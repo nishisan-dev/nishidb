@@ -82,9 +82,20 @@ type Writer struct {
 // OpenWriter abre o diretório de segmentos para escrita. segID=0 cria o
 // segmento 1; segID>0 reabre o segmento existente posicionado em offset,
 // truncando qualquer lixo além dele (recovery).
+// MaxSegmentSize é o teto de tamanho de segmento: o offset dentro da
+// Location empacotada tem 30 bits (design §3/§14.7), então offsets válidos
+// vão até 2³⁰-1. Acima disso, Pack panicaria com o record já durável no
+// segmento — crash loop no replay.
+const MaxSegmentSize = 1 << 30 // 1 GiB
+
 func OpenWriter(dir string, segmentSize int64, segID uint32, offset int64) (*Writer, error) {
 	if segmentSize <= HeaderSize {
 		return nil, fmt.Errorf("segment: segmentSize %d inválido", segmentSize)
+	}
+	if segmentSize > MaxSegmentSize {
+		return nil, fmt.Errorf(
+			"segment: segmentSize %d excede o máximo de 1 GiB (offset de location tem 30 bits — design §3/§14.7)",
+			segmentSize)
 	}
 	w := &Writer{dir: dir, segmentSize: segmentSize}
 	if segID == 0 {

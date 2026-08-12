@@ -139,6 +139,25 @@ func TestRotacaoCriaNovoSegmento(t *testing.T) {
 	}
 }
 
+func TestOpenWriterRejeitaSegmentSizeAcimaDe1GiB(t *testing.T) {
+	// C2: o offset de Location tem 30 bits (design §3/§14.7). segmentSize
+	// entre 1-4 GiB faria rowindex.Pack panicar APÓS o record estar no
+	// segmento (crash loop no replay); acima de 4 GiB, uint32(off) truncaria
+	// silenciosamente. A rejeição tem que acontecer na config, aqui.
+	if _, err := OpenWriter(t.TempDir(), 1<<30+1, 0, 0); err == nil {
+		t.Fatal("segmentSize > 1 GiB deveria ser rejeitado")
+	}
+	if _, err := OpenWriter(t.TempDir(), 5<<30, 0, 0); err == nil {
+		t.Fatal("segmentSize de 5 GiB deveria ser rejeitado")
+	}
+	// 1 GiB exato é o teto permitido.
+	w, err := OpenWriter(t.TempDir(), 1<<30, 0, 0)
+	if err != nil {
+		t.Fatalf("segmentSize de exatamente 1 GiB deveria ser aceito: %v", err)
+	}
+	w.Close()
+}
+
 func TestRecordMaiorQueSegmentoFalha(t *testing.T) {
 	dir := t.TempDir()
 	w, err := OpenWriter(dir, HeaderSize+64, 0, 0)
