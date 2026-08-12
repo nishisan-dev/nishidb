@@ -4,7 +4,27 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
+
+func TestClassificacaoDeFallocateNaoSuportado(t *testing.T) {
+	// I2: filesystem sem fallocate NÃO pode degradar silenciosamente para
+	// Truncate (sparse + disco cheio = SIGBUS). Open deve falhar com
+	// ErrFallocateUnsupported nesses errnos.
+	unsupported := []error{unix.EOPNOTSUPP, unix.ENOSYS, unix.EINVAL}
+	for _, e := range unsupported {
+		if !fallocateUnsupported(e) {
+			t.Errorf("errno %v deveria classificar como fallocate não suportado", e)
+		}
+	}
+	supported := []error{unix.ENOSPC, unix.EIO, unix.EBADF, nil}
+	for _, e := range supported {
+		if fallocateUnsupported(e) {
+			t.Errorf("errno %v NÃO é 'não suportado' (deve propagar cru)", e)
+		}
+	}
+}
 
 func openTemp(t *testing.T, size int64) (*Region, string) {
 	t.Helper()

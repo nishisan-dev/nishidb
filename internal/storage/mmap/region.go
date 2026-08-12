@@ -27,21 +27,33 @@ type Region struct {
 	size int64
 }
 
-// allocate garante alocação real de blocos (não sparse) em [off, off+len):
-// escrita em página não alocada com disco cheio mataria o processo com
-// SIGBUS. Filesystems sem fallocate caem para Truncate (risco documentado).
+// ErrFallocateUnsupported indica filesystem sem suporte a fallocate real.
+// O NishiDB exige alocação real de blocos: página esparsa + disco cheio no
+// writeback mata o processo com SIGBUS (fatal error incapturável). Não há
+// fallback silencioso para Truncate — mova o dataset para ext4/xfs/btrfs.
+var ErrFallocateUnsupported = errors.New(
+	"mmap: filesystem não suporta fallocate; NishiDB exige alocação real de blocos")
+
+// fallocateUnsupported classifica errnos de "sem suporte". EINVAL entra
+// porque alguns filesystems o devolvem no lugar de EOPNOTSUPP para o modo 0
+// — e nossos argumentos (off≥0, len>0, modo 0) nunca são inválidos de fato.
+func fallocateUnsupported(err error) bool {
+	return errors.Is(err, unix.EOPNOTSUPP) || errors.Is(err, unix.ENOSYS) || errors.Is(err, unix.EINVAL)
+}
+
+// allocate garante alocação real de blocos (não sparse) em [off, off+len).
 func allocate(f *os.File, off, length int64) error {
 	if length <= 0 {
 		return nil
 	}
 	err := unix.Fallocate(int(f.Fd()), 0, off, length)
-	if errors.Is(err, unix.EOPNOTSUPP) || errors.Is(err, unix.ENOSYS) {
-		return f.Truncate(off + length)
+	if err == nil {
+		return nil
 	}
-	if err != nil {
-		return fmt.Errorf("fallocate %s: %w", f.Name(), err)
+	if fallocateUnsupported(err) {
+		return fmt.Errorf("%w (%s: %v)", ErrFallocateUnsupported, f.Name(), err)
 	}
-	return nil
+	return fmt.Errorf("fallocate %s: %w", f.Name(), err)
 }
 
 // Open cria (se necessário) e mapeia o arquivo com pelo menos minSize bytes.
