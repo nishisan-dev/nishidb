@@ -70,29 +70,40 @@ func nextPow2(v uint64) uint64 {
 func fileSizeFor(slots uint64) int64 { return headerSize + int64(slots)*slotSize }
 
 func writeIdxHeader(r *mmap.Region, slots uint64) {
-	h := r.Bytes(0, headerSize)
-	copy(h[0:4], idxMagic[:])
-	h[4] = idxVersion
-	h[5] = hashKindFnv
-	binary.LittleEndian.PutUint64(h[8:16], slots)
-	binary.LittleEndian.PutUint64(h[16:24], 0) // seed
+	r.WithBytes(0, headerSize, func(h []byte) {
+		copy(h[0:4], idxMagic[:])
+		h[4] = idxVersion
+		h[5] = hashKindFnv
+		binary.LittleEndian.PutUint64(h[8:16], slots)
+		binary.LittleEndian.PutUint64(h[16:24], 0) // seed
+	})
 }
 
 func readIdxHeader(r *mmap.Region) (uint64, error) {
-	h := r.Bytes(0, headerSize)
-	if [4]byte(h[0:4]) != idxMagic {
-		return 0, fmt.Errorf("primary: magic inválida %q", h[0:4])
+	var (
+		slots uint64
+		err   error
+	)
+	r.WithBytes(0, headerSize, func(h []byte) {
+		switch {
+		case [4]byte(h[0:4]) != idxMagic:
+			err = fmt.Errorf("primary: magic inválida %q", h[0:4])
+		case h[4] != idxVersion:
+			err = fmt.Errorf("primary: version desconhecida %d", h[4])
+		case h[5] != hashKindFnv:
+			err = fmt.Errorf("primary: hashKind desconhecido %d (rebuild necessário)", h[5])
+		default:
+			slots = binary.LittleEndian.Uint64(h[8:16])
+		}
+	})
+	if err != nil {
+		return 0, err
 	}
-	if h[4] != idxVersion {
-		return 0, fmt.Errorf("primary: version desconhecida %d", h[4])
-	}
-	if h[5] != hashKindFnv {
-		return 0, fmt.Errorf("primary: hashKind desconhecido %d (rebuild necessário)", h[5])
-	}
-	slots := binary.LittleEndian.Uint64(h[8:16])
 	if slots < minSlotCount || slots&(slots-1) != 0 {
 		return 0, fmt.Errorf("primary: slotCount inválido %d", slots)
 	}
+	// r.Size() fora do callback: WithBytes segura o RLock e o RWMutex não é
+	// reentrante.
 	if r.Size() < fileSizeFor(slots) {
 		return 0, fmt.Errorf("primary: arquivo com %d bytes menor que o necessário para %d slots", r.Size(), slots)
 	}

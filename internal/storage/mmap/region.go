@@ -114,15 +114,21 @@ func (r *Region) Grow(newSize int64) error {
 	return nil
 }
 
-// Bytes devolve uma view mutável de n bytes a partir de off.
-// A slice é invalidada por Grow/Close.
-func (r *Region) Bytes(off, n int) []byte {
+// WithBytes executa fn sobre uma view mutável de n bytes a partir de off,
+// segurando o RLock durante TODA a execução: a slice nunca escapa do lock,
+// então é estruturalmente impossível retê-la através de um Grow/Close
+// (reter uma view através do Munmap seria SIGSEGV incapturável).
+//
+// fn NÃO pode chamar outros métodos desta Region (RWMutex não é reentrante:
+// com um Grow enfileirado, o RLock aninhado deadlocka) nem reter a slice
+// após retornar.
+func (r *Region) WithBytes(off, n int, fn func(b []byte)) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	if off < 0 || n < 0 || int64(off)+int64(n) > r.size {
-		panic(fmt.Sprintf("mmap: Bytes(%d, %d) fora dos limites (size=%d)", off, n, r.size))
+		panic(fmt.Sprintf("mmap: WithBytes(%d, %d) fora dos limites (size=%d)", off, n, r.size))
 	}
-	return r.data[off : off+n : off+n]
+	fn(r.data[off : off+n : off+n])
 }
 
 // word devolve o ponteiro para a word alinhada em off. Chamar com RLock.

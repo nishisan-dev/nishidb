@@ -59,22 +59,27 @@ func openDense(path string, magic [4]byte, minRows uint64) (*denseFile, error) {
 	if err != nil {
 		return nil, err
 	}
-	h := r.Bytes(0, headerSize)
-	if [4]byte(h[0:4]) == [4]byte{0, 0, 0, 0} && h[4] == 0 {
-		// Arquivo novo: grava o header.
-		copy(h[0:4], magic[:])
-		h[4] = fileVersion
-		h[5] = entrySize
-		binary.LittleEndian.PutUint64(h[8:16], 0) // seed/reserved
-		return &denseFile{region: r}, nil
-	}
-	if [4]byte(h[0:4]) != magic {
+	var hdrErr error
+	r.WithBytes(0, headerSize, func(h []byte) {
+		if [4]byte(h[0:4]) == [4]byte{0, 0, 0, 0} && h[4] == 0 {
+			// Arquivo novo: grava o header.
+			copy(h[0:4], magic[:])
+			h[4] = fileVersion
+			h[5] = entrySize
+			binary.LittleEndian.PutUint64(h[8:16], 0) // seed/reserved
+			return
+		}
+		if [4]byte(h[0:4]) != magic {
+			hdrErr = fmt.Errorf("rowindex: magic inválida em %s: %q (esperado %q)", path, h[0:4], magic[:])
+			return
+		}
+		if h[4] != fileVersion || h[5] != entrySize {
+			hdrErr = fmt.Errorf("rowindex: version/entrySize incompatível em %s: %d/%d", path, h[4], h[5])
+		}
+	})
+	if hdrErr != nil {
 		r.Close()
-		return nil, fmt.Errorf("rowindex: magic inválida em %s: %q (esperado %q)", path, h[0:4], magic[:])
-	}
-	if h[4] != fileVersion || h[5] != entrySize {
-		r.Close()
-		return nil, fmt.Errorf("rowindex: version/entrySize incompatível em %s: %d/%d", path, h[4], h[5])
+		return nil, hdrErr
 	}
 	return &denseFile{region: r}, nil
 }

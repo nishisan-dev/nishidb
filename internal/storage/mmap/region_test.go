@@ -75,13 +75,30 @@ func TestAtomicOrAnd(t *testing.T) {
 	}
 }
 
-func TestBytesView(t *testing.T) {
+func TestWithBytesView(t *testing.T) {
+	// I1: a view NUNCA escapa do RLock — o acesso é escopado no callback,
+	// então é impossível reter a slice através de um Grow (SIGSEGV).
 	r, _ := openTemp(t, 4096)
-	b := r.Bytes(100, 4)
-	copy(b, "abcd")
-	if string(r.Bytes(100, 4)) != "abcd" {
-		t.Fatal("Bytes deveria ser uma view mutável da região")
+	r.WithBytes(100, 4, func(b []byte) {
+		copy(b, "abcd")
+	})
+	var got string
+	r.WithBytes(100, 4, func(b []byte) {
+		got = string(b)
+	})
+	if got != "abcd" {
+		t.Fatalf("WithBytes deveria expor view mutável da região: %q", got)
 	}
+}
+
+func TestWithBytesForaDosLimitesPanica(t *testing.T) {
+	r, _ := openTemp(t, 4096)
+	defer func() {
+		if recover() == nil {
+			t.Fatal("esperado panic com range além do fim")
+		}
+	}()
+	r.WithBytes(4090, 8, func([]byte) {})
 }
 
 func TestMsyncEReopenPersistem(t *testing.T) {
@@ -91,7 +108,7 @@ func TestMsyncEReopenPersistem(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.AtomicStore64(8, 42)
-	copy(r.Bytes(0, 4), "NDBX")
+	r.WithBytes(0, 4, func(b []byte) { copy(b, "NDBX") })
 	if err := r.Msync(); err != nil {
 		t.Fatalf("Msync: %v", err)
 	}
@@ -107,8 +124,10 @@ func TestMsyncEReopenPersistem(t *testing.T) {
 	if got := r2.AtomicLoad64(8); got != 42 {
 		t.Fatalf("persistência: esperado 42, obtido %d", got)
 	}
-	if string(r2.Bytes(0, 4)) != "NDBX" {
-		t.Fatalf("persistência de bytes: %q", r2.Bytes(0, 4))
+	var hdr string
+	r2.WithBytes(0, 4, func(b []byte) { hdr = string(b) })
+	if hdr != "NDBX" {
+		t.Fatalf("persistência de bytes: %q", hdr)
 	}
 }
 

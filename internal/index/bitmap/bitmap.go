@@ -217,25 +217,30 @@ func (ix *Index) region(valueID uint32, create bool) (*mmap.Region, error) {
 	if err != nil {
 		return nil, err
 	}
-	h := r.Bytes(0, bmHeaderSize)
-	if !exists {
-		copy(h[0:4], bmMagic[:])
-		h[4] = bmVersion
-		binary.LittleEndian.PutUint16(h[6:8], uint16(ix.fieldID))
-		binary.LittleEndian.PutUint32(h[8:12], valueID)
-	} else {
+	var hdrErr error
+	r.WithBytes(0, bmHeaderSize, func(h []byte) {
+		if !exists {
+			copy(h[0:4], bmMagic[:])
+			h[4] = bmVersion
+			binary.LittleEndian.PutUint16(h[6:8], uint16(ix.fieldID))
+			binary.LittleEndian.PutUint32(h[8:12], valueID)
+			return
+		}
 		if [4]byte(h[0:4]) != bmMagic || h[4] != bmVersion {
-			r.Close()
-			return nil, fmt.Errorf("bitmap: header inválido em %s", path)
+			hdrErr = fmt.Errorf("bitmap: header inválido em %s", path)
+			return
 		}
 		if got := types.FieldID(binary.LittleEndian.Uint16(h[6:8])); got != ix.fieldID {
-			r.Close()
-			return nil, fmt.Errorf("bitmap: %s pertence ao campo %d, esperado %d", path, got, ix.fieldID)
+			hdrErr = fmt.Errorf("bitmap: %s pertence ao campo %d, esperado %d", path, got, ix.fieldID)
+			return
 		}
 		if got := binary.LittleEndian.Uint32(h[8:12]); got != valueID {
-			r.Close()
-			return nil, fmt.Errorf("bitmap: %s declara valueID %d, esperado %d", path, got, valueID)
+			hdrErr = fmt.Errorf("bitmap: %s declara valueID %d, esperado %d", path, got, valueID)
 		}
+	})
+	if hdrErr != nil {
+		r.Close()
+		return nil, hdrErr
 	}
 	ix.regions[valueID] = r
 	return r, nil
