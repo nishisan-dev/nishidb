@@ -12,6 +12,55 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
+// orderRecorder embrulha o values.dict real registrando a ordem das
+// chamadas de escrita/durabilidade.
+type orderRecorder struct {
+	inner dictFile
+	calls []string
+}
+
+func (r *orderRecorder) WriteAt(p []byte, off int64) (int, error) {
+	r.calls = append(r.calls, "WriteAt")
+	return r.inner.WriteAt(p, off)
+}
+func (r *orderRecorder) Sync() error {
+	r.calls = append(r.calls, "Sync")
+	return r.inner.Sync()
+}
+func (r *orderRecorder) Truncate(size int64) error {
+	r.calls = append(r.calls, "Truncate")
+	return r.inner.Truncate(size)
+}
+func (r *orderRecorder) Close() error { return r.inner.Close() }
+
+func TestValorNovoEhFsyncadoAntesDoPrimeiroUso(t *testing.T) {
+	// I8: mesma invariante de replay do fields.dict (§8/§14.6) — o valor
+	// novo é gravado E fsyncado no values.dict ANTES de qualquer bit ser
+	// setado no bitmap do valueID correspondente.
+	ix, _ := openIndex(t, 7)
+	rec := &orderRecorder{}
+	ix.WrapDictFileForTest(func(f dictFile) dictFile {
+		rec.inner = f
+		return rec
+	})
+
+	if err := ix.Set(strValue("valor-novo"), 1); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"WriteAt", "Sync"}; !slices.Equal(rec.calls, want) {
+		t.Fatalf("ordem de durabilidade: esperado %v, obtido %v", want, rec.calls)
+	}
+
+	// Valor já conhecido: nenhum toque no dict.
+	rec.calls = nil
+	if err := ix.Set(strValue("valor-novo"), 2); err != nil {
+		t.Fatal(err)
+	}
+	if len(rec.calls) != 0 {
+		t.Fatalf("Set de valor conhecido não pode tocar o values.dict: %v", rec.calls)
+	}
+}
+
 func TestIteracaoConcorrenteComGrowLazy(t *testing.T) {
 	// I7b: o Iterator segura um *mmap.Region através de múltiplas chamadas
 	// enquanto o writer pode remapear a região (grow lazy do Set). Cada

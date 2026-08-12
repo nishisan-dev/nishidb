@@ -9,3 +9,9 @@ func (d *Dict) setNextIDForTest(next types.FieldID) {
 		d.byID = append(d.byID, "")
 	}
 }
+
+// WrapFileForTest substitui o handle do fields.dict por um wrapper de teste
+// (ex.: gravador de ordem de chamadas de durabilidade).
+func (d *Dict) WrapFileForTest(wrap func(dictFile) dictFile) {
+	d.f = wrap(d.f)
+}

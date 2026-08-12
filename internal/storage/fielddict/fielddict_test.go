@@ -4,10 +4,61 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
+
+// orderRecorder embrulha o arquivo real registrando a ordem das chamadas de
+// escrita/durabilidade, delegando tudo ao arquivo verdadeiro.
+type orderRecorder struct {
+	inner dictFile
+	calls []string
+}
+
+func (r *orderRecorder) WriteAt(p []byte, off int64) (int, error) {
+	r.calls = append(r.calls, "WriteAt")
+	return r.inner.WriteAt(p, off)
+}
+func (r *orderRecorder) Sync() error {
+	r.calls = append(r.calls, "Sync")
+	return r.inner.Sync()
+}
+func (r *orderRecorder) Truncate(size int64) error {
+	r.calls = append(r.calls, "Truncate")
+	return r.inner.Truncate(size)
+}
+func (r *orderRecorder) Close() error { return r.inner.Close() }
+
+func TestEntryNovaEhFsyncadaAntesDeDevolverID(t *testing.T) {
+	// I8: a invariante de replay (§4/§14.6) — a entry nova é gravada E
+	// fsyncada ANTES do id ser devolvido (nenhum record pode referenciar um
+	// fieldID que o replay do tail não resolva). Um batching futuro do Sync
+	// quebraria o replay silenciosamente; este teste trava a ordem.
+	d, _ := openDict(t)
+	rec := &orderRecorder{}
+	d.WrapFileForTest(func(f dictFile) dictFile {
+		rec.inner = f
+		return rec
+	})
+
+	if _, err := d.LookupOrCreate([]byte("novo-campo")); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"WriteAt", "Sync"}; !slices.Equal(rec.calls, want) {
+		t.Fatalf("ordem de durabilidade: esperado %v, obtido %v", want, rec.calls)
+	}
+
+	// Campo já existente: nenhum toque no arquivo.
+	rec.calls = nil
+	if _, err := d.LookupOrCreate([]byte("novo-campo")); err != nil {
+		t.Fatal(err)
+	}
+	if len(rec.calls) != 0 {
+		t.Fatalf("lookup de campo existente não pode tocar o arquivo: %v", rec.calls)
+	}
+}
 
 func openDict(t *testing.T) (*Dict, string) {
 	t.Helper()

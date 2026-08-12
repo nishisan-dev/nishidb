@@ -11,6 +11,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"hash/crc32"
+	"io"
 	"math"
 	"math/bits"
 	"os"
@@ -62,13 +63,23 @@ func canonicalValue(dst []byte, v types.Value) ([]byte, error) {
 	}
 }
 
+// dictFile é a superfície de arquivo do values.dict. É interface para
+// permitir que testes verifiquem a ORDEM das chamadas de durabilidade
+// (a invariante fsync-before-first-use do §8/§14.6).
+type dictFile interface {
+	io.WriterAt
+	Sync() error
+	Truncate(size int64) error
+	Close() error
+}
+
 // Index é o índice bitmap de um campo. Set/Clear são exclusivos do writer;
 // Lookup e iteradores são seguros para leitores concorrentes. Os mapas em
 // heap são bounded pela cardinalidade de VALORES (baixa por definição).
 type Index struct {
 	dir      string
 	fieldID  types.FieldID
-	dictF    *os.File
+	dictF    dictFile
 	dictSize int64
 
 	mu      sync.RWMutex

@@ -11,6 +11,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"hash/crc32"
+	"io"
 	"math"
 	"os"
 	"sync"
@@ -35,13 +36,23 @@ var (
 	castagnoli = crc32.MakeTable(crc32.Castagnoli)
 )
 
+// dictFile é a superfície de arquivo usada pelo dicionário. É interface
+// para permitir que testes verifiquem a ORDEM das chamadas de durabilidade
+// (a invariante fsync-before-first-use do §4/§14.6).
+type dictFile interface {
+	io.WriterAt
+	Sync() error
+	Truncate(size int64) error
+	Close() error
+}
+
 // Dict é o dicionário de campos. LookupOrCreate é exclusivo do writer;
 // Lookup/Name são seguros para leitores concorrentes. O mapeamento em heap
 // é bounded pela cardinalidade de NOMES de campos (dezenas/centenas), não
 // pelo número de entidades.
 type Dict struct {
 	mu     sync.RWMutex
-	f      *os.File
+	f      dictFile
 	size   int64
 	byName map[string]types.FieldID
 	byID   []string // índice 0 = fieldID 1
