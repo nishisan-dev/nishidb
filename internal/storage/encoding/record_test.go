@@ -19,11 +19,54 @@ func buildTestPayload(t *testing.T) ([]byte, uint32) {
 	return p, 3
 }
 
-func TestBuildRecordParseRecordRoundTrip(t *testing.T) {
+func mustBuildRecord(t *testing.T, dst []byte, rowID types.RowID, seq int64, flags uint8, key, payload []byte) []byte {
+	t.Helper()
+	rec, err := BuildRecord(dst, rowID, seq, flags, key, payload)
+	if err != nil {
+		t.Fatalf("BuildRecord: %v", err)
+	}
+	return rec
+}
+
+func TestBuildRecordDerivaFieldCountEValidaPayload(t *testing.T) {
+	// I4: o fieldCount gravado (e protegido por CRC) é SEMPRE o retorno de
+	// ValidatePayload sobre o payload — nunca um número vindo do caller.
 	payload, fc := buildTestPayload(t)
+	rec := mustBuildRecord(t, nil, 1, 2, 0, []byte("key"), payload)
+	h, err := ParseHeader(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.FieldCount != fc {
+		t.Fatalf("fieldCount: esperado %d (ValidatePayload), obtido %d", fc, h.FieldCount)
+	}
+
+	t.Run("payload_invalido_falha", func(t *testing.T) {
+		unordered := AppendField(nil, 5, types.Value{Type: types.TypeInt64, I64: 1})
+		unordered = AppendField(unordered, 2, types.Value{Type: types.TypeInt64, I64: 2})
+		if _, err := BuildRecord(nil, 1, 2, 0, []byte("k"), unordered); !errors.Is(err, ErrInvalidPayload) {
+			t.Fatalf("esperado ErrInvalidPayload, obtido %v", err)
+		}
+	})
+	t.Run("key_acima_do_teto_falha", func(t *testing.T) {
+		big := bytes.Repeat([]byte{'k'}, MaxKeySize+1)
+		if _, err := BuildRecord(nil, 1, 2, 0, big, payload); err == nil {
+			t.Fatal("key acima de MaxKeySize deveria falhar")
+		}
+	})
+	t.Run("total_acima_do_teto_falha", func(t *testing.T) {
+		huge := AppendField(nil, 1, types.Value{Type: types.TypeBytes, Bytes: make([]byte, MaxRecordSize)})
+		if _, err := BuildRecord(nil, 1, 2, 0, []byte("k"), huge); err == nil {
+			t.Fatal("record acima de MaxRecordSize deveria falhar")
+		}
+	})
+}
+
+func TestBuildRecordParseRecordRoundTrip(t *testing.T) {
+	payload, _ := buildTestPayload(t)
 	key := []byte("CMP-V0001PPCLP-013")
 
-	rec := BuildRecord(nil, 4183927, 7455409733, 0, key, payload, fc)
+	rec := mustBuildRecord(t, nil, 4183927, 7455409733, 0, key, payload)
 
 	got, err := ParseRecord(rec)
 	if err != nil {
@@ -50,7 +93,7 @@ func TestBuildRecordLayoutGolden(t *testing.T) {
 	// Fixa o layout em disco: mudanças aqui exigem bump de formatVersion.
 	key := []byte("ab")
 	payload := AppendField(nil, 2, types.Value{Type: types.TypeBool, I64: 1})
-	rec := BuildRecord(nil, 0x1122334455667788, -2, types.FlagTombstone, key, payload, 1)
+	rec := mustBuildRecord(t, nil, 0x1122334455667788, -2, types.FlagTombstone, key, payload)
 
 	if len(rec) != RecordHeaderSize+len(key)+len(payload) {
 		t.Fatalf("tamanho: esperado %d, obtido %d", RecordHeaderSize+len(key)+len(payload), len(rec))
@@ -85,9 +128,9 @@ func TestBuildRecordLayoutGolden(t *testing.T) {
 }
 
 func TestParseHeader(t *testing.T) {
-	payload, fc := buildTestPayload(t)
+	payload, _ := buildTestPayload(t)
 	key := []byte("k1")
-	rec := BuildRecord(nil, 77, 100, 0, key, payload, fc)
+	rec := mustBuildRecord(t, nil, 77, 100, 0, key, payload)
 
 	h, err := ParseHeader(rec[:RecordHeaderSize])
 	if err != nil {
@@ -95,6 +138,10 @@ func TestParseHeader(t *testing.T) {
 	}
 	if h.RowID != 77 || h.Sequence != 100 || h.Flags != 0 {
 		t.Fatalf("header: %+v", h)
+	}
+	fc, err := ValidatePayload(payload)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if h.KeyLen != uint16(len(key)) || h.PayloadLen != uint32(len(payload)) || h.FieldCount != fc {
 		t.Fatalf("comprimentos: %+v", h)
@@ -105,8 +152,8 @@ func TestParseHeader(t *testing.T) {
 }
 
 func TestParseRecordDetectaCorrupcao(t *testing.T) {
-	payload, fc := buildTestPayload(t)
-	rec := BuildRecord(nil, 1, 2, 0, []byte("key"), payload, fc)
+	payload, _ := buildTestPayload(t)
+	rec := mustBuildRecord(t, nil, 1, 2, 0, []byte("key"), payload)
 
 	flip := func(off int) []byte {
 		c := bytes.Clone(rec)
@@ -139,8 +186,8 @@ func TestParseRecordDetectaCorrupcao(t *testing.T) {
 }
 
 func TestParseHeaderRejeitaComprimentosInsanos(t *testing.T) {
-	payload, fc := buildTestPayload(t)
-	rec := BuildRecord(nil, 1, 2, 0, []byte("key"), payload, fc)
+	payload, _ := buildTestPayload(t)
+	rec := mustBuildRecord(t, nil, 1, 2, 0, []byte("key"), payload)
 
 	// payloadLength absurdo: ParseHeader aceita (só valida forma), mas o
 	// caller usa MaxRecordSize; aqui garantimos que ParseRecord rejeita
@@ -156,8 +203,8 @@ func TestParseHeaderRejeitaLimitesAbsolutos(t *testing.T) {
 	// C1: os tetos são aplicados no ParseHeader, ANTES de qualquer CRC ou
 	// alocação — 1 bit corrompido em keyLength/payloadLength não pode
 	// induzir alocação gigante no caller (segment.ReadRecord, tail scan).
-	payload, fc := buildTestPayload(t)
-	rec := BuildRecord(nil, 1, 2, 0, []byte("key"), payload, fc)
+	payload, _ := buildTestPayload(t)
+	rec := mustBuildRecord(t, nil, 1, 2, 0, []byte("key"), payload)
 
 	t.Run("keyLength_acima_do_teto", func(t *testing.T) {
 		c := bytes.Clone(rec)
@@ -232,10 +279,10 @@ func TestValidatePayload(t *testing.T) {
 }
 
 func TestBuildRecordReutilizaBuffer(t *testing.T) {
-	payload, fc := buildTestPayload(t)
+	payload, _ := buildTestPayload(t)
 	buf := make([]byte, 0, 1024)
-	rec1 := BuildRecord(buf, 1, 1, 0, []byte("a"), payload, fc)
-	rec2 := BuildRecord(rec1[:0], 2, 2, 0, []byte("b"), payload, fc)
+	rec1 := mustBuildRecord(t, buf, 1, 1, 0, []byte("a"), payload)
+	rec2 := mustBuildRecord(t, rec1[:0], 2, 2, 0, []byte("b"), payload)
 	got, err := ParseRecord(rec2)
 	if err != nil {
 		t.Fatalf("ParseRecord após reuso: %v", err)
@@ -253,8 +300,12 @@ func BenchmarkBuildRecord(b *testing.B) {
 	buf := make([]byte, 0, 4096)
 	b.ReportAllocs()
 	b.ResetTimer()
+	var err error
 	for i := 0; i < b.N; i++ {
-		buf = BuildRecord(buf[:0], 1, int64(i), 0, key, payload, 2)
+		buf, err = BuildRecord(buf[:0], 1, int64(i), 0, key, payload)
+		if err != nil {
+			b.Fatal(err)
+		}
 	}
 	_ = buf
 }

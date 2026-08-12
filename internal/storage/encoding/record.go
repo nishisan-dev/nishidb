@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
-	"math"
 
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
@@ -63,14 +62,23 @@ func (h Header) TotalSize() int {
 }
 
 // BuildRecord codifica um record completo ao final de dst.
-// Limites (key em u16, payload em u32) são responsabilidade do caller
-// (o Store aplica MaxKeySize/MaxRecordSize antes); violação é panic.
-func BuildRecord(dst []byte, rowID types.RowID, seq int64, flags uint8, key, payload []byte, fieldCount uint32) []byte {
-	if len(key) > math.MaxUint16 {
-		panic(fmt.Sprintf("encoding: key de %d bytes excede u16", len(key)))
+//
+// O fieldCount gravado no header é derivado POR CONSTRUÇÃO de
+// ValidatePayload(payload) — nunca aceito de fora: um fieldCount errado
+// ficaria durável e protegido por CRC, indetectável para sempre. A mesma
+// chamada valida os invariantes do payload (ordem, duplicatas, tags).
+// Os tetos absolutos do formato (MaxKeySize/MaxRecordSize) são aplicados
+// aqui, espelhando o ParseHeader.
+func BuildRecord(dst []byte, rowID types.RowID, seq int64, flags uint8, key, payload []byte) ([]byte, error) {
+	fieldCount, err := ValidatePayload(payload)
+	if err != nil {
+		return dst, err
 	}
-	if uint64(len(payload)) > math.MaxUint32 {
-		panic(fmt.Sprintf("encoding: payload de %d bytes excede u32", len(payload)))
+	if len(key) > MaxKeySize {
+		return dst, fmt.Errorf("%w: key de %d bytes excede o teto %d", ErrInvalidPayload, len(key), MaxKeySize)
+	}
+	if total := RecordHeaderSize + int64(len(key)) + int64(len(payload)); total > MaxRecordSize {
+		return dst, fmt.Errorf("%w: record de %d bytes excede o teto %d", ErrInvalidPayload, total, MaxRecordSize)
 	}
 	base := len(dst)
 	dst = append(dst, recordMagic[:]...)
@@ -87,7 +95,7 @@ func BuildRecord(dst []byte, rowID types.RowID, seq int64, flags uint8, key, pay
 	crc := crc32.Update(0, castagnoli, dst[base+4:base+32])
 	crc = crc32.Update(crc, castagnoli, dst[base+RecordHeaderSize:])
 	binary.LittleEndian.PutUint32(dst[base+32:base+36], crc)
-	return dst
+	return dst, nil
 }
 
 // ParseHeader decodifica o header fixo (36 bytes) validando magic, version

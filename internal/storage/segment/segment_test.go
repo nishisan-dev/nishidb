@@ -18,11 +18,11 @@ func makeRecord(t *testing.T, rowID types.RowID, seq int64, key string, payloadS
 		filler := bytes.Repeat([]byte{'z'}, payloadSize)
 		payload = encoding.AppendField(payload, 2, types.Value{Type: types.TypeBytes, Bytes: filler})
 	}
-	fc, err := encoding.ValidatePayload(payload)
+	rec, err := encoding.BuildRecord(nil, rowID, seq, 0, []byte(key), payload)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return encoding.BuildRecord(nil, rowID, seq, 0, []byte(key), payload, fc)
+	return rec
 }
 
 func TestAppendReadRoundTrip(t *testing.T) {
