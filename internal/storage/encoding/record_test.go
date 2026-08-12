@@ -152,6 +152,46 @@ func TestParseHeaderRejeitaComprimentosInsanos(t *testing.T) {
 	}
 }
 
+func TestParseHeaderRejeitaLimitesAbsolutos(t *testing.T) {
+	// C1: os tetos são aplicados no ParseHeader, ANTES de qualquer CRC ou
+	// alocação — 1 bit corrompido em keyLength/payloadLength não pode
+	// induzir alocação gigante no caller (segment.ReadRecord, tail scan).
+	payload, fc := buildTestPayload(t)
+	rec := BuildRecord(nil, 1, 2, 0, []byte("key"), payload, fc)
+
+	t.Run("keyLength_acima_do_teto", func(t *testing.T) {
+		c := bytes.Clone(rec)
+		binary.LittleEndian.PutUint16(c[6:8], MaxKeySize+1)
+		if _, err := ParseHeader(c); !errors.Is(err, ErrCorrupt) {
+			t.Fatalf("esperado ErrCorrupt, obtido %v", err)
+		}
+	})
+	t.Run("payloadLength_acima_do_teto", func(t *testing.T) {
+		c := bytes.Clone(rec)
+		binary.LittleEndian.PutUint32(c[28:32], math.MaxUint32)
+		if _, err := ParseHeader(c); !errors.Is(err, ErrCorrupt) {
+			t.Fatalf("esperado ErrCorrupt, obtido %v", err)
+		}
+	})
+	t.Run("total_acima_do_teto", func(t *testing.T) {
+		// key e payload individualmente sob os tetos, mas o total estoura.
+		c := bytes.Clone(rec)
+		binary.LittleEndian.PutUint16(c[6:8], MaxKeySize)
+		binary.LittleEndian.PutUint32(c[28:32], MaxRecordSize-RecordHeaderSize-MaxKeySize+1)
+		if _, err := ParseHeader(c); !errors.Is(err, ErrCorrupt) {
+			t.Fatalf("esperado ErrCorrupt, obtido %v", err)
+		}
+	})
+	t.Run("nos_tetos_exatos_aceita", func(t *testing.T) {
+		c := bytes.Clone(rec)
+		binary.LittleEndian.PutUint16(c[6:8], MaxKeySize)
+		binary.LittleEndian.PutUint32(c[28:32], MaxRecordSize-RecordHeaderSize-MaxKeySize)
+		if _, err := ParseHeader(c); err != nil {
+			t.Fatalf("limites exatos deveriam passar no ParseHeader: %v", err)
+		}
+	})
+}
+
 func TestValidatePayload(t *testing.T) {
 	ordered, fc := buildTestPayload(t)
 

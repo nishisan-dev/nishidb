@@ -30,6 +30,16 @@ var ErrInvalidPayload = errors.New("encoding: payload viola invariantes")
 //	36  ...key ++ payload
 const RecordHeaderSize = 36
 
+// Tetos absolutos do formato de record. São limites do FORMATO (aplicados
+// em ParseHeader antes de CRC ou de qualquer alocação do caller), não de
+// configuração: o Store pode configurar limites menores, nunca maiores.
+const (
+	// MaxKeySize é o teto absoluto da serviceKey em bytes.
+	MaxKeySize = 1 << 10 // 1 KiB
+	// MaxRecordSize é o teto absoluto do record completo (header+key+payload).
+	MaxRecordSize = 4 << 20 // 4 MiB
+)
+
 const recordFormatVersion = 1
 
 var recordMagic = [4]byte{'N', 'D', 'B', 'R'}
@@ -80,8 +90,11 @@ func BuildRecord(dst []byte, rowID types.RowID, seq int64, flags uint8, key, pay
 	return dst
 }
 
-// ParseHeader decodifica o header fixo (36 bytes) validando magic e version,
-// sem validar CRC (a validação completa exige key+payload — ParseRecord).
+// ParseHeader decodifica o header fixo (36 bytes) validando magic, version
+// e os tetos absolutos de comprimento (MaxKeySize/MaxRecordSize) — sem
+// validar CRC (a validação completa exige key+payload — ParseRecord).
+// Callers podem alocar com base nos comprimentos devolvidos: eles nunca
+// excedem MaxRecordSize.
 func ParseHeader(buf []byte) (Header, error) {
 	if len(buf) < RecordHeaderSize {
 		return Header{}, fmt.Errorf("%w: header de record truncado (%d bytes)", ErrCorrupt, len(buf))
@@ -92,7 +105,7 @@ func ParseHeader(buf []byte) (Header, error) {
 	if buf[4] != recordFormatVersion {
 		return Header{}, fmt.Errorf("%w: formatVersion desconhecida %d", ErrCorrupt, buf[4])
 	}
-	return Header{
+	h := Header{
 		Flags:      buf[5],
 		KeyLen:     binary.LittleEndian.Uint16(buf[6:8]),
 		RowID:      types.RowID(binary.LittleEndian.Uint64(buf[8:16])),
@@ -100,7 +113,15 @@ func ParseHeader(buf []byte) (Header, error) {
 		FieldCount: binary.LittleEndian.Uint32(buf[24:28]),
 		PayloadLen: binary.LittleEndian.Uint32(buf[28:32]),
 		CRC:        binary.LittleEndian.Uint32(buf[32:36]),
-	}, nil
+	}
+	if h.KeyLen > MaxKeySize {
+		return Header{}, fmt.Errorf("%w: keyLength %d excede o teto %d", ErrCorrupt, h.KeyLen, MaxKeySize)
+	}
+	// Aritmética em int64: sem overflow mesmo em GOARCH de 32 bits.
+	if total := RecordHeaderSize + int64(h.KeyLen) + int64(h.PayloadLen); total > MaxRecordSize {
+		return Header{}, fmt.Errorf("%w: record de %d bytes excede o teto %d", ErrCorrupt, total, MaxRecordSize)
+	}
+	return h, nil
 }
 
 // ParseRecord valida magic, version, comprimentos e CRC32C, devolvendo a

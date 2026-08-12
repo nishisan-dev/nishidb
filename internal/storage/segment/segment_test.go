@@ -244,6 +244,49 @@ func TestReadRecordDetectaCorrupcao(t *testing.T) {
 	}
 }
 
+func TestReadRecordComLengthCorrompidoNaoAlocaGigante(t *testing.T) {
+	// C1: payloadLength corrompido em disco é rejeitado pelos tetos do
+	// ParseHeader ANTES do ReadRecord alocar o "total" declarado — sem os
+	// tetos, 1 bit invertido induziria make([]byte, ~4GiB) antes do CRC.
+	dir := t.TempDir()
+	w, err := OpenWriter(dir, 1<<20, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := makeRecord(t, 9, 9, "len-corrupto", 50)
+	seg, off, err := w.Append(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+
+	path := filepath.Join(dir, "segment-00000001.dat")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// payloadLength fica nos offsets 28..31 do record.
+	for i := 0; i < 4; i++ {
+		raw[int(off)+28+i] = 0xFF
+	}
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := OpenReader(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	_, buf, err := r.ReadRecord(seg, off, nil)
+	if !errors.Is(err, encoding.ErrCorrupt) {
+		t.Fatalf("esperado ErrCorrupt, obtido %v", err)
+	}
+	if cap(buf) > 4096 {
+		t.Fatalf("buffer cresceu para %d bytes com length corrompido", cap(buf))
+	}
+}
+
 func TestReadRecordGrande(t *testing.T) {
 	// Record maior que o pread especulativo de 4 KiB (caminho de 2 preads).
 	dir := t.TempDir()
