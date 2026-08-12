@@ -3,6 +3,7 @@ package segment
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -303,6 +304,66 @@ func TestReadRecordComLengthCorrompidoNaoAlocaGigante(t *testing.T) {
 	}
 	if cap(buf) > 4096 {
 		t.Fatalf("buffer cresceu para %d bytes com length corrompido", cap(buf))
+	}
+}
+
+// recordingReaderAt registra o tamanho de cada leitura para verificar a
+// janela do pread especulativo.
+type recordingReaderAt struct {
+	data  []byte
+	reads []int
+}
+
+func (r *recordingReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	r.reads = append(r.reads, len(p))
+	if off >= int64(len(r.data)) {
+		return 0, io.EOF
+	}
+	n := copy(p, r.data[off:])
+	if n < len(p) {
+		return n, io.EOF
+	}
+	return n, nil
+}
+
+func TestPrimeiroPreadLimitadoComBufferGrandeReutilizado(t *testing.T) {
+	// I5: o 1º pread deve ser min(len(buf), 4096) — NUNCA cap(buf). Com o
+	// reuso de buffer do §15A.6, um único record de 4 MiB no buffer faria
+	// toda leitura seguinte emitir preads de 4 MiB para records de 700B
+	// (~5000× de amplificação num full scan).
+	rec := makeRecord(t, 1, 1, "small", 100)
+	fake := &recordingReaderAt{data: rec}
+
+	bigBuf := make([]byte, 0, 1<<20) // buffer "envenenado" por um record grande anterior
+	got, _, err := readRecordAt(fake, 1, 0, bigBuf)
+	if err != nil {
+		t.Fatalf("readRecordAt: %v", err)
+	}
+	if got.RowID != 1 {
+		t.Fatalf("record errado: %+v", got)
+	}
+	if len(fake.reads) == 0 || fake.reads[0] > 4096 {
+		t.Fatalf("1º pread deveria ser ≤ 4096 bytes, foi %d (reads=%v)", fake.reads[0], fake.reads)
+	}
+}
+
+func TestSegundoPreadCobreRecordGrande(t *testing.T) {
+	// Record maior que a janela: 1º pread de 4096, 2º pread do restante.
+	rec := makeRecord(t, 2, 2, "big", 8192)
+	fake := &recordingReaderAt{data: rec}
+
+	got, _, err := readRecordAt(fake, 1, 0, nil)
+	if err != nil {
+		t.Fatalf("readRecordAt: %v", err)
+	}
+	if got.RowID != 2 {
+		t.Fatalf("record errado: %+v", got)
+	}
+	if fake.reads[0] > 4096 {
+		t.Fatalf("1º pread: %d", fake.reads[0])
+	}
+	if len(fake.reads) < 2 || fake.reads[len(fake.reads)-1] != len(rec)-4096 {
+		t.Fatalf("2º pread deveria ler o restante (%d), reads=%v", len(rec)-4096, fake.reads)
 	}
 }
 

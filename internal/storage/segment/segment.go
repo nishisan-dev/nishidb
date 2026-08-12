@@ -5,6 +5,7 @@ package segment
 import (
 	"encoding/binary"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -224,12 +225,24 @@ func (r *Reader) ReadRecord(seg, off uint32, buf []byte) (types.Record, []byte, 
 	if err != nil {
 		return types.Record{}, buf, err
 	}
+	return readRecordAt(f, seg, off, buf)
+}
+
+// readRecordAt implementa a leitura em (até) dois preads sobre qualquer
+// io.ReaderAt (separado de ReadRecord para ser testável com fakes).
+func readRecordAt(f io.ReaderAt, seg, off uint32, buf []byte) (types.Record, []byte, error) {
 	if cap(buf) < speculativeRead {
 		buf = make([]byte, speculativeRead)
 	}
 	buf = buf[:cap(buf)]
 
-	n, err := readFullAt(f, buf, int64(off))
+	// A janela do 1º pread é sempre ≤ speculativeRead, mesmo com um buffer
+	// reutilizado que já cresceu para um record grande — senão um único
+	// record de 4 MiB faria toda leitura seguinte emitir preads de 4 MiB
+	// (o buffer nunca encolhe). O min(…, resto) do §3 sai de graça: o
+	// readFullAt para no EOF.
+	first := min(len(buf), speculativeRead)
+	n, err := readFullAt(f, buf[:first], int64(off))
 	if n < encoding.RecordHeaderSize {
 		return types.Record{}, buf, fmt.Errorf("%w: leitura de %d bytes no segmento %d offset %d (err=%v)",
 			encoding.ErrCorrupt, n, seg, off, err)
@@ -262,7 +275,7 @@ func (r *Reader) ReadRecord(seg, off uint32, buf []byte) (types.Record, []byte, 
 
 // readFullAt lê até len(b) bytes em off; EOF antes disso não é erro fatal
 // aqui — o caller decide com base no total necessário.
-func readFullAt(f *os.File, b []byte, off int64) (int, error) {
+func readFullAt(f io.ReaderAt, b []byte, off int64) (int, error) {
 	n := 0
 	for n < len(b) {
 		m, err := f.ReadAt(b[n:], off+int64(n))
