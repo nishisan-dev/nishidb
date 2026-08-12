@@ -227,9 +227,14 @@ func TestReopenPreservaEstado(t *testing.T) {
 	}
 }
 
-func TestFindConcorrenteComInsert(t *testing.T) {
-	ix, _, ks := openIndex(t, 1<<13)
-	const n = 3000
+func TestFindConcorrenteComInsertERehash(t *testing.T) {
+	// I7a: o ponto sensível é o rehash (Grow) com leitores em voo — o
+	// Munmap da tabela antiga sob Lock não pode alcançar um Find no
+	// mapeamento antigo (seria SIGSEGV incapturável). Tabela pequena +
+	// inserts suficientes forçam ≥3 rehashes DURANTE as leituras.
+	ix, _, ks := openIndex(t, 1024)
+	before := ix.SlotCount()
+	const n = 5000
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -258,4 +263,15 @@ func TestFindConcorrenteComInsert(t *testing.T) {
 	}
 	close(stop)
 	wg.Wait()
+
+	// Sem crescimento real, o teste não exercitou o que promete.
+	if ix.SlotCount() < before*8 {
+		t.Fatalf("esperado ≥3 rehashes durante o teste (slots %d → %d)", before, ix.SlotCount())
+	}
+	for i := 0; i < n; i += 97 {
+		key := fmt.Appendf(nil, "conc-%d", i)
+		if id, ok, err := ix.Find(key, ks.validator(key)); err != nil || !ok || id != types.RowID(i) {
+			t.Fatalf("Find(%q) pós-rehashes: (%d,%v,%v)", key, id, ok, err)
+		}
+	}
 }

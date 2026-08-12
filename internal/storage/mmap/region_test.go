@@ -210,22 +210,32 @@ func TestOffsetForaDosLimitesPanica(t *testing.T) {
 }
 
 func TestLeituraConcorrenteComGrow(t *testing.T) {
+	// M7/I7a: o leitor roda até TODOS os Grows terminarem (canal), então a
+	// janela crítica (RLock do load × Lock+Munmap do remap) é exercitada de
+	// fato — um contador fixo terminaria antes do primeiro Grow.
 	r, _ := openTemp(t, 4096)
 	r.AtomicStore64(0, 7)
+	growsDone := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		for i := 0; i < 1000; i++ {
+		for {
+			select {
+			case <-growsDone:
+				return
+			default:
+			}
 			if got := r.AtomicLoad64(0); got != 7 {
 				t.Errorf("leitura durante grow: obtido %d", got)
 				return
 			}
 		}
 	}()
-	for sz := int64(8192); sz <= 8192*8; sz *= 2 {
+	for sz := int64(8192); sz <= 8192*64; sz *= 2 {
 		if err := r.Grow(sz); err != nil {
 			t.Fatalf("Grow(%d): %v", sz, err)
 		}
 	}
+	close(growsDone)
 	<-done
 }
