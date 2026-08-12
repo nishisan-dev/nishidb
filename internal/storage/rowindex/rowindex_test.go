@@ -251,6 +251,66 @@ func TestLocationsConcorrencia(t *testing.T) {
 	wg.Wait()
 }
 
+func TestLocationNuncaFicaInvisivelDuranteApply(t *testing.T) {
+	// I6: rows criadas desde o último checkpoint existem SÓ no overlay
+	// (não há valor antigo no mmap). Durante o ApplyOverlay elas precisam
+	// continuar visíveis a leitores — o lote em aplicação fica exposto até
+	// a última entrada estar no mmap. O hook verifica deterministicamente
+	// no meio do apply.
+	l, _ := openLocations(t, 1024)
+	rows := []types.RowID{1, 2, 3, 4, 5}
+	for _, r := range rows {
+		l.Publish(r, Pack(1, uint32(64+8*r), 0))
+	}
+	l.SetApplyHookForTest(func() {
+		for _, r := range rows {
+			if _, ok := l.Get(r); !ok {
+				t.Errorf("row %d invisível durante o apply (janela overlay→mmap)", r)
+			}
+		}
+	})
+	if err := l.ApplyOverlay(); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range rows {
+		if _, ok := l.Get(r); !ok {
+			t.Fatalf("row %d perdida após o apply", r)
+		}
+	}
+}
+
+func TestApplyOverlayComPublishConcorrenteNaoAborta(t *testing.T) {
+	// I6: a invariante do design (§10.2) é que Publish e ApplyOverlay rodam
+	// no mesmo goroutine (o writer). Este teste garante que uma violação
+	// acidental dessa invariante nunca pode ABORTAR o processo com
+	// "fatal error: concurrent map iteration and map write" (incapturável):
+	// o swap do map sob Lock elimina a iteração de map vivo por construção.
+	l, _ := openLocations(t, 1024)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 200; i++ {
+			for r := types.RowID(0); r < 100; r++ {
+				l.Publish(r, Pack(uint32(i%100+1), uint32(64+r), 0))
+			}
+		}
+	}()
+	for i := 0; i < 200; i++ {
+		if err := l.ApplyOverlay(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	<-done
+	if err := l.ApplyOverlay(); err != nil {
+		t.Fatal(err)
+	}
+	for r := types.RowID(0); r < 100; r++ {
+		if _, ok := l.Get(r); !ok {
+			t.Fatalf("row %d perdeu a location", r)
+		}
+	}
+}
+
 func TestSequencesRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sequences.idx")
 	s, err := OpenSequences(path, 1024)

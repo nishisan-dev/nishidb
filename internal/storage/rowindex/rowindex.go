@@ -119,8 +119,20 @@ func (d *denseFile) store(rowID types.RowID, v uint64) error {
 // writeback antecipado de página nunca cria dangling pointer.
 type Locations struct {
 	dense *denseFile
-	mu    sync.RWMutex // protege overlay
+	mu    sync.RWMutex // protege over/applying
 	over  map[types.RowID]uint64
+	// applying é o lote em aplicação pelo checkpoint: não-nil somente
+	// durante ApplyOverlay, somente-leitura enquanto exposto.
+	applying map[types.RowID]uint64
+
+	applyHook func() // seam de teste; nil em produção
+}
+
+// overlayEntry é um par (rowId, packed) materializado do overlay para
+// iteração fora do lock.
+type overlayEntry struct {
+	row    types.RowID
+	packed uint64
 }
 
 var locationsMagic = [4]byte{'N', 'D', 'B', 'L'}
@@ -134,10 +146,14 @@ func OpenLocations(path string, minRows uint64) (*Locations, error) {
 	return &Locations{dense: d, over: make(map[types.RowID]uint64)}, nil
 }
 
-// Get devolve a location do rowId (overlay primeiro, depois mmap).
+// Get devolve a location do rowId: overlay corrente, depois o lote em
+// aplicação pelo checkpoint, depois o mmap.
 func (l *Locations) Get(rowID types.RowID) (uint64, bool) {
 	l.mu.RLock()
 	p, ok := l.over[rowID]
+	if !ok && l.applying != nil {
+		p, ok = l.applying[rowID]
+	}
 	l.mu.RUnlock()
 	if ok {
 		return p, true
@@ -158,31 +174,49 @@ func (l *Locations) Publish(rowID types.RowID, packed uint64) {
 }
 
 // ApplyOverlay grava todas as entradas do overlay no mmap e o esvazia.
-// Chamado no checkpoint, após o fdatasync dos segmentos. Leitores
-// concorrentes veem cada entrada no overlay até o instante em que ela já
-// está no mmap — nunca há janela sem a location.
+// Chamado no checkpoint, após o fdatasync dos segmentos, SEMPRE no goroutine
+// do writer (invariante do §10.2 — Publish e ApplyOverlay nunca concorrem).
+// O swap do map sob Lock codifica essa invariante: nenhuma iteração de map
+// vivo acontece, então nem uma violação acidental aborta o processo.
+// Leitores concorrentes (Get) veem cada entrada no overlay até ela já estar
+// no mmap — nunca há janela sem a location.
 func (l *Locations) ApplyOverlay() error {
-	l.mu.RLock()
-	snapshot := l.over
-	l.mu.RUnlock()
-	for rowID, packed := range snapshot {
-		if err := l.dense.store(rowID, packed); err != nil {
+	l.mu.Lock()
+	pending := l.over
+	l.over = make(map[types.RowID]uint64)
+	// pending permanece visível aos leitores via l.applying até TODAS as
+	// entradas estarem no mmap — uma row criada desde o último checkpoint
+	// nunca fica invisível durante o apply. A partir daqui pending é
+	// somente-leitura; a iteração acontece sobre a slice.
+	l.applying = pending
+	entries := make([]overlayEntry, 0, len(pending))
+	for r, p := range pending {
+		entries = append(entries, overlayEntry{row: r, packed: p})
+	}
+	l.mu.Unlock()
+
+	for i, e := range entries {
+		if err := l.dense.store(e.row, e.packed); err != nil {
+			// Falha parcial (ex.: Grow sem espaço em disco): devolve as
+			// entradas não aplicadas ao overlay para a retentativa do
+			// próximo checkpoint; publicações posteriores ao swap têm
+			// precedência (são mais novas).
+			l.mu.Lock()
+			for _, rest := range entries[i:] {
+				if _, newer := l.over[rest.row]; !newer {
+					l.over[rest.row] = rest.packed
+				}
+			}
+			l.applying = nil
+			l.mu.Unlock()
 			return err
+		}
+		if l.applyHook != nil {
+			l.applyHook()
 		}
 	}
 	l.mu.Lock()
-	if len(l.over) == len(snapshot) {
-		l.over = make(map[types.RowID]uint64)
-	} else {
-		// Writer publicou durante o apply (não ocorre no design atual —
-		// checkpoint roda no goroutine do writer — mas mantém correção):
-		// remove apenas o que foi aplicado sem sobrescrever o mais novo.
-		for rowID, packed := range snapshot {
-			if l.over[rowID] == packed {
-				delete(l.over, rowID)
-			}
-		}
-	}
+	l.applying = nil
 	l.mu.Unlock()
 	return nil
 }
