@@ -1,0 +1,151 @@
+// Package encoding implementa o wire format de campos e records do NishiDB
+// (spec §31-33): campos codificados como FIELD_ID (u16 LE) + TYPE (u8) +
+// [LENGTH uvarint apenas para tipos variáveis] + VALUE.
+//
+// Invariantes do payload materializado: campos em ordem crescente de FieldID,
+// sem duplicatas e sem TypeNull (NULL = campo ausente). A ordenação é
+// responsabilidade de quem monta o payload e é validada pelo Store no Put.
+package encoding
+
+import (
+	"encoding/binary"
+	"errors"
+	"fmt"
+
+	"github.com/nishisan-dev/nishidb/internal/types"
+)
+
+// ErrCorrupt indica payload malformado ou truncado.
+var ErrCorrupt = errors.New("encoding: payload corrompido")
+
+const (
+	varWidth     = -1 // tipo de largura variável (LENGTH uvarint + bytes)
+	invalidWidth = -2 // tag desconhecida ou reservada (TypeNull)
+)
+
+// fieldWidth devolve a largura fixa em bytes do tipo, varWidth para tipos
+// variáveis ou invalidWidth para tags que nunca aparecem em payload.
+func fieldWidth(t types.FieldType) int {
+	switch t {
+	case types.TypeInt64, types.TypeDouble, types.TypeTimestamp:
+		return 8
+	case types.TypeBool:
+		return 1
+	case types.TypeIPv4:
+		return 4
+	case types.TypeIPv6:
+		return 16
+	case types.TypeIPv4Prefix:
+		return 5
+	case types.TypeIPv6Prefix:
+		return 17
+	case types.TypeString, types.TypeBytes, types.TypeJSON:
+		return varWidth
+	default:
+		return invalidWidth
+	}
+}
+
+// AppendField codifica um campo ao final de dst e devolve o slice resultante.
+//
+// Value inválida (TypeNull, tag desconhecida, largura fixa errada em Bytes,
+// bool fora de 0/1) é bug do caller e causa panic — o typeconv do
+// materializer garante os invariantes antes de chegar aqui.
+func AppendField(dst []byte, id types.FieldID, v types.Value) []byte {
+	dst = binary.LittleEndian.AppendUint16(dst, uint16(id))
+	dst = append(dst, byte(v.Type))
+
+	switch w := fieldWidth(v.Type); {
+	case w == invalidWidth:
+		panic(fmt.Sprintf("encoding: tipo inválido em AppendField: %#x", v.Type))
+	case v.Type == types.TypeBool:
+		if v.I64 != 0 && v.I64 != 1 {
+			panic(fmt.Sprintf("encoding: bool fora de 0/1: %d", v.I64))
+		}
+		return append(dst, byte(v.I64))
+	case w == 8:
+		return binary.LittleEndian.AppendUint64(dst, uint64(v.I64))
+	case w == varWidth:
+		dst = binary.AppendUvarint(dst, uint64(len(v.Bytes)))
+		return append(dst, v.Bytes...)
+	default:
+		if len(v.Bytes) != w {
+			panic(fmt.Sprintf("encoding: tipo %#x exige %d bytes, recebeu %d", v.Type, w, len(v.Bytes)))
+		}
+		return append(dst, v.Bytes...)
+	}
+}
+
+// FieldReader é um cursor zero-copy sobre um payload de campos codificados.
+// Os Bytes das Values devolvidas são subslices do payload.
+type FieldReader struct {
+	payload []byte
+	pos     int
+	err     error
+}
+
+// Reset posiciona o reader no início do payload e limpa o estado de erro.
+func (r *FieldReader) Reset(payload []byte) {
+	r.payload = payload
+	r.pos = 0
+	r.err = nil
+}
+
+// Err devolve o erro de corrupção encontrado, ou nil em fim limpo.
+func (r *FieldReader) Err() error { return r.err }
+
+func (r *FieldReader) fail(format string, args ...any) (types.FieldID, types.Value, bool) {
+	r.err = fmt.Errorf("%w: "+format, append([]any{ErrCorrupt}, args...)...)
+	return 0, types.Value{}, false
+}
+
+// Next devolve o próximo campo. ok=false indica fim do payload ou erro
+// (distinguíveis via Err).
+func (r *FieldReader) Next() (types.FieldID, types.Value, bool) {
+	if r.err != nil || r.pos >= len(r.payload) {
+		return 0, types.Value{}, false
+	}
+	if len(r.payload)-r.pos < 3 {
+		return r.fail("header de campo truncado no offset %d", r.pos)
+	}
+	id := types.FieldID(binary.LittleEndian.Uint16(r.payload[r.pos:]))
+	tag := types.FieldType(r.payload[r.pos+2])
+	r.pos += 3
+
+	w := fieldWidth(tag)
+	if w == invalidWidth {
+		return r.fail("tag de tipo inválida %#x no offset %d", tag, r.pos-1)
+	}
+
+	length := w
+	if w == varWidth {
+		l, n := binary.Uvarint(r.payload[r.pos:])
+		if n <= 0 {
+			return r.fail("uvarint de length inválido no offset %d", r.pos)
+		}
+		r.pos += n
+		if l > uint64(len(r.payload)-r.pos) {
+			return r.fail("length %d além do fim do payload no offset %d", l, r.pos)
+		}
+		length = int(l)
+	} else if length > len(r.payload)-r.pos {
+		return r.fail("valor de largura fixa truncado no offset %d", r.pos)
+	}
+
+	val := types.Value{Type: tag}
+	raw := r.payload[r.pos : r.pos+length : r.pos+length]
+	r.pos += length
+
+	switch {
+	case tag == types.TypeBool:
+		if raw[0] > 1 {
+			return r.fail("byte de bool inválido %d", raw[0])
+		}
+		val.I64 = int64(raw[0])
+	case w == 8:
+		val.I64 = int64(binary.LittleEndian.Uint64(raw))
+	default:
+		val.Bytes = raw
+	}
+	return id, val, true
+}
