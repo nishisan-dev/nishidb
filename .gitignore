@@ -1,0 +1,8 @@
+/nishidb
+cmd/nishidb/nishidb
+coverage.out
+*.test
+.superpowers/
+dist/
+*.prof
+report.json
