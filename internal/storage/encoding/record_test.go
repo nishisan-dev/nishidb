@@ -189,9 +189,9 @@ func TestParseHeaderRejeitaComprimentosInsanos(t *testing.T) {
 	payload, _ := buildTestPayload(t)
 	rec := mustBuildRecord(t, nil, 1, 2, 0, []byte("key"), payload)
 
-	// payloadLength absurdo: ParseHeader aceita (só valida forma), mas o
-	// caller usa MaxRecordSize; aqui garantimos que ParseRecord rejeita
-	// quando o buffer não contém o total declarado.
+	// payloadLength absurdo é rejeitado já no ParseHeader (tetos absolutos,
+	// ver TestParseHeaderRejeitaLimitesAbsolutos); aqui garantimos que o
+	// caminho completo do ParseRecord também devolve ErrCorrupt.
 	c := bytes.Clone(rec)
 	binary.LittleEndian.PutUint32(c[28:32], math.MaxUint32)
 	if _, err := ParseRecord(c); !errors.Is(err, ErrCorrupt) {

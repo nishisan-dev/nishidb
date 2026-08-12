@@ -18,8 +18,8 @@ import (
 //
 // Concorrência: leitores e o writer único podem usar os métodos Atomic*
 // simultaneamente (RLock interno); Grow remapeia sob Lock exclusivo, então
-// nenhum acesso em voo observa o remap. Slices devolvidas por Bytes são
-// invalidadas por Grow/Close — não retê-las através dessas chamadas.
+// nenhum acesso em voo observa o remap. Acesso a bytes crus é sempre
+// escopado via WithBytes — nenhuma slice do mapeamento escapa do RLock.
 type Region struct {
 	mu   sync.RWMutex
 	f    *os.File
