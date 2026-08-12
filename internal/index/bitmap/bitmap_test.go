@@ -6,10 +6,66 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"testing"
 
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
+
+func TestIteracaoConcorrenteComGrowLazy(t *testing.T) {
+	// I7b: o Iterator segura um *mmap.Region através de múltiplas chamadas
+	// enquanto o writer pode remapear a região (grow lazy do Set). Cada
+	// Next re-resolve o ponteiro sob RLock — este teste exercita a janela
+	// Lookup/Next × Grow sob -race.
+	ix, _ := openIndex(t, 7)
+	v := strValue("conc")
+	if err := ix.Set(v, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			it, ok, err := ix.Lookup(v)
+			if err != nil || !ok {
+				t.Errorf("Lookup concorrente: (%v,%v)", ok, err)
+				return
+			}
+			last := types.RowID(0)
+			first := true
+			for it.Next() {
+				if !first && it.RowID() <= last {
+					t.Errorf("iterador fora de ordem: %d após %d", it.RowID(), last)
+					return
+				}
+				last, first = it.RowID(), false
+			}
+			it.Close()
+		}
+	}()
+
+	// rowIds crescentes cruzando ~3 fronteiras de grow (8KiB→64KiB de words).
+	for r := types.RowID(0); r <= 500_000; r += 1000 {
+		if err := ix.Set(v, r); err != nil {
+			t.Fatalf("Set(%d): %v", r, err)
+		}
+	}
+	close(done)
+	wg.Wait()
+
+	rows, ok := collect(t, ix, v)
+	if !ok || len(rows) != 501 {
+		t.Fatalf("esperado 501 rows ao final, obtido (%d,%v)", len(rows), ok)
+	}
+}
 
 func strValue(s string) types.Value {
 	return types.Value{Type: types.TypeString, Bytes: []byte(s)}
