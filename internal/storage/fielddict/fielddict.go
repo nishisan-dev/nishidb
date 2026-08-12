@@ -24,7 +24,7 @@ import (
 //	entry:            nameLen u16 LE | typeHint u8 | name | crc32c u32
 //	                  (CRC sobre nameLen..name; fieldID implícito, 1-based)
 const (
-	headerSize   = 8
+	headerSize    = 8
 	entryOverhead = 3 + 4 // nameLen+typeHint antes do nome, CRC depois
 
 	dictVersion = 1

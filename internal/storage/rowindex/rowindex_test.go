@@ -13,10 +13,10 @@ import (
 
 func TestPackUnpackRoundTrip(t *testing.T) {
 	cases := []struct {
-		name    string
-		seg     uint32
-		off     uint32
-		flags   uint8
+		name  string
+		seg   uint32
+		off   uint32
+		flags uint8
 	}{
 		{"minimo", 1, 64, 0},
 		{"tipico", 127, 9283712, 0},
