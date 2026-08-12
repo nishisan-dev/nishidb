@@ -23,6 +23,31 @@ func TestFnv1a64VetoresPublicos(t *testing.T) {
 	}
 }
 
+// Golden vectors do HashKey COMPOSTO (remapReserved(fmix64(fnv1a64(k)))),
+// calculados com implementação independente (Python) pelo revisor.
+//
+// ATENÇÃO: primary.idx é um arquivo persistente indexado por este hash.
+// Mudar qualquer valor abaixo significa que TODO índice existente aponta
+// para o slot errado — exige bump de hashKind no header e rebuild da
+// primary.idx. Estes vetores fixam a composição exata das três etapas
+// (reordená-las passaria em todos os testes de propriedade sem isto).
+func TestHashKeyGoldenVectors(t *testing.T) {
+	cases := []struct {
+		in   string
+		want uint64
+	}{
+		{"", 0xefd01f60ba992926},
+		{"a", 0x82a2a958a9bece5b},
+		{"foobar", 0x2c22194922d1672b},
+		{"CMP-V0001PPCLP-013", 0xa246190b6f3496c4},
+	}
+	for _, c := range cases {
+		if got := HashKey([]byte(c.in)); got != c.want {
+			t.Errorf("HashKey(%q): esperado %#x, obtido %#x", c.in, c.want, got)
+		}
+	}
+}
+
 func TestFmix64Propriedades(t *testing.T) {
 	if fmix64(0) != 0 {
 		t.Fatalf("fmix64(0) deve ser 0, obtido %#x", fmix64(0))
