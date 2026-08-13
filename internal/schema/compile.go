@@ -270,6 +270,31 @@ func (c *Compiled) FieldByName(name []byte) (*CompiledField, bool) {
 	return f, ok
 }
 
+// FieldsByID devolve os campos conhecidos em ordem CRESCENTE de FieldID.
+//
+// É um SNAPSHOT: campo auto registrado por ResolveUnknown depois desta
+// chamada não aparece. Isso é comportamento, não bug — num dataset com
+// wildcard e unknownFields include, duas execuções de `SELECT *` em momentos
+// diferentes podem devolver conjuntos de colunas diferentes, porque o
+// universo de campos cresce com os eventos.
+//
+// Caminho frio (bind de query): aloca. Os ponteiros são seguros de reter —
+// CompiledField é imutável após a criação, exceto pelo tipo fixado de campo
+// auto, que é publicado atomicamente.
+func (c *Compiled) FieldsByID() []*CompiledField {
+	c.mu.RLock()
+	// byID tem UMA entrada por campo (byName tem duas para campo com alias):
+	// não há duplicata a remover aqui.
+	out := make([]*CompiledField, 0, len(c.byID))
+	for _, f := range c.byID {
+		out = append(out, f)
+	}
+	c.mu.RUnlock()
+
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
 // FieldByID resolve pelo ID do dicionário.
 func (c *Compiled) FieldByID(id types.FieldID) (*CompiledField, bool) {
 	c.mu.RLock()
