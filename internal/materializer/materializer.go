@@ -21,6 +21,12 @@ import (
 type Store interface {
 	// GetByKey lê o record corrente da key sobre buf (que pode crescer);
 	// Record.Key e Record.Payload são janelas zero-copy sobre o buf devolvido.
+	//
+	// Contrato do buffer: o caller passa buf[:0] e REATRIBUI o slice
+	// devolvido; o provedor pode substituí-lo por um maior, mas NUNCA pode
+	// preservar o conteúdo anterior (append sobre o que recebeu) — isso faria
+	// o buffer do writer crescer sem limite, um evento por vez, sem que
+	// nenhum teste de comportamento percebesse.
 	GetByKey(key, buf []byte) (types.Record, []byte, bool, error)
 
 	// Put publica o estado novo. prev != nil evita o re-lookup e entrega o
@@ -179,6 +185,12 @@ func New(c *schema.Compiled, s Store) *Materializer {
 }
 
 // Metrics devolve os contadores acumulados.
+//
+// A leitura é contador a contador, NÃO um instantâneo atômico do conjunto:
+// com o writer ativo, EventsTotal pode já contar um evento cujo desfecho
+// ainda não entrou em Created/Stale/Invalid. Serve a observabilidade (onde a
+// defasagem de um evento não muda nada) e aos testes, que leem com o writer
+// parado — não use como base de decisão de controle de fluxo.
 func (m *Materializer) Metrics() MetricsSnapshot {
 	s := MetricsSnapshot{
 		EventsTotal:   m.metrics.events.Load(),

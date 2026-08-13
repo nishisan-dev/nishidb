@@ -3,9 +3,15 @@
 build:
 	go build ./...
 
+# Suíte completa, INCLUINDO os gates de alocação (testing.AllocsPerRun), que
+# são //go:build !race por construção. É este alvo que protege o orçamento de
+# alocações por evento — rode-o antes de commitar.
 test:
 	go test ./...
 
+# Detector de corrida. NÃO cobre os gates de alocação: a instrumentação do
+# -race altera a contagem, então eles ficam de fora do build e se anunciam
+# como SKIP. Os dois alvos são complementares, nenhum substitui o outro.
 test-race:
 	go test -race ./...
 
