@@ -177,6 +177,67 @@ func TestPutUpdateDiffsIndexPostings(t *testing.T) {
 	assertPosting(t, s, 2, strVal("Stop"), []types.RowID{rowID})
 }
 
+// A chave de posting é canônica ([type][payload], como o values.dict real):
+// bytes iguais sob tipos diferentes são valores DIFERENTES. Sem o prefixo de
+// tipo, uma string e um bytes com o mesmo conteúdo compartilhariam posting e
+// o lookup devolveria a row errada — que é exatamente o tipo de divergência
+// que o dublê existe para expor.
+func TestPostingKeySeparaTiposComMesmosBytes(t *testing.T) {
+	s := New(Indexes{Bitmap: []types.FieldID{2, 3}})
+	mesmoConteudo := []byte("0100")
+	comoString := types.Value{Type: types.TypeString, Bytes: mesmoConteudo}
+	comoBytes := types.Value{Type: types.TypeBytes, Bytes: mesmoConteudo}
+
+	pA := payload(t, fv(1, strVal("A")), fv(2, comoString))
+	rowA, _, err := s.Put([]byte("A"), 1, 0, pA, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pB := payload(t, fv(1, strVal("B")), fv(2, comoBytes))
+	rowB, _, err := s.Put([]byte("B"), 1, 0, pB, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertPosting(t, s, 2, comoString, []types.RowID{rowA})
+	assertPosting(t, s, 2, comoBytes, []types.RowID{rowB})
+
+	// Mesma armadilha entre tipos de largura fixa: bool 1 e int64 1 têm o
+	// mesmo I64.
+	pC := payload(t, fv(1, strVal("C")), fv(3, intVal(1)))
+	rowC, _, err := s.Put([]byte("C"), 1, 0, pC, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	boolVal := types.Value{Type: types.TypeBool, I64: 1}
+	pD := payload(t, fv(1, strVal("D")), fv(3, boolVal))
+	rowD, _, err := s.Put([]byte("D"), 1, 0, pD, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPosting(t, s, 3, intVal(1), []types.RowID{rowC})
+	assertPosting(t, s, 3, boolVal, []types.RowID{rowD})
+}
+
+// Campo indexado cujo valor NÃO mudou mantém o posting: o diff compara os
+// valores e só mexe no índice quando há troca real.
+func TestPutValorIndexadoInalteradoMantemPosting(t *testing.T) {
+	s := New(Indexes{Bitmap: []types.FieldID{2}})
+	p1 := payload(t, fv(1, strVal("ABC")), fv(2, strVal("Start")))
+	rowID, _, err := s.Put([]byte("ABC"), 1, 0, p1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Só o campo 1 muda; o indexado fica igual.
+	var buf []byte
+	prev, _, _, _ := s.GetByKey([]byte("ABC"), buf)
+	p2 := payload(t, fv(1, strVal("XYZ")), fv(2, strVal("Start")))
+	if _, _, err := s.Put([]byte("ABC"), 2, 0, p2, &prev); err != nil {
+		t.Fatal(err)
+	}
+	assertPosting(t, s, 2, strVal("Start"), []types.RowID{rowID})
+}
+
 func TestPutRemovedFieldClearsPosting(t *testing.T) {
 	s := New(Indexes{Bitmap: []types.FieldID{2}})
 	p1 := payload(t, fv(1, strVal("ABC")), fv(2, strVal("Start")))

@@ -32,6 +32,7 @@ package fakestorage
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"sort"
 
@@ -111,8 +112,30 @@ func New(idx Indexes) *Store {
 	return s
 }
 
+// valKey serializa a Value na MESMA forma canônica do índice bitmap real
+// ([type][payload], bitmap.canonicalValue): tipo + os 8 bytes do I64 para os
+// tipos de largura fixa, tipo + os bytes crus para os variáveis.
+//
+// Já foi um fmt.Sprintf. Era chamado por campo no diff, o que fazia um Apply
+// de evento RADIUS custar ~120 alocações — todas do dublê, escondendo a
+// medição do código sob teste nos benchmarks que o usam.
 func valKey(v types.Value) string {
-	return fmt.Sprintf("%d|%d|%x", v.Type, v.I64, v.Bytes)
+	var scratch [40]byte // cobre ipv6_prefix (17B) e a maioria das strings
+	b := append(scratch[:0], byte(v.Type))
+	switch v.Type {
+	case types.TypeInt64, types.TypeDouble, types.TypeBool, types.TypeTimestamp:
+		b = binary.LittleEndian.AppendUint64(b, uint64(v.I64))
+	default:
+		b = append(b, v.Bytes...)
+	}
+	return string(b)
+}
+
+// sameValue compara duas Values sem passar por valKey — o diff só precisa
+// saber se o valor MUDOU, e comparar campo a campo não constrói string
+// nenhuma.
+func sameValue(a, b types.Value) bool {
+	return a.Type == b.Type && a.I64 == b.I64 && bytes.Equal(a.Bytes, b.Bytes)
 }
 
 // Put espelha o write path do Store real: valida os argumentos, resolve o
@@ -220,7 +243,10 @@ func (s *Store) diffPostings(rowID types.RowID, prevPayload, newPayload []byte) 
 			s.addPosting(nid, nv, rowID)
 			nid, nv, nok = nr.Next()
 		default: // mesmo id
-			if valKey(pv) != valKey(nv) {
+			// O check de índice vem ANTES da comparação: campo sem índice não
+			// tem posting a atualizar, e é a maioria esmagadora dos campos de
+			// um evento.
+			if s.indexed[pid] && !sameValue(pv, nv) {
 				s.removePosting(pid, pv, rowID)
 				s.addPosting(nid, nv, rowID)
 			}
