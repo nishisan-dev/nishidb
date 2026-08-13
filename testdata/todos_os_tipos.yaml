@@ -1,0 +1,58 @@
+version: 1
+
+# Dataset de teste com UM campo de cada tipo do wire format. Existe para o
+# teste de propriedade cruzado ingestão × query: o YAML da spec §12 não cobre
+# double, boolean, bytes, json nem os prefixos, e é justamente nesses tipos que
+# uma divergência entre o parser da ingestão e o da query passa despercebida —
+# ela aparece como resultado VAZIO, não como erro.
+name: todos_os_tipos
+
+materialization:
+  key:
+    source: payload
+    field: id
+    type: string
+  mode: merge
+  sequence:
+    field: _SEQ
+    type: int64
+    strategy: greater
+
+schema:
+  include:
+    - "*"
+  unknownFields: include
+  fields:
+    id:
+      type: string
+    _SEQ:
+      type: int64
+    texto:
+      type: string
+      alias: t
+      index: bitmap
+    inteiro:
+      type: int64
+    real:
+      type: double
+    booleano:
+      type: boolean
+    quando:
+      type: timestamp
+    v4:
+      type: ipv4
+      index: hash
+    v6:
+      type: ipv6
+    rede4:
+      type: ipv4_prefix
+    rede6:
+      type: ipv6_prefix
+    cru:
+      type: bytes
+    doc:
+      type: json
+
+query:
+  maxRows: 1000
+  timeout: 30s
