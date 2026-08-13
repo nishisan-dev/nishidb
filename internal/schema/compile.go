@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/types"
@@ -44,20 +45,76 @@ const (
 )
 
 // FieldDictionary é o que o schema consome do storage (fielddict): IDs
-// estáveis e persistentes por nome de campo.
+// estáveis e persistentes por nome de campo, e o tipo FIXADO dos campos sem
+// declaração (R11).
+//
+// Os dois métodos de tipo entram na interface, e não numa capability
+// opcional: com type assertion, um dicionário que não a implementasse fixaria
+// o tipo só em memória e o perderia no restart EM SILÊNCIO — o campo passaria
+// a não ser comparável em query sem nada indicar o porquê.
 type FieldDictionary interface {
 	LookupOrCreate(name []byte) (types.FieldID, error)
+	TypeHint(id types.FieldID) (types.FieldType, bool)
+	SetTypeHint(id types.FieldID, t types.FieldType) error
 }
 
-// CompiledField é a forma resolvida de um campo, imutável após criação.
+// CompiledField é a forma resolvida de um campo. Imutável após a criação,
+// exceto pelo tipo fixado de campo auto (autoType), que é publicado uma única
+// vez na primeira observação.
+//
+// SEMPRE use por ponteiro: o atômico o torna não-copiável (go vet -copylocks).
 type CompiledField struct {
 	ID                       types.FieldID
 	Name                     string
-	Alias                    string // "" se ausente
-	Type                     types.FieldType
-	IsAuto                   bool // tipo resolvido em runtime na primeira observação
+	Alias                    string          // "" se ausente
+	Type                     types.FieldType // tipo DECLARADO; TypeNull quando IsAuto
+	IsAuto                   bool            // tipo resolvido na primeira observação
 	Index                    IndexKind
 	IsKey, IsSequence, IsTTL bool
+
+	// autoType é o tipo FIXADO de um campo auto (R11); TypeNull = ainda não
+	// observado. Atômico porque o writer o fixa enquanto goroutines de query
+	// leem EffectiveType sem lock — um campo simples aqui seria data race que
+	// o -race pega no CI e nem sempre em dev.
+	autoType atomic.Uint32
+}
+
+// EffectiveType devolve o tipo contra o qual os valores deste campo devem ser
+// interpretados: o declarado no YAML ou, para campo auto, o FIXADO na
+// primeira observação.
+//
+// types.TypeNull significa "campo auto que este dataset nunca viu" — o único
+// estado em que não há tipo para comparar, e o binder SQL recusa a comparação
+// em vez de inventar um.
+func (f *CompiledField) EffectiveType() types.FieldType {
+	if !f.IsAuto {
+		return f.Type
+	}
+	return types.FieldType(f.autoType.Load())
+}
+
+// FixAutoType fixa o tipo de um campo auto na primeira observação: persiste
+// no dicionário (durável antes de retornar) e só então publica em memória.
+// Idempotente para o mesmo tipo; tipo divergente devolve o erro do dicionário
+// (fielddict.ErrTypeHintConflict), que o materializer classifica como
+// TYPE_CONVERSION — evento ruim, não falha de ingestão.
+//
+// Exclusivo da goroutine do writer.
+func (c *Compiled) FixAutoType(f *CompiledField, t types.FieldType) error {
+	if f == nil {
+		return specErrf("FixAutoType com campo nulo")
+	}
+	if !f.IsAuto {
+		return specErrf("campo %q tem tipo declarado (%s): só campo auto tem tipo a fixar", f.Name, f.Type)
+	}
+	if t == types.TypeNull {
+		return specErrf("campo %q: tipo nulo não pode ser fixado", f.Name)
+	}
+	if err := c.dict.SetTypeHint(f.ID, t); err != nil {
+		return err
+	}
+	f.autoType.Store(uint32(t))
+	return nil
 }
 
 // Compiled é a spec compilada usada no hot path. FieldByName/FieldByID são
@@ -171,6 +228,14 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 		} else {
 			cf.IsAuto = true
 		}
+		// Carrega o tipo já fixado em execuções anteriores: é isto que faz o
+		// tipo de um campo auto sobreviver a restart. Sem esta linha o
+		// processo reiniciado age como se o campo nunca tivesse sido visto.
+		if cf.IsAuto {
+			if t, ok := dict.TypeHint(cf.ID); ok {
+				cf.autoType.Store(uint32(t))
+			}
+		}
 		c.byName[cf.Name] = cf
 		if cf.Alias != "" {
 			c.byName[cf.Alias] = cf
@@ -253,6 +318,11 @@ func (c *Compiled) ResolveUnknown(name []byte) (*CompiledField, error) {
 		return nil, fmt.Errorf("registrando campo desconhecido %q: %w", name, err)
 	}
 	cf := &CompiledField{ID: id, Name: string(name), IsAuto: true}
+	// O campo pode já existir no dicionário, com tipo fixado, de uma execução
+	// anterior — mesma razão do carregamento no Compile.
+	if t, ok := c.dict.TypeHint(id); ok {
+		cf.autoType.Store(uint32(t))
+	}
 	c.byName[cf.Name] = cf
 	c.byID[cf.ID] = cf
 	return cf, nil

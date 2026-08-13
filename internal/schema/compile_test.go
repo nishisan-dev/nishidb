@@ -9,15 +9,24 @@ import (
 )
 
 // fakeDict atribui IDs sequenciais na ordem das chamadas (como o fielddict
-// real do storage) e registra a ordem para asserções de determinismo.
+// real do storage), registra a ordem para asserções de determinismo e
+// espelha o tipo fixado dos campos auto (R11).
 type fakeDict struct {
 	ids   map[string]types.FieldID
+	hints map[types.FieldID]types.FieldType
 	order []string
 	next  types.FieldID
+	// setCalls conta as fixações persistidas: é assim que os testes provam
+	// que o tipo foi ao dicionário, e não só à memória do Compiled.
+	setCalls int
 }
 
 func newFakeDict() *fakeDict {
-	return &fakeDict{ids: map[string]types.FieldID{}, next: 1}
+	return &fakeDict{
+		ids:   map[string]types.FieldID{},
+		hints: map[types.FieldID]types.FieldType{},
+		next:  1,
+	}
 }
 
 func (d *fakeDict) LookupOrCreate(name []byte) (types.FieldID, error) {
@@ -29,6 +38,27 @@ func (d *fakeDict) LookupOrCreate(name []byte) (types.FieldID, error) {
 	d.ids[string(name)] = id
 	d.order = append(d.order, string(name))
 	return id, nil
+}
+
+func (d *fakeDict) TypeHint(id types.FieldID) (types.FieldType, bool) {
+	t, ok := d.hints[id]
+	return t, ok && t != types.TypeNull
+}
+
+func (d *fakeDict) SetTypeHint(id types.FieldID, t types.FieldType) error {
+	if t == types.TypeNull {
+		return errors.New("tipo nulo não pode ser fixado")
+	}
+	switch atual := d.hints[id]; atual {
+	case t:
+		return nil
+	case types.TypeNull:
+		d.hints[id] = t
+		d.setCalls++
+		return nil
+	default:
+		return errors.New("tipo já fixado com outro valor")
+	}
 }
 
 func compileBase(t *testing.T) (*Compiled, *fakeDict) {
