@@ -7,12 +7,35 @@
 // permite que o dublê de teste de um subsistema não importe a implementação
 // que dubla.
 //
-// O critério para uma interface morar aqui, e não no consumidor, é estreito:
-// só entram as que têm mais de um provedor real (o Store e o seu fake). Uma
-// interface com provedor único continua sendo declarada por quem a consome.
+// O critério de admissão é estreito e vale para as duas categorias que não
+// são dados puros:
+//
+//   - interfaces: só entram as que têm mais de um provedor REAL (o Store e o
+//     seu dublê). Interface com provedor único continua no consumidor.
+//   - constantes: só entram limites de FORMATO que provedor e dublê precisam
+//     aplicar identicamente. Constante de implementação (tamanho de buffer,
+//     política interna) fica no pacote que a usa.
+//
+// O teste é sempre o mesmo: se um dublê precisasse importar a implementação
+// que dubla para respeitar a regra, a regra mora aqui.
 package types
 
-import "errors"
+import (
+	"errors"
+	"math"
+)
+
+// MaxIndexedValueBytes é o teto de um valor que pode entrar num índice
+// bitmap: o dicionário de valores codifica o comprimento em u16.
+//
+// É limite de FORMATO, e por isso mora aqui e não no pacote do índice: o
+// dublê de teste do storage precisa recusar o mesmo valor que o Store real
+// recusa, senão um teste passa no dublê e explode na integração — que é
+// exatamente a divergência que um dublê existe para expor. As alternativas
+// eram o dublê importar a implementação do índice, recriando o acoplamento
+// que os sentinelas eliminaram, ou repetir o número nos dois lados, onde
+// ele envelheceria calado.
+const MaxIndexedValueBytes = math.MaxUint16
 
 // Sentinelas que os consumidores do storage precisam classificar.
 //

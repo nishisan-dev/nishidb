@@ -10,7 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nishisan-dev/nishidb/internal/index/bitmap"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
@@ -66,9 +65,9 @@ func TestTetoDoValorIndexavelNaFronteira(t *testing.T) {
 	// só com "70000 falha" ficaria verde com o limite em qualquer lugar.
 	s := openStore(t, Options{BitmapFields: []types.FieldID{fldStatus}})
 
-	noLimite := strings.Repeat("v", bitmap.MaxValueBytes)
+	noLimite := strings.Repeat("v", types.MaxIndexedValueBytes)
 	if _, _, err := s.Put([]byte("limite"), 1, 0, statusPayload(t, s, "limite", noLimite, 1), nil); err != nil {
-		t.Fatalf("valor de exatamente %d bytes deveria ser aceito: %v", bitmap.MaxValueBytes, err)
+		t.Fatalf("valor de exatamente %d bytes deveria ser aceito: %v", types.MaxIndexedValueBytes, err)
 	}
 	// E fica de fato indexado: aceitar sem indexar seria falso negativo.
 	it, err := s.LookupBitmap(fldStatus, strVal(noLimite))
@@ -79,7 +78,7 @@ func TestTetoDoValorIndexavelNaFronteira(t *testing.T) {
 		t.Fatalf("o valor no limite deveria estar indexado: %v", rows)
 	}
 
-	umAMais := strings.Repeat("v", bitmap.MaxValueBytes+1)
+	umAMais := strings.Repeat("v", types.MaxIndexedValueBytes+1)
 	if _, _, err := s.Put([]byte("acima"), 2, 0, statusPayload(t, s, "acima", umAMais, 2), nil); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("um byte acima do teto deveria ser recusado, obtido %v", err)
 	}

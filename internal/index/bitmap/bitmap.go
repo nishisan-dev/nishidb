@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
-	"math"
 	"math/bits"
 	"os"
 	"path/filepath"
@@ -47,10 +46,6 @@ var (
 	castagnoli = crc32.MakeTable(crc32.Castagnoli)
 )
 
-// MaxValueBytes é o teto de um valor indexável: o values.dict codifica o
-// comprimento do valor em u16.
-const MaxValueBytes = math.MaxUint16
-
 // ValidateValue informa se o valor pode ser indexado.
 //
 // O Store precisa chamar isto ANTES de tornar o record durável. Descobrir a
@@ -65,9 +60,9 @@ func ValidateValue(v types.Value) error {
 		return nil // largura fixa, sempre cabe
 	case types.TypeString, types.TypeBytes, types.TypeJSON,
 		types.TypeIPv4, types.TypeIPv6, types.TypeIPv4Prefix, types.TypeIPv6Prefix:
-		if len(v.Bytes) > MaxValueBytes {
+		if len(v.Bytes) > types.MaxIndexedValueBytes {
 			return fmt.Errorf("bitmap: valor de %d bytes excede o teto de %d do values.dict",
-				len(v.Bytes), MaxValueBytes)
+				len(v.Bytes), types.MaxIndexedValueBytes)
 		}
 		return nil
 	default:
@@ -207,7 +202,7 @@ func (ix *Index) lookupID(key []byte) (uint32, bool) {
 // id — mesma regra do fields.dict). Exclusivo do writer.
 func (ix *Index) createID(key []byte) (uint32, error) {
 	valBytes := key[1:]
-	if len(valBytes) > math.MaxUint16 {
+	if len(valBytes) > types.MaxIndexedValueBytes {
 		return 0, fmt.Errorf("bitmap: valor com %d bytes excede u16", len(valBytes))
 	}
 	entry := make([]byte, 0, 3+len(valBytes)+4)
