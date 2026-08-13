@@ -1,0 +1,461 @@
+// Package binder faz a análise semântica do SQL v1: resolve nomes contra o
+// schema do dataset, coere literais e parâmetros para a representação binária
+// da coluna e numera os slots que o executor usa para varrer o payload.
+//
+// Duas regras semânticas que o binder DOCUMENTA e o executor implementa:
+//
+//  1. campo ausente na row compara FALSE para qualquer operador, inclusive
+//     `!=`. Não há lógica trivalente na v1; como também não existe NOT
+//     genérico, colapsar "desconhecido" em falso é seguro sob AND e OR.
+//  2. `IS NULL` é campo AUSENTE da row e `IS NOT NULL` é campo presente —
+//     coerente com a decisão de que NULL é ausência nas três camadas (merge,
+//     índice e query).
+//
+// O binder é puro: não toca dados, não toca o Store e não muta a AST nem o
+// schema. Também não reescreve a árvore WHERE (nada de constant folding,
+// reordenação ou dedup): o planner depende da FORMA da árvore para achatar
+// cadeias de AND/OR, e mexer aqui o quebraria em silêncio.
+package binder
+
+import (
+	"sort"
+	"time"
+
+	"github.com/nishisan-dev/nishidb/internal/query/parser"
+	"github.com/nishisan-dev/nishidb/internal/schema"
+	"github.com/nishisan-dev/nishidb/internal/types"
+)
+
+// BoundQuery é a query resolvida, pronta para o planner e o executor.
+type BoundQuery struct {
+	Dataset string           // == sc.Name
+	Schema  *schema.Compiled // repassado ao executor (FieldByID no encoder)
+
+	Star    bool          // a projeção veio de '*'
+	Columns []BoundColumn // projeção resolvida, na ORDEM DE SAÍDA
+
+	Where BoundExpr // nil quando não há WHERE
+
+	HasLimit bool  // LIMIT explícito na query
+	Limit    int64 // válido só com HasLimit; sempre >= 0
+	MaxRows  int64 // teto implícito do dataset
+	// EffectiveLimit é min(Limit, MaxRows) com HasLimit, e MaxRows sem.
+	//
+	// O trio (HasLimit, Limit, MaxRows) viaja separado de propósito: quando a
+	// parada vier do teto IMPLÍCITO e ainda houver candidatos, o executor
+	// precisa dizer que truncou — um corte silencioso por MaxRows faria o
+	// cliente ler um resultado parcial como completo.
+	EffectiveLimit int64
+	Timeout        time.Duration
+
+	Slots Slots // campos a coletar por row (projeção ∪ WHERE)
+
+	// arena guarda os bytes dos literais parseados (ips, prefixos). Vive
+	// enquanto o BoundQuery viver; as janelas em Val.Bytes apontam para cá.
+	arena []byte
+}
+
+// BoundColumn é uma coluna de saída.
+type BoundColumn struct {
+	Field *schema.CompiledField
+	Name  string // nome de SAÍDA
+	Slot  int    // índice em Slots.IDs
+}
+
+// BoundExpr é selada: só os três tipos abaixo a implementam, então o planner
+// e o executor fazem type switch exaustivo.
+type BoundExpr interface{ isBoundExpr() }
+
+// BoundLogical preserva a forma da árvore do parser (left-leaning).
+type BoundLogical struct {
+	Op          parser.LogicalOp
+	Left, Right BoundExpr
+}
+
+// BoundComparison já carrega o valor coerido e o modo de comparação: o
+// executor não re-deriva tipo por row, e o planner enxerga `key = ?` como
+// point lookup no plan-time.
+type BoundComparison struct {
+	Field    *schema.CompiledField
+	Slot     int
+	Op       parser.CmpOp
+	Val      types.Value // literal OU parâmetro JÁ coerido; nunca zero
+	Kind     CompareKind // nunca CompareUnset
+	IsParam  bool        // diagnóstico apenas; o valor já está em Val
+	ParamIdx int         // diagnóstico apenas; 0-based, válido só com IsParam
+}
+
+// BoundNullCheck vale para QUALQUER tipo, inclusive bytes, json e auto sem
+// tipo fixado: presença não depende de tipo.
+type BoundNullCheck struct {
+	Field *schema.CompiledField
+	Slot  int
+	Not   bool
+}
+
+func (*BoundLogical) isBoundExpr()    {}
+func (*BoundComparison) isBoundExpr() {}
+func (*BoundNullCheck) isBoundExpr()  {}
+
+// Slots é o plano de coleta do executor: os FieldIDs de que a query precisa,
+// em ordem CRESCENTE e sem duplicatas — a mesma ordem do payload, o que
+// permite casar payload×slots por merge linear, sem map e sem busca, numa
+// passada só por row.
+//
+// Os slots são numerados AQUI e são contrato: o executor os consome como
+// estão e não os recalcula. Com dois lugares calculando a mesma ordenação, a
+// primeira divergência apareceria como uma coluna lendo o valor do campo
+// errado — falha silenciosa.
+type Slots struct {
+	IDs []types.FieldID
+}
+
+// Len é a largura do array de valores que o executor mantém por row.
+func (s Slots) Len() int { return len(s.IDs) }
+
+// Index devolve o slot de um FieldID (busca binária). O executor não precisa
+// dele no laço por row — só o planner e os testes.
+func (s Slots) Index(id types.FieldID) (int, bool) {
+	i := sort.Search(len(s.IDs), func(i int) bool { return s.IDs[i] >= id })
+	if i < len(s.IDs) && s.IDs[i] == id {
+		return i, true
+	}
+	return 0, false
+}
+
+// Bind faz a análise semântica de um SELECT já parseado contra o schema
+// compilado do dataset e RESOLVE os parâmetros posicionais.
+//
+// params é indexado por Operand.ParamIdx (0-based); len(params) tem de ser
+// igual a stmt.ParamCount. Nas MENSAGENS os parâmetros são 1-based, porque é
+// como o usuário os conta.
+//
+// Lifetime: para coluna string, Val.Bytes copia o literal, mas o valor vindo
+// de PARÂMETRO também é copiado — o chamador pode reutilizar o slice params
+// depois do Bind.
+//
+// `SELECT *` é um SNAPSHOT do conjunto de campos no instante do bind: num
+// dataset com wildcard e unknownFields include, duas execuções da mesma query
+// podem devolver conjuntos de colunas diferentes conforme novos campos são
+// observados. É comportamento, não bug.
+func Bind(stmt *parser.SelectStmt, sc *schema.Compiled, params []types.Value) (*BoundQuery, error) {
+	if stmt == nil || sc == nil {
+		return nil, errNoPos("bind sem statement ou schema")
+	}
+	// Case-sensitive: identificadores são case-sensitive em toda a v1.
+	if stmt.Dataset != sc.Name {
+		return nil, errAt(stmt.DatasetPos, "dataset %q desconhecido (este handle é de %q)",
+			stmt.Dataset, sc.Name)
+	}
+	if len(params) != stmt.ParamCount {
+		return nil, errNoPos("a query tem %d parâmetros, foram fornecidos %d",
+			stmt.ParamCount, len(params))
+	}
+	if stmt.HasLimit && stmt.Limit < 0 {
+		return nil, errAt(stmt.LimitPos, "LIMIT deve ser >= 0, é %d", stmt.Limit)
+	}
+
+	b := &binder{
+		stmt:   stmt,
+		sc:     sc,
+		params: params,
+		usados: map[types.FieldID]struct{}{},
+	}
+	bq, err := b.run()
+	if err != nil {
+		return nil, err
+	}
+	return bq, nil
+}
+
+// binder acumula o estado de uma passada. Os campos Slot só podem ser
+// preenchidos na SEGUNDA passada, quando o conjunto de slots está fechado.
+type binder struct {
+	stmt   *parser.SelectStmt
+	sc     *schema.Compiled
+	params []types.Value
+
+	usados   map[types.FieldID]struct{}
+	arena    []byte
+	nParams  int      // comparações com parâmetro (invariante contra ParamCount)
+	pendente []janela // offsets de Val.Bytes a materializar depois dos appends
+}
+
+// janela é um (start,end) no arena, guardado até o fim dos appends. Emitir
+// Val.Bytes durante a construção deixaria janelas apontando para um array que
+// o append seguinte pode realocar.
+type janela struct {
+	cmp        *BoundComparison
+	start, end int
+}
+
+func (b *binder) run() (*BoundQuery, error) {
+	bq := &BoundQuery{
+		Dataset:  b.sc.Name,
+		Schema:   b.sc,
+		Star:     b.stmt.Star,
+		HasLimit: b.stmt.HasLimit,
+		Limit:    b.stmt.Limit,
+		MaxRows:  int64(b.sc.MaxRows),
+		Timeout:  b.sc.Timeout,
+	}
+
+	cols, err := b.projecao()
+	if err != nil {
+		return nil, err
+	}
+	bq.Columns = cols
+
+	if b.stmt.Where != nil {
+		where, err := b.expr(b.stmt.Where)
+		if err != nil {
+			return nil, err
+		}
+		bq.Where = where
+	}
+	// Defesa contra bug do PARSER, não contra o usuário: cada '?' aparece em
+	// exatamente uma comparação, então as contagens têm de bater.
+	if b.nParams != b.stmt.ParamCount {
+		return nil, errNoPos("parser inconsistente: ParamCount=%d, comparações com parâmetro=%d",
+			b.stmt.ParamCount, b.nParams)
+	}
+
+	// Fecha o conjunto de slots e só então materializa os índices.
+	bq.Slots = b.slots()
+	b.preencheSlots(bq)
+
+	// Agora que o arena parou de crescer, as janelas são estáveis.
+	for _, j := range b.pendente {
+		j.cmp.Val.Bytes = b.arena[j.start:j.end:j.end]
+	}
+	bq.arena = b.arena
+
+	bq.EffectiveLimit = bq.MaxRows
+	if bq.HasLimit && bq.Limit < bq.MaxRows {
+		bq.EffectiveLimit = bq.Limit
+	}
+	return bq, nil
+}
+
+func (b *binder) projecao() ([]BoundColumn, error) {
+	if b.stmt.Star {
+		campos := b.sc.FieldsByID()
+		cols := make([]BoundColumn, 0, len(campos))
+		for _, f := range campos {
+			// No '*' o usuário não escreveu nome nenhum, então o rótulo é o
+			// alias quando existe.
+			nome := f.Name
+			if f.Alias != "" {
+				nome = f.Alias
+			}
+			b.usa(f.ID)
+			cols = append(cols, BoundColumn{Field: f, Name: nome})
+		}
+		return cols, nil
+	}
+
+	cols := make([]BoundColumn, 0, len(b.stmt.Projection))
+	for _, ref := range b.stmt.Projection {
+		f, err := b.coluna(ref.Name, ref.Pos)
+		if err != nil {
+			return nil, err
+		}
+		b.usa(f.ID)
+		// Nome de saída é o que o usuário ESCREVEU: `SELECT status` rotula
+		// "status" mesmo que o campo se chame Acct-Status-Type.
+		cols = append(cols, BoundColumn{Field: f, Name: ref.Name})
+	}
+	return cols, nil
+}
+
+// coluna resolve nome original OU alias. Nunca chama ResolveUnknown: aquilo é
+// do writer e registraria um campo novo no dicionário a cada erro de
+// digitação numa query.
+func (b *binder) coluna(nome string, pos int) (*schema.CompiledField, error) {
+	f, ok := b.sc.FieldByName([]byte(nome))
+	if !ok {
+		// Campo excluído do schema também cai aqui, e é o certo: para o
+		// runtime ele não existe.
+		return nil, errAt(pos, "coluna %q não existe no dataset %q", nome, b.sc.Name)
+	}
+	return f, nil
+}
+
+func (b *binder) usa(id types.FieldID) { b.usados[id] = struct{}{} }
+
+func (b *binder) expr(e parser.Expr) (BoundExpr, error) {
+	switch n := e.(type) {
+	case *parser.LogicalExpr:
+		left, err := b.expr(n.Left)
+		if err != nil {
+			return nil, err
+		}
+		right, err := b.expr(n.Right)
+		if err != nil {
+			return nil, err
+		}
+		return &BoundLogical{Op: n.Op, Left: left, Right: right}, nil
+
+	case *parser.Comparison:
+		return b.comparacao(n)
+
+	case *parser.NullCheck:
+		f, err := b.coluna(n.Column, n.ColumnPos)
+		if err != nil {
+			return nil, err
+		}
+		b.usa(f.ID)
+		// Sem coerção e sem restrição de tipo: presença vale para bytes, json
+		// e campo auto nunca observado.
+		return &BoundNullCheck{Field: f, Not: n.Not}, nil
+
+	default:
+		// Nó novo na AST tem de falhar ALTO, não ser ignorado.
+		return nil, errNoPos("expressão não suportada: %T", e)
+	}
+}
+
+func (b *binder) comparacao(n *parser.Comparison) (BoundExpr, error) {
+	f, err := b.coluna(n.Column, n.ColumnPos)
+	if err != nil {
+		return nil, err
+	}
+	b.usa(f.ID)
+
+	cmp := &BoundComparison{Field: f, Op: n.Op}
+	var (
+		val   types.Value
+		kind  CompareKind
+		cerr  error
+		antes = len(b.arena)
+	)
+	if n.Operand.Kind == parser.OperandParam {
+		idx := n.Operand.ParamIdx
+		if idx < 0 || idx >= len(b.params) {
+			return nil, errNoPos("parser inconsistente: ParamIdx=%d fora de [0,%d)", idx, len(b.params))
+		}
+		b.nParams++
+		cmp.IsParam = true
+		cmp.ParamIdx = idx
+		val, kind, b.arena, cerr = coerceParam(f, n.Op, b.params[idx], b.arena)
+		if cerr != nil {
+			return nil, b.erroParam(idx, f, n, cerr)
+		}
+	} else {
+		val, kind, b.arena, cerr = coerceLiteral(f, n.Op, n.Operand, b.arena)
+		if cerr != nil {
+			return nil, b.erroLiteral(f, n, cerr)
+		}
+	}
+
+	cmp.Val = val
+	cmp.Kind = kind
+	if len(b.arena) > antes {
+		// O valor foi para o arena: guarda os offsets e materializa a janela
+		// só quando o arena parar de crescer.
+		cmp.Val.Bytes = nil
+		b.pendente = append(b.pendente, janela{cmp: cmp, start: antes, end: len(b.arena)})
+	}
+	return cmp, nil
+}
+
+// erroLiteral traduz o sentinela da tabela para a mensagem final, que precisa
+// do nome da coluna e do tipo.
+func (b *binder) erroLiteral(f *schema.CompiledField, n *parser.Comparison, cerr error) error {
+	t := f.EffectiveType()
+	pos := n.Operand.Pos
+	switch cerr {
+	case errAutoSemTipo:
+		return errAt(n.ColumnPos, "coluna %q é auto e nunca foi observada neste dataset, "+
+			"então ainda não tem tipo; só admite IS NULL / IS NOT NULL", f.Name)
+	case errColunaSemTipo:
+		return errAt(n.ColumnPos, "coluna %q não tem tipo utilizável", f.Name)
+	case errNaoComparavel:
+		return errAt(n.ColumnPos, "coluna %q (%s) só admite IS NULL / IS NOT NULL", f.Name, t)
+	case errLiteralIncompativel:
+		return errAt(pos, "coluna %q (%s) não é comparável com literal do tipo %s",
+			f.Name, t, nomeLiteral(n.Operand.Kind))
+	case errOperadorNaoAdmitido:
+		return errAt(pos, "operador %q não é permitido para a coluna %q (%s); use = ou !=",
+			n.Op.String(), f.Name, t)
+	case errLiteralInvalido:
+		return errAt(pos, "literal %q inválido para a coluna %q (%s)", valorLiteral(n.Operand), f.Name, t)
+	default:
+		return errAt(pos, "coluna %q (%s): %v", f.Name, t, cerr)
+	}
+}
+
+func (b *binder) erroParam(idx int, f *schema.CompiledField, n *parser.Comparison, cerr error) error {
+	// Nas mensagens o parâmetro é 1-based, porque é como o usuário o conta.
+	num := idx + 1
+	t := f.EffectiveType()
+	switch cerr {
+	case errParamNulo:
+		return errNoPos("parâmetro %d: NULL não é suportado; use IS NULL", num)
+	case errParamTipo:
+		return errNoPos("parâmetro %d: tipo %s não suportado (use string, int64, double ou boolean)",
+			num, b.params[idx].Type)
+	case errAutoSemTipo:
+		return errNoPos("parâmetro %d: coluna %q é auto e nunca foi observada neste dataset, "+
+			"então ainda não tem tipo; só admite IS NULL / IS NOT NULL", num, f.Name)
+	case errNaoComparavel:
+		return errNoPos("parâmetro %d: coluna %q (%s) só admite IS NULL / IS NOT NULL", num, f.Name, t)
+	case errLiteralIncompativel:
+		return errNoPos("parâmetro %d: coluna %q (%s) não é comparável com literal do tipo %s",
+			num, f.Name, t, b.params[idx].Type)
+	case errOperadorNaoAdmitido:
+		return errNoPos("parâmetro %d: operador %q não é permitido para a coluna %q (%s); use = ou !=",
+			num, n.Op.String(), f.Name, t)
+	case errLiteralInvalido:
+		return errNoPos("parâmetro %d: valor inválido para a coluna %q (%s)", num, f.Name, t)
+	default:
+		return errNoPos("parâmetro %d: %v", num, cerr)
+	}
+}
+
+func nomeLiteral(k parser.OperandKind) string {
+	switch k {
+	case parser.OperandBool:
+		return "boolean"
+	default:
+		return k.String()
+	}
+}
+
+func valorLiteral(op parser.Operand) string {
+	if op.Kind == parser.OperandString {
+		return op.S
+	}
+	return op.Kind.String()
+}
+
+func (b *binder) slots() Slots {
+	ids := make([]types.FieldID, 0, len(b.usados))
+	for id := range b.usados {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return Slots{IDs: ids}
+}
+
+// preencheSlots é a segunda passada: os índices só existem depois que o
+// conjunto de campos usados está fechado.
+func (b *binder) preencheSlots(bq *BoundQuery) {
+	for i := range bq.Columns {
+		slot, _ := bq.Slots.Index(bq.Columns[i].Field.ID)
+		bq.Columns[i].Slot = slot
+	}
+	var walk func(BoundExpr)
+	walk = func(e BoundExpr) {
+		switch n := e.(type) {
+		case *BoundLogical:
+			walk(n.Left)
+			walk(n.Right)
+		case *BoundComparison:
+			n.Slot, _ = bq.Slots.Index(n.Field.ID)
+		case *BoundNullCheck:
+			n.Slot, _ = bq.Slots.Index(n.Field.ID)
+		}
+	}
+	walk(bq.Where)
+}
