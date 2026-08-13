@@ -163,6 +163,12 @@ func TestParseValidationErrors(t *testing.T) {
 		{"mode invalido", repl("mode: merge", "mode: upsert"), "mode"},
 		{"sequence tipo invalido", repl("    type: int64\n    strategy: greater", "    type: string\n    strategy: greater"), "sequence.type"},
 		{"strategy invalida", repl("strategy: greater", "strategy: lower"), "sequence.strategy"},
+		// Sequence/ttl referenciados devem estar DECLARADOS em fields
+		// incondicionalmente (como a key): sob include explícito, um campo
+		// não declarado compilaria como auto/TypeNull e quebraria o greater
+		// do materializer (sequence) e a expiração (ttl).
+		{"sequence nao declarada", "version: 1\nname: t\nmaterialization:\n  key:\n    field: id\n  sequence:\n    field: _SEQ\nschema:\n  include: [id, _SEQ]\n  fields:\n    id:\n      type: string\n", "sequence"},
+		{"ttl nao declarada", "version: 1\nname: t\nmaterialization:\n  key:\n    field: id\n  ttl:\n    field: exp\nschema:\n  include: [id, exp]\n  fields:\n    id:\n      type: string\n", "ttl"},
 		{"sequence declarada com outro tipo", repl("    _SEQ:\n      type: int64", "    _SEQ:\n      type: string"), "_SEQ"},
 		{"ttl tipo invalido", repl("  ttl:\n    field: EventExpireDate\n    type: timestamp", "  ttl:\n    field: EventExpireDate\n    type: string"), "ttl.type"},
 		{"ttl declarado com outro tipo", repl("    EventExpireDate:\n      type: timestamp", "    EventExpireDate:\n      type: string"), "EventExpireDate"},

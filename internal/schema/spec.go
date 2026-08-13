@@ -326,13 +326,26 @@ func validate(raw *rawSpec) (*DatasetSpec, error) {
 	} else if kf.Type != "string" {
 		return nil, specErrf("campo key %q deve ser string, é %q", key.Field, kf.Type)
 	}
+	// Sequence e ttl têm a MESMA exigência incondicional da key: o campo
+	// referenciado precisa estar declarado em schema.fields com o tipo
+	// certo. Sem isso, um include explícito contendo o nome compilaria o
+	// campo como auto (TypeNull), quebrando o `greater` do materializer e
+	// a expiração por timestamp.
 	if seq := s.Materialization.Sequence; seq != nil {
-		if sf, ok := fields[seq.Field]; ok && sf.Type != "int64" {
+		sf, ok := fields[seq.Field]
+		if !ok {
+			return nil, specErrf("materialization.sequence.field %q não declarado em schema.fields", seq.Field)
+		}
+		if sf.Type != "int64" {
 			return nil, specErrf("campo sequence %q deve ser int64, é %q", seq.Field, sf.Type)
 		}
 	}
 	if ttl := s.Materialization.TTL; ttl != nil {
-		if tf, ok := fields[ttl.Field]; ok && tf.Type != "timestamp" {
+		tf, ok := fields[ttl.Field]
+		if !ok {
+			return nil, specErrf("materialization.ttl.field %q não declarado em schema.fields", ttl.Field)
+		}
+		if tf.Type != "timestamp" {
 			return nil, specErrf("campo ttl %q deve ser timestamp, é %q", ttl.Field, tf.Type)
 		}
 	}
