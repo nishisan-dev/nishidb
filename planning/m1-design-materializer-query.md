@@ -550,6 +550,17 @@ Notas:
 - `EXPLAIN` fora do escopo, mas o plano expõe `String()` para testes e logging.
 - **Hash index é Fase 8 da spec** (storage entrega depois do M1): o planner implementa a regra 2 desde já e os testes §106 de hash lookup rodam contra o fake (a interface `LookupHash` é declarada no consumidor). No runtime real do M1, campo `index: hash` sem suporte do storage faz a regra 2 ser pulada (cai em bitmap ou full scan) — capability check no plan-time via schema+store.
 
+Decisões fixadas na implementação (Q14):
+
+- **A prioridade é da REGRA, não da posição no AST.** `nas_ip='x' AND id='y'` é point lookup, não hash: a regra 1 varre todos os conjuncts antes de a regra 2 começar. Dentro de uma regra, vence o primeiro termo na ordem léxica — que é o que torna o plano determinístico e o que os testes de ordem asseram.
+- **Um termo só é chave de índice quando `Val.Type == Field.Type`.** A chave do values.dict inclui o BYTE DE TIPO, então um valor promovido pelo binder (coluna int64 comparada a literal float vira double dos dois lados) jamais casa com os postings gravados: o lookup devolveria vazio e a query mentiria com resultado incompleto. É a condição de correção mais importante do pacote.
+- **Capability check obrigatório mesmo com o YAML declarando o índice.** O conjunto de bitmaps é decidido na criação do dataset, e um `Open` com `AllowBitmapDrop` abre o dataset sem um índice declarado; sem o check, o executor chamaria `LookupBitmap` num campo sem índice e a query FALHARIA em vez de degradar. Para o hash existe também um check por campo (`HasHash`), opcional: store que não o expõe é tratado como "atende todo campo `index: hash`".
+- **Budget de profundidade no flatten (64).** Acima dele a subárvore vira conjunct opaco e a query degrada — inclusive quando há um termo indexável lá no fundo. É o preço de não deixar uma AST patológica derrubar o processo, e FullScan é sempre correto.
+- **Dedup de termos por (FieldID, Val) exato**, com varredura linear. `status='a' AND status='a'` colapsa para BitmapScan; `status='a' AND status='b'` NÃO colapsa (dois termos, interseção vazia, resultado correto). Um map alocaria por consulta e daria ordem não-determinística nos termos.
+- **Limitações registradas, com teste fixando o comportamento atual:** grupo OR indexável aninhado em AND não vira união (a regra 5 vale só na raiz), e `key='a' OR key='b'` não vira união de point lookups (a primary não é índice secundário). As duas seriam corretas como superset; ficam como otimização futura, porque simplicidade > performance (§127).
+- **`query.full_scan` é contado no plan-time e só aqui.** É correto na v1 porque não há cache de planos nem prepared statements — todo plano produzido é executado em seguida. Se um cache for introduzido, a contagem migra para o executor. O contador de fonte de candidatos do executor é de diagnóstico e explicitamente NÃO normativo: dois contadores com o mesmo nome de spec fariam alguém ler o errado em produção.
+- **Alocação O(#conjuncts), nunca do dataset.** Medido: 0 allocs/op sem WHERE (singleton `FullScan()`), 3 no point lookup, 5 numa query de 4 conjuncts, 6 na interseção de 2 bitmaps. Gate no teto de 12.
+
 ### 3.6 Coerção de tipos nas comparações (tabela normativa v1)
 
 Coerção acontece no **bind** (literal/param → representação do tipo da COLUNA). Célula vazia = erro de bind (`type mismatch: column "x" (ipv4) cannot be compared to boolean literal`).
