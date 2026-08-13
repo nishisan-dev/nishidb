@@ -138,11 +138,12 @@ Validações com erros claros (arquivo:campo): `version` suportada; `name` não 
 Forma compilada:
 
 ```go
-// internal/schema/compiled.go
-type FieldID = uint16 // até 65k campos por dataset; alinhado com fields.dict
+// internal/schema/compile.go
+// FieldID mora em internal/types (tipo próprio uint16, não alias): até 65k
+// campos por dataset, alinhado com fields.dict.
 
 type CompiledField struct {
-    ID    FieldID
+    ID    types.FieldID
     Name  string      // nome original (ex.: "Acct-Status-Type")
     Alias string      // "" se ausente (ex.: "status")
     Type  types.FieldType
@@ -175,9 +176,11 @@ Campos desconhecidos com `include: ["*"]` + `unknownFields: include`: o compiled
 Contrato negociado com o plan-storage (registrado no plano dele como §15A). Pacote `internal/types` (leve, sem dependências) contém **só tipos de dados**; interfaces são declaradas no consumidor (padrão Go — `*storage.Store` as satisfaz):
 
 ```go
-type FieldType uint8  // TString, TInt64, TDouble, TBool, TTimestamp, TIPv4, TIPv6,
-                      // TIPv4Prefix, TIPv6Prefix, TBytes, TJSON  (auto resolve-se no parse)
-type FieldID = uint16
+type FieldType uint8  // TypeString, TypeInt64, TypeDouble, TypeBool, TypeTimestamp,
+                      // TypeIPv4, TypeIPv6, TypeIPv4Prefix, TypeIPv6Prefix,
+                      // TypeBytes, TypeJSON  (auto resolve-se no parse)
+type FieldID uint16   // tipo próprio, não alias: o compilador barra a troca com RowID
+type RowID uint64     // idem — a API inteira trafega RowID, nunca uint64 cru
 
 type Value struct {   // união sem boxing — NUNCA interface{} no hot path
     Type  FieldType
@@ -186,7 +189,7 @@ type Value struct {   // união sem boxing — NUNCA interface{} no hot path
 }
 
 type Record struct {
-    RowID    uint64
+    RowID    RowID
     Sequence int64
     Flags    uint8  // constantes em internal/types (fonte única): FlagTombstone = 1<<0,
                     // bits 1-7 reservados (zero). Apply sempre escreve 0 no M1
@@ -211,7 +214,7 @@ type Store interface {
     // location (§45/46). prev != nil evita re-lookup (usa prev.RowID);
     // prev == nil com key existente → Put resolve sozinho (fallback de correção).
     Put(key []byte, seq int64, flags uint8, payload []byte,
-        prev *types.Record) (rowID uint64, created bool, err error)
+        prev *types.Record) (rowID types.RowID, created bool, err error)
 }
 
 type FieldDictionary interface {
@@ -313,14 +316,22 @@ Duplicata pós-sort (chave JSON duplicada ou alias/nome apontando ao mesmo id): 
 ### 2.6 Algoritmo de MERGE — merge linear de listas ordenadas
 
 ```go
-// internal/materializer/merge.go
-// prev: FieldReader sobre o payload do record anterior (ordenado por id)
-// patch: entries ordenadas por id
-// out: buffer de saída reutilizável
+// internal/materializer/merge.go  — IMPLEMENTADO (Q9)
+// prevPayload: payload do record anterior (campos ordenados por FieldID)
+// patch: entries ordenadas por FieldID, com isNull
+// out: buffer reutilizável, semântica de append (passe out[:0])
 // fieldCount e diff de campos indexados são do storage.Put (D11/§2.2) — não deste código
 
-func mergeRecords(prev *encoding.FieldReader, patch []patchEntry, out []byte) []byte
+func mergeRecords(prevPayload []byte, patch []patchEntry, out []byte) ([]byte, error)
+
+// Replace e create caem no mesmo lugar: sem estado anterior, o payload é só o
+// patch. Uma função, não duas — não há nada a decidir entre os dois casos.
+func encodePatch(patch []patchEntry, out []byte) ([]byte, error)
 ```
+
+O erro existe porque nem toda entrada é confiável: payload anterior ilegível (corrupção vinda do storage) e patch fora de ordem (bug do PatchBuffer) viram `ErrInternalState`, categoria que o `Apply` contabiliza **separada** das cinco de evento ruim. O `out` volta mesmo no erro, para o caller reter o buffer já crescido.
+
+O campo não tocado é copiado CRU via `encoding.FieldReader.RawField()` — o span completo (FIELD_ID+TYPE+[LENGTH]+VALUE), sem decode/re-encode. Campo corrompido não devolve span (o `fail()` zera o offset do campo corrente), então nem meio campo vaza para a saída.
 
 Pseudocódigo (dois ponteiros):
 
@@ -359,45 +370,69 @@ Sem sequence configurada: ordem de chegada vale (Kafka ordering §26 — fora de
 
 ### 2.8 Fluxo REPLACE (§23)
 
-O record novo é construído **só do patch** (nulls omitidos), sem merge. Sequence check idêntico ao §2.7. A limpeza de postings antigos dos índices secundários é responsabilidade do `Put` (diffa `prev` ↔ payload novo sempre, merge ou replace) — o Apply só precisa repassar o `prev` que o GetByKey já devolveu. O antigo risco R6 (esquecer de ler o estado anterior no replace) morre por construção.
+O record novo é construído **só do patch** (`encodePatch`, nulls omitidos), sem merge. Sequence check idêntico ao §2.7. A limpeza de postings antigos dos índices secundários é responsabilidade do `Put` (diffa `prev` ↔ payload novo sempre, merge ou replace) — o Apply só precisa repassar o `prev` que o GetByKey já devolveu. O antigo risco R6 (esquecer de ler o estado anterior no replace) morre por construção.
 
 ### 2.9 `Materializer.Apply` — orquestração e interface com o storage
 
 ```go
-// internal/materializer/materializer.go
+// internal/materializer/materializer.go  — IMPLEMENTADO (Q10)
 type Materializer struct {
     schema *schema.Compiled
     store  Store           // interface do §2.2 (GetByKey + Put) — *storage.Store satisfaz
-    dict   FieldDictionary
 
     // buffers reutilizáveis (owned pela goroutine do writer — NÃO thread-safe, documentado)
-    parser  jsonp.Parser
-    patch   PatchBuffer
-    prevBuf []byte // destino do GetByKey
-    outBuf  []byte // payload de saída
+    patch   PatchBuffer  // contém o jsonp.Parser
+    prevRec types.Record // estado corrente lido; janela sobre prevBuf
+    prevBuf []byte       // destino do GetByKey
+    outBuf  []byte       // payload de saída
+
+    metrics Metrics
 }
 
-type Action uint8 // Created | Updated | Replaced | Stale | Skipped | Failed
-type ApplyResult struct{ Action Action; RowID uint64; Err error }
+type Action uint8        // Created | Updated | Replaced | Stale | Skipped | Failed
+type ErrorCategory uint8 // as 5 de §101 + WriterFailed | Storage | Internal
 
+type ApplyResult struct {
+    Action   Action
+    RowID    types.RowID
+    Category ErrorCategory
+    Err      error
+}
+
+func (r ApplyResult) Fatal() bool  // writer em modo falho: o caller PARA
 func (m *Materializer) Apply(event []byte) ApplyResult
+func (m *Materializer) Metrics() MetricsSnapshot
 ```
+
+O `dict` saiu do struct: quem registra campo desconhecido é o `schema.Compiled` (via `ResolveUnknown`), que já carrega o dicionário desde o Compile — um segundo ponteiro aqui só daria duas fontes para a mesma verdade.
 
 Sequência completa:
 
 ```text
-1. patch.Parse(event)                      → erros INVALID_JSON/SCHEMA_VALIDATION/INVALID_KEY/TYPE_CONVERSION
-2. prev, ok := store.GetByKey(patch.key, prevBuf)
-3. ok && sequence: patch.seq <= prev.Sequence → Stale (fim, §2.7)
-4. payload := merge(prev.Payload, patch)   [mode merge, ok]  |  payload := encodePatch(patch)  [replace ou create]
+1. patch.Parse(event)                      → erros INVALID_JSON/SCHEMA_VALIDATION/INVALID_KEY/
+                                             INVALID_SEQUENCE/TYPE_CONVERSION
+2. prevRec, prevBuf, ok := store.GetByKey(patch.key, prevBuf[:0])
+3. ok && sequence: patch.seq <= prevRec.Sequence → Stale (fim, §2.7)
+4. payload := mergeRecords(prevRec.Payload, patch.entries, outBuf[:0])   [merge, ok]
+   payload := encodePatch(patch.entries, outBuf[:0])                     [replace ou create]
 5. rowID, created := store.Put(patch.key, patch.seq, flags=0, payload, prevOrNil)
       ← o Put faz: append, validação, diff de índices, publicação atômica (D11)
 6. Action: created → Created; senão mode==merge → Updated, mode==replace → Replaced
 ```
 
-Política de erro (§101): categorias tipadas (`errors.Is`-áveis); o chamador (writer loop / harness) decide log-and-skip vs stop conforme config. Métricas: `ingest_events_total`, `ingest_stale_total`, `ingest_invalid_total` (counters simples `atomic.Int64` neste milestone; endpoint Prometheus é Fase 6).
+`prev` é o endereço de um CAMPO do materializer, não de uma variável local: passar o endereço de uma local por interface a faria escapar para o heap a cada evento, e o gate de alocação cairia.
 
-Alvo de alocações do `Apply` em steady state: **0–3 allocs/evento** (crescimentos raros de buffer amortizados). Meta da spec (§111) coberta com folga.
+Política de erro (§101) em **três baldes**, não dois:
+
+| Balde | Categorias | Action | Por quê |
+|---|---|---|---|
+| evento ruim | INVALID_JSON, SCHEMA_VALIDATION, INVALID_KEY, INVALID_SEQUENCE, TYPE_CONVERSION | `Skipped` | log-and-skip: a fonte é ruidosa, a ingestão segue |
+| writer morto | WRITER_FAILED (`types.ErrWriterFailed`) | `Failed` + `Fatal()` | sticky (§14.14): reprocessar é inútil até reabrir o dataset |
+| defeito nosso | STORAGE_ERROR (`types.ErrInvalidArgument`, leitura corrompida, falha do dicionário), INTERNAL_STATE | `Failed` | contá-los como evento ruim esconderia o bug na métrica de fonte ruidosa |
+
+Métricas (`atomic.Int64`, lidas por outra goroutine): `EventsTotal`, `CreatedTotal`, `UpdatedTotal`, `ReplacedTotal`, `StaleTotal`, `InvalidTotal` (soma das 5 de evento ruim), `FailedTotal` e `ByCategory[...]` para todas. Endpoint Prometheus é Fase 6.
+
+Alocações do `Apply` em steady state: **0 allocs/evento**, com gate executável na suíte (`TestApplyNaoAlocaEmSteadyState`, contra um store mínimo; fora do build `-race`, onde a instrumentação altera a contagem). O alvo original do plano era 0–3.
 
 ---
 
@@ -718,11 +753,11 @@ O encoding é implementado e testado pelo plano do storage (formato fechado no �
 **T8 — `PatchBuffer.Parse`** *(dep: T3, T4, T5)*
 Testes: evento RADIUS completo → entries ordenadas/tipadas; wildcard §13 (§103-wildcard); include explícito ignora extras; exclusão (§103-exclusion); unknownFields include/ignore/reject (§103-unknown); key ausente → INVALID_KEY; sequence ausente → INVALID_SEQUENCE; null explícito → isNull; Extended JSON (§103-mongo); chave JSON duplicada last-wins.
 
-**T9 — `mergeRecords`** *(dep: T6, T8)*
-Testes §103: merge campo sobrescreve (§22 exemplo literal da spec); campo ausente mantém (§103-missing); null remove (§103-null, D2); patch só com campos novos; prev vazio (create); deltas de índice (old/new corretos p/ bitmap e hash, incluindo old=ausente e new=NULL). Bench: 0 allocs.
+**T9 — `mergeRecords`** *(dep: T6, T8)* — ENTREGUE
+Testes §103: merge campo sobrescreve (§22 exemplo literal da spec); campo ausente mantém (§103-missing); null remove (§103-null, D2) e a ausência é transitiva; patch só com campos novos (nas duas pontas); campos intercalados; prev vazio (create); patch vazio; 11 tipos round-trip; corrupção do prev e patch fora de ordem → `ErrInternalState`. Deltas de índice saíram do escopo com o Put orquestrador (§2.2). Bench: 0 allocs.
 
-**T10 — `Materializer.Apply` fluxo completo** *(dep: T7, T9)*
-Testes §103: create; merge; replace (§103-replace — asserção de que o `prev` correto foi repassado ao Put, que é quem limpa postings antigos); sequence greater aplica / equal descarta / lower descarta (§103-sequence×3); stale não escreve nada (fake sem Put registrado); erros por categoria + ApplyResult.Action (Created/Updated/Replaced via `created` do Put); métricas contadas.
+**T10 — `Materializer.Apply` fluxo completo** *(dep: T7, T9)* — ENTREGUE
+Testes §103: create; merge; replace (§103-replace — asserção de que o `prev` correto foi repassado ao Put, que é quem limpa postings antigos, e de que os postings do valor antigo somem); sequence greater aplica / equal descarta / lower descarta (§103-sequence×3); stale não escreve nada (fake sem Put registrado); dataset sem sequence aplica tudo; unknownFields include/ignore/reject fim-a-fim; erros por categoria + ApplyResult.Action nos três baldes (evento ruim → Skipped; writer morto → Failed+Fatal; defeito nosso → Failed); métricas contadas; fixture real (evento cheio → patch parcial → estado conferido campo a campo). Gate: 0 allocs/evento na suíte.
 
 **T11 — `internal/query/lexer`** *(sem dep)*
 Testes: todos os tokens; keywords case-insensitive; `''`/`""` escapes; números (int/float/negativo/exp); posições de erro; query completa da spec §68.
