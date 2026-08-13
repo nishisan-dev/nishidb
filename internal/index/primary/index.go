@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/bits"
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 
@@ -286,11 +287,29 @@ func (ix *Index) grow() error {
 		newRegion.Close()
 		return fmt.Errorf("primary: rename do rehash: %w", err)
 	}
+	// Política uniforme do projeto (design §9): rename de arquivo de estado
+	// permanente é seguido de fsync do diretório para durabilizar a entrada.
+	if err := syncDir(filepath.Dir(ix.path)); err != nil {
+		return err
+	}
 	old := ix.region
 	ix.region = newRegion
 	ix.slotCount = newSlots
 	if err := old.Close(); err != nil {
 		return fmt.Errorf("primary: fechar tabela antiga: %w", err)
+	}
+	return nil
+}
+
+// syncDir força a durabilidade da entrada de diretório após um rename.
+func syncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	if err := d.Sync(); err != nil {
+		return fmt.Errorf("primary: fsync do diretório %s: %w", dir, err)
 	}
 	return nil
 }
