@@ -356,7 +356,18 @@ func (s *Store) resolveBitmapFields(opts Options) ([]types.FieldID, error) {
 		}
 		set[field] = struct{}{}
 	}
-	for _, nome := range opts.BitmapFieldNames {
+	// Ordem CANÔNICA antes de resolver: o LookupOrCreate queima os primeiros
+	// IDs do dicionário na ordem em que é chamado, então a ordem do slice
+	// decidiria o mapeamento nome→ID de um dataset novo — e ele é gravado para
+	// sempre. Ordenar aqui, e não em cada chamador, é o que torna a garantia
+	// independente de quem abre (o CLI monta a lista iterando um map, e o
+	// resultado seria sorteado a cada criação de dataset).
+	//
+	// Cópia: o slice é do chamador, e reordená-lo no lugar seria efeito
+	// colateral de uma função que promete só abrir o dataset.
+	nomes := slices.Clone(opts.BitmapFieldNames)
+	slices.Sort(nomes)
+	for _, nome := range nomes {
 		if nome == "" {
 			return nil, fmt.Errorf("%w: nome vazio em BitmapFieldNames", ErrInvalidArgument)
 		}
