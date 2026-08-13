@@ -1051,6 +1051,24 @@ mesma ideia: sem isso ele valida a implementação contra ela mesma) e para os g
 (medir a igualdade entre dois tamanhos de entrada, e não um teto, é o que separa "0 alloc por row"
 de "cabe no teto").
 
+### Convenção: quando a fonte já satisfaz o predicado, o teste não exercita o predicado
+
+O curto-circuito do AND no programa de predicado pôde ser desligado com a suíte inteira VERDE — `A AND
+B` passava a devolver o resultado de `B`, e nenhum teste acusou. A causa não foi "faltou um teste": foi
+**assimetria estrutural entre AND e OR** no conjunto de queries testadas.
+
+Toda query com AND do bloco caía em `IndexIntersect`. A fonte de candidatos já é a interseção dos dois
+bitmaps, então **toda row que chega ao predicado satisfaz os dois termos** — a reavaliação do §44 é
+redundante ali, e qualquer mutação nela é invisível. No OR a fonte é `IndexUnion`, que **não**
+pré-filtra: chegam rows que satisfazem só um lado, e a mutação morre na hora. Por isso as mutações do
+OR morriam e as do AND sobreviviam.
+
+Regra do projeto: **quando a fonte de candidatos já satisfaz o predicado, o teste não exercita o
+predicado.** Vale para qualquer camada alimentada por fonte pré-filtrada — o teste do filtro precisa
+de entrada que o filtro tenha o que rejeitar. Em concreto: todo teste de avaliação de predicado
+precisa de pelo menos um caso cuja fonte seja `FullScan` ou `IndexUnion`, e um caso em que o AND é
+verdadeiro na fonte e falso no predicado (por exemplo, o termo não indexável ao lado do indexado).
+
 ### Profundidade da árvore: quem recursa e quem não pode (nota da Q13/Q14)
 
 A espinha de AND/OR **não** é limitada por `MaxExprDepth` — esse teto é de **parênteses**. Uma query
