@@ -1,0 +1,310 @@
+package executor
+
+import (
+	"fmt"
+	"sync/atomic"
+
+	"github.com/nishisan-dev/nishidb/internal/query/planner"
+	"github.com/nishisan-dev/nishidb/internal/schema"
+	"github.com/nishisan-dev/nishidb/internal/types"
+)
+
+// rowSource entrega UM candidato por chamada. A distinção entre "acabou" e
+// "candidato morto" é do chamador: o laço de skip vive no iterador, não aqui,
+// para que o check de ctx continue disparando quando um milhão de candidatos
+// mortos aparecem em sequência.
+type rowSource interface {
+	// advance devolve o record do próximo candidato. more=false esgota a
+	// fonte; live=false marca candidato sem location ou tombstoned. out é o
+	// buffer possivelmente crescido e DEVE ser reatribuído pelo chamador em
+	// todos os caminhos.
+	advance(buf []byte) (rec types.Record, out []byte, more, live bool, err error)
+	close() error
+}
+
+// candidateSource lê rowIds de um iterador de índice (ou do scan) e busca cada
+// record. É onde a liveness é decidida — pelo FETCH, não pela fonte: o índice
+// devolve superset por construção.
+type candidateSource struct {
+	it types.RowIDIterator
+	st Store
+}
+
+func (s *candidateSource) advance(buf []byte) (types.Record, []byte, bool, bool, error) {
+	if !s.it.Next() {
+		if err := s.it.Err(); err != nil {
+			return types.Record{}, buf, false, false, fmt.Errorf("executor: iteração de candidatos: %w", err)
+		}
+		return types.Record{}, buf, false, false, nil
+	}
+	id := s.it.RowID()
+	rec, out, ok, err := s.st.GetByRowID(id, buf)
+	if err != nil {
+		return types.Record{}, out, false, false, fmt.Errorf("executor: leitura da row %d: %w", id, err)
+	}
+	return rec, out, true, ok, nil
+}
+
+func (s *candidateSource) close() error { return s.it.Close() }
+
+// keySource é o point lookup: um único GetByKey, sem passar por rowID. Evita a
+// leitura dupla que existiria se o plano devolvesse um rowID para o fetcher
+// reler.
+type keySource struct {
+	st   Store
+	key  []byte
+	done bool
+}
+
+func (s *keySource) advance(buf []byte) (types.Record, []byte, bool, bool, error) {
+	if s.done {
+		return types.Record{}, buf, false, false, nil
+	}
+	s.done = true
+	rec, out, ok, err := s.st.GetByKey(s.key, buf)
+	if err != nil {
+		return types.Record{}, out, false, false, fmt.Errorf("executor: leitura da key %q: %w", s.key, err)
+	}
+	return rec, out, true, ok, nil
+}
+
+func (s *keySource) close() error { return nil }
+
+// fonteDoPlano traduz o plano na fonte de candidatos. Nenhuma leitura de dado
+// acontece aqui além de abrir iteradores.
+func fonteDoPlano(plan planner.Plan, st Store, hash HashLookuper, m *Metrics) (rowSource, error) {
+	switch p := plan.(type) {
+	case *planner.FullScanPlan:
+		contaFonte(m, func(m *Metrics) *atomic.Int64 { return &m.SourceFullScan })
+		return &candidateSource{it: st.ScanLive(), st: st}, nil
+
+	case *planner.PointLookupPlan:
+		if len(p.Key.Bytes) == 0 {
+			return nil, fmt.Errorf("%w: PointLookupPlan com key sem bytes", ErrInvalidPlan)
+		}
+		contaFonte(m, func(m *Metrics) *atomic.Int64 { return &m.PointLookups })
+		return &keySource{st: st, key: p.Key.Bytes}, nil
+
+	case *planner.BitmapScanPlan:
+		it, err := st.LookupBitmap(p.Field.ID, p.Val)
+		if err != nil {
+			return nil, fmt.Errorf("executor: abrir bitmap de %q: %w", p.Field.Name, err)
+		}
+		contaFonte(m, func(m *Metrics) *atomic.Int64 { return &m.IndexScans })
+		return &candidateSource{it: it, st: st}, nil
+
+	case *planner.HashIndexPlan:
+		if hash == nil {
+			// O planner só escolhe este plano quando a capability existe; chegar
+			// aqui sem ela é bug de plan-time, não erro do usuário.
+			return nil, fmt.Errorf("%w: store não implementa LookupHash", ErrInvalidPlan)
+		}
+		it, err := hash.LookupHash(p.Field.ID, p.Val)
+		if err != nil {
+			return nil, fmt.Errorf("executor: abrir hash de %q: %w", p.Field.Name, err)
+		}
+		contaFonte(m, func(m *Metrics) *atomic.Int64 { return &m.IndexScans })
+		return &candidateSource{it: it, st: st}, nil
+
+	case *planner.BitmapIntersectPlan:
+		its, err := abreTermos(p.Terms, st, hash)
+		if err != nil {
+			return nil, err
+		}
+		contaFonte(m, func(m *Metrics) *atomic.Int64 { return &m.IndexScans })
+		return &candidateSource{it: &intersectIter{its: its, cur: make([]types.RowID, len(its))}, st: st}, nil
+
+	case *planner.IndexUnionPlan:
+		its, err := abreTermos(p.Terms, st, hash)
+		if err != nil {
+			return nil, err
+		}
+		contaFonte(m, func(m *Metrics) *atomic.Int64 { return &m.IndexScans })
+		return &candidateSource{it: &unionIter{its: its, cur: make([]types.RowID, len(its)),
+			vivo: make([]bool, len(its))}, st: st}, nil
+
+	default:
+		return nil, fmt.Errorf("%w: tipo de plano %T não suportado", ErrInvalidPlan, plan)
+	}
+}
+
+// abreTermos abre um iterador por termo. Falha no termo i FECHA os i-1 já
+// abertos: vazar iterador de índice num caminho de erro é o tipo de coisa que
+// só aparece como file descriptor esgotado em produção.
+func abreTermos(terms []planner.IndexTerm, st Store, hash HashLookuper) ([]types.RowIDIterator, error) {
+	its := make([]types.RowIDIterator, 0, len(terms))
+	for _, t := range terms {
+		var (
+			it  types.RowIDIterator
+			err error
+		)
+		switch {
+		case t.Kind == schema.IndexHash && hash == nil:
+			err = fmt.Errorf("%w: store não implementa LookupHash", ErrInvalidPlan)
+		case t.Kind == schema.IndexHash:
+			it, err = hash.LookupHash(t.Field.ID, t.Val)
+		default:
+			it, err = st.LookupBitmap(t.Field.ID, t.Val)
+		}
+		if err != nil {
+			for _, aberto := range its {
+				aberto.Close()
+			}
+			return nil, fmt.Errorf("executor: abrir índice de %q: %w", t.Field.Name, err)
+		}
+		its = append(its, it)
+	}
+	return its, nil
+}
+
+// contaFonte incrementa um contador de abertura de fonte. Recebe a FUNÇÃO que
+// escolhe o campo, e não o ponteiro do campo: `conta(m, &m.X)` avalia `&m.X`
+// no chamador e explode com m nil — e Metrics é opcional por contrato.
+func contaFonte(m *Metrics, escolhe func(*Metrics) *atomic.Int64) {
+	if m != nil {
+		escolhe(m).Add(1)
+	}
+}
+
+// intersectIter é a interseção k-way de iteradores ASCENDENTES: avança os que
+// estão atrás do máximo corrente até todos coincidirem. Memória O(k), nunca
+// O(resultado).
+//
+// Interseção de supersets é superset da interseção — por isso continua válida
+// como fonte de candidatos mesmo com postings órfãos.
+type intersectIter struct {
+	its  []types.RowIDIterator
+	cur  []types.RowID
+	id   types.RowID
+	done bool
+	err  error
+}
+
+func (i *intersectIter) Next() bool {
+	if i.done {
+		return false
+	}
+	// Na primeira chamada isto posiciona cada iterador no seu primeiro id; nas
+	// seguintes, avança todos para além do id já emitido — os dois casos são a
+	// mesma operação.
+	for k := range i.its {
+		if !i.avanca(k) {
+			return false
+		}
+	}
+	for {
+		max := i.cur[0]
+		for _, v := range i.cur[1:] {
+			if v > max {
+				max = v
+			}
+		}
+		coincidem := true
+		for k := range i.its {
+			for i.cur[k] < max {
+				if !i.avanca(k) {
+					return false
+				}
+			}
+			if i.cur[k] != max {
+				// Ultrapassou o máximo: há um novo candidato a máximo e a
+				// varredura recomeça.
+				coincidem = false
+			}
+		}
+		if coincidem {
+			i.id = max
+			return true
+		}
+	}
+}
+
+// avanca puxa o próximo id do iterador k; esgotamento ou erro terminam a
+// interseção inteira (não há mais como coincidir).
+func (i *intersectIter) avanca(k int) bool {
+	if !i.its[k].Next() {
+		i.err = i.its[k].Err()
+		i.done = true
+		return false
+	}
+	i.cur[k] = i.its[k].RowID()
+	return true
+}
+
+func (i *intersectIter) RowID() types.RowID { return i.id }
+func (i *intersectIter) Err() error         { return i.err }
+
+func (i *intersectIter) Close() error {
+	var primeiro error
+	for _, it := range i.its {
+		if err := it.Close(); err != nil && primeiro == nil {
+			primeiro = err
+		}
+	}
+	return primeiro
+}
+
+// unionIter é a união k-way COM DEDUP sobre iteradores ascendentes: emite o
+// mínimo corrente e consome TODOS os iteradores posicionados nele.
+//
+// Consumir só o primeiro devolveria o mesmo rowID k vezes, e um OR duplicando
+// linha é bug visível; perder um iterador devolveria resultado incompleto, que
+// é pior porque é silencioso. Sem heap: com k pequeno a varredura linear é
+// mais rápida e não aloca.
+type unionIter struct {
+	its  []types.RowIDIterator
+	cur  []types.RowID
+	vivo []bool
+	id   types.RowID
+	init bool
+	err  error
+}
+
+func (u *unionIter) Next() bool {
+	if !u.init {
+		u.init = true
+		for k := range u.its {
+			u.puxa(k)
+		}
+	}
+	min, achou := types.RowID(0), false
+	for k := range u.its {
+		if u.vivo[k] && (!achou || u.cur[k] < min) {
+			min, achou = u.cur[k], true
+		}
+	}
+	if !achou {
+		return false
+	}
+	u.id = min
+	for k := range u.its {
+		if u.vivo[k] && u.cur[k] == min {
+			u.puxa(k)
+		}
+	}
+	return true
+}
+
+func (u *unionIter) puxa(k int) {
+	if u.its[k].Next() {
+		u.cur[k], u.vivo[k] = u.its[k].RowID(), true
+		return
+	}
+	u.vivo[k] = false
+	if err := u.its[k].Err(); err != nil && u.err == nil {
+		u.err = err
+	}
+}
+
+func (u *unionIter) RowID() types.RowID { return u.id }
+func (u *unionIter) Err() error         { return u.err }
+
+func (u *unionIter) Close() error {
+	var primeiro error
+	for _, it := range u.its {
+		if err := it.Close(); err != nil && primeiro == nil {
+			primeiro = err
+		}
+	}
+	return primeiro
+}

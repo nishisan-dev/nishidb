@@ -1,0 +1,302 @@
+package query_test
+
+import (
+	"errors"
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/nishisan-dev/nishidb/internal/query/binder"
+	"github.com/nishisan-dev/nishidb/internal/types"
+)
+
+// Os 12 casos obrigatórios da §106, fim a fim: do texto SQL ao resultado,
+// sobre dados que entraram pelo Materializer. Os testes homônimos das camadas
+// (lexer, parser, binder, planner) cobrem cada uma delas; a rastreabilidade
+// normativa é ESTA, porque é a única que exercita a costura.
+
+// evento base: uma sessão RADIUS completa.
+func eventos() []string {
+	return []string{
+		`{"id":"CMP-0001","_SEQ":1,"Acct-Status-Type":"Stop","Framed-Protocol":"PPPoE",
+		  "NAS-IP-Address":"10.0.0.1","NAS-Identifier":"NAS-7","Framed-IP-Address":"200.1.1.1",
+		  "User-Name":"joao","Connect-Info":100,"Acct-Session-Time":3600}`,
+		`{"id":"CMP-0002","_SEQ":1,"Acct-Status-Type":"Start","Framed-Protocol":"PPPoE",
+		  "NAS-IP-Address":"10.0.0.1","NAS-Identifier":"NAS-7","Framed-IP-Address":"200.1.1.2",
+		  "User-Name":"maria","Connect-Info":200,"Acct-Session-Time":60}`,
+		`{"id":"CMP-0003","_SEQ":1,"Acct-Status-Type":"Stop","Framed-Protocol":"PPP",
+		  "NAS-IP-Address":"10.0.0.2","NAS-Identifier":"NAS-9","Framed-IP-Address":"200.1.1.3",
+		  "User-Name":"joao","Connect-Info":300,"Acct-Session-Time":120}`,
+		`{"id":"CMP-0004","_SEQ":1,"Acct-Status-Type":"Stop","Framed-Protocol":"PPPoE",
+		  "NAS-IP-Address":"10.0.0.2","NAS-Identifier":"NAS-9","Framed-IP-Address":"200.1.1.4",
+		  "User-Name":"ana","Connect-Info":400,"Acct-Session-Time":900}`,
+	}
+}
+
+func semeado(t *testing.T) *harness {
+	t.Helper()
+	h := novoHarness(t)
+	h.ingere(eventos()...)
+	return h
+}
+
+// §106 — primary lookup
+func TestSpec106PrimaryLookup(t *testing.T) {
+	h := semeado(t)
+	rows := h.consultaOK(`SELECT id, username FROM radius_sessions WHERE id = 'CMP-0003'`)
+
+	if got := chaves(rows, "id"); !reflect.DeepEqual(got, []string{"CMP-0003"}) {
+		t.Fatalf("resultado = %v, want [CMP-0003]", got)
+	}
+	// O caminho é o da primary: nenhum scan foi aberto.
+	if n := h.engine.Metrics().SourceFullScan.Load(); n != 0 {
+		t.Errorf("SourceFullScan = %d, want 0", n)
+	}
+	if n := h.engine.Metrics().PointLookups.Load(); n != 1 {
+		t.Errorf("PointLookups = %d, want 1", n)
+	}
+}
+
+// §106 — bitmap lookup
+func TestSpec106BitmapLookup(t *testing.T) {
+	h := semeado(t)
+	rows := h.consultaOK(`SELECT id FROM radius_sessions WHERE status = 'Stop'`)
+
+	if got := chaves(rows, "id"); !reflect.DeepEqual(got, []string{"CMP-0001", "CMP-0003", "CMP-0004"}) {
+		t.Fatalf("resultado = %v", got)
+	}
+	if n := h.engine.Metrics().SourceFullScan.Load(); n != 0 {
+		t.Errorf("SourceFullScan = %d, want 0: o bitmap deveria ter atendido", n)
+	}
+}
+
+// §106 — hash lookup. Roda contra o DUBLÊ: o índice hash real é da Fase 8, e o
+// *storage.Store do M1 não implementa LookupHash.
+func TestSpec106HashLookup(t *testing.T) {
+	h := semeado(t)
+	rows := h.consultaOK(`SELECT id FROM radius_sessions WHERE nas = 'NAS-9'`)
+
+	if got := chaves(rows, "id"); !reflect.DeepEqual(got, []string{"CMP-0003", "CMP-0004"}) {
+		t.Fatalf("resultado = %v", got)
+	}
+	// O campo tem índice hash e NÃO tem bitmap: é o caminho do hash mesmo.
+	f, _ := h.sch.FieldByName([]byte("NAS-Identifier"))
+	if h.store.HasBitmap(f.ID) {
+		t.Error("fixture inválido: o campo deveria ter só índice hash")
+	}
+	if n := h.engine.Metrics().SourceFullScan.Load(); n != 0 {
+		t.Errorf("SourceFullScan = %d, want 0", n)
+	}
+}
+
+// §106 — AND
+func TestSpec106And(t *testing.T) {
+	h := semeado(t)
+	indexado := h.consultaOK(
+		`SELECT id FROM radius_sessions WHERE status = 'Stop' AND protocol = 'PPPoE'`)
+	// O mesmo predicado sem índice tem de dar o mesmo resultado: se a
+	// interseção perder candidato, a divergência aparece aqui.
+	scan := h.consultaOK(
+		`SELECT id FROM radius_sessions WHERE username != 'zzz' AND status = 'Stop' AND protocol = 'PPPoE'`)
+
+	if got := chaves(indexado, "id"); !reflect.DeepEqual(got, []string{"CMP-0001", "CMP-0004"}) {
+		t.Fatalf("resultado = %v", got)
+	}
+	if !reflect.DeepEqual(chaves(indexado, "id"), chaves(scan, "id")) {
+		t.Errorf("indexado = %v, scan = %v: a interseção divergiu do full scan",
+			chaves(indexado, "id"), chaves(scan, "id"))
+	}
+}
+
+// §106 — OR
+func TestSpec106Or(t *testing.T) {
+	h := semeado(t)
+	rows := h.consultaOK(
+		`SELECT id FROM radius_sessions WHERE status = 'Stop' OR status = 'Start'`)
+
+	got := chaves(rows, "id")
+	want := []string{"CMP-0001", "CMP-0002", "CMP-0003", "CMP-0004"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("resultado = %v, want %v", got, want)
+	}
+	// Dedup: uma row que casa nos dois lados do OR sai UMA vez. Aqui os
+	// conjuntos são disjuntos, então o teste que morde é o de baixo.
+	rows = h.consultaOK(
+		`SELECT id FROM radius_sessions WHERE status = 'Stop' OR protocol = 'PPPoE'`)
+	got = chaves(rows, "id")
+	want = []string{"CMP-0001", "CMP-0002", "CMP-0003", "CMP-0004"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("união com sobreposição = %v, want %v (sem duplicata)", got, want)
+	}
+}
+
+// §106 — comparison: cada operador × cada tipo comparável.
+func TestSpec106ComparacaoPorTipoEOperador(t *testing.T) {
+	h := semeado(t)
+	casos := []struct {
+		where string
+		want  []string
+	}{
+		// string
+		{`username = 'joao'`, []string{"CMP-0001", "CMP-0003"}},
+		{`username != 'joao'`, []string{"CMP-0002", "CMP-0004"}},
+		{`username > 'joao'`, []string{"CMP-0002"}},
+		{`username >= 'joao'`, []string{"CMP-0001", "CMP-0002", "CMP-0003"}},
+		{`username < 'joao'`, []string{"CMP-0004"}},
+		{`username <= 'joao'`, []string{"CMP-0001", "CMP-0003", "CMP-0004"}},
+		// int64
+		{`connect_info = 300`, []string{"CMP-0003"}},
+		{`connect_info != 300`, []string{"CMP-0001", "CMP-0002", "CMP-0004"}},
+		{`connect_info > 300`, []string{"CMP-0004"}},
+		{`connect_info >= 300`, []string{"CMP-0003", "CMP-0004"}},
+		{`connect_info < 300`, []string{"CMP-0001", "CMP-0002"}},
+		{`connect_info <= 300`, []string{"CMP-0001", "CMP-0002", "CMP-0003"}},
+		// ipv4 — a ordem lexicográfica dos bytes em network order É a numérica
+		{`nas_ip = '10.0.0.2'`, []string{"CMP-0003", "CMP-0004"}},
+		{`nas_ip != '10.0.0.2'`, []string{"CMP-0001", "CMP-0002"}},
+		{`nas_ip > '10.0.0.1'`, []string{"CMP-0003", "CMP-0004"}},
+		{`ip <= '200.1.1.2'`, []string{"CMP-0001", "CMP-0002"}},
+		// coluna int64 comparada a literal FLOAT (CompareIntAsFloat)
+		{`connect_info > 299.5`, []string{"CMP-0003", "CMP-0004"}},
+		{`connect_info = 300.0`, []string{"CMP-0003"}},
+	}
+	for _, tc := range casos {
+		t.Run(tc.where, func(t *testing.T) {
+			rows := h.consultaOK(`SELECT id FROM radius_sessions WHERE ` + tc.where)
+			if got := chaves(rows, "id"); !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("resultado = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// §106 — NULL. Cruza com D2: NULL é AUSÊNCIA, e um patch com null REMOVE o
+// campo.
+func TestSpec106Null(t *testing.T) {
+	h := semeado(t)
+	// CMP-0005 nasce sem Framed-Protocol; CMP-0001 perde o dele por patch.
+	h.ingere(
+		`{"id":"CMP-0005","_SEQ":1,"Acct-Status-Type":"Stop","User-Name":"bia"}`,
+		`{"id":"CMP-0001","_SEQ":2,"Framed-Protocol":null}`,
+	)
+
+	ausentes := chaves(h.consultaOK(
+		`SELECT id FROM radius_sessions WHERE protocol IS NULL`), "id")
+	if !reflect.DeepEqual(ausentes, []string{"CMP-0001", "CMP-0005"}) {
+		t.Fatalf("IS NULL = %v, want [CMP-0001 CMP-0005]", ausentes)
+	}
+
+	presentes := chaves(h.consultaOK(
+		`SELECT id FROM radius_sessions WHERE protocol IS NOT NULL`), "id")
+	if !reflect.DeepEqual(presentes, []string{"CMP-0002", "CMP-0003", "CMP-0004"}) {
+		t.Fatalf("IS NOT NULL = %v", presentes)
+	}
+
+	// Campo ausente compara FALSE para todo operador — inclusive `!=`. A
+	// intuição SQL diria que CMP-0001 e CMP-0005 saem no `!=`; aqui não saem, e
+	// é deliberado: sem NOT genérico, a lógica trivalente não vaza.
+	igual := chaves(h.consultaOK(
+		`SELECT id FROM radius_sessions WHERE protocol = 'PPPoE'`), "id")
+	diferente := chaves(h.consultaOK(
+		`SELECT id FROM radius_sessions WHERE protocol != 'PPPoE'`), "id")
+	for _, id := range []string{"CMP-0001", "CMP-0005"} {
+		if contem(igual, id) || contem(diferente, id) {
+			t.Errorf("row %s com campo ausente saiu em = ou !=", id)
+		}
+	}
+	if len(igual)+len(diferente) != 3 {
+		t.Errorf("= (%v) e != (%v) deveriam particionar só as rows com o campo", igual, diferente)
+	}
+}
+
+// §106 — LIMIT
+func TestSpec106Limit(t *testing.T) {
+	h := semeado(t)
+	rows := h.consultaOK(`SELECT id FROM radius_sessions WHERE status = 'Stop' LIMIT 2`)
+	if got := chaves(rows, "id"); !reflect.DeepEqual(got, []string{"CMP-0001", "CMP-0003"}) {
+		t.Fatalf("resultado = %v", got)
+	}
+	// LIMIT explícito abaixo do teto não é truncamento: Err() é nil.
+	if _, err := h.consulta(`SELECT id FROM radius_sessions LIMIT 1`); err != nil {
+		t.Errorf("LIMIT explícito devolveu erro: %v", err)
+	}
+}
+
+// §106 — full scan
+func TestSpec106FullScan(t *testing.T) {
+	h := semeado(t)
+	rows := h.consultaOK(`SELECT id FROM radius_sessions WHERE username = 'joao'`)
+
+	if got := chaves(rows, "id"); !reflect.DeepEqual(got, []string{"CMP-0001", "CMP-0003"}) {
+		t.Fatalf("resultado = %v", got)
+	}
+	if n := h.engine.Metrics().SourceFullScan.Load(); n != 1 {
+		t.Errorf("SourceFullScan = %d, want 1", n)
+	}
+	// A métrica NORMATIVA da §64 é a do planner, contada em plan-time.
+	if n := h.engine.PlanMetrics().FullScan.Load(); n != 1 {
+		t.Errorf("query.full_scan = %d, want 1", n)
+	}
+}
+
+// §106 — aliases: no WHERE e na projeção, com o nome de saída sendo o que o
+// usuário escreveu.
+func TestSpec106Aliases(t *testing.T) {
+	h := semeado(t)
+	rows := h.consultaOK(`SELECT service_id, status FROM radius_sessions WHERE status = 'Start'`)
+	if len(rows) != 1 {
+		t.Fatalf("resultado = %v", rows)
+	}
+	if rows[0]["service_id"] != "CMP-0002" || rows[0]["status"] != "Start" {
+		t.Errorf("linha = %v, want colunas nomeadas pelo alias", rows[0])
+	}
+	// O nome ORIGINAL resolve o mesmo campo.
+	orig := h.consultaOK(
+		`SELECT id FROM radius_sessions WHERE "Acct-Status-Type" = 'Start'`)
+	if !reflect.DeepEqual(chaves(orig, "id"), []string{"CMP-0002"}) {
+		t.Errorf("nome original = %v", chaves(orig, "id"))
+	}
+}
+
+// §106 — quoted fields
+func TestSpec106QuotedFields(t *testing.T) {
+	h := semeado(t)
+	rows := h.consultaOK(
+		`SELECT "Acct-Status-Type" FROM radius_sessions WHERE "Acct-Status-Type" = 'Start'`)
+	if len(rows) != 1 || rows[0]["Acct-Status-Type"] != "Start" {
+		t.Fatalf("resultado = %v", rows)
+	}
+}
+
+// §106 — parameters
+func TestSpec106Parameters(t *testing.T) {
+	h := semeado(t)
+	rows := h.consultaOK(
+		`SELECT id FROM radius_sessions WHERE status = ? AND nas_ip = ?`,
+		types.Value{Type: types.TypeString, Bytes: []byte("Stop")},
+		types.Value{Type: types.TypeString, Bytes: []byte("10.0.0.2")},
+	)
+	if got := chaves(rows, "id"); !reflect.DeepEqual(got, []string{"CMP-0003", "CMP-0004"}) {
+		t.Fatalf("resultado = %v", got)
+	}
+
+	// Contagem errada de parâmetros é erro de Execute, antes de qualquer
+	// leitura.
+	_, err := h.consulta(`SELECT id FROM radius_sessions WHERE status = ? AND nas_ip = ?`,
+		types.Value{Type: types.TypeString, Bytes: []byte("Stop")})
+	if err == nil {
+		t.Fatal("contagem errada de parâmetros deveria falhar")
+	}
+	if !errors.Is(err, binder.ErrBind) || !strings.Contains(err.Error(), "parâmetros") {
+		t.Errorf("erro = %v, want ErrBind mencionando parâmetros", err)
+	}
+}
+
+func contem(s []string, v string) bool {
+	for _, x := range s {
+		if x == v {
+			return true
+		}
+	}
+	return false
+}

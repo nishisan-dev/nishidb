@@ -1,0 +1,311 @@
+package executor
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/nishisan-dev/nishidb/internal/query/binder"
+	"github.com/nishisan-dev/nishidb/internal/query/planner"
+	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
+	"github.com/nishisan-dev/nishidb/internal/types"
+)
+
+// RowIterator é o contrato de streaming: nada do resultado é materializado.
+type RowIterator interface {
+	// Next avança para a próxima row. false = fim, LIMIT, teto, cancelamento
+	// ou erro — Err() distingue.
+	Next() bool
+	// Row é válida SOMENTE até o próximo Next; depois do fim devolve Row zero.
+	Row() Row
+	// Err é nil quando a iteração terminou por esgotamento ou por LIMIT
+	// explícito.
+	Err() error
+	// Close é idempotente e fecha a fonte upstream.
+	Close() error
+}
+
+// Options configura a execução.
+type Options struct {
+	Store   Store
+	Metrics *Metrics // opcional
+	// BatchSize é a CADÊNCIA do check de contexto em planos indexados — não um
+	// buffer de rows. Não existe buffer de rows (§66); quem introduzir um
+	// violou o requisito de memória. 0 usa 256; valores não potência de dois
+	// são arredondados para cima, porque a cadência é medida com máscara.
+	BatchSize int
+}
+
+const batchPadrao = 256
+
+// timeoutPadrao é usado quando o dataset não declara query.timeout. Existe
+// para que nenhuma query possa correr indefinidamente segurando iteradores.
+const timeoutPadrao = 30 * time.Second
+
+// Open valida o plano, compila predicado e projeção e devolve o iterador.
+//
+// NENHUMA leitura de dado acontece aqui: a primeira row só é lida no primeiro
+// Next — inclusive para LIMIT 0, que não deve tocar o Store.
+func Open(ctx context.Context, bq *binder.BoundQuery, plan planner.Plan, opts Options) (RowIterator, error) {
+	switch {
+	case bq == nil:
+		return nil, fmt.Errorf("%w: query ligada nula", ErrInvalidPlan)
+	case plan == nil:
+		return nil, fmt.Errorf("%w: plano nulo", ErrInvalidPlan)
+	case opts.Store == nil:
+		return nil, fmt.Errorf("%w: store nulo", ErrInvalidPlan)
+	case len(bq.Columns) == 0:
+		return nil, fmt.Errorf("%w: projeção vazia", ErrInvalidPlan)
+	}
+
+	it := &iterador{
+		st:      opts.Store,
+		metrics: opts.Metrics,
+		slots:   novosSlots(bq.Slots.IDs),
+		eff:     bq.EffectiveLimit,
+		// Truncamento por teto IMPLÍCITO: só quando a parada não veio de um
+		// LIMIT que o usuário escreveu e que é menor que o teto.
+		tetoImplicito: !bq.HasLimit || bq.Limit > bq.MaxRows,
+	}
+
+	cols := make([]ColView, len(bq.Columns))
+	slotDaColuna := make([]int32, len(bq.Columns))
+	for i, c := range bq.Columns {
+		if c.Field == nil {
+			return nil, fmt.Errorf("%w: coluna %d com campo nulo", ErrInvalidPlan, i)
+		}
+		if c.Slot < 0 || c.Slot >= len(it.slots) {
+			return nil, fmt.Errorf("%w: coluna %q com slot %d fora de [0,%d)",
+				ErrInvalidPlan, c.Name, c.Slot, len(it.slots))
+		}
+		// Type é constante por query: o tipo DECLARADO (ou o fixado, para campo
+		// auto). Não é o tipo físico — esse vive em Val.Type, por row.
+		cols[i] = ColView{Name: c.Name, Type: c.Field.EffectiveType()}
+		slotDaColuna[i] = int32(c.Slot)
+	}
+	it.cols, it.slotDaColuna = cols, slotDaColuna
+
+	pred, err := compila(bq.Where, len(it.slots))
+	if err != nil {
+		return nil, err
+	}
+	it.pred = pred
+
+	// Máscara da cadência de ctx: 0 no full scan (checa a cada candidato),
+	// BatchSize-1 nos planos indexados.
+	it.mask = int64(potenciaDeDois(opts.BatchSize) - 1)
+	if _, full := plan.(*planner.FullScanPlan); full {
+		it.mask = 0
+	}
+
+	timeout := bq.Timeout
+	if timeout <= 0 {
+		timeout = timeoutPadrao
+	}
+	it.ctx, it.cancel = context.WithTimeout(ctx, timeout)
+
+	// A fonte é aberta POR ÚLTIMO: qualquer erro acima não pode deixar
+	// iteradores de índice abertos e sem dono.
+	hash, _ := opts.Store.(HashLookuper)
+	src, err := fonteDoPlano(plan, opts.Store, hash, opts.Metrics)
+	if err != nil {
+		it.cancel()
+		return nil, err
+	}
+	it.src = src
+	return it, nil
+}
+
+// potenciaDeDois arredonda para cima até a próxima potência de dois (mínimo 1),
+// porque a cadência é medida com máscara de bits.
+func potenciaDeDois(n int) int64 {
+	if n <= 0 {
+		n = batchPadrao
+	}
+	p := int64(1)
+	for p < int64(n) {
+		p <<= 1
+	}
+	return p
+}
+
+type iterador struct {
+	st      Store
+	src     rowSource
+	metrics *Metrics
+
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	slots        []slot
+	cols         []ColView
+	slotDaColuna []int32
+	pred         *programa
+	fr           encoding.FieldReader
+
+	rowBuf []byte
+
+	eff           int64 // teto efetivo de linhas (min(LIMIT, maxRows))
+	tetoImplicito bool
+	emitidas      int64
+	n             int64 // candidatos consumidos, para a cadência de ctx
+	mask          int64
+
+	cnt      contadores
+	done     bool
+	fechou   bool
+	err      error
+	errClose error
+}
+
+func (it *iterador) Next() bool {
+	if it.done {
+		return false
+	}
+	if it.emitidas >= it.eff {
+		// Inclui LIMIT 0: termina antes de tocar o Store.
+		it.termina(nil)
+		return false
+	}
+	for {
+		if it.mask == 0 || it.n&it.mask == 0 {
+			if err := it.ctx.Err(); err != nil {
+				it.contaCancel()
+				it.termina(fmt.Errorf("executor: query interrompida após %d candidatos: %w", it.n, err))
+				return false
+			}
+		}
+
+		rec, buf, more, live, err := it.src.advance(it.rowBuf)
+		it.rowBuf = buf // obrigatório em TODOS os caminhos, inclusive erro
+		if err != nil {
+			it.termina(err)
+			return false
+		}
+		if !more {
+			it.termina(nil)
+			return false
+		}
+		it.n++
+		it.cnt.candidates++
+		if !live {
+			// Row sem location ou tombstoned: o índice a devolveu porque as
+			// postings não são limpas. Conta como candidato, não como row.
+			it.cnt.deadSkipped++
+			continue
+		}
+
+		if err := coleta(it.slots, &it.fr, rec.Payload); err != nil {
+			it.termina(fmt.Errorf("executor: payload da row %d: %w", rec.RowID, err))
+			return false
+		}
+		if !it.pred.eval(it.slots, &it.cnt) {
+			it.cnt.rejected++
+			continue
+		}
+
+		it.projeta()
+		it.emitidas++
+		it.cnt.emitted++
+		if it.emitidas >= it.eff {
+			// Early-exit: fecha a fonte AGORA, não no Next seguinte. Uma query
+			// com LIMIT 3 sobre um milhão de candidatos não pode segurar o
+			// iterador do índice até o consumidor decidir chamar Next de novo.
+			it.encerra()
+			it.marcaTruncado()
+		}
+		return true
+	}
+}
+
+// projeta copia os valores dos slots para as colunas de saída.
+func (it *iterador) projeta() {
+	for j, s := range it.slotDaColuna {
+		sl := &it.slots[s]
+		if sl.present {
+			it.cols[j].Null, it.cols[j].Val = false, sl.val
+			continue
+		}
+		// Zerar o Val é obrigatório: sem isso a coluna carrega o valor da row
+		// anterior e o encoder imprime lixo ao lado de um null.
+		it.cols[j].Null, it.cols[j].Val = true, types.Value{}
+	}
+}
+
+// marcaTruncado registra o erro de teto quando a parada veio do limite
+// IMPLÍCITO (query.maxRows). Resultado truncado apresentado como completo é
+// resposta errada, e o erro depois das rows é o menor mal.
+//
+// Precisão deliberada: o erro significa "parou no teto", e aparece também
+// quando o resultado tinha EXATAMENTE maxRows linhas. Distinguir os dois casos
+// exigiria continuar avaliando o predicado até achar a próxima linha viva —
+// potencialmente o dataset inteiro, que é exatamente o custo que o teto existe
+// para evitar. Um alarme falso é aceitável; um resultado truncado silencioso
+// não é.
+func (it *iterador) marcaTruncado() {
+	if !it.tetoImplicito {
+		return
+	}
+	it.err = fmt.Errorf("%w: %d", ErrMaxRowsExceeded, it.eff)
+	if it.metrics != nil {
+		it.metrics.Truncated.Add(1)
+	}
+}
+
+func (it *iterador) contaCancel() {
+	if it.metrics != nil {
+		it.metrics.Canceled.Add(1)
+	}
+}
+
+// termina é o ÚNICO estado terminal: fecha upstream na hora, publica o erro e
+// libera o contexto. Depois dele, Next é false e Row é zero sem tocar o Store.
+func (it *iterador) termina(err error) {
+	if it.done {
+		return
+	}
+	it.done = true
+	if err != nil && it.err == nil {
+		it.err = err
+	}
+	it.encerra()
+}
+
+// encerra fecha a fonte e cancela o contexto derivado. Idempotente: o
+// early-exit do LIMIT chama antes do estado terminal.
+func (it *iterador) encerra() {
+	if it.fechou {
+		return
+	}
+	it.fechou = true
+	if it.src != nil {
+		if err := it.src.close(); err != nil {
+			it.errClose = err
+			if it.err == nil {
+				it.err = err
+			}
+		}
+	}
+	// cancel SEMPRE, inclusive na parada por LIMIT: senão o timer do
+	// WithTimeout fica vivo até o deadline em toda query com LIMIT.
+	it.cancel()
+	it.cnt.flush(it.metrics)
+}
+
+func (it *iterador) Row() Row {
+	if it.done {
+		return Row{}
+	}
+	return Row{cols: it.cols}
+}
+
+func (it *iterador) Err() error { return it.err }
+
+// Close devolve apenas o erro de FECHAMENTO upstream — não o erro da query.
+// Um Close que devolvesse ErrMaxRowsExceeded faria `defer it.Close()` parecer
+// falha de recurso.
+func (it *iterador) Close() error {
+	it.done = true
+	it.encerra()
+	return it.errClose
+}
