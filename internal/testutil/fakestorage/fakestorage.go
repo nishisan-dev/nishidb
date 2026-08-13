@@ -455,6 +455,11 @@ func (d *Dict) Name(id types.FieldID) (string, bool) {
 	return n, ok
 }
 
+// Len devolve quantos campos o dicionário registrou. Junto com Name é o que
+// permite ao schema.Compile enumerar os campos que uma execução anterior
+// materializou.
+func (d *Dict) Len() int { return len(d.names) }
+
 // TypeHint devolve o tipo fixado do campo; ok=false para campo inexistente ou
 // sem tipo fixado — mesma semântica do real.
 func (d *Dict) TypeHint(id types.FieldID) (types.FieldType, bool) {

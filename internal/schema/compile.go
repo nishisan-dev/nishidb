@@ -52,10 +52,15 @@ const (
 // opcional: com type assertion, um dicionário que não a implementasse fixaria
 // o tipo só em memória e o perderia no restart EM SILÊNCIO — o campo passaria
 // a não ser comparável em query sem nada indicar o porquê.
+// Len e Name existem para o Compile ENUMERAR o dicionário e carregar os campos
+// que uma execução anterior materializou (ver o carregamento no fim do
+// Compile). São de leitura pura: nenhuma delas cria entry.
 type FieldDictionary interface {
 	LookupOrCreate(name []byte) (types.FieldID, error)
 	TypeHint(id types.FieldID) (types.FieldType, bool)
 	SetTypeHint(id types.FieldID, t types.FieldType) error
+	Len() int
+	Name(id types.FieldID) (string, bool)
 }
 
 // CompiledField é a forma resolvida de um campo. Imutável após a criação,
@@ -249,6 +254,53 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 		}
 		if cf.IsTTL {
 			c.TTL = cf
+		}
+	}
+
+	// Campos que o DICIONÁRIO conhece e o YAML não: campos auto que uma
+	// execução anterior materializou via ResolveUnknown. Sem carregá-los aqui,
+	// depois de um restart o campo tem dados e typeHint no fields.dict mas não
+	// existe no Compiled — FieldByName devolve false, a query sobre ele erra
+	// "coluna não existe" (mentira) e o SELECT * omite a coluna.
+	//
+	// A rota é READ-ONLY por construção: a única outra forma de materializar o
+	// campo seria ResolveUnknown, que é do writer e CRIA entry durável no
+	// dicionário. O binder jamais pode criar campo — um erro de digitação numa
+	// query gravaria um fieldID para sempre.
+	//
+	// O carregamento vale só para o dataset de universo ABERTO, que é
+	// exatamente a condição sob a qual ResolveUnknown poderia ter criado o
+	// campo. Num universo fechado o que sobra no dicionário é resíduo de uma
+	// configuração anterior, e o operador que tirou o campo da lista o quer
+	// fora.
+	if c.IncludeAll && c.Unknown == UnknownInclude {
+		for i := 1; i <= dict.Len(); i++ {
+			id := types.FieldID(i)
+			name, ok := dict.Name(id)
+			if !ok || name == "" {
+				continue
+			}
+			// Nome já tomado (inclusive por ALIAS de campo declarado): uma
+			// segunda entrada sob o mesmo nome faria o resultado da query
+			// depender da ordem de inserção no mapa.
+			if _, tomado := c.byName[name]; tomado {
+				continue
+			}
+			if _, tomado := c.byID[id]; tomado {
+				continue
+			}
+			if _, excluído := c.exclude[name]; excluído {
+				continue
+			}
+			cf := &CompiledField{ID: id, Name: name, IsAuto: true}
+			// Sem typeHint o campo entra SEM tipo: existe, é projetável, e o
+			// binder recusa comparação sobre ele com "sem tipo conhecido" — não
+			// com "coluna não existe".
+			if t, ok := dict.TypeHint(id); ok {
+				cf.autoType.Store(uint32(t))
+			}
+			c.byName[cf.Name] = cf
+			c.byID[cf.ID] = cf
 		}
 	}
 

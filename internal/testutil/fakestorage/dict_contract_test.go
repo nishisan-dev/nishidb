@@ -25,6 +25,54 @@ type dictSobTeste interface {
 	LookupOrCreate(name []byte) (types.FieldID, error)
 	TypeHint(id types.FieldID) (types.FieldType, bool)
 	SetTypeHint(id types.FieldID, t types.FieldType) error
+	Len() int
+	Name(id types.FieldID) (string, bool)
+}
+
+// O schema.Compile ENUMERA o dicionário (1..Len) para carregar os campos que
+// uma execução anterior materializou. Se o dublê e o real divergirem nessa
+// numeração, o SELECT * passa com o fake e perde colunas com o real.
+func TestEnumeracaoDoDicionarioConcorda(t *testing.T) {
+	real, err := fielddict.Open(filepath.Join(t.TempDir(), "fields.dict"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer real.Close()
+
+	casos := map[string]dictSobTeste{"real": real, "fake": fakestorage.NewDict()}
+	for nome, d := range casos {
+		t.Run(nome, func(t *testing.T) {
+			if d.Len() != 0 {
+				t.Errorf("Len inicial = %d, want 0", d.Len())
+			}
+			nomes := []string{"id", "Acct-Status-Type", "X-Vendor-Attr"}
+			for i, n := range nomes {
+				id, err := d.LookupOrCreate([]byte(n))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if want := types.FieldID(i + 1); id != want {
+					t.Errorf("LookupOrCreate(%q) = %d, want %d (ordem de criação)", n, id, want)
+				}
+			}
+			if d.Len() != len(nomes) {
+				t.Errorf("Len = %d, want %d", d.Len(), len(nomes))
+			}
+			for i, want := range nomes {
+				got, ok := d.Name(types.FieldID(i + 1))
+				if !ok || got != want {
+					t.Errorf("Name(%d) = %q/%v, want %q/true", i+1, got, ok, want)
+				}
+			}
+			// Fora da faixa: os dois recusam, e nenhum entra em panic — o
+			// Compile varre a faixa inteira sem checar antes.
+			for _, id := range []types.FieldID{0, types.FieldID(len(nomes) + 1), 9999} {
+				if got, ok := d.Name(id); ok {
+					t.Errorf("Name(%d) = %q/true, want false", id, got)
+				}
+			}
+		})
+	}
 }
 
 // O dublê e o real precisam concordar em TUDO o que o consumidor observa —

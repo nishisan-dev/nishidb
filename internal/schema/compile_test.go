@@ -40,6 +40,15 @@ func (d *fakeDict) LookupOrCreate(name []byte) (types.FieldID, error) {
 	return id, nil
 }
 
+func (d *fakeDict) Len() int { return len(d.order) }
+
+func (d *fakeDict) Name(id types.FieldID) (string, bool) {
+	if id < 1 || int(id) > len(d.order) {
+		return "", false
+	}
+	return d.order[id-1], true
+}
+
 func (d *fakeDict) TypeHint(id types.FieldID) (types.FieldType, bool) {
 	t, ok := d.hints[id]
 	return t, ok && t != types.TypeNull

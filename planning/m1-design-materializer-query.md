@@ -860,6 +860,41 @@ embrulhado em `ErrTypeConversion` (evento ruim, `Skipped`, a ingestão segue) e 
 default do `classify`, que o trataria como erro de storage e **pararia a ingestão** por causa de um
 campo que mudou de formato na origem. Teste: `TestConflitoDeTipoNoDicionarioEhEventoRuim`.
 
+**Só o CONFLITO é evento ruim.** Qualquer outro erro de `FixAutoType` — falha de I/O ao gravar o
+hint (disco cheio, EIO, EFBIG) ou bug de programação — é do dataset, e embrulhá-lo em
+`ErrTypeConversion` junto com o conflito faria o pipeline pular em silêncio, e para sempre, todo
+evento que tocasse um campo `auto` ainda sem tipo, exibindo `Failed=0`. A política de três baldes
+existe para impedir exatamente isso: bug e infra nunca entram no balde de dado ruim. Teste:
+`TestFalhaDeIODoDicionarioAoFixarTipoEhFailed`.
+
+### R11b — o campo auto depois do restart (decisão da revisão da QP)
+
+Depois de um restart, um campo `auto` materializado numa execução anterior existe no **dicionário**
+(com `typeHint`) mas **não no YAML** — e portanto não estaria no `Compiled`. Consequências, ambas
+observadas: o binder responde **"coluna não existe"** para uma coluna que tem dados, e o `SELECT *`
+**omite** a coluna. A única rota que materializava esse campo era `ResolveUnknown`, que é do
+**writer** e CRIA entry durável no dicionário — o binder jamais pode criar campo, senão um erro de
+digitação numa query gravaria um `fieldID` para sempre.
+
+**Decisão: rota read-only no `Compile`.** Ao compilar o dataset, além dos campos do YAML, o
+`Compiled` carrega os campos já presentes no dicionário como `CompiledField` auto, com o tipo vindo
+do `typeHint`. O `FieldDictionary` ganhou `Len()`/`Name(id)` — enumeração de leitura pura — e nenhuma
+escrita nova aparece no caminho de query.
+
+Três decisões de borda que a implementação fixou:
+
+- **Só em universo ABERTO** (`include: ["*"]` + `unknownFields: include`), que é exatamente a
+  condição sob a qual `ResolveUnknown` poderia ter criado o campo. Num universo fechado o que sobra
+  no dicionário é resíduo de uma configuração anterior, e o operador que tirou o campo da lista o
+  quer fora.
+- **Campo excluído não volta**, mesmo estando no dicionário: para o runtime ele não existe.
+- **`typeHint = 0`** (campo criado mas nunca observado com valor) entra **sem tipo**: existe, é
+  projetável, e o binder recusa a comparação com "nunca foi observada" em vez de "não existe" — que
+  seria mentira e mandaria o operador procurar erro de digitação. `IS NULL` sobre ele continua
+  válido, porque presença não depende de tipo.
+
+Testes: `schema/dictfields_test.go` e `query/binder/restart_test.go`.
+
 ---
 
 ## 8. Contrato com o plano do storage — FECHADO (2026-08-12; §15A no plano do storage)

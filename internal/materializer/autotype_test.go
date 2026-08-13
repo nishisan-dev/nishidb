@@ -262,6 +262,10 @@ func (d dictFalhaAoFixar) TypeHint(id types.FieldID) (types.FieldType, bool) {
 
 func (d dictFalhaAoFixar) SetTypeHint(types.FieldID, types.FieldType) error { return d.err }
 
+func (d dictFalhaAoFixar) Len() int { return d.inner.Len() }
+
+func (d dictFalhaAoFixar) Name(id types.FieldID) (string, bool) { return d.inner.Name(id) }
+
 // Falha de I/O ao PERSISTIR o tipo fixado vem do dataset, não do evento.
 // Contabilizá-la como TYPE_CONVERSION faria o pipeline pular, em silêncio e
 // para sempre, todo evento que tocasse um campo auto ainda sem tipo — com

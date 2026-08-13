@@ -884,6 +884,10 @@ func (d dictErro) SetTypeHint(id types.FieldID, t types.FieldType) error {
 	return d.inner.SetTypeHint(id, t)
 }
 
+func (d dictErro) Len() int { return d.inner.Len() }
+
+func (d dictErro) Name(id types.FieldID) (string, bool) { return d.inner.Name(id) }
+
 // Falha ao registrar campo desconhecido vem do STORAGE, não do evento: não
 // pode ser contabilizada como SCHEMA_VALIDATION nem virar Skipped.
 func TestApplyFalhaDoDicionarioEhFailed(t *testing.T) {
