@@ -283,19 +283,58 @@ func (b *binder) coluna(nome string, pos int) (*schema.CompiledField, error) {
 
 func (b *binder) usa(id types.FieldID) { b.usados[id] = struct{}{} }
 
+// expr percorre a ESPINHA ESQUERDA iterativamente, pelo mesmo motivo que o
+// parser é iterativo em parseAnd/parseOr: `a=1 AND a=1 AND …` é left-leaning e
+// cresce um nível por termo, sem parênteses. Uma query gerada por máquina (um
+// IN expandido, um filtro montado por UI) chega a dezenas de milhares de
+// termos sem intenção nenhuma, e recursão aqui seria um frame por termo.
+//
+// O lado DIREITO continua recursivo, e isso é seguro para AST vinda do parser:
+// só se aprofunda com parênteses, que o parser já limita a MaxExprDepth. O
+// budget abaixo cobre o caso de uma AST construída à mão (o Bind é público e
+// recebe uma AST que qualquer um pode montar).
+//
+// A ORDEM de visita é preservada — folha mais à esquerda primeiro, depois os
+// filhos direitos do mais profundo ao topo, que é a mesma ordem léxica da
+// recursão anterior. Ela decide qual erro é reportado primeiro e o layout do
+// arena.
 func (b *binder) expr(e parser.Expr) (BoundExpr, error) {
-	switch n := e.(type) {
-	case *parser.LogicalExpr:
-		left, err := b.expr(n.Left)
-		if err != nil {
-			return nil, err
-		}
-		right, err := b.expr(n.Right)
-		if err != nil {
-			return nil, err
-		}
-		return &BoundLogical{Op: n.Op, Left: left, Right: right}, nil
+	return b.exprProf(e, 0)
+}
 
+func (b *binder) exprProf(e parser.Expr, prof int) (BoundExpr, error) {
+	if prof > MaxBindDepth {
+		return nil, errNoPos("expressão aninhada demais no WHERE (máximo %d níveis à direita)", MaxBindDepth)
+	}
+
+	var espinha []*parser.LogicalExpr
+	for {
+		l, ok := e.(*parser.LogicalExpr)
+		if !ok {
+			break
+		}
+		espinha = append(espinha, l)
+		e = l.Left
+	}
+
+	atual, err := b.folha(e)
+	if err != nil {
+		return nil, err
+	}
+	for i := len(espinha) - 1; i >= 0; i-- {
+		direita, err := b.exprProf(espinha[i].Right, prof+1)
+		if err != nil {
+			return nil, err
+		}
+		atual = &BoundLogical{Op: espinha[i].Op, Left: atual, Right: direita}
+	}
+	return atual, nil
+}
+
+// folha liga os nós terminais. Um *parser.LogicalExpr nunca chega aqui: a
+// espinha já o consumiu.
+func (b *binder) folha(e parser.Expr) (BoundExpr, error) {
+	switch n := e.(type) {
 	case *parser.Comparison:
 		return b.comparacao(n)
 
@@ -445,17 +484,21 @@ func (b *binder) preencheSlots(bq *BoundQuery) {
 		slot, _ := bq.Slots.Index(bq.Columns[i].Field.ID)
 		bq.Columns[i].Slot = slot
 	}
-	var walk func(BoundExpr)
-	walk = func(e BoundExpr) {
+	// Percurso com PILHA EXPLÍCITA, pela mesma razão que o expr percorre a
+	// espinha iterativamente: uma cadeia de 50 mil termos é uma árvore de 50
+	// mil níveis, e um walk recursivo aqui gastaria um frame por termo —
+	// desfazendo, na segunda passada, o cuidado tomado na primeira.
+	pilha := []BoundExpr{bq.Where}
+	for len(pilha) > 0 {
+		e := pilha[len(pilha)-1]
+		pilha = pilha[:len(pilha)-1]
 		switch n := e.(type) {
 		case *BoundLogical:
-			walk(n.Left)
-			walk(n.Right)
+			pilha = append(pilha, n.Left, n.Right)
 		case *BoundComparison:
 			n.Slot, _ = bq.Slots.Index(n.Field.ID)
 		case *BoundNullCheck:
 			n.Slot, _ = bq.Slots.Index(n.Field.ID)
 		}
 	}
-	walk(bq.Where)
 }
