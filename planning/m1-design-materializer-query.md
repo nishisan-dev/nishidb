@@ -879,6 +879,26 @@ depois e percebe que o argumento não fecha.
    do teto, remover o budget não quebra nada, porque uma AST de 200 níveis com folhas não indexáveis
    degrada de qualquer jeito.
 
+### Convenção: teste de ordenação visita a região onde representação e semântica divergem
+
+Uma comparação pode estar implementada errada e passar em qualquer quantidade de testes verdes,
+desde que eles nunca visitem a faixa onde a representação interna deixa de ter a mesma ordem do
+valor. Aconteceu aqui: **todos os testes de double usavam valores positivos**, e no espaço de bits
+do IEEE-754 os positivos têm a mesma ordem dos floats — a mutação que ordena `Value.I64` cru
+passava. A divergência só aparece nos **negativos**, porque o sinal mora no bit mais alto.
+
+Regra: todo teste de ordenação tem de incluir a região de divergência do tipo:
+
+- **double comparado por bits**: negativos (o caso `-1 > -2`), e `-0.0` contra `0.0`;
+- **inteiros com sinal**: `MinInt64`/`MaxInt64`, onde a negação e o overflow mudam de comportamento;
+- **bytes/rede**: o byte alto ≥ 0x80, onde a comparação com signed byte inverteria a ordem;
+- **timestamp**: millis negativos (antes de 1970), onde o resto truncado do Go dá fração negativa.
+
+O mesmo raciocínio vale para o zero-value de enum: `CompareUnset` como valor inválido protege uma
+ponta, e fechar a enumeração no `switch` — em vez de deixar um `default` silencioso — protege a
+outra. Um `Kind` novo que caísse no `default` de bytes compararia representações diferentes sem
+nada acusar.
+
 ### Convenção: gate colado no valor medido
 
 Um gate de alocação com folga não é gate. O teto de 12 sobre 5 medidos não acusaria nem uma
