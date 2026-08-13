@@ -879,6 +879,45 @@ depois e percebe que o argumento não fecha.
    do teto, remover o budget não quebra nada, porque uma AST de 200 níveis com folhas não indexáveis
    degrada de qualquer jeito.
 
+### I1 — o que a integração com o Store real encontrou
+
+O bloco de query inteiro foi construído contra o dublê, e a I1 existe para medir a distância entre o
+que foi provado e o que vai rodar. O resultado:
+
+**Divergência corrigida.** O dublê validava só o payload (`ValidatePayload`), enquanto o Store real
+valida o record inteiro (`ValidateRecord`) e aplica os tetos de formato — `MaxKeySize` de 1 KiB e
+`MaxRecordSize` de 4 MiB. **O dublê aceitava o que o real recusa**, que é a pior direção possível
+para uma divergência de dublê: o teste passa no desenvolvimento e a ingestão falha depois do deploy.
+
+**Divergência estrutural, registrada e não corrigível.** O Store real recusa payload que referencie
+um `fieldID` inexistente no dicionário — o dicionário é dele. O dublê **não tem dicionário** (o
+`fakestorage.Dict` é um objeto do teste), então não valida. Dar um dicionário ao dublê significaria
+duplicar a máquina que ele existe para substituir; e a rota real (materializer sobre
+`schema.Compile`) nunca produz um ID que não venha do dicionário. Fica registrado no doc do dublê.
+
+**Paridade de comportamento, e não só de assinatura.** As asserções de compilação garantem que os
+dois satisfazem a mesma interface; elas não dizem nada sobre o que acontece em runtime. Um roteiro
+ÚNICO roda nos dois (`fakestorage/comportamento_test.go`) e cobre o que o executor observa: rowId
+0-based, update preservando o id, diff de postings (o valor antigo deixa de apontar a row), valor
+nunca visto devolvendo iterador vazio em vez de erro, campo sem índice devolvendo
+`ErrInvalidArgument`, ausência devolvendo `ok=false` sem erro, tombstone sumindo das três rotas de
+leitura com o posting sobrevivendo, e `ScanLive` em ordem crescente.
+
+**A armadilha que pegou o próprio teste de integração.** Os ratios do `radiusgen` são LITERAIS (só
+os campos de cardinalidade tratam 0 como default) — decisão correta, porque desligar uma dimensão
+precisa ser possível. O custo é que `Config{Seed, Entities}` produz um corpus sem patch, sem Extended
+JSON, sem campo desconhecido e sem null. A primeira versão do teste fim-a-fim usava exatamente isso e
+**parecia** exercitar o workload real; quem revelou foi uma mutação (desligar a remoção por null no
+merge) que não quebrou nada. Com `DefaultConfig()`, a mesma mutação falha na ingestão do evento 321.
+Registrado como armadilha no doc do gerador.
+
+**O que a integração provou de ponta a ponta:** 4.000 eventos do workload de accounting → 794
+entidades → checkpoint → fechar e reabrir → as quatro rotas do planner conferidas contra um oráculo
+em memória → NDJSON validado linha a linha com `encoding/json`. Mais o campo `auto` sobrevivendo ao
+restart e sendo filtrável (o cenário que motivou a R11, que nunca tinha rodado com dicionário durável
+de verdade), e 149 mil linhas lidas por 4 leitores concorrentes com o writer, sem nenhum estado
+parcial visível.
+
 ### Convenção: teste de ordenação visita a região onde representação e semântica divergem
 
 Uma comparação pode estar implementada errada e passar em qualquer quantidade de testes verdes,
