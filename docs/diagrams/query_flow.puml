@@ -1,0 +1,61 @@
+@startuml query_flow
+title Consulta — do SQL à linha NDJSON
+
+participant "nishidb query" as cli
+participant "lexer" as lex
+participant "parser" as par
+participant "binder" as bnd
+participant "planner" as pln
+participant "executor" as exe
+participant "Store" as st
+participant "StreamWriter\n(NDJSON)" as w
+
+cli -> lex : SELECT … WHERE …
+lex -> par : tokens (0 alocação)
+par -> par : AST; cadeias AND/OR\nITERATIVAS (left-leaning)
+note right of par
+  Erro de sintaxe sai com POSIÇÃO;
+  o CLI mostra linha, coluna e o trecho.
+end note
+
+par -> bnd : SelectStmt + params
+bnd -> bnd : resolve nome/alias contra o schema
+bnd -> bnd : coage literais E parâmetros\npara a representação da COLUNA
+bnd -> bnd : numera os slots (projeção ∪ WHERE)
+bnd --> pln : BoundQuery
+
+pln -> st : HasBitmap(field) — só CAPABILITY
+pln -> pln : R1 primary → R2 hash → R3/R4 bitmap\n→ R5 união → R6 full scan
+note right of pln
+  O plano é só a FONTE DE CANDIDATOS.
+  Toda dúvida degrada para full scan:
+  falso positivo o executor filtra,
+  falso negativo ninguém recupera.
+end note
+pln --> exe : Plan
+
+exe -> st : abre a fonte\n(GetByKey | LookupBitmap | ScanLive | k-way)
+loop por candidato
+  exe -> st : GetByRowID(id, buf)
+  st --> exe : Record ou "morto"
+  alt row sem location ou tombstoned
+    exe -> exe : pula (DeadSkipped)
+  else
+    exe -> exe : coleta slots (merge linear, 1 passada)
+    exe -> exe : REAVALIA o WHERE inteiro (§44)
+    alt não satisfaz
+      exe -> exe : rejeita (Rejected)
+    else
+      exe -> w : WriteRow(row)
+      w -> cli : linha NDJSON (flush por limiar)
+    end
+  end
+end
+
+note over exe
+  Memória O(batch), nunca O(resultado):
+  38 alocações por query, constantes de
+  1.000 a 100.000 linhas.
+  LIMIT fecha a fonte na hora.
+end note
+@enduml

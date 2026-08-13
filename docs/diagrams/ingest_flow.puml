@@ -1,0 +1,61 @@
+@startuml ingest_flow
+title Ingestão — do evento JSON à location publicada
+
+participant "nishidb ingest" as cli
+participant "Materializer" as mat
+participant "PatchBuffer" as pb
+participant "Store" as st
+participant "segment.Writer" as seg
+participant "índices mmap" as idx
+
+cli -> mat : Apply(linha NDJSON)
+activate mat
+
+mat -> pb : Parse(evento, schema)
+activate pb
+pb -> pb : tokeniza (jsonp, zero-copy)
+pb -> pb : resolve campos\n(include/exclude/unknown)
+pb -> pb : fixa tipo de campo auto\n(R11: 1ª observação, durável)
+pb -> pb : converte para o arena\ne ordena por FieldID
+pb --> mat : entries + key + sequence
+deactivate pb
+
+alt evento sem key ou tipo inconvertível
+  mat --> cli : Skipped (§101: log-and-skip)
+end
+
+mat -> st : GetByKey(key) — estado anterior
+st --> mat : Record{payload, seq} ou ausente
+
+alt sequence do evento <= a gravada
+  mat --> cli : Stale (descartado, §25)
+end
+
+mat -> mat : mergeRecords(prev, patch)\nnull REMOVE o campo (D2)
+mat -> st : Put(key, seq, flags, payload, prev)
+activate st
+
+st -> st : ValidateRecord\n(ordem, tetos de formato)
+st -> st : valida fieldIDs contra o dicionário
+st -> seg : Append(record)
+seg --> st : offset
+st -> idx : diff prev↔novo nos campos indexados\n(Clear + Set nos bitmaps)
+st -> idx : publica location\n(u64 atômico: segmento|offset|flags)
+note right of idx
+  A location é publicada POR ÚLTIMO:
+  até ela existir, a row não é visível
+  para leitor nenhum.
+end note
+st --> mat : rowID, criado?
+deactivate st
+
+mat --> cli : Created | Updated
+deactivate mat
+
+cli -> st : Checkpoint() a cada N eventos
+note right of cli
+  LIGADO por padrão: sem checkpoint
+  o overlay de locations vive no heap
+  e a memória acompanha o dataset.
+end note
+@enduml

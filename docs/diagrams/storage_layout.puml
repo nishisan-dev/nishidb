@@ -1,0 +1,60 @@
+@startuml storage_layout
+title Layout em disco de um dataset
+
+skinparam componentStyle rectangle
+
+folder "<dataset>/" {
+  folder "data/" {
+    artifact "segment-00000001.dat\nsegment-00000002.dat\n…" as seg
+  }
+  folder "indexes/" {
+    artifact "primary.idx\nhash aberto, linear probing\nslots de 16 B" as prim
+    artifact "locations.idx\nu64 por rowId:\nsegmento | offset | flags" as loc
+    artifact "sequences.idx\nint64 por rowId" as seqs
+    artifact "bitmaps/<campo>/\nposting por valor + values.dict" as bmp
+  }
+  folder "metadata/" {
+    artifact "fields.dict\nnome → fieldID (v2, com typeHint)" as fd
+  }
+  folder "checkpoint/" {
+    artifact "manifest.bin\nepoch, ponto S, stats" as man
+  }
+  artifact "dataset.lock\nflock exclusivo" as lock
+}
+
+note right of seg
+  APPEND-ONLY. Record:
+  header 36 B (CRC, fieldCount,
+  tamanhos) + key + payload
+  ordenado por FieldID.
+  Tetos de FORMATO: key 1 KiB,
+  record 4 MiB.
+end note
+
+note right of prim
+  Colisão é VALIDADA lendo a key
+  do record — hash igual não basta.
+end note
+
+note right of loc
+  mmap: cresce com o dataset,
+  mas é página de ARQUIVO.
+  Na rodada de 8M: 386 MiB de
+  RSS de arquivo contra 71 MiB
+  de RSS anônimo.
+end note
+
+note bottom of man
+  O checkpoint aplica o overlay
+  de locations ao mmap. Sem ele,
+  o overlay vive no HEAP e a
+  memória acompanha o dataset.
+end note
+
+note bottom of fd
+  v2: entry (nameLen|typeHint|nome|CRC)
+  + registro de hint append-only.
+  O tipo do campo auto é fixado na 1ª
+  observação e sobrevive ao restart.
+end note
+@enduml

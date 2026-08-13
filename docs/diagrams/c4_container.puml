@@ -1,0 +1,51 @@
+@startuml c4_container
+!define RECTANGLE class
+title NishiDB — containers (M1)
+
+skinparam componentStyle rectangle
+skinparam defaultTextAlignment center
+
+actor "Operador" as op
+actor "Cliente de consulta\n(M3: driver JDBC)" as cli #lightgray
+
+package "nishidb (binário único)" {
+  component "CLI\ninternal/cli" as cliapp
+  component "Materializer\ninternal/materializer" as mat
+  component "Engine SQL\ninternal/query" as eng
+  component "Storage\ninternal/storage" as sto
+}
+
+database "Dataset em disco" as ds {
+  file "segments/*.dat\n(append-only)" as seg
+  file "primary.idx\nlocations.idx\nsequences.idx\n(mmap)" as idx
+  file "bitmaps/*\nfields.dict\nvalues.dict" as dic
+  file "manifest.bin\n(checkpoint)" as man
+}
+
+queue "Kafka\n(M2 — fora do M1)" as kafka #lightgray
+
+op --> cliapp : nishidb ingest\nnishidb query
+cli ..> eng : NDJSON sobre HTTP\n(Fase 6 — fora do M1)
+kafka ..> mat : eventos\n(M2)
+
+cliapp --> mat : eventos NDJSON
+cliapp --> eng : SQL
+mat --> sto : Put(key, seq, payload, prev)
+eng --> sto : GetByKey / GetByRowID\nScanLive / LookupBitmap
+sto --> seg
+sto --> idx
+sto --> dic
+sto --> man
+
+note right of eng
+  lexer → parser → binder
+  → planner → executor → NDJSON
+end note
+
+note bottom of sto
+  Writer único serializado;
+  leitores concorrentes.
+  Close faz quiesce antes
+  de liberar o lock.
+end note
+@enduml

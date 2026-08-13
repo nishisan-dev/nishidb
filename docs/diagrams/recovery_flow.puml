@@ -1,0 +1,52 @@
+@startuml recovery_flow
+title Recovery na abertura do dataset (design §10.3)
+
+start
+:adquire o flock do diretório;
+note right
+  Falha aqui = ErrDatasetLocked,
+  com o pid do outro processo.
+end note
+
+:abre fields.dict;
+if (version != 2?) then (sim)
+  #pink:ERRO FATAL\ndiz arquivo, versão encontrada,\nesperada e a remediação;
+  stop
+endif
+
+:lista os segmentos;
+if (manifest ausente?) then (sim)
+  if (algum segmento tem record?) then (sim)
+    #pink:ErrDatasetCorrupt\n"dados sem manifest"\nrebuild total é fase futura;
+    stop
+  else (não)
+    :dataset NOVO:\ncria estrutura e grava\no manifest inicial;
+  endif
+else (não)
+  if (manifest ilegível\nou CRC inválido?) then (sim)
+    #pink:ErrDatasetCorrupt;
+    stop
+  endif
+  if (segmento do manifest sumiu\nou há buraco na cadeia?) then (sim)
+    #pink:ErrDatasetCorrupt;
+    stop
+  endif
+
+  :carrega as seeds do manifest\n(nextRowID, rowCount, epoch);
+  :adota segmentos posteriores\nao checkpoint (inclusive órfão\nde rotação);
+  :TAIL SCAN a partir do ponto S;
+  while (há record íntegro no tail?) is (sim)
+    :replay: reindexa primary,\nlocations, sequences e bitmaps;
+  endwhile (não)
+  :TRUNCA o rasgo no último\nboundary válido;
+  note right
+    O rasgo só pode estar no FIM:
+    o append é sequencial e o CRC
+    identifica onde parou.
+  end note
+endif
+
+:checkpoint imediato\n(estado limpo, epoch nunca regride);
+:zera o modo falho (sticky);
+stop
+@enduml
