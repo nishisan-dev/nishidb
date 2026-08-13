@@ -9,13 +9,32 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// storeSurface é a superfície do *storage.Store (§15A item 4), com as
-// assinaturas copiadas verbatim do Store real. O fake precisa satisfazê-la
-// para poder substituí-lo em qualquer interface declarada pelo consumidor —
-// Go não tem retorno covariante, então uma divergência de assinatura (ainda
-// que só uint64 no lugar de types.RowID) torna os dois mutuamente
-// inutilizáveis.
-type storeSurface interface {
+// consumerIterator é o iterador na forma EXATA do Store real, declarado aqui
+// como um consumidor (Q10/Q15) o declararia. A asserção abaixo prova que o
+// iterador do fake tem o mesmo method set — independente do nome do tipo.
+type consumerIterator interface {
+	Next() bool
+	RowID() types.RowID
+	Err() error
+	Close() error
+}
+
+var _ consumerIterator = (*rowIDIter)(nil)
+
+// consumerStore é a interface que a Q10 (Apply) e a Q15 (Executor) vão
+// declarar, com as assinaturas copiadas verbatim do *storage.Store
+// (§15A item 4). Go não tem retorno covariante: uma divergência de
+// assinatura, ainda que só uint64 no lugar de types.RowID, torna fake e real
+// mutuamente inutilizáveis.
+//
+// Esta asserção prova METADE do contrato — a do fake. A outra metade (o
+// *storage.Store satisfazendo a MESMA interface) só é verificável na I1,
+// quando os ramos se encontrarem: hoje o iterador aparece aqui como
+// fakestorage.RowIDIterator e lá como storage.RowIDIterator, dois tipos
+// nomeados distintos. O lote de ajustes de contrato do ramo de storage move
+// a interface para internal/types justamente para fechar isso; quando
+// mergear, o fake devolve types.RowIDIterator e as duas metades se juntam.
+type consumerStore interface {
 	GetByKey(key, buf []byte) (types.Record, []byte, bool, error)
 	GetByRowID(id types.RowID, buf []byte) (types.Record, []byte, bool, error)
 	Put(key []byte, seq int64, flags uint8, payload []byte, prev *types.Record) (types.RowID, bool, error)
@@ -24,7 +43,7 @@ type storeSurface interface {
 	Sequence(id types.RowID) (int64, bool)
 }
 
-var _ storeSurface = (*Store)(nil)
+var _ consumerStore = (*Store)(nil)
 
 func payload(t *testing.T, fields ...struct {
 	ID  types.FieldID
@@ -60,8 +79,12 @@ func TestPutCreateAndGetByKey(t *testing.T) {
 	s := New(Indexes{Bitmap: []types.FieldID{2}, Hash: []types.FieldID{3}})
 	p := payload(t, fv(1, strVal("ABC")), fv(2, strVal("Start")), fv(3, intVal(7)))
 	rowID, created, err := s.Put([]byte("ABC"), 100, 0, p, nil)
-	if err != nil || !created || rowID == 0 {
+	if err != nil || !created {
 		t.Fatalf("Put: rowID=%d created=%v err=%v", rowID, created, err)
+	}
+	// rowIds são 0-based, como no real.
+	if rowID != 0 {
+		t.Errorf("primeiro rowId = %d, want 0", rowID)
 	}
 	var buf []byte
 	rec, buf2, ok, err := s.GetByKey([]byte("ABC"), buf)
@@ -218,26 +241,40 @@ func TestPutRejectsInvalidArguments(t *testing.T) {
 	}
 }
 
-// rowId é monotônico e nunca reutilizado, inclusive depois de um Put que
-// falha na validação do payload (o id vaza, como no real, mas não volta).
-func TestRowIDsMonotonicNeverReused(t *testing.T) {
+// rowId é monotônico, nunca reutilizado E nunca queimado por evento
+// rejeitado: a validação inteira roda antes da reserva. Id queimado abre
+// buraco nos índices densos por rowId, que ninguém preenche depois.
+func TestRejectedPutDoesNotBurnRowID(t *testing.T) {
 	s := New(Indexes{})
 	first, _, err := s.Put([]byte("A"), 1, 0, payload(t, fv(1, strVal("A"))), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	var bad []byte
 	bad = encoding.AppendField(bad, 3, intVal(1))
 	bad = encoding.AppendField(bad, 1, strVal("x"))
 	if _, _, err := s.Put([]byte("B"), 1, 0, bad, nil); err == nil {
-		t.Fatal("payload inválido deveria falhar")
+		t.Fatal("payload fora de ordem deveria falhar")
 	}
+	if _, _, err := s.Put(nil, 1, 0, payload(t, fv(1, strVal("B"))), nil); err == nil {
+		t.Fatal("key vazia deveria falhar")
+	}
+
+	// O próximo Put válido recebe exatamente o id que os rejeitados teriam
+	// recebido: nenhum buraco na sequência.
 	next, created, err := s.Put([]byte("C"), 1, 0, payload(t, fv(1, strVal("C"))), nil)
 	if err != nil || !created {
-		t.Fatal(err)
+		t.Fatalf("Put: created=%v err=%v", created, err)
 	}
-	if next <= first+1 {
-		t.Errorf("rowId reutilizado após Put falho: first=%d next=%d", first, next)
+	if next != first+1 {
+		t.Errorf("rowId após Puts rejeitados = %d, want %d (id queimado)", next, first+1)
+	}
+
+	// E o id de uma row viva nunca é reatribuído a outra key.
+	other, created, err := s.Put([]byte("D"), 1, 0, payload(t, fv(1, strVal("D"))), nil)
+	if err != nil || !created || other != next+1 {
+		t.Errorf("rowId = %d, want %d (created=%v err=%v)", other, next+1, created, err)
 	}
 }
 

@@ -90,9 +90,12 @@ type postingKey struct {
 // New cria um Store vazio com os índices declarados.
 func New(idx Indexes) *Store {
 	s := &Store{
-		byKey:    map[string]types.RowID{},
-		rows:     map[types.RowID]*row{},
-		nextRow:  1,
+		byKey: map[string]types.RowID{},
+		rows:  map[types.RowID]*row{},
+		// rowIds são 0-based, como no real (nextRowID.Add(1)-1 sobre um
+		// contador zerado): os índices densos indexam por rowId, e começar
+		// em 1 desperdiçaria o slot 0 em todos eles.
+		nextRow:  0,
 		bitmap:   map[types.FieldID]bool{},
 		hash:     map[types.FieldID]bool{},
 		indexed:  map[types.FieldID]bool{},
@@ -125,14 +128,19 @@ func valKey(v types.Value) string {
 // existente é resolvido internamente.
 //
 // flags é a única fonte de liveness: Put com types.FlagTombstone mata a row.
-// O rowId é reservado ANTES da validação do payload, como no real — um Put
-// falho vaza o id, jamais o reutiliza.
+//
+// TODA validação (key, prev, payload) acontece ANTES da reserva do rowId: um
+// evento rejeitado não pode queimar um id, senão os índices densos por rowId
+// crescem com buracos que nenhum estado ocupa.
 func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *types.Record) (types.RowID, bool, error) {
 	if len(key) == 0 {
 		return 0, false, fmt.Errorf("%w: key vazia", ErrInvalidArgument)
 	}
 	if prev != nil && !bytes.Equal(prev.Key, key) {
 		return 0, false, fmt.Errorf("%w: prev pertence à key %q, não a %q", ErrInvalidArgument, prev.Key, key)
+	}
+	if _, err := encoding.ValidatePayload(payload); err != nil {
+		return 0, false, err
 	}
 
 	var (
@@ -151,10 +159,6 @@ func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *ty
 		rowID = s.nextRow
 		s.nextRow++
 		created = true
-	}
-
-	if _, err := encoding.ValidatePayload(payload); err != nil {
-		return 0, false, err
 	}
 
 	s.byKey[string(key)] = rowID
