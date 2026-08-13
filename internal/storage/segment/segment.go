@@ -307,6 +307,9 @@ func readRecordAt(f io.ReaderAt, seg, off uint32, buf []byte) (types.Record, []b
 	// readFullAt para no EOF.
 	first := min(len(buf), speculativeRead)
 	n, err := readFullAt(f, buf[:first], int64(off))
+	if ioErr := genuineIOError(err); ioErr != nil {
+		return types.Record{}, buf, fmt.Errorf("segment: ler segmento %d offset %d: %w", seg, off, ioErr)
+	}
 	if n < encoding.RecordHeaderSize {
 		return types.Record{}, buf, fmt.Errorf("%w: leitura de %d bytes no segmento %d offset %d (err=%v)",
 			encoding.ErrCorrupt, n, seg, off, err)
@@ -325,7 +328,11 @@ func readRecordAt(f io.ReaderAt, seg, off uint32, buf []byte) (types.Record, []b
 		} else {
 			buf = buf[:total]
 		}
-		if m, err := readFullAt(f, buf[n:total], int64(off)+int64(n)); m < total-n {
+		m, err := readFullAt(f, buf[n:total], int64(off)+int64(n))
+		if ioErr := genuineIOError(err); ioErr != nil {
+			return types.Record{}, buf, fmt.Errorf("segment: ler segmento %d offset %d: %w", seg, off, ioErr)
+		}
+		if m < total-n {
 			return types.Record{}, buf, fmt.Errorf("%w: record truncado no segmento %d offset %d (err=%v)",
 				encoding.ErrCorrupt, seg, off, err)
 		}
@@ -335,6 +342,16 @@ func readRecordAt(f io.ReaderAt, seg, off uint32, buf []byte) (types.Record, []b
 		return types.Record{}, buf, err
 	}
 	return rec, buf, nil
+}
+
+// genuineIOError separa "acabou o arquivo" (EOF: fim do prefixo válido, o
+// caller decide) de uma falha real do dispositivo, que nunca pode ser
+// interpretada como fim do log.
+func genuineIOError(err error) error {
+	if err == nil || errors.Is(err, io.EOF) {
+		return nil
+	}
+	return err
 }
 
 // readFullAt lê até len(b) bytes em off; EOF antes disso não é erro fatal
@@ -349,6 +366,44 @@ func readFullAt(f io.ReaderAt, b []byte, off int64) (int, error) {
 		}
 	}
 	return n, nil
+}
+
+// ScanFrom percorre os records válidos do segmento a partir de from,
+// devolvendo o offset do fim válido (após o último record íntegro). Para no
+// primeiro record inválido/incompleto SEM erro (spec §52 — o caller decide
+// truncar naquele offset); erro do callback e erro de I/O genuíno abortam o
+// scan e são propagados.
+func (r *Reader) ScanFrom(seg uint32, from int64, fn func(off uint32, rec types.Record) error) (int64, error) {
+	f, err := r.file(seg)
+	if err != nil {
+		return 0, err
+	}
+	return scanFrom(f, seg, from, fn)
+}
+
+// scanFrom implementa o scan sobre qualquer io.ReaderAt (separado de
+// ScanFrom para ser testável com fakes de I/O).
+func scanFrom(f io.ReaderAt, seg uint32, from int64, fn func(off uint32, rec types.Record) error) (int64, error) {
+	off := from
+	var buf []byte
+	for {
+		rec, b, err := readRecordAt(f, seg, uint32(off), buf)
+		buf = b
+		if err != nil {
+			// Só corrupção/fim de arquivo marca o fim do prefixo válido. Um
+			// EIO NÃO pode virar "fim do log": o caller trunca no offset
+			// devolvido, e descartar records íntegros por uma falha de
+			// leitura seria perda de dados silenciosa.
+			if errors.Is(err, encoding.ErrCorrupt) {
+				return off, nil
+			}
+			return off, err
+		}
+		if err := fn(uint32(off), rec); err != nil {
+			return off, err
+		}
+		off += int64(encoding.RecordHeaderSize + len(rec.Key) + len(rec.Payload))
+	}
 }
 
 // Close fecha todos os segmentos abertos pelo reader.

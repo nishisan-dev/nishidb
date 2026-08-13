@@ -3,9 +3,12 @@ package segment
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
@@ -442,6 +445,179 @@ func TestListSegments(t *testing.T) {
 
 	if empty, err := ListSegments(t.TempDir()); err != nil || len(empty) != 0 {
 		t.Fatalf("diretório vazio: (%v,%v)", empty, err)
+	}
+}
+
+func TestScanFromPercorreEDevolveFimValido(t *testing.T) {
+	dir := t.TempDir()
+	w, err := OpenWriter(dir, 1<<20, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	var offs []uint32
+	for i := 1; i <= 3; i++ {
+		_, off, err := w.Append(makeRecord(t, types.RowID(i), int64(i*10), fmt.Sprintf("scan-%d", i), 50*i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		offs = append(offs, off)
+	}
+	_, tail := w.Current()
+
+	r, err := OpenReader(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+
+	var gotOffs []uint32
+	var gotRows []types.RowID
+	end, err := r.ScanFrom(1, HeaderSize, func(off uint32, rec types.Record) error {
+		gotOffs = append(gotOffs, off)
+		gotRows = append(gotRows, rec.RowID)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ScanFrom: %v", err)
+	}
+	if !slices.Equal(gotOffs, offs) || !slices.Equal(gotRows, []types.RowID{1, 2, 3}) {
+		t.Fatalf("scan: offs=%v rows=%v", gotOffs, gotRows)
+	}
+	if end != tail {
+		t.Fatalf("fim válido: esperado %d, obtido %d", tail, end)
+	}
+
+	// Scan a partir do 2º record.
+	var n int
+	end2, err := r.ScanFrom(1, int64(offs[1]), func(uint32, types.Record) error { n++; return nil })
+	if err != nil || n != 2 || end2 != tail {
+		t.Fatalf("scan parcial: (n=%d end=%d err=%v)", n, end2, err)
+	}
+
+	// Erro do callback aborta e propaga.
+	sentinel := errors.New("abort")
+	if _, err := r.ScanFrom(1, HeaderSize, func(uint32, types.Record) error { return sentinel }); !errors.Is(err, sentinel) {
+		t.Fatalf("erro do callback deveria propagar, obtido %v", err)
+	}
+}
+
+func TestScanFromParaEmCorrupcaoETruncamento(t *testing.T) {
+	build := func(t *testing.T) (string, []uint32, []int) {
+		dir := t.TempDir()
+		w, err := OpenWriter(dir, 1<<20, 0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var offs []uint32
+		var lens []int
+		for i := 1; i <= 3; i++ {
+			rec := makeRecord(t, types.RowID(i), int64(i), fmt.Sprintf("c-%d", i), 40)
+			_, off, err := w.Append(rec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			offs = append(offs, off)
+			lens = append(lens, len(rec))
+		}
+		w.Close()
+		return dir, offs, lens
+	}
+
+	t.Run("crc_corrompido_no_meio", func(t *testing.T) {
+		dir, offs, _ := build(t)
+		path := filepath.Join(dir, "segment-00000001.dat")
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw[offs[1]+40] ^= 0xFF // corrompe o 2º record
+		if err := os.WriteFile(path, raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		r, err := OpenReader(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Close()
+		var n int
+		end, err := r.ScanFrom(1, HeaderSize, func(uint32, types.Record) error { n++; return nil })
+		if err != nil || n != 1 || end != int64(offs[1]) {
+			t.Fatalf("parada na corrupção: (n=%d end=%d err=%v), esperado end=%d", n, end, err, offs[1])
+		}
+	})
+
+	t.Run("tail_truncado_no_meio_do_ultimo", func(t *testing.T) {
+		dir, offs, lens := build(t)
+		path := filepath.Join(dir, "segment-00000001.dat")
+		cut := int64(offs[2]) + int64(lens[2])/2
+		if err := os.Truncate(path, cut); err != nil {
+			t.Fatal(err)
+		}
+		r, err := OpenReader(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Close()
+		var n int
+		end, err := r.ScanFrom(1, HeaderSize, func(uint32, types.Record) error { n++; return nil })
+		if err != nil || n != 2 || end != int64(offs[2]) {
+			t.Fatalf("tail truncado: (n=%d end=%d err=%v), esperado end=%d", n, end, err, offs[2])
+		}
+	})
+}
+
+// failingReaderAt devolve um erro de I/O genuíno (não EOF) a partir de
+// failFrom, para separar "fim do prefixo válido" de "leitura falhou".
+type failingReaderAt struct {
+	data     []byte
+	failFrom int64
+}
+
+var errFakeIO = errors.New("erro de I/O simulado")
+
+func (r *failingReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	if off >= r.failFrom {
+		return 0, errFakeIO
+	}
+	if off >= int64(len(r.data)) {
+		return 0, io.EOF
+	}
+	n := copy(p, r.data[off:])
+	if n < len(p) {
+		return n, io.EOF
+	}
+	return n, nil
+}
+
+func TestScanFromPropagaErroDeIOEmVezDeTruncar(t *testing.T) {
+	// Um EIO no meio do log NÃO pode virar "fim válido": o caller trunca no
+	// offset devolvido, então confundir falha de leitura com fim do prefixo
+	// descartaria records íntegros em silêncio.
+	rec1 := makeRecord(t, 1, 1, "io-1", 40)
+	rec2 := makeRecord(t, 2, 2, "io-2", 40)
+	data := append(append([]byte{}, rec1...), rec2...)
+	fake := &failingReaderAt{data: data, failFrom: int64(len(rec1))}
+
+	var n int
+	end, err := scanFrom(fake, 1, 0, func(uint32, types.Record) error { n++; return nil })
+	if !errors.Is(err, errFakeIO) {
+		t.Fatalf("erro de I/O deveria propagar, obtido %v", err)
+	}
+	if n != 1 || end != int64(len(rec1)) {
+		t.Fatalf("scan deveria parar no record legível: (n=%d end=%d)", n, end)
+	}
+}
+
+func TestScanFromParaNoEOFSemErro(t *testing.T) {
+	// EOF exato após o último record é fim de prefixo válido, não falha.
+	rec := makeRecord(t, 1, 1, "eof", 40)
+	fake := &failingReaderAt{data: rec, failFrom: math.MaxInt64}
+
+	var n int
+	end, err := scanFrom(fake, 1, 0, func(uint32, types.Record) error { n++; return nil })
+	if err != nil || n != 1 || end != int64(len(rec)) {
+		t.Fatalf("EOF deveria encerrar sem erro: (n=%d end=%d err=%v)", n, end, err)
 	}
 }
 
