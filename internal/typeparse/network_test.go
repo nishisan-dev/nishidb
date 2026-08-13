@@ -90,7 +90,13 @@ func TestIPv4Prefix(t *testing.T) {
 		})
 	}
 
-	for _, raw := range []string{"2001:db8::/32", "10.0.0.0/33", "10.0.0.0", "10.0.0.0/", "", "10.0.0.0/8 "} {
+	invalidos := []string{
+		"2001:db8::/32", "10.0.0.0/33", "10.0.0.0", "10.0.0.0/", "", "10.0.0.0/8 ",
+		// Zona: mesma regra do IPv6 solto — não faz parte do valor armazenado,
+		// então um literal com zona não pode casar com nada gravado.
+		"10.0.0.0%eth0/8",
+	}
+	for _, raw := range invalidos {
 		t.Run("invalido/"+raw, func(t *testing.T) {
 			if _, _, ok := typeparse.IPv4Prefix([]byte(raw)); ok {
 				t.Errorf("IPv4Prefix(%q) aceitou", raw)
@@ -123,7 +129,15 @@ func TestIPv6Prefix(t *testing.T) {
 		})
 	}
 
-	for _, raw := range []string{"10.0.0.0/8", "2001:db8::/129", "2001:db8::", "", "2001:db8::/32 "} {
+	invalidos := []string{
+		"10.0.0.0/8", "2001:db8::/129", "2001:db8::", "", "2001:db8::/32 ",
+		// Zona é recusada nas DUAS grafias (literal e percent-encoded). Hoje
+		// quem recusa é netip.ParsePrefix, não uma checagem nossa: o teste
+		// existe para que trocar a implementação por um split manual em "/" +
+		// ParseAddr (que ACEITA zona) não passe despercebido.
+		"fe80::1%eth0/64", "fe80::1%25eth0/64",
+	}
+	for _, raw := range invalidos {
 		t.Run("invalido/"+raw, func(t *testing.T) {
 			if _, _, ok := typeparse.IPv6Prefix([]byte(raw)); ok {
 				t.Errorf("IPv6Prefix(%q) aceitou", raw)

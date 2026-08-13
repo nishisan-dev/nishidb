@@ -306,6 +306,11 @@ func IPv6(raw []byte) (addr [16]byte, ok bool) {
 // Os host bits NÃO são mascarados: 10.0.0.1/24 continua 10.0.0.1/24. É o que
 // netip.ParsePrefix faz e o que a ingestão gravou — mascarar aqui faria a
 // query procurar bytes diferentes dos armazenados.
+//
+// A zona (%eth0) é recusada, como no IPv6 solto, mas quem a recusa é o próprio
+// netip.ParsePrefix ("IPv6 zones cannot be present in a prefix") — não há
+// checagem nossa a acrescentar, e uma seria código morto. A recusa está
+// coberta por teste justamente porque depende de comportamento de terceiro.
 func IPv4Prefix(raw []byte) (addr [4]byte, bits byte, ok bool) {
 	pfx, err := netip.ParsePrefix(unsafex.String(raw))
 	if err != nil || !pfx.Addr().Is4() {
