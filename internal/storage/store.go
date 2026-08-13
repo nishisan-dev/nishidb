@@ -245,8 +245,14 @@ func Open(opts Options) (*Store, error) {
 		return nil, fmt.Errorf(
 			"%w: %s contém records mas o manifest está ausente (o manifest existe desde a criação do dataset; rebuild total é fase futura)",
 			ErrDatasetCorrupt, dataDir)
-	case mErr != nil:
+	case errors.Is(mErr, checkpoint.ErrCorruptManifest):
 		return nil, fmt.Errorf("%w: manifest ilegível: %w", ErrDatasetCorrupt, mErr)
+	case mErr != nil:
+		// EIO/EACCES/ENOMEM ao LER o manifest são transitórios: afirmar
+		// "dataset corrompido" aqui induz a resposta operacional errada
+		// (restaurar backup, reconstruir), que é destrutiva. Só corrupção
+		// confirmada justifica a afirmação.
+		return nil, fmt.Errorf("storage: ler o manifest de %s: %w", opts.Dir, mErr)
 	default:
 		if err := s.recoverFrom(m, refs, dataDir); err != nil {
 			return nil, err

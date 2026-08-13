@@ -17,6 +17,10 @@ func (s *Store) SetClearErrHookForTest(fn func(types.FieldID) error) { s.clearEr
 // phantom commit (§14.12) com payload replayável.
 func (s *Store) SetSetErrHookForTest(fn func(types.FieldID) error) { s.setErrHook = fn }
 
+// PrimaryUsedForTest expõe a ocupação da primary: é o observável que denuncia
+// slot duplicado quando o replay insere a mesma key duas vezes.
+func (s *Store) PrimaryUsedForTest() uint64 { return s.prim.Used() }
+
 // PartialCheckpointForTest executa os passos 1-3 do checkpoint (segSync,
 // ApplyOverlay, msyncs) SEM gravar o manifest — simula o crash entre os
 // passos 3 e 4 do §10.2 (índices em disco à frente do manifest).
