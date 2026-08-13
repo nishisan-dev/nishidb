@@ -135,30 +135,31 @@ func TestPutUpdateMantemRowIDETrocaEstado(t *testing.T) {
 }
 
 func TestPutComPrevConfiaNoRowIDSemRefazerFind(t *testing.T) {
-	// Prova de que o Put NÃO refaz Find quando prev é fornecido: um prev
-	// FORJADO com o rowId de OUTRA key faz o novo estado aterrissar na row
-	// forjada. Se o Put refizesse o Find pela key, o registro iria para a
-	// row verdadeira da key. (Explora deliberadamente o contrato "prev
-	// pertence à key" para tornar o comportamento observável.)
+	// Prova de que o Put NÃO refaz Find quando prev é fornecido: um prev da
+	// MESMA key com rowId forjado (999, inexistente) faz o novo estado
+	// aterrissar na row 999. Se o Put refizesse o Find, o registro iria
+	// para a row verdadeira da key. (prev de OUTRA key é rejeitado pela
+	// guarda — ver TestPutRejeitaPrevDeOutraKey.)
 	s := openStore(t, Options{})
-	_, _ = mustPut(t, s, "key-a", 1, statusPayload(t, s, "key-a", "Start", 1), nil)
-	idB, _ := mustPut(t, s, "key-b", 1, statusPayload(t, s, "key-b", "Start", 1), nil)
+	idA, _ := mustPut(t, s, "key-a", 1, statusPayload(t, s, "key-a", "Start", 1), nil)
 
-	prevB, _, ok, err := s.GetByKey([]byte("key-b"), nil)
+	prevA, _, ok, err := s.GetByKey([]byte("key-a"), nil)
 	if err != nil || !ok {
 		t.Fatal(err)
 	}
-	forged := prevB // RowID = idB, mas o Put será da key-a
+	forged := prevA
+	forged.RowID = 999
 	got, created := mustPut(t, s, "key-a", 2, statusPayload(t, s, "key-a", "Stop", 2), &forged)
-	if created || got != idB {
-		t.Fatalf("Put com prev deveria confiar no rowId forjado %d, obtido (%d,%v)", idB, got, created)
+	if created || got != 999 {
+		t.Fatalf("Put deveria confiar no rowId forjado 999, obtido (%d,%v)", got, created)
 	}
-	rec, _, ok, err := s.GetByRowID(idB, nil)
-	if err != nil || !ok {
-		t.Fatal(err)
+	rec, _, ok, err := s.GetByRowID(999, nil)
+	if err != nil || !ok || rec.Sequence != 2 || !bytes.Equal(rec.Key, []byte("key-a")) {
+		t.Fatalf("estado deveria estar na row 999: (%+v,%v,%v)", rec, ok, err)
 	}
-	if !bytes.Equal(rec.Key, []byte("key-a")) {
-		t.Fatalf("o estado da row %d deveria ser da key-a (prova de não-refazer-Find), key=%q", idB, rec.Key)
+	// A row original não foi tocada (nenhum re-Find aconteceu).
+	if rec, _, ok, _ := s.GetByRowID(idA, nil); !ok || rec.Sequence != 1 {
+		t.Fatalf("row original alterada: (%+v,%v)", rec, ok)
 	}
 }
 
@@ -412,6 +413,24 @@ func TestVisibilidadeLeitorConcorrente(t *testing.T) {
 					return
 				}
 				lastSeq = rec.Sequence
+				// M5: payload e header do MESMO estado — o writer grava
+				// counter == sequence, então divergência = estado parcial.
+				var counter int64
+				var fr encoding.FieldReader
+				fr.Reset(rec.Payload)
+				for {
+					id, v, more := fr.Next()
+					if !more {
+						break
+					}
+					if id == fldCounter {
+						counter = v.I64
+					}
+				}
+				if counter != rec.Sequence {
+					t.Errorf("estado parcial: counter=%d sequence=%d", counter, rec.Sequence)
+					return
+				}
 			}
 		}()
 	}

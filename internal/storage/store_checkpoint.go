@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"fmt"
 	"path/filepath"
 	"time"
 
@@ -25,6 +26,11 @@ import (
 // pacotes). Nenhum batching de Sync de dicionário pode ser introduzido
 // aqui — quebraria o replay do tail de forma silenciosa.
 func (s *Store) Checkpoint() error {
+	if s.stickyErr != nil {
+		return fmt.Errorf("storage: writer em modo falho (reabra o dataset): %w", s.stickyErr)
+	}
+	// Falhas do próprio checkpoint NÃO são sticky: o protocolo é idempotente
+	// e retentável (o manifest anterior permanece autoritativo).
 	if err := s.segW.Sync(); err != nil {
 		return err
 	}

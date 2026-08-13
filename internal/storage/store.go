@@ -71,6 +71,16 @@ type Store struct {
 	rowCount  atomic.Uint64
 	epoch     uint64 // último epoch de manifest gravado (writer-only)
 
+	// curSegID espelha o segmento corrente para leitura concorrente em
+	// Stats (segment.Writer não é thread-safe).
+	curSegID atomic.Uint32
+	// clearFailures conta erros tolerados na fase de Clear dos bitmaps
+	// (deixam falso positivo, filtrado pelo §44); exposto via métricas na S13.
+	clearFailures atomic.Uint64
+	// stickyErr: primeiro erro pós-Append. Sem rollback parcial, o writer
+	// fica FALHO até Close + reabertura com recovery. Writer-only.
+	stickyErr error
+
 	// segTally acumula os totais por segmento que o writer conhece (para as
 	// stats do manifest §9; em memória — a S12 os reconstrói no replay).
 	// Writer-only.
@@ -129,7 +139,12 @@ func Open(opts Options) (*Store, error) {
 	if s.segR, err = segment.OpenReader(dataDir); err != nil {
 		return nil, err
 	}
+	s.curSegID.Store(1) // dataset novo sempre começa no segmento 1
 	// Piso de 1<<20 slots do design §5 aplica-se aqui, não no pacote primary.
+	// Teto de sanidade evita wraparound do *10/7 com config absurda.
+	if opts.EstimatedRows > 1<<40 {
+		return nil, fmt.Errorf("%w: EstimatedRows %d acima do teto de sanidade (2^40)", ErrInvalidArgument, opts.EstimatedRows)
+	}
 	minSlots := max(uint64(1<<20), opts.EstimatedRows*10/7)
 	if s.prim, err = primary.Open(filepath.Join(idxDir, "primary.idx"), minSlots); err != nil {
 		return nil, err
@@ -184,7 +199,7 @@ func (s *Store) lookup(key, buf []byte) (rec types.Record, out []byte, exists, l
 			return false, nil // colisão de hash: continua o probe
 		}
 		rec = r
-		live = locFlags&uint8(types.FlagTombstone) == 0
+		live = locFlags&types.FlagTombstone == 0
 		return true, nil
 	}
 	_, exists, err = s.prim.Find(key, validate)
@@ -213,7 +228,7 @@ func (s *Store) GetByRowID(id types.RowID, buf []byte) (types.Record, []byte, bo
 		return types.Record{}, buf, false, nil
 	}
 	seg, off, locFlags := rowindex.Unpack(packed)
-	if locFlags&uint8(types.FlagTombstone) != 0 {
+	if locFlags&types.FlagTombstone != 0 {
 		return types.Record{}, buf, false, nil
 	}
 	rec, out, err := s.segR.ReadRecord(seg, off, buf)
@@ -228,12 +243,29 @@ func (s *Store) GetByRowID(id types.RowID, buf []byte) (types.Record, []byte, bo
 }
 
 // Put aplica um estado materializado na ordem do design §10.1 e publica a
-// location atomicamente (commit point, spec §45/§46). prev, quando
-// fornecido, é confiado (rowId e estado anterior) — evita refazer o Find.
-// Exclusivo do writer único.
+// location atomicamente (commit point, spec §45/§46). Exclusivo do writer.
+//
+// Contrato do prev: quando fornecido, prev DEVE ser o record corrente DESTA
+// key (obtido de GetByKey) — o Put confia em prev.RowID e prev.Payload sem
+// refazer o Find. prev de outra key é rejeitado com ErrInvalidArgument
+// (a violação silenciosa redirecionaria o estado para a row errada e
+// apagaria a key legítima do dataset).
+//
+// Erros: antes do Append nada foi gravado e o Store segue utilizável.
+// Depois do Append não há rollback parcial possível — o writer entra em
+// modo FALHO (sticky): Put/Sync/Checkpoint devolvem o mesmo erro até
+// Close + reabertura com recovery (S12). Falha do Sync com SyncEveryPut
+// devolve (rowID, created, err): é erro de DURABILIDADE, não de
+// visibilidade — o estado está commitado e visível.
 func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *types.Record) (types.RowID, bool, error) {
+	if s.stickyErr != nil {
+		return 0, false, fmt.Errorf("storage: writer em modo falho (reabra o dataset): %w", s.stickyErr)
+	}
 	if len(key) == 0 {
 		return 0, false, fmt.Errorf("%w: key vazia", ErrInvalidArgument)
+	}
+	if prev != nil && !bytes.Equal(prev.Key, key) {
+		return 0, false, fmt.Errorf("%w: prev pertence à key %q, não a %q", ErrInvalidArgument, prev.Key, key)
 	}
 	var (
 		rowID       types.RowID
@@ -253,15 +285,22 @@ func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *ty
 			rowID = found.RowID
 			prevPayload = found.Payload
 		} else {
-			rowID = types.RowID(s.nextRowID.Load())
+			// Reserva o rowId JÁ NA ALOCAÇÃO: um Put falho vaza o id (o
+			// recovery §10.3 reconcilia via max), mas nunca o reutiliza —
+			// reuso quebraria a bijeção rowId↔key no log (ABA).
+			rowID = types.RowID(s.nextRowID.Add(1) - 1)
 			created = true
 		}
 	}
 
-	// 1. encode (BuildRecord embute ValidatePayload e os tetos do formato).
+	// 1. encode (BuildRecord embute ValidatePayload e os tetos do formato)
+	// + fieldIDs conhecidos no dicionário (§15A item 3).
 	rec, err := encoding.BuildRecord(s.buildBuf[:0], rowID, seq, flags, key, payload)
 	s.buildBuf = rec
 	if err != nil {
+		return 0, false, err
+	}
+	if err := s.validateKnownFields(payload); err != nil {
 		return 0, false, err
 	}
 	// 2. append (rotação interna ao segment).
@@ -269,8 +308,9 @@ func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *ty
 	if err != nil {
 		return 0, false, err
 	}
+	s.curSegID.Store(seg)
 	// 3. offset accounting: packing + tally do segmento (stats do manifest).
-	packed := rowindex.Pack(seg, off, flags&uint8(types.FlagTombstone))
+	packed := rowindex.Pack(seg, off, flags&types.FlagTombstone)
 	tally := s.segTally[seg]
 	if tally == nil {
 		tally = &segStats{}
@@ -283,34 +323,66 @@ func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *ty
 	if created {
 		_, inserted, err := s.prim.Insert(key, rowID, s.insertValidator(key))
 		if err != nil {
-			return 0, false, err
+			return 0, false, s.failWriter(err)
 		}
 		if !inserted {
-			return 0, false, fmt.Errorf("storage: key %q já presente na primary com prev==nil e lookup ausente", key)
+			return 0, false, s.failWriter(fmt.Errorf("storage: key %q já presente na primary com prev==nil e lookup ausente", key))
 		}
 	}
-	// 5. diff de bitmaps (two-pointer sobre payloads ordenados por fieldID).
+	// 5. fase de SET dos bitmaps ANTES do commit: a janela entre índice e
+	// location é sempre um SUPERSET de candidatos (falso positivo,
+	// filtrado pela revalidação §44) — nunca falso negativo.
 	if len(s.bitmaps) > 0 {
-		if err := s.applyBitmapDiff(rowID, prevPayload, payload); err != nil {
-			return 0, false, err
+		if err := s.applyBitmapSets(rowID, prevPayload, payload); err != nil {
+			return 0, false, s.failWriter(err)
 		}
 	}
 	// 6. sequence.
 	if err := s.seqs.Set(rowID, seq); err != nil {
-		return 0, false, err
+		return 0, false, s.failWriter(err)
 	}
 	// 7. COMMIT POINT: publica a location (overlay; visível a leitores).
 	s.locs.Publish(rowID, packed)
 	if created {
-		s.nextRowID.Add(1)
 		s.rowCount.Add(1)
+	}
+	// 8. fase de CLEAR dos bitmaps DEPOIS do commit: erro aqui deixa só
+	// falso positivo (tolerável; contabilizado p/ métricas da S13).
+	if len(s.bitmaps) > 0 {
+		s.applyBitmapClears(rowID, prevPayload, payload)
 	}
 	if s.opts.SyncEveryPut {
 		if err := s.Sync(); err != nil {
-			return 0, false, err
+			return rowID, created, err // Sync já marcou o modo falho
 		}
 	}
 	return rowID, created, nil
+}
+
+// failWriter registra o primeiro erro pós-Append e o devolve. Sem rollback
+// parcial, o único caminho íntegro é reabrir com recovery (replay do tail).
+func (s *Store) failWriter(err error) error {
+	if s.stickyErr == nil {
+		s.stickyErr = err
+	}
+	return err
+}
+
+// validateKnownFields garante que todo fieldID do payload existe no
+// dicionário (§15A item 3) ANTES do append — um id desconhecido gravado
+// ficaria durável sob CRC e só explodiria no encoder do query layer.
+func (s *Store) validateKnownFields(payload []byte) error {
+	var r encoding.FieldReader
+	r.Reset(payload)
+	for {
+		id, _, ok := r.Next()
+		if !ok {
+			return r.Err()
+		}
+		if _, known := s.dict.Name(id); !known {
+			return fmt.Errorf("%w: fieldID %d não existe no dicionário", ErrInvalidArgument, id)
+		}
+	}
 }
 
 // insertValidator devolve o ValidateFunc de colisão do Insert. Roda sob o
@@ -346,10 +418,9 @@ func valueEqual(a, b types.Value) bool {
 	}
 }
 
-// applyBitmapDiff aplica Clear/Set nos campos indexados que mudaram entre o
-// estado anterior e o novo (merge linear de duas listas ordenadas por
-// fieldID). Campo com o mesmo valor não toca o bitmap.
-func (s *Store) applyBitmapDiff(rowID types.RowID, prevPayload, newPayload []byte) error {
+// applyBitmapSets liga as postings novas (campo que entra ou muda) — roda
+// ANTES do publish. Campo com o mesmo valor não toca o bitmap.
+func (s *Store) applyBitmapSets(rowID types.RowID, prevPayload, newPayload []byte) error {
 	var pr, nr encoding.FieldReader
 	pr.Reset(prevPayload)
 	nr.Reset(newPayload)
@@ -358,11 +429,7 @@ func (s *Store) applyBitmapDiff(rowID types.RowID, prevPayload, newPayload []byt
 	for pok || nok {
 		switch {
 		case pok && (!nok || pid < nid):
-			if ix := s.bitmaps[pid]; ix != nil {
-				if err := ix.Clear(pv, rowID); err != nil {
-					return err
-				}
-			}
+			// Campo que sai: o Clear correspondente roda pós-commit.
 			pid, pv, pok = pr.Next()
 		case nok && (!pok || nid < pid):
 			if ix := s.bitmaps[nid]; ix != nil {
@@ -373,9 +440,6 @@ func (s *Store) applyBitmapDiff(rowID types.RowID, prevPayload, newPayload []byt
 			nid, nv, nok = nr.Next()
 		default: // pid == nid
 			if ix := s.bitmaps[pid]; ix != nil && !valueEqual(pv, nv) {
-				if err := ix.Clear(pv, rowID); err != nil {
-					return err
-				}
 				if err := ix.Set(nv, rowID); err != nil {
 					return err
 				}
@@ -388,6 +452,41 @@ func (s *Store) applyBitmapDiff(rowID types.RowID, prevPayload, newPayload []byt
 		return err
 	}
 	return nr.Err()
+}
+
+// applyBitmapClears desliga as postings antigas (campo que sai ou muda) —
+// roda DEPOIS do publish. Erro aqui deixa apenas falso positivo (a
+// revalidação §44 filtra); é contabilizado em clearFailures.
+func (s *Store) applyBitmapClears(rowID types.RowID, prevPayload, newPayload []byte) {
+	var pr, nr encoding.FieldReader
+	pr.Reset(prevPayload)
+	nr.Reset(newPayload)
+	pid, pv, pok := pr.Next()
+	nid, nv, nok := nr.Next()
+	for pok || nok {
+		switch {
+		case pok && (!nok || pid < nid):
+			if ix := s.bitmaps[pid]; ix != nil {
+				if err := ix.Clear(pv, rowID); err != nil {
+					s.clearFailures.Add(1)
+				}
+			}
+			pid, pv, pok = pr.Next()
+		case nok && (!pok || nid < pid):
+			nid, nv, nok = nr.Next()
+		default: // pid == nid
+			if ix := s.bitmaps[pid]; ix != nil && !valueEqual(pv, nv) {
+				if err := ix.Clear(pv, rowID); err != nil {
+					s.clearFailures.Add(1)
+				}
+			}
+			pid, pv, pok = pr.Next()
+			nid, nv, nok = nr.Next()
+		}
+	}
+	if pr.Err() != nil || nr.Err() != nil {
+		s.clearFailures.Add(1)
+	}
 }
 
 // liveIterator percorre lazy as rows vivas até o limite fixado na criação.
@@ -406,7 +505,7 @@ func (it *liveIterator) Next() bool {
 		if !ok {
 			continue
 		}
-		if _, _, locFlags := rowindex.Unpack(packed); locFlags&uint8(types.FlagTombstone) != 0 {
+		if _, _, locFlags := rowindex.Unpack(packed); locFlags&types.FlagTombstone != 0 {
 			continue
 		}
 		it.cur = id
@@ -435,7 +534,9 @@ func (s *Store) ScanLive() RowIDIterator {
 }
 
 // LookupBitmap consulta o índice bitmap do campo; valor nunca visto devolve
-// iterador vazio; campo não indexado é erro.
+// iterador vazio; campo não indexado é erro. O resultado é um SUPERSET de
+// candidatos: rows tombstoned/sem location podem aparecer — valide liveness
+// e predicate via GetByRowID (spec §44).
 func (s *Store) LookupBitmap(field types.FieldID, v types.Value) (RowIDIterator, error) {
 	ix, ok := s.bitmaps[field]
 	if !ok {
@@ -453,6 +554,8 @@ func (s *Store) LookupBitmap(field types.FieldID, v types.Value) (RowIDIterator,
 
 // Sequence devolve a última sequence aplicada à row (ok=false para row sem
 // location publicada — a sequence só tem significado com estado visível).
+// Pode estar momentaneamente À FRENTE do record visível: ela é gravada no
+// passo 6 do Put, antes do publish (passo 7).
 func (s *Store) Sequence(id types.RowID) (int64, bool) {
 	if _, ok := s.locs.Get(id); !ok {
 		return 0, false
@@ -461,12 +564,24 @@ func (s *Store) Sequence(id types.RowID) (int64, bool) {
 }
 
 // Sync força fdatasync do segmento corrente (loop de durability batch).
-// Exclusivo do writer.
-func (s *Store) Sync() error { return s.segW.Sync() }
+// Exclusivo do writer. Falha marca o writer como FALHO: durabilidade
+// comprometida exige investigação e reabertura com recovery.
+func (s *Store) Sync() error {
+	if s.stickyErr != nil {
+		return fmt.Errorf("storage: writer em modo falho (reabra o dataset): %w", s.stickyErr)
+	}
+	if err := s.segW.Sync(); err != nil {
+		return s.failWriter(err)
+	}
+	return nil
+}
 
-// Stats devolve o snapshot de estado do Store.
+// Stats devolve o snapshot de estado do Store. Seguro para uso concorrente
+// com o writer (o segmento corrente vem de um espelho atômico, não do
+// segment.Writer). RowCount conta rows CRIADAS — não decrementa em
+// tombstone; a contagem de vivas é semântica da S14.
 func (s *Store) Stats() Stats {
-	segID, _ := s.segW.Current()
+	segID := s.curSegID.Load()
 	var lf float64
 	if slots := s.prim.SlotCount(); slots > 0 {
 		lf = float64(s.prim.Used()) / float64(slots)
