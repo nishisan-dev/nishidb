@@ -3,7 +3,11 @@ package executor
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/nishisan-dev/nishidb/internal/query/planner"
+	"github.com/nishisan-dev/nishidb/internal/schema"
 
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
@@ -136,5 +140,66 @@ func TestFechamentoFechaTodosOsIteradores(t *testing.T) {
 	}
 	if a.fechado != 1 || b.fechado != 1 {
 		t.Errorf("fechados = %d/%d, want 1/1", a.fechado, b.fechado)
+	}
+}
+
+// storeFalhaNoSegundo abre o primeiro índice e falha no segundo.
+type storeFalhaNoSegundo struct {
+	abertos []*listaIter
+	n       int
+}
+
+func (s *storeFalhaNoSegundo) GetByRowID(types.RowID, []byte) (types.Record, []byte, bool, error) {
+	return types.Record{}, nil, false, nil
+}
+
+func (s *storeFalhaNoSegundo) GetByKey([]byte, []byte) (types.Record, []byte, bool, error) {
+	return types.Record{}, nil, false, nil
+}
+
+func (s *storeFalhaNoSegundo) ScanLive() types.RowIDIterator { return lista() }
+
+func (s *storeFalhaNoSegundo) LookupBitmap(types.FieldID, types.Value) (types.RowIDIterator, error) {
+	s.n++
+	if s.n >= 2 {
+		return nil, errors.New("índice indisponível")
+	}
+	it := lista(1, 2, 3)
+	s.abertos = append(s.abertos, it)
+	return it, nil
+}
+
+// Falha ao abrir o termo i FECHA os i-1 já abertos. Vazar iterador de índice
+// num caminho de erro é o tipo de coisa que só aparece em produção, como
+// descritor esgotado depois de horas.
+func TestAbreTermosFechaOsJaAbertosNoErro(t *testing.T) {
+	st := &storeFalhaNoSegundo{}
+	campo := &schema.CompiledField{ID: 1, Name: "x", Index: schema.IndexBitmap}
+	termos := []planner.IndexTerm{
+		{Field: campo, Kind: schema.IndexBitmap},
+		{Field: campo, Kind: schema.IndexBitmap},
+	}
+
+	if _, err := abreTermos(termos, st, nil); err == nil {
+		t.Fatal("abreTermos não propagou o erro")
+	}
+	if len(st.abertos) != 1 {
+		t.Fatalf("%d iteradores abertos, want 1", len(st.abertos))
+	}
+	if st.abertos[0].fechado != 1 {
+		t.Errorf("o iterador já aberto foi fechado %d vezes, want 1", st.abertos[0].fechado)
+	}
+}
+
+// Termo de hash sem a capability: erro claro, e nada aberto fica pendurado.
+func TestAbreTermosSemCapabilityDeHash(t *testing.T) {
+	st := &storeFalhaNoSegundo{}
+	campo := &schema.CompiledField{ID: 1, Name: "x", Index: schema.IndexHash}
+	_, err := abreTermos([]planner.IndexTerm{{Field: campo, Kind: schema.IndexHash}}, st, nil)
+	if !errors.Is(err, ErrInvalidPlan) {
+		t.Fatalf("erro = %v, want ErrInvalidPlan", err)
+	}
+	if !strings.Contains(err.Error(), "LookupHash") {
+		t.Errorf("mensagem = %q", err)
 	}
 }

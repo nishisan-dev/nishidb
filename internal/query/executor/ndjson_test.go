@@ -106,6 +106,11 @@ func TestFormatacaoPorTipo(t *testing.T) {
 		{"timestamp comum", ts(1700000000123), `"2023-11-14T22:13:20.123Z"`},
 		{"timestamp ano > 9999", ts(300000000000000), `"11476-08-15T05:20:00.000Z"`},
 		{"timestamp ano negativo", ts(-70000000000000), `"-0249-10-15T19:33:20.000Z"`},
+		// Anos de 1, 2 e 3 dígitos exercitam o padding do formatador manual, que
+		// replica a convenção do time.AppendFormat (mínimo 4 dígitos).
+		{"timestamp ano de 1 dígito", ts(-62135596800000), `"0001-01-01T00:00:00.000Z"`},
+		{"timestamp ano de 2 dígitos", ts(-60000000000000), `"0068-09-03T13:20:00.000Z"`},
+		{"timestamp ano de 3 dígitos", ts(-50000000000000), `"0385-07-25T07:06:40.000Z"`},
 
 		{"ipv4 zero", types.Value{Type: types.TypeIPv4, Bytes: []byte{0, 0, 0, 0}}, `"0.0.0.0"`},
 		{"ipv4 broadcast", types.Value{Type: types.TypeIPv4, Bytes: []byte{255, 255, 255, 255}}, `"255.255.255.255"`},

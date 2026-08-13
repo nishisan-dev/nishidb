@@ -181,6 +181,16 @@ func TestStreamWriterCapEstavel(t *testing.T) {
 	t.Logf("cap(buf) estável em %d bytes (bufSize 4096) de 200.000 a 400.000 linhas", quatrocentosMil)
 }
 
+// bufSize <= 0 cai no padrão: um writer com buffer zero faria flush por linha.
+func TestStreamWriterBufPadrao(t *testing.T) {
+	for _, n := range []int{0, -1} {
+		s := NewStreamWriter(io.Discard, n)
+		if cap(s.buf) != DefaultBufSize || s.flushAt != DefaultBufSize {
+			t.Errorf("bufSize %d: cap=%d flushAt=%d, want %d", n, cap(s.buf), s.flushAt, DefaultBufSize)
+		}
+	}
+}
+
 // Nenhum byte extra, nenhum byte perdido.
 func TestStreamWriterBytesEscritos(t *testing.T) {
 	var buf bytes.Buffer
