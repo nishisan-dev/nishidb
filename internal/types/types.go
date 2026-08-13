@@ -1,11 +1,63 @@
-// Package types define os tipos de dados compartilhados entre os subsistemas
-// de storage, materializer e query do NishiDB.
+// Package types define o vocabulário compartilhado entre os subsistemas de
+// storage, materializer e query do NishiDB: os tipos de dados, os sentinelas
+// de erro que os consumidores classificam e as poucas interfaces que
+// PROVEDORES DISTINTOS precisam satisfazer identicamente.
 //
-// O pacote é deliberadamente leve e sem dependências: apenas dados, nenhuma
-// interface de comportamento (interfaces são declaradas nos consumidores).
+// O pacote depende apenas da stdlib e assim deve permanecer — é o que
+// permite que o dublê de teste de um subsistema não importe a implementação
+// que dubla.
+//
+// O critério de admissão é estreito e vale para as duas categorias que não
+// são dados puros:
+//
+//   - interfaces: só entram as que têm mais de um provedor REAL (o Store e o
+//     seu dublê). Interface com provedor único continua no consumidor.
+//   - constantes: só entram limites de FORMATO que provedor e dublê precisam
+//     aplicar identicamente. Constante de implementação (tamanho de buffer,
+//     política interna) fica no pacote que a usa.
+//
+// O teste é sempre o mesmo: se um dublê precisasse importar a implementação
+// que dubla para respeitar a regra, a regra mora aqui.
 package types
 
-import "strconv"
+import (
+	"errors"
+	"math"
+	"strconv"
+)
+
+// MaxIndexedValueBytes é o teto de um valor que pode entrar num índice
+// bitmap: o dicionário de valores codifica o comprimento em u16.
+//
+// É limite de FORMATO, e por isso mora aqui e não no pacote do índice: o
+// dublê de teste do storage precisa recusar o mesmo valor que o Store real
+// recusa, senão um teste passa no dublê e explode na integração — que é
+// exatamente a divergência que um dublê existe para expor. As alternativas
+// eram o dublê importar a implementação do índice, recriando o acoplamento
+// que os sentinelas eliminaram, ou repetir o número nos dois lados, onde
+// ele envelheceria calado.
+const MaxIndexedValueBytes = math.MaxUint16
+
+// Sentinelas que os consumidores do storage precisam classificar.
+//
+// Moram aqui, e não no pacote que os produz, porque quem os interpreta é o
+// materializer — e o dublê de teste dele precisa DEVOLVÊ-LOS. Com os
+// sentinelas dentro de internal/storage, tanto o materializer quanto o seu
+// fake passariam a importar a implementação que dublam, que é justamente o
+// acoplamento evitado ao declarar as interfaces no consumidor.
+var (
+	// ErrInvalidArgument indica violação dos argumentos de uma operação
+	// (key vazia, payload malformado, campo desconhecido). O evento é ruim;
+	// o writer segue utilizável.
+	ErrInvalidArgument = errors.New("storage: argumento inválido")
+
+	// ErrWriterFailed indica writer em modo falho (sticky): o dataset
+	// precisa ser reaberto para voltar a aceitar escrita. É o que separa
+	// "pule este evento" de "pare a ingestão" — sem essa distinção, a
+	// política de log-and-skip por evento vira um skip infinito e a
+	// ingestão descarta tudo em silêncio.
+	ErrWriterFailed = errors.New("storage: writer em modo falho (reabra o dataset)")
+)
 
 // FieldType identifica o tipo lógico de um campo (spec §17-18) e é também a
 // tag de tipo no wire format do payload (spec §33).
@@ -68,6 +120,21 @@ const (
 	// FlagTombstone marca o record como tombstone (Fase 9; M1 grava sempre 0).
 	FlagTombstone uint8 = 1 << 0
 )
+
+// RowIDIterator percorre rowIds em ordem CRESCENTE — a ordem é
+// pré-condição das interseções e uniões do planner.
+//
+// Mora aqui, e não no consumidor, porque dois provedores precisam satisfazer
+// a MESMA interface: o Store real e o fake do ramo query. Uma interface
+// redeclarada em cada consumidor nunca é satisfeita por dois provedores com
+// tipos de retorno diferentes, e é isso que permite as asserções de
+// compilação dos dois lados.
+type RowIDIterator interface {
+	Next() bool
+	RowID() RowID
+	Err() error
+	Close() error
+}
 
 // Value é uma união sem boxing para valores tipados no hot path.
 // Nunca usar interface{} para valores.

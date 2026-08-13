@@ -2,6 +2,7 @@ package rowindex
 
 import (
 	"bytes"
+	"errors"
 	"math"
 	"os"
 	"path/filepath"
@@ -10,6 +11,49 @@ import (
 
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
+
+func TestApplyOverlayFalhaParcialPreservaEntradas(t *testing.T) {
+	// Deferido da re-revisão S5-S9: a idempotência sob falha parcial do
+	// ApplyOverlay (elogiada na revisão) precisa de teste. Um store falha
+	// no meio do lote: nada se perde, o restante volta ao overlay e a
+	// retentativa completa o trabalho.
+	l, _ := openLocations(t, 1024)
+	for r := types.RowID(0); r < 5; r++ {
+		l.Publish(r, Pack(1, uint32(64+8*r), 0))
+	}
+	calls := 0
+	l.SetStoreErrHookForTest(func(types.RowID) error {
+		calls++
+		if calls == 3 {
+			return errors.New("disco cheio simulado")
+		}
+		return nil
+	})
+	if err := l.ApplyOverlay(); err == nil {
+		t.Fatal("apply com store falhando deveria devolver erro")
+	}
+	for r := types.RowID(0); r < 5; r++ {
+		if _, ok := l.Get(r); !ok {
+			t.Fatalf("row %d perdida após falha parcial", r)
+		}
+	}
+	if got := l.OverlayLen(); got != 3 {
+		t.Fatalf("3 entradas não aplicadas deveriam voltar ao overlay, tem %d", got)
+	}
+
+	l.SetStoreErrHookForTest(nil)
+	if err := l.ApplyOverlay(); err != nil {
+		t.Fatalf("retentativa: %v", err)
+	}
+	if got := l.OverlayLen(); got != 0 {
+		t.Fatalf("overlay deveria esvaziar na retentativa, tem %d", got)
+	}
+	for r := types.RowID(0); r < 5; r++ {
+		if _, ok := l.Get(r); !ok {
+			t.Fatalf("row %d perdida após retentativa", r)
+		}
+	}
+}
 
 func TestPackUnpackRoundTrip(t *testing.T) {
 	cases := []struct {

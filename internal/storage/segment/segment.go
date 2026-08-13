@@ -3,11 +3,14 @@
 package segment
 
 import (
+	"cmp"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -80,15 +83,15 @@ type Writer struct {
 	offset      int64
 }
 
-// OpenWriter abre o diretório de segmentos para escrita. segID=0 cria o
-// segmento 1; segID>0 reabre o segmento existente posicionado em offset,
-// truncando qualquer lixo além dele (recovery).
 // MaxSegmentSize é o teto de tamanho de segmento: o offset dentro da
 // Location empacotada tem 30 bits (design §3/§14.7), então offsets válidos
 // vão até 2³⁰-1. Acima disso, Pack panicaria com o record já durável no
 // segmento — crash loop no replay.
 const MaxSegmentSize = 1 << 30 // 1 GiB
 
+// OpenWriter abre o diretório de segmentos para escrita. segID=0 cria o
+// segmento 1; segID>0 reabre o segmento existente posicionado em offset,
+// truncando qualquer lixo além dele (recovery).
 func OpenWriter(dir string, segmentSize int64, segID uint32, offset int64) (*Writer, error) {
 	if segmentSize <= HeaderSize {
 		return nil, fmt.Errorf("segment: segmentSize %d inválido", segmentSize)
@@ -112,7 +115,33 @@ func OpenWriter(dir string, segmentSize int64, segID uint32, offset int64) (*Wri
 	if err != nil {
 		return nil, fmt.Errorf("segment: reabrir segmento %d: %w", segID, err)
 	}
-	if err := checkHeader(f, segID); err != nil {
+	st, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, fmt.Errorf("segment: stat do segmento %d: %w", segID, err)
+	}
+	if st.Size() < HeaderSize {
+		// Rotação interrompida entre o O_CREATE|O_EXCL e o writeHeader do
+		// openNew: o arquivo existe sem header. Completar a criação é a
+		// única saída — recusar trava o dataset para sempre, e o arquivo
+		// existente já bloquearia o O_EXCL de qualquer rotação futura. O
+		// caller é quem decide que este segmento não continha records (só o
+		// último pode estar assim, e o manifest não pode declará-lo com
+		// dados).
+		if offset != HeaderSize {
+			f.Close()
+			return nil, fmt.Errorf("segment: segmento %d tem %d bytes (sem header) mas o offset pedido é %d",
+				segID, st.Size(), offset)
+		}
+		if err := writeHeader(f, segID, segmentSize); err != nil {
+			f.Close()
+			return nil, err
+		}
+		if err := syncDir(dir); err != nil {
+			f.Close()
+			return nil, err
+		}
+	} else if err := checkHeader(f, segID); err != nil {
 		f.Close()
 		return nil, err
 	}
@@ -133,7 +162,27 @@ func (w *Writer) openNew(id uint32) error {
 		f.Close()
 		return err
 	}
+	// Política de fsync de diretório (design §14): a ENTRADA do segmento
+	// novo precisa ser durável — sem isso, um power loss pós-rotação pode
+	// deixar records fsyncados num arquivo sem dirent.
+	if err := syncDir(w.dir); err != nil {
+		f.Close()
+		return err
+	}
 	w.f, w.segID, w.offset = f, id, HeaderSize
+	return nil
+}
+
+// syncDir durabiliza as entradas de um diretório.
+func syncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	if err := d.Sync(); err != nil {
+		return fmt.Errorf("segment: fsync do diretório %s: %w", dir, err)
+	}
 	return nil
 }
 
@@ -177,6 +226,47 @@ func (w *Writer) Current() (uint32, int64) { return w.segID, w.offset }
 
 // Close fecha o segmento corrente.
 func (w *Writer) Close() error { return w.f.Close() }
+
+// SegmentRef descreve um segmento presente no diretório de dados.
+type SegmentRef struct {
+	ID        uint32
+	SizeBytes int64
+}
+
+// ListSegments enumera os segmentos do diretório em ordem crescente de ID
+// (usado pelo checkpoint e pelo dir-listing da recovery, design §10.3).
+func ListSegments(dir string) ([]SegmentRef, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("segment: listar %s: %w", dir, err)
+	}
+	var refs []SegmentRef
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		var id uint32
+		if _, err := fmt.Sscanf(e.Name(), "segment-%08d.dat", &id); err != nil || id == 0 {
+			continue
+		}
+		// Só o nome canônico exato: Sscanf aceitaria sufixos
+		// (segment-N.dat.tmp/.new) e padding divergente, produzindo IDs
+		// duplicados no manifest e no dir-listing da recovery.
+		if e.Name() != fmt.Sprintf("segment-%08d.dat", id) {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue // removido entre ReadDir e Info
+			}
+			return nil, err
+		}
+		refs = append(refs, SegmentRef{ID: id, SizeBytes: info.Size()})
+	}
+	slices.SortFunc(refs, func(a, b SegmentRef) int { return cmp.Compare(a.ID, b.ID) })
+	return refs, nil
+}
 
 // Reader lê records por localização física. Seguro para uso concorrente:
 // ReadAt não usa o cursor do arquivo e o cache de handles é protegido.
@@ -243,6 +333,9 @@ func readRecordAt(f io.ReaderAt, seg, off uint32, buf []byte) (types.Record, []b
 	// readFullAt para no EOF.
 	first := min(len(buf), speculativeRead)
 	n, err := readFullAt(f, buf[:first], int64(off))
+	if ioErr := genuineIOError(err); ioErr != nil {
+		return types.Record{}, buf, fmt.Errorf("segment: ler segmento %d offset %d: %w", seg, off, ioErr)
+	}
 	if n < encoding.RecordHeaderSize {
 		return types.Record{}, buf, fmt.Errorf("%w: leitura de %d bytes no segmento %d offset %d (err=%v)",
 			encoding.ErrCorrupt, n, seg, off, err)
@@ -261,7 +354,11 @@ func readRecordAt(f io.ReaderAt, seg, off uint32, buf []byte) (types.Record, []b
 		} else {
 			buf = buf[:total]
 		}
-		if m, err := readFullAt(f, buf[n:total], int64(off)+int64(n)); m < total-n {
+		m, err := readFullAt(f, buf[n:total], int64(off)+int64(n))
+		if ioErr := genuineIOError(err); ioErr != nil {
+			return types.Record{}, buf, fmt.Errorf("segment: ler segmento %d offset %d: %w", seg, off, ioErr)
+		}
+		if m < total-n {
 			return types.Record{}, buf, fmt.Errorf("%w: record truncado no segmento %d offset %d (err=%v)",
 				encoding.ErrCorrupt, seg, off, err)
 		}
@@ -271,6 +368,16 @@ func readRecordAt(f io.ReaderAt, seg, off uint32, buf []byte) (types.Record, []b
 		return types.Record{}, buf, err
 	}
 	return rec, buf, nil
+}
+
+// genuineIOError separa "acabou o arquivo" (EOF: fim do prefixo válido, o
+// caller decide) de uma falha real do dispositivo, que nunca pode ser
+// interpretada como fim do log.
+func genuineIOError(err error) error {
+	if err == nil || errors.Is(err, io.EOF) {
+		return nil
+	}
+	return err
 }
 
 // readFullAt lê até len(b) bytes em off; EOF antes disso não é erro fatal
@@ -285,6 +392,44 @@ func readFullAt(f io.ReaderAt, b []byte, off int64) (int, error) {
 		}
 	}
 	return n, nil
+}
+
+// ScanFrom percorre os records válidos do segmento a partir de from,
+// devolvendo o offset do fim válido (após o último record íntegro). Para no
+// primeiro record inválido/incompleto SEM erro (spec §52 — o caller decide
+// truncar naquele offset); erro do callback e erro de I/O genuíno abortam o
+// scan e são propagados.
+func (r *Reader) ScanFrom(seg uint32, from int64, fn func(off uint32, rec types.Record) error) (int64, error) {
+	f, err := r.file(seg)
+	if err != nil {
+		return 0, err
+	}
+	return scanFrom(f, seg, from, fn)
+}
+
+// scanFrom implementa o scan sobre qualquer io.ReaderAt (separado de
+// ScanFrom para ser testável com fakes de I/O).
+func scanFrom(f io.ReaderAt, seg uint32, from int64, fn func(off uint32, rec types.Record) error) (int64, error) {
+	off := from
+	var buf []byte
+	for {
+		rec, b, err := readRecordAt(f, seg, uint32(off), buf)
+		buf = b
+		if err != nil {
+			// Só corrupção/fim de arquivo marca o fim do prefixo válido. Um
+			// EIO NÃO pode virar "fim do log": o caller trunca no offset
+			// devolvido, e descartar records íntegros por uma falha de
+			// leitura seria perda de dados silenciosa.
+			if errors.Is(err, encoding.ErrCorrupt) {
+				return off, nil
+			}
+			return off, err
+		}
+		if err := fn(uint32(off), rec); err != nil {
+			return off, err
+		}
+		off += int64(encoding.RecordHeaderSize + len(rec.Key) + len(rec.Payload))
+	}
 }
 
 // Close fecha todos os segmentos abertos pelo reader.

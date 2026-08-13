@@ -70,15 +70,9 @@ func (h Header) TotalSize() int {
 // Os tetos absolutos do formato (MaxKeySize/MaxRecordSize) são aplicados
 // aqui, espelhando o ParseHeader.
 func BuildRecord(dst []byte, rowID types.RowID, seq int64, flags uint8, key, payload []byte) ([]byte, error) {
-	fieldCount, err := ValidatePayload(payload)
+	fieldCount, err := ValidateRecord(key, payload)
 	if err != nil {
 		return dst, err
-	}
-	if len(key) > MaxKeySize {
-		return dst, fmt.Errorf("%w: key de %d bytes excede o teto %d", ErrInvalidPayload, len(key), MaxKeySize)
-	}
-	if total := RecordHeaderSize + int64(len(key)) + int64(len(payload)); total > MaxRecordSize {
-		return dst, fmt.Errorf("%w: record de %d bytes excede o teto %d", ErrInvalidPayload, total, MaxRecordSize)
 	}
 	base := len(dst)
 	dst = append(dst, recordMagic[:]...)
@@ -96,6 +90,29 @@ func BuildRecord(dst []byte, rowID types.RowID, seq int64, flags uint8, key, pay
 	crc = crc32.Update(crc, castagnoli, dst[base+RecordHeaderSize:])
 	binary.LittleEndian.PutUint32(dst[base+32:base+36], crc)
 	return dst, nil
+}
+
+// ValidateRecord aplica as checagens de FORMATO de um record — invariantes
+// do payload (ordem, duplicatas, tags), teto de key e teto de tamanho total
+// — e devolve o fieldCount derivado.
+//
+// Existe separada do BuildRecord para que o caller possa rejeitar um record
+// ANTES de assumir custos irreversíveis. No Store, reservar um rowId é
+// irreversível por construção (ids nunca são reutilizados, §14 risco 9):
+// validar depois de reservar queima um id por evento inválido, e com fonte
+// ruidosa isso infla os arrays densos indexados por rowId.
+func ValidateRecord(key, payload []byte) (uint32, error) {
+	fieldCount, err := ValidatePayload(payload)
+	if err != nil {
+		return 0, err
+	}
+	if len(key) > MaxKeySize {
+		return 0, fmt.Errorf("%w: key de %d bytes excede o teto %d", ErrInvalidPayload, len(key), MaxKeySize)
+	}
+	if total := RecordHeaderSize + int64(len(key)) + int64(len(payload)); total > MaxRecordSize {
+		return 0, fmt.Errorf("%w: record de %d bytes excede o teto %d", ErrInvalidPayload, total, MaxRecordSize)
+	}
+	return fieldCount, nil
 }
 
 // ParseHeader decodifica o header fixo (36 bytes) validando magic, version

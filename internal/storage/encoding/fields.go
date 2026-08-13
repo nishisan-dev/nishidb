@@ -49,30 +49,38 @@ func fieldWidth(t types.FieldType) int {
 // AppendField codifica um campo ao final de dst e devolve o slice resultante.
 //
 // Value inválida (TypeNull, tag desconhecida, largura fixa errada em Bytes,
-// bool fora de 0/1) é bug do caller e causa panic — o typeconv do
-// materializer garante os invariantes antes de chegar aqui.
-func AppendField(dst []byte, id types.FieldID, v types.Value) []byte {
+// bool fora de 0/1) devolve ErrInvalidPayload com dst INTACTO. O erro é
+// obrigatório e não um panic porque o materializer converte dados EXTERNOS
+// sob política de log-and-skip por evento (§101): um panic não é capturado
+// por ela, então um único evento com Value malformada derrubaria o loop de
+// ingestão inteiro.
+//
+// A validação acontece ANTES de qualquer escrita justamente para que um
+// caller que ignore o erro não fique com um payload meio codificado.
+func AppendField(dst []byte, id types.FieldID, v types.Value) ([]byte, error) {
+	w := fieldWidth(v.Type)
+	switch {
+	case w == invalidWidth:
+		return dst, fmt.Errorf("%w: tipo %#x não é codificável (TypeNull e tags desconhecidas nunca entram em payload)",
+			ErrInvalidPayload, v.Type)
+	case v.Type == types.TypeBool && v.I64 != 0 && v.I64 != 1:
+		return dst, fmt.Errorf("%w: bool com valor %d (esperado 0 ou 1)", ErrInvalidPayload, v.I64)
+	case w > 0 && w != 8 && v.Type != types.TypeBool && len(v.Bytes) != w:
+		return dst, fmt.Errorf("%w: tipo %#x exige %d bytes, recebeu %d", ErrInvalidPayload, v.Type, w, len(v.Bytes))
+	}
+
 	dst = binary.LittleEndian.AppendUint16(dst, uint16(id))
 	dst = append(dst, byte(v.Type))
-
-	switch w := fieldWidth(v.Type); {
-	case w == invalidWidth:
-		panic(fmt.Sprintf("encoding: tipo inválido em AppendField: %#x", v.Type))
+	switch {
 	case v.Type == types.TypeBool:
-		if v.I64 != 0 && v.I64 != 1 {
-			panic(fmt.Sprintf("encoding: bool fora de 0/1: %d", v.I64))
-		}
-		return append(dst, byte(v.I64))
+		return append(dst, byte(v.I64)), nil
 	case w == 8:
-		return binary.LittleEndian.AppendUint64(dst, uint64(v.I64))
+		return binary.LittleEndian.AppendUint64(dst, uint64(v.I64)), nil
 	case w == varWidth:
 		dst = binary.AppendUvarint(dst, uint64(len(v.Bytes)))
-		return append(dst, v.Bytes...)
+		return append(dst, v.Bytes...), nil
 	default:
-		if len(v.Bytes) != w {
-			panic(fmt.Sprintf("encoding: tipo %#x exige %d bytes, recebeu %d", v.Type, w, len(v.Bytes)))
-		}
-		return append(dst, v.Bytes...)
+		return append(dst, v.Bytes...), nil
 	}
 }
 
@@ -81,14 +89,29 @@ func AppendField(dst []byte, id types.FieldID, v types.Value) []byte {
 type FieldReader struct {
 	payload []byte
 	pos     int
-	err     error
+	// start é o offset do campo devolvido pelo último Next, ou -1 quando não
+	// há campo corrente (antes do primeiro Next, no fim ou após erro).
+	start int
+	err   error
 }
 
 // Reset posiciona o reader no início do payload e limpa o estado de erro.
 func (r *FieldReader) Reset(payload []byte) {
 	r.payload = payload
 	r.pos = 0
+	r.start = -1
 	r.err = nil
+}
+
+// RawField devolve os bytes brutos do campo corrente — id, tag, length e
+// valor —, subslice do payload válido até a próxima chamada de Next ou
+// Reset. Existe para o merge copiar um campo não tocado sem decodificar e
+// recodificar. Devolve nil quando não há campo corrente.
+func (r *FieldReader) RawField() []byte {
+	if r.start < 0 || r.start >= r.pos {
+		return nil
+	}
+	return r.payload[r.start:r.pos:r.pos]
 }
 
 // Err devolve o erro de corrupção encontrado, ou nil em fim limpo.
@@ -96,6 +119,7 @@ func (r *FieldReader) Err() error { return r.err }
 
 func (r *FieldReader) fail(format string, args ...any) (types.FieldID, types.Value, bool) {
 	r.err = fmt.Errorf("%w: "+format, append([]any{ErrCorrupt}, args...)...)
+	r.start = -1
 	return 0, types.Value{}, false
 }
 
@@ -103,8 +127,10 @@ func (r *FieldReader) fail(format string, args ...any) (types.FieldID, types.Val
 // (distinguíveis via Err).
 func (r *FieldReader) Next() (types.FieldID, types.Value, bool) {
 	if r.err != nil || r.pos >= len(r.payload) {
+		r.start = -1
 		return 0, types.Value{}, false
 	}
+	r.start = r.pos
 	if len(r.payload)-r.pos < 3 {
 		return r.fail("header de campo truncado no offset %d", r.pos)
 	}

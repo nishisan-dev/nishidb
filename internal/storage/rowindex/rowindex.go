@@ -125,7 +125,8 @@ type Locations struct {
 	// durante ApplyOverlay, somente-leitura enquanto exposto.
 	applying map[types.RowID]uint64
 
-	applyHook func() // seam de teste; nil em produção
+	applyHook    func()                  // seam de teste; nil em produção
+	storeErrHook func(types.RowID) error // seam de teste; nil em produção
 }
 
 // overlayEntry é um par (rowId, packed) materializado do overlay para
@@ -176,6 +177,7 @@ func (l *Locations) Publish(rowID types.RowID, packed uint64) {
 // ApplyOverlay grava todas as entradas do overlay no mmap e o esvazia.
 // Chamado no checkpoint, após o fdatasync dos segmentos, SEMPRE no goroutine
 // do writer (invariante do §10.2 — Publish e ApplyOverlay nunca concorrem).
+// NÃO é reentrante nem thread-safe consigo mesmo: uma chamada por vez.
 // O swap do map sob Lock codifica essa invariante: nenhuma iteração de map
 // vivo acontece, então nem uma violação acidental aborta o processo.
 // Leitores concorrentes (Get) veem cada entrada no overlay até ela já estar
@@ -196,7 +198,8 @@ func (l *Locations) ApplyOverlay() error {
 	l.mu.Unlock()
 
 	for i, e := range entries {
-		if err := l.dense.store(e.row, e.packed); err != nil {
+		err := l.storeOne(e)
+		if err != nil {
 			// Falha parcial (ex.: Grow sem espaço em disco): devolve as
 			// entradas não aplicadas ao overlay para a retentativa do
 			// próximo checkpoint; publicações posteriores ao swap têm
@@ -219,6 +222,17 @@ func (l *Locations) ApplyOverlay() error {
 	l.applying = nil
 	l.mu.Unlock()
 	return nil
+}
+
+// storeOne grava uma entrada do lote no mmap, com o seam de injeção de
+// erro dos testes de falha parcial.
+func (l *Locations) storeOne(e overlayEntry) error {
+	if l.storeErrHook != nil {
+		if err := l.storeErrHook(e.row); err != nil {
+			return err
+		}
+	}
+	return l.dense.store(e.row, e.packed)
 }
 
 // SetDirect grava direto no mmap, sem overlay (recovery, sem leitores).

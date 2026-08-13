@@ -2,6 +2,7 @@ package primary
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -224,6 +225,65 @@ func TestReopenPreservaEstado(t *testing.T) {
 		if err != nil || !ok || id != types.RowID(i) {
 			t.Fatalf("Find(%q) pós-reopen: (%d,%v,%v)", key, id, ok, err)
 		}
+	}
+}
+
+func TestGrowComSyncDirFalhoAindaTrocaATabela(t *testing.T) {
+	// S11-C1: falha do fsync de diretório PÓS-rename não pode deixar o
+	// índice na tabela antiga (inode desvinculado = perda silenciosa de
+	// slots). O swap é obrigatório; o erro é propagado ao caller.
+	restore := setSyncDirForTest(func(string) error { return errors.New("EIO simulado") })
+	defer restore()
+
+	ix, path, ks := openIndex(t, 1024)
+	before := ix.SlotCount()
+	var growErr error
+	failedAt := -1
+	for i := 0; i < 800; i++ { // 0.7*1024 → rehash dispara no caminho
+		key := fmt.Appendf(nil, "gsd-%d", i)
+		ks.put(types.RowID(i), key)
+		if _, _, err := ix.Insert(key, types.RowID(i), ks.validator(key)); err != nil {
+			growErr, failedAt = err, i
+			break
+		}
+	}
+	if growErr == nil {
+		t.Fatal("esperado erro do syncDir durante o rehash")
+	}
+	if ix.SlotCount() != before*2 {
+		t.Fatalf("swap obrigatório pós-rename: slots %d → %d", before, ix.SlotCount())
+	}
+
+	// Com o syncDir restaurado, o índice segue operando na tabela NOVA.
+	restore()
+	key := fmt.Appendf(nil, "gsd-%d", failedAt)
+	if _, _, err := ix.Insert(key, types.RowID(failedAt), ks.validator(key)); err != nil {
+		t.Fatalf("insert pós-swap: %v", err)
+	}
+	for i := 0; i <= failedAt; i += 97 {
+		k := fmt.Appendf(nil, "gsd-%d", i)
+		if id, ok, err := ix.Find(k, ks.validator(k)); err != nil || !ok || id != types.RowID(i) {
+			t.Fatalf("Find(%q) pós-swap: (%d,%v,%v)", k, id, ok, err)
+		}
+	}
+	// O arquivo em disco É a tabela nova (nada ficou no inode fantasma).
+	if err := ix.Msync(); err != nil {
+		t.Fatal(err)
+	}
+	if err := ix.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ix2, err := Open(path, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ix2.Close()
+	if ix2.SlotCount() != before*2 {
+		t.Fatalf("arquivo em disco não é a tabela nova: %d slots", ix2.SlotCount())
+	}
+	k0 := []byte("gsd-0")
+	if id, ok, err := ix2.Find(k0, ks.validator(k0)); err != nil || !ok || id != 0 {
+		t.Fatalf("Find pós-reopen: (%d,%v,%v)", id, ok, err)
 	}
 }
 

@@ -262,6 +262,7 @@ Rodar no writer elimina concorrência writer×checkpoint; a fila de ingestão (5
 - **Alinhamento/unsafe**: mapeamentos são page-aligned; headers de 64B mantêm words alinhadas a 8. Todo `unsafe` confinado em `internal/storage/mmap`: `Region` expõe `AtomicLoad64(off)`, `AtomicStore64`, `Or64`, `And64`, `Bytes(off,len)`, com assert `off%8==0`. Nenhuma slice apontando para dentro do mmap escapa da API pública (Record.Key/Payload apontam para buffer de pread do caller).
 - **Consistência leitor×writer**: pares release/acquire (`sync/atomic`) nos pontos de publicação (slot hash da primary, word do locations, words de bitmap, sequence). O conteúdo do record vai por pread: o `write()` do segmento completa antes do publish atômico (program order do writer) e a coerência page-cache do kernel garante read-after-write.
 - `msync` sempre sobre a slice inteira do mapeamento (range page-aligned); só páginas sujas são escritas.
+- **`Close` do `Region` desmapeia mas NÃO zera o tamanho registrado**, então o bounds check continua aprovando offsets sobre um mapeamento já desfeito: acesso após o `Close` produz panic, não erro. É a metade baixa do risco 21 — enquanto o `Store.Close` não fizer quiesce, fechar com operação em voo mata o processo. Quem for corrigir precisa tratar os dois níveis: a flag de vida no `Store` E o tamanho no `Region`.
 - Opcional (M12): `madvise(MADV_RANDOM)` na primary.
 
 ## 12. Interfaces Go públicas (contrato para M2+)
@@ -290,24 +291,45 @@ type Options struct {
     Dir           string
     SegmentSize   int64    // default 512 MiB; máx 1 GiB
     EstimatedRows uint64   // pre-sizing primary/locations/sequences
-    MaxRecordSize int      // default 4 MiB
-    MaxKeySize    int      // default 1 KiB
-    BitmapFields  []string // nomes de campos com index: bitmap
-    SyncEveryPut  bool     // modo durability=sync (testes)
+    BitmapFields     []types.FieldID // campos com index: bitmap, por ID
+    BitmapFieldNames []string        // os mesmos, por NOME (resolvidos pelo dicionário no Open); união com o acima
+    AllowBitmapDrop  bool            // autoriza abrir SEM um campo que o manifest declara indexado
+    SyncEveryPut  bool             // modo durability=sync (testes)
 }
 
 func Open(opts Options) (*Store, error)          // executa recovery completo
-func (s *Store) Put(key []byte, seq int64, flags Flags, payload []byte, prev *Record) (RowID, error)
-func (s *Store) GetByKey(key, buf []byte) (Record, []byte, bool, error)   // devolve buf (possivelmente crescido)
-func (s *Store) GetByRowID(id RowID, buf []byte) (Record, []byte, bool, error)
-func (s *Store) LookupBitmap(field string, v encoding.Value) (RowIDIterator, error)
+func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *types.Record) (types.RowID, bool, error)
+func (s *Store) GetByKey(key, buf []byte) (types.Record, []byte, bool, error)   // devolve buf (possivelmente crescido)
+func (s *Store) GetByRowID(id types.RowID, buf []byte) (types.Record, []byte, bool, error)
+func (s *Store) ScanLive() types.RowIDIterator
+func (s *Store) LookupBitmap(field types.FieldID, v types.Value) (types.RowIDIterator, error)
+func (s *Store) HasBitmap(field types.FieldID) bool      // capability check do planner (§3.5)
+func (s *Store) BitmapFields() []types.FieldID           // conjunto indexado, ordem crescente
 func (s *Store) FieldDict() *fielddict.Dict
+func (s *Store) Sequence(id types.RowID) (int64, bool)
 func (s *Store) Sync() error        // fdatasync do segmento corrente (loop de durability batch chama)
 func (s *Store) Checkpoint() error  // chamar do goroutine writer
 func (s *Store) Stats() Stats
-func (s *Store) Close() error
+func (s *Store) Close() error        // NÃO faz quiesce: ver §14.21
+```
 
-type RowIDIterator interface { Next() bool; RowID() RowID; Err() error; Close() error }
+`MaxRecordSize` (4 MiB) e `MaxKeySize` (1 KiB) NÃO são configuráveis: são
+tetos do FORMATO, constantes em `internal/storage/encoding`, aplicados pelo
+`ParseHeader` antes de qualquer alocação. Configurá-los por dataset
+permitiria gravar records que outra abertura não conseguiria ler.
+
+`RowIDIterator` mora em `internal/types` (não neste pacote): dois provedores
+precisam satisfazer a MESMA interface — o Store real e o fake do ramo query —
+e uma interface redeclarada em cada consumidor nunca é satisfeita por dois
+provedores com tipos de retorno diferentes.
+
+Sentinelas de erro exportados, todos classificáveis com `errors.Is`:
+
+```go
+types.ErrInvalidArgument  // evento ruim: pule (reexportado por storage)
+types.ErrWriterFailed     // writer morto: PARE a ingestão e reabra (reexportado por storage)
+storage.ErrDatasetCorrupt // recovery não resolve sozinha; rebuild é fase futura
+storage.ErrDatasetLocked  // dataset já aberto por outro processo (flock, M1 é exclusivo)
 ```
 
 ```go
@@ -419,6 +441,24 @@ Cada tarefa: teste primeiro → implementação → refactor. `make test` verde 
 9. **ABA de rowId** — proibido reutilizar rowId (nextRowID monotônico no manifest, recuperado como max(manifest, tail)).
 10. **msync no checkpoint pausa writer** — aceito no M1 (dezenas de ms); se benchmark M13 acusar, mover para coordinator com quiesce (fase futura).
 11. **Go race detector não cobre ordering em memória não-heap** — usar sempre `sync/atomic` (nunca load/store simples) nos pontos de publicação, mesmo onde amd64 "perdoaria".
+12. **Phantom commit / record sem location publicada (VINCULA a S12)** — todo erro pós-Append no `Put` deixa um record durável no segmento SEM location publicada (com o writer sticky-failed, a janela é exatamente 1 Put). O replay do tail (§10.3) vai materializá-lo: um Put que devolveu ERRO ao caller vira visível após o restart. O recovery da S12 DEVE documentar/aceitar essa semântica e ter caso de teste dedicado ("record no tail sem location previamente publicada").
+13. **Política completa de fsync de diretório** — toda mutação de dirent de estado permanente durabiliza o diretório pai: rename (manifest, rehash da primary), criação de segmento (`openNew`, inclusive rotação) e criação dos diretórios do dataset no `Open`. Arquivos de índice/dict pegam carona no fsync/msync próprios; diretórios não têm carona — por isso o fsync explícito.
+14. **Taxonomia de erros do writer (fsyncgate)** — erro de DURABILIDADE (fdatasync de segmento, msync de índice, fsync de manifest/diretório) é STICKY: o kernel reporta EIO de writeback uma vez e limpa, então retentativa "bem-sucedida" mentiria no manifest. Erro LÓGICO (validação, ApplyOverlay) é retentável. `Put/Sync/Checkpoint` devolvem o erro sticky até reabertura com recovery.
+15. **Seeds da recovery (VINCULA a S12)** — no reopen: semear `epoch` do manifest carregado (senão o primeiro checkpoint pós-restart regride para Epoch=1) e semear os tallies de liveness por segmento a partir do manifest (senão os decrementos de update começam do zero e o manifest seguinte mente). `PrimarySlotCount` do manifest pode estar stale após rehash — a fonte de verdade é o header do primary.idx (assert+log, não erro).
+16. **Bitmap sempre erra para o lado do falso positivo (PRINCÍPIO)** — toda operação sobre índice bitmap, no write path ou no replay, deve preferir uma posting a mais a uma posting a menos. A assimetria é estrutural: o índice é declarado SUPERSET de candidatos (§44) e o executor revalida o predicate contra o estado corrente, então falso positivo é filtrado por construção — mas **nenhuma camada acima recupera um candidato que o índice não devolveu**, e uma query indexada volta silenciosamente incompleta. Consequências normativas: o `Set` roda ANTES do commit da location e o `Clear` DEPOIS (§10.1); erro no `Clear` é tolerado e contabilizado, erro no `Set` é fatal para o Put; e quando o replay não tem um `prev` confiável (location à frente do ponto S — normal após crash, porque o §10.2 msynca as locations antes dos bitmaps), ele liga TODAS as postings do payload novo e não limpa nenhuma, em vez de derivar transições de uma base falsa.
+
+17. **Índice bitmap é imutável a partir da 1ª row / não existe backfill no M1** — declarar um campo indexado num dataset que já tem rows produziria um índice cobrindo apenas os records futuros, e as rows antigas sumiriam da query indexada (§14.16). O `Open` recusa, e a consequência precisa ser respeitada pela I2 e pelo planner: **os campos indexados são decididos na criação do dataset**. Abrir sem um campo que o manifest declara também é recusado, salvo `AllowBitmapDrop` explícito — e a flag NÃO autoriza a re-adição depois, justamente para fechar o ciclo drop → escrever → re-adicionar.
+18. **Índice DERIVADO removido por fora não é detectado por nenhuma das validações** — apagar `indexes/` (liberar disco, `rsync`/backup que ignora o diretório, restore parcial) abre normalmente e produz dano silencioso, porque as validações do `Open` cobrem fonte de verdade (segmentos, manifest), não estado derivado. Medido: bitmap apagado ⇒ `LookupBitmap` devolve 0 de 3 rows vivas, e o checkpoint imediato do `Open` regrava `ValuesDictValidBytes` destruindo a evidência já na primeira reabertura; `locations.idx` ⇒ row invisível pelos dois caminhos; `sequences.idx` ⇒ sequence zerada. **O pior é `primary.idx`**: o reopen é aceito, `GetByKey` falha, e o Put seguinte da MESMA key cria um rowId novo — **duas rowIds para uma key**, violando a bijeção do risco 9. Detectar exige verificação de integridade dos derivados no Open (fase futura); até lá, `indexes/` é parte do dataset e deve ser tratado como tal em backup e restore.
+19. **O lock de dataset é por INODE, e o limite real é filesystem de rede** — o `flock` do `Open` protege contra dois processos no mesmo diretório (M1 é exclusivo: dois writers significariam dois overlays, dois contadores de rowId e dois checkpoints concorrentes). Ele **colide corretamente** através de symlink, caminho relativo, `//`, `/.` e `mount --bind`, porque o lock é do inode e não do caminho — não confie em texto que diga o contrário. O limite genuíno é **NFS com `local_lock=flock|all`**, onde o flock vira local ao cliente e dois hosts não colidem (mesmo cuidado para alguns FUSE/CIFS/overlayfs). Datasets em FS de rede não têm exclusão mútua garantida.
+20. **O item 14 detecta ENCOLHIMENTO, não sobrescrita in-place** — a guarda compara o tamanho do arquivo com o registrado no manifest, então perda de records aparece se o arquivo diminuir. Uma sobrescrita que preserve o tamanho passa: nenhum CRC é verificado antes do `DurableOffset` no `Open` (por design — validar o dataset inteiro em cada abertura custaria a leitura completa). Para segmento SELADO essa é a ÚNICA guarda; a de `durableOffset` só vale para o corrente.
+21. **`Close()` não faz quiesce (VINCULA a S13/I2)** — o `Close` não toma o mutex do writer nem marca o Store como fechado, e o `mmap.Region.Close` desmapeia sem zerar o tamanho, então o bounds check passa sobre um slice vazio. Um `Close` concorrente com `Put` em voo produz **panic**, não erro — e panic não é capturável pela política de log-and-skip do §101, que é o argumento que fundamentou o D4. **Os LEITORES morrem igual**, embora o godoc prometa `GetByKey`/`GetByRowID`/`ScanLive`/`LookupBitmap`/`Sequence`/`Stats` seguros concorrentes com o writer. O `flock` é devolvido no mesmo instante, com o `Put` ainda em voo. Bloqueia a I2, cujo CLI abre e fecha o Store a cada comando. Corrigir exige mutex + flag `closed` para o writer **e** quiesce de leitores (refcount ou RWMutex de vida do Store) — corrigir só o writer deixa metade do defeito de pé.
+22. **Valor de campo indexado tem teto de 64 KiB e é validado ANTES do append** — o `values.dict` codifica o comprimento em u16. Descobrir a violação na fase de Set seria fatal, não inconveniente: o record já estaria durável, o replay do tail tentaria reindexá-lo a cada abertura, falharia sempre, e **um único evento externo tornaria o dataset inabrível para sempre** com a configuração default. Por isso a checagem entra junto com a validação de dicionário, antes de qualquer custo irreversível — mesma regra do risco 9 aplicada ao índice.
+
+    **Recuperação de um dataset já atingido** (inalcançável em greenfield, mas registrado porque é a pergunta que se faz em incidente): **não é perda definitiva**. Verificado por reprodução — injetando no tail o record que uma versão sem a validação teria gravado: abrir declarando o campo falha (`bitmap: valor com N bytes excede u16`), mas abrir **sem declarar o campo indexado, com `AllowBitmapDrop`**, funciona: o replay não tenta indexar um campo que não está no conjunto, todas as rows anteriores continuam acessíveis e o próprio record ofensor fica visível. O que se perde é o ÍNDICE, não os dados — e ele não pode ser re-declarado depois enquanto o dataset tiver rows (risco 17), até existir backfill. A rota de escape, portanto, é: abrir sem o campo, exportar os dados, **corrigir o evento ofensor** (obrigatório, não opcional — se o campo for indexado no dataset novo, o mesmo valor reproduziria o problema na primeira ingestão) e recriar o dataset.
+
+    Há uma segunda porta de entrada para o mesmo estado, mais provável na operação: um dataset que acumulou records com valor grande num campo **não indexado** e depois recebe esse campo na lista de índices. Nada foi violado quando os records foram gravados — o teto só existe para campo indexado. A primeira abertura com o índice declarado falha no replay; o erro é embrulhado com o nome do dataset e o remédio (reabrir sem declarar o campo), e a partir daí vale a mesma rota acima. Exige mudança de configuração pelo operador e nunca perde dados, mas a porta existe e o erro precisa ser acionável, porque quem a atravessa está no meio de uma mudança de schema.
+
+23. **Convenção de teste do projeto: pinar a MENSAGEM, não só o sentinela** — vale para os dois ramos e para as fases seguintes. Vários erros distintos deste subsistema compartilham o mesmo sentinela (`ErrDatasetCorrupt` cobre encolhimento de segmento, buraco na cadeia, ponto S fora do arquivo, manifest ilegível e divergência de bitmap), então um teste que só afira `errors.Is` fica verde com a guarda que ele deveria travar **inteiramente inerte** — outra guarda devolve o mesmo sentinela por outra causa e o teste não percebe. Medido: a mutação que afrouxava o item 14 sobrevivia à suíte inteira até o assert passar a exigir a substring `"encolheu"`. Regra: todo teste de caminho de erro afere o sentinela **e** um trecho da mensagem que identifique a guarda específica (`"encolheu"`, `"1 rows"`, `"AllowBitmapDrop"`). Corolário para quem escreve a mensagem: ela é contrato de teste, não só texto para humano — mudá-la quebra testes de propósito.
 
 ## 15A. Contrato acordado com plan-query (materializer/query) — deltas sobre o §12
 
@@ -430,7 +470,7 @@ Negociado em resposta aos 6 pontos do plan-query (plano dele: `/home/lucas/.clau
    - `Record{RowID RowID; Sequence int64; Flags uint8; Key []byte; Payload []byte}` — substitui `MaterializedRecord` (ganha Key e Flags; FieldCount sai — o Store conta durante a validação do Put).
    - **`PhysicalLocation` NÃO entra no contrato público** — com o Put orquestrando (item 3), nem materializer nem query tocam locations; o tipo fica interno a `internal/storage`.
    - Interfaces da §99: declaradas nos consumidores (idiom Go), não em types. Não-bloqueante se ele preferir centralizar.
-2. **Encoding**: dono confirmado `internal/storage/encoding`; formato exatamente como no §2 deste plano (== §2.4 do plano dele). API payload-level: `AppendField(dst []byte, id types.FieldID, v types.Value) []byte` + `FieldReader{Reset(payload); Next() (FieldID, Value, ok)}` zero-copy. Framing do record (header+CRC) é interno ao `Store.Put`. **Tag 0x00 (null) fica reservada e nunca é codificada**: o PatchBuffer dele carrega `isNull` como flag em struct (não encoda patch para wire), e estado materializado dropa o campo — `AppendField` com TypeNull = erro; `FieldReader` em 0x00 = erro. (Substitui a ideia anterior de null-tag em patches codificados.)
+2. **Encoding**: dono confirmado `internal/storage/encoding`; formato exatamente como no §2 deste plano (== §2.4 do plano dele). API payload-level: `AppendField(dst []byte, id types.FieldID, v types.Value) ([]byte, error)` + `FieldReader{Reset(payload); Next() (FieldID, Value, ok); RawField() []byte}` zero-copy. O `RawField` devolve o span BRUTO do campo corrente — id, tag, length e valor —, subslice do payload com cap fechado, para o merge copiar um campo não tocado sem pagar decode e encode; é `nil` antes do primeiro `Next`, no fim e após erro, e vale até o `Next` seguinte ou até o buffer do payload ser reaproveitado, o que vier antes. Framing do record (header+CRC) é interno ao `Store.Put`. **Tag 0x00 (null) fica reservada e nunca é codificada**: o PatchBuffer dele carrega `isNull` como flag em struct (não encoda patch para wire), e estado materializado dropa o campo — `AppendField` com TypeNull = erro; `FieldReader` em 0x00 = erro. (Substitui a ideia anterior de null-tag em patches codificados.)
 3. **Orquestração do write path é do Store (Option A — acordado como ponto 4 da negociação)**: `Apply` do materializer vira `GetByKey(prev) → stale-check via prev.Sequence → merge/replace → Put(key, seq, flags, payload, prev)`. `RowIDAllocator`, `StorageEngine.Append`, `SecondaryIndex.Update` e `LocationIndex.Set` saem do contrato público. Motivos: replay do recovery re-executa o mesmo diff de índices do Put (um único code path); invariantes do overlay de locations ficam num só pacote; R6 do plano dele (replace esquecendo postings) morre por construção.
    - `Put` confia em `prev.RowID` quando `prev != nil` (não re-faz Find — evita probe+pread duplicados); `prev == nil` com key existente → Store lê o prev sozinho (fallback de correção, 1 read extra).
    - `Put` retorna `(RowID, created bool, error)`; valida no mesmo passo do diff de bitmap: fieldIDs crescentes sem duplicata, ausência de tag 0x00, IDs conhecidos no dict, limites de tamanho; conta fieldCount.
@@ -438,8 +478,8 @@ Negociado em resposta aos 6 pontos do plan-query (plano dele: `/home/lucas/.clau
    - `GetByKey(key, buf []byte) (types.Record, []byte, bool, error)` — a validação de colisão da primary (spec §36) já lê o record, então o prev vem "de graça"; `prev.Sequence` cobre o stale-check sem I/O extra.
    - `GetByRowID(id types.RowID, buf []byte) (types.Record, []byte, bool, error)` — ok=false para row sem location ou tombstoned = checagem de liveness dos caminhos indexados.
    - `Put(key []byte, seq int64, flags uint8, payload []byte, prev *types.Record) (types.RowID, bool, error)`
-   - `ScanLive() RowIDIterator` — full scan: rowIds crescentes com location válida e sem tombstone (overlay incluso); TTL filtrará aqui na Fase 9.
-   - `LookupBitmap(field types.FieldID, v types.Value) (RowIDIterator, error)` — por FieldID (não nome); iteração em ordem crescente de rowId garantida (pré-condição das interseções/uniões do planner dele).
+   - `ScanLive() types.RowIDIterator` — full scan: rowIds crescentes com location válida e sem tombstone (overlay incluso); TTL filtrará aqui na Fase 9.
+   - `LookupBitmap(field types.FieldID, v types.Value) (types.RowIDIterator, error)` — por FieldID (não nome); iteração em ordem crescente de rowId garantida (pré-condição das interseções/uniões do planner dele).
    - `Sequence(rowID types.RowID) (int64, bool)` — sequences.idx confirmado no M1; recomendado usar prev.Sequence (um só code path), mas o índice existe (spec §38 + replay).
 5. **Logística**: T0 (go.mod, layout, Makefile, golangci) é meu; plan-query não cria go.mod e adiciona `gopkg.in/yaml.v3` na primeira task dele após meu T0.
 
@@ -447,7 +487,7 @@ Confirmações finais (plan-query aceitou o item 3/Option A integralmente):
 
 6. **Contrato de buffers**: `GetByKey(key, buf []byte) (types.Record, []byte, bool, error)` e `GetByRowID(rowID, buf)` idem — `Record.Key/Payload` são zero-copy sobre o buf devolvido (possivelmente crescido) como segundo valor de retorno; o caller reutiliza (prevBuf/rowBuf). Válido até a próxima chamada com o mesmo buf.
 7. **Bit layout de Flags** (constantes em `internal/types`, fonte única): `FlagTombstone uint8 = 1 << 0`; bits 1-7 reservados (zero). No packed location: bit63 = tombstone, bit62 reservado. M1 sempre grava Flags=0.
-8. **LookupHash reservado para Fase 8**: assinatura futura `LookupHash(field types.FieldID, v types.Value) (RowIDIterator, error)` — NÃO existe no *storage.Store do M1. Capability check do planner via type assertion consumer-side (`interface{ LookupHash(...) }`); o fake dele implementa, o Store real só na Fase 8.
+8. **LookupHash reservado para Fase 8**: assinatura futura `LookupHash(field types.FieldID, v types.Value) (types.RowIDIterator, error)` — NÃO existe no *storage.Store do M1. Capability check do planner via type assertion consumer-side (`interface{ LookupHash(...) }`); o fake dele implementa, o Store real só na Fase 8.
 9. **`internal/types` é criado no MEU T0/T1** (o encoding depende dele imediatamente): T0 cria o pacote com os tipos acordados, T1 testa (roundtrip Value etc.). plan-query não cria o pacote — consome.
 
 Impacto nas tarefas: T0/T1 ganham a criação de `internal/types` (movendo Value/tipos para lá); T10 usa as assinaturas acima; demais inalteradas.

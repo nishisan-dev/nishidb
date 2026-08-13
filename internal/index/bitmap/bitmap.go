@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
-	"math"
 	"math/bits"
 	"os"
 	"path/filepath"
@@ -46,6 +45,30 @@ var (
 	bmMagic    = [4]byte{'N', 'D', 'B', 'B'}
 	castagnoli = crc32.MakeTable(crc32.Castagnoli)
 )
+
+// ValidateValue informa se o valor pode ser indexado.
+//
+// O Store precisa chamar isto ANTES de tornar o record durável. Descobrir a
+// violação depois do append é fatal e não apenas inconveniente: o record
+// fica no segmento, o replay do tail tenta reindexá-lo a cada abertura,
+// falha pelo mesmo motivo, e o dataset inteiro passa a ser INABRÍVEL — um
+// único evento externo bastaria para isso, já que o teto é atingível com a
+// configuração default.
+func ValidateValue(v types.Value) error {
+	switch v.Type {
+	case types.TypeInt64, types.TypeDouble, types.TypeBool, types.TypeTimestamp:
+		return nil // largura fixa, sempre cabe
+	case types.TypeString, types.TypeBytes, types.TypeJSON,
+		types.TypeIPv4, types.TypeIPv6, types.TypeIPv4Prefix, types.TypeIPv6Prefix:
+		if len(v.Bytes) > types.MaxIndexedValueBytes {
+			return fmt.Errorf("bitmap: valor de %d bytes excede o teto de %d do values.dict",
+				len(v.Bytes), types.MaxIndexedValueBytes)
+		}
+		return nil
+	default:
+		return fmt.Errorf("bitmap: tipo %#x não indexável", v.Type)
+	}
+}
 
 // canonicalValue serializa a Value em bytes canônicos [type][payload] para
 // chavear o dicionário de valores.
@@ -179,7 +202,7 @@ func (ix *Index) lookupID(key []byte) (uint32, bool) {
 // id — mesma regra do fields.dict). Exclusivo do writer.
 func (ix *Index) createID(key []byte) (uint32, error) {
 	valBytes := key[1:]
-	if len(valBytes) > math.MaxUint16 {
+	if len(valBytes) > types.MaxIndexedValueBytes {
 		return 0, fmt.Errorf("bitmap: valor com %d bytes excede u16", len(valBytes))
 	}
 	entry := make([]byte, 0, 3+len(valBytes)+4)
@@ -333,6 +356,13 @@ func (ix *Index) Lookup(v types.Value) (*Iterator, bool, error) {
 		return &Iterator{}, true, nil
 	}
 	return &Iterator{region: r, nWords: (r.Size() - bmHeaderSize) / 8}, true, nil
+}
+
+// DictSizeBytes devolve o tamanho válido do values.dict (para o manifest).
+func (ix *Index) DictSizeBytes() int64 {
+	ix.mu.RLock()
+	defer ix.mu.RUnlock()
+	return ix.dictSize
 }
 
 // Values devolve o número de valores distintos registrados.

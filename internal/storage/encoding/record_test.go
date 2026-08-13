@@ -13,9 +13,9 @@ import (
 func buildTestPayload(t *testing.T) ([]byte, uint32) {
 	t.Helper()
 	var p []byte
-	p = AppendField(p, 1, types.Value{Type: types.TypeString, Bytes: []byte("CMP-V0001PPCLP-013")})
-	p = AppendField(p, 3, types.Value{Type: types.TypeInt64, I64: 7455409733})
-	p = AppendField(p, 9, types.Value{Type: types.TypeIPv4, Bytes: []byte{177, 1, 2, 3}})
+	p = mustAppend(t, p, 1, types.Value{Type: types.TypeString, Bytes: []byte("CMP-V0001PPCLP-013")})
+	p = mustAppend(t, p, 3, types.Value{Type: types.TypeInt64, I64: 7455409733})
+	p = mustAppend(t, p, 9, types.Value{Type: types.TypeIPv4, Bytes: []byte{177, 1, 2, 3}})
 	return p, 3
 }
 
@@ -42,8 +42,8 @@ func TestBuildRecordDerivaFieldCountEValidaPayload(t *testing.T) {
 	}
 
 	t.Run("payload_invalido_falha", func(t *testing.T) {
-		unordered := AppendField(nil, 5, types.Value{Type: types.TypeInt64, I64: 1})
-		unordered = AppendField(unordered, 2, types.Value{Type: types.TypeInt64, I64: 2})
+		unordered := mustAppend(t, nil, 5, types.Value{Type: types.TypeInt64, I64: 1})
+		unordered = mustAppend(t, unordered, 2, types.Value{Type: types.TypeInt64, I64: 2})
 		if _, err := BuildRecord(nil, 1, 2, 0, []byte("k"), unordered); !errors.Is(err, ErrInvalidPayload) {
 			t.Fatalf("esperado ErrInvalidPayload, obtido %v", err)
 		}
@@ -55,7 +55,7 @@ func TestBuildRecordDerivaFieldCountEValidaPayload(t *testing.T) {
 		}
 	})
 	t.Run("total_acima_do_teto_falha", func(t *testing.T) {
-		huge := AppendField(nil, 1, types.Value{Type: types.TypeBytes, Bytes: make([]byte, MaxRecordSize)})
+		huge := mustAppend(t, nil, 1, types.Value{Type: types.TypeBytes, Bytes: make([]byte, MaxRecordSize)})
 		if _, err := BuildRecord(nil, 1, 2, 0, []byte("k"), huge); err == nil {
 			t.Fatal("record acima de MaxRecordSize deveria falhar")
 		}
@@ -92,7 +92,7 @@ func TestBuildRecordParseRecordRoundTrip(t *testing.T) {
 func TestBuildRecordLayoutGolden(t *testing.T) {
 	// Fixa o layout em disco: mudanças aqui exigem bump de formatVersion.
 	key := []byte("ab")
-	payload := AppendField(nil, 2, types.Value{Type: types.TypeBool, I64: 1})
+	payload := mustAppend(t, nil, 2, types.Value{Type: types.TypeBool, I64: 1})
 	rec := mustBuildRecord(t, nil, 0x1122334455667788, -2, types.FlagTombstone, key, payload)
 
 	if len(rec) != RecordHeaderSize+len(key)+len(payload) {
@@ -242,11 +242,11 @@ func TestParseHeaderRejeitaLimitesAbsolutos(t *testing.T) {
 func TestValidatePayload(t *testing.T) {
 	ordered, fc := buildTestPayload(t)
 
-	unordered := AppendField(nil, 5, types.Value{Type: types.TypeInt64, I64: 1})
-	unordered = AppendField(unordered, 2, types.Value{Type: types.TypeInt64, I64: 2})
+	unordered := mustAppend(t, nil, 5, types.Value{Type: types.TypeInt64, I64: 1})
+	unordered = mustAppend(t, unordered, 2, types.Value{Type: types.TypeInt64, I64: 2})
 
-	dup := AppendField(nil, 5, types.Value{Type: types.TypeInt64, I64: 1})
-	dup = AppendField(dup, 5, types.Value{Type: types.TypeInt64, I64: 2})
+	dup := mustAppend(t, nil, 5, types.Value{Type: types.TypeInt64, I64: 1})
+	dup = mustAppend(t, dup, 5, types.Value{Type: types.TypeInt64, I64: 2})
 
 	withNull := append(bytes.Clone(ordered), 0xFF, 0x00, byte(types.TypeNull))
 
@@ -294,8 +294,8 @@ func TestBuildRecordReutilizaBuffer(t *testing.T) {
 
 func BenchmarkBuildRecord(b *testing.B) {
 	var payload []byte
-	payload = AppendField(payload, 1, types.Value{Type: types.TypeString, Bytes: []byte("CMP-V0001PPCLP-013")})
-	payload = AppendField(payload, 3, types.Value{Type: types.TypeInt64, I64: 7455409733})
+	payload = mustAppend(b, payload, 1, types.Value{Type: types.TypeString, Bytes: []byte("CMP-V0001PPCLP-013")})
+	payload = mustAppend(b, payload, 3, types.Value{Type: types.TypeInt64, I64: 7455409733})
 	key := []byte("CMP-V0001PPCLP-013")
 	buf := make([]byte, 0, 4096)
 	b.ReportAllocs()
