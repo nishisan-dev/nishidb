@@ -45,6 +45,9 @@ func TestConvertIPv6(t *testing.T) {
 		{"2001:db8::1", []byte{0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}},
 		{"::", make([]byte, 16)},
 		{"fe80::a00:27ff:fe4e:66a1", []byte{0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0x0a, 0x00, 0x27, 0xff, 0xfe, 0x4e, 0x66, 0xa1}},
+		// Mapped (::ffff:a.b.c.d): aceito como ipv6 — netip o trata como
+		// endereço v6 (Is4()==false), e o roundtrip preserva os 16 bytes.
+		{"::ffff:192.0.2.1", []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 192, 0, 2, 1}},
 	}
 	for _, tc := range cases {
 		v, _, err := Convert(str(tc.in), types.TypeIPv6, nil)
