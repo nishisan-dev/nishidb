@@ -46,6 +46,17 @@ type Config struct {
 	StatusValues    int // valores distintos de Acct-Status-Type (0 → 8)
 	NASCount        int // NAS distintos (0 → 300)
 	TerminateCauses int // valores de Acct-Terminate-Cause (0 → 10)
+
+	// Sequential percorre as entidades em ordem em vez de sortear.
+	//
+	// Existe para a fase LOAD do harness: com sorteio uniforme, N eventos
+	// tocam só ~63% das N entidades, e criar 8M rows exigiria ~13M eventos —
+	// 60% a mais de tempo e de disco na rodada mais cara do projeto. Com
+	// Sequential, N eventos criam exatamente N entidades.
+	//
+	// NÃO use para medir carga de regime: a ordem perfeita elimina a
+	// localidade irregular que o índice primary enfrenta na vida real.
+	Sequential bool
 }
 
 // DefaultConfig é o workload de referência: a carga de accounting real, com
@@ -112,6 +123,9 @@ type Generator struct {
 	// processo do GERADOR, não na engine. É o preço da monotonicidade por
 	// entidade, e está documentado porque aparece no RSS do harness.
 	seqs []uint32
+
+	// next é o cursor do modo Sequential.
+	next int
 }
 
 // New valida a Config, aplica os defaults e devolve o gerador.
@@ -216,7 +230,14 @@ func GenerateCorpus(cfg Config, n int) ([][]byte, error) {
 // corpus estável: mudar um ratio muda quais eventos variam, não a sequência
 // inteira a partir dali.
 func (g *Generator) Next(dst []byte) []byte {
+	// O sorteio da entidade acontece SEMPRE, mesmo no modo Sequential, para
+	// que os dois modos consumam o rng na mesma ordem — trocar o modo não
+	// pode mudar o resto do evento.
 	idx := g.rng.IntN(g.cfg.Entities)
+	if g.cfg.Sequential {
+		idx = g.next % g.cfg.Entities
+		g.next++
+	}
 	rPatch := g.rng.Float64()
 	rExt := g.rng.Float64()
 	rUnknown := g.rng.Float64()

@@ -320,6 +320,62 @@ func TestKeyEstavelEUnicaPorEntidade(t *testing.T) {
 	}
 }
 
+// Sequential existe para a fase LOAD: N eventos precisam criar exatamente N
+// entidades. Com sorteio uniforme seriam necessários ~1,6N eventos, e na
+// rodada de 8M isso é uma hora de disco a mais.
+func TestSequentialCobreTodasAsEntidades(t *testing.T) {
+	const entidades = 500
+	g := gen(t, radiusgen.Config{Seed: 31, Entities: entidades, Sequential: true, PatchRatio: 0})
+
+	vistas := map[string]int{}
+	for _, e := range collect(t, g, entidades) {
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(e, &m); err != nil {
+			t.Fatal(err)
+		}
+		vistas[string(bytes.Trim(m["id"], `"`))]++
+	}
+	if len(vistas) != entidades {
+		t.Fatalf("%d entidades distintas em %d eventos, want %d", len(vistas), entidades, entidades)
+	}
+	for id, n := range vistas {
+		if n != 1 {
+			t.Fatalf("entidade %s apareceu %d vezes na primeira passada", id, n)
+		}
+	}
+
+	// A segunda passada reencontra as MESMAS entidades (é o que faz o
+	// harness poder alternar LOAD e STEADY sobre o mesmo conjunto).
+	for _, e := range collect(t, g, entidades) {
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(e, &m); err != nil {
+			t.Fatal(err)
+		}
+		id := string(bytes.Trim(m["id"], `"`))
+		if vistas[id] == 0 {
+			t.Fatalf("entidade %s só apareceu na segunda passada", id)
+		}
+	}
+}
+
+// Sem Sequential, o sorteio uniforme deixa entidades de fora — é justamente o
+// que justifica o modo.
+func TestSorteioUniformeNaoCobreTodasAsEntidades(t *testing.T) {
+	const entidades = 500
+	g := gen(t, radiusgen.Config{Seed: 31, Entities: entidades, PatchRatio: 0})
+	vistas := map[string]bool{}
+	for _, e := range collect(t, g, entidades) {
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(e, &m); err != nil {
+			t.Fatal(err)
+		}
+		vistas[string(bytes.Trim(m["id"], `"`))] = true
+	}
+	if len(vistas) == entidades {
+		t.Fatal("sorteio uniforme cobriu todas as entidades: o modo Sequential perdeu a razão de existir")
+	}
+}
+
 // O NAS tem cardinalidade de centenas e distribuição concentrada (poucos NAS
 // levam a maior parte das sessões) — é o que torna o índice bitmap sobre ele
 // um caso realista em vez de um índice uniforme de brinquedo.

@@ -1,0 +1,167 @@
+{
+  "started_at": "2026-08-13T12:48:39.325593131-03:00",
+  "go_version": "go1.26.5",
+  "gomemlimit": "512MiB",
+  "gogc": "100",
+  "config": {
+    "entities": 1000000,
+    "seed": 42,
+    "steady_sec": 10,
+    "steady_rate": 0,
+    "readers": 0,
+    "segment_size": 0,
+    "checkpoint_every_events": 200000,
+    "rss_limit_bytes": 1073741824,
+    "corpus_golden_note": "corpus determinístico: mesma Seed e Entities reproduzem os mesmos eventos (ver TestCorpusGolden no radiusgen)",
+    "spec_path": "testdata/radius.materialization.yaml",
+    "data_dir_present": true
+  },
+  "load": {
+    "name": "load",
+    "events": 1000000,
+    "created": 1000000,
+    "updated": 0,
+    "stale": 0,
+    "skipped": 0,
+    "failed": 0,
+    "duration_sec": 20.150755332,
+    "events_per_sec": 49625.931312459055,
+    "allocs_per_event": 0.005877,
+    "max_rss_bytes": 83136512,
+    "end_rss_bytes": 83136512,
+    "end_anon_rss_bytes": 29614080,
+    "end_file_rss_bytes": 53522432,
+    "heap_stable_bytes": 377672,
+    "gc_per_min": 20.842891151232802
+  },
+  "steady": {
+    "name": "steady",
+    "events": 1113403,
+    "created": 0,
+    "updated": 442115,
+    "stale": 671288,
+    "skipped": 0,
+    "failed": 0,
+    "duration_sec": 10.000071722,
+    "events_per_sec": 111339.5014508277,
+    "allocs_per_event": 0.003053701130677751,
+    "max_rss_bytes": 74248192,
+    "end_rss_bytes": 74248192,
+    "end_anon_rss_bytes": 19320832,
+    "end_file_rss_bytes": 54927360,
+    "heap_stable_bytes": 2824408,
+    "gc_per_min": 35.99974180265184
+  },
+  "samples": [
+    {
+      "elapsed_sec": 5.002632477,
+      "phase": "load",
+      "events": 247362,
+      "vm_rss_bytes": 54943744,
+      "anon_rss_bytes": 14368768,
+      "file_rss_bytes": 40574976,
+      "heap_alloc_bytes": 14677760,
+      "heap_objects": 1714,
+      "num_gc": 3
+    },
+    {
+      "elapsed_sec": 10.002635432,
+      "phase": "load",
+      "events": 498420,
+      "vm_rss_bytes": 69804032,
+      "anon_rss_bytes": 25448448,
+      "file_rss_bytes": 44355584,
+      "heap_alloc_bytes": 17047776,
+      "heap_objects": 1975,
+      "num_gc": 4
+    },
+    {
+      "elapsed_sec": 15.002618614,
+      "phase": "load",
+      "events": 746091,
+      "vm_rss_bytes": 77697024,
+      "anon_rss_bytes": 29868032,
+      "file_rss_bytes": 47828992,
+      "heap_alloc_bytes": 21786024,
+      "heap_objects": 2505,
+      "num_gc": 5
+    },
+    {
+      "elapsed_sec": 20.00262645,
+      "phase": "load",
+      "events": 999166,
+      "vm_rss_bytes": 81567744,
+      "anon_rss_bytes": 29655040,
+      "file_rss_bytes": 51912704,
+      "heap_alloc_bytes": 21777848,
+      "heap_objects": 2502,
+      "num_gc": 6
+    },
+    {
+      "elapsed_sec": 25.157362403,
+      "phase": "steady",
+      "events": 634804,
+      "vm_rss_bytes": 71589888,
+      "anon_rss_bytes": 16805888,
+      "file_rss_bytes": 54784000,
+      "heap_alloc_bytes": 9514328,
+      "heap_objects": 1706,
+      "num_gc": 11
+    },
+    {
+      "elapsed_sec": 30.15735403,
+      "phase": "steady",
+      "events": 1113403,
+      "vm_rss_bytes": 74248192,
+      "anon_rss_bytes": 19320832,
+      "file_rss_bytes": 54927360,
+      "heap_alloc_bytes": 7020936,
+      "heap_objects": 1502,
+      "num_gc": 14
+    }
+  ],
+  "gates": [
+    {
+      "name": "rss_limit",
+      "spec": "§109",
+      "passed": true,
+      "hard": true,
+      "detail": "max(VmRSS) = 79.3 MiB, limite 1.00 GiB"
+    },
+    {
+      "name": "heap_decoupled",
+      "spec": "§110",
+      "passed": true,
+      "hard": true,
+      "detail": "heap 2.7 MiB (1000000 entidades) vs 2.8 MiB (100000 entidades): 0.97x de heap para 10.0x de dados, teto 2x"
+    },
+    {
+      "name": "ingest_throughput",
+      "spec": "§88",
+      "passed": true,
+      "hard": true,
+      "detail": "LOAD a 49626 ev/s, mínimo 2000"
+    },
+    {
+      "name": "allocs_per_event",
+      "spec": "§111",
+      "passed": true,
+      "hard": false,
+      "detail": "0.00 allocs/evento na fase steady (alvo 9; soft no M1)"
+    },
+    {
+      "name": "no_event_loss",
+      "spec": "§101",
+      "passed": true,
+      "hard": true,
+      "detail": "0 eventos descartados (skipped+failed)"
+    }
+  ],
+  "store_stats": {
+    "row_count": 1000000,
+    "segments_total": 3,
+    "primary_load_factor": 0.476837158203125,
+    "disk_bytes": 1152984360
+  },
+  "passed": true
+}
