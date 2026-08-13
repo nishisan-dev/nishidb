@@ -378,6 +378,18 @@ func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *ty
 	if prev != nil && !bytes.Equal(prev.Key, key) {
 		return 0, false, fmt.Errorf("%w: prev pertence à key %q, não a %q", ErrInvalidArgument, prev.Key, key)
 	}
+	// Validação do formato e do dicionário ANTES de qualquer custo
+	// irreversível. Reservar um rowId é irreversível por construção (ids
+	// nunca são reutilizados — bijeção rowId↔key, §14 risco 9), então
+	// validar depois queimaria um id por evento inválido: com fonte ruidosa,
+	// 1M de eventos rejeitados inflariam locations.idx e sequences.idx em
+	// 8 MB cada e encheriam o intervalo do ScanLive de buracos.
+	if _, err := encoding.ValidateRecord(key, payload); err != nil {
+		return 0, false, err
+	}
+	if err := s.validateKnownFields(payload); err != nil {
+		return 0, false, err
+	}
 	var (
 		rowID       types.RowID
 		created     bool
@@ -396,22 +408,20 @@ func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *ty
 			rowID = found.RowID
 			prevPayload = found.Payload
 		} else {
-			// Reserva o rowId JÁ NA ALOCAÇÃO: um Put falho vaza o id (o
-			// recovery §10.3 reconcilia via max), mas nunca o reutiliza —
-			// reuso quebraria a bijeção rowId↔key no log (ABA).
+			// A partir daqui o id está QUEIMADO mesmo se o Put falhar: o
+			// recovery reconcilia por max, mas nunca o reutiliza (reuso
+			// quebraria a bijeção rowId↔key no log — ABA).
 			rowID = types.RowID(s.nextRowID.Add(1) - 1)
 			created = true
 		}
 	}
 
-	// 1. encode (BuildRecord embute ValidatePayload e os tetos do formato)
-	// + fieldIDs conhecidos no dicionário (§15A item 3).
+	// 1. encode. O BuildRecord revalida por conta própria e deriva o
+	// fieldCount por construção (§I4: nunca aceito do caller) — a segunda
+	// varredura do payload é deliberada, o custo é medido na S13.
 	rec, err := encoding.BuildRecord(s.buildBuf[:0], rowID, seq, flags, key, payload)
 	s.buildBuf = rec
 	if err != nil {
-		return 0, false, err
-	}
-	if err := s.validateKnownFields(payload); err != nil {
 		return 0, false, err
 	}
 	// 2. append (rotação interna ao segment). TODO erro do Append é sticky:

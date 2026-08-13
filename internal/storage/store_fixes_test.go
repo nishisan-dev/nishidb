@@ -13,6 +13,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
@@ -53,9 +54,11 @@ func TestPutRejeitaPrevDeOutraKey(t *testing.T) {
 	}
 }
 
-func TestRowIDNaoEhReutilizadoAposPutFalho(t *testing.T) {
-	// C1(a): o rowId é reservado NA ALOCAÇÃO — um Put que falha na
-	// validação (antes do Append) vaza o id, nunca o devolve ao pool.
+func TestEventoInvalidoNaoQueimaRowID(t *testing.T) {
+	// R-B: a validação de formato e de dicionário acontece ANTES da reserva
+	// do rowId. Com fonte ruidosa (RADIUS/Kafka), validar depois queimaria um
+	// id por evento inválido, inflando locations.idx e sequences.idx (arrays
+	// densos indexados por rowId) e enchendo o ScanLive de buracos.
 	s := openStore(t, Options{})
 	okPayload := statusPayload(t, s, "x", "Start", 0)
 
@@ -64,14 +67,39 @@ func TestRowIDNaoEhReutilizadoAposPutFalho(t *testing.T) {
 	if _, _, err := s.Put([]byte("key-falha"), 1, 0, unordered, nil); err == nil {
 		t.Fatal("payload desordenado deveria falhar")
 	}
+	// Campo fora do dicionário: mesma regra.
+	ghost := mustAppendField(t, nil, 999, types.Value{Type: types.TypeString, Bytes: []byte("fantasma")})
+	if _, _, err := s.Put([]byte("key-ghost"), 1, 0, ghost, nil); err == nil {
+		t.Fatal("fieldID desconhecido deveria falhar")
+	}
+	// Key acima do teto do formato: idem.
+	enorme := bytes.Repeat([]byte("k"), encoding.MaxKeySize+1)
+	if _, _, err := s.Put(enorme, 1, 0, okPayload, nil); err == nil {
+		t.Fatal("key acima do teto deveria falhar")
+	}
 
 	id, created := mustPut(t, s, "key-ok", 1, okPayload, nil)
-	if !created || id != 1 {
-		t.Fatalf("rowId 0 vazou no Put falho e NÃO pode ser reutilizado: esperado id=1, obtido %d", id)
+	if !created || id != 0 {
+		t.Fatalf("nenhum id pode ter sido queimado pelos 3 Puts inválidos: esperado id=0, obtido %d", id)
 	}
-	// O rowId vazado não tem location: invisível no scan.
-	if rows := collectRows(t, s.ScanLive()); len(rows) != 1 || rows[0] != 1 {
-		t.Fatalf("ScanLive: esperado [1], obtido %v", rows)
+	if rows := collectRows(t, s.ScanLive()); len(rows) != 1 || rows[0] != 0 {
+		t.Fatalf("ScanLive: esperado [0], obtido %v", rows)
+	}
+}
+
+func TestRowIDNaoEhReutilizadoAposFalhaPosAppend(t *testing.T) {
+	// C1(a) continua valendo do Append em diante: ali o id JÁ está queimado
+	// e não pode voltar ao pool — reuso quebraria a bijeção rowId↔key no log
+	// (ABA). O que mudou no R-B é só o que acontece ANTES da reserva.
+	s := openStore(t, Options{BitmapFields: []types.FieldID{fldStatus}})
+	s.SetSetErrHookForTest(func(types.FieldID) error { return errors.New("set falho simulado") })
+	if _, _, err := s.Put([]byte("queima"), 1, 0, statusPayload(t, s, "queima", "Start", 1), nil); err == nil {
+		t.Fatal("erro na fase de Set deveria falhar o Put")
+	}
+	// O id 0 foi consumido pelo Put que morreu depois do Append; o writer
+	// está sticky, então a prova é o estado pós-reopen do rowId.
+	if got := s.Stats().RowCount; got != 0 {
+		t.Fatalf("o Put falho não pode contar a row: RowCount=%d", got)
 	}
 }
 
