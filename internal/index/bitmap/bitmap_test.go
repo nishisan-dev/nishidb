@@ -33,6 +33,20 @@ func (r *orderRecorder) Truncate(size int64) error {
 }
 func (r *orderRecorder) Close() error { return r.inner.Close() }
 
+func TestDictSizeBytes(t *testing.T) {
+	ix, _ := openIndex(t, 7)
+	base := ix.DictSizeBytes()
+	if base != 8 {
+		t.Fatalf("dict recém-criado deveria ter só o header (8 bytes), tem %d", base)
+	}
+	if err := ix.Set(strValue("v1"), 1); err != nil {
+		t.Fatal(err)
+	}
+	if got := ix.DictSizeBytes(); got <= base {
+		t.Fatalf("DictSizeBytes deveria crescer com valor novo: %d", got)
+	}
+}
+
 func TestValorNovoEhFsyncadoAntesDoPrimeiroUso(t *testing.T) {
 	// I8: mesma invariante de replay do fields.dict (§8/§14.6) — o valor
 	// novo é gravado E fsyncado no values.dict ANTES de qualquer bit ser

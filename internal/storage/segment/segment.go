@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -177,6 +178,35 @@ func (w *Writer) Current() (uint32, int64) { return w.segID, w.offset }
 
 // Close fecha o segmento corrente.
 func (w *Writer) Close() error { return w.f.Close() }
+
+// SegmentRef descreve um segmento presente no diretório de dados.
+type SegmentRef struct {
+	ID        uint32
+	SizeBytes int64
+}
+
+// ListSegments enumera os segmentos do diretório em ordem crescente de ID
+// (usado pelo checkpoint e pelo dir-listing da recovery, design §10.3).
+func ListSegments(dir string) ([]SegmentRef, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("segment: listar %s: %w", dir, err)
+	}
+	var refs []SegmentRef
+	for _, e := range entries {
+		var id uint32
+		if _, err := fmt.Sscanf(e.Name(), "segment-%08d.dat", &id); err != nil || id == 0 {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			return nil, err
+		}
+		refs = append(refs, SegmentRef{ID: id, SizeBytes: info.Size()})
+	}
+	slices.SortFunc(refs, func(a, b SegmentRef) int { return int(a.ID) - int(b.ID) })
+	return refs, nil
+}
 
 // Reader lê records por localização física. Seguro para uso concorrente:
 // ReadAt não usa o cursor do arquivo e o cache de handles é protegido.

@@ -406,6 +406,45 @@ func TestReadSegmentoInexistente(t *testing.T) {
 	}
 }
 
+func TestListSegments(t *testing.T) {
+	dir := t.TempDir()
+	rec := makeRecord(t, 1, 1, "list-key", 100)
+	segSize := int64(HeaderSize + 2*len(rec))
+	w, err := OpenWriter(dir, segSize, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5; i++ { // 3 segmentos: {1,1,2,2,3}
+		if _, _, err := w.Append(rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w.Close()
+
+	refs, err := ListSegments(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 3 {
+		t.Fatalf("esperado 3 segmentos, obtido %v", refs)
+	}
+	for i, ref := range refs {
+		if ref.ID != uint32(i+1) {
+			t.Fatalf("ordem/IDs errados: %v", refs)
+		}
+		if ref.SizeBytes < HeaderSize {
+			t.Fatalf("tamanho inválido: %v", ref)
+		}
+	}
+	if refs[0].SizeBytes != int64(HeaderSize+2*len(rec)) {
+		t.Fatalf("segmento 1 selado deveria ter %d bytes, tem %d", HeaderSize+2*len(rec), refs[0].SizeBytes)
+	}
+
+	if empty, err := ListSegments(t.TempDir()); err != nil || len(empty) != 0 {
+		t.Fatalf("diretório vazio: (%v,%v)", empty, err)
+	}
+}
+
 func TestSyncNaoFalha(t *testing.T) {
 	w, err := OpenWriter(t.TempDir(), 1<<20, 0, 0)
 	if err != nil {

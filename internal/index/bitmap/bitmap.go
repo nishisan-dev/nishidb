@@ -335,6 +335,13 @@ func (ix *Index) Lookup(v types.Value) (*Iterator, bool, error) {
 	return &Iterator{region: r, nWords: (r.Size() - bmHeaderSize) / 8}, true, nil
 }
 
+// DictSizeBytes devolve o tamanho válido do values.dict (para o manifest).
+func (ix *Index) DictSizeBytes() int64 {
+	ix.mu.RLock()
+	defer ix.mu.RUnlock()
+	return ix.dictSize
+}
+
 // Values devolve o número de valores distintos registrados.
 func (ix *Index) Values() int {
 	ix.mu.RLock()
