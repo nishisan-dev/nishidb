@@ -139,6 +139,9 @@ type Store struct {
 	// Writer-only.
 	segTally map[uint32]*segStats
 
+	// lock garante acesso exclusivo ao diretório do dataset.
+	lock *datasetLock
+
 	// Buffers exclusivos do writer (Put).
 	buildBuf []byte // record em construção
 	prevBuf  []byte // fallback de leitura do estado anterior
@@ -197,7 +200,13 @@ func Open(opts Options) (*Store, error) {
 		}
 	}()
 
+	// Lock antes de tocar em qualquer arquivo do dataset. O Close no defer
+	// acima o libera nos caminhos de erro — um Open que falha não pode
+	// deixar o dataset travado até o processo morrer.
 	var err error
+	if s.lock, err = acquireDatasetLock(opts.Dir); err != nil {
+		return nil, err
+	}
 	if s.dict, err = fielddict.Open(filepath.Join(metaDir, "fields.dict")); err != nil {
 		return nil, err
 	}
@@ -1024,5 +1033,8 @@ func (s *Store) Close() error {
 	if s.dict != nil {
 		errs = append(errs, s.dict.Close())
 	}
+	// O lock sai por ÚLTIMO: enquanto qualquer arquivo do dataset estiver
+	// aberto aqui, outro processo não pode assumi-lo.
+	errs = append(errs, s.lock.release())
 	return errors.Join(errs...)
 }
