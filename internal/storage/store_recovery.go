@@ -209,10 +209,21 @@ func (s *Store) replayRecord(st *replayState, seg, off uint32, rec types.Record)
 	// Resíduo conhecido no tally: quando a row já existia em S e o tail traz
 	// um update cuja location está à frente, o record antigo continua
 	// contado como vivo — LiveRecords fica ACIMA do real (2 onde o certo é
-	// 1). É a direção segura da mesma assimetria do §14.16: superestimar
-	// liveness só adia a compaction, enquanto subestimar faria a compaction
-	// descartar dado vivo. O contador converge no próximo checkpoint que
-	// enxergar a row inteira.
+	// 1, com LiveBytes em 127 onde o certo é 63). É a direção segura da
+	// mesma assimetria do §14.16: superestimar liveness só adia a
+	// compaction, enquanto subestimar faria a compaction descartar dado
+	// vivo.
+	//
+	// O resíduo é PERMANENTE — nenhum checkpoint futuro o desconta. O
+	// decremento do applyRecord (§10.1 passo 3) identifica o record que
+	// virou garbage por s.locs.Get(rowID), e essa location já aponta para o
+	// record do tail: o que cada update seguinte desconta é o record
+	// anterior a ELE, nunca o órfão deixado aqui. Medido em
+	// TestResiduoDeLivenessDoReplayNaoConverge: um terceiro update com
+	// checkpoint completo mantém 2 records / 128 bytes vivos onde o certo é
+	// 1 / 64. Só uma varredura do segmento (compaction, M4) reconstrói o
+	// tally — e é justamente a compaction que consome este número no
+	// minimumLiveRatio, o que faz do erro um adiamento, nunca uma perda.
 	var prevPayload []byte
 	prevConhecido := false
 	if oldPacked, ok := s.locs.Get(id); ok {

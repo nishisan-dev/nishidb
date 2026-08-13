@@ -180,7 +180,8 @@ func TestReplayNaoDecrementaLivenessDeRecordVivo(t *testing.T) {
 	// do tail, e para elas os três modos batem exatamente. Uma row que já
 	// existia em S e recebe update no tail com location à frente cai no
 	// resíduo documentado em replayRecord — LiveRecords superestimado, que é
-	// o lado seguro. Este teste NÃO cobre esse caso.
+	// o lado seguro. Este teste NÃO cobre esse caso; quem o mede, e prova que
+	// ele não converge, é o TestResiduoDeLivenessDoReplayNaoConverge.
 	monta := func(t *testing.T, modo string) []checkpoint.SegmentInfo {
 		t.Helper()
 		dir := t.TempDir()
