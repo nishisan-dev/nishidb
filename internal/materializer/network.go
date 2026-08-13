@@ -2,12 +2,10 @@ package materializer
 
 import (
 	"encoding/base64"
-	"net/netip"
 
 	"github.com/nishisan-dev/nishidb/internal/jsonp"
 	"github.com/nishisan-dev/nishidb/internal/typeparse"
 	"github.com/nishisan-dev/nishidb/internal/types"
-	"github.com/nishisan-dev/nishidb/internal/unsafex"
 )
 
 // convertNetwork trata os alvos ipv4/ipv6/prefixes/bytes (todos exigem
@@ -26,31 +24,27 @@ func convertNetwork(f jsonp.Field, target types.FieldType, arena []byte) (types.
 		arena = append(arena, a, b, c, d)
 
 	case types.TypeIPv6:
-		// netip.ParseAddr não retém o argumento: unsafex.String é seguro.
-		addr, err := netip.ParseAddr(unsafex.String(f.Raw))
-		if err != nil || addr.Is4() || addr.Zone() != "" {
+		a16, ok := typeparse.IPv6(f.Raw)
+		if !ok {
 			return types.Value{}, arena, convErrf(target, "ipv6 inválido: %s", truncVal(f.Raw))
 		}
-		a16 := addr.As16()
 		arena = append(arena, a16[:]...)
 
 	case types.TypeIPv4Prefix:
-		pfx, err := netip.ParsePrefix(unsafex.String(f.Raw))
-		if err != nil || !pfx.Addr().Is4() {
+		a4, bits, ok := typeparse.IPv4Prefix(f.Raw)
+		if !ok {
 			return types.Value{}, arena, convErrf(target, "prefixo ipv4 inválido: %s", truncVal(f.Raw))
 		}
-		a4 := pfx.Addr().As4()
 		arena = append(arena, a4[:]...)
-		arena = append(arena, byte(pfx.Bits()))
+		arena = append(arena, bits)
 
 	case types.TypeIPv6Prefix:
-		pfx, err := netip.ParsePrefix(unsafex.String(f.Raw))
-		if err != nil || pfx.Addr().Is4() {
+		a16, bits, ok := typeparse.IPv6Prefix(f.Raw)
+		if !ok {
 			return types.Value{}, arena, convErrf(target, "prefixo ipv6 inválido: %s", truncVal(f.Raw))
 		}
-		a16 := pfx.Addr().As16()
 		arena = append(arena, a16[:]...)
-		arena = append(arena, byte(pfx.Bits()))
+		arena = append(arena, bits)
 
 	case types.TypeBytes:
 		var err error
