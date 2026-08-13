@@ -1,0 +1,76 @@
+// Baseline dos micro-benchmarks integrados — 2026-08-13, commit base 1ccee4d.
+//
+// Como reproduzir:
+//   NISHIDB_BENCH_DIR=/caminho/em/disco make bench-micro
+//
+// Como comparar com um baseline novo:
+//   benchstat benchmark/baselines/micro-20260813.txt novo.txt
+//
+// Ambiente: Intel Core 7 150U (12 threads), Linux 6.8, Go 1.26.5, NVMe.
+// Parâmetros: Apply* com -benchtime=20000x, Query*/FullScan com -benchtime=2000x,
+// -count=6 nos dois grupos.
+//
+// Leitura dos números (§88 pede ≥ 2.000 ev/s; §89 p95 < 10ms; §90 p95 < 50ms):
+//   - ApplyIngestReal ~8,6 µs/evento = ~116k ev/s por core no pipeline COMPLETO
+//     com Store real (append durável + índices + publicação), 0 allocs/op;
+//   - QueryPointLookup ~0,93 µs inclui a leitura do record (validação de
+//     colisão da primary obriga), 0 allocs;
+//   - QueryBitmapLimit100 ~56 µs para materializar 100 candidatos;
+//   - FullScan1k ~586 µs para 1000 rows = ~586 ns/row.
+//
+// As alocações residuais (2 B/op no lookup, 34 B/op no scan) são crescimento
+// amortizado de buffer, não alocação por operação — os gates de
+// benchmark/micro/gates_test.go aferem isso com AllocsPerRun.
+
+goos: linux
+goarch: amd64
+pkg: github.com/nishisan-dev/nishidb/benchmark/micro
+cpu: Intel(R) Core(TM) 7 150U
+BenchmarkApplyCreate-12        	   20000	      9859 ns/op	 158.43 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyCreate-12        	   20000	      9975 ns/op	 156.58 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyCreate-12        	   20000	      9767 ns/op	 159.93 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyCreate-12        	   20000	      9787 ns/op	 159.60 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyCreate-12        	   20000	      9783 ns/op	 159.67 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyCreate-12        	   20000	      9764 ns/op	 159.98 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyMergePatch-12    	   20000	      2042 ns/op	 135.14 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyMergePatch-12    	   20000	      2418 ns/op	 114.14 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyMergePatch-12    	   20000	      2056 ns/op	 134.23 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyMergePatch-12    	   20000	      2051 ns/op	 134.57 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyMergePatch-12    	   20000	      2057 ns/op	 134.17 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyMergePatch-12    	   20000	      2208 ns/op	 124.97 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyStale-12         	   20000	      1489 ns/op	 184.75 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyStale-12         	   20000	      1468 ns/op	 187.39 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyStale-12         	   20000	      1476 ns/op	 186.37 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyStale-12         	   20000	      1917 ns/op	 143.44 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyStale-12         	   20000	      1794 ns/op	 153.28 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyStale-12         	   20000	      1554 ns/op	 176.95 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyIngestFake-12    	   20000	      7174 ns/op	  38.47 MB/s	     286 B/op	       2 allocs/op
+BenchmarkApplyIngestFake-12    	   20000	      4905 ns/op	  56.27 MB/s	     286 B/op	       2 allocs/op
+BenchmarkApplyIngestFake-12    	   20000	      4810 ns/op	  57.38 MB/s	     283 B/op	       2 allocs/op
+BenchmarkApplyIngestFake-12    	   20000	      3588 ns/op	  76.93 MB/s	     285 B/op	       2 allocs/op
+BenchmarkApplyIngestFake-12    	   20000	      3450 ns/op	  79.99 MB/s	     283 B/op	       2 allocs/op
+BenchmarkApplyIngestFake-12    	   20000	      3486 ns/op	  79.17 MB/s	     283 B/op	       2 allocs/op
+BenchmarkApplyIngestReal-12    	   20000	     10264 ns/op	  26.89 MB/s	      13 B/op	       0 allocs/op
+BenchmarkApplyIngestReal-12    	   20000	      7617 ns/op	  36.23 MB/s	      13 B/op	       0 allocs/op
+BenchmarkApplyIngestReal-12    	   20000	      7086 ns/op	  38.95 MB/s	      15 B/op	       0 allocs/op
+BenchmarkApplyIngestReal-12    	   20000	      8121 ns/op	  33.98 MB/s	      13 B/op	       0 allocs/op
+BenchmarkApplyIngestReal-12    	   20000	      9289 ns/op	  29.71 MB/s	      13 B/op	       0 allocs/op
+BenchmarkApplyIngestReal-12    	   20000	      9539 ns/op	  28.93 MB/s	      13 B/op	       0 allocs/op
+BenchmarkQueryPointLookup-12       	    2000	       960.6 ns/op	       2 B/op	       0 allocs/op
+BenchmarkQueryPointLookup-12       	    2000	       971.6 ns/op	       2 B/op	       0 allocs/op
+BenchmarkQueryPointLookup-12       	    2000	       924.0 ns/op	       2 B/op	       0 allocs/op
+BenchmarkQueryPointLookup-12       	    2000	       936.3 ns/op	       2 B/op	       0 allocs/op
+BenchmarkQueryPointLookup-12       	    2000	       892.5 ns/op	       2 B/op	       0 allocs/op
+BenchmarkQueryPointLookup-12       	    2000	       922.3 ns/op	       2 B/op	       0 allocs/op
+BenchmarkQueryBitmapLimit100-12    	    2000	     55776 ns/op	      74 B/op	       3 allocs/op
+BenchmarkQueryBitmapLimit100-12    	    2000	     54333 ns/op	      74 B/op	       3 allocs/op
+BenchmarkQueryBitmapLimit100-12    	    2000	     66742 ns/op	      74 B/op	       3 allocs/op
+BenchmarkQueryBitmapLimit100-12    	    2000	     55047 ns/op	      74 B/op	       3 allocs/op
+BenchmarkQueryBitmapLimit100-12    	    2000	     54040 ns/op	      74 B/op	       3 allocs/op
+BenchmarkQueryBitmapLimit100-12    	    2000	     54765 ns/op	      74 B/op	       3 allocs/op
+BenchmarkFullScan1k-12             	    2000	    580350 ns/op	      34 B/op	       1 allocs/op
+BenchmarkFullScan1k-12             	    2000	    580950 ns/op	      34 B/op	       1 allocs/op
+BenchmarkFullScan1k-12             	    2000	    614013 ns/op	      34 B/op	       1 allocs/op
+BenchmarkFullScan1k-12             	    2000	    618712 ns/op	      34 B/op	       1 allocs/op
+BenchmarkFullScan1k-12             	    2000	    578998 ns/op	      34 B/op	       1 allocs/op
+BenchmarkFullScan1k-12             	    2000	    585780 ns/op	      34 B/op	       1 allocs/op
