@@ -34,6 +34,16 @@ import (
 // Os campos de CARDINALIDADE (Entities, StatusValues, NASCount,
 // TerminateCauses) tratam zero como default, porque zero ali não descreve
 // nenhum corpus: seria um gerador sem entidades ou sem vocabulário.
+// ARMADILHA CONHECIDA: os RATIOS são literais — 0 significa ZERO, não
+// "default". Só os campos de cardinalidade (Entities, StatusValues, NASCount,
+// TerminateCauses) tratam 0 como default. Um `Config{Seed: 42, Entities: 800}`
+// produz corpus SEM patch, SEM Extended JSON, SEM campo desconhecido e SEM
+// null — e o teste que o usar parece exercitar o workload real sem exercitar
+// nada disso. Comece de DefaultConfig() e sobrescreva o que precisar.
+//
+// A decisão de os ratios serem literais é deliberada (desligar uma dimensão
+// tem de ser possível); o que ela custa é esta armadilha, que já pegou o teste
+// de integração da I1.
 type Config struct {
 	Seed     uint64 // semente do PCG; 0 é uma semente válida
 	Entities int    // entidades distintas (0 → 10_000)

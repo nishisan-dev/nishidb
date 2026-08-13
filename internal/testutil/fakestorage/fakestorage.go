@@ -25,7 +25,16 @@
 //     caminho e vai instalar um seam de injeção quando o teste existir;
 //   - queima de rowId APÓS o append: no real, falha pós-append não tem
 //     rollback e o id fica queimado. Aqui não há ponto de não-retorno, então
-//     a validação é a única fronteira — a que importa para o consumidor.
+//     a validação é a única fronteira — a que importa para o consumidor;
+//   - validação de fieldID contra o DICIONÁRIO: o Store real recusa payload
+//     que referencie um fieldID inexistente (o dicionário é dele), e o dublê
+//     não tem dicionário — o `fakestorage.Dict` é um objeto separado, do
+//     teste. Consequência prática: um payload com fieldID inventado passa
+//     aqui e é recusado lá. Não é corrigível sem dar um dicionário ao dublê,
+//     e a rota real (materializer sobre schema.Compile) nunca produz um ID
+//     que não venha do dicionário. Registrado na I1; a paridade de
+//     comportamento do que o executor observa está coberta por
+//     comportamento_test.go.
 //
 // Escala pequena por design (maps): é infraestrutura de teste, não engine.
 package fakestorage
