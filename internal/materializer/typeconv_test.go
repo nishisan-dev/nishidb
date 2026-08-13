@@ -3,6 +3,7 @@ package materializer
 import (
 	"errors"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/nishisan-dev/nishidb/internal/jsonp"
@@ -213,6 +214,27 @@ func TestConvertJSON(t *testing.T) {
 	// Escalares não viram json na v1 (exigiria re-serialização com aspas).
 	convErr(t, str("abc"), types.TypeJSON)
 	convErr(t, num("1"), types.TypeJSON)
+}
+
+// I3 do fix round: o valor interpolado em erros é limitado (~64 bytes) —
+// um payload grande num campo errado não pode inflar logs/mensagens.
+func TestConversionErrorTruncatesValue(t *testing.T) {
+	big := `{"b":,` + strings.Repeat("x", 10_000) + `}`
+	_, _, err := Convert(obj(big), types.TypeJSON, nil)
+	if err == nil {
+		t.Fatal("esperava erro")
+	}
+	if n := len(err.Error()); n > 160 {
+		t.Errorf("mensagem não truncada: %d bytes", n)
+	}
+	if !strings.Contains(err.Error(), "…") {
+		t.Errorf("sem marcador de truncamento: %q", err.Error())
+	}
+	// Valor curto sai inteiro, sem marcador.
+	_, _, err = Convert(str("abc"), types.TypeInt64, nil)
+	if err == nil || strings.Contains(err.Error(), "…") {
+		t.Errorf("valor curto não deveria ser truncado: %v", err)
+	}
 }
 
 // O jsonp entrega janelas de nested por skip ESTRUTURAL, sem validar o

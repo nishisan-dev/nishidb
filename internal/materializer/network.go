@@ -21,7 +21,7 @@ func convertNetwork(f jsonp.Field, target types.FieldType, arena []byte) (types.
 	case types.TypeIPv4:
 		a, b, c, d, ok := typeparse.IPv4(f.Raw)
 		if !ok {
-			return types.Value{}, arena, convErrf(target, "ipv4 inválido: %s", f.Raw)
+			return types.Value{}, arena, convErrf(target, "ipv4 inválido: %s", truncVal(f.Raw))
 		}
 		arena = append(arena, a, b, c, d)
 
@@ -29,7 +29,7 @@ func convertNetwork(f jsonp.Field, target types.FieldType, arena []byte) (types.
 		// netip.ParseAddr não retém o argumento: unsafex.String é seguro.
 		addr, err := netip.ParseAddr(unsafex.String(f.Raw))
 		if err != nil || addr.Is4() || addr.Zone() != "" {
-			return types.Value{}, arena, convErrf(target, "ipv6 inválido: %s", f.Raw)
+			return types.Value{}, arena, convErrf(target, "ipv6 inválido: %s", truncVal(f.Raw))
 		}
 		a16 := addr.As16()
 		arena = append(arena, a16[:]...)
@@ -37,7 +37,7 @@ func convertNetwork(f jsonp.Field, target types.FieldType, arena []byte) (types.
 	case types.TypeIPv4Prefix:
 		pfx, err := netip.ParsePrefix(unsafex.String(f.Raw))
 		if err != nil || !pfx.Addr().Is4() {
-			return types.Value{}, arena, convErrf(target, "prefixo ipv4 inválido: %s", f.Raw)
+			return types.Value{}, arena, convErrf(target, "prefixo ipv4 inválido: %s", truncVal(f.Raw))
 		}
 		a4 := pfx.Addr().As4()
 		arena = append(arena, a4[:]...)
@@ -46,7 +46,7 @@ func convertNetwork(f jsonp.Field, target types.FieldType, arena []byte) (types.
 	case types.TypeIPv6Prefix:
 		pfx, err := netip.ParsePrefix(unsafex.String(f.Raw))
 		if err != nil || pfx.Addr().Is4() {
-			return types.Value{}, arena, convErrf(target, "prefixo ipv6 inválido: %s", f.Raw)
+			return types.Value{}, arena, convErrf(target, "prefixo ipv6 inválido: %s", truncVal(f.Raw))
 		}
 		a16 := pfx.Addr().As16()
 		arena = append(arena, a16[:]...)

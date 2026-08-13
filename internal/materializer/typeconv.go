@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"unicode/utf8"
 
 	"github.com/nishisan-dev/nishidb/internal/jsonp"
 	"github.com/nishisan-dev/nishidb/internal/typeparse"
@@ -54,7 +55,7 @@ func Convert(f jsonp.Field, target types.FieldType, arena []byte) (types.Value, 
 		}
 		n, err := typeparse.Int64(f.Raw)
 		if err != nil {
-			return types.Value{}, arena, convErrf(target, "%s: %s", err, f.Raw)
+			return types.Value{}, arena, convErrf(target, "%s: %s", err, truncVal(f.Raw))
 		}
 		return types.Value{Type: target, I64: n}, arena, nil
 
@@ -66,7 +67,7 @@ func Convert(f jsonp.Field, target types.FieldType, arena []byte) (types.Value, 
 		}
 		d, err := typeparse.Float64(f.Raw)
 		if err != nil {
-			return types.Value{}, arena, convErrf(target, "%s: %s", err, f.Raw)
+			return types.Value{}, arena, convErrf(target, "%s: %s", err, truncVal(f.Raw))
 		}
 		return types.Value{Type: target, I64: int64(math.Float64bits(d))}, arena, nil
 
@@ -85,14 +86,14 @@ func Convert(f jsonp.Field, target types.FieldType, arena []byte) (types.Value, 
 		case jsonp.KindString:
 			ms, err := typeparse.RFC3339Millis(f.Raw)
 			if err != nil {
-				return types.Value{}, arena, convErrf(target, "%s: %s", err, f.Raw)
+				return types.Value{}, arena, convErrf(target, "%s: %s", err, truncVal(f.Raw))
 			}
 			return types.Value{Type: target, I64: ms}, arena, nil
 		case jsonp.KindNumber:
 			// Número = epoch millis (inclui $date canonical já desembrulhado).
 			ms, err := typeparse.Int64(f.Raw)
 			if err != nil {
-				return types.Value{}, arena, convErrf(target, "epoch millis inválido: %s", f.Raw)
+				return types.Value{}, arena, convErrf(target, "epoch millis inválido: %s", truncVal(f.Raw))
 			}
 			return types.Value{Type: target, I64: ms}, arena, nil
 		}
@@ -107,7 +108,7 @@ func Convert(f jsonp.Field, target types.FieldType, arena []byte) (types.Value, 
 		// de armazenamento — o valor seria emitido verbatim pelo encoder
 		// NDJSON. json.Valid usa scanner pooled: 0 allocs em steady state.
 		if !json.Valid(f.Raw) {
-			return types.Value{}, arena, convErrf(target, "json aninhado inválido: %s", f.Raw)
+			return types.Value{}, arena, convErrf(target, "json aninhado inválido: %s", truncVal(f.Raw))
 		}
 		return appendBytesValue(target, f.Raw, arena)
 
@@ -149,6 +150,21 @@ func appendBytesValue(t types.FieldType, src, arena []byte) (types.Value, []byte
 	start := len(arena)
 	arena = append(arena, src...)
 	return types.Value{Type: t, Bytes: arena[start:len(arena):len(arena)]}, arena, nil
+}
+
+// truncVal limita o valor interpolado em mensagens de erro (o caminho de
+// erro pode receber payloads grandes). Corta em 64 bytes, recuando até um
+// início de rune para não partir UTF-8, e marca o corte com reticências.
+func truncVal(b []byte) string {
+	const max = 64
+	if len(b) <= max {
+		return string(b)
+	}
+	end := max
+	for end > 0 && !utf8.RuneStart(b[end]) {
+		end--
+	}
+	return string(b[:end]) + "…"
 }
 
 func convErrf(target types.FieldType, format string, args ...any) error {
