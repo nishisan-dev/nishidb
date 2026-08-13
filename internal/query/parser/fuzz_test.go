@@ -80,8 +80,17 @@ func FuzzParse(f *testing.F) {
 		var params []int
 		var walk func(parser.Expr, int)
 		walk = func(e parser.Expr, prof int) {
-			if prof > parser.MaxExprDepth+64 {
-				t.Fatal("árvore mais profunda que o teto do parser")
+			// MaxExprDepth limita o aninhamento de PARÊNTESES, não a altura da
+			// árvore: `a=1 AND a=1 AND …` é left-leaning e cresce um nível por
+			// termo, sem recursão no parser. A guarda anterior (MaxExprDepth+64)
+			// afirmava o contrário e reprovava query LEGAL a partir de ~130
+			// termos.
+			//
+			// O que é verdade: todo nó consome ao menos um token, então a altura
+			// não passa do tamanho da entrada. Isso ainda protege o walk de
+			// recursão infinita numa AST cíclica, que é o risco real aqui.
+			if prof > len(sql)+1 {
+				t.Fatalf("árvore com altura %d para %d bytes de query: nó sem token", prof, len(sql))
 			}
 			switch n := e.(type) {
 			case nil:
