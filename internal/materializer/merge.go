@@ -33,6 +33,12 @@ var ErrInternalState = errors.New("INTERNAL_STATE")
 // para reaproveitar a capacidade sem herdar o conteúdo. Devolve SEMPRE o
 // slice resultante, inclusive no erro, para o caller reter o buffer crescido.
 //
+// PRÉ-CONDIÇÃO: out e prevPayload não podem compartilhar o mesmo array. O
+// merge lê do prev enquanto escreve em out, então o aliasing corrompe a saída
+// de forma dependente dos dados — silenciosa quando as larguras coincidem. No
+// Apply a separação é estrutural (prevBuf e outBuf são campos distintos); a
+// nota existe para o próximo caller, que não terá essa garantia de graça.
+//
 // A saída sai com FieldIDs estritamente crescentes e sem TypeNull —
 // pré-condição do Put, que a revalida antes de tornar o record durável.
 func mergeRecords(prevPayload []byte, patch []patchEntry, out []byte) ([]byte, error) {

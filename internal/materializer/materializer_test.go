@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/jsonp"
 	"github.com/nishisan-dev/nishidb/internal/schema"
@@ -429,6 +430,100 @@ func TestApplyExcludeEWildcard(t *testing.T) {
 	h.wantString(st, "RemoteServerAddr", "10.0.0.9") // wildcard + unknown include
 }
 
+// §103 caso 12 + §19: os wrappers do Mongo Extended JSON são forma de
+// TRANSPORTE. O que a spec proíbe é ARMAZENÁ-LOS — e só um teste que chegue
+// ao payload gravado prova isso; parar no PatchBuffer deixaria de fora
+// justamente o passo em questão.
+func TestApplyMongoExtendedJSONNaoArmazenaWrapper(t *testing.T) {
+	h := newHarness(t, patchYAML)
+	r := h.apply(`{
+		"id":"M-1",
+		"_SEQ":{"$numberLong":"7455409733"},
+		"Event-Timestamp":{"$date":"2026-05-01T10:00:00Z"},
+		"Acct-Input-Octets":{"$numberLong":"5"}
+	}`)
+	if r.Action != ActionCreated {
+		t.Fatalf("Action = %v, want Created", r.Action)
+	}
+
+	st := h.state("M-1")
+	// Os valores chegam como tipos binários nativos: nem string com o JSON do
+	// wrapper, nem json opaco.
+	h.wantInt(st, "_SEQ", 7455409733)
+	h.wantInt(st, "Acct-Input-Octets", 5)
+	ts, ok := st["Event-Timestamp"]
+	if !ok {
+		t.Fatal("Event-Timestamp ausente do estado")
+	}
+	want, err := time.Parse(time.RFC3339, "2026-05-01T10:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ts.Type != types.TypeTimestamp || ts.I64 != want.UnixMilli() {
+		t.Errorf("Event-Timestamp = %+v, want timestamp %d", ts, want.UnixMilli())
+	}
+	// Nenhum campo do estado pode carregar o texto do wrapper.
+	for name, v := range st {
+		if strings.Contains(string(v.Bytes), "$numberLong") || strings.Contains(string(v.Bytes), "$date") {
+			t.Errorf("campo %q armazenou o wrapper: %q", name, v.Bytes)
+		}
+	}
+
+	// O seq extraído do $numberLong é o MESMO que alimenta o stale check:
+	// reenviar o evento é descartado.
+	if again := h.m.Apply([]byte(`{"id":"M-1","_SEQ":{"$numberLong":"7455409733"},"Acct-Input-Octets":9}`)); again.Action != ActionStale {
+		t.Fatalf("Action = %v, want Stale (o $numberLong precisa alimentar o sequence check)", again.Action)
+	}
+	h.wantInt(h.state("M-1"), "Acct-Input-Octets", 5)
+
+	// Shape canonical do $date (millis em $numberLong) segue o mesmo caminho.
+	h.apply(`{"id":"M-2","_SEQ":1,"Event-Timestamp":{"$date":{"$numberLong":"1786399690000"}}}`)
+	ts2 := h.state("M-2")["Event-Timestamp"]
+	if ts2.Type != types.TypeTimestamp || ts2.I64 != 1786399690000 {
+		t.Errorf("Event-Timestamp canonical = %+v, want 1786399690000", ts2)
+	}
+}
+
+const includeExplicitoYAML = `
+version: 1
+name: include_explicito
+materialization:
+  key:
+    field: id
+schema:
+  include:
+    - id
+    - a
+  fields:
+    id:
+      type: string
+    a:
+      type: int64
+    b:
+      type: int64
+`
+
+// §13/§14: com include EXPLÍCITO o universo é fechado — um campo DECLARADO em
+// fields: mas fora do include: não materializa. É o que separa "declarei o
+// tipo" de "quero o campo", e sem o teste a diferença entre o wildcard e a
+// lista explícita some.
+//
+// (A spec já impede a combinação oposta: unknownFields: include com lista
+// explícita é recusado no Compile, porque seria universo fechado e aberto ao
+// mesmo tempo.)
+func TestApplyIncludeExplicitoFechaOUniverso(t *testing.T) {
+	h := newHarness(t, includeExplicitoYAML)
+	h.apply(`{"id":"X","a":1,"b":2,"c":3}`)
+
+	st := h.state("X")
+	h.wantInt(st, "a", 1)
+	h.wantAbsent(st, "b") // declarado, mas fora do include
+	h.wantAbsent(st, "c") // desconhecido, e o universo está fechado
+	if n := len(st); n != 2 {
+		t.Errorf("estado com %d campos: %+v (esperado só id e a)", n, st)
+	}
+}
+
 // ---------------------------------------------------------------- erros §101
 
 func TestApplyCategoriasDeEventoRuim(t *testing.T) {
@@ -446,6 +541,9 @@ func TestApplyCategoriasDeEventoRuim(t *testing.T) {
 			event: `{"id":"A", "_SEQ":`,
 			cat:   CategoryInvalidJSON,
 			is:    jsonp.ErrInvalidJSON,
+			// A posição do erro é o que torna o log acionável num evento de
+			// 2 KB; sem ela o operador recebe "json inválido" e nada mais.
+			msg: "posição",
 		},
 		{
 			nome:  "schema_validation",
@@ -646,6 +744,123 @@ func TestApplyErroDeLeituraEhFailed(t *testing.T) {
 	}
 	if len(st.Store.PutCalls) != 0 {
 		t.Errorf("erro de leitura não pode virar escrita: %+v", st.Store.PutCalls)
+	}
+}
+
+// storePayloadTruncado devolve um estado corrente ILEGÍVEL: é a corrupção
+// vindo do storage, que o merge detecta e o Apply precisa classificar como
+// defeito NOSSO, nunca como evento ruim.
+type storePayloadTruncado struct {
+	*fakestorage.Store
+	rec types.Record
+}
+
+func (s storePayloadTruncado) GetByKey(key, buf []byte) (types.Record, []byte, bool, error) {
+	buf = buf[:0]
+	buf = append(buf, key...)
+	keyEnd := len(buf)
+	buf = append(buf, s.rec.Payload...)
+	return types.Record{
+		RowID:    s.rec.RowID,
+		Sequence: s.rec.Sequence,
+		Key:      buf[:keyEnd:keyEnd],
+		Payload:  buf[keyEnd:len(buf):len(buf)],
+	}, buf, true, nil
+}
+
+// A regra é normativa e inegociável: erro que indica BUG NOSSO jamais entra na
+// métrica de evento ruim, senão esconde exatamente o defeito que a próxima
+// mudança pode introduzir. Este teste é a rede dela — cobre a classificação
+// (INTERNAL_STATE, não TYPE_CONVERSION), o balde (Failed, não Skipped), a
+// contabilidade (FailedTotal, não InvalidTotal) e o corte do write path
+// (nenhum payload parcial de um prev corrompido pode chegar ao Put).
+func TestApplyPrevIlegivelEhInternalState(t *testing.T) {
+	c := compileYAML(t, patchYAML)
+	// Payload de um campo string, truncado no meio do valor.
+	prev := encodeFields(t, fieldKV{1, vi64(10)}, fieldKV{2, vstr("abcdef")})
+	st := storePayloadTruncado{
+		Store: fakestorage.New(fakestorage.Indexes{}),
+		rec:   types.Record{RowID: 7, Sequence: 1, Payload: prev[:len(prev)-3]},
+	}
+	m := New(c, st)
+
+	r := m.Apply([]byte(`{"id":"A","_SEQ":99,"Acct-Input-Octets":3}`))
+
+	if r.Action != ActionFailed {
+		t.Errorf("Action = %v, want Failed (evento bom, estado podre)", r.Action)
+	}
+	if r.Category != CategoryInternal {
+		t.Errorf("Category = %v, want INTERNAL_STATE", r.Category)
+	}
+	if r.Fatal() {
+		t.Error("prev corrompido não é writer em modo falho: o caller decide, não para de vez")
+	}
+	if !errors.Is(r.Err, ErrInternalState) {
+		t.Errorf("erro = %v, want ErrInternalState", r.Err)
+	}
+	if !strings.Contains(r.Err.Error(), "estado anterior ilegível") {
+		t.Errorf("mensagem = %q, want identificar a guarda", r.Err)
+	}
+	// Um payload montado a partir de prev ilegível é PARCIAL: se escapasse
+	// para o Put, gravaria estado incompleto por cima do bom.
+	if len(st.Store.PutCalls) != 0 {
+		t.Errorf("merge falho chegou ao Put: %+v", st.Store.PutCalls)
+	}
+	mt := m.Metrics()
+	if mt.FailedTotal != 1 || mt.InvalidTotal != 0 || mt.ByCategory[CategoryInternal] != 1 {
+		t.Errorf("métricas = %+v, want FailedTotal=1 InvalidTotal=0 ByCategory[INTERNAL_STATE]=1", mt)
+	}
+	if mt.ByCategory[CategoryTypeConversion] != 0 {
+		t.Error("erro interno contabilizado como TYPE_CONVERSION")
+	}
+}
+
+// Os rótulos são o que o operador lê na métrica e no log: um mapeamento
+// trocado manda investigar a coisa errada.
+func TestRotulosDeActionECategoria(t *testing.T) {
+	actions := map[Action]string{
+		ActionCreated:  "created",
+		ActionUpdated:  "updated",
+		ActionReplaced: "replaced",
+		ActionStale:    "stale",
+		ActionSkipped:  "skipped",
+		ActionFailed:   "failed",
+	}
+	for a, want := range actions {
+		if got := a.String(); got != want {
+			t.Errorf("Action(%d).String() = %q, want %q", a, got, want)
+		}
+	}
+	if got := Action(200).String(); got != "action(?)" {
+		t.Errorf("Action fora de faixa = %q", got)
+	}
+
+	cats := map[ErrorCategory]string{
+		CategoryNone:             "none",
+		CategoryInvalidJSON:      "INVALID_JSON",
+		CategorySchemaValidation: "SCHEMA_VALIDATION",
+		CategoryInvalidKey:       "INVALID_KEY",
+		CategoryInvalidSequence:  "INVALID_SEQUENCE",
+		CategoryTypeConversion:   "TYPE_CONVERSION",
+		CategoryWriterFailed:     "WRITER_FAILED",
+		CategoryStorage:          "STORAGE_ERROR",
+		CategoryInternal:         "INTERNAL_STATE",
+	}
+	for c, want := range cats {
+		if got := c.String(); got != want {
+			t.Errorf("ErrorCategory(%d).String() = %q, want %q", c, got, want)
+		}
+	}
+	if got := ErrorCategory(200).String(); got != "category(?)" {
+		t.Errorf("ErrorCategory fora de faixa = %q", got)
+	}
+	// As cinco categorias §101 são as ÚNICAS de evento ruim: a fronteira do
+	// balde é o que separa "pule este evento" de "temos um bug".
+	for c := CategoryNone; c < numCategories; c++ {
+		want := c >= CategoryInvalidJSON && c <= CategoryTypeConversion
+		if got := c.badEvent(); got != want {
+			t.Errorf("%v.badEvent() = %v, want %v", c, got, want)
+		}
 	}
 }
 

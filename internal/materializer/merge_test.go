@@ -299,6 +299,31 @@ func TestMergeReutilizaBufferDeSaida(t *testing.T) {
 	wantFields(t, out2, fieldKV{4, vi64(4)}, fieldKV{5, vi64(5)})
 }
 
+// Trava a pré-condição de aliasing documentada no mergeRecords: buffers de
+// entrada e saída são DISTINTOS no Apply, e este teste registra o que o
+// contrato garante — o resultado é o mesmo do caso normal quando os arrays
+// são separados, e o prev permanece intacto (o merge não escreve nele).
+func TestMergeNaoEscreveNoPrev(t *testing.T) {
+	prev := encodeFields(t, fieldKV{1, vi64(10)}, fieldKV{2, vstr("original")}, fieldKV{5, vi64(50)})
+	copia := append([]byte(nil), prev...)
+
+	out := make([]byte, 0, 256)
+	got, err := mergeRecords(prev, []patchEntry{pe(2, vstr("novo")), pe(9, vi64(90))}, out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantFields(t, got, fieldKV{1, vi64(10)}, fieldKV{2, vstr("novo")}, fieldKV{5, vi64(50)}, fieldKV{9, vi64(90)})
+
+	if !bytes.Equal(prev, copia) {
+		t.Errorf("o merge alterou o payload anterior:\n got  %x\n want %x", prev, copia)
+	}
+	// E a saída não pode ser uma janela sobre o prev: o Put recebe os dois e
+	// o prev precisa sobreviver ao diff de índices.
+	if len(got) > 0 && len(prev) > 0 && &got[0] == &prev[0] {
+		t.Error("a saída compartilha o array do prev")
+	}
+}
+
 func TestEncodePatchSoCamposDoPatch(t *testing.T) {
 	got := mustEncode(t, []patchEntry{pe(1, vi64(1)), peNull(2), pe(3, vstr("x"))})
 	wantFields(t, got, fieldKV{1, vi64(1)}, fieldKV{3, vstr("x")})
@@ -386,5 +411,27 @@ func TestEncodePatchValueInvalida(t *testing.T) {
 	_, err := encodePatch([]patchEntry{pe(1, types.Value{Type: types.TypeIPv4, Bytes: []byte{1, 2}})}, nil)
 	if !errors.Is(err, encoding.ErrInvalidPayload) {
 		t.Fatalf("erro = %v, want encoding.ErrInvalidPayload", err)
+	}
+}
+
+// O mesmo pelo caminho do MERGE: engolir o erro do codificador deixaria a
+// saída sem o campo — um estado silenciosamente incompleto, que é pior que a
+// falha, porque o Put aceitaria o payload truncado sem reclamar.
+func TestMergeAppendFieldErroPropaga(t *testing.T) {
+	prev := encodeFields(t, fieldKV{1, vi64(10)})
+	inválida := types.Value{Type: types.TypeIPv4, Bytes: []byte{1, 2}} // ipv4 exige 4 bytes
+
+	_, err := mergeRecords(prev, []patchEntry{pe(2, inválida)}, nil)
+	if !errors.Is(err, encoding.ErrInvalidPayload) {
+		t.Fatalf("erro = %v, want encoding.ErrInvalidPayload", err)
+	}
+	if !strings.Contains(err.Error(), "exige 4 bytes") {
+		t.Errorf("mensagem = %q, want identificar a largura esperada", err)
+	}
+
+	// E também quando o campo inválido sobrescreve um do prev (o ramo em que o
+	// cursor do prev já avançou).
+	if _, err := mergeRecords(prev, []patchEntry{pe(1, inválida)}, nil); !errors.Is(err, encoding.ErrInvalidPayload) {
+		t.Errorf("sobrescrita com Value inválida: erro = %v, want encoding.ErrInvalidPayload", err)
 	}
 }

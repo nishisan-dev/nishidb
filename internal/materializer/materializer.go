@@ -27,6 +27,11 @@ type Store interface {
 	// preservar o conteúdo anterior (append sobre o que recebeu) — isso faria
 	// o buffer do writer crescer sem limite, um evento por vez, sem que
 	// nenhum teste de comportamento percebesse.
+	//
+	// O buffer precisa voltar em TODOS os caminhos, inclusive key ausente e
+	// erro: devolver nil ali faz o materializer perder o buffer e realocar a
+	// cada evento, e isso não aparece em nenhum teste de comportamento — só
+	// no gate de alocação.
 	GetByKey(key, buf []byte) (types.Record, []byte, bool, error)
 
 	// Put publica o estado novo. prev != nil evita o re-lookup e entrega o
@@ -69,6 +74,10 @@ func (a Action) String() string {
 // categorias de evento ruim da spec §101; as três últimas separam o que NÃO é
 // culpa do evento — a distinção que impede um bug nosso de desaparecer na
 // métrica de fonte ruidosa.
+//
+// STALE_EVENT, que a §101 lista, NÃO é categoria de erro aqui: descarte por
+// sequence não é falha, é o funcionamento normal do §25. Ele aparece como
+// ActionStale e StaleTotal, sem Err.
 type ErrorCategory uint8
 
 const (
@@ -81,9 +90,18 @@ const (
 	// CategoryWriterFailed: writer em modo falho (sticky, §14.14). Terminal:
 	// reprocessar o evento é inútil até o dataset ser reaberto.
 	CategoryWriterFailed
-	// CategoryStorage: erro do store que não é modo falho (argumento
-	// inválido, leitura corrompida, falha do dicionário). Indica bug nosso ou
-	// dataset avariado, não evento ruim.
+	// CategoryStorage: erro do store que não é modo falho — argumento
+	// inválido, leitura corrompida, falha do dicionário. Em geral indica bug
+	// nosso ou dataset avariado.
+	//
+	// Ressalva conhecida: os tetos de FORMATO do storage também caem aqui e
+	// esses SÃO culpa do evento — valor acima de types.MaxIndexedValueBytes
+	// (64 KiB) num campo com bitmap, key acima do teto do record. Enquanto
+	// não houver uma 6ª categoria de evento ruim para eles, um evento
+	// gigante conta como Failed/STORAGE_ERROR e não como Skipped. É
+	// conservador na direção certa (pede atenção humana em vez de sumir na
+	// contagem de "fonte ruidosa"), mas o operador precisa saber disso ao
+	// ler a métrica.
 	CategoryStorage
 	// CategoryInternal: inconsistência detectada pelo próprio materializer
 	// (ErrInternalState).
@@ -193,7 +211,6 @@ func New(c *schema.Compiled, s Store) *Materializer {
 // parado — não use como base de decisão de controle de fluxo.
 func (m *Materializer) Metrics() MetricsSnapshot {
 	s := MetricsSnapshot{
-		EventsTotal:   m.metrics.events.Load(),
 		CreatedTotal:  m.metrics.created.Load(),
 		UpdatedTotal:  m.metrics.updated.Load(),
 		ReplacedTotal: m.metrics.replaced.Load(),
@@ -204,6 +221,13 @@ func (m *Materializer) Metrics() MetricsSnapshot {
 	for i := range s.ByCategory {
 		s.ByCategory[i] = m.metrics.byCat[i].Load()
 	}
+	// events é lido por ÚLTIMO, de propósito: o Apply o incrementa na ENTRADA
+	// e o desfecho na SAÍDA, então ler events primeiro deixaria o writer
+	// avançar entre as leituras e produziria um snapshot com
+	// soma(desfechos) > EventsTotal — um exporter que publique "eventos em
+	// voo" mostraria valor negativo. Lendo por último, o desvio é monotônico e
+	// sempre no mesmo sentido: o déficit são os eventos em processamento.
+	s.EventsTotal = m.metrics.events.Load()
 	return s
 }
 
@@ -271,6 +295,13 @@ func (m *Materializer) Apply(event []byte) ApplyResult {
 	}
 	rowID, created, err := m.store.Put(m.patch.key, m.patch.seq, 0, payload, prev)
 	if err != nil {
+		// O rowID devolvido junto com erro é descartado de propósito. Com
+		// SyncEveryPut, uma falha de fsync devolve (rowID, created, err) com o
+		// estado JÁ commitado e visível — mas o writer ficou sticky, então o
+		// desfecho correto é Failed+Fatal e a ingestão para. Reportar Created
+		// aqui faria o caller contabilizar sucesso num writer morto; o evento
+		// "perdido" volta pelo reprocessamento e o stale check o descarta se
+		// já tiver sido aplicado.
 		return m.failure(err)
 	}
 
