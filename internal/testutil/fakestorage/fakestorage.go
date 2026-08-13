@@ -162,7 +162,12 @@ func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *ty
 	if prev != nil && !bytes.Equal(prev.Key, key) {
 		return 0, false, fmt.Errorf("%w: prev pertence à key %q, não a %q", types.ErrInvalidArgument, prev.Key, key)
 	}
-	if _, err := encoding.ValidatePayload(payload); err != nil {
+	// ValidateRecord, e não ValidatePayload: é o que o Store REAL chama, e ele
+	// aplica também os tetos de formato (MaxKeySize, MaxRecordSize). Com a
+	// validação mais fraca, o dublê ACEITAVA record que o real recusa — a
+	// divergência mais perigosa que um dublê pode ter, porque o teste passa no
+	// desenvolvimento e a ingestão falha em produção.
+	if _, err := encoding.ValidateRecord(key, payload); err != nil {
 		return 0, false, err
 	}
 	if err := s.validateIndexable(payload); err != nil {
