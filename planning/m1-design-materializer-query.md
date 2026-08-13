@@ -835,8 +835,30 @@ Caminho crítico: T0→T1→T3→T4→T8→T9→T10 (materializer) e T11→T12�
 | R8 | **Lifetime de buffers zero-copy**: `Field.Raw` do parser e `Row` do executor válidos só até o próximo Next — uso após avanço = corrupção silenciosa | Contrato em doc comment + cópia imediata p/ arena no PatchBuffer; testes documentais; considerar `-race` + testes com reuso agressivo de buffer (sobrescrever com 0xAA no Reset em builds de teste) |
 | R9 | **Desalinhamento com o plano de storage** | **Contrato FECHADO em 2026-08-12** (§2.2/§2.4/§3.7; §15A no plano do storage). Risco residual: drift de implementação — mitigado por testes de contrato + golden files (T6) |
 | R10 | **Chave/sequence ausentes ou JSON duplicado** em eventos reais sujos | Categorias §101 mapeadas em T8; política log-and-skip testada; last-wins documentado |
-| R11 | **int64 vs double no `auto`**: número "5000" vira int64, depois patch traz "5000.5" → conflito de tipo no mesmo campo | Regra v1: tipo do campo auto é fixado na PRIMEIRA observação (registrada no dicionário); conversão posterior incompatível = TYPE_CONVERSION log-and-skip. Documentar |
+| R11 | **int64 vs double no `auto`**: número "5000" vira int64, depois patch traz "5000.5" → conflito de tipo no mesmo campo | **RESOLVIDO na QP.** Tipo do campo auto é fixado na PRIMEIRA observação e PERSISTIDO no `typeHint` do `fields.dict` (registro append-only, v2), então sobrevive a restart; conversão posterior incompatível = TYPE_CONVERSION log-and-skip. `EffectiveType()` expõe o tipo ao binder; `TypeNull` = "nunca observado" e é o único estado em que a comparação é recusada. Ver a nota sobre o conflito de dicionário logo abaixo |
 | R12 | **Gerador contaminando a medição** (allocs do harness contadas como allocs da engine) | Gerador ~0 alloc (D8) + corpus pré-gerado nos micro-benchmarks |
+
+### R11 — quando o conflito de tipo aparece de verdade (nota da QP)
+
+O conflito de tipo do dicionário (`fielddict.ErrTypeHintConflict`) é **inalcançável com um único
+`schema.Compiled`**, e isso não é acidente: `FixAutoType` só é chamado quando o campo ainda está sem
+tipo em memória, e nesse estado o dicionário também não tem hint — porque o `ResolveUnknown` carrega
+o hint no instante em que resolve o campo. Uma rede de teste construída sobre um único `Compiled`
+protege o nada: a mutação que remove a classificação do conflito sobrevive a ela.
+
+A condição real exige **dois `Compiled` sobre o MESMO dicionário**, que é do dataset e não do
+processo:
+
+1. o `Compiled` A resolve o campo com um evento cujo valor é `null` — que não fixa tipo (fixar
+   `TypeNull` gravaria "sem tipo" e travaria o campo);
+2. o `Compiled` B observa o mesmo campo com um valor real e fixa, digamos, `string`;
+3. o `Compiled` A recebe um evento com número e tenta fixar `int64` — e aí o dicionário recusa.
+
+**Isso acontece em produção a partir da I1 e do CLI da I2**: ingerir e consultar o mesmo dataset no
+mesmo processo significa dois `Compiled` compartilhando o dicionário. Por isso o conflito é
+embrulhado em `ErrTypeConversion` (evento ruim, `Skipped`, a ingestão segue) e não deixado cair no
+default do `classify`, que o trataria como erro de storage e **pararia a ingestão** por causa de um
+campo que mudou de formato na origem. Teste: `TestConflitoDeTipoNoDicionarioEhEventoRuim`.
 
 ---
 
