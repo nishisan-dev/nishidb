@@ -92,6 +92,9 @@ type Store struct {
 	// cpTrace é o seam de teste da ordem de durabilidade do checkpoint
 	// (nil em produção).
 	cpTrace func(step string)
+	// clearErrHook é o seam de teste do caminho de Clear tolerado
+	// (nil em produção).
+	clearErrHook func(types.FieldID) error
 
 	// segTally acumula os totais por segmento que o writer conhece (para as
 	// stats do manifest §9; em memória — a S12 os reconstrói no replay).
@@ -339,10 +342,13 @@ func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *ty
 	if err := s.validateKnownFields(payload); err != nil {
 		return 0, false, err
 	}
-	// 2. append (rotação interna ao segment).
+	// 2. append (rotação interna ao segment). TODO erro do Append é sticky:
+	// a rotação embute fdatasync do segmento selado e fsync de diretório
+	// (erro de durabilidade ali não pode escapar do modo falho — fsyncgate),
+	// e um WriteAt parcial também não tem rollback confiável.
 	seg, off, err := s.segW.Append(rec)
 	if err != nil {
-		return 0, false, err
+		return 0, false, s.failWriter(err)
 	}
 	s.curSegID.Store(seg)
 	// 3. offset accounting: packing + tally do segmento (stats do manifest).
@@ -524,7 +530,7 @@ func (s *Store) applyBitmapClears(rowID types.RowID, prevPayload, newPayload []b
 		switch {
 		case pok && (!nok || pid < nid):
 			if ix := s.bitmaps[pid]; ix != nil {
-				if err := ix.Clear(pv, rowID); err != nil {
+				if err := s.clearBit(ix, pid, pv, rowID); err != nil {
 					s.clearFailures.Add(1)
 				}
 			}
@@ -533,7 +539,7 @@ func (s *Store) applyBitmapClears(rowID types.RowID, prevPayload, newPayload []b
 			nid, nv, nok = nr.Next()
 		default: // pid == nid
 			if ix := s.bitmaps[pid]; ix != nil && !valueEqual(pv, nv) {
-				if err := ix.Clear(pv, rowID); err != nil {
+				if err := s.clearBit(ix, pid, pv, rowID); err != nil {
 					s.clearFailures.Add(1)
 				}
 			}
@@ -544,6 +550,17 @@ func (s *Store) applyBitmapClears(rowID types.RowID, prevPayload, newPayload []b
 	if pr.Err() != nil || nr.Err() != nil {
 		s.clearFailures.Add(1)
 	}
+}
+
+// clearBit executa o Clear com o seam de injeção de erro dos testes do
+// caminho tolerado (nil em produção).
+func (s *Store) clearBit(ix *bitmap.Index, field types.FieldID, v types.Value, rowID types.RowID) error {
+	if s.clearErrHook != nil {
+		if err := s.clearErrHook(field); err != nil {
+			return err
+		}
+	}
+	return ix.Clear(v, rowID)
 }
 
 // liveIterator percorre lazy as rows vivas até o limite fixado na criação.

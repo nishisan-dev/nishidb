@@ -196,14 +196,20 @@ func decode(raw []byte) (*Manifest, error) {
 }
 
 // writeTrace é o seam de teste da ordem de durabilidade do Write (nil em
-// produção). Os eventos são emitidos junto de cada operação para que
-// remover/reordenar a operação também remova/reordene o evento.
+// produção).
 var writeTrace func(step string)
 
-func emit(step string) {
-	if writeTrace != nil {
-		writeTrace(step)
+// step executa a operação e, em sucesso, emite o evento — amarrar o trace à
+// execução garante que remover a operação também remove o evento (poder de
+// detecção contra a mutação "remove o Sync, mantém o emit").
+func step(name string, op func() error) error {
+	if err := op(); err != nil {
+		return err
 	}
+	if writeTrace != nil {
+		writeTrace(name)
+	}
+	return nil
 }
 
 // Write grava o manifest atomicamente: tmp → fsync → rename → fsync do
@@ -215,28 +221,28 @@ func Write(path string, m *Manifest) error {
 	if err != nil {
 		return fmt.Errorf("checkpoint: criar %s: %w", tmp, err)
 	}
-	if _, err := f.Write(data); err != nil {
+	if err := step("write", func() error {
+		_, werr := f.Write(data)
+		return werr
+	}); err != nil {
 		f.Close()
 		return fmt.Errorf("checkpoint: escrever %s: %w", tmp, err)
 	}
-	emit("write")
-	if err := f.Sync(); err != nil {
+	if err := step("fsync", f.Sync); err != nil {
 		f.Close()
 		return err
 	}
-	emit("fsync")
 	if err := f.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := step("rename", func() error {
+		return os.Rename(tmp, path)
+	}); err != nil {
 		return fmt.Errorf("checkpoint: rename do manifest: %w", err)
 	}
-	emit("rename")
-	if err := syncDir(filepath.Dir(path)); err != nil {
-		return err
-	}
-	emit("dirsync")
-	return nil
+	return step("dirsync", func() error {
+		return syncDir(filepath.Dir(path))
+	})
 }
 
 // syncDir força a durabilidade da entrada de diretório após um rename.
