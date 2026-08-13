@@ -58,22 +58,33 @@ type Config struct {
 
 // PhaseReport agrega uma fase.
 type PhaseReport struct {
-	Name          string  `json:"name"`
-	Events        int64   `json:"events"`
-	Created       int64   `json:"created"`
-	Updated       int64   `json:"updated"`
-	Stale         int64   `json:"stale"`
-	Skipped       int64   `json:"skipped"`
-	Failed        int64   `json:"failed"`
-	DurationSec   float64 `json:"duration_sec"`
-	EventsPerSec  float64 `json:"events_per_sec"`
-	AllocsPerEven float64 `json:"allocs_per_event"`
-	MaxRSSBytes   uint64  `json:"max_rss_bytes"`
-	EndRSSBytes   uint64  `json:"end_rss_bytes"`
-	EndAnonBytes  uint64  `json:"end_anon_rss_bytes"`
-	EndFileBytes  uint64  `json:"end_file_rss_bytes"`
-	HeapStable    uint64  `json:"heap_stable_bytes"` // HeapAlloc após runtime.GC()
-	GCPerMin      float64 `json:"gc_per_min"`
+	Name        string  `json:"name"`
+	Events      int64   `json:"events"`
+	Created     int64   `json:"created"`
+	Updated     int64   `json:"updated"`
+	Stale       int64   `json:"stale"`
+	Skipped     int64   `json:"skipped"`
+	Failed      int64   `json:"failed"`
+	DurationSec float64 `json:"duration_sec"`
+	// IngestSec e CheckpointSec decompõem a duração. A separação existe
+	// porque, ao throughput medido (~50k ev/s), o pipeline NÃO é o gargalo da
+	// rodada — checkpoint e fsync são. Sem a decomposição, uma rodada que
+	// estoure o orçamento de tempo exigiria repetir 3 minutos de ingestão só
+	// para descobrir de que lado olhar.
+	IngestSec       float64 `json:"ingest_sec"`
+	CheckpointSec   float64 `json:"checkpoint_sec"`
+	CheckpointCount int     `json:"checkpoint_count"`
+	// EventsPerSec é sobre a duração TOTAL (o número que a operação sente).
+	EventsPerSec float64 `json:"events_per_sec"`
+	// IngestEventsPerSec exclui o tempo de checkpoint: é o teto do pipeline.
+	IngestEventsPerSec float64 `json:"ingest_events_per_sec"`
+	AllocsPerEven      float64 `json:"allocs_per_event"`
+	MaxRSSBytes        uint64  `json:"max_rss_bytes"`
+	EndRSSBytes        uint64  `json:"end_rss_bytes"`
+	EndAnonBytes       uint64  `json:"end_anon_rss_bytes"`
+	EndFileBytes       uint64  `json:"end_file_rss_bytes"`
+	HeapStable         uint64  `json:"heap_stable_bytes"` // HeapAlloc após runtime.GC()
+	GCPerMin           float64 `json:"gc_per_min"`
 }
 
 // QueryStats são as latências de uma classe de leitura.
@@ -234,8 +245,11 @@ func Run(cfg Config) (*Report, error) {
 	if err != nil {
 		return nil, err
 	}
-	fmt.Fprintf(cfg.Out, "LOAD: %d eventos em %.1fs (%.0f ev/s), RSS %s\n",
-		rep.Load.Events, rep.Load.DurationSec, rep.Load.EventsPerSec, humanBytes(rep.Load.EndRSSBytes))
+	fmt.Fprintf(cfg.Out, "LOAD: %d eventos em %.1fs (%.0f ev/s; ingestão %.1fs a %.0f ev/s, "+
+		"%d checkpoints em %.1fs), RSS %s\n",
+		rep.Load.Events, rep.Load.DurationSec, rep.Load.EventsPerSec,
+		rep.Load.IngestSec, rep.Load.IngestEventsPerSec,
+		rep.Load.CheckpointCount, rep.Load.CheckpointSec, humanBytes(rep.Load.EndRSSBytes))
 
 	// FASE STEADY — carga de regime com leituras concorrentes.
 	if cfg.SteadyDuration > 0 {
@@ -351,9 +365,12 @@ func runPhase(a phaseArgs) (PhaseReport, error) {
 			desdeCkpt++
 			if desdeCkpt >= a.cfg.CheckpointOn {
 				desdeCkpt = 0
+				ckptInício := time.Now()
 				if err := a.st.Checkpoint(); err != nil {
 					return rep, fmt.Errorf("ingest-bench: checkpoint: %w", err)
 				}
+				rep.CheckpointSec += time.Since(ckptInício).Seconds()
+				rep.CheckpointCount++
 			}
 		}
 		if now := time.Now(); now.After(próxima) {
@@ -365,8 +382,12 @@ func runPhase(a phaseArgs) (PhaseReport, error) {
 	}
 
 	rep.DurationSec = time.Since(início).Seconds()
+	rep.IngestSec = rep.DurationSec - rep.CheckpointSec
 	if rep.DurationSec > 0 {
 		rep.EventsPerSec = float64(rep.Events) / rep.DurationSec
+	}
+	if rep.IngestSec > 0 {
+		rep.IngestEventsPerSec = float64(rep.Events) / rep.IngestSec
 	}
 
 	// Heap estável: mede DEPOIS de um GC forçado, senão o número é lixo

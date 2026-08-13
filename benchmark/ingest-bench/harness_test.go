@@ -278,6 +278,48 @@ func TestCheckpointDuranteIngestao(t *testing.T) {
 	if _, err := os.Stat(manifest); err != nil {
 		t.Errorf("diretório de checkpoint ausente: %v", err)
 	}
+
+	// O tempo de checkpoint sai SEPARADO do de ingestão: ao throughput
+	// medido, o gargalo da rodada é o checkpoint, e descobrir isso não pode
+	// exigir repetir a rodada inteira.
+	if rep.Load.CheckpointCount != 3 {
+		t.Errorf("CheckpointCount = %d, want 3 (300 eventos a cada 100)", rep.Load.CheckpointCount)
+	}
+	if rep.Load.CheckpointSec <= 0 {
+		t.Error("CheckpointSec = 0 com checkpoints executados")
+	}
+	if rep.Load.IngestSec <= 0 || rep.Load.IngestSec >= rep.Load.DurationSec {
+		t.Errorf("IngestSec = %f fora de (0, %f)", rep.Load.IngestSec, rep.Load.DurationSec)
+	}
+	if soma := rep.Load.IngestSec + rep.Load.CheckpointSec; abs(soma-rep.Load.DurationSec) > 1e-6 {
+		t.Errorf("ingestão + checkpoint = %f, want %f", soma, rep.Load.DurationSec)
+	}
+	// Excluir o tempo de checkpoint só pode AUMENTAR a taxa.
+	if rep.Load.IngestEventsPerSec <= rep.Load.EventsPerSec {
+		t.Errorf("IngestEventsPerSec (%.0f) <= EventsPerSec (%.0f)",
+			rep.Load.IngestEventsPerSec, rep.Load.EventsPerSec)
+	}
+}
+
+// Sem checkpoint, a decomposição continua coerente: tudo é ingestão.
+func TestSemCheckpointTudoEhIngestao(t *testing.T) {
+	rep, err := Run(baseConfig(t, 100))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Load.CheckpointCount != 0 || rep.Load.CheckpointSec != 0 {
+		t.Errorf("checkpoint contabilizado sem estar ligado: %+v", rep.Load)
+	}
+	if abs(rep.Load.IngestSec-rep.Load.DurationSec) > 1e-6 {
+		t.Errorf("IngestSec = %f, want %f", rep.Load.IngestSec, rep.Load.DurationSec)
+	}
+}
+
+func abs(f float64) float64 {
+	if f < 0 {
+		return -f
+	}
+	return f
 }
 
 // Config inválida falha ANTES de tocar em disco.
