@@ -98,15 +98,65 @@ func Int64(b []byte) (int64, error) {
 	return n, nil
 }
 
-// Float64 converte um número (sintaxe aceita pelo strconv.ParseFloat, que
-// cobre a gramática de número JSON). ParseFloat não retém o argumento,
-// então a conversão via unsafex.String é segura.
+// Float64 converte um número na gramática de número JSON (RFC 8259):
+// -?(0|[1-9][0-9]*)(.[0-9]+)?([eE][+-]?[0-9]+)?. A gramática é imposta
+// ANTES do strconv.ParseFloat porque este aceita formas que a ingestão
+// nunca produziria (NaN, Inf, hex float, underscores) — e a coerção de
+// strings declaradas como double deve se comportar byte a byte como um
+// número que entrasse cru no JSON. ParseFloat não retém o argumento, então
+// a conversão via unsafex.String é segura.
 func Float64(b []byte) (float64, error) {
+	if !JSONNumber(b) {
+		return 0, errFloatSyntax
+	}
 	d, err := strconv.ParseFloat(unsafex.String(b), 64)
 	if err != nil {
 		return 0, errFloatSyntax
 	}
 	return d, nil
+}
+
+// JSONNumber reporta se b casa exatamente a gramática de número do RFC
+// 8259 (sem espaços, sem sinal +, sem leading zeros, sem NaN/Inf/hex).
+func JSONNumber(b []byte) bool {
+	i := 0
+	if i < len(b) && b[i] == '-' {
+		i++
+	}
+	switch {
+	case i < len(b) && b[i] == '0':
+		i++
+	case i < len(b) && b[i] >= '1' && b[i] <= '9':
+		for i < len(b) && b[i] >= '0' && b[i] <= '9' {
+			i++
+		}
+	default:
+		return false
+	}
+	if i < len(b) && b[i] == '.' {
+		i++
+		start := i
+		for i < len(b) && b[i] >= '0' && b[i] <= '9' {
+			i++
+		}
+		if i == start {
+			return false
+		}
+	}
+	if i < len(b) && (b[i] == 'e' || b[i] == 'E') {
+		i++
+		if i < len(b) && (b[i] == '+' || b[i] == '-') {
+			i++
+		}
+		start := i
+		for i < len(b) && b[i] >= '0' && b[i] <= '9' {
+			i++
+		}
+		if i == start {
+			return false
+		}
+	}
+	return i == len(b)
 }
 
 // RFC3339Millis converte um timestamp RFC 3339 (único formato string aceito

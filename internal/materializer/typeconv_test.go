@@ -87,14 +87,59 @@ func TestConvertInt64(t *testing.T) {
 			t.Errorf("Convert(%q) = %d, want %d", tc.in, v.I64, tc.want)
 		}
 	}
-	// int64 não aceita fração/expoente, string de dígitos, bool, overflow.
+	// int64 não aceita fração/expoente, bool, object, overflow.
 	convErr(t, num("3.14"), types.TypeInt64)
 	convErr(t, num("1e3"), types.TypeInt64)
 	convErr(t, num("9223372036854775808"), types.TypeInt64)
 	convErr(t, num("-9223372036854775809"), types.TypeInt64)
-	convErr(t, str("123"), types.TypeInt64)
 	convErr(t, boolean(true), types.TypeInt64)
 	convErr(t, obj(`{"x":1}`), types.TypeInt64)
+}
+
+// Ajuste pós-amostra (vinculante): com o tipo DECLARADO no YAML, strings
+// parseáveis são coeridas — a amostra real traz Connect-Info como string
+// "1000000000" num campo int64. Em `auto`, string permanece string (o
+// InferType não adivinha — coberto em TestInferType).
+func TestCoerceDeclaredStringToNumeric(t *testing.T) {
+	// int64 ← string de dígitos (-?[0-9]+).
+	if v := convOK(t, str("1000000000"), types.TypeInt64); v.I64 != 1000000000 {
+		t.Errorf("Connect-Info coerido = %d", v.I64)
+	}
+	if v := convOK(t, str("123"), types.TypeInt64); v.I64 != 123 {
+		t.Errorf("I64 = %d", v.I64)
+	}
+	if v := convOK(t, str("-42"), types.TypeInt64); v.I64 != -42 {
+		t.Errorf("I64 = %d", v.I64)
+	}
+	convErr(t, str(""), types.TypeInt64)
+	convErr(t, str("abc"), types.TypeInt64)
+	convErr(t, str("1.5"), types.TypeInt64)
+	convErr(t, str(" 12 "), types.TypeInt64)
+	convErr(t, str("9223372036854775808"), types.TypeInt64)
+
+	// double ← string com a MESMA gramática de número JSON (nada de NaN,
+	// Inf, hex ou underscore — coerência com o que entra por number).
+	if v := convOK(t, str("3.14"), types.TypeDouble); math.Float64frombits(uint64(v.I64)) != 3.14 {
+		t.Errorf("double = %v", math.Float64frombits(uint64(v.I64)))
+	}
+	if v := convOK(t, str("1e6"), types.TypeDouble); math.Float64frombits(uint64(v.I64)) != 1e6 {
+		t.Errorf("double = %v", math.Float64frombits(uint64(v.I64)))
+	}
+	if v := convOK(t, str("-0.5"), types.TypeDouble); math.Float64frombits(uint64(v.I64)) != -0.5 {
+		t.Errorf("double = %v", math.Float64frombits(uint64(v.I64)))
+	}
+	convErr(t, str(""), types.TypeDouble)
+	convErr(t, str("abc"), types.TypeDouble)
+	convErr(t, str("NaN"), types.TypeDouble)
+	convErr(t, str("Inf"), types.TypeDouble)
+	convErr(t, str("0x1p2"), types.TypeDouble)
+	convErr(t, str("1_000"), types.TypeDouble)
+	convErr(t, str(" 1 "), types.TypeDouble)
+	convErr(t, str("01"), types.TypeDouble)
+
+	// A coerção NÃO se estende a bool nem à direção contrária.
+	convErr(t, str("true"), types.TypeBool)
+	convErr(t, num("1"), types.TypeString)
 }
 
 func TestConvertExtNumberLong(t *testing.T) {
@@ -124,8 +169,8 @@ func TestConvertDouble(t *testing.T) {
 			t.Errorf("Convert(%q) = %v, want %v", tc.in, got, tc.want)
 		}
 	}
-	convErr(t, str("3.14"), types.TypeDouble)
 	convErr(t, boolean(false), types.TypeDouble)
+	convErr(t, obj(`{"x":1}`), types.TypeDouble)
 }
 
 func TestConvertBool(t *testing.T) {

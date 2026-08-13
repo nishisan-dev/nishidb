@@ -46,8 +46,10 @@ func Convert(f jsonp.Field, target types.FieldType, arena []byte) (types.Value, 
 		return appendBytesValue(target, f.Raw, arena)
 
 	case types.TypeInt64:
-		if f.Kind != jsonp.KindNumber {
-			return types.Value{}, arena, convErrf(target, "esperava número JSON, veio %v", f.Kind)
+		// Ajuste pós-amostra (vinculante): tipo declarado coerce string de
+		// dígitos — a amostra real traz Connect-Info como "1000000000".
+		if f.Kind != jsonp.KindNumber && f.Kind != jsonp.KindString {
+			return types.Value{}, arena, convErrf(target, "esperava número JSON ou string numérica, veio %v", f.Kind)
 		}
 		n, err := typeparse.Int64(f.Raw)
 		if err != nil {
@@ -56,8 +58,10 @@ func Convert(f jsonp.Field, target types.FieldType, arena []byte) (types.Value, 
 		return types.Value{Type: target, I64: n}, arena, nil
 
 	case types.TypeDouble:
-		if f.Kind != jsonp.KindNumber {
-			return types.Value{}, arena, convErrf(target, "esperava número JSON, veio %v", f.Kind)
+		// Coerção string→double com a MESMA gramática de número JSON
+		// (typeparse.Float64 a impõe; nada de NaN/Inf/hex).
+		if f.Kind != jsonp.KindNumber && f.Kind != jsonp.KindString {
+			return types.Value{}, arena, convErrf(target, "esperava número JSON ou string numérica, veio %v", f.Kind)
 		}
 		d, err := typeparse.Float64(f.Raw)
 		if err != nil {
