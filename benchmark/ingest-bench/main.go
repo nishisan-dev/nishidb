@@ -16,7 +16,8 @@ func main() {
 		seed     = flag.Uint64("seed", 42, "semente do corpus (determinística)")
 		steady   = flag.Duration("steady", 0, "duração da fase STEADY (0 = pular)")
 		rate     = flag.Int("rate", 500, "eventos/s no STEADY (0 = sem limite)")
-		readers  = flag.Int("queries", 0, "goroutines de leitura concorrente no STEADY")
+		readers  = flag.Int("queries", 0, "goroutines de leitura de baixo nível no STEADY")
+		sqlQrs   = flag.Int("sql-queries", 0, "goroutines de consulta SQL concorrente no STEADY")
 		sample   = flag.Duration("sample", 5*time.Second, "intervalo de amostragem de memória")
 		segment  = flag.Int64("segment-size", 0, "tamanho do segmento em bytes (0 = default do Store)")
 		// Checkpoint LIGADO por default: sem ele o overlay de locations fica
@@ -69,6 +70,7 @@ Sai com código 1 se algum gate DURO for violado.
 		SteadyDuration: *steady,
 		SteadyRate:     *rate,
 		Readers:        *readers,
+		SQLReaders:     *sqlQrs,
 		SampleInterval: *sample,
 		SegmentSize:    *segment,
 		CheckpointOn:   *ckpt,

@@ -45,7 +45,12 @@ type Config struct {
 
 	SteadyDuration time.Duration // duração da fase STEADY
 	SteadyRate     int           // eventos/s na fase STEADY (0 = sem limite)
-	Readers        int           // goroutines de leitura concorrente durante o STEADY
+	Readers        int           // goroutines de leitura de baixo nível no STEADY
+	// SQLReaders são goroutines de consulta SQL concorrentes no STEADY, pelo
+	// caminho completo (parse → bind → plan → executor → NDJSON). A §109 exige
+	// o número de memória com ingestão E consultas; a rodada anterior mediu
+	// com leitores de baixo nível porque o SQL ainda não existia.
+	SQLReaders     int
 	SampleInterval time.Duration // intervalo de amostragem de memória
 	// SampleEveryEvents amostra também por CONTAGEM, não só por tempo
 	// (0 → Entities/50). Sem isso a resolução da curva depende da duração da
@@ -123,6 +128,7 @@ type Report struct {
 	Load       PhaseReport      `json:"load"`
 	Steady     PhaseReport      `json:"steady"`
 	Queries    []QueryStats     `json:"queries,omitempty"`
+	SQLErrors  int64            `json:"sql_errors"`
 	Samples    []Sample         `json:"samples"`
 	Gates      []GateResult     `json:"gates"`
 	StoreStats StoreStatsReport `json:"store_stats"`
@@ -137,6 +143,7 @@ type ConfigSummary struct {
 	SteadySec      int    `json:"steady_sec"`
 	SteadyRate     int    `json:"steady_rate"`
 	Readers        int    `json:"readers"`
+	SQLReaders     int    `json:"sql_readers"`
 	SegmentSize    int64  `json:"segment_size"`
 	CheckpointOn   int    `json:"checkpoint_every_events"`
 	RSSLimitBytes  uint64 `json:"rss_limit_bytes"`
@@ -242,7 +249,7 @@ func Run(cfg Config) (*Report, error) {
 		Config: ConfigSummary{
 			Entities: cfg.Entities, Seed: cfg.Seed,
 			SteadySec: int(cfg.SteadyDuration.Seconds()), SteadyRate: cfg.SteadyRate,
-			Readers: cfg.Readers, SegmentSize: cfg.SegmentSize,
+			Readers: cfg.Readers, SQLReaders: cfg.SQLReaders, SegmentSize: cfg.SegmentSize,
 			CheckpointOn: cfg.CheckpointOn, RSSLimitBytes: cfg.RSSLimitBytes,
 			SpecPath:       cfg.SpecPath,
 			DataDirPresent: true,
@@ -283,19 +290,24 @@ func Run(cfg Config) (*Report, error) {
 			return nil, err
 		}
 		readers := startReaders(cfg, st, c)
-		fmt.Fprintf(cfg.Out, "STEADY: %s a %d ev/s com %d leitores...\n",
-			cfg.SteadyDuration, cfg.SteadyRate, cfg.Readers)
+		sqlReaders := startSQLReaders(cfg, st, c, amostraDeKeys(cfg))
+		fmt.Fprintf(cfg.Out, "STEADY: %s a %d ev/s com %d leitores e %d consultas SQL...\n",
+			cfg.SteadyDuration, cfg.SteadyRate, cfg.Readers, cfg.SQLReaders)
 		rep.Steady, err = runPhase(phaseArgs{
 			name: "steady", cfg: cfg, m: m, gen: steadyGen, col: col,
 			duration: cfg.SteadyDuration, rate: cfg.SteadyRate, st: st,
 		})
 		if err != nil {
 			readers.stop()
+			sqlReaders.stop()
 			return nil, err
 		}
 		rep.Queries = readers.stop()
-		fmt.Fprintf(cfg.Out, "STEADY: %d eventos, RSS max %s\n",
-			rep.Steady.Events, humanBytes(rep.Steady.MaxRSSBytes))
+		statsSQL, errosSQL := sqlReaders.stop()
+		rep.Queries = append(rep.Queries, statsSQL...)
+		rep.SQLErrors = errosSQL
+		fmt.Fprintf(cfg.Out, "STEADY: %d eventos, RSS max %s, %d erros de query\n",
+			rep.Steady.Events, humanBytes(rep.Steady.MaxRSSBytes), errosSQL)
 	}
 
 	rep.Samples = col.samples
@@ -510,6 +522,27 @@ type readerPool struct {
 }
 
 var classNames = [3]string{"point_lookup", "bitmap_limit_100", "scan_1k"}
+
+// amostraDeKeys devolve keys REAIS do dataset, tiradas do mesmo gerador
+// determinístico da fase LOAD — é o que garante que o point lookup medido
+// encontra row, em vez de medir o caminho de "não achou".
+func amostraDeKeys(cfg Config) [][]byte {
+	gen, err := radiusgen.New(radiusgen.Config{
+		Seed: cfg.Seed + 2, Entities: cfg.Entities, Sequential: true,
+	})
+	if err != nil {
+		return nil
+	}
+	keys := make([][]byte, 0, 1024)
+	var buf []byte
+	for i := 0; i < 1024 && i < cfg.Entities; i++ {
+		buf = gen.Next(buf[:0])
+		if k := extractKey(buf); k != nil {
+			keys = append(keys, k)
+		}
+	}
+	return keys
+}
 
 func startReaders(cfg Config, st *storage.Store, c *schema.Compiled) *readerPool {
 	p := &readerPool{stopCh: make(chan struct{})}
@@ -756,6 +789,13 @@ func evaluateGates(cfg Config, rep *Report) []GateResult {
 	// Nenhum evento pode ser perdido em silêncio: descarte é sinal de corpus
 	// ou pipeline quebrado, não de carga.
 	perdidos := rep.Load.Failed + rep.Steady.Failed + rep.Load.Skipped + rep.Steady.Skipped
+	if rep.Config.SQLReaders > 0 {
+		gates = append(gates, GateResult{
+			Name: "no_query_error", Spec: "§106", Hard: true,
+			Passed: rep.SQLErrors == 0,
+			Detail: fmt.Sprintf("%d erros nas consultas SQL concorrentes com a ingestão", rep.SQLErrors),
+		})
+	}
 	gates = append(gates, GateResult{
 		Name: "no_event_loss", Spec: "§101", Hard: true,
 		Passed: perdidos == 0,
@@ -766,17 +806,35 @@ func evaluateGates(cfg Config, rep *Report) []GateResult {
 	for _, q := range rep.Queries {
 		var teto float64
 		var spec string
+		// As rotas SQL são DURAS: a §89 e a §90 falam da latência que o
+		// usuário paga, e o caminho dele é o completo (parse → bind → plan →
+		// executor → NDJSON). As de baixo nível continuam medidas, agora como
+		// referência — a diferença entre as duas é o custo do front-end SQL.
+		duro := false
 		switch q.Class {
-		case "point_lookup":
-			teto, spec = 10_000, "§89"
-		case "bitmap_limit_100":
+		case "sql_point_lookup":
+			teto, spec, duro = 10_000, "§89", true
+		case "sql_bitmap_limit_100":
+			teto, spec, duro = 50_000, "§90", true
+		case "sql_intersect_limit_100", "sql_union_limit_100", "sql_full_scan_limit_100":
 			teto, spec = 50_000, "§90"
+		case "sql_full_scan_completo":
+			// Varredura completa do dataset: não tem teto de latência (a §90 é
+			// de query INDEXADA). O número entra no relatório porque é o custo
+			// real de um full scan, e é o que justifica a métrica
+			// query.full_scan existir.
+			teto, spec = 0, "§64 (varredura completa, sem teto)"
+		case "point_lookup":
+			teto, spec = 10_000, "§89 (baixo nível, referência)"
+		case "bitmap_limit_100":
+			teto, spec = 50_000, "§90 (baixo nível, referência)"
 		default:
 			continue
 		}
+		passou := teto == 0 || q.P95Micr <= teto
 		gates = append(gates, GateResult{
-			Name: "latency_" + q.Class, Spec: spec, Hard: false,
-			Passed: q.P95Micr <= teto,
+			Name: "latency_" + q.Class, Spec: spec, Hard: duro,
+			Passed: passou,
 			Detail: fmt.Sprintf("p95 = %.0f µs, teto %.0f µs (%d amostras)", q.P95Micr, teto, q.Count),
 		})
 	}
