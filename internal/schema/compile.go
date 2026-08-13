@@ -29,6 +29,12 @@ const (
 	UnknownReject
 )
 
+// IndexKind é o índice secundário declarado para o campo no YAML.
+//
+// IndexHash é ACEITO na configuração desde o M1, mas o índice físico só
+// existe a partir da Fase 8 (M4): até lá o metadado é carregado sem efeito
+// colateral e as queries sobre o campo caem no caminho de scan. Declarar
+// hash hoje é, portanto, um forward-compat sem penalidade.
 type IndexKind uint8
 
 const (

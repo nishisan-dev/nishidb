@@ -1,0 +1,203 @@
+version: 1
+
+name: radius_sessions
+
+source:
+  type: kafka
+
+  kafka:
+    bootstrapServers:
+      - kafka01:9092
+      - kafka02:9092
+      - kafka03:9092
+
+    topic: radius-accounting
+
+    consumer:
+      groupId: nishidb-radius
+      autoOffsetReset: earliest
+      maxPollRecords: 1000
+      ingestionQueueSize: 5000
+
+    security:
+      protocol: SASL_SSL
+      saslMechanism: SCRAM-SHA-512
+      usernameEnv: KAFKA_USERNAME
+      passwordEnv: KAFKA_PASSWORD
+
+materialization:
+  key:
+    source: payload
+    field: id
+    type: string
+
+  mode: merge
+
+  sequence:
+    field: _SEQ
+    type: int64
+    strategy: greater
+
+  ttl:
+    field: EventExpireDate
+    type: timestamp
+
+  tombstoneRetention: 7d
+
+schema:
+  include:
+    - "*"
+
+  unknownFields: include
+
+  fields:
+    id:
+      type: string
+      alias: service_id
+
+    _id:
+      type: string
+
+    _SEQ:
+      type: int64
+
+    Acct-Authentic:
+      type: string
+      alias: acct_authentic
+      index: bitmap
+
+    Acct-Session-Id:
+      type: string
+      alias: session_id
+
+    Acct-Status-Type:
+      type: string
+      alias: status
+      index: bitmap
+
+    Calling-Station-Id:
+      type: string
+      alias: calling_station_id
+
+    Class:
+      type: string
+
+    Connect-Info:
+      type: int64
+      alias: connect_info
+
+    Event-Timestamp:
+      type: timestamp
+      alias: event_timestamp
+
+    EventExpireDate:
+      type: timestamp
+      alias: expiration
+
+    Filter-Id:
+      type: string
+      alias: filter_id
+      index: bitmap
+
+    Framed-IPv6-Prefix:
+      type: ipv6_prefix
+      alias: ipv6_prefix
+
+    Framed-Interface-Id:
+      type: string
+
+    Framed-Protocol:
+      type: string
+      alias: protocol
+      index: bitmap
+
+    Idle-Timeout:
+      type: int64
+
+    LastSessionStartedDate:
+      type: timestamp
+
+    NAS-IP-Address:
+      type: ipv4
+      alias: nas_ip
+      index: hash
+
+    NAS-Identifier:
+      type: string
+      alias: nas
+      index: hash
+
+    NAS-Port:
+      type: int64
+
+    NAS-Port-Id:
+      type: string
+      alias: nas_port_id
+
+    NAS-Port-Type:
+      type: string
+      index: bitmap
+
+    PSA-SERVER:
+      type: ipv4
+
+    Service-Type:
+      type: string
+      index: bitmap
+
+    Session-Timeout:
+      type: int64
+
+    User-Name:
+      type: string
+      alias: username
+
+    _insertedDate:
+      type: timestamp
+
+    _lastUpdate:
+      type: timestamp
+
+    Acct-Input-Gigawords:
+      type: int64
+
+    Acct-Input-Octets:
+      type: int64
+
+    Acct-Input-Packets:
+      type: int64
+
+    Acct-Output-Gigawords:
+      type: int64
+
+    Acct-Output-Octets:
+      type: int64
+
+    Acct-Output-Packets:
+      type: int64
+
+    Acct-Session-Time:
+      type: int64
+
+    Framed-IP-Address:
+      type: ipv4
+      alias: ip
+      index: hash
+
+    LastSessionAliveDate:
+      type: timestamp
+
+    Delegated-IPv6-Prefix:
+      type: ipv6_prefix
+
+    Acct-Terminate-Cause:
+      type: string
+      alias: terminate_cause
+      index: bitmap
+
+    LastSessionStoppedDate:
+      type: timestamp
+
+query:
+  maxRows: 100000
+  timeout: 30s
