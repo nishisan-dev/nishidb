@@ -348,6 +348,10 @@ func TestParseTypeConversionError(t *testing.T) {
 	if !contains(err.Error(), "Acct-Status-Type") {
 		t.Errorf("erro deveria citar o campo: %v", err)
 	}
+	// O tipo alvo aparece pelo nome, não pela tag numérica do wire.
+	if !contains(err.Error(), "string") {
+		t.Errorf("erro deveria citar o tipo alvo pelo nome: %v", err)
+	}
 }
 
 func TestParseInvalidJSON(t *testing.T) {

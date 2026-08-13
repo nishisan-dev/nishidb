@@ -5,6 +5,8 @@
 // interface de comportamento (interfaces são declaradas nos consumidores).
 package types
 
+import "strconv"
+
 // FieldType identifica o tipo lógico de um campo (spec §17-18) e é também a
 // tag de tipo no wire format do payload (spec §33).
 type FieldType uint8
@@ -26,6 +28,32 @@ const (
 	TypeBytes      FieldType = 0x0A // varlen
 	TypeJSON       FieldType = 0x0B // varlen, JSON UTF-8 cru
 )
+
+// fieldTypeNames mapeia a tag para o nome do tipo no vocabulário do YAML.
+var fieldTypeNames = [...]string{
+	TypeNull:       "null",
+	TypeInt64:      "int64",
+	TypeDouble:     "double",
+	TypeBool:       "boolean",
+	TypeTimestamp:  "timestamp",
+	TypeIPv4:       "ipv4",
+	TypeIPv6:       "ipv6",
+	TypeIPv4Prefix: "ipv4_prefix",
+	TypeIPv6Prefix: "ipv6_prefix",
+	TypeString:     "string",
+	TypeBytes:      "bytes",
+	TypeJSON:       "json",
+}
+
+// String devolve o nome do tipo como o operador o escreveu no YAML. Sem
+// ele, toda mensagem que interpola um FieldType imprime a tag numérica do
+// wire — "conversão para 1 falhou" em vez de "conversão para int64 falhou".
+func (t FieldType) String() string {
+	if int(t) < len(fieldTypeNames) && fieldTypeNames[t] != "" {
+		return fieldTypeNames[t]
+	}
+	return "FieldType(0x" + strconv.FormatUint(uint64(t), 16) + ")"
+}
 
 // FieldID identifica um campo no field dictionary do dataset (spec §32).
 // O valor 0 é reservado; IDs válidos começam em 1.
