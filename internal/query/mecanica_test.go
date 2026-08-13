@@ -132,8 +132,8 @@ query:
 `
 
 // montaStub cria n rows com nome="linha" e n=índice.
-func montaStub(t *testing.T, sch *schema.Compiled, n int) *stub {
-	t.Helper()
+func montaStub(tb testing.TB, sch *schema.Compiled, n int) *stub {
+	tb.Helper()
 	id, _ := sch.FieldByName([]byte("id"))
 	nome, _ := sch.FieldByName([]byte("nome"))
 	num, _ := sch.FieldByName([]byte("n"))
@@ -160,7 +160,7 @@ func montaStub(t *testing.T, sch *schema.Compiled, n int) *stub {
 		var err error
 		for _, c := range campos {
 			if p, err = encoding.AppendField(p, c.f.ID, c.v(i)); err != nil {
-				t.Fatal(err)
+				tb.Fatal(err)
 			}
 		}
 		rid := types.RowID(i)
@@ -172,7 +172,7 @@ func montaStub(t *testing.T, sch *schema.Compiled, n int) *stub {
 }
 
 type stubHarness struct {
-	t      *testing.T
+	tb     testing.TB
 	sch    *schema.Compiled
 	store  *stub
 	engine *query.Engine
@@ -180,33 +180,44 @@ type stubHarness struct {
 
 func novoStubHarness(t *testing.T, rows, maxRows int, timeout string) *stubHarness {
 	t.Helper()
+	return montaStubHarness(t, rows, maxRows, timeout)
+}
+
+// novoStubHarnessB é o mesmo para benchmarks (teto e timeout folgados).
+func novoStubHarnessB(b *testing.B, rows int) *stubHarness {
+	b.Helper()
+	return montaStubHarness(b, rows, 10_000_000, "5m")
+}
+
+func montaStubHarness(tb testing.TB, rows, maxRows int, timeout string) *stubHarness {
+	tb.Helper()
 	spec, err := schema.Parse([]byte(fmt.Sprintf(stubYAML, maxRows, timeout)))
 	if err != nil {
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
 	sch, err := spec.Compile(fakestorage.NewDict())
 	if err != nil {
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
-	st := montaStub(t, sch, rows)
+	st := montaStub(tb, sch, rows)
 	eng := query.NewEngine()
 	if err := eng.Register("linhas", sch, st); err != nil {
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
-	return &stubHarness{t: t, sch: sch, store: st, engine: eng}
+	return &stubHarness{tb: tb, sch: sch, store: st, engine: eng}
 }
 
 func (h *stubHarness) abre(ctx context.Context, sql string) executor.RowIterator {
-	h.t.Helper()
+	h.tb.Helper()
 	it, err := h.engine.Execute(ctx, "linhas", sql, nil)
 	if err != nil {
-		h.t.Fatalf("Execute(%q): %v", sql, err)
+		h.tb.Fatalf("Execute(%q): %v", sql, err)
 	}
 	return it
 }
 
 func (h *stubHarness) conta(sql string) (int, error) {
-	h.t.Helper()
+	h.tb.Helper()
 	it := h.abre(context.Background(), sql)
 	defer it.Close()
 	n := 0

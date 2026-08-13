@@ -1,0 +1,25 @@
+Baseline do executor de query — 2026-08-13
+Intel Core 7 150U (12 threads), Linux 6.8, Go 1.26.5
+
+go test ./internal/query/ -run XXX -bench . -benchtime 300x
+
+BenchmarkFullScan1k-12                    137211 ns/op    2200 B/op    30 allocs/op
+BenchmarkFullScanSemWhere1k-12             98877 ns/op    1344 B/op    20 allocs/op
+BenchmarkScanLimit100-12                    8109 ns/op    1344 B/op    20 allocs/op
+BenchmarkPointLookup-12                     2925 ns/op    1952 B/op    29 allocs/op
+BenchmarkPredicadoDeMuitosTermos-12       269709 ns/op   27472 B/op   176 allocs/op
+
+Leitura dos números:
+
+- As alocações são POR QUERY, não por row: o gate
+  TestScanAllocsIndependenteDoNumeroDeRows prova a igualdade entre 1.000 e
+  8.000 linhas. Em 1.000 rows são ~137 ns/row de custo de pipeline (fonte,
+  coleta por merge linear, predicado, projeção).
+- BenchmarkScanLimit100 varre um dataset de 100.000 rows com LIMIT 100 e custa
+  8 µs — 17x MENOS que o full scan de 1.000 rows. É a evidência direta do
+  early-exit: sem ele o número seria da ordem de 13 ms.
+- BenchmarkPredicadoDeMuitosTermos tem 33 termos no WHERE; as 176 alocações são
+  do parse/bind da query grande (caminho frio), não da avaliação por row.
+- Os benchmarks rodam contra o dublê SEM alocação (payloads pré-montados). O
+  fakestorage completo aloca em ScanLive e no lookup, e mediria o dublê junto
+  com o executor.
