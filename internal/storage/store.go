@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 
 	"github.com/nishisan-dev/nishidb/internal/index/bitmap"
@@ -77,9 +78,20 @@ type Store struct {
 	// clearFailures conta erros tolerados na fase de Clear dos bitmaps
 	// (deixam falso positivo, filtrado pelo §44); exposto via métricas na S13.
 	clearFailures atomic.Uint64
-	// stickyErr: primeiro erro pós-Append. Sem rollback parcial, o writer
-	// fica FALHO até Close + reabertura com recovery. Writer-only.
+	// stickyErr: primeiro erro pós-Append ou de durabilidade. Sem rollback
+	// parcial, o writer fica FALHO até Close + reabertura com recovery.
+	// Protegido por wmu.
 	stickyErr error
+
+	// wmu serializa as operações do writer (Put/Sync/Checkpoint): o
+	// contrato "writer único" deixa de ser convenção e vira mecanismo —
+	// um Checkpoint de coordenador concorrente com Put não pode mais
+	// corromper segTally/epoch nem ler offset além do fsyncado.
+	wmu sync.Mutex
+
+	// cpTrace é o seam de teste da ordem de durabilidade do checkpoint
+	// (nil em produção).
+	cpTrace func(step string)
 
 	// segTally acumula os totais por segmento que o writer conhece (para as
 	// stats do manifest §9; em memória — a S12 os reconstrói no replay).
@@ -109,6 +121,15 @@ func Open(opts Options) (*Store, error) {
 	for _, d := range []string{metaDir, dataDir, idxDir, cpDir} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return nil, fmt.Errorf("storage: criar %s: %w", d, err)
+		}
+	}
+	// Política de fsync de diretório (design §14): as ENTRADAS dos
+	// diretórios recém-criados precisam ser duráveis — um power loss após o
+	// primeiro checkpoint não pode deixar Dir/ sem checkpoint/ (viraria
+	// "dados sem manifest" = erro fatal na recovery).
+	for _, d := range []string{opts.Dir, metaDir, dataDir, idxDir, cpDir} {
+		if err := fsyncDir(d); err != nil {
+			return nil, err
 		}
 	}
 	if entries, err := os.ReadDir(dataDir); err != nil {
@@ -169,6 +190,19 @@ func Open(opts Options) (*Store, error) {
 	}
 	ok = true
 	return s, nil
+}
+
+// fsyncDir durabiliza as entradas de um diretório.
+func fsyncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	if err := d.Sync(); err != nil {
+		return fmt.Errorf("storage: fsync do diretório %s: %w", dir, err)
+	}
+	return nil
 }
 
 // FieldDict expõe o dicionário de campos do dataset.
@@ -258,6 +292,8 @@ func (s *Store) GetByRowID(id types.RowID, buf []byte) (types.Record, []byte, bo
 // devolve (rowID, created, err): é erro de DURABILIDADE, não de
 // visibilidade — o estado está commitado e visível.
 func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *types.Record) (types.RowID, bool, error) {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
 	if s.stickyErr != nil {
 		return 0, false, fmt.Errorf("storage: writer em modo falho (reabra o dataset): %w", s.stickyErr)
 	}
@@ -316,8 +352,29 @@ func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *ty
 		tally = &segStats{}
 		s.segTally[seg] = tally
 	}
-	tally.records++
-	tally.bytes += uint64(len(rec))
+	tally.totalRecords++
+	tally.liveRecords++
+	tally.liveBytes += uint64(len(rec))
+	// Update torna o record ANTERIOR garbage no instante do publish:
+	// decrementa a liveness do segmento antigo (lida ANTES do publish
+	// sobrescrever a location). Segmentos pré-restart sem tally são
+	// semeados pela recovery (S12).
+	if !created {
+		if oldPacked, had := s.locs.Get(rowID); had {
+			oldSeg, _, _ := rowindex.Unpack(oldPacked)
+			if t := s.segTally[oldSeg]; t != nil {
+				oldLen := uint64(encoding.RecordHeaderSize + len(key) + len(prevPayload))
+				if t.liveRecords > 0 {
+					t.liveRecords--
+				}
+				if t.liveBytes >= oldLen {
+					t.liveBytes -= oldLen
+				} else {
+					t.liveBytes = 0
+				}
+			}
+		}
+	}
 
 	// 4. primary insert-if-absent para key nova.
 	if created {
@@ -352,8 +409,8 @@ func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *ty
 		s.applyBitmapClears(rowID, prevPayload, payload)
 	}
 	if s.opts.SyncEveryPut {
-		if err := s.Sync(); err != nil {
-			return rowID, created, err // Sync já marcou o modo falho
+		if err := s.syncLocked(); err != nil {
+			return rowID, created, err // syncLocked já marcou o modo falho
 		}
 	}
 	return rowID, created, nil
@@ -564,9 +621,16 @@ func (s *Store) Sequence(id types.RowID) (int64, bool) {
 }
 
 // Sync força fdatasync do segmento corrente (loop de durability batch).
-// Exclusivo do writer. Falha marca o writer como FALHO: durabilidade
-// comprometida exige investigação e reabertura com recovery.
+// Serializado com Put/Checkpoint pelo mutex do writer. Falha marca o writer
+// como FALHO: durabilidade comprometida exige reabertura com recovery.
 func (s *Store) Sync() error {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	return s.syncLocked()
+}
+
+// syncLocked exige wmu já adquirido.
+func (s *Store) syncLocked() error {
 	if s.stickyErr != nil {
 		return fmt.Errorf("storage: writer em modo falho (reabra o dataset): %w", s.stickyErr)
 	}
@@ -595,7 +659,11 @@ func (s *Store) Stats() Stats {
 	}
 }
 
-// Close fecha o dataset (sem checkpoint — S11).
+// Close fecha o dataset SEM checkpoint automático: é responsabilidade do
+// caller chamar Checkpoint() antes, se quiser durabilizar o delta. Close
+// não drena o overlay nem faz msync/fsync de nada — o que não foi
+// checkpointado volta apenas pelo tail scan da recovery (S12), a partir do
+// último manifest.
 func (s *Store) Close() error {
 	var errs []error
 	for _, ix := range s.bitmaps {

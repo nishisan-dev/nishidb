@@ -445,6 +445,42 @@ func TestListSegments(t *testing.T) {
 	}
 }
 
+func TestListSegmentsIgnoraNomesNaoCanonicos(t *testing.T) {
+	// S11-I4: sufixos e padding divergente casariam no Sscanf e produziriam
+	// IDs duplicados no manifest/recovery. Só o nome canônico exato entra.
+	dir := t.TempDir()
+	w, err := OpenWriter(dir, 1<<20, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := w.Append(makeRecord(t, 1, 1, "canon", 0)); err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+
+	for _, garbage := range []string{
+		"segment-00000001.dat.tmp",
+		"segment-00000001.dat.new",
+		"segment-1.dat",
+		"segment-00000002.txt",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, garbage), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(dir, "segment-00000009.dat"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	refs, err := ListSegments(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 1 || refs[0].ID != 1 {
+		t.Fatalf("só o canônico deveria entrar: %v", refs)
+	}
+}
+
 func TestSyncNaoFalha(t *testing.T) {
 	w, err := OpenWriter(t.TempDir(), 1<<20, 0, 0)
 	if err != nil {

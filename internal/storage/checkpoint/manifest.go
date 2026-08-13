@@ -48,8 +48,11 @@ var (
 )
 
 // SegmentInfo descreve um segmento no manifest, com as estatísticas de
-// liveness do design §9. No M1 o writer grava os totais que conhece
-// (live == total, sem compaction); o refinamento live/garbage é da S14.
+// liveness do design §9 rastreadas pelo writer (updates decrementam o
+// segmento do record anterior).
+//
+// Unidades: SizeBytes é o tamanho do ARQUIVO (inclui o header de 64 bytes
+// do segmento); LiveBytes soma apenas os bytes dos records vivos.
 type SegmentInfo struct {
 	ID           uint32
 	SizeBytes    int64
@@ -192,7 +195,18 @@ func decode(raw []byte) (*Manifest, error) {
 	return m, nil
 }
 
-// Write grava o manifest atomicamente: tmp → fdatasync → rename → fsync do
+// writeTrace é o seam de teste da ordem de durabilidade do Write (nil em
+// produção). Os eventos são emitidos junto de cada operação para que
+// remover/reordenar a operação também remova/reordene o evento.
+var writeTrace func(step string)
+
+func emit(step string) {
+	if writeTrace != nil {
+		writeTrace(step)
+	}
+}
+
+// Write grava o manifest atomicamente: tmp → fsync → rename → fsync do
 // diretório (a política de rename durável do design §9/M18).
 func Write(path string, m *Manifest) error {
 	data := m.encode()
@@ -205,17 +219,24 @@ func Write(path string, m *Manifest) error {
 		f.Close()
 		return fmt.Errorf("checkpoint: escrever %s: %w", tmp, err)
 	}
+	emit("write")
 	if err := f.Sync(); err != nil {
 		f.Close()
 		return err
 	}
+	emit("fsync")
 	if err := f.Close(); err != nil {
 		return err
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		return fmt.Errorf("checkpoint: rename do manifest: %w", err)
 	}
-	return syncDir(filepath.Dir(path))
+	emit("rename")
+	if err := syncDir(filepath.Dir(path)); err != nil {
+		return err
+	}
+	emit("dirsync")
+	return nil
 }
 
 // syncDir força a durabilidade da entrada de diretório após um rename.

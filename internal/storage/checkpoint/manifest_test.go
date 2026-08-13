@@ -6,8 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
 func sampleManifest() Manifest {
@@ -183,5 +181,4 @@ func TestManifestMuitosSegmentos(t *testing.T) {
 	if len(got.Segments) != 200 || got.Segments[199].SizeBytes != 200000 {
 		t.Fatalf("segments: len=%d", len(got.Segments))
 	}
-	_ = types.RowID(0) // mantém o import de types coeso com o restante do pacote
 }

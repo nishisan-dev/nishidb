@@ -3,7 +3,9 @@
 package segment
 
 import (
+	"cmp"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -134,7 +136,27 @@ func (w *Writer) openNew(id uint32) error {
 		f.Close()
 		return err
 	}
+	// Política de fsync de diretório (design §14): a ENTRADA do segmento
+	// novo precisa ser durável — sem isso, um power loss pós-rotação pode
+	// deixar records fsyncados num arquivo sem dirent.
+	if err := syncDir(w.dir); err != nil {
+		f.Close()
+		return err
+	}
 	w.f, w.segID, w.offset = f, id, HeaderSize
+	return nil
+}
+
+// syncDir durabiliza as entradas de um diretório.
+func syncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	if err := d.Sync(); err != nil {
+		return fmt.Errorf("segment: fsync do diretório %s: %w", dir, err)
+	}
 	return nil
 }
 
@@ -194,17 +216,29 @@ func ListSegments(dir string) ([]SegmentRef, error) {
 	}
 	var refs []SegmentRef
 	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
 		var id uint32
 		if _, err := fmt.Sscanf(e.Name(), "segment-%08d.dat", &id); err != nil || id == 0 {
 			continue
 		}
+		// Só o nome canônico exato: Sscanf aceitaria sufixos
+		// (segment-N.dat.tmp/.new) e padding divergente, produzindo IDs
+		// duplicados no manifest e no dir-listing da recovery.
+		if e.Name() != fmt.Sprintf("segment-%08d.dat", id) {
+			continue
+		}
 		info, err := e.Info()
 		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue // removido entre ReadDir e Info
+			}
 			return nil, err
 		}
 		refs = append(refs, SegmentRef{ID: id, SizeBytes: info.Size()})
 	}
-	slices.SortFunc(refs, func(a, b SegmentRef) int { return int(a.ID) - int(b.ID) })
+	slices.SortFunc(refs, func(a, b SegmentRef) int { return cmp.Compare(a.ID, b.ID) })
 	return refs, nil
 }
 

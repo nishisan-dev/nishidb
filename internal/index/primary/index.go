@@ -287,19 +287,30 @@ func (ix *Index) grow() error {
 		newRegion.Close()
 		return fmt.Errorf("primary: rename do rehash: %w", err)
 	}
-	// Política uniforme do projeto (design §9): rename de arquivo de estado
-	// permanente é seguido de fsync do diretório para durabilizar a entrada.
-	if err := syncDir(filepath.Dir(ix.path)); err != nil {
-		return err
-	}
+	// Pós-rename o swap é OBRIGATÓRIO: o arquivo em ix.path JÁ é a tabela
+	// nova; continuar na antiga (inode desvinculado) perderia slots em
+	// silêncio. Por isso o fsync do diretório (política do design §9) roda
+	// DEPOIS do swap e o erro é propagado ao final — o caller decide o
+	// destino (no Store, erro de durabilidade é sticky).
 	old := ix.region
 	ix.region = newRegion
 	ix.slotCount = newSlots
 	if err := old.Close(); err != nil {
 		return fmt.Errorf("primary: fechar tabela antiga: %w", err)
 	}
+	if err := syncDirFn(filepath.Dir(ix.path)); err != nil {
+		return err
+	}
 	return nil
 }
+
+// HashKind devolve o identificador do algoritmo de hash do índice (gravado
+// no header e no manifest).
+func (ix *Index) HashKind() uint8 { return hashKindFnv }
+
+// syncDirFn é indirecionada para permitir injeção de falha nos testes do
+// caminho de erro do rehash.
+var syncDirFn = syncDir
 
 // syncDir força a durabilidade da entrada de diretório após um rename.
 func syncDir(dir string) error {
