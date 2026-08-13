@@ -36,10 +36,27 @@ var rotasSQL = []struct {
 	// que estaria sendo medido seria a varredura completa, não o caminho que
 	// o usuário paga com LIMIT.
 	{nome: "sql_full_scan_limit_100", sql: `SELECT id FROM radius_sessions WHERE connect_info >= 0 LIMIT 100`},
-	// E o full scan que NÃO casa nada, com LIMIT, medido à parte: é o pior
-	// caso do §91 (cancelável, memória constante) e o número honesto de uma
-	// varredura completa. Fica fora dos gates de latência por construção.
-	{nome: "sql_full_scan_completo", sql: `SELECT id FROM radius_sessions WHERE username = 'nao-existe-jamais' LIMIT 1`},
+}
+
+// varreduraCompleta é o full scan que NÃO casa nada: percorre o dataset
+// inteiro e é o número honesto do pior caso.
+//
+// Fica FORA do rodízio de propósito. Ele custa ~6 s a 1M rows (e cresce
+// linear), então dentro do rodízio cada leitor passaria a maior parte do tempo
+// dentro dele e as rotas que os gates medem ficariam com um punhado de
+// amostras — o p95 delas viraria ruído. Medido UMA vez, ao fim do STEADY.
+const varreduraCompleta = `SELECT id FROM radius_sessions WHERE username = 'nao-existe-jamais' LIMIT 1`
+
+// MedeVarreduraCompleta roda uma varredura completa e devolve a duração.
+func (p *sqlPool) MedeVarreduraCompleta() (time.Duration, int64, error) {
+	if p.eng == nil {
+		return 0, 0, nil
+	}
+	saida := &contador{}
+	w := executor.NewStreamWriter(saida, 8<<10)
+	início := time.Now()
+	err := p.roda(w, varreduraCompleta, nil)
+	return time.Since(início), saida.bytes, err
 }
 
 // sqlPool roda consultas SQL concorrentes com a ingestão e mede a latência de

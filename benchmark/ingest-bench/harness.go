@@ -120,19 +120,23 @@ type GateResult struct {
 
 // Report é o artefato final.
 type Report struct {
-	StartedAt  time.Time        `json:"started_at"`
-	GoVersion  string           `json:"go_version"`
-	GOMEMLIMIT string           `json:"gomemlimit"`
-	GOGC       string           `json:"gogc"`
-	Config     ConfigSummary    `json:"config"`
-	Load       PhaseReport      `json:"load"`
-	Steady     PhaseReport      `json:"steady"`
-	Queries    []QueryStats     `json:"queries,omitempty"`
-	SQLErrors  int64            `json:"sql_errors"`
-	Samples    []Sample         `json:"samples"`
-	Gates      []GateResult     `json:"gates"`
-	StoreStats StoreStatsReport `json:"store_stats"`
-	Passed     bool             `json:"passed"`
+	StartedAt  time.Time     `json:"started_at"`
+	GoVersion  string        `json:"go_version"`
+	GOMEMLIMIT string        `json:"gomemlimit"`
+	GOGC       string        `json:"gogc"`
+	Config     ConfigSummary `json:"config"`
+	Load       PhaseReport   `json:"load"`
+	Steady     PhaseReport   `json:"steady"`
+	Queries    []QueryStats  `json:"queries,omitempty"`
+	SQLErrors  int64         `json:"sql_errors"`
+	// FullScanSec é a duração de UMA varredura completa do dataset (predicado
+	// que não casa nada), medida fora do rodízio de consultas.
+	FullScanSec   float64          `json:"full_scan_sec"`
+	FullScanBytes int64            `json:"full_scan_bytes"`
+	Samples       []Sample         `json:"samples"`
+	Gates         []GateResult     `json:"gates"`
+	StoreStats    StoreStatsReport `json:"store_stats"`
+	Passed        bool             `json:"passed"`
 }
 
 // ConfigSummary registra no relatório o que produziu os números — sem isso,
@@ -303,6 +307,14 @@ func Run(cfg Config) (*Report, error) {
 			return nil, err
 		}
 		rep.Queries = readers.stop()
+		// A varredura completa é medida UMA vez, fora do rodízio: dentro dele
+		// ela monopolizaria os leitores e deixaria as rotas dos gates sem
+		// amostras.
+		if dur, bytes, err := sqlReaders.MedeVarreduraCompleta(); err == nil && dur > 0 {
+			rep.FullScanSec = dur.Seconds()
+			rep.FullScanBytes = bytes
+			fmt.Fprintf(cfg.Out, "STEADY: varredura completa em %s\n", dur.Round(time.Millisecond))
+		}
 		statsSQL, errosSQL := sqlReaders.stop()
 		rep.Queries = append(rep.Queries, statsSQL...)
 		rep.SQLErrors = errosSQL
@@ -775,15 +787,29 @@ func evaluateGates(cfg Config, rep *Report) []GateResult {
 	})
 
 	// §111: allocs/evento — soft no M1, vira gate na Fase 12 (design §5.2).
-	allocs := rep.Steady.AllocsPerEven
-	fase := "steady"
-	if rep.Steady.Events == 0 {
-		allocs, fase = rep.Load.AllocsPerEven, "load"
+	//
+	// O gate mede o LOAD, e não o STEADY, quando há consultas concorrentes: a
+	// §111 é sobre o custo de INGERIR um evento, e o numerador do STEADY passa
+	// a incluir as alocações das queries enquanto o denominador continua sendo
+	// só os eventos ingeridos. Com 4 leitores SQL a 500 ev/s o número vira duas
+	// ordens de grandeza maior e não fala mais de ingestão nenhuma.
+	//
+	// Os dois números aparecem no detalhe: o do LOAD é a ingestão pura, o do
+	// STEADY é a carga mista — e a diferença entre eles é informação, não ruído.
+	allocs, fase := rep.Load.AllocsPerEven, "load (ingestão pura)"
+	misto := ""
+	if rep.Steady.Events > 0 {
+		if rep.Config.SQLReaders > 0 {
+			misto = fmt.Sprintf("; steady com %d leitores SQL = %.2f (inclui as alocações das queries)",
+				rep.Config.SQLReaders, rep.Steady.AllocsPerEven)
+		} else {
+			allocs, fase = rep.Steady.AllocsPerEven, "steady"
+		}
 	}
 	gates = append(gates, GateResult{
 		Name: "allocs_per_event", Spec: "§111", Hard: false,
 		Passed: allocs <= 9,
-		Detail: fmt.Sprintf("%.2f allocs/evento na fase %s (alvo 9; soft no M1)", allocs, fase),
+		Detail: fmt.Sprintf("%.4f allocs/evento na fase %s (alvo 9; soft no M1)%s", allocs, fase, misto),
 	})
 
 	// Nenhum evento pode ser perdido em silêncio: descarte é sinal de corpus
@@ -818,12 +844,6 @@ func evaluateGates(cfg Config, rep *Report) []GateResult {
 			teto, spec, duro = 50_000, "§90", true
 		case "sql_intersect_limit_100", "sql_union_limit_100", "sql_full_scan_limit_100":
 			teto, spec = 50_000, "§90"
-		case "sql_full_scan_completo":
-			// Varredura completa do dataset: não tem teto de latência (a §90 é
-			// de query INDEXADA). O número entra no relatório porque é o custo
-			// real de um full scan, e é o que justifica a métrica
-			// query.full_scan existir.
-			teto, spec = 0, "§64 (varredura completa, sem teto)"
 		case "point_lookup":
 			teto, spec = 10_000, "§89 (baixo nível, referência)"
 		case "bitmap_limit_100":
