@@ -1,0 +1,31 @@
+Baseline do encoder NDJSON — 2026-08-13
+Intel Core 7 150U (12 threads), Linux 6.8, Go 1.26.5
+
+go test ./internal/query/executor/ -run XXX -bench 'Append|Stream' -benchtime 200000x
+
+BenchmarkAppendRow-12            148.6 ns/op    0 B/op    0 allocs/op
+BenchmarkAppendTimestamp-12       59.6 ns/op    0 B/op    0 allocs/op
+BenchmarkAppendJSONString-12      77.6 ns/op    0 B/op    0 allocs/op
+BenchmarkStreamWriter-12          64.7 ns/op    0 B/op    0 allocs/op
+
+Gates (todos executáveis na suíte, não só medidos aqui):
+
+G1  AppendRow                     0 allocs/op   TestGateAppendRowZeroAlloc
+G2  AppendValue, 12 tipos         0 allocs/op   TestGateAppendValueZeroAllocPorTipo
+G3  cap(buf) do StreamWriter      5376 bytes, IDÊNTICO de 200.000 a 400.000
+                                  linhas, com bufSize 4096
+                                  TestStreamWriterCapEstavel
+G4  bytes escritos == soma das linhas           TestStreamWriterBytesEscritos
+G5  exatamente 1 '\n' por linha   invariante universal, aferida em todos os
+                                  testes de valor e nos dois fuzz
+
+Notas:
+
+- AppendRow da linha do golden (6 colunas, com timestamp, ipv4 e um null) custa
+  ~149 ns. O timestamp é o componente mais caro; o formatador manual gasta
+  ~60 ns contra os ~118 ns do time.AppendFormat, que fica só como oráculo no
+  teste.
+- O cap do buffer estaciona em 5376 e não em 4096 porque o append que
+  ULTRAPASSA o limiar acontece antes do flush: o teto é bufSize + a maior
+  linha, arredondado pela política de crescimento do runtime. O que importa
+  para o contrato é que ele não cresce com o NÚMERO de linhas.
