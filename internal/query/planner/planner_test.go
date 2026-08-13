@@ -407,6 +407,26 @@ func TestPlanOrDuplicadoColapsaParaScan(t *testing.T) {
 	}
 }
 
+// O dedup da união é por (campo, VALOR), e o valor é comparado byte a byte.
+//
+// O caso que morde tem os dois valores com o MESMO COMPRIMENTO: um dedup que
+// comparasse só o tamanho colapsaria a união num BitmapScan do primeiro termo
+// e as linhas "Star" SUMIRIAM do resultado — falso negativo puro, silencioso,
+// na query mais banal do domínio. O teste de valores diferentes que já existia
+// usa 'Stop' (4) × 'Start' (5) e vive no caminho AND, onde o colapso seria
+// benigno (superset mais largo); nenhum dos dois protege isto.
+func TestPlanOrMesmoCampoValoresDeMesmoComprimento(t *testing.T) {
+	p, c, _ := novo(t)
+	status := campo(t, c, "Acct-Status-Type")
+	pl := planeja(t, p, or(eq(status, str("Stop")), eq(status, str("Star"))))
+
+	querString(t, pl, `IndexUnion(bitmap:Acct-Status-Type="Stop", bitmap:Acct-Status-Type="Star")`)
+	u, ok := pl.(*planner.IndexUnionPlan)
+	if !ok || len(u.Terms) != 2 {
+		t.Fatalf("plano = %T, want IndexUnion com 2 termos", pl)
+	}
+}
+
 // O colapso respeita o índice do termo: união de um termo de HASH vira
 // HashIndex, não BitmapScan — que faria o executor consultar um índice que o
 // campo não tem.

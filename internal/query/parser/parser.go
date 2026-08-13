@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/nishisan-dev/nishidb/internal/query/lexer"
@@ -13,6 +14,7 @@ type parser struct {
 	lx     lexer.Lexer // por VALOR: é o que dá 0 alloc ao lexer
 	cur    lexer.Token
 	depth  int // profundidade de parênteses corrente
+	termos int // termos do WHERE já emitidos (teto de recurso, MaxWhereTerms)
 	params int // próximo ParamIdx a atribuir
 }
 
@@ -226,6 +228,14 @@ func (p *parser) parsePrimary() (Expr, error) {
 }
 
 func (p *parser) parsePredicate() (Expr, error) {
+	// O teto é contado AQUI, na folha, e não na profundidade: a cadeia de
+	// AND/OR é iterativa e cresce sem aninhar, então nenhum limite de
+	// parênteses a alcança. Cada termo custa ~182 B de AST ligada, retidos
+	// enquanto a query viver.
+	p.termos++
+	if p.termos > MaxWhereTerms {
+		return nil, p.errAt(p.cur.Pos, "WHERE com mais de "+itoa(MaxWhereTerms)+" termos")
+	}
 	col, pos, ok := p.identifier()
 	if !ok {
 		switch p.cur.Type {
@@ -275,6 +285,9 @@ func (p *parser) parsePredicate() (Expr, error) {
 	}
 	return &Comparison{Column: col, ColumnPos: pos, Op: op, Operand: operand}, nil
 }
+
+// itoa evita arrastar o fmt para o pacote por causa de uma mensagem de erro.
+func itoa(v int) string { return strconv.Itoa(v) }
 
 func cmpOp(t lexer.TokenType) (CmpOp, bool) {
 	switch t {

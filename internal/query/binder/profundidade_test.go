@@ -12,14 +12,30 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// cadeiaLonga monta `SELECT id FROM radius_sessions WHERE status='Stop' AND …`
-// com n termos.
-func cadeiaLonga(n int) string {
-	partes := make([]string, n)
-	for i := range partes {
-		partes[i] = "status = 'Stop'"
+// cadeiaLonga monta a AST de `status='Stop' AND status='Stop' AND …` com n
+// termos, DIRETAMENTE — sem passar pelo parser.
+//
+// Construir à mão é deliberado: o parser tem um teto de termos (recurso), e
+// amarrar estes testes a ele faria a propriedade do binder — percorrer a
+// espinha com pilha constante — deixar de ser exercitada acima do teto. O Bind
+// é público e aceita uma árvore que qualquer chamador monta, então esta é a
+// entrada realista para o pior caso.
+func cadeiaLonga(n int) *parser.SelectStmt {
+	folha := func() parser.Expr {
+		return &parser.Comparison{
+			Column: "status", Op: parser.CmpEq,
+			Operand: parser.Operand{Kind: parser.OperandString, S: "Stop"},
+		}
 	}
-	return "SELECT id FROM radius_sessions WHERE " + strings.Join(partes, " AND ")
+	var e parser.Expr = folha()
+	for i := 1; i < n; i++ {
+		e = &parser.LogicalExpr{Op: parser.LogicalAnd, Left: e, Right: folha()}
+	}
+	return &parser.SelectStmt{
+		Projection: []parser.ColumnRef{{Name: "id"}},
+		Dataset:    "radius_sessions",
+		Where:      e,
+	}
 }
 
 // Uma query gerada por máquina (IN expandido, filtro montado por UI) chega a
@@ -28,11 +44,7 @@ func cadeiaLonga(n int) string {
 // pilha constante. Recursão aqui seria um frame por termo.
 func TestBindCadeiaLongaComPilhaConstante(t *testing.T) {
 	const termos = 50_000
-	st, err := parser.Parse(cadeiaLonga(termos))
-	if err != nil {
-		t.Fatal(err)
-	}
-	bq, err := binder.Bind(st, compilar(t), nil)
+	bq, err := binder.Bind(cadeiaLonga(termos), compilar(t), nil)
 	if err != nil {
 		t.Fatalf("bind de %d termos: %v", termos, err)
 	}
@@ -71,11 +83,7 @@ func TestBindCadeiaLongaNaoUsaPilhaProporcional(t *testing.T) {
 	const termos = 50_000
 	if os.Getenv("NISHIDB_BIND_STACK_CHILD") == "1" {
 		debug.SetMaxStack(4 << 20)
-		st, err := parser.Parse(cadeiaLonga(termos))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := binder.Bind(st, compilar(t), nil); err != nil {
+		if _, err := binder.Bind(cadeiaLonga(termos), compilar(t), nil); err != nil {
 			t.Fatal(err)
 		}
 		return
