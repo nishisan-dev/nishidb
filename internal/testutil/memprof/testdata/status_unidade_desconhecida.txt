@@ -1,0 +1,8 @@
+Name:	nishidb
+State:	S (sleeping)
+Pid:	4242
+VmHWM:	 1048576 kB
+VmRSS:	  983040 MB
+RssAnon:	  262144 kB
+RssFile:	  720896 kB
+Threads:	12

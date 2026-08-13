@@ -1,0 +1,33 @@
+Name:	nishidb
+Umask:	0002
+State:	S (sleeping)
+Tgid:	4242
+Ngid:	0
+Pid:	4242
+PPid:	4241
+TracerPid:	0
+Uid:	1000	1000	1000	1000
+Gid:	1000	1000	1000	1000
+FDSize:	256
+Groups:	1000
+NStgid:	4242
+NSpid:	4242
+NSpgid:	4242
+NSsid:	4241
+Kthread:	0
+VmPeak:	 4194304 kB
+VmSize:	 3145728 kB
+VmLck:	       0 kB
+VmPin:	       0 kB
+VmHWM:	 1048576 kB
+VmRSS:	  983040 kB
+RssAnon:	  262144 kB
+RssFile:	  720896 kB
+RssShmem:	       0 kB
+VmData:	  524288 kB
+VmStk:	     132 kB
+VmExe:	    8192 kB
+VmLib:	    2048 kB
+VmPTE:	    3072 kB
+VmSwap:	       0 kB
+Threads:	12
