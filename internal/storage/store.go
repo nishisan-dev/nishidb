@@ -92,9 +92,11 @@ type Store struct {
 	// cpTrace é o seam de teste da ordem de durabilidade do checkpoint
 	// (nil em produção).
 	cpTrace func(step string)
-	// clearErrHook é o seam de teste do caminho de Clear tolerado
-	// (nil em produção).
+	// clearErrHook/setErrHook são seams de teste das fases de Clear e Set
+	// dos bitmaps (nil em produção; setErrHook viabiliza o phantom commit
+	// com payload replayável).
 	clearErrHook func(types.FieldID) error
+	setErrHook   func(types.FieldID) error
 
 	// segTally acumula os totais por segmento que o writer conhece (para as
 	// stats do manifest §9; em memória — a S12 os reconstrói no replay).
@@ -351,25 +353,82 @@ func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *ty
 		return 0, false, s.failWriter(err)
 	}
 	s.curSegID.Store(seg)
+	// 3-8. aplicação do estado aos índices, até o commit da location.
+	if err := s.applyRecord(recordApply{
+		rowID:       rowID,
+		key:         key,
+		seq:         seq,
+		flags:       flags,
+		payload:     payload,
+		prevPayload: prevPayload,
+		created:     created,
+		seg:         seg,
+		off:         off,
+		recLen:      len(rec),
+	}); err != nil {
+		return 0, false, s.failWriter(err)
+	}
+	if s.opts.SyncEveryPut {
+		if err := s.syncLocked(); err != nil {
+			return rowID, created, err // syncLocked já marcou o modo falho
+		}
+	}
+	return rowID, created, nil
+}
+
+// applyMode distingue os dois callers de applyRecord.
+type applyMode uint8
+
+const (
+	// applyWrite é o write path: a location vai para o overlay (visível a
+	// leitores concorrentes) e o caller marca o writer como falho no erro.
+	applyWrite applyMode = iota
+	// applyReplay é o replay do tail na recovery: sem leitores, a location
+	// vai direto ao mmap e a primary é reconciliada por insert-if-absent.
+	applyReplay
+)
+
+// recordApply descreve um record JÁ durável no segmento cujo estado precisa
+// ser aplicado aos índices.
+type recordApply struct {
+	rowID       types.RowID
+	key         []byte
+	seq         int64
+	flags       uint8
+	payload     []byte
+	prevPayload []byte // estado anterior desta row (nil quando não havia)
+	created     bool   // row nova: conta em rowCount e exige Insert na primary
+	seg         uint32
+	off         uint32
+	recLen      int
+	mode        applyMode
+}
+
+// applyRecord executa os passos 3-8 do §10.1 (offset accounting, primary,
+// bitmaps, sequence, commit da location, clears) para um record já gravado
+// no segmento. É o ÚNICO code path de aplicação de estado: o Put o chama
+// para o record recém-appendado e o replay da recovery para cada record do
+// tail (§10.3 passo 5) — o que garante que restart não diverge da escrita.
+func (s *Store) applyRecord(a recordApply) error {
 	// 3. offset accounting: packing + tally do segmento (stats do manifest).
-	packed := rowindex.Pack(seg, off, flags&types.FlagTombstone)
-	tally := s.segTally[seg]
+	packed := rowindex.Pack(a.seg, a.off, a.flags&types.FlagTombstone)
+	tally := s.segTally[a.seg]
 	if tally == nil {
 		tally = &segStats{}
-		s.segTally[seg] = tally
+		s.segTally[a.seg] = tally
 	}
 	tally.totalRecords++
 	tally.liveRecords++
-	tally.liveBytes += uint64(len(rec))
+	tally.liveBytes += uint64(a.recLen)
 	// Update torna o record ANTERIOR garbage no instante do publish:
 	// decrementa a liveness do segmento antigo (lida ANTES do publish
-	// sobrescrever a location). Segmentos pré-restart sem tally são
-	// semeados pela recovery (S12).
-	if !created {
-		if oldPacked, had := s.locs.Get(rowID); had {
+	// sobrescrever a location). Segmentos pré-restart têm o tally semeado
+	// do manifest pela recovery.
+	if !a.created {
+		if oldPacked, had := s.locs.Get(a.rowID); had {
 			oldSeg, _, _ := rowindex.Unpack(oldPacked)
 			if t := s.segTally[oldSeg]; t != nil {
-				oldLen := uint64(encoding.RecordHeaderSize + len(key) + len(prevPayload))
+				oldLen := uint64(encoding.RecordHeaderSize + len(a.key) + len(a.prevPayload))
 				if t.liveRecords > 0 {
 					t.liveRecords--
 				}
@@ -382,44 +441,62 @@ func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *ty
 		}
 	}
 
-	// 4. primary insert-if-absent para key nova.
-	if created {
-		_, inserted, err := s.prim.Insert(key, rowID, s.insertValidator(key))
+	// 4. primary insert-if-absent. No write path só a key nova precisa
+	// (o lookup já resolveu as demais); no replay roda SEMPRE, porque um
+	// checkpoint interrompido pode ter deixado a primary atrás das
+	// locations — e o Insert é idempotente.
+	if a.created || a.mode == applyReplay {
+		validate := s.insertValidator(a.key)
+		if a.mode == applyReplay {
+			validate = s.replayValidator(a.key, a.rowID)
+		}
+		existing, inserted, err := s.prim.Insert(a.key, a.rowID, validate)
 		if err != nil {
-			return 0, false, s.failWriter(err)
+			return err
 		}
 		if !inserted {
-			return 0, false, s.failWriter(fmt.Errorf("storage: key %q já presente na primary com prev==nil e lookup ausente", key))
+			if a.mode == applyWrite {
+				return fmt.Errorf("storage: key %q já presente na primary com prev==nil e lookup ausente", a.key)
+			}
+			if existing != a.rowID {
+				return fmt.Errorf("%w: key %q mapeada para a row %d na primary, mas o record do tail declara a row %d",
+					encoding.ErrCorrupt, a.key, existing, a.rowID)
+			}
 		}
 	}
 	// 5. fase de SET dos bitmaps ANTES do commit: a janela entre índice e
 	// location é sempre um SUPERSET de candidatos (falso positivo,
 	// filtrado pela revalidação §44) — nunca falso negativo.
 	if len(s.bitmaps) > 0 {
-		if err := s.applyBitmapSets(rowID, prevPayload, payload); err != nil {
-			return 0, false, s.failWriter(err)
+		if err := s.applyBitmapSets(a.rowID, a.prevPayload, a.payload); err != nil {
+			return err
 		}
 	}
 	// 6. sequence.
-	if err := s.seqs.Set(rowID, seq); err != nil {
-		return 0, false, s.failWriter(err)
+	if err := s.seqs.Set(a.rowID, a.seq); err != nil {
+		return err
 	}
-	// 7. COMMIT POINT: publica a location (overlay; visível a leitores).
-	s.locs.Publish(rowID, packed)
-	if created {
+	// 7. COMMIT POINT: publica a location.
+	if a.mode == applyReplay {
+		// Recovery: grava direto no mmap, sem overlay. A invariante §6.1
+		// (página de índice nunca referencia record não durável) continua
+		// satisfeita porque os records replayed já estão no disco, e não há
+		// leitores ativos antes do Open retornar.
+		if err := s.locs.SetDirect(a.rowID, packed); err != nil {
+			return err
+		}
+	} else {
+		s.locs.Publish(a.rowID, packed)
+	}
+	if a.created {
 		s.rowCount.Add(1)
 	}
 	// 8. fase de CLEAR dos bitmaps DEPOIS do commit: erro aqui deixa só
 	// falso positivo (tolerável; contabilizado p/ métricas da S13).
 	if len(s.bitmaps) > 0 {
-		s.applyBitmapClears(rowID, prevPayload, payload)
+		s.applyBitmapClears(a.rowID, a.prevPayload, a.payload)
 	}
-	if s.opts.SyncEveryPut {
-		if err := s.syncLocked(); err != nil {
-			return rowID, created, err // syncLocked já marcou o modo falho
-		}
-	}
-	return rowID, created, nil
+	return nil
 }
 
 // failWriter registra o primeiro erro pós-Append e o devolve. Sem rollback
@@ -468,6 +545,21 @@ func (s *Store) insertValidator(key []byte) primary.ValidateFunc {
 	}
 }
 
+// replayValidator reconhece a própria row antes de cair na validação por
+// leitura. Durante o replay a location da row pode ainda não existir (um
+// checkpoint interrompido deixa a primary à frente das locations): o
+// insertValidator responderia "não é a row", o Insert seguiria o probe e
+// gravaria a mesma key num segundo slot.
+func (s *Store) replayValidator(key []byte, rowID types.RowID) primary.ValidateFunc {
+	byRead := s.insertValidator(key)
+	return func(rid types.RowID) (bool, error) {
+		if rid == rowID {
+			return true, nil
+		}
+		return byRead(rid)
+	}
+}
+
 // valueEqual compara duas Values de mesmo campo.
 func valueEqual(a, b types.Value) bool {
 	if a.Type != b.Type {
@@ -496,14 +588,14 @@ func (s *Store) applyBitmapSets(rowID types.RowID, prevPayload, newPayload []byt
 			pid, pv, pok = pr.Next()
 		case nok && (!pok || nid < pid):
 			if ix := s.bitmaps[nid]; ix != nil {
-				if err := ix.Set(nv, rowID); err != nil {
+				if err := s.setBit(ix, nid, nv, rowID); err != nil {
 					return err
 				}
 			}
 			nid, nv, nok = nr.Next()
 		default: // pid == nid
 			if ix := s.bitmaps[pid]; ix != nil && !valueEqual(pv, nv) {
-				if err := ix.Set(nv, rowID); err != nil {
+				if err := s.setBit(ix, pid, nv, rowID); err != nil {
 					return err
 				}
 			}
@@ -515,6 +607,17 @@ func (s *Store) applyBitmapSets(rowID types.RowID, prevPayload, newPayload []byt
 		return err
 	}
 	return nr.Err()
+}
+
+// setBit executa o Set com o seam de injeção de erro dos testes (phantom
+// commit precisa de falha pós-Append com payload replayável).
+func (s *Store) setBit(ix *bitmap.Index, field types.FieldID, v types.Value, rowID types.RowID) error {
+	if s.setErrHook != nil {
+		if err := s.setErrHook(field); err != nil {
+			return err
+		}
+	}
+	return ix.Set(v, rowID)
 }
 
 // applyBitmapClears desliga as postings antigas (campo que sai ou muda) —
