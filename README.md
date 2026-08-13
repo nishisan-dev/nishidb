@@ -47,11 +47,13 @@ storage:
 
 datasets:
   directory: /etc/nishidb/datasets
-
-query:
-  defaultMaxRows: 100000
-  defaultTimeout: 30s
 ```
+
+O **teto de linhas** e o **timeout** da consulta são do YAML do **dataset**
+(`query.maxRows` e `query.timeout`, default 100000 e 30s) — não deste arquivo.
+As chaves `query.defaultMaxRows`/`query.defaultTimeout` do `nishidb.yaml` são
+aceitas e validadas, mas **nenhum código as lê**: editá-las não muda nada e não
+avisa nada. Registrado como débito 37 em [`docs/debitos.md`](docs/debitos.md).
 
 ### 2. Definição do dataset
 

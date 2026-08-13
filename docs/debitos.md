@@ -6,6 +6,11 @@ revisão de fechamento, cuja unidade foi a **fronteira entre camadas** e não a
 tarefa. Cada item aberto tem **milestone dono**; nenhum depende de trabalho não
 planejado.
 
+Os itens **37 a 44** entraram na errata pós-fechamento: são coisas que estavam
+abertas e não tinham registro nenhum — nem em documento, nem em comentário, nem
+em teste. A numeração é **estável** (documentos e comentários citam "débito N"),
+então item novo entra no fim da seção a que pertence, e nada é renumerado.
+
 ## Resolvidos durante o M1 (registro, para não voltarem)
 
 | Item | O que era | Onde fechou |
@@ -22,8 +27,10 @@ planejado.
 | Teto de termos no WHERE | 1 M de termos aceitos, ~180 MB de AST retidos | Fix round Q13/Q14 — `parser.MaxWhereTerms` |
 | Projeção repetida | `SELECT a, a` emitia chave repetida no objeto JSON e o consumidor colapsava as duas em silêncio | Decisão do fecho do M1 — recusada no binder, apontando a segunda ocorrência |
 | Corpus fraco na medição | O gerador do LOAD era montado com `Config` literal parcial: zero patch, zero Extended JSON, zero null — enquanto o aceite citava 85% de patch | Fecho do M1 — `DefaultConfig()` no LOAD, perfil gravado no artefato e teste comparando com a referência |
-| Documentação nunca executada | 4 defeitos no quickstart do README e 2 evidências citando teste que não provava o critério | Fecho do M1 — o README é executado por teste, e as citações de teste dos documentos são verificadas por teste |
+| Documentação nunca executada | 4 defeitos no quickstart do README e 2 evidências citando teste que não provava o critério | Fecho do M1 — **parcialmente**: o quickstart do README é EXECUTADO por `TestQuickstartDoREADMEExecuta` (o YAML de config, o do dataset, o `ingest` e as duas queries, com a saída conferida linha a linha), e `TestEvidenciasCitadasNosDocumentosExistem` confere que todo **nome de teste** citado em `aceite-m1.md`, `architecture.md` e `debitos.md` existe na suíte. O verificador para EXATAMENTE aí: casa `func Test` e mais nada — não abre `.puml`, não resolve URL de diagrama, não confere número medido contra o JSON da rodada e não executa bloco de comando fora do README. Ver débito 41 |
 | `kill -9` sem teste | O critério 25 era creditado por um teste de encerramento **limpo** | Fecho do M1 — `TestKill9NoMeioDaIngestaoPreservaOEstadoConfirmado` mata o binário com SIGKILL de verdade |
+| `--limit` cortava dentro de aspas duplas | A varredura textual que achava a cláusula LIMIT conhecia literal `'…'` e não identificador `"…"`: `--limit 2 'SELECT id, "no limit aqui" FROM t'` cortava no meio do identificador e saía erro de sintaxe | Errata do M1 — `ultimoLimit` passou a tokenizar com o `lexer` (o mesmo do `Execute`) e a pegar o último `TokenLimit`; some a segunda gramática, e com ela o escape por aspa duplicada e o boundary de identificador (`TestComLimitNaoCortaDentroDeLiteralNemDeIdentificador`, `TestComLimitNaoCortaQueryQueNaoTokeniza`, `TestFlagLimitNaoCortaDentroDeIdentificadorCitado`) |
+| Vazão do CLI gateada por relógio | O piso absoluto de 4.000 ev/s media hardware e instrumentação junto com o código: sob `-race` com a máquina carregada a medida cai a ~3.100 ev/s **sem defeito nenhum**, e ainda deixava passar uma regressão de 3,7× | Errata do M1 — `TestVazaoDaIngestaoPeloCLI` mede a MESMA ingestão pelo caminho interno no mesmo processo e instante, e cobra do CLI no máximo 3× sobre essa referência. Ver débito 40 |
 
 ## Abertos, com dono
 
@@ -41,6 +48,7 @@ planejado.
 | 8 | **§14.20 — nenhum CRC verificado antes do `DurableOffset` no `Open`** | Corrupção em região selada só aparece na leitura, no meio do resultado |
 | 9 | **§101 política `stop`** (a chave `errors:` sequer é parseada) e **§102 dead-letter** | Nenhum é bloqueante; ambos são **silêncio**, que é o problema |
 | 10 | **§78 `query.resultBatchSize`** não parseado | Provavelmente só a chave falta |
+| 37 | **`query.defaultMaxRows` e `query.defaultTimeout` do `nishidb.yaml` são parseados, validados e NUNCA lidos** | `internal/cli/config.go:37-38,44,80` faz o parse e recusa valor inválido; não existe leitor. O teto e o timeout **efetivos** vêm do YAML do **dataset** (`internal/schema/spec.go:409-425`: `query.maxRows` e `query.timeout`). Como os defaults coincidem (100000 e 30s), quem edita a chave global não vê efeito **nem aviso** — a configuração mente em silêncio. O README deixou de mostrá-las; fechar o débito é ler a chave global como default do dataset, ou recusá-la. Mesma família do 10 e do 15 |
 
 ### M3 — protocolo e driver
 
@@ -50,7 +58,7 @@ planejado.
 | 12 | Driver JDBC (§126.18) e `PreparedStatement` real (§126.19) | Parâmetros posicionais já funcionam pela API Go; o CLI não tem como fornecê-los |
 | 13 | **Metadados de tipo fora de banda** | O NDJSON **não carrega tipos**, e o `ResultSetMetaData` precisa deles — inclusive das colunas que são NULL em todas as linhas, que não dão para derivar do dado. A fonte é `binder.BoundQuery.Columns` |
 | 14 | Autenticação (§126.20) e TLS (§126.21) | Seções do YAML já são aceitas e ignoradas |
-| 15 | **§80/§81 — `runtime.memoryTarget`, `query.maxConcurrent`, `query.maxBufferPerQuery`** e a prioridade sob pressão | A seção `runtime:` do YAML é aceita e **silenciosamente ignorada**. Com N conexões, o pior caso do débito 20 é N × maior linha, sem teto |
+| 15 | **§80/§81 — `runtime.memoryTarget`, `query.maxConcurrent`, `query.maxBufferPerQuery`** e a prioridade sob pressão | A seção `runtime:` do YAML é aceita e **silenciosamente ignorada**. Com N conexões, o pior caso do débito 28 (o `StreamWriter` que nunca encolhe) é N × maior linha, sem teto |
 | 16 | **§92-94 — métricas, `GET /metrics`, `GET /v1/health`** | 25 métricas nomeadas na spec; zero ocorrência de `prometheus` no código |
 | 17 | **§96 — comandos `status`, `datasets`, `checkpoint`, `inspect`** | A spec pede 6 comandos operacionais; o M1 entrega 2, e nenhum dos 2 está na lista da spec. `compact` tem dono no M4; estes quatro são baratos (o `Store` já expõe `Stats()` e `Checkpoint()`) |
 | 18 | **Acesso concorrente entre processos** | O `flock` é exclusivo: com um `ingest` em voo, um `query` sai com exit 3. A concorrência real chega com o servidor |
@@ -66,6 +74,7 @@ planejado.
 | 23 | Índice derivado removido por fora não é detectado (§14.18) | Nenhuma validação cobre apagar o diretório de índice |
 | 24 | **Tombstone fura o stale check do `_SEQ`** | `GetByKey` mascara row tombstoned como **ausente**, e o materializer usa esse `found` como guarda do §25: com `found == false` o stale check não roda, o evento segue pelo caminho de create e o `Put` reusa o rowId — a row **ressuscita**. Latente hoje (nada produz tombstone); vira real quando a Fase 9 ligar o TTL |
 | 25 | **`Store.Sequence` não honra tombstone** | Valida só a location. Mesma família do 24 |
+| 38 | **A liveness não converge depois de um crash** | Quando a row já existia no ponto S e o tail traz um update cuja location está **à frente** do cursor do replay, o record antigo continua contado como vivo. Medido: **2 records / 127 bytes onde o certo é 1 / 63** logo após o replay, e **2 / 128 onde o certo é 1 / 64** depois de um terceiro update com checkpoint completo — ou seja, **permanente**: o decremento do `applyRecord` identifica o garbage por `s.locs.Get(rowID)`, location que já aponta para o record do tail, então cada update seguinte desconta o anterior a ELE e nunca o órfão. É a direção segura (superestimar adia a compaction; subestimar faria a compaction descartar dado vivo). Fato registrado em `TestResiduoDeLivenessDoReplayNaoConverge` e no comentário de `store_recovery.go`; quem reconstrói o tally por varredura é a compaction do débito 21 |
 
 ### Sem milestone — decisões registradas que podem virar trabalho
 
@@ -82,6 +91,12 @@ planejado.
 | 34 | **`Stats` e `Sequence` engolem `ErrDatasetClosed`** e devolvem `Stats{}` / `(0,false)`: `RowCount: 0` num Store fechado é indistinguível de dataset vazio | Quando `Stats` virar superfície de observabilidade (débito 16) |
 | 35 | **`FieldDictValidBytes`/`ValuesDictValidBytes` são gravados a cada checkpoint e ninguém os lê** | Campo de consistência sem verificador convida a próxima revisão a assumir uma checagem que não existe |
 | 36 | **`ExitWriter` (4) não tem teste fim a fim** — é o único código do contrato sem cobertura, e o de semântica mais cara | Junto com o teste de ENOSPC no meio da ingestão |
+| 39 | **Os diagramas do `architecture.md` não renderizam: o repositório nunca foi publicado.** `git remote -v` é vazio, então `raw.githubusercontent.com/nishisan-dev/nishidb/main/…` responde 404 nos cinco `.puml` | **Ação do dono do repositório**, não de código: publicar o remoto. As URLs já apontam para `main` (apontavam para `feature/m1-query`, que some no merge) e os cinco fontes estão versionados em `docs/diagrams/` — a sintaxe dos cinco foi validada contra um servidor PlantUML |
+| 40 | **O gate de vazão do CLI é relativo, e de propósito**: `TestVazaoDaIngestaoPeloCLI` mede a mesma ingestão pelo caminho interno no mesmo processo e cobra do CLI no máximo **3×** sobre ela | A razão é adimensional — `-race` e carga penalizam os dois lados juntos, e por isso o gate sobrevive nas duas trilhas (`make test` e `make test-race`), onde o piso absoluto ficava vermelho sem defeito. O que ele **não** pega: regressão no storage, que derruba os dois lados na mesma proporção e mantém a razão. Essa é a jurisdição de `benchmark/micro` e `benchmark/baselines`, e é o que precisa existir em CI para o flanco fechar |
+| 41 | **O verificador de documentação só confere nome de teste.** `TestEvidenciasCitadasNosDocumentosExistem` casa `func Test` e mais nada | Não abre `.puml`, não resolve URL de diagrama, não executa bloco de comando fora do README (o quickstart é executado, o resto não) e não confere número medido — nem a data do rótulo — contra o JSON da rodada. Reabrir quando um documento voltar a citar o que não existe; o custo de cada checagem nova é baixo, o do silêncio não |
+| 42 | **S13 em aberto**: property test com sequência aleatória de puts/gets contra oráculo `map` **com reopen aleatório**, e os benchmarks nomeados `BenchmarkPut`/`BenchmarkGetByKey` | Não é falta de cobertura, é granularidade: o caminho de escrita e o point lookup são medidos por `BenchmarkApplyIngestReal` e `BenchmarkQueryPointLookup` (ambos **0 allocs/op**, baseline em `benchmark/baselines/micro-20260813.txt`), e o crash real está em `TestKill9NoMeioDaIngestaoPreservaOEstadoConfirmado`. O que falta mesmo é o **aleatório com reopen**, que é a única forma de pegar ordem de operações que ninguém pensou em escrever |
+| 43 | **S15 em aberto**: `docs/architecture-storage.md` e o `c4_storage_component.puml` prometidos no design de storage | O `architecture.md` cobre a visão de sistema e o layout em disco; falta o detalhe por componente do storage (write path, recovery, C4 de componente) |
+| 44 | **`make test-integration` é plumbing morto**: roda `go test -race -tags integration ./...` e **nenhum arquivo declara a tag** — é alias byte a byte de `make test-race` | Três saídas: dar conteúdo à tag (o crash test com subprocesso do S13 é o candidato natural), remover o alvo, ou deixá-lo documentado como está. Enquanto ninguém decide, o alvo promete uma suíte que não existe |
 
 ## Riscos de operação (não são débito de código, são de conhecimento)
 

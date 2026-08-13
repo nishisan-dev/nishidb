@@ -143,9 +143,9 @@ Commits atômicos; S0–S2 direto na main (bootstrap), depois os dois ramos em b
 - [ ] **S10** `storage.Store` façade + write path (Put orquestrado): put/get por key e rowId, update mantém rowId, bitmap diff em update, location como commit point com leitor concorrente sob `-race`
 - [ ] **S11** `checkpoint.Manifest` + `Store.Checkpoint`: encode/decode+CRC, rename atômico, corrupção → erro (§104: checkpoint)
 - [ ] **S12** Recovery/tail replay: write N → checkpoint → write M → reopen → N+M visíveis (**critério Fase 1: write → restart → lookup by id**); tail incompleto → ftruncate; replay reconverge bitmaps/sequences; segmentos pós-checkpoint descobertos (§104: restart, replay, incomplete tail)
-- [ ] **S13** Integração + bench: property test vs oracle com reopen aleatório; **crash test com subprocesso + SIGKILL** (`//go:build integration`); `BenchmarkPut`/`GetByKey` com `AllocsPerRun` (meta single-digit); heap-flatness 1M vs 8M
+- [ ] **S13** Integração + bench: property test vs oracle com reopen aleatório; **crash test com subprocesso + SIGKILL** (`//go:build integration`); `BenchmarkPut`/`GetByKey` com `AllocsPerRun` (meta single-digit); heap-flatness 1M vs 8M — **entregue por outros nomes**: crash real em `TestKill9NoMeioDaIngestaoPreservaOEstadoConfirmado` (sem build tag), escrita e point lookup em `BenchmarkApplyIngestReal`/`BenchmarkQueryPointLookup` (0 allocs/op), heap-flatness na rodada de aceite. **Aberto:** o property test aleatório com reopen — débito 42 de `docs/debitos.md`
 - [ ] **S14** Stats de liveness por segmento no manifest (groundwork da Fase 10; compactor fora do M1)
-- [ ] **S15** Docs: `docs/architecture-storage.md` + PlantUML (write flow, recovery flow, C4 component)
+- [ ] **S15** Docs: `docs/architecture-storage.md` + PlantUML (write flow, recovery flow, C4 component) — **aberto** (o `architecture.md` cobre a visão de sistema, o layout em disco e o recovery; falta o detalhe por componente do storage): débito 43 de `docs/debitos.md`
 
 ## Tarefas M1 — ramo Materializer + Query (Q2–Q20)
 
@@ -200,7 +200,7 @@ Commits atômicos; S0–S2 direto na main (bootstrap), depois os dois ramos em b
 - [ ] "write → restart → lookup by id" (critério da Fase 1, spec §113) demonstrado por teste de integração (S12/I1).
 - [ ] CLI local funcional: `nishidb ingest` + `nishidb query` sobre a amostra real e corpus sintético (I2).
 - [ ] `ingest-bench` fim-a-fim: rodada 8M entidades com storage real, `GOMEMLIMIT=512MiB GOGC=100`, gates §109 (RSS < 1 GiB) e §110 (heap 8M < 2× heap 1M) verdes (I3).
-- [ ] `docs/architecture.md` + diagramas PlantUML (`docs/diagrams/`) atualizados e renderizando via uml.nishisan.dev.
+- [ ] `docs/architecture.md` + diagramas PlantUML (`docs/diagrams/`) atualizados e renderizando via uml.nishisan.dev. **Parcial:** os cinco `.puml` existem, estão citados no documento e têm a sintaxe validada; a renderização pelo proxy depende de **publicar o repositório** (as URLs raw apontam para `main`, e hoje não há remoto) — débito 39 de `docs/debitos.md`.
 - [ ] Plano + anexos copiados para `/planning` no repositório (primeiro commit após S0).
 
 ## Apêndice A — Amostra real de evento (fixture `testdata/radius_event_sample.json`)
