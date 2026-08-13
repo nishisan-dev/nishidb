@@ -69,6 +69,7 @@ type Store struct {
 
 	nextRowID atomic.Uint64
 	rowCount  atomic.Uint64
+	epoch     uint64 // último epoch de manifest gravado (writer-only)
 
 	// Buffers exclusivos do writer (Put).
 	buildBuf []byte // record em construção
@@ -89,7 +90,8 @@ func Open(opts Options) (*Store, error) {
 	metaDir := filepath.Join(opts.Dir, "metadata")
 	dataDir := filepath.Join(opts.Dir, "data")
 	idxDir := filepath.Join(opts.Dir, "indexes")
-	for _, d := range []string{metaDir, dataDir, idxDir} {
+	cpDir := filepath.Join(opts.Dir, "checkpoint")
+	for _, d := range []string{metaDir, dataDir, idxDir, cpDir} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return nil, fmt.Errorf("storage: criar %s: %w", d, err)
 		}

@@ -1,0 +1,150 @@
+package storage
+
+import (
+	"fmt"
+	"path/filepath"
+	"slices"
+	"sync"
+	"testing"
+
+	"github.com/nishisan-dev/nishidb/internal/storage/checkpoint"
+	"github.com/nishisan-dev/nishidb/internal/types"
+)
+
+func TestCheckpointEscreveManifestCoerente(t *testing.T) {
+	dir := t.TempDir()
+	s := openStore(t, Options{Dir: dir, BitmapFields: []types.FieldID{fldStatus}})
+	const n = 8
+	for i := 0; i < n; i++ {
+		k := fmt.Sprintf("cp-%d", i)
+		mustPut(t, s, k, int64(i), statusPayload(t, s, k, "Start", 0), nil)
+	}
+
+	if err := s.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+
+	m, err := checkpoint.Load(filepath.Join(dir, "checkpoint", "manifest.bin"))
+	if err != nil {
+		t.Fatalf("Load do manifest: %v", err)
+	}
+	if m.Epoch != 1 {
+		t.Fatalf("Epoch: %d", m.Epoch)
+	}
+	if m.NextRowID != n || m.RowCount != n {
+		t.Fatalf("contadores: %+v", *m)
+	}
+	if m.CurrentSegment != 1 || len(m.Segments) != 1 || m.Segments[0].ID != 1 {
+		t.Fatalf("segmentos: %+v", *m)
+	}
+	if m.DurableOffset <= 64 {
+		t.Fatalf("DurableOffset deveria estar após o header: %d", m.DurableOffset)
+	}
+	if m.PrimarySlotCount != 1<<20 || m.PrimaryUsed != n || m.HashKind != 1 {
+		t.Fatalf("primary no manifest: %+v", *m)
+	}
+	if m.FieldDictValidBytes <= 8 {
+		t.Fatalf("FieldDictValidBytes: %d", m.FieldDictValidBytes)
+	}
+	if len(m.Bitmaps) != 1 || m.Bitmaps[0].FieldID != fldStatus || m.Bitmaps[0].ValuesDictValidBytes <= 8 {
+		t.Fatalf("bitmaps no manifest: %+v", m.Bitmaps)
+	}
+}
+
+func TestCheckpointEsvaziaOverlayEMantemLeitura(t *testing.T) {
+	s := openStore(t, Options{})
+	const n = 5
+	for i := 0; i < n; i++ {
+		k := fmt.Sprintf("ov-%d", i)
+		mustPut(t, s, k, int64(i), statusPayload(t, s, k, "Start", 0), nil)
+	}
+	if got := s.Stats().OverlayLen; got != n {
+		t.Fatalf("OverlayLen pré-checkpoint: %d", got)
+	}
+	if err := s.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Stats().OverlayLen; got != 0 {
+		t.Fatalf("OverlayLen pós-checkpoint: %d", got)
+	}
+	// Leituras seguem funcionando (agora via mmap) e o scan não muda.
+	for i := 0; i < n; i++ {
+		k := fmt.Sprintf("ov-%d", i)
+		if _, _, ok, err := s.GetByKey([]byte(k), nil); err != nil || !ok {
+			t.Fatalf("GetByKey(%q) pós-checkpoint: (%v,%v)", k, ok, err)
+		}
+	}
+	if rows := collectRows(t, s.ScanLive()); !slices.Equal(rows, []types.RowID{0, 1, 2, 3, 4}) {
+		t.Fatalf("ScanLive pós-checkpoint: %v", rows)
+	}
+}
+
+func TestCheckpointIncrementaEpochEAceitaNovosPuts(t *testing.T) {
+	dir := t.TempDir()
+	s := openStore(t, Options{Dir: dir})
+	mustPut(t, s, "a", 1, statusPayload(t, s, "a", "Start", 0), nil)
+	if err := s.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	mustPut(t, s, "b", 2, statusPayload(t, s, "b", "Start", 0), nil)
+	if got := s.Stats().OverlayLen; got != 1 {
+		t.Fatalf("OverlayLen entre checkpoints: %d", got)
+	}
+	if err := s.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	m, err := checkpoint.Load(filepath.Join(dir, "checkpoint", "manifest.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Epoch != 2 || m.RowCount != 2 {
+		t.Fatalf("%+v", *m)
+	}
+}
+
+func TestCheckpointComLeitoresConcorrentes(t *testing.T) {
+	s := openStore(t, Options{})
+	key := []byte("cp-conc")
+	mustPut(t, s, "cp-conc", 0, statusPayload(t, s, "cp-conc", "Start", 0), nil)
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		var buf []byte
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if _, b, ok, err := s.GetByKey(key, buf); err != nil || !ok {
+				t.Errorf("leitura durante checkpoint: (%v,%v)", ok, err)
+				return
+			} else {
+				buf = b
+			}
+		}
+	}()
+	var prev types.Record
+	var buf []byte
+	var ok bool
+	var err error
+	for i := int64(1); i <= 50; i++ {
+		prev, buf, ok, err = s.GetByKey(key, buf)
+		if err != nil || !ok {
+			t.Fatal(err)
+		}
+		if _, _, err := s.Put(key, i, 0, statusPayload(t, s, "cp-conc", "Start", i), &prev); err != nil {
+			t.Fatal(err)
+		}
+		if i%10 == 0 {
+			if err := s.Checkpoint(); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	close(stop)
+	wg.Wait()
+}
