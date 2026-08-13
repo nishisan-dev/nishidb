@@ -69,6 +69,33 @@ func TestPointLookupTambemRevalida(t *testing.T) {
 	}
 }
 
+// A liveness do POINT LOOKUP tem de ser honrada pelo fetch, e não por
+// acidente do predicado.
+//
+// Sem a asserção de métricas este teste passa mesmo com a liveness desligada,
+// e pelo motivo errado: o GetByKey de uma row morta devolve Record{} com
+// payload vazio, todos os slots ficam ausentes, e o predicado `id = 'X'` dá
+// falso. É a revalidação da §44 cobrindo o buraco da liveness — coincidência
+// estrutural (todo PointLookupPlan tem `key = literal` como conjunct), não
+// invariante. DeadSkipped=1 com Rejected=0 é o que separa os dois.
+func TestPointLookupHonraLiveness(t *testing.T) {
+	h := novoHarness(t)
+	h.ingere(`{"id":"CMP-0001","_SEQ":1,"Acct-Status-Type":"Stop"}`)
+	h.store.SetTombstone(h.rowID("CMP-0001"))
+
+	rows := h.consultaOK(`SELECT id FROM radius_sessions WHERE id = 'CMP-0001'`)
+	if len(rows) != 0 {
+		t.Fatalf("resultado = %v, want vazio: a row está morta", rows)
+	}
+	m := h.engine.Metrics()
+	if got := m.DeadSkipped.Load(); got != 1 {
+		t.Errorf("DeadSkipped = %d, want 1: a row foi pulada pela LIVENESS", got)
+	}
+	if got := m.Rejected.Load(); got != 0 {
+		t.Errorf("Rejected = %d, want 0: se a row chegou ao predicado, a liveness não a filtrou", got)
+	}
+}
+
 // Candidato tombstoned: o índice o devolve (as postings não são limpas), o
 // fetch reporta morto, e ele não conta como row. A liveness é do FETCH.
 func TestCandidatoTombstonedNaoSai(t *testing.T) {

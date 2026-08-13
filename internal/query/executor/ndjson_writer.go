@@ -22,6 +22,14 @@ const DefaultBufSize = 64 << 10
 // converge para bufSize + maiorLinha — independente do NÚMERO de linhas, que é
 // exatamente o contrato.
 //
+// O buffer NUNCA encolhe, e isso tem consequência de orçamento: uma única row
+// de 1 MiB fixa a capacidade em ~1 MiB pela vida do writer, mesmo que as
+// 100 mil linhas seguintes sejam pequenas. Com N queries concorrentes o pior
+// caso é N × maiorLinha de RSS residente. É aderência ao contrato, não defeito,
+// mas é um termo real num orçamento de 1 GiB: se ele passar a importar, o
+// remédio é encolher no flush quando cap > k·bufSize, ao custo de uma alocação
+// por row patológica.
+//
 // Não é thread-safe. Uma vez em erro, fica STICKY: toda chamada seguinte
 // devolve o mesmo erro sem tocar no io.Writer. Continuar escrevendo depois de
 // uma falha produziria um stream truncado no meio de uma linha, que o cliente

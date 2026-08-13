@@ -307,6 +307,36 @@ func TestMaxRowsImplicitoSinalizaTruncamento(t *testing.T) {
 	}
 }
 
+// O alarme FALSO do teto exato, fixado como comportamento em vez de virar
+// descoberta de produção: com exatamente maxRows linhas no resultado, o
+// executor ainda reporta truncamento.
+//
+// É deliberado — distinguir "acabou" de "parou no teto" exigiria continuar
+// avaliando o predicado até achar a próxima linha viva, potencialmente o
+// dataset inteiro, que é o custo que o teto existe para evitar. Alarme falso é
+// aceitável; truncamento silencioso não é. O teste existente usava 20 rows com
+// teto 5, e por isso não distinguia os dois casos.
+func TestTetoExatoAindaReportaTruncamento(t *testing.T) {
+	h := novoStubHarness(t, 5, 5, "30s") // exatamente maxRows linhas
+	n, err := h.conta(`SELECT id FROM linhas`)
+
+	if n != 5 {
+		t.Fatalf("linhas = %d, want 5", n)
+	}
+	if !errors.Is(err, executor.ErrMaxRowsExceeded) {
+		t.Errorf("Err() = %v, want ErrMaxRowsExceeded mesmo com o resultado exato", err)
+	}
+}
+
+// E o complemento: ABAIXO do teto não há alarme nenhum.
+func TestAbaixoDoTetoNaoReportaTruncamento(t *testing.T) {
+	h := novoStubHarness(t, 4, 5, "30s")
+	n, err := h.conta(`SELECT id FROM linhas`)
+	if n != 4 || err != nil {
+		t.Errorf("linhas=%d err=%v, want 4/nil", n, err)
+	}
+}
+
 // LIMIT explícito abaixo do teto NÃO é truncamento: o usuário pediu 3 e
 // recebeu 3.
 func TestLimitMenorQueMaxRowsNaoErra(t *testing.T) {
@@ -393,6 +423,71 @@ func TestRowInvalidaAposNext(t *testing.T) {
 		t.Errorf("slice capturado = %q, row corrente = %q",
 			capturado, it.Row().Col(0).Val.Bytes)
 	}
+}
+
+// O contrato "Val é zero quando Null" é o que separa uma coluna nula do VALOR
+// DA ROW ANTERIOR: o coleta reseta só o `present`, nunca o `val` — de
+// propósito, é o que dá o zero alocação —, então o slot de um campo ausente
+// carrega literalmente o valor anterior. O zeramento na projeção é a única
+// coisa entre os dois.
+//
+// Hoje isso é invisível porque todo consumidor checa Null antes de olhar Val.
+// A máscara acaba no primeiro que fizer o contrário — e o candidato é o driver
+// JDBC, onde getInt() devolve o valor e wasNull() devolve o flag, nessa ordem:
+// o valor da row anterior sairia como dado plausível de um campo nulo.
+func TestValEhZeradoQuandoAColunaEhNull(t *testing.T) {
+	h := novoStubHarness(t, 2, 100000, "30s")
+	// A ORDEM é o ponto: a row COM o campo vem PRIMEIRO, e é o valor dela que
+	// fica no slot para vazar na segunda. Com a ausente primeiro o slot ainda
+	// está zerado e o teste não prova nada — foi assim que a primeira versão
+	// deste teste deixou a mutação passar.
+	h.store.payloads[1] = payloadSemNome(t, h.sch)
+
+	it := h.abre(context.Background(), `SELECT nome FROM linhas`)
+	defer it.Close()
+
+	if !it.Next() {
+		t.Fatalf("sem a primeira row: %v", it.Err())
+	}
+	if c := it.Row().Col(0); c.Null || string(c.Val.Bytes) != "linha" {
+		t.Fatalf("a primeira row deveria ter o campo: %+v", c)
+	}
+
+	if !it.Next() {
+		t.Fatalf("sem a segunda row: %v", it.Err())
+	}
+	c := it.Row().Col(0)
+	if !c.Null {
+		t.Fatalf("a segunda row deveria ter a coluna ausente: %+v", c)
+	}
+	// types.Value contém []byte e não é comparável com ==; o zero é aferido
+	// campo a campo.
+	if c.Val.Type != types.TypeNull || c.Val.I64 != 0 || c.Val.Bytes != nil {
+		t.Errorf("Val = %+v numa coluna Null, want zero: é o valor da row ANTERIOR vazando", c.Val)
+	}
+}
+
+// payloadSemNome monta um payload com id e n, sem o campo `nome`.
+func payloadSemNome(t *testing.T, sch *schema.Compiled) []byte {
+	t.Helper()
+	id, _ := sch.FieldByName([]byte("id"))
+	num, _ := sch.FieldByName([]byte("n"))
+	campos := []struct {
+		f *schema.CompiledField
+		v types.Value
+	}{
+		{id, types.Value{Type: types.TypeString, Bytes: []byte("K00001")}},
+		{num, types.Value{Type: types.TypeInt64, I64: 1}},
+	}
+	sort.SliceStable(campos, func(a, b int) bool { return campos[a].f.ID < campos[b].f.ID })
+	var p []byte
+	var err error
+	for _, c := range campos {
+		if p, err = encoding.AppendField(p, c.f.ID, c.v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return p
 }
 
 func TestRowZeroAposFim(t *testing.T) {

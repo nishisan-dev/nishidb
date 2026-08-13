@@ -383,6 +383,10 @@ func TestParidadeDeEscapingComEncodingJSON(t *testing.T) {
 		"", "abc", `a"b`, `a\b`, "\b\t\n\f\r", "\x00\x1f",
 		"a/b", "ção", "🙂", "a\xffb", "a\xc3", "\xed\xa0\x80",
 		strings.Repeat("x", 200), "tab\there",
+		// HTML entra na PARIDADE, e não nas divergências: com
+		// SetEscapeHTML(false) o encoding/json também não escapa < > &. A
+		// divergência real seria contra o encoder padrão, com HTML ligado.
+		"<&>", "<script>", "a&b",
 	}
 	for _, in := range casos {
 		t.Run(in, func(t *testing.T) {

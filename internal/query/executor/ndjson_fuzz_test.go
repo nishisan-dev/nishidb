@@ -43,8 +43,18 @@ func FuzzAppendRow(f *testing.F) {
 			t.Fatalf("não termina em LF: %q", out)
 		}
 
-		// 2. A linha é JSON válido.
+		// 2. A linha é JSON válido — MAS só quando o valor de entrada também
+		// era. Com um `json` de conteúdo inválido o encoder promete
+		// explicitamente APENAS o framing (D-Q16-2): o documento sai verbatim,
+		// sanitizado só nos control chars, e a falha degrada para "uma linha
+		// com json estranho" em vez de "o stream dessincronizou".
+		//
+		// Sem este guard o alvo exigia do fuzz uma garantia mais forte do que
+		// a que o código promete, e morria no primeiro `{"0":A}`.
 		linha := out[:len(out)-1]
+		if v.Type == types.TypeJSON && len(dados) > 0 && !json.Valid(dados) {
+			return // framing já aferido acima; validade não é prometida aqui
+		}
 		if !json.Valid(linha) {
 			t.Fatalf("JSON inválido: %q", linha)
 		}

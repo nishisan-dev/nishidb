@@ -108,6 +108,41 @@ func TestSpec106And(t *testing.T) {
 	}
 }
 
+// O AND com a fonte NÃO indexada: aqui o predicado é a única coisa que
+// filtra, e a esquerda é falsa enquanto a direita é verdadeira.
+//
+// Todas as outras queries com AND deste pacote usam interseção de bitmaps,
+// onde a FONTE já pré-filtra os dois termos e o predicado fica redundante —
+// por isso a mutação que desliga o curto-circuito do AND (fazendo `A AND B`
+// devolver o resultado de B) passava na suíte inteira. A assimetria com o OR
+// é estrutural: lá a fonte é união, que não pré-filtra.
+func TestAndSobreFullScanFiltraPelosDoisLados(t *testing.T) {
+	h := semeado(t)
+
+	// username='zzz' é falso para todas as rows; connect_info=200 é verdadeiro
+	// para CMP-0002. Se o AND devolver o lado direito, CMP-0002 aparece.
+	got := chaves(h.consultaOK(
+		`SELECT id FROM radius_sessions WHERE username = 'zzz' AND connect_info = 200`), "id")
+	if len(got) != 0 {
+		t.Errorf("resultado = %v, want vazio: a esquerda do AND é falsa para todas as rows", got)
+	}
+
+	// E o simétrico, para que "vazio sempre" não passe: com a esquerda
+	// verdadeira e a direita também, a row sai.
+	got = chaves(h.consultaOK(
+		`SELECT id FROM radius_sessions WHERE username = 'maria' AND connect_info = 200`), "id")
+	if len(got) != 1 || got[0] != "CMP-0002" {
+		t.Errorf("resultado = %v, want [CMP-0002]", got)
+	}
+
+	// Com a direita falsa e a esquerda verdadeira, também não sai.
+	got = chaves(h.consultaOK(
+		`SELECT id FROM radius_sessions WHERE username = 'maria' AND connect_info = 999`), "id")
+	if len(got) != 0 {
+		t.Errorf("resultado = %v, want vazio: a direita do AND é falsa", got)
+	}
+}
+
 // §106 — OR
 func TestSpec106Or(t *testing.T) {
 	h := semeado(t)

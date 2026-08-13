@@ -226,8 +226,15 @@ func (it *iterador) projeta() {
 			it.cols[j].Null, it.cols[j].Val = false, sl.val
 			continue
 		}
-		// Zerar o Val é obrigatório: sem isso a coluna carrega o valor da row
-		// anterior e o encoder imprime lixo ao lado de um null.
+		// Zerar o Val é obrigatório: o coleta reseta só o `present`, nunca o
+		// `val` — é o que dá o zero alocação —, então o slot de um campo
+		// ausente carrega literalmente o valor da row ANTERIOR, e este
+		// zeramento é a única coisa entre os dois.
+		//
+		// Hoje todo consumidor checa Null antes de olhar Val, o que mascara a
+		// falha; ela apareceria no primeiro que fizesse o contrário, e o
+		// candidato é o driver JDBC (getInt() devolve o valor, wasNull()
+		// devolve o flag, nessa ordem).
 		it.cols[j].Null, it.cols[j].Val = true, types.Value{}
 	}
 }

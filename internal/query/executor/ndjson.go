@@ -71,6 +71,12 @@ func AppendValue(dst []byte, v types.Value) []byte {
 		if math.IsNaN(f) || math.IsInf(f, 0) {
 			return append(dst, "null"...)
 		}
+		// 'g' é a forma mais curta que faz round-trip, e diverge do
+		// encoding/json na GRAFIA (ele usa 'f' abaixo de 1e21 e 'e' fora, com
+		// expoente sem zero à esquerda) em cerca de um quarto dos doubles: nós
+		// emitimos 1e-07 onde ele emitiria 1e-7. As duas formas são JSON válido
+		// e decodificam para o MESMO float64 — a divergência é textual, e só
+		// importa para quem compara a saída byte a byte com o encoder padrão.
 		return strconv.AppendFloat(dst, f, 'g', -1, 64)
 
 	case types.TypeBool:
