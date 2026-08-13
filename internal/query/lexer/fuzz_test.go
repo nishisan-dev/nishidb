@@ -18,6 +18,13 @@ func FuzzLexer(f *testing.F) {
 		`''''`, `"a""b"`, "-", "<>", "007", "1e+", "'", `"`, "\xff",
 		"a >", "café", "\x00", "   ", "",
 		`SELECT "Acct-Status-Type" FROM s WHERE a IS NOT NULL`,
+		// Sem este seed a invariante do IDENT abaixo nunca é exercitada com
+		// hífen: os outros seeds só trazem nome hifenizado ENTRE ASPAS, que é
+		// outro token. Aceitar hífen em identificador bare faria
+		// `Acct-Status-Type = 'Stop'` resolver silenciosamente para uma coluna
+		// em vez de dar erro de sintaxe.
+		"SELECT * FROM radius-sessions",
+		"SELECT a FROM x WHERE Acct-Status-Type = 'Stop'",
 	}
 	for _, s := range seeds {
 		f.Add(s)
