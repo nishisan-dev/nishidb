@@ -41,6 +41,21 @@ const (
 	FlagTombstone uint8 = 1 << 0
 )
 
+// RowIDIterator percorre rowIds em ordem CRESCENTE — a ordem é
+// pré-condição das interseções e uniões do planner.
+//
+// Mora aqui, e não no consumidor, porque dois provedores precisam satisfazer
+// a MESMA interface: o Store real e o fake do ramo query. Uma interface
+// redeclarada em cada consumidor nunca é satisfeita por dois provedores com
+// tipos de retorno diferentes, e é isso que permite as asserções de
+// compilação dos dois lados.
+type RowIDIterator interface {
+	Next() bool
+	RowID() RowID
+	Err() error
+	Close() error
+}
+
 // Value é uma união sem boxing para valores tipados no hot path.
 // Nunca usar interface{} para valores.
 //

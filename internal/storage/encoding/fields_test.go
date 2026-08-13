@@ -135,6 +135,62 @@ func TestFieldReaderZeroCopy(t *testing.T) {
 	}
 }
 
+func TestFieldReaderRawField(t *testing.T) {
+	// C5: o merge precisa copiar campos não tocados sem pagar decode+encode.
+	// A prova é que concatenar os spans brutos reproduz o payload original.
+	cases := fieldCases()
+	var payload []byte
+	for _, c := range cases {
+		payload = mustAppend(t, payload, c.id, c.val)
+	}
+
+	var r FieldReader
+	r.Reset(payload)
+	if raw := r.RawField(); raw != nil {
+		t.Fatalf("antes do primeiro Next não há campo corrente: %x", raw)
+	}
+	var reconstruido []byte
+	for range cases {
+		if _, _, ok := r.Next(); !ok {
+			t.Fatalf("Next: %v", r.Err())
+		}
+		raw := r.RawField()
+		if len(raw) == 0 {
+			t.Fatal("RawField vazio para campo válido")
+		}
+		reconstruido = append(reconstruido, raw...)
+	}
+	if _, _, ok := r.Next(); ok {
+		t.Fatal("esperado fim do payload")
+	}
+	if raw := r.RawField(); raw != nil {
+		t.Fatalf("após o fim não há campo corrente: %x", raw)
+	}
+	if !bytes.Equal(reconstruido, payload) {
+		t.Fatal("a concatenação dos spans brutos deveria reproduzir o payload")
+	}
+
+	// O span é subslice do payload (zero-copy) e tem cap limitado, para que
+	// um append do caller não escreva por cima do campo seguinte.
+	r.Reset(payload)
+	r.Next()
+	raw := r.RawField()
+	if cap(raw) != len(raw) {
+		t.Fatalf("RawField deveria ter cap limitado: len=%d cap=%d", len(raw), cap(raw))
+	}
+}
+
+func TestFieldReaderRawFieldAposErro(t *testing.T) {
+	var r FieldReader
+	r.Reset([]byte{0x01, 0x00, 0xFF}) // tag inválida
+	if _, _, ok := r.Next(); ok {
+		t.Fatal("tag inválida deveria falhar")
+	}
+	if raw := r.RawField(); raw != nil {
+		t.Fatalf("sem campo corrente após erro: %x", raw)
+	}
+}
+
 func TestFieldReaderPayloadVazio(t *testing.T) {
 	var r FieldReader
 	r.Reset(nil)

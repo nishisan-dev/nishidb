@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"sync/atomic"
 
@@ -32,6 +33,15 @@ var ErrInvalidArgument = errors.New("storage: argumento inválido")
 // de adivinhar, porque toda alternativa (truncar, pular, recriar) descarta
 // dados duráveis em silêncio.
 var ErrDatasetCorrupt = errors.New("storage: dataset corrompido")
+
+// ErrWriterFailed indica writer em modo falho (sticky) — o dataset precisa
+// ser reaberto para voltar a aceitar escrita.
+//
+// É o que permite ao consumidor distinguir "evento ruim, pule" de "writer
+// morreu, pare a ingestão": sem esse sentinela, a política de log-and-skip
+// por evento (§101) transformaria um writer morto num skip infinito, e a
+// ingestão seguiria descartando tudo em silêncio.
+var ErrWriterFailed = errors.New("storage: writer em modo falho (reabra o dataset)")
 
 // semRecords informa se nenhum segmento do diretório tem record algum (só
 // header): é o que distingue um dataset recém-criado de um dataset com
@@ -61,14 +71,6 @@ type Stats struct {
 	CurrentSegmentID  uint32
 	PrimaryLoadFactor float64
 	OverlayLen        int
-}
-
-// RowIDIterator itera rowIds em ordem crescente.
-type RowIDIterator interface {
-	Next() bool
-	RowID() types.RowID
-	Err() error
-	Close() error
 }
 
 const defaultSegmentSize = 512 << 20
@@ -283,6 +285,27 @@ func fsyncDir(dir string) error {
 // FieldDict expõe o dicionário de campos do dataset.
 func (s *Store) FieldDict() *fielddict.Dict { return s.dict }
 
+// HasBitmap informa se o campo tem índice bitmap.
+//
+// É o capability check do planner: sem ele o plano escolhe o caminho
+// indexado e a query falha em RUNTIME, em vez de degradar para full scan
+// como o design promete. O conjunto é fixado no Open, então a resposta é
+// estável durante toda a vida do Store.
+func (s *Store) HasBitmap(field types.FieldID) bool {
+	_, ok := s.bitmaps[field]
+	return ok
+}
+
+// BitmapFields devolve, em ordem crescente, os campos com índice bitmap.
+func (s *Store) BitmapFields() []types.FieldID {
+	out := make([]types.FieldID, 0, len(s.bitmaps))
+	for field := range s.bitmaps {
+		out = append(out, field)
+	}
+	slices.Sort(out)
+	return out
+}
+
 // lookup resolve a key pela primary, lendo o record corrente em buf.
 // exists = key presente; live = sem flag de tombstone na location.
 //
@@ -370,7 +393,7 @@ func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *ty
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
 	if s.stickyErr != nil {
-		return 0, false, fmt.Errorf("storage: writer em modo falho (reabra o dataset): %w", s.stickyErr)
+		return 0, false, fmt.Errorf("%w: %w", ErrWriterFailed, s.stickyErr)
 	}
 	if len(key) == 0 {
 		return 0, false, fmt.Errorf("%w: key vazia", ErrInvalidArgument)
@@ -784,7 +807,7 @@ func (it *liveIterator) RowID() types.RowID { return it.cur }
 func (it *liveIterator) Err() error         { return nil }
 func (it *liveIterator) Close() error       { return nil }
 
-// emptyIterator é um RowIDIterator sem elementos.
+// emptyIterator é um types.RowIDIterator sem elementos.
 type emptyIterator struct{}
 
 func (emptyIterator) Next() bool         { return false }
@@ -795,7 +818,7 @@ func (emptyIterator) Close() error       { return nil }
 // ScanLive devolve um iterador lazy das rows vivas (rowIds crescentes,
 // location válida — overlay incluso — e sem tombstone). Rows criadas após a
 // chamada não aparecem (snapshot do limite superior).
-func (s *Store) ScanLive() RowIDIterator {
+func (s *Store) ScanLive() types.RowIDIterator {
 	return &liveIterator{s: s, limit: types.RowID(s.nextRowID.Load())}
 }
 
@@ -803,7 +826,7 @@ func (s *Store) ScanLive() RowIDIterator {
 // iterador vazio; campo não indexado é erro. O resultado é um SUPERSET de
 // candidatos: rows tombstoned/sem location podem aparecer — valide liveness
 // e predicate via GetByRowID (spec §44).
-func (s *Store) LookupBitmap(field types.FieldID, v types.Value) (RowIDIterator, error) {
+func (s *Store) LookupBitmap(field types.FieldID, v types.Value) (types.RowIDIterator, error) {
 	ix, ok := s.bitmaps[field]
 	if !ok {
 		return nil, fmt.Errorf("%w: campo %d não possui índice bitmap", ErrInvalidArgument, field)
@@ -841,7 +864,7 @@ func (s *Store) Sync() error {
 // syncLocked exige wmu já adquirido.
 func (s *Store) syncLocked() error {
 	if s.stickyErr != nil {
-		return fmt.Errorf("storage: writer em modo falho (reabra o dataset): %w", s.stickyErr)
+		return fmt.Errorf("%w: %w", ErrWriterFailed, s.stickyErr)
 	}
 	if err := s.segW.Sync(); err != nil {
 		return s.failWriter(err)

@@ -89,14 +89,29 @@ func AppendField(dst []byte, id types.FieldID, v types.Value) ([]byte, error) {
 type FieldReader struct {
 	payload []byte
 	pos     int
-	err     error
+	// start é o offset do campo devolvido pelo último Next, ou -1 quando não
+	// há campo corrente (antes do primeiro Next, no fim ou após erro).
+	start int
+	err   error
 }
 
 // Reset posiciona o reader no início do payload e limpa o estado de erro.
 func (r *FieldReader) Reset(payload []byte) {
 	r.payload = payload
 	r.pos = 0
+	r.start = -1
 	r.err = nil
+}
+
+// RawField devolve os bytes brutos do campo corrente — id, tag, length e
+// valor —, subslice do payload válido até a próxima chamada de Next ou
+// Reset. Existe para o merge copiar um campo não tocado sem decodificar e
+// recodificar. Devolve nil quando não há campo corrente.
+func (r *FieldReader) RawField() []byte {
+	if r.start < 0 || r.start >= r.pos {
+		return nil
+	}
+	return r.payload[r.start:r.pos:r.pos]
 }
 
 // Err devolve o erro de corrupção encontrado, ou nil em fim limpo.
@@ -104,6 +119,7 @@ func (r *FieldReader) Err() error { return r.err }
 
 func (r *FieldReader) fail(format string, args ...any) (types.FieldID, types.Value, bool) {
 	r.err = fmt.Errorf("%w: "+format, append([]any{ErrCorrupt}, args...)...)
+	r.start = -1
 	return 0, types.Value{}, false
 }
 
@@ -111,8 +127,10 @@ func (r *FieldReader) fail(format string, args ...any) (types.FieldID, types.Val
 // (distinguíveis via Err).
 func (r *FieldReader) Next() (types.FieldID, types.Value, bool) {
 	if r.err != nil || r.pos >= len(r.payload) {
+		r.start = -1
 		return 0, types.Value{}, false
 	}
+	r.start = r.pos
 	if len(r.payload)-r.pos < 3 {
 		return r.fail("header de campo truncado no offset %d", r.pos)
 	}

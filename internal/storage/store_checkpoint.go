@@ -38,7 +38,7 @@ func (s *Store) Checkpoint() error {
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
 	if s.stickyErr != nil {
-		return fmt.Errorf("storage: writer em modo falho (reabra o dataset): %w", s.stickyErr)
+		return fmt.Errorf("%w: %w", ErrWriterFailed, s.stickyErr)
 	}
 	if err := s.traceStep("segSync", s.segW.Sync); err != nil {
 		return s.failWriter(err)

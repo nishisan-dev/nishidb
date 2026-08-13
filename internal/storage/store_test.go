@@ -65,7 +65,7 @@ func strVal(s string) types.Value {
 	return types.Value{Type: types.TypeString, Bytes: []byte(s)}
 }
 
-func collectRows(t *testing.T, it RowIDIterator) []types.RowID {
+func collectRows(t *testing.T, it types.RowIDIterator) []types.RowID {
 	t.Helper()
 	defer it.Close()
 	var rows []types.RowID
