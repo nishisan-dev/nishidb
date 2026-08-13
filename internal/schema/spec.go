@@ -372,6 +372,23 @@ func validate(raw *rawSpec) (*DatasetSpec, error) {
 	if len(raw.Schema.Exclude) > 0 && !includeAll {
 		return nil, specErrf(`exclude só é válido com include: ["*"]`)
 	}
+	// Excluir key/sequence/ttl compila sem reclamar e condena TODO evento a
+	// falhar em runtime (INVALID_KEY, INVALID_SEQUENCE, expiração muda): é
+	// erro de configuração, não de dado. E exclude lista NOMES de campo —
+	// uma entrada que casa com um alias declarado seria um no-op silencioso.
+	for _, name := range raw.Schema.Exclude {
+		switch {
+		case name == key.Field:
+			return nil, specErrf("campo key %q não pode estar no exclude", name)
+		case s.Materialization.Sequence != nil && name == s.Materialization.Sequence.Field:
+			return nil, specErrf("campo sequence %q não pode estar no exclude", name)
+		case s.Materialization.TTL != nil && name == s.Materialization.TTL.Field:
+			return nil, specErrf("campo ttl %q não pode estar no exclude", name)
+		}
+		if owner, isAlias := aliases[name]; isAlias {
+			return nil, specErrf("exclude %q é alias do campo %q; exclua pelo nome", name, owner)
+		}
+	}
 	s.Schema.Exclude = raw.Schema.Exclude
 
 	unknown := raw.Schema.UnknownFields

@@ -144,6 +144,22 @@ func TestParseExclusion(t *testing.T) {
 	}
 }
 
+// A exclusão vale para o nome E para o alias do campo excluído: o alias era
+// a porta pela qual o campo descartado voltava a materializar.
+func TestParseExclusionByNameAndAlias(t *testing.T) {
+	yml := replace(t, patchYAML, "  exclude:\n    - debug\n", "  exclude:\n    - debug\n    - Acct-Status-Type\n")
+	c := compileYAML(t, yml)
+	b := parsePatch(t, c, `{"id":"A","_SEQ":1,"Acct-Status-Type":"Start","status":"Stop","debug":{"big":"blob"}}`)
+	for _, e := range b.entries {
+		if e.field.Name == "Acct-Status-Type" || e.field.Name == "status" {
+			t.Fatalf("campo excluído materializou: %+v", e.field)
+		}
+	}
+	if len(b.entries) != 2 {
+		t.Errorf("entries = %d, want 2 (id e _SEQ)", len(b.entries))
+	}
+}
+
 func TestParseUnknownIgnore(t *testing.T) {
 	yml := patchYAML
 	yml = replace(t, yml, "unknownFields: include", "unknownFields: ignore")

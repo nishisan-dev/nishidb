@@ -102,8 +102,15 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 	case "reject":
 		c.Unknown = UnknownReject
 	}
+	// Campo excluído é INEXISTENTE para o runtime: não é compilado, não
+	// consome FieldID e não volta pelo ResolveUnknown. O alias entra no
+	// conjunto junto com o nome, senão o evento que trouxesse o alias
+	// materializaria exatamente o campo que o operador mandou descartar.
 	for _, name := range s.Schema.Exclude {
 		c.exclude[name] = struct{}{}
+		if spec, declared := s.Schema.Fields[name]; declared && spec.Alias != "" {
+			c.exclude[spec.Alias] = struct{}{}
+		}
 	}
 
 	// Conjunto de campos a compilar: com "*", todos os declarados; com
@@ -134,6 +141,9 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 	}
 
 	for _, name := range names {
+		if _, excluded := c.exclude[name]; excluded {
+			continue
+		}
 		id, err := dict.LookupOrCreate([]byte(name))
 		if err != nil {
 			return nil, fmt.Errorf("registrando campo %q no dicionário: %w", name, err)
@@ -203,8 +213,9 @@ func (c *Compiled) FieldByID(id types.FieldID) (*CompiledField, bool) {
 	return f, ok
 }
 
-// Excluded reporta se o campo está na lista de exclusão (só relevante com
-// include: ["*"]).
+// Excluded reporta se o nome (ou o alias) está na lista de exclusão. Não é
+// consultado no hot path do parse: campo excluído simplesmente não existe em
+// byName, e o ResolveUnknown se encarrega de não o recriar.
 func (c *Compiled) Excluded(name []byte) bool {
 	_, ok := c.exclude[string(name)]
 	return ok
@@ -212,6 +223,8 @@ func (c *Compiled) Excluded(name []byte) bool {
 
 // ResolveUnknown trata um campo do evento que FieldByName não conhece:
 //
+//   - excluído (por nome ou alias) → (nil, nil): descartado, inclusive sob
+//     policy reject — o operador já decidiu o destino do campo;
 //   - include explícito (universo fechado) → (nil, nil): ignorado;
 //   - policy ignore → (nil, nil);
 //   - policy reject → ErrUnknownField;
@@ -221,6 +234,9 @@ func (c *Compiled) Excluded(name []byte) bool {
 // Chamado apenas pela goroutine do writer; leitores concorrentes de
 // FieldByName/FieldByID são protegidos pelo RWMutex.
 func (c *Compiled) ResolveUnknown(name []byte) (*CompiledField, error) {
+	if _, excluded := c.exclude[string(name)]; excluded {
+		return nil, nil
+	}
 	if !c.IncludeAll || c.Unknown == UnknownIgnore {
 		return nil, nil
 	}

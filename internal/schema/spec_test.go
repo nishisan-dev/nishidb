@@ -182,6 +182,12 @@ func TestParseValidationErrors(t *testing.T) {
 		{"alias colide com nome", repl("      alias: nas", "      alias: _SEQ"), "_SEQ"},
 		{"exclude sem wildcard", strings.Replace(repl("    - \"*\"", "    - id"), "  exclude:\n    - debug\n", "  exclude:\n    - debug\n", 1), "exclude"},
 		{"wildcard com outros", repl("    - \"*\"", "    - \"*\"\n    - id"), "*"},
+		// Excluir key/sequence/ttl compila mas quebra todo evento em runtime;
+		// excluir por alias seria um no-op silencioso.
+		{"exclude da key", repl("  exclude:\n    - debug", "  exclude:\n    - id"), "key"},
+		{"exclude da sequence", repl("  exclude:\n    - debug", "  exclude:\n    - _SEQ"), "sequence"},
+		{"exclude do ttl", repl("  exclude:\n    - debug", "  exclude:\n    - EventExpireDate"), "ttl"},
+		{"exclude por alias", repl("  exclude:\n    - debug", "  exclude:\n    - status"), "alias"},
 		{"maxRows negativo", repl("maxRows: 50000", "maxRows: -1"), "maxRows"},
 		{"timeout invalido", repl("timeout: 10s", "timeout: depressa"), "timeout"},
 	}

@@ -59,17 +59,17 @@ func (b *PatchBuffer) Parse(event []byte, c *schema.Compiled) error {
 		if !ok {
 			break
 		}
-		if c.Excluded(f.Key) {
-			continue
-		}
 		cf, found := c.FieldByName(f.Key)
 		if !found {
+			// Campo excluído não está compilado: cai aqui e o
+			// ResolveUnknown o descarta — uma comparação a menos por campo
+			// por evento no hot path.
 			cf, err = c.ResolveUnknown(f.Key)
 			if err != nil {
 				return fmt.Errorf("campo %q: %w", f.Key, err) // SCHEMA_VALIDATION
 			}
 			if cf == nil {
-				continue // ignorado (policy ignore ou universo fechado)
+				continue // excluído, ignorado ou universo fechado
 			}
 		}
 

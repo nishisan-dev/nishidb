@@ -111,6 +111,80 @@ func TestCompileExcluded(t *testing.T) {
 	}
 }
 
+// excludedYAML exclui um campo DECLARADO e com alias — o caso que expõe se a
+// exclusão vale só para o nome.
+func excludedYAML(t *testing.T) string {
+	t.Helper()
+	return strings.Replace(baseYAML, "  exclude:\n    - debug\n",
+		"  exclude:\n    - debug\n    - Acct-Status-Type\n", 1)
+}
+
+// Campo excluído é INEXISTENTE para o runtime: não é compilado, não resolve
+// por nome nem por alias e não consome FieldID persistente do dicionário.
+// Antes ele era compilado e registrado em byName pelo alias, então o evento
+// que trouxesse "status" materializava o campo que o operador excluiu.
+func TestCompileExcludedFieldIsNotCompiled(t *testing.T) {
+	s := parseOK(t, excludedYAML(t))
+	dict := newFakeDict()
+	c, err := s.Compile(dict)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c.FieldByName([]byte("Acct-Status-Type")); ok {
+		t.Error("campo excluído não deveria resolver por nome")
+	}
+	if _, ok := c.FieldByName([]byte("status")); ok {
+		t.Error("campo excluído não deveria resolver pelo alias")
+	}
+	if !c.Excluded([]byte("status")) {
+		t.Error("Excluded deveria valer para o alias do campo excluído")
+	}
+	for _, name := range dict.order {
+		if name == "Acct-Status-Type" {
+			t.Error("campo excluído não deveria consumir FieldID do dicionário")
+		}
+	}
+}
+
+// A porta dos fundos: com unknownFields include, o campo excluído chega ao
+// ResolveUnknown (já não está em byName) e não pode ser registrado ali —
+// nem pelo nome, nem pelo alias.
+func TestResolveUnknownRespectsExclude(t *testing.T) {
+	s := parseOK(t, excludedYAML(t))
+	dict := newFakeDict()
+	c, err := s.Compile(dict)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := len(dict.order)
+	for _, name := range []string{"Acct-Status-Type", "status", "debug"} {
+		f, err := c.ResolveUnknown([]byte(name))
+		if err != nil || f != nil {
+			t.Errorf("ResolveUnknown(%q) = %v, %v; want nil, nil", name, f, err)
+		}
+	}
+	if len(dict.order) != before {
+		t.Errorf("campo excluído registrou no dicionário: %v", dict.order[before:])
+	}
+}
+
+// Sob policy reject, campo excluído é descartado em silêncio: o operador já
+// declarou o que fazer com ele. Rejeitar o evento inteiro seria o oposto.
+func TestResolveUnknownExcludeBeatsReject(t *testing.T) {
+	yml := strings.Replace(excludedYAML(t), "unknownFields: include", "unknownFields: reject", 1)
+	s := parseOK(t, yml)
+	c, err := s.Compile(newFakeDict())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f, err := c.ResolveUnknown([]byte("Acct-Status-Type")); err != nil || f != nil {
+		t.Errorf("excluído sob reject = %v, %v; want nil, nil", f, err)
+	}
+	if _, err := c.ResolveUnknown([]byte("X-Vendor")); !errors.Is(err, ErrUnknownField) {
+		t.Errorf("campo realmente desconhecido = %v, want ErrUnknownField", err)
+	}
+}
+
 func TestCompileDeterministicIDs(t *testing.T) {
 	_, d1 := compileBase(t)
 	_, d2 := compileBase(t)
