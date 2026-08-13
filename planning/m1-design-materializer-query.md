@@ -902,6 +902,41 @@ Aplicações práticas da regra, todas usadas neste bloco:
 - desconfiar de teste que passa de primeira em código novo e não trivial: ou o desenho estava
   fechado antes de escrever, ou o teste não está exercitando o que diz.
 
+### I2 — o CLI, e o que ele obrigou a corrigir antes
+
+O CLI é o entregável demonstrável do M1, e a primeira coisa que ele fez foi transformar um defeito
+raro em caminho normal: **ele abre e fecha o dataset a cada comando**.
+
+**F-1 (§14.21 do design de storage) — `Close` sem quiesce, corrigido antes dos comandos.** Fechar com
+`Put` ou leitura em voo desmapeava o índice sob os pés da operação e produzia PANIC — que a política
+de log-and-skip da ingestão não captura, então derrubava o processo. E o `flock` era devolvido no
+mesmo instante, com escrita em voo: outro processo podia assumir o dataset enquanto o primeiro ainda
+escrevia. O Store ganhou um `RWMutex` de VIDA (operações em leitura, `Close` em escrita — é o que faz
+dele um quiesce), os LEITORES entraram junto (o iterador do `ScanLive` reentra a cada `Next`, porque
+segurar o lock pela vida do iterador bloquearia o `Close` atrás de um consumidor lento), e o
+`mmap.Region.Close` passou a zerar o tamanho para que um acesso que escape nomeie a causa.
+
+**Decisões do comando que valem registro:**
+
+- **Checkpoint LIGADO por padrão**, e desligar avisa no stderr com a consequência. É consequência
+  direta da medição da Q20: sem checkpoint o heap acompanha o dataset (13,19x de crescimento para 10x
+  de dados, contra 0,97x com ele). Um default que desliga a promessa central da arquitetura em
+  silêncio seria pior que não ter a flag.
+- **Erro de query sai com posição, linha, coluna e o trecho**, e o **stdout fica vazio**: uma linha
+  parcial seguida de erro quebraria quem consome NDJSON em streaming.
+- **Truncamento por `maxRows` tem exit code próprio** (5). Resposta parcial com cara de resposta
+  completa é resposta errada, e um script precisa distinguir os dois casos sem parsear stderr.
+- **A configuração aceita as seções que o M1 não implementa** (server, TLS, auth, runtime). Recusá-las
+  obrigaria o operador a manter dois arquivos, que divergiriam.
+- **Vazão medida: 32 mil ev/s pelo CLI**, contra 48 mil do harness em disco real — mesma ordem, e a
+  diferença é o que o comando faz a mais.
+
+**Um achado sobre o meu próprio código, encontrado por mutação:** o `runQuery` tinha um ramo especial
+para o truncamento que era **indistinguível** do caminho geral, porque o `codigoDoErro` já traduzia o
+sentinela no mesmo exit code e a mensagem do próprio erro já dizia "truncado". Nenhum teste
+conseguia separar os dois — código que nenhum teste distingue é decoração. Removido; a mutação que
+importa (o mapeamento em `codigoDoErro`) falha em 1 teste.
+
 ### I1 — o que a integração com o Store real encontrou
 
 O bloco de query inteiro foi construído contra o dublê, e a I1 existe para medir a distância entre o
