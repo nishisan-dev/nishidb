@@ -3,6 +3,7 @@
 package materializer
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -100,6 +101,13 @@ func Convert(f jsonp.Field, target types.FieldType, arena []byte) (types.Value, 
 	case types.TypeJSON:
 		if f.Kind != jsonp.KindObject && f.Kind != jsonp.KindArray {
 			return types.Value{}, arena, convErrf(target, "esperava object/array JSON, veio %v", f.Kind)
+		}
+		// O jsonp faz skip estrutural sem validar o conteúdo da janela
+		// (leniência documentada lá); a validade é garantida AQUI, na porta
+		// de armazenamento — o valor seria emitido verbatim pelo encoder
+		// NDJSON. json.Valid usa scanner pooled: 0 allocs em steady state.
+		if !json.Valid(f.Raw) {
+			return types.Value{}, arena, convErrf(target, "json aninhado inválido: %s", f.Raw)
 		}
 		return appendBytesValue(target, f.Raw, arena)
 

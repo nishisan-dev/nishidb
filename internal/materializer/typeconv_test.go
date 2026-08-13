@@ -215,6 +215,28 @@ func TestConvertJSON(t *testing.T) {
 	convErr(t, num("1"), types.TypeJSON)
 }
 
+// O jsonp entrega janelas de nested por skip ESTRUTURAL, sem validar o
+// conteúdo (leniência documentada lá). A porta de armazenamento é aqui:
+// json.Valid rejeita a janela antes de ela virar valor persistido — senão
+// a primeira query que projetasse o campo emitiria NDJSON inválido.
+func TestConvertJSONRejectsInvalidWindow(t *testing.T) {
+	cases := []jsonp.Field{
+		obj(`{]`),
+		obj(`{ffff}`),
+		obj(`{"b" "c"}`),
+		obj(`{"b":,}`),
+		obj(`{"b":01}`),
+		obj("{\"b\":\"\x01\"}"),
+		obj(`{"b":"\q"}`),
+		arr(`[1,2,,]`),
+	}
+	for _, f := range cases {
+		t.Run(string(f.Raw), func(t *testing.T) {
+			convErr(t, f, types.TypeJSON)
+		})
+	}
+}
+
 func TestConvertBytesGoToArena(t *testing.T) {
 	// Tipos com Bytes copiam para o arena passado — nunca aliasam f.Raw
 	// (que morre no próximo Next do parser).
