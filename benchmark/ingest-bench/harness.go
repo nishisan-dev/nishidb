@@ -794,20 +794,24 @@ func evaluateGates(cfg Config, rep *Report) []GateResult {
 // isso com mais força do que qualquer razão.
 func avaliaHeap(heapAtual, heapBase uint64, entAtual, entBase int) (bool, string) {
 	razãoDados := float64(entAtual) / float64(entBase)
-	if heapAtual <= heapNegligibleBytes {
-		return true, fmt.Sprintf(
-			"heap %s para %d entidades — abaixo do piso de %s, onde a razão vira ruído de GC "+
-				"(referência: %s para %d entidades, %.1fx de dados)",
-			humanBytes(heapAtual), entAtual, humanBytes(heapNegligibleBytes),
-			humanBytes(heapBase), entBase, razãoDados)
-	}
 	razão := math.Inf(1)
 	if heapBase > 0 {
 		razão = float64(heapAtual) / float64(heapBase)
 	}
-	return razão < 2, fmt.Sprintf(
-		"heap %s (%d entidades) vs %s (%d entidades): %.2fx de heap para %.1fx de dados, teto 2x",
+	// A razão e os valores absolutos entram no detalhe nos DOIS regimes,
+	// inclusive quando o piso decide. Passar não pode significar esconder: um
+	// bug que leve o heap de 850 KiB para 15 MiB (18x) passa corretamente
+	// neste gate — 15 MiB é 1,5% do orçamento, e o RSS tem gate próprio —,
+	// mas quem comparar duas rodadas precisa VER a regressão.
+	medida := fmt.Sprintf("heap %s (%d entidades) vs %s (%d entidades): %.2fx de heap para %.1fx de dados",
 		humanBytes(heapAtual), entAtual, humanBytes(heapBase), entBase, razão, razãoDados)
+
+	if heapAtual <= heapNegligibleBytes {
+		return true, fmt.Sprintf("%s — abaixo do piso de %s, onde a razão vira ruído de GC "+
+			"e o desacoplamento está provado pela grandeza absoluta",
+			medida, humanBytes(heapNegligibleBytes))
+	}
+	return razão < 2, medida + ", teto 2x"
 }
 
 func loadReport(path string) (*Report, error) {

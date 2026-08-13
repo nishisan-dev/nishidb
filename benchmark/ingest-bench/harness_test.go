@@ -250,6 +250,11 @@ func TestAvaliaHeapDoisRegimes(t *testing.T) {
 	}{
 		{"desprezível encerra pelo valor", 1 * mib, 400 * 1024, 8_000_000, 1_000_000, true, "piso"},
 		{"desprezível mesmo com razão alta", 15 * mib, 1 * mib, 8_000_000, 1_000_000, true, "piso"},
+		// Passar não pode esconder: mesmo decidido pelo piso, o detalhe traz
+		// a razão e os dois valores, senão uma regressão de 850 KiB para 15
+		// MiB some do relatório de quem compara duas rodadas.
+		{"piso ainda mostra a razão", 15 * mib, 1 * mib, 8_000_000, 1_000_000, true, "15.00x de heap"},
+		{"piso ainda mostra os absolutos", 15 * mib, 1 * mib, 8_000_000, 1_000_000, true, "15.0 MiB"},
 		{"acoplado reprova", 300 * mib, 100 * mib, 8_000_000, 1_000_000, false, "teto 2x"},
 		{"desacoplado passa", 150 * mib, 100 * mib, 8_000_000, 1_000_000, true, "teto 2x"},
 		{"exatamente no dobro reprova", 200 * mib, 100 * mib, 8_000_000, 1_000_000, false, "teto 2x"},
