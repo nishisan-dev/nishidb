@@ -6,6 +6,17 @@
 //
 // O modelo proibido map[string]any nunca é materializado: o consumidor puxa
 // campo a campo via Next(), recebendo janelas ([]byte) sobre o input.
+//
+// Chaves duplicadas no objeto top-level NÃO são erro: o parser emite todas
+// as ocorrências, na ordem do documento. A política last-wins é
+// responsabilidade do consumidor (o PatchBuffer do materializer a aplica).
+//
+// Leniência estrutural (decisão de design): o skip de objetos/arrays
+// aninhados é puramente estrutural — conta profundidade e respeita strings,
+// mas NÃO valida o conteúdo. O Raw de um KindObject/KindArray pode não ser
+// JSON válido (ex.: `{ffff}`). A validação acontece na borda de
+// armazenamento: o typeconv rejeita a janela com encoding/json.Valid ao
+// converter para o tipo `json` (TYPE_CONVERSION).
 package jsonp
 
 import (
