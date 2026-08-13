@@ -106,35 +106,35 @@ func comLimit(sql string, n int) string {
 	return fmt.Sprintf("%s LIMIT %d", corte, n)
 }
 
-// ultimoLimit devolve o índice da última palavra LIMIT fora de string, ou -1.
-// Percorrer o texto respeitando aspas evita cortar a query num literal que
-// contenha "limit".
+// ultimoLimit devolve o offset da última cláusula LIMIT fora de literal, ou -1.
+//
+// Quem decide o que é cláusula e o que é literal é o LEXER DE VERDADE, o mesmo
+// que o Execute vai usar. Uma varredura textual própria é uma segunda
+// gramática, e a daqui já divergia da de verdade: reconhecia só a aspa
+// SIMPLES, então um identificador entre aspas duplas — obrigatórias para
+// os nomes reais do dataset, que têm hífen e espaço — com a palavra limit no
+// meio fazia o corte cair DENTRO do identificador e reescrever a query.
+//
+// Query que nem tokeniza devolve -1, e o --limit é apenas anexado: sem
+// gramática íntegra não há como saber o que é literal, e cortar por adivinhação
+// entregaria ao usuário um erro de sintaxe sobre um texto que ele não escreveu.
 func ultimoLimit(sql string) int {
-	var (
-		emString bool
-		achado   = -1
-	)
-	for i := 0; i < len(sql); i++ {
-		c := sql[i]
-		if c == '\'' {
-			emString = !emString
-			continue
+	var lx lexer.Lexer
+	lx.Init(sql)
+	achado := -1
+	for {
+		tok, err := lx.Next()
+		if err != nil {
+			return -1
 		}
-		if emString {
-			continue
-		}
-		if (c == 'L' || c == 'l') && i+5 <= len(sql) && strings.EqualFold(sql[i:i+5], "LIMIT") {
-			antes := i == 0 || ehEspaco(sql[i-1])
-			depois := i+5 == len(sql) || ehEspaco(sql[i+5])
-			if antes && depois {
-				achado = i
-			}
+		switch tok.Type {
+		case lexer.TokenEOF:
+			return achado
+		case lexer.TokenLimit:
+			achado = tok.Pos
 		}
 	}
-	return achado
 }
-
-func ehEspaco(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' }
 
 // imprimeErroDeQuery mostra a POSIÇÃO e o trecho ofensor, não só a mensagem.
 // A posição é a informação que o front-end já carrega e que o usuário precisa

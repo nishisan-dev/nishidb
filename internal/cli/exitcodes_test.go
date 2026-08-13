@@ -142,6 +142,27 @@ func TestFlagLimitNaoCortaDentroDeLiteral(t *testing.T) {
 	}
 }
 
+// Nome de campo com espaço EXIGE aspas duplas, e aspas duplas eram o
+// delimitador que o corte do --limit não conhecia: a query virava
+// `SELECT id, "no LIMIT 2` — texto que o usuário nunca escreveu, com erro de
+// sintaxe numa posição inventada.
+func TestFlagLimitNaoCortaDentroDeIdentificadorCitado(t *testing.T) {
+	a := comDatasetPequeno(t)
+	if code := a.rodaComEntrada(`{"id":"Q1","_SEQ":1,"no limit aqui":"ok"}`+"\n",
+		"ingest", "--config", a.config, "--dataset", "pequeno", "--input", "-"); code != cli.ExitOK {
+		t.Fatalf("ingest = %d\n%s", code, a.stderr.String())
+	}
+
+	code := a.roda("query", "--config", a.config, "--dataset", "pequeno",
+		"--limit", "2", `SELECT id, "no limit aqui" FROM pequeno`)
+	if code != cli.ExitOK {
+		t.Fatalf("code = %d\n%s", code, a.stderr.String())
+	}
+	if n := strings.Count(a.stdout.String(), "\n"); n != 2 {
+		t.Errorf("%d linhas, want 2\n%s", n, a.stdout.String())
+	}
+}
+
 // Interrupção durante a ingestão: o processo sai com o código de sinal, e o
 // que já foi aplicado ATÉ ALI sobrevive — o dataset reabre íntegro.
 func TestIngestInterrompidoPreservaOQueFoiAplicado(t *testing.T) {
