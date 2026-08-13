@@ -879,6 +879,29 @@ depois e percebe que o argumento não fecha.
    do teto, remover o budget não quebra nada, porque uma AST de 200 níveis com folhas não indexáveis
    degrada de qualquer jeito.
 
+### Convenção: teste verde não prova nada até você ter visto ele falhar
+
+Um teste que nunca foi observado falhando não é evidência — é uma afirmação sobre o código escrita em
+Go. A única forma barata de transformá-lo em evidência é **quebrar de propósito o que ele deveria
+proteger** e confirmar que ele acusa.
+
+O caso que originou a regra: o teste fim-a-fim da I1 passou de primeira nas nove sub-rotas, e passava
+porque o corpus não tinha patch, nem Extended JSON, nem campo desconhecido, nem null — o comentário
+dizia "workload de accounting real" e o teste exercitava um subconjunto muito mais fraco, **em
+silêncio**. Quem revelou foi a mutação (desligar a remoção por null no merge), que não quebrou nada.
+Aceito o verde, a I1 teria "passado" cobrindo menos da metade do que promete.
+
+Aplicações práticas da regra, todas usadas neste bloco:
+
+- desligar a regra sob teste e confirmar que a suíte fica vermelha, no teste **nomeado** que a
+  credita — se quem falha é outro teste, o crédito está no lugar errado;
+- pôr `panic` na função que um gate diz vigiar (foi assim que dois gates de alocação decorativos
+  apareceram);
+- para testes de propriedade, garantir que a **premissa** também é aferida (a row tombstoned que
+  precisa aparecer entre os candidatos);
+- desconfiar de teste que passa de primeira em código novo e não trivial: ou o desenho estava
+  fechado antes de escrever, ou o teste não está exercitando o que diz.
+
 ### I1 — o que a integração com o Store real encontrou
 
 O bloco de query inteiro foi construído contra o dublê, e a I1 existe para medir a distância entre o
