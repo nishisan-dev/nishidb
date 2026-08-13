@@ -7,9 +7,25 @@
 //
 // As invariantes observáveis também são espelhadas, inclusive as
 // desconfortáveis: payload validado com a rotina real, rowId monotônico
-// nunca reutilizado, liveness derivada das flags, lookup indexado devolvendo
-// SUPERSET de candidatos (§44) e campo sem índice devolvendo erro. Um dublê
-// mais gentil que o real esconde justamente os bugs que ele deveria expor.
+// nunca reutilizado nem queimado por evento rejeitado, liveness derivada das
+// flags, lookup indexado devolvendo SUPERSET de candidatos (§44), campo sem
+// índice devolvendo erro e teto do values.dict aplicado a campo indexado. Um
+// dublê mais gentil que o real esconde justamente os bugs que ele deveria
+// expor.
+//
+// O que o fake NÃO modela, e por quê:
+//
+//   - lock de dataset (storage.ErrDatasetLocked): não há diretório nem Open
+//     aqui, então não existe exclusão mútua a violar;
+//   - Options.BitmapFieldNames e AllowBitmapDrop: o análogo é o struct
+//     Indexes, fixado na criação — não há backfill nem drop autorizado a
+//     testar, e o conjunto de índices nunca muda em vida;
+//   - modo falho sticky (types.ErrWriterFailed): o fake não tem append
+//     durável, então nada o mata. O Apply (Q10) precisa exercitar esse
+//     caminho e vai instalar um seam de injeção quando o teste existir;
+//   - queima de rowId APÓS o append: no real, falha pós-append não tem
+//     rollback e o id fica queimado. Aqui não há ponto de não-retorno, então
+//     a validação é a única fronteira — a que importa para o consumidor.
 //
 // Escala pequena por design (maps): é infraestrutura de teste, não engine.
 package fakestorage
@@ -125,6 +141,9 @@ func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *ty
 	if _, err := encoding.ValidatePayload(payload); err != nil {
 		return 0, false, err
 	}
+	if err := s.validateIndexable(payload); err != nil {
+		return 0, false, err
+	}
 
 	var (
 		rowID       types.RowID
@@ -157,6 +176,30 @@ func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *ty
 		Key: string(key), Seq: seq, Flags: flags, HadPrev: prev != nil, Created: created,
 	})
 	return rowID, created, nil
+}
+
+// validateIndexable recusa valor grande demais para o dicionário de valores
+// do índice bitmap, como o real faz ANTES de tornar o record durável.
+//
+// Vale só para campo COM índice bitmap: o teto é do values.dict, não do
+// payload — campo sem índice aceita o mesmo valor sem reclamar, e o teste
+// prova os dois lados. Espelhar isto importa porque a violação, no real, é
+// fatal se escapar: o record fica durável, o replay do tail tenta reindexá-lo
+// a cada abertura e o dataset inteiro deixa de abrir. Um dublê que aceitasse
+// deixaria o teste passar e a integração explodir.
+func (s *Store) validateIndexable(payload []byte) error {
+	var r encoding.FieldReader
+	r.Reset(payload)
+	for {
+		id, v, ok := r.Next()
+		if !ok {
+			return r.Err()
+		}
+		if s.bitmap[id] && len(v.Bytes) > types.MaxIndexedValueBytes {
+			return fmt.Errorf("%w: campo %d tem índice bitmap e valor de %d bytes, acima do teto de %d",
+				types.ErrInvalidArgument, id, len(v.Bytes), types.MaxIndexedValueBytes)
+		}
+	}
 }
 
 // diffPostings percorre os dois payloads ordenados (merge linear, como o

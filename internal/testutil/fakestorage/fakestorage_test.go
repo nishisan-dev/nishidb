@@ -254,6 +254,35 @@ func TestPutRejectsInvalidArguments(t *testing.T) {
 	}
 }
 
+// O teto do values.dict vale para campo COM índice bitmap e é checado antes
+// de qualquer mutação de estado — no real, descobrir a violação depois do
+// append deixa o dataset inabrível para sempre. Campo sem índice aceita o
+// mesmo valor: o teto é do índice, não do payload.
+func TestPutRejectsOversizedIndexedValue(t *testing.T) {
+	s := New(Indexes{Bitmap: []types.FieldID{2}})
+	big := make([]byte, types.MaxIndexedValueBytes+1)
+	for i := range big {
+		big[i] = 'x'
+	}
+	huge := types.Value{Type: types.TypeString, Bytes: big}
+
+	_, _, err := s.Put([]byte("K"), 1, 0, payload(t, fv(1, strVal("K")), fv(2, huge)), nil)
+	assertInvalidArgument(t, err, "acima do teto")
+	if _, ok := s.byKey["K"]; ok {
+		t.Error("Put rejeitado não deveria ter registrado a key")
+	}
+
+	// No limite exato passa, e em campo sem índice o mesmo valor gigante
+	// também passa.
+	atLimit := types.Value{Type: types.TypeString, Bytes: big[:types.MaxIndexedValueBytes]}
+	if _, _, err := s.Put([]byte("K"), 1, 0, payload(t, fv(1, strVal("K")), fv(2, atLimit)), nil); err != nil {
+		t.Errorf("valor no teto exato deveria passar: %v", err)
+	}
+	if _, _, err := s.Put([]byte("L"), 1, 0, payload(t, fv(3, huge)), nil); err != nil {
+		t.Errorf("campo sem índice não deveria ter teto: %v", err)
+	}
+}
+
 // rowId é monotônico, nunca reutilizado E nunca queimado por evento
 // rejeitado: a validação inteira roda antes da reserva. Id queimado abre
 // buraco nos índices densos por rowId, que ninguém preenche depois.
