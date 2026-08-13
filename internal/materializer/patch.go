@@ -3,7 +3,6 @@ package materializer
 import (
 	"errors"
 	"fmt"
-
 	"slices"
 
 	"github.com/nishisan-dev/nishidb/internal/jsonp"
@@ -15,8 +14,8 @@ import (
 // jsonp.ErrInvalidJSON, SCHEMA_VALIDATION de schema.ErrUnknownField e
 // TYPE_CONVERSION de ErrTypeConversion.
 var (
-	ErrInvalidKey      = errors.New("INVALID_KEY: key ausente ou nula")
-	ErrInvalidSequence = errors.New("INVALID_SEQUENCE: sequence ausente ou nula")
+	ErrInvalidKey      = errors.New("INVALID_KEY")
+	ErrInvalidSequence = errors.New("INVALID_SEQUENCE")
 )
 
 // patchEntry é um campo do evento, resolvido e tipado. val.Bytes aponta
@@ -43,6 +42,17 @@ type PatchBuffer struct {
 // campos contra o schema (include/exclude/unknown policy), converte tipos
 // para o arena, extrai key e sequence, ordena por FieldID e aplica
 // last-wins em chaves JSON duplicadas.
+//
+// Exceção ao last-wins: key e sequence são capturadas DURANTE a conversão,
+// antes do dedup, então a primeira ocorrência inválida aborta o evento mesmo
+// havendo uma válida à frente — {"id":null,"id":"A"} é INVALID_KEY, não "A".
+// O mesmo vale para erro de conversão de qualquer campo. Adiar o abort para
+// depois do dedup exigiria adiar a conversão do evento inteiro: preço alto
+// no hot path para socorrer evento malformado.
+//
+// Após erro, os buffers ficam com estado PARCIAL (entries, arena, key e seq
+// do ponto em que parou). O caller deve descartar o evento; nada além do
+// erro é observável até o próximo Parse, que reseta tudo.
 func (b *PatchBuffer) Parse(event []byte, c *schema.Compiled) error {
 	b.entries = b.entries[:0]
 	b.arena = b.arena[:0]
@@ -92,13 +102,18 @@ func (b *PatchBuffer) Parse(event []byte, c *schema.Compiled) error {
 		isNull := val.Type == types.TypeNull
 		switch {
 		case cf.IsKey:
-			if isNull {
-				return fmt.Errorf("%w (campo %q nulo)", ErrInvalidKey, cf.Name)
+			switch {
+			case isNull:
+				return fmt.Errorf("%w: campo %q nulo", ErrInvalidKey, cf.Name)
+			case len(val.Bytes) == 0:
+				// Key vazia é rejeitada pelo Store real (ErrInvalidArgument);
+				// barrar aqui evita o evento morrer só na escrita.
+				return fmt.Errorf("%w: campo %q vazio", ErrInvalidKey, cf.Name)
 			}
 			b.key = val.Bytes
 		case cf.IsSequence:
 			if isNull {
-				return fmt.Errorf("%w (campo %q nulo)", ErrInvalidSequence, cf.Name)
+				return fmt.Errorf("%w: campo %q nulo", ErrInvalidSequence, cf.Name)
 			}
 			b.seq = val.I64
 			b.hasSeq = true
@@ -119,11 +134,11 @@ func (b *PatchBuffer) Parse(event []byte, c *schema.Compiled) error {
 	})
 	b.entries = dedupLastWins(b.entries)
 
-	if len(b.key) == 0 {
-		return ErrInvalidKey
+	if b.key == nil {
+		return fmt.Errorf("%w: campo %q ausente no evento", ErrInvalidKey, c.Key.Name)
 	}
 	if c.Seq != nil && !b.hasSeq {
-		return ErrInvalidSequence
+		return fmt.Errorf("%w: campo %q ausente no evento", ErrInvalidSequence, c.Seq.Name)
 	}
 	return nil
 }

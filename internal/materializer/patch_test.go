@@ -218,6 +218,59 @@ func TestParseSequenceNull(t *testing.T) {
 	}
 }
 
+// A mensagem precisa dizer a verdade: "ausente" e "nulo" são diagnósticos
+// diferentes, e key vazia (rejeitada também pelo Store real) é um terceiro
+// caso que antes se escondia atrás de "ausente ou nula".
+func TestParseKeyAndSequenceErrorsSayTheCause(t *testing.T) {
+	c := compileYAML(t, patchYAML)
+	cases := []struct {
+		event string
+		sent  error
+		field string
+		cause string
+	}{
+		{`{"_SEQ":1}`, ErrInvalidKey, "id", "ausente"},
+		{`{"id":null,"_SEQ":1}`, ErrInvalidKey, "id", "nulo"},
+		{`{"id":"","_SEQ":1}`, ErrInvalidKey, "id", "vazio"},
+		{`{"id":"A"}`, ErrInvalidSequence, "_SEQ", "ausente"},
+		{`{"id":"A","_SEQ":null}`, ErrInvalidSequence, "_SEQ", "nulo"},
+	}
+	for _, tc := range cases {
+		var b PatchBuffer
+		err := b.Parse([]byte(tc.event), c)
+		if !errors.Is(err, tc.sent) {
+			t.Errorf("%s: err = %v, want %v", tc.event, err, tc.sent)
+			continue
+		}
+		if !contains(err.Error(), tc.field) || !contains(err.Error(), tc.cause) {
+			t.Errorf("%s: err = %q, deveria citar %q e %q", tc.event, err, tc.field, tc.cause)
+		}
+	}
+}
+
+// Exceção documentada ao last-wins: key, sequence e conversão são resolvidas
+// durante a tokenização, antes do dedup, então a PRIMEIRA ocorrência
+// inválida aborta o evento mesmo havendo uma válida logo à frente.
+func TestParseAbortsOnFirstInvalidOccurrence(t *testing.T) {
+	c := compileYAML(t, patchYAML)
+	cases := []struct {
+		event string
+		sent  error
+	}{
+		{`{"id":null,"id":"A","_SEQ":1}`, ErrInvalidKey},
+		{`{"id":"","id":"A","_SEQ":1}`, ErrInvalidKey},
+		{`{"id":"A","id":null,"_SEQ":1}`, ErrInvalidKey},
+		{`{"id":"A","_SEQ":null,"_SEQ":2}`, ErrInvalidSequence},
+		{`{"id":"A","_SEQ":1,"Acct-Input-Octets":"abc","Acct-Input-Octets":10}`, ErrTypeConversion},
+	}
+	for _, tc := range cases {
+		var b PatchBuffer
+		if err := b.Parse([]byte(tc.event), c); !errors.Is(err, tc.sent) {
+			t.Errorf("%s: err = %v, want %v", tc.event, err, tc.sent)
+		}
+	}
+}
+
 func TestParseNoSequenceConfigured(t *testing.T) {
 	yml := replace(t, patchYAML, "  sequence:\n    field: _SEQ\n", "")
 	c := compileYAML(t, yml)
