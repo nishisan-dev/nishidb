@@ -559,6 +559,8 @@ Decisões fixadas na implementação (Q14):
 - **Dedup de termos por (FieldID, Val) exato**, com varredura linear. `status='a' AND status='a'` colapsa para BitmapScan; `status='a' AND status='b'` NÃO colapsa (dois termos, interseção vazia, resultado correto). Um map alocaria por consulta e daria ordem não-determinística nos termos.
 - **Limitações registradas, com teste fixando o comportamento atual:** grupo OR indexável aninhado em AND não vira união (a regra 5 vale só na raiz), e `key='a' OR key='b'` não vira união de point lookups (a primary não é índice secundário). As duas seriam corretas como superset; ficam como otimização futura, porque simplicidade > performance (§127).
 - **`query.full_scan` é contado no plan-time e só aqui.** É correto na v1 porque não há cache de planos nem prepared statements — todo plano produzido é executado em seguida. Se um cache for introduzido, a contagem migra para o executor. O contador de fonte de candidatos do executor é de diagnóstico e explicitamente NÃO normativo: dois contadores com o mesmo nome de spec fariam alguém ler o errado em produção.
+- **O penhasco do flatten é POSICIONAL, não de tamanho (medido).** O budget de 64 é o ÚNICO limite da espinha de AND/OR — o teto do parser conta parênteses, e a espinha é iterativa lá. Com o termo indexável no INÍCIO da cláusula, o plano degrada para FullScan a partir de **67 conjuncts**; com o mesmo número de termos e o indexável no FIM, não degrada. A mesma query com os termos reordenados pode mudar de `BitmapScan` para `FullScan`. É penhasco de performance, nunca de correção — degradar não perde row. Medido por `TestPenhascoDoBudgetDeFlatten`.
+- **`-0.0` gravado não casa com o literal `0` por igualdade.** A chave do índice é byte a byte e os dois têm bits diferentes; nem um executor correto concordaria com o índice nesse canto. É consequência de IEEE-754, não defeito, e vale para qualquer engine que indexe double por bytes.
 - **Alocação O(#conjuncts), nunca do dataset.** Medido: 0 allocs/op sem WHERE (singleton `FullScan()`), 3 no point lookup, 5 numa query de 4 conjuncts, 6 na interseção de 2 bitmaps. Gate no teto de 12.
 
 ### 3.6 Coerção de tipos nas comparações (tabela normativa v1)
@@ -876,6 +878,21 @@ depois e percebe que o argumento não fecha.
    conjunct opaco e a query degrada para full scan. Sem um teste que ponha um termo INDEXÁVEL abaixo
    do teto, remover o budget não quebra nada, porque uma AST de 200 níveis com folhas não indexáveis
    degrada de qualquer jeito.
+
+### Convenção: gate colado no valor medido
+
+Um gate de alocação com folga não é gate. O teto de 12 sobre 5 medidos não acusaria nem uma
+duplicação do custo; e um gate que nunca executa o caminho que promete vigiar é pior que ausente,
+porque a próxima pessoa confia nele. Os dois casos aconteceram neste bloco:
+
+- os dois gates do planner passavam com `appendDedup` em `panic` — a query gateada casa a regra do
+  hash e nunca chega ao laço de bitmap, único chamador do dedup no caminho AND. O comentário
+  prometia exatamente o que o gate não fazia;
+- o teto folgado escondia a diferença entre a varredura linear e um dedup por map (6 → 7 allocs na
+  interseção de 2 termos, 8 → 11 na de 3).
+
+Regra: **o teto de um gate de alocação é o valor MEDIDO**, e o gate tem de exercitar o caminho que
+o comentário credita — verificável pondo `panic` na função vigiada e rodando o gate.
 
 ### Convenção: teste que detecta a própria erosão
 

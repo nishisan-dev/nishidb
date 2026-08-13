@@ -28,6 +28,13 @@ const (
 	CompareInt
 	// CompareFloatBits: os dois lados são math.Float64bits em Value.I64
 	// (coluna double).
+	//
+	// O executor converte os DOIS lados com math.Float64frombits ANTES de
+	// comparar, inclusive para ordem. Comparar os bits crus funciona para
+	// igualdade e MENTE para ordem: o sinal mora no bit mais alto, então
+	// -1 > -2 devolve false no espaço de bits. Com valores positivos as duas
+	// ordens coincidem, e é por isso que o erro sobrevive a um teste
+	// descuidado.
 	CompareFloatBits
 	// CompareIntAsFloat: ESQUERDA (payload) é int64 cru, DIREITA (literal) é
 	// Float64bits. Único caso: coluna int64 comparada a literal float.

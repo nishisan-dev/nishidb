@@ -76,13 +76,24 @@ type BoundLogical struct {
 // executor não re-deriva tipo por row, e o planner enxerga `key = ?` como
 // point lookup no plan-time.
 type BoundComparison struct {
-	Field    *schema.CompiledField
-	Slot     int
-	Op       parser.CmpOp
-	Val      types.Value // literal OU parâmetro JÁ coerido; nunca zero
-	Kind     CompareKind // nunca CompareUnset
-	IsParam  bool        // diagnóstico apenas; o valor já está em Val
-	ParamIdx int         // diagnóstico apenas; 0-based, válido só com IsParam
+	Field *schema.CompiledField
+	Slot  int
+	Op    parser.CmpOp
+	// Val é o literal ou parâmetro JÁ coerido; nunca zero.
+	//
+	// ATENÇÃO: Val.Type pode DIVERGIR de Field.EffectiveType(). Coluna int64
+	// comparada a literal float promove os dois lados para double, e aí
+	// `octets > 1.5` (coluna int64) e `ratio > 1.5` (coluna double) produzem um
+	// Val idêntico byte a byte — mesmo Type e mesmo I64.
+	Val types.Value
+	// Kind é o ÚNICO discriminador de COMO comparar. Nunca faça switch em
+	// Val.Type: nos dois casos acima ele vale double, e ler o payload de uma
+	// coluna int64 como Float64bits transforma 1000 em 4,94e-321 — a query
+	// devolve VAZIO sobre milhões de linhas, sem erro, sem log, sem métrica.
+	// Nunca é CompareUnset.
+	Kind     CompareKind
+	IsParam  bool // diagnóstico apenas; o valor já está em Val
+	ParamIdx int  // diagnóstico apenas; 0-based, válido só com IsParam
 }
 
 // BoundNullCheck vale para QUALQUER tipo, inclusive bytes, json e auto sem

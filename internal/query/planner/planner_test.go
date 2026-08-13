@@ -568,6 +568,26 @@ func TestPlanCampoAutoNaoUsaIndice(t *testing.T) {
 	if pl := planeja(t, p, eq(auto, str("x"))); pl != planner.FullScan() {
 		t.Fatalf("plano = %T, want FullScan", pl)
 	}
+
+	// O teste acima NÃO prova a guarda de IsAuto: pelo caminho normal um campo
+	// auto tem Type == TypeNull, e é essa condição que o recusa — remover
+	// `f.IsAuto` da classificação não quebra nada.
+	//
+	// O estado que a guarda protege não é produzível pelo Compile (campo auto
+	// com tipo DECLARADO concreto e índice), e por isso é montado à mão: ela
+	// existe para o dia em que alguém decidir gravar o tipo fixado em Type em
+	// vez de autoType. Sem esta asserção, a guarda seria decoração.
+	sintetico := &schema.CompiledField{
+		ID: 999, Name: "sintetico", Type: types.TypeString,
+		IsAuto: true, Index: schema.IndexBitmap,
+	}
+	comBitmap := planner.New(fakestorage.New(fakestorage.Indexes{
+		Bitmap: []types.FieldID{sintetico.ID},
+	}), nil)
+	if pl := planeja(t, comBitmap, eq(sintetico, str("x"))); pl != planner.FullScan() {
+		t.Errorf("plano = %s, want FullScan: campo auto não é elegível a índice "+
+			"mesmo com tipo declarado e bitmap disponível", pl)
+	}
 }
 
 // Determinismo: com dois eq sobre a key, vence o PRIMEIRO da ordem léxica. O
