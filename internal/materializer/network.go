@@ -5,6 +5,7 @@ import (
 	"net/netip"
 
 	"github.com/nishisan-dev/nishidb/internal/jsonp"
+	"github.com/nishisan-dev/nishidb/internal/typeparse"
 	"github.com/nishisan-dev/nishidb/internal/types"
 	"github.com/nishisan-dev/nishidb/internal/unsafex"
 )
@@ -18,7 +19,7 @@ func convertNetwork(f jsonp.Field, target types.FieldType, arena []byte) (types.
 	start := len(arena)
 	switch target {
 	case types.TypeIPv4:
-		a, b, c, d, ok := parseIPv4(f.Raw)
+		a, b, c, d, ok := typeparse.IPv4(f.Raw)
 		if !ok {
 			return types.Value{}, arena, convErrf(target, "ipv4 inválido: %s", f.Raw)
 		}
@@ -59,37 +60,4 @@ func convertNetwork(f jsonp.Field, target types.FieldType, arena []byte) (types.
 		}
 	}
 	return types.Value{Type: target, Bytes: arena[start:len(arena):len(arena)]}, arena, nil
-}
-
-// parseIPv4 valida dotted-quad estrito: 4 octetos decimais 0-255, sem
-// leading zeros (evita ambiguidade octal), sem espaços.
-func parseIPv4(raw []byte) (a, b, c, d byte, ok bool) {
-	var oct [4]int
-	pos := 0
-	for i := 0; i < 4; i++ {
-		if i > 0 {
-			if pos >= len(raw) || raw[pos] != '.' {
-				return 0, 0, 0, 0, false
-			}
-			pos++
-		}
-		start := pos
-		v := 0
-		for pos < len(raw) && raw[pos] >= '0' && raw[pos] <= '9' {
-			v = v*10 + int(raw[pos]-'0')
-			pos++
-			if v > 255 {
-				return 0, 0, 0, 0, false
-			}
-		}
-		n := pos - start
-		if n == 0 || (n > 1 && raw[start] == '0') {
-			return 0, 0, 0, 0, false
-		}
-		oct[i] = v
-	}
-	if pos != len(raw) {
-		return 0, 0, 0, 0, false
-	}
-	return byte(oct[0]), byte(oct[1]), byte(oct[2]), byte(oct[3]), true
 }

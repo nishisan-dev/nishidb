@@ -6,11 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"strconv"
 
 	"github.com/nishisan-dev/nishidb/internal/jsonp"
+	"github.com/nishisan-dev/nishidb/internal/typeparse"
 	"github.com/nishisan-dev/nishidb/internal/types"
-	"github.com/nishisan-dev/nishidb/internal/unsafex"
 )
 
 // ErrTypeConversion é a categoria de erros de conversão (spec §101:
@@ -50,9 +49,9 @@ func Convert(f jsonp.Field, target types.FieldType, arena []byte) (types.Value, 
 		if f.Kind != jsonp.KindNumber {
 			return types.Value{}, arena, convErrf(target, "esperava número JSON, veio %v", f.Kind)
 		}
-		n, err := parseInt64(f.Raw)
+		n, err := typeparse.Int64(f.Raw)
 		if err != nil {
-			return types.Value{}, arena, err
+			return types.Value{}, arena, convErrf(target, "%s: %s", err, f.Raw)
 		}
 		return types.Value{Type: target, I64: n}, arena, nil
 
@@ -60,9 +59,9 @@ func Convert(f jsonp.Field, target types.FieldType, arena []byte) (types.Value, 
 		if f.Kind != jsonp.KindNumber {
 			return types.Value{}, arena, convErrf(target, "esperava número JSON, veio %v", f.Kind)
 		}
-		d, err := parseFloat64(f.Raw)
+		d, err := typeparse.Float64(f.Raw)
 		if err != nil {
-			return types.Value{}, arena, err
+			return types.Value{}, arena, convErrf(target, "%s: %s", err, f.Raw)
 		}
 		return types.Value{Type: target, I64: int64(math.Float64bits(d))}, arena, nil
 
@@ -79,14 +78,14 @@ func Convert(f jsonp.Field, target types.FieldType, arena []byte) (types.Value, 
 	case types.TypeTimestamp:
 		switch f.Kind {
 		case jsonp.KindString:
-			ms, err := parseRFC3339Millis(f.Raw)
+			ms, err := typeparse.RFC3339Millis(f.Raw)
 			if err != nil {
-				return types.Value{}, arena, err
+				return types.Value{}, arena, convErrf(target, "%s: %s", err, f.Raw)
 			}
 			return types.Value{Type: target, I64: ms}, arena, nil
 		case jsonp.KindNumber:
 			// Número = epoch millis (inclui $date canonical já desembrulhado).
-			ms, err := parseInt64(f.Raw)
+			ms, err := typeparse.Int64(f.Raw)
 			if err != nil {
 				return types.Value{}, arena, convErrf(target, "epoch millis inválido: %s", f.Raw)
 			}
@@ -120,7 +119,7 @@ func InferType(f jsonp.Field) types.FieldType {
 	case jsonp.KindString:
 		return types.TypeString
 	case jsonp.KindNumber:
-		if numberIsIntegral(f.Raw) {
+		if typeparse.IntegralNumber(f.Raw) {
 			return types.TypeInt64
 		}
 		return types.TypeDouble
@@ -138,65 +137,6 @@ func appendBytesValue(t types.FieldType, src, arena []byte) (types.Value, []byte
 	start := len(arena)
 	arena = append(arena, src...)
 	return types.Value{Type: t, Bytes: arena[start:len(arena):len(arena)]}, arena, nil
-}
-
-// numberIsIntegral reporta se um número JSON já validado é inteiro
-// (sem fração nem expoente).
-func numberIsIntegral(raw []byte) bool {
-	for _, c := range raw {
-		if c == '.' || c == 'e' || c == 'E' {
-			return false
-		}
-	}
-	return true
-}
-
-// parseInt64 converte dígitos JSON (sem fração/expoente) com check de
-// overflow. Não usa strconv para evitar a conversão []byte→string.
-func parseInt64(raw []byte) (int64, error) {
-	if !numberIsIntegral(raw) {
-		return 0, convErrf(types.TypeInt64, "número com fração/expoente: %s", raw)
-	}
-	i := 0
-	neg := false
-	if len(raw) > 0 && raw[0] == '-' {
-		neg = true
-		i++
-	}
-	if i >= len(raw) {
-		return 0, convErrf(types.TypeInt64, "número vazio")
-	}
-	// Acumula como negativo (o range de int64 é assimétrico: MinInt64 não
-	// tem par positivo).
-	var n int64
-	for ; i < len(raw); i++ {
-		c := raw[i]
-		if c < '0' || c > '9' {
-			return 0, convErrf(types.TypeInt64, "dígito inválido em %s", raw)
-		}
-		d := int64(c - '0')
-		if n < (math.MinInt64+d)/10 {
-			return 0, convErrf(types.TypeInt64, "overflow de int64: %s", raw)
-		}
-		n = n*10 - d
-	}
-	if !neg {
-		if n == math.MinInt64 {
-			return 0, convErrf(types.TypeInt64, "overflow de int64: %s", raw)
-		}
-		n = -n
-	}
-	return n, nil
-}
-
-// parseFloat64 converte um número JSON para float64. strconv.ParseFloat não
-// retém o argumento, então a conversão via unsafex.String é segura.
-func parseFloat64(raw []byte) (float64, error) {
-	d, err := strconv.ParseFloat(unsafex.String(raw), 64)
-	if err != nil {
-		return 0, convErrf(types.TypeDouble, "número inválido: %s", raw)
-	}
-	return d, nil
 }
 
 func convErrf(target types.FieldType, format string, args ...any) error {
