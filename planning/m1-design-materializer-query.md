@@ -642,25 +642,37 @@ Fluxo: lookup dataset → lexer→parser (AST) → bind (schema + params) → pl
 **Localização**: `internal/testutil/radiusgen` — importável por testes unitários, integração e pelos mains de `benchmark/` (mesmo módulo). `benchmark/` fica só com os harnesses (mains + análise), não com a lógica de geração.
 
 ```go
+// IMPLEMENTADO (Q17)
 type Config struct {
     Seed              uint64
-    Entities          int     // nº de entidades distintas (ex.: 8_000_000)
-    PatchRatio        float64 // fração de eventos que são patch parcial (default 0.85)
-    ExtendedJSONRatio float64 // fração de eventos usando wrappers Mongo (default 0.30)
-    UnknownFieldRatio float64 // fração com campo extra desconhecido (default 0.01)
-    NullFieldRatio    float64 // fração de patches com um campo = null explícito (default 0.05)
-    StatusValues      int     // default 8  (Start/Stop/Interim-Update/…)
-    NASCount          int     // default 300
-    TerminateCauses   int     // default 10
+    Entities          int     // nº de entidades distintas (ex.: 8_000_000); 0 → 10_000
+    PatchRatio        float64 // fração de eventos que são patch parcial (referência 0.85)
+    ExtendedJSONRatio float64 // fração de eventos usando wrappers Mongo (referência 0.10)
+    UnknownFieldRatio float64 // fração com campo extra desconhecido (referência 0.01)
+    NullFieldRatio    float64 // fração de patches com um campo = null explícito (referência 0.05)
+    StatusValues      int     // 0 → 8  (Interim-Update/Alive/Start/Stop/…)
+    NASCount          int     // 0 → 300
+    TerminateCauses   int     // 0 → 10
 }
 
-type Generator struct{ /* rng rand.PCG; seqs []uint32; cfg */ }
+type Generator struct{ /* cfg; rng *rand.Rand (PCG); seqs []uint32 */ }
 
-func New(cfg Config) *Generator
-// Appende UM evento JSON em dst e retorna o slice. ~0 alloc/evento em steady state.
+func DefaultConfig() Config          // o workload de referência, para ajustar Seed/Entities
+func New(cfg Config) (*Generator, error)
+func MustNew(cfg Config) *Generator  // para teste/benchmark, onde não há a quem devolver erro
+// Appende UM evento JSON em dst e retorna o slice. 0 alloc/evento (gate na suíte).
 func (g *Generator) Next(dst []byte) []byte
-// Determinismo: mesmo Config ⇒ mesma sequência byte a byte (teste obrigatório).
+func GenerateCorpus(cfg Config, n int) ([][]byte, error)
 ```
+
+Duas decisões que o esboço acima não previa:
+
+- **Ratio zero é zero, não default.** Só a CARDINALIDADE (Entities, StatusValues, NASCount, TerminateCauses) trata zero como default — ali zero não descreve corpus nenhum. Os ratios valem o que está escrito, senão "medir sem Extended JSON" viraria "medir com 10%" em silêncio, e o harness não conseguiria isolar uma dimensão por vez. Quem quer a carga de referência chama `DefaultConfig()`.
+- **`New` devolve erro** (com `MustNew` para o caso de teste): Config inválida vinda de flag de linha de comando merece mensagem, não stack trace; e normalizar em silêncio produziria uma medição que não corresponde ao que o operador pediu — ninguém confere um corpus de 8M eventos a olho.
+
+O `ExtendedJSONRatio` de referência caiu de 0.30 para **0.10**, alinhado à proporção observada na fonte real.
+
+Determinismo tem DOIS testes, não um: mesma Config ⇒ mesmo corpus na mesma build, e um **golden de hash** que trava o corpus entre versões do gerador. Sem o segundo, trocar a ordem de consumo do rng passaria batido e a comparação com medições anteriores viraria ficção.
 
 Design:
 - **Determinismo**: `math/rand/v2` `PCG(seed, seed^0x9e3779b97f4a7c15)`. Todo sampling deriva do rng na mesma ordem — mesma seed ⇒ corpus idêntico (testável byte a byte).
@@ -777,8 +789,8 @@ Testes §106 completos: primary lookup; bitmap lookup; hash lookup; AND; OR (com
 **T16 — encoder NDJSON** *(dep: T15)*
 Testes: cada tipo formatado (timestamp RFC3339 UTC, ipv4 dotted, ipv6 compressed, base64, json cru, null); escaping JSON de strings; streaming O(batch) (buffer não cresce com resultado).
 
-**T17 — `internal/testutil/radiusgen`** *(dep: nenhuma técnica; depois de T10 p/ round-trip)*
-Testes: determinismo (mesma seed ⇒ bytes idênticos); todo evento parseia no jsonp E no `encoding/json` (oráculo); distribuições aproximadas (χ² frouxo: 8 status, N nas); PatchRatio/ExtendedJSONRatio/NullFieldRatio respeitados (contagem em 10k eventos); `_SEQ` monotônico por entidade; bench ~0 allocs.
+**T17 — `internal/testutil/radiusgen`** *(dep: nenhuma técnica; depois de T10 p/ round-trip)* — ENTREGUE
+Testes: determinismo (mesma seed ⇒ bytes idênticos) **+ golden de hash entre versões**; todo evento parseia no jsonp E no `encoding/json` (oráculo, com a contagem de campos batendo nos dois); PatchRatio/ExtendedJSONRatio/UnknownFieldRatio/NullFieldRatio respeitados em 10k eventos e DESLIGÁVEIS em zero; `_SEQ` monotônico por entidade; key e ip 1:1 e estáveis por entidade; NAS com cardinalidade limitada e concentração acima da uniforme; Config inválida com mensagem; **corpus ingerível fim-a-fim pelo materializer com o YAML de produção, sem nenhum descarte**; gate de 0 allocs na suíte.
 
 **T18 — `internal/testutil/memprof`** *(sem dep; Linux build tag)*
 Testes: parse de fixtures de `/proc` (arquivos de exemplo em testdata); leitura real smoke test.
