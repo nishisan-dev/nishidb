@@ -6,16 +6,17 @@ Recebe eventos, mantém o **estado corrente** de cada entidade (merge por campo,
 controle de sequência) e responde consultas SQL sobre esse estado — com o
 dataset inteiro cabendo num orçamento de memória fixo.
 
-Medido com **8 milhões de entidades**: 486 MiB de RSS de pico (limite: 1 GiB),
-heap Go de 994 KiB, 45 mil eventos/s de ingestão e point lookup em **16
-microssegundos** pelo caminho SQL completo.
+Medido com **8 milhões de entidades**: 483 MiB de RSS de pico (limite: 1 GiB),
+133 mil eventos/s de ingestão e point lookup em **18 microssegundos** pelo
+caminho SQL completo. O heap Go da ingestão fica em **396 KiB com 8 milhões de
+rows**, contra 389 KiB com 1 milhão — 8× de dados, 1,9% de heap a mais.
 
 ## Estado
 
 **M1 completo.** Ingestão, materialização, storage durável com recovery,
 índices, SQL e saída NDJSON — tudo pelo binário. Os 25 critérios de aceite estão
-detalhados em [`docs/aceite-m1.md`](docs/aceite-m1.md): 13 atendidos, 5 parciais
-com milestone dono, 7 fora do M1 por planejamento.
+detalhados em [`docs/aceite-m1.md`](docs/aceite-m1.md): 14 atendidos, 5 parciais
+com milestone dono, 6 fora do M1 por planejamento.
 
 Próximos: **M2** (consumidor Kafka), **M3** (protocolo HTTP, driver JDBC, auth,
 TLS), **M4** (índice hash físico, compaction, TTL).
@@ -79,10 +80,17 @@ schema:
     id:
       type: string
       alias: service_id
+    # O campo de sequence precisa ser declarado como qualquer outro: sem esta
+    # entrada o dataset não abre.
+    _SEQ:
+      type: int64
     Acct-Status-Type:
       type: string
       alias: status
       index: bitmap
+    Acct-Terminate-Cause:
+      type: string
+      alias: terminate_cause
     NAS-IP-Address:
       type: ipv4
       alias: nas_ip
@@ -91,6 +99,10 @@ schema:
       type: string
       alias: username
 ```
+
+Um campo **não declarado** aqui continua sendo aceito (`unknownFields:
+include`) e vira coluna `auto`, mas só é consultável pelo **nome original** —
+o alias existe apenas para campo declarado.
 
 ### 3. Ingerir
 
@@ -101,7 +113,7 @@ $ cat eventos.ndjson
 {"id":"CMP-1","_SEQ":2,"Acct-Terminate-Cause":"User-Request"}
 
 $ nishidb ingest --config nishidb.yaml --dataset radius_sessions --input eventos.ndjson
-ingest: 3 lidos, 3 aplicados (2 criados, 1 atualizados, 0 stale) em 14ms (214 ev/s)
+ingest: 3 lidos, 3 aplicados (2 criados, 1 atualizados, 0 stale) em 10ms (289 ev/s)
 ```
 
 O terceiro evento é um **patch**: ele acrescenta um campo à sessão `CMP-1` sem
@@ -124,10 +136,10 @@ O erro de consulta aponta a posição:
 $ nishidb query --config nishidb.yaml --dataset radius_sessions \
     "SELECT id FROM radius_sessions
      WHERE status = 'Stop' AND naoexiste = 1"
-query: coluna "naoexiste" não existe no dataset "radius_sessions" (posição 57)
-  linha 2, coluna 27:
-     WHERE status = 'Stop' AND naoexiste = 1
-                              ^
+query: coluna "naoexiste" não existe no dataset "radius_sessions" (posição 62)
+  linha 2, coluna 32:
+         WHERE status = 'Stop' AND naoexiste = 1
+                                   ^
 ```
 
 ### SQL suportado (v1)
@@ -139,8 +151,12 @@ SELECT <colunas | *> FROM <dataset>
 ```
 
 Comparadores `=`, `!=`, `>`, `>=`, `<`, `<=`; `AND`, `OR`, parênteses;
-`IS NULL` / `IS NOT NULL`; parâmetros posicionais `?`; alias e campos entre
-aspas duplas (obrigatórias para nomes com hífen, como `"Acct-Status-Type"`).
+`IS NULL` / `IS NOT NULL`; alias e campos entre aspas duplas (obrigatórias para
+nomes com hífen, como `"Acct-Status-Type"`).
+
+Parâmetros posicionais `?` existem no engine e são usados pela API Go, mas o
+comando `query` **não tem como fornecê-los**: uma query com `?` pelo CLI sai
+com exit 2. O `PreparedStatement` é do M3, junto com o driver JDBC.
 
 Repetir uma coluna na projeção (`SELECT id, id`) é recusado no bind: a linha
 sairia com a chave repetida e o consumidor de JSON colapsaria as duas em
@@ -174,8 +190,9 @@ o dataset está íntegro e checkpointado, mas faltam rows.
 
 - [Arquitetura](docs/architecture.md) — como o sistema funciona, com os números.
 - [Aceite do M1](docs/aceite-m1.md) — os 25 critérios, item a item.
-- [Rodada de aceite](benchmark/baselines/aceite-8m-20260814.md) — 8M entidades
-  com consultas concorrentes.
+- [Rodada de aceite](benchmark/baselines/aceite-8m-20260815.md) — 8M entidades
+  com consultas concorrentes, corpus de referência.
+- [Débitos abertos](docs/debitos.md) — o que ficou para o M2, M3 e M4, com dono.
 
 ## Desenvolvimento
 
