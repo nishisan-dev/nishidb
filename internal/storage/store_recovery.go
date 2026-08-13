@@ -51,10 +51,12 @@ func (s *Store) recoverFrom(m *checkpoint.Manifest, refs []segment.SegmentRef, d
 			maxID = ref.ID
 		}
 	}
+	declaradoNoManifest := make(map[uint32]int64, len(m.Segments))
 	for _, si := range m.Segments {
 		if _, present := byID[si.ID]; !present {
 			return fmt.Errorf("%w: segmento %d do manifest ausente em %s", ErrDatasetCorrupt, si.ID, dataDir)
 		}
+		declaradoNoManifest[si.ID] = si.SizeBytes
 	}
 	if _, present := byID[m.CurrentSegment]; !present {
 		return fmt.Errorf("%w: segmento corrente %d do manifest ausente em %s",
@@ -70,6 +72,24 @@ func (s *Store) recoverFrom(m *checkpoint.Manifest, refs []segment.SegmentRef, d
 		if !present {
 			return fmt.Errorf("%w: buraco na cadeia de segmentos: %d ausente entre %d e %d",
 				ErrDatasetCorrupt, id, m.CurrentSegment, maxID)
+		}
+		if ref.SizeBytes < segment.HeaderSize {
+			// Arquivo sem header: crash entre o O_CREATE|O_EXCL e o
+			// writeHeader do openNew. É reparável (o OpenWriter completa o
+			// header adiante), mas SÓ se o manifest não o conhecer com
+			// dados: um segmento que continha records e foi zerado por
+			// truncamento externo é byte a byte idêntico a este, e reparar
+			// apagaria a evidência de uma perda real.
+			if declarado := declaradoNoManifest[id]; declarado > segment.HeaderSize {
+				return fmt.Errorf("%w: segmento %d está com %d bytes, mas o manifest o declara com %d (arquivo encolheu)",
+					ErrDatasetCorrupt, id, ref.SizeBytes, declarado)
+			}
+			if id != maxID {
+				return fmt.Errorf("%w: segmento %d sem header no meio da cadeia (o último é o %d)",
+					ErrDatasetCorrupt, id, maxID)
+			}
+			lastValidEnd = segment.HeaderSize
+			break
 		}
 		from := int64(segment.HeaderSize)
 		if id == m.CurrentSegment {
@@ -127,6 +147,13 @@ type replayState struct {
 // ponto S. Não dá para usar "não tem location": um checkpoint interrompido
 // entre o ApplyOverlay e o manifest deixa a location da row nova já no
 // mmap, e o manifest antigo (que governa) não a contou.
+//
+// Resíduo conhecido: um rowId reservado por um Put que falhou ANTES do
+// Append não gera record no tail, então nunca é contado — RowCount fica
+// abaixo de nextRowID por esses ids. É o comportamento desejado (a row de
+// fato não existe), mas significa que RowCount é ESTATÍSTICA e não
+// invariante: não use a diferença entre RowCount e nextRowID como prova de
+// nada. Visibilidade e lookup não dependem dele.
 func (st *replayState) contaComoNova(id types.RowID) bool {
 	if uint64(id) < st.baseNextRowID {
 		return false // já existia em S; o manifest já a contabilizou
@@ -150,18 +177,37 @@ func (s *Store) replayRecord(st *replayState, seg, off uint32, rec types.Record)
 		s.nextRowID.Store(uint64(id) + 1)
 	}
 	// Estado anterior da row: base do diff de bitmaps e do decremento de
-	// liveness. No replay forward ele é sempre o correto — o estado de S ou
-	// um record já replayado (§10.2).
+	// liveness.
+	//
+	// O §10.2 afirma que esse prev está sempre correto no replay forward,
+	// mas a premissa NÃO vale quando a location está à frente do ponto S —
+	// situação normal de crash, porque o checkpoint msynca as locations
+	// (passo 3) antes dos bitmaps e antes do manifest (passo 4). Nesse caso
+	// a location nomeia este mesmo record (ou um posterior do tail): usá-lo
+	// como "anterior" faria o diff comparar o record consigo mesmo,
+	// suprimindo o Set — falso negativo permanente no bitmap, que a
+	// revalidação do §44 não recupera — e decrementaria a liveness de um
+	// record VIVO.
+	//
+	// Só uma location ESTRITAMENTE atrás do cursor do replay é passado
+	// legítimo (estado de S ou record já replayado). Fora disso o prev é
+	// desconhecido, e prev desconhecido é tratado como ausente: liga todas
+	// as postings do payload novo (Set é idempotente), não limpa nenhuma
+	// (Clear a menos = falso positivo, tolerado pelo §44) e não decrementa
+	// liveness.
 	var prevPayload []byte
-	oldPacked, had := s.locs.Get(id)
-	if had {
+	prevConhecido := false
+	if oldPacked, ok := s.locs.Get(id); ok {
 		oseg, ooff, _ := rowindex.Unpack(oldPacked)
-		prevRec, buf, err := s.segR.ReadRecord(oseg, ooff, s.prevBuf)
-		s.prevBuf = buf
-		if err != nil {
-			return fmt.Errorf("%w: replay da row %d: estado anterior ilegível: %w", ErrDatasetCorrupt, id, err)
+		if oseg < seg || (oseg == seg && ooff < off) {
+			prevRec, buf, err := s.segR.ReadRecord(oseg, ooff, s.prevBuf)
+			s.prevBuf = buf
+			if err != nil {
+				return fmt.Errorf("%w: replay da row %d: estado anterior ilegível: %w", ErrDatasetCorrupt, id, err)
+			}
+			prevPayload = prevRec.Payload
+			prevConhecido = true
 		}
-		prevPayload = prevRec.Payload
 	}
 	return s.applyRecord(recordApply{
 		rowID:       id,
@@ -170,7 +216,7 @@ func (s *Store) replayRecord(st *replayState, seg, off uint32, rec types.Record)
 		flags:       rec.Flags,
 		payload:     rec.Payload,
 		prevPayload: prevPayload,
-		hadPrevious: had,
+		hadPrevious: prevConhecido,
 		countsAsNew: st.contaComoNova(id),
 		seg:         seg,
 		off:         off,

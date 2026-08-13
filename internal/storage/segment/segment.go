@@ -115,7 +115,33 @@ func OpenWriter(dir string, segmentSize int64, segID uint32, offset int64) (*Wri
 	if err != nil {
 		return nil, fmt.Errorf("segment: reabrir segmento %d: %w", segID, err)
 	}
-	if err := checkHeader(f, segID); err != nil {
+	st, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, fmt.Errorf("segment: stat do segmento %d: %w", segID, err)
+	}
+	if st.Size() < HeaderSize {
+		// Rotação interrompida entre o O_CREATE|O_EXCL e o writeHeader do
+		// openNew: o arquivo existe sem header. Completar a criação é a
+		// única saída — recusar trava o dataset para sempre, e o arquivo
+		// existente já bloquearia o O_EXCL de qualquer rotação futura. O
+		// caller é quem decide que este segmento não continha records (só o
+		// último pode estar assim, e o manifest não pode declará-lo com
+		// dados).
+		if offset != HeaderSize {
+			f.Close()
+			return nil, fmt.Errorf("segment: segmento %d tem %d bytes (sem header) mas o offset pedido é %d",
+				segID, st.Size(), offset)
+		}
+		if err := writeHeader(f, segID, segmentSize); err != nil {
+			f.Close()
+			return nil, err
+		}
+		if err := syncDir(dir); err != nil {
+			f.Close()
+			return nil, err
+		}
+	} else if err := checkHeader(f, segID); err != nil {
 		f.Close()
 		return nil, err
 	}

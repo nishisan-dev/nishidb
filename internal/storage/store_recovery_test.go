@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -76,11 +77,13 @@ func TestRestartBasico_WriteRestartLookup(t *testing.T) {
 	if st := s2.Stats(); st.RowCount != 5 {
 		t.Fatalf("RowCount pós-restart: %d", st.RowCount)
 	}
+	exigeBitmapCompleto(t, s2)
 	// O writer está posicionado: escrever depois do restart funciona.
 	mustPut(t, s2, "rb-nova", 99, statusPayload(t, s2, "rb-nova", "Start", 99), nil)
 	if _, _, ok, _ := s2.GetByKey([]byte("rb-nova"), nil); !ok {
 		t.Fatal("put pós-restart deveria funcionar")
 	}
+	exigeBitmapCompleto(t, s2)
 }
 
 // tailRecordLens devolve os comprimentos dos records do tail construídos
@@ -310,6 +313,9 @@ func TestPhantomCommitViraVisivelNoReplay(t *testing.T) {
 	}
 	// E a recovery LIMPA o sticky (reopen é o remédio, §14.14).
 	mustPut(t, s2, "ph-pos", 1, statusPayload(t, s2, "ph-pos", "Start", 1), nil)
+	// O phantom foi materializado por um Put que morreu ANTES da fase de
+	// Set: quem tem de ligar as postings dele é o replay.
+	exigeBitmapCompleto(t, s2)
 }
 
 func TestEpochNaoRegride(t *testing.T) {
@@ -436,6 +442,7 @@ func TestReopenBitmapConverge(t *testing.T) {
 	if rows := collectRows(t, itB); !slices.Equal(rows, []types.RowID{id}) {
 		t.Fatalf("posting nova pós-replay: %v", rows)
 	}
+	exigeBitmapCompleto(t, s2)
 }
 
 func TestCrashEntreApplyEManifest(t *testing.T) {
@@ -479,6 +486,7 @@ func TestCrashEntreApplyEManifest(t *testing.T) {
 	if slices.Contains(rowsA, id1) {
 		t.Fatalf("posting antiga de ca-1 deveria estar limpa: %v", rowsA)
 	}
+	exigeBitmapCompleto(t, s2)
 }
 
 func TestDoubleReopenEhIdempotente(t *testing.T) {
@@ -495,7 +503,9 @@ func TestDoubleReopenEhIdempotente(t *testing.T) {
 	mustPut(t, s, "dr-4", 4, statusPayload(t, s, "dr-4", "Start", 4), nil)
 
 	s2 := reopen(t, s, opts)
+	manifestA := loadManifestAud(t, dir)
 	s3 := reopen(t, s2, opts)
+	manifestB := loadManifestAud(t, dir)
 	for i := 0; i < 5; i++ {
 		k := fmt.Sprintf("dr-%d", i)
 		if _, _, ok, err := s3.GetByKey([]byte(k), nil); err != nil || !ok {
@@ -508,4 +518,26 @@ func TestDoubleReopenEhIdempotente(t *testing.T) {
 	if st := s3.Stats(); st.RowCount != 5 {
 		t.Fatalf("RowCount: %d", st.RowCount)
 	}
+	exigeBitmapCompleto(t, s3)
+
+	// O reopen só pode avançar o epoch: todo o resto do ponto S — tallies
+	// inclusive — tem que sair idêntico, senão o replay não é idempotente.
+	if manifestB.Epoch != manifestA.Epoch+1 {
+		t.Fatalf("epoch: %d → %d (esperado +1)", manifestA.Epoch, manifestB.Epoch)
+	}
+	manifestA.Epoch, manifestB.Epoch = 0, 0
+	manifestA.CreatedAtUnixMs, manifestB.CreatedAtUnixMs = 0, 0
+	if !reflect.DeepEqual(manifestA, manifestB) {
+		t.Fatalf("o 2º reopen produziu um manifest diferente:\n  1º = %+v\n  2º = %+v", manifestA, manifestB)
+	}
+}
+
+// loadManifestAud lê o manifest corrente do dataset.
+func loadManifestAud(t *testing.T, dir string) *checkpoint.Manifest {
+	t.Helper()
+	m, err := checkpoint.Load(audManifestPath(dir))
+	if err != nil {
+		t.Fatalf("Load do manifest: %v", err)
+	}
+	return m
 }
