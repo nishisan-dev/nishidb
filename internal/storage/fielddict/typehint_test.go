@@ -322,8 +322,12 @@ func TestVersaoV1Recusada(t *testing.T) {
 	if err == nil {
 		t.Fatal("v1 deveria ser recusado")
 	}
-	if !strings.Contains(err.Error(), "version desconhecida") {
-		t.Errorf("erro = %q, want conter 'version desconhecida'", err)
+	// Quem lê a mensagem é um operador com o processo caído: sem o arquivo,
+	// as duas versões e a saída, ele não tem o que fazer com a informação.
+	for _, quer := range []string{path, "version 1", "esperada 2", "recrie o dataset"} {
+		if !strings.Contains(err.Error(), quer) {
+			t.Errorf("erro = %q, want conter %q", err, quer)
+		}
 	}
 }
 

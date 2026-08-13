@@ -205,7 +205,9 @@ func Open(opts Options) (*Store, error) {
 		return nil, err
 	}
 	if s.dict, err = fielddict.Open(filepath.Join(metaDir, "fields.dict")); err != nil {
-		return nil, err
+		// O erro do dicionário já traz arquivo, versão e remediação; aqui entra
+		// o dataset, que é o identificador que o operador tem na mão.
+		return nil, fmt.Errorf("storage: abrir o dataset %s: %w", opts.Dir, err)
 	}
 	if s.segR, err = segment.OpenReader(dataDir); err != nil {
 		return nil, err

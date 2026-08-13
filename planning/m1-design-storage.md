@@ -98,12 +98,16 @@ Records back-to-back a partir do offset 64.
 `metadata/fields.dict`, append-only.
 
 ```
-Header 8 bytes: "NDBD" | version u8 | reserved[3]
-Entry: nameLen u16 | typeHint u8 | name bytes | crc32c u32 (sobre nameLen..name)
+Header 8 bytes:    "NDBD" | version u8 (=2) | reserved[3]
+Entry de campo:    nameLen u16 (>=1) | typeHint u8 | name bytes | crc32c u32 (sobre nameLen..name)
+Registro de hint:  0x0000 u16 | fieldID u16 | typeHint u8 | crc32c u32 (9 bytes; CRC sobre os 5 primeiros)
 ```
 
 - fieldID implícito = ordem da entry (1-based; 0 reservado). Máx 65535 campos (u16).
 - Open: scan integral validando CRC; prefixo válido define o dict; entry rasgada no fim → `ftruncate` no último boundary válido.
+- **Registro de hint (v2, R11).** O tipo de um campo `auto` é fixado na primeira observação (§14 item 26) e precisa sobreviver a restart. Ele NÃO é gravado no byte `typeHint` da entry: o tipo não é conhecido quando o campo nasce, e reescrever o byte in-place seria uma escrita no MEIO do arquivo — um rasgo de crash entre o byte e o CRC deixaria uma entry inválida antes das demais, e a abertura seguinte truncaria ali, apagando campos cujos IDs já estão em records duráveis. Com registro append-only o rasgo só pode estar no tail: perde-se o hint ainda não fsyncado e o campo volta a fixar o tipo na próxima observação. Os dois registros se distinguem por `nameLen == 0`, impossível numa entry (nome vazio é recusado), sem gastar um byte de tag. O ÚLTIMO registro de um fieldID vence. O `fdatasync` do hint acontece ANTES da publicação em memória, mesma regra do nome.
+- **v2 sem fallback para v1 (decisão QP-D2).** Um arquivo com outra version é RECUSADO no Open, com o caminho do arquivo, a versão encontrada, a esperada e a remediação (recriar o dataset a partir da origem). Não há conversor: o M1 não foi lançado, o v1 não tem onde guardar o tipo fixado, e um leitor tolerante interpretaria o dicionário de um dataset v1 como se todo campo `auto` nunca tivesse sido observado — silenciosamente, e só em query. Datasets de pré-prod anteriores são recriados.
+- **O formato é travado por golden de BYTES** (`TestGoldenBytesV2`), não só por round-trip: leitor e escritor mutados da mesma maneira concordam entre si e produzem um arquivo com o MESMO byte de version que o leitor canônico trunca.
 - Em memória: `map[string]uint16` + `[]entry` — bounded pela cardinalidade de campos (dezenas/centenas), permitido pela filosofia de memória.
 - **Regra de durabilidade: entry nova é appendada e `fdatasync`ada ANTES do primeiro record que usa o fieldID ser appendado ao segmento.** Garante que replay do tail sempre resolve fieldIDs. Campos novos são raros → custo irrelevante.
 

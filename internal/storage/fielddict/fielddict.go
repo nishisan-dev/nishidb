@@ -125,7 +125,14 @@ func Open(path string) (*Dict, error) {
 	}
 	if raw[4] != dictVersion {
 		f.Close()
-		return nil, fmt.Errorf("fielddict: version desconhecida %d", raw[4])
+		// Quem lê isto é um operador com o processo caído: a mensagem precisa
+		// dizer QUAL arquivo, o que ele é, e o que fazer. Não há conversor de
+		// v1 (decisão QP-D2, design §4): o v1 não tem onde guardar o tipo
+		// fixado dos campos auto, e ler um v1 como v2 faria todo campo auto
+		// parecer nunca observado — em silêncio, e só na query.
+		return nil, fmt.Errorf("fielddict: %s está na version %d, esperada %d: "+
+			"não há migração do formato antigo — recrie o dataset a partir da origem",
+			path, raw[4], dictVersion)
 	}
 
 	// Scan do prefixo válido; primeiro registro inválido/incompleto →
