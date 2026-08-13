@@ -49,7 +49,15 @@ func TestErrosDeSintaxe(t *testing.T) {
 		{"limit com parametro", "SELECT a FROM x LIMIT ?", 22, "LIMIT não aceita parâmetro"},
 		{"limit com string", "SELECT a FROM x LIMIT 'x'", 22, "esperado literal inteiro após LIMIT"},
 		{"limit fracionario", "SELECT a FROM x LIMIT 1.5", 22, "LIMIT exige literal inteiro"},
-		{"limit negativo", "SELECT a FROM x LIMIT -1", 22, "LIMIT não aceita valor negativo"},
+		{"limit negativo", "SELECT a FROM x LIMIT -1", 22, "LIMIT exige literal inteiro sem sinal"},
+		// -0 é zero, e mesmo assim é recusado: a gramática recusa o SINAL. A
+		// mensagem tem de dizer isso, senão manda procurar um valor negativo
+		// que não existe.
+		{"limit menos zero", "SELECT a FROM x LIMIT -0", 22, "LIMIT exige literal inteiro sem sinal"},
+		// O sinal de MAIS nem chega ao parser: '+' não abre número no lexer
+		// (só '-' abre), então a recusa vem de lá. Registrado para que mover
+		// essa fronteira apareça como mudança de mensagem, não em silêncio.
+		{"limit com mais", "SELECT a FROM x LIMIT +1", 22, "caractere inesperado '+'"},
 		{"limit overflow", "SELECT a FROM x LIMIT 99999999999999999999", 22, "inteiro fora do intervalo de int64"},
 		{"operando overflow", "SELECT a FROM x WHERE b = 99999999999999999999", 26, "inteiro fora do intervalo de int64"},
 		{"where depois de limit", "SELECT a FROM x LIMIT 10 WHERE a = 1", 25, "conteúdo inesperado após o fim da query"},

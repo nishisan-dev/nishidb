@@ -370,7 +370,12 @@ func (p *parser) parseLimit(st *SelectStmt) error {
 		return p.errAt(tok.Pos, "LIMIT exige literal inteiro")
 	}
 	if strings.HasPrefix(tok.Text, "-") {
-		return p.errAt(tok.Pos, "LIMIT não aceita valor negativo")
+		// A gramática recusa o SINAL, não só o valor negativo: `LIMIT -0` cai
+		// aqui embora -0 seja zero. Estreitar assim é deliberado (um LIMIT com
+		// sinal é quase sempre erro de quem escreveu), mas a mensagem tem de
+		// dizer a regra REAL — "não aceita valor negativo" mandaria o usuário
+		// procurar um problema de valor que não existe em `-0`.
+		return p.errAt(tok.Pos, "LIMIT exige literal inteiro sem sinal")
 	}
 	n, err := typeparse.Int64([]byte(tok.Text))
 	if err != nil {
