@@ -1,21 +1,44 @@
 // Package fakestorage é o dublê de teste do Store do storage engine para o
-// ramo materializer/query. Implementa o contrato acordado (§15A do plano de
-// storage / §2.2 e §3.7 do plano de materializer+query): GetByKey/Put para o
-// writer e GetByRowID/ScanLive/LookupBitmap/LookupHash para o executor,
-// espelhando as invariantes do Store real — validação de payload no Put,
-// diff prev↔novo dos campos indexados, cópia para o buffer do caller nas
-// leituras e iteradores de rowIds em ordem crescente.
+// ramo materializer/query. Implementa a MESMA superfície do *storage.Store
+// (§15A item 4 do plano de storage): GetByKey/Put para o writer e
+// GetByRowID/ScanLive/LookupBitmap/Sequence para o executor, com assinaturas
+// idênticas às do real para que qualquer interface declarada no consumidor
+// aceite os dois.
+//
+// As invariantes observáveis também são espelhadas, inclusive as
+// desconfortáveis: payload validado com a rotina real, rowId monotônico
+// nunca reutilizado, liveness derivada das flags, lookup indexado devolvendo
+// SUPERSET de candidatos (§44) e campo sem índice devolvendo erro. Um dublê
+// mais gentil que o real esconde justamente os bugs que ele deveria expor.
 //
 // Escala pequena por design (maps): é infraestrutura de teste, não engine.
 package fakestorage
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"sort"
 
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
+
+// ErrInvalidArgument espelha storage.ErrInvalidArgument (violação dos
+// argumentos de Put/LookupBitmap). É um sentinel próprio porque o pacote
+// storage vive no outro ramo; na convergência dos ramos ele passa a ser um
+// alias do real.
+var ErrInvalidArgument = errors.New("fakestorage: argumento inválido")
+
+// RowIDIterator itera rowIds em ordem crescente — cópia verbatim da
+// interface homônima do Store real. Na convergência dos ramos o fake passa a
+// devolver storage.RowIDIterator e esta declaração some.
+type RowIDIterator interface {
+	Next() bool
+	RowID() types.RowID
+	Err() error
+	Close() error
+}
 
 // Indexes declara quais campos têm índice secundário no fake (o Store real
 // deriva isso do schema do dataset).
@@ -25,13 +48,16 @@ type Indexes struct {
 }
 
 type row struct {
-	rowID    types.RowID
-	seq      int64
-	flags    uint8
-	key      []byte // cópia própria
-	payload  []byte // cópia própria
-	tombsted bool
+	rowID   types.RowID
+	seq     int64
+	flags   uint8
+	key     []byte // cópia própria
+	payload []byte // cópia própria
 }
+
+// live deriva a liveness das flags — ÚNICA fonte de verdade, como no real
+// (o bit vai empacotado na location, §15A item 7).
+func (r *row) live() bool { return r.flags&types.FlagTombstone == 0 }
 
 // PutCall registra uma chamada de Put para asserções de instrumentação.
 type PutCall struct {
@@ -47,7 +73,9 @@ type Store struct {
 	byKey    map[string]types.RowID
 	rows     map[types.RowID]*row
 	nextRow  types.RowID
-	indexed  map[types.FieldID]bool // união de bitmap+hash (diff é igual)
+	bitmap   map[types.FieldID]bool
+	hash     map[types.FieldID]bool
+	indexed  map[types.FieldID]bool // união bitmap+hash (o diff é igual)
 	postings map[postingKey]map[types.RowID]struct{}
 
 	// PutCalls instrumenta as chamadas na ordem em que ocorreram.
@@ -65,13 +93,17 @@ func New(idx Indexes) *Store {
 		byKey:    map[string]types.RowID{},
 		rows:     map[types.RowID]*row{},
 		nextRow:  1,
+		bitmap:   map[types.FieldID]bool{},
+		hash:     map[types.FieldID]bool{},
 		indexed:  map[types.FieldID]bool{},
 		postings: map[postingKey]map[types.RowID]struct{}{},
 	}
 	for _, f := range idx.Bitmap {
+		s.bitmap[f] = true
 		s.indexed[f] = true
 	}
 	for _, f := range idx.Hash {
+		s.hash[f] = true
 		s.indexed[f] = true
 	}
 	return s
@@ -81,28 +113,51 @@ func valKey(v types.Value) string {
 	return fmt.Sprintf("%d|%d|%x", v.Type, v.I64, v.Bytes)
 }
 
-// Put espelha o write path do Store real: valida o payload (ordem crescente
-// de FieldID, tag 0x00 proibida), cria a row se a key é nova, diffa os
-// campos indexados prev↔novo e publica. prev==nil com key existente é
-// resolvido internamente (fallback do contrato). Sequence NÃO é checada
-// aqui — stale check é responsabilidade do Apply.
-func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *types.Record) (uint64, bool, error) {
+// Put espelha o write path do Store real: valida os argumentos, resolve o
+// rowId (novo, do prev ou da key existente), valida o payload (ordem
+// crescente de FieldID, tag 0x00 proibida), diffa os campos indexados
+// prev↔novo e publica. Sequence NÃO é checada aqui — stale check é
+// responsabilidade do Apply.
+//
+// Contrato do prev (idêntico ao real): quando fornecido, prev DEVE ser o
+// record corrente DESTA key; prev de outra key é ErrInvalidArgument, porque
+// a violação silenciosa gravaria o estado na row errada. prev==nil com key
+// existente é resolvido internamente.
+//
+// flags é a única fonte de liveness: Put com types.FlagTombstone mata a row.
+// O rowId é reservado ANTES da validação do payload, como no real — um Put
+// falho vaza o id, jamais o reutiliza.
+func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *types.Record) (types.RowID, bool, error) {
+	if len(key) == 0 {
+		return 0, false, fmt.Errorf("%w: key vazia", ErrInvalidArgument)
+	}
+	if prev != nil && !bytes.Equal(prev.Key, key) {
+		return 0, false, fmt.Errorf("%w: prev pertence à key %q, não a %q", ErrInvalidArgument, prev.Key, key)
+	}
+
+	var (
+		rowID       types.RowID
+		created     bool
+		prevPayload []byte
+	)
+	switch existing, exists := s.byKey[string(key)]; {
+	case prev != nil:
+		rowID = prev.RowID
+		prevPayload = prev.Payload
+	case exists:
+		rowID = existing
+		prevPayload = s.rows[existing].payload
+	default:
+		rowID = s.nextRow
+		s.nextRow++
+		created = true
+	}
+
 	if _, err := encoding.ValidatePayload(payload); err != nil {
 		return 0, false, err
 	}
-	rowID, exists := s.byKey[string(key)]
-	created := !exists
-	if !exists {
-		rowID = s.nextRow
-		s.nextRow++
-		s.byKey[string(key)] = rowID
-	}
-	var prevPayload []byte
-	if prev != nil {
-		prevPayload = prev.Payload
-	} else if exists {
-		prevPayload = s.rows[rowID].payload
-	}
+
+	s.byKey[string(key)] = rowID
 	s.diffPostings(rowID, prevPayload, payload)
 	s.rows[rowID] = &row{
 		rowID:   rowID,
@@ -114,7 +169,7 @@ func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *ty
 	s.PutCalls = append(s.PutCalls, PutCall{
 		Key: string(key), Seq: seq, Flags: flags, HadPrev: prev != nil, Created: created,
 	})
-	return uint64(rowID), created, nil
+	return rowID, created, nil
 }
 
 // diffPostings percorre os dois payloads ordenados (merge linear, como o
@@ -167,23 +222,39 @@ func (s *Store) removePosting(field types.FieldID, v types.Value, rowID types.Ro
 
 // GetByKey devolve o record corrente da key, copiado para buf (Record.Key e
 // Record.Payload são janelas zero-copy sobre o buf devolvido — mesmo
-// contrato de lifetime do Store real).
+// contrato de lifetime do Store real). ok=false para key ausente OU
+// tombstoned.
 func (s *Store) GetByKey(key, buf []byte) (types.Record, []byte, bool, error) {
 	rowID, ok := s.byKey[string(key)]
 	if !ok {
 		return types.Record{}, buf, false, nil
 	}
-	return s.readRow(s.rows[rowID], buf)
+	r := s.rows[rowID]
+	if !r.live() {
+		return types.Record{}, buf, false, nil
+	}
+	return s.readRow(r, buf)
 }
 
 // GetByRowID idem, por rowId; ok=false para row inexistente ou tombstoned
 // (é a checagem de liveness dos caminhos indexados).
-func (s *Store) GetByRowID(rowID uint64, buf []byte) (types.Record, []byte, bool, error) {
-	r, ok := s.rows[types.RowID(rowID)]
-	if !ok || r.tombsted {
+func (s *Store) GetByRowID(id types.RowID, buf []byte) (types.Record, []byte, bool, error) {
+	r, ok := s.rows[id]
+	if !ok || !r.live() {
 		return types.Record{}, buf, false, nil
 	}
 	return s.readRow(r, buf)
+}
+
+// Sequence devolve a última sequence aplicada à row. ok=false apenas para
+// row sem estado publicado: row tombstoned MANTÉM a sequence visível (no
+// real a location existe, só carrega o bit de tombstone).
+func (s *Store) Sequence(id types.RowID) (int64, bool) {
+	r, ok := s.rows[id]
+	if !ok {
+		return 0, false
+	}
+	return r.seq, true
 }
 
 func (s *Store) readRow(r *row, buf []byte) (types.Record, []byte, bool, error) {
@@ -202,58 +273,71 @@ func (s *Store) readRow(r *row, buf []byte) (types.Record, []byte, bool, error) 
 	return rec, buf, true, nil
 }
 
-// SetTombstone marca a row como morta (helper de teste; no Store real isso
-// virá do TTL/tombstones na Fase 9).
-func (s *Store) SetTombstone(rowID uint64) {
-	if r, ok := s.rows[types.RowID(rowID)]; ok {
-		r.tombsted = true
+// SetTombstone liga o bit de tombstone nas flags da row (helper de teste; no
+// Store real isso virá do TTL/tombstones na Fase 9, também via flags). Note
+// que as postings NÃO são limpas — é justamente o que torna o lookup um
+// superset.
+func (s *Store) SetTombstone(id types.RowID) {
+	if r, ok := s.rows[id]; ok {
+		r.flags |= types.FlagTombstone
 	}
 }
 
 // ScanLive devolve um iterador de rowIds vivos em ordem CRESCENTE
 // (pré-condição das interseções/uniões do executor).
-func (s *Store) ScanLive() *RowIDIter {
-	ids := make([]uint64, 0, len(s.rows))
+func (s *Store) ScanLive() RowIDIterator {
+	ids := make([]types.RowID, 0, len(s.rows))
 	for id, r := range s.rows {
-		if !r.tombsted {
-			ids = append(ids, uint64(id))
+		if r.live() {
+			ids = append(ids, id)
 		}
 	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-	return &RowIDIter{ids: ids}
+	sortRowIDs(ids)
+	return &rowIDIter{ids: ids}
 }
 
-// LookupBitmap devolve os rowIds com field==v, crescentes. Valor sem
-// postings dá iterador vazio (não erro).
-func (s *Store) LookupBitmap(field types.FieldID, v types.Value) (*RowIDIter, error) {
-	return s.lookup(field, v)
+// LookupBitmap consulta o índice bitmap do campo; valor nunca visto devolve
+// iterador vazio; campo sem índice bitmap é ErrInvalidArgument. O resultado
+// é um SUPERSET de candidatos: rows tombstoned podem aparecer — valide
+// liveness e predicate via GetByRowID (spec §44).
+func (s *Store) LookupBitmap(field types.FieldID, v types.Value) (RowIDIterator, error) {
+	if !s.bitmap[field] {
+		return nil, fmt.Errorf("%w: campo %d não possui índice bitmap", ErrInvalidArgument, field)
+	}
+	return s.lookup(field, v), nil
 }
 
-// LookupHash é a capability da Fase 8 — no fake, idêntica ao bitmap.
-func (s *Store) LookupHash(field types.FieldID, v types.Value) (*RowIDIter, error) {
-	return s.lookup(field, v)
+// LookupHash é a capability da Fase 8 — no fake, idêntica ao bitmap sobre os
+// campos declarados com índice hash.
+func (s *Store) LookupHash(field types.FieldID, v types.Value) (RowIDIterator, error) {
+	if !s.hash[field] {
+		return nil, fmt.Errorf("%w: campo %d não possui índice hash", ErrInvalidArgument, field)
+	}
+	return s.lookup(field, v), nil
 }
 
-func (s *Store) lookup(field types.FieldID, v types.Value) (*RowIDIter, error) {
+func (s *Store) lookup(field types.FieldID, v types.Value) RowIDIterator {
 	set := s.postings[postingKey{field, valKey(v)}]
-	ids := make([]uint64, 0, len(set))
+	ids := make([]types.RowID, 0, len(set))
 	for id := range set {
-		if r, ok := s.rows[id]; ok && !r.tombsted {
-			ids = append(ids, uint64(id))
-		}
+		ids = append(ids, id)
 	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-	return &RowIDIter{ids: ids}, nil
+	sortRowIDs(ids)
+	return &rowIDIter{ids: ids}
 }
 
-// RowIDIter itera rowIds em ordem crescente (mesmo shape da interface que o
-// executor declara).
-type RowIDIter struct {
-	ids []uint64
+func sortRowIDs(ids []types.RowID) {
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+}
+
+// rowIDIter é a implementação materializada (o real é lazy; para o consumidor
+// só importa a interface).
+type rowIDIter struct {
+	ids []types.RowID
 	pos int
 }
 
-func (it *RowIDIter) Next() bool {
+func (it *rowIDIter) Next() bool {
 	if it.pos >= len(it.ids) {
 		return false
 	}
@@ -261,9 +345,9 @@ func (it *RowIDIter) Next() bool {
 	return true
 }
 
-func (it *RowIDIter) Value() uint64 { return it.ids[it.pos-1] }
-func (it *RowIDIter) Err() error    { return nil }
-func (it *RowIDIter) Close() error  { return nil }
+func (it *rowIDIter) RowID() types.RowID { return it.ids[it.pos-1] }
+func (it *rowIDIter) Err() error         { return nil }
+func (it *rowIDIter) Close() error       { return nil }
 
 // Dict é o fake do FieldDictionary (IDs sequenciais a partir de 1).
 type Dict struct {
