@@ -1,9 +1,15 @@
-// Package types define os tipos de dados compartilhados entre os subsistemas
-// de storage, materializer e query do NishiDB.
+// Package types define o vocabulário compartilhado entre os subsistemas de
+// storage, materializer e query do NishiDB: os tipos de dados, os sentinelas
+// de erro que os consumidores classificam e as poucas interfaces que
+// PROVEDORES DISTINTOS precisam satisfazer identicamente.
 //
-// O pacote é deliberadamente leve e depende apenas da stdlib: dados e os
-// sentinelas de erro que os consumidores precisam classificar. Interfaces de
-// comportamento continuam declaradas nos consumidores.
+// O pacote depende apenas da stdlib e assim deve permanecer — é o que
+// permite que o dublê de teste de um subsistema não importe a implementação
+// que dubla.
+//
+// O critério para uma interface morar aqui, e não no consumidor, é estreito:
+// só entram as que têm mais de um provedor real (o Store e o seu fake). Uma
+// interface com provedor único continua sendo declarada por quem a consome.
 package types
 
 import "errors"

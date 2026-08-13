@@ -114,13 +114,17 @@ func TestWriterStickyFailedAposErroPosAppend(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatal(err)
 	}
-	// Valor de bitmap com 70000 bytes excede o u16 do values.dict → erro na
-	// fase de Set (passo 5), depois do Append.
-	huge := strings.Repeat("v", 70000)
-	_, _, err = s.Put([]byte("k1"), 2, 0, statusPayload(t, s, "k1", huge, 2), &prev)
+	// Falha injetada na fase de Set (passo 5), depois do Append. Antes este
+	// teste usava um valor de 70 KiB, que hoje é barrado ANTES do Append
+	// (ver TestValorIndexavelGiganteEhBarradoAntesDoAppend) — o seam é o
+	// único jeito de exercitar o erro pós-Append sem gravar um record que o
+	// replay não consegue reindexar.
+	s.SetSetErrHookForTest(func(types.FieldID) error { return errors.New("set falho simulado") })
+	_, _, err = s.Put([]byte("k1"), 2, 0, statusPayload(t, s, "k1", "Stop", 2), &prev)
 	if err == nil {
-		t.Fatal("Set de valor gigante deveria falhar")
+		t.Fatal("Set falho deveria falhar o Put")
 	}
+	s.SetSetErrHookForTest(nil)
 
 	// I3: a posting antiga NÃO foi limpa (Clear é pós-commit) — query no
 	// valor antigo continua achando a row.

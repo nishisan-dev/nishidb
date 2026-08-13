@@ -47,6 +47,34 @@ var (
 	castagnoli = crc32.MakeTable(crc32.Castagnoli)
 )
 
+// MaxValueBytes é o teto de um valor indexável: o values.dict codifica o
+// comprimento do valor em u16.
+const MaxValueBytes = math.MaxUint16
+
+// ValidateValue informa se o valor pode ser indexado.
+//
+// O Store precisa chamar isto ANTES de tornar o record durável. Descobrir a
+// violação depois do append é fatal e não apenas inconveniente: o record
+// fica no segmento, o replay do tail tenta reindexá-lo a cada abertura,
+// falha pelo mesmo motivo, e o dataset inteiro passa a ser INABRÍVEL — um
+// único evento externo bastaria para isso, já que o teto é atingível com a
+// configuração default.
+func ValidateValue(v types.Value) error {
+	switch v.Type {
+	case types.TypeInt64, types.TypeDouble, types.TypeBool, types.TypeTimestamp:
+		return nil // largura fixa, sempre cabe
+	case types.TypeString, types.TypeBytes, types.TypeJSON,
+		types.TypeIPv4, types.TypeIPv6, types.TypeIPv4Prefix, types.TypeIPv6Prefix:
+		if len(v.Bytes) > MaxValueBytes {
+			return fmt.Errorf("bitmap: valor de %d bytes excede o teto de %d do values.dict",
+				len(v.Bytes), MaxValueBytes)
+		}
+		return nil
+	default:
+		return fmt.Errorf("bitmap: tipo %#x não indexável", v.Type)
+	}
+}
+
 // canonicalValue serializa a Value em bytes canônicos [type][payload] para
 // chavear o dicionário de valores.
 func canonicalValue(dst []byte, v types.Value) ([]byte, error) {

@@ -519,7 +519,7 @@ func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *ty
 	if _, err := encoding.ValidateRecord(key, payload); err != nil {
 		return 0, false, err
 	}
-	if err := s.validateKnownFields(payload); err != nil {
+	if err := s.validatePayloadAgainstDataset(payload); err != nil {
 		return 0, false, err
 	}
 	var (
@@ -720,28 +720,46 @@ func (s *Store) applyRecord(a recordApply) error {
 	return nil
 }
 
-// failWriter registra o primeiro erro pós-Append e o devolve. Sem rollback
-// parcial, o único caminho íntegro é reabrir com recovery (replay do tail).
+// failWriter registra o primeiro erro pós-Append e o devolve embrulhado em
+// ErrWriterFailed. Sem rollback parcial, o único caminho íntegro é reabrir
+// com recovery (replay do tail).
+//
+// O embrulho vale já na chamada que MATA o writer, e não só nas seguintes:
+// é justamente essa chamada que deixa o phantom commit do §14.12, e um
+// consumidor sob log-and-skip que recebesse o erro cru concluiria duas
+// coisas falsas — que o writer segue vivo e que nada foi gravado.
 func (s *Store) failWriter(err error) error {
 	if s.stickyErr == nil {
 		s.stickyErr = err
 	}
-	return err
+	return fmt.Errorf("%w: %w", ErrWriterFailed, err)
 }
 
-// validateKnownFields garante que todo fieldID do payload existe no
-// dicionário (§15A item 3) ANTES do append — um id desconhecido gravado
-// ficaria durável sob CRC e só explodiria no encoder do query layer.
-func (s *Store) validateKnownFields(payload []byte) error {
+// validatePayloadAgainstDataset confere o payload contra o estado deste
+// dataset ANTES do append, numa única varredura:
+//
+//   - todo fieldID existe no dicionário (§15A item 3) — um id desconhecido
+//     gravado ficaria durável sob CRC e só explodiria no encoder do query;
+//   - todo campo COM ÍNDICE tem valor indexável. Este segundo é o que
+//     impede um dano fatal: se a violação só aparecesse na fase de Set, o
+//     record já estaria durável, o replay do tail tentaria reindexá-lo a
+//     cada abertura e falharia sempre — um único evento externo tornaria o
+//     dataset INABRÍVEL para sempre, com a configuração default.
+func (s *Store) validatePayloadAgainstDataset(payload []byte) error {
 	var r encoding.FieldReader
 	r.Reset(payload)
 	for {
-		id, _, ok := r.Next()
+		id, v, ok := r.Next()
 		if !ok {
 			return r.Err()
 		}
 		if _, known := s.dict.Name(id); !known {
 			return fmt.Errorf("%w: fieldID %d não existe no dicionário", ErrInvalidArgument, id)
+		}
+		if _, indexado := s.bitmaps[id]; indexado {
+			if err := bitmap.ValidateValue(v); err != nil {
+				return fmt.Errorf("%w: campo %d tem índice bitmap: %w", ErrInvalidArgument, id, err)
+			}
 		}
 	}
 }

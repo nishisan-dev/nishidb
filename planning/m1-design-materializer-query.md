@@ -267,7 +267,7 @@ field   := FIELD_ID(uint16 LE) TYPE(uint8) [LENGTH(uvarint)] VALUE
 API acordada:
 
 ```go
-func AppendField(dst []byte, id types.FieldID, v types.Value) []byte
+func AppendField(dst []byte, id types.FieldID, v types.Value) ([]byte, error)
 type FieldReader struct{ /* cursor sobre payload */ }
 func (r *FieldReader) Reset(payload []byte)
 func (r *FieldReader) Next() (id types.FieldID, v types.Value, ok bool) // v.Bytes = subslice do payload
@@ -545,17 +545,17 @@ API do Store consumida pelo executor (interface declarada em `internal/query/exe
 type Store interface {
     // ok=false → row morta/tombstoned (é a checagem de liveness dos caminhos indexados;
     // quando TTL entrar na Fase 9, passa a filtrar expirados sem mudar assinatura)
-    GetByRowID(rowID uint64, buf []byte) (types.Record, []byte, bool, error)
+    GetByRowID(rowID types.RowID, buf []byte) (types.Record, []byte, bool, error)
     GetByKey(key, buf []byte) (types.Record, []byte, bool, error) // PointLookupPlan
-    ScanLive() RowIDIterator                                      // full scan: rowIds live, CRESCENTES, overlay incluso
-    LookupBitmap(field types.FieldID, v types.Value) (RowIDIterator, error) // rowIds CRESCENTES
+    ScanLive() types.RowIDIterator                                // full scan: rowIds live, CRESCENTES, overlay incluso
+    LookupBitmap(field types.FieldID, v types.Value) (types.RowIDIterator, error) // rowIds CRESCENTES
 }
 
 // Capability opcional (Fase 8) — NÃO existe no *storage.Store do M1. Detecção por
 // type assertion no plan-time (o fake do M1 implementa; o Store real só na Fase 8).
 // Assinatura reservada no §15A do plano do storage.
 type HashLookuper interface {
-    LookupHash(field types.FieldID, v types.Value) (RowIDIterator, error)
+    LookupHash(field types.FieldID, v types.Value) (types.RowIDIterator, error)
 }
 ```
 
