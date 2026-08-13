@@ -237,8 +237,8 @@ Representação binária (little-endian para inteiros/double; IPs em network byt
 | Tipo | Encoding | Entradas aceitas (JSON) |
 |------|----------|--------------------------|
 | string | bytes UTF-8, comprimento variável | string |
-| int64 | 8B LE | number inteiro (sem frac/exp com parte fracionária); `$numberLong`; **string de dígitos NÃO** (erro) |
-| double | 8B LE IEEE-754 | number (int ou frac/exp) |
+| int64 | 8B LE | number inteiro (sem frac/exp com parte fracionária); `$numberLong`; **string numérica é COERIDA** — ajuste pós-amostra vinculante, o `Connect-Info` real chega como `"1000000000"` (o design dizia "string de dígitos NÃO"; quem manda é `typeconv.go`) |
+| double | 8B LE IEEE-754 | number (int ou frac/exp); string com a **mesma gramática** de número JSON (nada de NaN/Inf/hex) |
 | boolean | 1B (0/1) | true/false |
 | timestamp | int64 epoch **millis**, 8B LE | string RFC3339/RFC3339Nano; number = epoch millis; `$date` (relaxed/canonical) |
 | ipv4 | 4B network order | string dotted-quad |
@@ -246,7 +246,7 @@ Representação binária (little-endian para inteiros/double; IPs em network byt
 | ipv4_prefix | 5B (4B addr + 1B len) | string `"a.b.c.d/nn"` |
 | ipv6_prefix | 17B | string `"xxxx::/nn"` |
 | bytes | comprimento variável | string base64 (std encoding) |
-| json | bytes JSON crus, variável | object/array/qualquer valor |
+| json | bytes JSON crus, variável | **só object ou array** — escalar (string, number, bool) é RECUSADO com TYPE_CONVERSION, e o §101 descarta o evento inteiro. Exige JSON bem-formado e UTF-8 válido: o valor sai verbatim no NDJSON |
 | auto | inferido | string→string; number inteiro→int64; number frac→double; bool→boolean; null→null; object/array→json; `$numberLong`→int64; `$date`→timestamp |
 
 Regras de alocação:

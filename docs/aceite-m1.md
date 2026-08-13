@@ -9,8 +9,16 @@ Números medidos na rodada de aceite de 2026-08-15
 corpus de referência (85% de patch parcial, 10% Extended JSON, 1% campo
 desconhecido, 5% null explícito) e consultas SQL concorrentes com a ingestão.
 
-**Cada evidência abaixo cita um teste que existe e prova o que o critério
-afirma.** A revisão de fechamento encontrou duas citações que não sustentavam o
+A evidência vem em **duas formas**, e nenhum critério fica sem uma delas: para o
+que é comportamento, o **nome de um teste** que existe na suíte — e
+`TestEvidenciasCitadasNosDocumentosExistem` falha se algum deles sumir; para o
+que é desempenho ou volume, o **número medido** na rodada de aceite, conferível
+no relatório citado acima e no JSON ao lado dele. Dos 14 "Atendido", **5 citam
+teste pelo nome** (1, 5, 6, 8, 25) e os outros 9 citam o número medido — com
+exceção dos critérios 3 e 7, cuja evidência é o pacote que os implementa
+(`internal/jsonp`, `internal/storage/encoding`), ambos com suíte própria que
+esta lista não nomeia.
+A revisão de fechamento encontrou duas citações de teste que não sustentavam o
 item; elas foram trocadas, e o que a suíte não exercitava (`kill -9` real)
 passou a ser exercitado em vez de continuar creditado.
 

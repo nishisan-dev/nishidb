@@ -19,14 +19,23 @@ abaixo.
 
 ## Visão geral
 
-![Containers](https://uml.nishisan.dev/proxy?src=https://raw.githubusercontent.com/nishisan-dev/nishidb/feature/m1-query/docs/diagrams/c4_container.puml)
+![Containers](https://uml.nishisan.dev/proxy?src=https://raw.githubusercontent.com/nishisan-dev/nishidb/main/docs/diagrams/c4_container.puml)
+
+> **Os cinco diagramas deste documento ainda não renderizam.** As URLs apontam
+> para `raw.githubusercontent.com/nishisan-dev/nishidb/main/…`, e o repositório
+> **nunca foi publicado**: `git remote -v` é vazio, então não existe URL raw para
+> o proxy buscar e todas respondem 404. Publicar é ação do dono do repositório e
+> está registrada em [`debitos.md`](debitos.md). Enquanto isso não acontece, os
+> fontes estão versionados em [`docs/diagrams/`](diagrams/) — os cinco `.puml`
+> renderizam em qualquer servidor PlantUML. As URLs fixam **`main`** de
+> propósito: fixar a branch de trabalho quebraria os links no merge.
 
 Um binário só, sem dependência externa em runtime. Dois comandos: `ingest`
 materializa NDJSON num dataset; `query` executa SQL e escreve NDJSON.
 
 ## Ingestão
 
-![Fluxo de ingestão](https://uml.nishisan.dev/proxy?src=https://raw.githubusercontent.com/nishisan-dev/nishidb/feature/m1-query/docs/diagrams/ingest_flow.puml)
+![Fluxo de ingestão](https://uml.nishisan.dev/proxy?src=https://raw.githubusercontent.com/nishisan-dev/nishidb/main/docs/diagrams/ingest_flow.puml)
 
 Um evento passa por: tokenização sem cópia → resolução de campos contra o
 schema → conversão tipada para um arena reutilizado → merge com o estado
@@ -59,7 +68,7 @@ carga (146.216 ev/s descontando o tempo de checkpoint).
 
 ## Storage
 
-![Layout em disco](https://uml.nishisan.dev/proxy?src=https://raw.githubusercontent.com/nishisan-dev/nishidb/feature/m1-query/docs/diagrams/storage_layout.puml)
+![Layout em disco](https://uml.nishisan.dev/proxy?src=https://raw.githubusercontent.com/nishisan-dev/nishidb/main/docs/diagrams/storage_layout.puml)
 
 Segmentos **append-only** para os dados; **mmap** para os índices. É essa
 divisão que resolve a tensão do orçamento: os índices crescem com o dataset,
@@ -108,7 +117,7 @@ concorrente de clientes distintos chega com o servidor do M3.
 
 ## Recovery
 
-![Recovery](https://uml.nishisan.dev/proxy?src=https://raw.githubusercontent.com/nishisan-dev/nishidb/feature/m1-query/docs/diagrams/recovery_flow.puml)
+![Recovery](https://uml.nishisan.dev/proxy?src=https://raw.githubusercontent.com/nishisan-dev/nishidb/main/docs/diagrams/recovery_flow.puml)
 
 O manifest marca um ponto consistente; o que veio depois é reconstruído lendo o
 tail dos segmentos e reindexando. Um rasgo de crash só pode estar no fim, e é
@@ -121,7 +130,7 @@ recriar) descarta dado durável em silêncio.
 
 ## Consulta
 
-![Fluxo de consulta](https://uml.nishisan.dev/proxy?src=https://raw.githubusercontent.com/nishisan-dev/nishidb/feature/m1-query/docs/diagrams/query_flow.puml)
+![Fluxo de consulta](https://uml.nishisan.dev/proxy?src=https://raw.githubusercontent.com/nishisan-dev/nishidb/main/docs/diagrams/query_flow.puml)
 
 Cinco camadas: lexer → parser → binder → planner → executor, com o encoder
 NDJSON na saída.
@@ -217,13 +226,29 @@ onde pode ser usado. Sem esta tabela, escrever um YAML novo é tentativa e erro.
 | `ipv4_prefix` | string `a.b.c.d/len` | não | não |
 | `ipv6_prefix` | string `addr/len` | não | não |
 | `bytes` | string **base64** (padrão, com padding) | não | não |
-| `json` | qualquer valor JSON (guardado cru) | não | não |
+| `json` | **só object ou array** (guardado cru, exatamente como veio); escalar — string, número, `true`/`false` — é **recusado** | não | não |
 | `auto` | qualquer um dos acima; o tipo é **fixado na primeira observação** e persistido | não | não |
 
 Restrições da v1: a **key** (`materialization.key.type`) só pode ser `string`, e
 a **sequence** (`materialization.sequence.type`) só pode ser `int64`. Campo
 `auto` não é indexável — o tipo só existe depois do primeiro evento. Alias é
 opcional e precisa casar `[a-z0-9_]+`.
+
+**O `json` é mais estreito do que o nome sugere, e isso custa evento.** Ele
+aceita **apenas** object e array (`internal/materializer/typeconv.go`,
+`TestConvertJSON`), e ainda exige que a janela seja JSON bem-formado e UTF-8
+válido — a validade é conferida na porta de armazenamento porque o valor sai
+verbatim no NDJSON. Qualquer escalar num campo declarado `json` é erro de
+conversão, e no §101 erro de conversão **descarta o evento inteiro**, não o
+campo: o resto do patch nem chega ao merge. A perda não é silenciosa (o resumo
+do `ingest` mostra `TYPE_CONVERSION=N`), mas é perda. `null` continua sendo
+ausência — remove o campo, como em qualquer outro tipo.
+
+Trocar `json` por `auto` **não** resolve campo de shape variável: o `auto`
+também fixa o tipo na primeira observação, e a observação divergente vira o
+mesmo descarte (`TestAutoSegundaObservacaoDivergenteCoerceOuFalha`). Na v1 não
+há tipo que aceite objeto e escalar no mesmo campo — se a fonte varia, o
+tratamento é na origem.
 
 ## Observabilidade
 
