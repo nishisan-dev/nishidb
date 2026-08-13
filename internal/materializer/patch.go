@@ -83,14 +83,23 @@ func (b *PatchBuffer) Parse(event []byte, c *schema.Compiled) error {
 			}
 		}
 
-		target := cf.Type
-		if cf.IsAuto {
-			// Tipo inferido por evento (wire format carrega o tipo por
-			// campo; a fixação persistente do primeiro tipo observado é
-			// decisão do binder/Apply — ver R11 no design).
-			target = InferType(f)
-			if target == types.TypeNull {
-				target = cf.Type // null: alvo irrelevante, Convert curto-circuita
+		// R11: o tipo de um campo sem declaração é decidido na PRIMEIRA
+		// observação e persistido; as seguintes convertem contra ele, não
+		// contra o shape do evento. Inferir por evento faria o mesmo campo ter
+		// significados diferentes conforme a ordem de chegada — e nenhuma
+		// query sobre ele seria confiável.
+		target := cf.EffectiveType()
+		if cf.IsAuto && target == types.TypeNull {
+			// null JSON não fixa tipo: gravaria "sem tipo" e travaria o campo.
+			if t := InferType(f); t != types.TypeNull {
+				// O conflito precisa carregar ErrTypeConversion: sem ele o
+				// classify cai no default, vira CategoryStorage e PARA a
+				// ingestão por causa de um campo que mudou de formato na
+				// origem — que é evento ruim, não falha do dataset.
+				if err := c.FixAutoType(cf, t); err != nil {
+					return fmt.Errorf("campo %q: %w: %w", f.Key, ErrTypeConversion, err)
+				}
+				target = t
 			}
 		}
 		val, arena, err := Convert(f, target, b.arena)
