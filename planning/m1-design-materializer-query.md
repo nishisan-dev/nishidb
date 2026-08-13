@@ -692,18 +692,21 @@ Design:
 ### 5.1 Medição — `internal/testutil/memprof`
 
 ```go
+// IMPLEMENTADO (Q18)
 type Sample struct {
     VmRSSBytes, VmHWMBytes uint64 // /proc/self/status — RSS real do processo (critério §109)
-    FileRSSBytes, AnonRSSBytes uint64 // /proc/self/smaps_rollup — separa residência de mmap
-                                      // (file-backed) do heap anônimo (§79: não confundir)
+    FileRSSBytes, AnonRSSBytes uint64 // separa residência de mmap (file-backed) do heap
+                                      // anônimo (§79: não confundir com tamanho mapeado)
     HeapAlloc, HeapObjects, Mallocs, NumGC uint64 // runtime.ReadMemStats
     Timestamp time.Time
 }
-func Read() (Sample, error)
+func Read() (Sample, error) // valores em BYTES (o /proc reporta KiB)
 ```
 
-- **RSS de verdade**: parse de `VmRSS:`/`VmHWM:` em `/proc/self/status`. Linux-only (build tag), suficiente — o alvo é Linux.
-- **Residência mmap**: `/proc/self/smaps_rollup` → `Anonymous:` vs `Rss:` (file-backed = Rss − Anonymous). Distingue "índices mmap quentes" de "heap Go" no relatório.
+- **RSS de verdade**: parse de `VmRSS:`/`VmHWM:` em `/proc/self/status`. Linux-only, com stub que compila em outros SOs e falha em runtime — o harness precisa de mensagem, não de erro de build.
+- **Residência mmap**: fonte primária é `RssAnon:`/`RssFile:` do próprio `status` (kernel ≥ 4.5) — mesma informação do smaps_rollup, no arquivo que já está sendo lido e sem percorrer as VMAs, o que importa num processo com muitos mapeamentos. `/proc/self/smaps_rollup` (`Rss` − `Anonymous`) entra como fallback para kernels antigos. Sem nenhuma das duas fontes, o RSS total continua válido e só a decomposição se perde: degradar o relatório é melhor que invalidar o critério de aceite.
+- **Unidade conferida, não descartada**: `kB` que virasse outra coisa produziria um número calmamente errado por 1024 — na direção que faz um orçamento de 1 GiB parecer cumprido.
+- **O instrumento entra na conta**: `Read` aloca e chama `ReadMemStats` (stop-the-world). Amostre FORA da janela cujo allocs/evento você quer derivar.
 - **allocations/evento (macro)**: `ΔMemStats.Mallocs / Δeventos` no steady state — pega alocações que micro-benchmarks não veem (caminho completo).
 - **allocations/evento (micro)**: `testing.B` + `b.ReportAllocs()` em `Materializer.Apply` com corpus pré-gerado; acompanhamento com `benchstat` entre commits (guardar baselines em `benchmark/baselines/`).
 - **GC frequency**: ΔNumGC/Δt; GC CPU via `debug.GCStats`/`/memory/classes` (runtime/metrics).
@@ -792,8 +795,8 @@ Testes: cada tipo formatado (timestamp RFC3339 UTC, ipv4 dotted, ipv6 compressed
 **T17 — `internal/testutil/radiusgen`** *(dep: nenhuma técnica; depois de T10 p/ round-trip)* — ENTREGUE
 Testes: determinismo (mesma seed ⇒ bytes idênticos) **+ golden de hash entre versões**; todo evento parseia no jsonp E no `encoding/json` (oráculo, com a contagem de campos batendo nos dois); PatchRatio/ExtendedJSONRatio/UnknownFieldRatio/NullFieldRatio respeitados em 10k eventos e DESLIGÁVEIS em zero; `_SEQ` monotônico por entidade; key e ip 1:1 e estáveis por entidade; NAS com cardinalidade limitada e concentração acima da uniforme; Config inválida com mensagem; **corpus ingerível fim-a-fim pelo materializer com o YAML de produção, sem nenhum descarte**; gate de 0 allocs na suíte.
 
-**T18 — `internal/testutil/memprof`** *(sem dep; Linux build tag)*
-Testes: parse de fixtures de `/proc` (arquivos de exemplo em testdata); leitura real smoke test.
+**T18 — `internal/testutil/memprof`** *(sem dep; Linux build tag)* — ENTREGUE
+Testes: fixtures de `/proc` para kernel moderno (RssAnon/RssFile no status) e antigo (fallback pelo smaps_rollup); degradação sem erro quando a separação não existe; erros com substring (status ausente, VmRSS ausente, valor não numérico, unidade inesperada); conversão KiB→bytes tabelada; smoke real (VmHWM ≥ VmRSS, anon+file ≤ VmRSS, MemStats plausíveis); monotonicidade dos contadores acumulados entre duas leituras. Stub não-Linux compila e falha com mensagem (verificado com GOOS=darwin/windows).
 
 **T19 — micro-benchmarks integrados** *(dep: T10, T15, T17)*
 `BenchmarkApplyCreate/ApplyMergePatch/ApplyStale/QueryPointLookup/QueryBitmapLimit100/FullScan1k` com corpus radiusgen + fakes; baselines commitados; alvo M1: Apply ≤ 10 allocs (fake storage), documentado o esperado com storage real.
