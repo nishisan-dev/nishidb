@@ -47,11 +47,15 @@ var (
 	castagnoli    = crc32.MakeTable(crc32.Castagnoli)
 )
 
-// SegmentInfo descreve um segmento no manifest. As estatísticas de liveness
-// chegam na S14.
+// SegmentInfo descreve um segmento no manifest, com as estatísticas de
+// liveness do design §9. No M1 o writer grava os totais que conhece
+// (live == total, sem compaction); o refinamento live/garbage é da S14.
 type SegmentInfo struct {
-	ID        uint32
-	SizeBytes int64
+	ID           uint32
+	SizeBytes    int64
+	TotalRecords uint64
+	LiveRecords  uint64
+	LiveBytes    uint64
 }
 
 // BitmapInfo descreve um índice bitmap no manifest.
@@ -90,6 +94,9 @@ func (m *Manifest) encode() []byte {
 	for _, s := range m.Segments {
 		b = binary.LittleEndian.AppendUint32(b, s.ID)
 		b = binary.LittleEndian.AppendUint64(b, uint64(s.SizeBytes))
+		b = binary.LittleEndian.AppendUint64(b, s.TotalRecords)
+		b = binary.LittleEndian.AppendUint64(b, s.LiveRecords)
+		b = binary.LittleEndian.AppendUint64(b, s.LiveBytes)
 	}
 	b = binary.LittleEndian.AppendUint64(b, m.PrimarySlotCount)
 	b = binary.LittleEndian.AppendUint64(b, m.PrimaryUsed)
@@ -150,13 +157,19 @@ func decode(raw []byte) (*Manifest, error) {
 	m.CurrentSegment = r.u32()
 	m.DurableOffset = r.u64()
 	segCount := r.u32()
-	// Sanidade contra contagens absurdas antes de alocar.
-	if int(segCount) > len(body)/12 {
+	// Sanidade contra contagens absurdas antes de alocar (36 B/segmento).
+	if int(segCount) > len(body)/36 {
 		return nil, fmt.Errorf("%w: segmentCount %d impossível", ErrCorruptManifest, segCount)
 	}
 	m.Segments = make([]SegmentInfo, 0, segCount)
 	for i := uint32(0); i < segCount; i++ {
-		m.Segments = append(m.Segments, SegmentInfo{ID: r.u32(), SizeBytes: int64(r.u64())})
+		m.Segments = append(m.Segments, SegmentInfo{
+			ID:           r.u32(),
+			SizeBytes:    int64(r.u64()),
+			TotalRecords: r.u64(),
+			LiveRecords:  r.u64(),
+			LiveBytes:    r.u64(),
+		})
 	}
 	m.PrimarySlotCount = r.u64()
 	m.PrimaryUsed = r.u64()

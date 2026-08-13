@@ -37,6 +37,15 @@ func TestCheckpointEscreveManifestCoerente(t *testing.T) {
 	if m.CurrentSegment != 1 || len(m.Segments) != 1 || m.Segments[0].ID != 1 {
 		t.Fatalf("segmentos: %+v", *m)
 	}
+	// Stats de liveness com os totais que o writer conhece (refinamento
+	// live/garbage é S14; sem compaction, live == total).
+	seg := m.Segments[0]
+	if seg.TotalRecords != n || seg.LiveRecords != n {
+		t.Fatalf("records do segmento: %+v", seg)
+	}
+	if seg.LiveBytes == 0 || seg.LiveBytes > uint64(seg.SizeBytes) {
+		t.Fatalf("liveBytes fora da faixa: %+v", seg)
+	}
 	if m.DurableOffset <= 64 {
 		t.Fatalf("DurableOffset deveria estar após o header: %d", m.DurableOffset)
 	}

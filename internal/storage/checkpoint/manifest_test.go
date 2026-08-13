@@ -19,9 +19,9 @@ func sampleManifest() Manifest {
 		CurrentSegment:  3,
 		DurableOffset:   9283712,
 		Segments: []SegmentInfo{
-			{ID: 1, SizeBytes: 512 << 20},
-			{ID: 2, SizeBytes: 512 << 20},
-			{ID: 3, SizeBytes: 9283712 + 64},
+			{ID: 1, SizeBytes: 512 << 20, TotalRecords: 700000, LiveRecords: 650000, LiveBytes: 480 << 20},
+			{ID: 2, SizeBytes: 512 << 20, TotalRecords: 700001, LiveRecords: 700001, LiveBytes: 512 << 20},
+			{ID: 3, SizeBytes: 9283712 + 64, TotalRecords: 12000, LiveRecords: 12000, LiveBytes: 9283712},
 		},
 		PrimarySlotCount:    1 << 24,
 		PrimaryUsed:         4183900,

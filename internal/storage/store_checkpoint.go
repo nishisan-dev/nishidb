@@ -18,6 +18,12 @@ import (
 //
 // Exclusivo do writer — não concorre com Put nem consigo mesmo. Leitores
 // seguem operando normalmente durante todo o checkpoint.
+//
+// Os dicionários (fields.dict/values.dict) NÃO participam do checkpoint:
+// a durabilidade deles é por entrada, no momento da criação
+// (fsync-before-first-use, design §4/§8, travada por teste nos dois
+// pacotes). Nenhum batching de Sync de dicionário pode ser introduzido
+// aqui — quebraria o replay do tail de forma silenciosa.
 func (s *Store) Checkpoint() error {
 	if err := s.segW.Sync(); err != nil {
 		return err
@@ -59,7 +65,15 @@ func (s *Store) Checkpoint() error {
 		FieldDictValidBytes: s.dict.SizeBytes(),
 	}
 	for _, ref := range segs {
-		m.Segments = append(m.Segments, checkpoint.SegmentInfo{ID: ref.ID, SizeBytes: ref.SizeBytes})
+		info := checkpoint.SegmentInfo{ID: ref.ID, SizeBytes: ref.SizeBytes}
+		if t := s.segTally[ref.ID]; t != nil {
+			// Totais que o writer conhece; sem compaction, live == total
+			// (refinamento live/garbage é S14).
+			info.TotalRecords = t.records
+			info.LiveRecords = t.records
+			info.LiveBytes = t.bytes
+		}
+		m.Segments = append(m.Segments, info)
 	}
 	for field, ix := range s.bitmaps {
 		m.Bitmaps = append(m.Bitmaps, checkpoint.BitmapInfo{
@@ -76,4 +90,10 @@ func (s *Store) Checkpoint() error {
 
 func (s *Store) manifestPath() string {
 	return filepath.Join(s.opts.Dir, "checkpoint", "manifest.bin")
+}
+
+// segStats acumula os totais de um segmento conhecidos pelo writer.
+type segStats struct {
+	records uint64
+	bytes   uint64
 }

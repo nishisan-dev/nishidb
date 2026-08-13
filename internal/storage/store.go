@@ -71,6 +71,11 @@ type Store struct {
 	rowCount  atomic.Uint64
 	epoch     uint64 // último epoch de manifest gravado (writer-only)
 
+	// segTally acumula os totais por segmento que o writer conhece (para as
+	// stats do manifest §9; em memória — a S12 os reconstrói no replay).
+	// Writer-only.
+	segTally map[uint32]*segStats
+
 	// Buffers exclusivos do writer (Put).
 	buildBuf []byte // record em construção
 	prevBuf  []byte // fallback de leitura do estado anterior
@@ -102,7 +107,11 @@ func Open(opts Options) (*Store, error) {
 		return nil, fmt.Errorf("storage: %s contém segmentos; dataset existente exige recovery (S12)", dataDir)
 	}
 
-	s := &Store{opts: opts, bitmaps: make(map[types.FieldID]*bitmap.Index)}
+	s := &Store{
+		opts:     opts,
+		bitmaps:  make(map[types.FieldID]*bitmap.Index),
+		segTally: make(map[uint32]*segStats),
+	}
 	ok := false
 	defer func() {
 		if !ok {
@@ -260,9 +269,15 @@ func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *ty
 	if err != nil {
 		return 0, false, err
 	}
-	// 3. offset accounting: nada além do packing — os bounds do formato já
-	// foram validados na construção, e o segment garante off < segmentSize.
+	// 3. offset accounting: packing + tally do segmento (stats do manifest).
 	packed := rowindex.Pack(seg, off, flags&uint8(types.FlagTombstone))
+	tally := s.segTally[seg]
+	if tally == nil {
+		tally = &segStats{}
+		s.segTally[seg] = tally
+	}
+	tally.records++
+	tally.bytes += uint64(len(rec))
 
 	// 4. primary insert-if-absent para key nova.
 	if created {
