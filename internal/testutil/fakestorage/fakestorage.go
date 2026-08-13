@@ -37,6 +37,7 @@ import (
 	"sort"
 
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
+	"github.com/nishisan-dev/nishidb/internal/storage/fielddict"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
@@ -420,15 +421,22 @@ func (it *rowIDIter) RowID() types.RowID { return it.ids[it.pos-1] }
 func (it *rowIDIter) Err() error         { return nil }
 func (it *rowIDIter) Close() error       { return nil }
 
-// Dict é o fake do FieldDictionary (IDs sequenciais a partir de 1).
+// Dict é o fake do FieldDictionary (IDs sequenciais a partir de 1), com o
+// mesmo contrato de tipo fixado do real.
 type Dict struct {
 	ids   map[string]types.FieldID
 	names map[types.FieldID]string
+	hints map[types.FieldID]types.FieldType
 	next  types.FieldID
 }
 
 func NewDict() *Dict {
-	return &Dict{ids: map[string]types.FieldID{}, names: map[types.FieldID]string{}, next: 1}
+	return &Dict{
+		ids:   map[string]types.FieldID{},
+		names: map[types.FieldID]string{},
+		hints: map[types.FieldID]types.FieldType{},
+		next:  1,
+	}
 }
 
 func (d *Dict) LookupOrCreate(name []byte) (types.FieldID, error) {
@@ -445,4 +453,36 @@ func (d *Dict) LookupOrCreate(name []byte) (types.FieldID, error) {
 func (d *Dict) Name(id types.FieldID) (string, bool) {
 	n, ok := d.names[id]
 	return n, ok
+}
+
+// TypeHint devolve o tipo fixado do campo; ok=false para campo inexistente ou
+// sem tipo fixado — mesma semântica do real.
+func (d *Dict) TypeHint(id types.FieldID) (types.FieldType, bool) {
+	t, ok := d.hints[id]
+	return t, ok && t != types.TypeNull
+}
+
+// SetTypeHint espelha a regra R11 do dicionário real: idempotente para o
+// mesmo tipo, conflito para tipo diferente.
+//
+// Usa o MESMO sentinela do real (fielddict.ErrTypeHintConflict). Um dublê com
+// erro próprio faria o teste do consumidor passar com o fake e falhar com o
+// real — que é exatamente a divergência que um dublê existe para expor.
+func (d *Dict) SetTypeHint(id types.FieldID, t types.FieldType) error {
+	if t == types.TypeNull {
+		return fmt.Errorf("fakestorage: tipo nulo não pode ser fixado no campo %d", id)
+	}
+	if _, existe := d.names[id]; !existe {
+		return fmt.Errorf("fakestorage: campo %d inexistente", id)
+	}
+	switch atual := d.hints[id]; atual {
+	case t:
+		return nil
+	case types.TypeNull:
+		d.hints[id] = t
+		return nil
+	default:
+		return fmt.Errorf("%w: campo %q fixado como %s, tentativa de %s",
+			fielddict.ErrTypeHintConflict, d.names[id], atual, t)
+	}
 }

@@ -878,6 +878,12 @@ func (d dictErro) LookupOrCreate(name []byte) (types.FieldID, error) {
 	return d.inner.LookupOrCreate(name)
 }
 
+func (d dictErro) TypeHint(id types.FieldID) (types.FieldType, bool) { return d.inner.TypeHint(id) }
+
+func (d dictErro) SetTypeHint(id types.FieldID, t types.FieldType) error {
+	return d.inner.SetTypeHint(id, t)
+}
+
 // Falha ao registrar campo desconhecido vem do STORAGE, não do evento: não
 // pode ser contabilizada como SCHEMA_VALIDATION nem virar Skipped.
 func TestApplyFalhaDoDicionarioEhFailed(t *testing.T) {
