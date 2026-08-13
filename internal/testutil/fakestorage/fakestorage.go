@@ -358,6 +358,36 @@ func (s *Store) ScanLive() types.RowIDIterator {
 // runtime, em vez de degradar para full scan como o design promete.
 func (s *Store) HasBitmap(field types.FieldID) bool { return s.bitmap[field] }
 
+// HasHash informa se o campo tem índice hash — o capability check POR CAMPO
+// do planner (Fase 8), análogo do HasBitmap. Sem ele, um schema que declara
+// `index: hash` num campo que o store não indexa faria o planner escolher o
+// plano de hash e o executor falhar em runtime, que é exatamente o que a
+// degradação para full scan existe para evitar.
+func (s *Store) HasHash(field types.FieldID) bool { return s.hash[field] }
+
+// InjectPosting insere um posting no índice do campo SEM alterar o estado da
+// row. Existe para reproduzir o falso positivo que o Store real tolera por
+// construção (§14.16: erro de Clear é contabilizado e deixa posting órfão) — é
+// o único jeito de provar que o executor revalida o predicate (§44) em vez de
+// confiar no índice.
+//
+// Campo sem índice declarado, ou valor acima do teto do values.dict, é
+// ErrInvalidArgument: são estados que o Store real não alcança, e um dublê que
+// os criasse deixaria passar aqui um teste que falha na integração. RowId
+// inexistente é ACEITO — posting apontando para row que não está mais lá é
+// justamente um dos estados órfãos do real.
+func (s *Store) InjectPosting(field types.FieldID, v types.Value, id types.RowID) error {
+	if !s.indexed[field] {
+		return fmt.Errorf("%w: campo %d não possui índice", types.ErrInvalidArgument, field)
+	}
+	if s.bitmap[field] && len(v.Bytes) > types.MaxIndexedValueBytes {
+		return fmt.Errorf("%w: campo %d tem índice bitmap e valor de %d bytes, acima do teto de %d",
+			types.ErrInvalidArgument, field, len(v.Bytes), types.MaxIndexedValueBytes)
+	}
+	s.addPosting(field, v, id)
+	return nil
+}
+
 // BitmapFields devolve, em ordem crescente, os campos com índice bitmap.
 func (s *Store) BitmapFields() []types.FieldID {
 	out := make([]types.FieldID, 0, len(s.bitmap))
