@@ -142,6 +142,12 @@ Comparadores `=`, `!=`, `>`, `>=`, `<`, `<=`; `AND`, `OR`, parênteses;
 `IS NULL` / `IS NOT NULL`; parâmetros posicionais `?`; alias e campos entre
 aspas duplas (obrigatórias para nomes com hífen, como `"Acct-Status-Type"`).
 
+Repetir uma coluna na projeção (`SELECT id, id`) é recusado no bind: a linha
+sairia com a chave repetida e o consumidor de JSON colapsaria as duas em
+silêncio — duas colunas pedidas, uma entregue. Pedir o mesmo campo pelo nome e
+pelo alias (`SELECT id, service_id`) continua valendo, porque aí são duas
+chaves distintas na saída.
+
 Fora da v1: `ORDER BY`, `GROUP BY`, `JOIN`, agregações, `NOT` genérico,
 `OFFSET`.
 

@@ -266,17 +266,60 @@ func (b *binder) projecao() ([]BoundColumn, error) {
 	}
 
 	cols := make([]BoundColumn, 0, len(b.stmt.Projection))
+	// vistos só materializa em projeção grande; até o limiar a varredura linear
+	// sobre cols resolve sem alocar nada.
+	var vistos map[string]struct{}
 	for _, ref := range b.stmt.Projection {
 		f, err := b.coluna(ref.Name, ref.Pos)
 		if err != nil {
 			return nil, err
 		}
+		if repetido(cols, vistos, ref.Name) {
+			// `SELECT id, id` vira objeto JSON com chave repetida: válido para
+			// o formato, e o consumidor COLAPSA em silêncio — o usuário pede
+			// duas colunas e recebe uma. A posição é a da segunda ocorrência,
+			// que é a que ele apaga para corrigir.
+			return nil, errAt(ref.Pos, "coluna %q aparece mais de uma vez na projeção", ref.Name)
+		}
 		b.usa(f.ID)
 		// Nome de saída é o que o usuário ESCREVEU: `SELECT status` rotula
 		// "status" mesmo que o campo se chame Acct-Status-Type.
 		cols = append(cols, BoundColumn{Field: f, Name: ref.Name})
+		switch {
+		case vistos != nil:
+			vistos[ref.Name] = struct{}{}
+		case len(cols) == limiarMapaProjecao:
+			vistos = make(map[string]struct{}, len(b.stmt.Projection))
+			for i := range cols {
+				vistos[cols[i].Name] = struct{}{}
+			}
+		}
 	}
 	return cols, nil
+}
+
+// limiarMapaProjecao é onde a checagem de nome repetido troca varredura linear
+// por mapa. A projeção real tem unidades de colunas, e aí a varredura é mais
+// barata e não aloca; o mapa existe porque o número de nomes DISTINTOS que
+// bindam com sucesso não é pequeno (FieldID é uint16, e cada campo responde por
+// nome e alias), e o custo quadrático transformaria uma query de algumas
+// centenas de KB em segundos de CPU.
+const limiarMapaProjecao = 32
+
+// repetido usa o mapa quando ele existe e a varredura enquanto não existe. As
+// duas responderiam igual em qualquer ponto: o mapa é semeado com o que a
+// varredura já tinha visto.
+func repetido(cols []BoundColumn, vistos map[string]struct{}, nome string) bool {
+	if vistos != nil {
+		_, ok := vistos[nome]
+		return ok
+	}
+	for i := range cols {
+		if cols[i].Name == nome {
+			return true
+		}
+	}
+	return false
 }
 
 // coluna resolve nome original OU alias. Nunca chama ResolveUnknown: aquilo é

@@ -15,6 +15,7 @@ tem **milestone dono**; nenhum depende de trabalho não planejado.
 | Dublê × real | O `fakestorage` aceitava key e record acima dos tetos que o Store real recusa | I1 — `ValidateRecord` no dublê + roteiro de comportamento compartilhado |
 | Curto-circuito do AND | Desligá-lo fazia `A AND B` devolver o resultado de B, com a suíte verde | Reconciliação Q15/Q16 — diferencial árvore × programa |
 | Teto de termos no WHERE | 1 M de termos aceitos, ~180 MB de AST retidos | Fix round Q13/Q14 — `parser.MaxWhereTerms` |
+| Projeção repetida | `SELECT a, a` emitia chave repetida no objeto JSON e o consumidor colapsava as duas em silêncio | Decisão do fecho do M1 — recusada no binder, apontando a segunda ocorrência |
 
 ## Abertos, com dono
 
@@ -33,7 +34,6 @@ tem **milestone dono**; nenhum depende de trabalho não planejado.
 | 4 | Driver JDBC (§126.18) e `PreparedStatement` real (§126.19) | Parâmetros posicionais já funcionam fim a fim |
 | 5 | **Metadados de tipo fora de banda** | O NDJSON **não carrega tipos**, e o `ResultSetMetaData` precisa deles — inclusive das colunas que são NULL em todas as linhas, que não dão para derivar do dado. A fonte é `binder.BoundQuery.Columns` |
 | 6 | Autenticação (§126.20) e TLS (§126.21) | Seções do YAML já são aceitas e ignoradas |
-| 7 | **Projeção duplicada** (`SELECT a, a`) produz chave repetida no objeto JSON e o cliente colapsa em silêncio | O binder decidiu permitir; é decisão de **protocolo**, sem dono no M1 |
 
 ### M4 / Fases 8-9
 

@@ -162,21 +162,6 @@ func TestProjecaoEstrelaUsaAlias(t *testing.T) {
 	}
 }
 
-// Duplicata é permitida: SQL permite, e o executor só lê o mesmo slot duas
-// vezes.
-func TestProjecaoDuplicada(t *testing.T) {
-	bq := bindOK(t, "SELECT id, id FROM radius_sessions")
-	if len(bq.Columns) != 2 {
-		t.Fatalf("%d colunas, want 2", len(bq.Columns))
-	}
-	if bq.Columns[0].Slot != bq.Columns[1].Slot {
-		t.Errorf("slots diferentes para a mesma coluna: %d e %d", bq.Columns[0].Slot, bq.Columns[1].Slot)
-	}
-	if bq.Slots.Len() != 1 {
-		t.Errorf("Slots.Len = %d, want 1", bq.Slots.Len())
-	}
-}
-
 // Os slots são a ordem do PAYLOAD: crescente, sem duplicata, cobrindo
 // projeção ∪ WHERE.
 func TestSlotsOrdenadosECobremProjecaoEWhere(t *testing.T) {
