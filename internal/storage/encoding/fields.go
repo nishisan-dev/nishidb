@@ -49,30 +49,38 @@ func fieldWidth(t types.FieldType) int {
 // AppendField codifica um campo ao final de dst e devolve o slice resultante.
 //
 // Value inválida (TypeNull, tag desconhecida, largura fixa errada em Bytes,
-// bool fora de 0/1) é bug do caller e causa panic — o typeconv do
-// materializer garante os invariantes antes de chegar aqui.
-func AppendField(dst []byte, id types.FieldID, v types.Value) []byte {
+// bool fora de 0/1) devolve ErrInvalidPayload com dst INTACTO. O erro é
+// obrigatório e não um panic porque o materializer converte dados EXTERNOS
+// sob política de log-and-skip por evento (§101): um panic não é capturado
+// por ela, então um único evento com Value malformada derrubaria o loop de
+// ingestão inteiro.
+//
+// A validação acontece ANTES de qualquer escrita justamente para que um
+// caller que ignore o erro não fique com um payload meio codificado.
+func AppendField(dst []byte, id types.FieldID, v types.Value) ([]byte, error) {
+	w := fieldWidth(v.Type)
+	switch {
+	case w == invalidWidth:
+		return dst, fmt.Errorf("%w: tipo %#x não é codificável (TypeNull e tags desconhecidas nunca entram em payload)",
+			ErrInvalidPayload, v.Type)
+	case v.Type == types.TypeBool && v.I64 != 0 && v.I64 != 1:
+		return dst, fmt.Errorf("%w: bool com valor %d (esperado 0 ou 1)", ErrInvalidPayload, v.I64)
+	case w > 0 && w != 8 && v.Type != types.TypeBool && len(v.Bytes) != w:
+		return dst, fmt.Errorf("%w: tipo %#x exige %d bytes, recebeu %d", ErrInvalidPayload, v.Type, w, len(v.Bytes))
+	}
+
 	dst = binary.LittleEndian.AppendUint16(dst, uint16(id))
 	dst = append(dst, byte(v.Type))
-
-	switch w := fieldWidth(v.Type); {
-	case w == invalidWidth:
-		panic(fmt.Sprintf("encoding: tipo inválido em AppendField: %#x", v.Type))
+	switch {
 	case v.Type == types.TypeBool:
-		if v.I64 != 0 && v.I64 != 1 {
-			panic(fmt.Sprintf("encoding: bool fora de 0/1: %d", v.I64))
-		}
-		return append(dst, byte(v.I64))
+		return append(dst, byte(v.I64)), nil
 	case w == 8:
-		return binary.LittleEndian.AppendUint64(dst, uint64(v.I64))
+		return binary.LittleEndian.AppendUint64(dst, uint64(v.I64)), nil
 	case w == varWidth:
 		dst = binary.AppendUvarint(dst, uint64(len(v.Bytes)))
-		return append(dst, v.Bytes...)
+		return append(dst, v.Bytes...), nil
 	default:
-		if len(v.Bytes) != w {
-			panic(fmt.Sprintf("encoding: tipo %#x exige %d bytes, recebeu %d", v.Type, w, len(v.Bytes)))
-		}
-		return append(dst, v.Bytes...)
+		return append(dst, v.Bytes...), nil
 	}
 }
 

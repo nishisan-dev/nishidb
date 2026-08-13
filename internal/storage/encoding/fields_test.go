@@ -39,6 +39,16 @@ func fieldCases() []struct {
 	}
 }
 
+// mustAppend codifica um campo que o teste sabe ser válido.
+func mustAppend(tb testing.TB, dst []byte, id types.FieldID, v types.Value) []byte {
+	tb.Helper()
+	out, err := AppendField(dst, id, v)
+	if err != nil {
+		tb.Fatalf("AppendField(%d, %#x): %v", id, v.Type, err)
+	}
+	return out
+}
+
 func assertValueEqual(t *testing.T, want, got types.Value) {
 	t.Helper()
 	if got.Type != want.Type {
@@ -59,7 +69,7 @@ func assertValueEqual(t *testing.T, want, got types.Value) {
 func TestAppendFieldRoundTripPorTipo(t *testing.T) {
 	for _, c := range fieldCases() {
 		t.Run(c.name, func(t *testing.T) {
-			payload := AppendField(nil, c.id, c.val)
+			payload := mustAppend(t, nil, c.id, c.val)
 
 			var r FieldReader
 			r.Reset(payload)
@@ -86,7 +96,7 @@ func TestAppendFieldPayloadComTodosOsTipos(t *testing.T) {
 	cases := fieldCases()
 	var payload []byte
 	for _, c := range cases {
-		payload = AppendField(payload, c.id, c.val)
+		payload = mustAppend(t, payload, c.id, c.val)
 	}
 
 	var r FieldReader
@@ -110,7 +120,7 @@ func TestAppendFieldPayloadComTodosOsTipos(t *testing.T) {
 }
 
 func TestFieldReaderZeroCopy(t *testing.T) {
-	payload := AppendField(nil, 1, types.Value{Type: types.TypeString, Bytes: []byte("abc")})
+	payload := mustAppend(t, nil, 1, types.Value{Type: types.TypeString, Bytes: []byte("abc")})
 
 	var r FieldReader
 	r.Reset(payload)
@@ -137,8 +147,8 @@ func TestFieldReaderPayloadVazio(t *testing.T) {
 }
 
 func TestFieldReaderCorrompido(t *testing.T) {
-	str := AppendField(nil, 7, types.Value{Type: types.TypeString, Bytes: []byte("hello")})
-	i64 := AppendField(nil, 3, types.Value{Type: types.TypeInt64, I64: 99})
+	str := mustAppend(t, nil, 7, types.Value{Type: types.TypeString, Bytes: []byte("hello")})
+	i64 := mustAppend(t, nil, 3, types.Value{Type: types.TypeInt64, I64: 99})
 
 	cases := []struct {
 		name    string
@@ -169,7 +179,10 @@ func TestFieldReaderCorrompido(t *testing.T) {
 	}
 }
 
-func TestAppendFieldPanicaComValorInvalido(t *testing.T) {
+func TestAppendFieldRejeitaValorInvalido(t *testing.T) {
+	// D4: o materializer converte dados EXTERNOS sob log-and-skip por evento
+	// (§101), e panic não é capturado por essa política — um único evento
+	// malformado derrubaria a ingestão inteira. Erro, não panic.
 	cases := []struct {
 		name string
 		val  types.Value
@@ -183,12 +196,27 @@ func TestAppendFieldPanicaComValorInvalido(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			defer func() {
-				if recover() == nil {
-					t.Fatal("esperado panic com Value inválido")
-				}
-			}()
-			AppendField(nil, 1, c.val)
+			// Começa com um campo válido já codificado: o erro não pode
+			// deixar o payload anterior meio escrito.
+			base, err := AppendField(nil, 1, types.Value{Type: types.TypeInt64, I64: 7})
+			if err != nil {
+				t.Fatal(err)
+			}
+			intacto := append([]byte(nil), base...)
+
+			got, err := AppendField(base, 2, c.val)
+			if !errors.Is(err, ErrInvalidPayload) {
+				t.Fatalf("esperado ErrInvalidPayload, obtido %v", err)
+			}
+			if !bytes.Equal(got, intacto) {
+				t.Fatalf("dst foi modificado apesar do erro: %x vs %x", got, intacto)
+			}
+			// E o que sobrou continua decodificável.
+			var r FieldReader
+			r.Reset(got)
+			if _, _, ok := r.Next(); !ok {
+				t.Fatalf("payload anterior deveria seguir legível: %v", r.Err())
+			}
 		})
 	}
 }
@@ -196,7 +224,7 @@ func TestAppendFieldPanicaComValorInvalido(t *testing.T) {
 func BenchmarkFieldReader(b *testing.B) {
 	var payload []byte
 	for _, c := range fieldCases() {
-		payload = AppendField(payload, c.id, c.val)
+		payload = mustAppend(b, payload, c.id, c.val)
 	}
 	b.ReportAllocs()
 	b.ResetTimer()

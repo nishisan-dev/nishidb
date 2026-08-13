@@ -15,12 +15,22 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
+// mustAppendField codifica um campo que o teste sabe ser válido.
+func mustAppendField(tb testing.TB, dst []byte, id types.FieldID, v types.Value) []byte {
+	tb.Helper()
+	out, err := encoding.AppendField(dst, id, v)
+	if err != nil {
+		tb.Fatalf("AppendField(%d, %#x): %v", id, v.Type, err)
+	}
+	return out
+}
+
 func makeRecord(t *testing.T, rowID types.RowID, seq int64, key string, payloadSize int) []byte {
 	t.Helper()
-	payload := encoding.AppendField(nil, 1, types.Value{Type: types.TypeString, Bytes: []byte(key)})
+	payload := mustAppendField(t, nil, 1, types.Value{Type: types.TypeString, Bytes: []byte(key)})
 	if payloadSize > 0 {
 		filler := bytes.Repeat([]byte{'z'}, payloadSize)
-		payload = encoding.AppendField(payload, 2, types.Value{Type: types.TypeBytes, Bytes: filler})
+		payload = mustAppendField(t, payload, 2, types.Value{Type: types.TypeBytes, Bytes: filler})
 	}
 	rec, err := encoding.BuildRecord(nil, rowID, seq, 0, []byte(key), payload)
 	if err != nil {

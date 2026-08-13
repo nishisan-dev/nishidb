@@ -13,7 +13,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
@@ -26,8 +25,8 @@ func payloadSemStatus(t *testing.T, s *Store, key string, counter int64) []byte 
 		}
 	}
 	var p []byte
-	p = encoding.AppendField(p, fldID, types.Value{Type: types.TypeString, Bytes: []byte(key)})
-	p = encoding.AppendField(p, fldCounter, types.Value{Type: types.TypeInt64, I64: counter})
+	p = mustAppendField(t, p, fldID, types.Value{Type: types.TypeString, Bytes: []byte(key)})
+	p = mustAppendField(t, p, fldCounter, types.Value{Type: types.TypeInt64, I64: counter})
 	return p
 }
 
@@ -60,8 +59,8 @@ func TestRowIDNaoEhReutilizadoAposPutFalho(t *testing.T) {
 	s := openStore(t, Options{})
 	okPayload := statusPayload(t, s, "x", "Start", 0)
 
-	unordered := encoding.AppendField(nil, fldStatus, types.Value{Type: types.TypeInt64, I64: 1})
-	unordered = encoding.AppendField(unordered, fldID, types.Value{Type: types.TypeInt64, I64: 2})
+	unordered := mustAppendField(t, nil, fldStatus, types.Value{Type: types.TypeInt64, I64: 1})
+	unordered = mustAppendField(t, unordered, fldID, types.Value{Type: types.TypeInt64, I64: 2})
 	if _, _, err := s.Put([]byte("key-falha"), 1, 0, unordered, nil); err == nil {
 		t.Fatal("payload desordenado deveria falhar")
 	}
@@ -236,7 +235,7 @@ func TestPayloadComFieldIDDesconhecido(t *testing.T) {
 	s := openStore(t, Options{})
 	okPayload := statusPayload(t, s, "d", "Start", 0) // registra os campos 1..3
 
-	ghost := encoding.AppendField(nil, 999, types.Value{Type: types.TypeString, Bytes: []byte("fantasma")})
+	ghost := mustAppendField(t, nil, 999, types.Value{Type: types.TypeString, Bytes: []byte("fantasma")})
 	if _, _, err := s.Put([]byte("d"), 1, 0, ghost, nil); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("fieldID desconhecido: esperado ErrInvalidArgument, obtido %v", err)
 	}

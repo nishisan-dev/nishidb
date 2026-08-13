@@ -37,6 +37,16 @@ func openStore(t *testing.T, opts Options) *Store {
 	return s
 }
 
+// mustAppendField codifica um campo que o teste sabe ser válido.
+func mustAppendField(tb testing.TB, dst []byte, id types.FieldID, v types.Value) []byte {
+	tb.Helper()
+	out, err := encoding.AppendField(dst, id, v)
+	if err != nil {
+		tb.Fatalf("AppendField(%d, %#x): %v", id, v.Type, err)
+	}
+	return out
+}
+
 func statusPayload(t *testing.T, s *Store, key, status string, counter int64) []byte {
 	t.Helper()
 	for _, name := range []string{"id", "status", "counter"} {
@@ -45,9 +55,9 @@ func statusPayload(t *testing.T, s *Store, key, status string, counter int64) []
 		}
 	}
 	var p []byte
-	p = encoding.AppendField(p, fldID, types.Value{Type: types.TypeString, Bytes: []byte(key)})
-	p = encoding.AppendField(p, fldStatus, types.Value{Type: types.TypeString, Bytes: []byte(status)})
-	p = encoding.AppendField(p, fldCounter, types.Value{Type: types.TypeInt64, I64: counter})
+	p = mustAppendField(t, p, fldID, types.Value{Type: types.TypeString, Bytes: []byte(key)})
+	p = mustAppendField(t, p, fldStatus, types.Value{Type: types.TypeString, Bytes: []byte(status)})
+	p = mustAppendField(t, p, fldCounter, types.Value{Type: types.TypeInt64, I64: counter})
 	return p
 }
 
@@ -325,8 +335,8 @@ func TestErrosDePut(t *testing.T) {
 	s := openStore(t, Options{})
 	okPayload := statusPayload(t, s, "e", "Start", 0)
 
-	unordered := encoding.AppendField(nil, 5, types.Value{Type: types.TypeInt64, I64: 1})
-	unordered = encoding.AppendField(unordered, 2, types.Value{Type: types.TypeInt64, I64: 2})
+	unordered := mustAppendField(t, nil, 5, types.Value{Type: types.TypeInt64, I64: 1})
+	unordered = mustAppendField(t, unordered, 2, types.Value{Type: types.TypeInt64, I64: 2})
 
 	if _, _, err := s.Put(nil, 1, 0, okPayload, nil); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("key vazia: esperado ErrInvalidArgument, obtido %v", err)
