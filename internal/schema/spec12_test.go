@@ -8,11 +8,12 @@ import (
 )
 
 // Carrega e compila o radius.materialization.yaml COMPLETO da spec §12
-// (testdata/radius.materialization.yaml, verbatim do documento): ~40 campos
-// declarados, source.kafka multi-nível (aceito e ignorado no M1), wildcard
-// com unknownFields include, ttl e tombstoneRetention.
+// (testdata/ na raiz, verbatim do documento, ao lado da amostra de evento
+// que ele descreve): ~40 campos declarados, source.kafka multi-nível
+// (aceito e ignorado no M1), wildcard com unknownFields include, ttl e
+// tombstoneRetention.
 func TestLoadSpec12YAML(t *testing.T) {
-	s, err := Load("testdata/radius.materialization.yaml")
+	s, err := Load("../../testdata/radius.materialization.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}

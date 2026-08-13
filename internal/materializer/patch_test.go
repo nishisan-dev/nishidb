@@ -338,6 +338,58 @@ func TestParseAliasInEvent(t *testing.T) {
 	}
 }
 
+// O design §2.5 lista DOIS geradores de duplicata: chave JSON repetida e
+// alias/nome apontando para o mesmo campo. O segundo só é exercitado quando
+// os dois aparecem no mesmo evento — e o last-wins tem que valer na ordem do
+// evento, não na ordem nome-antes-de-alias.
+func TestParseAliasAndNameDedup(t *testing.T) {
+	c := compileYAML(t, patchYAML)
+	cases := []struct{ event, want string }{
+		{`{"id":"A","_SEQ":1,"Acct-Status-Type":"Start","status":"Stop"}`, "Stop"},
+		{`{"id":"A","_SEQ":1,"status":"Stop","Acct-Status-Type":"Start"}`, "Start"},
+	}
+	for _, tc := range cases {
+		b := parsePatch(t, c, tc.event)
+		count := 0
+		for _, e := range b.entries {
+			if e.field.Name == "Acct-Status-Type" {
+				count++
+				if string(e.val.Bytes) != tc.want {
+					t.Errorf("%s: valor = %q, want %q", tc.event, e.val.Bytes, tc.want)
+				}
+			}
+		}
+		if count != 1 {
+			t.Errorf("%s: %d entries para o mesmo campo", tc.event, count)
+		}
+	}
+}
+
+// A key é uma janela sobre o arena, capturada no meio do evento. Um campo
+// grande depois dela força o append do arena a realocar: a janela continua
+// apontando para o array anterior, que segue vivo e íntegro justamente
+// porque b.key o referencia.
+func TestParseKeySurvivesArenaGrowth(t *testing.T) {
+	c := compileYAML(t, patchYAML)
+	blob := make([]byte, 8192)
+	for i := range blob {
+		blob[i] = 'x'
+	}
+	event := append([]byte(`{"id":"CMP-001","_SEQ":1,"blob":"`), blob...)
+	event = append(event, `"}`...)
+
+	var b PatchBuffer
+	if err := b.Parse(event, c); err != nil {
+		t.Fatal(err)
+	}
+	if string(b.key) != "CMP-001" {
+		t.Errorf("key corrompida pelo crescimento do arena: %q", b.key)
+	}
+	if e := entryByName(t, &b, "blob"); len(e.val.Bytes) != len(blob) {
+		t.Errorf("blob = %d bytes, want %d", len(e.val.Bytes), len(blob))
+	}
+}
+
 func TestParseTypeConversionError(t *testing.T) {
 	c := compileYAML(t, patchYAML)
 	var b PatchBuffer
