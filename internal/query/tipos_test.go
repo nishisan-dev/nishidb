@@ -166,6 +166,65 @@ func TestOperadoresNosTresModosNumericos(t *testing.T) {
 	}
 }
 
+// IEEE-754 inverte a ordem dos NEGATIVOS no espaço de bits: comparar
+// Value.I64 diretamente faz `-1 > -2` devolver false. Os bits só servem para
+// IGUALDADE; para ordenar é obrigatório converter com Float64frombits antes.
+//
+// Com valores positivos a ordem dos bits COINCIDE com a dos floats — por isso
+// um teste que só use positivos passa com o código errado e não prova nada.
+func TestOrdemDeDoubleNegativoNaoUsaBits(t *testing.T) {
+	h := novoTiposHarness(t)
+	h.ingere(`{"id":"K1","_SEQ":1,"real":-1.0,"inteiro":-1}`)
+
+	casos := []struct {
+		where string
+		acha  bool
+	}{
+		{`real > -2.0`, true}, // o caso que falha comparando bits
+		{`real < -0.5`, true},
+		{`real >= -1.0`, true},
+		{`real <= -1.0`, true},
+		{`real > -0.5`, false},
+		{`real < -2.0`, false},
+		// O mesmo pelo caminho CompareIntAsFloat (coluna int64, literal float).
+		{`inteiro > -2.0`, true},
+		{`inteiro < -0.5`, true},
+		{`inteiro > -0.5`, false},
+	}
+	for _, tc := range casos {
+		t.Run(tc.where, func(t *testing.T) {
+			got := h.achaIDs(`SELECT id FROM todos_os_tipos WHERE ` + tc.where)
+			if achou := len(got) == 1; achou != tc.acha {
+				t.Errorf("achou = %v, want %v", achou, tc.acha)
+			}
+		})
+	}
+}
+
+// O MESMO literal contra uma coluna int64 e uma coluna double produz um Val
+// IDÊNTICO — mesmo Type (double) e mesmos bits. Só o CompareKind separa os
+// dois casos. Um executor que despachasse por Val.Type varreria o dataset
+// inteiro e devolveria vazio, sem erro nenhum.
+func TestMesmoLiteralEmColunasDeTipoDiferente(t *testing.T) {
+	h := novoTiposHarness(t)
+	h.ingere(`{"id":"K1","_SEQ":1,"inteiro":2,"real":2.0}`)
+
+	// inteiro=2 > 1.5 (CompareIntAsFloat) e real=2.0 > 1.5 (CompareFloatBits).
+	if got := h.achaIDs(`SELECT id FROM todos_os_tipos WHERE inteiro > 1.5`); len(got) != 1 {
+		t.Errorf("coluna int64 com literal 1.5: %v", got)
+	}
+	if got := h.achaIDs(`SELECT id FROM todos_os_tipos WHERE real > 1.5`); len(got) != 1 {
+		t.Errorf("coluna double com literal 1.5: %v", got)
+	}
+	// E o simétrico, onde o modo errado devolveria a row: a coluna int64 vale
+	// 2, então > 2.5 é falso; se ela fosse lida como Float64bits, o inteiro 2
+	// viraria ~1e-323 e a comparação também daria falso — o teste acima é o
+	// que separa, porque lá o modo errado dá VAZIO onde deveria achar.
+	if got := h.achaIDs(`SELECT id FROM todos_os_tipos WHERE inteiro > 2.5`); len(got) != 0 {
+		t.Errorf("inteiro > 2.5 deveria ser vazio: %v", got)
+	}
+}
+
 // bytes e json não comparam (o binder recusa com E4): a concordância dos dois
 // lados é provada pela PROJEÇÃO — o valor projetado é byte a byte o ingerido.
 func TestIngestaoEQueryConcordamNosTiposOpacos(t *testing.T) {

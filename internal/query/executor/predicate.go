@@ -100,6 +100,11 @@ func (in *instr) testa(slots []slot, cnt *contadores) bool {
 		cnt.typeMismatch++
 		return false
 	}
+	// O despacho é pelo KIND, nunca por Val.Type: `octets > 1.5` numa coluna
+	// int64 e `ratio > 1.5` numa coluna double produzem um Val IDÊNTICO —
+	// mesmo Type (double) e mesmos bits. Só o Kind separa os dois, e trocá-lo
+	// por Val.Type devolveria resultado vazio varrendo o dataset inteiro, sem
+	// erro nenhum.
 	switch in.kind {
 	case binder.CompareInt:
 		return ordemInt(in.cmpOp, s.val.I64, in.val.I64)
@@ -111,8 +116,14 @@ func (in *instr) testa(slots []slot, cnt *contadores) bool {
 		// Float64bits. Confundir os dois lados devolve resultado vazio em
 		// silêncio.
 		return ordemFloat(in.cmpOp, float64(s.val.I64), math.Float64frombits(uint64(in.val.I64)))
-	default: // binder.CompareBytes
+	case binder.CompareBytes:
 		return ordemBytes(in.cmpOp, s.val.Bytes, in.val.Bytes)
+	default:
+		// Modo desconhecido não cai no caminho de bytes: um Kind novo tratado
+		// como bytes compararia representações diferentes e devolveria
+		// resultado errado em silêncio. O Open já recusa CompareUnset, então
+		// isto é o fecho da enumeração, não uma condição alcançável.
+		return false
 	}
 }
 

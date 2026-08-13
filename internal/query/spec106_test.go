@@ -130,6 +130,42 @@ func TestSpec106Or(t *testing.T) {
 	}
 }
 
+// A união MISTURA índices: um termo de bitmap e um de hash na mesma consulta.
+// Assumir homogeneidade abriria os dois pelo mesmo caminho e o termo de hash
+// falharia (o campo não tem bitmap) — ou, pior, devolveria vazio.
+func TestUniaoMisturaBitmapEHash(t *testing.T) {
+	h := semeado(t)
+	rows := h.consultaOK(
+		`SELECT id FROM radius_sessions WHERE status = 'Start' OR nas_ip = '10.0.0.2'`)
+
+	// CMP-0002 pelo bitmap (status Start), CMP-0003 e CMP-0004 pelo hash.
+	got := chaves(rows, "id")
+	if !reflect.DeepEqual(got, []string{"CMP-0002", "CMP-0003", "CMP-0004"}) {
+		t.Fatalf("resultado = %v", got)
+	}
+	if n := h.engine.Metrics().SourceFullScan.Load(); n != 0 {
+		t.Errorf("SourceFullScan = %d, want 0: a união deveria ter atendido", n)
+	}
+
+	// Com sobreposição real: Stop = {1,3,4} e nas_ip 10.0.0.1 = {1,2}. A união
+	// é {1,2,3,4}, e CMP-0001 — que casa nos DOIS lados — sai uma vez só.
+	rows = h.consultaOK(
+		`SELECT id FROM radius_sessions WHERE status = 'Stop' OR nas_ip = '10.0.0.1'`)
+	got = chaves(rows, "id")
+	if !reflect.DeepEqual(got, []string{"CMP-0001", "CMP-0002", "CMP-0003", "CMP-0004"}) {
+		t.Fatalf("união com sobreposição = %v", got)
+	}
+	vezes := 0
+	for _, id := range got {
+		if id == "CMP-0001" {
+			vezes++
+		}
+	}
+	if vezes != 1 {
+		t.Errorf("CMP-0001 saiu %d vezes: casa nos dois lados do OR e o dedup falhou", vezes)
+	}
+}
+
 // §106 — comparison: cada operador × cada tipo comparável.
 func TestSpec106ComparacaoPorTipoEOperador(t *testing.T) {
 	h := semeado(t)
