@@ -30,10 +30,20 @@ type HashCapable interface {
 }
 
 // maxFlattenDepth limita a recursão do achatamento. Estourá-lo não é erro: a
-// subárvore vira um conjunct OPACO, e a query patologicamente aninhada degrada
-// para FullScan — correto e seguro. O parser já limita a profundidade da
-// expressão; este budget é defesa em profundidade e não deve ser removido por
-// isso.
+// subárvore vira um conjunct OPACO e a query degrada para FullScan — correto,
+// só mais lento.
+//
+// NÃO é defesa em profundidade: o teto de PARÊNTESES do parser
+// (parser.MaxExprDepth) não alcança a espinha de AND/OR, que é iterativa lá.
+// Este budget é o ÚNICO limite dela, e é alcançável por SQL perfeitamente
+// válido — o penhasco medido está em 67 conjuncts com o termo indexável no
+// INÍCIO da cláusula (TestPenhascoDoBudgetDeFlatten).
+//
+// A consequência a conhecer: a fronteira é POSICIONAL, não de tamanho. A mesma
+// query com os termos reordenados pode mudar de BitmapScan para FullScan,
+// porque o que conta é a profundidade do termo indexável na espinha. É um
+// penhasco de performance silencioso; nunca de correção, porque degradar para
+// full scan não perde row nenhuma.
 const maxFlattenDepth = 64
 
 // Planner é criado UMA VEZ por dataset (o Engine o guarda junto do schema

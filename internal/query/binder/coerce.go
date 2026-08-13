@@ -63,7 +63,13 @@ func (k CompareKind) String() string {
 // que a query compartilhar os parsers da ingestão existe para evitar.
 func Comparable(col types.FieldType, isAuto bool, lit parser.OperandKind, op parser.CmpOp) (CompareKind, error) {
 	// A ordem das checagens é fixa porque determina QUAL erro aparece
-	// primeiro, e a mensagem é contrato de teste.
+	// primeiro, e a mensagem é contrato — fixado por
+	// TestOrdemDasChecagensDeComparable.
+	//
+	// O tipo do literal é checado ANTES do operador: numa coluna de operador
+	// restrito com literal incompatível as duas checagens falhariam, e a
+	// mensagem de operador daria um conselho ERRADO ("use = ou !=" não resolve
+	// quando o problema é o tipo).
 	switch col {
 	case types.TypeNull:
 		if isAuto {

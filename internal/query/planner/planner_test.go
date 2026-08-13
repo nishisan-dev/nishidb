@@ -608,6 +608,49 @@ func TestPlanProfundidadeAcimaDoBudgetDegrada(t *testing.T) {
 	}
 }
 
+// O penhasco do budget é EXATO e depende da POSIÇÃO do termo, não do tamanho
+// da query: a mesma consulta com os termos reordenados muda de BitmapScan para
+// FullScan. O teste mede a fronteira em vez de afirmá-la, para que ela conste
+// do código e não de um relatório.
+func TestPenhascoDoBudgetDeFlatten(t *testing.T) {
+	p, c, _ := novo(t)
+	indexavel := eq(campo(t, c, "status"), str("Stop"))
+	ruido := eq(campo(t, c, "username"), str("ze"))
+
+	// Termo indexável no INÍCIO = o mais fundo da espinha left-leaning.
+	noInicio := func(n int) binder.BoundExpr {
+		var e binder.BoundExpr = indexavel
+		for i := 1; i < n; i++ {
+			e = and(e, ruido)
+		}
+		return e
+	}
+	achaPenhasco := func() int {
+		for n := 2; n <= 512; n++ {
+			if p.Plan(consulta(noInicio(n))) == planner.FullScan() {
+				return n
+			}
+		}
+		return -1
+	}
+	penhasco := achaPenhasco()
+	if penhasco != 67 {
+		t.Errorf("penhasco em %d conjuncts, want 67 (budget %d + a raiz + o off-by-one do depth)",
+			penhasco, 64)
+	}
+
+	// Com o MESMO número de termos e o indexável no FIM (raso), não há
+	// penhasco: é a prova de que a fronteira é posicional.
+	var noFim binder.BoundExpr = ruido
+	for i := 1; i < 500; i++ {
+		noFim = and(noFim, ruido)
+	}
+	noFim = and(noFim, indexavel)
+	if pl := planeja(t, p, noFim); pl == planner.FullScan() {
+		t.Error("com o termo indexável raso, 500 conjuncts deveriam continuar indexados")
+	}
+}
+
 // ---------------------------------------------------------------- 30-33
 
 // O planner escolhe a fonte de candidatos; quem lê dado é o executor.

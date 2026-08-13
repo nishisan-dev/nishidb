@@ -182,3 +182,101 @@ func TestBitsDeFloatSobrevivemAoI64(t *testing.T) {
 		t.Errorf("round-trip = %v, want %v", got, f)
 	}
 }
+
+// A ordem das checagens de Comparable é contrato, e este é o teste que a fixa.
+//
+// Nas quatro formas abaixo — coluna de operador RESTRITO (boolean, prefixo)
+// com literal de tipo INCOMPATÍVEL — as duas checagens falhariam, e só a ordem
+// decide qual mensagem o usuário vê. Trocar `celula` e `admitsOp` de lugar
+// compila, passa na árvore inteira, e faz o erro dar um conselho ERRADO:
+// "use = ou !=" não resolve nada quando o problema é o tipo do literal
+// (`ativo = 'x'` dá o mesmo erro de incompatibilidade).
+func TestOrdemDasChecagensDeComparable(t *testing.T) {
+	casos := []struct {
+		nome string
+		sql  string
+		msg  string
+	}{
+		{"boolean com string", `SELECT id FROM radius_sessions WHERE ativo > 'x'`,
+			"não é comparável com literal do tipo string"},
+		{"boolean com int", `SELECT id FROM radius_sessions WHERE ativo >= 1`,
+			"não é comparável com literal do tipo int"},
+		{"prefixo v4 com int", `SELECT id FROM radius_sessions WHERE rede4 > 1`,
+			"não é comparável com literal do tipo int"},
+		{"prefixo v6 com boolean", `SELECT id FROM radius_sessions WHERE rede6 < TRUE`,
+			"não é comparável com literal do tipo boolean"},
+	}
+	for _, tc := range casos {
+		t.Run(tc.nome, func(t *testing.T) {
+			err := bindErr(t, tc.sql)
+			if !strings.Contains(err.Error(), tc.msg) {
+				t.Errorf("erro = %q\n want conter %q\n (a ordem celula→admitsOp inverteu?)", err, tc.msg)
+			}
+			// O conselho do erro de OPERADOR seria enganoso aqui.
+			if strings.Contains(err.Error(), "use = ou !=") {
+				t.Errorf("erro = %q, want NÃO aconselhar trocar o operador: o problema é o tipo", err)
+			}
+		})
+	}
+}
+
+// Os caminhos de ERRO de coerção que não tinham teste. O código estava certo
+// nos seis; o que faltava era a rede — e a dos prefixos é a única coerção de
+// literal cujo caminho de falha não era exercitado por nada.
+func TestCaminhosDeErroDeCoercao(t *testing.T) {
+	casos := []struct {
+		nome, sql, msg string
+	}{
+		{"prefixo v4 inválido", `SELECT id FROM radius_sessions WHERE rede4 = 'nao-eh-prefixo'`,
+			`literal "nao-eh-prefixo" inválido para a coluna "rede4" (ipv4_prefix)`},
+		{"prefixo v4 com bits fora de faixa", `SELECT id FROM radius_sessions WHERE rede4 = '10.0.0.0/33'`,
+			`inválido para a coluna "rede4"`},
+		{"prefixo v6 inválido", `SELECT id FROM radius_sessions WHERE rede6 = 'xyz'`,
+			`literal "xyz" inválido para a coluna "rede6" (ipv6_prefix)`},
+		{"prefixo v6 com endereço v4", `SELECT id FROM radius_sessions WHERE rede6 = '10.0.0.0/8'`,
+			`inválido para a coluna "rede6"`},
+		{"ipv6 inválido", `SELECT id FROM radius_sessions WHERE v6 = 'nao-eh-ipv6'`,
+			`inválido para a coluna "v6" (ipv6)`},
+		{"timestamp inválido", `SELECT id FROM radius_sessions WHERE quando = 'ontem'`,
+			`inválido para a coluna "quando" (timestamp)`},
+	}
+	for _, tc := range casos {
+		t.Run(tc.nome, func(t *testing.T) {
+			err := bindErr(t, tc.sql)
+			if !strings.Contains(err.Error(), tc.msg) {
+				t.Errorf("erro = %q, want conter %q", err, tc.msg)
+			}
+			// Toda mensagem de literal inválido aponta a POSIÇÃO do literal.
+			if !strings.Contains(err.Error(), "posição") {
+				t.Errorf("erro = %q, want citar a posição", err)
+			}
+		})
+	}
+}
+
+// Os mesmos caminhos pelo lado do PARÂMETRO: são duas rotas de coerção, e a
+// mensagem de parâmetro não tem posição no texto (o valor não está na query).
+func TestCaminhosDeErroDeCoercaoComParametro(t *testing.T) {
+	casos := []struct {
+		nome, sql, msg string
+		param          types.Value
+	}{
+		{"prefixo v4 inválido", `SELECT id FROM radius_sessions WHERE rede4 = ?`,
+			"parâmetro 1", wireString("nao-eh-prefixo")},
+		{"prefixo v6 inválido", `SELECT id FROM radius_sessions WHERE rede6 = ?`,
+			"parâmetro 1", wireString("xyz")},
+		{"ipv6 inválido", `SELECT id FROM radius_sessions WHERE v6 = ?`,
+			"parâmetro 1", wireString("nope")},
+	}
+	for _, tc := range casos {
+		t.Run(tc.nome, func(t *testing.T) {
+			err := bindErr(t, tc.sql, tc.param)
+			if !strings.Contains(err.Error(), tc.msg) {
+				t.Errorf("erro = %q, want conter %q", err, tc.msg)
+			}
+			if strings.Contains(err.Error(), "posição") {
+				t.Errorf("erro = %q: parâmetro não tem posição no texto da query", err)
+			}
+		})
+	}
+}
