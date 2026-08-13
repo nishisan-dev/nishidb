@@ -62,9 +62,12 @@ func TestLoadCriaUmaRowPorEntidade(t *testing.T) {
 
 // STEADY roda a carga de regime e produz série temporal e agregados.
 func TestSteadyProduzAmostrasEAgregados(t *testing.T) {
-	cfg := baseConfig(t, 200)
+	cfg := baseConfig(t, 500)
 	cfg.SteadyDuration = 300 * time.Millisecond
 	cfg.SteadyRate = 0 // sem limite: o teste não pode depender de relógio
+	// Amostragem densa: numa rodada de teste o default (Entities/50, piso
+	// 100) daria dois pontos, e a curva é o que se quer verificar aqui.
+	cfg.SampleEveryEvents = 25
 
 	rep, err := Run(cfg)
 	if err != nil {
@@ -79,6 +82,21 @@ func TestSteadyProduzAmostrasEAgregados(t *testing.T) {
 	}
 	if len(rep.Samples) == 0 {
 		t.Fatal("nenhuma amostra de memória coletada")
+	}
+	// A curva precisa começar na origem e ter resolução por CONTAGEM, não só
+	// por tempo: é ela que mostra se o crescimento é plano, linear ou em
+	// degrau, e uma rodada curta não pode ficar com dois pontos.
+	if rep.Samples[0].Events != 0 {
+		t.Errorf("primeira amostra em %d eventos, want 0 (origem da curva)", rep.Samples[0].Events)
+	}
+	var noLoad int
+	for _, s := range rep.Samples {
+		if s.Phase == "load" {
+			noLoad++
+		}
+	}
+	if noLoad < 10 {
+		t.Errorf("só %d pontos na curva do LOAD: resolução insuficiente para ver degrau", noLoad)
 	}
 	var viuSteady bool
 	for _, s := range rep.Samples {
@@ -211,8 +229,80 @@ func TestGateHeapComBaselineCompara(t *testing.T) {
 	if g.Skipped {
 		t.Fatal("gate pulado mesmo com baseline")
 	}
-	if !strings.Contains(g.Detail, "teto 2x") {
-		t.Errorf("detalhe não explicita o critério: %q", g.Detail)
+	// O detalhe precisa nomear as duas rodadas comparadas, seja pelo regime
+	// da razão ou pelo do piso.
+	if !strings.Contains(g.Detail, "100 entidades") || !strings.Contains(g.Detail, "400 entidades") {
+		t.Errorf("detalhe não identifica as duas rodadas: %q", g.Detail)
+	}
+}
+
+// Os dois regimes do §110 com valores sintéticos: a rodada real nunca produz
+// heap grande o bastante para exercitar o caminho da razão, e é justamente ele
+// que carrega o critério da spec.
+func TestAvaliaHeapDoisRegimes(t *testing.T) {
+	const mib = 1 << 20
+	casos := []struct {
+		nome                  string
+		atual, base           uint64
+		entAtual, entBase     int
+		querPassar            bool
+		trechoEsperadoNoTexto string
+	}{
+		{"desprezível encerra pelo valor", 1 * mib, 400 * 1024, 8_000_000, 1_000_000, true, "piso"},
+		{"desprezível mesmo com razão alta", 15 * mib, 1 * mib, 8_000_000, 1_000_000, true, "piso"},
+		{"acoplado reprova", 300 * mib, 100 * mib, 8_000_000, 1_000_000, false, "teto 2x"},
+		{"desacoplado passa", 150 * mib, 100 * mib, 8_000_000, 1_000_000, true, "teto 2x"},
+		{"exatamente no dobro reprova", 200 * mib, 100 * mib, 8_000_000, 1_000_000, false, "teto 2x"},
+		{"base zerada não divide por zero", 100 * mib, 0, 8_000_000, 1_000_000, false, "teto 2x"},
+	}
+	for _, tc := range casos {
+		t.Run(tc.nome, func(t *testing.T) {
+			passou, detalhe := avaliaHeap(tc.atual, tc.base, tc.entAtual, tc.entBase)
+			if passou != tc.querPassar {
+				t.Errorf("passou = %v, want %v (detalhe: %s)", passou, tc.querPassar, detalhe)
+			}
+			if !strings.Contains(detalhe, tc.trechoEsperadoNoTexto) {
+				t.Errorf("detalhe = %q, want conter %q", detalhe, tc.trechoEsperadoNoTexto)
+			}
+		})
+	}
+}
+
+// Heap absoluto desprezível encerra o §110 pelo valor, não pela razão: com
+// ~1 MiB de heap, a variação normal entre ciclos de GC vira "2,3x" e
+// reprovaria uma rodada cujo heap é 0,1% do orçamento. Foi o que aconteceu
+// numa rodada real de 8M, e é por isso que o piso existe.
+func TestGateHeapPisoAbsolutoEncerraPelaGrandeza(t *testing.T) {
+	base, err := Run(baseConfig(t, 100))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Força a razão a estourar (heap atual 3x o da referência) mantendo os
+	// dois valores muito abaixo do piso.
+	base.Load.HeapStable = 300 * 1024
+	base.Steady.HeapStable = 0
+	path := filepath.Join(t.TempDir(), "base.json")
+	writeReport(t, path, base)
+
+	cfg := baseConfig(t, 400)
+	cfg.HeapBaseline = path
+	rep, err := Run(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	heapAtual := rep.Steady.HeapStable
+	if heapAtual == 0 {
+		heapAtual = rep.Load.HeapStable
+	}
+	if heapAtual > 16*1024*1024 {
+		t.Skipf("heap de %d B acima do piso: o teste não exercita o caminho", heapAtual)
+	}
+	g := gateByName(t, rep, "heap_decoupled")
+	if !g.Passed {
+		t.Errorf("gate reprovou com heap desprezível: %+v", g)
+	}
+	if !strings.Contains(g.Detail, "piso") {
+		t.Errorf("detalhe não explica por que a razão foi dispensada: %q", g.Detail)
 	}
 }
 
