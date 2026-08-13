@@ -38,6 +38,18 @@ func audOpen(t *testing.T, opts Options) *Store {
 	return s
 }
 
+// mustGetAud lê a key exigindo que ela exista. Mora aqui, e não junto dos
+// testes do fix round, para que reverter um commit posterior não deixe os
+// demais sem o helper.
+func mustGetAud(t *testing.T, s *Store, key string) types.Record {
+	t.Helper()
+	rec, _, ok, err := s.GetByKey([]byte(key), nil)
+	if err != nil || !ok {
+		t.Fatalf("GetByKey(%q): (ok=%v, err=%v)", key, ok, err)
+	}
+	return rec
+}
+
 func TestReplayReinsereKeyComPrimaryAtrasDasLocations(t *testing.T) {
 	// Janela real do §10.2: o ApplyOverlay grava as locations no mmap ANTES
 	// do msync da primary. Um crash entre os dois deixa as locations À

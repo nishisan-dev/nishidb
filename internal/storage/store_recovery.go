@@ -205,6 +205,14 @@ func (s *Store) replayRecord(st *replayState, seg, off uint32, rec types.Record)
 	// as postings do payload novo (Set é idempotente), não limpa nenhuma
 	// (Clear a menos = falso positivo, tolerado pelo §44) e não decrementa
 	// liveness.
+	//
+	// Resíduo conhecido no tally: quando a row já existia em S e o tail traz
+	// um update cuja location está à frente, o record antigo continua
+	// contado como vivo — LiveRecords fica ACIMA do real (2 onde o certo é
+	// 1). É a direção segura da mesma assimetria do §14.16: superestimar
+	// liveness só adia a compaction, enquanto subestimar faria a compaction
+	// descartar dado vivo. O contador converge no próximo checkpoint que
+	// enxergar a row inteira.
 	var prevPayload []byte
 	prevConhecido := false
 	if oldPacked, ok := s.locs.Get(id); ok {

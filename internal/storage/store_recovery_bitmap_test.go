@@ -31,8 +31,11 @@ import (
 // visibilidade por key de cada cenário.
 func exigeBitmapCompleto(t *testing.T, s *Store) {
 	t.Helper()
+	// Sem índice declarado o guarda não verifica nada. Falhar aqui evita que
+	// ele vire um no-op invisível se algum cenário perder a configuração de
+	// bitmap — uma rede que passa sempre é pior que rede nenhuma.
 	if len(s.bitmaps) == 0 {
-		return
+		t.Fatal("guarda de bitmap chamado num Store sem índice: o cenário precisa declarar BitmapFields, senão a asserção não verifica nada")
 	}
 	it := s.ScanLive()
 	defer it.Close()
@@ -115,15 +118,6 @@ func bitmapDir(dir string, field types.FieldID) string {
 	return filepath.Join(dir, "indexes", "bitmap", fmt.Sprintf("%05d", field))
 }
 
-func mustGetAud(t *testing.T, s *Store, key string) types.Record {
-	t.Helper()
-	rec, _, ok, err := s.GetByKey([]byte(key), nil)
-	if err != nil || !ok {
-		t.Fatalf("GetByKey(%q): (ok=%v, err=%v)", key, ok, err)
-	}
-	return rec
-}
-
 func TestReplayRestauraPostingComBitmapAtrasDasLocations(t *testing.T) {
 	// CRITICAL 1. O §10.2 msynca as locations (passo 3) ANTES dos bitmaps e
 	// antes do manifest (passo 4), então após um crash é NORMAL a location
@@ -180,8 +174,13 @@ func TestReplayRestauraPostingComBitmapAtrasDasLocations(t *testing.T) {
 func TestReplayNaoDecrementaLivenessDeRecordVivo(t *testing.T) {
 	// IMPORTANT 3, mesma raiz do Critical 1: com a location apontando para o
 	// próprio record replayado, o decremento de liveness usava esse "estado
-	// anterior" e marcava como garbage um record VIVO. O tally do replay tem
-	// que bater com o da escrita direta nos três modos.
+	// anterior" e marcava como garbage um record VIVO.
+	//
+	// Escopo do que este teste prova: as rows aqui são todas CRIADAS dentro
+	// do tail, e para elas os três modos batem exatamente. Uma row que já
+	// existia em S e recebe update no tail com location à frente cai no
+	// resíduo documentado em replayRecord — LiveRecords superestimado, que é
+	// o lado seguro. Este teste NÃO cobre esse caso.
 	monta := func(t *testing.T, modo string) []checkpoint.SegmentInfo {
 		t.Helper()
 		dir := t.TempDir()
