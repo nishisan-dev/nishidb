@@ -877,6 +877,27 @@ depois e percebe que o argumento não fecha.
    do teto, remover o budget não quebra nada, porque uma AST de 200 níveis com folhas não indexáveis
    degrada de qualquer jeito.
 
+### Convenção: teste que detecta a própria erosão
+
+Um teste de propriedade prova algo **sobre uma premissa**. Quando a premissa deixa de valer, o teste
+costuma continuar VERDE — e passa a provar uma tautologia sem que ninguém perceba.
+
+O caso concreto: `TestPlanCandidatosSaoSuperset` verifica que os candidatos de um plano contêm todas
+as rows que satisfazem o WHERE. A premissa é que candidato ≠ resultado — que o índice devolve um
+SUPERSET. Se um dia a fonte passasse a devolver o conjunto EXATO, todas as asserções continuariam
+passando e o teste deixaria de proteger o que promete.
+
+Por isso ele carrega uma **contraprova**: uma row tombstoned que satisfaz o WHERE, que **precisa**
+aparecer entre os candidatos e **não** no resultado esperado. A contraprova falha exatamente no
+cenário em que o teste principal viraria tautologia.
+
+Regra do projeto: **todo teste de propriedade cujo valor depende de uma premissa deve conter uma
+asserção que falhe quando a premissa cair.** Vale para os supersets de índice, para os golden de
+formato (o golden calculado a partir do layout documentado, e não lido do arquivo produzido, é a
+mesma ideia: sem isso ele valida a implementação contra ela mesma) e para os gates de alocação
+(medir a igualdade entre dois tamanhos de entrada, e não um teto, é o que separa "0 alloc por row"
+de "cabe no teto").
+
 ### Profundidade da árvore: quem recursa e quem não pode (nota da Q13/Q14)
 
 A espinha de AND/OR **não** é limitada por `MaxExprDepth` — esse teto é de **parênteses**. Uma query
