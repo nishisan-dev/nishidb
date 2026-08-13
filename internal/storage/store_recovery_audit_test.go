@@ -219,8 +219,14 @@ func TestErrosFataisDeDatasetSaoClassificaveis(t *testing.T) {
 		if err := os.WriteFile(audManifestPath(dir), raw, 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := Open(opts); !errors.Is(err, ErrDatasetCorrupt) {
+		_, err = Open(opts)
+		if !errors.Is(err, ErrDatasetCorrupt) {
 			t.Fatalf("obtido %v", err)
+		}
+		// A causa original sobrevive ao embrulho: quem quiser distinguir
+		// "manifest ilegível" de "segmento sumido" consegue.
+		if !errors.Is(err, checkpoint.ErrCorruptManifest) {
+			t.Fatalf("a causa ErrCorruptManifest deveria ser preservada na cadeia: %v", err)
 		}
 	})
 
@@ -311,6 +317,49 @@ func TestReplayUsaOMesmoCodePathDoWritePath(t *testing.T) {
 		e, r := escrito[i], replayado[i]
 		if e.TotalRecords != r.TotalRecords || e.LiveRecords != r.LiveRecords || e.LiveBytes != r.LiveBytes {
 			t.Fatalf("tally do segmento %d divergiu entre escrita e replay:\n  escrito  = %+v\n  replayado= %+v", e.ID, e, r)
+		}
+	}
+}
+
+func TestCorrupcaoNoMeioDaCadeiaEhFatalENaoTrunca(t *testing.T) {
+	// Truncar é legítimo só no ÚLTIMO segmento. Um record corrompido no meio
+	// de um segmento que já foi selado por rotação não é tail rasgado: parar
+	// e truncar ali descartaria os segmentos seguintes INTEIROS, que estão
+	// íntegros. Tem que ser fatal, e o Open não pode tocar em nada.
+	dir := t.TempDir()
+	opts := Options{Dir: dir, SegmentSize: 400}
+	s := audOpen(t, opts)
+	for i := 0; i < 12; i++ {
+		k := fmt.Sprintf("mc-%d", i)
+		mustPut(t, s, k, int64(i), statusPayload(t, s, k, "Start", int64(i)), nil)
+	}
+	if got := s.Stats().CurrentSegmentID; got < 3 {
+		t.Fatalf("o cenário exige 3+ segmentos, obtido %d", got)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Corrompe o PRIMEIRO record do segmento 1, que já foi selado.
+	raw, err := os.ReadFile(audSegPath(dir, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw[segment.HeaderSize+40] ^= 0xFF
+	if err := os.WriteFile(audSegPath(dir, 1), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tamanhos := map[uint32]int64{}
+	for id := uint32(1); id <= 3; id++ {
+		tamanhos[id] = fileSizeAud(t, audSegPath(dir, id))
+	}
+
+	if _, err := Open(opts); !errors.Is(err, ErrDatasetCorrupt) {
+		t.Fatalf("corrupção antes do último segmento deveria ser fatal, obtido %v", err)
+	}
+	for id, want := range tamanhos {
+		if got := fileSizeAud(t, audSegPath(dir, id)); got != want {
+			t.Fatalf("o Open recusado não pode truncar nada: segmento %d %d → %d", id, want, got)
 		}
 	}
 }
