@@ -58,10 +58,23 @@ func semRecords(refs []segment.SegmentRef) bool {
 // Options configura a abertura de um Store.
 type Options struct {
 	Dir           string
-	SegmentSize   int64           // default 512 MiB; teto validado pelo segment
-	EstimatedRows uint64          // pre-sizing da primary (piso 1<<20 slots)
-	BitmapFields  []types.FieldID // campos com índice bitmap
-	SyncEveryPut  bool            // durability=sync (testes/config)
+	SegmentSize   int64  // default 512 MiB; teto validado pelo segment
+	EstimatedRows uint64 // pre-sizing da primary (piso 1<<20 slots)
+	// BitmapFields são os campos com índice bitmap, por ID.
+	BitmapFields []types.FieldID
+	// BitmapFieldNames são os mesmos campos por NOME, resolvidos pelo
+	// dicionário do próprio dataset durante o Open (criando a entry se
+	// necessário). Existe porque os FieldIDs nascem de schema.Compile, que
+	// precisa do dicionário — e o dicionário vive dentro do Store: exigir
+	// IDs aqui obrigaria a abrir o dataset sem índices, compilar, fechar e
+	// reabrir. Os dois campos se somam (união).
+	BitmapFieldNames []string
+	// AllowBitmapDrop autoriza abrir o dataset SEM um campo que o manifest
+	// declara como indexado. Fora disso é erro: o índice ficaria em disco
+	// parando de ser atualizado e, se o campo voltasse depois, reapareceria
+	// INCOMPLETO — falso negativo silencioso em query.
+	AllowBitmapDrop bool
+	SyncEveryPut    bool // durability=sync (testes/config)
 }
 
 // Stats é o snapshot mínimo de estado do Store.
@@ -207,22 +220,28 @@ func Open(opts Options) (*Store, error) {
 	if s.seqs, err = rowindex.OpenSequences(filepath.Join(idxDir, "sequences.idx"), minRows); err != nil {
 		return nil, err
 	}
-	for _, field := range opts.BitmapFields {
-		if field == 0 {
-			return nil, fmt.Errorf("%w: fieldID 0 em BitmapFields", ErrInvalidArgument)
+	m, mErr := checkpoint.Load(s.manifestPath())
+	refs, err := segment.ListSegments(dataDir)
+	if err != nil {
+		return nil, err
+	}
+
+	campos, err := s.resolveBitmapFields(opts)
+	if err != nil {
+		return nil, err
+	}
+	if m != nil {
+		if err := validaBitmapsContraManifest(m, campos, opts.AllowBitmapDrop); err != nil {
+			return nil, err
 		}
+	}
+	for _, field := range campos {
 		dir := filepath.Join(idxDir, "bitmap", fmt.Sprintf("%05d", field))
 		ix, err := bitmap.Open(dir, field)
 		if err != nil {
 			return nil, err
 		}
 		s.bitmaps[field] = ix
-	}
-
-	m, mErr := checkpoint.Load(s.manifestPath())
-	refs, err := segment.ListSegments(dataDir)
-	if err != nil {
-		return nil, err
 	}
 	switch {
 	case errors.Is(mErr, checkpoint.ErrNoManifest) && semRecords(refs):
@@ -267,6 +286,90 @@ func Open(opts Options) (*Store, error) {
 	}
 	ok = true
 	return s, nil
+}
+
+// resolveBitmapFields devolve a união, ordenada e sem duplicatas, dos
+// campos declarados por ID e por nome. Os nomes são resolvidos pelo
+// dicionário do dataset, criando a entry se ainda não existir (a regra
+// fsync-before-first-use vale, é o próprio LookupOrCreate que a aplica).
+func (s *Store) resolveBitmapFields(opts Options) ([]types.FieldID, error) {
+	set := make(map[types.FieldID]struct{}, len(opts.BitmapFields)+len(opts.BitmapFieldNames))
+	for _, field := range opts.BitmapFields {
+		if field == 0 {
+			return nil, fmt.Errorf("%w: fieldID 0 em BitmapFields", ErrInvalidArgument)
+		}
+		set[field] = struct{}{}
+	}
+	for _, nome := range opts.BitmapFieldNames {
+		if nome == "" {
+			return nil, fmt.Errorf("%w: nome vazio em BitmapFieldNames", ErrInvalidArgument)
+		}
+		id, err := s.dict.LookupOrCreate([]byte(nome))
+		if err != nil {
+			return nil, fmt.Errorf("storage: resolver o campo de bitmap %q: %w", nome, err)
+		}
+		set[id] = struct{}{}
+	}
+	out := make([]types.FieldID, 0, len(set))
+	for field := range set {
+		out = append(out, field)
+	}
+	slices.Sort(out)
+	return out, nil
+}
+
+// validaBitmapsContraManifest rejeita as duas divergências que produzem
+// índice incompleto sem sintoma. Query indexada é SUPERSET revalidado
+// (§44): falso positivo o executor filtra, falso negativo ninguém recupera.
+func validaBitmapsContraManifest(m *checkpoint.Manifest, campos []types.FieldID, permiteDrop bool) error {
+	declarado := make(map[types.FieldID]bool, len(campos))
+	for _, field := range campos {
+		declarado[field] = true
+	}
+	noManifest := make(map[types.FieldID]bool, len(m.Bitmaps))
+	for _, bi := range m.Bitmaps {
+		noManifest[bi.FieldID] = true
+	}
+
+	// (1) Índice que o dataset tem e que esta abertura não declara: ele
+	// pararia de receber sets/clears e reapareceria incompleto se o campo
+	// voltasse.
+	if !permiteDrop {
+		var abandonados []types.FieldID
+		for _, bi := range m.Bitmaps {
+			if !declarado[bi.FieldID] {
+				abandonados = append(abandonados, bi.FieldID)
+			}
+		}
+		if len(abandonados) > 0 {
+			return fmt.Errorf(
+				"%w: o manifest declara índice bitmap para o(s) campo(s) %v, ausente(s) desta abertura; "+
+					"abrir assim faria o índice parar de ser atualizado e reaparecer INCOMPLETO depois. "+
+					"Declare o(s) campo(s) em BitmapFields/BitmapFieldNames ou use AllowBitmapDrop",
+				ErrDatasetCorrupt, abandonados)
+		}
+	}
+
+	// (2) Índice declarado agora que o dataset não tem, com rows já
+	// gravadas: ele nasceria cobrindo só o que vier daqui pra frente, e as
+	// rows antigas ficariam invisíveis à query indexada. Reconstruir o
+	// índice (backfill) não existe no M1.
+	if m.RowCount > 0 {
+		var semBackfill []types.FieldID
+		for _, field := range campos {
+			if !noManifest[field] {
+				semBackfill = append(semBackfill, field)
+			}
+		}
+		if len(semBackfill) > 0 {
+			return fmt.Errorf(
+				"%w: campo(s) %v declarado(s) com índice bitmap num dataset que já tem %d rows; "+
+					"o índice cobriria apenas os records futuros e a query indexada omitiria as rows antigas. "+
+					"Reconstrução de índice não existe no M1 — crie o dataset já com o campo indexado",
+				ErrDatasetCorrupt, semBackfill, m.RowCount)
+		}
+	}
+	return nil
 }
 
 // fsyncDir durabiliza as entradas de um diretório.

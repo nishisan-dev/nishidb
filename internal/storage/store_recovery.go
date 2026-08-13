@@ -53,8 +53,18 @@ func (s *Store) recoverFrom(m *checkpoint.Manifest, refs []segment.SegmentRef, d
 	}
 	declaradoNoManifest := make(map[uint32]int64, len(m.Segments))
 	for _, si := range m.Segments {
-		if _, present := byID[si.ID]; !present {
+		ref, present := byID[si.ID]
+		if !present {
 			return fmt.Errorf("%w: segmento %d do manifest ausente em %s", ErrDatasetCorrupt, si.ID, dataDir)
+		}
+		// Segmentos só crescem: o manifest registra o tamanho no instante do
+		// checkpoint e o writer apenas appenda depois. Um arquivo MENOR que o
+		// registrado encolheu por fora (truncamento externo, falha de FS), e
+		// os records que faltam são irrecuperáveis — seguir daqui replayaria
+		// um prefixo mutilado como se fosse o dataset inteiro.
+		if ref.SizeBytes < si.SizeBytes {
+			return fmt.Errorf("%w: segmento %d encolheu de %d para %d bytes (truncamento externo, não falha do engine)",
+				ErrDatasetCorrupt, si.ID, si.SizeBytes, ref.SizeBytes)
 		}
 		declaradoNoManifest[si.ID] = si.SizeBytes
 	}
