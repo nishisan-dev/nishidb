@@ -327,6 +327,57 @@ func TestVersaoV1Recusada(t *testing.T) {
 	}
 }
 
+// Golden de BYTES do formato v2. Round-trip não basta para um formato
+// persistente: leitor e escritor mutados da mesma maneira concordam entre si,
+// a suíte fica verde, e o arquivo produzido — com o MESMO byte de version —
+// é truncado pelo leitor canônico, apagando o dicionário de um dataset cujos
+// fieldIDs já estão em records duráveis.
+//
+// Os CRCs abaixo foram calculados a partir do layout DOCUMENTADO, não do que
+// o código produz. Se este teste falhar, ou o formato mudou de propósito (e
+// então a version tem de mudar junto) ou uma mutação o corrompeu.
+//
+// Decodificação byte a byte do esperado:
+//
+//	4e 44 42 44   magic "NDBD"
+//	02            version 2
+//	00 00 00      reservado
+//	01 00         nameLen = 1
+//	00            typeHint da entry = 0 (não declarado ao nascer)
+//	58            nome "X"
+//	63 63 de 4e   crc32c sobre nameLen+typeHint+nome (01 00 00 58)
+//	00 00         discriminador de registro de hint (nameLen impossível)
+//	01 00         fieldID 1
+//	01            tipo fixado = int64
+//	48 67 58 12   crc32c sobre os 5 bytes anteriores
+func TestGoldenBytesV2(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fields.dict")
+	d, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := mustCreate(t, d, "X")
+	if err := d.SetTypeHint(id, types.TypeInt64); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []byte{
+		0x4e, 0x44, 0x42, 0x44, 0x02, 0x00, 0x00, 0x00,
+		0x01, 0x00, 0x00, 0x58, 0x63, 0x63, 0xde, 0x4e,
+		0x00, 0x00, 0x01, 0x00, 0x01, 0x48, 0x67, 0x58, 0x12,
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("bytes do fields.dict v2:\n got % x\nwant % x", got, want)
+	}
+}
+
 // O hint não pode confundir o cálculo de tamanho usado pelo manifest.
 func TestSizeBytesContabilizaHint(t *testing.T) {
 	d, _ := openDict(t)
