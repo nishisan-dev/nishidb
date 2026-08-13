@@ -8,7 +8,7 @@ tem **milestone dono**; nenhum depende de trabalho não planejado.
 
 | Item | O que era | Onde fechou |
 |---|---|---|
-| Storage §14.21 | `Close()` sem quiesce: fechar com operação em voo produzia **panic** e devolvia o lock com escrita em voo | I2 — `RWMutex` de vida + iterador reentrante + `Region.Close` zerando o tamanho |
+| Storage §14.21 | `Close()` sem quiesce: fechar com operação em voo produzia **panic** e devolvia o lock com escrita em voo | I2 — `RWMutex` de vida + iterador reentrante + `Region.Close` zerando o tamanho. **A I2 fechou 3 das 4 rotas**: o iterador de bitmap continuou cru e continuou entrando em panic até o fecho do M1, onde virou `bitmapIterator` reentrante. A lição está registrada abaixo |
 | R11 (materializer) | Campo `auto` perdia o tipo no restart e sumia do `Compiled` | QP + fix round — `typeHint` durável no `fields.dict` v2 e rota read-only no `Compile` |
 | Formato do `fields.dict` | v2 não travado: mutação de layout produzia arquivo que o leitor canônico truncava | QP fix round — golden de bytes calculado do layout documentado |
 | Política de três baldes | Falha de I/O do dicionário contabilizada como "evento ruim"; pipeline pulava em silêncio | QP fix round — só o conflito de tipo é evento ruim |

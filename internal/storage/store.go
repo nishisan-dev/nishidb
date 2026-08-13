@@ -1013,6 +1013,43 @@ func (it *liveIterator) RowID() types.RowID { return it.cur }
 func (it *liveIterator) Err() error         { return it.err }
 func (it *liveIterator) Close() error       { return nil }
 
+// bitmapIterator embrulha o iterador do índice bitmap pelo MESMO motivo do
+// liveIterator: ele sobrevive à chamada que o criou e lê o mmap a cada avanço,
+// então precisa reentrar no Store a cada Next — devolver o iterador cru deixava
+// o Close desmapear a região sob os pés da varredura, e o bounds check da
+// região (que passa a comparar contra size=0) virava panic.
+//
+// Só o Next reentra. RowID lê um campo já materializado, e o Close do iterador
+// de bitmap não toca a região.
+type bitmapIterator struct {
+	s   *Store
+	it  *bitmap.Iterator
+	err error
+}
+
+func (it *bitmapIterator) Next() bool {
+	if it.err != nil {
+		return false
+	}
+	if err := it.s.entra(); err != nil {
+		it.err = err
+		return false
+	}
+	defer it.s.sai()
+	return it.it.Next()
+}
+
+func (it *bitmapIterator) RowID() types.RowID { return it.it.RowID() }
+
+func (it *bitmapIterator) Err() error {
+	if it.err != nil {
+		return it.err
+	}
+	return it.it.Err()
+}
+
+func (it *bitmapIterator) Close() error { return it.it.Close() }
+
 // emptyIterator é um types.RowIDIterator sem elementos.
 type emptyIterator struct{}
 
@@ -1036,6 +1073,9 @@ func (s *Store) ScanLive() types.RowIDIterator {
 // iterador vazio; campo não indexado é erro. O resultado é um SUPERSET de
 // candidatos: rows tombstoned/sem location podem aparecer — valide liveness
 // e predicate via GetByRowID (spec §44).
+//
+// O iterador devolvido é reentrante: um Close do dataset no meio da varredura
+// a interrompe com ErrDatasetClosed em Err(), sem panic.
 func (s *Store) LookupBitmap(field types.FieldID, v types.Value) (types.RowIDIterator, error) {
 	if err := s.entra(); err != nil {
 		return nil, err
@@ -1052,7 +1092,7 @@ func (s *Store) LookupBitmap(field types.FieldID, v types.Value) (types.RowIDIte
 	if !found {
 		return emptyIterator{}, nil
 	}
-	return it, nil
+	return &bitmapIterator{s: s, it: it}, nil
 }
 
 // Sequence devolve a última sequence aplicada à row (ok=false para row sem
