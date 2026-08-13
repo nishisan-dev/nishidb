@@ -1,7 +1,7 @@
 # Arquitetura do NishiDB — estado do M1
 
 Escrito para quem chega agora. Os números são medidos, não estimados, e vêm da
-rodada de aceite de 2026-08-14 (`benchmark/baselines/aceite-8m-20260814.md`).
+rodada de aceite de 2026-08-15 (`benchmark/baselines/aceite-8m-20260815.md`).
 
 ## O problema
 
@@ -54,8 +54,8 @@ persistido.** Sem isso o mesmo campo teria significados diferentes conforme a
 ordem de chegada, e nenhuma query sobre ele seria confiável. O tipo vive num
 registro append-only do `fields.dict` e sobrevive ao restart.
 
-Custo medido: **0,0086 alocações por evento** e **45.243 eventos/s** na fase de
-carga.
+Custo medido: **0,0086 alocações por evento** e **132.931 eventos/s** na fase de
+carga (146.216 ev/s descontando o tempo de checkpoint).
 
 ## Storage
 
@@ -66,8 +66,14 @@ divisão que resolve a tensão do orçamento: os índices crescem com o dataset,
 mas como página de **arquivo** — o kernel as descarta sob pressão, e elas não
 são memória que o processo possui.
 
-Na rodada de 8M: **386 MiB de RSS de arquivo** contra **71 MiB de RSS anônimo**,
-com 6,09 GiB em disco. O heap Go fica em **994 KiB**.
+Na rodada de 8M: **386 MiB de RSS de arquivo** contra **70 MiB de RSS anônimo**,
+com 2,31 GiB em disco (6,09 GiB na rodada de eventos completos — o corpus de
+referência cria a maioria das rows por patch parcial, e elas nascem menores).
+
+O heap Go da ingestão fica em **396 KiB com 8 milhões de rows**, contra **389
+KiB com 1 milhão**: 8× de dados, 1,9% de heap a mais. Esta é a medida mais
+limpa do desacoplamento — a razão do gate §110 (1,02×) é medida no regime com
+os 8 leitores, e inclui os buffers deles.
 
 Índices:
 
@@ -81,9 +87,24 @@ com 6,09 GiB em disco. O heap Go fica em **994 KiB**.
   valor de tipo promovido: um `double` jamais casaria postings gravados como
   `int64`, e o resultado seria vazio em silêncio.
 
-**Um writer, muitos leitores.** O writer é serializado por mutex; as leituras
-são concorrentes. O `Close` faz **quiesce** — espera as operações em voo e só
-então libera o lock do dataset.
+**Um writer, muitos leitores — DENTRO do processo.** O writer é serializado por
+mutex; as leituras são concorrentes com ele. O `Close` faz **quiesce**: espera
+as operações em voo e só então libera o lock do dataset, e todo iterador
+devolvido reentra no Store a cada avanço, para que fechar no meio de uma
+varredura vire erro e não panic.
+
+**Entre processos o acesso é EXCLUSIVO.** Um `flock(LOCK_EX|LOCK_NB)` no
+diretório do dataset garante um processo por vez: com um `ingest` em voo, um
+`query` concorrente sai com exit 3 e a mensagem nomeia o pid que segura o lock.
+Como o M1 entrega dois comandos separados, a concorrência descrita acima **só é
+alcançável in-process** (é assim que o harness de benchmark mede) — o acesso
+concorrente de clientes distintos chega com o servidor do M3.
+
+> **Restrição de deployment.** O `flock` é por inode e **não garante exclusão
+> mútua em NFS** (sem `local_lock=flock|all`), nem em alguns FUSE, CIFS e
+> overlayfs. Dois writers no mesmo dataset significam dois overlays de location,
+> dois contadores de rowId e dois checkpoints — corrupção garantida. **Mantenha
+> o diretório do dataset em disco local.**
 
 ## Recovery
 
@@ -124,14 +145,14 @@ Latências medidas com 8M rows e ingestão concorrente:
 
 | Rota | p95 (SQL completo) | p95 (Store direto) | Teto da spec |
 |---|---:|---:|---:|
-| point lookup | **16 µs** | 6 µs | 10 ms (§89) |
-| bitmap + LIMIT 100 | **568 µs** | 367 µs | 50 ms (§90) |
-| interseção + LIMIT 100 | 571 µs | — | 50 ms |
-| união + LIMIT 100 | 573 µs | — | 50 ms |
-| full scan + LIMIT 100 | 728 µs | — | — |
-| varredura completa (8M) | 21,8 s | — | — |
+| point lookup | **18 µs** | 6 µs | 10 ms (§89) |
+| bitmap + LIMIT 100 | **522 µs** | 434 µs | 50 ms (§90) |
+| interseção + LIMIT 100 | 753 µs | — | 50 ms |
+| união + LIMIT 100 | 533 µs | — | 50 ms |
+| full scan + LIMIT 100 | 4,3 ms | — | — |
+| varredura completa (8M) | 17,0 s | — | — |
 
-A diferença entre as duas colunas — cerca de 10 µs no point lookup — é o custo
+A diferença entre as duas colunas — cerca de 12 µs no point lookup — é o custo
 de parse, bind, plan e serialização NDJSON.
 
 ## Formato de saída
@@ -145,6 +166,72 @@ evento, então um documento pretty-printed chega com quebra de linha dentro (é
 sanitizada byte a byte); e uma string materializada **contém** control char cru,
 porque o tokenizer decodifica `\n` ao gravar (é escapada). Sem os dois, uma
 linha vira duas e o cliente dessincroniza.
+
+## Operar isto: o que morde primeiro
+
+Decisões conscientes que **não** são bug, mas que surpreendem quem opera sem
+conhecê-las. Cada uma tem dono em [`debitos.md`](debitos.md).
+
+- **Um processo por dataset.** Ver a restrição de `flock` acima. Rotina de
+  monitoração que consulte durante a carga falha com exit 3 até o M3.
+- **Corrupção é detectada na LEITURA, não na abertura.** Nenhum CRC é
+  verificado antes do `DurableOffset` no `Open`: um byte adulterado numa região
+  já selada aparece no meio de uma query, que aborta com exit 3 **depois** de
+  ter emitido as linhas anteriores. Quem consome a saída precisa tratar exit ≠ 0
+  como "resultado incompleto", mesmo tendo recebido linhas válidas.
+- **Perda de evento sai com exit 7, não com 0.** Evento ruim é descartado
+  (política §101) e a ingestão termina com 0; evento que não entrou por falha
+  de infraestrutura sai com 7. Um pipeline com retry deve ligar a política ao
+  exit code, não ao texto do resumo.
+- **Campo indexado tem teto de 64 KiB** (`types.MaxIndexedValueBytes`, limite do
+  `u16` do dicionário de valores). Valor acima disso faz o evento inteiro
+  falhar. E há uma segunda porta: declarar `index: bitmap` num campo que **já
+  acumulou** valores maiores torna o dataset inabrível até reabrir sem o campo.
+- **Duas pausas visíveis, aceitas no M1:** o rehash da primary **pausa a
+  ingestão** enquanto redistribui os slots, e o `msync` do checkpoint **pausa o
+  writer**. Com `checkpoint.interval: 30s`, isso aparece como serrilha
+  periódica no gráfico de vazão.
+- **Phantom commit:** um `Put` que devolveu **erro** ao chamador pode virar
+  **visível** depois do restart, se o record já tinha sido gravado no segmento
+  quando a falha ocorreu. É decisão consciente (o replay do tail não distingue
+  os dois casos) e está testada; quem trata erro de escrita como "nada foi
+  gravado" vai divergir do dataset no próximo restart.
+- **`mode: replace` existe.** Além do `merge` (default), a materialização aceita
+  `mode: replace`, em que cada evento substitui o estado inteiro da chave e as
+  postings antigas são limpas.
+
+## Referência de tipos de campo
+
+O que `type:` aceita no YAML do dataset, o que cada um aceita como **entrada** e
+onde pode ser usado. Sem esta tabela, escrever um YAML novo é tentativa e erro.
+
+| `type:` | Entrada aceita no evento | `index: bitmap` | `index: hash` |
+|---|---|:---:|:---:|
+| `string` | string JSON | sim | sim |
+| `int64` | número inteiro ou `{"$numberLong":"<dígitos>"}` | sim | sim |
+| `double` | número | não | não |
+| `boolean` | `true`/`false` | sim | não |
+| `timestamp` | **RFC3339(Nano)** ou **número = epoch millis**; `{"$date":"<rfc3339>"}` e `{"$date":{"$numberLong":"<ms>"}}` | não | não |
+| `ipv4` | string `a.b.c.d` | não | sim |
+| `ipv6` | string RFC 4291 (inclusive forma comprimida) | não | sim |
+| `ipv4_prefix` | string `a.b.c.d/len` | não | não |
+| `ipv6_prefix` | string `addr/len` | não | não |
+| `bytes` | string **base64** (padrão, com padding) | não | não |
+| `json` | qualquer valor JSON (guardado cru) | não | não |
+| `auto` | qualquer um dos acima; o tipo é **fixado na primeira observação** e persistido | não | não |
+
+Restrições da v1: a **key** (`materialization.key.type`) só pode ser `string`, e
+a **sequence** (`materialization.sequence.type`) só pode ser `int64`. Campo
+`auto` não é indexável — o tipo só existe depois do primeiro evento. Alias é
+opcional e precisa casar `[a-z0-9_]+`.
+
+## Observabilidade
+
+**Não existe ainda.** Sem métricas Prometheus, sem `/metrics`, sem
+`/v1/health`, sem `pprof` e sem log estruturado — o diagnóstico disponível é a
+linha de resumo do `ingest` e o exit code. As §92-95 da spec têm dono
+registrado em [`debitos.md`](debitos.md), com o **log estruturado (§95) puxado
+para o M2** por ser barato e independente do servidor HTTP.
 
 ## O que ainda não existe
 
