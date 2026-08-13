@@ -85,6 +85,27 @@ func TestErrWriterFailedDistingueWriterMortoDeEventoRuim(t *testing.T) {
 	}
 }
 
+func TestSentinelasSaoOsMesmosValoresDeTypes(t *testing.T) {
+	// Os sentinelas moram em internal/types para que o materializer e o
+	// dublê de teste dele possam classificar e DEVOLVER esses erros sem
+	// importar a implementação que dublam. Os símbolos daqui são
+	// reexportações: se alguém os redeclarar com errors.New, a identidade
+	// quebra e o consumidor para de reconhecer o erro — sem falhar o build.
+	if ErrInvalidArgument != types.ErrInvalidArgument {
+		t.Fatal("ErrInvalidArgument precisa ser o MESMO valor de types.ErrInvalidArgument")
+	}
+	if ErrWriterFailed != types.ErrWriterFailed {
+		t.Fatal("ErrWriterFailed precisa ser o MESMO valor de types.ErrWriterFailed")
+	}
+
+	// E a classificação funciona pelos dois caminhos, sobre erro real.
+	s := openStore(t, Options{})
+	_, _, err := s.Put(nil, 1, 0, statusPayload(t, s, "sent", "Start", 1), nil)
+	if !errors.Is(err, ErrInvalidArgument) || !errors.Is(err, types.ErrInvalidArgument) {
+		t.Fatalf("errors.Is deveria casar pelos dois pacotes: %v", err)
+	}
+}
+
 func TestHasBitmapEhCapabilityCheck(t *testing.T) {
 	// G1: sem isto o planner escolhe caminho indexado e a query falha em
 	// runtime em vez de degradar para full scan.

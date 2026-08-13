@@ -23,8 +23,14 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// ErrInvalidArgument indica violação dos argumentos de Put (ex.: key vazia).
-var ErrInvalidArgument = errors.New("storage: argumento inválido")
+// ErrInvalidArgument e ErrWriterFailed são os MESMOS valores declarados em
+// internal/types, reexportados para a API deste pacote: errors.Is casa pelos
+// dois caminhos, e o materializer (mais o dublê de teste dele) os classifica
+// sem importar esta implementação.
+var (
+	ErrInvalidArgument = types.ErrInvalidArgument
+	ErrWriterFailed    = types.ErrWriterFailed
+)
 
 // ErrDatasetCorrupt indica dataset que a recovery não consegue recuperar
 // sozinha: manifest ausente com records, manifest ilegível, segmento do
@@ -33,15 +39,6 @@ var ErrInvalidArgument = errors.New("storage: argumento inválido")
 // de adivinhar, porque toda alternativa (truncar, pular, recriar) descarta
 // dados duráveis em silêncio.
 var ErrDatasetCorrupt = errors.New("storage: dataset corrompido")
-
-// ErrWriterFailed indica writer em modo falho (sticky) — o dataset precisa
-// ser reaberto para voltar a aceitar escrita.
-//
-// É o que permite ao consumidor distinguir "evento ruim, pule" de "writer
-// morreu, pare a ingestão": sem esse sentinela, a política de log-and-skip
-// por evento (§101) transformaria um writer morto num skip infinito, e a
-// ingestão seguiria descartando tudo em silêncio.
-var ErrWriterFailed = errors.New("storage: writer em modo falho (reabra o dataset)")
 
 // semRecords informa se nenhum segmento do diretório tem record algum (só
 // header): é o que distingue um dataset recém-criado de um dataset com

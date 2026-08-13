@@ -1,9 +1,33 @@
 // Package types define os tipos de dados compartilhados entre os subsistemas
 // de storage, materializer e query do NishiDB.
 //
-// O pacote é deliberadamente leve e sem dependências: apenas dados, nenhuma
-// interface de comportamento (interfaces são declaradas nos consumidores).
+// O pacote é deliberadamente leve e depende apenas da stdlib: dados e os
+// sentinelas de erro que os consumidores precisam classificar. Interfaces de
+// comportamento continuam declaradas nos consumidores.
 package types
+
+import "errors"
+
+// Sentinelas que os consumidores do storage precisam classificar.
+//
+// Moram aqui, e não no pacote que os produz, porque quem os interpreta é o
+// materializer — e o dublê de teste dele precisa DEVOLVÊ-LOS. Com os
+// sentinelas dentro de internal/storage, tanto o materializer quanto o seu
+// fake passariam a importar a implementação que dublam, que é justamente o
+// acoplamento evitado ao declarar as interfaces no consumidor.
+var (
+	// ErrInvalidArgument indica violação dos argumentos de uma operação
+	// (key vazia, payload malformado, campo desconhecido). O evento é ruim;
+	// o writer segue utilizável.
+	ErrInvalidArgument = errors.New("storage: argumento inválido")
+
+	// ErrWriterFailed indica writer em modo falho (sticky): o dataset
+	// precisa ser reaberto para voltar a aceitar escrita. É o que separa
+	// "pule este evento" de "pare a ingestão" — sem essa distinção, a
+	// política de log-and-skip por evento vira um skip infinito e a
+	// ingestão descarta tudo em silêncio.
+	ErrWriterFailed = errors.New("storage: writer em modo falho (reabra o dataset)")
+)
 
 // FieldType identifica o tipo lógico de um campo (spec §17-18) e é também a
 // tag de tipo no wire format do payload (spec §33).
