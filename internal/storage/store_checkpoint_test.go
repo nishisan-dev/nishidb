@@ -28,7 +28,7 @@ func TestCheckpointEscreveManifestCoerente(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load do manifest: %v", err)
 	}
-	if m.Epoch != 1 {
+	if m.Epoch != 2 { // 1 = manifest da criação; 2 = este checkpoint
 		t.Fatalf("Epoch: %d", m.Epoch)
 	}
 	if m.NextRowID != n || m.RowCount != n {
@@ -106,7 +106,7 @@ func TestCheckpointIncrementaEpochEAceitaNovosPuts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.Epoch != 2 || m.RowCount != 2 {
+	if m.Epoch != 3 || m.RowCount != 2 { // 1 da criação + 2 explícitos
 		t.Fatalf("%+v", *m)
 	}
 }

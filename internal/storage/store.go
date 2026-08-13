@@ -14,6 +14,7 @@ import (
 
 	"github.com/nishisan-dev/nishidb/internal/index/bitmap"
 	"github.com/nishisan-dev/nishidb/internal/index/primary"
+	"github.com/nishisan-dev/nishidb/internal/storage/checkpoint"
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 	"github.com/nishisan-dev/nishidb/internal/storage/fielddict"
 	"github.com/nishisan-dev/nishidb/internal/storage/rowindex"
@@ -23,6 +24,26 @@ import (
 
 // ErrInvalidArgument indica violação dos argumentos de Put (ex.: key vazia).
 var ErrInvalidArgument = errors.New("storage: argumento inválido")
+
+// ErrDatasetCorrupt indica dataset que a recovery não consegue recuperar
+// sozinha: manifest ausente com records, manifest ilegível, segmento do
+// manifest sumido, buraco na cadeia de segmentos ou ponto S incoerente com
+// os arquivos. O rebuild total é fase futura — até lá o Open recusa em vez
+// de adivinhar, porque toda alternativa (truncar, pular, recriar) descarta
+// dados duráveis em silêncio.
+var ErrDatasetCorrupt = errors.New("storage: dataset corrompido")
+
+// semRecords informa se nenhum segmento do diretório tem record algum (só
+// header): é o que distingue um dataset recém-criado de um dataset com
+// dados cujo manifest se perdeu.
+func semRecords(refs []segment.SegmentRef) bool {
+	for _, ref := range refs {
+		if ref.SizeBytes > segment.HeaderSize {
+			return false
+		}
+	}
+	return true
+}
 
 // Options configura a abertura de um Store.
 type Options struct {
@@ -109,9 +130,21 @@ type Store struct {
 	valBuf   []byte // validação de colisão no Insert
 }
 
-// Open abre (ou cria) o dataset no diretório. Nesta fase (pré-S12) o
-// diretório de dados precisa estar sem segmentos: dataset existente exige
-// recovery, que chega na S12.
+// Open abre o dataset com recovery completo (design §10.3):
+//
+//   - dataset novo (sem manifest, sem segmentos): cria a estrutura e grava
+//     o manifest inicial — a partir da criação, "manifest ausente COM
+//     dados" indica genuinamente corrupção/adulteração, não uma janela
+//     normal de crash;
+//   - manifest ausente COM segmentos, ou manifest corrompido: erro fatal
+//     claro (rebuild total é fase futura);
+//   - manifest válido: recovery — seeds (§14.15), adoção de segmentos
+//     pós-checkpoint (inclusive órfão de rotação), tail scan com replay e
+//     truncamento do lixo, writer posicionado no fim válido.
+//
+// Em ambos os fluxos o Open termina com um checkpoint imediato (estado
+// limpo; epoch nunca regride) e o modo falho (sticky) zerado — reabrir é o
+// remédio da taxonomia §14.14.
 func Open(opts Options) (*Store, error) {
 	if opts.Dir == "" {
 		return nil, fmt.Errorf("%w: Dir vazio", ErrInvalidArgument)
@@ -137,12 +170,6 @@ func Open(opts Options) (*Store, error) {
 			return nil, err
 		}
 	}
-	if entries, err := os.ReadDir(dataDir); err != nil {
-		return nil, err
-	} else if len(entries) > 0 {
-		return nil, fmt.Errorf("storage: %s contém segmentos; dataset existente exige recovery (S12)", dataDir)
-	}
-
 	s := &Store{
 		opts:     opts,
 		bitmaps:  make(map[types.FieldID]*bitmap.Index),
@@ -159,13 +186,9 @@ func Open(opts Options) (*Store, error) {
 	if s.dict, err = fielddict.Open(filepath.Join(metaDir, "fields.dict")); err != nil {
 		return nil, err
 	}
-	if s.segW, err = segment.OpenWriter(dataDir, opts.SegmentSize, 0, 0); err != nil {
-		return nil, fmt.Errorf("storage: abrir segmentos (SegmentSize=%d): %w", opts.SegmentSize, err)
-	}
 	if s.segR, err = segment.OpenReader(dataDir); err != nil {
 		return nil, err
 	}
-	s.curSegID.Store(1) // dataset novo sempre começa no segmento 1
 	// Piso de 1<<20 slots do design §5 aplica-se aqui, não no pacote primary.
 	// Teto de sanidade evita wraparound do *10/7 com config absurda.
 	if opts.EstimatedRows > 1<<40 {
@@ -192,6 +215,47 @@ func Open(opts Options) (*Store, error) {
 			return nil, err
 		}
 		s.bitmaps[field] = ix
+	}
+
+	m, mErr := checkpoint.Load(s.manifestPath())
+	refs, err := segment.ListSegments(dataDir)
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case errors.Is(mErr, checkpoint.ErrNoManifest) && semRecords(refs):
+		// Dataset novo. Entram aqui tanto o diretório virgem quanto o
+		// dataset que crashou DENTRO do primeiro Open: o segmento 1 nasce
+		// antes do manifest inicial, então "segmento sem record e sem
+		// manifest" é uma janela normal de crash — condená-la faria um
+		// dataset que nunca teve um único record nascer inacessível.
+		// Um segmento vazio já criado é ADOTADO (não recriado): o openNew usa
+		// O_EXCL e falharia contra o arquivo existente.
+		var segID uint32
+		var off int64
+		if len(refs) > 0 {
+			segID, off = refs[len(refs)-1].ID, int64(segment.HeaderSize)
+		}
+		if s.segW, err = segment.OpenWriter(dataDir, opts.SegmentSize, segID, off); err != nil {
+			return nil, fmt.Errorf("storage: abrir segmentos (SegmentSize=%d): %w", opts.SegmentSize, err)
+		}
+		cur, _ := s.segW.Current()
+		s.curSegID.Store(cur)
+	case errors.Is(mErr, checkpoint.ErrNoManifest):
+		return nil, fmt.Errorf(
+			"%w: %s contém records mas o manifest está ausente (o manifest existe desde a criação do dataset; rebuild total é fase futura)",
+			ErrDatasetCorrupt, dataDir)
+	case mErr != nil:
+		return nil, fmt.Errorf("%w: manifest ilegível: %w", ErrDatasetCorrupt, mErr)
+	default:
+		if err := s.recoverFrom(m, refs, dataDir); err != nil {
+			return nil, err
+		}
+	}
+	// Checkpoint imediato: manifest desde a criação e estado limpo pós-
+	// recovery (novo S = tail; epoch nunca regride).
+	if err := s.Checkpoint(); err != nil {
+		return nil, err
 	}
 	ok = true
 	return s, nil
@@ -361,7 +425,8 @@ func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *ty
 		flags:       flags,
 		payload:     payload,
 		prevPayload: prevPayload,
-		created:     created,
+		hadPrevious: !created,
+		countsAsNew: created,
 		seg:         seg,
 		off:         off,
 		recLen:      len(rec),
@@ -397,7 +462,15 @@ type recordApply struct {
 	flags       uint8
 	payload     []byte
 	prevPayload []byte // estado anterior desta row (nil quando não havia)
-	created     bool   // row nova: conta em rowCount e exige Insert na primary
+	// hadPrevious: havia location para esta row — governa o decremento de
+	// liveness do segmento do record anterior.
+	hadPrevious bool
+	// countsAsNew: esta row conta como CRIADA em rowCount. No write path é
+	// "key ausente da primary"; no replay é "rowId nascido depois do ponto S"
+	// — os dois não coincidem, porque um checkpoint interrompido pode ter
+	// deixado a location de uma row nova no mmap sem que o manifest a
+	// contabilizasse.
+	countsAsNew bool
 	seg         uint32
 	off         uint32
 	recLen      int
@@ -424,7 +497,7 @@ func (s *Store) applyRecord(a recordApply) error {
 	// decrementa a liveness do segmento antigo (lida ANTES do publish
 	// sobrescrever a location). Segmentos pré-restart têm o tally semeado
 	// do manifest pela recovery.
-	if !a.created {
+	if a.hadPrevious {
 		if oldPacked, had := s.locs.Get(a.rowID); had {
 			oldSeg, _, _ := rowindex.Unpack(oldPacked)
 			if t := s.segTally[oldSeg]; t != nil {
@@ -445,7 +518,7 @@ func (s *Store) applyRecord(a recordApply) error {
 	// (o lookup já resolveu as demais); no replay roda SEMPRE, porque um
 	// checkpoint interrompido pode ter deixado a primary atrás das
 	// locations — e o Insert é idempotente.
-	if a.created || a.mode == applyReplay {
+	if a.countsAsNew || a.mode == applyReplay {
 		validate := s.insertValidator(a.key)
 		if a.mode == applyReplay {
 			validate = s.replayValidator(a.key, a.rowID)
@@ -488,7 +561,7 @@ func (s *Store) applyRecord(a recordApply) error {
 	} else {
 		s.locs.Publish(a.rowID, packed)
 	}
-	if a.created {
+	if a.countsAsNew {
 		s.rowCount.Add(1)
 	}
 	// 8. fase de CLEAR dos bitmaps DEPOIS do commit: erro aqui deixa só
