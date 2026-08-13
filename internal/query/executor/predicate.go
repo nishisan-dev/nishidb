@@ -53,9 +53,6 @@ type programa struct {
 	prog []instr
 }
 
-// vazio reporta predicado ausente (query sem WHERE) — que é sempre verdadeiro.
-func (p *programa) vazio() bool { return len(p.prog) == 0 }
-
 // eval roda o programa. Sem alocação, sem chamada recursiva, sem pilha.
 func (p *programa) eval(slots []slot, cnt *contadores) bool {
 	acc := true

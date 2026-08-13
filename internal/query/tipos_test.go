@@ -129,6 +129,43 @@ func TestIngestaoEQueryConcordamPorTipo(t *testing.T) {
 	}
 }
 
+// Os três modos numéricos de comparação (CompareInt, CompareFloatBits e
+// CompareIntAsFloat) percorridos por TODOS os operadores. O modo errado não
+// dá erro: dá resultado errado em silêncio, porque o payload de int64 guarda o
+// inteiro cru e o de double guarda Float64bits — comparar um pelo outro
+// devolve lixo ordenado.
+func TestOperadoresNosTresModosNumericos(t *testing.T) {
+	h := novoTiposHarness(t)
+	h.ingere(`{"id":"K1","_SEQ":1,"inteiro":100,"real":10.5}`)
+
+	casos := []struct {
+		where string
+		acha  bool
+	}{
+		// double × literal float
+		{`real = 10.5`, true}, {`real != 10.5`, false},
+		{`real > 10.4`, true}, {`real > 10.6`, false},
+		{`real >= 10.5`, true}, {`real < 10.6`, true},
+		{`real <= 10.5`, true}, {`real < 10.4`, false},
+		// double × literal inteiro (o literal também vira Float64bits)
+		{`real > 10`, true}, {`real < 11`, true}, {`real = 10`, false},
+		// int64 × literal float (CompareIntAsFloat: esquerda crua, direita bits)
+		{`inteiro > 99.9`, true}, {`inteiro < 100.1`, true},
+		{`inteiro = 100.0`, true}, {`inteiro != 100.0`, false},
+		{`inteiro >= 100.0`, true}, {`inteiro <= 99.9`, false},
+		// int64 × literal inteiro
+		{`inteiro = 100`, true}, {`inteiro > 100`, false}, {`inteiro <= 100`, true},
+	}
+	for _, tc := range casos {
+		t.Run(tc.where, func(t *testing.T) {
+			got := h.achaIDs(`SELECT id FROM todos_os_tipos WHERE ` + tc.where)
+			if achou := len(got) == 1; achou != tc.acha {
+				t.Errorf("achou = %v, want %v (resultado: %v)", achou, tc.acha, got)
+			}
+		})
+	}
+}
+
 // bytes e json não comparam (o binder recusa com E4): a concordância dos dois
 // lados é provada pela PROJEÇÃO — o valor projetado é byte a byte o ingerido.
 func TestIngestaoEQueryConcordamNosTiposOpacos(t *testing.T) {
