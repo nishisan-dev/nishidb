@@ -315,6 +315,106 @@ func TestReplayUsaOMesmoCodePathDoWritePath(t *testing.T) {
 	}
 }
 
+func TestRotacaoSeguinteAposAdotarOrfao(t *testing.T) {
+	// O registro M11 é sobre a rotação FUTURA: com o órfão abandonado no
+	// diretório, o openNew(O_EXCL) da próxima rotação falharia com EEXIST.
+	// Adotar o órfão como corrente resolve — este teste chega até a rotação
+	// seguinte para provar que a cadeia continua.
+	dir := t.TempDir()
+	opts := Options{Dir: dir, SegmentSize: 400}
+	s := audOpen(t, opts)
+	mustPut(t, s, "rot-0", 0, statusPayload(t, s, "rot-0", "Start", 0), nil)
+	if err := s.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Forja o órfão de uma rotação interrompida: header do 1 com ID trocado.
+	raw, err := os.ReadFile(audSegPath(dir, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hdr := append([]byte(nil), raw[:segment.HeaderSize]...)
+	hdr[8] = 2
+	if err := os.WriteFile(audSegPath(dir, 2), hdr, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s2 := audOpen(t, opts)
+	defer s2.Close()
+	if got := s2.Stats().CurrentSegmentID; got != 2 {
+		t.Fatalf("órfão deveria ter sido adotado como corrente, obtido %d", got)
+	}
+	// Escreve até rotacionar de novo: é aqui que o EEXIST apareceria.
+	for i := 1; i <= 10; i++ {
+		k := fmt.Sprintf("rot-%d", i)
+		mustPut(t, s2, k, int64(i), statusPayload(t, s2, k, "Start", int64(i)), nil)
+	}
+	if got := s2.Stats().CurrentSegmentID; got < 3 {
+		t.Fatalf("a rotação após a adoção deveria avançar além do 2, obtido %d", got)
+	}
+	for i := 0; i <= 10; i++ {
+		k := fmt.Sprintf("rot-%d", i)
+		if _, _, ok, err := s2.GetByKey([]byte(k), nil); !ok || err != nil {
+			t.Fatalf("GetByKey(%q) após a rotação: (ok=%v, err=%v)", k, ok, err)
+		}
+	}
+}
+
+func TestPhantomCommitEmUpdateMaterializaEstadoNovo(t *testing.T) {
+	// §14.12 no caso de UPDATE: o record órfão carrega o estado novo de uma
+	// row que já existia. O replay tem que promover esse estado E reexecutar
+	// a transição de bitmap que o Put falho deixou pela metade.
+	dir := t.TempDir()
+	opts := Options{Dir: dir, BitmapFields: []types.FieldID{fldStatus}}
+	s := audOpen(t, opts)
+	id, _ := mustPut(t, s, "phu", 1, statusPayload(t, s, "phu", "Start", 1), nil)
+	if err := s.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	prev, _, ok, err := s.GetByKey([]byte("phu"), nil)
+	if err != nil || !ok {
+		t.Fatal(err)
+	}
+	s.SetSetErrHookForTest(func(types.FieldID) error { return errors.New("set falho simulado") })
+	if _, _, err := s.Put([]byte("phu"), 2, 0, statusPayload(t, s, "phu", "Stop", 2), &prev); err == nil {
+		t.Fatal("o Put do phantom deveria falhar")
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s2 := audOpen(t, opts)
+	defer s2.Close()
+	rec, _, ok, err := s2.GetByKey([]byte("phu"), nil)
+	if err != nil || !ok || rec.RowID != id || rec.Sequence != 2 {
+		t.Fatalf("o update órfão deveria estar visível pós-restart: (%+v, ok=%v, err=%v)", rec, ok, err)
+	}
+	// A transição de bitmap foi reexecutada inteira: entra em Stop e sai de
+	// Start (o Put falho não chegou a nenhuma das duas fases).
+	itStop, err := s2.LookupBitmap(fldStatus, strVal("Stop"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows := collectRows(t, itStop); len(rows) != 1 || rows[0] != id {
+		t.Fatalf("postings de Stop após o replay: %v", rows)
+	}
+	itStart, err := s2.LookupBitmap(fldStatus, strVal("Start"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range collectRows(t, itStart) {
+		if r == id {
+			t.Fatal("a posting antiga de Start deveria ter sido limpa pelo replay")
+		}
+	}
+	// A row não pode ter sido contada duas vezes.
+	if got := s2.Stats().RowCount; got != 1 {
+		t.Fatalf("RowCount após replay de update órfão: %d", got)
+	}
+}
+
 func fileSizeAud(t *testing.T, path string) int64 {
 	t.Helper()
 	st, err := os.Stat(path)
