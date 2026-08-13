@@ -737,7 +737,7 @@ Dependência: este harness precisa do storage engine real (Fase 1, outro plano).
 
 ---
 
-**ENTREGUE (Q20) — e a rodada de 8M já foi executada: APROVADA.** Resultado completo em `benchmark/baselines/ingest-8m-20260813.md` (com os JSON de 1M e 8M ao lado). Resumo: **RSS máximo 490 MiB** contra o teto de 1 GiB; **heap de 857 KiB para 8M entidades** contra 2,7 MiB para 1M (0,31x de heap para 8x de dados — desacoplado); 49.233 ev/s no LOAD; 0,07 allocs/evento; p95 de 3 µs no point lookup e 313 µs no bitmap+LIMIT 100, com 4 leitores concorrentes ao writer; 6,35 GiB em disco para 386 MiB residentes de mmap, que é a separação da §79 medida na prática.
+**ENTREGUE (Q20) — e a rodada de 8M já foi executada: APROVADA nos 7 gates.** Resultado completo em `benchmark/baselines/ingest-8m-20260813.md` (com os JSON de 1M e 8M ao lado). Resumo: **RSS máximo 478,5 MiB** contra o teto de 1 GiB; **heap estável de 843,7 KiB para 8M entidades** (a rodada de 1M ficou em 502,7 KiB — o heap não acompanha o dataset em nenhuma escala medida); 48.786 ev/s no LOAD, dos quais 156,8 s de ingestão pura (51.019 ev/s) e 7,2 s em 16 checkpoints (4,4%); 0,07 allocs/evento; p95 de 3 µs no point lookup e 307 µs no bitmap+LIMIT 100, com 4 leitores concorrentes ao writer; 6,35 GiB em disco para 386 MiB residentes de mmap, que é a separação da §79 medida na prática. A curva do LOAD (52 pontos) mostra salto inicial de mmap e depois crescimento **sublinear**: 4,9x de dados → 1,35x de RSS, sem degrau de rehash.
 
 Diferenças entre o esboço acima e o entregue:
 
@@ -865,7 +865,8 @@ Pendência aberta (única, não bloqueia planejamento): aviso do plan-storage qu
 
 - [ ] `go test ./... -race` verde; fuzz do jsonp rodado (≥ 5 min sem crash).
 - [ ] Todos os casos §103 (materialização) e §106 (query) com teste nomeado rastreável.
-- [ ] Micro-benchmarks com baselines commitados; parser/typeconv/merge/executor-row = 0 allocs; `Apply` ≤ 10 allocs com fakes (meta single-digit §111 vira gate com storage real na integração).
-- [ ] `radiusgen` determinístico e validado por oráculo `encoding/json`.
-- [ ] `ingest-bench` roda fim-a-fim com `-storage fake` (mecânica + relatório JSON + gates implementados); rodada 8M/1GiB agendada para a integração com a Fase 1.
+- [x] Micro-benchmarks com baselines commitados; parser/typeconv/merge = 0 allocs; `Apply` = **0 allocs** contra store mínimo e 1 com dublê completo (o teto de 10 do plano virou 4 no gate, porque um teto 10x acima do medido não pega regressão). Executor-row fica com a Q15.
+- [x] `radiusgen` determinístico e validado por oráculo `encoding/json`, **com golden de hash** travando o corpus entre versões.
+- [x] `ingest-bench` roda fim-a-fim contra o Store REAL (o modo fake foi cortado — ver §5.2) e a **rodada 8M/1GiB foi executada e APROVADA**: 478,5 MiB de RSS, heap de 843,7 KiB, 48.786 ev/s.
+- [ ] **CLI de ingestão (I2) com checkpoint periódico LIGADO POR PADRÃO**, intervalo configurável. Não é preferência: sem checkpoint o overlay de locations fica em heap (~36 B/row) e o heap volta a acompanhar o dataset — medido na Q20, item 25 do design de storage. Uma flag opcional que o operador não conhece perde a garantia de memória em silêncio, e o sintoma aponta para o lugar errado.
 - [ ] `docs/` atualizado: `architecture.md` (materializer + query) e diagramas PlantUML (`sequence_apply.puml`, fluxo de query) conforme padrão do repositório.
