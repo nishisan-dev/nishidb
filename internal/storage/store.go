@@ -29,7 +29,13 @@ import (
 // sem importar esta implementação.
 var (
 	ErrInvalidArgument = types.ErrInvalidArgument
-	ErrWriterFailed    = types.ErrWriterFailed
+
+	// ErrDatasetClosed indica operação sobre um Store já fechado. É ERRO, e
+	// não panic, porque o chamador (ingestão, query) tem política para erro e
+	// não tem para panic.
+	ErrDatasetClosed = errors.New("storage: dataset fechado")
+
+	ErrWriterFailed = types.ErrWriterFailed
 )
 
 // ErrDatasetCorrupt indica dataset que a recovery não consegue recuperar
@@ -116,6 +122,22 @@ type Store struct {
 	// Protegido por wmu.
 	stickyErr error
 
+	// vida protege o CICLO DE VIDA do Store: toda operação pública a toma em
+	// leitura e desiste se `fechado`; o Close a toma em escrita, o que faz
+	// dele um QUIESCE — ele só prossegue quando não há mais operação em voo, e
+	// nenhuma nova entra depois.
+	//
+	// Sem isso, um Close concorrente com Put ou com leitura produzia PANIC (o
+	// mmap fica desmapeado sob os pés da operação), e panic não é capturável
+	// pela política de log-and-skip da ingestão — derruba o processo. O CLI
+	// abre e fecha o dataset a cada comando, então o que era corrida rara
+	// virou caminho normal.
+	//
+	// É RWMutex e não Mutex porque as leituras são concorrentes entre si por
+	// contrato; o writer continua serializado pelo wmu, que é outro nível.
+	vida    sync.RWMutex
+	fechado bool
+
 	// wmu serializa as operações do writer (Put/Sync/Checkpoint): o
 	// contrato "writer único" deixa de ser convenção e vira mecanismo —
 	// um Checkpoint de coordenador concorrente com Put não pode mais
@@ -144,6 +166,22 @@ type Store struct {
 	prevBuf  []byte // fallback de leitura do estado anterior
 	valBuf   []byte // validação de colisão no Insert
 }
+
+// entra registra uma operação em voo e recusa se o Store já fechou. O
+// chamador SEMPRE libera com sai(), inclusive nos caminhos de erro.
+//
+// Devolve erro em vez de panic: a ingestão tem política para erro (§101) e não
+// tem para panic.
+func (s *Store) entra() error {
+	s.vida.RLock()
+	if s.fechado {
+		s.vida.RUnlock()
+		return ErrDatasetClosed
+	}
+	return nil
+}
+
+func (s *Store) sai() { s.vida.RUnlock() }
 
 // Open abre o dataset com recovery completo (design §10.3):
 //
@@ -466,6 +504,10 @@ func (s *Store) lookup(key, buf []byte) (rec types.Record, out []byte, exists, l
 // devolve o record corrente sobre buf (possivelmente crescido).
 // ok=false para key ausente ou tombstoned.
 func (s *Store) GetByKey(key, buf []byte) (types.Record, []byte, bool, error) {
+	if err := s.entra(); err != nil {
+		return types.Record{}, buf, false, err
+	}
+	defer s.sai()
 	rec, out, exists, live, err := s.lookup(key, buf)
 	if err != nil || !exists || !live {
 		return types.Record{}, out, false, err
@@ -476,6 +518,10 @@ func (s *Store) GetByKey(key, buf []byte) (types.Record, []byte, bool, error) {
 // GetByRowID devolve o record corrente da row. ok=false para row sem
 // location ou tombstoned (checagem de liveness dos caminhos indexados).
 func (s *Store) GetByRowID(id types.RowID, buf []byte) (types.Record, []byte, bool, error) {
+	if err := s.entra(); err != nil {
+		return types.Record{}, buf, false, err
+	}
+	defer s.sai()
 	packed, ok := s.locs.Get(id)
 	if !ok {
 		return types.Record{}, buf, false, nil
@@ -511,6 +557,10 @@ func (s *Store) GetByRowID(id types.RowID, buf []byte) (types.Record, []byte, bo
 // devolve (rowID, created, err): é erro de DURABILIDADE, não de
 // visibilidade — o estado está commitado e visível.
 func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *types.Record) (types.RowID, bool, error) {
+	if err := s.entra(); err != nil {
+		return 0, false, err
+	}
+	defer s.sai()
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
 	if s.stickyErr != nil {
@@ -924,9 +974,25 @@ type liveIterator struct {
 	next  types.RowID
 	limit types.RowID
 	cur   types.RowID
+	err   error
 }
 
+// Next reentra no Store a cada avanço, e não uma vez só na criação: o
+// iterador SOBREVIVE à chamada que o criou, e um Close no meio da varredura
+// desmapearia o índice sob os seus pés. Segurar o lock de vida pela vida do
+// iterador seria pior — um consumidor lento bloquearia o Close para sempre.
 func (it *liveIterator) Next() bool {
+	if it.err != nil {
+		return false
+	}
+	if it.s == nil {
+		return false
+	}
+	if err := it.s.entra(); err != nil {
+		it.err = err
+		return false
+	}
+	defer it.s.sai()
 	for it.next < it.limit {
 		id := it.next
 		it.next++
@@ -944,7 +1010,7 @@ func (it *liveIterator) Next() bool {
 }
 
 func (it *liveIterator) RowID() types.RowID { return it.cur }
-func (it *liveIterator) Err() error         { return nil }
+func (it *liveIterator) Err() error         { return it.err }
 func (it *liveIterator) Close() error       { return nil }
 
 // emptyIterator é um types.RowIDIterator sem elementos.
@@ -959,6 +1025,10 @@ func (emptyIterator) Close() error       { return nil }
 // location válida — overlay incluso — e sem tombstone). Rows criadas após a
 // chamada não aparecem (snapshot do limite superior).
 func (s *Store) ScanLive() types.RowIDIterator {
+	if err := s.entra(); err != nil {
+		return &liveIterator{err: err}
+	}
+	defer s.sai()
 	return &liveIterator{s: s, limit: types.RowID(s.nextRowID.Load())}
 }
 
@@ -967,6 +1037,10 @@ func (s *Store) ScanLive() types.RowIDIterator {
 // candidatos: rows tombstoned/sem location podem aparecer — valide liveness
 // e predicate via GetByRowID (spec §44).
 func (s *Store) LookupBitmap(field types.FieldID, v types.Value) (types.RowIDIterator, error) {
+	if err := s.entra(); err != nil {
+		return nil, err
+	}
+	defer s.sai()
 	ix, ok := s.bitmaps[field]
 	if !ok {
 		return nil, fmt.Errorf("%w: campo %d não possui índice bitmap", ErrInvalidArgument, field)
@@ -986,6 +1060,10 @@ func (s *Store) LookupBitmap(field types.FieldID, v types.Value) (types.RowIDIte
 // Pode estar momentaneamente À FRENTE do record visível: ela é gravada no
 // passo 6 do Put, antes do publish (passo 7).
 func (s *Store) Sequence(id types.RowID) (int64, bool) {
+	if err := s.entra(); err != nil {
+		return 0, false
+	}
+	defer s.sai()
 	if _, ok := s.locs.Get(id); !ok {
 		return 0, false
 	}
@@ -996,6 +1074,10 @@ func (s *Store) Sequence(id types.RowID) (int64, bool) {
 // Serializado com Put/Checkpoint pelo mutex do writer. Falha marca o writer
 // como FALHO: durabilidade comprometida exige reabertura com recovery.
 func (s *Store) Sync() error {
+	if err := s.entra(); err != nil {
+		return err
+	}
+	defer s.sai()
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
 	return s.syncLocked()
@@ -1017,6 +1099,10 @@ func (s *Store) syncLocked() error {
 // segment.Writer). RowCount conta rows CRIADAS — não decrementa em
 // tombstone; a contagem de vivas é semântica da S14.
 func (s *Store) Stats() Stats {
+	if err := s.entra(); err != nil {
+		return Stats{}
+	}
+	defer s.sai()
 	segID := s.curSegID.Load()
 	var lf float64
 	if slots := s.prim.SlotCount(); slots > 0 {
@@ -1036,7 +1122,28 @@ func (s *Store) Stats() Stats {
 // não drena o overlay nem faz msync/fsync de nada — o que não foi
 // checkpointado volta apenas pelo tail scan da recovery (S12), a partir do
 // último manifest.
+// Close faz QUIESCE antes de liberar qualquer recurso: toma o lock de vida em
+// escrita, o que só acontece quando nenhuma operação está em voo, e marca o
+// Store como fechado para que nenhuma nova entre.
+//
+// Sem isso, fechar com um Put ou uma leitura em andamento desmapeava o índice
+// sob os pés da operação e produzia PANIC — que a política de log-and-skip da
+// ingestão não captura, então derrubava o processo. E o flock do dataset era
+// devolvido no mesmo instante, com escrita em voo: outro processo podia
+// assumir o dataset enquanto o primeiro ainda escrevia nele.
+//
+// É idempotente: o segundo Close devolve nil sem tocar em nada.
 func (s *Store) Close() error {
+	s.vida.Lock()
+	defer s.vida.Unlock()
+	if s.fechado {
+		return nil
+	}
+	s.fechado = true
+
+	// O writer também é aguardado: uma operação de escrita que já passou pelo
+	// entra() e está dentro do wmu termina antes daqui, porque o Lock acima só
+	// é concedido quando o RLock dela é liberado.
 	var errs []error
 	for _, ix := range s.bitmaps {
 		if ix != nil {

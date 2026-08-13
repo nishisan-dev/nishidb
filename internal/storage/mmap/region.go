@@ -181,6 +181,16 @@ func (r *Region) Msync() error {
 }
 
 // Close desfaz o mapeamento e fecha o arquivo.
+//
+// ZERA o tamanho junto com o mapeamento, e isso é parte da correção: sem
+// zerar, o bounds check de word/WithBytes continuava aprovando offsets contra
+// o tamanho ANTIGO e a falha virava um índice em slice nil — panic obscuro,
+// longe da causa. Com o tamanho zerado, qualquer acesso após o Close falha na
+// checagem de limites, que nomeia o problema.
+//
+// A garantia de que NENHUM acesso chega aqui depois do Close é do Store, que
+// faz quiesce antes de fechar os seus arquivos (design §14.21); isto é a rede
+// do nível de baixo, para o dia em que um caminho novo escapar.
 func (r *Region) Close() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -190,6 +200,7 @@ func (r *Region) Close() error {
 			errs = append(errs, fmt.Errorf("mmap: munmap %s: %w", r.f.Name(), err))
 		}
 		r.data = nil
+		r.size = 0
 	}
 	if err := r.f.Close(); err != nil {
 		errs = append(errs, err)

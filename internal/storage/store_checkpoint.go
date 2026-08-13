@@ -35,6 +35,10 @@ import (
 // pacotes). Nenhum batching de Sync de dicionário pode ser introduzido
 // aqui — quebraria o replay do tail de forma silenciosa.
 func (s *Store) Checkpoint() error {
+	if err := s.entra(); err != nil {
+		return err
+	}
+	defer s.sai()
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
 	if s.stickyErr != nil {
