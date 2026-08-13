@@ -996,6 +996,23 @@ ponta, e fechar a enumeração no `switch` — em vez de deixar um `default` sil
 outra. Um `Kind` novo que caísse no `default` de bytes compararia representações diferentes sem
 nada acusar.
 
+### Convenção: gate de alocação mede valor ABSOLUTO quando a taxa é sub-unitária
+
+`testing.AllocsPerRun` faz divisão INTEIRA (`mallocs/runs`): qualquer taxa abaixo de uma alocação por
+chamada aparece como **0,0**. Isso torna o gate cego exatamente para a classe de regressão mais comum
+em código com buffer amortizado — uma alocação a cada N operações.
+
+Aconteceu duas vezes neste projeto. No materializer, a medição precisou virar `runtime.MemStats`
+absoluto pelo mesmo motivo. No `StreamWriter`, o primeiro gate que escrevi passava com uma
+**realocação por flush** (uma a cada ~146 rows, isto é 0,007/chamada): a mutação que troca
+`buf = buf[:0]` por `make` sobrevivia. Com contagem absoluta de mallocs sobre 3.000 escritas, a mesma
+mutação falha com "32 alocações em 3.000 WriteRow".
+
+Regra: **se a operação sob teste amortiza custo (buffer que cresce, cache, flush por limiar), o gate
+conta mallocs absolutos sobre N execuções, nunca a média do `AllocsPerRun`.** E o gate precisa de
+teto **além** da igualdade: igualdade entre dois tamanhos de entrada prova ausência de custo por
+item, e não impede o custo FIXO de crescer — 71 alocações constantes a mais continuam constantes.
+
 ### Convenção: gate colado no valor medido
 
 Um gate de alocação com folga não é gate. O teto de 12 sobre 5 medidos não acusaria nem uma
