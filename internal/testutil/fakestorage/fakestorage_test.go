@@ -3,23 +3,13 @@ package fakestorage
 import (
 	"bytes"
 	"errors"
+	"strings"
 	"testing"
 
+	"github.com/nishisan-dev/nishidb/internal/storage"
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
-
-// consumerIterator é o iterador na forma EXATA do Store real, declarado aqui
-// como um consumidor (Q10/Q15) o declararia. A asserção abaixo prova que o
-// iterador do fake tem o mesmo method set — independente do nome do tipo.
-type consumerIterator interface {
-	Next() bool
-	RowID() types.RowID
-	Err() error
-	Close() error
-}
-
-var _ consumerIterator = (*rowIDIter)(nil)
 
 // consumerStore é a interface que a Q10 (Apply) e a Q15 (Executor) vão
 // declarar, com as assinaturas copiadas verbatim do *storage.Store
@@ -27,23 +17,35 @@ var _ consumerIterator = (*rowIDIter)(nil)
 // assinatura, ainda que só uint64 no lugar de types.RowID, torna fake e real
 // mutuamente inutilizáveis.
 //
-// Esta asserção prova METADE do contrato — a do fake. A outra metade (o
-// *storage.Store satisfazendo a MESMA interface) só é verificável na I1,
-// quando os ramos se encontrarem: hoje o iterador aparece aqui como
-// fakestorage.RowIDIterator e lá como storage.RowIDIterator, dois tipos
-// nomeados distintos. O lote de ajustes de contrato do ramo de storage move
-// a interface para internal/types justamente para fechar isso; quando
-// mergear, o fake devolve types.RowIDIterator e as duas metades se juntam.
+// As DUAS asserções abaixo são o contrato entre os ramos deixando de ser
+// papel: enquanto ambas compilarem, o dublê e o Store real são
+// intercambiáveis em qualquer consumidor. A segunda só passou a ser possível
+// com o RowIDIterator morando em internal/types — com a interface
+// redeclarada em cada lado, nenhuma das duas satisfaria a mesma assinatura.
 type consumerStore interface {
 	GetByKey(key, buf []byte) (types.Record, []byte, bool, error)
 	GetByRowID(id types.RowID, buf []byte) (types.Record, []byte, bool, error)
 	Put(key []byte, seq int64, flags uint8, payload []byte, prev *types.Record) (types.RowID, bool, error)
-	ScanLive() RowIDIterator
-	LookupBitmap(field types.FieldID, v types.Value) (RowIDIterator, error)
+	ScanLive() types.RowIDIterator
+	LookupBitmap(field types.FieldID, v types.Value) (types.RowIDIterator, error)
+	HasBitmap(field types.FieldID) bool
 	Sequence(id types.RowID) (int64, bool)
 }
 
-var _ consumerStore = (*Store)(nil)
+var (
+	_ consumerStore = (*Store)(nil)
+	_ consumerStore = (*storage.Store)(nil)
+)
+
+// mustAppendField codifica um campo que o teste sabe ser válido.
+func mustAppendField(tb testing.TB, dst []byte, id types.FieldID, v types.Value) []byte {
+	tb.Helper()
+	out, err := encoding.AppendField(dst, id, v)
+	if err != nil {
+		tb.Fatalf("AppendField(%d, %#x): %v", id, v.Type, err)
+	}
+	return out
+}
 
 func payload(t *testing.T, fields ...struct {
 	ID  types.FieldID
@@ -52,7 +54,7 @@ func payload(t *testing.T, fields ...struct {
 	t.Helper()
 	var p []byte
 	for _, f := range fields {
-		p = encoding.AppendField(p, f.ID, f.Val)
+		p = mustAppendField(t, p, f.ID, f.Val)
 	}
 	return p
 }
@@ -209,10 +211,24 @@ func TestPutRejectsInvalidPayload(t *testing.T) {
 	s := New(Indexes{})
 	// Campos fora de ordem (id 3 antes do id 1) violam a invariante.
 	var p []byte
-	p = encoding.AppendField(p, 3, intVal(1))
-	p = encoding.AppendField(p, 1, strVal("x"))
+	p = mustAppendField(t, p, 3, intVal(1))
+	p = mustAppendField(t, p, 1, strVal("x"))
 	if _, _, err := s.Put([]byte("K"), 1, 0, p, nil); err == nil {
 		t.Error("payload fora de ordem deveria ser rejeitado")
+	}
+}
+
+// assertInvalidArgument confere o sentinela E a substring da mensagem: a
+// mensagem é contrato de teste (§14.23), porque é ela que diz ao operador
+// qual dos argumentos estava errado.
+func assertInvalidArgument(t *testing.T, err error, wantSubstr string) {
+	t.Helper()
+	if !errors.Is(err, types.ErrInvalidArgument) {
+		t.Errorf("err = %v, want ErrInvalidArgument", err)
+		return
+	}
+	if !strings.Contains(err.Error(), wantSubstr) {
+		t.Errorf("err = %q, deveria conter %q", err, wantSubstr)
 	}
 }
 
@@ -221,21 +237,18 @@ func TestPutRejectsInvalidPayload(t *testing.T) {
 func TestPutRejectsInvalidArguments(t *testing.T) {
 	s := New(Indexes{})
 	p := payload(t, fv(1, strVal("A")))
-	if _, _, err := s.Put(nil, 1, 0, p, nil); !errors.Is(err, ErrInvalidArgument) {
-		t.Errorf("key vazia: err = %v", err)
-	}
-	if _, _, err := s.Put([]byte(""), 1, 0, p, nil); !errors.Is(err, ErrInvalidArgument) {
-		t.Errorf("key vazia: err = %v", err)
-	}
+	_, _, err := s.Put(nil, 1, 0, p, nil)
+	assertInvalidArgument(t, err, "key vazia")
+	_, _, err = s.Put([]byte(""), 1, 0, p, nil)
+	assertInvalidArgument(t, err, "key vazia")
 
 	if _, _, err := s.Put([]byte("A"), 1, 0, p, nil); err != nil {
 		t.Fatal(err)
 	}
 	prevA, _, _, _ := s.GetByKey([]byte("A"), nil)
 	pb := payload(t, fv(1, strVal("B")))
-	if _, _, err := s.Put([]byte("B"), 1, 0, pb, &prevA); !errors.Is(err, ErrInvalidArgument) {
-		t.Errorf("prev de outra key: err = %v", err)
-	}
+	_, _, err = s.Put([]byte("B"), 1, 0, pb, &prevA)
+	assertInvalidArgument(t, err, "prev pertence à key")
 	if _, ok := s.byKey["B"]; ok {
 		t.Error("Put rejeitado não deveria ter registrado a key")
 	}
@@ -252,8 +265,8 @@ func TestRejectedPutDoesNotBurnRowID(t *testing.T) {
 	}
 
 	var bad []byte
-	bad = encoding.AppendField(bad, 3, intVal(1))
-	bad = encoding.AppendField(bad, 1, strVal("x"))
+	bad = mustAppendField(t, bad, 3, intVal(1))
+	bad = mustAppendField(t, bad, 1, strVal("x"))
 	if _, _, err := s.Put([]byte("B"), 1, 0, bad, nil); err == nil {
 		t.Fatal("payload fora de ordem deveria falhar")
 	}
@@ -408,15 +421,20 @@ func TestLookupWithoutIndexIsError(t *testing.T) {
 	if _, _, err := s.Put([]byte("K"), 1, 0, payload(t, fv(1, strVal("K")), fv(2, strVal("Start"))), nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.LookupBitmap(1, strVal("K")); !errors.Is(err, ErrInvalidArgument) {
-		t.Errorf("bitmap em campo sem índice: err = %v", err)
-	}
+	_, err := s.LookupBitmap(1, strVal("K"))
+	assertInvalidArgument(t, err, "não possui índice bitmap")
 	// Índice hash não atende consulta bitmap e vice-versa.
-	if _, err := s.LookupBitmap(3, intVal(0)); !errors.Is(err, ErrInvalidArgument) {
-		t.Errorf("bitmap em campo hash: err = %v", err)
+	_, err = s.LookupBitmap(3, intVal(0))
+	assertInvalidArgument(t, err, "não possui índice bitmap")
+	_, err = s.LookupHash(2, strVal("Start"))
+	assertInvalidArgument(t, err, "não possui índice hash")
+
+	// O capability check concorda com o que o lookup aceita.
+	if s.HasBitmap(1) || s.HasBitmap(3) || !s.HasBitmap(2) {
+		t.Error("HasBitmap diverge dos índices declarados")
 	}
-	if _, err := s.LookupHash(2, strVal("Start")); !errors.Is(err, ErrInvalidArgument) {
-		t.Errorf("hash em campo bitmap: err = %v", err)
+	if got := s.BitmapFields(); len(got) != 1 || got[0] != 2 {
+		t.Errorf("BitmapFields = %v, want [2]", got)
 	}
 }
 
@@ -465,7 +483,7 @@ func TestFieldDict(t *testing.T) {
 	}
 }
 
-func drain(t *testing.T, it RowIDIterator) []types.RowID {
+func drain(t *testing.T, it types.RowIDIterator) []types.RowID {
 	t.Helper()
 	var out []types.RowID
 	for it.Next() {

@@ -16,29 +16,12 @@ package fakestorage
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"sort"
 
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
-
-// ErrInvalidArgument espelha storage.ErrInvalidArgument (violação dos
-// argumentos de Put/LookupBitmap). É um sentinel próprio porque o pacote
-// storage vive no outro ramo; na convergência dos ramos ele passa a ser um
-// alias do real.
-var ErrInvalidArgument = errors.New("fakestorage: argumento inválido")
-
-// RowIDIterator itera rowIds em ordem crescente — cópia verbatim da
-// interface homônima do Store real. Na convergência dos ramos o fake passa a
-// devolver storage.RowIDIterator e esta declaração some.
-type RowIDIterator interface {
-	Next() bool
-	RowID() types.RowID
-	Err() error
-	Close() error
-}
 
 // Indexes declara quais campos têm índice secundário no fake (o Store real
 // deriva isso do schema do dataset).
@@ -134,10 +117,10 @@ func valKey(v types.Value) string {
 // crescem com buracos que nenhum estado ocupa.
 func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *types.Record) (types.RowID, bool, error) {
 	if len(key) == 0 {
-		return 0, false, fmt.Errorf("%w: key vazia", ErrInvalidArgument)
+		return 0, false, fmt.Errorf("%w: key vazia", types.ErrInvalidArgument)
 	}
 	if prev != nil && !bytes.Equal(prev.Key, key) {
-		return 0, false, fmt.Errorf("%w: prev pertence à key %q, não a %q", ErrInvalidArgument, prev.Key, key)
+		return 0, false, fmt.Errorf("%w: prev pertence à key %q, não a %q", types.ErrInvalidArgument, prev.Key, key)
 	}
 	if _, err := encoding.ValidatePayload(payload); err != nil {
 		return 0, false, err
@@ -289,7 +272,7 @@ func (s *Store) SetTombstone(id types.RowID) {
 
 // ScanLive devolve um iterador de rowIds vivos em ordem CRESCENTE
 // (pré-condição das interseções/uniões do executor).
-func (s *Store) ScanLive() RowIDIterator {
+func (s *Store) ScanLive() types.RowIDIterator {
 	ids := make([]types.RowID, 0, len(s.rows))
 	for id, r := range s.rows {
 		if r.live() {
@@ -300,27 +283,42 @@ func (s *Store) ScanLive() RowIDIterator {
 	return &rowIDIter{ids: ids}
 }
 
+// HasBitmap informa se o campo tem índice bitmap — o capability check do
+// planner. Sem ele o plano escolhe o caminho indexado e a query falha em
+// runtime, em vez de degradar para full scan como o design promete.
+func (s *Store) HasBitmap(field types.FieldID) bool { return s.bitmap[field] }
+
+// BitmapFields devolve, em ordem crescente, os campos com índice bitmap.
+func (s *Store) BitmapFields() []types.FieldID {
+	out := make([]types.FieldID, 0, len(s.bitmap))
+	for field := range s.bitmap {
+		out = append(out, field)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
 // LookupBitmap consulta o índice bitmap do campo; valor nunca visto devolve
 // iterador vazio; campo sem índice bitmap é ErrInvalidArgument. O resultado
 // é um SUPERSET de candidatos: rows tombstoned podem aparecer — valide
 // liveness e predicate via GetByRowID (spec §44).
-func (s *Store) LookupBitmap(field types.FieldID, v types.Value) (RowIDIterator, error) {
+func (s *Store) LookupBitmap(field types.FieldID, v types.Value) (types.RowIDIterator, error) {
 	if !s.bitmap[field] {
-		return nil, fmt.Errorf("%w: campo %d não possui índice bitmap", ErrInvalidArgument, field)
+		return nil, fmt.Errorf("%w: campo %d não possui índice bitmap", types.ErrInvalidArgument, field)
 	}
 	return s.lookup(field, v), nil
 }
 
 // LookupHash é a capability da Fase 8 — no fake, idêntica ao bitmap sobre os
 // campos declarados com índice hash.
-func (s *Store) LookupHash(field types.FieldID, v types.Value) (RowIDIterator, error) {
+func (s *Store) LookupHash(field types.FieldID, v types.Value) (types.RowIDIterator, error) {
 	if !s.hash[field] {
-		return nil, fmt.Errorf("%w: campo %d não possui índice hash", ErrInvalidArgument, field)
+		return nil, fmt.Errorf("%w: campo %d não possui índice hash", types.ErrInvalidArgument, field)
 	}
 	return s.lookup(field, v), nil
 }
 
-func (s *Store) lookup(field types.FieldID, v types.Value) RowIDIterator {
+func (s *Store) lookup(field types.FieldID, v types.Value) types.RowIDIterator {
 	set := s.postings[postingKey{field, valKey(v)}]
 	ids := make([]types.RowID, 0, len(set))
 	for id := range set {
