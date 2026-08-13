@@ -154,6 +154,33 @@ type ConfigSummary struct {
 	CorpusGolden   string `json:"corpus_golden_note"`
 	SpecPath       string `json:"spec_path"`
 	DataDirPresent bool   `json:"data_dir_present"`
+	// LoadCorpus e SteadyCorpus registram o PERFIL do corpus de cada fase no
+	// próprio artefato. Sem isso, um corpus que empobrece em silêncio (uma
+	// Config parcial, cujos ratios ficam zerados por serem literais) continua
+	// produzindo números bonitos e um documento de aceite que cita evidência
+	// inexistente — foi o que aconteceu com a primeira rodada de 8M, cujo LOAD
+	// tinha zero patch enquanto o critério afirmava 85%.
+	LoadCorpus   CorpusProfile `json:"load_corpus"`
+	SteadyCorpus CorpusProfile `json:"steady_corpus"`
+}
+
+// CorpusProfile é o perfil do gerador de uma fase, como ele foi de fato usado.
+type CorpusProfile struct {
+	PatchRatio        float64 `json:"patch_ratio"`
+	ExtendedJSONRatio float64 `json:"extended_json_ratio"`
+	UnknownFieldRatio float64 `json:"unknown_field_ratio"`
+	NullFieldRatio    float64 `json:"null_field_ratio"`
+	Sequential        bool    `json:"sequential"`
+}
+
+func perfilDoCorpus(c radiusgen.Config) CorpusProfile {
+	return CorpusProfile{
+		PatchRatio:        c.PatchRatio,
+		ExtendedJSONRatio: c.ExtendedJSONRatio,
+		UnknownFieldRatio: c.UnknownFieldRatio,
+		NullFieldRatio:    c.NullFieldRatio,
+		Sequential:        c.Sequential,
+	}
 }
 
 // StoreStatsReport é o estado final do dataset.
@@ -264,8 +291,20 @@ func Run(cfg Config) (*Report, error) {
 
 	col := &collector{cfg: cfg, start: time.Now()}
 
-	// FASE LOAD — entidades em ordem: N eventos criam exatamente N rows.
-	loadCfg := radiusgen.Config{Seed: cfg.Seed, Entities: cfg.Entities, Sequential: true}
+	// FASE LOAD — o workload de REFERÊNCIA (patch parcial, Extended JSON, campo
+	// desconhecido, null explícito), percorrendo as entidades em ordem para que
+	// N eventos criem exatamente N rows.
+	//
+	// Partir de DefaultConfig() e sobrescrever, e nunca montar uma Config
+	// literal: os ratios são campos literais, e uma Config parcial produz um
+	// corpus SEM patch nenhum — verde, rápido, e sem exercitar o merge. Foi
+	// assim que a primeira rodada de 8M mediu ingestão de eventos completos
+	// enquanto o documento de aceite afirmava 85% de patch.
+	loadCfg := radiusgen.DefaultConfig()
+	loadCfg.Seed = cfg.Seed
+	loadCfg.Entities = cfg.Entities
+	loadCfg.Sequential = true
+	rep.Config.LoadCorpus = perfilDoCorpus(loadCfg)
 	loadGen, err := radiusgen.New(loadCfg)
 	if err != nil {
 		return nil, err
@@ -289,6 +328,7 @@ func Run(cfg Config) (*Report, error) {
 		steadyCfg := radiusgen.DefaultConfig()
 		steadyCfg.Seed = cfg.Seed + 1
 		steadyCfg.Entities = cfg.Entities
+		rep.Config.SteadyCorpus = perfilDoCorpus(steadyCfg)
 		steadyGen, err := radiusgen.New(steadyCfg)
 		if err != nil {
 			return nil, err
