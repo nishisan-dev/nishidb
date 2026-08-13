@@ -162,6 +162,13 @@ Fora da v1: `ORDER BY`, `GROUP BY`, `JOIN`, agregações, `NOT` genérico,
 | 4 | writer em modo falho (reabra o dataset) |
 | 5 | resultado truncado pelo teto `query.maxRows` |
 | 6 | interrompido por sinal |
+| 7 | eventos não entraram por falha (perda de dado): investigue e reprocesse |
+
+O 7 é o que separa perda de sucesso. Evento **ruim** (JSON inválido, key
+ausente, tipo incompatível) é descartado pela política §101 e a ingestão termina
+com 0 — uma fonte ruidosa não derruba o pipeline. Evento que **não entrou por
+falha nossa ou do dataset** (erro do storage, inconsistência interna) sai com 7:
+o dataset está íntegro e checkpointado, mas faltam rows.
 
 ## Documentação
 

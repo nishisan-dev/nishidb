@@ -25,6 +25,12 @@ const (
 	ExitWriter    = 4 // writer em modo falho: reprocessar é inútil até reabrir
 	ExitTruncado  = 5 // resultado truncado pelo teto de maxRows
 	ExitInterromp = 6 // interrompido por sinal
+	// ExitPerdaDeDados: a ingestão terminou e o dataset está íntegro, mas
+	// eventos NÃO entraram por falha que não é do evento (§101, balde 2).
+	// Distinto do 4: aqui não há modo falho, reprocessar depois de investigar
+	// é útil. Distinto do 0: houve perda, e um pipeline que testa $? precisa
+	// saber disso.
+	ExitPerdaDeDados = 7
 )
 
 // Ambiente são as dependências de processo, injetadas para o teste rodar o
@@ -62,6 +68,7 @@ EXIT CODES
   4  writer em modo falho (reabra o dataset; reprocessar antes disso é inútil)
   5  resultado truncado pelo teto de query.maxRows
   6  interrompido por sinal
+  7  eventos não entraram por falha (perda de dado): investigue e reprocesse
 `
 
 // Run executa o CLI e devolve o exit code. Não chama os.Exit: quem decide

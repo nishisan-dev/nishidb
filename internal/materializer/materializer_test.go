@@ -858,8 +858,8 @@ func TestRotulosDeActionECategoria(t *testing.T) {
 	// balde é o que separa "pule este evento" de "temos um bug".
 	for c := CategoryNone; c < numCategories; c++ {
 		want := c >= CategoryInvalidJSON && c <= CategoryTypeConversion
-		if got := c.badEvent(); got != want {
-			t.Errorf("%v.badEvent() = %v, want %v", c, got, want)
+		if got := c.BadEvent(); got != want {
+			t.Errorf("%v.BadEvent() = %v, want %v", c, got, want)
 		}
 	}
 }

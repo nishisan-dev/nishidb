@@ -107,8 +107,15 @@ const (
 	// (ErrInternalState).
 	CategoryInternal
 
-	numCategories
+	// NumCategories é o limite superior EXCLUSIVO das categorias. Exportado
+	// porque quem reporta contagem por categoria (o CLI) precisa varrer o
+	// conjunto inteiro: um laço com o limite escrito à mão para de reportar a
+	// última categoria no dia em que uma nova for acrescentada — foi o que
+	// aconteceu com CategoryInternal, que existia e não aparecia no resumo.
+	NumCategories = numCategories
 )
+
+const numCategories = CategoryInternal + 1
 
 var categoryNames = [...]string{
 	CategoryNone:             "none",
@@ -129,9 +136,11 @@ func (c ErrorCategory) String() string {
 	return "category(?)"
 }
 
-// badEvent reporta se a categoria é de evento ruim (§101) — o balde que a
-// política log-and-skip cobre.
-func (c ErrorCategory) badEvent() bool {
+// BadEvent reporta se a categoria é de evento ruim (§101) — o balde que a
+// política log-and-skip cobre, e o ÚNICO em que descartar é a decisão certa.
+// Fora dele o evento não entrou por falha nossa ou do dataset, e quem chamou
+// precisa tratar isso como perda, não como descarte.
+func (c ErrorCategory) BadEvent() bool {
 	return c >= CategoryInvalidJSON && c <= CategoryTypeConversion
 }
 
@@ -323,7 +332,7 @@ func (m *Materializer) Apply(event []byte) ApplyResult {
 func (m *Materializer) failure(err error) ApplyResult {
 	cat := classify(err)
 	m.metrics.byCat[cat].Add(1)
-	if cat.badEvent() {
+	if cat.BadEvent() {
 		m.metrics.invalid.Add(1)
 		return ApplyResult{Action: ActionSkipped, Category: cat, Err: err}
 	}

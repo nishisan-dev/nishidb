@@ -24,9 +24,16 @@ const (
 	checkpointTempoPadrao   = 30 * time.Second
 )
 
+// resumoIngest separa os DOIS baldes de erro da §101, e a separação é a razão
+// de o tipo existir. Evento ruim é decisão tomada: descarta e segue, exit 0.
+// O resto — erro do store, inconsistência interna — significa que a row NÃO
+// entrou por falha nossa ou do dataset: é perda de dado, e sair com 0 dali faz
+// um pipeline que testa $? tratar perda como sucesso.
 type resumoIngest struct {
 	lidos, aplicados, criados, atualizados, stale int64
-	invalidos                                     map[materializer.ErrorCategory]int64
+	descartados                                   [materializer.NumCategories]int64
+	falhas                                        [materializer.NumCategories]int64
+	descartadosTotal, falhasTotal                 int64
 }
 
 func runIngest(args []string, amb Ambiente) int {
@@ -86,7 +93,7 @@ func runIngest(args []string, amb Ambiente) int {
 	defer st.Close()
 
 	mat := materializer.New(compilado, st)
-	resumo := resumoIngest{invalidos: map[materializer.ErrorCategory]int64{}}
+	var resumo resumoIngest
 	inicio := time.Now()
 	ultimoCP := inicio
 
@@ -118,8 +125,13 @@ func runIngest(args []string, amb Ambiente) int {
 			fmt.Fprintf(amb.Stderr, "ingest: writer em modo falho no evento %d: %v\n", resumo.lidos, r.Err)
 			imprimeResumo(amb.Stderr, resumo, time.Since(inicio))
 			return ExitWriter
+		case r.Category.BadEvent():
+			resumo.descartados[r.Category]++
+			resumo.descartadosTotal++
 		case r.Err != nil:
-			resumo.invalidos[r.Category]++
+			// Balde 2: a row não entrou e não foi por culpa do evento.
+			resumo.falhas[r.Category]++
+			resumo.falhasTotal++
 		default:
 			resumo.aplicados++
 			switch r.Action {
@@ -153,6 +165,16 @@ func runIngest(args []string, amb Ambiente) int {
 		return codigoDoErro(err)
 	}
 	imprimeResumo(amb.Stderr, resumo, time.Since(inicio))
+	if resumo.falhasTotal > 0 {
+		// A ingestão terminou, o dataset está íntegro e checkpointado — mas
+		// eventos foram perdidos por falha. Quem automatiza precisa distinguir
+		// isto de sucesso, e não pode confundir com o writer falho (4), onde
+		// nada mais entra até reabrir.
+		fmt.Fprintf(amb.Stderr,
+			"ingest: %d eventos NÃO entraram no dataset por falha — investigue antes de considerar a carga completa\n",
+			resumo.falhasTotal)
+		return ExitPerdaDeDados
+	}
 	return ExitOK
 }
 
@@ -193,18 +215,25 @@ func imprimeResumo(w io.Writer, r resumoIngest, dur time.Duration) {
 	}
 	fmt.Fprintf(w, "ingest: %d lidos, %d aplicados (%d criados, %d atualizados, %d stale) em %s (%.0f ev/s)\n",
 		r.lidos, r.aplicados, r.criados, r.atualizados, r.stale, dur.Round(time.Millisecond), taxa)
-	var total int64
-	for _, n := range r.invalidos {
-		total += n
-	}
+
+	// Duas linhas distintas para os dois baldes: "descartado" é uma decisão
+	// sobre um evento ruim, "não aplicado" é perda. Juntá-las numa linha só foi
+	// o que deixou a perda passar por descarte.
+	linhaPorCategoria(w, "descartados por categoria", r.descartadosTotal, r.descartados)
+	linhaPorCategoria(w, "não aplicados por falha (perda de dado)", r.falhasTotal, r.falhas)
+}
+
+// linhaPorCategoria imprime na ordem de DECLARAÇÃO das categorias e percorre
+// todas elas. A ordem é fixa porque a saída é lida por script; o limite é
+// NumCategories porque escrevê-lo à mão foi o que fez INTERNAL_STATE sair como
+// uma linha de contagem sem categoria nenhuma.
+func linhaPorCategoria(w io.Writer, rotulo string, total int64, por [materializer.NumCategories]int64) {
 	if total == 0 {
 		return
 	}
-	fmt.Fprintf(w, "ingest: %d descartados por categoria:", total)
-	// Ordem fixa: a saída é lida por humano e por script, e mapa iterado dá
-	// ordem diferente a cada execução.
-	for c := materializer.CategoryInvalidJSON; c <= materializer.CategoryStorage; c++ {
-		if n := r.invalidos[c]; n > 0 {
+	fmt.Fprintf(w, "ingest: %d %s:", total, rotulo)
+	for c := materializer.CategoryInvalidJSON; c < materializer.NumCategories; c++ {
+		if n := por[c]; n > 0 {
 			fmt.Fprintf(w, " %v=%d", c, n)
 		}
 	}
