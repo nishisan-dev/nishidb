@@ -45,6 +45,9 @@ func Convert(f jsonp.Field, target types.FieldType, arena []byte) (types.Value, 
 		if f.Kind != jsonp.KindString {
 			return types.Value{}, arena, convErrf(target, "esperava string JSON, veio %v", f.Kind)
 		}
+		if !utf8.Valid(f.Raw) {
+			return types.Value{}, arena, convErrf(target, "utf-8 inválido: %s", truncVal(f.Raw))
+		}
 		return appendBytesValue(target, f.Raw, arena)
 
 	case types.TypeInt64:
@@ -109,6 +112,15 @@ func Convert(f jsonp.Field, target types.FieldType, arena []byte) (types.Value, 
 		// NDJSON. json.Valid usa scanner pooled: 0 allocs em steady state.
 		if !json.Valid(f.Raw) {
 			return types.Value{}, arena, convErrf(target, "json aninhado inválido: %s", truncVal(f.Raw))
+		}
+		// json.Valid NÃO valida UTF-8: sem esta checagem, um valor json com
+		// bytes malformados atravessa a ingestão e reaparece como linha NDJSON
+		// inválida, quebrando o consumidor em runtime por um dado que deveria
+		// ter sido recusado na porta. Mesma filosofia do teto do valor
+		// indexado: recusar na entrada em vez de gravar algo que envenena a
+		// leitura.
+		if !utf8.Valid(f.Raw) {
+			return types.Value{}, arena, convErrf(target, "utf-8 inválido: %s", truncVal(f.Raw))
 		}
 		return appendBytesValue(target, f.Raw, arena)
 
