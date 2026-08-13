@@ -288,6 +288,10 @@ func (p *Parser) tryExtended(f *Field) (bool, error) {
 			return false, nil
 		}
 		if isNumberLong {
+			if !int64Digits(raw) {
+				restore()
+				return false, nil
+			}
 			f.Kind, f.Ext, f.Raw = KindNumber, ExtNumberLong, raw
 		} else {
 			f.Kind, f.Ext, f.Raw = KindString, ExtDate, raw
@@ -318,7 +322,7 @@ func (p *Parser) tryExtended(f *Field) (bool, error) {
 			return false, nil
 		}
 		raw, err := p.parseString()
-		if err != nil || !p.closeWrapper() || !p.closeWrapper() {
+		if err != nil || !p.closeWrapper() || !p.closeWrapper() || !int64Digits(raw) {
 			restore()
 			return false, nil
 		}
@@ -327,6 +331,25 @@ func (p *Parser) tryExtended(f *Field) (bool, error) {
 	}
 	restore()
 	return false, nil
+}
+
+// int64Digits valida o conteúdo exigido de um $numberLong: -?[0-9]+ não
+// vazio. Qualquer outra string faz o wrapper degradar para objeto opaco —
+// aceitar lixo aqui viraria erro de TYPE_CONVERSION no consumidor, categoria
+// errada para um shape que o design manda tratar como valor json cru.
+func int64Digits(b []byte) bool {
+	if len(b) > 0 && b[0] == '-' {
+		b = b[1:]
+	}
+	if len(b) == 0 {
+		return false
+	}
+	for _, c := range b {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // closeWrapper consome um '}' (com whitespace antes); false se não houver.

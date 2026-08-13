@@ -54,6 +54,15 @@ func TestNotAWrapperFallsBackToOpaque(t *testing.T) {
 		{"date valor numero", `{"n":{"$date":123}}`, `{"$date":123}`},
 		{"date canonical com outra chave", `{"n":{"$date":{"$numberInt":"1"}}}`, `{"$date":{"$numberInt":"1"}}`},
 		{"chave comum", `{"n":{"numberLong":"1"}}`, `{"numberLong":"1"}`},
+		// F1: $numberLong exige conteúdo -?[0-9]+ não vazio; qualquer outra
+		// string degrada para objeto opaco (senão o typeconv receberia
+		// ExtNumberLong→int64 com lixo e erraria a categoria do erro).
+		{"numberLong nao-digitos", `{"n":{"$numberLong":"abc"}}`, `{"$numberLong":"abc"}`},
+		{"numberLong vazio", `{"n":{"$numberLong":""}}`, `{"$numberLong":""}`},
+		{"numberLong fracao", `{"n":{"$numberLong":"1.5"}}`, `{"$numberLong":"1.5"}`},
+		{"numberLong espacos", `{"n":{"$numberLong":" 12 "}}`, `{"$numberLong":" 12 "}`},
+		{"numberLong so sinal", `{"n":{"$numberLong":"-"}}`, `{"$numberLong":"-"}`},
+		{"date canonical nao-digitos", `{"n":{"$date":{"$numberLong":"xyz"}}}`, `{"$date":{"$numberLong":"xyz"}}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -72,9 +81,29 @@ func TestWrapperInsideNestedStaysRaw(t *testing.T) {
 	})
 }
 
+// Interação de maior risco do pacote: tryExtended salva/restaura len(scratch)
+// enquanto a chave do campo (e/ou o valor do wrapper) já vivem no scratch.
 func TestExtendedWithEscapes(t *testing.T) {
-	// . = '.'
-	assertFields(t, collect(t, `{"d":{"$date":"2026-08-11T22:28:10.000Z"}}`), []ownedField{
-		{Key: "d", Kind: KindString, Ext: ExtDate, Raw: "2026-08-11T22:28:10.000Z"},
+	t.Run("chave escapada com numberLong", func(t *testing.T) {
+		assertFields(t, collect(t, `{"k\nx":{"$numberLong":"12"}}`), []ownedField{
+			{Key: "k\nx", Kind: KindNumber, Ext: ExtNumberLong, Raw: "12"},
+		})
+	})
+	t.Run("chave escapada com date canonical", func(t *testing.T) {
+		assertFields(t, collect(t, `{"k\nx":{"$date":{"$numberLong":"12"}}}`), []ownedField{
+			{Key: "k\nx", Kind: KindNumber, Ext: ExtDate, Raw: "12"},
+		})
+	})
+	t.Run("valor relaxed com escape unicode", func(t *testing.T) {
+		// \u005A = 'Z'; o valor cai no parseStringSlow com a chave já no scratch.
+		assertFields(t, collect(t, `{"k\tx":{"$date":"2026-08-11T22:28:10.000\u005A"}}`), []ownedField{
+			{Key: "k\tx", Kind: KindString, Ext: ExtDate, Raw: "2026-08-11T22:28:10.000Z"},
+		})
+	})
+	t.Run("chave escapada com fallback e campo seguinte", func(t *testing.T) {
+		assertFields(t, collect(t, `{"k\nx":{"$oid":"abc"},"z":"w"}`), []ownedField{
+			{Key: "k\nx", Kind: KindObject, Raw: `{"$oid":"abc"}`},
+			{Key: "z", Kind: KindString, Raw: "w"},
+		})
 	})
 }
