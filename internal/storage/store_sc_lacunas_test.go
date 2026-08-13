@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nishisan-dev/nishidb/internal/index/bitmap"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
@@ -32,6 +33,11 @@ func TestValorIndexavelGiganteEhBarradoAntesDoAppend(t *testing.T) {
 	if !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("valor indexável acima do teto deveria ser rejeitado como argumento inválido, obtido %v", err)
 	}
+	// A mensagem nomeia o campo pelo NOME, não só pelo id: quem lê o log é
+	// o operador, que conhece "status" e não o fieldID 2.
+	if !strings.Contains(err.Error(), `"status"`) {
+		t.Fatalf("a mensagem precisa nomear o campo: %v", err)
+	}
 	if errors.Is(err, ErrWriterFailed) {
 		t.Fatalf("evento ruim não pode matar o writer: %v", err)
 	}
@@ -53,6 +59,30 @@ func TestValorIndexavelGiganteEhBarradoAntesDoAppend(t *testing.T) {
 		t.Fatal("o evento rejeitado não pode ter sido gravado")
 	}
 	exigeBitmapCompleto(t, s2)
+}
+
+func TestTetoDoValorIndexavelNaFronteira(t *testing.T) {
+	// R2: o teto é do u16 do values.dict — 65535 cabe, 65536 não. Um teste
+	// só com "70000 falha" ficaria verde com o limite em qualquer lugar.
+	s := openStore(t, Options{BitmapFields: []types.FieldID{fldStatus}})
+
+	noLimite := strings.Repeat("v", bitmap.MaxValueBytes)
+	if _, _, err := s.Put([]byte("limite"), 1, 0, statusPayload(t, s, "limite", noLimite, 1), nil); err != nil {
+		t.Fatalf("valor de exatamente %d bytes deveria ser aceito: %v", bitmap.MaxValueBytes, err)
+	}
+	// E fica de fato indexado: aceitar sem indexar seria falso negativo.
+	it, err := s.LookupBitmap(fldStatus, strVal(noLimite))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows := collectRows(t, it); len(rows) != 1 {
+		t.Fatalf("o valor no limite deveria estar indexado: %v", rows)
+	}
+
+	umAMais := strings.Repeat("v", bitmap.MaxValueBytes+1)
+	if _, _, err := s.Put([]byte("acima"), 2, 0, statusPayload(t, s, "acima", umAMais, 2), nil); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("um byte acima do teto deveria ser recusado, obtido %v", err)
+	}
 }
 
 func TestFailWriterEmbrulhaSentinelaNaChamadaQueMata(t *testing.T) {

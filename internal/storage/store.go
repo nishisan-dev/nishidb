@@ -282,7 +282,17 @@ func Open(opts Options) (*Store, error) {
 		return nil, fmt.Errorf("storage: ler o manifest de %s: %w", opts.Dir, mErr)
 	default:
 		if err := s.recoverFrom(m, refs, dataDir); err != nil {
-			return nil, err
+			if errors.Is(err, ErrDatasetCorrupt) {
+				return nil, err // já classificado e com contexto próprio
+			}
+			// Erro do replay que não é corrupção: tipicamente o dataset tem
+			// um record incompatível com a configuração desta abertura — por
+			// exemplo um valor acima do teto do índice num campo que só
+			// agora foi declarado indexado. Sem contexto, o erro sai cru,
+			// sem nomear sequer o dataset. O remédio está no §14.22.
+			return nil, fmt.Errorf(
+				"storage: recovery de %s falhou ao aplicar o tail: %w (se a causa for um índice, reabra sem declarar o campo — o dado não se perde)",
+				opts.Dir, err)
 		}
 	}
 	// Checkpoint imediato: manifest desde a criação e estado limpo pós-
@@ -758,7 +768,8 @@ func (s *Store) validatePayloadAgainstDataset(payload []byte) error {
 		}
 		if _, indexado := s.bitmaps[id]; indexado {
 			if err := bitmap.ValidateValue(v); err != nil {
-				return fmt.Errorf("%w: campo %d tem índice bitmap: %w", ErrInvalidArgument, id, err)
+				nome, _ := s.dict.Name(id)
+				return fmt.Errorf("%w: campo %d (%q) tem índice bitmap: %w", ErrInvalidArgument, id, nome, err)
 			}
 		}
 	}
