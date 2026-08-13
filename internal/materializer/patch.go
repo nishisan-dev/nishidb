@@ -7,6 +7,7 @@ import (
 
 	"github.com/nishisan-dev/nishidb/internal/jsonp"
 	"github.com/nishisan-dev/nishidb/internal/schema"
+	"github.com/nishisan-dev/nishidb/internal/storage/fielddict"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
@@ -92,12 +93,23 @@ func (b *PatchBuffer) Parse(event []byte, c *schema.Compiled) error {
 		if cf.IsAuto && target == types.TypeNull {
 			// null JSON não fixa tipo: gravaria "sem tipo" e travaria o campo.
 			if t := InferType(f); t != types.TypeNull {
-				// O conflito precisa carregar ErrTypeConversion: sem ele o
-				// classify cai no default, vira CategoryStorage e PARA a
-				// ingestão por causa de um campo que mudou de formato na
-				// origem — que é evento ruim, não falha do dataset.
 				if err := c.FixAutoType(cf, t); err != nil {
-					return fmt.Errorf("campo %q: %w: %w", f.Key, ErrTypeConversion, err)
+					// Só o CONFLITO é evento ruim: o campo mudou de formato na
+					// origem. Ele precisa carregar ErrTypeConversion, senão o
+					// classify cai no default e PARA a ingestão por causa de um
+					// evento.
+					//
+					// Qualquer outro erro daqui é do DATASET — falha de I/O ao
+					// gravar o hint (disco cheio, EIO) ou bug de programação.
+					// Embrulhá-lo em ErrTypeConversion o faria virar "evento
+					// ruim": o pipeline pularia em silêncio, e para sempre, todo
+					// evento que tocasse um campo auto ainda sem tipo, com
+					// Failed=0 no painel. Bug e infra nunca entram no balde de
+					// dado ruim.
+					if errors.Is(err, fielddict.ErrTypeHintConflict) {
+						return fmt.Errorf("campo %q: %w: %w", f.Key, ErrTypeConversion, err)
+					}
+					return fmt.Errorf("campo %q: %w", f.Key, err) // STORAGE_ERROR
 				}
 				target = t
 			}

@@ -243,3 +243,57 @@ func TestConversaoDeValorNaoAcusaConflitoDeDicionario(t *testing.T) {
 		t.Error("conversão de valor não deveria acusar conflito de dicionário")
 	}
 }
+
+// dictFalhaAoFixar persiste nomes normalmente, mas falha ao gravar o TIPO — o
+// que o fielddict real faz quando o WriteAt/fsync do registro de hint falha
+// (disco cheio, EIO, EFBIG).
+type dictFalhaAoFixar struct {
+	inner *fakestorage.Dict
+	err   error
+}
+
+func (d dictFalhaAoFixar) LookupOrCreate(name []byte) (types.FieldID, error) {
+	return d.inner.LookupOrCreate(name)
+}
+
+func (d dictFalhaAoFixar) TypeHint(id types.FieldID) (types.FieldType, bool) {
+	return d.inner.TypeHint(id)
+}
+
+func (d dictFalhaAoFixar) SetTypeHint(types.FieldID, types.FieldType) error { return d.err }
+
+// Falha de I/O ao PERSISTIR o tipo fixado vem do dataset, não do evento.
+// Contabilizá-la como TYPE_CONVERSION faria o pipeline pular, em silêncio e
+// para sempre, todo evento que tocasse um campo auto ainda sem tipo — com
+// Failed=0 no painel, que é a leitura oposta da realidade. A política de três
+// baldes existe exatamente para impedir que bug/infra vire "dado ruim".
+func TestFalhaDeIODoDicionarioAoFixarTipoEhFailed(t *testing.T) {
+	s, err := schema.Parse([]byte(autoFixYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eio := errors.New(`fielddict: fsync do tipo de "X": input/output error`)
+	c, err := s.Compile(dictFalhaAoFixar{inner: fakestorage.NewDict(), err: eio})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := New(c, fakestorage.New(fakestorage.Indexes{}))
+
+	r := m.Apply([]byte(`{"id":"A","X":5}`))
+
+	if r.Action != ActionFailed {
+		t.Fatalf("Action = %v (%v), want Failed: falha do dicionário não é evento ruim", r.Action, r.Err)
+	}
+	if r.Category != CategoryStorage {
+		t.Errorf("Category = %v, want STORAGE_ERROR", r.Category)
+	}
+	if errors.Is(r.Err, ErrTypeConversion) {
+		t.Errorf("erro = %v, want SEM ErrTypeConversion: é falha de infra, não conversão", r.Err)
+	}
+	if !errors.Is(r.Err, eio) {
+		t.Errorf("erro = %v, want preservar o erro do dicionário", r.Err)
+	}
+	if mt := m.Metrics(); mt.InvalidTotal != 0 || mt.FailedTotal != 1 {
+		t.Errorf("métricas = %+v, want InvalidTotal=0 FailedTotal=1", mt)
+	}
+}
