@@ -435,6 +435,23 @@ func TestParseCopiesFromEvent(t *testing.T) {
 	}
 }
 
+// O evento do benchmark só cumpre seu papel se os escapes forem escapes de
+// verdade: este teste decodifica o que o gate de 0 allocs atravessa a cada
+// iteração e falha se alguém trocar a sequência por UTF-8 cru.
+func TestBenchEventEscapesDecode(t *testing.T) {
+	c := compileYAML(t, patchYAML)
+	b := parsePatch(t, c, string(benchRadiusEvent))
+	if got := string(entryByName(t, b, "User-Name").val.Bytes); got != "joão@isp.net.br 😀" {
+		t.Errorf("User-Name = %q (escapes \\u e surrogate pair não decodificaram)", got)
+	}
+	if got := string(entryByName(t, b, "Class").val.Bytes); got != "srv=hsi&prof=200M \"tag\"\nfim" {
+		t.Errorf("Class = %q", got)
+	}
+	if got := string(entryByName(t, b, "NAS-Port-Id").val.Bytes); got != "ethernet1/1/1:100.200" {
+		t.Errorf("NAS-Port-Id = %q", got)
+	}
+}
+
 func TestParseReuse(t *testing.T) {
 	c := compileYAML(t, patchYAML)
 	var b PatchBuffer
