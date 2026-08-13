@@ -849,6 +849,55 @@ Caminho crítico: T0→T1→T3→T4→T8→T9→T10 (materializer) e T11→T12�
 | R11 | **int64 vs double no `auto`**: número "5000" vira int64, depois patch traz "5000.5" → conflito de tipo no mesmo campo | **RESOLVIDO na QP.** Tipo do campo auto é fixado na PRIMEIRA observação e PERSISTIDO no `typeHint` do `fields.dict` (registro append-only, v2), então sobrevive a restart; conversão posterior incompatível = TYPE_CONVERSION log-and-skip. `EffectiveType()` expõe o tipo ao binder; `TypeNull` = "nunca observado" e é o único estado em que a comparação é recusada. Ver a nota sobre o conflito de dicionário logo abaixo |
 | R12 | **Gerador contaminando a medição** (allocs do harness contadas como allocs da engine) | Gerador ~0 alloc (D8) + corpus pré-gerado nos micro-benchmarks |
 
+### Defesas que existem por um motivo diferente do escrito (notas da Q13)
+
+Três defesas do bloco SQL foram justificadas, no plano original, por razões que **não se sustentam**.
+Todas foram MANTIDAS — o que mudou foi a razão, e com ela o teste que as protege. Registrar isso
+importa porque uma defesa mantida por superstição é a primeira a ser removida por quem lê o código
+depois e percebe que o argumento não fecha.
+
+1. **Disciplina do arena no binder** ("offsets primeiro, janelas depois"). A justificativa escrita era
+   *"a realocação invalida as janelas já emitidas"* — e isso é **falso em Go**: depois de um `append`
+   que realoca, o array antigo continua vivo e imutável, e uma janela criada com full slice expression
+   (`arena[i:j:j]`) nunca é alcançada por um append posterior. Nenhum valor corrompe. O que a
+   disciplina protege é **memória**: sem ela o `BoundQuery` retém um array intermediário por
+   realocação, em vez de um só. Num sistema cujo critério de aceite é RSS (§108-111), reter arrays por
+   consulta é exatamente o vazamento que a arquitetura existe para evitar. Teste correspondente:
+   `TestJanelasVivemNoArenaDoBoundQuery`, que compara endereços com `unsafe.SliceData` e falha se
+   alguma janela ficar apontando para um array anterior — mutação que removia a disciplina passava por
+   toda a suíte antes dele.
+2. **Erro E10 do binder** (nó de expressão desconhecido). É **inalcançável de fora do pacote**:
+   `parser.Expr` é selada, então nenhum chamador consegue construir um nó que caia no `default`. A
+   defesa fica, porque um nó NOVO adicionado à AST no futuro tem de falhar alto em vez de ser
+   ignorado em silêncio — mas o teste correspondente é documentação de inalcançabilidade, não
+   asserção de comportamento, e foi escrito como tal.
+3. **Budget de profundidade do flatten no planner** (64). Ele não protege contra estouro de pilha no
+   range testado — Go cresce a pilha — e sim fixa um comportamento: acima do teto a subárvore vira
+   conjunct opaco e a query degrada para full scan. Sem um teste que ponha um termo INDEXÁVEL abaixo
+   do teto, remover o budget não quebra nada, porque uma AST de 200 níveis com folhas não indexáveis
+   degrada de qualquer jeito.
+
+### Profundidade da árvore: quem recursa e quem não pode (nota da Q13/Q14)
+
+A espinha de AND/OR **não** é limitada por `MaxExprDepth` — esse teto é de **parênteses**. Uma query
+gerada por máquina (um `IN` expandido, um filtro montado por UI) produz `a=1 AND a=1 AND …` com
+dezenas de milhares de termos, e o parser a aceita: `parseAnd`/`parseOr` são iterativos exatamente por
+isso. A consequência vale para **todo consumidor da árvore**:
+
+- o **parser** é iterativo na espinha (já era);
+- o **binder** era recursivo nas DUAS passadas (`expr` e `preencheSlots`) e estourava 4 MiB de pilha
+  com 50 mil termos. Agora percorre a espinha esquerda iterativamente e usa pilha explícita na
+  segunda passada; o lado direito segue recursivo, limitado por `binder.MaxBindDepth` (teto de
+  RECURSO, alcançável só com AST montada à mão, já que aprofundar à direita exige parênteses);
+- o **planner** achata com budget de 64 e degrada — seguro por construção;
+- o **executor (Q15)** avalia o WHERE **por row**: um walk recursivo ali paga o custo N vezes, e é o
+  lugar onde este problema dói mais. A avaliação de predicado precisa nascer iterativa.
+
+O teste que prova o custo (e não só o comportamento) roda o bind num **processo filho com
+`debug.SetMaxStack(4 MiB)`**: com a espinha iterativa sobra folga; com um frame por termo o runtime
+mata o processo com `goroutine stack exceeds`. Foi ele que revelou o segundo caso (`preencheSlots`),
+que passava despercebido sem `-race` porque os frames eram menores.
+
 ### R11 — quando o conflito de tipo aparece de verdade (nota da QP)
 
 O conflito de tipo do dicionário (`fielddict.ErrTypeHintConflict`) é **inalcançável com um único
