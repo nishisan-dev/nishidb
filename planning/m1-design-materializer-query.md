@@ -737,6 +737,19 @@ Dependência: este harness precisa do storage engine real (Fase 1, outro plano).
 
 ---
 
+**ENTREGUE (Q20) — e a rodada de 8M já foi executada: APROVADA.** Resultado completo em `benchmark/baselines/ingest-8m-20260813.md` (com os JSON de 1M e 8M ao lado). Resumo: **RSS máximo 490 MiB** contra o teto de 1 GiB; **heap de 857 KiB para 8M entidades** contra 2,7 MiB para 1M (0,31x de heap para 8x de dados — desacoplado); 49.233 ev/s no LOAD; 0,07 allocs/evento; p95 de 3 µs no point lookup e 313 µs no bitmap+LIMIT 100, com 4 leitores concorrentes ao writer; 6,35 GiB em disco para 386 MiB residentes de mmap, que é a separação da §79 medida na prática.
+
+Diferenças entre o esboço acima e o entregue:
+
+- A flag `-storage fake|real` **não existe**: o Store real ficou pronto antes do harness, e um modo fake produziria números sem valor de aceite que alguém acabaria citando. O harness roda só contra o real.
+- As leituras concorrentes do STEADY **não são SQL** (o executor é a Q15): são os três caminhos que ele usará por baixo — point lookup, bitmap com limite e scan. Já valem como prova da promessa de concorrência do Store (§45/§46) sob carga, que nenhum teste unitário exercita.
+- O gate §110 exige o report de uma rodada MENOR (`-heap-baseline`). Sem ele o gate se declara **pulado**, nunca aprovado por omissão — a diferença entre "não medi" e "está bom" é a que importa num relatório de aceite. Baseline maior que a rodada atual é rejeitado (compararia na direção errada).
+- Gate novo `no_event_loss` (§101): descarte de evento é sinal de corpus ou pipeline quebrado, não de carga, e passaria despercebido no meio dos agregados.
+
+**Achado operacional da rodada — `checkpoint` é o que mantém o heap desacoplado.** A primeira rodada de 1M REPROVOU o §110: heap de 36,5 MiB contra 2,8 MiB na de 100k (13,19x de heap para 10x de dados). A causa é o overlay de locations, que vive em heap até um checkpoint aplicá-lo ao mmap — sem checkpoint, ~36 bytes por row acumulam indefinidamente. Repetindo com `-checkpoint-every 200000`: 2,7 MiB, ou 0,97x de heap para 10x de dados. Por isso o harness passou a ter checkpoint LIGADO por default (500k eventos), e fica registrado que checkpoint periódico não é só otimização de recovery: é o mecanismo que drena o overlay. Vale para a documentação de operação do M1.
+
+---
+
 ## 6. Decomposição em tarefas TDD (ordem de execução)
 
 Convenção: cada tarefa = testes primeiro (red) → implementação (green) → refactor. Testes de materialização mapeiam §103; de query, §106. Dependências indicadas. Storage real NÃO bloqueia nada até T17: usar fakes.
@@ -798,11 +811,11 @@ Testes: determinismo (mesma seed ⇒ bytes idênticos) **+ golden de hash entre 
 **T18 — `internal/testutil/memprof`** *(sem dep; Linux build tag)* — ENTREGUE
 Testes: fixtures de `/proc` para kernel moderno (RssAnon/RssFile no status) e antigo (fallback pelo smaps_rollup); degradação sem erro quando a separação não existe; erros com substring (status ausente, VmRSS ausente, valor não numérico, unidade inesperada); conversão KiB→bytes tabelada; smoke real (VmHWM ≥ VmRSS, anon+file ≤ VmRSS, MemStats plausíveis); monotonicidade dos contadores acumulados entre duas leituras. Stub não-Linux compila e falha com mensagem (verificado com GOOS=darwin/windows).
 
-**T19 — micro-benchmarks integrados** *(dep: T10, T15, T17)*
-`BenchmarkApplyCreate/ApplyMergePatch/ApplyStale/QueryPointLookup/QueryBitmapLimit100/FullScan1k` com corpus radiusgen + fakes; baselines commitados; alvo M1: Apply ≤ 10 allocs (fake storage), documentado o esperado com storage real.
+**T19 — micro-benchmarks integrados** *(dep: T10, T15, T17)* — ENTREGUE
+`BenchmarkApplyCreate/ApplyMergePatch/ApplyStale/QueryPointLookup/QueryBitmapLimit100/FullScan1k` em `benchmark/micro/`, com corpus do radiusgen e o YAML de produção. Os três de query rodam contra o **Store real** (o executor ainda não existe; medir os caminhos que ele usará por baixo separa o custo do storage do custo do plano). Baseline em `benchmark/baselines/micro-20260813.txt` com os parâmetros de reprodução; `make bench-micro` usa os mesmos. Gates na suíte: Apply create/merge/stale em **0 allocs**, ingestão com dublê com teto 4 (o alvo de 10 do design ficaria 10x acima do medido, que é 1, e não pegaria regressão de ordem de grandeza), point lookup no Store real com teto 2 (medido: 0). Números: ingestão completa sobre o Store real a ~8,6 µs/evento (**~116k ev/s por core, 0 allocs**), point lookup 0,93 µs, bitmap+LIMIT 100 em 56 µs, scan de 1k em 586 µs.
 
-**T20 — `benchmark/ingest-bench` harness** *(dep: T17, T18, T19; storage real quando disponível)*
-Teste: smoke run 10k entidades / 5s steady com `-storage fake` valida mecânica, relatório JSON e gates. Rodada 8M real fica agendada para quando a Fase 1 (storage) entregar — gates §109/§110 ligados aí.
+**T20 — `benchmark/ingest-bench` harness** *(dep: T17, T18, T19; storage real quando disponível)* — ENTREGUE, **com a rodada de 8M já executada e APROVADA** (ver §5.2 e `benchmark/baselines/ingest-8m-20260813.md`)
+Testes da mecânica em escala pequena e TempDir (300 entidades): LOAD cria uma row por entidade; STEADY produz série temporal e agregados; rate limiter segura a taxa; leitores concorrentes produzem latências nas três classes; gate de RSS REPROVA com teto impossível; gate de heap pula sem baseline, compara com baseline menor e rejeita baseline maior ou ilegível; checkpoint durante a ingestão; Config inválida; relatório com round-trip JSON. A rodada pesada continua sendo operação manual com `-data` em disco real.
 
 Caminho crítico: T0→T1→T3→T4→T8→T9→T10 (materializer) e T11→T12→T13→T14→T15 (query, paralelizável com o ramo do materializer a partir de T5). T6/T7 destravam cedo e são pequenos.
 
