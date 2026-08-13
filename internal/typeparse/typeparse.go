@@ -15,6 +15,7 @@ package typeparse
 import (
 	"errors"
 	"math"
+	"net/netip"
 	"strconv"
 	"time"
 
@@ -277,6 +278,50 @@ func IPv4(raw []byte) (a, b, c, d byte, ok bool) {
 		return 0, 0, 0, 0, false
 	}
 	return byte(oct[0]), byte(oct[1]), byte(oct[2]), byte(oct[3]), true
+}
+
+// IPv6 valida um endereço IPv6 textual e devolve os 16 bytes em network
+// order.
+//
+// Os critérios são os MESMOS da ingestão, e cada um tem uma razão:
+//
+//   - endereço v4 puro é RECUSADO. netip.ParseAddr("10.0.0.1") tem sucesso
+//     com Is4() == true, e aceitá-lo produziria 16 bytes de v4-mapped que a
+//     ingestão nunca gravou — toda comparação daria false em silêncio;
+//   - zona (%eth0) é RECUSADA: não faz parte do valor armazenado;
+//   - ::ffff:1.2.3.4 (Is4In6) é ACEITO — é um endereço v6 legítimo e a
+//     ingestão sempre o aceitou.
+func IPv6(raw []byte) (addr [16]byte, ok bool) {
+	// netip.ParseAddr não retém o argumento: unsafex.String é seguro.
+	a, err := netip.ParseAddr(unsafex.String(raw))
+	if err != nil || a.Is4() || a.Zone() != "" {
+		return [16]byte{}, false
+	}
+	return a.As16(), true
+}
+
+// IPv4Prefix valida um prefixo IPv4 textual (a.b.c.d/bits) e devolve os 4
+// bytes do endereço e o comprimento do prefixo.
+//
+// Os host bits NÃO são mascarados: 10.0.0.1/24 continua 10.0.0.1/24. É o que
+// netip.ParsePrefix faz e o que a ingestão gravou — mascarar aqui faria a
+// query procurar bytes diferentes dos armazenados.
+func IPv4Prefix(raw []byte) (addr [4]byte, bits byte, ok bool) {
+	pfx, err := netip.ParsePrefix(unsafex.String(raw))
+	if err != nil || !pfx.Addr().Is4() {
+		return [4]byte{}, 0, false
+	}
+	return pfx.Addr().As4(), byte(pfx.Bits()), true
+}
+
+// IPv6Prefix é o análogo de IPv4Prefix para IPv6: 16 bytes mais o
+// comprimento, host bits preservados, prefixo v4 recusado.
+func IPv6Prefix(raw []byte) (addr [16]byte, bits byte, ok bool) {
+	pfx, err := netip.ParsePrefix(unsafex.String(raw))
+	if err != nil || pfx.Addr().Is4() {
+		return [16]byte{}, 0, false
+	}
+	return pfx.Addr().As16(), byte(pfx.Bits()), true
 }
 
 // Digits2 lê exatamente 2 dígitos decimais; b deve ter len ≥ 2.
