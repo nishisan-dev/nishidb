@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -263,6 +264,84 @@ func TestGateAppendValueZeroAllocPorTipo(t *testing.T) {
 			got := testing.AllocsPerRun(1000, func() { dst = AppendValue(dst[:0], v) })
 			if got != 0 {
 				t.Errorf("AppendValue(%s) = %.1f allocs/op, want 0", nome, got)
+			}
+		})
+	}
+	lixo = dst
+}
+
+// G1-writer: o StreamWriter não pode alocar em regime. Sem este gate, uma
+// realocação por flush passa pela suíte inteira e leva a alocação total a
+// 1,4x o tamanho da saída — num caminho cujo contrato é justamente memória
+// constante.
+//
+// A medição pula as primeiras escritas: o buffer cresce até o teto
+// (bufSize + maiorLinha) e SÓ DEPOIS entra em regime. Medir o aquecimento
+// junto mediria o crescimento, não o regime.
+func TestGateStreamWriterZeroAllocEmRegime(t *testing.T) {
+	s := NewStreamWriter(io.Discard, 4096)
+	row := rowDeTeste(1)
+	for i := 0; i < 2000; i++ { // aquecimento: leva o buffer ao teto
+		if err := s.WriteRow(row); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A medição é ABSOLUTA, e não por testing.AllocsPerRun: ele faz divisão
+	// INTEIRA (mallocs/runs), então qualquer taxa abaixo de 1 alocação por
+	// chamada aparece como 0,0. Uma realocação a cada flush — que acontece a
+	// cada ~146 rows com este buffer — é exatamente uma taxa dessas, e passaria
+	// despercebida.
+	const rodadas = 3000
+	if got := mallocsEm(t, func() {
+		for i := 0; i < rodadas; i++ {
+			if err := s.WriteRow(row); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}); got != 0 {
+		t.Errorf("%d alocações em %d WriteRow, want 0 (%.4f por chamada)",
+			got, rodadas, float64(got)/rodadas)
+	}
+	if got := mallocsEm(t, func() {
+		for i := 0; i < 200; i++ {
+			if err := s.Flush(); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}); got != 0 {
+		t.Errorf("%d alocações em 200 Flush, want 0", got)
+	}
+}
+
+// mallocsEm conta as alocações ABSOLUTAS de f, com o GC parado para que o
+// número seja o de mallocs e não o saldo.
+func mallocsEm(t *testing.T, f func()) uint64 {
+	t.Helper()
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
+	var antes, depois runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&antes)
+	f()
+	runtime.ReadMemStats(&depois)
+	return depois.Mallocs - antes.Mallocs
+}
+
+// Os três caminhos do encoder que os gates anteriores NÃO exercitavam: o json
+// com control char (que passa pelo laço de sanitização), a string com UTF-8
+// inválido (que passa pelo caminho de escape) e o escape dentro do AppendRow.
+func TestGateCaminhosNaoTriviaisZeroAlloc(t *testing.T) {
+	casos := map[string]Row{
+		"json com control char": {cols: []ColView{col("j",
+			types.Value{Type: types.TypeJSON, Bytes: []byte("{\"a\": 1,\n\t\"b\": 2}")})}},
+		"utf-8 inválido": {cols: []ColView{col("s", str("a\xffb\xc3"))}},
+		"escape no valor e no nome": {cols: []ColView{
+			{Name: "com\"aspas", Val: str("linha\nnova\ttab")}}},
+	}
+	dst := make([]byte, 0, 4096)
+	for nome, row := range casos {
+		t.Run(nome, func(t *testing.T) {
+			if got := testing.AllocsPerRun(1000, func() { dst = AppendRow(dst[:0], row) }); got != 0 {
+				t.Errorf("%s = %.1f allocs/op, want 0", nome, got)
 			}
 		})
 	}

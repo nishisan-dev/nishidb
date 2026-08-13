@@ -18,6 +18,11 @@ import (
 // Se este teste falhar com números próximos mas diferentes, procure alocação
 // por ROW (crescimento de buffer, string(), boxing em interface); se falhar com
 // números muito diferentes, alguém materializou o resultado.
+// tetoPorQuery é o valor MEDIDO do custo fixo de uma query (Open: slots,
+// colunas, programa do predicado, fonte). Colado, sem folga, pela convenção do
+// projeto: um teto folgado não acusa nem uma duplicação do custo.
+const tetoPorQuery = 38
+
 func TestScanAllocsIndependenteDoNumeroDeRows(t *testing.T) {
 	const sql = `SELECT id, nome, n FROM linhas WHERE nome = 'linha' AND n >= 0`
 
@@ -37,6 +42,13 @@ func TestScanAllocsIndependenteDoNumeroDeRows(t *testing.T) {
 	mil := testing.AllocsPerRun(20, varre(1_000))
 	oitoMil := testing.AllocsPerRun(20, varre(8_000))
 
+	// A igualdade prova que não há alocação por ROW; o TETO prova que o custo
+	// fixo por query não cresceu. Sem ele, +71 allocs constantes passariam
+	// despercebidas — a igualdade continuaria valendo, porque elas são
+	// constantes.
+	if mil > tetoPorQuery {
+		t.Errorf("allocs/query = %.0f, teto %d: o custo fixo do Open cresceu", mil, tetoPorQuery)
+	}
 	if mil != oitoMil {
 		t.Errorf("allocs/query = %.0f com 1.000 rows e %.0f com 8.000: "+
 			"a diferença é alocação POR ROW (%.4f por row)",
