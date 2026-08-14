@@ -55,7 +55,7 @@ import (
 //	  500 eventos
 //	intervalo do YAML    12 execuções   mediana de 1,88x a 2,16x  12 vermelhos
 //	  1000x menor (bug
-//	  de unidade em duracao)
+//	  de unidade em units.Duracao)
 //
 // O fator 1,4 fica entre as duas populações: 13% acima do pior caso sem
 // mutação e 27% abaixo do melhor caso com mutação.

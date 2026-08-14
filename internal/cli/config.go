@@ -6,13 +6,12 @@ package cli
 import (
 	"fmt"
 	"os"
-	"strconv"
-	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
 
 	"github.com/nishisan-dev/nishidb/internal/schema"
+	"github.com/nishisan-dev/nishidb/internal/units"
 )
 
 // Config é o subconjunto do nishidb.yaml (spec §78) que os comandos do M1
@@ -84,16 +83,16 @@ func CarregaConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("configuração %s: datasets.directory é obrigatório", path)
 	}
 
-	if c.segmentSize, err = tamanho(c.Storage.SegmentSize, segmentSizePadrao); err != nil {
+	if c.segmentSize, err = units.Tamanho(c.Storage.SegmentSize, segmentSizePadrao); err != nil {
 		return nil, fmt.Errorf("configuração %s: storage.segmentSize: %w", path, err)
 	}
-	if c.checkpointInterval, err = duracao(c.Storage.Checkpoint.Interval, checkpointIntervalPadrao); err != nil {
+	if c.checkpointInterval, err = units.Duracao(c.Storage.Checkpoint.Interval, checkpointIntervalPadrao); err != nil {
 		return nil, fmt.Errorf("configuração %s: storage.checkpoint.interval: %w", path, err)
 	}
-	if c.defaultMaxRows, err = inteiroPositivo(c.Query.DefaultMaxRows, maxRowsPadrao); err != nil {
+	if c.defaultMaxRows, err = units.InteiroPositivo(c.Query.DefaultMaxRows, maxRowsPadrao); err != nil {
 		return nil, fmt.Errorf("configuração %s: query.defaultMaxRows: %w", path, err)
 	}
-	if c.defaultTimeout, err = duracao(c.Query.DefaultTimeout, timeoutPadrao); err != nil {
+	if c.defaultTimeout, err = units.Duracao(c.Query.DefaultTimeout, timeoutPadrao); err != nil {
 		return nil, fmt.Errorf("configuração %s: query.defaultTimeout: %w", path, err)
 	}
 	return &c, nil
@@ -103,73 +102,6 @@ func CarregaConfig(path string) (*Config, error) {
 // chave equivalente.
 func (c *Config) DefaultsDeQuery() schema.Defaults {
 	return schema.Defaults{MaxRows: c.defaultMaxRows, Timeout: c.defaultTimeout}
-}
-
-// inteiroPositivo aplica o padrão quando a chave está AUSENTE e recusa
-// qualquer valor não positivo. Zero e negativo não são "sem valor": são teto
-// que nenhuma consulta poderia satisfazer, e aceitá-los em silêncio faria a
-// configuração mentir.
-func inteiroPositivo(v *int, padrao int) (int, error) {
-	if v == nil {
-		return padrao, nil
-	}
-	if *v <= 0 {
-		return 0, fmt.Errorf("deve ser positivo, é %d", *v)
-	}
-	return *v, nil
-}
-
-// tamanho aceita as unidades binárias da spec (512MiB, 1GiB) e o número puro
-// em bytes. As unidades DECIMAIS (MB, GB) são recusadas em vez de
-// interpretadas: aceitar as duas grafias faria "512MB" e "512MiB" parecerem a
-// mesma coisa e diferirem em 7% de disco.
-func tamanho(s string, padrao int64) (int64, error) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return padrao, nil
-	}
-	unidades := []struct {
-		sufixo string
-		mult   int64
-	}{
-		{"KiB", 1 << 10}, {"MiB", 1 << 20}, {"GiB", 1 << 30}, {"TiB", 1 << 40}, {"B", 1},
-	}
-	for _, u := range unidades {
-		if !strings.HasSuffix(s, u.sufixo) {
-			continue
-		}
-		n, err := strconv.ParseInt(strings.TrimSpace(strings.TrimSuffix(s, u.sufixo)), 10, 64)
-		if err != nil {
-			return 0, fmt.Errorf("valor inválido %q", s)
-		}
-		if n <= 0 {
-			return 0, fmt.Errorf("valor deve ser positivo, é %q", s)
-		}
-		return n * u.mult, nil
-	}
-	n, err := strconv.ParseInt(s, 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("valor inválido %q (use bytes ou sufixo KiB/MiB/GiB)", s)
-	}
-	if n <= 0 {
-		return 0, fmt.Errorf("valor deve ser positivo, é %q", s)
-	}
-	return n, nil
-}
-
-func duracao(s string, padrao time.Duration) (time.Duration, error) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return padrao, nil
-	}
-	d, err := time.ParseDuration(s)
-	if err != nil {
-		return 0, fmt.Errorf("duração inválida %q", s)
-	}
-	if d <= 0 {
-		return 0, fmt.Errorf("duração deve ser positiva, é %q", s)
-	}
-	return d, nil
 }
 
 // DirDoDataset é onde os arquivos do dataset vivem.
