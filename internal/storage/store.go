@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -15,6 +16,8 @@ import (
 
 	"github.com/nishisan-dev/nishidb/internal/index/bitmap"
 	"github.com/nishisan-dev/nishidb/internal/index/primary"
+	"github.com/nishisan-dev/nishidb/internal/logging"
+	"github.com/nishisan-dev/nishidb/internal/metrics"
 	"github.com/nishisan-dev/nishidb/internal/storage/checkpoint"
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 	"github.com/nishisan-dev/nishidb/internal/storage/fielddict"
@@ -78,6 +81,18 @@ type Options struct {
 	// INCOMPLETO — falso negativo silencioso em query.
 	AllowBitmapDrop bool
 	SyncEveryPut    bool // durability=sync (testes/config)
+	// Log é o logger estruturado do §95. Quando nil, o Store escreve em
+	// stderr no formato texto — que é o comportamento que os log.Printf
+	// tinham antes, e perder a divergência de recovery só porque o chamador
+	// não injetou logger seria trocar observabilidade por cerimônia.
+	Log *logging.Logger
+	// Dataset é o nome lógico, usado como label de métrica e campo de log.
+	// Vazio herda o nome do diretório.
+	Dataset string
+	// Metrics, quando presente, recebe as séries do §92 que só o storage
+	// pode medir (duração e último sucesso do checkpoint). Nil desliga a
+	// instrumentação sem desligar nada mais.
+	Metrics *metrics.Registry
 }
 
 // Stats é o snapshot mínimo de estado do Store.
@@ -161,6 +176,12 @@ type Store struct {
 	// lock garante acesso exclusivo ao diretório do dataset.
 	lock *datasetLock
 
+	// Séries do §92 sobre o checkpoint. São nil quando o chamador não passou
+	// registry (CLI, testes), e todo uso é guardado — a instrumentação não
+	// pode ser condição de funcionamento do storage.
+	cpDuracao *metrics.SerieHistograma
+	cpUltimo  *metrics.SerieMedidor
+
 	// Buffers exclusivos do writer (Put).
 	buildBuf []byte // record em construção
 	prevBuf  []byte // fallback de leitura do estado anterior
@@ -205,6 +226,13 @@ func Open(opts Options) (*Store, error) {
 	if opts.SegmentSize == 0 {
 		opts.SegmentSize = defaultSegmentSize
 	}
+	if opts.Dataset == "" {
+		opts.Dataset = filepath.Base(filepath.Clean(opts.Dir))
+	}
+	if opts.Log == nil {
+		opts.Log = logging.New(os.Stderr, logging.FormatoTexto, slog.LevelInfo)
+	}
+	opts.Log = opts.Log.Component("storage").Dataset(opts.Dataset)
 	metaDir := filepath.Join(opts.Dir, "metadata")
 	dataDir := filepath.Join(opts.Dir, "data")
 	idxDir := filepath.Join(opts.Dir, "indexes")
@@ -227,6 +255,14 @@ func Open(opts Options) (*Store, error) {
 		opts:     opts,
 		bitmaps:  make(map[types.FieldID]*bitmap.Index),
 		segTally: make(map[uint32]*segStats),
+	}
+	if opts.Metrics != nil {
+		s.cpDuracao = opts.Metrics.Histograma(metrics.MetCheckpointDurationSeconds,
+			"Duração do checkpoint em segundos, da chamada ao manifest durável (inclui a espera pelo mutex do writer, que é stall real).",
+			limitesDeCheckpoint, metrics.LabelDataset).Com(opts.Dataset)
+		s.cpUltimo = opts.Metrics.Medidor(metrics.MetCheckpointLastSuccessTimestmp,
+			"Unix timestamp do último checkpoint bem-sucedido. Fica em 0 até o primeiro.",
+			metrics.LabelDataset).Com(opts.Dataset)
 	}
 	ok := false
 	defer func() {

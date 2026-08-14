@@ -1,7 +1,12 @@
 //go:build linux
 
-// Package memprof lê o consumo de memória do PRÓPRIO processo para os
-// harnesses de benchmark (spec §79 e §108-111).
+// Package memprof lê o consumo de memória do PRÓPRIO processo (spec §79 e
+// §108-111).
+//
+// Nasceu servindo só aos harnesses de benchmark e por isso morava em
+// internal/testutil. Saiu de lá no M2 porque o §79 é obrigação do MOTOR, não
+// da bancada de medição: "a engine deve coletar e expor process RSS, Go heap,
+// Go heap objects, mapped bytes". O /metrics do §93 lê daqui.
 //
 // A distinção que justifica o pacote: `runtime.MemStats` mede o heap Go, e o
 // NishiDB guarda a maior parte do estado FORA dele — em índices mmap, que são

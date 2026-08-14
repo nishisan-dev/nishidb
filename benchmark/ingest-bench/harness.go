@@ -32,7 +32,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/materializer"
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/storage"
-	"github.com/nishisan-dev/nishidb/internal/testutil/memprof"
+	"github.com/nishisan-dev/nishidb/internal/memprof"
 	"github.com/nishisan-dev/nishidb/internal/testutil/radiusgen"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )

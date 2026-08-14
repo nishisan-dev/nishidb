@@ -35,6 +35,34 @@ import (
 // pacotes). Nenhum batching de Sync de dicionário pode ser introduzido
 // aqui — quebraria o replay do tail de forma silenciosa.
 func (s *Store) Checkpoint() error {
+	inicio := time.Now()
+	err := s.checkpoint()
+	if err != nil {
+		return err
+	}
+	// Só o SUCESSO conta. Um checkpoint que falhou não tem duração
+	// interpretável (parou num passo arbitrário) e, principalmente, não pode
+	// mexer no "último sucesso" — é justamente esse relógio parado que revela
+	// um writer em modo falho gravando nada há meia hora.
+	//
+	// A medição inclui a espera pelo mutex do writer de propósito: para quem
+	// opera, o custo do checkpoint É o stall total da ingestão, não só o
+	// tempo de fsync.
+	if s.cpDuracao != nil {
+		s.cpDuracao.Observa(time.Since(inicio).Seconds())
+		s.cpUltimo.Set(float64(time.Now().Unix()))
+	}
+	return nil
+}
+
+// limitesDeCheckpoint cobre a faixa observada no M1 (checkpoint de dataset de
+// 8M com msync de índices) e vai até 30s, que é o intervalo padrão do §78: um
+// checkpoint que leve mais que o próprio intervalo é a definição de saturação.
+var limitesDeCheckpoint = []float64{
+	0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30,
+}
+
+func (s *Store) checkpoint() error {
 	if err := s.entra(); err != nil {
 		return err
 	}

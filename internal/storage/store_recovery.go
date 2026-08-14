@@ -2,7 +2,6 @@ package storage
 
 import (
 	"fmt"
-	"log"
 
 	"github.com/nishisan-dev/nishidb/internal/storage/checkpoint"
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
@@ -31,12 +30,15 @@ func (s *Store) recoverFrom(m *checkpoint.Manifest, refs []segment.SegmentRef, d
 	// verdade é o header do primary.idx (um rehash pós-checkpoint deixa o
 	// manifest para trás — divergência é esperada, não erro).
 	if m.PrimarySlotCount != s.prim.SlotCount() {
-		log.Printf("nishidb: manifest declara %d slots na primary; header tem %d (rehash pós-checkpoint; header prevalece)",
-			m.PrimarySlotCount, s.prim.SlotCount())
+		s.opts.Log.Info("recovery.primary_slots_divergem",
+			"manifest declara outro número de slots na primary; o header prevalece",
+			"manifest_slots", m.PrimarySlotCount, "header_slots", s.prim.SlotCount(),
+			"causa", "rehash pós-checkpoint")
 	}
 	if m.HashKind != s.prim.HashKind() {
-		log.Printf("nishidb: manifest declara hashKind %d; índice usa %d (header prevalece)",
-			m.HashKind, s.prim.HashKind())
+		s.opts.Log.Info("recovery.hashkind_diverge",
+			"manifest declara outro hashKind; o header prevalece",
+			"manifest_hashkind", m.HashKind, "header_hashkind", s.prim.HashKind())
 	}
 
 	// Conjunto de segmentos: todos os do manifest precisam existir no
