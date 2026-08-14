@@ -64,7 +64,7 @@ func TestRecordMaiorQueOTetoPassaSozinho(t *testing.T) {
 		t.Fatalf("record acima do teto travou a fila: %v", err)
 	}
 	it, ok := f.Recebe(ctx)
-	if !ok || len(it.rec.Value) != 5000 {
+	if !ok || len(it.Rec.Value) != 5000 {
 		t.Fatalf("Recebe = (%v, %v)", it, ok)
 	}
 }
@@ -139,7 +139,7 @@ func TestMarcaNaoConsomeOrcamento(t *testing.T) {
 		t.Errorf("a marca consumiu %d bytes do orçamento", bytes)
 	}
 	it, ok := f.Recebe(ctx)
-	if !ok || it.marca == nil {
+	if !ok || it.Marca == nil {
 		t.Fatalf("Recebe = (%+v, %v), quer o marcador", it, ok)
 	}
 }

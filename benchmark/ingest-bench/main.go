@@ -31,6 +31,16 @@ func main() {
 		rssLimit = flag.Uint64("rss-limit", 1<<30, "gate §109: teto de RSS em bytes")
 		baseline = flag.String("heap-baseline", "", "report de uma rodada MENOR, para o gate §110")
 		out      = flag.String("report", "", "arquivo de saída do relatório JSON (vazio = stdout)")
+
+		// Ingestão Kafka REAL. Sem -kafka a rodada usa o gerador em memória,
+		// que é o modo rápido de regressão — e o que o M1 media, deixando o
+		// custo do consumidor fora do orçamento publicado (§108, débito M2 #2).
+		kafkaBrokers = flag.String("kafka", "", "brokers (host:porta[,host:porta]); vazio usa o gerador em memória")
+		kafkaTopic   = flag.String("kafka-topic", "nishidb-bench", "tópico da rodada com ingestão Kafka real")
+		kafkaGroup   = flag.String("kafka-group", "nishidb-bench", "consumer group da rodada")
+		kafkaQueue   = flag.Int("kafka-queue", 5000, "capacidade da fila limitada, em registros")
+		kafkaBytes   = flag.Int64("kafka-queue-bytes", 64<<20, "teto da fila limitada, em bytes")
+		kafkaPoll    = flag.Int("kafka-max-poll", 1000, "registros por fetch")
 	)
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, `ingest-bench — rodada de aceite de memória do NishiDB (spec §108-111)
@@ -66,21 +76,36 @@ Ela vale pelo report que produz, não pelo veredito. O aceite é a SEGUNDA.
 		os.Exit(2)
 	}
 
+	var brokers []string
+	if *kafkaBrokers != "" {
+		brokers = strings.Split(*kafkaBrokers, ",")
+		for i := range brokers {
+			brokers[i] = strings.TrimSpace(brokers[i])
+		}
+	}
+
 	rep, err := Run(Config{
-		SpecPath:       *spec,
-		DataDir:        *dataDir,
-		Entities:       *entities,
-		Seed:           *seed,
-		SteadyDuration: *steady,
-		SteadyRate:     *rate,
-		Readers:        *readers,
-		SQLReaders:     *sqlQrs,
-		SampleInterval: *sample,
-		SegmentSize:    *segment,
-		CheckpointOn:   *ckpt,
-		RSSLimitBytes:  *rssLimit,
-		HeapBaseline:   *baseline,
-		Out:            os.Stderr,
+		SpecPath:        *spec,
+		DataDir:         *dataDir,
+		Entities:        *entities,
+		Seed:            *seed,
+		SteadyDuration:  *steady,
+		SteadyRate:      *rate,
+		Readers:         *readers,
+		SQLReaders:      *sqlQrs,
+		SampleInterval:  *sample,
+		SegmentSize:     *segment,
+		CheckpointOn:    *ckpt,
+		RSSLimitBytes:   *rssLimit,
+		KafkaBrokers:    brokers,
+		KafkaTopic:      *kafkaTopic,
+		KafkaGroup:      *kafkaGroup,
+		KafkaQueueSize:  *kafkaQueue,
+		KafkaQueueBytes: *kafkaBytes,
+		KafkaMaxPoll:    *kafkaPoll,
+
+		HeapBaseline: *baseline,
+		Out:          os.Stderr,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "erro: %v\n", err)

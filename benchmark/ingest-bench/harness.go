@@ -65,6 +65,16 @@ type Config struct {
 	RSSLimitBytes uint64 // gate §109 (0 = desliga)
 	HeapBaseline  string // report de uma rodada menor, para o gate §110
 
+	// Kafka* ligam a ingestão REAL do §108. Sem eles a rodada usa o gerador
+	// em memória, que é o modo rápido de regressão — e o que o M1 media,
+	// deixando o custo do consumidor fora do orçamento publicado.
+	KafkaBrokers    []string
+	KafkaTopic      string
+	KafkaGroup      string
+	KafkaQueueSize  int
+	KafkaQueueBytes int64
+	KafkaMaxPoll    int
+
 	Out io.Writer // destino do progresso (nil = silencioso)
 }
 
@@ -205,11 +215,19 @@ type Report struct {
 	SQLErrors  int64         `json:"sql_errors"`
 	// FullScanSec é a duração de UMA varredura completa do dataset (predicado
 	// que não casa nada), medida fora do rodízio de consultas.
-	FullScanSec   float64          `json:"full_scan_sec"`
-	FullScanBytes int64            `json:"full_scan_bytes"`
-	Samples       []Sample         `json:"samples"`
-	Gates         []GateResult     `json:"gates"`
-	StoreStats    StoreStatsReport `json:"store_stats"`
+	FullScanSec   float64 `json:"full_scan_sec"`
+	FullScanBytes int64   `json:"full_scan_bytes"`
+	// Kafka* só são preenchidos na rodada com ingestão Kafka real (§108). O
+	// lag e a profundidade da fila são o que o §125 manda medir e o que
+	// nenhum relatório do M1 tinha.
+	KafkaLagFinal      int64   `json:"kafka_lag_final"`
+	KafkaQueueDepthMax int     `json:"kafka_queue_depth_max"`
+	KafkaQueueBytesMax int64   `json:"kafka_queue_bytes_max"`
+	RestartSec         float64 `json:"restart_sec"`
+
+	Samples    []Sample         `json:"samples"`
+	Gates      []GateResult     `json:"gates"`
+	StoreStats StoreStatsReport `json:"store_stats"`
 	// Passed é o veredito da RODADA: verdadeiro só quando todo gate duro foi
 	// avaliado e passou. Um gate duro que ficou sem avaliação reprova a rodada
 	// — inclusive a de referência do §110, que por construção não tem baseline
@@ -333,14 +351,9 @@ func Run(cfg Config) (*Report, error) {
 	}
 	sort.Strings(bitmapFields) // ordem determinística na criação do dicionário
 
-	st, err := storage.Open(storage.Options{
-		Dir:              cfg.DataDir,
-		SegmentSize:      cfg.SegmentSize,
-		EstimatedRows:    uint64(cfg.Entities),
-		BitmapFieldNames: bitmapFields,
-	})
+	st, err := abreStore(cfg, bitmapFields...)
 	if err != nil {
-		return nil, fmt.Errorf("ingest-bench: abrindo dataset: %w", err)
+		return nil, err
 	}
 	defer st.Close()
 
@@ -388,10 +401,18 @@ func Run(cfg Config) (*Report, error) {
 		return nil, err
 	}
 	fmt.Fprintf(cfg.Out, "LOAD: criando %d entidades...\n", cfg.Entities)
+	fonteLoad, kfk, err := montaFonte(cfg, loadGen, int64(cfg.Entities), 0)
+	if err != nil {
+		return nil, err
+	}
 	rep.Load, err = runPhase(phaseArgs{
-		name: "load", cfg: cfg, m: m, gen: loadGen, col: col,
+		name: "load", cfg: cfg, m: m, gen: fonteLoad, col: col,
 		events: int64(cfg.Entities), rate: 0, st: st,
 	})
+	if kfk != nil {
+		registraKafka(rep, kfk)
+		kfk.Fecha()
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -415,10 +436,21 @@ func Run(cfg Config) (*Report, error) {
 		sqlReaders := startSQLReaders(cfg, st, c, amostraDeKeys(cfg))
 		fmt.Fprintf(cfg.Out, "STEADY: %s a %d ev/s com %d leitores e %d consultas SQL...\n",
 			cfg.SteadyDuration, cfg.SteadyRate, cfg.Readers, cfg.SQLReaders)
+		fonteSteady, kfkSteady, err := montaFonte(cfg, steadyGen,
+			int64(cfg.SteadyDuration.Seconds())*int64(cfg.SteadyRate), cfg.SteadyRate)
+		if err != nil {
+			readers.stop()
+			sqlReaders.stop()
+			return nil, err
+		}
 		rep.Steady, err = runPhase(phaseArgs{
-			name: "steady", cfg: cfg, m: m, gen: steadyGen, col: col,
+			name: "steady", cfg: cfg, m: m, gen: fonteSteady, col: col,
 			duration: cfg.SteadyDuration, rate: cfg.SteadyRate, st: st,
 		})
+		if kfkSteady != nil {
+			registraKafka(rep, kfkSteady)
+			kfkSteady.Fecha()
+		}
 		if err != nil {
 			readers.stop()
 			sqlReaders.stop()
@@ -440,6 +472,9 @@ func Run(cfg Config) (*Report, error) {
 			rep.Steady.Events, humanBytes(rep.Steady.MaxRSSBytes), errosSQL)
 	}
 
+	// §125 manda medir o restart time, e nenhum relatório do M1 o tinha. É
+	// checkpoint + Close (quiesce) + Open (recovery, com replay do tail):
+	// exatamente o que um `systemctl restart` custa em indisponibilidade.
 	rep.Samples = col.samples
 	stats := st.Stats()
 	rep.StoreStats = StoreStatsReport{
@@ -448,6 +483,16 @@ func Run(cfg Config) (*Report, error) {
 		PrimaryLoadFactor: stats.PrimaryLoadFactor,
 		DiskBytes:         dirBytes(cfg.DataDir),
 	}
+
+	// O restart é medido por ÚLTIMO porque ele FECHA o Store: colhido antes,
+	// zeraria as StoreStats (Stats sobre Store fechado devolve o zero-value,
+	// que é indistinguível de um dataset vazio no relatório).
+	if err := st.Checkpoint(); err != nil {
+		return nil, fmt.Errorf("ingest-bench: checkpoint antes de medir o restart: %w", err)
+	}
+	rep.RestartSec = medeRestart(cfg, st, bitmapFields)
+	fmt.Fprintf(cfg.Out, "RESTART: %.2fs (§125)\n", rep.RestartSec)
+
 	rep.Gates = evaluateGates(cfg, rep)
 	rep.Passed = aprovaRodada(rep.Gates)
 	return rep, nil
@@ -457,7 +502,7 @@ type phaseArgs struct {
 	name     string
 	cfg      Config
 	m        *materializer.Materializer
-	gen      *radiusgen.Generator
+	gen      fonte
 	col      *collector
 	st       *storage.Store
 	events   int64         // parar após N eventos (0 = usar duration)
@@ -505,6 +550,12 @@ func runPhase(a phaseArgs) (PhaseReport, error) {
 		}
 
 		buf = a.gen.Next(buf[:0])
+		if buf == nil {
+			// Fonte encerrada (só acontece no modo Kafka). Parar aqui é o
+			// certo: insistir produziria eventos vazios e um relatório que
+			// mente sobre quantos eventos existiram.
+			break
+		}
 		r := a.m.Apply(buf)
 		switch r.Action {
 		case materializer.ActionCreated:
@@ -1079,4 +1130,40 @@ func humanBytes(n uint64) string {
 	default:
 		return fmt.Sprintf("%d B", n)
 	}
+}
+
+// medeRestart fecha e reabre o dataset, devolvendo o tempo total.
+//
+// O Store devolvido pelo Open substitui o anterior no lugar certo: quem
+// chamou o Run tem um defer Close, e fechar duas vezes é seguro (o Close é
+// idempotente), mas deixar o segundo Store aberto vazaria o flock.
+func abreStore(cfg Config, bitmaps ...string) (*storage.Store, error) {
+	st, err := storage.Open(storage.Options{
+		Dir:              cfg.DataDir,
+		SegmentSize:      cfg.SegmentSize,
+		EstimatedRows:    uint64(cfg.Entities),
+		BitmapFieldNames: bitmaps,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("ingest-bench: abrindo dataset: %w", err)
+	}
+	return st, nil
+}
+
+func medeRestart(cfg Config, st *storage.Store, bitmaps []string) float64 {
+	inicio := time.Now()
+	if err := st.Close(); err != nil {
+		fmt.Fprintf(cfg.Out, "AVISO: Close falhou ao medir o restart: %v\n", err)
+		return 0
+	}
+	novo, err := abreStore(cfg, bitmaps...)
+	if err != nil {
+		fmt.Fprintf(cfg.Out, "AVISO: reabertura falhou ao medir o restart: %v\n", err)
+		return 0
+	}
+	dur := time.Since(inicio)
+	if err := novo.Close(); err != nil {
+		fmt.Fprintf(cfg.Out, "AVISO: fechar o Store da medição de restart: %v\n", err)
+	}
+	return dur.Seconds()
 }

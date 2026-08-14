@@ -138,8 +138,8 @@ func (w *Writer) Roda(ctx context.Context) error {
 			// jogaria fora até um intervalo inteiro de checkpoint.
 			return w.finaliza(ctx)
 		}
-		if it.marca != nil {
-			close(it.marca)
+		if it.Marca != nil {
+			close(it.Marca)
 			continue
 		}
 		if err := w.aplica(ctx, it); err != nil {
@@ -148,8 +148,8 @@ func (w *Writer) Roda(ctx context.Context) error {
 	}
 }
 
-func (w *Writer) aplica(ctx context.Context, it item) error {
-	r := w.mat.Apply(it.rec.Value)
+func (w *Writer) aplica(ctx context.Context, it Item) error {
+	r := w.mat.Apply(it.Rec.Value)
 	w.conta(r)
 
 	switch {
@@ -158,20 +158,20 @@ func (w *Writer) aplica(ctx context.Context, it item) error {
 		// ser reaberto. O offset NÃO avança, então o reinício retoma
 		// exatamente daqui.
 		return w.para(ctx, fmt.Errorf("%w: writer em modo falho: %w", ErrPausado, r.Err),
-			"writer.falho", it.rec)
+			"writer.falho", it.Rec)
 
 	case r.Category.BadEvent():
 		if w.cfg.InvalidEvent == schema.InvalidEventStop {
 			return w.para(ctx, fmt.Errorf("%w: errors.invalidEvent=stop e o evento é %s: %w",
-				ErrPausado, r.Category, r.Err), "evento.parou", it.rec)
+				ErrPausado, r.Category, r.Err), "evento.parou", it.Rec)
 		}
 		// log-and-skip: o evento é ruim, a decisão de descartá-lo é do
 		// operador, e o offset AVANÇA — não avançar aqui seria livelock.
 		w.log.Warn("evento.descartado", "evento descartado pela política do §101",
 			"categoria", r.Category.String(),
-			"partition", it.rec.Partition, "offset", it.rec.Offset,
+			"partition", it.Rec.Partition, "offset", it.Rec.Offset,
 			"erro", r.Err.Error())
-		w.avanca(it.rec)
+		w.avanca(it.Rec)
 
 	case r.Err != nil:
 		// STORAGE_ERROR e INTERNAL_STATE: não é culpa do evento e não há
@@ -179,10 +179,10 @@ func (w *Writer) aplica(ctx context.Context, it item) error {
 		// seria definitiva e invisível; seguir sem avançar seria livelock.
 		// A saída é PARAR de forma observável.
 		return w.para(ctx, fmt.Errorf("%w: %s não é culpa do evento e não tem política: %w",
-			ErrPausado, r.Category, r.Err), "storage.falhou", it.rec)
+			ErrPausado, r.Category, r.Err), "storage.falhou", it.Rec)
 
 	default:
-		w.avanca(it.rec)
+		w.avanca(it.Rec)
 	}
 	return w.talvezCheckpoint(ctx)
 }

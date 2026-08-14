@@ -7,17 +7,21 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-// item é o que trafega na fila.
+// Item é o que trafega na fila.
 //
-// marca != nil identifica o MARCADOR DE FIM DE LOTE, que não carrega evento.
+// Marca != nil identifica o MARCADOR DE FIM DE LOTE, que não carrega evento.
 // Ele existe porque o poller precisa saber quando o writer terminou o lote
 // para liberar o rebalance (kgo.AllowRebalance) — e a fila é FIFO com um
 // consumidor só, então um marcador no fim do lote é sinal exato e sem
 // contador compartilhado.
-type item struct {
-	rec   *kgo.Record
+//
+// É exportado para que o harness de benchmark possa usar a fila DE VERDADE em
+// vez de uma imitação: o §108 exige medir a rodada de 8M com ingestão Kafka
+// real, e uma fila de mentira mediria o orçamento de memória errado.
+type Item struct {
+	Rec   *kgo.Record
+	Marca chan struct{}
 	bytes int64
-	marca chan struct{}
 }
 
 // Fila é o bounded channel do §27 com os DOIS gates que o §29 e o §128
@@ -33,7 +37,7 @@ type item struct {
 // heartbeat na goroutine dele — que é literalmente o que o §29 pede: reduzir
 // intake, preservar membership, manter heartbeats, não perder mensagem.
 type Fila struct {
-	ch       chan item
+	ch       chan Item
 	maxBytes int64
 
 	mu    sync.Mutex
@@ -46,7 +50,7 @@ type Fila struct {
 // NovaFila constrói a fila com os dois tetos.
 func NovaFila(registros int, maxBytes int64) *Fila {
 	return &Fila{
-		ch:       make(chan item, registros),
+		ch:       make(chan Item, registros),
 		maxBytes: maxBytes,
 		espera:   make(chan struct{}, 1),
 	}
@@ -66,7 +70,7 @@ func (f *Fila) Envia(ctx context.Context, r *kgo.Record) error {
 		return err
 	}
 	select {
-	case f.ch <- item{rec: r, bytes: n}:
+	case f.ch <- Item{Rec: r, bytes: n}:
 		return nil
 	case <-ctx.Done():
 		f.libera(n)
@@ -80,7 +84,7 @@ func (f *Fila) EnviaMarca(ctx context.Context, marca chan struct{}) error {
 		return err
 	}
 	select {
-	case f.ch <- item{marca: marca}:
+	case f.ch <- Item{Marca: marca}:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -131,19 +135,19 @@ func (f *Fila) libera(n int64) {
 // que o writer está processando não está mais nela. Contar o evento em voo
 // tornaria a contabilidade mais conservadora e a API mais fácil de errar (o
 // chamador teria de devolver os bytes em todos os caminhos de erro).
-func (f *Fila) Recebe(ctx context.Context) (item, bool) {
+func (f *Fila) Recebe(ctx context.Context) (Item, bool) {
 	if ctx.Err() != nil {
-		return item{}, false
+		return Item{}, false
 	}
 	select {
 	case it, ok := <-f.ch:
 		if !ok {
-			return item{}, false
+			return Item{}, false
 		}
 		f.libera(it.bytes)
 		return it, true
 	case <-ctx.Done():
-		return item{}, false
+		return Item{}, false
 	}
 }
 
