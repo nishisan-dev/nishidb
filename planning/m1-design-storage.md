@@ -156,7 +156,7 @@ Solução: **as publicações de Location entre checkpoints vivem num overlay em
 - Bounded: 500 ev/s × intervalo de checkpoint 30s ≈ 15k entries (~1-2 MB) — independe do dataset, respeita a filosofia de memória.
 - Leitura: overlay primeiro (RLock), senão atomic load no mmap.
 - Invariante resultante: **qualquer página do locations.idx que chegue ao disco só referencia records já duráveis**. Elimina a classe inteira de dangling pointers.
-- primary.idx, sequences.idx e bitmaps escrevem direto no mmap: análise de crash mostra que replay do tail converge esses índices (ver §10); um slot vazado da primary vira, no pior caso, slot lixo inofensivo (a validação de key falha e o probe segue).
+- primary.idx, sequences.idx e bitmaps escrevem direto no mmap: análise de crash mostra que o replay do tail converge a primary e as sequences (ver §10); um slot vazado da primary vira, no pior caso, slot lixo inofensivo (a validação de key falha e o probe segue). **Os bitmaps são a exceção**: o replay restaura as postings do valor corrente, mas não apaga a do valor anterior quando o prev não é confiável — o excesso é permanente e está detalhado no §10.2 (débito 45).
 
 ## 7. sequences.idx (seção 38)
 
@@ -182,7 +182,7 @@ values.dict  (append-only): header 8B "NDBV" | entries: type u8 | valLen u16 | v
 - Bitmap plano (não comprimido): 8M rows ≈ 1 MB por valor distinto — dentro do budget da spec; roaring é complexidade desnecessária na v1.
 - Em memória: `map[valueKey]valueID` por índice (cardinalidade baixa por definição de bitmap index).
 - Escrita (single writer): update de row com campo indexado → `Clear(oldValue, rowId)` + `Set(newValue, rowId)` usando `atomic.OrUint64` / `atomic.AndUint64` (Go 1.23+). Leitores fazem `atomic.LoadUint64` por word.
-- Consistência: bits podem estar levemente stale para leitores — aceitável porque **o predicate é sempre revalidado contra o estado corrente** (seção 44). Falso positivo é filtrado; falso negativo não ocorre no caminho normal porque o writer só limpa o bit antigo ao publicar o novo estado, e o replay pós-crash reconverge (§10).
+- Consistência: bits podem estar levemente stale para leitores — aceitável porque **o predicate é sempre revalidado contra o estado corrente** (seção 44). Falso positivo é filtrado; falso negativo não ocorre no caminho normal porque o writer só limpa o bit antigo ao publicar o novo estado, e o replay pós-crash restaura a posting do valor corrente (§10.2). O que o replay **não** desfaz é a posting do valor anterior: ela vira falso positivo permanente, não transitório (§10.2, débito 45).
 - Crescimento: lazy — `Set` além do tamanho atual → fallocate+remap; `Lookup` além do tamanho → zeros.
 - `values.dict` segue a mesma regra do fields.dict: fsync antes do primeiro uso do valueID novo.
 - Iterator: scan de words; word ≠ 0 → emite rowIds em ordem crescente.
@@ -242,7 +242,10 @@ Rodar no writer elimina concorrência writer×checkpoint; a fila de ingestão (5
 - primary: insert-if-absent ✓
 - locations: replay re-publica na ordem dos records; valor final = último record válido ✓
 - sequences: overwrite incondicional ✓
-- bitmaps: para cada record replayed, `prev = read(locations[r])` está sempre correto durante o replay forward (base = estado S ou record já replayed); todas as transições do tail são re-executadas → estado final dos bits converge, sobrando no máximo falso positivo transitório que a revalidação de predicate filtra ✓
+- bitmaps: **`prev = read(locations[r])` NÃO é confiável durante o replay** ✗ — a premissa original ("está sempre correto no replay forward, base = estado S ou record já replayed") foi refutada na S12. O §10.2 msynca as locations **antes** do manifest, então após um crash é normal a location durável já apontar para o record do tail enquanto as postings não chegaram ao disco; ler o prev dessa location faz o replay comparar o record consigo mesmo. Só uma location **estritamente atrás** do cursor do replay é passado legítimo; fora disso o prev é tratado como ausente (`replayRecord`, `store_recovery.go`), o que liga as postings do payload novo (Set é idempotente) e **não limpa nenhuma**. Consequências, nesta ordem:
+  - o que importa para a corretude está garantido: o valor CORRENTE sempre aparece nas postings, então **não há falso negativo** — é a propriedade que `exigeBitmapCompleto` guarda em todos os cenários de recovery, e é dela que o §44 depende;
+  - o bit do valor que a row tinha no ponto S fica ligado para sempre: **posting órfã PERMANENTE**, não transitória. Nenhum update seguinte a apaga, porque o Clear de cada update parte do prev que a location nomeia — o record do tail —, nunca do que veio antes dele. Só uma varredura (compaction/rebuild, M4) reconstrói o bitmap. Medido em `TestPostingOrfaDoReplayNaoConverge`; registrado como **débito 45**;
+  - o custo é falso positivo, que a revalidação de predicate filtra (§44): candidato a mais varrido, nunca resultado errado.
 
 ### 10.3 Recovery (Open)
 
@@ -425,7 +428,7 @@ Cada tarefa: teste primeiro → implementação → refactor. `make test` verde 
 - **T9 — index/bitmap** (dep T1,T3): set/lookup/clear; iterator ordenado; valor novo cria dict entry + arquivo; grow lazy; lookup além do tamanho = vazio; reopen.
 - **T10 — storage.Store (façade + write path)** (dep T5,T6,T7,T8,T9): put/get roundtrip por key e por rowId; update mantém rowId e troca estado; bitmap diff em update (A→B: lookup A perde a row, B ganha); Put com prev; visibilidade: location é commit point (teste com leitor concorrente + `-race`).
 - **T11 — checkpoint.Manifest + Store.Checkpoint** (dep T10): encode/decode+CRC; rename atômico; manifest corrompido → erro; **checkpoint** persiste S/nextRowID/stats [spec104: checkpoint].
-- **T12 — recovery/tail replay** (dep T11): write N → checkpoint → write M → reopen → N+M visíveis (**critério do M1: write → restart → lookup by id**) [spec104: restart, replay]; **tail incompleto (truncar bytes finais) → descarta último record + ftruncate** [spec104: incomplete tail]; CRC corrompido no tail → para ali; replay reconverge bitmaps/sequences (cenários do §10.2); segmentos pós-S criados por rotação são descobertos e replayed; reopen de todos os mmaps [spec104: mmap reopen].
+- **T12 — recovery/tail replay** (dep T11): write N → checkpoint → write M → reopen → N+M visíveis (**critério do M1: write → restart → lookup by id**) [spec104: restart, replay]; **tail incompleto (truncar bytes finais) → descarta último record + ftruncate** [spec104: incomplete tail]; CRC corrompido no tail → para ali; replay reconverge as sequences e restaura a posting do valor corrente, deixando a do anterior como falso positivo permanente (cenários do §10.2); segmentos pós-S criados por rotação são descobertos e replayed; reopen de todos os mmaps [spec104: mmap reopen].
 - **T13 — integração + bench** (dep T12): property test — sequência aleatória de puts/gets vs oracle `map` do teste, com reopen aleatório; teste de crash real: subprocesso + SIGKILL + reopen (`//go:build integration`); `BenchmarkPut`/`BenchmarkGetByKey` + `testing.AllocsPerRun` (meta: single-digit allocs/op); bench de heap-flatness 1M vs (opcional, `-short` skip) 8M rows.
 - **T14 — stats de liveness** (dep T10, opcional no M1): contadores totalBytes/liveBytes/liveRecords por segmento no manifest (groundwork da Fase 10, sem compactor).
 - **T15 — docs** (dep T12): `docs/architecture-storage.md` + `docs/diagrams/{storage_write_flow.puml,storage_recovery_flow.puml,c4_storage_component.puml}` (padrão seção 7 do CLAUDE.md global).

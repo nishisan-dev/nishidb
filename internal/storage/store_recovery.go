@@ -206,7 +206,18 @@ func (s *Store) replayRecord(st *replayState, seg, off uint32, rec types.Record)
 	// (Clear a menos = falso positivo, tolerado pelo §44) e não decrementa
 	// liveness.
 	//
-	// Resíduo conhecido no tally: quando a row já existia em S e o tail traz
+	// Esse ramo deixa DOIS resíduos, ambos permanentes e da mesma raiz.
+	//
+	// Resíduo 1, no bitmap: o bit do valor que a row tinha em S continua
+	// ligado — POSTING ÓRFÃ. Nenhum update seguinte a apaga, porque o Clear
+	// de cada update parte do prev que a location nomeia, que é o record do
+	// tail e nunca o de antes dele; só uma varredura (compaction/rebuild,
+	// M4) reconstrói o bitmap. NÃO é falso negativo: o valor corrente está
+	// nas postings, que é a única propriedade da qual o §44 depende, então
+	// o custo é candidato a mais varrido, nunca resultado errado. Medido em
+	// TestPostingOrfaDoReplayNaoConverge; débito 45.
+	//
+	// Resíduo 2, no tally: quando a row já existia em S e o tail traz
 	// um update cuja location está à frente, o record antigo continua
 	// contado como vivo — LiveRecords fica ACIMA do real (2 onde o certo é
 	// 1, com LiveBytes em 127 onde o certo é 63). É a direção segura da
