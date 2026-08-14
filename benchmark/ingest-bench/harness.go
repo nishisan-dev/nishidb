@@ -11,9 +11,10 @@
 //     configurada, com leituras concorrentes opcionais, amostrando memória;
 //   - REPORT: JSON com séries temporais, agregados e o veredito dos gates.
 //
-// O binário sai com código ≠ 0 quando um gate DURO é violado: o harness
-// existe para reprovar, não só para relatar. Um número fora do orçamento que
-// só aparece num arquivo de relatório é um número que ninguém lê.
+// O binário sai com código ≠ 0 quando um gate DURO é violado OU fica sem
+// avaliação: o harness existe para reprovar, não só para relatar. Um número
+// fora do orçamento que só aparece num arquivo de relatório é um número que
+// ninguém lê — e um gate que ninguém pôde avaliar não é um gate aprovado.
 package main
 
 import (
@@ -108,14 +109,87 @@ type QueryStats struct {
 	MaxMicr float64 `json:"max_us"`
 }
 
+// GateStatus é o veredito de um gate, e tem TRÊS estados de propósito.
+//
+// Enquanto foram dois booleanos (`passed` + `skipped`), o artefato conseguia
+// afirmar as duas coisas ao mesmo tempo — e afirmava: um gate DURO sem como
+// ser avaliado saía com "skipped": true E "passed": true, e não reprovava a
+// rodada. As rodadas de 1M em benchmark/baselines estão gravadas assim. Num
+// relatório de aceite, "não medi" lido como "está bom" é a pior das leituras
+// possíveis, e a representação não pode deixá-la existir.
+type GateStatus string
+
+const (
+	// GatePassou: o gate foi avaliado e o critério vale.
+	GatePassou GateStatus = "pass"
+	// GateReprovou: o gate foi avaliado e o critério NÃO vale.
+	GateReprovou GateStatus = "fail"
+	// GateNaoAvaliado: faltou insumo para avaliar (o §110 sem baseline é o
+	// caso). Não é aprovação: sendo o gate duro, a rodada não é aprovada.
+	GateNaoAvaliado GateStatus = "skip"
+)
+
+// statusDe traduz o booleano de um critério já avaliado.
+func statusDe(passou bool) GateStatus {
+	if passou {
+		return GatePassou
+	}
+	return GateReprovou
+}
+
 // GateResult é o veredito de um critério de aceite.
 type GateResult struct {
-	Name    string `json:"name"`
-	Spec    string `json:"spec"`
-	Passed  bool   `json:"passed"`
-	Hard    bool   `json:"hard"` // gate duro reprova a rodada (exit != 0)
-	Detail  string `json:"detail"`
-	Skipped bool   `json:"skipped,omitempty"`
+	Name   string     `json:"name"`
+	Spec   string     `json:"spec"`
+	Status GateStatus `json:"status"`
+	Hard   bool       `json:"hard"` // gate duro reprova a rodada (exit != 0)
+	Detail string     `json:"detail"`
+}
+
+// aprovaRodada: a rodada só é aprovada quando TODO gate duro foi avaliado e
+// passou. Gate soft entra no relatório para acompanhamento e não decide nada,
+// violado ou não avaliado.
+func aprovaRodada(gates []GateResult) bool {
+	violados, naoAvaliados := gatesDurosPendentes(gates)
+	return len(violados) == 0 && len(naoAvaliados) == 0
+}
+
+// gatesDurosPendentes separa os dois motivos de reprovação. Eles pedem ações
+// diferentes do operador: violado é regressão para investigar, não avaliado é
+// insumo que faltou na linha de comando.
+func gatesDurosPendentes(gates []GateResult) (violados, naoAvaliados []string) {
+	for _, g := range gates {
+		if !g.Hard {
+			continue
+		}
+		switch g.Status {
+		case GateReprovou:
+			violados = append(violados, g.Name)
+		case GateNaoAvaliado:
+			naoAvaliados = append(naoAvaliados, g.Name)
+		}
+	}
+	return violados, naoAvaliados
+}
+
+// rotuloDoGate é o rótulo impresso no resumo. O gate duro NÃO AVALIADO tem
+// rótulo próprio: reutilizar SKIP o faria parecer inofensivo como o soft, e
+// reutilizar FAIL esconderia que ninguém mediu nada.
+func rotuloDoGate(g GateResult) string {
+	switch g.Status {
+	case GatePassou:
+		return "PASS"
+	case GateNaoAvaliado:
+		if g.Hard {
+			return "SEM-AVAL"
+		}
+		return "SKIP"
+	default:
+		if g.Hard {
+			return "FAIL"
+		}
+		return "WARN"
+	}
 }
 
 // Report é o artefato final.
@@ -136,7 +210,11 @@ type Report struct {
 	Samples       []Sample         `json:"samples"`
 	Gates         []GateResult     `json:"gates"`
 	StoreStats    StoreStatsReport `json:"store_stats"`
-	Passed        bool             `json:"passed"`
+	// Passed é o veredito da RODADA: verdadeiro só quando todo gate duro foi
+	// avaliado e passou. Um gate duro que ficou sem avaliação reprova a rodada
+	// — inclusive a de referência do §110, que por construção não tem baseline
+	// e portanto não prova o critério.
+	Passed bool `json:"passed"`
 }
 
 // ConfigSummary registra no relatório o que produziu os números — sem isso,
@@ -371,12 +449,7 @@ func Run(cfg Config) (*Report, error) {
 		DiskBytes:         dirBytes(cfg.DataDir),
 	}
 	rep.Gates = evaluateGates(cfg, rep)
-	rep.Passed = true
-	for _, g := range rep.Gates {
-		if g.Hard && !g.Passed {
-			rep.Passed = false
-		}
-	}
+	rep.Passed = aprovaRodada(rep.Gates)
 	return rep, nil
 }
 
@@ -767,8 +840,8 @@ func (l *latencyRec) stats(class string) (QueryStats, bool) {
 	}, true
 }
 
-// evaluateGates aplica os critérios de aceite. Gate DURO reprova a rodada;
-// gate soft entra no relatório para acompanhamento.
+// evaluateGates aplica os critérios de aceite. Gate DURO violado OU não
+// avaliado reprova a rodada; gate soft entra no relatório para acompanhamento.
 func evaluateGates(cfg Config, rep *Report) []GateResult {
 	limite := cfg.RSSLimitBytes
 	if limite == 0 {
@@ -781,27 +854,29 @@ func evaluateGates(cfg Config, rep *Report) []GateResult {
 
 	gates := []GateResult{{
 		Name: "rss_limit", Spec: "§109", Hard: true,
-		Passed: maxRSS < limite,
+		Status: statusDe(maxRSS < limite),
 		Detail: fmt.Sprintf("max(VmRSS) = %s, limite %s", humanBytes(maxRSS), humanBytes(limite)),
 	}}
 
 	// §110: o heap não pode acompanhar o dataset. Exige o report de uma
 	// rodada MENOR como referência — sem ela o gate não tem o que comparar e
-	// se declara pulado, em vez de passar por omissão.
+	// fica NÃO AVALIADO, que é estado próprio: não é aprovação, e por ser gate
+	// duro derruba a rodada. A rodada de referência reprova por construção,
+	// e é assim que tem de ser: ela não prova o §110 de ninguém, nem do
+	// próprio volume que mediu.
 	heapGate := GateResult{Name: "heap_decoupled", Spec: "§110", Hard: true}
 	switch {
 	case cfg.HeapBaseline == "":
-		heapGate.Skipped = true
-		heapGate.Passed = true
+		heapGate.Status = GateNaoAvaliado
 		heapGate.Detail = "sem -heap-baseline: rode antes com menos entidades e passe o report"
 	default:
 		base, err := loadReport(cfg.HeapBaseline)
 		switch {
 		case err != nil:
-			heapGate.Passed = false
+			heapGate.Status = GateReprovou
 			heapGate.Detail = fmt.Sprintf("lendo baseline %s: %v", cfg.HeapBaseline, err)
 		case base.Config.Entities >= cfg.Entities:
-			heapGate.Passed = false
+			heapGate.Status = GateReprovou
 			heapGate.Detail = fmt.Sprintf("baseline tem %d entidades, esta rodada %d: a referência precisa ser MENOR",
 				base.Config.Entities, cfg.Entities)
 		default:
@@ -813,8 +888,10 @@ func evaluateGates(cfg Config, rep *Report) []GateResult {
 			if heapBase == 0 {
 				heapBase = base.Load.HeapStable
 			}
-			heapGate.Passed, heapGate.Detail = avaliaHeap(
+			var passouHeap bool
+			passouHeap, heapGate.Detail = avaliaHeap(
 				heapAtual, heapBase, cfg.Entities, base.Config.Entities)
+			heapGate.Status = statusDe(passouHeap)
 		}
 	}
 	gates = append(gates, heapGate)
@@ -822,7 +899,7 @@ func evaluateGates(cfg Config, rep *Report) []GateResult {
 	// §88: throughput de ingestão.
 	gates = append(gates, GateResult{
 		Name: "ingest_throughput", Spec: "§88", Hard: true,
-		Passed: rep.Load.EventsPerSec >= 2000,
+		Status: statusDe(rep.Load.EventsPerSec >= 2000),
 		Detail: fmt.Sprintf("LOAD a %.0f ev/s, mínimo 2000", rep.Load.EventsPerSec),
 	})
 
@@ -848,7 +925,7 @@ func evaluateGates(cfg Config, rep *Report) []GateResult {
 	}
 	gates = append(gates, GateResult{
 		Name: "allocs_per_event", Spec: "§111", Hard: false,
-		Passed: allocs <= 9,
+		Status: statusDe(allocs <= 9),
 		Detail: fmt.Sprintf("%.4f allocs/evento na fase %s (alvo 9; soft no M1)%s", allocs, fase, misto),
 	})
 
@@ -858,13 +935,13 @@ func evaluateGates(cfg Config, rep *Report) []GateResult {
 	if rep.Config.SQLReaders > 0 {
 		gates = append(gates, GateResult{
 			Name: "no_query_error", Spec: "§106", Hard: true,
-			Passed: rep.SQLErrors == 0,
+			Status: statusDe(rep.SQLErrors == 0),
 			Detail: fmt.Sprintf("%d erros nas consultas SQL concorrentes com a ingestão", rep.SQLErrors),
 		})
 	}
 	gates = append(gates, GateResult{
 		Name: "no_event_loss", Spec: "§101", Hard: true,
-		Passed: perdidos == 0,
+		Status: statusDe(perdidos == 0),
 		Detail: fmt.Sprintf("%d eventos descartados (skipped+failed)", perdidos),
 	})
 
@@ -894,7 +971,7 @@ func evaluateGates(cfg Config, rep *Report) []GateResult {
 		passou := teto == 0 || q.P95Micr <= teto
 		gates = append(gates, GateResult{
 			Name: "latency_" + q.Class, Spec: spec, Hard: duro,
-			Passed: passou,
+			Status: statusDe(passou),
 			Detail: fmt.Sprintf("p95 = %.0f µs, teto %.0f µs (%d amostras)", q.P95Micr, teto, q.Count),
 		})
 	}

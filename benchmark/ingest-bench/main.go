@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -49,7 +50,10 @@ Uso típico (gate §110 exige duas rodadas, a menor primeiro):
   GOMEMLIMIT=512MiB GOGC=100 ingest-bench -data /var/tmp/nb-8m \
       -entities 8000000 -steady 10m -queries 8 -heap-baseline 1m.json -report 8m.json
 
-Sai com código 1 se algum gate DURO for violado.
+Sai com código 1 se algum gate DURO for violado OU ficar sem avaliação. A
+primeira rodada, a de referência, reprova por construção: sem -heap-baseline
+o §110 não tem o que comparar, e gate duro não avaliado não é gate aprovado.
+Ela vale pelo report que produz, não pelo veredito. O aceite é a SEGUNDA.
 
 `)
 		flag.PrintDefaults()
@@ -98,19 +102,21 @@ Sai com código 1 se algum gate DURO for violado.
 
 	fmt.Fprintln(os.Stderr, "\n--- GATES ---")
 	for _, g := range rep.Gates {
-		status := "PASS"
-		switch {
-		case g.Skipped:
-			status = "SKIP"
-		case !g.Passed && g.Hard:
-			status = "FAIL"
-		case !g.Passed:
-			status = "WARN"
-		}
-		fmt.Fprintf(os.Stderr, "%-6s %-22s %-6s %s\n", status, g.Name, g.Spec, g.Detail)
+		fmt.Fprintf(os.Stderr, "%-8s %-22s %-6s %s\n", rotuloDoGate(g), g.Name, g.Spec, g.Detail)
+	}
+	// As duas reprovações saem separadas: violado manda investigar regressão,
+	// NÃO AVALIADO manda repetir a rodada com o insumo que faltou. Juntá-las
+	// numa frase só faria quem roda a referência do §110 procurar um gate
+	// violado que não existe.
+	violados, naoAvaliados := gatesDurosPendentes(rep.Gates)
+	if len(violados) > 0 {
+		fmt.Fprintf(os.Stderr, "\nrodada REPROVADA: gate duro violado: %s\n", strings.Join(violados, ", "))
+	}
+	if len(naoAvaliados) > 0 {
+		fmt.Fprintf(os.Stderr, "\nrodada REPROVADA: gate duro NÃO AVALIADO: %s — "+
+			"gate que ninguém pôde avaliar não é gate aprovado\n", strings.Join(naoAvaliados, ", "))
 	}
 	if !rep.Passed {
-		fmt.Fprintln(os.Stderr, "\nrodada REPROVADA: gate duro violado")
 		os.Exit(1)
 	}
 	fmt.Fprintln(os.Stderr, "\nrodada aprovada")

@@ -185,7 +185,7 @@ func TestGateRSSReprova(t *testing.T) {
 		t.Fatal("rodada aprovada com teto de RSS de 1 byte")
 	}
 	g := gateByName(t, rep, "rss_limit")
-	if g.Passed || !g.Hard {
+	if g.Status != GateReprovou || !g.Hard {
 		t.Errorf("gate rss_limit = %+v", g)
 	}
 	if !strings.Contains(g.Detail, "limite") {
@@ -193,17 +193,18 @@ func TestGateRSSReprova(t *testing.T) {
 	}
 }
 
-// Sem baseline, o gate §110 se declara PULADO em vez de passar por omissão —
+// Sem baseline, o gate §110 fica NÃO AVALIADO em vez de passar por omissão —
 // a diferença entre "não medi" e "está bom" é a que importa num relatório de
-// aceite.
-func TestGateHeapSemBaselineFicaPulado(t *testing.T) {
+// aceite. Que isso também reprova a rodada está em
+// TestGateDuroPuladoNaoEhGateAprovado.
+func TestGateHeapSemBaselineFicaNaoAvaliado(t *testing.T) {
 	rep, err := Run(baseConfig(t, 100))
 	if err != nil {
 		t.Fatal(err)
 	}
 	g := gateByName(t, rep, "heap_decoupled")
-	if !g.Skipped {
-		t.Errorf("gate heap sem baseline deveria ficar pulado: %+v", g)
+	if g.Status != GateNaoAvaliado {
+		t.Errorf("gate heap sem baseline deveria ficar não avaliado: %+v", g)
 	}
 	if !strings.Contains(g.Detail, "heap-baseline") {
 		t.Errorf("detalhe não instrui como habilitar: %q", g.Detail)
@@ -226,8 +227,8 @@ func TestGateHeapComBaselineCompara(t *testing.T) {
 		t.Fatal(err)
 	}
 	g := gateByName(t, rep, "heap_decoupled")
-	if g.Skipped {
-		t.Fatal("gate pulado mesmo com baseline")
+	if g.Status == GateNaoAvaliado {
+		t.Fatal("gate não avaliado mesmo com baseline")
 	}
 	// O detalhe precisa nomear as duas rodadas comparadas, seja pelo regime
 	// da razão ou pelo do piso.
@@ -303,7 +304,7 @@ func TestGateHeapPisoAbsolutoEncerraPelaGrandeza(t *testing.T) {
 		t.Skipf("heap de %d B acima do piso: o teste não exercita o caminho", heapAtual)
 	}
 	g := gateByName(t, rep, "heap_decoupled")
-	if !g.Passed {
+	if g.Status != GatePassou {
 		t.Errorf("gate reprovou com heap desprezível: %+v", g)
 	}
 	if !strings.Contains(g.Detail, "piso") {
@@ -328,8 +329,8 @@ func TestGateHeapRecusaBaselineMaior(t *testing.T) {
 		t.Fatal(err)
 	}
 	g := gateByName(t, rep, "heap_decoupled")
-	if g.Passed {
-		t.Error("gate passou com baseline maior que a rodada")
+	if g.Status != GateReprovou {
+		t.Errorf("gate deveria REPROVAR com baseline maior que a rodada: %+v", g)
 	}
 	if !strings.Contains(g.Detail, "MENOR") {
 		t.Errorf("detalhe não explica o problema: %q", g.Detail)
@@ -347,8 +348,8 @@ func TestGateHeapBaselineIlegivel(t *testing.T) {
 		t.Fatal(err)
 	}
 	g := gateByName(t, rep, "heap_decoupled")
-	if g.Passed || g.Skipped {
-		t.Errorf("baseline ilegível precisa REPROVAR, não passar nem pular: %+v", g)
+	if g.Status != GateReprovou {
+		t.Errorf("baseline ilegível precisa REPROVAR, não passar nem ficar sem avaliação: %+v", g)
 	}
 	if !strings.Contains(g.Detail, "nao-existe.json") {
 		t.Errorf("detalhe não nomeia o arquivo: %q", g.Detail)
