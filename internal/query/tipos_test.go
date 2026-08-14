@@ -33,7 +33,7 @@ type tiposHarness struct {
 
 func novoTiposHarness(t *testing.T) *tiposHarness {
 	t.Helper()
-	spec, err := schema.Load(tiposYAML)
+	spec, err := schema.Load(tiposYAML, schema.DefaultsPadrao)
 	if err != nil {
 		t.Fatal(err)
 	}

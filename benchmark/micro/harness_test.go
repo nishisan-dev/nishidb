@@ -28,7 +28,7 @@ const corpusEntities = 20_000
 
 func loadSpec(tb testing.TB) *schema.DatasetSpec {
 	tb.Helper()
-	spec, err := schema.Load(specPath)
+	spec, err := schema.Load(specPath, schema.DefaultsPadrao)
 	if err != nil {
 		tb.Fatalf("carregando %s: %v", specPath, err)
 	}

@@ -65,7 +65,7 @@ query:
 
 func parseOK(t *testing.T, yml string) *DatasetSpec {
 	t.Helper()
-	s, err := Parse([]byte(yml))
+	s, err := Parse([]byte(yml), DefaultsPadrao)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -74,7 +74,7 @@ func parseOK(t *testing.T, yml string) *DatasetSpec {
 
 func parseErr(t *testing.T, yml, wantSubstr string) {
 	t.Helper()
-	_, err := Parse([]byte(yml))
+	_, err := Parse([]byte(yml), DefaultsPadrao)
 	if err == nil {
 		t.Fatalf("esperava erro contendo %q", wantSubstr)
 	}

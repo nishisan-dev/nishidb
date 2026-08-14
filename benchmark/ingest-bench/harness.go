@@ -243,7 +243,7 @@ func Run(cfg Config) (*Report, error) {
 		cfg.Out = io.Discard
 	}
 
-	spec, err := schema.Load(cfg.SpecPath)
+	spec, err := schema.Load(cfg.SpecPath, schema.DefaultsPadrao)
 	if err != nil {
 		return nil, fmt.Errorf("ingest-bench: carregando spec: %w", err)
 	}

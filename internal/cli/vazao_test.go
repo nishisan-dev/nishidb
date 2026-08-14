@@ -196,7 +196,7 @@ func umaRodadaPeloCLI(t *testing.T, entrada string) (float64, float64) {
 // ficam fora dos dois lados.
 func umaRodadaDireta(t *testing.T, entrada string) float64 {
 	t.Helper()
-	spec, err := schema.Load("../../testdata/radius.materialization.yaml")
+	spec, err := schema.Load("../../testdata/radius.materialization.yaml", schema.DefaultsPadrao)
 	if err != nil {
 		t.Fatal(err)
 	}

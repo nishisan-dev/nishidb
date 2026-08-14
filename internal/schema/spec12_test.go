@@ -13,7 +13,7 @@ import (
 // (aceito e ignorado no M1), wildcard com unknownFields include, ttl e
 // tombstoneRetention.
 func TestLoadSpec12YAML(t *testing.T) {
-	s, err := Load("../../testdata/radius.materialization.yaml")
+	s, err := Load("../../testdata/radius.materialization.yaml", DefaultsPadrao)
 	if err != nil {
 		t.Fatal(err)
 	}

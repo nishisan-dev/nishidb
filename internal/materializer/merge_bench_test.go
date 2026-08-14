@@ -47,7 +47,7 @@ func benchPatchEntries(tb testing.TB, c *schema.Compiled, event []byte) []patchE
 
 func benchCompiled(tb testing.TB) *schema.Compiled {
 	tb.Helper()
-	s, err := schema.Parse([]byte(patchYAML))
+	s, err := schema.Parse([]byte(patchYAML), schema.DefaultsPadrao)
 	if err != nil {
 		tb.Fatal(err)
 	}

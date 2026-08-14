@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/nishisan-dev/nishidb/internal/schema"
 )
 
 // Config é o subconjunto do nishidb.yaml (spec §78) que os comandos do M1
@@ -33,20 +35,31 @@ type Config struct {
 		Directory string `yaml:"directory"`
 	} `yaml:"datasets"`
 
+	// query.defaultMaxRows e query.defaultTimeout são os DEFAULTS GLOBAIS do
+	// teto de linhas e do timeout de consulta: valem para o dataset que omite
+	// `query.maxRows`/`query.timeout` no YAML dele, e perdem para o dataset
+	// que os declara. Chegam ao motor por CarregaConfig →
+	// Config.DefaultsDeQuery → schema.Load.
+	//
+	// DefaultMaxRows é ponteiro para separar "ausente" de "zero": ausente
+	// herda o padrão da spec, zero é valor inválido e precisa ser recusado
+	// com a mesma clareza de um negativo.
 	Query struct {
-		DefaultMaxRows int    `yaml:"defaultMaxRows"`
+		DefaultMaxRows *int   `yaml:"defaultMaxRows"`
 		DefaultTimeout string `yaml:"defaultTimeout"`
 	} `yaml:"query"`
 
 	// Resolvidos a partir dos campos textuais acima.
 	segmentSize        int64
 	checkpointInterval time.Duration
+	defaultMaxRows     int
 	defaultTimeout     time.Duration
 }
 
 const (
 	segmentSizePadrao        = 512 << 20
 	checkpointIntervalPadrao = 30 * time.Second
+	maxRowsPadrao            = 100000
 	timeoutPadrao            = 30 * time.Second
 )
 
@@ -77,10 +90,33 @@ func CarregaConfig(path string) (*Config, error) {
 	if c.checkpointInterval, err = duracao(c.Storage.Checkpoint.Interval, checkpointIntervalPadrao); err != nil {
 		return nil, fmt.Errorf("configuração %s: storage.checkpoint.interval: %w", path, err)
 	}
+	if c.defaultMaxRows, err = inteiroPositivo(c.Query.DefaultMaxRows, maxRowsPadrao); err != nil {
+		return nil, fmt.Errorf("configuração %s: query.defaultMaxRows: %w", path, err)
+	}
 	if c.defaultTimeout, err = duracao(c.Query.DefaultTimeout, timeoutPadrao); err != nil {
 		return nil, fmt.Errorf("configuração %s: query.defaultTimeout: %w", path, err)
 	}
 	return &c, nil
+}
+
+// DefaultsDeQuery são os defaults globais que o dataset herda quando omite a
+// chave equivalente.
+func (c *Config) DefaultsDeQuery() schema.Defaults {
+	return schema.Defaults{MaxRows: c.defaultMaxRows, Timeout: c.defaultTimeout}
+}
+
+// inteiroPositivo aplica o padrão quando a chave está AUSENTE e recusa
+// qualquer valor não positivo. Zero e negativo não são "sem valor": são teto
+// que nenhuma consulta poderia satisfazer, e aceitá-los em silêncio faria a
+// configuração mentir.
+func inteiroPositivo(v *int, padrao int) (int, error) {
+	if v == nil {
+		return padrao, nil
+	}
+	if *v <= 0 {
+		return 0, fmt.Errorf("deve ser positivo, é %d", *v)
+	}
+	return *v, nil
 }
 
 // tamanho aceita as unidades binárias da spec (512MiB, 1GiB) e o número puro

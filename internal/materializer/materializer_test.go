@@ -891,7 +891,7 @@ func (d dictErro) Name(id types.FieldID) (string, bool) { return d.inner.Name(id
 // Falha ao registrar campo desconhecido vem do STORAGE, não do evento: não
 // pode ser contabilizada como SCHEMA_VALIDATION nem virar Skipped.
 func TestApplyFalhaDoDicionarioEhFailed(t *testing.T) {
-	s, err := schema.Parse([]byte(fmt.Sprintf(unknownYAMLTmpl, "include", "include")))
+	s, err := schema.Parse([]byte(fmt.Sprintf(unknownYAMLTmpl, "include", "include")), schema.DefaultsPadrao)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -936,7 +936,7 @@ func TestApplyReutilizaBuffersEntreEventos(t *testing.T) {
 // produção (spec §12): evento cheio cria a entidade, patch parcial com _SEQ
 // maior mescla, e o estado final é conferido campo a campo.
 func TestApplyFixtureRadiusCompletoDepoisPatch(t *testing.T) {
-	spec, err := schema.Load(fixtureSpec)
+	spec, err := schema.Load(fixtureSpec, schema.DefaultsPadrao)
 	if err != nil {
 		t.Fatal(err)
 	}

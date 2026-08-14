@@ -129,7 +129,7 @@ func codigoDoErro(err error) int {
 // nascem do dicionário, que vive dentro do Store — exigir IDs aqui obrigaria
 // a abrir sem índice, compilar, fechar e reabrir.
 func abreDataset(cfg *Config, nome string) (*storage.Store, *schema.Compiled, error) {
-	spec, err := schema.Load(cfg.SpecDoDataset(nome))
+	spec, err := schema.Load(cfg.SpecDoDataset(nome), cfg.DefaultsDeQuery())
 	if err != nil {
 		return nil, nil, fmt.Errorf("dataset %q: %w", nome, err)
 	}

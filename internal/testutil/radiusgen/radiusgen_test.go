@@ -416,7 +416,7 @@ func TestNASCardinalidadeEConcentracao(t *testing.T) {
 // incompatível (ip malformado, timestamp fora do formato) só apareceria na
 // rodada de 8M, como taxa de descarte inexplicada.
 func TestCorpusIngerivelPeloMaterializer(t *testing.T) {
-	spec, err := schema.Load(specPath)
+	spec, err := schema.Load(specPath, schema.DefaultsPadrao)
 	if err != nil {
 		t.Fatal(err)
 	}

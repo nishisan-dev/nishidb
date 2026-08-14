@@ -23,7 +23,7 @@ var benchRadiusEvent = []byte(`{"id":"CMP-V0001PPCLP-013","_id":"68992d1a77b6f26
 // Gate da Q8: 0 allocs/op no Parse de evento RADIUS em steady state
 // (todos os campos já resolvidos no schema/cache).
 func BenchmarkPatchParseRadiusEvent(b *testing.B) {
-	s, err := schema.Parse([]byte(patchYAML))
+	s, err := schema.Parse([]byte(patchYAML), schema.DefaultsPadrao)
 	if err != nil {
 		b.Fatal(err)
 	}

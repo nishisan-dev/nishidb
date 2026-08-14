@@ -32,7 +32,7 @@ type harness struct {
 
 func novoHarness(t *testing.T) *harness {
 	t.Helper()
-	spec, err := schema.Load(fixtureYAML)
+	spec, err := schema.Load(fixtureYAML, schema.DefaultsPadrao)
 	if err != nil {
 		t.Fatal(err)
 	}

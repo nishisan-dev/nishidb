@@ -141,7 +141,7 @@ schema:
 // e mantém mapas de postings, e é daí que vêm as alocações.
 func newFakeMaterializer(tb testing.TB) (*Materializer, *schema.Compiled) {
 	tb.Helper()
-	s, err := schema.Parse([]byte(benchNoSeqYAML))
+	s, err := schema.Parse([]byte(benchNoSeqYAML), schema.DefaultsPadrao)
 	if err != nil {
 		tb.Fatal(err)
 	}

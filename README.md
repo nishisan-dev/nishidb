@@ -47,13 +47,23 @@ storage:
 
 datasets:
   directory: /etc/nishidb/datasets
+
+query:
+  defaultMaxRows: 100000
+  defaultTimeout: 30s
 ```
 
-O **teto de linhas** e o **timeout** da consulta são do YAML do **dataset**
-(`query.maxRows` e `query.timeout`, default 100000 e 30s) — não deste arquivo.
-As chaves `query.defaultMaxRows`/`query.defaultTimeout` do `nishidb.yaml` são
-aceitas e validadas, mas **nenhum código as lê**: editá-las não muda nada e não
-avisa nada. Registrado como débito 37 em [`docs/debitos.md`](docs/debitos.md).
+`query.defaultMaxRows` e `query.defaultTimeout` são os **defaults globais** do
+teto de linhas e do timeout de consulta: valem para o dataset que **omite**
+`query.maxRows`/`query.timeout` no YAML dele, e perdem para o dataset que os
+declara — o global é default, não teto. Omitir o bloco `query` inteiro vale o
+padrão da spec (100000 e 30s). Valor não positivo é **recusado** no
+carregamento, com a chave e o valor nomeados no erro.
+
+`query.resultBatchSize` ainda não é parseado (débito 10 em
+[`docs/debitos.md`](docs/debitos.md)); as demais seções que o M1 não implementa
+(`server`, `runtime`, TLS, auth) são aceitas e ignoradas de propósito, para que
+o arquivo do M3 continue válido para este binário.
 
 ### 2. Definição do dataset
 

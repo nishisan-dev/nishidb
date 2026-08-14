@@ -19,7 +19,7 @@ const fixtureYAML = "../../../testdata/radius.materialization.yaml"
 
 func compilar(tb testing.TB) *schema.Compiled {
 	tb.Helper()
-	spec, err := schema.Load(fixtureYAML)
+	spec, err := schema.Load(fixtureYAML, schema.DefaultsPadrao)
 	if err != nil {
 		tb.Fatal(err)
 	}
@@ -512,7 +512,7 @@ func TestPlanIsNullFullScan(t *testing.T) {
 // TypeInt64 — o lookup devolveria vazio e a query MENTIRIA. Por isso o termo
 // só é indexável quando Val.Type == Field.Type.
 func TestPlanTipoPromovidoNaoUsaIndice(t *testing.T) {
-	spec, err := schema.Parse([]byte(vlanYAML))
+	spec, err := schema.Parse([]byte(vlanYAML), schema.DefaultsPadrao)
 	if err != nil {
 		t.Fatal(err)
 	}

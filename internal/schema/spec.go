@@ -117,26 +117,42 @@ type rawQuery struct {
 	Timeout string `yaml:"timeout"`
 }
 
+// Defaults são os valores GLOBAIS de `query` do nishidb.yaml (§78:
+// defaultMaxRows e defaultTimeout), aplicados ao dataset que OMITE a chave
+// equivalente. O dataset que a declara vence — o global é default, não teto.
+//
+// Vem por parâmetro, e não de uma constante interna, porque só assim a chave
+// global tem leitor: enquanto o default morava aqui, editá-la não mudava nada
+// e não avisava nada (débito 37).
+type Defaults struct {
+	MaxRows int
+	Timeout time.Duration
+}
+
+// DefaultsPadrao são os valores da spec §78 para quem carrega uma spec sem
+// nishidb.yaml nenhum por perto — testes, benchmarks e ferramentas.
+var DefaultsPadrao = Defaults{MaxRows: 100000, Timeout: 30 * time.Second}
+
 // Load lê e valida uma spec de um arquivo YAML.
-func Load(path string) (*DatasetSpec, error) {
+func Load(path string, d Defaults) (*DatasetSpec, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("lendo spec %s: %w", path, err)
 	}
-	s, err := Parse(data)
+	s, err := Parse(data, d)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	return s, nil
 }
 
-// Parse valida o YAML e devolve a spec com defaults aplicados.
-func Parse(data []byte) (*DatasetSpec, error) {
+// Parse valida o YAML e devolve a spec com os defaults aplicados.
+func Parse(data []byte, d Defaults) (*DatasetSpec, error) {
 	var raw rawSpec
 	if err := yaml.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("%w: yaml malformado: %v", ErrInvalidSpec, err)
 	}
-	return validate(&raw)
+	return validate(&raw, d)
 }
 
 func specErrf(format string, args ...any) error {
@@ -195,7 +211,16 @@ func hashIndexable(t string) bool {
 	return t == "string" || t == "int64" || t == "ipv4" || t == "ipv6"
 }
 
-func validate(raw *rawSpec) (*DatasetSpec, error) {
+func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
+	// Default inválido é erro do CHAMADOR, e sai aqui em vez de virar um
+	// padrão implícito: cair no 100000 quando o global veio zerado esconderia
+	// exatamente o defeito que se está corrigindo.
+	if padroes.MaxRows <= 0 {
+		return nil, specErrf("query.defaultMaxRows global deve ser > 0, é %d", padroes.MaxRows)
+	}
+	if padroes.Timeout <= 0 {
+		return nil, specErrf("query.defaultTimeout global deve ser > 0, é %s", padroes.Timeout)
+	}
 	s := &DatasetSpec{}
 
 	if raw.Version == nil {
@@ -405,8 +430,8 @@ func validate(raw *rawSpec) (*DatasetSpec, error) {
 	}
 	s.Schema.UnknownFields = unknown
 
-	// query
-	maxRows := 100000
+	// query: o dataset que declara a chave vence; quem omite herda o global.
+	maxRows := padroes.MaxRows
 	if raw.Query.MaxRows != nil {
 		maxRows = *raw.Query.MaxRows
 	}
@@ -414,7 +439,7 @@ func validate(raw *rawSpec) (*DatasetSpec, error) {
 		return nil, specErrf("query.maxRows deve ser > 0, é %d", maxRows)
 	}
 	s.Query.MaxRows = maxRows
-	timeout := 30 * time.Second
+	timeout := padroes.Timeout
 	if raw.Query.Timeout != "" {
 		d, err := time.ParseDuration(raw.Query.Timeout)
 		if err != nil || d <= 0 {

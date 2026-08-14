@@ -42,7 +42,7 @@ schema:
 // preso por uma janela, e o BoundQuery passa a reter N arrays em vez de um.
 // Este teste é o único capaz de ver isso.
 func TestJanelasVivemNoArenaDoBoundQuery(t *testing.T) {
-	spec, err := schema.Parse([]byte(arenaYAML))
+	spec, err := schema.Parse([]byte(arenaYAML), schema.DefaultsPadrao)
 	if err != nil {
 		t.Fatal(err)
 	}
