@@ -87,8 +87,20 @@ type Segredo string
 func (Segredo) LogValue() slog.Value { return slog.StringValue(Redactado) }
 
 // Logger emite as linhas do §95.
+//
+// Guarda a RAIZ (sem component/dataset) além do logger derivado, porque
+// Component e Dataset precisam SUBSTITUIR e o slog.With só sabe acrescentar.
+// Sem isso, um servidor que deriva Component("server") e entrega o logger a um
+// consumer que deriva Component("kafka") emite o campo duas vezes — e chave
+// repetida em JSON tem comportamento indefinido: jq, Loki e Elasticsearch
+// escolhem uma delas por critérios diferentes, então o mesmo log lido por duas
+// ferramentas discorda sobre quem emitiu a linha.
 type Logger struct {
-	sl *slog.Logger
+	raiz      *slog.Logger
+	component string
+	dataset   string
+	extras    []any
+	sl        *slog.Logger // raiz + component + dataset + extras
 }
 
 // New constrói o logger raiz. O chamador define o componente com Component.
@@ -100,7 +112,24 @@ func New(w io.Writer, f Formato, nivel slog.Level) *Logger {
 	} else {
 		h = slog.NewJSONHandler(w, opts)
 	}
-	return &Logger{sl: slog.New(h)}
+	raiz := slog.New(h)
+	return &Logger{raiz: raiz, sl: raiz}
+}
+
+// deriva reconstrói o logger a partir da RAIZ, e não do derivado: é o que faz
+// component e dataset substituírem em vez de acumularem.
+func (l *Logger) deriva(component, dataset string, extras []any) *Logger {
+	sl := l.raiz
+	if component != "" {
+		sl = sl.With(slog.String(campoComponent, component))
+	}
+	if dataset != "" {
+		sl = sl.With(slog.String(campoDataset, dataset))
+	}
+	if len(extras) > 0 {
+		sl = sl.With(extras...)
+	}
+	return &Logger{raiz: l.raiz, component: component, dataset: dataset, extras: extras, sl: sl}
 }
 
 // traduzERedige faz as duas coisas que o §95 exige, no único lugar por onde
@@ -126,20 +155,23 @@ func traduzERedige(grupos []string, a slog.Attr) slog.Attr {
 // Component deriva um logger para um subsistema (kafka, storage, query,
 // server). Deriva, não muta: o logger de origem continua válido e limpo.
 func (l *Logger) Component(nome string) *Logger {
-	return &Logger{sl: l.sl.With(slog.String(campoComponent, nome))}
+	return l.deriva(nome, l.dataset, l.extras)
 }
 
 // Dataset deriva um logger amarrado a um dataset. Sem esta chamada o campo
 // simplesmente não aparece — um `dataset: ""` em toda linha de escopo global
 // seria ruído que atrapalha o grep.
 func (l *Logger) Dataset(nome string) *Logger {
-	return &Logger{sl: l.sl.With(slog.String(campoDataset, nome))}
+	return l.deriva(l.component, nome, l.extras)
 }
 
 // With deriva um logger com atributos fixos, úteis para amarrar partição e
 // offset a toda linha de um laço.
 func (l *Logger) With(args ...any) *Logger {
-	return &Logger{sl: l.sl.With(args...)}
+	novos := make([]any, 0, len(l.extras)+len(args))
+	novos = append(novos, l.extras...)
+	novos = append(novos, args...)
+	return l.deriva(l.component, l.dataset, novos)
 }
 
 // Enabled diz se o nível seria emitido, para o chamador poder pular a montagem

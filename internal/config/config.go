@@ -50,8 +50,14 @@ type Config struct {
 
 	// Server é o bloco §78 do processo de longa duração. Continua opcional:
 	// `nishidb ingest` e `nishidb query` não o usam.
+	//
+	// Enabled é PONTEIRO para separar "ausente" de "false", e os dois têm
+	// significados opostos: rodar `nishidb server` já É o ato de ligar, então
+	// exigir a chave também seria cerimônia dupla sem segurança nenhuma em
+	// troca — ausente vale true. Já `enabled: false` é o operador desligando
+	// deliberadamente, e aí o comando recusa em vez de ignorar a decisão.
 	Server struct {
-		Enabled bool   `yaml:"enabled"`
+		Enabled *bool  `yaml:"enabled"`
 		Bind    string `yaml:"bind"`
 		Port    *int   `yaml:"port"`
 	} `yaml:"server"`
@@ -143,6 +149,12 @@ func CarregaConfig(path string) (*Config, error) {
 		c.Server.Bind = serverBindPadrao
 	}
 	return &c, nil
+}
+
+// ServidorHabilitado diz se o bloco `server` autoriza a subida. Ausente é
+// true; só `enabled: false` explícito recusa.
+func (c *Config) ServidorHabilitado() bool {
+	return c.Server.Enabled == nil || *c.Server.Enabled
 }
 
 // Endereco é o host:porta em que o servidor escuta (§78).

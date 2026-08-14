@@ -61,17 +61,19 @@ declara — o global é default, não teto. Omitir o bloco `query` inteiro vale 
 padrão da spec (100000 e 30s). Valor não positivo é **recusado** no
 carregamento, com a chave e o valor nomeados no erro.
 
-`query.resultBatchSize` ainda não é parseado (débito 10 em
-[`docs/debitos.md`](docs/debitos.md)); as demais seções que o M1 não implementa
-(`server`, `runtime`, TLS, auth) são aceitas e ignoradas de propósito, para que
-o arquivo do M3 continue válido para este binário.
+`version`, `query.resultBatchSize` e o bloco `server` **passaram a ter leitor
+no M2**: `version` diferente de 1 é recusado no carregamento, `resultBatchSize`
+não positivo também, e `server.enabled: false` faz o `nishidb server` recusar a
+subida em vez de ignorar a chave. As seções que ainda não têm implementação
+(`runtime`, `storage.durability`, TLS, auth) continuam aceitas e ignoradas de
+propósito, para que o arquivo do M3 continue válido para este binário —
+`storage.durability` está registrada como débito 50, porque quem lê
+`interval: 100ms` conclui uma garantia que não existe.
 
-`version: 1` **é aceito e ignorado neste arquivo**: o carregador do
-`nishidb.yaml` não tem campo para a chave e não a confere. Escreva-a mesmo
-assim — ela é o que vai permitir recusar um arquivo de versão futura quando o
-parse existir (débito 47). No YAML **do dataset** a história é outra: lá o
-`version` é obrigatório e qualquer valor diferente de 1 é recusado no
-carregamento.
+O bloco `server` é lido só pelo comando `server`; `ingest` e `query` o ignoram.
+`enabled` **ausente vale `true`** — rodar `nishidb server` já é o ato de ligar,
+e exigir a chave também seria cerimônia dupla. Só `enabled: false` explícito
+recusa.
 
 `storage.checkpoint.interval` só age enquanto o checkpoint periódico estiver
 ligado: `nishidb ingest --checkpoint-every 0` desliga o disparo por contagem
@@ -241,10 +243,20 @@ errors:
 nishidb server --config nishidb.yaml
 ```
 
-O servidor hospeda ingestão e consulta no **mesmo processo**, porque o flock do
-dataset é exclusivo por processo: um consumer separado tornaria o dataset
-inconsultável. Expõe `GET /metrics` (§92/§93) e `GET /v1/health` (§94), e
-aceita `--pprof <addr>` para os endpoints de debug num listener próprio.
+O servidor abre os datasets no **mesmo processo** em que consome, porque o
+flock do dataset é exclusivo por processo. Expõe `GET /metrics` (§92/§93) e
+`GET /v1/health` (§94), e aceita `--pprof <addr>` para os endpoints de debug
+num listener próprio.
+
+> **Com o servidor no ar, NÃO há como consultar.** O motor de consulta está
+> registrado no processo, mas o protocolo remoto que o exporia é do M3 (§67-69,
+> `/v1/query` e o driver JDBC) e ainda não existe — e `nishidb query` é barrado
+> pelo flock, saindo com exit 3 e nomeando o pid do servidor. Na prática, hoje
+> o operador **alterna**: sobe o servidor para ingerir, encerra com SIGTERM
+> (que drena, checkpointa e devolve o flock) e então consulta. Está registrado
+> como débito 54 em [`docs/debitos.md`](docs/debitos.md). Se a sua carga exige
+> consultar durante a ingestão, o caminho de hoje é `nishidb ingest` por
+> arquivo, que tem a mesma restrição de flock, ou esperar o M3.
 
 Um dataset cuja ingestão não pode subir **continua consultável** — a ordem do
 §51 é `start queries` antes de `resume ingestion`. Quatro situações recusam a

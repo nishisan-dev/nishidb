@@ -153,11 +153,16 @@ com um `ingest` em voo, um `query` concorrente sai com exit 3 e a mensagem
 nomeia o pid que segura o lock.
 
 É esse flock que decide a arquitetura do `nishidb server`: um consumer de
-longa duração num processo SEPARADO tornaria o dataset inconsultável, porque
-toda `nishidb query` sairia com exit 3 enquanto a ingestão estivesse de pé.
-Por isso ingestão e consulta moram no MESMO processo, onde o Store já é um
-writer com muitos leitores concorrentes — que é o modelo do §27. O acesso
-concorrente de clientes REMOTOS chega com o protocolo do M3.
+longa duração num processo SEPARADO tornaria o dataset inconsultável. Por isso
+o servidor abre os datasets no MESMO processo em que consome, onde o Store já é
+um writer com muitos leitores concorrentes — que é o modelo do §27.
+
+**O que ainda falta para isso virar utilidade.** O `query.Engine` está
+registrado no processo do servidor, mas nada o EXPÕE: o protocolo remoto é do
+M3 (§67-69), e `nishidb query` continua sendo barrado pelo mesmo flock. Na
+prática, com o servidor no ar não há como consultar — o operador alterna entre
+ingerir e consultar. Ter os dois no mesmo processo é a metade que o M2 podia
+entregar; a outra metade é o endpoint, e está registrada como débito 54.
 
 > **`LOCK` residual não é dataset travado.** O arquivo é criado na primeira
 > abertura e **nunca é removido** — nem no `Close`, nem no crash: apagá-lo no

@@ -33,6 +33,9 @@ var (
 	// que gerou os offsets persistidos.
 	ErrOrigemDivergente = errors.New("kafka: a origem mudou desde o último checkpoint")
 
+	// ErrTopicoAusente indica tópico inexistente ou sem partições no cluster.
+	ErrTopicoAusente = errors.New("kafka: tópico ausente")
+
 	// ErrAssignmentParcial indica que o group não entregou todas as partições
 	// do tópico a esta instância.
 	//
@@ -131,9 +134,6 @@ func (c *Consumidor) resolveOrigemEPosicao(ctx context.Context, st Store) error 
 		return fmt.Errorf("kafka: metadados do tópico %q: %w", c.cfg.Topic, err)
 	}
 	c.origem.ClusterID = md.Cluster
-	if d, ok := md.Topics[c.cfg.Topic]; ok {
-		c.met.partTotal.Set(float64(len(d.Partitions)))
-	}
 
 	persistidos, existe, err := st.SourceOffsets()
 	switch {
@@ -164,6 +164,32 @@ func (c *Consumidor) resolveOrigemEPosicao(ctx context.Context, st Store) error 
 		c.log.Info("posicao.inicial", "dataset vazio e sem offsets locais; vale o autoOffsetReset",
 			"autoOffsetReset", c.cfg.AutoOffsetReset)
 	}
+
+	// A existência do tópico é conferida DEPOIS da divergência de origem, e a
+	// ordem é deliberada: quando o operador aponta o dataset para um tópico
+	// que não existe, as duas coisas são verdade, mas "a origem mudou" é a
+	// CAUSA e "o tópico não existe" é a consequência. Reportar a consequência
+	// mandaria criar o tópico errado.
+	//
+	// A checagem em si existe porque, sem ela, o consumer sobe, não recebe
+	// assignment nenhum e fica sentado: o health reporta UP, as métricas
+	// mostram 0 partições, e nada é consumido — o operador vê tudo verde com o
+	// dataset parado. A guarda de assignment não pega o caso, porque compara
+	// atribuídas com total e 0 == 0.
+	//
+	// Recusar torna a ordem de subida relevante (o tópico precisa existir
+	// antes do NishiDB), e é a troca certa: um consumer silenciosamente ocioso
+	// é pior que uma recusa com o nome do tópico na mensagem.
+	d, ok := md.Topics[c.cfg.Topic]
+	switch {
+	case !ok:
+		return fmt.Errorf("%w: o tópico %q não existe no cluster", ErrTopicoAusente, c.cfg.Topic)
+	case d.Err != nil:
+		return fmt.Errorf("%w: tópico %q: %w", ErrTopicoAusente, c.cfg.Topic, d.Err)
+	case len(d.Partitions) == 0:
+		return fmt.Errorf("%w: o tópico %q não tem partição nenhuma", ErrTopicoAusente, c.cfg.Topic)
+	}
+	c.met.partTotal.Set(float64(len(d.Partitions)))
 	return nil
 }
 

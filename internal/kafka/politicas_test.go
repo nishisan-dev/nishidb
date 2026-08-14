@@ -262,3 +262,23 @@ func TestEncerramentoGraciosoCheckpointaOQueEntrou(t *testing.T) {
 		t.Errorf("offsets = %v (existe=%v), quer {0:2} pelo checkpoint de encerramento", offsets, existe)
 	}
 }
+
+// Tópico inexistente tem de RECUSAR a subida.
+//
+// Sem isto o consumer sobe, não recebe assignment nenhum e fica sentado: o
+// health reporta UP, as métricas mostram 0 partições, e nada é consumido — o
+// operador vê tudo verde com o dataset parado. A guarda de assignment não
+// pega o caso, porque ela compara atribuídas com total e 0 == 0.
+func TestTopicoInexistenteRecusaASubida(t *testing.T) {
+	b := novaBancada(t, 1)
+	defer b.fecha()
+
+	b.cfg.Topic = "topico-que-nao-existe"
+	_, err := b.abreConsumidor()
+	if !errors.Is(err, kafka.ErrTopicoAusente) {
+		t.Fatalf("erro = %v, quer ErrTopicoAusente", err)
+	}
+	if !strings.Contains(err.Error(), "topico-que-nao-existe") {
+		t.Errorf("a mensagem não nomeia o tópico: %v", err)
+	}
+}

@@ -171,3 +171,68 @@ func chaves(m map[string]any) []string {
 	}
 	return out
 }
+
+// Component e Dataset SUBSTITUEM, não acumulam.
+//
+// O defeito apareceu no primeiro percurso de operador: o servidor derivava
+// Component("server") e o consumer derivava Component("kafka") do MESMO
+// logger, e a linha saía com o campo duas vezes —
+// `{"component":"server","component":"kafka"}`. Chave repetida em JSON tem
+// comportamento indefinido: jq, Loki e Elasticsearch escolhem uma delas por
+// critérios diferentes, então o mesmo log lido por duas ferramentas discorda
+// sobre quem emitiu a linha.
+func TestComponentEDatasetSubstituemEmVezDeAcumular(t *testing.T) {
+	casos := []struct {
+		nome   string
+		deriva func(*logging.Logger) *logging.Logger
+		campo  string
+		quer   string
+	}{
+		{"component duas vezes", func(l *logging.Logger) *logging.Logger {
+			return l.Component("server").Component("kafka")
+		}, "component", "kafka"},
+		{"dataset duas vezes", func(l *logging.Logger) *logging.Logger {
+			return l.Component("kafka").Dataset("a").Dataset("b")
+		}, "dataset", "b"},
+	}
+	for _, c := range casos {
+		t.Run(c.nome, func(t *testing.T) {
+			var buf bytes.Buffer
+			c.deriva(logging.New(&buf, logging.FormatoJSON, slog.LevelInfo)).
+				Info("evento", "mensagem")
+
+			linha := buf.String()
+			if n := strings.Count(linha, `"`+c.campo+`":`); n != 1 {
+				t.Errorf("campo %q apareceu %d vezes; chave repetida em JSON tem comportamento indefinido:\n%s",
+					c.campo, n, linha)
+			}
+			var m map[string]any
+			if err := json.Unmarshal([]byte(linha), &m); err != nil {
+				t.Fatal(err)
+			}
+			if m[c.campo] != c.quer {
+				t.Errorf("%s = %v, quer %q (a derivação mais recente vence)", c.campo, m[c.campo], c.quer)
+			}
+		})
+	}
+}
+
+// A derivação repetida não pode perder os atributos fixos do With: o consumer
+// amarra partição e offset a um laço inteiro por ali.
+func TestWithSobreviveANovaDerivacao(t *testing.T) {
+	var buf bytes.Buffer
+	logging.New(&buf, logging.FormatoJSON, slog.LevelInfo).
+		Component("kafka").With("partition", 3).Dataset("d").
+		Info("evento", "mensagem")
+
+	var m map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &m); err != nil {
+		t.Fatal(err)
+	}
+	if m["partition"] != float64(3) {
+		t.Errorf("partition = %v, quer 3: a derivação seguinte apagou o atributo fixo\n%s", m["partition"], buf.String())
+	}
+	if m["dataset"] != "d" || m["component"] != "kafka" {
+		t.Errorf("component/dataset = %v/%v", m["component"], m["dataset"])
+	}
+}

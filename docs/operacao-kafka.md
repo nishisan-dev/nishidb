@@ -1,0 +1,215 @@
+# Operar o consumo de Kafka
+
+Guia do caminho completo: build, configuração, subida contra um Kafka real,
+verificação e os modos de falha que o operador vai encontrar. Tudo aqui foi
+executado contra um broker real antes de ser escrito.
+
+> **Leia isto antes de planejar a operação.** Com o `nishidb server` no ar
+> **não há como consultar**: o protocolo remoto é do M3, e `nishidb query` é
+> barrado pelo flock do dataset (exit 3). Hoje o operador ALTERNA — sobe o
+> servidor para ingerir, encerra, e então consulta. É o débito 54.
+
+## 1. Build
+
+```bash
+go build -o nishidb ./cmd/nishidb
+```
+
+Binário único, estático, sem dependência em runtime — o cliente Kafka é Go
+puro, então `CGO_ENABLED=0` produz um executável que roda em `scratch`
+(§97):
+
+```bash
+CGO_ENABLED=0 go build -o nishidb ./cmd/nishidb
+file nishidb   # ELF 64-bit LSB executable, statically linked
+```
+
+Requer Go 1.25+ e Linux (o storage usa `mmap` e `fallocate` diretamente).
+
+## 2. `nishidb.yaml`
+
+```yaml
+version: 1
+
+storage:
+  path: /var/lib/nishidb          # DISCO REAL; tmpfs invalida o orçamento de memória
+  segmentSize: 512MiB
+  checkpoint:
+    interval: 30s                 # a janela de reprocessamento em caso de crash
+
+datasets:
+  directory: /etc/nishidb/datasets
+
+server:
+  bind: 127.0.0.1
+  port: 9142
+
+query:
+  defaultMaxRows: 100000
+  defaultTimeout: 30s
+```
+
+`storage.checkpoint.interval` **é** a janela de reprocessamento: um crash faz o
+consumo retomar do último checkpoint durável, e tudo depois dele é reprocessado
+(inócuo, mas custa tempo e lixo em disco). Diminuir o intervalo estreita a
+janela e aumenta a frequência de fsync.
+
+`storage.durability` continua **aceita e ignorada** (débito 50): quem a lê
+conclui uma garantia que o binário não dá. A janela real é a do
+`checkpoint.interval` acima.
+
+## 3. YAML do dataset
+
+Um arquivo por dataset em `datasets.directory`, e **o nome do arquivo é o nome
+do dataset** (`radius_sessions.yaml` → `name: radius_sessions`).
+
+```yaml
+version: 1
+
+name: radius_sessions
+
+source:
+  type: kafka
+  kafka:
+    enabled: true                          # sem isto, o bloco descreve e não liga
+    bootstrapServers: [kafka01:9092, kafka02:9092, kafka03:9092]
+    topic: radius-accounting
+    consumer:
+      groupId: nishidb-radius
+      autoOffsetReset: earliest            # só vale com o dataset VAZIO
+      maxPollRecords: 1000
+      ingestionQueueSize: 5000             # gate de registros
+      ingestionQueueBytes: 64MiB           # gate de BYTES
+    security:
+      protocol: SASL_SSL
+      saslMechanism: SCRAM-SHA-512
+      usernameEnv: KAFKA_USERNAME          # o NOME da variável, nunca o valor
+      passwordEnv: KAFKA_PASSWORD
+      caFile: /etc/nishidb/tls/kafka-ca.pem
+
+errors:
+  invalidEvent: log-and-skip
+
+materialization:
+  key:
+    field: id
+  mode: merge
+  sequence:
+    field: _SEQ
+    type: int64
+    strategy: greater
+
+schema:
+  include: ["*"]
+  unknownFields: include
+  fields:
+    id: { type: string }
+    _SEQ: { type: int64 }
+    Acct-Status-Type: { type: string, alias: status, index: bitmap }
+    Framed-IP-Address: { type: ipv4, alias: ip }
+```
+
+Três coisas que o parse recusa e que valem saber antes do primeiro deploy:
+
+- **Chave desconhecida** dentro de `source` e de `errors` é erro, com o nome da
+  chave e a lista das conhecidas. É deliberado: `invalidEvant: stop` com typo
+  cairia no default e a política que você escreveu não existiria.
+- **`usernameEnv`/`passwordEnv` recebem o NOME da variável.** Escrever a senha
+  ali é recusado no parse, com a mensagem dizendo isso — o YAML é versionado e
+  o §95 proíbe registrar senha.
+- **Credencial ausente ou vazia** é falha de ativação, não de parse: o YAML
+  carrega numa máquina sem as variáveis (por isso a suíte roda), e o servidor é
+  que recusa subir, nomeando a variável faltante.
+
+## 4. Subir
+
+```bash
+export KAFKA_USERNAME=... KAFKA_PASSWORD=...
+nishidb server --config /etc/nishidb/nishidb.yaml
+```
+
+Flags: `--log-format json|texto` (default `json`), `--log-level`, e
+`--pprof <addr>` para os endpoints de debug **num listener próprio** — o §112
+os autoriza só em modo administrativo, então não exponha essa porta.
+
+Numa unidade systemd, as credenciais entram por `EnvironmentFile=` com modo
+`0600`; o processo nunca as escreve no log.
+
+Subida saudável:
+
+```
+level=INFO event=query.pronta       datasets=1 endereco=127.0.0.1:9142
+level=INFO event=posicao.inicial    dataset=radius_sessions autoOffsetReset=earliest
+level=INFO event=ingestao.subiu     dataset=radius_sessions topico=radius-accounting group=nishidb-radius
+level=INFO event=particoes.atribuidas dataset=radius_sessions particoes=3
+```
+
+## 5. Verificar
+
+```bash
+curl -s localhost:9142/v1/health
+curl -s localhost:9142/metrics | grep nishidb_ingest_events_total
+```
+
+O health responde **503** quando `status` não é `UP`, para um balanceador
+tirar a instância de rotação sem interpretar o corpo. A chave `kafka` AGREGA:
+basta um dataset parado para ela sair de `UP`, e `detalhes` nomeia qual.
+
+As métricas que respondem "está ingerindo?": `nishidb_ingest_events_total`,
+`nishidb_kafka_offset` (por partição), `nishidb_kafka_lag`. As que respondem
+"está saudável?": `nishidb_ingest_blocked` (1 = ingestão parada por política),
+`nishidb_ingest_failed_total`, `nishidb_kafka_errors_total`, e
+`nishidb_kafka_partitions_assigned` contra `nishidb_kafka_partitions_total`.
+
+## 6. Encerrar
+
+`SIGTERM` (ou `SIGINT`): o servidor para os pollers, drena a fila, faz um
+checkpoint final e devolve o flock. **Não use `SIGKILL` por rotina** — ele é
+sobrevivível (o §126.25 é testado), mas custa o reprocessamento da janela
+desde o último checkpoint.
+
+Só depois de encerrado o dataset fica consultável:
+
+```bash
+nishidb query --config /etc/nishidb/nishidb.yaml --dataset radius_sessions \
+  'SELECT id, status, ip FROM radius_sessions LIMIT 10'
+```
+
+## 7. Modos de falha, e o que fazer
+
+O servidor **não morre** quando a ingestão de um dataset não pode subir: as
+consultas continuam registradas e o problema aparece no health (§51). Em todos
+os casos abaixo o dataset fica `DOWN` com o motivo em `detalhes`.
+
+| Sintoma no health / log | Causa | O que fazer |
+|---|---|---|
+| `dataset tem linhas e não tem offsets locais` | O `kafka.offsets` sumiu ou veio de restore parcial | `nishidb offsets --show` para ver o estado, depois `--set` (retomar de uma posição conhecida) ou `--reset earliest\|latest` (aceitar reprocessar ou pular). Nunca é decidido sozinho: `earliest` reprocessaria o tópico retido inteiro e `latest` pularia tudo |
+| `a origem mudou desde o último checkpoint: topic mudou (...)` | O YAML aponta para outro tópico, group ou cluster | Se a troca é intencional (promoção teste→produção), `nishidb offsets --reset` autoriza. Se não é, corrija o YAML — o offset gravado é de outro fluxo |
+| `assignment parcial: o group entregou 2 de 4 partições` | Outra instância no mesmo `groupId` | Derrube a outra. O v1 é single-writer com checkpoint local autoritativo: duas instâncias materializam metade cada uma |
+| `ingestão PARADA` + `nishidb_ingest_blocked 1` | `errors.invalidEvent: stop` encontrou um evento ruim, ou houve `STORAGE_ERROR` | O offset persistido aponta **exatamente** para o evento problemático. Investigue-o no tópico; para pular, `nishidb offsets --set <particao>:<offset+1> --yes` |
+| `variável de ambiente KAFKA_PASSWORD não está definida` | Credencial ausente no ambiente do processo | Corrija o `EnvironmentFile`. A mensagem nomeia a variável e nunca o valor |
+| `datasets X e Y consomem o tópico T com o mesmo consumer.groupId` | Dois YAMLs copiados sem trocar o group | Recusa na subida do processo inteiro, de propósito: com o group compartilhado, cada dataset materializaria estado parcial e nenhuma métrica acusaria |
+
+## 8. Reposicionar
+
+```bash
+nishidb offsets --config nishidb.yaml --dataset radius_sessions --show
+nishidb offsets --config nishidb.yaml --dataset radius_sessions --set 0:1500,1:900 --yes
+nishidb offsets --config nishidb.yaml --dataset radius_sessions --reset earliest --yes
+```
+
+Exige o **servidor parado** — o comando toma o flock. É proposital: mexer na
+posição com o consumer de pé faria o writer sobrescrever a decisão no
+checkpoint seguinte. `--set` e `--reset` pedem `--yes`, porque uma reposição
+acidental reprocessa ou pula uma janela inteira do tópico.
+
+## 9. O que é seguro mudar com o dataset já em produção
+
+| Mudança | Seguro? |
+|---|---|
+| `ingestionQueueSize`, `ingestionQueueBytes`, `maxPollRecords` | Sim. Só afeta o intake |
+| `errors.invalidEvent` | Sim |
+| `enabled: false` | Sim — é o botão de pausa declarativo de UM dataset |
+| `autoOffsetReset` | Inócuo depois da primeira subida: com posição local, ele não é consultado |
+| Acrescentar campo ao `schema.fields` | Sim, com a ressalva do M1 sobre índices (o conjunto de campos com bitmap é imutável nas duas direções) |
+| `topic`, `groupId`, `bootstrapServers` | **Não sem `nishidb offsets`.** A identidade da origem é conferida contra a persistida, e a subida é recusada nomeando o campo que mudou |

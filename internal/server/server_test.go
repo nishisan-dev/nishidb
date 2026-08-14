@@ -3,12 +3,12 @@ package server_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -60,6 +60,13 @@ type ambiente struct {
 
 func novoAmbiente(t *testing.T) *ambiente {
 	t.Helper()
+	return novoAmbienteCom(t, "\nserver:\n  bind: 127.0.0.1\n  port: %d\n")
+}
+
+// novoAmbienteCom monta o ambiente com o bloco `server` que o teste quiser.
+// O %d recebe uma porta livre.
+func novoAmbienteCom(t *testing.T, blocoServer string) *ambiente {
+	t.Helper()
 	dir := t.TempDir()
 	dados := filepath.Join(dir, "dados")
 	datasets := filepath.Join(dir, "datasets")
@@ -73,7 +80,7 @@ func novoAmbiente(t *testing.T) *ambiente {
 	// propósito (zero não é "sem valor"), então quem escolhe é quem testa.
 	corpo := "version: 1\nstorage:\n  path: " + dados +
 		"\ndatasets:\n  directory: " + datasets +
-		"\nserver:\n  bind: 127.0.0.1\n  port: " + strconv.Itoa(portaLivre(t)) + "\n"
+		fmt.Sprintf(blocoServer, portaLivre(t))
 	if err := os.WriteFile(cfgPath, []byte(corpo), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -313,4 +320,33 @@ func portaLivre(t *testing.T) int {
 		t.Fatal(err)
 	}
 	return porta
+}
+
+// `server.enabled: false` é o operador desligando deliberadamente, e recusar
+// é o oposto de aceitar-e-ignorar — que é o defeito que a issue #1 denuncia.
+// Ausente é outra coisa: rodar `nishidb server` já é o ato de ligar.
+func TestServerEnabledFalseRecusaASubida(t *testing.T) {
+	a := novoAmbienteCom(t, "\nserver:\n  bind: 127.0.0.1\n  port: %d\n  enabled: false\n")
+	a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))
+
+	_, err := server.Novo(a.carrega(), server.Opcoes{})
+	if err == nil {
+		t.Fatal("quer recusa com server.enabled: false")
+	}
+	if !strings.Contains(err.Error(), "server.enabled") {
+		t.Errorf("a mensagem não nomeia a chave: %v", err)
+	}
+}
+
+func TestServerSemBlocoEnabledSobe(t *testing.T) {
+	a := novoAmbienteCom(t, "\nserver:\n  bind: 127.0.0.1\n  port: %d\n")
+	a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))
+
+	srv, err := server.Novo(a.carrega(), server.Opcoes{})
+	if err != nil {
+		t.Fatalf("sem a chave o servidor deveria subir: %v", err)
+	}
+	if err := srv.Fecha(); err != nil {
+		t.Fatal(err)
+	}
 }

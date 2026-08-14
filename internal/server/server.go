@@ -100,6 +100,14 @@ func Novo(cfg *config.Config, o Opcoes) (*Servidor, error) {
 	reg := metrics.NewRegistry()
 	metrics.RegistraProcesso(reg)
 
+	// server.enabled tem leitor. Aceitar a chave e ignorá-la seria repetir,
+	// dentro do próprio conserto, o defeito que a issue #1 denuncia: o
+	// operador escreve `enabled: false`, o servidor sobe assim mesmo, e a
+	// configuração mente.
+	if !cfg.ServidorHabilitado() {
+		return nil, fmt.Errorf("server.enabled é false em %s: o servidor não sobe com a chave desligada", cfg.Datasets.Directory)
+	}
+
 	nomes, err := cfg.ListaDatasets()
 	if err != nil {
 		return nil, err
@@ -310,12 +318,24 @@ func (s *Servidor) sobeHTTP() error {
 	return nil
 }
 
+// Fecha libera o listener e os datasets sem ter rodado.
+//
+// Existe porque o Novo já TOMA recursos — o listener e o flock de cada
+// dataset — e até aqui só o Roda os devolvia: um chamador que montasse o
+// servidor e decidisse não subi-lo deixava os datasets travados até o processo
+// morrer. É idempotente.
+func (s *Servidor) Fecha() error { return s.encerra() }
+
 func (s *Servidor) encerra() error {
 	ctx, cancela := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancela()
 	var errs []error
 	if s.http != nil {
 		errs = append(errs, s.http.Shutdown(ctx))
+	} else if s.ln != nil {
+		// Sem Roda, o listener nunca foi entregue ao http.Server: fechá-lo é
+		// responsabilidade daqui.
+		errs = append(errs, s.ln.Close())
 	}
 	if s.pprofSrv != nil {
 		errs = append(errs, s.pprofSrv.Shutdown(ctx))
