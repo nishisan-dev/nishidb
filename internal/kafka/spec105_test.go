@@ -299,7 +299,7 @@ func TestAssignmentParcialRecusaASubida(t *testing.T) {
 	defer cancelaRival()
 	rival.PollRecords(ctxRival, 1) // entra no group
 
-	_, err = b.consomeAte(20*time.Second, func(d kafka.Desfecho) bool { return false })
+	_, err = b.consomeAte(20*time.Second, func(kafka.Desfecho) bool { return false })
 	if !errors.Is(err, kafka.ErrAssignmentParcial) {
 		t.Errorf("erro = %v, quer ErrAssignmentParcial", err)
 	}

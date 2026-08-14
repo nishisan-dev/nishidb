@@ -80,7 +80,7 @@ func TestStopParaAIngestaoSemAvancarOOffset(t *testing.T) {
 
 	b.produz(evento("A", 1, "Start"), eventoRuim(), evento("B", 1, "Start"))
 
-	_, err := b.consomeAte(prazo, func(d kafka.Desfecho) bool { return false })
+	_, err := b.consomeAte(prazo, func(kafka.Desfecho) bool { return false })
 	if !errors.Is(err, kafka.ErrPausado) {
 		t.Fatalf("erro = %v, quer ErrPausado", err)
 	}

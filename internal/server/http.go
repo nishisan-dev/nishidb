@@ -51,7 +51,7 @@ type Saude struct {
 // A chave "kafka" agrega: basta UM dataset com ingestão parada para ela sair
 // de UP. É deliberado — um health que dissesse UP com metade da ingestão
 // parada seria pior que não existir.
-func (s *Servidor) handleHealth(w http.ResponseWriter, r *http.Request) {
+func (s *Servidor) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	h := Saude{
 		Status:   EstadoUP,
 		Kafka:    EstadoUP,

@@ -3,7 +3,6 @@ package kafka_test
 import (
 	"context"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -135,7 +134,9 @@ func (b *bancada) abre() {
 	}
 	compilado, err := b.spec.Compile(st.FieldDict())
 	if err != nil {
-		st.Close()
+		if cerr := st.Close(); cerr != nil {
+			b.t.Errorf("fechar o store: %v", cerr)
+		}
 		b.t.Fatalf("compile: %v", err)
 	}
 	b.st = st
@@ -182,42 +183,6 @@ func (b *bancada) produz(recs ...*kgo.Record) {
 	if err := cl.ProduceSync(ctx, recs...).FirstErr(); err != nil {
 		b.t.Fatalf("produzir: %v", err)
 	}
-}
-
-// produzComHash publica escolhendo a partição pelo HASH DA KEY, que é a
-// recomendação do §26 (Kafka key igual à materialization key) e o que garante
-// que os eventos de uma entidade caiam sempre na mesma partição.
-func (b *bancada) produzComHash(recs ...*kgo.Record) {
-	b.t.Helper()
-	cl, err := kgo.NewClient(kgo.SeedBrokers(b.endereco))
-	if err != nil {
-		b.t.Fatalf("produtor: %v", err)
-	}
-	defer cl.Close()
-	for _, r := range recs {
-		r.Topic = b.cfg.Topic
-	}
-	ctx, cancela := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancela()
-	if err := cl.ProduceSync(ctx, recs...).FirstErr(); err != nil {
-		b.t.Fatalf("produzir: %v", err)
-	}
-}
-
-// portaLivre reserva uma porta pedindo :0 ao sistema e devolvendo-a em
-// seguida. Há uma janela de corrida teórica; é o padrão usado por suítes que
-// precisam da porta antes do bind.
-func portaLivre(t *testing.T) int {
-	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	porta := ln.Addr().(*net.TCPAddr).Port
-	if err := ln.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return porta
 }
 
 // evento monta um record de uma entidade.

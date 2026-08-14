@@ -264,7 +264,11 @@ func pega(t *testing.T, srv *server.Servidor, caminho string) string {
 	if err != nil {
 		t.Fatalf("GET %s: %v", caminho, err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Errorf("fechar o corpo da resposta: %v", err)
+		}
+	}()
 	b, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatal(err)

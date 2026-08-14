@@ -31,6 +31,8 @@ import (
 // Tipo é o tipo Prometheus da família.
 type Tipo int
 
+// Os três tipos que o formato de exposição do Prometheus reconhece e que este
+// produto usa: contador monotônico, medidor e histograma de buckets fixos.
 const (
 	TipoContador Tipo = iota
 	TipoMedidor

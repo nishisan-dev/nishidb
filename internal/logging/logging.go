@@ -33,6 +33,8 @@ const Redactado = "[REDACTADO]"
 // texto existe para quem lê no terminal.
 type Formato int
 
+// FormatoJSON é o default de produção; FormatoTexto existe para quem lê no
+// terminal.
 const (
 	FormatoJSON Formato = iota
 	FormatoTexto
@@ -146,12 +148,21 @@ func (l *Logger) Enabled(nivel slog.Level) bool {
 	return l.sl.Enabled(context.Background(), nivel)
 }
 
-// Os quatro níveis. `event` é o identificador estável que scripts casam
-// (kafka.offset.commit, storage.recovery.divergencia); `msg` é a prosa para
-// humanos. Separar os dois é o que permite mudar o texto sem quebrar alerta.
+// Debug emite no nível de depuração.
+//
+// Nos quatro níveis, `event` é o identificador estável que scripts e alertas
+// casam (kafka.offset.commit, storage.recovery.divergencia) e `msg` é a prosa
+// para humanos. Separar os dois é o que permite reescrever o texto sem
+// quebrar alerta.
 func (l *Logger) Debug(event, msg string, args ...any) { l.emite(slog.LevelDebug, event, msg, args) }
-func (l *Logger) Info(event, msg string, args ...any)  { l.emite(slog.LevelInfo, event, msg, args) }
-func (l *Logger) Warn(event, msg string, args ...any)  { l.emite(slog.LevelWarn, event, msg, args) }
+
+// Info emite no nível informativo.
+func (l *Logger) Info(event, msg string, args ...any) { l.emite(slog.LevelInfo, event, msg, args) }
+
+// Warn emite um aviso: algo saiu do esperado e o processo segue.
+func (l *Logger) Warn(event, msg string, args ...any) { l.emite(slog.LevelWarn, event, msg, args) }
+
+// Error emite uma falha: algo não foi feito.
 func (l *Logger) Error(event, msg string, args ...any) { l.emite(slog.LevelError, event, msg, args) }
 
 func (l *Logger) emite(nivel slog.Level, event, msg string, args []any) {

@@ -6,4 +6,12 @@ linters:
     - staticcheck
     - errcheck
     - revive
+
+# gofmt fica aqui, e não em `linters`: na v2 do golangci-lint ele é FORMATTER,
+# e listá-lo como linter faz o binário recusar a configuração inteira com
+# "can't load config: gofmt is a formatter" — ou seja, o projeto ficava sem
+# lint nenhum, em silêncio, porque o Makefile cai para `go vet` quando o
+# golangci-lint não está instalado e ninguém via o erro.
+formatters:
+  enable:
     - gofmt

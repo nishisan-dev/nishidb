@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -33,6 +34,42 @@ import (
 )
 
 const imagemRedpanda = "redpandadata/redpanda:v24.2.18"
+
+// produzComHash publica escolhendo a partição pelo HASH DA KEY, que é a
+// recomendação do §26 (Kafka key igual à materialization key) e o que garante
+// que os eventos de uma entidade caiam sempre na mesma partição.
+func (b *bancada) produzComHash(recs ...*kgo.Record) {
+	b.t.Helper()
+	cl, err := kgo.NewClient(kgo.SeedBrokers(b.endereco))
+	if err != nil {
+		b.t.Fatalf("produtor: %v", err)
+	}
+	defer cl.Close()
+	for _, r := range recs {
+		r.Topic = b.cfg.Topic
+	}
+	ctx, cancela := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancela()
+	if err := cl.ProduceSync(ctx, recs...).FirstErr(); err != nil {
+		b.t.Fatalf("produzir: %v", err)
+	}
+}
+
+// portaLivre reserva uma porta pedindo :0 ao sistema e devolvendo-a em
+// seguida. Há uma janela de corrida teórica; é o padrão usado por suítes que
+// precisam da porta antes do bind.
+func portaLivre(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	porta := ln.Addr().(*net.TCPAddr).Port
+	if err := ln.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return porta
+}
 
 // sobeRedpanda inicia um broker e devolve o endereço.
 func sobeRedpanda(t *testing.T, particoes int) string {

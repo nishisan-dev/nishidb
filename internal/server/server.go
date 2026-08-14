@@ -65,12 +65,6 @@ func (d *dataset) falha(err error) {
 	}
 }
 
-func (d *dataset) erro() error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.erroIngestao
-}
-
 // Servidor é o processo de longa duração.
 type Servidor struct {
 	cfg      *config.Config
@@ -142,9 +136,17 @@ func Novo(cfg *config.Config, o Opcoes) (*Servidor, error) {
 	}
 	ok := false
 	defer func() {
-		if !ok {
-			s.ln.Close()
-			s.fechaDatasets()
+		if ok {
+			return
+		}
+		// Caminho de erro: o que importa é não vazar o listener nem os
+		// flocks. Uma falha ao fechar aqui não tem a quem ser reportada — o
+		// erro que interessa é o que abortou a subida.
+		if err := s.ln.Close(); err != nil {
+			log.Warn("listener.close", "falha ao fechar o listener na subida abortada", "erro", err.Error())
+		}
+		if err := s.fechaDatasets(); err != nil {
+			log.Warn("datasets.close", "falha ao fechar datasets na subida abortada", "erro", err.Error())
 		}
 	}()
 
@@ -179,12 +181,10 @@ func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*
 	}
 	compilado, err := spec.Compile(st.FieldDict())
 	if err != nil {
-		st.Close()
-		return nil, fmt.Errorf("dataset %q: %w", spec.Name, err)
+		return nil, fechandoStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}
 	if err := s.eng.Register(spec.Name, compilado, st); err != nil {
-		st.Close()
-		return nil, fmt.Errorf("dataset %q: %w", spec.Name, err)
+		return nil, fechandoStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}
 	return &dataset{
 		nome: spec.Name,
@@ -192,6 +192,16 @@ func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*
 		st:   st,
 		mat:  materializer.New(compilado, st),
 	}, nil
+}
+
+// fechandoStore devolve o erro original, fechando o Store antes. O erro do
+// Close é agregado e nunca substitui a causa: quem lê precisa do motivo de a
+// abertura ter falhado, não do que aconteceu na limpeza.
+func fechandoStore(st *storage.Store, causa error) error {
+	if err := st.Close(); err != nil {
+		return errors.Join(causa, err)
+	}
+	return causa
 }
 
 // Roda sobe o HTTP e os consumers, nessa ordem (§51), e bloqueia até o
