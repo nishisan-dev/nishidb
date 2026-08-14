@@ -1305,3 +1305,11 @@ func (s *Store) Close() error {
 	errs = append(errs, s.lock.release())
 	return errors.Join(errs...)
 }
+
+// RowCount é a contagem de rows materializadas.
+//
+// Existe separado do Stats porque é o sinal que a ingestão Kafka usa para
+// separar "dataset novo" de "dataset com dados e sem posição conhecida" — e
+// esse consumidor não deveria depender do tipo Stats inteiro só para ler um
+// contador.
+func (s *Store) RowCount() uint64 { return s.rowCount.Load() }
