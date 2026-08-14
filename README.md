@@ -198,6 +198,18 @@ com 0 — uma fonte ruidosa não derruba o pipeline. Evento que **não entrou po
 falha nossa ou do dataset** (erro do storage, inconsistência interna) sai com 7:
 o dataset está íntegro e checkpointado, mas faltam rows.
 
+**Entrada interrompida também é 7**: se a leitura do NDJSON falhar no meio
+(erro de I/O, linha acima do teto de 8 MiB do scanner), o que vinha depois não
+foi ingerido — a ação é investigar e reprocessar, não conferir a linha de
+comando. O erro aparece no stderr como `ENTRADA INTERROMPIDA`.
+
+Quando uma execução acumula mais de um desfecho, o código de saída é o **mais
+grave**, não o último ocorrido — na ordem `4 > 3 > 7 > 6 > 1`. O writer em modo
+falho vem primeiro porque é o único que exige reabrir o dataset antes de
+qualquer reprocessamento; a perda vem antes da interrupção por sinal porque o
+sinal foi pedido por quem chamou, e a perda é notícia. O desfecho que perdeu a
+precedência continua descrito no stderr.
+
 ## Documentação
 
 - [Arquitetura](docs/architecture.md) — como o sistema funciona, com os números.

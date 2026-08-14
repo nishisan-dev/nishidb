@@ -36,6 +36,47 @@ type resumoIngest struct {
 	descartadosTotal, falhasTotal                 int64
 }
 
+// gravidadeIngest ordena os desfechos possíveis de uma ingestão do MAIS grave
+// para o menos grave. A ordem é o contrato com quem lê $?: numa execução que
+// termina por um motivo E acumula perda, o código de saída tem de ser o que
+// exige a ação mais forte, não o do evento que ocorreu por último.
+//
+//   - 4 (writer em modo falho) primeiro: é o único que prescreve um passo
+//     extra — reabrir o dataset — antes de qualquer reprocessamento, e já
+//     implica que a carga está incompleta.
+//   - 3 (dataset) em seguida: checkpoint que falha significa delta não
+//     durável; o alvo da investigação é o dataset, não os eventos.
+//   - 7 (perda) antes de 6 (sinal): a interrupção foi PEDIDA por quem chamou
+//     e ele já sabe dela; a perda é notícia, e esconder notícia atrás de um
+//     desfecho conhecido é exatamente o defeito que criou o 7.
+//   - 1 (uso) por último entre os erros: é o vala-comum do codigoDoErro, o
+//     único código que manda o operador olhar a linha de comando. Qualquer
+//     desfecho nomeado diz mais.
+var gravidadeIngest = [...]int{ExitWriter, ExitDataset, ExitPerdaDeDados, ExitInterromp, ExitUso}
+
+// desfechoMaisGrave devolve, entre dois códigos de saída, o de maior
+// gravidade. Código sem gravidade declarada (nenhum é alcançável hoje pelo
+// ingest) vale o mesmo que o vala-comum: perde para os nomeados e vence o
+// sucesso, porque sair 0 com desfecho anômalo é a perda silenciosa de volta.
+func desfechoMaisGrave(a, b int) int {
+	if a == b {
+		return a
+	}
+	for _, c := range gravidadeIngest {
+		if a == c {
+			return a
+		}
+		if b == c {
+			return b
+		}
+	}
+	// Nenhum dos dois é nomeado: o sucesso perde para qualquer anomalia.
+	if a == ExitOK {
+		return b
+	}
+	return a
+}
+
 func runIngest(args []string, amb Ambiente) int {
 	fs := flag.NewFlagSet("ingest", flag.ContinueOnError)
 	fs.SetOutput(amb.Stderr)
@@ -97,6 +138,26 @@ func runIngest(args []string, amb Ambiente) int {
 	inicio := time.Now()
 	ultimoCP := inicio
 
+	// encerra é o ÚNICO ponto de saída depois que a ingestão começou. Todo
+	// caminho de retorno passa por aqui porque cada retorno antecipado que
+	// pulava o teste de falhasTotal transformava perda de dado num código de
+	// saída que fala de outra coisa. O motivo do encerramento não substitui a
+	// perda: os dois são impressos, e o código devolvido é o MAIS GRAVE.
+	encerra := func(motivo int) int {
+		imprimeResumo(amb.Stderr, resumo, time.Since(inicio))
+		if resumo.falhasTotal == 0 {
+			return motivo
+		}
+		// A ingestão pode ter terminado com o dataset íntegro e checkpointado
+		// — mas eventos foram perdidos por falha. Quem automatiza precisa
+		// distinguir isto de sucesso, e não pode confundir com o writer falho
+		// (4), onde nada mais entra até reabrir.
+		fmt.Fprintf(amb.Stderr,
+			"ingest: %d eventos NÃO entraram no dataset por falha — investigue antes de considerar a carga completa\n",
+			resumo.falhasTotal)
+		return desfechoMaisGrave(motivo, ExitPerdaDeDados)
+	}
+
 	sc := bufio.NewScanner(entrada)
 	// Uma linha é um evento, e um record pode ter até 4 MiB: o buffer padrão
 	// de 64 KiB do Scanner cortaria eventos legítimos.
@@ -105,11 +166,12 @@ func runIngest(args []string, amb Ambiente) int {
 	for sc.Scan() {
 		if err := amb.Ctx.Err(); err != nil {
 			fmt.Fprintln(amb.Stderr, "ingest: interrompido; gravando checkpoint do que foi aplicado")
+			motivo := ExitInterromp
 			if cperr := st.Checkpoint(); cperr != nil {
 				fmt.Fprintln(amb.Stderr, "ingest: checkpoint final:", cperr)
+				motivo = desfechoMaisGrave(motivo, codigoDoErro(cperr))
 			}
-			imprimeResumo(amb.Stderr, resumo, time.Since(inicio))
-			return ExitInterromp
+			return encerra(motivo)
 		}
 		linha := sc.Bytes()
 		if len(linha) == 0 {
@@ -123,8 +185,7 @@ func runIngest(args []string, amb Ambiente) int {
 			// Writer em modo falho: continuar é desperdício, porque nenhum
 			// evento seguinte vai ser aceito até o dataset reabrir.
 			fmt.Fprintf(amb.Stderr, "ingest: writer em modo falho no evento %d: %v\n", resumo.lidos, r.Err)
-			imprimeResumo(amb.Stderr, resumo, time.Since(inicio))
-			return ExitWriter
+			return encerra(ExitWriter)
 		case r.Category.BadEvent():
 			resumo.descartados[r.Category]++
 			resumo.descartadosTotal++
@@ -147,35 +208,36 @@ func runIngest(args []string, amb Ambiente) int {
 		if precisaCheckpoint(*everyN, resumo.lidos, ultimoCP, cfg.checkpointInterval) {
 			if err := st.Checkpoint(); err != nil {
 				fmt.Fprintln(amb.Stderr, "ingest: checkpoint:", err)
-				imprimeResumo(amb.Stderr, resumo, time.Since(inicio))
-				return codigoDoErro(err)
+				return encerra(codigoDoErro(err))
 			}
 			ultimoCP = time.Now()
 		}
 	}
-	if err := sc.Err(); err != nil {
-		fmt.Fprintln(amb.Stderr, "ingest: lendo a entrada:", err)
-		imprimeResumo(amb.Stderr, resumo, time.Since(inicio))
-		return ExitUso
+
+	// Erro de leitura é PERDA, não erro de uso: o que vinha depois do erro
+	// nunca chegou ao materializador, e a ação de quem recebe o código é a do
+	// 7 — investigar e reprocessar —, não conferir a linha de comando. Difere
+	// da interrupção por sinal (6) porque ninguém pediu esta parada.
+	//
+	// O que JÁ entrou é durabilizado antes de sair, do mesmo modo que no
+	// caminho do sinal: deixar o delta para o tail scan da recovery seria
+	// trocar um desfecho conhecido por um conserto na próxima abertura.
+	erroLeitura := sc.Err()
+	if erroLeitura != nil {
+		fmt.Fprintf(amb.Stderr,
+			"ingest: ENTRADA INTERROMPIDA na leitura: %v — o que vinha depois NÃO foi ingerido, a carga está incompleta\n",
+			erroLeitura)
 	}
 
+	motivo := ExitOK
+	if erroLeitura != nil {
+		motivo = ExitPerdaDeDados
+	}
 	if err := st.Checkpoint(); err != nil {
 		fmt.Fprintln(amb.Stderr, "ingest: checkpoint final:", err)
-		imprimeResumo(amb.Stderr, resumo, time.Since(inicio))
-		return codigoDoErro(err)
+		motivo = desfechoMaisGrave(motivo, codigoDoErro(err))
 	}
-	imprimeResumo(amb.Stderr, resumo, time.Since(inicio))
-	if resumo.falhasTotal > 0 {
-		// A ingestão terminou, o dataset está íntegro e checkpointado — mas
-		// eventos foram perdidos por falha. Quem automatiza precisa distinguir
-		// isto de sucesso, e não pode confundir com o writer falho (4), onde
-		// nada mais entra até reabrir.
-		fmt.Fprintf(amb.Stderr,
-			"ingest: %d eventos NÃO entraram no dataset por falha — investigue antes de considerar a carga completa\n",
-			resumo.falhasTotal)
-		return ExitPerdaDeDados
-	}
-	return ExitOK
+	return encerra(motivo)
 }
 
 // precisaCheckpoint dispara por CONTAGEM ou por TEMPO, o que vier primeiro:

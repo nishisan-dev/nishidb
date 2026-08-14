@@ -213,6 +213,16 @@ conhecê-las. Cada uma tem dono em [`debitos.md`](debitos.md).
   (política §101) e a ingestão termina com 0; evento que não entrou por falha
   de infraestrutura sai com 7. Um pipeline com retry deve ligar a política ao
   exit code, não ao texto do resumo.
+- **Entrada interrompida na leitura também sai com 7.** Erro de I/O no NDJSON
+  ou linha acima do teto de 8 MiB do scanner param a ingestão, e o resto do
+  arquivo não entra: o `ingest` durabiliza o que já aplicou, imprime
+  `ENTRADA INTERROMPIDA` no stderr e sai 7. Saía 1 ("erro de uso") antes, o que
+  mandava o operador conferir a linha de comando.
+- **Com mais de um desfecho, o exit code é o MAIS GRAVE**, na ordem
+  `4 > 3 > 7 > 6 > 1`, e não o do último evento ocorrido: uma ingestão que
+  perde eventos e depois recebe SIGTERM sai 7, não 6. Cada retorno antecipado
+  que pulava o teste de perda transformava perda de dado num código que fala de
+  outra coisa — a razão de o `ingest` ter um ponto de saída único.
 - **Campo indexado tem teto de 64 KiB** (`types.MaxIndexedValueBytes`, limite do
   `u16` do dicionário de valores). Valor acima disso faz o evento inteiro
   falhar. E há uma segunda porta: declarar `index: bitmap` num campo que **já

@@ -23,6 +23,7 @@ no fim da seção a que pertence, e nada é renumerado.
 | Política de três baldes (materializer) | Falha de I/O do dicionário contabilizada como "evento ruim"; pipeline pulava em silêncio | QP fix round — só o conflito de tipo é evento ruim |
 | Política de três baldes (CLI) | Os dois baldes colapsados na saída do `ingest`: perda de dado saía com **exit 0**, e `INTERNAL_STATE` nem aparecia no resumo | Fecho do M1 — linha própria por balde e `ExitPerdaDeDados` (7) |
 | Exit code de corrupção | `encoding.ErrCorrupt` caía no default e saía como **exit 1** ("erro de uso") | Fecho do M1 — mapeado para `ExitDataset` (3) |
+| Retorno antecipado do `ingest` | Erro de leitura da entrada saía com **exit 1** e retornava ANTES do teste de perda: a perda apurada sumia do `$?`, e o mesmo valia para o writer falho, a falha de checkpoint e o sinal | Verificação da doc do M1 — ponto de saída único (`encerra`) e precedência por gravidade (`desfechoMaisGrave`, `4 > 3 > 7 > 6 > 1`); entrada interrompida virou perda (7) |
 | FieldID não-determinístico | Datasets criados do mesmo YAML ficavam com ordem de coluna diferente em `SELECT *`, gravada para sempre | Fecho do M1 — `Open` ordena `BitmapFieldNames` antes de resolver |
 | Dublê × real | O `fakestorage` aceitava key e record acima dos tetos que o Store real recusa | I1 — `ValidateRecord` no dublê + roteiro de comportamento compartilhado |
 | Curto-circuito do AND | Desligá-lo fazia `A AND B` devolver o resultado de B, com a suíte verde | Reconciliação Q15/Q16 — diferencial árvore × programa |
