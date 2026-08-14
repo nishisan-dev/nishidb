@@ -19,23 +19,23 @@ abaixo.
 
 ## Visão geral
 
-![Containers do M1: CLI, materializer, engine SQL e storage, e os arquivos do dataset em disco](https://uml.nishisan.dev/proxy?src=https://raw.githubusercontent.com/nishisan-dev/nishidb/main/docs/diagrams/c4_container.puml)
+![Containers do M1: CLI, materializer, engine SQL e storage, e os arquivos do dataset em disco](https://uml.nishisan.dev/proxy?src=https://git-raw.nishisan.dev/nishisan-dev/nishidb/main/docs/diagrams/c4_container.puml)
 
-> **Os cinco diagramas deste documento ainda não renderizam.** As URLs apontam
-> para `raw.githubusercontent.com/nishisan-dev/nishidb/main/…`, e o repositório
-> **nunca foi publicado**: `git remote -v` é vazio, então não existe URL raw para
-> o proxy buscar e todas respondem 404. Publicar é ação do dono do repositório e
-> está registrada em [`debitos.md`](debitos.md). Enquanto isso não acontece, os
-> fontes estão versionados em [`docs/diagrams/`](diagrams/) — os cinco `.puml`
-> renderizam em qualquer servidor PlantUML. As URLs fixam **`main`** de
-> propósito: fixar a branch de trabalho quebraria os links no merge.
+> **Sobre as URLs dos diagramas.** O repositório é **privado**, então
+> `raw.githubusercontent.com` responde 404 a quem não está autenticado — e o
+> proxy do PlantUML busca o `.puml` anonimamente. Por isso os cinco diagramas
+> passam por `git-raw.nishisan.dev`, que serve o conteúdo do repositório
+> privado ao proxy. Os fontes estão versionados em
+> [`docs/diagrams/`](diagrams/) e renderizam em qualquer servidor PlantUML.
+> As URLs fixam **`main`** de propósito: fixar a branch de trabalho quebraria
+> os links no merge.
 
 Um binário só, sem dependência externa em runtime. Dois comandos: `ingest`
 materializa NDJSON num dataset; `query` executa SQL e escreve NDJSON.
 
 ## Ingestão
 
-![Fluxo de ingestão: do evento JSON à location publicada, com o commit point entre a fase SET e a fase CLEAR dos bitmaps](https://uml.nishisan.dev/proxy?src=https://raw.githubusercontent.com/nishisan-dev/nishidb/main/docs/diagrams/ingest_flow.puml)
+![Fluxo de ingestão: do evento JSON à location publicada, com o commit point entre a fase SET e a fase CLEAR dos bitmaps](https://uml.nishisan.dev/proxy?src=https://git-raw.nishisan.dev/nishisan-dev/nishidb/main/docs/diagrams/ingest_flow.puml)
 
 Um evento passa por: tokenização sem cópia → resolução de campos contra o
 schema → conversão tipada para um arena reutilizado → merge com o estado
@@ -73,7 +73,7 @@ carga (146.216 ev/s descontando o tempo de checkpoint).
 
 ## Storage
 
-![Layout em disco de um dataset, com os nomes exatos de diretório e de arquivo](https://uml.nishisan.dev/proxy?src=https://raw.githubusercontent.com/nishisan-dev/nishidb/main/docs/diagrams/storage_layout.puml)
+![Layout em disco de um dataset, com os nomes exatos de diretório e de arquivo](https://uml.nishisan.dev/proxy?src=https://git-raw.nishisan.dev/nishisan-dev/nishidb/main/docs/diagrams/storage_layout.puml)
 
 Segmentos **append-only** para os dados; **mmap** para os índices. É essa
 divisão que resolve a tensão do orçamento: os índices crescem com o dataset,
@@ -138,7 +138,7 @@ com o servidor do M3.
 
 ## Recovery
 
-![Abertura do dataset: criação da estrutura, flock, validações fatais e recovery pelo tail](https://uml.nishisan.dev/proxy?src=https://raw.githubusercontent.com/nishisan-dev/nishidb/main/docs/diagrams/recovery_flow.puml)
+![Abertura do dataset: criação da estrutura, flock, validações fatais e recovery pelo tail](https://uml.nishisan.dev/proxy?src=https://git-raw.nishisan.dev/nishisan-dev/nishidb/main/docs/diagrams/recovery_flow.puml)
 
 O manifest marca um ponto consistente; o que veio depois é reconstruído lendo o
 tail dos segmentos e reindexando. Um rasgo de crash só pode estar no fim, e é
@@ -151,7 +151,7 @@ recriar) descarta dado durável em silêncio.
 
 ## Consulta
 
-![Fluxo de consulta: o consumidor puxa o RowIterator, copia ou serializa cada Row e faz o Flush final](https://uml.nishisan.dev/proxy?src=https://raw.githubusercontent.com/nishisan-dev/nishidb/main/docs/diagrams/query_flow.puml)
+![Fluxo de consulta: o consumidor puxa o RowIterator, copia ou serializa cada Row e faz o Flush final](https://uml.nishisan.dev/proxy?src=https://git-raw.nishisan.dev/nishisan-dev/nishidb/main/docs/diagrams/query_flow.puml)
 
 Cinco camadas: lexer → parser → binder → planner → executor, com o encoder
 NDJSON na saída.
