@@ -65,6 +65,17 @@ carregamento, com a chave e o valor nomeados no erro.
 (`server`, `runtime`, TLS, auth) são aceitas e ignoradas de propósito, para que
 o arquivo do M3 continue válido para este binário.
 
+`version: 1` **é aceito e ignorado neste arquivo**: o carregador do
+`nishidb.yaml` não tem campo para a chave e não a confere. Escreva-a mesmo
+assim — ela é o que vai permitir recusar um arquivo de versão futura quando o
+parse existir (débito 47). No YAML **do dataset** a história é outra: lá o
+`version` é obrigatório e qualquer valor diferente de 1 é recusado no
+carregamento.
+
+`storage.checkpoint.interval` só age enquanto o checkpoint periódico estiver
+ligado: `nishidb ingest --checkpoint-every 0` desliga o disparo por contagem
+**e** o por tempo, e o intervalo acima vira letra morta.
+
 ### 2. Definição do dataset
 
 `/etc/nishidb/datasets/radius_sessions.yaml` — o nome do arquivo é o nome do
@@ -116,6 +127,21 @@ Um campo **não declarado** aqui continua sendo aceito (`unknownFields:
 include`) e vira coluna `auto`, mas só é consultável pelo **nome original** —
 o alias existe apenas para campo declarado.
 
+O `index: bitmap` dos campos é **definitivo**: acrescentar um bitmap passa a ser
+recusado assim que o dataset tem a primeira row, e **remover** um bitmap
+existente é recusado desde a criação — os dois com exit 3, num dataset íntegro,
+e o tamanho dos valores não tem nada a ver com isso. Não há backfill nem
+migração in-place: a única saída é reprocessar a fonte para um dataset com o
+conjunto definitivo. Vale escolher agora — a mecânica e os dois caminhos
+possíveis estão em [`docs/architecture.md`](docs/architecture.md), seção
+"Operar isto".
+
+`mode: replace` (no lugar de `merge`) faz cada evento substituir o estado
+inteiro da chave. Ele funciona, mas **não aparece no resumo do `ingest`**: a
+quebra impressa é criados/atualizados/stale, e a substituição não cai em
+nenhuma delas — num dataset `replace` o total de aplicados fica certo e o
+detalhe não fecha com ele (débito 48).
+
 ### 3. Ingerir
 
 ```console
@@ -130,6 +156,20 @@ ingest: 3 lidos, 3 aplicados (2 criados, 1 atualizados, 0 stale) em 10ms (289 ev
 
 O terceiro evento é um **patch**: ele acrescenta um campo à sessão `CMP-1` sem
 tocar nos demais. Aceita `-` para ler de stdin.
+
+**`--checkpoint-every N`** (padrão **500.000**) controla o checkpoint periódico,
+e é a flag que decide o consumo de memória da carga. O overlay de locations vive
+no heap até um checkpoint aplicá-lo ao mmap: sem checkpoint, a memória acompanha
+o **tamanho do dataset** em vez de ficar constante.
+
+- O disparo é por contagem **ou** por tempo, o que vier primeiro — o tempo é o
+  `storage.checkpoint.interval` do `nishidb.yaml` (30s no exemplo acima).
+- **`--checkpoint-every 0` desliga os dois**, contagem e tempo: o
+  `checkpoint.interval` fica inerte e a carga inteira acumula overlay no heap.
+  O comando aceita, avisa no stderr e segue — é para casos em que a carga é
+  curta e a pausa do `msync` incomoda mais que a memória.
+- Valor negativo é recusado (exit 1). O checkpoint final, no fim da entrada,
+  acontece sempre — inclusive com `0`.
 
 ### 4. Consultar
 
@@ -153,6 +193,20 @@ query: coluna "naoexiste" não existe no dataset "radius_sessions" (posição 62
          WHERE status = 'Stop' AND naoexiste = 1
                                    ^
 ```
+
+**`--limit N`** sobrepõe o `LIMIT` da query: `--limit 3` sobre
+`SELECT id FROM t LIMIT 1` devolve 3 linhas, não 1. `--limit 0` é válido e
+devolve zero linhas; sem a flag, o `LIMIT` escrito na query é o que vale.
+
+Dois detalhes que a flag exige saber:
+
+- Ela **reescreve o texto** da consulta — corta a cláusula `LIMIT` existente e
+  anexa a sua —, porque a v1 não tem serializador de AST. O corte usa o mesmo
+  lexer do `Execute`, então **query que não tokeniza não é cortada**: a flag é
+  só anexada e o comando sai com o erro de sintaxe na posição real. O caminho
+  definitivo (parâmetro do plano) é o débito 46.
+- O `query.maxRows` do dataset continua valendo como **teto**: `--limit` acima
+  dele não levanta o teto, e resultado truncado por ele sai com exit 5.
 
 ### SQL suportado (v1)
 
@@ -221,9 +275,19 @@ precedência continua descrito no stderr.
 ## Desenvolvimento
 
 ```bash
-go test ./...          # suíte completa
-go test ./... -race    # com o detector de corrida
+go test ./...          # suíte completa, com os gates de medida
+go test ./... -race    # detector de corrida, SEM os gates de medida
 ```
+
+**Os dois alvos são complementares e nenhum substitui o outro** — `-race` não é
+"a suíte completa mais uma verificação". Os gates de medida (os de alocação, que
+usam `testing.AllocsPerRun`, e o de vazão da ingestão pelo CLI) são
+`//go:build !race` por construção: a instrumentação do detector muda a contagem
+de alocações e infla o laço de ingestão sem inflar o checkpoint, o que
+transformaria cada gate em ruído. Sob `-race` eles ficam **fora do build** e se
+anunciam como SKIP. Quem roda só `-race` não está medindo o orçamento de
+alocações; quem roda só `go test ./...` não está procurando corrida. O `Makefile`
+tem os dois (`make test`, `make test-race`) com essa mesma nota.
 
 A rodada de aceite **não** roda no `go test` padrão: ela grava vários GiB e
 exige disco real.

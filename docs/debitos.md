@@ -6,10 +6,12 @@ revisão de fechamento, cuja unidade foi a **fronteira entre camadas** e não a
 tarefa. Cada item aberto tem **milestone dono**; nenhum depende de trabalho não
 planejado.
 
-Os itens **37 a 46** entraram na errata pós-fechamento: são coisas que estavam
+Os itens **37 a 48** entraram na errata pós-fechamento: são coisas que estavam
 abertas e não tinham registro nenhum — nem em documento, nem em comentário, nem
-em teste. Os dois últimos (**45** e **46**) vieram da segunda rodada da errata,
-que foi atrás justamente do que a primeira deixou passar. A numeração é
+em teste. **45** e **46** vieram da segunda rodada da errata, que foi atrás
+justamente do que a primeira deixou passar; **47** e **48** vieram da
+verificação da documentação, que conferiu prosa contra código e achou duas
+promessas que o binário não cumpre. A numeração é
 **estável** (documentos e comentários citam "débito N"), então item novo entra
 no fim da seção a que pertence, e nada é renumerado.
 
@@ -55,6 +57,8 @@ no fim da seção a que pertence, e nada é renumerado.
 | 9 | **§101 política `stop`** (a chave `errors:` sequer é parseada) e **§102 dead-letter** | Nenhum é bloqueante; ambos são **silêncio**, que é o problema |
 | 10 | **§78 `query.resultBatchSize`** não parseado | Provavelmente só a chave falta |
 | 46 | **A reescrita textual de SQL do `--limit` deve morrer** | O CLI corta a cláusula `LIMIT` do texto e anexa a sua, porque a v1 não tem serializador de AST. O corte já usa o lexer de verdade — some a segunda gramática —, mas continua sendo edição de texto: query que não tokeniza não é cortada, e a flag deixa de valer nela (registrado em `docs/architecture.md`, seção Consulta, com o exit code medido). O **binder já conhece o `LIMIT` da AST**: a saída definitiva é o `--limit` virar parâmetro do plano, e aí não sobra caso em que a flag depende de o texto ser reescrito. Enquanto isso não acontece, `comLimit`/`ultimoLimit` em `internal/cli/query.go` são a única parte do CLI que interpreta SQL fora do pipeline |
+| 47 | **`version:` do `nishidb.yaml` é aceito e NUNCA lido** | A chave aparece no exemplo do README e no arquivo de todo mundo, mas `Config` (`internal/cli/config.go`) não tem campo para ela: o YAML global não é versionado na prática. O YAML **do dataset** é — `internal/schema/spec.go:226-232` exige `version` e recusa qualquer valor diferente de 1 —, o que torna a assimetria pior: o operador tem toda razão para achar que as duas são conferidas. Fica registrado em vez de "corrigido no texto" porque o texto não é o defeito: no dia em que existir um `version: 2` global, este binário vai ler o arquivo novo **como se fosse v1** e seguir em frente, que é a forma mais cara de falhar. O conserto é de uma linha (campo + validação no `CarregaConfig`, espelhando o dataset) e cabe no M2, junto com `query.resultBatchSize` (débito 10). Até lá o README diz explicitamente que a chave é ignorada |
+| 48 | **`ActionReplaced` não aparece no resumo do `ingest`** | `mode: replace` funciona e é contado no materializer (`m.metrics.replaced`), mas `imprimeResumo` (`internal/cli/ingest.go`) só quebra o total em criados/atualizados/stale — a substituição não cai em nenhum balde. Medido com o binário, 3 eventos da mesma chave num dataset `mode: replace`: `3 lidos, 3 aplicados (1 criados, 0 atualizados, 0 stale)`. Não é perda de dado (o `aplicados` está certo, o dataset está certo), é **detalhe que não fecha com o total** — e num dataset `replace` puro o operador vê zeros e conclui que nada foi atualizado. Junto com o logging estruturado do §95 (débito 4), que é onde os contadores por ação deixam de ser uma linha de texto |
 
 ### M3 — protocolo e driver
 
@@ -76,7 +80,7 @@ no fim da seção a que pertence, e nada é renumerado.
 | 19 | Índice **hash físico** (§126.15) | Planner e executor já implementam a rota e a testam contra o dublê; no real degrada para full scan |
 | 20 | Expiração por **TTL** (§126.22) e tombstones por retenção (§126.23) | Declaração e bit já existem e são honrados na leitura |
 | 21 | **Compaction** de segmentos (§126.24) | `minimumLiveRatio` já registrado no design |
-| 22 | Backfill de índice bitmap (§14.17) | Hoje o conjunto de bitmaps é fixado na criação do dataset |
+| 22 | Backfill de índice bitmap (§14.17) | Hoje o conjunto de bitmaps é fixado na criação do dataset e **imutável nas duas direções** depois da primeira row: acrescentar um `index: bitmap` com `RowCount > 0` é recusado por falta de backfill, e removê-lo de um campo já indexado é recusado porque o índice reapareceria incompleto (`AllowBitmapDrop` existe no `Store`, mas o CLI não expõe flag). Os dois saem com **exit 3** num dataset íntegro. Sem backfill, mudar o conjunto exige reprocessar a fonte para um dataset novo — ver `architecture.md`, "Operar isto" |
 | 23 | Índice derivado removido por fora não é detectado (§14.18) | Nenhuma validação cobre apagar o diretório de índice |
 | 24 | **Tombstone fura o stale check do `_SEQ`** | `GetByKey` mascara row tombstoned como **ausente**, e o materializer usa esse `found` como guarda do §25: com `found == false` o stale check não roda, o evento segue pelo caminho de create e o `Put` reusa o rowId — a row **ressuscita**. Latente hoje (nada produz tombstone); vira real quando a Fase 9 ligar o TTL |
 | 25 | **`Store.Sequence` não honra tombstone** | Valida só a location. Mesma família do 24 |
@@ -108,10 +112,13 @@ no fim da seção a que pertence, e nada é renumerado.
 ## Riscos de operação (não são débito de código, são de conhecimento)
 
 Documentados em [`architecture.md`](architecture.md), seção "Operar isto":
-`flock` inválido em NFS/FUSE/overlayfs, detecção de corrupção só na leitura,
-teto de 64 KiB em campo indexado (e a segunda porta: declarar `index:` num campo
-que já acumulou valores grandes torna o dataset inabrível), pausas do rehash e
-do `msync`, e o phantom commit.
+`flock` inválido em NFS/FUSE/overlayfs (e o arquivo `LOCK`, que nunca é
+removido), detecção de corrupção só na leitura, teto de 64 KiB em campo
+indexado, **conjunto de bitmaps imutável depois da primeira row nas duas
+direções** — acrescentar `index: bitmap` num dataset com `RowCount > 0` e
+removê-lo de um campo já indexado são recusados igualmente, com **exit 3** num
+dataset íntegro, e o tamanho dos valores não entra na decisão —, pausas do
+rehash e do `msync`, e o phantom commit.
 
 ## O que NÃO ficou em aberto
 

@@ -47,9 +47,14 @@ Quatro decisões que moldam esse caminho:
 campo do estado. Não existe "valor nulo" gravado: não no payload, não no índice,
 não na query. É o que faz `IS NULL` e "campo ausente" serem a mesma pergunta.
 
-**A sequência decide, não a ordem de chegada.** Evento com `_SEQ` menor ou igual
-ao gravado é descartado inteiro. Sem isso, um reprocessamento fora de ordem
-sobrescreveria estado novo com estado velho.
+**A sequência decide, não a ordem de chegada — no dataset que declara uma.**
+Com `materialization.sequence` no YAML, evento com `_SEQ` menor ou igual ao
+gravado é descartado inteiro, e é isso que impede um reprocessamento fora de
+ordem de sobrescrever estado novo com estado velho. É propriedade da
+**configuração**, não garantia da engine: o stale check exige `schema.Seq != nil`
+(`internal/materializer/materializer.go:276`), então o dataset **sem** bloco
+`sequence:` aplica tudo na ordem de chegada — inclusive o reprocessamento antigo
+sobre estado novo. Quem não declara sequence não tem a proteção deste parágrafo.
 
 **Evento ruim não para a ingestão.** A política de três baldes (§101) separa
 *dado ruim* (JSON inválido, tipo inconvertível, key ausente → pula e conta) de
@@ -102,18 +107,31 @@ as operações em voo e só então libera o lock do dataset, e todo iterador
 devolvido reentra no Store a cada avanço, para que fechar no meio de uma
 varredura vire erro e não panic.
 
-**Entre processos o acesso é EXCLUSIVO.** Um `flock(LOCK_EX|LOCK_NB)` no
-diretório do dataset garante um processo por vez: com um `ingest` em voo, um
-`query` concorrente sai com exit 3 e a mensagem nomeia o pid que segura o lock.
-Como o M1 entrega dois comandos separados, a concorrência descrita acima **só é
-alcançável in-process** (é assim que o harness de benchmark mede) — o acesso
-concorrente de clientes distintos chega com o servidor do M3.
+**Entre processos o acesso é EXCLUSIVO.** Um `flock(LOCK_EX|LOCK_NB)` sobre o
+arquivo **`LOCK`** dentro do diretório do dataset garante um processo por vez:
+com um `ingest` em voo, um `query` concorrente sai com exit 3 e a mensagem
+nomeia o pid que segura o lock. Como o M1 entrega dois comandos separados, a
+concorrência descrita acima **só é alcançável in-process** (é assim que o
+harness de benchmark mede) — o acesso concorrente de clientes distintos chega
+com o servidor do M3.
 
-> **Restrição de deployment.** O `flock` é por inode e **não garante exclusão
-> mútua em NFS** (sem `local_lock=flock|all`), nem em alguns FUSE, CIFS e
-> overlayfs. Dois writers no mesmo dataset significam dois overlays de location,
-> dois contadores de rowId e dois checkpoints — corrupção garantida. **Mantenha
-> o diretório do dataset em disco local.**
+> **`LOCK` residual não é dataset travado.** O arquivo é criado na primeira
+> abertura e **nunca é removido** — nem no `Close`, nem no crash: apagá-lo no
+> release abriria a janela em que outro processo já criou e travou o *seu*
+> `LOCK` e teria a entrada de diretório removida por baixo. O pid gravado
+> dentro dele é **só diagnóstico**, e fica lá depois que o processo morre. Quem
+> encontrar um `LOCK` com pid inexistente não precisa fazer nada: o lock de
+> verdade é o `flock`, e o kernel o libera sozinho quando o processo termina —
+> a próxima abertura simplesmente reescreve o pid.
+
+> **Restrição de deployment.** O `flock` trava a **descrição de abertura** do
+> arquivo `LOCK` — o que dois processos precisam enxergar em comum é o inode
+> **desse arquivo**, não o do diretório. Ele **não garante exclusão mútua em
+> NFS** (sem `local_lock=flock|all`), nem em alguns FUSE, CIFS e overlayfs:
+> nesses sistemas o lock pode ser satisfeito localmente em cada cliente, e cada
+> um acha que ganhou. Dois writers no mesmo dataset significam dois overlays de
+> location, dois contadores de rowId e dois checkpoints — corrupção garantida.
+> **Mantenha o diretório do dataset em disco local.**
 
 ## Recovery
 
@@ -147,10 +165,32 @@ sempre correto — só mais lento.
 
 **Nada do resultado é materializado.** O predicado é compilado uma vez para um
 programa linear com saltos, os campos são coletados por merge linear numa
-passada, e a linha é serializada direto para o writer. Medido: **38 alocações
-por query, constantes** de mil a cem mil linhas — zero por linha.
+passada, e a linha é serializada direto para o writer. O que está medido é
+**zero alocação por linha**: o gate `TestScanAllocsIndependenteDoNumeroDeRows`
+roda a mesma query sobre **1.000 e 8.000 rows** e exige **igualdade exata** entre
+as duas contagens — a diferença, se houvesse, seria alocação por row.
 
-Latências medidas com 8M rows e ingestão concorrente:
+O custo **fixo** de uma query é outro assunto, e sobre ele circulam dois números
+de naturezas diferentes — confundi-los já pôs "38 alocações por query" neste
+documento como se fosse o custo de qualquer consulta:
+
+- **38 é TETO**, não retrato. É o custo fixo de abertura da query do gate
+  (`SELECT id, nome, n FROM linhas WHERE nome = 'linha' AND n >= 0`), colado sem
+  folga para acusar crescimento. Medido nesta máquina: **38, 38, 38** em três
+  execuções de `go test ./internal/query/ -run TestScanAllocsIndependenteDoNumeroDeRows -v -count=1`.
+- **O custo fixo varia com a query**, e é o benchmark que o mede: **30
+  allocs/op** no full scan de 1.000 rows, **20** no full scan sem WHERE e **29**
+  no point lookup — três execuções de `go test ./internal/query/ -run XXX -bench
+  'BenchmarkFullScan1k|BenchmarkFullScanSemWhere1k|BenchmarkPointLookup'
+  -benchtime 300x -count=3`, com as três repetições idênticas em cada
+  benchmark e iguais à baseline de 2026-08-13
+  (`benchmark/baselines/query-20260813.txt`).
+
+Ou seja: por query o custo é da ordem de algumas dezenas de alocações e depende
+da forma da consulta; **por linha é zero**, e é essa a propriedade gateada.
+
+Latências medidas com 8M rows, com as consultas concorrentes a uma **tentativa**
+de escrita — não a escrita sustentada (ver a ressalva logo abaixo da tabela):
 
 | Rota | p95 (SQL completo) | p95 (Store direto) | Teto da spec |
 |---|---:|---:|---:|
@@ -163,6 +203,15 @@ Latências medidas com 8M rows e ingestão concorrente:
 
 A diferença entre as duas colunas — cerca de 12 µs no point lookup — é o custo
 de parse, bind, plan e serialização NDJSON.
+
+> **Estas latências não dimensionam carga mista.** Na fase STEADY da rodada, dos
+> **30.000 eventos oferecidos apenas 50 viraram escrita** — os outros 29.950
+> foram descartados por stale (§25), porque o gerador do STEADY reinicia as
+> sequências. O que a tabela mede é consulta concorrente com **tentativa** de
+> escrita; escrita sustentada disputando com consulta **não foi medida** e é o
+> **débito 3** ([`debitos.md`](debitos.md)), dono M2. Quem dimensionar capacidade
+> de leitura+escrita simultâneas a partir daqui está extrapolando. O flanco de
+> escrita que existe hoje é a rodada `ingest-8m-20260813`, sem SQL.
 
 **O `--limit` do CLI reescreve o texto da query, e isso mudou de comportamento
 na errata do M1.** A flag corta a cláusula `LIMIT` que a query já tiver e anexa
@@ -225,8 +274,39 @@ conhecê-las. Cada uma tem dono em [`debitos.md`](debitos.md).
   outra coisa — a razão de o `ingest` ter um ponto de saída único.
 - **Campo indexado tem teto de 64 KiB** (`types.MaxIndexedValueBytes`, limite do
   `u16` do dicionário de valores). Valor acima disso faz o evento inteiro
-  falhar. E há uma segunda porta: declarar `index: bitmap` num campo que **já
-  acumulou** valores maiores torna o dataset inabrível até reabrir sem o campo.
+  falhar.
+- **O conjunto de bitmaps é IMUTÁVEL depois da primeira row, nas duas
+  direções** — e a remoção, na prática, desde a criação do dataset. O tamanho
+  dos valores **não entra em nenhuma das duas decisões**:
+  - **Acrescentar** `index: bitmap` a um campo é recusado assim que o dataset
+    tem `RowCount > 0` (`internal/storage/store.go:420-438`), qualquer que seja
+    o valor gravado: o índice cobriria só os records futuros e a query indexada
+    omitiria as rows antigas. Backfill não existe no M1 (débito 22). Enquanto o
+    dataset está vazio, acrescentar é permitido.
+  - **Remover** `index: bitmap` de um campo já indexado é recusado sem
+    condição nenhuma de contagem (`store.go:404-418`): basta o manifest declarar
+    o índice, o que acontece já no checkpoint da criação. O índice pararia de
+    receber sets/clears e reapareceria incompleto se o campo voltasse depois. O
+    `Store` tem o opt-out `AllowBitmapDrop`, mas **o CLI não tem flag para ele**
+    — pelo binário, a remoção é simplesmente impossível.
+
+  Nos dois casos o comando seguinte — `ingest` ou `query` — sai com **exit 3**
+  ("dataset corrompido") num dataset perfeitamente íntegro, e a mensagem nomeia
+  o campo pelo **FieldID numérico**, não pelo nome do YAML. Medido com o
+  binário, num dataset cujo único valor indexado tem 5 bytes (`"Start"`):
+  `campo(s) [3] declarado(s) com índice bitmap num dataset que já tem 1 rows` ao
+  adicionar, e `o manifest declara índice bitmap para o(s) campo(s) [1],
+  ausente(s) desta abertura` ao remover — este segundo reproduzido também num
+  dataset **com zero rows**, criado com o campo indexado e reaberto sem ele.
+
+  **O que fazer quando o conjunto precisar mudar:** reprocessar a fonte para um
+  dataset com o conjunto definitivo. São os dois únicos caminhos que o código
+  permite hoje — (a) criar um dataset **novo** (outro `name`, outro YAML, outro
+  diretório em `storage.path/<nome>`), ingerir a fonte nele e trocar o nome nas
+  consultas; ou (b) apagar o diretório do dataset e reingerir a fonte sob o
+  mesmo nome, o que **destrói** o estado atual e só serve se a fonte inteira
+  ainda existir. Não há rebuild, backfill nem migração in-place. Escolha o
+  conjunto de bitmaps na criação do dataset.
 - **Duas pausas visíveis, aceitas no M1:** o rehash da primary **pausa a
   ingestão** enquanto redistribui os slots, e o `msync` do checkpoint **pausa o
   writer**. Com `checkpoint.interval: 30s`, isso aparece como serrilha
@@ -236,9 +316,15 @@ conhecê-las. Cada uma tem dono em [`debitos.md`](debitos.md).
   quando a falha ocorreu. É decisão consciente (o replay do tail não distingue
   os dois casos) e está testada; quem trata erro de escrita como "nada foi
   gravado" vai divergir do dataset no próximo restart.
-- **`mode: replace` existe.** Além do `merge` (default), a materialização aceita
-  `mode: replace`, em que cada evento substitui o estado inteiro da chave e as
-  postings antigas são limpas.
+- **`mode: replace` existe, mas some do resumo do `ingest`.** Além do `merge`
+  (default), a materialização aceita `mode: replace`, em que cada evento
+  substitui o estado inteiro da chave e as postings antigas são limpas. O
+  contador dessa ação (`ActionReplaced`) **não é impresso**: o resumo só quebra
+  em criados/atualizados/stale, e a substituição não cai em nenhum deles.
+  Medido com o binário, 3 eventos da mesma chave num dataset `mode: replace`:
+  `3 lidos, 3 aplicados (1 criados, 0 atualizados, 0 stale)` — as duas
+  substituições existem no total e somem do detalhe, que deixa de fechar com
+  `aplicados`. É o **débito 48**.
 
 ## Referência de tipos de campo
 

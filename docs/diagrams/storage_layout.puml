@@ -19,7 +19,7 @@ folder "<dataset>/" {
   folder "checkpoint/" {
     artifact "manifest.bin\nepoch, ponto S, stats" as man
   }
-  artifact "dataset.lock\nflock exclusivo" as lock
+  artifact "LOCK\nflock exclusivo; guarda o pid\ne nunca é removido" as lock
 }
 
 note right of seg

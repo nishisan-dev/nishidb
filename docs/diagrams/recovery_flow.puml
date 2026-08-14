@@ -2,10 +2,13 @@
 title Recovery na abertura do dataset (design §10.3)
 
 start
-:adquire o flock do diretório;
+:adquire o flock do arquivo LOCK
+do diretório do dataset;
 note right
   Falha aqui = ErrDatasetLocked,
   com o pid do outro processo.
+  O LOCK nunca é removido: o pid
+  dentro dele é só diagnóstico.
 end note
 
 :abre fields.dict;
