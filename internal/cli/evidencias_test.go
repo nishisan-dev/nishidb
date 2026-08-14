@@ -26,7 +26,7 @@ import (
 var reNomeDeTeste = regexp.MustCompile(`\bTest[A-Z][A-Za-z0-9_]*`)
 
 func TestEvidenciasCitadasNosDocumentosExistem(t *testing.T) {
-	docs := []string{"../../docs/aceite-m1.md", "../../docs/architecture.md", "../../docs/debitos.md"}
+	docs := []string{"../../docs/aceite-m1.md", "../../docs/aceite-m2.md", "../../docs/architecture.md", "../../docs/debitos.md"}
 
 	existentes := testesDoRepositorio(t)
 	for _, doc := range docs {

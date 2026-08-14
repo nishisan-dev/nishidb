@@ -1,0 +1,88 @@
+@startuml kafka_pipeline
+title Ingestão Kafka — do fetch ao commit, na ordem que o §48 fixa
+
+participant "Kafka broker" as kafka
+participant "Poller\n(1 goroutine)" as poll
+participant "Fila limitada\nregistros + bytes" as fila
+participant "Writer único\n(§27)" as wr
+participant "Materializer" as mat
+participant "Store" as st
+
+== consume ==
+poll -> kafka : PollRecords(maxPollRecords)
+activate poll
+note right of poll
+  BlockRebalanceOnPoll: nenhuma partição é
+  revogada enquanto o lote está em voo, então
+  o commit seguinte só toca partição que ainda
+  é nossa.
+end note
+kafka --> poll : lote de records
+
+loop cada record
+  poll -> fila : Envia(record)
+  alt fila cheia (registros OU bytes)
+    fila --> poll : BLOQUEIA
+    note right of fila
+      §29: reduz o intake, preserva a membership
+      e mantém os heartbeats — que seguem na
+      goroutine do cliente. Nenhuma mensagem
+      se perde; o fetch é que espera.
+    end note
+  end
+end
+poll -> fila : EnviaMarca(fim de lote)
+
+== materialize ==
+loop até a marca
+  wr -> fila : Recebe()
+  fila --> wr : record
+  wr -> mat : Apply(record.Value)
+  activate mat
+  mat --> wr : ApplyResult
+  deactivate mat
+
+  alt aplicado, stale, ou descartado por log-and-skip
+    wr -> wr : offsets[p] = record.Offset + 1
+  else STORAGE_ERROR, writer falho, ou invalidEvent=stop
+    wr -> wr : PARA sem avançar o offset
+    note right of wr
+      A posição fica apontando para o evento
+      problemático: é o que permite ao operador
+      vê-lo e decidir com `nishidb offsets`.
+      As consultas seguem de pé (§51).
+    end note
+  end
+end
+
+== persist + durable checkpoint ==
+alt cadência atingida (contagem OU tempo)
+  wr -> st : SetSourceOffsets(offsets)
+  wr -> st : Checkpoint()
+  activate st
+  st -> st : fdatasync do segmento
+  st -> st : msync dos índices
+  st -> st : manifest.bin (tmp→fsync→rename→fsync dir)
+  st -> st : kafka.offsets  **DEPOIS** do manifest
+  note right of st
+    A ordem é a única proteção: são dois renames
+    sem transação. Crash entre eles deixa o offset
+    ATRÁS dos dados (reprocessa, converge). O
+    inverso perderia os eventos do meio para sempre.
+  end note
+  st --> wr : ok
+  deactivate st
+
+  == commit Kafka offset ==
+  wr -> kafka : CommitOffsetsSync
+  note right of wr
+    Por último, e nunca antes (§48). Falhar aqui
+    NÃO é fatal: o checkpoint local é autoritativo
+    (§49) e o commit existe para lag e terceiros.
+  end note
+end
+
+poll -> kafka : AllowRebalance
+deactivate poll
+
+@enduml

@@ -262,6 +262,7 @@ type ConfigSummary struct {
 
 // CorpusProfile é o perfil do gerador de uma fase, como ele foi de fato usado.
 type CorpusProfile struct {
+	SeqOffset         uint32  `json:"seq_offset"`
 	PatchRatio        float64 `json:"patch_ratio"`
 	ExtendedJSONRatio float64 `json:"extended_json_ratio"`
 	UnknownFieldRatio float64 `json:"unknown_field_ratio"`
@@ -271,6 +272,7 @@ type CorpusProfile struct {
 
 func perfilDoCorpus(c radiusgen.Config) CorpusProfile {
 	return CorpusProfile{
+		SeqOffset:         c.SeqOffset,
 		PatchRatio:        c.PatchRatio,
 		ExtendedJSONRatio: c.ExtendedJSONRatio,
 		UnknownFieldRatio: c.UnknownFieldRatio,
@@ -427,6 +429,12 @@ func Run(cfg Config) (*Report, error) {
 		steadyCfg := radiusgen.DefaultConfig()
 		steadyCfg.Seed = cfg.Seed + 1
 		steadyCfg.Entities = cfg.Entities
+		// O LOAD é sequencial e dá exatamente um evento por entidade, então
+		// as sequences do regime precisam começar acima disso. Sem este
+		// offset, o STEADY vira consulta com escrita quase nenhuma e o
+		// relatório publica "carga mista" descrevendo outra coisa (débito
+		// M2 #3): medido, 15.000 eventos oferecidos e 12 escritas efetivas.
+		steadyCfg.SeqOffset = 1
 		rep.Config.SteadyCorpus = perfilDoCorpus(steadyCfg)
 		steadyGen, err := radiusgen.New(steadyCfg)
 		if err != nil {

@@ -42,23 +42,31 @@ no fim da seção a que pertence, e nada é renumerado.
 
 ## Abertos, com dono
 
-### M2 — consumidor Kafka, e o que ele exige antes
+### M2 — consumidor Kafka — FECHADO
+
+Entregue: consumer, bounded queue com os dois gates, offsets duráveis,
+checkpoint, seek e recovery (§115); `nishidb server` com `/metrics` e
+`/v1/health`; log estruturado; `nishidb offsets`. Os oito testes do §105
+existem, e a rodada de aceite passou a medir com ingestão Kafka real.
+
+Fechados nesta fase: **1** (consumo e recuperação de offsets), **2** (custo de
+memória do consumidor no orçamento medido), **3** (carga mista de verdade — o
+Kafka É a sobreposição), **4** (§95 logging estruturado), **5** (§112 pprof),
+**9** (política `stop` e a chave `errors:`, que agora é parseada, validada e
+lida pelos dois caminhos de ingestão), **10** (`query.resultBatchSize`), **44**
+(`make test-integration` deixou de ser plumbing morto), **47** (`version:` do
+`nishidb.yaml`) e **48** (`ActionReplaced` no resumo).
 
 | # | Débito | Nota |
 |---|---|---|
-| 1 | Consumo de Kafka (§126.2) e recuperação de **offsets** (§126.9) | O recovery de dados está completo; falta o de posição no tópico |
-| 2 | Custo de memória do consumidor (buffers, `ingestionQueueSize`) não está no orçamento medido | A rodada de aceite ingere de corpus em memória |
-| 3 | **Medir carga MISTA de verdade** | Hoje LOAD (escrita pura) e STEADY (consulta, com 50 escritas efetivas em 30.000 eventos) nunca se sobrepõem, porque o gerador do STEADY reinicia as sequências e 29.950 eventos viram stale. Kafka **é** a sobreposição. Correção conhecida: expor `radiusgen.Config.SeqOffset` (ou pré-carregar as sequências) e re-rodar |
-| 4 | **§95 — logging estruturado**, puxado para o M2 | Não depende do HTTP do M3, é barato, e é o que separa "dá para operar" de "dá para depurar às 3 da manhã". Hoje o CLI escreve texto livre em stderr |
-| 5 | **§112 — `pprof`** (`-pprof :6060` + profiles ao fim de cada fase, prometido no design) | Zero ocorrência no código; sem profile, a primeira regressão de memória do consumidor é cega |
-| 6 | **Oráculo do harness** | O `ingest-bench` mede latência e ausência de erro, e **não confere nenhum resultado**: um bug que fizesse toda query devolver 0 linhas passaria em todos os gates com p95 melhor. Também não valida a **presença** do conjunto de gates (um relatório com 8 em vez de 13 passa), nem gateia `row_count` |
+| 6 | **Oráculo do harness** | O `ingest-bench` mede latência e ausência de erro, e **não confere nenhum resultado**: um bug que fizesse toda query devolver 0 linhas passaria em todos os gates com p95 melhor. Também não valida a **presença** do conjunto de gates, nem gateia `row_count` |
 | 7 | **3 rotas de leitura do harness descartam o erro** (`_, out, _, _ := st.GetByKey(...)`) | Um erro sistemático nelas produziria "0 erros" e latência melhor. Por isso a linha de zero erro do aceite fala de consultas **SQL** |
 | 8 | **§14.20 — nenhum CRC verificado antes do `DurableOffset` no `Open`** | Corrupção em região selada só aparece na leitura, no meio do resultado |
-| 9 | **§101 política `stop`** (a chave `errors:` sequer é parseada) e **§102 dead-letter** | Nenhum é bloqueante; ambos são **silêncio**, que é o problema |
-| 10 | **§78 `query.resultBatchSize`** não parseado | Provavelmente só a chave falta |
-| 46 | **A reescrita textual de SQL do `--limit` deve morrer** | O CLI corta a cláusula `LIMIT` do texto e anexa a sua, porque a v1 não tem serializador de AST. O corte já usa o lexer de verdade — some a segunda gramática —, mas continua sendo edição de texto: query que não tokeniza não é cortada, e a flag deixa de valer nela (registrado em `docs/architecture.md`, seção Consulta, com o exit code medido). O **binder já conhece o `LIMIT` da AST**: a saída definitiva é o `--limit` virar parâmetro do plano, e aí não sobra caso em que a flag depende de o texto ser reescrito. Enquanto isso não acontece, `comLimit`/`ultimoLimit` em `internal/cli/query.go` são a única parte do CLI que interpreta SQL fora do pipeline |
-| 47 | **`version:` do `nishidb.yaml` é aceito e NUNCA lido** | A chave aparece no exemplo do README e no arquivo de todo mundo, mas `Config` (`internal/cli/config.go`) não tem campo para ela: o YAML global não é versionado na prática. O YAML **do dataset** é — `internal/schema/spec.go:226-232` exige `version` e recusa qualquer valor diferente de 1 —, o que torna a assimetria pior: o operador tem toda razão para achar que as duas são conferidas. Fica registrado em vez de "corrigido no texto" porque o texto não é o defeito: no dia em que existir um `version: 2` global, este binário vai ler o arquivo novo **como se fosse v1** e seguir em frente, que é a forma mais cara de falhar. O conserto é de uma linha (campo + validação no `CarregaConfig`, espelhando o dataset) e cabe no M2, junto com `query.resultBatchSize` (débito 10). Até lá o README diz explicitamente que a chave é ignorada |
-| 48 | **`ActionReplaced` não aparece no resumo do `ingest`** | `mode: replace` funciona e é contado no materializer (`m.metrics.replaced`), mas `imprimeResumo` (`internal/cli/ingest.go`) só quebra o total em criados/atualizados/stale — a substituição não cai em nenhum balde. Medido com o binário, 3 eventos da mesma chave num dataset `mode: replace`: `3 lidos, 3 aplicados (1 criados, 0 atualizados, 0 stale)`. Não é perda de dado (o `aplicados` está certo, o dataset está certo), é **detalhe que não fecha com o total** — e num dataset `replace` puro o operador vê zeros e conclui que nada foi atualizado. Junto com o logging estruturado do §95 (débito 4), que é onde os contadores por ação deixam de ser uma linha de texto |
+| 46 | **A reescrita textual de SQL do `--limit` deve morrer** | O CLI corta a cláusula `LIMIT` do texto e anexa a sua, porque a v1 não tem serializador de AST. O corte já usa o lexer de verdade, mas continua sendo edição de texto: query que não tokeniza não é cortada, e a flag deixa de valer nela. O **binder já conhece o `LIMIT` da AST**: a saída definitiva é o `--limit` virar parâmetro do plano |
+| 49 | **`errors.deadLetterTopic` é aceito no parse e recusado na ativação** | §102 não o torna bloqueante. A doutrina escolhida para o produto é uma só: chave que a spec nomeia é aceita e validada na FORMA pelo parse, e recusada na ATIVAÇÃO — recusar no parse tornaria inválido o snippet literal da spec, e aceitar em silêncio repetiria o defeito da issue #1. Implementá-lo puxa produção Kafka, que é escopo novo |
+| 50 | **`storage.durability` continua aceita e ignorada** | O §47 define `mode: sync\|batch\|async` com `interval`, e nada disso é implementado — só o `SyncEveryPut`, que o CLI nunca liga. O risco é de LEITURA: quem lê `interval: 100ms` conclui "perco no máximo 100ms", enquanto no caminho Kafka a janela de reprocessamento é a do `storage.checkpoint.interval`. Não entrou no M2 porque o §115 não a lista |
+| 51 | **A guarda de assignment total não distingue "instância rival" de "partição sem líder"** | O consumer recusa a subida quando o group não lhe entrega TODAS as partições do tópico (que é o que single-writer + checkpoint autoritativo exigem), mas a mensagem atribui a causa a outra instância. Um broker com partição sem líder produziria o mesmo sintoma com outra causa |
+| 52 | **O lag do relatório de benchmark commita o que foi POLLADO** | A bancada não é o motor: ela commita antes de perguntar o lag, senão o número seria sempre o total produzido. O consumer de produção só commita depois do checkpoint durável (§48). A diferença é de alguns registros e irrelevante para a ordem de grandeza do §125, mas está registrada para que ninguém compare os dois números como se fossem a mesma coisa |
 
 ### M3 — protocolo e driver
 

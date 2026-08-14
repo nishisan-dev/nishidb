@@ -37,6 +37,46 @@ materializa NDJSON num dataset; `query` executa SQL e escreve NDJSON.
 
 ![Fluxo de ingestão: do evento JSON à location publicada, com o commit point entre a fase SET e a fase CLEAR dos bitmaps](https://uml.nishisan.dev/proxy?src=https://git-raw.nishisan.dev/nishisan-dev/nishidb/main/docs/diagrams/ingest_flow.puml)
 
+### Ingestão por Kafka
+
+O caminho por arquivo (`nishidb ingest`) e o por tópico (`nishidb server`)
+compartilham materializer e storage; o que o Kafka acrescenta é a **posição**.
+O pipeline é o do §27 sem desvio — poller único, fila limitada, writer único —
+e os decode workers que o §27 marca como opcionais não existem: além de o §28
+dizer que 500 ev/s não justifica múltiplos writers, é o pipeline de uma
+goroutine de ponta a ponta que preserva a ordem por partição, que o §26 usa
+como critério de correção quando o dataset não declara `sequence`.
+
+A fila tem **dois** gates. O de registros é o `ingestionQueueSize` da spec; o
+de bytes é inventado, e existe porque contar registros não é unidade de
+memória — 5000 slots com payload grande estouram o orçamento de 1 GiB sem que
+nenhuma contagem reclame. Um record acima do teto passa sozinho com a fila
+vazia, senão a ingestão travaria para sempre num deadlock que nenhuma métrica
+explicaria.
+
+![Pipeline de ingestão Kafka: fetch, fila limitada com backpressure, writer único, e a ordem persist → checkpoint durável → commit do offset](https://uml.nishisan.dev/proxy?src=https://git-raw.nishisan.dev/nishisan-dev/nishidb/main/docs/diagrams/kafka_pipeline.puml)
+
+**A ordem do §48 é a única proteção contra perda.** O `manifest.bin` e o
+`kafka.offsets` são dois arquivos e dois renames, sem transação entre eles. Na
+ordem certa, um crash no meio deixa a posição ATRÁS dos dados: o seek
+reprocessa uma janela já aplicada, que converge (com `sequence`, o gate do §25
+descarta; sem ela, reaplicar na mesma ordem de partição produz o mesmo
+payload). O custo é lixo — records órfãos e o resíduo de liveness já
+registrado. Na ordem inversa, os eventos entre os dois pontos nunca mais
+seriam lidos.
+
+### Retomada da posição
+
+O checkpoint local é autoritativo (§49); o offset commitado no group é
+secundário e nunca posiciona o consumer no boot. Quatro situações RECUSAM a
+subida da ingestão — e nas quatro as **consultas seguem de pé**, porque o §51
+põe `start queries` antes de `resume ingestion`:
+
+![Retomada da posição: as quatro recusas de subida da ingestão e o ponto exato do seek pela posição local](https://uml.nishisan.dev/proxy?src=https://git-raw.nishisan.dev/nishisan-dev/nishidb/main/docs/diagrams/offset_recovery.puml)
+
+A saída de todas elas é o comando `nishidb offsets`, que exige o servidor
+parado (toma o flock) e confirmação explícita para escrever.
+
 Um evento passa por: tokenização sem cópia → resolução de campos contra o
 schema → conversão tipada para um arena reutilizado → merge com o estado
 anterior → gravação.
@@ -110,10 +150,14 @@ varredura vire erro e não panic.
 **Entre processos o acesso é EXCLUSIVO.** Um `flock(LOCK_EX|LOCK_NB)` sobre o
 arquivo **`LOCK`** dentro do diretório do dataset garante um processo por vez:
 com um `ingest` em voo, um `query` concorrente sai com exit 3 e a mensagem
-nomeia o pid que segura o lock. Como o M1 entrega dois comandos separados, a
-concorrência descrita acima **só é alcançável in-process** (é assim que o
-harness de benchmark mede) — o acesso concorrente de clientes distintos chega
-com o servidor do M3.
+nomeia o pid que segura o lock.
+
+É esse flock que decide a arquitetura do `nishidb server`: um consumer de
+longa duração num processo SEPARADO tornaria o dataset inconsultável, porque
+toda `nishidb query` sairia com exit 3 enquanto a ingestão estivesse de pé.
+Por isso ingestão e consulta moram no MESMO processo, onde o Store já é um
+writer com muitos leitores concorrentes — que é o modelo do §27. O acesso
+concorrente de clientes REMOTOS chega com o protocolo do M3.
 
 > **`LOCK` residual não é dataset travado.** O arquivo é criado na primeira
 > abertura e **nunca é removido** — nem no `Close`, nem no crash: apagá-lo no
@@ -382,15 +426,48 @@ tratamento é na origem.
 
 ## Observabilidade
 
-**Não existe ainda.** Sem métricas Prometheus, sem `/metrics`, sem
-`/v1/health`, sem `pprof` e sem log estruturado — o diagnóstico disponível é a
-linha de resumo do `ingest` e o exit code. As §92-95 da spec têm dono
-registrado em [`debitos.md`](debitos.md), com o **log estruturado (§95) puxado
-para o M2** por ser barato e independente do servidor HTTP.
+**Log estruturado (§95).** `internal/logging` emite os campos literais da spec
+— `timestamp level component dataset event message` — sobre `log/slog`, que
+batiza `time`/`msg` e deixaria o log fora da spec por descuido de biblioteca.
+A proibição de registrar senha e payload vive no HANDLER, e não na disciplina
+de quem escreve a chamada: chave sensível tem o valor suprimido em qualquer
+profundidade de grupo, e o tipo `Segredo` cobre o caso oposto — chave inocente
+com valor que não é. `event` é o identificador estável que alerta casa;
+`message` é a prosa para humanos, e separá-los é o que permite mudar o texto
+sem quebrar alerta.
+
+**Métricas (§92, §93).** `internal/metrics` é um registry PULL com exposição
+Prometheus escrita à mão. À mão porque o §97 exige binário único em
+scratch/distroless e o projeto tem duas dependências; PULL porque os
+contadores que já existem (materializer, executor, planner, `Store.Stats`) não
+são copiados e sim lidos no scrape — duplicar o estado criaria um segundo
+contador com o mesmo nome de spec, que é bug de observabilidade. Os nomes do
+§92 ficam em constantes, num lugar só: dashboard e alerta casam string, e um
+nome digitado à mão em dois lugares diverge no dia em que um deles é
+corrigido.
+
+Cinco séries são INVENTADAS, e cada uma corrige um silêncio:
+`nishidb_ingest_failed_total` (o §92 só prevê o balde do evento ruim, e sem
+esta a perda de dado é invisível num daemon, onde não há exit code para
+carregá-la), `nishidb_ingest_blocked`, `nishidb_kafka_errors_total`,
+`nishidb_kafka_queue_depth`/`_bytes` e
+`nishidb_kafka_partitions_assigned`/`_total`.
+
+**Health (§94).** `GET /v1/health` traz `status`, `kafka`, `storage` e
+`datasets`. A chave `kafka` AGREGA: basta um dataset com ingestão parada para
+ela sair de `UP`, e o corpo nomeia qual — num processo que hospeda vários
+datasets (§82), `DOWN` sozinho manda o operador procurar no log. Responde 503
+quando o status não é `UP`, para que um balanceador tire a instância de
+rotação sem interpretar o corpo.
+
+**pprof (§112).** `nishidb server --pprof <addr>` sobe os endpoints de debug
+num listener PRÓPRIO. Separado de propósito: o §112 os autoriza apenas em modo
+administrativo, e expô-los na porta das métricas os tornaria alcançáveis por
+quem só deveria raspar `/metrics`.
 
 ## O que ainda não existe
 
-Kafka (M2), protocolo HTTP e driver JDBC (M3), índice hash físico, TTL,
+Protocolo HTTP e driver JDBC (M3), índice hash físico, TTL,
 compaction e tombstones por retenção (M4/Fase 8-9). O estado item a item está em
 [`aceite-m1.md`](aceite-m1.md).
 

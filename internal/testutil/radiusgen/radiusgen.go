@@ -67,6 +67,20 @@ type Config struct {
 	// NÃO use para medir carga de regime: a ordem perfeita elimina a
 	// localidade irregular que o índice primary enfrenta na vida real.
 	Sequential bool
+
+	// SeqOffset é de onde as sequences por entidade começam.
+	//
+	// Existe porque um Generator novo reinicia os contadores em zero, e a
+	// fase de regime do harness usa um Generator PRÓPRIO: sem offset, todo
+	// evento do STEADY nasce com sequence menor que a já gravada pelo LOAD e
+	// vira stale no gate do §25. O efeito medido era brutal — 15.000 eventos
+	// oferecidos, 12 escritas efetivas —, e o número de "carga mista" que
+	// saía do relatório descrevia consulta com escrita quase nenhuma. É o
+	// débito M2 #3.
+	//
+	// Para um LOAD sequencial de N eventos sobre N entidades, cada entidade
+	// recebeu exatamente um evento, então SeqOffset: 1 basta.
+	SeqOffset uint32
 }
 
 // DefaultConfig é o workload de referência: a carga de accounting real, com
@@ -187,8 +201,19 @@ func New(cfg Config) (*Generator, error) {
 		// O segundo stream do PCG deriva da seed por golden ratio: seeds
 		// vizinhas (1, 2, 3…) produzem sequências descorrelacionadas.
 		rng:  rand.New(rand.NewPCG(cfg.Seed, cfg.Seed^0x9e3779b97f4a7c15)),
-		seqs: make([]uint32, cfg.Entities),
+		seqs: sequenciasIniciais(cfg),
 	}, nil
+}
+
+func sequenciasIniciais(cfg Config) []uint32 {
+	s := make([]uint32, cfg.Entities)
+	if cfg.SeqOffset == 0 {
+		return s
+	}
+	for i := range s {
+		s[i] = cfg.SeqOffset
+	}
+	return s
 }
 
 // MustNew é o New para chamador que trata Config inválida como bug de

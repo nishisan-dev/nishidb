@@ -1,0 +1,87 @@
+@startuml offset_recovery
+title Retomada da posição — o que decide de onde o consumo recomeça (§49, §51)
+
+start
+
+:Open do dataset;
+note right
+  Ordem do §51: os dados vêm primeiro.
+  load checkpoint → verify checksums →
+  open mmap → scan segment tail →
+  replay → **start queries**
+end note
+
+:lê checkpoint/kafka.offsets;
+
+if (arquivo ausente?) then (sim)
+  if (RowCount > 0?) then (sim)
+    #FFD9D9:RECUSA a subida da ingestão;
+    note right
+      Dataset com linhas e sem posição é estado
+      anômalo (restore parcial, arquivo perdido).
+      `earliest` reprocessaria o tópico retido
+      inteiro e `latest` pularia tudo — os dois
+      em silêncio. A saída é `nishidb offsets`.
+    end note
+    :as CONSULTAS seguem de pé;
+    stop
+  else (não — dataset vazio)
+    :vale o autoOffsetReset;
+  endif
+elseif (CRC/magic inválidos?) then (sim)
+  #FFD9D9:RECUSA a subida da ingestão;
+  note right
+    Posição ilegível não é a mesma coisa que
+    posição ausente. O Open NÃO falha: os dados
+    estão íntegros e o §51 manda as consultas
+    subirem antes da ingestão.
+  end note
+  :as CONSULTAS seguem de pé;
+  stop
+else (não — posição legível)
+  :compara a identidade da origem;
+  if (topic, groupId, bootstrap ou cluster mudou?) then (sim)
+    #FFD9D9:RECUSA nomeando o campo que mudou;
+    note right
+      Offset é número sem significado fora do seu
+      fluxo. Promover teste→produção com o mesmo
+      nome de tópico faria seek num offset alheio:
+      o consumo começaria no meio, sem erro em
+      camada nenhuma.
+    end note
+    stop
+  endif
+endif
+
+:entra no consumer group;
+
+if (o group entregou TODAS as partições?) then (não)
+  #FFD9D9:RECUSA por assignment parcial;
+  note right
+    Single-writer (§27) + checkpoint local
+    autoritativo (§49) implicam UMA instância
+    ativa por group. Com duas, cada dataset
+    materializa metade e nenhuma métrica do §92
+    acusa — o group consome tudo e o lag fica
+    normal.
+  end note
+  stop
+endif
+
+#D9F2D9:AdjustFetchOffsetsFn: seek pela posição LOCAL;
+note right
+  Aqui, e não no callback de assignment: o
+  SetOffsets do cliente "só ajusta partições
+  previamente consumidas", então num join novo
+  ele é silenciosamente inócuo — e o consumo
+  seguiria pelo offset do broker, que é
+  exatamente o que o §49 proíbe.
+
+  WithEpoch(-1) desliga a detecção de data loss:
+  reposicionar para trás é a operação PRETENDIDA.
+end note
+
+:resume ingestion;
+stop
+
+@enduml

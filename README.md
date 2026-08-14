@@ -13,13 +13,14 @@ rows**, contra 389 KiB com 1 milhão — 8× de dados, 1,9% de heap a mais.
 
 ## Estado
 
-**M1 completo.** Ingestão, materialização, storage durável com recovery,
-índices, SQL e saída NDJSON — tudo pelo binário. Os 25 critérios de aceite estão
-detalhados em [`docs/aceite-m1.md`](docs/aceite-m1.md): 14 atendidos, 5 parciais
-com milestone dono, 6 fora do M1 por planejamento.
+**M1 e M2 completos.** Ingestão por arquivo e por **Kafka**, materialização,
+storage durável com recovery de dados E de posição no tópico, índices, SQL,
+saída NDJSON, e um servidor com `/metrics` e `/v1/health` — tudo pelo binário.
+Os critérios de aceite estão em [`docs/aceite-m1.md`](docs/aceite-m1.md) e
+[`docs/aceite-m2.md`](docs/aceite-m2.md).
 
-Próximos: **M2** (consumidor Kafka), **M3** (protocolo HTTP, driver JDBC, auth,
-TLS), **M4** (índice hash físico, compaction, TTL).
+Próximos: **M3** (protocolo HTTP de consulta, driver JDBC, auth, TLS), **M4**
+(índice hash físico, compaction, TTL).
 
 ## Instalação
 
@@ -207,6 +208,62 @@ Dois detalhes que a flag exige saber:
   definitivo (parâmetro do plano) é o débito 46.
 - O `query.maxRows` do dataset continua valendo como **teto**: `--limit` acima
   dele não levanta o teto, e resultado truncado por ele sai com exit 5.
+
+### Ingestão por Kafka
+
+O YAML do dataset descreve a fonte (§12). O consumer só sobe com
+`enabled: true` **e** por ato de comando — descrever não é ligar:
+
+```yaml
+source:
+  type: kafka
+  kafka:
+    enabled: true
+    bootstrapServers: [kafka01:9092, kafka02:9092]
+    topic: radius-accounting
+    consumer:
+      groupId: nishidb-radius
+      autoOffsetReset: earliest    # só vale com dataset VAZIO
+      maxPollRecords: 1000
+      ingestionQueueSize: 5000     # gate de registros da fila limitada
+      ingestionQueueBytes: 64MiB   # gate de BYTES — registros não são memória
+    security:
+      protocol: SASL_SSL
+      saslMechanism: SCRAM-SHA-512
+      usernameEnv: KAFKA_USERNAME  # o NOME da variável, nunca o valor
+      passwordEnv: KAFKA_PASSWORD
+
+errors:
+  invalidEvent: log-and-skip       # ou `stop`, que PARA a ingestão
+```
+
+```bash
+nishidb server --config nishidb.yaml
+```
+
+O servidor hospeda ingestão e consulta no **mesmo processo**, porque o flock do
+dataset é exclusivo por processo: um consumer separado tornaria o dataset
+inconsultável. Expõe `GET /metrics` (§92/§93) e `GET /v1/health` (§94), e
+aceita `--pprof <addr>` para os endpoints de debug num listener próprio.
+
+Um dataset cuja ingestão não pode subir **continua consultável** — a ordem do
+§51 é `start queries` antes de `resume ingestion`. Quatro situações recusam a
+subida da ingestão, todas visíveis no health: posição desconhecida (dataset com
+linhas e sem `kafka.offsets`), posição ilegível, origem divergente (o YAML
+aponta para outro tópico, group ou cluster), e assignment parcial (outra
+instância no mesmo group).
+
+### Reposicionar no tópico
+
+```bash
+nishidb offsets --config nishidb.yaml --dataset radius_sessions --show
+nishidb offsets --config nishidb.yaml --dataset radius_sessions --set 0:1500,1:900 --yes
+nishidb offsets --config nishidb.yaml --dataset radius_sessions --reset earliest --yes
+```
+
+Exige o servidor **parado** (toma o flock) e `--yes` para escrever. É a saída
+para `invalidEvent: stop`, para um restore parcial, e para a troca legítima de
+tópico ou cluster.
 
 ### SQL suportado (v1)
 
