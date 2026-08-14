@@ -52,7 +52,30 @@ var (
 // segmento do record anterior).
 //
 // Unidades: SizeBytes é o tamanho do ARQUIVO (inclui o header de 64 bytes
-// do segmento); LiveBytes soma apenas os bytes dos records vivos.
+// do segmento); TotalRecords conta todos os records já gravados no segmento,
+// vivos ou não.
+//
+// LiveRecords e LiveBytes NÃO são a contagem exata dos records vivos: são um
+// LIMITE SUPERIOR dela. Podem ficar ACIMA do real, nunca abaixo. Quem os
+// consumir — a compaction do M4 é o consumidor previsto, no minimumLiveRatio
+// do §14.16 — precisa lê-los como "no máximo isto está vivo": a assimetria é
+// deliberada e é de segurança, porque superestimar liveness apenas ADIA uma
+// compaction, enquanto subestimá-la faria a compaction descartar dado vivo.
+//
+// De onde vem o excesso: do replay do tail no recovery. Quando a row já
+// existia no ponto do último checkpoint e o tail traz um update cuja location
+// durável já aponta para o record NOVO, o replay não tem como saber qual era
+// o estado anterior e não decrementa o record que o update tornou garbage
+// (o porquê está em replayRecord, internal/storage/store_recovery.go). Esse
+// record órfão fica contado como vivo de forma PERMANENTE: o decremento do
+// write path identifica o garbage pela location da row, que já nomeia o
+// record do tail, então cada update seguinte desconta o anterior a ELE e
+// nunca o órfão. Só uma varredura do segmento — a compaction — reconstrói o
+// tally.
+//
+// O resíduo está medido e travado em TestResiduoDeLivenessDoReplayNaoConverge
+// (internal/storage/store_liveness_residuo_test.go), que também prova que ele
+// não converge com checkpoints posteriores. Débito 38 em docs/debitos.md.
 type SegmentInfo struct {
 	ID           uint32
 	SizeBytes    int64

@@ -170,8 +170,9 @@ func exigeAssimetriaSegura(t *testing.T, momento string, obtido, certo checkpoin
 		t.Fatalf("%s: liveness = %d records / %d bytes; o resíduo medido do replay é de "+
 			"exatamente um record órfão sobre o real (%d records / %d bytes), o que dá "+
 			"%d / %d. Se a conta passou a fechar exato, a correção do M4 aconteceu: "+
-			"atualize esta expectativa e o comentário do replayRecord em "+
-			"store_recovery.go, que descreve o resíduo",
+			"atualize esta expectativa, o comentário do replayRecord em "+
+			"store_recovery.go e o godoc de checkpoint.SegmentInfo, que é onde o "+
+			"contrato do limite superior está publicado para quem consome as stats",
 			momento, obtido.LiveRecords, obtido.LiveBytes,
 			certo.LiveRecords, certo.LiveBytes, esperado.LiveRecords, esperado.LiveBytes)
 	}
