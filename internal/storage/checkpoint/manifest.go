@@ -235,10 +235,19 @@ func step(name string, op func() error) error {
 	return nil
 }
 
-// Write grava o manifest atomicamente: tmp → fsync → rename → fsync do
-// diretório (a política de rename durável do design §9/M18).
+// Write grava o manifest atomicamente.
 func Write(path string, m *Manifest) error {
-	data := m.encode()
+	return escreveAtomico(path, m.encode())
+}
+
+// escreveAtomico grava tmp → fsync → rename → fsync do diretório (a política
+// de rename durável do design §9/M18).
+//
+// É compartilhado pelo manifest.bin e pelo kafka.offsets de propósito: este é
+// o único caminho de durabilidade PROVADO do projeto (a ordem está travada
+// por TestWriteOrdemDeDurabilidade), e um segundo arquivo com uma segunda
+// cópia da sequência seria uma cópia que diverge na primeira correção.
+func escreveAtomico(path string, data []byte) error {
 	tmp := path + ".tmp"
 	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
@@ -261,7 +270,7 @@ func Write(path string, m *Manifest) error {
 	if err := step("rename", func() error {
 		return os.Rename(tmp, path)
 	}); err != nil {
-		return fmt.Errorf("checkpoint: rename do manifest: %w", err)
+		return fmt.Errorf("checkpoint: rename de %s: %w", filepath.Base(path), err)
 	}
 	return step("dirsync", func() error {
 		return syncDir(filepath.Dir(path))

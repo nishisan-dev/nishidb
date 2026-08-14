@@ -106,11 +106,16 @@ func ValidateRecord(key, payload []byte) (uint32, error) {
 	if err != nil {
 		return 0, err
 	}
+	// Os dois tetos abaixo carregam types.ErrTooLarge além do sentinela do
+	// pacote: são culpa do EVENTO, e é por esse sentinela que o materializer
+	// os separa do balde de "bug nosso" (§101, categoria EVENT_TOO_LARGE).
 	if len(key) > MaxKeySize {
-		return 0, fmt.Errorf("%w: key de %d bytes excede o teto %d", ErrInvalidPayload, len(key), MaxKeySize)
+		return 0, fmt.Errorf("%w: %w: key de %d bytes excede o teto %d",
+			ErrInvalidPayload, types.ErrTooLarge, len(key), MaxKeySize)
 	}
 	if total := RecordHeaderSize + int64(len(key)) + int64(len(payload)); total > MaxRecordSize {
-		return 0, fmt.Errorf("%w: record de %d bytes excede o teto %d", ErrInvalidPayload, total, MaxRecordSize)
+		return 0, fmt.Errorf("%w: %w: record de %d bytes excede o teto %d",
+			ErrInvalidPayload, types.ErrTooLarge, total, MaxRecordSize)
 	}
 	return fieldCount, nil
 }

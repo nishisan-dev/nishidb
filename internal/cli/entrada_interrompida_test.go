@@ -69,7 +69,7 @@ func TestErroDeLeituraNaoMascaraPerdaDeDado(t *testing.T) {
 	leitor := &leitorDeLinhas{
 		linhas: []string{
 			`{"id":"A","_SEQ":1,"Acct-Status-Type":"Stop"}`,
-			eventoGigante(),
+			eventoComNomeDeCampoGigante(),
 		},
 		erroFinal: errors.New("disco caiu no meio da leitura"),
 	}
@@ -162,7 +162,7 @@ func TestInterrupcaoNaoApagaAPerdaJaApurada(t *testing.T) {
 	leitor := &leitorDeLinhas{
 		linhas: []string{
 			`{"id":"A","_SEQ":1,"Acct-Status-Type":"Stop"}`,
-			eventoGigante(),
+			eventoComNomeDeCampoGigante(),
 			`{"id":"C","_SEQ":1,"Acct-Status-Type":"Start"}`,
 		},
 		erroFinal: io.EOF,

@@ -182,6 +182,24 @@ type Store struct {
 	cpDuracao *metrics.SerieHistograma
 	cpUltimo  *metrics.SerieMedidor
 
+	// srcOffsets é a posição no tópico Kafka amarrada a este checkpoint
+	// (§48, §50). WRITER-ONLY, sob wmu — mesmo regime de epoch e segTally.
+	//
+	// Mora no Store, e não num parâmetro do Checkpoint, por causa do Open:
+	// ele grava um checkpoint imediato, então qualquer estado que não viva
+	// aqui seria apagado na primeira reabertura. Capturar o offset fora do
+	// wmu abriria uma janela em que o manifest declara durável um ponto e o
+	// arquivo de offsets declara outro.
+	//
+	// nil = dataset que nunca consumiu de Kafka. Nesse caso o arquivo nem é
+	// criado: um dataset alimentado por `nishidb ingest` não tem posição.
+	srcOffsets *checkpoint.SourceOffsets
+	// srcOffsetsErr guarda a falha de LEITURA do kafka.offsets no Open. Não
+	// impede a abertura de propósito: os dados continuam íntegros e o §51
+	// manda as consultas subirem antes da ingestão. Quem for retomar o
+	// consumo é que precisa tratar isto.
+	srcOffsetsErr error
+
 	// Buffers exclusivos do writer (Put).
 	buildBuf []byte // record em construção
 	prevBuf  []byte // fallback de leitura do estado anterior
@@ -371,6 +389,11 @@ func Open(opts Options) (*Store, error) {
 				opts.Dir, err)
 		}
 	}
+	// Offsets ANTES do checkpoint imediato: o Checkpoint reescreve o
+	// kafka.offsets a partir do estado em memória, então carregar depois
+	// apagaria a posição na primeira reabertura do dataset.
+	s.carregaOffsets()
+
 	// Checkpoint imediato: manifest desde a criação e estado limpo pós-
 	// recovery (novo S = tail; epoch nunca regride).
 	if err := s.Checkpoint(); err != nil {
@@ -378,6 +401,28 @@ func Open(opts Options) (*Store, error) {
 	}
 	ok = true
 	return s, nil
+}
+
+// carregaOffsets semeia a posição Kafka a partir do disco.
+//
+// Nenhum modo de falha aqui impede a abertura. É deliberado e vem do §51, que
+// põe "start queries" ANTES de "seek Kafka offsets": um kafka.offsets
+// ilegível não torna os dados inacessíveis, torna a POSIÇÃO desconhecida — e
+// recusar a abertura por isso derrubaria também as consultas, que não têm
+// nada a ver com o problema. Quem for retomar o consumo consulta o erro.
+func (s *Store) carregaOffsets() {
+	o, err := checkpoint.LoadOffsets(s.offsetsPath())
+	switch {
+	case err == nil:
+		s.srcOffsets = &o
+	case errors.Is(err, checkpoint.ErrNoOffsets):
+		// Dataset que nunca consumiu de Kafka. Não é anomalia.
+	default:
+		s.srcOffsetsErr = err
+		s.opts.Log.Warn("offsets.ilegivel",
+			"kafka.offsets não pôde ser lido; as consultas sobem, a ingestão não retoma sem decisão explícita",
+			"erro", err.Error())
+	}
 }
 
 // resolveBitmapFields devolve a união, ordenada e sem duplicatas, dos

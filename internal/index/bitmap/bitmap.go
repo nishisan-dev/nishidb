@@ -61,8 +61,10 @@ func ValidateValue(v types.Value) error {
 	case types.TypeString, types.TypeBytes, types.TypeJSON,
 		types.TypeIPv4, types.TypeIPv6, types.TypeIPv4Prefix, types.TypeIPv6Prefix:
 		if len(v.Bytes) > types.MaxIndexedValueBytes {
-			return fmt.Errorf("bitmap: valor de %d bytes excede o teto de %d do values.dict",
-				len(v.Bytes), types.MaxIndexedValueBytes)
+			// types.ErrTooLarge: é culpa do EVENTO, e é por esse sentinela
+			// que o materializer o separa do balde de "bug nosso" (§101).
+			return fmt.Errorf("%w: bitmap: valor de %d bytes excede o teto de %d do values.dict",
+				types.ErrTooLarge, len(v.Bytes), types.MaxIndexedValueBytes)
 		}
 		return nil
 	default:
@@ -203,7 +205,7 @@ func (ix *Index) lookupID(key []byte) (uint32, bool) {
 func (ix *Index) createID(key []byte) (uint32, error) {
 	valBytes := key[1:]
 	if len(valBytes) > types.MaxIndexedValueBytes {
-		return 0, fmt.Errorf("bitmap: valor com %d bytes excede u16", len(valBytes))
+		return 0, fmt.Errorf("%w: bitmap: valor com %d bytes excede u16", types.ErrTooLarge, len(valBytes))
 	}
 	entry := make([]byte, 0, 3+len(valBytes)+4)
 	entry = append(entry, key[0])

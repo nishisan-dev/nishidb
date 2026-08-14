@@ -13,18 +13,59 @@ import (
 // colapsava os dois num único mapa de "descartados" e terminava com exit 0: a
 // row sumia e `$?` dizia sucesso, que é a definição de perda silenciosa.
 //
-// O evento gigante é a rota reprodutível: um valor acima de
-// types.MaxIndexedValueBytes num campo com índice bitmap é recusado pelo
-// storage, vira STORAGE_ERROR (balde 2) e o evento NÃO é aplicado.
+// eventoGigante tem um VALOR acima de types.MaxIndexedValueBytes num campo
+// com índice bitmap. Até o M1 essa era a rota de FALHA (balde 2), porque o
+// erro caía em STORAGE_ERROR por falta de categoria melhor. No M2 ele é a
+// rota de DESCARTE: um atributo RADIUS de 70 KiB é culpa do evento, e o §101
+// governa (categoria EVENT_TOO_LARGE).
 func eventoGigante() string {
 	return `{"id":"B","_SEQ":1,"Filter-Id":"` + strings.Repeat("x", types.MaxIndexedValueBytes+1) + `"}`
+}
+
+// eventoComNomeDeCampoGigante é a rota de FALHA que sobrou, e é
+// qualitativamente diferente: o teto violado não é de um VALOR, é do NOME do
+// campo no dicionário. Um valor grande é dado legítimo mal dimensionado; um
+// nome de campo de 64 KiB é produtor emitindo lixo estrutural, e cada um
+// desses consumiria permanentemente um slot do dicionário do dataset. Pedir
+// atenção humana em vez de descartar e seguir é conservador na direção certa.
+func eventoComNomeDeCampoGigante() string {
+	return `{"id":"B","_SEQ":1,"` + strings.Repeat("n", 1<<16) + `":"x"}`
+}
+
+// A rota de descarte: o evento não entra, mas isso NÃO é perda de dado — a
+// política do §101 decidiu descartá-lo, e o exit code diz sucesso.
+func TestEventoAcimaDoTetoDeFormatoEDescarteENaoPerda(t *testing.T) {
+	a := novoAmbiente(t)
+	entrada := strings.Join([]string{
+		`{"id":"A","_SEQ":1,"Acct-Status-Type":"Stop"}`,
+		eventoGigante(),
+		`{"id":"C","_SEQ":1,"Acct-Status-Type":"Start"}`,
+	}, "\n") + "\n"
+
+	code := a.rodaComEntrada(entrada,
+		"ingest", "--config", a.config, "--dataset", "radius_sessions", "--input", "-")
+
+	if code != cli.ExitOK {
+		t.Errorf("code = %d, want %d: teto de formato é culpa do evento, não perda\n%s",
+			code, cli.ExitOK, a.stderr.String())
+	}
+	msg := a.stderr.String()
+	if !strings.Contains(msg, "3 lidos, 2 aplicados") {
+		t.Errorf("resumo = %q", msg)
+	}
+	if !strings.Contains(msg, "descartados por categoria: EVENT_TOO_LARGE=1") {
+		t.Errorf("o descarte não foi nomeado pela categoria nova:\n%s", msg)
+	}
+	if strings.Contains(msg, "não aplicados por falha") {
+		t.Errorf("evento grande foi contado como perda de dado:\n%s", msg)
+	}
 }
 
 func TestEventoNaoAplicadoPorFalhaTemExitCodeProprio(t *testing.T) {
 	a := novoAmbiente(t)
 	entrada := strings.Join([]string{
 		`{"id":"A","_SEQ":1,"Acct-Status-Type":"Stop"}`,
-		eventoGigante(),
+		eventoComNomeDeCampoGigante(),
 		`{"id":"C","_SEQ":1,"Acct-Status-Type":"Start"}`,
 	}, "\n") + "\n"
 
@@ -86,7 +127,7 @@ func TestDescarteEFalhaSaoReportadosSeparadamente(t *testing.T) {
 	entrada := strings.Join([]string{
 		`{"id":"A","_SEQ":1,"Acct-Status-Type":"Stop"}`,
 		`{isso nao e json}`,
-		eventoGigante(),
+		eventoComNomeDeCampoGigante(),
 	}, "\n") + "\n"
 
 	if code := a.rodaComEntrada(entrada,

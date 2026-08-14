@@ -57,6 +57,21 @@ var (
 	// política de log-and-skip por evento vira um skip infinito e a
 	// ingestão descarta tudo em silêncio.
 	ErrWriterFailed = errors.New("storage: writer em modo falho (reabra o dataset)")
+
+	// ErrTooLarge indica que alguma parte do evento excedeu um teto de
+	// FORMATO do storage: key acima de MaxKeySize, record acima de
+	// MaxRecordSize, valor acima de MaxIndexedValueBytes num campo indexado.
+	//
+	// Existe como sentinela próprio porque esses casos SÃO culpa do evento e
+	// até o M1 caíam no balde de STORAGE_ERROR, que é o balde do "bug nosso
+	// ou dataset avariado". A consequência era concreta: um produtor emitindo
+	// um atributo de 70 KiB num campo com bitmap fazia o `ingest` sair com
+	// exit 7 (perda de dado) a cada evento, e num daemon, onde não há exit
+	// code, o operador teria de escolher entre avançar o offset (perda
+	// definitiva e invisível) e não avançar (livelock por evento envenenado).
+	// Com o sentinela, esses eventos são governados pela política do §101
+	// como qualquer outro evento ruim.
+	ErrTooLarge = errors.New("storage: acima do teto de formato")
 )
 
 // FieldType identifica o tipo lógico de um campo (spec §17-18) e é também a

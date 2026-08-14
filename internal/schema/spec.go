@@ -22,15 +22,10 @@ type DatasetSpec struct {
 	Version         int
 	Name            string
 	Source          SourceSpec
+	Errors          ErrorsSpec
 	Materialization MaterializationSpec
 	Schema          SchemaSpec
 	Query           QuerySpec
-}
-
-// SourceSpec é aceita e validada apenas sintaticamente no M1 (Kafka é M2).
-type SourceSpec struct {
-	Type  string
-	Kafka map[string]any
 }
 
 type MaterializationSpec struct {
@@ -78,17 +73,20 @@ type QuerySpec struct {
 
 // Estruturas cruas do YAML (tudo opcional; defaults e validação em validate).
 type rawSpec struct {
-	Version         *int       `yaml:"version"`
-	Name            string     `yaml:"name"`
-	Source          *rawSource `yaml:"source"`
-	Materialization rawMat     `yaml:"materialization"`
-	Schema          rawSchema  `yaml:"schema"`
-	Query           rawQuery   `yaml:"query"`
-}
-
-type rawSource struct {
-	Type  string         `yaml:"type"`
-	Kafka map[string]any `yaml:"kafka"`
+	Version *int   `yaml:"version"`
+	Name    string `yaml:"name"`
+	// Source e Errors ficam como nó cru porque a recusa de chave desconhecida
+	// nesses dois blocos é feita à mão, sobre as chaves do documento — ver
+	// bloco(), em source.go, para o motivo de yaml.KnownFields não servir.
+	//
+	// São VALOR e não ponteiro porque o yaml.v3 só trata yaml.Node de forma
+	// especial no tipo valor: um campo *yaml.Node fica com o nó zerado, sem
+	// erro nenhum. Bloco ausente é Kind == 0.
+	Source          yaml.Node `yaml:"source"`
+	Errors          yaml.Node `yaml:"errors"`
+	Materialization rawMat    `yaml:"materialization"`
+	Schema          rawSchema `yaml:"schema"`
+	Query           rawQuery  `yaml:"query"`
 }
 
 type rawMat struct {
@@ -236,8 +234,12 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 	}
 	s.Name = raw.Name
 
-	if raw.Source != nil {
-		s.Source = SourceSpec{Type: raw.Source.Type, Kafka: raw.Source.Kafka}
+	var err error
+	if s.Source, err = validaSource(&raw.Source); err != nil {
+		return nil, err
+	}
+	if s.Errors, err = validaErrors(&raw.Errors); err != nil {
+		return nil, err
 	}
 
 	// materialization.key

@@ -87,21 +87,29 @@ const (
 	CategoryInvalidKey
 	CategoryInvalidSequence
 	CategoryTypeConversion
+	// CategoryEventTooLarge: alguma parte do evento excedeu um teto de
+	// FORMATO do storage — valor acima de types.MaxIndexedValueBytes (64 KiB)
+	// num campo com bitmap, key acima de MaxKeySize, record acima de
+	// MaxRecordSize.
+	//
+	// É a 6ª categoria de evento ruim, que a §101 não nomeia e que o
+	// comentário desta constante pedia desde o M1. Até então esses casos
+	// caíam em CategoryStorage, o balde do "bug nosso ou dataset avariado", e
+	// o efeito era concreto: um produtor emitindo um atributo RADIUS de 70
+	// KiB num campo indexado fazia o `ingest` sair com exit 7 (perda de dado)
+	// a cada evento. Num daemon, sem exit code, a escolha seria entre avançar
+	// o offset (perda definitiva e invisível) e não avançar (livelock por
+	// evento envenenado). Aqui a política do §101 governa, como em qualquer
+	// outro evento ruim.
+	CategoryEventTooLarge
 	// CategoryWriterFailed: writer em modo falho (sticky, §14.14). Terminal:
 	// reprocessar o evento é inútil até o dataset ser reaberto.
 	CategoryWriterFailed
-	// CategoryStorage: erro do store que não é modo falho — argumento
-	// inválido, leitura corrompida, falha do dicionário. Em geral indica bug
-	// nosso ou dataset avariado.
-	//
-	// Ressalva conhecida: os tetos de FORMATO do storage também caem aqui e
-	// esses SÃO culpa do evento — valor acima de types.MaxIndexedValueBytes
-	// (64 KiB) num campo com bitmap, key acima do teto do record. Enquanto
-	// não houver uma 6ª categoria de evento ruim para eles, um evento
-	// gigante conta como Failed/STORAGE_ERROR e não como Skipped. É
-	// conservador na direção certa (pede atenção humana em vez de sumir na
-	// contagem de "fonte ruidosa"), mas o operador precisa saber disso ao
-	// ler a métrica.
+	// CategoryStorage: erro do store que não é modo falho e não é teto de
+	// formato — argumento inválido, leitura corrompida, falha do dicionário.
+	// Indica bug nosso ou dataset avariado, e por isso NÃO é governado pela
+	// política de evento: quem consome o resultado tem de parar a ingestão,
+	// nunca descartar e seguir.
 	CategoryStorage
 	// CategoryInternal: inconsistência detectada pelo próprio materializer
 	// (ErrInternalState).
@@ -124,6 +132,7 @@ var categoryNames = [...]string{
 	CategoryInvalidKey:       "INVALID_KEY",
 	CategoryInvalidSequence:  "INVALID_SEQUENCE",
 	CategoryTypeConversion:   "TYPE_CONVERSION",
+	CategoryEventTooLarge:    "EVENT_TOO_LARGE",
 	CategoryWriterFailed:     "WRITER_FAILED",
 	CategoryStorage:          "STORAGE_ERROR",
 	CategoryInternal:         "INTERNAL_STATE",
@@ -141,7 +150,7 @@ func (c ErrorCategory) String() string {
 // Fora dele o evento não entrou por falha nossa ou do dataset, e quem chamou
 // precisa tratar isso como perda, não como descarte.
 func (c ErrorCategory) BadEvent() bool {
-	return c >= CategoryInvalidJSON && c <= CategoryTypeConversion
+	return c >= CategoryInvalidJSON && c <= CategoryEventTooLarge
 }
 
 // ApplyResult é o desfecho completo de um evento. Err é nil para Created,
@@ -358,6 +367,11 @@ func classify(err error) ErrorCategory {
 		return CategoryTypeConversion
 	case errors.Is(err, types.ErrWriterFailed):
 		return CategoryWriterFailed
+	// Depois do writer falho, que é terminal e vence qualquer outra leitura,
+	// e antes do default, que é onde o teto de formato caía até o M1 —
+	// contando como perda de dado o que é culpa do evento.
+	case errors.Is(err, types.ErrTooLarge):
+		return CategoryEventTooLarge
 	case errors.Is(err, ErrInternalState):
 		return CategoryInternal
 	default:

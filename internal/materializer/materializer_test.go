@@ -842,6 +842,7 @@ func TestRotulosDeActionECategoria(t *testing.T) {
 		CategoryInvalidKey:       "INVALID_KEY",
 		CategoryInvalidSequence:  "INVALID_SEQUENCE",
 		CategoryTypeConversion:   "TYPE_CONVERSION",
+		CategoryEventTooLarge:    "EVENT_TOO_LARGE",
 		CategoryWriterFailed:     "WRITER_FAILED",
 		CategoryStorage:          "STORAGE_ERROR",
 		CategoryInternal:         "INTERNAL_STATE",
@@ -854,10 +855,11 @@ func TestRotulosDeActionECategoria(t *testing.T) {
 	if got := ErrorCategory(200).String(); got != "category(?)" {
 		t.Errorf("ErrorCategory fora de faixa = %q", got)
 	}
-	// As cinco categorias §101 são as ÚNICAS de evento ruim: a fronteira do
-	// balde é o que separa "pule este evento" de "temos um bug".
+	// As cinco categorias §101 MAIS o teto de formato (EVENT_TOO_LARGE, que a
+	// spec não nomeia) são as únicas de evento ruim: a fronteira do balde é o
+	// que separa "pule este evento" de "temos um bug".
 	for c := CategoryNone; c < numCategories; c++ {
-		want := c >= CategoryInvalidJSON && c <= CategoryTypeConversion
+		want := c >= CategoryInvalidJSON && c <= CategoryEventTooLarge
 		if got := c.BadEvent(); got != want {
 			t.Errorf("%v.BadEvent() = %v, want %v", c, got, want)
 		}

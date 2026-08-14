@@ -145,7 +145,76 @@ func (s *Store) checkpoint() error {
 		return s.failWriter(err)
 	}
 	s.epoch = m.Epoch
+
+	// Passo 8: a posição no tópico, DEPOIS do manifest — nunca antes.
+	//
+	// São dois arquivos e dois renames, sem transação entre eles, e é a ORDEM
+	// que decide qual estado um crash entre os dois pode produzir:
+	//
+	//	manifest → offsets:  offset ATRÁS dos dados. O seek reprocessa uma
+	//	                     janela já aplicada, que converge (§25 descarta por
+	//	                     sequence; sem sequence, reaplicar na mesma ordem de
+	//	                     partição produz o mesmo payload). Custo: lixo.
+	//	offsets → manifest:  offset ADIANTE dos dados. Os eventos entre os dois
+	//	                     pontos nunca mais são lidos. PERDA DEFINITIVA.
+	//
+	// O §48 já fixa essa direção ("persist → durable checkpoint → commit
+	// Kafka offset"); aqui ela vira invariante de código, travada por teste.
+	if s.srcOffsets != nil {
+		if err := s.traceStep("sourceOffsets", func() error {
+			return checkpoint.WriteOffsets(s.offsetsPath(), *s.srcOffsets)
+		}); err != nil {
+			return s.failWriter(err)
+		}
+	}
 	return nil
+}
+
+// SetSourceOffsets publica a posição no tópico que o PRÓXIMO checkpoint vai
+// tornar durável. Exclusivo do writer único (§27).
+//
+// Guarda uma cópia: o chamador mantém o mapa vivo entre os lotes, e
+// compartilhar a referência faria o checkpoint gravar um estado mais recente
+// que o dos dados que ele acabou de tornar duráveis — exatamente a inversão
+// que o §48 proíbe.
+func (s *Store) SetSourceOffsets(o checkpoint.SourceOffsets) error {
+	if err := s.entra(); err != nil {
+		return err
+	}
+	defer s.sai()
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	c := o.Clone()
+	s.srcOffsets = &c
+	return nil
+}
+
+// SourceOffsets devolve a posição persistida.
+//
+// ok=false e err=nil significa dataset que nunca consumiu de Kafka. err != nil
+// significa que o arquivo EXISTIA e estava ilegível — que não é a mesma coisa,
+// e tratar os dois casos igual é o que faria um restore parcial reprocessar o
+// tópico retido inteiro (com autoOffsetReset: earliest) ou pular tudo (latest),
+// nos dois casos sem erro em camada nenhuma.
+func (s *Store) SourceOffsets() (checkpoint.SourceOffsets, bool, error) {
+	if err := s.entra(); err != nil {
+		return checkpoint.SourceOffsets{}, false, err
+	}
+	defer s.sai()
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	if s.srcOffsetsErr != nil {
+		return checkpoint.SourceOffsets{}, false, s.srcOffsetsErr
+	}
+	if s.srcOffsets == nil {
+		return checkpoint.SourceOffsets{}, false, nil
+	}
+	return s.srcOffsets.Clone(), true, nil
+}
+
+// offsetsPath é o caminho do kafka.offsets (§50, §83).
+func (s *Store) offsetsPath() string {
+	return filepath.Join(s.opts.Dir, "checkpoint", checkpoint.OffsetsFileName)
 }
 
 // traceStep executa a operação e, em sucesso, emite o evento no seam de

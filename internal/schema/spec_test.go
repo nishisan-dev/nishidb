@@ -198,14 +198,15 @@ func TestParseValidationErrors(t *testing.T) {
 	}
 }
 
-func TestParseSourceKafkaIsAcceptedAndIgnored(t *testing.T) {
-	// A seção source é validada só sintaticamente no M1 (Kafka é M2).
-	s := parseOK(t, strings.Replace(baseYAML, "materialization:", `source:
+// Até o M1 este teste se chamava TestParseSourceKafkaIsAcceptedAndIgnored e
+// provava que o bloco era aceito sem validação nenhuma. Esse comportamento ERA
+// o defeito (issue #1): um `topic` sem `bootstrapServers` passava limpo, e o
+// operador só descobria na primeira tentativa de conexão — que no M1 nunca
+// acontecia, porque ninguém lia a seção.
+func TestSourceKafkaIncompletoERecusadoNoParse(t *testing.T) {
+	parseErr(t, strings.Replace(baseYAML, "materialization:", `source:
   type: kafka
   kafka:
     topic: radius-accounting
-materialization:`, 1))
-	if s.Source.Type != "kafka" {
-		t.Errorf("Source.Type = %q", s.Source.Type)
-	}
+materialization:`, 1), "bootstrapServers")
 }
