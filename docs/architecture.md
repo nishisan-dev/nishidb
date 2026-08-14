@@ -216,23 +216,31 @@ onde pode ser usado. Sem esta tabela, escrever um YAML novo é tentativa e erro.
 
 | `type:` | Entrada aceita no evento | `index: bitmap` | `index: hash` |
 |---|---|:---:|:---:|
-| `string` | string JSON | sim | sim |
-| `int64` | número inteiro ou `{"$numberLong":"<dígitos>"}` | sim | sim |
-| `double` | número | não | não |
-| `boolean` | `true`/`false` | sim | não |
-| `timestamp` | **RFC3339(Nano)** ou **número = epoch millis**; `{"$date":"<rfc3339>"}` e `{"$date":{"$numberLong":"<ms>"}}` | não | não |
-| `ipv4` | string `a.b.c.d` | não | sim |
-| `ipv6` | string RFC 4291 (inclusive forma comprimida) | não | sim |
-| `ipv4_prefix` | string `a.b.c.d/len` | não | não |
-| `ipv6_prefix` | string `addr/len` | não | não |
-| `bytes` | string **base64** (padrão, com padding) | não | não |
+| `string` | string JSON, e ela precisa ser **UTF-8 válido** | sim | sim |
+| `int64` | número inteiro (sem `.`, `e` nem `E`), `{"$numberLong":"<dígitos>"}` **ou string de dígitos** — `-?[0-9]+`, sem espaço em volta, sem sinal `+`, sem fração e sem expoente; zero à esquerda é aceito (`"007"` → 7) e estouro do range de `int64` é **recusado** | sim | sim |
+| `double` | número JSON **ou string com a mesma gramática de número JSON** (opcionalmente com fração e expoente). São recusados `NaN`, `Inf`, hexadecimal, separador `_`, sinal `+`, zero à esquerda (`"01"`), ponto sem dígito (`"1."`) e espaço em volta | não | não |
+| `boolean` | `true`/`false` JSON — a **string** `"true"` não serve | sim | não |
+| `timestamp` | **RFC3339(Nano)** com fuso **obrigatório** (`Z` ou `±hh:mm`) e fração **truncada em milissegundos**; **número = epoch millis** (inteiro); `{"$date":"<rfc3339>"}` e `{"$date":{"$numberLong":"<ms>"}}` | não | não |
+| `ipv4` | string `a.b.c.d`, octeto decimal **sem zero à esquerda** e sem espaço em volta | não | sim |
+| `ipv6` | string RFC 4291, inclusive a forma comprimida e `::ffff:a.b.c.d`; endereço **v4 puro é recusado** (`10.0.0.1` não vira v4-mapped), e zona (`%eth0`) também | não | sim |
+| `ipv4_prefix` | string `a.b.c.d/len`, com os **host bits preservados** — `10.0.0.1/24` é gravado como `10.0.0.1/24`, não mascarado | não | não |
+| `ipv6_prefix` | string `addr/len`, mesmas regras do `ipv4_prefix`; prefixo v4 é recusado, e prefixo v6 é recusado no `ipv4_prefix` | não | não |
+| `bytes` | string **base64** (`StdEncoding`: alfabeto padrão, com padding). base64url é recusado | não | não |
 | `json` | **só object ou array** (guardado cru, exatamente como veio); escalar — string, número, `true`/`false` — é **recusado** | não | não |
-| `auto` | qualquer um dos acima; o tipo é **fixado na primeira observação** e persistido | não | não |
+| `auto` | qualquer entrada, mas o tipo inferido sai de um conjunto **restrito**: string→`string`, número inteiro→`int64`, número com fração ou expoente→`double`, `true`/`false`→`boolean`, object/array→`json`, `$numberLong`→`int64`, `$date`→`timestamp`. **Nunca** infere `ipv4`, `ipv6`, prefixo ou `bytes` — uma string com cara de IP vira `string`. O tipo é **fixado na primeira observação** e persistido | não | não |
 
 Restrições da v1: a **key** (`materialization.key.type`) só pode ser `string`, e
 a **sequence** (`materialization.sequence.type`) só pode ser `int64`. Campo
 `auto` não é indexável — o tipo só existe depois do primeiro evento. Alias é
 opcional e precisa casar `[a-z0-9_]+`.
+
+**Por que `int64` e `double` aceitam string.** É ajuste pós-amostra, não
+leniência: a fonte real manda `Connect-Info` como `"1000000000"`. A coerção é
+estreita de propósito — a string precisa casar a mesma gramática que o número
+casaria, então `"1e3"` vira 1000 num `double` e é recusado num `int64`, e
+`"NaN"` não entra em lugar nenhum (`TestCoerceDeclaredStringToNumeric`).
+Recusa é erro de conversão, e no §101 erro de conversão descarta o **evento
+inteiro**.
 
 **O `json` é mais estreito do que o nome sugere, e isso custa evento.** Ele
 aceita **apenas** object e array (`internal/materializer/typeconv.go`,
