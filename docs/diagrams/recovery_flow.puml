@@ -1,9 +1,24 @@
 @startuml recovery_flow
-title Recovery na abertura do dataset (design §10.3)
+title Abertura do dataset (Open): estrutura, lock, validações e recovery (design §10.3)
 
 start
-:adquire o flock do arquivo LOCK
-do diretório do dataset;
+:cria data/, indexes/, metadata/ e
+checkpoint/ (MkdirAll) e fsynca os
+CINCO diretórios — os quatro e o
+diretório do dataset;
+note right
+  Isto acontece ANTES do lock: abrir um
+  dataset já travado ainda cria a estrutura
+  de diretórios vazia antes de falhar.
+  O fsync é o que impede que um power loss
+  logo após o primeiro checkpoint deixe o
+  dataset sem a entrada checkpoint/ —
+  o que a recovery leria como "dados sem
+  manifest", ou seja erro fatal.
+end note
+
+:adquire o flock do arquivo LOCK,
+dentro do diretório do dataset;
 note right
   Falha aqui = ErrDatasetLocked,
   com o pid do outro processo.
@@ -17,7 +32,16 @@ if (version != 2?) then (sim)
   stop
 endif
 
-:lista os segmentos;
+:abre primary.idx, locations.idx
+e sequences.idx (mmap);
+:carrega o manifest e lista os segmentos;
+
+if (o conjunto de bitmaps declarado\ndiverge do manifest?) then (sim)
+  #pink:ErrDatasetCorrupt\nbitmap abandonado (sem AllowBitmapDrop),\nou bitmap novo com RowCount > 0\n(não há backfill no M1);
+  stop
+endif
+:abre os índices bitmap declarados;
+
 if (manifest ausente?) then (sim)
   if (algum segmento tem record?) then (sim)
     #pink:ErrDatasetCorrupt\n"dados sem manifest"\nrebuild total é fase futura;
@@ -39,7 +63,7 @@ else (não)
   :adota segmentos posteriores\nao checkpoint (inclusive órfão\nde rotação);
   :TAIL SCAN a partir do ponto S;
   while (há record íntegro no tail?) is (sim)
-    :replay: reindexa primary,\nlocations, sequences e bitmaps;
+    :replay: reindexa primary,\nlocations, sequences e bitmaps\n(o MESMO applyRecord da escrita);
   endwhile (não)
   :TRUNCA o rasgo no último\nboundary válido;
   note right

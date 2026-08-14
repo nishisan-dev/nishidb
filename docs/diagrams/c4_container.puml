@@ -12,14 +12,16 @@ package "nishidb (binário único)" {
   component "CLI\ninternal/cli" as cliapp
   component "Materializer\ninternal/materializer" as mat
   component "Engine SQL\ninternal/query" as eng
-  component "Storage\ninternal/storage" as sto
+  component "Storage\ninternal/storage\n+ internal/index" as sto
 }
 
 database "Dataset em disco" as ds {
-  file "segments/*.dat\n(append-only)" as seg
-  file "primary.idx\nlocations.idx\nsequences.idx\n(mmap)" as idx
-  file "bitmaps/*\nfields.dict\nvalues.dict" as dic
-  file "manifest.bin\n(checkpoint)" as man
+  file "data/segment-00000001.dat\n(append-only)" as seg
+  file "indexes/primary.idx\nindexes/locations.idx\nindexes/sequences.idx\n(mmap)" as idx
+  file "indexes/bitmap/00003/\nvalues.dict + 00000000.bm" as bmp
+  file "metadata/fields.dict" as fdic
+  file "checkpoint/manifest.bin" as man
+  file "LOCK\n(flock exclusivo)" as lock
 }
 
 queue "Kafka\n(M2 — fora do M1)" as kafka #lightgray
@@ -34,8 +36,10 @@ mat --> sto : Put(key, seq, payload, prev)
 eng --> sto : GetByKey / GetByRowID\nScanLive / LookupBitmap
 sto --> seg
 sto --> idx
-sto --> dic
+sto --> bmp
+sto --> fdic
 sto --> man
+sto --> lock
 
 note right of eng
   lexer → parser → binder
@@ -45,7 +49,13 @@ end note
 note bottom of sto
   Writer único serializado;
   leitores concorrentes.
-  Close faz quiesce antes
-  de liberar o lock.
+  Close faz quiesce e solta o
+  flock POR ÚLTIMO, depois de
+  fechar todos os arquivos.
+end note
+
+note bottom of bmp
+  Um diretório por FieldID (5 dígitos),
+  uma posting por valorID (8 dígitos).
 end note
 @enduml

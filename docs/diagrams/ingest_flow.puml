@@ -27,11 +27,22 @@ end
 mat -> st : GetByKey(key) — estado anterior
 st --> mat : Record{payload, seq} ou ausente
 
-alt sequence do evento <= a gravada
+alt dataset COM bloco sequence: e seq do evento <= a gravada
   mat --> cli : Stale (descartado, §25)
 end
+note over mat
+  O teste de stale só existe quando o YAML
+  do dataset declara "sequence:". Sem ele
+  schema.Seq é nil e TUDO é aplicado na
+  ordem de chegada — inclusive reprocessamento
+  antigo sobre estado novo.
+end note
 
-mat -> mat : mergeRecords(prev, patch)\nnull REMOVE o campo (D2)
+alt mode: merge (padrão)
+  mat -> mat : mergeRecords(prev, patch)\nnull REMOVE o campo (D2)
+else mode: replace
+  mat -> mat : encodePatch(patch)\no estado anterior é descartado (§23)
+end
 mat -> st : Put(key, seq, flags, payload, prev)
 activate st
 
@@ -39,17 +50,48 @@ st -> st : ValidateRecord\n(ordem, tetos de formato)
 st -> st : valida fieldIDs contra o dicionário
 st -> seg : Append(record)
 seg --> st : offset
-st -> idx : diff prev↔novo nos campos indexados\n(Clear + Set nos bitmaps)
-st -> idx : publica location\n(u64 atômico: segmento|offset|flags)
+st -> st : primary insert-if-absent\n(só para key nova)
+
+group Fase SET — ANTES do commit
+  st -> idx : liga as postings dos valores NOVOS\n(bitmap)
+end
 note right of idx
-  A location é publicada POR ÚLTIMO:
-  até ela existir, a row não é visível
-  para leitor nenhum.
+  Enquanto a location não foi publicada o
+  bitmap é um SUPERSET de candidatos: falso
+  POSITIVO, que a revalidação do WHERE (§44)
+  filtra linha a linha. Nunca falso negativo.
 end note
+
+st -> idx : sequences.Set(rowID, seq)
+
+group COMMIT POINT — locations.Publish
+  st -> idx : publica location\n(u64 atômico: segmento|offset|flags)
+end
+note right of idx
+  A row passa a existir para os leitores
+  EXATAMENTE aqui, e não antes.
+end note
+
+group Fase CLEAR — DEPOIS do commit
+  st -> idx : desliga as postings dos valores ANTIGOS\n(bitmap)
+end
+note right of idx
+  Erro aqui é TOLERADO: conta em clearFailures,
+  a ingestão segue, e o resíduo é posting órfã
+  — falso positivo de novo.
+
+  Antecipar o Clear para antes do commit
+  inverteria a garantia: a posting sumiria
+  com a location ainda apontando para o
+  record ANTIGO, ou seja falso NEGATIVO.
+  Falso negativo revalidação nenhuma recupera:
+  a linha simplesmente não é oferecida.
+end note
+
 st --> mat : rowID, criado?
 deactivate st
 
-mat --> cli : Created | Updated
+mat --> cli : Created | Updated | Replaced
 deactivate mat
 
 cli -> st : Checkpoint() a cada N eventos

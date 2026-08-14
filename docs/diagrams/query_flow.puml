@@ -1,16 +1,16 @@
 @startuml query_flow
-title Consulta — do SQL à linha NDJSON
+title Consulta — do SQL à linha NDJSON (o CONSUMIDOR puxa)
 
-participant "nishidb query" as cli
+participant "nishidb query\n(consumidor)" as cli
 participant "lexer" as lex
 participant "parser" as par
 participant "binder" as bnd
 participant "planner" as pln
-participant "executor" as exe
+participant "executor\nRowIterator" as exe
 participant "Store" as st
 participant "StreamWriter\n(NDJSON)" as w
 
-cli -> lex : SELECT … WHERE …
+cli -> lex : Engine.Execute(ctx, dataset, SQL, params)
 lex -> par : tokens (0 alocação)
 par -> par : AST; cadeias AND/OR\nITERATIVAS (left-leaning)
 note right of par
@@ -34,28 +34,68 @@ note right of pln
 end note
 pln --> exe : Plan
 
-exe -> st : abre a fonte\n(GetByKey | LookupBitmap | ScanLive | k-way)
-loop por candidato
+exe --> cli : RowIterator{Next / Row / Err / Close}
+note over cli, exe
+  QUEM DIRIGE É O CONSUMIDOR — o modelo é PULL.
+  O executor não conhece writer nenhum: não há
+  sink para registrar nele, não há callback e não
+  há push. Execute() devolve o iterador e para
+  por aí; nada foi lido ainda (nem a fonte foi
+  aberta — LIMIT 0 não toca o Store).
+  No M1 o consumidor é o CLI; no M3 será o
+  servidor JDBC/HTTP, com as MESMAS obrigações.
+end note
+
+cli -> w : NewStreamWriter(stdout, DefaultBufSize)\n— criado pelo CONSUMIDOR
+
+loop enquanto it.Next() for true
+  cli -> exe : Next()
+  activate exe
+  exe -> st : abre a fonte no PRIMEIRO Next\n(GetByKey | LookupBitmap | ScanLive | k-way)
   exe -> st : GetByRowID(id, buf)
   st --> exe : Record ou "morto"
   alt row sem location ou tombstoned
-    exe -> exe : pula (DeadSkipped)
-  else
-    exe -> exe : coleta slots (merge linear, 1 passada)
-    exe -> exe : REAVALIA o WHERE inteiro (§44)
-    alt não satisfaz
-      exe -> exe : rejeita (Rejected)
-    else
-      exe -> w : WriteRow(row)
-      w -> cli : linha NDJSON (flush por limiar)
-    end
+    exe -> exe : pula (DeadSkipped)\ne busca o próximo candidato
   end
+  exe -> exe : coleta slots (merge linear, 1 passada)
+  exe -> exe : REAVALIA o WHERE inteiro (§44)
+  alt não satisfaz
+    exe -> exe : rejeita (Rejected)\ne busca o próximo candidato
+  end
+  exe --> cli : true
+  deactivate exe
+
+  cli -> exe : Row()
+  exe --> cli : Row — VIEW sobre o buffer da iteração
+  note right of cli
+    OBRIGAÇÃO 1: a Row vale SOMENTE até o
+    próximo Next(). Guardar a linha exige
+    COPIAR agora. O StreamWriter cumpre isso
+    por construção: serializa dentro da
+    própria iteração e não retém a view.
+  end note
+  cli -> w : WriteRow(row)
+  w -> w : serializa no buffer; escreve no\nstdout ao passar do limiar
 end
 
+cli -> w : Flush()
+note right of w
+  OBRIGAÇÃO 2: sem o Flush final, a última
+  fatia de linhas fica no buffer e o cliente
+  vê um resultado truncado — sem erro nenhum.
+end note
+
+cli -> exe : Err() — distingue fim, LIMIT, teto,\ncancelamento e erro
+cli -> exe : Close() (idempotente, fecha a fonte)
+
 note over exe
-  Memória O(batch), nunca O(resultado):
-  38 alocações por query, constantes de
-  1.000 a 100.000 linhas.
+  Memória O(batch), nunca O(resultado): não há
+  buffer de rows. É a alocação por LINHA que
+  está gateada em ZERO — mesma query sobre
+  1.000 e 8.000 rows, contagens exatamente
+  iguais. O custo FIXO por query é de algumas
+  dezenas de alocações e varia com a forma da
+  consulta (ver architecture.md).
   LIMIT fecha a fonte na hora.
 end note
 @enduml

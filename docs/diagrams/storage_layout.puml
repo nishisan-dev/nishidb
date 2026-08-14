@@ -1,5 +1,5 @@
 @startuml storage_layout
-title Layout em disco de um dataset
+title Layout em disco de um dataset (nomes exatos, como estão no disco)
 
 skinparam componentStyle rectangle
 
@@ -11,7 +11,9 @@ folder "<dataset>/" {
     artifact "primary.idx\nhash aberto, linear probing\nslots de 16 B" as prim
     artifact "locations.idx\nu64 por rowId:\nsegmento | offset | flags" as loc
     artifact "sequences.idx\nint64 por rowId" as seqs
-    artifact "bitmaps/<campo>/\nposting por valor + values.dict" as bmp
+    folder "bitmap/" {
+      artifact "00003/  — um diretório por FieldID\n(5 dígitos, zeros à esquerda)\n  values.dict\n  00000000.bm, 00000001.bm, …\n  (uma posting por valorID, 8 dígitos)" as bmp
+    }
   }
   folder "metadata/" {
     artifact "fields.dict\nnome → fieldID (v2, com typeHint)" as fd
@@ -39,9 +41,18 @@ end note
 note right of loc
   mmap: cresce com o dataset,
   mas é página de ARQUIVO.
-  Na rodada de 8M: 386 MiB de
-  RSS de arquivo contra 71 MiB
-  de RSS anônimo.
+  Rodada de aceite de 8M (2026-08-15),
+  ao fim do STEADY: 386,6 MiB de RSS
+  de ARQUIVO contra 69,8 MiB de RSS
+  anônimo (aceite-8m-20260815.md).
+end note
+
+note bottom of bmp
+  O diretório é nomeado pelo FieldID
+  NUMÉRICO, não pelo nome do campo do
+  YAML — a tradução está no fields.dict.
+  É por isso que a recusa de bitmap
+  também nomeia o campo por número.
 end note
 
 note bottom of man
