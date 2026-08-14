@@ -132,6 +132,11 @@ type Compiled struct {
 	Unknown    UnknownPolicy
 	MaxRows    int
 	Timeout    time.Duration
+	// Errors é a política de erro de evento do §101, resolvida. Vive na forma
+	// compilada porque o caminho de ingestão — que é onde ela vale — só
+	// carrega o Compiled, e ir buscar a DatasetSpec de novo ali obrigaria a
+	// carregar o YAML duas vezes.
+	Errors ErrorsSpec
 
 	Key, Seq, TTL *CompiledField
 
@@ -150,6 +155,7 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 		Name:    s.Name,
 		MaxRows: s.Query.MaxRows,
 		Timeout: s.Query.Timeout,
+		Errors:  s.Errors,
 		byName:  make(map[string]*CompiledField),
 		byID:    make(map[types.FieldID]*CompiledField),
 		exclude: make(map[string]struct{}, len(s.Schema.Exclude)),

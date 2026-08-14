@@ -9,7 +9,9 @@ import (
 	"os"
 	"time"
 
+	nishiconfig "github.com/nishisan-dev/nishidb/internal/config"
 	"github.com/nishisan-dev/nishidb/internal/materializer"
+	"github.com/nishisan-dev/nishidb/internal/schema"
 )
 
 // Padrões do checkpoint periódico.
@@ -30,10 +32,10 @@ const (
 // entrou por falha nossa ou do dataset: é perda de dado, e sair com 0 dali faz
 // um pipeline que testa $? tratar perda como sucesso.
 type resumoIngest struct {
-	lidos, aplicados, criados, atualizados, stale int64
-	descartados                                   [materializer.NumCategories]int64
-	falhas                                        [materializer.NumCategories]int64
-	descartadosTotal, falhasTotal                 int64
+	lidos, aplicados, criados, atualizados, substituidos, stale int64
+	descartados                                                 [materializer.NumCategories]int64
+	falhas                                                      [materializer.NumCategories]int64
+	descartadosTotal, falhasTotal                               int64
 }
 
 // gravidadeIngest ordena os desfechos possíveis de uma ingestão do MAIS grave
@@ -52,7 +54,7 @@ type resumoIngest struct {
 //   - 1 (uso) por último entre os erros: é o vala-comum do codigoDoErro, o
 //     único código que manda o operador olhar a linha de comando. Qualquer
 //     desfecho nomeado diz mais.
-var gravidadeIngest = [...]int{ExitWriter, ExitDataset, ExitPerdaDeDados, ExitInterromp, ExitUso}
+var gravidadeIngest = [...]int{ExitWriter, ExitDataset, ExitPerdaDeDados, ExitParadoPorPolitica, ExitInterromp, ExitUso}
 
 // desfechoMaisGrave devolve, entre dois códigos de saída, o de maior
 // gravidade. Código sem gravidade declarada (nenhum é alcançável hoje pelo
@@ -81,7 +83,7 @@ func runIngest(args []string, amb Ambiente) int {
 	fs := flag.NewFlagSet("ingest", flag.ContinueOnError)
 	fs.SetOutput(amb.Stderr)
 	var (
-		config    = fs.String("config", "", "caminho do nishidb.yaml")
+		argConfig = fs.String("config", "", "caminho do nishidb.yaml")
 		dataset   = fs.String("dataset", "", "nome do dataset")
 		input     = fs.String("input", "-", "arquivo NDJSON de entrada, ou - para stdin")
 		everyN    = fs.Int("checkpoint-every", checkpointEventosPadrao, "checkpoint a cada N eventos (0 desliga)")
@@ -95,7 +97,7 @@ func runIngest(args []string, amb Ambiente) int {
 			everyFlag = true
 		}
 	})
-	if *config == "" || *dataset == "" {
+	if *argConfig == "" || *dataset == "" {
 		fmt.Fprintln(amb.Stderr, "ingest: --config e --dataset são obrigatórios")
 		return ExitUso
 	}
@@ -111,7 +113,7 @@ func runIngest(args []string, amb Ambiente) int {
 				"O consumo de memória vai acompanhar o tamanho do dataset.")
 	}
 
-	cfg, err := CarregaConfig(*config)
+	cfg, err := nishiconfig.CarregaConfig(*argConfig)
 	if err != nil {
 		fmt.Fprintln(amb.Stderr, "ingest:", err)
 		return ExitUso
@@ -189,6 +191,16 @@ func runIngest(args []string, amb Ambiente) int {
 		case r.Category.BadEvent():
 			resumo.descartados[r.Category]++
 			resumo.descartadosTotal++
+			// §101: a política do dataset decide entre seguir e parar. Até o
+			// M2 ela era hardcoded como log-and-skip, e a chave `errors:` do
+			// YAML não era sequer parseada — o operador escrevia `stop` e
+			// nada acontecia.
+			if compilado.Errors.InvalidEvent == schema.InvalidEventStop {
+				fmt.Fprintf(amb.Stderr,
+					"ingest: errors.invalidEvent=stop e o evento %d é %v: %v\n",
+					resumo.lidos, r.Category, r.Err)
+				return encerra(ExitParadoPorPolitica)
+			}
 		case r.Err != nil:
 			// Balde 2: a row não entrou e não foi por culpa do evento.
 			resumo.falhas[r.Category]++
@@ -200,12 +212,14 @@ func runIngest(args []string, amb Ambiente) int {
 				resumo.criados++
 			case materializer.ActionUpdated:
 				resumo.atualizados++
+			case materializer.ActionReplaced:
+				resumo.substituidos++
 			case materializer.ActionStale:
 				resumo.stale++
 			}
 		}
 
-		if precisaCheckpoint(*everyN, resumo.lidos, ultimoCP, cfg.checkpointInterval) {
+		if precisaCheckpoint(*everyN, resumo.lidos, ultimoCP, cfg.IntervaloDeCheckpoint()) {
 			if err := st.Checkpoint(); err != nil {
 				fmt.Fprintln(amb.Stderr, "ingest: checkpoint:", err)
 				return encerra(codigoDoErro(err))
@@ -275,8 +289,10 @@ func imprimeResumo(w io.Writer, r resumoIngest, dur time.Duration) {
 	if dur > 0 {
 		taxa = float64(r.lidos) / dur.Seconds()
 	}
-	fmt.Fprintf(w, "ingest: %d lidos, %d aplicados (%d criados, %d atualizados, %d stale) em %s (%.0f ev/s)\n",
-		r.lidos, r.aplicados, r.criados, r.atualizados, r.stale, dur.Round(time.Millisecond), taxa)
+	// substituidos aparece porque `mode: replace` funcionava e era contado no
+	// materializer, mas sumia do resumo — o total não fechava com as parcelas.
+	fmt.Fprintf(w, "ingest: %d lidos, %d aplicados (%d criados, %d atualizados, %d substituídos, %d stale) em %s (%.0f ev/s)\n",
+		r.lidos, r.aplicados, r.criados, r.atualizados, r.substituidos, r.stale, dur.Round(time.Millisecond), taxa)
 
 	// Duas linhas distintas para os dois baldes: "descartado" é uma decisão
 	// sobre um evento ruim, "não aplicado" é perda. Juntá-las numa linha só foi

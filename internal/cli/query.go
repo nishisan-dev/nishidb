@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 
+	nishiconfig "github.com/nishisan-dev/nishidb/internal/config"
 	"github.com/nishisan-dev/nishidb/internal/query"
 	"github.com/nishisan-dev/nishidb/internal/query/binder"
 	"github.com/nishisan-dev/nishidb/internal/query/executor"
@@ -17,14 +18,14 @@ func runQuery(args []string, amb Ambiente) int {
 	fs := flag.NewFlagSet("query", flag.ContinueOnError)
 	fs.SetOutput(amb.Stderr)
 	var (
-		config  = fs.String("config", "", "caminho do nishidb.yaml")
-		dataset = fs.String("dataset", "", "nome do dataset")
-		limit   = fs.Int("limit", -1, "sobrepõe o LIMIT da query")
+		argConfig = fs.String("config", "", "caminho do nishidb.yaml")
+		dataset   = fs.String("dataset", "", "nome do dataset")
+		limit     = fs.Int("limit", -1, "sobrepõe o LIMIT da query")
 	)
 	if err := fs.Parse(args); err != nil {
 		return ExitUso
 	}
-	if *config == "" || *dataset == "" {
+	if *argConfig == "" || *dataset == "" {
 		fmt.Fprintln(amb.Stderr, "query: --config e --dataset são obrigatórios")
 		return ExitUso
 	}
@@ -37,7 +38,7 @@ func runQuery(args []string, amb Ambiente) int {
 		sql = comLimit(sql, *limit)
 	}
 
-	cfg, err := CarregaConfig(*config)
+	cfg, err := nishiconfig.CarregaConfig(*argConfig)
 	if err != nil {
 		fmt.Fprintln(amb.Stderr, "query:", err)
 		return ExitUso

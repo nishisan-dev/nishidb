@@ -151,7 +151,7 @@ $ cat eventos.ndjson
 {"id":"CMP-1","_SEQ":2,"Acct-Terminate-Cause":"User-Request"}
 
 $ nishidb ingest --config nishidb.yaml --dataset radius_sessions --input eventos.ndjson
-ingest: 3 lidos, 3 aplicados (2 criados, 1 atualizados, 0 stale) em 10ms (289 ev/s)
+ingest: 3 lidos, 3 aplicados (2 criados, 1 atualizados, 0 substituídos, 0 stale) em 10ms (289 ev/s)
 ```
 
 O terceiro evento é um **patch**: ele acrescenta um campo à sessão `CMP-1` sem
@@ -245,6 +245,7 @@ Fora da v1: `ORDER BY`, `GROUP BY`, `JOIN`, agregações, `NOT` genérico,
 | 5 | resultado truncado pelo teto `query.maxRows` |
 | 6 | interrompido por sinal |
 | 7 | eventos não entraram por falha (perda de dado): investigue e reprocesse |
+| 8 | ingestão parada por `errors.invalidEvent: stop` — veja o evento e decida |
 
 O 7 é o que separa perda de sucesso. Evento **ruim** (JSON inválido, key
 ausente, tipo incompatível) é descartado pela política §101 e a ingestão termina

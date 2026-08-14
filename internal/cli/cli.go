@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 
+	nishiconfig "github.com/nishisan-dev/nishidb/internal/config"
 	"github.com/nishisan-dev/nishidb/internal/query/binder"
 	"github.com/nishisan-dev/nishidb/internal/query/executor"
 	"github.com/nishisan-dev/nishidb/internal/query/parser"
@@ -32,6 +33,15 @@ const (
 	// é útil. Distinto do 0: houve perda, e um pipeline que testa $? precisa
 	// saber disso.
 	ExitPerdaDeDados = 7
+	// ExitParadoPorPolitica: a ingestão PAROU porque a política do dataset
+	// mandou (`errors.invalidEvent: stop`, §101).
+	//
+	// É código próprio, e não uma reciclagem do 7, porque a causa é outra e a
+	// ação também: no 7 os eventos não entraram por falha NOSSA e a resposta é
+	// investigar o motor; aqui a parada foi PEDIDA pela configuração diante de
+	// um evento ruim, e a resposta é olhar o evento e decidir — possivelmente
+	// pulando-o com `nishidb offsets`. Reusar o 7 mentiria sobre a causa.
+	ExitParadoPorPolitica = 8
 )
 
 // Ambiente são as dependências de processo, injetadas para o teste rodar o
@@ -47,8 +57,10 @@ type Ambiente struct {
 const uso = `nishidb — engine de materialização e consulta
 
 USO
-  nishidb ingest --config <nishidb.yaml> --dataset <nome> --input <arquivo|-> [--checkpoint-every N]
-  nishidb query  --config <nishidb.yaml> --dataset <nome> [--limit N] '<SQL>'
+  nishidb ingest  --config <nishidb.yaml> --dataset <nome> --input <arquivo|-> [--checkpoint-every N]
+  nishidb query   --config <nishidb.yaml> --dataset <nome> [--limit N] '<SQL>'
+  nishidb server  --config <nishidb.yaml> [--log-format json|texto] [--log-level N] [--pprof <addr>]
+  nishidb offsets --config <nishidb.yaml> --dataset <nome> (--show | --reset earliest|latest | --set p:o,...) [--yes]
 
 INGEST
   Lê NDJSON (um evento JSON por linha) e materializa no dataset.
@@ -61,6 +73,17 @@ QUERY
   --limit N              sobrepõe o LIMIT da query. O maxRows do dataset
                          continua valendo como teto.
 
+SERVER
+  Processo de longa duração: consultas e ingestão Kafka no MESMO processo.
+  Consome os datasets com source.kafka.enabled: true; os demais ficam só
+  consultáveis. Expõe GET /metrics e GET /v1/health.
+  --pprof <addr>         endpoints de debug num listener próprio. Modo
+                         administrativo: não exponha esta porta.
+
+OFFSETS
+  Lê e reposiciona a posição no tópico. Exige o servidor PARADO (toma o
+  flock do dataset). --reset e --set pedem --yes.
+
 EXIT CODES
   0  sucesso
   1  erro de uso ou de configuração
@@ -70,6 +93,7 @@ EXIT CODES
   5  resultado truncado pelo teto de query.maxRows
   6  interrompido por sinal
   7  eventos não entraram por falha (perda de dado): investigue e reprocesse
+  8  ingestão parada por errors.invalidEvent: stop — veja o evento e decida
 `
 
 // Run executa o CLI e devolve o exit code. Não chama os.Exit: quem decide
@@ -84,6 +108,10 @@ func Run(args []string, amb Ambiente) int {
 		return runIngest(args[1:], amb)
 	case "query":
 		return runQuery(args[1:], amb)
+	case "server":
+		return runServer(args[1:], amb)
+	case "offsets":
+		return runOffsets(args[1:], amb)
 	case "-h", "--help", "help":
 		fmt.Fprint(amb.Stdout, uso)
 		return ExitOK
@@ -128,7 +156,7 @@ func codigoDoErro(err error) int {
 // Os bitmaps saem do PRÓPRIO YAML, e são passados por NOME: os FieldIDs
 // nascem do dicionário, que vive dentro do Store — exigir IDs aqui obrigaria
 // a abrir sem índice, compilar, fechar e reabrir.
-func abreDataset(cfg *Config, nome string) (*storage.Store, *schema.Compiled, error) {
+func abreDataset(cfg *nishiconfig.Config, nome string) (*storage.Store, *schema.Compiled, error) {
 	spec, err := schema.Load(cfg.SpecDoDataset(nome), cfg.DefaultsDeQuery())
 	if err != nil {
 		return nil, nil, fmt.Errorf("dataset %q: %w", nome, err)
@@ -146,7 +174,7 @@ func abreDataset(cfg *Config, nome string) (*storage.Store, *schema.Compiled, er
 
 	st, err := storage.Open(storage.Options{
 		Dir:              cfg.DirDoDataset(nome),
-		SegmentSize:      cfg.segmentSize,
+		SegmentSize:      cfg.SegmentSize(),
 		BitmapFieldNames: bitmaps,
 	})
 	if err != nil {
