@@ -39,9 +39,10 @@ note over cli, exe
   QUEM DIRIGE É O CONSUMIDOR — o modelo é PULL.
   O executor não conhece writer nenhum: não há
   sink para registrar nele, não há callback e não
-  há push. Execute() devolve o iterador e para
-  por aí; nada foi lido ainda (nem a fonte foi
-  aberta — LIMIT 0 não toca o Store).
+  há push. Execute() devolve o iterador; a FONTE
+  JÁ FOI ABERTA nesse momento (executor.Open a
+  abre por último, depois de validar o plano),
+  mas nenhuma ROW foi lida ainda.
   No M1 o consumidor é o CLI; no M3 será o
   servidor JDBC/HTTP, com as MESMAS obrigações.
 end note
@@ -51,7 +52,7 @@ cli -> w : NewStreamWriter(stdout, DefaultBufSize)\n— criado pelo CONSUMIDOR
 loop enquanto it.Next() for true
   cli -> exe : Next()
   activate exe
-  exe -> st : abre a fonte no PRIMEIRO Next\n(GetByKey | LookupBitmap | ScanLive | k-way)
+  exe -> exe : puxa o próximo candidato da fonte\njá aberta (GetByKey | LookupBitmap | ScanLive | k-way)
   exe -> st : GetByRowID(id, buf)
   st --> exe : Record ou "morto"
   alt row sem location ou tombstoned
@@ -69,10 +70,13 @@ loop enquanto it.Next() for true
   exe --> cli : Row — VIEW sobre o buffer da iteração
   note right of cli
     OBRIGAÇÃO 1: a Row vale SOMENTE até o
-    próximo Next(). Guardar a linha exige
-    COPIAR agora. O StreamWriter cumpre isso
-    por construção: serializa dentro da
-    própria iteração e não retém a view.
+    próximo Next(). Reter exige cópia PROFUNDA:
+    ColView.Val.Bytes aponta para o buffer do
+    iterador, então copiar a struct não basta —
+    os bytes de cada coluna têm de ser copiados.
+    O StreamWriter cumpre isso por construção:
+    serializa dentro da própria iteração e não
+    retém a view.
   end note
   cli -> w : WriteRow(row)
   w -> w : serializa no buffer; escreve no\nstdout ao passar do limiar

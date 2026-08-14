@@ -126,10 +126,13 @@ com o servidor do M3.
 
 > **Restrição de deployment.** O `flock` trava a **descrição de abertura** do
 > arquivo `LOCK` — o que dois processos precisam enxergar em comum é o inode
-> **desse arquivo**, não o do diretório. Ele **não garante exclusão mútua em
-> NFS** (sem `local_lock=flock|all`), nem em alguns FUSE, CIFS e overlayfs:
-> nesses sistemas o lock pode ser satisfeito localmente em cada cliente, e cada
-> um acha que ganhou. Dois writers no mesmo dataset significam dois overlays de
+> **desse arquivo**, não o do diretório. Ele **não é confiável em NFS**, nem em
+> alguns FUSE, CIFS e overlayfs. No NFS o comportamento depende da montagem: a
+> opção **`local_lock=flock` (ou `all`) torna o `flock` LOCAL a cada cliente** —
+> nesse caso dois hosts travam cada um o seu, e os dois acham que ganharam. Sem
+> ela o lock é submetido ao servidor, o que costuma funcionar, mas depende de
+> versão e implementação — não é garantia sobre a qual valha apostar um dataset.
+> Dois writers no mesmo dataset significam dois overlays de
 > location, dois contadores de rowId e dois checkpoints — corrupção garantida.
 > **Mantenha o diretório do dataset em disco local.**
 
@@ -275,11 +278,13 @@ conhecê-las. Cada uma tem dono em [`debitos.md`](debitos.md).
 - **Campo indexado tem teto de 64 KiB** (`types.MaxIndexedValueBytes`, limite do
   `u16` do dicionário de valores). Valor acima disso faz o evento inteiro
   falhar.
-- **O conjunto de bitmaps é IMUTÁVEL depois da primeira row, nas duas
-  direções** — e a remoção, na prática, desde a criação do dataset. O tamanho
-  dos valores **não entra em nenhuma das duas decisões**:
-  - **Acrescentar** `index: bitmap` a um campo é recusado assim que o dataset
-    tem `RowCount > 0` (`internal/storage/store.go:420-438`), qualquer que seja
+- **O conjunto de bitmaps é IMUTÁVEL depois da primeira row CHECKPOINTADA, nas
+  duas direções** — e a remoção, na prática, desde a criação do dataset. O gate
+  de acréscimo é o `RowCount` do **manifest**, não as rows em disco: rows
+  escritas e ainda não checkpointadas não o alimentam. O tamanho dos valores
+  **não entra em nenhuma das duas decisões**:
+  - **Acrescentar** `index: bitmap` a um campo é recusado assim que o manifest
+    registra `RowCount > 0` (`internal/storage/store.go:420-438`), qualquer que seja
     o valor gravado: o índice cobriria só os records futuros e a query indexada
     omitiria as rows antigas. Backfill não existe no M1 (débito 22). Enquanto o
     dataset está vazio, acrescentar é permitido.

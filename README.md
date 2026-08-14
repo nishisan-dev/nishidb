@@ -128,7 +128,7 @@ include`) e vira coluna `auto`, mas só é consultável pelo **nome original** �
 o alias existe apenas para campo declarado.
 
 O `index: bitmap` dos campos é **definitivo**: acrescentar um bitmap passa a ser
-recusado assim que o dataset tem a primeira row, e **remover** um bitmap
+recusado assim que o manifest registra a primeira row, e **remover** um bitmap
 existente é recusado desde a criação — os dois com exit 3, num dataset íntegro,
 e o tamanho dos valores não tem nada a ver com isso. Não há backfill nem
 migração in-place: a única saída é reprocessar a fonte para um dataset com o

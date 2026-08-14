@@ -114,8 +114,9 @@ no fim da seção a que pertence, e nada é renumerado.
 Documentados em [`architecture.md`](architecture.md), seção "Operar isto":
 `flock` inválido em NFS/FUSE/overlayfs (e o arquivo `LOCK`, que nunca é
 removido), detecção de corrupção só na leitura, teto de 64 KiB em campo
-indexado, **conjunto de bitmaps imutável depois da primeira row nas duas
-direções** — acrescentar `index: bitmap` num dataset com `RowCount > 0` e
+indexado, **conjunto de bitmaps imutável depois da primeira row checkpointada,
+nas duas direções** — acrescentar `index: bitmap` num dataset cujo manifest
+registra `RowCount > 0` e
 removê-lo de um campo já indexado são recusados igualmente, com **exit 3** num
 dataset íntegro, e o tamanho dos valores não entra na decisão —, pausas do
 rehash e do `msync`, e o phantom commit.

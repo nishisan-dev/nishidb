@@ -12,7 +12,7 @@ folder "<dataset>/" {
     artifact "locations.idx\nu64 por rowId:\nsegmento | offset | flags" as loc
     artifact "sequences.idx\nint64 por rowId" as seqs
     folder "bitmap/" {
-      artifact "00003/  — um diretório por FieldID\n(5 dígitos, zeros à esquerda)\n  values.dict\n  00000000.bm, 00000001.bm, …\n  (uma posting por valorID, 8 dígitos)" as bmp
+      artifact "00003/  — um diretório por FieldID\n(5 dígitos, zeros à esquerda)\n  values.dict\n  00000001.bm, 00000002.bm, …\n  (uma posting por valorID, 8 dígitos,\n  1-based: não existe 00000000.bm)" as bmp
     }
   }
   folder "metadata/" {
