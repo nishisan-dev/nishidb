@@ -70,12 +70,15 @@ import (
 // pequena no envelope este gate não vê; quem vê é o orçamento de alocações e
 // os benchmarks de benchmark/micro.
 //
-// FORA DO BUILD COM -race, e isto foi medido, não presumido: sob o detector o
-// laço infla ~5x (mediana de 16.100 ev/s para 3.100 ev/s, n=80 em cada trilha)
-// enquanto o custo de um checkpoint não infla, então a mesma mutação que dá
+// FORA DO BUILD COM -race, e isto foi medido, não presumido: o detector infla
+// o laço mas não infla o custo de um checkpoint, então a mesma mutação que dá
 // 1,78x-2,01x aqui dá 1,12x-1,30x sob -race (12 execuções), contra 0,96x-1,13x
 // sem mutação (16 execuções). As duas populações se tocam: não existe fator
-// que separe uma da outra. O gate roda em `make test`, se
+// que separe uma da outra — e é esse o fato que tira o gate desta trilha.
+// (O quanto o detector infla o laço varia com máquina, carga e versão do Go:
+// medições nesta máquina ficaram entre ~3,7x e ~5x conforme a condição. O
+// número não é estável o bastante para virar afirmação; a sobreposição das
+// duas populações é, e foi reproduzida.) O gate roda em `make test`, se
 // anuncia como SKIP em `make test-race` (vazao_race_test.go), e o que ele NÃO
 // cobre continua sendo regressão no storage — que derruba os dois lados na
 // mesma proporção e mantém a razão. Essa é a jurisdição de benchmark/micro e
