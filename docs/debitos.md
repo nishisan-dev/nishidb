@@ -6,10 +6,12 @@ revisão de fechamento, cuja unidade foi a **fronteira entre camadas** e não a
 tarefa. Cada item aberto tem **milestone dono**; nenhum depende de trabalho não
 planejado.
 
-Os itens **37 a 45** entraram na errata pós-fechamento: são coisas que estavam
+Os itens **37 a 46** entraram na errata pós-fechamento: são coisas que estavam
 abertas e não tinham registro nenhum — nem em documento, nem em comentário, nem
-em teste. A numeração é **estável** (documentos e comentários citam "débito N"),
-então item novo entra no fim da seção a que pertence, e nada é renumerado.
+em teste. Os dois últimos (**45** e **46**) vieram da segunda rodada da errata,
+que foi atrás justamente do que a primeira deixou passar. A numeração é
+**estável** (documentos e comentários citam "débito N"), então item novo entra
+no fim da seção a que pertence, e nada é renumerado.
 
 ## Resolvidos durante o M1 (registro, para não voltarem)
 
@@ -51,6 +53,7 @@ então item novo entra no fim da seção a que pertence, e nada é renumerado.
 | 8 | **§14.20 — nenhum CRC verificado antes do `DurableOffset` no `Open`** | Corrupção em região selada só aparece na leitura, no meio do resultado |
 | 9 | **§101 política `stop`** (a chave `errors:` sequer é parseada) e **§102 dead-letter** | Nenhum é bloqueante; ambos são **silêncio**, que é o problema |
 | 10 | **§78 `query.resultBatchSize`** não parseado | Provavelmente só a chave falta |
+| 46 | **A reescrita textual de SQL do `--limit` deve morrer** | O CLI corta a cláusula `LIMIT` do texto e anexa a sua, porque a v1 não tem serializador de AST. O corte já usa o lexer de verdade — some a segunda gramática —, mas continua sendo edição de texto: query que não tokeniza não é cortada, e a flag deixa de valer nela (registrado em `docs/architecture.md`, seção Consulta, com o exit code medido). O **binder já conhece o `LIMIT` da AST**: a saída definitiva é o `--limit` virar parâmetro do plano, e aí não sobra caso em que a flag depende de o texto ser reescrito. Enquanto isso não acontece, `comLimit`/`ultimoLimit` em `internal/cli/query.go` são a única parte do CLI que interpreta SQL fora do pipeline |
 
 ### M3 — protocolo e driver
 

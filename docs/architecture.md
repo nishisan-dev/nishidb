@@ -164,6 +164,27 @@ Latências medidas com 8M rows e ingestão concorrente:
 A diferença entre as duas colunas — cerca de 12 µs no point lookup — é o custo
 de parse, bind, plan e serialização NDJSON.
 
+**O `--limit` do CLI reescreve o texto da query, e isso mudou de comportamento
+na errata do M1.** A flag corta a cláusula `LIMIT` que a query já tiver e anexa
+a sua, porque a v1 não tem serializador de AST — não há como reescrever o plano.
+Quem separa cláusula de literal passou a ser o **lexer de verdade**, o mesmo que
+o `Execute` usa, em vez de uma varredura textual própria que só conhecia a aspa
+simples.
+
+A consequência que o operador precisa saber: **query que não tokeniza deixou de
+ser cortada**. Antes, um texto malformado que tivesse um `LIMIT` legítimo antes
+do trecho ilegível — `SELECT id FROM t LIMIT 3 AND status = 'x`, com a aspa
+aberta e nunca fechada — era cortado nesse `LIMIT`, e o comando executava
+`SELECT id FROM t LIMIT <n>`: uma query **diferente da que o usuário escreveu**,
+que emitia linhas e não acusava nada. Hoje o `--limit` é apenas anexado, e a
+query sai com erro de sintaxe na posição real (`ExitQuery`, código 2 — medido, e
+o mesmo código que a query sairia **sem** a flag; a flag deixou de alterar o
+veredito). É perda de conveniência num caso que só existia por acidente, em
+troca de o comando nunca mais executar texto que ninguém escreveu.
+
+Essa reescrita textual tem prazo: no M2 o `--limit` deve virar parâmetro do
+plano, já que o binder conhece o `LIMIT` da AST (débito 46).
+
 ## Formato de saída
 
 NDJSON: uma linha por row, terminada em LF. Colunas **sempre presentes**, com
