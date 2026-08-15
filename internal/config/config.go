@@ -62,6 +62,22 @@ type Config struct {
 		Port    *int   `yaml:"port"`
 	} `yaml:"server"`
 
+	// Runtime é o bloco §79/§80. Só query.maxConcurrent tem leitor: é o teto
+	// de consultas simultâneas que o §80 nomeia e que o §81 autoriza a fazer
+	// valer REJEITANDO consulta antes de comprometer a ingestão.
+	//
+	// As demais chaves continuam aceitas e sem efeito (débito 15), mas não em
+	// silêncio: quem escreve `memoryTarget: 1GiB` conclui que há um teto de
+	// memória, e não há. A subida avisa, como já faz com storage.durability.
+	Runtime struct {
+		MemoryTarget        string `yaml:"memoryTarget"`
+		ManagedMemoryTarget string `yaml:"managedMemoryTarget"`
+		Query               struct {
+			MaxConcurrent     *int   `yaml:"maxConcurrent"`
+			MaxBufferPerQuery string `yaml:"maxBufferPerQuery"`
+		} `yaml:"query"`
+	} `yaml:"runtime"`
+
 	// query.defaultMaxRows e query.defaultTimeout são os DEFAULTS GLOBAIS do
 	// teto de linhas e do timeout de consulta: valem para o dataset que omite
 	// `query.maxRows`/`query.timeout` no YAML dele, e perdem para o dataset
@@ -84,6 +100,7 @@ type Config struct {
 	defaultTimeout     time.Duration
 	resultBatchSize    int
 	serverPort         int
+	maxConcurrent      int
 }
 
 const (
@@ -93,7 +110,23 @@ const (
 	timeoutPadrao            = 30 * time.Second
 	resultBatchPadrao        = 256
 	serverPortPadrao         = 9142
-	serverBindPadrao         = "0.0.0.0"
+	maxConcurrentPadrao      = 16
+
+	// serverBindPadrao é LOOPBACK, e não o 0.0.0.0 que o exemplo do §78
+	// escreve.
+	//
+	// A razão é o que passou a existir na Fase 6: até o M2 o servidor só
+	// expunha /metrics e /v1/health, que são operacionais e defensáveis numa
+	// rede interna. Com POST /v1/query ele expõe OS DADOS, e a autenticação do
+	// §74-77 só chega na Fase 11 — um default aberto entregaria leitura
+	// irrestrita de todo o dataset a quem alcançasse a porta.
+	//
+	// Não é contradição com o §78: o exemplo de lá traz `bind: 0.0.0.0` no
+	// MESMO arquivo em que liga `tls.enabled` e `authentication.enabled`. O
+	// bind aberto da spec pressupõe autenticação; enquanto ela não existe, o
+	// default seguro é o loopback e expor é ato explícito de quem opera — que
+	// a subida registra com um aviso.
+	serverBindPadrao = "127.0.0.1"
 )
 
 // CarregaConfig lê e valida o arquivo de configuração.
@@ -142,6 +175,9 @@ func CarregaConfig(path string) (*Config, error) {
 	if c.serverPort, err = units.InteiroPositivo(c.Server.Port, serverPortPadrao); err != nil {
 		return nil, fmt.Errorf("configuração %s: server.port: %w", path, err)
 	}
+	if c.maxConcurrent, err = units.InteiroPositivo(c.Runtime.Query.MaxConcurrent, maxConcurrentPadrao); err != nil {
+		return nil, fmt.Errorf("configuração %s: runtime.query.maxConcurrent: %w", path, err)
+	}
 	if c.serverPort > 65535 {
 		return nil, fmt.Errorf("configuração %s: server.port %d fora de 1..65535", path, c.serverPort)
 	}
@@ -163,7 +199,63 @@ func (c *Config) Endereco() string {
 }
 
 // ResultBatchSize é o tamanho do lote de linhas na resposta (§78).
+//
+// O lote é o de FLUSH: a cada N linhas o servidor descarrega o buffer do
+// stream e entrega o chunk ao cliente. Não é buffer de resultado — o §128
+// proíbe qualquer memória proporcional ao número de linhas, e o writer
+// continua com teto fixo em bytes.
 func (c *Config) ResultBatchSize() int { return c.resultBatchSize }
+
+// MaxConcurrent é o teto de consultas simultâneas do §80.
+//
+// É por PROCESSO, e não por dataset, porque o recurso que ele protege é do
+// processo: o §82 diz que todos os datasets de uma instância dividem o mesmo
+// orçamento de memória, e um teto por dataset multiplicaria o pior caso pelo
+// número deles.
+func (c *Config) MaxConcurrent() int { return c.maxConcurrent }
+
+// BindExposto diz se o servidor vai escutar fora do loopback.
+//
+// Existe para a subida poder AVISAR: enquanto a autenticação do §74-77 não
+// existir (Fase 11), escutar em endereço alcançável significa entregar
+// /v1/query — e com ele os dados — a quem chegar na porta.
+//
+// Nome que não resolve para IP conta como exposto: o servidor vai bindar
+// naquilo, e presumir inocência de um endereço que não se sabe qual é seria
+// errar para o lado errado.
+func (c *Config) BindExposto() bool {
+	if c.Server.Bind == "localhost" {
+		return false
+	}
+	ip := net.ParseIP(c.Server.Bind)
+	if ip == nil {
+		return true
+	}
+	// O unspecified (0.0.0.0, ::) é o caso mais comum e o mais perigoso: ele
+	// escuta em TODAS as interfaces, inclusive as que o operador esqueceu.
+	return !ip.IsLoopback()
+}
+
+// ChavesDeRuntimeIgnoradas nomeia as chaves de `runtime` que este binário
+// aceita e não implementa (débito 15).
+//
+// A lista existe porque configuração que mente é pior que configuração
+// ausente: quem escreve `memoryTarget: 1GiB` e não recebe aviso nenhum conclui
+// que há um teto de memória, e vai dimensionar a máquina por ele. É a mesma
+// doutrina aplicada a storage.durability no M2.
+func (c *Config) ChavesDeRuntimeIgnoradas() []string {
+	var out []string
+	if c.Runtime.MemoryTarget != "" {
+		out = append(out, "runtime.memoryTarget")
+	}
+	if c.Runtime.ManagedMemoryTarget != "" {
+		out = append(out, "runtime.managedMemoryTarget")
+	}
+	if c.Runtime.Query.MaxBufferPerQuery != "" {
+		out = append(out, "runtime.query.maxBufferPerQuery")
+	}
+	return out
+}
 
 // IntervaloDeCheckpoint é a janela de reprocessamento em caso de crash.
 func (c *Config) IntervaloDeCheckpoint() time.Duration { return c.checkpointInterval }

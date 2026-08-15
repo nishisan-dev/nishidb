@@ -1,10 +1,12 @@
 package server_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -14,6 +16,7 @@ import (
 	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/config"
+	"github.com/nishisan-dev/nishidb/internal/logging"
 	"github.com/nishisan-dev/nishidb/internal/server"
 )
 
@@ -348,5 +351,59 @@ func TestServerSemBlocoEnabledSobe(t *testing.T) {
 	}
 	if err := srv.Fecha(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// sobeCapturandoLog monta o servidor com um logger próprio e devolve o que ele
+// escreveu na subida.
+func sobeCapturandoLog(t *testing.T, a *ambiente) string {
+	t.Helper()
+	var buf bytes.Buffer
+	srv, err := server.Novo(a.carrega(), server.Opcoes{
+		Log: logging.New(&buf, logging.FormatoJSON, slog.LevelInfo),
+	})
+	if err != nil {
+		t.Fatalf("subida: %v", err)
+	}
+	if err := srv.Fecha(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.String()
+}
+
+// Com POST /v1/query no ar e sem autenticação até a Fase 11, escutar fora do
+// loopback entrega o dataset a quem alcançar a porta. O default protege; quem
+// abre precisa ver que abriu.
+func TestBindForaDoLoopbackAvisa(t *testing.T) {
+	a := novoAmbienteCom(t, "\nserver:\n  bind: 0.0.0.0\n  port: %d\n")
+	a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))
+
+	saida := sobeCapturandoLog(t, a)
+	if !strings.Contains(saida, "bind.exposto") {
+		t.Fatalf("subida com bind aberto não avisou: %s", saida)
+	}
+	if !strings.Contains(saida, "/v1/query") {
+		t.Fatalf("o aviso não diz o que está exposto: %s", saida)
+	}
+}
+
+// Aviso que aparece sempre é ruído, e ruído treina o operador a ignorar.
+func TestBindEmLoopbackNaoAvisa(t *testing.T) {
+	a := novoAmbienteCom(t, "\nserver:\n  bind: 127.0.0.1\n  port: %d\n")
+	a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))
+
+	if saida := sobeCapturandoLog(t, a); strings.Contains(saida, "bind.exposto") {
+		t.Fatalf("bind em loopback não deveria avisar: %s", saida)
+	}
+}
+
+// Chave de runtime aceita e não implementada é nomeada na subida (débito 15).
+func TestChaveDeRuntimeIgnoradaApareceNaSubida(t *testing.T) {
+	a := novoAmbienteCom(t, "\nserver:\n  bind: 127.0.0.1\n  port: %d\nruntime:\n  memoryTarget: 1GiB\n")
+	a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))
+
+	saida := sobeCapturandoLog(t, a)
+	if !strings.Contains(saida, "runtime.memoryTarget") {
+		t.Fatalf("a chave sem implementação não foi nomeada: %s", saida)
 	}
 }
