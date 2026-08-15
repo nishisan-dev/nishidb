@@ -1,0 +1,55 @@
+{
+  "rodada": "aceite-fase6-http",
+  "data": "2026-08-14",
+  "cenario": {
+    "broker": "redpandadata/redpanda:v24.2.18, 1 nó, 4 partições",
+    "topico": "nishidb-fase6",
+    "eventos_produzidos": 3300001,
+    "dataset": "radius_sessions (fixture do §12)",
+    "bind": "127.0.0.1:9142 (default loopback da Fase 6)",
+    "maxConcurrent": 16,
+    "resultBatchSize": 256
+  },
+  "consultas_durante_ingestao": {
+    "total": 744,
+    "point_lookup_ms": {
+      "p50": 0.72,
+      "p95": 0.949,
+      "max": 2.673
+    },
+    "bitmap_ms": {
+      "p50": 0.936,
+      "p95": 1.376,
+      "max": 1.994
+    },
+    "full_scan_ms": {
+      "p50": 65.506,
+      "p95": 195.76,
+      "max": 228.328
+    },
+    "progresso_da_ingestao_durante_a_medicao": {
+      "rows_inicio": 495152,
+      "rows_fim": 586978,
+      "aplicados_inicio": 1272587,
+      "aplicados_fim": 2186180
+    }
+  },
+  "streaming_no_fio": {
+    "linhas": 100000,
+    "bytes": 9903395,
+    "primeiro_byte_s": 0.001559,
+    "total_s": 0.171765,
+    "fecho": "MAX_ROWS_EXCEEDED (teto de query.maxRows: 100000)"
+  },
+  "estado_final": {
+    "rows": 586979,
+    "eventos": 3300001,
+    "aplicados": 2186181,
+    "stale": 1113820,
+    "descartados": 0,
+    "falhas": 0,
+    "consultas_total": 3279,
+    "consultas_erro": 4,
+    "full_scans_processo": 1094
+  }
+}

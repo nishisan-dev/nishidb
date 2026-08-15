@@ -4,10 +4,13 @@ Guia do caminho completo: build, configuração, subida contra um Kafka real,
 verificação e os modos de falha que o operador vai encontrar. Tudo aqui foi
 executado contra um broker real antes de ser escrito.
 
-> **Leia isto antes de planejar a operação.** Com o `nishidb server` no ar
-> **não há como consultar**: o protocolo remoto é do M3, e `nishidb query` é
-> barrado pelo flock do dataset (exit 3). Hoje o operador ALTERNA — sobe o
-> servidor para ingerir, encerra, e então consulta. É o débito 54.
+> **Consultar com o servidor no ar é pelo protocolo remoto.** O `nishidb
+> query --config` abre o dataset localmente e continua barrado pelo flock
+> (exit 3, nomeando o pid do servidor) — isso não mudou nem vai mudar, porque o
+> flock é exclusivo por processo. O que mudou é que agora existe o outro
+> caminho: `POST /v1/query` (§67-69) e o `nishidb query --server`, que falam
+> com o processo que já tem o dataset aberto. Foi assim que o débito 54
+> fechou; a rodada que mediu isso está em [`aceite-fase6.md`](aceite-fase6.md).
 
 ## 1. Build
 

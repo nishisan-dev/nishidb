@@ -157,12 +157,13 @@ longa duração num processo SEPARADO tornaria o dataset inconsultável. Por iss
 o servidor abre os datasets no MESMO processo em que consome, onde o Store já é
 um writer com muitos leitores concorrentes — que é o modelo do §27.
 
-**O que ainda falta para isso virar utilidade.** O `query.Engine` está
-registrado no processo do servidor, mas nada o EXPÕE: o protocolo remoto é do
-M3 (§67-69), e `nishidb query` continua sendo barrado pelo mesmo flock. Na
-prática, com o servidor no ar não há como consultar — o operador alterna entre
-ingerir e consultar. Ter os dois no mesmo processo é a metade que o M2 podia
-entregar; a outra metade é o endpoint, e está registrada como débito 54.
+**A outra metade chegou na Fase 6.** Ter consumo e consulta no mesmo processo
+era metade do problema; a outra era alcançar esse processo de fora, e é o que o
+protocolo remoto do §67 faz. `nishidb query --config` continua barrado pelo
+flock — isso é consequência do lock, não defeito a corrigir —, mas o
+`POST /v1/query` e o `nishidb query --server` falam com quem já tem o dataset
+aberto. Foi assim que o débito 54 fechou; ver [o protocolo
+remoto](#o-protocolo-remoto) e a rodada em [`aceite-fase6.md`](aceite-fase6.md).
 
 > **`LOCK` residual não é dataset travado.** O arquivo é criado na primeira
 > abertura e **nunca é removido** — nem no `Close`, nem no crash: apagá-lo no
@@ -297,6 +298,62 @@ evento, então um documento pretty-printed chega com quebra de linha dentro (é
 sanitizada byte a byte); e uma string materializada **contém** control char cru,
 porque o tokenizer decodifica `\n` ao gravar (é escapada). Sem os dois, uma
 linha vira duas e o cliente dessincroniza.
+
+## O protocolo remoto
+
+![Sequência do POST /v1/query: validação, semáforo, linha de schema, lotes de flush e o fecho que distingue fim de erro](https://uml.nishisan.dev/proxy?src=https://git-raw.nishisan.dev/nishisan-dev/nishidb/main/docs/diagrams/sequence_query_http.puml)
+
+O §67 pede um protocolo remoto simples e versionado; a versão é o caminho
+(`/v1/`), e o transporte é HTTP. São quatro rotas: `POST /v1/query`,
+`GET /v1/metadata`, `GET /v1/stats` e o `GET /v1/health` que o M2 já entregou.
+
+**A resposta tem moldura, e ela resolve um problema de mecanismo.** O status
+HTTP viaja com o primeiro byte, então uma consulta que quebra na linha 10.000
+não tem mais status para usar. O corpo é NDJSON com três papéis: a primeira
+linha descreve as colunas, as do meio são as rows exatamente como o §69 as
+mostra, e a última diz como terminou — `end` com `truncated`, ou `error` com
+código. Depois do schema o status é sempre 200, e um stream que termina **sem**
+fecho é falha de transporte, não resultado curto.
+
+A linha de schema fecha o débito 13: o NDJSON não carrega tipos, e o
+`ResultSetMetaData` do §71 precisa deles — inclusive das colunas que são NULL
+em todas as linhas, que o dado não revela por definição. A fonte é o tipo
+declarado, conhecido no `Open`, antes da primeira row.
+
+**Truncar tem dois significados que não se confundem.** O teto de
+`query.maxRows` do dataset é involuntário e sai como `error`
+(`MAX_ROWS_EXCEEDED`), o mesmo código que o CLI traduz em exit 5. O `maxRows`
+do request é o cliente pedindo menos, e sai como `end` com `truncated: true` —
+atender ao que foi pedido não é falha. Pedir **mais** que o teto do dataset é
+recusado com 400 nomeando o valor efetivo, nunca reduzido em silêncio.
+
+**Os parâmetros do §68 têm quatro tipos de wire** — `string`, `int64`,
+`double` e `boolean` — e a lista curta não é escolha do protocolo: é o contrato
+do binder, que recusa parâmetro em representação binária para manter um caminho
+de coerção só. Endereços, prefixos e timestamps viajam como `string` e são
+convertidos contra o tipo da coluna pela mesma tabela dos literais SQL, que é o
+que o §73 já pressupõe ao mapear `ipv4` para `VARCHAR`.
+
+**Streaming é verificado, não afirmado.** `query.resultBatchSize` ganhou seu
+primeiro leitor e virou o lote de flush — e são dois flushes por lote, o do
+`StreamWriter` (que tira as linhas do buffer fixo de 64 KiB) e o do
+`http.Flusher` (que entrega o chunk ao fio); só o primeiro deixaria os bytes
+parados dentro do processo. Dois gates cobrem o §128, e os dois foram aferidos
+contra um servidor que monta a resposta antes de enviá-la: o de temporização
+(a primeira linha chega com a consulta ainda em voo) e o de memória (~40 KB de
+heap vivo tanto para 2.000 quanto para 40.000 linhas).
+
+**Sob pressão, consulta é rejeitada** (§80, §81): `runtime.query.maxConcurrent`
+(default 16) é um semáforo por processo, e o excedente sai 503 com
+`Retry-After` sem tocar o Store. É por processo, e não por dataset, porque o
+recurso protegido é do processo — o §82 já diz que todos os datasets dividem o
+mesmo orçamento de memória.
+
+**O bind default é loopback.** Até o M2 o servidor só expunha `/metrics` e
+`/v1/health`; com `/v1/query` ele passa a servir os dados, e a autenticação do
+§74-77 é da Fase 11. Não contradiz o §78: o exemplo de lá abre o bind no mesmo
+arquivo em que liga TLS e `authentication`. Expor continua possível e virou ato
+explícito, com aviso na subida.
 
 ## Operar isto: o que morde primeiro
 
@@ -451,6 +508,28 @@ contador com o mesmo nome de spec, que é bug de observabilidade. Os nomes do
 nome digitado à mão em dois lugares diverge no dia em que um deles é
 corrigido.
 
+**As cinco séries de consulta do §92 nasceram com o protocolo.** Até a Fase 6
+elas eram nome em `nomes.go` sem alimentador nenhum, e não por esquecimento: o
+motor não sabe quantas consultas chegaram, quantas estão em voo nem quanto
+tempo cada uma levou de ponta a ponta — ele conhece iteradores, não requisições.
+`nishidb_query_full_scans` é a exceção que já tinha fonte (o contador normativo
+do §64, no plan-time) e entrou como coletor pull, **sem** o label `dataset`:
+`planner.Metrics` é um por Engine, compartilhado por todos os datasets, e um
+label que o dado não sustenta é pior que label nenhum. Pela mesma leitura de
+`Store.Stats()` que o `/v1/stats` faz, `nishidb_materialized_rows` e
+`nishidb_segments_total` também ganharam alimentador.
+
+O nome de dataset vindo do request **nunca** vira label: label alimentado por
+entrada do cliente é uma série nova por requisição, e um cliente em loop
+consumiria a memória do processo. Erro antes de o dataset ser resolvido é
+contado sob o valor fixo `?`.
+
+**`/v1/stats` não duplica contador.** Ele lê as mesmas estruturas que o
+`/metrics` lê, no instante da chamada. A divisão entre `process` e `datasets`
+segue o que o dado sustenta: os contadores do executor e do planner são de
+PROCESSO, e repeti-los dentro de cada dataset publicaria o mesmo número N vezes
+sob N nomes diferentes.
+
 Cinco séries são INVENTADAS, e cada uma corrige um silêncio:
 `nishidb_ingest_failed_total` (o §92 só prevê o balde do evento ruim, e sem
 esta a perda de dado é invisível num daemon, onde não há exit code para
@@ -472,9 +551,10 @@ quem só deveria raspar `/metrics`.
 
 ## O que ainda não existe
 
-Protocolo HTTP e driver JDBC (M3), índice hash físico, TTL,
+Driver JDBC (Fase 7), autenticação e TLS (Fase 11), índice hash físico, TTL,
 compaction e tombstones por retenção (M4/Fase 8-9). O estado item a item está em
-[`aceite-m1.md`](aceite-m1.md).
+[`aceite-m1.md`](aceite-m1.md), [`aceite-m2.md`](aceite-m2.md) e
+[`aceite-fase6.md`](aceite-fase6.md).
 
 ## Como os números foram obtidos
 

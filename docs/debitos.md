@@ -11,7 +11,9 @@ abertas e não tinham registro nenhum — nem em documento, nem em comentário, 
 em teste. **45** e **46** vieram da segunda rodada da errata, que foi atrás
 justamente do que a primeira deixou passar; **47** e **48** vieram da
 verificação da documentação, que conferiu prosa contra código e achou duas
-promessas que o binário não cumpre. A numeração é
+promessas que o binário não cumpre. Os itens **49 a 55** vieram do M2, e os
+**56 a 58** da Fase 6 — o **56** achado pela rodada de aceite com Kafka real,
+não por revisão de código. A numeração é
 **estável** (documentos e comentários citam "débito N"), então item novo entra
 no fim da seção a que pertence, e nada é renumerado.
 
@@ -53,9 +55,14 @@ Fechados nesta fase: **1** (consumo e recuperação de offsets), **2** (custo de
 memória do consumidor no orçamento medido), **3** (carga mista de verdade — o
 Kafka É a sobreposição), **4** (§95 logging estruturado), **5** (§112 pprof),
 **9** (política `stop` e a chave `errors:`, que agora é parseada, validada e
-lida pelos dois caminhos de ingestão), **10** (`query.resultBatchSize`), **44**
-(`make test-integration` deixou de ser plumbing morto), **47** (`version:` do
-`nishidb.yaml`) e **48** (`ActionReplaced` no resumo).
+lida pelos dois caminhos de ingestão), **44** (`make test-integration` deixou
+de ser plumbing morto), **47** (`version:` do `nishidb.yaml`) e **48**
+(`ActionReplaced` no resumo).
+
+> **Errata desta lista:** o **10** (`query.resultBatchSize`) constava aqui como
+> fechado e **não estava** — o M2 passou a parsear e validar a chave, e nenhum
+> código a lia. O próprio débito 37 já dizia o contrário nesta mesma página. Ele
+> fechou de verdade na Fase 6, onde a chave virou o lote de flush da resposta.
 
 | # | Débito | Nota |
 |---|---|---|
@@ -67,22 +74,47 @@ lida pelos dois caminhos de ingestão), **10** (`query.resultBatchSize`), **44**
 | 50 | **`storage.durability` continua aceita e ignorada** | O §47 define `mode: sync\|batch\|async` com `interval`, e nada disso é implementado — só o `SyncEveryPut`, que o CLI nunca liga. O risco é de LEITURA: quem lê `interval: 100ms` conclui "perco no máximo 100ms", enquanto no caminho Kafka a janela de reprocessamento é a do `storage.checkpoint.interval`. Não entrou no M2 porque o §115 não a lista |
 | 51 | **A guarda de assignment total não distingue "instância rival" de "partição sem líder"** | O consumer recusa a subida quando o group não lhe entrega TODAS as partições do tópico (que é o que single-writer + checkpoint autoritativo exigem), mas a mensagem atribui a causa a outra instância. Um broker com partição sem líder produziria o mesmo sintoma com outra causa |
 | 55 | **A ordem de subida passou a importar: o tópico precisa existir antes do NishiDB** | Consequência aceita da correção do "consumer silenciosamente ocioso": tópico inexistente agora RECUSA a subida da ingestão em vez de deixar o health verde com zero partições. Num deploy que dependa de auto-criação do tópico pelo primeiro produtor, o NishiDB precisa subir depois. A troca é deliberada — um consumer ocioso com tudo verde é pior que uma recusa nomeando o tópico —, mas está registrada porque muda o runbook |
-| 54 | **Com o `nishidb server` no ar, não há como consultar** | O motor de consulta é registrado no processo, mas nada o expõe: o protocolo remoto é do M3 (§67-69) e o `nishidb query` é barrado pelo flock, saindo com exit 3. O operador ALTERNA — sobe o servidor para ingerir, encerra com SIGTERM (que drena, checkpointa e devolve o flock) e então consulta. Não é regressão nem surpresa de planejamento (o §115 entrega o consumer, não o protocolo), mas é a diferença entre "ingere de Kafka" e "é operável como banco", e estava descrita de forma otimista demais na primeira versão da documentação do M2. **Dono: M3** |
-| 53 | **O `golangci-lint` NUNCA rodou neste projeto** | A configuração listava `gofmt` em `linters`, e na v2 ele é FORMATTER: o binário recusava o arquivo inteiro com `can't load config: gofmt is a formatter`. Como o alvo `lint` do Makefile cai para `go vet` quando o `golangci-lint` não está instalado, ninguém via o erro — o projeto passou o M1 achando que tinha lint. A configuração foi corrigida no M2 e o lint voltou a rodar; o **código do M2 está com 0 apontamentos**, e sobraram **114 no código do M1** (50 errcheck, 50 revive, 12 staticcheck, 1 gofmt, 1 unused — errcheck e revive estão no teto de 50 por linter, então o total real é maior). Não foram corrigidos aqui porque varrer o M1 inteiro é trabalho de outra unidade, e misturá-lo ao M2 tornaria o diff do consumer impossível de revisar |
+| 54 | ~~**Com o `nishidb server` no ar, não há como consultar**~~ — **FECHADO na Fase 6** (ver a seção dela) | O motor de consulta é registrado no processo, mas nada o expõe: o protocolo remoto é do M3 (§67-69) e o `nishidb query` é barrado pelo flock, saindo com exit 3. O operador ALTERNA — sobe o servidor para ingerir, encerra com SIGTERM (que drena, checkpointa e devolve o flock) e então consulta. Não é regressão nem surpresa de planejamento (o §115 entrega o consumer, não o protocolo), mas é a diferença entre "ingere de Kafka" e "é operável como banco", e estava descrita de forma otimista demais na primeira versão da documentação do M2. **Dono: M3** |
+| 53 | **O `golangci-lint` NUNCA rodou neste projeto** | A configuração listava `gofmt` em `linters`, e na v2 ele é FORMATTER: o binário recusava o arquivo inteiro com `can't load config: gofmt is a formatter`. Como o alvo `lint` do Makefile cai para `go vet` quando o `golangci-lint` não está instalado, ninguém via o erro — o projeto passou o M1 achando que tinha lint. A configuração foi corrigida no M2 e o lint voltou a rodar; o **código do M2 está com 0 apontamentos**, e sobraram **114 no código do M1** (50 errcheck, 50 revive, 12 staticcheck, 1 gofmt, 1 unused — errcheck e revive estão no teto de 50 por linter, então o total real é maior). Não foram corrigidos aqui porque varrer o M1 inteiro é trabalho de outra unidade, e misturá-lo ao M2 tornaria o diff do consumer impossível de revisar. A Fase 6 manteve a regra: **0 apontamentos no código novo**, com os mesmos 114 no M1 (conferidos com o `golangci-lint` 2.12.2 antes e depois das mudanças da fase) |
 | 52 | **O lag do relatório de benchmark commita o que foi POLLADO** | A bancada não é o motor: ela commita antes de perguntar o lag, senão o número seria sempre o total produzido. O consumer de produção só commita depois do checkpoint durável (§48). A diferença é de alguns registros e irrelevante para a ordem de grandeza do §125, mas está registrada para que ninguém compare os dois números como se fossem a mesma coisa |
+
+### M3 / Fase 6 — protocolo remoto HTTP — FECHADA
+
+Entregue: `POST /v1/query` com a moldura NDJSON do §69, `GET /v1/metadata`,
+`GET /v1/stats`, os parâmetros tipados do §68, as cinco séries de consulta do
+§92, o teto de consultas simultâneas do §80 e o `nishidb query --server`. A
+rodada está em [`aceite-fase6.md`](aceite-fase6.md).
+
+Fechados nesta fase: **11** (protocolo HTTP), **54** (consultar com o servidor
+no ar), **10** (`query.resultBatchSize` ganhou leitor — ver a errata acima),
+**13** (metadados de tipo, agora na linha de schema da resposta) e **18**
+(acesso concorrente entre processos: o flock continua exclusivo, e o caminho
+para quem precisa consultar durante a ingestão é o protocolo).
+
+Fechados **em parte**: **15** (só `runtime.query.maxConcurrent` ganhou leitor;
+`memoryTarget`, `managedMemoryTarget` e `maxBufferPerQuery` continuam sem
+implementação — mas não mais em silêncio: a subida nomeia cada uma) e **16**
+(as cinco séries de consulta do §92 mais `nishidb_materialized_rows` e
+`nishidb_segments_total` passaram a ter alimentador).
+
+| # | Débito | Nota |
+|---|---|---|
+| 56 | **Com a ingestão ociosa, o lag fica congelado** | O checkpoint — e o commit de offset que vem depois dele (§48) — é disparado **por evento**, não por tempo. Terminado o consumo, o offset commitado no group para no último checkpoint e o `nishidb_kafka_lag` fica marcando a diferença até chegar evento novo. **Medido na rodada de aceite da Fase 6**: lag de 499.999 parado com o consumidor em dia; um único evento produzido zerou as quatro partições na hora. Não é erro de corretude — o checkpoint local é autoritativo (§49) e nada se perde —, mas quem olha o painel lê meio milhão de atraso num consumidor que não tem atraso nenhum. A saída é um checkpoint disparado por TEMPO no laço do consumidor, e não só na chegada de evento. **Dono: M4** |
+| 57 | **`/v1/query` não tem autenticação** | O bind default virou loopback para que a exposição seja ato explícito, e a subida avisa quando o bind alcança a rede — mas isso é mitigação, não solução: quem alcança a porta lê o dataset inteiro. O §74-77 (usuários, roles, Argon2id, TLS) é da Fase 11, e até lá a porta 9142 exposta é equivalente a um banco sem senha. **Dono: Fase 11** |
+| 58 | **O `nishidb query --server` não tem como passar `parameters`** | O `POST /v1/query` aceita os parâmetros do §68, e o CLI remoto não expõe flag para eles: quem quiser usar `?` pelo CLI ainda precisa de `curl`. Não é bloqueio para a Fase 7 (o driver JDBC fala o protocolo direto), e a flag esbarra na pergunta de como declarar o tipo na linha de comando sem inventar uma sintaxe nova |
 
 ### M3 — protocolo e driver
 
 | # | Débito | Nota |
 |---|---|---|
-| 11 | Protocolo HTTP `POST /v1/query` (§126.17) | O NDJSON e o `StreamWriter` já são o formato; falta o transporte |
+| 11 | ~~Protocolo HTTP `POST /v1/query` (§126.17)~~ | **FECHADO na Fase 6.** O NDJSON e o `StreamWriter` já eram o formato; entrou o transporte, com a moldura que distingue fim de erro |
 | 12 | Driver JDBC (§126.18) e `PreparedStatement` real (§126.19) | Parâmetros posicionais já funcionam pela API Go; o CLI não tem como fornecê-los |
-| 13 | **Metadados de tipo fora de banda** | O NDJSON **não carrega tipos**, e o `ResultSetMetaData` precisa deles — inclusive das colunas que são NULL em todas as linhas, que não dão para derivar do dado. A fonte é `binder.BoundQuery.Columns` |
+| 13 | ~~**Metadados de tipo fora de banda**~~ — **FECHADO na Fase 6** pela linha de schema da resposta e pelo `/v1/metadata` | O NDJSON **não carrega tipos**, e o `ResultSetMetaData` precisa deles — inclusive das colunas que são NULL em todas as linhas, que não dão para derivar do dado. A fonte é `binder.BoundQuery.Columns` |
 | 14 | Autenticação (§126.20) e TLS (§126.21) | Seções do YAML já são aceitas e ignoradas |
 | 15 | **§80/§81 — `runtime.memoryTarget`, `query.maxConcurrent`, `query.maxBufferPerQuery`** e a prioridade sob pressão | A seção `runtime:` do YAML é aceita e **silenciosamente ignorada**. Com N conexões, o pior caso do débito 28 (o `StreamWriter` que nunca encolhe) é N × maior linha, sem teto |
 | 16 | **§92-94 — métricas, `GET /metrics`, `GET /v1/health`** | 25 métricas nomeadas na spec; zero ocorrência de `prometheus` no código |
 | 17 | **§96 — comandos `status`, `datasets`, `checkpoint`, `inspect`** | A spec pede 6 comandos operacionais; o M1 entrega 2, e nenhum dos 2 está na lista da spec. `compact` tem dono no M4; estes quatro são baratos (o `Store` já expõe `Stats()` e `Checkpoint()`) |
-| 18 | **Acesso concorrente entre processos** | O `flock` é exclusivo: com um `ingest` em voo, um `query` sai com exit 3. A concorrência real chega com o servidor |
+| 18 | ~~**Acesso concorrente entre processos**~~ | **FECHADO na Fase 6.** O `flock` continua exclusivo — é o mecanismo, não um defeito —, e quem precisa consultar durante a ingestão fala com o processo que tem o dataset aberto, pelo protocolo remoto |
 
 ### M4 / Fases 8-9
 
@@ -110,7 +142,7 @@ lida pelos dois caminhos de ingestão), **10** (`query.resultBatchSize`), **44**
 | 31 | **Mensagens de erro de rede trocáveis** entre os parsers de ipv4/ipv6/prefixo | Dívida pré-existente registrada na QP |
 | 32 | **`allocs/evento` do STEADY mistura ingestão e query** quando há leitores SQL | Separar exigiria contabilidade por goroutine |
 | 33 | **Erro de escrita no stdout vira exit 1** (`WriteRow`/`Flush`): `query \| head -1` reporta "erro de configuração", e disco cheio no redirecionamento também | Junto com a tabela-verdade de exit codes do M2 |
-| 34 | **`Stats` e `Sequence` engolem `ErrDatasetClosed`** e devolvem `Stats{}` / `(0,false)`: `RowCount: 0` num Store fechado é indistinguível de dataset vazio | Quando `Stats` virar superfície de observabilidade (débito 16) |
+| 34 | **`Stats` e `Sequence` engolem `ErrDatasetClosed`** e devolvem `Stats{}` / `(0,false)`: `RowCount: 0` num Store fechado é indistinguível de dataset vazio | **A hora chegou:** a Fase 6 tornou `Stats` superfície pública — ele alimenta `GET /v1/stats` e as séries `nishidb_materialized_rows`/`nishidb_segments_total`. Um Store fechado passaria a publicar `rows: 0` como se o dataset estivesse vazio. Não foi consertado junto porque muda o contrato do `Store` (a assinatura teria de devolver erro), o que é unidade própria. **Dono: M4** |
 | 35 | **`FieldDictValidBytes`/`ValuesDictValidBytes` são gravados a cada checkpoint e ninguém os lê** | Campo de consistência sem verificador convida a próxima revisão a assumir uma checagem que não existe |
 | 36 | **`ExitWriter` (4) não tem teste fim a fim** — é o único código do contrato sem cobertura, e o de semântica mais cara | Junto com o teste de ENOSPC no meio da ingestão |
 | 39 | **Os diagramas do `architecture.md` não renderizavam: o repositório é privado.** O proxy do PlantUML busca o `.puml` anonimamente, e `raw.githubusercontent.com` responde 404 para repositório privado | **RESOLVIDO** — o repositório foi publicado em `git@github.com:nishisan-dev/nishidb.git` (privado) e as cinco URLs passaram a apontar para `git-raw.nishisan.dev`, que serve o conteúdo privado ao proxy. Os cinco respondem **HTTP 200 `image/png`**. As URLs fixam `main` de propósito. A sintaxe dos cinco fontes foi validada de duas formas independentes: `plantuml -checkonly -failfast2` local (exit 0 nos cinco) e o próprio `uml.nishisan.dev` pelo endpoint `/png/<texto codificado>`. Os dois validadores foram aferidos com um `.puml` propositalmente quebrado: o local sai com **exit 200**, o servidor responde **HTTP 400** com `X-PlantUML-Diagram-Error: Syntax Error?` |

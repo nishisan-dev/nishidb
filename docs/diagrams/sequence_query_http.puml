@@ -1,0 +1,117 @@
+@startuml sequence_query_http
+title Protocolo remoto — POST /v1/query, do request ao fecho (§67-69)
+
+participant "cliente\n(curl, nishidb query --server,\ndriver JDBC da Fase 7)" as cli
+participant "handleQuery" as h
+participant "semáforo\nruntime.query.maxConcurrent" as sem
+participant "query.Engine" as eng
+participant "RowIterator" as it
+participant "StreamWriter\n(buffer FIXO de 64 KiB)" as w
+participant "http.Flusher" as fl
+
+cli -> h : POST /v1/query\n{dataset, sql, parameters, maxRows?, timeoutMs?}
+
+group Validação — nada foi escrito ainda, o status ainda é livre
+  h -> h : método, Content-Type, corpo <= 1 MiB\ne chave desconhecida RECUSADA
+  h -> h : parameters → types.Value\n(string | int64 | double | boolean)
+  h -> h : maxRows/timeoutMs só podem ENCURTAR
+  note right of h
+    Pedir MAIS que o teto do dataset sai 400
+    nomeando o valor efetivo. Reduzir em
+    silêncio faria o cliente acreditar que
+    recebeu tudo o que pediu.
+  end note
+end
+
+h -> sem : tenta uma vaga (NÃO bloqueante)
+alt sem vaga
+  sem --> h : ocupado
+  h --> cli : 503 + Retry-After\n{"error":{"code":"TOO_MANY_QUERIES"}}
+  note right of h
+    §81: sob pressão, consulta pode ser
+    REJEITADA antes de comprometer a
+    ingestão. Enfileirar seguraria conexão
+    e esconderia a saturação de quem lê
+    o /metrics.
+  end note
+end
+
+h -> eng : Execute(ctx, dataset, sql, params)
+note right of eng
+  Erro de sintaxe e de bind sai AQUI,
+  antes de qualquer leitura de dado:
+  vira 400 com linha e coluna.
+end note
+eng --> h : RowIterator (fonte aberta, nenhuma row lida)
+
+h -> it : Columns()
+note right of h
+  Metadado ANTES da primeira row, e é o
+  único jeito: a coluna nula em todas as
+  linhas não revela tipo nenhum, e o
+  ResultSetMetaData do §71 precisa dele.
+  Coluna de saída chamada "nishidb" é
+  recusada aqui — depois do primeiro byte
+  não haveria mais como recusar.
+end note
+
+h -> cli : linha 1 — {"nishidb":"schema","columns":[...]}
+note over h, cli
+  DAQUI PARA A FRENTE O STATUS É 200.
+  Ele viajou com o primeiro byte; todo
+  desfecho passa a ser linha de corpo.
+end note
+
+loop enquanto it.Next()
+  h -> it : Next() / Row()
+  it --> h : Row — válida até o próximo Next
+  h -> w : WriteRow(row) — serializa e descarta a view
+  alt a cada query.resultBatchSize linhas
+    h -> w : Flush() — tira as linhas do buffer de 64 KiB
+    h -> fl : Flush() — entrega o chunk ao fio
+    note right of fl
+      Os DOIS, nesta ordem. Só o primeiro
+      deixaria os bytes parados dentro do
+      processo; só o segundo não teria o
+      que entregar.
+    end note
+    fl --> cli : chunk NDJSON
+  end
+end
+
+h -> w : Flush() final
+h -> it : Err()
+
+alt terminou bem
+  h -> cli : {"nishidb":"end","rows":N,"truncated":false}
+else o cliente pediu maxRows e o resultado era maior
+  h -> cli : {"nishidb":"end","rows":N,"truncated":true}
+  note right of h
+    Atender ao que foi pedido não é falha:
+    o CLI sai 0.
+  end note
+else teto de query.maxRows do DATASET
+  h -> cli : {"nishidb":"error","code":"MAX_ROWS_EXCEEDED","rows":N}
+  note right of h
+    Truncamento involuntário: o CLI sai 5,
+    o mesmo código do caminho local.
+  end note
+else falha depois de N linhas
+  h -> cli : {"nishidb":"error","code":"...","rows":N}
+end
+
+note over cli
+  O fecho é o que separa "acabou" de
+  "quebrou" de "a conexão caiu": um stream
+  que termina SEM fecho é falha de
+  transporte, e o cliente a reporta como tal.
+end note
+
+note over h, w
+  Memória O(lote), nunca O(resultado) (§128).
+  Medido: ~40 KB de heap vivo tanto para
+  2.000 quanto para 40.000 linhas, e o
+  primeiro byte em 1,6 ms de um total de
+  171,8 ms para 9,9 MB.
+end note
+@enduml

@@ -13,14 +13,16 @@ rows**, contra 389 KiB com 1 milhão — 8× de dados, 1,9% de heap a mais.
 
 ## Estado
 
-**M1 e M2 completos.** Ingestão por arquivo e por **Kafka**, materialização,
-storage durável com recovery de dados E de posição no tópico, índices, SQL,
-saída NDJSON, e um servidor com `/metrics` e `/v1/health` — tudo pelo binário.
-Os critérios de aceite estão em [`docs/aceite-m1.md`](docs/aceite-m1.md) e
-[`docs/aceite-m2.md`](docs/aceite-m2.md).
+**M1, M2 e a Fase 6 do M3 completos.** Ingestão por arquivo e por **Kafka**,
+materialização, storage durável com recovery de dados E de posição no tópico,
+índices, SQL, saída NDJSON, e um servidor que **consulta enquanto ingere** pelo
+protocolo remoto do §67 — tudo pelo binário. Os critérios de aceite estão em
+[`docs/aceite-m1.md`](docs/aceite-m1.md),
+[`docs/aceite-m2.md`](docs/aceite-m2.md) e
+[`docs/aceite-fase6.md`](docs/aceite-fase6.md).
 
-Próximos: **M3** (protocolo HTTP de consulta, driver JDBC, auth, TLS), **M4**
-(índice hash físico, compaction, TTL).
+Próximos: **Fase 7** (driver JDBC thin sobre este protocolo), **Fase 11**
+(auth e TLS), **M4** (índice hash físico, compaction, TTL).
 
 ## Instalação
 
@@ -244,19 +246,39 @@ nishidb server --config nishidb.yaml
 ```
 
 O servidor abre os datasets no **mesmo processo** em que consome, porque o
-flock do dataset é exclusivo por processo. Expõe `GET /metrics` (§92/§93) e
-`GET /v1/health` (§94), e aceita `--pprof <addr>` para os endpoints de debug
-num listener próprio.
+flock do dataset é exclusivo por processo. Expõe o protocolo remoto do §67 —
+`POST /v1/query`, `GET /v1/metadata`, `GET /v1/stats` e `GET /v1/health` —
+mais `GET /metrics` (§92/§93), e aceita `--pprof <addr>` para os endpoints de
+debug num listener próprio.
 
-> **Com o servidor no ar, NÃO há como consultar.** O motor de consulta está
-> registrado no processo, mas o protocolo remoto que o exporia é do M3 (§67-69,
-> `/v1/query` e o driver JDBC) e ainda não existe — e `nishidb query` é barrado
-> pelo flock, saindo com exit 3 e nomeando o pid do servidor. Na prática, hoje
-> o operador **alterna**: sobe o servidor para ingerir, encerra com SIGTERM
-> (que drena, checkpointa e devolve o flock) e então consulta. Está registrado
-> como débito 54 em [`docs/debitos.md`](docs/debitos.md). Se a sua carga exige
-> consultar durante a ingestão, o caminho de hoje é `nishidb ingest` por
-> arquivo, que tem a mesma restrição de flock, ou esperar o M3.
+O bind default é **`127.0.0.1`**. O `/v1/query` serve os dados e a
+autenticação do §74-77 é da Fase 11: enquanto ela não existe, expor a porta é
+ato explícito de quem opera, e a subida avisa quando o bind alcança a rede.
+
+```bash
+# consultar COM a ingestão de pé
+curl -sS -H 'Content-Type: application/json' \
+  -d '{"dataset":"radius_sessions",
+       "sql":"SELECT id, ip FROM radius_sessions WHERE status = ? LIMIT 100",
+       "parameters":[{"type":"string","value":"Stop"}]}' \
+  127.0.0.1:9142/v1/query
+
+# o mesmo pelo CLI
+nishidb query --server 127.0.0.1:9142 --dataset radius_sessions \
+  'SELECT id, ip FROM radius_sessions LIMIT 100'
+```
+
+A resposta é NDJSON com moldura: a primeira linha descreve as colunas com
+tipo (o `ResultSetMetaData` do §71 precisa deles, e uma coluna nula em todas as
+linhas não os revela), as do meio são as rows do §69, e a última diz como o
+resultado terminou — `end` com `truncated`, ou `error` com o código. É isso que
+permite distinguir "acabou" de "quebrou na linha 10.000", já que o status HTTP
+viaja com o primeiro byte.
+
+> **`nishidb query --config` continua barrado pelo flock** com o servidor no
+> ar, e isso não é limitação a remover: o flock é exclusivo por processo. Use
+> `--server`, que é o caminho para o processo que já tem o dataset aberto — a
+> mensagem do exit 3 o sugere.
 
 Um dataset cuja ingestão não pode subir **continua consultável** — a ordem do
 §51 é `start queries` antes de `resume ingestion`. Quatro situações recusam a
@@ -289,9 +311,14 @@ Comparadores `=`, `!=`, `>`, `>=`, `<`, `<=`; `AND`, `OR`, parênteses;
 `IS NULL` / `IS NOT NULL`; alias e campos entre aspas duplas (obrigatórias para
 nomes com hífen, como `"Acct-Status-Type"`).
 
-Parâmetros posicionais `?` existem no engine e são usados pela API Go, mas o
-comando `query` **não tem como fornecê-los**: uma query com `?` pelo CLI sai
-com exit 2. O `PreparedStatement` é do M3, junto com o driver JDBC.
+Parâmetros posicionais `?` são fornecidos pelo `parameters` do §68, no
+`POST /v1/query`. Os tipos de wire são quatro — `string`, `int64`, `double` e
+`boolean` —, e não é limitação do protocolo: é o contrato do binder, que aceita
+um caminho de coerção só. Timestamp, endereços e prefixos viajam como `string`
+e são convertidos contra o tipo da coluna, pela mesma tabela dos literais SQL
+(que é o que o §73 já pressupõe ao mapear `ipv4` para `VARCHAR`). Uma query com
+`?` pelo caminho LOCAL do CLI continua saindo com exit 2: sem protocolo não há
+por onde passar o valor.
 
 Repetir uma coluna na projeção (`SELECT id, id`) é recusado no bind: a linha
 sairia com a chave repetida e o consumidor de JSON colapsaria as duas em
