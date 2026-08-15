@@ -304,6 +304,23 @@ func (f *FamiliaMedidor) Sozinha() *SerieMedidor { return f.Com() }
 // Set fixa o valor.
 func (s *SerieMedidor) Set(v float64) { s.bits.Store(math.Float64bits(v)) }
 
+// Add soma delta (negativo para subtrair).
+//
+// Existe para o medidor de "em voo": o incremento e o decremento acontecem em
+// goroutines DIFERENTES — uma requisição entra enquanto outra sai —, e um Set
+// calculado fora perderia atualizações concorrentes, deixando o gauge preso num
+// valor que nunca mais desce. O CAS em laço é o preço de guardar float em bits,
+// e é irrelevante aqui: observa-se duas vezes por consulta.
+func (s *SerieMedidor) Add(delta float64) {
+	for {
+		velho := s.bits.Load()
+		novo := math.Float64bits(math.Float64frombits(velho) + delta)
+		if s.bits.CompareAndSwap(velho, novo) {
+			return
+		}
+	}
+}
+
 // Valor lê o valor corrente.
 func (s *SerieMedidor) Valor() float64 { return math.Float64frombits(s.bits.Load()) }
 

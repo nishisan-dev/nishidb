@@ -62,32 +62,12 @@ func (s *Servidor) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	comIngestao := 0
 
 	for _, d := range s.datasets {
-		estado := EstadoUP
-		d.mu.Lock()
-		cons, erro := d.cons, d.erroIngestao
-		d.mu.Unlock()
-
-		k := d.spec.Source.Kafka
-		switch {
-		case k == nil || !k.Enabled:
-			// Sem fonte declarada, ou pausado pelo `enabled: false`. Não é
-			// anomalia e não pode contaminar a chave agregada.
-			estado = EstadoDesligado
-		default:
+		estado, detalhe := estadoDaIngestao(d)
+		if estado != EstadoDesligado {
 			comIngestao++
-			switch {
-			case erro != nil:
-				estado = EstadoDown
-				h.Detalhes[d.nome] = erro.Error()
-			case cons == nil:
-				estado = EstadoDegraded
-				h.Detalhes[d.nome] = "ingestão ainda subindo"
-			default:
-				if p := cons.Pausa(); p != nil {
-					estado = EstadoDown
-					h.Detalhes[d.nome] = p.Error()
-				}
-			}
+		}
+		if detalhe != "" {
+			h.Detalhes[d.nome] = detalhe
 		}
 		h.Datasets[d.nome] = estado
 
@@ -118,6 +98,35 @@ func (s *Servidor) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	if err := enc.Encode(h); err != nil && !errors.Is(err, http.ErrHandlerTimeout) {
 		s.log.Warn("health.escrita_falhou", "resposta interrompida", "erro", err.Error())
 	}
+}
+
+// estadoDaIngestao classifica a ingestão de UM dataset no vocabulário do §94, e
+// devolve junto o motivo — vazio quando não há o que explicar.
+//
+// É uma função só porque tem dois chamadores: o /v1/health e o /v1/stats. Com a
+// classificação duplicada, as duas rotas descreveriam a mesma realidade com
+// palavras diferentes no dia em que uma delas ganhasse um caso novo — e o
+// operador teria de descobrir qual das duas está certa.
+func estadoDaIngestao(d *dataset) (estado, detalhe string) {
+	d.mu.Lock()
+	cons, erro := d.cons, d.erroIngestao
+	d.mu.Unlock()
+
+	k := d.spec.Source.Kafka
+	switch {
+	case k == nil || !k.Enabled:
+		// Sem fonte declarada, ou pausado pelo `enabled: false`. Não é
+		// anomalia e não pode contaminar a chave agregada.
+		return EstadoDesligado, ""
+	case erro != nil:
+		return EstadoDown, erro.Error()
+	case cons == nil:
+		return EstadoDegraded, "ingestão ainda subindo"
+	}
+	if p := cons.Pausa(); p != nil {
+		return EstadoDown, p.Error()
+	}
+	return EstadoUP, ""
 }
 
 // sobePprof liga os endpoints do §112 num listener PRÓPRIO.

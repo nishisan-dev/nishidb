@@ -45,8 +45,12 @@ const (
 type dataset struct {
 	nome string
 	spec *schema.DatasetSpec
-	st   *storage.Store
-	mat  *materializer.Materializer
+	// sch é a spec COMPILADA, a mesma que foi registrada no motor. Fica aqui
+	// porque /v1/metadata a descreve campo a campo, e recompilá-la a cada
+	// requisição seria trabalho repetido sobre um dado imutável.
+	sch *schema.Compiled
+	st  *storage.Store
+	mat *materializer.Materializer
 
 	// cons é nil quando o dataset não declara Kafka ou está com
 	// `enabled: false` — o botão de pausa declarativo.
@@ -72,6 +76,16 @@ type Servidor struct {
 	reg      *metrics.Registry
 	eng      *query.Engine
 	datasets []*dataset
+	// porNome resolve o dataset de uma requisição. É construído na subida e
+	// só lido depois: nenhum dataset entra ou sai com o processo de pé, então
+	// não precisa de lock.
+	porNome map[string]*dataset
+	met     *metricasDeQuery
+	// vagas é o teto de consultas simultâneas do §80. Um canal com capacidade
+	// fixa, e não um contador: a aquisição não-bloqueante é o que permite
+	// REJEITAR na hora (§81) em vez de enfileirar — uma fila de espera
+	// seguraria conexões e esconderia a saturação de quem lê o /metrics.
+	vagas    chan struct{}
 	http     *http.Server
 	ln       net.Listener
 	pprofSrv *http.Server
@@ -144,7 +158,15 @@ func Novo(cfg *config.Config, o Opcoes) (*Servidor, error) {
 			"chave", chave)
 	}
 
-	s := &Servidor{cfg: cfg, log: log, reg: reg, eng: query.NewEngine()}
+	s := &Servidor{
+		cfg:     cfg,
+		log:     log,
+		reg:     reg,
+		eng:     query.NewEngine(),
+		porNome: make(map[string]*dataset, len(nomes)),
+		vagas:   make(chan struct{}, cfg.MaxConcurrent()),
+	}
+	s.met = registraMetricasDeQuery(reg, s.eng)
 
 	// O bind vem ANTES de abrir os datasets: descobrir porta ocupada depois
 	// de já ter tomado o flock de N datasets é desperdício, e deixa o
@@ -174,7 +196,11 @@ func Novo(cfg *config.Config, o Opcoes) (*Servidor, error) {
 			return nil, err
 		}
 		s.datasets = append(s.datasets, d)
+		s.porNome[d.nome] = d
 	}
+	// Depois do loop: o coletor percorre a lista pronta, e registrá-lo antes
+	// exporia um scrape com metade dos datasets durante a subida.
+	registraMetricasDeDataset(reg, s)
 	ok = true
 	return s, nil
 }
@@ -225,6 +251,7 @@ func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*
 	return &dataset{
 		nome: spec.Name,
 		spec: spec,
+		sch:  compilado,
 		st:   st,
 		mat:  materializer.New(compilado, st),
 	}, nil
@@ -333,10 +360,23 @@ func (s *Servidor) sobeHTTP() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /metrics", s.handleMetrics)
 	mux.HandleFunc("GET /v1/health", s.handleHealth)
+	// As rotas do §67 são registradas SEM método no padrão, e o handler
+	// confere o método por dentro. É para que toda recusa do protocolo — do
+	// método errado ao SQL inválido — saia com o MESMO corpo JSON: o 405 que
+	// o mux gera sozinho tem corpo em texto puro, e um cliente que precisasse
+	// tratar dois formatos de erro trataria mal um deles.
+	mux.HandleFunc("/v1/query", s.handleQuery)
+	mux.HandleFunc("/v1/metadata", s.handleMetadata)
+	mux.HandleFunc("/v1/stats", s.handleStats)
 
 	s.http = &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
+		// SEM WriteTimeout de propósito: ele é teto de CONEXÃO, e mataria um
+		// stream longo legítimo no meio. O teto de uma consulta é o
+		// query.timeout do dataset, aplicado pelo executor via contexto — o
+		// único que sabe distinguir "demorou porque tem muito resultado" de
+		// "travou".
 	}
 	go func() {
 		if err := s.http.Serve(s.ln); err != nil && !errors.Is(err, http.ErrServerClosed) {

@@ -1,0 +1,745 @@
+package server_test
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"runtime"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/nishisan-dev/nishidb/internal/materializer"
+	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/schema"
+	"github.com/nishisan-dev/nishidb/internal/server"
+	"github.com/nishisan-dev/nishidb/internal/storage"
+)
+
+// specConsultavel é um dataset sem Kafka, com um campo indexado e um alias —
+// o suficiente para exercitar projeção, WHERE com parâmetro e metadados.
+const specConsultavel = `version: 1
+name: %s
+materialization:
+  key:
+    field: id
+schema:
+  fields:
+    id:
+      type: string
+    status:
+      type: string
+      alias: estado
+      index: bitmap
+    porta:
+      type: int64
+    ip:
+      type: ipv4
+`
+
+// semeia materializa n eventos no dataset ANTES de o servidor subir.
+//
+// A ingestão acontece pelo pipeline real (Materializer.Apply + Store.Put) e o
+// flock é devolvido no Close — é o mesmo ciclo do `nishidb ingest`, e é o que
+// deixa o servidor abrir um dataset com dado de verdade dentro.
+func semeia(t *testing.T, a *ambiente, nome string, n int) {
+	t.Helper()
+	cfg := a.carrega()
+	spec, err := schema.Load(cfg.SpecDoDataset(nome), cfg.DefaultsDeQuery())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bitmaps []string
+	for campo, f := range spec.Schema.Fields {
+		if f.Index == "bitmap" {
+			bitmaps = append(bitmaps, campo)
+		}
+	}
+	st, err := storage.Open(storage.Options{
+		Dir:              cfg.DirDoDataset(nome),
+		Dataset:          nome,
+		SegmentSize:      cfg.SegmentSize(),
+		BitmapFieldNames: bitmaps,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	compilado, err := spec.Compile(st.FieldDict())
+	if err != nil {
+		st.Close()
+		t.Fatal(err)
+	}
+	mat := materializer.New(compilado, st)
+	for i := 0; i < n; i++ {
+		estado := "Start"
+		if i%2 == 0 {
+			estado = "Stop"
+		}
+		ev := fmt.Sprintf(`{"id":"S-%06d","status":%q,"porta":%d,"ip":"10.0.0.%d"}`,
+			i, estado, 1000+i, i%256)
+		if r := mat.Apply([]byte(ev)); r.Err != nil {
+			st.Close()
+			t.Fatalf("evento %d: %v", i, r.Err)
+		}
+	}
+	if err := st.Checkpoint(); err != nil {
+		st.Close()
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// servidorComDados sobe um servidor de verdade, já com n linhas materializadas.
+func servidorComDados(t *testing.T, n int, blocoServer string) *server.Servidor {
+	t.Helper()
+	a := novoAmbienteCom(t, blocoServer)
+	a.escreveDataset("d", strings.ReplaceAll(specConsultavel, "%s", "d"))
+	semeia(t, a, "d", n)
+
+	srv, err := server.Novo(a.carrega(), server.Opcoes{})
+	if err != nil {
+		t.Fatalf("subida: %v", err)
+	}
+	roda(t, srv)
+	return srv
+}
+
+// roda sobe o servidor numa goroutine e garante o encerramento gracioso no fim
+// do teste — que é o que devolve o flock do dataset.
+func roda(t *testing.T, srv *server.Servidor) {
+	t.Helper()
+	ctx, cancela := context.WithCancel(context.Background())
+	fim := make(chan error, 1)
+	go func() { fim <- srv.Roda(ctx, "") }()
+	t.Cleanup(func() {
+		cancela()
+		if err := <-fim; err != nil {
+			t.Errorf("Roda: %v", err)
+		}
+	})
+}
+
+const blocoPadrao = "\nserver:\n  bind: 127.0.0.1\n  port: %d\n"
+
+// consulta faz o POST /v1/query e devolve a resposta bruta.
+func consulta(t *testing.T, srv *server.Servidor, corpo string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, "http://"+srv.Endereco()+"/v1/query", strings.NewReader(corpo))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
+// resultado percorre a moldura inteira e devolve as rows cruas e o leitor.
+func resultado(t *testing.T, resp *http.Response) ([]string, *protocolo.Leitor) {
+	t.Helper()
+	defer resp.Body.Close()
+	l := protocolo.NovoLeitor(resp.Body)
+	var rows []string
+	for l.Next() {
+		rows = append(rows, string(l.Linha()))
+	}
+	if err := l.Err(); err != nil {
+		t.Fatalf("leitura do stream: %v", err)
+	}
+	return rows, l
+}
+
+func falhaDe(t *testing.T, resp *http.Response) protocolo.Falha {
+	t.Helper()
+	defer resp.Body.Close()
+	var corpo protocolo.CorpoErro
+	if err := json.NewDecoder(resp.Body).Decode(&corpo); err != nil {
+		t.Fatalf("corpo de erro ilegível: %v", err)
+	}
+	return corpo.Error
+}
+
+// A moldura completa: schema com os tipos, rows cruas do §69 e fecho.
+func TestQueryRespondeAMolduraCompleta(t *testing.T) {
+	srv := servidorComDados(t, 4, blocoPadrao)
+
+	resp := consulta(t, srv, `{"dataset":"d","sql":"SELECT id, ip FROM d"}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != protocolo.ContentTypeNDJSON {
+		t.Fatalf("Content-Type = %q, quer %q", ct, protocolo.ContentTypeNDJSON)
+	}
+	rows, l := resultado(t, resp)
+
+	if l.Schema() == nil || l.Schema().Dataset != "d" {
+		t.Fatalf("schema = %+v", l.Schema())
+	}
+	quer := []protocolo.Coluna{
+		{Name: "id", Type: "string", JDBC: protocolo.JDBCVarchar},
+		{Name: "ip", Type: "ipv4", JDBC: protocolo.JDBCVarchar},
+	}
+	for i, c := range quer {
+		if l.Schema().Columns[i] != c {
+			t.Fatalf("coluna %d = %+v, quer %+v", i, l.Schema().Columns[i], c)
+		}
+	}
+	if len(rows) != 4 {
+		t.Fatalf("rows = %d, quer 4", len(rows))
+	}
+	// As linhas são o NDJSON cru do §69: nada de envelope.
+	if !strings.HasPrefix(rows[0], `{"id":"S-000000","ip":"10.0.0.0"}`) {
+		t.Fatalf("row = %s", rows[0])
+	}
+	if l.Fim() == nil || l.Fim().Rows != 4 || l.Fim().Truncated {
+		t.Fatalf("fecho = %+v", l.Fim())
+	}
+}
+
+// O `?` do §68 é o caminho que o CLI local NÃO alcança: o motor aceita
+// parâmetro posicional desde o M1 e nada tinha como fornecê-lo.
+func TestParametroPosicionalChegaAoMotor(t *testing.T) {
+	srv := servidorComDados(t, 10, blocoPadrao)
+
+	resp := consulta(t, srv, `{"dataset":"d",
+		"sql":"SELECT id FROM d WHERE estado = ?",
+		"parameters":[{"type":"string","value":"Stop"}]}`)
+	rows, l := resultado(t, resp)
+
+	if l.Erro() != nil {
+		t.Fatalf("fecho de erro: %+v", l.Erro())
+	}
+	if len(rows) != 5 {
+		t.Fatalf("rows = %d, quer 5 (metade dos eventos é Stop)", len(rows))
+	}
+
+	// E o parâmetro de outro tipo também: int64 comparado a campo int64.
+	resp = consulta(t, srv, `{"dataset":"d",
+		"sql":"SELECT id FROM d WHERE porta = ?",
+		"parameters":[{"type":"int64","value":1003}]}`)
+	rows, _ = resultado(t, resp)
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, quer 1", len(rows))
+	}
+}
+
+// §69 e §128: a primeira linha tem de chegar ao cliente ANTES de a última ser
+// produzida.
+//
+// A prova é a métrica de consultas em voo: se o cliente já leu uma row
+// enquanto nishidb_query_active ainda é 1, a resposta não foi montada antes de
+// sair. O resultado é grande de propósito — alguns MB não cabem nos buffers de
+// socket, então um servidor que bufferizasse o resultado inteiro só começaria a
+// escrever depois de terminar, e a leitura da primeira linha travaria.
+func TestAPrimeiraLinhaChegaAntesDaUltimaSerProduzida(t *testing.T) {
+	srv := servidorComDados(t, 30000, blocoPadrao)
+
+	req, err := http.NewRequest(http.MethodPost, "http://"+srv.Endereco()+"/v1/query",
+		strings.NewReader(`{"dataset":"d","sql":"SELECT id, status, porta, ip FROM d"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	l := protocolo.NovoLeitor(resp.Body)
+	if !l.Next() {
+		t.Fatalf("nenhuma row chegou: %v", l.Err())
+	}
+	// Uma row na mão, e a consulta ainda em voo do outro lado.
+	if ativas := valorDaMetrica(t, srv, "nishidb_query_active"); ativas != 1 {
+		t.Fatalf("nishidb_query_active = %v durante o stream, quer 1: "+
+			"a resposta foi produzida inteira antes de sair", ativas)
+	}
+
+	n := 1
+	for l.Next() {
+		n++
+	}
+	if err := l.Err(); err != nil {
+		t.Fatalf("leitura: %v", err)
+	}
+	if n != 30000 || l.Fim() == nil || l.Fim().Rows != 30000 {
+		t.Fatalf("rows = %d, fecho = %+v", n, l.Fim())
+	}
+	// E, terminada a consulta, o medidor volta a zero.
+	esperaMetrica(t, srv, "nishidb_query_active", 0)
+}
+
+// O teto do DATASET é truncamento involuntário: sai como fecho de ERRO, com o
+// código que o CLI traduz em exit 5. Um resultado truncado apresentado como
+// completo é resposta errada.
+func TestTetoDoDatasetSaiComoFechoDeErro(t *testing.T) {
+	srv := servidorComDados(t, 20, blocoPadrao+"query:\n  defaultMaxRows: 5\n")
+
+	resp := consulta(t, srv, `{"dataset":"d","sql":"SELECT id FROM d"}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d: depois do schema o status é sempre 200", resp.StatusCode)
+	}
+	rows, l := resultado(t, resp)
+
+	if len(rows) != 5 {
+		t.Fatalf("rows = %d, quer 5", len(rows))
+	}
+	if l.Fim() != nil {
+		t.Fatalf("fecho de sucesso num resultado truncado: %+v", l.Fim())
+	}
+	if l.Erro() == nil || l.Erro().Code != protocolo.CodMaxRows || l.Erro().Rows != 5 {
+		t.Fatalf("fecho = %+v, quer %s com 5 rows", l.Erro(), protocolo.CodMaxRows)
+	}
+}
+
+// O maxRows do REQUEST é o cliente pedindo menos: não é erro, é o pedido sendo
+// atendido — mas o fecho diz que houve corte.
+func TestMaxRowsDoRequestTruncaSemErro(t *testing.T) {
+	srv := servidorComDados(t, 20, blocoPadrao)
+
+	resp := consulta(t, srv, `{"dataset":"d","sql":"SELECT id FROM d","maxRows":3}`)
+	rows, l := resultado(t, resp)
+
+	if len(rows) != 3 {
+		t.Fatalf("rows = %d, quer 3", len(rows))
+	}
+	if l.Erro() != nil {
+		t.Fatalf("pedir menos não é erro: %+v", l.Erro())
+	}
+	if l.Fim() == nil || !l.Fim().Truncated || l.Fim().Rows != 3 {
+		t.Fatalf("fecho = %+v, quer truncated com 3 rows", l.Fim())
+	}
+}
+
+// Pedir MAIS que o teto do dataset é recusado, não reduzido em silêncio: um
+// clamp calado faria o cliente acreditar que recebeu tudo o que pediu.
+func TestMaxRowsAcimaDoTetoEhRecusado(t *testing.T) {
+	srv := servidorComDados(t, 5, blocoPadrao+"query:\n  defaultMaxRows: 10\n")
+
+	resp := consulta(t, srv, `{"dataset":"d","sql":"SELECT id FROM d","maxRows":1000}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, quer 400", resp.StatusCode)
+	}
+	f := falhaDe(t, resp)
+	if f.Code != protocolo.CodMaxRowsAcimaDoTeto {
+		t.Fatalf("código = %q", f.Code)
+	}
+	if !strings.Contains(f.Message, "10") {
+		t.Fatalf("a mensagem não nomeia o teto efetivo: %q", f.Message)
+	}
+}
+
+// Toda recusa ANTES da primeira linha sai com status de verdade e o mesmo
+// corpo JSON — inclusive o método errado, que é por isso que a rota não delega
+// o 405 ao mux.
+func TestErrosAntesDaPrimeiraLinha(t *testing.T) {
+	srv := servidorComDados(t, 3, blocoPadrao)
+	base := "http://" + srv.Endereco() + "/v1/query"
+
+	t.Run("método", func(t *testing.T) {
+		resp, err := http.Get(base)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != http.StatusMethodNotAllowed {
+			t.Fatalf("status = %d", resp.StatusCode)
+		}
+		if resp.Header.Get("Allow") != http.MethodPost {
+			t.Fatalf("Allow = %q", resp.Header.Get("Allow"))
+		}
+		if f := falhaDe(t, resp); f.Code != protocolo.CodMetodo {
+			t.Fatalf("código = %q", f.Code)
+		}
+	})
+
+	t.Run("content-type", func(t *testing.T) {
+		resp, err := http.Post(base, "text/plain", strings.NewReader(`{"dataset":"d","sql":"SELECT id FROM d"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != http.StatusUnsupportedMediaType {
+			t.Fatalf("status = %d", resp.StatusCode)
+		}
+		if f := falhaDe(t, resp); f.Code != protocolo.CodMediaType {
+			t.Fatalf("código = %q", f.Code)
+		}
+	})
+
+	t.Run("corpo inválido", func(t *testing.T) {
+		resp := consulta(t, srv, `{"dataset":`)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("status = %d", resp.StatusCode)
+		}
+		if f := falhaDe(t, resp); f.Code != protocolo.CodBadRequest {
+			t.Fatalf("código = %q", f.Code)
+		}
+	})
+
+	t.Run("chave desconhecida", func(t *testing.T) {
+		// `maxRow` com typo tem de ser recusado: aceito em silêncio, o cliente
+		// acreditaria ter limitado o resultado.
+		resp := consulta(t, srv, `{"dataset":"d","sql":"SELECT id FROM d","maxRow":3}`)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("status = %d", resp.StatusCode)
+		}
+	})
+
+	t.Run("corpo grande demais", func(t *testing.T) {
+		gordo := `{"dataset":"d","sql":"SELECT id FROM d WHERE id = '` +
+			strings.Repeat("x", protocolo.MaxCorpoRequisicao) + `'"}`
+		resp := consulta(t, srv, gordo)
+		if resp.StatusCode != http.StatusRequestEntityTooLarge {
+			t.Fatalf("status = %d, quer 413", resp.StatusCode)
+		}
+		if f := falhaDe(t, resp); f.Code != protocolo.CodCorpoGrande {
+			t.Fatalf("código = %q", f.Code)
+		}
+	})
+
+	t.Run("dataset desconhecido", func(t *testing.T) {
+		resp := consulta(t, srv, `{"dataset":"nao_existe","sql":"SELECT id FROM nao_existe"}`)
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("status = %d", resp.StatusCode)
+		}
+		if f := falhaDe(t, resp); f.Code != protocolo.CodDatasetDesconhecido {
+			t.Fatalf("código = %q", f.Code)
+		}
+	})
+
+	t.Run("sintaxe com posição", func(t *testing.T) {
+		resp := consulta(t, srv, `{"dataset":"d","sql":"SELECT FROM d"}`)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("status = %d", resp.StatusCode)
+		}
+		f := falhaDe(t, resp)
+		if f.Code != protocolo.CodSintaxe {
+			t.Fatalf("código = %q", f.Code)
+		}
+		if f.Line != 1 || f.Column < 1 {
+			t.Fatalf("posição = linha %d, coluna %d", f.Line, f.Column)
+		}
+	})
+
+	t.Run("bind", func(t *testing.T) {
+		resp := consulta(t, srv, `{"dataset":"d","sql":"SELECT nao_existe FROM d"}`)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("status = %d", resp.StatusCode)
+		}
+		if f := falhaDe(t, resp); f.Code != protocolo.CodBind {
+			t.Fatalf("código = %q", f.Code)
+		}
+	})
+
+	t.Run("parâmetro inválido", func(t *testing.T) {
+		resp := consulta(t, srv, `{"dataset":"d","sql":"SELECT id FROM d WHERE estado = ?",
+			"parameters":[{"type":"ipv4","value":"10.0.0.1"}]}`)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("status = %d", resp.StatusCode)
+		}
+		f := falhaDe(t, resp)
+		if f.Code != protocolo.CodBadParameter {
+			t.Fatalf("código = %q", f.Code)
+		}
+		if !strings.Contains(f.Message, "string") {
+			t.Fatalf("a mensagem não ensina a alternativa: %q", f.Message)
+		}
+	})
+}
+
+// O §81 autoriza rejeitar consulta antes de comprometer a ingestão. Com uma
+// vaga só, a segunda requisição simultânea sai 503 sem tocar o Store.
+func TestConcorrenciaAcimaDoTetoEhRejeitada(t *testing.T) {
+	srv := servidorComDados(t, 30000, blocoPadrao+"runtime:\n  query:\n    maxConcurrent: 1\n")
+
+	// A primeira consulta fica em voo: o cliente lê uma linha e para de ler,
+	// o que segura o servidor no meio do stream.
+	req, err := http.NewRequest(http.MethodPost, "http://"+srv.Endereco()+"/v1/query",
+		strings.NewReader(`{"dataset":"d","sql":"SELECT id, status, porta, ip FROM d"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	primeira, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer primeira.Body.Close()
+
+	l := protocolo.NovoLeitor(primeira.Body)
+	if !l.Next() {
+		t.Fatalf("a primeira consulta não produziu row: %v", l.Err())
+	}
+
+	resp := consulta(t, srv, `{"dataset":"d","sql":"SELECT id FROM d"}`)
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, quer 503", resp.StatusCode)
+	}
+	if resp.Header.Get("Retry-After") == "" {
+		t.Fatal("503 sem Retry-After: o cliente não sabe quando voltar")
+	}
+	f := falhaDe(t, resp)
+	if f.Code != protocolo.CodMuitasQueries {
+		t.Fatalf("código = %q", f.Code)
+	}
+	if !strings.Contains(f.Message, "maxConcurrent") {
+		t.Fatalf("a mensagem não nomeia a chave: %q", f.Message)
+	}
+}
+
+// A vaga tem de voltar em TODO caminho de saída, inclusive nos de erro. Sem
+// isso o servidor para de aceitar consultas depois de N falhas.
+func TestAVagaVoltaDepoisDeCadaConsulta(t *testing.T) {
+	srv := servidorComDados(t, 3, blocoPadrao+"runtime:\n  query:\n    maxConcurrent: 1\n")
+
+	for i := 0; i < 5; i++ {
+		resp := consulta(t, srv, `{"dataset":"d","sql":"SELECT nao_existe FROM d"}`)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("iteração %d: status = %d", i, resp.StatusCode)
+		}
+		resp.Body.Close()
+	}
+	resp := consulta(t, srv, `{"dataset":"d","sql":"SELECT id FROM d"}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("depois de 5 erros a vaga não voltou: status = %d", resp.StatusCode)
+	}
+	rows, _ := resultado(t, resp)
+	if len(rows) != 3 {
+		t.Fatalf("rows = %d", len(rows))
+	}
+}
+
+// Consultas simultâneas dentro do teto não se atrapalham: o Engine é seguro
+// para uso concorrente e o Store é um writer com muitos leitores (§27).
+func TestConsultasSimultaneasDentroDoTeto(t *testing.T) {
+	srv := servidorComDados(t, 500, blocoPadrao+"runtime:\n  query:\n    maxConcurrent: 8\n")
+
+	var wg sync.WaitGroup
+	erros := make(chan error, 8)
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			resp := consulta(t, srv, `{"dataset":"d","sql":"SELECT id, porta FROM d"}`)
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				erros <- fmt.Errorf("status = %d", resp.StatusCode)
+				return
+			}
+			l := protocolo.NovoLeitor(resp.Body)
+			n := 0
+			for l.Next() {
+				n++
+			}
+			if l.Err() != nil {
+				erros <- l.Err()
+				return
+			}
+			if n != 500 {
+				erros <- fmt.Errorf("rows = %d, quer 500", n)
+			}
+		}()
+	}
+	wg.Wait()
+	close(erros)
+	for err := range erros {
+		t.Error(err)
+	}
+}
+
+// A coluna que colide com a chave de moldura é recusada ANTES do primeiro
+// byte: depois dele, a row seria indistinguível de uma linha de controle e não
+// haveria mais como recusar nada.
+func TestColunaComNomeReservadoEhRecusada(t *testing.T) {
+	a := novoAmbienteCom(t, blocoPadrao)
+	a.escreveDataset("d", `version: 1
+name: d
+materialization:
+  key:
+    field: id
+schema:
+  fields:
+    id:
+      type: string
+    nishidb:
+      type: string
+`)
+	srv, err := server.Novo(a.carrega(), server.Opcoes{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	roda(t, srv)
+
+	resp := consulta(t, srv, `{"dataset":"d","sql":"SELECT id, nishidb FROM d"}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, quer 400", resp.StatusCode)
+	}
+	f := falhaDe(t, resp)
+	if f.Code != protocolo.CodColunaReservada {
+		t.Fatalf("código = %q", f.Code)
+	}
+	if !strings.Contains(f.Message, "alias") {
+		t.Fatalf("a mensagem não diz como contornar: %q", f.Message)
+	}
+
+	// E a mesma coluna com alias passa: a colisão é de NOME DE SAÍDA.
+	resp = consulta(t, srv, `{"dataset":"d","sql":"SELECT id FROM d"}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+}
+
+// query.resultBatchSize ganhou leitor: é o lote de FLUSH da resposta. O
+// contrato observável é que o resultado sai íntegro com qualquer lote — o
+// número muda de quanto em quanto os bytes vão para o fio, não o que sai.
+func TestResultBatchSizeNaoAlteraOResultado(t *testing.T) {
+	for _, lote := range []int{1, 7, 4096} {
+		t.Run(fmt.Sprint(lote), func(t *testing.T) {
+			srv := servidorComDados(t, 100,
+				blocoPadrao+fmt.Sprintf("query:\n  resultBatchSize: %d\n", lote))
+			resp := consulta(t, srv, `{"dataset":"d","sql":"SELECT id FROM d"}`)
+			rows, l := resultado(t, resp)
+			if len(rows) != 100 || l.Fim() == nil || l.Fim().Rows != 100 {
+				t.Fatalf("lote %d: rows = %d, fecho = %+v", lote, len(rows), l.Fim())
+			}
+		})
+	}
+}
+
+// valorDaMetrica lê UMA série sem label do /metrics (ou a soma das séries com
+// label, que é o que interessa em processo de um dataset só).
+func valorDaMetrica(t *testing.T, srv *server.Servidor, nome string) float64 {
+	t.Helper()
+	resp, err := http.Get("http://" + srv.Endereco() + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	corpo, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var total float64
+	achou := false
+	for _, linha := range strings.Split(string(corpo), "\n") {
+		if !strings.HasPrefix(linha, nome) || strings.HasPrefix(linha, "#") {
+			continue
+		}
+		resto := linha[len(nome):]
+		if resto != "" && resto[0] != ' ' && resto[0] != '{' {
+			continue // outro nome com o mesmo prefixo
+		}
+		i := strings.LastIndexByte(linha, ' ')
+		var v float64
+		if _, err := fmt.Sscanf(linha[i+1:], "%g", &v); err != nil {
+			t.Fatalf("valor ilegível em %q: %v", linha, err)
+		}
+		total += v
+		achou = true
+	}
+	if !achou {
+		t.Fatalf("métrica %q ausente do /metrics", nome)
+	}
+	return total
+}
+
+// esperaMetrica espera a série atingir o valor: o decremento do medidor
+// acontece no defer do handler, que pode rodar depois de o cliente já ter o
+// último byte.
+func esperaMetrica(t *testing.T, srv *server.Servidor, nome string, quer float64) {
+	t.Helper()
+	prazo := time.Now().Add(2 * time.Second)
+	for {
+		got := valorDaMetrica(t, srv, nome)
+		if got == quer {
+			return
+		}
+		if time.Now().After(prazo) {
+			t.Fatalf("%s = %v, quer %v", nome, got, quer)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// §128 — a memória da consulta é O(lote), NUNCA O(resultado).
+//
+// A medida é o heap VIVO enquanto a consulta está em voo, com o cliente parado
+// no meio do stream: nesse estado o servidor está bloqueado escrevendo, nada se
+// move, e um runtime.GC() deixa de pé só o que a consulta realmente segura. O
+// delta é tirado contra o heap do MESMO servidor sem consulta nenhuma, porque o
+// índice primário e o overlay crescem com o número de linhas e apareceriam na
+// medida absoluta como se fossem custo do stream.
+//
+// Um servidor que acumulasse o resultado seguraria, no caso grande, alguns MB a
+// mais de linhas serializadas — e é exatamente isso que o teto abaixo recusa.
+func TestOCustoEmVooNaoAcompanhaOTamanhoDoResultado(t *testing.T) {
+	pequeno := custoEmVoo(t, 2000)
+	grande := custoEmVoo(t, 40000)
+
+	// 20× mais linhas. Se o resultado fosse acumulado, seriam ~3,5 MB a mais;
+	// o teto de 1 MiB dá folga larga para ruído de heap sem deixar passar
+	// acumulação.
+	const teto = 1 << 20
+	if grande > pequeno+teto {
+		t.Fatalf("custo em voo: %d linhas = %d B, %d linhas = %d B (delta %d B > %d B): "+
+			"a memória está acompanhando o tamanho do resultado",
+			2000, pequeno, 40000, grande, grande-pequeno, teto)
+	}
+	t.Logf("custo em voo: 2.000 linhas = %d B, 40.000 linhas = %d B", pequeno, grande)
+}
+
+// custoEmVoo devolve quantos bytes de heap vivo a consulta segura enquanto
+// está parada no meio do stream.
+func custoEmVoo(t *testing.T, linhas int) uint64 {
+	t.Helper()
+	srv := servidorComDados(t, linhas, blocoPadrao)
+	base := heapVivo()
+
+	req, err := http.NewRequest(http.MethodPost, "http://"+srv.Endereco()+"/v1/query",
+		strings.NewReader(`{"dataset":"d","sql":"SELECT id, status, porta, ip FROM d"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	l := protocolo.NovoLeitor(resp.Body)
+	if !l.Next() {
+		t.Fatalf("nenhuma row chegou: %v", l.Err())
+	}
+	// A partir daqui ninguém lê: o servidor enche os buffers e bloqueia no
+	// write, que é o estado estável de que a medida precisa.
+	if ativas := valorDaMetrica(t, srv, "nishidb_query_active"); ativas != 1 {
+		t.Fatalf("a consulta já tinha terminado quando o cliente parou de ler (query_active = %v): "+
+			"a resposta foi produzida inteira antes de sair, e não há custo em voo para medir", ativas)
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	durante := heapVivo()
+	if durante < base {
+		return 0
+	}
+	return durante - base
+}
+
+func heapVivo() uint64 {
+	// Dois GCs: o primeiro roda os finalizadores, o segundo coleta o que eles
+	// liberaram. É a receita padrão para uma leitura estável de heap vivo.
+	runtime.GC()
+	runtime.GC()
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	return m.HeapAlloc
+}
