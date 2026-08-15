@@ -121,7 +121,7 @@ func TestStatsConcordaComOMetrics(t *testing.T) {
 	if _, l := resultado(t, resp); l.Fim() == nil {
 		t.Fatal("a consulta de aquecimento não fechou bem")
 	}
-	consulta(t, srv, `{"dataset":"d","sql":"SELECT nao_existe FROM d"}`).Body.Close()
+	consulta(t, srv, `{"dataset":"d","sql":"SELECT nao_existe FROM d"}`).Body.Close() //nolint:errcheck // corpo já lido; o erro do fecho não muda o teste
 
 	e := leJSON[protocolo.Estatisticas](t, srv, "/v1/stats")
 	if len(e.Datasets) != 1 {
@@ -172,7 +172,7 @@ func TestAsCincoSeriesDeQueryDoSpec92SaoAlimentadas(t *testing.T) {
 
 	resp := consulta(t, srv, `{"dataset":"d","sql":"SELECT id FROM d"}`)
 	resultado(t, resp)
-	consulta(t, srv, `{"dataset":"d","sql":"SELECT nao_existe FROM d"}`).Body.Close()
+	consulta(t, srv, `{"dataset":"d","sql":"SELECT nao_existe FROM d"}`).Body.Close() //nolint:errcheck // corpo já lido; o erro do fecho não muda o teste
 
 	scrape := pega(t, srv, "/metrics")
 	for _, nome := range []string{
@@ -212,7 +212,7 @@ func TestDatasetInexistenteNaoCriaSerie(t *testing.T) {
 	srv := servidorComDados(t, 1, blocoPadrao)
 
 	for _, nome := range []string{"a1", "a2", "a3"} {
-		consulta(t, srv, `{"dataset":"`+nome+`","sql":"SELECT id FROM x"}`).Body.Close()
+		consulta(t, srv, `{"dataset":"`+nome+`","sql":"SELECT id FROM x"}`).Body.Close() //nolint:errcheck // corpo já lido; o erro do fecho não muda o teste
 	}
 	scrape := pega(t, srv, "/metrics")
 	for _, nome := range []string{"a1", "a2", "a3"} {

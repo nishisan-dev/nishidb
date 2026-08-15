@@ -69,7 +69,7 @@ func semeia(t *testing.T, a *ambiente, nome string, n int) {
 	}
 	compilado, err := spec.Compile(st.FieldDict())
 	if err != nil {
-		st.Close()
+		_ = st.Close()
 		t.Fatal(err)
 	}
 	mat := materializer.New(compilado, st)
@@ -81,12 +81,12 @@ func semeia(t *testing.T, a *ambiente, nome string, n int) {
 		ev := fmt.Sprintf(`{"id":"S-%06d","status":%q,"porta":%d,"ip":"10.0.0.%d"}`,
 			i, estado, 1000+i, i%256)
 		if r := mat.Apply([]byte(ev)); r.Err != nil {
-			st.Close()
+			_ = st.Close()
 			t.Fatalf("evento %d: %v", i, r.Err)
 		}
 	}
 	if err := st.Checkpoint(); err != nil {
-		st.Close()
+		_ = st.Close()
 		t.Fatal(err)
 	}
 	if err := st.Close(); err != nil {
@@ -141,10 +141,19 @@ func consulta(t *testing.T, srv *server.Servidor, corpo string) *http.Response {
 	return resp
 }
 
+// fecha fecha o corpo e reclama do erro: um corpo que não fecha vaza conexão, e
+// o teste seguinte herdaria o problema sem saber de onde veio.
+func fecha(t *testing.T, resp *http.Response) {
+	t.Helper()
+	if err := resp.Body.Close(); err != nil {
+		t.Errorf("fechando o corpo: %v", err)
+	}
+}
+
 // resultado percorre a moldura inteira e devolve as rows cruas e o leitor.
 func resultado(t *testing.T, resp *http.Response) ([]string, *protocolo.Leitor) {
 	t.Helper()
-	defer resp.Body.Close()
+	defer fecha(t, resp)
 	l := protocolo.NovoLeitor(resp.Body)
 	var rows []string
 	for l.Next() {
@@ -158,7 +167,7 @@ func resultado(t *testing.T, resp *http.Response) ([]string, *protocolo.Leitor) 
 
 func falhaDe(t *testing.T, resp *http.Response) protocolo.Falha {
 	t.Helper()
-	defer resp.Body.Close()
+	defer fecha(t, resp)
 	var corpo protocolo.CorpoErro
 	if err := json.NewDecoder(resp.Body).Decode(&corpo); err != nil {
 		t.Fatalf("corpo de erro ilegível: %v", err)
@@ -251,7 +260,7 @@ func TestAPrimeiraLinhaChegaAntesDaUltimaSerProduzida(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer fecha(t, resp)
 
 	l := protocolo.NovoLeitor(resp.Body)
 	if !l.Next() {
@@ -471,7 +480,7 @@ func TestConcorrenciaAcimaDoTetoEhRejeitada(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer primeira.Body.Close()
+	defer fecha(t, primeira)
 
 	l := protocolo.NovoLeitor(primeira.Body)
 	if !l.Next() {
@@ -504,7 +513,7 @@ func TestAVagaVoltaDepoisDeCadaConsulta(t *testing.T) {
 		if resp.StatusCode != http.StatusBadRequest {
 			t.Fatalf("iteração %d: status = %d", i, resp.StatusCode)
 		}
-		resp.Body.Close()
+		resp.Body.Close() //nolint:errcheck // corpo já lido; o erro do fecho não muda o teste
 	}
 	resp := consulta(t, srv, `{"dataset":"d","sql":"SELECT id FROM d"}`)
 	if resp.StatusCode != http.StatusOK {
@@ -528,7 +537,7 @@ func TestConsultasSimultaneasDentroDoTeto(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			resp := consulta(t, srv, `{"dataset":"d","sql":"SELECT id, porta FROM d"}`)
-			defer resp.Body.Close()
+			defer fecha(t, resp)
 			if resp.StatusCode != http.StatusOK {
 				erros <- fmt.Errorf("status = %d", resp.StatusCode)
 				return
@@ -594,7 +603,7 @@ schema:
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	resp.Body.Close() //nolint:errcheck // corpo já lido; o erro do fecho não muda o teste
 }
 
 // query.resultBatchSize ganhou leitor: é o lote de FLUSH da resposta. O
@@ -622,7 +631,7 @@ func valorDaMetrica(t *testing.T, srv *server.Servidor, nome string) float64 {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer fecha(t, resp)
 	corpo, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatal(err)
@@ -713,7 +722,7 @@ func custoEmVoo(t *testing.T, linhas int) uint64 {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer fecha(t, resp)
 
 	l := protocolo.NovoLeitor(resp.Body)
 	if !l.Next() {

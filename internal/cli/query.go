@@ -21,12 +21,24 @@ func runQuery(args []string, amb Ambiente) int {
 		argConfig = fs.String("config", "", "caminho do nishidb.yaml")
 		dataset   = fs.String("dataset", "", "nome do dataset")
 		limit     = fs.Int("limit", -1, "sobrepõe o LIMIT da query")
+		servidor  = fs.String("server", "", "consulta pelo protocolo remoto em vez de abrir o dataset local")
 	)
 	if err := fs.Parse(args); err != nil {
 		return ExitUso
 	}
-	if *argConfig == "" || *dataset == "" {
-		fmt.Fprintln(amb.Stderr, "query: --config e --dataset são obrigatórios")
+	// Com --server o dataset não é aberto aqui, então não há nishidb.yaml para
+	// ler: quem resolve caminho, teto e timeout é o servidor. Exigir --config
+	// obrigaria o operador a manter uma cópia da configuração do servidor na
+	// máquina de onde ele consulta.
+	switch {
+	case *dataset == "":
+		fmt.Fprintln(amb.Stderr, "query: --dataset é obrigatório")
+		return ExitUso
+	case *servidor == "" && *argConfig == "":
+		fmt.Fprintln(amb.Stderr, "query: informe --config (consulta local) ou --server (consulta remota)")
+		return ExitUso
+	case *servidor != "" && *argConfig != "":
+		fmt.Fprintln(amb.Stderr, "query: --config e --server são exclusivos; o --server usa a configuração do servidor")
 		return ExitUso
 	}
 	if fs.NArg() != 1 {
@@ -38,6 +50,10 @@ func runQuery(args []string, amb Ambiente) int {
 		sql = comLimit(sql, *limit)
 	}
 
+	if *servidor != "" {
+		return consultaRemota(*servidor, *dataset, sql, amb)
+	}
+
 	cfg, err := nishiconfig.CarregaConfig(*argConfig)
 	if err != nil {
 		fmt.Fprintln(amb.Stderr, "query:", err)
@@ -47,6 +63,7 @@ func runQuery(args []string, amb Ambiente) int {
 	st, compilado, err := abreDataset(cfg, *dataset)
 	if err != nil {
 		fmt.Fprintln(amb.Stderr, "query:", err)
+		dicaDeServidor(err, *argConfig, *dataset, amb)
 		return codigoDoErro(err)
 	}
 	defer st.Close()

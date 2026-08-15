@@ -59,6 +59,7 @@ const uso = `nishidb — engine de materialização e consulta
 USO
   nishidb ingest  --config <nishidb.yaml> --dataset <nome> --input <arquivo|-> [--checkpoint-every N]
   nishidb query   --config <nishidb.yaml> --dataset <nome> [--limit N] '<SQL>'
+  nishidb query   --server <host:porta>    --dataset <nome> [--limit N] '<SQL>'
   nishidb server  --config <nishidb.yaml> [--log-format json|texto] [--log-level N] [--pprof <addr>]
   nishidb offsets --config <nishidb.yaml> --dataset <nome> (--show | --reset earliest|latest | --set p:o,...) [--yes]
 
@@ -72,11 +73,18 @@ QUERY
   Executa o SQL e escreve NDJSON no stdout, uma linha por row, em streaming.
   --limit N              sobrepõe o LIMIT da query. O maxRows do dataset
                          continua valendo como teto.
+  --server <host:porta>  consulta pelo protocolo remoto (§67) em vez de abrir
+                         o dataset local. É o caminho para consultar COM o
+                         nishidb server no ar: o flock do dataset é exclusivo
+                         por processo, e a consulta local sai com exit 3
+                         enquanto o servidor estiver de pé. Exclusivo com
+                         --config, que só vale para a consulta local.
 
 SERVER
   Processo de longa duração: consultas e ingestão Kafka no MESMO processo.
   Consome os datasets com source.kafka.enabled: true; os demais ficam só
-  consultáveis. Expõe GET /metrics e GET /v1/health.
+  consultáveis. Expõe POST /v1/query, GET /v1/metadata, GET /v1/stats,
+  GET /v1/health e GET /metrics.
   --pprof <addr>         endpoints de debug num listener próprio. Modo
                          administrativo: não exponha esta porta.
 
