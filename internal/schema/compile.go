@@ -44,6 +44,24 @@ const (
 	IndexHash
 )
 
+// String devolve o índice como o operador o escreveu no YAML.
+//
+// O vocabulário do YAML é também o do wire (o `index` de /v1/metadata): são a
+// mesma informação — o que a configuração declara —, e traduzi-la para um
+// segundo conjunto de palavras só criaria a chance de os dois divergirem.
+func (k IndexKind) String() string {
+	switch k {
+	case IndexNone:
+		return "none"
+	case IndexBitmap:
+		return "bitmap"
+	case IndexHash:
+		return "hash"
+	default:
+		return "desconhecido"
+	}
+}
+
 // FieldDictionary é o que o schema consome do storage (fielddict): IDs
 // estáveis e persistentes por nome de campo, e o tipo FIXADO dos campos sem
 // declaração (R11).

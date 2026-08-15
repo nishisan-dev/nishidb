@@ -1,0 +1,190 @@
+// Package protocolo é o contrato do protocolo remoto do §67-69: o corpo da
+// requisição de consulta, a moldura da resposta NDJSON, os corpos de
+// /v1/metadata e /v1/stats e a tabela de tipos do §73.
+//
+// Mora em pacote próprio, fora de internal/server, porque tem DOIS falantes: o
+// servidor, que produz, e o `nishidb query --server`, que consome — e amanhã o
+// driver JDBC da Fase 7, que é cliente deste mesmo formato. Com os tipos
+// morando dentro do servidor, o cliente redeclararia o formato e as duas
+// definições divergiriam no primeiro campo acrescentado, sem nada em camada
+// nenhuma reclamar.
+//
+// O pacote depende apenas da stdlib, de internal/types e de internal/typeparse
+// — este último de propósito: um parâmetro que entra pelo protocolo e um
+// literal escrito na query devem ser interpretados byte a byte da mesma forma,
+// e a única maneira de garantir isso é os dois passarem pelos MESMOS parsers.
+package protocolo
+
+import (
+	"encoding/json"
+
+	"github.com/nishisan-dev/nishidb/internal/types"
+)
+
+// ContentTypeNDJSON é o Content-Type da resposta de /v1/query (§69).
+const ContentTypeNDJSON = "application/x-ndjson"
+
+// ContentTypeJSON é o Content-Type da requisição e das respostas que não são
+// stream (/v1/metadata, /v1/stats e os erros que saem antes da primeira linha).
+const ContentTypeJSON = "application/json"
+
+// MaxCorpoRequisicao é o teto do corpo de /v1/query.
+//
+// Existe porque o §128 proíbe fila sem limite, e um POST sem teto é
+// exatamente isso: um cliente que envia 2 GiB de SQL faz o servidor alocar
+// 2 GiB antes de descobrir que a query é inválida. 1 MiB é folga de sobra para
+// uma query com parâmetros — o SQL da v1 não tem JOIN nem subquery.
+const MaxCorpoRequisicao = 1 << 20
+
+// Requisicao é o corpo de POST /v1/query (§68).
+//
+// MaxRows e TimeoutMs são PONTEIROS para separar "ausente" de "zero": ausente
+// herda o teto do dataset, e zero é um pedido explícito de nada, que precisa
+// ser recusado com a mesma clareza de um negativo.
+type Requisicao struct {
+	Dataset    string      `json:"dataset"`
+	SQL        string      `json:"sql"`
+	Parameters []Parametro `json:"parameters"`
+	MaxRows    *int        `json:"maxRows"`
+	TimeoutMs  *int        `json:"timeoutMs"`
+}
+
+// Parametro é um parâmetro posicional do §68.
+//
+// Value é RawMessage, e não `any`, por duas razões. A primeira é precisão: o
+// `any` do encoding/json decodifica todo número como float64, e um int64 acima
+// de 2^53 chegaria ao motor com o valor ERRADO e sem erro nenhum. A segunda é
+// que o tipo DECLARADO manda — guardar os bytes crus é o que permite recusar
+// {"type":"int64","value":3.5} em vez de arredondar por conta própria.
+type Parametro struct {
+	Type  string          `json:"type"`
+	Value json.RawMessage `json:"value"`
+}
+
+// Os quatro tipos de wire aceitos em Parametro.Type.
+//
+// A lista é curta porque é o contrato de binder.coerceParam, não uma escolha
+// deste pacote: o binder recusa parâmetro já em representação binária para
+// manter UM caminho de coerção e UM conjunto de testes. Endereços, prefixos e
+// timestamps viajam como string e são convertidos pela mesma tabela dos
+// literais SQL — que é o que o §73 já pressupõe ao mapear ipv4 para VARCHAR.
+const (
+	TipoString  = "string"
+	TipoInt64   = "int64"
+	TipoDouble  = "double"
+	TipoBoolean = "boolean"
+)
+
+// TipoDesconhecido é o nome de tipo de uma coluna auto que o dataset ainda não
+// observou. Não é erro: é a ausência de evento que fixasse o tipo.
+const TipoDesconhecido = "unknown"
+
+// ChaveMoldura é a chave reservada que distingue uma linha de MOLDURA de uma
+// linha de dados.
+//
+// A escolha de um discriminador na raiz do objeto é o que permite às linhas de
+// dados serem exatamente o que o §69 mostra — sem envelope, sem custo de
+// serialização a mais. O preço é que uma coluna de saída com este nome tornaria
+// a row indistinguível da moldura; por isso o servidor RECUSA a query, antes do
+// primeiro byte, quando a projeção produz uma coluna chamada assim.
+const ChaveMoldura = "nishidb"
+
+// Os três valores de ChaveMoldura.
+const (
+	MolduraSchema = "schema"
+	MolduraFim    = "end"
+	MolduraErro   = "error"
+)
+
+// LinhaSchema é a PRIMEIRA linha da resposta de /v1/query.
+//
+// Ela existe porque o NDJSON não carrega tipos e o ResultSetMetaData do §71
+// precisa deles. Derivá-los do dado não funciona: uma coluna que é NULL em
+// todas as linhas não revela tipo nenhum, e mesmo uma que revela só o faria
+// depois da primeira row — tarde demais para quem já está consumindo o stream.
+type LinhaSchema struct {
+	Nishidb string   `json:"nishidb"`
+	Dataset string   `json:"dataset"`
+	Columns []Coluna `json:"columns"`
+}
+
+// Coluna descreve uma coluna da projeção.
+type Coluna struct {
+	Name string `json:"name"`
+	Type string `json:"type"`
+	JDBC string `json:"jdbc"`
+}
+
+// LinhaFim é a ÚLTIMA linha de uma resposta bem-sucedida.
+//
+// Truncated distingue "acabou" de "parou no teto de query.maxRows". Sem essa
+// distinção o cliente apresentaria um resultado incompleto como completo, que é
+// uma resposta errada — e é o motivo de o erro de teto sair depois das rows em
+// vez de virar status HTTP.
+type LinhaFim struct {
+	Nishidb   string `json:"nishidb"`
+	Rows      int64  `json:"rows"`
+	Truncated bool   `json:"truncated"`
+}
+
+// LinhaErro é a última linha quando a consulta falha DEPOIS de a primeira linha
+// já ter saído.
+//
+// É a resposta ao problema estrutural do streaming: o status HTTP foi enviado
+// junto com o primeiro byte, então uma query que quebra na linha 10.000 não tem
+// mais status para usar. Rows diz quantas linhas válidas o cliente recebeu
+// antes da falha.
+type LinhaErro struct {
+	Nishidb string `json:"nishidb"`
+	Code    string `json:"code"`
+	Rows    int64  `json:"rows"`
+	Message string `json:"message"`
+}
+
+// CorpoErro é a resposta de erro que sai ANTES da primeira linha, com o status
+// HTTP correspondente.
+type CorpoErro struct {
+	Error Falha `json:"error"`
+}
+
+// Falha é o erro em si. Line e Column são 1-based e só aparecem para erro de
+// sintaxe ou de bind, que são os que têm posição no texto da query — é a mesma
+// informação que o CLI já imprime com o cursor sob o trecho ofensor.
+type Falha struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	Line    int    `json:"line,omitempty"`
+	Column  int    `json:"column,omitempty"`
+}
+
+// Códigos de erro do protocolo. São estáveis: o cliente casa por código, nunca
+// pelo texto da mensagem, que é prosa para humanos e pode ser reescrita.
+const (
+	CodBadRequest          = "BAD_REQUEST"
+	CodBadParameter        = "BAD_PARAMETER"
+	CodMaxRowsAcimaDoTeto  = "MAX_ROWS_ABOVE_LIMIT"
+	CodColunaReservada     = "RESERVED_COLUMN"
+	CodSintaxe             = "SYNTAX"
+	CodBind                = "BIND"
+	CodDatasetDesconhecido = "UNKNOWN_DATASET"
+	CodMetodo              = "METHOD_NOT_ALLOWED"
+	CodMediaType           = "UNSUPPORTED_MEDIA_TYPE"
+	CodCorpoGrande         = "REQUEST_TOO_LARGE"
+	CodMuitasQueries       = "TOO_MANY_QUERIES"
+	CodTimeout             = "TIMEOUT"
+	CodMaxRows             = "MAX_ROWS_EXCEEDED"
+	CodDatasetCorrompido   = "DATASET_CORRUPT"
+	CodInterno             = "INTERNAL"
+)
+
+// NomeDeTipo é o nome do tipo como o operador o escreve no YAML (§17).
+//
+// TypeNull vira "unknown" em vez de "null": no wire, "null" descreveria um
+// VALOR ausente, e aqui o que é desconhecido é o TIPO da coluna — um campo auto
+// que nenhum evento fixou ainda.
+func NomeDeTipo(t types.FieldType) string {
+	if JDBCDeTipo(t) == JDBCOther {
+		return TipoDesconhecido
+	}
+	return t.String()
+}

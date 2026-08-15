@@ -20,6 +20,21 @@ type ColView struct {
 	Val types.Value
 }
 
+// ColMeta é o metadado ESTÁVEL de uma coluna projetada: o que vale para a
+// query inteira, e não para uma row.
+//
+// É tipo próprio, e não uma ColView com os campos de valor zerados, porque
+// ColView carrega Val/Null válidos SOMENTE durante uma row — entregá-la como
+// metadado convidaria o chamador a ler um valor que não existe mais.
+type ColMeta struct {
+	// Name é o nome de SAÍDA: o alias quando existe, senão o nome original.
+	Name string
+	// Type é o tipo DECLARADO no schema. É types.TypeNull quando a coluna é um
+	// campo auto que o dataset nunca observou — o tipo não é desconhecido por
+	// falha, é desconhecido porque nenhum evento o fixou ainda.
+	Type types.FieldType
+}
+
 // Row é a visão de uma linha do resultado. É barata de copiar, mas o slice
 // interno é REUTILIZADO a cada Next: copiar a Row não desacopla os valores.
 type Row struct{ cols []ColView }

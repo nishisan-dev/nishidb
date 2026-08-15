@@ -13,6 +13,14 @@ import (
 
 // RowIterator é o contrato de streaming: nada do resultado é materializado.
 type RowIterator interface {
+	// Columns descreve a PROJEÇÃO e é válida desde o Open, antes do primeiro
+	// Next — inclusive quando o resultado é vazio.
+	//
+	// Existe porque o NDJSON não carrega tipos, e o ResultSetMetaData do §71
+	// precisa deles ANTES da primeira row: derivá-los do dado é impossível
+	// para a coluna que é NULL em todas as linhas, e é tarde demais para quem
+	// já começou a receber o stream.
+	Columns() []ColMeta
 	// Next avança para a próxima row. false = fim, LIMIT, teto, cancelamento
 	// ou erro — Err() distingue.
 	Next() bool
@@ -297,6 +305,18 @@ func (it *iterador) encerra() {
 	// WithTimeout fica vivo até o deadline em toda query com LIMIT.
 	it.cancel()
 	it.cnt.flush(it.metrics)
+}
+
+// Columns devolve uma CÓPIA do metadado da projeção. A cópia é deliberada: as
+// ColView internas são reescritas a cada Next, e entregar o slice interno faria
+// o chamador guardar um metadado que muda sob os pés dele. É uma alocação por
+// QUERY, fora do caminho quente.
+func (it *iterador) Columns() []ColMeta {
+	out := make([]ColMeta, len(it.cols))
+	for i, c := range it.cols {
+		out[i] = ColMeta{Name: c.Name, Type: c.Type}
+	}
+	return out
 }
 
 func (it *iterador) Row() Row {
