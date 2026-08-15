@@ -31,6 +31,12 @@ com 4 partições, 3,3 milhões de eventos produzidos, `nishidb server` no ar e
 | 5 | `NO query result buffering proporcional ao resultado` | §128 | **Atendido** | `TestOCustoEmVooNaoAcompanhaOTamanhoDoResultado`: **~40 KB de heap vivo tanto para 2.000 quanto para 40.000 linhas** |
 | 6 | As quatro métricas de consulta do §92 | §92 | **Atendido** | `TestAsCincoSeriesDeQueryDoSpec92SaoAlimentadas` (as quatro mais `full_scans`) |
 | 7 | Logs estruturados com os campos do §95 | §95 | **Atendido** | `query.concluida`, `query.recusada`, `query.falhou`, todos com `component`/`dataset`/`event`; nenhum SQL em INFO |
+| 8 | Os doze query tests do §106 **pelo caminho HTTP** | §106 | **Atendido** | `TestSpec106PeloProtocoloHTTP` (um subteste por item) e `TestSpec106RotuloDaMolduraCasaComAsRows` |
+
+Os doze casos do §106 já existiam contra o Engine, e repeti-los pelo protocolo
+não é redundância: entre o motor e o cliente há projeção, alias, serialização e
+moldura. Um campo quoted que chegasse ao cliente com o rótulo errado passaria
+verde na suíte do motor e quebraria o `ResultSetMetaData` do driver.
 
 ## Os dois gates, e por que eles valem
 
