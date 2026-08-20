@@ -116,24 +116,54 @@ func (s *Store) checkpoint() error {
 		HashKind:            s.prim.HashKind(),
 		FieldDictValidBytes: s.dict.SizeBytes(),
 	}
-	// O mesmo ListSegments que monta o manifest reabastece o segSize que o
-	// Stats lê. É reconstrução, não merge: um segmento aposentado pela
-	// compaction (§53-55) some do diretório, e só zerar o mapa faz ele sumir
-	// também da conta de disco — atualizar entrada por entrada deixaria o
-	// tamanho do arquivo removido somando para sempre.
+	// Este ListSegments é o único ponto do código que sabe QUAIS segmentos
+	// existem, e ele roda sob o mutex do writer: a listagem é um snapshot
+	// consistente, nenhuma rotação se intercala entre ela e o que vem abaixo.
+	// Aproveitar isso para reconciliar os dois mapas de contabilidade — e não
+	// só para montar o manifest — é o que faz o Stats parar de mentir nas duas
+	// pontas.
+	//
+	// segSize é RECONSTRUÍDO, não mesclado: um segmento aposentado pela
+	// compaction (§53-55) some do diretório, e atualizar entrada por entrada
+	// deixaria o tamanho do arquivo removido somando para sempre.
 	clear(s.segSize)
 	for _, ref := range segs {
 		s.segSize[ref.ID] = ref.SizeBytes
 		info := checkpoint.SegmentInfo{ID: ref.ID, SizeBytes: ref.SizeBytes}
-		if t := s.segTally[ref.ID]; t != nil {
-			// Liveness real do que o writer viu: updates decrementam o
-			// segmento do record anterior no Put. Segmentos anteriores ao
-			// restart são semeados pela recovery (S12, design §14).
-			info.TotalRecords = t.totalRecords
-			info.LiveRecords = t.liveRecords
-			info.LiveBytes = t.liveBytes
+		t := s.segTally[ref.ID]
+		if t == nil {
+			// Segmento que existe em disco e que o writer nunca tocou. Não é
+			// hipótese: TODO dataset novo nasce assim — o segmento inicial é
+			// criado na abertura e o tally só ganha entrada no applyRecord.
+			// Sem semear aqui, o Stats de um dataset recém-provisionado
+			// reportaria `segments=0` com `current_segment=1`, que é snapshot
+			// incoerente vazando para o /v1/stats e para a
+			// nishidb_segments_total. Os zeros que entram no manifest são os
+			// mesmos de antes, quando o `t != nil` simplesmente falhava.
+			t = &segStats{}
+			s.segTally[ref.ID] = t
 		}
+		// Liveness real do que o writer viu: updates decrementam o
+		// segmento do record anterior no Put. Segmentos anteriores ao
+		// restart são semeados pela recovery (S12, design §14).
+		info.TotalRecords = t.totalRecords
+		info.LiveRecords = t.liveRecords
+		info.LiveBytes = t.liveBytes
 		m.Segments = append(m.Segments, info)
+	}
+	// E a poda, que é a outra metade da mesma reconciliação: o tally não perde
+	// entrada por conta própria em lugar nenhum do código. Sem isto, o
+	// segmento que a compaction aposentar continuaria contado pelo Stats para
+	// sempre — o arquivo sai do diretório, o manifest para de nomeá-lo, o
+	// StorageBytes dele some, e SegmentsTotal fica marcando um segmento que
+	// não existe mais. É a mesma direção da decisão D4 (a varredura tem
+	// autoridade sobre o tally do segmento que ela esvaziou), aplicada ao
+	// único fato que o diretório conhece melhor que o writer: se o segmento
+	// ainda está lá.
+	for id := range s.segTally {
+		if _, existe := s.segSize[id]; !existe {
+			delete(s.segTally, id)
+		}
 	}
 	for field, ix := range s.bitmaps {
 		m.Bitmaps = append(m.Bitmaps, checkpoint.BitmapInfo{

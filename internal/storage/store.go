@@ -98,7 +98,8 @@ type Options struct {
 // Stats é o snapshot mínimo de estado do Store.
 type Stats struct {
 	RowCount uint64
-	// SegmentsTotal conta os segmentos que o writer conhece. Já foi
+	// SegmentsTotal conta segmentos de fato: o writer os acrescenta ao
+	// rotacionar e o checkpoint os reconcilia com o ListSegments. Já foi
 	// DERIVADO do ID corrente ("IDs monotônicos desde 1, sem remoção"),
 	// premissa que a compaction do §53-55 quebra: o ID nunca regride, mas o
 	// arquivo é aposentado, e derivar passaria a reportar como existente um
@@ -114,15 +115,27 @@ type Stats struct {
 	// antecede o ENOSPC — o §86 dá 2 a 3 dias de margem a 500 ev/s, curto
 	// demais para descobrir pelo alerta do filesystem.
 	//
-	// Ressalva de FRESCOR, e ela vai só para um lado: o tamanho é o do
-	// último checkpoint, então entre dois checkpoints o valor fica ATRÁS do
-	// que o segmento corrente já cresceu — é limite INFERIOR, nunca
-	// superior. Errar para baixo numa série de disco é o lado seguro de
-	// errar apenas porque o gráfico atrasa; errar para cima faria o operador
-	// provisionar disco que não estava sendo usado. Relistar o diretório a
-	// cada Stats() poria um readdir em toda raspagem de métrica, e o
-	// intervalo de checkpoint é ordens de grandeza menor que a margem até o
-	// disco encher.
+	// Ressalva de FRESCOR, e ela é GRANDE: o tamanho é o do último
+	// ListSegments, que só roda no checkpoint, então o valor fica atrás de
+	// TUDO que foi escrito desde então — não só do crescimento do segmento
+	// corrente, mas de segmentos inteiros já selados no intervalo. Medido com
+	// SegmentSize de 8 KiB e 400 Puts sem checkpoint intermediário: 64 bytes
+	// reportados contra 28.256 em quatro arquivos, subestimativa de ~440x.
+	//
+	// A direção é o que se garante, e ela vale sempre: limite INFERIOR, nunca
+	// superior. Errar para baixo numa série de disco é o lado seguro — errar
+	// para cima faria o operador provisionar disco que não estava sendo
+	// usado. Mas a MAGNITUDE do atraso é a do intervalo entre checkpoints, e
+	// com checkpoint disparado por evento (débito 56) esse intervalo é
+	// ilimitado: ingestão ociosa congela a série. A série só é legível depois
+	// do checkpoint por TEMPO, que é o que o débito 56 entrega — até lá o
+	// gráfico responde a checkpoint, não a disco.
+	//
+	// Relistar o diretório dentro do Stats() tornaria o número exato ao custo
+	// de um readdir por raspagem de métrica. Não foi o caminho escolhido
+	// porque o dono do problema é o débito 56: resolvido ele, o atraso volta
+	// a ser o intervalo de checkpoint, que é ordens de grandeza menor que a
+	// margem até o disco encher.
 	StorageBytes int64
 	// LiveBytesUpperBound é a soma do tally por segmento. NÃO é contagem
 	// exata: é limite SUPERIOR, pelo mesmo contrato de
@@ -211,7 +224,9 @@ type Store struct {
 	// diretório respondeu. Fundi-los faria a imprecisão de um contaminar o
 	// outro, e é justamente a independência que deixa StorageBytes não
 	// herdar a do tally. São também mapas com CICLOS DE VIDA distintos: o
-	// tally acompanha cada Put, e isto só se move no checkpoint.
+	// tally acompanha cada Put, e isto só se move no checkpoint — que é
+	// justamente onde o CONJUNTO de chaves dos dois é reconciliado, porque só
+	// ali o Store sabe quais arquivos o diretório ainda tem.
 	segSize map[uint32]int64
 
 	// lock garante acesso exclusivo ao diretório do dataset.
@@ -1289,13 +1304,20 @@ func (s *Store) Stats() Stats {
 	if slots := s.prim.SlotCount(); slots > 0 {
 		lf = float64(s.prim.Used()) / float64(slots)
 	}
-	// A iteração é sobre o tally, e não sobre o segSize, porque o tally é o
-	// que o writer atualiza a cada Put: uma rotação de segmento aparece na
-	// contagem no mesmo instante em que acontece, sem esperar o próximo
-	// checkpoint. O segSize entra só como consulta — segmento que o writer
-	// conhece mas que o último ListSegments não viu contribui com zero
-	// bytes, o que mantém StorageBytes num limite INFERIOR e nunca inventa
-	// disco que não existe.
+	// A iteração é sobre o tally porque ele é o mapa que anda nos DOIS
+	// relógios: ganha entrada no applyRecord, então uma rotação aparece na
+	// contagem no instante em que acontece, e é reconciliado com o
+	// ListSegments a cada checkpoint (semeadura do segmento que o writer
+	// nunca tocou, poda do que o diretório não lista mais). Iterar o segSize
+	// perderia o primeiro relógio e quebraria o TestRotacaoDeSegmentoNoPut,
+	// que exige a rotação visível sem checkpoint; iterar o tally SEM a
+	// reconciliação perde o segundo, que é o que faz um segmento aposentado
+	// pela compaction (§53-55) sumir da contagem.
+	//
+	// O segSize entra só como consulta, e a assimetria é deliberada: segmento
+	// que o writer conhece mas que o último ListSegments não viu contribui
+	// com zero bytes, o que mantém StorageBytes num limite INFERIOR e nunca
+	// inventa disco que não existe.
 	var (
 		storageBytes int64
 		liveBytes    uint64

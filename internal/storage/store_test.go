@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"sync"
 	"testing"
@@ -387,12 +389,14 @@ func TestStatsCoerente(t *testing.T) {
 	}
 }
 
-// TestStatsContaBytesDeDiscoEDeLiveness prova que Stats deixou de derivar a
-// contagem de segmentos do ID corrente. A compaction (§53-55) remove
-// segmentos e o ID é monotônico: continuar derivando faria o painel reportar
-// segmento que não existe mais. Prova junto que o snapshot ganhou os dois
-// campos de bytes — sem eles não há série de disco, e o §86 dá 2 a 3 dias de
-// margem até o ENOSPC, o que é curto demais para descobrir pelo alerta do FS.
+// TestStatsContaBytesDeDiscoEDeLiveness cobre os dois campos de bytes: sem
+// série de disco não há como ver a curva chegar, e o §86 dá 2 a 3 dias de
+// margem até o ENOSPC — curto demais para descobrir pelo alerta do FS.
+//
+// O que este teste NÃO prova é a troca da derivação de SegmentsTotal: com um
+// segmento só, derivar do ID corrente devolveria o mesmo 1, e a asserção
+// passaria nas duas implementações. Quem separa as duas é o
+// TestStatsParaDeContarSegmentoAposentado, e só ele.
 func TestStatsContaBytesDeDiscoEDeLiveness(t *testing.T) {
 	s := openStore(t, Options{})
 	const n = 100
@@ -415,9 +419,123 @@ func TestStatsContaBytesDeDiscoEDeLiveness(t *testing.T) {
 	}
 	// O tally é limite SUPERIOR do que está vivo (débitos 38 e 45), mas
 	// nunca pode passar do tamanho do arquivo que o contém: se passar, o
-	// que quebrou não foi a precisão, foi a contabilidade.
+	// que quebrou não foi a precisão, foi a contabilidade. A comparação só
+	// vale LOGO APÓS um checkpoint, que é quando os dois números descrevem o
+	// mesmo instante — o tally anda a cada Put e o tamanho só no checkpoint,
+	// então entre os dois o vivo passa do disco por construção.
 	if got.LiveBytesUpperBound == 0 || got.LiveBytesUpperBound > uint64(got.StorageBytes) {
 		t.Errorf("LiveBytesUpperBound = %d fora de (0, %d]", got.LiveBytesUpperBound, got.StorageBytes)
+	}
+}
+
+// TestStatsParaDeContarSegmentoAposentado é o teste que separa a contagem
+// real da derivação antiga (`SegmentsTotal = CurrentSegmentID`, com a
+// premissa "IDs monotônicos desde 1, sem remoção no M1"). Nenhum cenário de
+// dataset que só CRESCE distingue as duas: enquanto ninguém remove segmento,
+// a contagem e o ID corrente são o mesmo número. O que as separa é a
+// aposentadoria, e é para ela que a Task existe.
+//
+// A aposentadoria é montada como a decisão D5 do §53-55 a fará: rename para
+// nome não canônico, que o ListSegments ignora de propósito
+// (segment.go:252). O arquivo continua em disco — o manifest vigente ainda
+// pode nomeá-lo — e some do dataset no checkpoint seguinte.
+//
+// A asserção decisiva é SegmentsTotal < CurrentSegmentID. Sob a derivação
+// antiga os dois são iguais em TODO cenário possível, então essa comparação
+// é falsa por construção lá e verdadeira aqui.
+func TestStatsParaDeContarSegmentoAposentado(t *testing.T) {
+	dir := t.TempDir()
+	s := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10})
+	const n = 400
+	for i := 0; i < n; i++ {
+		k := fmt.Sprintf("ap-%03d", i)
+		mustPut(t, s, k, int64(i), statusPayload(t, s, k, "Start", int64(i)), nil)
+	}
+	if err := s.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	antes := s.Stats()
+	if antes.SegmentsTotal < 2 {
+		t.Fatalf("o cenário precisa de um segmento SELADO para aposentar: %+v", antes)
+	}
+	if antes.SegmentsTotal != antes.CurrentSegmentID {
+		t.Fatalf("sem remoção os dois têm de coincidir; %+v", antes)
+	}
+
+	alvo := filepath.Join(dir, "data", "segment-00000001.dat")
+	info, err := os.Stat(alvo)
+	if err != nil {
+		t.Fatalf("stat do segmento a aposentar: %v", err)
+	}
+	if err := os.Rename(alvo, alvo+".retired"); err != nil {
+		t.Fatalf("aposentar por rename: %v", err)
+	}
+	// O checkpoint é o ponto de reconciliação: é ele que relista o diretório
+	// e é por ele que a aposentadoria entra na contabilidade do Store.
+	if err := s.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint pós-aposentadoria: %v", err)
+	}
+	depois := s.Stats()
+
+	if depois.CurrentSegmentID != antes.CurrentSegmentID {
+		t.Fatalf("o ID corrente não regride: %d -> %d", antes.CurrentSegmentID, depois.CurrentSegmentID)
+	}
+	if depois.SegmentsTotal >= depois.CurrentSegmentID {
+		t.Errorf("SegmentsTotal = %d ainda acompanha CurrentSegmentID = %d: a contagem continua derivada do ID",
+			depois.SegmentsTotal, depois.CurrentSegmentID)
+	}
+	if depois.SegmentsTotal != antes.SegmentsTotal-1 {
+		t.Errorf("SegmentsTotal = %d, queria %d (um segmento a menos)", depois.SegmentsTotal, antes.SegmentsTotal-1)
+	}
+	if depois.StorageBytes != antes.StorageBytes-info.Size() {
+		t.Errorf("StorageBytes = %d, queria %d (%d - %d do arquivo aposentado)",
+			depois.StorageBytes, antes.StorageBytes-info.Size(), antes.StorageBytes, info.Size())
+	}
+}
+
+// TestStatsDeDatasetSemRecordContaOSegmentoInicial fixa o caso que a contagem
+// pelo tally do writer perde: um dataset recém-provisionado tem o arquivo do
+// segmento inicial em disco e nenhum record, e o tally só ganha entrada no
+// applyRecord. Reportar `segments=0` com `current_segment=1` é snapshot
+// internamente incoerente vazando para o /v1/stats e para a
+// nishidb_segments_total — justo no painel que o M4 existe para alimentar, e
+// justo no dataset que acabou de subir, quando ninguém ainda confia nele.
+//
+// Quem sabe QUAIS segmentos existem é o ListSegments, e o Open já faz um
+// checkpoint antes de devolver o Store.
+func TestStatsDeDatasetSemRecordContaOSegmentoInicial(t *testing.T) {
+	dir := t.TempDir()
+	s := openStore(t, Options{Dir: dir})
+	got := s.Stats()
+
+	if got.CurrentSegmentID != 1 {
+		t.Fatalf("CurrentSegmentID = %d, queria 1", got.CurrentSegmentID)
+	}
+	if got.SegmentsTotal != 1 {
+		t.Errorf("SegmentsTotal = %d, queria 1: o arquivo do segmento inicial existe em disco", got.SegmentsTotal)
+	}
+	entradas, err := os.ReadDir(filepath.Join(dir, "data"))
+	if err != nil {
+		t.Fatalf("ler data/: %v", err)
+	}
+	var emDisco int64
+	for _, e := range entradas {
+		fi, err := e.Info()
+		if err != nil {
+			t.Fatalf("stat de %s: %v", e.Name(), err)
+		}
+		emDisco += fi.Size()
+	}
+	if emDisco <= 0 {
+		t.Fatalf("data/ vazio: o cenário não é o que o teste descreve")
+	}
+	// Exatidão, e não "> 0": StorageBytes é tamanho de arquivo, então logo
+	// após o checkpoint do Open ele tem de bater com o diretório byte a byte.
+	if got.StorageBytes != emDisco {
+		t.Errorf("StorageBytes = %d, queria %d (soma dos arquivos em data/)", got.StorageBytes, emDisco)
+	}
+	if got.LiveBytesUpperBound != 0 {
+		t.Errorf("LiveBytesUpperBound = %d, queria 0: nenhum record foi escrito", got.LiveBytesUpperBound)
 	}
 }
 
