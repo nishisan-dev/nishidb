@@ -7,6 +7,7 @@ import (
 
 	"github.com/nishisan-dev/nishidb/internal/metrics"
 	"github.com/nishisan-dev/nishidb/internal/server"
+	"github.com/nishisan-dev/nishidb/internal/storage/segment"
 )
 
 // amostraExposta é uma linha do /metrics já casada com o `# HELP` da família.
@@ -116,8 +117,26 @@ func TestMetricaDeDiscoEhPublicadaComSemanticaDeLimite(t *testing.T) {
 	if !strings.Contains(lixo.Ajuda, "pelo menos") {
 		t.Errorf("Ajuda = %q; precisa declarar que é limite inferior", lixo.Ajuda)
 	}
-	if lixo.Valor < 0 {
-		t.Errorf("garbage_bytes = %v: a subtração passou por baixo de zero", lixo.Valor)
+	// O VALOR, e não só a presença dele. Sem update no seed — os ids são
+	// S-%06d, um por evento —, todo record apendado continua vivo, e o único
+	// byte em disco que o tally não reivindica é o header de cada segmento,
+	// que não é record. Logo `disco - vivo` tem aqui um resultado EXATO e
+	// previsível, e travá-lo é o que separa uma série calculada de uma
+	// constante: sem esta linha, uma implementação que publicasse zero fixo
+	// satisfaria "não é negativa" e "não passa do storage_bytes" para sempre
+	// — métrica que mente pelo outro lado, uma curva de garbage travada no
+	// chão enquanto o disco enche.
+	//
+	// Os dois números saem da MESMA raspagem, que é o que amarra o resultado
+	// ao estado real do dataset em vez de a um literal: mudar o seed muda os
+	// dois lados juntos.
+	segmentos, ok := achaAmostra(amostras, metrics.MetSegmentsTotal)
+	if !ok {
+		t.Fatal("nishidb_segments_total não foi publicada")
+	}
+	if esperado := float64(segment.HeaderSize) * segmentos.Valor; lixo.Valor != esperado {
+		t.Errorf("garbage_bytes = %v, queria %v (%d bytes de header por segmento × %v segmentos; o seed não sobrescreve nenhum id, então nada além do header é lixo)",
+			lixo.Valor, esperado, segment.HeaderSize, segmentos.Valor)
 	}
 	if lixo.Valor > bytes.Valor {
 		t.Errorf("garbage_bytes = %v acima de storage_bytes = %v", lixo.Valor, bytes.Valor)

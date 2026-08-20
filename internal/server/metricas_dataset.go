@@ -1,6 +1,37 @@
 package server
 
-import "github.com/nishisan-dev/nishidb/internal/metrics"
+import (
+	"github.com/nishisan-dev/nishidb/internal/metrics"
+	"github.com/nishisan-dev/nishidb/internal/storage"
+)
+
+// lixoDeDisco é a conta de nishidb_storage_garbage_bytes: o que está em disco
+// menos o que o tally reivindica como vivo, com piso em zero.
+//
+// Está fora do coletor por um motivo só, e ele é de prova: dentro do closure a
+// conta só é alcançável com um servidor de pé, e um servidor de teste sobe de
+// manifest já checkpointado e não recebe Put pela rota — ali o disco está
+// SEMPRE à frente do vivo e o ramo do piso nunca roda. Aqui ela é tabela, e os
+// dois lados da desigualdade entram.
+//
+// O piso não é defensividade vaga. StorageBytes é do último ListSegments, que
+// só roda no checkpoint, enquanto o tally anda a cada Put: entre dois
+// checkpoints o vivo passa do disco POR CONSTRUÇÃO. E a subtração é em uint64,
+// que não tem negativo — sem piso, um vivo 64 bytes à frente não publicaria
+// "-64" e sim 1,8e19, um medidor de bytes com 18 exabytes de lixo disparando
+// compaction contra um dataset saudável. A guarda `> 0` é a mesma defesa um
+// passo antes: ela não existe pelo número negativo, existe pela CONVERSÃO de
+// int64 negativo para uint64, que também dá a volta.
+//
+// A direção do erro é o que se garante e vale sempre: como o vivo é limite
+// SUPERIOR (débitos 38 e 45), a diferença é limite INFERIOR do lixo — "há pelo
+// menos isto de garbage", que é o que a Ajuda da série diz ao operador.
+func lixoDeDisco(st storage.Stats) uint64 {
+	if st.StorageBytes > 0 && uint64(st.StorageBytes) > st.LiveBytesUpperBound {
+		return uint64(st.StorageBytes) - st.LiveBytesUpperBound
+	}
+	return 0
+}
 
 // registraMetricasDeDataset publica as séries do §92 que saem do Store.Stats().
 //
@@ -38,17 +69,6 @@ func registraMetricasDeDataset(reg *metrics.Registry, s *Servidor) {
 			st := d.st.Stats()
 			rotulo := []metrics.Label{{Nome: metrics.LabelDataset, Valor: d.nome}}
 
-			// O piso em zero não é defensividade vaga: StorageBytes é do
-			// último ListSegments, que só roda no checkpoint, enquanto o
-			// tally anda a cada Put. Entre dois checkpoints o vivo passa do
-			// disco POR CONSTRUÇÃO, e uma subtração sem piso publicaria
-			// bytes negativos num medidor — o painel mostraria lixo
-			// "negativo" toda vez que a ingestão andasse entre raspagens.
-			var lixo uint64
-			if st.StorageBytes > 0 && uint64(st.StorageBytes) > st.LiveBytesUpperBound {
-				lixo = uint64(st.StorageBytes) - st.LiveBytesUpperBound
-			}
-
 			out = append(out,
 				metrics.Amostra{
 					Familia: metrics.MetMaterializedRows,
@@ -80,7 +100,7 @@ func registraMetricasDeDataset(reg *metrics.Registry, s *Servidor) {
 					Ajuda:   "bytes de garbage nos segmentos: há pelo menos isto de lixo (limite INFERIOR, porque a liveness é limite superior — débitos 38 e 45)",
 					Tipo:    metrics.TipoMedidor,
 					Labels:  rotulo,
-					Valor:   float64(lixo),
+					Valor:   float64(lixoDeDisco(st)),
 				})
 		}
 		return out
