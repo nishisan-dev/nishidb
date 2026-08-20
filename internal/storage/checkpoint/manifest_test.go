@@ -72,6 +72,44 @@ func TestManifestVazioRoundTrip(t *testing.T) {
 	}
 }
 
+// TestManifestReservaACapacidadeDoLayoutQueGrava trava as duas metades da
+// mesma conta: quantos bytes o registro por segmento ocupa e se a reserva do
+// make cobre isso.
+//
+// O layout do topo do arquivo declara 36 bytes por segmento, e o encode grava
+// esses 36 desde que os stats de liveness da S14 entraram — mas a capacidade
+// do make ficou em 12, o valor de antes. Não corrompia nada (append cresce
+// sozinho), e é justamente por isso que passou: nenhum teste olhava para a
+// reserva, então o desperdício de uma realocação em TODO manifest com
+// segmento não tinha como aparecer no vermelho.
+//
+// A reserva é observável pela capacidade do slice devolvido: append não
+// realoca enquanto o que vem cabe, então cap() igual à fórmula é a prova de
+// que a reserva cobriu o encode inteiro. Um registro que cresça de novo sem
+// que a fórmula acompanhe quebra este teste — que é exatamente o alarme que
+// faltou da primeira vez.
+func TestManifestReservaACapacidadeDoLayoutQueGrava(t *testing.T) {
+	base := Manifest{Epoch: 1, CurrentSegment: 1, HashKind: 1}
+	semSegmento := len(base.encode())
+	comUm := base
+	comUm.Segments = []SegmentInfo{
+		{ID: 1, SizeBytes: 4096, TotalRecords: 9, LiveRecords: 8, LiveBytes: 3000},
+	}
+	if passo := len(comUm.encode()) - semSegmento; passo != 36 {
+		t.Errorf("o encode grava %d bytes por segmento; o layout declara 36", passo)
+	}
+
+	m := sampleManifest()
+	b := m.encode()
+	reservado := 96 + len(m.Segments)*36 + len(m.Bitmaps)*10
+	if len(b) > reservado {
+		t.Fatalf("o encode produziu %d bytes com reserva de %d: a fórmula não cobre o layout", len(b), reservado)
+	}
+	if cap(b) != reservado {
+		t.Errorf("cap = %d com reserva de %d: o append realocou no caminho do checkpoint", cap(b), reservado)
+	}
+}
+
 func TestManifestGoldenHeader(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "manifest.bin")
 	m := sampleManifest()
