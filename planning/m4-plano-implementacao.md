@@ -21,7 +21,8 @@ Valem para **todas** as tarefas.
 3. **Durabilidade por um caminho só.** `checkpoint.escreveAtomico` ([manifest.go:250](../internal/storage/checkpoint/manifest.go:250)) é o único caminho de durabilidade provado do projeto, e o comentário lá proíbe duplicá-lo. A compaction não escreve manifest por conta própria: ela chama `Checkpoint()`.
 4. **Nenhuma dependência nova** (§97: binário único).
 5. **Idioma e estilo:** comentários, erros e nomes de teste em PT-BR, no estilo argumentativo existente — o comentário explica **por quê**, cita `§NN` e o débito que fecha. Sentinela por pacote + `errors.Is` na fronteira. Stdlib `testing`, zero testify.
-6. **`go test ./...`, `go test ./... -race` e `golangci-lint run` limpos** antes de cada commit. A regra da Fase 6 continua: **0 apontamentos no código novo**, com os 114 do M1 conferidos antes e depois.
+6. **`go test ./...`, `go test ./... -race` e o lint limpos** antes de cada commit. A regra continua: **0 apontamentos no código novo**.
+   **O lint roda com os tetos desligados** — `golangci-lint run --max-issues-per-linter=0 --max-same-issues=0` — e a linha de base é **390**, não 114. Os 114 que a documentação do M2 e da Fase 6 citam são um número **truncado** pelos caps default (`--max-issues-per-linter=50`, `--max-same-issues=3`): `revive` reporta 50 com teto e **81** sem. Um número truncado não serve de linha de base, porque o linter estourado no teto **absorve o apontamento novo em silêncio** — e a comparação "114 antes, 114 depois" continuaria verde. Ver a Task 0.
 7. **Rotas mutantes não existem neste milestone** (decisão D3 do roadmap). A compaction é background regido por config; `POST /v1/compact` é do M5, atrás do papel ADMIN.
 
 ---
@@ -73,6 +74,195 @@ O trabalho é **ciclo de vida de arquivo e coordenação com o writer**, não mo
 | `internal/server/metricas_dataset.go` | `storage_bytes`, `garbage_bytes`, séries de compaction |
 | `internal/kafka/writer.go` | Débito 56 — checkpoint por tempo |
 | `internal/cli/`, `internal/server/`, `internal/protocolo/` | §96 leitura: `status`, `datasets`, `inspect` |
+
+---
+
+## Fase A′ — o que a revisão adversarial cobrou
+
+Três correções levantadas na execução da Fase A. **Duas são erro deste plano**, não do código, e estão marcadas como tal. Entram antes de qualquer coisa nova.
+
+### Task 0: o gate de lint precisa enxergar
+
+**Files:** Modify `.golangci.yml`, `Makefile` (alvo `lint`), `docs/debitos.md`
+
+A doutrina do projeto — "0 apontamentos no código novo, com os 114 do M1 conferidos antes e depois" — foi verificada com um instrumento cego desde o M2. Os 114 são **truncados** pelos caps default (`--max-issues-per-linter=50`, `--max-same-issues=3`). Medido nesta branch: `revive` sai **50** com teto e **81** sem; `staticcheck`, 12 e 13. O total real é **390**.
+
+O defeito não é o número errado, é o gate inoperante: com `revive` já estourado no teto, um apontamento **novo** de `revive` não muda a contagem — entra no lugar de outro que a truncagem descartou. "114 antes, 114 depois" continuaria verde com código novo sujo. Pior, o conjunto de 114 **não é estável**: duas rodadas no mesmo commit devolvem seleções diferentes.
+
+- [ ] **Step 1: Provar o defeito**
+
+Run: `golangci-lint run 2>&1 | tail -3`
+Run: `golangci-lint run --max-issues-per-linter=0 --max-same-issues=0 2>&1 | tail -3`
+Expected: os totais por linter divergem — é a prova de que o gate trunca.
+
+- [ ] **Step 2: Desligar os tetos na configuração**
+
+Em `.golangci.yml`, acrescentar, com comentário explicando que teto silencioso torna a comparação de baseline inútil:
+
+```yaml
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+```
+
+- [ ] **Step 3: Confirmar a linha de base estável**
+
+Run: `golangci-lint run 2>&1 | tail -8` duas vezes seguidas.
+Expected: **390**, idêntico nas duas, com os mesmos totais por linter.
+
+- [ ] **Step 4: Registrar em `docs/debitos.md`**
+
+Corrigir o débito 53, que afirma 114 — o número está errado e a razão importa mais que ele. Registrar item novo: as alegações de "0 apontamentos no código novo" do M2 e da Fase 6 foram feitas com o instrumento truncado e **não foram re-verificadas**.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add .golangci.yml Makefile docs/debitos.md
+git commit -m "Tira o teto do lint, que fazia a baseline esconder apontamento novo"
+```
+
+---
+
+### Task 1b: `Stats()` não pode bloquear atrás do writer — **erro deste plano**
+
+**Files:** Modify `internal/storage/store.go`, `internal/storage/store_checkpoint.go`; Test: `internal/storage/store_test.go`
+
+O passo 3 da Task 1 prescreveu `s.wmu.Lock()` para ler `segTally` e `segSize`. Está **errado**, e o próprio godoc de `Stats` dizia por quê antes de ser alterado: `Stats` é seguro para leitores concorrentes porque o segmento corrente vem de um **espelho atômico**, não do writer.
+
+`Checkpoint` segura `wmu` do início ao fim, e o histograma dele vai até 30s. Com o lock, todo scrape de `/metrics` e toda chamada de `/v1/stats` param atrás do checkpoint — ou seja, o painel cega exatamente sob a pressão que ele existe para observar. Num milestone cujo objetivo é tornar a curva de disco visível, é a regressão mais cara possível.
+
+- [ ] **Step 1: Escrever o teste que falha**
+
+```go
+// TestStatsNaoBloqueiaAtrasDoCheckpoint fixa a propriedade que o godoc de
+// Stats sempre prometeu: leitor concorrente não espera o writer. O checkpoint
+// segura wmu do início ao fim e pode levar dezenas de segundos; um Stats que
+// o aguarde cega o /metrics e o /v1/stats justamente sob pressão.
+func TestStatsNaoBloqueiaAtrasDoCheckpoint(t *testing.T) {
+	s := openStore(t, Options{})
+	popula(t, s, 2000)
+
+	liberado := make(chan struct{})
+	s.SetTraceStepParaTeste(func(passo string) {
+		if passo == "msyncLocations" {
+			<-liberado // segura o checkpoint DENTRO da seção crítica do writer
+		}
+	})
+	go func() { _ = s.Checkpoint() }()
+	esperaCheckpointEntrar(t, s)
+
+	pronto := make(chan Stats, 1)
+	go func() { pronto <- s.Stats() }()
+	select {
+	case <-pronto:
+	case <-time.After(2 * time.Second):
+		close(liberado)
+		t.Fatal("Stats bloqueou atrás do checkpoint: o painel cega sob pressão")
+	}
+	close(liberado)
+}
+```
+
+- [ ] **Step 2: Rodar e confirmar a falha**
+
+Run: `go test ./internal/storage/ -run TestStatsNaoBloqueiaAtrasDoCheckpoint -v`
+Expected: FAIL por timeout de 2s — é o defeito.
+
+- [ ] **Step 3: Implementar espelhos atômicos**
+
+Trocar a iteração de mapa por três espelhos, no mesmo padrão que `curSegID` já usa neste arquivo:
+
+```go
+	// Espelhos atômicos dos agregados do tally. Existem para que Stats NUNCA
+	// tome s.wmu: o Checkpoint o segura do início ao fim, e o histograma dele
+	// vai até 30s — um Stats atrás desse lock apagaria /metrics e /v1/stats
+	// exatamente sob a pressão que eles existem para mostrar. Mapa Go não se
+	// lê sem sincronizar (fatal error, não corrida benigna), então o que
+	// atravessa a fronteira é o agregado, não o mapa.
+	segCount     atomic.Uint32
+	liveBytesAll atomic.Uint64
+	diskBytesAll atomic.Int64
+```
+
+O writer atualiza `segCount`/`liveBytesAll` nos mesmos pontos em que já mexe no tally (`applyRecord`, incremento e decremento), e o checkpoint recarrega os três na reconciliação com `ListSegments`. Custo no hot path: duas somas atômicas por Put, **zero alocação** — os gates de `AllocsPerRun` seguem valendo.
+
+- [ ] **Step 4: Rodar e confirmar que passa**
+
+Run: `go test ./internal/storage/ -run TestStats -v` → PASS
+Run: `go test ./... && go test ./... -race && golangci-lint run`
+Run: `go test ./benchmark/micro/ -run TestGate -v` — os gates de alocação **têm** de continuar verdes.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add internal/storage/
+git commit -m "Devolve ao Stats a leitura que não espera o writer"
+```
+
+---
+
+### Task 2b: fixar `storage_bytes` contra o disco real — **Task 2 continua reprovada**
+
+**Files:** Modify `internal/server/metricas_dataset_test.go`, `internal/server/query_test.go` (helper `servidorComDados`)
+
+A revisão adversarial provou por mutação: trocar o valor publicado de `st.StorageBytes` para `st.LiveBytesUpperBound` — ou para `st.RowCount` — deixa **a suíte inteira verde**. A única asserção é `bytes.Valor > 0`, que qualquer número positivo satisfaz. É o defeito do débito 6 outra vez: medir sem oráculo.
+
+O mutante sobrevivente é exatamente a "métrica que mente" que o comentário do arquivo declara estar evitando — publicar o tally de liveness sob um nome que promete tamanho de arquivo.
+
+Bloqueio a remover: `servidorComDados` ([query_test.go:98](../internal/server/query_test.go:98)) descarta o ambiente e não expõe o diretório do dataset.
+
+- [ ] **Step 1: Escrever o teste que falha**
+
+```go
+// TestStorageBytesBateComOsArquivosEmDisco é o oráculo que faltava: a série
+// tem de casar com a soma dos segment-*.dat, não apenas ser positiva. Sem
+// isto, publicar o tally de liveness no lugar do tamanho de arquivo passa
+// despercebido — e era esse o mutante que sobrevivia à suíte inteira.
+func TestStorageBytesBateComOsArquivosEmDisco(t *testing.T) {
+	srv, dir := servidorComDadosEDiretorio(t)
+	amostra, ok := achaAmostra(coletaAmostras(t, srv), metrics.MetStorageBytes)
+	if !ok {
+		t.Fatal("nishidb_storage_bytes não foi publicada")
+	}
+	var emDisco int64
+	entradas, err := filepath.Glob(filepath.Join(dir, "data", "segment-*.dat"))
+	if err != nil {
+		t.Fatalf("glob: %v", err)
+	}
+	for _, p := range entradas {
+		fi, err := os.Stat(p)
+		if err != nil {
+			t.Fatalf("stat %s: %v", p, err)
+		}
+		emDisco += fi.Size()
+	}
+	if emDisco == 0 {
+		t.Fatal("nenhum segmento em disco: o teste não estaria provando nada")
+	}
+	if int64(amostra.Valor) != emDisco {
+		t.Errorf("storage_bytes = %d, arquivos em disco somam %d", int64(amostra.Valor), emDisco)
+	}
+}
+```
+
+- [ ] **Step 2: Provar que o teste mata o mutante**
+
+Trocar `Valor: float64(st.StorageBytes)` por `float64(st.LiveBytesUpperBound)` em [metricas_dataset.go:95](../internal/server/metricas_dataset.go:95), rodar o teste, **confirmar FAIL**, e reverter. Um teste que não mata este mutante não fecha a Task 2.
+
+- [ ] **Step 3: Implementar**
+
+Expor o diretório no helper (`servidorComDadosEDiretorio`, com `servidorComDados` delegando a ele para não tocar nos chamadores existentes).
+
+- [ ] **Step 4: Rodar e confirmar que passa**
+
+Run: `go test ./... && go test ./... -race && golangci-lint run`
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add internal/server/
+git commit -m "Ancora o storage_bytes no disco real, não num maior-que-zero"
+```
 
 ---
 
