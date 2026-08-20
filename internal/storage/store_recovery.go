@@ -25,6 +25,12 @@ func (s *Store) recoverFrom(m *checkpoint.Manifest, refs []segment.SegmentRef, d
 			liveRecords:  si.LiveRecords,
 			liveBytes:    si.LiveBytes,
 		}
+		// O tamanho do arquivo entra junto para que o Stats tenha conta de
+		// disco desde ANTES do checkpoint imediato do Open. A verificação
+		// logo abaixo prova que o arquivo não encolheu em relação a isto,
+		// então é um piso honesto até o ListSegments do checkpoint corrigi-lo
+		// para cima com o que a rotação pós-checkpoint acrescentou.
+		s.segSize[si.ID] = si.SizeBytes
 	}
 	// PrimarySlotCount/HashKind do manifest são ADVISORY: a fonte de
 	// verdade é o header do primary.idx (um rehash pós-checkpoint deixa o

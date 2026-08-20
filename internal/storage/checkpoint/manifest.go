@@ -32,7 +32,8 @@ var ErrCorruptManifest = errors.New("checkpoint: manifest corrompido")
 //	40  4  currentSegment (u32)
 //	44  8  durableOffset (u64)
 //	52  4  segmentCount (u32)
-//	    por segmento: id u32 | sizeBytes i64  (12 bytes; stats de liveness na S14)
+//	    por segmento: id u32 | sizeBytes i64 | totalRecords u64 |
+//	                  liveRecords u64 | liveBytes u64  (36 bytes)
 //	    primarySlotCount u64 | primaryUsed u64 | hashKind u8
 //	    fieldDictValidBytes i64
 //	    bitmapCount u16 | por bitmap: fieldID u16 | valuesDictValidBytes i64
@@ -107,7 +108,11 @@ type Manifest struct {
 }
 
 func (m *Manifest) encode() []byte {
-	b := make([]byte, 0, 96+len(m.Segments)*12+len(m.Bitmaps)*10)
+	// 36 por segmento, que é o que o laço abaixo grava desde os stats de
+	// liveness da S14. A capacidade estava em 12 e ficou para trás: não
+	// corrompia nada, mas fazia o append realocar em todo manifest com
+	// segmento — desperdício silencioso no caminho do checkpoint.
+	b := make([]byte, 0, 96+len(m.Segments)*36+len(m.Bitmaps)*10)
 	b = append(b, manifestMagic[:]...)
 	b = append(b, manifestVersion, 0, 0, 0)
 	b = binary.LittleEndian.AppendUint64(b, m.Epoch)

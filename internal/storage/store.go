@@ -97,11 +97,39 @@ type Options struct {
 
 // Stats é o snapshot mínimo de estado do Store.
 type Stats struct {
-	RowCount          uint64
+	RowCount uint64
+	// SegmentsTotal conta os segmentos que o writer conhece. Já foi
+	// DERIVADO do ID corrente ("IDs monotônicos desde 1, sem remoção"),
+	// premissa que a compaction do §53-55 quebra: o ID nunca regride, mas o
+	// arquivo é aposentado, e derivar passaria a reportar como existente um
+	// segmento já removido — justo no painel que serve para acompanhar a
+	// remoção.
 	SegmentsTotal     uint32
 	CurrentSegmentID  uint32
 	PrimaryLoadFactor float64
 	OverlayLen        int
+	// StorageBytes soma o tamanho dos arquivos de segmento. Não herda a
+	// imprecisão do tally de liveness (débitos 38 e 45) porque não depende
+	// dele: é tamanho de arquivo, medido pelo ListSegments. É a série que
+	// antecede o ENOSPC — o §86 dá 2 a 3 dias de margem a 500 ev/s, curto
+	// demais para descobrir pelo alerta do filesystem.
+	//
+	// Ressalva de FRESCOR, e ela vai só para um lado: o tamanho é o do
+	// último checkpoint, então entre dois checkpoints o valor fica ATRÁS do
+	// que o segmento corrente já cresceu — é limite INFERIOR, nunca
+	// superior. Errar para baixo numa série de disco é o lado seguro de
+	// errar apenas porque o gráfico atrasa; errar para cima faria o operador
+	// provisionar disco que não estava sendo usado. Relistar o diretório a
+	// cada Stats() poria um readdir em toda raspagem de métrica, e o
+	// intervalo de checkpoint é ordens de grandeza menor que a margem até o
+	// disco encher.
+	StorageBytes int64
+	// LiveBytesUpperBound é a soma do tally por segmento. NÃO é contagem
+	// exata: é limite SUPERIOR, pelo mesmo contrato de
+	// checkpoint.SegmentInfo. O nome carrega a ressalva de propósito —
+	// chamá-lo de LiveBytes convidaria a próxima revisão a tratá-lo como
+	// exato e a dimensionar compaction por ele.
+	LiveBytesUpperBound uint64
 }
 
 const defaultSegmentSize = 512 << 20
@@ -172,6 +200,19 @@ type Store struct {
 	// stats do manifest §9; em memória — a S12 os reconstrói no replay).
 	// Writer-only.
 	segTally map[uint32]*segStats
+
+	// segSize guarda o tamanho de cada arquivo de segmento visto pelo
+	// último ListSegments do checkpoint. Writer-only, mesmo regime do
+	// segTally.
+	//
+	// É mapa à parte, e não um campo do segStats, porque as duas coisas têm
+	// FONTES diferentes e precisam continuar tendo: o tally é o que o writer
+	// contabilizou (limite superior, débito 38), enquanto isto é o que o
+	// diretório respondeu. Fundi-los faria a imprecisão de um contaminar o
+	// outro, e é justamente a independência que deixa StorageBytes não
+	// herdar a do tally. São também mapas com CICLOS DE VIDA distintos: o
+	// tally acompanha cada Put, e isto só se move no checkpoint.
+	segSize map[uint32]int64
 
 	// lock garante acesso exclusivo ao diretório do dataset.
 	lock *datasetLock
@@ -273,6 +314,7 @@ func Open(opts Options) (*Store, error) {
 		opts:     opts,
 		bitmaps:  make(map[types.FieldID]*bitmap.Index),
 		segTally: make(map[uint32]*segStats),
+		segSize:  make(map[uint32]int64),
 	}
 	if opts.Metrics != nil {
 		s.cpDuracao = opts.Metrics.Histograma(metrics.MetCheckpointDurationSeconds,
@@ -1230,6 +1272,13 @@ func (s *Store) syncLocked() error {
 // com o writer (o segmento corrente vem de um espelho atômico, não do
 // segment.Writer). RowCount conta rows CRIADAS — não decrementa em
 // tombstone; a contagem de vivas é semântica da S14.
+//
+// Os campos de disco custam o mutex do writer: segSize e segTally são
+// writer-only, e ler mapa sem o lock é fatal error em Go, não corrida
+// benigna. O custo é um stall curto e limitado — os dois mapas têm uma
+// entrada por SEGMENTO, não por row — e é o mesmo preço que o Checkpoint já
+// paga. Ler cópia atômica desses totais exigiria manter um espelho a cada
+// Put, que é caro no caminho quente para servir uma raspagem de métrica.
 func (s *Store) Stats() Stats {
 	if err := s.entra(); err != nil {
 		return Stats{}
@@ -1240,12 +1289,33 @@ func (s *Store) Stats() Stats {
 	if slots := s.prim.SlotCount(); slots > 0 {
 		lf = float64(s.prim.Used()) / float64(slots)
 	}
+	// A iteração é sobre o tally, e não sobre o segSize, porque o tally é o
+	// que o writer atualiza a cada Put: uma rotação de segmento aparece na
+	// contagem no mesmo instante em que acontece, sem esperar o próximo
+	// checkpoint. O segSize entra só como consulta — segmento que o writer
+	// conhece mas que o último ListSegments não viu contribui com zero
+	// bytes, o que mantém StorageBytes num limite INFERIOR e nunca inventa
+	// disco que não existe.
+	var (
+		storageBytes int64
+		liveBytes    uint64
+		segmentos    uint32
+	)
+	s.wmu.Lock()
+	for id, t := range s.segTally {
+		segmentos++
+		liveBytes += t.liveBytes
+		storageBytes += s.segSize[id]
+	}
+	s.wmu.Unlock()
 	return Stats{
-		RowCount:          s.rowCount.Load(),
-		SegmentsTotal:     segID, // IDs monotônicos desde 1, sem remoção no M1
-		CurrentSegmentID:  segID,
-		PrimaryLoadFactor: lf,
-		OverlayLen:        s.locs.OverlayLen(),
+		RowCount:            s.rowCount.Load(),
+		SegmentsTotal:       segmentos,
+		CurrentSegmentID:    segID,
+		PrimaryLoadFactor:   lf,
+		OverlayLen:          s.locs.OverlayLen(),
+		StorageBytes:        storageBytes,
+		LiveBytesUpperBound: liveBytes,
 	}
 }
 

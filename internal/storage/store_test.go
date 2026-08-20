@@ -387,6 +387,40 @@ func TestStatsCoerente(t *testing.T) {
 	}
 }
 
+// TestStatsContaBytesDeDiscoEDeLiveness prova que Stats deixou de derivar a
+// contagem de segmentos do ID corrente. A compaction (§53-55) remove
+// segmentos e o ID é monotônico: continuar derivando faria o painel reportar
+// segmento que não existe mais. Prova junto que o snapshot ganhou os dois
+// campos de bytes — sem eles não há série de disco, e o §86 dá 2 a 3 dias de
+// margem até o ENOSPC, o que é curto demais para descobrir pelo alerta do FS.
+func TestStatsContaBytesDeDiscoEDeLiveness(t *testing.T) {
+	s := openStore(t, Options{})
+	const n = 100
+	for i := 0; i < n; i++ {
+		k := fmt.Sprintf("k-%03d", i)
+		mustPut(t, s, k, int64(i), statusPayload(t, s, k, "Start", int64(i)), nil)
+	}
+	// O checkpoint é o ponto em que o Store relista os arquivos; sem ele o
+	// snapshot ainda descreve o disco de antes dos Puts, e é assim de
+	// propósito (a nota do campo StorageBytes).
+	if err := s.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	got := s.Stats()
+	if got.StorageBytes <= 0 {
+		t.Errorf("StorageBytes = %d, queria > 0", got.StorageBytes)
+	}
+	if got.SegmentsTotal != 1 {
+		t.Errorf("SegmentsTotal = %d, queria 1", got.SegmentsTotal)
+	}
+	// O tally é limite SUPERIOR do que está vivo (débitos 38 e 45), mas
+	// nunca pode passar do tamanho do arquivo que o contém: se passar, o
+	// que quebrou não foi a precisão, foi a contabilidade.
+	if got.LiveBytesUpperBound == 0 || got.LiveBytesUpperBound > uint64(got.StorageBytes) {
+		t.Errorf("LiveBytesUpperBound = %d fora de (0, %d]", got.LiveBytesUpperBound, got.StorageBytes)
+	}
+}
+
 func TestVisibilidadeLeitorConcorrente(t *testing.T) {
 	// A location é o commit point: um leitor em loop nunca vê estado
 	// parcial — a key sempre confere e a sequence nunca regride.

@@ -116,7 +116,14 @@ func (s *Store) checkpoint() error {
 		HashKind:            s.prim.HashKind(),
 		FieldDictValidBytes: s.dict.SizeBytes(),
 	}
+	// O mesmo ListSegments que monta o manifest reabastece o segSize que o
+	// Stats lê. É reconstrução, não merge: um segmento aposentado pela
+	// compaction (§53-55) some do diretório, e só zerar o mapa faz ele sumir
+	// também da conta de disco — atualizar entrada por entrada deixaria o
+	// tamanho do arquivo removido somando para sempre.
+	clear(s.segSize)
 	for _, ref := range segs {
+		s.segSize[ref.ID] = ref.SizeBytes
 		info := checkpoint.SegmentInfo{ID: ref.ID, SizeBytes: ref.SizeBytes}
 		if t := s.segTally[ref.ID]; t != nil {
 			// Liveness real do que o writer viu: updates decrementam o
