@@ -204,3 +204,41 @@ func TestStorageBytesBateComOsArquivosEmDisco(t *testing.T) {
 			int64(amostra.Valor), emDisco)
 	}
 }
+
+// TestStorageBytesSomaTodosOsSegmentosENaoApenasUm fecha a lacuna que o oráculo
+// irmão deixa aberta: com um único segmento em disco, toda conta que percorre
+// segmentos é indistinguível de uma que lê só o corrente. Medido — publicar
+// `StorageBytes / SegmentsTotal` sobrevive à suíte inteira quando o fixture
+// materializa um segmento só, porque a divisão vira identidade.
+//
+// Aqui o segmentSize é pequeno de propósito, para que a ingestão ROTACIONE: a
+// série só está certa se for a SOMA dos arquivos, e é isso que a compaction do
+// §53-55 vai exigir dela quando começar a remover segmentos do meio.
+func TestStorageBytesSomaTodosOsSegmentosENaoApenasUm(t *testing.T) {
+	srv, dir := servidorComDadosDiretorioEStorage(t, 400, blocoPadrao, "  segmentSize: 8KiB\n")
+
+	entradas, err := filepath.Glob(filepath.Join(dir, "data", "segment-*.dat"))
+	if err != nil {
+		t.Fatalf("glob dos segmentos: %v", err)
+	}
+	if len(entradas) < 2 {
+		t.Fatalf("o dataset tem %d segmento(s): sem rotação este teste não distingue soma de leitura do corrente", len(entradas))
+	}
+	var emDisco int64
+	for _, p := range entradas {
+		fi, err := os.Stat(p)
+		if err != nil {
+			t.Fatalf("stat %s: %v", p, err)
+		}
+		emDisco += fi.Size()
+	}
+
+	amostra, ok := achaAmostra(coletaAmostras(t, srv), metrics.MetStorageBytes)
+	if !ok {
+		t.Fatal("nishidb_storage_bytes não foi publicada")
+	}
+	if int64(amostra.Valor) != emDisco {
+		t.Errorf("storage_bytes = %d e os %d segmentos somam %d: a série não soma o disco inteiro",
+			int64(amostra.Valor), len(entradas), emDisco)
+	}
+}

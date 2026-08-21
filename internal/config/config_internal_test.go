@@ -318,3 +318,26 @@ func TestMinimumLiveRatioForaDeZeroUmEhRecusado(t *testing.T) {
 		})
 	}
 }
+
+// TestFormaDoRatioEhValidadaMesmoComACompactionDesligada cruza os dois eixos que
+// a Task 3 introduz — o estado de `enabled` e a faixa de `minimumLiveRatio` —,
+// e nenhum outro teste os cruza: os três de `enabled` usam ratio válido e a
+// tabela de recusa omite `enabled`. Sem este cruzamento, uma implementação que
+// pule a checagem de faixa quando o subsistema está desligado passa pela suíte
+// inteira, e é exatamente o "aceito e ignorado" que a doutrina do débito 49
+// proíbe: forma validada no PARSE, comportamento na ATIVAÇÃO.
+//
+// Chave errada num arquivo é erro do arquivo, e desligar o subsistema não a
+// torna certa — quem ligasse `enabled: true` meses depois descobriria o valor
+// inválido só ali, no pior momento possível.
+func TestFormaDoRatioEhValidadaMesmoComACompactionDesligada(t *testing.T) {
+	for _, valor := range []string{"5", "0", ".nan"} {
+		t.Run(valor, func(t *testing.T) {
+			_, err := CarregaConfig(escreveConfigComStorage(t,
+				"  compaction:\n    enabled: false\n    minimumLiveRatio: "+valor+"\n", ""))
+			if err == nil {
+				t.Fatalf("minimumLiveRatio: %s foi aceito com enabled: false; a forma é validada no parse, não na ativação (débito 49)", valor)
+			}
+		})
+	}
+}

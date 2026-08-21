@@ -115,7 +115,14 @@ func servidorComDados(t *testing.T, n int, blocoServer string) *server.Servidor 
 // servidor: o de baixo é o real, e servidorComDados delega a ele.
 func servidorComDadosEDiretorio(t *testing.T, n int, blocoServer string) (*server.Servidor, string) {
 	t.Helper()
-	a := novoAmbienteCom(t, blocoServer)
+	return servidorComDadosDiretorioEStorage(t, n, blocoServer, "")
+}
+
+// servidorComDadosDiretorioEStorage é o de baixo: aceita linhas extras do bloco
+// `storage:`, que é como um teste pede rotação de segmento.
+func servidorComDadosDiretorioEStorage(t *testing.T, n int, blocoServer, storageExtra string) (*server.Servidor, string) {
+	t.Helper()
+	a := novoAmbienteComStorage(t, blocoServer, storageExtra)
 	a.escreveDataset("d", strings.ReplaceAll(specConsultavel, "%s", "d"))
 	semeia(t, a, "d", n)
 

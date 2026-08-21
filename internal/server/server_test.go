@@ -70,6 +70,15 @@ func novoAmbiente(t *testing.T) *ambiente {
 // O %d recebe uma porta livre.
 func novoAmbienteCom(t *testing.T, blocoServer string) *ambiente {
 	t.Helper()
+	return novoAmbienteComStorage(t, blocoServer, "")
+}
+
+// novoAmbienteComStorage acrescenta linhas ao bloco `storage:` do nishidb.yaml.
+// Existe porque há asserção que precisa de MAIS DE UM segmento em disco: com um
+// só, toda conta que percorre segmentos é indistinguível de uma que lê apenas o
+// corrente, e o mutante que divide pela contagem sobrevive por ser identidade.
+func novoAmbienteComStorage(t *testing.T, blocoServer, storageExtra string) *ambiente {
+	t.Helper()
 	dir := t.TempDir()
 	dados := filepath.Join(dir, "dados")
 	datasets := filepath.Join(dir, "datasets")
@@ -81,8 +90,8 @@ func novoAmbienteCom(t *testing.T, blocoServer string) *ambiente {
 	cfgPath := filepath.Join(dir, "nishidb.yaml")
 	// Porta livre escolhida pelo teste: o config recusa `port: 0` de
 	// propósito (zero não é "sem valor"), então quem escolhe é quem testa.
-	corpo := "version: 1\nstorage:\n  path: " + dados +
-		"\ndatasets:\n  directory: " + datasets +
+	corpo := "version: 1\nstorage:\n  path: " + dados + "\n" + storageExtra +
+		"datasets:\n  directory: " + datasets +
 		fmt.Sprintf(blocoServer, portaLivre(t))
 	if err := os.WriteFile(cfgPath, []byte(corpo), 0o644); err != nil {
 		t.Fatal(err)
