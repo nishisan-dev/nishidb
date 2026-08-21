@@ -136,16 +136,14 @@ type Stats struct {
 	// superior. Errar para baixo numa série de disco é o lado seguro — errar
 	// para cima faria o operador provisionar disco que não estava sendo
 	// usado. Mas a MAGNITUDE do atraso é a do intervalo entre checkpoints, e
-	// com checkpoint disparado por evento (débito 56) esse intervalo é
-	// ilimitado: ingestão ociosa congela a série. A série só é legível depois
-	// do checkpoint por TEMPO, que é o que o débito 56 entrega — até lá o
-	// gráfico responde a checkpoint, não a disco.
+	// ela deixou de ser ilimitada: o débito 56 FECHOU, e o consumidor Kafka
+	// passou a checkpointar por tempo além de por contagem, de modo que uma
+	// ingestão ociosa não congela mais a série.
 	//
 	// Relistar o diretório dentro do Stats() tornaria o número exato ao custo
 	// de um readdir por raspagem de métrica. Não foi o caminho escolhido
-	// porque o dono do problema é o débito 56: resolvido ele, o atraso volta
-	// a ser o intervalo de checkpoint, que é ordens de grandeza menor que a
-	// margem até o disco encher.
+	// porque o atraso agora é o intervalo de checkpoint (§78, 30s no padrão),
+	// ordens de grandeza menor que a margem até o disco encher.
 	StorageBytes int64
 	// LiveBytesUpperBound é a soma do tally por segmento. NÃO é contagem
 	// exata: é limite SUPERIOR, pelo mesmo contrato de

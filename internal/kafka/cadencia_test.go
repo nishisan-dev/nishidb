@@ -88,3 +88,32 @@ func TestPrecisaCheckpointDecideOsDoisGatilhos(t *testing.T) {
 		})
 	}
 }
+
+// TestDespertadorDesligaORelogioSemCadenciaPorTempo prova o off-switch que o
+// comentário do tipo Cadencia declara obrigatório — e que era código de
+// produção novo com zero teste.
+//
+// Não é zelo: `time.NewTicker` PANICA com intervalo não positivo
+// ("non-positive interval for NewTicker"), então a guarda é a diferença entre
+// devolver canal nil e derrubar o processo. A forma `Cadencia{Eventos: 1}`,
+// com intervalo zero, já é construída nesta suíte.
+func TestDespertadorDesligaORelogioSemCadenciaPorTempo(t *testing.T) {
+	casos := []struct {
+		nome string
+		cad  Cadencia
+	}{
+		{"intervalo zero", Cadencia{Eventos: 1}},
+		{"intervalo negativo", Cadencia{Eventos: 1, Intervalo: -time.Second}},
+		{"cadência por contagem desligada", Cadencia{Intervalo: time.Second}},
+	}
+	for _, caso := range casos {
+		t.Run(caso.nome, func(t *testing.T) {
+			w := &Writer{cad: caso.cad}
+			acorda, para := w.despertador()
+			defer para()
+			if acorda != nil {
+				t.Errorf("despertador criou relógio para %+v: sem cadência por tempo o select passa a acordar sozinho, e o NewTicker de intervalo não positivo panica", caso.cad)
+			}
+		})
+	}
+}

@@ -231,3 +231,61 @@ func contaCheckpoints(t *testing.T, b *bancada) int {
 	t.Fatalf("série %q ausente no scrape", prefixo)
 	return 0
 }
+
+// TestCheckpointPorTempoVoltaADispararDepoisDeNovaLeva fixa a propriedade que
+// mantém o débito 56 fechado EM REGIME, e que nenhum dos dois testes irmãos
+// alcança: um afirma que o disparo por tempo acontece ao menos UMA vez, o
+// outro que ele NÃO se repete sem evento novo. Um relógio de disparo único
+// satisfaz os dois e reabre o débito no segundo período de ociosidade — que é
+// o primeiro que um consumidor de verdade encontra, porque tráfego real vem em
+// levas com fila seca entre elas.
+//
+// Medido: trocar o `time.NewTicker` do despertador por um `time.NewTimer`
+// deixa a suíte inteira verde. É por isso que o comentário do despertador
+// argumenta pelo ticker, e é isto que sustenta o argumento.
+func TestCheckpointPorTempoVoltaADispararDepoisDeNovaLeva(t *testing.T) {
+	b := novaBancada(t, 1)
+	defer b.fecha()
+	produzLeva(t, b, "A", eventosOciosos)
+
+	base := contaCheckpoints(t, b)
+	var aposA, aposB int
+
+	if _, err := b.consomeComCadencia(prazoOcioso, cadenciaOciosa, func(d kafka.Desfecho) bool {
+		if aposA == 0 {
+			// Primeira ociosidade: espera a leva A ser decidida inteira e o
+			// relógio disparar pela primeira vez.
+			if d.Eventos < eventosOciosos {
+				return false
+			}
+			if n := contaCheckpoints(t, b); n > base {
+				aposA = n
+				// A segunda leva usa prefixo próprio: chave repetida cairia na
+				// regra de sequência do §37 e sairia como stale, decidida sem
+				// ter sido aplicada — não haveria posição nova a tornar
+				// durável e o segundo disparo seria barrado com razão.
+				produzLeva(t, b, "B", eventosOciosos)
+			}
+			return false
+		}
+		// Segunda ociosidade: a leva B já foi decidida e a fila secou de novo.
+		if d.Eventos < 2*eventosOciosos {
+			return false
+		}
+		if n := contaCheckpoints(t, b); n > aposA {
+			aposB = n
+			return true
+		}
+		return false
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if aposA == 0 {
+		t.Fatal("o primeiro checkpoint por tempo não veio: o teste não chegou a medir a repetição")
+	}
+	if aposB <= aposA {
+		t.Errorf("checkpoints: %d ao fim da primeira ociosidade e %d ao fim da segunda — "+
+			"o relógio disparou uma vez só, e o débito 56 reabre a partir da segunda leva", aposA, aposB)
+	}
+}
