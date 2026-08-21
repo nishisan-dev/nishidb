@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 	"github.com/nishisan-dev/nishidb/internal/storage/rowindex"
@@ -526,4 +528,175 @@ func (s *Store) passoDaAposentadoria(passo string) {
 	if s.apTrace != nil {
 		s.apTrace(passo)
 	}
+}
+
+// intervaloEntrePassadas é o tempo que a goroutine dorme entre duas eleições
+// (§53). Não é chave de configuração porque o §78 não tem uma: o operador
+// declara SE a compaction roda e a partir de que liveness, e o resto é
+// decisão do produto.
+//
+// O número sai da assimetria entre o custo de uma passada VAZIA e o de chegar
+// tarde. Passada vazia é uma iteração do segTally sob o wmu — dezenas de
+// entradas num disco de 50-100 GB com segmentos de 512 MiB (§85), microssegundos
+// —, enquanto chegar tarde custa o disco do §86: a 500 ev/s são 30-43 GB/dia
+// escritos contra 5,6-8 GB vivos, ou seja meio gigabyte a cada vinte minutos
+// de atraso. Dormir pouco é barato; dormir muito é o defeito que este
+// milestone existe para fechar.
+const intervaloEntrePassadas = 5 * time.Second
+
+// candidatos elege os segmentos cujo liveBytes/sizeBytes fica abaixo do
+// minimumLiveRatio (§53).
+//
+// Lê o tally como LIMITE SUPERIOR, que é a direção segura registrada no débito
+// 38: liveness superestimada apenas ADIA a eleição de um segmento que já era
+// candidato, enquanto subestimá-la faria a compaction descartar dado vivo.
+//
+// O segmento CORRENTE nunca entra (decisão D6) — compactá-lo é copiar dentro
+// de si mesmo, com a varredura perseguindo os records que ela própria acabou
+// de apendar e a aposentadoria removendo o arquivo em que o writer está no
+// meio de um Append.
+//
+// DIVERGÊNCIA deliberada do esboço da tarefa, e ela é a diferença entre a D6
+// valer e não valer: o curSegID é lido DENTRO da seção crítica. Lido antes do
+// Lock, o valor descreve um instante em que ninguém segurava o wmu — e quem
+// espera esse lock quase sempre espera um CHECKPOINT, que o segura do início
+// ao fim. É esse mesmo checkpoint que instala no segSize o tamanho do segmento
+// recém-rotacionado, ou seja a janela entre a leitura e o Lock é exatamente
+// aquela em que o novo corrente ganha tamanho conhecido e vira elegível: a
+// seleção acordaria com o corrente ANTIGO na mão e elegeria o segmento em que
+// o writer está apendando. Sob o wmu o writer não rotaciona, então ali o
+// espelho é exato — e este é o campo que nada reconcilia (invariante 4 da
+// Fase B). Fixado pelo
+// TestCandidatosLeOSegmentoCorrenteDEPOISDeEntrarNaSecaoCritica.
+//
+// Segmento sem entrada no segSize é PULADO, e isso também é adiamento e não
+// omissão: o segSize só se move no checkpoint, então um segmento selado depois
+// do último checkpoint ainda não tem tamanho medido, e eleger sem tamanho
+// seria dividir a liveness por um número inventado.
+func (s *Store) candidatos(ratio float64) []uint32 {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	corrente := s.curSegID.Load()
+	var out []uint32
+	for id, t := range s.segTally {
+		if id == corrente {
+			continue
+		}
+		tam, ok := s.segSize[id]
+		if !ok || tam <= 0 {
+			continue
+		}
+		if float64(t.liveBytes)/float64(tam) < ratio {
+			out = append(out, id)
+		}
+	}
+	// Determinismo: a mesma eleição produz a mesma ordem. Iteração de mapa Go
+	// é aleatória de propósito, e sem isto duas passadas do mesmo estado
+	// aposentariam em ordens diferentes — o operador que lê a sequência no log
+	// não distinguiria mudança de estado de troca de ordem.
+	slices.Sort(out)
+	return out
+}
+
+// IniciaCompaction sobe a goroutine que elege, varre e aposenta segmentos por
+// conta própria (§53-55). É o que separa "a compaction funciona" de "a
+// compaction resolve": até aqui todo ciclo dependia de alguém chamá-lo.
+//
+// Chamar duas vezes não sobe duas goroutines. Duas varreduras concorrentes
+// disputariam o wmu record a record e poderiam eleger o mesmo segmento, com a
+// segunda aposentando um arquivo que a primeira ainda está varrendo.
+func (s *Store) IniciaCompaction(ctx context.Context, ratio float64) {
+	s.compMu.Lock()
+	defer s.compMu.Unlock()
+	if s.compCancela != nil {
+		return
+	}
+	ctx, cancela := context.WithCancel(ctx)
+	s.compCancela = cancela
+	s.compEmVoo.Add(1)
+	go func() {
+		defer s.compEmVoo.Done()
+		s.rodaCompaction(ctx, ratio)
+	}()
+}
+
+// ParaCompaction cancela a goroutine e ESPERA por ela. As duas coisas, e nesta
+// ordem, são a decisão D7: o cancelamento sozinho devolveria o controle com a
+// varredura ainda apendando no segmento corrente e a aposentadoria ainda
+// renomeando arquivo.
+//
+// É idempotente e pode ser chamada sem nunca ter havido compaction — é o que
+// permite ao Close chamá-la sem perguntar se a config a ligou.
+func (s *Store) ParaCompaction() {
+	s.compMu.Lock()
+	defer s.compMu.Unlock()
+	if s.compCancela != nil {
+		s.compCancela()
+		s.compCancela = nil
+	}
+	s.compEmVoo.Wait()
+}
+
+// rodaCompaction é o laço perpétuo: uma passada, um cochilo, outra passada.
+//
+// A primeira passada é IMEDIATA, e não depois do primeiro cochilo. Um dataset
+// reaberto depois de horas de ingestão já vem com o garbage acumulado, e fazê
+// -lo esperar o intervalo é adiar o único trabalho que devolve disco.
+//
+// Para na PRIMEIRA falha, e para de vez. Não é impaciência: o erro que chega
+// aqui ou é o modo falho sticky do writer — que só sai com Close e reabertura
+// (§14.14) —, ou é a corrupção que o compactaSegmento recusa a varrer, e nos
+// dois casos a passada seguinte reencontraria o mesmo estado e o mesmo erro.
+// Um laço que insistisse transformaria uma falha em enxurrada de log e em
+// varredura perpétua sobre um dataset que já não pode ser compactado.
+func (s *Store) rodaCompaction(ctx context.Context, ratio float64) {
+	for {
+		if err := s.passadaDeCompaction(ctx, ratio); err != nil {
+			if ctx.Err() != nil {
+				return // cancelamento não é falha: é o Close ou o SIGTERM
+			}
+			s.opts.Log.Error("compaction.parou",
+				"a compaction parou e NÃO volta sozinha; o disco recomeça a crescer sem nada devolvê-lo (§53-55, §86)",
+				"erro", err.Error())
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(intervaloEntrePassadas):
+		}
+	}
+}
+
+// passadaDeCompaction varre e aposenta, em ordem, os candidatos de UMA
+// eleição.
+//
+// A lista é fotografada no começo e não é relida durante a passada. O
+// copy-forward empurra o segmento corrente para frente e SELA arquivos novos,
+// então uma passada que relesse a eleição a cada volta perseguiria as próprias
+// cópias sem nunca terminar — e nunca chegaria ao cochilo que devolve a CPU.
+// O que a passada não alcançar, a próxima alcança.
+func (s *Store) passadaDeCompaction(ctx context.Context, ratio float64) error {
+	for _, seg := range s.candidatos(ratio) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		copiados, lidos, escritos, err := s.compactaSegmento(ctx, seg)
+		if err != nil {
+			return fmt.Errorf("compactar o segmento %d: %w", seg, err)
+		}
+		if err := s.aposentaSegmento(seg); err != nil {
+			return fmt.Errorf("aposentar o segmento %d: %w", seg, err)
+		}
+		// O log é, até a Task 8 dar alimentador às três séries do §92, o
+		// ÚNICO lugar em que estes três números aparecem. Eles não são
+		// decorativos: `lidos - escritos` é o disco que este segmento devolveu
+		// ao filesystem, e é a resposta à pergunta do §86.
+		s.opts.Log.Info("compaction.segmento_aposentado",
+			"segmento varrido, esvaziado e removido",
+			"segmento", seg, "records_copiados", copiados,
+			"bytes_lidos", lidos, "bytes_escritos", escritos,
+			"bytes_devolvidos", lidos-escritos)
+	}
+	return nil
 }

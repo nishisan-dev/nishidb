@@ -5,6 +5,7 @@ package storage
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -242,6 +243,21 @@ type Store struct {
 	// contrato; o writer continua serializado pelo wmu, que é outro nível.
 	vida    sync.RWMutex
 	fechado bool
+
+	// compCancela e compEmVoo são o ciclo de vida da goroutine de compaction
+	// (§53-55, decisão D7). Ela NÃO se junta ao entra()/sai() pela duração da
+	// passada: o Close toma vida.Lock(), que é quiesce, e uma varredura de
+	// segmento leva minutos — o Close ficaria preso por todo esse tempo. O
+	// desenho é o oposto: o Close CANCELA e AGUARDA a goroutine antes de
+	// pedir o vida.Lock(), e cada trecho curto dela entra e sai do lock de
+	// vida por conta própria.
+	//
+	// compMu protege o par contra Inicia e Para concorrentes, e é segurado
+	// durante o Wait de propósito: sem isso um Inicia podia somar ao
+	// WaitGroup que o Para está esperando, que é uso indevido do tipo.
+	compMu      sync.Mutex
+	compCancela context.CancelFunc
+	compEmVoo   sync.WaitGroup
 
 	// wmu serializa as operações do writer (Put/Sync/Checkpoint): o
 	// contrato "writer único" deixa de ser convenção e vira mecanismo —
@@ -1456,6 +1472,14 @@ func (s *Store) Stats() Stats {
 //
 // É idempotente: o segundo Close devolve nil sem tocar em nada.
 func (s *Store) Close() error {
+	// A compaction é cancelada e AGUARDADA antes do quiesce (§53-55, decisão
+	// D7). O vida.Lock() abaixo só é concedido quando nenhuma operação está em
+	// voo, e a varredura do §54 é a operação mais longa que existe no produto:
+	// sem o join aqui, ou o Close espera a passada inteira, ou — pior — vence
+	// a corrida e desmapeia o índice sob os pés de quem está no meio de
+	// renomear e apagar arquivo.
+	s.ParaCompaction()
+
 	s.vida.Lock()
 	defer s.vida.Unlock()
 	if s.fechado {

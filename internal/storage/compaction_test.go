@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -676,14 +678,22 @@ func TestCopyForwardPerdeParaOUpdateQueEntraNaJanelaDaVerificacao(t *testing.T) 
 // determinístico de volta em probabilístico, que é exatamente o defeito que a
 // revisão apontou no teste concorrente.
 func compactionParadaNoWmu(prazo time.Duration) bool {
+	return paradaNoWmuEm("reapendaSeVivo", prazo)
+}
+
+// paradaNoWmuEm é o instrumento por trás do helper acima, com a marca da
+// função escolhida por quem chama: a barreira da Task 7 precisa do mesmo fato
+// ("já está esperando o lock") sobre a SELEÇÃO de candidatos, e duplicar a
+// leitura de stack faria as duas divergirem no primeiro ajuste.
+func paradaNoWmuEm(marca string, prazo time.Duration) bool {
 	buf := make([]byte, 1<<20)
 	limite := time.Now().Add(prazo)
 	for {
 		n := runtime.Stack(buf, true)
 		for _, g := range strings.Split(string(buf[:n]), "\n\ngoroutine ") {
 			// As duas marcas na MESMA goroutine: parada no Lock, e parada
-			// nele por dentro do copy-forward.
-			if strings.Contains(g, "reapendaSeVivo") && strings.Contains(g, "sync.(*Mutex).Lock") {
+			// nele por dentro da função que interessa.
+			if strings.Contains(g, marca) && strings.Contains(g, "sync.(*Mutex).Lock") {
 				return true
 			}
 		}
@@ -1876,4 +1886,300 @@ func TestAposentadoriaDurabilizaODiretorioNoRenameENoUnlink(t *testing.T) {
 		t.Errorf("nenhum fsync de %q aconteceu depois do unlink (sinais: %+v): a remoção fica só em cache e o ciclo seguinte "+
 			"volta a medir disco que esta função já devolveu", dataDir, sinais)
 	}
+}
+
+// ============================================================================
+// Task 7 — seleção de candidatos e ciclo de vida da goroutine (§53, D6, D7)
+// ============================================================================
+
+// corpusDeSegmentosSelados enche o dataset com updates sobre um key set FIXO
+// até haver uma pilha de segmentos SELADOS quase todos de garbage, e deixa o
+// checkpoint feito.
+//
+// O checkpoint não é cerimônia: o segSize só se move nele (store.go, godoc do
+// campo), e a seleção do §53 divide o tally pelo TAMANHO DO ARQUIVO. Sem ele
+// nenhum segmento teria tamanho conhecido e a eleição devolveria lista vazia
+// por falta de medida — um teste verde que não mediu nada.
+func corpusDeSegmentosSelados(t *testing.T, s *Store, keys, rodadas int) {
+	t.Helper()
+	for r := 0; r < rodadas; r++ {
+		for i := 0; i < keys; i++ {
+			k := chaveDoCorpus(i)
+			mustPut(t, s, k, sequenceDoCorpus(r, i), payloadDoCorpus(t, s, k, r), nil)
+		}
+	}
+	if err := s.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint do corpus: %v", err)
+	}
+}
+
+// TestSegmentoCorrenteNuncaEhCandidato é a decisão D6 em forma de asserção:
+// compactar o segmento em que se está apendando é copiar dentro de si mesmo —
+// o destino é a própria origem, a varredura persegue os records que ela mesma
+// acabou de escrever, e a aposentadoria removeria o arquivo em que o writer
+// está no meio de um Append.
+func TestSegmentoCorrenteNuncaEhCandidato(t *testing.T) {
+	s := openStore(t, Options{Dir: t.TempDir(), SegmentSize: 8 << 10})
+	corpusDeSegmentosSelados(t, s, 40, 20)
+
+	corrente := s.Stats().CurrentSegmentID
+	eleitos := s.candidatos(0.99)
+	if len(eleitos) == 0 {
+		t.Fatal("nenhum candidato com 20 rodadas de update sobre 40 keys: a montagem não produziu garbage, e a asserção abaixo passaria por vacuidade")
+	}
+	for _, c := range eleitos {
+		if c == corrente {
+			t.Fatalf("o segmento corrente %d foi eleito candidato (eleitos: %v)", corrente, eleitos)
+		}
+	}
+}
+
+// TestCandidatosLeOSegmentoCorrenteDEPOISDeEntrarNaSecaoCritica fixa a ORDEM
+// que o esboço do plano tem invertida, e ela decide a D6 inteira.
+//
+// Lido ANTES do wmu, o curSegID é um valor de um instante em que ninguém
+// segurava o lock do writer — e quem espera esse lock quase sempre está
+// esperando um CHECKPOINT, que é a operação que o segura do início ao fim.
+// É justamente o checkpoint que instala no segSize o tamanho do segmento
+// recém-rotacionado: ou seja, a janela entre a leitura e o Lock é exatamente
+// aquela em que o segmento que virou corrente ganha tamanho conhecido e passa
+// a ser elegível. A seleção acorda com o corrente ANTIGO na mão, não reconhece
+// o novo, e elege o segmento em que o writer está apendando.
+//
+// O teste é o writer: segura o wmu, espera a seleção PARAR no Lock (fato lido
+// da stack, e não um sleep — o mesmo instrumento do
+// TestCopyForwardLeALocationDEPOISDeEntrarNaSecaoCritica), rotaciona e
+// contabiliza o segmento novo como o checkpoint contabilizaria, e só então
+// solta. A partir daí as duas implementações são distinguíveis sempre.
+func TestCandidatosLeOSegmentoCorrenteDEPOISDeEntrarNaSecaoCritica(t *testing.T) {
+	dir := t.TempDir()
+	s := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10})
+	corpusDeSegmentosSelados(t, s, 20, 20)
+	const key = "cand-barreira"
+	payload := statusPayload(t, s, key, "Start", 1)
+	rowID, _ := mustPut(t, s, key, 1, payload, nil)
+	if err := s.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint da barreira: %v", err)
+	}
+
+	s.wmu.Lock()
+	eleitos := make(chan []uint32, 1)
+	go func() { eleitos <- s.candidatos(0.99) }()
+	if !paradaNoWmuEm("candidatos", 10*time.Second) {
+		s.wmu.Unlock()
+		t.Fatal("a seleção não chegou a parar no lock do writer: sem a barreira o teste não distingue implementação nenhuma")
+	}
+
+	// Rotação de verdade, com a seleção já parada no Lock: Append mais
+	// applyRecord, que é o par que o Put executa.
+	antes, _ := s.segW.Current()
+	corrente := antes
+	for i := 0; i < 500 && corrente == antes; i++ {
+		publicaUpdateSobOWmu(t, s, rowID, key, int64(1000+i), payload, payload)
+		corrente, _ = s.segW.Current()
+	}
+	if corrente == antes {
+		s.wmu.Unlock()
+		t.Fatalf("o writer não rotacionou além do segmento %d: sem rotação nesta janela não há o que a leitura antecipada erre", antes)
+	}
+	// O que o checkpoint que segurava este lock deixaria feito. Não é estado
+	// inventado: é a MESMA escrita da reconciliação (store_checkpoint.go), na
+	// mesma seção crítica, e com o espelho ajustado junto — invariante 4.
+	fi, err := os.Stat(audSegPath(dir, corrente))
+	if err != nil {
+		s.wmu.Unlock()
+		t.Fatalf("stat do segmento recém-rotacionado: %v", err)
+	}
+	s.segSize[corrente] = fi.Size()
+	s.diskBytesAll.Add(fi.Size())
+	s.wmu.Unlock()
+
+	lista := <-eleitos
+	if len(lista) == 0 {
+		t.Fatal("a seleção devolveu lista vazia: o corpus deixou de produzir candidato e a asserção abaixo não discriminaria nada")
+	}
+	for _, c := range lista {
+		if c == corrente {
+			t.Fatalf("o segmento %d virou corrente COM a seleção já parada no lock e ainda assim foi eleito (eleitos: %v): "+
+				"o corrente foi lido antes da seção crítica, e a D6 vale sobre um instante que já passou", corrente, lista)
+		}
+	}
+}
+
+// TestCandidatoSoSaiAbaixoDoMinimumLiveRatio prende o predicado do §53 —
+// `liveBytes/sizeBytes < ratio` — em direção e em fronteira.
+//
+// O oráculo é recalculado dos MESMOS mapas que a seleção lê, e isso é
+// deliberado: o que se afere aqui não é a exatidão do tally (ela é limite
+// superior por construção, débitos 38 e 45), é o predicado. Uma comparação
+// invertida elegeria justamente os segmentos densos, e um `<=` no lugar do `<`
+// tornaria candidato o segmento cuja liveness bate exatamente o teto — que
+// com ratio 1.0 seria o dataset inteiro, em laço.
+func TestCandidatoSoSaiAbaixoDoMinimumLiveRatio(t *testing.T) {
+	s := openStore(t, Options{Dir: t.TempDir(), SegmentSize: 8 << 10})
+	corpusDeSegmentosSelados(t, s, 40, 20)
+	corrente := s.Stats().CurrentSegmentID
+
+	razoes := map[uint32]float64{}
+	s.wmu.Lock()
+	for id, t := range s.segTally {
+		if tam, ok := s.segSize[id]; ok && tam > 0 && id != corrente {
+			razoes[id] = float64(t.liveBytes) / float64(tam)
+		}
+	}
+	s.wmu.Unlock()
+	if len(razoes) < 3 {
+		t.Fatalf("só %d segmento(s) selado(s) com tamanho conhecido: sem uma pilha deles a tabela abaixo não separa eleito de recusado", len(razoes))
+	}
+
+	for _, ratio := range []float64{0.01, 0.25, 0.5, 0.99} {
+		querido := map[uint32]bool{}
+		for id, r := range razoes {
+			if r < ratio {
+				querido[id] = true
+			}
+		}
+		obtido := map[uint32]bool{}
+		for _, id := range s.candidatos(ratio) {
+			obtido[id] = true
+		}
+		if !maps.Equal(querido, obtido) {
+			t.Errorf("ratio %v: eleitos %v, queria %v (razões medidas: %v)", ratio, obtido, querido, razoes)
+		}
+	}
+}
+
+// TestCandidatosSaemEmOrdemDeterministica: a mesma eleição tem de produzir a
+// mesma ordem. Iteração de mapa Go é aleatória de propósito, então sem a
+// ordenação duas passadas idênticas compactariam em ordens diferentes — e o
+// operador que lê a sequência de aposentadorias no log não teria como
+// distinguir uma mudança de estado de uma troca de ordem.
+func TestCandidatosSaemEmOrdemDeterministica(t *testing.T) {
+	s := openStore(t, Options{Dir: t.TempDir(), SegmentSize: 8 << 10})
+	corpusDeSegmentosSelados(t, s, 40, 20)
+
+	primeira := s.candidatos(0.99)
+	if len(primeira) < 3 {
+		t.Fatalf("só %d candidato(s): com menos de três a ordenação não é observável", len(primeira))
+	}
+	if !slices.IsSorted(primeira) {
+		t.Errorf("a eleição saiu fora de ordem: %v", primeira)
+	}
+	for i := 0; i < 20; i++ {
+		if got := s.candidatos(0.99); !slices.Equal(got, primeira) {
+			t.Fatalf("a volta %d devolveu %v contra %v da primeira: a eleição não é determinística", i, got, primeira)
+		}
+	}
+}
+
+// TestCloseCancelaEAguardaACompaction é a decisão D7 nas duas direções, e as
+// duas são necessárias.
+//
+// O Close toma vida.Lock(), que só é concedido quando nenhuma operação está em
+// voo, e a varredura do §54 é uma operação longa. Se a goroutine não for
+// cancelada, o Close espera a passada inteira. Se não for AGUARDADA, é pior: o
+// Close vence a corrida, desmapeia o índice e fecha os segmentos sob os pés de
+// uma compaction que está no meio de renomear e apagar arquivo — o único
+// caminho do projeto que destrói dado.
+//
+// A barreira é o seam da aposentadoria porque ali a goroutine está entre dois
+// passos do D5 SEM segurar o entra(): é exatamente o instante em que um Close
+// sem join receberia o vida.Lock() na hora e passaria à frente. Sem essa
+// asserção do meio, um Close que apenas não trava passaria verde.
+func TestCloseCancelaEAguardaACompaction(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(Options{Dir: dir, SegmentSize: 8 << 10})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	corpusDeSegmentosSelados(t, s, 40, 30)
+
+	emVoo := make(chan struct{})
+	libera := make(chan struct{})
+	liberar := sync.OnceFunc(func() { close(libera) })
+	defer liberar()
+	var umaVez sync.Once
+	s.SetAposentadoriaTraceForTest(func(string) {
+		umaVez.Do(func() {
+			close(emVoo)
+			<-libera
+		})
+	})
+
+	s.IniciaCompaction(context.Background(), 0.5)
+	select {
+	case <-emVoo:
+	case <-time.After(60 * time.Second):
+		t.Fatal("a compaction não chegou a aposentar nada em 60s: sem uma operação em voo o Close não tem o que aguardar")
+	}
+
+	feito := make(chan error, 1)
+	go func() { feito <- s.Close() }()
+	select {
+	case err := <-feito:
+		t.Fatalf("Close retornou (%v) com a compaction parada NO MEIO de uma aposentadoria: "+
+			"a goroutine não foi aguardada, e o que vem depois dela é rename e unlink de arquivo sobre um Store já fechado", err)
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	liberar()
+	select {
+	case err := <-feito:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(60 * time.Second):
+		t.Fatal("Close não retornou: a compaction não foi cancelada nem aguardada")
+	}
+}
+
+// TestCompactionEmBackgroundDevolveDiscoSemNinguemChamar é a Task 7 inteira do
+// lado do storage: ninguém chama compactaSegmento nem aposentaSegmento aqui.
+// A goroutine elege, varre, aposenta e volta a dormir por conta própria, que é
+// como ela roda em produção.
+//
+// O que separa este teste do critério de aceite da Task 6 é justamente o
+// AGENDADOR: lá as duas funções eram chamadas à mão sobre uma lista de alvos
+// escolhida pelo teste, e uma seleção que nunca elegesse nada deixaria a suíte
+// verde. Aqui a lista sai do §53.
+func TestCompactionEmBackgroundDevolveDiscoSemNinguemChamar(t *testing.T) {
+	dir := t.TempDir()
+	s := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10})
+	const keys, rodadas = 40, 30
+	corpusDeSegmentosSelados(t, s, keys, rodadas)
+
+	antes := discoDosSegmentosPorOsStat(t, dir)
+	s.IniciaCompaction(context.Background(), 0.5)
+
+	prazo := time.Now().Add(60 * time.Second)
+	depois := antes
+	for time.Now().Before(prazo) {
+		if depois = discoDosSegmentosPorOsStat(t, dir); depois <= antes/2 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	s.ParaCompaction()
+
+	t.Logf("disco em segment-*.dat: %d bytes antes, %d depois — %d devolvidos sem ninguém chamar a compaction",
+		antes, depois, antes-depois)
+	if depois > antes/2 {
+		t.Fatalf("o disco saiu de %d para %d bytes com %d rodadas de update sobre %d keys: "+
+			"a maior parte do arquivo era garbage e a goroutine não a devolveu", antes, depois, rodadas, keys)
+	}
+	sobreviventes, err := filepath.Glob(filepath.Join(dir, "data", "*"+sufixoAposentadoNoTeste))
+	if err != nil {
+		t.Fatalf("glob dos aposentados: %v", err)
+	}
+	if len(sobreviventes) != 0 {
+		t.Errorf("sobraram %d arquivo(s) aposentado(s) em disco: %v", len(sobreviventes), sobreviventes)
+	}
+	exigeCorpusNaUltimaRodada(t, s, keys, rodadas-1, "após a compaction em background")
+	exigeEspelhoIgualAosTallies(t, s, "após a compaction em background")
+
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	reaberto := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10})
+	exigeCorpusNaUltimaRodada(t, reaberto, keys, rodadas-1, "após Close+Open")
 }
