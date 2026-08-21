@@ -41,9 +41,18 @@ type Store interface {
 }
 
 // Cadencia é quando o checkpoint dispara: por contagem OU por tempo, o que
-// vier primeiro. É a mesma regra do `nishidb ingest` (§78,
+// vier primeiro. É o mesmo gatilho do `nishidb ingest` e a MESMA chave (§78,
 // storage.checkpoint.interval), e não uma chave nova — o §48 fixa a ORDEM do
 // fluxo, não a periodicidade.
+//
+// Onde as duas regras divergem, e por quê: o precisaCheckpoint do
+// `internal/cli/ingest.go` cai para um padrão quando o intervalo é <= 0 e não
+// tem guarda de "nenhum evento desde o último checkpoint". Ele pode se dar a
+// esse luxo porque lê uma entrada FINITA do começo ao fim — só é consultado
+// com um evento recém-lido na mão, e o processo termina. Aqui o laço é
+// perpétuo e desperta sozinho (débito 56): o intervalo <= 0 tem de DESLIGAR o
+// relógio em vez de adotar padrão nenhum, e o tique sem evento novo tem de ser
+// barrado, sob pena de um dataset parado reescrever o manifest para sempre.
 type Cadencia struct {
 	Eventos   int64
 	Intervalo time.Duration

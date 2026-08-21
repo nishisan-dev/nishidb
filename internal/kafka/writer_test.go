@@ -122,13 +122,87 @@ func TestCheckpointPorTempoNaoRepeteSemEventoNovo(t *testing.T) {
 	}
 }
 
+// TestDespertarPorTempoNaoEncerraOLacoDoWriter cobra a única consequência
+// observável da distinção entre DESPERTAR e FIM DE FILA — o terceiro retorno
+// do recebeOuAcorda, e a cláusula que o consome no Roda.
+//
+// Os dois testes acima não conseguem cobrá-la, por construção: eles afirmam
+// sobre artefatos que o ENCERRAMENTO também produz. O kafka.offsets é gravado
+// pelo finaliza() na saída do laço, e uma contagem de checkpoints que não
+// cresce é exatamente o que um writer morto deixa para trás. Um laço que
+// encerra no primeiro tique satisfaz as duas asserções.
+//
+// Colapsada a distinção, o despertar cai no ramo de fila fechada e o writer
+// devolve nil pelo finaliza(). O consumidor só cancela o poll quando o writer
+// devolve ERRO (consumidor.go, no `if err != nil`), então nada acontece: sem
+// pausa, sem log, sem métrica. O poller segue buscando, a fila enche até o
+// gate do §128 e o Envia bloqueia para sempre. Em produção o intervalo é o
+// storage.checkpoint.interval (§78, 30s por padrão) — a ingestão morreria em
+// silêncio após meio minuto de ociosidade, que é o débito 56 agravado.
+//
+// O que se afirma aqui é a sobrevivência do laço: passados vários intervalos
+// com a fila seca, os eventos produzidos DEPOIS têm de ser consumidos.
+func TestDespertarPorTempoNaoEncerraOLacoDoWriter(t *testing.T) {
+	// A ociosidade é contada em intervalos porque o que importa é o número de
+	// despertares atravessados, não o relógio de parede.
+	const (
+		primeiraLeva      = 1
+		segundaLeva       = 5
+		intervalosOciosos = 4
+	)
+
+	b := novaBancada(t, 1)
+	defer b.fecha()
+	produzLeva(t, b, "A", primeiraLeva)
+
+	var marca time.Time
+	var produziu bool
+	d, err := b.consomeComCadencia(prazoOcioso, cadenciaOciosa, func(d kafka.Desfecho) bool {
+		switch {
+		case d.Eventos < primeiraLeva:
+			return false
+		case marca.IsZero():
+			// A primeira leva acabou e nada mais é produzido: daqui em diante
+			// o writer só é acordado pelo relógio.
+			marca = time.Now()
+			return false
+		case !produziu:
+			if time.Since(marca) < intervalosOciosos*intervaloOcioso {
+				return false
+			}
+			produzLeva(t, b, "B", segundaLeva)
+			produziu = true
+			return false
+		default:
+			return d.Eventos >= primeiraLeva+segundaLeva
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Eventos < primeiraLeva+segundaLeva {
+		t.Errorf("eventos consumidos = %d, quer %d: depois de %d intervalos ociosos o laço não "+
+			"consumiu a leva nova — o despertar por tempo encerrou o writer em vez de reavaliar "+
+			"o checkpoint, e a ingestão parou sem erro, sem pausa e sem métrica",
+			d.Eventos, primeiraLeva+segundaLeva, intervalosOciosos)
+	}
+}
+
 // produzOciosos publica menos eventos que o limiar por contagem de
 // cadenciaOciosa. É essa desproporção que faz o teste falar do relógio.
 func produzOciosos(t *testing.T, b *bancada) {
 	t.Helper()
-	recs := make([]*kgo.Record, 0, eventosOciosos)
-	for i := 0; i < eventosOciosos; i++ {
-		recs = append(recs, evento(fmt.Sprintf("S%02d", i), 1, "Start"))
+	produzLeva(t, b, "S", eventosOciosos)
+}
+
+// produzLeva publica n eventos de entidades distintas. O prefixo separa as
+// levas: chaves repetidas entre elas cairiam na regra de sequência do §37 e a
+// segunda leva viraria stale, decidida sem ter sido aplicada.
+func produzLeva(t *testing.T, b *bancada, prefixo string, n int) {
+	t.Helper()
+	recs := make([]*kgo.Record, 0, n)
+	for i := 0; i < n; i++ {
+		recs = append(recs, evento(fmt.Sprintf("%s%02d", prefixo, i), 1, "Start"))
 	}
 	b.produz(recs...)
 }
