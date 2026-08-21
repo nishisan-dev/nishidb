@@ -634,8 +634,22 @@ git commit -m "Publica a curva de disco, que é o alarme que antecede o ENOSPC"
 >    sem cancelamento** (Task 5).
 > 3. O `Checkpoint()` que torna as locations duráveis acontece **antes** do
 >    rename, e o segundo `Checkpoint()` **antes** do unlink (Task 6).
-> 4. Toda mutação de `segTally`/`segSize` ajusta o **espelho atômico
->    correspondente** na mesma seção crítica (ver abaixo).
+> 4. Toda escrita que um espelho atômico descreve ajusta **o espelho, na mesma
+>    seção crítica**. São **quatro**, não três: `segCount`, `liveBytesAll` e
+>    `diskBytesAll` espelham os agregados de `segTally`/`segSize`, e
+>    **`curSegID` espelha o segmento em que o writer apenda** — ou seja,
+>    qualquer caminho que chame `segW.Append` e possa rotacionar tem de
+>    atualizá-lo.
+>
+>    O `curSegID` é o mais perigoso dos quatro porque é o **único que nada
+>    reconcilia**: a recarga do checkpoint refaz os outros três e o
+>    `conferaEspelhos()` os confere, mas ele não entra em nenhum dos dois — uma
+>    vez atrasado, fica atrasado. Foi encontrado assim na Task 4, onde apagar o
+>    `curSegID.Store` deixava a suíte inteira verde. O estrago aterrissa na
+>    Task 7: a decisão D6 é "nunca eleger o segmento corrente", e é este campo
+>    que responde qual é ele — com o espelho obsoleto, a compaction elegeria o
+>    segmento em que o writer está apendando, que é exatamente o que a D6
+>    existe para impedir.
 >
 > ### O que a Fase A′ mudou para esta fase
 >
