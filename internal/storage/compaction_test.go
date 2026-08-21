@@ -786,3 +786,72 @@ func TestCopyForwardLeALocationDEPOISDeEntrarNaSecaoCritica(t *testing.T) {
 	}
 	exigeEspelhoIgualAosTallies(t, s, "após a janela fechada pela seção crítica")
 }
+
+// segmentoCorrenteDoWriter lê onde o writer está de fato apendando. É a
+// VERDADE contra a qual o espelho curSegID se confere — perguntar ao Stats
+// seria perguntar ao próprio espelho.
+func segmentoCorrenteDoWriter(s *Store) uint32 {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	seg, _ := s.segW.Current()
+	return seg
+}
+
+// TestCopyForwardQueRotacionaAtualizaOSegmentoCorrentePublicado fecha a única
+// linha do reapendaSeVivo que nenhum teste alcançava: o
+// `s.curSegID.Store(novoSeg)` que segue o Append.
+//
+// Apagá-la deixava a suíte inteira verde, e o estrago não é cosmético. O
+// curSegID é o espelho que `Stats().CurrentSegmentID` publica, e dele saem o
+// `/v1/stats`, o `/metrics` e os comandos operacionais do §96. Diferente dos
+// espelhos de liveness, ele NÃO é recarregado pela reconciliação do checkpoint
+// nem conferido pelo conferaEspelhos: uma vez atrasado, fica atrasado. Num
+// período de compaction com a ingestão parada — que é exatamente o cenário do
+// §53-55 — o operador leria um segmento já SELADO como corrente por tempo
+// indeterminado.
+//
+// O custo real chega na seleção de candidatos: a decisão D6 é "nunca eleger o
+// segmento corrente", e é este campo que responde qual é ele. Com o espelho
+// obsoleto, a compaction elegeria justamente o segmento em que o writer está
+// apendando — copiar dentro de si mesmo, que é o que a D6 existe para impedir.
+func TestCopyForwardQueRotacionaAtualizaOSegmentoCorrentePublicado(t *testing.T) {
+	s := openStore(t, Options{SegmentSize: 400})
+	const key = "cf-rotaciona"
+	payload := statusPayload(t, s, key, "Start", 1)
+	rowID, _ := mustPut(t, s, key, 1, payload, nil)
+
+	inicial := segmentoCorrenteDoWriter(s)
+	// Copiar a row para frente repetidamente enche o segmento corrente até o
+	// Append rotacionar. Cada volta relê a location, porque a cópia anterior
+	// fez a antiga deixar de nomear o record.
+	var rotacionou bool
+	for i := 0; i < 200 && !rotacionou; i++ {
+		seg, off := localizacaoDaRow(t, s, rowID)
+		rec := recordEm(t, s, seg, off)
+		copiado, _, err := s.reapendaSeVivo(seg, off, rec)
+		if err != nil {
+			t.Fatalf("reapendaSeVivo na volta %d: %v", i, err)
+		}
+		if !copiado {
+			t.Fatalf("a cópia foi recusada na volta %d com a location recém-lida", i)
+		}
+		rotacionou = segmentoCorrenteDoWriter(s) != inicial
+	}
+	if !rotacionou {
+		t.Fatal("o copy-forward não rotacionou em 200 cópias: o teste não chegou a exercitar o espelho")
+	}
+
+	real := segmentoCorrenteDoWriter(s)
+	if got := s.Stats().CurrentSegmentID; got != real {
+		t.Errorf("CurrentSegmentID = %d e o writer está no %d: o copy-forward rotacionou e o espelho ficou para trás", got, real)
+	}
+	// A mentira não cicatriza. O checkpoint recarrega os espelhos de liveness
+	// e NÃO o curSegID; sem esta segunda asserção alguém poderia supor que o
+	// próximo checkpoint conserta, e operar em cima disso.
+	if err := s.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if got := s.Stats().CurrentSegmentID; got != real {
+		t.Errorf("CurrentSegmentID = %d depois do checkpoint e o writer está no %d: este espelho não é reconciliado", got, real)
+	}
+}
