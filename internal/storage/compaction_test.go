@@ -2,8 +2,10 @@ package storage
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
+	"os"
 	"runtime"
 	"strings"
 	"sync"
@@ -854,4 +856,258 @@ func TestCopyForwardQueRotacionaAtualizaOSegmentoCorrentePublicado(t *testing.T)
 	if got := s.Stats().CurrentSegmentID; got != real {
 		t.Errorf("CurrentSegmentID = %d depois do checkpoint e o writer está no %d: este espelho não é reconciliado", got, real)
 	}
+}
+
+// abreComResiduoOrfaoNoSegmento1 monta o dataset que a Task 5 precisa e que
+// nenhum atalho produz: um segmento SELADO cujo tally está ACIMA do real por
+// exatamente um record órfão, e um Store aberto por cima dele. Devolve também
+// o diretório do dataset e o tamanho em bytes do órfão, que é o oráculo EXATO
+// das duas asserções que interessam — quanto os decrementos deixariam para
+// trás e quanto o espelho tem de descer quando a varredura zerar o tally.
+//
+// O resíduo é produzido pelo MECANISMO, não injetado no mapa: Put, checkpoint
+// (que fixa o ponto S), update, crash entre os passos 3 e 4 do §10.2
+// (locations duráveis, manifest atrás) e reabertura, onde o replay do tail
+// reaplica o update sem conhecer o estado anterior e deixa o record de S
+// contado como vivo para sempre. É o cenário que o
+// TestResiduoDeLivenessDoReplayNaoConverge mede e declara PERMANENTE, e é a
+// razão de o débito 38 existir.
+//
+// Inflar o tally à mão seria mais curto e provaria menos: a asserção passaria
+// a valer sobre um estado que o produto não alcança, quando o que está em jogo
+// é justamente o estado que ele alcança e do qual não sai por subtração.
+func abreComResiduoOrfaoNoSegmento1(t *testing.T) (*Store, string, uint64) {
+	t.Helper()
+	dir := t.TempDir()
+	opts := Options{Dir: dir, SegmentSize: 400, BitmapFields: []types.FieldID{fldStatus}}
+
+	s := audOpen(t, opts)
+	mustPut(t, s, "lv", 1, statusPayload(t, s, "lv", "Start", 1), nil)
+	if err := s.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint do ponto S: %v", err)
+	}
+	// Em S o segmento 1 tem UM record vivo, e é ele que vira o órfão: o
+	// update abaixo o torna garbage sem que ninguém desconte.
+	orfao := statsDoSegmento(t, dir).LiveBytes
+	if orfao == 0 {
+		t.Fatal("o manifest de S não contabilizou o record: sem órfão não há o que provar")
+	}
+
+	prev := mustGetAud(t, s, "lv")
+	mustPut(t, s, "lv", 2, statusPayload(t, s, "lv", "Stop", 2), &prev)
+	if err := s.PartialCheckpointForTest(); err != nil {
+		t.Fatalf("checkpoint parcial: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close antes da reabertura: %v", err)
+	}
+
+	s2 := audOpen(t, opts)
+	t.Cleanup(func() { _ = s2.Close() })
+	if got := s2.Stats().CurrentSegmentID; got != 1 {
+		t.Fatalf("o cenário exige o resíduo no segmento 1, mas o writer reabriu no %d", got)
+	}
+	// A decisão D6 nunca elege o segmento corrente, então o candidato de um
+	// teste honesto tem de estar SELADO antes de a varredura tocá-lo.
+	rotacionaAlemDe(t, s2, 1)
+	return s2, dir, orfao
+}
+
+// TestVarreduraCompletaZeraOTallyMesmoComResiduoOrfao ataca o débito 38 de
+// frente. A pergunta que ele responde não é "a compaction esvazia o
+// segmento?", é "por que o tally é ZERADO em vez de subtraído?".
+//
+// A resposta está na asserção do meio, e ela é aritmética: o que o segmento
+// reivindicava como vivo MENOS o que a varredura de fato copiou é exatamente
+// o órfão. Ou seja, os decrementos do applyRecord param nele e nunca alcançam
+// zero, por mais completa que a varredura seja — o tally é limite superior
+// por construção (débitos 38 e 45) e o record órfão não é nomeado por
+// location nenhuma, logo nenhum decremento o encontra. Quem zera é a
+// varredura, que viu TODOS os records e é a única leitura exata do segmento
+// que existe no produto (§53-55, decisão D4).
+//
+// Sem a asserção do meio o teste seria vacuoso num dataset sem resíduo: com o
+// tally exato, "zerar" e "subtrair" produzem o mesmo 0 e nenhum oráculo os
+// separa.
+func TestVarreduraCompletaZeraOTallyMesmoComResiduoOrfao(t *testing.T) {
+	s, _, orfao := abreComResiduoOrfaoNoSegmento1(t)
+	recsAntes, vivoAntes := tallyDoSegmento(s, 1)
+	if recsAntes == 0 || vivoAntes <= orfao {
+		t.Fatalf("montagem sem o que compactar: o segmento 1 reivindica %d records / %d bytes com um órfão de %d",
+			recsAntes, vivoAntes, orfao)
+	}
+
+	copiados, lidos, escritos, err := s.compactaSegmento(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("compactaSegmento: %v", err)
+	}
+	if copiados == 0 {
+		t.Fatal("nenhum record copiado: a varredura não exercitou o copy-forward")
+	}
+	if escritos >= lidos {
+		t.Errorf("a varredura leu %d bytes e escreveu %d: sem garbage deixado para trás a compaction não devolve disco nenhum",
+			lidos, escritos)
+	}
+	if resto := vivoAntes - uint64(escritos); resto != orfao {
+		t.Errorf("os decrementos parariam em %d bytes (reivindicados %d, copiados %d) e o órfão mede %d — "+
+			"se estes números passaram a bater, o resíduo do replay foi corrigido e este teste perdeu o alvo",
+			resto, vivoAntes, escritos, orfao)
+	}
+
+	recs, vivo := tallyDoSegmento(s, 1)
+	if recs != 0 || vivo != 0 {
+		t.Errorf("tally do segmento 1 = %d records / %d bytes após a varredura completa, queria 0/0: "+
+			"a varredura tem autoridade sobre o segmento que ela leu inteiro (§53-55, D4)", recs, vivo)
+	}
+	// O dado não pode ter ido junto: o copy-forward move records vivos, não
+	// os descarta.
+	if got := mustGetAud(t, s, "lv"); got.Sequence != 2 {
+		t.Errorf("a row copiada voltou para a seq %d; o update seguia sendo o estado corrente", got.Sequence)
+	}
+}
+
+// TestZeramentoDoTallyDescontaOEspelhoNaMesmaSecaoCritica fixa o invariante 4
+// da Fase B — toda escrita que um espelho atômico descreve ajusta o espelho,
+// na MESMA seção crítica.
+//
+// O zeramento do tally é o único ponto da compaction que mexe no mapa por
+// fora do applyRecord, e é por isso que ele precisa de teste próprio: o
+// copy-forward passa pelo applyRecord, que já mantém os dois lados, mas esta
+// linha não passa por lugar nenhum. Zerar só o mapa deixaria o liveBytesAll
+// à frente dele — o /v1/stats e a nishidb_garbage_bytes publicando um vivo
+// que o dataset não tem, a cada compaction.
+//
+// São duas asserções porque uma só não fecha. O oráculo EXATO (o espelho
+// desce exatamente o órfão, nem mais nem menos) pega o desconto errado; a
+// conferência do checkpoint seguinte pega o desconto ESQUECIDO, que é o
+// mutante que passaria despercebido até alguém ler o WARN no log.
+func TestZeramentoDoTallyDescontaOEspelhoNaMesmaSecaoCritica(t *testing.T) {
+	s, _, orfao := abreComResiduoOrfaoNoSegmento1(t)
+	divergenciasAntes := s.EspelhosDivergentesForTest()
+	antes := s.Stats().LiveBytesUpperBound
+
+	if _, _, _, err := s.compactaSegmento(context.Background(), 1); err != nil {
+		t.Fatalf("compactaSegmento: %v", err)
+	}
+
+	depois := s.Stats().LiveBytesUpperBound
+	if antes-depois != orfao {
+		t.Errorf("LiveBytesUpperBound foi de %d para %d (queda de %d), e a queda tem de ser exatamente o órfão, %d: "+
+			"o copy-forward move bytes vivos de um segmento para o outro sem mudar o agregado, então o que sobra "+
+			"para o zeramento descontar é só o resíduo", antes, depois, antes-depois, orfao)
+	}
+	exigeEspelhoIgualAosTallies(t, s, "após o zeramento do tally pela varredura")
+
+	if err := s.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if got := s.EspelhosDivergentesForTest(); got != divergenciasAntes {
+		t.Errorf("o checkpoint seguinte acusou %d divergências de espelho contra %d antes da compaction: "+
+			"o mapa e o espelho saíram do zeramento discordando, e o detector está certo",
+			got, divergenciasAntes)
+	}
+}
+
+// TestVarreduraCanceladaNaoZeraOTally fixa a outra metade do invariante 2:
+// completa E sem cancelamento. Uma varredura interrompida não viu todos os
+// records, então não tem autoridade sobre nenhum deles — zerar ali diria que
+// o segmento está vazio quando metade dele nunca foi lida, e a aposentadoria
+// da Task 6 removeria o arquivo com as locations ainda apontando para dentro.
+//
+// O cancelamento chega pelo contexto e sai pelo erro do callback, que o
+// ScanFrom propaga. É o caminho que a goroutine da Task 7 vai usar no Close:
+// quem desliga o servidor não espera uma varredura de segmento inteiro
+// terminar.
+//
+// Registro honesto do alcance: com o contexto já cancelado na entrada, a
+// varredura para no PRIMEIRO record, então o que este teste prova é "não zera
+// quando cancelada", não "preserva o trabalho parcial". Cancelar no meio
+// exigiria um seam de produção que a tarefa não pede; o trabalho parcial já
+// está coberto pelo teste da varredura que para em record corrompido, que
+// interrompe a varredura DEPOIS de copiar.
+func TestVarreduraCanceladaNaoZeraOTally(t *testing.T) {
+	s, _, _ := abreComResiduoOrfaoNoSegmento1(t)
+	recsAntes, vivoAntes := tallyDoSegmento(s, 1)
+
+	ctx, cancela := context.WithCancel(context.Background())
+	cancela()
+	copiados, _, _, err := s.compactaSegmento(ctx, 1)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("compactaSegmento com contexto cancelado devolveu %v, queria context.Canceled", err)
+	}
+	if copiados != 0 {
+		t.Errorf("%d records copiados com o contexto cancelado na entrada: a verificação do ctx não é a primeira coisa do callback", copiados)
+	}
+	if recs, vivo := tallyDoSegmento(s, 1); recs != recsAntes || vivo != vivoAntes {
+		t.Errorf("tally do segmento 1 = %d/%d após a varredura cancelada, queria %d/%d intactos",
+			recs, vivo, recsAntes, vivoAntes)
+	}
+	exigeEspelhoIgualAosTallies(t, s, "após a varredura cancelada")
+}
+
+// TestVarreduraQueParaAntesDoFimDoArquivoNaoZeraOTally cobre o terceiro modo
+// de varredura incompleta, e é o único que não vem de fora: o ScanFrom para
+// no primeiro record inválido SEM erro, porque para o tail scan da recovery
+// (§52) isso é o caminho normal — é assim que o EOF chega até lá. Num
+// segmento SELADO não é: ele não cresce desde a rotação, então prefixo válido
+// menor que o arquivo é corrupção real, e os records depois dela continuam
+// sendo nomeados por locations que a varredura nunca visitou.
+//
+// Zerar o tally aqui daria à varredura uma autoridade que ela não tem, e o
+// estrago só aterrissaria na Task 6: o arquivo seria aposentado e removido
+// com locations vivas apontando para dentro dele, e o Open seguinte recusaria
+// o dataset inteiro (ErrDatasetCorrupt em store_recovery.go). Uma corrupção
+// de UM record viraria perda do segmento inteiro, causada pela compaction.
+//
+// A corrupção é plantada com o Store ABERTO de propósito: o recoverFrom já
+// recusa abrir um dataset com corrupção no meio da cadeia
+// (TestCorrupcaoNoMeioDaCadeiaEhFatalENaoTrunca), então o único jeito de a
+// varredura topar com ela é o dano ter aparecido depois da abertura — que é
+// exatamente o que bit rot é.
+func TestVarreduraQueParaAntesDoFimDoArquivoNaoZeraOTally(t *testing.T) {
+	s, dir, _ := abreComResiduoOrfaoNoSegmento1(t)
+	recsAntes, vivoAntes := tallyDoSegmento(s, 1)
+
+	// O último record do segmento selado: corrompê-lo deixa a varredura
+	// copiar os anteriores e parar antes do fim do arquivo, que é a
+	// precondição exata deste teste.
+	caminho := audSegPath(dir, 1)
+	alvo := fileSizeAud(t, caminho) - 8
+	f, err := os.OpenFile(caminho, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("abrir o segmento para plantar a corrupção: %v", err)
+	}
+	var b [1]byte
+	if _, err := f.ReadAt(b[:], alvo); err != nil {
+		t.Fatalf("ler o byte a corromper: %v", err)
+	}
+	b[0] ^= 0xFF
+	if _, err := f.WriteAt(b[:], alvo); err != nil {
+		t.Fatalf("gravar a corrupção: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("fechar o segmento corrompido: %v", err)
+	}
+
+	copiados, _, escritos, err := s.compactaSegmento(context.Background(), 1)
+	if !errors.Is(err, ErrDatasetCorrupt) {
+		t.Fatalf("compactaSegmento sobre segmento com record corrompido devolveu %v, queria ErrDatasetCorrupt", err)
+	}
+	if copiados == 0 {
+		t.Fatal("a varredura parou antes de copiar qualquer coisa: o teste não chegou a exercitar a varredura parcial")
+	}
+	recs, vivo := tallyDoSegmento(s, 1)
+	if recs == 0 && vivo == 0 {
+		t.Fatal("o tally foi zerado por uma varredura que parou no meio do arquivo: " +
+			"a autoridade do D4 vem de ter lido o segmento INTEIRO, e ela não leu")
+	}
+	// E o trabalho parcial não se perde nem se conta duas vezes: o que a
+	// varredura alcançou a copiar saiu do tally da origem pelo applyRecord, e
+	// só isso.
+	if recs != recsAntes-copiados || vivo != vivoAntes-uint64(escritos) {
+		t.Errorf("tally do segmento 1 = %d records / %d bytes após copiar %d records (%d bytes) de %d/%d; "+
+			"queria %d/%d — só a baixa do que foi de fato copiado",
+			recs, vivo, copiados, escritos, recsAntes, vivoAntes, recsAntes-copiados, vivoAntes-uint64(escritos))
+	}
+	exigeEspelhoIgualAosTallies(t, s, "após a varredura que parou em record corrompido")
 }

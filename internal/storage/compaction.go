@@ -1,10 +1,13 @@
 package storage
 
 import (
+	"context"
 	"fmt"
+	"path/filepath"
 
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 	"github.com/nishisan-dev/nishidb/internal/storage/rowindex"
+	"github.com/nishisan-dev/nishidb/internal/storage/segment"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
@@ -123,4 +126,131 @@ func (s *Store) reapendaSeVivo(seg, off uint32, rec types.Record) (copiado bool,
 		return false, 0, s.failWriter(err)
 	}
 	return true, len(buf), nil
+}
+
+// compactaSegmento varre seg record a record e copia para frente todo record
+// que a location ainda nomeia (§55). Streaming puro: um record por vez, com o
+// buffer do ScanFrom na leitura e o compactBuf do writer na escrita — nada
+// proporcional ao TAMANHO do segmento entra em memória, que é o que o §54
+// exige e o que separa esta varredura de um "carrega e reescreve".
+//
+// Devolve quantos records foram copiados, quantos bytes a varredura LEU da
+// origem e quantos ESCREVEU no destino. Os três são diferentes por
+// construção: `lidos` conta o arquivo inteiro, `escritos` só a parte viva, e
+// a distância entre eles é o disco que a aposentadoria da Task 6 vai devolver.
+//
+// Terminada a varredura COMPLETA — sem cancelamento, sem erro e tendo
+// alcançado o fim do arquivo —, nenhuma location aponta para seg, e é por
+// isso que o tally dele é ZERADO aqui em vez de deduzido dos decrementos do
+// applyRecord. O tally é limite superior por construção (débitos 38 e 45): o
+// record órfão que o replay do tail deixa não é nomeado por location nenhuma,
+// então nenhum decremento o encontra e o candidato jamais chegaria a zero por
+// subtração, por mais completa que a varredura fosse. A varredura é a única
+// leitura EXATA do segmento que existe no produto — é literalmente o que o
+// godoc de checkpoint.SegmentInfo antecipa ao dizer que só uma varredura
+// reconstrói o tally (manifest.go:73) —, e esta é a linha que fecha os dois
+// débitos. Fixado pelo TestVarreduraCompletaZeraOTallyMesmoComResiduoOrfao,
+// cuja asserção do meio mede o resíduo em que os decrementos param.
+//
+// A seleção do candidato NÃO mora aqui: quem decide qual segmento vale a pena
+// e nunca elege o corrente (decisão D6) é a Task 7. Esta função obedece.
+func (s *Store) compactaSegmento(ctx context.Context, seg uint32) (copiados uint64, lidos, escritos int64, err error) {
+	fimValido, err := s.segR.ScanFrom(seg, segment.HeaderSize, func(off uint32, rec types.Record) error {
+		// O cancelamento é a PRIMEIRA coisa do callback, e sai pelo erro que
+		// o ScanFrom propaga: é assim que a goroutine da Task 7 desiste no
+		// Close sem que ninguém precise esperar um segmento inteiro terminar
+		// (decisão D7). Uma varredura interrompida não viu todos os records,
+		// logo não tem autoridade sobre nenhum — o tally NÃO é zerado por
+		// este caminho.
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		lidos += int64(encoding.RecordHeaderSize + len(rec.Key) + len(rec.Payload))
+		copiou, n, err := s.reapendaSeVivo(seg, off, rec)
+		if err != nil {
+			return err
+		}
+		if copiou {
+			copiados++
+			escritos += int64(n)
+		}
+		return nil
+	})
+	if err != nil {
+		return copiados, lidos, escritos, err
+	}
+
+	// O ScanFrom para no primeiro record inválido SEM erro, porque para o
+	// tail scan da recovery (§52) isso é o caminho NORMAL — é assim que o EOF
+	// chega até lá. Num segmento SELADO não é: ele não cresce desde a
+	// rotação, então prefixo válido menor que o arquivo é corrupção real, e
+	// os records depois dela continuam sendo nomeados por locations que a
+	// varredura nunca visitou.
+	//
+	// Zerar o tally aqui daria à varredura uma autoridade que ela não tem: um
+	// instrumento que devolve resultado sem ter medido. O estrago só
+	// aterrissaria na Task 6 — o arquivo aposentado e removido com locations
+	// vivas apontando para dentro dele, e o Open seguinte recusando o dataset
+	// (store_recovery.go) —, de modo que a compaction transformaria a
+	// corrupção de UM record na perda do segmento inteiro. É a mesma
+	// aferição, e o mesmo veredito, do `validEnd != ref.SizeBytes` do
+	// recoverFrom.
+	tamanho, err := s.tamanhoDoSegmento(seg)
+	if err != nil {
+		return copiados, lidos, escritos, err
+	}
+	if fimValido != tamanho {
+		return copiados, lidos, escritos, fmt.Errorf(
+			"%w: a varredura do segmento %d parou em %d de %d bytes; o tally não é zerado por varredura incompleta (§53-55, D4)",
+			ErrDatasetCorrupt, seg, fimValido, tamanho)
+	}
+
+	if err := s.entra(); err != nil {
+		return copiados, lidos, escritos, err
+	}
+	defer s.sai()
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	if t := s.segTally[seg]; t != nil {
+		// NORMATIVO (invariante 4 da Fase B): o espelho acompanha o mapa na
+		// MESMA seção crítica. Zerar só o mapa deixa o liveBytesAll à frente
+		// dele, e o conferaEspelhos() do próximo checkpoint acusa divergência
+		// a cada compaction — com razão, porque nesse intervalo o /v1/stats e
+		// a nishidb_garbage_bytes publicaram um vivo que o dataset não tem.
+		//
+		// O espelho não é RECALCULADO da soma aqui (isso exigiria varrer
+		// todos os segmentos sob o wmu, que é justamente a varredura que a
+		// Fase A′ tirou do Stats): o que se desconta é exatamente o que este
+		// segmento ainda reivindicava. A subtração em complemento de dois é a
+		// forma que o applyRecord já usa (store.go:948) — Go não tem Sub
+		// atômico para Uint64, e ^(x-1) devolve 0 para x==0, então tally já
+		// vazio não vira underflow.
+		s.liveBytesAll.Add(^(t.liveBytes - 1))
+		t.liveRecords = 0
+		t.liveBytes = 0
+	}
+	return copiados, lidos, escritos, nil
+}
+
+// tamanhoDoSegmento devolve o tamanho em disco do arquivo de seg pelo mesmo
+// ListSegments que o checkpoint usa para reconciliar o segSize
+// (store_checkpoint.go:116).
+//
+// É consulta ao DIRETÓRIO, e não ao mapa segSize do writer, porque o mapa só
+// se move no checkpoint: um segmento selado depois do último checkpoint ainda
+// não tem entrada nele, e responder "não sei o tamanho" logo para o segmento
+// que a varredura acabou de ler seria trocar a medida por uma coincidência de
+// agenda. Um readdir por segmento compactado é ruído ao lado das milhares de
+// leituras da varredura que acabou de rodar.
+func (s *Store) tamanhoDoSegmento(seg uint32) (int64, error) {
+	refs, err := segment.ListSegments(filepath.Join(s.opts.Dir, "data"))
+	if err != nil {
+		return 0, err
+	}
+	for _, ref := range refs {
+		if ref.ID == seg {
+			return ref.SizeBytes, nil
+		}
+	}
+	return 0, fmt.Errorf("%w: o segmento %d saiu do diretório durante a própria compaction", ErrDatasetCorrupt, seg)
 }
