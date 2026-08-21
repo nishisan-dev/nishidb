@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // O alvo `lint` do Makefile é um GATE, e a tese dele é "gate que passa com a
@@ -159,16 +161,16 @@ func TestAlvoLintChamaOLinterComOsDoisTetosDesligados(t *testing.T) {
 var reInstalacao = regexp.MustCompile(`golangci-lint@([^\s"']+)`)
 
 // A linha do `go install` do Makefile é a ÚNICA instrução de instalação do
-// linter em todo o repositório, e por isso é ela que decide qual binário mede a
-// linha de base. Com `@latest` a versão fica solta: o próximo desenvolvedor
-// instala outra, mede outro número, e a comparação "390 antes, 390 depois"
-// volta a mentir — que é literalmente o defeito que os débitos 53 e 59
-// descrevem, reaberto por outra dimensão da mesma configuração.
+// linter no repositório, e por isso é ela que decide qual binário mede a linha
+// de base. Com `@latest` a versão fica solta: o próximo desenvolvedor instala
+// outra, mede outro número, e a comparação "390 antes, 390 depois" volta a
+// mentir — o defeito dos débitos 53 e 59 reaberto por outra dimensão.
 //
-// O teste amarra as duas pontas: a versão instruída é FIXA, e é a mesma que a
-// documentação registra ao lado dos 390. Separadas, as duas envelhecem em
-// silêncio.
-func TestAVersaoDoLinterEstaFixadaEBateComALinhaDeBaseDocumentada(t *testing.T) {
+// O teste afirma só o que é CONFIGURAÇÃO: a versão instruída é fixa. Não
+// afirma nada sobre o texto da documentação — número citado em prosa não é
+// gate, e amarrar teste a substring de markdown quebra em toda edição legítima
+// sem pegar defeito nenhum.
+func TestAInstrucaoDeInstalacaoFixaAVersaoDoLinter(t *testing.T) {
 	mk, err := os.ReadFile(filepath.Join(raizDoRepo, "Makefile"))
 	if err != nil {
 		t.Fatal(err)
@@ -177,59 +179,81 @@ func TestAVersaoDoLinterEstaFixadaEBateComALinhaDeBaseDocumentada(t *testing.T) 
 	if achado == nil {
 		t.Fatal("o Makefile não instrui mais como instalar o golangci-lint; a recusa do alvo perde a saída")
 	}
-	versão := achado[1]
-	if !strings.HasPrefix(versão, "v") {
-		t.Fatalf("a instrução de instalação manda buscar %q: versão solta mede outra linha de base (débitos 53 e 59)", versão)
-	}
-
-	débitos, err := os.ReadFile(filepath.Join(raizDoRepo, "docs", "debitos.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(débitos), versão) {
-		t.Fatalf("docs/debitos.md não registra a versão %s ao lado dos 390: o número da linha de base fica sem o instrumento que o produziu", versão)
+	if versão := achado[1]; !strings.HasPrefix(versão, "v") {
+		t.Fatalf("a instrução manda buscar %q: versão solta mede outra linha de base (débitos 53 e 59)", versão)
 	}
 }
 
-var reLinhaDeBase = regexp.MustCompile(`Medido nesta branch com os tetos desligados: \*\*(\d+)\*\*`)
-
-// A linha de base do lint é um número que só significa alguma coisa se for O
-// MESMO em todo lugar que o afirma. Ele já divergiu uma vez — os 114 truncados
-// ficaram vivos na documentação depois de o instrumento ter sido corrigido, e
-// foi preciso uma revisão para descobrir —, e documento de planejamento não tem
-// consumidor nenhum: nada lê, nada quebra, o número envelhece em silêncio até
-// a próxima revisão se apoiar nele.
-//
-// Este teste é o consumidor que faltava. A fonte é UMA — o débito 53, que é o
-// registro canônico da medida —, e os outros três lugares que citam o número
-// têm de concordar com ela.
-func TestALinhaDeBaseDoLintEhAMesmaEmTodoLugarQueAAfirma(t *testing.T) {
-	canônico := lê(t, "docs", "debitos.md")
-	achado := reLinhaDeBase.FindStringSubmatch(canônico)
-	if achado == nil {
-		t.Fatal("o débito 53 não registra mais a medida da linha de base; ela é a fonte de todos os outros números")
+// O alvo tem de PROPAGAR o veredito do linter, e não só chamá-lo. É o mesmo
+// defeito da recusa ausente, um ramo do `if` ao lado: um `|| true` na linha do
+// golangci-lint faz `make lint` sair 0 com os 390 apontamentos na tela, e a
+// tese da doutrina ("gate que passa não é gate, é carimbo") volta a valer
+// contra o próprio alvo que a corrigiu.
+func TestAlvoLintPropagaOVeredictoDoLinter(t *testing.T) {
+	dir := t.TempDir()
+	// Dublê que REPROVA: é o veredito do linter que precisa atravessar o
+	// alvo, e o conteúdo do apontamento não interessa aqui.
+	dublê := "#!/bin/sh\necho 'algum.go:1:1: apontamento' >&2\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(dir, "golangci-lint"), []byte(dublê), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	base := achado[1]
+	stdout, stderr, codigo := rodaMakeLint(t, dir)
+	if codigo == 0 {
+		t.Fatalf("o linter reprovou e `make lint` saiu 0: o alvo engole o veredito\nstdout: %q\nstderr: %q", stdout, stderr)
+	}
+}
 
-	for _, arquivo := range [][]string{
-		{"Makefile"},
-		{".golangci.yml"},
-		{"planning", "roadmap-m4-m5-m6.md"},
+// configDoLinter lê o .golangci.yml como DADO, não como texto. A distinção é o
+// que separa este teste dos que foram removidos daqui: configuração é lida por
+// máquina e tem consumidor real (o próprio golangci-lint), enquanto número
+// citado em prosa não tem.
+type configDoLinter struct {
+	Linters struct {
+		Enable []string `yaml:"enable"`
+	} `yaml:"linters"`
+	Issues struct {
+		MaxIssuesPerLinter *int `yaml:"max-issues-per-linter"`
+		MaxSameIssues      *int `yaml:"max-same-issues"`
+	} `yaml:"issues"`
+}
+
+// Metade do gate mora no `.golangci.yml`, e era a metade que nada fixava:
+// devolver os tetos a 50/3 — ou apagar o bloco `issues:` — faz `golangci-lint
+// run` cru voltar a reportar 114 truncados, que é o defeito dos débitos 53 e
+// 59 restaurado em silêncio, com a suíte inteira verde.
+//
+// O conjunto de linters entra pela mesma razão: sem `errcheck` e `revive` a
+// linha de base cai de 390 para cerca de 15, e a comparação "mesmo número
+// antes e depois" passaria a comparar outro instrumento.
+func TestConfiguracaoDoLinterMantemOsTetosEmZeroEOsLintersQueMedemALinhaDeBase(t *testing.T) {
+	bruto, err := os.ReadFile(filepath.Join(raizDoRepo, ".golangci.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg configDoLinter
+	if err := yaml.Unmarshal(bruto, &cfg); err != nil {
+		t.Fatalf(".golangci.yml não é YAML válido: %v", err)
+	}
+	for _, teto := range []struct {
+		chave string
+		valor *int
+	}{
+		{"issues.max-issues-per-linter", cfg.Issues.MaxIssuesPerLinter},
+		{"issues.max-same-issues", cfg.Issues.MaxSameIssues},
 	} {
-		if !strings.Contains(lê(t, arquivo...), base) {
-			t.Errorf("%s não cita a linha de base de %s apontamentos que o débito 53 registra — número que diverge em silêncio é o defeito dos 114 de volta",
-				filepath.Join(arquivo...), base)
+		if teto.valor == nil {
+			t.Errorf("%s ausente: sem ela o golangci-lint trunca no default e o apontamento novo entra no lugar de um descartado", teto.chave)
+			continue
+		}
+		if *teto.valor != 0 {
+			t.Errorf("%s = %d, queria 0: teto ligado é o gate cego dos débitos 53 e 59", teto.chave, *teto.valor)
 		}
 	}
-}
-
-func lê(t *testing.T, partes ...string) string {
-	t.Helper()
-	b, err := os.ReadFile(filepath.Join(append([]string{raizDoRepo}, partes...)...))
-	if err != nil {
-		t.Fatal(err)
+	for _, linter := range []string{"errcheck", "revive", "staticcheck", "govet"} {
+		if !contém(cfg.Linters.Enable, linter) {
+			t.Errorf("%s não está em linters.enable: a linha de base de 390 foi medida com ele, e sem ele o número passa a descrever outro instrumento", linter)
+		}
 	}
-	return string(b)
 }
 
 func contém(lista []string, alvo string) bool {
