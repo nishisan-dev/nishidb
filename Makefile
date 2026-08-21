@@ -21,9 +21,15 @@ test-race:
 test-integration:
 	go test -race -tags integration ./...
 
+# Os dois tetos vão desligados também aqui, e a duplicação com o `issues:` do
+# .golangci.yml é deliberada: o modo de falha deste gate é o SILÊNCIO — linter
+# estourado no teto absorve apontamento novo sem mexer no total —, e `make lint`
+# é o comando que a doutrina do projeto cita. Repetir a intenção na linha de
+# comando custa dois flags e garante que quem roda o alvo vê o número real (390
+# nesta branch), não o truncado. O porquê longo está no .golangci.yml.
 lint:
 	@if command -v golangci-lint > /dev/null; then \
-		golangci-lint run; \
+		golangci-lint run --max-issues-per-linter=0 --max-same-issues=0; \
 	else \
 		echo "golangci-lint not found in PATH, running go vet..."; \
 		go vet ./...; \
