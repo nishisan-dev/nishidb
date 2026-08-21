@@ -611,6 +611,54 @@ git commit -m "Publica a curva de disco, que é o alarme que antecede o ENOSPC"
 
 ## Fase B — a compaction
 
+> ### Como ler o código deste plano
+>
+> Na Fase A os trechos de código foram lidos como especificação literal três
+> vezes, e três vezes o implementador divergiu **com razão** (nomes de helper
+> que não existem, um oráculo de faixa que reprovaria o código correto, uma
+> regra do `ingest` que não serve a um laço perpétuo). Nesta fase a distinção
+> é explícita:
+>
+> - **NORMATIVO** — invariante. Divergir daqui é defeito, e a divergência tem
+>   de **parar e ser relatada** antes de qualquer código.
+> - **ILUSTRATIVO** — esboço. Nomes de helper, assinaturas exatas, forma dos
+>   testes e organização dos arquivos são a critério de quem implementa;
+>   adapte ao que existe no pacote em vez de criar duplicata.
+>
+> Salvo marcação em contrário, **todo bloco de código nesta fase é
+> ilustrativo**. Os invariantes normativos são estes quatro, e só eles:
+>
+> 1. A verificação de liveness e o `Append` acontecem na **mesma seção crítica
+>    de `s.wmu`** (Task 4). Separá-los é perda de dado silenciosa.
+> 2. O tally de um segmento só é zerado depois de uma varredura **completa e
+>    sem cancelamento** (Task 5).
+> 3. O `Checkpoint()` que torna as locations duráveis acontece **antes** do
+>    rename, e o segundo `Checkpoint()` **antes** do unlink (Task 6).
+> 4. Toda mutação de `segTally`/`segSize` ajusta o **espelho atômico
+>    correspondente** na mesma seção crítica (ver abaixo).
+>
+> ### O que a Fase A′ mudou para esta fase
+>
+> `segCount`, `liveBytesAll` e `diskBytesAll` são espelhos atômicos dos
+> agregados de `segTally`/`segSize` ([store.go:213](../internal/storage/store.go:213)),
+> e existem para que `Stats()` não bloqueie atrás do writer. Eles são mantidos
+> em **exatamente três lugares**: o `applyRecord`
+> ([store.go:904](../internal/storage/store.go:904) e
+> [:934](../internal/storage/store.go:934)), a reconciliação do checkpoint
+> ([store_checkpoint.go:197](../internal/storage/store_checkpoint.go:197)) e a
+> semeadura da recovery
+> ([store_recovery.go:55](../internal/storage/store_recovery.go:55)).
+>
+> **`conferaEspelhos()` roda no início de todo checkpoint** e acusa divergência
+> entre espelho e mapa — e está fixado por quatro mutantes. Qualquer código
+> desta fase que mexa nos mapas **sem ajustar o espelho** vai disparar esse
+> WARN a cada compaction, e o detector estará certo.
+>
+> O copy-forward em si não precisa de nada: ele passa pelo `applyRecord`, que
+> já mantém os dois lados. Os dois pontos que precisam de cuidado são o
+> **zeramento do tally** (Task 5) e a **poda do segmento aposentado** (Task 6),
+> ambos detalhados na tarefa.
+
 ### Task 3: config `storage.compaction`
 
 **Files:**
@@ -891,6 +939,13 @@ func (s *Store) compactaSegmento(ctx context.Context, seg uint32) (uint64, int64
 	}
 	s.wmu.Lock()
 	if t := s.segTally[seg]; t != nil {
+		// NORMATIVO: o espelho acompanha o mapa na MESMA seção crítica.
+		// Zerar só o mapa deixa liveBytesAll à frente dele, e o
+		// conferaEspelhos() do próximo checkpoint acusa divergência a cada
+		// compaction — com razão. O espelho não pode ser recalculado da soma
+		// aqui (isso exigiria varrer todos os segmentos); o que se desconta é
+		// exatamente o que este segmento reivindicava.
+		s.liveBytesAll.Add(^(t.liveBytes - 1))
 		t.liveRecords = 0
 		t.liveBytes = 0
 	}
@@ -900,6 +955,22 @@ func (s *Store) compactaSegmento(ctx context.Context, seg uint32) (uint64, int64
 ```
 
 O cancelamento sai pelo erro do callback, que o `ScanFrom` propaga — e o tally **não** é zerado nesse caminho, porque a varredura não foi completa.
+
+**O ajuste do espelho é NORMATIVO (invariante 4).** A subtração em complemento de
+dois é a forma que o `applyRecord` já usa
+([store.go:934](../internal/storage/store.go:934)) — reuse-a em vez de inventar
+outra. Um teste desta tarefa tem de provar que, depois de compactar,
+`Stats().LiveBytesUpperBound` desceu **e** que o checkpoint seguinte **não**
+registra divergência (`EspelhosDivergentesForTest()` inalterado): sem essa
+segunda asserção, zerar o mapa e esquecer o espelho passa despercebido até
+alguém ler o log.
+
+**Crash test é critério de aceite desta tarefa, não só da Task 6.** A partir
+daqui o copy-forward grava no segmento corrente enquanto a ingestão escreve, e
+o modo de falha deixou de ser "teste vermelho" para ser "estado errado depois
+de um `kill -9`". Mate o binário no meio de uma compaction e prove que o estado
+confirmado sobrevive, no molde de
+`TestKill9NoMeioDaIngestaoPreservaOEstadoConfirmado`.
 
 - [ ] **Step 4: Rodar e confirmar que passa**
 
@@ -1012,6 +1083,14 @@ func (s *Store) aposentaSegmento(seg uint32) error {
 	return syncDir(dir)
 }
 ```
+
+**A poda dos mapas é NORMATIVA (invariante 4).** O segmento aposentado sai de
+`segTally` e de `segSize`, e `segCount`/`diskBytesAll` acompanham na mesma
+seção crítica. A reconciliação do checkpoint se cura sozinha depois — ela
+reconstrói tudo do `ListSegments` —, mas entre a poda e o checkpoint seguinte
+os números publicados por `Stats()` estariam errados, e o `conferaEspelhos()`
+acusaria. Um teste tem de provar que `SegmentsTotal` **desce** e que o
+checkpoint seguinte não registra divergência.
 
 Em `store_recovery.go`, antes da checagem de segmento listado e ausente, rodar `reparaAposentados(dir, m.Segments)`: restaura o `.retired` cujo ID está no manifest, remove o que não está.
 
