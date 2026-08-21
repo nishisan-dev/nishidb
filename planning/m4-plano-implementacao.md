@@ -1226,7 +1226,11 @@ func TestCheckpointPorTempoDestravaOLagComIngestaoOciosa(t *testing.T) {
 
 - [ ] **Step 2: Rodar e confirmar a falha** → FAIL.
 
-- [ ] **Step 3: Implementar.** Disparo por contagem **ou** por tempo, o que vier primeiro, usando `storage.checkpoint.interval` — a mesma regra que o `nishidb ingest` já aplica.
+- [ ] **Step 3: Implementar.** Disparo por contagem **ou** por tempo, o que vier primeiro, usando `storage.checkpoint.interval` — a mesma **chave** do `nishidb ingest` (§78), mas **não a mesma regra**. A divergência é obrigatória e tem duas partes:
+  - **Intervalo `<= 0` DESLIGA o relógio**, em vez de cair para um padrão como o [ingest.go:267](../internal/cli/ingest.go:267) faz. `time.NewTicker` panica com intervalo não positivo, e o off-switch precisa de teste próprio.
+  - **Tique sem evento decidido desde o último checkpoint é barrado.** O `ingest` pode dispensar essa guarda porque lê entrada FINITA e só consulta a regra com um evento na mão; aqui o laço é perpétuo e desperta sozinho, então sem a guarda um dataset parado reescreveria o manifest e daria `fsync` a cada intervalo, para sempre.
+
+  Use **ticker, não timer rearmado**: um relógio de disparo único satisfaz tanto "dispara ao menos uma vez" quanto "não repete sem evento novo", e reabre o débito 56 na segunda ociosidade. A propriedade que sustenta o fecho é **volta a disparar depois de uma leva nova**, e é ela que precisa de teste.
 
 - [ ] **Step 4: Rodar** `go test ./... && go test ./... -race`
 
