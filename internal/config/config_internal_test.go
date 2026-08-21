@@ -22,10 +22,22 @@ import (
 
 func escreveConfig(t *testing.T, corpo string) string {
 	t.Helper()
+	return escreveConfigComStorage(t, "", corpo)
+}
+
+// escreveConfigComStorage acrescenta chaves DENTRO do bloco storage, que o
+// cabeçalho já abre, e é por onde entram as de storage.compaction.
+//
+// Existe porque repetir `storage:` no corpo não funcionaria: o yaml.v3 recusa
+// chave de mapa duplicada ("mapping key already defined"), e o teste falharia
+// no parse em vez de falhar pela regra que ele afirma — o pior tipo de verde,
+// porque o vermelho viria pelo motivo errado.
+func escreveConfigComStorage(t *testing.T, storage, corpo string) string {
+	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "nishidb.yaml")
-	cabecalho := "version: 1\nstorage:\n  path: " + dir +
-		"\ndatasets:\n  directory: " + dir + "\n"
+	cabecalho := "version: 1\nstorage:\n  path: " + dir + "\n" + storage +
+		"datasets:\n  directory: " + dir + "\n"
 	if err := os.WriteFile(path, []byte(cabecalho+corpo), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -178,5 +190,68 @@ func TestChavesDeRuntimeSemImplementacaoSaoNomeadas(t *testing.T) {
 	}
 	if got := c.ChavesDeRuntimeIgnoradas(); len(got) != 0 {
 		t.Fatalf("avisos = %v, quer nenhum", got)
+	}
+}
+
+// O bloco storage.compaction era aceito e ignorado. Ausente ele tem de valer
+// os defaults da spec, e não "desligado": o §53 fixa minimumLiveRatio em 0.50
+// e o §78 traz `enabled: true` no exemplo. Um arquivo que não fala de
+// compaction é um arquivo que aceita a política da spec — exigir declaração
+// explícita para ter compaction inverteria o default seguro e deixaria o disco
+// crescer para sempre em toda instalação que herdou um YAML do M1.
+func TestCompactionHerdaODefaultDoParagrafo53(t *testing.T) {
+	c, err := CarregaConfig(escreveConfig(t, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	habilitada, ratio := c.Compaction()
+	if !habilitada {
+		t.Error("compaction ausente veio desligada; ausente vale ligada (§78)")
+	}
+	if ratio != compactionRatioPadrao {
+		t.Errorf("minimumLiveRatio = %v, quer 0.50 (§53)", ratio)
+	}
+}
+
+// A chave declarada tem de VENCER o default, senão ela continua aceita e
+// ignorada — que é exatamente o defeito que esta tarefa fecha, e que nenhum
+// teste de default sozinho pegaria: um leitor que devolvesse a constante e
+// nunca olhasse o YAML passaria no teste do parágrafo 53.
+//
+// `enabled: false` é o operador desligando deliberadamente, pelo mesmo
+// raciocínio de server.enabled: ponteiro separa "ausente" de "false", e os
+// dois têm significados opostos.
+func TestCompactionDeclaradaVenceODefault(t *testing.T) {
+	c, err := CarregaConfig(escreveConfigComStorage(t,
+		"  compaction:\n    enabled: false\n    minimumLiveRatio: 0.25\n", ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	habilitada, ratio := c.Compaction()
+	if habilitada {
+		t.Error("enabled: false foi ignorado")
+	}
+	if ratio != 0.25 {
+		t.Errorf("minimumLiveRatio = %v, quer 0.25", ratio)
+	}
+}
+
+// TestMinimumLiveRatioForaDeZeroUmEhRecusado: ratio >= 1 elegeria TODO
+// segmento, inclusive os cheios de dado vivo — compaction perpétua que só
+// queima I/O. Ratio <= 0 nunca elegeria nenhum, e a chave mentiria. A faixa é
+// ABERTA nas duas pontas por isso, e a recusa nomeia a chave para o operador
+// não ter de adivinhar qual das dezenas do arquivo está errada.
+func TestMinimumLiveRatioForaDeZeroUmEhRecusado(t *testing.T) {
+	for _, v := range []string{"0", "1", "1.5", "-0.2"} {
+		t.Run(v, func(t *testing.T) {
+			_, err := CarregaConfig(escreveConfigComStorage(t,
+				"  compaction:\n    minimumLiveRatio: "+v+"\n", ""))
+			if err == nil {
+				t.Fatalf("minimumLiveRatio: %s foi aceito; queria recusa nomeando a chave", v)
+			}
+			if !strings.Contains(err.Error(), "storage.compaction.minimumLiveRatio") {
+				t.Errorf("erro = %v, quer nomear a chave", err)
+			}
+		})
 	}
 }
