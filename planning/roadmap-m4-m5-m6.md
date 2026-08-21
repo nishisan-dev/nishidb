@@ -282,7 +282,12 @@ Encontradas na varredura; pequenas, mas são prosa que não bate com o código:
 **M4**
 
 - `go test ./...` e `go test ./... -race` verdes; `golangci-lint run` sem apontamento no
-  código novo (a regra que a Fase 6 manteve, com os 114 do M1 conferidos antes e depois).
+  código novo, conferido contra a linha de base de **390** — com `max-issues-per-linter`
+  e `max-same-issues` em **0**, no `.golangci.yml` e no alvo `lint`. Os **114** que esta
+  linha citava saíram de circulação: eram a saída **truncada** pelos tetos default, e um
+  linter estourado no teto absorve o apontamento novo em silêncio, de modo que "114
+  antes, 114 depois" seguia verde com código sujo. O que o M2 e a Fase 6 alegaram sob o
+  instrumento truncado continua sem prova — débitos 53 e 59 em `docs/debitos.md`.
 - **Crash real no meio da compaction**, no molde de
   `TestKill9NoMeioDaIngestaoPreservaOEstadoConfirmado` — mata o binário com SIGKILL
   durante o copy-forward e confere que o estado confirmado sobrevive e que nenhum

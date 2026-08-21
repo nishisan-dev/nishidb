@@ -27,12 +27,26 @@ test-integration:
 # é o comando que a doutrina do projeto cita. Repetir a intenção na linha de
 # comando custa dois flags e garante que quem roda o alvo vê o número real (390
 # nesta branch), não o truncado. O porquê longo está no .golangci.yml.
+#
+# O ramo `else` FALHA, e falha alto. Ele já caiu para `go vet ./...` devolvendo
+# código 0, e essa é a outra metade da cegueira do débito 53: um gate que passa
+# quando a ferramenta está AUSENTE não é gate, é carimbo — foi assim que o
+# projeto atravessou o M1 achando que tinha lint, porque a única pista era uma
+# linha de aviso rolando no meio da saída. `go vet` também não substitui o que
+# se perde: ele cobre um subconjunto de `govet` e não conhece `errcheck`,
+# `revive` nem `staticcheck`, que sozinhos respondem por 388 dos 390
+# apontamentos da linha de base — enquanto o `govet` não responde por NENHUM
+# deles. O fallback trocava o gate por uma checagem que hoje não acusa nada.
+# Quem não tem o binário precisa descobrir pelo exit code, com o nome do que
+# instalar na mão.
 lint:
 	@if command -v golangci-lint > /dev/null; then \
 		golangci-lint run --max-issues-per-linter=0 --max-same-issues=0; \
 	else \
-		echo "golangci-lint not found in PATH, running go vet..."; \
-		go vet ./...; \
+		echo "erro: golangci-lint não está no PATH — o gate de lint NÃO rodou." >&2; \
+		echo "  instale: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest" >&2; \
+		echo '  e ponha $$(go env GOPATH)/bin no PATH' >&2; \
+		exit 1; \
 	fi
 
 bench:
