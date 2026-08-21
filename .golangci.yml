@@ -26,8 +26,15 @@ issues:
 # gofmt fica aqui, e não em `linters`: na v2 do golangci-lint ele é FORMATTER,
 # e listá-lo como linter faz o binário recusar a configuração inteira com
 # "can't load config: gofmt is a formatter" — ou seja, o projeto ficava sem
-# lint nenhum, em silêncio, porque o Makefile cai para `go vet` quando o
-# golangci-lint não está instalado e ninguém via o erro.
+# lint nenhum, em silêncio, porque o alvo `lint` do Makefile CAÍA para `go vet`
+# quando o golangci-lint não estava instalado e ninguém via o erro.
+#
+# O fallback foi REMOVIDO no M4: hoje o alvo recusa com código não-zero e nomeia
+# o que instalar, e internal/gates/lint_test.go o executa para provar que
+# continua recusando. O parágrafo acima está no passado de propósito — este
+# arquivo é para onde o comentário do alvo `lint` aponta, e afirmação stale no
+# arquivo de configuração do gate é o pior lugar possível para ela. Ver os
+# débitos 53 e 59 em docs/debitos.md.
 formatters:
   enable:
     - gofmt

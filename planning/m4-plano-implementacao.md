@@ -203,37 +203,53 @@ git commit -m "Devolve ao Stats a leitura que não espera o writer"
 
 ### Task 0b: os dois resíduos do gate de lint
 
-**Files:** Modify `Makefile` (alvo `lint`), `planning/roadmap-m4-m5-m6.md`
+**Files:** Modify `Makefile` (alvo `lint`), `planning/roadmap-m4-m5-m6.md`, `.golangci.yml`, `docs/debitos.md`; Create `internal/gates/lint_test.go`
 
 Dois pontos que a Task 0 deixou registrados e não fechou.
+
+> **Reprovada e reparada.** A primeira rodada entregou o alvo corrigido **sem prova de si mesmo**: nenhum teste executava `make lint`, e trocar `exit 1` por `exit 0` devolvia o defeito com um caractere sem a suíte piscar. Um gate que não é verificado é o mesmo carimbo que ele existe para fechar, um nível acima. O reparo é `internal/gates/lint_test.go`, que EXECUTA o alvo com o PATH controlado. A rodada também deixou o texto do fallback vivo, no PRESENTE, em `.golangci.yml` e no débito 53 — os dois lugares para onde o comentário do próprio alvo aponta — e instruía `@latest`, que é a versão do instrumento solta: outra dimensão da mesma configuração que os tetos, e por ela a comparação "390 antes, 390 depois" volta a mentir.
 
 **O fallback silencioso.** O alvo `lint` cai para `go vet ./...` e sai com **código 0** quando o `golangci-lint` não está no PATH. É a outra metade da cegueira que o débito 53 descreve: um gate que **passa quando a ferramenta está ausente** não é gate — foi exatamente assim que o projeto atravessou o M1 achando que tinha lint. Deve falhar alto, nomeando o que instalar.
 
 **O 114 sobrevivente.** [roadmap-m4-m5-m6.md:285](roadmap-m4-m5-m6.md:285) ainda cita os 114 como linha de base viva. O número foi retirado de circulação pela Task 0; deixá-lo num documento de planejamento é convidar a próxima revisão a se apoiar nele.
 
-- [ ] **Step 1: Provar o fallback**
+- [x] **Step 1: Provar o fallback**
 
 Run: `PATH=/usr/bin:/bin make lint; echo "exit=$?"` (com o `golangci-lint` fora do PATH)
 Expected: exit **0** — o gate passa sem ter rodado. É o defeito.
 
-- [ ] **Step 2: Fazer o alvo falhar alto**
+- [x] **Step 2: Fazer o alvo falhar alto**
 
-O `else` do alvo passa a imprimir o que falta e sair com **1**, em vez de rodar `go vet` e devolver 0. `go vet` não substitui o lint: cobre um subconjunto e não conhece `errcheck`, `revive` nem `staticcheck`.
+O `else` do alvo passa a imprimir o que falta **no stderr** e sair **não-zero**, em vez de rodar `go vet` e devolver 0. `go vet` não substitui o lint: cobre um subconjunto e não conhece `errcheck`, `revive` nem `staticcheck`. A instrução de instalação nomeia uma versão **fixa**, não `@latest` — é a única instrução de instalação do linter no repositório, e é ela que decide qual binário mede a linha de base.
 
-- [ ] **Step 3: Confirmar**
+- [x] **Step 3: Confirmar**
 
-Run: `PATH=/usr/bin:/bin make lint; echo "exit=$?"` → exit **1**, com a mensagem nomeando o binário.
+Run: `PATH=/usr/bin:/bin make lint; echo "exit=$?"` → exit **não-zero**, com a mensagem nomeando o binário.
 Run: `make lint` (PATH normal) → roda e devolve **390**.
 
-- [ ] **Step 4: Corrigir o roadmap**
+> **Errata:** este Step prescrevia exit **1** e o número está errado. O `exit 1` é do **shell da receita**; o GNU make reporta `[lint] Error 1` e sai com **2**. O que o gate promete — e o que o teste afirma — é **não-zero**, não o literal 1. Escrever o número exato num critério de aceite sem medi-lo é a mesma classe de erro que os 114.
+
+- [x] **Step 4: Corrigir o roadmap**
 
 Substituir a citação dos 114 pela regra vigente (390, tetos em 0), apontando para o débito 59.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 4b: Fixar o alvo com teste** *(reparo)*
+
+`internal/gates/lint_test.go` executa `make lint` com o PATH substituído por um diretório temporário vazio e afirma: exit não-zero, a recusa **no stderr** nomeando o binário e o `go install`, nada de `go vet` em canal nenhum. Com um dublê de `golangci-lint` no PATH, afirma que o alvo o chama com os **dois tetos em 0** — a duplicação com o `.golangci.yml` é load-bearing e não estava fixada por nada. Mais dois: a versão instruída é fixa e bate com a que o débito 53 registra, e a linha de base citada no Makefile, no `.golangci.yml` e no roadmap é a mesma que o débito 53 mede.
+
+- [x] **Step 4c: Fechar os resíduos de texto** *(reparo)*
+
+`.golangci.yml` e o débito 53 afirmavam **no presente** um fallback que este trabalho removeu. Os dois vão para o passado, e o débito 53 ganha a errata da metade fechada mais o instrumento da medida (golangci-lint v2.12.2 / go1.26.5) ao lado dos 390.
+
+- [x] **Step 5: Commit**
 
 ```bash
 git add Makefile planning/roadmap-m4-m5-m6.md
 git commit -m "Faz o alvo de lint falhar quando a ferramenta falta, em vez de passar"
+
+# reparo da reprovação, em commit NOVO por cima:
+git add internal/gates/ Makefile .golangci.yml docs/debitos.md planning/
+git commit -m "Põe o alvo de lint sob teste e tira o fallback dos textos que ainda o afirmam"
 ```
 
 ---

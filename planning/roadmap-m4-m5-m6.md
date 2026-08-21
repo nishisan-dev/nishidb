@@ -283,7 +283,9 @@ Encontradas na varredura; pequenas, mas são prosa que não bate com o código:
 
 - `go test ./...` e `go test ./... -race` verdes; `golangci-lint run` sem apontamento no
   código novo, conferido contra a linha de base de **390** — com `max-issues-per-linter`
-  e `max-same-issues` em **0**, no `.golangci.yml` e no alvo `lint`. Os **114** que esta
+  e `max-same-issues` em **0**, no `.golangci.yml` e no alvo `lint`, e com o instrumento
+  fixo — **golangci-lint v2.12.2 / go1.26.5**, a versão que o `go install` do alvo instrui
+  e que o débito 53 registra: versão solta mede outra linha de base. Os **114** que esta
   linha citava saíram de circulação: eram a saída **truncada** pelos tetos default, e um
   linter estourado no teto absorve o apontamento novo em silêncio, de modo que "114
   antes, 114 depois" seguia verde com código sujo. O que o M2 e a Fase 6 alegaram sob o
