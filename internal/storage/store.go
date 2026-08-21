@@ -261,9 +261,18 @@ type Store struct {
 	// lá dentro, e reproduzir o estado à mão só afirmaria sobre a ideia que o
 	// teste faz da aposentadoria, não sobre o que ela deixa em disco.
 	apTrace func(passo string)
-	// apDirSync é o seam de teste dos fsyncs de DIRETÓRIO da aposentadoria
-	// (nil em produção, mesmo regime dos dois acima), e ele é notificado de
-	// DENTRO do helper que executa o fsync — nunca de uma linha ao lado.
+	// apDirSync é o seam de teste dos fsyncs de DIRETÓRIO da aposentadoria e
+	// do REPARO dela (nil em produção, mesmo regime dos dois acima), e ele é
+	// notificado de DENTRO do helper que executa o fsync — nunca de uma linha
+	// ao lado.
+	//
+	// São TRÊS chamadas, não duas: as do rename e do unlink em
+	// aposentaSegmento, e a do fim do reparaAposentados. A terceira entrou
+	// depois, e o motivo está registrado porque ele é a lição: enquanto o
+	// reparo foi função de PACOTE, o seam não o alcançava, e apagar aquele
+	// fsync deixava `go test ./...` inteiro verde no único caminho da fase
+	// que destrói arquivo. Seam que cobre parte da família não é seam da
+	// família.
 	//
 	// A distinção é a razão de o campo existir. Um rótulo emitido ao lado da
 	// chamada mede a si mesmo: apagar o fsync e deixar o rótulo continuaria

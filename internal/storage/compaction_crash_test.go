@@ -44,6 +44,7 @@ package storage
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -425,6 +426,180 @@ func TestRetiredComOCanonicoPresenteEhDescartadoEmVezDeSobrescrever(t *testing.T
 		t.Errorf("o resíduo sobreviveu ao Open (err=%v)", err)
 	}
 	exigeCorpusDaAposentadoriaIntacto(t, s, "após descartar o resíduo ao lado do canônico")
+}
+
+// TestReparoDoAposentadoDurabilizaODiretorioDepoisDeRestaurar fixa o TERCEIRO
+// fsync de diretório desta tarefa. Os dois da aposentadoria ganharam oráculo
+// quando o seam apDirSync foi criado; este ficou de fora, e a revisão mediu o
+// preço: apagar a chamada do fim do reparo deixava `go test ./... -count=1`
+// INTEIRO verde — no único caminho desta fase que DESTRÓI arquivo.
+//
+// O argumento é o do próprio reparo. Ele conserta por rename e por unlink,
+// que são mutações de ENTRADA DE DIRETÓRIO: sem o fsync o conserto vive em
+// cache, e um segundo crash logo em seguida devolve o dataset exatamente ao
+// estado que se acabou de consertar — o Open seguinte reabriria a mesma
+// janela do D5, agora sem processo nenhum vivo para explicá-la.
+//
+// O oráculo é o mesmo do TestAposentadoriaDurabilizaODiretorioNoRenameENoUnlink
+// e pela mesma razão: o aviso chega de DENTRO do durabilizaODiretorio, depois
+// de o fsync devolver nil, e o teste pergunta ao DISCO o que já aconteceu.
+// Exigir apenas "houve aviso" mediria o rótulo; o que se exige aqui é aviso
+// com o segmento JÁ de volta ao nome canônico, que é a mutação a durabilizar.
+//
+// O limite fica escrito, como nos irmãos: isto prova a CHAMADA e a POSIÇÃO.
+// Que a entrada de diretório tenha chegado ao meio físico, nenhum teste deste
+// repositório afirma de nenhum fsync — o kernel não devolve observável para
+// isso e o SIGKILL não descarta page cache.
+func TestReparoDoAposentadoDurabilizaODiretorioDepoisDeRestaurar(t *testing.T) {
+	dir := datasetComSegmentoSelado(t)
+	s := openStore(t, Options{Dir: dir, SegmentSize: segmentoDoKill9})
+	dataDir := filepath.Join(dir, "data")
+	canonico := audSegPath(dir, segmentoAposentavel)
+	aposentado := canonico + sufixoAposentadoNoTeste
+	// A janela do rename, montada em disco: o manifest do dataset já fechado
+	// continua nomeando o segmento, e o arquivo já perdeu o nome canônico.
+	// É o estado em que o reparo RESTAURA, e restaurar é o caso em que perder
+	// a entrada de diretório custa o dataset inteiro no crash seguinte.
+	if err := os.Rename(canonico, aposentado); err != nil {
+		t.Fatalf("simular o rename da aposentadoria: %v", err)
+	}
+	m, err := checkpoint.Load(audManifestPath(dir))
+	if err != nil {
+		t.Fatalf("carregar o manifest: %v", err)
+	}
+
+	type sinal struct {
+		dir        string
+		canonico   bool
+		aposentado bool
+	}
+	var sinais []sinal
+	s.SetSyncDeDiretorioTraceForTest(func(d string) {
+		_, errCanonico := os.Stat(canonico)
+		_, errAposentado := os.Stat(aposentado)
+		sinais = append(sinais, sinal{
+			dir:        d,
+			canonico:   errCanonico == nil,
+			aposentado: errAposentado == nil,
+		})
+	})
+	defer s.SetSyncDeDiretorioTraceForTest(nil)
+
+	mudou, err := s.reparaAposentados(dataDir, m.Segments)
+	if err != nil {
+		t.Fatalf("reparaAposentados: %v", err)
+	}
+	if !mudou {
+		t.Fatalf("o reparo não mexeu no diretório: sem mutação não há entrada de diretório a durabilizar, "+
+			"e o teste passaria por vacuidade (segmento %d, manifest com %d segmento(s))",
+			segmentoAposentavel, len(m.Segments))
+	}
+	depoisDeRestaurar := false
+	for _, sn := range sinais {
+		if sn.dir != dataDir {
+			t.Errorf("o reparo durabilizou o diretório %q, e o que ele renomeia e remove está em %q", sn.dir, dataDir)
+			continue
+		}
+		if sn.canonico && !sn.aposentado {
+			depoisDeRestaurar = true
+		}
+	}
+	if !depoisDeRestaurar {
+		t.Errorf("nenhum fsync de %q aconteceu com o segmento %d já de volta ao nome canônico (sinais: %+v): "+
+			"o reparo fica só na entrada de diretório em cache, e o crash seguinte reabre a mesma janela do D5",
+			dataDir, segmentoAposentavel, sinais)
+	}
+}
+
+// TestRetiredComPaddingDivergenteNaoEhInstaladoSobreONomeCanonico fixa a
+// guarda de igualdade EXATA do idDoNomeAposentado (compaction.go), que o
+// godoc de lá declara load-bearing e que nenhum teste sustentava: apagar a
+// linha deixava a suíte inteira verde.
+//
+// O cenário é o que DESTRÓI dado, e não é hipotético. O Sscanf aceita padding
+// divergente, de modo que "segment-1.dat.retired" e
+// "segment-00000001.dat.retired" respondem o MESMO id — e o id é quem decide
+// entre RESTAURAR o arquivo e REMOVÊ-LO. Com o segmento listado no manifest e
+// o canônico ausente, o reparo sem a guarda faz o os.Rename do arquivo
+// estranho para o nome canônico: instala como segmento 1 bytes que o writer
+// nunca escreveu, no lugar exato que o manifest nomeia.
+//
+// O oráculo é o DISCO, e não o erro do Open, porque as duas versões recusam o
+// dataset — ele está mesmo sem o segmento 1 — e um teste que olhasse só o erro
+// concordaria com a versão que instalou o lixo. O que separa as duas é o que
+// ficou no diretório: recusar um dataset de fato incompleto é a resposta
+// honesta, e ela preserva a chance de restaurar o segmento verdadeiro de um
+// backup; encobri-lo com um arquivo estranho queima essa chance em silêncio.
+func TestRetiredComPaddingDivergenteNaoEhInstaladoSobreONomeCanonico(t *testing.T) {
+	dir := datasetComSegmentoSelado(t)
+	canonico := audSegPath(dir, segmentoAposentavel)
+	if err := os.Remove(canonico); err != nil {
+		t.Fatalf("remover o segmento %d para montar o listado-e-ausente: %v", segmentoAposentavel, err)
+	}
+	// O nome é o do MESMO segmento, escrito com outro padding — é a colisão
+	// que o Sscanf sozinho não distingue.
+	divergente := filepath.Join(dir, "data",
+		fmt.Sprintf("segment-%d.dat", segmentoAposentavel)+sufixoAposentadoNoTeste)
+	estranho := []byte("nem o writer escreveu isto, nem a aposentadoria o renomeou")
+	if err := os.WriteFile(divergente, estranho, 0o644); err != nil {
+		t.Fatalf("plantar o nome de padding divergente: %v", err)
+	}
+
+	s, err := Open(Options{Dir: dir, SegmentSize: segmentoDoKill9})
+	if err == nil {
+		_ = s.Close()
+		t.Fatalf("o Open aceitou um dataset cujo segmento %d o manifest lista e o diretório não tem", segmentoAposentavel)
+	}
+	if !errors.Is(err, ErrDatasetCorrupt) {
+		t.Errorf("o Open recusou com %v; um segmento listado e ausente é ErrDatasetCorrupt (store_recovery.go)", err)
+	}
+	if _, err := os.Stat(canonico); !os.IsNotExist(err) {
+		t.Fatalf("o reparo instalou %q a partir de um nome com padding divergente (err=%v): "+
+			"o manifest passou a nomear um arquivo que o writer nunca escreveu", canonico, err)
+	}
+	got, err := os.ReadFile(divergente)
+	if err != nil {
+		t.Fatalf("o arquivo de padding divergente sumiu (err=%v): a guarda o IGNORA — quem não sabe classificar não destrói", err)
+	}
+	if !bytes.Equal(got, estranho) {
+		t.Errorf("o arquivo de padding divergente foi reescrito: %d bytes viraram %d", len(estranho), len(got))
+	}
+}
+
+// TestRetiredDoSegmentoZeroNaoEhClassificadoPeloReparo fixa a recusa de
+// id==0 do idDoNomeAposentado, a outra guarda que nenhum teste sustentava.
+//
+// Ela NÃO é redundante com a de igualdade exata, e é por isso que precisa de
+// teste próprio: "segment-00000000.dat.retired" tem o padding canônico, então
+// a comparação de string concorda com ele — só o id==0 o recusa.
+//
+// O que a guarda impede é o reparo classificar um nome que ele próprio jamais
+// escreveria. Segmento 0 não existe neste projeto: o rowindex entra em pânico
+// ao empacotar uma location com segmentID 0 (rowindex.go:33), o writer começa
+// no 1 e nenhum manifest o lista. Sem a guarda, a pergunta "o manifest lista
+// este segmento?" responderia NÃO sempre — e "não listado" é o ramo que
+// REMOVE. O reparo apagaria, com certeza absoluta, um arquivo cuja origem ele
+// não sabe explicar. É a mesma família do arquivoExiste (store_recovery.go):
+// não se decide destruição a partir de uma leitura que não significa o que
+// parece.
+func TestRetiredDoSegmentoZeroNaoEhClassificadoPeloReparo(t *testing.T) {
+	dir := datasetComSegmentoSelado(t)
+	naoEhSegmento := filepath.Join(dir, "data", "segment-00000000.dat"+sufixoAposentadoNoTeste)
+	conteudo := []byte("arquivo cujo nome nenhuma aposentadoria deste projeto pode ter escrito")
+	if err := os.WriteFile(naoEhSegmento, conteudo, 0o644); err != nil {
+		t.Fatalf("plantar o nome de segmento 0: %v", err)
+	}
+
+	s := openStore(t, Options{Dir: dir, SegmentSize: segmentoDoKill9})
+	got, err := os.ReadFile(naoEhSegmento)
+	if err != nil {
+		t.Fatalf("o reparo removeu %q (err=%v): ele classificou como resíduo de aposentadoria um nome "+
+			"que nenhuma aposentadoria escreve, e o ramo do não listado é o que DESTRÓI", naoEhSegmento, err)
+	}
+	if !bytes.Equal(got, conteudo) {
+		t.Errorf("o arquivo de segmento 0 foi reescrito: %d bytes viraram %d", len(conteudo), len(got))
+	}
+	exigeCorpusDaAposentadoriaIntacto(t, s, "após ignorar o nome de segmento 0")
 }
 
 // ---------------------------------------------------------------------------

@@ -44,6 +44,25 @@ func caminhoCanonicoDoSegmento(dataDir string, seg uint32) string {
 // (segment.go:254) e pelo mesmo motivo: o Sscanf aceita padding divergente,
 // de modo que dois nomes diferentes responderiam o mesmo id — e aqui o id
 // decide entre RESTAURAR o arquivo e REMOVÊ-LO.
+//
+// As duas recusas são INDEPENDENTES, e cada uma tem o seu teste nominal
+// porque uma não cobre a outra:
+//
+//   - igualdade exata — "segment-1.dat.retired" responderia o id 1 pelo
+//     Sscanf. Com o segmento 1 listado no manifest e o canônico ausente, o
+//     reparo instalaria esse arquivo NO NOME que o manifest nomeia. É o único
+//     caminho desta fase que escreve lixo por cima de um segmento, e quem o
+//     fixa é o TestRetiredComPaddingDivergenteNaoEhInstaladoSobreONomeCanonico.
+//   - id != 0 — "segment-00000000.dat.retired" tem o padding canônico, então
+//     a igualdade acima CONCORDA com ele. Segmento 0 não existe (rowindex.go:33
+//     entra em pânico ao empacotar location com segmentID 0, e o writer começa
+//     no 1), logo nenhum manifest o lista e a classificação seria sempre "não
+//     listado" — que é o ramo que REMOVE. Fixado pelo
+//     TestRetiredDoSegmentoZeroNaoEhClassificadoPeloReparo.
+//
+// O registro de por que isto está escrito: até a revisão desta tarefa nenhum
+// teste sustentava qualquer uma das duas, e apagar cada uma deixava
+// `go test ./... -count=1` INTEIRO verde.
 func idDoNomeAposentado(nome string) (uint32, bool) {
 	base, temSufixo := strings.CutSuffix(nome, sufixoAposentado)
 	if !temSufixo {
@@ -439,6 +458,12 @@ func (s *Store) aposentaSegmento(seg uint32) error {
 // vermelho. Um rótulo emitido ao lado provaria apenas que alguém escreveu o
 // rótulo — foi assim que o primeiro Checkpoint desta função passou por uma
 // revisão inteira sem oráculo nenhum, e o remédio é não repetir a forma.
+//
+// Atende a aposentadoria E o reparo dela (store_recovery.go): as três mutações
+// de entrada de diretório do ciclo de vida do §53-55 passam por aqui. Este
+// helper é o que TORNA um fsync observável, então um fsync desta família
+// escrito cru é, por construção, um fsync sem oráculo — foi assim que o do
+// reparo atravessou a revisão anterior.
 //
 // O limite fica escrito: o que o teste alcança é a EXISTÊNCIA e a POSIÇÃO da
 // chamada. Que o fsync de fato tenha levado a entrada de diretório ao meio

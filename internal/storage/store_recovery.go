@@ -83,7 +83,7 @@ func (s *Store) recoverFrom(m *checkpoint.Manifest, refs []segment.SegmentRef, d
 	// aposentadoria existe justamente para que os bytes fiquem em disco até o
 	// manifest concordar, e conferir o conjunto antes de restaurá-los faria o
 	// Open condenar como corrompido um dataset íntegro.
-	mudou, err := reparaAposentados(dataDir, m.Segments)
+	mudou, err := s.reparaAposentados(dataDir, m.Segments)
 	if err != nil {
 		return err
 	}
@@ -226,7 +226,15 @@ func (s *Store) recoverFrom(m *checkpoint.Manifest, refs []segment.SegmentRef, d
 //	                     canônico, nada além disto voltaria a mencioná-los:
 //	                     REMOVER é a única forma de a compaction devolver o
 //	                     disco que promete.
-func reparaAposentados(dataDir string, listados []checkpoint.SegmentInfo) (bool, error) {
+//
+// É MÉTODO, e não função de pacote, por uma razão só: o fsync do fim precisa
+// passar pelo durabilizaODiretorio (compaction.go), que é o único ponto do
+// projeto em que a existência de um fsync de diretório vira observável. Como
+// função de pacote ela não alcançava o seam — e a revisão mediu o preço:
+// apagar aquele fsync deixava `go test ./...` INTEIRO verde, no único caminho
+// desta fase capaz de DESTRUIR dado. Nada em produção muda com isso: o campo
+// nasce nil e não há como instalá-lo de fora do pacote.
+func (s *Store) reparaAposentados(dataDir string, listados []checkpoint.SegmentInfo) (bool, error) {
 	entradas, err := os.ReadDir(dataDir)
 	if err != nil {
 		return false, fmt.Errorf("storage: listar %s: %w", dataDir, err)
@@ -275,7 +283,14 @@ func reparaAposentados(dataDir string, listados []checkpoint.SegmentInfo) (bool,
 	// O fsync do diretório é o mesmo da rotação (segment.go:140): sem ele o
 	// reparo é só uma entrada de diretório em cache, e um segundo crash
 	// devolveria o dataset exatamente ao estado que se acabou de consertar.
-	if err := fsyncDir(dataDir); err != nil {
+	//
+	// Passa pelo durabilizaODiretorio — o mesmo helper dos dois fsyncs da
+	// aposentadoria — em vez de chamar o fsyncDir cru, porque é ele que avisa
+	// o seam DEPOIS de o fsync devolver nil. Escrito cru, este fsync era a
+	// única durabilidade do caminho sem oráculo nenhum, e apagá-lo deixava a
+	// suíte inteira verde. Quem prova a diferença é o
+	// TestReparoDoAposentadoDurabilizaODiretorioDepoisDeRestaurar.
+	if err := s.durabilizaODiretorio(dataDir); err != nil {
 		return true, err
 	}
 	return true, nil
