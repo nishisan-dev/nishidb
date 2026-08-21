@@ -201,6 +201,150 @@ git commit -m "Devolve ao Stats a leitura que não espera o writer"
 
 ---
 
+### Task 0b: os dois resíduos do gate de lint
+
+**Files:** Modify `Makefile` (alvo `lint`), `planning/roadmap-m4-m5-m6.md`
+
+Dois pontos que a Task 0 deixou registrados e não fechou.
+
+**O fallback silencioso.** O alvo `lint` cai para `go vet ./...` e sai com **código 0** quando o `golangci-lint` não está no PATH. É a outra metade da cegueira que o débito 53 descreve: um gate que **passa quando a ferramenta está ausente** não é gate — foi exatamente assim que o projeto atravessou o M1 achando que tinha lint. Deve falhar alto, nomeando o que instalar.
+
+**O 114 sobrevivente.** [roadmap-m4-m5-m6.md:285](roadmap-m4-m5-m6.md:285) ainda cita os 114 como linha de base viva. O número foi retirado de circulação pela Task 0; deixá-lo num documento de planejamento é convidar a próxima revisão a se apoiar nele.
+
+- [ ] **Step 1: Provar o fallback**
+
+Run: `PATH=/usr/bin:/bin make lint; echo "exit=$?"` (com o `golangci-lint` fora do PATH)
+Expected: exit **0** — o gate passa sem ter rodado. É o defeito.
+
+- [ ] **Step 2: Fazer o alvo falhar alto**
+
+O `else` do alvo passa a imprimir o que falta e sair com **1**, em vez de rodar `go vet` e devolver 0. `go vet` não substitui o lint: cobre um subconjunto e não conhece `errcheck`, `revive` nem `staticcheck`.
+
+- [ ] **Step 3: Confirmar**
+
+Run: `PATH=/usr/bin:/bin make lint; echo "exit=$?"` → exit **1**, com a mensagem nomeando o binário.
+Run: `make lint` (PATH normal) → roda e devolve **390**.
+
+- [ ] **Step 4: Corrigir o roadmap**
+
+Substituir a citação dos 114 pela regra vigente (390, tetos em 0), apontando para o débito 59.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add Makefile planning/roadmap-m4-m5-m6.md
+git commit -m "Faz o alvo de lint falhar quando a ferramenta falta, em vez de passar"
+```
+
+---
+
+### Task 1c: pinar o detector de espelhos — **Task 1b continua reprovada**
+
+**Files:** Modify `internal/storage/store_liveness_espelho_test.go`, `internal/storage/export_test.go`; possivelmente `internal/storage/store_recovery.go`
+
+O núcleo da Task 1b está certo: `Stats()` lê atômicos e não toma mais `wmu`. O que a rodada de reparo acrescentou — `conferaEspelhos()` em `store_checkpoint.go`, mais a semeadura de `segCount`/`liveBytesAll` em `recoverFrom` — **não é fixado por teste nenhum**. A revisão adversarial derrubou quatro mutantes:
+
+| Mutante | O que faz | Suíte |
+|---|---|---|
+| **M7** | Remove a chamada `s.conferaEspelhos()` do `checkpoint()` | verde |
+| **M8** | Tira o termo `disco == s.diskBytesAll.Load()` da guarda | verde |
+| **M14** | Move a conferência para **depois** da recarga dos espelhos | verde |
+| **M16** | M14 + remover a semeadura de `recoverFrom` | verde, **com o underflow de volta** |
+
+O **M16** é o grave. A ordem — conferir **antes** de tocar nos espelhos — é a única propriedade que faz o detector valer alguma coisa, e é o argumento central da mensagem de commit. Com a conferência depois da recarga ela nunca acha nada, porque a recarga acabou de consertar o que ela iria comparar. Somado à remoção da semeadura, o underflow de `uint64` que o próprio commit mediu (`liveBytesAll = 18446744073709551544` contra 568 nos tallies) volta à produção sem uma única falha.
+
+Um detector que ninguém prova disparando é pior que detector nenhum: lê-se como proteção e não protege.
+
+- [ ] **Step 1: Escrever o teste que mata M7, M8 e M14**
+
+Um subteste por espelho. O hook de corrupção entra em `export_test.go`, no estilo do `zeraTallyDoSegmento` que já existe lá.
+
+```go
+// TestConferenciaDeEspelhosAcusaCadaEspelhoDivergente prova que o detector
+// DISPARA, e prova para os três espelhos. Sem isto ele é decoração: remover a
+// chamada do checkpoint, ou cegá-la para um dos termos, deixa a suíte verde —
+// medido em três mutantes na revisão da Task 1b.
+func TestConferenciaDeEspelhosAcusaCadaEspelhoDivergente(t *testing.T) {
+	for _, c := range []struct {
+		nome     string
+		corrompe func(*Store)
+	}{
+		{"segCount", func(s *Store) { s.segCount.Add(1) }},
+		{"liveBytesAll", func(s *Store) { s.liveBytesAll.Add(4096) }},
+		{"diskBytesAll", func(s *Store) { s.diskBytesAll.Add(4096) }},
+	} {
+		t.Run(c.nome, func(t *testing.T) {
+			s := openStore(t, Options{})
+			popula(t, s, 50)
+			if err := s.Checkpoint(); err != nil {
+				t.Fatalf("Checkpoint de base: %v", err)
+			}
+			antes := s.EspelhosDivergentesForTest()
+			s.CorrompeEspelhoParaTeste(c.corrompe) // sob s.wmu
+			if err := s.Checkpoint(); err != nil {
+				t.Fatalf("Checkpoint: %v", err)
+			}
+			if got := s.EspelhosDivergentesForTest(); got != antes+1 {
+				t.Errorf("divergências = %d, queria %d: o detector não acusou %s", got, antes+1, c.nome)
+			}
+		})
+	}
+}
+```
+
+- [ ] **Step 2: Escrever o teste que mata M16 — oráculo DIRETO da recovery**
+
+O oráculo atual é indireto: `TestRecoverySemeiaOEspelhoQueOStatsPublica` só pega o defeito **através** do contador de divergência, e sua asserção de `LiveBytesUpperBound` passa nas duas implementações, porque o `Checkpoint` incondicional do `Open` recarrega o absoluto antes de qualquer leitura. É preciso ler os espelhos **ao fim de `recoverFrom`, antes desse Checkpoint**.
+
+```go
+// TestEspelhosSaemDaRecoveryJaSemeados lê os espelhos ANTES do Checkpoint que
+// o Open dispara. Sem esse ponto de leitura o defeito é invisível: a recarga
+// conserta o absoluto e a asserção de Stats passa dos dois jeitos — foi assim
+// que o underflow de uint64 (liveBytesAll = 1,8e19 contra 568 nos tallies)
+// sobreviveu à suíte inteira no mutante composto M16.
+func TestEspelhosSaemDaRecoveryJaSemeados(t *testing.T) {
+	dir := datasetComManifest(t, 200)
+	var noFimDaRecovery espelhos
+	s := openStoreCom(t, dir, Options{
+		TraceRecoveryParaTeste: func(e espelhos) { noFimDaRecovery = e },
+	})
+	defer s.Close()
+	if noFimDaRecovery.vivo == 0 || noFimDaRecovery.vivo > uint64(noFimDaRecovery.disco) {
+		t.Errorf("liveBytesAll = %d ao fim da recovery, fora de (0, %d]: espelho não semeado",
+			noFimDaRecovery.vivo, noFimDaRecovery.disco)
+	}
+	if noFimDaRecovery.segmentos == 0 {
+		t.Error("segCount = 0 ao fim da recovery: espelho não semeado")
+	}
+}
+```
+
+- [ ] **Step 3: Rodar e confirmar que os dois falham**
+
+Run: `go test ./internal/storage/ -run 'TestConferenciaDeEspelhos|TestEspelhosSaemDaRecovery' -v`
+Expected: FAIL — os hooks de teste ainda não existem.
+
+- [ ] **Step 4: Implementar só os hooks**
+
+`CorrompeEspelhoParaTeste` e o ponto de trace ao fim de `recoverFrom`. **Nenhuma mudança de comportamento de produção** — o código já está correto; o que falta é o oráculo.
+
+- [ ] **Step 5: Re-matar os quatro mutantes, um a um**
+
+Aplicar M7, M8, M14 e M16 numa cópia descartável (`git archive` para fora do repo) e confirmar que **cada um** agora fica vermelho. Um mutante que sobreviver reabre a tarefa.
+
+- [ ] **Step 6: Decidir sobre `espelhosDivergentes`**
+
+O contador só tem `Log.Warn` e acessor de teste — nenhuma exposição ao operador. Num milestone cujo objetivo é o §92, ou ele ganha série em `metricas_dataset.go`, ou uma linha em `docs/debitos.md` dizendo quando ganha. **Escolher uma e executar**, não deixar as duas em aberto.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add internal/storage/
+git commit -m "Prova que a conferência de espelhos dispara, em vez de supô-lo"
+```
+
+---
+
 ### Task 2b: fixar `storage_bytes` contra o disco real — **Task 2 continua reprovada**
 
 **Files:** Modify `internal/server/metricas_dataset_test.go`, `internal/server/query_test.go` (helper `servidorComDados`)
