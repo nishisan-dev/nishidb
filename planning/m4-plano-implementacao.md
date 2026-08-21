@@ -1002,6 +1002,34 @@ git commit -m "Zera o tally pela varredura, que é a única leitura exata do seg
 
 ### Task 6: aposentar o segmento, e as duas janelas de crash
 
+> **CRITÉRIO DE ACEITE: e2e sobre disco real. NORMATIVO.**
+>
+> Esta é a primeira tarefa do projeto que **apaga dado**. Suíte verde não é
+> prova de nada aqui: o que precisa ser demonstrado é que o disco **volta** e
+> que **nenhuma row se perde**. Sem os três itens abaixo a tarefa não fecha,
+> por mais mutante que morra.
+>
+> 1. **O disco encolhe, medido no filesystem.** Store real em diretório real,
+>    carga de updates sobre key set fixo até haver segmento selado com garbage
+>    suficiente, compaction, e o tamanho do diretório **medido por `os.Stat`
+>    dos arquivos** — não por `Stats()`, que é a coisa sob teste. Antes e
+>    depois, com a queda afirmada em bytes. Se o número não cair, não houve
+>    compaction.
+> 2. **Nenhuma row se perde, conferida uma a uma.** Depois da compaction e
+>    depois de um `Close`+`Open`, **toda** key do corpus responde com o payload
+>    e a sequence corretos. Amostragem não serve: o modo de falha desta tarefa
+>    é justamente a row que ficou apontando para um arquivo removido.
+> 3. **`kill -9` nas DUAS janelas do D5**, com o binário de verdade, no molde
+>    de `TestKill9NoMeioDaIngestaoPreservaOEstadoConfirmado`
+>    ([kill9_test.go:27](../internal/cli/kill9_test.go:27)) — entre o rename e
+>    o checkpoint, e entre o checkpoint e o unlink. Em cada uma: reabrir, o
+>    `Open` tem de **reparar sem erro**, e o item 2 tem de valer. Matar o
+>    processo fora dessas janelas não exercita nada.
+>
+> Um `.retired` sobrevivente ou um `Open` que recuse o dataset é reprovação,
+> não observação.
+
+
 **Files:**
 - Modify: `internal/storage/compaction.go`, `internal/storage/store_recovery.go`
 - Create: `internal/storage/compaction_crash_test.go`
@@ -1123,6 +1151,28 @@ git commit -m "Aposenta o segmento por rename, e ensina o Open a reparar as duas
 ---
 
 ### Task 7: seleção de candidatos e o ciclo de vida da goroutine
+
+> **CRITÉRIO DE ACEITE: e2e pelo BINÁRIO. NORMATIVO.**
+>
+> A Task 6 prova o mecanismo; esta prova o **produto**. É a primeira vez que a
+> compaction roda sem ninguém a chamar, que é como ela vai rodar em produção.
+>
+> 1. **Pelo `nishidb` compilado**, no molde do
+>    [kill9_test.go:27](../internal/cli/kill9_test.go:27): `nishidb.yaml` com
+>    `storage.compaction.enabled: true` e `segmentSize` pequeno, ingestão de
+>    updates sobre key set fixo, o processo de pé.
+> 2. **O disco estabiliza sozinho.** Sem chamada de API: a carga continua e o
+>    tamanho do diretório **para de crescer**, medido no filesystem ao longo do
+>    tempo. É a diferença entre "a compaction roda" e "a compaction resolve".
+> 3. **O operador vê acontecer.** `nishidb_storage_bytes` cai no `/metrics` e
+>    `nishidb_compaction_bytes_written` sobe — pela porta HTTP, não por leitura
+>    de campo Go. Se a série não se move, o painel do M4 não serve para nada.
+> 4. **Consultar durante a compaction devolve o certo.** `POST /v1/query`
+>    enquanto ela roda, com o resultado conferido — é a promessa do §51, e a
+>    compaction reescreve locations sob os pés do leitor.
+> 5. **`SIGTERM` durante uma compaction encerra limpo**, devolve o flock, e o
+>    `Open` seguinte não acha `.retired` nem recusa o dataset.
+
 
 **Files:**
 - Modify: `internal/storage/compaction.go`, `internal/storage/store.go` (`Close` ~linha 1268), `internal/server/server.go`
