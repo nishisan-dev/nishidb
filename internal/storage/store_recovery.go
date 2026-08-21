@@ -19,24 +19,41 @@ func (s *Store) recoverFrom(m *checkpoint.Manifest, refs []segment.SegmentRef, d
 	s.epoch = m.Epoch
 	s.nextRowID.Store(m.NextRowID)
 	s.rowCount.Store(m.RowCount)
+	var (
+		segmentosDoManifest uint32
+		vivoDoManifest      uint64
+	)
 	for _, si := range m.Segments {
 		s.segTally[si.ID] = &segStats{
 			totalRecords: si.TotalRecords,
 			liveRecords:  si.LiveRecords,
 			liveBytes:    si.LiveBytes,
 		}
+		segmentosDoManifest++
+		vivoDoManifest += si.LiveBytes
 		// O segSize NÃO é semeado aqui de propósito: o Open faz um Checkpoint
 		// incondicional antes de devolver o Store, e esse checkpoint zera o
 		// mapa e o repovoa pelo ListSegments. Semear aqui seria escrita que
 		// nenhuma leitura alcança — não existe Stats() possível entre este
 		// ponto e o checkpoint, porque o Store ainda não saiu do Open.
-		//
-		// Pelo mesmo argumento, os espelhos atômicos que o Stats lê
-		// (segCount/liveBytesAll/diskBytesAll) também não são semeados: o
-		// replay do tail vai somar neles pelo applyRecord sem a base do
-		// manifest, e é o Checkpoint do Open que os recarrega com o valor
-		// absoluto. Ninguém observa o intervalo.
 	}
+	// Os espelhos do tally, ao contrário, PRECISAM da base do manifest, e o
+	// argumento "ninguém observa o intervalo" não os cobria. O replay do tail
+	// abaixo passa pelo applyRecord, que desconta do agregado a baixa
+	// CLAMPADA contra o tally — e o tally acabou de ser semeado com os
+	// liveBytes do manifest. Sem a mesma base no espelho, a primeira baixa
+	// subtrai mais do que existe: medido, o fim do recoverFrom deixava
+	// liveBytesAll em 18446744073709551544 com os tallies somando 568, ou
+	// seja underflow de uint64 no código de produção, e não num mutante.
+	//
+	// Que o Checkpoint do Open recarregue o absoluto logo depois não conserta
+	// o defeito, apenas o esconde: uma invariante que só vale porque o
+	// próximo passo a reescreve não é invariante, é coincidência de ordem —
+	// e a compaction do §53-55 vai mexer nesses mesmos mapas fora do Open.
+	// O espelho de disco fica em zero porque o segSize também fica: cada
+	// espelho continua sendo cópia fiel do SEU mapa.
+	s.segCount.Store(segmentosDoManifest)
+	s.liveBytesAll.Store(vivoDoManifest)
 	// PrimarySlotCount/HashKind do manifest são ADVISORY: a fonte de
 	// verdade é o header do primary.idx (um rehash pós-checkpoint deixa o
 	// manifest para trás — divergência é esperada, não erro).

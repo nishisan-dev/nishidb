@@ -182,10 +182,18 @@ type Store struct {
 	// disco visível (§92) é a regressão mais cara possível.
 	//
 	// Escrita WRITER-ONLY, sob wmu, nos mesmos pontos em que os mapas se
-	// movem: applyRecord (nascimento de segmento e delta de liveness) e a
-	// reconciliação do checkpoint, que recarrega os três com os valores
-	// absolutos. Custo no caminho quente: uma soma atômica por Put, zero
-	// alocação — os gates de AllocsPerRun seguem valendo.
+	// movem: applyRecord (nascimento de segmento e delta de liveness), a
+	// semeadura da recovery (que precisa da MESMA base do manifest com que
+	// semeia o tally, sob pena de a primeira baixa do replay furar o
+	// agregado por baixo) e a reconciliação do checkpoint, que recarrega os
+	// três com os valores absolutos.
+	//
+	// Custo no caminho quente, contado com precisão porque o número já saiu
+	// errado uma vez: DUAS somas atômicas no Put que é update — a do record
+	// que nasce e a da baixa do record que ele torna garbage — e UMA no Put
+	// que só cria. O Put que estreia um segmento paga mais uma, no segCount.
+	// Zero alocação nos três casos, então os gates de AllocsPerRun seguem
+	// valendo.
 	//
 	// Os três são atômicos INDEPENDENTES, então um leitor pode pegar um
 	// deles de antes e outro de depois do mesmo checkpoint. É aceito de
@@ -197,6 +205,12 @@ type Store struct {
 	segCount     atomic.Uint32
 	liveBytesAll atomic.Uint64
 	diskBytesAll atomic.Int64
+	// espelhosDivergentes conta as vezes em que o checkpoint ENCONTROU os
+	// três fora dos mapas. Não é contador de falha do checkpoint: a recarga
+	// conserta o valor e a ingestão segue. É contador de MENTIRA PUBLICADA —
+	// enquanto durou, o /v1/stats e a nishidb_garbage_bytes descreveram um
+	// dataset que não existe. Ver conferaEspelhos.
+	espelhosDivergentes atomic.Uint64
 	// clearFailures conta erros tolerados na fase de Clear dos bitmaps
 	// (deixam falso positivo, filtrado pelo §44); exposto via métricas na S13.
 	clearFailures atomic.Uint64

@@ -21,6 +21,13 @@ func (s *Store) SetSetErrHookForTest(fn func(types.FieldID) error) { s.setErrHoo
 // slot duplicado quando o replay insere a mesma key duas vezes.
 func (s *Store) PrimaryUsedForTest() uint64 { return s.prim.Used() }
 
+// EspelhosDivergentesForTest expõe quantas vezes o checkpoint encontrou os
+// espelhos do Stats fora dos mapas de contabilidade. É o único observável da
+// janela entre o replay do tail e o Checkpoint do Open: depois que o Open
+// retorna, a recarga já apagou o rastro e nenhuma leitura de Stats distingue
+// uma recovery que semeou os espelhos de uma que os deixou furados.
+func (s *Store) EspelhosDivergentesForTest() uint64 { return s.espelhosDivergentes.Load() }
+
 // PartialCheckpointForTest executa os passos 1-3 do checkpoint (segSync,
 // ApplyOverlay, msyncs) SEM gravar o manifest — simula o crash entre os
 // passos 3 e 4 do §10.2 (índices em disco à frente do manifest).

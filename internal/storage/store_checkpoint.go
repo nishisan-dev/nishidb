@@ -72,6 +72,19 @@ func (s *Store) checkpoint() error {
 	if s.stickyErr != nil {
 		return fmt.Errorf("%w: %w", ErrWriterFailed, s.stickyErr)
 	}
+	// ANTES de tocar nos mapas: os espelhos que o Stats publica sem tomar o
+	// wmu já têm de descrever o que os mapas dizem NESTE instante. A recarga
+	// lá embaixo é reconciliação com o diretório (semeadura e poda), não
+	// conserto — se ela precisou corrigir alguma coisa, o /v1/stats vinha
+	// mentindo desde o checkpoint anterior, e isso é fato operacional, não
+	// detalhe interno.
+	//
+	// A conferência é o que impede a recarga de virar rede de proteção
+	// silenciosa: era ela que escondia o applyRecord errado de toda asserção
+	// que lesse Stats depois de um checkpoint, e é ela que esconderia a
+	// compaction (§53-55) zerando um tally por autoridade da varredura (D4)
+	// sem mover o espelho junto.
+	s.conferaEspelhos()
 	if err := s.traceStep("segSync", s.segW.Sync); err != nil {
 		return s.failWriter(err)
 	}
@@ -180,16 +193,7 @@ func (s *Store) checkpoint() error {
 	// segmento que o writer conhece mas que o último ListSegments não viu
 	// contribui com zero bytes, o que mantém StorageBytes num limite
 	// INFERIOR e nunca inventa disco que não existe.
-	var (
-		segmentos  uint32
-		vivoTotal  uint64
-		discoTotal int64
-	)
-	for id, t := range s.segTally {
-		segmentos++
-		vivoTotal += t.liveBytes
-		discoTotal += s.segSize[id]
-	}
+	segmentos, vivoTotal, discoTotal := s.agregadosDoTally()
 	s.segCount.Store(segmentos)
 	s.liveBytesAll.Store(vivoTotal)
 	s.diskBytesAll.Store(discoTotal)
@@ -233,6 +237,48 @@ func (s *Store) checkpoint() error {
 		}
 	}
 	return nil
+}
+
+// agregadosDoTally soma os mapas de contabilidade numa varredura só. É a
+// forma canônica dos três números que o Stats publica, e existe como função
+// para que a CONFERÊNCIA e a RECARGA usem literalmente a mesma conta —
+// duplicá-la deixaria a conferência aprovando um agregado que a recarga
+// calcula de outro jeito. Writer-only: os dois mapas exigem o wmu.
+//
+// A iteração é sobre o tally, com o segSize entrando só como consulta, e a
+// assimetria é a mesma de sempre: segmento que o writer conhece mas que o
+// último ListSegments não viu contribui com zero bytes.
+func (s *Store) agregadosDoTally() (segmentos uint32, vivo uint64, disco int64) {
+	for id, t := range s.segTally {
+		segmentos++
+		vivo += t.liveBytes
+		disco += s.segSize[id]
+	}
+	return segmentos, vivo, disco
+}
+
+// conferaEspelhos afere a invariante dos espelhos atômicos: eles são CÓPIA
+// dos mapas de contabilidade, e as duas descrições não podem discordar em
+// instante nenhum em que o writer não esteja no meio de uma aplicação.
+//
+// A divergência não derruba nada e não é erro do checkpoint — a recarga que
+// vem depois já devolve o valor certo, e recusar um checkpoint por causa de
+// uma métrica seria trocar um número errado por uma perda de durabilidade.
+// O que ela faz é PARAR de ser invisível: enquanto durou, o /v1/stats e a
+// nishidb_garbage_bytes publicaram um número que não descreve o dataset, e
+// num uint64 uma subtração a mais não sai negativa, sai 1,8e19 — o alarme de
+// disco vira ruído exatamente quando ele deveria estar sendo lido.
+func (s *Store) conferaEspelhos() {
+	segmentos, vivo, disco := s.agregadosDoTally()
+	if segmentos == s.segCount.Load() && vivo == s.liveBytesAll.Load() && disco == s.diskBytesAll.Load() {
+		return
+	}
+	s.opts.Log.Warn("stats.espelhos_divergiram",
+		"os agregados publicados pelo Stats não descreviam os mapas de contabilidade; o checkpoint os recarrega, mas as leituras desde o checkpoint anterior saíram erradas",
+		"ocorrencias", s.espelhosDivergentes.Add(1),
+		"segmentos_espelho", s.segCount.Load(), "segmentos_mapa", segmentos,
+		"vivo_espelho", s.liveBytesAll.Load(), "vivo_mapa", vivo,
+		"disco_espelho", s.diskBytesAll.Load(), "disco_mapa", disco)
 }
 
 // SetSourceOffsets publica a posição no tópico que o PRÓXIMO checkpoint vai
