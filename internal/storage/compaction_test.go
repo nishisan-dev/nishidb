@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/nishisan-dev/nishidb/internal/storage/checkpoint"
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 	"github.com/nishisan-dev/nishidb/internal/storage/rowindex"
 	"github.com/nishisan-dev/nishidb/internal/storage/segment"
@@ -1223,5 +1225,336 @@ func TestVarreduraContaComoLidoOArquivoInteiroMenosOHeader(t *testing.T) {
 	if depois := fileSizeAud(t, audSegPath(dir, 1)); depois != tamanho {
 		t.Errorf("o segmento de origem foi de %d para %d bytes: a Task 5 copia para frente e não encolhe arquivo "+
 			"nenhum, então a conta acima seguiria valendo", tamanho, depois)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Task 6 — a aposentadoria do segmento
+// ---------------------------------------------------------------------------
+
+// discoDosSegmentosPorOsStat soma o tamanho dos arquivos de segmento
+// perguntando ao FILESYSTEM, um os.Stat por arquivo. Não usa Stats(), e a
+// distinção é a tarefa inteira: Stats é a coisa sob teste, e um oráculo que a
+// consultasse aprovaria uma compaction que só mexeu na contabilidade — o
+// disco que o §86 dá 2 a 3 dias para encher não é o que o painel diz, é o que
+// o filesystem cobra.
+func discoDosSegmentosPorOsStat(t *testing.T, dir string) int64 {
+	t.Helper()
+	entradas, err := filepath.Glob(filepath.Join(dir, "data", "segment-*.dat"))
+	if err != nil {
+		t.Fatalf("glob dos segmentos: %v", err)
+	}
+	var total int64
+	for _, p := range entradas {
+		fi, err := os.Stat(p)
+		if err != nil {
+			t.Fatalf("stat %s: %v", p, err)
+		}
+		total += fi.Size()
+	}
+	return total
+}
+
+// seladosEmDisco fotografa os segmentos que a compaction pode eleger AGORA
+// (decisão D6: o corrente nunca entra). A fotografia é tirada antes do
+// primeiro ciclo de propósito — o copy-forward empurra o segmento corrente
+// para frente e SELA novos arquivos, e um laço que relesse a lista a cada
+// volta perseguiria as próprias cópias sem nunca terminar.
+func seladosEmDisco(t *testing.T, dir string, corrente uint32) []uint32 {
+	t.Helper()
+	refs, err := segment.ListSegments(filepath.Join(dir, "data"))
+	if err != nil {
+		t.Fatalf("listar segmentos: %v", err)
+	}
+	var ids []uint32
+	for _, ref := range refs {
+		if ref.ID != corrente {
+			ids = append(ids, ref.ID)
+		}
+	}
+	return ids
+}
+
+func chaveDoCorpus(i int) string           { return fmt.Sprintf("e2e-%04d", i) }
+func sequenceDoCorpus(rodada, i int) int64 { return int64(rodada*10000 + i) }
+
+func payloadDoCorpus(t *testing.T, s *Store, key string, rodada int) []byte {
+	t.Helper()
+	return statusPayload(t, s, key, fmt.Sprintf("R%02d", rodada), int64(rodada))
+}
+
+// exigeCorpusNaUltimaRodada confere TODA key do corpus, uma a uma, com
+// sequence e payload. Amostragem não serve: o modo de falha desta tarefa é a
+// row que ficou apontando para um arquivo que a aposentadoria removeu, e ela
+// é uma entre dezenas — um sorteio a perde e devolve verde.
+func exigeCorpusNaUltimaRodada(t *testing.T, s *Store, keys, rodada int, quando string) {
+	t.Helper()
+	for i := 0; i < keys; i++ {
+		k := chaveDoCorpus(i)
+		rec, _, ok, err := s.GetByKey([]byte(k), nil)
+		if err != nil || !ok {
+			t.Fatalf("%s: a row %q sumiu (ok=%v, err=%v)", quando, k, ok, err)
+		}
+		if want := sequenceDoCorpus(rodada, i); rec.Sequence != want {
+			t.Fatalf("%s: a row %q voltou com sequence %d, queria %d", quando, k, rec.Sequence, want)
+		}
+		if want := payloadDoCorpus(t, s, k, rodada); !bytes.Equal(rec.Payload, want) {
+			t.Fatalf("%s: o payload da row %q não é o da última rodada", quando, k)
+		}
+	}
+}
+
+// TestAposentadoriaSaiDosMapasNoMesmoInstanteEmQueSaiDoDiretorio é o teste da
+// ORDEM, e ele afirma sobre o DISCO em cada passo — não sobre a sequência de
+// nomes que o próprio trace produz. A distinção importa: um trace que só
+// confere a si mesmo aprova qualquer implementação que continue chamando os
+// mesmos rótulos na mesma ordem, inclusive uma que remova o arquivo antes de
+// o manifest deixar de nomeá-lo.
+//
+// São três invariantes num teste só, porque as três descrevem o mesmo
+// instante:
+//
+//  1. Invariante 3 da Fase B: o Checkpoint das locations acontece ANTES do
+//     rename, e o segundo Checkpoint ANTES do unlink. Entre o rename e esse
+//     segundo checkpoint o manifest AINDA nomeia o segmento — é a janela que
+//     o Open repara, e ela existe de propósito.
+//  2. Invariante 4: a poda dos mapas e o ajuste dos espelhos acontecem na
+//     mesma seção crítica, e no MESMO passo do rename. Sem observar aqui
+//     dentro, a poda é invisível: o segundo Checkpoint reconstrói o segSize
+//     do ListSegments e poda o tally por conta própria, de modo que o estado
+//     FINAL é idêntico com e sem ela. O que a poda decide é o que o Stats
+//     publica DURANTE a janela — e é justamente aí que ele estaria mentindo.
+//  3. O arquivo só some do disco no fim, depois de o manifest concordar.
+func TestAposentadoriaSaiDosMapasNoMesmoInstanteEmQueSaiDoDiretorio(t *testing.T) {
+	dir := t.TempDir()
+	s := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10})
+	const n = 400
+	for i := 0; i < n; i++ {
+		k := fmt.Sprintf("apo-%03d", i)
+		mustPut(t, s, k, int64(i), statusPayload(t, s, k, "Start", int64(i)), nil)
+	}
+	const alvo = 1
+	if _, _, _, err := s.compactaSegmento(context.Background(), alvo); err != nil {
+		t.Fatalf("compactaSegmento: %v", err)
+	}
+	// O checkpoint ancora o "antes": o segSize só se move no checkpoint, e sem
+	// este a comparação de StorageBytes mediria o atraso da série em vez da
+	// aposentadoria.
+	if err := s.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint de base: %v", err)
+	}
+	canonico := audSegPath(dir, alvo)
+	info, err := os.Stat(canonico)
+	if err != nil {
+		t.Fatalf("stat do segmento a aposentar: %v", err)
+	}
+	antes := s.Stats()
+	divergenciasAntes := s.EspelhosDivergentesForTest()
+
+	type foto struct {
+		passo      string
+		canonico   bool
+		aposentado bool
+		listado    bool
+		segmentos  uint32
+		disco      int64
+	}
+	var fotos []foto
+	s.SetAposentadoriaTraceForTest(func(passo string) {
+		st := s.Stats()
+		m, err := checkpoint.Load(audManifestPath(dir))
+		if err != nil {
+			t.Fatalf("carregar o manifest no passo %q: %v", passo, err)
+		}
+		listado := false
+		for _, si := range m.Segments {
+			if si.ID == alvo {
+				listado = true
+			}
+		}
+		_, errCanonico := os.Stat(canonico)
+		_, errAposentado := os.Stat(canonico + sufixoAposentadoNoTeste)
+		fotos = append(fotos, foto{
+			passo:      passo,
+			canonico:   errCanonico == nil,
+			aposentado: errAposentado == nil,
+			listado:    listado,
+			segmentos:  st.SegmentsTotal,
+			disco:      st.StorageBytes,
+		})
+	})
+	defer s.SetAposentadoriaTraceForTest(nil)
+
+	if err := s.aposentaSegmento(alvo); err != nil {
+		t.Fatalf("aposentaSegmento: %v", err)
+	}
+
+	querido := []foto{
+		{"checkpointDasLocations", true, false, true, antes.SegmentsTotal, antes.StorageBytes},
+		{"rename", false, true, true, antes.SegmentsTotal - 1, antes.StorageBytes - info.Size()},
+		{"checkpointDoManifest", false, true, false, antes.SegmentsTotal - 1, antes.StorageBytes - info.Size()},
+		{"unlink", false, false, false, antes.SegmentsTotal - 1, antes.StorageBytes - info.Size()},
+	}
+	if len(fotos) != len(querido) {
+		t.Fatalf("a aposentadoria passou por %d passos (%+v), queria %d", len(fotos), fotos, len(querido))
+	}
+	for i, q := range querido {
+		if fotos[i] != q {
+			t.Errorf("passo %d:\n  obtido %+v\n  queria %+v", i, fotos[i], q)
+		}
+	}
+
+	// E o estado final tem de sobreviver ao checkpoint seguinte sem que a
+	// conferência de espelhos acuse nada: a reconciliação se cura sozinha, e é
+	// por isso que ela não serve de oráculo da poda — mas se a poda tivesse
+	// descontado o valor ERRADO, é aqui que apareceria.
+	exigeEspelhoIgualAosTallies(t, s, "após a aposentadoria do segmento 1")
+	if err := s.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint pós-aposentadoria: %v", err)
+	}
+	if got := s.EspelhosDivergentesForTest(); got != divergenciasAntes {
+		t.Errorf("o checkpoint seguinte acusou %d divergências contra %d antes: a poda e os espelhos saíram discordando",
+			got, divergenciasAntes)
+	}
+}
+
+// TestCompactionDevolveDiscoSemPerderNenhumaRow é o CRITÉRIO DE ACEITE da
+// Task 6, e ele existe porque suíte verde não prova nada numa tarefa que
+// APAGA arquivo. As duas coisas que precisam ser demonstradas são que o disco
+// VOLTA e que nenhuma row se perde, e nenhuma das duas é observável num teste
+// que afirme sobre contadores.
+//
+// O corpus é um key set FIXO reescrito em muitas rodadas, que é a forma do
+// dataset real do §86: 500 ev/s de updates sobre as mesmas sessões, 30-43 GB
+// escritos por dia contra 5,6-8 GB de estado vivo. Depois da última rodada
+// todo record vivo está nos ÚLTIMOS segmentos, e os selados anteriores são
+// garbage quase puro — é exatamente o disco que nada no projeto devolvia.
+//
+// A queda é medida por os.Stat e afirmada em bytes; a conferência das rows é
+// uma a uma, antes e DEPOIS de um Close+Open, porque a location pendurada num
+// arquivo removido não machuca ninguém enquanto o índice ainda está em
+// memória — ela reaparece na reabertura.
+func TestCompactionDevolveDiscoSemPerderNenhumaRow(t *testing.T) {
+	dir := t.TempDir()
+	s := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10})
+	const keys, rodadas = 40, 30
+	for r := 0; r < rodadas; r++ {
+		for i := 0; i < keys; i++ {
+			k := chaveDoCorpus(i)
+			mustPut(t, s, k, sequenceDoCorpus(r, i), payloadDoCorpus(t, s, k, r), nil)
+		}
+	}
+	if err := s.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+
+	alvos := seladosEmDisco(t, dir, s.Stats().CurrentSegmentID)
+	if len(alvos) < 3 {
+		t.Fatalf("o corpus selou %d segmento(s): sem uma pilha de selados o teste não mede compaction nenhuma", len(alvos))
+	}
+	antes := discoDosSegmentosPorOsStat(t, dir)
+	for _, seg := range alvos {
+		if _, _, _, err := s.compactaSegmento(context.Background(), seg); err != nil {
+			t.Fatalf("compactaSegmento(%d): %v", seg, err)
+		}
+		if err := s.aposentaSegmento(seg); err != nil {
+			t.Fatalf("aposentaSegmento(%d): %v", seg, err)
+		}
+	}
+	depois := discoDosSegmentosPorOsStat(t, dir)
+	t.Logf("disco em segment-*.dat: %d bytes antes, %d depois — %d devolvidos ao filesystem em %d segmentos aposentados",
+		antes, depois, antes-depois, len(alvos))
+
+	if depois >= antes {
+		t.Fatalf("o diretório saiu de %d para %d bytes: não houve compaction nenhuma", antes, depois)
+	}
+	// O piso não é cosmética. Com %d rodadas sobre o mesmo key set, o vivo é
+	// uma fração pequena do escrito, então uma queda menor que a metade
+	// denuncia aposentadoria PARCIAL — o mutante que retira um segmento e para
+	// deixaria "depois < antes" verde.
+	if depois > antes/2 {
+		t.Errorf("o disco caiu de %d para %d bytes, menos da metade, com %d rodadas de update sobre %d keys: "+
+			"a maior parte do arquivo era garbage e deveria ter voltado", antes, depois, rodadas, keys)
+	}
+	sobreviventes, err := filepath.Glob(filepath.Join(dir, "data", "*"+sufixoAposentadoNoTeste))
+	if err != nil {
+		t.Fatalf("glob dos aposentados: %v", err)
+	}
+	if len(sobreviventes) != 0 {
+		t.Errorf("sobraram %d arquivo(s) aposentado(s) em disco: %v", len(sobreviventes), sobreviventes)
+	}
+
+	exigeCorpusNaUltimaRodada(t, s, keys, rodadas-1, "após a compaction")
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	reaberto := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10})
+	exigeCorpusNaUltimaRodada(t, reaberto, keys, rodadas-1, "após Close+Open")
+	if got := reaberto.Stats().RowCount; got != keys {
+		t.Errorf("RowCount = %d após a reabertura, queria %d", got, keys)
+	}
+}
+
+// TestPodaDoSegmentoAposentadoDescontaOsTresEspelhos afere a ARITMÉTICA da
+// poda, e existe porque o teste da ordem não a alcança inteira: lá o segmento
+// chega à aposentadoria com o tally já zerado pela varredura (decisão D4), de
+// modo que o desconto de liveBytesAll é uma subtração de zero e some do
+// oráculo. Apagar aquela linha deixava a suíte inteira verde.
+//
+// A invariante 4 não tem cláusula de exceção — toda escrita que um espelho
+// descreve ajusta o espelho, na mesma seção crítica —, então o que se afere
+// aqui é a poda contra um tally QUALQUER, e não contra o tally que a
+// sequência feliz produz. É por isso que o teste chama a poda direto em vez de
+// passar pelo aposentaSegmento: aposentar um segmento com record vivo dentro
+// dele é o que a função proíbe, e montar essa proibição só para observar uma
+// subtração deixaria em disco um dataset com location pendurada.
+func TestPodaDoSegmentoAposentadoDescontaOsTresEspelhos(t *testing.T) {
+	dir := t.TempDir()
+	s := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10})
+	const n = 400
+	for i := 0; i < n; i++ {
+		k := fmt.Sprintf("poda-%03d", i)
+		mustPut(t, s, k, int64(i), statusPayload(t, s, k, "Start", int64(i)), nil)
+	}
+	// O checkpoint ancora o segSize, que só se move nele: sem isto o
+	// StorageBytes de "antes" descreveria um diretório mais antigo que o
+	// arquivo que a poda desconta.
+	if err := s.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint de base: %v", err)
+	}
+	const alvo = 1
+	info, err := os.Stat(audSegPath(dir, alvo))
+	if err != nil {
+		t.Fatalf("stat do segmento alvo: %v", err)
+	}
+	_, vivo := tallyDoSegmento(s, alvo)
+	if vivo == 0 {
+		t.Fatal("a montagem deixou o segmento 1 sem tally vivo: o desconto seria de zero e o teste não provaria nada")
+	}
+	antes := s.Stats()
+	divergenciasAntes := s.EspelhosDivergentesForTest()
+
+	if err := s.podaSegmentoAposentado(alvo); err != nil {
+		t.Fatalf("podaSegmentoAposentado: %v", err)
+	}
+
+	depois := s.Stats()
+	if want := antes.LiveBytesUpperBound - vivo; depois.LiveBytesUpperBound != want {
+		t.Errorf("LiveBytesUpperBound = %d, queria %d (%d menos os %d que o segmento reivindicava)",
+			depois.LiveBytesUpperBound, want, antes.LiveBytesUpperBound, vivo)
+	}
+	if want := antes.SegmentsTotal - 1; depois.SegmentsTotal != want {
+		t.Errorf("SegmentsTotal = %d, queria %d", depois.SegmentsTotal, want)
+	}
+	if want := antes.StorageBytes - info.Size(); depois.StorageBytes != want {
+		t.Errorf("StorageBytes = %d, queria %d (%d menos os %d bytes do arquivo)",
+			depois.StorageBytes, want, antes.StorageBytes, info.Size())
+	}
+	exigeEspelhoIgualAosTallies(t, s, "após a poda do segmento aposentado")
+	if err := s.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint pós-poda: %v", err)
+	}
+	if got := s.EspelhosDivergentesForTest(); got != divergenciasAntes {
+		t.Errorf("o checkpoint seguinte acusou %d divergências contra %d antes da poda", got, divergenciasAntes)
 	}
 }

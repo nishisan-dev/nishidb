@@ -1,7 +1,10 @@
 package storage
 
 import (
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/nishisan-dev/nishidb/internal/storage/checkpoint"
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
@@ -67,6 +70,28 @@ func (s *Store) recoverFrom(m *checkpoint.Manifest, refs []segment.SegmentRef, d
 		s.opts.Log.Info("recovery.hashkind_diverge",
 			"manifest declara outro hashKind; o header prevalece",
 			"manifest_hashkind", m.HashKind, "header_hashkind", s.prim.HashKind())
+	}
+
+	// As duas janelas de crash da aposentadoria (§53-55, decisão D5) são
+	// fechadas AQUI, antes de qualquer conclusão sobre o conjunto de
+	// segmentos — e é por isso que o refs é relistado logo abaixo: ele foi
+	// montado pelo Open ANTES deste reparo, e a checagem "segmento do
+	// manifest ausente" que vem a seguir recusaria o dataset com base numa
+	// listagem que o reparo acabou de tornar obsoleta.
+	//
+	// A ordem entre reparo e checagem é a tarefa inteira: o rename da
+	// aposentadoria existe justamente para que os bytes fiquem em disco até o
+	// manifest concordar, e conferir o conjunto antes de restaurá-los faria o
+	// Open condenar como corrompido um dataset íntegro.
+	mudou, err := reparaAposentados(dataDir, m.Segments)
+	if err != nil {
+		return err
+	}
+	if mudou {
+		refs, err = segment.ListSegments(dataDir)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Conjunto de segmentos: todos os do manifest precisam existir no
@@ -179,6 +204,97 @@ func (s *Store) recoverFrom(m *checkpoint.Manifest, refs []segment.SegmentRef, d
 		s.opts.traceRecovery(s)
 	}
 	return nil
+}
+
+// reparaAposentados fecha as duas janelas de crash da decisão D5, e é a
+// contrapartida obrigatória de a aposentadoria ser feita em três tempos
+// (checkpoint, rename, unlink) em vez de um unlink só. Devolve se mexeu no
+// diretório, porque quem chama montou a listagem de segmentos antes.
+//
+// O nome aposentado só pode ter sido escrito por um processo que MORREU no
+// meio da aposentadoria — nenhum caminho vivo o deixa para trás —, e o
+// manifest é quem diz qual das duas metades ficou por fazer:
+//
+//	segmento LISTADO   → o crash caiu entre o rename e o checkpoint. O
+//	                     manifest ainda nomeia o segmento, e um segmento
+//	                     listado e ausente é ErrDatasetCorrupt logo abaixo:
+//	                     RESTAURAR é o que impede o Open de condenar um
+//	                     dataset inteiro.
+//	segmento NÃO listado → o crash caiu entre o checkpoint e o unlink. Nenhuma
+//	                     location e nenhum manifest referenciam mais aqueles
+//	                     bytes, e como o ListSegments ignora o nome não
+//	                     canônico, nada além disto voltaria a mencioná-los:
+//	                     REMOVER é a única forma de a compaction devolver o
+//	                     disco que promete.
+func reparaAposentados(dataDir string, listados []checkpoint.SegmentInfo) (bool, error) {
+	entradas, err := os.ReadDir(dataDir)
+	if err != nil {
+		return false, fmt.Errorf("storage: listar %s: %w", dataDir, err)
+	}
+	noManifest := make(map[uint32]struct{}, len(listados))
+	for _, si := range listados {
+		noManifest[si.ID] = struct{}{}
+	}
+	mudou := false
+	for _, e := range entradas {
+		if e.IsDir() {
+			continue
+		}
+		seg, ok := idDoNomeAposentado(e.Name())
+		if !ok {
+			continue
+		}
+		aposentado := filepath.Join(dataDir, e.Name())
+		canonico := caminhoCanonicoDoSegmento(dataDir, seg)
+		presente, err := arquivoExiste(canonico)
+		if err != nil {
+			return mudou, err
+		}
+		_, listado := noManifest[seg]
+		// Restaurar exige as DUAS condições. A segunda é defensiva e a
+		// sequência do D5 não a produz — o rename cria um nome e apaga o outro
+		// no mesmo passo atômico —, mas a alternativa é um rename
+		// incondicional, e rename SOBRESCREVE: o dataset perderia o segmento
+		// que o manifest nomeia para ficar com um resíduo. É a única forma de
+		// este reparo destruir dado, e ela custa um Stat.
+		if listado && !presente {
+			if err := os.Rename(aposentado, canonico); err != nil {
+				return mudou, fmt.Errorf("storage: restaurar o segmento aposentado %d: %w", seg, err)
+			}
+			mudou = true
+			continue
+		}
+		if err := os.Remove(aposentado); err != nil {
+			return mudou, fmt.Errorf("storage: remover o segmento aposentado %d: %w", seg, err)
+		}
+		mudou = true
+	}
+	if !mudou {
+		return false, nil
+	}
+	// O fsync do diretório é o mesmo da rotação (segment.go:140): sem ele o
+	// reparo é só uma entrada de diretório em cache, e um segundo crash
+	// devolveria o dataset exatamente ao estado que se acabou de consertar.
+	if err := fsyncDir(dataDir); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+// arquivoExiste separa "não está lá" de "não deu para olhar". A distinção é
+// load-bearing no reparo acima: tratar um EIO como ausência faria o reparo
+// REMOVER um arquivo aposentado por não ter conseguido enxergar o canônico —
+// decidir destruição com base numa leitura que falhou é a mesma família do
+// instrumento que devolve resultado sem ter medido.
+func arquivoExiste(caminho string) (bool, error) {
+	_, err := os.Stat(caminho)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return false, fmt.Errorf("storage: verificar %s: %w", caminho, err)
 }
 
 // replayState carrega o que o replay precisa lembrar entre records.

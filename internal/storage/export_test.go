@@ -71,3 +71,8 @@ func (s *Store) CorrompeEspelhoParaTeste(fn func(*Store)) {
 	defer s.wmu.Unlock()
 	fn(s)
 }
+
+// SetAposentadoriaTraceForTest instala o gravador dos passos da aposentadoria
+// de segmento (seam de teste; nil em produção). É por ele que o crash test
+// para o processo DENTRO de cada janela do D5.
+func (s *Store) SetAposentadoriaTraceForTest(fn func(passo string)) { s.apTrace = fn }

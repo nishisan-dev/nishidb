@@ -234,3 +234,351 @@ func TestKill9NoMeioDaCompactionPreservaOEstadoConfirmado(t *testing.T) {
 	t.Logf("kill -9 com %d rows confirmadas e %d bytes de cópia já em disco; todas voltaram após o recovery",
 		confirmadas, discoDosSegmentos(t, dataDir)-discoAntes)
 }
+
+// ---------------------------------------------------------------------------
+// Task 6 — as duas janelas do D5, montadas em disco
+// ---------------------------------------------------------------------------
+
+const (
+	// rowsDaAposentadoria é bem menor que o corpus da varredura porque o que
+	// estes testes precisam ter em disco é outra coisa: não uma compaction
+	// longa o bastante para o sinal cair no meio dela, e sim um segmento
+	// SELADO com manifest que o liste. Com segmentos de 4 KiB isto dá algumas
+	// dezenas de arquivos, e a conferência row a row do critério de aceite
+	// custa milissegundos.
+	rowsDaAposentadoria = 600
+	// segmentoAposentavel é sempre o 1: ele é o primeiro a ser selado, logo é
+	// o único que se pode afirmar não-corrente sem consultar o Stats — e a
+	// decisão D6 proíbe eleger o corrente.
+	segmentoAposentavel = 1
+	// sufixoAposentadoNoTeste repete o sufixo em vez de importar a constante
+	// de produção DE PROPÓSITO: o que estes testes afirmam é que o Open repara
+	// um nome específico deixado em disco por um processo que já morreu, e um
+	// oráculo que segue a constante concordaria com ela mesmo depois de alguém
+	// trocá-la — o dataset da versão anterior é que ficaria sem reparo.
+	sufixoAposentadoNoTeste = ".retired"
+)
+
+func chaveDaAposentadoria(i int) string { return fmt.Sprintf("ap-%05d", i) }
+
+// datasetComSegmentoSelado monta um dataset FECHADO, com manifest gravado e
+// mais de um segmento — a precondição comum a todas as janelas do D5, porque
+// o arquivo que a aposentadoria renomeia é sempre um segmento selado.
+func datasetComSegmentoSelado(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	s := audOpen(t, Options{Dir: dir, SegmentSize: segmentoDoKill9})
+	for i := 0; i < rowsDaAposentadoria; i++ {
+		k := chaveDaAposentadoria(i)
+		mustPut(t, s, k, int64(i), statusPayload(t, s, k, "Start", int64(i)), nil)
+	}
+	if err := s.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint da montagem: %v", err)
+	}
+	if got := s.Stats().SegmentsTotal; got < 2 {
+		t.Fatalf("a montagem ficou com %d segmento(s): sem um SELADO não há o que aposentar", got)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close da montagem: %v", err)
+	}
+	return dir
+}
+
+// exigeCorpusDaAposentadoriaIntacto confere TODA key do corpus, uma a uma,
+// com payload e sequence. Amostragem não serve aqui: o modo de falha desta
+// tarefa é a row que ficou apontando para um arquivo REMOVIDO, e ela é uma só
+// entre centenas — um sorteio a perde e devolve verde.
+func exigeCorpusDaAposentadoriaIntacto(t *testing.T, s *Store, quando string) {
+	t.Helper()
+	for i := 0; i < rowsDaAposentadoria; i++ {
+		k := chaveDaAposentadoria(i)
+		rec, _, ok, err := s.GetByKey([]byte(k), nil)
+		if err != nil || !ok {
+			t.Fatalf("%s: a row %q sumiu (ok=%v, err=%v)", quando, k, ok, err)
+		}
+		if rec.Sequence != int64(i) {
+			t.Fatalf("%s: a row %q voltou com sequence %d, gravada com %d", quando, k, rec.Sequence, i)
+		}
+		if want := statusPayload(t, s, k, "Start", int64(i)); !bytes.Equal(rec.Payload, want) {
+			t.Fatalf("%s: o payload da row %q mudou", quando, k)
+		}
+	}
+}
+
+// TestCrashEntreORenameEOCheckpointRestauraOSegmento cobre a única janela em
+// que a aposentadoria produz estado INCONSISTENTE: o manifest ainda lista o
+// segmento e o arquivo já não tem nome canônico. Sem o reparo, o Open sai com
+// ErrDatasetCorrupt (store_recovery.go: "segmento do manifest ausente") num
+// dataset que está inteiro em disco — a decisão D5 renomeia justamente para
+// que os bytes continuem lá até o manifest concordar, e de nada adianta
+// mantê-los se ninguém sabe devolvê-los ao nome que o manifest nomeia.
+func TestCrashEntreORenameEOCheckpointRestauraOSegmento(t *testing.T) {
+	dir := datasetComSegmentoSelado(t)
+	canonico := audSegPath(dir, segmentoAposentavel)
+	antes, err := os.Stat(canonico)
+	if err != nil {
+		t.Fatalf("stat do segmento a aposentar: %v", err)
+	}
+	if err := os.Rename(canonico, canonico+sufixoAposentadoNoTeste); err != nil {
+		t.Fatalf("simular o rename da aposentadoria: %v", err)
+	}
+
+	s := openStore(t, Options{Dir: dir, SegmentSize: segmentoDoKill9})
+	depois, err := os.Stat(canonico)
+	if err != nil {
+		t.Fatalf("o segmento %d não foi restaurado: %v", segmentoAposentavel, err)
+	}
+	if depois.Size() != antes.Size() {
+		t.Errorf("o segmento restaurado tem %d bytes e tinha %d: o reparo não devolveu o mesmo arquivo",
+			depois.Size(), antes.Size())
+	}
+	if _, err := os.Stat(canonico + sufixoAposentadoNoTeste); !os.IsNotExist(err) {
+		t.Errorf("o nome aposentado sobreviveu ao reparo (err=%v): o próximo Open o veria como órfão e o removeria", err)
+	}
+	exigeCorpusDaAposentadoriaIntacto(t, s, "após restaurar o segmento renomeado")
+}
+
+// TestRetiredOrfaoNaoListadoEhRemovidoNoOpen cobre a outra janela: o crash
+// entre o checkpoint e o unlink deixa em disco bytes que NENHUM manifest
+// referencia mais. Sem a varredura, a compaction devolveria menos disco a
+// cada ciclo do que promete, e o resíduo é permanente — o ListSegments ignora
+// o nome não canônico de propósito, então nem o checkpoint nem o Stats
+// voltariam a mencionar o arquivo para alguém notar.
+func TestRetiredOrfaoNaoListadoEhRemovidoNoOpen(t *testing.T) {
+	dir := datasetComSegmentoSelado(t)
+	// O órfão é uma cópia fiel de um segmento real: é isto que o rename da
+	// aposentadoria deixa para trás, e um arquivo de brinquedo não provaria
+	// que o reparo remove o que ele de fato encontra.
+	bytesDoSegmento, err := os.ReadFile(audSegPath(dir, segmentoAposentavel))
+	if err != nil {
+		t.Fatalf("ler o segmento de origem: %v", err)
+	}
+	orfao := audSegPath(dir, 9999) + sufixoAposentadoNoTeste
+	if err := os.WriteFile(orfao, bytesDoSegmento, 0o644); err != nil {
+		t.Fatalf("plantar o órfão: %v", err)
+	}
+
+	s := openStore(t, Options{Dir: dir, SegmentSize: segmentoDoKill9})
+	if _, err := os.Stat(orfao); !os.IsNotExist(err) {
+		t.Errorf("o .retired órfão sobreviveu ao Open (err=%v): são %d bytes que ninguém referencia e nada mais remove",
+			err, len(bytesDoSegmento))
+	}
+	exigeCorpusDaAposentadoriaIntacto(t, s, "após remover o órfão não listado")
+}
+
+// TestRetiredComOCanonicoPresenteEhDescartadoEmVezDeSobrescrever fixa o ramo
+// DEFENSIVO do reparo, e o registro é honesto: a sequência do D5 não produz
+// este estado, porque o rename cria o nome aposentado e apaga o canônico no
+// mesmo passo atômico. O ramo existe porque a alternativa é pior — restaurar
+// por rename incondicional SOBRESCREVE o arquivo que o manifest nomeia, e o
+// candidato a sobrescrevê-lo é justamente um resíduo antigo. Trocar o
+// segmento vivo por um resíduo é a única forma de este reparo PERDER dado.
+func TestRetiredComOCanonicoPresenteEhDescartadoEmVezDeSobrescrever(t *testing.T) {
+	dir := datasetComSegmentoSelado(t)
+	canonico := audSegPath(dir, segmentoAposentavel)
+	vivo, err := os.ReadFile(canonico)
+	if err != nil {
+		t.Fatalf("ler o segmento vivo: %v", err)
+	}
+	if err := os.WriteFile(canonico+sufixoAposentadoNoTeste, []byte("resíduo de um ciclo anterior"), 0o644); err != nil {
+		t.Fatalf("plantar o resíduo ao lado do canônico: %v", err)
+	}
+
+	s := openStore(t, Options{Dir: dir, SegmentSize: segmentoDoKill9})
+	depois, err := os.ReadFile(canonico)
+	if err != nil {
+		t.Fatalf("o segmento vivo sumiu: %v", err)
+	}
+	if !bytes.Equal(vivo, depois) {
+		t.Fatalf("o reparo sobrescreveu o segmento %d com o resíduo: %d bytes viraram %d",
+			segmentoAposentavel, len(vivo), len(depois))
+	}
+	if _, err := os.Stat(canonico + sufixoAposentadoNoTeste); !os.IsNotExist(err) {
+		t.Errorf("o resíduo sobreviveu ao Open (err=%v)", err)
+	}
+	exigeCorpusDaAposentadoriaIntacto(t, s, "após descartar o resíduo ao lado do canônico")
+}
+
+// ---------------------------------------------------------------------------
+// Task 6 — kill -9 DENTRO de cada janela do D5
+// ---------------------------------------------------------------------------
+
+const (
+	// envAposentadoriaKill9 e envJanelaDoKill9 levam ao processo filho o
+	// dataset e o passo em que ele deve parar de existir. São variáveis de
+	// ambiente pela mesma razão do envKill9Compaction: o filho é o PRÓPRIO
+	// binário de teste reexecutado, e uma flag nova vazaria para a suíte
+	// inteira.
+	envAposentadoriaKill9 = "NISHIDB_APOSENTADORIA_KILL9_DIR"
+	envJanelaDoKill9      = "NISHIDB_APOSENTADORIA_KILL9_JANELA"
+	// Os dois passos que abrem janela. Matar o processo fora deles não
+	// exercita nada: antes do rename o dataset está íntegro e listado, e
+	// depois do unlink já não há aposentadoria em curso.
+	passoDoRename               = "rename"
+	passoDoCheckpointDoManifest = "checkpointDoManifest"
+)
+
+// aposentaAteAJanela é o corpo do processo FILHO: ingere, confirma o estado
+// com um checkpoint, compacta o segmento selado e entra na aposentadoria —
+// onde para de progredir no passo pedido, avisa o pai e espera o sinal. Nunca
+// retorna por bem: se o SIGKILL não chegar, ele falha, e o pai vê o código de
+// saída errado em vez de um verde inventado.
+func aposentaAteAJanela(t *testing.T, dir, janela, marcador string) {
+	t.Helper()
+	s, err := Open(Options{Dir: dir, SegmentSize: segmentoDoKill9})
+	if err != nil {
+		t.Fatalf("Open no filho: %v", err)
+	}
+	for i := 0; i < rowsDaAposentadoria; i++ {
+		k := chaveDaAposentadoria(i)
+		mustPut(t, s, k, int64(i), statusPayload(t, s, k, "Start", int64(i)), nil)
+	}
+	// É este checkpoint que define "estado confirmado" (§10): o manifest
+	// gravado aqui é o contrato que o SIGKILL não pode quebrar.
+	if err := s.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint no filho: %v", err)
+	}
+	if _, _, _, err := s.compactaSegmento(context.Background(), segmentoAposentavel); err != nil {
+		t.Fatalf("compactaSegmento no filho: %v", err)
+	}
+	s.SetAposentadoriaTraceForTest(func(passo string) {
+		if passo != janela {
+			return
+		}
+		if err := os.WriteFile(marcador, []byte(passo), 0o644); err != nil {
+			t.Fatalf("gravar o marcador da janela %q: %v", passo, err)
+		}
+		// O processo fica aqui até morrer. O sleep em laço, e não um select{}
+		// vazio, porque o runtime abate um programa cujas goroutines estão
+		// TODAS bloqueadas — o filho morreria de deadlock detectado em vez de
+		// pelo sinal, e o pai leria um código de saída que não é o do kill.
+		prazo := time.Now().Add(60 * time.Second)
+		for time.Now().Before(prazo) {
+			time.Sleep(2 * time.Millisecond)
+		}
+		t.Fatalf("o filho parou na janela %q e o SIGKILL não chegou", passo)
+	})
+	if err := s.aposentaSegmento(segmentoAposentavel); err != nil {
+		t.Fatalf("aposentaSegmento no filho: %v", err)
+	}
+	t.Fatalf("a aposentadoria terminou sem passar pela janela %q: o teste não exercitou janela nenhuma", janela)
+}
+
+// kill9NaJanelaDaAposentadoria mata o processo DENTRO de uma das duas janelas
+// do D5 e exige que o dataset volte inteiro pela reabertura. É o item 3 do
+// critério de aceite da Task 6, no molde do
+// TestKill9NoMeioDaIngestaoPreservaOEstadoConfirmado (internal/cli): processo
+// filho de verdade, SIGKILL de verdade, sem defer, sem Close e sem chance de
+// o programa arrumar a casa antes de morrer.
+//
+// O que ele cobre e o teste de unidade do reparo não cobre: lá o estado em
+// disco é MONTADO pelo teste, aqui ele é PRODUZIDO pelo código sob teste. Um
+// reparo aferido só contra a montagem concorda com a ideia que o teste tem da
+// aposentadoria, não com o que ela deixa em disco.
+func kill9NaJanelaDaAposentadoria(t *testing.T, janela string) {
+	t.Helper()
+	if dir := os.Getenv(envAposentadoriaKill9); dir != "" {
+		aposentaAteAJanela(t, dir, os.Getenv(envJanelaDoKill9), filepath.Join(filepath.Dir(dir), "pronto"))
+		return
+	}
+	if testing.Short() {
+		t.Skip("reexecuta o binário de teste e mata o processo filho")
+	}
+
+	raiz := t.TempDir()
+	dir := filepath.Join(raiz, "ds")
+	marcador := filepath.Join(raiz, "pronto")
+
+	cmd := exec.Command(os.Args[0], "-test.run=^"+t.Name()+"$", "-test.v")
+	cmd.Env = append(os.Environ(), envAposentadoriaKill9+"="+dir, envJanelaDoKill9+"="+janela)
+	var saida strings.Builder
+	cmd.Stdout = &saida
+	cmd.Stderr = &saida
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("iniciar o filho: %v", err)
+	}
+	falha := func(formato string, args ...any) {
+		t.Helper()
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+		t.Fatalf(formato+"\nsaída do filho:\n%s", append(args, saida.String())...)
+	}
+	if !esperaPor(120*time.Second, func() bool { _, err := os.Stat(marcador); return err == nil }) {
+		falha("o filho não chegou à janela %q", janela)
+	}
+
+	if err := cmd.Process.Signal(syscall.SIGKILL); err != nil {
+		falha("enviar o SIGKILL: %v", err)
+	}
+	estado, err := cmd.Process.Wait()
+	if err != nil {
+		t.Fatalf("aguardar o filho: %v", err)
+	}
+	if estado.ExitCode() != -1 {
+		t.Fatalf("o filho saiu com %d em vez de morrer pelo sinal\nsaída do filho:\n%s", estado.ExitCode(), saida.String())
+	}
+
+	// O estado em disco tem de ser o da janela, e não o de outra: sem esta
+	// conferência o teste passaria com o processo morto em qualquer lugar, que
+	// é precisamente o que ele existe para não fazer.
+	canonico := audSegPath(dir, segmentoAposentavel)
+	aposentado := canonico + sufixoAposentadoNoTeste
+	if _, err := os.Stat(canonico); !os.IsNotExist(err) {
+		t.Fatalf("o segmento %d ainda tem o nome canônico (err=%v): o kill não caiu depois do rename", segmentoAposentavel, err)
+	}
+	if _, err := os.Stat(aposentado); err != nil {
+		t.Fatalf("o arquivo aposentado não está em disco (%v): o kill caiu depois do unlink e a janela não foi exercitada", err)
+	}
+	m, err := checkpoint.Load(filepath.Join(dir, "checkpoint", "manifest.bin"))
+	if err != nil {
+		t.Fatalf("carregar o manifest deixado pelo kill: %v", err)
+	}
+	listado := false
+	for _, si := range m.Segments {
+		if si.ID == segmentoAposentavel {
+			listado = true
+		}
+	}
+	precisaRestaurar := janela == passoDoRename
+	if listado != precisaRestaurar {
+		t.Fatalf("o manifest %s o segmento %d na janela %q: não é o estado que a janela produz",
+			map[bool]string{true: "ainda lista", false: "já não lista"}[listado], segmentoAposentavel, janela)
+	}
+	if m.RowCount < rowsDaAposentadoria {
+		t.Fatalf("o checkpoint confirmou %d rows de %d: o corpus não chegou inteiro ao disco", m.RowCount, rowsDaAposentadoria)
+	}
+
+	// A reabertura roda o reparo e o recovery inteiro. Um Open que recuse o
+	// dataset é reprovação, não observação.
+	s := openStore(t, Options{Dir: dir, SegmentSize: segmentoDoKill9})
+	if _, err := os.Stat(aposentado); !os.IsNotExist(err) {
+		t.Errorf("o arquivo aposentado sobreviveu ao Open (err=%v)", err)
+	}
+	_, errCanonico := os.Stat(canonico)
+	if precisaRestaurar && errCanonico != nil {
+		t.Errorf("o segmento %d, que o manifest ainda lista, não foi restaurado: %v", segmentoAposentavel, errCanonico)
+	}
+	if !precisaRestaurar && errCanonico == nil {
+		t.Errorf("o segmento %d voltou ao nome canônico sem que o manifest o listasse: o órfão foi restaurado em vez de removido",
+			segmentoAposentavel)
+	}
+	exigeCorpusDaAposentadoriaIntacto(t, s, "após o kill -9 na janela "+janela)
+	t.Logf("kill -9 na janela %q: %d rows confirmadas, dataset reaberto sem erro e conferido uma a uma", janela, m.RowCount)
+}
+
+// TestKill9EntreORenameEOCheckpointDevolveODatasetInteiro exercita a janela em
+// que o manifest ainda lista um segmento que já não tem nome canônico — a
+// única da aposentadoria em que o dataset em disco é INCONSISTENTE, e a que
+// custaria ErrDatasetCorrupt num dataset íntegro se o reparo não existisse.
+func TestKill9EntreORenameEOCheckpointDevolveODatasetInteiro(t *testing.T) {
+	kill9NaJanelaDaAposentadoria(t, passoDoRename)
+}
+
+// TestKill9EntreOCheckpointEOUnlinkDevolveODatasetInteiro exercita a outra:
+// o manifest já não nomeia o segmento e os bytes continuam em disco sob um
+// nome que o ListSegments ignora. Nada volta a mencioná-los — sem a varredura
+// do Open, cada ciclo de compaction devolveria menos disco do que promete, em
+// silêncio.
+func TestKill9EntreOCheckpointEOUnlinkDevolveODatasetInteiro(t *testing.T) {
+	kill9NaJanelaDaAposentadoria(t, passoDoCheckpointDoManifest)
+}

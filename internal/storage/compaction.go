@@ -3,13 +3,61 @@ package storage
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 	"github.com/nishisan-dev/nishidb/internal/storage/rowindex"
 	"github.com/nishisan-dev/nishidb/internal/storage/segment"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
+
+// sufixoAposentado marca o segmento cujos records vivos já migraram para
+// frente. O nome deixa de ser canônico DE PROPÓSITO: o ListSegments ignora
+// não-canônicos (segment.go:252), então o próximo manifest já não o lista sem
+// que um único byte tenha saído do disco. É isso que fecha a janela entre o
+// unlink e o manifest, em que um segmento LISTADO e AUSENTE vira
+// ErrDatasetCorrupt no Open seguinte (store_recovery.go:88) — a decisão D5
+// mantém os bytes em disco até o manifest concordar em não precisar deles.
+const sufixoAposentado = ".retired"
+
+// nomeCanonicoDoSegmento repete o formato que o segment.ListSegments
+// reconhece (segment.go:249). A repetição é o preço de a aposentadoria ser
+// ciclo de vida de ARQUIVO, e não de record: o pacote segment não expõe o
+// caminho de um segmento, e inventar aqui um segundo formato "quase igual"
+// seria pior que repetir o mesmo.
+//
+// Ela não fica solta. Padding ou grafia divergentes fazem o os.Rename da
+// aposentadoria sair com ENOENT — não existe caminho em que a divergência
+// remova o arquivo errado —, e é a aposentadoria bem-sucedida do
+// TestAposentadoriaPodaOSegmentoDosMapasNaMesmaSecaoCritica que afirma o
+// acordo com o nome que o writer de fato criou.
+const nomeCanonicoDoSegmento = "segment-%08d.dat"
+
+func caminhoCanonicoDoSegmento(dataDir string, seg uint32) string {
+	return filepath.Join(dataDir, fmt.Sprintf(nomeCanonicoDoSegmento, seg))
+}
+
+// idDoNomeAposentado devolve o segmento que um nome aposentado descreve, e
+// recusa tudo o mais. A recusa por igualdade EXATA é a mesma do ListSegments
+// (segment.go:254) e pelo mesmo motivo: o Sscanf aceita padding divergente,
+// de modo que dois nomes diferentes responderiam o mesmo id — e aqui o id
+// decide entre RESTAURAR o arquivo e REMOVÊ-LO.
+func idDoNomeAposentado(nome string) (uint32, bool) {
+	base, temSufixo := strings.CutSuffix(nome, sufixoAposentado)
+	if !temSufixo {
+		return 0, false
+	}
+	var id uint32
+	if _, err := fmt.Sscanf(base, nomeCanonicoDoSegmento, &id); err != nil || id == 0 {
+		return 0, false
+	}
+	if base != fmt.Sprintf(nomeCanonicoDoSegmento, id) {
+		return 0, false
+	}
+	return id, true
+}
 
 // reapendaSeVivo re-apenda o record de (seg, off) no segmento corrente se, e
 // somente se, a location da row ainda o nomear. Devolve se copiou e quantos
@@ -277,4 +325,121 @@ func (s *Store) tamanhoDoSegmento(seg uint32) (int64, error) {
 		}
 	}
 	return 0, fmt.Errorf("%w: o segmento %d saiu do diretório durante a própria compaction", ErrDatasetCorrupt, seg)
+}
+
+// aposentaSegmento tira do dataset o segmento que a varredura esvaziou. É o
+// primeiro código do projeto que APAGA arquivo, e a ordem dos quatro passos é
+// a decisão D5 inteira — cada um deles existe para que um crash no passo
+// seguinte deixe um estado que o Open saiba reparar.
+//
+//  1. Checkpoint      as republicações da varredura viram duráveis. Até o
+//     ApplyOverlay elas vivem no overlay em memória, e é este
+//     Checkpoint que as leva ao mmap e ao manifest.
+//  2. rename          o segmento sai do ListSegments sem sair do disco. O
+//     manifest vigente ainda o nomeia — é a janela em que um
+//     crash exige o reparo do reparaAposentados, e é o preço
+//     de NÃO destruir os bytes antes de o manifest concordar.
+//  3. Checkpoint      o manifest é reconstruído a partir do ListSegments, que
+//     já não enxerga o arquivo. Daqui em diante nenhum estado
+//     durável referencia o segmento.
+//  4. unlink          só agora os bytes saem, e o que um crash pode deixar é
+//     um arquivo que ninguém referencia — resíduo, não perda.
+//
+// Inverter 3 e 4 é a troca que perde dado: o unlink com o manifest ainda
+// nomeando o segmento produz "listado e ausente", que o Open trata como
+// ErrDatasetCorrupt (store_recovery.go:88) — o dataset inteiro recusado por
+// causa de um arquivo que já não tinha nada vivo.
+//
+// A seleção do candidato NÃO mora aqui: quem decide qual segmento vale a pena
+// e nunca elege o corrente (decisão D6) é a Task 7. Esta função obedece, e
+// pressupõe que a varredura completa do compactaSegmento já rodou — é ela que
+// dá autoridade para afirmar que nenhuma location aponta para dentro deste
+// arquivo.
+func (s *Store) aposentaSegmento(seg uint32) error {
+	dataDir := filepath.Join(s.opts.Dir, "data")
+	canonico := caminhoCanonicoDoSegmento(dataDir, seg)
+	aposentado := canonico + sufixoAposentado
+
+	if err := s.Checkpoint(); err != nil {
+		return err
+	}
+	s.passoDaAposentadoria("checkpointDasLocations")
+
+	if err := os.Rename(canonico, aposentado); err != nil {
+		return fmt.Errorf("storage: aposentar o segmento %d: %w", seg, err)
+	}
+	// O fsync do diretório vem ANTES do checkpoint que deixa de listar o
+	// segmento, e não junto do unlink lá embaixo, porque é ele que torna a
+	// ordem dos passos verdadeira em DISCO e não apenas no programa: sem ele,
+	// o manifest novo pode sobreviver a um crash que a entrada de diretório
+	// não sobreviveu, e o dataset reabriria com o arquivo canônico de volta e
+	// nenhum manifest o nomeando — os mesmos bytes que esta função existe para
+	// devolver, presos até que alguém eleja o segmento outra vez.
+	if err := fsyncDir(dataDir); err != nil {
+		return err
+	}
+	if err := s.podaSegmentoAposentado(seg); err != nil {
+		return err
+	}
+	s.passoDaAposentadoria("rename")
+
+	if err := s.Checkpoint(); err != nil {
+		return err
+	}
+	s.passoDaAposentadoria("checkpointDoManifest")
+
+	if err := os.Remove(aposentado); err != nil {
+		return fmt.Errorf("storage: remover o segmento aposentado %d: %w", seg, err)
+	}
+	if err := fsyncDir(dataDir); err != nil {
+		return err
+	}
+	s.passoDaAposentadoria("unlink")
+	return nil
+}
+
+// podaSegmentoAposentado tira o segmento dos dois mapas de contabilidade e
+// ajusta os espelhos na MESMA seção crítica — invariante 4 da Fase B.
+//
+// A reconciliação do checkpoint se cura sozinha logo adiante (ela reconstrói
+// o segSize do ListSegments e poda o tally do que sobrou), e é por isso que a
+// poda não muda o estado FINAL de nada. O que ela decide é a janela entre o
+// rename e esse checkpoint: sem ela, o /v1/stats e a nishidb_segments_total
+// publicam nesse intervalo um segmento que já não está no diretório e bytes
+// que o filesystem já não cobra — mentira curta, mas exatamente do tipo que o
+// §92 existe para não contar, e numa série cujo propósito é mostrar a
+// compaction acontecendo.
+//
+// Nada é RECALCULADO aqui: o que se desconta é exatamente o que este segmento
+// reivindicava, pelo mesmo motivo do zeramento do tally — recalcular exigiria
+// varrer todos os segmentos sob o wmu, que é a varredura que a Fase A′ tirou
+// do Stats. A subtração em complemento de dois é a forma que o applyRecord já
+// usa (store.go:948): Go não tem Sub atômico para inteiro sem sinal, e
+// ^(x-1) devolve 0 para x==0, então tally já vazio não vira underflow.
+func (s *Store) podaSegmentoAposentado(seg uint32) error {
+	if err := s.entra(); err != nil {
+		return err
+	}
+	defer s.sai()
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	if t := s.segTally[seg]; t != nil {
+		s.liveBytesAll.Add(^(t.liveBytes - 1))
+		delete(s.segTally, seg)
+		// segCount espelha a QUANTIDADE de entradas do tally (é o que o
+		// agregadosDoTally conta), não o conjunto de arquivos: a baixa
+		// acompanha a entrada que acabou de sair, e só ela.
+		s.segCount.Add(^uint32(0))
+	}
+	if n, tinha := s.segSize[seg]; tinha {
+		s.diskBytesAll.Add(-n)
+		delete(s.segSize, seg)
+	}
+	return nil
+}
+
+func (s *Store) passoDaAposentadoria(passo string) {
+	if s.apTrace != nil {
+		s.apTrace(passo)
+	}
 }

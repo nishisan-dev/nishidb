@@ -252,6 +252,15 @@ type Store struct {
 	// cpTrace é o seam de teste da ordem de durabilidade do checkpoint
 	// (nil em produção).
 	cpTrace func(step string)
+	// apTrace é o seam de teste dos passos da aposentadoria de segmento
+	// (§53-55, decisão D5). Nil em produção, mesmo regime do cpTrace acima.
+	//
+	// Existe porque as duas janelas de crash da aposentadoria são o intervalo
+	// ENTRE dois passos, e nenhuma delas é alcançável de fora: quem quer matar
+	// o processo entre o rename e o checkpoint precisa de um ponto de parada
+	// lá dentro, e reproduzir o estado à mão só afirmaria sobre a ideia que o
+	// teste faz da aposentadoria, não sobre o que ela deixa em disco.
+	apTrace func(passo string)
 	// clearErrHook/setErrHook são seams de teste das fases de Clear e Set
 	// dos bitmaps (nil em produção; setErrHook viabiliza o phantom commit
 	// com payload replayável).
