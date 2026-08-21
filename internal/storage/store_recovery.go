@@ -30,6 +30,12 @@ func (s *Store) recoverFrom(m *checkpoint.Manifest, refs []segment.SegmentRef, d
 		// mapa e o repovoa pelo ListSegments. Semear aqui seria escrita que
 		// nenhuma leitura alcança — não existe Stats() possível entre este
 		// ponto e o checkpoint, porque o Store ainda não saiu do Open.
+		//
+		// Pelo mesmo argumento, os espelhos atômicos que o Stats lê
+		// (segCount/liveBytesAll/diskBytesAll) também não são semeados: o
+		// replay do tail vai somar neles pelo applyRecord sem a base do
+		// manifest, e é o Checkpoint do Open que os recarrega com o valor
+		// absoluto. Ninguém observa o intervalo.
 	}
 	// PrimarySlotCount/HashKind do manifest são ADVISORY: a fonte de
 	// verdade é o header do primary.idx (um rehash pós-checkpoint deixa o

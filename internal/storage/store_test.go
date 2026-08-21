@@ -9,6 +9,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 	"github.com/nishisan-dev/nishidb/internal/types"
@@ -616,4 +617,62 @@ func TestVisibilidadeLeitorConcorrente(t *testing.T) {
 	}
 	close(stop)
 	wg.Wait()
+}
+
+// TestStatsNaoBloqueiaAtrasDoCheckpoint fixa a propriedade que o godoc de
+// Stats sempre prometeu e que a conta de disco tinha tirado dele: leitor
+// concorrente NÃO espera o writer. O Checkpoint segura o wmu do início ao
+// fim, e o histograma dele vai até 30s porque é esse o intervalo padrão do
+// §78 — um Stats atrás desse lock apaga o /metrics e o /v1/stats exatamente
+// sob a pressão que eles existem para mostrar. Num milestone cujo objetivo é
+// tornar a curva de disco visível (§92), é a regressão mais cara possível.
+//
+// O cenário sai do seam de trace do checkpoint: o hook segura o passo
+// msyncLocations, que roda DENTRO da seção crítica do writer, e o teste mede
+// quanto o Stats demora com o checkpoint parado ali. Sem espelho atômico dos
+// agregados, ele demora o checkpoint inteiro.
+func TestStatsNaoBloqueiaAtrasDoCheckpoint(t *testing.T) {
+	s := openStore(t, Options{})
+	// Records o bastante para o snapshot ter o que somar: um Stats que
+	// devolvesse zeros passaria no teste de tempo sem provar nada.
+	const n = 200
+	for i := 0; i < n; i++ {
+		k := fmt.Sprintf("blk-%03d", i)
+		mustPut(t, s, k, int64(i), statusPayload(t, s, k, "Start", int64(i)), nil)
+	}
+
+	entrou := make(chan struct{})
+	liberado := make(chan struct{})
+	s.SetCheckpointTraceForTest(func(passo string) {
+		if passo != "msyncLocations" {
+			return
+		}
+		close(entrou)
+		<-liberado // segura o checkpoint DENTRO da seção crítica do writer
+	})
+	// Desinstalar é higiene, não detalhe: o hook fecha um canal, e todo
+	// caminho de saída deste teste já esperou o checkpoint terminar — deixar
+	// o seam armado transformaria um checkpoint futuro em panic de
+	// close-of-closed-channel.
+	defer s.SetCheckpointTraceForTest(nil)
+	cpFim := make(chan error, 1)
+	go func() { cpFim <- s.Checkpoint() }()
+	<-entrou
+
+	pronto := make(chan Stats, 1)
+	go func() { pronto <- s.Stats() }()
+	select {
+	case got := <-pronto:
+		if got.SegmentsTotal == 0 || got.RowCount != n {
+			t.Errorf("Stats respondeu rápido mas com snapshot vazio: %+v", got)
+		}
+	case <-time.After(2 * time.Second):
+		close(liberado)
+		<-cpFim
+		t.Fatal("Stats bloqueou atrás do checkpoint: o painel cega justamente sob pressão")
+	}
+	close(liberado)
+	if err := <-cpFim; err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
 }

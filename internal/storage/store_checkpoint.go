@@ -165,6 +165,34 @@ func (s *Store) checkpoint() error {
 			delete(s.segTally, id)
 		}
 	}
+	// Recarga dos espelhos que o Stats lê sem tomar o wmu. É este laço — a
+	// varredura que o Stats fazia sob o lock do writer — trazido para dentro
+	// da seção crítica onde ele sempre pertenceu, e o Stats fica com três
+	// Load atômicos.
+	//
+	// O ponto é aqui, e não no fim do checkpoint, porque é aqui que os dois
+	// mapas voltaram a concordar sobre QUAIS segmentos existem. E é dos
+	// mapas, não do manifest, que os espelhos são cópia: se a gravação
+	// abaixo falhar, o estado em memória continua sendo este, e é este que o
+	// Stats tem de descrever.
+	//
+	// A assimetria do segSize é a mesma de antes, e continua deliberada:
+	// segmento que o writer conhece mas que o último ListSegments não viu
+	// contribui com zero bytes, o que mantém StorageBytes num limite
+	// INFERIOR e nunca inventa disco que não existe.
+	var (
+		segmentos  uint32
+		vivoTotal  uint64
+		discoTotal int64
+	)
+	for id, t := range s.segTally {
+		segmentos++
+		vivoTotal += t.liveBytes
+		discoTotal += s.segSize[id]
+	}
+	s.segCount.Store(segmentos)
+	s.liveBytesAll.Store(vivoTotal)
+	s.diskBytesAll.Store(discoTotal)
 	for field, ix := range s.bitmaps {
 		m.Bitmaps = append(m.Bitmaps, checkpoint.BitmapInfo{
 			FieldID:              field,

@@ -170,6 +170,33 @@ type Store struct {
 	// curSegID espelha o segmento corrente para leitura concorrente em
 	// Stats (segment.Writer não é thread-safe).
 	curSegID atomic.Uint32
+	// segCount/liveBytesAll/diskBytesAll espelham os AGREGADOS de segTally e
+	// segSize, no mesmo padrão do curSegID acima e pelo mesmo motivo: o que
+	// atravessa a fronteira writer→leitor não pode ser a estrutura, tem de
+	// ser o número. Mapa Go não se lê sem sincronizar (é fatal error do
+	// runtime, não corrida benigna), e sincronizar aqui significaria tomar o
+	// wmu no Stats — que o Checkpoint segura do início ao fim, com histograma
+	// que vai até 30s (o intervalo padrão do §78). Um Stats atrás desse lock
+	// apagaria o /metrics e o /v1/stats exatamente sob a pressão que eles
+	// existem para mostrar, que num milestone dedicado a tornar a curva de
+	// disco visível (§92) é a regressão mais cara possível.
+	//
+	// Escrita WRITER-ONLY, sob wmu, nos mesmos pontos em que os mapas se
+	// movem: applyRecord (nascimento de segmento e delta de liveness) e a
+	// reconciliação do checkpoint, que recarrega os três com os valores
+	// absolutos. Custo no caminho quente: uma soma atômica por Put, zero
+	// alocação — os gates de AllocsPerRun seguem valendo.
+	//
+	// Os três são atômicos INDEPENDENTES, então um leitor pode pegar um
+	// deles de antes e outro de depois do mesmo checkpoint. É aceito de
+	// propósito: os campos que eles alimentam já são declaradamente limites
+	// (inferior no disco, superior no vivo), e nenhuma decisão operacional
+	// depende de os três descreverem o mesmo nanossegundo. Um snapshot
+	// coerente exigiria publicar uma struct por ponteiro atômico, ou seja uma
+	// alocação por Put, para servir uma raspagem de métrica.
+	segCount     atomic.Uint32
+	liveBytesAll atomic.Uint64
+	diskBytesAll atomic.Int64
 	// clearFailures conta erros tolerados na fase de Clear dos bitmaps
 	// (deixam falso positivo, filtrado pelo §44); exposto via métricas na S13.
 	clearFailures atomic.Uint64
@@ -848,10 +875,16 @@ func (s *Store) applyRecord(a recordApply) error {
 	if tally == nil {
 		tally = &segStats{}
 		s.segTally[a.seg] = tally
+		// Nascimento de entrada no tally é nascimento de segmento aos olhos
+		// do writer — é por aqui que uma rotação aparece no Stats no instante
+		// em que acontece, sem esperar o checkpoint relistar o diretório
+		// (é o que o TestRotacaoDeSegmentoNoPut exige).
+		s.segCount.Add(1)
 	}
 	tally.totalRecords++
 	tally.liveRecords++
 	tally.liveBytes += uint64(a.recLen)
+	s.liveBytesAll.Add(uint64(a.recLen))
 	// Update torna o record ANTERIOR garbage no instante do publish:
 	// decrementa a liveness do segmento antigo (lida ANTES do publish
 	// sobrescrever a location). Segmentos pré-restart têm o tally semeado
@@ -864,11 +897,19 @@ func (s *Store) applyRecord(a recordApply) error {
 				if t.liveRecords > 0 {
 					t.liveRecords--
 				}
-				if t.liveBytes >= oldLen {
-					t.liveBytes -= oldLen
-				} else {
-					t.liveBytes = 0
-				}
+				// A BAIXA é calculada antes de mexer no tally, e o espelho
+				// desconta exatamente ela — nunca o oldLen cru. O oldLen é
+				// estimativa (débitos 38 e 45) e o clamp em zero abaixo é o
+				// que impede o tally de furar por baixo; descontar o valor
+				// não-clampado do agregado o faria divergir da soma dos
+				// tallies num erro que só cresce, e o agregado é justamente
+				// o que o Stats publica no lugar da soma.
+				baixa := min(oldLen, t.liveBytes)
+				t.liveBytes -= baixa
+				// Go não tem Sub atômico para Uint64; ^(x-1) é o complemento
+				// de dois de -x, que é o idioma da própria stdlib (e devolve
+				// 0 para x==0, então a baixa nula não vira underflow).
+				s.liveBytesAll.Add(^(baixa - 1))
 			}
 		}
 	}
@@ -1284,16 +1325,23 @@ func (s *Store) syncLocked() error {
 }
 
 // Stats devolve o snapshot de estado do Store. Seguro para uso concorrente
-// com o writer (o segmento corrente vem de um espelho atômico, não do
-// segment.Writer). RowCount conta rows CRIADAS — não decrementa em
+// com o writer, e o "seguro" aqui é forte: Stats NÃO toma o wmu, então nunca
+// espera o writer. RowCount conta rows CRIADAS — não decrementa em
 // tombstone; a contagem de vivas é semântica da S14.
 //
-// Os campos de disco custam o mutex do writer: segSize e segTally são
-// writer-only, e ler mapa sem o lock é fatal error em Go, não corrida
-// benigna. O custo é um stall curto e limitado — os dois mapas têm uma
-// entrada por SEGMENTO, não por row — e é o mesmo preço que o Checkpoint já
-// paga. Ler cópia atômica desses totais exigiria manter um espelho a cada
-// Put, que é caro no caminho quente para servir uma raspagem de métrica.
+// Tudo o que sai daqui vem de leitura atômica, inclusive os campos de disco.
+// A alternativa — varrer segTally/segSize sob o wmu, que são writer-only e
+// não se leem sem sincronizar — foi TENTADA e desfeita: o Checkpoint segura
+// o wmu do início ao fim, com histograma que vai até 30s por ser esse o
+// intervalo padrão do §78, e todo scrape de /metrics e toda chamada de
+// /v1/stats passariam a parar atrás dele. O painel cegaria exatamente sob a
+// pressão que ele existe para observar. A varredura mudou de lugar, não de
+// forma: agora roda na reconciliação do checkpoint, que já está sob o lock, e
+// deixa o resultado nos espelhos.
+//
+// Os espelhos são três atômicos independentes: um leitor pode pegar um deles
+// de antes e outro de depois do mesmo checkpoint. A ressalva está na
+// declaração dos campos, junto do motivo de ela ser aceitável.
 func (s *Store) Stats() Stats {
 	if err := s.entra(); err != nil {
 		return Stats{}
@@ -1304,40 +1352,23 @@ func (s *Store) Stats() Stats {
 	if slots := s.prim.SlotCount(); slots > 0 {
 		lf = float64(s.prim.Used()) / float64(slots)
 	}
-	// A iteração é sobre o tally porque ele é o mapa que anda nos DOIS
-	// relógios: ganha entrada no applyRecord, então uma rotação aparece na
-	// contagem no instante em que acontece, e é reconciliado com o
-	// ListSegments a cada checkpoint (semeadura do segmento que o writer
-	// nunca tocou, poda do que o diretório não lista mais). Iterar o segSize
-	// perderia o primeiro relógio e quebraria o TestRotacaoDeSegmentoNoPut,
-	// que exige a rotação visível sem checkpoint; iterar o tally SEM a
-	// reconciliação perde o segundo, que é o que faz um segmento aposentado
-	// pela compaction (§53-55) sumir da contagem.
-	//
-	// O segSize entra só como consulta, e a assimetria é deliberada: segmento
-	// que o writer conhece mas que o último ListSegments não viu contribui
-	// com zero bytes, o que mantém StorageBytes num limite INFERIOR e nunca
-	// inventa disco que não existe.
-	var (
-		storageBytes int64
-		liveBytes    uint64
-		segmentos    uint32
-	)
-	s.wmu.Lock()
-	for id, t := range s.segTally {
-		segmentos++
-		liveBytes += t.liveBytes
-		storageBytes += s.segSize[id]
-	}
-	s.wmu.Unlock()
+	// SegmentsTotal vem do espelho do tally, e não do segSize, porque o tally
+	// é o mapa que anda nos DOIS relógios: ganha entrada no applyRecord, então
+	// uma rotação aparece na contagem no instante em que acontece, e é
+	// reconciliado com o ListSegments a cada checkpoint (semeadura do segmento
+	// que o writer nunca tocou, poda do que o diretório não lista mais).
+	// Espelhar o segSize perderia o primeiro relógio e quebraria o
+	// TestRotacaoDeSegmentoNoPut, que exige a rotação visível sem checkpoint;
+	// espelhar o tally SEM a reconciliação perde o segundo, que é o que faz um
+	// segmento aposentado pela compaction (§53-55) sumir da contagem.
 	return Stats{
 		RowCount:            s.rowCount.Load(),
-		SegmentsTotal:       segmentos,
+		SegmentsTotal:       s.segCount.Load(),
 		CurrentSegmentID:    segID,
 		PrimaryLoadFactor:   lf,
 		OverlayLen:          s.locs.OverlayLen(),
-		StorageBytes:        storageBytes,
-		LiveBytesUpperBound: liveBytes,
+		StorageBytes:        s.diskBytesAll.Load(),
+		LiveBytesUpperBound: s.liveBytesAll.Load(),
 	}
 }
 
