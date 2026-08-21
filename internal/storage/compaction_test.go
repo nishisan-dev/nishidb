@@ -14,6 +14,7 @@ import (
 
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 	"github.com/nishisan-dev/nishidb/internal/storage/rowindex"
+	"github.com/nishisan-dev/nishidb/internal/storage/segment"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
@@ -843,9 +844,9 @@ func TestCopyForwardQueRotacionaAtualizaOSegmentoCorrentePublicado(t *testing.T)
 		t.Fatal("o copy-forward não rotacionou em 200 cópias: o teste não chegou a exercitar o espelho")
 	}
 
-	real := segmentoCorrenteDoWriter(s)
-	if got := s.Stats().CurrentSegmentID; got != real {
-		t.Errorf("CurrentSegmentID = %d e o writer está no %d: o copy-forward rotacionou e o espelho ficou para trás", got, real)
+	correnteDeFato := segmentoCorrenteDoWriter(s)
+	if got := s.Stats().CurrentSegmentID; got != correnteDeFato {
+		t.Errorf("CurrentSegmentID = %d e o writer está no %d: o copy-forward rotacionou e o espelho ficou para trás", got, correnteDeFato)
 	}
 	// A mentira não cicatriza. O checkpoint recarrega os espelhos de liveness
 	// e NÃO o curSegID; sem esta segunda asserção alguém poderia supor que o
@@ -853,8 +854,8 @@ func TestCopyForwardQueRotacionaAtualizaOSegmentoCorrentePublicado(t *testing.T)
 	if err := s.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
-	if got := s.Stats().CurrentSegmentID; got != real {
-		t.Errorf("CurrentSegmentID = %d depois do checkpoint e o writer está no %d: este espelho não é reconciliado", got, real)
+	if got := s.Stats().CurrentSegmentID; got != correnteDeFato {
+		t.Errorf("CurrentSegmentID = %d depois do checkpoint e o writer está no %d: este espelho não é reconciliado", got, correnteDeFato)
 	}
 }
 
@@ -1110,4 +1111,117 @@ func TestVarreduraQueParaAntesDoFimDoArquivoNaoZeraOTally(t *testing.T) {
 			recs, vivo, copiados, escritos, recsAntes, vivoAntes, recsAntes-copiados, vivoAntes-uint64(escritos))
 	}
 	exigeEspelhoIgualAosTallies(t, s, "após a varredura que parou em record corrompido")
+}
+
+// TestZeramentoDoTallyRecusaDepoisDoCloseSemRecordParaCopiar cobre o entra()
+// do ZERAMENTO — o único trecho da compactaSegmento que roda fora da seção de
+// vida do reapendaSeVivo e que nenhuma asserção defendia. Apagar as quatro
+// linhas do guard deixava a suíte inteira verde, e guard de ciclo de vida que
+// a suíte não defende é mecanismo que o próximo refator remove sem notar.
+//
+// A porta é um segmento SEM record, e é deliberada. Com record, o dataset
+// fechado já é recusado antes, pelo entra() do reapendaSeVivo (fixado pelo
+// TestCopyForwardRecusaDepoisDoClose): o erro sairia idêntico com e sem o
+// guard do zeramento, e o teste seria vacuoso — mediria o guard errado. Num
+// segmento que só tem o header a varredura termina COMPLETA, sem erro e com o
+// prefixo válido igual ao arquivo, então o gate de corrupção deixa passar e o
+// zeramento é de fato alcançado. O único jeito de a chamada não devolver
+// sucesso, aí, é o guard.
+//
+// E "sucesso" é o ponto, não o valor do tally: sem o guard, compactaSegmento
+// devolve nil para um dataset FECHADO — e é sobre esse nil que a
+// aposentadoria da Task 6 vai decidir renomear e depois remover o arquivo. A
+// recusa é da mesma família da do copy-forward: erro, não panic, porque a
+// ingestão tem política para erro (§101) e não tem para panic.
+//
+// ALCANCE, registrado honestamente: o que fica fixado é "dataset fechado
+// ANTES da chamada". A outra janela do guard — o Close aterrissando ENTRE o
+// fim da varredura e o zeramento — não é alcançável pela suíte sem um seam de
+// produção que a Task 5 não pede, e é redundante por projeto: pela decisão D7
+// o Close cancela e AGUARDA a goroutine de compaction antes de tomar o
+// vida.Lock().
+func TestZeramentoDoTallyRecusaDepoisDoCloseSemRecordParaCopiar(t *testing.T) {
+	s := openStore(t, Options{})
+	const seg = 1
+	if got := s.Stats().CurrentSegmentID; got != seg {
+		t.Fatalf("montagem: o writer abriu no segmento %d e o vazio deste teste é o %d", got, seg)
+	}
+
+	// A precondição é o teste inteiro: se houvesse UM record, o erro viria do
+	// entra() do reapendaSeVivo e esta função não estaria medindo nada.
+	var visitados int
+	fimValido, err := s.segR.ScanFrom(seg, segment.HeaderSize, func(uint32, types.Record) error {
+		visitados++
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("montagem: varredura do segmento recém-criado: %v", err)
+	}
+	if visitados != 0 {
+		t.Fatalf("montagem: o segmento %d já tem %d records, e a porta deste teste é justamente não ter nenhum", seg, visitados)
+	}
+	tamanho, err := s.tamanhoDoSegmento(seg)
+	if err != nil {
+		t.Fatalf("montagem: tamanho do segmento %d: %v", seg, err)
+	}
+	if fimValido != tamanho {
+		t.Fatalf("montagem: prefixo válido de %d bytes contra arquivo de %d — assim o gate de corrupção responderia antes do guard",
+			fimValido, tamanho)
+	}
+
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	copiados, lidos, escritos, err := s.compactaSegmento(context.Background(), seg)
+	if !errors.Is(err, ErrDatasetClosed) {
+		t.Fatalf("compactaSegmento sobre dataset fechado devolveu %v, queria ErrDatasetClosed: "+
+			"varredura sem record termina completa e chega ao zeramento, e zerar tally de dataset fechado "+
+			"é reportar sucesso sobre um dataset que já foi embora", err)
+	}
+	if copiados != 0 || lidos != 0 || escritos != 0 {
+		t.Errorf("a varredura de um segmento vazio contabilizou %d records / %d lidos / %d escritos, queria 0/0/0",
+			copiados, lidos, escritos)
+	}
+}
+
+// TestVarreduraContaComoLidoOArquivoInteiroMenosOHeader fixa a aritmética dos
+// números que a compactaSegmento devolve, porque a Task 8 vai publicá-los
+// como série de compaction e comentário não é oráculo.
+//
+// `lidos` soma RecordHeaderSize + key + payload a partir de
+// segment.HeaderSize: vale o tamanho do arquivo MENOS o header do segmento,
+// não o arquivo inteiro. São 64 bytes de viés por segmento compactado, e
+// métrica com viés constante é pior que métrica ausente — ela parece medir. É
+// a mesma família do defeito dos tetos do lint: instrumento que devolve
+// resultado sem ter medido o que diz medir.
+//
+// O oráculo é o ARQUIVO em disco, e não uma segunda soma sobre os mesmos
+// records: repetir a soma provaria apenas que ela é determinística. E o
+// arquivo é medido de novo no fim porque a Task 5 ainda não devolve disco
+// nenhum — quem aposenta o segmento é a Task 6, e até lá o que a varredura
+// leu continua todo lá.
+func TestVarreduraContaComoLidoOArquivoInteiroMenosOHeader(t *testing.T) {
+	s, dir, _ := abreComResiduoOrfaoNoSegmento1(t)
+	tamanho := fileSizeAud(t, audSegPath(dir, 1))
+
+	copiados, lidos, escritos, err := s.compactaSegmento(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("compactaSegmento: %v", err)
+	}
+	if copiados == 0 {
+		t.Fatal("nenhum record copiado: a varredura não exercitou o copy-forward")
+	}
+	if lidos != tamanho-segment.HeaderSize {
+		t.Errorf("lidos = %d bytes num arquivo de %d bytes cujo header ocupa %d: a varredura começa DEPOIS do "+
+			"header, e é esta conta — arquivo menos header — que a série de compaction da Task 8 vai publicar",
+			lidos, tamanho, int64(segment.HeaderSize))
+	}
+	if escritos <= 0 || escritos >= lidos {
+		t.Errorf("a varredura leu %d bytes e escreveu %d: o destino recebe só a parte viva, e a distância entre "+
+			"os dois é o disco que a aposentadoria da Task 6 devolve", lidos, escritos)
+	}
+	if depois := fileSizeAud(t, audSegPath(dir, 1)); depois != tamanho {
+		t.Errorf("o segmento de origem foi de %d para %d bytes: a Task 5 copia para frente e não encolhe arquivo "+
+			"nenhum, então a conta acima seguiria valendo", tamanho, depois)
+	}
 }

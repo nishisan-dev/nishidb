@@ -136,8 +136,17 @@ func (s *Store) reapendaSeVivo(seg, off uint32, rec types.Record) (copiado bool,
 //
 // Devolve quantos records foram copiados, quantos bytes a varredura LEU da
 // origem e quantos ESCREVEU no destino. Os três são diferentes por
-// construção: `lidos` conta o arquivo inteiro, `escritos` só a parte viva, e
-// a distância entre eles é o disco que a aposentadoria da Task 6 vai devolver.
+// construção: `lidos` conta os RECORDS, `escritos` só a parte viva, e a
+// distância entre eles é o disco que a aposentadoria da Task 6 vai devolver.
+//
+// `lidos` NÃO é o arquivo inteiro: a soma começa em segment.HeaderSize e
+// acumula RecordHeaderSize + key + payload, logo vale exatamente o tamanho do
+// arquivo MENOS o header de 64 bytes do segmento. A precisão importa porque a
+// Task 8 publica estes números como série de compaction, e viés constante em
+// métrica é pior que métrica ausente — no gráfico ele não se distingue de
+// medida. Fixado pelo TestVarreduraContaComoLidoOArquivoInteiroMenosOHeader,
+// cujo oráculo é o arquivo em disco e não uma segunda soma dos mesmos
+// records.
 //
 // Terminada a varredura COMPLETA — sem cancelamento, sem erro e tendo
 // alcançado o fim do arquivo —, nenhuma location aponta para seg, e é por
@@ -205,6 +214,21 @@ func (s *Store) compactaSegmento(ctx context.Context, seg uint32) (copiados uint
 			ErrDatasetCorrupt, seg, fimValido, tamanho)
 	}
 
+	// O entra() é a MESMA recusa do reapendaSeVivo aplicada ao único trecho da
+	// compaction que roda fora dela. Sem ele, uma varredura que não teve
+	// record nenhum para copiar devolveria sucesso — nil — para um dataset já
+	// FECHADO, e é sobre esse nil que a aposentadoria da Task 6 decide
+	// renomear e depois remover o arquivo. Erro, não panic, pelo motivo de
+	// sempre: a ingestão tem política para erro (§101) e não tem para panic.
+	//
+	// O ramo é DEFENSIVO, não indispensável, e o registro é honesto: pela
+	// decisão D7 o Close cancela e AGUARDA a goroutine de compaction antes de
+	// tomar o vida.Lock(), então a janela "Close aterrissando ENTRE o fim da
+	// varredura e o zeramento" não existe em produção — e a suíte não a
+	// alcança sem um seam que esta tarefa não pede. O que está fixado é o
+	// dataset fechado ANTES da chamada, pelo
+	// TestZeramentoDoTallyRecusaDepoisDoCloseSemRecordParaCopiar; sem esse
+	// teste, apagar estas quatro linhas deixava a suíte inteira verde.
 	if err := s.entra(); err != nil {
 		return copiados, lidos, escritos, err
 	}
