@@ -333,8 +333,23 @@ func (s *Store) tamanhoDoSegmento(seg uint32) (int64, error) {
 // seguinte deixe um estado que o Open saiba reparar.
 //
 //  1. Checkpoint      as republicações da varredura viram duráveis. Até o
-//     ApplyOverlay elas vivem no overlay em memória, e é este
-//     Checkpoint que as leva ao mmap e ao manifest.
+//     ApplyOverlay elas vivem no overlay em memória
+//     (rowindex.go:171), e é este Checkpoint que as leva ao
+//     mmap e ao manifest. Quem afere este passo é o
+//     TestAposentadoriaTornaAsLocationsDuraveisAntesDoRename,
+//     e ele lê o ARQUIVO de locations por um segundo handle,
+//     não o Store: enquanto o segmento ainda tem o nome
+//     canônico, nenhuma das rows que a varredura moveu pode
+//     continuar presa a ele no disco. É preciso dizer o que
+//     este passo NÃO é: no desenho de hoje ele não é o que
+//     salva um crash — o passo 3 aplica o mesmo overlay, e
+//     os bytes de origem ficam sob o `.retired` durante a
+//     janela inteira, de modo que o reparo do Open devolve o
+//     dataset com ou sem ele. O que ele garante é que a
+//     ordem do D5 vale em DISCO desde o primeiro passo, e
+//     não a partir do segundo: nenhuma janela desta função
+//     tem location viva apontando para um arquivo que já
+//     perdeu o nome pelo qual o manifest o nomeia.
 //  2. rename          o segmento sai do ListSegments sem sair do disco. O
 //     manifest vigente ainda o nomeia — é a janela em que um
 //     crash exige o reparo do reparaAposentados, e é o preço
@@ -369,13 +384,26 @@ func (s *Store) aposentaSegmento(seg uint32) error {
 		return fmt.Errorf("storage: aposentar o segmento %d: %w", seg, err)
 	}
 	// O fsync do diretório vem ANTES do checkpoint que deixa de listar o
-	// segmento, e não junto do unlink lá embaixo, porque é ele que torna a
-	// ordem dos passos verdadeira em DISCO e não apenas no programa: sem ele,
-	// o manifest novo pode sobreviver a um crash que a entrada de diretório
-	// não sobreviveu, e o dataset reabriria com o arquivo canônico de volta e
-	// nenhum manifest o nomeando — os mesmos bytes que esta função existe para
-	// devolver, presos até que alguém eleja o segmento outra vez.
-	if err := fsyncDir(dataDir); err != nil {
+	// segmento, e não só junto do unlink lá embaixo, para que a ordem dos
+	// passos valha na ENTRADA DE DIRETÓRIO e não apenas no programa: o
+	// manifest do passo 3 é durável por conta própria (manifest.go:281
+	// fsyncia o diretório dele), e sem este fsync ele poderia sobreviver a um
+	// crash que o rename não sobreviveu — o dataset reabriria com o arquivo
+	// canônico de volta e nenhum manifest o nomeando, ou seja os mesmos bytes
+	// que esta função existe para devolver, presos até que alguém eleja o
+	// segmento outra vez.
+	//
+	// O REGISTRO HONESTO, porque a revisão cobrou esta linha e ela não estava
+	// no bloco da tarefa: o que a suíte prova é a CHAMADA e a POSIÇÃO dela —
+	// o TestAposentadoriaDurabilizaODiretorioNoRenameENoUnlink exige um fsync
+	// deste diretório num instante em que o disco já mostra o nome aposentado
+	// e o manifest AINDA nomeia o segmento, e outro depois do unlink. A
+	// reordenação que ele previne, essa não é alcançável pela suíte: exige
+	// perda de energia com writeback pela metade, e nem o kill -9 a produz
+	// (o SIGKILL não descarta page cache). É o mesmo tipo de registro dos
+	// ramos defensivos do entra() e do arquivoExiste() — a linha fica pelo
+	// argumento, e o argumento fica escrito.
+	if err := s.durabilizaODiretorio(dataDir); err != nil {
 		return err
 	}
 	if err := s.podaSegmentoAposentado(seg); err != nil {
@@ -391,10 +419,41 @@ func (s *Store) aposentaSegmento(seg uint32) error {
 	if err := os.Remove(aposentado); err != nil {
 		return fmt.Errorf("storage: remover o segmento aposentado %d: %w", seg, err)
 	}
-	if err := fsyncDir(dataDir); err != nil {
+	// O segundo fsync é o `syncDir(dir)` do fim que o bloco da tarefa previa,
+	// e fecha a mesma pergunta na outra ponta: sem ele a REMOÇÃO fica só na
+	// entrada de diretório em cache, e o ciclo seguinte de compaction acharia
+	// em disco um `.retired` que este já removeu. O Open o trata como órfão e
+	// remove de novo, então não há perda — o que se paga é medir disco que já
+	// foi devolvido, na única série que existe para mostrar a compaction
+	// acontecendo (§92).
+	if err := s.durabilizaODiretorio(dataDir); err != nil {
 		return err
 	}
 	s.passoDaAposentadoria("unlink")
+	return nil
+}
+
+// durabilizaODiretorio faz o fsync da entrada de diretório e só então avisa o
+// seam de teste. A ordem é o ponto: o aviso é consequência da chamada, não uma
+// linha ao lado dela, de modo que apagar o fsync apaga o aviso e o teste fica
+// vermelho. Um rótulo emitido ao lado provaria apenas que alguém escreveu o
+// rótulo — foi assim que o primeiro Checkpoint desta função passou por uma
+// revisão inteira sem oráculo nenhum, e o remédio é não repetir a forma.
+//
+// O limite fica escrito: o que o teste alcança é a EXISTÊNCIA e a POSIÇÃO da
+// chamada. Que o fsync de fato tenha levado a entrada de diretório ao meio
+// físico, isso nenhum teste deste repositório afirma de nenhum fsync — o
+// kernel não devolve observável para isso e o SIGKILL não descarta page
+// cache. Quem trocar o corpo desta função por um return nil não fica
+// vermelho; fica com uma função chamada "durabiliza" que não durabiliza, e é
+// a leitura que pega, não a suíte.
+func (s *Store) durabilizaODiretorio(dir string) error {
+	if err := fsyncDir(dir); err != nil {
+		return err
+	}
+	if s.apDirSync != nil {
+		s.apDirSync(dir)
+	}
 	return nil
 }
 

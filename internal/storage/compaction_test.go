@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -1238,6 +1239,17 @@ func TestVarreduraContaComoLidoOArquivoInteiroMenosOHeader(t *testing.T) {
 // consultasse aprovaria uma compaction que só mexeu na contabilidade — o
 // disco que o §86 dá 2 a 3 dias para encher não é o que o painel diz, é o que
 // o filesystem cobra.
+//
+// DIVERGÊNCIA declarada em relação ao item 1 do critério de aceite, que pede
+// "o tamanho do diretório": esta medida vê só `segment-*.dat`. Ela é mais
+// AFIADA, não mais frouxa — os índices são mmap de tamanho fixo que a
+// compaction não move, e somá-los junto dilui o sinal num denominador que não
+// participa do que se mede (no corpus deste teste são ~16 MB de índice contra
+// ~90 KB de segmento). É por isso que o piso da metade é aferido aqui, e só
+// aqui. O diretório INTEIRO, que é o texto literal do item, é medido pelo
+// discoDoDatasetInteiroPorOsStat logo abaixo e também tem de cair — sem isso,
+// a escolha de escopo ficaria por conta do implementador, e escopo escolhido
+// por quem é medido é exatamente o defeito que o §92 persegue.
 func discoDosSegmentosPorOsStat(t *testing.T, dir string) int64 {
 	t.Helper()
 	entradas, err := filepath.Glob(filepath.Join(dir, "data", "segment-*.dat"))
@@ -1251,6 +1263,42 @@ func discoDosSegmentosPorOsStat(t *testing.T, dir string) int64 {
 			t.Fatalf("stat %s: %v", p, err)
 		}
 		total += fi.Size()
+	}
+	return total
+}
+
+// discoDoDatasetInteiroPorOsStat é o item 1 do critério de aceite ao pé da
+// letra: TODO arquivo sob o diretório do dataset, um os.Stat por arquivo —
+// segmentos, índices, dicionários, manifest. É o número que o `du` do
+// operador devolveria, e o único capaz de responder à pergunta que o §86 faz
+// de verdade ("o volume para de encher?"), porque a compaction que encolhesse
+// os segmentos inflando um índice não teria devolvido nada a ninguém.
+//
+// Ele não substitui a medida por segmento, e o motivo está no godoc dela: os
+// índices são mmap de tamanho fixo e respondem pela quase totalidade destes
+// bytes, então a queda aqui é percentualmente pequena mesmo quando a
+// compaction fez todo o trabalho que podia. Por isso a asserção sobre este
+// número é de DIREÇÃO — tem de cair —, e a de magnitude fica com os
+// segmentos.
+func discoDoDatasetInteiroPorOsStat(t *testing.T, dir string) int64 {
+	t.Helper()
+	var total int64
+	err := filepath.WalkDir(dir, func(caminho string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		fi, err := os.Stat(caminho)
+		if err != nil {
+			return err
+		}
+		total += fi.Size()
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("percorrer o diretório do dataset %s: %v", dir, err)
 	}
 	return total
 }
@@ -1453,6 +1501,7 @@ func TestCompactionDevolveDiscoSemPerderNenhumaRow(t *testing.T) {
 		t.Fatalf("o corpus selou %d segmento(s): sem uma pilha de selados o teste não mede compaction nenhuma", len(alvos))
 	}
 	antes := discoDosSegmentosPorOsStat(t, dir)
+	antesDoDataset := discoDoDatasetInteiroPorOsStat(t, dir)
 	for _, seg := range alvos {
 		if _, _, _, err := s.compactaSegmento(context.Background(), seg); err != nil {
 			t.Fatalf("compactaSegmento(%d): %v", seg, err)
@@ -1462,11 +1511,22 @@ func TestCompactionDevolveDiscoSemPerderNenhumaRow(t *testing.T) {
 		}
 	}
 	depois := discoDosSegmentosPorOsStat(t, dir)
+	depoisDoDataset := discoDoDatasetInteiroPorOsStat(t, dir)
 	t.Logf("disco em segment-*.dat: %d bytes antes, %d depois — %d devolvidos ao filesystem em %d segmentos aposentados",
 		antes, depois, antes-depois, len(alvos))
+	t.Logf("diretório do dataset INTEIRO (item 1 do critério de aceite, ao pé da letra): %d bytes antes, %d depois — %d devolvidos",
+		antesDoDataset, depoisDoDataset, antesDoDataset-depoisDoDataset)
 
 	if depois >= antes {
 		t.Fatalf("o diretório saiu de %d para %d bytes: não houve compaction nenhuma", antes, depois)
+	}
+	// O item 1 pede o DIRETÓRIO, e é isto: se os segmentos encolhem enquanto o
+	// dataset inteiro não, a compaction moveu o custo de lugar em vez de
+	// devolvê-lo — e é o dataset inteiro que ocupa o volume que o §86 dá 2 a 3
+	// dias para encher.
+	if depoisDoDataset >= antesDoDataset {
+		t.Fatalf("os segmentos caíram de %d para %d bytes mas o dataset inteiro foi de %d para %d: "+
+			"o disco mudou de arquivo, não voltou para o filesystem", antes, depois, antesDoDataset, depoisDoDataset)
 	}
 	// O piso não é cosmética. Com %d rodadas sobre o mesmo key set, o vivo é
 	// uma fração pequena do escrito, então uma queda menor que a metade
@@ -1556,5 +1616,264 @@ func TestPodaDoSegmentoAposentadoDescontaOsTresEspelhos(t *testing.T) {
 	}
 	if got := s.EspelhosDivergentesForTest(); got != divergenciasAntes {
 		t.Errorf("o checkpoint seguinte acusou %d divergências contra %d antes da poda", got, divergenciasAntes)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Task 6 — a PRIMEIRA metade do invariante 3, aferida no arquivo de locations
+// ---------------------------------------------------------------------------
+
+// segmentosDuraveisDasRows lê a location de cada row no ARQUIVO, e não no
+// Store. A diferença é o teste inteiro: o Get do Store resolve overlay antes
+// do mmap (rowindex.go:152), então ele responde o destino da varredura desde o
+// instante da cópia — inclusive quando nada daquilo chegou ao disco. Um
+// segundo handle sobre o mesmo arquivo nasce com overlay vazio, de modo que o
+// que ele devolve é exatamente o que um processo que abrisse este dataset
+// agora encontraria.
+//
+// É a mesma técnica do TestReplayNaoDuplicaSlotComPrimaryAFrenteDasLocations,
+// que também vai ao locations.idx por fora do Store, e pela mesma razão:
+// afirmar sobre durabilidade consultando quem tem o estado em memória é
+// perguntar ao réu.
+func segmentosDuraveisDasRows(t *testing.T, dir string, rows []types.RowID) map[types.RowID]uint32 {
+	t.Helper()
+	locs, err := rowindex.OpenLocations(filepath.Join(dir, "indexes", "locations.idx"), 0)
+	if err != nil {
+		t.Fatalf("abrir o locations.idx para leitura independente: %v", err)
+	}
+	// O descarte é explícito porque este handle é só de LEITURA: ele não
+	// publicou nada, não tem overlay para aplicar e o unmap não pode falhar de
+	// um jeito que mude o que já foi lido. Fechar em silêncio um handle de
+	// escrita seria outra conversa.
+	defer func() { _ = locs.Close() }()
+	fora := make(map[types.RowID]uint32, len(rows))
+	for _, rid := range rows {
+		packed, ok := locs.Get(rid)
+		if !ok {
+			t.Fatalf("a row %d não tem location DURÁVEL: o dataset em disco não a nomeia em lugar nenhum", rid)
+		}
+		seg, _, _ := rowindex.Unpack(packed)
+		fora[rid] = seg
+	}
+	return fora
+}
+
+// contaPresasAoSegmento devolve quantas das rows ainda têm, EM DISCO, location
+// apontando para o segmento dado.
+func contaPresasAoSegmento(duraveis map[types.RowID]uint32, seg uint32) int {
+	n := 0
+	for _, s := range duraveis {
+		if s == seg {
+			n++
+		}
+	}
+	return n
+}
+
+// TestAposentadoriaTornaAsLocationsDuraveisAntesDoRename é a PRIMEIRA metade
+// do invariante 3 da Fase B — "o Checkpoint que torna as locations duráveis
+// acontece ANTES do rename" —, e existe porque a revisão desta tarefa mostrou
+// que ela não tinha oráculo nenhum: remover aquele Checkpoint e deixar a linha
+// do trace no lugar deixava `go test ./...` inteiro verde. O que segurava o
+// passo era a CONTAGEM de rótulos do teste da ordem, e contagem de rótulo
+// aprova qualquer no-op que continue chamando os mesmos nomes.
+//
+// O que este teste mede é outra coisa: o ARQUIVO de locations, lido por um
+// handle independente, em cada instante em que a aposentadoria dá sinal. A
+// asserção não é sobre o nome do passo, é sobre o disco — enquanto o segmento
+// AINDA TEM o nome canônico, nenhuma das rows que a varredura moveu pode
+// continuar presa a ele no arquivo. Com o Checkpoint no lugar, a varredura
+// republicou e o ApplyOverlay já levou tudo ao mmap; sem ele, as
+// republicações continuam no overlay em memória e o disco ainda nomeia o
+// segmento que está prestes a perder o nome.
+//
+// A âncora é FATO DE DISCO e não rótulo de propósito: quem apagar também a
+// linha do trace não escapa, porque aí não sobra observação nenhuma com o
+// canônico presente e o teste falha por vacuidade declarada — um oráculo que
+// não chegou a observar a janela não aprova ninguém.
+//
+// O que este teste NÃO afirma, e o registro é honesto: que um crash na janela
+// perderia dado sem o Checkpoint. Não perderia — o passo 3 aplica o mesmo
+// overlay e os bytes de origem ficam sob o `.retired` até o fim, de modo que o
+// reparo do Open devolve o dataset dos dois jeitos. O invariante 3 é sobre a
+// ORDEM valer em disco desde o primeiro passo, e é isso, exatamente isso, que
+// está aferido aqui.
+func TestAposentadoriaTornaAsLocationsDuraveisAntesDoRename(t *testing.T) {
+	dir := t.TempDir()
+	s := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10})
+	const n = 400
+	rows := make([]types.RowID, 0, n)
+	for i := 0; i < n; i++ {
+		k := fmt.Sprintf("dur-%03d", i)
+		rid, _ := mustPut(t, s, k, int64(i), statusPayload(t, s, k, "Start", int64(i)), nil)
+		rows = append(rows, rid)
+	}
+	const alvo = 1
+	var migradas []types.RowID
+	for _, rid := range rows {
+		if seg, _ := localizacaoDaRow(t, s, rid); seg == alvo {
+			migradas = append(migradas, rid)
+		}
+	}
+	if len(migradas) == 0 {
+		t.Fatal("nenhuma row viva no segmento 1: sem republicação para durabilizar, o teste aprovaria qualquer coisa")
+	}
+	// O checkpoint de base é o que põe a PRECONDIÇÃO em disco: sem ele as
+	// locations do corpus estariam no overlay desde sempre, e "ainda presa ao
+	// segmento 1" seria indistinguível de "nunca escrita".
+	if err := s.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint de base: %v", err)
+	}
+	if presas := contaPresasAoSegmento(segmentosDuraveisDasRows(t, dir, migradas), alvo); presas != len(migradas) {
+		t.Fatalf("o checkpoint de base deixou %d das %d rows fora do segmento %d em disco: a montagem não é a que o teste descreve",
+			len(migradas)-presas, len(migradas), alvo)
+	}
+
+	if _, _, _, err := s.compactaSegmento(context.Background(), alvo); err != nil {
+		t.Fatalf("compactaSegmento: %v", err)
+	}
+	// A premissa que dá sentido à asserção: a varredura republica no OVERLAY
+	// (rowindex.go:171), então neste instante o Store já responde o destino e
+	// o DISCO ainda nomeia a origem. É a diferença que o Checkpoint do passo 1
+	// existe para fechar — se ela não existisse aqui, o teste seria vacuidade
+	// com outro nome.
+	for _, rid := range migradas {
+		if seg, _ := localizacaoDaRow(t, s, rid); seg == alvo {
+			t.Fatalf("a row %d continua no segmento %d depois da varredura: o copy-forward não republicou nada", rid, alvo)
+		}
+	}
+	if presas := contaPresasAoSegmento(segmentosDuraveisDasRows(t, dir, migradas), alvo); presas != len(migradas) {
+		t.Fatalf("a varredura já deixou %d das %d republicações DURÁVEIS sem checkpoint nenhum: "+
+			"o overlay deixou de ser overlay e este teste não mede mais o passo 1", len(migradas)-presas, len(migradas))
+	}
+
+	canonico := audSegPath(dir, alvo)
+	type observacao struct {
+		passo    string
+		canonico bool
+		presas   int
+	}
+	var obs []observacao
+	s.SetAposentadoriaTraceForTest(func(passo string) {
+		_, errCanonico := os.Stat(canonico)
+		obs = append(obs, observacao{
+			passo:    passo,
+			canonico: errCanonico == nil,
+			presas:   contaPresasAoSegmento(segmentosDuraveisDasRows(t, dir, migradas), alvo),
+		})
+	})
+	defer s.SetAposentadoriaTraceForTest(nil)
+
+	if err := s.aposentaSegmento(alvo); err != nil {
+		t.Fatalf("aposentaSegmento: %v", err)
+	}
+
+	antesDoRename := 0
+	for _, o := range obs {
+		if !o.canonico {
+			continue
+		}
+		antesDoRename++
+		if o.presas != 0 {
+			t.Errorf("no passo %q o segmento %d ainda tinha o nome canônico e %d das %d locations republicadas continuavam presas a ele EM DISCO: "+
+				"o Checkpoint que as torna duráveis não rodou antes do rename (invariante 3 da Fase B, §53-55 D5)",
+				o.passo, alvo, o.presas, len(migradas))
+		}
+	}
+	if antesDoRename == 0 {
+		t.Fatalf("a aposentadoria não deu sinal nenhum enquanto o segmento %d ainda tinha o nome canônico (%+v): "+
+			"sem uma observação ANTES do rename este teste não afirma nada sobre a ordem", alvo, obs)
+	}
+}
+
+// TestAposentadoriaDurabilizaODiretorioNoRenameENoUnlink fixa as duas
+// chamadas de fsync de diretório da aposentadoria, e existe porque a revisão
+// as encontrou em produção com justificativa escrita e nenhum teste que
+// distinguisse a presença da ausência: apagar qualquer uma das duas deixava
+// o pacote verde.
+//
+// O oráculo não é a ordem dos avisos, é o estado do DIRETÓRIO no instante de
+// cada um — o aviso chega de dentro do helper, depois de o fsync devolver
+// nil, e o teste pergunta ao disco o que já aconteceu. São duas afirmações:
+//
+//  1. houve fsync do diretório de dados num instante em que o rename JÁ estava
+//     feito e o manifest AINDA nomeava o segmento. É a ponta que importa: o
+//     manifest do passo 3 se durabiliza sozinho, e sem este fsync ele poderia
+//     sobreviver a um rename que não sobreviveu.
+//  2. houve fsync depois do unlink, com o `.retired` já fora do disco e fora
+//     do manifest.
+//
+// O limite é declarado: isto prova a CHAMADA e a POSIÇÃO, não a reordenação
+// que ela previne — essa exige perda de energia com writeback pela metade, e
+// o kill -9 não a produz porque o SIGKILL não descarta page cache.
+func TestAposentadoriaDurabilizaODiretorioNoRenameENoUnlink(t *testing.T) {
+	dir := t.TempDir()
+	s := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10})
+	const n = 400
+	for i := 0; i < n; i++ {
+		k := fmt.Sprintf("fsy-%03d", i)
+		mustPut(t, s, k, int64(i), statusPayload(t, s, k, "Start", int64(i)), nil)
+	}
+	const alvo = 1
+	if _, _, _, err := s.compactaSegmento(context.Background(), alvo); err != nil {
+		t.Fatalf("compactaSegmento: %v", err)
+	}
+	canonico := audSegPath(dir, alvo)
+	aposentado := canonico + sufixoAposentadoNoTeste
+
+	type sinal struct {
+		dir        string
+		canonico   bool
+		aposentado bool
+		listado    bool
+	}
+	var sinais []sinal
+	s.SetSyncDeDiretorioTraceForTest(func(d string) {
+		m, err := checkpoint.Load(audManifestPath(dir))
+		if err != nil {
+			t.Fatalf("carregar o manifest no fsync de %q: %v", d, err)
+		}
+		listado := false
+		for _, si := range m.Segments {
+			if si.ID == alvo {
+				listado = true
+			}
+		}
+		_, errCanonico := os.Stat(canonico)
+		_, errAposentado := os.Stat(aposentado)
+		sinais = append(sinais, sinal{
+			dir:        d,
+			canonico:   errCanonico == nil,
+			aposentado: errAposentado == nil,
+			listado:    listado,
+		})
+	})
+	defer s.SetSyncDeDiretorioTraceForTest(nil)
+
+	if err := s.aposentaSegmento(alvo); err != nil {
+		t.Fatalf("aposentaSegmento: %v", err)
+	}
+
+	dataDir := filepath.Join(dir, "data")
+	depoisDoRename, depoisDoUnlink := false, false
+	for _, sn := range sinais {
+		if sn.dir != dataDir {
+			t.Errorf("a aposentadoria durabilizou o diretório %q, e o que ela renomeia e remove está em %q", sn.dir, dataDir)
+			continue
+		}
+		if !sn.canonico && sn.aposentado && sn.listado {
+			depoisDoRename = true
+		}
+		if !sn.canonico && !sn.aposentado && !sn.listado {
+			depoisDoUnlink = true
+		}
+	}
+	if !depoisDoRename {
+		t.Errorf("nenhum fsync de %q aconteceu com o rename feito e o manifest ainda nomeando o segmento %d (sinais: %+v): "+
+			"o manifest do passo 3 pode ficar durável sobre uma entrada de diretório que não ficou", dataDir, alvo, sinais)
+	}
+	if !depoisDoUnlink {
+		t.Errorf("nenhum fsync de %q aconteceu depois do unlink (sinais: %+v): a remoção fica só em cache e o ciclo seguinte "+
+			"volta a medir disco que esta função já devolveu", dataDir, sinais)
 	}
 }

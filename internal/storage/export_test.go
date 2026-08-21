@@ -76,3 +76,10 @@ func (s *Store) CorrompeEspelhoParaTeste(fn func(*Store)) {
 // de segmento (seam de teste; nil em produção). É por ele que o crash test
 // para o processo DENTRO de cada janela do D5.
 func (s *Store) SetAposentadoriaTraceForTest(fn func(passo string)) { s.apTrace = fn }
+
+// SetSyncDeDiretorioTraceForTest instala o observador dos fsyncs de diretório
+// da aposentadoria (seam de teste; nil em produção). Ele é chamado de dentro
+// do helper que executa o fsync, DEPOIS de o fsync devolver nil — quem apaga
+// a chamada apaga o aviso junto, que é a única forma de o teste distinguir a
+// presença da ausência de uma durabilidade que não deixa rastro em disco.
+func (s *Store) SetSyncDeDiretorioTraceForTest(fn func(dir string)) { s.apDirSync = fn }

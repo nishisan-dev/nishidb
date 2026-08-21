@@ -12,6 +12,34 @@ package storage
 // filho de verdade, SIGKILL de verdade, sem defer, sem Close e sem chance de
 // o programa arrumar a casa antes de morrer. A Task 6 acrescenta aqui as duas
 // janelas do rename/unlink da decisão D5.
+//
+// DIVERGÊNCIA DECLARADA em relação ao item 3 do critério de aceite NORMATIVO
+// da Task 6, que manda matar "o binário de verdade, no molde de
+// TestKill9NoMeioDaIngestaoPreservaOEstadoConfirmado
+// ([kill9_test.go:27](../cli/kill9_test.go:27))". Aquele molde tem DUAS
+// metades, e este arquivo cumpre uma delas:
+//
+//   - CUMPRIDO — o processo. O filho é um processo separado de verdade, com
+//     o dataset em disco de verdade, morto por SIGKILL de verdade, e o pai
+//     confere o código de saída para não confundir morte por sinal com saída
+//     por bem. É essa metade que decide se as janelas do D5 são reparáveis: o
+//     que o Open encontra é o que um processo morto deixou, não o que um
+//     teste montou à mão.
+//   - NÃO CUMPRIDO — o binário. Lá o filho é `go build ../../cmd/nishidb` e o
+//     morto é o PRODUTO; aqui o filho é o próprio binário de TESTE
+//     reexecutado por os.Args[0], porque `aposentaSegmento` não tem porta de
+//     entrada pelo cmd/nishidb até a Task 7 — não existe subcomando que a
+//     chame, e o único jeito de "matar o produto nesta janela" seria abrir um
+//     caminho de produção que esta tarefa não pede. A própria Task 7 pede o
+//     seu e2e "pelo nishidb compilado", o que mostra que o plano distingue as
+//     duas coisas e cobra a segunda de quem tem como entregá-la.
+//
+// O que fica em aberto, dito sem eufemismo: o binário de produção não é
+// exercitado nestas duas janelas por teste nenhum, e o que fecha o buraco é o
+// item 5 do critério de aceite da Task 7 (SIGTERM durante uma compaction de
+// verdade, sem `.retired` sobrevivente na reabertura). Registrar a divergência
+// aqui é o mínimo que o GC 9 pede — um arquivo que descrevesse só o que ele É
+// deixaria o leitor concluir que o item 3 foi cumprido inteiro.
 
 import (
 	"bytes"
@@ -466,10 +494,12 @@ func aposentaAteAJanela(t *testing.T, dir, janela, marcador string) {
 
 // kill9NaJanelaDaAposentadoria mata o processo DENTRO de uma das duas janelas
 // do D5 e exige que o dataset volte inteiro pela reabertura. É o item 3 do
-// critério de aceite da Task 6, no molde do
-// TestKill9NoMeioDaIngestaoPreservaOEstadoConfirmado (internal/cli): processo
+// critério de aceite da Task 6 na metade que esta tarefa alcança — processo
 // filho de verdade, SIGKILL de verdade, sem defer, sem Close e sem chance de
-// o programa arrumar a casa antes de morrer.
+// o programa arrumar a casa antes de morrer —, e NÃO na metade do binário de
+// produção: o filho é o próprio binário de teste reexecutado, pela razão
+// declarada no cabeçalho deste arquivo (aposentaSegmento não tem porta de
+// entrada pelo cmd/nishidb até a Task 7).
 //
 // O que ele cobre e o teste de unidade do reparo não cobre: lá o estado em
 // disco é MONTADO pelo teste, aqui ele é PRODUZIDO pelo código sob teste. Um

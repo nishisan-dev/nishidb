@@ -261,6 +261,19 @@ type Store struct {
 	// lá dentro, e reproduzir o estado à mão só afirmaria sobre a ideia que o
 	// teste faz da aposentadoria, não sobre o que ela deixa em disco.
 	apTrace func(passo string)
+	// apDirSync é o seam de teste dos fsyncs de DIRETÓRIO da aposentadoria
+	// (nil em produção, mesmo regime dos dois acima), e ele é notificado de
+	// DENTRO do helper que executa o fsync — nunca de uma linha ao lado.
+	//
+	// A distinção é a razão de o campo existir. Um rótulo emitido ao lado da
+	// chamada mede a si mesmo: apagar o fsync e deixar o rótulo continuaria
+	// verde, que é exatamente o defeito que a revisão desta tarefa encontrou
+	// no primeiro Checkpoint. Notificado de dentro, o aviso só chega se a
+	// chamada de verdade tiver acontecido e devolvido nil, e o teste ainda
+	// ancora CADA aviso no estado do diretório naquele instante — é assim
+	// que "houve fsync depois do rename e antes do manifest" vira asserção
+	// sobre o disco, e não sobre a ordem em que alguém escreveu rótulos.
+	apDirSync func(dir string)
 	// clearErrHook/setErrHook são seams de teste das fases de Clear e Set
 	// dos bitmaps (nil em produção; setErrHook viabiliza o phantom commit
 	// com payload replayável).
