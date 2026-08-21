@@ -1,6 +1,8 @@
 package server_test
 
 import (
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -148,5 +150,57 @@ func TestMetricaDeDiscoEhPublicadaComSemanticaDeLimite(t *testing.T) {
 	// varredura.
 	if _, ok := achaAmostra(amostras, metrics.MetStorageLiveBytes); ok {
 		t.Error("nishidb_storage_live_bytes foi publicada: o tally ainda é limite superior")
+	}
+}
+
+// TestStorageBytesBateComOsArquivosEmDisco é o oráculo que faltava: a série
+// tem de casar com a soma dos segment-*.dat, não apenas ser positiva.
+//
+// `Valor > 0` não é oráculo, é sinal de vida. A revisão adversarial provou
+// por mutação: publicar st.LiveBytesUpperBound — ou st.RowCount — no lugar de
+// st.StorageBytes deixava a suíte inteira verde. Ou seja, exatamente a
+// "métrica que mente" que o comentário de metricas_dataset.go declara estar
+// evitando: o tally de liveness, que é limite SUPERIOR (débitos 38 e 45), sob
+// um nome que promete tamanho de arquivo. É o débito 6 de novo — medir sem
+// oráculo.
+//
+// A soma é medida por os.Stat, e não por segment.ListSegments, DE PROPÓSITO:
+// ListSegments é a primitiva de onde o próprio StorageBytes sai, e um oráculo
+// que reusasse a fonte da medida provaria só que a soma foi copiada. O que
+// esta asserção afirma é a igualdade com o filesystem.
+//
+// A igualdade é EXATA, não aproximada, porque o seed fecha o store com
+// Checkpoint antes de o servidor abrir e nada apenda depois: o segSize do
+// último ListSegments descreve os arquivos que estão lá agora. Sob escrita
+// concorrente a série é limite inferior por frescor — a ressalva de frescor
+// está no godoc de Stats.StorageBytes —, mas aqui não há escrita concorrente,
+// e afrouxar a asserção para uma tolerância devolveria o buraco por onde o
+// mutante passou.
+func TestStorageBytesBateComOsArquivosEmDisco(t *testing.T) {
+	srv, dir := servidorComDadosEDiretorio(t, 100, blocoPadrao)
+
+	amostra, ok := achaAmostra(coletaAmostras(t, srv), metrics.MetStorageBytes)
+	if !ok {
+		t.Fatal("nishidb_storage_bytes não foi publicada")
+	}
+
+	entradas, err := filepath.Glob(filepath.Join(dir, "data", "segment-*.dat"))
+	if err != nil {
+		t.Fatalf("glob dos segmentos: %v", err)
+	}
+	var emDisco int64
+	for _, p := range entradas {
+		fi, err := os.Stat(p)
+		if err != nil {
+			t.Fatalf("stat %s: %v", p, err)
+		}
+		emDisco += fi.Size()
+	}
+	if emDisco == 0 {
+		t.Fatal("nenhum segmento em disco: o teste não estaria provando nada")
+	}
+	if int64(amostra.Valor) != emDisco {
+		t.Errorf("storage_bytes = %d e os arquivos em disco somam %d: a série não descreve o disco",
+			int64(amostra.Valor), emDisco)
 	}
 }
