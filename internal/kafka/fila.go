@@ -3,6 +3,7 @@ package kafka
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
 )
@@ -128,26 +129,43 @@ func (f *Fila) libera(n int64) {
 	}
 }
 
-// Recebe entrega o próximo item.
+// Recebe entrega o próximo item, esperando por ele o quanto for preciso.
+func (f *Fila) Recebe(ctx context.Context) (Item, bool) {
+	it, ok, _ := f.recebeOuAcorda(ctx, nil)
+	return it, ok
+}
+
+// recebeOuAcorda é o Recebe com uma saída a mais: o canal `acorda`.
+//
+// Existe pelo débito 56. O checkpoint por TEMPO tem de disparar mesmo sem
+// evento novo, e o Recebe puro deixa o writer dormindo no channel até chegar
+// um — com o tópico em dia, isso é para sempre. `acordou` distingue o
+// despertar do FIM da fila, que também devolve ok=false: tratar os dois igual
+// faria o writer encerrar o laço a cada intervalo.
+//
+// Com `acorda` nil o comportamento é exatamente o de antes, porque channel
+// nil nunca fica pronto num select.
 //
 // O orçamento de bytes é liberado AQUI, e não depois que o writer aplica o
 // evento: o que se está limitando é a memória retida pela FILA, e o record
 // que o writer está processando não está mais nela. Contar o evento em voo
 // tornaria a contabilidade mais conservadora e a API mais fácil de errar (o
 // chamador teria de devolver os bytes em todos os caminhos de erro).
-func (f *Fila) Recebe(ctx context.Context) (Item, bool) {
+func (f *Fila) recebeOuAcorda(ctx context.Context, acorda <-chan time.Time) (Item, bool, bool) {
 	if ctx.Err() != nil {
-		return Item{}, false
+		return Item{}, false, false
 	}
 	select {
 	case it, ok := <-f.ch:
 		if !ok {
-			return Item{}, false
+			return Item{}, false, false
 		}
 		f.libera(it.bytes)
-		return it, true
+		return it, true, false
+	case <-acorda:
+		return Item{}, false, true
 	case <-ctx.Done():
-		return Item{}, false
+		return Item{}, false, false
 	}
 }
 
