@@ -208,7 +208,14 @@ func TestCompactionHerdaODefaultDoParagrafo53(t *testing.T) {
 	if !habilitada {
 		t.Error("compaction ausente veio desligada; ausente vale ligada (§78)")
 	}
-	if ratio != compactionRatioPadrao {
+	// O 0.50 entra LITERAL, e não como compactionRatioPadrao: comparar a
+	// constante consigo mesma não prende número nenhum — trocar o padrão para
+	// 0.75 passaria por esta suíte inteira sem uma linha vermelha, e o único
+	// número que esta tarefa existe para fixar é justamente o que o §53 e o
+	// exemplo do §78 escrevem. A mensagem de falha também só é honesta assim:
+	// dizer "quer 0.50" enquanto se compara contra o que quer que a constante
+	// contenha é mentira em caso de divergência.
+	if ratio != 0.50 {
 		t.Errorf("minimumLiveRatio = %v, quer 0.50 (§53)", ratio)
 	}
 }
@@ -236,21 +243,77 @@ func TestCompactionDeclaradaVenceODefault(t *testing.T) {
 	}
 }
 
+// O terceiro estado de `enabled` é o do EXEMPLO do §78 — a chave escrita
+// `true` — e é o único que nenhum dos dois testes acima alcança: "ausente" e
+// `enabled: false` são os dois satisfeitos por um leitor que devolvesse
+// `enabled == nil`, e esse leitor devolveria DESLIGADA exatamente para o YAML
+// que a spec publica. O bloco entra aqui como o §78 o escreve, as duas linhas
+// juntas, porque é esse arquivo que o operador copia.
+func TestCompactionDoExemploDoParagrafo78FicaLigada(t *testing.T) {
+	c, err := CarregaConfig(escreveConfigComStorage(t,
+		"  compaction:\n    enabled: true\n    minimumLiveRatio: 0.50\n", ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	habilitada, ratio := c.Compaction()
+	if !habilitada {
+		t.Error("enabled: true explícito veio desligada")
+	}
+	if ratio != 0.50 {
+		t.Errorf("minimumLiveRatio = %v, quer 0.50 (§78)", ratio)
+	}
+}
+
 // TestMinimumLiveRatioForaDeZeroUmEhRecusado: ratio >= 1 elegeria TODO
 // segmento, inclusive os cheios de dado vivo — compaction perpétua que só
 // queima I/O. Ratio <= 0 nunca elegeria nenhum, e a chave mentiria. A faixa é
-// ABERTA nas duas pontas por isso, e a recusa nomeia a chave para o operador
-// não ter de adivinhar qual das dezenas do arquivo está errada.
+// ABERTA nas duas pontas por isso, e a recusa nomeia a chave E o valor para o
+// operador não ter de adivinhar qual das dezenas do arquivo está errada nem
+// conferir de cabeça o número que acha que escreveu.
 func TestMinimumLiveRatioForaDeZeroUmEhRecusado(t *testing.T) {
-	for _, v := range []string{"0", "1", "1.5", "-0.2"} {
-		t.Run(v, func(t *testing.T) {
+	casos := []struct {
+		yaml    string
+		naFalha string
+	}{
+		{"0", "0"},
+		{"1", "1"},
+		{"1.5", "1.5"},
+		{"-0.2", "-0.2"},
+		// `.nan` e `.NaN` são literais de float do YAML, e não texto solto: o
+		// parse os aceita e entrega um float64 que NÃO está na faixa aberta e
+		// mesmo assim escapa de toda guarda escrita por comparação — `<= 0` e
+		// `>= 1` são as duas falsas quando um lado é NaN. Ele é o pior dos dois
+		// casos que o comentário de razaoDeLiveness descreve: com ratio=NaN o
+		// predicado do §53 nunca é verdadeiro, nenhum segmento é eleito, e o
+		// operador fica com a chave configurada, o disco crescendo e nada
+		// compactado.
+		{".nan", "NaN"},
+		{".NaN", "NaN"},
+		// Os infinitos entram junto porque são a outra ponta da mesma família e
+		// porque a recusa deles hoje é acidente da comparação: se a guarda um
+		// dia trocar de forma, é aqui que se descobre.
+		{"+.inf", "+Inf"},
+		{"-.inf", "-Inf"},
+	}
+	for _, caso := range casos {
+		t.Run(caso.yaml, func(t *testing.T) {
 			_, err := CarregaConfig(escreveConfigComStorage(t,
-				"  compaction:\n    minimumLiveRatio: "+v+"\n", ""))
+				"  compaction:\n    minimumLiveRatio: "+caso.yaml+"\n", ""))
 			if err == nil {
-				t.Fatalf("minimumLiveRatio: %s foi aceito; queria recusa nomeando a chave", v)
+				t.Fatalf("minimumLiveRatio: %s foi aceito; queria recusa nomeando a chave", caso.yaml)
 			}
-			if !strings.Contains(err.Error(), "storage.compaction.minimumLiveRatio") {
-				t.Errorf("erro = %v, quer nomear a chave", err)
+			// A chave E o valor, como já faz o irmão deste arquivo para
+			// query.defaultMaxRows: sem o valor o operador confere a chave, vê
+			// um número que lhe parece plausível e não descobre que o que o
+			// arquivo tem não é o que ele acha que escreveu.
+			//
+			// O valor é procurado com o "é " na frente de propósito: a própria
+			// mensagem cita a faixa ("entre 0 e 1"), então um substring nu de
+			// "0" ou de "1" seria satisfeito pelo texto fixo e essas duas
+			// linhas da tabela não provariam nada.
+			if !strings.Contains(err.Error(), "storage.compaction.minimumLiveRatio") ||
+				!strings.Contains(err.Error(), "é "+caso.naFalha) {
+				t.Errorf("erro = %v, quer nomear a chave e o valor %s", err, caso.naFalha)
 			}
 		})
 	}

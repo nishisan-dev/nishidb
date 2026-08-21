@@ -8,6 +8,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -224,13 +225,23 @@ func CarregaConfig(path string) (*Config, error) {
 // Com ratio <= 0 nenhum segmento jamais seria eleito, e a chave mentiria —
 // haveria compaction configurada e nada compactado.
 //
+// O NaN é recusado por NOME, e não pela faixa, porque faixa não o alcança:
+// `.nan` é literal de float do YAML e toda comparação com NaN é falsa, então
+// `*v <= 0 || *v >= 1` — que diz "está fora" — o deixa passar, enquanto o que
+// se queria dizer era "está dentro". E ele cai no pior dos dois lados descritos
+// acima: com ratio=NaN o predicado do §53 `liveBytes/totalBytes < ratio` é
+// SEMPRE falso, nenhum segmento é eleito, e a chave mente da forma mais cara
+// que existe — o operador lê `minimumLiveRatio` no arquivo, conclui que a
+// política está valendo, e o disco cresce até o ENOSPC que o §86 projeta em 2 a
+// 3 dias. Os infinitos, esses a faixa já pega: +Inf >= 1 e -Inf <= 0.
+//
 // Não mora em units porque o pacote de lá existe para os escalares que os DOIS
 // YAMLs do produto compartilham, e esta faixa é regra de uma chave só.
 func razaoDeLiveness(v *float64) (float64, error) {
 	if v == nil {
 		return compactionRatioPadrao, nil
 	}
-	if *v <= 0 || *v >= 1 {
+	if math.IsNaN(*v) || *v <= 0 || *v >= 1 {
 		return 0, fmt.Errorf("deve ficar entre 0 e 1, exclusive, é %v", *v)
 	}
 	return *v, nil
