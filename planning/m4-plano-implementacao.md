@@ -1019,12 +1019,21 @@ git commit -m "Zera o tally pela varredura, que é a única leitura exata do seg
 >    depois de um `Close`+`Open`, **toda** key do corpus responde com o payload
 >    e a sequence corretos. Amostragem não serve: o modo de falha desta tarefa
 >    é justamente a row que ficou apontando para um arquivo removido.
-> 3. **`kill -9` nas DUAS janelas do D5**, com o binário de verdade, no molde
->    de `TestKill9NoMeioDaIngestaoPreservaOEstadoConfirmado`
->    ([kill9_test.go:27](../internal/cli/kill9_test.go:27)) — entre o rename e
->    o checkpoint, e entre o checkpoint e o unlink. Em cada uma: reabrir, o
->    `Open` tem de **reparar sem erro**, e o item 2 tem de valer. Matar o
->    processo fora dessas janelas não exercita nada.
+> 3. **`kill -9` nas DUAS janelas do D5** — entre o rename e o checkpoint, e
+>    entre o checkpoint e o unlink. **Processo real morto por SIGKILL, sem
+>    `defer` e sem `Close`**, sobre disco real. Em cada uma: reabrir, o `Open`
+>    tem de **reparar sem erro**, e o item 2 tem de valer. Matar o processo
+>    fora dessas janelas não exercita nada.
+>
+>    **Errata do orquestrador.** A primeira versão deste item exigia o binário
+>    `nishidb` de produção, no molde de
+>    `TestKill9NoMeioDaIngestaoPreservaOEstadoConfirmado`
+>    ([kill9_test.go:27](../internal/cli/kill9_test.go:27)). Era **impossível
+>    nesta tarefa**: nada no produto dispara uma compaction até a Task 7 ligar
+>    o agendamento, então não haveria janela a acertar. Reexecutar o binário de
+>    teste é o processo real que existe aqui. O `kill -9` sobre o **produto**
+>    durante compaction é item do e2e da Task 7, onde o escalonador o torna
+>    alcançável.
 >
 > Um `.retired` sobrevivente ou um `Open` que recuse o dataset é reprovação,
 > não observação.
@@ -1172,6 +1181,11 @@ git commit -m "Aposenta o segmento por rename, e ensina o Open a reparar as duas
 >    compaction reescreve locations sob os pés do leitor.
 > 5. **`SIGTERM` durante uma compaction encerra limpo**, devolve o flock, e o
 >    `Open` seguinte não acha `.retired` nem recusa o dataset.
+> 6. **`kill -9` no produto durante uma compaction** — o item que a Task 6 não
+>    podia cumprir, porque só aqui existe quem dispare a compaction sozinha.
+>    Molde de [kill9_test.go:27](../internal/cli/kill9_test.go:27): `go build`
+>    do `cmd/nishidb`, matar o processo com a compaction em voo, reabrir, e
+>    conferir **todas** as rows.
 
 
 **Files:**
