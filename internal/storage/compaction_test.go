@@ -2,10 +2,15 @@ package storage
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"runtime"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 	"github.com/nishisan-dev/nishidb/internal/storage/rowindex"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
@@ -186,9 +191,16 @@ func TestCopyForwardRepublicaALocationSemInflarALiveness(t *testing.T) {
 // ordens o valor final é o NOVO — e é essa a propriedade que a seção crítica
 // única compra.
 //
-// Roda sob -race porque é ali que a alternativa rejeitada pela D3 aparece:
-// verificar a location fora do wmu e apendar depois não é só corrida lógica,
-// é acesso concorrente aos buffers e ao offset do writer.
+// O -race NÃO é o oráculo deste teste, e a afirmação contrária (a de que o
+// -race é o que prova a seção crítica) foi medida e é falsa: verificar a
+// location fora do wmu e apendar depois não produz acesso de memória não
+// sincronizado nenhum — locs.Get resolve overlay e mmap com sincronização
+// própria —, e o detector não reportou DATA RACE em nenhuma das 8 execuções
+// do defeito. O que ele faz é perturbar o escalonamento, o que muda a taxa de
+// detecção sem mudar o que é detectável. A prova reprodutível está no
+// TestCopyForwardLeALocationDEPOISDeEntrarNaSecaoCritica; este teste continua
+// valendo pelo que ele cobre e nenhum outro cobre: a ingestão e a compaction
+// no MESMO Store, cada uma pelo seu caminho de produção inteiro.
 func TestCopyForwardConcorrenteComOWriterNuncaRegrideOValor(t *testing.T) {
 	s := openStore(t, Options{})
 	const n = 32
@@ -243,4 +255,534 @@ func TestCopyForwardConcorrenteComOWriterNuncaRegrideOValor(t *testing.T) {
 		}
 	}
 	exigeEspelhoIgualAosTallies(t, s, "após a corrida entre ingestão e compaction")
+}
+
+// flagForaDoTombstone é um bit de flag que o RECORD carrega e a LOCATION não.
+// Ele existe porque as duas fontes de flags do copy-forward só divergem aí: o
+// Put não valida o byte de flags e o grava inteiro no segmento, enquanto o
+// applyRecord empacota apenas `a.flags&types.FlagTombstone` na location
+// (store.go:909). Sem esse bit, escolher a location ou o record dá exatamente
+// o mesmo resultado e nenhuma asserção consegue separar as duas fontes.
+const flagForaDoTombstone uint8 = 0x02
+
+// flagsDaLocation devolve o byte de flags que a location publica para a row —
+// a mesma leitura que o §44 faz para decidir visibilidade.
+func flagsDaLocation(t *testing.T, s *Store, rowID types.RowID) uint8 {
+	t.Helper()
+	packed, ok := s.locs.Get(rowID)
+	if !ok {
+		t.Fatalf("row %d sem location", rowID)
+	}
+	_, _, flags := rowindex.Unpack(packed)
+	return flags
+}
+
+// TestCopyForwardGravaAsFlagsDaLocationENaoAsDoRecord fixa a escolha que o
+// doc-comment do reapendaSeVivo declara e que, até aqui, nenhuma asserção
+// sustentava: trocar `flags` por `rec.Flags` no BuildRecord deixava a suíte
+// INTEIRA verde. Uma decisão de projeto que nenhum teste defende não é
+// decisão, é acidente esperando a próxima leitura distraída.
+//
+// O oráculo é o byte de flags do record no destino. A origem carrega
+// flagForaDoTombstone, a location carrega 0, e a cópia tem de sair com 0: a
+// compaction é o único caminho de escrita que não recebe flags de um
+// chamador, e ela não reescreve no segmento um bit que nenhuma location
+// sustenta. O preço da escolha está aqui à vista — bits fora do
+// FlagTombstone não sobrevivem à cópia —, e é exatamente por estar à vista
+// que ele é uma escolha.
+func TestCopyForwardGravaAsFlagsDaLocationENaoAsDoRecord(t *testing.T) {
+	s := openStore(t, Options{SegmentSize: 400})
+	const key = "cf-flags"
+	payload := statusPayload(t, s, key, "Start", 1)
+	rowID, _, err := s.Put([]byte(key), 1, flagForaDoTombstone, payload, nil)
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	origSeg, origOff := localizacaoDaRow(t, s, rowID)
+	rec := recordEm(t, s, origSeg, origOff)
+	// As duas guardas de montagem: sem a divergência entre record e location
+	// o teste passaria a verde por acidente, e um teste que não distingue as
+	// duas fontes é pior que teste nenhum — ele DECLARA a cobertura.
+	if rec.Flags != flagForaDoTombstone {
+		t.Fatalf("montagem: o record de origem gravou flags %#x, queria %#x", rec.Flags, flagForaDoTombstone)
+	}
+	if f := flagsDaLocation(t, s, rowID); f != 0 {
+		t.Fatalf("montagem: a location guardou flags %#x, queria 0", f)
+	}
+	rotacionaAlemDe(t, s, origSeg)
+
+	copiado, _, err := s.reapendaSeVivo(origSeg, origOff, rec)
+	if err != nil {
+		t.Fatalf("reapendaSeVivo: %v", err)
+	}
+	if !copiado {
+		t.Fatal("a location ainda nomeava o record e a cópia foi recusada")
+	}
+	novoSeg, novoOff := localizacaoDaRow(t, s, rowID)
+	if copia := recordEm(t, s, novoSeg, novoOff); copia.Flags != 0 {
+		t.Errorf("flags do record copiado = %#x, queria %#x — a cópia veio do record, não da location, e a compaction passou a publicar no segmento um bit que o índice nunca validou",
+			copia.Flags, 0)
+	}
+}
+
+// TestCopyForwardCopiaORecordTombstonadoSemRessuscitarARow fixa a decisão D2,
+// que era normativa no plano, estava repetida no doc-comment da função e não
+// tinha um único teste: um `if flags&types.FlagTombstone != 0 { return }`
+// logo depois da verificação de liveness — a "otimização" mais plausível que
+// existe, porque copiar o que já está morto parece desperdício — deixava a
+// suíte INTEIRA verde.
+//
+// O estrago dessa otimização não aparece aqui e sim na Task 6: a location da
+// row tombstonada continuaria nomeando o segmento aposentado, e o Open
+// seguinte acharia location apontando para arquivo que não existe mais —
+// ErrDatasetCorrupt, dataset que não abre. Liveness para o copy-forward é "a
+// location nomeia este record" (§55), nunca "a row é visível".
+//
+// As duas asserções finais são o outro lado: copiar o tombstone não pode
+// RESSUSCITAR a row. Ela sai da cópia tão morta quanto entrou.
+func TestCopyForwardCopiaORecordTombstonadoSemRessuscitarARow(t *testing.T) {
+	s := openStore(t, Options{SegmentSize: 400})
+	const key = "cf-tumulo"
+	rowID, _ := mustPut(t, s, key, 1, statusPayload(t, s, key, "Start", 1), nil)
+	prev := mustGetAud(t, s, key)
+	morto := statusPayload(t, s, key, "Stop", 2)
+	if _, _, err := s.Put([]byte(key), 2, types.FlagTombstone, morto, &prev); err != nil {
+		t.Fatalf("Put do tombstone: %v", err)
+	}
+	tumSeg, tumOff := localizacaoDaRow(t, s, rowID)
+	rec := recordEm(t, s, tumSeg, tumOff)
+	rotacionaAlemDe(t, s, tumSeg)
+
+	copiado, n, err := s.reapendaSeVivo(tumSeg, tumOff, rec)
+	if err != nil {
+		t.Fatalf("reapendaSeVivo: %v", err)
+	}
+	if !copiado {
+		t.Fatal("a row tombstonada NÃO foi copiada: a location seguiria nomeando o segmento que a aposentadoria remove, e o Open seguinte declararia o dataset corrompido")
+	}
+	if want := bytesDoRecord(key, morto); uint64(n) != want {
+		t.Errorf("bytes copiados = %d, queria %d — a Task 5 soma este número para medir o progresso da varredura", n, want)
+	}
+	novoSeg, novoOff := localizacaoDaRow(t, s, rowID)
+	if novoSeg == tumSeg && novoOff == tumOff {
+		t.Fatalf("a location continua em (%d, %d): o segmento de origem nunca ficaria elegível à aposentadoria", tumSeg, tumOff)
+	}
+	if _, _, ok, err := s.GetByKey([]byte(key), nil); err != nil || ok {
+		t.Fatalf("a cópia ressuscitou a row: GetByKey ok=%v, err=%v", ok, err)
+	}
+	if f := flagsDaLocation(t, s, rowID); f&types.FlagTombstone == 0 {
+		t.Errorf("a location republicada perdeu o FlagTombstone (flags=%#x): a row voltaria a ser visível", f)
+	}
+	if copia := recordEm(t, s, novoSeg, novoOff); copia.Flags&types.FlagTombstone == 0 {
+		t.Errorf("o record copiado perdeu o FlagTombstone (flags=%#x): o replay da recovery republicaria a row VIVA", copia.Flags)
+	}
+	exigeEspelhoIgualAosTallies(t, s, "após copiar um record tombstonado")
+}
+
+// apendaResiduoSemLocation grava no segmento corrente um record cuja location
+// NUNCA foi publicada — o resíduo da janela de crash do §10.2, e a única
+// precondição do ramo `!had` do reapendaSeVivo.
+//
+// Não dá para produzi-lo pelo Put: o Put apenda e publica a location na MESMA
+// seção crítica, e é justamente por isso que o resíduo só nasce de um
+// processo que morre no meio. O append direto é a forma honesta de plantar
+// um estado que o produto não alcança sem morrer — mesma doutrina do
+// CorrompeEspelhoParaTeste, que também escreve sob o wmu.
+func apendaResiduoSemLocation(t *testing.T, s *Store, rowID types.RowID, key string, payload []byte) (uint32, uint32) {
+	t.Helper()
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	buf, err := encoding.BuildRecord(nil, rowID, 1, 0, []byte(key), payload)
+	if err != nil {
+		t.Fatalf("BuildRecord: %v", err)
+	}
+	seg, off, err := s.segW.Append(buf)
+	if err != nil {
+		t.Fatalf("Append do resíduo: %v", err)
+	}
+	s.curSegID.Store(seg)
+	return seg, off
+}
+
+// TestCopyForwardRecusaResiduoSemLocationEmVezDeRessuscitarOEstado cobre o
+// ramo `!had`, que carregava um comentário normativo forte e nenhuma
+// asserção. A varredura do §54 lê o ARQUIVO, não o índice: ela vai topar com
+// records que o commit point nunca publicou, e copiá-los seria a compaction
+// promovendo a durável uma escrita que o dataset nunca aceitou.
+//
+// Registro honesto do que este teste NÃO prova: remover o ramo hoje não muda
+// comportamento nenhum, porque packed==0 desempacota para segmento 0 e
+// nenhum segmentID válido é 0 (rowindex.go:33 chega a entrar em panic com
+// ele), de modo que a comparação `curSeg != seg` logo abaixo recusaria do
+// mesmo jeito. O ramo é explícito por legibilidade e para não pendurar a
+// recusa num detalhe do empacotamento; o que o teste fixa é o
+// COMPORTAMENTO — resíduo não vira dado —, que precisa continuar valendo
+// qualquer que seja o caminho pelo qual a função chega à recusa.
+func TestCopyForwardRecusaResiduoSemLocationEmVezDeRessuscitarOEstado(t *testing.T) {
+	s := openStore(t, Options{})
+	const key = "cf-residuo"
+	payload := statusPayload(t, s, key, "Start", 1)
+	// rowID bem à frente do contador: nenhuma location foi escrita para ele,
+	// e nenhum Put deste teste chega perto de alcançá-lo.
+	rowID := types.RowID(s.nextRowID.Load() + 1000)
+	seg, off := apendaResiduoSemLocation(t, s, rowID, key, payload)
+	rec := recordEm(t, s, seg, off)
+
+	copiado, n, err := s.reapendaSeVivo(seg, off, rec)
+	if err != nil {
+		t.Fatalf("reapendaSeVivo: %v", err)
+	}
+	if copiado || n != 0 {
+		t.Fatalf("o resíduo foi copiado (copiado=%v, n=%d): a compaction publicaria o que o commit point nunca publicou", copiado, n)
+	}
+	if _, ok := s.locs.Get(rowID); ok {
+		t.Error("a cópia criou location para a row do resíduo: o estado ressuscitou pela compaction")
+	}
+	if _, _, ok, err := s.GetByKey([]byte(key), nil); err != nil || ok {
+		t.Errorf("a key do resíduo ficou visível: ok=%v, err=%v", ok, err)
+	}
+}
+
+// TestCopyForwardRecusaComOWriterEmModoFalho cobre o primeiro ramo da função,
+// que também estava sem teste. O modo falho é sticky porque depois do Append
+// não existe rollback parcial (store.go:1012): apendar a cópia por cima de um
+// writer que já falhou é escrever num segmento cujo estado ninguém sabe
+// descrever. A varredura da Task 5 recebe este erro e para — é o sentinela
+// que separa "pule este record" de "pare a compaction".
+func TestCopyForwardRecusaComOWriterEmModoFalho(t *testing.T) {
+	s := openStore(t, Options{BitmapFields: []types.FieldID{fldStatus}})
+	const key = "cf-sticky"
+	rowID, _ := mustPut(t, s, key, 1, statusPayload(t, s, key, "Start", 1), nil)
+	origSeg, origOff := localizacaoDaRow(t, s, rowID)
+	rec := recordEm(t, s, origSeg, origOff)
+
+	// Falha no Set dos bitmaps: erro DEPOIS do Append, que é exatamente o
+	// que deixa o writer morto (§14.12).
+	s.SetSetErrHookForTest(func(types.FieldID) error { return errors.New("set falho simulado") })
+	if _, _, err := s.Put([]byte("cf-sticky-2"), 1, 0, statusPayload(t, s, "cf-sticky-2", "Start", 1), nil); err == nil {
+		t.Fatal("montagem: o Put com Set falho deveria falhar e deixar o writer em modo falho")
+	}
+	s.SetSetErrHookForTest(nil)
+
+	copiado, n, err := s.reapendaSeVivo(origSeg, origOff, rec)
+	if !errors.Is(err, ErrWriterFailed) {
+		t.Fatalf("reapendaSeVivo com writer morto = %v, queria ErrWriterFailed", err)
+	}
+	if copiado || n != 0 {
+		t.Errorf("a cópia foi aceita com o writer morto (copiado=%v, n=%d)", copiado, n)
+	}
+	if !strings.Contains(err.Error(), "set falho simulado") {
+		t.Errorf("a causa original precisa sobreviver na cadeia para o operador saber o que matou o writer: %v", err)
+	}
+}
+
+// TestCopyForwardRecusaDepoisDoClose cobre o entra(), o terceiro ramo sem
+// teste. A goroutine de compaction da Task 7 vive AO LADO do Close: quem
+// desliga o servidor não tem como esperar uma varredura de segmento inteiro
+// terminar, e o entra() é o que faz a cópia em voo desistir em vez de apendar
+// num segmento já fechado. Erro, não panic — a ingestão tem política para
+// erro (§101) e não tem para panic.
+func TestCopyForwardRecusaDepoisDoClose(t *testing.T) {
+	s := openStore(t, Options{})
+	const key = "cf-fechado"
+	rowID, _ := mustPut(t, s, key, 1, statusPayload(t, s, key, "Start", 1), nil)
+	origSeg, origOff := localizacaoDaRow(t, s, rowID)
+	rec := recordEm(t, s, origSeg, origOff)
+
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	copiado, n, err := s.reapendaSeVivo(origSeg, origOff, rec)
+	if !errors.Is(err, ErrDatasetClosed) {
+		t.Fatalf("reapendaSeVivo após o Close = %v, queria ErrDatasetClosed", err)
+	}
+	if copiado || n != 0 {
+		t.Errorf("a cópia foi aceita depois do Close (copiado=%v, n=%d)", copiado, n)
+	}
+}
+
+// copiaDaLocationCorrente copia a row a partir da location que ela nomeia
+// AGORA, devolvendo o buffer de leitura para a próxima chamada. Repetir a
+// cópia sobre a mesma row é o que aproxima o teste da varredura real: cada
+// record copiado passa pelo mesmo BuildRecord, e é aí que o buffer do writer
+// ou é reutilizado ou não é.
+func copiaDaLocationCorrente(t *testing.T, s *Store, rowID types.RowID, buf []byte) []byte {
+	t.Helper()
+	packed, ok := s.locs.Get(rowID)
+	if !ok {
+		t.Fatalf("row %d sem location", rowID)
+	}
+	seg, off, _ := rowindex.Unpack(packed)
+	rec, out, err := s.segR.ReadRecord(seg, off, buf)
+	if err != nil {
+		t.Fatalf("ReadRecord(%d, %d): %v", seg, off, err)
+	}
+	copiado, _, err := s.reapendaSeVivo(seg, off, rec)
+	if err != nil {
+		t.Fatalf("reapendaSeVivo: %v", err)
+	}
+	if !copiado {
+		t.Fatal("a cópia da location corrente foi recusada: sem cópia não há alocação para medir")
+	}
+	return out
+}
+
+// TestCopyForwardReusaOBufferDoWriterEmVezDeAlocarPorRecord ancora o
+// compactBuf, que era mecanismo de produção acrescentado ao Store com onze
+// linhas de comentário invocando o §54 e ZERO asserção: trocá-lo por um
+// buffer local — alocação a cada record copiado, exatamente o que o §54
+// proíbe — deixava o pacote inteiro verde, e o campo poderia ser removido sem
+// que nada acusasse.
+//
+// O oráculo é em BYTES ALOCADOS, não em contagem: TotalAlloc é cumulativo e o
+// GC não o desconta, então ele mede o que a varredura de fato pediu ao
+// alocador. O payload é grande de propósito — com 64 KiB por record, um
+// buffer local aloca da ordem de um record por cópia e o teto de UM record
+// para DEZESSEIS cópias separa as duas implementações por mais de uma ordem
+// de grandeza, sem depender de contagem exata de alocações miúdas que a
+// evolução do pacote pode legitimamente mudar.
+//
+// A cópia de aquecimento fica FORA da medição: o §54 proíbe alocar por
+// record, não a primeira alocação do buffer — é ela que dá capacidade ao
+// compactBuf, e cobrá-la seria exigir um buffer que nunca nasce.
+func TestCopyForwardReusaOBufferDoWriterEmVezDeAlocarPorRecord(t *testing.T) {
+	const (
+		copias  = 16
+		tamanho = 64 << 10
+	)
+	// Segmento folgado: rotacionar no meio da medição abriria arquivo novo e
+	// mediria o alocador do segment, não o buffer do copy-forward.
+	s := openStore(t, Options{SegmentSize: 64 << 20})
+	const key = "cf-buffer"
+	payload := statusPayload(t, s, key, strings.Repeat("x", tamanho), 1)
+	rowID, _ := mustPut(t, s, key, 1, payload, nil)
+	leitura := copiaDaLocationCorrente(t, s, rowID, nil)
+
+	var antes, depois runtime.MemStats
+	runtime.ReadMemStats(&antes)
+	for i := 0; i < copias; i++ {
+		leitura = copiaDaLocationCorrente(t, s, rowID, leitura)
+	}
+	runtime.ReadMemStats(&depois)
+
+	gasto := depois.TotalAlloc - antes.TotalAlloc
+	teto := bytesDoRecord(key, payload)
+	if gasto > teto {
+		t.Errorf("copiar %d records alocou %d bytes; o teto é %d (um record) — o buffer do writer deixou de ser reutilizado e a compaction voltou a alocar por record copiado (§54)",
+			copias, gasto, teto)
+	}
+}
+
+// payloadDaJanela é o payload das rodadas da janela: grande de propósito.
+// O tamanho não é capricho — ele é o que ALARGA a seção crítica do Put
+// (validação, BuildRecord, CRC e o write do Append acontecem todos com o wmu
+// na mão), e é dentro dessa janela alargada que a leitura de location feita
+// fora do lock precisa cair para o defeito aparecer. Com payload miúdo a
+// seção crítica do Put dura menos que o caminho da goroutine de compaction
+// até o Get, e o defeito passa despercebido em 199 de 200 rodadas — medido.
+func payloadDaJanela(t *testing.T, s *Store, key, marca string, r int) []byte {
+	t.Helper()
+	return statusPayload(t, s, key, strings.Repeat(marca, 16<<10), int64(r))
+}
+
+// TestCopyForwardPerdeParaOUpdateQueEntraNaJanelaDaVerificacao põe a
+// ingestão e a compaction na MESMA row, com largada alinhada, e repete. Ele
+// existe porque o teste concorrente acima quase não abre a janela do §53-55:
+// medido sobre o defeito (ler a location ANTES de pegar o wmu), ele sobrevive
+// a ~84% das rodadas de `go test ./...` e a ~28% das rodadas com -race.
+//
+// Duas coisas mudam aqui, e as duas saíram de medição, não de intuição:
+//
+//  1. A largada é alinhada no sentido CERTO: a compaction espera a ingestão
+//     anunciar que vai entrar e só então tenta copiar. Largar as duas juntas
+//     de uma barreira comum não serve — a compaction ganha o lock primeiro em
+//     200 de 200 rodadas e a janela nunca chega a abrir.
+//  2. O payload é grande, para que a seção crítica do Put dure mais que o
+//     caminho da outra goroutine até a leitura da location. Com payload
+//     miúdo a detecção cai para 1 em 200 rodadas; com este, sobe para ~55%
+//     por rodada, e 64 rodadas fecham a conta dentro de UMA execução do gate.
+//
+// O que este teste NÃO prova, e é honesto dizer: com GOMAXPROCS=1 ele não
+// detecta nada (medido: 0 de 30), porque a goroutine da compaction nem chega
+// a ser escalonada no meio do Put. Prova que depende de núcleo sobrando não é
+// prova, e por isso o kill reprodutível do invariante mora no
+// TestCopyForwardLeALocationDEPOISDeEntrarNaSecaoCritica. O valor deste aqui
+// é outro e nenhum outro cobre: a corrida acontece entre os caminhos de
+// PRODUÇÃO inteiros dos dois lados, sem nenhuma peça simulada pelo teste.
+//
+// A afirmação não depende da ordem: se a cópia venceu, o update entrou depois
+// e governa; se o update venceu, a cópia foi recusada. Nas duas ordens o
+// valor final é o NOVO, e é só isso que se pede.
+func TestCopyForwardPerdeParaOUpdateQueEntraNaJanelaDaVerificacao(t *testing.T) {
+	// Segmento folgado: a rotação embute fdatasync e alongaria a seção
+	// crítica DEPOIS do commit point, que é o lado que não interessa.
+	s := openStore(t, Options{SegmentSize: 256 << 20})
+	const rodadas = 64
+	for r := 0; r < rodadas; r++ {
+		key := fmt.Sprintf("cf-janela-%03d", r)
+		antigo := payloadDaJanela(t, s, key, "a", r)
+		rowID, _ := mustPut(t, s, key, 1, antigo, nil)
+		origSeg, origOff := localizacaoDaRow(t, s, rowID)
+		// O record sai do arquivo ANTES da largada, como a varredura o leria:
+		// ela varre o arquivo, não o índice, e não sabe que a row vai migrar.
+		rec := recordEm(t, s, origSeg, origOff)
+		novo := payloadDaJanela(t, s, key, "n", r)
+
+		emVoo := make(chan struct{})
+		var wg sync.WaitGroup
+		var errPut, errCopia error
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			close(emVoo)
+			_, _, errPut = s.Put([]byte(key), 2, 0, novo, nil)
+		}()
+		go func() {
+			defer wg.Done()
+			<-emVoo
+			// Um Gosched: com as duas goroutines no mesmo P, é ele que dá a
+			// vez à ingestão para que ela já esteja DENTRO da seção crítica
+			// quando a cópia for ler a location.
+			runtime.Gosched()
+			_, _, errCopia = s.reapendaSeVivo(origSeg, origOff, rec)
+		}()
+		wg.Wait()
+		if errPut != nil || errCopia != nil {
+			t.Fatalf("rodada %d: ingestão: %v; compaction: %v", r, errPut, errCopia)
+		}
+
+		got := mustGetAud(t, s, key)
+		if got.Sequence != 2 || !bytes.Equal(got.Payload, novo) {
+			t.Fatalf("rodada %d (%s): o valor corrente é seq=%d com o payload do update=%v — a cópia do record ANTIGO foi publicada DEPOIS do update e o dataset voltou no tempo, sem erro e com o CRC batendo",
+				r, key, got.Sequence, bytes.Equal(got.Payload, novo))
+		}
+	}
+	exigeEspelhoIgualAosTallies(t, s, "após as rodadas da janela")
+}
+
+// compactionParadaNoWmu bloqueia até a goroutine do copy-forward estar parada
+// no s.wmu.Lock() de dentro do reapendaSeVivo, e devolve false se ela não
+// chegar lá dentro do prazo.
+//
+// É leitura de stack, e não sleep, de propósito: o que o teste da barreira
+// precisa saber é um FATO ("a compaction já está esperando o lock"), não uma
+// aposta em quanto tempo o escalonador leva. Um sleep transformaria o oráculo
+// determinístico de volta em probabilístico, que é exatamente o defeito que a
+// revisão apontou no teste concorrente.
+func compactionParadaNoWmu(prazo time.Duration) bool {
+	buf := make([]byte, 1<<20)
+	limite := time.Now().Add(prazo)
+	for {
+		n := runtime.Stack(buf, true)
+		for _, g := range strings.Split(string(buf[:n]), "\n\ngoroutine ") {
+			// As duas marcas na MESMA goroutine: parada no Lock, e parada
+			// nele por dentro do copy-forward.
+			if strings.Contains(g, "reapendaSeVivo") && strings.Contains(g, "sync.(*Mutex).Lock") {
+				return true
+			}
+		}
+		if time.Now().After(limite) {
+			return false
+		}
+		runtime.Gosched()
+	}
+}
+
+// publicaUpdateSobOWmu grava um update da row com o mutex do writer JÁ na mão
+// de quem chama. É o núcleo do Put (store.go:828-857) — BuildRecord, Append e
+// applyRecord, nesta ordem —, sem a validação de argumento e sem o lookup do
+// estado anterior, que são justamente as partes que precisariam do lock que o
+// teste está segurando.
+//
+// Chamar s.Put aqui seria deadlock, e é essa impossibilidade que dá ao teste
+// da barreira o seu poder: para publicar um update ENQUANTO a compaction
+// espera o lock, é preciso ser o writer.
+func publicaUpdateSobOWmu(t *testing.T, s *Store, rowID types.RowID, key string, seq int64, prevPayload, payload []byte) {
+	t.Helper()
+	buf, err := encoding.BuildRecord(nil, rowID, seq, 0, []byte(key), payload)
+	if err != nil {
+		t.Fatalf("BuildRecord do update: %v", err)
+	}
+	seg, off, err := s.segW.Append(buf)
+	if err != nil {
+		t.Fatalf("Append do update: %v", err)
+	}
+	s.curSegID.Store(seg)
+	if err := s.applyRecord(recordApply{
+		rowID:       rowID,
+		key:         []byte(key),
+		seq:         seq,
+		payload:     payload,
+		prevPayload: prevPayload,
+		hadPrevious: true,
+		seg:         seg,
+		off:         off,
+		recLen:      len(buf),
+	}); err != nil {
+		t.Fatalf("applyRecord do update: %v", err)
+	}
+}
+
+// TestCopyForwardLeALocationDEPOISDeEntrarNaSecaoCritica é o kill
+// REPRODUTÍVEL do invariante normativo 1, e a razão de ele existir ao lado
+// dos testes concorrentes é que aqueles medem o escalonador junto com o
+// código: o defeito de ler a location fora do wmu sobrevive a ~84% das
+// rodadas de `go test ./...`, a ~28% das rodadas com -race, e a 100% delas
+// com GOMAXPROCS=1 — onde a goroutine da compaction nem chega a ser
+// escalonada no meio do Put. Prova que só vale em máquina com núcleo
+// sobrando não é prova.
+//
+// Aqui não há aposta nenhuma. O TESTE é o writer: ele segura o wmu, espera a
+// compaction PARAR no Lock (fato lido da stack, não presumido de um sleep),
+// publica o update com a compaction já parada e só então solta. A partir daí
+// as duas implementações são distinguíveis por construção, sempre:
+//
+//   - lendo a location DENTRO da seção crítica, a compaction acorda depois do
+//     update, vê a location nomeando outro lugar e recusa;
+//   - lendo a location ANTES, ela acorda com um valor de antes do update na
+//     mão, e publica a cópia do payload ANTIGO por cima do novo.
+//
+// O segundo caso é a perda de dado silenciosa do §53-55: durável, com CRC
+// batendo, indistinguível de uma escrita legítima para a recovery.
+func TestCopyForwardLeALocationDEPOISDeEntrarNaSecaoCritica(t *testing.T) {
+	s := openStore(t, Options{})
+	const key = "cf-barreira"
+	antigo := statusPayload(t, s, key, "antigo", 1)
+	rowID, _ := mustPut(t, s, key, 1, antigo, nil)
+	origSeg, origOff := localizacaoDaRow(t, s, rowID)
+	rec := recordEm(t, s, origSeg, origOff)
+	novo := statusPayload(t, s, key, "novo", 2)
+
+	s.wmu.Lock()
+	var wg sync.WaitGroup
+	var copiado bool
+	var errCopia error
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		copiado, _, errCopia = s.reapendaSeVivo(origSeg, origOff, rec)
+	}()
+	if !compactionParadaNoWmu(5 * time.Second) {
+		s.wmu.Unlock()
+		wg.Wait()
+		t.Fatal("a compaction não chegou a esperar o wmu em 5s: a montagem não abre a janela que o teste mede")
+	}
+	publicaUpdateSobOWmu(t, s, rowID, key, 2, antigo, novo)
+	s.wmu.Unlock()
+	wg.Wait()
+
+	if errCopia != nil {
+		t.Fatalf("reapendaSeVivo: %v", errCopia)
+	}
+	if copiado {
+		t.Error("a cópia foi ACEITA depois de um update que entrou enquanto ela esperava o lock: a liveness foi decidida com uma location lida fora da seção crítica")
+	}
+	if seg, off := localizacaoDaRow(t, s, rowID); seg == origSeg && off == origOff {
+		t.Errorf("a location voltou a nomear a origem (%d, %d): a cópia republicou por cima do update", origSeg, origOff)
+	}
+	if got := mustGetAud(t, s, key); got.Sequence != 2 || !bytes.Equal(got.Payload, novo) {
+		t.Errorf("o dataset voltou no tempo: seq=%d, payload igual ao do update=%v",
+			got.Sequence, bytes.Equal(got.Payload, novo))
+	}
+	exigeEspelhoIgualAosTallies(t, s, "após a janela fechada pela seção crítica")
 }

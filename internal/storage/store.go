@@ -311,7 +311,10 @@ type Store struct {
 	valBuf   []byte // validação de colisão no Insert
 	// compactBuf é o record em construção do copy-forward (§53-55). É o
 	// "buffer reutilizado" que o §54 exige: sem ele cada record copiado
-	// alocaria, e a compaction varre segmentos inteiros.
+	// alocaria, e a compaction varre segmentos inteiros. A reutilização está
+	// aferida em bytes pelo TestCopyForwardReusaOBufferDoWriterEmVezDeAlocarPorRecord
+	// — requisito de performance que a suíte não mede é requisito que não
+	// existe, e este campo poderia ser removido sem que nada acusasse.
 	//
 	// É buffer À PARTE do buildBuf, e não reuso dele, porque os dois nascem em
 	// caminhos que só não colidem enquanto nenhum deles segurar o slice além
