@@ -93,6 +93,16 @@ type Options struct {
 	// pode medir (duração e último sucesso do checkpoint). Nil desliga a
 	// instrumentação sem desligar nada mais.
 	Metrics *metrics.Registry
+	// traceRecovery é o seam de teste do FIM do recoverFrom. Nil em
+	// produção, e INEXPORTADO de propósito: ninguém de fora do pacote
+	// consegue instalá-lo, então ele não acrescenta superfície ao contrato
+	// do Store — a única coisa que muda para quem chama Open é nada.
+	//
+	// Mora aqui, e não num setter como o cpTrace, porque a recovery roda
+	// DENTRO do Open: quando o Store existe para o chamador, o Checkpoint
+	// incondicional já recarregou os espelhos em valor absoluto e apagou
+	// justamente o estado que se quer medir.
+	traceRecovery func(*Store)
 }
 
 // Stats é o snapshot mínimo de estado do Store.

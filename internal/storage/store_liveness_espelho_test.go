@@ -247,3 +247,133 @@ func TestRecoverySemeiaOEspelhoQueOStatsPublica(t *testing.T) {
 	}
 	exigeEspelhoIgualAosTallies(t, s2, "após a recovery")
 }
+
+// TestConferenciaDeEspelhosAcusaCadaEspelhoDivergente prova que o detector
+// DISPARA, e prova para os TRÊS espelhos, um subteste por espelho. Sem isto
+// ele é decoração: a revisão adversarial da Task 1b derrubou três mutantes
+// com a suíte inteira verde — remover a chamada de conferaEspelhos do
+// checkpoint, cegar a guarda para o termo do disco, e mover a conferência
+// para DEPOIS da recarga dos espelhos.
+//
+// O último é o que dá sentido aos outros dois: a conferência só acha alguma
+// coisa porque roda ANTES de a reconciliação tocar nos espelhos. Depois da
+// recarga ela compara o valor recém-consertado consigo mesmo e nunca acusa
+// nada — e é exatamente por isso que a asserção é sobre o CONTADOR de
+// divergências, não sobre o valor que o Stats publica no fim: o valor está
+// certo nas duas implementações.
+func TestConferenciaDeEspelhosAcusaCadaEspelhoDivergente(t *testing.T) {
+	for _, c := range []struct {
+		nome     string
+		corrompe func(*Store)
+	}{
+		{"segCount", func(s *Store) { s.segCount.Add(1) }},
+		{"liveBytesAll", func(s *Store) { s.liveBytesAll.Add(4096) }},
+		{"diskBytesAll", func(s *Store) { s.diskBytesAll.Add(4096) }},
+	} {
+		t.Run(c.nome, func(t *testing.T) {
+			s := openStore(t, Options{})
+			const n = 20
+			for i := 0; i < n; i++ {
+				k := fmt.Sprintf("cnf-%03d", i)
+				mustPut(t, s, k, int64(i), statusPayload(t, s, k, "Start", int64(i)), nil)
+			}
+			// Checkpoint de base: ele recarrega os três espelhos a partir dos
+			// mapas, então o que vier depois parte de espelho e mapa em
+			// acordo — e a única divergência possível é a que o teste planta.
+			if err := s.Checkpoint(); err != nil {
+				t.Fatalf("Checkpoint de base: %v", err)
+			}
+			antes := s.EspelhosDivergentesForTest()
+			if antes != 0 {
+				t.Fatalf("o dataset já nasceu com %d divergência(s): a montagem não isola o que o teste planta", antes)
+			}
+			s.CorrompeEspelhoParaTeste(c.corrompe)
+			if err := s.Checkpoint(); err != nil {
+				t.Fatalf("Checkpoint: %v", err)
+			}
+			if got := s.EspelhosDivergentesForTest(); got != antes+1 {
+				t.Errorf("divergências = %d, queria %d: o checkpoint não acusou o espelho %s fora do mapa, "+
+					"e um detector que ninguém prova disparando lê-se como proteção sem proteger", got, antes+1, c.nome)
+			}
+		})
+	}
+}
+
+// TestEspelhosSaemDaRecoveryJaSemeados lê os espelhos ao FIM do recoverFrom,
+// antes do Checkpoint incondicional que o Open dispara. É esse ponto de
+// leitura que faz o defeito aparecer, e é ele que faltava: a recarga do
+// checkpoint reescreve os três em valor absoluto, e depois dela nenhuma
+// leitura de Stats distingue uma recovery que semeou os espelhos de uma que
+// os deixou furados. Foi assim que o underflow de uint64 medido no fim do
+// recoverFrom — liveBytesAll em 18446744073709551544 contra 568 nos tallies —
+// sobreviveu à suíte inteira no mutante composto da revisão da Task 1b.
+//
+// O oráculo é a INVARIANTE (espelho é cópia do mapa), não uma faixa. Comparar
+// o vivo contra o espelho de DISCO não serviria: neste instante o disco vale
+// zero por decisão de produção documentada no próprio recoverFrom — o segSize
+// não é semeado ali, porque o Checkpoint do Open o repovoa pelo ListSegments
+// — e uma faixa (0, disco] reprovaria o código correto.
+func TestEspelhosSaemDaRecoveryJaSemeados(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{Dir: dir}
+	s := audOpen(t, opts)
+	const n = 8
+	for i := 0; i < n; i++ {
+		k := fmt.Sprintf("sem-%03d", i)
+		mustPut(t, s, k, int64(i), statusPayload(t, s, k, "Interrupted", int64(i)), nil)
+	}
+	if err := s.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	// O tail que o replay vai reaplicar. Payloads MENORES que os anteriores
+	// de propósito: é a diferença de tamanho que faz o agregado furar por
+	// baixo quando ele não parte da mesma base do tally.
+	for i := 0; i < n; i++ {
+		k := fmt.Sprintf("sem-%03d", i)
+		prev := mustGetAud(t, s, k)
+		mustPut(t, s, k, int64(n+i), statusPayload(t, s, k, "Ok", int64(i)), &prev)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	var (
+		chamou              bool
+		espSegs, mapaSegs   uint32
+		espVivo, mapaVivo   uint64
+		espDisco, mapaDisco int64
+	)
+	reabre := opts
+	reabre.traceRecovery = func(s *Store) {
+		chamou = true
+		espSegs, espVivo, espDisco = s.segCount.Load(), s.liveBytesAll.Load(), s.diskBytesAll.Load()
+		// Os mapas são writer-only e ler mapa Go sem sincronizar é fatal
+		// error do runtime. Aqui não há writer concorrente — o Store nem saiu
+		// do Open —, mas o seam respeita o contrato em vez de depender disso.
+		s.wmu.Lock()
+		mapaSegs, mapaVivo, mapaDisco = s.agregadosDoTally()
+		s.wmu.Unlock()
+	}
+	s2 := audOpen(t, reabre)
+	defer func() { _ = s2.Close() }()
+
+	if !chamou {
+		t.Fatal("o trace do fim da recovery não rodou: este Open não passou pelo recoverFrom e o teste não prova nada")
+	}
+	if mapaVivo == 0 || mapaSegs == 0 {
+		t.Fatalf("os mapas saíram da recovery em %d segmento(s) e %d bytes vivos: sem estado não há o que conferir",
+			mapaSegs, mapaVivo)
+	}
+	if espVivo != mapaVivo {
+		t.Errorf("liveBytesAll = %d ao fim da recovery e os tallies somam %d: o espelho não partiu da base do manifest, "+
+			"e a primeira baixa do replay o furou por baixo — num uint64 isso não dá negativo, dá 1,8e19 no /v1/stats",
+			espVivo, mapaVivo)
+	}
+	if espSegs != mapaSegs {
+		t.Errorf("segCount = %d ao fim da recovery e o tally tem %d segmento(s): o espelho não foi semeado", espSegs, mapaSegs)
+	}
+	if espDisco != mapaDisco {
+		t.Errorf("diskBytesAll = %d ao fim da recovery e o segSize soma %d: os dois têm de sair daqui iguais, "+
+			"cada espelho é cópia fiel do SEU mapa", espDisco, mapaDisco)
+	}
+}

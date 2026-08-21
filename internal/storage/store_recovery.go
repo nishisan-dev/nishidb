@@ -168,6 +168,16 @@ func (s *Store) recoverFrom(m *checkpoint.Manifest, refs []segment.SegmentRef, d
 	}
 	s.segW = w
 	s.curSegID.Store(maxID)
+	// Único instante em que os espelhos podem ser lidos como a RECOVERY os
+	// deixou: o Checkpoint incondicional do Open recarrega os três em valor
+	// absoluto logo adiante, e depois dele nenhuma leitura de Stats
+	// distingue a semeadura acima de um agregado furado. É por isso que o
+	// underflow de uint64 medido aqui (liveBytesAll em 1,8e19 contra 568 nos
+	// tallies) atravessou a suíte inteira até a revisão da Task 1b: não
+	// existia ponto de observação antes da recarga. Nil em produção.
+	if s.opts.traceRecovery != nil {
+		s.opts.traceRecovery(s)
+	}
 	return nil
 }
 

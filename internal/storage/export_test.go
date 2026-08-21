@@ -56,3 +56,18 @@ func (s *Store) PartialCheckpointForTest() error {
 	}
 	return nil
 }
+
+// CorrompeEspelhoParaTeste move os espelhos atômicos por fora dos mapas de
+// contabilidade — a precondição que a conferência do checkpoint existe para
+// achar e que nenhum caminho legítimo do writer produz.
+//
+// Roda sob o mutex do writer porque escrever nos espelhos é writer-only
+// (§128, e o godoc dos três campos no Store): cutucar os atômicos de fora do
+// contrato faria o seam plantar um estado que o produto não consegue
+// alcançar, e um detector aferido contra estado impossível não diz nada sobre
+// o estado real.
+func (s *Store) CorrompeEspelhoParaTeste(fn func(*Store)) {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	fn(s)
+}
