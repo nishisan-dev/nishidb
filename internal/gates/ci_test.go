@@ -28,19 +28,37 @@ import (
 
 // caminhoDoWorkflowDeCI usa raizDoRepo, já definido em lint_test.go: os dois
 // arquivos deste pacote enxergam a raiz do repositório do mesmo lugar.
-var caminhoDoWorkflowDeCI = filepath.Join(raizDoRepo, ".github", "workflows", "ci.yml")
+//
+// caminhoDoWorkflowDeRelease e caminhoDoWorkflowDeBench são os outros dois
+// workflows que fixam go-version (Important 1 da revisão final): antes deles,
+// só ci.yml tinha oráculo — nada fixava que release.yml builda com `make
+// build` (a única fonte do comando, segundo o próprio comentário do
+// workflow) nem que a go-version de release.yml/bench.yml acompanha o pin de
+// ci.yml. Um `go build` próprio no lugar de `make build` sobe o binário de
+// release SEM os ldflags de buildinfo (Task A3), e
+// scripts/nishidb-update.sh usa esse carimbo para confirmar a versão nova em
+// /v1/stats — sem ele a verificação pós-start nunca fecha e o script dispara
+// rollback espúrio no piloto mesmo com o binário certo no ar.
+var (
+	caminhoDoWorkflowDeCI      = filepath.Join(raizDoRepo, ".github", "workflows", "ci.yml")
+	caminhoDoWorkflowDeRelease = filepath.Join(raizDoRepo, ".github", "workflows", "release.yml")
+	caminhoDoWorkflowDeBench   = filepath.Join(raizDoRepo, ".github", "workflows", "bench.yml")
+)
 
-// leWorkflowDeCI devolve o conteúdo bruto do workflow. Ausência é FALHA, não
-// SKIP: pular aqui repetiria, no teste, o defeito que a Task A2 existe para
-// fechar — a automação sumir e ninguém perceber.
-func leWorkflowDeCI(t *testing.T) string {
+// leWorkflow devolve o conteúdo bruto de um arquivo de workflow qualquer.
+// Ausência é FALHA, não SKIP: pular aqui repetiria, no teste, o defeito que a
+// Task A2 existe para fechar — a automação sumir e ninguém perceber.
+func leWorkflow(t *testing.T, caminho string) string {
 	t.Helper()
-	bruto, err := os.ReadFile(caminhoDoWorkflowDeCI)
+	bruto, err := os.ReadFile(caminho)
 	if err != nil {
-		t.Fatalf(".github/workflows/ci.yml não existe ou não pôde ser lido: %v — sem ele o projeto não tem CI, só o gate local", err)
+		t.Fatalf("%s não existe ou não pôde ser lido: %v — sem ele o projeto não tem essa automação, só o gate local", caminho, err)
 	}
 	return string(bruto)
 }
+
+// leWorkflowDeCI é o atalho para ci.yml que os testes existentes já usavam.
+func leWorkflowDeCI(t *testing.T) string { return leWorkflow(t, caminhoDoWorkflowDeCI) }
 
 func TestWorkflowDeCIExiste(t *testing.T) {
 	leWorkflowDeCI(t)
@@ -130,6 +148,76 @@ func TestWorkflowDeCIPinaGoNaVersaoExata(t *testing.T) {
 	}
 }
 
+// versaoDeGoEmWorkflow extrai todas as ocorrências de go-version de um
+// workflow qualquer, reaproveitando reVersaoDeGo — a mesma regexp que
+// TestWorkflowDeCIPinaGoNaVersaoExata já usa para ci.yml. Fatal se nenhuma
+// aparecer: um workflow sem go-version fixado não tem o que comparar.
+func versaoDeGoEmWorkflow(t *testing.T, caminho string) []string {
+	t.Helper()
+	achados := reVersaoDeGo.FindAllStringSubmatch(leWorkflow(t, caminho), -1)
+	if len(achados) == 0 {
+		t.Fatalf("%s não fixa go-version em nenhum step de actions/setup-go", caminho)
+	}
+	out := make([]string, len(achados))
+	for i, a := range achados {
+		out[i] = a[1]
+	}
+	return out
+}
+
+// TestWorkflowDeReleasePinaGoNaMesmaVersaoDoCI e
+// TestWorkflowDeBenchPinaGoNaMesmaVersaoDoCI fecham o Important 1 da revisão
+// final: TestWorkflowDeCIPinaGoNaVersaoExata só varria ci.yml, e nada fixava
+// que release.yml e bench.yml acompanham o mesmo pin. Um Go diferente ali
+// builda o binário de release (ou o benchmark) com outro toolchain do que a
+// suíte testou — o mesmo risco de "instrumento diferente medindo o mesmo
+// número" que já justifica o pin exato em ci.yml.
+//
+// A comparação é entre as EXTRAÇÕES dos dois arquivos, e não contra uma
+// constante nova aqui — hardcodar "1.26.5" outra vez reabriria, neste
+// próprio teste, o defeito que ele existe para fechar: alguém sobe a versão
+// em um lugar, esquece os outros, e a comparação segue "verde" porque cada
+// teste checa contra o número escrito à mão, não contra o vizinho.
+func TestWorkflowDeReleasePinaGoNaMesmaVersaoDoCI(t *testing.T) {
+	daCI := versaoDeGoEmWorkflow(t, caminhoDoWorkflowDeCI)
+	daRelease := versaoDeGoEmWorkflow(t, caminhoDoWorkflowDeRelease)
+	for _, achado := range daRelease {
+		if achado != daCI[0] {
+			t.Errorf("release.yml fixa go-version=%q, ci.yml mede a base com %q — os dois precisam medir com a MESMA versão, senão o binário de release sai de um Go diferente do que a suíte testou", achado, daCI[0])
+		}
+	}
+}
+
+func TestWorkflowDeBenchPinaGoNaMesmaVersaoDoCI(t *testing.T) {
+	daCI := versaoDeGoEmWorkflow(t, caminhoDoWorkflowDeCI)
+	daBench := versaoDeGoEmWorkflow(t, caminhoDoWorkflowDeBench)
+	for _, achado := range daBench {
+		if achado != daCI[0] {
+			t.Errorf("bench.yml fixa go-version=%q, ci.yml mede a base com %q — os dois precisam medir com a MESMA versão, senão o benchmark roda sobre um binário compilado por outro Go", achado, daCI[0])
+		}
+	}
+}
+
+// TestWorkflowDeReleaseBuildaComOAlvoDoMakefile fixa a outra metade do
+// Important 1: nada garantia que .github/workflows/release.yml builda com
+// `make build` — a ÚNICA fonte do comando de build, segundo o próprio
+// comentário do workflow — em vez de um `go build` próprio. Um `go build`
+// direto sobe o binário de release SEM os ldflags de buildinfo (Task A3), e
+// scripts/nishidb-update.sh usa exatamente esse carimbo para confirmar a
+// versão nova em /v1/stats — sem ele a verificação pós-start nunca fecha, e
+// o script dispara ROLLBACK ESPÚRIO no piloto mesmo com o binário certo no
+// ar.
+//
+// A verificação roda sobre o SCRIPT do job (scriptDoJobDoArquivo), não sobre
+// o arquivo bruto: um comentário em prosa mencionando "make build" não pode
+// satisfazer o teste com o passo de fato trocado por outro comando.
+func TestWorkflowDeReleaseBuildaComOAlvoDoMakefile(t *testing.T) {
+	script := scriptDoJobDoArquivo(t, caminhoDoWorkflowDeRelease, "anexa-binario")
+	if !regexp.MustCompile(`(?m)^\s*make build\s*$`).MatchString(script) {
+		t.Errorf("o job `anexa-binario` de release.yml não roda `make build` — pode ter sido trocado por um `go build` próprio, que sobe o binário SEM o carimbo de buildinfo (Task A3)\nscript:\n%s", script)
+	}
+}
+
 // TestArquivoDeBaselineExisteEContemUmInteiro fixa a outra metade do ratchet
 // (Ruling 3 do controlador): o arquivo que guarda o número contra o qual o
 // job `lint` compara. Sem ele — ou com o conteúdo corrompido —, o job fica
@@ -164,17 +252,19 @@ type arquivoDeWorkflowDeCI struct {
 	Jobs map[string]jobDeWorkflow `yaml:"jobs"`
 }
 
-// scriptDoJob devolve a concatenação dos `run:` de todos os steps do job
-// pedido — só o script que o runner de fato executa.
-func scriptDoJob(t *testing.T, nome string) string {
+// scriptDoJobDoArquivo devolve a concatenação dos `run:` de todos os steps
+// do job pedido, em QUALQUER arquivo de workflow — a generalização de
+// scriptDoJob (que só enxergava ci.yml) para cobrir release.yml e bench.yml
+// sem duplicar o parser.
+func scriptDoJobDoArquivo(t *testing.T, caminhoArquivo, nomeJob string) string {
 	t.Helper()
 	var wf arquivoDeWorkflowDeCI
-	if err := yaml.Unmarshal([]byte(leWorkflowDeCI(t)), &wf); err != nil {
-		t.Fatalf(".github/workflows/ci.yml não é YAML válido: %v", err)
+	if err := yaml.Unmarshal([]byte(leWorkflow(t, caminhoArquivo)), &wf); err != nil {
+		t.Fatalf("%s não é YAML válido: %v", caminhoArquivo, err)
 	}
-	job, ok := wf.Jobs[nome]
+	job, ok := wf.Jobs[nomeJob]
 	if !ok {
-		t.Fatalf("o workflow não tem um job `%s`", nome)
+		t.Fatalf("%s não tem um job `%s`", caminhoArquivo, nomeJob)
 	}
 	var script strings.Builder
 	for _, passo := range job.Steps {
@@ -182,6 +272,12 @@ func scriptDoJob(t *testing.T, nome string) string {
 		script.WriteString("\n")
 	}
 	return script.String()
+}
+
+// scriptDoJob devolve a concatenação dos `run:` de todos os steps do job
+// pedido em ci.yml — só o script que o runner de fato executa.
+func scriptDoJob(t *testing.T, nome string) string {
+	return scriptDoJobDoArquivo(t, caminhoDoWorkflowDeCI, nome)
 }
 
 // scriptDoJobDeLint é o atalho que os testes do job `lint` já usavam antes
