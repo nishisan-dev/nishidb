@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"maps"
 	"os"
 	"path/filepath"
@@ -13,9 +14,11 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/nishisan-dev/nishidb/internal/logging"
 	"github.com/nishisan-dev/nishidb/internal/storage/checkpoint"
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 	"github.com/nishisan-dev/nishidb/internal/storage/rowindex"
@@ -2182,4 +2185,163 @@ func TestCompactionEmBackgroundDevolveDiscoSemNinguemChamar(t *testing.T) {
 	}
 	reaberto := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10})
 	exigeCorpusNaUltimaRodada(t, reaberto, keys, rodadas-1, "após Close+Open")
+}
+
+// registroDeLog é o io.Writer do logger quando quem escreve é uma goroutine e
+// quem lê é o teste. Um bytes.Buffer nu aí é corrida de dado, e o -race a
+// acusaria antes de o oráculo chegar a dizer qualquer coisa — o que se perde
+// nesse caso não é só a asserção, é a razão da falha.
+type registroDeLog struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (r *registroDeLog) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.buf.Write(p)
+}
+
+func (r *registroDeLog) String() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.buf.String()
+}
+
+// mataOWriter põe o writer em modo falho STICKY pelo caminho que o produto tem:
+// erro na fase de Set dos bitmaps, ou seja DEPOIS do Append (§14.12), que é
+// justamente onde não existe rollback parcial (store.go:1012).
+//
+// É a mesma montagem que o TestCopyForwardRecusaComOWriterEmModoFalho faz em
+// linha, e a repetição é deliberada: aquele teste afirma sobre a RECUSA DA
+// CÓPIA e este sobre a PARADA DO LAÇO, e reescrevê-lo para depender deste
+// helper acoplaria dois oráculos que precisam falhar por motivos diferentes.
+func mataOWriter(t *testing.T, s *Store) {
+	t.Helper()
+	s.SetSetErrHookForTest(func(types.FieldID) error { return errors.New("set falho simulado") })
+	defer s.SetSetErrHookForTest(nil)
+	const key = "mata-o-writer"
+	if _, _, err := s.Put([]byte(key), 1, 0, statusPayload(t, s, key, "Start", 1), nil); err == nil {
+		t.Fatal("montagem: o Put com Set falho deveria falhar e deixar o writer em modo falho")
+	}
+}
+
+// TestCompactionEmBackgroundParaNaPrimeiraFalhaDoWriter é o oráculo do modo
+// falho sticky do LAÇO, que o godoc do rodaCompaction gasta um parágrafo
+// argumentando e que a suíte não media: trocar o bloco de erro inteiro por
+// `_ = s.passadaDeCompaction(ctx, ratio)` deixava `go test ./...` verde de ponta
+// a ponta, com o laço insistindo para sempre sobre um writer que só sai do modo
+// falho com Close e reabertura (§14.14).
+//
+// A asserção do e2e (`compaction.parou` NÃO aparece na corrida boa,
+// compaction_e2e_test.go) não substitui esta, e é importante dizer por quê: ela
+// só falha se a linha existir, então passa por VACUIDADE exatamente quando o
+// ramo é apagado. Asserção negativa não é oráculo da presença.
+//
+// São duas metades, e nenhuma delas basta sozinha:
+//
+//   - a goroutine TERMINA por conta própria, sem cancelamento e sem Close. Quem
+//     responde isso sem inventar seam novo é o próprio compEmVoo: um laço que
+//     insistisse continuaria de pé, e o Wait nunca voltaria;
+//   - e ela se EXPLICA. `compaction.parou` é o único aviso de que o disco
+//     voltou a crescer sem nada devolvê-lo (§53-55, §86); uma parada silenciosa
+//     é indistinguível, no painel do operador, de uma compaction que nunca teve
+//     o que fazer.
+func TestCompactionEmBackgroundParaNaPrimeiraFalhaDoWriter(t *testing.T) {
+	var registro registroDeLog
+	s := openStore(t, Options{
+		Dir:          t.TempDir(),
+		SegmentSize:  8 << 10,
+		BitmapFields: []types.FieldID{fldStatus},
+		Log:          logging.New(&registro, logging.FormatoTexto, slog.LevelInfo),
+	})
+	corpusDeSegmentosSelados(t, s, 40, 30)
+	if eleitos := s.candidatos(0.5); len(eleitos) == 0 {
+		t.Fatal("nenhum candidato depois do corpus: sem passada para falhar, a asserção abaixo passaria por vacuidade")
+	}
+	mataOWriter(t, s)
+
+	s.IniciaCompaction(context.Background(), 0.5)
+
+	terminou := make(chan struct{})
+	go func() { s.compEmVoo.Wait(); close(terminou) }()
+	select {
+	case <-terminou:
+	case <-time.After(60 * time.Second):
+		t.Fatal("a goroutine de compaction continua de pé com o writer em modo falho: ela está insistindo sobre um estado " +
+			"que só Close e reabertura desfazem (§14.14), varrendo segmento e disputando o wmu para reencontrar o mesmo erro")
+	}
+	if saida := registro.String(); !strings.Contains(saida, "compaction.parou") {
+		t.Errorf("a compaction parou sem dizer nada ao operador: o disco volta a crescer e o único aviso do §53-55 não saiu.\nlog:\n%s", saida)
+	}
+}
+
+// TestSegundaPartidaDaCompactionNaoSobeSegundaGoroutine é a guarda de dupla
+// partida do IniciaCompaction, que o godoc afirma e que nada sustentava: apagar
+// o `if s.compCancela != nil { return }` deixava storage, server e cli verdes.
+//
+// O estrago que a guarda impede está escrito no próprio godoc e é de ARQUIVO,
+// não de contagem: duas varreduras disputam o wmu record a record, elegem a
+// mesma lista, e a segunda renomeia e apaga um segmento que a primeira ainda
+// está lendo. A isso soma-se um vazamento de ciclo de vida — a segunda partida
+// SOBRESCREVE o compCancela, de modo que o ParaCompaction do Close cancelaria só
+// a última goroutine e ficaria esperando para sempre pela primeira.
+//
+// O oráculo é positivo, e não uma espera por travamento: a primeira goroutine
+// fica PARADA dentro de uma aposentadoria, no seam do D5, e a partir daí
+// qualquer passo de aposentadoria que apareça é necessariamente de OUTRA
+// goroutine. Contar visitas ao seam sem a barreira não distinguiria a intrusa —
+// são quatro passos por segmento, todos da mesma goroutine.
+func TestSegundaPartidaDaCompactionNaoSobeSegundaGoroutine(t *testing.T) {
+	s := openStore(t, Options{Dir: t.TempDir(), SegmentSize: 8 << 10})
+	corpusDeSegmentosSelados(t, s, 40, 30)
+
+	emVoo := make(chan struct{})
+	libera := make(chan struct{})
+	liberar := sync.OnceFunc(func() { close(libera) })
+	defer liberar()
+	var barreira atomic.Bool
+	var intrusos atomic.Int64
+	s.SetAposentadoriaTraceForTest(func(string) {
+		if barreira.CompareAndSwap(false, true) {
+			close(emVoo)
+			<-libera
+			return
+		}
+		intrusos.Add(1)
+	})
+
+	comecou := time.Now()
+	s.IniciaCompaction(context.Background(), 0.5)
+	select {
+	case <-emVoo:
+	case <-time.After(60 * time.Second):
+		t.Fatal("a compaction não chegou a aposentar nada em 60s: sem a primeira goroutine parada dentro de uma " +
+			"aposentadoria não há com quem a segunda colidir, e a asserção passaria por vacuidade")
+	}
+	// O prazo é CALIBRADO pela bancada em vez de chutado. `decorrido` é o que a
+	// primeira goroutine levou para eleger, varrer um segmento inteiro e chegar
+	// ao primeiro passo da aposentadoria — exatamente o trabalho que uma
+	// intrusa teria de repetir, e ela não precisa de sorte para começar: a
+	// primeira passada do laço é IMEDIATA, sem cochilo. Vinte vezes isso, com
+	// piso de dois segundos, é folga para o -race e para máquina carregada sem
+	// transformar o teste numa espera fixa.
+	decorrido := time.Since(comecou)
+	janela := 20 * decorrido
+	if janela < 2*time.Second {
+		janela = 2 * time.Second
+	}
+
+	s.IniciaCompaction(context.Background(), 0.5)
+	prazo := time.Now().Add(janela)
+	for time.Now().Before(prazo) && intrusos.Load() == 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n := intrusos.Load(); n != 0 {
+		t.Fatalf("a segunda chamada do IniciaCompaction subiu outra goroutine: %d passo(s) de aposentadoria em %v com a "+
+			"primeira parada no seam. Duas varreduras concorrentes aposentam o arquivo que a outra está lendo, e o "+
+			"cancelamento do Close só alcança a última que partiu", n, janela)
+	}
+	t.Logf("segunda partida ignorada: nenhum passo de aposentadoria alheio em %v (primeira passada em %v)", janela, decorrido)
+	liberar()
 }

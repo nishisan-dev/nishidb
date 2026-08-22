@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -258,6 +259,53 @@ func (b *bancadaE2E) produzRodada() int64 {
 	return int64(b.rodada)
 }
 
+// produzSemParar mantém a carga em voo até que o `parar` devolvido seja
+// chamado, e ele espera a goroutine terminar antes de voltar.
+//
+// Existe porque os dois desfechos deste teste — o SIGTERM e o kill -9 — só
+// significam alguma coisa com o processo TRABALHANDO. A compaction não roda o
+// tempo todo: ela dorme cinco segundos entre passadas, e a janela em que há uma
+// aposentadoria em voo é de dezenas de MILISSEGUNDOS. Esperar essa janela com a
+// ingestão parada é esperar por um instante que talvez nunca volte a
+// acontecer — sem eventos novos não há garbage novo, e sem garbage a eleição do
+// §53 devolve lista vazia.
+//
+// Os erros de produção são engolidos DE PROPÓSITO: quem chama já não é a
+// goroutine do teste (t.Fatalf de fora dela é uso indevido do testing), e o que
+// interessa aqui é manter pressão, não auditar cada lote. A falha de verdade
+// aparece no oráculo — o processo que não encerra, a row que não volta.
+func (b *bancadaE2E) produzSemParar() (parar func()) {
+	pedido := make(chan struct{})
+	fim := make(chan struct{})
+	peso := strings.Repeat("p", e2ePesoBytes)
+	go func() {
+		defer close(fim)
+		for {
+			select {
+			case <-pedido:
+				return
+			default:
+			}
+			b.rodada++
+			recs := make([]*kgo.Record, 0, e2eKeys)
+			for i := 0; i < e2eKeys; i++ {
+				id := fmt.Sprintf("s-%04d", i)
+				recs = append(recs, &kgo.Record{
+					Topic: b.topico, Key: []byte(id),
+					Value: []byte(fmt.Sprintf(`{"id":%q,"seq":%d,"peso":%q}`, id, b.rodada, peso)),
+				})
+			}
+			ctx, cancela := context.WithTimeout(context.Background(), 30*time.Second)
+			_ = b.produtor.ProduceSync(ctx, recs...).FirstErr()
+			cancela()
+		}
+	}()
+	return sync.OnceFunc(func() {
+		close(pedido)
+		<-fim
+	})
+}
+
 // bytesProduzidos é o volume que a ingestão já aplicou, medido pelo que o
 // teste publicou. É o número contra o qual "o disco parou de crescer" só
 // significa alguma coisa: num storage append-only sem compaction, o diretório
@@ -472,6 +520,17 @@ func extremos(v []int64) (piso, pico int64) {
 //     /metrics. Uma compaction que devolvesse disco sem a série se mover
 //     deixaria o painel do M4 inútil, que é o que este milestone existe para
 //     evitar;
+//
+// DIVERGÊNCIA DECLARADA, no item 3. Ele pede DUAS séries — a de disco caindo e
+// a nishidb_compaction_bytes_written subindo —, e só a primeira é exercitável
+// aqui. A segunda não existe no /metrics: MetCompactionBytesWritten é nome sem
+// alimentador (nomes.go:48, "sem alimentador até o M4"), e quem o instala é a
+// Task 8, que registra as três séries do §92 no metricas_dataset.go. Este teste
+// NÃO a afirma, e escrever aqui uma asserção que a Task 8 ainda não pode
+// satisfazer seria trocar um oráculo por um lembrete. Os números existem — o
+// compactaSegmento devolve lidos e escritos, e o compaction.segmento_aposentado
+// os registra em cada aposentadoria —, o que falta é a publicação. A metade
+// pendente do item 3 fecha na Task 8, e é lá que ela deve ser cobrada;
 //   - a CONSULTA continua certa durante tudo isso (item 4): toda key presente,
 //     nenhuma duas vezes, e nenhuma sequence REGREDINDO entre duas leituras —
 //     que é exatamente o estrago que um copy-forward mal sincronizado produz,
@@ -575,11 +634,26 @@ func TestCompactionPeloBinarioEstabilizaODiscoComOOperadorVendo(t *testing.T) {
 		t.Fatalf("a consulta durante a compaction devolveu %d rows, queria %d", len(ultimaLeitura), e2eKeys)
 	}
 
-	// Item 5. SIGTERM é o encerramento do operador: o processo drena, fecha e
-	// devolve o flock. O que a compaction acrescenta ao roteiro é a chance de
-	// o sinal chegar no meio de uma varredura — e é a decisão D7 que faz o
-	// Close cancelá-la e aguardá-la em vez de esperar a passada inteira.
+	// Item 5, e o item diz "SIGTERM DURANTE uma compaction" — não "SIGTERM
+	// depois de uma corrida em que houve compaction". A diferença é tudo o que
+	// este trecho afirma: com o sinal disparado num instante arbitrário, o que
+	// se exercita é o encerramento de um processo OCIOSO. A medida, feita nesta
+	// bancada: as aposentadorias desta corrida se agrupam em seis passadas de
+	// 40 a 65 MILISSEGUNDOS dentro de uma janela de 25 segundos, ou seja pouco
+	// mais de 1% do tempo com compaction em voo — sortear o instante é acertar
+	// o cochilo em 99 de cada 100 corridas.
+	//
+	// Então o instante não é sorteado, e o instrumento é o mesmo que o kill -9
+	// já usava: espera-se o `.retired` APARECER no diretório, com a carga
+	// mantida em voo para que haja garbage novo a eleger, e o sinal vai embora
+	// ali. O que o Close tem de fazer nesse ponto é a decisão D7 — cancelar a
+	// goroutine e AGUARDÁ-LA, em vez de esperar a passada inteira ou de
+	// desmapear o índice sob os pés de quem está renomeando arquivo.
+	pararCarga := b.produzSemParar()
+	apanhado := b.esperaJanelaDaAposentadoria(90 * time.Second)
+	t.Logf("SIGTERM disparado com %s em disco: a compaction está no meio de uma passada, não ociosa", filepath.Base(apanhado))
 	if err := b.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		pararCarga()
 		t.Fatalf("SIGTERM: %v", err)
 	}
 	esperado := make(chan error, 1)
@@ -587,10 +661,12 @@ func TestCompactionPeloBinarioEstabilizaODiscoComOOperadorVendo(t *testing.T) {
 	select {
 	case err := <-esperado:
 		b.morto = true
+		pararCarga()
 		if err != nil {
 			t.Fatalf("o servidor saiu com erro após o SIGTERM: %v\n%s", err, b.saida.String())
 		}
 	case <-time.After(60 * time.Second):
+		pararCarga()
 		t.Fatalf("o servidor não encerrou em 60s após o SIGTERM: o Close ficou preso atrás da compaction\n%s", b.saida.String())
 	}
 	b.exigeSemAposentadoEmDisco("após o SIGTERM")
@@ -649,10 +725,11 @@ func TestKill9DuranteACompactionNoProdutoPreservaTodasAsRows(t *testing.T) {
 	// dataset que só cresceu, e o teste passaria por vacuidade.
 	serieAnterior := b.metrica(metrics.MetStorageBytes)
 	var compactou bool
+	var ultimaLeitura map[string]int64
 	for r := 1; r <= 60 && !compactou; r++ {
 		alvo := b.produzRodada()
 		time.Sleep(e2eIntervaloDaRodada)
-		b.esperaIngestaoAlcancar(alvo, 60*time.Second)
+		ultimaLeitura = b.esperaIngestaoAlcancar(alvo, 60*time.Second)
 		serie := b.metrica(metrics.MetStorageBytes)
 		compactou = serie < serieAnterior
 		serieAnterior = serie
@@ -660,6 +737,10 @@ func TestKill9DuranteACompactionNoProdutoPreservaTodasAsRows(t *testing.T) {
 	if !compactou {
 		t.Fatalf("nishidb_storage_bytes nunca caiu: a compaction não entrou em ciclo e não há o que este kill -9 exercite\n%s",
 			b.saida.String())
+	}
+	if len(ultimaLeitura) != e2eKeys {
+		t.Fatalf("a última leitura remota trouxe %d rows, queria %d: sem ela não há piso de sequence contra o qual medir o recovery",
+			len(ultimaLeitura), e2eKeys)
 	}
 
 	// O estado CONFIRMADO, lido do manifest antes do sinal. É contra ele que
@@ -678,31 +759,7 @@ func TestKill9DuranteACompactionNoProdutoPreservaTodasAsRows(t *testing.T) {
 	// A carga CONTINUA durante a morte: o processo é morto com o consumidor
 	// aplicando eventos e a compaction em ciclo, que é a situação em que a
 	// aposentadoria pode estar no meio de qualquer um dos quatro passos do D5.
-	parar := make(chan struct{})
-	fim := make(chan struct{})
-	go func() {
-		defer close(fim)
-		for {
-			select {
-			case <-parar:
-				return
-			default:
-			}
-			b.rodada++
-			peso := strings.Repeat("p", e2ePesoBytes)
-			recs := make([]*kgo.Record, 0, e2eKeys)
-			for i := 0; i < e2eKeys; i++ {
-				id := fmt.Sprintf("s-%04d", i)
-				recs = append(recs, &kgo.Record{
-					Topic: b.topico, Key: []byte(id),
-					Value: []byte(fmt.Sprintf(`{"id":%q,"seq":%d,"peso":%q}`, id, b.rodada, peso)),
-				})
-			}
-			ctx, cancela := context.WithTimeout(context.Background(), 30*time.Second)
-			_ = b.produtor.ProduceSync(ctx, recs...).FirstErr()
-			cancela()
-		}
-	}()
+	pararCarga := b.produzSemParar()
 
 	// O instante da morte não é sorteado: o teste espera o `.retired` APARECER
 	// no diretório e mata o processo ali. É a janela mais estreita e mais cara
@@ -713,13 +770,11 @@ func TestKill9DuranteACompactionNoProdutoPreservaTodasAsRows(t *testing.T) {
 	// passadas, e exercitaria um processo parado.
 	apanhado := b.esperaJanelaDaAposentadoria(90 * time.Second)
 	if err := b.cmd.Process.Signal(syscall.SIGKILL); err != nil {
-		close(parar)
-		<-fim
+		pararCarga()
 		t.Fatalf("SIGKILL: %v", err)
 	}
 	estado, err := b.cmd.Process.Wait()
-	close(parar)
-	<-fim
+	pararCarga()
 	b.morto = true
 	if err != nil {
 		t.Fatalf("aguardar o processo morto: %v", err)
@@ -741,6 +796,23 @@ func TestKill9DuranteACompactionNoProdutoPreservaTodasAsRows(t *testing.T) {
 	if uint64(len(rows)) < confirmadas {
 		t.Errorf("%d rows após o kill -9, mas o checkpoint já confirmava %d", len(rows), confirmadas)
 	}
+	// A conferência é por KEY e com PISO, e o piso é o que faz dela um oráculo.
+	//
+	// `presente` mais `seq > 0` diz apenas que alguma coisa voltou com aquele
+	// nome: uma row que reaparecesse com a sequence de dezenas de rodadas atrás
+	// passaria verde — e é exatamente esse o estrago de um copy-forward mal
+	// sincronizado que sobrevive ao SIGKILL, porque o record antigo copiado é
+	// durável, tem CRC válido e nenhuma outra camada o distingue de uma escrita
+	// legítima.
+	//
+	// O piso é a ÚLTIMA leitura remota, e ele é conservador por construção: o
+	// servidor já respondia aquele valor pela porta HTTP, o que só acontece
+	// depois de o record estar no segmento, e o SIGKILL não descarta page cache
+	// (o mesmo argumento que o godoc do durabilizaODiretorio registra). A carga
+	// seguiu correndo depois dessa leitura, de modo que o piso fica ATRÁS do
+	// estado real no instante da morte — o que ele proíbe é a regressão, não o
+	// que o kill -9 legitimamente custa em rodadas não checkpointadas.
+	menor, maior := int64(-1), int64(-1)
 	for i := 0; i < e2eKeys; i++ {
 		id := fmt.Sprintf("s-%04d", i)
 		seq, presente := rows[id]
@@ -748,8 +820,40 @@ func TestKill9DuranteACompactionNoProdutoPreservaTodasAsRows(t *testing.T) {
 			t.Errorf("a key %q não voltou do recovery: location pendurada num arquivo que a aposentadoria removeu", id)
 			continue
 		}
-		if seq <= 0 {
-			t.Errorf("a key %q voltou com seq %d: o record recuperado não é um update válido", id, seq)
+		if piso := ultimaLeitura[id]; seq < piso {
+			t.Errorf("a key %q voltou do recovery com seq %d, atrás dos %d que o servidor já respondia pela porta HTTP: "+
+				"o dataset regrediu no kill -9, que é o payload antigo do copy-forward publicado por cima do novo", id, seq, piso)
+			continue
+		}
+		if menor < 0 || seq < menor {
+			menor = seq
+		}
+		if seq > maior {
+			maior = seq
 		}
 	}
+	if menor < 0 {
+		t.Fatal("nenhuma key voltou do recovery")
+	}
+	// A BANDA é o oráculo fino, e ela existe porque o piso acima é grosso: a
+	// carga segue em voo depois da última leitura remota, então aquele piso fica
+	// centenas de rodadas atrás do estado real no instante da morte, e uma row
+	// que voltasse com a sequence de DEZENAS de rodadas atrás — que é
+	// exatamente o estrago de um copy-forward mal sincronizado sobrevivendo ao
+	// SIGKILL — passaria por cima dele.
+	//
+	// A banda não depende de saber qual era a rodada corrente. A carga publica
+	// TODAS as keys a cada rodada, o consumidor as aplica em ordem, e o corte da
+	// recovery é UM ponto do fluxo de append: no máximo uma rodada fica partida
+	// entre as keys que entraram antes do corte e as que não entraram. Duas
+	// rodadas de folga cobrem esse corte com margem; dezenas não são corte, são
+	// record antigo ressuscitado.
+	const bandaDoRecovery = 2
+	if maior-menor > bandaDoRecovery {
+		t.Errorf("as sequences do recovery se espalham por %d rodadas (de %d a %d) nas %d keys: a carga atualiza todas elas a cada "+
+			"rodada, então essa dispersão não é o corte do kill -9 — é row voltando de um record que a compaction copiou do passado",
+			maior-menor, menor, maior, e2eKeys)
+	}
+	t.Logf("recovery: sequences de %d a %d (banda de %d rodada(s)), todas acima do piso da última leitura remota",
+		menor, maior, maior-menor)
 }
