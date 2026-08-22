@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nishisan-dev/nishidb/internal/buildinfo"
 )
 
 const specPath = "../../testdata/radius.materialization.yaml"
@@ -467,6 +469,12 @@ func TestReportSerializaEIdentificaARodada(t *testing.T) {
 	}
 	if voltou.GoVersion == "" {
 		t.Error("GoVersion ausente")
+	}
+	// nishidb_version identifica o COMMIT do engine que produziu o número —
+	// sem ele, dois reports com o mesmo GoVersion mas engines diferentes (um
+	// antes e outro depois de uma otimização) não são distinguíveis.
+	if voltou.NishidbVersion != buildinfo.String() {
+		t.Errorf("NishidbVersion = %q, quer %q (buildinfo.String())", voltou.NishidbVersion, buildinfo.String())
 	}
 	if len(voltou.Gates) < 4 {
 		t.Errorf("%d gates no relatório, esperado ao menos 4", len(voltou.Gates))

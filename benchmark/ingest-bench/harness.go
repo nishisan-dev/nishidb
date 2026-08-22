@@ -33,6 +33,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nishisan-dev/nishidb/internal/buildinfo"
 	"github.com/nishisan-dev/nishidb/internal/materializer"
 	"github.com/nishisan-dev/nishidb/internal/memprof"
 	"github.com/nishisan-dev/nishidb/internal/schema"
@@ -220,15 +221,20 @@ func rotuloDoGate(g GateResult) string {
 
 // Report é o artefato final.
 type Report struct {
-	StartedAt  time.Time     `json:"started_at"`
-	GoVersion  string        `json:"go_version"`
-	GOMEMLIMIT string        `json:"gomemlimit"`
-	GOGC       string        `json:"gogc"`
-	Config     ConfigSummary `json:"config"`
-	Load       PhaseReport   `json:"load"`
-	Steady     PhaseReport   `json:"steady"`
-	Queries    []QueryStats  `json:"queries,omitempty"`
-	SQLErrors  int64         `json:"sql_errors"`
+	StartedAt time.Time `json:"started_at"`
+	GoVersion string    `json:"go_version"`
+	// NishidbVersion identifica o COMMIT do engine que produziu o report —
+	// internal/buildinfo.String(), a MESMA função que o `nishidb --version`
+	// usa. Sem ele, dois reports com o mesmo GoVersion mas engines
+	// diferentes (antes/depois de uma otimização) não são distinguíveis.
+	NishidbVersion string        `json:"nishidb_version"`
+	GOMEMLIMIT     string        `json:"gomemlimit"`
+	GOGC           string        `json:"gogc"`
+	Config         ConfigSummary `json:"config"`
+	Load           PhaseReport   `json:"load"`
+	Steady         PhaseReport   `json:"steady"`
+	Queries        []QueryStats  `json:"queries,omitempty"`
+	SQLErrors      int64         `json:"sql_errors"`
 	// FullScanSec é a duração de UMA varredura completa do dataset (predicado
 	// que não casa nada), medida fora do rodízio de consultas.
 	FullScanSec   float64 `json:"full_scan_sec"`
@@ -438,10 +444,11 @@ func Run(cfg Config) (*Report, error) {
 	m := materializer.New(c, st)
 
 	rep := &Report{
-		StartedAt:  time.Now(),
-		GoVersion:  runtime.Version(),
-		GOMEMLIMIT: os.Getenv("GOMEMLIMIT"),
-		GOGC:       os.Getenv("GOGC"),
+		StartedAt:      time.Now(),
+		GoVersion:      runtime.Version(),
+		NishidbVersion: buildinfo.String(),
+		GOMEMLIMIT:     os.Getenv("GOMEMLIMIT"),
+		GOGC:           os.Getenv("GOGC"),
 		Config: ConfigSummary{
 			Entities: cfg.Entities, Seed: cfg.Seed,
 			SteadySec: int(cfg.SteadyDuration.Seconds()), SteadyRate: cfg.SteadyRate,
