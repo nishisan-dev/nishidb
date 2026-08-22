@@ -250,7 +250,10 @@ func (w *Writer) conta(r materializer.ApplyResult) {
 	case r.Action == materializer.ActionStale:
 		w.met.stale.Inc()
 	case r.Category.BadEvent():
-		w.met.invalidos.Inc()
+		// O motivo é a categoria §101 do evento (ex.: EVENT_TOO_LARGE),
+		// nomeada em nishidb_ingest_invalid_total desde a Task A5 — sem isso
+		// o painel e um alerta só enxergavam um total misturado.
+		w.met.invalido(r.Category.String()).Inc()
 	case r.Err != nil:
 		w.met.falhas.Inc()
 	}

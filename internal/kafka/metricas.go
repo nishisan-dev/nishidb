@@ -20,9 +20,14 @@ import (
 type metricas struct {
 	eventos    *metrics.SerieContador
 	stale      *metrics.SerieContador
-	invalidos  *metrics.SerieContador
 	falhas     *metrics.SerieContador
 	errosKafka *metrics.SerieContador
+
+	// famInvalidos carrega o LabelMotivo (Task A5, issue #15): cada categoria
+	// §101 de evento ruim tem sua própria série, e não uma soma cega — é o
+	// que permite ao painel e a um alerta nomear EVENT_TOO_LARGE em vez de
+	// enxergar só um total misturado com INVALID_JSON e as outras quatro.
+	famInvalidos *metrics.FamiliaContador
 
 	bloqueado      *metrics.SerieMedidor
 	filaRegistros  *metrics.SerieMedidor
@@ -47,9 +52,11 @@ func registraMetricas(r *metrics.Registry, dataset string) *metricas {
 		return r.Medidor(nome, ajuda, metrics.LabelDataset).Com(dataset)
 	}
 	return &metricas{
-		eventos:   contador(metrics.MetIngestEventsTotal, "Eventos oferecidos à ingestão."),
-		stale:     contador(metrics.MetIngestStaleTotal, "Eventos descartados por sequence (§25). Não é erro."),
-		invalidos: contador(metrics.MetIngestInvalidTotal, "Eventos descartados por serem ruins (§101)."),
+		eventos: contador(metrics.MetIngestEventsTotal, "Eventos oferecidos à ingestão."),
+		stale:   contador(metrics.MetIngestStaleTotal, "Eventos descartados por sequence (§25). Não é erro."),
+		famInvalidos: r.Contador(metrics.MetIngestInvalidTotal,
+			"Eventos descartados por serem ruins (§101), por motivo (categoria §101; Task A5/issue #15).",
+			metrics.LabelDataset, metrics.LabelMotivo),
 		falhas: contador(metrics.MetIngestFailedTotal,
 			"Eventos que NÃO entraram por falha que não é do evento. O §92 não prevê esta série, e sem ela a perda de dado seria invisível num daemon, onde não há exit code para carregá-la."),
 		errosKafka: contador(metrics.MetKafkaErrorsTotal,
@@ -75,4 +82,10 @@ func (m *metricas) lag(p int32) *metrics.SerieMedidor {
 
 func (m *metricas) offset(p int32) *metrics.SerieMedidor {
 	return m.famOffset.Com(m.dataset, strconv.Itoa(int(p)))
+}
+
+// invalido devolve a série do motivo dado — o nome da categoria §101
+// (ErrorCategory.String() do materializer, ex.: "EVENT_TOO_LARGE").
+func (m *metricas) invalido(motivo string) *metrics.SerieContador {
+	return m.famInvalidos.Com(m.dataset, motivo)
 }

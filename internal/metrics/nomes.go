@@ -89,10 +89,16 @@ const (
 	MetKafkaPartitionsTotal    = "nishidb_kafka_partitions_total"
 )
 
-// LabelDataset e LabelPartition são os únicos nomes de label do produto. Um
-// label a mais multiplica séries por cardinalidade, e a spec não pede nenhum.
+// Nomes de label do produto. Um label a mais multiplica séries por
+// cardinalidade, e cada um aqui existe por uma razão registrada: LabelCategoria
+// separa nishidb_query_errors por categoria de falha de consulta;
+// LabelMotivo (Task A5, issue #15) separa nishidb_ingest_invalid_total pela
+// categoria §101 do evento ruim — sem ele, EVENT_TOO_LARGE (a cauda de chave
+// que estoura MaxKeySize) ficava indistinguível das outras cinco categorias
+// dentro do mesmo total.
 const (
 	LabelDataset   = "dataset"
 	LabelPartition = "partition"
 	LabelCategoria = "categoria"
+	LabelMotivo    = "motivo"
 )

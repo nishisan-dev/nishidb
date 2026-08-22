@@ -1,6 +1,7 @@
 package kafka_test
 
 import (
+	"bytes"
 	"errors"
 	"strings"
 	"testing"
@@ -67,6 +68,35 @@ func TestEventoAcimaDoTetoSegueAPolitica(t *testing.T) {
 	}
 	if offsets, _ := b.leOffsets(); offsets[0] != 3 {
 		t.Errorf("offset = %d, quer 3", offsets[0])
+	}
+}
+
+// Issue #15 / Task A5 — nishidb_ingest_invalid_total quebra por `motivo`
+// desde esta task (internal/kafka/metricas.go): antes dela, EVENT_TOO_LARGE
+// (a cauda de chave que estoura MaxKeySize, medida no piloto em 1099 e 1074
+// bytes — docs/piloto-events.md) ficava indistinguível de INVALID_JSON dentro
+// do mesmo total, e nem o painel nem um alerta tinham como nomear a causa.
+func TestInvalidosContamPorMotivoEmMetrics(t *testing.T) {
+	b := novaBancada(t, 1)
+	defer b.fecha()
+
+	b.produz(eventoRuim(), eventoGigante())
+	if _, err := b.consomeAte(prazo, func(d kafka.Desfecho) bool { return d.Eventos >= 2 }); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	if _, err := b.reg.WriteTo(&buf); err != nil {
+		t.Fatalf("WriteTo: %v", err)
+	}
+	saida := buf.String()
+	for _, linha := range []string{
+		`nishidb_ingest_invalid_total{dataset="radius_sessions",motivo="EVENT_TOO_LARGE"} 1`,
+		`nishidb_ingest_invalid_total{dataset="radius_sessions",motivo="INVALID_JSON"} 1`,
+	} {
+		if !strings.Contains(saida, linha) {
+			t.Errorf("linha %q não apareceu em /metrics:\n%s", linha, saida)
+		}
 	}
 }
 
