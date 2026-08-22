@@ -27,6 +27,14 @@
 #   a saúde do resultado dentro de um prazo, e desfaz a troca se a
 #   verificação não fechar.
 #
+#   NOTA sobre o primeiro uso: a migração para o layout releases/<versão>/ (com
+#   `current` symlinkado para dentro dele) é MANUAL — este script não a faz,
+#   só pressupõe que ela já aconteceu. E a pré-checagem (le_versao_atual) exige
+#   que o serviço CORRENTE já publique .process.version em /v1/stats; um
+#   binário pré-Task A3 não publica esse campo, então a primeira chamada
+#   real deste script só funciona depois que o binário em produção já foi
+#   trocado, ao menos uma vez, por um que o publique.
+#
 # Variáveis de ambiente (todas com default de produção):
 #   NISHIDB_ROOT                     default /app/nishidb
 #   NISHIDB_UPDATE_SYSTEMCTL         default systemctl        (comando substituível, p/ testes)
