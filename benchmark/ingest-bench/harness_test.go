@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -676,6 +679,234 @@ func TestDirBytesSomaSubdiretorios(t *testing.T) {
 		t.Errorf("dirBytes = %d, want 123", got)
 	}
 }
+
+// A compaction do §53-55 é o MECANISMO que o gate de disco existe para aferir,
+// e até aqui nenhum teste pedia uma rodada com ela ligada: o campo ficava em 0
+// na suíte inteira, o ramo que chama IniciaCompaction nunca executava, e a
+// rodada de aceite podia ter rodado append-only puro enquanto o artefato
+// publicava `compaction_min_live_ratio: 0.50`. É a família do débito 6 — o
+// instrumento que afirma sem ter medido — e a da errata do M1.
+//
+// Duas asserções, uma para cada metade da afirmação: a LINHA prova que o ramo
+// foi tomado (quem não liga a compaction não a anuncia), e o ARTEFATO prova que
+// o número que sai no JSON é o número que entrou na Config. O comentário do
+// campo diz que ele é "obrigatório no artefato"; sem esta segunda asserção nada
+// impedia o artefato de publicar 0,50 numa rodada sem compaction nenhuma.
+//
+// ESCALA: 300 entidades em TempDir. Nesta escala a compaction não chega a
+// aposentar nada (o intervalo entre passadas é de 5 s), então o que se prova
+// aqui é o LIGAMENTO e o registro, não o efeito. O efeito é a série do STEADY,
+// e ela é a rodada de aceite da Task 12.
+func TestCompactionLigadaAnunciaERegistraARazaoPedida(t *testing.T) {
+	const razao = 0.50
+	cfg := baseConfig(t, 300)
+	cfg.CompactionRatio = razao
+	var log bytes.Buffer
+	cfg.Out = &log
+
+	rep, err := Run(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(log.String(), "COMPACTION: ligada com minimumLiveRatio 0.50") {
+		t.Errorf("a rodada não anunciou a compaction — o ramo que a liga não foi tomado. Saída:\n%s", log.String())
+	}
+	if got := razaoNoArtefato(t, rep); got != razao {
+		t.Errorf("compaction_min_live_ratio = %v no artefato, want %v: o JSON tem de dizer com que política a rodada mediu", got, razao)
+	}
+}
+
+// O controle negativo tem o mesmo direito ao registro: uma rodada com
+// `-compaction-ratio 0` mede o append-only puro, e um artefato que não diga
+// isso é indistinguível do artefato da rodada com compaction. A linha da saída
+// e o campo do JSON precisam concordar com a Config nos DOIS sentidos, senão
+// fixar o campo em qualquer constante passa despercebido.
+func TestCompactionDesligadaAnunciaERegistraZero(t *testing.T) {
+	cfg := baseConfig(t, 200)
+	cfg.CompactionRatio = 0
+	var log bytes.Buffer
+	cfg.Out = &log
+
+	rep, err := Run(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(log.String(), "COMPACTION: DESLIGADA") {
+		t.Errorf("a rodada não anunciou que a compaction está desligada. Saída:\n%s", log.String())
+	}
+	if got := razaoNoArtefato(t, rep); got != 0 {
+		t.Errorf("compaction_min_live_ratio = %v no artefato, want 0", got)
+	}
+}
+
+// A faixa do §78 é [0, 1): 0 desliga, e >= 1 elegeria TODO segmento — a
+// compaction passaria a reescrever o dataset inteiro a cada passada, que não é
+// a política, é um laço de cópia. A validação existia sem oráculo nenhum;
+// removê-la inteira deixava a suíte verde e a rodada de aceite entregue a um
+// número que ninguém cobrou.
+func TestCompactionRatioForaDaFaixaRecusaARodada(t *testing.T) {
+	for _, ratio := range []float64{-0.5, -0.01, 1.0, 1.5} {
+		cfg := baseConfig(t, 50)
+		cfg.CompactionRatio = ratio
+		_, err := Run(cfg)
+		if err == nil {
+			t.Errorf("Run aceitou CompactionRatio = %v, fora de [0, 1)", ratio)
+			continue
+		}
+		if !strings.Contains(err.Error(), "CompactionRatio") {
+			t.Errorf("CompactionRatio = %v: erro %q não nomeia o campo recusado", ratio, err)
+		}
+	}
+}
+
+func razaoNoArtefato(t *testing.T, rep *Report) float64 {
+	t.Helper()
+	raw, err := json.Marshal(rep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Ponteiro de propósito: assim a ausência do campo (tag renomeada, campo
+	// removido) falha em vez de virar o zero-value, que é justamente o valor
+	// que uma rodada sem compaction publicaria.
+	var artefato struct {
+		Config struct {
+			CompactionRatio *float64 `json:"compaction_min_live_ratio"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal(raw, &artefato); err != nil {
+		t.Fatal(err)
+	}
+	if artefato.Config.CompactionRatio == nil {
+		t.Fatalf("o artefato não tem compaction_min_live_ratio: %s", raw)
+	}
+	return *artefato.Config.CompactionRatio
+}
+
+// Uma entrada que o instrumento não CONSEGUIU medir tem de abortar a rodada, e
+// não sumir da soma. O caminho coberto até aqui era o `ReadDir` falhando na
+// raiz; o caminho por ENTRADA — o que o commit anterior afirma ter fechado —
+// seguia sem oráculo, e trocar o `return` por um `continue` restaurava o
+// engolimento antigo com a suíte verde.
+//
+// O diretório em 0444 é o que separa os dois erros no sistema de arquivos real:
+// LEITURA sem BUSCA deixa o `getdents` listar a entrada e faz o `lstat` dela
+// falhar com EACCES. É um erro de instrumento, não uma aposentadoria, e a
+// diferença é a direção do estrago: engolir aqui DIMINUI a soma, e soma que
+// diminui é o desenho que a série lê como "a compaction devolveu disco".
+func TestDirBytesAbortaQuandoNaoConsegueMedirUmaEntrada(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignora o bit de busca do diretório: sem EACCES não há o que provar")
+	}
+	dir := filepath.Join(t.TempDir(), "sem-busca")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "seg-0.dat"), make([]byte, 4096), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	// Antes da limpeza do TempDir, que roda depois desta por ser LIFO.
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	n, err := dirBytes(dir)
+	if err == nil {
+		t.Fatalf("dirBytes devolveu %d para uma entrada que não conseguiu medir", n)
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("erro de permissão classificado como arquivo inexistente: %v", err)
+	}
+}
+
+// A exceção do arquivo que SUMIU é a única leniência do instrumento, e ela é
+// deliberada: o `unlink` do segmento `.retired` roda concorrente com a
+// varredura, e aqueles bytes de fato não estão mais no disco. Contá-los como
+// erro reprovaria a compaction por ter funcionado.
+//
+// Os três casos são os três ramos por entrada, e a suíte não os alcançava por
+// arquivo real — o ENOENT do `Info` só acontece se o arquivo desaparecer ENTRE
+// o `ReadDir` e o `stat`, corrida que o teste não controla. Descrevendo as
+// entradas, cada ramo responde: sumiu não conta, sumiu na recursão também não,
+// e QUALQUER outro erro aborta. A entrada viva ANTES da descrita faz dois
+// trabalhos: impede um `return 0, nil` preguiçoso de passar nos dois primeiros
+// casos, e no terceiro dá conteúdo à soma parcial — devolver 77 junto do erro
+// entrega ao chamador um número que parece medida e não é.
+func TestSomaDasEntradasSoIgnoraOQueSumiu(t *testing.T) {
+	raiz := t.TempDir()
+	if err := os.WriteFile(filepath.Join(raiz, "vivo.dat"), make([]byte, 77), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reais, err := os.ReadDir(raiz)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vivo := reais[0]
+
+	casos := []struct {
+		nome    string
+		entrada fs.DirEntry
+		want    int64
+		wantErr bool
+	}{
+		{
+			nome:    "arquivo aposentado entre o ReadDir e o stat",
+			entrada: entradaDescrita{nome: "seg-9.retired", erroDoInfo: fs.ErrNotExist},
+			want:    77,
+		},
+		{
+			nome:    "subdiretório que sumiu durante a recursão",
+			entrada: entradaDescrita{nome: "sub-que-sumiu", diretorio: true},
+			want:    77,
+		},
+		{
+			nome:    "entrada ilegível: instrumento cego aborta",
+			entrada: entradaDescrita{nome: "seg-10.dat", erroDoInfo: fs.ErrPermission},
+			wantErr: true,
+		},
+	}
+	for _, tc := range casos {
+		got, err := somaDasEntradas(raiz, []fs.DirEntry{vivo, tc.entrada})
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("%s: somaDasEntradas devolveu %d sem erro", tc.nome, got)
+			} else if got != 0 {
+				t.Errorf("%s: soma parcial %d junto do erro — o chamador que ignorar o erro lê isso como disco medido", tc.nome, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%s: %v", tc.nome, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("%s: somaDasEntradas = %d, want %d", tc.nome, got, tc.want)
+		}
+	}
+}
+
+// entradaDescrita é uma entrada de diretório cujo destino o teste escolhe. Não
+// é falsificação de medida: o que ela descreve é o estado que o sistema de
+// arquivos entrega quando o arquivo some entre a listagem e o stat — o caso que
+// a aposentadoria do §53-55 produz em toda passada, e que só a corrida real
+// fabrica.
+type entradaDescrita struct {
+	nome       string
+	diretorio  bool
+	erroDoInfo error
+}
+
+func (e entradaDescrita) Name() string { return e.nome }
+func (e entradaDescrita) IsDir() bool  { return e.diretorio }
+
+func (e entradaDescrita) Type() fs.FileMode {
+	if e.diretorio {
+		return fs.ModeDir
+	}
+	return 0
+}
+
+func (e entradaDescrita) Info() (fs.FileInfo, error) { return nil, e.erroDoInfo }
 
 func gateByName(t *testing.T, rep *Report, name string) GateResult {
 	t.Helper()

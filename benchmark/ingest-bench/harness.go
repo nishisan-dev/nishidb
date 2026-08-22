@@ -1117,14 +1117,36 @@ const (
 	// o append-only puro dá razão 1,00 por construção — a inclinação não muda —,
 	// 2,9x acima deste limiar, e o plateau do esboço dá 0,065, 5,4x abaixo.
 	//
-	// MEDIDO, e a escala importa: 50.000 entidades, STEADY de 120 s a
-	// 5.000 ev/s, segmentos de 4 MiB, em disco real. Com a compaction ligada em
-	// 0,50 a razão ficou em -0,663 (a segunda metade ENCOLHEU: 29,1 MiB no
-	// começo da janela, pico de 293,8 MiB dentro dela, 75,2 MiB no fim); com
-	// -compaction-ratio 0, na MESMA carga e com a primeira metade idêntica byte
-	// a byte, ficou em 1,346 e o disco terminou em 347,4 MiB. Os dois regimes
-	// caem de lados opostos do limiar, e é a rodada desligada que prova que o
-	// gate discorda de alguma coisa.
+	// DUAS RODADAS MEDIDAS, e elas provam MENOS do que este comentário
+	// afirmava. A escala inteira, porque a última linha dela é a que decide:
+	// 50.000 entidades, STEADY de 120 s a 5.000 ev/s, segmentos de 4 MiB,
+	// -checkpoint-every 500.000 (o default), em disco real (ext4). Os dois
+	// artefatos estão em benchmark/baselines/, com a série de 600 amostras
+	// inteira — que é o único formato em que estes números são conferíveis:
+	//
+	//	gate-disco-compaction-on-50k-20260822.json    razão -0,664
+	//	gate-disco-compaction-off-50k-20260822.json   razão  1,346
+	//
+	// Com a compaction em 0,50: 29,1 MiB no começo da janela, pico de
+	// 293,2 MiB em t = 104,2 s, 75,1 MiB no fim. Com -compaction-ratio 0, na
+	// mesma carga: crescimento até 347,4 MiB, sem uma única devolução.
+	//
+	// O que essas duas rodadas NÃO estabelecem: que os regimes caiam de lados
+	// opostos do limiar. As duas séries são IDÊNTICAS até a amostra 497 de 600
+	// — 82,8% da janela, os mesmos 475.211 B/amostra na primeira metade das
+	// duas —, e a diferença inteira mora nos últimos 20,6 s. A causa é
+	// mecânica e está no artefato: a rodada toda teve UM checkpoint
+	// (checkpoint_count = 1, em t ≈ 90 s), e segmento selado depois do último
+	// checkpoint não é elegível — então em 82,8% da janela a rodada "com
+	// compaction" é append-only puro, byte a byte. O que separa os dois
+	// números é ONDE a janela termina em relação ao único dente, não o regime.
+	//
+	// Portanto: o limiar 0,35 está justificado pela aritmética do esboço, e
+	// pela rodada desligada, que reprova por crescer sem devolver nada. NÃO
+	// está calibrado por uma janela em regime — essa janela ainda não foi
+	// medida, e é a rodada de aceite da Task 12 que deve produzi-la, com
+	// STEADY longo o bastante (ou -checkpoint-every baixo o bastante) para a
+	// janela conter vários dentes em vez de um.
 	//
 	// A folga do lado do plateau existe porque a compaction NÃO leva o
 	// crescimento a zero: o segmento corrente continua sendo apendado, e uma
@@ -1202,8 +1224,11 @@ func avaliaGateDeDisco(serie []int64) GateResult {
 		// A dica do checkpoint não é ruído: o segSize do writer só se move no
 		// checkpoint (compaction.go), então um -checkpoint-every alto adia a
 		// ELEIÇÃO dos segmentos selados depois do último — e a rodada reprova
-		// por cadência, não por compaction quebrada. Medido: com o default de
-		// 500.000 eventos, nada foi eleito na primeira metade da janela.
+		// por cadência, não por compaction quebrada. Medido, na rodada de
+		// gate-disco-compaction-on-50k-20260822.json: com o default de 500.000
+		// eventos a rodada inteira teve UM checkpoint, e o disco não devolveu
+		// nada antes da amostra 497 de 600 (t = 99,4 s de 120 s) — 82,8% da
+		// janela indistinguíveis do append-only puro.
 		g.Detail += "; o disco continua subindo em regime, que é o §86 caminhando para o ENOSPC. " +
 			"Confira -compaction-ratio e -checkpoint-every antes de culpar a compaction: " +
 			"segmento selado depois do último checkpoint ainda não é elegível"
@@ -1311,8 +1336,29 @@ func dirBytes(dir string) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("ingest-bench: medindo o disco de %s: %w", dir, err)
 	}
+	return somaDasEntradas(dir, entries)
+}
+
+// somaDasEntradas é o laço de dirBytes, e está separado por uma razão de PROVA,
+// não de estilo.
+//
+// Os três ramos POR ENTRADA — o erro que aborta, o arquivo que sumiu e o
+// subdiretório que sumiu — são justamente os que nenhum teste alcançava: o
+// único caminho com oráculo era o `ReadDir` falhando na RAIZ, e os outros três
+// sobreviviam a mutação com a suíte verde. Pelo sistema de arquivos não dá para
+// forçá-los: o ENOENT do `Info` exige que o arquivo desapareça ENTRE o `ReadDir`
+// e o `stat`, que é uma corrida que o teste não controla. Recebendo as entradas
+// prontas, a suíte descreve cada uma delas e cobra a decisão — sem trocar
+// nenhuma linha do comportamento, que continua idêntico ao que o dirBytes fazia.
+//
+// A assimetria dos ramos é deliberada e é a do §53-55: quem sumiu não conta
+// (o `unlink` do `.retired` de fato tirou aqueles bytes do disco), quem não
+// pôde ser lido ABORTA. As duas decisões erram para o mesmo lado do gate — a
+// primeira encolhe a soma porque o disco encolheu mesmo, a segunda se recusa a
+// encolher a soma por cegueira do instrumento.
+func somaDasEntradas(dir string, entradas []fs.DirEntry) (int64, error) {
 	var total int64
-	for _, e := range entries {
+	for _, e := range entradas {
 		p := filepath.Join(dir, e.Name())
 		if e.IsDir() {
 			sub, err := dirBytes(p)
