@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -51,31 +53,19 @@ func campoDaSaida(t *testing.T, saida, rotulo string) string {
 	return ""
 }
 
-// linhaDaSaida devolve a linha cuja primeira coluna é o valor pedido — é como
-// se lê uma tabela de colunas, no `datasets` e no `inspect`.
-func linhaDaSaida(t *testing.T, saida, primeiraColuna string) string {
-	t.Helper()
-	for _, l := range strings.Split(saida, "\n") {
-		l = strings.TrimSpace(l)
-		i := strings.Index(l, "  ")
-		if i < 0 {
-			continue
-		}
-		if strings.TrimSpace(l[:i]) == primeiraColuna {
-			return l
-		}
-	}
-	t.Fatalf("a saída não tem a linha de %q:\n%s", primeiraColuna, saida)
-	return ""
-}
-
 // celulasDaLinha corta a linha nas colunas em que o tabwriter a escreveu.
 //
 // O corte é pelos DOIS espaços do padding, e não por espaço simples, porque a
-// célula é o que interessa a quem confere valor posicional: a última coluna do
-// `datasets` é o TIMEOUT e a última do `inspect` é o AUTO, e `strings.Contains`
-// na linha inteira não distingue "30s" na coluna certa de "30s" em qualquer
-// outra.
+// CÉLULA é a unidade de quem confere valor posicional: `strings.Contains` na
+// linha inteira não distingue "30s" na coluna certa de "30s" em qualquer outra,
+// e é cego para duas colunas trocadas de lugar.
+//
+// O argumento está escrito aqui desde a primeira rodada do §96, e valia só para
+// a ÚLTIMA coluna de cada tabela — o resto da conferência era Contains na linha
+// inteira. O buraco tinha tamanho: dois mutantes de troca de coluna
+// (COLUNAS↔MAXROWS no `datasets`, ALIAS↔TIPO no `inspect`) atravessavam a suíte
+// inteira sem acender nada. Agora o corte alimenta a tabela toda, pelo
+// tabelaDaSaida.
 func celulasDaLinha(l string) []string {
 	var out []string
 	for _, c := range strings.Split(strings.TrimSpace(l), "  ") {
@@ -85,6 +75,154 @@ func celulasDaLinha(l string) []string {
 	}
 	return out
 }
+
+// tabelaDaSaida devolve o CABEÇALHO e as linhas de dados da tabela que começa
+// no rótulo dado, já cortados em células.
+//
+// O cabeçalho volta junto porque é dele que sai a POSIÇÃO de cada rótulo, e é
+// isso que separa duas coisas que um índice fixo no teste confundiria: mover
+// uma coluna de lugar DE PROPÓSITO — cabeçalho e valores juntos — continua
+// legítimo e não pode reprovar; deixar o valor sob o rótulo do vizinho é o
+// defeito. O oráculo destes comandos é "o número está sob o rótulo dele", que é
+// exatamente a pergunta que a suíte não sabia fazer.
+//
+// A tabela termina na primeira linha em branco ou no fim da saída. Nos dois
+// comandos ela é hoje o último bloco; parar no branco é o que impede que uma
+// seção acrescentada depois escorra para dentro das linhas e passe por dado.
+func tabelaDaSaida(t *testing.T, saida, primeiroRotulo string) (cabecalho []string, linhas [][]string) {
+	t.Helper()
+	todas := strings.Split(saida, "\n")
+	for i, l := range todas {
+		c := celulasDaLinha(l)
+		if len(c) == 0 || c[0] != primeiroRotulo {
+			continue
+		}
+		for _, resto := range todas[i+1:] {
+			if strings.TrimSpace(resto) == "" {
+				break
+			}
+			linhas = append(linhas, celulasDaLinha(resto))
+		}
+		return c, linhas
+	}
+	t.Fatalf("a saída não tem a tabela que começa em %q:\n%s", primeiroRotulo, saida)
+	return nil, nil
+}
+
+// linhaDaTabela devolve a linha cuja PRIMEIRA célula é a chave pedida — é como
+// se lê uma tabela de colunas, no `datasets` e no `inspect`.
+//
+// Morrer aqui é a forma que o SUMIÇO de uma linha tem de aparecer. Um comando
+// que escrevesse o nome do primeiro dataset em toda linha duplicaria o primeiro
+// e faria os demais desaparecerem, e é procurando a linha de CADA dataset que o
+// teste descobre isso: contar as linhas, sozinho, não descobriria.
+func linhaDaTabela(t *testing.T, linhas [][]string, chave string) []string {
+	t.Helper()
+	for _, l := range linhas {
+		if len(l) > 0 && l[0] == chave {
+			return l
+		}
+	}
+	t.Fatalf("a tabela não tem a linha de %q:\n%v", chave, linhas)
+	return nil
+}
+
+// celulaSobORotulo devolve a célula que a linha escreveu sob o rótulo do
+// cabeçalho.
+func celulaSobORotulo(t *testing.T, cabecalho, linha []string, rotulo string) string {
+	t.Helper()
+	for i, r := range cabecalho {
+		if r != rotulo {
+			continue
+		}
+		if i >= len(linha) {
+			t.Fatalf("a linha %v não tem célula sob %q (cabeçalho %v)", linha, rotulo, cabecalho)
+		}
+		return linha[i]
+	}
+	t.Fatalf("o cabeçalho %v não tem a coluna %q", cabecalho, rotulo)
+	return ""
+}
+
+// conferePorCelula compara a linha da tabela com o oráculo CÉLULA A CÉLULA, na
+// ordem em que o comando escreveu o cabeçalho.
+//
+// Todo rótulo do cabeçalho tem de ter oráculo: coluna sem conferência nenhuma é
+// o buraco por onde os mutantes de troca passaram, e um mapa que apenas
+// ignorasse o rótulo desconhecido reabriria o buraco no dia em que uma coluna
+// nova nascesse.
+//
+// `aparte` nomeia as colunas cujo oráculo NÃO é igualdade de texto — hoje só a
+// do prazo, que se confere de ida e volta (ver prazoDaSaida). Declarar a
+// exceção pelo nome é o que a distingue do esquecimento.
+func conferePorCelula(t *testing.T, contexto string, cabecalho, linha []string, esperado map[string]string, aparte ...string) {
+	t.Helper()
+	if len(linha) != len(cabecalho) {
+		t.Fatalf("%s: a linha saiu com %d células e o cabeçalho %v tem %d: %v",
+			contexto, len(linha), cabecalho, len(cabecalho), linha)
+	}
+	if len(esperado)+len(aparte) != len(cabecalho) {
+		t.Fatalf("%s: o cabeçalho %v tem %d colunas e o oráculo cobre %d (%d à parte): ou uma coluna "+
+			"nasceu sem conferência, ou o oráculo confere uma que já não existe",
+			contexto, cabecalho, len(cabecalho), len(esperado), len(aparte))
+	}
+	for i, rotulo := range cabecalho {
+		if slices.Contains(aparte, rotulo) {
+			continue
+		}
+		quer, ok := esperado[rotulo]
+		if !ok {
+			t.Fatalf("%s: a coluna %q não tem oráculo; o cabeçalho é %v", contexto, rotulo, cabecalho)
+		}
+		if linha[i] != quer {
+			t.Errorf("%s: sob %s a saída traz %q e o servidor respondeu %q (linha inteira: %v)",
+				contexto, rotulo, linha[i], quer, linha)
+		}
+	}
+}
+
+// exigeColunasDistinguiveis é a guarda `vistos` dos seis contadores do bloco
+// `processo`, aplicada à TABELA.
+//
+// O argumento é o mesmo, com um grau a mais: lá, dois contadores com o MESMO
+// valor tornam os dois rótulos indistinguíveis e o teste passa a aprovar um
+// comando que lê o campo do vizinho; aqui basta que UMA linha separe duas
+// colunas para que trocá-las apareça, então o que se exige é que, para cada par
+// de colunas, exista pelo menos uma linha em que elas difiram. Se o fixture
+// deixar de separá-las, é o FIXTURE que precisa mudar — não o oráculo.
+//
+// As colunas de `aparte` ficam de fora porque o oráculo delas não é texto. Não
+// é buraco: trocar a coluna do prazo com uma vizinha aparece do outro lado da
+// troca, na coluna que recebeu um prazo onde deveria haver um número.
+func exigeColunasDistinguiveis(t *testing.T, cabecalho []string, esperado []map[string]string, aparte ...string) {
+	t.Helper()
+	var rotulos []string
+	for _, r := range cabecalho {
+		if !slices.Contains(aparte, r) {
+			rotulos = append(rotulos, r)
+		}
+	}
+	for i := 0; i < len(rotulos); i++ {
+		for j := i + 1; j < len(rotulos); j++ {
+			separou := false
+			for _, linha := range esperado {
+				if linha[rotulos[i]] != linha[rotulos[j]] {
+					separou = true
+					break
+				}
+			}
+			if !separou {
+				t.Fatalf("as colunas %q e %q valem o mesmo em TODA linha do fixture (%d linhas): trocar as "+
+					"duas fontes não mudaria uma vírgula da saída, e o teste aprovaria o comando trocado",
+					rotulos[i], rotulos[j], len(esperado))
+			}
+		}
+	}
+}
+
+// rotuloDoPrazo é a coluna do `datasets` cujo oráculo é de ida e volta, e não
+// de igualdade de texto — ver prazoDaSaida.
+const rotuloDoPrazo = "TIMEOUT"
 
 // prazoDaSaida devolve a duração que o comando escreveu, RECUPERADA do texto.
 //
@@ -163,15 +301,15 @@ func sobeComEntrada(t *testing.T, a *ambienteRemoto, entrada string) *ambienteRe
 	return a
 }
 
-// desligaACompaction acrescenta `storage.compaction.enabled: false` ao YAML do
-// ambiente, ANTES de o servidor subir.
+// acrescentaAoStorage insere o trecho no bloco `storage:` do YAML do ambiente,
+// ANTES de o servidor subir.
 //
 // Reescreve o arquivo em vez de manter um segundo template porque o template do
 // ambiente remoto é um só: uma cópia dele aqui envelheceria calada no dia em
 // que o de lá mudasse. Se o ponto de inserção sumir, o teste morre dizendo
-// isso — que é melhor do que subir com a compaction ligada e afirmar o
-// contrário.
-func desligaACompaction(t *testing.T, a *ambienteRemoto) {
+// isso — que é melhor do que subir com uma configuração diferente da que o
+// teste afirma ter escrito.
+func acrescentaAoStorage(t *testing.T, a *ambienteRemoto, trecho string) {
 	t.Helper()
 	yml, err := os.ReadFile(a.config)
 	if err != nil {
@@ -181,10 +319,37 @@ func desligaACompaction(t *testing.T, a *ambienteRemoto) {
 	if !strings.Contains(string(yml), alvo) {
 		t.Fatalf("o template do ambiente remoto não tem mais o bloco %q:\n%s", alvo, yml)
 	}
-	novo := strings.Replace(string(yml), alvo, alvo+"  compaction:\n    enabled: false\n", 1)
+	novo := strings.Replace(string(yml), alvo, alvo+trecho, 1)
 	if err := os.WriteFile(a.config, []byte(novo), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// desligaACompaction acrescenta `storage.compaction.enabled: false` ao YAML do
+// ambiente. Subir com a compaction ligada e afirmar o contrário seria o teste
+// mentindo sobre o próprio fixture, e é por isso que o acrescentaAoStorage
+// morre quando não encontra onde inserir.
+func desligaACompaction(t *testing.T, a *ambienteRemoto) {
+	t.Helper()
+	acrescentaAoStorage(t, a, "  compaction:\n    enabled: false\n")
+}
+
+// afinaOStorageParaCompactar deixa o ambiente com segmento PEQUENO e a política
+// do §53 declarada, antes de o servidor subir.
+//
+// O segmentSize é o que faz a ingestão SELAR arquivos: com o padrão de 512 MiB
+// (§85) o fixture inteiro caberia no primeiro segmento e a decisão D6 — o
+// corrente nunca é candidato — deixaria a compaction sem um único alvo. É o
+// mesmo encolhimento que o e2e da Task 7 faz, e pelo mesmo argumento: o que o
+// mecanismo exige é uma PILHA de segmentos selados, não segmento grande.
+//
+// O minimumLiveRatio é DECLARADO, e não herdado, embora o default do §53 seja
+// hoje exatamente este valor. O que este fixture precisa é que a eleição
+// alcance os segmentos que o corpus deixa com pouca liveness, e um default
+// alterado noutra tarefa mudaria calado o que o teste mede.
+func afinaOStorageParaCompactar(t *testing.T, a *ambienteRemoto) {
+	t.Helper()
+	acrescentaAoStorage(t, a, "  segmentSize: 64KiB\n  compaction:\n    minimumLiveRatio: 0.5\n")
 }
 
 // chavesDistintas monta n eventos com n chaves DIFERENTES.
@@ -198,6 +363,110 @@ func chavesDistintas(n int) string {
 		fmt.Fprintf(&sb, `{"id":"S%06d","_SEQ":1,"Acct-Status-Type":"Stop"}`+"\n", i)
 	}
 	return sb.String()
+}
+
+// updatesSobreChavesQuentesEFrias monta a entrada que dá à compaction o que
+// devolver — e o que COPIAR.
+//
+// As duas famílias de chave têm papéis diferentes, e sem qualquer uma delas o
+// fixture deixa de separar um par de rótulos do `status`:
+//
+//   - as QUENTES são atualizadas em toda rodada, e delas sai o GARBAGE: cada
+//     update apenda um record novo e deixa o anterior morto, que é a forma do
+//     dataset do §86 e a razão de o disco crescer. Sem elas nenhum segmento cai
+//     abaixo do minimumLiveRatio, nada é eleito, nenhum arquivo é aposentado —
+//     e `segmentos` continua igual a `corrente`, que é a coincidência que o
+//     godoc de protocolo.StorageStats diz que a compaction quebrou.
+//   - as FRIAS são escritas uma vez e nunca mais, espalhadas ao longo das
+//     rodadas, e delas sai o `bytes escritos`: são os records VIVOS dentro de
+//     um segmento condenado, que é o que o copy-forward do §55 tem de mover
+//     para frente. Sem elas todo record vivo estaria no segmento corrente — que
+//     a D6 protege —, os eleitos seriam 100% lixo, e a varredura leria
+//     megabytes para escrever ZERO. Com `bytes lidos` e `bytes escritos`
+//     valendo o mesmo zero, alimentar um com a fonte do outro não muda uma
+//     vírgula da saída.
+//
+// A sequência das frias é sempre 1 porque elas nunca são reescritas; a das
+// quentes é a rodada, que o `strategy: greater` do §12 aceita como update.
+func updatesSobreChavesQuentesEFrias(quentes, rodadas, friasPorRodada int) string {
+	var sb strings.Builder
+	fria := 0
+	for r := 1; r <= rodadas; r++ {
+		for k := 0; k < quentes; k++ {
+			fmt.Fprintf(&sb, `{"id":"Q%04d","_SEQ":%d,"Acct-Status-Type":"Stop","User-Name":"u%04d","NAS-Identifier":"nas-%d"}`+"\n",
+				k, r, k, r%7)
+		}
+		for i := 0; i < friasPorRodada; i++ {
+			fmt.Fprintf(&sb, `{"id":"F%06d","_SEQ":1,"Acct-Status-Type":"Start","User-Name":"f%06d","NAS-Identifier":"nas-fria"}`+"\n",
+				fria, fria)
+			fria++
+		}
+	}
+	return sb.String()
+}
+
+// nomeDoSegundoDataset e specDoSegundoDataset são o outro dataset do servidor,
+// e existem por causa do `datasets`.
+//
+// O comando cuja única razão de existir é listar O QUE ESTE SERVIDOR SERVE
+// estava sendo exercitado contra um servidor de UM dataset, e um servidor de um
+// dataset não distingue "lista todos" de "imprime o primeiro N vezes": com uma
+// linha só, escrever o nome de m.Datasets[0] em todas elas é indistinguível de
+// escrever o nome de cada uma. É a mesma família da guarda `vistos` dos seis
+// contadores do bloco `processo` — dois valores iguais tornam dois rótulos
+// indistinguíveis —, agora na dimensão da LINHA.
+//
+// Ele diverge do fixture do §12 em TODAS as colunas da tabela (nome, chave,
+// número de colunas, teto de linhas e prazo), e isso não é enfeite: é o que o
+// exigeColunasDistinguiveis cobra para que trocar duas colunas de lugar apareça.
+//
+// Não declara `source`, então nenhum consumer sobe para ele (§12 + D15) e o
+// dataset nasce vazio — o que basta, porque o `datasets` descreve SCHEMA e
+// limites, não conteúdo.
+const nomeDoSegundoDataset = "auditoria_acessos"
+
+const specDoSegundoDataset = `version: 1
+name: auditoria_acessos
+materialization:
+  key:
+    field: sessao
+  mode: merge
+  sequence:
+    field: ordem
+    type: int64
+    strategy: greater
+schema:
+  include: ["*"]
+  unknownFields: include
+  fields:
+    sessao:
+      type: string
+    ordem:
+      type: int64
+    resultado:
+      type: string
+      index: bitmap
+query:
+  maxRows: 77
+  timeout: 12s
+`
+
+// acrescentaOSegundoDataset escreve a spec no diretório que o servidor varre,
+// ANTES de ele subir — é lá que o `Novo` descobre o que servir.
+//
+// O nome do ARQUIVO tem de casar o `name:` de dentro (o schema.Load recusa a
+// divergência), então a conferência acontece aqui: uma constante editada pela
+// metade falharia na subida do servidor, com uma mensagem sobre YAML, e não
+// sobre o fixture.
+func acrescentaOSegundoDataset(t *testing.T, a *ambienteRemoto) {
+	t.Helper()
+	if !strings.Contains(specDoSegundoDataset, "name: "+nomeDoSegundoDataset+"\n") {
+		t.Fatalf("a spec do segundo dataset não declara name: %s", nomeDoSegundoDataset)
+	}
+	caminho := filepath.Join(a.dir, "datasets", nomeDoSegundoDataset+".yaml")
+	if err := os.WriteFile(caminho, []byte(specDoSegundoDataset), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // TestStatusRemotoFuncionaComOServidorNoAr é o critério que separa este
@@ -346,6 +615,156 @@ func esperaCompactionNoAr(t *testing.T, a *ambienteRemoto) {
 	t.Fatal("a compaction não subiu em 15s: o default do §78 traz a chave ligada")
 }
 
+// Os quatro números que o M4 acrescentou ao `status` são DOIS PARES, e a
+// distância dentro de cada par é a resposta do §86. Nenhum dos dois pares se
+// distinguia no fixture parado, e é isso que este teste conserta.
+//
+// `segmentos` e `corrente` valiam AMBOS 1. O godoc de protocolo.StorageStats diz
+// por que isso é grave: os dois coincidiam enquanto os IDs eram monotônicos e
+// nada removia arquivo, premissa que a compaction quebrou — "a distância entre
+// os dois é justamente o que a compaction devolveu". A produção escreve o mesmo
+// argumento ao lado do campo ("publicar só um dos dois esconderia isso") e nada
+// verificava: trocar as duas fontes, ou publicar o CurrentSegment sob o rótulo
+// `segmentos`, deixava a suíte inteira verde.
+//
+// `bytes lidos` e `bytes escritos` valiam AMBOS 0, porque a suíte lia o status
+// antes de qualquer passada de compaction concluir. Alimentar `bytes lidos` com
+// o BytesWritten passava — e contra um servidor com compaction efetiva ele
+// imprime "0 B" onde estão os 1,7 MB que a varredura de fato leu, que é
+// exatamente o número que responde a pergunta do §86.
+//
+// O fixture é o que separa os quatro, e cada peça dele fecha um par: segmento de
+// 64 KiB para haver PILHA de selados, chaves quentes para produzir o garbage que
+// elege, e chaves frias espalhadas para haver dado VIVO dentro do que se elegeu.
+func TestStatusSeparaOsSegmentosDoCorrenteEOsBytesDaCompaction(t *testing.T) {
+	a := novoAmbienteRemoto(t, 100000)
+	afinaOStorageParaCompactar(t, a)
+	sobeComEntrada(t, a, updatesSobreChavesQuentesEFrias(50, 200, 5))
+
+	saida, st := statusComOsCamposDeDiscoSeparados(t, a)
+	for _, c := range camposDeDiscoDoStatus(st) {
+		quer := strconv.FormatInt(c.valor, 10)
+		got := campoDaSaida(t, saida, c.rotulo)
+		if c.emBytes {
+			// O byte EXATO vem primeiro no bytesLegiveis, e é ele que se
+			// confere: quem compara duas medições — antes e depois de uma
+			// passada — precisa do número, não da grandeza arredondada.
+			if !strings.HasPrefix(got, quer+" B") {
+				t.Errorf("%s = %q na saída e %s B no /v1/stats", c.rotulo, got, quer)
+			}
+			continue
+		}
+		if got != quer {
+			t.Errorf("%s = %q na saída e %s no /v1/stats", c.rotulo, got, quer)
+		}
+	}
+}
+
+// campoDeDisco é um dos números que o §96 publica sob rótulo próprio no bloco
+// do dataset. `emBytes` marca os que saem pelo bytesLegiveis, cuja célula
+// começa pelo valor exato e continua com a grandeza para humano.
+type campoDeDisco struct {
+	rotulo  string
+	valor   int64
+	emBytes bool
+}
+
+// camposDeDiscoDoStatus é a lista que a espera e a conferência compartilham —
+// as duas precisam falar dos MESMOS quatro números, senão o teste espera por uma
+// condição e afirma outra.
+func camposDeDiscoDoStatus(st protocolo.StorageStats) []campoDeDisco {
+	return []campoDeDisco{
+		{"segmentos", int64(st.Segments), false},
+		{"corrente", int64(st.CurrentSegment), false},
+		{"bytes lidos", st.Compaction.BytesRead, true},
+		{"bytes escritos", st.Compaction.BytesWritten, true},
+	}
+}
+
+// colisaoEntreOsCamposDeDisco descreve a primeira razão pela qual os quatro
+// números ainda não distinguem os quatro rótulos, ou devolve "" quando
+// distinguem.
+//
+// É a guarda `vistos` dos seis contadores do bloco `processo`, na forma de
+// predicado: dois números iguais tornam os dois rótulos indistinguíveis, e o
+// teste passaria a aprovar um comando que lê o campo do vizinho. Ela é
+// predicado, e não asserção imediata, porque aqui o fixture leva algumas
+// centenas de milissegundos para separá-los — a compaction precisa aposentar o
+// primeiro segmento —, e afirmar antes disso seria reprovar o comando certo.
+//
+// Os dois contadores de bytes ainda são exigidos NÃO-ZERO à parte. Zero é o
+// estado em que a suíte anterior os lia, e zero não é só igual ao vizinho: é
+// igual a tudo o que ainda não aconteceu.
+func colisaoEntreOsCamposDeDisco(st protocolo.StorageStats) string {
+	campos := camposDeDiscoDoStatus(st)
+	for _, c := range campos {
+		if c.emBytes && c.valor == 0 {
+			return fmt.Sprintf("%q ainda vale 0: nenhuma passada de compaction concluiu", c.rotulo)
+		}
+	}
+	vistos := map[int64]string{}
+	for _, c := range campos {
+		if outro, ok := vistos[c.valor]; ok {
+			return fmt.Sprintf("%q e %q valem %d: com dois números iguais o teste não distingue os rótulos",
+				outro, c.rotulo, c.valor)
+		}
+		vistos[c.valor] = c.rotulo
+	}
+	return ""
+}
+
+// statusComOsCamposDeDiscoSeparados roda o `status` ENTRE duas leituras do
+// /v1/stats e devolve a saída junto da amostra em que as duas coincidiram.
+//
+// A sanduíche existe porque este é o único teste da suíte em que a compaction
+// TRABALHA enquanto a saída é lida: os quatro números se movem a cada segmento
+// aposentado, e comparar a saída do comando com um /v1/stats lido depois seria
+// comparar dois instantes diferentes — o teste reprovaria o comando certo por
+// uma passada que aconteceu no meio. Exigir que a leitura de antes e a de depois
+// sejam IDÊNTICAS fixa o instante sem parar a compaction, que é justamente o que
+// o fixture existe para deixar acontecer.
+//
+// Esperar pela CONDIÇÃO, e não por tempo, é a mesma regra do esperaCompactionNoAr:
+// dormir um prazo fixo esconderia tanto a lentidão quanto a ausência de
+// progresso. E o prazo que expira morre dizendo QUAL par ainda colide, porque a
+// resposta certa a ele é mexer no fixture, não no oráculo.
+func statusComOsCamposDeDiscoSeparados(t *testing.T, a *ambienteRemoto) (string, protocolo.StorageStats) {
+	t.Helper()
+	motivo := "o /v1/stats não chegou a ser lido"
+	prazo := time.Now().Add(30 * time.Second)
+	for time.Now().Before(prazo) {
+		antes := storageDoDataset(t, a)
+		if m := colisaoEntreOsCamposDeDisco(antes); m != "" {
+			motivo = m
+			time.Sleep(20 * time.Millisecond)
+			continue
+		}
+		if code := a.roda("status", "--server", a.endereco()); code != 0 {
+			t.Fatalf("status: exit = %d: %s", code, a.stderr.String())
+		}
+		saida := a.stdout.String()
+		if storageDoDataset(t, a) == antes {
+			return saida, antes
+		}
+		motivo = "a compaction moveu os números DURANTE o comando"
+	}
+	t.Fatalf("em 30s o fixture não pôs os quatro números do disco em valores distintos e estáveis: %s", motivo)
+	return "", protocolo.StorageStats{}
+}
+
+// storageDoDataset é o bloco de storage do dataset único do ambiente, lido pela
+// porta. Morre quando o servidor traz outro número de datasets: um oráculo que
+// pegasse o primeiro de vários estaria conferindo a saída de um contra os
+// números de outro.
+func storageDoDataset(t *testing.T, a *ambienteRemoto) protocolo.StorageStats {
+	t.Helper()
+	e := estatisticas(t, a)
+	if len(e.Datasets) != 1 {
+		t.Fatalf("o /v1/stats trouxe %d datasets: o oráculo não se aplica", len(e.Datasets))
+	}
+	return e.Datasets[0].Storage
+}
+
 // A seção `processo` publica os seis contadores do motor, e eles são do
 // PROCESSO e não de um dataset — repeti-los por dataset publicaria o mesmo
 // número N vezes, e alguém somaria os N.
@@ -453,8 +872,23 @@ func TestStatusPublicaACargaDoPrimario(t *testing.T) {
 // `datasets` responde a pergunta mais barata do §96 — o que este servidor
 // serve — e é a que um operador faz antes de saber o nome exato para passar ao
 // `inspect`.
+//
+// O servidor sobe com DOIS datasets, e essa é a diferença que faz o teste
+// provar o comando. Contra um servidor de um dataset só, "lista o que este
+// servidor serve" é indistinguível de "imprime o primeiro dataset uma vez": o
+// comando que escrevesse o nome de m.Datasets[0] em toda linha passaria pela
+// suíte inteira e, no servidor do operador, duplicaria o primeiro e faria o
+// segundo desaparecer — justamente o comando cuja única razão de existir é
+// não fazer isso.
+//
+// A conferência é POR CÉLULA em todas as colunas, e não por `strings.Contains`
+// na linha: Contains é indiferente à ordem, e aprova sem piscar uma saída que
+// escreva o número de colunas sob MAXROWS e o teto de linhas sob COLUNAS. Quem
+// ancora a posição é o cabeçalho que o próprio comando escreveu.
 func TestDatasetsListaOQueOServidorServe(t *testing.T) {
-	a := servidorComDadosNoAr(t, 10)
+	a := novoAmbienteRemoto(t, 100000)
+	acrescentaOSegundoDataset(t, a)
+	sobeComEntrada(t, a, corpus(t, 10))
 
 	if code := a.roda("datasets", "--server", a.endereco()); code != 0 {
 		t.Fatalf("exit = %d: %s", code, a.stderr.String())
@@ -462,35 +896,43 @@ func TestDatasetsListaOQueOServidorServe(t *testing.T) {
 	saida := a.stdout.String()
 
 	m := metadados(t, a, "")
-	if len(m.Datasets) != 1 {
-		t.Fatalf("o /v1/metadata trouxe %d datasets: o oráculo não se aplica", len(m.Datasets))
+	if len(m.Datasets) < 2 {
+		t.Fatalf("o /v1/metadata trouxe %d datasets: com menos de dois o comando não é exercitado "+
+			"naquilo que ele existe para fazer", len(m.Datasets))
 	}
-	d := m.Datasets[0]
 
-	linha := linhaDaSaida(t, saida, d.Name)
-	for _, quer := range []string{
-		d.Key,
-		strconv.Itoa(len(d.Columns)),
-		strconv.Itoa(d.MaxRows),
-	} {
-		if !strings.Contains(linha, quer) {
-			t.Errorf("a linha do dataset não traz %q: %q", quer, linha)
+	cabecalho, linhas := tabelaDaSaida(t, saida, "DATASET")
+	if len(linhas) != len(m.Datasets) {
+		t.Fatalf("a tabela saiu com %d linhas para %d datasets servidos:\n%s", len(linhas), len(m.Datasets), saida)
+	}
+
+	oraculos := make([]map[string]string, 0, len(m.Datasets))
+	for _, d := range m.Datasets {
+		if d.TimeoutMs == 0 {
+			t.Fatalf("o /v1/metadata respondeu timeout 0 para %q: contra ele um \"0s\" fixo passaria", d.Name)
 		}
+		oraculos = append(oraculos, map[string]string{
+			"DATASET": d.Name,
+			"KEY":     d.Key,
+			"COLUNAS": strconv.Itoa(len(d.Columns)),
+			"MAXROWS": strconv.Itoa(d.MaxRows),
+		})
 	}
+	exigeColunasDistinguiveis(t, cabecalho, oraculos, rotuloDoPrazo)
 
-	// A coluna TIMEOUT é o prazo EFETIVO da consulta escrito para humano, e é
-	// por ele que o operador decide se a query que ele vai mandar cabe no
-	// dataset. Conferi-la é conferir a célula: um "0s" fixo — ou o prazo na
-	// coluna errada — diria ao operador que toda consulta morre na largada.
-	celulas := celulasDaLinha(linha)
-	if len(celulas) != 5 {
-		t.Fatalf("a linha saiu com %d células, quer 5 (dataset, key, colunas, maxRows, timeout): %q", len(celulas), linha)
-	}
-	if d.TimeoutMs == 0 {
-		t.Fatal("o /v1/metadata respondeu timeout 0: contra ele um \"0s\" fixo passaria")
-	}
-	if got := prazoDaSaida(t, celulas[4]); got != time.Duration(d.TimeoutMs)*time.Millisecond {
-		t.Errorf("TIMEOUT = %q (%v) na saída e %d ms no /v1/metadata", celulas[4], got, d.TimeoutMs)
+	for i, d := range m.Datasets {
+		linha := linhaDaTabela(t, linhas, d.Name)
+		conferePorCelula(t, "dataset "+d.Name, cabecalho, linha, oraculos[i], rotuloDoPrazo)
+
+		// A coluna TIMEOUT é o prazo EFETIVO da consulta escrito para humano, e
+		// é por ele que o operador decide se a query que ele vai mandar cabe no
+		// dataset. O oráculo dela é de IDA E VOLTA (ver prazoDaSaida), mas a
+		// célula continua sendo a da coluna: um "0s" fixo — ou o prazo na
+		// coluna errada — diria ao operador que toda consulta morre na largada.
+		celula := celulaSobORotulo(t, cabecalho, linha, rotuloDoPrazo)
+		if got := prazoDaSaida(t, celula); got != time.Duration(d.TimeoutMs)*time.Millisecond {
+			t.Errorf("%s: TIMEOUT = %q (%v) na saída e %d ms no /v1/metadata", d.Name, celula, got, d.TimeoutMs)
+		}
 	}
 }
 
@@ -533,50 +975,62 @@ func TestInspectDetalhaColunasEIndices(t *testing.T) {
 		t.Errorf("timeout = %v na saída e %d ms no /v1/metadata", got, d.TimeoutMs)
 	}
 
-	// Toda coluna do metadata sai, e sai com os quatro atributos: uma tabela
-	// que omitisse uma coluna mandaria o operador concluir que ela não existe.
+	// Toda coluna do metadata sai, e sai com os cinco atributos, cada um na SUA
+	// coluna: uma tabela que omitisse uma linha mandaria o operador concluir que
+	// aquele campo não existe, e uma que trocasse ALIAS com TIPO lhe daria o
+	// nome do campo onde ele leria o tipo. A conferência antiga era
+	// `strings.Contains` na linha inteira para tudo menos a última coluna, e
+	// Contains é indiferente à ordem — trocar as duas fontes deixava a suíte
+	// verde.
 	if len(d.Columns) < 10 {
 		t.Fatalf("o fixture tem %d colunas: poucas para distinguir tabela de amostra", len(d.Columns))
 	}
-	var auto int
-	for _, c := range d.Columns {
-		linha := linhaDaSaida(t, saida, c.Name)
-		if !strings.Contains(linha, c.Type) || !strings.Contains(linha, c.JDBC) || !strings.Contains(linha, c.Index) {
-			t.Errorf("coluna %q sem tipo/jdbc/índice na saída: %q", c.Name, linha)
-		}
-		if c.Alias != nil && !strings.Contains(linha, *c.Alias) {
-			t.Errorf("coluna %q sem o alias %q: %q", c.Name, *c.Alias, linha)
-		}
+	cabecalho, linhas := tabelaDaSaida(t, saida, "COLUNA")
+	if len(linhas) != len(d.Columns) {
+		t.Fatalf("a tabela saiu com %d linhas para %d colunas do /v1/metadata:\n%s", len(linhas), len(d.Columns), saida)
+	}
 
-		// A coluna AUTO diz se o TIPO daquela coluna foi declarado no YAML ou
-		// fixado pela primeira observação — e é o que explica ao operador por
-		// que um campo aparece como "unknown", ou por que ele não pode receber
-		// índice. Um traço fixo em toda linha apagaria a distinção inteira.
-		celulas := celulasDaLinha(linha)
-		if len(celulas) != 6 {
-			t.Fatalf("a linha de %q saiu com %d células, quer 6 (coluna, alias, tipo, jdbc, índice, auto): %q",
-				c.Name, len(celulas), linha)
+	// A coluna AUTO diz se o TIPO daquela coluna foi declarado no YAML ou fixado
+	// pela primeira observação — e é o que explica ao operador por que um campo
+	// aparece como "unknown", ou por que ele não pode receber índice. O ÍNDICE
+	// sai com o nome do YAML pelo mesmo motivo: publicá-lo como "sim/não"
+	// apagaria a diferença entre bitmap e hash, que decide o plano.
+	var auto int
+	oraculos := make([]map[string]string, 0, len(d.Columns))
+	for _, c := range d.Columns {
+		alias := "-"
+		if c.Alias != nil {
+			alias = *c.Alias
 		}
-		quer := "-"
+		marca := "-"
 		if c.Auto {
-			quer, auto = "sim", auto+1
+			marca, auto = "sim", auto+1
 		}
-		if celulas[5] != quer {
-			t.Errorf("coluna %q com AUTO = %q e auto=%v no /v1/metadata: %q", c.Name, celulas[5], c.Auto, linha)
-		}
+		oraculos = append(oraculos, map[string]string{
+			"COLUNA": c.Name,
+			"ALIAS":  alias,
+			"TIPO":   c.Type,
+			"JDBC":   c.JDBC,
+			"ÍNDICE": c.Index,
+			"AUTO":   marca,
+		})
 	}
 	if auto == 0 {
 		t.Fatal("nenhuma coluna auto no fixture: a coluna AUTO seria um traço fixo e o teste não provaria nada")
 	}
+	exigeColunasDistinguiveis(t, cabecalho, oraculos)
 
-	// Os dois índices declarados pelo fixture do §12 aparecem com o nome que o
-	// YAML usa: publicar "bitmap" como "sim/não" apagaria a diferença entre
-	// bitmap e hash, que decide o plano.
-	if l := linhaDaSaida(t, saida, "Acct-Status-Type"); !strings.Contains(l, "bitmap") {
-		t.Errorf("o índice bitmap não aparece na linha: %q", l)
+	for i, c := range d.Columns {
+		conferePorCelula(t, "coluna "+c.Name, cabecalho, linhaDaTabela(t, linhas, c.Name), oraculos[i])
 	}
-	if l := linhaDaSaida(t, saida, "NAS-IP-Address"); !strings.Contains(l, "hash") {
-		t.Errorf("o índice hash não aparece na linha: %q", l)
+
+	// Os dois índices declarados pelo fixture do §12, conferidos na CÉLULA do
+	// índice: é a diferença entre "a palavra bitmap aparece em algum lugar da
+	// linha" e "o índice desta coluna é bitmap".
+	for coluna, quer := range map[string]string{"Acct-Status-Type": "bitmap", "NAS-IP-Address": "hash"} {
+		if got := celulaSobORotulo(t, cabecalho, linhaDaTabela(t, linhas, coluna), "ÍNDICE"); got != quer {
+			t.Errorf("o índice de %s saiu %q, queria %q", coluna, got, quer)
+		}
 	}
 }
 
