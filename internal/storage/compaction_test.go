@@ -67,6 +67,17 @@ func tallyDoSegmento(s *Store, seg uint32) (liveRecords, liveBytes uint64) {
 	return t.liveRecords, t.liveBytes
 }
 
+// tamanhoConhecidoDoSegmento lê o segSize sob o mesmo lock e pelo mesmo motivo
+// do tallyDoSegmento — o mapa é writer-only. É o DENOMINADOR da eleição do
+// §53, e ele merece leitor próprio porque não anda no mesmo relógio do tally:
+// o tally ganha entrada no applyRecord, o segSize só se move em checkpoint.
+func tamanhoConhecidoDoSegmento(s *Store, seg uint32) (int64, bool) {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	tam, ok := s.segSize[seg]
+	return tam, ok
+}
+
 // rotacionaAlemDe apenda até o segmento corrente deixar de ser `seg`, e
 // devolve quantos records isso custou. Existe porque o §53 D6 nunca elege o
 // segmento corrente como candidato — compactar o segmento em que se está
@@ -2169,6 +2180,79 @@ func TestCandidatoSoSaiAbaixoDoMinimumLiveRatio(t *testing.T) {
 		if !maps.Equal(querido, obtido) {
 			t.Errorf("ratio %v: eleitos %v, queria %v (razões medidas: %v)", ratio, obtido, querido, razoes)
 		}
+	}
+}
+
+// TestCandidatosElegeOSegmentoSemeadoPeloOpenSemCheckpointDoChamador fixa a
+// mecânica que TODO dataset novo tem e que nenhum teste desta suíte alcançava.
+// Os outros montam o corpus com o corpusDeSegmentosSelados, que TERMINA em
+// Checkpoint: todos eles medem a eleição já com o segSize reconciliado, e
+// nenhum distingue "o segmento tem tamanho conhecido" de "alguém checkpointou".
+//
+// O que se afirma aqui é o caso sem checkpoint nenhum do chamador. O Checkpoint
+// incondicional do Open (store.go:605) reconstrói o segSize a partir do
+// ListSegments (store_checkpoint.go:142), e num dataset recém-criado o único
+// arquivo listado é o corrente, ainda do tamanho do header
+// (segment.HeaderSize). O segmento 1 nasce, portanto, com DENOMINADOR
+// conhecido: selado o arquivo e superada a última row nascida nele, a eleição o
+// pega — 0/64 < 0,50 — sem que o chamador tenha checkpointado uma vez sequer.
+//
+// Não é curiosidade de laboratório, e é por isso que o teste existe: é a causa
+// do primeiro dente da curva de disco da rodada de aceite, e o comentário de
+// fracaoDeCrescimentoTolerada (benchmark/ingest-bench/harness.go) se apoia
+// NESTE teste em vez de afirmar a mecânica por conta própria. A explicação que
+// estava escrita lá — "segmento selado depois do último checkpoint ainda não é
+// elegível" — descreve o caso geral e não este, e o artefato da rodada a
+// desmentia: a primeira devolução acontece antes do único checkpoint da fase.
+//
+// As duas asserções do meio existem para o teste não passar por vacuidade. Sem
+// a primeira, um candidatos() que devolvesse [1] sempre passaria; sem a
+// segunda, passaria também um que ignorasse o liveBytes e elegesse todo
+// segmento selado.
+func TestCandidatosElegeOSegmentoSemeadoPeloOpenSemCheckpointDoChamador(t *testing.T) {
+	s := openStore(t, Options{Dir: t.TempDir(), SegmentSize: 400})
+
+	tam, ok := tamanhoConhecidoDoSegmento(s, 1)
+	if !ok || tam != segment.HeaderSize {
+		t.Fatalf("segSize[1] = (%d, %v) logo após o Open, queria (%d, true): é esta semeadura que "+
+			"torna o segmento 1 elegível sem checkpoint do chamador", tam, ok, segment.HeaderSize)
+	}
+	if eleitos := s.candidatos(0.50); len(eleitos) != 0 {
+		t.Fatalf("candidatos = %v com o segmento 1 ainda CORRENTE e vazio: a D6 vem antes de tudo", eleitos)
+	}
+
+	// Enche o segmento 1 até a rotação, guardando as keys que nasceram nele —
+	// são elas, e só elas, que precisam ser superadas para o tally zerar.
+	var doSeg1 []string
+	for i := 0; i < 500 && s.Stats().CurrentSegmentID == 1; i++ {
+		k := fmt.Sprintf("semeadura-%03d", i)
+		mustPut(t, s, k, 1, statusPayload(t, s, k, "Start", 1), nil)
+		doSeg1 = append(doSeg1, k)
+	}
+	if s.Stats().CurrentSegmentID == 1 {
+		t.Fatalf("o segmento 1 continua corrente após %d records: sem selá-lo a eleição cairia na D6 e o "+
+			"teste passaria pelo motivo errado", len(doSeg1))
+	}
+	if eleitos := s.candidatos(0.50); len(eleitos) != 0 {
+		t.Fatalf("candidatos = %v com as rows do segmento 1 ainda VIVAS: a eleição não está lendo o liveBytes", eleitos)
+	}
+
+	// O esgotamento: toda row nascida no segmento 1 superada por um update. É
+	// o que a carga de regime do harness faz por sorteio, e o que lá custa o
+	// coupon collector das rows do primeiro segmento.
+	for _, k := range doSeg1 {
+		prev := mustGetAud(t, s, k)
+		mustPut(t, s, k, 2, statusPayload(t, s, k, "Stop", 2), &prev)
+	}
+	if _, vivos := tallyDoSegmento(s, 1); vivos != 0 {
+		t.Fatalf("liveBytes do segmento 1 = %d depois de superar todas as rows dele", vivos)
+	}
+	if tam, _ := tamanhoConhecidoDoSegmento(s, 1); tam != segment.HeaderSize {
+		t.Fatalf("segSize[1] = %d, queria %d: alguma coisa checkpointou no meio e o teste deixou de ser "+
+			"sobre a semeadura do Open", tam, segment.HeaderSize)
+	}
+	if eleitos := s.candidatos(0.50); !slices.Equal(eleitos, []uint32{1}) {
+		t.Fatalf("candidatos = %v, queria [1]: o segmento semeado pelo Open é elegível sem checkpoint do chamador", eleitos)
 	}
 }
 

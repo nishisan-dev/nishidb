@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -681,61 +680,164 @@ func TestDirBytesSomaSubdiretorios(t *testing.T) {
 }
 
 // A compaction do §53-55 é o MECANISMO que o gate de disco existe para aferir,
-// e até aqui nenhum teste pedia uma rodada com ela ligada: o campo ficava em 0
-// na suíte inteira, o ramo que chama IniciaCompaction nunca executava, e a
-// rodada de aceite podia ter rodado append-only puro enquanto o artefato
-// publicava `compaction_min_live_ratio: 0.50`. É a família do débito 6 — o
-// instrumento que afirma sem ter medido — e a da errata do M1.
+// e o oráculo dele não pode ser o TEXTO que a rodada imprime.
 //
-// Duas asserções, uma para cada metade da afirmação: a LINHA prova que o ramo
-// foi tomado (quem não liga a compaction não a anuncia), e o ARTEFATO prova que
-// o número que sai no JSON é o número que entrou na Config. O comentário do
-// campo diz que ele é "obrigatório no artefato"; sem esta segunda asserção nada
-// impedia o artefato de publicar 0,50 numa rodada sem compaction nenhuma.
+// A prova por mutação de que não pode: com a asserção anterior — a linha
+// "COMPACTION: ligada" na saída —, remover a chamada de `st.IniciaCompaction`
+// e MANTER o Fprintf deixava a suíte inteira verde, e o artefato publicava
+// `compaction_min_live_ratio: 0.50` para uma rodada de append-only puro. É a
+// família do débito 6 na sua forma mais cara, porque o que o instrumento
+// afirmava sem medir era justamente o mecanismo que este harness existe para
+// aferir. E é também a constraint 8 do plano: não se testa prosa.
 //
-// ESCALA: 300 entidades em TempDir. Nesta escala a compaction não chega a
-// aposentar nada (o intervalo entre passadas é de 5 s), então o que se prova
-// aqui é o LIGAMENTO e o registro, não o efeito. O efeito é a série do STEADY,
-// e ela é a rodada de aceite da Task 12.
-func TestCompactionLigadaAnunciaERegistraARazaoPedida(t *testing.T) {
+// O que se cobra agora é ESTADO que só existe se a goroutine do §53-55 tiver
+// subido — `Stats().CompactionRunning`, que o Run lê com o Store ainda aberto.
+// Ele responde por dois desfechos diferentes e os dois interessam: ninguém
+// ligou a compaction, e a goroutine ligou e MORREU no meio da rodada (o
+// `compaction.parou`), caso em que o disco volta a crescer e o artefato, sem
+// este campo, continuaria dizendo 0,50.
+//
+// As três asserções afirmam coisas diferentes e nenhuma cobre a outra: o campo
+// do Report prova o ligamento, o campo do JSON prova que ele CHEGA ao artefato
+// — é lá que a rodada de aceite é conferida, meses depois —, e a razão prova
+// que o número publicado é o que a Config pediu.
+//
+// O limite, escrito porque a leitura é que pega e não a suíte: `true` prova
+// que a goroutine subiu e chegou viva ao fim, não com que razão ela foi
+// iniciada (Stats não expõe a política vigente), nem que ela tenha compactado
+// coisa alguma. Quem responde a segunda pergunta é o
+// TestCompactionEmDatasetReabertoDevolveDiscoDeVerdade.
+//
+// ESCALA: 300 entidades em TempDir, sem STEADY. Nesta escala o segmento 1 é o
+// corrente do começo ao fim (300 records não enchem 4 MiB) e a decisão D6 nunca
+// elege o corrente, então a passada imediata não tem candidato — os contadores
+// de bytes ficam em zero por medida, e é por isso que o oráculo aqui é o
+// medidor de atividade.
+func TestCompactionLigadaSobeAGoroutineEChegaVivaAoFim(t *testing.T) {
 	const razao = 0.50
 	cfg := baseConfig(t, 300)
 	cfg.CompactionRatio = razao
-	var log bytes.Buffer
-	cfg.Out = &log
 
 	rep, err := Run(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(log.String(), "COMPACTION: ligada com minimumLiveRatio 0.50") {
-		t.Errorf("a rodada não anunciou a compaction — o ramo que a liga não foi tomado. Saída:\n%s", log.String())
+	if !rep.StoreStats.CompactionRunning {
+		t.Error("compaction_running = false numa rodada com -compaction-ratio 0,50: " +
+			"ou a goroutine do §53-55 não subiu, ou ela morreu no meio — nos dois casos ninguém devolveu disco")
 	}
-	if got := razaoNoArtefato(t, rep); got != razao {
-		t.Errorf("compaction_min_live_ratio = %v no artefato, want %v: o JSON tem de dizer com que política a rodada mediu", got, razao)
+	art := compactionNoArtefato(t, rep)
+	if !art.Rodando {
+		t.Error("o artefato publica compaction_running = false: quem lê o JSON meses depois não tem outra evidência")
+	}
+	if art.Ratio != razao {
+		t.Errorf("compaction_min_live_ratio = %v no artefato, want %v: o JSON tem de dizer com que política a rodada mediu",
+			art.Ratio, razao)
 	}
 }
 
-// O controle negativo tem o mesmo direito ao registro: uma rodada com
-// `-compaction-ratio 0` mede o append-only puro, e um artefato que não diga
-// isso é indistinguível do artefato da rodada com compaction. A linha da saída
-// e o campo do JSON precisam concordar com a Config nos DOIS sentidos, senão
-// fixar o campo em qualquer constante passa despercebido.
-func TestCompactionDesligadaAnunciaERegistraZero(t *testing.T) {
+// O controle negativo tem o mesmo direito ao registro, e pelo mesmo motivo: uma
+// rodada com `-compaction-ratio 0` mede o append-only puro, e um artefato que
+// não diga isso é indistinguível do artefato da rodada com compaction. Os dois
+// campos precisam concordar com a Config nos DOIS sentidos — sem este teste,
+// fixar `compaction_running` em true (ou o ratio em qualquer constante) passa
+// despercebido.
+func TestCompactionDesligadaRegistraQueNinguemEstavaDevolvendoDisco(t *testing.T) {
 	cfg := baseConfig(t, 200)
 	cfg.CompactionRatio = 0
-	var log bytes.Buffer
-	cfg.Out = &log
 
 	rep, err := Run(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(log.String(), "COMPACTION: DESLIGADA") {
-		t.Errorf("a rodada não anunciou que a compaction está desligada. Saída:\n%s", log.String())
+	if rep.StoreStats.CompactionRunning {
+		t.Error("compaction_running = true com -compaction-ratio 0: o campo não está lendo o Store")
 	}
-	if got := razaoNoArtefato(t, rep); got != 0 {
-		t.Errorf("compaction_min_live_ratio = %v no artefato, want 0", got)
+	art := compactionNoArtefato(t, rep)
+	if art.Rodando {
+		t.Error("o artefato do controle negativo publica compaction_running = true")
+	}
+	if art.Ratio != 0 {
+		t.Errorf("compaction_min_live_ratio = %v no artefato, want 0", art.Ratio)
+	}
+	if art.Lidos != 0 || art.Escritos != 0 {
+		t.Errorf("a rodada sem compaction publicou %d bytes lidos e %d escritos", art.Lidos, art.Escritos)
+	}
+}
+
+// TestCompactionEmDatasetReabertoDevolveDiscoDeVerdade é o oráculo do TRABALHO,
+// e ele fecha a metade que o medidor de atividade não alcança: uma goroutine
+// que sobe, elege lista vazia e dorme para sempre também publica
+// compaction_running true.
+//
+// A montagem é a única que produz trabalho dentro de uma rodada de suíte, e ela
+// sai da mecânica, não de um sleep: a primeira passada é IMEDIATA
+// (compaction.go), e o Checkpoint incondicional do Open reconstrói o segSize
+// com o tamanho REAL de todos os segmentos do diretório. Um dataset REABERTO já
+// nasce, portanto, com os segmentos selados da rodada anterior elegíveis —
+// enquanto num dataset novo só existe o corrente, que a D6 nunca elege. É a
+// mesma semeadura que o
+// TestCandidatosElegeOSegmentoSemeadoPeloOpenSemCheckpointDoChamador fixa do
+// lado do storage.
+//
+// A rodada de montagem roda com a compaction DESLIGADA, para que todo byte que
+// a segunda mover seja trabalho dela. As três asserções de premissa existem
+// porque sem segmento selado e sem row superada a segunda rodada não teria
+// candidato, e a asserção final passaria por vacuidade em vez de por medida.
+//
+// ESCALA: 300 entidades e segmentos de 128 KiB em TempDir. O tamanho do
+// segmento é o que garante a rotação ainda dentro do LOAD, em vez de depender
+// de quantos eventos o STEADY conseguiu emitir na máquina que está rodando a
+// suíte.
+func TestCompactionEmDatasetReabertoDevolveDiscoDeVerdade(t *testing.T) {
+	cfg := baseConfig(t, 300)
+	cfg.SegmentSize = 128 << 10
+	cfg.SteadyDuration = 200 * time.Millisecond
+	cfg.SteadyRate = 0 // sem limite: o teste não pode depender de relógio
+	cfg.SampleEveryEvents = 200
+
+	montagem, err := Run(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if montagem.StoreStats.SegmentsTotal < 2 {
+		t.Fatalf("a montagem terminou com %d segmento(s): sem um SELADO a D6 recusa todo candidato e a "+
+			"rodada seguinte não teria o que compactar", montagem.StoreStats.SegmentsTotal)
+	}
+	if montagem.Steady.Updated == 0 {
+		t.Fatal("a montagem não produziu update nenhum: sem row superada não há garbage para devolver")
+	}
+	if montagem.StoreStats.CompactionBytesRead != 0 {
+		t.Fatalf("a montagem leu %d bytes de compaction com -compaction-ratio 0: o controle negativo não é controle",
+			montagem.StoreStats.CompactionBytesRead)
+	}
+
+	// MESMO DataDir: é a reabertura que torna os segmentos selados elegíveis.
+	reabertura := cfg
+	reabertura.CompactionRatio = 0.50
+	rep, err := Run(reabertura)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rep.StoreStats.CompactionRunning {
+		t.Fatal("compaction_running = false na reabertura: a goroutine não chegou viva ao fim")
+	}
+	if rep.StoreStats.CompactionBytesRead <= 0 {
+		t.Errorf("compaction_bytes_read = %d numa reabertura com %d segmentos selados e garbage de %d updates: "+
+			"a compaction subiu e não varreu nada",
+			rep.StoreStats.CompactionBytesRead, montagem.StoreStats.SegmentsTotal, montagem.Steady.Updated)
+	}
+	// Escritos < lidos é a afirmação inteira do §53-55: o que a varredura leu
+	// da origem e NÃO reescreveu é o disco que a aposentadoria devolveu. Iguais
+	// seria uma cópia que não descartou nada.
+	if rep.StoreStats.CompactionBytesWritten >= rep.StoreStats.CompactionBytesRead {
+		t.Errorf("compaction_bytes_written = %d contra %d lidos: a varredura copiou tudo para frente e não devolveu disco",
+			rep.StoreStats.CompactionBytesWritten, rep.StoreStats.CompactionBytesRead)
+	}
+	art := compactionNoArtefato(t, rep)
+	if art.Lidos != rep.StoreStats.CompactionBytesRead || art.Escritos != rep.StoreStats.CompactionBytesWritten {
+		t.Errorf("o artefato publica (%d, %d) contra (%d, %d) do relatório: os contadores não chegam ao JSON",
+			art.Lidos, art.Escritos, rep.StoreStats.CompactionBytesRead, rep.StoreStats.CompactionBytesWritten)
 	}
 }
 
@@ -759,27 +861,52 @@ func TestCompactionRatioForaDaFaixaRecusaARodada(t *testing.T) {
 	}
 }
 
-func razaoNoArtefato(t *testing.T, rep *Report) float64 {
+// artefatoDaCompaction são os quatro campos com que o JSON responde "a
+// compaction rodou nesta rodada, e com que política".
+type artefatoDaCompaction struct {
+	Ratio    float64
+	Rodando  bool
+	Lidos    int64
+	Escritos int64
+}
+
+// compactionNoArtefato lê esses campos do JSON, e não do struct em memória: o
+// que a rodada de aceite deixa para trás é o arquivo, e um campo que não sai
+// no arquivo não existe para quem for conferi-la depois.
+//
+// Ponteiros de propósito: assim a ausência de qualquer um deles (tag renomeada,
+// campo removido) falha em vez de virar o zero-value — que é exatamente o valor
+// que uma rodada SEM compaction publicaria, ou seja o mutante que mais
+// interessa pegar.
+func compactionNoArtefato(t *testing.T, rep *Report) artefatoDaCompaction {
 	t.Helper()
 	raw, err := json.Marshal(rep)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Ponteiro de propósito: assim a ausência do campo (tag renomeada, campo
-	// removido) falha em vez de virar o zero-value, que é justamente o valor
-	// que uma rodada sem compaction publicaria.
 	var artefato struct {
 		Config struct {
-			CompactionRatio *float64 `json:"compaction_min_live_ratio"`
+			Ratio *float64 `json:"compaction_min_live_ratio"`
 		} `json:"config"`
+		StoreStats struct {
+			Rodando  *bool  `json:"compaction_running"`
+			Lidos    *int64 `json:"compaction_bytes_read"`
+			Escritos *int64 `json:"compaction_bytes_written"`
+		} `json:"store_stats"`
 	}
 	if err := json.Unmarshal(raw, &artefato); err != nil {
 		t.Fatal(err)
 	}
-	if artefato.Config.CompactionRatio == nil {
-		t.Fatalf("o artefato não tem compaction_min_live_ratio: %s", raw)
+	if artefato.Config.Ratio == nil || artefato.StoreStats.Rodando == nil ||
+		artefato.StoreStats.Lidos == nil || artefato.StoreStats.Escritos == nil {
+		t.Fatalf("o artefato não publica os quatro campos de compaction: %s", raw)
 	}
-	return *artefato.Config.CompactionRatio
+	return artefatoDaCompaction{
+		Ratio:    *artefato.Config.Ratio,
+		Rodando:  *artefato.StoreStats.Rodando,
+		Lidos:    *artefato.StoreStats.Lidos,
+		Escritos: *artefato.StoreStats.Escritos,
+	}
 }
 
 // Uma entrada que o instrumento não CONSEGUIU medir tem de abortar a rodada, e
@@ -816,6 +943,91 @@ func TestDirBytesAbortaQuandoNaoConsegueMedirUmaEntrada(t *testing.T) {
 	}
 	if errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("erro de permissão classificado como arquivo inexistente: %v", err)
+	}
+}
+
+// TestDirBytesAbortaQuandoNaoConsegueMedirUmSubdiretorio fecha o quarto ramo
+// por entrada — o erro NÃO-ENOENT vindo da RECURSÃO —, e é o único que a suíte
+// não alcançava. Os testes ao lado cobrem o subdiretório que SUMIU (não conta, e
+// está certo) e o ARQUIVO ilegível (aborta); trocar por `continue` o
+// `return 0, err` da recursão deixava os dois verdes e restaurava o engolimento
+// na direção mais cara: um subdiretório inteiro descontado da soma, sem uma
+// linha de log.
+//
+// A direção do estrago é a que o próprio comentário do dirBytes nomeia, e é por
+// ela que o ramo existe: engolir DIMINUI a soma, e soma que diminui é o desenho
+// que a série do gate lê como "a compaction devolveu disco". O dataset com um
+// subdiretório ilegível reprovaria de um jeito ou de outro — mas reprovaria por
+// plateau APROVADO em cima de cegueira, não por instrumento que se recusou a
+// medir, e os dois diagnósticos mandam o operador a lugares opostos.
+//
+// O 0o000 é o modo que faz o `os.ReadDir` da recursão falhar com EACCES: sem
+// LEITURA e sem BUSCA a listagem não acontece, e o erro que sobe não é
+// fs.ErrNotExist. E o arquivo vivo se chama "a-vivo.dat" para ordenar ANTES do
+// subdiretório na listagem: assim a soma parcial já vale 77 quando a recursão
+// falha, e a asserção do zero deixa de ser vácua.
+func TestDirBytesAbortaQuandoNaoConsegueMedirUmSubdiretorio(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignora os bits do diretório: sem EACCES não há o que provar")
+	}
+	raiz := t.TempDir()
+	if err := os.WriteFile(filepath.Join(raiz, "a-vivo.dat"), make([]byte, 77), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(raiz, "z-sub-ilegivel")
+	if err := os.Mkdir(sub, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	// Antes da limpeza do TempDir, que roda depois desta por ser LIFO.
+	t.Cleanup(func() { _ = os.Chmod(sub, 0o755) })
+
+	n, err := dirBytes(raiz)
+	if err == nil {
+		t.Fatalf("dirBytes devolveu %d com um subdiretório que não conseguiu medir", n)
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("erro de permissão na recursão classificado como arquivo inexistente: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("soma parcial %d junto do erro do subdiretório — o chamador que ignorar o erro lê isso como disco medido", n)
+	}
+}
+
+// TestAmostraAbortaAFaseQuandoNaoConsegueMedirODisco cobra a decisão que o
+// comentário do collector.sample argumenta e que nenhum teste alcançava: a
+// leitura de disco que falhou ABORTA, em vez de virar um ponto inventado na
+// curva.
+//
+// Trocar aquele `return err` por um `disco = 0` deixava a suíte inteira verde,
+// e é a pior mutação possível neste arquivo — a amostra inventada entra na
+// série como uma queda a zero, e queda é o desenho que o gate lê como devolução
+// de disco. O instrumento cego aprovaria a própria cegueira, que é o argumento
+// que o comentário escreve e que até aqui ninguém cobrava.
+//
+// A asserção que carrega o teste é a SEGUNDA. Devolver erro é metade; a outra
+// metade é a série NÃO ganhar o ponto, porque um sample que apendasse antes de
+// devolver o erro deixaria o ponto inventado no relatório de quem ignorasse o
+// retorno.
+//
+// A fase é chamada com duração de 1 ns de propósito: assim a MUTAÇÃO também tem
+// desfecho limpo — o laço sai na primeira volta sem tocar no gerador, o
+// runPhase retorna nil, e o teste falha por asserção em vez de por panic num
+// campo que a montagem não preencheu.
+func TestAmostraAbortaAFaseQuandoNaoConsegueMedirODisco(t *testing.T) {
+	cfg := baseConfig(t, 10)
+	cfg.DataDir = filepath.Join(t.TempDir(), "diretorio-nunca-criado")
+	col := &collector{cfg: cfg, start: time.Now()}
+
+	_, err := runPhase(phaseArgs{name: "steady", cfg: cfg, col: col, duration: time.Nanosecond})
+	if err == nil {
+		t.Fatal("a fase terminou sem erro com o disco do dataset ilegível: a rodada seguiria relatando o que não conseguiu medir")
+	}
+	if !strings.Contains(err.Error(), "diretorio-nunca-criado") {
+		t.Errorf("o erro não nomeia o diretório que não pôde ser medido: %v", err)
+	}
+	if len(col.samples) != 0 {
+		t.Errorf("%d amostra(s) coletada(s) apesar da falha de leitura (%+v): ponto inventado na curva é "+
+			"exatamente o que o gate lê como plateau", len(col.samples), col.samples)
 	}
 }
 

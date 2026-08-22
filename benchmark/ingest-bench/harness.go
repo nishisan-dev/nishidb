@@ -308,6 +308,34 @@ type StoreStatsReport struct {
 	SegmentsTotal     uint32  `json:"segments_total"`
 	PrimaryLoadFactor float64 `json:"primary_load_factor"`
 	DiskBytes         int64   `json:"disk_bytes"`
+	// Os três campos de compaction são o ORÁCULO DO MECANISMO, e o
+	// ConfigSummary.CompactionRatio acima não os substitui: aquele registra o
+	// que a rodada PEDIU, estes registram o que aconteceu.
+	//
+	// A distinção não é acadêmica. Enquanto a única evidência era a linha
+	// "COMPACTION: ligada" na saída, remover a chamada de IniciaCompaction e
+	// manter o Fprintf deixava a suíte inteira verde — e o artefato publicava
+	// `compaction_min_live_ratio: 0.50` para uma rodada de append-only puro.
+	// É a família do débito 6: instrumento que afirma sem ter medido, aqui na
+	// forma mais cara possível, porque o que ele afirma é justamente o
+	// mecanismo que o gate de disco existe para aferir.
+	//
+	// CompactionRunning é lido do Stats com o Store ainda ABERTO (o restart do
+	// §125 o fecha logo depois, e Stats sobre Store fechado devolve o
+	// zero-value). Ele responde por dois desfechos diferentes, e os dois
+	// importam ao gate: ninguém ligou a compaction, e a goroutine ligou e
+	// MORREU no meio da rodada — o `compaction.parou` do §53-55, em que o
+	// disco recomeça a crescer sem que nada no artefato dissesse por quê.
+	//
+	// O limite, dito por extenso: `true` prova que a goroutine subiu e chegou
+	// viva ao fim, não com QUE razão ela foi iniciada. Quem responde isso é o
+	// campo do ConfigSummary, e as duas leituras juntas é que fecham a
+	// pergunta. Os contadores de bytes ficam em zero numa rodada curta demais
+	// para uma passada eleger seja lá o que for — eles medem trabalho feito, e
+	// zero é uma resposta honesta quando não houve nenhum.
+	CompactionRunning      bool  `json:"compaction_running"`
+	CompactionBytesRead    int64 `json:"compaction_bytes_read"`
+	CompactionBytesWritten int64 `json:"compaction_bytes_written"`
 }
 
 // Sample é uma amostra da série temporal.
@@ -539,6 +567,12 @@ func Run(cfg Config) (*Report, error) {
 		SegmentsTotal:     stats.SegmentsTotal,
 		PrimaryLoadFactor: stats.PrimaryLoadFactor,
 		DiskBytes:         discoFinal,
+		// O `stats` acima foi colhido com o Store ABERTO, e é por isso que
+		// estes três campos são leitura e não suposição — ver o bloco na
+		// declaração do StoreStatsReport.
+		CompactionRunning:      stats.CompactionRunning,
+		CompactionBytesRead:    stats.CompactionBytesRead,
+		CompactionBytesWritten: stats.CompactionBytesWritten,
 	}
 
 	// O restart é medido por ÚLTIMO porque ele FECHA o Store: colhido antes,
@@ -1127,26 +1161,70 @@ const (
 	//	gate-disco-compaction-on-50k-20260822.json    razão -0,664
 	//	gate-disco-compaction-off-50k-20260822.json   razão  1,346
 	//
-	// Com a compaction em 0,50: 29,1 MiB no começo da janela, pico de
-	// 293,2 MiB em t = 104,2 s, 75,1 MiB no fim. Com -compaction-ratio 0, na
+	// Com a compaction em 0,50: 29,1 MiB na amostra 0 da janela, pico de
+	// 293,2 MiB na amostra 521 e 75,1 MiB na 599. Com -compaction-ratio 0, na
 	// mesma carga: crescimento até 347,4 MiB, sem uma única devolução.
 	//
 	// O que essas duas rodadas NÃO estabelecem: que os regimes caiam de lados
-	// opostos do limiar. As duas séries são IDÊNTICAS até a amostra 497 de 600
-	// — 82,8% da janela, os mesmos 475.211 B/amostra na primeira metade das
-	// duas —, e a diferença inteira mora nos últimos 20,6 s. A causa é
-	// mecânica e está no artefato: a rodada toda teve UM checkpoint
-	// (checkpoint_count = 1, em t ≈ 90 s), e segmento selado depois do último
-	// checkpoint não é elegível — então em 82,8% da janela a rodada "com
-	// compaction" é append-only puro, byte a byte. O que separa os dois
-	// números é ONDE a janela termina em relação ao único dente, não o regime.
+	// opostos do limiar. As duas séries são IDÊNTICAS byte a byte nas 497
+	// primeiras amostras de 600 — 82,8% da janela, os mesmos 475.211 B/amostra
+	// na primeira metade das duas —, e a diferença inteira mora nas 103
+	// últimas, que são 20,4 s dos 120 s. O que separa os dois números é ONDE a
+	// janela termina em relação ao PRIMEIRO dente, não o regime.
+	//
+	// A causa do dente chegar tarde NÃO é a cadência de checkpoint, e é o
+	// próprio artefato que desmente essa leitura: a primeira devolução está na
+	// amostra 497 (`events` 497.000, o disco cai de 295.039.892 para
+	// 291.502.261) e o ÚNICO checkpoint da fase está na amostra 500
+	// (`checkpoint_count` 1, `events` 500.000). A compaction devolveu disco
+	// ANTES de o chamador ter checkpointado uma única vez, e nenhuma explicação
+	// que dependa do checkpoint sobrevive a isso. Fica registrado também o
+	// instante certo, porque a versão anterior deste comentário dizia "t ≈ 90
+	// s": o contador do -checkpoint-every é local ao runPhase, então os 50.000
+	// eventos do LOAD não entram na conta, e 500.000 eventos a 5.000 ev/s são
+	// 100,0 s de STEADY.
+	//
+	// O que governa o instante do primeiro dente são estes três, e nenhum deles
+	// é o -checkpoint-every:
+	//
+	//  1. O segmento 1 nasce ELEGÍVEL. O Checkpoint incondicional do Open
+	//     (store.go:605) reconstrói o segSize a partir do ListSegments
+	//     (store_checkpoint.go:142), e num dataset novo o único arquivo listado
+	//     é o corrente, ainda do tamanho do header (segment.HeaderSize = 64 B).
+	//     Selado esse segmento e zerado o liveBytes dele, candidatos() o elege
+	//     — 0/64 < 0,50 — sem checkpoint nenhum do chamador. Quem afirma isto é
+	//     o TestCandidatosElegeOSegmentoSemeadoPeloOpenSemCheckpointDoChamador,
+	//     e não este parágrafo.
+	//  2. Zerar aquele liveBytes exige que TODA row nascida no segmento 1 tenha
+	//     sido superada, e o STEADY sorteia as keys uniformemente: é coupon
+	//     collector sobre as k rows do primeiro segmento dentro das n do
+	//     dataset, ou seja n·(ln k + γ) eventos. O k sai do artefato desligado,
+	//     por média e não por medida direta — 649.998 records (`load.events` +
+	//     `steady.events`) em 83 segmentos (`store_stats.segments_total`) dão
+	//     ~7.831 records por segmento de 4 MiB, e no segmento 1, preenchido só
+	//     pelo LOAD, cada record é uma row distinta. Com n = 50.000 a conta dá
+	//     ~477.000 eventos contra os 497.000 em que o dente de fato apareceu:
+	//     4% de erro para uma estimativa com um k aproximado é acordo, não
+	//     coincidência. É esta espera, e não a agenda de checkpoint, que ocupa
+	//     os 82,8% de janela indistinguível do append-only puro.
+	//  3. A cascata depois do primeiro dente é do produto: o aposentaSegmento
+	//     checkpointa antes do rename e outra vez depois dele (compaction.go),
+	//     e cada um repovoa o segSize com o tamanho REAL de todos os segmentos
+	//     selados — que até ali não tinham entrada alguma. Daí em diante a
+	//     eleição passa a valer contra o tamanho de verdade, em que meio
+	//     segmento morto já basta, e as 103 últimas amostras trazem 34
+	//     devoluções.
 	//
 	// Portanto: o limiar 0,35 está justificado pela aritmética do esboço, e
 	// pela rodada desligada, que reprova por crescer sem devolver nada. NÃO
 	// está calibrado por uma janela em regime — essa janela ainda não foi
-	// medida, e é a rodada de aceite da Task 12 que deve produzi-la, com
-	// STEADY longo o bastante (ou -checkpoint-every baixo o bastante) para a
-	// janela conter vários dentes em vez de um.
+	// medida, e é a rodada de aceite da Task 12 que deve produzi-la. A receita
+	// para ela sai do item 2, não do -checkpoint-every: a janela precisa de
+	// eventos suficientes para o esgotamento do primeiro segmento CABER nela
+	// com folga para os dentes seguintes. n entra linear (-entities), o
+	// tamanho da janela entra linear (-steady × -rate) e k entra dentro de um
+	// logaritmo — cortar -segment-size pela metade tira ln 2 de H_k, ou seja
+	// ~7% da espera, e é por isso que ele não é a alavanca.
 	//
 	// A folga do lado do plateau existe porque a compaction NÃO leva o
 	// crescimento a zero: o segmento corrente continua sendo apendado, e uma
@@ -1221,17 +1299,30 @@ func avaliaGateDeDisco(serie []int64) GateResult {
 		"(razão %.3f, teto %.2f) — %s",
 		primeira, segunda, razao, fracaoDeCrescimentoTolerada, janela)
 	if g.Status == GateReprovou {
-		// A dica do checkpoint não é ruído: o segSize do writer só se move no
-		// checkpoint (compaction.go), então um -checkpoint-every alto adia a
-		// ELEIÇÃO dos segmentos selados depois do último — e a rodada reprova
-		// por cadência, não por compaction quebrada. Medido, na rodada de
-		// gate-disco-compaction-on-50k-20260822.json: com o default de 500.000
-		// eventos a rodada inteira teve UM checkpoint, e o disco não devolveu
-		// nada antes da amostra 497 de 600 (t = 99,4 s de 120 s) — 82,8% da
-		// janela indistinguíveis do append-only puro.
+		// A dica manda o operador ao artefato antes de mandá-lo ao produto,
+		// porque as duas hipóteses pedem ações opostas e o relatório já sabe
+		// distinguir uma da outra desde que o StoreStatsReport ganhou os campos
+		// de compaction: `compaction_running` falso é compaction que não subiu
+		// (ou que morreu no meio, o `compaction.parou` do §53-55), e aí não há
+		// o que calibrar; viva e com `compaction_bytes_read` zerado é uma
+		// janela que acabou antes do primeiro dente, que é problema de CARGA.
+		//
+		// A dica ANTERIOR mandava conferir o -checkpoint-every, apoiada em
+		// "segmento selado depois do último checkpoint ainda não é elegível". A
+		// meia-verdade custava caro: o segmento 1 nasce com tamanho conhecido
+		// pelo Checkpoint do Open e não depende de checkpoint nenhum do
+		// chamador, e na própria rodada citada a primeira devolução acontece
+		// ANTES do único checkpoint (amostra 497 contra amostra 500 do
+		// gate-disco-compaction-on-50k-20260822.json). Quem manda no instante
+		// do primeiro dente é o esgotamento do primeiro segmento selado — ver a
+		// aritmética junto de fracaoDeCrescimentoTolerada —, e mandar o
+		// operador mexer no checkpoint o faria calibrar o parâmetro errado.
 		g.Detail += "; o disco continua subindo em regime, que é o §86 caminhando para o ENOSPC. " +
-			"Confira -compaction-ratio e -checkpoint-every antes de culpar a compaction: " +
-			"segmento selado depois do último checkpoint ainda não é elegível"
+			"Antes de culpar a compaction, leia compaction_running e compaction_bytes_read no artefato: " +
+			"falso ali significa que ninguém devolveu disco nesta rodada. Com a compaction viva, o " +
+			"suspeito é a JANELA — o primeiro segmento só sai depois que toda row nascida nele foi " +
+			"superada, o que custa da ordem de entities × ln(rows por segmento) eventos —, e quem a " +
+			"encurta é -entities, -rate e -steady, não -checkpoint-every"
 	}
 	return g
 }

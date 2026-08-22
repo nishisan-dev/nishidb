@@ -82,6 +82,13 @@ REGIME, que é onde os updates sobre key set fixo geram garbage sem gerar row
 nova. Sem STEADY não há série, o gate fica NÃO AVALIADO e a rodada reprova —
 uma rodada só de LOAD não prova que o disco para de crescer.
 
+E a janela precisa ser longa o bastante para o PRIMEIRO segmento selado
+esgotar: como os updates sorteiam as keys, isso custa da ordem de
+-entities × ln(rows por segmento) eventos, e até lá a curva é indistinguível do
+append-only puro. Quem encurta essa espera é -entities, -rate e -steady;
+-checkpoint-every não é o que decide. O artefato responde de que lado está o
+problema — compaction_running e compaction_bytes_read em store_stats.
+
 `)
 		flag.PrintDefaults()
 	}
