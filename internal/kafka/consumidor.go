@@ -70,6 +70,25 @@ type Consumidor struct {
 	// offsetsIniciais é a posição de onde retomar, por partição.
 	offsetsIniciais map[int32]int64
 
+	// admPronto barra aoAtribuir até c.adm existir (débito 60).
+	//
+	// O franz-go entrega partições assim que o metadata loop descobre o
+	// tópico em background, e isso não espera o primeiro Poll nem o retorno
+	// de kgo.NewClient: um assignment pode chegar ENQUANTO NewClient ainda
+	// está em curso, antes de `Abre` ter a chance de montar c.adm. Sem esta
+	// barreira, aoAtribuir tocava c.adm nil nessa janela e o processo morria
+	// de SIGSEGV inteiro — não uma falha de ingestão.
+	//
+	// Fecha assim que c.adm é atribuído (logo após kgo.NewClient devolver com
+	// sucesso), e não no fim do construtor: bloquear pelo tempo de
+	// resolveOrigemEPosicao (que faz I/O de rede) atrasaria o rebalance sem
+	// necessidade, e um erro ali chamaria cl.Close() antes de um defer no fim
+	// da função ter a chance de abrir o gate — cl.Close() esperaria a
+	// goroutine da sessão do group sair do callback, e o callback esperaria
+	// o gate para sempre: deadlock. Fechando o gate no instante em que c.adm
+	// fica válido, esse caminho de erro nunca vê o gate ainda fechado.
+	admPronto chan struct{}
+
 	fecha sync.Once
 }
 
@@ -99,7 +118,7 @@ func Abre(ctx context.Context, cfg *Config, o Opcoes) (*Consumidor, error) {
 	log = log.Component("kafka").Dataset(cfg.Dataset)
 	met := registraMetricas(o.Metrics, cfg.Dataset)
 
-	c := &Consumidor{cfg: cfg, log: log, met: met, origem: cfg.Origem()}
+	c := &Consumidor{cfg: cfg, log: log, met: met, origem: cfg.Origem(), admPronto: make(chan struct{})}
 
 	opts := append(cfg.opcoesDoCliente(),
 		kgo.OnPartitionsAssigned(c.aoAtribuir),
@@ -110,10 +129,17 @@ func Abre(ctx context.Context, cfg *Config, o Opcoes) (*Consumidor, error) {
 
 	cl, err := kgo.NewClient(opts...)
 	if err != nil {
+		// kgo.NewClient só falha antes de qualquer goroutine do cliente
+		// nascer (validação de opções), então aoAtribuir nunca teve chance de
+		// rodar aqui — mas fechar o gate de todo caminho de saída, sem
+		// exceção, é o invariante que evita reintroduzir o débito 60 por
+		// omissão num caminho futuro.
+		close(c.admPronto)
 		return nil, fmt.Errorf("kafka: criar cliente do dataset %q: %w", cfg.Dataset, err)
 	}
 	c.cl = cl
 	c.adm = kadm.NewClient(cl)
+	close(c.admPronto)
 
 	if err := c.resolveOrigemEPosicao(ctx, o.Store); err != nil {
 		cl.Close()
@@ -215,6 +241,11 @@ func valorDoCampo(o checkpoint.Origem, campo string) string {
 // o consumer faria o dataset divergir do que o Kafka acha que já foi
 // entregue.
 func (c *Consumidor) aoAtribuir(ctx context.Context, _ *kgo.Client, atribuidas map[string][]int32) {
+	// Débito 60: o group pode entregar partições antes de c.adm existir.
+	// admPronto fecha assim que Abre atribui c.adm, e nunca antes — ver o
+	// comentário do campo.
+	<-c.admPronto
+
 	partes := atribuidas[c.cfg.Topic]
 	c.met.partAtribuidas.Set(float64(len(partes)))
 
