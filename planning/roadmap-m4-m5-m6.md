@@ -47,6 +47,42 @@ alcança loopback sem senha não é usável de fato (débito 57).
 físico será removido por **compaction**". TTL publica tombstone, e o tombstone continua
 ocupando bytes no segmento. A compaction é a primitiva; o TTL é política sobre ela.
 
+## Estado ao fim do ciclo do M4 (22/08/2026)
+
+O **M4 foi entregue** — compaction completa, provada ponta a ponta pelo binário
+e devolvendo disco — **com uma ressalva registrada**: o plateau em escala não
+foi provado. O gate da rodada de aceite passou por uma amostra colhida fora da
+janela de carga e, recontado, reprova ([`docs/aceite-m4.md`](../docs/aceite-m4.md)).
+
+O que o ciclo entregou além do escopo planejado:
+
+| Achado | Onde ficou |
+|---|---|
+| O gate de lint do projeto era **cego** desde o M2: os "114 apontamentos" eram saída truncada pelos tetos default, e a baseline real é **390** | Débitos 53 (errata) e 59 (novo) |
+| O `Stats()` passou a ler espelhos atômicos e nunca bloqueia atrás do checkpoint | Task 1b |
+| O primeiro dataset real em produção, com três medições que contrariaram a previsão | [`docs/piloto-events.md`](../docs/piloto-events.md) |
+
+**A prova do plateau agora depende do piloto**, não de uma rodada sintética: o
+tópico `events` tem padrão de update real e o dataset drena o backlog em ~3h30.
+
+### O que muda para o M5, à luz do piloto
+
+1. **A Fase 11 ganhou urgência concreta.** Há um dataset real no ar, alcançável
+   só por loopback porque a porta não tem senha. Consultar de outra máquina hoje
+   exige túnel SSH.
+2. **O M6/TTL saiu do abstrato.** O payload do `events` traz `expireTime`,
+   `ttlEspecial` e `sendClearOnExpiration`: os dados pedem TTL, e sem ele o
+   estado vivo cresce com o número de alarmes distintos. A compaction recupera
+   versões superadas, não entidades.
+3. **Migração de formato tem prazo.** A retenção do tópico é de **~18,8 horas**.
+   Qualquer mudança que exija reprocessar precisa caber nessa janela, ou aceita
+   perder o histórico anterior a ela. Isso vale para o M6, que muda a semântica
+   de tombstone.
+4. **Falta o básico de operação de long run**: o binário não tem `--version`, e
+   não há mecanismo de atualização com verificação e rollback.
+
+---
+
 ## Decisões fechadas com o usuário
 
 | # | Decisão | Escolha |
