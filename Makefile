@@ -1,7 +1,20 @@
 .PHONY: build test test-race test-integration lint bench bench-micro cover
 
+# `go build ./...` sozinho DESCARTA o binário: o módulo tem dois packages
+# main (cmd/nishidb e benchmark/ingest-bench), e sem -o o toolchain só
+# verifica que os dois compilam, sem deixar nada em disco. O `./...` continua
+# aqui como verificação — pega quebra em qualquer pacote, não só no CLI —, e a
+# segunda chamada é quem de fato emite `./nishidb`, com os três ldflags do
+# buildinfo carimbados na hora do build. É a MESMA linha que o `release.yml`
+# (Task A2) herda ao chamar `make build`; não crie um segundo comando de
+# build fora daqui, ou os dois divergem em silêncio.
+LDFLAGS := -X github.com/nishisan-dev/nishidb/internal/buildinfo.Versao=$(shell git describe --tags --always --dirty) \
+           -X github.com/nishisan-dev/nishidb/internal/buildinfo.Commit=$(shell git rev-parse --short HEAD) \
+           -X github.com/nishisan-dev/nishidb/internal/buildinfo.Data=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+
 build:
 	go build ./...
+	go build -ldflags "$(LDFLAGS)" -o nishidb ./cmd/nishidb
 
 # Suíte completa, INCLUINDO os gates de medida — os de alocação
 # (testing.AllocsPerRun) e o de vazão da ingestão pelo CLI —, que são
