@@ -18,13 +18,17 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"math"
 	"os"
+	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -64,6 +68,18 @@ type Config struct {
 	CheckpointOn  int    // eventos entre checkpoints (0 = nenhum)
 	RSSLimitBytes uint64 // gate §109 (0 = desliga)
 	HeapBaseline  string // report de uma rodada menor, para o gate §110
+
+	// CompactionRatio é o minimumLiveRatio do §78 com que a compaction do
+	// §53-55 roda nesta rodada. ZERO a DESLIGA, e desligá-la é o controle
+	// negativo do gate de disco: sem ninguém devolvendo disco, a série do
+	// STEADY é a do append-only puro e o gate tem de reprovar. Um gate que
+	// aprovasse a rodada sem compaction não estaria medindo compaction.
+	//
+	// Fora da faixa aberta (0, 1) o Store não teria política nenhuma para
+	// aplicar — é a mesma faixa que o config.razaoDeLiveness impõe ao YAML, e
+	// aqui ela é validada pelo mesmo motivo: ratio >= 1 elege todo segmento e
+	// reescreve o dataset em laço.
+	CompactionRatio float64
 
 	// Kafka* ligam a ingestão REAL do §108. Sem eles a rodada usa o gerador
 	// em memória, que é o modo rápido de regressão — e o que o M1 media,
@@ -250,6 +266,11 @@ type ConfigSummary struct {
 	CorpusGolden   string `json:"corpus_golden_note"`
 	SpecPath       string `json:"spec_path"`
 	DataDirPresent bool   `json:"data_dir_present"`
+	// CompactionRatio registra se a compaction rodou, e com que política. É
+	// obrigatório no artefato: um relatório com o gate de disco aprovado e sem
+	// dizer se havia compaction é um relatório que não permite distinguir "o
+	// disco estabilizou" de "a rodada foi curta demais para crescer".
+	CompactionRatio float64 `json:"compaction_min_live_ratio"`
 	// LoadCorpus e SteadyCorpus registram o PERFIL do corpus de cada fase no
 	// próprio artefato. Sem isso, um corpus que empobrece em silêncio (uma
 	// Config parcial, cujos ratios ficam zerados por serem literais) continua
@@ -300,6 +321,13 @@ type Sample struct {
 	HeapAlloc   uint64  `json:"heap_alloc_bytes"`
 	HeapObjects uint64  `json:"heap_objects"`
 	NumGC       uint64  `json:"num_gc"`
+	// DiskBytes é o disco ocupado pelo dataset NO INSTANTE da amostra, e é a
+	// série que o gate do §53-55 lê. O relatório já trazia o disco FINAL
+	// (StoreStatsReport.DiskBytes), e um valor final não distingue as duas
+	// curvas que este milestone existe para separar: o append-only puro e o
+	// dente de serra da compaction terminam na mesma ordem de grandeza se a
+	// rodada parar logo depois de uma aposentadoria. Só a série discorda.
+	DiskBytes int64 `json:"disk_bytes"`
 }
 
 const (
@@ -328,6 +356,10 @@ func Run(cfg Config) (*Report, error) {
 	}
 	if cfg.Entities <= 0 {
 		return nil, fmt.Errorf("ingest-bench: Entities = %d, deve ser > 0", cfg.Entities)
+	}
+	if cfg.CompactionRatio < 0 || cfg.CompactionRatio >= 1 {
+		return nil, fmt.Errorf("ingest-bench: CompactionRatio = %v, deve estar em [0, 1) — "+
+			"0 desliga a compaction, e >= 1 elegeria todo segmento", cfg.CompactionRatio)
 	}
 	if cfg.SampleInterval <= 0 {
 		cfg.SampleInterval = 5 * time.Second
@@ -359,6 +391,18 @@ func Run(cfg Config) (*Report, error) {
 	}
 	defer st.Close()
 
+	// A compaction sobe ANTES da primeira fase, pela mesma razão que o servidor
+	// a liga antes do consumidor (server.ligaCompaction): quem produz o garbage
+	// é a ingestão, e ligá-la depois abriria uma janela em que o dataset cresce
+	// sem ninguém devolvendo nada — janela que cairia inteira dentro da série
+	// que o gate lê. Quem a cancela e aguarda é o Close (decisão D7).
+	if cfg.CompactionRatio > 0 {
+		st.IniciaCompaction(context.Background(), cfg.CompactionRatio)
+		_, _ = fmt.Fprintf(cfg.Out, "COMPACTION: ligada com minimumLiveRatio %.2f (§53-55)\n", cfg.CompactionRatio)
+	} else {
+		_, _ = fmt.Fprintln(cfg.Out, "COMPACTION: DESLIGADA — o gate de disco vai medir o append-only puro")
+	}
+
 	c, err := spec.Compile(st.FieldDict())
 	if err != nil {
 		return nil, fmt.Errorf("ingest-bench: compilando spec: %w", err)
@@ -375,8 +419,9 @@ func Run(cfg Config) (*Report, error) {
 			SteadySec: int(cfg.SteadyDuration.Seconds()), SteadyRate: cfg.SteadyRate,
 			Readers: cfg.Readers, SQLReaders: cfg.SQLReaders, SegmentSize: cfg.SegmentSize,
 			CheckpointOn: cfg.CheckpointOn, RSSLimitBytes: cfg.RSSLimitBytes,
-			SpecPath:       cfg.SpecPath,
-			DataDirPresent: true,
+			SpecPath:        cfg.SpecPath,
+			DataDirPresent:  true,
+			CompactionRatio: cfg.CompactionRatio,
 			CorpusGolden: "corpus determinístico: mesma Seed e Entities reproduzem os mesmos " +
 				"eventos (ver TestCorpusGolden no radiusgen)",
 		},
@@ -485,11 +530,15 @@ func Run(cfg Config) (*Report, error) {
 	// exatamente o que um `systemctl restart` custa em indisponibilidade.
 	rep.Samples = col.samples
 	stats := st.Stats()
+	discoFinal, err := dirBytes(cfg.DataDir)
+	if err != nil {
+		return nil, err
+	}
 	rep.StoreStats = StoreStatsReport{
 		RowCount:          stats.RowCount,
 		SegmentsTotal:     stats.SegmentsTotal,
 		PrimaryLoadFactor: stats.PrimaryLoadFactor,
-		DiskBytes:         dirBytes(cfg.DataDir),
+		DiskBytes:         discoFinal,
 	}
 
 	// O restart é medido por ÚLTIMO porque ele FECHA o Store: colhido antes,
@@ -655,6 +704,15 @@ func (c *collector) sample(phase string, events int64, rep *PhaseReport) error {
 	if err != nil {
 		return fmt.Errorf("ingest-bench: amostra de memória: %w", err)
 	}
+	// O disco entra na MESMA amostra da memória, e uma leitura que falhou
+	// aborta a rodada em vez de virar um ponto inventado na curva — o mesmo
+	// tratamento que o memprof.Read sempre teve. Carregar o último valor bom
+	// para frente seria pior que abortar: a série ficaria PLANA no trecho não
+	// medido, e plano é o desenho que o gate aprova.
+	disco, err := dirBytes(c.cfg.DataDir)
+	if err != nil {
+		return err
+	}
 	c.samples = append(c.samples, Sample{
 		ElapsedSec:  time.Since(c.start).Seconds(),
 		Phase:       phase,
@@ -665,6 +723,7 @@ func (c *collector) sample(phase string, events int64, rep *PhaseReport) error {
 		HeapAlloc:   s.HeapAlloc,
 		HeapObjects: s.HeapObjects,
 		NumGC:       s.NumGC,
+		DiskBytes:   disco,
 	})
 	if s.VmRSSBytes > rep.MaxRSSBytes {
 		rep.MaxRSSBytes = s.VmRSSBytes
@@ -1004,6 +1063,12 @@ func evaluateGates(cfg Config, rep *Report) []GateResult {
 		Detail: fmt.Sprintf("%d eventos descartados (skipped+failed)", perdidos),
 	})
 
+	// §53-55: o disco tem de parar de crescer. O gate é avaliado SEMPRE que a
+	// série existe, inclusive com a compaction desligada — e é assim que ele se
+	// prova: `-compaction-ratio 0` produz o append-only puro, e uma rodada em
+	// que ele passasse mesmo assim não estaria medindo nada.
+	gates = append(gates, avaliaGateDeDisco(serieDeDiscoDoSteady(rep.Samples)))
+
 	// Latências (§89/§90) — soft no M1: sem o executor, medem o storage.
 	for _, q := range rep.Queries {
 		var teto float64
@@ -1035,6 +1100,125 @@ func evaluateGates(cfg Config, rep *Report) []GateResult {
 		})
 	}
 	return gates
+}
+
+const (
+	// amostrasMinimasDeDisco é o piso para o gate ter DUAS METADES em vez de
+	// duas leituras. Com seis amostras a primeira metade tem três variações e
+	// a segunda tem duas; abaixo disso uma das metades vira uma variação só, e
+	// uma variação só de um dente de serra cai no pico ou no vale conforme o
+	// instante — o veredito passaria a ser sorteio.
+	amostrasMinimasDeDisco = 6
+	// fracaoDeCrescimentoTolerada é o quanto a segunda metade da janela pode
+	// crescer, por amostra, em relação à primeira.
+	//
+	// O número não sai de ajuste fino: ele separa os dois regimes que o gate
+	// existe para distinguir. Pela aritmética das séries do esboço da Task 11,
+	// o append-only puro dá razão 1,00 por construção — a inclinação não muda —,
+	// 2,9x acima deste limiar, e o plateau do esboço dá 0,065, 5,4x abaixo.
+	//
+	// MEDIDO, e a escala importa: 50.000 entidades, STEADY de 120 s a
+	// 5.000 ev/s, segmentos de 4 MiB, em disco real. Com a compaction ligada em
+	// 0,50 a razão ficou em -0,663 (a segunda metade ENCOLHEU: 29,1 MiB no
+	// começo da janela, pico de 293,8 MiB dentro dela, 75,2 MiB no fim); com
+	// -compaction-ratio 0, na MESMA carga e com a primeira metade idêntica byte
+	// a byte, ficou em 1,346 e o disco terminou em 347,4 MiB. Os dois regimes
+	// caem de lados opostos do limiar, e é a rodada desligada que prova que o
+	// gate discorda de alguma coisa.
+	//
+	// A folga do lado do plateau existe porque a compaction NÃO leva o
+	// crescimento a zero: o segmento corrente continua sendo apendado, e uma
+	// aposentadoria que caia no começo da janela deixa a segunda metade subindo
+	// até a próxima. A limitação, dita por extenso porque o resíduo R3 da Fase B
+	// é sobre exatamente isto: uma série que cresça para sempre a um terço da
+	// inclinação inicial passa neste gate. Ele afere DESACELERAÇÃO, e o que
+	// aterrissa aqui quando a compaction não roda é razão ~1, não razão 0,4.
+	fracaoDeCrescimentoTolerada = 0.35
+)
+
+// serieDeDiscoDoSteady extrai a curva de disco da fase STEADY, e só dela.
+//
+// O LOAD fica de fora por construção: ele CRIA o dataset, cresce do zero ao
+// tamanho vivo e não tem garbage para a compaction devolver. Deixá-lo entrar
+// encheria a primeira metade da janela com a inclinação da carga inicial, e
+// qualquer segunda metade pareceria plateau em comparação — o gate aprovaria
+// por artefato de recorte.
+func serieDeDiscoDoSteady(amostras []Sample) []int64 {
+	var serie []int64
+	for _, s := range amostras {
+		if s.Phase == "steady" {
+			serie = append(serie, s.DiskBytes)
+		}
+	}
+	return serie
+}
+
+// avaliaGateDeDisco é a prova que importa neste milestone: sob carga de regime
+// — updates sobre key set FIXO, que geram garbage sem gerar row nova —, o disco
+// tem de parar de crescer. A compaction pode passar em todo teste unitário do
+// §53-55 e não devolver disco em regime; é esta série que discorda.
+//
+// O critério compara a INCLINAÇÃO das duas metades da janela, normalizada por
+// amostra. A normalização não é detalhe: com número ímpar de variações as
+// metades têm tamanhos diferentes, e comparar somas brutas daria 0,67 para uma
+// reta perfeita — o limiar passaria a depender de quantas amostras a rodada
+// coletou, que é a definição de instrumento que mede a si mesmo.
+//
+// Os três estados são os da errata do M1, e o terceiro é o que impede a
+// aprovação por omissão: janela sem as duas metades, ou primeira metade que não
+// cresceu, não são plateau — são falta de insumo. Sendo o gate DURO, NÃO
+// AVALIADO reprova a rodada e manda repetir com STEADY mais longo, que é a ação
+// correta. Aprovar ali seria dizer "o disco estabilizou" sobre uma janela em
+// que nada foi escrito.
+func avaliaGateDeDisco(serie []int64) GateResult {
+	g := GateResult{Name: "disk_plateau", Spec: "§53-55", Hard: true}
+	if len(serie) < amostrasMinimasDeDisco {
+		g.Status = GateNaoAvaliado
+		g.Detail = fmt.Sprintf("%d amostras de disco no STEADY, mínimo %d: "+
+			"rode com -steady mais longo ou -sample menor — janela curta não prova plateau nenhum",
+			len(serie), amostrasMinimasDeDisco)
+		return g
+	}
+	meio := len(serie) / 2
+	primeira := taxaPorAmostra(serie[0], serie[meio], meio)
+	segunda := taxaPorAmostra(serie[meio], serie[len(serie)-1], len(serie)-1-meio)
+	janela := fmt.Sprintf("%d amostras, disco de %s a %s (pico da 1ª metade em %s)",
+		len(serie), humanBytes(uint64(max(serie[0], 0))), humanBytes(uint64(max(serie[len(serie)-1], 0))),
+		humanBytes(uint64(max(slices.Max(serie[:meio+1]), 0))))
+
+	if primeira <= 0 {
+		g.Status = GateNaoAvaliado
+		g.Detail = fmt.Sprintf("a primeira metade da janela não cresceu (%.0f B/amostra) — %s. "+
+			"Sem crescimento para absorver, a segunda metade plana não diz nada sobre a compaction",
+			primeira, janela)
+		return g
+	}
+	razao := segunda / primeira
+	g.Status = statusDe(razao < fracaoDeCrescimentoTolerada)
+	g.Detail = fmt.Sprintf("crescimento de %.0f B/amostra na 1ª metade contra %.0f B/amostra na 2ª "+
+		"(razão %.3f, teto %.2f) — %s",
+		primeira, segunda, razao, fracaoDeCrescimentoTolerada, janela)
+	if g.Status == GateReprovou {
+		// A dica do checkpoint não é ruído: o segSize do writer só se move no
+		// checkpoint (compaction.go), então um -checkpoint-every alto adia a
+		// ELEIÇÃO dos segmentos selados depois do último — e a rodada reprova
+		// por cadência, não por compaction quebrada. Medido: com o default de
+		// 500.000 eventos, nada foi eleito na primeira metade da janela.
+		g.Detail += "; o disco continua subindo em regime, que é o §86 caminhando para o ENOSPC. " +
+			"Confira -compaction-ratio e -checkpoint-every antes de culpar a compaction: " +
+			"segmento selado depois do último checkpoint ainda não é elegível"
+	}
+	return g
+}
+
+// taxaPorAmostra é a inclinação média de um trecho da curva. Pode ser negativa,
+// e ela é: aposentar um segmento devolve disco, e a metade que contém a
+// aposentadoria encolhe.
+func taxaPorAmostra(de, ate int64, variacoes int) float64 {
+	if variacoes <= 0 {
+		return 0
+	}
+	return float64(ate-de) / float64(variacoes)
 }
 
 // avaliaHeap decide o §110 comparando o heap estável das duas rodadas.
@@ -1108,23 +1292,49 @@ func indexOf(haystack []byte, needle string) int {
 
 // dirBytes soma o tamanho aparente dos arquivos do dataset. Não é RSS: é o
 // disco ocupado, e a distinção entre os dois é o ponto da spec §79.
-func dirBytes(dir string) int64 {
-	var total int64
+//
+// Devolve ERRO, e não zero, quando não conseguiu medir. A versão anterior
+// engolia tudo — `ReadDir` falho virava 0, `Info` falho virava a entrada
+// descartada —, e isso deixou de ser aceitável no momento em que esta função
+// passou a alimentar o gate de disco: todo erro engolido DIMINUI a soma, e uma
+// soma que diminui é exatamente o formato que a série lê como "a compaction
+// devolveu disco". O gate aprovaria a própria cegueira. É o resíduo R1 da Fase
+// B, do lado do harness.
+//
+// A única exceção é o arquivo (ou subdiretório) que SUMIU entre o `ReadDir` e o
+// `stat`, e ela não é leniência: é a aposentadoria do §53-55 fazendo o trabalho
+// dela. O `unlink` do segmento `.retired` roda concorrente com esta varredura,
+// e os bytes daquele arquivo de fato não estão mais no disco — contá-los como
+// erro reprovaria a compaction por ter funcionado.
+func dirBytes(dir string) (int64, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return 0
+		return 0, fmt.Errorf("ingest-bench: medindo o disco de %s: %w", dir, err)
 	}
+	var total int64
 	for _, e := range entries {
-		p := dir + string(os.PathSeparator) + e.Name()
+		p := filepath.Join(dir, e.Name())
 		if e.IsDir() {
-			total += dirBytes(p)
+			sub, err := dirBytes(p)
+			if err != nil {
+				if errors.Is(err, fs.ErrNotExist) {
+					continue
+				}
+				return 0, err
+			}
+			total += sub
 			continue
 		}
-		if fi, err := e.Info(); err == nil {
-			total += fi.Size()
+		fi, err := e.Info()
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
+			return 0, fmt.Errorf("ingest-bench: medindo o disco de %s: %w", p, err)
 		}
+		total += fi.Size()
 	}
-	return total
+	return total, nil
 }
 
 func humanBytes(n uint64) string {

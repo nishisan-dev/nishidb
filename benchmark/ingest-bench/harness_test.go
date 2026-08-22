@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -491,6 +492,188 @@ func TestExtractKey(t *testing.T) {
 		if string(got) != tc.want {
 			t.Errorf("extractKey(%s) = %q, want %q", tc.event, got, tc.want)
 		}
+	}
+}
+
+// TestGateDeDiscoReprovaCrescimentoLinear afere o gate contra a série que a
+// AUSÊNCIA de compaction produz. Um gate que não reprova o append-only puro
+// não está medindo nada — é o mesmo erro do oráculo do débito 6, um nível
+// acima: lá o harness media latência e não conferia resultado nenhum; aqui ele
+// mediria disco e nunca discordaria de uma curva que sobe para sempre.
+//
+// As duas séries são as do esboço da Task 11, e a ordem das asserções é a que
+// importa: a que prova o gate é a PRIMEIRA. Um gate que só aprova plateau é
+// satisfeito por `return GatePassou` — a reprovação do crescimento linear é a
+// única metade que nenhuma implementação degenerada atende.
+func TestGateDeDiscoReprovaCrescimentoLinear(t *testing.T) {
+	linear := []int64{1e9, 2e9, 3e9, 4e9, 5e9, 6e9}
+	if g := avaliaGateDeDisco(linear); g.Status != GateReprovou {
+		t.Errorf("gate = %q para crescimento linear, queria %q: %s", g.Status, GateReprovou, g.Detail)
+	}
+	plateau := []int64{1e9, 1.8e9, 2.1e9, 2.15e9, 2.1e9, 2.2e9}
+	if g := avaliaGateDeDisco(plateau); g.Status != GatePassou {
+		t.Errorf("gate = %q para plateau, queria %q: %s", g.Status, GatePassou, g.Detail)
+	}
+}
+
+// Falta de insumo é NÃO AVALIADO, e não aprovação: série curta demais para ter
+// duas metades, e série cuja primeira metade não cresceu, não descrevem
+// compaction devolvendo disco — descrevem uma janela que não mediu nada.
+//
+// A segunda família é a que engana: uma série toda plana É um plateau, e um
+// gate ingênuo a aprovaria. Só que o plateau de um harness que não escreveu
+// nada não prova compaction nenhuma — é a aprovação por omissão que a errata
+// do M1 tirou de circulação.
+func TestGateDeDiscoSemInsumoFicaNaoAvaliado(t *testing.T) {
+	casos := map[string][]int64{
+		"série vazia":                    nil,
+		"amostras abaixo do mínimo":      {1e9, 1.1e9, 1.2e9, 1.25e9, 1.3e9},
+		"primeira metade plana":          {1e9, 1e9, 1e9, 1e9, 1e9, 1e9},
+		"primeira metade em queda":       {3e9, 2e9, 1e9, 1e9, 1e9, 1e9},
+		"primeira metade plana com pico": {1e9, 1e9, 1e9, 1e9, 9e9, 9e9},
+	}
+	for nome, serie := range casos {
+		g := avaliaGateDeDisco(serie)
+		if g.Status != GateNaoAvaliado {
+			t.Errorf("%s: Status = %q, want %q (%s)", nome, g.Status, GateNaoAvaliado, g.Detail)
+		}
+		if !g.Hard {
+			t.Errorf("%s: o gate precisa ser DURO, senão não avaliado deixa de custar alguma coisa", nome)
+		}
+	}
+}
+
+// A razão é entre INCLINAÇÕES — crescimento por amostra —, e não entre os
+// totais das duas metades. A diferença não é cosmética: com número ímpar de
+// variações as metades têm tamanhos diferentes, e comparar somas brutas faria o
+// veredito depender de quantas amostras caíram de cada lado, que é instrumento
+// medindo a si mesmo.
+//
+// Nesta série a segunda metade cresce a 45% da inclinação da primeira, e isso
+// reprova. Somando bruto daria 0,30 — abaixo do teto — e a mesma curva seria
+// aprovada.
+func TestGateDeDiscoNormalizaPorAmostra(t *testing.T) {
+	serie := []int64{1e9, 1.4e9, 1.7e9, 2e9, 2.15e9, 2.3e9}
+	g := avaliaGateDeDisco(serie)
+	if g.Status != GateReprovou {
+		t.Errorf("Status = %q, want %q: %s", g.Status, GateReprovou, g.Detail)
+	}
+	if !strings.Contains(g.Detail, "razão 0.450") {
+		t.Errorf("o detalhe precisa publicar a razão POR AMOSTRA (0.450): %q", g.Detail)
+	}
+}
+
+// A série é a do STEADY, e só dele. O LOAD cresce por construção — ele CRIA o
+// dataset —, e deixá-lo entrar encheria a primeira metade da janela com um
+// crescimento que a compaction não tem por que absorver, aprovando qualquer
+// coisa por comparação.
+func TestSerieDeDiscoIgnoraOLoad(t *testing.T) {
+	amostras := []Sample{
+		{Phase: "load", DiskBytes: 10},
+		{Phase: "load", DiskBytes: 900},
+		{Phase: "steady", DiskBytes: 30},
+		{Phase: "steady", DiskBytes: 31},
+	}
+	got := serieDeDiscoDoSteady(amostras)
+	if want := []int64{30, 31}; !slices.Equal(got, want) {
+		t.Errorf("serieDeDiscoDoSteady = %v, want %v", got, want)
+	}
+}
+
+// O gate precisa aparecer AVALIADO no relatório de uma rodada com STEADY,
+// senão ele é prosa: a série existe, a janela tem as duas metades, e o veredito
+// é pass ou fail — nunca "faltou insumo".
+//
+// ESCALA: 500 entidades e 300 ms de STEADY em TempDir. Nesta escala a
+// compaction não chega a agir (o intervalo entre passadas é de 5 s), então o
+// que este teste prova é o CAMINHO — amostragem, extração da série e veredito
+// — e não o plateau. O plateau é a rodada de aceite da Task 12.
+func TestGateDeDiscoEntraAvaliadoNaRodadaComSteady(t *testing.T) {
+	cfg := baseConfig(t, 500)
+	cfg.SteadyDuration = 300 * time.Millisecond
+	cfg.SteadyRate = 0 // sem limite: o teste não pode depender de relógio
+	cfg.SampleEveryEvents = 25
+
+	rep, err := Run(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := gateByName(t, rep, "disk_plateau")
+	if !g.Hard {
+		t.Error("o gate de disco precisa ser DURO: é a prova de que a compaction devolve disco")
+	}
+	if g.Status == GateNaoAvaliado {
+		t.Fatalf("gate NÃO AVALIADO numa rodada com STEADY: %s", g.Detail)
+	}
+	var amostrasSteady int
+	for _, s := range rep.Samples {
+		if s.Phase != "steady" {
+			continue
+		}
+		amostrasSteady++
+		if s.DiskBytes <= 0 {
+			t.Fatalf("amostra do STEADY com disco %d: a série do gate sai daqui", s.DiskBytes)
+		}
+	}
+	if amostrasSteady < amostrasMinimasDeDisco {
+		t.Errorf("%d amostras no STEADY, mínimo %d para o gate ter o que ler",
+			amostrasSteady, amostrasMinimasDeDisco)
+	}
+}
+
+// Sem fase STEADY não há série, e aí o gate fica NÃO AVALIADO — que por ser
+// DURO reprova a rodada. É a mesma regra do §110 sem baseline: "não medi" não
+// pode ser lido como "está bom", e uma rodada rápida de regressão não prova
+// que o disco estabiliza.
+func TestGateDeDiscoSemSteadyReprovaPorNaoAvaliado(t *testing.T) {
+	rep, err := Run(baseConfig(t, 100))
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := gateByName(t, rep, "disk_plateau")
+	if g.Status != GateNaoAvaliado {
+		t.Errorf("Status = %q, want %q (%s)", g.Status, GateNaoAvaliado, g.Detail)
+	}
+	_, naoAvaliados := gatesDurosPendentes(rep.Gates)
+	if !slices.Contains(naoAvaliados, "disk_plateau") {
+		t.Errorf("o gate de disco não avaliado precisa entrar em gatesDurosPendentes: %v", naoAvaliados)
+	}
+	if rep.Passed {
+		t.Error("rodada aprovada sem nunca ter medido o disco em regime")
+	}
+}
+
+// dirBytes é o INSTRUMENTO do gate, e um instrumento que devolve número sem ter
+// medido é o defeito do débito 6 na sua forma mais direta. Aqui a direção do
+// erro agrava: zero por diretório ilegível é lido pela série como "o disco
+// desabou", que é exatamente o formato de um plateau — o gate aprovaria a
+// própria cegueira.
+func TestDirBytesRecusaDevolverZeroQuandoNaoMediu(t *testing.T) {
+	if n, err := dirBytes(filepath.Join(t.TempDir(), "nao-existe")); err == nil {
+		t.Errorf("dirBytes de diretório inexistente devolveu %d sem erro", n)
+	}
+}
+
+// A soma é recursiva e é sobre o tamanho APARENTE: é o disco que o dataset
+// ocupa, e é a grandeza contra a qual o plateau é medido.
+func TestDirBytesSomaSubdiretorios(t *testing.T) {
+	raiz := t.TempDir()
+	if err := os.WriteFile(filepath.Join(raiz, "a.dat"), make([]byte, 100), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(raiz, "sub")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "b.dat"), make([]byte, 23), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := dirBytes(raiz)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 123 {
+		t.Errorf("dirBytes = %d, want 123", got)
 	}
 }
 
