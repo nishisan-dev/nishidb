@@ -479,6 +479,20 @@ func acrescentaOSegundoDataset(t *testing.T, a *ambienteRemoto) {
 func TestStatusRemotoFuncionaComOServidorNoAr(t *testing.T) {
 	a := servidorComDadosNoAr(t, 50)
 
+	// Tráfego ANTES do status, para que os três números da linha de consultas
+	// deixem de ser zero. Enquanto eram, trocar Total por Errors era invisível
+	// — o oráculo comparava "0 (0 ativas, 0 com erro)" consigo mesmo, e a
+	// asserção parecia existir sem exercer nada.
+	for i := 0; i < 2; i++ {
+		if code := a.roda("query", "--server", a.endereco(),
+			"--dataset", "radius_sessions",
+			"SELECT id FROM radius_sessions WHERE id = 'chave que nao existe'"); code != 0 {
+			t.Fatalf("consulta de aquecimento saiu %d: %s", code, a.stderr.String())
+		}
+	}
+	a.stdout.Reset()
+	a.stderr.Reset()
+
 	if code := a.roda("status", "--server", a.endereco()); code != 0 {
 		t.Fatalf("exit = %d, queria 0: %s", code, a.stderr.String())
 	}
@@ -526,6 +540,16 @@ func TestStatusRemotoFuncionaComOServidorNoAr(t *testing.T) {
 	// aprender as duas.
 	if got := campoDaSaida(t, saida, "ingestão"); !strings.HasPrefix(got, ds.Ingestion.State) {
 		t.Errorf("ingestão = %q, queria começar com %q", got, ds.Ingestion.State)
+	}
+
+	// A linha de consultas põe TRÊS números na MESMA frase, e era a última do
+	// bloco sem oráculo: trocar Total por Errors deixava a suíte inteira verde.
+	// A frase única é justamente o que torna a troca fácil de cometer e difícil
+	// de enxergar — a saída continua plausível.
+	querConsultas := fmt.Sprintf("%d (%d ativas, %d com erro)",
+		ds.Query.Total, ds.Query.Active, ds.Query.Errors)
+	if got := campoDaSaida(t, saida, "consultas"); got != querConsultas {
+		t.Errorf("consultas = %q, queria %q", got, querConsultas)
 	}
 }
 
@@ -961,6 +985,14 @@ func TestInspectDetalhaColunasEIndices(t *testing.T) {
 	d := m.Datasets[0]
 	if campoDaSaida(t, saida, "key") != d.Key {
 		t.Errorf("key = %q, queria %q", campoDaSaida(t, saida, "key"), d.Key)
+	}
+	// O contador de colunas era o único campo do bloco sem oráculo, e o
+	// inspect publica esse número DUAS vezes — aqui e como número de linhas da
+	// tabela. Alimentá-lo com d.MaxRows deixava a suíte verde: é a mesma
+	// família que o resto deste arquivo fecha, valor sob o rótulo do vizinho.
+	if got, quer := campoDaSaida(t, saida, "colunas"), strconv.Itoa(len(d.Columns)); got != quer {
+		t.Errorf("colunas = %q, queria %q (o dataset tem %d colunas e maxRows %d)",
+			got, quer, len(d.Columns), d.MaxRows)
 	}
 	if campoDaSaida(t, saida, "maxRows") != strconv.Itoa(d.MaxRows) {
 		t.Errorf("maxRows = %q, queria %d", campoDaSaida(t, saida, "maxRows"), d.MaxRows)
