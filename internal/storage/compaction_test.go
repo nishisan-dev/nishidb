@@ -1264,21 +1264,128 @@ func TestVarreduraContaComoLidoOArquivoInteiroMenosOHeader(t *testing.T) {
 // discoDoDatasetInteiroPorOsStat logo abaixo e também tem de cair — sem isso,
 // a escolha de escopo ficaria por conta do implementador, e escopo escolhido
 // por quem é medido é exatamente o defeito que o §92 persegue.
+//
+// A soma tolera o segmento que some no MEIO da medição, e o porquê está no
+// somaDosSegmentosEmDisco logo abaixo: a partir da Task 7 este helper é
+// chamado com a goroutine de compaction viva do outro lado do diretório.
 func discoDosSegmentosPorOsStat(t *testing.T, dir string) int64 {
 	t.Helper()
+	total, err := somaDosSegmentosEmDisco(dir)
+	if err != nil {
+		t.Fatalf("somar os segmentos de %s: %v", dir, err)
+	}
+	return total
+}
+
+// somaDosSegmentosEmDisco é o corpo mensurável do helper acima, e existe
+// separado dele por uma razão só: um helper que só sabe chamar t.Fatalf não
+// tem como ser aferido de dentro da suíte — o oráculo da tolerância abaixo
+// morreria junto com o teste que a exercitasse.
+func somaDosSegmentosEmDisco(dir string) (int64, error) {
 	entradas, err := filepath.Glob(filepath.Join(dir, "data", "segment-*.dat"))
 	if err != nil {
-		t.Fatalf("glob dos segmentos: %v", err)
+		return 0, fmt.Errorf("glob dos segmentos: %w", err)
 	}
 	var total int64
 	for _, p := range entradas {
 		fi, err := os.Stat(p)
 		if err != nil {
-			t.Fatalf("stat %s: %v", p, err)
+			// O arquivo pode ter sido APOSENTADO entre o glob e o stat: a
+			// goroutine da Task 7 remove segmento sem avisar ninguém, e o que
+			// sumiu daqui é disco devolvido ao filesystem — a própria
+			// grandeza sob medida —, não falha de aferição. Só o ausente é
+			// perdoado: qualquer outro erro de stat encolheria a soma em
+			// silêncio, e soma que encolhe é o que as asserções desta suíte
+			// leem como compaction bem-sucedida.
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
+			return 0, fmt.Errorf("stat do segmento: %w", err)
 		}
 		total += fi.Size()
 	}
-	return total
+	return total, nil
+}
+
+// TestSomaDosSegmentosTrataArquivoSumidoEntreOGlobEOStatComoDiscoDevolvido
+// fixa a tolerância do instrumento ao único evento que ele existe para
+// observar.
+//
+// O glob e o os.Stat são DUAS chamadas, e a partir da Task 7 há uma goroutine
+// viva removendo segmento aposentado entre uma e outra: o nome sai do
+// diretório listado e o stat que vem depois cai em ENOENT. Isso não é falha —
+// é literalmente disco devolvido, que é a grandeza medida. Reprovar aí é
+// instrumento que acusa erro no sucesso que mede, e a bancada passa a correr
+// contra o mecanismo que ela afere. Foi medido assim: o
+// TestCompactionEmBackgroundDevolveDiscoSemNinguemChamar quebrou em 2 de 5
+// passadas de `go test ./internal/storage/ -race -count=5` com "stat
+// segment-0000000N.dat: no such file or directory" — falha do oráculo, com o
+// produto tendo feito exatamente o que se pedia dele. O gêmeo deste helper no
+// e2e (internal/cli/compaction_e2e_test.go, discoDosSegmentos) já tratava o
+// caso; este não.
+//
+// O symlink pendurado é o estado que o unlink produz, montado sem depender de
+// escalonamento: o filepath.Glob casa NOMES lidos do diretório e não faz stat
+// nenhum, então o nome entra na lista; o os.Stat seguinte segue o link e
+// devolve ENOENT. Um teste que tentasse apanhar a corrida no relógio mediria
+// o agendador, não a tolerância.
+func TestSomaDosSegmentosTrataArquivoSumidoEntreOGlobEOStatComoDiscoDevolvido(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "data"), 0o755); err != nil {
+		t.Fatalf("criar o diretório de dados: %v", err)
+	}
+	const bytesPorSegmento = 128
+	for _, id := range []uint32{1, 2} {
+		if err := os.WriteFile(audSegPath(dir, id), make([]byte, bytesPorSegmento), 0o644); err != nil {
+			t.Fatalf("escrever o segmento %d: %v", id, err)
+		}
+	}
+	if err := os.Symlink(filepath.Join(dir, "data", "aposentado-e-removido.dat"), audSegPath(dir, 3)); err != nil {
+		t.Fatalf("montar o segmento que some entre o glob e o stat: %v", err)
+	}
+
+	total, err := somaDosSegmentosEmDisco(dir)
+	if err != nil {
+		t.Fatalf("a soma reprovou um segmento que a aposentadoria removeu (%v): "+
+			"a remoção é o disco voltando ao filesystem (§86), e um instrumento que a trata como erro "+
+			"falha justamente na passada em que a compaction fez o seu trabalho", err)
+	}
+	if querido := int64(2 * bytesPorSegmento); total != querido {
+		t.Errorf("a soma devolveu %d bytes com dois segmentos de %d em disco e um removido: querido %d — "+
+			"o arquivo que sumiu sai da conta, os que ficaram continuam nela", total, bytesPorSegmento, querido)
+	}
+}
+
+// TestSomaDosSegmentosRecusaErroDeStatQueNaoSejaOArquivoAusente é o outro lado
+// da tolerância acima, e não é cerimônia: um `continue` para QUALQUER erro
+// engoliria também falha de leitura real, e a direção do estrago é a pior
+// possível. Todo stat engolido DIMINUI a soma, e soma menor é exatamente o que
+// as asserções desta suíte leem como "o disco caiu" (`depois <= antes/2`). Um
+// filesystem doente aprovaria, em silêncio, uma compaction que não devolveu
+// byte nenhum.
+//
+// Por isso a tolerância é nominal — fs.ErrNotExist e nada além dele. O
+// symlink em laço devolve ELOOP no mesmo os.Stat, pela mesma chamada, e é o
+// controle de que a peneira tem malha.
+func TestSomaDosSegmentosRecusaErroDeStatQueNaoSejaOArquivoAusente(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "data"), 0o755); err != nil {
+		t.Fatalf("criar o diretório de dados: %v", err)
+	}
+	emLaco := audSegPath(dir, 4)
+	if err := os.Symlink(emLaco, emLaco); err != nil {
+		t.Fatalf("montar o segmento ilegível: %v", err)
+	}
+
+	total, err := somaDosSegmentosEmDisco(dir)
+	if err == nil {
+		t.Fatalf("a soma devolveu %d bytes sem erro sobre um segmento que o os.Stat não consegue ler: "+
+			"engolir isso encolhe a soma, e soma que encolhe é o que esta suíte lê como disco devolvido", total)
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("o erro do segmento ilegível chegou como arquivo ausente (%v): "+
+			"a tolerância existe para a aposentadoria, e confundi-la com falha de leitura devolve a peneira sem malha", err)
+	}
 }
 
 // discoDoDatasetInteiroPorOsStat é o item 1 do critério de aceite ao pé da
@@ -2362,6 +2469,53 @@ func rowsVivasPorSegmento(t *testing.T, s *Store, keys int) map[uint32]int64 {
 	return fora
 }
 
+// tamanhosDosSegmentosPorArquivo fotografa o diretório de dados arquivo a
+// arquivo, por os.Stat. Diferente do discoDosSegmentosPorOsStat, que soma, ele
+// PRESERVA quem é quem: é a diferença entre saber que o diretório cresceu e
+// saber em qual arquivo o byte caiu, e é essa segunda pergunta que separa o
+// que o copy-forward apendou do que ele apenas encontrou lá.
+func tamanhosDosSegmentosPorArquivo(t *testing.T, dir string) map[string]int64 {
+	t.Helper()
+	entradas, err := filepath.Glob(filepath.Join(dir, "data", "segment-*.dat"))
+	if err != nil {
+		t.Fatalf("glob dos segmentos: %v", err)
+	}
+	fora := make(map[string]int64, len(entradas))
+	for _, p := range entradas {
+		fora[p] = fileSizeAud(t, p)
+	}
+	return fora
+}
+
+// bytesApendadosNoDestino é o oráculo do `bytes_escritos`, e ele é feito de
+// ARQUIVO: quantos bytes a passada acrescentou aos segmentos de DESTINO entre
+// as duas fotografias.
+//
+// A conta é exata, e é exata por três propriedades do produto, não por
+// aproximação. O Append grava len(rec) no offset corrente e nada mais — sem
+// padding, sem prealocação (segment.go:191) —, logo arquivo que cresce cresceu
+// de record copiado. O writer rotaciona criando o segmento seguinte com um
+// header de segment.HeaderSize, que é o único byte de um arquivo novo que não
+// veio do copy-forward, e por isso ele é descontado. E os IDs são monotônicos
+// (openNew(segID+1)), de modo que nenhum nome aposentado volta com outro
+// conteúdo por baixo do mesmo caminho.
+//
+// Arquivo que existia antes e não existe depois é candidato APOSENTADO: ele
+// não recebeu escrita nenhuma — a compaction só o lê — e fica fora da conta,
+// que é o que faz esta medida ser sobre o destino e não sobre o saldo do
+// diretório.
+func bytesApendadosNoDestino(antes, depois map[string]int64) int64 {
+	var total int64
+	for caminho, tamanhoDepois := range depois {
+		if tamanhoAntes, existia := antes[caminho]; existia {
+			total += tamanhoDepois - tamanhoAntes
+			continue
+		}
+		total += tamanhoDepois - segment.HeaderSize
+	}
+	return total
+}
+
 // TestAposentadoriaRegistraNoLogOsBytesQueODiscoDevolveu é o oráculo do
 // compaction.segmento_aposentado, e ele existe porque a revisão desta tarefa
 // MEDIU o mutante: apagar o bloco inteiro do Log.Info da passadaDeCompaction
@@ -2393,10 +2547,27 @@ func rowsVivasPorSegmento(t *testing.T, s *Store, keys int) map[uint32]int64 {
 //     certa e a linha registrar outra coisa;
 //   - `records_copiados` bate com quantas rows o índice nomeava dentro do
 //     segmento antes da passada, contadas pelo teste;
+//   - `bytes_escritos` bate, SOMADO na passada, com o que os arquivos de
+//     DESTINO cresceram nela (bytesApendadosNoDestino). A medida é do total e
+//     não de cada linha, e o motivo é do produto: os segmentos eleitos copiam
+//     todos para o MESMO writer, então o disco não sabe dizer qual byte veio
+//     de qual origem. O que ela apanha é todo viés que não se cancele dentro
+//     da passada — um `+1` por segmento, por exemplo, sai errado por
+//     len(eleitos). O que ela NÃO apanharia é um erro que sobrasse num
+//     segmento exatamente o que faltasse noutro;
 //   - `bytes_devolvidos` é `lidos - escritos`, e este é o único dos cinco que
 //     não vem de uma medida — ele é ARITMÉTICA, feita na própria chamada do
 //     log, onde nenhuma outra camada a confere. Aritmética emitida sem oráculo
 //     é o campo que fica errado em silêncio.
+//
+// A conferência de coerência por linha (`devolvidos == lidos - escritos` e
+// `copiados` zerado com `escritos` zerado) NÃO é medida de campo nenhum: os
+// dois lados dela saem do mesmo número logado, e um `escritos` errado que
+// chegue coerente à linha passa por ela. É por isso que o campo precisa da
+// soma de disco acima; e é por isso que ela não substitui o
+// TestVarreduraCompletaZeraOTallyMesmoComResiduoOrfao nem o
+// TestVarreduraQueParaAntesDoFimDoArquivoNaoZeraOTally, que fixam o `escritos`
+// no RETORNO do compactaSegmento, segmento a segmento.
 func TestAposentadoriaRegistraNoLogOsBytesQueODiscoDevolveu(t *testing.T) {
 	var registro registroDeLog
 	dir := t.TempDir()
@@ -2421,15 +2592,17 @@ func TestAposentadoriaRegistraNoLogOsBytesQueODiscoDevolveu(t *testing.T) {
 		tamanhos[seg] = fileSizeAud(t, audSegPath(dir, seg))
 	}
 	vivas := rowsVivasPorSegmento(t, s, keys)
+	arquivosAntes := tamanhosDosSegmentosPorArquivo(t, dir)
 
 	if err := s.passadaDeCompaction(context.Background(), 0.5); err != nil {
 		t.Fatalf("passadaDeCompaction: %v", err)
 	}
+	arquivosDepois := tamanhosDosSegmentosPorArquivo(t, dir)
 
 	saida := registro.String()
 	linhas := linhasDoEvento(t, saida, eventoSegmentoAposentado)
 	registrados := make([]uint32, 0, len(linhas))
-	var copiadosNoTotal, devolvidoNoTotal int64
+	var copiadosNoTotal, escritosNoTotal, devolvidoNoTotal int64
 	for _, linha := range linhas {
 		seg := uint32(campoNumerico(t, linha, "segmento"))
 		copiados := campoNumerico(t, linha, "records_copiados")
@@ -2438,6 +2611,7 @@ func TestAposentadoriaRegistraNoLogOsBytesQueODiscoDevolveu(t *testing.T) {
 		devolvidos := campoNumerico(t, linha, "bytes_devolvidos")
 		registrados = append(registrados, seg)
 		copiadosNoTotal += copiados
+		escritosNoTotal += escritos
 		devolvidoNoTotal += devolvidos
 
 		if devolvidos != lidos-escritos {
@@ -2473,8 +2647,19 @@ func TestAposentadoriaRegistraNoLogOsBytesQueODiscoDevolveu(t *testing.T) {
 		t.Fatalf("a passada registrou %d bytes devolvidos no total: sem garbage recolhido a asserção da aritmética "+
 			"passaria com lidos e escritos ambos zerados", devolvidoNoTotal)
 	}
-	t.Logf("%d aposentadoria(s) registradas: %d records copiados e %d bytes devolvidos ao filesystem",
-		len(linhas), copiadosNoTotal, devolvidoNoTotal)
+	// O `bytes_escritos` contra o DISCO. Sem esta linha ele é o único dos cinco
+	// campos sem medida própria aqui: as duas conferências de coerência lá de
+	// cima leem o valor logado dos dois lados da conta, e um `escritos` errado
+	// que chegue coerente à linha passa por elas — o que sobra é uma métrica de
+	// volume de escrita que ninguém confere contra a escrita.
+	if apendado := bytesApendadosNoDestino(arquivosAntes, arquivosDepois); escritosNoTotal != apendado {
+		t.Errorf("a passada registrou bytes_escritos somando %d, mas os arquivos de destino cresceram %d bytes nela: "+
+			"o campo mede o que o copy-forward gravou, e é contra o filesystem que ele responde — "+
+			"viés que não se cancele entre os %d segmento(s) eleitos aparece exatamente aqui",
+			escritosNoTotal, apendado, len(eleitos))
+	}
+	t.Logf("%d aposentadoria(s) registradas: %d records copiados, %d bytes escritos no destino e %d devolvidos ao filesystem",
+		len(linhas), copiadosNoTotal, escritosNoTotal, devolvidoNoTotal)
 }
 
 // TestSegundaPartidaDaCompactionNaoSobeSegundaGoroutine é a guarda de dupla

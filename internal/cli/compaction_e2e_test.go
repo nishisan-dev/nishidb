@@ -478,10 +478,11 @@ func (b *bancadaE2E) exigeSemAposentadoEmDisco(quando string) {
 // pressão de I/O sobre o alvo no exato instante que ela pretende observar.
 //
 // O que se garante é a RESOLUÇÃO da amostragem, e não "não perturbar o processo
-// medido", que é o que este godoc dizia sem ter medido: um milissegundo fica
-// duas ordens de grandeza abaixo dos 40 a 65ms que uma passada de aposentadoria
-// dura nesta bancada, de modo que o cochilo não estreita a janela que o laço
-// existe para apanhar.
+// medido", que é o que este godoc dizia sem ter medido: um milissegundo fica de
+// 40 a 65 VEZES abaixo dos 40 a 65 ms que uma passada de aposentadoria dura
+// nesta bancada, de modo que o cochilo não estreita a janela que o laço existe
+// para apanhar. São pouco menos de duas ordens de grandeza, e não as duas que
+// esta frase afirmava — duas seriam 100x, e o número aqui é o que foi medido.
 func (b *bancadaE2E) esperaJanelaDaAposentadoria(prazo time.Duration) string {
 	b.t.Helper()
 	limite := time.Now().Add(prazo)
@@ -553,16 +554,19 @@ func extremos(v []int64) (piso, pico int64) {
 //     deixaria o painel do M4 inútil, que é o que este milestone existe para
 //     evitar;
 //
-// DIVERGÊNCIA DECLARADA, no item 3. Ele pede DUAS séries — a de disco caindo e
-// a nishidb_compaction_bytes_written subindo —, e só a primeira é exercitável
-// aqui. A segunda não existe no /metrics: MetCompactionBytesWritten é nome sem
-// alimentador (nomes.go:48, "sem alimentador até o M4"), e quem o instala é a
-// Task 8, que registra as três séries do §92 no metricas_dataset.go. Este teste
-// NÃO a afirma, e escrever aqui uma asserção que a Task 8 ainda não pode
-// satisfazer seria trocar um oráculo por um lembrete. Os números existem — o
+// Só UMA série é cobrada aqui, e isso não é desvio: a primeira versão do item 3
+// pedia também a nishidb_compaction_bytes_written subindo, e a ERRATA DO
+// ORQUESTRADOR no próprio item reduziu-o a nishidb_storage_bytes e transformou
+// a outra metade em critério de aceite da TASK 8
+// (planning/m4-plano-implementacao.md, Tasks 7 e 8). O motivo está escrito lá e
+// é de escopo: MetCompactionBytesWritten é nome sem alimentador (nomes.go:48,
+// "sem alimentador até o M4"), e instalar o alimentador das três séries do §92
+// no metricas_dataset.go é literalmente a Task 8 — exigi-lo aqui era pedir que
+// esta tarefa fizesse o trabalho da seguinte. Os números já existem: o
 // compactaSegmento devolve lidos e escritos, e o compaction.segmento_aposentado
-// os registra em cada aposentadoria —, o que falta é a publicação. A metade
-// pendente do item 3 fecha na Task 8, e é lá que ela deve ser cobrada;
+// os registra em cada aposentadoria, com oráculo do lado do storage
+// (TestAposentadoriaRegistraNoLogOsBytesQueODiscoDevolveu). O que falta é a
+// PUBLICAÇÃO pela porta, e é na Task 8 que ela se cobra;
 //   - a CONSULTA continua certa durante tudo isso (item 4): toda key presente,
 //     nenhuma duas vezes, e nenhuma sequence REGREDINDO entre duas leituras —
 //     que é exatamente o estrago que um copy-forward mal sincronizado produz,
