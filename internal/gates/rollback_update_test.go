@@ -120,16 +120,13 @@ func servidorFake(t *testing.T, estadoDir string) *httptest.Server {
 	return servidorFakeComInvalido(t, estadoDir, func(int64) int64 { return 0 })
 }
 
-// servidorFakeComInvalido é a base de servidorFake, com o crescimento de
-// nishidb_ingest_invalid_total controlado por quem chama — invalidoPorRaspagem
-// recebe o número da raspagem atual (1-based) e devolve o valor ACUMULADO do
-// contador naquele instante. Existe por causa do Critical 1 da revisão: a
-// tolerância de invalid_total (NISHIDB_UPDATE_INVALID_TOLERANCE) só é
-// provável com um servidor cujo invalid_total pode subir de propósito.
-func servidorFakeComInvalido(t *testing.T, estadoDir string, invalidoPorRaspagem func(n int64) int64) *httptest.Server {
-	t.Helper()
-	var raspagens int64
-
+// montaMuxFakeComEstado registra /v1/health e /v1/stats — comuns a TODOS os
+// cenários, formato antigo ou novo de invalid_total — lendo o estado que o
+// dublê `systemctl` grava em disco a cada `start`/`stop`. Quem chama ainda
+// precisa registrar /metrics: é o único handler que difere entre
+// servidorFakeComInvalido (formato antigo, sem `motivo`) e
+// servidorFakeComInvalidoPorMotivo (formato novo, Task A5).
+func montaMuxFakeComEstado(estadoDir string) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/health", func(w http.ResponseWriter, _ *http.Request) {
 		bruto, _ := os.ReadFile(filepath.Join(estadoDir, "saude"))
@@ -141,16 +138,76 @@ func servidorFakeComInvalido(t *testing.T, estadoDir string, invalidoPorRaspagem
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprintf(w, `{"process": {"version": %q}}`, strings.TrimSpace(string(bruto)))
 	})
+	return mux
+}
+
+// escreveMetricasComuns escreve, em /metrics, as duas linhas que TODOS os
+// cenários compartilham — eventos processados e lag —, calculadas a partir
+// do número da raspagem atual (1-based). Devolve esse número: quem chama
+// decide, a partir dele, como escrever a(s) linha(s) de invalid_total.
+func escreveMetricasComuns(w http.ResponseWriter, raspagens *int64) int64 {
+	n := atomic.AddInt64(raspagens, 1)
+	lag := 100 - n*10
+	if lag < 0 {
+		lag = 0
+	}
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	_, _ = fmt.Fprintf(w, "nishidb_ingest_events_total{dataset=\"events\"} %d\n", n*1000)
+	_, _ = fmt.Fprintf(w, "nishidb_kafka_lag{dataset=\"events\"} %d\n", lag)
+	return n
+}
+
+// servidorFakeComInvalido é a base de servidorFake, com o crescimento de
+// nishidb_ingest_invalid_total controlado por quem chama — invalidoPorRaspagem
+// recebe o número da raspagem atual (1-based) e devolve o valor ACUMULADO do
+// contador naquele instante. Existe por causa do Critical 1 da revisão: a
+// tolerância de invalid_total (NISHIDB_UPDATE_INVALID_TOLERANCE) só é
+// provável com um servidor cujo invalid_total pode subir de propósito.
+//
+// Emite o FORMATO ANTIGO — uma série sem o label `motivo`, como o binário
+// PRÉ-A5 produzia. O binário velho ainda pode estar no ar no primeiro update
+// real do piloto (Minor 4: a primeira migração para releases/ é manual), e
+// soma_metrica (nishidb-update.sh) precisa continuar somando esse formato
+// certo — ver TestScriptDeAtualizacaoToleraUmInvalidoIsoladoNoFormatoAntigoSemMotivo.
+func servidorFakeComInvalido(t *testing.T, estadoDir string, invalidoPorRaspagem func(n int64) int64) *httptest.Server {
+	t.Helper()
+	var raspagens int64
+
+	mux := montaMuxFakeComEstado(estadoDir)
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
-		n := atomic.AddInt64(&raspagens, 1)
-		lag := 100 - n*10
-		if lag < 0 {
-			lag = 0
-		}
-		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-		_, _ = fmt.Fprintf(w, "nishidb_ingest_events_total{dataset=\"events\"} %d\n", n*1000)
-		_, _ = fmt.Fprintf(w, "nishidb_kafka_lag{dataset=\"events\"} %d\n", lag)
+		n := escreveMetricasComuns(w, &raspagens)
 		_, _ = fmt.Fprintf(w, "nishidb_ingest_invalid_total{dataset=\"events\"} %d\n", invalidoPorRaspagem(n))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// servidorFakeComInvalidoPorMotivo prova o Important 2 da revisão final: a
+// Task A5 (internal/kafka/metricas.go) fez o binário passar a emitir
+// nishidb_ingest_invalid_total SEMPRE com o label `motivo`, e possivelmente
+// em VÁRIAS séries — uma por categoria §101 —, nunca mais a série única e
+// sem label que servidorFakeComInvalido simula. Antes desta função, o
+// oráculo do A4 só exercitava o formato que o binário atual não emite mais.
+//
+// invalidoPorRaspagem continua devolvendo o total ACUMULADO na raspagem n; a
+// função o REPARTE em duas séries (EVENT_TOO_LARGE e INVALID_JSON, duas das
+// seis categorias §101) que somam esse total — provando que soma_metrica,
+// que soma por NOME ignorando o resto da chave (dataset E motivo), soma as
+// duas corretamente. A repartição varia entre pares (metade em cada) e
+// ímpares (a sobra vai para INVALID_JSON), então o teste também cobre o caso
+// em que as duas séries não têm o mesmo valor.
+func servidorFakeComInvalidoPorMotivo(t *testing.T, estadoDir string, invalidoPorRaspagem func(n int64) int64) *httptest.Server {
+	t.Helper()
+	var raspagens int64
+
+	mux := montaMuxFakeComEstado(estadoDir)
+	mux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
+		n := escreveMetricasComuns(w, &raspagens)
+		total := invalidoPorRaspagem(n)
+		metade := total / 2
+		_, _ = fmt.Fprintf(w, "nishidb_ingest_invalid_total{dataset=\"events\",motivo=\"EVENT_TOO_LARGE\"} %d\n", metade)
+		_, _ = fmt.Fprintf(w, "nishidb_ingest_invalid_total{dataset=\"events\",motivo=\"INVALID_JSON\"} %d\n", total-metade)
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -505,9 +562,13 @@ exit 99
 // update saudável — a cauda de chaves >1024 bytes já descarta eventos
 // legítimos em produção, por política, e um único descarte não é o defeito
 // de binário-novo-classificando-tudo-errado que o check existe para pegar.
+//
+// Usa o formato NOVO (servidorFakeComInvalidoPorMotivo, Important 2 da
+// revisão final): é o que o binário atual — o que esta atualização instala —
+// de fato emite.
 func TestScriptDeAtualizacaoToleraUmInvalidoIsoladoDentroDaJanela(t *testing.T) {
 	raiz, estadoDir := montaRaiz(t)
-	servidor := servidorFakeComInvalido(t, estadoDir, func(n int64) int64 {
+	servidor := servidorFakeComInvalidoPorMotivo(t, estadoDir, func(n int64) int64 {
 		if n >= 2 {
 			return 1
 		}
@@ -529,9 +590,12 @@ func TestScriptDeAtualizacaoToleraUmInvalidoIsoladoDentroDaJanela(t *testing.T) 
 // é o outro lado do Critical 1: invalid_total crescendo bem acima de
 // qualquer tolerância pequena (o sinal de classificação em massa, não de
 // descarte isolado) tem de continuar disparando o rollback.
+//
+// Formato NOVO (servidorFakeComInvalidoPorMotivo, Important 2), pelo mesmo
+// motivo do teste acima.
 func TestScriptDeAtualizacaoFazRollbackQuandoInvalidoSobeAlemDaToleranciaConfigurada(t *testing.T) {
 	raiz, estadoDir := montaRaiz(t)
-	servidor := servidorFakeComInvalido(t, estadoDir, func(n int64) int64 {
+	servidor := servidorFakeComInvalidoPorMotivo(t, estadoDir, func(n int64) int64 {
 		return n * 10 // cresce rápido: delta já estoura a tolerância default (5) na 2ª amostra
 	})
 	systemctlPath, logPath := escreveDuble(t, dubleHonesto)
@@ -554,9 +618,12 @@ func TestScriptDeAtualizacaoFazRollbackQuandoInvalidoSobeAlemDaToleranciaConfigu
 // número fixo que só parece configurável: com a tolerância explicitamente
 // reduzida para 1, um delta de +2 tem de reprovar — o mesmo delta que
 // passaria pela tolerância default (5).
+//
+// Formato NOVO (servidorFakeComInvalidoPorMotivo, Important 2), pelo mesmo
+// motivo dos dois testes acima.
 func TestScriptDeAtualizacaoRespeitaToleranciaCustomizadaDeInvalido(t *testing.T) {
 	raiz, estadoDir := montaRaiz(t)
-	servidor := servidorFakeComInvalido(t, estadoDir, func(n int64) int64 {
+	servidor := servidorFakeComInvalidoPorMotivo(t, estadoDir, func(n int64) int64 {
 		if n >= 2 {
 			return 2
 		}
@@ -571,6 +638,38 @@ func TestScriptDeAtualizacaoRespeitaToleranciaCustomizadaDeInvalido(t *testing.T
 	}
 	if linkada := releaseLinkada(t, raiz); linkada != "velha" {
 		t.Errorf("current aponta para releases/%s — esperava rollback com a tolerância customizada estourada", linkada)
+	}
+}
+
+// TestScriptDeAtualizacaoToleraUmInvalidoIsoladoNoFormatoAntigoSemMotivo é o
+// outro lado do Important 2 da revisão final: os três testes de tolerância
+// acima provam o formato NOVO (com `motivo`), que é o que o binário desta
+// branch emite — mas o binário PRÉ-A5 ainda pode estar no ar no primeiro
+// update real do piloto (Minor 4: a primeira migração para o layout
+// releases/ é manual, e nada força as duas pontas a trocarem no mesmo
+// instante em produção). soma_metrica (nishidb-update.sh) é agnóstica a
+// labels — soma por NOME, ignorando o que vem depois de `{` — mas só um
+// teste contra o formato antigo de verdade prova que ela continua somando
+// esse formato certo depois da mudança do A5. Sem este teste, o oráculo
+// inteiro passaria a testar só o formato novo, e uma regressão que quebrasse
+// especificamente a leitura da série SEM `motivo` passaria despercebida.
+func TestScriptDeAtualizacaoToleraUmInvalidoIsoladoNoFormatoAntigoSemMotivo(t *testing.T) {
+	raiz, estadoDir := montaRaiz(t)
+	servidor := servidorFakeComInvalido(t, estadoDir, func(n int64) int64 {
+		if n >= 2 {
+			return 1
+		}
+		return 0
+	})
+	systemctlPath, logPath := escreveDuble(t, dubleHonesto)
+
+	saida, err := rodaScript(t, raiz, servidor.URL, systemctlPath, logPath, "nova", "10")
+
+	if err != nil {
+		t.Fatalf("o script saiu %d com invalid_total (formato ANTIGO, sem motivo) subindo só +1 na janela inteira (tolerância default 5): %v\nsaída completa:\n%s", exitCode(err), err, saida)
+	}
+	if linkada := releaseLinkada(t, raiz); linkada != "nova" {
+		t.Errorf("current aponta para releases/%s — esperava releases/nova (um invalid isolado no formato antigo não deveria disparar rollback)", linkada)
 	}
 }
 
