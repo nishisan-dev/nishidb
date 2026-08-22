@@ -87,3 +87,81 @@ func TestAoAtribuirEsperaAdmProntoAntesDeTocarAdm(t *testing.T) {
 		t.Fatal("aoAtribuir não prosseguiu depois de admPronto fechar")
 	}
 }
+
+// TestAjustaOffsetsEsperaOffsetsProntoAntesDeLerOMapa é o oráculo do débito
+// 69 — a janela-irmã do 60, achada pela revisão do próprio fechamento dele.
+//
+// O franz-go chama onAssigned (aoAtribuir) e SÓ DEPOIS, numa goroutine
+// própria disparada assim que aoAtribuir retorna, busca os offsets do group e
+// invoca AdjustFetchOffsetsFn (ajustaOffsets). admPronto (débito 60) fecha
+// logo depois de kgo.NewClient devolver — bem ANTES de resolveOrigemEPosicao
+// terminar de escrever c.offsetsIniciais, que faz I/O de rede (metadata) e de
+// disco (checkpoint local). Isso deixa uma janela em que aoAtribuir já
+// retornou — e a goroutine de fetchOffsets já pode estar chamando
+// ajustaOffsets — enquanto resolveOrigemEPosicao ainda está no meio da
+// escrita do mapa: leitura concorrente com mapassign, capturada ao vivo pelo
+// -race no CI (run 32601376137, TestSpec105DuplicateDelivery), não hipótese.
+//
+// O oráculo é o mesmo desenho do 60: determinístico, sem depender de timing
+// de broker nem do detector de corrida. A goroutine chama `ajustaOffsets` com
+// `c.offsetsPronto` ainda ABERTO (simulando resolveOrigemEPosicao no meio do
+// caminho) e o teste exige que ela fique BLOQUEADA por um intervalo razoável
+// — sem tocar o mapa, que aqui está deliberadamente nil, o estado real antes
+// da escrita. Só depois o teste escreve o mapa e fecha `offsetsPronto` (como
+// `Abre` faria) e exige que a goroutine prossiga e aplique o seek certo.
+func TestAjustaOffsetsEsperaOffsetsProntoAntesDeLerOMapa(t *testing.T) {
+	c := &Consumidor{
+		cfg:           &Config{Topic: "topico-teste"},
+		log:           logging.Descartado().Component("kafka").Dataset("teste"),
+		met:           registraMetricas(nil, "teste"),
+		offsetsPronto: make(chan struct{}),
+	}
+
+	doGroup := map[string]map[int32]kgo.Offset{
+		"topico-teste": {0: kgo.NewOffset().At(5)},
+	}
+
+	type resultado struct {
+		saida map[string]map[int32]kgo.Offset
+		err   error
+		panic any
+	}
+	terminou := make(chan resultado, 1)
+	go func() {
+		var r resultado
+		defer func() { r.panic = recover(); terminou <- r }()
+		r.saida, r.err = c.ajustaOffsets(context.Background(), doGroup)
+	}()
+
+	// Antes da liberação, ajustaOffsets tem de estar BLOQUEADA. c.offsetsIniciais
+	// é nil neste momento — exatamente o estado que a corrida do débito 69
+	// expunha ao leitor concorrente.
+	select {
+	case r := <-terminou:
+		t.Fatalf("ajustaOffsets leu c.offsetsIniciais antes de offsetsPronto fechar (débito 69): saida=%+v err=%v panic=%v",
+			r.saida, r.err, r.panic)
+	case <-time.After(150 * time.Millisecond):
+		// Ainda bloqueada — o esperado.
+	}
+
+	// Libera o gate como Abre faria: o mapa ganha seu valor final e só DEPOIS
+	// o canal fecha.
+	c.offsetsIniciais = map[int32]int64{0: 42}
+	close(c.offsetsPronto)
+
+	select {
+	case r := <-terminou:
+		if r.panic != nil {
+			t.Fatalf("ajustaOffsets paniquei após a liberação do gate: %v", r.panic)
+		}
+		if r.err != nil {
+			t.Fatalf("ajustaOffsets err = %v, quer nil", r.err)
+		}
+		got := r.saida["topico-teste"][0].EpochOffset()
+		if got.Offset != 42 {
+			t.Fatalf("offset ajustado = %+v, quer seek para 42 (posição local do checkpoint)", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ajustaOffsets não prosseguiu depois de offsetsPronto fechar")
+	}
+}

@@ -89,6 +89,35 @@ type Consumidor struct {
 	// fica válido, esse caminho de erro nunca vê o gate ainda fechado.
 	admPronto chan struct{}
 
+	// offsetsPronto barra ajustaOffsets até c.offsetsIniciais ter seu valor
+	// final (débito 69 — a janela-irmã do 60, achada pela revisão do
+	// fechamento dele).
+	//
+	// O franz-go chama onAssigned (aoAtribuir) e SÓ DEPOIS — numa goroutine
+	// própria, disparada assim que aoAtribuir retorna — busca os offsets do
+	// group e invoca AdjustFetchOffsetsFn (ajustaOffsets). admPronto fecha
+	// logo depois de kgo.NewClient devolver, bem ANTES de
+	// resolveOrigemEPosicao terminar de escrever c.offsetsIniciais (que faz
+	// I/O de rede e de disco): aoAtribuir já pode ter retornado — e a
+	// goroutine de fetchOffsets já pode estar chamando ajustaOffsets —
+	// enquanto resolveOrigemEPosicao ainda está no meio da escrita do mapa.
+	// Sem uma barreira própria para este campo, isso é leitura concorrente
+	// com mapassign — não "mapa nil degrada com segurança" como a triagem
+	// original do débito 69 presumiu: o -race pegou isso ao vivo no CI.
+	//
+	// Fecha assim que resolveOrigemEPosicao retorna — sucesso OU erro —, e
+	// SEMPRE antes do cl.Close() do caminho de erro logo em seguida, pela
+	// mesma razão do admPronto: se o gate só fechasse depois (ou nunca, no
+	// caminho de erro), o Close esperaria a goroutine de fetchOffsets —
+	// presa neste gate — para a sessão do group terminar de sair: deadlock.
+	//
+	// Deliberadamente um gate PRÓPRIO, e não o mesmo admPronto: aoAtribuir
+	// não toca offsetsIniciais, e fundir os dois atrasaria o
+	// totalDeParticoes de aoAtribuir (uma chamada de rede) até
+	// resolveOrigemEPosicao terminar, quando as duas hoje correm em
+	// paralelo — uma no callback do group, outra na goroutine do construtor.
+	offsetsPronto chan struct{}
+
 	fecha sync.Once
 }
 
@@ -118,7 +147,11 @@ func Abre(ctx context.Context, cfg *Config, o Opcoes) (*Consumidor, error) {
 	log = log.Component("kafka").Dataset(cfg.Dataset)
 	met := registraMetricas(o.Metrics, cfg.Dataset)
 
-	c := &Consumidor{cfg: cfg, log: log, met: met, origem: cfg.Origem(), admPronto: make(chan struct{})}
+	c := &Consumidor{
+		cfg: cfg, log: log, met: met, origem: cfg.Origem(),
+		admPronto:     make(chan struct{}),
+		offsetsPronto: make(chan struct{}),
+	}
 
 	opts := append(cfg.opcoesDoCliente(),
 		kgo.OnPartitionsAssigned(c.aoAtribuir),
@@ -130,18 +163,25 @@ func Abre(ctx context.Context, cfg *Config, o Opcoes) (*Consumidor, error) {
 	cl, err := kgo.NewClient(opts...)
 	if err != nil {
 		// kgo.NewClient só falha antes de qualquer goroutine do cliente
-		// nascer (validação de opções), então aoAtribuir nunca teve chance de
-		// rodar aqui — mas fechar o gate de todo caminho de saída, sem
-		// exceção, é o invariante que evita reintroduzir o débito 60 por
-		// omissão num caminho futuro.
+		// nascer (validação de opções), então aoAtribuir e ajustaOffsets
+		// nunca tiveram chance de rodar aqui — mas fechar os dois gates de
+		// todo caminho de saída, sem exceção, é o invariante que evita
+		// reintroduzir o débito 60/69 por omissão num caminho futuro.
 		close(c.admPronto)
+		close(c.offsetsPronto)
 		return nil, fmt.Errorf("kafka: criar cliente do dataset %q: %w", cfg.Dataset, err)
 	}
 	c.cl = cl
 	c.adm = kadm.NewClient(cl)
 	close(c.admPronto)
 
-	if err := c.resolveOrigemEPosicao(ctx, o.Store); err != nil {
+	// c.offsetsIniciais ganha seu valor final dentro de resolveOrigemEPosicao
+	// (ou fica nil, se ela falhar). offsetsPronto fecha logo em seguida, e
+	// SEMPRE antes do cl.Close() abaixo — nunca depois, pela razão do
+	// deadlock documentada no campo.
+	err = c.resolveOrigemEPosicao(ctx, o.Store)
+	close(c.offsetsPronto)
+	if err != nil {
 		cl.Close()
 		return nil, err
 	}
@@ -283,6 +323,12 @@ func (c *Consumidor) aoAtribuir(ctx context.Context, _ *kgo.Client, atribuidas m
 // trás é a operação PRETENDIDA aqui, e com epoch não negativo o cliente a
 // trataria como truncamento do log.
 func (c *Consumidor) ajustaOffsets(_ context.Context, doGroup map[string]map[int32]kgo.Offset) (map[string]map[int32]kgo.Offset, error) {
+	// Débito 69: fetchOffsets (que chama este callback) pode disparar assim
+	// que aoAtribuir retorna, antes de resolveOrigemEPosicao terminar de
+	// escrever c.offsetsIniciais. offsetsPronto fecha só depois — ver o
+	// comentário do campo.
+	<-c.offsetsPronto
+
 	if len(c.offsetsIniciais) == 0 {
 		return doGroup, nil
 	}
