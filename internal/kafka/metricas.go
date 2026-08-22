@@ -3,6 +3,7 @@ package kafka
 import (
 	"strconv"
 
+	"github.com/nishisan-dev/nishidb/internal/materializer"
 	"github.com/nishisan-dev/nishidb/internal/metrics"
 )
 
@@ -51,12 +52,25 @@ func registraMetricas(r *metrics.Registry, dataset string) *metricas {
 	medidor := func(nome, ajuda string) *metrics.SerieMedidor {
 		return r.Medidor(nome, ajuda, metrics.LabelDataset).Com(dataset)
 	}
+	famInvalidos := r.Contador(metrics.MetIngestInvalidTotal,
+		"Eventos descartados por serem ruins (§101), por motivo (categoria §101; Task A5/issue #15).",
+		metrics.LabelDataset, metrics.LabelMotivo)
+	// Pré-registra as seis categorias de evento ruim em zero: sem isto, cada
+	// série só nasce no primeiro Apply que descartar um evento daquela
+	// categoria, e nishidb_ingest_invalid_total{motivo="..."} deixa de
+	// aparecer em /metrics desde a subida — mudança observável de superfície
+	// que o piloto em produção já emite. O enum §101 é fechado (por isso
+	// BadEvent(), não uma lista escrita à mão), então o custo de cardinalidade
+	// é fixo: sempre seis séries por dataset.
+	for cat := materializer.ErrorCategory(0); cat < materializer.NumCategories; cat++ {
+		if cat.BadEvent() {
+			famInvalidos.Com(dataset, cat.String())
+		}
+	}
 	return &metricas{
-		eventos: contador(metrics.MetIngestEventsTotal, "Eventos oferecidos à ingestão."),
-		stale:   contador(metrics.MetIngestStaleTotal, "Eventos descartados por sequence (§25). Não é erro."),
-		famInvalidos: r.Contador(metrics.MetIngestInvalidTotal,
-			"Eventos descartados por serem ruins (§101), por motivo (categoria §101; Task A5/issue #15).",
-			metrics.LabelDataset, metrics.LabelMotivo),
+		eventos:      contador(metrics.MetIngestEventsTotal, "Eventos oferecidos à ingestão."),
+		stale:        contador(metrics.MetIngestStaleTotal, "Eventos descartados por sequence (§25). Não é erro."),
+		famInvalidos: famInvalidos,
 		falhas: contador(metrics.MetIngestFailedTotal,
 			"Eventos que NÃO entraram por falha que não é do evento. O §92 não prevê esta série, e sem ela a perda de dado seria invisível num daemon, onde não há exit code para carregá-la."),
 		errosKafka: contador(metrics.MetKafkaErrorsTotal,
