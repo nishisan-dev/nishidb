@@ -44,7 +44,7 @@ explicada logo adiante.
 | **Máquina** | Intel Core 7 150U, **12 vCPU** (10 núcleos, 2 threads/núcleo), **31 GiB** de RAM |
 | **Disco** | NVMe ADATA SM2P41C3 512 GB, **ext4**, disco real (não tmpfs) |
 | **Kernel** | Linux 6.8.0-136-generic; Docker 29.7.2 |
-| **Veredito** | **rodada aprovada pelo harness** (`passed: true`, os 12 gates duros avaliados) — **mas o `disk_plateau` NÃO se sustenta**, e a recontagem está em ["O gate que importa"](#o-gate-que-importa-e-por-que-ele-não-vale-nesta-rodada) |
+| **Veredito** | **rodada aprovada pelo harness** (`passed: true`, os 12 gates avaliados, 8 deles duros) — **mas o `disk_plateau` NÃO se sustenta**, e a recontagem está em ["O gate que importa"](#o-gate-que-importa-e-por-que-ele-não-vale-nesta-rodada) |
 
 **Por que não é a rodada de 8M a 500 ev/s do §125.** As duas coisas medem
 coisas diferentes, e a segunda não cabe em nenhum orçamento de tempo razoável:

@@ -13,7 +13,8 @@ rows**, contra 389 KiB com 1 milhão — 8× de dados, 1,9% de heap a mais.
 
 ## Estado
 
-**M1, M2, a Fase 6 do M3 e o M4 completos.** Ingestão por arquivo e por
+**M1, M2 e a Fase 6 do M3 completos; o M4 entregue, com uma ressalva que
+vale ler.** Ingestão por arquivo e por
 **Kafka**, materialização, storage durável com recovery de dados E de posição no
 tópico, índices, SQL, saída NDJSON, um servidor que **consulta enquanto ingere**
 pelo protocolo remoto do §67, e a **compaction** que devolve ao filesystem o
