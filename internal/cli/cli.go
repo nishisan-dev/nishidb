@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/nishisan-dev/nishidb/internal/buildinfo"
 	nishiconfig "github.com/nishisan-dev/nishidb/internal/config"
 	"github.com/nishisan-dev/nishidb/internal/query/binder"
 	"github.com/nishisan-dev/nishidb/internal/query/executor"
@@ -65,6 +66,7 @@ USO
   nishidb status   --server <host:porta>
   nishidb datasets --server <host:porta>
   nishidb inspect  --server <host:porta> <dataset>
+  nishidb --version | version
 
 INGEST
   Lê NDJSON (um evento JSON por linha) e materializa no dataset.
@@ -141,6 +143,9 @@ func Run(args []string, amb Ambiente) int {
 		return runDatasets(args[1:], amb)
 	case "inspect":
 		return runInspect(args[1:], amb)
+	case "--version", "version":
+		_, _ = fmt.Fprintln(amb.Stdout, buildinfo.String())
+		return ExitOK
 	case "-h", "--help", "help":
 		fmt.Fprint(amb.Stdout, uso)
 		return ExitOK
