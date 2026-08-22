@@ -28,17 +28,41 @@
 #   verificação não fechar.
 #
 # Variáveis de ambiente (todas com default de produção):
-#   NISHIDB_ROOT               default /app/nishidb
-#   NISHIDB_UPDATE_SYSTEMCTL   default systemctl        (comando substituível, p/ testes)
-#   NISHIDB_SERVICE            default nishidb.service
-#   NISHIDB_SERVER             default http://127.0.0.1:9142  (plano LOOPBACK, sem credencial)
-#   NISHIDB_UPDATE_TIMEOUT     default 60               (segundos; prazo da verificação
-#                              pós-start, reaproveitado também na verificação pós-rollback)
+#   NISHIDB_ROOT                     default /app/nishidb
+#   NISHIDB_UPDATE_SYSTEMCTL         default systemctl        (comando substituível, p/ testes)
+#   NISHIDB_SERVICE                  default nishidb.service
+#   NISHIDB_SERVER                   default http://127.0.0.1:9142  (plano LOOPBACK, sem credencial)
+#   NISHIDB_UPDATE_TIMEOUT           default 60         (segundos; prazo da verificação
+#                                    pós-start, reaproveitado também na verificação pós-rollback)
+#   NISHIDB_UPDATE_INVALID_TOLERANCE default 5          (quantos `nishidb_ingest_invalid_total`
+#                                    a mais, somados na janela inteira da verificação, ainda
+#                                    contam como saudável — ver nota abaixo)
+#
+# Sobre a tolerância de invalid_total: o objetivo do check é pegar o binário
+# NOVO classificando eventos válidos como inválidos EM MASSA (o defeito de
+# rollback que esta task existe para cobrir), não um evento isolado e
+# legítimo — a cauda de chaves grandes (>1024 bytes) do tópico `events` já
+# produz descarte esporádico em produção, por política (`log-and-skip`), sem
+# corrupção nenhuma. Falhar o update por causa de UM desses descartes
+# legítimos seria pior que o problema que o check existe para pegar.
+#
+# Sobre a suposição de ingestão ativa: a verificação de "ingestão viva" (3/4
+# abaixo) assume que existe pelo menos um dataset consumindo Kafka de fato —
+# é o caso do piloto (tópico `events`, ~452 msg/s contínuos, sem janela
+# morta plausível). Um deploy hipotético SEM nenhum dataset com Kafka
+# habilitado nunca veria `nishidb_ingest_events_total` avançar nem
+# `nishidb_kafka_lag` cair, e a verificação sempre estouraria o prazo. Não
+# há flag para desligar esse check: não é o caso do piloto, e uma variável
+# para um cenário que não existe hoje é só superfície não testada.
 #
 # Saída: 0 em sucesso (versão nova no ar e verificada); != 0 em qualquer
 # falha, com o PASSO que falhou nomeado em stderr. Uma pré-checagem que
 # recusa não toca no serviço; uma falha depois do `systemctl stop` sempre
-# tenta o rollback automático antes de sair.
+# tenta o rollback automático antes de sair. Uma interrupção (Ctrl-C ou
+# SIGTERM) depois que a mutação já começou tenta o MESMO rollback de
+# emergência, e o script sempre imprime, ao sair — por qualquer caminho —,
+# para onde o symlink `current` ficou apontando e o que `/v1/health`
+# responde naquele instante.
 
 set -euo pipefail
 
@@ -49,6 +73,7 @@ NISHIDB_UPDATE_SYSTEMCTL="${NISHIDB_UPDATE_SYSTEMCTL:-systemctl}"
 NISHIDB_SERVICE="${NISHIDB_SERVICE:-nishidb.service}"
 NISHIDB_SERVER="${NISHIDB_SERVER:-http://127.0.0.1:9142}"
 NISHIDB_UPDATE_TIMEOUT="${NISHIDB_UPDATE_TIMEOUT:-60}"
+NISHIDB_UPDATE_INVALID_TOLERANCE="${NISHIDB_UPDATE_INVALID_TOLERANCE:-5}"
 
 # Intervalo entre amostras da verificação com prazo. Fixo, e não uma
 # variável de ambiente: não está na lista de parametrização do brief (a
@@ -56,6 +81,23 @@ NISHIDB_UPDATE_TIMEOUT="${NISHIDB_UPDATE_TIMEOUT:-60}"
 # mudaria quão fina é a amostragem dentro do MESMO prazo, sem abrir
 # capacidade nova.
 readonly INTERVALO_VERIFICACAO_SEGUNDOS=2
+
+# ------------------------------------------------------------------- estado
+
+# Estado usado pelos traps (INT/TERM/EXIT, mais abaixo). Declarado com
+# default vazio/zero ANTES de qualquer `exit` possível: sob `set -u`, o
+# handler de EXIT roda mesmo numa saída antes da pré-checagem (ex.: uso sem
+# argumento), e uma referência a variável ainda não populada seria erro.
+CURRENT_LINK=""
+RELEASE_ANTERIOR=""
+VERSAO_ANTERIOR=""
+# MUTACAO_INICIADA vira 1 no primeiro `systemctl stop` bem-sucedido — daí
+# em diante, o serviço real pode estar parado ou com o symlink já trocado, e
+# uma interrupção não pode simplesmente sair: precisa tentar o rollback.
+MUTACAO_INICIADA=0
+# TRATANDO_INTERRUPCAO evita reentrância se um segundo sinal chegar enquanto
+# o rollback de emergência do primeiro ainda está em andamento.
+TRATANDO_INTERRUPCAO=0
 
 if [[ $# -ne 1 ]]; then
   echo "uso: $(basename "$0") <versão>" >&2
@@ -66,8 +108,6 @@ VERSAO="$1"
 
 CURRENT_LINK="${NISHIDB_ROOT}/current"
 RELEASE_NOVA="${NISHIDB_ROOT}/releases/${VERSAO}"
-
-# ------------------------------------------------------------------- estado
 
 # FALHA_PASSO/FALHA_MSG carregam a última falha registrada por
 # registra_falha — usadas tanto para a mensagem final quanto para decidir,
@@ -117,6 +157,19 @@ except Exception:
 ' "$caminho"
 }
 
+# extrai_token_versao devolve só o PRIMEIRO campo (separado por espaço) de
+# uma string de versão. buildinfo.String() (internal/buildinfo) monta
+# "<versão> (commit <sha>, build <data>)" quando os ldflags vieram, ou só
+# "<versão>"/"dev" no fallback — em qualquer um dos dois formatos, o texto
+# ANTES do primeiro espaço é exatamente o identificador que o operador
+# passa como <versão> no argumento deste script. Comparar por esse token
+# (igualdade exata), e não por prefixo solto, é o que impede v1.2.3 de
+# casar com v1.2.30/v1.2.35/v1.2.3-rc1 — a única defesa contra
+# binário-velho-config-nova não pode aceitar uma release vizinha.
+extrai_token_versao() {
+  awk '{print $1}' <<<"$1"
+}
+
 # soma_metrica soma o último campo de toda linha do /metrics cujo nome
 # (antes de um eventual "{") bate exatamente com o pedido — o mesmo formato
 # que scripts/nishidb-stats.py já parseia manualmente, aqui via awk porque
@@ -157,6 +210,66 @@ compara_numeros() {
 curl_rota() {
   curl -sS --noproxy '*' --max-time 5 "${NISHIDB_SERVER}$1"
 }
+
+# ------------------------------------------------------- interrupção e estado
+
+# reporta_estado_real imprime, melhor esforço, para onde o symlink current
+# aponta e o que /v1/health responde NESTE INSTANTE. Uma mensagem de erro
+# sozinha não diz se o serviço ficou de pé, parado, ou em qual release — só
+# uma consulta ao estado de verdade diz isso, e é o que um operador precisa
+# antes de decidir o próximo passo.
+reporta_estado_real() {
+  local release_atual="desconhecida (current ausente ou não é symlink)"
+  if [[ -n "$CURRENT_LINK" && -L "$CURRENT_LINK" ]]; then
+    release_atual=$(readlink -f "$CURRENT_LINK" 2>/dev/null) || release_atual="ilegível"
+  fi
+  local saude="inalcançável"
+  local corpo
+  if corpo=$(curl -sS --noproxy '*' --max-time 3 "${NISHIDB_SERVER}/v1/health" 2>/dev/null); then
+    saude=$(extrai_campo_json "status" <<<"$corpo")
+    [[ -z "$saude" ]] && saude="resposta sem campo status"
+  fi
+  echo "estado real agora: current -> ${release_atual} | /v1/health -> ${saude}" >&2
+}
+
+# ao_sair roda em TODA saída do script — sucesso, erro fatal, ou depois de
+# trata_interrupcao chamar `exit` — e é o que garante o "SEMPRE imprime o
+# estado real resultante" mesmo numa saída que ninguém previu. Sai cedo se
+# CURRENT_LINK ainda não foi calculado (erro de uso, antes de qualquer
+# pré-checagem): nesse ponto não há nada em disco para reportar.
+ao_sair() {
+  [[ -n "$CURRENT_LINK" ]] || return 0
+  reporta_estado_real
+}
+trap ao_sair EXIT
+
+# trata_interrupcao responde a INT/TERM. Se a mutação já começou (o primeiro
+# `systemctl stop` já rodou), o serviço real pode estar parado ou com o
+# symlink trocado sem verificação nenhuma — a rede de segurança é tentar o
+# MESMO rollback automático que uma falha de verificação dispararia.
+trata_interrupcao() {
+  local sinal="$1"
+  if [[ $TRATANDO_INTERRUPCAO -eq 1 ]]; then
+    exit 130
+  fi
+  TRATANDO_INTERRUPCAO=1
+
+  echo "" >&2
+  echo "erro: script interrompido por ${sinal}" >&2
+  if [[ $MUTACAO_INICIADA -eq 1 ]]; then
+    echo "  mutação já em andamento (systemctl stop já rodou) — tentando rollback de emergência para ${RELEASE_ANTERIOR:-a release anterior}" >&2
+    if rollback; then
+      echo "  rollback de emergência concluído" >&2
+    else
+      echo "  rollback de emergência TAMBÉM falhou no passo [${FALHA_PASSO}]: ${FALHA_MSG} — intervenção manual necessária" >&2
+    fi
+  else
+    echo "  interrompido antes de qualquer mudança (pré-checagem) — nada para desfazer" >&2
+  fi
+  exit 130
+}
+trap 'trata_interrupcao INT' INT
+trap 'trata_interrupcao TERM' TERM
 
 # ----------------------------------------------------------------- pré-checagem
 
@@ -241,6 +354,9 @@ troca_para() {
       "${NISHIDB_UPDATE_SYSTEMCTL} stop ${NISHIDB_SERVICE} falhou preparando a versão ${rotulo}"
     return 1
   fi
+  # A partir daqui o serviço real já foi parado: uma interrupção (INT/TERM)
+  # não pode mais só sair, precisa tentar o rollback (trata_interrupcao).
+  MUTACAO_INICIADA=1
 
   echo "  trocando symlink current -> ${release_alvo}"
   if ! ln -sfn "$release_alvo" "$CURRENT_LINK"; then
@@ -271,11 +387,12 @@ troca_para() {
 # QUALQUER uma delas até o prazo esgotar é falha da verificação inteira.
 verifica_pos_start() {
   local alvo_versao="$1"
-  local fim=$(( $(date +%s) + NISHIDB_UPDATE_TIMEOUT ))
+  local fim
+  fim=$(( $(date +%s) + NISHIDB_UPDATE_TIMEOUT ))
 
   local ok_saude=0 ok_versao=0 ok_ingestao=0 ok_invalido=1
   local base_eventos="" base_lag="" base_invalido=""
-  local ultima_versao="" ultimo_status=""
+  local ultima_versao="" ultimo_status="" ultimo_delta_invalido="0"
 
   while true; do
     local corpo_saude corpo_stats corpo_metrics
@@ -291,9 +408,7 @@ verifica_pos_start() {
     ok_versao=0
     if corpo_stats=$(curl_rota /v1/stats); then
       ultima_versao=$(extrai_campo_json "process.version" <<<"$corpo_stats")
-      case "$ultima_versao" in
-        "${alvo_versao}"*) ok_versao=1 ;;
-      esac
+      [[ "$(extrai_token_versao "$ultima_versao")" == "$alvo_versao" ]] && ok_versao=1
     else
       ultima_versao=""
     fi
@@ -306,18 +421,27 @@ verifica_pos_start() {
 
       if [[ -z "$base_eventos" ]]; then
         base_eventos="$eventos"; base_lag="$lag"; base_invalido="$invalido"
+      elif compara_numeros "$eventos" ">" "$base_eventos" || compara_numeros "$lag" "<" "$base_lag"; then
+        ok_ingestao=1
+      fi
+
+      # invalid_total: tolerância sobre o DELTA da janela INTEIRA (amostra
+      # atual - primeira amostra desta verificação), recalculada a cada
+      # iteração — não uma flag que, uma vez derrubada por um evento
+      # isolado e legítimo, nunca mais volta (era exatamente esse o defeito:
+      # a cauda de chaves >1024 bytes já descarta eventos válidos em
+      # produção por política, e um único descarte na janela não pode
+      # derrubar o update inteiro).
+      ultimo_delta_invalido=$(awk -v a="$invalido" -v b="$base_invalido" 'BEGIN{printf "%s", a-b}')
+      if compara_numeros "$ultimo_delta_invalido" ">" "$NISHIDB_UPDATE_INVALID_TOLERANCE"; then
+        ok_invalido=0
       else
-        if compara_numeros "$eventos" ">" "$base_eventos" || compara_numeros "$lag" "<" "$base_lag"; then
-          ok_ingestao=1
-        fi
-        if compara_numeros "$invalido" ">" "$base_invalido"; then
-          ok_invalido=0
-        fi
+        ok_invalido=1
       fi
     fi
 
     if [[ $ok_saude -eq 1 && $ok_versao -eq 1 && $ok_ingestao -eq 1 && $ok_invalido -eq 1 ]]; then
-      echo "  verificação ok: /v1/health UP, versão ${alvo_versao} confirmada, ingestão viva, sem invalid_total subindo"
+      echo "  verificação ok: /v1/health UP, versão ${alvo_versao} confirmada, ingestão viva, invalid_total dentro da tolerância (Δ=${ultimo_delta_invalido})"
       return 0
     fi
 
@@ -331,7 +455,7 @@ verifica_pos_start() {
   [[ $ok_saude    -eq 1 ]] || motivos+="/v1/health não ficou UP (última leitura: '${ultimo_status:-sem resposta}'); "
   [[ $ok_versao   -eq 1 ]] || motivos+="versão nova (${alvo_versao}) não confirmada em /v1/stats (última leitura: '${ultima_versao:-sem resposta}'); "
   [[ $ok_ingestao -eq 1 ]] || motivos+="ingestão sem sinal de progresso — nishidb_ingest_events_total parado e nishidb_kafka_lag não caiu; "
-  [[ $ok_invalido -eq 1 ]] || motivos+="nishidb_ingest_invalid_total subiu durante a verificação; "
+  [[ $ok_invalido -eq 1 ]] || motivos+="nishidb_ingest_invalid_total subiu além da tolerância (Δ=${ultimo_delta_invalido} > NISHIDB_UPDATE_INVALID_TOLERANCE=${NISHIDB_UPDATE_INVALID_TOLERANCE}); "
   registra_falha "verificação pós-start" "prazo de ${NISHIDB_UPDATE_TIMEOUT}s esgotado — ${motivos}"
   return 1
 }
@@ -345,7 +469,8 @@ verifica_pos_start() {
 # deliberadamente mais enxuta que a da atualização.
 verifica_rollback_saudavel() {
   local versao_esperada="$1"
-  local fim=$(( $(date +%s) + NISHIDB_UPDATE_TIMEOUT ))
+  local fim
+  fim=$(( $(date +%s) + NISHIDB_UPDATE_TIMEOUT ))
   local status="" versao=""
 
   while true; do
@@ -416,6 +541,7 @@ main() {
     echo "rollback concluído — serviço voltou para a versão anterior (${VERSAO_ANTERIOR}), saudável." >&2
   else
     echo "erro: ROLLBACK TAMBÉM FALHOU no passo [${FALHA_PASSO}]: ${FALHA_MSG} — intervenção manual necessária." >&2
+    reporta_estado_real
   fi
 
   echo "erro: atualização para ${VERSAO} falhou no passo [${passo_original}]: ${msg_original}" >&2

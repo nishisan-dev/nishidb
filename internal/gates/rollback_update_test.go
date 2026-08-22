@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // A Task A4 (#11, parte 2) entrega scripts/nishidb-update.sh: o mecanismo que
@@ -111,8 +112,21 @@ func montaRaiz(t *testing.T) (raiz, estadoDir string) {
 // servidorFake responde /v1/health, /v1/stats e /metrics lendo o estado que o
 // dublê `systemctl` grava em disco a cada `start`/`stop`. /metrics simula
 // ingestão viva incrementando um contador a cada raspagem — eventos sempre
-// avançam entre duas amostras, sem depender de tempo real decorrido.
+// avançam entre duas amostras, sem depender de tempo real decorrido —, e
+// invalid_total fixo em 0 (o caso comum; ver servidorFakeComInvalido para os
+// testes de tolerância).
 func servidorFake(t *testing.T, estadoDir string) *httptest.Server {
+	t.Helper()
+	return servidorFakeComInvalido(t, estadoDir, func(int64) int64 { return 0 })
+}
+
+// servidorFakeComInvalido é a base de servidorFake, com o crescimento de
+// nishidb_ingest_invalid_total controlado por quem chama — invalidoPorRaspagem
+// recebe o número da raspagem atual (1-based) e devolve o valor ACUMULADO do
+// contador naquele instante. Existe por causa do Critical 1 da revisão: a
+// tolerância de invalid_total (NISHIDB_UPDATE_INVALID_TOLERANCE) só é
+// provável com um servidor cujo invalid_total pode subir de propósito.
+func servidorFakeComInvalido(t *testing.T, estadoDir string, invalidoPorRaspagem func(n int64) int64) *httptest.Server {
 	t.Helper()
 	var raspagens int64
 
@@ -136,7 +150,7 @@ func servidorFake(t *testing.T, estadoDir string) *httptest.Server {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		_, _ = fmt.Fprintf(w, "nishidb_ingest_events_total{dataset=\"events\"} %d\n", n*1000)
 		_, _ = fmt.Fprintf(w, "nishidb_kafka_lag{dataset=\"events\"} %d\n", lag)
-		_, _ = fmt.Fprintf(w, "nishidb_ingest_invalid_total{dataset=\"events\"} 0\n")
+		_, _ = fmt.Fprintf(w, "nishidb_ingest_invalid_total{dataset=\"events\"} %d\n", invalidoPorRaspagem(n))
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -182,6 +196,120 @@ esac
 exit 0
 `
 
+// dubleVersaoVizinha prova o Critical 2 da revisão: escreve uma versão que
+// COMEÇA com o mesmo prefixo do alvo ("nova"), mas é outra release inteira
+// ("nova2") — a comparação por prefixo solto aceitava isso; a comparação
+// por token exato não pode.
+const dubleVersaoVizinha = `#!/bin/sh
+set -e
+echo "$@" >> "$NISHIDB_TESTE_LOG"
+case "$1" in
+  start)
+    printf '%s' "nova2 (dublê)" > "$NISHIDB_TESTE_ESTADO/versao"
+    printf 'UP' > "$NISHIDB_TESTE_ESTADO/saude"
+    ;;
+  stop)
+    printf 'DOWN' > "$NISHIDB_TESTE_ESTADO/saude"
+    ;;
+esac
+exit 0
+`
+
+// dubleVersaoComSufixoDeBuildinfo escreve o formato REAL de
+// buildinfo.String() ("<versão> (commit <sha>, build <data>)"), com o
+// mesmo token de versão do alvo ("nova"). Prova que a correção do Critical 2
+// (comparar só o primeiro token) não passou a rejeitar o formato de
+// verdade que o servidor produz.
+const dubleVersaoComSufixoDeBuildinfo = `#!/bin/sh
+set -e
+echo "$@" >> "$NISHIDB_TESTE_LOG"
+case "$1" in
+  start)
+    printf '%s' "nova (commit abcdef1, build 2026-01-01T00:00:00Z)" > "$NISHIDB_TESTE_ESTADO/versao"
+    printf 'UP' > "$NISHIDB_TESTE_ESTADO/saude"
+    ;;
+  stop)
+    printf 'DOWN' > "$NISHIDB_TESTE_ESTADO/saude"
+    ;;
+esac
+exit 0
+`
+
+// dubleFalhaNoPrimeiroStart prova o Important 2 da revisão: o `systemctl
+// start` da PRIMEIRA tentativa (a versão nova) falha de verdade — o dublê
+// sai 1 em vez de aplicar o start. Da segunda chamada em diante (a do
+// rollback) ele volta a se comportar como dubleHonesto, para o rollback
+// poder de fato se recuperar e o teste conseguir distinguir "o passo certo
+// falhou" de "o script trava".
+const dubleFalhaNoPrimeiroStart = `#!/bin/sh
+echo "$@" >> "$NISHIDB_TESTE_LOG"
+case "$1" in
+  start)
+    if [ ! -f "$NISHIDB_TESTE_ESTADO/ja-falhou-start" ]; then
+      touch "$NISHIDB_TESTE_ESTADO/ja-falhou-start"
+      echo "systemctl start: falha simulada pelo dublê" >&2
+      exit 1
+    fi
+    versao_atual=$("$NISHIDB_TESTE_CURRENT/nishidb" --version)
+    printf '%s' "$versao_atual" > "$NISHIDB_TESTE_ESTADO/versao"
+    printf 'UP' > "$NISHIDB_TESTE_ESTADO/saude"
+    ;;
+  stop)
+    printf 'DOWN' > "$NISHIDB_TESTE_ESTADO/saude"
+    ;;
+esac
+exit 0
+`
+
+// dubleQueNuncaSobeEDerrubaOServidor prova o Important 3: o `start` não
+// escreve UP nem versão nenhuma (o processo "nunca sobe") e avisa o teste
+// (tocando um arquivo-sinal no próprio estadoDir) para derrubar o
+// httptest.Server de verdade, simulando a porta parando de responder — os
+// ramos de curl FALHANDO em verifica_pos_start, não só um JSON dizendo
+// DOWN.
+const dubleQueNuncaSobeEDerrubaOServidor = `#!/bin/sh
+set -e
+echo "$@" >> "$NISHIDB_TESTE_LOG"
+case "$1" in
+  stop)
+    printf 'DOWN' > "$NISHIDB_TESTE_ESTADO/saude"
+    ;;
+  start)
+    touch "$NISHIDB_TESTE_ESTADO/derruba-servidor"
+    ;;
+esac
+exit 0
+`
+
+// dubleMataOPaiAposStart prova o Important 1 (trap de INT/TERM): assim que
+// aplica o PRIMEIRO `start` (a versão nova), manda SIGTERM para o próprio
+// processo pai — que é o nishidb-update.sh em execução, já que o dublê é
+// filho direto dele. É determinístico (sem depender de acertar uma janela
+// de tempo): o sinal é entregue enquanto o script está bloqueado esperando
+// este `systemctl start` terminar, então o trap dispara assim que o dublê
+// sai, ANTES de troca_para sequer conferir o exit code do start. O marcador
+// ja-matou evita mandar um SEGUNDO sinal quando o rollback chama `start` de
+// novo.
+const dubleMataOPaiAposStart = `#!/bin/sh
+set -e
+echo "$@" >> "$NISHIDB_TESTE_LOG"
+case "$1" in
+  start)
+    versao_atual=$("$NISHIDB_TESTE_CURRENT/nishidb" --version)
+    printf '%s' "$versao_atual" > "$NISHIDB_TESTE_ESTADO/versao"
+    printf 'UP' > "$NISHIDB_TESTE_ESTADO/saude"
+    if [ ! -f "$NISHIDB_TESTE_ESTADO/ja-matou" ]; then
+      touch "$NISHIDB_TESTE_ESTADO/ja-matou"
+      kill -TERM "$PPID"
+    fi
+    ;;
+  stop)
+    printf 'DOWN' > "$NISHIDB_TESTE_ESTADO/saude"
+    ;;
+esac
+exit 0
+`
+
 // escreveDuble grava o dublê `systemctl` num diretório próprio (fora de
 // $NISHIDB_ROOT, para não colidir com o layout releases/current que o script
 // varre) e devolve o caminho do executável e do arquivo de log de chamadas.
@@ -198,8 +326,11 @@ func escreveDuble(t *testing.T, conteudo string) (caminho, log string) {
 
 // rodaScript executa nishidb-update.sh de verdade, com PATH e ambiente
 // totalmente controlados, e devolve stdout+stderr combinados e o erro de
-// exec.Cmd.Run (nil quando o script sai 0).
-func rodaScript(t *testing.T, raiz, servidorURL, systemctlPath, logPath, versao, prazoSegundos string) (saida string, err error) {
+// exec.Cmd.Run (nil quando o script sai 0). extras carrega variáveis de
+// ambiente adicionais no formato CHAVE=valor (ex.:
+// "NISHIDB_UPDATE_INVALID_TOLERANCE=1") — usadas pelos testes que precisam
+// de um parâmetro além dos cinco básicos.
+func rodaScript(t *testing.T, raiz, servidorURL, systemctlPath, logPath, versao, prazoSegundos string, extras ...string) (saida string, err error) {
 	t.Helper()
 	bash := ondeEstaOBash(t)
 	cmd := exec.Command(bash, caminhoDoScriptDeAtualizacao, versao)
@@ -213,6 +344,7 @@ func rodaScript(t *testing.T, raiz, servidorURL, systemctlPath, logPath, versao,
 		"NISHIDB_TESTE_LOG="+logPath,
 		"NISHIDB_TESTE_CURRENT="+filepath.Join(raiz, "current"),
 	)
+	cmd.Env = append(cmd.Env, extras...)
 	var buf strings.Builder
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
@@ -357,5 +489,233 @@ exit 99
 	}
 	if linkada := releaseLinkada(t, raiz); linkada != "velha" {
 		t.Errorf("current mudou de releases/velha para releases/%s numa pré-checagem que deveria ter recusado ANTES de tocar no serviço", linkada)
+	}
+}
+
+// ------------------------------------------------------- fix report: revisão
+
+// Os testes abaixo foram acrescentados na correção dos achados da revisão
+// (2 Critical, 3 Important, 2 Minor — ver task-a4-report.md, seção "Fix
+// report"). Cada um teve RED confirmado contra o script ANTES da correção
+// correspondente.
+
+// TestScriptDeAtualizacaoToleraUmInvalidoIsoladoDentroDaJanela prova a
+// correção do Critical 1: invalid_total subindo +1 durante toda a janela de
+// verificação (bem dentro da tolerância default de 5) NÃO pode travar um
+// update saudável — a cauda de chaves >1024 bytes já descarta eventos
+// legítimos em produção, por política, e um único descarte não é o defeito
+// de binário-novo-classificando-tudo-errado que o check existe para pegar.
+func TestScriptDeAtualizacaoToleraUmInvalidoIsoladoDentroDaJanela(t *testing.T) {
+	raiz, estadoDir := montaRaiz(t)
+	servidor := servidorFakeComInvalido(t, estadoDir, func(n int64) int64 {
+		if n >= 2 {
+			return 1
+		}
+		return 0
+	})
+	systemctlPath, logPath := escreveDuble(t, dubleHonesto)
+
+	saida, err := rodaScript(t, raiz, servidor.URL, systemctlPath, logPath, "nova", "10")
+
+	if err != nil {
+		t.Fatalf("o script saiu %d com invalid_total subindo só +1 na janela inteira (tolerância default 5): %v\nsaída completa:\n%s", exitCode(err), err, saida)
+	}
+	if linkada := releaseLinkada(t, raiz); linkada != "nova" {
+		t.Errorf("current aponta para releases/%s — esperava releases/nova (um invalid isolado não deveria disparar rollback)", linkada)
+	}
+}
+
+// TestScriptDeAtualizacaoFazRollbackQuandoInvalidoSobeAlemDaToleranciaConfigurada
+// é o outro lado do Critical 1: invalid_total crescendo bem acima de
+// qualquer tolerância pequena (o sinal de classificação em massa, não de
+// descarte isolado) tem de continuar disparando o rollback.
+func TestScriptDeAtualizacaoFazRollbackQuandoInvalidoSobeAlemDaToleranciaConfigurada(t *testing.T) {
+	raiz, estadoDir := montaRaiz(t)
+	servidor := servidorFakeComInvalido(t, estadoDir, func(n int64) int64 {
+		return n * 10 // cresce rápido: delta já estoura a tolerância default (5) na 2ª amostra
+	})
+	systemctlPath, logPath := escreveDuble(t, dubleHonesto)
+
+	saida, err := rodaScript(t, raiz, servidor.URL, systemctlPath, logPath, "nova", "5")
+
+	if err == nil {
+		t.Fatalf("o script saiu 0 com invalid_total disparando bem acima da tolerância\nsaída completa:\n%s", saida)
+	}
+	if !strings.Contains(saida, "invalid_total") {
+		t.Errorf("a mensagem de falha não menciona invalid_total\nsaída completa:\n%s", saida)
+	}
+	if linkada := releaseLinkada(t, raiz); linkada != "velha" {
+		t.Errorf("current aponta para releases/%s — esperava rollback para releases/velha", linkada)
+	}
+}
+
+// TestScriptDeAtualizacaoRespeitaToleranciaCustomizadaDeInvalido prova que
+// NISHIDB_UPDATE_INVALID_TOLERANCE é de fato LIDA do ambiente, e não um
+// número fixo que só parece configurável: com a tolerância explicitamente
+// reduzida para 1, um delta de +2 tem de reprovar — o mesmo delta que
+// passaria pela tolerância default (5).
+func TestScriptDeAtualizacaoRespeitaToleranciaCustomizadaDeInvalido(t *testing.T) {
+	raiz, estadoDir := montaRaiz(t)
+	servidor := servidorFakeComInvalido(t, estadoDir, func(n int64) int64 {
+		if n >= 2 {
+			return 2
+		}
+		return 0
+	})
+	systemctlPath, logPath := escreveDuble(t, dubleHonesto)
+
+	saida, err := rodaScript(t, raiz, servidor.URL, systemctlPath, logPath, "nova", "3", "NISHIDB_UPDATE_INVALID_TOLERANCE=1")
+
+	if err == nil {
+		t.Fatalf("o script saiu 0 com invalid_total subindo +2 e NISHIDB_UPDATE_INVALID_TOLERANCE=1 — a variável não está sendo respeitada\nsaída completa:\n%s", saida)
+	}
+	if linkada := releaseLinkada(t, raiz); linkada != "velha" {
+		t.Errorf("current aponta para releases/%s — esperava rollback com a tolerância customizada estourada", linkada)
+	}
+}
+
+// TestScriptDeAtualizacaoRecusaVersaoVizinhaPorPrefixo prova a correção do
+// Critical 2: "nova2" não pode confirmar o alvo "nova" só porque começa com
+// o mesmo texto. Antes da correção, o `case "$versao" in "$alvo"*)` aceitava
+// isso — a "única defesa contra binário-velho-config-nova" ficava furada.
+func TestScriptDeAtualizacaoRecusaVersaoVizinhaPorPrefixo(t *testing.T) {
+	raiz, estadoDir := montaRaiz(t)
+	servidor := servidorFake(t, estadoDir)
+	systemctlPath, logPath := escreveDuble(t, dubleVersaoVizinha)
+
+	saida, err := rodaScript(t, raiz, servidor.URL, systemctlPath, logPath, "nova", "3")
+
+	if err == nil {
+		t.Fatalf("o script saiu 0 com 'nova2' no /v1/stats — a versão vizinha não deveria confirmar o alvo 'nova'\nsaída completa:\n%s", saida)
+	}
+	if linkada := releaseLinkada(t, raiz); linkada != "velha" {
+		t.Errorf("current aponta para releases/%s — esperava rollback diante da versão vizinha 'nova2'", linkada)
+	}
+	if !strings.Contains(saida, "nova2") {
+		t.Errorf("a mensagem de falha não mostra a versão vizinha lida ('nova2 (dublê)')\nsaída completa:\n%s", saida)
+	}
+}
+
+// TestScriptDeAtualizacaoAceitaVersaoComSufixoDeBuildinfo é o outro lado do
+// Critical 2: a correção não pode rejeitar o formato REAL que
+// buildinfo.String() produz ("<versão> (commit ..., build ...)"). Sem este
+// teste, uma correção "por igualdade exata da string inteira" (em vez de
+// por token) passaria no teste da versão vizinha e quebraria em produção.
+func TestScriptDeAtualizacaoAceitaVersaoComSufixoDeBuildinfo(t *testing.T) {
+	raiz, estadoDir := montaRaiz(t)
+	servidor := servidorFake(t, estadoDir)
+	systemctlPath, logPath := escreveDuble(t, dubleVersaoComSufixoDeBuildinfo)
+
+	saida, err := rodaScript(t, raiz, servidor.URL, systemctlPath, logPath, "nova", "10")
+
+	if err != nil {
+		t.Fatalf("o script saiu %d com a versão 'nova (commit ..., build ...)' — formato real do buildinfo.String() deveria bater com o alvo 'nova': %v\nsaída completa:\n%s", exitCode(err), err, saida)
+	}
+	if linkada := releaseLinkada(t, raiz); linkada != "nova" {
+		t.Errorf("current aponta para releases/%s — esperava releases/nova", linkada)
+	}
+}
+
+// TestScriptDeAtualizacaoFazRollbackQuandoOSystemctlStartFalha prova o
+// Important 2: o `systemctl start` de verdade pode falhar (unidade não
+// encontrada, dependência não satisfeita, etc.) — troca_para já tratava
+// isso, mas nenhum teste exercitava o ramo antes desta correção.
+func TestScriptDeAtualizacaoFazRollbackQuandoOSystemctlStartFalha(t *testing.T) {
+	raiz, estadoDir := montaRaiz(t)
+	servidor := servidorFake(t, estadoDir)
+	systemctlPath, logPath := escreveDuble(t, dubleFalhaNoPrimeiroStart)
+
+	saida, err := rodaScript(t, raiz, servidor.URL, systemctlPath, logPath, "nova", "5")
+
+	if err == nil {
+		t.Fatalf("o script saiu 0 com o systemctl start falhando na tentativa de subir a versão nova\nsaída completa:\n%s", saida)
+	}
+	if !strings.Contains(saida, "systemctl start") {
+		t.Errorf("a mensagem de falha não nomeia o passo 'systemctl start'\nsaída completa:\n%s", saida)
+	}
+	if !strings.Contains(strings.ToLower(saida), "rollback") {
+		t.Errorf("a saída não menciona o rollback\nsaída completa:\n%s", saida)
+	}
+	if linkada := releaseLinkada(t, raiz); linkada != "velha" {
+		t.Errorf("current aponta para releases/%s — esperava rollback de volta para releases/velha", linkada)
+	}
+}
+
+// TestScriptDeAtualizacaoFazRollbackQuandoOServidorNuncaResponde prova o
+// Important 3: a porta pode parar de responder de vez (conexão recusada),
+// não só devolver um JSON dizendo DOWN — os ramos de curl FALHANDO em
+// verifica_pos_start (else ultimo_status=""/ultima_versao="") precisam
+// tratar isso como "não confirmado", não travar nem confundir com sucesso.
+// A goroutine derruba o httptest.Server assim que o dublê toca o arquivo-
+// sinal, dentro do próprio `systemctl start`.
+func TestScriptDeAtualizacaoFazRollbackQuandoOServidorNuncaResponde(t *testing.T) {
+	raiz, estadoDir := montaRaiz(t)
+	servidor := servidorFake(t, estadoDir)
+	systemctlPath, logPath := escreveDuble(t, dubleQueNuncaSobeEDerrubaOServidor)
+
+	sinal := filepath.Join(estadoDir, "derruba-servidor")
+	derrubado := make(chan struct{})
+	go func() {
+		for {
+			if _, err := os.Stat(sinal); err == nil {
+				servidor.Close()
+				close(derrubado)
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}()
+
+	saida, err := rodaScript(t, raiz, servidor.URL, systemctlPath, logPath, "nova", "2")
+
+	select {
+	case <-derrubado:
+	case <-time.After(10 * time.Second):
+		t.Fatal("o sinal para derrubar o servidor fake nunca chegou — o dublê não tocou o marcador esperado")
+	}
+
+	if err == nil {
+		t.Fatalf("o script saiu 0 com o servidor fake parando de responder logo após o start\nsaída completa:\n%s", saida)
+	}
+	if linkada := releaseLinkada(t, raiz); linkada != "velha" {
+		t.Errorf("current aponta para releases/%s — esperava o rollback devolver para releases/velha quando a porta para de responder", linkada)
+	}
+	if !strings.Contains(saida, "verificação") {
+		t.Errorf("a saída não nomeia o passo de verificação\nsaída completa:\n%s", saida)
+	}
+}
+
+// TestScriptDeAtualizacaoRespondeATerminacaoTentandoRollback prova o
+// Important 1: um SIGTERM depois que a mutação já começou (o `systemctl
+// stop` original já rodou) não pode simplesmente matar o script sem rede de
+// segurança — o trap precisa tentar o MESMO rollback automático e reportar
+// o estado real resultante. O timeout passado é longo (60s) DE PROPÓSITO:
+// a interrupção é determinística (o dublê mata o próprio pai logo depois do
+// primeiro start) e nunca deveria depender do prazo de verificação para
+// disparar.
+func TestScriptDeAtualizacaoRespondeATerminacaoTentandoRollback(t *testing.T) {
+	raiz, estadoDir := montaRaiz(t)
+	servidor := servidorFake(t, estadoDir)
+	systemctlPath, logPath := escreveDuble(t, dubleMataOPaiAposStart)
+
+	saida, err := rodaScript(t, raiz, servidor.URL, systemctlPath, logPath, "nova", "60")
+
+	if err == nil {
+		t.Fatalf("o script saiu 0 apesar de ter recebido SIGTERM no meio da mutação\nsaída completa:\n%s", saida)
+	}
+	if got := exitCode(err); got != 130 {
+		t.Errorf("exit code = %d, esperava 130 (convenção escolhida pelo próprio handler de interrupção)\nsaída completa:\n%s", got, saida)
+	}
+	if !strings.Contains(saida, "interrompido") {
+		t.Errorf("a saída não menciona a interrupção\nsaída completa:\n%s", saida)
+	}
+	if !strings.Contains(strings.ToLower(saida), "rollback") {
+		t.Errorf("a saída não menciona a tentativa de rollback de emergência\nsaída completa:\n%s", saida)
+	}
+	if !strings.Contains(saida, "estado real") {
+		t.Errorf("a saída não reporta o estado real resultante (current/health) — Important 1 pede isso SEMPRE\nsaída completa:\n%s", saida)
+	}
+	if linkada := releaseLinkada(t, raiz); linkada != "velha" {
+		t.Errorf("current aponta para releases/%s — esperava o rollback de emergência devolver para releases/velha", linkada)
 	}
 }
