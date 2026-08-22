@@ -313,3 +313,49 @@ func esperaCompactionNoAr(t *testing.T, srv *server.Servidor) {
 	}
 	t.Fatal("a compaction não subiu em 15s: o default do §78 traz a chave ligada")
 }
+
+// TestStatsReportaACompactionParadaComAChaveDesligada é a outra metade do par
+// do teste acima, e sem ela a primeira não prova nada: um `Running: true` fixo
+// no lugar do `st.CompactionRunning` satisfaz todo oráculo que só exercita o
+// laço DE PÉ — e o `esperaCompactionNoAr` está lá justamente para garantir que
+// o outro caso nunca aconteça.
+//
+// O caso que falta é o que importa. O godoc de protocolo.CompactionStats
+// escreve por extenso qual é: não é o Close, é a falha sticky do writer
+// (§14.14), em que a goroutine para sozinha e o disco volta a crescer com o
+// processo de pé. Essa falha não é provocável aqui sem avariar o writer; a
+// chave `storage.compaction.enabled: false` produz o MESMO estado observável —
+// laço parado, processo no ar — e é o que separa o campo de uma constante.
+//
+// É o mesmo par que as séries do §92 já têm no /metrics
+// (TestSeriesDeCompactionSaemZeradasComAChaveDesligada). Aqui a afirmação é
+// sobre o JSON, porque é o JSON que o `nishidb status` do §96 lê.
+func TestStatsReportaACompactionParadaComAChaveDesligada(t *testing.T) {
+	srv, _ := servidorComDadosDiretorioEStorage(t, 100, blocoPadrao, "  compaction:\n    enabled: false\n")
+
+	e := leJSON[protocolo.Estatisticas](t, srv, "/v1/stats")
+	if len(e.Datasets) != 1 {
+		t.Fatalf("datasets = %d", len(e.Datasets))
+	}
+	st := e.Datasets[0].Storage
+
+	// Não há espera aqui, ao contrário do teste de cima: com a chave em false
+	// o laço não sobe NUNCA, e esperar por ele só saberia gastar o prazo
+	// inteiro antes de falhar.
+	if st.Compaction.Running {
+		t.Error("compaction.running = true com storage.compaction.enabled: false — " +
+			"o operador leria laço de pé num processo que honrou a chave dele")
+	}
+	if got := valorDaMetrica(t, srv, metrics.MetCompactionRunning); got != 0 {
+		t.Errorf("compaction_running = %v no /metrics contra false no JSON: duas fontes para o mesmo estado", got)
+	}
+
+	// Os dois contadores continuam SAINDO, zerados: campo que some do JSON
+	// vira `undefined` no cliente, indistinguível de servidor velho — é a
+	// mesma decisão que mantém as três séries no scrape com a chave
+	// desligada.
+	if st.Compaction.BytesRead != 0 || st.Compaction.BytesWritten != 0 {
+		t.Errorf("compaction moveu %d/%d bytes com a chave desligada",
+			st.Compaction.BytesRead, st.Compaction.BytesWritten)
+	}
+}

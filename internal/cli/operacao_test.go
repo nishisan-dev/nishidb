@@ -2,8 +2,11 @@ package cli_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -66,6 +69,40 @@ func linhaDaSaida(t *testing.T, saida, primeiraColuna string) string {
 	return ""
 }
 
+// celulasDaLinha corta a linha nas colunas em que o tabwriter a escreveu.
+//
+// O corte é pelos DOIS espaços do padding, e não por espaço simples, porque a
+// célula é o que interessa a quem confere valor posicional: a última coluna do
+// `datasets` é o TIMEOUT e a última do `inspect` é o AUTO, e `strings.Contains`
+// na linha inteira não distingue "30s" na coluna certa de "30s" em qualquer
+// outra.
+func celulasDaLinha(l string) []string {
+	var out []string
+	for _, c := range strings.Split(strings.TrimSpace(l), "  ") {
+		if c = strings.TrimSpace(c); c != "" {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// prazoDaSaida devolve a duração que o comando escreveu, RECUPERADA do texto.
+//
+// A conferência é de ida e volta de propósito: o oráculo não é "o comando
+// imprimiu a mesma string que eu formataria", que só afirmaria que dois
+// trechos de código chamam o mesmo Sprintf, e sim que do texto para humano se
+// recupera o MESMO prazo que a rota respondeu em milissegundos. É o argumento
+// do bytesLegiveis aplicado ao tempo: número humanizado do qual não se recupera
+// o valor esconde a diferença que o operador veio medir.
+func prazoDaSaida(t *testing.T, texto string) time.Duration {
+	t.Helper()
+	d, err := time.ParseDuration(texto)
+	if err != nil {
+		t.Fatalf("o comando escreveu %q, que não é uma duração: %v", texto, err)
+	}
+	return d
+}
+
 // estatisticas lê o /v1/stats pela porta, para servir de oráculo ao comando.
 func estatisticas(t *testing.T, a *ambienteRemoto) protocolo.Estatisticas {
 	t.Helper()
@@ -106,13 +143,61 @@ func leJSONDaPorta(t *testing.T, a *ambienteRemoto, caminho string, destino any)
 // ordem que o operador segue.
 func servidorComDadosNoAr(t *testing.T, eventos int) *ambienteRemoto {
 	t.Helper()
-	a := novoAmbienteRemoto(t, 100000)
-	if code := a.rodaComEntrada(corpus(t, eventos), "ingest",
+	return sobeComEntrada(t, novoAmbienteRemoto(t, 100000), corpus(t, eventos))
+}
+
+// sobeComEntrada é o de baixo: ingere a entrada que o teste montou e sobe o
+// servidor sobre ela.
+//
+// A separação existe porque o corpus do §12 não produz sozinho três fixtures de
+// que esta suíte precisa — um teto de linhas baixo o bastante para truncar, uma
+// coluna AUTO, e chaves em número suficiente para a carga do primário sair de
+// zero. Cada um deles é uma linha de entrada diferente, não um segundo helper.
+func sobeComEntrada(t *testing.T, a *ambienteRemoto, entrada string) *ambienteRemoto {
+	t.Helper()
+	if code := a.rodaComEntrada(entrada, "ingest",
 		"--config", a.config, "--dataset", "radius_sessions", "--input", "-"); code != 0 {
 		t.Fatalf("ingest saiu com %d: %s", code, a.stderr.String())
 	}
 	a.sobeServidor(t)
 	return a
+}
+
+// desligaACompaction acrescenta `storage.compaction.enabled: false` ao YAML do
+// ambiente, ANTES de o servidor subir.
+//
+// Reescreve o arquivo em vez de manter um segundo template porque o template do
+// ambiente remoto é um só: uma cópia dele aqui envelheceria calada no dia em
+// que o de lá mudasse. Se o ponto de inserção sumir, o teste morre dizendo
+// isso — que é melhor do que subir com a compaction ligada e afirmar o
+// contrário.
+func desligaACompaction(t *testing.T, a *ambienteRemoto) {
+	t.Helper()
+	yml, err := os.ReadFile(a.config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const alvo = "storage:\n"
+	if !strings.Contains(string(yml), alvo) {
+		t.Fatalf("o template do ambiente remoto não tem mais o bloco %q:\n%s", alvo, yml)
+	}
+	novo := strings.Replace(string(yml), alvo, alvo+"  compaction:\n    enabled: false\n", 1)
+	if err := os.WriteFile(a.config, []byte(novo), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// chavesDistintas monta n eventos com n chaves DIFERENTES.
+//
+// O corpus do §12 gira sobre 200 entidades, e o que o fixture da carga do
+// primário precisa é de chave, não de evento: 20 mil eventos sobre 200 chaves
+// deixam a primary com 200 slots ocupados.
+func chavesDistintas(n int) string {
+	var sb strings.Builder
+	for i := 0; i < n; i++ {
+		fmt.Fprintf(&sb, `{"id":"S%06d","_SEQ":1,"Acct-Status-Type":"Stop"}`+"\n", i)
+	}
+	return sb.String()
 }
 
 // TestStatusRemotoFuncionaComOServidorNoAr é o critério que separa este
@@ -207,6 +292,41 @@ func TestStatusMostraOEstadoDaCompaction(t *testing.T) {
 	}
 }
 
+// TestStatusMostraACompactionDesligada é a outra metade do par acima, e sem
+// ela o teste de cima não prova a palavra: `return "ligada"` no corpo do
+// estadoDaCompaction passa por todo oráculo que só sobe com a chave no
+// default, e o `esperaCompactionNoAr` está lá justamente para garantir que o
+// laço esteja de pé quando a saída for lida.
+//
+// O ramo que falta é o que o godoc da função nomeia como o único que importa:
+// "desligada" com a chave ligada no YAML é a falha sticky do writer (§14.14),
+// em que a goroutine parou sozinha e o disco voltou a crescer com o processo de
+// pé. Essa falha não se provoca por fora sem avariar o writer; a chave em false
+// produz o MESMO estado observável — laço parado, servidor no ar — e é o que
+// separa a palavra de um literal.
+func TestStatusMostraACompactionDesligada(t *testing.T) {
+	a := novoAmbienteRemoto(t, 100000)
+	desligaACompaction(t, a)
+	sobeComEntrada(t, a, corpus(t, 20))
+
+	if code := a.roda("status", "--server", a.endereco()); code != 0 {
+		t.Fatalf("exit = %d: %s", code, a.stderr.String())
+	}
+	saida := a.stdout.String()
+
+	// Não há o que esperar aqui, ao contrário do teste de cima: com a chave em
+	// false o laço não sobe NUNCA, e esperar por ele só saberia gastar o prazo
+	// inteiro antes de falhar.
+	ds := estatisticas(t, a).Datasets[0]
+	if ds.Storage.Compaction.Running {
+		t.Fatal("o /v1/stats reporta o laço de pé com storage.compaction.enabled: false")
+	}
+	if got := campoDaSaida(t, saida, "compaction"); got != "desligada" {
+		t.Errorf("compaction = %q com a chave em false; queria \"desligada\", que é a palavra "+
+			"que o operador procura quando o disco cresce com o processo de pé (§14.14)", got)
+	}
+}
+
 // esperaCompactionNoAr bloqueia até o /v1/stats reportar o laço de pé.
 //
 // A subida põe o HTTP no ar ANTES de ligar a compaction (§51), então há uma
@@ -224,6 +344,110 @@ func esperaCompactionNoAr(t *testing.T, a *ambienteRemoto) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("a compaction não subiu em 15s: o default do §78 traz a chave ligada")
+}
+
+// A seção `processo` publica os seis contadores do motor, e eles são do
+// PROCESSO e não de um dataset — repeti-los por dataset publicaria o mesmo
+// número N vezes, e alguém somaria os N.
+//
+// Seis rótulos que o operador lê como verdade do motor precisam de seis
+// valores DIFERENTES para serem provados: com o fixture parado, os seis valem
+// 0, são indistinguíveis entre si, e trocar a fonte de um pelo campo do
+// vizinho não muda uma vírgula da saída. Por isso este teste roda consulta
+// antes de perguntar o status, e roda cada família de plano um número
+// diferente de vezes — 2 full scans, 3 point lookups, 4 bitmap scans, 6
+// uniões, 5 linhas emitidas e 1 truncamento.
+//
+// Os planos são os do §63: chave no WHERE dá point lookup, campo bitmap dá
+// bitmap scan, OR de dois termos indexados dá união, e campo sem índice cai em
+// full scan. Todos batem em valor que não existe, para que a única emissão do
+// fixture seja a da consulta sem WHERE — que estoura o teto de 5 linhas do
+// dataset e produz o truncamento.
+func TestStatusPublicaOsContadoresDoMotorDoProcesso(t *testing.T) {
+	a := sobeComEntrada(t, novoAmbienteRemoto(t, 5), corpus(t, 50))
+
+	consulta := func(vezes int, quer int, sql string) {
+		t.Helper()
+		for i := 0; i < vezes; i++ {
+			if code := a.roda("query", "--server", a.endereco(),
+				"--dataset", "radius_sessions", sql); code != quer {
+				t.Fatalf("exit = %d, quer %d para %q: %s", code, quer, sql, a.stderr.String())
+			}
+		}
+	}
+	// A sem WHERE é a única que emite: 5 linhas, o teto do dataset, e o exit 5
+	// do truncamento.
+	consulta(1, 5, "SELECT id FROM radius_sessions")
+	consulta(1, 0, "SELECT id FROM radius_sessions WHERE username = 'ninguem'")
+	consulta(3, 0, "SELECT id FROM radius_sessions WHERE id = 'chave que nao existe'")
+	consulta(4, 0, "SELECT id FROM radius_sessions WHERE status = 'Fantasma'")
+	consulta(6, 0, "SELECT id FROM radius_sessions WHERE status = 'Fantasma' OR status = 'Outro'")
+
+	if code := a.roda("status", "--server", a.endereco()); code != 0 {
+		t.Fatalf("exit = %d: %s", code, a.stderr.String())
+	}
+	saida := a.stdout.String()
+
+	q := estatisticas(t, a).Process.Query
+	campos := []struct {
+		rotulo string
+		valor  int64
+	}{
+		{"full scans", q.FullScans},
+		{"point lookups", q.PointLookups},
+		{"bitmap scans", q.BitmapScans},
+		{"index unions", q.IndexUnions},
+		{"linhas emitidas", q.Emitted},
+		{"linhas truncadas", q.Truncated},
+	}
+
+	// A guarda vem ANTES da conferência: dois contadores com o mesmo valor
+	// tornam os dois rótulos indistinguíveis, e o teste passaria a aprovar um
+	// comando que lê o campo errado. Se o fixture deixar de separá-los, é o
+	// fixture que precisa mudar — não o oráculo.
+	vistos := map[int64]string{}
+	for _, c := range campos {
+		if outro, ok := vistos[c.valor]; ok {
+			t.Fatalf("%q e %q valem %d: com dois contadores iguais o teste não distingue os rótulos",
+				outro, c.rotulo, c.valor)
+		}
+		vistos[c.valor] = c.rotulo
+	}
+
+	for _, c := range campos {
+		if got := campoDaSaida(t, saida, c.rotulo); got != strconv.FormatInt(c.valor, 10) {
+			t.Errorf("%s = %q na saída e %d no /v1/stats", c.rotulo, got, c.valor)
+		}
+	}
+}
+
+// A carga do primário é o número que diz se o índice primário vai precisar
+// crescer (o godoc de StorageStats põe o sinal em ~0,7), e o status é onde o
+// operador o lê.
+//
+// O fixture tem 12 mil CHAVES por um motivo aritmético: a primary nasce com
+// piso de 1<<20 slots (§5), a carga é ocupados/slots e a saída tem duas casas,
+// então qualquer dataset abaixo de ~5,2 mil chaves imprime "0.00" — e um
+// literal "0.00" no lugar do campo passaria por um oráculo montado sobre um
+// fixture pequeno. Se um dia o piso mudar e este fixture voltar a imprimir
+// zero, o teste falha dizendo isso em vez de aprovar a constante.
+func TestStatusPublicaACargaDoPrimario(t *testing.T) {
+	a := sobeComEntrada(t, novoAmbienteRemoto(t, 100000), chavesDistintas(12000))
+
+	if code := a.roda("status", "--server", a.endereco()); code != 0 {
+		t.Fatalf("exit = %d: %s", code, a.stderr.String())
+	}
+	saida := a.stdout.String()
+
+	ds := estatisticas(t, a).Datasets[0]
+	quer := strconv.FormatFloat(ds.Storage.PrimaryLoadFactor, 'f', 2, 64)
+	if quer == "0.00" {
+		t.Fatalf("a carga saiu 0.00 com %d rows (fator %v): neste fixture o campo já não se "+
+			"distingue de uma constante", ds.Storage.Rows, ds.Storage.PrimaryLoadFactor)
+	}
+	if got := campoDaSaida(t, saida, "carga do primário"); got != quer {
+		t.Errorf("carga do primário = %q na saída e %q no /v1/stats", got, quer)
+	}
 }
 
 // `datasets` responde a pergunta mais barata do §96 — o que este servidor
@@ -253,6 +477,21 @@ func TestDatasetsListaOQueOServidorServe(t *testing.T) {
 			t.Errorf("a linha do dataset não traz %q: %q", quer, linha)
 		}
 	}
+
+	// A coluna TIMEOUT é o prazo EFETIVO da consulta escrito para humano, e é
+	// por ele que o operador decide se a query que ele vai mandar cabe no
+	// dataset. Conferi-la é conferir a célula: um "0s" fixo — ou o prazo na
+	// coluna errada — diria ao operador que toda consulta morre na largada.
+	celulas := celulasDaLinha(linha)
+	if len(celulas) != 5 {
+		t.Fatalf("a linha saiu com %d células, quer 5 (dataset, key, colunas, maxRows, timeout): %q", len(celulas), linha)
+	}
+	if d.TimeoutMs == 0 {
+		t.Fatal("o /v1/metadata respondeu timeout 0: contra ele um \"0s\" fixo passaria")
+	}
+	if got := prazoDaSaida(t, celulas[4]); got != time.Duration(d.TimeoutMs)*time.Millisecond {
+		t.Errorf("TIMEOUT = %q (%v) na saída e %d ms no /v1/metadata", celulas[4], got, d.TimeoutMs)
+	}
 }
 
 // `inspect` é o comando do §96 que detalha o dataset, e o que o operador
@@ -260,7 +499,13 @@ func TestDatasetsListaOQueOServidorServe(t *testing.T) {
 // pelo qual ela é escrita no SQL e o ÍNDICE declarado — que é o que separa uma
 // consulta com lookup de uma que cai em full scan.
 func TestInspectDetalhaColunasEIndices(t *testing.T) {
-	a := servidorComDadosNoAr(t, 10)
+	// O corpus do §12 só produz campo fora do schema em ~1% dos eventos, então
+	// com dez deles a tabela sairia sem NENHUMA coluna auto — e a coluna AUTO
+	// seria um traço fixo que nada distingue. O evento a mais fixa isso: campo
+	// que o YAML não declara, com `unknownFields: include`, é coluna auto por
+	// construção.
+	a := sobeComEntrada(t, novoAmbienteRemoto(t, 100000),
+		corpus(t, 10)+`{"id":"S-auto","_SEQ":1,"Campo-Fora-Do-Schema":"presente"}`+"\n")
 
 	if code := a.roda("inspect", "--server", a.endereco(), "radius_sessions"); code != 0 {
 		t.Fatalf("exit = %d: %s", code, a.stderr.String())
@@ -278,12 +523,22 @@ func TestInspectDetalhaColunasEIndices(t *testing.T) {
 	if campoDaSaida(t, saida, "maxRows") != strconv.Itoa(d.MaxRows) {
 		t.Errorf("maxRows = %q, queria %d", campoDaSaida(t, saida, "maxRows"), d.MaxRows)
 	}
+	// O timeout é o outro limite EFETIVO, e sai pelo mesmo argumento do
+	// maxRows: quem consulta precisa do prazo que VAI VALER. Escrito para
+	// humano, ele tem de voltar ao milissegundo que a rota respondeu.
+	if d.TimeoutMs == 0 {
+		t.Fatal("o /v1/metadata respondeu timeout 0: contra ele um \"0s\" fixo passaria")
+	}
+	if got := prazoDaSaida(t, campoDaSaida(t, saida, "timeout")); got != time.Duration(d.TimeoutMs)*time.Millisecond {
+		t.Errorf("timeout = %v na saída e %d ms no /v1/metadata", got, d.TimeoutMs)
+	}
 
 	// Toda coluna do metadata sai, e sai com os quatro atributos: uma tabela
 	// que omitisse uma coluna mandaria o operador concluir que ela não existe.
 	if len(d.Columns) < 10 {
 		t.Fatalf("o fixture tem %d colunas: poucas para distinguir tabela de amostra", len(d.Columns))
 	}
+	var auto int
 	for _, c := range d.Columns {
 		linha := linhaDaSaida(t, saida, c.Name)
 		if !strings.Contains(linha, c.Type) || !strings.Contains(linha, c.JDBC) || !strings.Contains(linha, c.Index) {
@@ -292,6 +547,26 @@ func TestInspectDetalhaColunasEIndices(t *testing.T) {
 		if c.Alias != nil && !strings.Contains(linha, *c.Alias) {
 			t.Errorf("coluna %q sem o alias %q: %q", c.Name, *c.Alias, linha)
 		}
+
+		// A coluna AUTO diz se o TIPO daquela coluna foi declarado no YAML ou
+		// fixado pela primeira observação — e é o que explica ao operador por
+		// que um campo aparece como "unknown", ou por que ele não pode receber
+		// índice. Um traço fixo em toda linha apagaria a distinção inteira.
+		celulas := celulasDaLinha(linha)
+		if len(celulas) != 6 {
+			t.Fatalf("a linha de %q saiu com %d células, quer 6 (coluna, alias, tipo, jdbc, índice, auto): %q",
+				c.Name, len(celulas), linha)
+		}
+		quer := "-"
+		if c.Auto {
+			quer, auto = "sim", auto+1
+		}
+		if celulas[5] != quer {
+			t.Errorf("coluna %q com AUTO = %q e auto=%v no /v1/metadata: %q", c.Name, celulas[5], c.Auto, linha)
+		}
+	}
+	if auto == 0 {
+		t.Fatal("nenhuma coluna auto no fixture: a coluna AUTO seria um traço fixo e o teste não provaria nada")
 	}
 
 	// Os dois índices declarados pelo fixture do §12 aparecem com o nome que o
@@ -302,6 +577,48 @@ func TestInspectDetalhaColunasEIndices(t *testing.T) {
 	}
 	if l := linhaDaSaida(t, saida, "NAS-IP-Address"); !strings.Contains(l, "hash") {
 		t.Errorf("o índice hash não aparece na linha: %q", l)
+	}
+}
+
+// A guarda de cardinalidade do `inspect` não é alcançável pelo servidor: o
+// filtro do §67 responde exatamente um dataset ou recusa com 404. Ela existe
+// para o dia em que o protocolo mudar sob o comando — e é justamente isso que
+// o comentário dela afirma, sem que nada verificasse.
+//
+// O oráculo é um servidor de mentira porque não há outro jeito de produzir a
+// resposta ilegítima. O que se afere é o desfecho: o comando RECUSA, com o
+// código de dataset, sem escrever tabela nenhuma no stdout. Aceitar a resposta
+// e imprimir o primeiro elemento seria descrever um dataset que o operador não
+// pediu, sob o nome que ele pediu.
+func TestInspectRecusaMetadataQueNaoTrazExatamenteUmDataset(t *testing.T) {
+	casos := []struct {
+		nome     string
+		datasets []protocolo.DatasetMeta
+	}{
+		{"nenhum", nil},
+		{"dois", []protocolo.DatasetMeta{{Name: "radius_sessions"}, {Name: "outro"}}},
+	}
+	for _, c := range casos {
+		t.Run(c.nome, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", protocolo.ContentTypeJSON)
+				if err := json.NewEncoder(w).Encode(protocolo.Metadados{Datasets: c.datasets}); err != nil {
+					t.Errorf("escrevendo a resposta de mentira: %v", err)
+				}
+			}))
+			defer srv.Close()
+
+			a := novoAmbiente(t)
+			if code := a.roda("inspect", "--server", srv.URL, "radius_sessions"); code != 3 {
+				t.Fatalf("exit = %d, quer 3 (dataset): %s", code, a.stderr.String())
+			}
+			if a.stdout.Len() != 0 {
+				t.Errorf("o comando descreveu um dataset a partir de resposta ilegítima: %q", a.stdout.String())
+			}
+			if !strings.Contains(a.stderr.String(), strconv.Itoa(len(c.datasets))+" datasets") {
+				t.Errorf("a mensagem não diz quantos datasets vieram:\n%s", a.stderr.String())
+			}
+		})
 	}
 }
 
