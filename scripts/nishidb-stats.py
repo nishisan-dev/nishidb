@@ -218,6 +218,9 @@ def desenha(base: str, saude: dict, stats: dict, m: Amostra, ant: Amostra | None
     estado = saude.get("status", "?")
     print(regua(f"NishiDB {base}"))
     partes = [c("32" if estado == "UP" else "31", estado)]
+    versao = stats.get("process", {}).get("version")
+    if versao:
+        partes.append(f"versao={versao}")
     for chave in ("kafka", "storage"):
         if chave in saude:
             partes.append(f"{chave}={saude[chave]}")
