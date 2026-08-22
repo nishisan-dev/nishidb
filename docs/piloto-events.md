@@ -138,3 +138,21 @@ filesystem, garbage em 29%.
 - **Sem `ORDER BY`, `GROUP BY` ou agregações** na v1 (§9, §59).
 - **O binário não sabe dizer sua versão**: não há `--version`, então não há como
   correlacionar o que está no ar com um commit.
+
+## Armadilha do ambiente: o proxy corporativo e o loopback
+
+`/root/.bashrc` neste host exporta `http_proxy=http://10.215.39.5:8080`, e o
+`.bashrc` só vale em shell **interativo**. Qualquer ferramenta que honre essa
+variável manda a consulta a `127.0.0.1:9142` para o proxy da empresa, que
+responde **403** — e o sintoma engana, porque parece o servidor fora do ar.
+
+O detalhe cruel é que o erro **não aparece por ssh não-interativo**
+(`ssh host 'comando'` não lê o `.bashrc`), só para quem digita o comando no
+terminal. Diagnóstico que funciona para o script e falha para a pessoa.
+
+O `scripts/nishidb-stats.py` desliga a descoberta de proxy por construção
+(`ProxyHandler({})`). Para `curl` na mão, use `--noproxy '*'`:
+
+```bash
+curl -s --noproxy '*' 127.0.0.1:9142/v1/stats
+```
