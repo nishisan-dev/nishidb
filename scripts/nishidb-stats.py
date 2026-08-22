@@ -282,8 +282,43 @@ def desenha(base: str, saude: dict, stats: dict, m: Amostra, ant: Amostra | None
         if aplicados is not None and ev is not None and aplicados != ev:
             print(f"  {'  aplicados':<22} {milhar(aplicados):>16}"
                   f"   " + c("33", f"({milhar(ev - aplicados)} não viraram estado)"))
-        for rotulo, chave, serie in (("descartados", "discarded", "nishidb_ingest_invalid_total"),
-                                     ("stale", "stale", "nishidb_ingest_stale_total"),
+        # `nishidb_ingest_invalid_total` quebra por `motivo` desde a Task A5
+        # (internal/kafka/metricas.go): cada categoria §101 de evento ruim
+        # tem série própria, e EVENT_TOO_LARGE — a cauda de chave que estoura
+        # MaxKeySize, a própria razão da issue #15 — passa a aparecer NOMEADA
+        # em vez de escondida dentro de um total misturado com INVALID_JSON e
+        # as outras quatro. Um binário anterior a esta task publica o
+        # contador só com `dataset`: por_rotulo devolve {} e o painel cai de
+        # volta no total plano, sem quebrar.
+        descartados = ing.get("discarded")
+        if descartados is None:
+            descartados = m.valor("nishidb_ingest_invalid_total", dataset=nome)
+        por_motivo = m.por_rotulo("nishidb_ingest_invalid_total", "motivo")
+
+        # O sinal forte é a TAXA, não o total: um piloto com a cauda do item 4
+        # de docs/piloto-events.md já sobe com descartados > 0 no primeiro
+        # segundo de vida, e reagir a isso a cada leitura seria alarme
+        # permanente por uma história já conhecida. Subindo ENTRE DUAS
+        # amostras do --watch é descarte NOVO acontecendo agora — só ele
+        # justifica o alerta vermelho. A soma cobre todo motivo e todo
+        # dataset (mesmo padrão de nishidb_kafka_lag/nishidb_query_errors
+        # acima); um único dataset por instância, como o piloto de hoje, não
+        # sente a diferença.
+        total_atual = m.soma("nishidb_ingest_invalid_total")
+        total_anterior = ant.soma("nishidb_ingest_invalid_total") if ant else None
+        subindo = dt > 0 and total_anterior is not None and total_atual > total_anterior
+        if subindo:
+            alerta = "  " + c("31", "← SUBINDO agora, investigar")
+        elif descartados and descartados > 0:
+            alerta = "  " + c("33", "← histórico conhecido (ver motivo abaixo)")
+        else:
+            alerta = ""
+        print(f"  {'  descartados':<22} {milhar(descartados):>16}{alerta}")
+        for motivo, n in sorted(por_motivo.items(), key=lambda kv: -kv[1]):
+            if n > 0:
+                print(f"  {'    ' + motivo:<22} {milhar(n):>16}")
+
+        for rotulo, chave, serie in (("stale", "stale", "nishidb_ingest_stale_total"),
                                      ("falhos", None, "nishidb_ingest_failed_total")):
             v = ing.get(chave) if chave else None
             if v is None:
