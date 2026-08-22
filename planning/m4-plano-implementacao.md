@@ -1173,9 +1173,18 @@ git commit -m "Aposenta o segmento por rename, e ensina o Open a reparar as duas
 > 2. **O disco estabiliza sozinho.** Sem chamada de API: a carga continua e o
 >    tamanho do diretório **para de crescer**, medido no filesystem ao longo do
 >    tempo. É a diferença entre "a compaction roda" e "a compaction resolve".
-> 3. **O operador vê acontecer.** `nishidb_storage_bytes` cai no `/metrics` e
->    `nishidb_compaction_bytes_written` sobe — pela porta HTTP, não por leitura
->    de campo Go. Se a série não se move, o painel do M4 não serve para nada.
+> 3. **O operador vê acontecer.** `nishidb_storage_bytes` **cai no `/metrics`**,
+>    lida pela porta HTTP e não por campo Go. Se a série não se move, o painel
+>    do M4 não serve para nada.
+>
+>    **Errata do orquestrador.** A primeira versão deste item exigia também
+>    `nishidb_compaction_bytes_written` subindo. Era **trabalho da Task 8**:
+>    as três séries de compaction do §92 estão em
+>    [nomes.go:48](../internal/metrics/nomes.go:48) sob o comentário "sem
+>    alimentador até o M4", e dar-lhes alimentador é literalmente o escopo
+>    dela. Exigi-la aqui era pedir que a Task 7 fizesse o trabalho da seguinte.
+>    **A metade que faltava vira critério de aceite da Task 8**, com o e2e
+>    lendo a série pela porta.
 > 4. **Consultar durante a compaction devolve o certo.** `POST /v1/query`
 >    enquanto ela roda, com o resultado conferido — é a promessa do §51, e a
 >    compaction reescreve locations sob os pés do leitor.
@@ -1294,6 +1303,20 @@ git commit -m "Elege candidato pelo §53 e dá à compaction um ciclo de vida qu
 ---
 
 ### Task 8: as três séries de compaction do §92
+
+> **CRITÉRIO DE ACEITE: a série tem de se mover, lida pela porta. NORMATIVO.**
+>
+> Herdado da Task 7 pela errata do item 3 do e2e dela. Não basta registrar a
+> métrica: o e2e pelo binário tem de mostrar
+> `nishidb_compaction_bytes_written` **subindo no `/metrics`** enquanto a
+> compaction roda, por requisição HTTP. Nome sem alimentador é o débito 16, e
+> alimentador sem prova é a mesma coisa um nível acima.
+>
+> Com a série publicada, o log `compaction.segmento_aposentado`
+> ([compaction.go:695](../internal/storage/compaction.go:695)) deixa de ser "o
+> único lugar em que estes três números aparecem" — reveja o comentário dele,
+> que hoje afirma isso.
+
 
 **Files:**
 - Modify: `internal/storage/compaction.go`, `internal/server/metricas_dataset.go`
