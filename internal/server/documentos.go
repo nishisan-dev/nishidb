@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/nishisan-dev/nishidb/internal/buildinfo"
 	"github.com/nishisan-dev/nishidb/internal/metrics"
 	"github.com/nishisan-dev/nishidb/internal/protocolo"
 	"github.com/nishisan-dev/nishidb/internal/schema"
@@ -99,19 +100,22 @@ func (s *Servidor) handleStats(w http.ResponseWriter, r *http.Request) {
 	em := s.eng.Metrics()
 	pm := s.eng.PlanMetrics()
 	out := protocolo.Estatisticas{
-		Process: protocolo.ProcessoStats{Query: protocolo.MotorStats{
-			FullScans:    pm.FullScan.Load(),
-			PointLookups: pm.PointLookup.Load(),
-			BitmapScans:  pm.BitmapScan.Load(),
-			IndexUnions:  pm.IndexUnion.Load(),
-			Candidates:   em.Candidates.Load(),
-			Rejected:     em.Rejected.Load(),
-			DeadSkipped:  em.DeadSkipped.Load(),
-			TypeMismatch: em.TypeMismatch.Load(),
-			Emitted:      em.Emitted.Load(),
-			Truncated:    em.Truncated.Load(),
-			Canceled:     em.Canceled.Load(),
-		}},
+		Process: protocolo.ProcessoStats{
+			Version: buildinfo.String(),
+			Query: protocolo.MotorStats{
+				FullScans:    pm.FullScan.Load(),
+				PointLookups: pm.PointLookup.Load(),
+				BitmapScans:  pm.BitmapScan.Load(),
+				IndexUnions:  pm.IndexUnion.Load(),
+				Candidates:   em.Candidates.Load(),
+				Rejected:     em.Rejected.Load(),
+				DeadSkipped:  em.DeadSkipped.Load(),
+				TypeMismatch: em.TypeMismatch.Load(),
+				Emitted:      em.Emitted.Load(),
+				Truncated:    em.Truncated.Load(),
+				Canceled:     em.Canceled.Load(),
+			},
+		},
 		Datasets: make([]protocolo.DatasetStats, 0, len(s.datasets)),
 	}
 

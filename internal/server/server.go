@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nishisan-dev/nishidb/internal/buildinfo"
 	"github.com/nishisan-dev/nishidb/internal/config"
 	"github.com/nishisan-dev/nishidb/internal/kafka"
 	"github.com/nishisan-dev/nishidb/internal/logging"
@@ -276,7 +277,8 @@ func (s *Servidor) Roda(ctx context.Context, pprofAddr string) error {
 	if pprofAddr != "" {
 		s.sobePprof(pprofAddr)
 	}
-	s.log.Info("query.pronta", "consultas disponíveis", "datasets", len(s.datasets), "endereco", s.cfg.Endereco())
+	s.log.Info("query.pronta", "consultas disponíveis",
+		"datasets", len(s.datasets), "endereco", s.cfg.Endereco(), "versao", buildinfo.String())
 	s.ligaCompaction(ctx)
 
 	var wg sync.WaitGroup
