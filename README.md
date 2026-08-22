@@ -16,8 +16,12 @@ rows**, contra 389 KiB com 1 milhão — 8× de dados, 1,9% de heap a mais.
 **M1, M2, a Fase 6 do M3 e o M4 completos.** Ingestão por arquivo e por
 **Kafka**, materialização, storage durável com recovery de dados E de posição no
 tópico, índices, SQL, saída NDJSON, um servidor que **consulta enquanto ingere**
-pelo protocolo remoto do §67, e a **compaction** que faz o disco parar de
-crescer para sempre — tudo pelo binário. Os critérios de aceite estão em
+pelo protocolo remoto do §67, e a **compaction** que devolve ao filesystem o
+espaço dos records superados — tudo pelo binário. Na rodada de aceite do M4 ela
+devolveu **3,68 GB** e derrubou o crescimento de disco de 91 para 26 MiB/min;
+**parar de crescer, ela ainda não parou** nessa escala, e o
+[aceite do M4](docs/aceite-m4.md) mostra a recontagem. Os critérios de aceite
+estão em
 [`docs/aceite-m1.md`](docs/aceite-m1.md),
 [`docs/aceite-m2.md`](docs/aceite-m2.md),
 [`docs/aceite-fase6.md`](docs/aceite-fase6.md) e
@@ -339,6 +343,14 @@ até o ENOSPC. A compaction do §53-55 é o que devolve esse espaço, e ela roda
   depois que o manifest concorda em não precisar deles. Um `kill -9` no meio
   disso deixa um estado que a próxima abertura repara sozinha, restaurando ou
   removendo o arquivo conforme o manifest.
+
+**O que foi medido, e até onde.** Na rodada de aceite do M4 — 1 milhão de
+entidades, 8,4× o key set reescrito, segmentos de 64 MiB — a compaction devolveu
+**3,68 GB** em 104 aposentadorias e derrubou o crescimento de disco de 91 para
+26 MiB/min ao longo da janela. **O disco não parou de crescer nessa escala**, e
+o gate `disk_plateau` reprova quando recontado sem a amostra colhida fora da
+janela de carga. O número, a recontagem e o que falta medir estão no
+[aceite do M4](docs/aceite-m4.md).
 
 Nada disso é rota mutante: **não existe** `POST /v1/compact` nem
 `nishidb compact` nesta versão. A política é a configuração, e o único ato do
