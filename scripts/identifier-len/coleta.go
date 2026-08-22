@@ -72,7 +72,7 @@ func Coleta(ctx context.Context, cfg ConfigColeta, prog Progresso) (*Histograma,
 
 	inicioRodada := time.Now()
 	var lidos, desdeOUltimoReport int64
-	for !faltaConsumir(restante) {
+	for !tudoConsumido(restante) {
 		if ctx.Err() != nil {
 			return hist, ctx.Err()
 		}
@@ -115,7 +115,11 @@ func Coleta(ctx context.Context, cfg ConfigColeta, prog Progresso) (*Histograma,
 	return hist, nil
 }
 
-func faltaConsumir(restante map[int32]int64) bool {
+// tudoConsumido reporta se todas as partições já alcançaram o watermark
+// capturado na partida (nenhuma tem registros restantes). O nome antigo,
+// faltaConsumir, devolvia exatamente este valor — true quando NADA falta —,
+// o inverso do que o nome prometia.
+func tudoConsumido(restante map[int32]int64) bool {
 	for _, r := range restante {
 		if r > 0 {
 			return false
