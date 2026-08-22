@@ -193,6 +193,38 @@ func TestChavesDeRuntimeSemImplementacaoSaoNomeadas(t *testing.T) {
 	}
 }
 
+// storage.durability (§47) é aceita e ignorada (débito 50): só existe o
+// SyncEveryPut interno, que o CLI nunca liga. Quem escreve `interval: 100ms`
+// conclui uma janela de durabilidade que o binário não dá — a chave precisa
+// ser NOMEADA na subida, no mesmo molde do débito 15 em ChavesDeRuntimeIgnoradas.
+func TestChaveDeStorageDurabilitySemImplementacaoENomeada(t *testing.T) {
+	c, err := CarregaConfig(escreveConfigComStorage(t,
+		"  durability:\n    mode: sync\n    interval: 100ms\n", ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	quer := []string{"storage.durability"}
+	got := c.ChavesDeStorageIgnoradas()
+	if len(got) != len(quer) {
+		t.Fatalf("chaves = %v, quer %v", got, quer)
+	}
+	for i := range quer {
+		if got[i] != quer[i] {
+			t.Fatalf("chaves = %v, quer %v", got, quer)
+		}
+	}
+
+	// O bloco §78 sem durability não avisa nada — aviso que aparece sempre é
+	// ruído, e ruído treina o operador a ignorar.
+	c, err = CarregaConfig(escreveConfig(t, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.ChavesDeStorageIgnoradas(); len(got) != 0 {
+		t.Fatalf("avisos = %v, quer nenhum", got)
+	}
+}
+
 // O bloco storage.compaction era aceito e ignorado. Ausente ele tem de valer
 // os defaults da spec, e não "desligado": o §53 fixa minimumLiveRatio em 0.50
 // e o §78 traz `enabled: true` no exemplo. Um arquivo que não fala de

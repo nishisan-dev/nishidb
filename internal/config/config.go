@@ -63,6 +63,17 @@ type Config struct {
 			Enabled          *bool    `yaml:"enabled"`
 			MinimumLiveRatio *float64 `yaml:"minimumLiveRatio"`
 		} `yaml:"compaction"`
+
+		// Durability é o bloco §47 (débito 50): `mode: sync|batch|async` com
+		// `interval`, e nenhum dos dois tem implementação — só existe o
+		// SyncEveryPut interno, que o CLI nunca liga. Os campos ficam CRUS
+		// (string, sem parse de duração nem validação de enum) porque aqui só
+		// se detecta PRESENÇA para poder avisar; interpretar `mode`/`interval`
+		// de verdade é o resto do débito 50, e não é escopo desta chave.
+		Durability struct {
+			Mode     string `yaml:"mode"`
+			Interval string `yaml:"interval"`
+		} `yaml:"durability"`
 	} `yaml:"storage"`
 
 	Datasets struct {
@@ -89,7 +100,8 @@ type Config struct {
 	//
 	// As demais chaves continuam aceitas e sem efeito (débito 15), mas não em
 	// silêncio: quem escreve `memoryTarget: 1GiB` conclui que há um teto de
-	// memória, e não há. A subida avisa, como já faz com storage.durability.
+	// memória, e não há. A subida avisa — no mesmo molde do aviso que
+	// storage.durability recebe (débito 50, ChavesDeStorageIgnoradas).
 	Runtime struct {
 		MemoryTarget        string `yaml:"memoryTarget"`
 		ManagedMemoryTarget string `yaml:"managedMemoryTarget"`
@@ -313,7 +325,8 @@ func (c *Config) BindExposto() bool {
 // A lista existe porque configuração que mente é pior que configuração
 // ausente: quem escreve `memoryTarget: 1GiB` e não recebe aviso nenhum conclui
 // que há um teto de memória, e vai dimensionar a máquina por ele. É a mesma
-// doutrina aplicada a storage.durability no M2.
+// doutrina que ChavesDeStorageIgnoradas, logo abaixo, aplica a
+// storage.durability (débito 50).
 func (c *Config) ChavesDeRuntimeIgnoradas() []string {
 	var out []string
 	if c.Runtime.MemoryTarget != "" {
@@ -326,6 +339,23 @@ func (c *Config) ChavesDeRuntimeIgnoradas() []string {
 		out = append(out, "runtime.query.maxBufferPerQuery")
 	}
 	return out
+}
+
+// ChavesDeStorageIgnoradas nomeia storage.durability quando presente no
+// arquivo: a seção é aceita e não tem implementação nesta versão (débito 50,
+// §47) — só existe o SyncEveryPut interno, que o CLI nunca liga.
+//
+// O bloco entra como UMA chave, e não uma por sub-campo (`mode`, `interval`):
+// ao contrário de runtime, onde query.maxConcurrent TEM leitor e as demais
+// chaves são as exceções que precisam ser nomeadas uma a uma, aqui NADA do
+// bloco tem efeito — nomear a seção inteira já diz tudo que há para dizer, e
+// nomear `mode`/`interval` em separado sugeriria que um dos dois poderia, um
+// dia, valer sozinho.
+func (c *Config) ChavesDeStorageIgnoradas() []string {
+	if c.Storage.Durability.Mode == "" && c.Storage.Durability.Interval == "" {
+		return nil
+	}
+	return []string{"storage.durability"}
 }
 
 // IntervaloDeCheckpoint é a janela de reprocessamento em caso de crash.

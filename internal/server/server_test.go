@@ -416,3 +416,17 @@ func TestChaveDeRuntimeIgnoradaApareceNaSubida(t *testing.T) {
 		t.Fatalf("a chave sem implementação não foi nomeada: %s", saida)
 	}
 }
+
+// storage.durability (débito 50) é aceita e ignorada — só existe o
+// SyncEveryPut interno, que o CLI nunca liga. Nomeá-la na subida é a mesma
+// doutrina do débito 15: chave que mente sem aviso é pior que chave ausente.
+func TestStorageDurabilityIgnoradaApareceNaSubida(t *testing.T) {
+	a := novoAmbienteComStorage(t, "\nserver:\n  bind: 127.0.0.1\n  port: %d\n",
+		"  durability:\n    mode: sync\n    interval: 100ms\n")
+	a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))
+
+	saida := sobeCapturandoLog(t, a)
+	if !strings.Contains(saida, "storage.durability") {
+		t.Fatalf("a chave sem implementação não foi nomeada: %s", saida)
+	}
+}
