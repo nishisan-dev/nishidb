@@ -785,15 +785,38 @@ func TestCompactionDesligadaRegistraQueNinguemEstavaDevolvendoDisco(t *testing.T
 // porque sem segmento selado e sem row superada a segunda rodada não teria
 // candidato, e a asserção final passaria por vacuidade em vez de por medida.
 //
-// ESCALA: 300 entidades e segmentos de 128 KiB em TempDir. O tamanho do
-// segmento é o que garante a rotação ainda dentro do LOAD, em vez de depender
-// de quantos eventos o STEADY conseguiu emitir na máquina que está rodando a
-// suíte.
+// ESCALA: 300 entidades e segmentos de 128 KiB em TempDir. Quem sela segmento
+// aqui é o STEADY, não o LOAD — a versão anterior deste bloco afirmava o
+// contrário, e o mecanismo a desmente. MEDIDO nesta mesma Config com
+// SteadyDuration = 0: o LOAD termina com load.events = 300 e
+// segments_total = 1, que é o CORRENTE, com 84.427 B dos 131.072 B do teto
+// (header de 64 B mais os 300 records da carga, ~281 B cada). Rodado assim, o
+// teste morre na primeira premissa — e morre certo, porque nenhum arquivo foi
+// selado.
+//
+// O que os 128 KiB compram é ENCURTAR o STEADY necessário, não eliminar a
+// dependência da vazão da máquina: com eles o primeiro selo custa da ordem de
+// 130 a 170 eventos de regime (medido aqui: 127 eventos ainda dão 1 segmento,
+// 180 já dão 2), contra os 4 MiB do baseConfig, onde os mesmos 200 ms rendem
+// 5.196 eventos NESTA máquina e nenhum selo. A dependência continua de pé, é a
+// duração abaixo que a paga, e é ela — não o SegmentSize — a alavanca de quem
+// for calibrar este teste numa máquina mais lenta. Escrever o contrário é o
+// mesmo defeito pelo qual a dica do -checkpoint-every foi reprovada: causa
+// nomeada que o mecanismo desmente, e uma investigação inteira no lugar errado.
 func TestCompactionEmDatasetReabertoDevolveDiscoDeVerdade(t *testing.T) {
 	cfg := baseConfig(t, 300)
 	cfg.SegmentSize = 128 << 10
 	cfg.SteadyDuration = 200 * time.Millisecond
-	cfg.SteadyRate = 0 // sem limite: o teste não pode depender de relógio
+	// Sem limitador. A fase continua limitada pelo RELÓGIO da linha acima, e
+	// portanto pela vazão: tirar o rate é o que dá o MÁXIMO de eventos dentro
+	// da janela, não o que torna a contagem determinística. A margem que sobra
+	// é medida, não postulada — quatro rodadas de 200 ms aqui deram de 2.527 a
+	// 3.200 eventos e de 11 a 14 segmentos, contra os ~150 do primeiro selo;
+	// aos 30 ms a premissa passou nas quatro rodadas medidas e aos 20 ms
+	// reprovou em três delas, ou seja ~6x de folga em DURAÇÃO nesta máquina.
+	// Quem quiser a fase independente de vazão tem de limitá-la por EVENTOS
+	// (phaseArgs.events), que é mecanismo de produção e não está neste débito.
+	cfg.SteadyRate = 0
 	cfg.SampleEveryEvents = 200
 
 	montagem, err := Run(cfg)
@@ -802,7 +825,9 @@ func TestCompactionEmDatasetReabertoDevolveDiscoDeVerdade(t *testing.T) {
 	}
 	if montagem.StoreStats.SegmentsTotal < 2 {
 		t.Fatalf("a montagem terminou com %d segmento(s): sem um SELADO a D6 recusa todo candidato e a "+
-			"rodada seguinte não teria o que compactar", montagem.StoreStats.SegmentsTotal)
+			"rodada seguinte não teria o que compactar. Quem sela aqui é o STEADY: em %s esta máquina "+
+			"emitiu %d eventos e não rodou o segmento — a alavanca é SteadyDuration, não SegmentSize",
+			montagem.StoreStats.SegmentsTotal, cfg.SteadyDuration, montagem.Steady.Events)
 	}
 	if montagem.Steady.Updated == 0 {
 		t.Fatal("a montagem não produziu update nenhum: sem row superada não há garbage para devolver")
@@ -966,6 +991,12 @@ func TestDirBytesAbortaQuandoNaoConsegueMedirUmaEntrada(t *testing.T) {
 // fs.ErrNotExist. E o arquivo vivo se chama "a-vivo.dat" para ordenar ANTES do
 // subdiretório na listagem: assim a soma parcial já vale 77 quando a recursão
 // falha, e a asserção do zero deixa de ser vácua.
+//
+// O `t.Skip` sob root é o preço de medir permissão de verdade, e ele deixaria o
+// ramo sem oráculo em CI que rode como root. Não deixa: o caso "subdiretório
+// que não é diretório" do TestSomaDasEntradasSoIgnoraOQueSumiu cobra a MESMA
+// decisão por ENOTDIR, que independe de euid. Este teste é o que prova o ramo
+// contra o sistema de arquivos real; aquele é o que continua cobrando sob root.
 func TestDirBytesAbortaQuandoNaoConsegueMedirUmSubdiretorio(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root ignora os bits do diretório: sem EACCES não há o que provar")
@@ -1036,14 +1067,15 @@ func TestAmostraAbortaAFaseQuandoNaoConsegueMedirODisco(t *testing.T) {
 // varredura, e aqueles bytes de fato não estão mais no disco. Contá-los como
 // erro reprovaria a compaction por ter funcionado.
 //
-// Os três casos são os três ramos por entrada, e a suíte não os alcançava por
-// arquivo real — o ENOENT do `Info` só acontece se o arquivo desaparecer ENTRE
-// o `ReadDir` e o `stat`, corrida que o teste não controla. Descrevendo as
-// entradas, cada ramo responde: sumiu não conta, sumiu na recursão também não,
-// e QUALQUER outro erro aborta. A entrada viva ANTES da descrita faz dois
+// Os quatro casos são os quatro ramos por entrada, e a suíte não os alcançava
+// por arquivo real — o ENOENT do `Info` só acontece se o arquivo desaparecer
+// ENTRE o `ReadDir` e o `stat`, corrida que o teste não controla. Descrevendo
+// as entradas, cada ramo responde: sumiu não conta, sumiu na recursão também
+// não, o Info que falhou por outro motivo aborta, e a recursão que falhou por
+// outro motivo aborta igual. A entrada viva ANTES da descrita faz dois
 // trabalhos: impede um `return 0, nil` preguiçoso de passar nos dois primeiros
-// casos, e no terceiro dá conteúdo à soma parcial — devolver 77 junto do erro
-// entrega ao chamador um número que parece medida e não é.
+// casos, e nos dois que ABORTAM dá conteúdo à soma parcial — devolver 77 junto
+// do erro entrega ao chamador um número que parece medida e não é.
 func TestSomaDasEntradasSoIgnoraOQueSumiu(t *testing.T) {
 	raiz := t.TempDir()
 	if err := os.WriteFile(filepath.Join(raiz, "vivo.dat"), make([]byte, 77), 0o644); err != nil {
@@ -1074,6 +1106,19 @@ func TestSomaDasEntradasSoIgnoraOQueSumiu(t *testing.T) {
 		{
 			nome:    "entrada ilegível: instrumento cego aborta",
 			entrada: entradaDescrita{nome: "seg-10.dat", erroDoInfo: fs.ErrPermission},
+			wantErr: true,
+		},
+		{
+			// O ramo NÃO-ENOENT da RECURSÃO, e aqui ele não depende de euid: a
+			// entrada se descreve como diretório apontando para o ARQUIVO
+			// vivo, então o os.ReadDir da recursão falha com ENOTDIR — que não
+			// é fs.ErrNotExist e que root também leva. O
+			// TestDirBytesAbortaQuandoNaoConsegueMedirUmSubdiretorio cobre o
+			// mesmo ramo por permissão real e PULA sob root; sem este caso,
+			// trocar aquele `return 0, err` por `continue` sobreviveria em CI
+			// que rode como root, que é o normal em container.
+			nome:    "subdiretório que não é diretório: recursão aborta",
+			entrada: entradaDescrita{nome: "vivo.dat", diretorio: true},
 			wantErr: true,
 		},
 	}

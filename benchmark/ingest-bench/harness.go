@@ -1317,6 +1317,18 @@ func avaliaGateDeDisco(serie []int64) GateResult {
 		// do primeiro dente é o esgotamento do primeiro segmento selado — ver a
 		// aritmética junto de fracaoDeCrescimentoTolerada —, e mandar o
 		// operador mexer no checkpoint o faria calibrar o parâmetro errado.
+		//
+		// RESSALVA sobre os dois artefatos citados neste arquivo: eles são
+		// ANTERIORES aos campos que a dica manda ler. O store_stats de
+		// gate-disco-compaction-{on,off}-50k-20260822.json tem só row_count,
+		// segments_total, primary_load_factor e disk_bytes — quem seguir a
+		// dica contra ELES não acha compaction_running nem
+		// compaction_bytes_read, e a ausência ali não significa compaction
+		// parada. Rodadas novas os trazem. Os dois JSON não foram regerados de
+		// propósito: são registro de execução, é sobre a série de 600 amostras
+		// deles que os números do bloco acima são conferíveis, e regerá-los
+		// invalidaria cada um. É a mesma decisão da errata do M1, registrada
+		// em benchmark/baselines/aceite-8m-20260815.md.
 		g.Detail += "; o disco continua subindo em regime, que é o §86 caminhando para o ENOSPC. " +
 			"Antes de culpar a compaction, leia compaction_running e compaction_bytes_read no artefato: " +
 			"falso ali significa que ninguém devolveu disco nesta rodada. Com a compaction viva, o " +
