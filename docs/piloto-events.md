@@ -78,6 +78,30 @@ quando a Fase 8 entregar o índice físico.
 exige reprocessar o tópico para um dataset novo — e ver a janela de retenção
 abaixo antes de contar com isso.
 
+### 4. A cauda da distribuição de chaves estoura o teto do storage
+
+Medido depois, com o piloto já no ar: **2 eventos em 4 milhões foram descartados**
+por `EVENT_TOO_LARGE` — `identifier` de **1099 e 1074 bytes**, contra o teto de
+`MaxKeySize` de **1024**.
+
+A sonda que dimensionou a chave viu **máximo de 320 bytes** em 80 mil eventos.
+Não errou a medida: errou a extrapolação, pelo mesmo motivo do item 1 — a cauda
+de uma distribuição não aparece numa janela curta.
+
+O efeito é pequeno em volume (0,00005%) e **permanente em consequência**: esses
+alarmes nunca são materializados, e o descarte é por política (`log-and-skip`),
+com WARN no log e o contador `nishidb_ingest_invalid_total` subindo. Não há
+corrupção — o dataset segue íntegro.
+
+As saídas possíveis, nenhuma gratuita: elevar `MaxKeySize` é mudança de formato;
+derivar a chave por hash muda a semântica e quebra a consulta por `identifier`
+literal; aceitar e monitorar é o que está feito hoje.
+
+**A lição de método é a mesma dos itens 1 e 2**, e vale escrevê-la de uma vez:
+neste projeto, toda decisão tomada a partir de uma amostra de tópico precisa
+declarar o tamanho da janela — e tratar máximo observado como piso, nunca como
+teto.
+
 ## A janela de retenção é de ~18,8 horas
 
 Medido: **452 msg/s** de produção, **30,6 milhões** de mensagens retidas.
