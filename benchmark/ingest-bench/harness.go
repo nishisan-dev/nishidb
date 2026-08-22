@@ -1176,7 +1176,8 @@ const (
 	// próprio artefato que desmente essa leitura: a primeira devolução está na
 	// amostra 497 (`events` 497.000, o disco cai de 295.039.892 para
 	// 291.502.261) e o ÚNICO checkpoint da fase está na amostra 500
-	// (`checkpoint_count` 1, `events` 500.000). A compaction devolveu disco
+	// (`events` 500.000; o `checkpoint_count` 1 é campo da FASE, não da
+	// amostra). A compaction devolveu disco
 	// ANTES de o chamador ter checkpointado uma única vez, e nenhuma explicação
 	// que dependa do checkpoint sobrevive a isso. Fica registrado também o
 	// instante certo, porque a versão anterior deste comentário dizia "t ≈ 90
@@ -1330,8 +1331,10 @@ func avaliaGateDeDisco(serie []int64) GateResult {
 		// invalidaria cada um. É a mesma decisão da errata do M1, registrada
 		// em benchmark/baselines/aceite-8m-20260815.md.
 		g.Detail += "; o disco continua subindo em regime, que é o §86 caminhando para o ENOSPC. " +
-			"Antes de culpar a compaction, leia compaction_running e compaction_bytes_read no artefato: " +
-			"falso ali significa que ninguém devolveu disco nesta rodada. Com a compaction viva, o " +
+			"Antes de culpar a compaction, leia compaction_bytes_read no artefato: " +
+			"zero ali significa que ninguém devolveu disco nesta rodada (compaction_running falso não " +
+			"basta: ele desce quando o LAÇO termina, e uma goroutine que aposentou segmentos e morreu " +
+			"publica falso com bytes lidos acima de zero). Com a compaction viva, o " +
 			"suspeito é a JANELA — o primeiro segmento só sai depois que toda row nascida nele foi " +
 			"superada, o que custa da ordem de entities × ln(rows por segmento) eventos —, e quem a " +
 			"encurta é -entities, -rate e -steady, não -checkpoint-every"

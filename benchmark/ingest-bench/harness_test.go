@@ -810,10 +810,22 @@ func TestCompactionEmDatasetReabertoDevolveDiscoDeVerdade(t *testing.T) {
 	// Sem limitador. A fase continua limitada pelo RELÓGIO da linha acima, e
 	// portanto pela vazão: tirar o rate é o que dá o MÁXIMO de eventos dentro
 	// da janela, não o que torna a contagem determinística. A margem que sobra
-	// é medida, não postulada — quatro rodadas de 200 ms aqui deram de 2.527 a
-	// 3.200 eventos e de 11 a 14 segmentos, contra os ~150 do primeiro selo;
-	// aos 30 ms a premissa passou nas quatro rodadas medidas e aos 20 ms
-	// reprovou em três delas, ou seja ~6x de folga em DURAÇÃO nesta máquina.
+	// é medida, não postulada — quatro rodadas de 200 ms deram alguns milhares
+	// de eventos e mais de dez segmentos, contra os ~150 do primeiro selo, e
+	// aos 30 ms a premissa ainda passou nas quatro. As duas medidas
+	// reproduziram numa segunda máquina; a FAIXA exata, não: lá as mesmas
+	// quatro rodadas deram 2.349–2.789 eventos e 10–12 segmentos, abaixo do
+	// piso que a primeira redação fixava. Por isso o número aqui é ordem de
+	// grandeza e não intervalo — faixa medida numa máquina é amostra, não
+	// propriedade do teste, e o que sustenta a margem é a distância até o selo
+	// (dez segmentos contra um), que sobrevive às duas.
+	//
+	// O que esta prosa deliberadamente NÃO afirma é a frequência de reprovação
+	// num prazo mais curto. A primeira redação dizia que aos 20 ms a premissa
+	// "reprovou em três de quatro"; remedida, deu o oposto — três de quatro
+	// PASSARAM. Frequência de falha entre rodadas é o número menos durável que
+	// se pode fixar em comentário permanente, porque mede a carga da máquina e
+	// não o mecanismo.
 	// Quem quiser a fase independente de vazão tem de limitá-la por EVENTOS
 	// (phaseArgs.events), que é mecanismo de produção e não está neste débito.
 	cfg.SteadyRate = 0
