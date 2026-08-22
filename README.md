@@ -13,16 +13,22 @@ rows**, contra 389 KiB com 1 milhão — 8× de dados, 1,9% de heap a mais.
 
 ## Estado
 
-**M1, M2 e a Fase 6 do M3 completos.** Ingestão por arquivo e por **Kafka**,
-materialização, storage durável com recovery de dados E de posição no tópico,
-índices, SQL, saída NDJSON, e um servidor que **consulta enquanto ingere** pelo
-protocolo remoto do §67 — tudo pelo binário. Os critérios de aceite estão em
+**M1, M2, a Fase 6 do M3 e o M4 completos.** Ingestão por arquivo e por
+**Kafka**, materialização, storage durável com recovery de dados E de posição no
+tópico, índices, SQL, saída NDJSON, um servidor que **consulta enquanto ingere**
+pelo protocolo remoto do §67, e a **compaction** que faz o disco parar de
+crescer para sempre — tudo pelo binário. Os critérios de aceite estão em
 [`docs/aceite-m1.md`](docs/aceite-m1.md),
-[`docs/aceite-m2.md`](docs/aceite-m2.md) e
-[`docs/aceite-fase6.md`](docs/aceite-fase6.md).
+[`docs/aceite-m2.md`](docs/aceite-m2.md),
+[`docs/aceite-fase6.md`](docs/aceite-fase6.md) e
+[`docs/aceite-m4.md`](docs/aceite-m4.md).
 
-Próximos: **Fase 7** (driver JDBC thin sobre este protocolo), **Fase 11**
-(auth e TLS), **M4** (índice hash físico, compaction, TTL).
+Próximos, na ordem do roadmap: **M5** — primeiro a **Fase 11** (autenticação e
+TLS, §74-77) e só então a **Fase 7** (driver JDBC, §70-73). A ordem é
+deliberada: o driver é *cliente* de um protocolo que hoje não tem senha, e
+publicá-lo antes da auth multiplicaria os pontos de acesso não autenticado em
+vez de fechar um. Depois vem o **M6** (TTL e tombstones por retenção, índice
+hash físico).
 
 ## Instalação
 
@@ -47,6 +53,9 @@ storage:
   segmentSize: 512MiB
   checkpoint:
     interval: 30s
+  compaction:
+    enabled: true
+    minimumLiveRatio: 0.50
 
 datasets:
   directory: /etc/nishidb/datasets
@@ -71,6 +80,17 @@ subida em vez de ignorar a chave. As seções que ainda não têm implementaçã
 propósito, para que o arquivo do M3 continue válido para este binário —
 `storage.durability` está registrada como débito 50, porque quem lê
 `interval: 100ms` conclui uma garantia que não existe.
+
+`storage.compaction` **ganhou leitor no M4** e é o que decide se o disco para de
+crescer (§78). `enabled` **ausente vale `true`**: o exemplo do §78 traz a chave
+ligada, e exigir declaração explícita inverteria o default seguro — todo YAML
+herdado do M1 acumularia garbage até o ENOSPC que o §86 projeta em 2 a 3 dias.
+Só `enabled: false` explícito desliga, e a subida **avisa** quando desliga, para
+que a decisão apareça no log. `minimumLiveRatio` é a fração de bytes vivos
+abaixo da qual um segmento **selado** deixa de valer a pena manter como está;
+vale `0.50` quando ausente, e é recusado no carregamento fora de `(0, 1)`
+exclusive — inclusive `.nan`, que a faixa sozinha não pegaria e que faria a
+política nunca eleger ninguém, com o arquivo dizendo o contrário.
 
 O bloco `server` é lido só pelo comando `server`; `ingest` e `query` o ignoram.
 `enabled` **ausente vale `true`** — rodar `nishidb server` já é o ato de ligar,
@@ -299,6 +319,67 @@ Exige o servidor **parado** (toma o flock) e `--yes` para escrever. É a saída
 para `invalidEvent: stop`, para um restore parcial, e para a troca legítima de
 tópico ou cluster.
 
+### Compaction: fazer o disco parar de crescer
+
+Segmentos são **append-only**: todo update apenda um record novo e deixa o
+anterior como garbage. A 500 ev/s contínuos, o §86 projeta **30-43 GB escritos
+por dia** contra 5,6-8 GB de estado vivo — num disco de 50-100 GB são 2 a 3 dias
+até o ENOSPC. A compaction do §53-55 é o que devolve esse espaço, e ela roda
+**sozinha**, em background, dentro do `nishidb server`:
+
+- **elege** os segmentos **selados** cuja fração viva caiu abaixo do
+  `minimumLiveRatio`. O segmento **corrente nunca** é eleito — compactá-lo seria
+  copiar dentro de si mesmo;
+- **varre** o candidato record a record, em streaming, sem carregar o segmento
+  em memória (§54), e **copia para frente** apenas os records que a location
+  ainda nomeia. A verificação e a cópia acontecem na **mesma seção crítica** do
+  writer: fora dela, um update que chegasse no meio faria o payload antigo
+  vencer o novo — sem erro, sem log e com o CRC batendo;
+- **aposenta** o arquivo por **rename** para `.retired`, e só remove os bytes
+  depois que o manifest concorda em não precisar deles. Um `kill -9` no meio
+  disso deixa um estado que a próxima abertura repara sozinha, restaurando ou
+  removendo o arquivo conforme o manifest.
+
+Nada disso é rota mutante: **não existe** `POST /v1/compact` nem
+`nishidb compact` nesta versão. A política é a configuração, e o único ato do
+operador é ligá-la ou desligá-la. O que se acompanha em regime são as séries do
+§92 — `nishidb_storage_bytes`, `nishidb_storage_garbage_bytes`,
+`nishidb_compaction_running` e os dois contadores de bytes — e o `status`
+abaixo.
+
+> **O garbage publicado é limite INFERIOR**, e a ressalva viaja junto do número
+> em toda superfície. A liveness por segmento é limite *superior* (débitos 38 e
+> 45), então `total − vivo` diz "há **pelo menos** isto de lixo em disco, nunca
+> menos". É afirmação verdadeira e acionável; tratá-la como exata levaria a
+> dimensionar disco por um número que não promete o que se leu nele.
+
+### Ver o estado do servidor no ar
+
+```bash
+nishidb status  --server 127.0.0.1:9142
+nishidb datasets --server 127.0.0.1:9142
+nishidb inspect --server 127.0.0.1:9142 radius_sessions
+```
+
+Os três comandos de **leitura** do §96. Eles nascem **remotos**, e não é
+economia: o flock do dataset é exclusivo por processo, então um diagnóstico que
+só soubesse abrir o dataset local exigiria **derrubar o servidor** para
+perguntar o estado dele — a pergunta e a resposta se excluiriam.
+
+`status` traz, por dataset, rows, segmentos, **segmento corrente**, carga do
+primário, overlay, disco, garbage, o estado da compaction com os bytes lidos e
+escritos, as consultas e a ingestão; e, do processo, os contadores do motor de
+consulta. Segmentos e corrente aparecem **separados** de propósito: o ID nunca
+regride e a compaction aposenta arquivos, então a distância entre os dois é o
+que ela já devolveu.
+
+`datasets` lista o que este servidor serve; `inspect <dataset>` detalha as
+colunas com tipo, alias e índice declarado, mais os limites **efetivos** de
+`maxRows` e `timeout` — o do dataset, ou o default global que ele herdou.
+
+`compact` e `checkpoint`, que o §96 também lista, são **rotas mutantes** e ficam
+para o M5, atrás do papel ADMIN.
+
 ### SQL suportado (v1)
 
 ```sql
@@ -365,6 +446,8 @@ precedência continua descrito no stderr.
 
 - [Arquitetura](docs/architecture.md) — como o sistema funciona, com os números.
 - [Aceite do M1](docs/aceite-m1.md) — os 25 critérios, item a item.
+- [Aceite do M4](docs/aceite-m4.md) — a compaction em regime, com a escala e o
+  ambiente da rodada declarados.
 - [Rodada de aceite](benchmark/baselines/aceite-8m-20260815.md) — 8M entidades
   com consultas concorrentes, corpus de referência.
 - [Débitos abertos](docs/debitos.md) — o que ficou para o M2, M3 e M4, com dono.

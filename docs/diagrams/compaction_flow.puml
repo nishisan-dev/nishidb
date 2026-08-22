@@ -1,0 +1,267 @@
+@startuml compaction_flow
+title Compaction de segmento: varredura, republicação condicional e aposentadoria (§53-55, débito 21)
+
+start
+
+:IniciaCompaction: sobe UMA goroutine
+(chamar duas vezes não sobe duas);
+note right
+  Duas varreduras concorrentes disputariam o
+  writer record a record e poderiam eleger o
+  MESMO segmento — a segunda aposentaria um
+  arquivo que a primeira ainda está lendo.
+
+  A primeira passada é IMEDIATA e não depois do
+  primeiro cochilo: um dataset reaberto depois de
+  horas de ingestão já vem com o garbage
+  acumulado, e fazê-lo esperar é adiar o único
+  trabalho que devolve disco.
+end note
+
+repeat
+  :elege os candidatos sob s.wmu:
+  liveBytes/sizeBytes < minimumLiveRatio (§53, §78);
+  note right
+    O segmento CORRENTE nunca entra (decisão D6):
+    compactá-lo é copiar dentro de si mesmo, com a
+    varredura perseguindo os records que ela acabou
+    de apendar.
+
+    O curSegID é lido DENTRO da seção crítica. Lido
+    antes do Lock, ele descreveria um instante em
+    que ninguém o segurava — e a espera pelo lock é
+    quase sempre a espera por um CHECKPOINT, que é
+    justamente quem instala o tamanho do segmento
+    recém-rotacionado e o torna elegível.
+
+    O tally é LIMITE SUPERIOR (débitos 38 e 45), e
+    essa é a direção segura: liveness superestimada
+    apenas ADIA a eleição; subestimá-la faria a
+    compaction descartar dado vivo.
+
+    Segmento sem tamanho medido no segSize é PULADO
+    — eleger sem tamanho seria dividir a liveness
+    por um número inventado.
+  end note
+
+  partition "Varredura streaming — compactaSegmento (§54)" {
+    :ScanFrom(seg, HeaderSize): um record por vez,
+    buffer reutilizado, CRC validado;
+    note right
+      §54: a compaction NÃO carrega o segmento em
+      memória. Nada proporcional ao TAMANHO do
+      arquivo é acumulado — nem uma fatia de
+      records, nem o payload do arquivo inteiro.
+    end note
+
+    while (próximo record) is (há)
+      if (contexto cancelado?) then (sim)
+        #FFD9D9:desiste da passada;
+        note right
+          Varredura interrompida não viu todos os
+          records, logo não tem autoridade sobre
+          nenhum: o tally NÃO é zerado (D4) e o
+          arquivo NÃO é aposentado.
+
+          As duas séries de bytes do §92 sobem
+          mesmo assim, inclusive no retorno de
+          erro: elas medem o I/O que a compaction
+          consumiu, e zerá-lo deixaria o /metrics
+          parado exatamente na passada que morreu.
+        end note
+        stop
+      endif
+
+      partition "reapendaSeVivo — MESMA seção crítica de s.wmu (D3)" {
+        if (locs.Get(rowID) ainda nomeia (seg, off)?) then (sim — vivo)
+          #D9F2D9:REPUBLICA: segW.Append no segmento
+          corrente pelo applyRecord normal;
+          note right
+            Verificação e Append na MESMA seção
+            crítica. Fora dela, um update que
+            chegasse no meio faria a cópia do
+            payload ANTIGO ser publicada DEPOIS do
+            novo: o dataset voltaria no tempo sem
+            erro, sem log e com o CRC batendo.
+
+            É por isto que a compaction não chama
+            Put: o Put apenda o que lhe deram sem
+            perguntar se o record de ORIGEM ainda é
+            o corrente.
+
+            Record TOMBSTONED também é copiado
+            (decisão D2). A location aponta para
+            ele, e deixá-la pendurada num arquivo
+            que a aposentadoria vai remover faria o
+            Open seguinte recusar o dataset inteiro.
+            Recuperar tombstone é do TTL (M6).
+          end note
+        else (não — garbage)
+          :não copia — é este byte que a
+          aposentadoria devolve ao filesystem;
+        endif
+      }
+    endwhile (fim do prefixo válido)
+
+    if (o prefixo válido cobre o arquivo inteiro?) then (não)
+      #FFD9D9:ErrDatasetCorrupt: a varredura parou
+      antes do fim de um segmento SELADO;
+      note right
+        O ScanFrom para no primeiro record inválido
+        SEM erro, porque para o tail scan da recovery
+        (§52) isso é o caminho normal. Num segmento
+        selado não é: ele não cresce desde a rotação,
+        e os records depois da corrupção continuam
+        sendo nomeados por locations que a varredura
+        nunca visitou.
+
+        Zerar o tally aqui daria à varredura uma
+        autoridade que ela não tem, e o estrago
+        aterrissaria na aposentadoria: a corrupção de
+        UM record viraria a perda do segmento inteiro.
+      end note
+      stop
+    endif
+
+    #D9F2D9:ZERA o tally do segmento sob s.wmu,
+    descontando o espelho liveBytesAll na
+    MESMA seção crítica;
+    note right
+      Decisão D4 — o tally é zerado por AUTORIDADE
+      da varredura completa, não pelos decrementos.
+      O tally é limite superior por construção
+      (débitos 38 e 45): o record órfão que o replay
+      do tail deixa não é nomeado por location
+      nenhuma, então nenhum decremento o encontra e o
+      candidato jamais chegaria a zero por subtração.
+      A varredura é a única leitura EXATA do segmento
+      que existe no produto.
+
+      O espelho acompanha o mapa na mesma seção
+      crítica (invariante 4): zerar só o mapa faria o
+      conferaEspelhos() do próximo checkpoint acusar
+      divergência a cada compaction — com razão.
+    end note
+  }
+
+  partition "Aposentadoria em quatro passos — aposentaSegmento (D5)" {
+    :**1.** Checkpoint(): as republicações da varredura
+    viram duráveis (overlay -> mmap -> manifest);
+    note right
+      Até o ApplyOverlay as locations novas vivem no
+      overlay em memória. Este passo garante que a
+      ordem do D5 vale em DISCO desde o primeiro
+      passo: nenhuma janela desta função tem location
+      viva apontando para um arquivo que já perdeu o
+      nome pelo qual o manifest o nomeia.
+    end note
+
+    :**2.** rename para segment-NNNNNNNN.dat.retired,
+    fsync do diretório, e poda dos mapas de
+    contabilidade sob s.wmu;
+    note right
+      O ListSegments ignora nome não-canônico DE
+      PROPÓSITO (segment.go:252), então o segmento
+      sai do dataset **sem que um byte saia do
+      disco**. É o mecanismo de aposentadoria, e ele
+      já existia.
+
+      **JANELA 1 de crash:** o manifest vigente ainda
+      nomeia o segmento. Morrer aqui deixa "listado e
+      ausente", que o Open trata como
+      ErrDatasetCorrupt — por isso o reparo abaixo.
+    end note
+
+    :**3.** Checkpoint(): o manifest é reconstruído a
+    partir do ListSegments, que já não enxerga
+    o arquivo;
+    note right
+      Daqui em diante nenhum estado durável
+      referencia o segmento.
+
+      **JANELA 2 de crash:** os bytes continuam em
+      disco sob o nome aposentado, e ninguém mais os
+      referencia.
+    end note
+
+    :**4.** unlink + fsync do diretório;
+    note right
+      Inverter 3 e 4 é a troca que PERDE dado: o
+      unlink com o manifest ainda nomeando o segmento
+      produz "listado e ausente", e o dataset inteiro
+      é recusado por causa de um arquivo que já não
+      tinha nada vivo.
+    end note
+  }
+
+  :log compaction.segmento_aposentado
+  (segmento, records copiados, bytes lidos,
+  escritos e devolvidos) + as três séries do §92;
+
+repeat while (o Close cancelou o contexto?) is (não — dorme 5s) not (sim)
+
+:ParaCompaction: o Close cancela e AGUARDA a
+goroutine ANTES de tomar o vida.Lock() (D7);
+stop
+
+partition "Open — reparaAposentados: as duas janelas de crash (D5)" {
+start
+:reparaAposentados, ANTES de qualquer conclusão
+sobre o conjunto de segmentos (store_recovery.go);
+note right
+  Nome aposentado em disco só pode ter sido escrito
+  por um processo que MORREU no meio da
+  aposentadoria — nenhum caminho vivo o deixa para
+  trás. Quem diz qual das duas metades ficou por
+  fazer é o MANIFEST.
+
+  A ordem importa: conferir o conjunto de segmentos
+  antes de restaurar faria o Open condenar como
+  corrompido um dataset íntegro.
+end note
+
+if (o manifest vigente lista o segmento?) then (sim — JANELA 1)
+  if (o nome canônico está ausente?) then (sim)
+    #D9F2D9:RESTAURA: rename de volta para o
+    nome canônico;
+    note right
+      É o que impede o Open de condenar o dataset
+      inteiro por "segmento listado e ausente".
+    end note
+  else (não)
+    :REMOVE o aposentado;
+    note right
+      Guarda defensiva: a sequência do D5 não produz
+      este estado (o rename cria um nome e apaga o
+      outro no mesmo passo atômico), mas um rename
+      incondicional SOBRESCREVERIA o segmento que o
+      manifest nomeia. É a única forma de este reparo
+      destruir dado, e ela custa um Stat.
+    end note
+  endif
+else (não — JANELA 2)
+  :REMOVE o aposentado;
+  note right
+    Nenhuma location e nenhum manifest referenciam
+    aqueles bytes, e como o ListSegments ignora o
+    nome não canônico, nada além deste reparo
+    voltaria a mencioná-los: remover é a única forma
+    de a compaction devolver o disco que promete.
+  end note
+endif
+
+:fsync do diretório e RELISTA os segmentos;
+note right
+  Sem o fsync o reparo é só uma entrada de diretório
+  em cache, e um segundo crash devolveria o dataset
+  ao estado que se acabou de consertar.
+
+  A relistagem é obrigatória: o refs foi montado
+  ANTES do reparo, e a checagem de "segmento do
+  manifest ausente" que vem a seguir leria uma
+  listagem que o reparo acabou de tornar obsoleta.
+end note
+stop
+}
+
+@enduml
