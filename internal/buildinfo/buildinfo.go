@@ -85,10 +85,10 @@ func doVCS() (commit, data string) {
 	return commit, data
 }
 
-// curto abrevia o SHA completo do vcs.revision (40 caracteres) ao mesmo
-// tamanho que `git rev-parse --short` costuma produzir. Não precisa ser o
-// abreviamento MÍNIMO e único do git — só de curto o bastante para o
-// operador colar num grep.
+// curto abrevia o SHA completo do vcs.revision (40 caracteres) para um
+// tamanho fixo mais generoso que os 7 caracteres que `git rev-parse --short`
+// costuma produzir. Não precisa ser o abreviamento MÍNIMO e único do git —
+// só de curto o bastante para o operador colar num grep.
 func curto(rev string) string {
 	const n = 12
 	if len(rev) > n {
