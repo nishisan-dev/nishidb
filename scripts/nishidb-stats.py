@@ -35,9 +35,22 @@ class ErroDeColeta(Exception):
 # --------------------------------------------------------------------------- coleta
 
 
+# Abridor SEM proxy, deliberadamente. O urllib honra `http_proxy` do ambiente,
+# e num host corporativo isso manda a consulta a 127.0.0.1 para o proxy da
+# empresa — que responde 403 e faz o painel acusar o servidor de estar fora do
+# ar. Foi o que aconteceu: /root/.bashrc exporta http_proxy, e como .bashrc só
+# vale em shell INTERATIVO, o erro aparecia para quem digitava o comando e não
+# para quem o rodava por ssh não-interativo.
+#
+# Não há caso em que este painel deva usar proxy: ele fala com um servidor que
+# o operador nomeou, quase sempre no próprio host. ProxyHandler({}) desliga a
+# descoberta por ambiente sem depender de no_proxy estar configurado.
+_ABRIDOR = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 def _busca(base: str, rota: str) -> str:
     try:
-        with urllib.request.urlopen(f"http://{base}{rota}", timeout=TEMPO_LIMITE) as r:
+        with _ABRIDOR.open(f"http://{base}{rota}", timeout=TEMPO_LIMITE) as r:
             return r.read().decode("utf-8")
     except urllib.error.HTTPError as e:
         raise ErroDeColeta(f"{rota} devolveu HTTP {e.code}") from e
