@@ -147,6 +147,43 @@ func TestHistogramaPercentisComRepeticao(t *testing.T) {
 	}
 }
 
+// TestHistogramaPercentisComUmUnicoElemento fixa a borda mínima não-vazia:
+// com uma única mensagem registrada, todo percentil — e o máximo — só pode
+// ser esse único comprimento, qualquer que seja p.
+func TestHistogramaPercentisComUmUnicoElemento(t *testing.T) {
+	h := NovoHistograma()
+	h.Registra(ExtraidoOK, 777)
+
+	for _, p := range []float64{1, 50, 95, 99, 100} {
+		if got := h.Percentil(p); got != 777 {
+			t.Errorf("Percentil(%v) = %d, quer 777 (único elemento registrado)", p, got)
+		}
+	}
+	if got := h.Maximo(); got != 777 {
+		t.Errorf("Maximo() = %d, quer 777", got)
+	}
+}
+
+// TestHistogramaPercentisComTodosOsComprimentosIdenticos fixa a outra borda
+// que TestHistogramaPercentisComRepeticao não cobre: repetição não de UMA
+// entre duas massas, mas de TODAS as mensagens no mesmo comprimento — o caso
+// degenerado em que não há "distribuição" nenhuma para distinguir percentis.
+func TestHistogramaPercentisComTodosOsComprimentosIdenticos(t *testing.T) {
+	h := NovoHistograma()
+	for i := 0; i < 500; i++ {
+		h.Registra(ExtraidoOK, 300)
+	}
+
+	for _, p := range []float64{1, 50, 95, 99, 100} {
+		if got := h.Percentil(p); got != 300 {
+			t.Errorf("Percentil(%v) = %d, quer 300 (todas as 500 mensagens têm o mesmo comprimento)", p, got)
+		}
+	}
+	if got := h.Maximo(); got != 300 {
+		t.Errorf("Maximo() = %d, quer 300", got)
+	}
+}
+
 func TestHistogramaPercentilVazioDevolveZero(t *testing.T) {
 	h := NovoHistograma()
 	if got := h.Percentil(50); got != 0 {
