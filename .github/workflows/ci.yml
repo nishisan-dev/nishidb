@@ -26,6 +26,14 @@ jobs:
           cache: true
       - run: go test ./...
 
+      # scripts/nishidb-stats.py é código de produção (o painel do operador);
+      # sem este passo, nishidb-stats_test.py só rodava pela mão de quem
+      # lembrasse — a próxima alteração no painel podia quebrar a exibição da
+      # versão (Task A3) sem que nada acusasse. ubuntu-latest já traz
+      # python3; nenhum setup extra.
+      - name: testa o painel Python (scripts/nishidb-stats.py)
+        run: make test-python
+
   # Detector de corrida. NÃO cobre os gates de medida do job `test`: a
   # instrumentação do -race altera a contagem de alocações e infla o Apply
   # sem inflar o checkpoint, então eles se anunciam SKIP sob -race. Os dois

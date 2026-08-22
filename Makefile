@@ -1,4 +1,4 @@
-.PHONY: build test test-race test-integration lint bench bench-micro cover
+.PHONY: build test test-race test-integration test-python lint bench bench-micro cover
 
 # `go build ./...` sozinho DESCARTA o binário: o módulo tem dois packages
 # main (cmd/nishidb e benchmark/ingest-bench), e sem -o o toolchain só
@@ -33,6 +33,23 @@ test-race:
 
 test-integration:
 	go test -race -tags integration ./...
+
+# scripts/nishidb-stats.py é código de produção — o painel que o operador lê
+# em cima de um incidente —, e até a Task A3 o teste dele
+# (nishidb-stats_test.py) só rodava pela mão de quem lembrasse de chamar
+# `python3` direto: nenhum Makefile nem workflow o executava, então a
+# próxima alteração no painel podia quebrar a exibição da versão sem que
+# NADA acusasse. O alvo segue o molde do `lint` logo abaixo: ferramenta
+# ausente FALHA alto e nomeia o que falta, não vira SKIP silencioso — é o
+# mesmo defeito do débito 53 (gate que passa porque a ferramenta não está lá)
+# por uma porta nova, em Python em vez de em Go.
+test-python:
+	@if command -v python3 > /dev/null; then \
+		python3 scripts/nishidb-stats_test.py; \
+	else \
+		echo "erro: python3 não está no PATH — o teste do painel NÃO rodou." >&2; \
+		exit 1; \
+	fi
 
 # Os dois tetos vão desligados também aqui, e a duplicação com o `issues:` do
 # .golangci.yml é deliberada: o modo de falha deste gate é o SILÊNCIO — linter

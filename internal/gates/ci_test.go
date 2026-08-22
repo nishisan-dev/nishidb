@@ -94,6 +94,22 @@ func TestWorkflowDeCIRodaOsDoisAlvosDeTeste(t *testing.T) {
 	}
 }
 
+// TestWorkflowDeCIRodaOTestePython fixa o mesmo ratchet da Task A3: antes
+// dela, scripts/nishidb-stats_test.py — o teste do painel que lê /v1/stats e
+// mostra a versão do binário — só rodava pela mão de quem lembrasse de
+// chamar `python3` direto. Nenhum Makefile nem workflow o executava, então a
+// próxima alteração em nishidb-stats.py podia quebrar a exibição da versão
+// sem que NADA acusasse — o mesmo defeito do débito 53 (gate ausente que
+// ninguém percebe), agora numa porta em Python em vez de Go. A verificação
+// roda sobre o SCRIPT do job `test` (scriptDoJob), não sobre o arquivo
+// bruto, pelo mesmo motivo do job `lint`: um comentário mencionando
+// "test-python" não pode satisfazer o teste com o passo de fato removido.
+func TestWorkflowDeCIRodaOTestePython(t *testing.T) {
+	if !strings.Contains(scriptDoJob(t, "test"), "test-python") {
+		t.Error("o job `test` não roda `make test-python` — scripts/nishidb-stats.py (o painel do operador) fica sem cobertura em CI")
+	}
+}
+
 var reVersaoDeGo = regexp.MustCompile(`go-version:\s*['"]?([^\s'"\n]+)['"]?`)
 
 // A versão de Go do workflow tem de ser a EXATA que mede a base localmente
@@ -148,17 +164,17 @@ type arquivoDeWorkflowDeCI struct {
 	Jobs map[string]jobDeWorkflow `yaml:"jobs"`
 }
 
-// scriptDoJobDeLint devolve a concatenação dos `run:` de todos os steps do
-// job `lint` — só o script que o runner de fato executa.
-func scriptDoJobDeLint(t *testing.T) string {
+// scriptDoJob devolve a concatenação dos `run:` de todos os steps do job
+// pedido — só o script que o runner de fato executa.
+func scriptDoJob(t *testing.T, nome string) string {
 	t.Helper()
 	var wf arquivoDeWorkflowDeCI
 	if err := yaml.Unmarshal([]byte(leWorkflowDeCI(t)), &wf); err != nil {
 		t.Fatalf(".github/workflows/ci.yml não é YAML válido: %v", err)
 	}
-	job, ok := wf.Jobs["lint"]
+	job, ok := wf.Jobs[nome]
 	if !ok {
-		t.Fatal("o workflow não tem um job `lint`")
+		t.Fatalf("o workflow não tem um job `%s`", nome)
 	}
 	var script strings.Builder
 	for _, passo := range job.Steps {
@@ -167,6 +183,11 @@ func scriptDoJobDeLint(t *testing.T) string {
 	}
 	return script.String()
 }
+
+// scriptDoJobDeLint é o atalho que os testes do job `lint` já usavam antes
+// de scriptDoJob virar genérico — mantido para não duplicar "lint" em cada
+// chamador.
+func scriptDoJobDeLint(t *testing.T) string { return scriptDoJob(t, "lint") }
 
 var (
 	reReferenciaABaseline = regexp.MustCompile(`\.golangci-baseline`)
