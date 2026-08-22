@@ -23,6 +23,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/cli"
 	"github.com/nishisan-dev/nishidb/internal/metrics"
 	"github.com/nishisan-dev/nishidb/internal/storage/checkpoint"
+	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 )
 
 // O critério de aceite da Task 7 do M4, pelo BINÁRIO.
@@ -310,8 +311,24 @@ func (b *bancadaE2E) produzSemParar() (parar func()) {
 // teste publicou. É o número contra o qual "o disco parou de crescer" só
 // significa alguma coisa: num storage append-only sem compaction, o diretório
 // cresce com ELE, byte a byte.
+//
+// O custo por record é um LIMITE INFERIOR DERIVADO DO PRODUTO, e a distinção
+// importa porque esta é a única grandeza contra a qual o plateau é medido: o
+// encoding.RecordHeaderSize é o header fixo que todo record carrega em disco
+// (record.go), e o peso do evento entra INTEIRO no payload — o wire format do
+// §31-33 grava a string como bytes, sem compressão. O record real desta bancada
+// fica acima disso, porque sobram a key, os outros dois campos do evento e o
+// framing de cada um (FIELD_ID + TYPE + LENGTH). Aqui esteve, até a revisão
+// desta tarefa, um "+ 40" escolhido sem oráculo — número inventado embutido no
+// denominador de duas asserções.
+//
+// Subestimar é a direção SEGURA, e é por isso que o limite inferior basta: as
+// duas asserções do plateau dividem por este número (o piso não pode subir mais
+// que `escritoNaSegundaMetade/4`, o pico não pode alcançar `produzido/3`), de
+// modo que um produzido menor que o real APERTA as duas. O erro para baixo
+// reprova compaction boa; ele nunca aprova compaction que não devolveu disco.
 func (b *bancadaE2E) bytesProduzidos() int64 {
-	return int64(b.rodada) * e2eKeys * (e2ePesoBytes + 40)
+	return int64(b.rodada) * e2eKeys * (e2ePesoBytes + encoding.RecordHeaderSize)
 }
 
 // esperaIngestaoAlcancar bloqueia até TODA key responder com sequence >= alvo.
@@ -454,8 +471,17 @@ func (b *bancadaE2E) exigeSemAposentadoEmDisco(quando string) {
 // unlink corre um checkpoint, alguns milissegundos, contra os cinco segundos
 // de cochilo entre duas passadas.
 //
-// A leitura é um readdir por volta, sem dormir, e não perturba o processo
-// medido — quem escreve ali é o filho.
+// A volta é um readdir e um cochilo curto. O cochilo não é cerimônia: sem ele
+// o laço queima um core inteiro em readdir sobre o MESMO diretório em que o
+// processo medido está renomeando e apagando arquivo — e é este laço que decide
+// o instante do SIGTERM e do kill -9, ou seja a bancada estaria empilhando
+// pressão de I/O sobre o alvo no exato instante que ela pretende observar.
+//
+// O que se garante é a RESOLUÇÃO da amostragem, e não "não perturbar o processo
+// medido", que é o que este godoc dizia sem ter medido: um milissegundo fica
+// duas ordens de grandeza abaixo dos 40 a 65ms que uma passada de aposentadoria
+// dura nesta bancada, de modo que o cochilo não estreita a janela que o laço
+// existe para apanhar.
 func (b *bancadaE2E) esperaJanelaDaAposentadoria(prazo time.Duration) string {
 	b.t.Helper()
 	limite := time.Now().Add(prazo)
@@ -467,8 +493,14 @@ func (b *bancadaE2E) esperaJanelaDaAposentadoria(prazo time.Duration) string {
 			b.t.Fatalf("nenhuma aposentadoria em voo em %v: a compaction parou de eleger candidatos e o kill -9 cairia num processo ocioso\n%s",
 				prazo, b.saida.String())
 		}
+		time.Sleep(e2eResolucaoDaJanela)
 	}
 }
+
+// e2eResolucaoDaJanela é o passo de amostragem do laço acima. Não é chave de
+// nada: é o intervalo entre dois readdir, escolhido para ficar muito abaixo da
+// janela observada e muito acima do custo de um syscall.
+const e2eResolucaoDaJanela = time.Millisecond
 
 func (b *bancadaE2E) aposentadosEmDisco() []string {
 	achados, err := filepath.Glob(filepath.Join(b.dirDoDataset(), "data", "*.retired"))

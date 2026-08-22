@@ -3,6 +3,7 @@ package storage
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -2274,6 +2275,206 @@ func TestCompactionEmBackgroundParaNaPrimeiraFalhaDoWriter(t *testing.T) {
 	if saida := registro.String(); !strings.Contains(saida, "compaction.parou") {
 		t.Errorf("a compaction parou sem dizer nada ao operador: o disco volta a crescer e o único aviso do §53-55 não saiu.\nlog:\n%s", saida)
 	}
+}
+
+// eventoSegmentoAposentado é o `event` do §95 que a passadaDeCompaction emite
+// por segmento removido. Fica em constante porque o teste abaixo o usa como
+// CHAVE de busca e como texto de falha, e um `event` é justamente o
+// identificador estável que alerta e script casam (logging.go, godoc do
+// Debug): errar a grafia aqui produziria um teste que procura por uma linha
+// que ninguém emite e falha dizendo o contrário do que houve.
+const eventoSegmentoAposentado = "compaction.segmento_aposentado"
+
+// linhasDoEvento decodifica a saída do logger linha a linha e devolve, NA
+// ORDEM em que saíram, os campos daquelas cujo `event` é o pedido.
+//
+// Lê o formato JSON, que é o de produção (§95), e com UseNumber de propósito.
+// Decodificado no default do encoding/json todo número vira float64, e aí o
+// teste aprovaria pela última casa uma aritmética errada — além de perder a
+// distinção entre o número e o texto que o parágrafo seguinte cobra.
+func linhasDoEvento(t *testing.T, saida, evento string) []map[string]any {
+	t.Helper()
+	var out []map[string]any
+	for i, texto := range strings.Split(strings.TrimSpace(saida), "\n") {
+		if texto == "" {
+			continue
+		}
+		dec := json.NewDecoder(strings.NewReader(texto))
+		dec.UseNumber()
+		var linha map[string]any
+		if err := dec.Decode(&linha); err != nil {
+			t.Fatalf("a linha %d do log não é JSON: %v — %q", i+1, err, texto)
+		}
+		if linha[campoEventoDoLog] == evento {
+			out = append(out, linha)
+		}
+	}
+	return out
+}
+
+// campoEventoDoLog repete o nome que o §95 dá ao campo e que o pacote logging
+// escreve (logging.go, campoEvent). A repetição é o preço de o teste ler o log
+// como o COLETOR o lê — um handler traduzido por ReplaceAttr não expõe o nome
+// final por nenhuma outra via, e assumir "event" sem dizer de onde ele vem é
+// que seria acoplamento silencioso.
+const campoEventoDoLog = "event"
+
+// campoNumerico exige que a chave esteja na linha E que tenha saído como
+// número. As duas metades são o oráculo, e nenhuma delas cobre a outra:
+// ausente, o operador simplesmente não tem o dado; presente como TEXTO, ele
+// continua legível para um humano e quebra todo consumidor que o log
+// estruturado do §95 existe para servir.
+func campoNumerico(t *testing.T, linha map[string]any, chave string) int64 {
+	t.Helper()
+	bruto, presente := linha[chave]
+	if !presente {
+		t.Fatalf("o %s saiu sem o campo %q, que é um dos cinco números pelos quais o operador acompanha o disco voltando (§53-55, §86): %v",
+			eventoSegmentoAposentado, chave, linha)
+	}
+	n, ok := bruto.(json.Number)
+	if !ok {
+		t.Fatalf("o campo %q do %s saiu como %T (%v) em vez de número: o painel do M4 não soma texto",
+			chave, eventoSegmentoAposentado, bruto, bruto)
+	}
+	v, err := n.Int64()
+	if err != nil {
+		t.Fatalf("o campo %q do %s saiu com %q, que não é inteiro: %v", chave, eventoSegmentoAposentado, n.String(), err)
+	}
+	return v
+}
+
+// rowsVivasPorSegmento conta, segmento a segmento, quantas rows do corpus a
+// location NOMEIA neste instante. É o critério de vivo da decisão D2 — "a
+// location ainda aponta para este record" — aplicado pelo teste numa varredura
+// própria, e é contra ele que o `records_copiados` do log é medido.
+func rowsVivasPorSegmento(t *testing.T, s *Store, keys int) map[uint32]int64 {
+	t.Helper()
+	fora := make(map[uint32]int64)
+	for i := 0; i < keys; i++ {
+		k := chaveDoCorpus(i)
+		rec, _, ok, err := s.GetByKey([]byte(k), nil)
+		if err != nil || !ok {
+			t.Fatalf("a row %q sumiu antes da passada (ok=%v, err=%v)", k, ok, err)
+		}
+		seg, _ := localizacaoDaRow(t, s, rec.RowID)
+		fora[seg]++
+	}
+	return fora
+}
+
+// TestAposentadoriaRegistraNoLogOsBytesQueODiscoDevolveu é o oráculo do
+// compaction.segmento_aposentado, e ele existe porque a revisão desta tarefa
+// MEDIU o mutante: apagar o bloco inteiro do Log.Info da passadaDeCompaction
+// deixava `go test ./... -count=1` verde de ponta a ponta. A única menção à
+// linha em toda a suíte era uma frase dentro de um COMENTÁRIO do e2e
+// (compaction_e2e_test.go), e comentário não é asserção.
+//
+// A omissão pesava mais aqui do que pesaria noutro log por duas razões. A
+// primeira é que o godoc da própria linha a declara load-bearing: ela é, até a
+// Task 8 dar alimentador às três séries do §92 (nomes.go:48), o ÚNICO lugar em
+// que estes números aparecem, e `lidos - escritos` é a resposta à pergunta do
+// §86 — quanto disco voltou. A segunda é que os outros três logs novos desta
+// tarefa (compaction.parou, compaction.ligada, compaction.desligada) já têm
+// oráculo, de modo que a instrumentação do ciclo de vida estava aferida em
+// tudo menos no único evento que carrega número.
+//
+// O que se afirma, e por que cada asserção não é substituível pelas outras:
+//
+//   - a linha SAI, uma por segmento aposentado e NA ORDEM da eleição. Uma
+//     passada que aposentasse cinco arquivos e registrasse um deixaria o
+//     operador com uma conta de disco que não fecha, e a ordem é o que o godoc
+//     do candidatos compra com o slices.Sort — sem ela o operador não
+//     distingue mudança de estado de troca de ordem;
+//   - os CINCO campos estão lá, e como NÚMERO (campoNumerico);
+//   - `bytes_lidos` bate com o ARQUIVO em disco medido antes da passada, menos
+//     o header do segmento. É o oráculo do
+//     TestVarreduraContaComoLidoOArquivoInteiroMenosOHeader aplicado agora ao
+//     número que de fato CHEGA ao operador: a função pode devolver a conta
+//     certa e a linha registrar outra coisa;
+//   - `records_copiados` bate com quantas rows o índice nomeava dentro do
+//     segmento antes da passada, contadas pelo teste;
+//   - `bytes_devolvidos` é `lidos - escritos`, e este é o único dos cinco que
+//     não vem de uma medida — ele é ARITMÉTICA, feita na própria chamada do
+//     log, onde nenhuma outra camada a confere. Aritmética emitida sem oráculo
+//     é o campo que fica errado em silêncio.
+func TestAposentadoriaRegistraNoLogOsBytesQueODiscoDevolveu(t *testing.T) {
+	var registro registroDeLog
+	dir := t.TempDir()
+	s := openStore(t, Options{
+		Dir:         dir,
+		SegmentSize: 8 << 10,
+		Log:         logging.New(&registro, logging.FormatoJSON, slog.LevelInfo),
+	})
+	const keys, rodadas = 40, 30
+	corpusDeSegmentosSelados(t, s, keys, rodadas)
+
+	// A eleição é fotografada ANTES da passada, e é a mesma que ela vai fazer:
+	// nada escreve neste dataset além do teste, e o candidatos é determinístico
+	// por construção (TestCandidatosSaemEmOrdemDeterministica).
+	eleitos := s.candidatos(0.5)
+	if len(eleitos) == 0 {
+		t.Fatalf("nenhum candidato com %d rodadas de update sobre %d keys: sem aposentadoria não há linha a conferir, "+
+			"e todas as asserções abaixo passariam por vacuidade", rodadas, keys)
+	}
+	tamanhos := make(map[uint32]int64, len(eleitos))
+	for _, seg := range eleitos {
+		tamanhos[seg] = fileSizeAud(t, audSegPath(dir, seg))
+	}
+	vivas := rowsVivasPorSegmento(t, s, keys)
+
+	if err := s.passadaDeCompaction(context.Background(), 0.5); err != nil {
+		t.Fatalf("passadaDeCompaction: %v", err)
+	}
+
+	saida := registro.String()
+	linhas := linhasDoEvento(t, saida, eventoSegmentoAposentado)
+	registrados := make([]uint32, 0, len(linhas))
+	var copiadosNoTotal, devolvidoNoTotal int64
+	for _, linha := range linhas {
+		seg := uint32(campoNumerico(t, linha, "segmento"))
+		copiados := campoNumerico(t, linha, "records_copiados")
+		lidos := campoNumerico(t, linha, "bytes_lidos")
+		escritos := campoNumerico(t, linha, "bytes_escritos")
+		devolvidos := campoNumerico(t, linha, "bytes_devolvidos")
+		registrados = append(registrados, seg)
+		copiadosNoTotal += copiados
+		devolvidoNoTotal += devolvidos
+
+		if devolvidos != lidos-escritos {
+			t.Errorf("o segmento %d registrou bytes_devolvidos=%d com bytes_lidos=%d e bytes_escritos=%d: "+
+				"o disco que a aposentadoria devolveu é a DISTÂNCIA entre o que a varredura leu e o que copiou para frente (§86), "+
+				"e um campo que não é essa conta responde errado a única pergunta que este milestone existe para responder",
+				seg, devolvidos, lidos, escritos)
+		}
+		if querido := tamanhos[seg] - segment.HeaderSize; lidos != querido {
+			t.Errorf("o segmento %d registrou bytes_lidos=%d num arquivo de %d bytes cujo header ocupa %d: "+
+				"a varredura começa DEPOIS do header, e viés constante em número publicado não se distingue de medida no gráfico",
+				seg, lidos, tamanhos[seg], int64(segment.HeaderSize))
+		}
+		if querido := vivas[seg]; copiados != querido {
+			t.Errorf("o segmento %d registrou records_copiados=%d, mas o índice nomeava %d row(s) dentro dele antes da passada: "+
+				"vivo é a location apontar para o record (decisão D2), e é essa contagem que o copy-forward move",
+				seg, copiados, querido)
+		}
+		if (copiados == 0) != (escritos == 0) {
+			t.Errorf("o segmento %d registrou records_copiados=%d com bytes_escritos=%d: "+
+				"os dois contam a MESMA cópia, então um zerado com o outro não é aritmética possível", seg, copiados, escritos)
+		}
+	}
+	if !slices.Equal(registrados, eleitos) {
+		t.Fatalf("a passada aposentou %v e registrou %v: cada aposentadoria tem de deixar a sua linha, na ordem da eleição — "+
+			"o que não sai no log é disco que voltou sem ninguém saber.\nlog:\n%s", eleitos, registrados, saida)
+	}
+	if copiadosNoTotal == 0 {
+		t.Fatal("nenhum record copiado na passada inteira: o corpus não exercitou o copy-forward e o campo records_copiados " +
+			"seria zero mesmo com a contagem quebrada")
+	}
+	if devolvidoNoTotal <= 0 {
+		t.Fatalf("a passada registrou %d bytes devolvidos no total: sem garbage recolhido a asserção da aritmética "+
+			"passaria com lidos e escritos ambos zerados", devolvidoNoTotal)
+	}
+	t.Logf("%d aposentadoria(s) registradas: %d records copiados e %d bytes devolvidos ao filesystem",
+		len(linhas), copiadosNoTotal, devolvidoNoTotal)
 }
 
 // TestSegundaPartidaDaCompactionNaoSobeSegundaGoroutine é a guarda de dupla
