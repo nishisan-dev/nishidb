@@ -75,6 +75,17 @@ jobs:
         run: |
           mkdir -p "$GOLANGCI_LINT_CACHE"
 
+          # internal/gates/ci_test.go já fixa que .golangci-baseline existe
+          # e contém um inteiro, e o job `test` reprova se ele sumir — mas
+          # esse job roda em paralelo, sem depender do resultado do `test`.
+          # A checagem abaixo é só para o OPERADOR: sem ela, a ausência do
+          # arquivo aparece como "cat: .golangci-baseline: No such file or
+          # directory" no meio do script, sem nomear o que falta.
+          if [ ! -f .golangci-baseline ]; then
+            echo "erro: .golangci-baseline não existe — o job lint não tem contra o que comparar a contagem." >&2
+            exit 1
+          fi
+
           # O exit code NÃO é o veredito: com a linha de base > 0 o linter
           # sempre sai != 0. O veredito é a comparação abaixo, contra
           # .golangci-baseline.
