@@ -100,16 +100,56 @@ type DatasetStats struct {
 
 // StorageStats vem de storage.Store.Stats().
 //
-// Rows é a contagem de linhas vivas; Segments e CurrentSegment coincidem
-// enquanto não houver compaction (os IDs são monotônicos desde 1, sem remoção).
-// PrimaryLoadFactor acima de ~0,7 é o sinal de que o índice primário vai
-// precisar crescer.
+// Rows é a contagem de linhas vivas. Segments e CurrentSegment JÁ NÃO
+// coincidem: eles coincidiam enquanto os IDs eram monotônicos desde 1 e nada
+// removia arquivo, premissa que a compaction do §53-55 quebrou — o ID nunca
+// regride, mas o segmento é aposentado, e a distância entre os dois é
+// justamente o que a compaction devolveu. PrimaryLoadFactor acima de ~0,7 é o
+// sinal de que o índice primário vai precisar crescer.
+//
+// Bytes, GarbageBytes e Compaction entram pelo §96: o `nishidb status` resume
+// STORAGE, e o disco é o assunto do M4 — o §86 dá 2 a 3 dias até o ENOSPC a
+// 500 ev/s, curto demais para o operador descobrir pelo alerta do filesystem.
+// Eles saem da MESMA leitura de Store.Stats() que o /metrics faz no scrape, e
+// não de contador próprio: duas fontes para o mesmo número divergem, e a
+// divergência aparece como um painel que discorda do JSON sem nada estar
+// quebrado.
 type StorageStats struct {
 	Rows              uint64  `json:"rows"`
 	Segments          uint32  `json:"segments"`
 	CurrentSegment    uint32  `json:"currentSegment"`
 	PrimaryLoadFactor float64 `json:"primaryLoadFactor"`
 	Overlay           int     `json:"overlay"`
+	// Bytes é a soma do tamanho dos arquivos de segmento, medida no último
+	// ListSegments — que roda no checkpoint. A ressalva é de FRESCOR, não de
+	// exatidão, e a direção é garantida: limite INFERIOR, nunca superior. É a
+	// mesma nishidb_storage_bytes, com a ressalva escrita em
+	// storage.Stats.StorageBytes.
+	Bytes int64 `json:"bytes"`
+	// GarbageBytes é `disco - vivo` com piso em zero. Como o vivo é limite
+	// SUPERIOR (débitos 38 e 45), a diferença é limite INFERIOR do lixo: "há
+	// pelo menos isto de garbage". O nome não carrega o `>=` porque o campo
+	// JSON é lido por máquina; quem escreve para humano — o `nishidb status` —
+	// é que marca a semântica na coluna.
+	GarbageBytes uint64          `json:"garbageBytes"`
+	Compaction   CompactionStats `json:"compaction"`
+}
+
+// CompactionStats é o estado do laço do §53-55 para o dataset.
+//
+// Running afirma que o LAÇO está de pé, não que há varredura em voo neste
+// instante — a passada dura dezenas de milissegundos contra um cochilo de
+// segundos, e um medidor de "varredura em voo" responderia falso em quase toda
+// pergunta. O caso que importa não é o Close: é a falha sticky do writer
+// (§14.14), em que a goroutine para sozinha e o disco volta a crescer com o
+// processo de pé.
+//
+// BytesRead e BytesWritten são contadores monotônicos por processo, e a
+// distância entre eles é o disco devolvido — a pergunta do §86.
+type CompactionStats struct {
+	Running      bool  `json:"running"`
+	BytesRead    int64 `json:"bytesRead"`
+	BytesWritten int64 `json:"bytesWritten"`
 }
 
 // RotaStats são os contadores do §92 que o protocolo alimenta, por dataset.

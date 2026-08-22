@@ -126,6 +126,18 @@ func (s *Servidor) handleStats(w http.ResponseWriter, r *http.Request) {
 				CurrentSegment:    st.CurrentSegmentID,
 				PrimaryLoadFactor: st.PrimaryLoadFactor,
 				Overlay:           st.OverlayLen,
+				Bytes:             st.StorageBytes,
+				// O lixo sai pela MESMA função que a série do §92 usa. Repetir
+				// a subtração aqui daria duas contas para o mesmo número, e o
+				// piso — que existe pela conversão de int64 negativo para
+				// uint64, não por elegância — teria de ser lembrado nos dois
+				// lugares.
+				GarbageBytes: lixoDeDisco(st),
+				Compaction: protocolo.CompactionStats{
+					Running:      st.CompactionRunning,
+					BytesRead:    st.CompactionBytesRead,
+					BytesWritten: st.CompactionBytesWritten,
+				},
 			},
 			Query: protocolo.RotaStats{
 				Total:  s.met.total.Com(d.nome).Valor(),
