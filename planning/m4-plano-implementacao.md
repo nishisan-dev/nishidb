@@ -1541,6 +1541,17 @@ Prosa que não bate com o código, encontrada na varredura desta fase. Entram na
 - [config.go:71](../internal/config/config.go:71) e [:245](../internal/config/config.go:245) afirmam que a subida avisa sobre `storage.durability` "como já faz". **Não há campo nem aviso.** Acrescentar a chave à lista de `config.sem_efeito` fecha parte do débito 50 — vai junto da Task 3.
 - [manifest.go:35](../internal/storage/checkpoint/manifest.go:35) descreve 12 bytes por segmento; o `encode` grava 36 desde os stats de liveness, e o `make` de capacidade em [:110](../internal/storage/checkpoint/manifest.go:110) usa o `*12` desatualizado. Vai junto da Task 1.
 
+## 4b. Resíduos abertos da Fase B
+
+Levantados pelas revisões e **não fechados**. Nenhum é bloqueio; os três são de
+instrumento, não de produto. Entram na Task 12 ou viram débito com dono.
+
+| # | Resíduo | Por que importa |
+|---|---|---|
+| R1 | `discoDosSegmentos` ([compaction_e2e_test.go:449](../internal/cli/compaction_e2e_test.go:449)) faz `continue` para **qualquer** erro de `os.Stat` | É o gêmeo desleixado do helper que a Task 7b corrigiu do lado do storage — e o argumento do próprio commit se aplica a ele: todo `stat` engolido **diminui** a soma, que é a direção que a asserção lê como "o disco caiu". Agrava por ser o instrumento que responde o **item 2 do critério normativo** da Task 7 |
+| R2 | `bytesApendadosNoDestino` e `tamanhosDosSegmentosPorArquivo` sem oráculo direto | O primeiro carrega aritmética real (desconto de `segment.HeaderSize` por arquivo novo, exclusão de arquivo que sumiu). Funciona e mata mutante por uso indireto, mas o próprio commit que os introduziu argumentou que helper com aritmética precisa de oráculo |
+| R3 | A asserção do **piso** do plateau está calibrada com folga de 17× | Na rodada medida, o piso subiu 37.440 contra um teto de 654.000, enquanto o pico ficou em 62% do limite. Quem carrega o item 2 na prática é a asserção do **pico**; a do piso só dispararia num colapso total. Nenhuma das duas é vácua — as duas disparam com a compaction desligada — mas a do piso não apanha o que se propõe a apanhar |
+
 ## 5. O que este milestone NÃO entrega
 
 - **Recuperação de tombstone.** Record tombstoned é copiado para frente (D2). Limpar location e primary é Fase 9.
