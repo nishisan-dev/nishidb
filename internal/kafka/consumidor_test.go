@@ -165,3 +165,69 @@ func TestAjustaOffsetsEsperaOffsetsProntoAntesDeLerOMapa(t *testing.T) {
 		t.Fatal("ajustaOffsets não prosseguiu depois de offsetsPronto fechar")
 	}
 }
+
+// TestAoRevogarEsperaWProntoAntesDeLerW é o oráculo do débito 70 — o terceiro
+// da família 60/69, achado pela varredura que a revisão do fechamento do 69
+// pediu sobre os demais callbacks.
+//
+// c.w só é atribuído ao FIM de Abre, depois de resolveOrigemEPosicao e de
+// NovaFila. O loop do group nasce assíncrono no metadata loop (mesma raiz do
+// 60) e pode completar join→assign→heartbeat→revoke antes disso —
+// `manageFailWait` do franz-go chama onRevoked (aoRevogar) incondicionalmente
+// ao perceber o contexto do group cancelado. O `if c.w == nil { return }`
+// existente impede o nil-deref, mas não sincroniza a LEITURA do ponteiro com
+// a escrita: é a mesma leitura-sem-barreira que o -race provou real no 69
+// (data race, não "degrada com segurança"), agora sobre um ponteiro.
+//
+// Mesmo oráculo determinístico dos outros dois: a goroutine chama
+// `aoRevogar` com `c.wPronto` ainda ABERTO (simulando Abre no meio do
+// caminho, com c.w deliberadamente nil) e o teste exige que ela fique
+// BLOQUEADA por um intervalo razoável — em vez de já ter lido c.w (nil) e
+// retornado, que é o que o `if c.w == nil` faz hoje sem esperar ninguém. Só
+// depois o teste atribui c.w e fecha `wPronto` (como Abre faria) e exige que
+// a goroutine prossiga e execute o checkpoint de verdade.
+func TestAoRevogarEsperaWProntoAntesDeLerW(t *testing.T) {
+	c := &Consumidor{
+		cfg:     &Config{Topic: "topico-teste"},
+		log:     logging.Descartado().Component("kafka").Dataset("teste"),
+		met:     registraMetricas(nil, "teste"),
+		wPronto: make(chan struct{}),
+	}
+	c.met.partAtribuidas.Set(7) // valor sentinela: só zera se aoRevogar de fato avançar até lá.
+
+	terminou := make(chan any, 1)
+	go func() {
+		defer func() { terminou <- recover() }()
+		c.aoRevogar(context.Background(), nil, map[string][]int32{"topico-teste": {0}})
+	}()
+
+	// Antes da liberação, aoRevogar tem de estar BLOQUEADA. c.w é nil neste
+	// momento — exatamente o estado que a corrida do débito 70 expunha ao
+	// leitor concorrente.
+	select {
+	case v := <-terminou:
+		t.Fatalf("aoRevogar leu c.w antes de wPronto fechar (débito 70): panic=%v", v)
+	case <-time.After(150 * time.Millisecond):
+		// Ainda bloqueada — o esperado.
+	}
+
+	// Libera o gate como Abre faria: c.w ganha seu valor final e só DEPOIS o
+	// canal fecha. Um Writer zero-value com offsets vazio é seguro de
+	// checkpointar sem depender de store/materializer reais — o mesmo padrão
+	// de cadencia_test.go (`&Writer{cad: caso.cad}`).
+	c.w = &Writer{}
+	close(c.wPronto)
+
+	select {
+	case v := <-terminou:
+		if v != nil {
+			t.Fatalf("aoRevogar paniquei após a liberação do gate: %v", v)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("aoRevogar não prosseguiu depois de wPronto fechar")
+	}
+
+	if got := c.met.partAtribuidas.Valor(); got != 0 {
+		t.Fatalf("partAtribuidas = %v, quer 0: aoRevogar não chegou a processar a revogação com o c.w liberado", got)
+	}
+}

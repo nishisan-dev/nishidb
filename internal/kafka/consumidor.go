@@ -118,6 +118,38 @@ type Consumidor struct {
 	// paralelo — uma no callback do group, outra na goroutine do construtor.
 	offsetsPronto chan struct{}
 
+	// wPronto barra aoRevogar até c.w existir (débito 70 — o terceiro da
+	// família 60/69, achado pela varredura que a revisão do 69 pediu sobre
+	// os demais callbacks).
+	//
+	// c.w só é atribuído ao FIM de Abre, depois de resolveOrigemEPosicao E
+	// de NovaFila. A checagem `if c.w == nil` em aoRevogar impede o
+	// nil-deref, mas não sincroniza a LEITURA do ponteiro com a escrita: o
+	// loop do group nasce assíncrono no metadata loop (mesma raiz do 60) e
+	// pode completar join→assign→heartbeat→revoke — `manageFailWait` chama
+	// onRevoked incondicionalmente ao perceber o contexto do group cancelado
+	// — antes de Abre chegar a atribuir c.w. É a mesma leitura-sem-barreira
+	// que o -race provou real no 69, agora sobre um ponteiro em vez de um
+	// mapa: sem esta barreira, o "degrada com segurança" do nil-check não é
+	// garantia de sincronização, só de não panicar.
+	//
+	// Reordenar a atribuição de c.w para mais cedo NÃO é opção: NovoWriter
+	// depende de c.fila (criada depois de resolveOrigemEPosicao) e de
+	// c.offsetsIniciais (escrita POR resolveOrigemEPosicao), então c.w não
+	// pode existir antes desse ponto — a barreira é a única saída, como já
+	// era para admPronto e offsetsPronto.
+	//
+	// Fecha em TODO caminho de saída de Abre, sempre antes de qualquer
+	// cl.Close() dentro da própria função: Close() chama LeaveGroupContext e
+	// espera `<-c.g.left`, e o caminho de erro do group (`manageFailWait`,
+	// acionado pelo cl.ctx cancelado que o Close provoca) chama onRevoked
+	// SINCRONAMENTE antes de o group terminar de sair — se aoRevogar ficasse
+	// preso neste gate, `c.g.left` nunca fecharia e Close() travaria para
+	// sempre. Um gate próprio, não fundido aos outros dois, pela mesma razão
+	// de latência do offsetsPronto: aoRevogar não depende de c.adm nem de
+	// offsetsIniciais, e um gate único atrasaria os três até o mais lento.
+	wPronto chan struct{}
+
 	fecha sync.Once
 }
 
@@ -151,6 +183,7 @@ func Abre(ctx context.Context, cfg *Config, o Opcoes) (*Consumidor, error) {
 		cfg: cfg, log: log, met: met, origem: cfg.Origem(),
 		admPronto:     make(chan struct{}),
 		offsetsPronto: make(chan struct{}),
+		wPronto:       make(chan struct{}),
 	}
 
 	opts := append(cfg.opcoesDoCliente(),
@@ -163,12 +196,14 @@ func Abre(ctx context.Context, cfg *Config, o Opcoes) (*Consumidor, error) {
 	cl, err := kgo.NewClient(opts...)
 	if err != nil {
 		// kgo.NewClient só falha antes de qualquer goroutine do cliente
-		// nascer (validação de opções), então aoAtribuir e ajustaOffsets
-		// nunca tiveram chance de rodar aqui — mas fechar os dois gates de
-		// todo caminho de saída, sem exceção, é o invariante que evita
-		// reintroduzir o débito 60/69 por omissão num caminho futuro.
+		// nascer (validação de opções), então aoAtribuir, ajustaOffsets e
+		// aoRevogar nunca tiveram chance de rodar aqui — mas fechar os três
+		// gates de todo caminho de saída, sem exceção, é o invariante que
+		// evita reintroduzir o débito 60/69/70 por omissão num caminho
+		// futuro.
 		close(c.admPronto)
 		close(c.offsetsPronto)
+		close(c.wPronto)
 		return nil, fmt.Errorf("kafka: criar cliente do dataset %q: %w", cfg.Dataset, err)
 	}
 	c.cl = cl
@@ -182,12 +217,17 @@ func Abre(ctx context.Context, cfg *Config, o Opcoes) (*Consumidor, error) {
 	err = c.resolveOrigemEPosicao(ctx, o.Store)
 	close(c.offsetsPronto)
 	if err != nil {
+		// c.w nunca vai existir para este Consumidor (a construção parou
+		// aqui): libera aoRevogar ANTES do cl.Close() que já vem a seguir —
+		// Close espera o group sair, e sair pode passar por onRevoked.
+		close(c.wPronto)
 		cl.Close()
 		return nil, err
 	}
 
 	c.fila = NovaFila(cfg.QueueSize, cfg.QueueBytes)
 	c.w = NovoWriter(cfg, o.Mat, o.Store, c.fila, log, met, c.offsetsIniciais, o.Cadencia, c.commitNoBroker)
+	close(c.wPronto)
 	return c, nil
 }
 
@@ -370,6 +410,11 @@ func (c *Consumidor) ajustaOffsets(_ context.Context, doGroup map[string]map[int
 // foi processado, então não há evento em voo na fila. O checkpoint aqui é o
 // que evita reprocessar desde o último ponto durável a cada rebalance.
 func (c *Consumidor) aoRevogar(ctx context.Context, _ *kgo.Client, revogadas map[string][]int32) {
+	// Débito 70: o group pode revogar antes de c.w existir (a mesma raiz
+	// assíncrona do 60/69). wPronto fecha só depois de Abre atribuir c.w —
+	// ver o comentário do campo.
+	<-c.wPronto
+
 	if c.w == nil {
 		return
 	}
