@@ -97,16 +97,42 @@ func semeia(t *testing.T, a *ambiente, nome string, n int) {
 // servidorComDados sobe um servidor de verdade, já com n linhas materializadas.
 func servidorComDados(t *testing.T, n int, blocoServer string) *server.Servidor {
 	t.Helper()
-	a := novoAmbienteCom(t, blocoServer)
+	srv, _ := servidorComDadosEDiretorio(t, n, blocoServer)
+	return srv
+}
+
+// servidorComDadosEDiretorio faz o mesmo e ainda devolve o diretório do
+// dataset — a raiz de onde pendem data/, metadata/, indexes/ e checkpoint/.
+//
+// O diretório existe porque há asserção que só fecha contra o FILESYSTEM. A
+// nishidb_storage_bytes promete tamanho de arquivo, e a única maneira de
+// provar que ela cumpre é somar os segment-*.dat por fora do Store: um
+// oráculo que perguntasse ao próprio Store confirmaria apenas que o número foi
+// copiado de um campo para outro, que é como o mutante de publicar o tally de
+// liveness sob esse nome sobreviveu à suíte inteira.
+//
+// A separação em dois helpers é para não mexer nos chamadores que só querem o
+// servidor: o de baixo é o real, e servidorComDados delega a ele.
+func servidorComDadosEDiretorio(t *testing.T, n int, blocoServer string) (*server.Servidor, string) {
+	t.Helper()
+	return servidorComDadosDiretorioEStorage(t, n, blocoServer, "")
+}
+
+// servidorComDadosDiretorioEStorage é o de baixo: aceita linhas extras do bloco
+// `storage:`, que é como um teste pede rotação de segmento.
+func servidorComDadosDiretorioEStorage(t *testing.T, n int, blocoServer, storageExtra string) (*server.Servidor, string) {
+	t.Helper()
+	a := novoAmbienteComStorage(t, blocoServer, storageExtra)
 	a.escreveDataset("d", strings.ReplaceAll(specConsultavel, "%s", "d"))
 	semeia(t, a, "d", n)
 
-	srv, err := server.Novo(a.carrega(), server.Opcoes{})
+	cfg := a.carrega()
+	srv, err := server.Novo(cfg, server.Opcoes{})
 	if err != nil {
 		t.Fatalf("subida: %v", err)
 	}
 	roda(t, srv)
-	return srv
+	return srv, cfg.DirDoDataset("d")
 }
 
 // roda sobe o servidor numa goroutine e garante o encerramento gracioso no fim

@@ -23,12 +23,22 @@ abaixo.
 
 > **Sobre as URLs dos diagramas.** O repositório é **privado**, então
 > `raw.githubusercontent.com` responde 404 a quem não está autenticado — e o
-> proxy do PlantUML busca o `.puml` anonimamente. Por isso os cinco diagramas
+> proxy do PlantUML busca o `.puml` anonimamente. Por isso **todos** os
+> diagramas deste documento — o número deles muda a cada fase, e um número
+> escrito aqui só serviria para envelhecer errado —
 > passam por `git-raw.nishisan.dev`, que serve o conteúdo do repositório
 > privado ao proxy. Os fontes estão versionados em
 > [`docs/diagrams/`](diagrams/) e renderizam em qualquer servidor PlantUML.
 > As URLs fixam **`main`** de propósito: fixar a branch de trabalho quebraria
 > os links no merge.
+>
+> **Se as imagens não aparecerem, o problema é o certificado, não o fonte.** Em
+> 2026-08-22 o certificado TLS de `git-raw.nishisan.dev` estava **expirado
+> desde 2026-08-21 15:07 UTC**, e sem conseguir buscar o `.puml` o proxy
+> devolve **HTTP 500** para todas as URLs desta página. O conserto é renovar o
+> certificado no host — não há nada a mudar aqui. Os fontes em si continuam
+> válidos, e isso é verificável sem o proxy: `plantuml -checkonly -failfast2`
+> em `docs/diagrams/*.puml`. Registrado no débito 39.
 
 Um binário só, sem dependência externa em runtime. Dois comandos: `ingest`
 materializa NDJSON num dataset; `query` executa SQL e escreve NDJSON.
@@ -185,6 +195,71 @@ remoto](#o-protocolo-remoto) e a rodada em [`aceite-fase6.md`](aceite-fase6.md).
 > Dois writers no mesmo dataset significam dois overlays de
 > location, dois contadores de rowId e dois checkpoints — corrupção garantida.
 > **Mantenha o diretório do dataset em disco local.**
+
+## Compaction
+
+![Compaction de segmento: eleição, varredura streaming, republicação condicional sob o mutex do writer, os quatro passos da aposentadoria e os dois pontos de reparo do Open](https://uml.nishisan.dev/proxy?src=https://git-raw.nishisan.dev/nishisan-dev/nishidb/main/docs/diagrams/compaction_flow.puml)
+
+Append-only sem compaction é disco que cresce para sempre: todo update apenda um
+record novo e deixa o anterior como garbage. O §86 projeta **30-43 GB escritos
+por dia** contra 5,6-8 GB de estado vivo a 500 ev/s — dois a três dias de disco,
+e nada no M1 devolvia esse espaço.
+
+**O desenho é copy-forward, e não "arquivo novo".** A varredura re-apenda o
+record vivo pelo caminho **normal** de escrita, no segmento corrente. A
+alternativa — montar um arquivo novo com ID próprio — esbarra em três
+restrições que já existiam: o `checkHeader` amarra o `segmentID` ao nome do
+arquivo, o `openNew` usa `O_EXCL`, e os IDs vêm de `segID+1` no writer. O
+copy-forward faz as três desaparecerem e reusa rotação, tally e durabilidade já
+provadas.
+
+**Vivo é "a location ainda nomeia este record"** (§55), e não "a row é visível".
+A distinção decide um caso real: um record **tombstoned** precisa ser copiado
+também, porque a location aponta para ele — não copiá-lo deixaria a location
+pendurada num arquivo que a aposentadoria vai remover, e o `Open` seguinte
+recusaria o dataset inteiro. Recuperar tombstone exige limpar location e
+primary, que é trabalho do TTL.
+
+**A verificação e o `Append` acontecem na MESMA seção crítica do writer.** É a
+corretude inteira do mecanismo: entre ler a location e apendar, a ingestão pode
+ter gravado um update, e fora do lock a cópia do payload **antigo** seria
+publicada **depois** do novo. O dataset voltaria no tempo sem erro, sem log e
+com o CRC batendo — nem a recovery distinguiria o estrago de uma escrita
+legítima. É por isso que a compaction não chama `Put`.
+
+**O tally do segmento esvaziado é zerado por AUTORIDADE da varredura**, e não
+deduzido dos decrementos. O tally é limite superior por construção (débitos 38 e
+45): o record órfão que o replay do tail deixa não é nomeado por location
+nenhuma, então nenhum decremento o encontra e o candidato jamais chegaria a zero
+por subtração. A varredura viu **todos** os records e é a única leitura exata do
+segmento que existe no produto. Varredura **cancelada ou incompleta não tem essa
+autoridade** — e um segmento selado cujo prefixo válido não cobre o arquivo
+inteiro é corrupção, recusada em vez de compactada: zerar ali transformaria a
+perda de um record na perda do segmento.
+
+**A aposentadoria é em quatro passos, e a ordem é a garantia.** Checkpoint (as
+republicações viram duráveis), rename para nome **não canônico** — que o
+`ListSegments` já ignorava de propósito, de modo que o segmento sai do dataset
+sem que um byte saia do disco —, checkpoint (o manifest deixa de nomeá-lo) e só
+então unlink. Inverter os dois últimos é a troca que perde dado: um unlink com o
+manifest ainda nomeando o segmento produz "listado e ausente", que o `Open`
+trata como `ErrDatasetCorrupt`.
+
+Os dois intervalos entre esses passos são **janelas de crash**, e o `Open` as
+repara pelo manifest: segmento **listado** com o canônico ausente é
+**restaurado**; segmento **não listado** é **removido**. O reparo roda antes de
+qualquer conclusão sobre o conjunto de segmentos — conferir o conjunto primeiro
+faria o `Open` condenar como corrompido um dataset íntegro.
+
+**Ela é background, não comando.** A goroutine sobe com o servidor (depois do
+HTTP, antes do consumer, que é a ordem do §51 aplicada a mais um consumidor de
+disco), faz a primeira passada imediatamente e dorme entre passadas. O `Close`
+cancela e **aguarda** antes de tomar o lock de vida — segurar o quiesce pela
+varredura inteira deixaria o encerramento preso por minutos. E ela **para de
+vez** na primeira falha: o erro que chega ali é o modo falho sticky do writer ou
+a corrupção recusada, e nos dois casos a passada seguinte reencontraria o mesmo
+estado. Quem observa isso é `nishidb_compaction_running` — o `compaction.parou`
+no log fala com quem já foi ler o log.
 
 ## Recovery
 
@@ -519,6 +594,21 @@ label que o dado não sustenta é pior que label nenhum. Pela mesma leitura de
 `Store.Stats()` que o `/v1/stats` faz, `nishidb_materialized_rows` e
 `nishidb_segments_total` também ganharam alimentador.
 
+**As cinco séries de disco e compaction do §92 nasceram com o M4.**
+`nishidb_storage_bytes` é soma de **tamanho de arquivo** e não herda a
+imprecisão do tally; `nishidb_storage_garbage_bytes` é `total − vivo` e sai
+publicada como **limite INFERIOR**, com a semântica escrita na `Ajuda` da série
+— a liveness é limite superior (débitos 38 e 45), logo "há **pelo menos** isto
+de lixo" é a única afirmação verdadeira que se pode fazer com esses dois
+números, e ela já é acionável. `nishidb_compaction_running` é 0/1 do **laço**
+por dataset, não da varredura em voo: a passada dura dezenas de milissegundos
+contra um cochilo de segundos, de modo que um medidor de "varredura agora"
+responderia 0 em quase toda raspagem e o painel não distinguiria a compaction
+viva da desligada. `nishidb_compaction_bytes_read` e `_bytes_written` são
+**contadores** monotônicos por processo, e a distância entre eles é o disco
+devolvido — contadores, e não medidores, porque o painel pede a TAXA de bytes
+movidos, e taxa não se calcula sobre um número que zera a cada passada.
+
 O nome de dataset vindo do request **nunca** vira label: label alimentado por
 entrada do cliente é uma série nova por requisição, e um cliente em loop
 consumiria a memória do processo. Erro antes de o dataset ser resolvido é
@@ -551,10 +641,11 @@ quem só deveria raspar `/metrics`.
 
 ## O que ainda não existe
 
-Driver JDBC (Fase 7), autenticação e TLS (Fase 11), índice hash físico, TTL,
-compaction e tombstones por retenção (M4/Fase 8-9). O estado item a item está em
-[`aceite-m1.md`](aceite-m1.md), [`aceite-m2.md`](aceite-m2.md) e
-[`aceite-fase6.md`](aceite-fase6.md).
+Autenticação e TLS (Fase 11) e o driver JDBC (Fase 7) — nessa ordem, que é a do
+M5 —, mais índice hash físico, TTL e tombstones por retenção (M6). **A
+compaction saiu desta lista no M4** e está descrita acima. O estado item a item
+está em [`aceite-m1.md`](aceite-m1.md), [`aceite-m2.md`](aceite-m2.md),
+[`aceite-fase6.md`](aceite-fase6.md) e [`aceite-m4.md`](aceite-m4.md).
 
 ## Como os números foram obtidos
 

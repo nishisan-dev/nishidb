@@ -7,11 +7,34 @@ linters:
     - errcheck
     - revive
 
+# Os tetos default (`--max-issues-per-linter=50`, `--max-same-issues=3`) não são
+# cosmética de saída: eles quebram o único gate de lint que este projeto tem,
+# que é "0 apontamentos no código NOVO, com a linha de base conferida antes e
+# depois". Com um linter estourado no teto — `revive` reporta 50 truncado contra
+# 81 reais, `errcheck` 50 contra 294 —, um apontamento novo NÃO muda o total:
+# ele entra no lugar de outro que a truncagem descartou, e a comparação "N
+# antes, N depois" segue verde com código sujo. Pior, a seleção truncada nem é
+# estável: duas rodadas no mesmo commit devolvem conjuntos diferentes, então o
+# que ela produz não serve nem de linha de base. Com os tetos em 0 o número é o
+# real — 390 nesta branch, não os 114 truncados que a documentação do M2 e da
+# Fase 6 citam — e a comparação volta a significar alguma coisa. Ver os débitos
+# 53 e 59 em docs/debitos.md.
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
 # gofmt fica aqui, e não em `linters`: na v2 do golangci-lint ele é FORMATTER,
 # e listá-lo como linter faz o binário recusar a configuração inteira com
 # "can't load config: gofmt is a formatter" — ou seja, o projeto ficava sem
-# lint nenhum, em silêncio, porque o Makefile cai para `go vet` quando o
-# golangci-lint não está instalado e ninguém via o erro.
+# lint nenhum, em silêncio, porque o alvo `lint` do Makefile CAÍA para `go vet`
+# quando o golangci-lint não estava instalado e ninguém via o erro.
+#
+# O fallback foi REMOVIDO no M4: hoje o alvo recusa com código não-zero e nomeia
+# o que instalar, e internal/gates/lint_test.go o executa para provar que
+# continua recusando. O parágrafo acima está no passado de propósito — este
+# arquivo é para onde o comentário do alvo `lint` aponta, e afirmação stale no
+# arquivo de configuração do gate é o pior lugar possível para ela. Ver os
+# débitos 53 e 59 em docs/debitos.md.
 formatters:
   enable:
     - gofmt

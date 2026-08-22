@@ -5,6 +5,7 @@ package storage
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -93,15 +94,88 @@ type Options struct {
 	// pode medir (duração e último sucesso do checkpoint). Nil desliga a
 	// instrumentação sem desligar nada mais.
 	Metrics *metrics.Registry
+	// traceRecovery é o seam de teste do FIM do recoverFrom. Nil em
+	// produção, e INEXPORTADO de propósito: ninguém de fora do pacote
+	// consegue instalá-lo, então ele não acrescenta superfície ao contrato
+	// do Store — a única coisa que muda para quem chama Open é nada.
+	//
+	// Mora aqui, e não num setter como o cpTrace, porque a recovery roda
+	// DENTRO do Open: quando o Store existe para o chamador, o Checkpoint
+	// incondicional já recarregou os espelhos em valor absoluto e apagou
+	// justamente o estado que se quer medir.
+	traceRecovery func(*Store)
 }
 
 // Stats é o snapshot mínimo de estado do Store.
 type Stats struct {
-	RowCount          uint64
+	RowCount uint64
+	// SegmentsTotal conta segmentos de fato: o writer os acrescenta ao
+	// rotacionar e o checkpoint os reconcilia com o ListSegments. Já foi
+	// DERIVADO do ID corrente ("IDs monotônicos desde 1, sem remoção"),
+	// premissa que a compaction do §53-55 quebra: o ID nunca regride, mas o
+	// arquivo é aposentado, e derivar passaria a reportar como existente um
+	// segmento já removido — justo no painel que serve para acompanhar a
+	// remoção.
 	SegmentsTotal     uint32
 	CurrentSegmentID  uint32
 	PrimaryLoadFactor float64
 	OverlayLen        int
+	// StorageBytes soma o tamanho dos arquivos de segmento. Não herda a
+	// imprecisão do tally de liveness (débitos 38 e 45) porque não depende
+	// dele: é tamanho de arquivo, medido pelo ListSegments. É a série que
+	// antecede o ENOSPC — o §86 dá 2 a 3 dias de margem a 500 ev/s, curto
+	// demais para descobrir pelo alerta do filesystem.
+	//
+	// Ressalva de FRESCOR, e ela é GRANDE: o tamanho é o do último
+	// ListSegments, que só roda no checkpoint, então o valor fica atrás de
+	// TUDO que foi escrito desde então — não só do crescimento do segmento
+	// corrente, mas de segmentos inteiros já selados no intervalo. Medido com
+	// SegmentSize de 8 KiB e 400 Puts sem checkpoint intermediário: 64 bytes
+	// reportados contra 28.256 em quatro arquivos, subestimativa de ~440x.
+	//
+	// A direção é o que se garante, e ela vale sempre: limite INFERIOR, nunca
+	// superior. Errar para baixo numa série de disco é o lado seguro — errar
+	// para cima faria o operador provisionar disco que não estava sendo
+	// usado. Mas a MAGNITUDE do atraso é a do intervalo entre checkpoints, e
+	// ela deixou de ser ilimitada: o débito 56 FECHOU, e o consumidor Kafka
+	// passou a checkpointar por tempo além de por contagem, de modo que uma
+	// ingestão ociosa não congela mais a série.
+	//
+	// Relistar o diretório dentro do Stats() tornaria o número exato ao custo
+	// de um readdir por raspagem de métrica. Não foi o caminho escolhido
+	// porque o atraso agora é o intervalo de checkpoint (§78, 30s no padrão),
+	// ordens de grandeza menor que a margem até o disco encher.
+	StorageBytes int64
+	// LiveBytesUpperBound é a soma do tally por segmento. NÃO é contagem
+	// exata: é limite SUPERIOR, pelo mesmo contrato de
+	// checkpoint.SegmentInfo. O nome carrega a ressalva de propósito —
+	// chamá-lo de LiveBytes convidaria a próxima revisão a tratá-lo como
+	// exato e a dimensionar compaction por ele.
+	LiveBytesUpperBound uint64
+	// CompactionRunning é o 0/1 de nishidb_compaction_running (§92), e o que
+	// ele afirma é que o LAÇO do §53-55 está de pé para este dataset — não
+	// que há uma varredura em voo neste microssegundo. A escolha é medida: a
+	// passada dura dezenas de milissegundos contra um cochilo de segundos, de
+	// modo que um medidor de "varredura em voo" responderia 0 em quase toda
+	// raspagem e o painel não distinguiria a compaction viva da desligada.
+	//
+	// Ele desce quando o laço termina, e o caso que importa não é o Close: é
+	// a falha sticky do writer (§14.14), em que a goroutine para sozinha e o
+	// disco volta a crescer com o processo de pé. O compaction.parou registra
+	// o instante no log; esta série é o que um alerta consegue observar.
+	CompactionRunning bool
+	// CompactionBytesRead e CompactionBytesWritten são os dois CONTADORES do
+	// §92, monotônicos por processo: somam o que as varreduras leram e o que
+	// o copy-forward escreveu desde a abertura do dataset. A distância entre
+	// eles é o disco devolvido, que é a pergunta do §86.
+	//
+	// São contadores e não medidores por causa da leitura que o operador faz:
+	// o painel pede a TAXA de bytes movidos, e taxa não se calcula sobre um
+	// número que zera a cada passada. Reabrir o dataset os zera, como zera
+	// qualquer contador de processo — é a semântica que o Prometheus espera e
+	// trata com `rate()`.
+	CompactionBytesRead    int64
+	CompactionBytesWritten int64
 }
 
 const defaultSegmentSize = 512 << 20
@@ -129,6 +203,47 @@ type Store struct {
 	// curSegID espelha o segmento corrente para leitura concorrente em
 	// Stats (segment.Writer não é thread-safe).
 	curSegID atomic.Uint32
+	// segCount/liveBytesAll/diskBytesAll espelham os AGREGADOS de segTally e
+	// segSize, no mesmo padrão do curSegID acima e pelo mesmo motivo: o que
+	// atravessa a fronteira writer→leitor não pode ser a estrutura, tem de
+	// ser o número. Mapa Go não se lê sem sincronizar (é fatal error do
+	// runtime, não corrida benigna), e sincronizar aqui significaria tomar o
+	// wmu no Stats — que o Checkpoint segura do início ao fim, com histograma
+	// que vai até 30s (o intervalo padrão do §78). Um Stats atrás desse lock
+	// apagaria o /metrics e o /v1/stats exatamente sob a pressão que eles
+	// existem para mostrar, que num milestone dedicado a tornar a curva de
+	// disco visível (§92) é a regressão mais cara possível.
+	//
+	// Escrita WRITER-ONLY, sob wmu, nos mesmos pontos em que os mapas se
+	// movem: applyRecord (nascimento de segmento e delta de liveness), a
+	// semeadura da recovery (que precisa da MESMA base do manifest com que
+	// semeia o tally, sob pena de a primeira baixa do replay furar o
+	// agregado por baixo) e a reconciliação do checkpoint, que recarrega os
+	// três com os valores absolutos.
+	//
+	// Custo no caminho quente, contado com precisão porque o número já saiu
+	// errado uma vez: DUAS somas atômicas no Put que é update — a do record
+	// que nasce e a da baixa do record que ele torna garbage — e UMA no Put
+	// que só cria. O Put que estreia um segmento paga mais uma, no segCount.
+	// Zero alocação nos três casos, então os gates de AllocsPerRun seguem
+	// valendo.
+	//
+	// Os três são atômicos INDEPENDENTES, então um leitor pode pegar um
+	// deles de antes e outro de depois do mesmo checkpoint. É aceito de
+	// propósito: os campos que eles alimentam já são declaradamente limites
+	// (inferior no disco, superior no vivo), e nenhuma decisão operacional
+	// depende de os três descreverem o mesmo nanossegundo. Um snapshot
+	// coerente exigiria publicar uma struct por ponteiro atômico, ou seja uma
+	// alocação por Put, para servir uma raspagem de métrica.
+	segCount     atomic.Uint32
+	liveBytesAll atomic.Uint64
+	diskBytesAll atomic.Int64
+	// espelhosDivergentes conta as vezes em que o checkpoint ENCONTROU os
+	// três fora dos mapas. Não é contador de falha do checkpoint: a recarga
+	// conserta o valor e a ingestão segue. É contador de MENTIRA PUBLICADA —
+	// enquanto durou, o /v1/stats e a nishidb_garbage_bytes descreveram um
+	// dataset que não existe. Ver conferaEspelhos.
+	espelhosDivergentes atomic.Uint64
 	// clearFailures conta erros tolerados na fase de Clear dos bitmaps
 	// (deixam falso positivo, filtrado pelo §44); exposto via métricas na S13.
 	clearFailures atomic.Uint64
@@ -153,6 +268,36 @@ type Store struct {
 	vida    sync.RWMutex
 	fechado bool
 
+	// compCancela e compEmVoo são o ciclo de vida da goroutine de compaction
+	// (§53-55, decisão D7). Ela NÃO se junta ao entra()/sai() pela duração da
+	// passada: o Close toma vida.Lock(), que é quiesce, e uma varredura de
+	// segmento leva minutos — o Close ficaria preso por todo esse tempo. O
+	// desenho é o oposto: o Close CANCELA e AGUARDA a goroutine antes de
+	// pedir o vida.Lock(), e cada trecho curto dela entra e sai do lock de
+	// vida por conta própria.
+	//
+	// compMu protege o par contra Inicia e Para concorrentes, e é segurado
+	// durante o Wait de propósito: sem isso um Inicia podia somar ao
+	// WaitGroup que o Para está esperando, que é uso indevido do tipo.
+	compMu      sync.Mutex
+	compCancela context.CancelFunc
+	compEmVoo   sync.WaitGroup
+
+	// compAtiva, compBytesLidos e compBytesEscritos são os alimentadores das
+	// três séries de compaction do §92, que até o M4 eram nome sem número
+	// (nomes.go). São atômicos e não campos sob o wmu pelo motivo dos
+	// espelhos logo acima: quem os lê é o /metrics, no instante do scrape, e
+	// um scrape atrás do lock do writer apaga o painel exatamente sob a
+	// pressão que ele existe para mostrar.
+	//
+	// Não há contador duplicado aqui: estes são a ÚNICA soma dos bytes que a
+	// compaction move, e o servidor os lê pelo Stats() em vez de manter cópia
+	// própria — a doutrina do registry (metrics.go) é que quem publica lê a
+	// estrutura existente.
+	compAtiva         atomic.Bool
+	compBytesLidos    atomic.Int64
+	compBytesEscritos atomic.Int64
+
 	// wmu serializa as operações do writer (Put/Sync/Checkpoint): o
 	// contrato "writer único" deixa de ser convenção e vira mecanismo —
 	// um Checkpoint de coordenador concorrente com Put não pode mais
@@ -162,6 +307,37 @@ type Store struct {
 	// cpTrace é o seam de teste da ordem de durabilidade do checkpoint
 	// (nil em produção).
 	cpTrace func(step string)
+	// apTrace é o seam de teste dos passos da aposentadoria de segmento
+	// (§53-55, decisão D5). Nil em produção, mesmo regime do cpTrace acima.
+	//
+	// Existe porque as duas janelas de crash da aposentadoria são o intervalo
+	// ENTRE dois passos, e nenhuma delas é alcançável de fora: quem quer matar
+	// o processo entre o rename e o checkpoint precisa de um ponto de parada
+	// lá dentro, e reproduzir o estado à mão só afirmaria sobre a ideia que o
+	// teste faz da aposentadoria, não sobre o que ela deixa em disco.
+	apTrace func(passo string)
+	// apDirSync é o seam de teste dos fsyncs de DIRETÓRIO da aposentadoria e
+	// do REPARO dela (nil em produção, mesmo regime dos dois acima), e ele é
+	// notificado de DENTRO do helper que executa o fsync — nunca de uma linha
+	// ao lado.
+	//
+	// São TRÊS chamadas, não duas: as do rename e do unlink em
+	// aposentaSegmento, e a do fim do reparaAposentados. A terceira entrou
+	// depois, e o motivo está registrado porque ele é a lição: enquanto o
+	// reparo foi função de PACOTE, o seam não o alcançava, e apagar aquele
+	// fsync deixava `go test ./...` inteiro verde no único caminho da fase
+	// que destrói arquivo. Seam que cobre parte da família não é seam da
+	// família.
+	//
+	// A distinção é a razão de o campo existir. Um rótulo emitido ao lado da
+	// chamada mede a si mesmo: apagar o fsync e deixar o rótulo continuaria
+	// verde, que é exatamente o defeito que a revisão desta tarefa encontrou
+	// no primeiro Checkpoint. Notificado de dentro, o aviso só chega se a
+	// chamada de verdade tiver acontecido e devolvido nil, e o teste ainda
+	// ancora CADA aviso no estado do diretório naquele instante — é assim
+	// que "houve fsync depois do rename e antes do manifest" vira asserção
+	// sobre o disco, e não sobre a ordem em que alguém escreveu rótulos.
+	apDirSync func(dir string)
 	// clearErrHook/setErrHook são seams de teste das fases de Clear e Set
 	// dos bitmaps (nil em produção; setErrHook viabiliza o phantom commit
 	// com payload replayável).
@@ -172,6 +348,21 @@ type Store struct {
 	// stats do manifest §9; em memória — a S12 os reconstrói no replay).
 	// Writer-only.
 	segTally map[uint32]*segStats
+
+	// segSize guarda o tamanho de cada arquivo de segmento visto pelo
+	// último ListSegments do checkpoint. Writer-only, mesmo regime do
+	// segTally.
+	//
+	// É mapa à parte, e não um campo do segStats, porque as duas coisas têm
+	// FONTES diferentes e precisam continuar tendo: o tally é o que o writer
+	// contabilizou (limite superior, débito 38), enquanto isto é o que o
+	// diretório respondeu. Fundi-los faria a imprecisão de um contaminar o
+	// outro, e é justamente a independência que deixa StorageBytes não
+	// herdar a do tally. São também mapas com CICLOS DE VIDA distintos: o
+	// tally acompanha cada Put, e isto só se move no checkpoint — que é
+	// justamente onde o CONJUNTO de chaves dos dois é reconciliado, porque só
+	// ali o Store sabe quais arquivos o diretório ainda tem.
+	segSize map[uint32]int64
 
 	// lock garante acesso exclusivo ao diretório do dataset.
 	lock *datasetLock
@@ -204,6 +395,20 @@ type Store struct {
 	buildBuf []byte // record em construção
 	prevBuf  []byte // fallback de leitura do estado anterior
 	valBuf   []byte // validação de colisão no Insert
+	// compactBuf é o record em construção do copy-forward (§53-55). É o
+	// "buffer reutilizado" que o §54 exige: sem ele cada record copiado
+	// alocaria, e a compaction varre segmentos inteiros. A reutilização está
+	// aferida em bytes pelo TestCopyForwardReusaOBufferDoWriterEmVezDeAlocarPorRecord
+	// — requisito de performance que a suíte não mede é requisito que não
+	// existe, e este campo poderia ser removido sem que nada acusasse.
+	//
+	// É buffer À PARTE do buildBuf, e não reuso dele, porque os dois nascem em
+	// caminhos que só não colidem enquanto nenhum deles segurar o slice além
+	// da seção crítica do writer. Hoje nenhum segura, mas reusar o buildBuf
+	// transformaria isso numa premissa não escrita ENTRE a ingestão e a
+	// compaction — e a compaction chama daqui de dentro de uma varredura, onde
+	// a distância entre quem constrói o record e quem o consome só cresce.
+	compactBuf []byte
 }
 
 // entra registra uma operação em voo e recusa se o Store já fechou. O
@@ -273,6 +478,7 @@ func Open(opts Options) (*Store, error) {
 		opts:     opts,
 		bitmaps:  make(map[types.FieldID]*bitmap.Index),
 		segTally: make(map[uint32]*segStats),
+		segSize:  make(map[uint32]int64),
 	}
 	if opts.Metrics != nil {
 		s.cpDuracao = opts.Metrics.Histograma(metrics.MetCheckpointDurationSeconds,
@@ -791,10 +997,16 @@ func (s *Store) applyRecord(a recordApply) error {
 	if tally == nil {
 		tally = &segStats{}
 		s.segTally[a.seg] = tally
+		// Nascimento de entrada no tally é nascimento de segmento aos olhos
+		// do writer — é por aqui que uma rotação aparece no Stats no instante
+		// em que acontece, sem esperar o checkpoint relistar o diretório
+		// (é o que o TestRotacaoDeSegmentoNoPut exige).
+		s.segCount.Add(1)
 	}
 	tally.totalRecords++
 	tally.liveRecords++
 	tally.liveBytes += uint64(a.recLen)
+	s.liveBytesAll.Add(uint64(a.recLen))
 	// Update torna o record ANTERIOR garbage no instante do publish:
 	// decrementa a liveness do segmento antigo (lida ANTES do publish
 	// sobrescrever a location). Segmentos pré-restart têm o tally semeado
@@ -807,11 +1019,19 @@ func (s *Store) applyRecord(a recordApply) error {
 				if t.liveRecords > 0 {
 					t.liveRecords--
 				}
-				if t.liveBytes >= oldLen {
-					t.liveBytes -= oldLen
-				} else {
-					t.liveBytes = 0
-				}
+				// A BAIXA é calculada antes de mexer no tally, e o espelho
+				// desconta exatamente ela — nunca o oldLen cru. O oldLen é
+				// estimativa (débitos 38 e 45) e o clamp em zero abaixo é o
+				// que impede o tally de furar por baixo; descontar o valor
+				// não-clampado do agregado o faria divergir da soma dos
+				// tallies num erro que só cresce, e o agregado é justamente
+				// o que o Stats publica no lugar da soma.
+				baixa := min(oldLen, t.liveBytes)
+				t.liveBytes -= baixa
+				// Go não tem Sub atômico para Uint64; ^(x-1) é o complemento
+				// de dois de -x, que é o idioma da própria stdlib (e devolve
+				// 0 para x==0, então a baixa nula não vira underflow).
+				s.liveBytesAll.Add(^(baixa - 1))
 			}
 		}
 	}
@@ -1227,9 +1447,23 @@ func (s *Store) syncLocked() error {
 }
 
 // Stats devolve o snapshot de estado do Store. Seguro para uso concorrente
-// com o writer (o segmento corrente vem de um espelho atômico, não do
-// segment.Writer). RowCount conta rows CRIADAS — não decrementa em
+// com o writer, e o "seguro" aqui é forte: Stats NÃO toma o wmu, então nunca
+// espera o writer. RowCount conta rows CRIADAS — não decrementa em
 // tombstone; a contagem de vivas é semântica da S14.
+//
+// Tudo o que sai daqui vem de leitura atômica, inclusive os campos de disco.
+// A alternativa — varrer segTally/segSize sob o wmu, que são writer-only e
+// não se leem sem sincronizar — foi TENTADA e desfeita: o Checkpoint segura
+// o wmu do início ao fim, com histograma que vai até 30s por ser esse o
+// intervalo padrão do §78, e todo scrape de /metrics e toda chamada de
+// /v1/stats passariam a parar atrás dele. O painel cegaria exatamente sob a
+// pressão que ele existe para observar. A varredura mudou de lugar, não de
+// forma: agora roda na reconciliação do checkpoint, que já está sob o lock, e
+// deixa o resultado nos espelhos.
+//
+// Os espelhos são três atômicos independentes: um leitor pode pegar um deles
+// de antes e outro de depois do mesmo checkpoint. A ressalva está na
+// declaração dos campos, junto do motivo de ela ser aceitável.
 func (s *Store) Stats() Stats {
 	if err := s.entra(); err != nil {
 		return Stats{}
@@ -1240,12 +1474,26 @@ func (s *Store) Stats() Stats {
 	if slots := s.prim.SlotCount(); slots > 0 {
 		lf = float64(s.prim.Used()) / float64(slots)
 	}
+	// SegmentsTotal vem do espelho do tally, e não do segSize, porque o tally
+	// é o mapa que anda nos DOIS relógios: ganha entrada no applyRecord, então
+	// uma rotação aparece na contagem no instante em que acontece, e é
+	// reconciliado com o ListSegments a cada checkpoint (semeadura do segmento
+	// que o writer nunca tocou, poda do que o diretório não lista mais).
+	// Espelhar o segSize perderia o primeiro relógio e quebraria o
+	// TestRotacaoDeSegmentoNoPut, que exige a rotação visível sem checkpoint;
+	// espelhar o tally SEM a reconciliação perde o segundo, que é o que faz um
+	// segmento aposentado pela compaction (§53-55) sumir da contagem.
 	return Stats{
-		RowCount:          s.rowCount.Load(),
-		SegmentsTotal:     segID, // IDs monotônicos desde 1, sem remoção no M1
-		CurrentSegmentID:  segID,
-		PrimaryLoadFactor: lf,
-		OverlayLen:        s.locs.OverlayLen(),
+		RowCount:               s.rowCount.Load(),
+		SegmentsTotal:          s.segCount.Load(),
+		CurrentSegmentID:       segID,
+		PrimaryLoadFactor:      lf,
+		OverlayLen:             s.locs.OverlayLen(),
+		StorageBytes:           s.diskBytesAll.Load(),
+		LiveBytesUpperBound:    s.liveBytesAll.Load(),
+		CompactionRunning:      s.compAtiva.Load(),
+		CompactionBytesRead:    s.compBytesLidos.Load(),
+		CompactionBytesWritten: s.compBytesEscritos.Load(),
 	}
 }
 
@@ -1266,6 +1514,14 @@ func (s *Store) Stats() Stats {
 //
 // É idempotente: o segundo Close devolve nil sem tocar em nada.
 func (s *Store) Close() error {
+	// A compaction é cancelada e AGUARDADA antes do quiesce (§53-55, decisão
+	// D7). O vida.Lock() abaixo só é concedido quando nenhuma operação está em
+	// voo, e a varredura do §54 é a operação mais longa que existe no produto:
+	// sem o join aqui, ou o Close espera a passada inteira, ou — pior — vence
+	// a corrida e desmapeia o índice sob os pés de quem está no meio de
+	// renomear e apagar arquivo.
+	s.ParaCompaction()
+
 	s.vida.Lock()
 	defer s.vida.Unlock()
 	if s.fechado {

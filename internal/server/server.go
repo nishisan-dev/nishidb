@@ -277,6 +277,7 @@ func (s *Servidor) Roda(ctx context.Context, pprofAddr string) error {
 		s.sobePprof(pprofAddr)
 	}
 	s.log.Info("query.pronta", "consultas disponíveis", "datasets", len(s.datasets), "endereco", s.cfg.Endereco())
+	s.ligaCompaction(ctx)
 
 	var wg sync.WaitGroup
 	for _, d := range s.datasets {
@@ -350,6 +351,37 @@ func (s *Servidor) rodaIngestao(ctx context.Context, d *dataset) {
 		log.Error("ingestao.parou", "a ingestão parou; as consultas seguem de pé (§51)",
 			"erro", err.Error())
 	}
+}
+
+// ligaCompaction sobe a goroutine do §53-55 em cada dataset, a partir da
+// política do §78 lida pela Task 3.
+//
+// Depois do HTTP e ANTES da ingestão, que é a ordem do §51 aplicada a mais um
+// consumidor de disco: quem sobe primeiro é quem responde consulta. E a
+// compaction precisa estar de pé antes do consumer justamente porque é o
+// consumer que produz o garbage — ligá-la depois abriria uma janela em que o
+// dataset cresce sem ninguém devolvendo nada.
+//
+// O contexto é o do Roda, então o SIGTERM cancela as goroutinas junto com a
+// ingestão. O Close de cada Store as aguarda de novo (decisão D7): as duas
+// coisas não se repetem à toa — o cancelamento é o pedido, e o join é o que
+// garante que ninguém está renomeando arquivo quando o dataset fecha.
+//
+// A ausência tem log próprio de propósito. `enabled: false` é uma decisão do
+// operador, e um processo que a honra em silêncio é indistinguível de um que a
+// ignora — que é o defeito que a issue #1 denuncia, em outra chave.
+func (s *Servidor) ligaCompaction(ctx context.Context) {
+	habilitada, ratio := s.cfg.Compaction()
+	if !habilitada {
+		s.log.Warn("compaction.desligada",
+			"storage.compaction.enabled é false: nada devolve o disco dos updates, e o §86 projeta 30-43 GB/dia escritos contra 5,6-8 GB vivos a 500 ev/s")
+		return
+	}
+	for _, d := range s.datasets {
+		d.st.IniciaCompaction(ctx, ratio)
+	}
+	s.log.Info("compaction.ligada",
+		"a compaction do §53-55 está de pé", "datasets", len(s.datasets), "minimumLiveRatio", ratio)
 }
 
 // checkpointEventosPadrao é a mesma constante do `nishidb ingest`: o custo de

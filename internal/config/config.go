@@ -8,6 +8,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -26,8 +27,8 @@ import (
 // Config é o subconjunto do nishidb.yaml (spec §78) que os comandos do M1
 // precisam.
 //
-// As seções que o M1 não implementa (server, TLS, auth, runtime, compaction,
-// durability) são ACEITAS e ignoradas: o arquivo que o M3 vai usar não pode
+// As seções que o M1 não implementa (server, TLS, auth, runtime, durability)
+// são ACEITAS e ignoradas: o arquivo que o M3 vai usar não pode
 // ser inválido para o binário do M1, senão o operador mantém dois arquivos e
 // eles divergem.
 type Config struct {
@@ -42,6 +43,26 @@ type Config struct {
 		Checkpoint  struct {
 			Interval string `yaml:"interval"`
 		} `yaml:"checkpoint"`
+
+		// Compaction é o bloco §78 que decide se o disco para de crescer. Aqui
+		// se valida a FORMA; o comportamento entra na ativação, no motor
+		// (doutrina do débito 49).
+		//
+		// Enabled é PONTEIRO pelo mesmo motivo de server.enabled: ausente e
+		// `false` significam coisas opostas. Ausente vale TRUE — o §78 traz a
+		// chave ligada no exemplo, e exigir declaração explícita para ter
+		// compaction inverteria o default seguro, deixando todo YAML herdado do
+		// M1 acumular garbage até o ENOSPC que o §86 projeta em 2 a 3 dias.
+		// `enabled: false` é o operador desligando deliberadamente, e aí a
+		// decisão dele vale.
+		//
+		// MinimumLiveRatio é ponteiro para separar "ausente" de zero, que aqui
+		// não é omissão: é valor fora da faixa, e precisa ser recusado com a
+		// mesma clareza de um negativo.
+		Compaction struct {
+			Enabled          *bool    `yaml:"enabled"`
+			MinimumLiveRatio *float64 `yaml:"minimumLiveRatio"`
+		} `yaml:"compaction"`
 	} `yaml:"storage"`
 
 	Datasets struct {
@@ -101,6 +122,7 @@ type Config struct {
 	resultBatchSize    int
 	serverPort         int
 	maxConcurrent      int
+	minimumLiveRatio   float64
 }
 
 const (
@@ -111,6 +133,10 @@ const (
 	resultBatchPadrao        = 256
 	serverPortPadrao         = 9142
 	maxConcurrentPadrao      = 16
+
+	// compactionRatioPadrao é o default do §53: um segmento vira candidato
+	// quando menos da metade dele ainda é dado vivo.
+	compactionRatioPadrao = 0.50
 
 	// serverBindPadrao é LOOPBACK, e não o 0.0.0.0 que o exemplo do §78
 	// escreve.
@@ -163,6 +189,9 @@ func CarregaConfig(path string) (*Config, error) {
 	if c.checkpointInterval, err = units.Duracao(c.Storage.Checkpoint.Interval, checkpointIntervalPadrao); err != nil {
 		return nil, fmt.Errorf("configuração %s: storage.checkpoint.interval: %w", path, err)
 	}
+	if c.minimumLiveRatio, err = razaoDeLiveness(c.Storage.Compaction.MinimumLiveRatio); err != nil {
+		return nil, fmt.Errorf("configuração %s: storage.compaction.minimumLiveRatio: %w", path, err)
+	}
 	if c.defaultMaxRows, err = units.InteiroPositivo(c.Query.DefaultMaxRows, maxRowsPadrao); err != nil {
 		return nil, fmt.Errorf("configuração %s: query.defaultMaxRows: %w", path, err)
 	}
@@ -187,10 +216,52 @@ func CarregaConfig(path string) (*Config, error) {
 	return &c, nil
 }
 
+// razaoDeLiveness aplica o default do §53 quando a chave está AUSENTE e recusa
+// qualquer valor fora da faixa ABERTA (0, 1).
+//
+// As duas pontas são exclusivas porque nenhuma delas descreve uma política. Com
+// ratio >= 1 todo segmento vira candidato, inclusive o que é só dado vivo: a
+// compaction reescreveria o dataset em laço, queimando I/O sem devolver disco.
+// Com ratio <= 0 nenhum segmento jamais seria eleito, e a chave mentiria —
+// haveria compaction configurada e nada compactado.
+//
+// O NaN é recusado por NOME, e não pela faixa, porque faixa não o alcança:
+// `.nan` é literal de float do YAML e toda comparação com NaN é falsa, então
+// `*v <= 0 || *v >= 1` — que diz "está fora" — o deixa passar, enquanto o que
+// se queria dizer era "está dentro". E ele cai no pior dos dois lados descritos
+// acima: com ratio=NaN o predicado do §53 `liveBytes/totalBytes < ratio` é
+// SEMPRE falso, nenhum segmento é eleito, e a chave mente da forma mais cara
+// que existe — o operador lê `minimumLiveRatio` no arquivo, conclui que a
+// política está valendo, e o disco cresce até o ENOSPC que o §86 projeta em 2 a
+// 3 dias. Os infinitos, esses a faixa já pega: +Inf >= 1 e -Inf <= 0.
+//
+// Não mora em units porque o pacote de lá existe para os escalares que os DOIS
+// YAMLs do produto compartilham, e esta faixa é regra de uma chave só.
+func razaoDeLiveness(v *float64) (float64, error) {
+	if v == nil {
+		return compactionRatioPadrao, nil
+	}
+	if math.IsNaN(*v) || *v <= 0 || *v >= 1 {
+		return 0, fmt.Errorf("deve ficar entre 0 e 1, exclusive, é %v", *v)
+	}
+	return *v, nil
+}
+
 // ServidorHabilitado diz se o bloco `server` autoriza a subida. Ausente é
 // true; só `enabled: false` explícito recusa.
 func (c *Config) ServidorHabilitado() bool {
 	return c.Server.Enabled == nil || *c.Server.Enabled
+}
+
+// Compaction é a política de compaction do §53/§78: se ela roda, e a partir de
+// que fração de dado vivo um segmento deixa de valer a pena manter como está.
+//
+// Devolve os dois juntos porque quem consome decide UMA coisa — eleger ou não
+// um segmento —, e dois métodos separados convidariam a ler o ratio de um
+// processo com a compaction desligada.
+func (c *Config) Compaction() (habilitada bool, minimumLiveRatio float64) {
+	e := c.Storage.Compaction.Enabled
+	return e == nil || *e, c.minimumLiveRatio
 }
 
 // Endereco é o host:porta em que o servidor escuta (§78).

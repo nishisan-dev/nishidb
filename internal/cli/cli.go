@@ -62,6 +62,9 @@ USO
   nishidb query   --server <host:porta>    --dataset <nome> [--limit N] '<SQL>'
   nishidb server  --config <nishidb.yaml> [--log-format json|texto] [--log-level N] [--pprof <addr>]
   nishidb offsets --config <nishidb.yaml> --dataset <nome> (--show | --reset earliest|latest | --set p:o,...) [--yes]
+  nishidb status   --server <host:porta>
+  nishidb datasets --server <host:porta>
+  nishidb inspect  --server <host:porta> <dataset>
 
 INGEST
   Lê NDJSON (um evento JSON por linha) e materializa no dataset.
@@ -92,6 +95,18 @@ OFFSETS
   Lê e reposiciona a posição no tópico. Exige o servidor PARADO (toma o
   flock do dataset). --reset e --set pedem --yes.
 
+STATUS, DATASETS E INSPECT
+  Leitura do servidor NO AR (§96), pelo mesmo protocolo remoto do
+  "query --server". Não existe caminho local para eles: o flock do dataset é
+  exclusivo por processo, e um diagnóstico que exigisse o servidor parado
+  responderia sobre o produto que justamente não está rodando.
+  status                 rows, segmentos, disco, garbage, compaction,
+                         consultas e ingestão de cada dataset.
+  datasets               o que este servidor serve.
+  inspect <dataset>      colunas com tipo, alias e índice declarado.
+  Os três são SÓ leitura. "compact" e "checkpoint", que o §96 também lista,
+  são rotas mutantes e ficam para o M5, atrás do papel ADMIN.
+
 EXIT CODES
   0  sucesso
   1  erro de uso ou de configuração
@@ -120,6 +135,12 @@ func Run(args []string, amb Ambiente) int {
 		return runServer(args[1:], amb)
 	case "offsets":
 		return runOffsets(args[1:], amb)
+	case "status":
+		return runStatus(args[1:], amb)
+	case "datasets":
+		return runDatasets(args[1:], amb)
+	case "inspect":
+		return runInspect(args[1:], amb)
 	case "-h", "--help", "help":
 		fmt.Fprint(amb.Stdout, uso)
 		return ExitOK

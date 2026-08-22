@@ -41,9 +41,18 @@ type Store interface {
 }
 
 // Cadencia é quando o checkpoint dispara: por contagem OU por tempo, o que
-// vier primeiro. É a mesma regra do `nishidb ingest` (§78,
+// vier primeiro. É o mesmo gatilho do `nishidb ingest` e a MESMA chave (§78,
 // storage.checkpoint.interval), e não uma chave nova — o §48 fixa a ORDEM do
 // fluxo, não a periodicidade.
+//
+// Onde as duas regras divergem, e por quê: o precisaCheckpoint do
+// `internal/cli/ingest.go` cai para um padrão quando o intervalo é <= 0 e não
+// tem guarda de "nenhum evento desde o último checkpoint". Ele pode se dar a
+// esse luxo porque lê uma entrada FINITA do começo ao fim — só é consultado
+// com um evento recém-lido na mão, e o processo termina. Aqui o laço é
+// perpétuo e desperta sozinho (débito 56): o intervalo <= 0 tem de DESLIGAR o
+// relógio em vez de adotar padrão nenhum, e o tique sem evento novo tem de ser
+// barrado, sob pena de um dataset parado reescrever o manifest para sempre.
 type Cadencia struct {
 	Eventos   int64
 	Intervalo time.Duration
@@ -130,22 +139,56 @@ func (w *Writer) Desfecho() Desfecho {
 // Roda drena a fila até o contexto acabar, a fila fechar ou a ingestão
 // pausar. Devolve ErrPausado quando parou por política.
 func (w *Writer) Roda(ctx context.Context) error {
+	acorda, paraDespertador := w.despertador()
+	defer paraDespertador()
+
 	for {
-		it, ok := w.fila.Recebe(ctx)
-		if !ok {
+		it, ok, acordou := w.fila.recebeOuAcorda(ctx, acorda)
+		switch {
+		case acordou:
+			// Débito 56: sem evento novo o disparo por CONTAGEM nunca vem, e
+			// o writer ficaria dormindo no channel com a posição consumida
+			// nunca virando posição durável. O commit no broker vem depois do
+			// checkpoint (§48), então quem olha o `nishidb_kafka_lag` lê meio
+			// milhão de atraso num consumidor que não tem atraso nenhum.
+			//
+			// O despertar só AVALIA a regra — quem decide continua sendo o
+			// precisaCheckpoint.
+			if err := w.talvezCheckpoint(ctx); err != nil {
+				return err
+			}
+		case !ok:
 			// Fila fechada ou contexto encerrado: torna durável o que já foi
 			// aplicado antes de sair. Sem isto, um encerramento gracioso
 			// jogaria fora até um intervalo inteiro de checkpoint.
 			return w.finaliza(ctx)
-		}
-		if it.Marca != nil {
+		case it.Marca != nil:
 			close(it.Marca)
-			continue
-		}
-		if err := w.aplica(ctx, it); err != nil {
-			return err
+		default:
+			if err := w.aplica(ctx, it); err != nil {
+				return err
+			}
 		}
 	}
+}
+
+// despertador é o relógio que tira o writer do channel para reavaliar o
+// checkpoint por tempo, com a função que o encerra.
+//
+// Sem cadência por tempo não há o que despertar, e o canal nil devolvido
+// nesse caso deixa o select idêntico ao laço de antes — nenhum timer criado,
+// nenhum wakeup a pagar.
+func (w *Writer) despertador() (<-chan time.Time, func()) {
+	if w.cad.Eventos <= 0 || w.cad.Intervalo <= 0 {
+		return nil, func() {}
+	}
+	// Ticker, e não timer rearmado a cada checkpoint: o despertar é barato
+	// (precisaCheckpoint é aritmética) e um tique que chega cedo demais
+	// simplesmente não faz nada. O custo de errar para o lado do timer seria
+	// pior — esquecer um Reset num caminho de erro deixa o laço mudo de novo,
+	// que é exatamente o débito que se está fechando.
+	t := time.NewTicker(w.cad.Intervalo)
+	return t.C, t.Stop
 }
 
 func (w *Writer) aplica(ctx context.Context, it Item) error {
@@ -296,8 +339,15 @@ func (w *Writer) finaliza(ctx context.Context) error {
 
 // precisaCheckpoint dispara por contagem OU por tempo, o que vier primeiro.
 // Eventos == 0 desliga os dois.
+//
+// `desde == 0` também desliga, e a guarda passou a importar quando o laço
+// ganhou despertador (débito 56): sem evento decidido desde o último
+// checkpoint não há posição nova para tornar durável nem offset novo para
+// commitar, e um dataset parado reescreveria o manifest e daria fsync a cada
+// intervalo, para sempre. Pelo caminho do evento a guarda é redundante —
+// avanca() sempre incrementa antes —, e é por isso que ela não existia.
 func precisaCheckpoint(c Cadencia, desde int64, ultimo time.Time) bool {
-	if c.Eventos <= 0 {
+	if c.Eventos <= 0 || desde <= 0 {
 		return false
 	}
 	if desde >= c.Eventos {

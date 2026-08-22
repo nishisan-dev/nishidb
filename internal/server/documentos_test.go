@@ -3,9 +3,13 @@ package server_test
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/nishisan-dev/nishidb/internal/metrics"
 	"github.com/nishisan-dev/nishidb/internal/protocolo"
 	"github.com/nishisan-dev/nishidb/internal/server"
 )
@@ -222,5 +226,136 @@ func TestDatasetInexistenteNaoCriaSerie(t *testing.T) {
 	}
 	if !strings.Contains(scrape, `dataset="?"`) {
 		t.Fatalf("os erros sem dataset resolvido sumiram do scrape:\n%s", scrape)
+	}
+}
+
+// TestStatsPublicaODiscoEACompactionSemSegundaFonte fecha a lacuna que o §96
+// abriu: o `nishidb status` resume STORAGE, e até esta tarefa o /v1/stats
+// respondia rows e segmentos mas não o disco — o operador via a curva no
+// /metrics e não tinha como perguntá-la pelo comando.
+//
+// O oráculo é duplo de propósito. Contra o /metrics, porque as duas saídas
+// leem o MESMO Store.Stats() e divergir é o defeito clássico de contador
+// duplicado. E contra o FILESYSTEM, porque comparar só com a métrica
+// confirmaria apenas que o número foi copiado de um campo para outro — é o
+// mesmo argumento que o godoc de servidorComDadosEDiretorio registra, e é o
+// que mata o mutante de publicar o tally de liveness sob o nome do disco.
+func TestStatsPublicaODiscoEACompactionSemSegundaFonte(t *testing.T) {
+	srv, dir := servidorComDadosEDiretorio(t, 100, blocoPadrao)
+
+	// A subida põe o HTTP no ar ANTES de ligar a compaction (§51), então há
+	// uma janela em que a rota já responde e o laço ainda não subiu. Esperar
+	// pela CONDIÇÃO fecha a janela sem dormir — e o que se espera é o default
+	// do §78, que traz a chave LIGADA: um YAML herdado do M1, sem o bloco
+	// storage.compaction, tem de compactar.
+	esperaCompactionNoAr(t, srv)
+
+	e := leJSON[protocolo.Estatisticas](t, srv, "/v1/stats")
+	if len(e.Datasets) != 1 {
+		t.Fatalf("datasets = %d", len(e.Datasets))
+	}
+	st := e.Datasets[0].Storage
+
+	entradas, err := filepath.Glob(filepath.Join(dir, "data", "segment-*.dat"))
+	if err != nil {
+		t.Fatalf("glob dos segmentos: %v", err)
+	}
+	var emDisco int64
+	for _, p := range entradas {
+		fi, err := os.Stat(p)
+		if err != nil {
+			t.Fatalf("stat %s: %v", p, err)
+		}
+		emDisco += fi.Size()
+	}
+	if emDisco == 0 {
+		t.Fatal("nenhum segmento em disco: o teste não estaria provando nada")
+	}
+	if st.Bytes != emDisco {
+		t.Errorf("storage.bytes = %d e os arquivos somam %d: o JSON não descreve o disco", st.Bytes, emDisco)
+	}
+	if got := int64(valorDaMetrica(t, srv, metrics.MetStorageBytes)); st.Bytes != got {
+		t.Errorf("storage.bytes = %d no JSON e %d no /metrics: duas fontes para o mesmo número", st.Bytes, got)
+	}
+	if got := uint64(valorDaMetrica(t, srv, metrics.MetStorageGarbageBytes)); st.GarbageBytes != got {
+		t.Errorf("garbageBytes = %d no JSON e %d no /metrics", st.GarbageBytes, got)
+	}
+
+	// A compaction sai SEMPRE, inclusive antes da primeira passada — pelo
+	// mesmo motivo das séries do §92: zero é uma resposta, ausência não é.
+	if !st.Compaction.Running {
+		t.Error("compaction.running = false com o default do §78, que traz a chave ligada")
+	}
+	if got := valorDaMetrica(t, srv, metrics.MetCompactionRunning); got != 1 {
+		t.Errorf("compaction_running = %v no /metrics contra true no JSON", got)
+	}
+	if got := int64(valorDaMetrica(t, srv, metrics.MetCompactionBytesRead)); st.Compaction.BytesRead != got {
+		t.Errorf("compaction.bytesRead = %d no JSON e %d no /metrics", st.Compaction.BytesRead, got)
+	}
+	if got := int64(valorDaMetrica(t, srv, metrics.MetCompactionBytesWritten)); st.Compaction.BytesWritten != got {
+		t.Errorf("compaction.bytesWritten = %d no JSON e %d no /metrics", st.Compaction.BytesWritten, got)
+	}
+}
+
+// esperaCompactionNoAr bloqueia até o /v1/stats reportar o laço de pé.
+//
+// Espera por condição, e não por sleep: dormir esconderia tanto a lentidão
+// quanto a ausência de progresso — é a mesma regra do esperaHealth.
+func esperaCompactionNoAr(t *testing.T, srv *server.Servidor) {
+	t.Helper()
+	prazo := time.Now().Add(15 * time.Second)
+	for time.Now().Before(prazo) {
+		e := leJSON[protocolo.Estatisticas](t, srv, "/v1/stats")
+		if len(e.Datasets) > 0 && e.Datasets[0].Storage.Compaction.Running {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("a compaction não subiu em 15s: o default do §78 traz a chave ligada")
+}
+
+// TestStatsReportaACompactionParadaComAChaveDesligada é a outra metade do par
+// do teste acima, e sem ela a primeira não prova nada: um `Running: true` fixo
+// no lugar do `st.CompactionRunning` satisfaz todo oráculo que só exercita o
+// laço DE PÉ — e o `esperaCompactionNoAr` está lá justamente para garantir que
+// o outro caso nunca aconteça.
+//
+// O caso que falta é o que importa. O godoc de protocolo.CompactionStats
+// escreve por extenso qual é: não é o Close, é a falha sticky do writer
+// (§14.14), em que a goroutine para sozinha e o disco volta a crescer com o
+// processo de pé. Essa falha não é provocável aqui sem avariar o writer; a
+// chave `storage.compaction.enabled: false` produz o MESMO estado observável —
+// laço parado, processo no ar — e é o que separa o campo de uma constante.
+//
+// É o mesmo par que as séries do §92 já têm no /metrics
+// (TestSeriesDeCompactionSaemZeradasComAChaveDesligada). Aqui a afirmação é
+// sobre o JSON, porque é o JSON que o `nishidb status` do §96 lê.
+func TestStatsReportaACompactionParadaComAChaveDesligada(t *testing.T) {
+	srv, _ := servidorComDadosDiretorioEStorage(t, 100, blocoPadrao, "  compaction:\n    enabled: false\n")
+
+	e := leJSON[protocolo.Estatisticas](t, srv, "/v1/stats")
+	if len(e.Datasets) != 1 {
+		t.Fatalf("datasets = %d", len(e.Datasets))
+	}
+	st := e.Datasets[0].Storage
+
+	// Não há espera aqui, ao contrário do teste de cima: com a chave em false
+	// o laço não sobe NUNCA, e esperar por ele só saberia gastar o prazo
+	// inteiro antes de falhar.
+	if st.Compaction.Running {
+		t.Error("compaction.running = true com storage.compaction.enabled: false — " +
+			"o operador leria laço de pé num processo que honrou a chave dele")
+	}
+	if got := valorDaMetrica(t, srv, metrics.MetCompactionRunning); got != 0 {
+		t.Errorf("compaction_running = %v no /metrics contra false no JSON: duas fontes para o mesmo estado", got)
+	}
+
+	// Os dois contadores continuam SAINDO, zerados: campo que some do JSON
+	// vira `undefined` no cliente, indistinguível de servidor velho — é a
+	// mesma decisão que mantém as três séries no scrape com a chave
+	// desligada.
+	if st.Compaction.BytesRead != 0 || st.Compaction.BytesWritten != 0 {
+		t.Errorf("compaction moveu %d/%d bytes com a chave desligada",
+			st.Compaction.BytesRead, st.Compaction.BytesWritten)
 	}
 }

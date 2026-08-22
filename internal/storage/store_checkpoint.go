@@ -72,6 +72,19 @@ func (s *Store) checkpoint() error {
 	if s.stickyErr != nil {
 		return fmt.Errorf("%w: %w", ErrWriterFailed, s.stickyErr)
 	}
+	// ANTES de tocar nos mapas: os espelhos que o Stats publica sem tomar o
+	// wmu já têm de descrever o que os mapas dizem NESTE instante. A recarga
+	// lá embaixo é reconciliação com o diretório (semeadura e poda), não
+	// conserto — se ela precisou corrigir alguma coisa, o /v1/stats vinha
+	// mentindo desde o checkpoint anterior, e isso é fato operacional, não
+	// detalhe interno.
+	//
+	// A conferência é o que impede a recarga de virar rede de proteção
+	// silenciosa: era ela que escondia o applyRecord errado de toda asserção
+	// que lesse Stats depois de um checkpoint, e é ela que esconderia a
+	// compaction (§53-55) zerando um tally por autoridade da varredura (D4)
+	// sem mover o espelho junto.
+	s.conferaEspelhos()
 	if err := s.traceStep("segSync", s.segW.Sync); err != nil {
 		return s.failWriter(err)
 	}
@@ -116,18 +129,74 @@ func (s *Store) checkpoint() error {
 		HashKind:            s.prim.HashKind(),
 		FieldDictValidBytes: s.dict.SizeBytes(),
 	}
+	// Este ListSegments é o único ponto do código que sabe QUAIS segmentos
+	// existem, e ele roda sob o mutex do writer: a listagem é um snapshot
+	// consistente, nenhuma rotação se intercala entre ela e o que vem abaixo.
+	// Aproveitar isso para reconciliar os dois mapas de contabilidade — e não
+	// só para montar o manifest — é o que faz o Stats parar de mentir nas duas
+	// pontas.
+	//
+	// segSize é RECONSTRUÍDO, não mesclado: um segmento aposentado pela
+	// compaction (§53-55) some do diretório, e atualizar entrada por entrada
+	// deixaria o tamanho do arquivo removido somando para sempre.
+	clear(s.segSize)
 	for _, ref := range segs {
+		s.segSize[ref.ID] = ref.SizeBytes
 		info := checkpoint.SegmentInfo{ID: ref.ID, SizeBytes: ref.SizeBytes}
-		if t := s.segTally[ref.ID]; t != nil {
-			// Liveness real do que o writer viu: updates decrementam o
-			// segmento do record anterior no Put. Segmentos anteriores ao
-			// restart são semeados pela recovery (S12, design §14).
-			info.TotalRecords = t.totalRecords
-			info.LiveRecords = t.liveRecords
-			info.LiveBytes = t.liveBytes
+		t := s.segTally[ref.ID]
+		if t == nil {
+			// Segmento que existe em disco e que o writer nunca tocou. Não é
+			// hipótese: TODO dataset novo nasce assim — o segmento inicial é
+			// criado na abertura e o tally só ganha entrada no applyRecord.
+			// Sem semear aqui, o Stats de um dataset recém-provisionado
+			// reportaria `segments=0` com `current_segment=1`, que é snapshot
+			// incoerente vazando para o /v1/stats e para a
+			// nishidb_segments_total. Os zeros que entram no manifest são os
+			// mesmos de antes, quando o `t != nil` simplesmente falhava.
+			t = &segStats{}
+			s.segTally[ref.ID] = t
 		}
+		// Liveness real do que o writer viu: updates decrementam o
+		// segmento do record anterior no Put. Segmentos anteriores ao
+		// restart são semeados pela recovery (S12, design §14).
+		info.TotalRecords = t.totalRecords
+		info.LiveRecords = t.liveRecords
+		info.LiveBytes = t.liveBytes
 		m.Segments = append(m.Segments, info)
 	}
+	// E a poda, que é a outra metade da mesma reconciliação: o tally não perde
+	// entrada por conta própria em lugar nenhum do código. Sem isto, o
+	// segmento que a compaction aposentar continuaria contado pelo Stats para
+	// sempre — o arquivo sai do diretório, o manifest para de nomeá-lo, o
+	// StorageBytes dele some, e SegmentsTotal fica marcando um segmento que
+	// não existe mais. É a mesma direção da decisão D4 (a varredura tem
+	// autoridade sobre o tally do segmento que ela esvaziou), aplicada ao
+	// único fato que o diretório conhece melhor que o writer: se o segmento
+	// ainda está lá.
+	for id := range s.segTally {
+		if _, existe := s.segSize[id]; !existe {
+			delete(s.segTally, id)
+		}
+	}
+	// Recarga dos espelhos que o Stats lê sem tomar o wmu. É este laço — a
+	// varredura que o Stats fazia sob o lock do writer — trazido para dentro
+	// da seção crítica onde ele sempre pertenceu, e o Stats fica com três
+	// Load atômicos.
+	//
+	// O ponto é aqui, e não no fim do checkpoint, porque é aqui que os dois
+	// mapas voltaram a concordar sobre QUAIS segmentos existem. E é dos
+	// mapas, não do manifest, que os espelhos são cópia: se a gravação
+	// abaixo falhar, o estado em memória continua sendo este, e é este que o
+	// Stats tem de descrever.
+	//
+	// A assimetria do segSize é a mesma de antes, e continua deliberada:
+	// segmento que o writer conhece mas que o último ListSegments não viu
+	// contribui com zero bytes, o que mantém StorageBytes num limite
+	// INFERIOR e nunca inventa disco que não existe.
+	segmentos, vivoTotal, discoTotal := s.agregadosDoTally()
+	s.segCount.Store(segmentos)
+	s.liveBytesAll.Store(vivoTotal)
+	s.diskBytesAll.Store(discoTotal)
 	for field, ix := range s.bitmaps {
 		m.Bitmaps = append(m.Bitmaps, checkpoint.BitmapInfo{
 			FieldID:              field,
@@ -168,6 +237,48 @@ func (s *Store) checkpoint() error {
 		}
 	}
 	return nil
+}
+
+// agregadosDoTally soma os mapas de contabilidade numa varredura só. É a
+// forma canônica dos três números que o Stats publica, e existe como função
+// para que a CONFERÊNCIA e a RECARGA usem literalmente a mesma conta —
+// duplicá-la deixaria a conferência aprovando um agregado que a recarga
+// calcula de outro jeito. Writer-only: os dois mapas exigem o wmu.
+//
+// A iteração é sobre o tally, com o segSize entrando só como consulta, e a
+// assimetria é a mesma de sempre: segmento que o writer conhece mas que o
+// último ListSegments não viu contribui com zero bytes.
+func (s *Store) agregadosDoTally() (segmentos uint32, vivo uint64, disco int64) {
+	for id, t := range s.segTally {
+		segmentos++
+		vivo += t.liveBytes
+		disco += s.segSize[id]
+	}
+	return segmentos, vivo, disco
+}
+
+// conferaEspelhos afere a invariante dos espelhos atômicos: eles são CÓPIA
+// dos mapas de contabilidade, e as duas descrições não podem discordar em
+// instante nenhum em que o writer não esteja no meio de uma aplicação.
+//
+// A divergência não derruba nada e não é erro do checkpoint — a recarga que
+// vem depois já devolve o valor certo, e recusar um checkpoint por causa de
+// uma métrica seria trocar um número errado por uma perda de durabilidade.
+// O que ela faz é PARAR de ser invisível: enquanto durou, o /v1/stats e a
+// nishidb_garbage_bytes publicaram um número que não descreve o dataset, e
+// num uint64 uma subtração a mais não sai negativa, sai 1,8e19 — o alarme de
+// disco vira ruído exatamente quando ele deveria estar sendo lido.
+func (s *Store) conferaEspelhos() {
+	segmentos, vivo, disco := s.agregadosDoTally()
+	if segmentos == s.segCount.Load() && vivo == s.liveBytesAll.Load() && disco == s.diskBytesAll.Load() {
+		return
+	}
+	s.opts.Log.Warn("stats.espelhos_divergiram",
+		"os agregados publicados pelo Stats não descreviam os mapas de contabilidade; o checkpoint os recarrega, mas as leituras desde o checkpoint anterior saíram erradas",
+		"ocorrencias", s.espelhosDivergentes.Add(1),
+		"segmentos_espelho", s.segCount.Load(), "segmentos_mapa", segmentos,
+		"vivo_espelho", s.liveBytesAll.Load(), "vivo_mapa", vivo,
+		"disco_espelho", s.diskBytesAll.Load(), "disco_mapa", disco)
 }
 
 // SetSourceOffsets publica a posição no tópico que o PRÓXIMO checkpoint vai

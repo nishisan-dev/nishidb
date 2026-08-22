@@ -32,6 +32,18 @@ func main() {
 		baseline = flag.String("heap-baseline", "", "report de uma rodada MENOR, para o gate §110")
 		out      = flag.String("report", "", "arquivo de saída do relatório JSON (vazio = stdout)")
 
+		// A compaction vem LIGADA, com o mesmo default do §78
+		// (storage.compaction.minimumLiveRatio). É a operação real: um YAML sem
+		// a chave já sobe com ela ligada, e uma rodada de aceite que medisse o
+		// disco com a compaction desligada estaria medindo outro produto.
+		//
+		// `-compaction-ratio 0` é o CONTROLE NEGATIVO do gate de disco: sem
+		// ninguém devolvendo disco, a série do STEADY é a do append-only puro e
+		// o gate tem de reprovar. É a rodada que prova que o gate mede alguma
+		// coisa, e ela custa uma linha de comando.
+		compRatio = flag.Float64("compaction-ratio", 0.50,
+			"minimumLiveRatio da compaction do §53-55 (0 = desligada, controle negativo do gate de disco)")
+
 		// Ingestão Kafka REAL. Sem -kafka a rodada usa o gerador em memória,
 		// que é o modo rápido de regressão — e o que o M1 media, deixando o
 		// custo do consumidor fora do orçamento publicado (§108, débito M2 #2).
@@ -64,6 +76,18 @@ Sai com código 1 se algum gate DURO for violado OU ficar sem avaliação. A
 primeira rodada, a de referência, reprova por construção: sem -heap-baseline
 o §110 não tem o que comparar, e gate duro não avaliado não é gate aprovado.
 Ela vale pelo report que produz, não pelo veredito. O aceite é a SEGUNDA.
+
+O gate disk_plateau (§53-55) exige -steady: ele lê a curva de disco da fase de
+REGIME, que é onde os updates sobre key set fixo geram garbage sem gerar row
+nova. Sem STEADY não há série, o gate fica NÃO AVALIADO e a rodada reprova —
+uma rodada só de LOAD não prova que o disco para de crescer.
+
+E a janela precisa ser longa o bastante para o PRIMEIRO segmento selado
+esgotar: como os updates sorteiam as keys, isso custa da ordem de
+-entities × ln(rows por segmento) eventos, e até lá a curva é indistinguível do
+append-only puro. Quem encurta essa espera é -entities, -rate e -steady;
+-checkpoint-every não é o que decide. O artefato responde de que lado está o
+problema — compaction_running e compaction_bytes_read em store_stats.
 
 `)
 		flag.PrintDefaults()
@@ -104,8 +128,9 @@ Ela vale pelo report que produz, não pelo veredito. O aceite é a SEGUNDA.
 		KafkaQueueBytes: *kafkaBytes,
 		KafkaMaxPoll:    *kafkaPoll,
 
-		HeapBaseline: *baseline,
-		Out:          os.Stderr,
+		HeapBaseline:    *baseline,
+		CompactionRatio: *compRatio,
+		Out:             os.Stderr,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "erro: %v\n", err)
