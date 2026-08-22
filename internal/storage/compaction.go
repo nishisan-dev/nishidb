@@ -233,6 +233,21 @@ func (s *Store) reapendaSeVivo(seg, off uint32, rec types.Record) (copiado bool,
 // A seleção do candidato NÃO mora aqui: quem decide qual segmento vale a pena
 // e nunca elege o corrente (decisão D6) é a Task 7. Esta função obedece.
 func (s *Store) compactaSegmento(ctx context.Context, seg uint32) (copiados uint64, lidos, escritos int64, err error) {
+	// Os dois contadores do §92 sobem no RETORNO, inclusive quando ele é de
+	// erro, e o defer é o que garante isso por construção em vez de por
+	// disciplina de quem editar a função depois.
+	//
+	// Contar também a varredura que FRACASSOU não é detalhe: o que estas duas
+	// séries medem é o I/O que a compaction consumiu, e uma varredura
+	// cancelada no meio já leu o prefixo e já copiou para frente o que achou
+	// vivo. Zerar esse trabalho deixaria o /metrics parado exatamente na
+	// passada que morreu — que é a passada sobre a qual alguém está
+	// perguntando. O tally, esse sim, não é zerado por varredura incompleta
+	// (D4): são autoridades diferentes, e a distinção está logo abaixo.
+	defer func() {
+		s.compBytesLidos.Add(lidos)
+		s.compBytesEscritos.Add(escritos)
+	}()
 	fimValido, err := s.segR.ScanFrom(seg, segment.HeaderSize, func(off uint32, rec types.Record) error {
 		// O cancelamento é a PRIMEIRA coisa do callback, e sai pelo erro que
 		// o ScanFrom propaga: é assim que a goroutine da Task 7 desiste no
@@ -613,9 +628,24 @@ func (s *Store) IniciaCompaction(ctx context.Context, ratio float64) {
 	}
 	ctx, cancela := context.WithCancel(ctx)
 	s.compCancela = cancela
+	// O medidor do §92 sobe AQUI, e não dentro da goroutine: quem chamou tem
+	// direito de ver o estado que acabou de instalar, e um Stats() lido entre
+	// a chamada e o primeiro escalonamento não pode responder que a compaction
+	// não subiu.
+	s.compAtiva.Store(true)
 	s.compEmVoo.Add(1)
 	go func() {
 		defer s.compEmVoo.Done()
+		// E desce quando o LAÇO acaba, seja qual for o motivo — o
+		// cancelamento do Close ou a falha sticky do writer, que é a que
+		// importa: ali ninguém pediu para parar, o disco volta a crescer e a
+		// única coisa que o operador tem para observar é esta série (o
+		// compaction.parou fala com quem já foi ler o log).
+		//
+		// O defer é declarado DEPOIS do Done e por isso roda ANTES dele: o
+		// ParaCompaction devolve o controle já com o medidor em 0, e não com
+		// uma janela em que a goroutine acabou e a série ainda diz 1.
+		defer s.compAtiva.Store(false)
 		s.rodaCompaction(ctx, ratio)
 	}()
 }
@@ -688,10 +718,18 @@ func (s *Store) passadaDeCompaction(ctx context.Context, ratio float64) error {
 		if err := s.aposentaSegmento(seg); err != nil {
 			return fmt.Errorf("aposentar o segmento %d: %w", seg, err)
 		}
-		// O log é, até a Task 8 dar alimentador às três séries do §92, o
-		// ÚNICO lugar em que estes três números aparecem. Eles não são
-		// decorativos: `lidos - escritos` é o disco que este segmento devolveu
-		// ao filesystem, e é a resposta à pergunta do §86.
+		// O log deixou de ser o único lugar em que estes números aparecem: as
+		// séries do §92 os publicam desde a Task 8, e as duas leituras não se
+		// substituem. A série responde "quanto disco a compaction moveu neste
+		// dataset, por segundo", que é o que o painel do §86 pergunta e o que
+		// um alerta consegue observar; a linha responde "QUAL segmento
+		// devolveu quanto", que é o que se lê depois do alerta, e que nenhuma
+		// série carrega sem um label por segmento — cardinalidade que o §92
+		// não pede e que o registry não tem por que pagar.
+		//
+		// Eles não são decorativos em nenhuma das duas: `lidos - escritos` é o
+		// disco que este segmento devolveu ao filesystem, e é a resposta à
+		// pergunta do §86.
 		s.opts.Log.Info("compaction.segmento_aposentado",
 			"segmento varrido, esvaziado e removido",
 			"segmento", seg, "records_copiados", copiados,

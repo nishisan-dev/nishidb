@@ -112,13 +112,19 @@ func semeiaGarbage(t *testing.T, a *ambiente, nome string, keys, rodadas int) {
 }
 
 // bancadaDeCompaction monta o dataset cheio de garbage, sobe o SERVIDOR com a
-// chave do §78 no valor pedido e devolve o diretório do dataset, o log da
-// subida e o disco medido ANTES de o processo abrir o dataset.
+// chave do §78 no valor pedido e devolve o servidor de pé, o diretório do
+// dataset, o log da subida e o disco medido ANTES de o processo abrir o
+// dataset.
 //
 // O disco é medido antes da subida de propósito: a primeira passada do laço é
 // imediata, então medir depois já mediria um diretório possivelmente
 // compactado, e a diferença que este teste afere desapareceria na largada.
-func bancadaDeCompaction(t *testing.T, chave string) (dir string, registro *registroDoServidor, antes int64) {
+//
+// O servidor entra na devolução pela Task 8: as três séries do §92 se leem
+// PELA PORTA (/metrics), e sem o handle não há como raspá-lo — medir a
+// compaction por dentro do processo é justamente o que o critério de aceite
+// recusa.
+func bancadaDeCompaction(t *testing.T, chave string) (srv *server.Servidor, dir string, registro *registroDoServidor, antes int64) {
 	t.Helper()
 	a := novoAmbienteComStorage(t, blocoPadrao, fmt.Sprintf(storageComCompaction, chave))
 	a.escreveDataset("d", strings.ReplaceAll(specConsultavel, "%s", "d"))
@@ -136,7 +142,7 @@ func bancadaDeCompaction(t *testing.T, chave string) (dir string, registro *regi
 		t.Fatalf("subida: %v", err)
 	}
 	roda(t, srv)
-	return dir, registro, antes
+	return srv, dir, registro, antes
 }
 
 // discoDosSegmentosDoDataset é o `du` do operador sobre os segmentos: um
@@ -182,7 +188,7 @@ func discoDosSegmentosDoDataset(t *testing.T, dir string) int64 {
 // que se dá à goroutine desligada é vinte vezes o tempo que a ligada levou para
 // devolver metade do diretório, com piso de dois segundos.
 func TestCompactionSoSobeComAChaveDoOperadorLigada(t *testing.T) {
-	dirLigada, logLigada, antesLigada := bancadaDeCompaction(t, "true")
+	_, dirLigada, logLigada, antesLigada := bancadaDeCompaction(t, "true")
 
 	comecou := time.Now()
 	var depoisLigada int64
@@ -210,7 +216,7 @@ func TestCompactionSoSobeComAChaveDoOperadorLigada(t *testing.T) {
 		janela = 2 * time.Second
 	}
 
-	dirDesligada, logDesligada, antesDesligada := bancadaDeCompaction(t, "false")
+	_, dirDesligada, logDesligada, antesDesligada := bancadaDeCompaction(t, "false")
 	time.Sleep(janela)
 	depois := discoDosSegmentosDoDataset(t, dirDesligada)
 	if depois < antesDesligada {

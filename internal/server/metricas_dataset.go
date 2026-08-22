@@ -62,12 +62,30 @@ func lixoDeDisco(st storage.Stats) uint64 {
 //     limite INFERIOR do lixo. "Há pelo menos isto de garbage" é afirmação
 //     verdadeira e acionável, e a ajuda a carrega junto do número — é ela que
 //     impede a próxima leitura de tratar o valor como exato.
+//
+// As três séries de compaction do §92 entram por aqui pelo mesmo motivo das
+// outras: os números já existem no Store, que é quem varre e quem copia, e o
+// coletor os LÊ no scrape em vez de manter cópia própria. Um contador mantido
+// dos dois lados diverge no dia em que um caminho de erro esquece de somar, e
+// em produção alguém lê o errado.
+//
+// Elas são publicadas SEMPRE, inclusive com storage.compaction.enabled: false
+// e inclusive antes da primeira passada. Série que só aparece quando há o que
+// mostrar vira lacuna no gráfico, e lacuna não se distingue de alvo fora do ar
+// — zero é uma resposta, ausência não é.
 func registraMetricasDeDataset(reg *metrics.Registry, s *Servidor) {
 	reg.Coletor(metrics.ColetorFunc(func() []metrics.Amostra {
-		out := make([]metrics.Amostra, 0, len(s.datasets)*4)
+		out := make([]metrics.Amostra, 0, len(s.datasets)*7)
 		for _, d := range s.datasets {
 			st := d.st.Stats()
 			rotulo := []metrics.Label{{Nome: metrics.LabelDataset, Valor: d.nome}}
+			// O formato de exposição só tem número, e Go não converte bool
+			// para float: o 0/1 do medidor se escreve aqui, uma vez, em vez de
+			// dentro do literal da amostra.
+			var rodando float64
+			if st.CompactionRunning {
+				rodando = 1
+			}
 
 			out = append(out,
 				metrics.Amostra{
@@ -101,6 +119,30 @@ func registraMetricasDeDataset(reg *metrics.Registry, s *Servidor) {
 					Tipo:    metrics.TipoMedidor,
 					Labels:  rotulo,
 					Valor:   float64(lixoDeDisco(st)),
+				},
+				metrics.Amostra{
+					Familia: metrics.MetCompactionRunning,
+					Nome:    metrics.MetCompactionRunning,
+					Ajuda:   "1 enquanto o laço de compaction do §53-55 está de pé para o dataset; 0 com a chave desligada ou depois de ele parar",
+					Tipo:    metrics.TipoMedidor,
+					Labels:  rotulo,
+					Valor:   rodando,
+				},
+				metrics.Amostra{
+					Familia: metrics.MetCompactionBytesRead,
+					Nome:    metrics.MetCompactionBytesRead,
+					Ajuda:   "bytes de record que as varreduras de compaction leram desde a abertura do dataset",
+					Tipo:    metrics.TipoContador,
+					Labels:  rotulo,
+					Valor:   float64(st.CompactionBytesRead),
+				},
+				metrics.Amostra{
+					Familia: metrics.MetCompactionBytesWritten,
+					Nome:    metrics.MetCompactionBytesWritten,
+					Ajuda:   "bytes que o copy-forward da compaction reescreveu; a distância para bytes_read é o disco devolvido (§86)",
+					Tipo:    metrics.TipoContador,
+					Labels:  rotulo,
+					Valor:   float64(st.CompactionBytesWritten),
 				})
 		}
 		return out

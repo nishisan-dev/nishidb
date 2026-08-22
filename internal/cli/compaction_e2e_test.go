@@ -542,7 +542,8 @@ func extremos(v []int64) (piso, pico int64) {
 }
 
 // TestCompactionPeloBinarioEstabilizaODiscoComOOperadorVendo é o critério de
-// aceite da Task 7, itens 1 a 5.
+// aceite da Task 7, itens 1 a 5, e — desde a Task 8 — a metade do item 3 que a
+// errata do orquestrador adiou.
 //
 // O que ele afirma, e por que cada asserção não é substituível pela anterior:
 //
@@ -553,20 +554,17 @@ func extremos(v []int64) (piso, pico int64) {
 //     /metrics. Uma compaction que devolvesse disco sem a série se mover
 //     deixaria o painel do M4 inútil, que é o que este milestone existe para
 //     evitar;
-//
-// Só UMA série é cobrada aqui, e isso não é desvio: a primeira versão do item 3
-// pedia também a nishidb_compaction_bytes_written subindo, e a ERRATA DO
-// ORQUESTRADOR no próprio item reduziu-o a nishidb_storage_bytes e transformou
-// a outra metade em critério de aceite da TASK 8
-// (planning/m4-plano-implementacao.md, Tasks 7 e 8). O motivo está escrito lá e
-// é de escopo: MetCompactionBytesWritten é nome sem alimentador (nomes.go:48,
-// "sem alimentador até o M4"), e instalar o alimentador das três séries do §92
-// no metricas_dataset.go é literalmente a Task 8 — exigi-lo aqui era pedir que
-// esta tarefa fizesse o trabalho da seguinte. Os números já existem: o
-// compactaSegmento devolve lidos e escritos, e o compaction.segmento_aposentado
-// os registra em cada aposentadoria, com oráculo do lado do storage
-// (TestAposentadoriaRegistraNoLogOsBytesQueODiscoDevolveu). O que falta é a
-// PUBLICAÇÃO pela porta, e é na Task 8 que ela se cobra;
+//   - e ele vê PELA SÉRIE DA COMPACTION, que é o critério da Task 8 cobrado
+//     aqui: nishidb_compaction_bytes_written SOBE no /metrics enquanto a carga
+//     corre, e nishidb_compaction_running vale 1 com o laço de pé. Até a Task 8
+//     estas três eram nome declarado em nomes.go sem número atrás dele, e os
+//     únicos números da compaction viviam no compaction.segmento_aposentado,
+//     ou seja no log — que responde a pergunta do §86 para quem está lendo o
+//     log àquela hora, e não para um painel. A distinção entre as duas séries
+//     também importa: a de disco cai quando ALGUÉM devolve espaço, e um
+//     `checkpoint` que relistasse o diretório a moveria sem compaction nenhuma;
+//     a de bytes escritos só se move se o copy-forward do §55 tiver de fato
+//     copiado record vivo para frente;
 //   - a CONSULTA continua certa durante tudo isso (item 4): toda key presente,
 //     nenhuma duas vezes, e nenhuma sequence REGREDINDO entre duas leituras —
 //     que é exatamente o estrago que um copy-forward mal sincronizado produz,
@@ -586,6 +584,12 @@ func TestCompactionPeloBinarioEstabilizaODiscoComOOperadorVendo(t *testing.T) {
 	var quedaNaSerie bool
 	serieAnterior := b.metrica(metrics.MetStorageBytes)
 	picoDaSerie := serieAnterior
+	// A série de bytes escritos é CONTADOR: a largada é lida antes da primeira
+	// rodada justamente para que a asserção seja sobre o MOVIMENTO dela e não
+	// sobre o valor absoluto — um processo reiniciado começa do zero, e o que o
+	// operador acompanha no painel é a taxa.
+	escritosNaLargada := b.metrica(metrics.MetCompactionBytesWritten)
+	escritosAgora := escritosNaLargada
 	var primeiraLeitura, ultimaLeitura map[string]int64
 	var produzidoAteAMetade int64
 
@@ -595,6 +599,7 @@ func TestCompactionPeloBinarioEstabilizaODiscoComOOperadorVendo(t *testing.T) {
 		linhas := b.esperaIngestaoAlcancar(alvo, 60*time.Second)
 
 		serie := b.metrica(metrics.MetStorageBytes)
+		escritosAgora = b.metrica(metrics.MetCompactionBytesWritten)
 		if serie < serieAnterior {
 			quedaNaSerie = true
 		}
@@ -622,6 +627,7 @@ func TestCompactionPeloBinarioEstabilizaODiscoComOOperadorVendo(t *testing.T) {
 	t.Logf("primeira metade: piso %d, pico %d — segunda metade: piso %d, pico %d", pisoA, picoA, pisoB, picoB)
 	t.Logf("volume produzido: %d bytes no total, %d só na segunda metade", produzido, escritoNaSegundaMetade)
 	t.Logf("nishidb_storage_bytes: pico de %.0f pela porta HTTP, com queda observada = %v", picoDaSerie, quedaNaSerie)
+	t.Logf("nishidb_compaction_bytes_written: %.0f na largada, %.0f na última raspagem", escritosNaLargada, escritosAgora)
 
 	// Item 2, e a medida é o PISO da serra, não uma amostra solta.
 	//
@@ -651,6 +657,23 @@ func TestCompactionPeloBinarioEstabilizaODiscoComOOperadorVendo(t *testing.T) {
 	if !quedaNaSerie {
 		t.Errorf("nishidb_storage_bytes nunca caiu em %d raspagens de /metrics (pico %.0f): "+
 			"o disco voltou e o painel do M4 não mostrou nada", rodadas, picoDaSerie)
+	}
+	// Item 3, a metade que a errata passou para a Task 8, e ela não é a
+	// anterior dita de outro jeito: a série de disco cai quando o diretório
+	// encolhe, seja lá quem o tenha encolhido, enquanto esta só se move quando
+	// o copy-forward do §55 copiou record VIVO para frente. É o único número
+	// pela porta que diz que a compaction TRABALHOU, e não apenas que sobrou
+	// menos arquivo.
+	if escritosAgora <= escritosNaLargada {
+		t.Errorf("nishidb_compaction_bytes_written saiu de %.0f para %.0f em %d raspagens de /metrics, com o disco em serra "+
+			"(piso %d→%d) e %d bytes produzidos: o operador vê o diretório encolher e não tem série que diga que foi a compaction",
+			escritosNaLargada, escritosAgora, rodadas, pisoA, pisoB, produzido)
+	}
+	// E o medidor do §92 diz que o laço está de pé. Com a chave ligada no YAML
+	// e o processo respondendo, 0 aqui é a compaction que morreu sem avisar —
+	// o compaction.parou existe para o log, este número existe para o alerta.
+	if rodando := b.metrica(metrics.MetCompactionRunning); rodando != 1 {
+		t.Errorf("nishidb_compaction_running = %.0f com storage.compaction.enabled: true e o servidor de pé, queria 1", rodando)
 	}
 
 	// Item 4. A sequence é `greater` (§25): ela NUNCA regride numa

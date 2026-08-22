@@ -2524,13 +2524,15 @@ func bytesApendadosNoDestino(antes, depois map[string]int64) int64 {
 // (compaction_e2e_test.go), e comentário não é asserção.
 //
 // A omissão pesava mais aqui do que pesaria noutro log por duas razões. A
-// primeira é que o godoc da própria linha a declara load-bearing: ela é, até a
-// Task 8 dar alimentador às três séries do §92 (nomes.go:48), o ÚNICO lugar em
-// que estes números aparecem, e `lidos - escritos` é a resposta à pergunta do
-// §86 — quanto disco voltou. A segunda é que os outros três logs novos desta
-// tarefa (compaction.parou, compaction.ligada, compaction.desligada) já têm
-// oráculo, de modo que a instrumentação do ciclo de vida estava aferida em
-// tudo menos no único evento que carrega número.
+// primeira é que o godoc da própria linha a declara load-bearing: ela era, até
+// a Task 8 dar alimentador às três séries do §92, o ÚNICO lugar em que estes
+// números apareciam, e `lidos - escritos` é a resposta à pergunta do §86 —
+// quanto disco voltou. Com as séries publicadas ela continua sendo o único
+// lugar em que eles aparecem POR SEGMENTO, que é a leitura que se faz depois
+// do alerta. A segunda é que os outros três logs novos daquela tarefa
+// (compaction.parou, compaction.ligada, compaction.desligada) já têm oráculo,
+// de modo que a instrumentação do ciclo de vida estava aferida em tudo menos
+// no único evento que carrega número.
 //
 // O que se afirma, e por que cada asserção não é substituível pelas outras:
 //
@@ -2730,4 +2732,141 @@ func TestSegundaPartidaDaCompactionNaoSobeSegundaGoroutine(t *testing.T) {
 	}
 	t.Logf("segunda partida ignorada: nenhum passo de aposentadoria alheio em %v (primeira passada em %v)", janela, decorrido)
 	liberar()
+}
+
+// TestContadoresDaCompactionAcumulamOQueAVarreduraLeuEEscreveu é o oráculo dos
+// dois CONTADORES do §92 (nishidb_compaction_bytes_read e _bytes_written), que
+// a Task 8 tirou da condição de nome sem alimentador.
+//
+// O que se afirma aqui é a aritmética, e não a publicação — quem prova a porta
+// é o TestSeriesDeCompactionGanhamAlimentador do server e o e2e pelo binário.
+// São duas coisas diferentes e as duas quebram sozinhas: uma série pode ser
+// publicada com o número errado, e um número certo pode não chegar ao scrape.
+//
+// A segunda varredura não é repetição da primeira. Ela é o que separa CONTADOR
+// de medidor: um `Store` no lugar do `Add` sobrevive a qualquer teste de uma
+// passada só — a primeira parcela é sempre igual ao total —, e o painel do §86
+// não pede o valor, pede a TAXA, que só existe sobre série monotônica. O
+// segmento varrido na segunda volta é o DESTINO da primeira cópia, porque é o
+// único jeito de as duas parcelas de `escritos` serem não nulas: depois do
+// copy-forward, a origem não tem mais nada vivo.
+func TestContadoresDaCompactionAcumulamOQueAVarreduraLeuEEscreveu(t *testing.T) {
+	s, _, _ := abreComResiduoOrfaoNoSegmento1(t)
+	if lidos, escritos := s.compBytesLidos.Load(), s.compBytesEscritos.Load(); lidos != 0 || escritos != 0 {
+		t.Fatalf("montagem: o dataset já contabiliza %d bytes lidos / %d escritos antes de qualquer varredura", lidos, escritos)
+	}
+
+	_, lidos1, escritos1, err := s.compactaSegmento(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("compactaSegmento(1): %v", err)
+	}
+	if lidos1 <= 0 || escritos1 <= 0 {
+		t.Fatalf("montagem: a varredura do segmento 1 leu %d e escreveu %d bytes — com qualquer um dos dois zerado "+
+			"a acumulação abaixo não distinguiria contador de medidor", lidos1, escritos1)
+	}
+	if lidos, escritos := s.compBytesLidos.Load(), s.compBytesEscritos.Load(); lidos != lidos1 || escritos != escritos1 {
+		t.Fatalf("depois da primeira varredura os contadores valem %d/%d, e ela devolveu %d/%d: "+
+			"o que o operador lê no §92 tem de ser o que a varredura mediu, não um número parecido",
+			lidos, escritos, lidos1, escritos1)
+	}
+
+	// O destino da cópia é onde a location da row passou a apontar. Selá-lo
+	// (D6 nunca elege o corrente) e varrê-lo é o que produz a SEGUNDA parcela
+	// de bytes escritos.
+	rec := mustGetAud(t, s, "lv")
+	destino, _ := localizacaoDaRow(t, s, rec.RowID)
+	if destino == 1 {
+		t.Fatalf("a cópia continua no segmento 1: o copy-forward não moveu nada e a segunda varredura releria a mesma origem")
+	}
+	rotacionaAlemDe(t, s, destino)
+
+	_, lidos2, escritos2, err := s.compactaSegmento(context.Background(), destino)
+	if err != nil {
+		t.Fatalf("compactaSegmento(%d): %v", destino, err)
+	}
+	if lidos2 <= 0 || escritos2 <= 0 {
+		t.Fatalf("montagem: a varredura do segmento %d leu %d e escreveu %d bytes; sem segunda parcela não há acumulação a provar",
+			destino, lidos2, escritos2)
+	}
+	if lidos, escritos := s.compBytesLidos.Load(), s.compBytesEscritos.Load(); lidos != lidos1+lidos2 || escritos != escritos1+escritos2 {
+		t.Errorf("depois de duas varreduras os contadores valem %d/%d, e as parcelas somam %d/%d: "+
+			"série de compaction que esquece a passada anterior é medidor com nome de contador, e `rate()` sobre ela não se calcula (§92)",
+			lidos, escritos, lidos1+lidos2, escritos1+escritos2)
+	}
+}
+
+// TestMedidorDaCompactionSobeComOLacoEDesceQuandoEleAcaba fixa a semântica de
+// nishidb_compaction_running: 1 enquanto o LAÇO do §53-55 está de pé para o
+// dataset, 0 quando não está.
+//
+// A alternativa — 1 só durante a passada — foi rejeitada com a medida desta
+// bancada na mão: as aposentadorias se agrupam em passadas de dezenas de
+// MILISSEGUNDOS separadas pelo cochilo de cinco segundos (compaction_e2e_test.go
+// registra pouco mais de 1% do tempo com varredura em voo). Um medidor com esse
+// ciclo de trabalho lido a cada 15 segundos responde 0 em 99 de cada 100
+// raspagens, e um painel que mostra zero quase sempre não distingue a compaction
+// VIVA da compaction desligada — que é a leitura errada mais cara deste
+// milestone. O que a série carrega é o estado que o operador não tem outro jeito
+// de ver; a atividade ele lê na taxa dos dois contadores.
+func TestMedidorDaCompactionSobeComOLacoEDesceQuandoEleAcaba(t *testing.T) {
+	s := openStore(t, Options{Dir: t.TempDir(), SegmentSize: 8 << 10})
+	corpusDeSegmentosSelados(t, s, 40, 10)
+
+	if s.Stats().CompactionRunning {
+		t.Fatal("montagem: o medidor já dizia 1 antes de alguém iniciar a compaction")
+	}
+	s.IniciaCompaction(context.Background(), 0.5)
+	if !s.Stats().CompactionRunning {
+		t.Error("o medidor do §92 diz 0 com a goroutine do §53-55 de pé: o operador que ligou a chave no YAML " +
+			"vê no painel exatamente o mesmo número de quem a deixou desligada")
+	}
+	s.ParaCompaction()
+	if s.Stats().CompactionRunning {
+		t.Error("o medidor continua em 1 depois do ParaCompaction, que CANCELA e AGUARDA (decisão D7): " +
+			"série presa em 1 é alerta que nunca dispara")
+	}
+}
+
+// TestMedidorDaCompactionDesceQuandoOLacoParaSozinho é o caso que justifica a
+// série existir, e ele não é alcançado pelo teste irmão: ali quem derruba o
+// laço é o ParaCompaction, aqui o laço morre SOZINHO pelo modo falho sticky do
+// writer (§14.14), sem cancelamento e sem Close.
+//
+// É a única situação em que o disco volta a crescer para sempre com o processo
+// de pé e respondendo consulta — o compaction.parou registra o instante, mas
+// quem lê log é quem já foi olhar; o alerta do operador se escreve sobre a
+// série. Um medidor que lesse "a chave está ligada" em vez de "o laço está de
+// pé" continuaria em 1 aqui, que é o pior valor possível: ele afirma que o
+// mecanismo está funcionando no exato caso em que ele parou.
+//
+// A montagem repete a do TestCompactionEmBackgroundParaNaPrimeiraFalhaDoWriter
+// de propósito: aquele teste afirma sobre a PARADA e o aviso, este sobre o
+// número que a parada publica, e acoplá-los faria um oráculo cobrir o buraco do
+// outro.
+func TestMedidorDaCompactionDesceQuandoOLacoParaSozinho(t *testing.T) {
+	var registro registroDeLog
+	s := openStore(t, Options{
+		Dir:          t.TempDir(),
+		SegmentSize:  8 << 10,
+		BitmapFields: []types.FieldID{fldStatus},
+		Log:          logging.New(&registro, logging.FormatoTexto, slog.LevelInfo),
+	})
+	corpusDeSegmentosSelados(t, s, 40, 30)
+	if eleitos := s.candidatos(0.5); len(eleitos) == 0 {
+		t.Fatal("nenhum candidato depois do corpus: a passada não teria em que falhar e o laço terminaria por falta de trabalho")
+	}
+	mataOWriter(t, s)
+
+	s.IniciaCompaction(context.Background(), 0.5)
+	terminou := make(chan struct{})
+	go func() { s.compEmVoo.Wait(); close(terminou) }()
+	select {
+	case <-terminou:
+	case <-time.After(60 * time.Second):
+		t.Fatal("a goroutine de compaction continua de pé com o writer em modo falho: sem a parada não há o que este medidor observe")
+	}
+	if s.Stats().CompactionRunning {
+		t.Errorf("o medidor do §92 diz 1 com o laço já encerrado pela falha sticky: o painel afirma que a compaction está de pé "+
+			"justamente quando ela parou e NÃO volta sozinha (§53-55, §86).\nlog:\n%s", registro.String())
+	}
 }

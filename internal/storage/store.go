@@ -152,6 +152,30 @@ type Stats struct {
 	// chamá-lo de LiveBytes convidaria a próxima revisão a tratá-lo como
 	// exato e a dimensionar compaction por ele.
 	LiveBytesUpperBound uint64
+	// CompactionRunning é o 0/1 de nishidb_compaction_running (§92), e o que
+	// ele afirma é que o LAÇO do §53-55 está de pé para este dataset — não
+	// que há uma varredura em voo neste microssegundo. A escolha é medida: a
+	// passada dura dezenas de milissegundos contra um cochilo de segundos, de
+	// modo que um medidor de "varredura em voo" responderia 0 em quase toda
+	// raspagem e o painel não distinguiria a compaction viva da desligada.
+	//
+	// Ele desce quando o laço termina, e o caso que importa não é o Close: é
+	// a falha sticky do writer (§14.14), em que a goroutine para sozinha e o
+	// disco volta a crescer com o processo de pé. O compaction.parou registra
+	// o instante no log; esta série é o que um alerta consegue observar.
+	CompactionRunning bool
+	// CompactionBytesRead e CompactionBytesWritten são os dois CONTADORES do
+	// §92, monotônicos por processo: somam o que as varreduras leram e o que
+	// o copy-forward escreveu desde a abertura do dataset. A distância entre
+	// eles é o disco devolvido, que é a pergunta do §86.
+	//
+	// São contadores e não medidores por causa da leitura que o operador faz:
+	// o painel pede a TAXA de bytes movidos, e taxa não se calcula sobre um
+	// número que zera a cada passada. Reabrir o dataset os zera, como zera
+	// qualquer contador de processo — é a semântica que o Prometheus espera e
+	// trata com `rate()`.
+	CompactionBytesRead    int64
+	CompactionBytesWritten int64
 }
 
 const defaultSegmentSize = 512 << 20
@@ -258,6 +282,21 @@ type Store struct {
 	compMu      sync.Mutex
 	compCancela context.CancelFunc
 	compEmVoo   sync.WaitGroup
+
+	// compAtiva, compBytesLidos e compBytesEscritos são os alimentadores das
+	// três séries de compaction do §92, que até o M4 eram nome sem número
+	// (nomes.go). São atômicos e não campos sob o wmu pelo motivo dos
+	// espelhos logo acima: quem os lê é o /metrics, no instante do scrape, e
+	// um scrape atrás do lock do writer apaga o painel exatamente sob a
+	// pressão que ele existe para mostrar.
+	//
+	// Não há contador duplicado aqui: estes são a ÚNICA soma dos bytes que a
+	// compaction move, e o servidor os lê pelo Stats() em vez de manter cópia
+	// própria — a doutrina do registry (metrics.go) é que quem publica lê a
+	// estrutura existente.
+	compAtiva         atomic.Bool
+	compBytesLidos    atomic.Int64
+	compBytesEscritos atomic.Int64
 
 	// wmu serializa as operações do writer (Put/Sync/Checkpoint): o
 	// contrato "writer único" deixa de ser convenção e vira mecanismo —
@@ -1445,13 +1484,16 @@ func (s *Store) Stats() Stats {
 	// espelhar o tally SEM a reconciliação perde o segundo, que é o que faz um
 	// segmento aposentado pela compaction (§53-55) sumir da contagem.
 	return Stats{
-		RowCount:            s.rowCount.Load(),
-		SegmentsTotal:       s.segCount.Load(),
-		CurrentSegmentID:    segID,
-		PrimaryLoadFactor:   lf,
-		OverlayLen:          s.locs.OverlayLen(),
-		StorageBytes:        s.diskBytesAll.Load(),
-		LiveBytesUpperBound: s.liveBytesAll.Load(),
+		RowCount:               s.rowCount.Load(),
+		SegmentsTotal:          s.segCount.Load(),
+		CurrentSegmentID:       segID,
+		PrimaryLoadFactor:      lf,
+		OverlayLen:             s.locs.OverlayLen(),
+		StorageBytes:           s.diskBytesAll.Load(),
+		LiveBytesUpperBound:    s.liveBytesAll.Load(),
+		CompactionRunning:      s.compAtiva.Load(),
+		CompactionBytesRead:    s.compBytesLidos.Load(),
+		CompactionBytesWritten: s.compBytesEscritos.Load(),
 	}
 }
 

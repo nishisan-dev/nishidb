@@ -45,7 +45,9 @@ const (
 	MetQueryFullScans      = "nishidb_query_full_scans"
 	MetQueryLatencySeconds = "nishidb_query_latency_seconds"
 
-	// Compaction (§92) — sem alimentador até o M4.
+	// Compaction (§92). Alimentadas desde o M4 pelo Store.Stats(): o medidor
+	// diz se o laço do §53-55 está de pé, e os dois contadores somam o que as
+	// varreduras leram e o copy-forward escreveu.
 	MetCompactionRunning      = "nishidb_compaction_running"
 	MetCompactionBytesRead    = "nishidb_compaction_bytes_read"
 	MetCompactionBytesWritten = "nishidb_compaction_bytes_written"
