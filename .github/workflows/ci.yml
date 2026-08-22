@@ -65,10 +65,6 @@ jobs:
     name: lint (golangci-lint + gofmt)
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    env:
-      # Isolado num diretório próprio do runner, e não no cache default do
-      # golangci-lint: o job não reaproveita estado entre execuções.
-      GOLANGCI_LINT_CACHE: ${{ runner.temp }}/golangci-lint-cache
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -81,6 +77,14 @@ jobs:
 
       - name: roda o linter e compara a contagem com a linha de base
         run: |
+          # Isolado num diretório próprio do runner, e não no cache default
+          # do golangci-lint: o job não reaproveita estado entre execuções.
+          # O contexto `runner` não é permitido em `env:` de nível de job —
+          # só dentro de steps —, então o isolamento é feito aqui, com
+          # RUNNER_TEMP: variável de ambiente do runner, resolvida em
+          # runtime pelo shell, sem depender de expressão de contexto do
+          # Actions.
+          export GOLANGCI_LINT_CACHE="$RUNNER_TEMP/golangci-lint-cache"
           mkdir -p "$GOLANGCI_LINT_CACHE"
 
           # internal/gates/ci_test.go já fixa que .golangci-baseline existe
