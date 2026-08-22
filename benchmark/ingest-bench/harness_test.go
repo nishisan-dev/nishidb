@@ -860,17 +860,67 @@ func TestCompactionEmDatasetReabertoDevolveDiscoDeVerdade(t *testing.T) {
 	// MESMO DataDir: é a reabertura que torna os segmentos selados elegíveis.
 	reabertura := cfg
 	reabertura.CompactionRatio = 0.50
-	rep, err := Run(reabertura)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !rep.StoreStats.CompactionRunning {
-		t.Fatal("compaction_running = false na reabertura: a goroutine não chegou viva ao fim")
+
+	// Run() NÃO espera a primeira passada da compaction antes de colher o
+	// StoreStats: ele lê o snapshot (linha ~567 do harness.go) logo depois do
+	// STEADY e devolve, sem sincronizar com a goroutine de fundo que
+	// IniciaCompaction subiu. A JANELA que essa goroutine tem para ganhar uma
+	// fatia de CPU e terminar de varrer é só a duração real do LOAD mais os
+	// 200ms do STEADY acima — e -race, que infla o overhead de sincronização
+	// de 5 a 20x, num runner de DOIS núcleos pode esgotar essa janela inteira
+	// sem o agendador jamais escalonar a goroutine. Não há data race nenhuma
+	// no log: é contenção de agendador, não corrida de dados — foi assim que
+	// a run 32599767555 reprovou -race na main num runner lento, embora o
+	// MESMO commit tivesse passado -race na run do PR meia hora antes e
+	// passe localmente com -race -count=3 em 12 vCPUs.
+	//
+	// O retry NÃO é "dar outra chance à MESMA goroutine parada": Run() fecha
+	// o Store no seu defer, e Close chama ParaCompaction, que cancela e
+	// ESPERA a goroutine morrer (D7) antes de devolver. Cada tentativa sobe,
+	// portanto, um Store NOVO com uma goroutine de compaction NOVA — e
+	// reexecuta o LOAD e o STEADY inteiros por cima do que já existe no
+	// DataDir. O dataset não fica parado entre tentativas, ele CRESCE: mais
+	// eventos de LOAD tornam mais stale o que já estava nos segmentos
+	// selados (cada update é uma escrita nova no corrente, não uma edição no
+	// lugar), e mais um STEADY de 200ms pode selar segmento novo em cima. É
+	// isso que faz o retry CONVERGIR e não só insistir: a cada volta há mais
+	// candidato elegível e um live ratio mais baixo para a D6 escolher, e o
+	// LOAD+STEADY de cada tentativa é o que dá à goroutine nova uma janela
+	// de tempo real para ganhar sua fatia de CPU — não a sorte de repetir a
+	// mesma corrida. Por isso o polling é por CONDIÇÃO (a compaction
+	// realmente varreu e devolveu disco), com um prazo generoso, e não um
+	// sleep fixo: numa máquina rápida a primeira tentativa já basta e o
+	// prazo nunca é consultado; o custo só é pago quando o runner estiver de
+	// fato lento.
+	const prazoPrimeiraPassada = 30 * time.Second
+	limite := time.Now().Add(prazoPrimeiraPassada)
+	var rep *Report
+	var tentativas int
+	for {
+		tentativas++
+		var err error
+		rep, err = Run(reabertura)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !rep.StoreStats.CompactionRunning {
+			t.Fatal("compaction_running = false na reabertura: a goroutine não chegou viva ao fim")
+		}
+		trabalhou := rep.StoreStats.CompactionBytesRead > 0 &&
+			rep.StoreStats.CompactionBytesWritten < rep.StoreStats.CompactionBytesRead
+		if trabalhou {
+			break
+		}
+		if time.Now().After(limite) {
+			t.Logf("a compaction não fechou uma passada completa em %d tentativa(s) e %s de prazo; "+
+				"seguindo para as asserções abaixo, que nomeiam o sintoma exato", tentativas, prazoPrimeiraPassada)
+			break
+		}
 	}
 	if rep.StoreStats.CompactionBytesRead <= 0 {
-		t.Errorf("compaction_bytes_read = %d numa reabertura com %d segmentos selados e garbage de %d updates: "+
+		t.Errorf("compaction_bytes_read = %d após %d tentativa(s), na ÚLTIMA reabertura com %d segmentos e garbage de %d updates nela: "+
 			"a compaction subiu e não varreu nada",
-			rep.StoreStats.CompactionBytesRead, montagem.StoreStats.SegmentsTotal, montagem.Steady.Updated)
+			rep.StoreStats.CompactionBytesRead, tentativas, rep.StoreStats.SegmentsTotal, rep.Steady.Updated)
 	}
 	// Escritos < lidos é a afirmação inteira do §53-55: o que a varredura leu
 	// da origem e NÃO reescreveu é o disco que a aposentadoria devolveu. Iguais
