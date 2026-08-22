@@ -341,6 +341,14 @@ func somaDoLogDaAposentadoria(t *testing.T, saida, campo string) int64 {
 //     storage. Sem esta parte, publicar uma constante — ou publicar `lidos` no
 //     lugar de `escritos` — passaria por "a série existe e é positiva", que é
 //     medir sem oráculo (débito 6);
+//   - e a convergência só vale com `bytes_escritos` do log JÁ POSITIVO. Sem
+//     essa guarda o teste é vacuoso na metade das corridas, e não por acaso:
+//     o corpus é feito de rodadas sobre o mesmo key set, então quase todo
+//     segmento eleito está 100% morto e é aposentado copiando ZERO record
+//     vivo. O laço converge na primeira raspagem em que scrape e log
+//     coincidem, e se ela chega antes do primeiro copy-forward a conferência
+//     de `escritos` é 0 == 0 — medido: `Valor: 0` fixo na amostra de
+//     bytes_written sobrevivia a este pacote inteiro, e só o e2e o matava;
 //   - `running` vale 1 com o laço de pé, e o teste irmão exige 0 com a chave
 //     desligada. Um par que não se separa é constante disfarçada de medidor.
 //
@@ -374,6 +382,9 @@ func TestSeriesDeCompactionGanhamAlimentador(t *testing.T) {
 			faltando = "as séries de bytes não foram publicadas"
 		case lidosLog == 0:
 			faltando = "nenhuma aposentadoria no log: sem passada não há número a conferir"
+		case escrLog == 0:
+			faltando = "nenhuma aposentadoria copiou record vivo para frente ainda: com 0 escritos a conferência " +
+				"abaixo seria 0 == 0 e uma constante zero na série passaria por ela"
 		case int64(lidos.Valor) != lidosLog || int64(escritos.Valor) != escrLog:
 			faltando = fmt.Sprintf("o scrape diz %d lidos / %d escritos e o log soma %d / %d",
 				int64(lidos.Valor), int64(escritos.Valor), lidosLog, escrLog)

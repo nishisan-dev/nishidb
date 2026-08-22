@@ -1063,6 +1063,37 @@ func TestVarreduraCanceladaNaoZeraOTally(t *testing.T) {
 	exigeEspelhoIgualAosTallies(t, s, "após a varredura cancelada")
 }
 
+// corrompeOUltimoRecordDoSegmento vira um byte perto do fim do arquivo do
+// segmento seg — o suficiente para o ScanFrom parar ali e devolver um prefixo
+// válido MENOR que o arquivo, que é a precondição da varredura parcial.
+//
+// Esta é a única montagem da suíte que faz a compactaSegmento voltar com erro
+// tendo LIDO e ESCRITO bytes: os outros dois modos de fracasso param cedo
+// demais para produzir as duas parcelas — o contexto cancelado morre no
+// primeiro record e o writer em modo falho falha na primeira cópia. Por isso
+// ela serve a dois testes com oráculos distintos (o tally e os contadores do
+// §92), e é helper em vez de estar escrita dentro de um deles.
+func corrompeOUltimoRecordDoSegmento(t *testing.T, dir string, seg uint32) {
+	t.Helper()
+	caminho := audSegPath(dir, seg)
+	alvo := fileSizeAud(t, caminho) - 8
+	f, err := os.OpenFile(caminho, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("abrir o segmento para plantar a corrupção: %v", err)
+	}
+	var b [1]byte
+	if _, err := f.ReadAt(b[:], alvo); err != nil {
+		t.Fatalf("ler o byte a corromper: %v", err)
+	}
+	b[0] ^= 0xFF
+	if _, err := f.WriteAt(b[:], alvo); err != nil {
+		t.Fatalf("gravar a corrupção: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("fechar o segmento corrompido: %v", err)
+	}
+}
+
 // TestVarreduraQueParaAntesDoFimDoArquivoNaoZeraOTally cobre o terceiro modo
 // de varredura incompleta, e é o único que não vem de fora: o ScanFrom para
 // no primeiro record inválido SEM erro, porque para o tail scan da recovery
@@ -1086,26 +1117,7 @@ func TestVarreduraQueParaAntesDoFimDoArquivoNaoZeraOTally(t *testing.T) {
 	s, dir, _ := abreComResiduoOrfaoNoSegmento1(t)
 	recsAntes, vivoAntes := tallyDoSegmento(s, 1)
 
-	// O último record do segmento selado: corrompê-lo deixa a varredura
-	// copiar os anteriores e parar antes do fim do arquivo, que é a
-	// precondição exata deste teste.
-	caminho := audSegPath(dir, 1)
-	alvo := fileSizeAud(t, caminho) - 8
-	f, err := os.OpenFile(caminho, os.O_RDWR, 0)
-	if err != nil {
-		t.Fatalf("abrir o segmento para plantar a corrupção: %v", err)
-	}
-	var b [1]byte
-	if _, err := f.ReadAt(b[:], alvo); err != nil {
-		t.Fatalf("ler o byte a corromper: %v", err)
-	}
-	b[0] ^= 0xFF
-	if _, err := f.WriteAt(b[:], alvo); err != nil {
-		t.Fatalf("gravar a corrupção: %v", err)
-	}
-	if err := f.Close(); err != nil {
-		t.Fatalf("fechar o segmento corrompido: %v", err)
-	}
+	corrompeOUltimoRecordDoSegmento(t, dir, 1)
 
 	copiados, _, escritos, err := s.compactaSegmento(context.Background(), 1)
 	if !errors.Is(err, ErrDatasetCorrupt) {
@@ -2792,6 +2804,57 @@ func TestContadoresDaCompactionAcumulamOQueAVarreduraLeuEEscreveu(t *testing.T) 
 		t.Errorf("depois de duas varreduras os contadores valem %d/%d, e as parcelas somam %d/%d: "+
 			"série de compaction que esquece a passada anterior é medidor com nome de contador, e `rate()` sobre ela não se calcula (§92)",
 			lidos, escritos, lidos1+lidos2, escritos1+escritos2)
+	}
+}
+
+// TestContadoresDaCompactionSobemNaVarreduraQueFracassou é o oráculo do
+// caminho de ERRO dos dois contadores do §92, que o teste irmão não alcança:
+// lá as duas varreduras terminam bem, e um `if err != nil { return }` antes
+// dos dois `Add` do defer da compactaSegmento sobrevive à suíte inteira.
+//
+// A escolha que ele fixa é deliberada e está argumentada em produção: o que
+// estas séries medem é o I/O que a compaction CONSUMIU, e uma varredura que
+// fracassou no meio já leu o prefixo e já copiou para frente o que achou vivo.
+// Zerar esse trabalho deixaria o /metrics parado exatamente na passada que
+// morreu — que é a passada sobre a qual alguém está perguntando —, e é
+// autoridade diferente da do tally, que continua só sendo zerado por varredura
+// COMPLETA (D4). As duas afirmações convivem na mesma chamada, e este teste é
+// quem prova que elas não foram unificadas por descuido: aqui os contadores
+// sobem e o tally do teste vizinho NÃO zera, sobre a mesma montagem.
+//
+// A montagem é a da corrupção porque é a única que devolve erro com as DUAS
+// parcelas não nulas (ver corrompeOUltimoRecordDoSegmento). Os outros dois
+// caminhos de fracasso citados pelo comentário de produção — a falha sticky do
+// writer (§14.14) e o cancelamento do Close (D7) — passam pelo mesmo defer e
+// param cedo demais para produzir `escritos`: cobri-los aqui trocaria um
+// oráculo de dois lados por um de um lado só.
+func TestContadoresDaCompactionSobemNaVarreduraQueFracassou(t *testing.T) {
+	s, dir, _ := abreComResiduoOrfaoNoSegmento1(t)
+	if lidos, escritos := s.compBytesLidos.Load(), s.compBytesEscritos.Load(); lidos != 0 || escritos != 0 {
+		t.Fatalf("montagem: o dataset já contabiliza %d bytes lidos / %d escritos antes de qualquer varredura", lidos, escritos)
+	}
+	corrompeOUltimoRecordDoSegmento(t, dir, 1)
+
+	copiados, lidos, escritos, err := s.compactaSegmento(context.Background(), 1)
+	if !errors.Is(err, ErrDatasetCorrupt) {
+		t.Fatalf("compactaSegmento sobre segmento com record corrompido devolveu %v, queria ErrDatasetCorrupt", err)
+	}
+	if copiados == 0 || lidos <= 0 || escritos <= 0 {
+		t.Fatalf("montagem: a varredura que fracassou devolveu %d record(s) copiado(s), %d bytes lidos e %d escritos — "+
+			"com qualquer parcela zerada a conferência abaixo seria 0 == 0 e não distinguiria acumular de descartar",
+			copiados, lidos, escritos)
+	}
+
+	if got := s.compBytesLidos.Load(); got != lidos {
+		t.Errorf("nishidb_compaction_bytes_read = %d depois de uma varredura que devolveu erro tendo lido %d bytes: "+
+			"o I/O que a passada morta consumiu sumiu do painel, e é justamente a passada sobre a qual o operador pergunta (§92)",
+			got, lidos)
+	}
+	if got := s.compBytesEscritos.Load(); got != escritos {
+		t.Errorf("nishidb_compaction_bytes_written = %d depois de uma varredura que devolveu erro tendo escrito %d bytes: "+
+			"o copy-forward parcial já está no disco de destino e já saiu do tally da origem — descontá-lo da série "+
+			"faria o /metrics negar trabalho que foi feito (§92)",
+			got, escritos)
 	}
 }
 
