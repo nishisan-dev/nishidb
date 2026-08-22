@@ -1,0 +1,107 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  # Suíte completa, INCLUINDO os gates de medida — os de alocação
+  # (testing.AllocsPerRun) e o de vazão da ingestão pelo CLI —, que são
+  # //go:build !race por construção. É este job que protege o orçamento de
+  # alocações por evento e o custo por evento do comando.
+  #
+  # timeout-minutes generoso: localmente a suíte já leva ~2 min (internal/cli
+  # sozinho leva 60s, com os e2e de compaction e vazão), e o runner é mais
+  # lento que a máquina de desenvolvimento.
+  test:
+    name: test (./...)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.5"
+          cache: true
+      - run: go test ./...
+
+  # Detector de corrida. NÃO cobre os gates de medida do job `test`: a
+  # instrumentação do -race altera a contagem de alocações e infla o Apply
+  # sem inflar o checkpoint, então eles se anunciam SKIP sob -race. Os dois
+  # jobs são complementares por construção — nenhum substitui o outro —, e
+  # por isso rodam em paralelo, não em sequência.
+  race:
+    name: test -race
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.5"
+          cache: true
+      - run: go test ./... -race
+
+  # golangci-lint na MESMA versão que a instrução de instalação do Makefile —
+  # internal/gates/ci_test.go fixa que as duas nunca divergem, comparando as
+  # duas extrações. `make lint` não serve de veredito aqui: com a
+  # linha de base > 0 o alvo sempre sai != 0 (é assim que ele recusa a
+  # ausência do binário). Este job roda o linter direto, com os DOIS tetos
+  # zerados (--max-issues-per-linter=0 --max-same-issues=0, que já são o
+  # default do .golangci.yml — repetir na linha de comando é o que defende o
+  # número real, ver o comentário do alvo `lint`), extrai a CONTAGEM em JSON e
+  # compara com .golangci-baseline: ratchet bidirecional, contagem maior OU
+  # menor reprovam.
+  lint:
+    name: lint (golangci-lint + gofmt)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Isolado num diretório próprio do runner, e não no cache default do
+      # golangci-lint: o job não reaproveita estado entre execuções.
+      GOLANGCI_LINT_CACHE: ${{ runner.temp }}/golangci-lint-cache
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.5"
+          cache: true
+
+      - name: instala o golangci-lint na versão que mede a linha de base
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
+
+      - name: roda o linter e compara a contagem com a linha de base
+        run: |
+          mkdir -p "$GOLANGCI_LINT_CACHE"
+
+          # O exit code NÃO é o veredito: com a linha de base > 0 o linter
+          # sempre sai != 0. O veredito é a comparação abaixo, contra
+          # .golangci-baseline.
+          golangci-lint run \
+            --max-issues-per-linter=0 --max-same-issues=0 \
+            --show-stats=false --output.json.path=lint-report.json || true
+
+          contagem="$(jq '.Issues | length' lint-report.json)"
+          baseline="$(cat .golangci-baseline)"
+          echo "apontamentos: $contagem (linha de base: $baseline)"
+
+          if [ "$contagem" -gt "$baseline" ]; then
+            echo "erro: $contagem apontamentos contra a linha de base de $baseline — há apontamento NOVO no diff." >&2
+            exit 1
+          fi
+          if [ "$contagem" -lt "$baseline" ]; then
+            echo "erro: $contagem apontamentos é MENOR que a linha de base de $baseline — abaixe .golangci-baseline para $contagem neste mesmo PR." >&2
+            exit 1
+          fi
+
+      # Hoje `gofmt -l .` está limpo na base — o job nasce estrito, sem
+      # ratchet: formatação não tem meio-termo como a contagem de lint.
+      - name: gofmt -l (formatação estrita)
+        run: |
+          faltando="$(gofmt -l .)"
+          if [ -n "$faltando" ]; then
+            echo "os arquivos abaixo não passaram por gofmt -l:" >&2
+            echo "$faltando" >&2
+            exit 1
+          fi
