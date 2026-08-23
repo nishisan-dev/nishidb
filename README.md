@@ -69,6 +69,9 @@ storage:
   compaction:
     enabled: true
     minimumLiveRatio: 0.50
+  expiracao:
+    maxPorPassada: 1000     # marcações por passada do coletor
+    tempoPorPassada: 5s     # teto de tempo da passada; vence o que bater primeiro
 
 datasets:
   directory: /etc/nishidb/datasets

@@ -673,6 +673,50 @@ conhecê-las. Cada uma tem dono em [`debitos.md`](debitos.md).
   substituições existem no total e somem do detalhe, que deixa de fechar com
   `aplicados`. É o **débito 48**.
 
+## Expiração por inatividade
+
+`materialization.ttl.expireAfterWrite` declara um idle timeout: a entidade sai
+quando passa a duração sem receber escrita, e **cada escrita renova o prazo**.
+Entidade ativa nunca expira; entidade abandonada sai sozinha. É o que impede o
+estado vivo de crescer com o espaço de chaves — a compaction não segura isso,
+porque ela recupera versões superadas, não entidades inteiras.
+
+O instante da última escrita vira um campo de sistema no payload, `_writtenAt`
+(11 bytes por record). Ele guarda um **fato**, não uma política: mudar a
+duração no YAML vale na hora para as linhas existentes, em vez de exigir
+reescrever o dataset.
+
+**A visibilidade não depende do coletor.** Os três pontos de liveness checam o
+prazo, então a entidade vencida some da consulta mesmo com o coletor parado,
+atrasado ou nunca ligado. O coletor é mecanismo de **espaço**, não de
+correção — e é por isso que `nishidb query` e `nishidb server` respondem a
+mesma coisa sobre o mesmo dataset.
+
+A coleta tem **duas rotas**, e elas cobrem coisas diferentes:
+
+| Rota | Como acha | O que ela não alcança |
+|---|---|---|
+| **Oportunista**, na compaction | Ela já lê todo record do segmento que elegeu, então conferir o prazo custa uma carga de 8 bytes. Ao achar um vencido, grava a lápide direto no destino em vez de copiar o payload | Segmento sem garbage. Garbage vem de update, e entidade abandonada não recebe update — então o segmento onde ela mora nunca é candidato |
+| **Coletor**, por passada | Varre o índice de escritas, não os segmentos | Nada; é ele que cobre o ponto cego acima |
+
+A passada do coletor tem freio duplo, em `storage.expiracao`, e vence o
+primeiro a bater: `maxPorPassada` (default 1000) e `tempoPorPassada` (default
+5s). São dois porque os riscos são opostos — **marcar é um append**, então uma
+leva grande escreve muito antes de a compaction recuperar qualquer coisa e
+disputa o lock de escrita com a ingestão; e varrer milhões de entradas sem
+achar nada não escreve nada, mas seguraria a goroutine.
+
+Entidade materializada **antes** de a expiração ser ligada não tem o campo de
+sistema, o que o índice lê como prazo **desconhecido** — e desconhecido nunca
+vence. A primeira passada do coletor lhe dá carência, contando um prazo cheio
+a partir dali. É o que permite ligar a chave num dataset já materializado sem
+reprocessar nada, e o que impede essas entidades de ficarem imortais.
+
+O que **não** volta é a chave: a lápide é copiada para frente enquanto a
+primary nomear a key, e esquecê-la exige `tombstoneRetention`, que ainda não
+tem motor. Cada entidade expirada deixa um resíduo do tamanho da lápide
+(header + key + 11 bytes).
+
 ## Referência de tipos de campo
 
 O que `type:` aceita no YAML do dataset, o que cada um aceita como **entrada** e
