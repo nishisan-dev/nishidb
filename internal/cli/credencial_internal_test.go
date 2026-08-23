@@ -147,6 +147,30 @@ func TestFlagsRemotasResolveMensagensNaoEcoamSenha(t *testing.T) {
 	}
 }
 
+// TestUserComNISHIDBPASSWORDDefinidaEVaziaEhRecusado é o Minor 8 da revisão
+// final: t.Setenv(envSenha, "") deixa a variável DEFINIDA
+// (os.LookupEnv devolve ok=true), só vazia — antes desta recusa, resolve()
+// não tinha case nenhum que casasse esta combinação (temUsuario && temEnv
+// && !temArquivo, com o VALOR vazio) e caía no caminho feliz com senha ==
+// "": o Basic saía com senha vazia, e o servidor respondia 401 sem nenhuma
+// pista, porque para o operador a variável "está setada". Espelha
+// resolveSenha (internal/server/seguranca.go), que já distingue "ausente"
+// de "definida e vazia" para o MESMO cenário do lado do servidor.
+func TestUserComNISHIDBPASSWORDDefinidaEVaziaEhRecusado(t *testing.T) {
+	t.Setenv(envSenha, "")
+	f := flagsParaTeste(t, "--user", "chefe")
+	_, err := f.resolve()
+	if err == nil {
+		t.Fatal("queria erro: NISHIDB_PASSWORD definida e vazia com --user")
+	}
+	if !strings.Contains(err.Error(), envSenha) {
+		t.Errorf("a mensagem não nomeia %s: %v", envSenha, err)
+	}
+	if !strings.Contains(err.Error(), "VAZIA") {
+		t.Errorf("a mensagem não diz que a variável está definida e vazia: %v", err)
+	}
+}
+
 // certPEMDeTeste gera um certificado autoassinado mínimo, só para exercitar
 // clienteRemoto lendo e parseando um PEM de verdade — o handshake TLS de
 // ponta a ponta (SAN, validade) é responsabilidade do e2e em credencial_test.go

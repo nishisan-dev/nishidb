@@ -93,6 +93,15 @@ func (f *flagsRemotas) resolve() (credencialRemota, error) {
 	case temUsuario && !temEnv && !temArquivo:
 		return credencialRemota{}, fmt.Errorf(
 			"--user exige uma senha por %s ou --password-file", envSenha)
+	case temUsuario && temEnv && !temArquivo && senhaEnv == "":
+		// Mesma distinção do servidor (seguranca.go:resolveSenha): "ausente"
+		// e "definida e vazia" NÃO são a mesma coisa — o caso do container
+		// cujo orquestrador injeta a chave sem valor, e sem esta recusa o
+		// Basic sairia com senha vazia e o 401 do servidor não daria pista
+		// nenhuma de qual das duas aconteceu.
+		return credencialRemota{}, fmt.Errorf(
+			"%s está definida e VAZIA — não é a mesma coisa que ausente; preencha a variável ou use "+
+				"--password-file", envSenha)
 	case !temUsuario:
 		// Nem --user, nem fonte de senha: caminho anônimo, byte a byte igual
 		// ao comportamento anterior a esta task. --tls-ca continua valendo —
