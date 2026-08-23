@@ -59,6 +59,15 @@ const (
 	// Autenticação (§74-77, Fase 11, Task B3). Não está no §92 — a exposição
 	// remota não tinha autenticação quando aquela seção foi escrita.
 	MetAuthFailuresTotal = "nishidb_auth_failures_total"
+
+	// MetTLSCertExpiryTimestamp (§77-78, Fase 11, Task B4). Não está no §92
+	// pela mesma razão de MetAuthFailuresTotal — o protocolo remoto não tinha
+	// TLS quando aquela seção foi escrita. Epoch segundos do NotAfter do leaf
+	// de server.tls, publicado sempre que TLS está ligado; o operador deriva
+	// "quanto falta" no painel/alerta a partir dela, em vez de esta métrica
+	// tentar decidir o que é "pouco tempo" (isso já é o WARN estruturado
+	// tls.certificado_expirando, em internal/server/seguranca.go).
+	MetTLSCertExpiryTimestamp = "nishidb_tls_cert_expiry_timestamp"
 )
 
 // Séries INVENTADAS no M2, com o defeito que cada uma corrige.

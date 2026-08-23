@@ -16,6 +16,7 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -104,6 +105,24 @@ type Servidor struct {
 	// aparece no scrape (comportamento igual ao de qualquer família lazy
 	// deste registry).
 	authFalhas *metrics.FamiliaContador
+
+	// tlsCert é o par certificado/chave já CARREGADO por
+	// validaCertificadoNaSubida (seguranca.go), nil quando server.tls está
+	// desligado. sobeHTTP o REUSA no ServeTLS — nunca relido do disco depois
+	// da subida; rotação de certificado é reiniciar o processo.
+	tlsCert *tls.Certificate
+
+	// loopbackLn é o listener do plano loopback (decisão 4 do plano do
+	// ciclo), bindado em Novo() junto do listener principal — mesma razão do
+	// bind cedo de s.ln: descobrir porta ocupada depois de já ter tomado o
+	// flock de N datasets é desperdício. Nil quando server.loopback.enabled é
+	// false (default): nenhum listener a mais sobe.
+	loopbackLn net.Listener
+	// loopbackSrv é o SEGUNDO http.Server que serve o mux CRU (rt.Cru(), sem
+	// autenticação nem TLS) sobre loopbackLn — o que preserva painel, script
+	// de update e cron locais funcionando sem credencial mesmo com
+	// server.authentication ligado no listener exposto.
+	loopbackSrv *http.Server
 }
 
 // Opcoes configura a subida.
@@ -164,15 +183,29 @@ func Novo(cfg *config.Config, o Opcoes) (*Servidor, error) {
 	}
 
 	// A segurança do §74-78 é resolvida ANTES do bind: falha de credencial,
-	// de certificado, ou a matriz de recusa do §77 não podem deixar um
-	// listener aberto para trás. A ordem é a mais barata primeiro — a matriz
-	// é só leitura de config e não faz I/O — para não gastar em ler env var
-	// ou arquivo de senha uma subida que já vai ser recusada pela topologia.
+	// de certificado, de porta loopback, ou a matriz de recusa do §77 não
+	// podem deixar um listener aberto para trás. A ordem é a mais barata
+	// primeiro — matriz e endereço loopback são só leitura de config, sem
+	// I/O — para não gastar em ler env var, arquivo de senha ou certificado
+	// uma subida que já vai ser recusada pela topologia.
 	if err := avaliaExposicaoEAutenticacao(cfg, log); err != nil {
 		return nil, err
 	}
-	if err := validaCertificadoNaSubida(cfg); err != nil {
+	loopbackAddr, err := enderecoLoopback(cfg)
+	if err != nil {
 		return nil, err
+	}
+	certificado, err := validaCertificadoNaSubida(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if certificado != nil {
+		// Aviso de validade do leaf (Task B4): nunca recusa a subida, só
+		// registra WARN/ERRO estruturado e publica a gauge de expiração —
+		// ver o comentário de avisaValidadeDoCertificado (seguranca.go).
+		if err := avisaValidadeDoCertificado(*certificado, log, reg); err != nil {
+			return nil, err
+		}
 	}
 	credenciais, err := resolveCredenciais(cfg)
 	if err != nil {
@@ -197,6 +230,7 @@ func Novo(cfg *config.Config, o Opcoes) (*Servidor, error) {
 		porNome:     make(map[string]*dataset, len(nomes)),
 		vagas:       make(chan struct{}, cfg.MaxConcurrent()),
 		credenciais: credenciais,
+		tlsCert:     certificado,
 	}
 	s.met = registraMetricasDeQuery(reg, s.eng)
 	s.authFalhas = registraMetricasDeAuth(reg)
@@ -204,6 +238,9 @@ func Novo(cfg *config.Config, o Opcoes) (*Servidor, error) {
 	// O bind vem ANTES de abrir os datasets: descobrir porta ocupada depois
 	// de já ter tomado o flock de N datasets é desperdício, e deixa o
 	// operador com um processo morto que segurou os locks por um instante.
+	// Os DOIS listeners (principal e loopback, quando ligado) bindam aqui,
+	// pela mesma razão — a falha do segundo não pode deixar o primeiro
+	// vazado, por isso o defer de limpeza abaixo cobre os dois.
 	if s.ln, err = net.Listen("tcp", cfg.Endereco()); err != nil {
 		return nil, fmt.Errorf("server: escutar em %s: %w", cfg.Endereco(), err)
 	}
@@ -218,10 +255,21 @@ func Novo(cfg *config.Config, o Opcoes) (*Servidor, error) {
 		if err := s.ln.Close(); err != nil {
 			log.Warn("listener.close", "falha ao fechar o listener na subida abortada", "erro", err.Error())
 		}
+		if s.loopbackLn != nil {
+			if err := s.loopbackLn.Close(); err != nil {
+				log.Warn("loopback.close", "falha ao fechar o listener loopback na subida abortada", "erro", err.Error())
+			}
+		}
 		if err := s.fechaDatasets(); err != nil {
 			log.Warn("datasets.close", "falha ao fechar datasets na subida abortada", "erro", err.Error())
 		}
 	}()
+
+	if loopbackAddr != "" {
+		if s.loopbackLn, err = net.Listen("tcp", loopbackAddr); err != nil {
+			return nil, fmt.Errorf("server: escutar loopback em %s: %w", loopbackAddr, err)
+		}
+	}
 
 	for _, nome := range nomes {
 		d, err := s.abreDataset(specs[nome], log)
@@ -287,6 +335,9 @@ func fechandoStore(st *storage.Store, causa error) error {
 func (s *Servidor) Roda(ctx context.Context, pprofAddr string) error {
 	if err := s.sobeHTTP(); err != nil {
 		return err
+	}
+	if s.loopbackLn != nil {
+		s.sobeLoopback()
 	}
 	if pprofAddr != "" {
 		s.sobePprof(pprofAddr)
@@ -405,22 +456,51 @@ func (s *Servidor) ligaCompaction(ctx context.Context) {
 const checkpointEventosPadrao = 500_000
 
 // sobeHTTP é o ÚNICO ponto de entrada do listener principal — a costura do
-// §77 que a B4 herda: montaMux constrói o mux CRU (sem autenticação nenhuma),
-// e comAutenticacao é o wrapper único em torno dele (autenticacao.go). A B4
-// serve o mux cru, sem este wrapper, no listener loopback — o mesmo *rt.mux,
-// dois caminhos de acesso.
+// §77: montaMux constrói o mux CRU (sem autenticação nenhuma), e
+// comAutenticacao é o wrapper único em torno dele (autenticacao.go). O
+// listener loopback (sobeLoopback, em http.go — decisão 4 do plano do ciclo)
+// serve o MESMO mux via rt.Cru(), sem este wrapper: dois caminhos de acesso à
+// mesma definição de rota, nunca o *http.ServeMux cru exposto direto.
 func (s *Servidor) sobeHTTP() error {
 	rt := s.montaMux()
 
 	s.http = &http.Server{
 		Handler:           s.comAutenticacao(rt),
 		ReadHeaderTimeout: 10 * time.Second,
+		// ErrorLog roteia o que net/http grava sozinho (erro de handshake,
+		// conexão cortada no meio) para o logger estruturado — scanners
+		// corporativos batendo na porta exposta geram esse ruído o tempo
+		// todo, e sem isto cada linha caía em log.Printf cru no journal,
+		// fora do formato do §95.
+		ErrorLog: s.errorLog("principal"),
 		// SEM WriteTimeout de propósito: ele é teto de CONEXÃO, e mataria um
 		// stream longo legítimo no meio. O teto de uma consulta é o
 		// query.timeout do dataset, aplicado pelo executor via contexto — o
 		// único que sabe distinguir "demorou porque tem muito resultado" de
 		// "travou".
 	}
+
+	// ServeTLS no ponto único (§77, Task B4): MinVersion TLS12 é o mesmo
+	// precedente de internal/kafka/config.go (Resolve, security.TLS()). O
+	// certificado é o que validaCertificadoNaSubida já carregou e validou —
+	// nunca relido do disco aqui. Rotação de certificado é reiniciar o
+	// processo (limite nomeado: sem SIGHUP-reload nesta versão).
+	if s.tlsCert != nil {
+		s.http.TLSConfig = &tls.Config{
+			MinVersion:   tls.VersionTLS12,
+			Certificates: []tls.Certificate{*s.tlsCert},
+		}
+		go func() {
+			// certFile/keyFile vazios: o par já está em TLSConfig.Certificates
+			// (doc de http.Server.ServeTLS — só exige os caminhos quando
+			// NENHUM dos dois está populado).
+			if err := s.http.ServeTLS(s.ln, "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				s.log.Error("http.falhou", "o servidor HTTPS caiu", "erro", err.Error())
+			}
+		}()
+		return nil
+	}
+
 	go func() {
 		if err := s.http.Serve(s.ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			s.log.Error("http.falhou", "o servidor HTTP caiu", "erro", err.Error())
@@ -448,6 +528,15 @@ func (s *Servidor) encerra() error {
 		// responsabilidade daqui.
 		errs = append(errs, s.ln.Close())
 	}
+	// Mesma disciplina do listener principal, para o do plano loopback: se
+	// sobeLoopback rodou, o Shutdown do http.Server drena e fecha; se Novo
+	// bindou mas Roda nunca chegou a subir o http.Server, fechar o listener
+	// cru é responsabilidade daqui.
+	if s.loopbackSrv != nil {
+		errs = append(errs, s.loopbackSrv.Shutdown(ctx))
+	} else if s.loopbackLn != nil {
+		errs = append(errs, s.loopbackLn.Close())
+	}
 	if s.pprofSrv != nil {
 		errs = append(errs, s.pprofSrv.Shutdown(ctx))
 	}
@@ -472,4 +561,15 @@ func (s *Servidor) Endereco() string {
 		return ""
 	}
 	return s.ln.Addr().String()
+}
+
+// EnderecoLoopback é o endereço REAL do listener do plano loopback (decisão
+// 4 do plano do ciclo), vazio quando server.loopback.enabled é false — o
+// mesmo formato de Endereco, para quem precisa dialar o segundo listener sem
+// reconstruir "127.0.0.1:" + a porta declarada em config à mão.
+func (s *Servidor) EnderecoLoopback() string {
+	if s.loopbackLn == nil {
+		return ""
+	}
+	return s.loopbackLn.Addr().String()
 }

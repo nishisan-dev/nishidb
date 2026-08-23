@@ -3,12 +3,15 @@ package server
 import (
 	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/config"
 	"github.com/nishisan-dev/nishidb/internal/logging"
+	"github.com/nishisan-dev/nishidb/internal/metrics"
 )
 
 // credencial é a credencial de UM usuário (server.authentication.users, §75)
@@ -151,18 +154,93 @@ func resolveSenha(u config.UserSpec) ([sha256.Size]byte, error) {
 // corresponde ao certificado só apareceria hoje no primeiro handshake TLS,
 // e nesse ponto o listener já está aberto e aceitando conexão.
 //
-// Não guarda o par carregado: o ServeTLS em si, e o parse do leaf para o
-// aviso de validade do certificado, são da B4. Aqui só o fail-fast da
-// combinação arquivo-de-certificado + arquivo-de-chave.
-func validaCertificadoNaSubida(cfg *config.Config) error {
+// Devolve o par CARREGADO (nil quando TLS está desligado) para que o Serve
+// (B4, sobeHTTP em server.go) reuse o MESMO tls.Certificate no ServeTLS, e
+// avisaValidadeDoCertificado (abaixo) leia o leaf sem um segundo
+// LoadX509KeyPair — o par nunca é relido do disco depois deste ponto;
+// rotação de certificado é reiniciar o processo (limite nomeado: não há
+// SIGHUP-reload aqui, mesma decisão de resolveCredenciais acima).
+func validaCertificadoNaSubida(cfg *config.Config) (*tls.Certificate, error) {
 	if !cfg.TLSHabilitado() {
-		return nil
+		return nil, nil
 	}
-	if _, err := tls.LoadX509KeyPair(cfg.Server.TLS.CertificateFile, cfg.Server.TLS.PrivateKeyFile); err != nil {
-		return fmt.Errorf("server.tls: certificado %s / chave %s: %w",
+	cert, err := tls.LoadX509KeyPair(cfg.Server.TLS.CertificateFile, cfg.Server.TLS.PrivateKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("server.tls: certificado %s / chave %s: %w",
 			cfg.Server.TLS.CertificateFile, cfg.Server.TLS.PrivateKeyFile, err)
 	}
+	return &cert, nil
+}
+
+// avisoDeExpiracaoDoCertificado é o piso do WARN de validade do leaf: sem
+// SIGHUP-reload, trocar o certificado exige um restart planejado, e isso
+// precisa de aviso ANTES do vencimento, não no dia — 30 dias dá tempo de
+// pedir um certificado novo a uma CA corporativa sem pressa (§ decisão 4 do
+// plano do ciclo).
+const avisoDeExpiracaoDoCertificado = 30 * 24 * time.Hour
+
+// avisaValidadeDoCertificado parseia o leaf do certificado já CARREGADO por
+// validaCertificadoNaSubida (nunca relido do disco) e publica a métrica de
+// expiração — SEMPRE que TLS está ligado, para que o operador derive "quanto
+// falta" no painel/alerta sem que esta função precise decidir o que é "pouco
+// tempo" além do próprio WARN abaixo.
+//
+// NUNCA recusa a subida por causa da validade: um certificado expirado ainda
+// cifra o transporte (a cadeia é validada pelo CLIENTE no handshake, não pelo
+// servidor), e recusar aqui derrubaria as consultas por um problema que o
+// operador corrige sem downtime nenhum se o aviso chegar a tempo — é
+// exatamente o cenário que "ERRO no log + métrica" cobre em vez de recusa.
+// Só devolve erro se o leaf em si não decodificar, o que não deveria
+// acontecer com um par que já passou por LoadX509KeyPair (violação de
+// invariante, mesma doutrina do `default` de resolveSenha).
+func avisaValidadeDoCertificado(cert tls.Certificate, log *logging.Logger, reg *metrics.Registry) error {
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		return fmt.Errorf("server.tls: leaf do certificado não decodifica (violação de invariante: "+
+			"LoadX509KeyPair já deveria ter recusado): %w", err)
+	}
+
+	reg.Medidor(metrics.MetTLSCertExpiryTimestamp,
+		"epoch segundos do NotAfter do leaf de server.tls; o operador deriva quanto falta no painel/alerta").
+		Sozinha().Set(float64(leaf.NotAfter.Unix()))
+
+	notAfter := leaf.NotAfter.UTC().Format(time.RFC3339)
+	switch restante := time.Until(leaf.NotAfter); {
+	case restante <= 0:
+		log.Error("tls.certificado_expirado",
+			"o certificado de server.tls já expirou; o servidor SOBE mesmo assim (recusar derrubaria "+
+				"as consultas) — troque o par certificado/chave e reinicie (rotação é restart, sem "+
+				"SIGHUP-reload)",
+			"notAfter", notAfter)
+	case restante < avisoDeExpiracaoDoCertificado:
+		log.Warn("tls.certificado_expirando",
+			"o certificado de server.tls vence em menos de 30 dias",
+			"notAfter", notAfter)
+	}
 	return nil
+}
+
+// enderecoLoopback resolve o endereço do listener secundário do plano
+// loopback (decisão 4 do plano do ciclo, §77-78) a partir de
+// server.loopback. Devolve "" quando desligado — nenhum listener a mais.
+//
+// Quando ligado, server.loopback.port é OBRIGATÓRIO: a B1 deixou Port
+// *int sem default de propósito (nenhuma das 8 recusas do parse cobria o
+// caso, ver task-b1-report.md), sinalizando que a ATIVAÇÃO decidiria. Sem
+// porta declarada não há endereço determinístico para bindar, e um default
+// silencioso (a porta principal + 1, por exemplo) escolheria pelo operador
+// numa decisão que é dele — a mesma doutrina do resto do §77: recusar,
+// nomeando a chave, nunca assumir.
+func enderecoLoopback(cfg *config.Config) (string, error) {
+	if !cfg.LoopbackHabilitado() {
+		return "", nil
+	}
+	if cfg.Server.Loopback.Port == nil {
+		return "", fmt.Errorf(
+			"server.loopback.enabled: true exige server.loopback.port declarado (sem default: a porta é " +
+				"decisão do operador, não do processo)")
+	}
+	return fmt.Sprintf("127.0.0.1:%d", *cfg.Server.Loopback.Port), nil
 }
 
 // avaliaExposicaoEAutenticacao substitui o aviso avisaSobreAExposicao (que só

@@ -4,9 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"net/http/pprof"
+	"strings"
 	"time"
+
+	"github.com/nishisan-dev/nishidb/internal/logging"
 )
 
 // handleMetrics serve a exposição do §93.
@@ -147,6 +151,61 @@ func (s *Servidor) sobePprof(addr string) {
 	s.log.Warn("pprof.ligado",
 		"endpoints de debug ATIVOS; o §112 os autoriza apenas em modo administrativo — não exponha esta porta",
 		"endereco", addr)
+}
+
+// sobeLoopback liga o SEGUNDO listener do plano loopback (decisão 4 do plano
+// do ciclo, §77-78): serve o MESMO mux CRU (rt.Cru(), montado de novo por
+// montaMux — sem estado compartilhado, ver o report da B3), sem TLS e sem o
+// middleware de autenticação, sobre s.loopbackLn (já bindado por Novo).
+//
+// É o que preserva o painel, o script de update e o cron locais funcionando
+// sem credencial mesmo com server.authentication ligado no listener exposto
+// — precedente arquitetural: sobePprof, acima, também é um segundo listener
+// isolado do principal, embora com objetivo diferente (debug vs. ferramental
+// local).
+func (s *Servidor) sobeLoopback() {
+	rt := s.montaMux()
+	s.loopbackSrv = &http.Server{
+		Handler:           rt.Cru(),
+		ReadHeaderTimeout: 10 * time.Second,
+		ErrorLog:          s.errorLog("loopback"),
+	}
+	go func() {
+		if err := s.loopbackSrv.Serve(s.loopbackLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			s.log.Error("loopback.falhou", "o listener loopback caiu", "erro", err.Error())
+		}
+	}()
+	s.log.Info("loopback.ligado",
+		"listener sem TLS/autenticação de pé (decisão 4, plano duplo de observabilidade)",
+		"endereco", s.loopbackLn.Addr().String())
+}
+
+// errorLog adapta o Logger estruturado para o *log.Logger que
+// http.Server.ErrorLog exige — net/http só sabe escrever para um io.Writer
+// cru, nunca para o logger estruturado do §95 diretamente. Sem isto, o
+// ruído de handshake que um scanner corporativo gera na porta exposta (TLS
+// de versão errada, HTTP puro na porta TLS) cairia como log.Printf cru no
+// journal, fora do formato JSON/texto do resto do processo.
+//
+// listener nomeia a origem ("principal" ou "loopback") — os DOIS http.Server
+// usam este adaptador, cada um com o seu rótulo, para que uma linha de erro
+// não fique ambígua sobre qual dos dois listeners a gerou.
+func (s *Servidor) errorLog(listener string) *log.Logger {
+	return log.New(errorLogParaLogger{log: s.log, listener: listener}, "", 0)
+}
+
+// errorLogParaLogger é o io.Writer por trás de errorLog: cada Write de
+// net/http vira UM evento estruturado, nunca uma linha crua.
+type errorLogParaLogger struct {
+	log      *logging.Logger
+	listener string
+}
+
+func (w errorLogParaLogger) Write(p []byte) (int, error) {
+	w.log.Warn("http.erro_transporte",
+		"net/http reportou um erro de conexão/handshake (comum com scanners batendo na porta)",
+		"listener", w.listener, "mensagem", strings.TrimRight(string(p), "\n"))
+	return len(p), nil
 }
 
 // Pausas devolve, por dataset, o motivo de a ingestão estar parada. Vazio
