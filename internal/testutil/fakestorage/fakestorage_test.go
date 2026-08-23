@@ -29,7 +29,11 @@ type consumerStore interface {
 	ScanLive() types.RowIDIterator
 	LookupBitmap(field types.FieldID, v types.Value) (types.RowIDIterator, error)
 	HasBitmap(field types.FieldID) bool
-	Sequence(id types.RowID) (int64, bool)
+	Sequence(id types.RowID) (int64, types.Presenca)
+	// Estado é o que a ingestão usa, e entra aqui pelo mesmo motivo dos
+	// outros: é assinatura que dublê e real precisam compartilhar, e o
+	// materializer só é intercambiável entre os dois enquanto ela bater.
+	Estado(key, buf []byte) (types.Record, []byte, types.Presenca, error)
 }
 
 var (
@@ -432,17 +436,20 @@ func TestPutFlagsDriveLiveness(t *testing.T) {
 func TestSequence(t *testing.T) {
 	s := New(Indexes{})
 	rowID, _, _ := s.Put([]byte("ABC"), 42, 0, payload(t, fv(1, strVal("ABC"))), nil)
-	if seq, ok := s.Sequence(rowID); !ok || seq != 42 {
-		t.Errorf("Sequence = %d, %v", seq, ok)
+	if seq, pres := s.Sequence(rowID); pres != types.PresencaViva || seq != 42 {
+		t.Errorf("Sequence = %d, %v", seq, pres)
 	}
-	if _, ok := s.Sequence(999); ok {
+	if _, pres := s.Sequence(999); pres != types.PresencaAusente {
 		t.Error("row inexistente não tem sequence")
 	}
-	// Row tombstoned mantém a sequence visível (no real a location existe,
-	// apenas com o bit ligado).
+	// Row tombstoned mantém a sequence VISÍVEL e se declara expirada — é o
+	// débito 25. A sequence é o lastSequence que o §58 manda a lápide
+	// preservar, e é ela que faz o stale check recusar o evento antigo que
+	// tentaria reabrir a entidade; devolvê-la escondida atrás de um "não sei"
+	// era o que permitia a ressurreição.
 	s.SetTombstone(rowID)
-	if seq, ok := s.Sequence(rowID); !ok || seq != 42 {
-		t.Errorf("Sequence pós-tombstone = %d, %v", seq, ok)
+	if seq, pres := s.Sequence(rowID); pres != types.PresencaExpirada || seq != 42 {
+		t.Errorf("Sequence pós-tombstone = %d, %v; quer 42, expirada", seq, pres)
 	}
 }
 

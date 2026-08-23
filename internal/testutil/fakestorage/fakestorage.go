@@ -342,12 +342,17 @@ func (s *Store) GetByRowID(id types.RowID, buf []byte) (types.Record, []byte, bo
 // Sequence devolve a última sequence aplicada à row. ok=false apenas para
 // row sem estado publicado: row tombstoned MANTÉM a sequence visível (no
 // real a location existe, só carrega o bit de tombstone).
-func (s *Store) Sequence(id types.RowID) (int64, bool) {
+func (s *Store) Sequence(id types.RowID) (int64, types.Presenca) {
 	r, ok := s.rows[id]
 	if !ok {
-		return 0, false
+		return 0, types.PresencaAusente
 	}
-	return r.seq, true
+	// A sequence de uma row expirada volta, como no Store real: é o
+	// lastSequence do §58, e escondê-la reabriria o débito 25 no dublê.
+	if !r.live() {
+		return r.seq, types.PresencaExpirada
+	}
+	return r.seq, types.PresencaViva
 }
 
 func (s *Store) readRow(r *row, buf []byte) (types.Record, []byte, bool, error) {
