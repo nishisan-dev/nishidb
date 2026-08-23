@@ -14,26 +14,34 @@ rows**, contra 389 KiB com 1 milhão — 8× de dados, 1,9% de heap a mais.
 ## Estado
 
 **M1, M2 e a Fase 6 do M3 completos; o M4 entregue, com uma ressalva que
-vale ler.** Ingestão por arquivo e por
-**Kafka**, materialização, storage durável com recovery de dados E de posição no
-tópico, índices, SQL, saída NDJSON, um servidor que **consulta enquanto ingere**
-pelo protocolo remoto do §67, e a **compaction** que devolve ao filesystem o
-espaço dos records superados — tudo pelo binário. Na rodada de aceite do M4 ela
-devolveu **3,68 GB** e derrubou o crescimento de disco de 91 para 26 MiB/min;
-**parar de crescer, ela ainda não parou** nessa escala, e o
+vale ler; a Fase 11 (autenticação e TLS) do M5 entregue.** Ingestão por
+arquivo e por **Kafka**, materialização, storage durável com recovery de
+dados E de posição no tópico, índices, SQL, saída NDJSON, um servidor que
+**consulta enquanto ingere** pelo protocolo remoto do §67, a **compaction**
+que devolve ao filesystem o espaço dos records superados, e agora
+**autenticação HTTP Basic sobre TLS com papéis READ/ADMIN** no protocolo
+remoto — tudo pelo binário. Na rodada de aceite do M4 a compaction devolveu
+**3,68 GB** e derrubou o crescimento de disco de 91 para 26 MiB/min; **parar
+de crescer, ela ainda não parou** nessa escala, e o
 [aceite do M4](docs/aceite-m4.md) mostra a recontagem. Os critérios de aceite
 estão em
 [`docs/aceite-m1.md`](docs/aceite-m1.md),
 [`docs/aceite-m2.md`](docs/aceite-m2.md),
-[`docs/aceite-fase6.md`](docs/aceite-fase6.md) e
-[`docs/aceite-m4.md`](docs/aceite-m4.md).
+[`docs/aceite-fase6.md`](docs/aceite-fase6.md),
+[`docs/aceite-m4.md`](docs/aceite-m4.md) e
+[`docs/aceite-m5.md`](docs/aceite-m5.md).
 
-Próximos, na ordem do roadmap: **M5** — primeiro a **Fase 11** (autenticação e
-TLS, §74-77) e só então a **Fase 7** (driver JDBC, §70-73). A ordem é
-deliberada: o driver é *cliente* de um protocolo que hoje não tem senha, e
-publicá-lo antes da auth multiplicaria os pontos de acesso não autenticado em
-vez de fechar um. Depois vem o **M6** (TTL e tombstones por retenção, índice
-hash físico).
+**Autenticação e TLS (§74-77) chegaram, mas o piloto ainda fala com a versão
+sem senha.** O mecanismo está pronto e testado — a seção "Segurança" abaixo
+mostra o exemplo mínimo de config —, mas ligá-lo em produção (certificado da
+CA do piloto, usuários reais, a porta exposta com firewall restrito) é a
+**Fase C** do ciclo, ainda não rodada; [`docs/aceite-m5.md`](docs/aceite-m5.md)
+registra o que falta.
+
+Próximos, na ordem do roadmap: a **Fase 7** (driver JDBC, §70-73), que agora
+pode seguir — publicá-la antes da auth multiplicaria os pontos de acesso não
+autenticado em vez de fechar um, e essa condição já não vale mais. Depois vem
+o **M6** (TTL e tombstones por retenção, índice hash físico).
 
 ## Instalação
 
@@ -80,9 +88,11 @@ carregamento, com a chave e o valor nomeados no erro.
 `version`, `query.resultBatchSize` e o bloco `server` **passaram a ter leitor
 no M2**: `version` diferente de 1 é recusado no carregamento, `resultBatchSize`
 não positivo também, e `server.enabled: false` faz o `nishidb server` recusar a
-subida em vez de ignorar a chave. As seções que ainda não têm implementação
-(`runtime`, `storage.durability`, TLS, auth) continuam aceitas e ignoradas de
-propósito, para que o arquivo do M3 continue válido para este binário —
+subida em vez de ignorar a chave. `server.tls`, `server.authentication` e
+`server.loopback` **ganharam leitor na Fase 11** (§74-77) — ver "Segurança:
+autenticação e TLS" abaixo. O que ainda não tem implementação
+(`runtime`, `storage.durability`) continua aceito e ignorado de propósito,
+para que o arquivo do M3 continue válido para este binário —
 `storage.durability` está registrada como débito 50, porque quem lê
 `interval: 100ms` conclui uma garantia que não existe.
 
@@ -276,9 +286,8 @@ flock do dataset é exclusivo por processo. Expõe o protocolo remoto do §67 �
 mais `GET /metrics` (§92/§93), e aceita `--pprof <addr>` para os endpoints de
 debug num listener próprio.
 
-O bind default é **`127.0.0.1`**. O `/v1/query` serve os dados e a
-autenticação do §74-77 é da Fase 11: enquanto ela não existe, expor a porta é
-ato explícito de quem opera, e a subida avisa quando o bind alcança a rede.
+O bind default é **`127.0.0.1`**. Fora do loopback, o servidor agora EXIGE
+uma decisão sobre autenticação — ver a próxima seção — em vez de só avisar.
 
 ```bash
 # consultar COM a ingestão de pé
@@ -311,6 +320,73 @@ subida da ingestão, todas visíveis no health: posição desconhecida (dataset 
 linhas e sem `kafka.offsets`), posição ilegível, origem divergente (o YAML
 aponta para outro tópico, group ou cluster), e assignment parcial (outra
 instância no mesmo group).
+
+### Segurança: autenticação e TLS (§74-77)
+
+Exemplo mínimo com os três blocos — TLS, usuários e o listener loopback
+opcional:
+
+```yaml
+server:
+  bind: 0.0.0.0
+  port: 9142
+  tls:
+    enabled: true
+    certificateFile: /etc/nishidb/tls/server.crt
+    privateKeyFile: /etc/nishidb/tls/server.key
+  authentication:
+    enabled: true
+    users:
+      - username: reader
+        passwordFile: /etc/nishidb/secrets/reader   # chmod 600, senão a subida recusa
+        role: READ
+      - username: admin
+        passwordEnv: NISHIDB_ADMIN_PASSWORD          # nome da variável, nunca o valor
+        role: ADMIN
+  loopback:
+    enabled: true
+    port: 9143   # painel/script/cron locais continuam sem credencial aqui
+```
+
+Bind fora do loopback exige uma decisão EXPLÍCITA sobre `authentication` — a
+seção ausente do arquivo **recusa a subida** (o typo mais caro seria
+`authentification:` sumindo em silêncio), e `authentication.enabled: true`
+sem `server.tls.enabled: true` também recusa: HTTP Basic sem TLS transmitiria
+a senha em texto claro pela rede. O listener **loopback** é opcional
+(`server.loopback.enabled`, default desligado) e serve o MESMO protocolo sem
+TLS nem credencial, só em `127.0.0.1` — é o que mantém painel, script de
+atualização e cron locais funcionando sem senha mesmo com a porta exposta
+trancada. Uma rota **ADMIN** (`/v1/compact`, `/v1/checkpoint`) responde 403
+também no loopback: esse listener é READ-only por construção.
+
+```bash
+# rota de leitura, autenticada, sobre TLS
+curl -sS --cacert /etc/nishidb/tls/ca.pem -u reader:senha \
+  https://127.0.0.1:9142/v1/health
+
+# o mesmo pelo CLI
+nishidb status --server 127.0.0.1:9142 --tls-ca /etc/nishidb/tls/ca.pem \
+  --user reader --password-file /etc/nishidb/secrets/reader-cli
+
+# rota mutante, exige ADMIN — READ sai 403
+nishidb compact --server 127.0.0.1:9142 --tls-ca /etc/nishidb/tls/ca.pem \
+  --user admin   # senha por NISHIDB_PASSWORD ou --password-file, nunca por flag
+```
+
+Sem lockout — um contador por IP ou usuário abriria a porta para trancar a
+conta de outra pessoa —, mas toda falha de autenticação paga um atraso fixo
+(~100ms) antes da resposta, e o 401 é byte-idêntico entre "usuário não
+existe" e "senha errada". `--user` sem senha nenhuma, ou com duas fontes ao
+mesmo tempo, é recusado pelo CLI antes de qualquer rede; `--password` como
+flag não existe (apareceria em `ps`) — a senha só entra por
+`NISHIDB_PASSWORD` ou `--password-file`. `--insecure`/`InsecureSkipVerify`
+não existe em nenhum cliente do produto: `--tls-ca` aponta a CA que o
+cliente deve confiar, e um redirect de qualquer tipo é recusado, nunca
+seguido com a credencial junto.
+
+**O que este README não cobre é a rodada no piloto** — certificado de uma CA
+real, usuários de verdade, a porta liberada no firewall. Isso é a Fase C do
+ciclo e está registrada, pendente, em [`docs/aceite-m5.md`](docs/aceite-m5.md).
 
 ### Reposicionar no tópico
 
@@ -353,10 +429,15 @@ o gate `disk_plateau` reprova quando recontado sem a amostra colhida fora da
 janela de carga. O número, a recontagem e o que falta medir estão no
 [aceite do M4](docs/aceite-m4.md).
 
-Nada disso é rota mutante: **não existe** `POST /v1/compact` nem
-`nishidb compact` nesta versão. A política é a configuração, e o único ato do
-operador é ligá-la ou desligá-la. O que se acompanha em regime são as séries do
-§92 — `nishidb_storage_bytes`, `nishidb_storage_garbage_bytes`,
+Isso é o laço AUTOMÁTICO: a política é a configuração, e o ato do operador é
+ligá-la ou desligá-la. Desde a Fase 11 existe também o modo MANUAL —
+`POST /v1/compact` e `nishidb compact --server`, atrás do papel ADMIN —, para
+disparar uma passada sob demanda (funciona inclusive com
+`storage.compaction.enabled: false`, o caso de uso central do modo manual).
+Uma passada em voo, do laço automático OU de outra chamada manual, faz uma
+segunda chamada devolver **409** (`COMPACTION_BUSY`) em vez de enfileirar —
+ver "Segurança" acima para a credencial. O que se acompanha em regime são as
+séries do §92 — `nishidb_storage_bytes`, `nishidb_storage_garbage_bytes`,
 `nishidb_compaction_running` e os dois contadores de bytes — e o `status`
 abaixo.
 
@@ -390,8 +471,12 @@ que ela já devolveu.
 colunas com tipo, alias e índice declarado, mais os limites **efetivos** de
 `maxRows` e `timeout` — o do dataset, ou o default global que ele herdou.
 
-`compact` e `checkpoint`, que o §96 também lista, são **rotas mutantes** e ficam
-para o M5, atrás do papel ADMIN.
+`compact` e `checkpoint`, que o §96 também lista, são **rotas mutantes** e
+chegaram na Fase 11, atrás do papel ADMIN — ver "Compaction" acima e
+"Segurança" mais acima para a credencial. `nishidb checkpoint --server
+127.0.0.1:9142 [dataset]` dispara um checkpoint síncrono; sem `dataset`, roda
+para todos, na ordem determinística da subida, e para no primeiro que falhar
+nomeando quem já tinha sido processado com sucesso antes dele.
 
 ### SQL suportado (v1)
 
@@ -461,9 +546,11 @@ precedência continua descrito no stderr.
 - [Aceite do M1](docs/aceite-m1.md) — os 25 critérios, item a item.
 - [Aceite do M4](docs/aceite-m4.md) — a compaction em regime, com a escala e o
   ambiente da rodada declarados.
+- [Aceite do M5](docs/aceite-m5.md) — autenticação e TLS (Fase 11); a rodada
+  operacional no piloto (Fase C) segue pendente.
 - [Rodada de aceite](benchmark/baselines/aceite-8m-20260815.md) — 8M entidades
   com consultas concorrentes, corpus de referência.
-- [Débitos abertos](docs/debitos.md) — o que ficou para o M2, M3 e M4, com dono.
+- [Débitos abertos](docs/debitos.md) — o que ficou para o M2, M3, M4 e M5, com dono.
 
 ## Desenvolvimento
 

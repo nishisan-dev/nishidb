@@ -425,10 +425,147 @@ recurso protegido é do processo — o §82 já diz que todos os datasets divide
 mesmo orçamento de memória.
 
 **O bind default é loopback.** Até o M2 o servidor só expunha `/metrics` e
-`/v1/health`; com `/v1/query` ele passa a servir os dados, e a autenticação do
-§74-77 é da Fase 11. Não contradiz o §78: o exemplo de lá abre o bind no mesmo
-arquivo em que liga TLS e `authentication`. Expor continua possível e virou ato
-explícito, com aviso na subida.
+`/v1/health`; com `/v1/query` ele passa a servir os dados. A autenticação e o
+TLS do §74-77 chegaram na Fase 11 e estão descritos na seção seguinte. Não
+contradiz o §78: o exemplo de lá abre o bind no mesmo arquivo em que liga TLS
+e `authentication`. Expor continua possível e virou ato explícito, com aviso
+na subida — ou recusa, quando a decisão do operador não está no arquivo (ver
+abaixo).
+
+## Segurança: autenticação e TLS (Fase 11)
+
+O débito 57 (`/v1/query` sem autenticação — porta exposta equivale a um banco
+sem senha) fechou nesta fase com `internal/config/config_seguranca.go`
+(forma no parse), `internal/server/seguranca.go` (ativação e a matriz de
+recusa) e `internal/server/autenticacao.go` (o middleware e os papéis).
+
+**O plano é duplo, e a razão é o piloto.** O listener EXPOSTO passa a exigir
+TLS **e** autenticação em TODAS as rotas — `/v1/health` e `/metrics`
+inclusive, não só `/v1/query` — porque uma exceção "métricas não precisam de
+senha" seria uma porta sem tranca do mesmo jeito. Um segundo listener,
+opcional (`server.loopback`, default desligado), serve o MESMO conjunto de
+rotas sem TLS nem autenticação, só em `127.0.0.1`: é o que mantém painel,
+script de atualização e cron locais funcionando sem credencial mesmo com o
+listener principal fechado a cadeado. Os dois listeners compartilham a MESMA
+definição de rota (`Servidor.montaMux`, `internal/server/autenticacao.go`) —
+nunca duas listas que poderiam divergir.
+
+**A matriz de recusa do §77** decide se o servidor sobe, olhando bind, TLS e
+autenticação juntos (`avaliaExposicaoEAutenticacao`,
+`internal/server/seguranca.go`):
+
+| bind | `authentication` | TLS | resultado |
+|---|---|---|---|
+| loopback | qualquer | qualquer | sobe (avisa `auth.sem_tls` se autenticação ligada sem TLS — HTTP Basic em texto claro, mesmo que só alcançável pelo próprio host) |
+| exposto | **ausente** do arquivo | — | **recusa**, pedindo decisão explícita |
+| exposto | `enabled: false` **explícito** | — | sobe com o aviso `bind.exposto` (a decisão já foi tomada) |
+| exposto | ligada | desligado | **recusa** (§77): Basic sem TLS transmitiria a senha em texto claro pela rede aberta |
+| exposto | ligada | ligado | sobe, sem aviso — a combinação que o §77 pede |
+
+A célula "ausente" existe porque o `KnownFields` global do parser continua
+desligado (doutrina do M1): sem ela, um `authentification:` (typo) sumiria em
+silêncio e o servidor subiria exposto e sem senha nenhuma, com o operador
+achando que tinha autenticação. É a mesma classe de defeito que a issue #1
+denuncia, só que na chave mais cara do arquivo.
+
+**HTTP Basic sobre TLS**, não um esquema próprio — mapeia 1:1 para
+`DriverManager` do JDBC (Fase 7) e para `basic_auth` de ferramentas de
+scrape. A senha do request é hasheada (SHA-256) e comparada contra o digest
+guardado com `subtle.ConstantTimeCompare` — os dois lados sempre 32 bytes,
+para que a comparação em tempo constante não vaze o comprimento da senha
+certa pela diferença de tamanho de slice. Usuário inexistente compara contra
+um digest fantasma fixo (`credencialFantasma`), e a resposta de falha é
+**uma função só** (`recusaAutenticacao`) para os três casos — header
+malformado, usuário inexistente, senha errada —, sempre com a MESMA
+mensagem e os MESMOS headers: o 401 é byte-idêntico entre "não existe" e
+"senha errada", provado por comparação de `Header()` completo, não só de
+duas chaves nomeadas.
+
+**Sem lockout, com atraso fixo.** Não há contador por IP nem por usuário —
+isso abriria a porta para auto-DoS contra um username conhecido. Em vez
+disso, toda falha de autenticação paga o MESMO atraso fixo (~100ms,
+`atrasoDeFalha`), antes de qualquer escrita de resposta, o que mitiga o
+timing attack de enumeração sem criar um estado que um atacante possa usar
+para trancar a conta de outra pessoa. O rate-limit por IP fica registrado
+como débito (ver `debitos.md`).
+
+**Papéis: READ e ADMIN, com ADMIN ⊇ READ** (`papelAutorizado`,
+`internal/server/autenticacao.go`) — um usuário ADMIN alcança toda rota READ;
+um usuário READ nunca alcança rota ADMIN. O enum é fechado desde o parse
+(`config.RoleRead`/`config.RoleAdmin`) e comparado por string EXATA: `role:
+read` ou `role: Read` no YAML são recusados na subida, não normalizados.
+
+**O registro de rota é fail-closed por construção.** `roteador.registra` é a
+ÚNICA função que grava o papel exigido junto com o handler
+(`rt.papeis[padrao]`); o middleware (`comAutenticacao`) consulta essa mesma
+tabela para decidir 403. Uma rota que casasse no mux SEM ter passado por
+`registra` — por exemplo, um `rt.mux.HandleFunc` chamado direto por engano —
+não fica acessível sem checagem: é tratada como BUG DE REGISTRO e recusada
+com 500 genérico ao cliente (o detalhe — qual rota, e a dica de usar
+`registra` — vai só para o log). A alternativa mais óbvia (deixar passar
+quando não há papel registrado) foi descartada porque mascararia o bug até
+alguém notar em produção; o 500 é alto e imediato, tanto em teste quanto em
+log.
+
+**O plano loopback é READ-only por construção, não por convenção.** O
+segundo listener não tem middleware de autenticação, mas uma rota cujo papel
+registrado é ADMIN responde 403 nele também (`muxLoopback`,
+`recusaLoopbackAdmin`) — nunca anônima. A razão é o host do piloto ter
+múltiplos usuários locais: `compact`/`checkpoint` anônimos por qualquer um
+deles seria stall de ingestão sem privilégio nenhum de por meio. Rotas READ
+continuam servidas sem credencial no loopback, intocadas.
+
+**Resolução de segredos na subida, nunca no parse.** O YAML só declara ONDE
+a senha mora — `passwordEnv` (nome da variável) ou `passwordFile` (caminho),
+nunca o valor — e a B1 garante XOR entre os dois; ler o valor de verdade é
+ativação (`resolveCredenciais`/`resolveSenha`,
+`internal/server/seguranca.go`), fail-fast ANTES de qualquer listener abrir.
+Uma env var ausente ou definida-e-vazia recusa a subida nomeando a variável
+(nunca o valor); um `passwordFile` group- ou world-readable (`modo&0o077 !=
+0`) recusa nomeando caminho e modo — uma senha não é uma CA pública, o
+descuido de permissão custa mais caro aqui do que no Kafka, de onde o molde
+veio. O conteúdo do arquivo tem o `\n`/`\r\n` final aparado (todo `echo
+senha > arquivo` termina em quebra de linha) e, se sobrar vazio depois de
+aparar, a subida recusa — um `touch senha.txt` de provisionamento não pode
+virar uma conta que autentica com qualquer senha em branco. Não há
+recarga a quente: `passwordEnv` não é recarregável por construção, e
+`passwordFile` fica para o débito nomeado "SIGHUP-reload" — o restart mede
+~0,28s no piloto, o que barateia a alternativa.
+
+**TLS.** O certificado é carregado uma vez na subida
+(`validaCertificadoNaSubida`, `tls.LoadX509KeyPair`) e nunca relido do disco
+depois — rotação é reiniciar o processo. `MinVersion: tls.VersionTLS12` é
+explícito no `tls.Config` (mesmo precedente de `internal/kafka/config.go`). O
+leaf é parseado na subida para publicar `nishidb_tls_cert_expiry_timestamp`
+(epoch segundos do `NotAfter`) e logar `tls.certificado_expirando` (WARN,
+menos de 30 dias) ou `tls.certificado_expirado` (ERROR, já vencido) — nos
+dois casos o servidor SOBE mesmo assim: recusar por causa da data derrubaria
+as consultas por um problema que o operador corrige sem downtime se o aviso
+chegar a tempo.
+
+**As rotas mutantes do §96 — `POST /v1/compact` e `POST /v1/checkpoint`,
+ambas ADMIN** — são as primeiras do protocolo remoto que mudam estado, e a
+semântica é sempre a mesma: SÍNCRONA (a resposta só sai depois do trabalho
+feito, nenhuma das duas enfileira ou devolve 202) e IDEMPOTENTE POR EFEITO,
+não por resultado — repetir `checkpoint` sobre estado inalterado paga o
+custo real do mutex do writer, mas não muda o manifest de forma observável;
+repetir `compact` sobre um dataset já compactado é uma varredura que não
+acha candidato e devolve zero. `POST /v1/compact` usa o MESMO
+`storage.compaction.minimumLiveRatio` que o laço automático usaria e
+funciona mesmo com `storage.compaction.enabled: false` (é o caso de uso do
+modo manual); quando uma passada — do laço automático OU de outra chamada
+manual — já está em voo, a rota devolve **409** (`COMPACTION_BUSY`) em vez de
+enfileirar, porque as duas disputam o MESMO single-flight do `Store`
+(`compPassadaMu`/`compPassadaEmVoo`, `internal/storage/store.go`).
+
+O corpo de ambas aceita `{"dataset": "..."}` opcional; ausente significa
+TODOS os datasets, na ordem determinística da subida. **O contrato de falha
+parcial** (`processaDatasets`/`ErroParcial`,
+`internal/server/mutacoes.go`) é stop-no-primeiro-erro, mas a resposta de
+erro nomeia o dataset que falhou E os nomes dos que já tinham sido
+processados com sucesso ANTES dele — o efeito colateral (checkpoint gravado,
+disco já devolvido) aconteceu de verdade para eles, e escondê-lo do operador
+seria pior do que expor a lista.
 
 ## Operar isto: o que morde primeiro
 
@@ -641,11 +778,15 @@ quem só deveria raspar `/metrics`.
 
 ## O que ainda não existe
 
-Autenticação e TLS (Fase 11) e o driver JDBC (Fase 7) — nessa ordem, que é a do
-M5 —, mais índice hash físico, TTL e tombstones por retenção (M6). **A
-compaction saiu desta lista no M4** e está descrita acima. O estado item a item
-está em [`aceite-m1.md`](aceite-m1.md), [`aceite-m2.md`](aceite-m2.md),
-[`aceite-fase6.md`](aceite-fase6.md) e [`aceite-m4.md`](aceite-m4.md).
+O driver JDBC (Fase 7, próximo do M5), mais índice hash físico, TTL e
+tombstones por retenção (M6). **A compaction saiu desta lista no M4** e está
+descrita acima; **autenticação e TLS saíram nesta fase (Fase 11)** e estão
+descritas em "Segurança: autenticação e TLS" — o que falta ali é
+operacional, não de mecanismo: o deploy no piloto com certificado e usuários
+reais é a Fase C do ciclo, ainda não rodada (ver [`aceite-m5.md`](aceite-m5.md)).
+O estado item a item está em [`aceite-m1.md`](aceite-m1.md),
+[`aceite-m2.md`](aceite-m2.md), [`aceite-fase6.md`](aceite-fase6.md),
+[`aceite-m4.md`](aceite-m4.md) e [`aceite-m5.md`](aceite-m5.md).
 
 ## Como os números foram obtidos
 

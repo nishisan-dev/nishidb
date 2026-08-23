@@ -1,15 +1,17 @@
 @startuml c4_container
 !define RECTANGLE class
-title NishiDB — containers (M1)
+title NishiDB — containers (M1, com os dois listeners HTTP da Fase 11)
 
 skinparam componentStyle rectangle
 skinparam defaultTextAlignment center
 
 actor "Operador" as op
-actor "Cliente de consulta\n(M3: driver JDBC)" as cli #lightgray
+actor "Cliente remoto\n(nishidb query --server,\ndriver JDBC da Fase 7)" as cli #lightgray
+actor "Painel / script de update / cron\n(loopback, sem credencial)" as local #lightgray
 
 package "nishidb (binário único)" {
   component "CLI\ninternal/cli" as cliapp
+  component "Servidor HTTP\ninternal/server" as srv
   component "Materializer\ninternal/materializer" as mat
   component "Engine SQL\ninternal/query" as eng
   component "Storage\ninternal/storage\n+ internal/index" as sto
@@ -27,11 +29,14 @@ database "Dataset em disco" as ds {
 queue "Kafka\n(M2 — fora do M1)" as kafka #lightgray
 
 op --> cliapp : nishidb ingest\nnishidb query
-cli ..> eng : NDJSON sobre HTTP\n(Fase 6 — fora do M1)
+cli --> srv : listener EXPOSTO\nTLS + HTTP Basic em TODA rota\n(§74-77, Fase 11)
+local --> srv : listener LOOPBACK opcional\n(server.loopback.enabled)\nsem TLS/auth — rota ADMIN sai 403
 kafka ..> mat : eventos\n(M2)
 
 cliapp --> mat : eventos NDJSON
 cliapp --> eng : SQL
+srv --> eng : /v1/query, /v1/metadata,\n/v1/stats, /v1/health, /metrics
+srv --> sto : /v1/compact, /v1/checkpoint\n(ADMIN, síncronas)
 mat --> sto : Put(key, seq, payload, prev)
 eng --> sto : GetByKey / GetByRowID\nScanLive / LookupBitmap
 sto --> seg
@@ -57,5 +62,15 @@ end note
 note bottom of bmp
   Um diretório por FieldID (5 dígitos),
   uma posting por valorID (8 dígitos).
+end note
+
+note right of srv
+  Os dois listeners compartilham a MESMA
+  definição de rota (Servidor.montaMux) —
+  nunca duas listas que poderiam divergir.
+  A matriz do §77 decide se o servidor
+  SOBE: bind exposto sem a seção
+  authentication no arquivo é recusa,
+  não silêncio.
 end note
 @enduml
