@@ -446,9 +446,10 @@ senha" seria uma porta sem tranca do mesmo jeito. Um segundo listener,
 opcional (`server.loopback`, default desligado), serve o MESMO conjunto de
 rotas sem TLS nem autenticação, só em `127.0.0.1`: é o que mantém painel,
 script de atualização e cron locais funcionando sem credencial mesmo com o
-listener principal fechado a cadeado. Os dois listeners compartilham a MESMA
-definição de rota (`Servidor.montaMux`, `internal/server/autenticacao.go`) —
-nunca duas listas que poderiam divergir.
+listener principal fechado a cadeado. Os dois listeners compartilham a
+mesma FUNÇÃO de definição de rota (`Servidor.montaMux`,
+`internal/server/autenticacao.go`), chamada uma vez por listener — nunca
+duas listas que poderiam divergir.
 
 **A matriz de recusa do §77** decide se o servidor sobe, olhando bind, TLS e
 autenticação juntos (`avaliaExposicaoEAutenticacao`,

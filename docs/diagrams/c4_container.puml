@@ -65,9 +65,10 @@ note bottom of bmp
 end note
 
 note right of srv
-  Os dois listeners compartilham a MESMA
-  definição de rota (Servidor.montaMux) —
-  nunca duas listas que poderiam divergir.
+  Os dois listeners compartilham a mesma
+  FUNÇÃO de definição de rota (montaMux),
+  chamada uma vez por listener — nunca
+  duas listas que poderiam divergir.
   A matriz do §77 decide se o servidor
   SOBE: bind exposto sem a seção
   authentication no arquivo é recusa,
