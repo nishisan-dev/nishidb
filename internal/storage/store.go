@@ -304,38 +304,55 @@ type Store struct {
 	compCancela context.CancelFunc
 	compEmVoo   sync.WaitGroup
 
-	// compPassadaMu protege o par (compPassadaEmVoo, compManualEmVoo) — o
-	// single-flight FINO que decide, a cada instante, se HÁ uma passada de
-	// verdade em andamento. As duas flags:
+	// compPassadaMu protege o trio (compPassadaEmVoo, compManualEmVoo,
+	// compEncerrando) — o single-flight FINO que decide, a cada instante,
+	// se HÁ uma passada de verdade em andamento (ou se está proibido
+	// começar uma nova). As três flags:
 	//
 	//   - compPassadaEmVoo: true SÓ durante a chamada real a
 	//     passadaDeCompaction dentro de rodaCompaction (o laço automático).
 	//   - compManualEmVoo: true durante a chamada real a passadaDeCompaction
 	//     dentro de CompactaUmaVez (Task B5, POST /v1/compact).
+	//   - compEncerrando: setada por ParaCompaction ANTES de compEmVoo.Wait()
+	//     (revisão da B5, round 2 — Important). Enquanto true, NENHUM claim
+	//     novo é aceito, nem do laço nem manual — é o veto que fecha a
+	//     janela entre "compEmVoo pode estar em zero" e "uma reivindicação
+	//     nova está prestes a somar 1 nele": sem ele, ParaCompaction podia
+	//     decidir que o WaitGroup estava vazio e devolver o controle a
+	//     Close() ENQUANTO uma chamada manual, já autorizada a prosseguir,
+	//     ainda não tinha chamado Add — e Close() fecharia segR/segW debaixo
+	//     dela. Nunca é resetada para false: a única chamadora real de
+	//     ParaCompaction é Close(), que também não volta atrás, e reabrir a
+	//     vaga depois do Wait() reabriria exatamente esta janela um passo
+	//     adiante (ver o godoc de CompactaUmaVez, compaction.go).
 	//
 	// tentaClaimarPassada/liberaPassada (compaction.go) são os dois únicos
-	// pontos que tocam este par, e um Lock BLOQUEANTE neles é seguro — ao
+	// pontos que tocam este trio, e um Lock BLOQUEANTE neles é seguro — ao
 	// contrário de compMu (nota acima), compPassadaMu NUNCA é mantido além
-	// do tempo de ler dois bools e setar um: nenhuma das duas funções o
-	// segura DURANTE a passada em si (que é o trecho que pode levar
-	// minutos), então não existe goroutine que fique presa nele por tempo
-	// que importe, e portanto nenhum risco de ParaCompaction (via
-	// compEmVoo.Wait()) esperar por um goroutine bloqueado aqui.
+	// do tempo de checar as flags e (para a chamada manual) parear o
+	// Add/Done de compEmVoo: nenhuma das duas funções o segura DURANTE a
+	// passada em si (que é o trecho que pode levar minutos), então não
+	// existe goroutine que fique presa nele por tempo que importe, e
+	// portanto nenhum risco de ParaCompaction (via compEmVoo.Wait())
+	// esperar por um goroutine bloqueado aqui.
 	//
 	// A exclusão é HERMÉTICA NOS DOIS SENTIDOS: com compManualEmVoo true, a
 	// tentativa do laço (rodaCompaction) de reivindicar a rodada FALHA e ele
 	// PULA — nunca sobe uma segunda varredura; com compPassadaEmVoo true,
 	// CompactaUmaVez devolve ErrCompactionBusy na hora.
 	//
-	// CompactaUmaVez também soma ao MESMO compEmVoo que o laço usa — não por
-	// decoração, mas porque é o que faz ParaCompaction (chamado pelo Close)
-	// esperar por uma passada manual em voo antes de fechar segR/segW sob
-	// os pés dela: ver o godoc de CompactaUmaVez (compaction.go) para a
-	// análise completa de por que isso é o que mantém segura a janela entre
-	// ParaCompaction retornar e Close tomar vida.Lock().
+	// compEmVoo.Add(1)/Done() da chamada MANUAL vivem DENTRO de
+	// tentaClaimarPassada/liberaPassada — atômicos com o claim, na MESMA
+	// seção crítica — e não como dois passos separados em CompactaUmaVez:
+	// ver o godoc de tentaClaimarPassada para o porquê. É esse pareamento,
+	// mais o veto de compEncerrando, que faz ParaCompaction (chamado pelo
+	// Close) esperar de verdade por uma passada manual antes de fechar
+	// segR/segW sob os pés dela — a análise completa está no godoc de
+	// CompactaUmaVez (compaction.go).
 	compPassadaMu    sync.Mutex
 	compPassadaEmVoo bool
 	compManualEmVoo  bool
+	compEncerrando   bool
 
 	// compAtiva, compBytesLidos e compBytesEscritos são os alimentadores das
 	// três séries de compaction do §92, que até o M4 eram nome sem número

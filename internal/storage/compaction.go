@@ -657,6 +657,15 @@ func (s *Store) IniciaCompaction(ctx context.Context, ratio float64) {
 //
 // É idempotente e pode ser chamada sem nunca ter havido compaction — é o que
 // permite ao Close chamá-la sem perguntar se a config a ligou.
+//
+// Marca compEncerrando ANTES de esperar (revisão da B5, round 2 —
+// Important): a partir daqui NENHUMA passada nova — do laço ou manual —
+// consegue reivindicar a vaga em tentaClaimarPassada, então compEmVoo só
+// pode DIMINUIR entre este ponto e o Wait() retornar, nunca AUMENTAR de
+// novo depois. compEncerrando NUNCA volta a false: a única chamadora real
+// desta função é Close(), que também não desfaz o que faz — reabrir a vaga
+// depois do Wait() moveria a mesma janela para logo depois dele, onde
+// Close() já está fechando segR/segW (ver o godoc de CompactaUmaVez).
 func (s *Store) ParaCompaction() {
 	s.compMu.Lock()
 	defer s.compMu.Unlock()
@@ -664,6 +673,10 @@ func (s *Store) ParaCompaction() {
 		s.compCancela()
 		s.compCancela = nil
 	}
+	s.compPassadaMu.Lock()
+	s.compEncerrando = true
+	s.compPassadaMu.Unlock()
+
 	s.compEmVoo.Wait()
 }
 
@@ -688,9 +701,7 @@ func (s *Store) ParaCompaction() {
 func (s *Store) rodaCompaction(ctx context.Context, ratio float64) {
 	for {
 		if s.tentaClaimarPassada(false) {
-			_, err := s.passadaDeCompaction(ctx, ratio)
-			s.liberaPassada(false)
-			if err != nil {
+			if err := s.rodaUmaPassadaClaimada(ctx, ratio); err != nil {
 				if ctx.Err() != nil {
 					return // cancelamento não é falha: é o Close ou o SIGTERM
 				}
@@ -713,36 +724,71 @@ func (s *Store) rodaCompaction(ctx context.Context, ratio float64) {
 	}
 }
 
+// rodaUmaPassadaClaimada roda a passada já reivindicada por
+// tentaClaimarPassada(false) e libera a vaga via DEFER, não chamada
+// síncrona (revisão da B5, Minor — consistência com o release da chamada
+// manual, que já era via defer): uma passada que entrasse em pânico (não
+// deveria, mas defensivamente) deixaria compPassadaEmVoo travado em true
+// para sempre sem o defer, e nenhuma passada — automática ou manual —
+// conseguiria correr de novo neste Store. Função própria, e não um literal
+// inline em rodaCompaction, porque `defer` dentro do `for` de uma função de
+// vida longa só dispararia quando a função INTEIRA retornasse, não a cada
+// volta do laço.
+func (s *Store) rodaUmaPassadaClaimada(ctx context.Context, ratio float64) error {
+	defer s.liberaPassada(false)
+	_, err := s.passadaDeCompaction(ctx, ratio)
+	return err
+}
+
 // tentaClaimarPassada reivindica o direito de rodar UMA passada agora.
 // manual escolhe qual das duas flags do single-flight fino
 // (compPassadaEmVoo para o laço, compManualEmVoo para CompactaUmaVez) checar
-// e setar; devolve false se a OUTRA já estiver em voo.
+// e setar; devolve false se a OUTRA já estiver em voo, OU se compEncerrando
+// já tiver sido setado por ParaCompaction — Close em curso, e nenhuma
+// passada nova pode começar depois disso (godoc do campo, store.go).
+//
+// Para a chamada MANUAL, compEmVoo.Add(1) acontece AQUI DENTRO, na MESMA
+// seção crítica que decide o claim — nunca como um passo separado depois
+// (revisão da B5, round 2 — Important). Um Add(1) que rodasse DEPOIS do
+// claim abriria uma janela em que o claim já vale (compManualEmVoo==true)
+// mas o WaitGroup ainda não sabe disso: ParaCompaction podia enxergar o
+// contador em zero e devolver o controle a Close() ANTES de esta chamada
+// sequer ter começado a tocar segR/segW — violação do contrato do
+// WaitGroup ("um Add positivo que parte de zero deve happen-before o Wait
+// correspondente") e, na prática, Close() fechando arquivo debaixo de uma
+// passada que ainda ia rodar. Para o LAÇO (manual=false), compEmVoo já é
+// contado uma vez só, em IniciaCompaction, pela vida inteira da goroutine —
+// um Add(1) aqui contaria em dobro.
 //
 // Lock BLOQUEANTE em compPassadaMu é seguro aqui — ao contrário de compMu
 // (godoc do campo, store.go), compPassadaMu NUNCA é mantido além do tempo de
-// ler dois bools e setar um: nem tentaClaimarPassada nem liberaPassada
-// seguram o mutex durante a passada em si (que pode levar minutos), então
-// não há goroutine nenhuma que fique presa nele por tempo que importe, e
-// portanto nenhum cenário em que ParaCompaction (via compEmVoo.Wait())
-// esteja esperando por um goroutine bloqueado aqui.
+// checar as flags e parear o Add/Done: nem tentaClaimarPassada nem
+// liberaPassada seguram o mutex durante a passada em si (que pode levar
+// minutos), então não há goroutine nenhuma que fique presa nele por tempo
+// que importe, e portanto nenhum cenário em que ParaCompaction (via
+// compEmVoo.Wait()) esteja esperando por um goroutine bloqueado aqui.
 func (s *Store) tentaClaimarPassada(manual bool) bool {
 	s.compPassadaMu.Lock()
 	defer s.compPassadaMu.Unlock()
-	if s.compPassadaEmVoo || s.compManualEmVoo {
+	if s.compEncerrando || s.compPassadaEmVoo || s.compManualEmVoo {
 		return false
 	}
 	if manual {
 		s.compManualEmVoo = true
+		s.compEmVoo.Add(1)
 	} else {
 		s.compPassadaEmVoo = true
 	}
 	return true
 }
 
-// liberaPassada devolve a vaga que tentaClaimarPassada(manual) reivindicou.
+// liberaPassada devolve a vaga que tentaClaimarPassada(manual) reivindicou
+// — e, para a chamada manual, o Done() PAREADO com o Add(1) de lá, na MESMA
+// seção crítica, pela mesma razão de atomicidade do godoc acima.
 func (s *Store) liberaPassada(manual bool) {
 	s.compPassadaMu.Lock()
 	if manual {
+		s.compEmVoo.Done()
 		s.compManualEmVoo = false
 	} else {
 		s.compPassadaEmVoo = false
@@ -849,45 +895,54 @@ func (s *Store) passadaDeCompaction(ctx context.Context, ratio float64) (Resulta
 //
 // # Por que a janela entre ParaCompaction retornar e Close tomar vida.Lock() é segura
 //
-// (Important 2 da revisão da B5.) Close() chama ParaCompaction() ANTES de
-// vida.Lock() — não depois —, então existe uma janela, por menor que seja,
-// em que compCancela já é nil e vida ainda não está travada. O que impede
-// uma chamada nova a CompactaUmaVez de entrar nessa janela e correr contra
-// Close() desmapeando segR/segW NÃO é vida.RLock(): compactaSegmento chama
+// (Important 2 da revisão da B5; mecanismo corrigido no round 2 — ver
+// Important abaixo.) Close() chama ParaCompaction() ANTES de vida.Lock() —
+// não depois —, então existe uma janela, por menor que seja, em que
+// compCancela já é nil e vida ainda não está travada. O que impede uma
+// chamada nova a CompactaUmaVez de entrar nessa janela e correr contra
+// Close() fechando segR/segW NÃO é vida.RLock(): compactaSegmento chama
 // s.segR.ScanFrom SEM esse bracket (só reapendaSeVivo, por record, tem
-// entra()/sai()) — é o PAREAMENTO Add/Done de compEmVoo. ParaCompaction
-// espera compEmVoo.Wait() ANTES de Close() prosseguir, e tanto o laço
-// (Add em IniciaCompaction, Done quando rodaCompaction retorna) quanto esta
-// função (Add/Done logo abaixo) só decrementam DEPOIS que
-// passadaDeCompaction — o trecho que toca segR/segW de verdade, incluindo
-// candidatos(), que também não passa por entra() — já terminou. É esse
-// pareamento, não vida.RLock(), que garante que nenhuma varredura ainda está
-// lendo/escrevendo segmento quando Close() chega a fechar os arquivos.
+// entra()/sai()) — são DUAS coisas juntas: (1) o PAREAMENTO Add/Done de
+// compEmVoo, atômico com o claim (tentaClaimarPassada/liberaPassada, e não
+// mais dois passos soltos aqui — essa separação era exatamente o Important
+// que a revisão achou no round 2, ver abaixo); e (2) compEncerrando, que
+// ParaCompaction marca ANTES do Wait() e que faz tentaClaimarPassada recusar
+// qualquer reivindicação nova a partir dali. Entre as duas: nenhuma passada
+// pode COMEÇAR depois que ParaCompaction decidiu esperar, e nenhuma passada
+// que já tinha COMEÇADO escapa de ser contada por compEmVoo antes de tocar
+// segR/segW. É esse par — não vida.RLock() — que garante que nenhuma
+// varredura ainda está lendo/escrevendo segmento quando Close() chega a
+// fechar os arquivos.
 //
-// O QUE REABRIRIA o risco: qualquer mudança que despachasse
-// compactaSegmento/aposentaSegmento/candidatos() para uma goroutine PRÓPRIA
-// sem repassar o Add/Done de compEmVoo para dentro dela (por exemplo, um
-// "compacta em background e responde 202" futuro que perdesse esse
-// pareamento no caminho), ou que fizesse Close() reordenar ParaCompaction()
-// para DEPOIS de tocar segR/segW. Enquanto o invariante "compEmVoo só
-// decrementa depois que o último byte de I/O da passada foi tocado" valer
-// para TODO chamador de passadaDeCompaction, a janela é segura; ele não é
-// imposto pelo compilador nem por um teste dedicado — fica registrado aqui
-// para a próxima mudança nesta função ou em Close() tropeçar no comentário.
+// O QUE REABRIRIA o risco: qualquer mudança que separasse de novo o Add(1)
+// do claim (por exemplo, um "compacta em background e responde 202" futuro
+// que reivindicasse a vaga num lugar e chamasse Add noutro), que resetasse
+// compEncerrando para false em algum ponto (não faz — é permanente, uma vez
+// que ParaCompaction é chamada), ou que fizesse Close() reordenar
+// ParaCompaction() para DEPOIS de tocar segR/segW. Enquanto claim e Add
+// continuarem ATÔMICOS sob compPassadaMu, e compEncerrando continuar
+// permanente, a janela é segura; ela não é imposta pelo compilador — fica
+// registrado aqui para a próxima mudança tropeçar no comentário.
+//
+// # Important do round 2 da revisão: o Add(1) tinha descolado do claim
+//
+// Uma primeira versão desta função fazia `tentaClaimarPassada` devolver só
+// um bool, e chamava `compEmVoo.Add(1)` NA LINHA SEGUINTE, fora do lock de
+// compPassadaMu. Isso abria exatamente a janela que o parágrafo acima
+// fecha: entre o claim valer (compManualEmVoo==true) e o Add rodar, um
+// ParaCompaction concorrente podia enxergar compEmVoo em ZERO — a janela
+// não durava mais que algumas instruções de máquina, mas o contrato do
+// WaitGroup não tem uma cláusula de "só um pouquinho", e o efeito prático,
+// se acontecesse, seria Close() liberado para fechar segR/segW enquanto
+// esta função ainda ia CHAMAR passadaDeCompaction. A correção: Add(1)
+// (chamada manual) e Done() (no release) moraram para DENTRO de
+// tentaClaimarPassada/liberaPassada, na MESMA seção crítica que decide o
+// claim — nunca mais dois passos.
 func (s *Store) CompactaUmaVez(ctx context.Context, ratio float64) (ResultadoCompactacao, error) {
 	if !s.tentaClaimarPassada(true) {
 		return ResultadoCompactacao{}, ErrCompactionBusy
 	}
-	s.compEmVoo.Add(1)
-	defer func() {
-		// A ORDEM importa: liberar a vaga ANTES de decrementar compEmVoo
-		// garante que, no instante em que um Wait() bloqueado (ParaCompaction)
-		// ou uma nova tentativa de reivindicar a vaga acordar, o par de flags
-		// já reflete "livre" — nunca uma janela em que compEmVoo já chegou a
-		// zero mas compManualEmVoo ainda diz true.
-		s.liberaPassada(true)
-		s.compEmVoo.Done()
-	}()
+	defer s.liberaPassada(true)
 
 	return s.passadaDeCompaction(ctx, ratio)
 }

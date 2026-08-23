@@ -284,3 +284,88 @@ func TestCompactaUmaVezCanceladoNoMeioNaoCorrompeReabreEContaRows(t *testing.T) 
 	reaberto := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10})
 	exigeCorpusNaUltimaRodada(t, reaberto, keys, rodadas-1, "após cancelamento no meio do CompactaUmaVez")
 }
+
+// TestCloseEsperaAPassadaManualEmVooAntesDeFechar é o lado (a) do Important
+// do round 2 da revisão da B5: uma chamada manual CLAIMADA (já passou por
+// tentaClaimarPassada, compEmVoo já sabe disso) tem de segurar o Close até
+// terminar — nunca o contrário. É o MESMO teste de
+// TestCloseCancelaEAguardaACompaction, mas para o caminho MANUAL em vez do
+// laço automático: aquele já provava que o Add/Done do LAÇO protege a
+// janela; este prova que o Add/Done (agora atômico com o claim, dentro de
+// tentaClaimarPassada) protege a janela também para CompactaUmaVez.
+func TestCloseEsperaAPassadaManualEmVooAntesDeFechar(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(Options{Dir: dir, SegmentSize: 8 << 10})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	corpusDeSegmentosSelados(t, s, 40, 30)
+
+	emVoo := make(chan struct{})
+	libera := make(chan struct{})
+	liberar := sync.OnceFunc(func() { close(libera) })
+	defer liberar()
+	var umaVez sync.Once
+	s.SetAposentadoriaTraceForTest(func(string) {
+		umaVez.Do(func() {
+			close(emVoo)
+			<-libera
+		})
+	})
+
+	manual := make(chan error, 1)
+	go func() {
+		_, err := s.CompactaUmaVez(context.Background(), 0.5)
+		manual <- err
+	}()
+
+	select {
+	case <-emVoo:
+	case <-time.After(60 * time.Second):
+		t.Fatal("a chamada manual não chegou a aposentar nada em 60s: sem uma passada em voo o teste não exercita nada")
+	}
+
+	fechado := make(chan error, 1)
+	go func() { fechado <- s.Close() }()
+
+	select {
+	case err := <-fechado:
+		t.Fatalf("Close retornou (%v) com a chamada MANUAL parada NO MEIO de uma aposentadoria: "+
+			"o Add/Done de compEmVoo não protegeu a janela, e o que vem depois dele é rename/unlink de "+
+			"arquivo sobre um Store já fechado", err)
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	liberar()
+	select {
+	case err := <-fechado:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(60 * time.Second):
+		t.Fatal("Close não retornou depois de liberado: a chamada manual não foi aguardada nem cancelada")
+	}
+	if err := <-manual; err != nil {
+		t.Fatalf("chamada manual: %v", err)
+	}
+}
+
+// TestCompactaUmaVezRecusaPermanentementeDepoisDeParaCompaction é o lado (b)
+// do Important do round 2: uma vez que ParaCompaction marca compEncerrando
+// (mesmo sem nunca ter havido laço nenhum — ela é idempotente), NENHUMA
+// chamada manual nova consegue reivindicar a vaga — a recusa é limpa
+// (ErrCompactionBusy), nunca uma tentativa de tocar arquivo já em vias de
+// ser fechado. Determinístico sem gate nenhum: compEncerrando é permanente
+// (godoc do campo, store.go), então a ordem "ParaCompaction, depois
+// CompactaUmaVez" já basta — não há corrida a decidir.
+func TestCompactaUmaVezRecusaPermanentementeDepoisDeParaCompaction(t *testing.T) {
+	s := openStore(t, Options{Dir: t.TempDir(), SegmentSize: 8 << 10})
+	corpusDeSegmentosSelados(t, s, 40, 30)
+
+	s.ParaCompaction() // idempotente, nunca houve laço — mas marca compEncerrando
+
+	if _, err := s.CompactaUmaVez(context.Background(), 0.5); !errors.Is(err, ErrCompactionBusy) {
+		t.Fatalf("CompactaUmaVez depois de ParaCompaction: err = %v, quer ErrCompactionBusy "+
+			"(compEncerrando é permanente — nunca reabre a vaga)", err)
+	}
+}
