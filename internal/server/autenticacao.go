@@ -2,18 +2,28 @@
 //
 // A costura central deste arquivo é a que a B4 e a B5 herdam: montaMux
 // constrói o mux CRU — só rotas, papel exigido por rota, ZERO autenticação —
-// e comAutenticacao é o WRAPPER ÚNICO que a Fase 11 pede em torno dele. A B4
-// serve o mux cru, sem passar por comAutenticacao nenhuma, no listener
-// loopback: é assim que o painel local continua anônimo mesmo com
-// server.authentication ligado no listener exposto. A B5 registra rotas
-// ADMIN-only chamando roteador.registra com config.RoleAdmin — o mecanismo já
-// sai desta task testado com um handler de teste (autenticacao_internal_test.go).
+// e comAutenticacao é o WRAPPER ÚNICO que a Fase 11 pede em torno dele no
+// listener EXPOSTO. A B5 registra as duas rotas ADMIN-only do §96 (POST
+// /v1/compact e POST /v1/checkpoint) chamando roteador.registra com
+// config.RoleAdmin — o mecanismo já saiu da B3 testado com um handler de
+// teste (autenticacao_internal_test.go), e agora tem produção de verdade
+// para exercitá-lo.
 //
 // Quando a autenticação está DESLIGADA (s.credenciais == nil, resolvido pela
 // B2 em Novo()), comAutenticacao devolve o PRÓPRIO mux como http.Handler —
 // não um wrapper que "deixa passar tudo", o mux em si. É o que garante
 // paridade byte a byte com o piloto de hoje: não há função nenhuma a mais no
 // caminho do request além do que já existia antes desta task.
+//
+// O listener LOOPBACK (B4) serve o MESMO mux sem autenticação — mas não mais
+// cru: muxLoopback (mais abaixo) embrulha rt.Cru() para aplicar o RULING do
+// plano do ciclo (§77b): o loopback é READ-only por construção. Uma rota
+// ADMIN respondendo sem credencial no loopback seria stall de ingestão por
+// qualquer usuário local sem privilégio, no host de múltiplos usuários do
+// piloto — então padrão cujo papel registrado é ADMIN responde 403 também
+// ali, reusando papelDaRota (a MESMA leitura de rt.papeis que comAutenticacao
+// usa, nunca uma segunda classificação de rota). Rotas READ continuam
+// anônimas no loopback, intocadas.
 
 package server
 
@@ -79,16 +89,39 @@ func (rt *roteador) Cru() http.Handler {
 	return rt.mux
 }
 
-// montaMux constrói o mux CRU do servidor: as cinco rotas de hoje, todas
-// exigindo READ (o plano do §77 é claro — "no plano exposto TUDO exige
-// auth" — e as rotas mutantes/ADMIN-only ficam para a B5). Sem nenhuma
-// autenticação embutida: é exatamente o que sobeHTTP registrava antes desta
-// task, palavra por palavra, só que agora nomeado e reutilizável pela B4.
+// papelDaRota resolve, para um request já roteado, o papel mínimo que a rota
+// CASADA exige — a pergunta "que papel isto precisa?" que os DOIS pontos do
+// pacote que decidem sobre papel fazem: comAutenticacao (papel insuficiente
+// → 403, revisão da B3) e o wrapper do plano loopback (papel ADMIN → 403,
+// RULING do §77b, Task B5). Extraída da closure original de comAutenticacao
+// por instrução da revisão da B4: rt.papeis é a ÚNICA fonte de verdade sobre
+// papel de rota, e duplicar esta leitura nos dois pontos divergiria no dia em
+// que uma rota nova mudasse de papel e só um dos dois fosse atualizado.
 //
-// As rotas de /v1/query, /v1/metadata e /v1/stats são registradas SEM método
-// no padrão, e o handler confere o método por dentro — a mesma razão de
-// sempre: toda recusa do protocolo tem o MESMO corpo JSON, e o 405 que o mux
-// geraria sozinho tem corpo em texto puro.
+// existe=false quando a rota é DESCONHECIDA ou o método não é aceito
+// (mux.Handler devolve padrão vazio) — não há papel a checar, e o mux
+// resolve 404/405 sozinho. existe=true com papel=="" é o BUG DE REGISTRO
+// fail-closed (rota casou no mux sem passar por roteador.registra, a única
+// função que grava em rt.papeis): um papel VÁLIDO nunca é string vazia — o
+// enum é fechado em {config.RoleRead, config.RoleAdmin} desde a B1 —, então
+// os dois chamadores tratam papel=="" com existe=true como recusa, nunca
+// como ausência legítima de restrição.
+func (rt *roteador) papelDaRota(r *http.Request) (papel string, existe bool) {
+	_, padrao := rt.mux.Handler(r)
+	return rt.papeis[padrao], padrao != ""
+}
+
+// montaMux constrói o mux CRU do servidor: as cinco rotas de LEITURA (READ) e
+// as duas rotas MUTANTES do §96 (ADMIN, Task B5, decisão D3 do roadmap) —
+// POST /v1/compact e POST /v1/checkpoint, as primeiras que mudam estado pelo
+// protocolo remoto. Sem nenhuma autenticação embutida: é o roteamento cru,
+// reutilizável pelos DOIS listeners (exposto, com comAutenticacao; loopback,
+// com muxLoopback).
+//
+// As sete rotas são registradas SEM método no padrão, e o handler confere o
+// método por dentro — a mesma razão de sempre: toda recusa do protocolo tem o
+// MESMO corpo JSON, e o 405 que o mux geraria sozinho tem corpo em texto
+// puro.
 func (s *Servidor) montaMux() *roteador {
 	rt := novoRoteador()
 	rt.registra("GET /metrics", config.RoleRead, s.handleMetrics)
@@ -96,6 +129,8 @@ func (s *Servidor) montaMux() *roteador {
 	rt.registra("/v1/query", config.RoleRead, s.handleQuery)
 	rt.registra("/v1/metadata", config.RoleRead, s.handleMetadata)
 	rt.registra("/v1/stats", config.RoleRead, s.handleStats)
+	rt.registra("/v1/compact", config.RoleAdmin, s.handleCompact)
+	rt.registra("/v1/checkpoint", config.RoleAdmin, s.handleCheckpoint)
 	return rt
 }
 
@@ -128,23 +163,61 @@ func (s *Servidor) comAutenticacao(rt *roteador) http.Handler {
 		if !ok {
 			return // 401 já escrito por s.autentica (via recusaAutenticacao)
 		}
-		// mux.Handler consulta o roteamento SEM executá-lo — é a mesma
+		// rt.papelDaRota consulta o roteamento SEM executá-lo — é a mesma
 		// decisão que rt.mux.ServeHTTP tomaria a seguir, só que aqui só
-		// precisamos do PADRÃO que casou (ou "" para rota desconhecida ou
-		// método não aceito), para saber que papel a rota exige.
-		_, padrao := rt.mux.Handler(r)
-		if padrao != "" {
-			exigido, existe := rt.papeis[padrao]
+		// precisamos saber que papel a rota CASADA exige (existe==false para
+		// rota desconhecida ou método não aceito).
+		exigido, existe := rt.papelDaRota(r)
+		if existe {
 			switch {
-			case !existe:
+			case exigido == "":
+				_, padrao := rt.mux.Handler(r)
 				s.recusaRegistroSemPapel(w, r, padrao)
 				return
 			case !papelAutorizado(papel, exigido):
+				_, padrao := rt.mux.Handler(r)
 				s.recusaAutorizacao(w, r, padrao, papel, exigido)
 				return
 			}
 		}
 		rt.mux.ServeHTTP(w, r)
+	})
+}
+
+// muxLoopback é o wrapper que o listener loopback (B4, http.go:sobeLoopback)
+// serve em vez de rt.Cru() puro — o RULING do plano do ciclo (§77b, Task
+// B5): o loopback SERVE sem autenticação (decisão 4 da B4), mas uma rota cujo
+// papel registrado é ADMIN não pode responder anônima nele. O host do piloto
+// tem múltiplos usuários locais, e compact/checkpoint anônimos por qualquer
+// um deles é stall de ingestão sem privilégio nenhum de por meio.
+//
+// Reusa rt.papelDaRota — a MESMA leitura de rt.papeis que comAutenticacao usa
+// — por instrução da revisão da B4: montaMux() é a única fonte de registro,
+// então uma segunda classificação de rota aqui só poderia divergir dela, nunca
+// completá-la. Rotas READ (papel == config.RoleRead) e padrão vazio (rota
+// desconhecida ou método não aceito, existe==false) continuam servidas sem
+// checagem nenhuma — o comportamento de hoje, intocado.
+//
+// O bug de registro (existe==true, papel=="") é recusado aqui também, com o
+// MESMO 500 genérico do plano exposto: um "não sei que papel isto exige" não
+// pode virar acesso anônimo só porque este listener não tem middleware de
+// autenticação — a ausência de auth no loopback é uma decisão sobre rotas
+// READ conhecidas, nunca uma licença para bug de registro passar batido.
+func (s *Servidor) muxLoopback(rt *roteador) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		papel, existe := rt.papelDaRota(r)
+		if existe {
+			switch {
+			case papel == "":
+				_, padrao := rt.mux.Handler(r)
+				s.recusaRegistroSemPapel(w, r, padrao)
+				return
+			case papel == config.RoleAdmin:
+				s.recusaLoopbackAdmin(w, r)
+				return
+			}
+		}
+		rt.Cru().ServeHTTP(w, r)
 	})
 }
 
@@ -296,6 +369,25 @@ func (s *Servidor) recusaAutorizacao(w http.ResponseWriter, r *http.Request, rot
 	}
 	s.log.Warn("auth.negada", "requisição autenticada sem papel suficiente para a rota",
 		"remoto", r.RemoteAddr, "rota", rota, "papel", papelUsuario, "exigido", papelExigido)
+}
+
+// recusaLoopbackAdmin é o 403 do RULING do §77b: rota ADMIN batida pelo
+// listener loopback. Diferente de recusaAutorizacao, aqui não existe
+// identidade nenhuma provada (o loopback não autentica ninguém) — a recusa é
+// sobre o LISTENER, não sobre o papel de um usuário, e a mensagem orienta
+// para o caminho que de fato alcança a rota: o listener exposto e autenticado.
+func (s *Servidor) recusaLoopbackAdmin(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", protocolo.ContentTypeJSON)
+	w.WriteHeader(http.StatusForbidden)
+	if err := json.NewEncoder(w).Encode(protocolo.CorpoErro{Error: protocolo.Falha{
+		Code:    protocolo.CodForbidden,
+		Message: "rotas administrativas não respondem no plano loopback (§77b); use o listener autenticado (server.authentication)",
+	}}); err != nil {
+		s.log.Warn("query.escrita_falhou", "não foi possível entregar o corpo do 403 do loopback", "erro", err.Error())
+	}
+	s.log.Warn("auth.loopback_admin_recusado",
+		"requisição ADMIN recusada no plano loopback: o loopback é READ-only por construção (§77b)",
+		"remoto", r.RemoteAddr)
 }
 
 // recusaRegistroSemPapel é o fail-closed do mecanismo de papel (revisão

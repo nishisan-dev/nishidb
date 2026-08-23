@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -113,6 +114,56 @@ func TestLoopbackRespondeSemCredencialComPrincipalAutenticadoSimultaneamente(t *
 		defer fecha(t, resp)
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("status = %d, quer 200: o plano loopback preserva o acesso anônimo local", resp.StatusCode)
+		}
+	})
+}
+
+// TestLoopbackRecusaRotaAdminMasRotaReadContinuaAnonima é o RULING do §77b
+// (plano do ciclo) posto à prova, ponta a ponta pelo listener de verdade: o
+// loopback é READ-only por construção. Nem o servidor tem autenticação
+// configurada aqui — a recusa é sobre o LISTENER que respondeu, não sobre uma
+// credencial que faltou, e é por isso que POST /v1/compact sai 403 (papel
+// insuficiente) em vez de 401 (sem credencial não existe conceito nenhum
+// neste listener).
+func TestLoopbackRecusaRotaAdminMasRotaReadContinuaAnonima(t *testing.T) {
+	loopbackPorta := portaLivre(t)
+	bloco := blocoPadrao + fmt.Sprintf("  loopback:\n    enabled: true\n    port: %d\n", loopbackPorta)
+	srv := servidorComDados(t, 1, bloco)
+
+	if srv.EnderecoLoopback() == "" {
+		t.Fatal("EnderecoLoopback() vazio com server.loopback.enabled: true")
+	}
+
+	t.Run("compact via loopback eh 403", func(t *testing.T) {
+		resp, err := http.Post("http://"+srv.EnderecoLoopback()+"/v1/compact", "", nil)
+		if err != nil {
+			t.Fatalf("POST /v1/compact no loopback: %v", err)
+		}
+		defer fecha(t, resp)
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("status = %d, quer 403: rota ADMIN não pode responder anônima no loopback", resp.StatusCode)
+		}
+		var corpo struct {
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&corpo); err != nil {
+			t.Fatalf("corpo de erro ilegível: %v", err)
+		}
+		if corpo.Error.Code != "FORBIDDEN" {
+			t.Errorf("código = %q, quer FORBIDDEN", corpo.Error.Code)
+		}
+	})
+
+	t.Run("stats via loopback continua 200 sem credencial", func(t *testing.T) {
+		resp, err := http.Get("http://" + srv.EnderecoLoopback() + "/v1/stats")
+		if err != nil {
+			t.Fatalf("GET /v1/stats no loopback: %v", err)
+		}
+		defer fecha(t, resp)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, quer 200: rota READ continua anônima no loopback (comportamento intocado)", resp.StatusCode)
 		}
 	})
 }

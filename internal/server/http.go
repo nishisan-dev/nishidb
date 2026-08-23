@@ -154,19 +154,22 @@ func (s *Servidor) sobePprof(addr string) {
 }
 
 // sobeLoopback liga o SEGUNDO listener do plano loopback (decisão 4 do plano
-// do ciclo, §77-78): serve o MESMO mux CRU (rt.Cru(), montado de novo por
-// montaMux — sem estado compartilhado, ver o report da B3), sem TLS e sem o
-// middleware de autenticação, sobre s.loopbackLn (já bindado por Novo).
+// do ciclo, §77-78): serve o MESMO mux (montado de novo por montaMux — sem
+// estado compartilhado, ver o report da B3), sem TLS e sem o middleware de
+// autenticação, sobre s.loopbackLn (já bindado por Novo).
 //
-// É o que preserva o painel, o script de update e o cron locais funcionando
-// sem credencial mesmo com server.authentication ligado no listener exposto
-// — precedente arquitetural: sobePprof, acima, também é um segundo listener
-// isolado do principal, embora com objetivo diferente (debug vs. ferramental
-// local).
+// O handler NÃO é mais rt.Cru() puro desde a Task B5: é muxLoopback(rt), que
+// aplica o RULING do §77b sobre o MESMO mux — rota READ continua anônima
+// (paridade com o que este listener já fazia), rota ADMIN (as duas novas do
+// §96) responde 403. É o que preserva o painel, o script de update e o cron
+// locais funcionando sem credencial, sem abrir compact/checkpoint anônimos
+// para qualquer usuário local do host do piloto — precedente arquitetural:
+// sobePprof, acima, também é um segundo listener isolado do principal,
+// embora com objetivo diferente (debug vs. ferramental local).
 func (s *Servidor) sobeLoopback() {
 	rt := s.montaMux()
 	s.loopbackSrv = &http.Server{
-		Handler:           rt.Cru(),
+		Handler:           s.muxLoopback(rt),
 		ReadHeaderTimeout: 10 * time.Second,
 		ErrorLog:          s.errorLog("loopback"),
 	}
