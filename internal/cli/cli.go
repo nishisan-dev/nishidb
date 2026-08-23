@@ -124,6 +124,19 @@ COMPACT E CHECKPOINT
                          sobre estado inalterado custa o stall real da
                          ingestão e não muda nada — não rode em loop apertado.
 
+CREDENCIAL E TLS (query --server, status, datasets, inspect, compact, checkpoint)
+  --user <nome>          usuário HTTP Basic (§74-77). A senha NUNCA é uma
+                         flag — apareceria em "ps" para qualquer usuário da
+                         máquina — e vem de exatamente UMA das duas fontes
+                         abaixo; as duas ao mesmo tempo, ou --user sem
+                         nenhuma delas, são erro de uso.
+  NISHIDB_PASSWORD       a senha, por variável de ambiente.
+  --password-file <path> a senha, por arquivo (quebra de linha final
+                         aparada).
+  --tls-ca <path>        CA (PEM) para validar o certificado do servidor —
+                         liga TLS neste cliente. Sem --insecure: quem precisa
+                         depurar um handshake usa openssl s_client.
+
 EXIT CODES
   0  sucesso
   1  erro de uso ou de configuração

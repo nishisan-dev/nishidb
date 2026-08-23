@@ -39,7 +39,13 @@ func runStatus(args []string, amb Ambiente) int {
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
 	fs.SetOutput(amb.Stderr)
 	servidor := fs.String("server", "", "endereço do nishidb server (host:porta)")
+	credFlags := registraFlagsRemotas(fs)
 	if err := fs.Parse(args); err != nil {
+		return ExitUso
+	}
+	cred, err := credFlags.resolve()
+	if err != nil {
+		avisa(amb, "status: %v\n", err)
 		return ExitUso
 	}
 	if fs.NArg() != 0 {
@@ -51,7 +57,7 @@ func runStatus(args []string, amb Ambiente) int {
 	}
 
 	var e protocolo.Estatisticas
-	if code := buscaDocumento("status", *servidor, "/v1/stats", &e, amb); code != ExitOK {
+	if code := buscaDocumento("status", *servidor, "/v1/stats", cred, &e, amb); code != ExitOK {
 		return code
 	}
 	return escreveSaida("status", amb, func(w io.Writer) { escreveStatus(w, *servidor, e) })
@@ -61,7 +67,13 @@ func runDatasets(args []string, amb Ambiente) int {
 	fs := flag.NewFlagSet("datasets", flag.ContinueOnError)
 	fs.SetOutput(amb.Stderr)
 	servidor := fs.String("server", "", "endereço do nishidb server (host:porta)")
+	credFlags := registraFlagsRemotas(fs)
 	if err := fs.Parse(args); err != nil {
+		return ExitUso
+	}
+	cred, err := credFlags.resolve()
+	if err != nil {
+		avisa(amb, "datasets: %v\n", err)
 		return ExitUso
 	}
 	if fs.NArg() != 0 {
@@ -73,7 +85,7 @@ func runDatasets(args []string, amb Ambiente) int {
 	}
 
 	var m protocolo.Metadados
-	if code := buscaDocumento("datasets", *servidor, "/v1/metadata", &m, amb); code != ExitOK {
+	if code := buscaDocumento("datasets", *servidor, "/v1/metadata", cred, &m, amb); code != ExitOK {
 		return code
 	}
 	return escreveSaida("datasets", amb, func(w io.Writer) { escreveDatasets(w, *servidor, m) })
@@ -83,7 +95,13 @@ func runInspect(args []string, amb Ambiente) int {
 	fs := flag.NewFlagSet("inspect", flag.ContinueOnError)
 	fs.SetOutput(amb.Stderr)
 	servidor := fs.String("server", "", "endereço do nishidb server (host:porta)")
+	credFlags := registraFlagsRemotas(fs)
 	if err := fs.Parse(args); err != nil {
+		return ExitUso
+	}
+	cred, err := credFlags.resolve()
+	if err != nil {
+		avisa(amb, "inspect: %v\n", err)
 		return ExitUso
 	}
 	// A flag vem ANTES do dataset porque é assim que o flag da stdlib para de
@@ -102,7 +120,7 @@ func runInspect(args []string, amb Ambiente) int {
 
 	var m protocolo.Metadados
 	caminho := "/v1/metadata?dataset=" + url.QueryEscape(nome)
-	if code := buscaDocumento("inspect", *servidor, caminho, &m, amb); code != ExitOK {
+	if code := buscaDocumento("inspect", *servidor, caminho, cred, &m, amb); code != ExitOK {
 		return code
 	}
 	// O filtro do §67 responde a MESMA forma com um elemento. Zero elementos
@@ -139,13 +157,23 @@ func exigeServidor(cmd, endereco string, amb Ambiente) int {
 // Sem timeout no cliente, pelo mesmo argumento do consultaRemota: quem impõe
 // prazo é o servidor, e um prazo local faria o operador culpá-lo por uma
 // decisão da máquina de onde ele pergunta.
-func buscaDocumento(cmd, endereco, caminho string, destino any, amb Ambiente) int {
+//
+// cred entra pelo MESMO clienteRemoto/aplicaCredencial que consultaRemota e
+// postaMutacao usam (Task B6) — o client HTTP compartilhado com Proxy: nil e
+// o CertPool de --tls-ca, e o Authorization quando --user foi dado.
+func buscaDocumento(cmd, endereco, caminho string, cred credencialRemota, destino any, amb Ambiente) int {
+	client, err := clienteRemoto(cred)
+	if err != nil {
+		avisa(amb, "%s: %v\n", cmd, err)
+		return ExitUso
+	}
 	req, err := http.NewRequestWithContext(amb.Ctx, http.MethodGet, normalizaEndereco(endereco)+caminho, nil)
 	if err != nil {
 		avisa(amb, "%s: %v\n", cmd, err)
 		return ExitUso
 	}
-	resp, err := http.DefaultClient.Do(req)
+	aplicaCredencial(req, cred)
+	resp, err := client.Do(req)
 	if err != nil {
 		avisa(amb, "%s: falando com %s: %v\n", cmd, endereco, err)
 		return ExitUso
@@ -176,9 +204,12 @@ func buscaDocumento(cmd, endereco, caminho string, destino any, amb Ambiente) in
 // nome antigo, recusaDeLeitura, já não descrevia os dois comandos mutantes
 // que a B5 acrescentou como chamadores.
 func recusaRemota(cmd string, resp *http.Response, amb Ambiente) int {
-	var corpo protocolo.CorpoErro
-	if err := json.NewDecoder(resp.Body).Decode(&corpo); err != nil {
+	corpo, dica, ok := leCorpoErro(resp)
+	if !ok {
 		avisa(amb, "%s: o servidor respondeu %s sem corpo legível\n", cmd, resp.Status)
+		if dica != "" {
+			avisa(amb, "%s", dica)
+		}
 		return ExitUso
 	}
 	avisa(amb, "%s: %s\n", cmd, corpo.Error.Message)

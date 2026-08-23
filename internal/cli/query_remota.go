@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,10 +25,19 @@ import (
 // O contrato de saída é o MESMO do caminho local: NDJSON cru no stdout, uma
 // linha por row, e o exit code dizendo o que aconteceu. Um script que troca
 // `--config` por `--server` não muda mais nada.
-func consultaRemota(endereco, dataset, sql string, amb Ambiente) int {
+func consultaRemota(endereco, dataset, sql string, cred credencialRemota, amb Ambiente) int {
 	corpo, err := json.Marshal(protocolo.Requisicao{Dataset: dataset, SQL: sql})
 	if err != nil {
 		fmt.Fprintln(amb.Stderr, "query:", err)
+		return ExitUso
+	}
+
+	client, err := clienteRemoto(cred)
+	if err != nil {
+		// `_, _ =`: código NOVO desta task segue a disciplina de avisa
+		// (operacao.go) — 0 apontamentos de lint novos; as chamadas bare a
+		// fmt.Fprintln já existentes neste arquivo são débito anterior.
+		_, _ = fmt.Fprintln(amb.Stderr, "query:", err)
 		return ExitUso
 	}
 
@@ -38,11 +48,12 @@ func consultaRemota(endereco, dataset, sql string, amb Ambiente) int {
 		return ExitUso
 	}
 	req.Header.Set("Content-Type", protocolo.ContentTypeJSON)
+	aplicaCredencial(req, cred)
 
 	// Sem timeout no cliente: o teto de uma consulta é o query.timeout do
 	// dataset, que o servidor aplica. Um prazo local mataria um stream longo
 	// legítimo e faria o operador culpar o servidor.
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		fmt.Fprintf(amb.Stderr, "query: falando com %s: %v\n", endereco, err)
 		return ExitUso
@@ -68,12 +79,50 @@ func normalizaEndereco(e string) string {
 	return "http://" + strings.TrimRight(e, "/")
 }
 
+// corpoHTTPQuandoEsperavaHTTPS é o texto EXATO que o net/http do Go escreve
+// (server.go, tratamento de tls.RecordHeaderError) quando um cliente fala
+// texto puro com uma porta que só aceita TLS: o handshake nunca chega a
+// acontecer, e o servidor devolve isto cru — HTTP/1.0, sem JSON — na única
+// oportunidade que tem antes de fechar a conexão.
+const corpoHTTPQuandoEsperavaHTTPS = "Client sent an HTTP request to an HTTPS server"
+
+// leCorpoErro lê o corpo bruto de uma resposta de erro e tenta decodificá-lo
+// como protocolo.CorpoErro. ok=false cobre tanto falha de leitura quanto
+// corpo que não é JSON — só o segundo caso preserva os BYTES originais para
+// dicaDeEsquema examinar; uma falha de leitura não tem corpo nenhum a
+// examinar.
+func leCorpoErro(resp *http.Response) (corpo protocolo.CorpoErro, dica string, ok bool) {
+	bruto, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return corpo, "", false
+	}
+	if err := json.Unmarshal(bruto, &corpo); err != nil {
+		return corpo, dicaDeEsquema(resp.StatusCode, bruto), false
+	}
+	return corpo, "", true
+}
+
+// dicaDeEsquema troca "servidor respondeu 400 sem corpo legível" — mensagem
+// sem nenhuma pista — pela causa mais provável: a porta fala TLS
+// (server.tls.enabled: true) e o operador esqueceu o https://.
+// normalizaEndereco (acima) já ACEITA o esquema quando ele vem escrito; só
+// não assume sozinho — a dica fecha essa distância.
+func dicaDeEsquema(status int, corpoBruto []byte) string {
+	if status != http.StatusBadRequest || !bytes.Contains(corpoBruto, []byte(corpoHTTPQuandoEsperavaHTTPS)) {
+		return ""
+	}
+	return "  a porta parece falar TLS: tente --server https://host:porta\n"
+}
+
 // recusaDoServidor trata o erro que chegou ANTES de qualquer linha: o corpo é
 // um JSON único e o status é de verdade.
 func recusaDoServidor(resp *http.Response, amb Ambiente) int {
-	var corpo protocolo.CorpoErro
-	if err := json.NewDecoder(resp.Body).Decode(&corpo); err != nil {
+	corpo, dica, ok := leCorpoErro(resp)
+	if !ok {
 		fmt.Fprintf(amb.Stderr, "query: o servidor respondeu %s sem corpo legível\n", resp.Status)
+		if dica != "" {
+			_, _ = fmt.Fprint(amb.Stderr, dica)
+		}
 		return ExitUso
 	}
 	fmt.Fprintf(amb.Stderr, "query: %s\n", corpo.Error.Message)
@@ -143,8 +192,9 @@ func codigoDoProtocolo(codigo string) int {
 		// Inclui BAD_REQUEST, UNKNOWN_DATASET, TOO_MANY_QUERIES, INTERNAL,
 		// UNAUTHENTICATED e FORBIDDEN (§74-77, Fase 11, Task B3): credencial
 		// recusada ou papel insuficiente são erro de quem chamou o comando,
-		// não do servidor — a flag de credencial no CLI é da B6, mas a
-		// degradação com a mensagem do servidor já vale hoje. O que o
+		// não do servidor — a flag de credencial no CLI (--user/
+		// --password-file/NISHIDB_PASSWORD, Task B6) já existe, e a
+		// degradação com a mensagem do servidor vale para ela também. O que o
 		// operador faz com todos eles é olhar o comando ou o servidor, que é
 		// o significado do 1.
 		//

@@ -20,19 +20,25 @@ import (
 // CorpoErro decodificado, mensagem no stderr, código traduzido pela MESMA
 // tabela de exit codes do resto do binário.
 //
-// FORA DE ESCOPO desta task (B6): nenhuma credencial sai daqui. Os dois
-// comandos falam HTTP puro, sem Authorization — funcionam hoje só contra um
-// servidor com server.authentication DESLIGADA, ou por trás de algo que
-// injete a credencial. O ponto de costura para a B6 é postaMutacao, abaixo:
-// é aqui que um `req.SetBasicAuth(...)` (ou um transporte com TLS/CA
-// custom) entraria, no MESMO lugar em que a B6 já vai mexer em
-// consultaRemota e buscaDocumento — uma função a mais na mesma lista.
+// Credencial e TLS (Task B6): os dois comandos aceitam --user, --tls-ca e
+// senha por NISHIDB_PASSWORD/--password-file, no MESMO ponto de costura que
+// consultaRemota (query_remota.go) e buscaDocumento (operacao.go) usam —
+// postaMutacao, abaixo, chama clienteRemoto/aplicaCredencial, nunca monta
+// Authorization ou Transport por conta própria. Contra um servidor com
+// server.authentication DESLIGADA, rodar sem --user continua byte a byte
+// igual a antes desta task.
 
 func runCompact(args []string, amb Ambiente) int {
 	fs := flag.NewFlagSet("compact", flag.ContinueOnError)
 	fs.SetOutput(amb.Stderr)
 	servidor := fs.String("server", "", "endereço do nishidb server (host:porta)")
+	credFlags := registraFlagsRemotas(fs)
 	if err := fs.Parse(args); err != nil {
+		return ExitUso
+	}
+	cred, err := credFlags.resolve()
+	if err != nil {
+		avisa(amb, "compact: %v\n", err)
 		return ExitUso
 	}
 	if fs.NArg() > 1 {
@@ -49,7 +55,7 @@ func runCompact(args []string, amb Ambiente) int {
 	}
 
 	var resp protocolo.RespostaCompact
-	if code := postaMutacao("compact", *servidor, "/v1/compact", dataset, &resp, amb); code != ExitOK {
+	if code := postaMutacao("compact", *servidor, "/v1/compact", dataset, cred, &resp, amb); code != ExitOK {
 		return code
 	}
 	return escreveSaida("compact", amb, func(w io.Writer) { escreveCompact(w, *servidor, resp) })
@@ -59,7 +65,13 @@ func runCheckpoint(args []string, amb Ambiente) int {
 	fs := flag.NewFlagSet("checkpoint", flag.ContinueOnError)
 	fs.SetOutput(amb.Stderr)
 	servidor := fs.String("server", "", "endereço do nishidb server (host:porta)")
+	credFlags := registraFlagsRemotas(fs)
 	if err := fs.Parse(args); err != nil {
+		return ExitUso
+	}
+	cred, err := credFlags.resolve()
+	if err != nil {
+		avisa(amb, "checkpoint: %v\n", err)
 		return ExitUso
 	}
 	if fs.NArg() > 1 {
@@ -76,7 +88,7 @@ func runCheckpoint(args []string, amb Ambiente) int {
 	}
 
 	var resp protocolo.RespostaCheckpoint
-	if code := postaMutacao("checkpoint", *servidor, "/v1/checkpoint", dataset, &resp, amb); code != ExitOK {
+	if code := postaMutacao("checkpoint", *servidor, "/v1/checkpoint", dataset, cred, &resp, amb); code != ExitOK {
 		return code
 	}
 	return escreveSaida("checkpoint", amb, func(w io.Writer) { escreveCheckpoint(w, *servidor, resp) })
@@ -93,7 +105,11 @@ func runCheckpoint(args []string, amb Ambiente) int {
 // mensagem no stderr, código traduzido por codigoDoProtocolo — a MESMA
 // tabela que WRITER_FAILED (→ ExitWriter) e COMPACTION_BUSY (→ ExitUso, com
 // justificativa no comentário de codigoDoProtocolo) alimentam.
-func postaMutacao(cmd, endereco, caminho, dataset string, destino any, amb Ambiente) int {
+//
+// cred entra pelo MESMO clienteRemoto/aplicaCredencial que consultaRemota e
+// buscaDocumento usam (Task B6) — este É o ponto de costura único que a B5
+// já apontava para a credencial entrar.
+func postaMutacao(cmd, endereco, caminho, dataset string, cred credencialRemota, destino any, amb Ambiente) int {
 	var corpo io.Reader
 	if dataset != "" {
 		b, err := json.Marshal(protocolo.RequisicaoDataset{Dataset: dataset})
@@ -103,6 +119,12 @@ func postaMutacao(cmd, endereco, caminho, dataset string, destino any, amb Ambie
 		}
 		corpo = bytes.NewReader(b)
 	}
+
+	client, err := clienteRemoto(cred)
+	if err != nil {
+		avisa(amb, "%s: %v\n", cmd, err)
+		return ExitUso
+	}
 	req, err := http.NewRequestWithContext(amb.Ctx, http.MethodPost, normalizaEndereco(endereco)+caminho, corpo)
 	if err != nil {
 		avisa(amb, "%s: %v\n", cmd, err)
@@ -111,8 +133,9 @@ func postaMutacao(cmd, endereco, caminho, dataset string, destino any, amb Ambie
 	if corpo != nil {
 		req.Header.Set("Content-Type", protocolo.ContentTypeJSON)
 	}
+	aplicaCredencial(req, cred)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		avisa(amb, "%s: falando com %s: %v\n", cmd, endereco, err)
 		return ExitUso

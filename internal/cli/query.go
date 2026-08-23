@@ -23,7 +23,22 @@ func runQuery(args []string, amb Ambiente) int {
 		limit     = fs.Int("limit", -1, "sobrepõe o LIMIT da query")
 		servidor  = fs.String("server", "", "consulta pelo protocolo remoto em vez de abrir o dataset local")
 	)
+	credFlags := registraFlagsRemotas(fs)
 	if err := fs.Parse(args); err != nil {
+		return ExitUso
+	}
+	// A credencial só é USADA no caminho --server (consultaRemota, abaixo),
+	// mas a validação roda sempre: --user/--password-file/NISHIDB_PASSWORD
+	// mal combinados são erro de uso independente de --config ou --server, e
+	// resolver aqui garante a MESMA mensagem que status/datasets/inspect/
+	// compact/checkpoint dão para o mesmo engano.
+	cred, err := credFlags.resolve()
+	if err != nil {
+		// `_, _ =`: mesma disciplina de avisa (operacao.go) para código NOVO
+		// desta task — o gate de lint deste projeto cobra 0 apontamentos
+		// novos, e as chamadas bare a fmt.Fprintln já existentes neste
+		// arquivo são débito anterior a esta task, não um precedente a repetir.
+		_, _ = fmt.Fprintln(amb.Stderr, "query:", err)
 		return ExitUso
 	}
 	// Com --server o dataset não é aberto aqui, então não há nishidb.yaml para
@@ -51,7 +66,7 @@ func runQuery(args []string, amb Ambiente) int {
 	}
 
 	if *servidor != "" {
-		return consultaRemota(*servidor, *dataset, sql, amb)
+		return consultaRemota(*servidor, *dataset, sql, cred, amb)
 	}
 
 	cfg, err := nishiconfig.CarregaConfig(*argConfig)
