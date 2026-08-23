@@ -2692,7 +2692,7 @@ func TestAposentadoriaRegistraNoLogOsBytesQueODiscoDevolveu(t *testing.T) {
 	vivas := rowsVivasPorSegmento(t, s, keys)
 	arquivosAntes := tamanhosDosSegmentosPorArquivo(t, dir)
 
-	if err := s.passadaDeCompaction(context.Background(), 0.5); err != nil {
+	if _, err := s.passadaDeCompaction(context.Background(), 0.5); err != nil {
 		t.Fatalf("passadaDeCompaction: %v", err)
 	}
 	arquivosDepois := tamanhosDosSegmentosPorArquivo(t, dir)

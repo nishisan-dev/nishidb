@@ -681,7 +681,7 @@ func (s *Store) ParaCompaction() {
 // varredura perpétua sobre um dataset que já não pode ser compactado.
 func (s *Store) rodaCompaction(ctx context.Context, ratio float64) {
 	for {
-		if err := s.passadaDeCompaction(ctx, ratio); err != nil {
+		if _, err := s.passadaDeCompaction(ctx, ratio); err != nil {
 			if ctx.Err() != nil {
 				return // cancelamento não é falha: é o Close ou o SIGTERM
 			}
@@ -698,6 +698,20 @@ func (s *Store) rodaCompaction(ctx context.Context, ratio float64) {
 	}
 }
 
+// ResultadoCompactacao é o agregado de UMA passada — quantos segmentos ela
+// aposentou e quanto disco moveu. O laço automático (rodaCompaction) ignora
+// o valor e só olha o erro; CompactaUmaVez (Task B5, POST /v1/compact) o
+// devolve ao operador. Zeros em toda a struct é resultado LEGÍTIMO, não
+// ausência de resposta: uma eleição sem candidato (dataset já compactado, ou
+// ratio que nada alcança) é o mesmo "idempotente por efeito" do Checkpoint —
+// chamar de novo sobre um estado já compactado custa uma eleição vazia e não
+// muda nada.
+type ResultadoCompactacao struct {
+	SegmentosAposentados int
+	BytesLidos           int64
+	BytesEscritos        int64
+}
+
 // passadaDeCompaction varre e aposenta, em ordem, os candidatos de UMA
 // eleição.
 //
@@ -706,18 +720,27 @@ func (s *Store) rodaCompaction(ctx context.Context, ratio float64) {
 // então uma passada que relesse a eleição a cada volta perseguiria as próprias
 // cópias sem nunca terminar — e nunca chegaria ao cochilo que devolve a CPU.
 // O que a passada não alcançar, a próxima alcança.
-func (s *Store) passadaDeCompaction(ctx context.Context, ratio float64) error {
+//
+// É privada do PACOTE, não do laço: rodaCompaction é uma chamadora, e
+// CompactaUmaVez (mais abaixo, Task B5) é a outra — as duas disputam o
+// single-flight de compMu/compEmVoo ANTES de chegar aqui, então quando esta
+// função roda já não há a quem ela possa disputar wmu record a record.
+func (s *Store) passadaDeCompaction(ctx context.Context, ratio float64) (ResultadoCompactacao, error) {
+	var out ResultadoCompactacao
 	for _, seg := range s.candidatos(ratio) {
 		if err := ctx.Err(); err != nil {
-			return err
+			return out, err
 		}
 		copiados, lidos, escritos, err := s.compactaSegmento(ctx, seg)
 		if err != nil {
-			return fmt.Errorf("compactar o segmento %d: %w", seg, err)
+			return out, fmt.Errorf("compactar o segmento %d: %w", seg, err)
 		}
 		if err := s.aposentaSegmento(seg); err != nil {
-			return fmt.Errorf("aposentar o segmento %d: %w", seg, err)
+			return out, fmt.Errorf("aposentar o segmento %d: %w", seg, err)
 		}
+		out.SegmentosAposentados++
+		out.BytesLidos += lidos
+		out.BytesEscritos += escritos
 		// O log deixou de ser o único lugar em que estes números aparecem: as
 		// séries do §92 os publicam desde a Task 8, e as duas leituras não se
 		// substituem. A série responde "quanto disco a compaction moveu neste
@@ -736,5 +759,45 @@ func (s *Store) passadaDeCompaction(ctx context.Context, ratio float64) error {
 			"bytes_lidos", lidos, "bytes_escritos", escritos,
 			"bytes_devolvidos", lidos-escritos)
 	}
-	return nil
+	return out, nil
+}
+
+// CompactaUmaVez executa UMA passada de compaction sob demanda — o caso de
+// uso do operador que desligou o laço automático (storage.compaction.enabled:
+// false) e quer devolver disco na mão (Task B5, POST /v1/compact), ou que
+// quer forçar uma passada fora do intervalo do laço.
+//
+// Disputa o MESMO single-flight de IniciaCompaction/rodaCompaction, nunca um
+// segundo (godoc de IniciaCompaction, acima: duas varreduras concorrentes são
+// PROIBIDAS). "Em voo" cobre as DUAS formas de já haver uma passada
+// acontecendo: o laço automático de pé (compCancela != nil — mesmo dormindo
+// entre passadas, porque o cochilo pode terminar a qualquer instante e
+// colidir com esta chamada) OU outra chamada manual concorrente
+// (compManualEmVoo). Em qualquer um dos dois casos, devolve ErrCompactionBusy
+// NA HORA — não enfileira e não espera, porque quem chama (a rota HTTP) tem
+// de responder ao cliente sem segurar a conexão por uma passada que pode
+// durar minutos.
+//
+// ctx cancelado no meio interrompe a passada com segurança: o copy-forward é
+// escrita normal sob o wmu (reapendaSeVivo), e o candidato que a passada não
+// alcançar fica para a PRÓXIMA — automática ou manual. É o mesmo argumento de
+// segurança que o cancelamento do Close já usa (decisão D7), só que aqui quem
+// cancela é o cliente HTTP desistindo, não o encerramento do processo.
+func (s *Store) CompactaUmaVez(ctx context.Context, ratio float64) (ResultadoCompactacao, error) {
+	s.compMu.Lock()
+	if s.compCancela != nil || s.compManualEmVoo {
+		s.compMu.Unlock()
+		return ResultadoCompactacao{}, ErrCompactionBusy
+	}
+	s.compManualEmVoo = true
+	s.compEmVoo.Add(1)
+	s.compMu.Unlock()
+	defer func() {
+		s.compEmVoo.Done()
+		s.compMu.Lock()
+		s.compManualEmVoo = false
+		s.compMu.Unlock()
+	}()
+
+	return s.passadaDeCompaction(ctx, ratio)
 }

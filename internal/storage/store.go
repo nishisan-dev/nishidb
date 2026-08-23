@@ -50,6 +50,14 @@ var (
 // dados duráveis em silêncio.
 var ErrDatasetCorrupt = errors.New("storage: dataset corrompido")
 
+// ErrCompactionBusy é o que CompactaUmaVez devolve quando já existe uma
+// passada em voo — do laço automático (IniciaCompaction de pé) ou de outra
+// chamada manual concorrente (Task B5, POST /v1/compact). Não é retentável
+// pelo MESMO chamador em loop apertado: é a restrição estrutural do godoc de
+// IniciaCompaction (duas varreduras concorrentes são PROIBIDAS) se
+// manifestando para quem pede uma passada avulsa em vez de ligar o laço.
+var ErrCompactionBusy = errors.New("storage: compaction já em voo")
+
 // semRecords informa se nenhum segmento do diretório tem record algum (só
 // header): é o que distingue um dataset recém-criado de um dataset com
 // dados cujo manifest se perdeu.
@@ -282,6 +290,21 @@ type Store struct {
 	compMu      sync.Mutex
 	compCancela context.CancelFunc
 	compEmVoo   sync.WaitGroup
+
+	// compManualEmVoo marca uma passada MANUAL em andamento (Task B5,
+	// CompactaUmaVez/POST /v1/compact) — a metade do single-flight que falta
+	// para cobrir "duas chamadas manuais concorrentes", já que compCancela
+	// != nil já cobre "o laço automático está de pé".
+	//
+	// Protegida pelo MESMO compMu, nunca um mutex próprio: a decisão "já
+	// existe passada em voo?" é sempre as DUAS condições lidas sob o mesmo
+	// lock (compCancela != nil || compManualEmVoo), e um segundo mutex
+	// permitiria as duas leituras verem estados de instantes diferentes.
+	// CompactaUmaVez também soma ao MESMO compEmVoo que o laço usa — não por
+	// decoração, mas porque é o que faz ParaCompaction (chamado pelo Close)
+	// esperar por uma passada manual em voo antes de desmapear o índice sob
+	// os pés dela, exatamente a mesma proteção que já existe para o laço.
+	compManualEmVoo bool
 
 	// compAtiva, compBytesLidos e compBytesEscritos são os alimentadores das
 	// três séries de compaction do §92, que até o M4 eram nome sem número
