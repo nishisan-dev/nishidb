@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/nishisan-dev/nishidb/internal/typeparse"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
@@ -61,9 +63,10 @@ type SchemaSpec struct {
 }
 
 type FieldSpec struct {
-	Type  string
-	Alias string
-	Index string // "" | bitmap | hash
+	Type   string
+	Alias  string
+	Index  string // "" | bitmap | hash
+	Format string // padrão de parsing; obrigatório em datetime/time, proibido no resto
 }
 
 type QuerySpec struct {
@@ -157,6 +160,17 @@ func specErrf(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrInvalidSpec, fmt.Sprintf(format, args...))
 }
 
+// semPrefixoDeSpec desembrulha a mensagem de um erro já marcado com
+// ErrInvalidSpec, para que aninhá-lo em outro specErrf não produza
+// "spec inválida: spec inválida: ..." na cara do operador.
+func semPrefixoDeSpec(err error) string {
+	s := err.Error()
+	if p := ErrInvalidSpec.Error() + ": "; strings.HasPrefix(s, p) {
+		return s[len(p):]
+	}
+	return s
+}
+
 var fieldTypeNames = map[string]types.FieldType{
 	"string":      types.TypeString,
 	"int64":       types.TypeInt64,
@@ -169,6 +183,45 @@ var fieldTypeNames = map[string]types.FieldType{
 	"ipv6_prefix": types.TypeIPv6Prefix,
 	"bytes":       types.TypeBytes,
 	"json":        types.TypeJSON,
+	"datetime":    types.TypeDateTime,
+	"time":        types.TypeTime,
+}
+
+// dominioDeFormato mapeia o tipo YAML para o domínio do compilador de padrão.
+// Só estes dois tipos aceitam (e exigem) `format:`.
+func dominioDeFormato(tipo string) (typeparse.Dominio, bool) {
+	switch tipo {
+	case "datetime":
+		return typeparse.DominioDateTime, true
+	case "time":
+		return typeparse.DominioTime, true
+	}
+	return 0, false
+}
+
+// CompilaFormato resolve o `format:` de um campo para o layout de parsing.
+// Dono único da regra: quem valida a spec e quem compila o schema chamam
+// AQUI, nunca uma segunda lista de formatos — duas listas divergiriam e o
+// dataset aceitaria no load o que recusa por evento na ingestão.
+func CompilaFormato(tipo, format string) (*typeparse.Layout, error) {
+	d, usa := dominioDeFormato(tipo)
+	if !usa {
+		if format != "" {
+			return nil, specErrf("format só se aplica a datetime e time; o tipo %q não o usa", tipo)
+		}
+		return nil, nil
+	}
+	if format == "" {
+		// Sem default de propósito: um format esquecido escolheria um padrão
+		// que recusa 100% dos eventos, e sob log-and-skip isso é um dataset
+		// que não ingere nada — só WARNs, sem nada apontando para a causa.
+		return nil, specErrf("tipo %q exige format (tokens: %s)", tipo, typeparse.TokensSuportados())
+	}
+	l, err := typeparse.CompilaLayout(format, d)
+	if err != nil {
+		return nil, specErrf("%s", err)
+	}
+	return l, nil
 }
 
 // FieldTypeByName resolve o nome YAML de um tipo; "auto" não entra aqui
@@ -315,6 +368,18 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 		}
 		if !isValidTypeName(f.Type) {
 			return nil, specErrf("campo %q: tipo %q inválido", name, f.Type)
+		}
+		// O format é compilado AQUI, no load, e o layout resultante é
+		// descartado: o que importa neste ponto é recusar o padrão inválido
+		// antes de o dataset subir. O Compile o compila de novo para guardar.
+		//
+		// A checagem cobre os dois sentidos, e o segundo é o que não erra
+		// alto sozinho: FieldSpec é decodificado sem KnownFields, então um
+		// `format:` sob um campo que não o usa decodifica com sucesso e não
+		// faz nada — configuração sem leitor, que é o defeito que o débito 37
+		// registra.
+		if _, err := CompilaFormato(f.Type, f.Format); err != nil {
+			return nil, specErrf("campo %q: %s", name, semPrefixoDeSpec(err))
 		}
 		if f.Alias != "" {
 			if !isIdentName(f.Alias) {

@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/nishisan-dev/nishidb/internal/typeparse"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
@@ -94,6 +95,13 @@ type CompiledField struct {
 	IsAuto                   bool            // tipo resolvido na primeira observação
 	Index                    IndexKind
 	IsKey, IsSequence, IsTTL bool
+
+	// Format é o padrão declarado no YAML e Layout é ele compilado. Não-nil
+	// exatamente quando Type é datetime ou time; o Format é guardado ao lado
+	// do Layout porque a mensagem de literal inválido precisa dizer o que se
+	// esperava — "literal inválido para a coluna x" sozinho é inacionável.
+	Format string
+	Layout *typeparse.Layout
 
 	// autoType é o tipo FIXADO de um campo auto (R11); TypeNull = ainda não
 	// observado. Atômico porque o writer o fixa enquanto goroutines de query
@@ -247,6 +255,11 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 				cf.IsAuto = true
 			} else {
 				cf.Type, _ = FieldTypeByName(spec.Type)
+				l, err := CompilaFormato(spec.Type, spec.Format)
+				if err != nil {
+					return nil, fmt.Errorf("campo %q: %w", name, err)
+				}
+				cf.Format, cf.Layout = spec.Format, l
 			}
 			switch spec.Index {
 			case "bitmap":
@@ -262,6 +275,17 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 		// processo reiniciado age como se o campo nunca tivesse sido visto.
 		if cf.IsAuto {
 			if t, ok := dict.TypeHint(cf.ID); ok {
+				// datetime e time só existem declarados, porque só a
+				// declaração traz o format: sem ele não há Layout, e um campo
+				// auto com tipo temporal derefereciaria nil no materializer e
+				// no binder. InferType nunca os produz, então um hint assim é
+				// dicionário escrito por outra configuração — recusa alta na
+				// subida, com a causa nomeada, em vez de panic na primeira
+				// query.
+				if t == types.TypeDateTime || t == types.TypeTime {
+					return nil, fmt.Errorf("campo %q: dicionário traz tipo %v para campo auto, "+
+						"que não tem format declarado; declare o campo com type e format em schema.fields", name, t)
+				}
 				cf.autoType.Store(uint32(t))
 			}
 		}
