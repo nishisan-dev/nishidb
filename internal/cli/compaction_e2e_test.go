@@ -112,6 +112,30 @@ query:
   defaultTimeout: 30s
 `
 
+// e2eConfigManualYAML é o gêmeo de e2eConfigYAML com o laço automático
+// DESLIGADO (Task B5) — o operador que opera a compaction na mão via
+// `nishidb compact --server`. Mesma forma de dataset (§85: segmentos
+// pequenos para empilhar candidatos sem gigabytes de disco), mesmo
+// minimumLiveRatio: o único bit que muda é quem dispara a passada.
+const e2eConfigManualYAML = `version: 1
+storage:
+  path: %s
+  segmentSize: 256KiB
+  checkpoint:
+    interval: 500ms
+  compaction:
+    enabled: false
+    minimumLiveRatio: 0.5
+datasets:
+  directory: %s
+server:
+  bind: 127.0.0.1
+  port: %d
+query:
+  defaultMaxRows: 100000
+  defaultTimeout: 30s
+`
+
 const (
 	e2eDataset = "sessoes"
 	e2eKeys    = 200
@@ -152,6 +176,17 @@ type bancadaE2E struct {
 // tópico sem exigir daemon externo nem container.
 func novaBancadaE2E(t *testing.T) *bancadaE2E {
 	t.Helper()
+	return novaBancadaE2EComConfig(t, e2eConfigYAML)
+}
+
+// novaBancadaE2EComConfig é o novaBancadaE2E de baixo, parametrizado pelo
+// nishidb.yaml (Task B5, Fase 11): o compact MANUAL do §96 precisa da MESMA
+// montagem — broker kfake, spec do dataset, binário compilado — com
+// storage.compaction.enabled: false, o caso de uso central da rota (o
+// operador desligou o laço automático). Sem esta separação, o e2e do compact
+// manual duplicaria a montagem inteira em vez de trocar só o YAML.
+func novaBancadaE2EComConfig(t *testing.T, configYAML string) *bancadaE2E {
+	t.Helper()
 	const topico = "e2e-compaction"
 	cluster, err := kfake.NewCluster(
 		kfake.SeedTopics(1, topico),
@@ -178,7 +213,7 @@ func novaBancadaE2E(t *testing.T) *bancadaE2E {
 	}
 	porta := portaLivre(t)
 	cfg := filepath.Join(raiz, "nishidb.yaml")
-	if err := os.WriteFile(cfg, []byte(fmt.Sprintf(e2eConfigYAML, dados, specs, porta)), 0o644); err != nil {
+	if err := os.WriteFile(cfg, []byte(fmt.Sprintf(configYAML, dados, specs, porta)), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -915,4 +950,78 @@ func TestKill9DuranteACompactionNoProdutoPreservaTodasAsRows(t *testing.T) {
 	}
 	t.Logf("recovery: sequences de %d a %d (banda de %d rodada(s)), todas acima do piso da última leitura remota",
 		menor, maior, maior-menor)
+}
+
+// TestCompactManualPeloCLIReduzDiscoNumaBancadaPequena é o compact MANUAL do
+// §96 (Fase 11, Task B5) pelo BINÁRIO — a mesma exigência de "pelo produto,
+// não à mão" que TestCompactionPeloBinarioEstabilizaODiscoComOOperadorVendo
+// já cobra para o laço automático, agora para a rota que o operador aciona
+// com o laço DESLIGADO (e2eConfigManualYAML: storage.compaction.enabled:
+// false).
+//
+// A bancada é PEQUENA de propósito, ao contrário da irmã de 60 rodadas: aqui
+// não há laço para esperar acordar e vigiar por dezenas de segundos — é um
+// POST síncrono, e poucas rodadas sobre o key set fixo já bastam para o
+// disco crescer bem além do que fica vivo (o mesmo argumento do §86: a
+// rodada seguinte torna garbage a anterior inteira).
+func TestCompactManualPeloCLIReduzDiscoNumaBancadaPequena(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compila o binário e sobe um broker")
+	}
+	b := novaBancadaE2EComConfig(t, e2eConfigManualYAML)
+	b.sobe()
+
+	const rodadas = 12
+	for r := 1; r <= rodadas; r++ {
+		alvo := b.produzRodada()
+		b.esperaIngestaoAlcancar(alvo, 30*time.Second)
+	}
+	// O checkpoint automático (500ms) precisa ter rodado ao menos uma vez
+	// DEPOIS da última rodada para que segSize — o que a eleição do §53
+	// divide — reflita os segmentos recém-selados.
+	time.Sleep(600 * time.Millisecond)
+
+	antes := b.discoDosSegmentos()
+	if antes == 0 {
+		t.Fatal("disco em segment-*.dat é zero antes do compact: o teste não teria o que reduzir")
+	}
+
+	var saida, erro bytes.Buffer
+	code := cli.Run([]string{"compact", "--server", b.endereco()},
+		cli.Ambiente{Stdin: strings.NewReader(""), Stdout: &saida, Stderr: &erro, Ctx: context.Background()})
+	if code != 0 {
+		t.Fatalf("compact saiu %d: %s", code, erro.String())
+	}
+	depois := b.discoDosSegmentos()
+	t.Logf("disco em segment-*.dat: %d antes, %d depois do compact manual", antes, depois)
+	t.Logf("saída do comando:\n%s", saida.String())
+	if depois >= antes {
+		t.Errorf("compact não reduziu o disco: antes=%d depois=%d", antes, depois)
+	}
+	if !strings.Contains(saida.String(), e2eDataset) {
+		t.Errorf("a saída do comando não nomeia o dataset:\n%s", saida.String())
+	}
+	b.exigeSemAposentadoEmDisco("após o compact manual")
+
+	// E o dataset segue íntegro: SIGTERM, e nenhuma row perdida na
+	// reabertura — o mesmo oráculo da Task 6/7 aplicado ao caminho manual.
+	if err := b.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatalf("SIGTERM: %v", err)
+	}
+	esperado := make(chan error, 1)
+	go func() { esperado <- b.cmd.Wait() }()
+	select {
+	case err := <-esperado:
+		b.morto = true
+		if err != nil {
+			t.Fatalf("o servidor saiu com erro após o SIGTERM: %v\n%s", err, b.saida.String())
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("o servidor não encerrou em 30s após o SIGTERM")
+	}
+	reaberto := b.consultaLocal()
+	if len(reaberto) != e2eKeys {
+		t.Fatalf("após a reabertura o dataset devolveu %d rows, queria %d", len(reaberto), e2eKeys)
+	}
+	b.exigeSemAposentadoEmDisco("após a reabertura")
 }
