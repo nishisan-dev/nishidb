@@ -1250,12 +1250,13 @@ func valueEqual(a, b types.Value) bool {
 	if a.Type != b.Type {
 		return false
 	}
-	switch a.Type {
-	case types.TypeInt64, types.TypeDouble, types.TypeBool, types.TypeTimestamp:
+	// CarregaI64 e não um switch local: tipo de largura fixa esquecido no
+	// ramo de bytes compara nil com nil e devolve true para valores
+	// diferentes, e o diff conclui em silêncio que o campo não mudou.
+	if a.Type.CarregaI64() {
 		return a.I64 == b.I64
-	default:
-		return bytes.Equal(a.Bytes, b.Bytes)
 	}
+	return bytes.Equal(a.Bytes, b.Bytes)
 }
 
 // applyBitmapSets liga as postings novas (campo que entra ou muda) — roda

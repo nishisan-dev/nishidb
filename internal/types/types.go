@@ -94,7 +94,20 @@ const (
 	TypeString     FieldType = 0x09 // varlen, UTF-8
 	TypeBytes      FieldType = 0x0A // varlen
 	TypeJSON       FieldType = 0x0B // varlen, JSON UTF-8 cru
+	// TypeDateTime é data+hora SEM fuso na origem, resolvida para instante
+	// pelo fuso do host (time.Local) na ingestão. Fisicamente idêntico a
+	// TypeTimestamp; a tag é distinta para que o nome declarado no YAML
+	// chegue ao /v1/metadata e ao JDBC sem um sistema de tipos sombra.
+	TypeDateTime FieldType = 0x0C // 8 bytes LE, epoch millis UTC
+	// TypeTime é hora do dia, e NÃO é um instante: não tem data, não tem
+	// fuso e não compara com timestamp. Tag própria porque reusar a de
+	// timestamp faria a query casar sem erro e a saída emitir uma data de
+	// 1970 plausível para um valor que nunca foi uma data.
+	TypeTime FieldType = 0x0D // 8 bytes LE, millis desde a meia-noite
 )
+
+// MillisPorDia é o teto exclusivo de TypeTime.
+const MillisPorDia int64 = 86_400_000
 
 // fieldTypeNames mapeia a tag para o nome do tipo no vocabulário do YAML.
 var fieldTypeNames = [...]string{
@@ -110,6 +123,8 @@ var fieldTypeNames = [...]string{
 	TypeString:     "string",
 	TypeBytes:      "bytes",
 	TypeJSON:       "json",
+	TypeDateTime:   "datetime",
+	TypeTime:       "time",
 }
 
 // String devolve o nome do tipo como o operador o escreveu no YAML. Sem
@@ -120,6 +135,22 @@ func (t FieldType) String() string {
 		return fieldTypeNames[t]
 	}
 	return "FieldType(0x" + strconv.FormatUint(uint64(t), 16) + ")"
+}
+
+// CarregaI64 diz se o valor do tipo mora em Value.I64 (largura fixa) em vez
+// de Value.Bytes. É a fonte ÚNICA dessa distinção.
+//
+// Existe porque quem a enumerava à mão a escrevia como um switch com
+// `default:` caindo no ramo dos bytes — e uma tag nova de largura fixa
+// esquecida ali não erra alto: os dois lados têm Bytes nil, bytes.Equal
+// devolve true para valores DIFERENTES, e o diff conclui que o campo não
+// mudou. Sem erro, sem log, sem métrica. Acrescentar tag agora é mexer aqui.
+func (t FieldType) CarregaI64() bool {
+	switch t {
+	case TypeInt64, TypeDouble, TypeBool, TypeTimestamp, TypeDateTime, TypeTime:
+		return true
+	}
+	return false
 }
 
 // FieldID identifica um campo no field dictionary do dataset (spec §32).

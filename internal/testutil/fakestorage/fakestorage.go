@@ -132,10 +132,13 @@ func New(idx Indexes) *Store {
 func valKey(v types.Value) string {
 	var scratch [40]byte // cobre ipv6_prefix (17B) e a maioria das strings
 	b := append(scratch[:0], byte(v.Type))
-	switch v.Type {
-	case types.TypeInt64, types.TypeDouble, types.TypeBool, types.TypeTimestamp:
+	// CarregaI64 e não um switch local: um tipo de largura fixa esquecido no
+	// ramo de bytes faria TODOS os seus valores colapsarem na chave [tag] no
+	// dublê — teste verde aqui e explosão na integração, que é exatamente a
+	// divergência que este dublê existe para expor.
+	if v.Type.CarregaI64() {
 		b = binary.LittleEndian.AppendUint64(b, uint64(v.I64))
-	default:
+	} else {
 		b = append(b, v.Bytes...)
 	}
 	return string(b)

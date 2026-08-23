@@ -27,7 +27,8 @@ const (
 // variáveis ou invalidWidth para tags que nunca aparecem em payload.
 func fieldWidth(t types.FieldType) int {
 	switch t {
-	case types.TypeInt64, types.TypeDouble, types.TypeTimestamp:
+	case types.TypeInt64, types.TypeDouble, types.TypeTimestamp,
+		types.TypeDateTime, types.TypeTime:
 		return 8
 	case types.TypeBool:
 		return 1
