@@ -123,6 +123,21 @@ type Servidor struct {
 	// de update e cron locais funcionando sem credencial mesmo com
 	// server.authentication ligado no listener exposto.
 	loopbackSrv *http.Server
+
+	// vidaCtx é o MESMO ctx que Roda recebe — o que signal.NotifyContext
+	// cancela no SIGTERM (cmd/nishidb/main.go). handleCompact (mutacoes.go)
+	// o compõe com r.Context() via ctxDeMutacao, porque http.Server.Shutdown
+	// NÃO cancela o contexto de uma requisição em voo — só espera o handler
+	// devolver, e por um tempo limitado (o ctx de 15s de encerra()). Sem
+	// esta composição, uma passada manual de compaction (POST /v1/compact)
+	// em voo no encerramento ignora o SIGTERM e só para quando processa
+	// todos os candidatos ou o cliente desiste — e o compEmVoo.Wait() do
+	// Close (storage/compaction.go, ParaCompaction) fica sem teto esperando
+	// por ela, minutos em produção, até o systemd desistir e mandar SIGKILL.
+	// Nil só em testes que constroem o handler sem passar por Roda —
+	// ctxDeMutacao cai para o contrato antigo (só o cliente decide) nesse
+	// caso, o que preserva o comportamento anterior a esta composição.
+	vidaCtx context.Context
 }
 
 // Opcoes configura a subida.
@@ -333,6 +348,12 @@ func fechandoStore(st *storage.Store, causa error) error {
 // Roda sobe o HTTP e os consumers, nessa ordem (§51), e bloqueia até o
 // contexto acabar.
 func (s *Servidor) Roda(ctx context.Context, pprofAddr string) error {
+	// Escrito ANTES de sobeHTTP() subir a goroutine que serve requisições:
+	// a criação da goroutine (o `go` dentro de sobeHTTP) é um ponto de
+	// sincronização do memory model, então todo handler que rodar depois
+	// enxerga este campo sem precisar de lock — o mesmo raciocínio que já
+	// vale para s.credenciais e s.tlsCert, escritos antes do bind.
+	s.vidaCtx = ctx
 	if err := s.sobeHTTP(); err != nil {
 		return err
 	}
@@ -507,6 +528,37 @@ func (s *Servidor) sobeHTTP() error {
 		}
 	}()
 	return nil
+}
+
+// ctxDeMutacao devolve um ctx cancelado por QUALQUER um dos dois: o cliente
+// HTTP desistindo (r.Context()) OU o servidor encerrando (vidaCtx, o
+// cancelado no SIGTERM — godoc do campo). É o que handleCompact (mutacoes.go)
+// usa para chamar Store.CompactaUmaVez, cuja passada pode levar minutos.
+//
+// A composição existe porque http.Server.Shutdown não cancela r.Context() —
+// só espera o handler devolver, com um teto (o ctx de 15s de encerra()) que
+// estoura e devolve o controle ANTES de o handler ter de fato terminado. Sem
+// vidaCtx no meio, uma passada manual em voo no encerramento nunca saberia
+// que o processo está de saída, e o compEmVoo.Wait() do Close (ParaCompaction,
+// storage/compaction.go) ficaria esperando por ela sem teto nenhum.
+//
+// context.AfterFunc, não um select bloqueante numa goroutine à parte: o stop
+// que ele devolve é o que permite liberar o registro em vidaCtx assim que a
+// chamada acaba (via o cancel devolvido aqui), em vez de vazar uma goroutine
+// por requisição até o processo inteiro sair.
+func (s *Servidor) ctxDeMutacao(r *http.Request) (context.Context, context.CancelFunc) {
+	base := r.Context()
+	if s.vidaCtx == nil {
+		// Só em teste que chama o handler sem passar por Roda: sem vidaCtx
+		// para compor, o contrato cai para o de sempre — só o cliente decide.
+		return base, func() {}
+	}
+	ctx, cancela := context.WithCancel(base)
+	para := context.AfterFunc(s.vidaCtx, cancela)
+	return ctx, func() {
+		para()
+		cancela()
+	}
 }
 
 // Fecha libera o listener e os datasets sem ter rodado.
