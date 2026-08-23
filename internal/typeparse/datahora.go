@@ -24,6 +24,7 @@ import (
 // binder, e é isso que impede as duas coerções de divergirem (risco R3).
 type Dominio uint8
 
+// Os domínios de formato suportados.
 const (
 	DominioDateTime Dominio = iota + 1 // data + hora, resolvida para instante
 	DominioTime                        // hora do dia, sem data e sem fuso
@@ -56,9 +57,9 @@ func (k tokKind) consomeDigitos() bool {
 }
 
 type tok struct {
-	kind     tokKind
-	min, max uint8  // dígitos aceitos, para os tokens numéricos
-	off, n   uint16 // janela em Layout.lits, para tokLiteral
+	kind           tokKind
+	minDig, maxDig uint8  // dígitos aceitos, para os tokens numéricos
+	off, n         uint16 // janela em Layout.lits, para tokLiteral
 }
 
 // Layout é um padrão compilado. Construído UMA vez, no load da spec; o parse
@@ -146,7 +147,7 @@ func CompilaLayout(padrao string, d Dominio) (*Layout, error) {
 				j++
 			}
 			run := padrao[i:j]
-			k, min, max, ok := tokenDaRun(run)
+			k, minDig, maxDig, ok := tokenDaRun(run)
 			if !ok {
 				return nil, fmt.Errorf("format %q: token %q não é suportado (tokens: %s); "+
 					"texto fixo com letras precisa de aspas simples, como 'T'",
@@ -155,7 +156,7 @@ func CompilaLayout(padrao string, d Dominio) (*Layout, error) {
 			if err := marca(k); err != nil {
 				return nil, err
 			}
-			l.toks = append(l.toks, tok{kind: k, min: min, max: max})
+			l.toks = append(l.toks, tok{kind: k, minDig: minDig, maxDig: maxDig})
 			i = j
 
 		default:
@@ -206,7 +207,7 @@ func leEscapado(padrao string, i int) (int, string, error) {
 	return i + 1 + fim + 1, padrao[i+1 : i+1+fim], nil
 }
 
-func tokenDaRun(run string) (k tokKind, min, max uint8, ok bool) {
+func tokenDaRun(run string) (k tokKind, minDig, maxDig uint8, ok bool) {
 	switch run {
 	case "yyyy":
 		return tokAno, 4, 4, true
@@ -268,7 +269,7 @@ func nomeDoToken(k tokKind) string {
 func (l *Layout) validaAmbiguidade() error {
 	for i := 0; i+1 < len(l.toks); i++ {
 		a, b := l.toks[i], l.toks[i+1]
-		if a.kind.consomeDigitos() && a.max > a.min && b.kind.consomeDigitos() {
+		if a.kind.consomeDigitos() && a.maxDig > a.minDig && b.kind.consomeDigitos() {
 			return fmt.Errorf("format %q: %q de largura variável colado em %q é ambíguo; "+
 				"separe com texto fixo ou use a forma de largura fixa",
 				l.padrao, nomeDoToken(a.kind), nomeDoToken(b.kind))
@@ -389,7 +390,7 @@ func (l *Layout) interpreta(raw []byte) (campos, error) {
 			pos += 2
 
 		default:
-			v, n, err := leDigitos(raw[pos:], int(tk.min), int(tk.max))
+			v, n, err := leDigitos(raw[pos:], int(tk.minDig), int(tk.maxDig))
 			if err != nil {
 				return c, err
 			}
@@ -422,12 +423,12 @@ func (l *Layout) interpreta(raw []byte) (campos, error) {
 }
 
 // leDigitos lê entre min e max dígitos decimais, o máximo que houver.
-func leDigitos(b []byte, min, max int) (v, n int, err error) {
-	for n < max && n < len(b) && b[n] >= '0' && b[n] <= '9' {
+func leDigitos(b []byte, minDig, maxDig int) (v, n int, err error) {
+	for n < maxDig && n < len(b) && b[n] >= '0' && b[n] <= '9' {
 		v = v*10 + int(b[n]-'0')
 		n++
 	}
-	if n < min {
+	if n < minDig {
 		if n == len(b) {
 			return 0, 0, errDtCurto
 		}

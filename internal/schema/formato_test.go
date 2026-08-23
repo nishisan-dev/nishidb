@@ -14,6 +14,8 @@ func yamlComCampo(decl string) string {
 		"    alvo:\n" + decl
 }
 
+// parseFalha exige que a spec seja recusada com uma mensagem que contenha o
+// trecho. Devolve o erro para quem quiser conferir mais da mensagem.
 func parseFalha(t *testing.T, yaml, trecho string) error {
 	t.Helper()
 	_, err := Parse([]byte(yaml), DefaultsPadrao)
@@ -24,6 +26,12 @@ func parseFalha(t *testing.T, yaml, trecho string) error {
 		t.Fatalf("mensagem %q não contém %q", err, trecho)
 	}
 	return err
+}
+
+// exigeRecusa é a forma sem retorno, para os casos que só precisam do fato.
+func exigeRecusa(t *testing.T, yaml, trecho string) {
+	t.Helper()
+	_ = parseFalha(t, yaml, trecho)
 }
 
 // Sem default de format: um format esquecido escolheria um padrão que recusa
@@ -48,7 +56,7 @@ func TestFormatInvalidoEhRecusadoNoLoad(t *testing.T) {
 		"datetime incompleto": "      type: datetime\n      format: \"yyyy-MM-dd\"\n",
 	}
 	for nome, decl := range casos {
-		t.Run(nome, func(t *testing.T) { parseFalha(t, yamlComCampo(decl), "alvo") })
+		t.Run(nome, func(t *testing.T) { exigeRecusa(t, yamlComCampo(decl), "alvo") })
 	}
 }
 
@@ -58,7 +66,7 @@ func TestFormatInvalidoEhRecusadoNoLoad(t *testing.T) {
 func TestFormatEmTipoQueNaoOUsaEhRecusado(t *testing.T) {
 	for _, tipo := range []string{"string", "timestamp", "int64", "auto"} {
 		decl := "      type: " + tipo + "\n      format: \"yyyy-MM-dd HH:mm\"\n"
-		parseFalha(t, yamlComCampo(decl), "format só se aplica")
+		exigeRecusa(t, yamlComCampo(decl), "format só se aplica")
 	}
 }
 
@@ -66,7 +74,7 @@ func TestDatetimeETimeNaoSaoIndexaveis(t *testing.T) {
 	for _, tipo := range []string{"datetime", "time"} {
 		for _, idx := range []string{"bitmap", "hash"} {
 			decl := "      type: " + tipo + "\n      format: \"" + formatDe(tipo) + "\"\n      index: " + idx + "\n"
-			parseFalha(t, yamlComCampo(decl), "não suporta índice "+idx)
+			exigeRecusa(t, yamlComCampo(decl), "não suporta índice "+idx)
 		}
 	}
 }
