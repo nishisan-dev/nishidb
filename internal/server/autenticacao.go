@@ -123,10 +123,14 @@ func (rt *roteador) papelDaRota(r *http.Request) (papel, padrao string, existe b
 // reutilizável pelos DOIS listeners (exposto, com comAutenticacao; loopback,
 // com muxLoopback).
 //
-// As sete rotas são registradas SEM método no padrão, e o handler confere o
-// método por dentro — a mesma razão de sempre: toda recusa do protocolo tem o
-// MESMO corpo JSON, e o 405 que o mux geraria sozinho tem corpo em texto
-// puro.
+// CINCO das sete rotas (/v1/query, /v1/metadata, /v1/stats, /v1/compact,
+// /v1/checkpoint) são registradas SEM método no padrão, e o handler confere
+// o método por dentro — a mesma razão de sempre: toda recusa do protocolo
+// tem o MESMO corpo JSON, e o 405 que o mux geraria sozinho tem corpo em
+// texto puro. /metrics e /v1/health são a EXCEÇÃO, herdada de antes da Fase
+// 11: o padrão já levava o prefixo "GET " (Go 1.22), e um método errado
+// nelas sai com o 405 de texto puro do próprio mux, fora do contrato
+// CorpoErro — nenhuma das duas tem handler que confira método por dentro.
 func (s *Servidor) montaMux() *roteador {
 	rt := novoRoteador()
 	rt.registra("GET /metrics", config.RoleRead, s.handleMetrics)

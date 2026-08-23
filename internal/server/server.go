@@ -480,8 +480,10 @@ const checkpointEventosPadrao = 500_000
 // §77: montaMux constrói o mux CRU (sem autenticação nenhuma), e
 // comAutenticacao é o wrapper único em torno dele (autenticacao.go). O
 // listener loopback (sobeLoopback, em http.go — decisão 4 do plano do ciclo)
-// serve o MESMO mux via rt.Cru(), sem este wrapper: dois caminhos de acesso à
-// mesma definição de rota, nunca o *http.ServeMux cru exposto direto.
+// serve o MESMO mux via muxLoopback(rt), não rt.Cru() puro: o wrapper é
+// DIFERENTE (rota READ passa direto, rota ADMIN responde 403 —
+// recusaLoopbackAdmin), mas nasce da MESMA função de definição de rota,
+// nunca o *http.ServeMux cru exposto direto nem uma segunda lista de rotas.
 func (s *Servidor) sobeHTTP() error {
 	rt := s.montaMux()
 
