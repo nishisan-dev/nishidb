@@ -46,6 +46,19 @@ import (
 // ingestão aplicar o corpus de garbage é que existe candidato para alguém
 // achar — e o laço só vai olhar de novo daqui a 5 segundos, folga
 // enorme para um POST /v1/compact.
+//
+// # Retry curto (B7)
+//
+// A folga de 5s é grande, mas não infinita: sob pressão de CPU real (suíte
+// inteira em paralelo, `-race`, CI compartilhado) o tempo entre
+// esperaIngestaoAplicarPeloMenos retornar e o POST chegar ao servidor pode
+// esticar o bastante para flakear uma tentativa seca. O POST ganhou o mesmo
+// retry curto e sem sleep dos vizinhos de "config default"
+// (TestCompactComAdminNaConfigDefaultFuncionaSemPassadaEmVoo, aqui perto, e
+// TestCompactRemotoNaConfigDefaultEventualmenteSai0, internal/cli): a
+// determinística continua sendo a estrutura (ordem fixa de Roda(), não
+// sorte), o retry só absorve o jitter de agendador que a estrutura sozinha
+// não cobre.
 func TestCompactComAdminNaConfigDefaultELacoOciosoFazTrabalhoReal(t *testing.T) {
 	const topico = "b5-compact-default-kafka"
 	cluster, err := kfake.NewCluster(
@@ -94,11 +107,30 @@ func TestCompactComAdminNaConfigDefaultELacoOciosoFazTrabalhoReal(t *testing.T) 
 
 	esperaIngestaoAplicarPeloMenos(t, srv, "d", keys*rodadas, 30*time.Second)
 
-	resp := postComAuth(t, srv, "/v1/compact", "", "", "")
+	// Retry curto, sem sleep entre tentativas — o mesmo padrão de
+	// TestCompactComAdminNaConfigDefaultFuncionaSemPassadaEmVoo
+	// (mutacoes_test.go) e de TestCompactRemotoNaConfigDefaultEventualmenteSai0
+	// (internal/cli). A folga estrutural (o laço automático só volta a olhar
+	// candidatos daqui a intervaloEntrePassadas, 5s) já torna uma tentativa
+	// seca correta na prática, mas sob pressão de CPU real (suíte inteira em
+	// paralelo, `-race`, CI compartilhado) a viagem de rede desta chamada
+	// pode esbarrar num 409 se o agendador atrasar o teste o bastante para o
+	// laço acordar antes do POST chegar. Se a rota estivesse morta de
+	// verdade (o Critical que a revisão da B5 achou), NENHUMA das tentativas
+	// teria sucesso, e o teste falha alto no teto em vez de travar.
+	const tentativas = 200
+	var resp *http.Response
+	for i := 0; i < tentativas; i++ {
+		resp = postComAuth(t, srv, "/v1/compact", "", "", "")
+		if resp.StatusCode == http.StatusOK {
+			break
+		}
+		fecha(t, resp)
+	}
 	if resp.StatusCode != http.StatusOK {
 		defer fecha(t, resp)
-		t.Fatalf("compact: status = %d, quer 200 (o laço automático só volta a olhar daqui a 5s — folga de "+
-			"sobra para este POST único)", resp.StatusCode)
+		t.Fatalf("compact: status = %d após %d tentativas imediatas, quer 200 (o laço automático só volta a olhar "+
+			"daqui a 5s — folga de sobra para este POST)", resp.StatusCode, tentativas)
 	}
 	var out protocolo.RespostaCompact
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {

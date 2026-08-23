@@ -412,6 +412,24 @@ func TestBindEmLoopbackNaoAvisa(t *testing.T) {
 	}
 }
 
+// TestBindEmLoopbackSemNadaDeSegurancaDeclaradoNaoLogaNada é a paridade do
+// piloto por SILÊNCIO TOTAL, não só pela ausência da substring "bind.exposto"
+// que TestBindEmLoopbackNaoAvisa já trava. A config do piloto de hoje (bind
+// loopback, nenhum bloco tls/authentication/loopback no YAML) não pode ganhar
+// NENHUM aviso novo na subida por causa desta fase — nem um WARN de uma
+// checagem futura que alguém esqueça de gatear por bind exposto ou por
+// authentication ligada. A asserção é sobre o BUFFER inteiro (deve ficar
+// vazio), não sobre uma lista de substrings que a próxima linha de log
+// nova esqueceria de atualizar.
+func TestBindEmLoopbackSemNadaDeSegurancaDeclaradoNaoLogaNada(t *testing.T) {
+	a := novoAmbienteCom(t, "\nserver:\n  bind: 127.0.0.1\n  port: %d\n")
+	a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))
+
+	if saida := sobeCapturandoLog(t, a); saida != "" {
+		t.Fatalf("subida do piloto (loopback, sem segurança declarada) logou algo: %s", saida)
+	}
+}
+
 // Chave de runtime aceita e não implementada é nomeada na subida (débito 15).
 func TestChaveDeRuntimeIgnoradaApareceNaSubida(t *testing.T) {
 	a := novoAmbienteCom(t, "\nserver:\n  bind: 127.0.0.1\n  port: %d\nruntime:\n  memoryTarget: 1GiB\n")

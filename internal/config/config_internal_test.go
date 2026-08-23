@@ -527,6 +527,63 @@ func TestLoopbackNaMesmaPortaDoServerPrincipalEhRecusado(t *testing.T) {
 	}
 }
 
+// TestLoopbackNaMesmaPortaDoDefaultImplicitoEhRecusado é a mesma recusa 8,
+// mas com `server.port` OMITIDO: a colisão precisa ser detectada contra o
+// default implícito (9142, serverPortPadrao) tanto quanto contra um `port:`
+// explícito — um operador que confiasse no default e não repetisse a porta
+// no YAML não pode escapar da checagem só por isso.
+func TestLoopbackNaMesmaPortaDoDefaultImplicitoEhRecusado(t *testing.T) {
+	corpo := "server:\n  loopback:\n    enabled: true\n    port: 9142\n"
+	_, err := CarregaConfig(escreveConfig(t, corpo))
+	if err == nil {
+		t.Fatal("server.loopback.port igual ao default implícito de server.port (9142) foi aceito")
+	}
+	if !strings.Contains(err.Error(), "server.loopback.port") || !strings.Contains(err.Error(), "server.port") {
+		t.Errorf("erro = %v, quer nomear as duas chaves mesmo com server.port omitido", err)
+	}
+}
+
+// TestPasswordEnvVazioExplicitoTemOMesmoTratamentoDeAusente blinda o
+// comportamento atual contra uma migração futura de PasswordEnv para
+// ponteiro (*string): hoje `passwordEnv: ""` decodifica para a MESMA string
+// vazia que o campo ausente produziria, e as duas devem continuar caindo na
+// mesma recusa ("nenhuma fonte declarada") com a MESMA mensagem — nunca
+// serem tratadas como "fonte declarada, porém vazia".
+func TestPasswordEnvVazioExplicitoTemOMesmoTratamentoDeAusente(t *testing.T) {
+	corpo := "server:\n  authentication:\n    enabled: true\n    users:\n" +
+		"      - username: grafana\n        passwordEnv: \"\"\n        role: READ\n"
+	_, err := CarregaConfig(escreveConfig(t, corpo))
+	if err == nil {
+		t.Fatal("passwordEnv vazio explícito foi aceito")
+	}
+	if !strings.Contains(err.Error(), "nenhum declarado") {
+		t.Errorf("erro = %v, quer a MESMA mensagem do caso ausente (\"nenhum declarado\")", err)
+	}
+}
+
+// TestRoleEhCaseSensitive trava a escolha atual: o enum fechado {READ,
+// ADMIN} não normaliza case. Não é limitação a corrigir — ver o comentário
+// no switch de validaUsuarios — mas uma variação de case aceita em silêncio
+// autorizaria um papel que o middleware da B3 nunca reconheceria como válido
+// (ele compara a string exata), então a recusa nomeando o valor recebido
+// importa tanto quanto a recusa de um valor fora do enum.
+func TestRoleEhCaseSensitive(t *testing.T) {
+	casos := []string{"read", "Read", "admin", "Admin"}
+	for _, valor := range casos {
+		t.Run(valor, func(t *testing.T) {
+			corpo := "server:\n  authentication:\n    enabled: true\n    users:\n" +
+				"      - username: grafana\n        passwordEnv: A\n        role: " + valor + "\n"
+			_, err := CarregaConfig(escreveConfig(t, corpo))
+			if err == nil {
+				t.Fatalf("role %q (case diferente do enum) foi aceito", valor)
+			}
+			if !strings.Contains(err.Error(), "role") || !strings.Contains(err.Error(), valor) {
+				t.Errorf("erro = %v, quer nomear role e o valor recebido %q", err, valor)
+			}
+		})
+	}
+}
+
 // TestServerSemBlocosDeSegurancaContinuaValido é o teste de COMPATIBILIDADE:
 // o YAML de hoje — inclusive o do piloto, que não conhece tls/authentication/
 // loopback — precisa continuar carregando exatamente como antes desta tarefa.

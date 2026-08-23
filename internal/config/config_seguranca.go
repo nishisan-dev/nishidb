@@ -195,6 +195,13 @@ func validaUsuarios(users []UserSpec, usersNode *yaml.Node, path string) error {
 				path, caminho)
 		}
 
+		// Comparação de string exata, de propósito: o enum é fechado e
+		// CASE-SENSITIVE — "read"/"Read" não casam com RoleRead ("READ"). Uma
+		// normalização de case pareceria conveniência, mas o middleware da B3
+		// compara o papel resolvido contra RoleRead/RoleAdmin com == simples;
+		// aceitar variação aqui só empurraria a mesma pergunta para lá, sem
+		// necessidade — melhor recusar cedo, no parse, nomeando o valor
+		// exato que o operador escreveu.
 		switch u.Role {
 		case RoleRead, RoleAdmin:
 		case "":
