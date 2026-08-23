@@ -691,12 +691,91 @@ onde pode ser usado. Sem esta tabela, escrever um YAML novo é tentativa e erro.
 | `ipv6_prefix` | string `addr/len`, mesmas regras do `ipv4_prefix`; prefixo v4 é recusado, e prefixo v6 é recusado no `ipv4_prefix` | não | não |
 | `bytes` | string **base64** (`StdEncoding`: alfabeto padrão, com padding). base64url é recusado | não | não |
 | `json` | **só object ou array** (guardado cru, exatamente como veio); escalar — string, número, `true`/`false` — é **recusado** | não | não |
+| `datetime` | string no **`format:` declarado** (obrigatório), **sem fuso** — o instante é resolvido pelo fuso do **host**; **número = epoch millis**, como no `timestamp` | não | não |
+| `time` | string no **`format:` declarado** (obrigatório): hora do dia, sem data e sem fuso; **número = millis desde a meia-noite**, e fora de `[0, 86400000)` é recusado | não | não |
 | `auto` | qualquer entrada, mas o tipo inferido sai de um conjunto **restrito**: string→`string`, número inteiro→`int64`, número com fração ou expoente→`double`, `true`/`false`→`boolean`, object/array→`json`, `$numberLong`→`int64`, `$date`→`timestamp`. **Nunca** infere `ipv4`, `ipv6`, prefixo ou `bytes` — uma string com cara de IP vira `string`. O tipo é **fixado na primeira observação** e persistido | não | não |
 
 Restrições da v1: a **key** (`materialization.key.type`) só pode ser `string`, e
 a **sequence** (`materialization.sequence.type`) só pode ser `int64`. Campo
 `auto` não é indexável — o tipo só existe depois do primeiro evento. Alias é
 opcional e precisa casar `[a-z0-9_]+`.
+
+### `datetime` e `time`: o `format:` é declarado, e o fuso vem do host
+
+`timestamp` cobre origem que manda RFC3339 com offset. `datetime` e `time`
+existem para a origem que manda **wall-clock sem fuso** — o caso do piloto
+`events`, cujo `firstSeen`/`lastSeen` chega como `Aug 22, 2026 08:54:02 PM`.
+
+O `format:` é **obrigatório** nos dois e usa um vocabulário **fechado** de
+tokens, validado no load:
+
+| Token | Significado | | Token | Significado |
+|---|---|---|---|---|
+| `yyyy` | ano, 4 dígitos | | `hh` / `h` | hora 12h, 2 / 1-2 dígitos |
+| `MM` / `M` | mês numérico, 2 / 1-2 dígitos | | `mm` | minuto |
+| `MMM` | mês abreviado en_US (`Jan`..`Dec`) | | `ss` | segundo |
+| `dd` / `d` | dia, 2 / 1-2 dígitos | | `SSS` | milissegundos |
+| `HH` / `H` | hora 24h, 2 / 1-2 dígitos | | `a` | `AM`/`PM` |
+
+Texto fixo com letras precisa de aspas simples (`yyyy-MM-dd'T'HH:mm:ss`), como
+no CLDR: letra nua é recusada para que um token digitado errado não vire texto
+fixo em silêncio. O piloto declara `format: "MMM d, yyyy hh:mm:ss a"`.
+
+```yaml
+    firstSeen:
+      type: datetime
+      format: "MMM d, yyyy hh:mm:ss a"
+```
+
+**A forma de largura fixa é estrita, a variável não.** `dd` exige dois dígitos;
+`d` aceita um ou dois. Como o padrão CLDR do produtor pode não ser
+zero-padded, declarar as formas variáveis (`d`, `h`) é a escolha tolerante — e
+é a recomendada quando a grafia da origem foi vista numa amostra só, porque um
+texto que o `format:` não aceita é erro de conversão, que sob `log-and-skip`
+descarta o evento inteiro.
+
+**O fuso vem do host.** Um wall-clock sem offset não tem instante até alguém
+escolher um fuso, e a escolha é o `time.Local` do processo, honrando a env
+`TZ`. Vale igual para a ingestão e para o literal SQL, e é isso que os mantém
+concordando sobre o mesmo texto. A consequência a conhecer: **o mesmo evento
+reingerido num host com outro `TZ` produz outro instante**, sem erro e sem
+log. Quem precisa de instante independente de ambiente pede offset à origem e
+declara o campo como `timestamp`.
+
+**Horário de verão.** Hora ambígua (a que acontece duas vezes, no recuo do
+relógio) fica na primeira ocorrência; hora inexistente (a pulada, no
+adiantamento) normaliza para frente. Recusar as duas transformaria uma hora
+por ano de saída legítima em descarte silencioso; o que importa é que
+ingestão e query cheguem ao **mesmo** número para o mesmo texto
+(`TestHoraAmbiguaDeDSTEhResolvidaDeFormaDeterministica`). A validade da
+**data** é conferida em UTC justamente para não recusar data válida em zona
+cuja virada desloca a meia-noite
+(`TestDataValidaNaViradaDeDSTNaoEhRecusada`).
+
+**O literal SQL usa o mesmo `format:` do campo, não RFC3339.** A propriedade
+que vale é *o texto que o produtor mandou, escrito como literal, acha a row*
+(`TestIngestaoEQueryConcordamPorTipo`). Uma grafia diferente é **erro de
+bind**, nunca resultado vazio — vazio pareceria resposta
+(`TestLiteralNoFormatoErradoNaoAchaEmSilencio`). Quem quer grafia independente
+de formato escreve o número: epoch millis em `datetime`, millis do dia em
+`time`.
+
+```sql
+SELECT identifier, lastSeen FROM events
+ WHERE lastSeen >= 'Aug 22, 2026 08:00:00 PM' LIMIT 20
+```
+
+**`datetime` não faz round-trip textual.** Entra `Aug 22, 2026 08:54:02 PM` e
+sai `"2026-08-22T23:54:02.000Z"` (com `TZ=America/Sao_Paulo`): o texto de
+relógio de parede foi consumido para resolver o instante e não é preservado.
+Renderizar em horário local faria o mesmo dataset servido de dois hosts
+produzir bytes diferentes. `time` sai como `"20:54:02.000"`, **sem `Z`** —
+não há instante, e anunciar fuso o faria parecer um timestamp de 1970.
+
+**Nenhum dos dois é indexável, e nenhum é inferido por `auto`.** O bitmap é
+denso: um campo `time` com resolução de segundo tem 86.400 valores distintos.
+E `auto` não tem `format:` declarado, então uma string com cara de data
+continua `string` — a mesma regra que já vale para IP.
 
 **Por que `int64` e `double` aceitam string.** É ajuste pós-amostra, não
 leniência: a fonte real manda `Connect-Info` como `"1000000000"`. A coerção é
