@@ -469,6 +469,19 @@ silêncio e o servidor subiria exposto e sem senha nenhuma, com o operador
 achando que tinha autenticação. É a mesma classe de defeito que a issue #1
 denuncia, só que na chave mais cara do arquivo.
 
+**Assimetria deliberada: autenticação desligada torna as rotas ADMIN
+anônimas também no plano PRINCIPAL, não só no loopback.** Isso vale na
+célula 3 da matriz (bind exposto, `enabled: false` explícito) e, do mesmo
+jeito, na config DEFAULT (bind loopback, `server.authentication` nem
+declarado): `AutenticacaoHabilitada()` falsa faz `comAutenticacao`
+(`internal/server/autenticacao.go`) devolver o mux CRU como passthrough
+puro, sem checar papel nenhum — `POST /v1/compact` e `POST /v1/checkpoint`
+respondem sem credencial no MESMO listener que serve `/v1/query`. É
+comportamento testado, não descuido: o caso de uso central do §96 é o
+operador que desligou o laço automático de compaction e opera na mão (modo
+manual), e a config que a maioria dos deploys usa hoje — sem
+`server.authentication` nenhuma — não pode deixar essa rota morta.
+
 **HTTP Basic sobre TLS**, não um esquema próprio — mapeia 1:1 para
 `DriverManager` do JDBC (Fase 7) e para `basic_auth` de ferramentas de
 scrape. A senha do request é hasheada (SHA-256) e comparada contra o digest
@@ -515,6 +528,16 @@ registrado é ADMIN responde 403 nele também (`muxLoopback`,
 múltiplos usuários locais: `compact`/`checkpoint` anônimos por qualquer um
 deles seria stall de ingestão sem privilégio nenhum de por meio. Rotas READ
 continuam servidas sem credencial no loopback, intocadas.
+
+Essa garantia é EXCLUSIVA do plano loopback, e não se estende ao principal:
+com autenticação desligada (célula 3/config default, seção acima), o
+principal não tem `muxLoopback` nem `recusaLoopbackAdmin` no meio —
+`comAutenticacao` é puro passthrough, e as rotas ADMIN respondem anônimas
+ali também. O loopback é fail-closed por construção porque o piloto tem
+mais de um usuário local no HOST; o principal sem autenticação segue a
+regra oposta — o operador desligou a checagem inteira, não só o TLS —, e é
+essa mesma ausência de checagem que faz `POST /v1/compact` funcionar sem
+credencial no caso de uso central do §96 (modo manual).
 
 **Resolução de segredos na subida, nunca no parse.** O YAML só declara ONDE
 a senha mora — `passwordEnv` (nome da variável) ou `passwordFile` (caminho),
