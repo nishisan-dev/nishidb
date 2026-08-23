@@ -30,11 +30,21 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/protocolo"
 )
 
-// roteador é o mux cru mais o papel exigido por rota. O campo mux fica
-// acessível dentro do pacote de propósito: é o que a B4 serve sem embrulho no
-// listener loopback (http.Serve(loopbackLn, rt.mux)), e é o mesmo *http.ServeMux
-// que comAutenticacao embrulha para o listener exposto — a MESMA definição de
-// rota, dois caminhos de acesso.
+// roteador é o mux cru mais o papel exigido por rota.
+//
+// O campo mux é privado ao pacote de propósito (revisão pós-implementação):
+// expor o *http.ServeMux em si daria a qualquer código dentro de
+// internal/server um jeito de registrar rota SEM papel (rt.mux.HandleFunc
+// direto, por fora de registra), e HandleFunc/Handle são capacidades de
+// ESCRITA que ninguém além de registra deveria ter. Quem precisa só de
+// SERVIR o mux cru — a B4, no listener loopback — usa Cru(), que devolve
+// http.Handler: a interface tem SÓ ServeHTTP, sem HandleFunc/Handle. Isso não
+// impede um bypass por quem insistir em usar o campo mux direto (Go não tem
+// privacidade por arquivo dentro do mesmo pacote) — quem impede de fato é o
+// fail-closed em comAutenticacao, que recusa qualquer rota casada sem entrada
+// em papeis. As duas defesas são complementares: Cru() torna o bypass
+// deliberado (não o caminho óbvio), e o fail-closed torna o bypass INÓCUO
+// mesmo que aconteça.
 type roteador struct {
 	mux *http.ServeMux
 	// papeis mapeia o PADRÃO do mux (o texto exato passado a
@@ -50,14 +60,23 @@ func novoRoteador() *roteador {
 	return &roteador{mux: http.NewServeMux(), papeis: make(map[string]string)}
 }
 
-// registra é COMO uma rota entra no mux com um papel mínimo — o mecanismo que
-// a B5 usa para as rotas ADMIN-only que ainda não existem: basta chamar
-// rt.registra(padrao, config.RoleAdmin, handler). O padrão aceita a mesma
-// sintaxe de http.ServeMux.HandleFunc, incluindo o prefixo de método do Go 1.22
-// ("GET /metrics").
+// registra é a ÚNICA via correta para acrescentar rota — a B5 a chama para as
+// rotas ADMIN-only que ainda não existem: basta rt.registra(padrao,
+// config.RoleAdmin, handler). O padrão aceita a mesma sintaxe de
+// http.ServeMux.HandleFunc, incluindo o prefixo de método do Go 1.22
+// ("GET /metrics"). É a única função do pacote que grava em rt.papeis, e é
+// essa gravação — não o HandleFunc em si — que faz uma rota ser reconhecida
+// pelo fail-closed de comAutenticacao.
 func (rt *roteador) registra(padrao, papel string, h http.HandlerFunc) {
 	rt.mux.HandleFunc(padrao, h)
 	rt.papeis[padrao] = papel
+}
+
+// Cru devolve o mux como http.Handler PURO — só ServeHTTP, sem acesso a
+// HandleFunc/Handle. É isto que a B4 serve, sem embrulho, no listener
+// loopback: http.Serve(loopbackLn, rt.Cru()), nunca o *http.ServeMux em si.
+func (rt *roteador) Cru() http.Handler {
+	return rt.mux
 }
 
 // montaMux constrói o mux CRU do servidor: as cinco rotas de hoje, todas
@@ -91,9 +110,18 @@ func (s *Servidor) montaMux() *roteador {
 // lido e a vaga do §80 nunca é disputada para uma requisição que falha aqui,
 // porque handleQuery — quem lê o corpo e disputa a vaga — está atrás desta
 // checagem, nunca na frente dela.
+//
+// A decisão de papel é FAIL-CLOSED (revisão pós-implementação): um padrão que
+// CASOU (padrao != "") mas não tem entrada em rt.papeis só pode significar
+// que algum código registrou rota direto em rt.mux, por fora de
+// roteador.registra — a única via que grava papel junto com o handler. Isso é
+// bug de REGISTRO, não ausência legítima de restrição, e por isso não cai em
+// "sem checagem": nomeia o defeito e recusa com 500. Padrão vazio (rota
+// desconhecida ou método não aceito) segue direto para o mux, que resolve
+// 404/405 sozinho — não há handler nenhum ali para vazar dado sem checagem.
 func (s *Servidor) comAutenticacao(rt *roteador) http.Handler {
 	if s.credenciais == nil {
-		return rt.mux
+		return rt.Cru()
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		papel, ok := s.autentica(w, r)
@@ -105,9 +133,16 @@ func (s *Servidor) comAutenticacao(rt *roteador) http.Handler {
 		// precisamos do PADRÃO que casou (ou "" para rota desconhecida ou
 		// método não aceito), para saber que papel a rota exige.
 		_, padrao := rt.mux.Handler(r)
-		if exigido, existe := rt.papeis[padrao]; existe && !papelAutorizado(papel, exigido) {
-			s.recusaAutorizacao(w, r, padrao, papel, exigido)
-			return
+		if padrao != "" {
+			exigido, existe := rt.papeis[padrao]
+			switch {
+			case !existe:
+				s.recusaRegistroSemPapel(w, r, padrao)
+				return
+			case !papelAutorizado(papel, exigido):
+				s.recusaAutorizacao(w, r, padrao, papel, exigido)
+				return
+			}
 		}
 		rt.mux.ServeHTTP(w, r)
 	})
@@ -261,6 +296,30 @@ func (s *Servidor) recusaAutorizacao(w http.ResponseWriter, r *http.Request, rot
 	}
 	s.log.Warn("auth.negada", "requisição autenticada sem papel suficiente para a rota",
 		"remoto", r.RemoteAddr, "rota", rota, "papel", papelUsuario, "exigido", papelExigido)
+}
+
+// recusaRegistroSemPapel é o fail-closed do mecanismo de papel (revisão
+// pós-implementação): uma rota CASOU no mux (padrao != "") mas não tem
+// entrada em rt.papeis. Isso só acontece se algum código dentro do pacote
+// chamou rt.mux.HandleFunc/Handle diretamente, por fora de roteador.registra
+// — a única via que grava em rt.papeis junto com o handler. Não é erro de
+// CLIENTE nem ausência legítima de restrição: é bug de REGISTRO, e por isso
+// nunca deixa passar sem checagem. 500, nomeando a rota, para aparecer alto em
+// teste e em log — nunca um papel default silencioso (ADMIN implícito
+// mascararia o bug até alguém notar em produção).
+func (s *Servidor) recusaRegistroSemPapel(w http.ResponseWriter, r *http.Request, padrao string) {
+	w.Header().Set("Content-Type", protocolo.ContentTypeJSON)
+	w.WriteHeader(http.StatusInternalServerError)
+	if err := json.NewEncoder(w).Encode(protocolo.CorpoErro{Error: protocolo.Falha{
+		Code: protocolo.CodInterno,
+		Message: fmt.Sprintf(
+			"rota %q não declara papel exigido (bug de registro: use roteador.registra, nunca HandleFunc direto)",
+			padrao),
+	}}); err != nil {
+		s.log.Warn("query.escrita_falhou", "não foi possível entregar o corpo do 500 de registro sem papel", "erro", err.Error())
+	}
+	s.log.Error("auth.rota_sem_papel", "rota registrada sem papel exigido — bug de registro, use roteador.registra",
+		"remoto", r.RemoteAddr, "rota", padrao)
 }
 
 // registraMetricasDeAuth instala a série de falha de autenticação. Fica fora

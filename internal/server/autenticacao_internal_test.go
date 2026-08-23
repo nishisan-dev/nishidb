@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -84,8 +85,8 @@ func TestComAutenticacaoDesligadaDevolveOMuxCruSemEmbrulho(t *testing.T) {
 
 	got := s.comAutenticacao(rt)
 
-	if got != http.Handler(rt.mux) {
-		t.Fatal("com autenticação desligada, comAutenticacao precisa devolver o PRÓPRIO mux: " +
+	if got != rt.Cru() {
+		t.Fatal("com autenticação desligada, comAutenticacao precisa devolver o PRÓPRIO mux (via Cru()): " +
 			"qualquer wrapper, mesmo um que só delegasse, já não seria byte a byte igual ao caminho de hoje")
 	}
 }
@@ -98,8 +99,66 @@ func TestComAutenticacaoLigadaEmbrulhaOMux(t *testing.T) {
 
 	got := s.comAutenticacao(rt)
 
-	if got == http.Handler(rt.mux) {
+	if got == rt.Cru() {
 		t.Fatal("com autenticação ligada, comAutenticacao não pode devolver o mux cru diretamente")
+	}
+}
+
+// O fail-closed do mecanismo de papel (Important da revisão pós-implementação):
+// uma rota registrada por FORA de roteador.registra — direto em rt.mux, sem
+// papel declarado — tem de ser RECUSADA, nunca servida sem checagem, mesmo
+// para o usuário ADMIN. Prova que a segurança do mecanismo vem da
+// CONSTRUÇÃO (comAutenticacao recusa padrão sem entrada em papeis), não da
+// disciplina de quem registra rota nova — a B5 é quem primeiro acrescenta
+// rotas ADMIN-only de verdade sobre esta costura.
+func TestRotaRegistradaPorForaDeRegistraEhRecusadaFailClosed(t *testing.T) {
+	s := servidorDeTeste(nil)
+	rt := roteadorDeTeste()
+
+	// Bypass DELIBERADO: grava direto no mux, sem passar por rt.registra —
+	// exatamente o cenário que o mecanismo tem de fechar sozinho.
+	rt.mux.HandleFunc("/rota-esquecida", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("nao-deveria-chegar-aqui"))
+	})
+
+	h := s.comAutenticacao(rt)
+
+	req := httptest.NewRequest(http.MethodGet, "/rota-esquecida", nil)
+	req.SetBasicAuth("chefe", senhaChefeDeTeste) // ADMIN — nem o papel mais alto deveria bastar
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code == http.StatusOK {
+		t.Fatalf("a rota registrada por fora foi SERVIDA sem checagem de papel: %s", rec.Body.String())
+	}
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, quer 500 (bug de registro nomeado, não passagem livre)", rec.Code)
+	}
+	var corpo protocolo.CorpoErro
+	if err := json.NewDecoder(rec.Body).Decode(&corpo); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(corpo.Error.Message, "/rota-esquecida") {
+		t.Errorf("a mensagem não nomeia a rota sem papel: %q", corpo.Error.Message)
+	}
+}
+
+// Minor da revisão: username é CASE-SENSITIVE — "Leitor" não pode casar com o
+// usuário configurado "leitor". Trava a escolha atual (comparação exata de
+// mapa Go) contra regressão futura.
+func TestUsernameEhCaseSensitive(t *testing.T) {
+	s := servidorDeTeste(nil)
+	rt := roteadorDeTeste()
+	h := s.comAutenticacao(rt)
+
+	req := httptest.NewRequest(http.MethodGet, "/rota-read", nil)
+	req.SetBasicAuth("Leitor", senhaLeitorDeTeste) // usuário configurado é "leitor", minúsculo
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, quer 401: username é case-sensitive, \"Leitor\" != \"leitor\"", rec.Code)
 	}
 }
 
@@ -212,10 +271,14 @@ func TestAutenticacao401EhByteIdenticoEntreUsuarioInexistenteESenhaErrada(t *tes
 		t.Fatalf("corpos divergem — um atacante distinguiria usuário existente de inexistente pelo corpo:\n"+
 			"senha errada:        %q\nusuário inexistente: %q", senhaErrada.Body.String(), usuarioInexistente.Body.String())
 	}
-	for _, chave := range []string{"WWW-Authenticate", "Content-Type"} {
-		if senhaErrada.Header().Get(chave) != usuarioInexistente.Header().Get(chave) {
-			t.Fatalf("header %s divergiu entre os dois casos", chave)
-		}
+	// O CONJUNTO completo de headers, não só os dois óbvios (WWW-Authenticate,
+	// Content-Type): qualquer header a mais em um dos dois caminhos seria
+	// outro canal de distinção que o §77 pede fechado. httptest.ResponseRecorder
+	// não acrescenta Date sozinho (diferente de um http.Server de verdade),
+	// então a comparação pode ser exata sem falso negativo por relógio.
+	if !reflect.DeepEqual(senhaErrada.Header(), usuarioInexistente.Header()) {
+		t.Fatalf("headers divergem entre os dois casos:\nsenha errada:        %v\nusuário inexistente: %v",
+			senhaErrada.Header(), usuarioInexistente.Header())
 	}
 }
 
