@@ -14,6 +14,12 @@ import (
 // MESMA coisa aqui — TLS é recurso novo e opt-in, sem YAML herdado cujo
 // comportamento dependa do oposto (ao contrário de Server.Enabled, onde
 // ausente já vale "true" porque subir o comando já é o ato de ligar).
+//
+// Isto é ASSIMÉTRICO com AuthenticationSpec.Enabled (que é ponteiro) de
+// propósito, e não inconsistência a "corrigir": nenhuma célula da matriz de
+// recusa do §77 (B2) precisa distinguir "tls ausente" de "tls.enabled: false
+// explícito" — só authentication precisa (ver comentário lá). LoopbackSpec
+// segue a mesma regra de TLSSpec por não ter dependente na matriz.
 type TLSSpec struct {
 	Enabled         bool   `yaml:"enabled"`
 	CertificateFile string `yaml:"certificateFile"`
@@ -35,10 +41,25 @@ type UserSpec struct {
 	Role         string `yaml:"role"`
 }
 
-// AuthenticationSpec é server.authentication (§74-76). Enabled segue a
-// mesma regra de TLSSpec.Enabled: bool simples, ausente vale FALSE.
+// AuthenticationSpec é server.authentication (§74-76).
+//
+// Enabled é PONTEIRO — ao contrário de TLSSpec.Enabled e
+// LoopbackSpec.Enabled, que são bool simples. A diferença é a matriz de
+// recusa do §77 (B2, ruling do controlador): ela distingue "authentication
+// AUSENTE" (bind exposto sem NENHUMA decisão sobre auth — recusa pedindo
+// decisão explícita do operador) de "authentication.enabled: false
+// EXPLÍCITO" (o operador decidiu, e a decisão vale — sobe com aviso). bool
+// simples apagaria essa distinção (nil e false virariam a mesma coisa); TLS
+// e loopback não têm célula de matriz que precise dela, então continuam
+// bool. Não é a mesma regra de Server.Enabled: lá nil vale TRUE (rodar o
+// comando já é o ato de ligar); aqui nil vale FALSE — ver
+// AutenticacaoHabilitada.
+//
+// AuthenticationDeclarada() responde "a seção apareceu no YAML?" com
+// independência do valor de Enabled (inclusive nil); AutenticacaoHabilitada()
+// responde "está LIGADA?", derivado do ponteiro.
 type AuthenticationSpec struct {
-	Enabled bool       `yaml:"enabled"`
+	Enabled *bool      `yaml:"enabled"`
 	Users   []UserSpec `yaml:"users"`
 }
 
@@ -103,13 +124,19 @@ func validaServerSeguranca(c *Config, raiz *yaml.Node, path string) error {
 	}
 
 	authNode := filho(servidor, "authentication")
+	// A seção "apareceu no YAML" é fato do DOCUMENTO, não do valor decodificado
+	// de enabled: authNode != nil já responde isso mesmo quando `enabled` vem
+	// omitido dentro do bloco (Enabled fica nil do mesmo jeito que ficaria com
+	// o bloco inteiro ausente). É o que AuthenticationDeclarada expõe para a
+	// matriz do §77.
+	c.authenticationDeclarada = authNode != nil
 	if err := chavesConhecidas(authNode, "server.authentication", "enabled", "users"); err != nil {
 		return fmt.Errorf("configuração %s: %w", path, err)
 	}
 	if err := validaUsuarios(c.Server.Authentication.Users, filho(authNode, "users"), path); err != nil {
 		return err
 	}
-	if c.Server.Authentication.Enabled && len(c.Server.Authentication.Users) == 0 {
+	if c.AutenticacaoHabilitada() && len(c.Server.Authentication.Users) == 0 {
 		return fmt.Errorf(
 			"configuração %s: server.authentication.enabled: true exige ao menos um item em server.authentication.users",
 			path)

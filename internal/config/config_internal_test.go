@@ -599,3 +599,80 @@ func TestBlocosDeSegurancaValidosSaoCarregados(t *testing.T) {
 		t.Errorf("Loopback.Port = %v, quer 9143", c.Server.Loopback.Port)
 	}
 }
+
+// A partir daqui: ajuste pós-B2 (ruling do controlador). A matriz de recusa
+// do §77 precisa distinguir "authentication AUSENTE do YAML" de
+// "authentication.enabled: false EXPLÍCITO" — os dois davam FALSE em
+// AutenticacaoHabilitada() e eram indistinguíveis. AuthenticationSpec.Enabled
+// virou *bool (só ele; TLSSpec e LoopbackSpec continuam bool, nenhuma célula
+// da matriz depende de presença neles) e AuthenticationDeclarada() expõe a
+// pergunta "a seção apareceu?" separada de "está ligada?".
+
+// TestAuthenticationDeclaradaDistingueOsTresEstados prova os três estados que
+// a matriz do §77 precisa: seção ausente, seção presente com `enabled: false`
+// explícito, e seção presente com `enabled: true`. Os dois primeiros dão
+// AutenticacaoHabilitada() == false, mas só o segundo dá
+// AuthenticationDeclarada() == true — é essa diferença que a matriz consulta
+// para saber se o operador decidiu alguma coisa sobre auth ou não.
+func TestAuthenticationDeclaradaDistingueOsTresEstados(t *testing.T) {
+	casos := []struct {
+		nome       string
+		corpo      string
+		declarada  bool
+		habilitada bool
+	}{
+		{
+			nome:       "ausente",
+			corpo:      "",
+			declarada:  false,
+			habilitada: false,
+		},
+		{
+			nome:       "presente com enabled false explícito",
+			corpo:      "server:\n  authentication:\n    enabled: false\n",
+			declarada:  true,
+			habilitada: false,
+		},
+		{
+			nome: "presente com enabled true",
+			corpo: "server:\n  authentication:\n    enabled: true\n    users:\n" +
+				"      - username: grafana\n        passwordEnv: A\n        role: READ\n",
+			declarada:  true,
+			habilitada: true,
+		},
+	}
+	for _, caso := range casos {
+		t.Run(caso.nome, func(t *testing.T) {
+			c, err := CarregaConfig(escreveConfig(t, caso.corpo))
+			if err != nil {
+				t.Fatalf("carregamento falhou: %v", err)
+			}
+			if got := c.AuthenticationDeclarada(); got != caso.declarada {
+				t.Errorf("AuthenticationDeclarada() = %v, quer %v", got, caso.declarada)
+			}
+			if got := c.AutenticacaoHabilitada(); got != caso.habilitada {
+				t.Errorf("AutenticacaoHabilitada() = %v, quer %v", got, caso.habilitada)
+			}
+		})
+	}
+}
+
+// TestFormaDosUsersEhValidadaMesmoComAuthenticationDesligadaExplicitamente
+// cruza os dois eixos que este ajuste introduz — `enabled: false` EXPLÍCITO e
+// a forma de cada user —, no mesmo espírito de
+// TestFormaDoRatioEhValidadaMesmoComACompactionDesligada: o ponteiro em
+// Enabled muda COMO se pergunta "está ligada?", mas não muda a doutrina de
+// que forma é validada no parse, independente de ativação (débito 49). Um
+// `role` inválido não vira aceitável só porque authentication está desligada
+// por decisão explícita do operador.
+func TestFormaDosUsersEhValidadaMesmoComAuthenticationDesligadaExplicitamente(t *testing.T) {
+	corpo := "server:\n  authentication:\n    enabled: false\n    users:\n" +
+		"      - username: grafana\n        passwordEnv: A\n        role: SUPERUSER\n"
+	_, err := CarregaConfig(escreveConfig(t, corpo))
+	if err == nil {
+		t.Fatal("role inválido foi aceito com authentication.enabled: false")
+	}
+	if !strings.Contains(err.Error(), "role") || !strings.Contains(err.Error(), "SUPERUSER") {
+		t.Errorf("erro = %v, quer nomear a chave role e o valor recebido", err)
+	}
+}

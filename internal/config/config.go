@@ -148,6 +148,12 @@ type Config struct {
 	serverPort         int
 	maxConcurrent      int
 	minimumLiveRatio   float64
+
+	// authenticationDeclarada é fato do DOCUMENTO (a chave server.authentication
+	// apareceu, com qualquer valor de enabled), e não do valor decodificado —
+	// por isso não cabe em AuthenticationSpec, que só enxerga o que foi
+	// decodificado. Ver AuthenticationDeclarada.
+	authenticationDeclarada bool
 }
 
 const (
@@ -300,9 +306,26 @@ func (c *Config) ServidorHabilitado() bool {
 // novo e opt-in, sem YAML herdado cujo comportamento dependa do oposto.
 func (c *Config) TLSHabilitado() bool { return c.Server.TLS.Enabled }
 
-// AutenticacaoHabilitada diz se server.authentication está ligado (§74-76).
-// Mesma regra do TLSHabilitado: ausente é FALSE.
-func (c *Config) AutenticacaoHabilitada() bool { return c.Server.Authentication.Enabled }
+// AutenticacaoHabilitada diz se server.authentication está LIGADO (§74-76).
+// Deriva do ponteiro Server.Authentication.Enabled: nil (seção ausente OU
+// `enabled` omitido dentro dela) vale FALSE, mesma regra prática de antes —
+// só que agora expressa via ponteiro, para que AuthenticationDeclarada possa
+// perguntar "a seção apareceu?" com independência do valor de enabled.
+func (c *Config) AutenticacaoHabilitada() bool {
+	return c.Server.Authentication.Enabled != nil && *c.Server.Authentication.Enabled
+}
+
+// AuthenticationDeclarada diz se o bloco server.authentication apareceu no
+// YAML, com QUALQUER valor de enabled — inclusive ausente ou `false`.
+//
+// Existe para a matriz de recusa do §77 (B2, ruling do controlador): bind
+// exposto + authentication AUSENTE pede decisão explícita do operador (typo
+// engolido não pode liberar um bind aberto sem auth por omissão); bind
+// exposto + `enabled: false` EXPLÍCITO é a decisão já tomada, e ela vale —
+// sobe com aviso. AutenticacaoHabilitada() sozinho não distingue os dois
+// casos (os dois dão FALSE); este método é o que permite a B2 perguntar
+// "apareceu?" separado de "está ligada?".
+func (c *Config) AuthenticationDeclarada() bool { return c.authenticationDeclarada }
 
 // LoopbackHabilitado diz se o listener secundário SEM TLS/auth
 // (server.loopback, plano duplo de observabilidade da Fase 11) está ligado.
