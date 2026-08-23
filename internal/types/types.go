@@ -153,6 +153,46 @@ func (t FieldType) CarregaI64() bool {
 	return false
 }
 
+// Presenca é o que o materializer precisa saber sobre uma key, e são TRÊS
+// estados, não dois.
+//
+// Enquanto "ausente" e "expirada" chegavam colapsados num único ok=false, o
+// stale check do §25 não rodava para a row expirada — o materializer a tratava
+// como key nova e a recriava a partir de um evento ANTIGO, que é exatamente a
+// ressurreição que o §58 diz que o tombstone deve impedir (débitos 24 e 25).
+// A informação sempre existiu no lookup; era descartada uma linha depois.
+//
+// Mora em types porque dois provedores precisam concordar sobre ela: o Store
+// real e o dublê de storage.
+type Presenca uint8
+
+const (
+	// PresencaAusente marca a key que nunca existiu neste dataset.
+	PresencaAusente Presenca = iota
+	// PresencaViva marca a key cujo estado corrente é legível.
+	PresencaViva
+	// PresencaExpirada marca a entidade que existiu e não está mais visível —
+	// lápide publicada ou prazo vencido. RowID e Sequence do record devolvido
+	// são VÁLIDOS, e é isso que faz o stale check funcionar; só o Payload
+	// deixou de descrever um estado vivo.
+	PresencaExpirada
+)
+
+// Existe reporta se a key já foi vista, viva ou não.
+func (p Presenca) Existe() bool { return p != PresencaAusente }
+
+func (p Presenca) String() string {
+	switch p {
+	case PresencaAusente:
+		return "ausente"
+	case PresencaViva:
+		return "viva"
+	case PresencaExpirada:
+		return "expirada"
+	}
+	return "Presenca(" + strconv.FormatUint(uint64(p), 10) + ")"
+}
+
 // FieldID identifica um campo no field dictionary do dataset (spec §32).
 // O valor 0 é reservado; IDs válidos começam em 1.
 type FieldID uint16

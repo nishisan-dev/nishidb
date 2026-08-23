@@ -33,7 +33,11 @@ type Store interface {
 	// erro: devolver nil ali faz o materializer perder o buffer e realocar a
 	// cada evento, e isso não aparece em nenhum teste de comportamento — só
 	// no gate de alocação.
-	GetByKey(key, buf []byte) (types.Record, []byte, bool, error)
+	// Estado devolve os TRÊS estados da key (§58). São três e não dois
+	// porque o stale check precisa rodar também sobre a entidade EXPIRADA:
+	// tratá-la como ausente a faria ser recriada por um evento antigo, que é
+	// a ressurreição que o tombstone existe para impedir.
+	Estado(key, buf []byte) (types.Record, []byte, types.Presenca, error)
 
 	// Put publica o estado novo. prev != nil evita o re-lookup e entrega o
 	// payload anterior para o diff dos índices; deve ser o record corrente
@@ -279,12 +283,12 @@ func (m *Materializer) Apply(event []byte) ApplyResult {
 	}
 
 	var (
-		found bool
-		err   error
+		presenca types.Presenca
+		err      error
 	)
 	// O buf devolvido é reatribuído SEMPRE (pode ter crescido), inclusive no
 	// erro — descartá-lo faria o próximo evento realocar do zero.
-	m.prevRec, m.prevBuf, found, err = m.store.GetByKey(m.patch.key, m.prevBuf[:0])
+	m.prevRec, m.prevBuf, presenca, err = m.store.Estado(m.patch.key, m.prevBuf[:0])
 	if err != nil {
 		return m.failure(err)
 	}
@@ -293,7 +297,11 @@ func (m *Materializer) Apply(event []byte) ApplyResult {
 	// merge, sem append, sem índices. O record já veio do GetByKey (a
 	// validação de colisão da primary obriga a lê-lo de qualquer jeito), então
 	// o stale check não custa I/O algum.
-	if found && m.schema.Seq != nil && m.patch.seq <= m.prevRec.Sequence {
+	// presenca.Existe(), e não "está viva": é AQUI que o débito 24 se fecha.
+	// A entidade expirada mantém RowID e Sequence, então o stale check tem
+	// contra o que comparar — e um evento antigo é descartado em vez de
+	// recriar a entidade que acabou de expirar.
+	if presenca.Existe() && m.schema.Seq != nil && m.patch.seq <= m.prevRec.Sequence {
 		m.metrics.stale.Add(1)
 		return ApplyResult{Action: ActionStale, RowID: m.prevRec.RowID}
 	}
@@ -302,7 +310,10 @@ func (m *Materializer) Apply(event []byte) ApplyResult {
 	// merge lê de um e escreve no outro sem risco de sobrescrita.
 	replace := m.schema.Mode == schema.ModeReplace
 	var payload []byte
-	if found && !replace {
+	// O merge exige estado VIVO. Sobre uma lápide ele arrastaria os campos da
+	// encarnação anterior para a entidade que está reabrindo — um alarme novo
+	// herdaria a severidade do que foi fechado.
+	if presenca == types.PresencaViva && !replace {
 		payload, err = mergeRecords(m.prevRec.Payload, m.patch.entries, m.outBuf[:0])
 	} else {
 		// Create (não há estado anterior) e replace (§23, o estado anterior é
@@ -318,8 +329,11 @@ func (m *Materializer) Apply(event []byte) ApplyResult {
 	// lookup e o diff de índices perde a base de comparação. O endereço é o de
 	// um campo do materializer, não de uma local: tomar o endereço de uma
 	// variável de pilha aqui a faria escapar para o heap a cada evento.
+	// prev vale também para a entidade expirada: é ele que faz o Put reusar o
+	// mesmo rowId (a primary ainda nomeia a key) e dá ao diff de índices a
+	// base certa para limpar as postings da encarnação anterior.
 	var prev *types.Record
-	if found {
+	if presenca.Existe() {
 		prev = &m.prevRec
 	}
 	rowID, created, err := m.store.Put(m.patch.key, m.patch.seq, 0, payload, prev)

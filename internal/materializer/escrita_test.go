@@ -170,3 +170,104 @@ func TestOInstanteEhOMesmoParaOEventoInteiro(t *testing.T) {
 		t.Fatalf("o relógio foi lido %d vezes num evento; tem de ser 1", chamadas)
 	}
 }
+
+// O débito 24, provado. Enquanto GetByKey colapsava "ausente" e "expirada"
+// num ok=false, o stale check do §25 não rodava sobre a entidade expirada: o
+// materializer a tratava como key NOVA e a recriava a partir de um evento
+// antigo — a ressurreição que o §58 diz que o tombstone deve impedir.
+func TestEventoAntigoNaoRessuscitaEntidadeExpirada(t *testing.T) {
+	yaml := `
+version: 1
+name: alarmes
+materialization:
+  key:
+    field: id
+  mode: merge
+  sequence:
+    field: seq
+    type: int64
+    strategy: greater
+schema:
+  include: ["*"]
+  unknownFields: include
+  fields:
+    id:
+      type: string
+    seq:
+      type: int64
+    severidade:
+      type: int64
+`
+	c, st := compiladoComExpire(t, yaml)
+	m := New(c, st)
+
+	if r := m.Apply([]byte(`{"id":"A","seq":10,"severidade":3}`)); r.Err != nil {
+		t.Fatal(r.Err)
+	}
+	rowID, ok := st.RowIDDaKey("A")
+	if !ok {
+		t.Fatal("key não materializada")
+	}
+	st.SetTombstone(rowID)
+
+	// Evento ATRASADO (sequence menor que a corrente) sobre a entidade
+	// expirada: tem de ser descartado como stale.
+	r := m.Apply([]byte(`{"id":"A","seq":5,"severidade":9}`))
+	if r.Err != nil {
+		t.Fatal(r.Err)
+	}
+	if r.Action != ActionStale {
+		t.Fatalf("Action = %v, quer Stale: o evento antigo ressuscitou a entidade", r.Action)
+	}
+
+	// Evento NOVO reabre legitimamente, no MESMO rowId (a primary ainda
+	// nomeia a key; alocar um rowId novo deixaria o antigo órfão).
+	r = m.Apply([]byte(`{"id":"A","seq":20,"severidade":9}`))
+	if r.Err != nil {
+		t.Fatal(r.Err)
+	}
+	if r.Action == ActionStale {
+		t.Fatal("o evento novo foi descartado como stale")
+	}
+	if r.RowID != rowID {
+		t.Fatalf("ressurreição alocou rowId novo: %d, quer %d", r.RowID, rowID)
+	}
+}
+
+// Merge sobre a lápide arrastaria os campos da encarnação anterior para a
+// entidade que reabre: um alarme novo herdaria a severidade do que foi
+// fechado.
+func TestRessurreicaoNaoFazMergeSobreOPayloadDaLapide(t *testing.T) {
+	c, st := compiladoComExpire(t, yamlComExpire)
+	m := New(c, st)
+
+	if r := m.Apply([]byte(`{"id":"A","severidade":3,"extra":"velho"}`)); r.Err != nil {
+		t.Fatal(r.Err)
+	}
+	rowID, ok := st.RowIDDaKey("A")
+	if !ok {
+		t.Fatal("key não materializada")
+	}
+	st.SetTombstone(rowID)
+
+	if r := m.Apply([]byte(`{"id":"A","severidade":9}`)); r.Err != nil {
+		t.Fatal(r.Err)
+	}
+	st.LimpaTombstone(rowID)
+
+	rec, _, presente, err := st.GetByKey([]byte("A"), nil)
+	if err != nil || !presente {
+		t.Fatalf("presente=%v err=%v", presente, err)
+	}
+	var r encoding.FieldReader
+	r.Reset(rec.Payload)
+	for {
+		id, _, ok := r.Next()
+		if !ok {
+			break
+		}
+		if f, achou := c.FieldByID(id); achou && f.Name == "extra" {
+			t.Fatal("a entidade reaberta herdou um campo da encarnação anterior")
+		}
+	}
+}

@@ -884,6 +884,34 @@ func (s *Store) GetByKey(key, buf []byte) (types.Record, []byte, bool, error) {
 	return rec, out, true, nil
 }
 
+// Estado resolve a key e devolve os TRÊS estados possíveis (§58). É o que o
+// materializer usa: ele precisa distinguir "key nova" de "entidade que
+// existiu", porque só no segundo caso o stale check tem uma sequence anterior
+// contra a qual comparar — e sem essa comparação um evento antigo ressuscita
+// a row.
+//
+// O GetByKey continua existindo com bool para o caminho de LEITURA, onde a
+// pergunta é outra: "esta row aparece na query?". Duas perguntas diferentes,
+// duas assinaturas.
+func (s *Store) Estado(key, buf []byte) (types.Record, []byte, types.Presenca, error) {
+	if err := s.entra(); err != nil {
+		return types.Record{}, buf, types.PresencaAusente, err
+	}
+	defer s.sai()
+	rec, out, exists, live, err := s.lookup(key, buf)
+	switch {
+	case err != nil:
+		return types.Record{}, out, types.PresencaAusente, err
+	case !exists:
+		return types.Record{}, out, types.PresencaAusente, nil
+	case !live:
+		// O record VOLTA, e não zerado: RowID e Sequence são o que o stale
+		// check e a ressurreição precisam.
+		return rec, out, types.PresencaExpirada, nil
+	}
+	return rec, out, types.PresencaViva, nil
+}
+
 // GetByRowID devolve o record corrente da row. ok=false para row sem
 // location ou tombstoned (checagem de liveness dos caminhos indexados).
 func (s *Store) GetByRowID(id types.RowID, buf []byte) (types.Record, []byte, bool, error) {
