@@ -3,6 +3,7 @@ package materializer
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/jsonp"
 	"github.com/nishisan-dev/nishidb/internal/schema"
@@ -62,7 +63,7 @@ func compileYAML(t *testing.T, yml string) *schema.Compiled {
 func parsePatch(t *testing.T, c *schema.Compiled, event string) *PatchBuffer {
 	t.Helper()
 	var b PatchBuffer
-	if err := b.Parse([]byte(event), c); err != nil {
+	if err := b.Parse([]byte(event), c, time.Now()); err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
 	return &b
@@ -176,7 +177,7 @@ func TestParseUnknownReject(t *testing.T) {
 	yml := replace(t, patchYAML, "unknownFields: include", "unknownFields: reject")
 	c := compileYAML(t, yml)
 	var b PatchBuffer
-	err := b.Parse([]byte(`{"id":"A","_SEQ":1,"X-Bad":"v"}`), c)
+	err := b.Parse([]byte(`{"id":"A","_SEQ":1,"X-Bad":"v"}`), c, time.Now())
 	if !errors.Is(err, schema.ErrUnknownField) {
 		t.Errorf("err = %v, want ErrUnknownField", err)
 	}
@@ -185,7 +186,7 @@ func TestParseUnknownReject(t *testing.T) {
 func TestParseKeyMissing(t *testing.T) {
 	c := compileYAML(t, patchYAML)
 	var b PatchBuffer
-	err := b.Parse([]byte(`{"_SEQ":1,"Acct-Status-Type":"Start"}`), c)
+	err := b.Parse([]byte(`{"_SEQ":1,"Acct-Status-Type":"Start"}`), c, time.Now())
 	if !errors.Is(err, ErrInvalidKey) {
 		t.Errorf("err = %v, want ErrInvalidKey", err)
 	}
@@ -194,7 +195,7 @@ func TestParseKeyMissing(t *testing.T) {
 func TestParseKeyNull(t *testing.T) {
 	c := compileYAML(t, patchYAML)
 	var b PatchBuffer
-	err := b.Parse([]byte(`{"id":null,"_SEQ":1}`), c)
+	err := b.Parse([]byte(`{"id":null,"_SEQ":1}`), c, time.Now())
 	if !errors.Is(err, ErrInvalidKey) {
 		t.Errorf("err = %v, want ErrInvalidKey", err)
 	}
@@ -203,7 +204,7 @@ func TestParseKeyNull(t *testing.T) {
 func TestParseSequenceMissing(t *testing.T) {
 	c := compileYAML(t, patchYAML)
 	var b PatchBuffer
-	err := b.Parse([]byte(`{"id":"A"}`), c)
+	err := b.Parse([]byte(`{"id":"A"}`), c, time.Now())
 	if !errors.Is(err, ErrInvalidSequence) {
 		t.Errorf("err = %v, want ErrInvalidSequence", err)
 	}
@@ -212,7 +213,7 @@ func TestParseSequenceMissing(t *testing.T) {
 func TestParseSequenceNull(t *testing.T) {
 	c := compileYAML(t, patchYAML)
 	var b PatchBuffer
-	err := b.Parse([]byte(`{"id":"A","_SEQ":null}`), c)
+	err := b.Parse([]byte(`{"id":"A","_SEQ":null}`), c, time.Now())
 	if !errors.Is(err, ErrInvalidSequence) {
 		t.Errorf("err = %v, want ErrInvalidSequence", err)
 	}
@@ -237,7 +238,7 @@ func TestParseKeyAndSequenceErrorsSayTheCause(t *testing.T) {
 	}
 	for _, tc := range cases {
 		var b PatchBuffer
-		err := b.Parse([]byte(tc.event), c)
+		err := b.Parse([]byte(tc.event), c, time.Now())
 		if !errors.Is(err, tc.sent) {
 			t.Errorf("%s: err = %v, want %v", tc.event, err, tc.sent)
 			continue
@@ -265,7 +266,7 @@ func TestParseAbortsOnFirstInvalidOccurrence(t *testing.T) {
 	}
 	for _, tc := range cases {
 		var b PatchBuffer
-		if err := b.Parse([]byte(tc.event), c); !errors.Is(err, tc.sent) {
+		if err := b.Parse([]byte(tc.event), c, time.Now()); !errors.Is(err, tc.sent) {
 			t.Errorf("%s: err = %v, want %v", tc.event, err, tc.sent)
 		}
 	}
@@ -379,7 +380,7 @@ func TestParseKeySurvivesArenaGrowth(t *testing.T) {
 	event = append(event, `"}`...)
 
 	var b PatchBuffer
-	if err := b.Parse(event, c); err != nil {
+	if err := b.Parse(event, c, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	if string(b.key) != "CMP-001" {
@@ -393,7 +394,7 @@ func TestParseKeySurvivesArenaGrowth(t *testing.T) {
 func TestParseTypeConversionError(t *testing.T) {
 	c := compileYAML(t, patchYAML)
 	var b PatchBuffer
-	err := b.Parse([]byte(`{"id":"A","_SEQ":1,"Acct-Status-Type":123}`), c)
+	err := b.Parse([]byte(`{"id":"A","_SEQ":1,"Acct-Status-Type":123}`), c, time.Now())
 	if !errors.Is(err, ErrTypeConversion) {
 		t.Fatalf("err = %v, want ErrTypeConversion", err)
 	}
@@ -409,7 +410,7 @@ func TestParseTypeConversionError(t *testing.T) {
 func TestParseInvalidJSON(t *testing.T) {
 	c := compileYAML(t, patchYAML)
 	var b PatchBuffer
-	err := b.Parse([]byte(`{"id":`), c)
+	err := b.Parse([]byte(`{"id":`), c, time.Now())
 	if !errors.Is(err, jsonp.ErrInvalidJSON) {
 		t.Errorf("err = %v, want ErrInvalidJSON", err)
 	}
@@ -421,7 +422,7 @@ func TestParseCopiesFromEvent(t *testing.T) {
 	c := compileYAML(t, patchYAML)
 	event := []byte(`{"id":"CMP-001","_SEQ":1,"Acct-Status-Type":"Start"}`)
 	var b PatchBuffer
-	if err := b.Parse(event, c); err != nil {
+	if err := b.Parse(event, c, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	for i := range event {
@@ -455,10 +456,10 @@ func TestBenchEventEscapesDecode(t *testing.T) {
 func TestParseReuse(t *testing.T) {
 	c := compileYAML(t, patchYAML)
 	var b PatchBuffer
-	if err := b.Parse([]byte(`{"id":"A","_SEQ":1,"Acct-Status-Type":"Start"}`), c); err != nil {
+	if err := b.Parse([]byte(`{"id":"A","_SEQ":1,"Acct-Status-Type":"Start"}`), c, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.Parse([]byte(`{"id":"B","_SEQ":2}`), c); err != nil {
+	if err := b.Parse([]byte(`{"id":"B","_SEQ":2}`), c, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	if string(b.key) != "B" || b.seq != 2 || len(b.entries) != 2 {

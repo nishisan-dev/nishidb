@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
 // yamlComTTL monta uma spec mínima com o bloco ttl dado.
@@ -130,5 +132,49 @@ func TestCampoDeSistemaNaoPodeSerDeclarado(t *testing.T) {
 func TestCampoComUnderscoreQueNaoEhDeSistemaContinuaValido(t *testing.T) {
 	if _, err := Parse([]byte(baseYAML), DefaultsPadrao); err != nil {
 		t.Fatalf("a spec base, que declara _SEQ, foi recusada: %v", err)
+	}
+}
+
+// Quem pede "tudo" quer os campos do próprio dado, não a contabilidade
+// interna do banco. Mas quem precisa do conjunto FÍSICO do payload — o
+// storage, a compaction — precisa vê-lo.
+func TestFieldsByIDOcultaOCampoDeSistemaMasAVersaoCompletaNao(t *testing.T) {
+	yaml := "version: 1\nname: t\nmaterialization:\n  key:\n    field: id\n" +
+		"  ttl:\n    expireAfterWrite: 2h\n" +
+		"schema:\n  include: [id]\n  fields:\n    id:\n      type: string\n"
+	spec, err := Parse([]byte(yaml), DefaultsPadrao)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := spec.Compile(newFakeDict())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Escrita == nil {
+		t.Fatal("campo de sistema não compilado")
+	}
+
+	temSistema := func(campos []*CompiledField) bool {
+		for _, f := range campos {
+			if f.Name == CampoInstanteDeEscrita {
+				return true
+			}
+		}
+		return false
+	}
+	if temSistema(c.FieldsByID()) {
+		t.Error("FieldsByID expôs o campo de sistema: ele apareceria no SELECT * e no /v1/metadata")
+	}
+	if !temSistema(c.FieldsByIDIncluindoSistema()) {
+		t.Error("FieldsByIDIncluindoSistema escondeu o campo de sistema")
+	}
+
+	// Endereçável por nome, como ROWID/xmin: oculto no *, não inacessível.
+	f, ok := c.FieldByName([]byte(CampoInstanteDeEscrita))
+	if !ok {
+		t.Fatal("FieldByName não resolve o campo de sistema")
+	}
+	if !f.IsSystem || f.Type != types.TypeTimestamp {
+		t.Fatalf("IsSystem=%v Type=%v", f.IsSystem, f.Type)
 	}
 }

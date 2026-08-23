@@ -96,6 +96,13 @@ type CompiledField struct {
 	Index                    IndexKind
 	IsKey, IsSequence, IsTTL bool
 
+	// IsSystem marca campo que o WRITER injeta e o operador não declara.
+	// Ele existe no schema como qualquer outro — tem FieldID, é gravado no
+	// payload e SELECT pelo nome funciona —, mas fica fora do `SELECT *` e
+	// das colunas do /v1/metadata: quem pede "tudo" quer os campos do
+	// próprio dado, não a contabilidade interna do banco.
+	IsSystem bool
+
 	// Format é o padrão declarado no YAML e Layout é ele compilado. Não-nil
 	// exatamente quando Type é datetime ou time; o Format é guardado ao lado
 	// do Layout porque a mensagem de literal inválido precisa dizer o que se
@@ -170,6 +177,11 @@ type Compiled struct {
 	// escrita. Mutuamente exclusivo com TTL, pela validação da spec.
 	ExpireAfterWrite time.Duration
 
+	// Escrita é o campo de sistema que registra o instante da escrita.
+	// Não-nil exatamente quando ExpireAfterWrite > 0 — sem expiração não há
+	// para que pagar 11 bytes por record.
+	Escrita *CompiledField
+
 	mu      sync.RWMutex
 	byName  map[string]*CompiledField
 	byID    map[types.FieldID]*CompiledField
@@ -230,6 +242,13 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 	} else {
 		names = append(names, s.Schema.Include...)
 	}
+	// O campo de sistema entra no conjunto a compilar como qualquer outro:
+	// assim ele ganha FieldID pelo mesmo caminho determinístico e o dicionário
+	// o registra de forma durável, que é o que faz o replay do tail conseguir
+	// reconstruir o índice de expiração a partir dos próprios records.
+	if c.ExpireAfterWrite > 0 {
+		names = append(names, CampoInstanteDeEscrita)
+	}
 	sort.Strings(names)
 
 	seqField := ""
@@ -255,6 +274,15 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 			IsKey:      name == s.Materialization.Key.Field,
 			IsSequence: name == seqField,
 			IsTTL:      name == ttlField,
+		}
+		if name == CampoInstanteDeEscrita {
+			// Tipo fixo, não declarável: é o writer que o preenche, com o
+			// relógio do processo, e não há format nem inferência envolvidos.
+			cf.Type, cf.IsSystem = types.TypeTimestamp, true
+			c.Escrita = cf
+			c.byName[cf.Name] = cf
+			c.byID[cf.ID] = cf
+			continue
 		}
 		if spec, declared := s.Schema.Fields[name]; declared {
 			cf.Alias = spec.Alias
@@ -389,11 +417,25 @@ func (c *Compiled) FieldByName(name []byte) (*CompiledField, bool) {
 // CompiledField é imutável após a criação, exceto pelo tipo fixado de campo
 // auto, que é publicado atomicamente.
 func (c *Compiled) FieldsByID() []*CompiledField {
+	return c.camposOrdenados(false)
+}
+
+// FieldsByIDIncluindoSistema devolve TODOS os campos, inclusive os que o
+// writer injeta. É para quem precisa do conjunto físico do payload — não para
+// quem monta a lista de colunas que o usuário vê.
+func (c *Compiled) FieldsByIDIncluindoSistema() []*CompiledField {
+	return c.camposOrdenados(true)
+}
+
+func (c *Compiled) camposOrdenados(comSistema bool) []*CompiledField {
 	c.mu.RLock()
 	// byID tem UMA entrada por campo (byName tem duas para campo com alias):
 	// não há duplicata a remover aqui.
 	out := make([]*CompiledField, 0, len(c.byID))
 	for _, f := range c.byID {
+		if f.IsSystem && !comSistema {
+			continue
+		}
 		out = append(out, f)
 	}
 	c.mu.RUnlock()

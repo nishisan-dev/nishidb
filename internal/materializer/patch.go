@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/jsonp"
 	"github.com/nishisan-dev/nishidb/internal/schema"
@@ -54,7 +55,12 @@ type PatchBuffer struct {
 // Após erro, os buffers ficam com estado PARCIAL (entries, arena, key e seq
 // do ponto em que parou). O caller deve descartar o evento; nada além do
 // erro é observável até o próximo Parse, que reseta tudo.
-func (b *PatchBuffer) Parse(event []byte, c *schema.Compiled) error {
+// agora é o instante da escrita, injetado no campo de sistema quando o
+// dataset declara expireAfterWrite. Vem por PARÂMETRO, e não de um time.Now()
+// aqui dentro, porque um teste de expiração precisa controlar o relógio sem
+// dormir — e porque todo campo de um mesmo evento tem de carimbar o MESMO
+// instante, que uma chamada por campo não garantiria.
+func (b *PatchBuffer) Parse(event []byte, c *schema.Compiled, agora time.Time) error {
 	b.entries = b.entries[:0]
 	b.arena = b.arena[:0]
 	b.key = nil
@@ -71,6 +77,13 @@ func (b *PatchBuffer) Parse(event []byte, c *schema.Compiled) error {
 			break
 		}
 		cf, found := c.FieldByName(f.Key)
+		if found && cf.IsSystem {
+			// O evento não pode escrever o relógio do writer. Aceitar isto
+			// deixaria o produtor controlar quando a própria entidade expira,
+			// e um valor no futuro a tornaria imortal — sem erro nenhum.
+			return fmt.Errorf("%w: campo %q é reservado ao writer e não pode vir no evento",
+				schema.ErrUnknownField, f.Key) // SCHEMA_VALIDATION
+		}
 		if !found {
 			// Campo excluído não está compilado: cai aqui e o
 			// ResolveUnknown o descarta — uma comparação a menos por campo
@@ -140,6 +153,17 @@ func (b *PatchBuffer) Parse(event []byte, c *schema.Compiled) error {
 			b.hasSeq = true
 		}
 		b.entries = append(b.entries, patchEntry{field: cf, isNull: isNull, val: val})
+	}
+
+	// O campo de sistema entra ANTES da ordenação, como uma entry qualquer:
+	// assim o merge e o replace o incluem pelo mesmo caminho, sem que nenhum
+	// dos dois precise saber que ele existe. É também o que garante que toda
+	// escrita o renove — é disso que o idle timeout depende.
+	if c.Escrita != nil {
+		b.entries = append(b.entries, patchEntry{
+			field: c.Escrita,
+			val:   types.Value{Type: types.TypeTimestamp, I64: agora.UnixMilli()},
+		})
 	}
 
 	// Ordena por FieldID; sort ESTÁVEL preserva a ordem do evento entre

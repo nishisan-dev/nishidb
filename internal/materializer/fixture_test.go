@@ -126,7 +126,7 @@ func TestParseRadiusFixtureWithSpecYAML(t *testing.T) {
 	}
 
 	var b PatchBuffer
-	if err := b.Parse(data, c); err != nil {
+	if err := b.Parse(data, c, time.Now()); err != nil {
 		t.Fatalf("Parse da amostra real: %v", err)
 	}
 

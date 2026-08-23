@@ -3,6 +3,7 @@ package materializer
 import (
 	"errors"
 	"sync/atomic"
+	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/jsonp"
 	"github.com/nishisan-dev/nishidb/internal/schema"
@@ -212,13 +213,23 @@ type Materializer struct {
 	prevBuf []byte       // destino do GetByKey
 	outBuf  []byte       // payload de saída
 
+	// agora é o relógio da injeção do campo de sistema. Campo, e não uma
+	// chamada direta a time.Now, para que um teste de expiração possa avançar
+	// o tempo sem dormir — a alternativa seria um teste que leva minutos ou
+	// que só prova a expiração com prazos irrealistas.
+	agora func() time.Time
+
 	metrics Metrics
 }
 
 // New monta o materializer do dataset sobre o store.
 func New(c *schema.Compiled, s Store) *Materializer {
-	return &Materializer{schema: c, store: s}
+	return &Materializer{schema: c, store: s, agora: time.Now}
 }
+
+// UsaRelogio troca o relógio da injeção do campo de sistema. Exclusivo de
+// teste: em produção o relógio é o do processo.
+func (m *Materializer) UsaRelogio(f func() time.Time) { m.agora = f }
 
 // Metrics devolve os contadores acumulados.
 //
@@ -263,7 +274,7 @@ func (m *Materializer) Metrics() MetricsSnapshot {
 func (m *Materializer) Apply(event []byte) ApplyResult {
 	m.metrics.events.Add(1)
 
-	if err := m.patch.Parse(event, m.schema); err != nil {
+	if err := m.patch.Parse(event, m.schema, m.agora()); err != nil {
 		return m.failure(err)
 	}
 
