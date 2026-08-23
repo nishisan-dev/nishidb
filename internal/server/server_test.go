@@ -383,8 +383,14 @@ func sobeCapturandoLog(t *testing.T, a *ambiente) string {
 // Com POST /v1/query no ar e sem autenticação até a Fase 11, escutar fora do
 // loopback entrega o dataset a quem alcançar a porta. O default protege; quem
 // abre precisa ver que abriu.
+//
+// A matriz de recusa do §77 (B2) exige `server.authentication` DECLARADA com
+// `enabled: false` EXPLÍCITO para que o bind exposto ainda suba só com
+// aviso — seção ausente vira recusa (célula 2 da matriz, ver
+// seguranca_test.go). Este teste continua sobre a célula "decisão já
+// tomada pelo operador"; a célula da seção ausente tem teste próprio.
 func TestBindForaDoLoopbackAvisa(t *testing.T) {
-	a := novoAmbienteCom(t, "\nserver:\n  bind: 0.0.0.0\n  port: %d\n")
+	a := novoAmbienteCom(t, "\nserver:\n  bind: 0.0.0.0\n  port: %d\n  authentication:\n    enabled: false\n")
 	a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))
 
 	saida := sobeCapturandoLog(t, a)

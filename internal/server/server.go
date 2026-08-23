@@ -90,6 +90,13 @@ type Servidor struct {
 	http     *http.Server
 	ln       net.Listener
 	pprofSrv *http.Server
+
+	// credenciais é o cache imutável de server.authentication.users já
+	// resolvido contra o ambiente (§74-77, resolveCredenciais em
+	// seguranca.go): username -> digest SHA-256 da senha + papel. Nil quando
+	// AutenticacaoHabilitada() é false — a B3 lê este mapa para montar o
+	// middleware HTTP Basic; sem ele não há usuário nenhum para autenticar.
+	credenciais map[string]credencial
 }
 
 // Opcoes configura a subida.
@@ -149,10 +156,21 @@ func Novo(cfg *config.Config, o Opcoes) (*Servidor, error) {
 		return nil, err
 	}
 
-	// Os avisos saem ANTES do bind: se a porta estiver ocupada, o operador
-	// perde a subida e ainda assim precisa ter lido que o endereço que ele
-	// escolheu expõe os dados.
-	avisaSobreAExposicao(cfg, log)
+	// A segurança do §74-78 é resolvida ANTES do bind: falha de credencial,
+	// de certificado, ou a matriz de recusa do §77 não podem deixar um
+	// listener aberto para trás. A ordem é a mais barata primeiro — a matriz
+	// é só leitura de config e não faz I/O — para não gastar em ler env var
+	// ou arquivo de senha uma subida que já vai ser recusada pela topologia.
+	if err := avaliaExposicaoEAutenticacao(cfg, log); err != nil {
+		return nil, err
+	}
+	if err := validaCertificadoNaSubida(cfg); err != nil {
+		return nil, err
+	}
+	credenciais, err := resolveCredenciais(cfg)
+	if err != nil {
+		return nil, err
+	}
 	for _, chave := range cfg.ChavesDeRuntimeIgnoradas() {
 		log.Warn("config.sem_efeito",
 			"a chave é aceita e NÃO tem implementação nesta versão; não dimensione a máquina por ela",
@@ -165,12 +183,13 @@ func Novo(cfg *config.Config, o Opcoes) (*Servidor, error) {
 	}
 
 	s := &Servidor{
-		cfg:     cfg,
-		log:     log,
-		reg:     reg,
-		eng:     query.NewEngine(),
-		porNome: make(map[string]*dataset, len(nomes)),
-		vagas:   make(chan struct{}, cfg.MaxConcurrent()),
+		cfg:         cfg,
+		log:         log,
+		reg:         reg,
+		eng:         query.NewEngine(),
+		porNome:     make(map[string]*dataset, len(nomes)),
+		vagas:       make(chan struct{}, cfg.MaxConcurrent()),
+		credenciais: credenciais,
 	}
 	s.met = registraMetricasDeQuery(reg, s.eng)
 
@@ -209,24 +228,6 @@ func Novo(cfg *config.Config, o Opcoes) (*Servidor, error) {
 	registraMetricasDeDataset(reg, s)
 	ok = true
 	return s, nil
-}
-
-// avisaSobreAExposicao registra, uma vez por subida, que o bind escolhido
-// alcança a rede.
-//
-// O aviso existe porque o POST /v1/query serve OS DADOS e a autenticação do
-// §74-77 é da Fase 11: até lá, quem chega na porta lê o dataset inteiro. O
-// default é loopback justamente para que este aviso só apareça quando alguém
-// tiver escrito o endereço aberto com as próprias mãos — e aí ele é
-// confirmação de uma decisão, não ruído.
-func avisaSobreAExposicao(cfg *config.Config, log *logging.Logger) {
-	if !cfg.BindExposto() {
-		return
-	}
-	log.Warn("bind.exposto",
-		"o servidor vai escutar FORA do loopback e o protocolo remoto ainda NÃO tem autenticação (§74-77, Fase 11): "+
-			"quem alcançar esta porta lê o dataset inteiro por POST /v1/query",
-		"endereco", cfg.Endereco())
 }
 
 func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*dataset, error) {
