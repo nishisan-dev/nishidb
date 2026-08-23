@@ -2,9 +2,11 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"slices"
 	"strings"
 
+	"github.com/nishisan-dev/nishidb/internal/units"
 	"gopkg.in/yaml.v3"
 )
 
@@ -74,8 +76,43 @@ type LoopbackSpec struct {
 	// Port é ponteiro porque não tem default: ausente não é "porta zero", é
 	// "sem porta declarada" — a exigência de declará-la quando o listener
 	// está ligado é ativação (B2), não desta tarefa. O que ESTA tarefa
-	// recusa é a porta declarada colidir com server.port (recusa 8).
+	// recusa é a porta declarada colidir de fato com server.port — mesma
+	// porta E o bind principal alcançando 127.0.0.1 (recusa 8, refinada pela
+	// revisão final: ver bindColideComLoopback, acima). Um bind principal em
+	// IP específico não-loopback pode repetir a porta do loopback sem
+	// colisão nenhuma no kernel — é o desenho da Fase C.
 	Port *int `yaml:"port"`
+}
+
+// bindColideComLoopback diz se o bind do listener PRINCIPAL alcança o mesmo
+// endereço que o listener loopback usa fixo (127.0.0.1, enderecoLoopback em
+// internal/server/seguranca.go) — a única condição em que os dois listeners
+// na MESMA porta colidiriam de fato no kernel.
+//
+// Dois casos colidem: o bind principal É um endereço loopback (mesma
+// doutrina de BindExposto — IsLoopback cobre 127.0.0.0/8 inteiro, não só
+// 127.0.0.1 literal — e "localhost" antes do ParseIP, pela mesma razão que
+// BindExposto o trata à parte), ou é o unspecified (0.0.0.0/::), que escuta
+// em TODAS as interfaces locais, 127.0.0.1 inclusive. Um IP ESPECÍFICO e
+// NÃO-loopback (o caso da Fase C: expor 10.200.20.218:9142 com o plano
+// loopback também em :9142) não colide — para o kernel são dois sockets em
+// endereços diferentes, e os dois listeners coexistem sem disputar porta
+// nenhuma.
+//
+// Nome que não resolve para IP (hostname arbitrário) é tratado como
+// podendo colidir — mesma doutrina de BindExposto: presumir inocência de um
+// endereço que não se sabe qual é seria errar para o lado errado, e aqui o
+// lado errado é deixar dois listeners tentarem bindar a mesma porta na
+// mesma interface sem avisar antes.
+func bindColideComLoopback(bind string) bool {
+	if bind == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(bind)
+	if ip == nil {
+		return true
+	}
+	return ip.IsLoopback() || ip.IsUnspecified()
 }
 
 // Papéis do §74: enum fechado, e não string livre — um valor fora dele
@@ -145,10 +182,24 @@ func validaServerSeguranca(c *Config, raiz *yaml.Node, path string) error {
 	if err := chavesConhecidas(filho(servidor, "loopback"), "server.loopback", "enabled", "port"); err != nil {
 		return fmt.Errorf("configuração %s: %w", path, err)
 	}
-	if p := c.Server.Loopback.Port; p != nil && *p == c.serverPort {
+	// Mesma faixa de server.port (Minor 7 da revisão final): sem isto,
+	// `port: 0` passa direto pela recusa 8 (0 nunca é igual a c.serverPort) e
+	// só aparece na subida como net.Listen("127.0.0.1:0") — uma porta
+	// EFÊMERA escolhida pelo kernel, em silêncio, no lugar do endereço
+	// determinístico que server.loopback.port promete declarar.
+	if _, err := units.InteiroPositivo(c.Server.Loopback.Port, 0); err != nil {
+		return fmt.Errorf("configuração %s: server.loopback.port: %w", path, err)
+	}
+	if p := c.Server.Loopback.Port; p != nil && *p > 65535 {
+		return fmt.Errorf("configuração %s: server.loopback.port %d fora de 1..65535", path, *p)
+	}
+	if p := c.Server.Loopback.Port; p != nil && *p == c.serverPort && bindColideComLoopback(c.Server.Bind) {
 		return fmt.Errorf(
-			"configuração %s: server.loopback.port (%d) não pode ser igual a server.port (%d)",
-			path, *p, c.serverPort)
+			"configuração %s: server.loopback.port (%d) colide com server.port (%d): o bind principal (%s) "+
+				"alcança 127.0.0.1, o endereço fixo do listener loopback, e os dois bindariam a mesma porta na "+
+				"MESMA interface. Um server.bind em IP específico e NÃO-loopback pode reusar a porta do "+
+				"loopback sem colisão nenhuma",
+			path, *p, c.serverPort, c.Server.Bind)
 	}
 
 	return nil

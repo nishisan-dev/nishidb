@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -524,6 +525,93 @@ func TestLoopbackNaMesmaPortaDoServerPrincipalEhRecusado(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "server.loopback.port") || !strings.Contains(err.Error(), "server.port") {
 		t.Errorf("erro = %v, quer nomear as duas chaves", err)
+	}
+}
+
+// TestLoopbackMesmaPortaComBindLoopbackExplicitoEhRecusado é a mesma célula
+// da recusa 8, com server.bind ESCRITO por extenso em vez de confiar no
+// default implícito (127.0.0.1) — a colisão de fato é sobre o bind
+// alcançar 127.0.0.1, não sobre a chave estar ausente do arquivo.
+func TestLoopbackMesmaPortaComBindLoopbackExplicitoEhRecusado(t *testing.T) {
+	corpo := "server:\n  bind: 127.0.0.1\n  port: 9142\n  loopback:\n    enabled: true\n    port: 9142\n"
+	_, err := CarregaConfig(escreveConfig(t, corpo))
+	if err == nil {
+		t.Fatal("server.bind: 127.0.0.1 com server.loopback.port igual a server.port foi aceito")
+	}
+	if !strings.Contains(err.Error(), "server.loopback.port") || !strings.Contains(err.Error(), "server.port") {
+		t.Errorf("erro = %v, quer nomear as duas chaves", err)
+	}
+}
+
+// TestLoopbackMesmaPortaComBindWildcardEhRecusado é a segunda célula do
+// refinamento de topologia (RULING da revisão final): 0.0.0.0 escuta em
+// TODAS as interfaces locais, 127.0.0.1 inclusive — colide de fato com o
+// listener loopback na mesma porta, do mesmo jeito que um bind loopback
+// explícito colide.
+func TestLoopbackMesmaPortaComBindWildcardEhRecusado(t *testing.T) {
+	corpo := "server:\n  bind: 0.0.0.0\n  port: 9142\n  loopback:\n    enabled: true\n    port: 9142\n"
+	_, err := CarregaConfig(escreveConfig(t, corpo))
+	if err == nil {
+		t.Fatal("server.bind: 0.0.0.0 com server.loopback.port igual a server.port foi aceito")
+	}
+	if !strings.Contains(err.Error(), "server.loopback.port") || !strings.Contains(err.Error(), "server.port") {
+		t.Errorf("erro = %v, quer nomear as duas chaves", err)
+	}
+}
+
+// TestLoopbackMesmaPortaComBindEmIPEspecificoEhPermitido é a terceira
+// célula, e a que o plano da Fase C depende: expor o servidor num IP
+// específico e NÃO-loopback (10.200.20.218, no exemplo do plano aprovado)
+// na MESMA porta que o plano loopback usa em 127.0.0.1 não colide de fato —
+// para o kernel são dois endereços diferentes, cada um seu próprio socket.
+// A recusa 8, antes desta revisão, vetava esta topologia comparando só a
+// porta e ignorando o bind — o que impedia o passo 3 do plano aprovado
+// (expor 10.200.20.218:9142 mantendo o plano loopback intocado em
+// 127.0.0.1:9142, sem mexer em painel/script/cron).
+func TestLoopbackMesmaPortaComBindEmIPEspecificoEhPermitido(t *testing.T) {
+	corpo := "server:\n  bind: 10.200.20.218\n  port: 9142\n  loopback:\n    enabled: true\n    port: 9142\n"
+	_, err := CarregaConfig(escreveConfig(t, corpo))
+	if err != nil {
+		t.Fatalf("server.bind em IP específico não-loopback com a mesma porta do loopback foi recusado: %v", err)
+	}
+}
+
+// TestLoopbackPortForaDaFaixaEhRecusado é o Minor 7 da revisão final:
+// server.loopback.port não tinha a MESMA validação de faixa que
+// server.port (units.InteiroPositivo + teto de 65535) — `port: 0` hoje
+// vira porta EFÊMERA escolhida pelo kernel em silêncio (net.Listen aceita
+// ":0"), o oposto do endereço determinístico que o operador declarou.
+func TestLoopbackPortForaDaFaixaEhRecusado(t *testing.T) {
+	casos := map[string]int{
+		"zero":            0,
+		"negativo":        -1,
+		"acima_do_teto":   70000,
+		"acima_do_teto_2": 65536,
+	}
+	for nome, porta := range casos {
+		t.Run(nome, func(t *testing.T) {
+			corpo := fmt.Sprintf("server:\n  loopback:\n    enabled: true\n    port: %d\n", porta)
+			_, err := CarregaConfig(escreveConfig(t, corpo))
+			if err == nil {
+				t.Fatalf("server.loopback.port: %d foi aceito", porta)
+			}
+			if !strings.Contains(err.Error(), "server.loopback.port") {
+				t.Errorf("erro = %v, quer nomear server.loopback.port", err)
+			}
+		})
+	}
+}
+
+// TestLoopbackPortNaFaixaContinuaAceito blinda o caminho feliz: uma porta
+// válida (1..65535) não pode ser pega pela recusa nova do Minor 7.
+func TestLoopbackPortNaFaixaContinuaAceito(t *testing.T) {
+	corpo := "server:\n  loopback:\n    enabled: true\n    port: 9143\n"
+	c, err := CarregaConfig(escreveConfig(t, corpo))
+	if err != nil {
+		t.Fatalf("server.loopback.port: 9143 foi recusado: %v", err)
+	}
+	if c.Server.Loopback.Port == nil || *c.Server.Loopback.Port != 9143 {
+		t.Errorf("Loopback.Port = %v, quer 9143", c.Server.Loopback.Port)
 	}
 }
 
