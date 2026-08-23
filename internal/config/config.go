@@ -27,10 +27,12 @@ import (
 // Config é o subconjunto do nishidb.yaml (spec §78) que os comandos do M1
 // precisam.
 //
-// As seções que o M1 não implementa (server, TLS, auth, runtime, durability)
-// são ACEITAS e ignoradas: o arquivo que o M3 vai usar não pode
-// ser inválido para o binário do M1, senão o operador mantém dois arquivos e
-// eles divergem.
+// As seções que o M1 não implementa (runtime, storage.durability) são
+// ACEITAS e ignoradas: o arquivo que o M3 vai usar não pode ser inválido
+// para o binário do M1, senão o operador mantém dois arquivos e eles
+// divergem. server.tls e server.authentication SAIRAM dessa lista na Fase
+// 11: continuam opcionais, mas quando presentes têm forma validada — ver
+// TLSSpec/AuthenticationSpec/LoopbackSpec, em config_seguranca.go.
 type Config struct {
 	// Version é a versão do PRÓPRIO arquivo (§78). Era aceita e nunca lida:
 	// no dia em que existisse um `version: 2` global, este binário leria o
@@ -92,6 +94,17 @@ type Config struct {
 		Enabled *bool  `yaml:"enabled"`
 		Bind    string `yaml:"bind"`
 		Port    *int   `yaml:"port"`
+
+		// TLS, Authentication e Loopback são os blocos de segurança da Fase 11
+		// (§74-78). A FORMA de cada um é validada em validaServerSeguranca
+		// (config_seguranca.go): whitelist manual de chave dentro do bloco (o
+		// KnownFields GLOBAL continua desligado, ver comentário em
+		// CarregaConfig) e as recusas cruzadas do §75/§77 que dependem só do
+		// arquivo. A resolução de segredos e a matriz de recusa "auth sem TLS
+		// com bind exposto" (§77) são ativação — B2, em server.Novo.
+		TLS            TLSSpec            `yaml:"tls"`
+		Authentication AuthenticationSpec `yaml:"authentication"`
+		Loopback       LoopbackSpec       `yaml:"loopback"`
 	} `yaml:"server"`
 
 	// Runtime é o bloco §79/§80. Só query.maxConcurrent tem leitor: é o teto
@@ -173,11 +186,24 @@ func CarregaConfig(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("configuração: %w", err)
 	}
+	// O documento é decodificado primeiro em ÁRVORE CRUA (yaml.Node), e só
+	// depois no Config tipado, via raiz.Decode — e não yaml.Unmarshal(b, &c)
+	// direto. A árvore é o que validaServerSeguranca usa para a whitelist
+	// manual de chave dentro de server.tls/authentication/loopback (recusa 7
+	// do §75/§77); yaml.Node.Decode não herda estritume nenhum do documento
+	// (mesma observação de internal/schema/source.go), então o resto do
+	// arquivo continua exatamente tão tolerante quanto antes.
+	var raiz yaml.Node
+	if err := yaml.Unmarshal(b, &raiz); err != nil {
+		return nil, fmt.Errorf("configuração %s: %w", path, err)
+	}
 	var c Config
 	// KnownFields fica DESLIGADO de propósito: o arquivo do M3 traz seções
 	// que este binário não conhece, e recusá-las obrigaria o operador a mantê
-	// -las em dois arquivos.
-	if err := yaml.Unmarshal(b, &c); err != nil {
+	// -las em dois arquivos. Isso vale para o documento INTEIRO — inclusive
+	// para dentro de server.tls/authentication/loopback, cuja whitelist é
+	// manual (validaServerSeguranca), e não pelo KnownFields do decoder.
+	if err := raiz.Decode(&c); err != nil {
 		return nil, fmt.Errorf("configuração %s: %w", path, err)
 	}
 
@@ -225,6 +251,9 @@ func CarregaConfig(path string) (*Config, error) {
 	if c.Server.Bind == "" {
 		c.Server.Bind = serverBindPadrao
 	}
+	if err := validaServerSeguranca(&c, &raiz, path); err != nil {
+		return nil, err
+	}
 	return &c, nil
 }
 
@@ -264,6 +293,22 @@ func razaoDeLiveness(v *float64) (float64, error) {
 func (c *Config) ServidorHabilitado() bool {
 	return c.Server.Enabled == nil || *c.Server.Enabled
 }
+
+// TLSHabilitado diz se server.tls está ligado (§77).
+//
+// Ao contrário de ServidorHabilitado, aqui ausente é FALSE: TLS é recurso
+// novo e opt-in, sem YAML herdado cujo comportamento dependa do oposto.
+func (c *Config) TLSHabilitado() bool { return c.Server.TLS.Enabled }
+
+// AutenticacaoHabilitada diz se server.authentication está ligado (§74-76).
+// Mesma regra do TLSHabilitado: ausente é FALSE.
+func (c *Config) AutenticacaoHabilitada() bool { return c.Server.Authentication.Enabled }
+
+// LoopbackHabilitado diz se o listener secundário SEM TLS/auth
+// (server.loopback, plano duplo de observabilidade da Fase 11) está ligado.
+// Ausente é FALSE — nenhum YAML herdado ganha um listener novo sem o
+// operador pedir.
+func (c *Config) LoopbackHabilitado() bool { return c.Server.Loopback.Enabled }
 
 // Compaction é a política de compaction do §53/§78: se ela roda, e a partir de
 // que fração de dado vivo um segmento deixa de valer a pena manter como está.

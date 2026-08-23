@@ -373,3 +373,229 @@ func TestFormaDoRatioEhValidadaMesmoComACompactionDesligada(t *testing.T) {
 		})
 	}
 }
+
+// A partir daqui: Fase 11 (§74-78) — server.tls, server.authentication e
+// server.loopback ganham forma no parse. As oito recusas abaixo seguem a
+// mesma doutrina do bloco de compaction logo acima: FORMA validada no PARSE,
+// independente de qualquer `enabled`, exceto quando a própria recusa É sobre
+// a implicação de `enabled: true` (TLS exigindo cert/key, authentication
+// exigindo users).
+//
+// A resolução de segredos (ler a env var, ler o arquivo de senha) e a matriz
+// de recusa do §77 (auth sem TLS com bind exposto etc.) NÃO são desta tarefa
+// — ficam para a ativação, em server.Novo (B2 do plano do ciclo).
+
+// TestSenhaLiteralNoYAMLEhRecusada fecha o §75: "senha literal no YAML não
+// deve ser aceita" é uma exigência de RECUSA EXPLÍCITA, e não de silêncio.
+// `password` nunca foi campo de UserSpec — por isso a mesma whitelist manual
+// que a recusa 7 exercita já a nomeia como chave desconhecida.
+//
+// O usuário já traz passwordEnv E role válidos: se o teste falhasse por
+// QUALQUER outro motivo (fonte de senha ausente, role ruim), a mensagem já
+// conteria "password" como substring de "passwordEnv" e a asserção passaria
+// pelo motivo ERRADO. Com as outras chaves corretas, a única forma de haver
+// erro é a whitelist recusando a chave `password` em si.
+func TestSenhaLiteralNoYAMLEhRecusada(t *testing.T) {
+	corpo := "server:\n  authentication:\n    enabled: true\n    users:\n" +
+		"      - username: grafana\n        passwordEnv: NISHIDB_GRAFANA_PASSWORD\n        password: hunter2\n        role: READ\n"
+	_, err := CarregaConfig(escreveConfig(t, corpo))
+	if err == nil {
+		t.Fatal("password literal foi aceita")
+	}
+	if !strings.Contains(err.Error(), "password: chave desconhecida") {
+		t.Errorf("erro = %v, quer nomear a chave password como desconhecida", err)
+	}
+}
+
+func TestRoleForaDoEnumEhRecusado(t *testing.T) {
+	corpo := "server:\n  authentication:\n    enabled: true\n    users:\n" +
+		"      - username: grafana\n        passwordEnv: NISHIDB_GRAFANA_PASSWORD\n        role: SUPERUSER\n"
+	_, err := CarregaConfig(escreveConfig(t, corpo))
+	if err == nil {
+		t.Fatal("role fora do enum {READ, ADMIN} foi aceita")
+	}
+	if !strings.Contains(err.Error(), "role") || !strings.Contains(err.Error(), "SUPERUSER") {
+		t.Errorf("erro = %v, quer nomear a chave role e o valor recebido", err)
+	}
+}
+
+// TestUsuarioExigeExatamenteUmaFonteDeSenha cobre as duas pontas: nenhuma
+// fonte declarada e as duas ao mesmo tempo são igualmente inválidas — a
+// credencial precisa morar em EXATAMENTE um lugar.
+func TestUsuarioExigeExatamenteUmaFonteDeSenha(t *testing.T) {
+	casos := map[string]string{
+		"nenhuma": "      - username: grafana\n        role: READ\n",
+		"ambas":   "      - username: grafana\n        passwordEnv: NISHIDB_GRAFANA_PASSWORD\n        passwordFile: /run/secrets/grafana\n        role: READ\n",
+	}
+	for nome, user := range casos {
+		t.Run(nome, func(t *testing.T) {
+			corpo := "server:\n  authentication:\n    enabled: true\n    users:\n" + user
+			_, err := CarregaConfig(escreveConfig(t, corpo))
+			if err == nil {
+				t.Fatalf("%s fontes de senha foi aceito", nome)
+			}
+			if !strings.Contains(err.Error(), "passwordEnv") || !strings.Contains(err.Error(), "passwordFile") {
+				t.Errorf("erro = %v, quer nomear passwordEnv e passwordFile", err)
+			}
+		})
+	}
+}
+
+func TestUsernameDuplicadoEntreUsersEhRecusado(t *testing.T) {
+	corpo := "server:\n  authentication:\n    enabled: true\n    users:\n" +
+		"      - username: grafana\n        passwordEnv: A\n        role: READ\n" +
+		"      - username: grafana\n        passwordEnv: B\n        role: ADMIN\n"
+	_, err := CarregaConfig(escreveConfig(t, corpo))
+	if err == nil {
+		t.Fatal("username duplicado entre users foi aceito")
+	}
+	if !strings.Contains(err.Error(), "username") || !strings.Contains(err.Error(), "grafana") {
+		t.Errorf("erro = %v, quer nomear username e o valor duplicado", err)
+	}
+}
+
+func TestTLSLigadoSemCertificadoOuChaveEhRecusado(t *testing.T) {
+	casos := map[string]string{
+		"sem certificateFile": "server:\n  tls:\n    enabled: true\n    privateKeyFile: /etc/nishidb/tls/server.key\n",
+		"sem privateKeyFile":  "server:\n  tls:\n    enabled: true\n    certificateFile: /etc/nishidb/tls/server.crt\n",
+		"sem os dois":         "server:\n  tls:\n    enabled: true\n",
+	}
+	for nome, corpo := range casos {
+		t.Run(nome, func(t *testing.T) {
+			_, err := CarregaConfig(escreveConfig(t, corpo))
+			if err == nil {
+				t.Fatalf("tls.enabled: true sem cert/key foi aceito (%s)", nome)
+			}
+			if !strings.Contains(err.Error(), "server.tls") {
+				t.Errorf("erro = %v, quer nomear server.tls", err)
+			}
+		})
+	}
+}
+
+func TestAuthenticationLigadaSemUsersEhRecusada(t *testing.T) {
+	casos := map[string]string{
+		"ausente": "server:\n  authentication:\n    enabled: true\n",
+		"vazia":   "server:\n  authentication:\n    enabled: true\n    users: []\n",
+	}
+	for nome, corpo := range casos {
+		t.Run(nome, func(t *testing.T) {
+			_, err := CarregaConfig(escreveConfig(t, corpo))
+			if err == nil {
+				t.Fatalf("authentication.enabled: true sem users foi aceito (%s)", nome)
+			}
+			if !strings.Contains(err.Error(), "server.authentication") {
+				t.Errorf("erro = %v, quer nomear server.authentication", err)
+			}
+		})
+	}
+}
+
+// TestChaveDesconhecidaNosBlocosDeSegurancaEhRecusada é a recusa que a
+// doutrina do arquivo mais teme: "enabld: true" (typo) engolido é o typo
+// mais caro do arquivo — bloco de segurança não pode herdar a tolerância do
+// KnownFields global, que continua desligado de propósito para o resto do
+// documento.
+func TestChaveDesconhecidaNosBlocosDeSegurancaEhRecusada(t *testing.T) {
+	casos := map[string]string{
+		"tls":            "server:\n  tls:\n    enabld: true\n",
+		"authentication": "server:\n  authentication:\n    enbaled: true\n",
+		"users":          "server:\n  authentication:\n    enabled: true\n    users:\n      - usernme: grafana\n        passwordEnv: A\n        role: READ\n",
+		"loopback":       "server:\n  loopback:\n    enabld: true\n",
+	}
+	for nome, corpo := range casos {
+		t.Run(nome, func(t *testing.T) {
+			_, err := CarregaConfig(escreveConfig(t, corpo))
+			if err == nil {
+				t.Fatalf("chave desconhecida em server.%s foi aceita", nome)
+			}
+			if !strings.Contains(err.Error(), "chave desconhecida") {
+				t.Errorf("erro = %v, quer \"chave desconhecida\"", err)
+			}
+		})
+	}
+}
+
+func TestLoopbackNaMesmaPortaDoServerPrincipalEhRecusado(t *testing.T) {
+	corpo := "server:\n  port: 9142\n  loopback:\n    enabled: true\n    port: 9142\n"
+	_, err := CarregaConfig(escreveConfig(t, corpo))
+	if err == nil {
+		t.Fatal("server.loopback.port igual a server.port foi aceito")
+	}
+	if !strings.Contains(err.Error(), "server.loopback.port") || !strings.Contains(err.Error(), "server.port") {
+		t.Errorf("erro = %v, quer nomear as duas chaves", err)
+	}
+}
+
+// TestServerSemBlocosDeSegurancaContinuaValido é o teste de COMPATIBILIDADE:
+// o YAML de hoje — inclusive o do piloto, que não conhece tls/authentication/
+// loopback — precisa continuar carregando exatamente como antes desta tarefa.
+func TestServerSemBlocosDeSegurancaContinuaValido(t *testing.T) {
+	c, err := CarregaConfig(escreveConfig(t, "server:\n  bind: 127.0.0.1\n  port: 9142\n"))
+	if err != nil {
+		t.Fatalf("YAML sem os blocos novos passou a ser recusado: %v", err)
+	}
+	if c.TLSHabilitado() {
+		t.Error("TLSHabilitado() = true sem bloco tls no YAML")
+	}
+	if c.AutenticacaoHabilitada() {
+		t.Error("AutenticacaoHabilitada() = true sem bloco authentication no YAML")
+	}
+	if c.LoopbackHabilitado() {
+		t.Error("LoopbackHabilitado() = true sem bloco loopback no YAML")
+	}
+}
+
+// TestBlocosDeSegurancaValidosSaoCarregados prova a INTERFACE que a B2 vai
+// consumir: os três predicados e os campos por trás deles, com um YAML no
+// molde do exemplo do §78.
+func TestBlocosDeSegurancaValidosSaoCarregados(t *testing.T) {
+	corpo := "server:\n" +
+		"  tls:\n" +
+		"    enabled: true\n" +
+		"    certificateFile: /etc/nishidb/tls/server.crt\n" +
+		"    privateKeyFile: /etc/nishidb/tls/server.key\n" +
+		"  authentication:\n" +
+		"    enabled: true\n" +
+		"    users:\n" +
+		"      - username: reader\n" +
+		"        passwordEnv: NISHIDB_READER_PASSWORD\n" +
+		"        role: READ\n" +
+		"      - username: admin\n" +
+		"        passwordFile: /run/secrets/nishidb-admin\n" +
+		"        role: ADMIN\n" +
+		"  loopback:\n" +
+		"    enabled: true\n" +
+		"    port: 9143\n"
+	c, err := CarregaConfig(escreveConfig(t, corpo))
+	if err != nil {
+		t.Fatalf("YAML do exemplo do §78 foi recusado: %v", err)
+	}
+	if !c.TLSHabilitado() {
+		t.Error("TLSHabilitado() = false com tls.enabled: true")
+	}
+	if c.Server.TLS.CertificateFile != "/etc/nishidb/tls/server.crt" ||
+		c.Server.TLS.PrivateKeyFile != "/etc/nishidb/tls/server.key" {
+		t.Errorf("TLS = %+v, cert/key não bateram", c.Server.TLS)
+	}
+	if !c.AutenticacaoHabilitada() {
+		t.Error("AutenticacaoHabilitada() = false com authentication.enabled: true")
+	}
+	if len(c.Server.Authentication.Users) != 2 {
+		t.Fatalf("Users = %+v, quer 2 usuários", c.Server.Authentication.Users)
+	}
+	reader := c.Server.Authentication.Users[0]
+	if reader.Username != "reader" || reader.PasswordEnv != "NISHIDB_READER_PASSWORD" || reader.Role != "READ" {
+		t.Errorf("users[0] = %+v", reader)
+	}
+	admin := c.Server.Authentication.Users[1]
+	if admin.Username != "admin" || admin.PasswordFile != "/run/secrets/nishidb-admin" || admin.Role != "ADMIN" {
+		t.Errorf("users[1] = %+v", admin)
+	}
+	if !c.LoopbackHabilitado() {
+		t.Error("LoopbackHabilitado() = false com loopback.enabled: true")
+	}
+	if c.Server.Loopback.Port == nil || *c.Server.Loopback.Port != 9143 {
+		t.Errorf("Loopback.Port = %v, quer 9143", c.Server.Loopback.Port)
+	}
+}

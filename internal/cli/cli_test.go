@@ -28,15 +28,22 @@ type ambiente struct {
 const configYAML = `
 version: 1
 
-# Seções que o M1 NÃO implementa, presentes de propósito: o arquivo do M3 não
-# pode ser inválido para o binário do M1.
+# runtime é seção que o M1 NÃO implementa, presente de propósito: o arquivo
+# do M3 não pode ser inválido para o binário do M1.
 runtime:
   memoryTarget: 1GiB
 server:
   enabled: true
   port: 9142
+  # server.tls ganhou FORMA validada na Fase 11 (débito zero de
+  # "aceita e ignorada em silêncio"): enabled: true sem os dois arquivos é
+  # recusado no parse. O M1 continua sem ATIVAR TLS nenhum — só a validação
+  # de forma chegou — mas o valor aqui precisa ser um bloco válido para este
+  # fixture continuar representando um arquivo real.
   tls:
     enabled: true
+    certificateFile: /etc/nishidb/tls/server.crt
+    privateKeyFile: /etc/nishidb/tls/server.key
 
 storage:
   path: %s
