@@ -673,6 +673,12 @@ func (s *Store) ParaCompaction() {
 // reaberto depois de horas de ingestão já vem com o garbage acumulado, e fazê
 // -lo esperar o intervalo é adiar o único trabalho que devolve disco.
 //
+// Cada rodada DISPUTA a vaga do single-flight fino (tentaClaimarPassada)
+// antes de rodar — e PULA a rodada, sem erro nem log, se uma chamada MANUAL
+// (CompactaUmaVez, Task B5) já a tiver. É a metade "laço em voo + manual"
+// da exclusão hermética: o laço nunca sobe uma segunda varredura por cima de
+// uma passada manual, ele só espera o próprio cochilo e tenta de novo.
+//
 // Para na PRIMEIRA falha, e para de vez. Não é impaciência: o erro que chega
 // aqui ou é o modo falho sticky do writer — que só sai com Close e reabertura
 // (§14.14) —, ou é a corrupção que o compactaSegmento recusa a varrer, e nos
@@ -681,21 +687,67 @@ func (s *Store) ParaCompaction() {
 // varredura perpétua sobre um dataset que já não pode ser compactado.
 func (s *Store) rodaCompaction(ctx context.Context, ratio float64) {
 	for {
-		if _, err := s.passadaDeCompaction(ctx, ratio); err != nil {
-			if ctx.Err() != nil {
-				return // cancelamento não é falha: é o Close ou o SIGTERM
+		if s.tentaClaimarPassada(false) {
+			_, err := s.passadaDeCompaction(ctx, ratio)
+			s.liberaPassada(false)
+			if err != nil {
+				if ctx.Err() != nil {
+					return // cancelamento não é falha: é o Close ou o SIGTERM
+				}
+				s.opts.Log.Error("compaction.parou",
+					"a compaction parou e NÃO volta sozinha; o disco recomeça a crescer sem nada devolvê-lo (§53-55, §86)",
+					"erro", err.Error())
+				return
 			}
-			s.opts.Log.Error("compaction.parou",
-				"a compaction parou e NÃO volta sozinha; o disco recomeça a crescer sem nada devolvê-lo (§53-55, §86)",
-				"erro", err.Error())
-			return
 		}
+		// Sem `else` com log: uma rodada pulada por causa de uma chamada
+		// manual em voo não é anomalia — é a exclusão funcionando — e o
+		// cochilo de 5s abaixo já é folga de sobra para a chamada manual
+		// (que responde em vez de manter conexão aberta) ter liberado a vaga
+		// bem antes da próxima tentativa.
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(intervaloEntrePassadas):
 		}
 	}
+}
+
+// tentaClaimarPassada reivindica o direito de rodar UMA passada agora.
+// manual escolhe qual das duas flags do single-flight fino
+// (compPassadaEmVoo para o laço, compManualEmVoo para CompactaUmaVez) checar
+// e setar; devolve false se a OUTRA já estiver em voo.
+//
+// Lock BLOQUEANTE em compPassadaMu é seguro aqui — ao contrário de compMu
+// (godoc do campo, store.go), compPassadaMu NUNCA é mantido além do tempo de
+// ler dois bools e setar um: nem tentaClaimarPassada nem liberaPassada
+// seguram o mutex durante a passada em si (que pode levar minutos), então
+// não há goroutine nenhuma que fique presa nele por tempo que importe, e
+// portanto nenhum cenário em que ParaCompaction (via compEmVoo.Wait())
+// esteja esperando por um goroutine bloqueado aqui.
+func (s *Store) tentaClaimarPassada(manual bool) bool {
+	s.compPassadaMu.Lock()
+	defer s.compPassadaMu.Unlock()
+	if s.compPassadaEmVoo || s.compManualEmVoo {
+		return false
+	}
+	if manual {
+		s.compManualEmVoo = true
+	} else {
+		s.compPassadaEmVoo = true
+	}
+	return true
+}
+
+// liberaPassada devolve a vaga que tentaClaimarPassada(manual) reivindicou.
+func (s *Store) liberaPassada(manual bool) {
+	s.compPassadaMu.Lock()
+	if manual {
+		s.compManualEmVoo = false
+	} else {
+		s.compPassadaEmVoo = false
+	}
+	s.compPassadaMu.Unlock()
 }
 
 // ResultadoCompactacao é o agregado de UMA passada — quantos segmentos ela
@@ -723,8 +775,9 @@ type ResultadoCompactacao struct {
 //
 // É privada do PACOTE, não do laço: rodaCompaction é uma chamadora, e
 // CompactaUmaVez (mais abaixo, Task B5) é a outra — as duas disputam o
-// single-flight de compMu/compEmVoo ANTES de chegar aqui, então quando esta
-// função roda já não há a quem ela possa disputar wmu record a record.
+// single-flight fino de compPassadaMu (tentaClaimarPassada) ANTES de chegar
+// aqui, então quando esta função roda já não há a quem ela possa disputar
+// wmu record a record.
 func (s *Store) passadaDeCompaction(ctx context.Context, ratio float64) (ResultadoCompactacao, error) {
 	var out ResultadoCompactacao
 	for _, seg := range s.candidatos(ratio) {
@@ -764,39 +817,76 @@ func (s *Store) passadaDeCompaction(ctx context.Context, ratio float64) (Resulta
 
 // CompactaUmaVez executa UMA passada de compaction sob demanda — o caso de
 // uso do operador que desligou o laço automático (storage.compaction.enabled:
-// false) e quer devolver disco na mão (Task B5, POST /v1/compact), ou que
-// quer forçar uma passada fora do intervalo do laço.
+// false) e quer devolver disco na mão (Task B5, POST /v1/compact), E TAMBÉM
+// o caso — corrigido pela revisão da B5, achado Critical — do operador que
+// deixou o laço LIGADO (o default: storage.compaction.enabled ausente ⇒
+// true) e quer forçar uma passada fora do intervalo dele: com o laço
+// configurado mas OCIOSO entre duas passadas, esta chamada funciona e
+// devolve trabalho de verdade.
 //
-// Disputa o MESMO single-flight de IniciaCompaction/rodaCompaction, nunca um
-// segundo (godoc de IniciaCompaction, acima: duas varreduras concorrentes são
-// PROIBIDAS). "Em voo" cobre as DUAS formas de já haver uma passada
-// acontecendo: o laço automático de pé (compCancela != nil — mesmo dormindo
-// entre passadas, porque o cochilo pode terminar a qualquer instante e
-// colidir com esta chamada) OU outra chamada manual concorrente
-// (compManualEmVoo). Em qualquer um dos dois casos, devolve ErrCompactionBusy
-// NA HORA — não enfileira e não espera, porque quem chama (a rota HTTP) tem
-// de responder ao cliente sem segurar a conexão por uma passada que pode
-// durar minutos.
+// Disputa o MESMO single-flight fino de rodaCompaction — tentaClaimarPassada
+// — nunca um segundo, e NUNCA compCancela: compCancela fica não-nil da
+// primeira à última hora do laço (dormindo ou varrendo), e checá-lo
+// devolveria ErrCompactionBusy o tempo todo na config default, tornando esta
+// rota morta no caso majoritário — o bug que a revisão achou. "Em voo" quer
+// dizer que HÁ uma varredura de fato acontecendo NESTE INSTANTE (o laço
+// dentro de passadaDeCompaction, ou outra chamada manual) — nunca "existe um
+// laço configurado". Em qualquer um dos dois casos de exclusão, devolve
+// ErrCompactionBusy NA HORA — não enfileira e não espera, porque quem chama
+// (a rota HTTP) tem de responder ao cliente sem segurar a conexão por uma
+// passada que pode durar minutos.
+//
+// A exclusão é HERMÉTICA NOS DOIS SENTIDOS (godoc de compPassadaMu,
+// store.go): com esta chamada em voo, a tentativa do laço de rodar sua
+// PRÓXIMA rodada falha e ele PULA (rodaCompaction) — nunca uma segunda
+// varredura concorrente; com o laço em voo, esta chamada falha aqui.
 //
 // ctx cancelado no meio interrompe a passada com segurança: o copy-forward é
 // escrita normal sob o wmu (reapendaSeVivo), e o candidato que a passada não
 // alcançar fica para a PRÓXIMA — automática ou manual. É o mesmo argumento de
 // segurança que o cancelamento do Close já usa (decisão D7), só que aqui quem
 // cancela é o cliente HTTP desistindo, não o encerramento do processo.
+//
+// # Por que a janela entre ParaCompaction retornar e Close tomar vida.Lock() é segura
+//
+// (Important 2 da revisão da B5.) Close() chama ParaCompaction() ANTES de
+// vida.Lock() — não depois —, então existe uma janela, por menor que seja,
+// em que compCancela já é nil e vida ainda não está travada. O que impede
+// uma chamada nova a CompactaUmaVez de entrar nessa janela e correr contra
+// Close() desmapeando segR/segW NÃO é vida.RLock(): compactaSegmento chama
+// s.segR.ScanFrom SEM esse bracket (só reapendaSeVivo, por record, tem
+// entra()/sai()) — é o PAREAMENTO Add/Done de compEmVoo. ParaCompaction
+// espera compEmVoo.Wait() ANTES de Close() prosseguir, e tanto o laço
+// (Add em IniciaCompaction, Done quando rodaCompaction retorna) quanto esta
+// função (Add/Done logo abaixo) só decrementam DEPOIS que
+// passadaDeCompaction — o trecho que toca segR/segW de verdade, incluindo
+// candidatos(), que também não passa por entra() — já terminou. É esse
+// pareamento, não vida.RLock(), que garante que nenhuma varredura ainda está
+// lendo/escrevendo segmento quando Close() chega a fechar os arquivos.
+//
+// O QUE REABRIRIA o risco: qualquer mudança que despachasse
+// compactaSegmento/aposentaSegmento/candidatos() para uma goroutine PRÓPRIA
+// sem repassar o Add/Done de compEmVoo para dentro dela (por exemplo, um
+// "compacta em background e responde 202" futuro que perdesse esse
+// pareamento no caminho), ou que fizesse Close() reordenar ParaCompaction()
+// para DEPOIS de tocar segR/segW. Enquanto o invariante "compEmVoo só
+// decrementa depois que o último byte de I/O da passada foi tocado" valer
+// para TODO chamador de passadaDeCompaction, a janela é segura; ele não é
+// imposto pelo compilador nem por um teste dedicado — fica registrado aqui
+// para a próxima mudança nesta função ou em Close() tropeçar no comentário.
 func (s *Store) CompactaUmaVez(ctx context.Context, ratio float64) (ResultadoCompactacao, error) {
-	s.compMu.Lock()
-	if s.compCancela != nil || s.compManualEmVoo {
-		s.compMu.Unlock()
+	if !s.tentaClaimarPassada(true) {
 		return ResultadoCompactacao{}, ErrCompactionBusy
 	}
-	s.compManualEmVoo = true
 	s.compEmVoo.Add(1)
-	s.compMu.Unlock()
 	defer func() {
+		// A ORDEM importa: liberar a vaga ANTES de decrementar compEmVoo
+		// garante que, no instante em que um Wait() bloqueado (ParaCompaction)
+		// ou uma nova tentativa de reivindicar a vaga acordar, o par de flags
+		// já reflete "livre" — nunca uma janela em que compEmVoo já chegou a
+		// zero mas compManualEmVoo ainda diz true.
+		s.liberaPassada(true)
 		s.compEmVoo.Done()
-		s.compMu.Lock()
-		s.compManualEmVoo = false
-		s.compMu.Unlock()
 	}()
 
 	return s.passadaDeCompaction(ctx, ratio)

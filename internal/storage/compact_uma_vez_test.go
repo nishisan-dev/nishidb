@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -60,23 +61,133 @@ func TestCompactaUmaVezSemCandidatoDevolveZerosSemErro(t *testing.T) {
 	}
 }
 
-// TestCompactaUmaVezComOLacoAutomaticoDePeDevolveBusy é a metade "laço em
-// voo + POST" do critério de 409 concorrente do brief, e é determinística sem
-// nenhum gate: IniciaCompaction grava compCancela de forma SÍNCRONA, antes de
-// devolver o controle ao chamador — a goroutine ainda nem pode ter rodado um
-// passo, e mesmo assim CompactaUmaVez já vê o laço como "de pé" e recusa. É a
-// leitura conservadora da restrição estrutural: enquanto o laço existe, ele
-// pode acordar do cochilo a qualquer instante e colidir com uma varredura
-// manual, então NENHUMA janela do laço (nem dormindo) é tratada como livre.
-func TestCompactaUmaVezComOLacoAutomaticoDePeDevolveBusy(t *testing.T) {
+// TestCompactaUmaVezComPassadaDoLacoEmVooDevolveBusy é o Critical da revisão
+// da B5: o 409 tem de disparar com uma passada de VERDADE em voo — não só
+// porque o laço automático EXISTE (compCancela fica não-nil da primeira à
+// última hora do laço, dormindo ou varrendo; checá-lo tornava a rota morta o
+// tempo todo na config default). Aqui o mesmo gate de aposentadoria de
+// TestCloseCancelaEAguardaACompaction trava a PRIMEIRA passada do laço (ela é
+// imediata, sem cochilo antes) no meio, e só então CompactaUmaVez é chamada
+// — determinístico, sem sleep de corrida.
+func TestCompactaUmaVezComPassadaDoLacoEmVooDevolveBusy(t *testing.T) {
 	s := openStore(t, Options{Dir: t.TempDir(), SegmentSize: 8 << 10})
 	corpusDeSegmentosSelados(t, s, 40, 30)
+
+	emVoo := make(chan struct{})
+	libera := make(chan struct{})
+	liberar := sync.OnceFunc(func() { close(libera) })
+	defer liberar()
+	var umaVez sync.Once
+	s.SetAposentadoriaTraceForTest(func(string) {
+		umaVez.Do(func() {
+			close(emVoo)
+			<-libera
+		})
+	})
 
 	s.IniciaCompaction(context.Background(), 0.5)
 	defer s.ParaCompaction()
 
+	select {
+	case <-emVoo:
+	case <-time.After(60 * time.Second):
+		t.Fatal("o laço não chegou a aposentar nada em 60s: sem uma passada em voo o teste não exercita nada")
+	}
+
 	if _, err := s.CompactaUmaVez(context.Background(), 0.5); !errors.Is(err, ErrCompactionBusy) {
-		t.Fatalf("CompactaUmaVez com o laço automático de pé: err = %v, quer ErrCompactionBusy", err)
+		t.Fatalf("CompactaUmaVez com a passada do laço em voo: err = %v, quer ErrCompactionBusy", err)
+	}
+
+	liberar()
+}
+
+// TestRodaCompactionPulaARodadaQuandoUmaChamadaManualEstaEmVoo é o OUTRO
+// sentido da exclusão hermética (revisão da B5): com uma passada MANUAL em
+// voo, a tentativa do laço automático de rodar a SUA passada (aqui, a
+// primeira, que é imediata) tem de PULAR — nunca subir uma segunda
+// varredura concorrente disputando wmu record a record com a manual. O
+// oráculo é o mesmo estilo de "ausência dentro de uma janela" de
+// TestSegundaPartidaDaCompactionNaoSobeSegundaGoroutine: se o laço tivesse
+// intrudido, um segundo passo de aposentadoria chegaria ao seam quase
+// imediatamente (a primeira passada de IniciaCompaction não tem cochilo
+// antes dela) — a janela de 500ms é folga larga sobre qualquer agendamento
+// de goroutine.
+func TestRodaCompactionPulaARodadaQuandoUmaChamadaManualEstaEmVoo(t *testing.T) {
+	s := openStore(t, Options{Dir: t.TempDir(), SegmentSize: 8 << 10})
+	corpusDeSegmentosSelados(t, s, 40, 30)
+
+	emVoo := make(chan struct{})
+	libera := make(chan struct{})
+	liberar := sync.OnceFunc(func() { close(libera) })
+	defer liberar()
+	var primeira atomic.Bool
+	var intrusos atomic.Int64
+	s.SetAposentadoriaTraceForTest(func(string) {
+		if primeira.CompareAndSwap(false, true) {
+			close(emVoo)
+			<-libera
+			return
+		}
+		intrusos.Add(1)
+	})
+
+	manual := make(chan error, 1)
+	go func() {
+		_, err := s.CompactaUmaVez(context.Background(), 0.5)
+		manual <- err
+	}()
+
+	select {
+	case <-emVoo:
+	case <-time.After(60 * time.Second):
+		t.Fatal("a chamada manual não chegou a aposentar nada em 60s")
+	}
+
+	// A passada MANUAL está em voo (parada no gate). O laço automático
+	// começa AGORA — a primeira passada dele é imediata — e disputa a MESMA
+	// vaga do single-flight fino.
+	s.IniciaCompaction(context.Background(), 0.5)
+	defer s.ParaCompaction()
+
+	time.Sleep(500 * time.Millisecond)
+	if n := intrusos.Load(); n != 0 {
+		t.Fatalf("o laço automático rodou %d passo(s) de aposentadoria enquanto a chamada manual estava em voo: "+
+			"duas varreduras concorrentes disputariam wmu record a record", n)
+	}
+
+	liberar()
+	if err := <-manual; err != nil {
+		t.Fatalf("chamada manual: %v", err)
+	}
+}
+
+// TestCompactaUmaVezFuncionaComOLacoLigadoMasOcioso é o outro lado do
+// Critical: só existir o laço (storage.compaction.enabled: true, o default)
+// não pode bastar para recusar CompactaUmaVez para sempre — a rota tem de
+// responder quando não há passada NENHUMA em voo, mesmo com o laço
+// configurado. Sem garbage nenhum, a eleição do laço e a manual são sempre
+// vazias — nenhuma das duas passa tempo "aposentando" —, então não há como
+// travar nenhuma delas no meio para um gate; o oráculo é chamar de novo,
+// imediatamente, sem sleep de corrida nenhum: cada tentativa ou vê a vaga
+// livre (o caso esperado — a eleição vazia do laço dura microssegundos, não
+// segundos) ou recebe ErrCompactionBusy e tenta de novo na hora. O teto
+// existe só para falhar alto se a rota estivesse morta de verdade.
+func TestCompactaUmaVezFuncionaComOLacoLigadoMasOcioso(t *testing.T) {
+	s := openStore(t, Options{Dir: t.TempDir(), SegmentSize: 8 << 10})
+
+	s.IniciaCompaction(context.Background(), 0.5)
+	defer s.ParaCompaction()
+
+	const tentativas = 500
+	var err error
+	for i := 0; i < tentativas; i++ {
+		_, err = s.CompactaUmaVez(context.Background(), 0.5)
+		if !errors.Is(err, ErrCompactionBusy) {
+			break
+		}
+	}
+	if err != nil {
+		t.Fatalf("CompactaUmaVez nunca teve sucesso em %d tentativas com o laço ligado e ocioso: %v", tentativas, err)
 	}
 }
 

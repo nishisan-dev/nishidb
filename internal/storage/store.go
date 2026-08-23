@@ -287,24 +287,55 @@ type Store struct {
 	// compMu protege o par contra Inicia e Para concorrentes, e é segurado
 	// durante o Wait de propósito: sem isso um Inicia podia somar ao
 	// WaitGroup que o Para está esperando, que é uso indevido do tipo.
+	//
+	// compMu NÃO decide mais (revisão da B5, achado Critical) se HÁ uma
+	// passada em voo — só se o LAÇO existe. compCancela fica não-nil da
+	// primeira à última hora do laço, dormindo ou varrendo, então checá-lo
+	// para decidir 409 tornava a rota morta o tempo todo na config default
+	// (storage.compaction.enabled ausente ⇒ true). Quem decide isso agora é
+	// compPassadaMu, abaixo — um mutex PRÓPRIO, de propósito: compMu fica
+	// preso do início ao fim de ParaCompaction (Lock → compCancela() →
+	// compEmVoo.Wait(), que pode durar minutos com uma passada em
+	// andamento), e nem o laço nem CompactaUmaVez podem arriscar bloquear
+	// nele para reivindicar uma passada — um Lock bloqueante ali, na hora
+	// errada, prenderia o próprio goroutine que ParaCompaction está
+	// esperando via compEmVoo (deadlock).
 	compMu      sync.Mutex
 	compCancela context.CancelFunc
 	compEmVoo   sync.WaitGroup
 
-	// compManualEmVoo marca uma passada MANUAL em andamento (Task B5,
-	// CompactaUmaVez/POST /v1/compact) — a metade do single-flight que falta
-	// para cobrir "duas chamadas manuais concorrentes", já que compCancela
-	// != nil já cobre "o laço automático está de pé".
+	// compPassadaMu protege o par (compPassadaEmVoo, compManualEmVoo) — o
+	// single-flight FINO que decide, a cada instante, se HÁ uma passada de
+	// verdade em andamento. As duas flags:
 	//
-	// Protegida pelo MESMO compMu, nunca um mutex próprio: a decisão "já
-	// existe passada em voo?" é sempre as DUAS condições lidas sob o mesmo
-	// lock (compCancela != nil || compManualEmVoo), e um segundo mutex
-	// permitiria as duas leituras verem estados de instantes diferentes.
+	//   - compPassadaEmVoo: true SÓ durante a chamada real a
+	//     passadaDeCompaction dentro de rodaCompaction (o laço automático).
+	//   - compManualEmVoo: true durante a chamada real a passadaDeCompaction
+	//     dentro de CompactaUmaVez (Task B5, POST /v1/compact).
+	//
+	// tentaClaimarPassada/liberaPassada (compaction.go) são os dois únicos
+	// pontos que tocam este par, e um Lock BLOQUEANTE neles é seguro — ao
+	// contrário de compMu (nota acima), compPassadaMu NUNCA é mantido além
+	// do tempo de ler dois bools e setar um: nenhuma das duas funções o
+	// segura DURANTE a passada em si (que é o trecho que pode levar
+	// minutos), então não existe goroutine que fique presa nele por tempo
+	// que importe, e portanto nenhum risco de ParaCompaction (via
+	// compEmVoo.Wait()) esperar por um goroutine bloqueado aqui.
+	//
+	// A exclusão é HERMÉTICA NOS DOIS SENTIDOS: com compManualEmVoo true, a
+	// tentativa do laço (rodaCompaction) de reivindicar a rodada FALHA e ele
+	// PULA — nunca sobe uma segunda varredura; com compPassadaEmVoo true,
+	// CompactaUmaVez devolve ErrCompactionBusy na hora.
+	//
 	// CompactaUmaVez também soma ao MESMO compEmVoo que o laço usa — não por
 	// decoração, mas porque é o que faz ParaCompaction (chamado pelo Close)
-	// esperar por uma passada manual em voo antes de desmapear o índice sob
-	// os pés dela, exatamente a mesma proteção que já existe para o laço.
-	compManualEmVoo bool
+	// esperar por uma passada manual em voo antes de fechar segR/segW sob
+	// os pés dela: ver o godoc de CompactaUmaVez (compaction.go) para a
+	// análise completa de por que isso é o que mantém segura a janela entre
+	// ParaCompaction retornar e Close tomar vida.Lock().
+	compPassadaMu    sync.Mutex
+	compPassadaEmVoo bool
+	compManualEmVoo  bool
 
 	// compAtiva, compBytesLidos e compBytesEscritos são os alimentadores das
 	// três séries de compaction do §92, que até o M4 eram nome sem número
