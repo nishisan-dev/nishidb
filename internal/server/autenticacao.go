@@ -106,9 +106,14 @@ func (rt *roteador) Cru() http.Handler {
 // enum é fechado em {config.RoleRead, config.RoleAdmin} desde a B1 —, então
 // os dois chamadores tratam papel=="" com existe=true como recusa, nunca
 // como ausência legítima de restrição.
-func (rt *roteador) papelDaRota(r *http.Request) (papel string, existe bool) {
-	_, padrao := rt.mux.Handler(r)
-	return rt.papeis[padrao], padrao != ""
+//
+// padrao também volta (revisão da B5, Minor 5): os dois chamadores
+// precisam dele só nos ramos de recusa, para nomear a rota na mensagem de
+// log/erro — devolvê-lo aqui evita que os dois repitam rt.mux.Handler(r),
+// que já rodou dentro desta função.
+func (rt *roteador) papelDaRota(r *http.Request) (papel, padrao string, existe bool) {
+	_, padrao = rt.mux.Handler(r)
+	return rt.papeis[padrao], padrao, padrao != ""
 }
 
 // montaMux constrói o mux CRU do servidor: as cinco rotas de LEITURA (READ) e
@@ -167,15 +172,13 @@ func (s *Servidor) comAutenticacao(rt *roteador) http.Handler {
 		// decisão que rt.mux.ServeHTTP tomaria a seguir, só que aqui só
 		// precisamos saber que papel a rota CASADA exige (existe==false para
 		// rota desconhecida ou método não aceito).
-		exigido, existe := rt.papelDaRota(r)
+		exigido, padrao, existe := rt.papelDaRota(r)
 		if existe {
 			switch {
 			case exigido == "":
-				_, padrao := rt.mux.Handler(r)
 				s.recusaRegistroSemPapel(w, r, padrao)
 				return
 			case !papelAutorizado(papel, exigido):
-				_, padrao := rt.mux.Handler(r)
 				s.recusaAutorizacao(w, r, padrao, papel, exigido)
 				return
 			}
@@ -205,11 +208,10 @@ func (s *Servidor) comAutenticacao(rt *roteador) http.Handler {
 // READ conhecidas, nunca uma licença para bug de registro passar batido.
 func (s *Servidor) muxLoopback(rt *roteador) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		papel, existe := rt.papelDaRota(r)
+		papel, padrao, existe := rt.papelDaRota(r)
 		if existe {
 			switch papel {
 			case "":
-				_, padrao := rt.mux.Handler(r)
 				s.recusaRegistroSemPapel(w, r, padrao)
 				return
 			case config.RoleAdmin:

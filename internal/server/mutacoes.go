@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/protocolo"
@@ -100,6 +101,55 @@ func erroDeMutacao(err error) (int, protocolo.Falha) {
 	}
 }
 
+// ErroParcial é a falha de UM dataset no meio de "todos os datasets" (Task
+// B5, revisão, Important 3): processaDatasets para no primeiro erro, mas
+// não pode ESCONDER que já tocou os datasets anteriores — checkpoint já
+// gravou, compaction já moveu disco para eles, e esse efeito colateral
+// aconteceu de verdade. Dataset nomeia QUEM falhou; Processados nomeia, NA
+// ORDEM em que rodaram, os que tinham tido sucesso ANTES dele.
+type ErroParcial struct {
+	Dataset     string
+	Processados []string
+	Err         error
+}
+
+// processaDatasets executa fn para cada dataset de alvos, NA ORDEM, e para
+// no PRIMEIRO erro — stop-no-primeiro-erro continua sendo a política (uma
+// falha de writer/compaction busy no meio da lista não é motivo para tentar
+// os próximos, que só reencontrariam o mesmo writer). O que muda (revisão da
+// B5, Important 3) é que o erro devolvido nomeia o dataset que falhou E os
+// nomes dos que já tinham sido processados com sucesso antes — informação
+// que o handler usa para NÃO esconder do operador que o efeito colateral já
+// aconteceu para parte da lista.
+//
+// fn devolve o erro CRU do storage — processaDatasets não traduz status HTTP
+// nem código de protocolo, só agrega ordem e nomes; a tradução continua em
+// erroDeMutacao, chamada pelo handler com ErroParcial.Err.
+func processaDatasets[T any](alvos []*dataset, fn func(*dataset) (T, error)) (processados []T, parcial *ErroParcial) {
+	nomes := make([]string, 0, len(alvos))
+	for _, d := range alvos {
+		v, err := fn(d)
+		if err != nil {
+			return processados, &ErroParcial{Dataset: d.nome, Processados: nomes, Err: err}
+		}
+		processados = append(processados, v)
+		nomes = append(nomes, d.nome)
+	}
+	return processados, nil
+}
+
+// mensagemParcial decora a mensagem de erroDeMutacao com o dataset que
+// falhou e os que já tinham sido processados ANTES dele. "nenhum" quando a
+// lista está vazia (falhou no primeiro) — nunca uma lista vazia silenciosa
+// que o operador poderia ler como "não sei".
+func mensagemParcial(p *ErroParcial, base string) string {
+	processados := "nenhum"
+	if len(p.Processados) > 0 {
+		processados = strings.Join(p.Processados, ", ")
+	}
+	return fmt.Sprintf("dataset %q: %s (processados com sucesso antes deste: %s)", p.Dataset, base, processados)
+}
+
 // handleCheckpoint serve o POST /v1/checkpoint do §96 (ADMIN).
 //
 // Idempotente por EFEITO, não por resultado: repetir sobre estado inalterado
@@ -128,22 +178,23 @@ func (s *Servidor) handleCheckpoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	out := protocolo.RespostaCheckpoint{Datasets: make([]protocolo.CheckpointDataset, 0, len(alvos))}
-	for _, d := range alvos {
+	resultados, parcial := processaDatasets(alvos, func(d *dataset) (protocolo.CheckpointDataset, error) {
 		inicio := time.Now()
 		if err := d.st.Checkpoint(); err != nil {
-			status, f := erroDeMutacao(err)
-			s.recusa(w, r, status, d.nome, f)
-			return
+			return protocolo.CheckpointDataset{}, err
 		}
 		duracao := time.Since(inicio)
-		out.Datasets = append(out.Datasets, protocolo.CheckpointDataset{
-			Name: d.nome, DurationMs: duracao.Milliseconds(),
-		})
 		s.log.Dataset(d.nome).Info("checkpoint.manual",
 			"checkpoint disparado via POST /v1/checkpoint (ADMIN)", "duracao_ms", duracao.Milliseconds())
+		return protocolo.CheckpointDataset{Name: d.nome, DurationMs: duracao.Milliseconds()}, nil
+	})
+	if parcial != nil {
+		status, f := erroDeMutacao(parcial.Err)
+		f.Message = mensagemParcial(parcial, f.Message)
+		s.recusa(w, r, status, parcial.Dataset, f)
+		return
 	}
-	s.respondeJSON(w, out)
+	s.respondeJSON(w, protocolo.RespostaCheckpoint{Datasets: resultados})
 }
 
 // handleCompact serve o POST /v1/compact do §96 (ADMIN).
@@ -175,28 +226,31 @@ func (s *Servidor) handleCompact(w http.ResponseWriter, r *http.Request) {
 	}
 	_, ratio := s.cfg.Compaction()
 
-	out := protocolo.RespostaCompact{Datasets: make([]protocolo.CompactDataset, 0, len(alvos))}
-	for _, d := range alvos {
+	resultados, parcial := processaDatasets(alvos, func(d *dataset) (protocolo.CompactDataset, error) {
 		inicio := time.Now()
 		res, err := d.st.CompactaUmaVez(r.Context(), ratio)
 		if err != nil {
-			status, f := erroDeMutacao(err)
-			s.recusa(w, r, status, d.nome, f)
-			return
+			return protocolo.CompactDataset{}, err
 		}
 		duracao := time.Since(inicio)
-		out.Datasets = append(out.Datasets, protocolo.CompactDataset{
-			Name:            d.nome,
-			SegmentsRetired: res.SegmentosAposentados,
-			BytesRead:       res.BytesLidos,
-			BytesWritten:    res.BytesEscritos,
-			DurationMs:      duracao.Milliseconds(),
-		})
 		s.log.Dataset(d.nome).Info("compaction.manual",
 			"passada de compaction disparada via POST /v1/compact (ADMIN)",
 			"segmentos_aposentados", res.SegmentosAposentados,
 			"bytes_lidos", res.BytesLidos, "bytes_escritos", res.BytesEscritos,
 			"duracao_ms", duracao.Milliseconds())
+		return protocolo.CompactDataset{
+			Name:            d.nome,
+			SegmentsRetired: res.SegmentosAposentados,
+			BytesRead:       res.BytesLidos,
+			BytesWritten:    res.BytesEscritos,
+			DurationMs:      duracao.Milliseconds(),
+		}, nil
+	})
+	if parcial != nil {
+		status, f := erroDeMutacao(parcial.Err)
+		f.Message = mensagemParcial(parcial, f.Message)
+		s.recusa(w, r, status, parcial.Dataset, f)
+		return
 	}
-	s.respondeJSON(w, out)
+	s.respondeJSON(w, protocolo.RespostaCompact{Datasets: resultados})
 }

@@ -208,23 +208,127 @@ func TestCheckpointFiltraPorDatasetOuRecusaDesconhecido(t *testing.T) {
 	}
 }
 
-// 409 concorrente, determinístico e SEM sleep de corrida: com o laço
-// automático de compaction de pé (o default — storage.compaction.enabled
-// ausente vale true), compCancela é gravado de forma SÍNCRONA por
-// IniciaCompaction antes mesmo de a goroutine rodar um passo — então
-// CompactaUmaVez vê "em voo" e recusa NA HORA, sem depender de nenhuma
-// corrida de agendador. É a metade "laço em voo + POST" que o brief oferece
-// como alternativa à corrida de dois POSTs simultâneos.
-func TestCompactConcorrenteComOLacoAutomaticoDevolve409(t *testing.T) {
+// servidorComDoisDatasets sobe um servidor de verdade com DOIS datasets sem
+// Kafka — o suficiente para exercitar "todos os datasets" com mais de um
+// elemento de verdade, sem precisar de Kafka nenhum.
+func servidorComDoisDatasets(t *testing.T, blocoServer string) *server.Servidor {
+	t.Helper()
+	a := novoAmbienteCom(t, blocoServer)
+	a.escreveDataset("alfa", strings.ReplaceAll(specSemKafka, "%s", "alfa"))
+	a.escreveDataset("beta", strings.ReplaceAll(specSemKafka, "%s", "beta"))
+	srv, err := server.Novo(a.carrega(), server.Opcoes{})
+	if err != nil {
+		t.Fatalf("subida: %v", err)
+	}
+	roda(t, srv)
+	return srv
+}
+
+// TestCheckpointComTodosOsDatasetsRespeitaAOrdemDeterministicaDaSubida é o
+// Important 3 da revisão da B5: "todos os datasets" (corpo ausente) com MAIS
+// DE UM dataset de verdade, provando a ordem determinística (alfabética,
+// config.ListaDatasets) e que os DOIS aparecem na resposta feliz — não só
+// um teste de unidade com dublê (mutacoes_internal_test.go), que prova a
+// LÓGICA de parar-no-primeiro-erro mas não a fiação real com s.datasets.
+func TestCheckpointComTodosOsDatasetsRespeitaAOrdemDeterministicaDaSubida(t *testing.T) {
+	srv := servidorComDoisDatasets(t, blocoPadrao)
+
+	resp := postComAuth(t, srv, "/v1/checkpoint", "", "", "")
+	if resp.StatusCode != http.StatusOK {
+		defer fecha(t, resp)
+		t.Fatalf("status = %d, quer 200", resp.StatusCode)
+	}
+	var out protocolo.RespostaCheckpoint
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("corpo ilegível: %v", err)
+	}
+	fecha(t, resp)
+
+	if len(out.Datasets) != 2 {
+		t.Fatalf("datasets = %+v, quer 2", out.Datasets)
+	}
+	if out.Datasets[0].Name != "alfa" || out.Datasets[1].Name != "beta" {
+		t.Fatalf("ordem = [%s, %s], quer [alfa, beta] (ordem alfabética da subida, config.ListaDatasets)",
+			out.Datasets[0].Name, out.Datasets[1].Name)
+	}
+}
+
+// TestCompactComAdminNaConfigDefaultFuncionaSemPassadaEmVoo é o Critical da
+// revisão da B5: com a config DEFAULT (storage.compaction ausente ⇒
+// enabled: true, o caso majoritário), a rota NÃO pode ficar morta para
+// sempre — ela só falha BUSY enquanto uma passada está de fato em voo,
+// nunca só porque o laço automático existe (era esse o bug: checar
+// compCancela, que fica não-nil da primeira à última hora do laço).
+//
+// Sem garbage nenhum, a primeira passada automática (imediata, sem cochilo
+// antes) é uma eleição vazia que dura microssegundos — a janela ocupada é
+// curta demais para valer sleep. O oráculo é tentar de novo NA HORA, sem
+// esperar nada entre tentativas: se a rota estivesse morta de verdade (o
+// bug que a revisão achou), NENHUMA das tentativas teria sucesso, e o teste
+// falharia alto no teto em vez de convergir.
+func TestCompactComAdminNaConfigDefaultFuncionaSemPassadaEmVoo(t *testing.T) {
 	srv := servidorComAutenticacao(t, 3, "") // storage.compaction ausente = enabled: true (default)
 
-	resp := postComAuth(t, srv, "/v1/compact", "", "chefe", senhaChefeAuth)
-	status := resp.StatusCode // falhaDe fecha o corpo; lido antes
-	f := falhaDe(t, resp)
-	if status != http.StatusConflict {
-		t.Fatalf("status = %d, quer 409", status)
+	const tentativas = 200
+	var resp *http.Response
+	for i := 0; i < tentativas; i++ {
+		resp = postComAuth(t, srv, "/v1/compact", "", "chefe", senhaChefeAuth)
+		if resp.StatusCode == http.StatusOK {
+			break
+		}
+		fecha(t, resp)
 	}
-	if f.Code != protocolo.CodCompactionBusy {
-		t.Fatalf("código = %q, quer %q", f.Code, protocolo.CodCompactionBusy)
+	defer fecha(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d após %d tentativas imediatas: a rota parece permanentemente ocupada na config default", resp.StatusCode, tentativas)
+	}
+}
+
+// TestCompactDuasChamadasSimultaneasPeloHTTPUmaGanhaUmaRecebe409 prova o 409
+// concorrente FIM A FIM pela porta: duas requisições reais, disparadas ao
+// mesmo tempo por uma barreira de canal (nunca sleep de corrida), contra um
+// dataset com garbage suficiente para a passada real levar dezenas de
+// milissegundos (a mesma bancada de TestCompactionSoSobeComAChaveDoOperadorLigada,
+// que mede ~117ms para este volume) — folga de sobra para a segunda
+// requisição, que chega poucos microssegundos atrás da primeira, encontrar
+// a vaga do single-flight ocupada.
+//
+// storage.compaction.enabled: false isola o teste do laço automático: o que
+// se prova aqui é exclusão entre DUAS CHAMADAS MANUAIS — a suíte do storage
+// (compact_uma_vez_test.go) já prova essa exclusão de forma exaustiva com
+// gate determinístico; o que falta provar aqui é que ela sobrevive à
+// viagem pela porta HTTP, com o servidor de verdade decidindo a resposta.
+func TestCompactDuasChamadasSimultaneasPeloHTTPUmaGanhaUmaRecebe409(t *testing.T) {
+	srv, _, _, _ := bancadaDeCompaction(t, "false")
+
+	partida := make(chan struct{})
+	resultados := make(chan int, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			<-partida
+			resp, err := http.Post("http://"+srv.Endereco()+"/v1/compact", "", nil)
+			if err != nil {
+				resultados <- -1
+				return
+			}
+			defer func() { _ = resp.Body.Close() }()
+			resultados <- resp.StatusCode
+		}()
+	}
+	close(partida) // as duas goroutines partem juntas
+
+	a, b := <-resultados, <-resultados
+	oks, conflitos := 0, 0
+	for _, status := range []int{a, b} {
+		switch status {
+		case http.StatusOK:
+			oks++
+		case http.StatusConflict:
+			conflitos++
+		}
+	}
+	if oks != 1 || conflitos != 1 {
+		t.Fatalf("status = %d e %d, quer exatamente um 200 (COMPACTION_BUSY nunca deveria recusar as DUAS, "+
+			"nem deixar as DUAS varrerem ao mesmo tempo) e um 409", a, b)
 	}
 }
