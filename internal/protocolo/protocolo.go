@@ -175,6 +175,16 @@ const (
 	CodMaxRows             = "MAX_ROWS_EXCEEDED"
 	CodDatasetCorrompido   = "DATASET_CORRUPT"
 	CodInterno             = "INTERNAL"
+
+	// CodUnauthenticated e CodForbidden são do middleware de autenticação e
+	// papéis do §74-77 (Fase 11, Task B3) — os dois primeiros códigos deste
+	// pacote que não vêm da consulta em si. CodUnauthenticated sai com 401 e
+	// o header WWW-Authenticate (RFC 7617); CodForbidden sai com 403. Nenhum
+	// dos dois nomeia CREDENTIAL nem ROLE na mensagem de forma a distinguir
+	// "usuário não existe" de "senha errada" — essa distinção é dado que o
+	// protocolo deliberadamente NÃO expõe (ver internal/server/autenticacao.go).
+	CodUnauthenticated = "UNAUTHENTICATED"
+	CodForbidden       = "FORBIDDEN"
 )
 
 // NomeDeTipo é o nome do tipo como o operador o escreve no YAML (§17).

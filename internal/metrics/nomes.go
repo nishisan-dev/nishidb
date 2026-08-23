@@ -55,6 +55,10 @@ const (
 	// Checkpoint (§92).
 	MetCheckpointDurationSeconds     = "nishidb_checkpoint_duration_seconds"
 	MetCheckpointLastSuccessTimestmp = "nishidb_checkpoint_last_success_timestamp"
+
+	// Autenticação (§74-77, Fase 11, Task B3). Não está no §92 — a exposição
+	// remota não tinha autenticação quando aquela seção foi escrita.
+	MetAuthFailuresTotal = "nishidb_auth_failures_total"
 )
 
 // Séries INVENTADAS no M2, com o defeito que cada uma corrige.
@@ -101,4 +105,14 @@ const (
 	LabelPartition = "partition"
 	LabelCategoria = "categoria"
 	LabelMotivo    = "motivo"
+
+	// LabelReason é o motivo de UMA falha de autenticação HTTP Basic
+	// (Task B3) — enum FECHADO {header, usuario, senha}, nunca o username:
+	// mesma doutrina de datasetDesconhecido
+	// (internal/server/metricas_query.go), que já recusa alimentar um label
+	// com texto de entrada do cliente por ser cardinalidade sem teto. Chamado
+	// "reason" e não "motivo" (o nome que LabelMotivo já ocupa, com outro
+	// propósito) porque é a grafia que o plano da Fase 11 fixa para
+	// nishidb_auth_failures_total.
+	LabelReason = "reason"
 )

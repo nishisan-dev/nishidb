@@ -94,9 +94,16 @@ type Servidor struct {
 	// credenciais é o cache imutável de server.authentication.users já
 	// resolvido contra o ambiente (§74-77, resolveCredenciais em
 	// seguranca.go): username -> digest SHA-256 da senha + papel. Nil quando
-	// AutenticacaoHabilitada() é false — a B3 lê este mapa para montar o
-	// middleware HTTP Basic; sem ele não há usuário nenhum para autenticar.
+	// AutenticacaoHabilitada() é false — é o que comAutenticacao
+	// (autenticacao.go) lê para decidir entre o middleware de verdade e o
+	// passthrough puro.
 	credenciais map[string]credencial
+	// authFalhas conta nishidb_auth_failures_total por razão (Task B3). Só é
+	// incrementado quando o middleware de fato roda — com credenciais nil o
+	// wrapper nunca chama recusaAutenticacao, então a série simplesmente não
+	// aparece no scrape (comportamento igual ao de qualquer família lazy
+	// deste registry).
+	authFalhas *metrics.FamiliaContador
 }
 
 // Opcoes configura a subida.
@@ -192,6 +199,7 @@ func Novo(cfg *config.Config, o Opcoes) (*Servidor, error) {
 		credenciais: credenciais,
 	}
 	s.met = registraMetricasDeQuery(reg, s.eng)
+	s.authFalhas = registraMetricasDeAuth(reg)
 
 	// O bind vem ANTES de abrir os datasets: descobrir porta ocupada depois
 	// de já ter tomado o flock de N datasets é desperdício, e deixa o
@@ -396,21 +404,16 @@ func (s *Servidor) ligaCompaction(ctx context.Context) {
 // não checkpointar é o heap acompanhar o tamanho do dataset.
 const checkpointEventosPadrao = 500_000
 
+// sobeHTTP é o ÚNICO ponto de entrada do listener principal — a costura do
+// §77 que a B4 herda: montaMux constrói o mux CRU (sem autenticação nenhuma),
+// e comAutenticacao é o wrapper único em torno dele (autenticacao.go). A B4
+// serve o mux cru, sem este wrapper, no listener loopback — o mesmo *rt.mux,
+// dois caminhos de acesso.
 func (s *Servidor) sobeHTTP() error {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /metrics", s.handleMetrics)
-	mux.HandleFunc("GET /v1/health", s.handleHealth)
-	// As rotas do §67 são registradas SEM método no padrão, e o handler
-	// confere o método por dentro. É para que toda recusa do protocolo — do
-	// método errado ao SQL inválido — saia com o MESMO corpo JSON: o 405 que
-	// o mux gera sozinho tem corpo em texto puro, e um cliente que precisasse
-	// tratar dois formatos de erro trataria mal um deles.
-	mux.HandleFunc("/v1/query", s.handleQuery)
-	mux.HandleFunc("/v1/metadata", s.handleMetadata)
-	mux.HandleFunc("/v1/stats", s.handleStats)
+	rt := s.montaMux()
 
 	s.http = &http.Server{
-		Handler:           mux,
+		Handler:           s.comAutenticacao(rt),
 		ReadHeaderTimeout: 10 * time.Second,
 		// SEM WriteTimeout de propósito: ele é teto de CONEXÃO, e mataria um
 		// stream longo legítimo no meio. O teto de uma consulta é o

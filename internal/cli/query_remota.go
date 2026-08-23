@@ -132,9 +132,13 @@ func codigoDoProtocolo(codigo string) int {
 	case protocolo.CodDatasetCorrompido:
 		return ExitDataset
 	default:
-		// Inclui BAD_REQUEST, UNKNOWN_DATASET, TOO_MANY_QUERIES e INTERNAL: o
-		// que o operador faz com todos eles é olhar o comando ou o servidor,
-		// que é o significado do 1.
+		// Inclui BAD_REQUEST, UNKNOWN_DATASET, TOO_MANY_QUERIES, INTERNAL,
+		// UNAUTHENTICATED e FORBIDDEN (§74-77, Fase 11, Task B3): credencial
+		// recusada ou papel insuficiente são erro de quem chamou o comando,
+		// não do servidor — a flag de credencial no CLI é da B6, mas a
+		// degradação com a mensagem do servidor já vale hoje. O que o
+		// operador faz com todos eles é olhar o comando ou o servidor, que é
+		// o significado do 1.
 		return ExitUso
 	}
 }

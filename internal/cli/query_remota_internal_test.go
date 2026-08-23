@@ -38,6 +38,8 @@ func TestCodigoDoProtocoloTraduzATabelaInteira(t *testing.T) {
 		{protocolo.CodDatasetDesconhecido, ExitUso, "dataset que não existe neste servidor é erro de linha de comando"},
 		{protocolo.CodMuitasQueries, ExitUso, "o teto de concorrência é do servidor, e a ação é tentar de novo"},
 		{protocolo.CodInterno, ExitUso, "falha interna não tem código próprio no contrato do §96"},
+		{protocolo.CodUnauthenticated, ExitUso, "credencial recusada (§74-77) é erro de quem chamou o comando, não do servidor"},
+		{protocolo.CodForbidden, ExitUso, "papel insuficiente (§74-77) é erro de quem chamou o comando, não do servidor"},
 		{"CODIGO_QUE_NAO_EXISTE", ExitUso, "código desconhecido cai no vala-comum, nunca em zero"},
 	}
 	for _, c := range casos {
