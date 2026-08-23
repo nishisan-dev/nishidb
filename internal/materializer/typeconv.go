@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"time"
 	"unicode/utf8"
 
 	"github.com/nishisan-dev/nishidb/internal/jsonp"
@@ -36,7 +37,12 @@ func (e *ConversionError) Unwrap() error { return ErrTypeConversion }
 // copiados/derivados para arena (nunca aliasam f.Raw, que morre no próximo
 // Next do parser); o arena possivelmente crescido é retornado. null JSON
 // vira Value{Type: TypeNull} para qualquer alvo (NULL = campo ausente, D2).
-func Convert(f jsonp.Field, target types.FieldType, arena []byte) (types.Value, []byte, error) {
+// O layout é o padrão compilado do campo, e é não-nil exatamente para os
+// alvos datetime e time. Vem por parâmetro, e não por um lookup de schema
+// aqui dentro, para manter este arquivo sem importar schema — a coerção é
+// função do VALOR e do alvo, e é isso que permite ao binder SQL usar as
+// mesmas regras (risco R3).
+func Convert(f jsonp.Field, target types.FieldType, layout *typeparse.Layout, arena []byte) (types.Value, []byte, error) {
 	if f.Kind == jsonp.KindNull {
 		return types.Value{Type: types.TypeNull}, arena, nil
 	}
@@ -123,6 +129,57 @@ func Convert(f jsonp.Field, target types.FieldType, arena []byte) (types.Value, 
 			return types.Value{}, arena, convErrf(target, "utf-8 inválido: %s", truncVal(f.Raw))
 		}
 		return appendBytesValue(target, f.Raw, arena)
+
+	case types.TypeDateTime:
+		switch f.Kind {
+		case jsonp.KindString:
+			if layout == nil {
+				return types.Value{}, arena, convErrf(target, "campo sem format compilado")
+			}
+			// time.Local, e não um fuso declarado: a decisão é que o instante
+			// de um wall-clock sem offset é resolvido pelo fuso do HOST. Vale
+			// para a ingestão e para o literal SQL, e é o que os mantém
+			// concordando sobre o mesmo texto.
+			ms, err := layout.DateTime(f.Raw, time.Local)
+			if err != nil {
+				return types.Value{}, arena, convErrf(target, "%s: %s", err, truncVal(f.Raw))
+			}
+			return types.Value{Type: target, I64: ms}, arena, nil
+		case jsonp.KindNumber:
+			// Número é epoch millis, como no timestamp: é a grafia
+			// independente de formato, e a simetria entre os dois evita que
+			// trocar o tipo de um campo mude o significado de um número.
+			ms, err := typeparse.Int64(f.Raw)
+			if err != nil {
+				return types.Value{}, arena, convErrf(target, "epoch millis inválido: %s", truncVal(f.Raw))
+			}
+			return types.Value{Type: target, I64: ms}, arena, nil
+		}
+		return types.Value{}, arena, convErrf(target, "esperava string no format declarado ou epoch millis, veio %v", f.Kind)
+
+	case types.TypeTime:
+		switch f.Kind {
+		case jsonp.KindString:
+			if layout == nil {
+				return types.Value{}, arena, convErrf(target, "campo sem format compilado")
+			}
+			ms, err := layout.TimeOfDay(f.Raw)
+			if err != nil {
+				return types.Value{}, arena, convErrf(target, "%s: %s", err, truncVal(f.Raw))
+			}
+			return types.Value{Type: target, I64: ms}, arena, nil
+		case jsonp.KindNumber:
+			// Aqui o número NÃO é epoch: é millis desde a meia-noite. A faixa
+			// é validada porque um epoch millis mandado por engano para um
+			// campo time seria gravado como uma hora do dia absurda, e a
+			// saída NDJSON o renderiza como null — dado perdido em silêncio.
+			ms, err := typeparse.Int64(f.Raw)
+			if err != nil || ms < 0 || ms >= types.MillisPorDia {
+				return types.Value{}, arena, convErrf(target, "millis do dia fora de [0,%d): %s", types.MillisPorDia, truncVal(f.Raw))
+			}
+			return types.Value{Type: target, I64: ms}, arena, nil
+		}
+		return types.Value{}, arena, convErrf(target, "esperava string no format declarado ou millis do dia, veio %v", f.Kind)
 
 	case types.TypeIPv4, types.TypeIPv6, types.TypeIPv4Prefix,
 		types.TypeIPv6Prefix, types.TypeBytes:

@@ -114,7 +114,7 @@ func (b *PatchBuffer) Parse(event []byte, c *schema.Compiled) error {
 				target = t
 			}
 		}
-		val, arena, err := Convert(f, target, b.arena)
+		val, arena, err := Convert(f, target, cf.Layout, b.arena)
 		if err != nil {
 			return fmt.Errorf("campo %q: %w", f.Key, err) // TYPE_CONVERSION
 		}

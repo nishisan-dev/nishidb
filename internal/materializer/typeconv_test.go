@@ -38,7 +38,7 @@ func arr(s string) jsonp.Field {
 // convOK converte e falha o teste em erro.
 func convOK(t *testing.T, f jsonp.Field, target types.FieldType) types.Value {
 	t.Helper()
-	v, _, err := Convert(f, target, nil)
+	v, _, err := Convert(f, target, nil, nil)
 	if err != nil {
 		t.Fatalf("Convert(%v, %v) erro: %v", f, target, err)
 	}
@@ -51,7 +51,7 @@ func convOK(t *testing.T, f jsonp.Field, target types.FieldType) types.Value {
 // convErr espera TYPE_CONVERSION.
 func convErr(t *testing.T, f jsonp.Field, target types.FieldType) {
 	t.Helper()
-	_, _, err := Convert(f, target, nil)
+	_, _, err := Convert(f, target, nil, nil)
 	if err == nil {
 		t.Fatalf("Convert(%v, %v): esperava erro", f, target)
 	}
@@ -192,7 +192,7 @@ func TestConvertNullIsUniversal(t *testing.T) {
 		types.TypeIPv4Prefix, types.TypeIPv6Prefix, types.TypeBytes, types.TypeJSON,
 	}
 	for _, target := range targets {
-		v, _, err := Convert(null(), target, nil)
+		v, _, err := Convert(null(), target, nil, nil)
 		if err != nil {
 			t.Fatalf("null → %v: erro %v", target, err)
 		}
@@ -220,7 +220,7 @@ func TestConvertJSON(t *testing.T) {
 // um payload grande num campo errado não pode inflar logs/mensagens.
 func TestConversionErrorTruncatesValue(t *testing.T) {
 	big := `{"b":,` + strings.Repeat("x", 10_000) + `}`
-	_, _, err := Convert(obj(big), types.TypeJSON, nil)
+	_, _, err := Convert(obj(big), types.TypeJSON, nil, nil)
 	if err == nil {
 		t.Fatal("esperava erro")
 	}
@@ -231,7 +231,7 @@ func TestConversionErrorTruncatesValue(t *testing.T) {
 		t.Errorf("sem marcador de truncamento: %q", err.Error())
 	}
 	// Valor curto sai inteiro, sem marcador.
-	_, _, err = Convert(str("abc"), types.TypeInt64, nil)
+	_, _, err = Convert(str("abc"), types.TypeInt64, nil, nil)
 	if err == nil || strings.Contains(err.Error(), "…") {
 		t.Errorf("valor curto não deveria ser truncado: %v", err)
 	}
@@ -265,7 +265,7 @@ func TestConvertBytesGoToArena(t *testing.T) {
 	raw := []byte("mutavel")
 	f := jsonp.Field{Kind: jsonp.KindString, Raw: raw}
 	arena := make([]byte, 0, 64)
-	v, arena2, err := Convert(f, types.TypeString, arena)
+	v, arena2, err := Convert(f, types.TypeString, nil, arena)
 	if err != nil {
 		t.Fatal(err)
 	}

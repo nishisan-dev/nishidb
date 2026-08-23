@@ -73,7 +73,7 @@ func TestConvertRadiusFixture(t *testing.T) {
 			continue
 		}
 		name := string(f.Key)
-		v, newArena, err := Convert(f, target, arena)
+		v, newArena, err := Convert(f, target, nil, arena)
 		if err != nil {
 			t.Fatalf("campo %q: %v", name, err)
 		}

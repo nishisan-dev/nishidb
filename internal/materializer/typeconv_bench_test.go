@@ -32,7 +32,7 @@ func BenchmarkConvertRadiusMix(b *testing.B) {
 	for b.Loop() {
 		arena = arena[:0]
 		for _, p := range mix {
-			v, a, err := Convert(p.f, p.target, arena)
+			v, a, err := Convert(p.f, p.target, nil, arena)
 			if err != nil {
 				b.Fatal(err)
 			}
