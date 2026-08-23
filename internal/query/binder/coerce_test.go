@@ -38,6 +38,14 @@ func TestComparableTabela(t *testing.T) {
 		{"timestamp com string", types.TypeTimestamp, parser.OperandString, parser.CmpGte, binder.CompareInt},
 		{"timestamp com int", types.TypeTimestamp, parser.OperandInt, parser.CmpLt, binder.CompareInt},
 
+		// datetime aceita o texto no format do campo e o epoch millis.
+		{"datetime com string", types.TypeDateTime, parser.OperandString, parser.CmpGte, binder.CompareInt},
+		{"datetime com int", types.TypeDateTime, parser.OperandInt, parser.CmpLt, binder.CompareInt},
+		// Em time o inteiro é millis do DIA, não epoch: mesma célula da
+		// tabela, significado diferente do número.
+		{"time com string", types.TypeTime, parser.OperandString, parser.CmpGt, binder.CompareInt},
+		{"time com int", types.TypeTime, parser.OperandInt, parser.CmpLte, binder.CompareInt},
+
 		{"ipv4 com string", types.TypeIPv4, parser.OperandString, parser.CmpEq, binder.CompareBytes},
 		{"ipv6 com string", types.TypeIPv6, parser.OperandString, parser.CmpEq, binder.CompareBytes},
 		{"ipv4_prefix com string", types.TypeIPv4Prefix, parser.OperandString, parser.CmpEq, binder.CompareBytes},

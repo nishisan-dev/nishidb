@@ -52,6 +52,21 @@ schema:
       type: bytes
     doc:
       type: json
+    # Os dois formatos vezes os dois tipos temporais. datetime resolve o
+    # wall-clock com o fuso do HOST, então todo caso que envolva epoch millis
+    # tem de ser montado em runtime — ver o teste cruzado.
+    momento:
+      type: datetime
+      format: "MMM d, yyyy hh:mm:ss a"
+    momento_iso:
+      type: datetime
+      format: "yyyy-MM-dd'T'HH:mm:ss"
+    hora:
+      type: time
+      format: "hh:mm:ss a"
+    hora_iso:
+      type: time
+      format: "HH:mm:ss.SSS"
 
 query:
   maxRows: 1000

@@ -170,7 +170,7 @@ func formatValue(v types.Value) string {
 	switch v.Type {
 	case types.TypeString:
 		return strconv.Quote(string(v.Bytes))
-	case types.TypeInt64, types.TypeTimestamp:
+	case types.TypeInt64, types.TypeTimestamp, types.TypeDateTime, types.TypeTime:
 		return strconv.FormatInt(v.I64, 10)
 	case types.TypeBool:
 		if v.I64 != 0 {

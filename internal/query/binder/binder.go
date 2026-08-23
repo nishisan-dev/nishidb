@@ -472,7 +472,7 @@ func (b *binder) erroLiteral(f *schema.CompiledField, n *parser.Comparison, cerr
 		return errAt(pos, "operador %q não é permitido para a coluna %q (%s); use = ou !=",
 			n.Op.String(), f.Name, t)
 	case errLiteralInvalido:
-		return errAt(pos, "literal %q inválido para a coluna %q (%s)", valorLiteral(n.Operand), f.Name, t)
+		return errAt(pos, "literal %q inválido para a coluna %q (%s)", valorLiteral(n.Operand), f.Name, descreveTipo(f, t))
 	default:
 		return errAt(pos, "coluna %q (%s): %v", f.Name, t, cerr)
 	}
@@ -500,10 +500,20 @@ func (b *binder) erroParam(idx int, f *schema.CompiledField, n *parser.Compariso
 		return errNoPos("parâmetro %d: operador %q não é permitido para a coluna %q (%s); use = ou !=",
 			num, n.Op.String(), f.Name, t)
 	case errLiteralInvalido:
-		return errNoPos("parâmetro %d: valor inválido para a coluna %q (%s)", num, f.Name, t)
+		return errNoPos("parâmetro %d: valor inválido para a coluna %q (%s)", num, f.Name, descreveTipo(f, t))
 	default:
 		return errNoPos("parâmetro %d: %v", num, cerr)
 	}
+}
+
+// descreveTipo acrescenta o format declarado quando o tipo o tem. Sem ele,
+// "literal 'x' inválido para a coluna momento (datetime)" não diz ao usuário
+// em que grafia escrever o literal, e a mensagem fica inacionável.
+func descreveTipo(f *schema.CompiledField, t types.FieldType) string {
+	if f.Format == "" {
+		return t.String()
+	}
+	return t.String() + ", format: " + f.Format
 }
 
 func nomeLiteral(k parser.OperandKind) string {
