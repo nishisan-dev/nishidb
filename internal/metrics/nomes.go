@@ -9,9 +9,13 @@ package metrics
 //
 // A lista é a transcrição do §92, na ordem em que a spec a escreve. O que o
 // M2 ainda não alimenta está marcado; nenhum nome foi inventado aqui, com a
-// única exceção declarada de MetKafkaErrorsTotal, MetKafkaQueueDepth,
+// exceção declarada de MetKafkaErrorsTotal, MetKafkaQueueDepth,
 // MetKafkaQueueBytes, MetIngestFailedTotal e MetIngestBlocked — cinco séries
-// que o M2 precisa e a spec não previu (ver o plano do M2, D8, D13 e D16).
+// que o M2 precisa e a spec não previu (ver o plano do M2, D8, D13 e D16) —,
+// e, a partir da Fase 11, de MetAuthFailuresTotal e MetTLSCertExpiryTimestamp:
+// o protocolo remoto ainda não tinha autenticação nem TLS quando o §92 foi
+// escrito. As duas exceções da Fase 11 têm a razão comentada junto à própria
+// constante, mais abaixo, em vez de repetida aqui.
 const (
 	// Processo e runtime (§79, §92).
 	MetProcessRSSBytes = "nishidb_process_rss_bytes"
