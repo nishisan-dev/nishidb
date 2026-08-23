@@ -10,6 +10,10 @@ const (
 	JDBCBoolean   = "BOOLEAN"
 	JDBCTimestamp = "TIMESTAMP"
 	JDBCVarbinary = "VARBINARY"
+	// JDBCTime é java.sql.Types.TIME: hora do dia sem data e sem fuso. Não é
+	// TIMESTAMP porque o driver montaria um java.sql.Timestamp em 1970 para
+	// um valor que nunca foi um instante.
+	JDBCTime = "TIME"
 	// JDBCOther é o destino da coluna cujo tipo o dataset ainda não fixou.
 	// Chamá-la de VARCHAR seria mentir para o driver: ele criaria um
 	// ResultSetMetaData afirmando String para uma coluna que pode vir a ser
@@ -41,8 +45,12 @@ func JDBCDeTipo(t types.FieldType) string {
 		return JDBCDouble
 	case types.TypeBool:
 		return JDBCBoolean
-	case types.TypeTimestamp:
+	case types.TypeTimestamp, types.TypeDateTime:
+		// datetime é um instante depois da ingestão, e sai no fio como o
+		// timestamp: o driver não tem por que distinguir.
 		return JDBCTimestamp
+	case types.TypeTime:
+		return JDBCTime
 	case types.TypeBytes:
 		return JDBCVarbinary
 	case types.TypeNull:

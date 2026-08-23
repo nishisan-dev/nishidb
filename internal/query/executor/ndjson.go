@@ -85,8 +85,28 @@ func AppendValue(dst []byte, v types.Value) []byte {
 		}
 		return append(dst, "false"...)
 
-	case types.TypeTimestamp:
+	case types.TypeTimestamp, types.TypeDateTime:
+		// datetime sai como INSTANTE UTC, byte a byte igual ao timestamp,
+		// porque é o que ele é depois da ingestão: o texto de relógio de
+		// parede foi consumido para resolver o instante e não é preservado.
+		//
+		// As duas alternativas foram descartadas. Ecoar o format declarado
+		// obrigaria AppendValue a receber schema, e a assinatura pura
+		// (dst, types.Value) é o que mantém este arquivo sem fmt e sem
+		// encoding/json. Renderizar em time.Local com offset faria o MESMO
+		// dataset servido de dois hosts produzir bytes diferentes — o que é
+		// inaceitável num formato de fio.
 		return appendTimestamp(dst, v.I64)
+
+	case types.TypeTime:
+		// Fora do dia é valor fisicamente malformado, e a política deste
+		// arquivo é null — nunca texto de erro, que chegaria ao cliente como
+		// um dado plausível. Inalcançável pelo caminho normal: a ingestão e o
+		// binder recusam antes.
+		if v.I64 < 0 || v.I64 >= types.MillisPorDia {
+			return append(dst, "null"...)
+		}
+		return appendHoraDoDia(dst, v.I64)
 
 	case types.TypeIPv4:
 		if len(v.Bytes) != 4 {
@@ -330,6 +350,22 @@ func appendTimestamp(dst []byte, millis int64) []byte {
 	dst = append(dst, '.')
 	dst = append3(dst, int(frac))
 	return append(dst, 'Z', '"')
+}
+
+// appendHoraDoDia escreve "hh:mm:ss.sss" — sempre 3 dígitos de fração e SEM
+// 'Z': não há instante aqui, e não há fuso a anunciar. Anunciar um faria a
+// hora do dia parecer um instante UTC, que é exatamente a confusão que o tipo
+// separado existe para evitar.
+func appendHoraDoDia(dst []byte, millis int64) []byte {
+	dst = append(dst, '"')
+	dst = append2(dst, int(millis/3600_000))
+	dst = append(dst, ':')
+	dst = append2(dst, int(millis/60_000%60))
+	dst = append(dst, ':')
+	dst = append2(dst, int(millis/1000%60))
+	dst = append(dst, '.')
+	dst = append3(dst, int(millis%1000))
+	return append(dst, '"')
 }
 
 // appendAno replica a convenção do time.AppendFormat para o layout "2006":

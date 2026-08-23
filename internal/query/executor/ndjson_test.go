@@ -419,3 +419,64 @@ func TestDivergenciasDeliberadasComEncodingJSON(t *testing.T) {
 		}
 	}
 }
+
+// datetime é um instante depois da ingestão e sai byte a byte como o
+// timestamp. Se um dia divergir, é sinal de que alguém tentou preservar o
+// texto de origem na saída — e aí o mesmo dataset servido de dois hosts
+// produziria bytes diferentes.
+func TestNDJSONDeDatetimeSaiComOsMesmosBytesDoTimestamp(t *testing.T) {
+	for _, ms := range []int64{0, 1787878442123, -1, -86_400_000, 253402300799000} {
+		ts := AppendValue(nil, types.Value{Type: types.TypeTimestamp, I64: ms})
+		dt := AppendValue(nil, types.Value{Type: types.TypeDateTime, I64: ms})
+		if string(ts) != string(dt) {
+			t.Errorf("millis=%d: timestamp=%s datetime=%s", ms, ts, dt)
+		}
+	}
+}
+
+// Hora do dia não é instante: anunciar Z a faria parecer um timestamp UTC,
+// que é a confusão que o tipo separado existe para evitar.
+func TestNDJSONDeHoraDoDiaNaoAnunciaFuso(t *testing.T) {
+	casos := map[int64]string{
+		0:          `"00:00:00.000"`,
+		75_242_000: `"20:54:02.000"`,
+		86_399_999: `"23:59:59.999"`,
+		43_200_500: `"12:00:00.500"`,
+	}
+	for ms, want := range casos {
+		got := string(AppendValue(nil, types.Value{Type: types.TypeTime, I64: ms}))
+		if got != want {
+			t.Errorf("millis=%d: obtido %s, esperado %s", ms, got, want)
+		}
+		if strings.Contains(got, "Z") {
+			t.Errorf("millis=%d: a saída anuncia fuso: %s", ms, got)
+		}
+	}
+}
+
+// Valor fisicamente malformado vira null, nunca texto de erro — texto de erro
+// chegaria ao cliente como um dado plausível.
+func TestNDJSONDeHoraDoDiaForaDoDiaVirandoNull(t *testing.T) {
+	for _, ms := range []int64{-1, 86_400_000, 1787878442000} {
+		got := string(AppendValue(nil, types.Value{Type: types.TypeTime, I64: ms}))
+		if got != "null" {
+			t.Errorf("millis=%d: obtido %s, esperado null", ms, got)
+		}
+	}
+}
+
+func TestNDJSONDeTiposTemporaisNaoAloca(t *testing.T) {
+	buf := make([]byte, 0, 64)
+	casos := []types.Value{
+		{Type: types.TypeDateTime, I64: 1787878442123},
+		{Type: types.TypeTime, I64: 75_242_000},
+	}
+	for _, v := range casos {
+		v := v
+		if n := testing.AllocsPerRun(200, func() {
+			_ = AppendValue(buf[:0], v)
+		}); n != 0 {
+			t.Errorf("%v: alocou %v vezes", v.Type, n)
+		}
+	}
+}
