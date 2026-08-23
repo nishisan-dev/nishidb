@@ -395,6 +395,45 @@ func (b *bancadaE2E) esperaIngestaoAlcancar(alvo int64, prazo time.Duration) map
 	}
 }
 
+// esperaCompactionCreditarBytesEscritos bloqueia até nishidb_compaction_bytes_written
+// subir acima de `partida`, produzindo rodada nova a cada volta.
+//
+// O crédito (compactaSegmento, storage/compaction.go) é por SEGMENTO e não
+// por passada inteira — o defer soma `escritos` assim que UMA varredura
+// termina, sem esperar os demais candidatos da eleição —, mas ele só é
+// MAIOR QUE ZERO quando essa varredura encontra pelo menos um record que a
+// location ainda nomeia. Com o key set inteiro reescrito a cada rodada
+// (e2eKeys eventos por rodada, um por key), um segmento vira 100% garbage
+// poucas rodadas depois de selado, então "a passada credita bytes" é uma
+// corrida contra a própria ingestão: só quando a eleição alcança um
+// segmento AINDA QUENTE — com alguma key cujo write mais recente segue ali
+// — é que `escritos` sai de zero.
+//
+// Um laço de rodadas fixas trata essa corrida como se tivesse prazo certo,
+// e não tem: um runner de dois núcleos sob -race atrasa os dois lados dela
+// (a goroutine de compaction e o produtor), o que empurra o primeiro
+// segmento quente para depois da última raspagem sem que o produto tenha
+// regredido — é a mesma contabilidade que o piloto em produção credita em
+// segundos. Por isso esta espera é por FATO (o contador subir), com carga
+// nova a cada volta para dar à corrida uma chance por rodada, e um prazo
+// generoso o bastante para não morder a corrida normal — ele só é pago no
+// runner lento.
+func (b *bancadaE2E) esperaCompactionCreditarBytesEscritos(partida float64, prazo time.Duration) float64 {
+	b.t.Helper()
+	limite := time.Now().Add(prazo)
+	for {
+		agora := b.metrica(metrics.MetCompactionBytesWritten)
+		if agora > partida {
+			return agora
+		}
+		if time.Now().After(limite) {
+			return agora
+		}
+		b.produzRodada()
+		time.Sleep(e2eIntervaloDaRodada)
+	}
+}
+
 // consulta faz o POST /v1/query do §68 pelo CLIENTE DO PRODUTO — o mesmo
 // `nishidb query --server` que o operador digita. Devolve id → seq.
 //
@@ -662,7 +701,7 @@ func TestCompactionPeloBinarioEstabilizaODiscoComOOperadorVendo(t *testing.T) {
 	t.Logf("primeira metade: piso %d, pico %d — segunda metade: piso %d, pico %d", pisoA, picoA, pisoB, picoB)
 	t.Logf("volume produzido: %d bytes no total, %d só na segunda metade", produzido, escritoNaSegundaMetade)
 	t.Logf("nishidb_storage_bytes: pico de %.0f pela porta HTTP, com queda observada = %v", picoDaSerie, quedaNaSerie)
-	t.Logf("nishidb_compaction_bytes_written: %.0f na largada, %.0f na última raspagem", escritosNaLargada, escritosAgora)
+	t.Logf("nishidb_compaction_bytes_written: %.0f na largada, %.0f na última raspagem do laço de %d rodadas", escritosNaLargada, escritosAgora, rodadas)
 
 	// Item 2, e a medida é o PISO da serra, não uma amostra solta.
 	//
@@ -699,10 +738,22 @@ func TestCompactionPeloBinarioEstabilizaODiscoComOOperadorVendo(t *testing.T) {
 	// o copy-forward do §55 copiou record VIVO para frente. É o único número
 	// pela porta que diz que a compaction TRABALHOU, e não apenas que sobrou
 	// menos arquivo.
+	//
+	// A espera abaixo é por FATO — o contador subir —, não pela contagem fixa
+	// de 60 raspagens do laço acima: essa contagem já rendeu produzido e as
+	// amostras de disco, que não dependem de quando a compaction credita, mas
+	// o crédito em si é uma corrida contra a própria ingestão (godoc do
+	// helper) e pode não fechar dentro das 60 rodadas num runner lento sem
+	// que o produto tenha regredido. O curto-circuito do helper (devolve na
+	// hora se `escritosAgora` já passou de `escritosNaLargada`) não custa
+	// nada na corrida normal — só o runner lento paga o prazo extra, e o
+	// oráculo continua o mesmo: o contador tem de subir.
+	const prazoDoCreditoDaCompaction = 60 * time.Second
+	escritosAgora = b.esperaCompactionCreditarBytesEscritos(escritosNaLargada, prazoDoCreditoDaCompaction)
 	if escritosAgora <= escritosNaLargada {
-		t.Errorf("nishidb_compaction_bytes_written saiu de %.0f para %.0f em %d raspagens de /metrics, com o disco em serra "+
-			"(piso %d→%d) e %d bytes produzidos: o operador vê o diretório encolher e não tem série que diga que foi a compaction",
-			escritosNaLargada, escritosAgora, rodadas, pisoA, pisoB, produzido)
+		t.Errorf("nishidb_compaction_bytes_written saiu de %.0f para %.0f em %d raspagens de /metrics e mais %s de espera pelo crédito, "+
+			"com o disco em serra (piso %d→%d) e %d bytes produzidos: o operador vê o diretório encolher e não tem série que diga que foi a compaction",
+			escritosNaLargada, escritosAgora, rodadas, prazoDoCreditoDaCompaction, pisoA, pisoB, produzido)
 	}
 	// E o medidor do §92 diz que o laço está de pé. Com a chave ligada no YAML
 	// e o processo respondendo, 0 aqui é a compaction que morreu sem avisar —
