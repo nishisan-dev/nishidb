@@ -39,11 +39,13 @@ type RespostaCompact struct {
 }
 
 // CompactDataset é o resultado de UMA passada manual de compaction sobre um
-// dataset. Os quatro campos saem ZERADOS quando a eleição não encontrou
-// candidato — resultado LEGÍTIMO ("nada para compactar agora"), não ausência
-// de resposta; é o mesmo "idempotente por efeito" do checkpoint, e a razão de
-// não haver um campo booleano de "aconteceu alguma coisa" ao lado dos
-// números.
+// dataset. SegmentsRetired, BytesRead e BytesWritten saem ZERADOS quando a
+// eleição não encontrou candidato — resultado LEGÍTIMO ("nada para
+// compactar agora"), não ausência de resposta; é o mesmo "idempotente por
+// efeito" do checkpoint, e a razão de não haver um campo booleano de
+// "aconteceu alguma coisa" ao lado dos números. DurationMs NÃO segue essa
+// regra: mesmo uma eleição vazia custa a varredura do tally sob o mutex do
+// writer, e a duração observada é a real, não um zero convencionado.
 type CompactDataset struct {
 	Name            string `json:"name"`
 	SegmentsRetired int    `json:"segmentsRetired"`
