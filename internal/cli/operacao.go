@@ -25,9 +25,9 @@ import (
 // justamente o momento em que não há nada para diagnosticar.
 //
 // Eles são SÓ leitura, por decisão D3 do roadmap: o `compact` e o `checkpoint`
-// que o §96 também lista são rotas mutantes, ficam para o M5 e entram atrás do
-// papel ADMIN. Um comando que apaga dado não vai para o mesmo balde de um que
-// imprime números.
+// que o §96 também lista são rotas MUTANTES, atrás do papel ADMIN — vivem em
+// mutacao.go (Task B5), não aqui. Um comando que muda o dataset não vai para
+// o mesmo arquivo de um que só imprime números.
 //
 // O que sai daqui é uma VISTA do /v1/stats e do /v1/metadata, não uma segunda
 // contabilidade: nenhum número é recalculado no cliente. É a mesma doutrina que
