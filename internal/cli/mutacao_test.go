@@ -83,21 +83,33 @@ func TestCompactRemotoFuncionaComOServidorNoArEEnabledFalse(t *testing.T) {
 	}
 }
 
-// Com o laço automático de pé (o default — storage.compaction ausente vale
-// enabled: true), compact recebe 409 do servidor e sai 1: retentável, mas
-// sem código de saída próprio (ver o comentário de codigoDoProtocolo).
-func TestCompactRemotoComOLacoAutomaticoDePeSaiComExit1(t *testing.T) {
+// TestCompactRemotoNaConfigDefaultEventualmenteSai0 é o Critical da revisão
+// da B5, visto pelo CLI: o laço automático de pé (o default — storage.
+// compaction ausente vale enabled: true) NÃO pode deixar `compact --server`
+// morto para sempre — só sai 1 (COMPACTION_BUSY) enquanto uma passada está
+// de fato em voo, e a janela ocupada num dataset sem garbage dura
+// microssegundos. Tentativas imediatas, sem sleep de corrida: se a rota
+// estivesse morta de verdade, nenhuma teria sucesso e o teste falharia alto
+// no teto — a mesma técnica de
+// TestCompactComAdminNaConfigDefaultFuncionaSemPassadaEmVoo (internal/server),
+// agora ponta a ponta pelo binário do CLI.
+func TestCompactRemotoNaConfigDefaultEventualmenteSai0(t *testing.T) {
 	a := servidorComDadosNoAr(t, 5)
 
-	code := a.roda("compact", "--server", a.endereco())
-	if code != 1 {
-		t.Fatalf("exit = %d, quer 1: %s", code, a.stderr.String())
+	const tentativas = 200
+	var code int
+	for i := 0; i < tentativas; i++ {
+		code = a.roda("compact", "--server", a.endereco())
+		if code == 0 {
+			break
+		}
 	}
-	if !strings.Contains(a.stderr.String(), "voo") && !strings.Contains(a.stderr.String(), "novamente") {
-		t.Errorf("a mensagem não orienta sobre o 409 (compaction em voo/tente novamente):\n%s", a.stderr.String())
+	if code != 0 {
+		t.Fatalf("exit = %d após %d tentativas imediatas: a rota parece permanentemente ocupada na config default: %s",
+			code, tentativas, a.stderr.String())
 	}
-	if a.stdout.Len() != 0 {
-		t.Errorf("recusa não pode escrever no stdout: %q", a.stdout.String())
+	if !strings.Contains(a.stdout.String(), "radius_sessions") {
+		t.Errorf("a saída não nomeia o dataset:\n%s", a.stdout.String())
 	}
 }
 

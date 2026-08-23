@@ -157,7 +157,7 @@ func buscaDocumento(cmd, endereco, caminho string, destino any, amb Ambiente) in
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return recusaDeLeitura(cmd, resp, amb)
+		return recusaRemota(cmd, resp, amb)
 	}
 	if err := json.NewDecoder(resp.Body).Decode(destino); err != nil {
 		// Corpo 200 que não decodifica é falha de TRANSPORTE, não de uso: o
@@ -169,9 +169,13 @@ func buscaDocumento(cmd, endereco, caminho string, destino any, amb Ambiente) in
 	return ExitOK
 }
 
-// recusaDeLeitura trata a resposta de erro do §67, que é um JSON único com o
-// código estável — o cliente casa por código, nunca pelo texto.
-func recusaDeLeitura(cmd string, resp *http.Response, amb Ambiente) int {
+// recusaRemota trata a resposta de erro de QUALQUER rota do protocolo
+// remoto — leitura (status/datasets/inspect) e mutante (compact/checkpoint,
+// Task B5) por igual: um JSON único com o código estável, e o cliente casa
+// por código, nunca pelo texto. Renomeada na revisão da B5 (Minor 6): o
+// nome antigo, recusaDeLeitura, já não descrevia os dois comandos mutantes
+// que a B5 acrescentou como chamadores.
+func recusaRemota(cmd string, resp *http.Response, amb Ambiente) int {
 	var corpo protocolo.CorpoErro
 	if err := json.NewDecoder(resp.Body).Decode(&corpo); err != nil {
 		avisa(amb, "%s: o servidor respondeu %s sem corpo legível\n", cmd, resp.Status)

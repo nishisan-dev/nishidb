@@ -88,8 +88,8 @@ func runCheckpoint(args []string, amb Ambiente) int {
 // datasets" que um corpo ausente já cobre no servidor (mutacoes.go,
 // leRequisicaoDataset).
 //
-// O tratamento de erro é o do query_remota (recusaDeLeitura, que
-// operacao.go já generaliza com um parâmetro `cmd`): CorpoErro decodificado,
+// O tratamento de erro é o do query_remota (recusaRemota, que operacao.go
+// já generaliza com um parâmetro `cmd`): CorpoErro decodificado,
 // mensagem no stderr, código traduzido por codigoDoProtocolo — a MESMA
 // tabela que WRITER_FAILED (→ ExitWriter) e COMPACTION_BUSY (→ ExitUso, com
 // justificativa no comentário de codigoDoProtocolo) alimentam.
@@ -124,7 +124,7 @@ func postaMutacao(cmd, endereco, caminho, dataset string, destino any, amb Ambie
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return recusaDeLeitura(cmd, resp, amb)
+		return recusaRemota(cmd, resp, amb)
 	}
 	if err := json.NewDecoder(resp.Body).Decode(destino); err != nil {
 		avisa(amb, "%s: resposta ilegível de %s: %v\n", cmd, endereco, err)
