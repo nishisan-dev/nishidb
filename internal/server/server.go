@@ -370,6 +370,7 @@ func (s *Servidor) Roda(ctx context.Context, pprofAddr string) error {
 	s.log.Info("query.pronta", "consultas disponíveis",
 		"datasets", len(s.datasets), "endereco", s.cfg.Endereco(), "versao", buildinfo.String())
 	s.ligaCompaction(ctx)
+	s.ligaExpiracao(ctx)
 
 	var wg sync.WaitGroup
 	for _, d := range s.datasets {
@@ -508,6 +509,35 @@ func (s *Servidor) ligaCompaction(ctx context.Context) {
 	}
 	s.log.Info("compaction.ligada",
 		"a compaction do §53-55 está de pé", "datasets", len(s.datasets), "minimumLiveRatio", ratio)
+}
+
+// ligaExpiracao sobe o coletor do idle timeout nos datasets que o declaram.
+//
+// Só neles: quem não declara expireAfterWrite não tem índice de escritas e não
+// paga goroutine. O log nomeia quais subiram, porque "o disco não está sendo
+// devolvido" é indistinguível de "não há nada para devolver" quando ninguém
+// conta qual dos dois é.
+func (s *Servidor) ligaExpiracao(ctx context.Context) {
+	maxPorPassada, tempoPorPassada := s.cfg.Expiracao()
+	var comExpiracao []string
+	for _, d := range s.datasets {
+		if !d.st.TemExpiracao() {
+			continue
+		}
+		d.st.IniciaExpiracao(ctx, storage.LimitesDeExpiracao{
+			MaxPorPassada:   maxPorPassada,
+			TempoPorPassada: tempoPorPassada,
+		})
+		comExpiracao = append(comExpiracao, d.nome)
+	}
+	if len(comExpiracao) == 0 {
+		return
+	}
+	sort.Strings(comExpiracao)
+	s.log.Info("expiracao.ligada",
+		"o coletor do idle timeout está de pé",
+		"datasets", comExpiracao,
+		"maxPorPassada", maxPorPassada, "tempoPorPassada", tempoPorPassada)
 }
 
 // checkpointEventosPadrao é a mesma constante do `nishidb ingest`: o custo de

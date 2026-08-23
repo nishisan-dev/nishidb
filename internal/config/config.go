@@ -66,6 +66,22 @@ type Config struct {
 			MinimumLiveRatio *float64 `yaml:"minimumLiveRatio"`
 		} `yaml:"compaction"`
 
+		// Expiracao é o freio da coleta do idle timeout. Os dois limites
+		// valem JUNTOS e a passada termina no que bater primeiro: o de
+		// quantidade protege o disco e o lock de escrita (marcar uma
+		// entidade como expirada é um APPEND, então uma leva grande escreve
+		// muito antes de a compaction recuperar qualquer coisa), e o de tempo
+		// protege do caso oposto — varrer milhões de entradas sem achar nada
+		// que vença, que não escreve nada mas segura a goroutine.
+		//
+		// Ponteiros pelo mesmo motivo do MinimumLiveRatio: zero aqui não é
+		// omissão, é "não faça nada", e precisa ser recusado com clareza em
+		// vez de virar um coletor que nunca coleta.
+		Expiracao struct {
+			MaxPorPassada   *int   `yaml:"maxPorPassada"`
+			TempoPorPassada string `yaml:"tempoPorPassada"`
+		} `yaml:"expiracao"`
+
 		// Durability é o bloco §47 (débito 50): `mode: sync|batch|async` com
 		// `interval`, e nenhum dos dois tem implementação — só existe o
 		// SyncEveryPut interno, que o CLI nunca liga. Os campos ficam CRUS
@@ -148,6 +164,8 @@ type Config struct {
 	serverPort         int
 	maxConcurrent      int
 	minimumLiveRatio   float64
+	expiracaoMax       int
+	expiracaoTempo     time.Duration
 
 	// authenticationDeclarada é fato do DOCUMENTO (a chave server.authentication
 	// apareceu, com qualquer valor de enabled), e não do valor decodificado —
@@ -164,6 +182,13 @@ const (
 	resultBatchPadrao        = 256
 	serverPortPadrao         = 9142
 	maxConcurrentPadrao      = 16
+
+	// Defaults da coleta de expiração. Mil marcações por passada a 452 ev/s
+	// do piloto são ~136 KB escritos por passada — ruído perto da ingestão —,
+	// e cinco segundos é a mesma ordem do intervalo entre passadas da
+	// compaction, que já se provou uma cadência que não atrapalha o writer.
+	expiracaoMaxPorPassadaPadrao   = 1000
+	expiracaoTempoPorPassadaPadrao = 5 * time.Second
 
 	// compactionRatioPadrao é o default do §53: um segmento vira candidato
 	// quando menos da metade dele ainda é dado vivo.
@@ -235,6 +260,12 @@ func CarregaConfig(path string) (*Config, error) {
 	}
 	if c.minimumLiveRatio, err = razaoDeLiveness(c.Storage.Compaction.MinimumLiveRatio); err != nil {
 		return nil, fmt.Errorf("configuração %s: storage.compaction.minimumLiveRatio: %w", path, err)
+	}
+	if c.expiracaoMax, err = units.InteiroPositivo(c.Storage.Expiracao.MaxPorPassada, expiracaoMaxPorPassadaPadrao); err != nil {
+		return nil, fmt.Errorf("configuração %s: storage.expiracao.maxPorPassada: %w", path, err)
+	}
+	if c.expiracaoTempo, err = units.Duracao(c.Storage.Expiracao.TempoPorPassada, expiracaoTempoPorPassadaPadrao); err != nil {
+		return nil, fmt.Errorf("configuração %s: storage.expiracao.tempoPorPassada: %w", path, err)
 	}
 	if c.defaultMaxRows, err = units.InteiroPositivo(c.Query.DefaultMaxRows, maxRowsPadrao); err != nil {
 		return nil, fmt.Errorf("configuração %s: query.defaultMaxRows: %w", path, err)
@@ -332,6 +363,13 @@ func (c *Config) AuthenticationDeclarada() bool { return c.authenticationDeclara
 // Ausente é FALSE — nenhum YAML herdado ganha um listener novo sem o
 // operador pedir.
 func (c *Config) LoopbackHabilitado() bool { return c.Server.Loopback.Enabled }
+
+// Expiracao é o freio da coleta: quantas entidades uma passada pode marcar e
+// por quanto tempo ela pode rodar. Os dois valem juntos, e vence o primeiro a
+// ser atingido.
+func (c *Config) Expiracao() (maxPorPassada int, tempoPorPassada time.Duration) {
+	return c.expiracaoMax, c.expiracaoTempo
+}
 
 // Compaction é a política de compaction do §53/§78: se ela roda, e a partir de
 // que fração de dado vivo um segmento deixa de valer a pena manter como está.

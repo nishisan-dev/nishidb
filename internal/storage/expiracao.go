@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -89,16 +90,10 @@ func (s *Store) Expira(rowID types.RowID) (expirou bool, err error) {
 	// todas as postings da row: com o payload novo sem campo indexado nenhum,
 	// todo campo do anterior cai no ramo "campo que sai". É o "secondary
 	// indexes são limpos" do §56, sem uma linha nova.
-	ms, temInstante := instanteDeEscrita(rec.Payload, s.campoDeEscrita)
-	tomb := s.tombBuf[:0]
-	if temInstante {
-		tomb, err = encoding.AppendField(tomb, s.campoDeEscrita,
-			types.Value{Type: types.TypeTimestamp, I64: ms})
-		if err != nil {
-			return false, err
-		}
+	tomb, err := s.montaLapide(rec.Payload)
+	if err != nil {
+		return false, err
 	}
-	s.tombBuf = tomb
 
 	// A sequence da lápide é a ÚLTIMA aplicada, não zero: é o lastSequence do
 	// §58, e é ele que faz o stale check recusar o evento antigo que tentaria
@@ -137,4 +132,225 @@ func (s *Store) Expira(rowID types.RowID) (expirou bool, err error) {
 	}
 	s.expiradas.Add(1)
 	return true, nil
+}
+
+// montaLapide devolve o payload de uma lápide: o instante de escrita, e nada
+// mais.
+//
+// Preservar o instante é o que mantém o índice de expiração convergente no
+// replay — applyRecord relê o campo do payload, e uma lápide sem ele deixaria
+// a entrada como DESCONHECIDA depois de um crash, fazendo a row ganhar
+// carência e a lápide ser reescrita a cada reinício.
+//
+// Não preservar o RESTO é o que devolve disco (o payload grande morre) e o
+// que limpa os índices secundários: com o payload novo sem campo indexado
+// nenhum, todo campo do anterior cai no ramo "campo que sai" do
+// applyBitmapClears.
+//
+// Usa o tombBuf, que é do writer e está sob o wmu — os dois chamadores (o
+// coletor e a compaction) já estão dentro da seção crítica.
+func (s *Store) montaLapide(payloadAnterior []byte) ([]byte, error) {
+	tomb := s.tombBuf[:0]
+	if ms, tem := instanteDeEscrita(payloadAnterior, s.campoDeEscrita); tem {
+		var err error
+		if tomb, err = encoding.AppendField(tomb, s.campoDeEscrita,
+			types.Value{Type: types.TypeTimestamp, I64: ms}); err != nil {
+			return nil, err
+		}
+	}
+	s.tombBuf = tomb
+	return tomb, nil
+}
+
+// LimitesDeExpiracao é o freio de uma passada do coletor. Os dois valem
+// JUNTOS e vence o primeiro a ser atingido.
+//
+// São dois porque os riscos são opostos. O de QUANTIDADE protege o disco e o
+// lock de escrita: marcar uma entidade é um append, então uma leva grande
+// escreve muito antes de a compaction recuperar qualquer coisa, e cada marca
+// disputa o wmu com a ingestão. O de TEMPO protege do caso inverso — varrer
+// milhões de entradas sem achar nada que vença não escreve nada, mas seguraria
+// a goroutine numa passada longa.
+type LimitesDeExpiracao struct {
+	MaxPorPassada   int
+	TempoPorPassada time.Duration
+}
+
+// ResultadoDaExpiracao descreve o que uma passada fez.
+type ResultadoDaExpiracao struct {
+	Examinadas int  // entradas do índice lidas
+	Expiradas  int  // entidades que ganharam lápide
+	Renovadas  int  // venceram na leitura do índice mas foram renovadas antes da marca
+	DeuVolta   bool // o cursor completou o círculo e recomeçou
+	BateuTeto  bool // parou pelo limite, não por ter acabado a lista
+}
+
+// ExpiraUmaPassada percorre o índice de escritas a partir de onde a passada
+// anterior parou e marca as entidades vencidas, respeitando os limites.
+//
+// O cursor é de MEMÓRIA, não persistido: reiniciar o processo faz a próxima
+// passada recomeçar do rowId 0. Com prazos da ordem de dias isso não perde
+// nada — o que ficou para trás é reencontrado na volta seguinte —, e persistir
+// um cursor custaria um arquivo a mais no caminho de crash para economizar uma
+// varredura de mmap que leva milissegundos.
+//
+// A entrada DESCONHECIDA (zero, de entidade materializada antes de a expiração
+// ser ligada) recebe carência: grava-se agora como instante de escrita, e ela
+// passa a vencer um prazo cheio à frente. É o que permite ligar a expiração
+// num dataset já materializado sem reprocessar nada, e é também o que impede
+// essas entidades de ficarem imortais por acidente de calendário.
+func (s *Store) ExpiraUmaPassada(ctx context.Context, lim LimitesDeExpiracao) (ResultadoDaExpiracao, error) {
+	var r ResultadoDaExpiracao
+	if s.escritas == nil {
+		return r, nil
+	}
+	if lim.MaxPorPassada <= 0 || lim.TempoPorPassada <= 0 {
+		return r, fmt.Errorf("%w: limites de expiração devem ser positivos", ErrInvalidArgument)
+	}
+	if err := s.entra(); err != nil {
+		return r, err
+	}
+	defer s.sai()
+
+	limite := types.RowID(s.nextRowID.Load())
+	if limite == 0 {
+		return r, nil
+	}
+	fim := s.agora().Add(lim.TempoPorPassada)
+	id := s.cursorExpiracao
+	if id >= limite {
+		id, r.DeuVolta = 0, true
+	}
+
+	for percorridas := types.RowID(0); percorridas < limite; percorridas++ {
+		// O ctx é checado a cada entrada, e não só entre marcas: uma passada
+		// que não encontra nada para expirar não passaria por nenhum ponto de
+		// cancelamento, e o Close ficaria esperando a varredura inteira.
+		if ctx.Err() != nil {
+			break
+		}
+		if r.Expiradas >= lim.MaxPorPassada || !s.agora().Before(fim) {
+			r.BateuTeto = true
+			break
+		}
+
+		r.Examinadas++
+		ms, conhecido := s.escritas.Get(id)
+		switch {
+		case !conhecido:
+			// Carência: só para row que EXISTE. Gravar prazo para rowId nunca
+			// publicado encheria o índice de entradas de rows que não são.
+			if _, publicada := s.locs.Get(id); publicada {
+				if err := s.escritas.Set(id, s.agora().UnixMilli()); err != nil {
+					return r, err
+				}
+			}
+		case s.agora().UnixMilli()-ms >= s.expireAfterWrite.Milliseconds():
+			// O Expira releva a decisão dentro do wmu, então uma renovação
+			// que chegue entre esta leitura e a marca faz ele abortar sozinho.
+			expirou, err := s.Expira(id)
+			if err != nil {
+				return r, err
+			}
+			if expirou {
+				r.Expiradas++
+			} else {
+				r.Renovadas++
+			}
+		}
+
+		id++
+		if id >= limite {
+			id, r.DeuVolta = 0, true
+		}
+	}
+	s.cursorExpiracao = id
+	return r, nil
+}
+
+// intervaloEntreExpiracoes é o cochilo entre passadas do coletor.
+//
+// Um minuto, e não os cinco segundos da compaction, porque as duas correm
+// atrás de coisas com urgências diferentes: a compaction persegue disco que
+// já é lixo AGORA, o coletor persegue prazos que vencem em dias. Com o freio
+// de mil marcas por passada, um minuto ainda dá 60 mil expirações por hora —
+// mais do que qualquer dataset produz de abandono nessa janela.
+const intervaloEntreExpiracoes = time.Minute
+
+// IniciaExpiracao sobe o coletor do idle timeout. Sem expiração declarada não
+// há goroutine: o dataset não paga uma thread para não fazer nada.
+func (s *Store) IniciaExpiracao(ctx context.Context, lim LimitesDeExpiracao) {
+	if s.escritas == nil {
+		return
+	}
+	s.expMu.Lock()
+	defer s.expMu.Unlock()
+	if s.expCancela != nil {
+		return
+	}
+	ctx, cancela := context.WithCancel(ctx)
+	s.expCancela = cancela
+	// O medidor sobe aqui, e não dentro da goroutine, pela mesma razão da
+	// compaction: quem chamou tem direito de ver o estado que instalou, e um
+	// Stats lido antes do primeiro escalonamento não pode dizer que o coletor
+	// não subiu.
+	s.expAtiva.Store(true)
+	s.expEmVoo.Add(1)
+	go func() {
+		defer s.expEmVoo.Done()
+		defer s.expAtiva.Store(false)
+		s.rodaExpiracao(ctx, lim)
+	}()
+}
+
+// ParaExpiracao cancela e AGUARDA a passada em voo.
+//
+// Aguardar não é zelo: a passada toma o wmu por trecho e lê o mmap do índice,
+// então um Close que vencesse a corrida desmapearia a região sob os pés dela.
+// É a mesma razão do ParaCompaction, e é por isso que o Close chama os dois
+// antes do quiesce.
+func (s *Store) ParaExpiracao() {
+	s.expMu.Lock()
+	defer s.expMu.Unlock()
+	if s.expCancela != nil {
+		s.expCancela()
+		s.expCancela = nil
+	}
+	s.expEmVoo.Wait()
+}
+
+func (s *Store) rodaExpiracao(ctx context.Context, lim LimitesDeExpiracao) {
+	t := time.NewTimer(0) // primeira passada imediata
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		r, err := s.ExpiraUmaPassada(ctx, lim)
+		if err != nil {
+			// Erro aqui é do writer (sticky) ou do store fechando. Nos dois
+			// casos insistir só produz log em laço: o laço termina e o
+			// medidor cai, que é o sinal que o operador tem.
+			s.opts.Log.Warn("expiracao.parou",
+				"o coletor do idle timeout encerrou e o disco das entidades vencidas deixa de ser devolvido",
+				"erro", err)
+			return
+		}
+		if r.Expiradas > 0 || r.Renovadas > 0 {
+			s.opts.Log.Info("expiracao.passada",
+				"passada do coletor do idle timeout",
+				"examinadas", r.Examinadas, "expiradas", r.Expiradas,
+				"renovadas", r.Renovadas, "bateuTeto", r.BateuTeto, "deuVolta", r.DeuVolta)
+		}
+		// Passada que bateu o teto volta JÁ: há trabalho represado, e esperar
+		// o cochilo inteiro faria a fila drenar na velocidade do relógio em
+		// vez da do disco.
+		espera := intervaloEntreExpiracoes
+		if r.BateuTeto {
+			espera = 0
+		}
+		t.Reset(espera)
+	}
 }

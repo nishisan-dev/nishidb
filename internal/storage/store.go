@@ -228,6 +228,17 @@ type Store struct {
 	expiraBuf []byte
 	tombBuf   []byte
 	expiradas atomic.Uint64
+	// cursorExpiracao é onde a próxima passada do coletor recomeça. Só o
+	// laço do coletor o toca, e sempre sob o entra()/sai().
+	cursorExpiracao types.RowID
+
+	// Ciclo de vida do coletor, no molde do da compaction: expMu guarda o
+	// par cancela/emVoo, expAtiva é o medidor observável e expEmVoo é o que
+	// o Close aguarda antes do quiesce.
+	expMu      sync.Mutex
+	expCancela context.CancelFunc
+	expEmVoo   sync.WaitGroup
+	expAtiva   atomic.Bool
 	// agora é o relógio da expiração. Campo, e não time.Now direto, porque um
 	// teste de prazo precisa avançar o tempo sem dormir.
 	agora   func() time.Time
@@ -1745,6 +1756,10 @@ func (s *Store) Close() error {
 	// a corrida e desmapeia o índice sob os pés de quem está no meio de
 	// renomear e apagar arquivo.
 	s.ParaCompaction()
+	// O coletor sai pela MESMA razão da compaction: ele toma o wmu por trecho
+	// e lê o mmap do índice de escritas, então um Close que vencesse a corrida
+	// desmapearia a região sob os pés da passada.
+	s.ParaExpiracao()
 
 	s.vida.Lock()
 	defer s.vida.Unlock()
