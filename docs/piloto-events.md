@@ -127,13 +127,64 @@ Primeiras leituras, com ~2 milhões de eventos ingeridos: disco oscilando em
 torno de 1 GiB **e caindo** durante as passadas, 2,5 GiB devolvidos ao
 filesystem, garbage em 29%.
 
+## Retipo de `firstSeen`/`lastSeen` para `datetime` (23/08/2026)
+
+Os dois campos chegavam como texto — não estavam declarados no YAML, então
+caíam em `auto` e viravam `string`. O formato da origem é o
+`DateFormat.MEDIUM` do Java em locale `en_US`: `Aug 23, 2026 07:54:59 PM`.
+Como texto isso **não ordena cronologicamente** (`Aug` < `Dec` < `Feb`), então
+filtro por janela de tempo era impossível, não apenas lento.
+
+Agora são `type: datetime` com `format: "MMM d, yyyy h:mm:ss a"`, e o instante
+é resolvido pelo `TZ` do host — `America/Sao_Paulo`.
+
+**O ensaio veio antes, e é o que dá confiança na grafia.** A lição dos itens 1
+a 4 é que amostra curta não extrapola, então a validação foi feita sobre o
+corpus materializado, não sobre uma janela de tópico: **200.000 valores reais,
+zero fora do padrão**. Dias `01`/`05`/`09` e horas `01`–`09` aparecem todos
+zero-padded, ou seja, a origem emite `dd`/`hh`. Ainda assim o `format`
+declara as formas **variáveis** (`d`, `h`), que aceitam as duas grafias pelo
+mesmo preço: uma troca de provider de locale na JVM do produtor emitiria um
+dígito só, e sob `log-and-skip` isso seria descarte silencioso por evento.
+
+Depois, 100.000 eventos reais foram ingeridos num dataset de rascunho com o
+schema novo: **100.000 aplicados, zero descartados**. Só então o piloto foi
+tocado.
+
+**O retipo exigiu recriar o dataset**, e é o preço conhecido: os bytes já
+gravados carregam a tag de `string`, e o predicado exige igualdade exata de
+tag — sem recriar, toda row anterior contaria `typeMismatch` e a mesma coluna
+sairia como texto nas rows velhas e como instante nas novas, sem nenhum erro.
+Foram descartados **3.628.004 identifiers / 15,3 GB**, e o que voltou é o que
+cabe na janela de retenção do tópico. O YAML e o checkpoint antigos ficaram
+em `/app/nishidb/backup-<stamp>/` no host.
+
+**`datetime` não faz round-trip textual**: entra `Aug 23, 2026 07:54:59 PM` e
+sai `"2026-08-23T22:54:59.000Z"`. O texto de relógio de parede é consumido
+para resolver o instante e não é preservado — renderizar em horário local
+faria o mesmo dataset servido de dois hosts produzir bytes diferentes.
+
+A janela agora é consultável:
+
+```bash
+nishidb query --server 127.0.0.1:9142 --dataset events \
+  "SELECT identifier, lastSeen FROM events WHERE lastSeen >= 'Aug 23, 2026 08:00:00 PM' LIMIT 20"
+```
+
+Literal em outra grafia é **erro de bind**, com a mensagem nomeando o format
+declarado — nunca resultado vazio, que pareceria resposta.
+
 ## Limites conhecidos deste piloto
 
 - **Sem autenticação e sem TLS** (Fase 11). Loopback é a única proteção, e por
   isso o bind não deve mudar.
-- **Sem TTL** (M6): entidade materializada nunca expira. O payload traz
+- **Sem TTL ligado** (M6): entidade materializada nunca expira. O payload traz
   `expireTime`, `ttlEspecial` e `sendClearOnExpiration` — estes dados **pedem**
   TTL, e sem ele o estado vivo cresce com o número de alarmes distintos.
+  O `ttl.expireAfterWrite` já existe e o predicado de leitura já funciona, mas
+  o **coletor** ainda não: ligar a chave hoje faria a entidade abandonada
+  sumir da query no prazo sem devolver o disco. Por isso o piloto segue sem
+  ela — ligá-la depois é editar o YAML e reiniciar, sem recriar o dataset.
 - **Sem índice hash físico** (débito 19): consulta por `node` é full scan.
 - **Sem `ORDER BY`, `GROUP BY` ou agregações** na v1 (§9, §59).
 - **O binário não sabe dizer sua versão**: não há `--version`, então não há como
