@@ -318,3 +318,57 @@ func TestPassadaHonraOCancelamentoMesmoSemNadaAExpirar(t *testing.T) {
 		t.Fatalf("a passada ignorou o cancelamento e examinou %d entradas", r.Examinadas)
 	}
 }
+
+// O PONTO CEGO, e é ele que justifica o coletor existir ao lado da descoberta
+// oportunista.
+//
+// Um segmento só vira candidato quando mais da metade dele é garbage, e
+// garbage vem de UPDATE. Uma entidade abandonada, por definição, não recebe
+// update — então o segmento onde ela mora continua "cheio de coisa viva" e a
+// compaction nunca o elege. A rota oportunista não a alcança NUNCA, por mais
+// que se espere.
+//
+// O teste separa as duas rotas: escreve entidades uma única vez (nenhum
+// garbage), roda a compaction até cansar e exige que ela não tenha marcado
+// nada, e só então mostra o coletor pegando o que ela não podia pegar.
+func TestSoOColetorAlcancaAbandonadaEmSegmentoSemGarbage(t *testing.T) {
+	s, rel := storeComExpiracao(t, t.TempDir(), time.Hour)
+
+	var ids []types.RowID
+	for _, k := range []string{"a", "b", "c", "d", "e"} {
+		// Uma escrita por key: nada vira versão superada, nada vira garbage.
+		id, _ := mustPut(t, s, k, 1, payloadComEscrita(t, s, k, "Start", rel.t), nil)
+		ids = append(ids, id)
+	}
+	if err := s.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	rel.avanca(2 * time.Hour) // todas venceram
+
+	// A compaction não tem o que eleger, então não descobre nada.
+	if cands := s.candidatos(0.5); len(cands) != 0 {
+		t.Fatalf("o cenário não isola o ponto cego: %d candidato(s)", len(cands))
+	}
+	for i := 0; i < 5; i++ {
+		if _, err := s.CompactaUmaVez(context.Background(), 0.5); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := s.expiradas.Load(); n != 0 {
+		t.Fatalf("a compaction marcou %d entidades num segmento que ela nem elege", n)
+	}
+	for _, id := range ids {
+		if _, ok := s.locs.Get(id); !ok {
+			t.Fatalf("row %d perdeu location", id)
+		}
+	}
+
+	// O coletor alcança, porque ele varre o índice e não os segmentos.
+	r, err := s.ExpiraUmaPassada(context.Background(), limitesDeTeste())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Expiradas != len(ids) {
+		t.Fatalf("o coletor marcou %d de %d: %+v", r.Expiradas, len(ids), r)
+	}
+}
