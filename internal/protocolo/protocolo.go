@@ -185,6 +185,21 @@ const (
 	// protocolo deliberadamente NÃO expõe (ver internal/server/autenticacao.go).
 	CodUnauthenticated = "UNAUTHENTICATED"
 	CodForbidden       = "FORBIDDEN"
+
+	// CodWriterFailed e CodCompactionBusy são das rotas mutantes do §96 (Fase
+	// 11, Task B5, decisão D3 do roadmap): POST /v1/checkpoint e POST
+	// /v1/compact. CodWriterFailed sai com 500 — o writer está em modo falho
+	// sticky (§14.14), e só reabrir o dataset o tira de lá; o CLI mapeia este
+	// código para o MESMO ExitWriter(4) que o caminho local já usa para o
+	// mesmo sentinela (internal/types.ErrWriterFailed), coerência com a
+	// tabela de exit codes. CodCompactionBusy sai com 409 — já existe uma
+	// passada de compaction em voo, do laço automático ou de outra chamada
+	// manual concorrente (storage.ErrCompactionBusy); não é retentável na
+	// hora, mas é retentável em instantes, o que o distingue de um erro de
+	// uso — mesmo assim ele NÃO ganha um exit code próprio (ver o
+	// comentário de codigoDoProtocolo no CLI).
+	CodWriterFailed   = "WRITER_FAILED"
+	CodCompactionBusy = "COMPACTION_BUSY"
 )
 
 // NomeDeTipo é o nome do tipo como o operador o escreve no YAML (§17).
