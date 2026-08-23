@@ -178,13 +178,22 @@ declarado — nunca resultado vazio, que pareceria resposta.
 
 - **Sem autenticação e sem TLS** (Fase 11). Loopback é a única proteção, e por
   isso o bind não deve mudar.
-- **Sem TTL ligado** (M6): entidade materializada nunca expira. O payload traz
-  `expireTime`, `ttlEspecial` e `sendClearOnExpiration` — estes dados **pedem**
-  TTL, e sem ele o estado vivo cresce com o número de alarmes distintos.
-  O `ttl.expireAfterWrite` já existe e o predicado de leitura já funciona, mas
-  o **coletor** ainda não: ligar a chave hoje faria a entidade abandonada
-  sumir da query no prazo sem devolver o disco. Por isso o piloto segue sem
-  ela — ligá-la depois é editar o YAML e reiniciar, sem recriar o dataset.
+- **Expiração ligada em `90d`, sem coletor ainda** (M6). `ttl.expireAfterWrite:
+  90d` está declarado: cada escrita renova o prazo, então alarme ativo nunca
+  expira e alarme abandonado sai da query após 3 meses sem update. O
+  **predicado de leitura** vale desde já; o **coletor** é a Fase 4, e até ele
+  entrar o disco não é devolvido — a entidade some da consulta e o record
+  fica.
+  - Ligar não exigiu recriar o dataset: as entidades materializadas ANTES
+    ficam sem `_writtenAt`, o que o índice lê como prazo **desconhecido** —
+    e desconhecido nunca vence. Elas ganham o campo assim que receberem
+    qualquer atualização, e a semeadura da Fase 4 dará carência às que
+    sobrarem. No corte havia 33.383 nessa condição contra 8.395 já com prazo.
+  - **A duração escolhida muda o desenho do agendador.** A 452 ev/s, 90 dias
+    são 3,51 bilhões de escritas na janela: a deque de baldes do §57 custaria
+    28 GB de heap. Para prazo longo a varredura completa é a estratégia certa
+    — 8 B por rowId alocado, e com 90 dias a resolução de 1 minuto é
+    irrelevante, então ela roda de hora em hora.
 - **Sem índice hash físico** (débito 19): consulta por `node` é full scan.
 - **Sem `ORDER BY`, `GROUP BY` ou agregações** na v1 (§9, §59).
 - **O binário não sabe dizer sua versão**: não há `--version`, então não há como

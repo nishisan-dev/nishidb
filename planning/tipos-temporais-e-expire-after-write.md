@@ -235,6 +235,20 @@ O que o torna **reconstruível por construção**: é gravado dentro de `applyRe
 
 Fila = 8 B por entrada, comprimento = escritas na janela: @452 ev/s, 2h → 3,25M entradas ≈ **26 MB de heap**. Vira métrica.
 
+> **Correção (23/08/2026): a deque não escala para prazo longo, e o piloto escolheu 90 dias.**
+> A 452 ev/s, 90 dias são 3,51 **bilhões** de escritas na janela — **28 GB de heap**. A deque foi
+> desenhada para prazos curtos e o dimensionamento não foi testado contra o caso real.
+>
+> Para prazo longo a varredura completa, que eu havia descartado, é a estratégia **certa**: 8 B por
+> rowId alocado dá 28,8 MB hoje e 142 MB nas 17,8M rows do piloto anterior — e com prazo de 90 dias
+> a resolução de 1 minuto do §57 é irrelevante, então ela roda de hora em hora em vez de por minuto.
+> O custo por passada é o mesmo, mas o número de passadas cai 60×.
+>
+> **A Fase 4 escolhe a estratégia pela duração declarada**: deque quando a janela de escritas couber
+> num teto de memória declarado, varredura periódica com intervalo proporcional quando não couber.
+> O teto vira configuração com default, e a escolha vai para log na subida — um agendador que
+> escolhe sozinho e não conta qual escolheu é o que torna um problema de memória indiagnosticável.
+
 Ciclo de vida decalcado de `IniciaCompaction`/`ParaCompaction` ([compaction.go:623](internal/storage/compaction.go:623), [:669](internal/storage/compaction.go:669)), mesmo single-flight. `Close()` chama `ParaExpiracao()` **antes** de `ParaCompaction()` e do `vida.Lock()`. Registro em `ligaExpiracao(ctx)` ao lado de [server.go:461](internal/server/server.go:461), lendo a duração **por dataset**. `nishidb ingest` roda **uma** passada antes do `Checkpoint` final — fecha metade do débito 66 sem tocar no laço de 5s.
 
 ## 2.4 A expiração
