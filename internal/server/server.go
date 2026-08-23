@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sort"
 	"sync"
 	"time"
 
@@ -196,6 +197,7 @@ func Novo(cfg *config.Config, o Opcoes) (*Servidor, error) {
 	if err := config.ValidaUnicidadeDeGroup(specs); err != nil {
 		return nil, err
 	}
+	avisaChavesSemMotor(specs, log)
 
 	// A segurança do §74-78 é resolvida ANTES do bind: falha de credencial,
 	// de certificado, de porta loopback, ou a matriz de recusa do §77 não
@@ -458,6 +460,40 @@ func (s *Servidor) rodaIngestao(ctx context.Context, d *dataset) {
 // A ausência tem log próprio de propósito. `enabled: false` é uma decisão do
 // operador, e um processo que a honra em silêncio é indistinguível de um que a
 // ignora — que é o defeito que a issue #1 denuncia, em outra chave.
+// avisaChavesSemMotor anuncia, na subida, as chaves de spec que são aceitas e
+// validadas mas ainda não têm implementação.
+//
+// A alternativa é o que havia antes: aceitar em silêncio. Um operador que
+// declara uma janela de retenção e não recebe nada de volta não tem como
+// distinguir "está funcionando" de "não existe" — é o defeito que a issue #1
+// denuncia, e ele custa mais caro numa chave de retenção do que em qualquer
+// outra, porque o sintoma esperado (disco parando de crescer) só apareceria
+// dias depois.
+func avisaChavesSemMotor(specs map[string]*schema.DatasetSpec, log *logging.Logger) {
+	for _, nome := range nomesOrdenados(specs) {
+		spec := specs[nome]
+		if d := spec.Materialization.TombstoneRetention; d > 0 {
+			log.Warn("ttl.tombstoneRetention.sem_motor",
+				"a chave é válida e NÃO tem efeito: esquecer a key exige purgar a primary e ensinar a compaction a descartar lápide vencida",
+				"dataset", nome, "tombstoneRetention", d)
+		}
+		if ttl := spec.Materialization.TTL; ttl != nil && ttl.Field != "" {
+			log.Warn("ttl.field.sem_motor",
+				"a chave é válida e NÃO tem efeito: a expiração implementada é a ttl.expireAfterWrite",
+				"dataset", nome, "field", ttl.Field)
+		}
+	}
+}
+
+func nomesOrdenados(specs map[string]*schema.DatasetSpec) []string {
+	out := make([]string, 0, len(specs))
+	for nome := range specs {
+		out = append(out, nome)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func (s *Servidor) ligaCompaction(ctx context.Context) {
 	habilitada, ratio := s.cfg.Compaction()
 	if !habilitada {

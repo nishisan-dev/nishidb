@@ -74,6 +74,53 @@ func Tamanho(s string, padrao int64) (int64, error) {
 	return n, nil
 }
 
+// DuracaoComDias aceita a gramática do time.ParseDuration MAIS o sufixo `d`
+// de dias, que ela não tem (a maior unidade do ParseDuration é `h`).
+//
+// Existe porque as janelas de RETENÇÃO são declaradas em dias na prática, e a
+// spec §12 já documenta `tombstoneRetention: 7d`. Sem isto, validar a chave
+// recusaria o YAML normativo do próprio projeto — e a alternativa, deixá-la
+// como string sem parse, é a configuração sem leitor que o débito 37 nomeia.
+//
+// A extensão é local, e não uma mudança na gramática de todas as durações do
+// produto: um `query.timeout` em dias não descreve nada que alguém queira.
+//
+// Formas aceitas: "7d", "1d12h", "36h". O `d` só pode aparecer uma vez e no
+// começo, que é como se escreve — "12h1d" é recusado em vez de reordenado, na
+// mesma disciplina de recusar em vez de adivinhar.
+func DuracaoComDias(s string, padrao time.Duration) (time.Duration, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return padrao, nil
+	}
+	dias, resto := 0, s
+	if i := strings.IndexByte(s, 'd'); i >= 0 {
+		n, err := strconv.Atoi(s[:i])
+		if err != nil || n < 0 {
+			return 0, fmt.Errorf("duração inválida %q", s)
+		}
+		dias, resto = n, s[i+1:]
+		if strings.ContainsRune(resto, 'd') {
+			return 0, fmt.Errorf("duração inválida %q: o sufixo d aparece mais de uma vez", s)
+		}
+	}
+	total := time.Duration(dias) * 24 * time.Hour
+	if resto != "" {
+		d, err := time.ParseDuration(resto)
+		if err != nil {
+			return 0, fmt.Errorf("duração inválida %q", s)
+		}
+		if d < 0 {
+			return 0, fmt.Errorf("duração deve ser positiva, é %q", s)
+		}
+		total += d
+	}
+	if total <= 0 {
+		return 0, fmt.Errorf("duração deve ser positiva, é %q", s)
+	}
+	return total, nil
+}
+
 // Duracao aceita a gramática do time.ParseDuration e recusa duração não
 // positiva pelo mesmo motivo de InteiroPositivo: um intervalo de zero não é
 // "sem intervalo", é um intervalo que nenhum agendador poderia honrar.

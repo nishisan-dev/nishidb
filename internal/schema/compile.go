@@ -166,6 +166,10 @@ type Compiled struct {
 
 	Key, Seq, TTL *CompiledField
 
+	// ExpireAfterWrite é o idle timeout do dataset; zero = sem expiração por
+	// escrita. Mutuamente exclusivo com TTL, pela validação da spec.
+	ExpireAfterWrite time.Duration
+
 	mu      sync.RWMutex
 	byName  map[string]*CompiledField
 	byID    map[types.FieldID]*CompiledField
@@ -186,6 +190,9 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 		byID:    make(map[types.FieldID]*CompiledField),
 		exclude: make(map[string]struct{}, len(s.Schema.Exclude)),
 		dict:    dict,
+	}
+	if ttl := s.Materialization.TTL; ttl != nil {
+		c.ExpireAfterWrite = ttl.ExpireAfterWrite
 	}
 	if s.Materialization.Mode == "replace" {
 		c.Mode = ModeReplace

@@ -126,3 +126,45 @@ func TestInteiroPositivoSeparaAusenteDeZero(t *testing.T) {
 		t.Errorf("InteiroPositivo(4242) = %d, quer 4242", got)
 	}
 }
+
+func TestDuracaoComDias(t *testing.T) {
+	ok := map[string]time.Duration{
+		"7d":     7 * 24 * time.Hour,
+		"1d":     24 * time.Hour,
+		"1d12h":  36 * time.Hour,
+		"36h":    36 * time.Hour,
+		"30s":    30 * time.Second,
+		"1d0h1m": 24*time.Hour + time.Minute,
+	}
+	for in, want := range ok {
+		got, err := DuracaoComDias(in, 0)
+		if err != nil {
+			t.Errorf("%q: %v", in, err)
+			continue
+		}
+		if got != want {
+			t.Errorf("%q = %v, quer %v", in, got, want)
+		}
+	}
+
+	// Recusa em vez de adivinhar: reordenar "12h1d" seria inventar intenção.
+	ruins := []string{"12h1d", "1d2d", "-1d", "0d", "d", "7dias", "7 d", "0s"}
+	for _, in := range ruins {
+		if got, err := DuracaoComDias(in, 0); err == nil {
+			t.Errorf("%q foi aceito como %v", in, got)
+		}
+	}
+
+	// Vazio devolve o padrão, como a Duracao.
+	if got, err := DuracaoComDias("", 5*time.Minute); err != nil || got != 5*time.Minute {
+		t.Errorf(`"" = %v, %v; quer o padrão`, got, err)
+	}
+}
+
+// A fixture normativa do §12 declara 7d: se esta gramática deixar de aceitá-la,
+// o YAML que a própria spec documenta para de carregar.
+func TestGramaticaAceitaAJanelaDoSpec12(t *testing.T) {
+	if _, err := DuracaoComDias("7d", 0); err != nil {
+		t.Fatalf("tombstoneRetention do §12 recusado: %v", err)
+	}
+}
