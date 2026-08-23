@@ -207,12 +207,12 @@ func (s *Servidor) muxLoopback(rt *roteador) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		papel, existe := rt.papelDaRota(r)
 		if existe {
-			switch {
-			case papel == "":
+			switch papel {
+			case "":
 				_, padrao := rt.mux.Handler(r)
 				s.recusaRegistroSemPapel(w, r, padrao)
 				return
-			case papel == config.RoleAdmin:
+			case config.RoleAdmin:
 				s.recusaLoopbackAdmin(w, r)
 				return
 			}

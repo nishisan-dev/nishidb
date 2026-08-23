@@ -1,6 +1,6 @@
-// Package server: as duas rotas MUTANTES do §96 (Fase 11, Task B5, decisão
-// D3 do roadmap) — POST /v1/compact e POST /v1/checkpoint. São as PRIMEIRAS
-// rotas do protocolo remoto que mudam estado; até aqui tudo era leitura.
+// As duas rotas MUTANTES do §96 (Fase 11, Task B5, decisão D3 do roadmap) —
+// POST /v1/compact e POST /v1/checkpoint. São as PRIMEIRAS rotas do
+// protocolo remoto que mudam estado; até aqui tudo era leitura.
 //
 // As duas são ADMIN-only (registradas em montaMux, autenticacao.go),
 // síncronas (a resposta só sai depois do trabalho feito — nenhuma das duas
@@ -8,6 +8,7 @@
 // {"dataset":"..."}: ausente significa TODOS os datasets, na ordem
 // determinística da subida (s.datasets, o mesmo slice que /v1/metadata e
 // /v1/stats já percorrem).
+
 package server
 
 import (
