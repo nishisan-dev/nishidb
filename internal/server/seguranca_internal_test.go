@@ -65,6 +65,7 @@ func TestResolveSenhaComPasswordFileGroupOuWorldReadableRecusaNomeandoCaminhoEMo
 		{"legível pelo group", 0o640},
 		{"legível por todos", 0o644},
 		{"escrevível pelo group", 0o620},
+		{"legível por outros sem group", 0o604},
 	}
 	for _, c := range casos {
 		t.Run(c.nome, func(t *testing.T) {
@@ -88,7 +89,7 @@ func TestResolveSenhaComPasswordFileGroupOuWorldReadableRecusaNomeandoCaminhoEMo
 				t.Errorf("a mensagem não nomeia o caminho: %v", err)
 			}
 			if !strings.Contains(err.Error(), "0640") && !strings.Contains(err.Error(), "0644") &&
-				!strings.Contains(err.Error(), "0620") {
+				!strings.Contains(err.Error(), "0620") && !strings.Contains(err.Error(), "0604") {
 				t.Errorf("a mensagem não nomeia o modo: %v", err)
 			}
 		})
@@ -151,6 +152,43 @@ func TestResolveSenhaAparaTrailingNewlineDoPasswordFile(t *testing.T) {
 				t.Errorf("digest com quebra de linha final diverge do digest sem quebra: "+
 					"a mesma senha 'autenticaria' diferente dependendo de como o operador a escreveu no arquivo (base=%x, %s=%x)",
 					base, c.nome, digest)
+			}
+		})
+	}
+}
+
+// Um passwordFile vazio ou que só contém quebra de linha apara para "" — e
+// sem esta recusa resolveria em silêncio para o digest de string vazia
+// (sha256("") = e3b0c442...). Um `touch senha.txt` de script de
+// provisionamento criaria, sem ninguém perceber, uma conta que autentica com
+// QUALQUER Basic de senha em branco — e o cache já não guarda a informação
+// de que o arquivo estava vazio para a B3 desconfiar depois. Mesma doutrina
+// da recusa de passwordEnv vazia, aplicada ao vizinho de baixo.
+func TestResolveSenhaComPasswordFileVazioOuSoNewlineRecusaNomeandoOCaminho(t *testing.T) {
+	casos := []struct {
+		nome      string
+		conteudo  string
+		descricao string
+	}{
+		{"vazio", "", "arquivo com zero bytes"},
+		{"só LF", "\n", "arquivo que só contém uma quebra de linha"},
+		{"só CRLF", "\r\n", "arquivo que só contém um CRLF"},
+	}
+	for _, c := range casos {
+		t.Run(c.nome, func(t *testing.T) {
+			dir := t.TempDir()
+			caminho := filepath.Join(dir, "senha.txt")
+			if err := os.WriteFile(caminho, []byte(c.conteudo), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			u := config.UserSpec{Username: "op", PasswordFile: caminho, Role: config.RoleRead}
+			_, err := resolveSenha(u)
+			if err == nil {
+				t.Fatalf("quer recusa: %s não pode resolver para senha vazia em silêncio", c.descricao)
+			}
+			if !strings.Contains(err.Error(), caminho) {
+				t.Errorf("a mensagem não nomeia o caminho: %v", err)
 			}
 		})
 	}

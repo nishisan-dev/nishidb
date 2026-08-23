@@ -119,6 +119,19 @@ func resolveSenha(u config.UserSpec) ([sha256.Size]byte, error) {
 		// digest, e a mesma senha digitada sem o operador ter usado echo
 		// deixaria de autenticar — a chave mentiria sobre qual é a senha.
 		senha = strings.TrimRight(string(b), "\r\n")
+		// Mesma doutrina do passwordEnv vazio, algumas linhas acima: um
+		// arquivo vazio ou só com quebra de linha — o que um `touch
+		// senha.txt` de script de provisionamento produz sem querer — apara
+		// para "" e resolveria em silêncio para o digest de string vazia.
+		// A B3 aceitaria essa credencial em qualquer HTTP Basic com senha em
+		// branco, e não teria como perceber depois: o cache já perdeu a
+		// informação de que o arquivo estava vazio, só guarda o digest.
+		if senha == "" {
+			return zero, fmt.Errorf(
+				"server.authentication.users: usuário %q: passwordFile %s está vazio (ou só contém "+
+					"quebra de linha) após aparar o \\n/\\r\\n final",
+				u.Username, u.PasswordFile)
+		}
 
 	default:
 		// A B1 garante XOR: exatamente um dos dois é não-vazio (invariante

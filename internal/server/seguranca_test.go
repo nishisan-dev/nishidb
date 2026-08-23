@@ -118,6 +118,83 @@ func TestBindExpostoComAutenticacaoETLSSobeSemRecusa(t *testing.T) {
 	}
 }
 
+// A célula 1 da matriz por completo: LOOPBACK com autenticação ligada e TLS
+// TAMBÉM ligado não tem nada para avisar — "auth.sem_tls" só faz sentido
+// quando TLS está desligado, e "bind.exposto" não se aplica a loopback. A
+// combinação correta sobe em silêncio, sem nenhum dos dois avisos.
+func TestLoopbackComAutenticacaoETLSSobeSemAviso(t *testing.T) {
+	certPath, keyPath := geraCertificadoDeTeste(t)
+	const variavel = "NISHIDB_TESTE_LOOPBACK_COM_TLS_ADMIN"
+	t.Setenv(variavel, "senha-bem-forte")
+
+	bloco := fmt.Sprintf("\nserver:\n  bind: 127.0.0.1\n  port: %%d\n"+
+		"  tls:\n    enabled: true\n    certificateFile: %s\n    privateKeyFile: %s\n"+
+		"  authentication:\n    enabled: true\n    users:\n"+
+		"      - username: admin\n        passwordEnv: %s\n        role: ADMIN\n",
+		certPath, keyPath, variavel)
+	a := novoAmbienteCom(t, bloco)
+	a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))
+
+	saida := sobeCapturandoLog(t, a)
+	if strings.Contains(saida, "auth.sem_tls") {
+		t.Errorf("loopback com TLS ligado não deveria avisar auth.sem_tls: %s", saida)
+	}
+	if strings.Contains(saida, "bind.exposto") {
+		t.Errorf("loopback nunca deveria avisar bind.exposto: %s", saida)
+	}
+}
+
+// A escolha atual para `authentication: {}` (seção PRESENTE, mas `enabled`
+// omitido dentro dela): trata como "declarada" (a seção apareceu) e
+// "desligada" (Enabled fica nil, que AutenticacaoHabilitada() lê como
+// false) — a mesma célula de `enabled: false` EXPLÍCITO, não a de seção
+// ausente. Este teste existe para TRAVAR essa decisão: se algum dia alguém
+// decidir que `authentication: {}` deveria pedir decisão explícita como a
+// seção ausente pede, este teste tem de ser atualizado de propósito, e não
+// quebrar como efeito colateral de outra mudança.
+func TestBindExpostoComAuthenticationSecaoVaziaSobeComAviso(t *testing.T) {
+	a := novoAmbienteCom(t, "\nserver:\n  bind: 0.0.0.0\n  port: %d\n  authentication: {}\n")
+	a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))
+
+	saida := sobeCapturandoLog(t, a)
+	if !strings.Contains(saida, "bind.exposto") {
+		t.Fatalf("authentication: {} deveria ser tratada como declarada+desligada, subindo com aviso: %s", saida)
+	}
+}
+
+// Violações simultâneas: bind exposto, autenticação ligada, TLS desligado, E
+// a variável de senha ausente do ambiente. A ORDEM documentada em
+// avaliaExposicaoEAutenticacao/Novo (matriz antes de segredos, porque a
+// matriz é só leitura de config) diz que a recusa da matriz (célula "auth
+// sem TLS") tem de sair PRIMEIRO — nomeando as três chaves — sem que
+// resolveCredenciais chegue a tocar o ambiente. Este teste pega uma
+// reordenação acidental futura: se alguém inverter a ordem, o erro passaria
+// a nomear a variável de ambiente em vez das três chaves da matriz.
+func TestViolacoesSimultaneasSaemNaOrdemDaMatrizNaoNosSegredos(t *testing.T) {
+	const variavel = "NISHIDB_TESTE_ORDEM_VIOLACOES_SIMULTANEAS"
+	os.Unsetenv(variavel) //nolint:errcheck // ausência é o próprio setup do teste
+
+	bloco := "\nserver:\n  bind: 0.0.0.0\n  port: %d\n" +
+		"  authentication:\n    enabled: true\n    users:\n" +
+		"      - username: admin\n        passwordEnv: " + variavel + "\n        role: ADMIN\n"
+	a := novoAmbienteCom(t, bloco)
+	a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))
+
+	_, err := server.Novo(a.carrega(), server.Opcoes{})
+	if err == nil {
+		t.Fatal("quer recusa: bind exposto, auth ligada, tls desligado E env de senha ausente")
+	}
+	for _, chave := range []string{"server.bind", "server.authentication.enabled", "server.tls.enabled"} {
+		if !strings.Contains(err.Error(), chave) {
+			t.Errorf("a recusa que sai não é a da matriz, não nomeia %s: %v", chave, err)
+		}
+	}
+	if strings.Contains(err.Error(), variavel) {
+		t.Errorf("a recusa nomeou a variável de ambiente: a resolução de segredos rodou antes da "+
+			"matriz, na ordem errada: %v", err)
+	}
+}
+
 // TLS ligado exige que o par cert/key CARREGUE na subida — LoadX509KeyPair,
 // não só "os arquivos existem" — para que o erro apareça aqui, nomeando o
 // caminho, e não no primeiro handshake com o listener já aberto.
