@@ -367,9 +367,13 @@ func (c *Config) MaxConcurrent() int { return c.maxConcurrent }
 
 // BindExposto diz se o servidor vai escutar fora do loopback.
 //
-// Existe para a subida poder AVISAR: enquanto a autenticação do §74-77 não
-// existir (Fase 11), escutar em endereço alcançável significa entregar
-// /v1/query — e com ele os dados — a quem chegar na porta.
+// Existe para a subida poder AVISAR ou RECUSAR (§77): a autenticação do
+// §74-77 já existe desde a Fase 11, mas o operador pode desligá-la
+// explicitamente (server.authentication.enabled: false) — e nesse caso um
+// bind exposto entrega POST /v1/query (leitura) E POST /v1/compact, POST
+// /v1/checkpoint (mutação, ADMIN) a quem chegar na porta, sem credencial
+// nenhuma. Não é lacuna do produto: é a decisão do operador tendo o alcance
+// completo que ela de fato tem.
 //
 // Nome que não resolve para IP conta como exposto: o servidor vai bindar
 // naquilo, e presumir inocência de um endereço que não se sabe qual é seria

@@ -312,9 +312,19 @@ func avaliaExposicaoEAutenticacao(cfg *config.Config, log *logging.Logger) error
 // exposto com authentication.enabled: false EXPLÍCITO (célula 3 da matriz
 // acima); a recusa por ausência da seção (célula 2) e a recusa por
 // autenticação sem TLS (célula 4) não chegam aqui.
+//
+// A mensagem NÃO pode dizer que falta autenticação: a Fase 11 entregou o
+// §74-77, e esta célula só é alcançada porque o OPERADOR desligou
+// authentication.enabled explicitamente — "ainda não tem" seria mentira
+// sobre uma escolha que ele fez de propósito. E não pode citar só
+// /v1/query: desde a Fase 11 a mesma porta sem credencial também serve
+// POST /v1/compact e POST /v1/checkpoint (ADMIN) anônimos no plano
+// principal (godoc de montaMux/comAutenticacao, autenticacao.go) — quem
+// alcança o bind lê E MUTA o dataset, não só lê.
 func avisaSobreAExposicao(cfg *config.Config, log *logging.Logger) {
 	log.Warn("bind.exposto",
-		"o servidor vai escutar FORA do loopback e o protocolo remoto ainda NÃO tem autenticação (§74-77, Fase 11): "+
-			"quem alcançar esta porta lê o dataset inteiro por POST /v1/query",
+		"o servidor vai escutar FORA do loopback com server.authentication.enabled: false — decisão explícita "+
+			"do operador, não lacuna do produto: quem alcançar esta porta lê (POST /v1/query) E MUTA "+
+			"(POST /v1/compact, POST /v1/checkpoint) o dataset inteiro, sem credencial nenhuma",
 		"endereco", cfg.Endereco())
 }
