@@ -139,8 +139,44 @@ func TestRotaRegistradaPorForaDeRegistraEhRecusadaFailClosed(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&corpo); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(corpo.Error.Message, "/rota-esquecida") {
-		t.Errorf("a mensagem não nomeia a rota sem papel: %q", corpo.Error.Message)
+	// Retoque da revisão da B3 (dono natural: B4): o corpo HTTP é genérico —
+	// nomear a rota ou o símbolo interno (roteador.registra) para um cliente
+	// já AUTENTICADO devolveria detalhe de implementação sem relação com quem
+	// só tem uma credencial válida. TestRecusaRegistroSemPapelLogaODetalheQueNaoVaiAoCliente
+	// prova o outro lado: o detalhe existe, só que SÓ no log.
+	if corpo.Error.Message != "erro interno do servidor" {
+		t.Errorf("mensagem = %q, quer o texto genérico (o detalhe vai só para o log)", corpo.Error.Message)
+	}
+	if strings.Contains(corpo.Error.Message, "/rota-esquecida") || strings.Contains(corpo.Error.Message, "registra") {
+		t.Errorf("o corpo HTTP vazou detalhe interno: %q", corpo.Error.Message)
+	}
+}
+
+// O outro lado do retoque acima: o corpo ao cliente é genérico, mas o
+// detalhe — a rota e a dica de correção — não pode desaparecer. Ele existe,
+// só que SÓ no log estruturado, que é quem o operador lê.
+func TestRecusaRegistroSemPapelLogaODetalheQueNaoVaiAoCliente(t *testing.T) {
+	var buf bytes.Buffer
+	s := servidorDeTeste(logging.New(&buf, logging.FormatoJSON, slog.LevelInfo))
+	rt := roteadorDeTeste()
+	rt.mux.HandleFunc("/rota-esquecida", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	h := s.comAutenticacao(rt)
+
+	req := httptest.NewRequest(http.MethodGet, "/rota-esquecida", nil)
+	req.SetBasicAuth("chefe", senhaChefeDeTeste)
+	h.ServeHTTP(httptest.NewRecorder(), req)
+
+	saida := buf.String()
+	if !strings.Contains(saida, "/rota-esquecida") {
+		t.Errorf("o log não nomeia a rota sem papel: %s", saida)
+	}
+	if !strings.Contains(saida, "roteador.registra") {
+		t.Errorf("o log não traz a dica de correção (roteador.registra): %s", saida)
+	}
+	if !strings.Contains(saida, `"level":"ERROR"`) {
+		t.Errorf("o evento não saiu em nível Error: %s", saida)
 	}
 }
 

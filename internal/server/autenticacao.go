@@ -304,21 +304,27 @@ func (s *Servidor) recusaAutorizacao(w http.ResponseWriter, r *http.Request, rot
 // chamou rt.mux.HandleFunc/Handle diretamente, por fora de roteador.registra
 // — a única via que grava em rt.papeis junto com o handler. Não é erro de
 // CLIENTE nem ausência legítima de restrição: é bug de REGISTRO, e por isso
-// nunca deixa passar sem checagem. 500, nomeando a rota, para aparecer alto em
-// teste e em log — nunca um papel default silencioso (ADMIN implícito
-// mascararia o bug até alguém notar em produção).
+// nunca deixa passar sem checagem. 500 para aparecer alto em teste e em log —
+// nunca um papel default silencioso (ADMIN implícito mascararia o bug até
+// alguém notar em produção).
+//
+// O corpo HTTP é genérico de propósito (retoque da revisão da B3): nomear
+// símbolos internos ("use roteador.registra") ou a própria rota para um
+// cliente já AUTENTICADO devolveria detalhe de implementação a alguém que só
+// tem uma credencial válida, sem relação com quem opera o servidor. O
+// detalhe inteiro — rota e a dica de correção — vai SÓ para s.log.Error, que
+// é quem o operador lê.
 func (s *Servidor) recusaRegistroSemPapel(w http.ResponseWriter, r *http.Request, padrao string) {
 	w.Header().Set("Content-Type", protocolo.ContentTypeJSON)
 	w.WriteHeader(http.StatusInternalServerError)
 	if err := json.NewEncoder(w).Encode(protocolo.CorpoErro{Error: protocolo.Falha{
-		Code: protocolo.CodInterno,
-		Message: fmt.Sprintf(
-			"rota %q não declara papel exigido (bug de registro: use roteador.registra, nunca HandleFunc direto)",
-			padrao),
+		Code:    protocolo.CodInterno,
+		Message: "erro interno do servidor",
 	}}); err != nil {
 		s.log.Warn("query.escrita_falhou", "não foi possível entregar o corpo do 500 de registro sem papel", "erro", err.Error())
 	}
-	s.log.Error("auth.rota_sem_papel", "rota registrada sem papel exigido — bug de registro, use roteador.registra",
+	s.log.Error("auth.rota_sem_papel",
+		"rota registrada sem papel exigido — bug de registro, use roteador.registra, nunca HandleFunc direto",
 		"remoto", r.RemoteAddr, "rota", padrao)
 }
 
