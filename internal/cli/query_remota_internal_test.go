@@ -40,6 +40,8 @@ func TestCodigoDoProtocoloTraduzATabelaInteira(t *testing.T) {
 		{protocolo.CodInterno, ExitUso, "falha interna não tem código próprio no contrato do §96"},
 		{protocolo.CodUnauthenticated, ExitUso, "credencial recusada (§74-77) é erro de quem chamou o comando, não do servidor"},
 		{protocolo.CodForbidden, ExitUso, "papel insuficiente (§74-77) é erro de quem chamou o comando, não do servidor"},
+		{protocolo.CodWriterFailed, ExitWriter, "o writer está em modo falho sticky (Fase 11, B5): o MESMO 4 do caminho local"},
+		{protocolo.CodCompactionBusy, ExitUso, "passada em voo (Fase 11, B5) é retentável, mas cai no MESMO vala-comum de TOO_MANY_QUERIES"},
 		{"CODIGO_QUE_NAO_EXISTE", ExitUso, "código desconhecido cai no vala-comum, nunca em zero"},
 	}
 	for _, c := range casos {

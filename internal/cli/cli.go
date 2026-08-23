@@ -66,6 +66,8 @@ USO
   nishidb status   --server <host:porta>
   nishidb datasets --server <host:porta>
   nishidb inspect  --server <host:porta> <dataset>
+  nishidb compact    --server <host:porta> [dataset]
+  nishidb checkpoint --server <host:porta> [dataset]
   nishidb --version | version
 
 INGEST
@@ -106,8 +108,21 @@ STATUS, DATASETS E INSPECT
                          consultas e ingestão de cada dataset.
   datasets               o que este servidor serve.
   inspect <dataset>      colunas com tipo, alias e índice declarado.
-  Os três são SÓ leitura. "compact" e "checkpoint", que o §96 também lista,
-  são rotas mutantes e ficam para o M5, atrás do papel ADMIN.
+  Os três são SÓ leitura.
+
+COMPACT E CHECKPOINT
+  As rotas MUTANTES do §96 (Fase 11, decisão D3 do roadmap), atrás do papel
+  ADMIN — as primeiras que mudam estado do dataset pelo protocolo remoto.
+  Síncronas: a saída só aparece depois do trabalho feito. [dataset] ausente
+  atua sobre TODOS os datasets do servidor, na ordem em que ele subiu.
+  compact [dataset]      dispara uma passada de compaction manual (funciona
+                         com storage.compaction.enabled: false — é o modo
+                         do operador que desligou o laço automático e opera
+                         na mão). 409 se já houver uma passada em voo, do
+                         laço ou de outra chamada.
+  checkpoint [dataset]   força um checkpoint. Idempotente por EFEITO: repetir
+                         sobre estado inalterado custa o stall real da
+                         ingestão e não muda nada — não rode em loop apertado.
 
 EXIT CODES
   0  sucesso
@@ -143,6 +158,10 @@ func Run(args []string, amb Ambiente) int {
 		return runDatasets(args[1:], amb)
 	case "inspect":
 		return runInspect(args[1:], amb)
+	case "compact":
+		return runCompact(args[1:], amb)
+	case "checkpoint":
+		return runCheckpoint(args[1:], amb)
 	case "--version", "version":
 		_, _ = fmt.Fprintln(amb.Stdout, buildinfo.String())
 		return ExitOK

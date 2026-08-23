@@ -131,6 +131,14 @@ func codigoDoProtocolo(codigo string) int {
 		return ExitInterromp
 	case protocolo.CodDatasetCorrompido:
 		return ExitDataset
+	case protocolo.CodWriterFailed:
+		// Fase 11, Task B5 (POST /v1/compact e /v1/checkpoint): o MESMO
+		// sentinela types.ErrWriterFailed que o caminho LOCAL mapeia para 4
+		// em codigoDoErro (cli.go) — o writer está em modo falho sticky, e só
+		// reabrir o dataset (reiniciar o servidor) o tira de lá. Coerência
+		// com a tabela: o exit code não pode depender de a consulta ter
+		// chegado local ou remota.
+		return ExitWriter
 	default:
 		// Inclui BAD_REQUEST, UNKNOWN_DATASET, TOO_MANY_QUERIES, INTERNAL,
 		// UNAUTHENTICATED e FORBIDDEN (§74-77, Fase 11, Task B3): credencial
@@ -139,6 +147,16 @@ func codigoDoProtocolo(codigo string) int {
 		// degradação com a mensagem do servidor já vale hoje. O que o
 		// operador faz com todos eles é olhar o comando ou o servidor, que é
 		// o significado do 1.
+		//
+		// COMPACTION_BUSY (Fase 11, Task B5) cai aqui TAMBÉM de propósito, e
+		// não ganha um exit code próprio: é retentável, mas a ação do
+		// operador diante dele é a MESMA do resto do vala-comum — olhar o
+		// comando (ele mandou compactar de novo cedo demais) ou o servidor
+		// (o laço automático está de pé, e o modo manual não se aplica) —,
+		// nunca "reprocesse" (7), "reabra o dataset" (4) nem qualquer outro
+		// código que já tem significado próprio na tabela. TOO_MANY_QUERIES
+		// é o precedente exato: outro 4xx "tente de novo" que também cai no
+		// 1.
 		return ExitUso
 	}
 }
