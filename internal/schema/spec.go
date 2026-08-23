@@ -598,3 +598,18 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 
 	return s, nil
 }
+
+// ExpiraApos devolve o idle timeout declarado, ou zero quando o dataset não
+// expira por escrita.
+//
+// Existe como método, e não como acesso direto ao campo, porque o bloco ttl
+// admite duas formas e só uma tem motor: quem lê
+// Materialization.TTL.ExpireAfterWrite na mão esquece o nil do bloco, e o
+// esquecimento não aparece em dataset nenhum que declare ttl — só nos que não
+// declaram, com um panic no caminho de abertura.
+func (s *DatasetSpec) ExpiraApos() time.Duration {
+	if s == nil || s.Materialization.TTL == nil {
+		return 0
+	}
+	return s.Materialization.TTL.ExpireAfterWrite
+}

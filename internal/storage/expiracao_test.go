@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"sort"
 	"testing"
 	"time"
 
@@ -8,9 +9,18 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// O campo de sistema tem um FieldID como qualquer outro; nos testes deste
-// pacote os ids são fixos (ver mustAppendField).
-const fldEscrita = types.FieldID(9)
+// Os ids deste pacote são POSICIONAIS (ordem de LookupOrCreate), e o Open de
+// um dataset com expiração registra o campo de sistema antes de qualquer
+// outro. Em vez de fixar números — que mudariam junto com essa ordem —, os
+// testes daqui resolvem cada id pelo dicionário do próprio store.
+func idDoCampo(t *testing.T, s *Store, nome string) types.FieldID {
+	t.Helper()
+	id, err := s.FieldDict().LookupOrCreate([]byte(nome))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
 
 type relogioDeTeste struct{ t time.Time }
 
@@ -23,23 +33,50 @@ func storeComExpiracao(t *testing.T, dir string, d time.Duration) (*Store, *relo
 	s := openStore(t, Options{
 		Dir:              dir,
 		ExpireAfterWrite: d,
-		CampoDeEscrita:   fldEscrita,
+		CampoDeEscrita:   "_writtenAt",
 	})
 	rel := &relogioDeTeste{t: time.Date(2026, 8, 22, 20, 0, 0, 0, time.UTC)}
 	s.UsaRelogio(rel.agora)
 	return s, rel
 }
 
+// payloadSemEscrita monta o payload de um dataset materializado ANTES de a
+// expiração ser declarada: sem o campo de sistema.
+func payloadSemEscrita(t *testing.T, s *Store, key string) []byte {
+	t.Helper()
+	return payloadOrdenado(t, s, map[string]types.Value{
+		"id": {Type: types.TypeString, Bytes: []byte(key)},
+	})
+}
+
 // payloadComEscrita monta um payload com o campo de sistema, como o
-// materializer o produziria. O campo é registrado no dicionário com o id
-// esperado: o Store recusa payload com fieldID desconhecido, e é essa
-// validação que impede um id inventado de virar durável sob CRC.
+// materializer o produziria.
 func payloadComEscrita(t *testing.T, s *Store, key, status string, escrita time.Time) []byte {
 	t.Helper()
-	p := statusPayload(t, s, key, status, 0)
-	registraCampoDeEscrita(t, s)
-	p = mustAppendField(t, p, fldEscrita,
-		types.Value{Type: types.TypeTimestamp, I64: escrita.UnixMilli()})
+	return payloadOrdenado(t, s, map[string]types.Value{
+		"id":         {Type: types.TypeString, Bytes: []byte(key)},
+		"status":     {Type: types.TypeString, Bytes: []byte(status)},
+		"_writtenAt": {Type: types.TypeTimestamp, I64: escrita.UnixMilli()},
+	})
+}
+
+// payloadOrdenado resolve os ids pelo dicionário e emite os campos em ordem
+// crescente — invariante que o Put revalida antes de tornar o record durável.
+func payloadOrdenado(t *testing.T, s *Store, campos map[string]types.Value) []byte {
+	t.Helper()
+	type par struct {
+		id types.FieldID
+		v  types.Value
+	}
+	pares := make([]par, 0, len(campos))
+	for nome, v := range campos {
+		pares = append(pares, par{idDoCampo(t, s, nome), v})
+	}
+	sort.Slice(pares, func(i, j int) bool { return pares[i].id < pares[j].id })
+	var p []byte
+	for _, x := range pares {
+		p = mustAppendField(t, p, x.id, x.v)
+	}
 	return p
 }
 
@@ -104,8 +141,7 @@ func TestRowSemInstanteDeEscritaNaoVence(t *testing.T) {
 	s, rel := storeComExpiracao(t, t.TempDir(), time.Hour)
 	// payload SEM o campo de sistema, como um dataset materializado antes de
 	// a expiração ser declarada.
-	registraCampoDeEscrita(t, s)
-	id, _ := mustPut(t, s, "A", 1, statusPayload(t, s, "A", "Start", 0), nil)
+	id, _ := mustPut(t, s, "A", 1, payloadSemEscrita(t, s, "A"), nil)
 
 	rel.avanca(100 * time.Hour)
 	if _, _, ok, err := s.GetByRowID(id, nil); err != nil || !ok {
@@ -249,22 +285,6 @@ func TestInstanteDeEscritaLeOCampoCertoOuNadaInforma(t *testing.T) {
 	q = mustAppendFieldSolto(t, q, 9, types.Value{Type: types.TypeInt64, I64: 5})
 	if _, ok := instanteDeEscrita(q, 9); ok {
 		t.Error("campo com tipo não-timestamp foi aceito")
-	}
-}
-
-// registraCampoDeEscrita garante que fldEscrita exista no dicionário. Os ids
-// deste pacote são posicionais (ordem de LookupOrCreate), então os campos
-// intermediários entram como placeholders para o de escrita cair no id certo.
-func registraCampoDeEscrita(t *testing.T, s *Store) {
-	t.Helper()
-	for _, name := range []string{"id", "status", "counter", "f4", "f5", "f6", "f7", "f8", "_writtenAt"} {
-		id, err := s.FieldDict().LookupOrCreate([]byte(name))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if name == "_writtenAt" && id != fldEscrita {
-			t.Fatalf("_writtenAt ficou com o id %d, o teste espera %d", id, fldEscrita)
-		}
 	}
 }
 

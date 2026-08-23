@@ -317,6 +317,8 @@ func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*
 		BitmapFieldNames: bitmaps,
 		Log:              log,
 		Metrics:          s.reg,
+		ExpireAfterWrite: spec.ExpiraApos(),
+		CampoDeEscrita:   schema.CampoInstanteDeEscrita,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("dataset %q: %w", spec.Name, err)

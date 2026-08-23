@@ -94,11 +94,17 @@ type Options struct {
 	// ExpireAfterWrite liga o idle timeout: a row deixa de ser visível quando
 	// passa este tempo sem escrita. Zero desliga tudo — nem o índice é aberto.
 	ExpireAfterWrite time.Duration
-	// CampoDeEscrita é o FieldID do campo de sistema que carrega o instante da
-	// escrita. Obrigatório quando ExpireAfterWrite > 0: é dele que o
-	// applyRecord tira o valor, tanto no Put quanto no replay do tail — e é
-	// por isso que o índice de expiração é reconstruível depois de um crash.
-	CampoDeEscrita types.FieldID
+	// CampoDeEscrita é o NOME do campo de sistema que carrega o instante da
+	// escrita, resolvido pelo dicionário do próprio dataset durante o Open.
+	// Obrigatório quando ExpireAfterWrite > 0: é dele que o applyRecord tira
+	// o valor, tanto no Put quanto no replay do tail, e é por isso que o
+	// índice de expiração é reconstruível depois de um crash.
+	//
+	// Nome e não FieldID pela mesma razão do BitmapFieldNames: os ids nascem
+	// de schema.Compile, que precisa do dicionário — e o dicionário vive
+	// dentro do Store. Exigir o id aqui obrigaria a abrir o dataset sem
+	// expiração, compilar, fechar e reabrir.
+	CampoDeEscrita string
 	// Log é o logger estruturado do §95. Quando nil, o Store escreve em
 	// stderr no formato texto — que é o comportamento que os log.Printf
 	// tinham antes, e perder a divergência de recovery só porque o chamador
@@ -622,21 +628,33 @@ func Open(opts Options) (*Store, error) {
 		return nil, err
 	}
 	if opts.ExpireAfterWrite > 0 {
-		if opts.CampoDeEscrita == 0 {
-			// FieldID 0 é reservado (§32): sem o campo, o applyRecord não
-			// teria de onde tirar o instante e toda row ficaria com prazo
-			// desconhecido — a expiração nunca aconteceria, em silêncio.
-			return nil, fmt.Errorf("storage: ExpireAfterWrite exige CampoDeEscrita")
+		if opts.CampoDeEscrita == "" {
+			// Sem o campo o applyRecord não teria de onde tirar o instante, e
+			// toda row ficaria com prazo desconhecido — a expiração nunca
+			// aconteceria, em silêncio.
+			return nil, fmt.Errorf("%w: ExpireAfterWrite exige CampoDeEscrita", ErrInvalidArgument)
 		}
-		s.expireAfterWrite, s.campoDeEscrita = opts.ExpireAfterWrite, opts.CampoDeEscrita
 		if s.escritas, err = rowindex.OpenEscritas(filepath.Join(idxDir, "expiry.idx"), minRows); err != nil {
 			return nil, err
 		}
+		s.expireAfterWrite = opts.ExpireAfterWrite
 	}
 	m, mErr := checkpoint.Load(s.manifestPath())
 	refs, err := segment.ListSegments(dataDir)
 	if err != nil {
 		return nil, err
+	}
+
+	if s.escritas != nil {
+		// LookupOrCreate e não Lookup: num dataset novo o campo ainda não
+		// existe, e criá-lo aqui é o que garante que o id seja o MESMO que o
+		// schema.Compile vai resolver depois — os dois passam pelo mesmo
+		// dicionário durável.
+		id, err := s.dict.LookupOrCreate([]byte(opts.CampoDeEscrita))
+		if err != nil {
+			return nil, fmt.Errorf("storage: registrando %q no dicionário: %w", opts.CampoDeEscrita, err)
+		}
+		s.campoDeEscrita = id
 	}
 
 	campos, err := s.resolveBitmapFields(opts)
