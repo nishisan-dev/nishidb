@@ -10,9 +10,12 @@ import (
 	"fmt"
 	"math/big"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -263,6 +266,49 @@ func TestDicaDeEsquemaQuandoAPortaFalaTLSMasOClienteUsaHTTP(t *testing.T) {
 	}
 	if !strings.Contains(a.stderr.String(), "https://") {
 		t.Fatalf("a mensagem não traz a dica do esquema:\n%s", a.stderr.String())
+	}
+}
+
+// ---------------------------------------------------------------- redirect
+
+// Revisão da B6, Important 1: o cliente compartilhado fala com UM servidor
+// que o operador nomeou na linha de comando — esse servidor não redireciona,
+// e a política DEFAULT do stdlib seguiria um 3xx same-host reenviando
+// Authorization nele (só remove em cross-host). clienteRemoto instala
+// recusaRedirect para eliminar a classe inteira; este teste prova a versão
+// observável pela rede, com DOIS servidores de mentira: "origem" (onde o
+// --server aponta, sempre responde 302) e "alvo" (o destino do Location),
+// que precisa NUNCA ser alcançado.
+func TestComandoRemotoNaoSegueRedirectENuncaReenviaCredencial(t *testing.T) {
+	var chamadasAlvo int32
+	alvo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&chamadasAlvo, 1)
+		if auth := r.Header.Get("Authorization"); auth != "" {
+			t.Errorf("o alvo do redirect recebeu Authorization (%q) — não deveria nem ter sido alcançado", auth)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer alvo.Close()
+
+	origem := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, alvo.URL+"/v1/stats", http.StatusFound)
+	}))
+	defer origem.Close()
+
+	a := novoAmbiente(t)
+	t.Setenv("NISHIDB_PASSWORD", "irrelevante-o-servidor-de-mentira-nao-valida-nada")
+	code := a.roda("status", "--server", origem.URL, "--user", "alguem")
+	if code != 1 {
+		t.Fatalf("exit = %d, quer 1: %s", code, a.stderr.String())
+	}
+	if !strings.Contains(a.stderr.String(), "302") {
+		t.Fatalf("a mensagem não nomeia o status do redirect:\n%s", a.stderr.String())
+	}
+	if !strings.Contains(a.stderr.String(), "não redireciona") {
+		t.Fatalf("a mensagem não afirma a postura de recusa:\n%s", a.stderr.String())
+	}
+	if n := atomic.LoadInt32(&chamadasAlvo); n != 0 {
+		t.Fatalf("o alvo do redirect foi alcançado %d vez(es): o cliente seguiu o redirect em vez de recusar", n)
 	}
 }
 

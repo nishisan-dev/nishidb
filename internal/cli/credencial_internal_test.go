@@ -11,6 +11,7 @@ import (
 	"flag"
 	"math/big"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -201,6 +202,59 @@ func TestClienteRemotoTransportTemProxyNil(t *testing.T) {
 	}
 	if tr.Proxy != nil {
 		t.Fatal("Proxy deveria ser nil — a classe de bug do proxy corporativo (docs/piloto-events.md:142)")
+	}
+}
+
+// Revisão da B6, Important 1: clienteRemoto tem de instalar CheckRedirect —
+// sem ele, o *http.Client usa a política default do stdlib, que segue
+// redirect same-host reenviando Authorization. A prova ponta a ponta (302
+// de verdade, credencial nunca chega ao alvo) mora em credencial_test.go;
+// aqui é só a fiação.
+func TestClienteRemotoInstalaCheckRedirect(t *testing.T) {
+	client, err := clienteRemoto(credencialRemota{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.CheckRedirect == nil {
+		t.Fatal("CheckRedirect não foi instalado — o cliente seguiria redirect pela política default do stdlib")
+	}
+}
+
+func TestRecusaRedirectNomeiaOStatusEODestino(t *testing.T) {
+	alvo, err := url.Parse("http://10.0.0.9:9142/v1/stats")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := &http.Request{
+		URL:      alvo,
+		Response: &http.Response{StatusCode: http.StatusFound},
+	}
+	err = recusaRedirect(req, nil)
+	if err == nil {
+		t.Fatal("queria erro: redirect tem de ser recusado sempre")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "302") {
+		t.Errorf("a mensagem não nomeia o status: %q", msg)
+	}
+	if !strings.Contains(msg, "10.0.0.9:9142") {
+		t.Errorf("a mensagem não nomeia o destino: %q", msg)
+	}
+	if !strings.Contains(msg, "não redireciona") {
+		t.Errorf("a mensagem não afirma a postura: %q", msg)
+	}
+}
+
+// req.Response pode ser nil em tese (a função não deve confiar cegamente);
+// a recusa continua valendo, só sem o número do status.
+func TestRecusaRedirectSemResponseAindaAssimRecusa(t *testing.T) {
+	alvo, err := url.Parse("http://10.0.0.9:9142/v1/stats")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := &http.Request{URL: alvo}
+	if err := recusaRedirect(req, nil); err == nil {
+		t.Fatal("queria erro mesmo sem req.Response")
 	}
 }
 

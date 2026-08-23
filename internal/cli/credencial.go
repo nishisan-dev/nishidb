@@ -157,7 +157,35 @@ func clienteRemoto(cred credencialRemota) (*http.Client, error) {
 		}
 		transport.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
 	}
-	return &http.Client{Transport: transport}, nil
+	return &http.Client{Transport: transport, CheckRedirect: recusaRedirect}, nil
+}
+
+// recusaRedirect recusa QUALQUER redirect — 3xx same-host incluído — em vez
+// de confiar na política default do stdlib (que remove o Authorization em
+// redirect CROSS-host mas o PRESERVA em SAME-host, ver net/http.Client.Do).
+// O CLI do NishiDB fala com UM servidor que o operador nomeou na linha de
+// comando; esse servidor não redireciona, e um 3xx só pode significar
+// configuração errada no meio do caminho (proxy reverso, endereço trocado) —
+// nunca algo a seguir silenciosamente com a credencial embarcada. Recusar a
+// classe inteira elimina o risco de vazar Authorization por um redirect
+// same-host, em vez de depender da distinção same-host/cross-host que o
+// stdlib faz por outro motivo (compatibilidade com navegador, não segurança
+// de credencial de API).
+//
+// req é a PRÓXIMA requisição que o stdlib montaria para seguir o redirect —
+// req.Response é a resposta 3xx que a originou (ver net/http/client.go,
+// send()), e é dali que o status code sai; req.URL já é o destino resolvido.
+// Retornar erro aqui faz http.Client.Do devolver esse erro (embrulhado num
+// *url.Error) SEM jamais montar ou enviar a requisição seguinte — nenhum
+// header, credencial incluída, é reenviado a lugar nenhum.
+func recusaRedirect(req *http.Request, _ []*http.Request) error {
+	status := 0
+	if req.Response != nil {
+		status = req.Response.StatusCode
+	}
+	return fmt.Errorf(
+		"o servidor respondeu com redirect (%d) para %s — o NishiDB não redireciona; verifique o endereço",
+		status, req.URL)
 }
 
 // aplicaCredencial injeta o HTTP Basic quando --user foi dado. É o ÚNICO

@@ -1164,6 +1164,37 @@ func TestOsComandosDeLeituraExigemOServidor(t *testing.T) {
 	}
 }
 
+// Revisão da B6, Important 2: a paridade byte a byte "sem --user, sem
+// Authorization" era só argumento estrutural (credencialRemota{} vazio) e
+// unit de caixa branca (TestAplicaCredencialSoDefineBasicComUsuario,
+// credencial_internal_test.go). Aqui o oráculo é o HEADER que chega pela
+// rede de verdade: um servidor de mentira captura o request de um `status
+// --server` SEM nenhuma credencial e afirma Authorization == "".
+func TestStatusSemUserNuncaEnviaHeaderAuthorization(t *testing.T) {
+	var recebida bool
+	var authorization string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		recebida = true
+		authorization = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", protocolo.ContentTypeJSON)
+		if err := json.NewEncoder(w).Encode(protocolo.Estatisticas{}); err != nil {
+			t.Errorf("escrevendo a resposta de mentira: %v", err)
+		}
+	}))
+	defer srv.Close()
+
+	a := novoAmbiente(t)
+	if code := a.roda("status", "--server", srv.URL); code != 0 {
+		t.Fatalf("exit = %d: %s", code, a.stderr.String())
+	}
+	if !recebida {
+		t.Fatal("o servidor de mentira nunca recebeu a requisição")
+	}
+	if authorization != "" {
+		t.Fatalf("Authorization presente sem --user: %q", authorization)
+	}
+}
+
 // O texto de uso é o único lugar em que o operador descobre que os comandos
 // existem. Ele já esqueceu o `--server` do `query` uma vez; aqui a omissão
 // custaria os três comandos desta tarefa.
