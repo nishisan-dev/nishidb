@@ -102,6 +102,14 @@ func semeiaGarbage(t *testing.T, a *ambiente, nome string, keys, rodadas int) {
 	// não tem por onde dividir a liveness — um dataset semeado sem ele não
 	// produziria candidato nenhum, e os dois lados deste teste ficariam verdes
 	// por vacuidade.
+	//
+	// NOTA (Task B5, revisão): isto NÃO cria uma janela "segSize desconhecido"
+	// para quem abrir este dataset depois — Store.Open() SEMPRE checkpointa
+	// no fim da recovery (store.go, "Checkpoint imediato: manifest desde a
+	// criação e estado limpo pós-recovery"), então segSize já está populado
+	// no instante em que um servidor abre este diretório, com ou sem este
+	// Checkpoint aqui. O daqui existe só para o PRÓPRIO teste medir o disco
+	// ANTES de fechar (bancadaDeCompaction o faz por fora, com os.Stat).
 	if err := st.Checkpoint(); err != nil {
 		_ = st.Close()
 		t.Fatal(err)
