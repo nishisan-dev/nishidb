@@ -253,7 +253,7 @@ func (s *Servidor) transmite(
 
 	cols := make([]protocolo.Coluna, len(colunas))
 	for i, c := range colunas {
-		cols[i] = protocolo.ColunaDe(c.Name, c.Type)
+		cols[i] = protocolo.ColunaDe(c.Name, c.Type, c.Nullable)
 	}
 
 	w.Header().Set("Content-Type", protocolo.ContentTypeNDJSON)

@@ -385,10 +385,12 @@ func TestALinhaDeSchemaPublicaPrecisionScaleEDisplaySize(t *testing.T) {
 
 	cols := colunasDoSchemaDaConsulta(t, srv, "SELECT id, porta, ip FROM d")
 	quer := []protocolo.Coluna{
-		// string não tem teto declarado: 0, a convenção do JDBC para desconhecido.
-		{Name: "id", Type: "string", JDBC: protocolo.JDBCVarchar, Precision: 0, Scale: 0, DisplaySize: 0},
-		{Name: "porta", Type: "int64", JDBC: protocolo.JDBCBigint, Precision: 19, Scale: 0, DisplaySize: 20},
-		{Name: "ip", Type: "ipv4", JDBC: protocolo.JDBCVarchar, Precision: 15, Scale: 0, DisplaySize: 15},
+		// "id" é a CHAVE do dataset: nullable false. string não tem teto
+		// declarado, então os três números são 0 — a convenção do JDBC para
+		// desconhecido.
+		{Name: "id", Type: "string", JDBC: protocolo.JDBCVarchar, Nullable: false, Precision: 0, Scale: 0, DisplaySize: 0},
+		{Name: "porta", Type: "int64", JDBC: protocolo.JDBCBigint, Nullable: true, Precision: 19, Scale: 0, DisplaySize: 20},
+		{Name: "ip", Type: "ipv4", JDBC: protocolo.JDBCVarchar, Nullable: true, Precision: 15, Scale: 0, DisplaySize: 15},
 	}
 	if len(cols) != len(quer) {
 		t.Fatalf("colunas = %d, quer %d", len(cols), len(quer))
@@ -443,11 +445,11 @@ func TestMetadataPublicaOsMesmosNumerosQueALinhaDeSchema(t *testing.T) {
 			t.Errorf("coluna de saída %q está no schema da consulta e não no /v1/metadata", col.Name)
 			continue
 		}
-		if m.Type != col.Type || m.JDBC != col.JDBC ||
+		if m.Type != col.Type || m.JDBC != col.JDBC || m.Nullable != col.Nullable ||
 			m.Precision != col.Precision || m.Scale != col.Scale || m.DisplaySize != col.DisplaySize {
-			t.Errorf("coluna %q diverge entre as rotas:\n  /v1/metadata: type=%q jdbc=%q p=%d s=%d d=%d\n  /v1/query:    type=%q jdbc=%q p=%d s=%d d=%d",
-				col.Name, m.Type, m.JDBC, m.Precision, m.Scale, m.DisplaySize,
-				col.Type, col.JDBC, col.Precision, col.Scale, col.DisplaySize)
+			t.Errorf("coluna %q diverge entre as rotas:\n  /v1/metadata: type=%q jdbc=%q null=%v p=%d s=%d d=%d\n  /v1/query:    type=%q jdbc=%q null=%v p=%d s=%d d=%d",
+				col.Name, m.Type, m.JDBC, m.Nullable, m.Precision, m.Scale, m.DisplaySize,
+				col.Type, col.JDBC, col.Nullable, col.Precision, col.Scale, col.DisplaySize)
 		}
 	}
 }
@@ -477,5 +479,36 @@ func TestPrecisionZeroSaiNoJSONEmVezDeSerOmitida(t *testing.T) {
 		if !strings.Contains(primeira, chave) {
 			t.Errorf("a linha de schema não traz %s — omitempty entrou no campo?\n%s", chave, primeira)
 		}
+	}
+}
+
+// A chave sai NÃO-NULÁVEL nas duas rotas, e é o que o DBeaver lê para desenhar
+// a chave primária e para gerar o DDL.
+//
+// A afirmação não é uma convenção: é o que o materializer garante, recusando o
+// evento cuja chave venha ausente, nula ou vazia — os cinco casos estão em
+// TestParseKeyAndSequenceErrorsSayTheCause. Sem essa recusa do outro lado,
+// nullable:false aqui seria só uma opinião publicada no contrato.
+func TestAChaveSaiNaoNulavelNasDuasRotas(t *testing.T) {
+	srv := servidorComDados(t, 2, blocoPadrao)
+
+	meta := leJSON[protocolo.Metadados](t, srv, "/v1/metadata")
+	achou := false
+	for _, c := range meta.Datasets[0].Columns {
+		if c.Name != meta.Datasets[0].Key {
+			continue
+		}
+		achou = true
+		if c.Nullable {
+			t.Errorf("/v1/metadata publica a chave %q como nulável", c.Name)
+		}
+	}
+	if !achou {
+		t.Fatalf("a chave %q não aparece nas colunas do /v1/metadata", meta.Datasets[0].Key)
+	}
+
+	cols := colunasDoSchemaDaConsulta(t, srv, "SELECT id FROM d")
+	if cols[0].Nullable {
+		t.Errorf("a linha de schema publica a chave como nulável: %+v", cols[0])
 	}
 }

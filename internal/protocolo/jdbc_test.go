@@ -36,7 +36,7 @@ func TestATabelaDeTiposDoSpec73(t *testing.T) {
 	}
 	for _, c := range casos {
 		t.Run(c.tipo, func(t *testing.T) {
-			col := protocolo.ColunaDe("x", c.ft)
+			col := protocolo.ColunaDe("x", c.ft, true)
 			if col.Type != c.tipo {
 				t.Fatalf("Type = %q, quer %q", col.Type, c.tipo)
 			}
@@ -50,7 +50,7 @@ func TestATabelaDeTiposDoSpec73(t *testing.T) {
 // Campo auto que o dataset nunca observou não tem tipo. Chamá-lo de VARCHAR
 // seria mentir para o driver: o próximo evento pode fixá-lo como int64.
 func TestCampoAutoNaoObservadoSaiComoUnknown(t *testing.T) {
-	col := protocolo.ColunaDe("attr", types.TypeNull)
+	col := protocolo.ColunaDe("attr", types.TypeNull, true)
 	if col.Type != protocolo.TipoDesconhecido {
 		t.Fatalf("Type = %q, quer %q", col.Type, protocolo.TipoDesconhecido)
 	}
@@ -60,7 +60,7 @@ func TestCampoAutoNaoObservadoSaiComoUnknown(t *testing.T) {
 }
 
 func TestTagDesconhecidaNaoViraTipoPlausivel(t *testing.T) {
-	col := protocolo.ColunaDe("x", types.FieldType(0xEE))
+	col := protocolo.ColunaDe("x", types.FieldType(0xEE), true)
 	if col.Type != protocolo.TipoDesconhecido || col.JDBC != protocolo.JDBCOther {
 		t.Fatalf("coluna = %+v, quer unknown/OTHER", col)
 	}

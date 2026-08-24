@@ -18,8 +18,8 @@ func escreveStream(t *testing.T, fecho any, rows ...string) string {
 		Nishidb: protocolo.MolduraSchema,
 		Dataset: "radius_sessions",
 		Columns: []protocolo.Coluna{
-			protocolo.ColunaDe("id", types.TypeString),
-			protocolo.ColunaDe("ip", types.TypeIPv4),
+			protocolo.ColunaDe("id", types.TypeString, false),
+			protocolo.ColunaDe("ip", types.TypeIPv4, true),
 		},
 	})
 	if err != nil {
@@ -152,7 +152,7 @@ func TestMolduraNaoEscapaHTML(t *testing.T) {
 	err := protocolo.EscreveLinha(&sb, protocolo.LinhaSchema{
 		Nishidb: protocolo.MolduraSchema,
 		Dataset: "d",
-		Columns: []protocolo.Coluna{protocolo.ColunaDe("a<b>c&d", types.TypeString)},
+		Columns: []protocolo.Coluna{protocolo.ColunaDe("a<b>c&d", types.TypeString, true)},
 	})
 	if err != nil {
 		t.Fatalf("EscreveLinha: %v", err)

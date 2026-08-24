@@ -220,8 +220,8 @@ func TestQueryRespondeAMolduraCompleta(t *testing.T) {
 	// A comparação é da struct INTEIRA, de propósito: campo novo na Coluna
 	// que ninguém preencha quebra aqui, em vez de sair como zero no fio.
 	quer := []protocolo.Coluna{
-		{Name: "id", Type: "string", JDBC: protocolo.JDBCVarchar, DisplaySize: 0},
-		{Name: "ip", Type: "ipv4", JDBC: protocolo.JDBCVarchar, Precision: 15, DisplaySize: 15},
+		{Name: "id", Type: "string", JDBC: protocolo.JDBCVarchar, Nullable: false, DisplaySize: 0},
+		{Name: "ip", Type: "ipv4", JDBC: protocolo.JDBCVarchar, Nullable: true, Precision: 15, DisplaySize: 15},
 	}
 	for i, c := range quer {
 		if l.Schema().Columns[i] != c {

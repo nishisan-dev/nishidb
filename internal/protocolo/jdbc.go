@@ -152,19 +152,24 @@ func JDBCDeTipo(t types.FieldType) string {
 	return DescritorDeTipo(t).JDBC
 }
 
-// ColunaDe monta a descrição de uma coluna a partir do nome de saída e do tipo
-// declarado.
+// ColunaDe monta a descrição de uma coluna a partir do nome de saída, do tipo
+// declarado e da nulabilidade.
 //
 // Um DescritorDeTipo por coluna, e não por row: isto roda uma vez por consulta,
 // no momento de escrever a linha de schema, fora do laço que emite as linhas de
 // dados. É por isso que executor.ColMeta não precisa carregar os três números —
 // derivá-los aqui não custa alocação nenhuma no caminho quente.
-func ColunaDe(nome string, t types.FieldType) Coluna {
+//
+// nullable é PARÂMETRO e não derivação porque é a única coisa aqui que não sai
+// do tipo: sai do papel do campo no dataset, que só o executor conhece. Quem
+// chama passa executor.ColMeta.Nullable.
+func ColunaDe(nome string, t types.FieldType, nullable bool) Coluna {
 	d := DescritorDeTipo(t)
 	return Coluna{
 		Name:        nome,
 		Type:        NomeDeTipo(t),
 		JDBC:        d.JDBC,
+		Nullable:    nullable,
 		Precision:   d.Precision,
 		Scale:       d.Scale,
 		DisplaySize: d.DisplaySize,

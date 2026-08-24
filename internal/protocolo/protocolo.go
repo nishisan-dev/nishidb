@@ -114,6 +114,11 @@ type LinhaSchema struct {
 // saem do descritor único (DescritorDeTipo): o driver não os recalcula, e por
 // isso um tipo novo no servidor não exige jar novo no cliente.
 //
+// Nullable é o único que NÃO sai do tipo: vem do executor, que é quem tem o
+// campo compilado na mão. false só para a chave e para a sequence — as duas
+// colunas que o materializer garante não-nulas recusando o evento que as traga
+// ausentes ou nulas.
+//
 // SEM omitempty, de propósito. precision:0 é o caso que carrega informação —
 // "sem teto declarado", que é a resposta para string, json e bytes — e com
 // omitempty ele sumiria justamente onde é a decisão. Ausência e zero são
@@ -122,6 +127,7 @@ type Coluna struct {
 	Name        string `json:"name"`
 	Type        string `json:"type"`
 	JDBC        string `json:"jdbc"`
+	Nullable    bool   `json:"nullable"`
 	Precision   int    `json:"precision"`
 	Scale       int    `json:"scale"`
 	DisplaySize int    `json:"displaySize"`

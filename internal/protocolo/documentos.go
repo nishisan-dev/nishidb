@@ -50,6 +50,7 @@ type ColunaMeta struct {
 	Alias       *string `json:"alias"`
 	Type        string  `json:"type"`
 	JDBC        string  `json:"jdbc"`
+	Nullable    bool    `json:"nullable"`
 	Precision   int     `json:"precision"`
 	Scale       int     `json:"scale"`
 	DisplaySize int     `json:"displaySize"`

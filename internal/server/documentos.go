@@ -73,9 +73,12 @@ func colunaMeta(f *schema.CompiledField) protocolo.ColunaMeta {
 	t := f.EffectiveType()
 	d := protocolo.DescritorDeTipo(t)
 	c := protocolo.ColunaMeta{
-		Name:        f.Name,
-		Type:        protocolo.NomeDeTipo(t),
-		JDBC:        d.JDBC,
+		Name: f.Name,
+		Type: protocolo.NomeDeTipo(t),
+		JDBC: d.JDBC,
+		// Mesma regra do executor, e a única fonte possível aqui: /v1/metadata
+		// descreve o SCHEMA, então o papel do campo vem direto do compilado.
+		Nullable:    !f.IsKey && !f.IsSequence,
 		Precision:   d.Precision,
 		Scale:       d.Scale,
 		DisplaySize: d.DisplaySize,

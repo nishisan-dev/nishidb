@@ -88,7 +88,14 @@ func Open(ctx context.Context, bq *binder.BoundQuery, plan planner.Plan, opts Op
 		}
 		// Type é constante por query: o tipo DECLARADO (ou o fixado, para campo
 		// auto). Não é o tipo físico — esse vive em Val.Type, por row.
-		cols[i] = ColView{Name: c.Name, Type: c.Field.EffectiveType()}
+		cols[i] = ColView{
+			Name: c.Name,
+			Type: c.Field.EffectiveType(),
+			// Chave e sequence são as duas colunas que o materializer garante
+			// não-nulas em toda row viva, recusando o evento que as traga
+			// ausentes ou nulas.
+			Nullable: !c.Field.IsKey && !c.Field.IsSequence,
+		}
 		slotDaColuna[i] = int32(c.Slot)
 	}
 	it.cols, it.slotDaColuna = cols, slotDaColuna
@@ -314,7 +321,7 @@ func (it *iterador) encerra() {
 func (it *iterador) Columns() []ColMeta {
 	out := make([]ColMeta, len(it.cols))
 	for i, c := range it.cols {
-		out[i] = ColMeta{Name: c.Name, Type: c.Type}
+		out[i] = ColMeta{Name: c.Name, Type: c.Type, Nullable: c.Nullable}
 	}
 	return out
 }
