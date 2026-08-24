@@ -55,8 +55,12 @@ test-python:
 # .golangci.yml é deliberada: o modo de falha deste gate é o SILÊNCIO — linter
 # estourado no teto absorve apontamento novo sem mexer no total —, e `make lint`
 # é o comando que a doutrina do projeto cita. Repetir a intenção na linha de
-# comando custa dois flags e garante que quem roda o alvo vê o número real (390
-# nesta branch), não o truncado. O porquê longo está no .golangci.yml.
+# comando custa dois flags e garante que quem roda o alvo vê o número real, não
+# o truncado. Qual é o número corrente NÃO se escreve aqui: a fonte é
+# .golangci-baseline, que é o que o CI lê, e todo PR que fecha um apontamento o
+# abaixa. Comentário com o número dentro diverge do arquivo no PR seguinte — foi
+# o que aconteceu com o "390" que estava nesta linha. O porquê longo está no
+# .golangci.yml.
 #
 # O ramo `else` FALHA, e falha alto. Ele já caiu para `go vet ./...` devolvendo
 # código 0, e essa é a outra metade da cegueira do débito 53: um gate que passa
@@ -64,9 +68,8 @@ test-python:
 # projeto atravessou o M1 achando que tinha lint, porque a única pista era uma
 # linha de aviso rolando no meio da saída. `go vet` também não substitui o que
 # se perde: ele cobre um subconjunto de `govet` e não conhece `errcheck`,
-# `revive` nem `staticcheck`, que sozinhos respondem por 388 dos 390
-# apontamentos da linha de base — enquanto o `govet` não responde por NENHUM
-# deles. O fallback trocava o gate por uma checagem que hoje não acusa nada.
+# `revive` nem `staticcheck`, que sozinhos respondem por quase toda a linha de
+# base — enquanto o `govet` não responde por NENHUM deles. O fallback trocava o gate por uma checagem que hoje não acusa nada.
 # Quem não tem o binário precisa descobrir pelo exit code, com o nome do que
 # instalar na mão.
 #
