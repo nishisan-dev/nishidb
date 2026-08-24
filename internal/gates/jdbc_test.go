@@ -2,6 +2,9 @@ package gates_test
 
 import (
 	"encoding/xml"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"strings"
@@ -152,4 +155,96 @@ func TestOTargetDoDriverEstaNoGitignore(t *testing.T) {
 	if !strings.Contains(string(bruto), "clients/jdbc/target/") {
 		t.Error(".gitignore não ignora clients/jdbc/target/")
 	}
+}
+
+// TODO código de erro do protocolo tem tradução para SQLState no driver.
+//
+// Este é o gate que fecha o laço entre os dois lados, e ele existe porque o
+// modo de falha é SILENCIOSO: um código novo acrescentado ao servidor sairia
+// no fio, o driver não o reconheceria e publicaria HY000 — a aplicação veria
+// "erro genérico" para uma condição que o servidor sabe nomear, e nada
+// acusaria. O CI Go reprova antes de qualquer JVM subir.
+//
+// A lista não é escrita à mão em lugar nenhum: sai do go/ast sobre
+// internal/protocolo/protocolo.go de um lado, e do texto de Codigos.java do
+// outro. É a mesma técnica de
+// TestVersaoDoGolangciLintNoWorkflowBateComAInstrucaoDoMakefile — comparar
+// duas EXTRAÇÕES, nunca uma extração contra um valor decorado, que envelhece
+// junto com quem o escreveu.
+func TestTodoCodigoDoProtocoloTemSqlStateNoDriver(t *testing.T) {
+	codigos := codigosDoProtocolo(t)
+	if len(codigos) < 15 {
+		t.Fatalf("só %d códigos extraídos de protocolo.go: a extração quebrou, e um gate que "+
+			"não acha nada passa sempre", len(codigos))
+	}
+
+	javaCodigos := leArquivo(t, "clients/jdbc/src/main/java/dev/nishisan/nishidb/jdbc/wire/Codigos.java")
+	javaEstados := leArquivo(t, "clients/jdbc/src/main/java/dev/nishisan/nishidb/jdbc/wire/SqlStates.java")
+
+	for nomeGo, valor := range codigos {
+		literal := `"` + valor + `"`
+		if !strings.Contains(javaCodigos, literal) {
+			t.Errorf("%s (%s) não está em Codigos.java: acrescente a constante", nomeGo, valor)
+			continue
+		}
+		// A constante existir não basta: ela precisa estar NA TABELA, senão o
+		// código continua caindo em HY000.
+		if !strings.Contains(javaEstados, "Codigos."+nomeJavaDoCodigo(valor)) {
+			t.Errorf("%s (%s) tem constante mas não está na tabela de SqlStates.java", nomeGo, valor)
+		}
+	}
+}
+
+// nomeJavaDoCodigo devolve o nome da constante Java, que é o próprio valor do
+// código — a convenção que faz o gate ser uma comparação e não um mapeamento a
+// manter.
+func nomeJavaDoCodigo(valor string) string { return valor }
+
+func leArquivo(t *testing.T, relativo string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(raizDoRepo, relativo))
+	if err != nil {
+		t.Fatalf("lendo %s: %v", relativo, err)
+	}
+	return string(b)
+}
+
+// codigosDoProtocolo extrai as constantes Cod* de valor string, por AST.
+//
+// Por AST e não por regexp: o valor de uma constante é o que o compilador vê,
+// e um grep casaria também comentários e strings de mensagem que mencionem o
+// código.
+func codigosDoProtocolo(t *testing.T) map[string]string {
+	t.Helper()
+	caminho := filepath.Join(raizDoRepo, "internal/protocolo/protocolo.go")
+	fset := token.NewFileSet()
+	arquivo, err := parser.ParseFile(fset, caminho, nil, 0)
+	if err != nil {
+		t.Fatalf("parseando %s: %v", caminho, err)
+	}
+
+	out := map[string]string{}
+	for _, decl := range arquivo.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for i, nome := range vs.Names {
+				if !strings.HasPrefix(nome.Name, "Cod") || i >= len(vs.Values) {
+					continue
+				}
+				lit, ok := vs.Values[i].(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					continue
+				}
+				out[nome.Name] = strings.Trim(lit.Value, `"`)
+			}
+		}
+	}
+	return out
 }

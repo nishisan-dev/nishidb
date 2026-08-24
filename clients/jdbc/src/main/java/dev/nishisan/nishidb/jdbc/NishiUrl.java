@@ -2,6 +2,7 @@ package dev.nishisan.nishidb.jdbc;
 
 import java.nio.charset.StandardCharsets;
 import java.net.URLDecoder;
+import dev.nishisan.nishidb.jdbc.wire.SqlStates;
 import java.sql.SQLException;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -79,7 +80,7 @@ public final class NishiUrl {
     public static NishiUrl parse(String url) throws SQLException {
         if (!aceita(url)) {
             throw new SQLException("a URL não é do NishiDB; a forma é " + PREFIXO + "host[:porta]/dataset",
-                    SqlStates.URL_INVALIDA);
+                    SqlStates.CONEXAO_NAO_ESTABELECIDA);
         }
         String resto = url.substring(PREFIXO.length());
 
@@ -98,27 +99,27 @@ public final class NishiUrl {
             throw new SQLException(
                     "credencial na URL não é aceita: a senha apareceria em log e em stack trace; "
                             + "use as Properties user e password",
-                    SqlStates.URL_INVALIDA);
+                    SqlStates.CONEXAO_NAO_ESTABELECIDA);
         }
 
         int barra = resto.indexOf('/');
         if (barra < 0) {
             throw new SQLException("a URL não nomeia o dataset; a forma é " + PREFIXO + "host[:porta]/dataset",
-                    SqlStates.URL_INVALIDA);
+                    SqlStates.CONEXAO_NAO_ESTABELECIDA);
         }
         String autoridade = resto.substring(0, barra);
         String caminho = resto.substring(barra + 1);
 
         if (caminho.isEmpty()) {
             throw new SQLException("a URL não nomeia o dataset; a forma é " + PREFIXO + "host[:porta]/dataset",
-                    SqlStates.URL_INVALIDA);
+                    SqlStates.CONEXAO_NAO_ESTABELECIDA);
         }
         if (caminho.indexOf('/') >= 0) {
             // O NishiDB não tem catálogo nem schema. Aceitar /a/b faria o
             // usuário supor uma hierarquia que o produto não tem, e a falha
             // só apareceria como "dataset desconhecido" depois de conectar.
             throw new SQLException("o caminho da URL tem mais de um segmento: o NishiDB não tem catálogo nem schema, "
-                    + "e o único segmento é o nome do dataset", SqlStates.URL_INVALIDA);
+                    + "e o único segmento é o nome do dataset", SqlStates.CONEXAO_NAO_ESTABELECIDA);
         }
 
         String host = autoridade;
@@ -133,7 +134,7 @@ public final class NishiUrl {
             porta = portaDe(autoridade.substring(doisPontos + 1));
         }
         if (host.isEmpty()) {
-            throw new SQLException("a URL não nomeia o host", SqlStates.URL_INVALIDA);
+            throw new SQLException("a URL não nomeia o host", SqlStates.CONEXAO_NAO_ESTABELECIDA);
         }
         return new NishiUrl(host, porta, decodifica(caminho), propriedadesDe(query));
     }
@@ -143,10 +144,10 @@ public final class NishiUrl {
         try {
             porta = Integer.parseInt(texto);
         } catch (NumberFormatException e) {
-            throw new SQLException("porta inválida na URL: " + texto, SqlStates.URL_INVALIDA);
+            throw new SQLException("porta inválida na URL: " + texto, SqlStates.CONEXAO_NAO_ESTABELECIDA);
         }
         if (porta < 1 || porta > 65535) {
-            throw new SQLException("porta fora de [1,65535] na URL: " + porta, SqlStates.URL_INVALIDA);
+            throw new SQLException("porta fora de [1,65535] na URL: " + porta, SqlStates.CONEXAO_NAO_ESTABELECIDA);
         }
         return porta;
     }
