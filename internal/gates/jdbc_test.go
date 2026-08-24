@@ -23,6 +23,7 @@ import (
 // nada acusar.
 type pomDoDriver struct {
 	ArtifactID string `xml:"artifactId"`
+	Version    string `xml:"version"`
 	Properties struct {
 		Release string `xml:"maven.compiler.release"`
 	} `xml:"properties"`
@@ -332,4 +333,42 @@ func nomesJDBCDoProtocolo(t *testing.T) map[string]string {
 		}
 	}
 	return out
+}
+
+// A versão que o driver ANUNCIA é a do artefato.
+//
+// getDriverMajorVersion é o que a ferramenta escreve na tela de "sobre a
+// conexão" e o que vai num chamado de suporte. Duas fontes para o mesmo número
+// divergem sozinhas: o pom sobe de versão numa release e as constantes ficam
+// para trás, e a partir daí a ferramenta exibe uma versão de driver que nunca
+// existiu — sem nada acusar, porque as duas continuam compilando.
+func TestAVersaoAnunciadaPeloDriverEhADoArtefato(t *testing.T) {
+	p := lePom(t)
+	partes := strings.Split(strings.TrimSuffix(p.Version, "-SNAPSHOT"), ".")
+	if len(partes) < 2 {
+		t.Fatalf("versão %q do pom não tem major.minor", p.Version)
+	}
+
+	java := leArquivo(t, "clients/jdbc/src/main/java/dev/nishisan/nishidb/jdbc/NishiDriver.java")
+	for _, exigido := range []string{
+		"VERSAO_MAJOR = " + partes[0] + ";",
+		"VERSAO_MINOR = " + partes[1] + ";",
+	} {
+		if !strings.Contains(java, exigido) {
+			t.Errorf("NishiDriver.java não declara %q: a versão anunciada divergiu da do pom (%s)",
+				exigido, p.Version)
+		}
+	}
+}
+
+// O driver precisa estar publicado como SERVIÇO, não só como classe.
+//
+// É o único caminho que uma ferramenta gráfica tem: ela põe o jar no classpath
+// e não chama classe nenhuma pelo nome. Sem o arquivo, o DriverManager não
+// acha o driver e a mensagem é "No suitable driver", que não diz o que fazer.
+func TestODriverEstaPublicadoNoMetaInfServices(t *testing.T) {
+	servico := leArquivo(t, "clients/jdbc/src/main/resources/META-INF/services/java.sql.Driver")
+	if !strings.Contains(servico, "dev.nishisan.nishidb.jdbc.NishiDriver") {
+		t.Error("META-INF/services/java.sql.Driver não nomeia a classe do driver")
+	}
 }

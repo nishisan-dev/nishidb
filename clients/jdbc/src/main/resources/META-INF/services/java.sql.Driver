@@ -1,0 +1,5 @@
+# O ServiceLoader do java.sql.DriverManager lê este arquivo ao carregar a
+# classe. É ele que faz `DriverManager.getConnection("jdbc:nishidb://…")`
+# funcionar com o jar no classpath e NADA mais — sem Class.forName, que é o que
+# uma ferramenta gráfica não tem como chamar.
+dev.nishisan.nishidb.jdbc.NishiDriver

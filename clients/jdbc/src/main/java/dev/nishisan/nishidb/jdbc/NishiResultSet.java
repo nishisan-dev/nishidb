@@ -113,10 +113,19 @@ public final class NishiResultSet implements ResultSet {
         }
         fechado = true;
         emLinha = false;
-        // Fechar o cursor devolve a conexão HTTP: um stream não consumido nem
-        // fechado nunca volta ao pool, e é assim que a ferramenta "trava depois
-        // de vinte consultas".
-        cursor.close();
+        try {
+            // Fechar o cursor devolve a conexão HTTP: um stream não consumido
+            // nem fechado nunca volta ao pool, e é assim que a ferramenta
+            // "trava depois de vinte consultas".
+            cursor.close();
+        } finally {
+            // Avisa o Statement mesmo se o fechamento do stream falhar: sem
+            // isso, um closeOnCompletion deixaria o Statement vivo justamente
+            // no caminho de erro.
+            if (dono instanceof NishiStatement st) {
+                st.resultadoFechado(this);
+            }
+        }
     }
 
     @Override
