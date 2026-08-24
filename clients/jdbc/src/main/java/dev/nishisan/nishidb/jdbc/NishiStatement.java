@@ -65,6 +65,11 @@ public class NishiStatement implements Statement {
      */
     final ResultSet executa(String sql, String parametros) throws SQLException {
         exigeAberto();
+        if (sql == null) {
+            // Sem esta guarda o scanner de SQL estoura com NullPointerException,
+            // que NÃO é SQLException e atravessa o catch da aplicação.
+            throw new SQLException("a consulta é nula", SqlStates.CONVERSAO_INVALIDA);
+        }
         fechaResultadoAnterior();
 
         SqlScanner escaneado = SqlScanner.de(sql);
@@ -492,6 +497,76 @@ public class NishiStatement implements Statement {
     @Override
     public void clearWarnings() throws SQLException {
         exigeAberto();
+    }
+
+    // ------------------------------------------------------- citação de nome
+    //
+    // Os quatro abaixo têm implementação DEFAULT na interface, e ela estoura
+    // com NullPointerException diante de um argumento nulo — que não é
+    // SQLException e atravessa o catch da aplicação. Sobrescrevê-los também
+    // troca as regras do SQL:2016 pelas do lexer DESTE servidor, que são as
+    // que valem quando o texto voltar para cá.
+
+    /** Literal entre aspas simples, com a aspa duplicada como escape — a regra do lexer. */
+    @Override
+    public String enquoteLiteral(String valor) throws SQLException {
+        if (valor == null) {
+            throw new SQLException("nao ha literal a citar: o valor e nulo",
+                    SqlStates.CONVERSAO_INVALIDA);
+        }
+        return "'" + valor.replace("'", "''") + "'";
+    }
+
+    @Override
+    public String enquoteNCharLiteral(String valor) throws SQLException {
+        // Nao existe prefixo N no dialeto: toda string ja e UTF-8.
+        return enquoteLiteral(valor);
+    }
+
+    /**
+     * SEMPRE cita, mesmo quando {@code alwaysQuote} e falso.
+     *
+     * <p>Citar e sempre seguro neste dialeto — um identificador entre aspas
+     * nunca e keyword —, e o driver NAO carrega a lista de palavras reservadas
+     * do servidor. Devolver um nome sem aspas por ache-lo simples quebraria
+     * justamente nos casos em que ele coincide com uma keyword, que e onde a
+     * citacao importa.
+     */
+    @Override
+    public String enquoteIdentifier(String identificador, boolean sempre) throws SQLException {
+        if (identificador == null || identificador.isEmpty()) {
+            throw new SQLException("nao ha identificador a citar", SqlStates.CONVERSAO_INVALIDA);
+        }
+        return "\"" + identificador.replace("\"", "\"\"") + "\"";
+    }
+
+    /**
+     * Responde a pergunta LEXICA: comeca com letra ou sublinhado e segue com
+     * ASCII alfanumerico ou sublinhado, que e o identificador bare do lexer.
+     *
+     * <p>Nao consulta lista de keywords, e por isso um nome simples que
+     * COINCIDA com uma palavra reservada responde true aqui — e a razao de
+     * {@link #enquoteIdentifier} citar sempre.
+     */
+    @Override
+    public boolean isSimpleIdentifier(String identificador) throws SQLException {
+        if (identificador == null || identificador.isEmpty()) {
+            throw new SQLException("nao ha identificador a examinar", SqlStates.CONVERSAO_INVALIDA);
+        }
+        char primeiro = identificador.charAt(0);
+        if (primeiro != '_' && !(primeiro >= 'a' && primeiro <= 'z')
+                && !(primeiro >= 'A' && primeiro <= 'Z')) {
+            return false;
+        }
+        for (int i = 1; i < identificador.length(); i++) {
+            char c = identificador.charAt(i);
+            boolean parte = c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+                    || (c >= '0' && c <= '9');
+            if (!parte) {
+                return false;
+            }
+        }
+        return true;
     }
 
     @Override

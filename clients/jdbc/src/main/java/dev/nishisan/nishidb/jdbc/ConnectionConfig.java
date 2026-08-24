@@ -46,6 +46,7 @@ public final class ConnectionConfig {
         {"connectTimeoutMs", "prazo do handshake, em ms. Default 10000. NÃO limita a duração da consulta."},
     };
 
+    private final String url;
     private final String host;
     private final int porta;
     private final String dataset;
@@ -55,8 +56,9 @@ public final class ConnectionConfig {
     private final String tlsCaFile;
     private final int connectTimeoutMs;
 
-    private ConnectionConfig(String host, int porta, String dataset, String usuario, String senha,
+    private ConnectionConfig(String url, String host, int porta, String dataset, String usuario, String senha,
             boolean tls, String tlsCaFile, int connectTimeoutMs) {
+        this.url = url;
         this.host = host;
         this.porta = porta;
         this.dataset = dataset;
@@ -80,7 +82,12 @@ public final class ConnectionConfig {
                     + "e o certificado não seria verificado", SqlStates.CONEXAO_NAO_ESTABELECIDA);
         }
         int prazo = prazo(escolhe(props, daUrl, "connectTimeoutMs"));
-        return new ConnectionConfig(u.host(), u.porta(), u.dataset(), usuario, senha, tls, ca, prazo);
+        return new ConnectionConfig(url, u.host(), u.porta(), u.dataset(), usuario, senha, tls, ca, prazo);
+    }
+
+    /** A URL como o usuário a escreveu — é o que getURL do metadata publica. */
+    public String url() {
+        return url;
     }
 
     public String host() {

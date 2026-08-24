@@ -44,6 +44,7 @@ import java.util.concurrent.Executor;
 public final class NishiConnection implements Connection {
 
     private final Transporte transporte;
+    private final ConnectionConfig cfg;
     private final String datasetPadrao;
     private final int maxRowsDoDataset;
     private final long timeoutMsDoDataset;
@@ -55,6 +56,7 @@ public final class NishiConnection implements Connection {
         this.transporte = new Transporte(
                 Transporte.clienteHttp(Duration.ofMillis(cfg.connectTimeoutMs()), cfg.contextoTls()),
                 cfg.base(), cfg.autorizacao());
+        this.cfg = cfg;
         this.datasetPadrao = cfg.dataset();
 
         JsonValue meta;
@@ -78,6 +80,10 @@ public final class NishiConnection implements Connection {
 
     Transporte transporte() {
         return transporte;
+    }
+
+    ConnectionConfig configuracao() {
+        return cfg;
     }
 
     /** O dataset da URL — o palpite de quando o SQL não nomeia um no FROM. */
@@ -143,6 +149,12 @@ public final class NishiConnection implements Connection {
     @Override
     public PreparedStatement prepareStatement(String sql) throws SQLException {
         exigeAberta();
+        if (sql == null) {
+            // O scanner de SQL estouraria com NullPointerException, que NÃO é
+            // SQLException e atravessa o catch da aplicação virando stack
+            // trace em vez de mensagem.
+            throw new SQLException("a consulta é nula", SqlStates.CONVERSAO_INVALIDA);
+        }
         NishiPreparedStatement st = new NishiPreparedStatement(this, sql);
         abertos.add(st);
         return st;
@@ -194,7 +206,8 @@ public final class NishiConnection implements Connection {
 
     @Override
     public DatabaseMetaData getMetaData() throws SQLException {
-        throw naoSuportado("DatabaseMetaData ainda não está implementado neste driver");
+        exigeAberta();
+        return new NishiDatabaseMetaData(this);
     }
 
     /** O SQL vai VERBATIM ao servidor: não há dialeto a traduzir. */
