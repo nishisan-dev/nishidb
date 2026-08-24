@@ -189,6 +189,15 @@ declarado — nunca resultado vazio, que pareceria resposta.
     e desconhecido nunca vence. Elas ganham o campo assim que receberem
     qualquer atualização, e a semeadura da Fase 4 dará carência às que
     sobrarem. No corte havia 33.383 nessa condição contra 8.395 já com prazo.
+  - **Como saber se o coletor está trabalhando.** As séries são
+    `nishidb_expiry_running` (0/1), `nishidb_expired_total`,
+    `nishidb_expiry_grace_total` e `nishidb_expiry_scanned_total`. Nos
+    primeiros meses `expired_total` fica em **zero por estar certo** — nada
+    tem 3 meses de inatividade —, e quem mostra vida é `scanned_total`
+    subindo. **Não meça pela consulta `_writtenAt IS NULL`**: a carência
+    grava no ÍNDICE de prazos e não no payload, então a entidade continua
+    aparecendo nessa consulta depois de já ter prazo. Medir por ali leva à
+    conclusão errada de que o coletor não subiu.
   - **A duração escolhida muda o desenho do agendador.** A 452 ev/s, 90 dias
     são 3,51 bilhões de escritas na janela: a deque de baldes do §57 custaria
     28 GB de heap. Para prazo longo a varredura completa é a estratégia certa
