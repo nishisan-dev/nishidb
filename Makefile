@@ -1,4 +1,4 @@
-.PHONY: build test test-race test-integration test-python lint bench bench-micro cover build-jdbc test-jdbc-unit
+.PHONY: build test test-race test-integration test-python lint bench bench-micro cover build-jdbc test-jdbc-unit test-jdbc
 
 # `go build ./...` sozinho DESCARTA o binário: o módulo tem dois packages
 # main (cmd/nishidb e benchmark/ingest-bench), e sem -o o toolchain só
@@ -64,6 +64,17 @@ build-jdbc:
 test-jdbc-unit:
 	$(exige-java)
 	cd $(JDBC_DIR) && ./mvnw -B test
+
+# Integração de VERDADE: sobe o binário com TLS e credencial, ingere um corpus
+# com um campo de cada tipo e roda o driver contra ele. É o alvo que o CI chama,
+# e o que separa "o driver faz o que eu achei que o servidor emite" de "o driver
+# fala com o servidor".
+#
+# Ele seta NISHIDB_IT_REQUIRED=1, e é isso que torna impossível o pior desfecho:
+# harness quebrado com suíte verde e zero teste de integração executado.
+test-jdbc:
+	$(exige-java)
+	./scripts/jdbc-it.sh
 
 # scripts/nishidb-stats.py é código de produção — o painel que o operador lê
 # em cima de um incidente —, e até a Task A3 o teste dele

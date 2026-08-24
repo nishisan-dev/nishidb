@@ -64,6 +64,14 @@
         <artifactId>maven-surefire-plugin</artifactId>
         <version>3.5.6</version>
         <configuration>
+          <!--
+            Heap FIXO e pequeno para a suíte inteira, e não só para o teste de
+            volume. É a prova do §128 no cliente: o DriverIT percorre 120 mil
+            linhas do servidor real, e um driver que materializasse o resultado
+            estouraria o heap muito antes do fim. Deixar o teto solto tornaria
+            esse teste um que passa por ter memória sobrando.
+          -->
+          <argLine>-Xmx64m</argLine>
           <includes>
             <!--
               Sufixo, nunca prefixo. TestFoo casaria o regexp \bTest[A-Z] de
