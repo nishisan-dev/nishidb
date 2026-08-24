@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/logging"
+	"github.com/nishisan-dev/nishidb/internal/protocolo"
 )
 
 // handleMetrics serve a exposição do §93.
@@ -38,28 +39,16 @@ func timeoutDoScrape(r *http.Request) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(r.Context(), 5*time.Second)
 }
 
-// Saude é o corpo do §94.
-type Saude struct {
-	Status   string            `json:"status"`
-	Kafka    string            `json:"kafka"`
-	Storage  string            `json:"storage"`
-	Datasets map[string]string `json:"datasets"`
-	// Detalhes nomeia o problema por dataset. Não está no §94 e existe
-	// porque "DOWN" sozinho manda o operador procurar no log de qual dos
-	// datasets, num processo que pode hospedar vários (§82).
-	Detalhes map[string]string `json:"detalhes,omitempty"`
-}
-
 // handleHealth serve o §94.
 //
 // A chave "kafka" agrega: basta UM dataset com ingestão parada para ela sair
 // de UP. É deliberado — um health que dissesse UP com metade da ingestão
 // parada seria pior que não existir.
 func (s *Servidor) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	h := Saude{
-		Status:   EstadoUP,
-		Kafka:    EstadoUP,
-		Storage:  EstadoUP,
+	h := protocolo.Saude{
+		Status:   protocolo.EstadoUP,
+		Kafka:    protocolo.EstadoUP,
+		Storage:  protocolo.EstadoUP,
 		Datasets: make(map[string]string, len(s.datasets)),
 		Detalhes: map[string]string{},
 	}
@@ -67,7 +56,7 @@ func (s *Servidor) handleHealth(w http.ResponseWriter, _ *http.Request) {
 
 	for _, d := range s.datasets {
 		estado, detalhe := estadoDaIngestao(d)
-		if estado != EstadoDesligado {
+		if estado != protocolo.EstadoDesligado {
 			comIngestao++
 		}
 		if detalhe != "" {
@@ -76,23 +65,23 @@ func (s *Servidor) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		h.Datasets[d.nome] = estado
 
 		switch estado {
-		case EstadoDown:
-			h.Kafka = EstadoDown
-			h.Status = EstadoDegraded
-		case EstadoDegraded:
-			if h.Kafka == EstadoUP {
-				h.Kafka = EstadoDegraded
+		case protocolo.EstadoDown:
+			h.Kafka = protocolo.EstadoDown
+			h.Status = protocolo.EstadoDegraded
+		case protocolo.EstadoDegraded:
+			if h.Kafka == protocolo.EstadoUP {
+				h.Kafka = protocolo.EstadoDegraded
 			}
 		}
 	}
 	if comIngestao == 0 {
 		// Nenhum dataset consome: dizer "kafka: UP" seria afirmar saúde de um
 		// subsistema que não está em uso.
-		h.Kafka = EstadoDesligado
+		h.Kafka = protocolo.EstadoDesligado
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	if h.Status != EstadoUP {
+	if h.Status != protocolo.EstadoUP {
 		// 503 para que um load balancer tire a instância de rotação sem
 		// precisar interpretar o corpo.
 		w.WriteHeader(http.StatusServiceUnavailable)
@@ -121,16 +110,16 @@ func estadoDaIngestao(d *dataset) (estado, detalhe string) {
 	case k == nil || !k.Enabled:
 		// Sem fonte declarada, ou pausado pelo `enabled: false`. Não é
 		// anomalia e não pode contaminar a chave agregada.
-		return EstadoDesligado, ""
+		return protocolo.EstadoDesligado, ""
 	case erro != nil:
-		return EstadoDown, erro.Error()
+		return protocolo.EstadoDown, erro.Error()
 	case cons == nil:
-		return EstadoDegraded, "ingestão ainda subindo"
+		return protocolo.EstadoDegraded, "ingestão ainda subindo"
 	}
 	if p := cons.Pausa(); p != nil {
-		return EstadoDown, p.Error()
+		return protocolo.EstadoDown, p.Error()
 	}
-	return EstadoUP, ""
+	return protocolo.EstadoUP, ""
 }
 
 // sobePprof liga os endpoints do §112 num listener PRÓPRIO.

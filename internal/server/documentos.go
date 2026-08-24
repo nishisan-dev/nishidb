@@ -155,7 +155,7 @@ func (s *Servidor) handleStats(w http.ResponseWriter, r *http.Request) {
 				Active: int64(s.met.ativas.Com(d.nome).Valor()),
 			},
 			Ingestion: protocolo.IngestaoStats{
-				Enabled: estado != EstadoDesligado,
+				Enabled: estado != protocolo.EstadoDesligado,
 				State:   estado,
 				Paused:  detalhe,
 			},

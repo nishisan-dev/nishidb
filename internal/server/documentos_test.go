@@ -163,7 +163,7 @@ func TestStatsConcordaComOMetrics(t *testing.T) {
 	// Sem Kafka declarado, a ingestão é DISABLED — o mesmo vocabulário do §94,
 	// para as duas rotas não descreverem a mesma realidade com palavras
 	// diferentes.
-	if ds.Ingestion.State != server.EstadoDesligado || ds.Ingestion.Enabled {
+	if ds.Ingestion.State != protocolo.EstadoDesligado || ds.Ingestion.Enabled {
 		t.Fatalf("ingestão = %+v", ds.Ingestion)
 	}
 	if h := leHealth(t, srv); h.Datasets["d"] != ds.Ingestion.State {

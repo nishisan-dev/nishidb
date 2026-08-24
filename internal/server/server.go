@@ -36,14 +36,6 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/storage"
 )
 
-// Estado de um subsistema no /v1/health (§94).
-const (
-	EstadoUP        = "UP"
-	EstadoDown      = "DOWN"
-	EstadoDegraded  = "DEGRADED"
-	EstadoDesligado = "DISABLED"
-)
-
 // dataset é um dataset aberto no processo.
 type dataset struct {
 	nome string
