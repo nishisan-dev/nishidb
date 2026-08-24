@@ -143,8 +143,49 @@ func registraMetricasDeDataset(reg *metrics.Registry, s *Servidor) {
 					Tipo:    metrics.TipoContador,
 					Labels:  rotulo,
 					Valor:   float64(st.CompactionBytesWritten),
+				},
+				metrics.Amostra{
+					Familia: metrics.MetExpiryRunning,
+					Nome:    metrics.MetExpiryRunning,
+					Ajuda:   "1 enquanto o coletor do idle timeout está de pé para o dataset; 0 sem expireAfterWrite declarado ou depois de ele parar",
+					Tipo:    metrics.TipoMedidor,
+					Labels:  rotulo,
+					Valor:   umSeVerdadeiro(st.ExpiryRunning),
+				},
+				metrics.Amostra{
+					Familia: metrics.MetExpiredTotal,
+					Nome:    metrics.MetExpiredTotal,
+					Ajuda:   "entidades que ganharam lápide por inatividade, pelas duas rotas: o coletor e a descoberta oportunista da compaction",
+					Tipo:    metrics.TipoContador,
+					Labels:  rotulo,
+					Valor:   float64(st.Expiradas),
+				},
+				metrics.Amostra{
+					Familia: metrics.MetExpiryGraceTotal,
+					Nome:    metrics.MetExpiryGraceTotal,
+					Ajuda:   "carências dadas a entidades sem instante de escrita; é o que sobe nos primeiros minutos depois de ligar a expiração num dataset já materializado, quando ainda não há nada a expirar",
+					Tipo:    metrics.TipoContador,
+					Labels:  rotulo,
+					Valor:   float64(st.Carencias),
+				},
+				metrics.Amostra{
+					Familia: metrics.MetExpiryScannedTotal,
+					Nome:    metrics.MetExpiryScannedTotal,
+					Ajuda:   "entradas do índice de escritas examinadas pelo coletor; comparada com o total de rows, diz se o cursor dá a volta ou empaca",
+					Tipo:    metrics.TipoContador,
+					Labels:  rotulo,
+					Valor:   float64(st.ExpiryExaminadas),
 				})
 		}
 		return out
 	}))
+}
+
+// umSeVerdadeiro converte o booleano de estado para o 0/1 que um medidor
+// Prometheus espera.
+func umSeVerdadeiro(v bool) float64 {
+	if v {
+		return 1
+	}
+	return 0
 }

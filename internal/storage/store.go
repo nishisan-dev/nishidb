@@ -197,6 +197,15 @@ type Stats struct {
 	// número que zera a cada passada. Reabrir o dataset os zera, como zera
 	// qualquer contador de processo — é a semântica que o Prometheus espera e
 	// trata com `rate()`.
+	// ExpiryRunning é o 0/1 do coletor do idle timeout; os três contadores
+	// abaixo são monotônicos e respondem, juntos, "ele está trabalhando?".
+	// Carencias importa isolada porque é a única coisa que acontece nos
+	// primeiros minutos depois de ligar a expiração num dataset já
+	// materializado — período em que Expiradas fica em zero por estar certo.
+	ExpiryRunning          bool
+	Expiradas              uint64
+	Carencias              uint64
+	ExpiryExaminadas       uint64
 	CompactionBytesRead    int64
 	CompactionBytesWritten int64
 }
@@ -225,9 +234,11 @@ type Store struct {
 	// expiraBuf e tombBuf são do Expira, owned pelo wmu como o compactBuf:
 	// reter os dois evita realocar o record lido e o payload da lápide a cada
 	// expiração, e a varredura expira em rajada.
-	expiraBuf []byte
-	tombBuf   []byte
-	expiradas atomic.Uint64
+	expiraBuf  []byte
+	tombBuf    []byte
+	expiradas  atomic.Uint64
+	carencias  atomic.Uint64
+	examinadas atomic.Uint64
 	// cursorExpiracao é onde a próxima passada do coletor recomeça. Só o
 	// laço do coletor o toca, e sempre sob o entra()/sai().
 	cursorExpiracao types.RowID
@@ -1727,6 +1738,10 @@ func (s *Store) Stats() Stats {
 		StorageBytes:           s.diskBytesAll.Load(),
 		LiveBytesUpperBound:    s.liveBytesAll.Load(),
 		CompactionRunning:      s.compAtiva.Load(),
+		ExpiryRunning:          s.expAtiva.Load(),
+		Expiradas:              s.expiradas.Load(),
+		Carencias:              s.carencias.Load(),
+		ExpiryExaminadas:       s.examinadas.Load(),
 		CompactionBytesRead:    s.compBytesLidos.Load(),
 		CompactionBytesWritten: s.compBytesEscritos.Load(),
 	}

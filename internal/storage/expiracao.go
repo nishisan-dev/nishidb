@@ -266,6 +266,8 @@ func (s *Store) ExpiraUmaPassada(ctx context.Context, lim LimitesDeExpiracao) (R
 		}
 	}
 	s.cursorExpiracao = id
+	s.examinadas.Add(uint64(r.Examinadas))
+	s.carencias.Add(uint64(r.Carencias))
 	return r, nil
 }
 
