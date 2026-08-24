@@ -257,6 +257,7 @@ func (s *Servidor) transmite(
 	}
 
 	w.Header().Set("Content-Type", protocolo.ContentTypeNDJSON)
+	flusher, _ := w.(http.Flusher)
 	// O schema sai ANTES de qualquer row, e é o que compromete o status em
 	// 200: daqui para a frente todo desfecho é uma linha de corpo.
 	if err := protocolo.EscreveLinha(w, protocolo.LinhaSchema{
@@ -272,9 +273,20 @@ func (s *Servidor) transmite(
 		return
 	}
 
+	// O schema vai ao fio SOZINHO, e não junto do primeiro lote.
+	//
+	// Custa um chunk por consulta e paga o ResultSetMetaData imediato: sem
+	// isto, uma query que varre muito e emite pouco — full scan com WHERE
+	// seletivo — deixaria o cliente sem nenhum byte até o primeiro lote de
+	// resultBatchSize fechar, e uma ferramenta de SQL não teria como desenhar
+	// as colunas do grid enquanto isso. Também adianta a detecção de cliente
+	// que já foi embora.
+	if flusher != nil {
+		flusher.Flush()
+	}
+
 	lote := s.cfg.ResultBatchSize()
 	sw := executor.NewStreamWriter(w, executor.DefaultBufSize)
-	flusher, _ := w.(http.Flusher)
 
 	var emitidas int64
 	truncadoPeloRequest := false
