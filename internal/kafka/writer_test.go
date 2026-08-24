@@ -88,19 +88,19 @@ func TestCheckpointPorTempoNaoRepeteSemEventoNovo(t *testing.T) {
 	// número de despertares que teriam checkpointado indevidamente.
 	const intervalosOciosos = 5
 
-	base := contaCheckpoints(t, b)
-	var naPrimeira, aoFim int
+	var naQuiescencia, aoFim int
 	var marca time.Time
 	if _, err := b.consomeComCadencia(prazoOcioso, cadenciaOciosa, func(d kafka.Desfecho) bool {
 		if d.Eventos < eventosOciosos {
 			return false
 		}
 		if marca.IsZero() {
-			n := contaCheckpoints(t, b)
-			if n == base {
-				return false // o disparo por tempo ainda não veio
+			// A contagem só começa quando não há mais evento decidido
+			// esperando checkpoint. Ver `quiescente`.
+			if !quiescente(t, b, eventosOciosos) {
+				return false
 			}
-			naPrimeira, marca = n, time.Now()
+			naQuiescencia, marca = contaCheckpoints(t, b), time.Now()
 			return false
 		}
 		if time.Since(marca) < intervalosOciosos*intervaloOcioso {
@@ -113,13 +113,46 @@ func TestCheckpointPorTempoNaoRepeteSemEventoNovo(t *testing.T) {
 	}
 
 	if marca.IsZero() {
-		t.Fatalf("o checkpoint por tempo não disparou em %s; sem ele este teste não tem o que afirmar",
-			prazoOcioso)
+		t.Fatalf("a posição durável não alcançou os %d eventos consumidos em %s: o checkpoint por "+
+			"tempo não disparou, e sem ele este teste não tem o que afirmar",
+			eventosOciosos, prazoOcioso)
 	}
-	if aoFim != naPrimeira {
+	if aoFim != naQuiescencia {
 		t.Errorf("checkpoints = %d após %d intervalos ociosos, quer %d: o despertar por tempo está "+
-			"checkpointando sem evento novo", aoFim, intervalosOciosos, naPrimeira)
+			"checkpointando sem evento novo", aoFim, intervalosOciosos, naQuiescencia)
 	}
+}
+
+// quiescente responde se a posição DURÁVEL já alcançou tudo o que foi
+// consumido. É o que dá ao teste acima um ponto de partida que não depende da
+// velocidade da máquina.
+//
+// A contagem de despertares só significa alguma coisa se começar num instante
+// em que NÃO exista evento decidido fora do checkpoint — havendo um, o
+// despertar seguinte checkpointa com razão, e a contagem sobe sem que o
+// produto tenha feito nada de errado. Amarrar o início ao primeiro checkpoint
+// OBSERVADO não garante isso: se o consumo da leva atravessar um tique — o
+// que sob `-race` num runner carregado é o caso comum, e não o excepcional —,
+// o primeiro checkpoint leva parte da leva e o resto sobra para o próximo.
+// Era esse o flake: o teste media a velocidade da máquina junto com a regra.
+//
+// O sinal é o kafka.offsets no disco, e não um contador novo só para o teste:
+// quando a soma dos próximos offsets iguala os eventos produzidos, tudo o que
+// entrou já foi tornado durável. Como o writer é a goroutine ÚNICA do §27, ele
+// não lê o despertador enquanto está dentro do checkpoint — quando o arquivo
+// mostra a posição final, o `desdeCP` já está zerado para o tique seguinte, e
+// não há janela entre gravar o arquivo e zerar o contador.
+func quiescente(t *testing.T, b *bancada, eventos int64) bool {
+	t.Helper()
+	o, ok := b.leOffsets()
+	if !ok {
+		return false // nenhum checkpoint durável ainda
+	}
+	var proximo int64
+	for _, v := range o {
+		proximo += v
+	}
+	return proximo == eventos
 }
 
 // TestDespertarPorTempoNaoEncerraOLacoDoWriter cobra a única consequência
