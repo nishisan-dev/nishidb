@@ -228,6 +228,44 @@ class StreamCursorTest {
     }
 
     /**
+     * A falha é STICKY: quem engolir a exceção e insistir NÃO recebe um fim
+     * limpo.
+     *
+     * <p>Sem isto, um laço que capture a SQLException e chame proxima() de novo
+     * receberia false e concluiria que o resultado terminou — apresentando como
+     * completo um resultado que foi cortado no meio. É a mesma doutrina do erro
+     * sticky do lexer do servidor.
+     */
+    @Test
+    void aFalhaEhStickyENaoViraFimLimpo() throws SQLException {
+        try (StreamCursor c = cursorDe(schema("a"), "{\"a\":1}")) {
+            assertTrue(c.proxima());
+            SQLException primeira = assertThrows(SQLRecoverableException.class, c::proxima);
+            SQLException segunda = assertThrows(SQLRecoverableException.class, c::proxima);
+            assertEquals(primeira.getMessage(), segunda.getMessage());
+        }
+    }
+
+    /**
+     * O span de um texto está ESCAPADO, e a conversão numérica precisa saber
+     * disso.
+     *
+     * <p>Uma coluna string que carregue um inteiro escrito com escape unicode
+     * chegaria como dígitos que não são dígitos, e o driver responderia "fora do
+     * intervalo de int64" para o número 41.
+     */
+    @Test
+    void numeroEmTextoEscapadoEhLidoDepoisDeDesescapar() throws SQLException {
+        String barra = String.valueOf((char) 92); // ver a armadilha em JsonScannerTest
+        try (StreamCursor c = cursorDe(schema("s"), "{\"s\":\"" + barra + "u00341\"}")) {
+            assertTrue(c.proxima());
+            assertEquals("41", c.texto(0));
+            assertEquals(41L, c.inteiro(0));
+            assertEquals(41d, c.numero(0));
+        }
+    }
+
+    /**
      * O §128 aplicado ao CLIENTE: o custo por linha não cresce com o resultado.
      *
      * <p>Mede bytes ALOCADOS na thread, que é a métrica que não depende de GC

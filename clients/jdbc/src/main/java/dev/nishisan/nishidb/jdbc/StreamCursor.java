@@ -62,6 +62,16 @@ public final class StreamCursor implements RowCursor {
     private boolean acabou;
     private SQLWarning aviso;
 
+    /**
+     * A falha, uma vez ocorrida, é STICKY.
+     *
+     * <p>Sem isto, quem capturasse a exceção de {@link #proxima} e insistisse
+     * receberia {@code false} na chamada seguinte — e concluiria que o
+     * resultado terminou bem, apresentando como completo um resultado cortado
+     * no meio. É a mesma doutrina do erro sticky do lexer do servidor.
+     */
+    private SQLException falha;
+
     public StreamCursor(LeitorNdjson leitor) throws SQLException {
         this.leitor = leitor;
         // A primeira chamada consome a linha de schema e pode já trazer a
@@ -101,20 +111,28 @@ public final class StreamCursor implements RowCursor {
 
     @Override
     public boolean proxima() throws SQLException {
-        if (linhaPendente) {
-            linhaPendente = false;
-            escaneia();
-            return true;
+        if (falha != null) {
+            throw falha;
         }
-        if (acabou) {
+        try {
+            if (linhaPendente) {
+                linhaPendente = false;
+                escaneia();
+                return true;
+            }
+            if (acabou) {
+                return false;
+            }
+            if (leitor.proxima()) {
+                escaneia();
+                return true;
+            }
+            desfecho();
             return false;
+        } catch (SQLException e) {
+            falha = e;
+            throw e;
         }
-        if (leitor.proxima()) {
-            escaneia();
-            return true;
-        }
-        desfecho();
-        return false;
     }
 
     @Override
@@ -152,20 +170,45 @@ public final class StreamCursor implements RowCursor {
         }
     }
 
+    /**
+     * O span de um TEXTO está escapado, e por isso o texto passa pelo
+     * desescape antes da conversão.
+     *
+     * <p>Sem esse desvio, uma coluna string que carregasse um inteiro escrito
+     * com escape unicode responderia "fora do intervalo de int64" para um
+     * número de dois dígitos. O caminho quente — token de NÚMERO — continua
+     * sobre o span cru, sem alocar.
+     */
     @Override
     public long inteiro(int coluna) throws SQLException {
+        if (tipo[coluna] == JsonTipo.TEXTO) {
+            byte[] ascii = texto(coluna).getBytes(StandardCharsets.US_ASCII);
+            return converteInteiro(coluna, ascii, 0, ascii.length);
+        }
+        return converteInteiro(coluna, leitor.buffer(), ini[coluna], fim[coluna]);
+    }
+
+    @Override
+    public double numero(int coluna) throws SQLException {
+        if (tipo[coluna] == JsonTipo.TEXTO) {
+            byte[] ascii = texto(coluna).getBytes(StandardCharsets.US_ASCII);
+            return converteNumero(coluna, ascii, 0, ascii.length);
+        }
+        return converteNumero(coluna, leitor.buffer(), ini[coluna], fim[coluna]);
+    }
+
+    private long converteInteiro(int coluna, byte[] buf, int de, int ate) throws SQLException {
         try {
-            return JsonScanner.inteiro(leitor.buffer(), ini[coluna], fim[coluna]);
+            return JsonScanner.inteiro(buf, de, ate);
         } catch (JsonException e) {
             throw new SQLDataException("coluna " + nomeDe(coluna) + ": " + e.getMessage(),
                     SqlStates.VALOR_FORA_DE_FAIXA);
         }
     }
 
-    @Override
-    public double numero(int coluna) throws SQLException {
+    private double converteNumero(int coluna, byte[] buf, int de, int ate) throws SQLException {
         try {
-            return JsonScanner.numero(leitor.buffer(), ini[coluna], fim[coluna]);
+            return JsonScanner.numero(buf, de, ate);
         } catch (JsonException e) {
             throw new SQLDataException("coluna " + nomeDe(coluna) + ": " + e.getMessage(),
                     SqlStates.CONVERSAO_INVALIDA);

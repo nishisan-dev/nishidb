@@ -11,6 +11,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.TimeZone;
 import java.util.concurrent.Callable;
 import org.junit.jupiter.api.Test;
@@ -169,17 +170,41 @@ class TemporaisTest {
     }
 
     /**
-     * A data preserva o instante, como o timestamp.
+     * A data é o dia UTC do instante, e é a MESMA em qualquer fuso da JVM.
      *
-     * <p>Consequência declarada: em Tóquio, um instante de 21:53Z aparece como
-     * o dia SEGUINTE no toString(). É a mesma regra do timestamp, e ter duas
-     * regras seria pior — o usuário veria a data e a hora discordarem.
+     * <p>Duas decisões aqui, e as duas são deliberadas. A primeira: o
+     * java.sql.Date sai NORMALIZADO — hora, minuto, segundo e milissegundo em
+     * zero —, porque é o que o contrato do tipo exige; devolver o instante cru
+     * faria o toString() mostrar a data certa e o equals() contra um
+     * Date.valueOf falhar, que é um defeito que se esconde.
+     *
+     * <p>A segunda: a divisão em dia é feita em UTC, e não no fuso da JVM. É a
+     * mesma doutrina do encoder, que se recusa a renderizar em hora local
+     * porque o MESMO dado servido de dois hosts produziria respostas
+     * diferentes. Um instante de 21:53Z cairia no dia seguinte em Tóquio e no
+     * mesmo dia em São Paulo, e o relatório mudaria de dia conforme a máquina
+     * que o rodou.
      */
     @Test
-    void aDataPreservaOInstante() throws Exception {
+    void aDataEhODiaUtcDoInstanteEmQualquerFuso() throws Exception {
         long millis = Instant.parse("2026-08-23T21:53:04.123Z").toEpochMilli();
-        Date d = em("Asia/Tokyo", () -> Temporais.dateDe(millis));
-        assertEquals(millis, d.getTime());
-        assertEquals("2026-08-24", em("Asia/Tokyo", d::toString));
+        for (String zona : new String[] {"UTC", "Asia/Tokyo", "America/Sao_Paulo"}) {
+            em(zona, () -> {
+                Date d = Temporais.dateDe(millis, ZoneOffset.UTC);
+                assertEquals("2026-08-23", d.toString(), zona);
+                assertEquals(Date.valueOf(LocalDate.of(2026, 8, 23)).getTime(), d.getTime(), zona);
+                return null;
+            });
+        }
+    }
+
+    /** Com fuso pedido, a divisão em dia o honra: é o caso legítimo do Calendar. */
+    @Test
+    void aDataHonraOFusoPedido() throws Exception {
+        long millis = Instant.parse("2026-08-23T21:53:04.123Z").toEpochMilli();
+        em("UTC", () -> {
+            assertEquals("2026-08-24", Temporais.dateDe(millis, ZoneId.of("Asia/Tokyo")).toString());
+            return null;
+        });
     }
 }

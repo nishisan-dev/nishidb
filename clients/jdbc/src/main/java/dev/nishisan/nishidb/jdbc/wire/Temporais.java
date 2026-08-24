@@ -6,6 +6,7 @@ import java.sql.SQLException;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.time.DateTimeException;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneId;
@@ -111,14 +112,22 @@ public final class Temporais {
     }
 
     /**
-     * A data do instante, preservando o instante.
+     * A data do instante, dividida na zona pedida e NORMALIZADA.
      *
-     * <p>Consequência declarada: em Tóquio, um instante de 21:53Z aparece como
-     * o dia SEGUINTE no {@code toString()}. É a mesma regra do timestamp, e ter
-     * duas regras seria pior — o usuário veria a data e a hora discordarem.
+     * <p>Duas decisões, as duas deliberadas. O {@link Date} sai com hora,
+     * minuto, segundo e milissegundo em zero porque é o que o contrato do tipo
+     * exige; {@code new Date(instante)} devolveria o instante cru, e o defeito
+     * se esconderia — o {@code toString()} mostraria a data certa e o
+     * {@code equals} contra um {@code Date.valueOf} falharia.
+     *
+     * <p>E a zona é PARÂMETRO, sem default escondido, porque dividir um
+     * instante em dias exige escolher um calendário. Quem chama sem Calendar
+     * passa UTC: é a mesma doutrina do encoder, que se recusa a renderizar em
+     * hora local porque o MESMO dado servido de dois hosts produziria
+     * respostas diferentes.
      */
-    public static Date dateDe(long millisUtc) {
-        return new Date(millisUtc);
+    public static Date dateDe(long millisUtc, ZoneId zona) {
+        return Date.valueOf(Instant.ofEpochMilli(millisUtc).atZone(zona).toLocalDate());
     }
 
     /**

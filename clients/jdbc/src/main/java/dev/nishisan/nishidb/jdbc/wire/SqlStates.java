@@ -55,6 +55,9 @@ public final class SqlStates {
     /** 22007 — texto que deveria ser data/hora e não é. */
     public static final String FORMATO_TEMPORAL_INVALIDO = "22007";
 
+    /** 24000 — não há linha corrente, ou o ResultSet já foi fechado. */
+    public static final String CURSOR_INVALIDO = "24000";
+
     /** 0A000 — o driver não implementa este método ou esta conversão. */
     public static final String NAO_SUPORTADO = "0A000";
 
