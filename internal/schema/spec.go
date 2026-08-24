@@ -7,11 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/nishisan-dev/nishidb/internal/typeparse"
 	"github.com/nishisan-dev/nishidb/internal/types"
+	"github.com/nishisan-dev/nishidb/internal/units"
 )
 
 // ErrInvalidSpec categoriza qualquer erro de validação de spec.
@@ -29,11 +32,20 @@ type DatasetSpec struct {
 }
 
 type MaterializationSpec struct {
-	Key                KeySpec
-	Mode               string // merge | replace
-	Sequence           *SequenceSpec
-	TTL                *TTLSpec
-	TombstoneRetention string
+	Key      KeySpec
+	Mode     string // merge | replace
+	Sequence *SequenceSpec
+	TTL      *TTLSpec
+	// TombstoneRetention é por quanto tempo a lápide de uma entidade expirada
+	// precisa sobreviver antes de a key poder ser esquecida. VALIDADO aqui e
+	// ainda SEM MOTOR: implementá-lo exige purgar a primary (remoção em
+	// open-addressing) e ensinar a compaction a descartar lápide vencida.
+	//
+	// Era guardado como string crua, sem parse e sem leitor — configuração que
+	// não faz nada e não avisa. Agora a gramática é conferida no load e a
+	// subida avisa que a chave não tem efeito, que é o mínimo honesto
+	// enquanto o motor não existe.
+	TombstoneRetention time.Duration
 }
 
 type KeySpec struct {
@@ -48,10 +60,28 @@ type SequenceSpec struct {
 	Strategy string // greater (único no v1)
 }
 
+// TTLSpec é a política de expiração do dataset, e admite EXATAMENTE uma das
+// duas formas: um campo de deadline absoluto vindo do payload (§56, ainda sem
+// motor) ou um idle timeout renovado a cada escrita (implementado).
+//
+// São mutuamente exclusivas porque precisam de agendadores diferentes: com
+// duração uniforme o prazo é monótono na ordem de escrita, e a fila de
+// expiração é uma deque de baldes com append sempre na cauda; com o prazo
+// vindo do payload ele pode chegar no passado ou daqui a três anos, a deque
+// vira heap e a semeadura O(n) vira O(n log n). Suportar as duas juntas é
+// escrever dois agendadores.
 type TTLSpec struct {
 	Field string
 	Type  string // timestamp (único no v1)
+	// ExpireAfterWrite é o idle timeout: a entidade expira se não receber
+	// escrita dentro da duração. Zero = não declarado.
+	ExpireAfterWrite time.Duration
 }
+
+// ResolucaoDaExpiracao é o passo do agendador (§57). Duração menor que isto é
+// recusada em vez de arredondada: o operador leria "30s" e teria até 90s, e
+// uma chave que mente é pior que uma chave recusada.
+const ResolucaoDaExpiracao = time.Minute
 
 type SchemaSpec struct {
 	Include       []string // ["*"] ou lista explícita; default = campos declarados
@@ -61,9 +91,10 @@ type SchemaSpec struct {
 }
 
 type FieldSpec struct {
-	Type  string
-	Alias string
-	Index string // "" | bitmap | hash
+	Type   string
+	Alias  string
+	Index  string // "" | bitmap | hash
+	Format string // padrão de parsing; obrigatório em datetime/time, proibido no resto
 }
 
 type QuerySpec struct {
@@ -93,8 +124,16 @@ type rawMat struct {
 	Key                rawKey        `yaml:"key"`
 	Mode               string        `yaml:"mode"`
 	Sequence           *SequenceSpec `yaml:"sequence"`
-	TTL                *TTLSpec      `yaml:"ttl"`
+	TTL                *rawTTL       `yaml:"ttl"`
 	TombstoneRetention string        `yaml:"tombstoneRetention"`
+}
+
+// rawTTL tem a duração como STRING porque é assim que ela vem do YAML; a
+// gramática é a do units.Duracao, e a conversão acontece na validação.
+type rawTTL struct {
+	Field            string `yaml:"field"`
+	Type             string `yaml:"type"`
+	ExpireAfterWrite string `yaml:"expireAfterWrite"`
 }
 
 type rawKey struct {
@@ -157,6 +196,17 @@ func specErrf(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrInvalidSpec, fmt.Sprintf(format, args...))
 }
 
+// semPrefixoDeSpec desembrulha a mensagem de um erro já marcado com
+// ErrInvalidSpec, para que aninhá-lo em outro specErrf não produza
+// "spec inválida: spec inválida: ..." na cara do operador.
+func semPrefixoDeSpec(err error) string {
+	s := err.Error()
+	if p := ErrInvalidSpec.Error() + ": "; strings.HasPrefix(s, p) {
+		return s[len(p):]
+	}
+	return s
+}
+
 var fieldTypeNames = map[string]types.FieldType{
 	"string":      types.TypeString,
 	"int64":       types.TypeInt64,
@@ -169,6 +219,45 @@ var fieldTypeNames = map[string]types.FieldType{
 	"ipv6_prefix": types.TypeIPv6Prefix,
 	"bytes":       types.TypeBytes,
 	"json":        types.TypeJSON,
+	"datetime":    types.TypeDateTime,
+	"time":        types.TypeTime,
+}
+
+// dominioDeFormato mapeia o tipo YAML para o domínio do compilador de padrão.
+// Só estes dois tipos aceitam (e exigem) `format:`.
+func dominioDeFormato(tipo string) (typeparse.Dominio, bool) {
+	switch tipo {
+	case "datetime":
+		return typeparse.DominioDateTime, true
+	case "time":
+		return typeparse.DominioTime, true
+	}
+	return 0, false
+}
+
+// CompilaFormato resolve o `format:` de um campo para o layout de parsing.
+// Dono único da regra: quem valida a spec e quem compila o schema chamam
+// AQUI, nunca uma segunda lista de formatos — duas listas divergiriam e o
+// dataset aceitaria no load o que recusa por evento na ingestão.
+func CompilaFormato(tipo, format string) (*typeparse.Layout, error) {
+	d, usa := dominioDeFormato(tipo)
+	if !usa {
+		if format != "" {
+			return nil, specErrf("format só se aplica a datetime e time; o tipo %q não o usa", tipo)
+		}
+		return nil, nil
+	}
+	if format == "" {
+		// Sem default de propósito: um format esquecido escolheria um padrão
+		// que recusa 100% dos eventos, e sob log-and-skip isso é um dataset
+		// que não ingere nada — só WARNs, sem nada apontando para a causa.
+		return nil, specErrf("tipo %q exige format (tokens: %s)", tipo, typeparse.TokensSuportados())
+	}
+	l, err := typeparse.CompilaLayout(format, d)
+	if err != nil {
+		return nil, specErrf("%s", err)
+	}
+	return l, nil
 }
 
 // FieldTypeByName resolve o nome YAML de um tipo; "auto" não entra aqui
@@ -185,6 +274,21 @@ func isValidTypeName(name string) bool {
 	_, ok := fieldTypeNames[name]
 	return ok
 }
+
+// nomesDeSistema são os campos que o WRITER injeta e o operador não declara.
+//
+// Lista fechada, e não o prefixo "_" inteiro: campos com underscore são
+// legítimos e já estão em uso — `_SEQ` é o nome de sequence da spec §12 e da
+// fixture de tipos. Reservar o prefixo recusaria datasets que hoje sobem.
+var nomesDeSistema = map[string]string{
+	CampoInstanteDeEscrita: "é injetado pelo writer a cada escrita",
+}
+
+// CampoInstanteDeEscrita registra QUANDO o writer gravou a entidade. É um
+// fato, não uma política: guardar o instante da escrita (e não o prazo já
+// somado) é o que faz uma mudança de expireAfterWrite valer imediatamente
+// para as linhas existentes, em vez de exigir reescrever o dataset.
+const CampoInstanteDeEscrita = "_writtenAt"
 
 func isIdentName(s string) bool {
 	if s == "" {
@@ -269,7 +373,13 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 		return nil, specErrf("materialization.mode %q inválido (merge|replace)", mode)
 	}
 	s.Materialization.Mode = mode
-	s.Materialization.TombstoneRetention = raw.Materialization.TombstoneRetention
+	if bruto := raw.Materialization.TombstoneRetention; bruto != "" {
+		d, err := units.DuracaoComDias(bruto, 0)
+		if err != nil {
+			return nil, specErrf("materialization.tombstoneRetention: %s", err)
+		}
+		s.Materialization.TombstoneRetention = d
+	}
 
 	if seq := raw.Materialization.Sequence; seq != nil {
 		if seq.Field == "" {
@@ -290,15 +400,35 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 		s.Materialization.Sequence = seq
 	}
 
-	if ttl := raw.Materialization.TTL; ttl != nil {
-		if ttl.Field == "" {
-			return nil, specErrf("materialization.ttl.field obrigatório")
-		}
-		if ttl.Type == "" {
-			ttl.Type = "timestamp"
-		}
-		if ttl.Type != "timestamp" {
-			return nil, specErrf("materialization.ttl.type %q não suportado (v1: timestamp)", ttl.Type)
+	if raw := raw.Materialization.TTL; raw != nil {
+		ttl := &TTLSpec{Field: raw.Field, Type: raw.Type}
+		temCampo, temIdle := raw.Field != "", raw.ExpireAfterWrite != ""
+		switch {
+		case temCampo && temIdle:
+			return nil, specErrf("materialization.ttl declara field e expireAfterWrite ao mesmo tempo; " +
+				"escolha um: field expira pelo prazo que o evento traz, expireAfterWrite expira o que não recebe escrita")
+		case !temCampo && !temIdle:
+			return nil, specErrf("materialization.ttl exige field ou expireAfterWrite")
+		case temIdle:
+			if raw.Type != "" {
+				return nil, specErrf("materialization.ttl.type só se aplica a ttl.field")
+			}
+			d, err := units.DuracaoComDias(raw.ExpireAfterWrite, 0)
+			if err != nil {
+				return nil, specErrf("materialization.ttl.expireAfterWrite: %s", err)
+			}
+			if d < ResolucaoDaExpiracao {
+				return nil, specErrf("materialization.ttl.expireAfterWrite %q é menor que a resolução do agendador (%s); "+
+					"abaixo dela o prazo real seria maior que o declarado", raw.ExpireAfterWrite, ResolucaoDaExpiracao)
+			}
+			ttl.ExpireAfterWrite = d
+		default:
+			if ttl.Type == "" {
+				ttl.Type = "timestamp"
+			}
+			if ttl.Type != "timestamp" {
+				return nil, specErrf("materialization.ttl.type %q não suportado (v1: timestamp)", ttl.Type)
+			}
 		}
 		s.Materialization.TTL = ttl
 	}
@@ -313,8 +443,23 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 		if name == "" {
 			return nil, specErrf("schema.fields contém nome vazio")
 		}
+		if motivo, reservado := nomesDeSistema[name]; reservado {
+			return nil, specErrf("campo %q é reservado: %s", name, motivo)
+		}
 		if !isValidTypeName(f.Type) {
 			return nil, specErrf("campo %q: tipo %q inválido", name, f.Type)
+		}
+		// O format é compilado AQUI, no load, e o layout resultante é
+		// descartado: o que importa neste ponto é recusar o padrão inválido
+		// antes de o dataset subir. O Compile o compila de novo para guardar.
+		//
+		// A checagem cobre os dois sentidos, e o segundo é o que não erra
+		// alto sozinho: FieldSpec é decodificado sem KnownFields, então um
+		// `format:` sob um campo que não o usa decodifica com sucesso e não
+		// faz nada — configuração sem leitor, que é o defeito que o débito 37
+		// registra.
+		if _, err := CompilaFormato(f.Type, f.Format); err != nil {
+			return nil, specErrf("campo %q: %s", name, semPrefixoDeSpec(err))
 		}
 		if f.Alias != "" {
 			if !isIdentName(f.Alias) {
@@ -367,7 +512,7 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 			return nil, specErrf("campo sequence %q deve ser int64, é %q", seq.Field, sf.Type)
 		}
 	}
-	if ttl := s.Materialization.TTL; ttl != nil {
+	if ttl := s.Materialization.TTL; ttl != nil && ttl.Field != "" {
 		tf, ok := fields[ttl.Field]
 		if !ok {
 			return nil, specErrf("materialization.ttl.field %q não declarado em schema.fields", ttl.Field)
@@ -409,7 +554,7 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 			return nil, specErrf("campo key %q não pode estar no exclude", name)
 		case s.Materialization.Sequence != nil && name == s.Materialization.Sequence.Field:
 			return nil, specErrf("campo sequence %q não pode estar no exclude", name)
-		case s.Materialization.TTL != nil && name == s.Materialization.TTL.Field:
+		case s.Materialization.TTL != nil && s.Materialization.TTL.Field != "" && name == s.Materialization.TTL.Field:
 			return nil, specErrf("campo ttl %q não pode estar no exclude", name)
 		}
 		if owner, isAlias := aliases[name]; isAlias {
@@ -452,4 +597,19 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 	s.Query.Timeout = timeout
 
 	return s, nil
+}
+
+// ExpiraApos devolve o idle timeout declarado, ou zero quando o dataset não
+// expira por escrita.
+//
+// Existe como método, e não como acesso direto ao campo, porque o bloco ttl
+// admite duas formas e só uma tem motor: quem lê
+// Materialization.TTL.ExpireAfterWrite na mão esquece o nil do bloco, e o
+// esquecimento não aparece em dataset nenhum que declare ttl — só nos que não
+// declaram, com um panic no caminho de abertura.
+func (s *DatasetSpec) ExpiraApos() time.Duration {
+	if s == nil || s.Materialization.TTL == nil {
+		return 0
+	}
+	return s.Materialization.TTL.ExpireAfterWrite
 }

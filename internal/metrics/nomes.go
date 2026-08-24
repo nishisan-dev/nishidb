@@ -56,6 +56,27 @@ const (
 	MetCompactionBytesRead    = "nishidb_compaction_bytes_read"
 	MetCompactionBytesWritten = "nishidb_compaction_bytes_written"
 
+	// Séries do coletor do idle timeout. O §92 não as previu — ele foi
+	// escrito antes de a expiração existir —, então o nome carrega a razão.
+	//
+	// MetExpiryRunning é o 0/1 do coletor, espelhando o da compaction: sem
+	// ele, "o disco não está sendo devolvido" é indistinguível de "não há
+	// nada para devolver".
+	MetExpiryRunning = "nishidb_expiry_running"
+	// MetExpiredTotal conta entidades que ganharam lápide, pelas DUAS rotas
+	// (o coletor e a descoberta oportunista da compaction).
+	MetExpiredTotal = "nishidb_expired_total"
+	// MetExpiryGraceTotal conta carências dadas a entidades sem instante de
+	// escrita. É a série que responde "o coletor está trabalhando?" nos
+	// primeiros minutos depois de ligar a expiração num dataset já
+	// materializado — quando ainda não há nada a expirar e ela é a ÚNICA
+	// coisa acontecendo. Sem ela, esse período é indistinguível de um coletor
+	// que não subiu, que foi exatamente a confusão vivida ao ligar no piloto.
+	MetExpiryGraceTotal = "nishidb_expiry_grace_total"
+	// MetExpiryScannedTotal conta entradas do índice examinadas. Comparada com
+	// o total de rows, diz se o cursor está dando a volta ou empacando.
+	MetExpiryScannedTotal = "nishidb_expiry_scanned_total"
+
 	// Checkpoint (§92).
 	MetCheckpointDurationSeconds     = "nishidb_checkpoint_duration_seconds"
 	MetCheckpointLastSuccessTimestmp = "nishidb_checkpoint_last_success_timestamp"

@@ -132,10 +132,13 @@ func New(idx Indexes) *Store {
 func valKey(v types.Value) string {
 	var scratch [40]byte // cobre ipv6_prefix (17B) e a maioria das strings
 	b := append(scratch[:0], byte(v.Type))
-	switch v.Type {
-	case types.TypeInt64, types.TypeDouble, types.TypeBool, types.TypeTimestamp:
+	// CarregaI64 e não um switch local: um tipo de largura fixa esquecido no
+	// ramo de bytes faria TODOS os seus valores colapsarem na chave [tag] no
+	// dublê — teste verde aqui e explosão na integração, que é exatamente a
+	// divergência que este dublê existe para expor.
+	if v.Type.CarregaI64() {
 		b = binary.LittleEndian.AppendUint64(b, uint64(v.I64))
-	default:
+	} else {
 		b = append(b, v.Bytes...)
 	}
 	return string(b)
@@ -307,6 +310,25 @@ func (s *Store) GetByKey(key, buf []byte) (types.Record, []byte, bool, error) {
 	return s.readRow(r, buf)
 }
 
+// Estado espelha o Store real: três estados, e o record de uma entidade
+// expirada volta com RowID e Sequence VÁLIDOS — é deles que o stale check
+// depende para não deixar um evento antigo ressuscitar a row.
+func (s *Store) Estado(key, buf []byte) (types.Record, []byte, types.Presenca, error) {
+	rowID, ok := s.byKey[string(key)]
+	if !ok {
+		return types.Record{}, buf, types.PresencaAusente, nil
+	}
+	r := s.rows[rowID]
+	rec, out, lido, err := s.readRow(r, buf)
+	if err != nil || !lido {
+		return types.Record{}, out, types.PresencaAusente, err
+	}
+	if !r.live() {
+		return rec, out, types.PresencaExpirada, nil
+	}
+	return rec, out, types.PresencaViva, nil
+}
+
 // GetByRowID idem, por rowId; ok=false para row inexistente ou tombstoned
 // (é a checagem de liveness dos caminhos indexados).
 func (s *Store) GetByRowID(id types.RowID, buf []byte) (types.Record, []byte, bool, error) {
@@ -320,12 +342,17 @@ func (s *Store) GetByRowID(id types.RowID, buf []byte) (types.Record, []byte, bo
 // Sequence devolve a última sequence aplicada à row. ok=false apenas para
 // row sem estado publicado: row tombstoned MANTÉM a sequence visível (no
 // real a location existe, só carrega o bit de tombstone).
-func (s *Store) Sequence(id types.RowID) (int64, bool) {
+func (s *Store) Sequence(id types.RowID) (int64, types.Presenca) {
 	r, ok := s.rows[id]
 	if !ok {
-		return 0, false
+		return 0, types.PresencaAusente
 	}
-	return r.seq, true
+	// A sequence de uma row expirada volta, como no Store real: é o
+	// lastSequence do §58, e escondê-la reabriria o débito 25 no dublê.
+	if !r.live() {
+		return r.seq, types.PresencaExpirada
+	}
+	return r.seq, types.PresencaViva
 }
 
 func (s *Store) readRow(r *row, buf []byte) (types.Record, []byte, bool, error) {
@@ -352,6 +379,20 @@ func (s *Store) SetTombstone(id types.RowID) {
 	if r, ok := s.rows[id]; ok {
 		r.flags |= types.FlagTombstone
 	}
+}
+
+// LimpaTombstone desliga o bit, para o teste observar a entidade reaberta.
+func (s *Store) LimpaTombstone(id types.RowID) {
+	if r, ok := s.rows[id]; ok {
+		r.flags &^= types.FlagTombstone
+	}
+}
+
+// RowIDDaKey resolve a key sem passar pela liveness — o teste precisa do id
+// da row que acabou de marcar como lápide.
+func (s *Store) RowIDDaKey(key string) (types.RowID, bool) {
+	id, ok := s.byKey[key]
+	return id, ok
 }
 
 // ScanLive devolve um iterador de rowIds vivos em ordem CRESCENTE

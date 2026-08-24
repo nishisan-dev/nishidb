@@ -73,7 +73,7 @@ func TestConvertRadiusFixture(t *testing.T) {
 			continue
 		}
 		name := string(f.Key)
-		v, newArena, err := Convert(f, target, arena)
+		v, newArena, err := Convert(f, target, nil, arena)
 		if err != nil {
 			t.Fatalf("campo %q: %v", name, err)
 		}
@@ -126,7 +126,7 @@ func TestParseRadiusFixtureWithSpecYAML(t *testing.T) {
 	}
 
 	var b PatchBuffer
-	if err := b.Parse(data, c); err != nil {
+	if err := b.Parse(data, c, time.Now()); err != nil {
 		t.Fatalf("Parse da amostra real: %v", err)
 	}
 

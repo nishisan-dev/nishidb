@@ -48,7 +48,7 @@ func TestConvertRecusaUTF8Invalido(t *testing.T) {
 				t.Fatalf("fixture inválida para o ponto do teste: %q não é JSON válido", tc.field.Raw)
 			}
 
-			_, _, err := Convert(tc.field, tc.target, nil)
+			_, _, err := Convert(tc.field, tc.target, nil, nil)
 			if err == nil {
 				t.Fatal("UTF-8 inválido foi aceito")
 			}
@@ -70,7 +70,7 @@ func TestUTF8InvalidoNaoSujaOArena(t *testing.T) {
 	tamanho := len(arena)
 
 	f := jsonp.Field{Kind: jsonp.KindString, Raw: []byte(invalidUTF8)}
-	_, out, err := Convert(f, types.TypeString, arena)
+	_, out, err := Convert(f, types.TypeString, nil, arena)
 	if err == nil {
 		t.Fatal("esperava erro")
 	}
@@ -98,7 +98,7 @@ func TestConvertAceitaUTF8Valido(t *testing.T) {
 	}
 	for _, tc := range casos {
 		t.Run(tc.nome, func(t *testing.T) {
-			v, _, err := Convert(jsonp.Field{Kind: tc.kind, Raw: []byte(tc.raw)}, tc.target, nil)
+			v, _, err := Convert(jsonp.Field{Kind: tc.kind, Raw: []byte(tc.raw)}, tc.target, nil, nil)
 			if err != nil {
 				t.Fatalf("Convert(%q): %v", tc.raw, err)
 			}

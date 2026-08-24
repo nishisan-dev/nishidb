@@ -2,6 +2,7 @@ package materializer
 
 import (
 	"testing"
+	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
@@ -20,7 +21,7 @@ var benchRadiusPatch = []byte(`{"id":"CMP-V0001PPCLP-013","_SEQ":{"$numberLong":
 func benchState(tb testing.TB, c *schema.Compiled) ([]byte, []patchEntry) {
 	tb.Helper()
 	var full PatchBuffer
-	if err := full.Parse(benchRadiusEvent, c); err != nil {
+	if err := full.Parse(benchRadiusEvent, c, time.Now()); err != nil {
 		tb.Fatal(err)
 	}
 	var state []byte
@@ -39,7 +40,7 @@ func benchState(tb testing.TB, c *schema.Compiled) ([]byte, []patchEntry) {
 func benchPatchEntries(tb testing.TB, c *schema.Compiled, event []byte) []patchEntry {
 	tb.Helper()
 	pb := &PatchBuffer{}
-	if err := pb.Parse(event, c); err != nil {
+	if err := pb.Parse(event, c, time.Now()); err != nil {
 		tb.Fatal(err)
 	}
 	return pb.entries

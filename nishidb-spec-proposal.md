@@ -655,8 +655,14 @@ ipv4_prefix
 ipv6_prefix
 bytes
 json
+datetime
+time
 auto
 ```
+
+`datetime` e `time` exigem `format:` — um padrão de tokens fechados, validado
+no load. `datetime` é wall-clock sem fuso, resolvido para instante pelo fuso
+do host; `time` é hora do dia, e não é instante.
 
 ---
 
@@ -669,6 +675,8 @@ int64       → 8 bytes
 double      → 8 bytes
 boolean     → 1 byte
 timestamp   → int64 epoch millis
+datetime    → int64 epoch millis (resolvido em time.Local na ingestão)
+time        → int64 millis desde a meia-noite, [0, 86400000)
 ipv4        → uint32
 ipv6        → 16 bytes
 ```
@@ -1832,6 +1840,8 @@ Parâmetros nunca devem ser interpolados manualmente no SQL.
 | ipv6_prefix | VARCHAR   |
 | bytes       | VARBINARY |
 | json        | VARCHAR   |
+| datetime    | TIMESTAMP |
+| time        | TIME      |
 
 ---
 

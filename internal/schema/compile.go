@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/nishisan-dev/nishidb/internal/typeparse"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
@@ -95,6 +96,20 @@ type CompiledField struct {
 	Index                    IndexKind
 	IsKey, IsSequence, IsTTL bool
 
+	// IsSystem marca campo que o WRITER injeta e o operador não declara.
+	// Ele existe no schema como qualquer outro — tem FieldID, é gravado no
+	// payload e SELECT pelo nome funciona —, mas fica fora do `SELECT *` e
+	// das colunas do /v1/metadata: quem pede "tudo" quer os campos do
+	// próprio dado, não a contabilidade interna do banco.
+	IsSystem bool
+
+	// Format é o padrão declarado no YAML e Layout é ele compilado. Não-nil
+	// exatamente quando Type é datetime ou time; o Format é guardado ao lado
+	// do Layout porque a mensagem de literal inválido precisa dizer o que se
+	// esperava — "literal inválido para a coluna x" sozinho é inacionável.
+	Format string
+	Layout *typeparse.Layout
+
 	// autoType é o tipo FIXADO de um campo auto (R11); TypeNull = ainda não
 	// observado. Atômico porque o writer o fixa enquanto goroutines de query
 	// leem EffectiveType sem lock — um campo simples aqui seria data race que
@@ -158,6 +173,15 @@ type Compiled struct {
 
 	Key, Seq, TTL *CompiledField
 
+	// ExpireAfterWrite é o idle timeout do dataset; zero = sem expiração por
+	// escrita. Mutuamente exclusivo com TTL, pela validação da spec.
+	ExpireAfterWrite time.Duration
+
+	// Escrita é o campo de sistema que registra o instante da escrita.
+	// Não-nil exatamente quando ExpireAfterWrite > 0 — sem expiração não há
+	// para que pagar 11 bytes por record.
+	Escrita *CompiledField
+
 	mu      sync.RWMutex
 	byName  map[string]*CompiledField
 	byID    map[types.FieldID]*CompiledField
@@ -178,6 +202,9 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 		byID:    make(map[types.FieldID]*CompiledField),
 		exclude: make(map[string]struct{}, len(s.Schema.Exclude)),
 		dict:    dict,
+	}
+	if ttl := s.Materialization.TTL; ttl != nil {
+		c.ExpireAfterWrite = ttl.ExpireAfterWrite
 	}
 	if s.Materialization.Mode == "replace" {
 		c.Mode = ModeReplace
@@ -215,6 +242,13 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 	} else {
 		names = append(names, s.Schema.Include...)
 	}
+	// O campo de sistema entra no conjunto a compilar como qualquer outro:
+	// assim ele ganha FieldID pelo mesmo caminho determinístico e o dicionário
+	// o registra de forma durável, que é o que faz o replay do tail conseguir
+	// reconstruir o índice de expiração a partir dos próprios records.
+	if c.ExpireAfterWrite > 0 {
+		names = append(names, CampoInstanteDeEscrita)
+	}
 	sort.Strings(names)
 
 	seqField := ""
@@ -241,12 +275,26 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 			IsSequence: name == seqField,
 			IsTTL:      name == ttlField,
 		}
+		if name == CampoInstanteDeEscrita {
+			// Tipo fixo, não declarável: é o writer que o preenche, com o
+			// relógio do processo, e não há format nem inferência envolvidos.
+			cf.Type, cf.IsSystem = types.TypeTimestamp, true
+			c.Escrita = cf
+			c.byName[cf.Name] = cf
+			c.byID[cf.ID] = cf
+			continue
+		}
 		if spec, declared := s.Schema.Fields[name]; declared {
 			cf.Alias = spec.Alias
 			if spec.Type == "auto" {
 				cf.IsAuto = true
 			} else {
 				cf.Type, _ = FieldTypeByName(spec.Type)
+				l, err := CompilaFormato(spec.Type, spec.Format)
+				if err != nil {
+					return nil, fmt.Errorf("campo %q: %w", name, err)
+				}
+				cf.Format, cf.Layout = spec.Format, l
 			}
 			switch spec.Index {
 			case "bitmap":
@@ -262,6 +310,17 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 		// processo reiniciado age como se o campo nunca tivesse sido visto.
 		if cf.IsAuto {
 			if t, ok := dict.TypeHint(cf.ID); ok {
+				// datetime e time só existem declarados, porque só a
+				// declaração traz o format: sem ele não há Layout, e um campo
+				// auto com tipo temporal derefereciaria nil no materializer e
+				// no binder. InferType nunca os produz, então um hint assim é
+				// dicionário escrito por outra configuração — recusa alta na
+				// subida, com a causa nomeada, em vez de panic na primeira
+				// query.
+				if t == types.TypeDateTime || t == types.TypeTime {
+					return nil, fmt.Errorf("campo %q: dicionário traz tipo %v para campo auto, "+
+						"que não tem format declarado; declare o campo com type e format em schema.fields", name, t)
+				}
 				cf.autoType.Store(uint32(t))
 			}
 		}
@@ -358,11 +417,25 @@ func (c *Compiled) FieldByName(name []byte) (*CompiledField, bool) {
 // CompiledField é imutável após a criação, exceto pelo tipo fixado de campo
 // auto, que é publicado atomicamente.
 func (c *Compiled) FieldsByID() []*CompiledField {
+	return c.camposOrdenados(false)
+}
+
+// FieldsByIDIncluindoSistema devolve TODOS os campos, inclusive os que o
+// writer injeta. É para quem precisa do conjunto físico do payload — não para
+// quem monta a lista de colunas que o usuário vê.
+func (c *Compiled) FieldsByIDIncluindoSistema() []*CompiledField {
+	return c.camposOrdenados(true)
+}
+
+func (c *Compiled) camposOrdenados(comSistema bool) []*CompiledField {
 	c.mu.RLock()
 	// byID tem UMA entrada por campo (byName tem duas para campo com alias):
 	// não há duplicata a remover aqui.
 	out := make([]*CompiledField, 0, len(c.byID))
 	for _, f := range c.byID {
+		if f.IsSystem && !comSistema {
+			continue
+		}
 		out = append(out, f)
 	}
 	c.mu.RUnlock()

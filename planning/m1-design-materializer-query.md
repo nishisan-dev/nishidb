@@ -576,6 +576,8 @@ Coerção acontece no **bind** (literal/param → representação do tipo da COL
 | double | — | → float64 | float64 | — | todos |
 | boolean | — | — | — | 0/1 | `=`, `!=` |
 | timestamp | parse RFC3339 → millis | epoch millis | — | — | todos (numérico) |
+| datetime | parse pelo `format:` do campo, em `time.Local` → millis UTC | epoch millis | — | — | todos (numérico) |
+| time | parse pelo `format:` do campo → millis do dia | millis do dia, `[0, 86400000)` | — | — | todos (numérico) |
 | ipv4 | dotted-quad → uint32 BE | — | — | — | todos (numérico — range scan futuro) |
 | ipv6 | parse → 16B | — | — | — | todos (`bytes.Compare`) |
 | ipv4/ipv6_prefix | parse → 5B/17B | — | — | — | só `=`, `!=` |
@@ -586,6 +588,7 @@ Regras adicionais:
 - Comparação com campo **ausente** na row (= NULL, D2): resultado **false** para qualquer comparador; `IS NULL` → true. Sem NOT genérico na v1, a lógica trivalente não vaza (false é seguro sob AND/OR).
 - int64 vs literal float com parte fracionária: ambos promovidos a float64 (documentar perda de precisão > 2^53 — aceitável v1).
 - Param `?`: coerido pelo tipo da coluna com as mesmas regras (param "string" p/ coluna ipv4 = parse dotted-quad, etc.), na execução.
+- `datetime`/`time`: o literal de texto usa o **`format:` declarado do campo**, nunca RFC3339. Aceitar as duas grafias criaria um texto que a query aceita e a ingestão recusa — a divergência que o risco R3 nomeia. Em `time`, literal inteiro fora de `[0, 86400000)` é **erro de bind**, não resultado vazio: `hora = 1786568400000` é engano de quem escreveu, e devolver vazio o faria parecer resposta.
 
 ### 3.7 Executor streaming — `internal/query/executor`
 

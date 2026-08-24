@@ -671,6 +671,13 @@ func (s storeErro) Put(key []byte, seq int64, flags uint8, payload []byte, prev 
 	return s.Store.Put(key, seq, flags, payload, prev)
 }
 
+func (s storeErro) Estado(key, buf []byte) (types.Record, []byte, types.Presenca, error) {
+	if s.get != nil {
+		return types.Record{}, buf, types.PresencaAusente, s.get
+	}
+	return s.Store.Estado(key, buf)
+}
+
 func (s storeErro) GetByKey(key, buf []byte) (types.Record, []byte, bool, error) {
 	if s.get != nil {
 		return types.Record{}, buf, false, s.get
@@ -753,6 +760,19 @@ func TestApplyErroDeLeituraEhFailed(t *testing.T) {
 type storePayloadTruncado struct {
 	*fakestorage.Store
 	rec types.Record
+}
+
+func (s storePayloadTruncado) Estado(key, buf []byte) (types.Record, []byte, types.Presenca, error) {
+	buf = buf[:0]
+	buf = append(buf, key...)
+	keyEnd := len(buf)
+	buf = append(buf, s.rec.Payload...)
+	return types.Record{
+		RowID:    s.rec.RowID,
+		Sequence: s.rec.Sequence,
+		Key:      buf[:keyEnd:keyEnd],
+		Payload:  buf[keyEnd:len(buf):len(buf)],
+	}, buf, types.PresencaViva, nil
 }
 
 func (s storePayloadTruncado) GetByKey(key, buf []byte) (types.Record, []byte, bool, error) {

@@ -287,3 +287,51 @@ func (s *Sequences) Msync() error { return s.dense.region.Msync() }
 
 // Close libera o mapeamento.
 func (s *Sequences) Close() error { return s.dense.region.Close() }
+
+// Escritas é o índice rowId→instante da última escrita, em epoch millis.
+//
+// É DERIVADO, como o Sequences: a fonte da verdade é o campo de sistema no
+// payload do record, e o replay do tail o reconstrói pelo mesmo applyRecord
+// que o Put usa. Isso não é detalhe de implementação, é o que torna a
+// expiração segura contra crash — um índice sem fonte no record deixaria a
+// row nascida no tail com entrada zerada, e não existe interpretação segura
+// de zero: "sem prazo" vaza a row para sempre, "vencido" apaga uma row viva.
+//
+// Por isso zero significa DESCONHECIDO, nunca vencido. Row desconhecida ganha
+// um prazo cheio de carência na primeira varredura, e é o que permite ligar a
+// expiração num dataset já materializado sem reprocessar nada.
+type Escritas struct {
+	dense *denseFile
+}
+
+var escritasMagic = [4]byte{'N', 'D', 'B', 'E'}
+
+// OpenEscritas cria/reabre o arquivo com capacidade para minRows.
+func OpenEscritas(path string, minRows uint64) (*Escritas, error) {
+	d, err := openDense(path, escritasMagic, minRows)
+	if err != nil {
+		return nil, err
+	}
+	return &Escritas{dense: d}, nil
+}
+
+// Get devolve o instante da última escrita do rowId em epoch millis, e
+// conhecido=false quando a entrada nunca foi gravada.
+func (e *Escritas) Get(rowID types.RowID) (millis int64, conhecido bool) {
+	v, ok := e.dense.load(rowID)
+	if !ok || v == 0 {
+		return 0, false
+	}
+	return int64(v), true
+}
+
+// Set grava o instante da última escrita. Exclusivo do writer.
+func (e *Escritas) Set(rowID types.RowID, millis int64) error {
+	return e.dense.store(rowID, uint64(millis))
+}
+
+// Msync força as páginas sujas para disco.
+func (e *Escritas) Msync() error { return e.dense.region.Msync() }
+
+// Close libera o mapeamento.
+func (e *Escritas) Close() error { return e.dense.region.Close() }

@@ -92,6 +92,8 @@ func runOffsets(args []string, amb Ambiente) int {
 		Dataset:          *dataset,
 		SegmentSize:      cfg.SegmentSize(),
 		BitmapFieldNames: bitmaps,
+		ExpireAfterWrite: spec.ExpiraApos(),
+		CampoDeEscrita:   schema.CampoInstanteDeEscrita,
 	})
 	if err != nil {
 		fmt.Fprintf(amb.Stderr, "offsets: %v\n", err)

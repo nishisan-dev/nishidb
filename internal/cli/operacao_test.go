@@ -249,6 +249,27 @@ func estatisticas(t *testing.T, a *ambienteRemoto) protocolo.Estatisticas {
 	return e
 }
 
+// esperaConsultasDrenarem bloqueia até o servidor não reportar mais nenhuma
+// consulta ativa, para que uma medição feita depois seja comparável com outra.
+func esperaConsultasDrenarem(t *testing.T, a *ambienteRemoto) {
+	t.Helper()
+	limite := time.Now().Add(5 * time.Second)
+	for {
+		e := estatisticas(t, a)
+		ativas := int64(0)
+		for _, d := range e.Datasets {
+			ativas += d.Query.Active
+		}
+		if ativas == 0 {
+			return
+		}
+		if time.Now().After(limite) {
+			t.Fatalf("%d consulta(s) continuam ativas depois de 5s: o servidor não está drenando", ativas)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 func metadados(t *testing.T, a *ambienteRemoto, consulta string) protocolo.Metadados {
 	t.Helper()
 	var m protocolo.Metadados
@@ -492,6 +513,20 @@ func TestStatusRemotoFuncionaComOServidorNoAr(t *testing.T) {
 	}
 	a.stdout.Reset()
 	a.stderr.Reset()
+
+	// As consultas de aquecimento precisam ter DRENADO antes de medir.
+	//
+	// O `query` do CLI retorna quando o cliente terminou de ler a resposta,
+	// e nesse instante o servidor ainda pode não ter decrementado o medidor
+	// de consultas ativas — o handler decrementa ao terminar, e o cliente vê
+	// a última linha antes disso. Sem esperar, o `status` abaixo e o
+	// /v1/stats mais adiante fotografam momentos DIFERENTES: a saída textual
+	// sai com "2 ativas" e o oráculo, lido depois, com 0.
+	//
+	// Não é hipótese: foi assim que este teste falhou no CI (job "test
+	// (./...)" da run 32676650648), passando em toda execução local e no
+	// próprio -race da mesma run. Uma máquina mais lenta alarga a janela.
+	esperaConsultasDrenarem(t, a)
 
 	if code := a.roda("status", "--server", a.endereco()); code != 0 {
 		t.Fatalf("exit = %d, queria 0: %s", code, a.stderr.String())

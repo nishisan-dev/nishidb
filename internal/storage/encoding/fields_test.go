@@ -36,6 +36,10 @@ func fieldCases() []struct {
 		{"string_longa", 15, types.Value{Type: types.TypeString, Bytes: bytes.Repeat([]byte{'x'}, 300)}},
 		{"bytes", 16, types.Value{Type: types.TypeBytes, Bytes: []byte{0x00, 0xFF, 0x10}}},
 		{"json", 17, types.Value{Type: types.TypeJSON, Bytes: []byte(`{"a":[1,2],"b":"c"}`)}},
+		{"datetime", 18, types.Value{Type: types.TypeDateTime, I64: 1787878442000}},
+		{"datetime_epoch_zero", 19, types.Value{Type: types.TypeDateTime, I64: 0}},
+		{"time_meia_noite", 20, types.Value{Type: types.TypeTime, I64: 0}},
+		{"time_ultimo_millis_do_dia", 21, types.Value{Type: types.TypeTime, I64: 86_399_999}},
 	}
 }
 
@@ -54,15 +58,17 @@ func assertValueEqual(t *testing.T, want, got types.Value) {
 	if got.Type != want.Type {
 		t.Fatalf("tipo: esperado %#x, obtido %#x", want.Type, got.Type)
 	}
-	switch want.Type {
-	case types.TypeInt64, types.TypeDouble, types.TypeBool, types.TypeTimestamp:
+	// CarregaI64 e não um switch local: um tipo de largura fixa esquecido no
+	// ramo de bytes compararia nil com nil e este helper aprovaria QUALQUER
+	// valor — o round-trip passaria sem testar nada.
+	if want.Type.CarregaI64() {
 		if got.I64 != want.I64 {
 			t.Fatalf("I64: esperado %d, obtido %d", want.I64, got.I64)
 		}
-	default:
-		if !bytes.Equal(got.Bytes, want.Bytes) {
-			t.Fatalf("Bytes: esperado %v, obtido %v", want.Bytes, got.Bytes)
-		}
+		return
+	}
+	if !bytes.Equal(got.Bytes, want.Bytes) {
+		t.Fatalf("Bytes: esperado %v, obtido %v", want.Bytes, got.Bytes)
 	}
 }
 

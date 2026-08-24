@@ -673,6 +673,50 @@ conhecê-las. Cada uma tem dono em [`debitos.md`](debitos.md).
   substituições existem no total e somem do detalhe, que deixa de fechar com
   `aplicados`. É o **débito 48**.
 
+## Expiração por inatividade
+
+`materialization.ttl.expireAfterWrite` declara um idle timeout: a entidade sai
+quando passa a duração sem receber escrita, e **cada escrita renova o prazo**.
+Entidade ativa nunca expira; entidade abandonada sai sozinha. É o que impede o
+estado vivo de crescer com o espaço de chaves — a compaction não segura isso,
+porque ela recupera versões superadas, não entidades inteiras.
+
+O instante da última escrita vira um campo de sistema no payload, `_writtenAt`
+(11 bytes por record). Ele guarda um **fato**, não uma política: mudar a
+duração no YAML vale na hora para as linhas existentes, em vez de exigir
+reescrever o dataset.
+
+**A visibilidade não depende do coletor.** Os três pontos de liveness checam o
+prazo, então a entidade vencida some da consulta mesmo com o coletor parado,
+atrasado ou nunca ligado. O coletor é mecanismo de **espaço**, não de
+correção — e é por isso que `nishidb query` e `nishidb server` respondem a
+mesma coisa sobre o mesmo dataset.
+
+A coleta tem **duas rotas**, e elas cobrem coisas diferentes:
+
+| Rota | Como acha | O que ela não alcança |
+|---|---|---|
+| **Oportunista**, na compaction | Ela já lê todo record do segmento que elegeu, então conferir o prazo custa uma carga de 8 bytes. Ao achar um vencido, grava a lápide direto no destino em vez de copiar o payload | Segmento sem garbage. Garbage vem de update, e entidade abandonada não recebe update — então o segmento onde ela mora nunca é candidato |
+| **Coletor**, por passada | Varre o índice de escritas, não os segmentos | Nada; é ele que cobre o ponto cego acima |
+
+A passada do coletor tem freio duplo, em `storage.expiracao`, e vence o
+primeiro a bater: `maxPorPassada` (default 1000) e `tempoPorPassada` (default
+5s). São dois porque os riscos são opostos — **marcar é um append**, então uma
+leva grande escreve muito antes de a compaction recuperar qualquer coisa e
+disputa o lock de escrita com a ingestão; e varrer milhões de entradas sem
+achar nada não escreve nada, mas seguraria a goroutine.
+
+Entidade materializada **antes** de a expiração ser ligada não tem o campo de
+sistema, o que o índice lê como prazo **desconhecido** — e desconhecido nunca
+vence. A primeira passada do coletor lhe dá carência, contando um prazo cheio
+a partir dali. É o que permite ligar a chave num dataset já materializado sem
+reprocessar nada, e o que impede essas entidades de ficarem imortais.
+
+O que **não** volta é a chave: a lápide é copiada para frente enquanto a
+primary nomear a key, e esquecê-la exige `tombstoneRetention`, que ainda não
+tem motor. Cada entidade expirada deixa um resíduo do tamanho da lápide
+(header + key + 11 bytes).
+
 ## Referência de tipos de campo
 
 O que `type:` aceita no YAML do dataset, o que cada um aceita como **entrada** e
@@ -691,12 +735,91 @@ onde pode ser usado. Sem esta tabela, escrever um YAML novo é tentativa e erro.
 | `ipv6_prefix` | string `addr/len`, mesmas regras do `ipv4_prefix`; prefixo v4 é recusado, e prefixo v6 é recusado no `ipv4_prefix` | não | não |
 | `bytes` | string **base64** (`StdEncoding`: alfabeto padrão, com padding). base64url é recusado | não | não |
 | `json` | **só object ou array** (guardado cru, exatamente como veio); escalar — string, número, `true`/`false` — é **recusado** | não | não |
+| `datetime` | string no **`format:` declarado** (obrigatório), **sem fuso** — o instante é resolvido pelo fuso do **host**; **número = epoch millis**, como no `timestamp` | não | não |
+| `time` | string no **`format:` declarado** (obrigatório): hora do dia, sem data e sem fuso; **número = millis desde a meia-noite**, e fora de `[0, 86400000)` é recusado | não | não |
 | `auto` | qualquer entrada, mas o tipo inferido sai de um conjunto **restrito**: string→`string`, número inteiro→`int64`, número com fração ou expoente→`double`, `true`/`false`→`boolean`, object/array→`json`, `$numberLong`→`int64`, `$date`→`timestamp`. **Nunca** infere `ipv4`, `ipv6`, prefixo ou `bytes` — uma string com cara de IP vira `string`. O tipo é **fixado na primeira observação** e persistido | não | não |
 
 Restrições da v1: a **key** (`materialization.key.type`) só pode ser `string`, e
 a **sequence** (`materialization.sequence.type`) só pode ser `int64`. Campo
 `auto` não é indexável — o tipo só existe depois do primeiro evento. Alias é
 opcional e precisa casar `[a-z0-9_]+`.
+
+### `datetime` e `time`: o `format:` é declarado, e o fuso vem do host
+
+`timestamp` cobre origem que manda RFC3339 com offset. `datetime` e `time`
+existem para a origem que manda **wall-clock sem fuso** — o caso do piloto
+`events`, cujo `firstSeen`/`lastSeen` chega como `Aug 22, 2026 08:54:02 PM`.
+
+O `format:` é **obrigatório** nos dois e usa um vocabulário **fechado** de
+tokens, validado no load:
+
+| Token | Significado | | Token | Significado |
+|---|---|---|---|---|
+| `yyyy` | ano, 4 dígitos | | `hh` / `h` | hora 12h, 2 / 1-2 dígitos |
+| `MM` / `M` | mês numérico, 2 / 1-2 dígitos | | `mm` | minuto |
+| `MMM` | mês abreviado en_US (`Jan`..`Dec`) | | `ss` | segundo |
+| `dd` / `d` | dia, 2 / 1-2 dígitos | | `SSS` | milissegundos |
+| `HH` / `H` | hora 24h, 2 / 1-2 dígitos | | `a` | `AM`/`PM` |
+
+Texto fixo com letras precisa de aspas simples (`yyyy-MM-dd'T'HH:mm:ss`), como
+no CLDR: letra nua é recusada para que um token digitado errado não vire texto
+fixo em silêncio. O piloto declara `format: "MMM d, yyyy hh:mm:ss a"`.
+
+```yaml
+    firstSeen:
+      type: datetime
+      format: "MMM d, yyyy hh:mm:ss a"
+```
+
+**A forma de largura fixa é estrita, a variável não.** `dd` exige dois dígitos;
+`d` aceita um ou dois. Como o padrão CLDR do produtor pode não ser
+zero-padded, declarar as formas variáveis (`d`, `h`) é a escolha tolerante — e
+é a recomendada quando a grafia da origem foi vista numa amostra só, porque um
+texto que o `format:` não aceita é erro de conversão, que sob `log-and-skip`
+descarta o evento inteiro.
+
+**O fuso vem do host.** Um wall-clock sem offset não tem instante até alguém
+escolher um fuso, e a escolha é o `time.Local` do processo, honrando a env
+`TZ`. Vale igual para a ingestão e para o literal SQL, e é isso que os mantém
+concordando sobre o mesmo texto. A consequência a conhecer: **o mesmo evento
+reingerido num host com outro `TZ` produz outro instante**, sem erro e sem
+log. Quem precisa de instante independente de ambiente pede offset à origem e
+declara o campo como `timestamp`.
+
+**Horário de verão.** Hora ambígua (a que acontece duas vezes, no recuo do
+relógio) fica na primeira ocorrência; hora inexistente (a pulada, no
+adiantamento) normaliza para frente. Recusar as duas transformaria uma hora
+por ano de saída legítima em descarte silencioso; o que importa é que
+ingestão e query cheguem ao **mesmo** número para o mesmo texto
+(`TestHoraAmbiguaDeDSTEhResolvidaDeFormaDeterministica`). A validade da
+**data** é conferida em UTC justamente para não recusar data válida em zona
+cuja virada desloca a meia-noite
+(`TestDataValidaNaViradaDeDSTNaoEhRecusada`).
+
+**O literal SQL usa o mesmo `format:` do campo, não RFC3339.** A propriedade
+que vale é *o texto que o produtor mandou, escrito como literal, acha a row*
+(`TestIngestaoEQueryConcordamPorTipo`). Uma grafia diferente é **erro de
+bind**, nunca resultado vazio — vazio pareceria resposta
+(`TestLiteralNoFormatoErradoNaoAchaEmSilencio`). Quem quer grafia independente
+de formato escreve o número: epoch millis em `datetime`, millis do dia em
+`time`.
+
+```sql
+SELECT identifier, lastSeen FROM events
+ WHERE lastSeen >= 'Aug 22, 2026 08:00:00 PM' LIMIT 20
+```
+
+**`datetime` não faz round-trip textual.** Entra `Aug 22, 2026 08:54:02 PM` e
+sai `"2026-08-22T23:54:02.000Z"` (com `TZ=America/Sao_Paulo`): o texto de
+relógio de parede foi consumido para resolver o instante e não é preservado.
+Renderizar em horário local faria o mesmo dataset servido de dois hosts
+produzir bytes diferentes. `time` sai como `"20:54:02.000"`, **sem `Z`** —
+não há instante, e anunciar fuso o faria parecer um timestamp de 1970.
+
+**Nenhum dos dois é indexável, e nenhum é inferido por `auto`.** O bitmap é
+denso: um campo `time` com resolução de segundo tem 86.400 valores distintos.
+E `auto` não tem `format:` declarado, então uma string com cara de data
+continua `string` — a mesma regra que já vale para IP.
 
 **Por que `int64` e `double` aceitam string.** É ajuste pós-amostra, não
 leniência: a fonte real manda `Connect-Info` como `"1000000000"`. A coerção é

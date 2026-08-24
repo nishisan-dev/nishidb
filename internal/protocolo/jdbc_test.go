@@ -1,6 +1,7 @@
 package protocolo_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/nishisan-dev/nishidb/internal/protocolo"
@@ -27,6 +28,8 @@ func TestATabelaDeTiposDoSpec73(t *testing.T) {
 		{types.TypeIPv6Prefix, "ipv6_prefix", protocolo.JDBCVarchar},
 		{types.TypeBytes, "bytes", protocolo.JDBCVarbinary},
 		{types.TypeJSON, "json", protocolo.JDBCVarchar},
+		{types.TypeDateTime, "datetime", protocolo.JDBCTimestamp},
+		{types.TypeTime, "time", protocolo.JDBCTime},
 	}
 	for _, c := range casos {
 		t.Run(c.tipo, func(t *testing.T) {
@@ -57,5 +60,29 @@ func TestTagDesconhecidaNaoViraTipoPlausivel(t *testing.T) {
 	col := protocolo.ColunaDe("x", types.FieldType(0xEE))
 	if col.Type != protocolo.TipoDesconhecido || col.JDBC != protocolo.JDBCOther {
 		t.Fatalf("coluna = %+v, quer unknown/OTHER", col)
+	}
+}
+
+// O comentário de JDBCDeTipo promete que acrescentar um FieldType sem passar
+// por ali "tem de ser uma decisão, não um esquecimento que sai como OTHER em
+// produção". Nada cobrava essa promessa: a tabela acima é escrita à mão e não
+// quebra quando uma tag entra. Este teste a cobra.
+//
+// O sintoma que ele previne é discreto: o driver publica OTHER, o
+// ResultSetMetaData não sabe descrever a coluna, e quem usa a ferramenta vê
+// um tipo genérico sem nenhum erro em lugar nenhum.
+func TestTodaTagComNomeTemJDBCEspecifico(t *testing.T) {
+	for tag := 0; tag < 0x20; tag++ {
+		ft := types.FieldType(tag)
+		nome := ft.String()
+		if strings.HasPrefix(nome, "FieldType(") {
+			continue // tag sem nome: não é tipo de campo declarável
+		}
+		if ft == types.TypeNull {
+			continue // campo auto sem observação: OTHER é a resposta certa
+		}
+		if got := protocolo.JDBCDeTipo(ft); got == protocolo.JDBCOther {
+			t.Errorf("tipo %q (0x%02x) sai como OTHER: acrescente a linha em JDBCDeTipo", nome, tag)
+		}
 	}
 }

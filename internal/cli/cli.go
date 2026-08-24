@@ -242,6 +242,8 @@ func abreDataset(cfg *nishiconfig.Config, nome string) (*storage.Store, *schema.
 		Dir:              cfg.DirDoDataset(nome),
 		SegmentSize:      cfg.SegmentSize(),
 		BitmapFieldNames: bitmaps,
+		ExpireAfterWrite: spec.ExpiraApos(),
+		CampoDeEscrita:   schema.CampoInstanteDeEscrita,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("abrindo o dataset %q: %w", nome, err)

@@ -2,6 +2,7 @@ package binder
 
 import (
 	"math"
+	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/query/parser"
 	"github.com/nishisan-dev/nishidb/internal/schema"
@@ -150,6 +151,22 @@ func celula(col types.FieldType, lit parser.OperandKind) (CompareKind, bool) {
 		case parser.OperandString, parser.OperandInt:
 			return CompareInt, true
 		}
+	case types.TypeDateTime:
+		// String é o texto no format DECLARADO do campo, não RFC3339 — ver o
+		// porquê em coerceLiteral. Inteiro é epoch millis, como no timestamp.
+		switch lit {
+		case parser.OperandString, parser.OperandInt:
+			return CompareInt, true
+		}
+	case types.TypeTime:
+		// O inteiro aqui NÃO é epoch: é millis desde a meia-noite. É a mesma
+		// palavra ("número") significando outra coisa, e por isso esta linha
+		// da tabela precisa dizê-lo — sem isso alguém escreve
+		// `hora = 1786568400000` e recebe zero linhas achando que é dado.
+		switch lit {
+		case parser.OperandString, parser.OperandInt:
+			return CompareInt, true
+		}
 	case types.TypeIPv4, types.TypeIPv6, types.TypeIPv4Prefix, types.TypeIPv6Prefix:
 		if lit == parser.OperandString {
 			return CompareBytes, true
@@ -219,6 +236,47 @@ func coerceLiteral(f *schema.CompiledField, op parser.CmpOp, lit parser.Operand,
 			return types.Value{}, CompareUnset, arena, errLiteralInvalido
 		}
 		return types.Value{Type: types.TypeTimestamp, I64: ms}, kind, arena, nil
+
+	case types.TypeDateTime:
+		if lit.Kind == parser.OperandInt {
+			return types.Value{Type: types.TypeDateTime, I64: lit.I}, kind, arena, nil
+		}
+		// O literal usa o MESMO format do campo, e não RFC3339. É a razão de
+		// existir do typeparse compartilhado: a propriedade que vale é "o
+		// texto que o produtor mandou, escrito como literal, acha a row".
+		// Aceitar RFC3339 também criaria um texto que a query aceita e a
+		// ingestão recusa — a divergência que o risco R3 nomeia. Quem quer
+		// uma grafia independente de format escreve o epoch millis.
+		//
+		// time.Local pelo mesmo motivo da ingestão: os dois lados resolvem o
+		// wall-clock com o fuso do host, ou não concordariam sobre o texto.
+		if f.Layout == nil {
+			return types.Value{}, CompareUnset, arena, errLiteralInvalido
+		}
+		ms, perr := f.Layout.DateTime([]byte(lit.S), time.Local)
+		if perr != nil {
+			return types.Value{}, CompareUnset, arena, errLiteralInvalido
+		}
+		return types.Value{Type: types.TypeDateTime, I64: ms}, kind, arena, nil
+
+	case types.TypeTime:
+		if lit.Kind == parser.OperandInt {
+			// Millis do dia, não epoch. Fora da faixa é literal inválido e
+			// não zero linhas: `hora = 1786568400000` é engano de quem
+			// escreveu, e devolver vazio o faria parecer resposta.
+			if lit.I < 0 || lit.I >= types.MillisPorDia {
+				return types.Value{}, CompareUnset, arena, errLiteralInvalido
+			}
+			return types.Value{Type: types.TypeTime, I64: lit.I}, kind, arena, nil
+		}
+		if f.Layout == nil {
+			return types.Value{}, CompareUnset, arena, errLiteralInvalido
+		}
+		ms, perr := f.Layout.TimeOfDay([]byte(lit.S))
+		if perr != nil {
+			return types.Value{}, CompareUnset, arena, errLiteralInvalido
+		}
+		return types.Value{Type: types.TypeTime, I64: ms}, kind, arena, nil
 
 	case types.TypeIPv4:
 		a, b, c, d, ok := typeparse.IPv4([]byte(lit.S))

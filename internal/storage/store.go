@@ -14,6 +14,7 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/index/bitmap"
 	"github.com/nishisan-dev/nishidb/internal/index/primary"
@@ -90,6 +91,20 @@ type Options struct {
 	// INCOMPLETO — falso negativo silencioso em query.
 	AllowBitmapDrop bool
 	SyncEveryPut    bool // durability=sync (testes/config)
+	// ExpireAfterWrite liga o idle timeout: a row deixa de ser visível quando
+	// passa este tempo sem escrita. Zero desliga tudo — nem o índice é aberto.
+	ExpireAfterWrite time.Duration
+	// CampoDeEscrita é o NOME do campo de sistema que carrega o instante da
+	// escrita, resolvido pelo dicionário do próprio dataset durante o Open.
+	// Obrigatório quando ExpireAfterWrite > 0: é dele que o applyRecord tira
+	// o valor, tanto no Put quanto no replay do tail, e é por isso que o
+	// índice de expiração é reconstruível depois de um crash.
+	//
+	// Nome e não FieldID pela mesma razão do BitmapFieldNames: os ids nascem
+	// de schema.Compile, que precisa do dicionário — e o dicionário vive
+	// dentro do Store. Exigir o id aqui obrigaria a abrir o dataset sem
+	// expiração, compilar, fechar e reabrir.
+	CampoDeEscrita string
 	// Log é o logger estruturado do §95. Quando nil, o Store escreve em
 	// stderr no formato texto — que é o comportamento que os log.Printf
 	// tinham antes, e perder a divergência de recovery só porque o chamador
@@ -182,6 +197,15 @@ type Stats struct {
 	// número que zera a cada passada. Reabrir o dataset os zera, como zera
 	// qualquer contador de processo — é a semântica que o Prometheus espera e
 	// trata com `rate()`.
+	// ExpiryRunning é o 0/1 do coletor do idle timeout; os três contadores
+	// abaixo são monotônicos e respondem, juntos, "ele está trabalhando?".
+	// Carencias importa isolada porque é a única coisa que acontece nos
+	// primeiros minutos depois de ligar a expiração num dataset já
+	// materializado — período em que Expiradas fica em zero por estar certo.
+	ExpiryRunning          bool
+	Expiradas              uint64
+	Carencias              uint64
+	ExpiryExaminadas       uint64
 	CompactionBytesRead    int64
 	CompactionBytesWritten int64
 }
@@ -196,12 +220,39 @@ const defaultSegmentSize = 512 << 20
 type Store struct {
 	opts Options
 
-	dict    *fielddict.Dict
-	segW    *segment.Writer
-	segR    *segment.Reader
-	prim    *primary.Index
-	locs    *rowindex.Locations
-	seqs    *rowindex.Sequences
+	dict *fielddict.Dict
+	segW *segment.Writer
+	segR *segment.Reader
+	prim *primary.Index
+	locs *rowindex.Locations
+	seqs *rowindex.Sequences
+	// escritas é nil quando o dataset não declara expiração: sem ela não há
+	// o que indexar, e abrir o arquivo custaria mmap por nada.
+	escritas         *rowindex.Escritas
+	expireAfterWrite time.Duration
+	campoDeEscrita   types.FieldID
+	// expiraBuf e tombBuf são do Expira, owned pelo wmu como o compactBuf:
+	// reter os dois evita realocar o record lido e o payload da lápide a cada
+	// expiração, e a varredura expira em rajada.
+	expiraBuf  []byte
+	tombBuf    []byte
+	expiradas  atomic.Uint64
+	carencias  atomic.Uint64
+	examinadas atomic.Uint64
+	// cursorExpiracao é onde a próxima passada do coletor recomeça. Só o
+	// laço do coletor o toca, e sempre sob o entra()/sai().
+	cursorExpiracao types.RowID
+
+	// Ciclo de vida do coletor, no molde do da compaction: expMu guarda o
+	// par cancela/emVoo, expAtiva é o medidor observável e expEmVoo é o que
+	// o Close aguarda antes do quiesce.
+	expMu      sync.Mutex
+	expCancela context.CancelFunc
+	expEmVoo   sync.WaitGroup
+	expAtiva   atomic.Bool
+	// agora é o relógio da expiração. Campo, e não time.Now direto, porque um
+	// teste de prazo precisa avançar o tempo sem dormir.
+	agora   func() time.Time
 	bitmaps map[types.FieldID]*bitmap.Index
 
 	nextRowID atomic.Uint64
@@ -550,6 +601,7 @@ func Open(opts Options) (*Store, error) {
 		bitmaps:  make(map[types.FieldID]*bitmap.Index),
 		segTally: make(map[uint32]*segStats),
 		segSize:  make(map[uint32]int64),
+		agora:    time.Now,
 	}
 	if opts.Metrics != nil {
 		s.cpDuracao = opts.Metrics.Histograma(metrics.MetCheckpointDurationSeconds,
@@ -597,10 +649,34 @@ func Open(opts Options) (*Store, error) {
 	if s.seqs, err = rowindex.OpenSequences(filepath.Join(idxDir, "sequences.idx"), minRows); err != nil {
 		return nil, err
 	}
+	if opts.ExpireAfterWrite > 0 {
+		if opts.CampoDeEscrita == "" {
+			// Sem o campo o applyRecord não teria de onde tirar o instante, e
+			// toda row ficaria com prazo desconhecido — a expiração nunca
+			// aconteceria, em silêncio.
+			return nil, fmt.Errorf("%w: ExpireAfterWrite exige CampoDeEscrita", ErrInvalidArgument)
+		}
+		if s.escritas, err = rowindex.OpenEscritas(filepath.Join(idxDir, "expiry.idx"), minRows); err != nil {
+			return nil, err
+		}
+		s.expireAfterWrite = opts.ExpireAfterWrite
+	}
 	m, mErr := checkpoint.Load(s.manifestPath())
 	refs, err := segment.ListSegments(dataDir)
 	if err != nil {
 		return nil, err
+	}
+
+	if s.escritas != nil {
+		// LookupOrCreate e não Lookup: num dataset novo o campo ainda não
+		// existe, e criá-lo aqui é o que garante que o id seja o MESMO que o
+		// schema.Compile vai resolver depois — os dois passam pelo mesmo
+		// dicionário durável.
+		id, err := s.dict.LookupOrCreate([]byte(opts.CampoDeEscrita))
+		if err != nil {
+			return nil, fmt.Errorf("storage: registrando %q no dicionário: %w", opts.CampoDeEscrita, err)
+		}
+		s.campoDeEscrita = id
 	}
 
 	campos, err := s.resolveBitmapFields(opts)
@@ -859,7 +935,10 @@ func (s *Store) lookup(key, buf []byte) (rec types.Record, out []byte, exists, l
 			return false, nil // colisão de hash: continua o probe
 		}
 		rec = r
-		live = locFlags&types.FlagTombstone == 0
+		// A liveness tem DUAS causas de morte: a lápide já publicada e o
+		// prazo vencido que o coletor ainda não recolheu. Contá-las juntas
+		// aqui é o que faz a visibilidade não depender do agendador.
+		live = locFlags&types.FlagTombstone == 0 && !s.prazoVencido(rid)
 		return true, nil
 	}
 	_, exists, err = s.prim.Find(key, validate)
@@ -884,6 +963,34 @@ func (s *Store) GetByKey(key, buf []byte) (types.Record, []byte, bool, error) {
 	return rec, out, true, nil
 }
 
+// Estado resolve a key e devolve os TRÊS estados possíveis (§58). É o que o
+// materializer usa: ele precisa distinguir "key nova" de "entidade que
+// existiu", porque só no segundo caso o stale check tem uma sequence anterior
+// contra a qual comparar — e sem essa comparação um evento antigo ressuscita
+// a row.
+//
+// O GetByKey continua existindo com bool para o caminho de LEITURA, onde a
+// pergunta é outra: "esta row aparece na query?". Duas perguntas diferentes,
+// duas assinaturas.
+func (s *Store) Estado(key, buf []byte) (types.Record, []byte, types.Presenca, error) {
+	if err := s.entra(); err != nil {
+		return types.Record{}, buf, types.PresencaAusente, err
+	}
+	defer s.sai()
+	rec, out, exists, live, err := s.lookup(key, buf)
+	switch {
+	case err != nil:
+		return types.Record{}, out, types.PresencaAusente, err
+	case !exists:
+		return types.Record{}, out, types.PresencaAusente, nil
+	case !live:
+		// O record VOLTA, e não zerado: RowID e Sequence são o que o stale
+		// check e a ressurreição precisam.
+		return rec, out, types.PresencaExpirada, nil
+	}
+	return rec, out, types.PresencaViva, nil
+}
+
 // GetByRowID devolve o record corrente da row. ok=false para row sem
 // location ou tombstoned (checagem de liveness dos caminhos indexados).
 func (s *Store) GetByRowID(id types.RowID, buf []byte) (types.Record, []byte, bool, error) {
@@ -896,7 +1003,7 @@ func (s *Store) GetByRowID(id types.RowID, buf []byte) (types.Record, []byte, bo
 		return types.Record{}, buf, false, nil
 	}
 	seg, off, locFlags := rowindex.Unpack(packed)
-	if locFlags&types.FlagTombstone != 0 {
+	if locFlags&types.FlagTombstone != 0 || s.prazoVencido(id) {
 		return types.Record{}, buf, false, nil
 	}
 	rec, out, err := s.segR.ReadRecord(seg, off, buf)
@@ -1142,6 +1249,21 @@ func (s *Store) applyRecord(a recordApply) error {
 	if err := s.seqs.Set(a.rowID, a.seq); err != nil {
 		return err
 	}
+	// 6b. instante da escrita, LIDO DO PAYLOAD.
+	//
+	// Ler do payload, e não do relógio daqui, é o que torna o índice de
+	// expiração reconstruível: applyRecord é o único caminho de aplicação de
+	// estado e roda tanto no Put quanto no replay do tail, então depois de um
+	// crash o replay repõe exatamente os mesmos instantes. Se o valor viesse
+	// do relógio, o replay empurraria todos os prazos para frente pelo tempo
+	// de queda — e um processo reiniciado em laço nunca expiraria nada.
+	if s.escritas != nil {
+		if ms, ok := instanteDeEscrita(a.payload, s.campoDeEscrita); ok {
+			if err := s.escritas.Set(a.rowID, ms); err != nil {
+				return err
+			}
+		}
+	}
 	// 7. COMMIT POINT: publica a location.
 	if a.mode == applyReplay {
 		// Recovery: grava direto no mmap, sem overlay. A invariante §6.1
@@ -1163,6 +1285,45 @@ func (s *Store) applyRecord(a recordApply) error {
 		s.applyBitmapClears(a.rowID, a.prevPayload, a.payload)
 	}
 	return nil
+}
+
+// instanteDeEscrita extrai o campo de sistema do payload. Ausente devolve
+// ok=false, que o índice registra como DESCONHECIDO — nunca como vencido.
+func instanteDeEscrita(payload []byte, campo types.FieldID) (int64, bool) {
+	var r encoding.FieldReader
+	r.Reset(payload)
+	for {
+		id, v, ok := r.Next()
+		if !ok {
+			return 0, false
+		}
+		if id == campo {
+			return v.I64, v.Type == types.TypeTimestamp
+		}
+		if id > campo {
+			return 0, false // payload é ordenado por FieldID: passou, não tem
+		}
+	}
+}
+
+// prazoVencido é o predicado de leitura da expiração, e ele existe para que a
+// visibilidade NÃO dependa do agendador: uma row deixa de aparecer assim que
+// o prazo passa, mesmo com o coletor parado, atrasado ou nunca ligado. O
+// agendador vira mecanismo de ESPAÇO, não de correção — e `nishidb query` e
+// `nishidb server` respondem a mesma coisa sobre o mesmo dataset.
+//
+// Prazo DESCONHECIDO (entrada zerada) não vence: é a row anterior à ativação
+// da expiração, ou a que perdeu o índice, e apagá-la seria perder dado vivo
+// por falta de informação. Ela ganha carência na primeira varredura.
+func (s *Store) prazoVencido(rowID types.RowID) bool {
+	if s.escritas == nil {
+		return false
+	}
+	ms, conhecido := s.escritas.Get(rowID)
+	if !conhecido {
+		return false
+	}
+	return s.agora().UnixMilli()-ms >= s.expireAfterWrite.Milliseconds()
 }
 
 // failWriter registra o primeiro erro pós-Append e o devolve embrulhado em
@@ -1250,12 +1411,13 @@ func valueEqual(a, b types.Value) bool {
 	if a.Type != b.Type {
 		return false
 	}
-	switch a.Type {
-	case types.TypeInt64, types.TypeDouble, types.TypeBool, types.TypeTimestamp:
+	// CarregaI64 e não um switch local: tipo de largura fixa esquecido no
+	// ramo de bytes compara nil com nil e devolve true para valores
+	// diferentes, e o diff conclui em silêncio que o campo não mudou.
+	if a.Type.CarregaI64() {
 		return a.I64 == b.I64
-	default:
-		return bytes.Equal(a.Bytes, b.Bytes)
 	}
+	return bytes.Equal(a.Bytes, b.Bytes)
 }
 
 // applyBitmapSets liga as postings novas (campo que entra ou muda) — roda
@@ -1386,6 +1548,9 @@ func (it *liveIterator) Next() bool {
 		if _, _, locFlags := rowindex.Unpack(packed); locFlags&types.FlagTombstone != 0 {
 			continue
 		}
+		if it.s.prazoVencido(id) {
+			continue
+		}
 		it.cur = id
 		return true
 	}
@@ -1482,15 +1647,25 @@ func (s *Store) LookupBitmap(field types.FieldID, v types.Value) (types.RowIDIte
 // location publicada — a sequence só tem significado com estado visível).
 // Pode estar momentaneamente À FRENTE do record visível: ela é gravada no
 // passo 6 do Put, antes do publish (passo 7).
-func (s *Store) Sequence(id types.RowID) (int64, bool) {
+func (s *Store) Sequence(id types.RowID) (int64, types.Presenca) {
 	if err := s.entra(); err != nil {
-		return 0, false
+		return 0, types.PresencaAusente
 	}
 	defer s.sai()
-	if _, ok := s.locs.Get(id); !ok {
-		return 0, false
+	packed, ok := s.locs.Get(id)
+	if !ok {
+		return 0, types.PresencaAusente
 	}
-	return s.seqs.Get(id), true
+	// A sequence de uma row expirada VOLTA, e isso é o débito 25. Escondê-la
+	// atrás de um ok=false repetiria na outra porta o defeito do GetByKey:
+	// é exatamente ela que o §58 manda o tombstone preservar como
+	// lastSequence, e é ela que impede um evento antigo de reabrir a
+	// entidade. Quem pergunta a sequence de uma row está decidindo sobre
+	// ordem, e "não sei" é a pior resposta possível.
+	if _, _, flags := rowindex.Unpack(packed); flags&types.FlagTombstone != 0 || s.prazoVencido(id) {
+		return s.seqs.Get(id), types.PresencaExpirada
+	}
+	return s.seqs.Get(id), types.PresencaViva
 }
 
 // Sync força fdatasync do segmento corrente (loop de durability batch).
@@ -1563,6 +1738,10 @@ func (s *Store) Stats() Stats {
 		StorageBytes:           s.diskBytesAll.Load(),
 		LiveBytesUpperBound:    s.liveBytesAll.Load(),
 		CompactionRunning:      s.compAtiva.Load(),
+		ExpiryRunning:          s.expAtiva.Load(),
+		Expiradas:              s.expiradas.Load(),
+		Carencias:              s.carencias.Load(),
+		ExpiryExaminadas:       s.examinadas.Load(),
 		CompactionBytesRead:    s.compBytesLidos.Load(),
 		CompactionBytesWritten: s.compBytesEscritos.Load(),
 	}
@@ -1592,6 +1771,10 @@ func (s *Store) Close() error {
 	// a corrida e desmapeia o índice sob os pés de quem está no meio de
 	// renomear e apagar arquivo.
 	s.ParaCompaction()
+	// O coletor sai pela MESMA razão da compaction: ele toma o wmu por trecho
+	// e lê o mmap do índice de escritas, então um Close que vencesse a corrida
+	// desmapearia a região sob os pés da passada.
+	s.ParaExpiracao()
 
 	s.vida.Lock()
 	defer s.vida.Unlock()
@@ -1608,6 +1791,9 @@ func (s *Store) Close() error {
 		if ix != nil {
 			errs = append(errs, ix.Close())
 		}
+	}
+	if s.escritas != nil {
+		errs = append(errs, s.escritas.Close())
 	}
 	if s.seqs != nil {
 		errs = append(errs, s.seqs.Close())

@@ -161,7 +161,40 @@ func (s *Store) reapendaSeVivo(seg, off uint32, rec types.Record) (copiado bool,
 	// que impede a cópia de ressuscitar a row. Fixada pelo
 	// TestCopyForwardGravaAsFlagsDaLocationENaoAsDoRecord: sem ele, trocar
 	// `flags` por `rec.Flags` deixava a suíte inteira verde.
-	buf, err := encoding.BuildRecord(s.compactBuf[:0], rec.RowID, rec.Sequence, flags, rec.Key, rec.Payload)
+	// DESCOBERTA OPORTUNISTA DA EXPIRAÇÃO.
+	//
+	// A varredura já leu este record e já está dentro da seção crítica: saber
+	// se ele venceu custa uma carga de 8 bytes em mmap. Copiar o payload
+	// inteiro de uma entidade que não vai mais aparecer em consulta nenhuma
+	// seria trabalho jogado fora — e, pior, trabalho REPETIDO a cada passada,
+	// porque a location continuaria nomeando o record grande.
+	//
+	// Então em vez de copiar, grava-se a lápide DIRETO no destino: um passo
+	// em vez de dois (o coletor marcaria e a compaction copiaria a marca
+	// depois), e o payload grande morre aqui.
+	//
+	// Isto amplia a responsabilidade da compaction, que até então só movia
+	// bytes de lugar. A fronteira que ela continua NÃO cruzando é a de
+	// inventar estado: o prazo é uma regra determinística sobre um dado que
+	// já está no record, e o resultado é o MESMO que o coletor produziria —
+	// não é a compaction decidindo, é ela aplicando antes.
+	//
+	// O ponto cego continua existindo e é por isso que o coletor não some: um
+	// segmento cheio de entidades abandonadas nunca fica abaixo da razão de
+	// liveness, então nunca é candidato, então esta descoberta nunca o
+	// alcança. Aqui se pega o que passar pela frente; a passada do coletor
+	// pega o resto.
+	payload, flagsSaida := rec.Payload, flags
+	expirou := false
+	if s.escritas != nil && flags&types.FlagTombstone == 0 && s.prazoVencido(rec.RowID) {
+		lapide, err := s.montaLapide(rec.Payload)
+		if err != nil {
+			return false, 0, err
+		}
+		payload, flagsSaida, expirou = lapide, flags|types.FlagTombstone, true
+	}
+
+	buf, err := encoding.BuildRecord(s.compactBuf[:0], rec.RowID, rec.Sequence, flagsSaida, rec.Key, payload)
 	s.compactBuf = buf
 	if err != nil {
 		return false, 0, err
@@ -183,8 +216,8 @@ func (s *Store) reapendaSeVivo(seg, off uint32, rec types.Record) (copiado bool,
 		rowID:       rec.RowID,
 		key:         rec.Key,
 		seq:         rec.Sequence,
-		flags:       flags,
-		payload:     rec.Payload,
+		flags:       flagsSaida,
+		payload:     payload,
 		prevPayload: rec.Payload,
 		hadPrevious: true,
 		countsAsNew: false,
@@ -193,6 +226,9 @@ func (s *Store) reapendaSeVivo(seg, off uint32, rec types.Record) (copiado bool,
 		recLen:      len(buf),
 	}); err != nil {
 		return false, 0, s.failWriter(err)
+	}
+	if expirou {
+		s.expiradas.Add(1)
 	}
 	return true, len(buf), nil
 }

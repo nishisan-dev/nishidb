@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/materializer"
 	"github.com/nishisan-dev/nishidb/internal/query"
@@ -113,6 +114,18 @@ func TestIngestaoEQueryConcordamPorTipo(t *testing.T) {
 		// 10.0.0.1/24 viraria 10.0.0.0/24 e a comparação daria vazio.
 		{"ipv4_prefix com host bits", "rede4", `"10.0.0.1/24"`, `rede4 = '10.0.0.1/24'`},
 		{"ipv6_prefix", "rede6", `"2001:db8::/32"`, `rede6 = '2001:db8::/32'`},
+
+		// O texto que o produtor manda, escrito como literal, acha a row. É a
+		// propriedade que justifica o literal usar o format DECLARADO do
+		// campo em vez de RFC3339.
+		{"datetime java medium", "momento", `"Aug 22, 2026 08:54:02 PM"`, `momento = 'Aug 22, 2026 08:54:02 PM'`},
+		{"datetime iso local", "momento_iso", `"2026-08-22T20:54:02"`, `momento_iso = '2026-08-22T20:54:02'`},
+		{"time java medium", "hora", `"08:54:02 PM"`, `hora = '08:54:02 PM'`},
+		{"time iso com millis", "hora_iso", `"20:54:02.123"`, `hora_iso = '20:54:02.123'`},
+		// A constante literal É o ponto: time não depende de fuso, então o
+		// número é o mesmo em qualquer host. O caso equivalente para datetime
+		// NÃO pode ser constante — está em TestDatetimePorEpochMillis.
+		{"time por millis do dia", "hora", `"08:54:02 PM"`, `hora = 75242000`},
 	}
 
 	for _, tc := range casos {
@@ -346,5 +359,76 @@ func TestAssimetriaDeliberadaEntreIngestaoEQuery(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "não é comparável") {
 		t.Errorf("erro = %q", err)
+	}
+}
+
+// O caso de epoch millis do datetime NÃO pode ser constante na tabela acima:
+// o instante depende do time.Local do host que roda o teste. Montá-lo em
+// runtime é o que torna o teste correto em qualquer fuso de CI — uma
+// constante passaria só na máquina onde foi escrita.
+func TestDatetimePorEpochMillisConcordaComOTextoIngerido(t *testing.T) {
+	h := novoTiposHarness(t)
+	h.ingere(`{"id":"K1","_SEQ":1,"momento":"Aug 22, 2026 08:54:02 PM"}`)
+
+	ms := time.Date(2026, 8, 22, 20, 54, 2, 0, time.Local).UnixMilli()
+	got := h.achaIDs(fmt.Sprintf(`SELECT id FROM todos_os_tipos WHERE momento = %d`, ms))
+	if len(got) != 1 || got[0] != "K1" {
+		t.Fatalf("epoch millis não achou a row ingerida pelo texto: %v (millis=%d, TZ=%s)",
+			got, ms, time.Local)
+	}
+}
+
+// A falha que este bloco inteiro existe para impedir: literal numa grafia que
+// o campo não declara tem de ser ERRO DE BIND, nunca resultado vazio. Vazio
+// parece resposta, e quem escreveu a query concluiria que não há dado.
+func TestLiteralNoFormatoErradoNaoAchaEmSilencio(t *testing.T) {
+	h := novoTiposHarness(t)
+	h.ingere(`{"id":"K1","_SEQ":1,"momento":"Aug 22, 2026 08:54:02 PM","hora":"08:54:02 PM"}`)
+
+	casos := []struct{ nome, where string }{
+		{"rfc3339 em campo java medium", `momento = '2026-08-22T20:54:02Z'`},
+		{"iso local em campo java medium", `momento_iso = 'Aug 22, 2026 08:54:02 PM'`},
+		{"texto de hora em campo de data", `momento = '08:54:02 PM'`},
+		{"epoch millis em campo time", `hora = 1786568400000`},
+	}
+	for _, tc := range casos {
+		t.Run(tc.nome, func(t *testing.T) {
+			_, err := h.engine.Execute(context.Background(), "todos_os_tipos",
+				`SELECT id FROM todos_os_tipos WHERE `+tc.where, nil)
+			if err == nil {
+				t.Fatalf("literal em grafia inválida foi aceito: %s", tc.where)
+			}
+		})
+	}
+}
+
+// A mensagem precisa dizer em que grafia escrever: "literal inválido para a
+// coluna momento (datetime)" sozinho não é acionável.
+func TestMensagemDeLiteralInvalidoNomeiaOFormatDeclarado(t *testing.T) {
+	h := novoTiposHarness(t)
+	_, err := h.engine.Execute(context.Background(), "todos_os_tipos",
+		`SELECT id FROM todos_os_tipos WHERE momento = '2026-08-22T20:54:02Z'`, nil)
+	if err == nil {
+		t.Fatal("esperava erro de bind")
+	}
+	if !strings.Contains(err.Error(), "MMM d, yyyy hh:mm:ss a") {
+		t.Fatalf("a mensagem não nomeia o format declarado: %v", err)
+	}
+}
+
+// datetime e time são fisicamente 8 bytes como o timestamp, mas o predicado
+// exige igualdade EXATA de tag: um valor gravado com uma tag não casa com
+// coluna declarada com outra. É o que torna o retipo de um campo existente
+// uma operação hostil, e o teste fixa esse comportamento em vez de deixá-lo
+// implícito.
+func TestColunasTemporaisNaoSeConfundemEntreSi(t *testing.T) {
+	h := novoTiposHarness(t)
+	// Mesmo instante de relógio nos três campos.
+	h.ingere(`{"id":"K1","_SEQ":1,"quando":"2026-08-22T20:54:02Z",` +
+		`"momento":"Aug 22, 2026 08:54:02 PM","hora":"08:54:02 PM"}`)
+
+	// A hora do dia como millis não pode achar nada em quando nem em momento.
+	if got := h.achaIDs(`SELECT id FROM todos_os_tipos WHERE quando = 75242000`); len(got) != 0 {
+		t.Errorf("millis do dia achou row numa coluna timestamp: %v", got)
 	}
 }

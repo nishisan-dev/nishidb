@@ -18,7 +18,7 @@ func TestConvertIPv4(t *testing.T) {
 		{"10.0.0.1", []byte{10, 0, 0, 1}},
 	}
 	for _, tc := range cases {
-		v, _, err := Convert(str(tc.in), types.TypeIPv4, nil)
+		v, _, err := Convert(str(tc.in), types.TypeIPv4, nil, nil)
 		if err != nil {
 			t.Fatalf("Convert(%q): %v", tc.in, err)
 		}
@@ -50,7 +50,7 @@ func TestConvertIPv6(t *testing.T) {
 		{"::ffff:192.0.2.1", []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 192, 0, 2, 1}},
 	}
 	for _, tc := range cases {
-		v, _, err := Convert(str(tc.in), types.TypeIPv6, nil)
+		v, _, err := Convert(str(tc.in), types.TypeIPv6, nil, nil)
 		if err != nil {
 			t.Fatalf("Convert(%q): %v", tc.in, err)
 		}
@@ -64,14 +64,14 @@ func TestConvertIPv6(t *testing.T) {
 }
 
 func TestConvertIPv4Prefix(t *testing.T) {
-	v, _, err := Convert(str("10.20.0.0/16"), types.TypeIPv4Prefix, nil)
+	v, _, err := Convert(str("10.20.0.0/16"), types.TypeIPv4Prefix, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(v.Bytes, []byte{10, 20, 0, 0, 16}) {
 		t.Errorf("Bytes = %v", v.Bytes)
 	}
-	v, _, err = Convert(str("0.0.0.0/0"), types.TypeIPv4Prefix, nil)
+	v, _, err = Convert(str("0.0.0.0/0"), types.TypeIPv4Prefix, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestConvertIPv4Prefix(t *testing.T) {
 }
 
 func TestConvertIPv6Prefix(t *testing.T) {
-	v, _, err := Convert(str("2804:14c::/32"), types.TypeIPv6Prefix, nil)
+	v, _, err := Convert(str("2804:14c::/32"), types.TypeIPv6Prefix, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,14 +99,14 @@ func TestConvertIPv6Prefix(t *testing.T) {
 }
 
 func TestConvertBytesBase64(t *testing.T) {
-	v, _, err := Convert(str("aGVsbG8="), types.TypeBytes, nil)
+	v, _, err := Convert(str("aGVsbG8="), types.TypeBytes, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(v.Bytes) != "hello" {
 		t.Errorf("Bytes = %q", v.Bytes)
 	}
-	v, _, err = Convert(str(""), types.TypeBytes, nil)
+	v, _, err = Convert(str(""), types.TypeBytes, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,8 +122,8 @@ func TestConvertBytesBase64(t *testing.T) {
 // Todos os tipos de rede escrevem no arena — nunca aliasam f.Raw.
 func TestNetworkValuesGoToArena(t *testing.T) {
 	arena := make([]byte, 0, 64)
-	v4, arena, _ := Convert(str("1.2.3.4"), types.TypeIPv4, arena)
-	v6, arena, _ := Convert(str("::1"), types.TypeIPv6, arena)
+	v4, arena, _ := Convert(str("1.2.3.4"), types.TypeIPv4, nil, arena)
+	v6, arena, _ := Convert(str("::1"), types.TypeIPv6, nil, arena)
 	if len(arena) != 4+16 {
 		t.Fatalf("arena len = %d, want 20", len(arena))
 	}

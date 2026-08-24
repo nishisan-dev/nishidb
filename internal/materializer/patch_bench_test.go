@@ -2,6 +2,7 @@ package materializer
 
 import (
 	"testing"
+	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/testutil/fakestorage"
@@ -34,13 +35,13 @@ func BenchmarkPatchParseRadiusEvent(b *testing.B) {
 	var pb PatchBuffer
 	// Warm-up: registra os campos desconhecidos do evento (_id, Class,
 	// roaming e companhia) no dicionário, para medir o steady state.
-	if err := pb.Parse(benchRadiusEvent, c); err != nil {
+	if err := pb.Parse(benchRadiusEvent, c, time.Now()); err != nil {
 		b.Fatal(err)
 	}
 	b.ReportAllocs()
 	b.SetBytes(int64(len(benchRadiusEvent)))
 	for b.Loop() {
-		if err := pb.Parse(benchRadiusEvent, c); err != nil {
+		if err := pb.Parse(benchRadiusEvent, c, time.Now()); err != nil {
 			b.Fatal(err)
 		}
 	}
