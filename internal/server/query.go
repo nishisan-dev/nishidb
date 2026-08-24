@@ -401,6 +401,15 @@ func traduzErroDeAbertura(err error, sql string) (int, protocolo.Falha) {
 		var se *lexer.SyntaxError
 		if errors.As(err, &se) {
 			f.Line, f.Column = posicao(sql, se.Pos)
+			// A cláusula não suportada é um erro de sintaxe com um nome
+			// melhor, e por isso a distinção mora DENTRO deste case, num
+			// campo, e não num case próprio antes dele. Um case novo teria de
+			// vir antes do de ErrSyntax para disparar, e trocar a ordem dos
+			// dois faria o código novo nunca sair — degradando em silêncio
+			// para SYNTAX, que é exatamente o estado que ele veio corrigir.
+			if se.Clausula != "" {
+				f.Code = protocolo.CodClausulaNaoSuportada
+			}
 		}
 		return http.StatusBadRequest, f
 	case errors.Is(err, binder.ErrBind):

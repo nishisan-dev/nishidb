@@ -172,7 +172,12 @@ func leStream(corpo io.Reader, amb Ambiente) int {
 // por `--server` num script sem reescrever o tratamento de $?.
 func codigoDoProtocolo(codigo string) int {
 	switch codigo {
-	case protocolo.CodSintaxe, protocolo.CodBind, protocolo.CodBadParameter:
+	case protocolo.CodSintaxe, protocolo.CodBind, protocolo.CodBadParameter,
+		protocolo.CodClausulaNaoSuportada:
+		// UNSUPPORTED_CLAUSE fica junto dos outros erros de QUERY, e não no
+		// default: o que o operador faz diante dele é reescrever o SQL, que é
+		// o significado deste código. Cair no vala-comum o classificaria como
+		// "olhe o comando ou o servidor", que é conselho errado.
 		return ExitQuery
 	case protocolo.CodMaxRows:
 		return ExitTruncado

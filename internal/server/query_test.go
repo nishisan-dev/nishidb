@@ -856,3 +856,55 @@ func TestALinhaDeSchemaSaiNoSeuProprioChunk(t *testing.T) {
 		t.Errorf("o primeiro chunk traz mais que a linha de schema — o flush depois dela sumiu?\n%q", primeiro)
 	}
 }
+
+// A cláusula não suportada chega ao cliente com código PRÓPRIO, 400 e posição.
+//
+// O código é o que o driver JDBC traduz para SQLState 0A000 (feature not
+// supported) em vez de 42601 (sintaxe) — a diferença entre a ferramenta dizer
+// "este banco não ordena" e "você escreveu errado".
+//
+// O teste também trava a decisão de a distinção morar num CAMPO do SyntaxError
+// e não num tipo de erro próprio: com um tipo, a tradução no servidor
+// dependeria da ORDEM dos cases, e inverter dois deles faria o código novo
+// nunca sair — degradando em silêncio para SYNTAX, sem nada acusar.
+func TestUnsupportedClauseSaiCom400EPosicaoNoProtocolo(t *testing.T) {
+	srv := servidorComDados(t, 1, blocoPadrao)
+
+	resp := consulta(t, srv, `{"dataset":"d","sql":"SELECT id FROM d ORDER BY id"}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		fecha(t, resp)
+		t.Fatalf("status = %d, quer 400", resp.StatusCode)
+	}
+	f := falhaDe(t, resp)
+	if f.Code != protocolo.CodClausulaNaoSuportada {
+		t.Errorf("código = %q, quer %q", f.Code, protocolo.CodClausulaNaoSuportada)
+	}
+	if !strings.Contains(f.Message, "ORDER BY") {
+		t.Errorf("a mensagem não nomeia a cláusula: %q", f.Message)
+	}
+	// 1-based, apontando para o token da CLÁUSULA e não para o seguinte: é ele
+	// que a ferramenta sublinha. Em "SELECT id FROM d ORDER BY id" o ORDER
+	// começa no byte 17 (0-based), logo coluna 18.
+	if f.Line != 1 || f.Column != 18 {
+		t.Errorf("posição = linha %d, coluna %d; quer 1/18 (o token ORDER)", f.Line, f.Column)
+	}
+}
+
+// Uma coluna chamada `order` continua consultável pelo protocolo, e não só no
+// parser: é a garantia de que a mensagem melhor não custou uma query que
+// funcionava.
+func TestColunaChamadaOrderContinuaConsultavelPeloProtocolo(t *testing.T) {
+	srv := servidorComDados(t, 2, blocoPadrao)
+
+	// `porta` existe no dataset de teste; o que se prova aqui é que o
+	// identificador `order` chega ao BINDER (que o recusa por não existir no
+	// schema) em vez de morrer no parser como cláusula.
+	resp := consulta(t, srv, `{"dataset":"d","sql":"SELECT order FROM d"}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		fecha(t, resp)
+		t.Fatalf("status = %d, quer 400", resp.StatusCode)
+	}
+	if f := falhaDe(t, resp); f.Code != protocolo.CodBind {
+		t.Errorf("código = %q, quer %q: `order` tem de chegar ao binder como nome de coluna", f.Code, protocolo.CodBind)
+	}
+}

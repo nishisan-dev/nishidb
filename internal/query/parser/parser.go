@@ -43,6 +43,14 @@ func Parse(sql string) (*SelectStmt, error) {
 			return nil, p.errAt(p.cur.Pos, "apenas um comando por query")
 		}
 	} else if p.cur.Type != lexer.TokenEOF {
+		// Sítio principal das cláusulas ausentes: ORDER, GROUP, OFFSET, JOIN,
+		// HAVING e UNION aparecem todas DEPOIS de um SELECT ... FROM [WHERE]
+		// [LIMIT] sintaticamente completo, e caem exatamente aqui. Sem isto a
+		// mensagem é "conteúdo inesperado após o fim da query", que manda o
+		// usuário procurar um erro de digitação que não existe.
+		if nome, ok := clausulaNaoSuportada(p.cur); ok {
+			return nil, lexer.NewClausulaNaoSuportada(p.cur.Pos, nome)
+		}
 		return nil, p.errAt(p.cur.Pos, "conteúdo inesperado após o fim da query")
 	}
 	st.ParamCount = p.params
@@ -124,6 +132,9 @@ func (p *parser) parseProjection(st *SelectStmt) error {
 
 	primeira := true
 	for {
+		// O token é guardado ANTES de identifier(): a ColumnRef não registra se
+		// o nome veio entre aspas, e o guard de DISTINCT abaixo precisa saber.
+		tokDaColuna := p.cur
 		nome, pos, ok := p.identifier()
 		if !ok {
 			if primeira {
@@ -137,6 +148,21 @@ func (p *parser) parseProjection(st *SelectStmt) error {
 			return err
 		}
 		if p.cur.Type != lexer.TokenComma {
+			// DISTINCT é a única das sete que NÃO chega ao sítio principal:
+			// em `SELECT DISTINCT a FROM t` o identifier() a aceita como nome
+			// de coluna, e o erro nasce apontando para o `a`, que não tem
+			// culpa nenhuma.
+			//
+			// As quatro condições, todas necessárias: é a PRIMEIRA coluna
+			// (`SELECT a, distinct` é outra coisa); o token era BARE (quem
+			// escreveu "distinct" entre aspas quer a coluna); a palavra casa;
+			// e o que vem depois NÃO é FROM (`SELECT distinct FROM t`
+			// seleciona uma coluna chamada distinct e continua válido).
+			if primeira && p.cur.Type != lexer.TokenFrom {
+				if nome, ok := clausulaNaoSuportada(tokDaColuna); ok && nome == "DISTINCT" {
+					return lexer.NewClausulaNaoSuportada(tokDaColuna.Pos, nome)
+				}
+			}
 			return nil
 		}
 		if err := p.advance(); err != nil {
