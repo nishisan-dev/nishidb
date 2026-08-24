@@ -25,8 +25,8 @@ import (
 // O contrato de saída é o MESMO do caminho local: NDJSON cru no stdout, uma
 // linha por row, e o exit code dizendo o que aconteceu. Um script que troca
 // `--config` por `--server` não muda mais nada.
-func consultaRemota(endereco, dataset, sql string, cred credencialRemota, amb Ambiente) int {
-	corpo, err := json.Marshal(protocolo.Requisicao{Dataset: dataset, SQL: sql})
+func consultaRemota(endereco, dataset, sql string, params []protocolo.Parametro, cred credencialRemota, amb Ambiente) int {
+	corpo, err := json.Marshal(protocolo.Requisicao{Dataset: dataset, SQL: sql, Parameters: params})
 	if err != nil {
 		fmt.Fprintln(amb.Stderr, "query:", err)
 		return ExitUso

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	nishiconfig "github.com/nishisan-dev/nishidb/internal/config"
+	"github.com/nishisan-dev/nishidb/internal/protocolo"
 	"github.com/nishisan-dev/nishidb/internal/query"
 	"github.com/nishisan-dev/nishidb/internal/query/binder"
 	"github.com/nishisan-dev/nishidb/internal/query/executor"
@@ -23,6 +24,8 @@ func runQuery(args []string, amb Ambiente) int {
 		limit     = fs.Int("limit", -1, "sobrepõe o LIMIT da query")
 		servidor  = fs.String("server", "", "consulta pelo protocolo remoto em vez de abrir o dataset local")
 	)
+	var params listaDeParametros
+	fs.Var(&params, "param", "valor de um `?` posicional, no formato <tipo>:<valor> ("+tiposDeParametro+"); repetível, na ordem dos ?")
 	credFlags := registraFlagsRemotas(fs)
 	if err := fs.Parse(args); err != nil {
 		return ExitUso
@@ -57,7 +60,22 @@ func runQuery(args []string, amb Ambiente) int {
 		return ExitUso
 	}
 	if fs.NArg() != 1 {
-		fmt.Fprintln(amb.Stderr, "query: informe exatamente uma query SQL")
+		// A dica sobre a ordem existe por causa do --param: flag.Parse para no
+		// primeiro argumento posicional, então `query --dataset d 'SELECT...'
+		// --param string:x` não parseia a flag — ela vira Arg(1) e cai aqui,
+		// com uma mensagem que sozinha não ajudaria em nada.
+		_, _ = fmt.Fprintln(amb.Stderr, "query: informe exatamente uma query SQL (as flags vêm ANTES dela)")
+		return ExitUso
+	}
+
+	// A validação roda ANTES de qualquer conexão ou abertura de dataset, e usa
+	// protocolo.Valores — a MESMA função que o servidor usa, nunca uma segunda
+	// gramática. É o que faz `--param int64:9223372036854775808` receber a
+	// mensagem de overflow do protocolo na linha de comando, em vez de depois
+	// de um round-trip.
+	valores, err := protocolo.Valores(params)
+	if err != nil {
+		_, _ = fmt.Fprintln(amb.Stderr, "query:", err)
 		return ExitUso
 	}
 	sql := fs.Arg(0)
@@ -66,7 +84,7 @@ func runQuery(args []string, amb Ambiente) int {
 	}
 
 	if *servidor != "" {
-		return consultaRemota(*servidor, *dataset, sql, cred, amb)
+		return consultaRemota(*servidor, *dataset, sql, params, cred, amb)
 	}
 
 	cfg, err := nishiconfig.CarregaConfig(*argConfig)
@@ -89,7 +107,11 @@ func runQuery(args []string, amb Ambiente) int {
 		return ExitUso
 	}
 
-	it, err := eng.Execute(amb.Ctx, *dataset, sql, nil)
+	// O caminho local recebe os MESMOS valores. Ignorá-los aqui faria a flag
+	// mentir num dos dois modos, e quebraria a promessa escrita em
+	// consultaRemota: "um script que troca --config por --server não muda mais
+	// nada".
+	it, err := eng.Execute(amb.Ctx, *dataset, sql, valores)
 	if err != nil {
 		// O erro de sintaxe/bind sai ANTES de qualquer byte no stdout: quem
 		// consome a saída não pode receber linha parcial seguida de erro.
