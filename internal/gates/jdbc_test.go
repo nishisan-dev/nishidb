@@ -9,6 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
 // O pom do driver, lido como DADO — a mesma doutrina de ci_test.go com os
@@ -236,6 +239,88 @@ func codigosDoProtocolo(t *testing.T) map[string]string {
 			}
 			for i, nome := range vs.Names {
 				if !strings.HasPrefix(nome.Name, "Cod") || i >= len(vs.Values) {
+					continue
+				}
+				lit, ok := vs.Values[i].(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					continue
+				}
+				out[nome.Name] = strings.Trim(lit.Value, `"`)
+			}
+		}
+	}
+	return out
+}
+
+// TODO nome JDBC que o servidor publica tem código de java.sql.Types no driver.
+//
+// É o irmão do gate de SQLState, e existe pelo mesmo motivo: o modo de falha é
+// SILENCIOSO. A linha de schema publica o nome ("BIGINT", "TIMESTAMP"), e é o
+// driver quem o traduz para o inteiro de java.sql.Types que o
+// ResultSetMetaData devolve. Um tipo novo no servidor sem tradução aqui não
+// quebra nada — sai como OTHER, que é a degradação honesta —, mas a ferramenta
+// passa a desenhar como "objeto desconhecido" uma coluna que o servidor sabe
+// nomear, e ninguém liga uma coisa à outra.
+//
+// A lista sai do go/ast sobre jdbc.go de um lado e do texto de TiposJdbc.java
+// do outro: duas EXTRAÇÕES, nunca uma extração contra um valor decorado.
+func TestTodoNomeJDBCDoProtocoloTemCodigoNoDriver(t *testing.T) {
+	nomes := nomesJDBCDoProtocolo(t)
+	if len(nomes) < 8 {
+		t.Fatalf("só %d nomes JDBC extraídos de jdbc.go: a extração quebrou, e um gate que "+
+			"não acha nada passa sempre", len(nomes))
+	}
+
+	java := leArquivo(t, "clients/jdbc/src/main/java/dev/nishisan/nishidb/jdbc/wire/TiposJdbc.java")
+	for nomeGo, valor := range nomes {
+		if !strings.Contains(java, `"`+valor+`"`) {
+			t.Errorf("%s (%s) não está em TiposJdbc.java: o ResultSetMetaData publicaria OTHER "+
+				"para uma coluna que o servidor sabe nomear", nomeGo, valor)
+		}
+	}
+}
+
+// O driver decide isSearchable pelo nome do tipo do PRODUTO, não pelo nome
+// JDBC — bytes e json viajam como VARCHAR/VARBINARY e o nome JDBC não os
+// distingue de uma string comum, mas o binder recusa comparação sobre os dois.
+//
+// Este gate amarra os dois literais que o driver usa ao valor que o Go produz.
+// Sem ele, renomear o tipo em Go faria o driver voltar a anunciar os dois como
+// pesquisáveis, e a ferramenta ofereceria um filtro que o servidor recusa.
+func TestOsTiposNaoPesquisaveisDoDriverSaoOsNomesQueOGoProduz(t *testing.T) {
+	java := leArquivo(t, "clients/jdbc/src/main/java/dev/nishisan/nishidb/jdbc/wire/TiposJdbc.java")
+	for _, ft := range []types.FieldType{types.TypeBytes, types.TypeJSON} {
+		nome := protocolo.NomeDeTipo(ft)
+		if !strings.Contains(java, `"`+nome+`"`) {
+			t.Errorf("o tipo %q não aparece em TiposJdbc.java: o driver anunciaria como "+
+				"pesquisável uma coluna sobre a qual o binder recusa comparação", nome)
+		}
+	}
+}
+
+// nomesJDBCDoProtocolo extrai as constantes JDBC* de internal/protocolo/jdbc.go.
+func nomesJDBCDoProtocolo(t *testing.T) map[string]string {
+	t.Helper()
+	caminho := filepath.Join(raizDoRepo, "internal/protocolo/jdbc.go")
+	fset := token.NewFileSet()
+	arquivo, err := parser.ParseFile(fset, caminho, nil, 0)
+	if err != nil {
+		t.Fatalf("parseando %s: %v", caminho, err)
+	}
+
+	out := map[string]string{}
+	for _, decl := range arquivo.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for i, nome := range vs.Names {
+				if !strings.HasPrefix(nome.Name, "JDBC") || i >= len(vs.Values) {
 					continue
 				}
 				lit, ok := vs.Values[i].(*ast.BasicLit)
