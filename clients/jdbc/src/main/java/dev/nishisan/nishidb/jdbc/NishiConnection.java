@@ -142,7 +142,10 @@ public final class NishiConnection implements Connection {
 
     @Override
     public PreparedStatement prepareStatement(String sql) throws SQLException {
-        throw naoSuportado("prepareStatement ainda não está implementado neste driver");
+        exigeAberta();
+        NishiPreparedStatement st = new NishiPreparedStatement(this, sql);
+        abertos.add(st);
+        return st;
     }
 
     @Override
