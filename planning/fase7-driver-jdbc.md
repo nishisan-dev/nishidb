@@ -646,6 +646,88 @@ ignorado em `getTimestamp`). Errata da spec: §71 (D3) e §98 (coordenadas do m�
 
 ---
 
+## Estado em 2026-08-24 — Fases A a G concluídas
+
+Branch `feature/driver-jdbc`, 21 commits sobre `main`. **Tudo verde**: `go test ./...`,
+`go test -race ./...`, `gofmt -l .` vazio, `make test-jdbc-unit` com **195 testes Java** e a
+contagem de lint **igualada em 388**.
+
+| Fase | Estado | Onde |
+|---|---|---|
+| A (D0, lado Go) | **completa**, 9 tasks | descritor de tipo, nullable, Saude no protocolo, 405 uniforme, UNSUPPORTED_CLAUSE, `--param`, flush do schema |
+| B (módulo Maven) | **completa** | `clients/jdbc/`, wrapper only-script pinado, gates em `internal/gates/jdbc_test.go` |
+| C (JSON próprio) | **completa** | `…/jdbc/json/`: scanner com spans, DOM para documentos pequenos, escritor |
+| D (transporte + leitor + SQLState) | **completa** | `…/jdbc/wire/`: `Codigos`, `SqlStates`, `Molduras`, `LeitorNdjson`, `Transporte` |
+| E (ResultSet e conversões) | **completa**, 4 commits | `SqlScanner`, `RowCursor`/`StreamCursor`/`ArrayCursor`, `Temporais`, `TiposJdbc`, `NishiResultSet(MetaData)`, `NishiDriver`, `ConnectionConfig`, `NishiConnection`, `NishiStatement` |
+| F (PreparedStatement) | **completa** | `NishiPreparedStatement`, `NishiParameterMetaData` |
+| G (DatabaseMetaData) | **completa** | `NishiDatabaseMetaData`, `AssinaturasTest` |
+| **H e I** | **a fazer** | integração contra o binário + CI; DBeaver, documentação e aceite |
+
+### Decisões tomadas na execução de E a G, que o plano não fixava
+
+1. **A conversão é dirigida pelo TOKEN; o tipo declarado só entra onde o token é
+   ambíguo.** Texto que é instante, texto que é hora do dia e texto que é base64 têm a
+   mesma cara no JSON: os dois primeiros são separados pela GRAMÁTICA (e por isso
+   `getTimestamp` sobre uma coluna `time` falha sozinho, sem caso especial), e o binário
+   é separado pelo TIPO. Duas exceções nomeadas: `getObject` segue o tipo declarado
+   (senão um `double` de valor inteiro, que sai do encoder como `1`, apareceria como
+   `Long`), e a coluna OTHER segue o token.
+
+2. **`getDate` mudou de semântica em relação ao que o plano insinuava.** O
+   `java.sql.Date` sai NORMALIZADO (contrato do tipo) e a divisão em dias é feita em
+   **UTC**, não no fuso da JVM — 21:53Z cai no dia 23 em São Paulo e no 24 em Tóquio, e
+   um relatório não pode mudar de dia conforme a máquina. Daí a regra geral do Calendar:
+   **honrado onde a resposta exige escolher um calendário** (`getTime`, `getDate`) e
+   **ignorado onde a resposta é o instante** (`getTimestamp`).
+
+3. **`getBytes` só vale na coluna binária**, contra a convenção do JDBC. Uma coluna
+   `bytes` que o dataset ainda não fixou chega anunciada OTHER, e a convenção faria o
+   mesmo método devolver ora o binário decodificado, ora os caracteres do base64.
+
+4. **`getTypeInfo` é DERIVADO do `/v1/metadata`**, e não uma segunda tabela de tipos no
+   driver — que divergiria da do servidor no primeiro tipo novo. Preço declarado: tipo
+   que nenhum dataset usa não aparece.
+
+5. **O `AssinaturasTest` do §107 classifica por COMPORTAMENTO OBSERVADO**, não por tabela
+   escrita à mão: cada método é invocado por reflexão e o único desfecho aceito é
+   "respondeu" ou "lançou SQLException". Uma tabela de quinhentas assinaturas envelheceria
+   em silêncio; esta reprova sozinha quando o JDBC ganha um método novo.
+
+### Achados da execução de E a G
+
+- **O gate de alocação do cliente existe e funciona.** `getThreadAllocatedBytes` mede
+  bytes alocados por thread — métrica que não depende de GC — e o teto é 64 bytes por
+  linha. Verificado quebrando o cursor de propósito: materializar a linha levou a conta a
+  88 bytes e o gate reprovou.
+- **O `AssinaturasTest` achou três defeitos reais na primeira execução**:
+  `prepareStatement(null)` e `executeQuery(null)` estouravam `NullPointerException`, e os
+  quatro métodos de citação de nome herdados da interface faziam o mesmo. Todos viraram
+  `SQLException`, e a citação passou a seguir as regras do lexer deste servidor.
+- **A falha do cursor precisava ser sticky.** Quem engolisse a exceção e chamasse
+  `next()` de novo recebia `false` e concluía que o resultado tinha terminado bem —
+  apresentando como completo um resultado cortado no meio.
+- **O span de um TEXTO está escapado**, e a conversão numérica sobre ele precisa
+  desescapar antes; sem isso um inteiro escrito com escape unicode saía como "fora do
+  intervalo de int64".
+- **`closeOnCompletion` precisou de um guard**: trocar de resultado numa execução nova
+  passa pelo mesmo `close()` que o usuário chamaria, e sem ele o Statement se fechava
+  sozinho na segunda consulta.
+- **Quatro nulos do fio NÃO são NULL** e não são distinguíveis no cliente: double
+  não-finito, `time` fora do dia, `json` vazio e valor fisicamente malformado. Ficam
+  registrados no javadoc do ResultSet — o lugar de procurar é o dado, não o driver.
+
+### Ponto de partida da Fase H
+
+O driver está completo e testado contra o servidor HTTP do próprio JDK
+(`com.sun.net.httpserver`), com corpo de requisição conferido byte a byte. Falta prová-lo
+contra o BINÁRIO real: `scripts/certgen`, `scripts/jdbc-it.sh`, as classes `*IT` com o
+guard contra SKIP silencioso (`NISHIDB_IT_REQUIRED=1`), o job `jdbc` no `ci.yml` com as
+extensões de `internal/gates/ci_test.go`, e a prova de heap com `-Xmx64m` sobre 100k
+linhas. Tudo já está desenhado na seção "Fase H — Integração e CI" acima; nada dela foi
+contradito pela execução de E a G.
+
+---
+
 ## Estado em 2026-08-24 — Fases A a D concluídas
 
 Branch `feature/driver-jdbc`, 14 commits sobre `main`. **Tudo verde**: `go test ./...`,
