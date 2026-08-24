@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>dev.nishisan</groupId>
+  <artifactId>nishidb-jdbc</artifactId>
+  <version>0.1.0-SNAPSHOT</version>
+  <packaging>jar</packaging>
+
+  <name>NishiDB JDBC Driver</name>
+  <description>Thin remote JDBC driver for NishiDB (spec 70-73)</description>
+
+  <properties>
+    <!--
+      release, e nunca source/target: source/target compila contra a
+      biblioteca do JDK que estiver instalado, então um build feito num JDK 25
+      aceitaria API que não existe no 21 e o jar quebraria só em runtime, na
+      máquina de quem usa. O 21 é o piso do §70, e não é arbitrário: é onde
+      HttpClient virou AutoCloseable, sem o que cada Connection.close()
+      deixaria uma selector thread viva.
+    -->
+    <maven.compiler.release>21</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <junit.version>6.1.3</junit.version>
+  </properties>
+
+  <dependencies>
+    <!--
+      A ÚNICA dependência do projeto, e ela é de TESTE.
+      "Zero dependência de runtime" (a doutrina do binário único traduzida para
+      um jar) é sobre o classpath de quem CONSUMA o driver: scope=test nunca
+      entra no Class-Path do artefato nem em `dependency:list
+      -DincludeScope=runtime`. O enforcer abaixo prova isso a cada build, e
+      internal/gates/jdbc_test.go prova de novo lendo este arquivo como dado —
+      esse segundo gate existe porque o primeiro só roda quem lembra de rodar
+      Maven, e a suíte Go roda sempre.
+    -->
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>${junit.version}</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <!--
+      O artefato é literalmente o nome do §70: nishidb-jdbc.jar, sem versão no
+      nome. É o que a documentação manda pôr no classpath.
+    -->
+    <finalName>nishidb-jdbc</finalName>
+
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.15.0</version>
+      </plugin>
+
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>3.5.6</version>
+        <configuration>
+          <includes>
+            <!--
+              Sufixo, nunca prefixo. TestFoo casaria o regexp \bTest[A-Z] de
+              TestEvidenciasCitadasNosDocumentosExistem, que varre os documentos
+              procurando nome de teste GO — e um doc de aceite citando uma
+              classe Java chamada TestFoo reprovaria a suíte Go inteira.
+            -->
+            <include>**/*Test.java</include>
+            <include>**/*IT.java</include>
+          </includes>
+        </configuration>
+      </plugin>
+
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <version>3.5.1</version>
+        <configuration>
+          <archive>
+            <manifestEntries>
+              <!--
+                Automatic-Module-Name e NÃO module-info.java: o DBeaver e o
+                IntelliJ carregam driver por URLClassLoader no classpath, onde
+                JPMS não entra. O nome reservado evita que o módulo automático
+                seja derivado do nome do arquivo.
+              -->
+              <Automatic-Module-Name>dev.nishisan.nishidb.jdbc</Automatic-Module-Name>
+            </manifestEntries>
+          </archive>
+        </configuration>
+      </plugin>
+
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-enforcer-plugin</artifactId>
+        <version>3.6.3</version>
+        <executions>
+          <execution>
+            <id>sem-dependencia-de-runtime</id>
+            <goals><goal>enforce</goal></goals>
+            <configuration>
+              <rules>
+                <!--
+                  Uma dependência de runtime que entrasse por transitividade
+                  não apareceria no <dependencies> acima, e o gate Go que lê
+                  este arquivo não a veria. É esta regra que fecha esse buraco.
+                -->
+                <banTransitiveDependencies/>
+                <requireJavaVersion><version>[21,)</version></requireJavaVersion>
+              </rules>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

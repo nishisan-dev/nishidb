@@ -7,6 +7,35 @@ package protocolo
 // consumir na Fase 7 — decidida agora, olhando para esse consumidor, porque um
 // formato mínimo hoje viraria um SEGUNDO formato depois.
 
+// Estado de um subsistema no /v1/health (§94).
+//
+// As constantes vivem AQUI, e não no servidor, pelo mesmo motivo que a Saude:
+// são o vocabulário que o corpo da rota usa, e um cliente que precise
+// distinguir DEGRADED de DOWN teria de redeclará-las. É o vocabulário que
+// IngestaoStats.State também usa — as duas rotas descrevem a mesma realidade.
+const (
+	EstadoUP        = "UP"
+	EstadoDown      = "DOWN"
+	EstadoDegraded  = "DEGRADED"
+	EstadoDesligado = "DISABLED"
+)
+
+// Saude é o corpo de GET /v1/health (§94).
+//
+// É o único corpo de rota do §67 que vivia dentro do servidor, e por isso o
+// único que um cliente teria de redeclarar para consumir. O CLI remoto e o
+// driver JDBC falam o mesmo protocolo: o contrato inteiro mora neste pacote.
+type Saude struct {
+	Status   string            `json:"status"`
+	Kafka    string            `json:"kafka"`
+	Storage  string            `json:"storage"`
+	Datasets map[string]string `json:"datasets"`
+	// Detalhes nomeia o problema por dataset. Não está no §94 e existe
+	// porque "DOWN" sozinho manda o operador procurar no log de qual dos
+	// datasets, num processo que pode hospedar vários (§82).
+	Detalhes map[string]string `json:"detalhes,omitempty"`
+}
+
 // Metadados é o corpo de GET /v1/metadata. Sem filtro traz todos os datasets;
 // com ?dataset=<nome> traz só um, na mesma forma — o cliente não precisa
 // aprender dois formatos para as duas perguntas.
@@ -38,13 +67,24 @@ type DatasetMeta struct {
 // Auto marca o campo sem tipo declarado. Quando ele ainda não foi observado,
 // Type é "unknown" e JDBC é "OTHER" — a única resposta honesta, já que o
 // próximo evento pode fixá-lo como qualquer coisa.
+//
+// Os quatro campos de tipo (Type, JDBC, Precision, Scale, DisplaySize) saem do
+// MESMO DescritorDeTipo que a linha de schema de /v1/query usa, e
+// TestMetadataPublicaOsMesmosNumerosQueALinhaDeSchema cobra que as duas rotas
+// descrevam a mesma coluna do mesmo jeito. Os dois pontos de serialização
+// ficam em arquivos diferentes: sem esse teste, acrescentar um campo em um e
+// esquecer o outro passaria.
 type ColunaMeta struct {
-	Name  string  `json:"name"`
-	Alias *string `json:"alias"`
-	Type  string  `json:"type"`
-	JDBC  string  `json:"jdbc"`
-	Index string  `json:"index"`
-	Auto  bool    `json:"auto"`
+	Name        string  `json:"name"`
+	Alias       *string `json:"alias"`
+	Type        string  `json:"type"`
+	JDBC        string  `json:"jdbc"`
+	Nullable    bool    `json:"nullable"`
+	Precision   int     `json:"precision"`
+	Scale       int     `json:"scale"`
+	DisplaySize int     `json:"displaySize"`
+	Index       string  `json:"index"`
+	Auto        bool    `json:"auto"`
 }
 
 // Estatisticas é o corpo de GET /v1/stats.
@@ -171,10 +211,13 @@ type RotaStats struct {
 
 // IngestaoStats é o estado da ingestão Kafka do dataset.
 //
-// State usa o vocabulário do §94 ("UP", "DOWN", "DEGRADED", "DISABLED"), o
-// mesmo do /v1/health, para que as duas rotas não descrevam a mesma realidade
-// com palavras diferentes. Paused traz o motivo quando a ingestão está parada
-// por política de erro (§101) e fica vazio quando tudo corre bem.
+// State usa o vocabulário do §94 — as constantes EstadoUP, EstadoDown,
+// EstadoDegraded e EstadoDesligado deste mesmo pacote, que são as que a Saude
+// do /v1/health preenche. Enquanto a Saude vivia dentro do servidor, este
+// godoc só podia CITAR as palavras; agora as duas rotas apontam para as mesmas
+// constantes, e um cliente que precise distinguir DEGRADED de DOWN não
+// redeclara nada. Paused traz o motivo quando a ingestão está parada por
+// política de erro (§101) e fica vazio quando tudo corre bem.
 type IngestaoStats struct {
 	Enabled   bool   `json:"enabled"`
 	State     string `json:"state"`

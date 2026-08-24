@@ -31,6 +31,7 @@ func TestCodigoDoProtocoloTraduzATabelaInteira(t *testing.T) {
 		{protocolo.CodSintaxe, ExitQuery, "a query está errada e nenhuma releitura do servidor a conserta"},
 		{protocolo.CodBind, ExitQuery, "coluna ou dataset que não casa com o schema é erro da query"},
 		{protocolo.CodBadParameter, ExitQuery, "parâmetro fora do contrato é erro de quem escreveu a consulta"},
+		{protocolo.CodClausulaNaoSuportada, ExitQuery, "cláusula ausente da v1 se conserta reescrevendo o SQL, e não olhando o servidor: o default deste switch daria o conselho errado"},
 		{protocolo.CodMaxRows, ExitTruncado, "as linhas entregues são válidas; o que falta é o resto"},
 		{protocolo.CodTimeout, ExitInterromp, "a consulta foi cortada por prazo, e repetir mais tarde é a ação"},
 		{protocolo.CodDatasetCorrompido, ExitDataset, "o problema é o dataset, não o comando: reabrir antes de insistir"},

@@ -300,9 +300,10 @@ curl -sS -H 'Content-Type: application/json' \
        "parameters":[{"type":"string","value":"Stop"}]}' \
   127.0.0.1:9142/v1/query
 
-# o mesmo pelo CLI
+# o mesmo pelo CLI, com o parâmetro (as flags vêm ANTES da query)
 nishidb query --server 127.0.0.1:9142 --dataset radius_sessions \
-  'SELECT id, ip FROM radius_sessions LIMIT 100'
+  --param string:Stop \
+  'SELECT id, ip FROM radius_sessions WHERE status = ? LIMIT 100'
 ```
 
 A resposta é NDJSON com moldura: a primeira linha descreve as colunas com
@@ -498,9 +499,17 @@ Parâmetros posicionais `?` são fornecidos pelo `parameters` do §68, no
 `boolean` —, e não é limitação do protocolo: é o contrato do binder, que aceita
 um caminho de coerção só. Timestamp, endereços e prefixos viajam como `string`
 e são convertidos contra o tipo da coluna, pela mesma tabela dos literais SQL
-(que é o que o §73 já pressupõe ao mapear `ipv4` para `VARCHAR`). Uma query com
-`?` pelo caminho LOCAL do CLI continua saindo com exit 2: sem protocolo não há
-por onde passar o valor.
+(que é o que o §73 já pressupõe ao mapear `ipv4` para `VARCHAR`).
+
+Pelo CLI, os valores vão em `--param <tipo>:<valor>`, repetível e na ordem dos
+`?`. A flag vale nos DOIS caminhos, `--config` e `--server` — um script que
+troca um pelo outro não muda mais nada. **As flags vêm antes da query**, porque
+o parser de linha de comando para no primeiro argumento posicional. O corte é
+no primeiro `:`, então `--param string:http://x:9142` é a URL inteira.
+
+Não há sintaxe de `--param` que produza NULL, e é deliberado: `col = ?` com `?`
+nulo não tem semântica sem lógica trivalente, e o que se quer dizer é
+`IS NULL` — escrito na query, não passado como valor.
 
 Repetir uma coluna na projeção (`SELECT id, id`) é recusado no bind: a linha
 sairia com a chave repetida e o consumidor de JSON colapsaria as duas em
@@ -509,7 +518,12 @@ pelo alias (`SELECT id, service_id`) continua valendo, porque aí são duas
 chaves distintas na saída.
 
 Fora da v1: `ORDER BY`, `GROUP BY`, `JOIN`, agregações, `NOT` genérico,
-`OFFSET`.
+`OFFSET`. As sete cláusulas ausentes — `ORDER BY`, `GROUP BY`, `OFFSET`,
+`JOIN`, `HAVING`, `DISTINCT`, `UNION` — são recusadas com o código
+`UNSUPPORTED_CLAUSE`, nomeando qual delas foi escrita. É o que separa "isto não
+existe aqui" de "você digitou errado" para quem escreve SQL numa ferramenta.
+Uma coluna chamada `order` continua consultável: as palavras não viraram
+keywords do lexer, e a recusa só acontece onde a query já ia falhar.
 
 ### Exit codes
 

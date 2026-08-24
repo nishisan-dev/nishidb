@@ -1,12 +1,15 @@
 package server_test
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -217,9 +220,11 @@ func TestQueryRespondeAMolduraCompleta(t *testing.T) {
 	if l.Schema() == nil || l.Schema().Dataset != "d" {
 		t.Fatalf("schema = %+v", l.Schema())
 	}
+	// A comparação é da struct INTEIRA, de propósito: campo novo na Coluna
+	// que ninguém preencha quebra aqui, em vez de sair como zero no fio.
 	quer := []protocolo.Coluna{
-		{Name: "id", Type: "string", JDBC: protocolo.JDBCVarchar},
-		{Name: "ip", Type: "ipv4", JDBC: protocolo.JDBCVarchar},
+		{Name: "id", Type: "string", JDBC: protocolo.JDBCVarchar, Nullable: false, DisplaySize: 0},
+		{Name: "ip", Type: "ipv4", JDBC: protocolo.JDBCVarchar, Nullable: true, Precision: 15, DisplaySize: 15},
 	}
 	for i, c := range quer {
 		if l.Schema().Columns[i] != c {
@@ -777,4 +782,129 @@ func heapVivo() uint64 {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 	return m.HeapAlloc
+}
+
+// A linha de schema sai no SEU PRÓPRIO chunk, antes de qualquer row.
+//
+// É o que faz Statement.executeQuery() devolver um ResultSetMetaData sem
+// esperar o primeiro lote de resultBatchSize. Numa consulta que varre muito e
+// emite pouco — full scan com WHERE seletivo, que é o caso comum no piloto — o
+// cliente ficaria sem nenhum byte até o primeiro lote fechar, e uma ferramenta
+// de SQL não teria como desenhar as colunas do grid enquanto isso.
+//
+// O oráculo é o CHUNKING cru, e não o tempo: um teste de latência passaria por
+// acidente num dataset de teste, onde tudo termina em milissegundos. Sem o
+// flush, o net/http junta schema e rows no mesmo chunk (elas cabem folgadas no
+// buffer dele); com o flush, o primeiro chunk é o schema e nada mais. Por isso
+// a requisição é feita na conexão crua: o http.Client desfaz o chunking antes
+// de entregar o corpo, e com ele o teste não teria o que observar.
+func TestALinhaDeSchemaSaiNoSeuProprioChunk(t *testing.T) {
+	srv := servidorComDados(t, 4, blocoPadrao)
+
+	conn, err := net.DialTimeout("tcp", srv.Endereco(), 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := conn.Close(); err != nil {
+			t.Errorf("fechar a conexão: %v", err)
+		}
+	}()
+	if err := conn.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	corpo := `{"dataset":"d","sql":"SELECT id FROM d"}`
+	req := "POST /v1/query HTTP/1.1\r\nHost: " + srv.Endereco() + "\r\n" +
+		"Content-Type: application/json\r\n" +
+		"Content-Length: " + strconv.Itoa(len(corpo)) + "\r\n\r\n" + corpo
+	if _, err := conn.Write([]byte(req)); err != nil {
+		t.Fatal(err)
+	}
+
+	br := bufio.NewReader(conn)
+	// Cabeçalhos até a linha em branco.
+	for {
+		linha, err := br.ReadString('\n')
+		if err != nil {
+			t.Fatalf("lendo cabeçalhos: %v", err)
+		}
+		if linha == "\r\n" {
+			break
+		}
+	}
+
+	// Primeiro chunk: <tamanho em hex>\r\n<dados>\r\n
+	cabecalho, err := br.ReadString('\n')
+	if err != nil {
+		t.Fatalf("lendo o tamanho do primeiro chunk: %v", err)
+	}
+	tamanho, err := strconv.ParseInt(strings.TrimSpace(cabecalho), 16, 64)
+	if err != nil {
+		t.Fatalf("tamanho de chunk ilegível %q — a resposta não veio chunked?", cabecalho)
+	}
+	dados := make([]byte, tamanho)
+	if _, err := io.ReadFull(br, dados); err != nil {
+		t.Fatalf("lendo o primeiro chunk: %v", err)
+	}
+
+	primeiro := string(dados)
+	if !strings.HasPrefix(primeiro, `{"`+protocolo.ChaveMoldura+`":"`+protocolo.MolduraSchema+`"`) {
+		t.Fatalf("o primeiro chunk não começa pela linha de schema: %q", primeiro)
+	}
+	if strings.Count(primeiro, "\n") != 1 {
+		t.Errorf("o primeiro chunk traz mais que a linha de schema — o flush depois dela sumiu?\n%q", primeiro)
+	}
+}
+
+// A cláusula não suportada chega ao cliente com código PRÓPRIO, 400 e posição.
+//
+// O código é o que o driver JDBC traduz para SQLState 0A000 (feature not
+// supported) em vez de 42601 (sintaxe) — a diferença entre a ferramenta dizer
+// "este banco não ordena" e "você escreveu errado".
+//
+// O teste também trava a decisão de a distinção morar num CAMPO do SyntaxError
+// e não num tipo de erro próprio: com um tipo, a tradução no servidor
+// dependeria da ORDEM dos cases, e inverter dois deles faria o código novo
+// nunca sair — degradando em silêncio para SYNTAX, sem nada acusar.
+func TestUnsupportedClauseSaiCom400EPosicaoNoProtocolo(t *testing.T) {
+	srv := servidorComDados(t, 1, blocoPadrao)
+
+	resp := consulta(t, srv, `{"dataset":"d","sql":"SELECT id FROM d ORDER BY id"}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		fecha(t, resp)
+		t.Fatalf("status = %d, quer 400", resp.StatusCode)
+	}
+	f := falhaDe(t, resp)
+	if f.Code != protocolo.CodClausulaNaoSuportada {
+		t.Errorf("código = %q, quer %q", f.Code, protocolo.CodClausulaNaoSuportada)
+	}
+	if !strings.Contains(f.Message, "ORDER BY") {
+		t.Errorf("a mensagem não nomeia a cláusula: %q", f.Message)
+	}
+	// 1-based, apontando para o token da CLÁUSULA e não para o seguinte: é ele
+	// que a ferramenta sublinha. Em "SELECT id FROM d ORDER BY id" o ORDER
+	// começa no byte 17 (0-based), logo coluna 18.
+	if f.Line != 1 || f.Column != 18 {
+		t.Errorf("posição = linha %d, coluna %d; quer 1/18 (o token ORDER)", f.Line, f.Column)
+	}
+}
+
+// Uma coluna chamada `order` continua consultável pelo protocolo, e não só no
+// parser: é a garantia de que a mensagem melhor não custou uma query que
+// funcionava.
+func TestColunaChamadaOrderContinuaConsultavelPeloProtocolo(t *testing.T) {
+	srv := servidorComDados(t, 2, blocoPadrao)
+
+	// `porta` existe no dataset de teste; o que se prova aqui é que o
+	// identificador `order` chega ao BINDER (que o recusa por não existir no
+	// schema) em vez de morrer no parser como cláusula.
+	resp := consulta(t, srv, `{"dataset":"d","sql":"SELECT order FROM d"}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		fecha(t, resp)
+		t.Fatalf("status = %d, quer 400", resp.StatusCode)
+	}
+	if f := falhaDe(t, resp); f.Code != protocolo.CodBind {
+		t.Errorf("código = %q, quer %q: `order` tem de chegar ao binder como nome de coluna", f.Code, protocolo.CodBind)
+	}
 }

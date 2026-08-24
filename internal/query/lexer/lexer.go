@@ -326,6 +326,14 @@ func keywordType(s string) (TokenType, bool) {
 // acidente. Não use este truque para normalizar texto arbitrário — comparar
 // s[i]|0x20 == t[i]|0x20 faria '_' (0x5F) casar com 0x7F.
 func asciiEqualFold(s, lower string) bool {
+	return asciiEqualFoldMesmoTamanho(s, lower)
+}
+
+// asciiEqualFoldMesmoTamanho assume len(s) == len(lower) — o switch de
+// keywordType já o garante no caminho quente, e ASCIIEqualFold confere antes
+// de chamar. Uma implementação só, para que o parser e o lexer nunca discordem
+// sobre o que é a mesma palavra.
+func asciiEqualFoldMesmoTamanho(s, lower string) bool {
 	for i := 0; i < len(s); i++ {
 		if s[i]|0x20 != lower[i] {
 			return false

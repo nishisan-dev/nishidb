@@ -7,3 +7,7 @@ dist/
 *.prof
 report.json
 scripts/__pycache__/
+
+# Saída do build do driver JDBC. Escopado, e nunca `target/` solto: um
+# padrão largo esconderia um diretório chamado target que fosse código.
+clients/jdbc/target/

@@ -25,8 +25,8 @@ import (
 // O contrato de saída é o MESMO do caminho local: NDJSON cru no stdout, uma
 // linha por row, e o exit code dizendo o que aconteceu. Um script que troca
 // `--config` por `--server` não muda mais nada.
-func consultaRemota(endereco, dataset, sql string, cred credencialRemota, amb Ambiente) int {
-	corpo, err := json.Marshal(protocolo.Requisicao{Dataset: dataset, SQL: sql})
+func consultaRemota(endereco, dataset, sql string, params []protocolo.Parametro, cred credencialRemota, amb Ambiente) int {
+	corpo, err := json.Marshal(protocolo.Requisicao{Dataset: dataset, SQL: sql, Parameters: params})
 	if err != nil {
 		fmt.Fprintln(amb.Stderr, "query:", err)
 		return ExitUso
@@ -172,7 +172,12 @@ func leStream(corpo io.Reader, amb Ambiente) int {
 // por `--server` num script sem reescrever o tratamento de $?.
 func codigoDoProtocolo(codigo string) int {
 	switch codigo {
-	case protocolo.CodSintaxe, protocolo.CodBind, protocolo.CodBadParameter:
+	case protocolo.CodSintaxe, protocolo.CodBind, protocolo.CodBadParameter,
+		protocolo.CodClausulaNaoSuportada:
+		// UNSUPPORTED_CLAUSE fica junto dos outros erros de QUERY, e não no
+		// default: o que o operador faz diante dele é reescrever o SQL, que é
+		// o significado deste código. Cair no vala-comum o classificaria como
+		// "olhe o comando ou o servidor", que é conselho errado.
 		return ExitQuery
 	case protocolo.CodMaxRows:
 		return ExitTruncado

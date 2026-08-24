@@ -61,8 +61,11 @@ func TestErrosDeSintaxe(t *testing.T) {
 		{"limit overflow", "SELECT a FROM x LIMIT 99999999999999999999", 22, "inteiro fora do intervalo de int64"},
 		{"operando overflow", "SELECT a FROM x WHERE b = 99999999999999999999", 26, "inteiro fora do intervalo de int64"},
 		{"where depois de limit", "SELECT a FROM x LIMIT 10 WHERE a = 1", 25, "conteúdo inesperado após o fim da query"},
-		{"order by", "SELECT a FROM x ORDER BY a", 16, "conteúdo inesperado após o fim da query"},
-		{"offset", "SELECT a FROM x LIMIT 10 OFFSET 5", 25, "conteúdo inesperado após o fim da query"},
+		// ORDER BY e OFFSET saíam daqui, com "conteúdo inesperado após o fim
+		// da query". Hoje são cláusula NOMEADA e vivem em clausulas_test.go —
+		// a recusa é a mesma, o que muda é o que o usuário faz depois de ler.
+		// O caso do `where depois de limit`, logo acima, continua aqui: WHERE
+		// fora de ordem é erro de escrita, não recurso ausente.
 		{"dois comandos", "SELECT a FROM x; SELECT b FROM y", 17, "apenas um comando por query"},
 	}
 

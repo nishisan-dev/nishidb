@@ -71,12 +71,19 @@ func colunaMeta(f *schema.CompiledField) protocolo.ColunaMeta {
 	// e types.TypeNull quando nenhum evento o fixou ainda, que o protocolo
 	// traduz para "unknown"/"OTHER" em vez de escolher um tipo plausível.
 	t := f.EffectiveType()
+	d := protocolo.DescritorDeTipo(t)
 	c := protocolo.ColunaMeta{
-		Name:  f.Name,
-		Type:  protocolo.NomeDeTipo(t),
-		JDBC:  protocolo.JDBCDeTipo(t),
-		Index: f.Index.String(),
-		Auto:  f.IsAuto,
+		Name: f.Name,
+		Type: protocolo.NomeDeTipo(t),
+		JDBC: d.JDBC,
+		// Mesma regra do executor, e a única fonte possível aqui: /v1/metadata
+		// descreve o SCHEMA, então o papel do campo vem direto do compilado.
+		Nullable:    !f.IsKey && !f.IsSequence,
+		Precision:   d.Precision,
+		Scale:       d.Scale,
+		DisplaySize: d.DisplaySize,
+		Index:       f.Index.String(),
+		Auto:        f.IsAuto,
 	}
 	if f.Alias != "" {
 		alias := f.Alias
@@ -148,7 +155,7 @@ func (s *Servidor) handleStats(w http.ResponseWriter, r *http.Request) {
 				Active: int64(s.met.ativas.Com(d.nome).Valor()),
 			},
 			Ingestion: protocolo.IngestaoStats{
-				Enabled: estado != EstadoDesligado,
+				Enabled: estado != protocolo.EstadoDesligado,
 				State:   estado,
 				Paused:  detalhe,
 			},

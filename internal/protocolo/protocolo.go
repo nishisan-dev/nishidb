@@ -109,10 +109,28 @@ type LinhaSchema struct {
 }
 
 // Coluna descreve uma coluna da projeção.
+//
+// Os três números são o que o ResultSetMetaData do §71 precisa além do tipo, e
+// saem do descritor único (DescritorDeTipo): o driver não os recalcula, e por
+// isso um tipo novo no servidor não exige jar novo no cliente.
+//
+// Nullable é o único que NÃO sai do tipo: vem do executor, que é quem tem o
+// campo compilado na mão. false só para a chave e para a sequence — as duas
+// colunas que o materializer garante não-nulas recusando o evento que as traga
+// ausentes ou nulas.
+//
+// SEM omitempty, de propósito. precision:0 é o caso que carrega informação —
+// "sem teto declarado", que é a resposta para string, json e bytes — e com
+// omitempty ele sumiria justamente onde é a decisão. Ausência e zero são
+// indistinguíveis para quem decodifica, mas não para quem lê o contrato.
 type Coluna struct {
-	Name string `json:"name"`
-	Type string `json:"type"`
-	JDBC string `json:"jdbc"`
+	Name        string `json:"name"`
+	Type        string `json:"type"`
+	JDBC        string `json:"jdbc"`
+	Nullable    bool   `json:"nullable"`
+	Precision   int    `json:"precision"`
+	Scale       int    `json:"scale"`
+	DisplaySize int    `json:"displaySize"`
 }
 
 // LinhaFim é a ÚLTIMA linha de uma resposta bem-sucedida.
@@ -160,21 +178,31 @@ type Falha struct {
 // Códigos de erro do protocolo. São estáveis: o cliente casa por código, nunca
 // pelo texto da mensagem, que é prosa para humanos e pode ser reescrita.
 const (
-	CodBadRequest          = "BAD_REQUEST"
-	CodBadParameter        = "BAD_PARAMETER"
-	CodMaxRowsAcimaDoTeto  = "MAX_ROWS_ABOVE_LIMIT"
-	CodColunaReservada     = "RESERVED_COLUMN"
-	CodSintaxe             = "SYNTAX"
-	CodBind                = "BIND"
-	CodDatasetDesconhecido = "UNKNOWN_DATASET"
-	CodMetodo              = "METHOD_NOT_ALLOWED"
-	CodMediaType           = "UNSUPPORTED_MEDIA_TYPE"
-	CodCorpoGrande         = "REQUEST_TOO_LARGE"
-	CodMuitasQueries       = "TOO_MANY_QUERIES"
-	CodTimeout             = "TIMEOUT"
-	CodMaxRows             = "MAX_ROWS_EXCEEDED"
-	CodDatasetCorrompido   = "DATASET_CORRUPT"
-	CodInterno             = "INTERNAL"
+	CodBadRequest         = "BAD_REQUEST"
+	CodBadParameter       = "BAD_PARAMETER"
+	CodMaxRowsAcimaDoTeto = "MAX_ROWS_ABOVE_LIMIT"
+	CodColunaReservada    = "RESERVED_COLUMN"
+	CodSintaxe            = "SYNTAX"
+	CodBind               = "BIND"
+	// CodClausulaNaoSuportada separa "isto não existe nesta versão" de
+	// "você digitou errado", que o CodSintaxe misturava.
+	//
+	// A distinção existe para a ferramenta de SQL: `ORDER BY` saía como
+	// "conteúdo inesperado após o fim da query", e quem escreveu a cláusula
+	// num DBeaver ia procurar o erro de digitação em vez de descobrir que a
+	// v1 não ordena. A mensagem nomeia a cláusula, e o driver JDBC traduz
+	// este código para SQLState 0A000 (feature not supported), não para os
+	// da classe 42 (sintaxe).
+	CodClausulaNaoSuportada = "UNSUPPORTED_CLAUSE"
+	CodDatasetDesconhecido  = "UNKNOWN_DATASET"
+	CodMetodo               = "METHOD_NOT_ALLOWED"
+	CodMediaType            = "UNSUPPORTED_MEDIA_TYPE"
+	CodCorpoGrande          = "REQUEST_TOO_LARGE"
+	CodMuitasQueries        = "TOO_MANY_QUERIES"
+	CodTimeout              = "TIMEOUT"
+	CodMaxRows              = "MAX_ROWS_EXCEEDED"
+	CodDatasetCorrompido    = "DATASET_CORRUPT"
+	CodInterno              = "INTERNAL"
 
 	// CodUnauthenticated e CodForbidden são do middleware de autenticação e
 	// papéis do §74-77 (Fase 11, Task B3) — os dois primeiros códigos deste

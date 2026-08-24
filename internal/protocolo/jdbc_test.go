@@ -1,10 +1,13 @@
 package protocolo_test
 
 import (
+	"bytes"
+	"math"
 	"strings"
 	"testing"
 
 	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/query/executor"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
@@ -33,7 +36,7 @@ func TestATabelaDeTiposDoSpec73(t *testing.T) {
 	}
 	for _, c := range casos {
 		t.Run(c.tipo, func(t *testing.T) {
-			col := protocolo.ColunaDe("x", c.ft)
+			col := protocolo.ColunaDe("x", c.ft, true)
 			if col.Type != c.tipo {
 				t.Fatalf("Type = %q, quer %q", col.Type, c.tipo)
 			}
@@ -47,7 +50,7 @@ func TestATabelaDeTiposDoSpec73(t *testing.T) {
 // Campo auto que o dataset nunca observou não tem tipo. Chamá-lo de VARCHAR
 // seria mentir para o driver: o próximo evento pode fixá-lo como int64.
 func TestCampoAutoNaoObservadoSaiComoUnknown(t *testing.T) {
-	col := protocolo.ColunaDe("attr", types.TypeNull)
+	col := protocolo.ColunaDe("attr", types.TypeNull, true)
 	if col.Type != protocolo.TipoDesconhecido {
 		t.Fatalf("Type = %q, quer %q", col.Type, protocolo.TipoDesconhecido)
 	}
@@ -57,7 +60,7 @@ func TestCampoAutoNaoObservadoSaiComoUnknown(t *testing.T) {
 }
 
 func TestTagDesconhecidaNaoViraTipoPlausivel(t *testing.T) {
-	col := protocolo.ColunaDe("x", types.FieldType(0xEE))
+	col := protocolo.ColunaDe("x", types.FieldType(0xEE), true)
 	if col.Type != protocolo.TipoDesconhecido || col.JDBC != protocolo.JDBCOther {
 		t.Fatalf("coluna = %+v, quer unknown/OTHER", col)
 	}
@@ -84,5 +87,113 @@ func TestTodaTagComNomeTemJDBCEspecifico(t *testing.T) {
 		if got := protocolo.JDBCDeTipo(ft); got == protocolo.JDBCOther {
 			t.Errorf("tipo %q (0x%02x) sai como OTHER: acrescente a linha em JDBCDeTipo", nome, tag)
 		}
+	}
+}
+
+// A tabela de precision/scale/displaySize, caso a caso.
+//
+// Estes números NÃO estão no §73 — a spec não diz "precision" em lugar
+// nenhum. São decisão do produto, tomada olhando para o consumidor: o
+// ResultSetMetaData que o DBeaver lê para dimensionar a coluna do grid antes
+// da primeira row e para escrever o DDL do "Generate SQL". A semântica é a do
+// javadoc: precision em dígitos para numérico, em caracteres para texto e
+// data/hora; scale em dígitos de fração; displaySize em largura NORMAL máxima.
+//
+// Os de texto sem teto declarado valem 0, que é a convenção do JDBC para
+// "desconhecido". Integer.MAX_VALUE seria pior que 0: o DBeaver escreveria
+// VARCHAR(2147483647) no DDL gerado, que nenhum banco de destino aceita — e o
+// schema do NishiDB não declara comprimento de coluna nenhum, então o número
+// seria inventado.
+func TestODescritorDeCadaTipoTemPrecisionScaleEDisplaySize(t *testing.T) {
+	casos := []struct {
+		ft                            types.FieldType
+		jdbc                          string
+		precision, scale, displaySize int
+	}{
+		{types.TypeInt64, protocolo.JDBCBigint, 19, 0, 20},
+		{types.TypeDouble, protocolo.JDBCDouble, 15, 0, 24},
+		{types.TypeBool, protocolo.JDBCBoolean, 1, 0, 5},
+		{types.TypeTimestamp, protocolo.JDBCTimestamp, 24, 3, 24},
+		{types.TypeDateTime, protocolo.JDBCTimestamp, 24, 3, 24},
+		{types.TypeTime, protocolo.JDBCTime, 12, 3, 12},
+		{types.TypeString, protocolo.JDBCVarchar, 0, 0, 0},
+		{types.TypeJSON, protocolo.JDBCVarchar, 0, 0, 0},
+		{types.TypeBytes, protocolo.JDBCVarbinary, 0, 0, 0},
+		{types.TypeIPv4, protocolo.JDBCVarchar, 15, 0, 15},
+		{types.TypeIPv6, protocolo.JDBCVarchar, 39, 0, 39},
+		{types.TypeIPv4Prefix, protocolo.JDBCVarchar, 18, 0, 18},
+		{types.TypeIPv6Prefix, protocolo.JDBCVarchar, 43, 0, 43},
+		{types.TypeNull, protocolo.JDBCOther, 0, 0, 0},
+	}
+	for _, c := range casos {
+		t.Run(protocolo.NomeDeTipo(c.ft), func(t *testing.T) {
+			d := protocolo.DescritorDeTipo(c.ft)
+			if d.JDBC != c.jdbc {
+				t.Errorf("JDBC = %q, quer %q", d.JDBC, c.jdbc)
+			}
+			if d.Precision != c.precision {
+				t.Errorf("Precision = %d, quer %d", d.Precision, c.precision)
+			}
+			if d.Scale != c.scale {
+				t.Errorf("Scale = %d, quer %d", d.Scale, c.scale)
+			}
+			if d.DisplaySize != c.displaySize {
+				t.Errorf("DisplaySize = %d, quer %d", d.DisplaySize, c.displaySize)
+			}
+		})
+	}
+}
+
+// O oráculo que faz o displaySize valer alguma coisa: o número publicado é
+// medido contra o que o ENCODER de fato emite, não contra um manual.
+//
+// Sem ele a tabela acima é opinião — e a opinião erra. O ipv6 de manual é 45,
+// que é a largura da forma mista x:x:x:x:x:x:d.d.d.d; o nosso encoder só usa
+// forma mista para endereço 4-in-6, e essa é MAIS CURTA
+// (::ffff:255.255.255.255 = 22). O que sai do fio no pior caso é ffff:...:ffff
+// = 39, e é o que este teste prova.
+//
+// Só os tipos de largura limitada entram: string, json e bytes não têm teto
+// declarado e publicam 0 por decisão.
+func TestDisplaySizeDeCadaTipoCasaComALarguraQueOEncoderEmite(t *testing.T) {
+	ipv6Cheio := bytes.Repeat([]byte{0xff}, 16)
+	casos := []struct {
+		nome string
+		v    types.Value
+	}{
+		// MinInt64 e não MaxInt64: o display inclui o sinal.
+		{"int64", types.Value{Type: types.TypeInt64, I64: math.MinInt64}},
+		// O 'g' de -MaxFloat64 é a forma mais larga que AppendFloat produz.
+		{"double", types.Value{Type: types.TypeDouble, I64: int64(math.Float64bits(-math.MaxFloat64))}},
+		{"boolean", types.Value{Type: types.TypeBool, I64: 0}}, // "false" é mais largo que "true"
+		{"timestamp", types.Value{Type: types.TypeTimestamp, I64: 1755990784123}},
+		{"datetime", types.Value{Type: types.TypeDateTime, I64: 1755990784123}},
+		{"time", types.Value{Type: types.TypeTime, I64: types.MillisPorDia - 1}},
+		{"ipv4", types.Value{Type: types.TypeIPv4, Bytes: []byte{255, 255, 255, 255}}},
+		{"ipv6", types.Value{Type: types.TypeIPv6, Bytes: ipv6Cheio}},
+		{"ipv4_prefix", types.Value{Type: types.TypeIPv4Prefix, Bytes: []byte{255, 255, 255, 255, 32}}},
+		{"ipv6_prefix", types.Value{Type: types.TypeIPv6Prefix, Bytes: append(append([]byte{}, ipv6Cheio...), 128)}},
+	}
+	for _, c := range casos {
+		t.Run(c.nome, func(t *testing.T) {
+			out := executor.AppendValue(nil, c.v)
+			largura := len(out)
+			if len(out) >= 2 && out[0] == '"' && out[len(out)-1] == '"' {
+				largura -= 2 // displaySize é do VALOR, não da grafia JSON
+			}
+			if got := protocolo.DescritorDeTipo(c.v.Type).DisplaySize; got != largura {
+				t.Errorf("DisplaySize = %d, mas o encoder emitiu %d caracteres: %s", got, largura, out)
+			}
+		})
+	}
+}
+
+// Tag que não é tipo de campo não ganha número plausível. Um precision
+// inventado para um tipo que não conhecemos seria pior que zero: o driver
+// dimensionaria a coluna por ele.
+func TestTipoSemNomeTemDescritorZerado(t *testing.T) {
+	d := protocolo.DescritorDeTipo(types.FieldType(0xEE))
+	if d.JDBC != protocolo.JDBCOther || d.Precision != 0 || d.Scale != 0 || d.DisplaySize != 0 {
+		t.Fatalf("descritor = %+v, quer OTHER com 0/0/0", d)
 	}
 }

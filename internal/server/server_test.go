@@ -17,6 +17,7 @@ import (
 
 	"github.com/nishisan-dev/nishidb/internal/config"
 	"github.com/nishisan-dev/nishidb/internal/logging"
+	"github.com/nishisan-dev/nishidb/internal/protocolo"
 	"github.com/nishisan-dev/nishidb/internal/server"
 )
 
@@ -134,15 +135,15 @@ func TestIngestaoQueNaoSobeNaoDerrubaAsConsultas(t *testing.T) {
 	fim := make(chan error, 1)
 	go func() { fim <- srv.Roda(ctx, "") }()
 
-	esperaHealth(t, srv, func(h server.Saude) bool {
-		return h.Datasets["quebrado"] == server.EstadoDown
+	esperaHealth(t, srv, func(h protocolo.Saude) bool {
+		return h.Datasets["quebrado"] == protocolo.EstadoDown
 	})
 
 	h := leHealth(t, srv)
-	if h.Datasets["bom"] != server.EstadoDesligado {
-		t.Errorf("dataset sem Kafka = %q, quer %q", h.Datasets["bom"], server.EstadoDesligado)
+	if h.Datasets["bom"] != protocolo.EstadoDesligado {
+		t.Errorf("dataset sem Kafka = %q, quer %q", h.Datasets["bom"], protocolo.EstadoDesligado)
 	}
-	if h.Kafka != server.EstadoDown {
+	if h.Kafka != protocolo.EstadoDown {
 		t.Errorf("kafka = %q, quer DOWN: um dataset parado não pode sair como UP", h.Kafka)
 	}
 	if h.Detalhes["quebrado"] == "" {
@@ -170,10 +171,10 @@ func TestEnabledFalseNaoSobeConsumer(t *testing.T) {
 	// como DOWN em poucos segundos.
 	time.Sleep(2 * time.Second)
 	h := leHealth(t, srv)
-	if h.Datasets["inerte"] != server.EstadoDesligado {
+	if h.Datasets["inerte"] != protocolo.EstadoDesligado {
 		t.Errorf("dataset = %q, quer DISABLED: enabled:false não pode subir consumer", h.Datasets["inerte"])
 	}
-	if h.Status != server.EstadoUP {
+	if h.Status != protocolo.EstadoUP {
 		t.Errorf("status = %q, quer UP", h.Status)
 	}
 	cancela()
@@ -295,9 +296,9 @@ func pega(t *testing.T, srv *server.Servidor, caminho string) string {
 	return string(b)
 }
 
-func leHealth(t *testing.T, srv *server.Servidor) server.Saude {
+func leHealth(t *testing.T, srv *server.Servidor) protocolo.Saude {
 	t.Helper()
-	var h server.Saude
+	var h protocolo.Saude
 	if err := json.Unmarshal([]byte(pega(t, srv, "/v1/health")), &h); err != nil {
 		t.Fatalf("health: %v", err)
 	}
@@ -306,7 +307,7 @@ func leHealth(t *testing.T, srv *server.Servidor) server.Saude {
 
 // esperaHealth espera por CONDIÇÃO, e não por sleep: dormir esconde tanto a
 // lentidão quanto a ausência de progresso.
-func esperaHealth(t *testing.T, srv *server.Servidor, ok func(server.Saude) bool) {
+func esperaHealth(t *testing.T, srv *server.Servidor, ok func(protocolo.Saude) bool) {
 	t.Helper()
 	prazo := time.Now().Add(15 * time.Second)
 	for time.Now().Before(prazo) {
@@ -452,5 +453,29 @@ func TestStorageDurabilityIgnoradaApareceNaSubida(t *testing.T) {
 	saida := sobeCapturandoLog(t, a)
 	if !strings.Contains(saida, "storage.durability") {
 		t.Fatalf("a chave sem implementação não foi nomeada: %s", saida)
+	}
+}
+
+// O corpo do /v1/health é contrato: o driver JDBC vai lê-lo pelo pacote
+// protocolo, e o painel Python já o lê hoje. Mover o tipo de pacote não pode
+// mudar um byte.
+//
+// A asserção é sobre os BYTES, e não sobre a struct decodificada, porque é o
+// que um refactor de serialização de fato quebra: renomear uma tag json,
+// perder o SetIndent, ganhar um omitempty. Nada disso aparece quando o teste
+// decodifica de volta para a própria struct que produziu a saída.
+func TestOCorpoDoHealthNaoMudouComAMudancaDePacote(t *testing.T) {
+	srv := servidorComDados(t, 1, blocoPadrao)
+
+	quer := "{\n" +
+		"  \"status\": \"UP\",\n" +
+		"  \"kafka\": \"DISABLED\",\n" +
+		"  \"storage\": \"UP\",\n" +
+		"  \"datasets\": {\n" +
+		"    \"d\": \"DISABLED\"\n" +
+		"  }\n" +
+		"}\n"
+	if got := pega(t, srv, "/v1/health"); got != quer {
+		t.Errorf("corpo do /v1/health mudou:\n--- got ---\n%s\n--- quer ---\n%s", got, quer)
 	}
 }

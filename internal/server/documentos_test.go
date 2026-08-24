@@ -2,9 +2,11 @@ package server_test
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -97,16 +99,38 @@ func TestMetadataFiltraPorDataset(t *testing.T) {
 	}
 }
 
+// As QUATRO rotas de leitura, e não duas.
+//
+// /metrics e /v1/health eram a exceção herdada de antes da Fase 11: o padrão
+// levava o prefixo "GET " e o método errado saía com o 405 de TEXTO PURO do
+// próprio mux, fora do contrato CorpoErro. Um cliente que soubesse decodificar
+// a recusa das outras cinco rotas encontrava outra coisa nessas duas — e o
+// driver JDBC decodifica a recusa em UM caminho só, para traduzi-la em
+// SQLState.
 func TestRotasDeLeituraRecusamMetodoErrado(t *testing.T) {
 	srv := servidorComDados(t, 1, blocoPadrao)
 
-	for _, caminho := range []string{"/v1/metadata", "/v1/stats"} {
+	// O Allow difere, e diz a verdade sobre cada rota: /metrics e /v1/health
+	// aceitam HEAD (era o que o mux fazia sozinho quando o método vivia no
+	// padrão, e um health check por HEAD não pode ter sido quebrado por uma
+	// mudança que só queria uniformizar o CORPO da recusa). As outras duas
+	// recusam HEAD desde sempre, e ampliá-las não é escopo daqui.
+	rotas := map[string]string{
+		"/v1/metadata": http.MethodGet,
+		"/v1/stats":    http.MethodGet,
+		"/metrics":     "GET, HEAD",
+		"/v1/health":   "GET, HEAD",
+	}
+	for caminho, permitidoQuer := range rotas {
 		resp, err := http.Post("http://"+srv.Endereco()+caminho, "application/json", strings.NewReader("{}"))
 		if err != nil {
 			t.Fatal(err)
 		}
 		if resp.StatusCode != http.StatusMethodNotAllowed {
 			t.Fatalf("POST %s = %d, quer 405", caminho, resp.StatusCode)
+		}
+		if permitido := resp.Header.Get("Allow"); permitido != permitidoQuer {
+			t.Errorf("POST %s: Allow = %q, quer %q", caminho, permitido, permitidoQuer)
 		}
 		if f := falhaDe(t, resp); f.Code != protocolo.CodMetodo {
 			t.Fatalf("POST %s: código = %q", caminho, f.Code)
@@ -161,7 +185,7 @@ func TestStatsConcordaComOMetrics(t *testing.T) {
 	// Sem Kafka declarado, a ingestão é DISABLED — o mesmo vocabulário do §94,
 	// para as duas rotas não descreverem a mesma realidade com palavras
 	// diferentes.
-	if ds.Ingestion.State != server.EstadoDesligado || ds.Ingestion.Enabled {
+	if ds.Ingestion.State != protocolo.EstadoDesligado || ds.Ingestion.Enabled {
 		t.Fatalf("ingestão = %+v", ds.Ingestion)
 	}
 	if h := leHealth(t, srv); h.Datasets["d"] != ds.Ingestion.State {
@@ -357,5 +381,182 @@ func TestStatsReportaACompactionParadaComAChaveDesligada(t *testing.T) {
 	if st.Compaction.BytesRead != 0 || st.Compaction.BytesWritten != 0 {
 		t.Errorf("compaction moveu %d/%d bytes com a chave desligada",
 			st.Compaction.BytesRead, st.Compaction.BytesWritten)
+	}
+}
+
+// colunasDoSchemaDaConsulta devolve a linha de schema de uma consulta, que é a
+// outra metade do contrato de metadados — a que descreve a PROJEÇÃO.
+func colunasDoSchemaDaConsulta(t *testing.T, srv *server.Servidor, sql string) []protocolo.Coluna {
+	t.Helper()
+	resp := consulta(t, srv, `{"dataset":"d","sql":`+strconv.Quote(sql)+`}`)
+	_, l := resultado(t, resp)
+	sch := l.Schema()
+	if sch == nil {
+		t.Fatal("a resposta não trouxe linha de schema")
+	}
+	return sch.Columns
+}
+
+// Os três números do ResultSetMetaData saem na linha de schema, por coluna.
+//
+// Sem eles o driver teria de carregar a tabela por dentro do jar, e um tipo
+// novo no servidor passaria a ser descrito por uma constante compilada num
+// artefato que só se corrige com release.
+func TestALinhaDeSchemaPublicaPrecisionScaleEDisplaySize(t *testing.T) {
+	srv := servidorComDados(t, 2, blocoPadrao)
+
+	cols := colunasDoSchemaDaConsulta(t, srv, "SELECT id, porta, ip FROM d")
+	quer := []protocolo.Coluna{
+		// "id" é a CHAVE do dataset: nullable false. string não tem teto
+		// declarado, então os três números são 0 — a convenção do JDBC para
+		// desconhecido.
+		{Name: "id", Type: "string", JDBC: protocolo.JDBCVarchar, Nullable: false, Precision: 0, Scale: 0, DisplaySize: 0},
+		{Name: "porta", Type: "int64", JDBC: protocolo.JDBCBigint, Nullable: true, Precision: 19, Scale: 0, DisplaySize: 20},
+		{Name: "ip", Type: "ipv4", JDBC: protocolo.JDBCVarchar, Nullable: true, Precision: 15, Scale: 0, DisplaySize: 15},
+	}
+	if len(cols) != len(quer) {
+		t.Fatalf("colunas = %d, quer %d", len(cols), len(quer))
+	}
+	for i := range quer {
+		if cols[i] != quer[i] {
+			t.Errorf("coluna %d = %+v, quer %+v", i, cols[i], quer[i])
+		}
+	}
+}
+
+// O godoc de DescritorDeTipo promete que o driver nunca vai "descrever a mesma
+// coluna de dois jeitos conforme a rota que consultou". Ninguém cobrava.
+//
+// Este é o oráculo: para a MESMA coluna, /v1/metadata e a linha de schema de
+// /v1/query têm de publicar os quatro campos de tipo idênticos. É o teste que
+// quebra no dia em que alguém acrescentar um campo num dos dois caminhos de
+// serialização e esquecer o outro — que é o modo de falha real, porque os dois
+// pontos ficam em arquivos diferentes.
+func TestMetadataPublicaOsMesmosNumerosQueALinhaDeSchema(t *testing.T) {
+	srv := servidorComDados(t, 2, blocoPadrao)
+
+	meta := leJSON[protocolo.Metadados](t, srv, "/v1/metadata")
+	if len(meta.Datasets) != 1 {
+		t.Fatalf("datasets = %d, quer 1", len(meta.Datasets))
+	}
+	// A chave é o nome de SAÍDA, que é o alias quando o campo tem um.
+	//
+	// ARMADILHA PARA O DRIVER, e a razão de este mapa não ser porNome[c.Name]:
+	// as duas rotas nomeiam a mesma coluna de formas diferentes por decisão. A
+	// linha de schema traz o nome que aparece na resposta — o alias, porque é
+	// ele que é chave do objeto JSON de cada row —, enquanto o /v1/metadata
+	// traz o nome do CAMPO e o alias num campo à parte, porque descreve o
+	// schema e não uma projeção. O DatabaseMetaData.getColumns() do driver vai
+	// publicar "status", e o ResultSetMetaData de SELECT * vai publicar
+	// "estado", para a mesma coluna. Casar os dois por igualdade de nome não
+	// funciona, e é assim que um findColumn ingênuo erra.
+	porSaida := map[string]protocolo.ColunaMeta{}
+	for _, c := range meta.Datasets[0].Columns {
+		saida := c.Name
+		if c.Alias != nil {
+			saida = *c.Alias
+		}
+		porSaida[saida] = c
+	}
+
+	// SELECT * cobre TODAS as colunas do dataset, não uma amostra escolhida —
+	// é o que faz o teste continuar exaustivo quando o spec de teste crescer.
+	for _, col := range colunasDoSchemaDaConsulta(t, srv, "SELECT * FROM d") {
+		m, ok := porSaida[col.Name]
+		if !ok {
+			t.Errorf("coluna de saída %q está no schema da consulta e não no /v1/metadata", col.Name)
+			continue
+		}
+		if m.Type != col.Type || m.JDBC != col.JDBC || m.Nullable != col.Nullable ||
+			m.Precision != col.Precision || m.Scale != col.Scale || m.DisplaySize != col.DisplaySize {
+			t.Errorf("coluna %q diverge entre as rotas:\n  /v1/metadata: type=%q jdbc=%q null=%v p=%d s=%d d=%d\n  /v1/query:    type=%q jdbc=%q null=%v p=%d s=%d d=%d",
+				col.Name, m.Type, m.JDBC, m.Nullable, m.Precision, m.Scale, m.DisplaySize,
+				col.Type, col.JDBC, col.Nullable, col.Precision, col.Scale, col.DisplaySize)
+		}
+	}
+}
+
+// Os campos saem SEM omitempty, e este teste trava a decisão.
+//
+// precision:0 é justamente o caso que carrega informação — "sem teto
+// declarado" —, e com omitempty ele sumiria do JSON. O driver leria a ausência
+// como zero do mesmo jeito, mas o contrato deixaria de dizer o que decidiu, e
+// um cliente escrito contra o campo ausente passaria a ver o campo aparecer no
+// dia em que o tipo ganhasse teto.
+//
+// A asserção é sobre os BYTES, e não sobre a struct decodificada, porque é a
+// única forma de distinguir "0 escrito" de "campo omitido": as duas decodificam
+// para o mesmo zero.
+func TestPrecisionZeroSaiNoJSONEmVezDeSerOmitida(t *testing.T) {
+	srv := servidorComDados(t, 1, blocoPadrao)
+
+	resp := consulta(t, srv, `{"dataset":"d","sql":"SELECT id FROM d"}`)
+	defer fecha(t, resp)
+	bruto, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	primeira, _, _ := strings.Cut(string(bruto), "\n")
+	for _, chave := range []string{`"precision":0`, `"scale":0`, `"displaySize":0`} {
+		if !strings.Contains(primeira, chave) {
+			t.Errorf("a linha de schema não traz %s — omitempty entrou no campo?\n%s", chave, primeira)
+		}
+	}
+}
+
+// A chave sai NÃO-NULÁVEL nas duas rotas, e é o que o DBeaver lê para desenhar
+// a chave primária e para gerar o DDL.
+//
+// A afirmação não é uma convenção: é o que o materializer garante, recusando o
+// evento cuja chave venha ausente, nula ou vazia — os cinco casos estão em
+// TestParseKeyAndSequenceErrorsSayTheCause. Sem essa recusa do outro lado,
+// nullable:false aqui seria só uma opinião publicada no contrato.
+func TestAChaveSaiNaoNulavelNasDuasRotas(t *testing.T) {
+	srv := servidorComDados(t, 2, blocoPadrao)
+
+	meta := leJSON[protocolo.Metadados](t, srv, "/v1/metadata")
+	achou := false
+	for _, c := range meta.Datasets[0].Columns {
+		if c.Name != meta.Datasets[0].Key {
+			continue
+		}
+		achou = true
+		if c.Nullable {
+			t.Errorf("/v1/metadata publica a chave %q como nulável", c.Name)
+		}
+	}
+	if !achou {
+		t.Fatalf("a chave %q não aparece nas colunas do /v1/metadata", meta.Datasets[0].Key)
+	}
+
+	cols := colunasDoSchemaDaConsulta(t, srv, "SELECT id FROM d")
+	if cols[0].Nullable {
+		t.Errorf("a linha de schema publica a chave como nulável: %+v", cols[0])
+	}
+}
+
+// HEAD continua servido em /metrics e /v1/health.
+//
+// Enquanto o padrão de registro era "GET /metrics", o mux tratava HEAD como
+// GET automaticamente. Tirar o método do padrão para uniformizar o corpo do
+// 405 tirou junto esse tratamento, e sem uma conferência explícita dentro do
+// handler um health check por HEAD passaria a receber 405 — regressão de
+// operação causada por uma mudança que só queria mexer no corpo do erro.
+func TestHeadContinuaServidoEmMetricsEHealth(t *testing.T) {
+	srv := servidorComDados(t, 1, blocoPadrao)
+
+	for _, caminho := range []string{"/metrics", "/v1/health"} {
+		req, err := http.NewRequest(http.MethodHead, "http://"+srv.Endereco()+caminho, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("HEAD %s: %v", caminho, err)
+		}
+		fecha(t, resp)
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("HEAD %s = %d, quer 200", caminho, resp.StatusCode)
+		}
 	}
 }
