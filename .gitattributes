@@ -1,0 +1,6 @@
+# O mvnw.cmd é script de Windows e precisa de CRLF: normalizado para LF, o
+# cmd.exe o executa errado. O mvnw (shell) precisa do oposto, e explicitá-lo
+# evita que um core.autocrlf mal configurado na máquina de alguém o quebre no
+# Linux.
+clients/jdbc/mvnw.cmd text eol=crlf
+clients/jdbc/mvnw     text eol=lf

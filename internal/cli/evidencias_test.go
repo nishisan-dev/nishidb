@@ -59,8 +59,13 @@ func testesDoRepositorio(t *testing.T) map[string]bool {
 			return err
 		}
 		if d.IsDir() {
-			// .git e as worktrees não têm código nosso e são grandes.
-			if nome := d.Name(); nome == ".git" || nome == ".claude" {
+			// .git e as worktrees não têm código nosso e são grandes;
+			// target é a saída do build do driver JDBC, que o Maven enche de
+			// classes e de relatórios. Nenhum dos três tem *_test.go, então
+			// pular é economia de varredura — mas é também o que impede um
+			// arquivo COPIADO para dentro de target de virar oráculo: o
+			// documento poderia citar um teste que não existe mais na fonte.
+			if nome := d.Name(); nome == ".git" || nome == ".claude" || nome == "target" {
 				return fs.SkipDir
 			}
 			return nil

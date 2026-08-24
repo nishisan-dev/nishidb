@@ -1,4 +1,4 @@
-.PHONY: build test test-race test-integration test-python lint bench bench-micro cover
+.PHONY: build test test-race test-integration test-python lint bench bench-micro cover build-jdbc test-jdbc-unit
 
 # `go build ./...` sozinho DESCARTA o binário: o módulo tem dois packages
 # main (cmd/nishidb e benchmark/ingest-bench), e sem -o o toolchain só
@@ -33,6 +33,37 @@ test-race:
 
 test-integration:
 	go test -race -tags integration ./...
+
+# ------------------------------------------------------------------ driver JDBC
+#
+# O repositório passou a ser poliglota na Fase 7, e o §97 continua valendo para
+# o `nishidb`: o binário é único e sem runtime externo. O .jar é artefato de
+# CLIENTE, não do engine.
+#
+# `make test` NÃO chama nada daqui, de propósito: a suíte Go não pode passar a
+# exigir uma JVM instalada para rodar. Quem mexe no driver chama estes alvos.
+JDBC_DIR := clients/jdbc
+
+# O ramo `else` falha ALTO e nomeia o que falta, como o alvo `lint`: um gate que
+# passa quando a ferramenta está AUSENTE não é gate, é carimbo (débito 53). O
+# Maven não entra na conta — o wrapper o baixa, na versão pinada.
+define exige-java
+	@if ! command -v java >/dev/null 2>&1; then \
+		echo "erro: java não está no PATH — o driver JDBC exige JDK 21 ou mais novo." >&2; \
+		echo "  Ubuntu/Debian: apt install openjdk-21-jdk" >&2; \
+		exit 1; \
+	fi
+endef
+
+build-jdbc:
+	$(exige-java)
+	cd $(JDBC_DIR) && ./mvnw -B -DskipTests package
+
+# Só os unitários: não sobem servidor, não pedem porta, rodam em qualquer
+# máquina com JDK. Os de integração contra o binário real ficam no test-jdbc.
+test-jdbc-unit:
+	$(exige-java)
+	cd $(JDBC_DIR) && ./mvnw -B test
 
 # scripts/nishidb-stats.py é código de produção — o painel que o operador lê
 # em cima de um incidente —, e até a Task A3 o teste dele
