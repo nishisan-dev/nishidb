@@ -40,12 +40,32 @@ public final class SqlStates {
     /** 08P01 — violação de protocolo: o driver falou errado, ou não é o servidor esperado. */
     public static final String PROTOCOLO_VIOLADO = "08P01";
 
+    // ---- classe 22: o dado em si
+    //
+    // Os três abaixo são PÚBLICOS porque não vêm do fio: nascem na conversão
+    // do lado do cliente, quando a aplicação pede de uma coluna um tipo que o
+    // valor não representa. O SQLState continua sendo o mesmo vocabulário — é
+    // por ele que uma ferramenta distingue "o dado não cabe" de "a consulta
+    // está errada", e inventar um código próprio para o caminho do cliente
+    // criaria duas linguagens para o mesmo assunto.
+    /** 22003 — o valor não cabe no tipo pedido (overflow, ou fração onde só cabe inteiro). */
+    public static final String VALOR_FORA_DE_FAIXA = "22003";
+    /** 22018 — o valor não tem a forma do tipo pedido. */
+    public static final String CONVERSAO_INVALIDA = "22018";
+    /** 22007 — texto que deveria ser data/hora e não é. */
+    public static final String FORMATO_TEMPORAL_INVALIDO = "22007";
+
+    /** 0A000 — o driver não implementa este método ou esta conversão. */
+    public static final String NAO_SUPORTADO = "0A000";
+
+    /** XX000 — defeito do próprio driver, não do servidor nem da aplicação. */
+    public static final String INTERNO = "XX000";
+
     // ---- os demais, na tabela abaixo
     private static final String SINTAXE = "42601";
     private static final String BIND = "42000";
     private static final String TABELA_INEXISTENTE = "42S02";
     private static final String SEM_PRIVILEGIO = "42501";
-    private static final String NAO_SUPORTADO = "0A000";
     private static final String DADO_INVALIDO = "22023";
     private static final String RECURSO_EXCEDIDO = "53400";
     private static final String RECURSO_INSUFICIENTE = "53000";
@@ -54,7 +74,6 @@ public final class SqlStates {
     private static final String OBJETO_EM_USO = "55006";
     private static final String AUTENTICACAO = "28000";
     private static final String IO_DO_SISTEMA = "58030";
-    private static final String INTERNO = "XX000";
     private static final String CORRUPCAO = "XX001";
     /** HY000 — código que este driver não conhece. Nunca degrada para INTERNAL. */
     public static final String DESCONHECIDO = "HY000";
