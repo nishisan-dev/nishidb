@@ -293,6 +293,25 @@ Escopo esboçado; ganha spec própria quando o M5 fechar.
 - **Fase 8 — índice hash físico (débito 19).** Planner e executor já implementam a rota
   e a testam contra o dublê; no real degrada para full scan.
 - **Fase 12 — memory optimization.**
+- **Campos aninhados consultáveis (feature nova, rascunho aberto).** Nasceu de uma
+  pergunta sobre a coluna `persistent` do piloto e cresceu com a medição:
+  extração declarada de caminhos dentro de um campo `json`, `SELECT *` sem
+  expandir aninhado, `maxNestedCols` na forma do `maxRows`, `maxCols` com
+  política de estouro que NUNCA para a ingestão, índice declarativo sobre campo
+  autodescoberto com backfill em segundo plano, e introspecção do sub-schema por
+  SQL num espaço `_meta` (o que traz a regra de dataset não começar com `_`).
+  Rascunho com os números em
+  [planning/feature-mapeamento-de-campos-aninhados.md](planning/feature-mapeamento-de-campos-aninhados.md).
+- **Bug achado no caminho, independente da feature acima:** o teto de 65.535
+  campos do dicionário **derruba o writer do dataset** em vez de degradar, e o
+  registro é irreversível. Rastreado no código, ainda **não reproduzido** —
+  reproduzir antes de abrir issue. Sobre uma grandeza que cresce sem teto,
+  atingir o limite não é anomalia, é questão de tempo.
+- **NDJSON esparso (investigação).** Não emitir a chave da coluna nula
+  desacoplaria o custo da resposta do tamanho do dicionário — 82,9% das chaves do
+  `persistent` respondem por 2,91% das ocorrências. Muda o contrato do fio e o
+  driver JDBC junto, que hoje casa linha e schema por POSIÇÃO justamente porque
+  toda coluna vem em toda linha.
 
 ---
 
