@@ -61,6 +61,50 @@ jobs:
   # número real, ver o comentário do alvo `lint`), extrai a CONTAGEM em JSON e
   # compara com .golangci-baseline: ratchet bidirecional, contagem maior OU
   # menor reprovam.
+  # O driver JDBC contra o BINÁRIO REAL, e não contra o servidor de mentira dos
+  # unitários.
+  #
+  # `make test-jdbc-unit` fala com o servidor HTTP do próprio JDK, respondendo o
+  # que o autor do teste escreveu — ele prova que o driver faz o que quem o
+  # escreveu ACHA que o servidor emite. Este job roda a outra metade: sobe o
+  # binário com TLS e credencial, ingere um corpus com um campo de cada tipo, e
+  # deixa o driver falar com ele. É onde uma divergência entre o fio suposto e o
+  # fio real aparece.
+  #
+  # O alvo seta NISHIDB_IT_REQUIRED=1, e é isso que impede o pior desfecho:
+  # harness quebrado com suíte VERDE e zero teste de integração executado — o
+  # débito 53 por uma porta nova.
+  #
+  # Go junto com Java porque o script compila o servidor a partir da árvore,
+  # pelo alvo do Makefile (é ele que carimba os ldflags de versão, e um dos
+  # testes confere que o driver publica essa versão).
+  #
+  # timeout generoso: a ingestão do corpus de 120 mil linhas mais a suíte Java
+  # levam ~2 min localmente, e o runner é mais lento.
+  jdbc:
+    name: test-jdbc (driver contra o binário real)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.5'
+      - uses: actions/setup-java@v4
+        with:
+          # EXATA, e igual ao maven.compiler.release do pom — um gate compara
+          # as duas extrações. Faixa (`21.x`) deixaria o runner escolher o
+          # patch, e o CI compilaria com um compilador que ninguém mediu.
+          java-version: '21'
+          # Fixada, e não o default da action: distribuições diferentes trazem
+          # defaults de TLS diferentes, e este job depende de handshake com
+          # certificado gerado na hora.
+          distribution: 'temurin'
+          cache: 'maven'
+          cache-dependency-path: clients/jdbc/pom.xml
+      - name: roda o driver contra um servidor de verdade
+        run: make test-jdbc
+
   lint:
     name: lint (golangci-lint + gofmt)
     runs-on: ubuntu-latest

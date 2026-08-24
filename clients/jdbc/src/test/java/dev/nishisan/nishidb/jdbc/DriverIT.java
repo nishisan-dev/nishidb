@@ -157,9 +157,20 @@ class DriverIT {
         try (Connection c = conecta()) {
             DatabaseMetaData m = c.getMetaData();
             assertEquals("NishiDB", m.getDatabaseProductName());
-            assertNotNull(m.getDatabaseProductVersion());
-            assertTrue(m.getDatabaseProductVersion().startsWith("v"),
-                    "a versão do processo devia vir do /v1/stats: " + m.getDatabaseProductVersion());
+            // A versão vem do /v1/stats, e o que se afirma aqui é a FORMA do
+            // buildinfo — uma constante no driver não teria "commit". Afirmar
+            // que começa com "v" testaria o AMBIENTE DE BUILD e não o driver:
+            // o checkout do CI é clone raso sem tags, então o
+            // `git describe --tags --always` do Makefile cai no SHA puro.
+            String versao = m.getDatabaseProductVersion();
+            assertFalse(versao.isBlank(), "getDatabaseProductVersion veio vazia");
+            assertTrue(versao.contains("commit "),
+                    "a versão devia ter a forma do buildinfo do servidor: " + versao);
+            // E major/minor DEGRADAM para zero quando a versão não é
+            // parseável, sem lançar. No CI esse é o caso real — é o único
+            // ambiente em que este caminho é exercitado.
+            assertTrue(m.getDatabaseMajorVersion() >= 0);
+            assertTrue(m.getDatabaseMinorVersion() >= 0);
             assertEquals("\"", m.getIdentifierQuoteString());
             assertFalse(m.supportsTransactions());
 
