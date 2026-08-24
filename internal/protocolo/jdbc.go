@@ -154,6 +154,19 @@ func JDBCDeTipo(t types.FieldType) string {
 
 // ColunaDe monta a descrição de uma coluna a partir do nome de saída e do tipo
 // declarado.
+//
+// Um DescritorDeTipo por coluna, e não por row: isto roda uma vez por consulta,
+// no momento de escrever a linha de schema, fora do laço que emite as linhas de
+// dados. É por isso que executor.ColMeta não precisa carregar os três números —
+// derivá-los aqui não custa alocação nenhuma no caminho quente.
 func ColunaDe(nome string, t types.FieldType) Coluna {
-	return Coluna{Name: nome, Type: NomeDeTipo(t), JDBC: JDBCDeTipo(t)}
+	d := DescritorDeTipo(t)
+	return Coluna{
+		Name:        nome,
+		Type:        NomeDeTipo(t),
+		JDBC:        d.JDBC,
+		Precision:   d.Precision,
+		Scale:       d.Scale,
+		DisplaySize: d.DisplaySize,
+	}
 }

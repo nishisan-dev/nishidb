@@ -38,13 +38,23 @@ type DatasetMeta struct {
 // Auto marca o campo sem tipo declarado. Quando ele ainda não foi observado,
 // Type é "unknown" e JDBC é "OTHER" — a única resposta honesta, já que o
 // próximo evento pode fixá-lo como qualquer coisa.
+//
+// Os quatro campos de tipo (Type, JDBC, Precision, Scale, DisplaySize) saem do
+// MESMO DescritorDeTipo que a linha de schema de /v1/query usa, e
+// TestMetadataPublicaOsMesmosNumerosQueALinhaDeSchema cobra que as duas rotas
+// descrevam a mesma coluna do mesmo jeito. Os dois pontos de serialização
+// ficam em arquivos diferentes: sem esse teste, acrescentar um campo em um e
+// esquecer o outro passaria.
 type ColunaMeta struct {
-	Name  string  `json:"name"`
-	Alias *string `json:"alias"`
-	Type  string  `json:"type"`
-	JDBC  string  `json:"jdbc"`
-	Index string  `json:"index"`
-	Auto  bool    `json:"auto"`
+	Name        string  `json:"name"`
+	Alias       *string `json:"alias"`
+	Type        string  `json:"type"`
+	JDBC        string  `json:"jdbc"`
+	Precision   int     `json:"precision"`
+	Scale       int     `json:"scale"`
+	DisplaySize int     `json:"displaySize"`
+	Index       string  `json:"index"`
+	Auto        bool    `json:"auto"`
 }
 
 // Estatisticas é o corpo de GET /v1/stats.

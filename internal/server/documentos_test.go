@@ -2,9 +2,11 @@ package server_test
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -357,5 +359,123 @@ func TestStatsReportaACompactionParadaComAChaveDesligada(t *testing.T) {
 	if st.Compaction.BytesRead != 0 || st.Compaction.BytesWritten != 0 {
 		t.Errorf("compaction moveu %d/%d bytes com a chave desligada",
 			st.Compaction.BytesRead, st.Compaction.BytesWritten)
+	}
+}
+
+// colunasDoSchemaDaConsulta devolve a linha de schema de uma consulta, que é a
+// outra metade do contrato de metadados — a que descreve a PROJEÇÃO.
+func colunasDoSchemaDaConsulta(t *testing.T, srv *server.Servidor, sql string) []protocolo.Coluna {
+	t.Helper()
+	resp := consulta(t, srv, `{"dataset":"d","sql":`+strconv.Quote(sql)+`}`)
+	_, l := resultado(t, resp)
+	sch := l.Schema()
+	if sch == nil {
+		t.Fatal("a resposta não trouxe linha de schema")
+	}
+	return sch.Columns
+}
+
+// Os três números do ResultSetMetaData saem na linha de schema, por coluna.
+//
+// Sem eles o driver teria de carregar a tabela por dentro do jar, e um tipo
+// novo no servidor passaria a ser descrito por uma constante compilada num
+// artefato que só se corrige com release.
+func TestALinhaDeSchemaPublicaPrecisionScaleEDisplaySize(t *testing.T) {
+	srv := servidorComDados(t, 2, blocoPadrao)
+
+	cols := colunasDoSchemaDaConsulta(t, srv, "SELECT id, porta, ip FROM d")
+	quer := []protocolo.Coluna{
+		// string não tem teto declarado: 0, a convenção do JDBC para desconhecido.
+		{Name: "id", Type: "string", JDBC: protocolo.JDBCVarchar, Precision: 0, Scale: 0, DisplaySize: 0},
+		{Name: "porta", Type: "int64", JDBC: protocolo.JDBCBigint, Precision: 19, Scale: 0, DisplaySize: 20},
+		{Name: "ip", Type: "ipv4", JDBC: protocolo.JDBCVarchar, Precision: 15, Scale: 0, DisplaySize: 15},
+	}
+	if len(cols) != len(quer) {
+		t.Fatalf("colunas = %d, quer %d", len(cols), len(quer))
+	}
+	for i := range quer {
+		if cols[i] != quer[i] {
+			t.Errorf("coluna %d = %+v, quer %+v", i, cols[i], quer[i])
+		}
+	}
+}
+
+// O godoc de DescritorDeTipo promete que o driver nunca vai "descrever a mesma
+// coluna de dois jeitos conforme a rota que consultou". Ninguém cobrava.
+//
+// Este é o oráculo: para a MESMA coluna, /v1/metadata e a linha de schema de
+// /v1/query têm de publicar os quatro campos de tipo idênticos. É o teste que
+// quebra no dia em que alguém acrescentar um campo num dos dois caminhos de
+// serialização e esquecer o outro — que é o modo de falha real, porque os dois
+// pontos ficam em arquivos diferentes.
+func TestMetadataPublicaOsMesmosNumerosQueALinhaDeSchema(t *testing.T) {
+	srv := servidorComDados(t, 2, blocoPadrao)
+
+	meta := leJSON[protocolo.Metadados](t, srv, "/v1/metadata")
+	if len(meta.Datasets) != 1 {
+		t.Fatalf("datasets = %d, quer 1", len(meta.Datasets))
+	}
+	// A chave é o nome de SAÍDA, que é o alias quando o campo tem um.
+	//
+	// ARMADILHA PARA O DRIVER, e a razão de este mapa não ser porNome[c.Name]:
+	// as duas rotas nomeiam a mesma coluna de formas diferentes por decisão. A
+	// linha de schema traz o nome que aparece na resposta — o alias, porque é
+	// ele que é chave do objeto JSON de cada row —, enquanto o /v1/metadata
+	// traz o nome do CAMPO e o alias num campo à parte, porque descreve o
+	// schema e não uma projeção. O DatabaseMetaData.getColumns() do driver vai
+	// publicar "status", e o ResultSetMetaData de SELECT * vai publicar
+	// "estado", para a mesma coluna. Casar os dois por igualdade de nome não
+	// funciona, e é assim que um findColumn ingênuo erra.
+	porSaida := map[string]protocolo.ColunaMeta{}
+	for _, c := range meta.Datasets[0].Columns {
+		saida := c.Name
+		if c.Alias != nil {
+			saida = *c.Alias
+		}
+		porSaida[saida] = c
+	}
+
+	// SELECT * cobre TODAS as colunas do dataset, não uma amostra escolhida —
+	// é o que faz o teste continuar exaustivo quando o spec de teste crescer.
+	for _, col := range colunasDoSchemaDaConsulta(t, srv, "SELECT * FROM d") {
+		m, ok := porSaida[col.Name]
+		if !ok {
+			t.Errorf("coluna de saída %q está no schema da consulta e não no /v1/metadata", col.Name)
+			continue
+		}
+		if m.Type != col.Type || m.JDBC != col.JDBC ||
+			m.Precision != col.Precision || m.Scale != col.Scale || m.DisplaySize != col.DisplaySize {
+			t.Errorf("coluna %q diverge entre as rotas:\n  /v1/metadata: type=%q jdbc=%q p=%d s=%d d=%d\n  /v1/query:    type=%q jdbc=%q p=%d s=%d d=%d",
+				col.Name, m.Type, m.JDBC, m.Precision, m.Scale, m.DisplaySize,
+				col.Type, col.JDBC, col.Precision, col.Scale, col.DisplaySize)
+		}
+	}
+}
+
+// Os campos saem SEM omitempty, e este teste trava a decisão.
+//
+// precision:0 é justamente o caso que carrega informação — "sem teto
+// declarado" —, e com omitempty ele sumiria do JSON. O driver leria a ausência
+// como zero do mesmo jeito, mas o contrato deixaria de dizer o que decidiu, e
+// um cliente escrito contra o campo ausente passaria a ver o campo aparecer no
+// dia em que o tipo ganhasse teto.
+//
+// A asserção é sobre os BYTES, e não sobre a struct decodificada, porque é a
+// única forma de distinguir "0 escrito" de "campo omitido": as duas decodificam
+// para o mesmo zero.
+func TestPrecisionZeroSaiNoJSONEmVezDeSerOmitida(t *testing.T) {
+	srv := servidorComDados(t, 1, blocoPadrao)
+
+	resp := consulta(t, srv, `{"dataset":"d","sql":"SELECT id FROM d"}`)
+	defer fecha(t, resp)
+	bruto, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	primeira, _, _ := strings.Cut(string(bruto), "\n")
+	for _, chave := range []string{`"precision":0`, `"scale":0`, `"displaySize":0`} {
+		if !strings.Contains(primeira, chave) {
+			t.Errorf("a linha de schema não traz %s — omitempty entrou no campo?\n%s", chave, primeira)
+		}
 	}
 }

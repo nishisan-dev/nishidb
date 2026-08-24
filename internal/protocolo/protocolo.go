@@ -109,10 +109,22 @@ type LinhaSchema struct {
 }
 
 // Coluna descreve uma coluna da projeção.
+//
+// Os três números são o que o ResultSetMetaData do §71 precisa além do tipo, e
+// saem do descritor único (DescritorDeTipo): o driver não os recalcula, e por
+// isso um tipo novo no servidor não exige jar novo no cliente.
+//
+// SEM omitempty, de propósito. precision:0 é o caso que carrega informação —
+// "sem teto declarado", que é a resposta para string, json e bytes — e com
+// omitempty ele sumiria justamente onde é a decisão. Ausência e zero são
+// indistinguíveis para quem decodifica, mas não para quem lê o contrato.
 type Coluna struct {
-	Name string `json:"name"`
-	Type string `json:"type"`
-	JDBC string `json:"jdbc"`
+	Name        string `json:"name"`
+	Type        string `json:"type"`
+	JDBC        string `json:"jdbc"`
+	Precision   int    `json:"precision"`
+	Scale       int    `json:"scale"`
+	DisplaySize int    `json:"displaySize"`
 }
 
 // LinhaFim é a ÚLTIMA linha de uma resposta bem-sucedida.
