@@ -123,18 +123,22 @@ func (rt *roteador) papelDaRota(r *http.Request) (papel, padrao string, existe b
 // reutilizável pelos DOIS listeners (exposto, com comAutenticacao; loopback,
 // com muxLoopback).
 //
-// CINCO das sete rotas (/v1/query, /v1/metadata, /v1/stats, /v1/compact,
-// /v1/checkpoint) são registradas SEM método no padrão, e o handler confere
-// o método por dentro — a mesma razão de sempre: toda recusa do protocolo
-// tem o MESMO corpo JSON, e o 405 que o mux geraria sozinho tem corpo em
-// texto puro. /metrics e /v1/health são a EXCEÇÃO, herdada de antes da Fase
-// 11: o padrão já levava o prefixo "GET " (Go 1.22), e um método errado
-// nelas sai com o 405 de texto puro do próprio mux, fora do contrato
-// CorpoErro — nenhuma das duas tem handler que confira método por dentro.
+// TODAS as sete rotas são registradas SEM método no padrão, e cada handler
+// confere o método por dentro. A razão é uma só: toda recusa do protocolo tem
+// o MESMO corpo JSON, e o 405 que o mux geraria sozinho tem corpo em texto
+// puro. O driver JDBC decodifica a recusa num caminho só, para traduzi-la em
+// SQLState; uma rota que responde texto puro obriga a um segundo caminho.
+//
+// /metrics e /v1/health eram a exceção, herdada de antes da Fase 11 — o padrão
+// levava o prefixo "GET " (Go 1.22) e o mux respondia sozinho. Ao tirar o
+// método do padrão, o mux deixa de tratar HEAD como GET automaticamente, então
+// as duas passam a aceitar os dois métodos POR DENTRO: quem raspa /metrics usa
+// GET, mas health check por HEAD existe, e o objetivo desta uniformização é o
+// CORPO da recusa, não estreitar o que já funciona.
 func (s *Servidor) montaMux() *roteador {
 	rt := novoRoteador()
-	rt.registra("GET /metrics", config.RoleRead, s.handleMetrics)
-	rt.registra("GET /v1/health", config.RoleRead, s.handleHealth)
+	rt.registra("/metrics", config.RoleRead, s.handleMetrics)
+	rt.registra("/v1/health", config.RoleRead, s.handleHealth)
 	rt.registra("/v1/query", config.RoleRead, s.handleQuery)
 	rt.registra("/v1/metadata", config.RoleRead, s.handleMetadata)
 	rt.registra("/v1/stats", config.RoleRead, s.handleStats)

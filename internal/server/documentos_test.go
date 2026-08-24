@@ -99,16 +99,38 @@ func TestMetadataFiltraPorDataset(t *testing.T) {
 	}
 }
 
+// As QUATRO rotas de leitura, e não duas.
+//
+// /metrics e /v1/health eram a exceção herdada de antes da Fase 11: o padrão
+// levava o prefixo "GET " e o método errado saía com o 405 de TEXTO PURO do
+// próprio mux, fora do contrato CorpoErro. Um cliente que soubesse decodificar
+// a recusa das outras cinco rotas encontrava outra coisa nessas duas — e o
+// driver JDBC decodifica a recusa em UM caminho só, para traduzi-la em
+// SQLState.
 func TestRotasDeLeituraRecusamMetodoErrado(t *testing.T) {
 	srv := servidorComDados(t, 1, blocoPadrao)
 
-	for _, caminho := range []string{"/v1/metadata", "/v1/stats"} {
+	// O Allow difere, e diz a verdade sobre cada rota: /metrics e /v1/health
+	// aceitam HEAD (era o que o mux fazia sozinho quando o método vivia no
+	// padrão, e um health check por HEAD não pode ter sido quebrado por uma
+	// mudança que só queria uniformizar o CORPO da recusa). As outras duas
+	// recusam HEAD desde sempre, e ampliá-las não é escopo daqui.
+	rotas := map[string]string{
+		"/v1/metadata": http.MethodGet,
+		"/v1/stats":    http.MethodGet,
+		"/metrics":     "GET, HEAD",
+		"/v1/health":   "GET, HEAD",
+	}
+	for caminho, permitidoQuer := range rotas {
 		resp, err := http.Post("http://"+srv.Endereco()+caminho, "application/json", strings.NewReader("{}"))
 		if err != nil {
 			t.Fatal(err)
 		}
 		if resp.StatusCode != http.StatusMethodNotAllowed {
 			t.Fatalf("POST %s = %d, quer 405", caminho, resp.StatusCode)
+		}
+		if permitido := resp.Header.Get("Allow"); permitido != permitidoQuer {
+			t.Errorf("POST %s: Allow = %q, quer %q", caminho, permitido, permitidoQuer)
 		}
 		if f := falhaDe(t, resp); f.Code != protocolo.CodMetodo {
 			t.Fatalf("POST %s: código = %q", caminho, f.Code)
@@ -510,5 +532,31 @@ func TestAChaveSaiNaoNulavelNasDuasRotas(t *testing.T) {
 	cols := colunasDoSchemaDaConsulta(t, srv, "SELECT id FROM d")
 	if cols[0].Nullable {
 		t.Errorf("a linha de schema publica a chave como nulável: %+v", cols[0])
+	}
+}
+
+// HEAD continua servido em /metrics e /v1/health.
+//
+// Enquanto o padrão de registro era "GET /metrics", o mux tratava HEAD como
+// GET automaticamente. Tirar o método do padrão para uniformizar o corpo do
+// 405 tirou junto esse tratamento, e sem uma conferência explícita dentro do
+// handler um health check por HEAD passaria a receber 405 — regressão de
+// operação causada por uma mudança que só queria mexer no corpo do erro.
+func TestHeadContinuaServidoEmMetricsEHealth(t *testing.T) {
+	srv := servidorComDados(t, 1, blocoPadrao)
+
+	for _, caminho := range []string{"/metrics", "/v1/health"} {
+		req, err := http.NewRequest(http.MethodHead, "http://"+srv.Endereco()+caminho, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("HEAD %s: %v", caminho, err)
+		}
+		fecha(t, resp)
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("HEAD %s = %d, quer 200", caminho, resp.StatusCode)
+		}
 	}
 }

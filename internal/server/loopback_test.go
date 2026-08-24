@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nishisan-dev/nishidb/internal/protocolo"
 	"github.com/nishisan-dev/nishidb/internal/server"
 )
 
@@ -227,4 +228,41 @@ func esperaListenerAceitar(t *testing.T, endereco string) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("%s nunca aceitou conexão", endereco)
+}
+
+// O loopback serve o MESMO mux, então a uniformização do 405 tem de valer
+// nele também.
+//
+// Não é redundante com o teste do plano exposto: enquanto o método vivia no
+// padrão de registro, POST /metrics dava padrão VAZIO no mux, o que faz
+// papelDaRota devolver existe=false — e o wrapper do loopback devolvia a
+// requisição ao mux, que respondia o 405 de texto puro. Depois da mudança o
+// padrão casa, papelDaRota devolve READ, e a recusa passa a vir do handler. Os
+// dois caminhos são diferentes por dentro e precisam sair iguais por fora.
+func TestMetricsComMetodoErradoNoPlanoLoopbackTambemSaiComCorpoErro(t *testing.T) {
+	loopbackPorta := portaLivre(t)
+	bloco := blocoPadrao + fmt.Sprintf("  loopback:\n    enabled: true\n    port: %d\n", loopbackPorta)
+	srv := servidorComDados(t, 1, bloco)
+
+	clienteComTeto := &http.Client{Timeout: 5 * time.Second}
+	for _, caminho := range []string{"/metrics", "/v1/health"} {
+		resp, err := clienteComTeto.Post("http://"+srv.EnderecoLoopback()+caminho,
+			"application/json", strings.NewReader("{}"))
+		if err != nil {
+			t.Fatalf("POST %s no loopback: %v", caminho, err)
+		}
+		if resp.StatusCode != http.StatusMethodNotAllowed {
+			fecha(t, resp)
+			t.Fatalf("POST %s no loopback = %d, quer 405", caminho, resp.StatusCode)
+		}
+		var corpo protocolo.CorpoErro
+		if err := json.NewDecoder(resp.Body).Decode(&corpo); err != nil {
+			fecha(t, resp)
+			t.Fatalf("POST %s no loopback: corpo não é CorpoErro (o 405 de texto puro do mux?): %v", caminho, err)
+		}
+		fecha(t, resp)
+		if corpo.Error.Code != protocolo.CodMetodo {
+			t.Errorf("POST %s no loopback: código = %q, quer %q", caminho, corpo.Error.Code, protocolo.CodMetodo)
+		}
+	}
 }

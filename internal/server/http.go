@@ -14,11 +14,32 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/protocolo"
 )
 
+// permitidoEmLeitura é o valor do header Allow das duas rotas que aceitam HEAD.
+//
+// HEAD é GET sem corpo, e o net/http já o serve assim quando o handler escreve
+// normalmente — descartar o corpo é trabalho dele. Aceitá-lo aqui preserva o
+// que o mux fazia sozinho quando o padrão era "GET /metrics".
+const permitidoEmLeitura = "GET, HEAD"
+
+// metodoDeLeitura responde se o método é um dos que /metrics e /v1/health
+// servem.
+func metodoDeLeitura(r *http.Request) bool {
+	return r.Method == http.MethodGet || r.Method == http.MethodHead
+}
+
 // handleMetrics serve a exposição do §93.
 //
 // O lag é atualizado AQUI, no scrape, e não por um timer: perguntar ao broker
 // num timer publicaria um número velho cuja idade o operador não conhece.
 func (s *Servidor) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	// PRIMEIRA linha do handler, antes do laço abaixo. Enquanto o método vivia
+	// no padrão de registro, o mux recusava de graça; agora a recusa é nossa, e
+	// pô-la depois do laço faria cada POST inválido disparar AtualizaLag contra
+	// o broker, com o timeout de 5 s do scrape — numa rota que um cron raspa.
+	if !metodoDeLeitura(r) {
+		s.recusaSimples(w, r, permitidoEmLeitura)
+		return
+	}
 	ctx, cancela := timeoutDoScrape(r)
 	defer cancela()
 	for _, d := range s.datasets {
@@ -44,7 +65,11 @@ func timeoutDoScrape(r *http.Request) (context.Context, context.CancelFunc) {
 // A chave "kafka" agrega: basta UM dataset com ingestão parada para ela sair
 // de UP. É deliberado — um health que dissesse UP com metade da ingestão
 // parada seria pior que não existir.
-func (s *Servidor) handleHealth(w http.ResponseWriter, _ *http.Request) {
+func (s *Servidor) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if !metodoDeLeitura(r) {
+		s.recusaSimples(w, r, permitidoEmLeitura)
+		return
+	}
 	h := protocolo.Saude{
 		Status:   protocolo.EstadoUP,
 		Kafka:    protocolo.EstadoUP,
