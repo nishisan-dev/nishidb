@@ -643,3 +643,72 @@ ignorado em `getTimestamp`). Errata da spec: §71 (D3) e §98 (coordenadas do m�
 - [internal/cli/query.go](internal/cli/query.go) — `--param` e a armadilha do ratchet
 - [internal/cli/credencial.go](internal/cli/credencial.go) — as doutrinas de cliente a herdar
 - [internal/gates/ci_test.go](internal/gates/ci_test.go) — molde dos gates novos (arquivo lido como dado, versões comparadas por extração)
+
+---
+
+## Estado em 2026-08-24 — Fases A a D concluídas
+
+Branch `feature/driver-jdbc`, 14 commits sobre `main`. **Tudo verde**: `go test ./...`,
+`go test -race ./...`, `gofmt -l .` vazio, `make test-jdbc-unit` (70 testes Java) e a
+contagem de lint **igualada em 388** (o arquivo `.golangci-baseline` foi abaixado de 389
+para 388 no commit do `--param`, porque a mensagem do `NArg` foi reescrita e código
+reescrito segue a disciplina `_, _ =`).
+
+| Fase | Estado | Onde |
+|---|---|---|
+| A (D0, lado Go) | **completa**, 9 tasks | descritor de tipo, nullable, Saude no protocolo, 405 uniforme, UNSUPPORTED_CLAUSE, `--param`, flush do schema |
+| B (módulo Maven) | **completa** | `clients/jdbc/`, wrapper only-script pinado, gates em `internal/gates/jdbc_test.go` |
+| C (JSON próprio) | **completa** | `…/jdbc/json/`: scanner com spans, DOM para documentos pequenos, escritor |
+| D (transporte + leitor + SQLState) | **completa** | `…/jdbc/wire/`: `Codigos`, `SqlStates`, `Molduras`, `LeitorNdjson`, `Transporte` |
+| **E a I** | **a fazer** | ResultSet/conversões, PreparedStatement, DatabaseMetaData, integração+CI, docs |
+
+### Achados durante a execução, que NÃO estavam no plano original
+
+Os três mudam decisões das fases seguintes.
+
+1. **As duas rotas de metadados nomeiam a mesma coluna de formas diferentes, por decisão.**
+   A linha de schema de `/v1/query` traz o nome de **saída** (o alias, porque é ele que é
+   chave do objeto JSON de cada row); `/v1/metadata` traz o nome do **campo** e o alias num
+   campo à parte, porque descreve schema e não projeção. Para o campo com alias `estado`,
+   `getColumns()` vai dizer `status` e o `ResultSetMetaData` de `SELECT *` vai dizer
+   `estado`. **Casar os dois por igualdade de nome não funciona** — é o que quem
+   implementar `findColumn` e o `DatabaseMetaData` (Fase G) precisa saber. Está registrado
+   em `TestMetadataPublicaOsMesmosNumerosQueALinhaDeSchema`.
+   Regra completa: projeção explícita usa o que o usuário escreveu; `*` usa o alias
+   (`TestONomeDoMetadadoEhODeSaida`).
+
+2. **O RUNBOOK ficou desatualizado.** O `planning/m5-plano-ciclo.md:249` manda configurar
+   `http.nonProxyHosts` da JVM para o JDBC. Com o `NO_PROXY` fixo do `Transporte` isso é
+   desnecessário, e **quem seguir a instrução vai depurar o proxy errado**. Corrigir na
+   Fase I.
+
+3. **O pré-processador do Java resolve escapes unicode antes do compilador**, inclusive
+   dentro de comentários e de literais de String. Escrever a sequência literal num teste
+   faz o compilador convertê-la no caractere, e o teste passa a exercitar o texto já
+   desescapado — **verificando o oposto do que afirma, sem que nada acuse**. A convenção
+   adotada é montar a barra em runtime (`String.valueOf((char) 92)`), e há um comentário
+   explicando isso em `JsonScannerTest.B`.
+
+### Correções ao próprio plano, verificadas no código
+
+- **`_writtenAt` é NULLABLE** (o plano mandava verificar em vez de deduzir, e a resposta
+  foi essa): ele só existe quando o dataset liga `expireAfterWrite`, e as rows gravadas
+  antes disso não o têm.
+- **NULL vem como `null` explícito** no NDJSON, não como campo ausente — e o oráculo já
+  existia (`TestNullExplicito`), citando o driver JDBC na justificativa. Logo o número de
+  chaves da row é igual ao de colunas do schema, **na mesma ordem**, e o casamento do
+  cursor pode ser posicional.
+- **Coluna `json` sai inline e verbatim**, não como string.
+- O `displaySize` de `ipv6` é **39**, e não os 45 do manual — medido contra o encoder.
+- O teste `TestMetricsComMetodoErradoNaoConsultaOBroker`, previsto no plano, **não foi
+  escrito**: o efeito é latência e chamada de rede, e não há oráculo determinístico barato
+  (um teste de tempo contra broker morto passaria por acidente, já que o connect falha em
+  microssegundos). A ordem correta está fixada por comentário no handler.
+
+### Ponto de partida da Fase E
+
+O `LeitorNdjson` entrega a linha corrente como span (`buffer()`, `inicio()`,
+`fimDaLinha()`), e o `JsonScanner` percorre esse span sem alocar
+(`abreObjeto`/`proximoCampo`/`tipo`/`valorIni`/`valorFim`). O `StreamCursor` da Fase E se
+apoia nos dois: casamento **posicional** row↔schema, avançando o ponteiro do schema até o
+nome bater, e recusando alto uma chave que não casa nenhuma coluna restante.
