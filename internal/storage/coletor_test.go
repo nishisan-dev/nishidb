@@ -372,3 +372,75 @@ func TestSoOColetorAlcancaAbandonadaEmSegmentoSemGarbage(t *testing.T) {
 		t.Fatalf("o coletor marcou %d de %d: %+v", r.Expiradas, len(ids), r)
 	}
 }
+
+// Coletor e ingestão escrevem no MESMO índice, cada um pelo seu caminho: a
+// carência pelo coletor, o applyRecord pela ingestão. Este teste os coloca
+// para rodar juntos.
+//
+// Ele NÃO prova ausência de corrida de dados — não haveria: o valor do índice
+// é gravado com AtomicStore64 e o remapeamento é protegido pelo mutex da
+// região, então as duas rotas já eram seguras para a memória. O que ele
+// exerce é o caminho concorrente inteiro, que nenhum outro teste monta:
+// carência e ingestão disputando o mesmo lock de escrita, com o índice
+// crescendo por baixo das duas.
+func TestColetorEIngestaoRodamJuntosSemQuebrar(t *testing.T) {
+	s, rel := storeComExpiracao(t, t.TempDir(), time.Hour)
+	// Metade das entidades sem instante, para a carência ter trabalho.
+	for i := 0; i < 200; i++ {
+		k := "k" + string(rune('a'+i%26)) + string(rune('a'+i/26))
+		mustPut(t, s, k, 1, payloadSemEscrita(t, s, k), nil)
+	}
+
+	pronto := make(chan struct{})
+	erros := make(chan error, 2)
+	go func() {
+		defer close(pronto)
+		for i := 0; i < 200; i++ {
+			k := "n" + string(rune('a'+i%26)) + string(rune('a'+i/26))
+			p := payloadComEscrita(t, s, k, "Start", rel.t)
+			if _, _, err := s.Put([]byte(k), 1, 0, p, nil); err != nil {
+				erros <- err
+				return
+			}
+		}
+	}()
+
+	for i := 0; i < 20; i++ {
+		if _, err := s.ExpiraUmaPassada(context.Background(), limitesDeTeste()); err != nil {
+			erros <- err
+			break
+		}
+	}
+	<-pronto
+	close(erros)
+	for err := range erros {
+		t.Fatal(err)
+	}
+}
+
+// A passada que SÓ dá carência precisa aparecer no log: é exatamente o que
+// acontece ao ligar a expiração num dataset já materializado, e sem contá-la
+// o operador não distingue "está trabalhando" de "não subiu".
+func TestPassadaContaAsCarenciasQueDeu(t *testing.T) {
+	s, _ := storeComExpiracao(t, t.TempDir(), 90*24*time.Hour)
+	const n = 50
+	for i := 0; i < n; i++ {
+		k := "k" + string(rune('a'+i%26)) + string(rune('a'+i/26))
+		mustPut(t, s, k, 1, payloadSemEscrita(t, s, k), nil)
+	}
+	r, err := s.ExpiraUmaPassada(context.Background(), limitesDeTeste())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Carencias != n {
+		t.Fatalf("carencias=%d, quer %d: %+v", r.Carencias, n, r)
+	}
+	// Segunda passada não tem mais o que dar.
+	r2, err := s.ExpiraUmaPassada(context.Background(), limitesDeTeste())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r2.Carencias != 0 {
+		t.Fatalf("a carência foi dada duas vezes: %+v", r2)
+	}
+}

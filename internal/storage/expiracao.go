@@ -181,6 +181,7 @@ type ResultadoDaExpiracao struct {
 	Examinadas int  // entradas do índice lidas
 	Expiradas  int  // entidades que ganharam lápide
 	Renovadas  int  // venceram na leitura do índice mas foram renovadas antes da marca
+	Carencias  int  // entidades sem instante que ganharam prazo cheio a partir de agora
 	DeuVolta   bool // o cursor completou o círculo e recomeçou
 	BateuTeto  bool // parou pelo limite, não por ter acabado a lista
 }
@@ -238,12 +239,12 @@ func (s *Store) ExpiraUmaPassada(ctx context.Context, lim LimitesDeExpiracao) (R
 		ms, conhecido := s.escritas.Get(id)
 		switch {
 		case !conhecido:
-			// Carência: só para row que EXISTE. Gravar prazo para rowId nunca
-			// publicado encheria o índice de entradas de rows que não são.
-			if _, publicada := s.locs.Get(id); publicada {
-				if err := s.escritas.Set(id, s.agora().UnixMilli()); err != nil {
-					return r, err
-				}
+			dada, err := s.daCarencia(id)
+			if err != nil {
+				return r, err
+			}
+			if dada {
+				r.Carencias++
 			}
 		case s.agora().UnixMilli()-ms >= s.expireAfterWrite.Milliseconds():
 			// O Expira releva a decisão dentro do wmu, então uma renovação
@@ -338,11 +339,17 @@ func (s *Store) rodaExpiracao(ctx context.Context, lim LimitesDeExpiracao) {
 				"erro", err)
 			return
 		}
-		if r.Expiradas > 0 || r.Renovadas > 0 {
+		// A carência entra na condição de propósito: sem ela, a passada que
+		// só dá prazo às entidades legadas — que é EXATAMENTE o que acontece
+		// ao ligar a expiração num dataset já materializado — não emitiria
+		// linha nenhuma, e o operador não teria como distinguir "está
+		// trabalhando" de "não subiu".
+		if r.Expiradas > 0 || r.Renovadas > 0 || r.Carencias > 0 {
 			s.opts.Log.Info("expiracao.passada",
 				"passada do coletor do idle timeout",
 				"examinadas", r.Examinadas, "expiradas", r.Expiradas,
-				"renovadas", r.Renovadas, "bateuTeto", r.BateuTeto, "deuVolta", r.DeuVolta)
+				"renovadas", r.Renovadas, "carencias", r.Carencias,
+				"bateuTeto", r.BateuTeto, "deuVolta", r.DeuVolta)
 		}
 		// Passada que bateu o teto volta JÁ: há trabalho represado, e esperar
 		// o cochilo inteiro faria a fila drenar na velocidade do relógio em
@@ -353,4 +360,51 @@ func (s *Store) rodaExpiracao(ctx context.Context, lim LimitesDeExpiracao) {
 		}
 		t.Reset(espera)
 	}
+}
+
+// daCarencia grava o instante de agora para uma entidade que não tem nenhum,
+// dando-lhe um prazo cheio a partir daqui.
+//
+// Toma o wmu, e o motivo NÃO é corrida de dados: o valor do índice é gravado
+// com AtomicStore64 e o remapeamento do Grow é protegido pelo mutex da própria
+// região, então gravar fora da seção crítica seria seguro para a memória.
+//
+// O motivo é o stickyErr. Fora do wmu não há como consultá-lo, e a carência
+// continuaria gravando no índice de um writer que já morreu — deixando prazo
+// novo para entidades num dataset que só pode ser reaberto por replay. Sob o
+// lock, ela para junto com todo o resto.
+//
+// O efeito colateral é bem-vindo: o par Get+Set vira atômico, então a carência
+// não sobrescreve um instante que a ingestão acabou de gravar.
+//
+// O custo é uma aquisição de lock por entidade, e é aceitável porque a passada
+// é limitada: no pior caso são MaxPorPassada aquisições espalhadas ao longo de
+// TempoPorPassada, intercaladas com uma ingestão que já toma esse mesmo lock a
+// cada evento.
+//
+// Devolve false, sem erro, quando não havia o que fazer: rowId sem location
+// (nunca publicado, ou resíduo de janela de crash) não ganha prazo, porque
+// encher o índice de entradas de rows que não existem só faria a varredura
+// seguinte reexaminá-las para sempre. E entidade que ganhou instante entre a
+// leitura da passada e esta chamada já está resolvida.
+func (s *Store) daCarencia(id types.RowID) (bool, error) {
+	if err := s.entra(); err != nil {
+		return false, err
+	}
+	defer s.sai()
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	if s.stickyErr != nil {
+		return false, fmt.Errorf("%w: %w", ErrWriterFailed, s.stickyErr)
+	}
+	if _, conhecido := s.escritas.Get(id); conhecido {
+		return false, nil // a ingestão chegou primeiro
+	}
+	if _, publicada := s.locs.Get(id); !publicada {
+		return false, nil
+	}
+	if err := s.escritas.Set(id, s.agora().UnixMilli()); err != nil {
+		return false, err
+	}
+	return true, nil
 }
