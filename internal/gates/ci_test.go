@@ -311,3 +311,79 @@ func TestWorkflowDeCIComparaAContagemComABaseline(t *testing.T) {
 		t.Error("o script do job lint não extrai a contagem de apontamentos (`Issues | length`) — sem isso não há o que comparar com a linha de base")
 	}
 }
+
+var (
+	reVersaoDeJava = regexp.MustCompile(`java-version:\s*['"]?([^\s'"\n]+)['"]?`)
+	reDistribuicao = regexp.MustCompile(`distribution:\s*['"]?([^\s'"\n]+)['"]?`)
+)
+
+// O job `jdbc` roda o teste de INTEGRAÇÃO do driver, e não só os unitários.
+//
+// Sem ele, `make test-jdbc` só roda para quem lembrar de chamá-lo — e o que
+// fica sem cobertura é justamente a metade que os unitários não podem provar:
+// o driver contra o binário real, com TLS, credencial e um dataset com um
+// campo de cada tipo. É o mesmo defeito do débito 53 (gate que existe mas
+// ninguém executa) por uma porta nova.
+//
+// A verificação roda sobre o SCRIPT do job, e não sobre o arquivo bruto: um
+// comentário mencionando "test-jdbc" não pode satisfazer o teste com o passo
+// de fato removido.
+func TestWorkflowDeCIRodaOTesteDeIntegracaoDoDriver(t *testing.T) {
+	script := scriptDoJob(t, "jdbc")
+	if !strings.Contains(script, "test-jdbc") {
+		t.Error("o job `jdbc` não roda `make test-jdbc` — o driver fica sem prova contra o servidor real em CI")
+	}
+	// test-jdbc-unit NÃO basta: ele fala com o servidor HTTP do JDK, com
+	// respostas escritas à mão. Aceitar o alvo dos unitários aqui deixaria o
+	// gate verde exatamente no caso que ele existe para pegar.
+	if strings.Contains(script, "test-jdbc-unit") && !strings.Contains(script, "make test-jdbc\n") {
+		t.Error("o job `jdbc` roda só os unitários do driver; o alvo de integração é `make test-jdbc`")
+	}
+}
+
+// A versão de Java do workflow é a EXATA do piso declarado no pom, e a
+// distribuição é fixada.
+//
+// A comparação é entre as duas EXTRAÇÕES — do ci.yml e do pom.xml —, nunca
+// contra um "21" escrito à mão neste teste. Hardcodar o número reabriria aqui
+// o defeito que o teste fecha: alguém sobe o piso do driver no pom, o
+// workflow continua compilando com o Java antigo, e o gate segue verde porque
+// cada lado é conferido contra a constante e não contra o vizinho.
+//
+// Faixa solta (`21.x`, `21+`) é recusada pelo mesmo motivo que a versão de Go
+// é fixa: versão de instrumento é configuração que muda o resultado, e deixar
+// o runner escolher o patch faz o CI compilar com um compilador que ninguém
+// mediu.
+func TestWorkflowDeCIPinaJavaNoPisoDeclaradoNoPom(t *testing.T) {
+	bruto := leWorkflowDeCI(t)
+	achados := reVersaoDeJava.FindAllStringSubmatch(bruto, -1)
+	if len(achados) == 0 {
+		t.Fatal("o workflow não fixa java-version em nenhum step de actions/setup-java")
+	}
+	piso := lePom(t).Properties.Release
+	if piso == "" {
+		t.Fatal("o pom do driver não declara maven.compiler.release")
+	}
+	for _, achado := range achados {
+		if strings.ContainsAny(achado[1], ".+*") {
+			t.Errorf("java-version = %q é faixa, não versão: o runner escolheria o patch", achado[1])
+		}
+		if achado[1] != piso {
+			t.Errorf("java-version = %q no workflow e maven.compiler.release = %q no pom: "+
+				"o CI compilaria o driver com um Java que não é o piso declarado", achado[1], piso)
+		}
+	}
+}
+
+// A distribuição do JDK é FIXADA, e não deixada ao default da action.
+//
+// Distribuições diferentes trazem bibliotecas e defaults de TLS diferentes, e
+// o teste de integração do driver depende de handshake com certificado
+// gerado na hora. Deixar isso ao acaso do runner é ter um teste que passa por
+// motivo que ninguém controla.
+func TestWorkflowDeCIFixaADistribuicaoDoJdk(t *testing.T) {
+	achados := reDistribuicao.FindAllStringSubmatch(leWorkflowDeCI(t), -1)
+	if len(achados) == 0 {
+		t.Error("o workflow não fixa `distribution` no setup-java: o JDK do CI fica a cargo do default da action")
+	}
+}
