@@ -47,7 +47,10 @@ func (s *Servidor) handleMetadata(w http.ResponseWriter, r *http.Request) {
 }
 
 func metaDoDataset(d *dataset) protocolo.DatasetMeta {
-	campos := d.sch.FieldsByID()
+	// FieldsParaMetadata, e não FieldsByID: a coluna derivada fica fora do
+	// SELECT * e este é o lugar onde ela é descoberta. Esconder aqui também
+	// deixaria o operador sem forma nenhuma de saber que ela existe.
+	campos := d.sch.FieldsParaMetadata()
 	m := protocolo.DatasetMeta{
 		Name: d.nome,
 		// MaxRows e Timeout saem do COMPILADO, que é onde o default global já

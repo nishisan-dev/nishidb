@@ -1826,3 +1826,23 @@ func (s *Store) Close() error {
 // esse consumidor não deveria depender do tipo Stats inteiro só para ler um
 // contador.
 func (s *Store) RowCount() uint64 { return s.rowCount.Load() }
+
+// LinhasNoManifest lê quantas linhas o dataset tem, SEM abrir o Store.
+//
+// Existe porque há validação que precisa acontecer antes de storage.Open, e
+// não durante: a resolução dos campos de bitmap grava no dicionário, com
+// fsync, antes de qualquer checagem de manifest — uma única subida abortada
+// deixa o registro para sempre, e o dicionário é append-only.
+//
+// Dataset que nunca fez checkpoint devolve zero, sem erro: ele é novo, que é
+// exatamente o caso em que toda declaração é permitida.
+func LinhasNoManifest(dir string) (uint64, error) {
+	m, err := checkpoint.Load(filepath.Join(dir, "checkpoint", "manifest.bin"))
+	if errors.Is(err, checkpoint.ErrNoManifest) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return m.RowCount, nil
+}

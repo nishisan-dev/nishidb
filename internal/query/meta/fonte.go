@@ -72,7 +72,7 @@ type fonte struct {
 }
 
 func novaFonte(alvo *schema.Compiled, caps Capacidades, _ *schema.Compiled) *fonte {
-	return &fonte{campos: alvo.FieldsByID(), caps: caps, ids: colunasIDs}
+	return &fonte{campos: alvo.FieldsParaMetadata(), caps: caps, ids: colunasIDs}
 }
 
 func (f *fonte) GetByRowID(id types.RowID, buf []byte) (types.Record, []byte, bool, error) {
@@ -133,9 +133,15 @@ func (f *fonte) record(row types.RowID, c *schema.CompiledField, buf []byte) (ty
 		{"indexed", booleano(indexado)},
 		{"id", types.Value{Type: types.TypeInt64, I64: int64(c.ID)}},
 	}
-	// `parent` fica ausente enquanto não houver coluna derivada: NULL é
-	// ausência, e campo de topo não tem pai. Emitir string vazia diria "tem
-	// pai, e o nome dele é nada".
+	// `parent` só existe para a coluna derivada. Campo de topo o deixa
+	// AUSENTE, e não vazio: NULL é ausência, e string vazia diria "tem pai, e
+	// o nome dele é nada".
+	if c.Parent != nil {
+		vals = append(vals, struct {
+			nome string
+			v    types.Value
+		}{"parent", texto(c.Parent.Name)})
+	}
 
 	type par struct {
 		id types.FieldID

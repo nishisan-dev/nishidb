@@ -197,3 +197,62 @@ func TestReconheceIgnoraQuerySemNamespace(t *testing.T) {
 }
 
 var _ executor.RowIterator = (executor.RowIterator)(nil)
+
+const alvoComExtract = `version: 1
+name: eventos
+materialization:
+  key:
+    field: id
+schema:
+  include: ["*"]
+  unknownFields: include
+  fields:
+    id:
+      type: string
+    doc:
+      type: json
+      extract:
+        - path: probeIpNode
+          as: probe_ip
+          type: string
+`
+
+func alvoExtract(t *testing.T) *schema.Compiled {
+	t.Helper()
+	s, err := schema.Parse([]byte(alvoComExtract), schema.DefaultsPadrao)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := s.Compile(fakestorage.NewDict())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+// A coluna derivada FICA FORA do SELECT *, então a tabela de metadados é o
+// lugar onde ela é descoberta. Escondê-la aqui também deixaria o operador sem
+// nenhuma forma de saber que ela existe.
+func TestFieldsListaAColunaDerivadaComOPai(t *testing.T) {
+	got := linhas(t, "SELECT name, parent FROM _meta.fields WHERE parent = 'doc'", alvoExtract(t))
+	if len(got) != 1 {
+		t.Fatalf("filtro por parent = %v, quer só a derivada", got)
+	}
+	if got[0]["name"] != "probe_ip" {
+		t.Errorf("name = %q, quer probe_ip", got[0]["name"])
+	}
+}
+
+// Campo de topo tem parent NULL, e não string vazia: vazio diria "tem pai, e
+// o nome dele é nada".
+func TestCampoDeTopoTemParentNulo(t *testing.T) {
+	got := linhas(t, "SELECT name, parent FROM _meta.fields WHERE parent IS NULL", alvoExtract(t))
+	for _, l := range got {
+		if l["name"] == "probe_ip" {
+			t.Fatal("a derivada apareceu entre as de parent nulo")
+		}
+	}
+	if len(got) < 2 {
+		t.Fatalf("campos de topo = %d, quer id e doc pelo menos", len(got))
+	}
+}

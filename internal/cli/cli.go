@@ -231,12 +231,15 @@ func abreDataset(cfg *nishiconfig.Config, nome string) (*storage.Store, *schema.
 		return nil, nil, fmt.Errorf("dataset %q: o arquivo declara name: %q", nome, spec.Name)
 	}
 
-	var bitmaps []string
-	for campo, f := range spec.Schema.Fields {
-		if f.Index == "bitmap" {
-			bitmaps = append(bitmaps, campo)
-		}
+	// ANTES do Open: a resolução dos campos de bitmap grava no dicionário com
+	// fsync antes de validar o manifest, e o dicionário é append-only — uma
+	// subida abortada depois disso deixaria a coluna derivada registrada para
+	// sempre.
+	if err := validaDatasetExistente(cfg.DirDoDataset(nome), spec); err != nil {
+		return nil, nil, fmt.Errorf("dataset %q: %w", nome, err)
 	}
+
+	bitmaps := schema.CamposComBitmap(spec)
 
 	st, err := storage.Open(storage.Options{
 		Dir:              cfg.DirDoDataset(nome),
@@ -254,4 +257,15 @@ func abreDataset(cfg *nishiconfig.Config, nome string) (*storage.Store, *schema.
 		return nil, nil, fmt.Errorf("dataset %q: %w", nome, err)
 	}
 	return st, compilado, nil
+}
+
+// validaDatasetExistente recusa uma spec que não pode ser aplicada ao dataset
+// que já está em disco. Roda antes de storage.Open porque o Open grava no
+// dicionário — que é append-only — antes de validar qualquer coisa.
+func validaDatasetExistente(dir string, spec *schema.DatasetSpec) error {
+	linhas, err := storage.LinhasNoManifest(dir)
+	if err != nil {
+		return fmt.Errorf("lendo o manifest: %w", err)
+	}
+	return spec.ValidaContraDatasetExistente(linhas)
 }

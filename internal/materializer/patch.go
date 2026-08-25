@@ -38,6 +38,13 @@ type PatchBuffer struct {
 	seq     int64
 	hasSeq  bool
 	parser  jsonp.Parser
+
+	// Buffers da segunda passada (extração de campos aninhados). Reusados
+	// entre eventos como todo o resto: a passada não pode alocar por evento.
+	pais       []paiVisto
+	paisFeitos []types.FieldID
+	aninhados  []*jsonp.Parser
+	folha      []byte
 }
 
 // Parse processa um evento completo em um único passo: tokeniza, resolve
@@ -66,6 +73,7 @@ func (b *PatchBuffer) Parse(event []byte, c *schema.Compiled, agora time.Time) e
 	b.key = nil
 	b.seq = 0
 	b.hasSeq = false
+	b.pais = b.pais[:0]
 
 	b.parser.Reset(event)
 	for {
@@ -83,6 +91,14 @@ func (b *PatchBuffer) Parse(event []byte, c *schema.Compiled, agora time.Time) e
 			// e um valor no futuro a tornaria imortal — sem erro nenhum.
 			return fmt.Errorf("%w: campo %q é reservado ao writer e não pode vir no evento",
 				schema.ErrUnknownField, f.Key) // SCHEMA_VALIDATION
+		}
+		// Coluna DERIVADA não aceita escrita de fora: ela é preenchida pela
+		// segunda passada, a partir do documento do pai. Sem esta guarda, um
+		// evento que trouxesse a chave no topo controlaria uma coluna que o
+		// operador declarou como sendo de dentro do documento — e o valor
+		// dependeria da ordem em que as duas apareceram.
+		if found && cf.Parent != nil {
+			continue
 		}
 		if !found {
 			// Campo excluído não está compilado: cai aqui e o
@@ -152,8 +168,25 @@ func (b *PatchBuffer) Parse(event []byte, c *schema.Compiled, agora time.Time) e
 			b.seq = val.I64
 			b.hasSeq = true
 		}
+		if len(cf.Derivadas) > 0 {
+			// Guarda a ocorrência para a segunda passada. Para objeto, o Raw é
+			// janela sobre o EVENTO (skipComposite devolve p.data[start:pos]),
+			// que é estável durante todo o Parse — ao contrário do arena, que
+			// é reapontado a cada conversão. Os outros Kinds nem são
+			// percorridos, então o valor deles não é guardado.
+			pv := paiVisto{campo: cf, kind: f.Kind}
+			if f.Kind == jsonp.KindObject {
+				pv.valor = f.Raw
+			}
+			b.pais = append(b.pais, pv)
+		}
 		b.entries = append(b.entries, patchEntry{field: cf, isNull: isNull, val: val})
 	}
+
+	// A extração roda DEPOIS do laço, porque precisa da última ocorrência de
+	// cada pai, e ANTES da ordenação, para que as derivadas participem do
+	// sort e do dedup como qualquer outra entry.
+	b.extraiDerivadas()
 
 	// O campo de sistema entra ANTES da ordenação, como uma entry qualquer:
 	// assim o merge e o replace o incluem pelo mesmo caminho, sem que nenhum

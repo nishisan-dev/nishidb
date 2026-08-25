@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -119,6 +120,28 @@ type FieldSpec struct {
 	Alias  string
 	Index  string // "" | bitmap | hash
 	Format string // padrão de parsing; obrigatório em datetime/time, proibido no resto
+	// Extract declara chaves de DENTRO de um campo json como colunas de
+	// verdade. Só vale sobre type: json — nos outros tipos não há o que
+	// percorrer, e aceitar em silêncio seria configuração sem leitor.
+	Extract []ExtractSpec
+}
+
+// ExtractSpec é uma chave de dentro de um documento json promovida a coluna.
+//
+// O documento original NÃO é removido: extrair não é mover. A coluna json
+// continua inteira, e quem já lia o documento continua lendo — o que a
+// extração acrescenta é um lugar tipado, comparável e indexável para a chave
+// que importa.
+type ExtractSpec struct {
+	// Path é o caminho dentro do documento, com '.' separando níveis.
+	Path string
+	// As é o nome da coluna resultante. Omitido, vale o próprio Path — o que
+	// só é possível quando ele não tem ponto, porque nome de coluna com ponto
+	// colidiria com a sintaxe de caminho da projeção.
+	As     string
+	Type   string
+	Index  string
+	Format string
 }
 
 type QuerySpec struct {
@@ -340,6 +363,202 @@ func bitmapIndexable(t string) bool {
 
 func hashIndexable(t string) bool {
 	return t == "string" || t == "int64" || t == "ipv4" || t == "ipv6"
+}
+
+// validaExtracoes confere o bloco `extract` de todos os campos.
+//
+// Roda numa passada PRÓPRIA, depois de include/exclude estarem resolvidos, e
+// percorre os campos em ordem alfabética. As duas coisas importam: a primeira
+// porque a validade de uma extração depende de o PAI estar visível, e a
+// segunda porque o laço de schema.fields itera um mapa — sem ordenar, a
+// mensagem de erro de um YAML com dois defeitos mudaria entre execuções.
+func validaExtracoes(s *DatasetSpec, fields map[string]FieldSpec, aliases map[string]string, include []string, includeAll bool) error {
+	nomesDePais := make([]string, 0, len(fields))
+	for nome := range fields {
+		if len(fields[nome].Extract) > 0 {
+			nomesDePais = append(nomesDePais, nome)
+		}
+	}
+	sort.Strings(nomesDePais)
+
+	noInclude := make(map[string]struct{}, len(include))
+	for _, n := range include {
+		noInclude[n] = struct{}{}
+	}
+	excluido := make(map[string]struct{}, len(s.Schema.Exclude))
+	for _, n := range s.Schema.Exclude {
+		excluido[n] = struct{}{}
+	}
+
+	vistos := map[string]string{} // as → pai que o declarou
+	for _, pai := range nomesDePais {
+		f := fields[pai]
+		if f.Type != "json" {
+			return specErrf("campo %q: extract só vale sobre type: json, e ele é %q — nos outros tipos não há documento a percorrer", pai, f.Type)
+		}
+		if _, fora := excluido[pai]; fora {
+			return specErrf("campo %q está no exclude e declara extract; o campo excluído nem é materializado, então a extração nunca rodaria", pai)
+		}
+		if !includeAll {
+			if _, dentro := noInclude[pai]; !dentro {
+				return specErrf("campo %q declara extract e não está no include; a extração nunca rodaria", pai)
+			}
+		}
+		for i, e := range f.Extract {
+			nome, err := nomeDaExtracao(pai, i, e)
+			if err != nil {
+				return err
+			}
+			if !isValidTypeName(e.Type) {
+				return specErrf("campo %q: extract %q: tipo %q inválido", pai, nome, e.Type)
+			}
+			if e.Type == "auto" {
+				return specErrf("campo %q: extract %q não pode ser auto; a coluna derivada existe para ter tipo", pai, nome)
+			}
+			if _, err := CompilaFormato(e.Type, e.Format); err != nil {
+				return specErrf("campo %q: extract %q: %s", pai, nome, semPrefixoDeSpec(err))
+			}
+			if _, clash := fields[nome]; clash {
+				return specErrf("extract %q colide com o campo de topo de mesmo nome; escolha outro `as`", nome)
+			}
+			if dono, clash := aliases[nome]; clash {
+				return specErrf("extract %q colide com o alias do campo %q; escolha outro `as`", nome, dono)
+			}
+			if antes, dup := vistos[nome]; dup {
+				return specErrf("extract %q declarado duas vezes (campos %q e %q)", nome, antes, pai)
+			}
+			vistos[nome] = pai
+			switch e.Index {
+			case "":
+			case "bitmap":
+				if !bitmapIndexable(e.Type) {
+					return specErrf("extract %q: tipo %q não suporta índice bitmap", nome, e.Type)
+				}
+			case "hash":
+				if !hashIndexable(e.Type) {
+					return specErrf("extract %q: tipo %q não suporta índice hash", nome, e.Type)
+				}
+			default:
+				return specErrf("extract %q: index %q inválido (bitmap|hash)", nome, e.Index)
+			}
+		}
+	}
+	return nil
+}
+
+// nomeDaExtracao resolve o `as`, com o default e as recusas de forma.
+func nomeDaExtracao(pai string, i int, e ExtractSpec) (string, error) {
+	if e.Path == "" {
+		return "", specErrf("campo %q: extract[%d] sem path", pai, i)
+	}
+	nome := e.As
+	if nome == "" {
+		// O default só serve ao caminho de um nível: derivar de "a.b" daria
+		// um nome com ponto, e nome de coluna com ponto colidiria com a
+		// sintaxe de caminho da projeção. Nesse caso o `as` é obrigatório.
+		if strings.Contains(e.Path, ".") {
+			return "", specErrf("campo %q: extract com path %q precisa de `as` — o nome não pode ser derivado de um caminho com ponto", pai, e.Path)
+		}
+		nome = e.Path
+	}
+	if strings.Contains(nome, ".") {
+		return "", specErrf("campo %q: extract `as` %q não pode conter ponto; ele separaria o pai da coluna na projeção", pai, nome)
+	}
+	// A regra é a de NOME DE CAMPO, e não a de alias: nome de campo no NishiDB
+	// nunca foi restrito a minúsculas — a fixture da spec tem
+	// `Acct-Status-Type` —, e chave de documento json é tipicamente camelCase.
+	// Aplicar aqui o isIdentName do alias tornaria o `as` obrigatório em
+	// praticamente toda extração real, sem nada ganhar.
+	if motivo, reservado := nomesDeSistema[nome]; reservado {
+		return "", specErrf("campo %q: extract `as` %q é reservado: %s", pai, nome, motivo)
+	}
+	return nome, nil
+}
+
+// CamposComBitmap devolve, em ordem determinística, os campos que o Store
+// precisa abrir com índice bitmap — os de topo E as colunas derivadas.
+//
+// É o ÚNICO lugar que decide isso. O laço vivia copiado em quatro sítios —
+// servidor, duas rotas do CLI e o benchmark — e nenhuma cópia conhecia a
+// coluna derivada. O efeito não seria degradação: o servidor criaria o dataset
+// COM o índice, e o `nishidb query` seguinte recusaria abrir, porque o Store
+// não deixa passar um manifest que declara índice que a abertura não conhece.
+//
+// A ORDEM é contrato, não estética: ela decide os FieldID de um dataset novo,
+// e o produto promete mapeamento determinístico para o mesmo spec.
+func CamposComBitmap(s *DatasetSpec) []string {
+	var out []string
+	for nome, f := range s.Schema.Fields {
+		if f.Index == "bitmap" {
+			out = append(out, nome)
+		}
+		for i, e := range f.Extract {
+			if e.Index != "bitmap" {
+				continue
+			}
+			derivada, err := nomeDaExtracao(nome, i, e)
+			if err != nil {
+				continue // a validação da spec já recusou isto
+			}
+			out = append(out, derivada)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// ValidaContraDatasetExistente recusa a subida quando a spec declara `extract`
+// e o dataset já tem linhas gravadas.
+//
+// A extração roda na INGESTÃO, então as linhas anteriores à declaração não têm
+// a coluna derivada. Deixar subir faria `WHERE derivada = 'x'` omitir todas
+// elas — sem erro, sem log e sem métrica. É o mesmo defeito que a abertura já
+// recusa quando um índice bitmap é declarado sobre um dataset com linhas, e a
+// razão é a mesma: resultado incompleto com cara de completo.
+//
+// A checagem precisa rodar ANTES de storage.Open. A resolução dos campos de
+// bitmap grava no dicionário, com fsync, antes de qualquer validação de
+// manifest: uma única subida abortada deixaria o `as` registrado para sempre.
+func (s *DatasetSpec) ValidaContraDatasetExistente(linhas uint64) error {
+	if linhas == 0 {
+		return nil
+	}
+	nomes := s.NomesDasExtracoes()
+	if len(nomes) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%w: %v declarada(s) em extract num dataset que já tem %d linhas; "+
+		"a extração roda na ingestão, então as linhas antigas ficariam sem a coluna e o filtro sobre ela "+
+		"as omitiria em silêncio. Declare extract na CRIAÇÃO do dataset, ou recrie este",
+		ErrColunaDerivada, nomes, linhas)
+}
+
+// NomesDasExtracoes devolve, em ordem determinística, o nome de todas as
+// colunas derivadas declaradas.
+func (s *DatasetSpec) NomesDasExtracoes() []string {
+	pais := make([]string, 0, len(s.Schema.Fields))
+	for nome := range s.Schema.Fields {
+		if len(s.Schema.Fields[nome].Extract) > 0 {
+			pais = append(pais, nome)
+		}
+	}
+	sort.Strings(pais)
+	var out []string
+	for _, pai := range pais {
+		for i, e := range s.Schema.Fields[pai].Extract {
+			nome, err := nomeDaExtracao(pai, i, e)
+			if err != nil {
+				continue // a validação da spec já recusou isto
+			}
+			out = append(out, nome)
+		}
+	}
+	return out
+}
+
+// NomeDaExtracao expõe a resolução do `as` para o compilador.
+func NomeDaExtracao(pai string, i int, e ExtractSpec) (string, error) {
+	return nomeDaExtracao(pai, i, e)
 }
 
 func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
@@ -649,6 +868,10 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 		return nil, specErrf("schema.onMaxCols %q inválido (%s|%s)", onMaxCols, OnMaxColsIgnore, OnMaxColsStop)
 	}
 	s.Schema.OnMaxCols = onMaxCols
+
+	if err := validaExtracoes(s, fields, aliases, include, includeAll); err != nil {
+		return nil, err
+	}
 
 	// query: o dataset que declara a chave vence; quem omite herda o global.
 	maxRows := padroes.MaxRows

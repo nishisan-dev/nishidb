@@ -81,12 +81,17 @@ func runOffsets(args []string, amb Ambiente) int {
 	// Os campos com bitmap PRECISAM ser declarados: o Store recusa abrir um
 	// dataset cujo manifest declara índices que a abertura não conhece,
 	// porque o índice pararia de ser atualizado e reapareceria incompleto.
-	var bitmaps []string
-	for nome, f := range spec.Schema.Fields {
-		if f.Index == "bitmap" {
-			bitmaps = append(bitmaps, nome)
-		}
+	// ANTES do Open, pela mesma razão do ingest: o dicionário é append-only e
+	// a resolução dos bitmaps grava nele antes de qualquer validação.
+	if err := validaDatasetExistente(cfg.DirDoDataset(*dataset), spec); err != nil {
+		//nolint:errcheck // escrita em stderr no caminho de saída; o erro do
+		// Fprintf não muda o exit code, e checá-lo aqui divergiria das outras
+		// dezenas de recusas deste arquivo.
+		fmt.Fprintf(amb.Stderr, "offsets: dataset %q: %v\n", *dataset, err)
+		return ExitUso
 	}
+
+	bitmaps := schema.CamposComBitmap(spec)
 	st, err := storage.Open(storage.Options{
 		Dir:              cfg.DirDoDataset(*dataset),
 		Dataset:          *dataset,

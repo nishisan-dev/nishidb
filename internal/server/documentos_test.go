@@ -609,3 +609,56 @@ func TestMetadataPublicaOTetoDeCamposEfetivo(t *testing.T) {
 		t.Errorf("onMaxCols = %q, quer ignore", d.OnMaxCols)
 	}
 }
+
+// O /v1/metadata publica a coluna derivada mesmo ela ficando fora do
+// SELECT *. É deliberadamente um superset: sem isto o DBeaver não a lista e
+// ninguém descobre que ela existe.
+func TestMetadataPublicaAColunaDerivada(t *testing.T) {
+	srv := servidorComExtract(t)
+	m := leJSON[protocolo.Metadados](t, srv, "/v1/metadata")
+	var achou bool
+	for _, d := range m.Datasets {
+		for _, c := range d.Columns {
+			if c.Name == "probe_ip" {
+				achou = true
+			}
+		}
+	}
+	if !achou {
+		t.Error("probe_ip não apareceu no /v1/metadata")
+	}
+}
+
+// specComExtract é um dataset que declara uma coluna extraída de dentro de um
+// campo json.
+const specComExtract = `version: 1
+name: d
+materialization:
+  key:
+    field: id
+schema:
+  include: ["*"]
+  unknownFields: include
+  fields:
+    id:
+      type: string
+    doc:
+      type: json
+      extract:
+        - path: probeIpNode
+          as: probe_ip
+          type: string
+`
+
+func servidorComExtract(t *testing.T) *server.Servidor {
+	t.Helper()
+	a := novoAmbienteCom(t, blocoPadrao)
+	a.escreveDataset("d", specComExtract)
+	cfg := a.carrega()
+	srv, err := server.Novo(cfg, server.Opcoes{})
+	if err != nil {
+		t.Fatalf("subida: %v", err)
+	}
+	roda(t, srv)
+	return srv
+}
