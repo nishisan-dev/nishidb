@@ -33,6 +33,9 @@ const (
 	MetKafkaOffset = "nishidb_kafka_offset"
 
 	// Materialização (§92).
+	MetDatasetFields        = "nishidb_dataset_fields"
+	MetDatasetFieldsDropped = "nishidb_dataset_fields_dropped_total"
+
 	MetMaterializedRows       = "nishidb_materialized_rows"
 	MetMaterializedTombstones = "nishidb_materialized_tombstones"
 
