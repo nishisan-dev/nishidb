@@ -11,6 +11,7 @@ import (
 
 	"github.com/nishisan-dev/nishidb/internal/query/binder"
 	"github.com/nishisan-dev/nishidb/internal/query/executor"
+	"github.com/nishisan-dev/nishidb/internal/query/meta"
 	"github.com/nishisan-dev/nishidb/internal/query/parser"
 	"github.com/nishisan-dev/nishidb/internal/query/planner"
 	"github.com/nishisan-dev/nishidb/internal/schema"
@@ -86,6 +87,14 @@ func (e *Engine) Execute(ctx context.Context, dataset, sql string, params []type
 	stmt, err := parser.Parse(sql)
 	if err != nil {
 		return nil, err
+	}
+	// O namespace reservado desvia para a tabela virtual, que descreve o
+	// dataset nomeado NA REQUISIÇÃO. O desvio é aqui, e não no servidor,
+	// porque este é o ponto por onde o servidor e o CLI passam os dois — pô-lo
+	// numa camada acima faria a introspecção existir só para quem falasse HTTP.
+	if meta.Reconhece(stmt) {
+		caps, _ := reg.store.(meta.Capacidades)
+		return meta.Abre(ctx, stmt, reg.sch, caps, params)
 	}
 	bq, err := binder.Bind(stmt, reg.sch, params)
 	if err != nil {

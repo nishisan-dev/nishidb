@@ -908,3 +908,23 @@ func TestColunaChamadaOrderContinuaConsultavelPeloProtocolo(t *testing.T) {
 		t.Errorf("código = %q, quer %q: `order` tem de chegar ao binder como nome de coluna", f.Code, protocolo.CodBind)
 	}
 }
+
+// A tabela virtual é servida pela MESMA rota de consulta, contra o dataset
+// nomeado na requisição. É o que dispensa suporte em cliente nenhum: o driver
+// e o DBeaver já sabem executar SELECT.
+func TestMetaFieldsRespondePelaRotaDeQuery(t *testing.T) {
+	srv := servidorComDados(t, 1, blocoPadrao)
+	resp := consulta(t, srv, `{"dataset":"d","sql":"SELECT name, type, auto FROM _meta.fields"}`)
+	linhas, fim := resultado(t, resp)
+	if fim.Fim() == nil {
+		t.Fatal("o stream não trouxe a linha de fecho")
+	}
+	if len(linhas) == 0 {
+		t.Fatal("nenhuma linha; o dataset tem campos")
+	}
+	for _, l := range linhas {
+		if !strings.Contains(l, `"name"`) || !strings.Contains(l, `"type"`) {
+			t.Fatalf("linha sem as colunas pedidas: %s", l)
+		}
+	}
+}

@@ -131,4 +131,40 @@ class SqlScannerTest {
         assertEquals("t", dataset("SELECT fromage FROM t"));
         assertNull(dataset("SELECT * FROMAGE t"));
     }
+
+    /**
+     * Nome qualificado no FROM ABANDONA o palpite.
+     *
+     * <p>O ponto não é parte de identificador para o scanner, então
+     * {@code FROM _meta.fields} lhe entregaria {@code "_meta"} — um dataset que
+     * não existe, e o servidor responderia 404. Devolver null faz o driver usar
+     * o dataset da conexão, que é justamente o que a tabela de metadados
+     * descreve.
+     *
+     * <p>Esta é a metade do trabalho que quebraria EM SILÊNCIO: o driver
+     * continuaria compilando e os testes continuariam verdes, e a falha
+     * apareceria só na primeira consulta ao metadado.
+     */
+    @Test
+    void nomeQualificadoNoFromAbandonaOPalpite() {
+        assertNull(dataset("SELECT name FROM _meta.fields"));
+        assertNull(dataset("SELECT name FROM _meta.fields WHERE auto = true"));
+        assertNull(dataset("select a from ns.tabela"));
+    }
+
+    /** O ponto abandona o palpite sem parar a contagem de placeholders. */
+    @Test
+    void nomeQualificadoNaoZeraAContagemDePlaceholders() {
+        assertEquals(2, placeholders("SELECT name FROM _meta.fields WHERE type = ? AND auto = ?"));
+    }
+
+    /**
+     * Abandonar o palpite não pode reabrir a caça: sem uma marca própria de
+     * "já vi o FROM", o campo nulo faria um FROM posterior no texto voltar a
+     * capturar um nome.
+     */
+    @Test
+    void depoisDeAbandonarNaoCapturaOutroFrom() {
+        assertNull(dataset("SELECT a FROM ns.t WHERE x = 'from outra'"));
+    }
 }
