@@ -158,6 +158,7 @@ func TestParseValidationErrors(t *testing.T) {
 		{"version errada", repl("version: 1", "version: 2"), "version"},
 		{"nome vazio", repl("name: radius_sessions", "name: \"\""), "name"},
 		{"nome invalido", repl("name: radius_sessions", "name: Radius-Sessions"), "name"},
+		{"nome com prefixo reservado", repl("name: radius_sessions", "name: _meta"), "reservado"},
 		{"key ausente", repl("    field: id\n", ""), "key.field"},
 		{"key tipo nao-string", repl("    field: id\n    type: string", "    field: id\n    type: int64"), "key.type"},
 		{"mode invalido", repl("mode: merge", "mode: upsert"), "mode"},
@@ -195,6 +196,34 @@ func TestParseValidationErrors(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			parseErr(t, tc.yml, tc.want)
 		})
+	}
+}
+
+// O prefixo "_" em nome de DATASET fica reservado aos espaços de nome do
+// produto — o primeiro é `_meta`, a tabela virtual de introspecção. A recusa
+// entra ANTES de existir dataset que o ocupe: é uma linha hoje, e depois seria
+// "recrie o dataset", o custo mais alto do produto.
+func TestNomeDeDatasetNaoPodeComecarComUnderscore(t *testing.T) {
+	for _, nome := range []string{"_meta", "_", "_x"} {
+		t.Run(nome, func(t *testing.T) {
+			parseErr(t, strings.Replace(baseYAML, "name: radius_sessions", "name: "+nome, 1), "reservado")
+		})
+	}
+}
+
+// A regra acima vale para o nome do DATASET e para mais nada. Campo e alias
+// com "_" continuam válidos, e é deliberado: o comentário de nomesDeSistema
+// (spec.go) registra que reservar o prefixo para CAMPOS recusaria datasets que
+// hoje sobem, porque `_SEQ` é nome de sequence legítimo e já está em uso.
+// Sem esta metade, a recusa nova poderia crescer para os campos sem que nada
+// acusasse.
+func TestUnderscoreContinuaValidoEmCampoEAlias(t *testing.T) {
+	s := parseOK(t, strings.Replace(baseYAML, "      alias: service_id", "      alias: _sid", 1))
+	if s.Schema.Fields["_SEQ"].Type != "int64" {
+		t.Errorf("campo _SEQ deveria continuar declarado como int64, é %q", s.Schema.Fields["_SEQ"].Type)
+	}
+	if got := s.Schema.Fields["id"].Alias; got != "_sid" {
+		t.Errorf("alias _sid deveria ser aceito, é %q", got)
 	}
 }
 

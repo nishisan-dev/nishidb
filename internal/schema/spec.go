@@ -336,6 +336,20 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 	if !isIdentName(raw.Name) {
 		return nil, specErrf("name %q inválido (esperado [a-z0-9_]+)", raw.Name)
 	}
+	// O prefixo "_" em nome de DATASET fica reservado aos espaços de nome do
+	// produto — `_meta` é o primeiro. A recusa vale a pena AGORA porque o custo
+	// é assimétrico: uma linha hoje, e "recrie o dataset" depois, para quem já
+	// tiver subido um nome assim.
+	//
+	// Ela mora aqui, e não dentro de isIdentName, porque aquela função também
+	// valida ALIAS logo abaixo — e para CAMPO o prefixo continua legítimo, pela
+	// razão que o comentário de nomesDeSistema registra: `_SEQ` é nome de
+	// sequence em uso, e reservá-lo recusaria datasets que hoje sobem.
+	if strings.HasPrefix(raw.Name, "_") {
+		return nil, specErrf(
+			"name %q: o prefixo \"_\" é reservado aos espaços de nome do produto (o primeiro é _meta); escolha outro nome",
+			raw.Name)
+	}
 	s.Name = raw.Name
 
 	var err error
