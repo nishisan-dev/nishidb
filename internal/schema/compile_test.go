@@ -2,6 +2,7 @@ package schema
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -357,4 +358,101 @@ schema:
     id:
       type: string
 `, "unknownFields")
+}
+
+// tetoYAML monta um dataset de universo aberto com teto de campos declarado.
+// Depois do Compile o dicionário tem exatamente um campo (`id`), então
+// maxCols: 2 deixa espaço para UM autodescoberto e recusa o seguinte.
+func tetoYAML(maxCols int, onMax string) string {
+	return fmt.Sprintf(`version: 1
+name: t
+materialization:
+  key:
+    field: id
+schema:
+  include: ["*"]
+  unknownFields: include
+  maxCols: %d
+  onMaxCols: %s
+  fields:
+    id:
+      type: string
+`, maxCols, onMax)
+}
+
+// O teto de campos NÃO pode parar a ingestão: sobre uma grandeza que cresce
+// sem limite, atingi-lo não é anomalia, é questão de tempo. Sob `ignore` o
+// campo excedente é descartado e o EVENTO continua sendo gravado — é o mesmo
+// desfecho que o campo excluído já tem, e por isso reusa a rota (nil, nil).
+func TestResolveUnknownDescartaCampoAcimaDoTetoSobIgnore(t *testing.T) {
+	s := parseOK(t, tetoYAML(2, "ignore"))
+	dict := newFakeDict()
+	c, err := s.Compile(dict)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f, err := c.ResolveUnknown([]byte("cabe")); err != nil || f == nil {
+		t.Fatalf("primeiro autodescoberto = %v, %v; devia caber", f, err)
+	}
+	antes := len(dict.order)
+	f, err := c.ResolveUnknown([]byte("naoCabe"))
+	if err != nil || f != nil {
+		t.Errorf("campo acima do teto = %v, %v; quer nil, nil", f, err)
+	}
+	if len(dict.order) != antes {
+		t.Errorf("campo acima do teto foi registrado no dicionário: %v", dict.order[antes:])
+	}
+	if got := c.CamposDescartados(); got != 1 {
+		t.Errorf("CamposDescartados = %d, quer 1 — a perda precisa ser contável", got)
+	}
+}
+
+// Sob `stop` a perda não é aceita: o erro sobe com sentinela própria para que
+// a classificação o separe do balde de "bug nosso" e a parada seja declarada,
+// e não um efeito colateral de erro sem dono.
+func TestResolveUnknownRecusaAcimaDoTetoSobStop(t *testing.T) {
+	s := parseOK(t, tetoYAML(2, "stop"))
+	c, err := s.Compile(newFakeDict())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.ResolveUnknown([]byte("cabe")); err != nil {
+		t.Fatalf("primeiro autodescoberto: %v", err)
+	}
+	if _, err := c.ResolveUnknown([]byte("naoCabe")); !errors.Is(err, ErrTetoDeCampos) {
+		t.Errorf("campo acima do teto = %v, quer ErrTetoDeCampos", err)
+	}
+}
+
+// Bater no teto congela o CONJUNTO de campos, não o dataset: os campos que já
+// existem continuam resolvendo normalmente. Sem esta garantia, o primeiro
+// campo excedente derrubaria todo evento seguinte, que é o defeito que o teto
+// deveria evitar.
+func TestTetoDeCamposNaoAfetaCampoJaConhecido(t *testing.T) {
+	s := parseOK(t, tetoYAML(2, "stop"))
+	c, err := s.Compile(newFakeDict())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.ResolveUnknown([]byte("cabe")); err != nil {
+		t.Fatalf("primeiro autodescoberto: %v", err)
+	}
+	if _, err := c.ResolveUnknown([]byte("naoCabe")); !errors.Is(err, ErrTetoDeCampos) {
+		t.Fatalf("preparo: quer ErrTetoDeCampos, veio %v", err)
+	}
+	if f, err := c.ResolveUnknown([]byte("cabe")); err != nil || f == nil {
+		t.Errorf("campo já conhecido no teto = %v, %v; devia continuar resolvendo", f, err)
+	}
+}
+
+// Declarar mais campos do que o próprio teto é erro de configuração, e sai na
+// compilação: deixar passar produziria um dataset que nasce acima do limite
+// que ele mesmo declarou.
+func TestCompileRecusaCamposDeclaradosAcimaDoTeto(t *testing.T) {
+	s := parseOK(t, strings.Replace(tetoYAML(1, "ignore"),
+		"    id:\n      type: string\n",
+		"    id:\n      type: string\n    outro:\n      type: string\n", 1))
+	if _, err := s.Compile(newFakeDict()); !errors.Is(err, ErrTetoDeCampos) {
+		t.Errorf("Compile = %v, quer ErrTetoDeCampos", err)
+	}
 }

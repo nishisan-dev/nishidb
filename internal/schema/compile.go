@@ -16,6 +16,15 @@ import (
 // (spec §101: SCHEMA_VALIDATION).
 var ErrUnknownField = errors.New("campo desconhecido rejeitado pela policy")
 
+// ErrTetoDeCampos é devolvido quando o dataset alcançou schema.maxCols.
+//
+// Tem sentinela PRÓPRIA de propósito. Sem ela o erro chegava à classificação
+// sem dono, caía no balde de "bug nosso ou dataset avariado" e PARAVA o writer
+// para sempre — o offset não avança, então o restart reproduz o mesmo evento e
+// o mesmo estouro. Sobre uma grandeza que cresce sem teto, alcançar o limite
+// não é anomalia: é questão de tempo, e precisa de desfecho declarado.
+var ErrTetoDeCampos = errors.New("teto de campos do dataset alcançado")
+
 type Mode uint8
 
 const (
@@ -165,6 +174,11 @@ type Compiled struct {
 	Unknown    UnknownPolicy
 	MaxRows    int
 	Timeout    time.Duration
+	// MaxCols/OnMaxCols governam o crescimento do dicionário. Vivem aqui, e
+	// não só na spec, porque quem os consulta é o ResolveUnknown — hot path do
+	// writer, que só carrega o Compiled.
+	MaxCols   int
+	OnMaxCols string
 	// Errors é a política de erro de evento do §101, resolvida. Vive na forma
 	// compilada porque o caminho de ingestão — que é onde ela vale — só
 	// carrega o Compiled, e ir buscar a DatasetSpec de novo ali obrigaria a
@@ -187,21 +201,36 @@ type Compiled struct {
 	byID    map[types.FieldID]*CompiledField
 	exclude map[string]struct{}
 	dict    FieldDictionary
+
+	// camposDescartados conta os campos recusados pelo teto. Atômico porque o
+	// writer o incrementa enquanto o coletor de métricas o lê. É o que torna a
+	// perda CONTÁVEL em vez de descoberta por acaso — o modo de falha
+	// inaceitável aqui é o silêncio, não a perda.
+	camposDescartados atomic.Uint64
 }
+
+// CamposDescartados é quantos campos o teto recusou desde a abertura.
+func (c *Compiled) CamposDescartados() uint64 { return c.camposDescartados.Load() }
+
+// CamposConhecidos é o tamanho corrente do dicionário — o numerador de que
+// MaxCols é o denominador.
+func (c *Compiled) CamposConhecidos() int { return c.dict.Len() }
 
 // Compile resolve a spec contra o field dictionary. IDs são atribuídos em
 // ordem determinística (nomes ordenados) — o mesmo spec + dict vazio produz
 // sempre o mesmo mapeamento.
 func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 	c := &Compiled{
-		Name:    s.Name,
-		MaxRows: s.Query.MaxRows,
-		Timeout: s.Query.Timeout,
-		Errors:  s.Errors,
-		byName:  make(map[string]*CompiledField),
-		byID:    make(map[types.FieldID]*CompiledField),
-		exclude: make(map[string]struct{}, len(s.Schema.Exclude)),
-		dict:    dict,
+		Name:      s.Name,
+		MaxRows:   s.Query.MaxRows,
+		Timeout:   s.Query.Timeout,
+		MaxCols:   s.Schema.MaxCols,
+		OnMaxCols: s.Schema.OnMaxCols,
+		Errors:    s.Errors,
+		byName:    make(map[string]*CompiledField),
+		byID:      make(map[types.FieldID]*CompiledField),
+		exclude:   make(map[string]struct{}, len(s.Schema.Exclude)),
+		dict:      dict,
 	}
 	if ttl := s.Materialization.TTL; ttl != nil {
 		c.ExpireAfterWrite = ttl.ExpireAfterWrite
@@ -250,6 +279,28 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 		names = append(names, CampoInstanteDeEscrita)
 	}
 	sort.Strings(names)
+
+	// Declarar mais campos do que o próprio teto é erro de configuração, e sai
+	// aqui: deixar passar faria o dataset nascer acima do limite que ele mesmo
+	// declarou, e o primeiro autodescoberto seria recusado por uma decisão que
+	// ninguém tomou conscientemente.
+	//
+	// A conta é sobre os DECLARADOS, e não sobre dict.Len(): um dataset que já
+	// cresceu além do teto numa execução anterior continua abrindo — os campos
+	// existem e são legíveis, e o que o teto governa é o crescimento daqui
+	// para a frente.
+	if c.MaxCols > 0 {
+		declarados := 0
+		for _, name := range names {
+			if _, excluded := c.exclude[name]; !excluded {
+				declarados++
+			}
+		}
+		if declarados > c.MaxCols {
+			return nil, fmt.Errorf("%w: o schema declara %d campos, acima de schema.maxCols (%d)",
+				ErrTetoDeCampos, declarados, c.MaxCols)
+		}
+	}
 
 	seqField := ""
 	if s.Materialization.Sequence != nil {
@@ -468,7 +519,13 @@ func (c *Compiled) Excluded(name []byte) bool {
 //   - policy ignore → (nil, nil);
 //   - policy reject → ErrUnknownField;
 //   - policy include → registra no dicionário, cria CompiledField auto e
-//     cacheia (idempotente).
+//     cacheia (idempotente);
+//   - teto de campos alcançado, onMaxCols ignore → (nil, nil): o campo é
+//     descartado e o EVENTO é gravado com todos os outros;
+//   - teto de campos alcançado, onMaxCols stop → ErrTetoDeCampos.
+//
+// Nos dois últimos o contador de descartados sobe: o teto pode custar dado, e
+// custá-lo em silêncio é o que não pode acontecer.
 //
 // Chamado apenas pela goroutine do writer; leitores concorrentes de
 // FieldByName/FieldByID são protegidos pelo RWMutex.
@@ -486,6 +543,23 @@ func (c *Compiled) ResolveUnknown(name []byte) (*CompiledField, error) {
 	defer c.mu.Unlock()
 	if f, ok := c.byName[string(name)]; ok {
 		return f, nil
+	}
+	// O teto governa o CRESCIMENTO, e a checagem vem depois do cache acima:
+	// campo que já existe continua resolvendo mesmo com o dicionário cheio.
+	// Sem essa ordem, o primeiro campo excedente derrubaria todo evento
+	// seguinte — exatamente o que o teto deveria evitar.
+	//
+	// Ela também vem ANTES do LookupOrCreate, e é isso que torna o erro de
+	// teto do próprio fielddict inalcançável por esta rota: os dois usam o
+	// mesmo limiar, e este dispara primeiro, com política.
+	if c.MaxCols > 0 && c.dict.Len() >= c.MaxCols {
+		c.camposDescartados.Add(1)
+		if c.OnMaxCols == OnMaxColsStop {
+			return nil, fmt.Errorf("%w: %s (maxCols=%d)", ErrTetoDeCampos, name, c.MaxCols)
+		}
+		// ignore: mesmo desfecho do campo excluído — o evento é gravado com
+		// todos os outros campos, e a perda fica no contador.
+		return nil, nil
 	}
 	id, err := c.dict.LookupOrCreate(name)
 	if err != nil {

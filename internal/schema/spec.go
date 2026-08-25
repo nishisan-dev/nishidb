@@ -88,7 +88,31 @@ type SchemaSpec struct {
 	Exclude       []string
 	UnknownFields string // include | ignore | reject (default ignore)
 	Fields        map[string]FieldSpec
+	// MaxCols é quantos campos o dataset pode registrar no dicionário, e
+	// OnMaxCols é o que acontece ao bater nele. São dois porque o número não é
+	// a decisão importante: o COMPORTAMENTO ao estourar é.
+	MaxCols   int
+	OnMaxCols string // ignore | stop (default ignore)
 }
+
+// Política de estouro do teto de campos.
+//
+// `partial` — gravar o evento e MARCÁ-LO como incompleto — foi considerada e
+// descartada: no modo merge, campo ausente do patch é preservado
+// (materializer.mergeRecords), então uma marca de "veio incompleto" nunca
+// poderia ser limpa por um evento posterior completo, nem atribuída ao evento
+// que de fato perdeu o campo. Ela mentiria para sempre a partir da primeira
+// vez. O que a proposta queria — que a perda fosse contável e não descoberta
+// por acaso — é entregue pelo contador por dataset, que não tem esse defeito.
+const (
+	OnMaxColsIgnore = "ignore"
+	OnMaxColsStop   = "stop"
+
+	// MaxColsTetoFisico é o teto que o dicionário impõe por construção: o
+	// types.FieldID é uint16. Declarar acima disto seria uma promessa que o
+	// fielddict recusa primeiro, então a spec recusa antes.
+	MaxColsTetoFisico = 65535
+)
 
 type FieldSpec struct {
 	Type   string
@@ -147,6 +171,11 @@ type rawSchema struct {
 	Exclude       []string             `yaml:"exclude"`
 	UnknownFields string               `yaml:"unknownFields"`
 	Fields        map[string]FieldSpec `yaml:"fields"`
+	// Ponteiro pela mesma razão do rawQuery.MaxRows: separa "ausente" de
+	// "zero", e zero é um pedido explícito de nada, que precisa ser recusado
+	// com a mesma clareza de um negativo.
+	MaxCols   *int   `yaml:"maxCols"`
+	OnMaxCols string `yaml:"onMaxCols"`
 }
 
 type rawQuery struct {
@@ -590,6 +619,36 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 		return nil, specErrf(`unknownFields: include exige include: ["*"] (com lista explícita o universo de campos é fechado)`)
 	}
 	s.Schema.UnknownFields = unknown
+
+	// maxCols/onMaxCols: quem declara vence, quem omite herda o teto físico.
+	//
+	// O default é o teto do dicionário, e não um número redondo menor, porque
+	// um teto menor aplicaria política a quem nunca a escolheu. Ele funciona
+	// como backstop contra forma patológica de dado (chave derivada de
+	// identificador); quem controla o caso real é a declaração.
+	maxCols := MaxColsTetoFisico
+	if raw.Schema.MaxCols != nil {
+		maxCols = *raw.Schema.MaxCols
+	}
+	if maxCols <= 0 {
+		return nil, specErrf("schema.maxCols deve ser > 0, é %d", maxCols)
+	}
+	if maxCols > MaxColsTetoFisico {
+		return nil, specErrf(
+			"schema.maxCols %d acima do teto físico do dicionário (%d, porque o FieldID é uint16); "+
+				"declarar acima disso prometeria o que o fielddict recusa primeiro",
+			maxCols, MaxColsTetoFisico)
+	}
+	s.Schema.MaxCols = maxCols
+
+	onMaxCols := raw.Schema.OnMaxCols
+	if onMaxCols == "" {
+		onMaxCols = OnMaxColsIgnore
+	}
+	if onMaxCols != OnMaxColsIgnore && onMaxCols != OnMaxColsStop {
+		return nil, specErrf("schema.onMaxCols %q inválido (%s|%s)", onMaxCols, OnMaxColsIgnore, OnMaxColsStop)
+	}
+	s.Schema.OnMaxCols = onMaxCols
 
 	// query: o dataset que declara a chave vence; quem omite herda o global.
 	maxRows := padroes.MaxRows

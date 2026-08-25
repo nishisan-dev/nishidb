@@ -1049,3 +1049,81 @@ func TestApplyFixtureRadiusCompletoDepoisPatch(t *testing.T) {
 	}
 	h.wantString(h.state(key), "Acct-Status-Type", "Stop")
 }
+
+// ------------------------------------------------------- teto de campos
+
+const tetoYAMLTmpl = `version: 1
+name: t
+materialization:
+  key:
+    field: id
+schema:
+  include: ["*"]
+  unknownFields: include
+  maxCols: %d
+  onMaxCols: %s
+  fields:
+    id:
+      type: string
+`
+
+func compilaComTeto(t *testing.T, maxCols int, onMax string) *schema.Compiled {
+	t.Helper()
+	s, err := schema.Parse([]byte(fmt.Sprintf(tetoYAMLTmpl, maxCols, onMax)), schema.DefaultsPadrao)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := s.Compile(fakestorage.NewDict())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+// O teto de campos alcançado NÃO derruba o evento: sob `ignore` a chave
+// excedente é descartada e todas as outras entram. É o contrário do que o
+// binário fazia antes — o erro do dicionário subia sem sentinela, caía no
+// balde de "bug nosso" e PARAVA o writer, com o offset congelado, de forma
+// que o restart reproduzia o mesmo estouro para sempre.
+func TestApplyAcimaDoTetoSobIgnoreGravaOEvento(t *testing.T) {
+	c := compilaComTeto(t, 2, schema.OnMaxColsIgnore)
+	m := New(c, fakestorage.New(fakestorage.Indexes{}))
+
+	r := m.Apply([]byte(`{"id":"A","cabe":1,"naoCabe":2}`))
+	if r.Action != ActionCreated {
+		t.Fatalf("resultado = %+v, quer Created — o evento tem de entrar", r)
+	}
+	if got := c.CamposDescartados(); got != 1 {
+		t.Errorf("CamposDescartados = %d, quer 1", got)
+	}
+	if mt := m.Metrics(); mt.FailedTotal != 0 || mt.InvalidTotal != 0 {
+		t.Errorf("métricas = %+v; descartar campo não é falha de evento", mt)
+	}
+}
+
+// Sob `stop` a parada é DECLARADA, e carrega categoria própria: até aqui ela
+// aconteceria de qualquer jeito, mas pelo default do classify, aparecendo ao
+// operador como STORAGE_ERROR — "bug nosso ou dataset avariado". O teto
+// alcançado não é nenhum dos dois.
+func TestApplyAcimaDoTetoSobStopTemCategoriaPropria(t *testing.T) {
+	c := compilaComTeto(t, 2, schema.OnMaxColsStop)
+	m := New(c, fakestorage.New(fakestorage.Indexes{}))
+
+	r := m.Apply([]byte(`{"id":"A","cabe":1,"naoCabe":2}`))
+	if r.Action != ActionFailed || r.Category != CategoryFieldsExhausted {
+		t.Fatalf("resultado = %+v, quer Failed/FIELDS_EXHAUSTED", r)
+	}
+}
+
+// A categoria do teto fica FORA da faixa de BadEvent(), e isso é o que faz o
+// `stop` realmente parar. Dentro da faixa ela seria governada pela política de
+// evento inválido, cujo default é log-and-skip: o writer descartaria o evento
+// e seguiria, entregando o oposto do que a chave pede.
+func TestCategoriaDeTetoNaoEEventoRuim(t *testing.T) {
+	if CategoryFieldsExhausted.BadEvent() {
+		t.Error("CategoryFieldsExhausted.BadEvent() = true; `stop` deixaria de parar")
+	}
+	if got := CategoryFieldsExhausted.String(); got != "FIELDS_EXHAUSTED" {
+		t.Errorf("String() = %q, quer FIELDS_EXHAUSTED", got)
+	}
+}

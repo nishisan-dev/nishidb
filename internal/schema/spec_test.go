@@ -190,6 +190,10 @@ func TestParseValidationErrors(t *testing.T) {
 		{"exclude do ttl", repl("  exclude:\n    - debug", "  exclude:\n    - EventExpireDate"), "ttl"},
 		{"exclude por alias", repl("  exclude:\n    - debug", "  exclude:\n    - status"), "alias"},
 		{"maxRows negativo", repl("maxRows: 50000", "maxRows: -1"), "maxRows"},
+		{"maxCols zero", repl("  unknownFields: include", "  unknownFields: include\n  maxCols: 0"), "maxCols"},
+		{"maxCols negativo", repl("  unknownFields: include", "  unknownFields: include\n  maxCols: -1"), "maxCols"},
+		{"maxCols acima do teto fisico", repl("  unknownFields: include", "  unknownFields: include\n  maxCols: 65536"), "65535"},
+		{"onMaxCols invalido", repl("  unknownFields: include", "  unknownFields: include\n  onMaxCols: partial"), "onMaxCols"},
 		{"timeout invalido", repl("timeout: 10s", "timeout: depressa"), "timeout"},
 	}
 	for _, tc := range cases {
@@ -238,4 +242,30 @@ func TestSourceKafkaIncompletoERecusadoNoParse(t *testing.T) {
   kafka:
     topic: radius-accounting
 materialization:`, 1), "bootstrapServers")
+}
+
+// maxCols/onMaxCols seguem a forma do maxRows: quem declara vence, quem omite
+// herda o default. O default de maxCols é o teto FÍSICO do dicionário — o
+// FieldID é uint16 —, porque qualquer número menor aplicaria política a quem
+// não a escolheu.
+func TestMaxColsPadraoEOTetoFisicoDoDicionario(t *testing.T) {
+	s := parseOK(t, baseYAML)
+	if s.Schema.MaxCols != 65535 {
+		t.Errorf("MaxCols default = %d, quer 65535", s.Schema.MaxCols)
+	}
+	if s.Schema.OnMaxCols != OnMaxColsIgnore {
+		t.Errorf("OnMaxCols default = %q, quer %q", s.Schema.OnMaxCols, OnMaxColsIgnore)
+	}
+}
+
+func TestMaxColsDeclaradoVenceODefault(t *testing.T) {
+	s := parseOK(t, strings.Replace(baseYAML,
+		"  unknownFields: include",
+		"  unknownFields: include\n  maxCols: 1000\n  onMaxCols: stop", 1))
+	if s.Schema.MaxCols != 1000 {
+		t.Errorf("MaxCols = %d, quer 1000", s.Schema.MaxCols)
+	}
+	if s.Schema.OnMaxCols != OnMaxColsStop {
+		t.Errorf("OnMaxCols = %q, quer %q", s.Schema.OnMaxCols, OnMaxColsStop)
+	}
 }
