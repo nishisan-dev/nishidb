@@ -93,9 +93,30 @@ func (p *parser) parseSelect() (*SelectStmt, error) {
 	if !ok {
 		return nil, p.errAt(p.cur.Pos, "esperado nome do dataset")
 	}
-	st.Dataset, st.DatasetPos = nome, pos
 	if err := p.advance(); err != nil {
 		return nil, err
+	}
+	// Nome qualificado: `_meta.fields`. Continua LL(1) — o '.' É o token de
+	// lookahead, e a decisão se toma olhando só para ele. O contraste é com o
+	// BY de GROUP BY, que exigiria um SEGUNDO lookahead e por isso foi
+	// recusado.
+	if p.cur.Type == lexer.TokenDot {
+		if err := p.advance(); err != nil {
+			return nil, err
+		}
+		qualificado, qpos, ok := p.identifier()
+		if !ok {
+			return nil, p.errAt(p.cur.Pos, "esperado nome de tabela depois de \""+nome+".\"")
+		}
+		if err := p.advance(); err != nil {
+			return nil, err
+		}
+		if p.cur.Type == lexer.TokenDot {
+			return nil, p.errAt(p.cur.Pos, "nome no FROM tem no máximo dois níveis (namespace.tabela); o NishiDB não tem catálogo")
+		}
+		st.Namespace, st.Dataset, st.DatasetPos = nome, qualificado, qpos
+	} else {
+		st.Dataset, st.DatasetPos = nome, pos
 	}
 
 	if p.cur.Type == lexer.TokenWhere {
@@ -146,6 +167,12 @@ func (p *parser) parseProjection(st *SelectStmt) error {
 		st.Projection = append(st.Projection, ColumnRef{Name: nome, Pos: pos})
 		if err := p.advance(); err != nil {
 			return err
+		}
+		// O '.' é token desde o nome qualificado do FROM, e sem esta guarda
+		// `SELECT t.a` cairia em "esperado ',' ou FROM" — uma recusa que não
+		// nomeia o ponto e manda o usuário procurar no lugar errado.
+		if p.cur.Type == lexer.TokenDot {
+			return p.errAt(p.cur.Pos, "nome qualificado não é suportado na projeção; escreva só o nome da coluna")
 		}
 		if p.cur.Type != lexer.TokenComma {
 			// DISTINCT é a única das sete que NÃO chega ao sítio principal:

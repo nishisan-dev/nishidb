@@ -84,6 +84,21 @@ func (l *Lexer) Next() (Token, error) {
 		return l.punct(TokenRParen, 1), nil
 	case ';':
 		return l.punct(TokenSemicolon, 1), nil
+	case '.':
+		// O ponto DENTRO de um número nunca chega aqui: o dispatch de cima
+		// manda todo lexema iniciado por dígito (ou por '-' seguido de dígito)
+		// para o scanNumber, que consome o ponto decimal junto.
+		//
+		// O ponto SEGUIDO de dígito continua sendo erro, com a mensagem que
+		// sempre teve. `.5` não é literal válido na v1, e deixá-lo virar
+		// TokenDot+NUMBER trocaria uma recusa que nomeia o caractere por um
+		// erro de sintaxe distante, no parser, dizendo o que ele esperava
+		// encontrar ali — que é o que o usuário NÃO está procurando. O ponto
+		// é separador entre nomes, e é só isso.
+		if l.pos+1 < len(l.src) && isDigit(l.src[l.pos+1]) {
+			return l.fail(start, "caractere inesperado '.'")
+		}
+		return l.punct(TokenDot, 1), nil
 	case '=':
 		return l.punct(TokenEq, 1), nil
 	case '!':

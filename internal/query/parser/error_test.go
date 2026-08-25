@@ -129,7 +129,6 @@ func TestErroDoLexerChegaSemEmbrulho(t *testing.T) {
 		{"caractere invalido", "SELECT # FROM x", "caractere inesperado '#'", 7},
 		{"numero com zero a esquerda", "SELECT a FROM x WHERE a = 007", "literal numérico inválido", 26},
 		{"string aberta", "SELECT a FROM x WHERE a = 'aberta", "literal string sem fechamento", 26},
-		{"nome qualificado", "SELECT t.a FROM x", "caractere inesperado '.'", 8},
 		{"comentario sql", "SELECT a FROM x -- comentario", "caractere inesperado '-'", 16},
 	}
 	for _, tc := range casos {
@@ -172,5 +171,65 @@ func TestErroSempreTermina(t *testing.T) {
 				t.Errorf("Parse(%q) não falhou", sql)
 			}
 		})
+	}
+}
+
+// O '.' virou token para servir ao nome qualificado do FROM. As mensagens
+// abaixo existem para que essa mudança não CUSTE diagnóstico: sem elas, cada
+// uma destas entradas cairia numa recusa genérica ("esperado ',' ou FROM",
+// "esperado nome do dataset") que não nomeia o ponto nem diz o que fazer.
+func TestPontoForaDeLugarTemMensagemPropria(t *testing.T) {
+	casos := []struct {
+		nome string
+		sql  string
+		msg  string
+	}{
+		{"projecao qualificada", "SELECT t.a FROM x", "nome qualificado"},
+		{"from com ponto solto", "SELECT a FROM x.", "esperado nome"},
+		{"from comecando com ponto", "SELECT a FROM .x", "esperado nome do dataset"},
+		{"from com tres niveis", "SELECT a FROM a.b.c", "dois níveis"},
+	}
+	for _, tc := range casos {
+		t.Run(tc.nome, func(t *testing.T) {
+			_, err := parser.Parse(tc.sql)
+			if err == nil {
+				t.Fatal("esperava erro")
+			}
+			if !strings.Contains(err.Error(), tc.msg) {
+				t.Errorf("erro = %q, quer conter %q", err, tc.msg)
+			}
+		})
+	}
+}
+
+// O nome qualificado no FROM é o que a tabela virtual de introspecção usa.
+// Continua LL(1): o '.' É o token de lookahead, e a decisão se toma olhando
+// só para ele — ao contrário do BY de GROUP BY, que exigiria um segundo e por
+// isso foi recusado.
+func TestFromAceitaNomeQualificado(t *testing.T) {
+	st, err := parser.Parse("SELECT name FROM _meta.fields")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if st.Namespace != "_meta" {
+		t.Errorf("Namespace = %q, quer _meta", st.Namespace)
+	}
+	if st.Dataset != "fields" {
+		t.Errorf("Dataset = %q, quer fields", st.Dataset)
+	}
+	if st.DatasetPos != len("SELECT name FROM _meta.") {
+		t.Errorf("DatasetPos = %d, quer apontar para o nome depois do ponto", st.DatasetPos)
+	}
+}
+
+// Sem namespace o campo fica vazio: é aditivo, e nenhuma query existente muda
+// de forma.
+func TestFromSemNamespaceDeixaOCampoVazio(t *testing.T) {
+	st, err := parser.Parse("SELECT a FROM x")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if st.Namespace != "" {
+		t.Errorf("Namespace = %q, quer vazio", st.Namespace)
 	}
 }

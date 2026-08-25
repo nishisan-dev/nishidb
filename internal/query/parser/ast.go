@@ -18,6 +18,13 @@ package parser
 type SelectStmt struct {
 	Star       bool        // true ⇒ Projection == nil
 	Projection []ColumnRef // nomes como escritos, já unescapados; nil quando Star
+	// Namespace é o qualificador antes do ponto (`_meta` em `_meta.fields`),
+	// vazio quando o FROM traz um nome simples. É ADITIVO: nenhuma query
+	// existente muda de forma, e o campo zero significa "sem namespace".
+	Namespace string
+	// Dataset é sempre o nome DEPOIS do ponto, quando há ponto. DatasetPos
+	// aponta para ele, e não para o qualificador: é dele que sai o
+	// "dataset desconhecido" do binder.
 	Dataset    string
 	DatasetPos int
 	Where      Expr  // nil se ausente
