@@ -326,6 +326,26 @@ func (p *parser) parsePredicate() (Expr, error) {
 	if err := p.advance(); err != nil {
 		return nil, err
 	}
+	// Caminho qualificado no filtro, pela mesma razão de existir na projeção:
+	// sem ele a gramática ficaria torta — `SELECT doc.x` valeria e
+	// `WHERE doc.x = 'y'` não, para a mesma coluna.
+	qualificador := ""
+	if p.cur.Type == lexer.TokenDot {
+		if err := p.advance(); err != nil {
+			return nil, err
+		}
+		caminho, cpos, ok := p.identifier()
+		if !ok {
+			return nil, p.errAt(p.cur.Pos, "esperado nome de coluna depois de \""+col+".\"")
+		}
+		qualificador, col, pos = col, caminho, cpos
+		if err := p.advance(); err != nil {
+			return nil, err
+		}
+		if p.cur.Type == lexer.TokenDot {
+			return nil, p.errAt(p.cur.Pos, "nome no filtro tem no máximo dois níveis (campo.caminho)")
+		}
+	}
 
 	if p.cur.Type == lexer.TokenIs {
 		if err := p.advance(); err != nil {
@@ -346,7 +366,7 @@ func (p *parser) parsePredicate() (Expr, error) {
 		if err := p.advance(); err != nil {
 			return nil, err
 		}
-		return &NullCheck{Column: col, ColumnPos: pos, Not: not}, nil
+		return &NullCheck{Qualifier: qualificador, Column: col, ColumnPos: pos, Not: not}, nil
 	}
 
 	op, ok := cmpOp(p.cur.Type)
@@ -360,7 +380,9 @@ func (p *parser) parsePredicate() (Expr, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Comparison{Column: col, ColumnPos: pos, Op: op, Operand: operand}, nil
+	return &Comparison{
+		Qualifier: qualificador,
+		Column:    col, ColumnPos: pos, Op: op, Operand: operand}, nil
 }
 
 // itoa evita arrastar o fmt para o pacote por causa de uma mensagem de erro.

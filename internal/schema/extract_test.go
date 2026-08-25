@@ -286,3 +286,172 @@ func TestCamposComBitmapVazioSemIndice(t *testing.T) {
 		t.Errorf("CamposComBitmap = %v, quer vazio", got)
 	}
 }
+
+const descobreYAML = `version: 1
+name: eventos
+materialization:
+  key:
+    field: id
+schema:
+  include: ["*"]
+  unknownFields: include
+  fields:
+    id:
+      type: string
+    doc:
+      type: json
+      unknownFields: include
+      extract:
+        - path: probeIpNode
+          as: probe_ip
+          type: string
+`
+
+// `unknownFields: include` no CAMPO descobre as chaves de dentro do documento
+// como colunas, do mesmo jeito que a chave homônima do bloco `schema` descobre
+// campos de topo. É deliberadamente a mesma palavra: o operador já sabe o que
+// ela significa um nível acima.
+func TestUnknownFieldsNoCampoLigaADescoberta(t *testing.T) {
+	c := compilaExtract(t, descobreYAML)
+	doc, ok := c.FieldByName([]byte("doc"))
+	if !ok {
+		t.Fatal("doc não compilou")
+	}
+	if !doc.DescobreAninhados {
+		t.Error("doc.DescobreAninhados = false; a chave no campo não ligou a descoberta")
+	}
+}
+
+// Sem a chave, o campo json continua opaco — o comportamento de antes.
+func TestSemAChaveOCampoJsonContinuaOpaco(t *testing.T) {
+	c := compilaExtract(t, extractYAML)
+	doc, _ := c.FieldByName([]byte("doc"))
+	if doc.DescobreAninhados {
+		t.Error("descoberta ligada sem a chave ter sido declarada")
+	}
+}
+
+func TestRecusasDaDescoberta(t *testing.T) {
+	casos := []struct{ nome, yml, quer string }{
+		{
+			"em campo que nao e json",
+			strings.Replace(descobreYAML, "    doc:\n      type: json", "    doc:\n      type: string", 1),
+			"json",
+		},
+		{
+			"valor invalido",
+			strings.Replace(descobreYAML, "      unknownFields: include", "      unknownFields: talvez", 1),
+			"unknownFields",
+		},
+		{
+			"reject nao faz sentido dentro do documento",
+			strings.Replace(descobreYAML, "      unknownFields: include", "      unknownFields: reject", 1),
+			"reject",
+		},
+	}
+	for _, tc := range casos {
+		t.Run(tc.nome, func(t *testing.T) { parseErr(t, tc.yml, tc.quer) })
+	}
+}
+
+// A coluna DESCOBERTA precisa voltar como derivada depois do restart.
+//
+// Sem isto ela ressuscita pela rota de carregamento do dicionário como campo
+// de TOPO autodescoberto — e aí volta para o `SELECT *`, que é exatamente o
+// que a decisão de mantê-la fora existe para evitar: o dataset do piloto
+// nasceria com centenas de colunas por linha na primeira reabertura.
+//
+// O que identifica a coluna é o próprio NOME: ele é qualificado por
+// construção, e o prefixo antes do ponto é um campo json com descoberta
+// ligada. Não é preciso estado durável novo — o nome já é o registro.
+func TestColunaDescobertaVoltaComoDerivadaNoReopen(t *testing.T) {
+	d := newFakeDict()
+	if _, err := parseOK(t, descobreYAML).Compile(d); err != nil {
+		t.Fatal(err)
+	}
+	// Simula o que a ingestão faria: registra colunas descobertas.
+	for _, nome := range []string{"doc.tlCause", "doc.alarme"} {
+		if _, err := d.LookupOrCreate([]byte(nome)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	c, err := parseOK(t, descobreYAML).Compile(d)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	f, ok := c.FieldByName([]byte("doc.tlCause"))
+	if !ok {
+		t.Fatal("doc.tlCause sumiu no reopen")
+	}
+	if f.Parent == nil || f.Parent.Name != "doc" {
+		t.Fatalf("doc.tlCause.Parent = %v, quer doc", f.Parent)
+	}
+	if f.Path != "tlCause" {
+		t.Errorf("doc.tlCause.Path = %q, quer tlCause", f.Path)
+	}
+	for _, g := range c.FieldsByID() {
+		if g.Parent == nil && g.Name != "id" && g.Name != "doc" {
+			t.Errorf("coluna descoberta %q voltou para o SELECT * no reopen", g.Name)
+		}
+	}
+	if n := len(c.FieldsByParent("doc")); n != 3 { // as duas descobertas + probe_ip declarada
+		t.Errorf("FieldsByParent(doc) = %d, quer 3", n)
+	}
+}
+
+// O ponto no nome só significa "aninhada" quando o prefixo é um pai que
+// DESCOBRE. Num dataset sem descoberta ligada, um campo de topo cujo nome
+// tenha ponto continua sendo de topo.
+func TestNomeComPontoSemPaiQueDescobreContinuaDeTopo(t *testing.T) {
+	d := newFakeDict()
+	if _, err := parseOK(t, extractYAML).Compile(d); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.LookupOrCreate([]byte("doc.tlCause")); err != nil {
+		t.Fatal(err)
+	}
+	c, err := parseOK(t, extractYAML).Compile(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, _ := c.FieldByName([]byte("doc.tlCause"))
+	if f != nil && f.Parent != nil {
+		t.Error("campo virou derivado num dataset que não declara descoberta")
+	}
+}
+
+// O descarte por teto precisa aparecer no LOG, e não só no contador: quem
+// opera descobre pelo painel que o número subiu, mas o log é o que diz QUAL
+// campo foi o primeiro a não caber — o resto se investiga a partir dele.
+//
+// Uma vez por dataset, e não por evento: sob a política `ignore` o descarte
+// passa a ser o estado normal, e uma linha por evento afogaria o log num
+// dataset que ingere a 500 ev/s.
+func TestDescarteAvisaUmaVezPorDataset(t *testing.T) {
+	s := parseOK(t, tetoYAML(2, "ignore"))
+	c, err := s.Compile(newFakeDict())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var avisos []string
+	c.AoDescartarCampo(func(campo string) { avisos = append(avisos, campo) })
+
+	if _, err := c.ResolveUnknown([]byte("cabe")); err != nil {
+		t.Fatal(err)
+	}
+	for _, nome := range []string{"primeiroExcedente", "segundo", "terceiro"} {
+		if _, err := c.ResolveUnknown([]byte(nome)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(avisos) != 1 {
+		t.Fatalf("avisos = %v, quer exatamente um", avisos)
+	}
+	if avisos[0] != "primeiroExcedente" {
+		t.Errorf("aviso = %q, quer o PRIMEIRO campo que não coube", avisos[0])
+	}
+	if c.CamposDescartados() != 3 {
+		t.Errorf("contador = %d, quer 3 — o log é uma vez, a contagem é toda", c.CamposDescartados())
+	}
+}

@@ -150,3 +150,66 @@ func TestTetoContaTambemOCaminhoQualificado(t *testing.T) {
 		t.Errorf("erro = %q, quer nomear o teto", err)
 	}
 }
+
+const yamlSoDescobre = `version: 1
+name: eventos
+materialization:
+  key:
+    field: id
+schema:
+  include: ["*"]
+  unknownFields: include
+  fields:
+    id:
+      type: string
+    doc:
+      type: json
+      unknownFields: include
+`
+
+// Pai que DESCOBRE mas ainda não viu nenhuma chave: a recusa não pode dizer
+// "não declara extract", porque ele declara descoberta — a mensagem mandaria
+// o operador escrever um extract que ele não precisa. O que falta é evento.
+func TestPaiQueDescobreEAindaNaoViuNadaDizOQueFalta(t *testing.T) {
+	_, err := bindComYAML(t, yamlSoDescobre, "SELECT doc.* FROM eventos")
+	if err == nil {
+		t.Fatal("esperava recusa: nada foi descoberto ainda")
+	}
+	if strings.Contains(err.Error(), "não declara extract") {
+		t.Errorf("erro = %q; ele DECLARA descoberta, a mensagem manda corrigir a coisa errada", err)
+	}
+	if !strings.Contains(err.Error(), "eventos") {
+		t.Errorf("erro = %q, quer dizer que as colunas aparecem conforme os eventos chegam", err)
+	}
+}
+
+// Filtrar por caminho tem de funcionar como projetar por caminho. Sem isso a
+// gramática fica torta: `SELECT doc.probeIpNode` vale e
+// `WHERE doc.probeIpNode = 'x'` não, para a mesma coluna.
+func TestWhereAceitaCaminhoQualificado(t *testing.T) {
+	bq, err := bindComYAML(t, yamlAninhado, "SELECT id FROM eventos WHERE doc.probeIpNode = '10.0.0.1'")
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	if bq.Where == nil {
+		t.Fatal("WHERE não ligou")
+	}
+}
+
+func TestWhereQualificadoRecusaCaminhoInexistente(t *testing.T) {
+	_, err := bindComYAML(t, yamlAninhado, "SELECT id FROM eventos WHERE doc.naoExiste = 'x'")
+	if err == nil {
+		t.Fatal("esperava recusa")
+	}
+	if !strings.Contains(err.Error(), "naoExiste") {
+		t.Errorf("erro = %q, quer nomear o caminho", err)
+	}
+}
+
+// IS NULL também: a coluna aninhada é ausente na maioria das linhas, então
+// perguntar por presença é o filtro mais natural sobre ela.
+func TestWhereQualificadoAceitaIsNull(t *testing.T) {
+	if _, err := bindComYAML(t, yamlAninhado, "SELECT id FROM eventos WHERE doc.probeIpNode IS NULL"); err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+}

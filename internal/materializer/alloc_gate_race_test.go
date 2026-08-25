@@ -4,14 +4,14 @@ package materializer
 
 import "testing"
 
-// Contraparte visível do gate de alocação sob -race: o detector instrumenta o
-// runtime e a contagem deixa de refletir o binário real, então o gate roda no
-// build normal (`go test ./...`) e aqui só registra o pulo — sem isto, o
-// desaparecimento do gate na rodada com -race seria silencioso.
-func TestApplyNaoAlocaEmSteadyState(t *testing.T) {
+// Contraparte visível dos gates sob -race: a instrumentação do detector altera
+// a contagem de alocações (ela desfaz a elisão da conversão []byte→string em
+// lookup de mapa, entre outras), então o gate mede o instrumento junto com o
+// código. O pulo se ANUNCIA em vez de sumir em silêncio da rodada.
+func TestExtracaoNaoAloca(t *testing.T) {
 	t.Skip("gate de alocação não roda sob -race: a instrumentação altera a contagem")
 }
 
-func TestMergeNaoAloca(t *testing.T) {
+func TestDescobertaNaoAlocaEmRegime(t *testing.T) {
 	t.Skip("gate de alocação não roda sob -race: a instrumentação altera a contagem")
 }

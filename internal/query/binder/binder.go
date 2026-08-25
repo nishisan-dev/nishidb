@@ -308,6 +308,27 @@ func (b *binder) projecao() ([]BoundColumn, error) {
 	return cols, nil
 }
 
+// colunaTalvezQualificada resolve o nome do filtro, com ou sem qualificador.
+//
+// Com qualificador, o nome é o CAMINHO dentro do documento — a mesma regra da
+// projeção, e é o que faz `WHERE doc.x` valer para a coluna que
+// `SELECT doc.x` projeta, tenha ela sido declarada com outro `as` ou
+// descoberta com o nome qualificado.
+func (b *binder) colunaTalvezQualificada(qualificador, nome string, pos int) (*schema.CompiledField, error) {
+	if qualificador == "" {
+		return b.coluna(nome, pos)
+	}
+	pai, ok := b.sc.FieldByName([]byte(qualificador))
+	if !ok {
+		return nil, errAt(pos, "campo %q não existe no dataset %q", qualificador, b.sc.Name)
+	}
+	f, ok := b.sc.FieldByPath(pai.Name, nome)
+	if !ok {
+		return nil, errAt(pos, "o campo %q não tem a coluna aninhada %q", qualificador, nome)
+	}
+	return f, nil
+}
+
 // qualificada resolve `pai.*` e `pai.caminho`.
 //
 // A expansão existe porque a coluna derivada fica FORA do SELECT * — sem ela,
@@ -320,7 +341,15 @@ func (b *binder) qualificada(cols []BoundColumn, ref parser.ColumnRef, derivadas
 	}
 	filhas := b.sc.FieldsByParent(pai.Name)
 	if len(filhas) == 0 {
-		return nil, 0, errAt(ref.Pos, "campo %q não declara extract; não há coluna aninhada a projetar", ref.Qualifier)
+		// A recusa precisa dizer o que FALTA, e isso depende do que o campo
+		// declarou. Um pai que descobre não precisa de extract nenhum: o que
+		// falta a ele é evento que traga a chave.
+		if pai.DescobreAninhados {
+			return nil, 0, errAt(ref.Pos,
+				"campo %q ainda não descobriu nenhuma coluna; elas aparecem conforme os eventos trazem as chaves", ref.Qualifier)
+		}
+		return nil, 0, errAt(ref.Pos,
+			"campo %q não declara extract nem descoberta de campos aninhados; não há coluna a projetar", ref.Qualifier)
 	}
 
 	// Quantas colunas aninhadas este item acrescenta. O teto é conferido para
@@ -457,7 +486,7 @@ func (b *binder) folha(e parser.Expr) (BoundExpr, error) {
 		return b.comparacao(n)
 
 	case *parser.NullCheck:
-		f, err := b.coluna(n.Column, n.ColumnPos)
+		f, err := b.colunaTalvezQualificada(n.Qualifier, n.Column, n.ColumnPos)
 		if err != nil {
 			return nil, err
 		}
@@ -473,7 +502,7 @@ func (b *binder) folha(e parser.Expr) (BoundExpr, error) {
 }
 
 func (b *binder) comparacao(n *parser.Comparison) (BoundExpr, error) {
-	f, err := b.coluna(n.Column, n.ColumnPos)
+	f, err := b.colunaTalvezQualificada(n.Qualifier, n.Column, n.ColumnPos)
 	if err != nil {
 		return nil, err
 	}

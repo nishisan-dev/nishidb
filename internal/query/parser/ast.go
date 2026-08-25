@@ -64,6 +64,9 @@ type LogicalExpr struct {
 // Comparison é `coluna <op> literal`. Comparação coluna×coluna e literal à
 // esquerda não existem na v1.
 type Comparison struct {
+	// Qualifier é o campo json à esquerda do ponto; vazio no filtro simples.
+	// Com ele, Column é o CAMINHO dentro do documento, como na projeção.
+	Qualifier string
 	Column    string
 	ColumnPos int // posição de byte do token da COLUNA
 	Op        CmpOp
@@ -73,6 +76,7 @@ type Comparison struct {
 // NullCheck é `coluna IS [NOT] NULL`. NULL é ausência do campo no record
 // (decisão D2), então isto vira teste de presença no executor.
 type NullCheck struct {
+	Qualifier string
 	Column    string
 	ColumnPos int
 	Not       bool
