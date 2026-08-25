@@ -507,32 +507,6 @@ func CamposComBitmap(s *DatasetSpec) []string {
 	return out
 }
 
-// ValidaContraDatasetExistente recusa a subida quando a spec declara `extract`
-// e o dataset já tem linhas gravadas.
-//
-// A extração roda na INGESTÃO, então as linhas anteriores à declaração não têm
-// a coluna derivada. Deixar subir faria `WHERE derivada = 'x'` omitir todas
-// elas — sem erro, sem log e sem métrica. É o mesmo defeito que a abertura já
-// recusa quando um índice bitmap é declarado sobre um dataset com linhas, e a
-// razão é a mesma: resultado incompleto com cara de completo.
-//
-// A checagem precisa rodar ANTES de storage.Open. A resolução dos campos de
-// bitmap grava no dicionário, com fsync, antes de qualquer validação de
-// manifest: uma única subida abortada deixaria o `as` registrado para sempre.
-func (s *DatasetSpec) ValidaContraDatasetExistente(linhas uint64) error {
-	if linhas == 0 {
-		return nil
-	}
-	nomes := s.NomesDasExtracoes()
-	if len(nomes) == 0 {
-		return nil
-	}
-	return fmt.Errorf("%w: %v declarada(s) em extract num dataset que já tem %d linhas; "+
-		"a extração roda na ingestão, então as linhas antigas ficariam sem a coluna e o filtro sobre ela "+
-		"as omitiria em silêncio. Declare extract na CRIAÇÃO do dataset, ou recrie este",
-		ErrColunaDerivada, nomes, linhas)
-}
-
 // NomesDasExtracoes devolve, em ordem determinística, o nome de todas as
 // colunas derivadas declaradas.
 func (s *DatasetSpec) NomesDasExtracoes() []string {

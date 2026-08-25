@@ -296,25 +296,14 @@ func Novo(cfg *config.Config, o Opcoes) (*Servidor, error) {
 }
 
 func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*dataset, error) {
-	// ANTES do Open: a resolução dos campos de bitmap grava no dicionário com
-	// fsync antes de validar o manifest, e o dicionário é append-only — uma
-	// subida abortada depois disso deixaria a coluna derivada registrada para
-	// sempre.
 	dir := s.cfg.CaminhoDoDataset(spec.Name)
-	linhas, err := storage.LinhasNoManifest(dir)
-	if err != nil {
-		return nil, fmt.Errorf("dataset %q: lendo o manifest: %w", spec.Name, err)
-	}
-	if err := spec.ValidaContraDatasetExistente(linhas); err != nil {
-		return nil, fmt.Errorf("dataset %q: %w", spec.Name, err)
-	}
-
 	bitmaps := schema.CamposComBitmap(spec)
 	st, err := storage.Open(storage.Options{
 		Dir:              dir,
 		Dataset:          spec.Name,
 		SegmentSize:      s.cfg.SegmentSize(),
 		BitmapFieldNames: bitmaps,
+		ColunasDerivadas: spec.NomesDasExtracoes(),
 		Log:              log,
 		Metrics:          s.reg,
 		ExpireAfterWrite: spec.ExpiraApos(),

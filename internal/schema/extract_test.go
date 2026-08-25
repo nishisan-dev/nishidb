@@ -256,39 +256,6 @@ func TestDerivadaSobreviveAoReopenSemVirarCampoDeTopo(t *testing.T) {
 	}
 }
 
-// Declarar extract num dataset que JÁ TEM linhas é recusado.
-//
-// As linhas antigas não têm a coluna derivada — a extração roda na ingestão, e
-// elas já passaram por ela. `WHERE derivada = 'x'` omitiria todas elas sem
-// erro, sem log e sem métrica: resultado incompleto com cara de completo, que
-// é o defeito que o produto já recusa na abertura para o caso do índice.
-//
-// A consequência é que extract vira decisão de CRIAÇÃO de dataset, na mesma
-// doutrina que já vale para mudança de tipo.
-func TestExtractEmDatasetComLinhasERecusado(t *testing.T) {
-	s := parseOK(t, extractYAML)
-	if err := s.ValidaContraDatasetExistente(0); err != nil {
-		t.Errorf("dataset vazio devia aceitar: %v", err)
-	}
-	err := s.ValidaContraDatasetExistente(1)
-	if !errors.Is(err, ErrColunaDerivada) {
-		t.Fatalf("dataset com linhas = %v, quer ErrColunaDerivada", err)
-	}
-	for _, quer := range []string{"probe_ip", "recrie"} {
-		if !strings.Contains(err.Error(), quer) {
-			t.Errorf("erro = %q, quer conter %q", err, quer)
-		}
-	}
-}
-
-// Sem extract declarado, o dataset com linhas abre normalmente.
-func TestSemExtractODatasetComLinhasAbre(t *testing.T) {
-	s := parseOK(t, baseYAML)
-	if err := s.ValidaContraDatasetExistente(1_000_000); err != nil {
-		t.Errorf("dataset sem extract devia abrir: %v", err)
-	}
-}
-
 // CamposComBitmap é o ÚNICO lugar que decide quais campos o Store abre com
 // índice. Existia como um laço copiado em quatro sítios — servidor, duas rotas
 // do CLI e o benchmark —, e nenhum deles conhecia a coluna derivada: o
