@@ -58,9 +58,18 @@ type DatasetMeta struct {
 	// bloco `schema:` do YAML aceita chave desconhecida em silêncio, então um
 	// `maxColls` com typo parseia limpo e não faz nada. Ler o efetivo de volta
 	// é onde o operador vê o typo, como "continua no default".
-	MaxCols   int          `json:"maxCols"`
-	OnMaxCols string       `json:"onMaxCols"`
-	Columns   []ColunaMeta `json:"columns"`
+	MaxCols   int    `json:"maxCols"`
+	OnMaxCols string `json:"onMaxCols"`
+	// MaxNestedCols é quantas colunas derivadas uma consulta pode projetar.
+	// Governa a expansão `pai.*`; ao estourar, o servidor RECUSA nomeando o
+	// limite, nunca trunca.
+	//
+	// Não há campo equivalente na Requisicao, ao contrário do maxRows: pedir
+	// MENOS colunas não é uma pergunta que o cliente precise fazer, porque
+	// ele já escolhe as colunas escrevendo-as. Um teto de cliente aqui só
+	// poderia transformar uma consulta que funciona em erro.
+	MaxNestedCols int          `json:"maxNestedCols"`
+	Columns       []ColunaMeta `json:"columns"`
 }
 
 // ColunaMeta descreve uma coluna do dataset.

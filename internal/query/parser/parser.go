@@ -161,19 +161,43 @@ func (p *parser) parseProjection(st *SelectStmt) error {
 			if primeira {
 				return p.errAt(p.cur.Pos, "esperado nome de coluna ou '*'")
 			}
+			if p.cur.Type == lexer.TokenStar {
+				// `SELECT doc.*, *`: o curinga de topo não se combina com
+				// nada, e a mistura colapsaria colunas em silêncio.
+				return p.errAt(p.cur.Pos, "'*' não pode ser combinado com colunas")
+			}
 			return p.errAt(p.cur.Pos, "esperado nome de coluna")
 		}
 		// Só aloca ao appendar: com Star, Projection precisa ficar nil.
-		st.Projection = append(st.Projection, ColumnRef{Name: nome, Pos: pos})
 		if err := p.advance(); err != nil {
 			return err
 		}
-		// O '.' é token desde o nome qualificado do FROM, e sem esta guarda
-		// `SELECT t.a` cairia em "esperado ',' ou FROM" — uma recusa que não
-		// nomeia o ponto e manda o usuário procurar no lugar errado.
+		ref := ColumnRef{Name: nome, Pos: pos}
 		if p.cur.Type == lexer.TokenDot {
-			return p.errAt(p.cur.Pos, "nome qualificado não é suportado na projeção; escreva só o nome da coluna")
+			if err := p.advance(); err != nil {
+				return err
+			}
+			switch p.cur.Type {
+			case lexer.TokenStar:
+				// `pai.*`: as colunas extraídas do pai. O curinga de TOPO
+				// continua não podendo ser combinado, e este herda a regra —
+				// a checagem de mistura está no parseProjection acima.
+				ref.Qualifier, ref.Name, ref.Star = nome, "", true
+			default:
+				caminho, cpos, ok := p.identifier()
+				if !ok {
+					return p.errAt(p.cur.Pos, "esperado nome de coluna ou '*' depois de \""+nome+".\"")
+				}
+				ref.Qualifier, ref.Name, ref.Pos = nome, caminho, cpos
+			}
+			if err := p.advance(); err != nil {
+				return err
+			}
+			if p.cur.Type == lexer.TokenDot {
+				return p.errAt(p.cur.Pos, "nome na projeção tem no máximo dois níveis (campo.caminho)")
+			}
 		}
+		st.Projection = append(st.Projection, ref)
 		if p.cur.Type != lexer.TokenComma {
 			// DISTINCT é a única das sete que NÃO chega ao sítio principal:
 			// em `SELECT DISTINCT a FROM t` o identifier() a aceita como nome

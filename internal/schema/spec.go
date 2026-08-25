@@ -94,6 +94,10 @@ type SchemaSpec struct {
 	// a decisão importante: o COMPORTAMENTO ao estourar é.
 	MaxCols   int
 	OnMaxCols string // ignore | stop (default ignore)
+	// MaxNestedCols é quantas colunas DERIVADAS uma consulta pode projetar.
+	// Governa a expansão `pai.*`, que é a única forma de a projeção crescer
+	// sem o usuário escrever cada nome.
+	MaxNestedCols int
 }
 
 // Política de estouro do teto de campos.
@@ -108,6 +112,12 @@ type SchemaSpec struct {
 const (
 	OnMaxColsIgnore = "ignore"
 	OnMaxColsStop   = "stop"
+
+	// MaxNestedColsPadrao é o teto default de colunas derivadas por consulta.
+	// O número é folgado de propósito: quem controla o caso real é a lista de
+	// extrações que o operador escreveu, e este é backstop contra uma
+	// expansão `pai.*` sobre um pai com centenas de chaves declaradas.
+	MaxNestedColsPadrao = 256
 
 	// MaxColsTetoFisico é o teto que o dicionário impõe por construção: o
 	// types.FieldID é uint16. Declarar acima disto seria uma promessa que o
@@ -197,8 +207,9 @@ type rawSchema struct {
 	// Ponteiro pela mesma razão do rawQuery.MaxRows: separa "ausente" de
 	// "zero", e zero é um pedido explícito de nada, que precisa ser recusado
 	// com a mesma clareza de um negativo.
-	MaxCols   *int   `yaml:"maxCols"`
-	OnMaxCols string `yaml:"onMaxCols"`
+	MaxCols       *int   `yaml:"maxCols"`
+	OnMaxCols     string `yaml:"onMaxCols"`
+	MaxNestedCols *int   `yaml:"maxNestedCols"`
 }
 
 type rawQuery struct {
@@ -842,6 +853,19 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 		return nil, specErrf("schema.onMaxCols %q inválido (%s|%s)", onMaxCols, OnMaxColsIgnore, OnMaxColsStop)
 	}
 	s.Schema.OnMaxCols = onMaxCols
+
+	// maxNestedCols tem a forma do maxRows: teto no dataset, e ao estourar
+	// RECUSA — nunca trunca. Truncar entregaria um resultado com colunas
+	// faltando e cara de completo, que é o defeito que o produto fecha em
+	// toda parte. O erro é acionável: pedem-se as colunas pelo nome.
+	maxNested := MaxNestedColsPadrao
+	if raw.Schema.MaxNestedCols != nil {
+		maxNested = *raw.Schema.MaxNestedCols
+	}
+	if maxNested <= 0 {
+		return nil, specErrf("schema.maxNestedCols deve ser > 0, é %d", maxNested)
+	}
+	s.Schema.MaxNestedCols = maxNested
 
 	if err := validaExtracoes(s, fields, aliases, include, includeAll); err != nil {
 		return nil, err

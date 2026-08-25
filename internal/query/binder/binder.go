@@ -269,7 +269,17 @@ func (b *binder) projecao() ([]BoundColumn, error) {
 	// vistos só materializa em projeção grande; até o limiar a varredura linear
 	// sobre cols resolve sem alocar nada.
 	var vistos map[string]struct{}
+	derivadas := 0
 	for _, ref := range b.stmt.Projection {
+		if ref.Qualifier != "" {
+			var err error
+			cols, derivadas, err = b.qualificada(cols, ref, derivadas)
+			if err != nil {
+				return nil, err
+			}
+			vistos = nil // o conjunto cresceu por fora; recalcula no limiar
+			continue
+		}
 		f, err := b.coluna(ref.Name, ref.Pos)
 		if err != nil {
 			return nil, err
@@ -296,6 +306,52 @@ func (b *binder) projecao() ([]BoundColumn, error) {
 		}
 	}
 	return cols, nil
+}
+
+// qualificada resolve `pai.*` e `pai.caminho`.
+//
+// A expansão existe porque a coluna derivada fica FORA do SELECT * — sem ela,
+// pedir as colunas de um documento exigiria saber de cor os nomes que o YAML
+// declarou.
+func (b *binder) qualificada(cols []BoundColumn, ref parser.ColumnRef, derivadas int) ([]BoundColumn, int, error) {
+	pai, ok := b.sc.FieldByName([]byte(ref.Qualifier))
+	if !ok {
+		return nil, 0, errAt(ref.Pos, "campo %q não existe no dataset %q", ref.Qualifier, b.sc.Name)
+	}
+	filhas := b.sc.FieldsByParent(pai.Name)
+	if len(filhas) == 0 {
+		return nil, 0, errAt(ref.Pos, "campo %q não declara extract; não há coluna aninhada a projetar", ref.Qualifier)
+	}
+
+	if !ref.Star {
+		f, ok := b.sc.FieldByPath(pai.Name, ref.Name)
+		if !ok {
+			return nil, 0, errAt(ref.Pos, "o campo %q não extrai o caminho %q", ref.Qualifier, ref.Name)
+		}
+		nome := ref.Qualifier + "." + ref.Name
+		if repetido(cols, nil, nome) {
+			return nil, 0, errAt(ref.Pos, "coluna %q aparece mais de uma vez na projeção", nome)
+		}
+		b.usa(f.ID)
+		return append(cols, BoundColumn{Field: f, Name: nome}), derivadas + 1, nil
+	}
+
+	// Ao estourar o teto, RECUSA nomeando o limite — nunca trunca. Truncar
+	// entregaria colunas faltando com cara de resultado completo, e o erro
+	// aqui é acionável: pedem-se as colunas pelo nome.
+	if n := derivadas + len(filhas); n > b.sc.MaxNestedCols {
+		return nil, 0, errAt(ref.Pos,
+			"a projeção pede %d colunas aninhadas, acima de schema.maxNestedCols (%d); "+
+				"peça as colunas pelo nome ou ajuste o teto do dataset", n, b.sc.MaxNestedCols)
+	}
+	for _, f := range filhas {
+		if repetido(cols, nil, f.Name) {
+			return nil, 0, errAt(ref.Pos, "coluna %q aparece mais de uma vez na projeção", f.Name)
+		}
+		b.usa(f.ID)
+		cols = append(cols, BoundColumn{Field: f, Name: f.Name})
+	}
+	return cols, derivadas + len(filhas), nil
 }
 
 // limiarMapaProjecao é onde a checagem de nome repetido troca varredura linear

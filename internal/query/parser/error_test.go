@@ -184,10 +184,11 @@ func TestPontoForaDeLugarTemMensagemPropria(t *testing.T) {
 		sql  string
 		msg  string
 	}{
-		{"projecao qualificada", "SELECT t.a FROM x", "nome qualificado"},
 		{"from com ponto solto", "SELECT a FROM x.", "esperado nome"},
 		{"from comecando com ponto", "SELECT a FROM .x", "esperado nome do dataset"},
 		{"from com tres niveis", "SELECT a FROM a.b.c", "dois níveis"},
+		{"projecao com tres niveis", "SELECT a.b.c FROM x", "dois níveis"},
+		{"projecao com ponto solto", "SELECT a. FROM x", "esperado nome de coluna"},
 	}
 	for _, tc := range casos {
 		t.Run(tc.nome, func(t *testing.T) {
@@ -231,5 +232,46 @@ func TestFromSemNamespaceDeixaOCampoVazio(t *testing.T) {
 	}
 	if st.Namespace != "" {
 		t.Errorf("Namespace = %q, quer vazio", st.Namespace)
+	}
+}
+
+// `pai.*` expande as colunas extraídas daquele pai. Elas ficam fora do
+// SELECT *, então esta é a forma de pedi-las sem saber os nomes.
+func TestProjecaoAceitaCurigaQualificado(t *testing.T) {
+	st, err := parser.Parse("SELECT id, doc.* FROM eventos")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if st.Star {
+		t.Error("Star = true; `doc.*` não é o curinga de topo")
+	}
+	if len(st.Projection) != 2 {
+		t.Fatalf("projeção = %d itens, quer 2", len(st.Projection))
+	}
+	q := st.Projection[1]
+	if q.Qualifier != "doc" || !q.Star {
+		t.Errorf("segundo item = %+v, quer qualificador doc com Star", q)
+	}
+}
+
+// `pai.caminho` endereça a coluna extraída pelo CAMINHO, e não pelo `as`.
+func TestProjecaoAceitaCaminhoQualificado(t *testing.T) {
+	st, err := parser.Parse("SELECT doc.probeIpNode FROM eventos")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	q := st.Projection[0]
+	if q.Qualifier != "doc" || q.Name != "probeIpNode" || q.Star {
+		t.Errorf("item = %+v, quer doc/probeIpNode sem Star", q)
+	}
+}
+
+// O curinga de topo continua sem poder ser combinado, e o qualificado herda a
+// mesma regra: `SELECT *, doc.*` colapsaria colunas em silêncio.
+func TestCuringaDeTopoNaoSeCombinaComQualificado(t *testing.T) {
+	for _, sql := range []string{"SELECT *, doc.* FROM x", "SELECT doc.*, * FROM x"} {
+		if _, err := parser.Parse(sql); err == nil {
+			t.Errorf("%q foi aceita", sql)
+		}
 	}
 }

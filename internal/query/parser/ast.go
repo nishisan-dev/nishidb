@@ -37,7 +37,15 @@ type SelectStmt struct {
 // ColumnRef é um item da projeção com a posição de byte do token no SQL — é
 // dela que sai o "coluna desconhecida %q na posição %d" do binder.
 type ColumnRef struct {
-	Name string
+	// Qualifier é o campo json à esquerda do ponto (`doc` em `doc.x`), vazio
+	// na projeção simples. Com ele, Name é o CAMINHO dentro do documento, e
+	// não o nome da coluna — quem resolve um no outro é o binder.
+	Qualifier string
+	Name      string
+	// Star marca `pai.*`: expande as colunas extraídas daquele pai. Elas
+	// ficam fora do SELECT *, então esta é a forma de pedi-las sem saber os
+	// nomes. Com Star, Name é vazio.
+	Star bool
 	Pos  int
 }
 

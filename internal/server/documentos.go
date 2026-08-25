@@ -56,11 +56,12 @@ func metaDoDataset(d *dataset) protocolo.DatasetMeta {
 		// MaxRows e Timeout saem do COMPILADO, que é onde o default global já
 		// foi resolvido contra o que o YAML do dataset declara: quem consulta
 		// precisa do teto que vai valer, não de onde ele foi escrito.
-		MaxRows:   d.sch.MaxRows,
-		TimeoutMs: d.sch.Timeout.Milliseconds(),
-		MaxCols:   d.sch.MaxCols,
-		OnMaxCols: d.sch.OnMaxCols,
-		Columns:   make([]protocolo.ColunaMeta, 0, len(campos)),
+		MaxRows:       d.sch.MaxRows,
+		TimeoutMs:     d.sch.Timeout.Milliseconds(),
+		MaxCols:       d.sch.MaxCols,
+		OnMaxCols:     d.sch.OnMaxCols,
+		MaxNestedCols: d.sch.MaxNestedCols,
+		Columns:       make([]protocolo.ColunaMeta, 0, len(campos)),
 	}
 	if d.sch.Key != nil {
 		m.Key = d.sch.Key.Name

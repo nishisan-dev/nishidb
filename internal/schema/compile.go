@@ -198,8 +198,9 @@ type Compiled struct {
 	// MaxCols/OnMaxCols governam o crescimento do dicionário. Vivem aqui, e
 	// não só na spec, porque quem os consulta é o ResolveUnknown — hot path do
 	// writer, que só carrega o Compiled.
-	MaxCols   int
-	OnMaxCols string
+	MaxCols       int
+	OnMaxCols     string
+	MaxNestedCols int
 	// Errors é a política de erro de evento do §101, resolvida. Vive na forma
 	// compilada porque o caminho de ingestão — que é onde ela vale — só
 	// carrega o Compiled, e ir buscar a DatasetSpec de novo ali obrigaria a
@@ -242,16 +243,17 @@ func (c *Compiled) CamposConhecidos() int { return c.dict.Len() }
 // sempre o mesmo mapeamento.
 func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 	c := &Compiled{
-		Name:      s.Name,
-		MaxRows:   s.Query.MaxRows,
-		Timeout:   s.Query.Timeout,
-		MaxCols:   s.Schema.MaxCols,
-		OnMaxCols: s.Schema.OnMaxCols,
-		Errors:    s.Errors,
-		byName:    make(map[string]*CompiledField),
-		byID:      make(map[types.FieldID]*CompiledField),
-		exclude:   make(map[string]struct{}, len(s.Schema.Exclude)),
-		dict:      dict,
+		Name:          s.Name,
+		MaxRows:       s.Query.MaxRows,
+		Timeout:       s.Query.Timeout,
+		MaxCols:       s.Schema.MaxCols,
+		OnMaxCols:     s.Schema.OnMaxCols,
+		MaxNestedCols: s.Schema.MaxNestedCols,
+		Errors:        s.Errors,
+		byName:        make(map[string]*CompiledField),
+		byID:          make(map[types.FieldID]*CompiledField),
+		exclude:       make(map[string]struct{}, len(s.Schema.Exclude)),
+		dict:          dict,
 	}
 	if ttl := s.Materialization.TTL; ttl != nil {
 		c.ExpireAfterWrite = ttl.ExpireAfterWrite
@@ -611,6 +613,20 @@ func (c *Compiled) camposOrdenados(comSistema, comDerivadas bool) []*CompiledFie
 // declarou justamente para consultá-la pelo nome.
 func (c *Compiled) FieldsParaMetadata() []*CompiledField {
 	return c.camposOrdenados(false, true)
+}
+
+// FieldByPath resolve a coluna derivada pelo CAMINHO dentro do documento do
+// pai — que é como ela aparece no `pai.caminho` da projeção, e não
+// necessariamente como ela se chama (o `as` pode renomeá-la).
+func (c *Compiled) FieldByPath(pai, path string) (*CompiledField, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for _, f := range c.byID {
+		if f.Parent != nil && f.Parent.Name == pai && f.Path == path {
+			return f, true
+		}
+	}
+	return nil, false
 }
 
 // FieldsByParent devolve as colunas extraídas de um campo json, em ordem
