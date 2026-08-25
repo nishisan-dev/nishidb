@@ -234,6 +234,7 @@ def desenha(base: str, saude: dict, stats: dict, m: Amostra, ant: Amostra | None
         st = ds.get("storage", {})
         ing = ds.get("ingestion", {})
         q = ds.get("query", {})
+        sch = ds.get("schema", {})
         comp = st.get("compaction", {})
 
         print(regua(f"dataset {nome}"))
@@ -326,45 +327,66 @@ def desenha(base: str, saude: dict, stats: dict, m: Amostra, ant: Amostra | None
             alerta = ("  " + c("31", "← investigar")) if v and v > 0 and rotulo != "stale" else ""
             print(f"  {'  ' + rotulo:<22} {milhar(v):>16}{alerta}")
 
+        # Dicionário de campos. Nenhum destes números aparecia no painel: o
+        # `descartados` acima conta EVENTOS, e nem campo recusado pelo teto nem
+        # valor fora do tipo derrubam evento — os dois ficavam invisíveis aqui
+        # mesmo já existindo no /v1/stats.
+        campos = sch.get("fields")
+        if campos is not None:
+            teto = sch.get("maxCols")
+            de = f"   de {milhar(teto)}" if teto else ""
+            print(f"  {'campos no dicionário':<22} {milhar(campos):>16}{de}")
+
+            perdidos = sch.get("fieldsDropped") or 0
+            if perdidos:
+                # Aqui houve perda de DADO: a chave não virou coluna, e para
+                # campo de topo não há documento que a guarde.
+                print(f"  {'  descartados pelo teto':<22} {milhar(perdidos):>16}"
+                      f"  " + c("31", "← investigar"))
+
+            fora = sch.get("nestedTypeMismatch") or 0
+            if fora:
+                # Aqui NÃO houve perda de dado — o documento json preserva o
+                # valor —, mas a COLUNA fica nula naquela linha, e um filtro
+                # sobre ela devolve menos linhas do que existem. A proporção é
+                # o que diz se isso é cauda ou regra: o absoluto sozinho não.
+                ev_total = ing.get("events") or ev
+                prop = f"   ({(fora / ev_total):.2f}".replace(".", ",") + " por evento)" if ev_total else ""
+                print(f"  {'  valor fora do tipo':<22} {milhar(fora):>16}{prop}"
+                      f"  " + c("33", "← a coluna fica nula; o documento preserva"))
+
         if lag:
             eta = ""
+            lag_ant = ant.soma("nishidb_kafka_lag") if ant else None
             if ev is not None and ev_ant is not None and dt > 0:
                 drenagem = (ev - ev_ant) / dt
-                # A produção REAL, e não uma constante: o FIM do tópico é
-                # `offset + lag`, e a variação dele entre duas amostras é
-                # exatamente o que o produtor escreveu no intervalo.
+                eta = f"   consome {milhar(round(drenagem))}/s"
+                # O BALANÇO sai da variação do próprio lag, que é medida.
                 #
-                # Aqui morava um 452,0 cravado, medido uma vez no tópico. Ele
-                # não erra só por desatualizar: quando o produtor acelera acima
-                # da drenagem, o lag CRESCE e a conta com a constante continua
-                # prometendo um prazo — o painel afirmava "ETA ≈ 16min" com o
-                # lag subindo.
-                fim = fim_do_topico(m)
-                fim_ant = fim_do_topico(ant)
-                if fim is not None and fim_ant is not None:
-                    producao = (fim - fim_ant) / dt
-                    liquido = drenagem - producao
-                    # O balanço fica SEMPRE visível, e não só quando dá para
-                    # prometer um prazo. Enquanto ele só servia de porta para o
-                    # ETA, o painel calava justamente no caso em que a resposta
-                    # importa — "o consumo não está dando conta" é a notícia, e
-                    # ela saía como ausência de linha.
-                    eta = (f"   produz {milhar(round(producao))}/s, "
-                           f"consome {milhar(round(drenagem))}/s (em {duracao(dt)})")
-                    # O VEREDITO exige janela mínima; os números, não.
-                    #
-                    # Medido no piloto: em 5 segundos o painel acusou "produz
-                    # 1.846/s, consome 1.408/s — não dá conta", e em 60
-                    # segundos a MESMA instância deu "produz 460/s, consome
-                    # 1.474/s" com o lag caindo de verdade. O produtor é
-                    # irregular, e janela curta captura rajada. Um vermelho
-                    # errado custa mais que a ausência dele: manda investigar
-                    # um problema que não existe, e ensina a ignorar o painel.
+                # Aqui morava uma derivação: produção = variação de
+                # `offset + lag`, supondo que a soma fosse o fim do tópico.
+                # Ela É — mas as duas parcelas não vêm do mesmo instante. O
+                # offset avança a cada lote e o lag é atualizado por consulta
+                # periódica ao broker, então a soma anda para trás e o painel
+                # chegou a imprimir `produz -310/s` no piloto. O lag em si não
+                # tem esse problema: se ele cai, o consumo está dando conta.
+                if lag_ant is not None:
+                    variacao = (lag - lag_ant) / dt
+                    if variacao < 0:
+                        eta += f", lag caindo {milhar(round(-variacao))}/s"
+                    elif variacao > 0:
+                        eta += f", lag subindo {milhar(round(variacao))}/s"
+                    eta += f" (em {duracao(dt)})"
+                    # O VEREDITO exige janela mínima; os números, não. Janela
+                    # curta sobre produtor irregular captura rajada, e um
+                    # vermelho errado manda investigar o que não existe.
                     if dt >= JANELA_MINIMA_DO_VEREDITO:
-                        if liquido > 1:
-                            eta += f"   ETA ≈ {duracao(lag / liquido)}"
-                        elif liquido < -1:
+                        if variacao < -1:
+                            eta += f"   ETA ≈ {duracao(lag / -variacao)}"
+                        elif variacao > 1:
                             eta += "   " + c("31", "← NÃO dá conta, o lag cresce")
+                else:
+                    eta += f" (em {duracao(dt)})"
             print(f"  {'lag do kafka':<22} {milhar(lag):>16}{eta}")
 
         # Consultas
@@ -398,24 +420,9 @@ def desenha(base: str, saude: dict, stats: dict, m: Amostra, ant: Amostra | None
 
 
 # JANELA_MINIMA_DO_VEREDITO é o intervalo abaixo do qual o painel mostra as
-# taxas mas NÃO conclui nada delas. Ver a razão no uso, abaixo.
+# taxas mas NÃO conclui nada delas: janela curta sobre produtor irregular
+# captura rajada, e um veredito vermelho errado custa mais que a ausência dele.
 JANELA_MINIMA_DO_VEREDITO = 15.0
-
-
-def fim_do_topico(a) -> float | None:
-    """O offset do FIM do tópico, somado sobre as partições.
-
-    `nishidb_kafka_offset` é a posição do consumidor e `nishidb_kafka_lag` é o
-    que falta para o fim, então a soma dos dois é onde o produtor chegou. Sem
-    as duas séries não há resposta — devolver zero faria a produção parecer
-    parada, e o ETA sairia otimista.
-    """
-    if a is None:
-        return None
-    tem = any(n in ("nishidb_kafka_offset", "nishidb_kafka_lag") for (n, _) in a.series)
-    if not tem:
-        return None
-    return a.soma("nishidb_kafka_offset") + a.soma("nishidb_kafka_lag")
 
 
 def main() -> int:

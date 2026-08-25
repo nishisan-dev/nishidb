@@ -202,41 +202,40 @@ class TestPainelMostraEventosPorSegundo(unittest.TestCase):
 
 
 class TestPainelDizSeOConsumoDaConta(unittest.TestCase):
-    """O balanço entre produção e consumo é a pergunta que se faz olhando o
-    lag, e ele precisa estar SEMPRE visível.
+    """A pergunta que se faz olhando o lag é "está dando conta?", e ela
+    precisa ser respondida por uma grandeza MEDIDA, não derivada.
 
-    A primeira versão só o usava para decidir se mostrava um ETA: quando o
-    consumo não dava conta, a conta não fechava e o painel não dizia NADA —
-    silêncio exatamente no caso em que a resposta importa."""
+    A primeira versão derivava a produção de `offset + lag`, supondo que a
+    soma fosse o fim do tópico. Ela é — mas as duas parcelas não vêm do mesmo
+    instante: o offset avança a cada lote e o lag é atualizado por consulta
+    periódica ao broker. A soma anda para trás, e o painel chegou a imprimir
+    `produz -310/s` no piloto.
 
-    def _saida(self, consumo, producao, lag0=150_000.0, dt=30.0):
-        """Monta duas amostras a partir das TAXAS, que é como o cenário se
-        descreve. O lag final é consequência: ele anda (producao - consumo) por
-        segundo, e a posição do consumidor anda `consumo`."""
-        off0 = 1_000_000.0
-        off1 = off0 + consumo * dt
-        lag1 = lag0 + (producao - consumo) * dt
-        ant = _amostra(0.0, nishidb_ingest_events_total=0.0,
-                       nishidb_kafka_offset=off0, nishidb_kafka_lag=lag0)
-        at = _amostra(dt, nishidb_ingest_events_total=consumo * dt,
-                      nishidb_kafka_offset=off1, nishidb_kafka_lag=lag1)
+    O lag em si é medido, e a variação dele JÁ é o balanço: caindo, o consumo
+    dá conta; subindo, não.
+    """
+
+    def _saida(self, consumo, lag0, lag1, dt=30.0):
+        ant = _amostra(0.0, nishidb_ingest_events_total=0.0, nishidb_kafka_lag=lag0)
+        at = _amostra(dt, nishidb_ingest_events_total=consumo * dt, nishidb_kafka_lag=lag1)
         return _desenha_com_amostras(_stats_com_dataset(), at, ant)
 
-    def test_drenando_mostra_o_balanco_e_o_eta(self):
-        saida = self._saida(consumo=2000, producao=500)
+    def test_lag_caindo_mostra_o_ritmo_e_o_eta(self):
+        # Cai 1.500/s, e o ETA sai sobre o lag CORRENTE (105.000), não sobre o
+        # da amostra anterior: 70 segundos.
+        saida = self._saida(consumo=2000, lag0=150_000, lag1=105_000)
         self.assertIn("consome 2.000/s", saida)
-        self.assertIn("produz 500/s", saida)
-        self.assertIn("ETA", saida)
+        self.assertIn("caindo 1.500/s", saida)
+        self.assertIn("1min 10s", saida)
 
-    def test_nao_dando_conta_avisa_em_vez_de_calar(self):
-        saida = self._saida(consumo=600, producao=1000)
+    def test_lag_subindo_avisa_em_vez_de_calar(self):
+        saida = self._saida(consumo=600, lag0=150_000, lag1=162_000)
         self.assertIn("consome 600/s", saida)
-        self.assertIn("produz 1.000/s", saida)
         self.assertIn("NÃO dá conta", saida)
         self.assertNotIn("ETA", saida)
 
-    def test_empatado_nao_promete_prazo_nem_acusa_atraso(self):
-        saida = self._saida(consumo=1000, producao=1000)
+    def test_lag_parado_nao_promete_prazo_nem_acusa_atraso(self):
+        saida = self._saida(consumo=1000, lag0=150_000, lag1=150_000)
         self.assertIn("consome 1.000/s", saida)
         self.assertNotIn("ETA", saida)
         self.assertNotIn("NÃO dá conta", saida)
@@ -244,31 +243,69 @@ class TestPainelDizSeOConsumoDaConta(unittest.TestCase):
     def test_janela_curta_mostra_os_numeros_mas_nao_o_veredito(self):
         """Janela curta sobre produtor irregular MENTE.
 
-        Medido no piloto: em 5 segundos o painel acusou "produz 1.846/s,
-        consome 1.408/s — não dá conta", e em 60 segundos a MESMA instância
-        deu "produz 460/s, consome 1.474/s" com o lag caindo de verdade. Um
-        veredito vermelho errado é pior que veredito nenhum: manda investigar
-        um problema que não existe, e ensina a ignorar o painel.
+        Medido no piloto: em 5 segundos o painel acusou "não dá conta", e em
+        60 segundos a MESMA instância mostrou o lag caindo de verdade. Um
+        vermelho errado custa mais que a ausência dele — manda investigar o que
+        não existe e ensina a ignorar o painel.
         """
-        saida = self._saida(consumo=600, producao=1000, dt=2.0)
+        saida = self._saida(consumo=600, lag0=150_000, lag1=151_600, dt=2.0)
         self.assertIn("consome 600/s", saida)
         self.assertIn("2s", saida)
         self.assertNotIn("NÃO dá conta", saida)
 
     def test_a_janela_aparece_na_linha(self):
-        self.assertIn("em 30s", self._saida(consumo=2000, producao=500))
+        self.assertIn("em 30s", self._saida(consumo=2000, lag0=150_000, lag1=105_000))
 
-    def test_a_producao_vem_do_topico_e_nao_de_uma_constante(self):
-        """Aqui morava um 452,0 cravado, medido uma vez no tópico.
+    def test_nunca_afirma_producao_negativa(self):
+        """O sintoma que derrubou a versão derivada: `produz -310/s`."""
+        saida = self._saida(consumo=2000, lag0=150_000, lag1=105_000)
+        self.assertNotIn("-", saida.split("lag do kafka")[1].split("\n")[0])
 
-        O fim do tópico é `offset + lag`, e a variação dele entre duas amostras
-        é a produção de verdade. Os números abaixo foram escolhidos para que os
-        dois cálculos DISCORDEM alto: com a produção real (1.500/s) o líquido é
-        500/s e o ETA dá 4min 30s; com a constante daria 1.548/s e 1min 27s.
-        """
-        saida = self._saida(consumo=2000, producao=1500)
-        self.assertIn("produz 1.500/s", saida)
-        self.assertIn("4min 30s", saida)
+
+class TestPainelMostraOCrescimentoDoDicionario(unittest.TestCase):
+    """O dicionário de campos e o que se perdeu no caminho.
+
+    Nenhum dos dois aparecia: o `descartados` da ingestão conta EVENTOS, e
+    campo recusado pelo teto ou valor que não coube no tipo não derrubam
+    evento nenhum — eles ficavam invisíveis no painel mesmo já existindo no
+    /v1/stats.
+    """
+
+    def _stats(self, **schema) -> dict:
+        d = _stats_com_dataset()
+        d["datasets"][0]["schema"] = schema
+        d["datasets"][0]["ingestion"]["events"] = 188_618
+        return d
+
+    def test_campos_e_teto_aparecem(self):
+        saida = _desenha(self._stats(fields=1495, fieldsDropped=0,
+                                     nestedTypeMismatch=0, maxCols=65535,
+                                     onMaxCols="ignore"))
+        self.assertIn("1.495", saida)
+        self.assertIn("65.535", saida)
+
+    def test_valor_fora_do_tipo_aparece_com_a_proporcao(self):
+        # Medido no piloto: um em cada cinco eventos traz pelo menos um valor
+        # que não cabe no tipo fixado. O absoluto sozinho não diz se é cauda
+        # ou regra; a proporção diz.
+        saida = _desenha(self._stats(fields=1495, fieldsDropped=0,
+                                     nestedTypeMismatch=39_951, maxCols=65535,
+                                     onMaxCols="ignore"))
+        self.assertIn("39.951", saida)
+        self.assertIn("0,21", saida)
+
+    def test_campo_descartado_pelo_teto_e_alerta_forte(self):
+        # Aqui houve perda de DADO: a chave não virou coluna e o documento de
+        # topo não a guarda em lugar nenhum.
+        saida = _desenha(self._stats(fields=65535, fieldsDropped=12,
+                                     nestedTypeMismatch=0, maxCols=65535,
+                                     onMaxCols="ignore"))
+        self.assertIn("12", saida)
+        self.assertIn("investigar", saida)
+
+    def test_servidor_sem_o_bloco_schema_nao_quebra(self):
+        saida = _desenha(_stats_com_dataset())
+        self.assertIn("dataset events", saida)
 
 
 if __name__ == "__main__":
