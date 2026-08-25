@@ -316,6 +316,14 @@ func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*
 	if err != nil {
 		return nil, fechandoStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}
+	// O contador de descarte diz QUANTO; o log diz por ONDE começar. Uma vez
+	// por dataset: sob a política `ignore` o descarte é o estado normal, e uma
+	// linha por evento afogaria o log.
+	compilado.AoDescartarCampo(func(campo string) {
+		log.Warn("schema.teto_de_campos",
+			"o dataset alcançou schema.maxCols; campos novos deixaram de virar coluna",
+			"campo", campo, "maxCols", compilado.MaxCols, "politica", compilado.OnMaxCols)
+	})
 	if err := s.eng.Register(spec.Name, compilado, st); err != nil {
 		return nil, fechandoStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}

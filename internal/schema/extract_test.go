@@ -420,3 +420,38 @@ func TestNomeComPontoSemPaiQueDescobreContinuaDeTopo(t *testing.T) {
 		t.Error("campo virou derivado num dataset que não declara descoberta")
 	}
 }
+
+// O descarte por teto precisa aparecer no LOG, e não só no contador: quem
+// opera descobre pelo painel que o número subiu, mas o log é o que diz QUAL
+// campo foi o primeiro a não caber — o resto se investiga a partir dele.
+//
+// Uma vez por dataset, e não por evento: sob a política `ignore` o descarte
+// passa a ser o estado normal, e uma linha por evento afogaria o log num
+// dataset que ingere a 500 ev/s.
+func TestDescarteAvisaUmaVezPorDataset(t *testing.T) {
+	s := parseOK(t, tetoYAML(2, "ignore"))
+	c, err := s.Compile(newFakeDict())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var avisos []string
+	c.AoDescartarCampo(func(campo string) { avisos = append(avisos, campo) })
+
+	if _, err := c.ResolveUnknown([]byte("cabe")); err != nil {
+		t.Fatal(err)
+	}
+	for _, nome := range []string{"primeiroExcedente", "segundo", "terceiro"} {
+		if _, err := c.ResolveUnknown([]byte(nome)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(avisos) != 1 {
+		t.Fatalf("avisos = %v, quer exatamente um", avisos)
+	}
+	if avisos[0] != "primeiroExcedente" {
+		t.Errorf("aviso = %q, quer o PRIMEIRO campo que não coube", avisos[0])
+	}
+	if c.CamposDescartados() != 3 {
+		t.Errorf("contador = %d, quer 3 — o log é uma vez, a contagem é toda", c.CamposDescartados())
+	}
+}

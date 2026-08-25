@@ -203,6 +203,27 @@ com tipo e índice próprios:
           type: string
 ```
 
+Para **descobrir sozinho** as chaves em vez de listá-las, use a mesma palavra
+que o bloco `schema` já usa um nível acima:
+
+```yaml
+    persistent:
+      type: json
+      unknownFields: include     # toda chave do documento vira coluna
+```
+
+Serve para o caso em que você não controla o que recebe — a origem pode passar
+a produzir um campo novo do dia para a noite, e o valor da coluna não é ela ter
+sido prevista, é ela existir quando alguém for investigar. A descoberta é de
+**um nível**: objeto aninhado vira coluna `json`, inteiro, e quem precisa da
+chave lá dentro declara o caminho. O nome da coluna é qualificado
+(`persistent.probeIpNode`), e o tipo é fixado na primeira observação — valor
+divergente depois fica nulo **na coluna**, com o documento preservando-o.
+
+Campo descoberto **não indexa** (é a mesma restrição do campo autodescoberto de
+topo), então filtro sobre ele é varredura. Declarar continua sendo o caminho
+para a chave que precisa ser rápida.
+
 Regras que valem a pena saber antes de declarar:
 
 - **Extrair não é mover.** O documento original continua inteiro na coluna

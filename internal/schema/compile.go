@@ -234,6 +234,27 @@ type Compiled struct {
 	// perda CONTÁVEL em vez de descoberta por acaso — o modo de falha
 	// inaceitável aqui é o silêncio, não a perda.
 	camposDescartados atomic.Uint64
+	// aoDescartar é avisado UMA vez, com o nome do primeiro campo que não
+	// coube. Uma vez, e não por evento: sob a política `ignore` o descarte
+	// passa a ser o estado normal, e uma linha por evento afogaria o log num
+	// dataset que ingere a centenas de eventos por segundo. O contador conta
+	// tudo; o log diz por onde começar a investigar.
+	//
+	// Escrito na fiação, antes de a ingestão começar, e lido pelo writer.
+	aoDescartar  func(campo string)
+	avisouDeTeto atomic.Bool
+}
+
+// AoDescartarCampo registra o aviso de que o teto recusou um campo. Chamado na
+// fiação do dataset, antes de a ingestão começar.
+func (c *Compiled) AoDescartarCampo(fn func(campo string)) { c.aoDescartar = fn }
+
+// avisaDescarte dispara o aviso na primeira vez, e só nela.
+func (c *Compiled) avisaDescarte(campo string) {
+	if c.aoDescartar == nil || !c.avisouDeTeto.CompareAndSwap(false, true) {
+		return
+	}
+	c.aoDescartar(campo)
 }
 
 // CamposDescartados é quantos campos o teto recusou desde a abertura.
@@ -611,7 +632,7 @@ func (c *Compiled) ResolveAninhado(pai *CompiledField, nomeQualificado, caminho 
 		}
 		return f, nil
 	}
-	if recusa := c.tetoAlcancado(); recusa != nil {
+	if recusa := c.tetoAlcancado(string(nomeQualificado)); recusa != nil {
 		return nil, recusa
 	}
 	id, err := c.dict.LookupOrCreate(nomeQualificado)
@@ -637,11 +658,12 @@ func (c *Compiled) ResolveAninhado(pai *CompiledField, nomeQualificado, caminho 
 // já travado. nil = há espaço; erro = a política é `stop`; e (nil, nil) do
 // caller quando ela é `ignore` — por isso ele devolve um erro sentinela só no
 // caso que precisa parar.
-func (c *Compiled) tetoAlcancado() error {
+func (c *Compiled) tetoAlcancado(campo string) error {
 	if c.MaxCols <= 0 || c.dict.Len() < c.MaxCols {
 		return nil
 	}
 	c.camposDescartados.Add(1)
+	c.avisaDescarte(campo)
 	if c.OnMaxCols == OnMaxColsStop {
 		return fmt.Errorf("%w (maxCols=%d)", ErrTetoDeCampos, c.MaxCols)
 	}
@@ -803,7 +825,7 @@ func (c *Compiled) ResolveUnknown(name []byte) (*CompiledField, error) {
 	// Ela também vem ANTES do LookupOrCreate, e é isso que torna o erro de
 	// teto do próprio fielddict inalcançável por esta rota: os dois usam o
 	// mesmo limiar, e este dispara primeiro, com política.
-	if recusa := c.tetoAlcancado(); recusa != nil {
+	if recusa := c.tetoAlcancado(string(name)); recusa != nil {
 		if TetoIgnorou(recusa) {
 			// ignore: mesmo desfecho do campo excluído — o evento é gravado
 			// com todos os outros campos, e a perda fica no contador.

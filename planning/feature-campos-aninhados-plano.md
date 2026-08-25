@@ -99,6 +99,40 @@ declarado num dataset com `RowCount > 0`. A guarda está certa; o backfill a
 11. **A baseline de lint é `388`**, lida de `.golangci-baseline` com ratchet
     bidirecional. **O próximo débito é o 76.**
 
+## Errata (25/08/2026): a motivação do campo json era outra
+
+O plano abaixo foi escrito supondo que `persistent` existia para tornar
+consultável a chave que alguém filtraria — daí a forma "declarado é o que
+precisa de índice, o resto fica no json", e daí o corte por frequência (259
+colunas cobrindo 97% das ocorrências) como critério de escolha.
+
+**A motivação real era preservar TUDO para estudo e debug depois.** Com ela, o
+corte por frequência mede a coisa errada: para investigação, a cauda de chave
+vista uma vez só é justamente o que se quer, e descartar 83% do vocabulário
+porque ele responde por 3% das aparições otimiza consulta às custas do
+propósito.
+
+Duas consequências:
+
+1. **A preservação já estava atendida, e sempre esteve.** O documento é gravado
+   verbatim; nada se perde nem se perdia. O que a promoção a coluna acrescenta
+   não é preservação, é poder ESCREVER a pergunta — sem coluna,
+   `WHERE persistent.x = 'y'` não é sequer expressável.
+2. **O universo de chaves não é governável pelo dataset.** Quem produz os
+   eventos é a área de integração, que pode passar a emitir um campo novo do
+   dia para a noite. Escolher hoje a lista do que virará coluna é apostar
+   contra isso.
+
+Daí a fase F8, que não estava no plano: descoberta automática das chaves de
+dentro do documento (`unknownFields: include` no campo). As duas decisões que a
+tornaram viável já estavam tomadas aqui por outras razões — a coluna derivada
+fica fora do `SELECT *`, e falha de extração nunca derruba o evento.
+
+O que a descoberta NÃO resolve, e continua sendo o backfill: campo descoberto
+não indexa, então o filtro sobre ele é varredura. Registrado como evolução
+futura, junto com tornar o armazenamento do documento opcional — hoje ele e as
+colunas são guardados os dois.
+
 ## Decisões tomadas
 
 | # | Decisão | Escolha |
