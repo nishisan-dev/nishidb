@@ -173,8 +173,17 @@ type DatasetStats struct {
 type SchemaStats struct {
 	Fields        int    `json:"fields"`
 	FieldsDropped uint64 `json:"fieldsDropped"`
-	MaxCols       int    `json:"maxCols"`
-	OnMaxCols     string `json:"onMaxCols"`
+	// NestedTypeMismatch conta os valores de coluna ANINHADA que não couberam
+	// no tipo fixado. Separado de FieldsDropped porque a causa e o remédio são
+	// outros: o teto se resolve subindo o número, e isto é a origem tendo
+	// mudado de forma.
+	//
+	// O evento entra; o que fica incompleto é a coluna naquela linha, e o
+	// documento preserva o valor. Ele NÃO aparece no `descartados` da
+	// ingestão, que conta EVENTOS.
+	NestedTypeMismatch uint64 `json:"nestedTypeMismatch"`
+	MaxCols            int    `json:"maxCols"`
+	OnMaxCols          string `json:"onMaxCols"`
 }
 
 // StorageStats vem de storage.Store.Stats().

@@ -324,6 +324,14 @@ func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*
 			"o dataset alcançou schema.maxCols; campos novos deixaram de virar coluna",
 			"campo", campo, "maxCols", compilado.MaxCols, "politica", compilado.OnMaxCols)
 	})
+	// Divergência de tipo em coluna aninhada não descarta o evento, então ela
+	// não aparece em lugar nenhum da contabilidade de ingestão. Uma vez por
+	// dataset, com os DOIS tipos: só com eles o operador sabe o que mudou.
+	compilado.AoValorIncompativel(func(coluna, fixado, veio string) {
+		log.Warn("schema.tipo_aninhado_divergente",
+			"valor não coube no tipo fixado da coluna aninhada; a coluna fica nula nessa linha e o documento preserva o valor",
+			"coluna", coluna, "tipoFixado", fixado, "tipoQueVeio", veio)
+	})
 	if err := s.eng.Register(spec.Name, compilado, st); err != nil {
 		return nil, fechandoStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}

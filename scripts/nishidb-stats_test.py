@@ -183,5 +183,95 @@ class TestTaxaDeDescartadosDestacaSubida(unittest.TestCase):
         self.assertNotIn("SUBINDO", saida)
 
 
+def _amostra(instante: float, **series: float):
+    """Amostra de /metrics com as séries do dataset `events`."""
+    a = nishidb_stats.Amostra(instante=instante)
+    for nome, v in series.items():
+        a.series[(nome, (("dataset", "events"),))] = v
+    return a
+
+
+class TestPainelMostraEventosPorSegundo(unittest.TestCase):
+    """Quem acompanha uma drenagem quer o ritmo, não só o acumulado."""
+
+    def test_taxa_aparece_ao_lado_do_total(self):
+        ant = _amostra(0.0, nishidb_ingest_events_total=1000)
+        at = _amostra(2.0, nishidb_ingest_events_total=5000)
+        saida = _desenha_com_amostras(_stats_com_dataset(), at, ant)
+        self.assertRegex(saida, r"eventos ingeridos.*2[.,]000/s")
+
+
+class TestPainelDizSeOConsumoDaConta(unittest.TestCase):
+    """O balanço entre produção e consumo é a pergunta que se faz olhando o
+    lag, e ele precisa estar SEMPRE visível.
+
+    A primeira versão só o usava para decidir se mostrava um ETA: quando o
+    consumo não dava conta, a conta não fechava e o painel não dizia NADA —
+    silêncio exatamente no caso em que a resposta importa."""
+
+    def _saida(self, consumo, producao, lag0=150_000.0, dt=30.0):
+        """Monta duas amostras a partir das TAXAS, que é como o cenário se
+        descreve. O lag final é consequência: ele anda (producao - consumo) por
+        segundo, e a posição do consumidor anda `consumo`."""
+        off0 = 1_000_000.0
+        off1 = off0 + consumo * dt
+        lag1 = lag0 + (producao - consumo) * dt
+        ant = _amostra(0.0, nishidb_ingest_events_total=0.0,
+                       nishidb_kafka_offset=off0, nishidb_kafka_lag=lag0)
+        at = _amostra(dt, nishidb_ingest_events_total=consumo * dt,
+                      nishidb_kafka_offset=off1, nishidb_kafka_lag=lag1)
+        return _desenha_com_amostras(_stats_com_dataset(), at, ant)
+
+    def test_drenando_mostra_o_balanco_e_o_eta(self):
+        saida = self._saida(consumo=2000, producao=500)
+        self.assertIn("consome 2.000/s", saida)
+        self.assertIn("produz 500/s", saida)
+        self.assertIn("ETA", saida)
+
+    def test_nao_dando_conta_avisa_em_vez_de_calar(self):
+        saida = self._saida(consumo=600, producao=1000)
+        self.assertIn("consome 600/s", saida)
+        self.assertIn("produz 1.000/s", saida)
+        self.assertIn("NÃO dá conta", saida)
+        self.assertNotIn("ETA", saida)
+
+    def test_empatado_nao_promete_prazo_nem_acusa_atraso(self):
+        saida = self._saida(consumo=1000, producao=1000)
+        self.assertIn("consome 1.000/s", saida)
+        self.assertNotIn("ETA", saida)
+        self.assertNotIn("NÃO dá conta", saida)
+
+    def test_janela_curta_mostra_os_numeros_mas_nao_o_veredito(self):
+        """Janela curta sobre produtor irregular MENTE.
+
+        Medido no piloto: em 5 segundos o painel acusou "produz 1.846/s,
+        consome 1.408/s — não dá conta", e em 60 segundos a MESMA instância
+        deu "produz 460/s, consome 1.474/s" com o lag caindo de verdade. Um
+        veredito vermelho errado é pior que veredito nenhum: manda investigar
+        um problema que não existe, e ensina a ignorar o painel.
+        """
+        saida = self._saida(consumo=600, producao=1000, dt=2.0)
+        self.assertIn("consome 600/s", saida)
+        self.assertIn("2s", saida)
+        self.assertNotIn("NÃO dá conta", saida)
+
+    def test_a_janela_aparece_na_linha(self):
+        self.assertIn("em 30s", self._saida(consumo=2000, producao=500))
+
+    def test_a_producao_vem_do_topico_e_nao_de_uma_constante(self):
+        """Aqui morava um 452,0 cravado, medido uma vez no tópico.
+
+        O fim do tópico é `offset + lag`, e a variação dele entre duas amostras
+        é a produção de verdade. Os números abaixo foram escolhidos para que os
+        dois cálculos DISCORDEM alto: com a produção real (1.500/s) o líquido é
+        500/s e o ETA dá 4min 30s; com a constante daria 1.548/s e 1min 27s.
+        """
+        saida = self._saida(consumo=2000, producao=1500)
+        self.assertIn("produz 1.500/s", saida)
+        self.assertIn("4min 30s", saida)
+
+
 if __name__ == "__main__":
     unittest.main()
+
+

@@ -35,6 +35,7 @@ const (
 	// Materialização (§92).
 	MetDatasetFields        = "nishidb_dataset_fields"
 	MetDatasetFieldsDropped = "nishidb_dataset_fields_dropped_total"
+	MetNestedTypeMismatch   = "nishidb_dataset_nested_type_mismatch_total"
 
 	MetMaterializedRows       = "nishidb_materialized_rows"
 	MetMaterializedTombstones = "nishidb_materialized_tombstones"

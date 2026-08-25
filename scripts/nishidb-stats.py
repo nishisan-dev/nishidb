@@ -330,10 +330,41 @@ def desenha(base: str, saude: dict, stats: dict, m: Amostra, ant: Amostra | None
             eta = ""
             if ev is not None and ev_ant is not None and dt > 0:
                 drenagem = (ev - ev_ant) / dt
-                producao = 452.0  # medida no tópico; só para estimar o ETA
-                liquido = drenagem - producao
-                if liquido > 1:
-                    eta = f"   ETA ≈ {duracao(lag / liquido)}"
+                # A produção REAL, e não uma constante: o FIM do tópico é
+                # `offset + lag`, e a variação dele entre duas amostras é
+                # exatamente o que o produtor escreveu no intervalo.
+                #
+                # Aqui morava um 452,0 cravado, medido uma vez no tópico. Ele
+                # não erra só por desatualizar: quando o produtor acelera acima
+                # da drenagem, o lag CRESCE e a conta com a constante continua
+                # prometendo um prazo — o painel afirmava "ETA ≈ 16min" com o
+                # lag subindo.
+                fim = fim_do_topico(m)
+                fim_ant = fim_do_topico(ant)
+                if fim is not None and fim_ant is not None:
+                    producao = (fim - fim_ant) / dt
+                    liquido = drenagem - producao
+                    # O balanço fica SEMPRE visível, e não só quando dá para
+                    # prometer um prazo. Enquanto ele só servia de porta para o
+                    # ETA, o painel calava justamente no caso em que a resposta
+                    # importa — "o consumo não está dando conta" é a notícia, e
+                    # ela saía como ausência de linha.
+                    eta = (f"   produz {milhar(round(producao))}/s, "
+                           f"consome {milhar(round(drenagem))}/s (em {duracao(dt)})")
+                    # O VEREDITO exige janela mínima; os números, não.
+                    #
+                    # Medido no piloto: em 5 segundos o painel acusou "produz
+                    # 1.846/s, consome 1.408/s — não dá conta", e em 60
+                    # segundos a MESMA instância deu "produz 460/s, consome
+                    # 1.474/s" com o lag caindo de verdade. O produtor é
+                    # irregular, e janela curta captura rajada. Um vermelho
+                    # errado custa mais que a ausência dele: manda investigar
+                    # um problema que não existe, e ensina a ignorar o painel.
+                    if dt >= JANELA_MINIMA_DO_VEREDITO:
+                        if liquido > 1:
+                            eta += f"   ETA ≈ {duracao(lag / liquido)}"
+                        elif liquido < -1:
+                            eta += "   " + c("31", "← NÃO dá conta, o lag cresce")
             print(f"  {'lag do kafka':<22} {milhar(lag):>16}{eta}")
 
         # Consultas
@@ -366,11 +397,36 @@ def desenha(base: str, saude: dict, stats: dict, m: Amostra, ant: Amostra | None
     sys.stdout.flush()
 
 
+# JANELA_MINIMA_DO_VEREDITO é o intervalo abaixo do qual o painel mostra as
+# taxas mas NÃO conclui nada delas. Ver a razão no uso, abaixo.
+JANELA_MINIMA_DO_VEREDITO = 15.0
+
+
+def fim_do_topico(a) -> float | None:
+    """O offset do FIM do tópico, somado sobre as partições.
+
+    `nishidb_kafka_offset` é a posição do consumidor e `nishidb_kafka_lag` é o
+    que falta para o fim, então a soma dos dois é onde o produtor chegou. Sem
+    as duas séries não há resposta — devolver zero faria a produção parecer
+    parada, e o ETA sairia otimista.
+    """
+    if a is None:
+        return None
+    tem = any(n in ("nishidb_kafka_offset", "nishidb_kafka_lag") for (n, _) in a.series)
+    if not tem:
+        return None
+    return a.soma("nishidb_kafka_offset") + a.soma("nishidb_kafka_lag")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Painel de texto do NishiDB.")
     ap.add_argument("--server", default="127.0.0.1:9142", help="host:porta (padrão 127.0.0.1:9142)")
     ap.add_argument("--watch", type=float, metavar="SEG",
                     help="repete a cada SEG segundos, mostrando taxas entre leituras")
+    ap.add_argument("--amostra", type=float, default=2.0, metavar="SEG",
+                    help="sem --watch, o intervalo entre as duas raspagens que dão as taxas (padrão 2). "
+                         "O veredito de 'dá conta ou não' exige 15s ou mais: abaixo disso a rajada do "
+                         "produtor faz a conta mentir")
     ap.add_argument("--json", action="store_true", help="despeja o /v1/stats cru e sai")
     args = ap.parse_args()
 
@@ -380,6 +436,13 @@ def main() -> int:
             return 0
 
         anterior: Amostra | None = None
+        # Sem --watch não haveria amostra anterior, e sem ela não há taxa nem
+        # ETA — justamente os dois números que se quer ao acompanhar uma
+        # drenagem. Uma primeira raspagem curta antes do desenho resolve, e
+        # custa os poucos segundos do intervalo.
+        if not args.watch:
+            anterior = raspa(args.server)
+            time.sleep(args.amostra)
         while True:
             saude = busca_json(args.server, "/v1/health")
             stats = busca_json(args.server, "/v1/stats")
