@@ -329,7 +329,7 @@ func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*
 	// dataset, com os DOIS tipos: só com eles o operador sabe o que mudou.
 	compilado.AoValorIncompativel(func(coluna, fixado, veio string) {
 		log.Warn("schema.tipo_aninhado_divergente",
-			"valor não coube no tipo fixado da coluna aninhada; a coluna fica nula nessa linha e o documento preserva o valor",
+			"valor não coube no tipo fixado da coluna aninhada; a coluna é removida nessa linha e o documento guarda o valor",
 			"coluna", coluna, "tipoFixado", fixado, "tipoQueVeio", veio)
 	})
 	if err := s.eng.Register(spec.Name, compilado, st); err != nil {

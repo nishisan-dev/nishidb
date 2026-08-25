@@ -346,14 +346,14 @@ def desenha(base: str, saude: dict, stats: dict, m: Amostra, ant: Amostra | None
 
             fora = sch.get("nestedTypeMismatch") or 0
             if fora:
-                # Aqui NÃO houve perda de dado — o documento json preserva o
-                # valor —, mas a COLUNA fica nula naquela linha, e um filtro
-                # sobre ela devolve menos linhas do que existem. A proporção é
-                # o que diz se isso é cauda ou regra: o absoluto sozinho não.
+                # Aqui NÃO houve perda de dado — o documento json guarda o
+                # valor —, mas a COLUNA é removida naquela linha, e um filtro
+                # sobre ela deixa de encontrar a entidade. A proporção é o que
+                # diz se isso é cauda ou regra: o absoluto sozinho não.
                 ev_total = ing.get("events") or ev
                 prop = f"   ({(fora / ev_total):.2f}".replace(".", ",") + " por evento)" if ev_total else ""
                 print(f"  {'  valor fora do tipo':<22} {milhar(fora):>16}{prop}"
-                      f"  " + c("33", "← a coluna fica nula; o documento preserva"))
+                      f"  " + c("33", "← a coluna é removida; o documento guarda"))
 
         if lag:
             eta = ""
