@@ -296,17 +296,14 @@ func Novo(cfg *config.Config, o Opcoes) (*Servidor, error) {
 }
 
 func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*dataset, error) {
-	var bitmaps []string
-	for nome, f := range spec.Schema.Fields {
-		if f.Index == "bitmap" {
-			bitmaps = append(bitmaps, nome)
-		}
-	}
+	dir := s.cfg.CaminhoDoDataset(spec.Name)
+	bitmaps := schema.CamposComBitmap(spec)
 	st, err := storage.Open(storage.Options{
-		Dir:              s.cfg.CaminhoDoDataset(spec.Name),
+		Dir:              dir,
 		Dataset:          spec.Name,
 		SegmentSize:      s.cfg.SegmentSize(),
 		BitmapFieldNames: bitmaps,
+		ColunasDerivadas: spec.NomesDasExtracoes(),
 		Log:              log,
 		Metrics:          s.reg,
 		ExpireAfterWrite: spec.ExpiraApos(),

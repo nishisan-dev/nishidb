@@ -560,3 +560,105 @@ func TestHeadContinuaServidoEmMetricsEHealth(t *testing.T) {
 		}
 	}
 }
+
+// O teto de campos pode custar dado sob `ignore`, e o modo de falha
+// inaceitável aqui é o silêncio: o tamanho corrente do dicionário e a contagem
+// de descartes saem pelas DUAS rotas e precisam concordar, pela mesma razão que
+// TestStatsConcordaComOMetrics nomeia para as outras.
+func TestCamposDoDatasetSaemNoStatsENoMetrics(t *testing.T) {
+	srv := servidorComDados(t, 3, blocoPadrao)
+
+	e := leJSON[protocolo.Estatisticas](t, srv, "/v1/stats")
+	if len(e.Datasets) != 1 {
+		t.Fatalf("datasets = %d", len(e.Datasets))
+	}
+	ds := e.Datasets[0]
+
+	if ds.Schema.Fields == 0 {
+		t.Fatal("schema.fields = 0; o dataset tem campos declarados")
+	}
+	if got := valorDaMetrica(t, srv, "nishidb_dataset_fields"); got != float64(ds.Schema.Fields) {
+		t.Errorf("nishidb_dataset_fields = %v contra %d no JSON", got, ds.Schema.Fields)
+	}
+	if ds.Schema.FieldsDropped != 0 {
+		t.Errorf("fieldsDropped = %d num dataset que não bateu no teto", ds.Schema.FieldsDropped)
+	}
+	if got := valorDaMetrica(t, srv, "nishidb_dataset_fields_dropped_total"); got != 0 {
+		t.Errorf("nishidb_dataset_fields_dropped_total = %v, quer 0", got)
+	}
+	if ds.Schema.MaxCols != 65535 {
+		t.Errorf("maxCols = %d, quer o teto físico 65535", ds.Schema.MaxCols)
+	}
+}
+
+// O bloco `schema:` aceita chave desconhecida em silêncio — um `maxColls` com
+// typo parseia limpo e não faz nada. Publicar o valor EFETIVO é o que dá ao
+// operador onde conferir: o typo aparece como "continua no default". É a mesma
+// razão pela qual o maxRows já é publicado assim.
+func TestMetadataPublicaOTetoDeCamposEfetivo(t *testing.T) {
+	srv := servidorComDados(t, 1, blocoPadrao)
+	m := leJSON[protocolo.Metadados](t, srv, "/v1/metadata")
+	if len(m.Datasets) != 1 {
+		t.Fatalf("datasets = %d", len(m.Datasets))
+	}
+	d := m.Datasets[0]
+	if d.MaxCols != 65535 {
+		t.Errorf("maxCols = %d, quer 65535", d.MaxCols)
+	}
+	if d.OnMaxCols != "ignore" {
+		t.Errorf("onMaxCols = %q, quer ignore", d.OnMaxCols)
+	}
+}
+
+// O /v1/metadata publica a coluna derivada mesmo ela ficando fora do
+// SELECT *. É deliberadamente um superset: sem isto o DBeaver não a lista e
+// ninguém descobre que ela existe.
+func TestMetadataPublicaAColunaDerivada(t *testing.T) {
+	srv := servidorComExtract(t)
+	m := leJSON[protocolo.Metadados](t, srv, "/v1/metadata")
+	var achou bool
+	for _, d := range m.Datasets {
+		for _, c := range d.Columns {
+			if c.Name == "probe_ip" {
+				achou = true
+			}
+		}
+	}
+	if !achou {
+		t.Error("probe_ip não apareceu no /v1/metadata")
+	}
+}
+
+// specComExtract é um dataset que declara uma coluna extraída de dentro de um
+// campo json.
+const specComExtract = `version: 1
+name: d
+materialization:
+  key:
+    field: id
+schema:
+  include: ["*"]
+  unknownFields: include
+  fields:
+    id:
+      type: string
+    doc:
+      type: json
+      extract:
+        - path: probeIpNode
+          as: probe_ip
+          type: string
+`
+
+func servidorComExtract(t *testing.T) *server.Servidor {
+	t.Helper()
+	a := novoAmbienteCom(t, blocoPadrao)
+	a.escreveDataset("d", specComExtract)
+	cfg := a.carrega()
+	srv, err := server.Novo(cfg, server.Opcoes{})
+	if err != nil {
+		t.Fatalf("subida: %v", err)
+	}
+	roda(t, srv)
+	return srv
+}

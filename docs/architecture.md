@@ -121,6 +121,36 @@ registro append-only do `fields.dict` e sobrevive ao restart.
 Custo medido: **0,0086 alocações por evento** e **132.931 eventos/s** na fase de
 carga (146.216 ev/s descontando o tempo de checkpoint).
 
+**Chaves de dentro de um campo `json` viram colunas de verdade.** Um campo
+`json` guarda o documento inteiro como um valor, e nada lá dentro é
+consultável — coluna `json` não é comparável e o binder recusa `WHERE`. O bloco
+`extract` declara caminhos que ganham FieldID, tipo e índice próprios, numa
+SEGUNDA passada do parser sobre o documento do pai. O documento original não é
+tocado: extrair não é mover.
+
+Essa passada **nunca propaga erro**, e é a regra que mais importa nela. O pai
+pode ser legitimamente um array ou um null — o conversor de `json` aceita os
+dois —, o caminho pode trazer outro tipo, o valor pode ser uma lista. Deixar
+qualquer uma dessas falhas subir faria o evento inteiro cair como
+`INVALID_JSON`, e a política `log-and-skip` o descartaria: as dezenas de
+colunas de TOPO iriam junto por causa de uma chave interna. A coluna fica
+ausente, que é a mesma resposta do caminho não encontrado. Custo: **zero
+alocações por evento**, com gate.
+
+A coluna derivada fica FORA do `SELECT *`, pelo mesmo mecanismo que esconde os
+campos de sistema. Sem isso o `events` do piloto nasceria com centenas de
+colunas por linha — a medição contou 545 chaves distintas em 1.000 linhas — e o
+custo de fio passaria a ser proporcional ao dicionário em vez de ao que foi
+pedido.
+
+**O dicionário tem teto e política.** Ele é append-only e limitado a 65.535
+campos por construção (o FieldID é `uint16`). Até o M5, alcançá-lo derrubava o
+writer para sempre: o erro subia sem sentinela, era classificado como
+`STORAGE_ERROR`, e o offset não avançava — o restart reproduzia o mesmo
+estouro. Hoje `schema.maxCols` e `schema.onMaxCols` dão dono à decisão, e o
+default (`ignore`) descarta a chave excedente, grava o evento com todas as
+outras e conta a perda.
+
 ## Storage
 
 ![Layout em disco de um dataset, com os nomes exatos de diretório e de arquivo](https://uml.nishisan.dev/proxy?src=https://git-raw.nishisan.dev/nishisan-dev/nishidb/main/docs/diagrams/storage_layout.puml)
@@ -361,6 +391,38 @@ troca de o comando nunca mais executar texto que ninguém escreveu.
 
 Essa reescrita textual tem prazo: no M2 o `--limit` deve virar parâmetro do
 plano, já que o binder conhece o `LIMIT` da AST (débito 46).
+
+### Introspecção pelo próprio SQL
+
+`_meta.fields` responde "o que este dataset tem" — nome, tipo, se é
+autodescoberto, índice declarado, índice físico e campo de origem — como uma
+tabela qualquer:
+
+```sql
+SELECT name, type, auto, index FROM _meta.fields WHERE parent = 'persistent'
+```
+
+Por SQL, e não por rota HTTP nova, porque uma tabela **não exige suporte em
+cliente nenhum**: DBeaver, CLI e driver já sabem executar `SELECT` e desenhar o
+resultado. Uma rota precisaria de código em cada um.
+
+Por dentro ela é um Store VIRTUAL atrás do mesmo binder, planner e executor de
+qualquer consulta, e a spec dela é escrita no mesmo YAML de um dataset de
+verdade. É isso que lhe dá `WHERE`, `LIMIT` e projeção sem gramática nova nem
+caminho de execução paralelo, e o que faz coluna inexistente ser recusada com a
+mesma mensagem do resto do produto.
+
+A resposta é **estado corrente, não declaração**: campo autodescoberto fixa o
+tipo na primeira observação, então duas execuções em momentos diferentes podem
+devolver conjuntos diferentes — a mesma ressalva que o `SELECT *` já carrega.
+
+O nome qualificado custou um token novo no lexer, e o cuidado foi com o
+diagnóstico que ele ameaçava levar junto: `.5` e `SELECT t.a` morriam no lexer
+com "caractere inesperado '.'", que nomeia o problema. As duas guardas de
+mensagem entraram JUNTO com o token, não depois. Nome de dataset não pode
+começar com `_`: o prefixo fica reservado a esses espaços de nome, e a recusa
+entrou antes de existir qualquer dataset que o ocupasse — uma linha agora,
+"recrie o dataset" depois.
 
 ## Formato de saída
 
@@ -925,8 +987,12 @@ quem só deveria raspar `/metrics`.
 
 ## O que ainda não existe
 
-O driver JDBC (Fase 7, próximo do M5), mais índice hash físico, TTL e
-tombstones por retenção (M6). **A compaction saiu desta lista no M4** e está
+Índice hash físico, TTL e tombstones por retenção (M6), e **backfill de índice
+bitmap** (débito 22): declarar `index: bitmap` sobre um dataset que já tem
+linhas continua sendo recusado na ABERTURA, porque o índice cobriria só os
+records futuros e a query indexada omitiria as linhas antigas. Pela mesma razão
+e com o mesmo remédio, acrescentar `extract` a um dataset com linhas também é
+recusado. **A compaction saiu desta lista no M4** e está
 descrita acima; **autenticação e TLS saíram nesta fase (Fase 11)** e estão
 descritas em "Segurança: autenticação e TLS" — o que falta ali é
 operacional, não de mecanismo: o deploy no piloto com certificado e usuários

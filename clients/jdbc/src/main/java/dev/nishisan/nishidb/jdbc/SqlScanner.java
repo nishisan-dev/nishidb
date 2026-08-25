@@ -63,6 +63,10 @@ public final class SqlScanner {
         // adiado para um FROM posterior, porque a v1 não tem subquery nem
         // JOIN e um segundo FROM é SQL inválido, não outro escopo.
         boolean esperandoNome = false;
+        // vistoFrom separa "ainda não achei o FROM" de "achei e decidi não
+        // palpitar". Sem ele, o dataset nulo do nome qualificado faria um FROM
+        // posterior no texto voltar a capturar um nome.
+        boolean vistoFrom = false;
 
         int i = 0;
         int n = sql.length();
@@ -119,8 +123,17 @@ public final class SqlScanner {
                     // dele, no WHERE. Devolver aqui zeraria a contagem de
                     // placeholders de toda query com parâmetro — e o
                     // PreparedStatement recusaria o setString do índice 1.
-                    dataset = palavra;
+                    vistoFrom = true;
                     esperandoNome = false;
+                    // Nome QUALIFICADO (`_meta.fields`) abandona o palpite. O
+                    // ponto não é parte de identificador aqui, então capturar
+                    // `palavra` entregaria "_meta" — um dataset que não existe,
+                    // e o servidor responderia 404 na primeira consulta ao
+                    // metadado. Devolver null faz o driver usar o dataset da
+                    // conexão, que é exatamente o que a tabela descreve.
+                    if (!seguidoDePonto(sql, fim, n)) {
+                        dataset = palavra;
+                    }
                     i = fim;
                     continue;
                 }
@@ -129,7 +142,7 @@ public final class SqlScanner {
                 // keywordType registra o caso do sinal de Kelvin, que dobra
                 // para 'k'). Duas regras de caixa fariam o cliente reconhecer
                 // uma cláusula que o servidor não reconhece.
-                if (dataset == null && igualSemCaixaASCII(palavra, "FROM")) {
+                if (!vistoFrom && igualSemCaixaASCII(palavra, "FROM")) {
                     esperandoNome = true;
                 }
                 i = fim;
@@ -215,5 +228,18 @@ public final class SqlScanner {
 
     private static boolean parteDeIdent(char c) {
         return inicioDeIdent(c) || (c >= '0' && c <= '9');
+    }
+
+    /** Se o próximo caractere não-branco a partir de {@code de} é um ponto. */
+    private static boolean seguidoDePonto(String sql, int de, int n) {
+        int j = de;
+        // espaco(), e não Character.isWhitespace: o folding e a classificação
+        // do Java são Unicode, e o lexer do servidor é ASCII puro. Duas regras
+        // de branco fariam o cliente enxergar uma fronteira que o servidor não
+        // enxerga — a mesma razão pela qual a comparação de FROM é ASCII.
+        while (j < n && espaco(sql.charAt(j))) {
+            j++;
+        }
+        return j < n && sql.charAt(j) == '.';
     }
 }

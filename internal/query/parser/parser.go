@@ -93,9 +93,30 @@ func (p *parser) parseSelect() (*SelectStmt, error) {
 	if !ok {
 		return nil, p.errAt(p.cur.Pos, "esperado nome do dataset")
 	}
-	st.Dataset, st.DatasetPos = nome, pos
 	if err := p.advance(); err != nil {
 		return nil, err
+	}
+	// Nome qualificado: `_meta.fields`. Continua LL(1) — o '.' É o token de
+	// lookahead, e a decisão se toma olhando só para ele. O contraste é com o
+	// BY de GROUP BY, que exigiria um SEGUNDO lookahead e por isso foi
+	// recusado.
+	if p.cur.Type == lexer.TokenDot {
+		if err := p.advance(); err != nil {
+			return nil, err
+		}
+		qualificado, qpos, ok := p.identifier()
+		if !ok {
+			return nil, p.errAt(p.cur.Pos, "esperado nome de tabela depois de \""+nome+".\"")
+		}
+		if err := p.advance(); err != nil {
+			return nil, err
+		}
+		if p.cur.Type == lexer.TokenDot {
+			return nil, p.errAt(p.cur.Pos, "nome no FROM tem no máximo dois níveis (namespace.tabela); o NishiDB não tem catálogo")
+		}
+		st.Namespace, st.Dataset, st.DatasetPos = nome, qualificado, qpos
+	} else {
+		st.Dataset, st.DatasetPos = nome, pos
 	}
 
 	if p.cur.Type == lexer.TokenWhere {
@@ -140,13 +161,43 @@ func (p *parser) parseProjection(st *SelectStmt) error {
 			if primeira {
 				return p.errAt(p.cur.Pos, "esperado nome de coluna ou '*'")
 			}
+			if p.cur.Type == lexer.TokenStar {
+				// `SELECT doc.*, *`: o curinga de topo não se combina com
+				// nada, e a mistura colapsaria colunas em silêncio.
+				return p.errAt(p.cur.Pos, "'*' não pode ser combinado com colunas")
+			}
 			return p.errAt(p.cur.Pos, "esperado nome de coluna")
 		}
 		// Só aloca ao appendar: com Star, Projection precisa ficar nil.
-		st.Projection = append(st.Projection, ColumnRef{Name: nome, Pos: pos})
 		if err := p.advance(); err != nil {
 			return err
 		}
+		ref := ColumnRef{Name: nome, Pos: pos}
+		if p.cur.Type == lexer.TokenDot {
+			if err := p.advance(); err != nil {
+				return err
+			}
+			switch p.cur.Type {
+			case lexer.TokenStar:
+				// `pai.*`: as colunas extraídas do pai. O curinga de TOPO
+				// continua não podendo ser combinado, e este herda a regra —
+				// a checagem de mistura está no parseProjection acima.
+				ref.Qualifier, ref.Name, ref.Star = nome, "", true
+			default:
+				caminho, cpos, ok := p.identifier()
+				if !ok {
+					return p.errAt(p.cur.Pos, "esperado nome de coluna ou '*' depois de \""+nome+".\"")
+				}
+				ref.Qualifier, ref.Name, ref.Pos = nome, caminho, cpos
+			}
+			if err := p.advance(); err != nil {
+				return err
+			}
+			if p.cur.Type == lexer.TokenDot {
+				return p.errAt(p.cur.Pos, "nome na projeção tem no máximo dois níveis (campo.caminho)")
+			}
+		}
+		st.Projection = append(st.Projection, ref)
 		if p.cur.Type != lexer.TokenComma {
 			// DISTINCT é a única das sete que NÃO chega ao sítio principal:
 			// em `SELECT DISTINCT a FROM t` o identifier() a aceita como nome

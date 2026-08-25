@@ -75,7 +75,7 @@ func lixoDeDisco(st storage.Stats) uint64 {
 // — zero é uma resposta, ausência não é.
 func registraMetricasDeDataset(reg *metrics.Registry, s *Servidor) {
 	reg.Coletor(metrics.ColetorFunc(func() []metrics.Amostra {
-		out := make([]metrics.Amostra, 0, len(s.datasets)*7)
+		out := make([]metrics.Amostra, 0, len(s.datasets)*9)
 		for _, d := range s.datasets {
 			st := d.st.Stats()
 			rotulo := []metrics.Label{{Nome: metrics.LabelDataset, Valor: d.nome}}
@@ -88,6 +88,22 @@ func registraMetricasDeDataset(reg *metrics.Registry, s *Servidor) {
 			}
 
 			out = append(out,
+				metrics.Amostra{
+					Familia: metrics.MetDatasetFields,
+					Nome:    metrics.MetDatasetFields,
+					Ajuda:   "campos registrados no dicionário do dataset; o denominador é schema.maxCols, publicado em /v1/metadata",
+					Tipo:    metrics.TipoMedidor,
+					Labels:  rotulo,
+					Valor:   float64(d.sch.CamposConhecidos()),
+				},
+				metrics.Amostra{
+					Familia: metrics.MetDatasetFieldsDropped,
+					Nome:    metrics.MetDatasetFieldsDropped,
+					Ajuda:   "campos que o teto recusou; só sobe sob onMaxCols ignore, e é o que torna a perda contável em vez de silenciosa",
+					Tipo:    metrics.TipoContador,
+					Labels:  rotulo,
+					Valor:   float64(d.sch.CamposDescartados()),
+				},
 				metrics.Amostra{
 					Familia: metrics.MetMaterializedRows,
 					Nome:    metrics.MetMaterializedRows,

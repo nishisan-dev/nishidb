@@ -49,11 +49,27 @@ type Metadados struct {
 // global que ele herdou), e não o que está escrito no YAML dele: quem consulta
 // precisa saber o teto que vai valer, não onde ele foi declarado.
 type DatasetMeta struct {
-	Name      string       `json:"name"`
-	Key       string       `json:"key"`
-	MaxRows   int          `json:"maxRows"`
-	TimeoutMs int64        `json:"timeoutMs"`
-	Columns   []ColunaMeta `json:"columns"`
+	Name      string `json:"name"`
+	Key       string `json:"key"`
+	MaxRows   int    `json:"maxRows"`
+	TimeoutMs int64  `json:"timeoutMs"`
+	// MaxCols e OnMaxCols são o teto de campos efetivo e o que acontece ao
+	// alcançá-lo. Publicados pela mesma razão do MaxRows, e com uma a mais: o
+	// bloco `schema:` do YAML aceita chave desconhecida em silêncio, então um
+	// `maxColls` com typo parseia limpo e não faz nada. Ler o efetivo de volta
+	// é onde o operador vê o typo, como "continua no default".
+	MaxCols   int    `json:"maxCols"`
+	OnMaxCols string `json:"onMaxCols"`
+	// MaxNestedCols é quantas colunas derivadas uma consulta pode projetar.
+	// Governa a expansão `pai.*`; ao estourar, o servidor RECUSA nomeando o
+	// limite, nunca trunca.
+	//
+	// Não há campo equivalente na Requisicao, ao contrário do maxRows: pedir
+	// MENOS colunas não é uma pergunta que o cliente precise fazer, porque
+	// ele já escolhe as colunas escrevendo-as. Um teto de cliente aqui só
+	// poderia transformar uma consulta que funciona em erro.
+	MaxNestedCols int          `json:"maxNestedCols"`
+	Columns       []ColunaMeta `json:"columns"`
 }
 
 // ColunaMeta descreve uma coluna do dataset.
@@ -140,8 +156,25 @@ type MotorStats struct {
 type DatasetStats struct {
 	Name      string        `json:"name"`
 	Storage   StorageStats  `json:"storage"`
+	Schema    SchemaStats   `json:"schema"`
 	Query     RotaStats     `json:"query"`
 	Ingestion IngestaoStats `json:"ingestion"`
+}
+
+// SchemaStats é o crescimento do dicionário de campos contra o teto.
+//
+// Fica FORA de IngestaoStats de propósito: aquele bloco só é preenchido quando
+// o dataset tem consumidor Kafka, e o dicionário cresce por qualquer rota de
+// escrita — inclusive o `nishidb ingest` de arquivo. Um dataset ingerido por
+// arquivo reportaria zero campos, que é pior do que não reportar.
+//
+// FieldsDropped só sobe sob onMaxCols ignore, e é o número que transforma a
+// perda em fato contável: sem ele o campo excedente sumiria sem sintoma.
+type SchemaStats struct {
+	Fields        int    `json:"fields"`
+	FieldsDropped uint64 `json:"fieldsDropped"`
+	MaxCols       int    `json:"maxCols"`
+	OnMaxCols     string `json:"onMaxCols"`
 }
 
 // StorageStats vem de storage.Store.Stats().

@@ -55,6 +55,11 @@ const (
 	TokenLParen    // (
 	TokenRParen    // )
 	TokenSemicolon // ;
+	// TokenDot separa o namespace do nome (`_meta.fields`) e o pai da
+	// projeção aninhada (`persistent.*`). Não existe aritmética nem menos
+	// unário na v1, então o '.' fora de número nunca é ambíguo: é SEMPRE
+	// separador.
+	TokenDot // .
 
 	// Comparadores (spec §61).
 	TokenEq  // =
@@ -88,6 +93,7 @@ var tokenNames = [...]string{
 	TokenLParen:      "(",
 	TokenRParen:      ")",
 	TokenSemicolon:   ";",
+	TokenDot:         ".",
 	TokenEq:          "=",
 	TokenNeq:         "!=",
 	TokenGt:          ">",

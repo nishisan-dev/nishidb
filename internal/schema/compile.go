@@ -16,6 +16,19 @@ import (
 // (spec §101: SCHEMA_VALIDATION).
 var ErrUnknownField = errors.New("campo desconhecido rejeitado pela policy")
 
+// ErrTetoDeCampos é devolvido quando o dataset alcançou schema.maxCols.
+//
+// Tem sentinela PRÓPRIA de propósito. Sem ela o erro chegava à classificação
+// sem dono, caía no balde de "bug nosso ou dataset avariado" e PARAVA o writer
+// para sempre — o offset não avança, então o restart reproduz o mesmo evento e
+// o mesmo estouro. Sobre uma grandeza que cresce sem teto, alcançar o limite
+// não é anomalia: é questão de tempo, e precisa de desfecho declarado.
+var ErrTetoDeCampos = errors.New("teto de campos do dataset alcançado")
+
+// ErrColunaDerivada é devolvido quando uma coluna extraída não pode ser criada
+// com segurança contra o dicionário existente.
+var ErrColunaDerivada = errors.New("coluna derivada inválida")
+
 type Mode uint8
 
 const (
@@ -103,6 +116,23 @@ type CompiledField struct {
 	// próprio dado, não a contabilidade interna do banco.
 	IsSystem bool
 
+	// Parent é o campo json de onde esta coluna foi extraída; nil para coluna
+	// de topo. Path é o caminho dentro daquele documento.
+	//
+	// A derivada é uma coluna NORMAL em tudo o que importa ao binder e ao
+	// planner — tem FieldID, tipo e índice, e por isso é comparável e
+	// indexável, que é o ponto inteiro da feature. O par Parent/Path governa
+	// só duas coisas: quem a materializa, e o fato de ela ficar FORA do
+	// SELECT *, pela mesma razão do IsSystem acima — quem pede "tudo" não
+	// espera o dataset multiplicar de largura.
+	Parent *CompiledField
+	Path   string
+	// Derivadas são as colunas extraídas DESTE campo, em ordem de FieldID.
+	// Pré-computada no Compile porque o materializer a consulta por campo por
+	// evento: procurar as filhas varrendo o mapa no hot path custaria o preço
+	// de um SELECT * por evento.
+	Derivadas []*CompiledField
+
 	// Format é o padrão declarado no YAML e Layout é ele compilado. Não-nil
 	// exatamente quando Type é datetime ou time; o Format é guardado ao lado
 	// do Layout porque a mensagem de literal inválido precisa dizer o que se
@@ -165,6 +195,12 @@ type Compiled struct {
 	Unknown    UnknownPolicy
 	MaxRows    int
 	Timeout    time.Duration
+	// MaxCols/OnMaxCols governam o crescimento do dicionário. Vivem aqui, e
+	// não só na spec, porque quem os consulta é o ResolveUnknown — hot path do
+	// writer, que só carrega o Compiled.
+	MaxCols       int
+	OnMaxCols     string
+	MaxNestedCols int
 	// Errors é a política de erro de evento do §101, resolvida. Vive na forma
 	// compilada porque o caminho de ingestão — que é onde ela vale — só
 	// carrega o Compiled, e ir buscar a DatasetSpec de novo ali obrigaria a
@@ -187,21 +223,37 @@ type Compiled struct {
 	byID    map[types.FieldID]*CompiledField
 	exclude map[string]struct{}
 	dict    FieldDictionary
+
+	// camposDescartados conta os campos recusados pelo teto. Atômico porque o
+	// writer o incrementa enquanto o coletor de métricas o lê. É o que torna a
+	// perda CONTÁVEL em vez de descoberta por acaso — o modo de falha
+	// inaceitável aqui é o silêncio, não a perda.
+	camposDescartados atomic.Uint64
 }
+
+// CamposDescartados é quantos campos o teto recusou desde a abertura.
+func (c *Compiled) CamposDescartados() uint64 { return c.camposDescartados.Load() }
+
+// CamposConhecidos é o tamanho corrente do dicionário — o numerador de que
+// MaxCols é o denominador.
+func (c *Compiled) CamposConhecidos() int { return c.dict.Len() }
 
 // Compile resolve a spec contra o field dictionary. IDs são atribuídos em
 // ordem determinística (nomes ordenados) — o mesmo spec + dict vazio produz
 // sempre o mesmo mapeamento.
 func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 	c := &Compiled{
-		Name:    s.Name,
-		MaxRows: s.Query.MaxRows,
-		Timeout: s.Query.Timeout,
-		Errors:  s.Errors,
-		byName:  make(map[string]*CompiledField),
-		byID:    make(map[types.FieldID]*CompiledField),
-		exclude: make(map[string]struct{}, len(s.Schema.Exclude)),
-		dict:    dict,
+		Name:          s.Name,
+		MaxRows:       s.Query.MaxRows,
+		Timeout:       s.Query.Timeout,
+		MaxCols:       s.Schema.MaxCols,
+		OnMaxCols:     s.Schema.OnMaxCols,
+		MaxNestedCols: s.Schema.MaxNestedCols,
+		Errors:        s.Errors,
+		byName:        make(map[string]*CompiledField),
+		byID:          make(map[types.FieldID]*CompiledField),
+		exclude:       make(map[string]struct{}, len(s.Schema.Exclude)),
+		dict:          dict,
 	}
 	if ttl := s.Materialization.TTL; ttl != nil {
 		c.ExpireAfterWrite = ttl.ExpireAfterWrite
@@ -251,6 +303,28 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 	}
 	sort.Strings(names)
 
+	// Declarar mais campos do que o próprio teto é erro de configuração, e sai
+	// aqui: deixar passar faria o dataset nascer acima do limite que ele mesmo
+	// declarou, e o primeiro autodescoberto seria recusado por uma decisão que
+	// ninguém tomou conscientemente.
+	//
+	// A conta é sobre os DECLARADOS, e não sobre dict.Len(): um dataset que já
+	// cresceu além do teto numa execução anterior continua abrindo — os campos
+	// existem e são legíveis, e o que o teto governa é o crescimento daqui
+	// para a frente.
+	if c.MaxCols > 0 {
+		declarados := 0
+		for _, name := range names {
+			if _, excluded := c.exclude[name]; !excluded {
+				declarados++
+			}
+		}
+		if declarados > c.MaxCols {
+			return nil, fmt.Errorf("%w: o schema declara %d campos, acima de schema.maxCols (%d)",
+				ErrTetoDeCampos, declarados, c.MaxCols)
+		}
+	}
+
 	seqField := ""
 	if s.Materialization.Sequence != nil {
 		seqField = s.Materialization.Sequence.Field
@@ -296,12 +370,7 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 				}
 				cf.Format, cf.Layout = spec.Format, l
 			}
-			switch spec.Index {
-			case "bitmap":
-				cf.Index = IndexBitmap
-			case "hash":
-				cf.Index = IndexHash
-			}
+			cf.Index = indexKindDe(spec.Index)
 		} else {
 			cf.IsAuto = true
 		}
@@ -342,6 +411,15 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 
 	// Campos que o DICIONÁRIO conhece e o YAML não: campos auto que uma
 	// execução anterior materializou via ResolveUnknown. Sem carregá-los aqui,
+	// As colunas DERIVADAS são registradas aqui: depois das de topo, para que
+	// os FieldIDs de topo não mudem quando um extract é acrescentado, e ANTES
+	// do carregamento do dicionário abaixo — que é o que impede a derivada de
+	// ressuscitar como campo de topo autodescoberto no reopen, levando junto o
+	// SELECT * de que ela precisa ficar fora.
+	if err := c.registraDerivadas(s, dict); err != nil {
+		return nil, err
+	}
+
 	// depois de um restart o campo tem dados e typeHint no fields.dict mas não
 	// existe no Compiled — FieldByName devolve false, a query sobre ele erra
 	// "coluna não existe" (mentira) e o SELECT * omite a coluna.
@@ -396,6 +474,86 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 	return c, nil
 }
 
+// indexKindDe traduz o vocabulário do YAML. Vive numa função só porque o
+// campo de topo e a coluna derivada leem a MESMA chave, e duas traduções
+// divergiriam no dia em que um índice novo entrasse.
+func indexKindDe(yaml string) IndexKind {
+	switch yaml {
+	case "bitmap":
+		return IndexBitmap
+	case "hash":
+		return IndexHash
+	default:
+		return IndexNone
+	}
+}
+
+// registraDerivadas compila as colunas declaradas em `extract`.
+//
+// A ordem é determinística — pais em ordem alfabética, extrações na ordem
+// escrita — pela mesma razão que o laço de topo ordena os nomes: o mesmo spec
+// contra o mesmo dicionário tem de produzir sempre o mesmo mapeamento.
+func (c *Compiled) registraDerivadas(s *DatasetSpec, dict FieldDictionary) error {
+	pais := make([]string, 0, len(s.Schema.Fields))
+	for nome := range s.Schema.Fields {
+		if len(s.Schema.Fields[nome].Extract) > 0 {
+			pais = append(pais, nome)
+		}
+	}
+	sort.Strings(pais)
+
+	for _, nomeDoPai := range pais {
+		pai, ok := c.byName[nomeDoPai]
+		if !ok {
+			// Pai excluído ou fora do include: a spec já recusou isso na
+			// validação, então chegar aqui seria bug de compilação.
+			return fmt.Errorf("%w: campo %q declara extract e não foi compilado", ErrColunaDerivada, nomeDoPai)
+		}
+		for i, e := range s.Schema.Fields[nomeDoPai].Extract {
+			nome, err := NomeDaExtracao(nomeDoPai, i, e)
+			if err != nil {
+				return err
+			}
+			tipo, _ := FieldTypeByName(e.Type)
+			layout, err := CompilaFormato(e.Type, e.Format)
+			if err != nil {
+				return fmt.Errorf("%w: extract %q: %w", ErrColunaDerivada, nome, err)
+			}
+			id, err := dict.LookupOrCreate([]byte(nome))
+			if err != nil {
+				return fmt.Errorf("registrando coluna derivada %q no dicionário: %w", nome, err)
+			}
+			// Tipo já fixado no dicionário e DIVERGENTE do declarado: o ID
+			// devolvido é de outra coluna — um campo de topo autodescoberto
+			// com o mesmo nome, observado numa execução anterior. Aceitar
+			// faria a derivada ler valores que nunca foram dela.
+			//
+			// Hint ausente não é conflito: sem tipo fixado também não há valor
+			// materializado, e adotar o ID é inofensivo. É o que permite o
+			// reopen normal de um dataset criado com extract.
+			if t, temHint := dict.TypeHint(id); temHint && t != tipo {
+				return fmt.Errorf("%w: %q declara tipo %s, mas o dataset já fixou %s para esse nome; "+
+					"escolha outro `as` ou recrie o dataset",
+					ErrColunaDerivada, nome, tipo, t)
+			}
+			cf := &CompiledField{
+				ID:     id,
+				Name:   nome,
+				Type:   tipo,
+				Index:  indexKindDe(e.Index),
+				Format: e.Format,
+				Layout: layout,
+				Parent: pai,
+				Path:   e.Path,
+			}
+			c.byName[cf.Name] = cf
+			c.byID[cf.ID] = cf
+			pai.Derivadas = append(pai.Derivadas, cf)
+		}
+	}
+	return nil
+}
+
 // FieldByName resolve nome original OU alias. Lookup com []byte não aloca
 // (elisão de map[string(b)]).
 func (c *Compiled) FieldByName(name []byte) (*CompiledField, bool) {
@@ -417,17 +575,17 @@ func (c *Compiled) FieldByName(name []byte) (*CompiledField, bool) {
 // CompiledField é imutável após a criação, exceto pelo tipo fixado de campo
 // auto, que é publicado atomicamente.
 func (c *Compiled) FieldsByID() []*CompiledField {
-	return c.camposOrdenados(false)
+	return c.camposOrdenados(false, false)
 }
 
 // FieldsByIDIncluindoSistema devolve TODOS os campos, inclusive os que o
 // writer injeta. É para quem precisa do conjunto físico do payload — não para
 // quem monta a lista de colunas que o usuário vê.
 func (c *Compiled) FieldsByIDIncluindoSistema() []*CompiledField {
-	return c.camposOrdenados(true)
+	return c.camposOrdenados(true, true)
 }
 
-func (c *Compiled) camposOrdenados(comSistema bool) []*CompiledField {
+func (c *Compiled) camposOrdenados(comSistema, comDerivadas bool) []*CompiledField {
 	c.mu.RLock()
 	// byID tem UMA entrada por campo (byName tem duas para campo com alias):
 	// não há duplicata a remover aqui.
@@ -436,10 +594,53 @@ func (c *Compiled) camposOrdenados(comSistema bool) []*CompiledField {
 		if f.IsSystem && !comSistema {
 			continue
 		}
+		if f.Parent != nil && !comDerivadas {
+			continue
+		}
 		out = append(out, f)
 	}
 	c.mu.RUnlock()
 
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+// FieldsParaMetadata é o conjunto que o /v1/metadata publica: as colunas de
+// topo MAIS as derivadas, sem os campos de sistema.
+//
+// É deliberadamente um SUPERSET do SELECT *. Esconder a derivada aqui faria o
+// DBeaver não a listar, e ninguém descobriria que ela existe — o operador a
+// declarou justamente para consultá-la pelo nome.
+func (c *Compiled) FieldsParaMetadata() []*CompiledField {
+	return c.camposOrdenados(false, true)
+}
+
+// FieldByPath resolve a coluna derivada pelo CAMINHO dentro do documento do
+// pai — que é como ela aparece no `pai.caminho` da projeção, e não
+// necessariamente como ela se chama (o `as` pode renomeá-la).
+func (c *Compiled) FieldByPath(pai, path string) (*CompiledField, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for _, f := range c.byID {
+		if f.Parent != nil && f.Parent.Name == pai && f.Path == path {
+			return f, true
+		}
+	}
+	return nil, false
+}
+
+// FieldsByParent devolve as colunas extraídas de um campo json, em ordem
+// crescente de FieldID — a mesma ordem do SELECT *, pela mesma razão: a
+// projeção precisa ser estável entre execuções.
+func (c *Compiled) FieldsByParent(pai string) []*CompiledField {
+	c.mu.RLock()
+	var out []*CompiledField
+	for _, f := range c.byID {
+		if f.Parent != nil && f.Parent.Name == pai {
+			out = append(out, f)
+		}
+	}
+	c.mu.RUnlock()
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
 }
@@ -468,7 +669,13 @@ func (c *Compiled) Excluded(name []byte) bool {
 //   - policy ignore → (nil, nil);
 //   - policy reject → ErrUnknownField;
 //   - policy include → registra no dicionário, cria CompiledField auto e
-//     cacheia (idempotente).
+//     cacheia (idempotente);
+//   - teto de campos alcançado, onMaxCols ignore → (nil, nil): o campo é
+//     descartado e o EVENTO é gravado com todos os outros;
+//   - teto de campos alcançado, onMaxCols stop → ErrTetoDeCampos.
+//
+// Nos dois últimos o contador de descartados sobe: o teto pode custar dado, e
+// custá-lo em silêncio é o que não pode acontecer.
 //
 // Chamado apenas pela goroutine do writer; leitores concorrentes de
 // FieldByName/FieldByID são protegidos pelo RWMutex.
@@ -486,6 +693,23 @@ func (c *Compiled) ResolveUnknown(name []byte) (*CompiledField, error) {
 	defer c.mu.Unlock()
 	if f, ok := c.byName[string(name)]; ok {
 		return f, nil
+	}
+	// O teto governa o CRESCIMENTO, e a checagem vem depois do cache acima:
+	// campo que já existe continua resolvendo mesmo com o dicionário cheio.
+	// Sem essa ordem, o primeiro campo excedente derrubaria todo evento
+	// seguinte — exatamente o que o teto deveria evitar.
+	//
+	// Ela também vem ANTES do LookupOrCreate, e é isso que torna o erro de
+	// teto do próprio fielddict inalcançável por esta rota: os dois usam o
+	// mesmo limiar, e este dispara primeiro, com política.
+	if c.MaxCols > 0 && c.dict.Len() >= c.MaxCols {
+		c.camposDescartados.Add(1)
+		if c.OnMaxCols == OnMaxColsStop {
+			return nil, fmt.Errorf("%w: %s (maxCols=%d)", ErrTetoDeCampos, name, c.MaxCols)
+		}
+		// ignore: mesmo desfecho do campo excluído — o evento é gravado com
+		// todos os outros campos, e a perda fica no contador.
+		return nil, nil
 	}
 	id, err := c.dict.LookupOrCreate(name)
 	if err != nil {

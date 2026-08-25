@@ -81,17 +81,13 @@ func runOffsets(args []string, amb Ambiente) int {
 	// Os campos com bitmap PRECISAM ser declarados: o Store recusa abrir um
 	// dataset cujo manifest declara índices que a abertura não conhece,
 	// porque o índice pararia de ser atualizado e reapareceria incompleto.
-	var bitmaps []string
-	for nome, f := range spec.Schema.Fields {
-		if f.Index == "bitmap" {
-			bitmaps = append(bitmaps, nome)
-		}
-	}
+	bitmaps := schema.CamposComBitmap(spec)
 	st, err := storage.Open(storage.Options{
 		Dir:              cfg.DirDoDataset(*dataset),
 		Dataset:          *dataset,
 		SegmentSize:      cfg.SegmentSize(),
 		BitmapFieldNames: bitmaps,
+		ColunasDerivadas: spec.NomesDasExtracoes(),
 		ExpireAfterWrite: spec.ExpiraApos(),
 		CampoDeEscrita:   schema.CampoInstanteDeEscrita,
 	})

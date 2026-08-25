@@ -90,7 +90,12 @@ type Options struct {
 	// parando de ser atualizado e, se o campo voltasse depois, reapareceria
 	// INCOMPLETO — falso negativo silencioso em query.
 	AllowBitmapDrop bool
-	SyncEveryPut    bool // durability=sync (testes/config)
+
+	// ColunasDerivadas são os nomes declarados em `extract`. Chegam como
+	// STRING para não fazer o storage depender do schema: o que ele precisa
+	// saber é só se o nome já está no dicionário.
+	ColunasDerivadas []string
+	SyncEveryPut     bool // durability=sync (testes/config)
 	// ExpireAfterWrite liga o idle timeout: a row deixa de ser visível quando
 	// passa este tempo sem escrita. Zero desliga tudo — nem o índice é aberto.
 	ExpireAfterWrite time.Duration
@@ -664,6 +669,16 @@ func Open(opts Options) (*Store, error) {
 	m, mErr := checkpoint.Load(s.manifestPath())
 	refs, err := segment.ListSegments(dataDir)
 	if err != nil {
+		return nil, err
+	}
+
+	// A recusa de coluna derivada nova sobre dataset com linhas mora AQUI, e
+	// não antes do Open nem depois: o dicionário já está aberto (é o que
+	// permite saber se a coluna é nova) e nada foi gravado nele ainda —
+	// _writtenAt e os campos de bitmap são registrados logo abaixo, com fsync,
+	// e o dicionário é append-only. Uma subida abortada depois disso deixaria
+	// o nome registrado para sempre.
+	if err := validaDerivadasContraDicionario(m, s.dict, opts.ColunasDerivadas); err != nil {
 		return nil, err
 	}
 
@@ -1826,3 +1841,35 @@ func (s *Store) Close() error {
 // esse consumidor não deveria depender do tipo Stats inteiro só para ler um
 // contador.
 func (s *Store) RowCount() uint64 { return s.rowCount.Load() }
+
+// validaDerivadasContraDicionario recusa uma coluna extraída NOVA num dataset
+// que já tem linhas.
+//
+// A extração roda na ingestão: as linhas gravadas antes de a coluna existir
+// não a têm, e um filtro sobre ela as omitiria — sem erro, sem log e sem
+// métrica. É o mesmo defeito que validaBitmapsContraManifest já recusa para
+// índice declarado sobre dataset com linhas, e a razão é idêntica.
+//
+// O critério é a AUSÊNCIA no dicionário, e não a mera presença de linhas: o
+// dataset criado já com extract tem a coluna registrada desde a primeira
+// subida, e recusá-lo faria a feature ser inutilizável depois do primeiro
+// evento.
+func validaDerivadasContraDicionario(m *checkpoint.Manifest, dict *fielddict.Dict, derivadas []string) error {
+	if len(derivadas) == 0 || m == nil || m.RowCount == 0 {
+		return nil
+	}
+	var novas []string
+	for _, nome := range derivadas {
+		if _, existe := dict.Lookup([]byte(nome)); !existe {
+			novas = append(novas, nome)
+		}
+	}
+	if len(novas) == 0 {
+		return nil
+	}
+	return fmt.Errorf(
+		"%w: coluna(s) %v declarada(s) em extract num dataset que já tem %d linhas; "+
+			"a extração roda na ingestão, então as linhas antigas ficariam sem a coluna e o filtro sobre ela "+
+			"as omitiria em silêncio. Declare extract na CRIAÇÃO do dataset, ou recrie este",
+		ErrDatasetCorrupt, novas, m.RowCount)
+}

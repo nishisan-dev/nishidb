@@ -18,6 +18,13 @@ package parser
 type SelectStmt struct {
 	Star       bool        // true ⇒ Projection == nil
 	Projection []ColumnRef // nomes como escritos, já unescapados; nil quando Star
+	// Namespace é o qualificador antes do ponto (`_meta` em `_meta.fields`),
+	// vazio quando o FROM traz um nome simples. É ADITIVO: nenhuma query
+	// existente muda de forma, e o campo zero significa "sem namespace".
+	Namespace string
+	// Dataset é sempre o nome DEPOIS do ponto, quando há ponto. DatasetPos
+	// aponta para ele, e não para o qualificador: é dele que sai o
+	// "dataset desconhecido" do binder.
 	Dataset    string
 	DatasetPos int
 	Where      Expr  // nil se ausente
@@ -30,7 +37,15 @@ type SelectStmt struct {
 // ColumnRef é um item da projeção com a posição de byte do token no SQL — é
 // dela que sai o "coluna desconhecida %q na posição %d" do binder.
 type ColumnRef struct {
-	Name string
+	// Qualifier é o campo json à esquerda do ponto (`doc` em `doc.x`), vazio
+	// na projeção simples. Com ele, Name é o CAMINHO dentro do documento, e
+	// não o nome da coluna — quem resolve um no outro é o binder.
+	Qualifier string
+	Name      string
+	// Star marca `pai.*`: expande as colunas extraídas daquele pai. Elas
+	// ficam fora do SELECT *, então esta é a forma de pedi-las sem saber os
+	// nomes. Com Star, Name é vazio.
+	Star bool
 	Pos  int
 }
 

@@ -231,17 +231,13 @@ func abreDataset(cfg *nishiconfig.Config, nome string) (*storage.Store, *schema.
 		return nil, nil, fmt.Errorf("dataset %q: o arquivo declara name: %q", nome, spec.Name)
 	}
 
-	var bitmaps []string
-	for campo, f := range spec.Schema.Fields {
-		if f.Index == "bitmap" {
-			bitmaps = append(bitmaps, campo)
-		}
-	}
+	bitmaps := schema.CamposComBitmap(spec)
 
 	st, err := storage.Open(storage.Options{
 		Dir:              cfg.DirDoDataset(nome),
 		SegmentSize:      cfg.SegmentSize(),
 		BitmapFieldNames: bitmaps,
+		ColunasDerivadas: spec.NomesDasExtracoes(),
 		ExpireAfterWrite: spec.ExpiraApos(),
 		CampoDeEscrita:   schema.CampoInstanteDeEscrita,
 	})

@@ -88,3 +88,26 @@ func primeiroIdentQuoted(t *testing.T, sql string) lexer.Token {
 	t.Fatalf("nenhum ident quoted em %q", sql)
 	return lexer.Token{}
 }
+
+// O '.' passa a ser token próprio: ele é o separador do nome qualificado
+// (`_meta.fields`) e da projeção aninhada (`persistent.*`). Até aqui era
+// "caractere inesperado".
+func TestPontoEhTokenProprio(t *testing.T) {
+	wantStream(t, "_meta.fields", []tok{
+		{lexer.TokenIdent, "_meta", 0},
+		{lexer.TokenDot, ".", 5},
+		{lexer.TokenIdent, "fields", 6},
+	})
+}
+
+// O ponto do NÚMERO continua sendo do número. A regressão plausível é
+// despachar o '.' antes de scanNumber terminar, e ela partiria `1.5` em três
+// tokens — um literal double viraria erro de sintaxe em toda query que o use.
+func TestPontoDeNumeroNaoViraTokenDot(t *testing.T) {
+	wantStream(t, "WHERE ratio > 1.5", []tok{
+		{lexer.TokenWhere, "WHERE", 0},
+		{lexer.TokenIdent, "ratio", 6},
+		{lexer.TokenGt, ">", 12},
+		{lexer.TokenNumber, "1.5", 14},
+	})
+}

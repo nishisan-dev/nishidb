@@ -47,15 +47,21 @@ func (s *Servidor) handleMetadata(w http.ResponseWriter, r *http.Request) {
 }
 
 func metaDoDataset(d *dataset) protocolo.DatasetMeta {
-	campos := d.sch.FieldsByID()
+	// FieldsParaMetadata, e não FieldsByID: a coluna derivada fica fora do
+	// SELECT * e este é o lugar onde ela é descoberta. Esconder aqui também
+	// deixaria o operador sem forma nenhuma de saber que ela existe.
+	campos := d.sch.FieldsParaMetadata()
 	m := protocolo.DatasetMeta{
 		Name: d.nome,
 		// MaxRows e Timeout saem do COMPILADO, que é onde o default global já
 		// foi resolvido contra o que o YAML do dataset declara: quem consulta
 		// precisa do teto que vai valer, não de onde ele foi escrito.
-		MaxRows:   d.sch.MaxRows,
-		TimeoutMs: d.sch.Timeout.Milliseconds(),
-		Columns:   make([]protocolo.ColunaMeta, 0, len(campos)),
+		MaxRows:       d.sch.MaxRows,
+		TimeoutMs:     d.sch.Timeout.Milliseconds(),
+		MaxCols:       d.sch.MaxCols,
+		OnMaxCols:     d.sch.OnMaxCols,
+		MaxNestedCols: d.sch.MaxNestedCols,
+		Columns:       make([]protocolo.ColunaMeta, 0, len(campos)),
 	}
 	if d.sch.Key != nil {
 		m.Key = d.sch.Key.Name
@@ -131,6 +137,15 @@ func (s *Servidor) handleStats(w http.ResponseWriter, r *http.Request) {
 		estado, detalhe := estadoDaIngestao(d)
 		ds := protocolo.DatasetStats{
 			Name: d.nome,
+			// O bloco de schema sai do COMPILADO e é preenchido sempre, fora
+			// de qualquer condicional de consumidor: o dicionário cresce por
+			// toda rota de escrita, não só pela do Kafka.
+			Schema: protocolo.SchemaStats{
+				Fields:        d.sch.CamposConhecidos(),
+				FieldsDropped: d.sch.CamposDescartados(),
+				MaxCols:       d.sch.MaxCols,
+				OnMaxCols:     d.sch.OnMaxCols,
+			},
 			Storage: protocolo.StorageStats{
 				Rows:              st.RowCount,
 				Segments:          st.SegmentsTotal,

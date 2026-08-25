@@ -120,9 +120,10 @@ func TestTokenTypeString(t *testing.T) {
 		lexer.TokenString, lexer.TokenNumber, lexer.TokenPlaceholder, lexer.TokenComma,
 		lexer.TokenStar, lexer.TokenLParen, lexer.TokenRParen, lexer.TokenSemicolon,
 		lexer.TokenEq, lexer.TokenNeq, lexer.TokenGt, lexer.TokenGte, lexer.TokenLt, lexer.TokenLte,
+		lexer.TokenDot,
 	}
-	if len(todos) != 28 {
-		t.Fatalf("a lista tem %d tipos, o contrato do parser fixa 28", len(todos))
+	if len(todos) != 29 {
+		t.Fatalf("a lista tem %d tipos, o contrato do parser fixa 29", len(todos))
 	}
 	vistos := map[string]lexer.TokenType{}
 	for _, tt := range todos {

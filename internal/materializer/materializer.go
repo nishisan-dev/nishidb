@@ -119,6 +119,19 @@ const (
 	// CategoryInternal: inconsistência detectada pelo próprio materializer
 	// (ErrInternalState).
 	CategoryInternal
+	// CategoryFieldsExhausted é o dataset que alcançou schema.maxCols tendo
+	// declarado a política `stop`.
+	//
+	// Fica FORA da faixa de BadEvent(), e é isso que faz o `stop` parar: quem
+	// consulta a política de evento inválido é o ramo de BadEvent() do writer,
+	// cujo default é log-and-skip — dentro da faixa, o writer descartaria o
+	// evento e seguiria, entregando o oposto da chave. Fora dela o resultado
+	// cai no ramo de erro e a parada é observável, com o offset congelado.
+	//
+	// Fica no FIM da lista de propósito: inserir no meio mudaria o valor das
+	// constantes seguintes. Elas não são serializadas hoje (as métricas usam o
+	// nome), mas depender disso seria fragilidade de graça.
+	CategoryFieldsExhausted
 
 	// NumCategories é o limite superior EXCLUSIVO das categorias. Exportado
 	// porque quem reporta contagem por categoria (o CLI) precisa varrer o
@@ -128,7 +141,7 @@ const (
 	NumCategories = numCategories
 )
 
-const numCategories = CategoryInternal + 1
+const numCategories = CategoryFieldsExhausted + 1
 
 var categoryNames = [...]string{
 	CategoryNone:             "none",
@@ -141,6 +154,7 @@ var categoryNames = [...]string{
 	CategoryWriterFailed:     "WRITER_FAILED",
 	CategoryStorage:          "STORAGE_ERROR",
 	CategoryInternal:         "INTERNAL_STATE",
+	CategoryFieldsExhausted:  "FIELDS_EXHAUSTED",
 }
 
 func (c ErrorCategory) String() string {
@@ -399,6 +413,12 @@ func classify(err error) ErrorCategory {
 		return CategoryEventTooLarge
 	case errors.Is(err, ErrInternalState):
 		return CategoryInternal
+	// O teto de campos alcançado não é evento ruim nem dataset avariado: é um
+	// limite declarado sendo atingido. Sem este ramo ele caía no default e o
+	// operador o lia como STORAGE_ERROR — "bug nosso" — enquanto o writer
+	// parava para sempre sem explicação acionável.
+	case errors.Is(err, schema.ErrTetoDeCampos):
+		return CategoryFieldsExhausted
 	default:
 		return CategoryStorage
 	}
