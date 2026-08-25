@@ -125,15 +125,32 @@ const (
 	MaxColsTetoFisico = 65535
 )
 
+// As tags de YAML são EXPLÍCITAS mesmo quando redundantes. O default do
+// yaml.v3 é minúsculo o nome inteiro do campo Go, então um nome de duas
+// palavras vira "unknownfields" e a chave camelCase do arquivo não casa com
+// nada — em silêncio, porque este struct é decodificado sem KnownFields. É a
+// mesma família do defeito de configuração sem leitor que o projeto já
+// registra, e ela mordeu aqui na primeira chave de duas palavras.
 type FieldSpec struct {
-	Type   string
-	Alias  string
-	Index  string // "" | bitmap | hash
-	Format string // padrão de parsing; obrigatório em datetime/time, proibido no resto
+	Type   string `yaml:"type"`
+	Alias  string `yaml:"alias"`
+	Index  string `yaml:"index"`  // "" | bitmap | hash
+	Format string `yaml:"format"` // padrão de parsing; obrigatório em datetime/time, proibido no resto
+	// UnknownFields liga a DESCOBERTA das chaves de dentro de um campo json:
+	// "include" as promove a coluna conforme aparecem, "ignore" (default)
+	// deixa o documento opaco.
+	//
+	// É a mesma palavra do bloco `schema`, um nível abaixo, e de propósito:
+	// quem já sabe o que ela faz com os campos de topo sabe o que ela faz aqui.
+	// "reject" NÃO existe neste nível — recusar o evento por uma chave interna
+	// desconhecida derrubaria o evento inteiro por causa do documento, que é o
+	// oposto do que este campo serve para fazer.
+	UnknownFields string `yaml:"unknownFields"`
+
 	// Extract declara chaves de DENTRO de um campo json como colunas de
 	// verdade. Só vale sobre type: json — nos outros tipos não há o que
 	// percorrer, e aceitar em silêncio seria configuração sem leitor.
-	Extract []ExtractSpec
+	Extract []ExtractSpec `yaml:"extract"`
 }
 
 // ExtractSpec é uma chave de dentro de um documento json promovida a coluna.
@@ -144,14 +161,14 @@ type FieldSpec struct {
 // que importa.
 type ExtractSpec struct {
 	// Path é o caminho dentro do documento, com '.' separando níveis.
-	Path string
+	Path string `yaml:"path"`
 	// As é o nome da coluna resultante. Omitido, vale o próprio Path — o que
 	// só é possível quando ele não tem ponto, porque nome de coluna com ponto
 	// colidiria com a sintaxe de caminho da projeção.
-	As     string
-	Type   string
-	Index  string
-	Format string
+	As     string `yaml:"as"`
+	Type   string `yaml:"type"`
+	Index  string `yaml:"index"`
+	Format string `yaml:"format"`
 }
 
 type QuerySpec struct {
@@ -732,6 +749,19 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 			}
 		default:
 			return nil, specErrf("campo %q: index %q inválido (bitmap|hash)", name, f.Index)
+		}
+		if f.UnknownFields != "" {
+			if f.Type != "json" {
+				return nil, specErrf("campo %q: unknownFields só vale sobre type: json, e ele é %q — nos outros tipos não há documento a percorrer", name, f.Type)
+			}
+			switch f.UnknownFields {
+			case "include", "ignore":
+			case "reject":
+				return nil, specErrf("campo %q: unknownFields reject não existe dentro de um documento; "+
+					"recusar o evento por uma chave interna desconhecida o derrubaria inteiro, que é o oposto do que o campo json serve para fazer", name)
+			default:
+				return nil, specErrf("campo %q: unknownFields %q inválido (include|ignore)", name, f.UnknownFields)
+			}
 		}
 		if f.Index != "" && name == key.Field {
 			return nil, specErrf("campo %q é a key do dataset e já é indexado pela primary; remova index", name)

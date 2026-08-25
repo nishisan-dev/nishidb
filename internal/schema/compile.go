@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -127,6 +128,10 @@ type CompiledField struct {
 	// espera o dataset multiplicar de largura.
 	Parent *CompiledField
 	Path   string
+	// DescobreAninhados liga a promoção automática das chaves de dentro deste
+	// documento a colunas. Só faz sentido em campo json.
+	DescobreAninhados bool
+
 	// Derivadas são as colunas extraídas DESTE campo, em ordem de FieldID.
 	// Pré-computada no Compile porque o materializer a consulta por campo por
 	// evento: procurar as filhas varrendo o mapa no hot path custaria o preço
@@ -360,6 +365,7 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 		}
 		if spec, declared := s.Schema.Fields[name]; declared {
 			cf.Alias = spec.Alias
+			cf.DescobreAninhados = spec.UnknownFields == "include"
 			if spec.Type == "auto" {
 				cf.IsAuto = true
 			} else {
@@ -454,6 +460,20 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 				continue
 			}
 			cf := &CompiledField{ID: id, Name: name, IsAuto: true}
+			// Nome QUALIFICADO cujo prefixo é um campo json com descoberta
+			// ligada: é uma coluna aninhada que uma execução anterior
+			// descobriu. Reatá-la ao pai é o que a mantém fora do SELECT * e
+			// alcançável por `pai.*`.
+			//
+			// O nome é o registro: ele é qualificado por construção, então não
+			// há estado durável novo a inventar. E a condição exige o pai
+			// DESCOBRIR — num dataset sem descoberta, um campo de topo cujo
+			// nome tenha ponto continua sendo de topo.
+			if i := strings.IndexByte(name, '.'); i > 0 {
+				if pai, ok := c.byName[name[:i]]; ok && pai.DescobreAninhados {
+					cf.Parent, cf.Path = pai, name[i+1:]
+				}
+			}
 			// Sem typeHint o campo entra SEM tipo: existe, é projetável, e o
 			// binder recusa comparação sobre ele com "sem tipo conhecido" — não
 			// com "coluna não existe".
@@ -553,6 +573,87 @@ func (c *Compiled) registraDerivadas(s *DatasetSpec, dict FieldDictionary) error
 	}
 	return nil
 }
+
+// ResolveAninhado resolve — criando na primeira vez — a coluna de uma chave
+// DESCOBERTA dentro de um documento json.
+//
+// É o irmão de ResolveUnknown um nível abaixo, e obedece às mesmas regras: o
+// tipo é fixado na primeira observação, o teto de campos governa o
+// crescimento, e o dicionário é a fonte durável do FieldID.
+//
+// O nome vem QUALIFICADO ("pai.chave") e o caller o monta num buffer reusado,
+// porque isto roda no writer a cada evento: um nome novo por chave por evento
+// seria alocação no hot path. O nome qualificado também é o que impede uma
+// chave interna chamada `id` de colidir com a key do dataset.
+//
+// Devolve (nil, nil) quando o teto recusa sob política ignore — o mesmo
+// contrato de ResolveUnknown, e o caller trata como "não virou coluna".
+//
+// Chamado apenas pela goroutine do writer.
+func (c *Compiled) ResolveAninhado(pai *CompiledField, nomeQualificado, caminho []byte) (*CompiledField, error) {
+	c.mu.RLock()
+	f, ok := c.byName[string(nomeQualificado)]
+	c.mu.RUnlock()
+	if ok {
+		if f.Parent != pai {
+			// Nome já tomado por outra coluna: não adota. Só acontece se
+			// alguém declarar um campo de topo com ponto no nome.
+			return nil, nil
+		}
+		return f, nil
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if f, ok := c.byName[string(nomeQualificado)]; ok {
+		if f.Parent != pai {
+			return nil, nil
+		}
+		return f, nil
+	}
+	if recusa := c.tetoAlcancado(); recusa != nil {
+		return nil, recusa
+	}
+	id, err := c.dict.LookupOrCreate(nomeQualificado)
+	if err != nil {
+		return nil, fmt.Errorf("registrando coluna aninhada %q: %w", nomeQualificado, err)
+	}
+	cf := &CompiledField{
+		ID:     id,
+		Name:   string(nomeQualificado),
+		IsAuto: true,
+		Parent: pai,
+		Path:   string(caminho),
+	}
+	if t, ok := c.dict.TypeHint(id); ok {
+		cf.autoType.Store(uint32(t))
+	}
+	c.byName[cf.Name] = cf
+	c.byID[cf.ID] = cf
+	return cf, nil
+}
+
+// tetoAlcancado aplica a política de estouro do dicionário. Chamado com c.mu
+// já travado. nil = há espaço; erro = a política é `stop`; e (nil, nil) do
+// caller quando ela é `ignore` — por isso ele devolve um erro sentinela só no
+// caso que precisa parar.
+func (c *Compiled) tetoAlcancado() error {
+	if c.MaxCols <= 0 || c.dict.Len() < c.MaxCols {
+		return nil
+	}
+	c.camposDescartados.Add(1)
+	if c.OnMaxCols == OnMaxColsStop {
+		return fmt.Errorf("%w (maxCols=%d)", ErrTetoDeCampos, c.MaxCols)
+	}
+	return errTetoIgnorado
+}
+
+// errTetoIgnorado é interno: sinaliza ao caller que a coluna não foi criada
+// por política `ignore`, sem que isso vire erro de evento.
+var errTetoIgnorado = errors.New("teto de campos alcançado; coluna ignorada")
+
+// TetoIgnorou informa se o erro é a recusa silenciosa do teto.
+func TetoIgnorou(err error) bool { return errors.Is(err, errTetoIgnorado) }
 
 // FieldByName resolve nome original OU alias. Lookup com []byte não aloca
 // (elisão de map[string(b)]).
@@ -702,14 +803,13 @@ func (c *Compiled) ResolveUnknown(name []byte) (*CompiledField, error) {
 	// Ela também vem ANTES do LookupOrCreate, e é isso que torna o erro de
 	// teto do próprio fielddict inalcançável por esta rota: os dois usam o
 	// mesmo limiar, e este dispara primeiro, com política.
-	if c.MaxCols > 0 && c.dict.Len() >= c.MaxCols {
-		c.camposDescartados.Add(1)
-		if c.OnMaxCols == OnMaxColsStop {
-			return nil, fmt.Errorf("%w: %s (maxCols=%d)", ErrTetoDeCampos, name, c.MaxCols)
+	if recusa := c.tetoAlcancado(); recusa != nil {
+		if TetoIgnorou(recusa) {
+			// ignore: mesmo desfecho do campo excluído — o evento é gravado
+			// com todos os outros campos, e a perda fica no contador.
+			return nil, nil
 		}
-		// ignore: mesmo desfecho do campo excluído — o evento é gravado com
-		// todos os outros campos, e a perda fica no contador.
-		return nil, nil
+		return nil, fmt.Errorf("%w: %s", recusa, name)
 	}
 	id, err := c.dict.LookupOrCreate(name)
 	if err != nil {

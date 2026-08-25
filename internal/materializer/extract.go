@@ -49,6 +49,9 @@ func (b *PatchBuffer) extraiDerivadas() {
 			// derivadas ficam ausentes.
 			continue
 		}
+		if p.campo.DescobreAninhados {
+			b.descobreAninhados(p)
+		}
 		for _, d := range p.campo.Derivadas {
 			f, ok := b.buscaCaminho(p.valor, d.Path, 0)
 			if !ok {
@@ -126,4 +129,80 @@ func (b *PatchBuffer) buscaCaminho(doc []byte, path string, nivel int) (jsonp.Fi
 		return jsonp.Field{}, false
 	}
 	return b.buscaCaminho(achado.Raw, resto, nivel+1)
+}
+
+// descobreAninhados promove a coluna toda chave do documento que não esteja
+// DECLARADA.
+//
+// A motivação do campo json é preservar tudo para estudo e debug depois, e o
+// documento já faz isso — ele é gravado verbatim. O que a descoberta
+// acrescenta é poder ESCREVER a pergunta: sem coluna, `WHERE doc.algo = 'x'`
+// não é sequer expressável, e o operador precisa trazer o documento inteiro e
+// filtrar fora.
+//
+// É de UM nível. Objeto aninhado vira coluna json, inteiro, e quem precisa da
+// chave lá dentro declara o caminho. Sem esse corte o vocabulário cresceria
+// por profundidade além de crescer por largura, e o dataset não controla nem
+// uma nem outra — quem produz os eventos é a integração.
+//
+// Como o resto da segunda passada, NUNCA propaga erro: chave que não vira
+// coluna some da projeção e continua no documento.
+func (b *PatchBuffer) descobreAninhados(p paiVisto) {
+	for len(b.aninhados) <= 0 {
+		b.aninhados = append(b.aninhados, &jsonp.Parser{})
+	}
+	// Parser próprio para a varredura de descoberta: o do nível 0 é usado pela
+	// busca por caminho das colunas DECLARADAS, que roda logo depois.
+	if b.descobridor == nil {
+		b.descobridor = &jsonp.Parser{}
+	}
+	b.descobridor.Reset(p.valor)
+	for {
+		f, ok, err := b.descobridor.Next()
+		if err != nil || !ok {
+			return
+		}
+		if b.declarado(p.campo, f.Key) {
+			continue // declaração vence: o nome e o tipo já foram escolhidos
+		}
+		// "pai.chave" num buffer reusado — um nome novo por chave por evento
+		// seria alocação no hot path.
+		b.nomeBuf = append(append(append(b.nomeBuf[:0], p.campo.Name...), '.'), f.Key...)
+		cf, err := b.compilado.ResolveAninhado(p.campo, b.nomeBuf, f.Key)
+		if err != nil || cf == nil {
+			// Teto alcançado, nome tomado, ou política de descarte: a coluna
+			// não existe, e o documento continua guardando o valor.
+			continue
+		}
+		alvo := cf.EffectiveType()
+		if alvo == types.TypeNull {
+			t := InferType(f)
+			if t == types.TypeNull {
+				continue // null JSON não fixa tipo
+			}
+			if err := b.compilado.FixAutoType(cf, t); err != nil {
+				continue
+			}
+			alvo = t
+		}
+		val, arena, err := Convert(f, alvo, cf.Layout, b.arena)
+		b.arena = arena
+		if err != nil || val.Type == types.TypeNull {
+			// Tipo divergente do fixado: a coluna fica ausente NESTA linha, e
+			// o documento preserva o valor. Derrubar o evento por causa de uma
+			// chave interna é o que esta passada existe para não fazer.
+			continue
+		}
+		b.entries = append(b.entries, patchEntry{field: cf, val: val})
+	}
+}
+
+// declarado informa se o caminho de um nível já é coberto por um extract.
+func (b *PatchBuffer) declarado(pai *schema.CompiledField, chave []byte) bool {
+	for _, d := range pai.Derivadas {
+		if d.Path == string(chave) {
+			return true
+		}
+	}
+	return false
 }

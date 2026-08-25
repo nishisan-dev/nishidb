@@ -41,10 +41,16 @@ type PatchBuffer struct {
 
 	// Buffers da segunda passada (extração de campos aninhados). Reusados
 	// entre eventos como todo o resto: a passada não pode alocar por evento.
-	pais       []paiVisto
-	paisFeitos []types.FieldID
-	aninhados  []*jsonp.Parser
-	folha      []byte
+	pais        []paiVisto
+	paisFeitos  []types.FieldID
+	aninhados   []*jsonp.Parser
+	folha       []byte
+	descobridor *jsonp.Parser
+	nomeBuf     []byte
+	// compilado é o schema do Parse corrente. A descoberta precisa dele para
+	// registrar coluna nova, e passá-lo por parâmetro em toda a cadeia da
+	// segunda passada só o faria viajar de graça.
+	compilado *schema.Compiled
 }
 
 // Parse processa um evento completo em um único passo: tokeniza, resolve
@@ -74,6 +80,7 @@ func (b *PatchBuffer) Parse(event []byte, c *schema.Compiled, agora time.Time) e
 	b.seq = 0
 	b.hasSeq = false
 	b.pais = b.pais[:0]
+	b.compilado = c
 
 	b.parser.Reset(event)
 	for {
@@ -168,7 +175,10 @@ func (b *PatchBuffer) Parse(event []byte, c *schema.Compiled, agora time.Time) e
 			b.seq = val.I64
 			b.hasSeq = true
 		}
-		if len(cf.Derivadas) > 0 {
+		// O pai entra na segunda passada se tem extração DECLARADA ou se
+		// descobre. Testar só as declaradas fazia a descoberta pura — sem
+		// nenhum `extract` no YAML, que é o caso do piloto — nunca rodar.
+		if len(cf.Derivadas) > 0 || cf.DescobreAninhados {
 			// Guarda a ocorrência para a segunda passada. Para objeto, o Raw é
 			// janela sobre o EVENTO (skipComposite devolve p.data[start:pos]),
 			// que é estável durante todo o Parse — ao contrário do arena, que
