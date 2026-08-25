@@ -18,8 +18,20 @@ note right of par
   o CLI mostra linha, coluna e o trecho.
 end note
 
+alt FROM _meta.<tabela>
+  par -> bnd : desvio para a tabela VIRTUAL
+  note right of par
+    O namespace reservado descreve o dataset
+    da REQUISIÇÃO. O desvio mora no motor —
+    servidor e CLI passam os dois por aqui.
+    Store virtual, MESMO binder/planner/executor:
+    é o que dá WHERE, LIMIT e projeção de graça.
+  end note
+end
+
 par -> bnd : SelectStmt + params
 bnd -> bnd : resolve nome/alias contra o schema
+bnd -> bnd : expande `pai.*` nas colunas derivadas\n(teto: maxNestedCols, RECUSA sem truncar)
 bnd -> bnd : coage literais E parâmetros\npara a representação da COLUNA
 bnd -> bnd : numera os slots (projeção ∪ WHERE)
 bnd --> pln : BoundQuery

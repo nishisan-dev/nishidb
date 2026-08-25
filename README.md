@@ -38,6 +38,17 @@ CA do piloto, usuários reais, a porta exposta com firewall restrito) é a
 **Fase C** do ciclo, ainda não rodada; [`docs/aceite-m5.md`](docs/aceite-m5.md)
 registra o que falta.
 
+**Campos aninhados consultáveis.** Chaves de dentro de um campo `json` podem
+ser declaradas como colunas de verdade (`extract`), com tipo e índice próprios
+e sem tocar no documento original — é o que torna `WHERE persistent.probeIpNode
+= ...` possível, já que coluna `json` não é comparável. Elas ficam fora do
+`SELECT *` e são pedidas por nome, por `persistent.*` ou pelo caminho. O
+namespace `_meta` responde por SQL o que o dataset tem. No caminho, o teto de
+65.535 campos do dicionário deixou de **derrubar o writer para sempre**: ele
+tem `maxCols`, política de estouro e contador. O que ficou de fora é o
+**backfill** — declarar índice ou extração sobre um dataset que já tem linhas
+continua recusado na abertura (débito 22).
+
 Próximos, na ordem do roadmap: a **Fase 7** (driver JDBC, §70-73), que agora
 pode seguir — publicá-la antes da auth multiplicaria os pontos de acesso não
 autenticado em vez de fechar um, e essa condição já não vale mais. Depois vem
@@ -169,6 +180,64 @@ schema:
 Um campo **não declarado** aqui continua sendo aceito (`unknownFields:
 include`) e vira coluna `auto`, mas só é consultável pelo **nome original** —
 o alias existe apenas para campo declarado.
+
+#### Chaves de dentro de um campo `json`
+
+Um campo `json` guarda o documento inteiro como **um** valor. Isso preserva o
+dado, mas nada lá dentro é consultável: coluna `json` não é comparável, e o
+binder recusa `WHERE`. `extract` promove uma chave interna a coluna de verdade,
+com tipo e índice próprios:
+
+```yaml
+    persistent:
+      type: json
+      extract:
+        - path: probeIpNode
+          as: probe_ip
+          type: string
+          index: bitmap
+        - path: alarme.id       # caminho de mais de um nível
+          as: alarme_id
+          type: string
+        - path: frontAlarmId    # sem `as`, o nome é o próprio path
+          type: string
+```
+
+Regras que valem a pena saber antes de declarar:
+
+- **Extrair não é mover.** O documento original continua inteiro na coluna
+  `persistent`, e quem já o lia continua lendo.
+- **A coluna derivada fica fora do `SELECT *`.** Ela é projetável pelo nome,
+  por `persistent.*` ou pelo caminho (`persistent.probeIpNode`), e aparece no
+  `/v1/metadata` — que é onde ela é descoberta. Ficar fora do curinga é o que
+  impede um documento de 500 chaves multiplicar a largura de toda linha.
+- **`extract` é decisão de CRIAÇÃO do dataset.** A extração roda na ingestão,
+  então acrescentá-la a um dataset que já tem linhas é recusado na subida: as
+  linhas antigas ficariam sem a coluna e o filtro sobre ela as omitiria em
+  silêncio.
+- **Índice:** `bitmap` aceita `string`, `int64` e `boolean`. `ipv4` só aceita
+  `hash`, que ainda **não tem motor** — declarar hash hoje é metadado sem
+  efeito. Uma chave que precise de índice agora deve ser declarada `string`.
+- **O que não vira coluna:** caminho ausente, valor que é lista, ou valor de
+  tipo incompatível com o declarado. Nos três a coluna fica **nula** e o evento
+  entra normalmente — uma chave interna nunca derruba o evento.
+
+#### Teto de campos
+
+O dicionário de campos de um dataset é append-only e tem um teto físico de
+65.535. Sobre uma grandeza que cresce com os eventos, alcançá-lo é questão de
+tempo, e o que acontece ali é configurável:
+
+```yaml
+schema:
+  maxCols: 10000
+  onMaxCols: ignore   # ignore (default) | stop
+```
+
+Com `ignore`, a chave excedente não vira coluna, o evento é gravado com todas
+as outras, e a perda é contável — `nishidb_dataset_fields_dropped_total` e o
+bloco `schema` do `/v1/stats`. Com `stop`, a ingestão para de forma observável.
+O teto efetivo é publicado no `/v1/metadata`.
 
 O `index: bitmap` dos campos é **definitivo**: acrescentar um bitmap passa a ser
 recusado assim que o manifest registra a primeira row, e **remover** um bitmap
@@ -493,6 +562,31 @@ SELECT <colunas | *> FROM <dataset>
 Comparadores `=`, `!=`, `>`, `>=`, `<`, `<=`; `AND`, `OR`, parênteses;
 `IS NULL` / `IS NOT NULL`; alias e campos entre aspas duplas (obrigatórias para
 nomes com hífen, como `"Acct-Status-Type"`).
+
+Colunas extraídas de um campo `json` (ver `extract` acima) são projetáveis pelo
+nome, por `<campo>.*` — que expande as derivadas daquele documento — ou pelo
+caminho:
+
+```sql
+SELECT id, persistent.* FROM eventos
+SELECT persistent.probeIpNode FROM eventos WHERE probe_ip = '10.0.0.1'
+```
+
+`schema.maxNestedCols` limita quantas colunas derivadas uma consulta projeta;
+ao estourar, o servidor **recusa nomeando o limite** em vez de truncar.
+
+O namespace `_meta` responde o que o dataset tem, por SQL, sem precisar de
+suporte em cliente nenhum:
+
+```sql
+SELECT name, type, auto, index, indexed, parent FROM _meta.fields
+SELECT name FROM _meta.fields WHERE parent = 'persistent'
+```
+
+A resposta é **estado corrente, não declaração**: campo autodescoberto fixa o
+tipo na primeira observação, então duas execuções em momentos diferentes podem
+devolver conjuntos diferentes. Nome de dataset não pode começar com `_` — o
+prefixo é reservado a esses espaços de nome.
 
 Parâmetros posicionais `?` são fornecidos pelo `parameters` do §68, no
 `POST /v1/query`. Os tipos de wire são quatro — `string`, `int64`, `double` e
