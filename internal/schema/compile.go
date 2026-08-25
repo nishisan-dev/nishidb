@@ -243,6 +243,40 @@ type Compiled struct {
 	// Escrito na fiação, antes de a ingestão começar, e lido pelo writer.
 	aoDescartar  func(campo string)
 	avisouDeTeto atomic.Bool
+
+	// valoresIncompativeis conta os valores de coluna ANINHADA que não
+	// couberam no tipo fixado. É um contador SEPARADO do de descarte por teto
+	// de propósito: as causas são diferentes e os remédios também — o teto se
+	// resolve subindo o número ou aceitando a perda, e a incompatibilidade de
+	// tipo é a origem tendo mudado de forma.
+	//
+	// O evento entra de qualquer jeito; o que fica incompleto é a COLUNA
+	// naquela linha, e o documento preserva o valor. Sem este contador isso
+	// era invisível: o `descartados` do painel conta EVENTOS, e o de campos
+	// conta o que o teto recusou.
+	valoresIncompativeis atomic.Uint64
+	aoIncompativel       func(coluna, fixado, veio string)
+	avisouIncompativel   atomic.Bool
+}
+
+// ValoresIncompativeis é quantos valores de coluna aninhada não couberam no
+// tipo fixado desde a abertura.
+func (c *Compiled) ValoresIncompativeis() uint64 { return c.valoresIncompativeis.Load() }
+
+// AoValorIncompativel registra o aviso da primeira divergência de tipo numa
+// coluna aninhada. Chamado na fiação, antes de a ingestão começar.
+func (c *Compiled) AoValorIncompativel(fn func(coluna, fixado, veio string)) { c.aoIncompativel = fn }
+
+// ContaValorIncompativel registra que um valor não coube no tipo da coluna.
+//
+// O aviso sai UMA vez, com o tipo fixado E o que chegou: só com os dois o
+// operador sabe o que mudou na origem. O contador conta todas.
+func (c *Compiled) ContaValorIncompativel(coluna *CompiledField, veio types.FieldType) {
+	c.valoresIncompativeis.Add(1)
+	if c.aoIncompativel == nil || !c.avisouIncompativel.CompareAndSwap(false, true) {
+		return
+	}
+	c.aoIncompativel(coluna.Name, coluna.EffectiveType().String(), veio.String())
 }
 
 // AoDescartarCampo registra o aviso de que o teto recusou um campo. Chamado na

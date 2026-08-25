@@ -141,10 +141,11 @@ func (s *Servidor) handleStats(w http.ResponseWriter, r *http.Request) {
 			// de qualquer condicional de consumidor: o dicionário cresce por
 			// toda rota de escrita, não só pela do Kafka.
 			Schema: protocolo.SchemaStats{
-				Fields:        d.sch.CamposConhecidos(),
-				FieldsDropped: d.sch.CamposDescartados(),
-				MaxCols:       d.sch.MaxCols,
-				OnMaxCols:     d.sch.OnMaxCols,
+				Fields:             d.sch.CamposConhecidos(),
+				FieldsDropped:      d.sch.CamposDescartados(),
+				NestedTypeMismatch: d.sch.ValoresIncompativeis(),
+				MaxCols:            d.sch.MaxCols,
+				OnMaxCols:          d.sch.OnMaxCols,
 			},
 			Storage: protocolo.StorageStats{
 				Rows:              st.RowCount,

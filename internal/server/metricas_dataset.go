@@ -75,7 +75,7 @@ func lixoDeDisco(st storage.Stats) uint64 {
 // — zero é uma resposta, ausência não é.
 func registraMetricasDeDataset(reg *metrics.Registry, s *Servidor) {
 	reg.Coletor(metrics.ColetorFunc(func() []metrics.Amostra {
-		out := make([]metrics.Amostra, 0, len(s.datasets)*9)
+		out := make([]metrics.Amostra, 0, len(s.datasets)*10)
 		for _, d := range s.datasets {
 			st := d.st.Stats()
 			rotulo := []metrics.Label{{Nome: metrics.LabelDataset, Valor: d.nome}}
@@ -103,6 +103,14 @@ func registraMetricasDeDataset(reg *metrics.Registry, s *Servidor) {
 					Tipo:    metrics.TipoContador,
 					Labels:  rotulo,
 					Valor:   float64(d.sch.CamposDescartados()),
+				},
+				metrics.Amostra{
+					Familia: metrics.MetNestedTypeMismatch,
+					Nome:    metrics.MetNestedTypeMismatch,
+					Ajuda:   "valores de coluna aninhada que não couberam no tipo fixado; o evento entrou e o documento preserva o valor, mas a coluna ficou nula naquela linha",
+					Tipo:    metrics.TipoContador,
+					Labels:  rotulo,
+					Valor:   float64(d.sch.ValoresIncompativeis()),
 				},
 				metrics.Amostra{
 					Familia: metrics.MetMaterializedRows,

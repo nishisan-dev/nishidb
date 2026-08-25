@@ -59,10 +59,15 @@ func (b *PatchBuffer) extraiDerivadas() {
 			}
 			val, arena, err := Convert(f, d.EffectiveType(), d.Layout, b.arena)
 			if err != nil || val.Type == types.TypeNull {
-				// Tipo incompatível com o declarado: a coluna fica ausente.
+				// Tipo incompatível com o declarado: a coluna fica ausente, o
+				// evento entra, e a divergência é CONTADA — a coluna passa a
+				// devolver menos linhas do que existem, e sem contador
+				// ninguém descobre.
+				//
 				// O arena pode ter crescido mesmo no erro, então ele é
 				// reatribuído aqui como em qualquer outro caminho.
 				b.arena = arena
+				b.compilado.ContaValorIncompativel(d, InferType(f))
 				continue
 			}
 			b.arena = arena
@@ -190,7 +195,12 @@ func (b *PatchBuffer) descobreAninhados(p paiVisto) {
 		if err != nil || val.Type == types.TypeNull {
 			// Tipo divergente do fixado: a coluna fica ausente NESTA linha, e
 			// o documento preserva o valor. Derrubar o evento por causa de uma
-			// chave interna é o que esta passada existe para não fazer.
+			// chave interna é o que esta passada existe para não fazer — mas
+			// deixar a divergência INVISÍVEL não faz parte do acordo: aqui o
+			// tipo foi decidido por qual evento chegou primeiro, não por quem
+			// escreveu o schema, então divergir é esperado e precisa ser
+			// contável.
+			b.compilado.ContaValorIncompativel(cf, InferType(f))
 			continue
 		}
 		b.entries = append(b.entries, patchEntry{field: cf, val: val})

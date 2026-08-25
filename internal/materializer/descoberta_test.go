@@ -147,3 +147,56 @@ func TestDescobertaSemNenhumExtractDeclarado(t *testing.T) {
 	h.wantString(st, "doc.tlCause", "LOS")
 	h.wantInt(st, "doc.perceivedSeverity", 3)
 }
+
+// Valor que não cabe no tipo FIXADO precisa ser contado.
+//
+// O evento entra — isso é deliberado e certo, uma chave interna não derruba o
+// resto. Mas a coluna fica nula naquela linha, e um filtro sobre ela passa a
+// devolver menos linhas do que existem. Sem contador ninguém descobre: o
+// `descartados` do painel conta EVENTOS, e o de campos conta o que o TETO
+// recusou. A falha de conversão não tocava nenhum dos dois.
+//
+// Isso morde mais na descoberta do que na extração declarada, porque ali o
+// tipo é decidido por qual evento chegou primeiro — não por quem escreveu o
+// schema.
+func TestValorIncompativelEContado(t *testing.T) {
+	h := newHarness(t, descobreYAML)
+	h.apply(`{"id":"A","doc":{"podName":"texto"}}`)
+	if n := h.c.ValoresIncompativeis(); n != 0 {
+		t.Fatalf("contador nasceu em %d", n)
+	}
+	h.apply(`{"id":"B","doc":{"podName":true}}`)
+	h.apply(`{"id":"C","doc":{"podName":42}}`)
+	if n := h.c.ValoresIncompativeis(); n != 2 {
+		t.Errorf("ValoresIncompativeis = %d, quer 2", n)
+	}
+}
+
+// O aviso sai uma vez, com o nome da coluna e os DOIS tipos: o fixado e o que
+// chegou. Sem os dois o operador sabe que algo divergiu e não sabe o quê.
+func TestValorIncompativelAvisaUmaVezComOsDoisTipos(t *testing.T) {
+	h := newHarness(t, descobreYAML)
+	var avisos []string
+	h.c.AoValorIncompativel(func(coluna, fixado, veio string) {
+		avisos = append(avisos, coluna+": fixado="+fixado+" veio="+veio)
+	})
+	h.apply(`{"id":"A","doc":{"podName":"texto"}}`)
+	h.apply(`{"id":"B","doc":{"podName":true}}`)
+	h.apply(`{"id":"C","doc":{"podName":42}}`)
+	if len(avisos) != 1 {
+		t.Fatalf("avisos = %v, quer exatamente um", avisos)
+	}
+	if avisos[0] != "doc.podName: fixado=string veio=boolean" {
+		t.Errorf("aviso = %q", avisos[0])
+	}
+}
+
+// Também na extração DECLARADA: lá o tipo foi escolhido por quem escreveu o
+// schema, mas a origem pode mudar de forma do mesmo jeito.
+func TestValorIncompativelEContadoNaExtracaoDeclarada(t *testing.T) {
+	h := newHarness(t, extractYAML)
+	h.apply(`{"id":"A","doc":{"tally":"nao-e-numero"}}`)
+	if n := h.c.ValoresIncompativeis(); n != 1 {
+		t.Errorf("ValoresIncompativeis = %d, quer 1", n)
+	}
+}
