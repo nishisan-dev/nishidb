@@ -107,7 +107,7 @@ func registraMetricasDeDataset(reg *metrics.Registry, s *Servidor) {
 				metrics.Amostra{
 					Familia: metrics.MetNestedTypeMismatch,
 					Nome:    metrics.MetNestedTypeMismatch,
-					Ajuda:   "valores de coluna aninhada que não couberam no tipo fixado; o evento entrou e o documento preserva o valor, mas a coluna ficou nula naquela linha",
+					Ajuda:   "valores de coluna aninhada que não couberam no tipo fixado; o evento entrou e o documento guarda o valor, e a coluna foi REMOVIDA naquela linha — sem a remoção ela ficaria com o valor do evento anterior, no modo merge",
 					Tipo:    metrics.TipoContador,
 					Labels:  rotulo,
 					Valor:   float64(d.sch.ValoresIncompativeis()),

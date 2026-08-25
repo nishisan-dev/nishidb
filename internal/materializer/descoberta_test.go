@@ -200,3 +200,55 @@ func TestValorIncompativelEContadoNaExtracaoDeclarada(t *testing.T) {
 		t.Errorf("ValoresIncompativeis = %d, quer 1", n)
 	}
 }
+
+// Valor de tipo divergente sobre entidade JÁ EXISTENTE não pode congelar o
+// valor anterior na coluna.
+//
+// No modo merge — o do piloto — campo ausente do patch PRESERVA o valor
+// anterior (merge.go). A segunda passada fazia `continue` seco, sem emitir
+// entry nenhuma, então a coluna ficava com o valor do evento passado enquanto
+// o documento da MESMA linha já trazia o novo. Coluna e documento se
+// contradiziam dentro do mesmo record, e a query devolvia valor velho com cara
+// de corrente — não "menos linhas do que existem", mas LINHA ERRADA.
+//
+// O teste anterior não pegou porque usava chaves DIFERENTES nos dois eventos,
+// e assim nunca passava pelo merge.
+func TestValorDivergenteNaoCongelaOAnterior(t *testing.T) {
+	h := newHarness(t, descobreYAML)
+	h.apply(`{"id":"MESMA","doc":{"podName":"valor-antigo"}}`)
+	h.wantString(h.state("MESMA"), "doc.podName", "valor-antigo")
+
+	h.apply(`{"id":"MESMA","doc":{"podName":true}}`)
+	st := h.state("MESMA")
+	h.wantAbsent(st, "doc.podName")
+	// O documento continua sendo a verdade, e traz o valor novo.
+	if got := string(st["doc"].Bytes); got != `{"podName":true}` {
+		t.Errorf("doc = %s, quer o documento do evento corrente", got)
+	}
+}
+
+// O mesmo para a extração DECLARADA.
+func TestValorDivergenteNaoCongelaOAnteriorNaExtracaoDeclarada(t *testing.T) {
+	h := newHarness(t, extractYAML)
+	h.apply(`{"id":"MESMA","doc":{"tally":7}}`)
+	h.wantInt(h.state("MESMA"), "tally", 7)
+
+	h.apply(`{"id":"MESMA","doc":{"tally":"nao-e-numero"}}`)
+	h.wantAbsent(h.state("MESMA"), "tally")
+}
+
+// A chave que SOME do documento é outro caso, e continua seguindo o merge: a
+// coluna preserva o último valor visto. Está travado aqui porque é semântica
+// declarada, não descuido — corrigi-la exigiria emitir uma remoção por coluna
+// conhecida e ausente, o que num documento de 11 chaves sobre 1.650 colunas
+// seriam 1.639 entries por evento.
+func TestChaveQueSomeDoDocumentoSegueOMerge(t *testing.T) {
+	h := newHarness(t, descobreYAML)
+	h.apply(`{"id":"MESMA","doc":{"podName":"visto"}}`)
+	h.apply(`{"id":"MESMA","doc":{"outra":"coisa"}}`)
+	st := h.state("MESMA")
+	h.wantString(st, "doc.podName", "visto")
+	if got := string(st["doc"].Bytes); got != `{"outra":"coisa"}` {
+		t.Errorf("doc = %s", got)
+	}
+}

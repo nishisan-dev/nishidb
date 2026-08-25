@@ -12,6 +12,15 @@ O dataset `events` do piloto declara `persistent` como `json` com
 `unknownFields: include`, então toda chave de dentro do documento vira coluna
 automaticamente. O tipo de cada uma é fixado na **primeira observação**.
 
+> **Errata (25/08, mesma sessão):** este documento nasceu afirmando que o valor
+> divergente "fica nulo na coluna e o documento preserva". **Era falso no modo
+> merge**, que é o do piloto: a segunda passada saía com `continue` seco, e
+> `mergeRecords` preserva campo ausente do patch — a coluna ficava com o valor
+> do evento ANTERIOR enquanto o documento da mesma linha trazia o novo. Coluna
+> e documento se contradiziam dentro do mesmo record, e a query devolvia valor
+> velho com cara de corrente. Corrigido: a segunda passada passou a emitir
+> remoção explícita. A afirmação abaixo já vale.
+
 Isso é o desenho certo — o dataset não governa o que recebe, e a integração
 pode passar a produzir um campo novo do dia para a noite. Mas tem um custo
 medido: quando o primeiro evento a trazer uma chave manda um tipo que não é o
@@ -215,6 +224,22 @@ própria resposta — nunca contar em silêncio por amostragem sem dizer.
 As queries de `_meta.fields` leem esses contadores enquanto o writer os
 incrementa. Atômicos resolvem, mas **é exatamente a família dos débitos 60, 69
 e 70**, que já mordeu o projeto três vezes. Nada de `int64` simples.
+
+### A chave que SOME do documento continua seguindo o merge
+
+Caso distinto do acima, e deliberadamente NÃO corrigido: quando uma chave
+desaparece do documento de um evento, a coluna derivada preserva o último valor
+visto, porque é o que o modo merge manda.
+
+A consequência é a mesma família: a coluna pode responder por uma chave que o
+documento da linha corrente não tem. Corrigir exigiria emitir uma remoção por
+coluna conhecida e ausente — num documento de 11 chaves sobre ~1.650 colunas,
+seriam ~1.639 entries por evento, o que é inviável no caminho quente.
+
+**A leitura correta de uma coluna derivada é "o último valor visto para esta
+chave", e não "o valor no documento desta linha".** Isso precisa estar dito na
+documentação da tabela e do `extract`. Travado por
+`TestChaveQueSomeDoDocumentoSegueOMerge`.
 
 ### Reset no restart
 

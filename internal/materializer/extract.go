@@ -59,10 +59,15 @@ func (b *PatchBuffer) extraiDerivadas() {
 			}
 			val, arena, err := Convert(f, d.EffectiveType(), d.Layout, b.arena)
 			if err != nil || val.Type == types.TypeNull {
-				// Tipo incompatível com o declarado: a coluna fica ausente, o
-				// evento entra, e a divergência é CONTADA — a coluna passa a
-				// devolver menos linhas do que existem, e sem contador
-				// ninguém descobre.
+				// REMOÇÃO explícita, e não `continue`: no modo merge, campo
+				// ausente do patch PRESERVA o valor anterior, então sair calado
+				// deixaria a coluna com o valor de um evento passado enquanto o
+				// documento da MESMA linha traz o novo. A query devolveria valor
+				// velho com cara de corrente — linha errada, não linha a menos.
+				b.entries = append(b.entries, patchEntry{field: d, isNull: true})
+				// Tipo incompatível com o declarado: a coluna é removida, o
+				// evento entra, e a divergência é CONTADA — sem contador
+				// ninguém descobre que a coluna deixou de responder.
 				//
 				// O arena pode ter crescido mesmo no erro, então ele é
 				// reatribuído aqui como em qualquer outro caminho.
@@ -193,13 +198,19 @@ func (b *PatchBuffer) descobreAninhados(p paiVisto) {
 		val, arena, err := Convert(f, alvo, cf.Layout, b.arena)
 		b.arena = arena
 		if err != nil || val.Type == types.TypeNull {
-			// Tipo divergente do fixado: a coluna fica ausente NESTA linha, e
-			// o documento preserva o valor. Derrubar o evento por causa de uma
-			// chave interna é o que esta passada existe para não fazer — mas
-			// deixar a divergência INVISÍVEL não faz parte do acordo: aqui o
-			// tipo foi decidido por qual evento chegou primeiro, não por quem
-			// escreveu o schema, então divergir é esperado e precisa ser
-			// contável.
+			// A chave ESTÁ no documento, com um valor que a coluna não
+			// representa. A coluna é removida — com entry de remoção, não com
+			// `continue` —, porque no modo merge o silêncio preserva o valor
+			// do evento anterior: a coluna mostraria um valor velho enquanto o
+			// documento da mesma linha traz o novo, e a query devolveria linha
+			// ERRADA em vez de linha a menos.
+			//
+			// Derrubar o evento por causa de uma chave interna é o que esta
+			// passada existe para não fazer; deixar a divergência invisível
+			// também não faz parte do acordo. Aqui o tipo foi decidido por qual
+			// evento chegou primeiro, não por quem escreveu o schema, então
+			// divergir é esperado e precisa ser contável.
+			b.entries = append(b.entries, patchEntry{field: cf, isNull: true})
 			b.compilado.ContaValorIncompativel(cf, InferType(f))
 			continue
 		}
