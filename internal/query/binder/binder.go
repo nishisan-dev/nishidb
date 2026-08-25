@@ -323,6 +323,22 @@ func (b *binder) qualificada(cols []BoundColumn, ref parser.ColumnRef, derivadas
 		return nil, 0, errAt(ref.Pos, "campo %q não declara extract; não há coluna aninhada a projetar", ref.Qualifier)
 	}
 
+	// Quantas colunas aninhadas este item acrescenta. O teto é conferido para
+	// os DOIS caminhos: contá-lo só na expansão deixava `pai.*, pai.caminho`
+	// passar acima do limite, porque cada metade cabia sozinha.
+	acrescenta := 1
+	if ref.Star {
+		acrescenta = len(filhas)
+	}
+	// Ao estourar, RECUSA nomeando o limite — nunca trunca. Truncar entregaria
+	// colunas faltando com cara de resultado completo, e o erro aqui é
+	// acionável: pedem-se as colunas pelo nome.
+	if n := derivadas + acrescenta; n > b.sc.MaxNestedCols {
+		return nil, 0, errAt(ref.Pos,
+			"a projeção pede %d colunas aninhadas, acima de schema.maxNestedCols (%d); "+
+				"peça as colunas pelo nome ou ajuste o teto do dataset", n, b.sc.MaxNestedCols)
+	}
+
 	if !ref.Star {
 		f, ok := b.sc.FieldByPath(pai.Name, ref.Name)
 		if !ok {
@@ -336,14 +352,6 @@ func (b *binder) qualificada(cols []BoundColumn, ref parser.ColumnRef, derivadas
 		return append(cols, BoundColumn{Field: f, Name: nome}), derivadas + 1, nil
 	}
 
-	// Ao estourar o teto, RECUSA nomeando o limite — nunca trunca. Truncar
-	// entregaria colunas faltando com cara de resultado completo, e o erro
-	// aqui é acionável: pedem-se as colunas pelo nome.
-	if n := derivadas + len(filhas); n > b.sc.MaxNestedCols {
-		return nil, 0, errAt(ref.Pos,
-			"a projeção pede %d colunas aninhadas, acima de schema.maxNestedCols (%d); "+
-				"peça as colunas pelo nome ou ajuste o teto do dataset", n, b.sc.MaxNestedCols)
-	}
 	for _, f := range filhas {
 		if repetido(cols, nil, f.Name) {
 			return nil, 0, errAt(ref.Pos, "coluna %q aparece mais de uma vez na projeção", f.Name)

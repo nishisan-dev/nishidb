@@ -135,3 +135,18 @@ func TestTetoDeColunasAninhadasRecusaEmVezDeTruncar(t *testing.T) {
 		}
 	}
 }
+
+// O teto vale para TODA coluna aninhada da projeção, e não só para a
+// expansão: misturar `pai.*` com `pai.caminho` somava sem conferir, e três
+// colunas passavam sob um teto de duas. Foi a verificação com o binário que
+// pegou — a expansão sozinha respeitava o limite, então nenhum teste do
+// caminho feliz acusava.
+func TestTetoContaTambemOCaminhoQualificado(t *testing.T) {
+	_, err := bindComYAML(t, yamlAninhado, "SELECT doc.*, doc.probeIpNode FROM eventos")
+	if err == nil {
+		t.Fatal("três colunas aninhadas passaram sob um teto de duas")
+	}
+	if !strings.Contains(err.Error(), "maxNestedCols") {
+		t.Errorf("erro = %q, quer nomear o teto", err)
+	}
+}
