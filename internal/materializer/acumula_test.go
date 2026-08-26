@@ -94,3 +94,35 @@ func TestAcumulaMantemOTipoDaColuna(t *testing.T) {
 		t.Errorf("tipo = %v, quero int64", got.Type)
 	}
 }
+
+// A soma é invisível no dado: o valor gravado não diz quantas parcelas
+// entraram. Os contadores são o que permite ao operador ver a política
+// trabalhando — e ver a SATURAÇÃO, que é o único desfecho em que o valor para
+// de ser verdade.
+func TestContadoresDeAcumuloContamSomaESaturacao(t *testing.T) {
+	h := newHarness(t, acumulaYAML)
+	h.apply(`{"id":"a","matchedCounter":3}`) // create: não há a que somar
+	h.apply(`{"id":"a","matchedCounter":5}`)
+	h.apply(`{"id":"a","matchedCounter":2}`)
+
+	m := h.m.Metrics()
+	if m.Acumuladas != 2 {
+		t.Errorf("acumuladas = %d, quero 2 (o create não soma)", m.Acumuladas)
+	}
+	if m.Saturadas != 0 {
+		t.Errorf("saturadas = %d, quero 0", m.Saturadas)
+	}
+}
+
+func TestContadorDeSaturacaoContaOTetoAlcancado(t *testing.T) {
+	h := newHarness(t, acumulaYAML)
+	h.apply(`{"id":"a","matchedCounter":9223372036854775807}`) // MaxInt64
+	h.apply(`{"id":"a","matchedCounter":10}`)
+
+	if got := h.state("a")["matchedCounter"]; got.I64 != 9223372036854775807 {
+		t.Errorf("valor = %d, quero saturado no teto", got.I64)
+	}
+	if m := h.m.Metrics(); m.Saturadas != 1 {
+		t.Errorf("saturadas = %d, quero 1", m.Saturadas)
+	}
+}

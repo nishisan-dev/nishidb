@@ -207,11 +207,12 @@ type Metrics struct {
 	// um que casa sempre, e os dois são erros de configuração comuns.
 	porRegra []atomic.Int64
 	semRegra atomic.Int64
-	// congeladas separa a CAPTURA (o valor entrou no patch) da PRESERVAÇÃO (o
-	// merge segurou o anterior). Os dois juntos dizem se a feature está
-	// funcionando: captura sem preservação é coluna que nunca congelou.
-	congeladasCapturadas  atomic.Int64
-	congeladasPreservadas atomic.Int64
+	// congeladasCapturadas conta a CAPTURA (o valor entrou no patch); a
+	// PRESERVAÇÃO (o merge segurou o anterior) e os efeitos da soma vivem em
+	// efeitos, porque quem os enxerga é o merge. Captura sem preservação é
+	// coluna que nunca congelou.
+	congeladasCapturadas atomic.Int64
+	efeitos              efeitosDoMerge
 }
 
 // MetricsSnapshot é a leitura consistente-por-contador dos contadores. Não é
@@ -238,6 +239,11 @@ type MetricsSnapshot struct {
 	// pelo merge.
 	CongeladasCapturadas  int64
 	CongeladasPreservadas int64
+	// Acumuladas conta as somas que o merge fez, e Saturadas as que bateram no
+	// teto do int64 — a partir dali o valor para de crescer e deixa de ser
+	// verdade, então ele precisa ser visível sem ninguém ir procurar.
+	Acumuladas int64
+	Saturadas  int64
 }
 
 // Materializer aplica eventos JSON sobre o estado materializado de um
@@ -328,7 +334,9 @@ func (m *Materializer) Metrics() MetricsSnapshot {
 	}
 	s.SemRegra = m.metrics.semRegra.Load()
 	s.CongeladasCapturadas = m.metrics.congeladasCapturadas.Load()
-	s.CongeladasPreservadas = m.metrics.congeladasPreservadas.Load()
+	s.CongeladasPreservadas = m.metrics.efeitos.congeladas.Load()
+	s.Acumuladas = m.metrics.efeitos.acumuladas.Load()
+	s.Saturadas = m.metrics.efeitos.saturadas.Load()
 	// events é lido por ÚLTIMO, de propósito: o Apply o incrementa na ENTRADA
 	// e o desfecho na SAÍDA, então ler events primeiro deixaria o writer
 	// avançar entre as leituras e produziria um snapshot com
@@ -406,8 +414,7 @@ func (m *Materializer) Apply(event []byte) ApplyResult {
 	// encarnação anterior para a entidade que está reabrindo — um alarme novo
 	// herdaria a severidade do que foi fechado.
 	if presenca == types.PresencaViva && !replace {
-		payload, err = mergeRecords(m.prevRec.Payload, m.patch.entries, m.outBuf[:0],
-			&m.metrics.congeladasPreservadas)
+		payload, err = mergeRecords(m.prevRec.Payload, m.patch.entries, m.outBuf[:0], &m.metrics.efeitos)
 	} else {
 		// Create (não há estado anterior) e replace (§23, o estado anterior é
 		// descartado) chegam ao mesmo lugar: o payload é só o patch.
