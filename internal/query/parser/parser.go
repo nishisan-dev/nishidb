@@ -11,11 +11,22 @@ import (
 // parser mantém UM token de lookahead. Nada de materializar o slice de
 // tokens: a gramática é LL(1) e um passo basta.
 type parser struct {
-	lx     lexer.Lexer // por VALOR: é o que dá 0 alloc ao lexer
-	cur    lexer.Token
-	depth  int // profundidade de parênteses corrente
-	termos int // termos do WHERE já emitidos (teto de recurso, MaxWhereTerms)
-	params int // próximo ParamIdx a atribuir
+	lx  lexer.Lexer // por VALOR: é o que dá 0 alloc ao lexer
+	cur lexer.Token
+	// prox/temProx são UM token de lookahead, e existem por um motivo só:
+	// distinguir `NOT LIKE` de um NOT em posição de comparador. Sem ele, `x NOT
+	// LIKE 'a%'` obrigaria a recusar o NOT antes de saber o que ele abre.
+	//
+	// A gramática continua LL(1) em toda decisão de CLÁUSULA — o comentário do
+	// `.` de nome qualificado, mais abaixo, contrasta justamente com o BY de
+	// GROUP BY, que exigiria olhar adiante para decidir se uma cláusula começa.
+	// Aqui não se decide cláusula: o parser já está no ponto em que só cabia
+	// erro, e o lookahead só escolhe QUAL erro deixar de ser erro.
+	prox    lexer.Token
+	temProx bool
+	depth   int // profundidade de parênteses corrente
+	termos  int // termos do WHERE já emitidos (teto de recurso, MaxWhereTerms)
+	params  int // próximo ParamIdx a atribuir
 }
 
 // Parse converte SQL v1 em AST. É pura e segura para uso concorrente; a AST
@@ -58,12 +69,34 @@ func Parse(sql string) (*SelectStmt, error) {
 }
 
 func (p *parser) advance() error {
+	if p.temProx {
+		p.cur, p.temProx = p.prox, false
+		return nil
+	}
 	tok, err := p.lx.Next()
 	if err != nil {
 		return err // já é *SyntaxError com a posição certa
 	}
 	p.cur = tok
 	return nil
+}
+
+// espia devolve o token seguinte ao corrente sem consumi-lo.
+//
+// Erro do lexer NÃO é propagado aqui: ele fica para o advance seguinte, que é
+// quem já sabe reportá-lo com a posição certa. Espiar não pode ser um segundo
+// sítio de erro de sintaxe, senão a mesma query passa a falhar com mensagens
+// diferentes conforme quem chegou primeiro.
+func (p *parser) espia() (lexer.Token, error) {
+	if p.temProx {
+		return p.prox, nil
+	}
+	tok, err := p.lx.Next()
+	if err != nil {
+		return lexer.Token{}, err
+	}
+	p.prox, p.temProx = tok, true
+	return tok, nil
 }
 
 func (p *parser) errAt(pos int, msg string) error {
@@ -298,7 +331,7 @@ func (p *parser) parsePrimary() (Expr, error) {
 	case lexer.TokenNot:
 		// Mensagem específica: "esperado predicado" mandaria o usuário
 		// procurar a coisa errada.
-		return nil, p.errAt(p.cur.Pos, "NOT só é suportado em IS NOT NULL")
+		return nil, p.errAt(p.cur.Pos, "NOT só é suportado em IS NOT NULL e NOT LIKE")
 	default:
 		return p.parsePredicate()
 	}
@@ -369,9 +402,46 @@ func (p *parser) parsePredicate() (Expr, error) {
 		return &NullCheck{Qualifier: qualificador, Column: col, ColumnPos: pos, Not: not}, nil
 	}
 
+	// LIKE e NOT LIKE, reconhecidos POR POSIÇÃO e não como keyword do lexer.
+	//
+	// A palavra `like` continua sendo TokenIdent em toda posição em que a
+	// gramática aceita um identificador — `SELECT like FROM t WHERE like LIKE
+	// 'a%'` é query válida —, e é isso que preserva o contrato publicado de que
+	// as palavras de cláusula não viraram keywords. Aqui o parser está numa
+	// posição em que só cabia ERRO ("esperado comparador"), então reconhecer a
+	// palavra e EXIGIR o resto é consumo, não lookahead: a gramática segue
+	// LL(1).
+	if not, ok := p.abreLike(); ok {
+		// Um advance consome o LIKE; o NOT LIKE consome DOIS tokens, e o
+		// primeiro é o NOT. Avançar uma vez só deixava o parser no LIKE e o
+		// parseOperand seguinte o lia como coluna — recusando `x NOT LIKE 'a%'`
+		// com "comparação entre colunas não é suportada".
+		if not {
+			if err := p.advance(); err != nil {
+				return nil, err
+			}
+		}
+		if err := p.advance(); err != nil {
+			return nil, err
+		}
+		padrao, err := p.parseOperand()
+		if err != nil {
+			return nil, err
+		}
+		if padrao.Kind == OperandString && len(padrao.S) > MaxLikePatternBytes {
+			return nil, p.errAt(padrao.Pos, "padrão de LIKE acima de "+itoa(MaxLikePatternBytes)+" bytes")
+		}
+		if padrao.Kind != OperandString && padrao.Kind != OperandParam {
+			return nil, p.errAt(padrao.Pos, "o padrão de LIKE é texto ou parâmetro")
+		}
+		return &LikeExpr{
+			Qualifier: qualificador,
+			Column:    col, ColumnPos: pos, Not: not, Pattern: padrao}, nil
+	}
+
 	op, ok := cmpOp(p.cur.Type)
 	if !ok {
-		return nil, p.errAt(p.cur.Pos, "esperado comparador, IS NULL ou IS NOT NULL")
+		return nil, p.errAt(p.cur.Pos, "esperado comparador, LIKE, IS NULL ou IS NOT NULL")
 	}
 	if err := p.advance(); err != nil {
 		return nil, err
@@ -383,6 +453,41 @@ func (p *parser) parsePredicate() (Expr, error) {
 	return &Comparison{
 		Qualifier: qualificador,
 		Column:    col, ColumnPos: pos, Op: op, Operand: operand}, nil
+}
+
+// abreLike reconhece `LIKE` ou `NOT LIKE` na posição do comparador, e deixa o
+// parser posicionado NO token do LIKE (o chamador avança).
+//
+// Devolve (not, ok). Não consome nada quando devolve false, para que o caminho
+// do comparador siga intacto — é a mesma disciplina do clausulaNaoSuportada.
+func (p *parser) abreLike() (bool, bool) {
+	if ehPalavra(p.cur, "like") {
+		return false, true
+	}
+	if p.cur.Type != lexer.TokenNot {
+		return false, false
+	}
+	// `NOT` aqui só pode abrir NOT LIKE: não há NOT genérico na v1, e o
+	// parsePrimary já o recusa em posição de expressão. Um lookahead é
+	// necessário, e é o ÚNICO do parser — sem ele, `x NOT LIKE 'a%'` teria de
+	// escolher entre recusar o NOT antes de saber o que ele abre ou aceitar
+	// `x NOT 'a%'` como se fosse alguma coisa.
+	prox, err := p.espia()
+	if err != nil || !ehPalavra(prox, "like") {
+		return false, false
+	}
+	return true, true
+}
+
+// ehPalavra compara um TokenIdent BARE com uma palavra de cláusula.
+//
+// Duas condições, e as duas importam — são as mesmas do clausulaNaoSuportada:
+// só TokenIdent e nunca TokenQuotedIdent, porque quem escreveu `"like"` quis
+// uma coluna com esse nome; e ASCIIEqualFold em vez de strings.EqualFold,
+// porque o folding Unicode do segundo dobra o Kelvin sign para 'k' e duas
+// regras de folding no mesmo front-end divergem no primeiro caso exótico.
+func ehPalavra(tok lexer.Token, palavra string) bool {
+	return tok.Type == lexer.TokenIdent && lexer.ASCIIEqualFold(tok.Text, palavra)
 }
 
 // itoa evita arrastar o fmt para o pacote por causa de uma mensagem de erro.

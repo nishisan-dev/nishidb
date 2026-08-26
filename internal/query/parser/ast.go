@@ -82,6 +82,25 @@ type NullCheck struct {
 	Not       bool
 }
 
+// LikeExpr é `coluna [NOT] LIKE <padrão>`.
+//
+// É um NÓ e não um CmpOp novo, e a escolha não é estética. As três funções de
+// ordem do executor (ordemInt, ordemFloat, ordemBytes) terminam em
+// `default: // parser.CmpLte`: um CmpLike que chegasse ali seria avaliado como
+// `<=`, silenciosamente, com a suíte inteira verde. Já os `default` de `folha`
+// (binder) e `emite` (executor) DEVOLVEM ERRO para nó desconhecido. Nó novo cai
+// no caminho barulhento; operador novo, no silencioso.
+//
+// O padrão viaja como Operand porque `LIKE ?` precisa valer: o binder recebe os
+// parâmetros e compila o padrão no bind, nunca por linha.
+type LikeExpr struct {
+	Qualifier string
+	Column    string
+	ColumnPos int
+	Not       bool
+	Pattern   Operand
+}
+
 // Operand é o literal já DECODIFICADO (nunca o texto cru): o binder coere a
 // partir daqui, sem reparsear.
 type Operand struct {
@@ -178,3 +197,4 @@ func (k OperandKind) String() string {
 func (*LogicalExpr) isExpr() {}
 func (*Comparison) isExpr()  {}
 func (*NullCheck) isExpr()   {}
+func (*LikeExpr) isExpr()    {}

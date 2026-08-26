@@ -31,3 +31,12 @@ const MaxExprDepth = 64
 // filtro montado por UI) e restritivo para o que só um cliente descuidado ou
 // malicioso produz. Nenhuma query escrita à mão chega perto.
 const MaxWhereTerms = 10_000
+
+// MaxLikePatternBytes limita o padrão de LIKE.
+//
+// É teto de RECURSO, no mesmo espírito de MaxWhereTerms e MaxExprDepth: o
+// matcher de glob tem um ponto de backtrack, e um padrão patológico
+// ('%a%a%a%...') sobre um valor longo é trabalho quadrático por linha. O
+// timeout de query o cerca por cima; este teto o corta na entrada, onde o custo
+// é zero e a mensagem é acionável.
+const MaxLikePatternBytes = 1024
