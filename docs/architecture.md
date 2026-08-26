@@ -973,6 +973,24 @@ mas a reentrega do Kafka depois de um crash soma de novo a janela entre o
 barra o reprocessamento; sem ela, o valor fica aproximado — acima do real, nunca
 abaixo.
 
+**Como se enxerga isso em produção.** O dado gravado não diz qual política o
+produziu: um valor congelado é indistinguível de um que nunca mudou, e um total
+somado é indistinguível de um que a origem mandou pronto. Por isso cada
+política publica contagem própria, no bloco `materialization` do `/v1/stats` e
+nas séries correspondentes do `/metrics`:
+
+| Série | Responde |
+|---|---|
+| `nishidb_frozen_captured_total` / `_preserved_total` | a congelada está capturando? está segurando? |
+| `nishidb_merge_sum_total` | quantas somas o merge fez |
+| `nishidb_merge_sum_saturated_total` | o teto foi alcançado — a partir daí a coluna não cresce mais |
+| `nishidb_ttl_rule_matched_total{rule}` | qual regra está decidindo o quê, pelo índice no YAML |
+| `nishidb_ttl_unmatched_total` | escritas sem regra nenhuma (só em dataset sem regra de fundo) |
+
+Os dois lados saem da MESMA leitura do snapshot do materializer: dois
+contadores para o mesmo fato divergem no dia em que um caminho de erro esquece
+de somar, e em produção alguém lê o errado.
+
 O valor anterior é redecodificado do `RawField` no ramo aditivo, em vez de vir
 do `Next()` do laço. Não é desperdício: guardar o valor de todo campo do estado
 só para usá-lo nesse ramo custou **43% do merge** quando medido (415→595 ns/op

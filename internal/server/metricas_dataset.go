@@ -75,9 +75,14 @@ func lixoDeDisco(st storage.Stats) uint64 {
 // — zero é uma resposta, ausência não é.
 func registraMetricasDeDataset(reg *metrics.Registry, s *Servidor) {
 	reg.Coletor(metrics.ColetorFunc(func() []metrics.Amostra {
-		out := make([]metrics.Amostra, 0, len(s.datasets)*10)
+		out := make([]metrics.Amostra, 0, len(s.datasets)*16)
 		for _, d := range s.datasets {
 			st := d.st.Stats()
+			// As políticas de escrita e as regras de ttl saem da MESMA leitura
+			// do snapshot que alimenta o /v1/stats: dois contadores para o
+			// mesmo fato divergem no dia em que um caminho de erro esquece de
+			// somar, e em produção alguém lê o errado.
+			out = append(out, amostrasDeMaterializacao(d.nome, d.spec, d.mat.Metrics())...)
 			rotulo := []metrics.Label{{Nome: metrics.LabelDataset, Valor: d.nome}}
 			// O formato de exposição só tem número, e Go não converte bool
 			// para float: o 0/1 do medidor se escreve aqui, uma vez, em vez de

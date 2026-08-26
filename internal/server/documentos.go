@@ -187,6 +187,7 @@ func (s *Servidor) handleStats(w http.ResponseWriter, r *http.Request) {
 				State:   estado,
 				Paused:  detalhe,
 			},
+			Materialization: materializacaoStats(d.spec, d.mat.Metrics()),
 		}
 		ds.Query.Errors = s.errosDoDataset(d.nome)
 

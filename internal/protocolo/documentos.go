@@ -207,6 +207,46 @@ type DatasetStats struct {
 	Schema    SchemaStats   `json:"schema"`
 	Query     RotaStats     `json:"query"`
 	Ingestion IngestaoStats `json:"ingestion"`
+	// Materialization são os efeitos das políticas de escrita e das regras de
+	// TTL. Fica FORA de Ingestion pela mesma razão do SchemaStats: aquele
+	// bloco só é preenchido quando há consumidor Kafka, e estes números valem
+	// para qualquer rota de escrita.
+	Materialization MaterializacaoStats `json:"materialization"`
+}
+
+// MaterializacaoStats conta o que o dado gravado NÃO diz.
+//
+// Um valor congelado é indistinguível de um que nunca mudou; um total somado é
+// indistinguível de um total que a origem mandou pronto; e uma regra de TTL
+// que nunca casa parece igual a uma que casa sempre. Estes contadores são a
+// única forma de o operador ver as políticas trabalhando.
+type MaterializacaoStats struct {
+	// FrozenCaptured é a entry emitida na ingestão e FrozenPreserved o valor
+	// anterior segurado pelo merge. Captura sem preservação é coluna que nunca
+	// chegou a congelar.
+	FrozenCaptured  int64 `json:"frozenCaptured"`
+	FrozenPreserved int64 `json:"frozenPreserved"`
+	// Summed conta as somas do `merge: sum`, e SummedSaturated as que bateram
+	// no teto do int64 — a partir dali o valor para de crescer.
+	Summed          int64 `json:"summed"`
+	SummedSaturated int64 `json:"summedSaturated"`
+	// TTLRules sai na ORDEM do YAML, que é semântica: a primeira que casa
+	// vence. Vazia num dataset sem regras.
+	TTLRules []RegraTTLStats `json:"ttlRules,omitempty"`
+	// TTLUnmatched são as escritas que não casaram com regra nenhuma — só
+	// possível num dataset sem regra de fundo.
+	TTLUnmatched int64 `json:"ttlUnmatched"`
+}
+
+// RegraTTLStats é uma regra de expiração e quantas escritas ela decidiu.
+//
+// O `when` viaja junto da contagem porque o índice sozinho obrigaria quem lê o
+// painel a abrir o YAML para saber o que casou.
+type RegraTTLStats struct {
+	Index            int    `json:"index"`
+	When             string `json:"when,omitempty"`
+	ExpireAfterWrite string `json:"expireAfterWrite"`
+	Matched          int64  `json:"matched"`
 }
 
 // SchemaStats é o crescimento do dicionário de campos contra o teto.

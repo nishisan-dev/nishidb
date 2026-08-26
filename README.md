@@ -461,8 +461,9 @@ O que precisa estar claro antes de ligar:
   Campo `auto` também é recusado: sem tipo declarado, a soma valeria ou não
   conforme o primeiro evento.
 - **O teto satura, não dá a volta.** Ao bater em `MaxInt64` o valor para ali e
-  o contador `Saturadas` sobe. Recusar o evento travaria a entidade para
-  sempre, porque todo evento seguinte estouraria igual.
+  `nishidb_merge_sum_saturated_total` sobe — o mesmo número aparece no
+  `/v1/stats`, em `materialization.summedSaturated`. Recusar o evento travaria
+  a entidade para sempre, porque todo evento seguinte estouraria igual.
 - **`null` continua apagando**, e a coluna recomeça do zero no próximo evento.
   Entidade que expira e volta também recomeça: a encarnação nova não herda o
   total da anterior.

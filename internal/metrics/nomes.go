@@ -70,6 +70,22 @@ const (
 	// MetExpiredTotal conta entidades que ganharam lápide, pelas DUAS rotas
 	// (o coletor e a descoberta oportunista da compaction).
 	MetExpiredTotal = "nishidb_expired_total"
+
+	// As séries das POLÍTICAS DE ESCRITA e das regras de TTL. Elas contam o
+	// que o dado gravado não diz: um valor congelado é indistinguível de um
+	// que nunca mudou, e um total somado é indistinguível de um total que a
+	// origem mandou pronto. Sem elas, a política é invisível em produção — e
+	// contador sem leitor é o defeito que este projeto trata como tal.
+	MetFrozenCaptured  = "nishidb_frozen_captured_total"
+	MetFrozenPreserved = "nishidb_frozen_preserved_total"
+	MetMergeSum        = "nishidb_merge_sum_total"
+	// MetMergeSumSaturated é o único desfecho em que o valor gravado deixa de
+	// ser verdade: a soma bateu no teto do int64 e parou ali.
+	MetMergeSumSaturated = "nishidb_merge_sum_saturated_total"
+	// MetTTLRuleMatched tem o rótulo `rule` com o ÍNDICE da regra no YAML,
+	// porque é a ordem que decide qual vence.
+	MetTTLRuleMatched = "nishidb_ttl_rule_matched_total"
+	MetTTLUnmatched   = "nishidb_ttl_unmatched_total"
 	// MetExpiryGraceTotal conta carências dadas a entidades sem instante de
 	// escrita. É a série que responde "o coletor está trabalhando?" nos
 	// primeiros minutos depois de ligar a expiração num dataset já
