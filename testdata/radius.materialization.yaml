@@ -38,10 +38,6 @@ materialization:
     type: int64
     strategy: greater
 
-  ttl:
-    field: EventExpireDate
-    type: timestamp
-
   tombstoneRetention: 7d
 
 schema:

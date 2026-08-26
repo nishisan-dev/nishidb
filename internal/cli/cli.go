@@ -240,7 +240,7 @@ func abreDataset(cfg *nishiconfig.Config, nome string) (*storage.Store, *schema.
 		BitmapFieldNames: bitmaps,
 		HashFieldNames:   hashes,
 		ColunasDerivadas: spec.NomesDasExtracoes(),
-		ExpireAfterWrite: spec.ExpiraApos(),
+		ExpireAfterWrite: spec.Materialization.DuracaoDeFundo,
 		CampoDeEscrita:   schema.CampoInstanteDeEscrita,
 	})
 	if err != nil {

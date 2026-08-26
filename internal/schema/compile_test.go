@@ -123,9 +123,12 @@ func TestCompileRoleFlags(t *testing.T) {
 	if !seq.IsSequence || c.Seq != seq {
 		t.Errorf("Seq: %+v", seq)
 	}
-	ttl, _ := c.FieldByName([]byte("EventExpireDate"))
-	if !ttl.IsTTL || c.TTL != ttl {
-		t.Errorf("TTL: %+v", ttl)
+	// EventExpireDate é campo COMUM desde que o deadline absoluto vindo do
+	// payload saiu: continua compilado, tipado e consultável — só não governa
+	// expiração nenhuma.
+	exp, _ := c.FieldByName([]byte("EventExpireDate"))
+	if exp == nil || exp.Type != types.TypeTimestamp || exp.IsSystem {
+		t.Errorf("EventExpireDate: %+v", exp)
 	}
 }
 

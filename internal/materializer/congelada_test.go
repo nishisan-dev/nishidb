@@ -37,7 +37,7 @@ materialization:
   key:
     field: id
   ttl:
-    expireAfterWrite: 1h
+    - expireAfterWrite: 1h
 schema:
   fields:
     id:

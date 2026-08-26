@@ -328,7 +328,7 @@ func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*
 		ColunasDerivadas: spec.NomesDasExtracoes(),
 		Log:              log,
 		Metrics:          s.reg,
-		ExpireAfterWrite: spec.ExpiraApos(),
+		ExpireAfterWrite: spec.Materialization.DuracaoDeFundo,
 		CampoDeEscrita:   schema.CampoInstanteDeEscrita,
 	})
 	if err != nil {
@@ -506,11 +506,6 @@ func avisaChavesSemMotor(specs map[string]*schema.DatasetSpec, log *logging.Logg
 			log.Warn("ttl.tombstoneRetention.sem_motor",
 				"a chave é válida e NÃO tem efeito: esquecer a key exige purgar a primary e ensinar a compaction a descartar lápide vencida",
 				"dataset", nome, "tombstoneRetention", d)
-		}
-		if ttl := spec.Materialization.TTL; ttl != nil && ttl.Field != "" {
-			log.Warn("ttl.field.sem_motor",
-				"a chave é válida e NÃO tem efeito: a expiração implementada é a ttl.expireAfterWrite",
-				"dataset", nome, "field", ttl.Field)
 		}
 	}
 }

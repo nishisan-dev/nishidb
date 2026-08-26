@@ -90,7 +90,7 @@ func runOffsets(args []string, amb Ambiente) int {
 		BitmapFieldNames: bitmaps,
 		HashFieldNames:   hashes,
 		ColunasDerivadas: spec.NomesDasExtracoes(),
-		ExpireAfterWrite: spec.ExpiraApos(),
+		ExpireAfterWrite: spec.Materialization.DuracaoDeFundo,
 		CampoDeEscrita:   schema.CampoInstanteDeEscrita,
 	})
 	if err != nil {

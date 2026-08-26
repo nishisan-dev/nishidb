@@ -106,13 +106,13 @@ type FieldDictionary interface {
 //
 // SEMPRE use por ponteiro: o atômico o torna não-copiável (go vet -copylocks).
 type CompiledField struct {
-	ID                       types.FieldID
-	Name                     string
-	Alias                    string          // "" se ausente
-	Type                     types.FieldType // tipo DECLARADO; TypeNull quando IsAuto
-	IsAuto                   bool            // tipo resolvido na primeira observação
-	Index                    IndexKind
-	IsKey, IsSequence, IsTTL bool
+	ID                types.FieldID
+	Name              string
+	Alias             string          // "" se ausente
+	Type              types.FieldType // tipo DECLARADO; TypeNull quando IsAuto
+	IsAuto            bool            // tipo resolvido na primeira observação
+	Index             IndexKind
+	IsKey, IsSequence bool
 
 	// IsSystem marca campo que o WRITER injeta e o operador não declara.
 	// Ele existe no schema como qualquer outro — tem FieldID, é gravado no
@@ -311,20 +311,25 @@ type Compiled struct {
 	// carregar o YAML duas vezes.
 	Errors ErrorsSpec
 
-	Key, Seq, TTL *CompiledField
+	Key, Seq *CompiledField
 
 	// Congeladas são as colunas com frozenFrom, em ordem de FieldID.
 	// Pré-computada e ordenada pela mesma razão das Derivadas: o materializer
 	// a percorre por evento, e varrer o mapa no caminho quente custaria caro.
 	Congeladas []*CompiledField
 
-	// ExpireAfterWrite é o idle timeout do dataset; zero = sem expiração por
-	// escrita. Mutuamente exclusivo com TTL, pela validação da spec.
-	ExpireAfterWrite time.Duration
+	// RegrasTTL são as regras de expiração validadas, na ordem do arquivo —
+	// que é semântica: a primeira que casa vence. O `when` continua em TEXTO
+	// aqui de propósito: compilá-lo exige o binder, e o binder importa este
+	// pacote. Quem compila é internal/predicado, o único ponto da árvore que
+	// pode importar os dois.
+	RegrasTTL []RegraTTL
+	// DuracaoDeFundo é a duração da regra sem `when`, ou zero quando não há.
+	DuracaoDeFundo time.Duration
 
 	// Escrita é o campo de sistema que registra o instante da escrita.
-	// Não-nil exatamente quando ExpireAfterWrite > 0 — sem expiração não há
-	// para que pagar 11 bytes por record.
+	// Não-nil exatamente quando há regras de TTL — sem expiração não há para
+	// que pagar 11 bytes por record.
 	Escrita *CompiledField
 
 	mu      sync.RWMutex
@@ -421,9 +426,8 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 		exclude:       make(map[string]struct{}, len(s.Schema.Exclude)),
 		dict:          dict,
 	}
-	if ttl := s.Materialization.TTL; ttl != nil {
-		c.ExpireAfterWrite = ttl.ExpireAfterWrite
-	}
+	c.RegrasTTL = s.Materialization.RegrasTTL
+	c.DuracaoDeFundo = s.Materialization.DuracaoDeFundo
 	if s.Materialization.Mode == "replace" {
 		c.Mode = ModeReplace
 	}
@@ -464,7 +468,7 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 	// assim ele ganha FieldID pelo mesmo caminho determinístico e o dicionário
 	// o registra de forma durável, que é o que faz o replay do tail conseguir
 	// reconstruir o índice de expiração a partir dos próprios records.
-	if c.ExpireAfterWrite > 0 {
+	if len(c.RegrasTTL) > 0 {
 		names = append(names, CampoInstanteDeEscrita)
 	}
 	sort.Strings(names)
@@ -495,11 +499,6 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 	if s.Materialization.Sequence != nil {
 		seqField = s.Materialization.Sequence.Field
 	}
-	ttlField := ""
-	if s.Materialization.TTL != nil {
-		ttlField = s.Materialization.TTL.Field
-	}
-
 	for _, name := range names {
 		if _, excluded := c.exclude[name]; excluded {
 			continue
@@ -513,7 +512,6 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 			Name:       name,
 			IsKey:      name == s.Materialization.Key.Field,
 			IsSequence: name == seqField,
-			IsTTL:      name == ttlField,
 		}
 		if name == CampoInstanteDeEscrita {
 			// Tipo fixo, não declarável: é o writer que o preenche, com o
@@ -570,9 +568,6 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 		}
 		if cf.IsSequence {
 			c.Seq = cf
-		}
-		if cf.IsTTL {
-			c.TTL = cf
 		}
 	}
 

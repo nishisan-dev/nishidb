@@ -19,7 +19,7 @@ materialization:
     field: id
   mode: merge
   ttl:
-    expireAfterWrite: 2h
+    - expireAfterWrite: 2h
 schema:
   include: ["*"]
   unknownFields: include
@@ -109,7 +109,7 @@ func TestCadaEscritaRenovaOInstante(t *testing.T) {
 
 // Sem expiração declarada não há por que pagar 11 bytes por record.
 func TestSemExpireAfterWriteNaoHaCampoDeSistema(t *testing.T) {
-	yaml := strings.Replace(yamlComExpire, "  ttl:\n    expireAfterWrite: 2h\n", "", 1)
+	yaml := strings.Replace(yamlComExpire, "  ttl:\n    - expireAfterWrite: 2h\n", "", 1)
 	c, st := compiladoComExpire(t, yaml)
 	if c.Escrita != nil {
 		t.Fatal("campo de sistema compilado sem expiração declarada")

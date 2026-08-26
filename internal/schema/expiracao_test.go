@@ -15,27 +15,24 @@ func yamlComTTL(bloco string) string {
 		"    exp:\n      type: timestamp\n"
 }
 
-// As duas formas precisam de agendadores diferentes: com duração uniforme o
-// prazo é monótono na ordem de escrita e a fila é uma deque; com o prazo vindo
-// do payload ele pode chegar no passado. Aceitar as duas juntas seria escrever
-// dois agendadores e deixar a interação invisível no dado.
-func TestExpireAfterWriteEFieldNoMesmoBlocoSaoRecusados(t *testing.T) {
-	yaml := yamlComTTL("  ttl:\n    field: exp\n    expireAfterWrite: 2h\n")
-	_, err := Parse([]byte(yaml), DefaultsPadrao)
-	if err == nil {
-		t.Fatal("as duas formas juntas foram aceitas")
-	}
-	for _, trecho := range []string{"field", "expireAfterWrite"} {
-		if !strings.Contains(err.Error(), trecho) {
-			t.Errorf("a mensagem precisa nomear %q para o operador saber o que escolher: %v", trecho, err)
+// O deadline absoluto vindo do payload — `ttl: {field, type}` — foi REMOVIDO:
+// era parseado e validado sem nenhum consumidor, e configuração que não faz
+// nada ao lado de um mecanismo que funciona é defeito. A recusa nomeia a
+// lista, que é para onde o operador tem de migrar.
+func TestBlocoTTLAntigoEhRecusadoNomeandoALista(t *testing.T) {
+	for _, bloco := range []string{
+		"  ttl:\n    field: exp\n    expireAfterWrite: 2h\n",
+		"  ttl:\n    type: timestamp\n",
+		"  ttl:\n    expireAfterWrite: 2h\n",
+	} {
+		_, err := Parse([]byte(yamlComTTL(bloco)), DefaultsPadrao)
+		if err == nil {
+			t.Errorf("a forma antiga foi aceita: %s", bloco)
+			continue
 		}
-	}
-}
-
-func TestBlocoTTLVazioEhRecusado(t *testing.T) {
-	yaml := yamlComTTL("  ttl:\n    type: timestamp\n")
-	if _, err := Parse([]byte(yaml), DefaultsPadrao); err == nil {
-		t.Fatal("bloco ttl sem field e sem expireAfterWrite foi aceito")
+		if !strings.Contains(err.Error(), "lista") {
+			t.Errorf("a mensagem precisa apontar a forma nova: %v", err)
+		}
 	}
 }
 
@@ -44,7 +41,7 @@ func TestBlocoTTLVazioEhRecusado(t *testing.T) {
 // liveness da compaction.
 func TestExpireAfterWriteAbaixoDaResolucaoEhRecusadoEmVezDeArredondado(t *testing.T) {
 	for _, d := range []string{"30s", "1s", "59s"} {
-		yaml := yamlComTTL("  ttl:\n    expireAfterWrite: " + d + "\n")
+		yaml := yamlComTTL("  ttl:\n    - expireAfterWrite: " + d + "\n")
 		_, err := Parse([]byte(yaml), DefaultsPadrao)
 		if err == nil {
 			t.Errorf("%s: aceito", d)
@@ -55,41 +52,41 @@ func TestExpireAfterWriteAbaixoDaResolucaoEhRecusadoEmVezDeArredondado(t *testin
 		}
 	}
 	// O piso exato é aceito.
-	yaml := yamlComTTL("  ttl:\n    expireAfterWrite: 1m\n")
+	yaml := yamlComTTL("  ttl:\n    - expireAfterWrite: 1m\n")
 	if _, err := Parse([]byte(yaml), DefaultsPadrao); err != nil {
 		t.Errorf("1m (a própria resolução) foi recusado: %v", err)
 	}
 }
 
-// A forma idle não referencia campo nenhum do payload, então não deve exigir
-// declaração em schema.fields — ao contrário da forma ttl.field.
+// A regra não referencia campo nenhum do payload, então não exige declaração
+// em schema.fields.
 func TestExpireAfterWriteNaoExigeCampoNoSchema(t *testing.T) {
 	yaml := "version: 1\nname: t\nmaterialization:\n  key:\n    field: id\n" +
-		"  ttl:\n    expireAfterWrite: 7d\n" +
+		"  ttl:\n    - expireAfterWrite: 7d\n" +
 		"schema:\n  include: [id]\n  fields:\n    id:\n      type: string\n"
 	spec, err := Parse([]byte(yaml), DefaultsPadrao)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := spec.Materialization.TTL.ExpireAfterWrite; got != 7*24*time.Hour {
-		t.Fatalf("ExpireAfterWrite = %v, quer 168h", got)
+	if got := spec.Materialization.DuracaoDeFundo; got != 7*24*time.Hour {
+		t.Fatalf("DuracaoDeFundo = %v, quer 168h", got)
 	}
 	c, err := spec.Compile(newFakeDict())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.ExpireAfterWrite != 7*24*time.Hour {
-		t.Fatalf("Compiled.ExpireAfterWrite = %v", c.ExpireAfterWrite)
+	if c.DuracaoDeFundo != 7*24*time.Hour {
+		t.Fatalf("Compiled.DuracaoDeFundo = %v", c.DuracaoDeFundo)
 	}
-	if c.TTL != nil {
-		t.Error("a forma idle não tem campo de TTL")
+	if len(c.RegrasTTL) != 1 {
+		t.Fatalf("%d regras compiladas, quero 1", len(c.RegrasTTL))
 	}
 }
 
-func TestTypeNaoSeAplicaAExpireAfterWrite(t *testing.T) {
-	yaml := yamlComTTL("  ttl:\n    expireAfterWrite: 2h\n    type: timestamp\n")
+func TestChaveTypeNaRegraEhRecusada(t *testing.T) {
+	yaml := yamlComTTL("  ttl:\n    - expireAfterWrite: 2h\n      type: timestamp\n")
 	if _, err := Parse([]byte(yaml), DefaultsPadrao); err == nil {
-		t.Fatal("ttl.type junto de expireAfterWrite foi aceito")
+		t.Fatal("ttl[].type foi aceito")
 	}
 }
 
@@ -140,7 +137,7 @@ func TestCampoComUnderscoreQueNaoEhDeSistemaContinuaValido(t *testing.T) {
 // storage, a compaction — precisa vê-lo.
 func TestFieldsByIDOcultaOCampoDeSistemaMasAVersaoCompletaNao(t *testing.T) {
 	yaml := "version: 1\nname: t\nmaterialization:\n  key:\n    field: id\n" +
-		"  ttl:\n    expireAfterWrite: 2h\n" +
+		"  ttl:\n    - expireAfterWrite: 2h\n" +
 		"schema:\n  include: [id]\n  fields:\n    id:\n      type: string\n"
 	spec, err := Parse([]byte(yaml), DefaultsPadrao)
 	if err != nil {

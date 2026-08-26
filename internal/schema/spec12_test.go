@@ -29,15 +29,16 @@ func TestLoadSpec12YAML(t *testing.T) {
 		t.Errorf("query = %+v", s.Query)
 	}
 
-	// Key/sequence/ttl resolvidos.
+	// Key e sequence resolvidos.
 	if c.Key == nil || c.Key.Name != "id" || c.Key.Type != types.TypeString || !c.Key.IsKey {
 		t.Errorf("key = %+v", c.Key)
 	}
 	if c.Seq == nil || c.Seq.Name != "_SEQ" || c.Seq.Type != types.TypeInt64 {
 		t.Errorf("seq = %+v", c.Seq)
 	}
-	if c.TTL == nil || c.TTL.Name != "EventExpireDate" || c.TTL.Type != types.TypeTimestamp {
-		t.Errorf("ttl = %+v", c.TTL)
+	exp, ok := c.FieldByName([]byte("EventExpireDate"))
+	if !ok || exp.Type != types.TypeTimestamp {
+		t.Errorf("EventExpireDate = %+v (ok=%v)", exp, ok)
 	}
 
 	// Aliases e índices representativos do arquivo real.
