@@ -47,6 +47,10 @@ type BoundQuery struct {
 	// precisa dizer que truncou — um corte silencioso por MaxRows faria o
 	// cliente ler um resultado parcial como completo.
 	EffectiveLimit int64
+	// OrderBy é a ordenação pedida, resolvida contra o schema. nil quando
+	// ausente — e ausente significa "sem operador de ordenação", não "ordenar
+	// por rowId".
+	OrderBy []BoundOrderKey
 	// Offset é quantas linhas QUE PASSARAM no predicado são puladas antes de a
 	// primeira sair. Não conta candidatos rejeitados, e não entra no
 	// EffectiveLimit: o teto é de linhas ENTREGUES, e somar as puladas a ele
@@ -109,6 +113,21 @@ type BoundNullCheck struct {
 	Field *schema.CompiledField
 	Slot  int
 	Not   bool
+}
+
+// BoundOrderKey é uma chave de ordenação resolvida.
+//
+// Want é o tipo FÍSICO esperado no payload, e não o do valor: é ele que separa
+// "esta linha tem a coluna no tipo da coluna" de "tem outra coisa ali". Vale a
+// mesma regra do predicado — valor de tipo divergente não é ordenável no
+// domínio declarado e vai para o grupo dos ausentes.
+type BoundOrderKey struct {
+	Field      *schema.CompiledField
+	Slot       int
+	Desc       bool
+	NullsFirst bool
+	Kind       CompareKind
+	Want       types.FieldType
 }
 
 // BoundLike é `coluna [NOT] LIKE <padrão>` com o padrão já compilado.
@@ -244,6 +263,17 @@ func (b *binder) run() (*BoundQuery, error) {
 			return nil, err
 		}
 		bq.Where = where
+	}
+	// ORDER BY DEPOIS do WHERE e ANTES de fechar os slots: as colunas de
+	// ordenação entram no conjunto a coletar como qualquer outra. Sem o
+	// b.usa(f.ID) que a resolução faz, a coluna não teria slot e o executor
+	// ordenaria por um valor que nunca leu.
+	if len(b.stmt.OrderBy) > 0 {
+		chaves, err := b.ordenacao()
+		if err != nil {
+			return nil, err
+		}
+		bq.OrderBy = chaves
 	}
 	// Defesa contra bug do PARSER, não contra o usuário: cada '?' aparece em
 	// exatamente uma comparação, então as contagens têm de bater.
@@ -525,6 +555,40 @@ func (b *binder) folha(e parser.Expr) (BoundExpr, error) {
 	}
 }
 
+// ordenacao resolve as chaves do ORDER BY contra o schema.
+//
+// Chave REPETIDA é recusada, e não colapsada: `ORDER BY a, a DESC` é
+// contraditório e aceitar em silêncio uma das duas leituras seria escolher pelo
+// usuário. É a mesma doutrina que já recusa coluna repetida na projeção.
+func (b *binder) ordenacao() ([]BoundOrderKey, error) {
+	out := make([]BoundOrderKey, 0, len(b.stmt.OrderBy))
+	vistos := make(map[types.FieldID]struct{}, len(b.stmt.OrderBy))
+	for _, k := range b.stmt.OrderBy {
+		f, err := b.colunaTalvezQualificada(k.Qualifier, k.Column, k.ColumnPos)
+		if err != nil {
+			return nil, err
+		}
+		if _, repetida := vistos[f.ID]; repetida {
+			return nil, errAt(k.ColumnPos, "coluna %q aparece duas vezes no ORDER BY", f.Name)
+		}
+		vistos[f.ID] = struct{}{}
+
+		t := f.EffectiveType()
+		if t == types.TypeNull {
+			return nil, errAt(k.ColumnPos, "coluna %q é auto e nunca foi observada neste dataset, "+
+				"então ainda não tem tipo e não pode ordenar", f.Name)
+		}
+		kind, ok := admiteOrdenacao(t)
+		if !ok {
+			return nil, errAt(k.ColumnPos, "coluna %q é %s e não tem ordem definida neste produto", f.Name, t)
+		}
+		b.usa(f.ID)
+		out = append(out, BoundOrderKey{
+			Field: f, Desc: k.Desc, NullsFirst: k.NullsFirst, Kind: kind, Want: t})
+	}
+	return out, nil
+}
+
 // like liga `coluna [NOT] LIKE <padrão>`.
 //
 // O padrão é compilado AQUI, uma vez por query. Fazer isso por linha seria o
@@ -711,6 +775,10 @@ func (b *binder) preencheSlots(bq *BoundQuery) {
 	for i := range bq.Columns {
 		slot, _ := bq.Slots.Index(bq.Columns[i].Field.ID)
 		bq.Columns[i].Slot = slot
+	}
+	for i := range bq.OrderBy {
+		slot, _ := bq.Slots.Index(bq.OrderBy[i].Field.ID)
+		bq.OrderBy[i].Slot = slot
 	}
 	// Percurso com PILHA EXPLÍCITA, pela mesma razão que o expr percorre a
 	// espinha iterativamente: uma cadeia de 50 mil termos é uma árvore de 50
