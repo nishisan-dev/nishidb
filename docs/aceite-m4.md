@@ -10,6 +10,27 @@ crescer?** O §86 projeta 30-43 GB escritos por dia contra 5,6-8 GB de estado
 vivo a 500 ev/s — dois a três dias até o ENOSPC —, e nada no M1 devolvia esse
 espaço.
 
+> **Errata (25/08/2026): "devolvidos ao filesystem" era LISTING, não filesystem.**
+> Os 3,68 GB desta rodada foram medidos somando o diretório de dados, e o
+> diretório mentia. `compactaSegmento` lê o segmento que vai aposentar pelo
+> `ScanFrom`, que **cacheia o descritor**; o cache do `segment.Reader` não tinha
+> despejo; e o `os.Remove` da aposentadoria removia o **nome** e nunca o
+> **inode**. Os blocos seguiam alocados enquanto o processo vivesse — um inode
+> preso por aposentadoria, de forma determinística. `dirBytes` do harness,
+> `discoDosSegmentos` do e2e e o `Stats.StorageBytes` somam o listing, e para os
+> três o arquivo tinha sumido; o próprio `bytes_devolvidos` do log da
+> aposentadoria anunciava bytes que ninguém recebeu. **`df` e `du` discordavam, e
+> nenhum instrumento deste projeto os consultava.**
+>
+> Corrigido em `Reader.FechaSegmento` mais a barreira `aposMu`, e registrado como
+> **débito 78** (já fechado). O número de disco desta rodada **não foi
+> recalculado** — a rodada não é reproduzível a posteriori —, então leia-o como
+> "bytes que a compaction desocupou logicamente", que é afirmação verdadeira, e
+> não como "bytes que voltaram ao dispositivo", que não era.
+>
+> Isto **agrava** o veredito abaixo em vez de aliviá-lo: o disco não parou, e
+> parte do que se pensava devolvido continuava alocado.
+
 **A resposta desta rodada é "ainda não, nesta escala".** A compaction devolve
 disco de verdade — 3,68 GB em 104 aposentadorias, com o crescimento
 desacelerando de 91 para 26 MiB/min ao longo da janela —, mas o disco **não
@@ -78,7 +99,7 @@ de **disco** em regime.
 
 | # | Obrigação | Seção | Estado | Evidência |
 |---|---|---|---|---|
-| 1 | Compactar segmentos (§126.24) | §53-55 | **Atendido** | `TestCompactionDevolveDiscoSemPerderNenhumaRow`; na rodada, **3,68 GB devolvidos ao filesystem** em 104 aposentadorias |
+| 1 | Compactar segmentos (§126.24) | §53-55 | **Atendido** | `TestCompactionDevolveDiscoSemPerderNenhumaRow`; na rodada, **3,68 GB desocupados** em 104 aposentadorias (ver a errata do topo: a medida era de listing, não de filesystem) |
 | 2 | A compaction **não** carrega o segmento em memória | §54 | **Atendido** | `TestCopyForwardReusaOBufferDoWriterEmVezDeAlocarPorRecord`; heap estável de **1,3 MiB** com a compaction moendo ~5,3 MB/s |
 | 3 | Atualização atômica das locations | §55 | **Atendido** | `TestCopyForwardNaoRessuscitaPayloadAntigoSobUpdateConcorrente`, `TestCopyForwardLeALocationDEPOISDeEntrarNaSecaoCritica` |
 | 4 | `NO update in-place` — a cópia passa pelo caminho normal de escrita | §128 | **Atendido** | `TestCopyForwardRepublicaALocationSemInflarALiveness` |
@@ -102,7 +123,7 @@ mede na escala de 8M estão marcadas com o documento em que estão.
 | Query p50 / p95 / p99 | point lookup **6 / 18 / 29 µs**; bitmap 170 / 340 / 508 µs; interseção 201 / 392 / 598 µs; união 171 / 351 / 531 µs; full scan com LIMIT 327 / 939 / 1.544 µs — **3.463.742 amostras por classe** | `queries[]` |
 | Checkpoint | 16 checkpoints em **0,855 s** no regime (2 em 0,174 s no LOAD) | `steady.checkpoint_sec` |
 | Restart | **0,72 s** | `restart_sec` |
-| Vazão da compaction | **6,98 GB lidos** e **3,30 GB escritos**, com **3,68 GB devolvidos** — ~**5,3 MB/s** de segmento varrido sobre os 1.327,6 s de relógio da fase | `store_stats` + soma dos `bytes_devolvidos` do log |
+| Vazão da compaction | **6,98 GB lidos** e **3,30 GB escritos**, com **3,68 GB desocupados** (errata do topo) — ~**5,3 MB/s** de segmento varrido sobre os 1.327,6 s de relógio da fase | `store_stats` + soma dos `bytes_devolvidos` do log |
 | Lag do Kafka ao fim | **0** | `kafka_lag_final` |
 | Fila limitada (pico) | 5.000 registros / 2.544.262 bytes | `kafka_queue_*_max` |
 | Eventos perdidos | **0 descartados, 0 falhas** (8.287.171 updates, 112.830 stale) | `steady` |
