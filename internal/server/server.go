@@ -356,6 +356,15 @@ func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*
 			"valor não coube no tipo fixado da coluna aninhada; a coluna é removida nessa linha e o documento guarda o valor",
 			"coluna", coluna, "tipoFixado", fixado, "tipoQueVeio", veio)
 	})
+	if regras := spec.Materialization.RegrasTTL; len(regras) > 0 {
+		// O operador precisa poder conferir que o YAML que escreveu é o que o
+		// processo entendeu — inclusive a ORDEM, que aqui é semântica.
+		log.Info("ttl.regras",
+			"regras de expiração carregadas",
+			"dataset", spec.Name, "total", len(regras),
+			"temFundo", spec.Materialization.DuracaoDeFundo > 0,
+			"regras", schema.DescreveRegras(regras))
+	}
 	mat, err := materializer.New(compilado, st)
 	if err != nil {
 		// Regra de TTL que não compila derruba a SUBIDA do dataset: um

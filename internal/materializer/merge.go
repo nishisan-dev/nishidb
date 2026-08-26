@@ -3,6 +3,7 @@ package materializer
 import (
 	"errors"
 	"fmt"
+	"sync/atomic"
 
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 	"github.com/nishisan-dev/nishidb/internal/types"
@@ -45,7 +46,10 @@ var ErrInternalState = errors.New("INTERNAL_STATE")
 //
 // A saída sai com FieldIDs estritamente crescentes e sem TypeNull —
 // pré-condição do Put, que a revalida antes de tornar o record durável.
-func mergeRecords(prevPayload []byte, patch []patchEntry, out []byte) ([]byte, error) {
+// congeladas conta os campos que o ramo congelado preservou. É ponteiro e
+// aceita nil porque os testes de unidade do merge não têm métricas a
+// alimentar; o Apply passa o contador do dataset.
+func mergeRecords(prevPayload []byte, patch []patchEntry, out []byte, congeladas *atomic.Int64) ([]byte, error) {
 	var (
 		r      encoding.FieldReader
 		lastID types.FieldID // 0 é reservado (§32): serve de sentinela inicial
@@ -71,6 +75,9 @@ func mergeRecords(prevPayload []byte, patch []patchEntry, out []byte) ([]byte, e
 		j++
 		if pok && pid == id {
 			if e.congelada {
+				if congeladas != nil {
+					congeladas.Add(1)
+				}
 				// Entry congelada com o campo JÁ no estado: preserva o
 				// anterior cru e descarta a nova. É o congelamento inteiro,
 				// e é o único lugar onde ele acontece — a política viaja na

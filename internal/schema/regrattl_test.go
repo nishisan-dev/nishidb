@@ -180,3 +180,21 @@ func TestCampoDeSistemaNaoPodeSerDeclaradoNoSchema(t *testing.T) {
 		t.Fatal("o campo de prazo foi aceito em schema.fields")
 	}
 }
+
+// O log de subida precisa mostrar a ORDEM, que é semântica, e distinguir
+// `never` de um prazo zero que não existe.
+func TestDescreveRegrasMostraOrdemEFundo(t *testing.T) {
+	s, err := Parse([]byte(yamlComRegras(
+		"  ttl:\n    - when: \"id = 'a'\"\n      expireAfterWrite: 3m\n"+
+			"    - when: \"id = 'b'\"\n      expireAfterWrite: never\n"+
+			"    - expireAfterWrite: 7d\n")), DefaultsPadrao)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := DescreveRegras(s.Materialization.RegrasTTL)
+	for _, trecho := range []string{`[0] when="id = 'a'" 3m0s`, `[1] when="id = 'b'" never`, "[2] fundo 168h0m0s"} {
+		if !strings.Contains(got, trecho) {
+			t.Errorf("descrição %q não contém %q", got, trecho)
+		}
+	}
+}

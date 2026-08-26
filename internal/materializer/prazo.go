@@ -29,6 +29,7 @@ func (m *Materializer) duracaoDe(prevPayload []byte, entries []patchEntry) (time
 	for i := range m.regras {
 		r := &m.regras[i]
 		if r.Prog == nil {
+			m.metrics.porRegra[i].Add(1)
 			return r.Duracao, nil // regra de fundo: casa com tudo
 		}
 		slots := m.slots[i]
@@ -38,9 +39,11 @@ func (m *Materializer) duracaoDe(prevPayload []byte, entries []patchEntry) (time
 		// O contador de mismatch é nil: a ingestão avalia uma regra por
 		// evento e não tem onde pendurar um contador por avaliação.
 		if r.Prog.Avalia(slots, nil) {
+			m.metrics.porRegra[i].Add(1)
 			return r.Duracao, nil
 		}
 	}
+	m.metrics.semRegra.Add(1)
 	return 0, nil
 }
 

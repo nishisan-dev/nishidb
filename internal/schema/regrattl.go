@@ -156,3 +156,30 @@ func regrasDoNo(n *yaml.Node) ([]RegraTTLSpec, error) {
 	}
 	return regras, nil
 }
+
+// DescreveRegras rende a lista num texto de UMA linha, para o log de subida.
+//
+// A ordem é preservada porque ela é semântica: a primeira regra que casa
+// vence, e é justamente isso que o operador precisa conferir contra o YAML que
+// escreveu. `never` aparece como texto, e não como "0s", pela mesma razão que
+// ele existe: zero e imortal não são a mesma coisa.
+func DescreveRegras(regras []RegraTTL) string {
+	var sb strings.Builder
+	for i, r := range regras {
+		if i > 0 {
+			sb.WriteString("; ")
+		}
+		fmt.Fprintf(&sb, "[%d] ", i)
+		if r.When == "" {
+			sb.WriteString("fundo ")
+		} else {
+			fmt.Fprintf(&sb, "when=%q ", r.When)
+		}
+		if r.Duracao == 0 {
+			sb.WriteString(DuracaoNunca)
+			continue
+		}
+		sb.WriteString(r.Duracao.String())
+	}
+	return sb.String()
+}

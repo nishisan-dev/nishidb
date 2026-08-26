@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync/atomic"
 	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/jsonp"
@@ -57,6 +58,10 @@ type PatchBuffer struct {
 	// ainda que este caminho seja raro: um caminho raro que aloca é uma
 	// alocação que só aparece em produção.
 	filhosBuf []*schema.CompiledField
+	// congeladasCapturadas é o contador do dataset, injetado pelo
+	// Materializer. Ponteiro porque o PatchBuffer é usado direto em testes,
+	// onde não há métrica nenhuma para alimentar.
+	congeladasCapturadas *atomic.Int64
 	// compilado é o schema do Parse corrente. A descoberta precisa dele para
 	// registrar coluna nova, e passá-lo por parâmetro em toda a cadeia da
 	// segunda passada só o faria viajar de graça.
@@ -220,7 +225,7 @@ func (b *PatchBuffer) Parse(event []byte, c *schema.Compiled, agora time.Time) e
 	// ter origem numa coluna extraída, e precisam participar do sort e do
 	// dedup como qualquer outra entry.
 	if len(c.Congeladas) > 0 {
-		if err := b.capturaCongeladas(c, agora); err != nil {
+		if err := b.capturaCongeladas(c, agora, b.congeladasCapturadas); err != nil {
 			return err
 		}
 	}

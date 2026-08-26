@@ -200,6 +200,18 @@ type Metrics struct {
 	invalid  atomic.Int64
 	failed   atomic.Int64
 	byCat    [numCategories]atomic.Int64
+
+	// porRegra conta quantas escritas cada regra de TTL decidiu, e semRegra
+	// as que não casaram com nenhuma. São a resposta para "qual regra está
+	// pegando o quê" — sem eles, um `when` que nunca casa é indistinguível de
+	// um que casa sempre, e os dois são erros de configuração comuns.
+	porRegra []atomic.Int64
+	semRegra atomic.Int64
+	// congeladas separa a CAPTURA (o valor entrou no patch) da PRESERVAÇÃO (o
+	// merge segurou o anterior). Os dois juntos dizem se a feature está
+	// funcionando: captura sem preservação é coluna que nunca congelou.
+	congeladasCapturadas  atomic.Int64
+	congeladasPreservadas atomic.Int64
 }
 
 // MetricsSnapshot é a leitura consistente-por-contador dos contadores. Não é
@@ -216,6 +228,16 @@ type MetricsSnapshot struct {
 	// FailedTotal soma o que não é culpa do evento (Failed).
 	FailedTotal int64
 	ByCategory  [numCategories]int64
+
+	// RegrasCasadas é indexada pela ORDEM das regras no YAML, e SemRegra são
+	// as escritas que não casaram com nenhuma. Vazia num dataset sem regras.
+	RegrasCasadas []int64
+	SemRegra      int64
+	// CongeladasCapturadas e CongeladasPreservadas contam as duas metades do
+	// congelamento: a entry emitida na ingestão e o valor anterior segurado
+	// pelo merge.
+	CongeladasCapturadas  int64
+	CongeladasPreservadas int64
 }
 
 // Materializer aplica eventos JSON sobre o estado materializado de um
@@ -259,12 +281,14 @@ type Materializer struct {
 // evento, com a ingestão já rodando.
 func New(c *schema.Compiled, s Store) (*Materializer, error) {
 	m := &Materializer{schema: c, store: s, agora: time.Now}
+	m.patch.congeladasCapturadas = &m.metrics.congeladasCapturadas
 	if len(c.RegrasTTL) > 0 {
 		regras, err := predicado.CompilaRegras(c.RegrasTTL, c)
 		if err != nil {
 			return nil, err
 		}
 		m.regras = regras
+		m.metrics.porRegra = make([]atomic.Int64, len(regras))
 		m.slots = make([][]predicado.Slot, len(regras))
 		for i := range regras {
 			m.slots[i] = predicado.NovosSlots(regras[i].Slots.IDs)
@@ -296,6 +320,15 @@ func (m *Materializer) Metrics() MetricsSnapshot {
 	for i := range s.ByCategory {
 		s.ByCategory[i] = m.metrics.byCat[i].Load()
 	}
+	if n := len(m.metrics.porRegra); n > 0 {
+		s.RegrasCasadas = make([]int64, n)
+		for i := range m.metrics.porRegra {
+			s.RegrasCasadas[i] = m.metrics.porRegra[i].Load()
+		}
+	}
+	s.SemRegra = m.metrics.semRegra.Load()
+	s.CongeladasCapturadas = m.metrics.congeladasCapturadas.Load()
+	s.CongeladasPreservadas = m.metrics.congeladasPreservadas.Load()
 	// events é lido por ÚLTIMO, de propósito: o Apply o incrementa na ENTRADA
 	// e o desfecho na SAÍDA, então ler events primeiro deixaria o writer
 	// avançar entre as leituras e produziria um snapshot com
@@ -373,7 +406,8 @@ func (m *Materializer) Apply(event []byte) ApplyResult {
 	// encarnação anterior para a entidade que está reabrindo — um alarme novo
 	// herdaria a severidade do que foi fechado.
 	if presenca == types.PresencaViva && !replace {
-		payload, err = mergeRecords(m.prevRec.Payload, m.patch.entries, m.outBuf[:0])
+		payload, err = mergeRecords(m.prevRec.Payload, m.patch.entries, m.outBuf[:0],
+			&m.metrics.congeladasPreservadas)
 	} else {
 		// Create (não há estado anterior) e replace (§23, o estado anterior é
 		// descartado) chegam ao mesmo lugar: o payload é só o patch.

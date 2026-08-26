@@ -3,6 +3,7 @@ package materializer
 import (
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/schema"
@@ -27,7 +28,7 @@ import (
 // congeladas sobre algumas dezenas de entries é ruído; um dataset que declare
 // muitas e cujo bench acuse deve guardar o índice da entry durante o parsing,
 // não trocar isto por um mapa alocado por evento.
-func (b *PatchBuffer) capturaCongeladas(c *schema.Compiled, agora time.Time) error {
+func (b *PatchBuffer) capturaCongeladas(c *schema.Compiled, agora time.Time, capturadas *atomic.Int64) error {
 	for _, cf := range c.Congeladas {
 		if cf.DoRelogio {
 			b.entries = append(b.entries, patchEntry{
@@ -35,6 +36,9 @@ func (b *PatchBuffer) capturaCongeladas(c *schema.Compiled, agora time.Time) err
 				val:       types.Value{Type: types.TypeTimestamp, I64: agora.UnixMilli()},
 				congelada: true,
 			})
+			if capturadas != nil {
+				capturadas.Add(1)
+			}
 			continue
 		}
 		for i := range b.entries {
@@ -61,6 +65,9 @@ func (b *PatchBuffer) capturaCongeladas(c *schema.Compiled, agora time.Time) err
 			b.entries = append(b.entries, patchEntry{
 				field: cf, val: e.val, congelada: true,
 			})
+			if capturadas != nil {
+				capturadas.Add(1)
+			}
 			break
 		}
 	}

@@ -171,3 +171,75 @@ func TestPrazoEntraOrdenadoNoPatch(t *testing.T) {
 		}
 	}
 }
+
+// Qual regra está pegando o quê é a primeira pergunta do operador quando o
+// dataset expira mais (ou menos) do que ele esperava.
+func TestContadoresDeRegraContamPorRegra(t *testing.T) {
+	h := newHarness(t, prazoYAML)
+	h.apply(`{"id":"a","tipo":2}`)
+	h.apply(`{"id":"b","tipo":2}`)
+	h.apply(`{"id":"c","tipo":1}`)
+
+	m := h.m.Metrics()
+	if len(m.RegrasCasadas) != 2 {
+		t.Fatalf("%d contadores, quero um por regra", len(m.RegrasCasadas))
+	}
+	if m.RegrasCasadas[0] != 2 {
+		t.Errorf("regra condicional casou %d vezes, quero 2", m.RegrasCasadas[0])
+	}
+	if m.RegrasCasadas[1] != 1 {
+		t.Errorf("regra de fundo casou %d vezes, quero 1", m.RegrasCasadas[1])
+	}
+	if m.SemRegra != 0 {
+		t.Errorf("semRegra = %d: com regra de fundo, ninguém fica sem", m.SemRegra)
+	}
+}
+
+func TestContadorSemRegraContaOQueNaoCasa(t *testing.T) {
+	h := newHarness(t, `
+version: 1
+name: alarmes
+materialization:
+  key:
+    field: id
+  ttl:
+    - when: "tipo = 2"
+      expireAfterWrite: 3m
+schema:
+  fields:
+    id:
+      type: string
+    tipo:
+      type: int64
+`)
+	h.apply(`{"id":"a","tipo":1}`)
+	if m := h.m.Metrics(); m.SemRegra != 1 || m.RegrasCasadas[0] != 0 {
+		t.Errorf("semRegra=%d regra[0]=%d, quero 1 e 0", m.SemRegra, m.RegrasCasadas[0])
+	}
+}
+
+// Captura sem preservação é coluna que nunca congelou; os dois contadores
+// separados são o que torna isso visível.
+func TestContadorDeCongeladaSeparaCapturaDePreservacao(t *testing.T) {
+	h := newHarness(t, congeladaYAML)
+	h.apply(`{"id":"a","sev":5}`) // create: captura, nada a preservar
+	m := h.m.Metrics()
+	if m.CongeladasCapturadas != 2 { // origSev e criadoEm
+		t.Errorf("capturadas = %d, quero 2", m.CongeladasCapturadas)
+	}
+	if m.CongeladasPreservadas != 0 {
+		t.Errorf("preservadas = %d no create, quero 0", m.CongeladasPreservadas)
+	}
+
+	h.apply(`{"id":"a","sev":9}`) // update: captura de novo e o merge segura
+	m = h.m.Metrics()
+	if m.CongeladasCapturadas != 4 {
+		t.Errorf("capturadas = %d, quero 4", m.CongeladasCapturadas)
+	}
+	if m.CongeladasPreservadas != 2 {
+		t.Errorf("preservadas = %d, quero 2 (origSev e criadoEm)", m.CongeladasPreservadas)
+	}
+	if got := h.state("a")["origSev"]; got.I64 != 5 {
+		t.Errorf("origSev = %+v, quero 5", got)
+	}
+}
