@@ -246,7 +246,14 @@ type Compiled struct {
 	IncludeAll bool
 	Unknown    UnknownPolicy
 	MaxRows    int
+	// Timeout é o prazo DEFAULT e MaxTimeout é o TETO que o request pode
+	// alcançar. Os dois viajam para o compilado porque quem os consulta são o
+	// binder (o default, que vira o deadline do executor quando o chamador não
+	// trouxe prazo) e o servidor (o teto, que ele faz valer contra o
+	// `timeoutMs` do request e publica em /v1/metadata). Ver QuerySpec, em
+	// spec.go, para o porquê de serem dois campos e não um.
 	Timeout    time.Duration
+	MaxTimeout time.Duration
 	// MaxCols/OnMaxCols governam o crescimento do dicionário. Vivem aqui, e
 	// não só na spec, porque quem os consulta é o ResolveUnknown — hot path do
 	// writer, que só carrega o Compiled.
@@ -354,6 +361,7 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 		Name:          s.Name,
 		MaxRows:       s.Query.MaxRows,
 		Timeout:       s.Query.Timeout,
+		MaxTimeout:    s.Query.MaxTimeout,
 		MaxCols:       s.Schema.MaxCols,
 		OnMaxCols:     s.Schema.OnMaxCols,
 		MaxNestedCols: s.Schema.MaxNestedCols,

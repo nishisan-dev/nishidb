@@ -15,7 +15,9 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/query/binder"
 	"github.com/nishisan-dev/nishidb/internal/query/executor"
 	"github.com/nishisan-dev/nishidb/internal/query/lexer"
+	"github.com/nishisan-dev/nishidb/internal/query/orcamento"
 	"github.com/nishisan-dev/nishidb/internal/query/parser"
+	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/storage"
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 )
@@ -85,12 +87,17 @@ func (s *Servidor) handleQuery(w http.ResponseWriter, r *http.Request) {
 		s.recusa(w, r, http.StatusBadRequest, d.nome, *falha)
 		return
 	}
-	ctx, cancela, falha := s.contextoDaConsulta(r, req, d.sch.Timeout)
+	ctx, cancela, prazo, falha := s.contextoDaConsulta(r, req, d.sch)
 	if falha != nil {
 		s.recusa(w, r, http.StatusBadRequest, d.nome, *falha)
 		return
 	}
 	defer cancela()
+	// LONGA é quem passa do prazo padrão do dataset, e não quem passa de um
+	// número fixo: `query.timeout` é a declaração de quanto tempo uma consulta
+	// deste dataset costuma levar, então tudo que a excede é, por definição
+	// dele mesmo, fora do comum.
+	longa := prazo > d.sch.Timeout
 
 	// A vaga é tomada DEPOIS de toda validação barata e ANTES de tocar o
 	// Store: recusar cedo custa nada, e o §81 é explícito em preferir rejeitar
@@ -108,8 +115,72 @@ func (s *Servidor) handleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A consulta longa toma DUAS vagas: a do pool geral, já tomada acima, e a
+	// do sub-pool. É a segunda que garante que as vagas gerais restantes
+	// continuem disponíveis para quem responde em milissegundos — sem ela,
+	// maxConcurrent relatórios de dez minutos fariam TODA consulta interativa
+	// receber 503 durante esses dez minutos.
+	//
+	// A ordem (geral primeiro, longo depois) importa: se a vaga longa faltar,
+	// o defer acima já devolve a geral, e uma consulta longa recusada não
+	// deixa vaga geral presa.
+	if longa {
+		select {
+		case s.vagasLongas <- struct{}{}:
+			defer func() { <-s.vagasLongas }()
+		default:
+			// Retry-After maior que o do pool geral, e de propósito: quem
+			// ocupa uma vaga longa pode estar lá por minutos, e mandar o
+			// cliente voltar em um segundo o treinaria a martelar o servidor.
+			w.Header().Set("Retry-After", "30")
+			s.met.recusaLonga()
+			s.recusa(w, r, http.StatusServiceUnavailable, d.nome, protocolo.Falha{
+				Code: protocolo.CodMuitasQueriesLongas,
+				Message: fmt.Sprintf(
+					"as %d vagas de consulta longa estão ocupadas (runtime.query.maxLongRunning); "+
+						"peça um timeoutMs de até %d ms para entrar pelo pool geral",
+					s.cfg.MaxLongRunning(), d.sch.Timeout.Milliseconds()),
+			})
+			return
+		}
+	}
+
+	// O orçamento de memória desta consulta é reservado AQUI, ao lado das vagas
+	// e antes de tocar o Store — é decisão de admissão, não de meio de stream.
+	//
+	// Reservado de uma vez, o desfecho é honesto: ou a consulta tem o orçamento
+	// dela inteiro antes do primeiro byte, ou recebe 503 com Retry-After. Com
+	// reserva conforme o buffer cresce, o `memoryTarget` poderia acabar na linha
+	// quarenta mil, e o cliente perderia o resultado por causa da memória de
+	// OUTRA consulta que nada tem a ver com a dele.
+	//
+	// A recusa reusa TOO_MANY_QUERIES, e não ganha código próprio, porque a AÇÃO
+	// do cliente é idêntica à do semáforo cheio — esperar e repetir. O que muda
+	// é a CAUSA, e ela vai na mensagem, nomeando a chave.
+	orc := s.orcamento.Query(s.cfg.MaxBufferPerQuery())
+	if !orc.Admite() {
+		w.Header().Set("Retry-After", "1")
+		s.recusa(w, r, http.StatusServiceUnavailable, d.nome, protocolo.Falha{
+			Code: protocolo.CodMuitasQueries,
+			Message: fmt.Sprintf(
+				"o orçamento de memória de consulta do processo está esgotado (runtime.memoryTarget, %d bytes); "+
+					"esta consulta precisa de %d bytes (runtime.query.maxBufferPerQuery)",
+				s.cfg.MemoryTarget(), s.cfg.MaxBufferPerQuery()),
+		})
+		return
+	}
+	defer orc.Libera()
+
 	encerra := s.met.admite(d.nome)
 	defer encerra()
+	// O registro de queries em voo nasce ao LADO do admite, e não dentro dele,
+	// porque as duas coisas respondem a perguntas diferentes: o medidor diz
+	// QUANTAS estão correndo, e o registro diz QUAIS e HÁ QUANTO TEMPO. Com o
+	// prazo longo virando padrão, "há 3 consultas ativas" deixou de ser
+	// resposta — o operador precisa saber se são três point lookups ou um
+	// full scan de oito minutos.
+	saiDoRegistro := s.registraEmVoo(d.nome, req.SQL, longa, inicio)
+	defer saiDoRegistro()
 	defer func() { s.met.observa(d.nome, time.Since(inicio).Seconds()) }()
 
 	it, err := s.eng.Execute(ctx, d.nome, req.SQL, params)
@@ -133,7 +204,7 @@ func (s *Servidor) handleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.transmite(w, r, d, req, it, colunas, tetoDoRequest, inicio)
+	s.transmite(w, r, d, req, it, colunas, tetoDoRequest, inicio, orc)
 }
 
 // ehJSON aceita application/json com ou sem parâmetros (charset, por exemplo).
@@ -207,30 +278,48 @@ func tetoDeLinhas(req protocolo.Requisicao, tetoDoDataset int) (int, *protocolo.
 	return n, nil
 }
 
-// contextoDaConsulta aplica o timeoutMs do request, que também só pode
-// ENCURTAR: o menor prazo vence porque o executor deriva do contexto recebido.
-func (s *Servidor) contextoDaConsulta(r *http.Request, req protocolo.Requisicao, tetoDoDataset time.Duration) (
-	context.Context, context.CancelFunc, *protocolo.Falha,
+// contextoDaConsulta resolve o prazo EFETIVO da consulta e devolve o contexto
+// já com ele, mais o próprio prazo — que é o que decide se ela é longa.
+//
+// O request pode ALONGAR até `query.maxTimeout` e nunca além dele. Enquanto o
+// teto era o próprio `query.timeout`, ele acumulava dois papéis incompatíveis:
+// dar prazo maior a UM cliente exigia subir o default de TODOS, inclusive o dos
+// que nunca chamaram setQueryTimeout — e esses passariam a poder segurar uma
+// vaga do §80 por minutos sem nunca terem pedido isso. Com as duas chaves
+// separadas, alongar é um ato explícito de quem pede.
+//
+// A ausência de `timeoutMs` aplica o `Timeout` do dataset EXPLICITAMENTE, com
+// um deadline de verdade no contexto, em vez de devolver r.Context() cru e
+// deixar o executor pôr o prazo lá embaixo. Não é cerimônia: o executor agora
+// respeita o deadline de quem chama (ver executor.Open), então quem não puser
+// deadline aqui entrega uma consulta sem prazo nenhum.
+func (s *Servidor) contextoDaConsulta(r *http.Request, req protocolo.Requisicao, sch *schema.Compiled) (
+	context.Context, context.CancelFunc, time.Duration, *protocolo.Falha,
 ) {
-	if req.TimeoutMs == nil {
-		return r.Context(), func() {}, nil
-	}
-	ms := *req.TimeoutMs
-	switch {
-	case ms <= 0:
-		return nil, nil, &protocolo.Falha{
-			Code:    protocolo.CodBadRequest,
-			Message: fmt.Sprintf(`"timeoutMs" precisa ser positivo (recebido %d)`, ms),
+	prazo := sch.Timeout
+	if req.TimeoutMs != nil {
+		ms := *req.TimeoutMs
+		switch {
+		case ms <= 0:
+			return nil, nil, 0, &protocolo.Falha{
+				Code:    protocolo.CodBadRequest,
+				Message: fmt.Sprintf(`"timeoutMs" precisa ser positivo (recebido %d)`, ms),
+			}
+		case time.Duration(ms)*time.Millisecond > sch.MaxTimeout:
+			// A mensagem nomeia `query.maxTimeout`, e não `query.timeout`:
+			// mandar o operador mexer no default para atender um pedido pontual
+			// é exatamente o conselho errado — subiria o prazo de todo mundo.
+			return nil, nil, 0, &protocolo.Falha{
+				Code: protocolo.CodBadRequest,
+				Message: fmt.Sprintf(
+					`"timeoutMs" %d acima do teto do dataset (%d ms); peça menos ou ajuste query.maxTimeout`,
+					ms, sch.MaxTimeout.Milliseconds()),
+			}
 		}
-	case time.Duration(ms)*time.Millisecond > tetoDoDataset:
-		return nil, nil, &protocolo.Falha{
-			Code: protocolo.CodBadRequest,
-			Message: fmt.Sprintf(`"timeoutMs" %d acima do teto do dataset (%d ms); peça menos ou ajuste query.timeout`,
-				ms, tetoDoDataset.Milliseconds()),
-		}
+		prazo = time.Duration(ms) * time.Millisecond
 	}
-	ctx, cancela := context.WithTimeout(r.Context(), time.Duration(ms)*time.Millisecond)
-	return ctx, cancela, nil
+	ctx, cancela := context.WithTimeout(r.Context(), prazo)
+	return ctx, cancela, prazo, nil
 }
 
 // colunaReservada procura na projeção uma coluna com o nome da chave de
@@ -248,6 +337,7 @@ func colunaReservada(cols []executor.ColMeta) (string, bool) {
 func (s *Servidor) transmite(
 	w http.ResponseWriter, r *http.Request, d *dataset, req protocolo.Requisicao,
 	it executor.RowIterator, colunas []executor.ColMeta, tetoDoRequest int, inicio time.Time,
+	orc *orcamento.PorQuery,
 ) {
 	log := s.log.Dataset(d.nome)
 
@@ -286,13 +376,16 @@ func (s *Servidor) transmite(
 	}
 
 	lote := s.cfg.ResultBatchSize()
-	sw := executor.NewStreamWriter(w, executor.DefaultBufSize)
+	// O orçamento já foi ADMITIDO em handleQuery, e é devolvido lá, no defer que
+	// cobre todos os caminhos de saída. Aqui ele só informa ao writer o teto que
+	// ele tem de fazer valer.
+	sw := executor.NewStreamWriter(w, executor.DefaultBufSize, orc)
 
 	var emitidas int64
 	truncadoPeloRequest := false
 	for it.Next() {
 		if err := sw.WriteRow(it.Row()); err != nil {
-			s.fechaComErro(w, d, protocolo.CodInterno, emitidas, err, log)
+			s.fechaComErro(w, d, s.codigoDeErroDeEscrita(err), emitidas, err, log)
 			return
 		}
 		emitidas++
@@ -309,7 +402,7 @@ func (s *Servidor) transmite(
 			// chunk ao fio. Só o primeiro deixaria os bytes parados no
 			// servidor; só o segundo não teria o que entregar.
 			if err := sw.Flush(); err != nil {
-				s.fechaComErro(w, d, protocolo.CodInterno, emitidas, err, log)
+				s.fechaComErro(w, d, s.codigoDeErroDeEscrita(err), emitidas, err, log)
 				return
 			}
 			if flusher != nil {
@@ -319,7 +412,7 @@ func (s *Servidor) transmite(
 	}
 
 	if err := sw.Flush(); err != nil {
-		s.fechaComErro(w, d, protocolo.CodInterno, emitidas, err, log)
+		s.fechaComErro(w, d, s.codigoDeErroDeEscrita(err), emitidas, err, log)
 		return
 	}
 	if err := it.Err(); err != nil {
@@ -428,6 +521,26 @@ func traduzErroDeAbertura(err error, sql string) (int, protocolo.Falha) {
 		// cliente: 500 é a resposta honesta.
 		return http.StatusInternalServerError, protocolo.Falha{Code: protocolo.CodInterno, Message: err.Error()}
 	}
+}
+
+// codigoDeErroDeEscrita classifica a falha do StreamWriter.
+//
+// Existe porque nem toda falha de escrita é defeito do servidor. A linha que não
+// cabe no orçamento de buffer (§80) é o teto de memória sendo APLICADO, com ação
+// possível do cliente — projetar menos colunas — e do operador — subir
+// runtime.query.maxBufferPerQuery. Publicá-la como INTERNAL mandaria os dois
+// procurar um bug que não existe, e é o que acontecia enquanto o writer crescia
+// em silêncio: não havia nem erro para classificar.
+//
+// A recusa também alimenta o contador do PROCESSO, aqui e não no executor: é a
+// mesma doutrina de metricasDeQuery — as séries de consulta nascem no protocolo,
+// que é quem conhece requisições, e não no motor, que conhece iteradores.
+func (s *Servidor) codigoDeErroDeEscrita(err error) string {
+	if errors.Is(err, executor.ErrRowTooLarge) {
+		s.met.recusaPorOrcamento()
+		return protocolo.CodLinhaGrande
+	}
+	return protocolo.CodInterno
 }
 
 // codigoDeErroDeQuery classifica a falha que aparece DEPOIS das rows, no

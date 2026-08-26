@@ -173,7 +173,23 @@ type ExtractSpec struct {
 
 type QuerySpec struct {
 	MaxRows int
-	Timeout time.Duration
+	// Timeout é o prazo DEFAULT: o que vale quando o request NÃO traz
+	// `timeoutMs`. MaxTimeout é o TETO que o `timeoutMs` pode alcançar.
+	//
+	// São dois campos porque são duas perguntas, e enquanto havia um só as duas
+	// tinham a mesma resposta: `query.timeout` era ao mesmo tempo o prazo de
+	// quem não pede nada E o limite de quem pede. Com uma fonte só, dar prazo
+	// longo a UMA consulta exigia subir o teto de TODAS — inclusive o das que
+	// esqueceram de chamar setQueryTimeout, que passariam a poder segurar uma
+	// vaga do §80 por minutos sem nunca terem pedido isso.
+	//
+	// MaxTimeout ausente vale exatamente o Timeout RESOLVIDO deste dataset —
+	// não o default global, não 30s. É essa regra que faz todo nishidb.yaml
+	// escrito antes da separação produzir comportamento idêntico ao de antes:
+	// um dataset com `query.timeout: 5m` continua com teto de 5m em vez de
+	// passar a ser recusado por um teto global menor.
+	Timeout    time.Duration
+	MaxTimeout time.Duration
 }
 
 // Estruturas cruas do YAML (tudo opcional; defaults e validação em validate).
@@ -232,6 +248,9 @@ type rawSchema struct {
 type rawQuery struct {
 	MaxRows *int   `yaml:"maxRows"`
 	Timeout string `yaml:"timeout"`
+	// MaxTimeout é string vazia quando ausente, e ausente NÃO é zero: vale o
+	// Timeout resolvido deste dataset. Ver QuerySpec.
+	MaxTimeout string `yaml:"maxTimeout"`
 }
 
 // Defaults são os valores GLOBAIS de `query` do nishidb.yaml (§78:
@@ -244,10 +263,23 @@ type rawQuery struct {
 type Defaults struct {
 	MaxRows int
 	Timeout time.Duration
+	// MaxTimeout é ZERO quando o nishidb.yaml não declara
+	// `query.defaultMaxTimeout`, e zero aqui significa "cada dataset herda o
+	// PRÓPRIO Timeout resolvido" — não "sem teto" nem "trinta segundos".
+	//
+	// É esta a peça que preserva o comportamento de todo arquivo escrito antes
+	// de o teto existir: um dataset com `query.timeout: 5m` e nenhum
+	// maxTimeout continua com teto de 5m, e não com o default global de 30s,
+	// que recusaria a própria consulta que ele já atende hoje.
+	MaxTimeout time.Duration
 }
 
 // DefaultsPadrao são os valores da spec §78 para quem carrega uma spec sem
 // nishidb.yaml nenhum por perto — testes, benchmarks e ferramentas.
+//
+// MaxTimeout fica ZERO de propósito: escrever 30s aqui seria um segundo lugar
+// de onde o teto poderia sair, e ele divergiria do Timeout no dia em que um
+// dataset declarasse `query.timeout` maior.
 var DefaultsPadrao = Defaults{MaxRows: 100000, Timeout: 30 * time.Second}
 
 // Load lê e valida uma spec de um arquivo YAML.
@@ -589,6 +621,12 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 	}
 	if padroes.Timeout <= 0 {
 		return nil, specErrf("query.defaultTimeout global deve ser > 0, é %s", padroes.Timeout)
+	}
+	// Zero é AUSENTE aqui (o dataset herda o próprio Timeout), e por isso a
+	// faixa recusada é só a negativa — que nenhum parser produz, mas que um
+	// chamador que monte Defaults à mão produziria, e daria um teto no passado.
+	if padroes.MaxTimeout < 0 {
+		return nil, specErrf("query.defaultMaxTimeout global não pode ser negativo, é %s", padroes.MaxTimeout)
 	}
 	s := &DatasetSpec{}
 
@@ -936,6 +974,34 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 		timeout = d
 	}
 	s.Query.Timeout = timeout
+
+	// maxTimeout é o TETO; timeout é o DEFAULT. O default do teto é o próprio
+	// timeout resolvido — nesta ordem, e não a partir de padroes.Timeout —
+	// porque é isso que faz o dataset que declara `query.timeout: 5m` continuar
+	// com teto de 5m em vez de ganhar o global de 30s e passar a recusar a
+	// consulta que ele atende hoje.
+	maxTimeout := padroes.MaxTimeout
+	if raw.Query.MaxTimeout != "" {
+		d, err := time.ParseDuration(raw.Query.MaxTimeout)
+		if err != nil || d <= 0 {
+			return nil, specErrf("query.maxTimeout %q inválido", raw.Query.MaxTimeout)
+		}
+		maxTimeout = d
+	}
+	if maxTimeout == 0 {
+		maxTimeout = timeout
+	}
+	if maxTimeout < timeout {
+		// As DUAS chaves na mensagem, com os dois valores: sem elas o operador
+		// lê "teto menor que o default" e não sabe qual dos dois números veio
+		// do YAML do dataset e qual veio do default global — e o par pode ter
+		// se formado de quatro maneiras diferentes.
+		return nil, specErrf(
+			"query.maxTimeout (%s) é menor que query.timeout (%s): o teto teria de recusar "+
+				"o prazo que o próprio dataset usa por padrão; suba query.maxTimeout ou baixe query.timeout",
+			maxTimeout, timeout)
+	}
+	s.Query.MaxTimeout = maxTimeout
 
 	return s, nil
 }

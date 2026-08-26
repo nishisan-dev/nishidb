@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/buildinfo"
 	"github.com/nishisan-dev/nishidb/internal/metrics"
@@ -56,12 +57,17 @@ func metaDoDataset(d *dataset) protocolo.DatasetMeta {
 		// MaxRows e Timeout saem do COMPILADO, que é onde o default global já
 		// foi resolvido contra o que o YAML do dataset declara: quem consulta
 		// precisa do teto que vai valer, não de onde ele foi escrito.
-		MaxRows:       d.sch.MaxRows,
-		TimeoutMs:     d.sch.Timeout.Milliseconds(),
-		MaxCols:       d.sch.MaxCols,
-		OnMaxCols:     d.sch.OnMaxCols,
-		MaxNestedCols: d.sch.MaxNestedCols,
-		Columns:       make([]protocolo.ColunaMeta, 0, len(campos)),
+		MaxRows: d.sch.MaxRows,
+		// TimeoutMs publica o TETO, e DefaultTimeoutMs o prazo padrão. O campo
+		// que já existia continua carregando o número que o servidor FAZ
+		// VALER — que é o que ele já significava para o driver, cujo clamp
+		// existe porque o servidor recusa acima do teto. Ver DatasetMeta.
+		TimeoutMs:        d.sch.MaxTimeout.Milliseconds(),
+		DefaultTimeoutMs: d.sch.Timeout.Milliseconds(),
+		MaxCols:          d.sch.MaxCols,
+		OnMaxCols:        d.sch.OnMaxCols,
+		MaxNestedCols:    d.sch.MaxNestedCols,
+		Columns:          make([]protocolo.ColunaMeta, 0, len(campos)),
 	}
 	if d.sch.Key != nil {
 		m.Key = d.sch.Key.Name
@@ -128,6 +134,12 @@ func (s *Servidor) handleStats(w http.ResponseWriter, r *http.Request) {
 				Truncated:    em.Truncated.Load(),
 				Canceled:     em.Canceled.Load(),
 			},
+			// Lido no instante da chamada, da MESMA estrutura que alimenta
+			// nishidb_query_longest_running_seconds — nenhum contador novo,
+			// pela regra deste handler: duas fontes para o mesmo número
+			// divergem, e a divergência aparece como um painel que discorda do
+			// JSON sem nada estar quebrado.
+			InFlight: s.emVoo.instantaneo(time.Now()),
 		},
 		Datasets: make([]protocolo.DatasetStats, 0, len(s.datasets)),
 	}

@@ -32,6 +32,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/materializer"
 	"github.com/nishisan-dev/nishidb/internal/metrics"
 	"github.com/nishisan-dev/nishidb/internal/query"
+	"github.com/nishisan-dev/nishidb/internal/query/orcamento"
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/storage"
 )
@@ -80,10 +81,26 @@ type Servidor struct {
 	// fixa, e não um contador: a aquisição não-bloqueante é o que permite
 	// REJEITAR na hora (§81) em vez de enfileirar — uma fila de espera
 	// seguraria conexões e esconderia a saturação de quem lê o /metrics.
-	vagas    chan struct{}
-	http     *http.Server
-	ln       net.Listener
-	pprofSrv *http.Server
+	vagas chan struct{}
+	// vagasLongas é o SUB-POOL do §80 para a consulta que pediu prazo acima do
+	// `query.timeout` do dataset. Vive DENTRO de vagas: quem entra aqui já
+	// tomou uma vaga geral, e por isso o config recusa maxLongRunning acima do
+	// maxConcurrent. Sem ele, o prazo longo por padrão faria maxConcurrent
+	// relatórios ocuparem o semáforo inteiro e toda consulta interativa
+	// receber 503 pelo tempo que eles durassem.
+	vagasLongas chan struct{}
+	// emVoo é o registro de QUAIS consultas estão correndo, ao lado do medidor
+	// que diz quantas. Ver emvoo.go.
+	emVoo *emVoo
+	// orcamento é o teto de memória de consulta do §80
+	// (runtime.memoryTarget), do qual cada requisição toma uma fatia limitada
+	// por runtime.query.maxBufferPerQuery. É do PROCESSO pela mesma razão do
+	// semáforo: o §82 diz que todos os datasets dividem o mesmo orçamento, e um
+	// por dataset multiplicaria o pior caso pelo número deles.
+	orcamento *orcamento.Global
+	http      *http.Server
+	ln        net.Listener
+	pprofSrv  *http.Server
 
 	// credenciais é o cache imutável de server.authentication.users já
 	// resolvido contra o ambiente (§74-77, resolveCredenciais em
@@ -238,10 +255,13 @@ func Novo(cfg *config.Config, o Opcoes) (*Servidor, error) {
 		eng:         query.NewEngine(),
 		porNome:     make(map[string]*dataset, len(nomes)),
 		vagas:       make(chan struct{}, cfg.MaxConcurrent()),
+		vagasLongas: make(chan struct{}, cfg.MaxLongRunning()),
+		emVoo:       novoEmVoo(),
+		orcamento:   orcamento.NovoGlobal(cfg.MemoryTarget()),
 		credenciais: credenciais,
 		tlsCert:     certificado,
 	}
-	s.met = registraMetricasDeQuery(reg, s.eng)
+	s.met = registraMetricasDeQuery(reg, s.eng, s.emVoo, s.orcamento)
 	s.authFalhas = registraMetricasDeAuth(reg)
 
 	// O bind vem ANTES de abrir os datasets: descobrir porta ocupada depois

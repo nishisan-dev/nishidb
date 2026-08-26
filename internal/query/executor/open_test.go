@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/query/binder"
 	"github.com/nishisan-dev/nishidb/internal/query/executor"
@@ -79,6 +80,11 @@ func bqBase(t *testing.T, c *schema.Compiled) *binder.BoundQuery {
 		Slots:          binder.Slots{IDs: []types.FieldID{id.ID}},
 		MaxRows:        100,
 		EffectiveLimit: 100,
+		// O prazo faz parte do MÍNIMO válido: o binder sempre o copia do
+		// schema compilado, e o Open recusa a query ligada sem ele em vez de
+		// cair num default próprio. Enquanto esse default existia, esta base
+		// podia esquecer o campo e nada acusava.
+		Timeout: 30 * time.Second,
 	}
 }
 
@@ -110,6 +116,14 @@ func TestPlanoInvalido(t *testing.T) {
 			bq.Columns[0].Field = nil
 			return bq
 		}, planner.FullScan(), st, "campo nulo"},
+		// Prazo ausente é BUG do binder, e tem de sair aqui: o executor deixou
+		// de ter um timeoutPadrao próprio, que era uma segunda fonte da verdade
+		// capaz de vencer em silêncio o `query.maxTimeout` configurado.
+		{"query ligada sem prazo", func() *binder.BoundQuery {
+			bq := bqBase(t, c)
+			bq.Timeout = 0
+			return bq
+		}, planner.FullScan(), st, "sem prazo"},
 		{"coluna com slot fora de faixa", func() *binder.BoundQuery {
 			bq := bqBase(t, c)
 			bq.Columns[0].Slot = 7

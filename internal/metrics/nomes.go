@@ -97,6 +97,56 @@ const (
 	// tentar decidir o que é "pouco tempo" (isso já é o WARN estruturado
 	// tls.certificado_expirando, em internal/server/seguranca.go).
 	MetTLSCertExpiryTimestamp = "nishidb_tls_cert_expiry_timestamp"
+
+	// MetQueryLongestRunningSeconds e MetQueryLongRejectedTotal são do sub-pool
+	// de consulta longa. Não estão no §92, e a razão é a mesma das duas
+	// anteriores: aquela seção foi escrita quando `query.timeout` era ao mesmo
+	// tempo o default e o teto, então "consulta longa" não era uma categoria
+	// que o produto reconhecesse — não havia o que medir.
+	//
+	// MetQueryLongestRunningSeconds é a idade da consulta em voo há mais tempo.
+	// É MEDIDOR e é lida no scrape (ver emVoo.maisAntiga), nunca atualizada na
+	// admissão: o número que interessa CRESCE SOZINHO enquanto nada acontece, e
+	// um medidor escrito só quando uma consulta começa ou termina ficaria
+	// congelado exatamente no estado que ele existe para denunciar — o servidor
+	// parado numa varredura que não acaba. Com o §92 sozinho, esse estado é
+	// indistinguível de "3 consultas ativas, tudo bem".
+	//
+	// MetQueryLongRejectedTotal conta as recusas do SUB-POOL, separado de
+	// nishidb_query_errors{categoria="TOO_MANY_LONG_QUERIES"} — que também as
+	// registra — porque as duas respondem a perguntas diferentes: a série de
+	// erros é dimensionada por dataset e serve ao diagnóstico de um deles, e
+	// esta é do PROCESSO e serve a uma decisão de capacidade, que é subir
+	// runtime.query.maxLongRunning. Sem ela, a pergunta "o sub-pool está
+	// apertado?" só teria resposta somando categorias sobre todos os datasets,
+	// que é conta que ninguém escreve num alerta.
+	//
+	// O débito 61 é o custo de publicar nome fora do §92 sem razão registrada;
+	// esta é a razão, e ela mora aqui junto das constantes.
+	MetQueryLongestRunningSeconds = "nishidb_query_longest_running_seconds"
+	MetQueryLongRejectedTotal     = "nishidb_query_long_rejected_total"
+
+	// MetQueryBufferBytes e MetQueryBudgetRejectedTotal são do orçamento de
+	// memória de consulta (§80: runtime.memoryTarget e
+	// runtime.query.maxBufferPerQuery). Não estão no §92 porque, quando aquela
+	// seção foi escrita, as duas chaves eram parseadas e nunca lidas — não havia
+	// orçamento, e por isso não havia o que medir. Era metade do débito 15.
+	//
+	// MetQueryBufferBytes é MEDIDOR e é lido no scrape, do próprio contador
+	// atômico do orçamento: é o único número que responde "o memoryTarget que
+	// eu configurei está apertado?" antes de a primeira recusa acontecer. Sem
+	// ele, o operador só descobriria o teto pelo erro — e aí já perdeu uma
+	// consulta para aprender o que um painel diria de graça.
+	//
+	// MetQueryBudgetRejectedTotal conta as linhas recusadas por não caberem no
+	// orçamento (ROW_TOO_LARGE). É separada de
+	// nishidb_query_errors{categoria="ROW_TOO_LARGE"} pela mesma razão que
+	// MetQueryLongRejectedTotal é separada da dela: a série de erros é por
+	// dataset e serve ao diagnóstico de um; esta é do PROCESSO e serve a uma
+	// decisão de capacidade, que é subir a chave. Somar categorias sobre todos
+	// os datasets não é conta que alguém escreva num alerta.
+	MetQueryBufferBytes         = "nishidb_query_buffer_bytes"
+	MetQueryBudgetRejectedTotal = "nishidb_query_budget_rejected_total"
 )
 
 // Séries INVENTADAS no M2, com o defeito que cada uma corrige.

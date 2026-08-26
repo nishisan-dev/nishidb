@@ -199,10 +199,35 @@ const (
 	CodMediaType            = "UNSUPPORTED_MEDIA_TYPE"
 	CodCorpoGrande          = "REQUEST_TOO_LARGE"
 	CodMuitasQueries        = "TOO_MANY_QUERIES"
-	CodTimeout              = "TIMEOUT"
-	CodMaxRows              = "MAX_ROWS_EXCEEDED"
-	CodDatasetCorrompido    = "DATASET_CORRUPT"
-	CodInterno              = "INTERNAL"
+	// CodMuitasQueriesLongas é a recusa do SUB-POOL de consulta longa
+	// (runtime.query.maxLongRunning), e tem código próprio em vez de reusar
+	// CodMuitasQueries porque a AÇÃO do cliente é outra.
+	//
+	// TOO_MANY_QUERIES diz "o servidor está cheio, tente de novo em instantes"
+	// — e é verdade, porque as consultas que ocupam o pool geral duram
+	// milissegundos. TOO_MANY_LONG_QUERIES diz "as vagas de consulta LONGA
+	// estão ocupadas", e quem as ocupa pode estar lá por minutos: repetir em
+	// um segundo é quase certo que falha de novo, e a alternativa útil é
+	// baixar o `timeoutMs` para caber no prazo padrão do dataset e entrar pelo
+	// pool geral. Com um código só, o cliente não teria como distinguir os dois
+	// conselhos, e o driver publicaria o mesmo SQLState para os dois.
+	CodMuitasQueriesLongas = "TOO_MANY_LONG_QUERIES"
+	CodTimeout             = "TIMEOUT"
+	CodMaxRows             = "MAX_ROWS_EXCEEDED"
+	// CodLinhaGrande é a linha que não coube no orçamento de buffer da consulta
+	// (runtime.query.maxBufferPerQuery, §80).
+	//
+	// Tem código próprio, e não CodInterno, porque não é defeito do servidor: é
+	// o teto de memória sendo aplicado, e existe ação do cliente — projetar
+	// menos colunas, ou o operador subir a chave. Enquanto o StreamWriter
+	// crescia em silêncio (débito 28) não havia erro nenhum para nomear, e o
+	// sintoma aparecia como RSS num processo que ninguém ligava àquela consulta.
+	//
+	// Sai SEMPRE na linha de fecho, depois das rows: quando a linha grande
+	// aparece, o status HTTP já foi enviado junto com o schema.
+	CodLinhaGrande       = "ROW_TOO_LARGE"
+	CodDatasetCorrompido = "DATASET_CORRUPT"
+	CodInterno           = "INTERNAL"
 
 	// CodUnauthenticated e CodForbidden são do middleware de autenticação e
 	// papéis do §74-77 (Fase 11, Task B3) — os dois primeiros códigos deste

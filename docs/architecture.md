@@ -563,6 +563,65 @@ heap vivo tanto para 2.000 quanto para 40.000 linhas).
 recurso protegido é do processo — o §82 já diz que todos os datasets dividem o
 mesmo orçamento de memória.
 
+**A consulta longa é cidadã de primeira classe, e por isso tem sub-pool.**
+`query.timeout` deixou de acumular os papéis de default e de teto: o teto agora é
+`query.maxTimeout`, e o request pode ALONGAR até ele — antes só sabia encurtar,
+e dar prazo maior a uma consulta exigia subir o default de todas. `maxTimeout`
+ausente vale o `timeout` resolvido do próprio dataset, que é o que preserva o
+comportamento de todo arquivo anterior à separação.
+
+A contenção que isso torna obrigatória é `runtime.query.maxLongRunning`
+(default 2, DENTRO do `maxConcurrent`): uma consulta cujo prazo efetivo passa do
+`query.timeout` do dataset toma uma vaga de CADA pool. Sem ela, `maxConcurrent`
+relatórios de dez minutos ocupariam o semáforo inteiro e toda consulta
+interativa receberia 503 por dez minutos — o teto do §80 protegeria a ingestão
+entregando, no lugar dela, a consulta que responde em milissegundos. A recusa do
+sub-pool sai como `TOO_MANY_LONG_QUERIES`, separada de `TOO_MANY_QUERIES` porque
+a ação do cliente é outra: o pool geral esvazia em milissegundos, e este pode
+levar minutos.
+
+**O prazo tem UMA fonte.** O executor tinha um `timeoutPadrao` de 30s próprio, e
+aplicava o `bq.Timeout` do dataset SEMPRE — inclusive por cima de um contexto que
+já trazia deadline. Como o menor deadline vence, um servidor que tivesse
+resolvido cinco minutos contra `query.maxTimeout` veria o prazo cortado de volta
+para 30s, e a consulta morreria em TIMEOUT com o teto configurado dizendo que ela
+podia. Hoje `executor.Open` só aplica o prazo do dataset quando o chamador NÃO
+trouxe deadline, e recusa uma query ligada sem prazo com `ErrInvalidPlan` em vez
+de cair num default próprio.
+
+**A memória de consulta virou orçamento, e não mais uma chave sem leitor.**
+`runtime.memoryTarget` e `runtime.query.maxBufferPerQuery` eram parseados e nunca
+lidos (metade do débito 15). `internal/query/orcamento` é o teto: dois
+`atomic.Int64`, sem mutex e sem alocação — o consumidor é chamado uma vez por
+row, e o gate de alocação do executor exige igualdade exata entre 1.000 e 8.000
+linhas. O `Global` recusa na ADMISSÃO (503 + `Retry-After`, ao lado do semáforo)
+e o `PorQuery` recusa POR LINHA, dentro do writer. A reserva é do teto inteiro na
+entrada: com reserva incremental o orçamento do processo pode acabar na linha
+quarenta mil, e o cliente perde o resultado por causa da memória de outra
+consulta.
+
+**Primeiro consumidor real: o `StreamWriter`** — o débito 28, cujo próprio texto
+já dizia que o remédio era o `maxBufferPerQuery` do §80. Ele nunca encolhia: uma
+linha de 1 MiB fixava a capacidade pela vida do writer, e o pior caso era
+N × maiorLinha de RSS residente. Hoje o teto vale sobre a CAPACIDADE (é o array
+que ocupa memória, e era ele que o `buf[:0]` preservava), a linha que não cabe
+sai como `ROW_TOO_LARGE` com o próprio tamanho e a chave na mensagem, e o array
+grande vira lixo na hora — recusar sem soltar a memória teria evitado o sintoma
+errado. O buffer inicial fica em METADE do teto quando o teto é apertado: o
+append que cruza o limiar de flush é o que estica o array, e sem folga um
+`maxBufferPerQuery` abaixo dos 64 KiB default do stream viraria "nenhuma consulta
+funciona".
+
+**Quem está segurando as vagas fica visível.** Um registro de consultas em voo
+(`{dataset, início, hash do SQL}`, alimentado ao lado de `s.met.admite` e limpo
+no defer) alimenta o `/v1/stats` e o `nishidb status`. O medidor
+`nishidb_query_active` responde "quantas"; com prazo longo virando padrão, a
+pergunta do operador passou a ser "qual, e há quanto tempo".
+`nishidb_query_longest_running_seconds` é lida no SCRAPE, e não escrita na
+admissão, porque o valor cresce sozinho enquanto nada acontece — um medidor
+escrito na admissão ficaria congelado exatamente no estado que ele existe para
+denunciar.
+
 **O bind default é loopback.** Até o M2 o servidor só expunha `/metrics` e
 `/v1/health`; com `/v1/query` ele passa a servir os dados. A autenticação e o
 TLS do §74-77 chegaram na Fase 11 e estão descritos na seção seguinte. Não

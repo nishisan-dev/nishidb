@@ -13,6 +13,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/query/binder"
 	"github.com/nishisan-dev/nishidb/internal/query/executor"
 	"github.com/nishisan-dev/nishidb/internal/query/lexer"
+	"github.com/nishisan-dev/nishidb/internal/query/orcamento"
 	"github.com/nishisan-dev/nishidb/internal/query/parser"
 )
 
@@ -123,7 +124,28 @@ func runQuery(args []string, amb Ambiente) int {
 
 	// Streaming de verdade: o writer descarrega por limiar e nada do resultado
 	// é acumulado.
-	w := executor.NewStreamWriter(amb.Stdout, executor.DefaultBufSize)
+	//
+	// O orçamento sai do MESMO nishidb.yaml que o servidor lê, e não de um
+	// "sem teto" local: um `runtime.query.maxBufferPerQuery` que vale pela porta
+	// e não vale pelo CLI é a chave mentindo em metade dos caminhos, que é o
+	// defeito de que este orçamento nasceu (débito 15). O processo do CLI serve
+	// UMA consulta, então o Global é dele sozinho.
+	orc := orcamento.NovoGlobal(cfg.MemoryTarget()).Query(cfg.MaxBufferPerQuery())
+	if !orc.Admite() {
+		// Só acontece com `maxBufferPerQuery` acima do `memoryTarget`, que o
+		// CarregaConfig já recusa — mas o retorno é conferido do mesmo jeito:
+		// ignorá-lo por "não pode acontecer" é como o writer ficaria sem
+		// orçamento no dia em que a validação mudasse de lugar.
+		// `_, _ =`: a disciplina que este arquivo já declara para código NOVO —
+		// o gate de lint cobra 0 apontamentos novos, e as chamadas bare a
+		// fmt.Fprintln daqui são débito anterior, não precedente a repetir.
+		_, _ = fmt.Fprintln(amb.Stderr,
+			"query: o orçamento de memória de consulta não comporta esta consulta "+
+				"(runtime.memoryTarget contra runtime.query.maxBufferPerQuery)")
+		return ExitUso
+	}
+	defer orc.Libera()
+	w := executor.NewStreamWriter(amb.Stdout, executor.DefaultBufSize, orc)
 	for it.Next() {
 		if err := w.WriteRow(it.Row()); err != nil {
 			fmt.Fprintln(amb.Stderr, "query: escrevendo o resultado:", err)

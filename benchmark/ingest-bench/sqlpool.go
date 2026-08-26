@@ -8,6 +8,7 @@ import (
 
 	"github.com/nishisan-dev/nishidb/internal/query"
 	"github.com/nishisan-dev/nishidb/internal/query/executor"
+	"github.com/nishisan-dev/nishidb/internal/query/orcamento"
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/storage"
 	"github.com/nishisan-dev/nishidb/internal/types"
@@ -53,10 +54,29 @@ func (p *sqlPool) MedeVarreduraCompleta() (time.Duration, int64, error) {
 		return 0, 0, nil
 	}
 	saida := &contador{}
-	w := executor.NewStreamWriter(saida, 8<<10)
+	// Orçamento do §80 com os defaults do produto: o benchmark tem de pagar o
+	// MESMO caminho que o servidor paga, senão ele mede um writer que não
+	// existe em produção.
+	w := executor.NewStreamWriter(saida, 8<<10, orcamentoDoBench())
 	início := time.Now()
 	err := p.roda(w, varreduraCompleta, nil)
 	return time.Since(início), saida.bytes, err
+}
+
+// orcamentoDoBench é o orçamento de memória de consulta (§80) nos defaults do
+// produto, um por leitor.
+//
+// Um por leitor, e não um Global compartilhado, porque o benchmark mede
+// LATÊNCIA DE ROTA: com um Global só, a contenção do CAS entre os leitores
+// entraria na medição e seria lida como custo da consulta. O que importa aqui é
+// que o writer pague o mesmo caminho de código que paga em produção.
+func orcamentoDoBench() *orcamento.PorQuery {
+	p := orcamento.NovoGlobal(512 << 20).Query(4 << 20)
+	// O retorno é IGNORADO de propósito, e o `_ =` diz isso: um Global de
+	// 512 MiB comporta o primeiro Admite de 4 MiB por construção, e o benchmark
+	// não tem a quem reportar recusa — ele mede vazão, não admissão.
+	_ = p.Admite()
+	return p
 }
 
 // sqlPool roda consultas SQL concorrentes com a ingestão e mede a latência de
@@ -92,7 +112,7 @@ func startSQLReaders(cfg Config, st *storage.Store, c *schema.Compiled, keys [][
 			// verdade, senão a medição não inclui o encoder — que é parte do
 			// caminho que o usuário paga.
 			saida := &contador{}
-			w := executor.NewStreamWriter(saida, 8<<10)
+			w := executor.NewStreamWriter(saida, 8<<10, orcamentoDoBench())
 			n := id
 			for {
 				select {

@@ -123,19 +123,27 @@ type Config struct {
 		Loopback       LoopbackSpec       `yaml:"loopback"`
 	} `yaml:"server"`
 
-	// Runtime é o bloco §79/§80. Só query.maxConcurrent tem leitor: é o teto
-	// de consultas simultâneas que o §80 nomeia e que o §81 autoriza a fazer
-	// valer REJEITANDO consulta antes de comprometer a ingestão.
+	// Runtime é o bloco §79/§80, e desde o fechamento de metade do débito 15
+	// quase todo ele tem leitor: query.maxConcurrent é o teto de consultas
+	// simultâneas do §80, query.maxLongRunning é o sub-pool da consulta longa,
+	// e memoryTarget/query.maxBufferPerQuery são o orçamento de memória de
+	// consulta (internal/query/orcamento), cujo primeiro consumidor real é o
+	// StreamWriter.
 	//
-	// As demais chaves continuam aceitas e sem efeito (débito 15), mas não em
-	// silêncio: quem escreve `memoryTarget: 1GiB` conclui que há um teto de
-	// memória, e não há. A subida avisa — no mesmo molde do aviso que
-	// storage.durability recebe (débito 50, ChavesDeStorageIgnoradas).
+	// managedMemoryTarget continua aceita e sem efeito, e não em silêncio:
+	// quem a escreve conclui que há um teto que não há, e a subida avisa — no
+	// mesmo molde de storage.durability (débito 50, ChavesDeStorageIgnoradas).
 	Runtime struct {
 		MemoryTarget        string `yaml:"memoryTarget"`
 		ManagedMemoryTarget string `yaml:"managedMemoryTarget"`
 		Query               struct {
-			MaxConcurrent     *int   `yaml:"maxConcurrent"`
+			MaxConcurrent *int `yaml:"maxConcurrent"`
+			// MaxLongRunning é o sub-pool da query LONGA, DENTRO do
+			// maxConcurrent. Sem ele, dar prazo longo por padrão faria 16
+			// consultas longas ocuparem o semáforo inteiro e TODA consulta
+			// curta receber 503 — o teto do §80 protegeria a ingestão e
+			// entregaria a consulta interativa no lugar dela.
+			MaxLongRunning    *int   `yaml:"maxLongRunning"`
 			MaxBufferPerQuery string `yaml:"maxBufferPerQuery"`
 		} `yaml:"query"`
 	} `yaml:"runtime"`
@@ -150,9 +158,17 @@ type Config struct {
 	// herda o padrão da spec, zero é valor inválido e precisa ser recusado
 	// com a mesma clareza de um negativo.
 	Query struct {
-		DefaultMaxRows  *int   `yaml:"defaultMaxRows"`
-		DefaultTimeout  string `yaml:"defaultTimeout"`
-		ResultBatchSize *int   `yaml:"resultBatchSize"`
+		DefaultMaxRows *int   `yaml:"defaultMaxRows"`
+		DefaultTimeout string `yaml:"defaultTimeout"`
+		// DefaultMaxTimeout é o default global do TETO de prazo — a chave que
+		// torna a query longa cidadã de primeira classe sem dar prazo longo a
+		// quem nunca o pediu. Ausente (string vazia) NÃO vira 30s: vira zero,
+		// e zero significa "cada dataset herda o próprio query.timeout
+		// resolvido" (ver schema.Defaults.MaxTimeout). É isso que faz um
+		// nishidb.yaml de hoje produzir comportamento idêntico ao de antes de
+		// a chave existir.
+		DefaultMaxTimeout string `yaml:"defaultMaxTimeout"`
+		ResultBatchSize   *int   `yaml:"resultBatchSize"`
 	} `yaml:"query"`
 
 	// Resolvidos a partir dos campos textuais acima.
@@ -160,9 +176,13 @@ type Config struct {
 	checkpointInterval time.Duration
 	defaultMaxRows     int
 	defaultTimeout     time.Duration
+	defaultMaxTimeout  time.Duration
 	resultBatchSize    int
 	serverPort         int
 	maxConcurrent      int
+	maxLongRunning     int
+	memoryTarget       int64
+	maxBufferPerQuery  int64
 	minimumLiveRatio   float64
 	expiracaoMax       int
 	expiracaoTempo     time.Duration
@@ -182,6 +202,28 @@ const (
 	resultBatchPadrao        = 256
 	serverPortPadrao         = 9142
 	maxConcurrentPadrao      = 16
+
+	// maxLongRunningPadrao é DOIS, e não uma fração do maxConcurrent.
+	//
+	// Duas porque o sub-pool existe para garantir que a consulta interativa
+	// sempre tenha vaga, e uma fração faria o pior caso crescer junto com o
+	// teto geral — com `maxConcurrent: 64`, um quarto seriam 16 consultas
+	// longas segurando 16 vagas do pool geral, que é exatamente o cenário que
+	// o sub-pool veio impedir. Duas cobrem o caso real (um relatório e um
+	// export em paralelo) e deixam 14 das 16 vagas do default sempre
+	// disponíveis para quem responde em milissegundos.
+	maxLongRunningPadrao = 2
+
+	// Os dois defaults do §80, literais da spec: 512 MiB de orçamento de
+	// memória de consulta para o processo e 4 MiB de buffer por consulta.
+	//
+	// A relação entre eles não é arbitrária: 4 MiB × os 16 do maxConcurrent
+	// padrão são 64 MiB, um oitavo do alvo — folga suficiente para que o
+	// orçamento por consulta seja o que de fato recusa a linha patológica, e
+	// não o global, que recusaria por culpa de uma consulta a consulta de
+	// outro cliente.
+	memoryTargetPadrao      = 512 << 20
+	maxBufferPerQueryPadrao = 4 << 20
 
 	// Defaults da coleta de expiração. Mil marcações por passada a 452 ev/s
 	// do piloto são ~136 KB escritos por passada — ruído perto da ingestão —,
@@ -273,6 +315,24 @@ func CarregaConfig(path string) (*Config, error) {
 	if c.defaultTimeout, err = units.Duracao(c.Query.DefaultTimeout, timeoutPadrao); err != nil {
 		return nil, fmt.Errorf("configuração %s: query.defaultTimeout: %w", path, err)
 	}
+	// O padrão é ZERO, e zero é o sinal de "ausente" que schema.validate lê
+	// como "cada dataset herda o próprio query.timeout". Passar timeoutPadrao
+	// aqui daria um teto global de 30s a datasets que hoje declaram
+	// `query.timeout: 5m` — e a spec deles passaria a ser recusada na abertura.
+	if c.defaultMaxTimeout, err = units.Duracao(c.Query.DefaultMaxTimeout, 0); err != nil {
+		return nil, fmt.Errorf("configuração %s: query.defaultMaxTimeout: %w", path, err)
+	}
+	if c.defaultMaxTimeout != 0 && c.defaultMaxTimeout < c.defaultTimeout {
+		// A recusa é AQUI, com os nomes GLOBAIS, e não lá na spec do dataset:
+		// o par inválido foi escrito neste arquivo, e deixá-lo chegar em
+		// schema.validate faria a mensagem nomear `query.maxTimeout`/
+		// `query.timeout` — chaves que o operador não encontraria no YAML que
+		// ele acabou de editar.
+		return nil, fmt.Errorf(
+			"configuração %s: query.defaultMaxTimeout (%s) é menor que query.defaultTimeout (%s): "+
+				"o teto global recusaria o prazo que ele mesmo dá por padrão",
+			path, c.defaultMaxTimeout, c.defaultTimeout)
+	}
 	if c.resultBatchSize, err = units.InteiroPositivo(c.Query.ResultBatchSize, resultBatchPadrao); err != nil {
 		return nil, fmt.Errorf("configuração %s: query.resultBatchSize: %w", path, err)
 	}
@@ -281,6 +341,50 @@ func CarregaConfig(path string) (*Config, error) {
 	}
 	if c.maxConcurrent, err = units.InteiroPositivo(c.Runtime.Query.MaxConcurrent, maxConcurrentPadrao); err != nil {
 		return nil, fmt.Errorf("configuração %s: runtime.query.maxConcurrent: %w", path, err)
+	}
+	// O DEFAULT do sub-pool é limitado pelo pool, e a chave EXPLÍCITA não é.
+	//
+	// A assimetria não é indulgência: `runtime.query.maxConcurrent: 1` é
+	// configuração legítima e existente, e um default fixo de 2 mataria a
+	// subida dela na primeira troca de binário — a chave nova recusaria um
+	// arquivo que ninguém editou. Com uma vaga só no pool não há folga a
+	// reservar, e o sub-pool honesto é o pool inteiro. Já quem ESCREVE
+	// maxLongRunning acima do maxConcurrent está pedindo algo que o semáforo
+	// geral recusaria primeiro, e aí a recusa é o serviço.
+	padraoLongo := maxLongRunningPadrao
+	if padraoLongo > c.maxConcurrent {
+		padraoLongo = c.maxConcurrent
+	}
+	if c.maxLongRunning, err = units.InteiroPositivo(c.Runtime.Query.MaxLongRunning, padraoLongo); err != nil {
+		return nil, fmt.Errorf("configuração %s: runtime.query.maxLongRunning: %w", path, err)
+	}
+	if c.maxLongRunning > c.maxConcurrent {
+		// O sub-pool vive DENTRO do geral: uma consulta longa toma as duas
+		// vagas. Um sub-pool maior que o pool prometeria vagas longas que o
+		// semáforo geral recusaria primeiro, e o operador leria o 503 de
+		// TOO_MANY_QUERIES onde configurou espaço para consulta longa.
+		return nil, fmt.Errorf(
+			"configuração %s: runtime.query.maxLongRunning (%d) acima de runtime.query.maxConcurrent (%d): "+
+				"a consulta longa toma uma vaga de CADA pool, então o sub-pool não pode ser maior que o pool",
+			path, c.maxLongRunning, c.maxConcurrent)
+	}
+	if c.memoryTarget, err = units.Tamanho(c.Runtime.MemoryTarget, memoryTargetPadrao); err != nil {
+		return nil, fmt.Errorf("configuração %s: runtime.memoryTarget: %w", path, err)
+	}
+	if c.maxBufferPerQuery, err = units.Tamanho(c.Runtime.Query.MaxBufferPerQuery, maxBufferPerQueryPadrao); err != nil {
+		return nil, fmt.Errorf("configuração %s: runtime.query.maxBufferPerQuery: %w", path, err)
+	}
+	if c.maxBufferPerQuery > c.memoryTarget {
+		// Um teto por consulta acima do orçamento do processo é uma promessa
+		// que o processo nunca poderia cumprir: a PRIMEIRA consulta a chegar
+		// perto do próprio limite já seria recusada pelo global, e o operador
+		// leria a recusa como defeito do motor em vez de como a contradição que
+		// ele escreveu. Recusar na abertura, nomeando as duas chaves, é o que
+		// transforma isso num erro de configuração legível.
+		return nil, fmt.Errorf(
+			"configuração %s: runtime.query.maxBufferPerQuery (%d bytes) acima de runtime.memoryTarget "+
+				"(%d bytes): o orçamento de UMA consulta não pode passar do orçamento do processo inteiro",
+			path, c.maxBufferPerQuery, c.memoryTarget)
 	}
 	if c.serverPort > 65535 {
 		return nil, fmt.Errorf("configuração %s: server.port %d fora de 1..65535", path, c.serverPort)
@@ -403,6 +507,34 @@ func (c *Config) ResultBatchSize() int { return c.resultBatchSize }
 // número deles.
 func (c *Config) MaxConcurrent() int { return c.maxConcurrent }
 
+// MaxLongRunning é quantas consultas LONGAS podem correr ao mesmo tempo — as
+// que pediram, via `timeoutMs`, um prazo acima do `query.timeout` do dataset.
+//
+// É um sub-pool DENTRO do MaxConcurrent, e não um segundo teto ao lado dele:
+// a consulta longa toma uma vaga de cada. Sem essa contenção, o prazo longo
+// por padrão transformaria o teto do §80 numa arma contra a própria consulta
+// interativa — bastariam MaxConcurrent relatórios para toda query de
+// milissegundos passar a receber 503.
+func (c *Config) MaxLongRunning() int { return c.maxLongRunning }
+
+// MemoryTarget é o orçamento de memória de CONSULTA do processo (§80), e
+// MaxBufferPerQuery é a fatia dele que uma consulta pode tomar.
+//
+// Os dois eram parseados e nunca lidos (metade do débito 15). A chave não era
+// só inócua: quem escreve `memoryTarget: 1GiB` dimensiona a máquina por ela, e
+// não havia teto nenhum. Hoje alimentam internal/query/orcamento, cujo primeiro
+// consumidor real é o StreamWriter — que também nunca encolhia (débito 28), e
+// cujo texto já dizia que o remédio era esta chave.
+//
+// MemoryTarget NÃO é um teto de RSS do processo: é o orçamento dos buffers de
+// consulta, que é o que este pacote sabe contar. Chamar de teto de memória o
+// que não inclui índices, mmap e heap do consumidor seria a mesma mentira que a
+// chave sem leitor era, com um número a mais.
+func (c *Config) MemoryTarget() int64 { return c.memoryTarget }
+
+// MaxBufferPerQuery é o teto de buffer de UMA consulta (§80). Ver MemoryTarget.
+func (c *Config) MaxBufferPerQuery() int64 { return c.maxBufferPerQuery }
+
 // BindExposto diz se o servidor vai escutar fora do loopback.
 //
 // Existe para a subida poder AVISAR ou RECUSAR (§77): a autenticação do
@@ -430,23 +562,27 @@ func (c *Config) BindExposto() bool {
 }
 
 // ChavesDeRuntimeIgnoradas nomeia as chaves de `runtime` que este binário
-// aceita e não implementa (débito 15).
+// aceita e não implementa (resto do débito 15).
 //
 // A lista existe porque configuração que mente é pior que configuração
-// ausente: quem escreve `memoryTarget: 1GiB` e não recebe aviso nenhum conclui
-// que há um teto de memória, e vai dimensionar a máquina por ele. É a mesma
-// doutrina que ChavesDeStorageIgnoradas, logo abaixo, aplica a
-// storage.durability (débito 50).
+// ausente: quem escreve uma chave de memória e não recebe aviso nenhum conclui
+// que há um teto, e vai dimensionar a máquina por ele. É a mesma doutrina que
+// ChavesDeStorageIgnoradas, logo abaixo, aplica a storage.durability (débito
+// 50).
+//
+// Sobrou UMA. `memoryTarget` e `query.maxBufferPerQuery` SAÍRAM daqui ao
+// ganharem leitor — e sair é obrigatório, não cosmético: um aviso que continua
+// dizendo "esta chave não faz nada" sobre uma chave que passou a fazer mente na
+// direção OPOSTA, e é a pior das duas, porque agora o operador desconfia de um
+// limite que está de fato valendo.
+//
+// `managedMemoryTarget` fica: ela descreve o teto do runtime Go
+// (GOMEMLIMIT/soft limit), que é outra coisa do orçamento de buffers de
+// consulta, e não tem leitor.
 func (c *Config) ChavesDeRuntimeIgnoradas() []string {
 	var out []string
-	if c.Runtime.MemoryTarget != "" {
-		out = append(out, "runtime.memoryTarget")
-	}
 	if c.Runtime.ManagedMemoryTarget != "" {
 		out = append(out, "runtime.managedMemoryTarget")
-	}
-	if c.Runtime.Query.MaxBufferPerQuery != "" {
-		out = append(out, "runtime.query.maxBufferPerQuery")
 	}
 	return out
 }
@@ -477,7 +613,14 @@ func (c *Config) SegmentSize() int64 { return c.segmentSize }
 // DefaultsDeQuery são os defaults globais que o dataset herda quando omite a
 // chave equivalente.
 func (c *Config) DefaultsDeQuery() schema.Defaults {
-	return schema.Defaults{MaxRows: c.defaultMaxRows, Timeout: c.defaultTimeout}
+	return schema.Defaults{
+		MaxRows: c.defaultMaxRows,
+		Timeout: c.defaultTimeout,
+		// Zero quando a chave está ausente, e zero é o sinal de "o dataset
+		// herda o próprio Timeout" — nunca um teto de 30s aplicado por cima
+		// de quem já declara `query.timeout` maior.
+		MaxTimeout: c.defaultMaxTimeout,
+	}
 }
 
 // DirDoDataset é onde os arquivos do dataset vivem.
