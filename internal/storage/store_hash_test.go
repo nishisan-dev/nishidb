@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/storage/checkpoint"
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
@@ -423,4 +424,52 @@ func TestCloseNoMeioDaVarreduraDoHashNaoDaPanic(t *testing.T) {
 	if err := it.Close(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// TestLapideLimpaAsPostingsDeHash trava o "secondary indexes são limpos" do §56
+// para o segundo motor.
+//
+// A lápide preserva o instante de escrita e NADA mais, e é dessa ausência que
+// vem a limpeza: com o payload novo sem campo indexado nenhum, todo campo do
+// anterior cai no ramo "campo que sai" do applyHashClears. Sem isso, a row
+// morta continuaria respondendo pelo valor que tinha em vida — e a revalidação
+// do §44 a filtraria, então o custo não seria resultado errado: seria candidato
+// morto varrido para sempre, no índice que existe justamente para não varrer.
+func TestLapideLimpaAsPostingsDeHash(t *testing.T) {
+	dir := t.TempDir()
+	s := openStore(t, Options{
+		Dir:              dir,
+		ExpireAfterWrite: time.Hour,
+		CampoDeEscrita:   "_writtenAt",
+		HashFieldNames:   []string{"status"},
+	})
+	rel := &relogioDeTeste{t: time.Date(2026, 8, 25, 20, 0, 0, 0, time.UTC)}
+	s.UsaRelogio(rel.agora)
+
+	k := "CMP-V0001PPCLP-013"
+	row, _ := mustPut(t, s, k, 1, payloadComEscrita(t, s, k, "Start", rel.t), nil)
+	if got := postingsDeHashDeStatus(t, s, strVal("Start")); !slices.Equal(got, []types.RowID{row}) {
+		t.Fatalf("posting antes da lápide: %v", got)
+	}
+
+	rel.avanca(2 * time.Hour)
+	expirou, err := s.Expira(row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !expirou {
+		t.Fatal("Expira devolveu false para row vencida: o teste não chegou a exercitar a lápide")
+	}
+	if got := postingsDeHashDeStatus(t, s, strVal("Start")); len(got) != 0 {
+		t.Fatalf("a lápide não limpou a posting de hash: %v", got)
+	}
+}
+
+func postingsDeHashDeStatus(t *testing.T, s *Store, v types.Value) []types.RowID {
+	t.Helper()
+	it, err := s.LookupHash(fldStatus, v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return collectRows(t, it)
 }
