@@ -80,7 +80,17 @@ type Servidor struct {
 	// fixa, e não um contador: a aquisição não-bloqueante é o que permite
 	// REJEITAR na hora (§81) em vez de enfileirar — uma fila de espera
 	// seguraria conexões e esconderia a saturação de quem lê o /metrics.
-	vagas    chan struct{}
+	vagas chan struct{}
+	// vagasLongas é o SUB-POOL do §80 para a consulta que pediu prazo acima do
+	// `query.timeout` do dataset. Vive DENTRO de vagas: quem entra aqui já
+	// tomou uma vaga geral, e por isso o config recusa maxLongRunning acima do
+	// maxConcurrent. Sem ele, o prazo longo por padrão faria maxConcurrent
+	// relatórios ocuparem o semáforo inteiro e toda consulta interativa
+	// receber 503 pelo tempo que eles durassem.
+	vagasLongas chan struct{}
+	// emVoo é o registro de QUAIS consultas estão correndo, ao lado do medidor
+	// que diz quantas. Ver emvoo.go.
+	emVoo    *emVoo
 	http     *http.Server
 	ln       net.Listener
 	pprofSrv *http.Server
@@ -238,10 +248,12 @@ func Novo(cfg *config.Config, o Opcoes) (*Servidor, error) {
 		eng:         query.NewEngine(),
 		porNome:     make(map[string]*dataset, len(nomes)),
 		vagas:       make(chan struct{}, cfg.MaxConcurrent()),
+		vagasLongas: make(chan struct{}, cfg.MaxLongRunning()),
+		emVoo:       novoEmVoo(),
 		credenciais: credenciais,
 		tlsCert:     certificado,
 	}
-	s.met = registraMetricasDeQuery(reg, s.eng)
+	s.met = registraMetricasDeQuery(reg, s.eng, s.emVoo)
 	s.authFalhas = registraMetricasDeAuth(reg)
 
 	// O bind vem ANTES de abrir os datasets: descobrir porta ocupada depois

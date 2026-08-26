@@ -1,6 +1,8 @@
 package server
 
 import (
+	"time"
+
 	"github.com/nishisan-dev/nishidb/internal/metrics"
 	"github.com/nishisan-dev/nishidb/internal/query"
 )
@@ -17,6 +19,12 @@ type metricasDeQuery struct {
 	ativas   *metrics.FamiliaMedidor
 	erros    *metrics.FamiliaContador
 	latencia *metrics.FamiliaHistograma
+	// longasRecusadas é o contador do SUB-POOL de consulta longa. Sai SEM o
+	// label dataset porque o recurso que ele mede é do PROCESSO — o sub-pool é
+	// um só para todos os datasets, pela mesma razão que o §82 dá ao
+	// maxConcurrent —, e um label que o dado não sustenta faria quem somasse
+	// por dataset contar a mesma recusa N vezes.
+	longasRecusadas *metrics.FamiliaContador
 }
 
 // datasetDesconhecido é o valor de label usado quando a requisição falha ANTES
@@ -28,7 +36,7 @@ type metricasDeQuery struct {
 // Com o valor fixo, o custo de um pedido inválido é uma série, uma vez.
 const datasetDesconhecido = "?"
 
-func registraMetricasDeQuery(reg *metrics.Registry, eng *query.Engine) *metricasDeQuery {
+func registraMetricasDeQuery(reg *metrics.Registry, eng *query.Engine, voo *emVoo) *metricasDeQuery {
 	m := &metricasDeQuery{
 		total: reg.Contador(metrics.MetQueryTotal,
 			"consultas admitidas pelo protocolo remoto", metrics.LabelDataset),
@@ -38,7 +46,29 @@ func registraMetricasDeQuery(reg *metrics.Registry, eng *query.Engine) *metricas
 			"consultas que terminaram em erro, por categoria", metrics.LabelDataset, metrics.LabelCategoria),
 		latencia: reg.Histograma(metrics.MetQueryLatencySeconds,
 			"duração da consulta, do request ao último byte", metrics.LimitesPadrao, metrics.LabelDataset),
+		longasRecusadas: reg.Contador(metrics.MetQueryLongRejectedTotal,
+			"consultas longas recusadas por falta de vaga no sub-pool (runtime.query.maxLongRunning)"),
 	}
+
+	// A idade da consulta mais antiga entra como coletor PULL, lido na hora do
+	// scrape. É o único jeito de ela estar certa: o valor cresce sozinho com o
+	// tempo, e um medidor escrito na admissão ficaria congelado no instante em
+	// que a última consulta começou — mostrando "0 s" enquanto uma varredura de
+	// oito minutos segura o pool, que é o estado que a série existe para
+	// denunciar.
+	//
+	// Sem label, e do PROCESSO: a pergunta é "há alguma consulta presa aqui?",
+	// e quebrá-la por dataset obrigaria o alerta a somar máximos, que não é uma
+	// operação que signifique coisa alguma.
+	reg.Coletor(metrics.ColetorFunc(func() []metrics.Amostra {
+		return []metrics.Amostra{{
+			Familia: metrics.MetQueryLongestRunningSeconds,
+			Nome:    metrics.MetQueryLongestRunningSeconds,
+			Ajuda:   "idade da consulta em voo há mais tempo; 0 quando não há nenhuma",
+			Tipo:    metrics.TipoMedidor,
+			Valor:   voo.maisAntiga(time.Now()),
+		}}
+	}))
 
 	// full_scans é a quinta série de consulta do §92 e a única que já tinha
 	// fonte antes do protocolo: o contador NORMATIVO do §64, mantido no
@@ -78,6 +108,14 @@ func (m *metricasDeQuery) admite(dataset string) func() {
 func (m *metricasDeQuery) erro(dataset, categoria string) {
 	m.erros.Com(dataset, categoria).Inc()
 }
+
+// recusaLonga conta uma consulta longa barrada pelo sub-pool.
+//
+// Chamada ALÉM de erro(), não no lugar dela: a série por categoria continua
+// contando a recusa como qualquer outra falha do dataset, e esta responde a
+// outra pergunta — "preciso subir runtime.query.maxLongRunning?" —, que é do
+// processo e não sai de uma soma sobre datasets.
+func (m *metricasDeQuery) recusaLonga() { m.longasRecusadas.Sozinha().Inc() }
 
 // observa registra a duração total, do request ao último byte escrito. Inclui o
 // tempo de rede do cliente lento de propósito: é a latência que o usuário sente,

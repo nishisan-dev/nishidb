@@ -90,6 +90,14 @@ datasets:
 query:
   defaultMaxRows: 100000
   defaultTimeout: 30s
+  defaultMaxTimeout: 30s   # teto do timeoutMs do request; ausente = o defaultTimeout de cada dataset
+
+runtime:
+  memoryTarget: 512MiB
+  query:
+    maxConcurrent: 16      # consultas simultâneas
+    maxLongRunning: 2      # quantas delas podem ser LONGAS (sub-pool)
+    maxBufferPerQuery: 4MiB
 ```
 
 `query.defaultMaxRows` e `query.defaultTimeout` são os **defaults globais** do
@@ -98,6 +106,69 @@ teto de linhas e do timeout de consulta: valem para o dataset que **omite**
 declara — o global é default, não teto. Omitir o bloco `query` inteiro vale o
 padrão da spec (100000 e 30s). Valor não positivo é **recusado** no
 carregamento, com a chave e o valor nomeados no erro.
+
+### Consulta longa: `query.timeout` deixou de ser default E teto
+
+Até esta fase `query.timeout` acumulava dois papéis incompatíveis. Era o prazo
+de quem não pede nada **e** o teto que o `timeoutMs` do request não podia
+ultrapassar — o request só sabia **encurtar**. A consequência é que dar prazo
+maior a UMA consulta exigia subir o default de TODAS, inclusive o das que nunca
+chamaram `setQueryTimeout`: elas passariam a poder segurar uma vaga do §80 por
+minutos sem nunca terem pedido isso.
+
+Agora são duas chaves, no dataset (`query.timeout` / `query.maxTimeout`) e no
+global (`query.defaultTimeout` / `query.defaultMaxTimeout`):
+
+| chave | o que é |
+|---|---|
+| `query.timeout` | o prazo que vale quando o request **não** manda `timeoutMs` |
+| `query.maxTimeout` | o **teto** que o `timeoutMs` do request pode alcançar |
+
+**`maxTimeout` ausente vale exatamente o `timeout` resolvido daquele dataset** —
+não o default global, não 30s. É isso que faz todo `nishidb.yaml` escrito antes
+da separação produzir comportamento idêntico: um dataset com `query.timeout: 5m`
+continua com teto de 5m, e não passa a ser recusado por um teto global menor.
+`maxTimeout` abaixo de `timeout` é **recusado na abertura**, nomeando as duas
+chaves com os dois valores.
+
+`/v1/metadata` publica `timeoutMs` = **o teto** e acrescenta `defaultTimeoutMs`
+= o prazo padrão. O campo `timeoutMs` já significava "o número que o servidor faz
+valer" para quem o consome — é contra ele que o driver JDBC apara o
+`setQueryTimeout` da aplicação, justamente porque o servidor **recusa** acima
+dele. Publicar o teto ali é o que faz o driver alongar sozinho, **sem uma linha
+de Java mudar**.
+
+### O sub-pool da consulta longa
+
+Prazo longo por padrão torna obrigatória uma contenção que antes seria opcional:
+com 16 vagas e consultas de dez minutos, bastariam 16 relatórios para **toda**
+consulta interativa receber 503 por dez minutos. `runtime.query.maxLongRunning`
+(default 2, dentro do `maxConcurrent`) é o sub-pool: uma consulta cujo prazo
+efetivo passa do `query.timeout` do dataset toma **duas** vagas — a do pool geral
+e a do pool longo. A recusa do sub-pool tem código próprio,
+`TOO_MANY_LONG_QUERIES`, com `Retry-After` maior que o do pool geral: o pool
+geral esvazia em milissegundos e este pode levar minutos, então o conselho ao
+cliente é outro — baixar o `timeoutMs` para caber no prazo padrão e entrar pelo
+pool geral.
+
+O default do sub-pool é limitado pelo pool, e a chave explícita não é:
+`maxConcurrent: 1` é configuração legítima e existente, e um default fixo de 2
+recusaria, na primeira troca de binário, um arquivo que ninguém editou.
+
+### Ver a consulta longa em andamento
+
+`nishidb status` e `/v1/stats` passam a listar as consultas **em voo** — dataset,
+hash do SQL, há quanto tempo e se é longa —, da mais antiga para a mais nova.
+`consultas: N (M ativas, K com erro)` é a mesma frase para três point lookups de
+2 ms e para um full scan de oito minutos, e as duas situações pedem ações
+opostas. O SQL **cru** não é publicado (§95: ele carrega literais com dado do
+cliente); o hash responde a pergunta que o operador faz de fato, que é se as
+consultas presas são a mesma ou várias diferentes.
+
+Duas séries novas acompanham: `nishidb_query_longest_running_seconds` (medidor
+lido no **scrape**, porque o número cresce sozinho enquanto nada acontece — que é
+exatamente o estado que ele existe para denunciar) e
+`nishidb_query_long_rejected_total`.
 
 `version`, `query.resultBatchSize` e o bloco `server` **passaram a ter leitor
 no M2**: `version` diferente de 1 é recusado no carregamento, `resultBatchSize`

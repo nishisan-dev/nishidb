@@ -110,6 +110,14 @@ public final class SqlStates {
             // resultado não vai encolher sozinho.
             Map.entry(Codigos.MAX_ROWS_EXCEEDED, new Entrada(RECURSO_EXCEDIDO, SQLNonTransientException::new)),
             Map.entry(Codigos.TOO_MANY_QUERIES, new Entrada(RECURSO_INSUFICIENTE, SQLTransientException::new)),
+
+            // TOO_MANY_LONG_QUERIES divide o SQLState com TOO_MANY_QUERIES —
+            // 53000 é "recurso insuficiente", e é o que os dois são — mas fica
+            // como entrada PRÓPRIA porque a mensagem que viaja é outra: o pool
+            // geral esvazia em milissegundos e o de consulta longa pode levar
+            // minutos. Continua TRANSIENT: repetir resolve, só que mais tarde.
+            Map.entry(Codigos.TOO_MANY_LONG_QUERIES,
+                    new Entrada(RECURSO_INSUFICIENTE, SQLTransientException::new)),
             Map.entry(Codigos.COMPACTION_BUSY, new Entrada(OBJETO_EM_USO, SQLTransientException::new)),
             Map.entry(Codigos.REQUEST_TOO_LARGE, new Entrada(LIMITE_DE_PROGRAMA, SQLNonTransientException::new)),
 

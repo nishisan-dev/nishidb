@@ -3,7 +3,6 @@ package executor
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/query/binder"
 	"github.com/nishisan-dev/nishidb/internal/query/planner"
@@ -46,10 +45,6 @@ type Options struct {
 
 const batchPadrao = 256
 
-// timeoutPadrao é usado quando o dataset não declara query.timeout. Existe
-// para que nenhuma query possa correr indefinidamente segurando iteradores.
-const timeoutPadrao = 30 * time.Second
-
 // Open valida o plano, compila predicado e projeção e devolve o iterador.
 //
 // NENHUMA leitura de dado acontece aqui: a primeira row só é lida no primeiro
@@ -64,6 +59,14 @@ func Open(ctx context.Context, bq *binder.BoundQuery, plan planner.Plan, opts Op
 		return nil, fmt.Errorf("%w: store nulo", ErrInvalidPlan)
 	case len(bq.Columns) == 0:
 		return nil, fmt.Errorf("%w: projeção vazia", ErrInvalidPlan)
+	case bq.Timeout <= 0:
+		// Prazo ausente é BUG do binder, não caso a tratar: o binder o copia do
+		// schema compilado, e schema.validate já recusa `query.timeout` não
+		// positivo. Aqui existia um `timeoutPadrao = 30s` que cobria este
+		// buraco — uma SEGUNDA fonte da verdade para o prazo, invisível, que
+		// venceria em silêncio o teto configurado no dia em que o caminho de
+		// cima quebrasse. Errar alto é o que impede isso.
+		return nil, fmt.Errorf("%w: query ligada sem prazo (bq.Timeout = %s)", ErrInvalidPlan, bq.Timeout)
 	}
 
 	it := &iterador{
@@ -113,11 +116,21 @@ func Open(ctx context.Context, bq *binder.BoundQuery, plan planner.Plan, opts Op
 		it.mask = 0
 	}
 
-	timeout := bq.Timeout
-	if timeout <= 0 {
-		timeout = timeoutPadrao
+	// bq.Timeout é o prazo DEFAULT do dataset, e só vale quando o chamador não
+	// trouxe prazo próprio.
+	//
+	// Antes ele era aplicado SEMPRE, e a consequência era silenciosa: um
+	// servidor que já tivesse resolvido o prazo efetivo do request contra
+	// `query.maxTimeout` — cinco minutos, digamos — veria o WithTimeout de
+	// baixo cortá-lo de volta para os 30s do `query.timeout`, porque o menor
+	// deadline vence. A consulta longa terminaria em TIMEOUT com o teto
+	// configurado dizendo que ela podia. Quem tem deadline já decidiu a
+	// política; repeti-la aqui só pode encurtá-la.
+	if _, temPrazo := ctx.Deadline(); temPrazo {
+		it.ctx, it.cancel = context.WithCancel(ctx)
+	} else {
+		it.ctx, it.cancel = context.WithTimeout(ctx, bq.Timeout)
 	}
-	it.ctx, it.cancel = context.WithTimeout(ctx, timeout)
 
 	// A fonte é aberta POR ÚLTIMO: qualquer erro acima não pode deixar
 	// iteradores de índice abertos e sem dono.

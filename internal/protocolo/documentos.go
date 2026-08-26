@@ -49,10 +49,27 @@ type Metadados struct {
 // global que ele herdou), e não o que está escrito no YAML dele: quem consulta
 // precisa saber o teto que vai valer, não onde ele foi declarado.
 type DatasetMeta struct {
-	Name      string `json:"name"`
-	Key       string `json:"key"`
-	MaxRows   int    `json:"maxRows"`
-	TimeoutMs int64  `json:"timeoutMs"`
+	Name    string `json:"name"`
+	Key     string `json:"key"`
+	MaxRows int    `json:"maxRows"`
+	// TimeoutMs é o TETO — `query.maxTimeout` —, e não o prazo padrão.
+	//
+	// O campo já significava isso para quem o consome: o clamp do driver JDBC
+	// (NishiStatement.timeoutParaOFio) apara o setQueryTimeout da aplicação
+	// contra ele justamente porque o servidor RECUSA um pedido acima do teto.
+	// Enquanto teto e default eram o mesmo número, publicar um ou outro dava
+	// no mesmo; com os dois separados, publicar o default aqui faria o driver
+	// clampar em 30s uma consulta que o dataset autoriza a durar dez minutos —
+	// e o teto novo não valeria para ninguém. Publicando o teto, o driver
+	// alonga sozinho, sem uma linha de Java mudar.
+	TimeoutMs int64 `json:"timeoutMs"`
+	// DefaultTimeoutMs é o `query.timeout`: o prazo que vale para o request que
+	// NÃO manda timeoutMs. Campo ADITIVO — um cliente que não o conhece
+	// continua lendo o resto. Ele existe porque, separados os dois números,
+	// "quanto tempo esta consulta tem?" deixou de ter resposta única: sem
+	// publicá-lo, uma ferramenta mostraria o teto de dez minutos para uma
+	// consulta que na verdade vai ser cortada em trinta segundos.
+	DefaultTimeoutMs int64 `json:"defaultTimeoutMs"`
 	// MaxCols e OnMaxCols são o teto de campos efetivo e o que acontece ao
 	// alcançá-lo. Publicados pela mesma razão do MaxRows, e com uma a mais: o
 	// bloco `schema:` do YAML aceita chave desconhecida em silêncio, então um
@@ -130,6 +147,37 @@ type ProcessoStats struct {
 	// depois de um rollout, para confirmar que o binário no ar é o novo.
 	Version string     `json:"version"`
 	Query   MotorStats `json:"query"`
+	// InFlight são as consultas correndo NESTE instante, da mais antiga para a
+	// mais nova. Campo ADITIVO.
+	//
+	// Vive no bloco do PROCESSO, e não dentro de cada dataset, porque a
+	// pergunta que ele responde é do pool: "quem está segurando as vagas?".
+	// Cada entrada nomeia o dataset dela, então quem quiser filtrar filtra —
+	// mas quebrar a lista por dataset esconderia o que interessa, que é a
+	// consulta mais antiga do processo INTEIRO.
+	InFlight []ConsultaEmVoo `json:"inFlight"`
+}
+
+// ConsultaEmVoo é uma consulta em andamento.
+//
+// SQLHash, e não o SQL: o texto pode carregar literais com dado do cliente, e o
+// §95 proíbe publicar payload por default — mesma razão de o SQL só aparecer no
+// log em nível DEBUG. O hash responde a pergunta que o operador faz de fato,
+// que é se as consultas presas são a mesma ou várias diferentes.
+//
+// RunningMs é a idade NO INSTANTE DA CHAMADA, calculada na hora. Publicar o
+// instante de início em vez da idade transferiria para o cliente a conta e o
+// problema de relógio: o painel roda em outra máquina, e um skew de segundos
+// viraria uma consulta "que começou no futuro".
+//
+// Long diz se ela ocupa uma vaga do sub-pool — isto é, se pediu prazo acima do
+// `query.timeout` do dataset. É o que separa "está demorando" de "foi
+// autorizada a demorar".
+type ConsultaEmVoo struct {
+	Dataset   string `json:"dataset"`
+	SQLHash   string `json:"sqlHash"`
+	RunningMs int64  `json:"runningMs"`
+	Long      bool   `json:"long"`
 }
 
 // MotorStats são os contadores do motor de consulta (executor e planner).

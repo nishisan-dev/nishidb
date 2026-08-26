@@ -135,7 +135,13 @@ type Config struct {
 		MemoryTarget        string `yaml:"memoryTarget"`
 		ManagedMemoryTarget string `yaml:"managedMemoryTarget"`
 		Query               struct {
-			MaxConcurrent     *int   `yaml:"maxConcurrent"`
+			MaxConcurrent *int `yaml:"maxConcurrent"`
+			// MaxLongRunning é o sub-pool da query LONGA, DENTRO do
+			// maxConcurrent. Sem ele, dar prazo longo por padrão faria 16
+			// consultas longas ocuparem o semáforo inteiro e TODA consulta
+			// curta receber 503 — o teto do §80 protegeria a ingestão e
+			// entregaria a consulta interativa no lugar dela.
+			MaxLongRunning    *int   `yaml:"maxLongRunning"`
 			MaxBufferPerQuery string `yaml:"maxBufferPerQuery"`
 		} `yaml:"query"`
 	} `yaml:"runtime"`
@@ -150,9 +156,17 @@ type Config struct {
 	// herda o padrão da spec, zero é valor inválido e precisa ser recusado
 	// com a mesma clareza de um negativo.
 	Query struct {
-		DefaultMaxRows  *int   `yaml:"defaultMaxRows"`
-		DefaultTimeout  string `yaml:"defaultTimeout"`
-		ResultBatchSize *int   `yaml:"resultBatchSize"`
+		DefaultMaxRows *int   `yaml:"defaultMaxRows"`
+		DefaultTimeout string `yaml:"defaultTimeout"`
+		// DefaultMaxTimeout é o default global do TETO de prazo — a chave que
+		// torna a query longa cidadã de primeira classe sem dar prazo longo a
+		// quem nunca o pediu. Ausente (string vazia) NÃO vira 30s: vira zero,
+		// e zero significa "cada dataset herda o próprio query.timeout
+		// resolvido" (ver schema.Defaults.MaxTimeout). É isso que faz um
+		// nishidb.yaml de hoje produzir comportamento idêntico ao de antes de
+		// a chave existir.
+		DefaultMaxTimeout string `yaml:"defaultMaxTimeout"`
+		ResultBatchSize   *int   `yaml:"resultBatchSize"`
 	} `yaml:"query"`
 
 	// Resolvidos a partir dos campos textuais acima.
@@ -160,9 +174,11 @@ type Config struct {
 	checkpointInterval time.Duration
 	defaultMaxRows     int
 	defaultTimeout     time.Duration
+	defaultMaxTimeout  time.Duration
 	resultBatchSize    int
 	serverPort         int
 	maxConcurrent      int
+	maxLongRunning     int
 	minimumLiveRatio   float64
 	expiracaoMax       int
 	expiracaoTempo     time.Duration
@@ -182,6 +198,17 @@ const (
 	resultBatchPadrao        = 256
 	serverPortPadrao         = 9142
 	maxConcurrentPadrao      = 16
+
+	// maxLongRunningPadrao é DOIS, e não uma fração do maxConcurrent.
+	//
+	// Duas porque o sub-pool existe para garantir que a consulta interativa
+	// sempre tenha vaga, e uma fração faria o pior caso crescer junto com o
+	// teto geral — com `maxConcurrent: 64`, um quarto seriam 16 consultas
+	// longas segurando 16 vagas do pool geral, que é exatamente o cenário que
+	// o sub-pool veio impedir. Duas cobrem o caso real (um relatório e um
+	// export em paralelo) e deixam 14 das 16 vagas do default sempre
+	// disponíveis para quem responde em milissegundos.
+	maxLongRunningPadrao = 2
 
 	// Defaults da coleta de expiração. Mil marcações por passada a 452 ev/s
 	// do piloto são ~136 KB escritos por passada — ruído perto da ingestão —,
@@ -273,6 +300,24 @@ func CarregaConfig(path string) (*Config, error) {
 	if c.defaultTimeout, err = units.Duracao(c.Query.DefaultTimeout, timeoutPadrao); err != nil {
 		return nil, fmt.Errorf("configuração %s: query.defaultTimeout: %w", path, err)
 	}
+	// O padrão é ZERO, e zero é o sinal de "ausente" que schema.validate lê
+	// como "cada dataset herda o próprio query.timeout". Passar timeoutPadrao
+	// aqui daria um teto global de 30s a datasets que hoje declaram
+	// `query.timeout: 5m` — e a spec deles passaria a ser recusada na abertura.
+	if c.defaultMaxTimeout, err = units.Duracao(c.Query.DefaultMaxTimeout, 0); err != nil {
+		return nil, fmt.Errorf("configuração %s: query.defaultMaxTimeout: %w", path, err)
+	}
+	if c.defaultMaxTimeout != 0 && c.defaultMaxTimeout < c.defaultTimeout {
+		// A recusa é AQUI, com os nomes GLOBAIS, e não lá na spec do dataset:
+		// o par inválido foi escrito neste arquivo, e deixá-lo chegar em
+		// schema.validate faria a mensagem nomear `query.maxTimeout`/
+		// `query.timeout` — chaves que o operador não encontraria no YAML que
+		// ele acabou de editar.
+		return nil, fmt.Errorf(
+			"configuração %s: query.defaultMaxTimeout (%s) é menor que query.defaultTimeout (%s): "+
+				"o teto global recusaria o prazo que ele mesmo dá por padrão",
+			path, c.defaultMaxTimeout, c.defaultTimeout)
+	}
 	if c.resultBatchSize, err = units.InteiroPositivo(c.Query.ResultBatchSize, resultBatchPadrao); err != nil {
 		return nil, fmt.Errorf("configuração %s: query.resultBatchSize: %w", path, err)
 	}
@@ -281,6 +326,32 @@ func CarregaConfig(path string) (*Config, error) {
 	}
 	if c.maxConcurrent, err = units.InteiroPositivo(c.Runtime.Query.MaxConcurrent, maxConcurrentPadrao); err != nil {
 		return nil, fmt.Errorf("configuração %s: runtime.query.maxConcurrent: %w", path, err)
+	}
+	// O DEFAULT do sub-pool é limitado pelo pool, e a chave EXPLÍCITA não é.
+	//
+	// A assimetria não é indulgência: `runtime.query.maxConcurrent: 1` é
+	// configuração legítima e existente, e um default fixo de 2 mataria a
+	// subida dela na primeira troca de binário — a chave nova recusaria um
+	// arquivo que ninguém editou. Com uma vaga só no pool não há folga a
+	// reservar, e o sub-pool honesto é o pool inteiro. Já quem ESCREVE
+	// maxLongRunning acima do maxConcurrent está pedindo algo que o semáforo
+	// geral recusaria primeiro, e aí a recusa é o serviço.
+	padraoLongo := maxLongRunningPadrao
+	if padraoLongo > c.maxConcurrent {
+		padraoLongo = c.maxConcurrent
+	}
+	if c.maxLongRunning, err = units.InteiroPositivo(c.Runtime.Query.MaxLongRunning, padraoLongo); err != nil {
+		return nil, fmt.Errorf("configuração %s: runtime.query.maxLongRunning: %w", path, err)
+	}
+	if c.maxLongRunning > c.maxConcurrent {
+		// O sub-pool vive DENTRO do geral: uma consulta longa toma as duas
+		// vagas. Um sub-pool maior que o pool prometeria vagas longas que o
+		// semáforo geral recusaria primeiro, e o operador leria o 503 de
+		// TOO_MANY_QUERIES onde configurou espaço para consulta longa.
+		return nil, fmt.Errorf(
+			"configuração %s: runtime.query.maxLongRunning (%d) acima de runtime.query.maxConcurrent (%d): "+
+				"a consulta longa toma uma vaga de CADA pool, então o sub-pool não pode ser maior que o pool",
+			path, c.maxLongRunning, c.maxConcurrent)
 	}
 	if c.serverPort > 65535 {
 		return nil, fmt.Errorf("configuração %s: server.port %d fora de 1..65535", path, c.serverPort)
@@ -403,6 +474,16 @@ func (c *Config) ResultBatchSize() int { return c.resultBatchSize }
 // número deles.
 func (c *Config) MaxConcurrent() int { return c.maxConcurrent }
 
+// MaxLongRunning é quantas consultas LONGAS podem correr ao mesmo tempo — as
+// que pediram, via `timeoutMs`, um prazo acima do `query.timeout` do dataset.
+//
+// É um sub-pool DENTRO do MaxConcurrent, e não um segundo teto ao lado dele:
+// a consulta longa toma uma vaga de cada. Sem essa contenção, o prazo longo
+// por padrão transformaria o teto do §80 numa arma contra a própria consulta
+// interativa — bastariam MaxConcurrent relatórios para toda query de
+// milissegundos passar a receber 503.
+func (c *Config) MaxLongRunning() int { return c.maxLongRunning }
+
 // BindExposto diz se o servidor vai escutar fora do loopback.
 //
 // Existe para a subida poder AVISAR ou RECUSAR (§77): a autenticação do
@@ -477,7 +558,14 @@ func (c *Config) SegmentSize() int64 { return c.segmentSize }
 // DefaultsDeQuery são os defaults globais que o dataset herda quando omite a
 // chave equivalente.
 func (c *Config) DefaultsDeQuery() schema.Defaults {
-	return schema.Defaults{MaxRows: c.defaultMaxRows, Timeout: c.defaultTimeout}
+	return schema.Defaults{
+		MaxRows: c.defaultMaxRows,
+		Timeout: c.defaultTimeout,
+		// Zero quando a chave está ausente, e zero é o sinal de "o dataset
+		// herda o próprio Timeout" — nunca um teto de 30s aplicado por cima
+		// de quem já declara `query.timeout` maior.
+		MaxTimeout: c.defaultMaxTimeout,
+	}
 }
 
 // DirDoDataset é onde os arquivos do dataset vivem.

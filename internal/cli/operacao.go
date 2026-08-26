@@ -256,6 +256,7 @@ func escreveStatus(w io.Writer, endereco string, e protocolo.Estatisticas) {
 	campo(w, "index unions", strconv.FormatInt(q.IndexUnions, 10))
 	campo(w, "linhas emitidas", strconv.FormatInt(q.Emitted, 10))
 	campo(w, "linhas truncadas", strconv.FormatInt(q.Truncated, 10))
+	escreveEmVoo(w, e.Process.InFlight)
 
 	for _, d := range e.Datasets {
 		titulo(w, "")
@@ -377,6 +378,41 @@ func bytesLegiveis(n int64) string {
 }
 
 func duracao(ms int64) string { return (time.Duration(ms) * time.Millisecond).String() }
+
+// escreveEmVoo lista as consultas que estão correndo NESTE instante.
+//
+// Existe porque `consultas: 12 (3 ativas, 0 com erro)` é a mesma frase para
+// três point lookups de 2 ms e para um full scan de oito minutos, e as duas
+// situações pedem ações opostas. Com o prazo longo virando cidadão de primeira
+// classe, a segunda deixou de ser exceção — e o operador precisa ver QUAL
+// consulta está lá e HÁ QUANTO TEMPO antes de decidir se reinicia o processo.
+//
+// A lista vem do servidor já ordenada da mais antiga para a mais nova, e a
+// ordem é preservada: a linha que interessa é a primeira, não uma que se
+// procura.
+//
+// Silêncio quando não há nenhuma: um bloco "em voo" vazio em toda chamada de
+// `nishidb status` seria ruído, e ruído treina o operador a pular a seção
+// justamente no dia em que ela tem conteúdo.
+func escreveEmVoo(w io.Writer, voos []protocolo.ConsultaEmVoo) {
+	if len(voos) == 0 {
+		return
+	}
+	titulo(w, "")
+	titulo(w, "consultas em voo (%d)", len(voos))
+	// O SQL não aparece — nem aqui nem no /v1/stats: ele pode carregar
+	// literais com dado do cliente, e o §95 proíbe publicar payload por
+	// default. O hash responde o que o operador pergunta de fato, que é se as
+	// consultas presas são a mesma ou várias diferentes.
+	linha(w, "DATASET", "SQL", "HÁ", "LONGA")
+	for _, v := range voos {
+		marca := "-"
+		if v.Long {
+			marca = "sim"
+		}
+		linha(w, v.Dataset, v.SQLHash, duracao(v.RunningMs), marca)
+	}
+}
 
 // titulo, campo e linha são os três formatos desta saída: cabeçalho sem
 // coluna, par rótulo/valor e linha de tabela.

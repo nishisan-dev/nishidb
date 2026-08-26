@@ -25,6 +25,7 @@ public final class Codigos {
     public static final String UNSUPPORTED_MEDIA_TYPE = "UNSUPPORTED_MEDIA_TYPE";
     public static final String REQUEST_TOO_LARGE = "REQUEST_TOO_LARGE";
     public static final String TOO_MANY_QUERIES = "TOO_MANY_QUERIES";
+    public static final String TOO_MANY_LONG_QUERIES = "TOO_MANY_LONG_QUERIES";
     public static final String TIMEOUT = "TIMEOUT";
     public static final String MAX_ROWS_EXCEEDED = "MAX_ROWS_EXCEEDED";
     public static final String DATASET_CORRUPT = "DATASET_CORRUPT";
