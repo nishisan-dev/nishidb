@@ -953,16 +953,37 @@ conhecê-las. Cada uma tem dono em [`debitos.md`](debitos.md).
 
 ## Expiração por inatividade
 
-`materialization.ttl.expireAfterWrite` declara um idle timeout: a entidade sai
-quando passa a duração sem receber escrita, e **cada escrita renova o prazo**.
-Entidade ativa nunca expira; entidade abandonada sai sozinha. É o que impede o
-estado vivo de crescer com o espaço de chaves — a compaction não segura isso,
-porque ela recupera versões superadas, não entidades inteiras.
+`materialization.ttl` é uma **lista de regras**: cada uma tem uma condição
+(`when`, com a gramática do WHERE) e um idle timeout, e a **primeira que casa**
+decide o prazo da entidade. A regra sem `when` é a de fundo e só pode ser a
+última. Cada escrita renova o prazo — entidade ativa nunca expira, entidade
+abandonada sai sozinha —, e é isso que impede o estado vivo de crescer com o
+espaço de chaves; a compaction não segura isso, porque ela recupera versões
+superadas, não entidades inteiras.
 
-O instante da última escrita vira um campo de sistema no payload, `_writtenAt`
-(11 bytes por record). Ele guarda um **fato**, não uma política: mudar a
-duração no YAML vale na hora para as linhas existentes, em vez de exigir
-reescrever o dataset.
+São DOIS campos de sistema no payload, e a divisão é deliberada:
+
+| Campo | Tipo | O que guarda |
+|---|---|---|
+| `_writtenAt` | timestamp | o instante da última escrita — um **fato** |
+| `_expiresIn` | int64 (millis) | a **duração** que a regra escolheu para esta entidade |
+
+A duração é gravada em vez do prazo absoluto por duas razões. A primeira é
+composição: com o instante ao lado, mudar a regra no YAML vale na hora para as
+linhas existentes. A segunda é ordem: reordenar as regras no arquivo não muda o
+significado do que já está gravado.
+
+`_expiresIn` é emitido em **toda** escrita, e não só quando o valor muda. O
+merge preserva campo que o evento não menciona, então uma emissão condicional
+deixaria o prazo curto de quando a condição valia sobreviver ao evento que a
+quebra — e a entidade morreria logo depois de o alarme reabrir. São 8 bytes por
+versão de record para tornar impossível a única falha que arruinaria a feature.
+
+O índice `prazos.idx` (rowId→duração) é DERIVADO do campo, como o de escritas:
+o replay do tail o reconstrói pelo mesmo `applyRecord`. Zero nele significa
+**desconhecido**, e por isso a entidade imortal — a que casou com uma regra
+`never` — é gravada com um sentinela (`rowindex.PrazoImortal`). Sem essa
+distinção, ela herdaria o prazo da regra de fundo e morreria sozinha.
 
 **A visibilidade não depende do coletor.** Os três pontos de liveness checam o
 prazo, então a entidade vencida some da consulta mesmo com o coletor parado,
@@ -984,11 +1005,21 @@ leva grande escreve muito antes de a compaction recuperar qualquer coisa e
 disputa o lock de escrita com a ingestão; e varrer milhões de entradas sem
 achar nada não escreve nada, mas seguraria a goroutine.
 
-Entidade materializada **antes** de a expiração ser ligada não tem o campo de
-sistema, o que o índice lê como prazo **desconhecido** — e desconhecido nunca
-vence. A primeira passada do coletor lhe dá carência, contando um prazo cheio
-a partir dali. É o que permite ligar a chave num dataset já materializado sem
+Entidade materializada **antes** de a expiração ser ligada não tem `_writtenAt`,
+o que o índice lê como instante **desconhecido** — e desconhecido nunca vence. A
+primeira passada do coletor lhe dá carência, contando um prazo cheio a partir
+dali. É o que permite ligar a chave num dataset já materializado sem
 reprocessar nada, e o que impede essas entidades de ficarem imortais.
+
+Já a entidade que tem instante mas não tem `_expiresIn` — a materializada antes
+das REGRAS — cai na duração da regra de **fundo**. Sem regra de fundo, ela não
+expira até a primeira escrita seguinte, que lhe grava um prazo.
+
+O coletor pula linha já tombstonada antes de qualquer trabalho: a lápide
+preserva o instante de escrita, então ela continua "vencida" para sempre, e sem
+o pré-filtro cada passada chamaria `Expira` só para ver a flag e desistir —
+tomando o lock de escrita a cada vez. Com prazos de minutos, que é o que as
+regras condicionais trouxeram, isso é disputa contínua com a ingestão.
 
 O que **não** volta é a chave: a lápide é copiada para frente enquanto a
 primary nomear a key, e esquecê-la exige `tombstoneRetention`, que ainda não

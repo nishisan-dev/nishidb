@@ -434,6 +434,55 @@ Cadeia (`b` congela `a`, `c` congela `b`), autorreferência, congelar a própria
 key e `format:` junto de `frozenFrom` são todos recusados no load, com a
 mensagem nomeando o motivo.
 
+#### Expiração: regras de TTL condicionais
+
+O bloco `ttl:` é uma **lista de regras**. Cada evento é avaliado contra elas na
+ordem do arquivo, e a **primeira que casa** decide por quanto tempo a entidade
+pode ficar sem receber escrita:
+
+```yaml
+materialization:
+  ttl:
+    # `when` é uma condição com a MESMA gramática do WHERE, avaliada sobre o
+    # estado que ESTA escrita vai produzir (o valor pós-merge).
+    - when: "severity = 2"
+      expireAfterWrite: 3m
+    - when: "kind = 'audit'"
+      expireAfterWrite: never     # casou e decidiu que não expira
+    # Regra sem `when` é a de FUNDO: casa com tudo, e só pode ser a última.
+    - expireAfterWrite: 7d
+```
+
+O que precisa estar claro antes de escrever a lista:
+
+- **A ordem é semântica.** Primeira que casa vence, então reordenar as regras
+  muda o comportamento. Uma regra de fundo antes de uma condicional tornaria a
+  condicional inalcançável, e por isso é recusada no load.
+- **A condição vê o estado PÓS-MERGE.** O valor de cada campo é o que o evento
+  trouxe; se ele não mencionar o campo, vale o que já estava no estado; `null`
+  explícito apaga. É por isso que um evento parcial não muda o prazo por
+  acidente.
+- **O prazo é reavaliado a cada escrita, e isso é o cancelamento.** Um alarme
+  que fecha ganha 3 minutos; se reabrir em 90 segundos, a escrita nova o
+  devolve para os 7 dias. O prazo escolhido é gravado no documento como o campo
+  de sistema `_expiresIn` (uma duração em millis, fora do `SELECT *`).
+- **`never` não é `0`.** `never` declara imortalidade e vence a regra de fundo;
+  `0` é recusado, porque parece esquecimento.
+- **A duração mínima é 1 minuto** — a resolução do coletor. Abaixo dela o
+  prazo real seria maior que o declarado, e uma chave que mente é pior que uma
+  chave recusada.
+- **Adotar as regras num dataset já populado não exige reprocessar.** As
+  entidades materializadas antes não têm `_expiresIn`, e caem no prazo da regra
+  de fundo até a primeira escrita seguinte. Sem regra de fundo, elas não
+  expiram.
+- **Renovar empurra o prazo indefinidamente.** Uma entidade que casa com uma
+  regra de 3 minutos mas recebe evento a cada 60 segundos nunca expira. É o
+  comportamento escolhido (não há teto de idade absoluta), e ele está fixado em
+  teste.
+
+A forma antiga — `ttl:` como bloco único com `expireAfterWrite`, ou com
+`field`/`type` — é **recusada na subida**, com a mensagem apontando a lista.
+
 #### Teto de campos
 
 O dicionário de campos de um dataset é append-only e tem um teto físico de
