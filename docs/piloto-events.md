@@ -278,13 +278,34 @@ contador por (coluna, tipo).
   ```yaml
   materialization:
     ttl:
-      # Alarme FECHADO sai em minutos, não em meses: a condição usa a mesma
+      # Alarme RESOLVIDO sai em minutos, não em meses: a condição usa a mesma
       # gramática do WHERE e é avaliada sobre o estado pós-merge.
-      - when: "severidade = 0"
-        expireAfterWrite: 30m
+      - when: "type = 2"
+        expireAfterWrite: 3m
       # Regra de fundo: o prazo que o piloto já tinha, para todo o resto.
       - expireAfterWrite: 90d
   ```
+
+  **Foi para produção em 26/08/2026**, junto de duas colunas congeladas que
+  guardam o estado de NASCIMENTO do alarme — o que o merge, por definição,
+  sobrescrevia:
+
+  ```yaml
+  schema:
+    fields:
+      originalSeverity:
+        frozenFrom: severity     # a severidade com que o alarme abriu
+        index: bitmap
+      originalFirstSeen:
+        frozenFrom: firstSeen    # o primeiro firstSeen visto
+  ```
+
+  Congelada não tem preenchimento retroativo (débito 83), então o dataset foi
+  **recriado** e o consumer group trocado (`nishidb-events-piloto-7`) para
+  reprocessar o tópico do início. Consequência de reprocessar: o `_writtenAt`
+  de todo evento é o instante da INGESTÃO, não o do evento original, então todo
+  alarme já resolvido no histórico é materializado e expira três minutos
+  depois — o estado vivo converge para os alarmes não resolvidos.
 
   Cada escrita reavalia as regras e regrava o prazo, então o alarme que REABRE
   volta ao prazo longo — o prazo curto é cancelado pela própria escrita. Alarme
