@@ -1,0 +1,64 @@
+name: Release do client Python
+
+# Disparado pela publicação de uma release, como o release.yml do engine — e,
+# como ele, NÃO cria a release nem a tag: isso é ato manual (`gh release
+# create`), e este workflow só builda e publica.
+#
+# O guard de tag é o que separa os dois ciclos. O client tem versão PRÓPRIA
+# (ver a decisão no pyproject): ele não muda de versão porque o engine mudou, e
+# o engine não vira release no PyPI porque o client mudou. Tag `vX.Y.Z` é do
+# engine; `python-vX.Y.Z` é deste pacote.
+on:
+  release:
+    types: [published]
+
+jobs:
+  publica:
+    # Só tags `python-v*`. Sem isto, toda release do engine tentaria publicar o
+    # client — e a segunda tentativa com a mesma versão falharia no PyPI, que
+    # recusa reenvio, deixando um job vermelho a cada release do binário.
+    if: startsWith(github.event.release.tag_name, 'python-v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: pypi
+    permissions:
+      # Trusted Publishing (OIDC): o PyPI confia neste repositório e neste
+      # workflow, e nenhum token de API precisa existir como secret. Um token
+      # em secret é um segredo de longa vida que ninguém rotaciona.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      # A versão do pacote é a do pyproject, e a tag tem de concordar com ela.
+      # Sem esta conferência, `gh release create python-v0.2.0` publicaria a
+      # 0.1.0 que estivesse no arquivo — e o PyPI mostraria uma versão que não
+      # é a que a tag anuncia, sem nada acusar.
+      - name: a tag e a versão do pyproject têm de concordar
+        run: |
+          tag="${{ github.event.release.tag_name }}"
+          esperada="${tag#python-v}"
+          declarada="$(sed -n 's/^version = "\(.*\)"/\1/p' clients/python/pyproject.toml | head -1)"
+          echo "tag: $esperada | pyproject: $declarada"
+          if [ "$esperada" != "$declarada" ]; then
+            echo "erro: a tag anuncia $esperada e o pyproject declara $declarada." >&2
+            exit 1
+          fi
+
+      # O pacote é publicado como está no repositório, então a suíte roda ANTES
+      # — publicar no PyPI é irreversível: uma versão não pode ser substituída,
+      # só cedida (yanked).
+      - name: os testes do client passam antes de publicar
+        run: make test-python
+
+      - name: builda sdist e wheel
+        run: |
+          python -m pip install --upgrade build
+          python -m build clients/python
+
+      - name: publica no PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: clients/python/dist/

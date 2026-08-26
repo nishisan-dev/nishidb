@@ -105,6 +105,52 @@ jobs:
       - name: roda o driver contra um servidor de verdade
         run: make test-jdbc
 
+  # O client Python contra o BINÁRIO REAL, pela mesma razão do job `jdbc` e com
+  # a mesma montagem (os dois scripts compartilham scripts/it-comum.sh, para que
+  # os dois clients sejam provados contra o MESMO corpus).
+  #
+  # O job `test` já roda `make test-python`, que são os unitários contra um
+  # `http.server` da stdlib — eles provam que o client faz o que quem o escreveu
+  # acha que o servidor emite. Este job roda a outra metade, e ela paga: o bug
+  # de reuso de conexão que a versão inicial tinha só apareceu AQUI, porque o
+  # servidor real responde `/v1/query` em chunked e o de mentira respondia com
+  # Content-Length. O servidor de mentira passou a falar chunked por causa
+  # disso, mas o job continua sendo a única prova contra o fio de verdade.
+  python:
+    name: test-python-it (client contra o binário real)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.5'
+      - uses: actions/setup-python@v5
+        with:
+          # EXATA, e igual ao piso do requires-python do pyproject — um gate
+          # compara as duas extrações. Faixa deixaria o runner escolher o
+          # patch, e o CI validaria um interpretador que ninguém mediu.
+          python-version: '3.10'
+      - name: roda o client contra um servidor de verdade
+        run: make test-python-it
+
+  # Lint e tipagem do client Python. Job PRÓPRIO, e não um passo do `test`,
+  # porque exige instalar ferramenta — e `make test-python` tem de continuar
+  # rodando com zero `pip install`, que é a promessa que o torna executável em
+  # qualquer máquina.
+  python-lint:
+    name: lint-python (ruff + mypy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: instala as ferramentas nas versões que o pyproject fixa
+        run: pip install -e 'clients/python[dev]'
+      - run: make lint-python
+
   lint:
     name: lint (golangci-lint + gofmt)
     runs-on: ubuntu-latest

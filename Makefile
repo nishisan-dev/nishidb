@@ -1,4 +1,4 @@
-.PHONY: build test test-race test-integration test-python lint bench bench-micro cover build-jdbc test-jdbc-unit test-jdbc
+.PHONY: build test test-race test-integration test-python test-python-it lint-python lint bench bench-micro cover build-jdbc test-jdbc-unit test-jdbc
 
 # `go build ./...` sozinho DESCARTA o binário: o módulo tem dois packages
 # main (cmd/nishidb e benchmark/ingest-bench), e sem -o o toolchain só
@@ -85,13 +85,48 @@ test-jdbc:
 # ausente FALHA alto e nomeia o que falta, não vira SKIP silencioso — é o
 # mesmo defeito do débito 53 (gate que passa porque a ferramenta não está lá)
 # por uma porta nova, em Python em vez de em Go.
+#
+# A partir do client Python (clients/python), o alvo roda DUAS suítes: o painel
+# e o client. As duas com `python3` puro e ZERO `pip install` — é a mesma
+# promessa do binário único aplicada ao ferramental, e é o que permite ao job
+# `test` do CI chamá-lo sem etapa de instalação nenhuma. O PYTHONPATH aponta
+# para o src layout do pacote, que não precisa estar instalado para ser testado.
 test-python:
 	@if command -v python3 > /dev/null; then \
-		python3 scripts/nishidb-stats_test.py; \
+		python3 scripts/nishidb-stats_test.py && \
+		PYTHONPATH=$(PY_DIR)/src python3 -m unittest discover -s $(PY_DIR)/tests -p '*_test.py'; \
 	else \
-		echo "erro: python3 não está no PATH — o teste do painel NÃO rodou." >&2; \
+		echo "erro: python3 não está no PATH — os testes Python NÃO rodaram." >&2; \
 		exit 1; \
 	fi
+
+# ---------------------------------------------------------------- client Python
+#
+# O irmão do driver JDBC: artefato de CLIENTE, não do engine. Zero dependência
+# de runtime (só a stdlib), cobrado por internal/gates/python_test.go.
+PY_DIR := clients/python
+
+define exige-python
+	@if ! command -v python3 >/dev/null 2>&1; then \
+		echo "erro: python3 não está no PATH — o client Python exige Python 3.10 ou mais novo." >&2; \
+		echo "  Ubuntu/Debian: apt install python3" >&2; \
+		exit 1; \
+	fi
+endef
+
+# Integração de VERDADE: sobe o binário com TLS e credencial, ingere um corpus
+# com um campo de cada tipo e roda o client contra ele. Mesma doutrina do
+# test-jdbc, inclusive o NISHIDB_IT_REQUIRED=1 que torna impossível o pior
+# desfecho: harness quebrado com suíte verde e zero teste de integração rodado.
+test-python-it:
+	$(exige-python)
+	./scripts/python-it.sh
+
+# Lint e tipagem do client. Exigem as ferramentas do extra `dev` instaladas, e
+# por isso NÃO entram no `test-python`, que tem de rodar sem instalar nada.
+lint-python:
+	$(exige-python)
+	cd $(PY_DIR) && python3 -m ruff check . && python3 -m ruff format --check . && python3 -m mypy
 
 # Os dois tetos vão desligados também aqui, e a duplicação com o `issues:` do
 # .golangci.yml é deliberada: o modo de falha deste gate é o SILÊNCIO — linter

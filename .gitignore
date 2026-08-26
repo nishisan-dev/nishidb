@@ -11,3 +11,12 @@ scripts/__pycache__/
 # Saída do build do driver JDBC. Escopado, e nunca `target/` solto: um
 # padrão largo esconderia um diretório chamado target que fosse código.
 clients/jdbc/target/
+
+# Saída do build e caches do client Python. Escopados pela mesma razão — e o
+# `dist/` aparece aqui mesmo já havendo um solto acima, porque um dia alguém
+# vai escopar aquele e esta linha é o que impede o artefato do client de
+# voltar a ser versionável em silêncio.
+clients/python/dist/
+clients/python/**/__pycache__/
+clients/python/.mypy_cache/
+clients/python/.ruff_cache/
