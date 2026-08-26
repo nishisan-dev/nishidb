@@ -75,6 +75,32 @@ func TestComLimitNaoCortaDentroDeLiteralNemDeIdentificador(t *testing.T) {
 			n:    5,
 			want: `SELECT "limite" FROM t LIMIT 5`,
 		},
+		// Os três casos abaixo são o defeito que o OFFSET expôs, e o primeiro
+		// é o grave: o corte antigo ia "da última cláusula LIMIT em diante" e
+		// levava o OFFSET junto. A paginação EVAPORAVA, e o comando devolvia as
+		// N PRIMEIRAS linhas como se fossem a página pedida — sem erro e sem
+		// aviso, que é resultado errado com cara de certo.
+		{
+			nome: "offset é PRESERVADO ao trocar o limit",
+			sql:  "SELECT id FROM t LIMIT 5 OFFSET 10",
+			n:    3,
+			want: "SELECT id FROM t LIMIT 3 OFFSET 10",
+		},
+		{
+			// Aqui o corte antigo anexava `LIMIT 3` DEPOIS do OFFSET, gerando
+			// `... OFFSET 10 LIMIT 3` — ordem inválida. O usuário recebia erro
+			// de sintaxe sobre um texto que não escreveu.
+			nome: "offset sem limit ganha o limit ANTES dele",
+			sql:  "SELECT id FROM t OFFSET 10",
+			n:    3,
+			want: "SELECT id FROM t LIMIT 3 OFFSET 10",
+		},
+		{
+			nome: "offset com where e ponto e vírgula",
+			sql:  "SELECT id FROM t WHERE a = 1 LIMIT 5 OFFSET 2;",
+			n:    9,
+			want: "SELECT id FROM t WHERE a = 1 LIMIT 9 OFFSET 2",
+		},
 	}
 	for _, c := range casos {
 		t.Run(c.nome, func(t *testing.T) {

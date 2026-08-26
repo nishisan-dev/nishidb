@@ -31,6 +31,11 @@ type SelectStmt struct {
 	HasLimit   bool  // LIMIT presente na query
 	Limit      int64 // válido só com HasLimit; sempre >= 0
 	LimitPos   int   // posição do literal do LIMIT; válido só com HasLimit
+	// OFFSET é ADITIVO, no molde exato do LIMIT: HasOffset distingue "ausente"
+	// de "OFFSET 0", que um int sozinho confundiria.
+	HasOffset  bool
+	Offset     int64 // válido só com HasOffset; sempre >= 0
+	OffsetPos  int   // posição do literal do OFFSET
 	ParamCount int
 }
 

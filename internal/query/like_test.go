@@ -128,3 +128,35 @@ func TestColunaChamadaLikeContinuaValida(t *testing.T) {
 		t.Errorf("mensagem = %q, quer nomear a coluna `like`", err)
 	}
 }
+
+func TestOffsetPulaAsPrimeirasLinhas(t *testing.T) {
+	h := semeado(t)
+	casos := []struct {
+		sql  string
+		quer []string
+	}{
+		{"SELECT id FROM radius_sessions OFFSET 0", []string{"CMP-0001", "CMP-0002", "CMP-0003", "CMP-0004"}},
+		{"SELECT id FROM radius_sessions OFFSET 2", []string{"CMP-0003", "CMP-0004"}},
+		{"SELECT id FROM radius_sessions LIMIT 2 OFFSET 1", []string{"CMP-0002", "CMP-0003"}},
+		{"SELECT id FROM radius_sessions OFFSET 99", nil},
+	}
+	for _, tc := range casos {
+		got := chaves(h.consultaOK(tc.sql), "id")
+		if strings.Join(got, ",") != strings.Join(tc.quer, ",") {
+			t.Errorf("%s\n  got  = %v\n  quer = %v", tc.sql, got, tc.quer)
+		}
+	}
+}
+
+// O OFFSET pula linhas que PASSARAM no predicado, e o LIMIT continua contando
+// só as ENTREGUES. Somar as puladas ao teto faria `LIMIT 2 OFFSET 1` devolver
+// uma linha num dataset que tem quatro.
+func TestOffsetNaoConsomeOLimit(t *testing.T) {
+	h := semeado(t)
+	got := chaves(h.consultaOK(
+		`SELECT id FROM radius_sessions WHERE "Acct-Status-Type" = 'Stop' LIMIT 2 OFFSET 1`), "id")
+	quer := []string{"CMP-0003", "CMP-0004"}
+	if strings.Join(got, ",") != strings.Join(quer, ",") {
+		t.Errorf("got = %v, quer %v", got, quer)
+	}
+}
