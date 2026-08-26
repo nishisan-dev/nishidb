@@ -182,6 +182,29 @@ type CompiledField struct {
 	// conclui "estável".
 	ocorrencias  atomic.Uint64
 	divergencias atomic.Uint64
+
+	// coercoes conta as ocorrências que chegaram noutra forma JSON e ainda
+	// assim entraram na coluna — número numa coluna de texto, string numérica
+	// numa coluna int64.
+	//
+	// Ele existe porque a coerção CEGA o contador vizinho. Enquanto a coluna
+	// `string` recusava número, um valor divergente aparecia em divergencias e
+	// o operador via que a origem estava inconsistente; passando a converter,
+	// divergencias vai a ZERO no mesmo cenário e o diagnóstico some junto com o
+	// problema aparente. Sem este terceiro contador, o efeito líquido da
+	// mudança seria trocar uma perda visível por uma inconsistência invisível —
+	// e a origem continuaria escrevendo `07` e `7` para a mesma coisa.
+	//
+	// É um contador SEPARADO e não uma soma com divergencias porque as duas
+	// afirmações são diferentes e pedem remédios diferentes: divergiu é "o
+	// valor se perdeu, a coluna está incompleta"; coergiu é "o valor está lá,
+	// mas a origem escreve a mesma coisa de duas formas e o filtro por um único
+	// literal não a encontra inteira". Somá-las apagaria justamente a distinção
+	// que decide o que fazer.
+	//
+	// É subconjunto de ocorrencias, como divergencias, e disjunto dela: uma
+	// ocorrência ou converteu ou não converteu.
+	coercoes atomic.Uint64
 }
 
 // ContaOcorrencia registra que a chave desta coluna apareceu no documento.
@@ -198,6 +221,18 @@ func (f *CompiledField) Ocorrencias() uint64 { return f.ocorrencias.Load() }
 // Divergencias é quantas dessas ocorrências não couberam no tipo da coluna.
 // É sempre <= Ocorrencias.
 func (f *CompiledField) Divergencias() uint64 { return f.divergencias.Load() }
+
+// ContaCoercao registra que o valor chegou noutra forma JSON e foi convertido
+// para o tipo da coluna sem perda.
+//
+// Roda no mesmo caminho quente do ContaOcorrencia acima — uma vez por coluna
+// derivada por evento, e só nas que de fato coergiram —, e pela mesma razão é um
+// atomic.Add: não aloca, que é o que o gate do materializer cobra.
+func (f *CompiledField) ContaCoercao() { f.coercoes.Add(1) }
+
+// Coercoes é quantas dessas ocorrências vieram noutra forma JSON e ainda assim
+// entraram na coluna. É sempre <= Ocorrencias, e disjunto de Divergencias.
+func (f *CompiledField) Coercoes() uint64 { return f.coercoes.Load() }
 
 // EffectiveType devolve o tipo contra o qual os valores deste campo devem ser
 // interpretados: o declarado no YAML ou, para campo auto, o FIXADO na

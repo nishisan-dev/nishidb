@@ -394,7 +394,12 @@ func TestParseKeySurvivesArenaGrowth(t *testing.T) {
 func TestParseTypeConversionError(t *testing.T) {
 	c := compileYAML(t, patchYAML)
 	var b PatchBuffer
-	err := b.Parse([]byte(`{"id":"A","_SEQ":1,"Acct-Status-Type":123}`), c, time.Now())
+	// O veículo é um OBJETO, e não o `123` que ele era: número numa coluna de
+	// texto passou a ser coerção sem perda (o Raw do parser é o texto-fonte), e
+	// com ele o teste deixaria de exercitar erro de conversão nenhum. Objeto e
+	// array continuam recusados em `string`, que é a recusa que sobrou — ver
+	// TestObjetoEArrayContinuamRecusadosEmColunaDeTexto.
+	err := b.Parse([]byte(`{"id":"A","_SEQ":1,"Acct-Status-Type":{"a":1}}`), c, time.Now())
 	if !errors.Is(err, ErrTypeConversion) {
 		t.Fatalf("err = %v, want ErrTypeConversion", err)
 	}

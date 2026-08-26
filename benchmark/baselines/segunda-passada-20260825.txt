@@ -34,6 +34,21 @@
 // caminho mais quente do produto. A promessa de que esse custo "sai de medição,
 // não de raciocínio" não tinha instrumento antes disto.
 //
+// SEGUNDO USO, 26/08/2026 — a COERÇÃO PARA TEXTO. Os números abaixo continuam
+// sendo a linha de base e não foram reescritos; o que segue é o registro de que
+// ela foi usada de novo, para o que ela foi construída. A mudança acrescenta,
+// por coluna derivada por evento, um teste de forma (f.Kind contra a forma
+// nativa do tipo alvo) e, só nas colunas que de fato coergem, um segundo
+// atomic.Add. Rodadas de -count=6 antes e depois, mesma máquina e mesma sessão,
+// comparadas com benchstat: ParseComDescoberta 3,244 us → 3,308 us (p=0.818) e
+// ParseSemDescoberta 1,506 us → 1,497 us (p=0.974) — nenhuma das duas distingue
+// o antes do depois, e os dois lados seguem em 0 B/op e 0 allocs/op.
+//
+// A leitura honesta: com a variância desta bancada (±9% a ±37% no p50), ela NÃO
+// resolveria uma regressão de poucos por cento. O que ela afirma é o que a
+// decisão precisava — não há degradação de ordem de grandeza, e a alocação
+// continua em zero, que é o gate duro do pacote.
+//
 goos: linux
 goarch: amd64
 pkg: github.com/nishisan-dev/nishidb/internal/materializer

@@ -117,10 +117,20 @@ func (e *erroDaTabela) Unwrap() error { return e.err }
 // à mão é o que garante que a tabela obedeça às mesmas regras — tipos, chave,
 // ordem determinística de FieldID — que qualquer outro dataset.
 //
-// `occurrences` e `typeMismatches` são DUAS colunas cruas e não uma razão,
-// porque a razão não compõe: `2.315 de 2.383` e `93 de 3.334` são problemas de
-// ordens diferentes, e o numerador sozinho não os distingue. A divisão fica com
-// quem consulta. As duas são NULL para campo de topo — ver o record().
+// `occurrences`, `typeMismatches` e `coercions` são TRÊS colunas cruas e não
+// uma razão, porque a razão não compõe: `2.315 de 2.383` e `93 de 3.334` são
+// problemas de ordens diferentes, e o numerador sozinho não os distingue. A
+// divisão fica com quem consulta. As três são NULL para campo de topo — ver o
+// record().
+//
+// `coercions` é uma coluna à parte de `typeMismatches`, e não uma soma com ela,
+// porque as duas afirmações pedem remédios diferentes: divergiu é "o valor se
+// perdeu, a coluna está incompleta"; coergiu é "o valor está lá, mas a origem
+// escreve a mesma coisa de duas formas e um único literal não a encontra
+// inteira". Ela também é o que impede a coerção de cegar o diagnóstico: sem
+// `coercions`, um número passando a entrar numa coluna de texto zeraria o
+// `typeMismatches` daquela coluna e a inconsistência da origem sumiria do painel
+// sem ter sumido do dado.
 //
 // `type` e `auto` são DUAS colunas de propósito, e reusam o vocabulário que o
 // /v1/metadata já publica. Dizer só `auto` jogaria fora a informação que se foi
@@ -132,7 +142,7 @@ materialization:
   key:
     field: name
 schema:
-  include: [name, type, auto, index, indexed, parent, id, occurrences, typeMismatches]
+  include: [name, type, auto, index, indexed, parent, id, occurrences, typeMismatches, coercions]
   fields:
     name:
       type: string
@@ -151,6 +161,8 @@ schema:
     occurrences:
       type: int64
     typeMismatches:
+      type: int64
+    coercions:
       type: int64
 `
 

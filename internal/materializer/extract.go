@@ -71,7 +71,8 @@ func (b *PatchBuffer) extraiDerivadas() error {
 			// sucesso: é o que faz a divergência ser um subconjunto da
 			// ocorrência, e "2.315 de 2.383" sair direto do SQL.
 			d.ContaOcorrencia()
-			val, arena, err := Convert(f, d.EffectiveType(), d.Layout, b.arena)
+			alvo := d.EffectiveType()
+			val, arena, err := Convert(f, alvo, d.Layout, b.arena)
 			if err != nil || val.Type == types.TypeNull {
 				// REMOÇÃO explícita, e não `continue`: no modo merge, campo
 				// ausente do patch PRESERVA o valor anterior, então sair calado
@@ -90,6 +91,7 @@ func (b *PatchBuffer) extraiDerivadas() error {
 				continue
 			}
 			b.arena = arena
+			contaSeCoergiu(d, f, alvo)
 			b.entries = append(b.entries, patchEntry{field: d, val: val})
 		}
 	}
@@ -304,6 +306,7 @@ func (b *PatchBuffer) descobreAninhados(p paiVisto) error {
 			contaSeDivergiu(b.compilado, cf, f)
 			continue
 		}
+		contaSeCoergiu(cf, f, alvo)
 		b.entries = append(b.entries, patchEntry{field: cf, val: val})
 	}
 }
@@ -333,6 +336,43 @@ func contaSeDivergiu(c *schema.Compiled, coluna *schema.CompiledField, f jsonp.F
 		return
 	}
 	c.ContaValorIncompativel(coluna, veio)
+}
+
+// contaSeCoergiu registra que o valor chegou noutra forma JSON e ainda assim
+// entrou na coluna — número numa coluna de texto, string numérica numa coluna
+// int64 ou double.
+//
+// POR QUE O CONTADOR EXISTE. A coerção resolve uma perda e cria uma cegueira. O
+// número numa coluna `string` era recusado, a coluna ficava nula e o
+// typeMismatches subia — o operador via, pelo contador, que a origem estava
+// inconsistente. Convertendo, o valor é preservado e aquele contador vai a ZERO
+// no mesmo cenário: a inconsistência da origem some do painel sem ter sumido do
+// dado. Sem este terceiro contador, a mudança trocaria uma perda visível por uma
+// inconsistência invisível, e a ressalva da documentação — `"07"` e `"7"`
+// continuam sendo duas strings — não teria como ser MEDIDA em dataset nenhum.
+//
+// ONDE ELE É CHAMADO, e por que só aqui. Convert é usado em três sítios: os dois
+// desta segunda passada e o campo de TOPO em patch.go. O topo fica de fora
+// porque os contadores por coluna são publicados só para as DERIVADAS — no topo
+// o `_meta.fields` os emite NULL, e incrementar um número que ninguém lê seria
+// custo no caminho quente sem leitor. Os dois sítios daqui não se sobrepõem: a
+// descoberta pula toda chave já DECLARADA (ver `declarado`), então nenhuma
+// ocorrência é contada duas vezes.
+//
+// A COMPARAÇÃO É f.Kind CONTRA A FORMA NATIVA DO ALVO, e não InferType contra o
+// alvo. A segunda seria mais curta e estaria errada: InferType de uma string
+// RFC3339 é TypeString, que difere de TypeTimestamp, e toda coluna de timestamp
+// marcaria 100% de coerção. O JSON não tem timestamp — ver kindNativo, que é
+// onde essa tabela mora e onde ela precisa ser mantida junto do Convert.
+//
+// Só é chamado no caminho de SUCESSO. Ocorrência que falhou é divergência e já
+// tem contador; ocorrência que veio `null` não é nem uma coisa nem outra.
+func contaSeCoergiu(coluna *schema.CompiledField, f jsonp.Field, alvo types.FieldType) {
+	nativo, temNativo := kindNativo(alvo)
+	if !temNativo || f.Kind == nativo {
+		return
+	}
+	coluna.ContaCoercao()
 }
 
 // declarado informa se o caminho de um nível já é coberto por um extract.

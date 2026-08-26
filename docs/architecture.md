@@ -457,7 +457,7 @@ autodescoberto, índice declarado, índice físico, campo de origem e a
 **densidade** de cada coluna derivada — como uma tabela qualquer:
 
 ```sql
-SELECT name, type, occurrences, typeMismatches FROM _meta.fields
+SELECT name, type, occurrences, typeMismatches, coercions FROM _meta.fields
 WHERE parent = 'persistent' AND typeMismatches > 0
 ```
 
@@ -468,16 +468,35 @@ uma vez, calculada por um script descartável sobre uma amostra de 20.000
 documentos. Com as duas colunas a mesma pergunta é respondida por SQL, sobre o
 dataset inteiro.
 
-São **duas colunas cruas e não uma razão**: a razão não compõe, e `2.315 de
-2.383` é problema de outra ordem que `93 de 3.334`. São **NULL para campo de
-topo**, pelo mesmo argumento que mantém `parent` ausente ali — zero diria "a
-chave nunca apareceu". E são **contadores de processo**, que zeram no restart:
-`0` num dataset recém-subido é "ainda não medi", não "estável".
+**`coercions` é a terceira, e existe porque a coerção de tipo CEGA as outras
+duas.** Enquanto a coluna `string` recusava número, um valor divergente subia em
+`typeMismatches` e apontava a coluna; a partir do momento em que o número entra,
+aquele contador vai a **zero** no mesmo cenário — a inconsistência da origem some
+do painel sem ter sumido do dado. `coercions` conta a ocorrência que chegou
+**noutra forma JSON e ainda assim entrou**: número ou boolean numa coluna de
+texto, string numérica numa coluna `int64`/`double` (esta última sempre existiu e
+nunca foi contada). É ela que torna MEDÍVEL a ressalva da referência de tipos —
+`"07"` e `"7"` na mesma coluna são duas strings distintas
+(`TestCoercoesSaemPorSQLSeparadasDasDivergencias`).
+
+São **três colunas cruas e não uma razão**: a razão não compõe, e `2.315 de
+2.383` é problema de outra ordem que `93 de 3.334`. `coercions` fica **separada**
+de `typeMismatches` e não somada a ela porque as duas afirmações pedem remédios
+diferentes — divergiu é "o valor se perdeu, a coluna está incompleta"; coergiu é
+"o valor está lá, mas a origem escreve a mesma coisa de duas formas". As três são
+**NULL para campo de topo**, pelo mesmo argumento que mantém `parent` ausente ali
+— zero diria "a chave nunca apareceu". E são **contadores de processo**, que
+zeram no restart: `0` num dataset recém-subido é "ainda não medi", não
+"estável".
 
 O custo está medido, e não raciocinado: o incremento roda uma vez por coluna
 derivada por evento, no caminho mais quente do produto, e a comparação contra
 `benchmark/baselines/segunda-passada-20260825.txt` não distingue o antes do
-depois (`p=0.310`), com zero alocação.
+depois (`p=0.310`), com zero alocação. `coercions` foi medida contra a MESMA
+bancada, e com o mesmo desfecho: a comparação da coerção — que acrescenta um
+teste de forma por coluna derivada por evento e um segundo `atomic.Add` nas que
+coergem — também não distingue o antes do depois (`p=0.818` com descoberta,
+`p=0.974` sem, `-count=6`), e os dois lados seguem em zero alocação.
 
 Por SQL, e não por rota HTTP nova, porque uma tabela **não exige suporte em
 cliente nenhum**: DBeaver, CLI e driver já sabem executar `SELECT` e desenhar o
@@ -926,7 +945,7 @@ onde pode ser usado. Sem esta tabela, escrever um YAML novo é tentativa e erro.
 
 | `type:` | Entrada aceita no evento | `index: bitmap` | `index: hash` |
 |---|---|:---:|:---:|
-| `string` | string JSON, e ela precisa ser **UTF-8 válido** | sim | sim |
+| `string` | string JSON, e ela precisa ser **UTF-8 válido**; **número e `true`/`false` também entram**, gravados como o **texto-fonte** (`1.50` → `"1.50"`, `007` → `"007"`, `true` → `"true"`) — não há normalização e nada se perde. **Object e array continuam recusados** | sim | sim |
 | `int64` | número inteiro (sem `.`, `e` nem `E`), `{"$numberLong":"<dígitos>"}` **ou string de dígitos** — `-?[0-9]+`, sem espaço em volta, sem sinal `+`, sem fração e sem expoente; zero à esquerda é aceito (`"007"` → 7) e estouro do range de `int64` é **recusado** | sim | sim |
 | `double` | número JSON **ou string com a mesma gramática de número JSON** (opcionalmente com fração e expoente). São recusados `NaN`, `Inf`, hexadecimal, separador `_`, sinal `+`, zero à esquerda (`"01"`), ponto sem dígito (`"1."`) e espaço em volta | não | não |
 | `boolean` | `true`/`false` JSON — a **string** `"true"` não serve | sim | não |
@@ -1030,6 +1049,36 @@ casaria, então `"1e3"` vira 1000 num `double` e é recusado num `int64`, e
 `"NaN"` não entra em lugar nenhum (`TestCoerceDeclaredStringToNumeric`).
 Recusa é erro de conversão, e no §101 erro de conversão descarta o **evento
 inteiro**.
+
+**E por que `string` aceita número e boolean.** É a outra metade da mesma
+simetria, e a regra que governa as duas é uma só: **converte-se quando a
+conversão é sem perda**. Para número e boolean o `Raw` do parser é o
+**texto-fonte** — os dígitos como a origem os escreveu, e o literal `true`/`false`
+—, então gravá-lo numa coluna de texto não altera um byte: `{"x": 1.50}` vira
+`"1.50"`, com o zero à direita preservado, e `{"x": 007}` vira `"007"`
+(`TestNumeroEmColunaDeTextoGravaOTextoFonte`,
+`TestBooleanEmColunaDeTextoGravaOLiteral`). Antes disto o valor era **recusado**:
+a coluna ficava nula e o dado só sobrevivia dentro do documento, fora do alcance
+de qualquer `WHERE`. Perder o dado é pior que preservá-lo noutra forma.
+
+**A coerção recupera o VALOR e não unifica a CONSULTA.** É o limite da mudança e
+precisa estar escrito, porque o motivo de a coluna existir é filtrar: uma coluna
+`string` que recebe `"07"` de um evento e `7` de outro passa a guardar `"07"` e
+`"7"` — **duas strings distintas para a mesma coisa**. A coluna fica completa e
+continua **não filtrável por um único literal**. Isso é honesto (os dois valores
+ERAM diferentes na origem, e inventar uma normalização seria gravar um valor que
+ninguém mandou), mas quem lê esta página precisa saber. É para MEDIR esse caso
+que existe a coluna `coercions` do `_meta.fields`.
+
+**O que a simetria NÃO alcança, nas duas direções.** `int64` continua recusando
+`5.7`: truncar em `5` gravaria um valor que ninguém mandou, a soma bateria
+diferente e o filtro por igualdade encontraria a linha errada, sem nada no
+caminho acusando — perder o valor é ruim, inventar outro é pior. E `string`
+continua recusando **object e array**: enfiar um documento inteiro numa coluna de
+texto destrói a razão de ela existir, que é ser comparável, e faria a coluna
+misturar escalar com estrutura sem nada distinguindo os dois na leitura. Quem
+quer o documento declara `type: json`
+(`TestObjetoEArrayContinuamRecusadosEmColunaDeTexto`).
 
 **O `json` é mais estreito do que o nome sugere, e isso custa evento.** Ele
 aceita **apenas** object e array (`internal/materializer/typeconv.go`,

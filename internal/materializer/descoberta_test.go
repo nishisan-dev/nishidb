@@ -97,17 +97,21 @@ func TestODocumentoContinuaInteiroComDescoberta(t *testing.T) {
 // O tipo de uma chave descoberta é fixado na PRIMEIRA observação, como o de
 // qualquer campo autodescoberto. Valor divergente depois vira coluna ausente —
 // e o evento entra, porque o documento continua guardando a verdade.
+// O veículo da divergência é um OBJETO, e não o booleano que ele era: boolean e
+// número numa coluna de texto passaram a ser coerção sem perda, e com eles o
+// teste afirmaria o contrário do que o nome promete. Objeto continua divergindo
+// de `string`, que é a divergência que sobrou nesse alvo.
 func TestTipoDaChaveDescobertaEFixadoNaPrimeiraObservacao(t *testing.T) {
 	h := newHarness(t, descobreYAML)
 	h.apply(`{"id":"A","doc":{"podName":"texto"}}`)
-	r := h.apply(`{"id":"B","doc":{"podName":true}}`)
+	r := h.apply(`{"id":"B","doc":{"podName":{"a":1}}}`)
 	if r.Action != ActionCreated {
 		t.Fatalf("segundo evento = %+v, quer Created", r)
 	}
 	h.wantString(h.state("A"), "doc.podName", "texto")
 	h.wantAbsent(h.state("B"), "doc.podName")
-	// ...mas o documento de B guarda o booleano.
-	if got := string(h.state("B")["doc"].Bytes); got != `{"podName":true}` {
+	// ...mas o documento de B guarda o objeto.
+	if got := string(h.state("B")["doc"].Bytes); got != `{"podName":{"a":1}}` {
 		t.Errorf("doc de B = %s; o documento tem de preservar o valor divergente", got)
 	}
 }
@@ -168,8 +172,8 @@ func TestValorIncompativelEContado(t *testing.T) {
 	if n := h.c.ValoresIncompativeis(); n != 0 {
 		t.Fatalf("contador nasceu em %d", n)
 	}
-	h.apply(`{"id":"B","doc":{"podName":true}}`)
-	h.apply(`{"id":"C","doc":{"podName":42}}`)
+	h.apply(`{"id":"B","doc":{"podName":{"a":1}}}`)
+	h.apply(`{"id":"C","doc":{"podName":[1,2]}}`)
 	if n := h.c.ValoresIncompativeis(); n != 2 {
 		t.Errorf("ValoresIncompativeis = %d, quer 2", n)
 	}
@@ -184,12 +188,12 @@ func TestValorIncompativelAvisaUmaVezComOsDoisTipos(t *testing.T) {
 		avisos = append(avisos, coluna+": fixado="+fixado+" veio="+veio)
 	})
 	h.apply(`{"id":"A","doc":{"podName":"texto"}}`)
-	h.apply(`{"id":"B","doc":{"podName":true}}`)
-	h.apply(`{"id":"C","doc":{"podName":42}}`)
+	h.apply(`{"id":"B","doc":{"podName":{"a":1}}}`)
+	h.apply(`{"id":"C","doc":{"podName":[1,2]}}`)
 	if len(avisos) != 1 {
 		t.Fatalf("avisos = %v, quer exatamente um", avisos)
 	}
-	if avisos[0] != "doc.podName: fixado=string veio=boolean" {
+	if avisos[0] != "doc.podName: fixado=string veio=json" {
 		t.Errorf("aviso = %q", avisos[0])
 	}
 }
@@ -221,11 +225,11 @@ func TestValorDivergenteNaoCongelaOAnterior(t *testing.T) {
 	h.apply(`{"id":"MESMA","doc":{"podName":"valor-antigo"}}`)
 	h.wantString(h.state("MESMA"), "doc.podName", "valor-antigo")
 
-	h.apply(`{"id":"MESMA","doc":{"podName":true}}`)
+	h.apply(`{"id":"MESMA","doc":{"podName":{"a":1}}}`)
 	st := h.state("MESMA")
 	h.wantAbsent(st, "doc.podName")
 	// O documento continua sendo a verdade, e traz o valor novo.
-	if got := string(st["doc"].Bytes); got != `{"podName":true}` {
+	if got := string(st["doc"].Bytes); got != `{"podName":{"a":1}}` {
 		t.Errorf("doc = %s, quer o documento do evento corrente", got)
 	}
 }
@@ -308,8 +312,8 @@ func TestConflitoDeTipoNoCaminhoAninhadoRemoveAColunaSemDerrubarOEvento(t *testi
 	h.apply(`{"id":"A","doc":{"podName":"texto"}}`)
 	antes := h.c.ValoresIncompativeis()
 
-	// O tipo já está fixado como string; um número no mesmo caminho diverge.
-	r := h.m.Apply([]byte(`{"id":"A","doc":{"podName":42}}`))
+	// O tipo já está fixado como string; um objeto no mesmo caminho diverge.
+	r := h.m.Apply([]byte(`{"id":"A","doc":{"podName":{"a":1}}}`))
 	if r.Err != nil {
 		t.Fatalf("o evento caiu por causa de uma chave interna: %v", r.Err)
 	}
@@ -343,7 +347,7 @@ func TestNullExplicitoNaoContaComoTipoIncompativel(t *testing.T) {
 	// E a divergência de verdade continua contando, no mesmo dataset e na
 	// mesma coluna — sem isto o teste acima passaria com o contador quebrado.
 	antes = h.c.ValoresIncompativeis()
-	h.apply(`{"id":"A","doc":{"podName":42}}`)
+	h.apply(`{"id":"A","doc":{"podName":{"a":1}}}`)
 	if got := h.c.ValoresIncompativeis() - antes; got != 1 {
 		t.Errorf("contador subiu %d com tipo divergente, quer 1", got)
 	}

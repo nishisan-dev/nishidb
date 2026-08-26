@@ -360,9 +360,24 @@ Regras que valem a pena saber antes de declarar:
   CARDINALIDADE: bitmap mantém um arquivo de bits por valor distinto e serve
   coluna de poucos valores (status, protocolo); hash mantém uma tabela única
   por campo e serve coluna de muitos valores (endereço, identificador de nó).
+- **O que ENTRA na coluna mesmo vindo noutra forma:** numa coluna `string`,
+  número e `true`/`false` são gravados como o **texto-fonte** (`5` → `"5"`,
+  `1.50` → `"1.50"`, `true` → `"true"`); numa coluna `int64` ou `double`, a
+  string numérica é convertida. A regra é uma só — converte-se quando a
+  conversão é **sem perda** —, e o que ela recupera é o valor que antes se
+  perdia inteiro. **A ressalva importa:** a coerção recupera o VALOR e **não
+  unifica a CONSULTA**. Uma coluna `string` que recebe `"07"` num evento e `7`
+  noutro passa a guardar `"07"` e `"7"` — duas strings distintas para a mesma
+  coisa. A coluna fica completa e continua **não filtrável por um único
+  literal**. É honesto, porque na origem os dois valores eram mesmo diferentes,
+  mas quem escreve o filtro precisa saber. A coluna `coercions` do
+  `_meta.fields` (abaixo) é como esse caso é medido.
 - **O que não vira coluna:** caminho ausente, valor que é lista, valor de tipo
-  incompatível com o declarado, `null` explícito, e documento que chega com
-  forma errada. Em todos a coluna fica **nula** e o evento entra normalmente —
+  incompatível com o declarado — hoje isso quer dizer **object ou array numa
+  coluna escalar**, e `5.7` numa coluna `int64`, que continua recusado porque
+  truncar em `5` gravaria um valor que ninguém mandou —, `null` explícito, e
+  documento que chega com forma errada. Em todos a coluna fica **nula** e o
+  evento entra normalmente —
   uma chave interna nunca derruba o evento. Só duas coisas o derrubam, e
   nenhuma delas é dado: **falha de infra** ao registrar a coluna ou a gravar o
   tipo (disco cheio, EIO), que sai como `STORAGE_ERROR`; e o **teto de campos
@@ -762,17 +777,28 @@ O namespace `_meta` responde o que o dataset tem, por SQL, sem precisar de
 suporte em cliente nenhum:
 
 ```sql
-SELECT name, type, auto, index, indexed, parent, occurrences, typeMismatches FROM _meta.fields
+SELECT name, type, auto, index, indexed, parent, occurrences, typeMismatches, coercions FROM _meta.fields
 SELECT name FROM _meta.fields WHERE parent = 'persistent'
 ```
 
 `occurrences` é quantas vezes a chave apareceu no documento; `typeMismatches`,
-quantas dessas não couberam no tipo da coluna. São **duas colunas cruas e não
-uma razão**, porque a razão não compõe: `2.315 de 2.383` e `93 de 3.334` são
-problemas de ordens diferentes, e o numerador sozinho não os distingue. As duas
-são **NULL para campo de topo** — zero diria "a chave nunca apareceu", que é
-outra afirmação —, então `WHERE typeMismatches > 0` já filtra o topo. As N
-piores colunas saem por `ORDER BY typeMismatches DESC`.
+quantas dessas não couberam no tipo da coluna; `coercions`, quantas chegaram
+**noutra forma JSON e ainda assim entraram** — o número numa coluna de texto, a
+string numérica numa coluna `int64`. São **três colunas cruas e não uma razão**,
+porque a razão não compõe: `2.315 de 2.383` e `93 de 3.334` são problemas de
+ordens diferentes, e o numerador sozinho não os distingue. As três são **NULL
+para campo de topo** — zero diria "a chave nunca apareceu", que é outra
+afirmação —, então `WHERE typeMismatches > 0` já filtra o topo. As N piores
+colunas saem por `ORDER BY typeMismatches DESC`.
+
+`coercions` fica **separada** de `typeMismatches`, e não somada a ela, porque as
+duas afirmações pedem remédios diferentes: divergiu é "o valor se perdeu, a
+coluna está incompleta"; coergiu é "o valor está lá, mas a origem escreve a mesma
+coisa de duas formas, e um único literal não a encontra inteira". Ela é também o
+que impede a coerção de cegar o painel — sem ela, uma coluna que passa a aceitar
+número teria o `typeMismatches` zerado e a inconsistência da origem sumiria da
+vista sem ter sumido do dado. `ORDER BY coercions DESC` lista as colunas cujo
+filtro por um literal só tem mais chance de vir incompleto.
 
 **São contadores de PROCESSO e zeram no restart**, como os demais do produto.
 Isso é aceitável para a pergunta que respondem — "esta coluna é confiável?" —,
