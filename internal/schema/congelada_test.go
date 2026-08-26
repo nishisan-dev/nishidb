@@ -3,6 +3,8 @@ package schema
 import (
 	"strings"
 	"testing"
+
+	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
 // yamlCongelada monta uma spec mínima com o bloco de campos dado. O `mode` é
@@ -109,5 +111,81 @@ func TestFrozenFromRelogioEhAceito(t *testing.T) {
 		"    criadoEm:\n      frozenFrom: \"@writeTime\"\n"))
 	if got := s.Schema.Fields["criadoEm"].FrozenFrom; got != OrigemRelogio {
 		t.Errorf("FrozenFrom = %q, quero %q", got, OrigemRelogio)
+	}
+}
+
+func compilaCongelada(t *testing.T, yaml string) *Compiled {
+	t.Helper()
+	s := aceitaCongelada(t, yaml)
+	c, err := s.Compile(newFakeDict())
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	return c
+}
+
+func TestCompilaCongeladaHerdaOTipoDaOrigem(t *testing.T) {
+	c := compilaCongelada(t, yamlCongelada("", "    id:\n      type: string\n"+
+		"    sev:\n      type: int64\n"+
+		"    origSev:\n      frozenFrom: sev\n"))
+	f, ok := c.FieldByName([]byte("origSev"))
+	if !ok {
+		t.Fatal("origSev não compilou")
+	}
+	if f.Type != types.TypeInt64 {
+		t.Errorf("tipo herdado = %v, quero int64", f.Type)
+	}
+	if f.FrozenFrom == nil || f.FrozenFrom.Name != "sev" {
+		t.Error("a origem não foi religada")
+	}
+	if f.IsSystem {
+		t.Error("congelada virou campo de sistema; ela é dado do usuário e tem de sair no SELECT *")
+	}
+	if len(c.Congeladas) != 1 || c.Congeladas[0] != f {
+		t.Error("a lista pré-computada não tem a congelada")
+	}
+}
+
+func TestCompilaCongeladaDeOrigemAutoTambemEhAuto(t *testing.T) {
+	c := compilaCongelada(t, yamlCongelada("", "    id:\n      type: string\n"+
+		"    sev:\n      type: auto\n"+
+		"    origSev:\n      frozenFrom: sev\n"))
+	f, _ := c.FieldByName([]byte("origSev"))
+	if !f.IsAuto {
+		t.Error("a congelada de origem auto precisa ser auto: o tipo dela só é conhecido na primeira observação")
+	}
+}
+
+func TestCompilaCongeladaDoRelogioEhTimestamp(t *testing.T) {
+	c := compilaCongelada(t, yamlCongelada("", "    id:\n      type: string\n"+
+		"    criadoEm:\n      frozenFrom: \"@writeTime\"\n"))
+	f, ok := c.FieldByName([]byte("criadoEm"))
+	if !ok {
+		t.Fatal("criadoEm não compilou")
+	}
+	if f.Type != types.TypeTimestamp || !f.DoRelogio {
+		t.Errorf("congelada do relógio = (tipo %v, doRelogio %v), quero (timestamp, true)", f.Type, f.DoRelogio)
+	}
+	if f.FrozenFrom != nil {
+		t.Error("a congelada do relógio não tem coluna de origem")
+	}
+	if len(c.Congeladas) != 1 || c.Congeladas[0] != f {
+		t.Error("a congelada do relógio precisa entrar na lista pré-computada")
+	}
+}
+
+// A ordem é a de FieldID pela mesma razão das Derivadas: o materializer
+// consulta a lista por evento e não pode varrer o mapa no caminho quente.
+func TestCongeladasSaemOrdenadasPorFieldID(t *testing.T) {
+	c := compilaCongelada(t, yamlCongelada("", "    id:\n      type: string\n"+
+		"    a:\n      type: int64\n"+
+		"    b:\n      type: int64\n"+
+		"    zOrigA:\n      frozenFrom: a\n"+
+		"    mOrigB:\n      frozenFrom: b\n"))
+	if len(c.Congeladas) != 2 {
+		t.Fatalf("%d congeladas, quero 2", len(c.Congeladas))
+	}
+	if c.Congeladas[0].ID >= c.Congeladas[1].ID {
+		t.Errorf("fora de ordem: %d depois de %d", c.Congeladas[1].ID, c.Congeladas[0].ID)
 	}
 }

@@ -142,6 +142,16 @@ type CompiledField struct {
 	// de um SELECT * por evento.
 	Derivadas []*CompiledField
 
+	// FrozenFrom é a coluna de onde o valor congelado vem; nil quando esta
+	// não é congelada. DoRelogio marca a congelada cuja origem é o relógio do
+	// writer, que não tem CompiledField para apontar.
+	//
+	// A congelada é uma coluna NORMAL em tudo o que importa ao binder, ao
+	// planner e ao encoder — tem FieldID, tipo e índice, aparece no SELECT *
+	// e no /v1/metadata. O par governa uma coisa só: quem escreve o valor.
+	FrozenFrom *CompiledField
+	DoRelogio  bool
+
 	// Format é o padrão declarado no YAML e Layout é ele compilado. Não-nil
 	// exatamente quando Type é datetime ou time; o Format é guardado ao lado
 	// do Layout porque a mensagem de literal inválido precisa dizer o que se
@@ -302,6 +312,11 @@ type Compiled struct {
 	Errors ErrorsSpec
 
 	Key, Seq, TTL *CompiledField
+
+	// Congeladas são as colunas com frozenFrom, em ordem de FieldID.
+	// Pré-computada e ordenada pela mesma razão das Derivadas: o materializer
+	// a percorre por evento, e varrer o mapa no caminho quente custaria caro.
+	Congeladas []*CompiledField
 
 	// ExpireAfterWrite é o idle timeout do dataset; zero = sem expiração por
 	// escrita. Mutuamente exclusivo com TTL, pela validação da spec.
@@ -560,6 +575,41 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 			c.TTL = cf
 		}
 	}
+
+	// A religação das congeladas roda DEPOIS do laço porque a origem pode ter
+	// sido compilada depois da congelada — os nomes são percorridos em ordem
+	// alfabética, e `originalSeverity` vem antes de `severity`.
+	for name, spec := range s.Schema.Fields {
+		if spec.FrozenFrom == "" {
+			continue
+		}
+		cf, ok := c.byName[name]
+		if !ok {
+			continue // excluída do dataset
+		}
+		if spec.FrozenFrom == OrigemRelogio {
+			cf.Type, cf.DoRelogio = types.TypeTimestamp, true
+		} else {
+			origem, ok := c.byName[spec.FrozenFrom]
+			if !ok {
+				return nil, specErrf("campo %q: origem %q não compilou (excluída?)", name, spec.FrozenFrom)
+			}
+			cf.FrozenFrom = origem
+			cf.Type, cf.IsAuto = origem.Type, origem.IsAuto
+			if cf.IsAuto {
+				// O hint é carregado aqui pela mesma razão do laço acima, e
+				// não de graça: a congelada tem FieldID PRÓPRIO, então o tipo
+				// que ela fixou numa execução anterior está sob o id DELA. Sem
+				// esta leitura, o processo reiniciado trataria uma coluna que
+				// já tem dados gravados como nunca observada.
+				if t, ok := dict.TypeHint(cf.ID); ok {
+					cf.autoType.Store(uint32(t))
+				}
+			}
+		}
+		c.Congeladas = append(c.Congeladas, cf)
+	}
+	sort.Slice(c.Congeladas, func(i, j int) bool { return c.Congeladas[i].ID < c.Congeladas[j].ID })
 
 	// Campos que o DICIONÁRIO conhece e o YAML não: campos auto que uma
 	// execução anterior materializou via ResolveUnknown. Sem carregá-los aqui,
