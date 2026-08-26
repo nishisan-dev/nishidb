@@ -18,6 +18,7 @@ import (
 
 	"github.com/nishisan-dev/nishidb/internal/index/bitmap"
 	"github.com/nishisan-dev/nishidb/internal/index/primary"
+	"github.com/nishisan-dev/nishidb/internal/index/valuekey"
 	"github.com/nishisan-dev/nishidb/internal/logging"
 	"github.com/nishisan-dev/nishidb/internal/metrics"
 	"github.com/nishisan-dev/nishidb/internal/storage/checkpoint"
@@ -1378,7 +1379,7 @@ func (s *Store) validatePayloadAgainstDataset(payload []byte) error {
 			return fmt.Errorf("%w: fieldID %d não existe no dicionário", ErrInvalidArgument, id)
 		}
 		if _, indexado := s.bitmaps[id]; indexado {
-			if err := bitmap.ValidateValue(v); err != nil {
+			if err := valuekey.Validate(v); err != nil {
 				nome, _ := s.dict.Name(id)
 				return fmt.Errorf("%w: campo %d (%q) tem índice bitmap: %w", ErrInvalidArgument, id, nome, err)
 			}
