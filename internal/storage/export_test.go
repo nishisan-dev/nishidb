@@ -54,6 +54,15 @@ func (s *Store) PartialCheckpointForTest() error {
 			return err
 		}
 	}
+	// O hash entra aqui pela mesma razão dos bitmaps: este seam reproduz o
+	// crash entre os passos 3 e 4 do §10.2, e o estado que ele tem de deixar é
+	// "todo índice durável, manifest ainda não". Esquecer um motor faria o seam
+	// simular um crash que o protocolo não produz.
+	for _, ix := range s.hashes {
+		if err := ix.Msync(); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

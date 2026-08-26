@@ -34,7 +34,17 @@ func TestCheckpointOrdemDeDurabilidade(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	want := []string{"segSync", "applyOverlay", "msyncPrimary", "msyncLocations", "msyncSequences", "msyncBitmaps", "manifest"}
+	// msyncHash entra ENTRE msyncBitmaps e manifest, e a posição é o que se
+	// trava aqui: o §10.2 exige que todo índice esteja durável antes do
+	// manifest, porque é o manifest que declara o ponto S como recuperável. Um
+	// msync depois dele declararia durável um índice ainda em página suja, e a
+	// recovery seguinte confiaria na declaração.
+	//
+	// O passo aparece mesmo neste dataset, que não tem índice hash algum, e
+	// isso é deliberado: um passo emitido só quando há conteúdo tornaria a
+	// SEQUÊNCIA dependente da configuração do dataset, e este teste passaria a
+	// provar o dataset dele em vez do protocolo.
+	want := []string{"segSync", "applyOverlay", "msyncPrimary", "msyncLocations", "msyncSequences", "msyncBitmaps", "msyncHash", "manifest"}
 	if !slices.Equal(trace, want) {
 		t.Fatalf("ordem de durabilidade violada:\nesperado %v\nobtido   %v", want, trace)
 	}
