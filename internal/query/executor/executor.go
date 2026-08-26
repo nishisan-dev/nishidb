@@ -58,6 +58,20 @@ type Options struct {
 	SortMemory int64
 	// SpillBytes é o teto de DISCO do transbordo de UMA query. 0 = sem teto.
 	SpillBytes int64
+	// TopNMax é o maior N (= OFFSET + limite efetivo) que ainda escolhe o
+	// caminho rápido de top-N do ORDER BY. 0 usa tetoTopNPadrao; NEGATIVO
+	// desliga o caminho rápido e força o ORDER BY completo.
+	//
+	// É teto de LINHAS retidas, e não de bytes, porque é decidido no Open — não
+	// há uma linha para medir ainda. O teto de bytes é o SortMemory, e continua
+	// valendo dentro do modo rápido.
+	//
+	// Pelo mesmo motivo do SortMemory, AINDA NÃO TEM CHAVE DE CONFIGURAÇÃO: o
+	// lugar dela é o orçamento por query do §80. O valor negativo existe para
+	// quem precisa comparar os dois caminhos sobre a MESMA query — é o que
+	// torna TestTopNDaOMesmoResultadoQueOSortCompleto um diferencial de verdade
+	// e não uma comparação do caminho consigo mesmo.
+	TopNMax int64
 }
 
 // DiretorioDeSpill é a capability opcional do Store que diz onde o transbordo
@@ -141,6 +155,18 @@ func Open(ctx context.Context, bq *binder.BoundQuery, plan planner.Plan, opts Op
 			}
 		}
 		it.ord = novoOrdenador(bq.OrderBy, teto, area, bq.Slots.IDs)
+		// O modo é decidido AQUI, e não na primeira linha, porque ele depende
+		// só da forma da query — LIMIT explícito e OFFSET —, e trocar de modo
+		// no meio da varredura obrigaria a reprocessar o que já passou.
+		if n, ok := tamanhoDoTopN(bq, opts.TopNMax); ok {
+			it.ord.ativaTopN(n)
+			if opts.Metrics != nil {
+				// Uma vez por QUERY, direto: não é caminho quente, e o
+				// acumulador local do iterador existe para o que roda por
+				// linha.
+				opts.Metrics.TopN.Add(1)
+			}
+		}
 	}
 
 	cols := make([]ColView, len(bq.Columns))
@@ -522,6 +548,11 @@ func (it *iterador) encerra() {
 	// cancel SEMPRE, inclusive na parada por LIMIT: senão o timer do
 	// WithTimeout fica vivo até o deadline em toda query com LIMIT.
 	it.cancel()
+	// A degradação do top-N é decidida lá dentro do ordenador, durante a
+	// drenagem; o flush é o único ponto por onde toda query passa uma vez.
+	if it.ord != nil && it.ord.degradou {
+		it.cnt.topNDegradado = 1
+	}
 	it.cnt.flush(it.metrics)
 }
 

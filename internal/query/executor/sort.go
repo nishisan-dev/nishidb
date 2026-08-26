@@ -33,6 +33,20 @@ var ErrOrcamentoDeOrdenacao = fmt.Errorf("orçamento de ordenação excedido")
 // leituras de memória liberada assim que o arena dobrasse. Por isso as chaves
 // guardam OFFSETS (ini, fim) e a janela é resolvida no momento da comparação.
 // É a mesma disciplina que o binder usa para os literais.
+//
+// ## Três modos, UM operador
+//
+// O caminho descrito acima é o COMPLETO, e é o default. Há mais dois, e nenhum
+// deles é um operador separado:
+//
+//   - TRANSBORDO, quando o orçamento de memória estoura e há lugar em disco: o
+//     lote corrente vira um run ordenado, e a emissão é um merge k-way.
+//   - TOP-N, escolhido no Open quando `OFFSET + limite` cabe num teto de
+//     linhas: um heap limitado que retém só as N melhores. Ver topn.go.
+//
+// Os três compartilham comparaChave, e isso é requisito e não economia: duas
+// regras de ordenação divergiriam no primeiro empate, e o resultado passaria a
+// depender de qual modo o Open escolheu.
 type ordenador struct {
 	chaves []binder.BoundOrderKey
 	arena  []byte
@@ -56,6 +70,27 @@ type ordenador struct {
 	// ordenação couber em memória.
 	cabecas  []*cabeca
 	pendente int
+
+	// topN é o tamanho do heap limitado quando o caminho rápido está ligado, e
+	// ZERO quando o operador usa o caminho completo — inclusive depois de uma
+	// degradação. É o único discriminador do modo; ver topn.go.
+	topN int
+	heap []entradaTopN
+	// valsTN é achatado como o vals do caminho completo: nKeys entradas por
+	// entrada do heap, contíguas, endereçadas pelo chaveIdx que viaja na
+	// entrada.
+	valsTN []chaveVal
+	// bytesTN é a soma das capacidades dos buffers do heap, mantida por
+	// aritmética para que o orçamento não precise varrer N entradas por linha.
+	bytesTN int64
+	// degradou registra que a query COMEÇOU no top-N e caiu no completo. É
+	// diagnóstico: sem ele, a degradação é invisível de fora e nenhum teste
+	// consegue provar que ela aconteceu.
+	degradou bool
+	// slotsDaDegradacao só existe durante a degradação, para reler as entradas
+	// retidas sem tocar nos slots do iterador — que naquele instante ainda
+	// carregam a linha que acabou de chegar.
+	slotsDaDegradacao []slot
 }
 
 // cabeca é a posição corrente de UM run durante o merge.
@@ -91,10 +126,15 @@ type chaveVal struct {
 	i64      int64
 	ini      int32
 	fim      int32
-	// direto é usado SÓ no merge de runs, onde os bytes vivem no buffer do
-	// leitor da cabeça e não no arena. No caminho em memória ele é nil e a
-	// janela (ini, fim) manda — ver o godoc do ordenador sobre por que o
-	// arena não admite ponteiros.
+	// direto é o valor já resolvido, e vale nos dois modos em que os bytes NÃO
+	// vivem no arena: o merge de runs, onde eles estão no buffer do leitor da
+	// cabeça, e o top-N, onde estão no buffer da própria entrada. No caminho
+	// completo em memória ele é nil e a janela (ini, fim) manda — ver o godoc
+	// do ordenador sobre por que o arena não admite ponteiros.
+	//
+	// No top-N o `direto` é RE-RESOLVIDO a cada substituição da entrada, porque
+	// a reescrita pode realocar o buffer; (ini, fim) continuam sendo a forma
+	// durável, e o ponteiro a forma derivada.
 	direto []byte
 }
 
@@ -106,6 +146,9 @@ func novoOrdenador(chaves []binder.BoundOrderKey, orcamento int64, area *spill.A
 
 // acrescenta copia a row para o arena. Devolve erro se o orçamento estourar.
 func (o *ordenador) acrescenta(slots []slot, rowID types.RowID) error {
+	if o.topN > 0 {
+		return o.acrescentaTopN(slots, rowID)
+	}
 	ini := int32(len(o.arena))
 	var err error
 	for i := range slots {
@@ -186,12 +229,23 @@ func (o *ordenador) transborda() error {
 
 // usado é a memória do operador. Conta o arena e as duas tabelas — sem elas o
 // teto mediria só metade do que o operador segura.
+//
+// No modo top-N o arena e as tabelas estão vazios e quem responde é o heap: os
+// buffers das entradas MAIS o custo fixo delas. Deixar o heap de fora faria o
+// teto de bytes valer só para o caminho completo, e a linha de 4 MiB de JSON
+// passaria a derrubar o processo exatamente pela porta que o modo novo abriu.
 func (o *ordenador) usado() int64 {
 	const bytesPorTupla = 24 // rowID(8) + três int32 + padding
 	const bytesPorChave = 24 // bool+pad(8) + i64(8) + dois int32
-	return int64(len(o.arena)) +
+	u := int64(len(o.arena)) +
 		int64(len(o.tuplas))*bytesPorTupla +
 		int64(len(o.vals))*bytesPorChave
+	if o.topN > 0 {
+		u += o.bytesTN +
+			int64(len(o.heap))*bytesPorEntradaTopN +
+			int64(len(o.valsTN))*bytesPorChave
+	}
+	return u
 }
 
 // ordena fecha a acumulação. Depois dela o arena não cresce mais, e por isso as
@@ -200,6 +254,10 @@ func (o *ordenador) usado() int64 {
 // Sem transbordo, ordena o lote único em memória — o caminho de sempre. Com
 // transbordo, grava o último lote como run e monta o merge k-way.
 func (o *ordenador) ordena() error {
+	if o.topN > 0 {
+		o.ordenaTopN()
+		return nil
+	}
 	if len(o.runs) == 0 {
 		o.ordenaEmMemoria()
 		return nil
@@ -383,6 +441,9 @@ func (o *ordenador) valor(k *binder.BoundOrderKey, c *chaveVal) types.Value {
 // e é isso que garante que uma linha ordenada e a mesma linha sem ORDER BY
 // produzam exatamente os mesmos valores.
 func (o *ordenador) proxima(slots []slot) (types.RowID, bool, error) {
+	if o.topN > 0 {
+		return o.proximaDoTopN(slots)
+	}
 	if o.cabecas != nil {
 		return o.proximaDoMerge(slots)
 	}
