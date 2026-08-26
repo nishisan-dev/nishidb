@@ -151,7 +151,10 @@ func TestCongeladaSobreviveAoReplayDoTail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mat := materializer.New(c, st)
+	mat, err := materializer.New(c, st)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, ev := range []string{`{"id":"a","sev":5}`, `{"id":"a","sev":9}`} {
 		if r := mat.Apply([]byte(ev)); r.Err != nil {
 			t.Fatalf("ingestão de %s: %v", ev, r.Err)

@@ -84,7 +84,10 @@ func aplicaCiclando(b *testing.B, m *materializer.Materializer, events [][]byte,
 // BenchmarkApplyCreate: entidade nova a cada evento — a fase LOAD.
 func BenchmarkApplyCreate(b *testing.B) {
 	events := corpusCheio(b, 7, 4096)
-	m := materializer.New(compiledSetup(b), &voidStore{rowID: 1})
+	m, err := materializer.New(compiledSetup(b), &voidStore{rowID: 1})
+	if err != nil {
+		b.Fatal(err)
+	}
 	// Warm-up: registra no dicionário os campos que só aparecem em parte do
 	// corpus, para medir o steady state.
 	for _, e := range events[:64] {
@@ -101,9 +104,12 @@ func BenchmarkApplyMergePatch(b *testing.B) {
 	events := corpusPatch(b, 8, 4096)
 	key, payload := estadoDeReferencia(b, corpusCheio(b, 8, 1))
 	// Sequence corrente baixa: todo patch do corpus é mais novo e aplica.
-	m := materializer.New(compiledSetup(b), &voidStore{
+	m, err := materializer.New(compiledSetup(b), &voidStore{
 		rowID: 42, seq: 1, key: key, payload: payload, found: true,
 	})
+	if err != nil {
+		b.Fatal(err)
+	}
 	for _, e := range events[:64] {
 		if r := m.Apply(e); r.Err != nil {
 			b.Fatal(r.Err)
@@ -117,9 +123,12 @@ func BenchmarkApplyMergePatch(b *testing.B) {
 func BenchmarkApplyStale(b *testing.B) {
 	events := corpusPatch(b, 9, 4096)
 	key, payload := estadoDeReferencia(b, corpusCheio(b, 9, 1))
-	m := materializer.New(compiledSetup(b), &voidStore{
+	m, err := materializer.New(compiledSetup(b), &voidStore{
 		rowID: 42, seq: 1 << 40, key: key, payload: payload, found: true,
 	})
+	if err != nil {
+		b.Fatal(err)
+	}
 	if r := m.Apply(events[0]); r.Action != materializer.ActionStale {
 		b.Fatalf("Action = %v, want Stale", r.Action)
 	}

@@ -20,7 +20,10 @@ func TestCampoAutoSobreviveAoRestartEFiltra(t *testing.T) {
 	ig := &integracao{t: t, dir: t.TempDir() + "/auto", oracle: oraculo{}}
 	ig.abre()
 
-	mat := materializer.New(ig.sch, ig.store)
+	mat, err := materializer.New(ig.sch, ig.store)
+	if err != nil {
+		t.Fatal(err)
+	}
 	eventos := []string{
 		`{"id":"A","_SEQ":1,"Acct-Status-Type":"Stop","X-Vendor-Attr":"alpha"}`,
 		`{"id":"B","_SEQ":1,"Acct-Status-Type":"Stop","X-Vendor-Attr":"beta"}`,
@@ -86,7 +89,10 @@ func TestCampoAutoSemTipoRecusaComMensagemCerta(t *testing.T) {
 	ig := &integracao{t: t, dir: t.TempDir() + "/auto2", oracle: oraculo{}}
 	ig.abre()
 
-	mat := materializer.New(ig.sch, ig.store)
+	mat, err := materializer.New(ig.sch, ig.store)
+	if err != nil {
+		t.Fatal(err)
+	}
 	// O null cria a entry no dicionário e NÃO fixa tipo.
 	if r := mat.Apply([]byte(`{"id":"A","_SEQ":1,"X-Nunca-Visto":null}`)); r.Err != nil {
 		t.Fatalf("ingestão: %v", r.Err)
@@ -105,7 +111,7 @@ func TestCampoAutoSemTipoRecusaComMensagemCerta(t *testing.T) {
 		t.Errorf("EffectiveType = %v, want null (nunca observado com valor)", got)
 	}
 
-	_, err := ig.engine.Execute(t.Context(), dataset,
+	_, err = ig.engine.Execute(t.Context(), dataset,
 		`SELECT id FROM radius_sessions WHERE "X-Nunca-Visto" = 'x'`, nil)
 	if err == nil {
 		t.Fatal("comparação sobre campo sem tipo deveria falhar")

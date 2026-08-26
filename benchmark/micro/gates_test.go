@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/nishisan-dev/nishidb/internal/materializer"
+	"github.com/nishisan-dev/nishidb/internal/schema"
 )
 
 // Gates de alocação do M1, executáveis na suíte (`make test`) e não só no
@@ -26,7 +27,7 @@ func TestGateAllocsApply(t *testing.T) {
 			nome: "create",
 			build: func(t *testing.T) (*materializer.Materializer, [][]byte) {
 				ev := corpusCheio(t, 7, 512)
-				return materializer.New(compiledSetup(t), &voidStore{rowID: 1}), ev
+				return mustNew(t, compiledSetup(t), &voidStore{rowID: 1}), ev
 			},
 			want: materializer.ActionCreated,
 			teto: 0,
@@ -36,7 +37,7 @@ func TestGateAllocsApply(t *testing.T) {
 			build: func(t *testing.T) (*materializer.Materializer, [][]byte) {
 				ev := corpusPatch(t, 8, 512)
 				key, payload := estadoDeReferenciaT(t, corpusCheio(t, 8, 1))
-				return materializer.New(compiledSetup(t), &voidStore{
+				return mustNew(t, compiledSetup(t), &voidStore{
 					rowID: 42, seq: 1, key: key, payload: payload, found: true,
 				}), ev
 			},
@@ -48,7 +49,7 @@ func TestGateAllocsApply(t *testing.T) {
 			build: func(t *testing.T) (*materializer.Materializer, [][]byte) {
 				ev := corpusPatch(t, 9, 512)
 				key, payload := estadoDeReferenciaT(t, corpusCheio(t, 9, 1))
-				return materializer.New(compiledSetup(t), &voidStore{
+				return mustNew(t, compiledSetup(t), &voidStore{
 					rowID: 42, seq: 1 << 40, key: key, payload: payload, found: true,
 				}), ev
 			},
@@ -176,4 +177,15 @@ func estadoDeReferenciaT(t *testing.T, events [][]byte) (key, payload []byte) {
 		t.Fatalf("estado de referência ausente: ok=%v err=%v", ok, err)
 	}
 	return append([]byte(nil), rec.Key...), append([]byte(nil), rec.Payload...)
+}
+
+// mustNew monta o materializer exigindo sucesso: o New recusa regra de TTL que
+// não compila, e a spec destes gates não declara nenhuma.
+func mustNew(tb testing.TB, c *schema.Compiled, st materializer.Store) *materializer.Materializer {
+	tb.Helper()
+	m, err := materializer.New(c, st)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return m
 }

@@ -72,7 +72,10 @@ func servidorSpec106(t *testing.T) *server.Servidor {
 		_ = st.Close()
 		t.Fatal(err)
 	}
-	mat := materializer.New(compilado, st)
+	mat, err := materializer.New(compilado, st)
+	if err != nil {
+		t.Fatal(err)
+	}
 	// Seis linhas, escolhidas para que cada caso do §106 tenha um resultado
 	// diferente do dos outros — dois casos com a mesma resposta não
 	// discriminariam nada. `observacao` não aparece em nenhuma: é o caso NULL.

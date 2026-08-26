@@ -50,7 +50,11 @@ func novoHarness(t *testing.T) *harness {
 	if err := eng.Register(dataset, sch, st); err != nil {
 		t.Fatal(err)
 	}
-	return &harness{t: t, sch: sch, store: st, mat: materializer.New(sch, st), engine: eng}
+	mat, err := materializer.New(sch, st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &harness{t: t, sch: sch, store: st, mat: mat, engine: eng}
 }
 
 func ids(t *testing.T, sch *schema.Compiled, nomes ...string) []types.FieldID {

@@ -15,6 +15,18 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
+// mustNew monta o materializer exigindo sucesso. O New falha quando uma regra
+// de TTL não compila, e nesses testes a regra é sempre válida — o caso de
+// recusa vive em prazo_test.go.
+func mustNew(t *testing.T, c *schema.Compiled, st Store) *Materializer {
+	t.Helper()
+	m, err := New(c, st)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return m
+}
+
 // harness amarra o trio schema compilado + store fake + materializer, que é
 // como o writer roda em produção.
 type harness struct {
@@ -38,7 +50,7 @@ func newHarness(t *testing.T, yml string, bitmapFields ...string) *harness {
 		idx.Bitmap = append(idx.Bitmap, f.ID)
 	}
 	st := fakestorage.New(idx)
-	return &harness{t: t, m: New(c, st), st: st, c: c}
+	return &harness{t: t, m: mustNew(t, c, st), st: st, c: c}
 }
 
 func (h *harness) fieldID(name string) types.FieldID {
@@ -691,7 +703,7 @@ func TestApplyWriterFailedEhFatal(t *testing.T) {
 	c := compileYAML(t, patchYAML)
 	st := storeErro{Store: fakestorage.New(fakestorage.Indexes{}),
 		put: fmt.Errorf("%w: fdatasync do segmento", types.ErrWriterFailed)}
-	m := New(c, st)
+	m := mustNew(t, c, st)
 
 	r := m.Apply([]byte(`{"id":"A","_SEQ":1,"Acct-Input-Octets":3}`))
 	if r.Action != ActionFailed {
@@ -719,7 +731,7 @@ func TestApplyErroDeStorageNaoEhEventoRuim(t *testing.T) {
 	c := compileYAML(t, patchYAML)
 	st := storeErro{Store: fakestorage.New(fakestorage.Indexes{}),
 		put: fmt.Errorf("%w: key vazia", types.ErrInvalidArgument)}
-	m := New(c, st)
+	m := mustNew(t, c, st)
 
 	r := m.Apply([]byte(`{"id":"A","_SEQ":1,"Acct-Input-Octets":3}`))
 	if r.Action != ActionFailed || r.Category != CategoryStorage {
@@ -740,7 +752,7 @@ func TestApplyErroDeLeituraEhFailed(t *testing.T) {
 	c := compileYAML(t, patchYAML)
 	st := storeErro{Store: fakestorage.New(fakestorage.Indexes{}),
 		get: fmt.Errorf("%w: CRC do record", encoding.ErrCorrupt)}
-	m := New(c, st)
+	m := mustNew(t, c, st)
 
 	r := m.Apply([]byte(`{"id":"A","_SEQ":1,"Acct-Input-Octets":3}`))
 	if r.Action != ActionFailed || r.Category != CategoryStorage {
@@ -802,7 +814,7 @@ func TestApplyPrevIlegivelEhInternalState(t *testing.T) {
 		Store: fakestorage.New(fakestorage.Indexes{}),
 		rec:   types.Record{RowID: 7, Sequence: 1, Payload: prev[:len(prev)-3]},
 	}
-	m := New(c, st)
+	m := mustNew(t, c, st)
 
 	r := m.Apply([]byte(`{"id":"A","_SEQ":99,"Acct-Input-Octets":3}`))
 
@@ -921,7 +933,7 @@ func TestApplyFalhaDoDicionarioEhFailed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := New(c, fakestorage.New(fakestorage.Indexes{}))
+	m := mustNew(t, c, fakestorage.New(fakestorage.Indexes{}))
 
 	r := m.Apply([]byte(`{"id":"A","novo":1}`))
 	if r.Action != ActionFailed || r.Category != CategoryStorage {
@@ -971,7 +983,7 @@ func TestApplyFixtureRadiusCompletoDepoisPatch(t *testing.T) {
 		t.Fatal("Acct-Status-Type não compilado")
 	}
 	st := fakestorage.New(fakestorage.Indexes{Bitmap: []types.FieldID{statusField.ID}})
-	m := New(c, st)
+	m := mustNew(t, c, st)
 	h := &harness{t: t, m: m, st: st, c: c}
 
 	event, err := os.ReadFile(fixtureEvent)
@@ -1087,7 +1099,7 @@ func compilaComTeto(t *testing.T, maxCols int, onMax string) *schema.Compiled {
 // que o restart reproduzia o mesmo estouro para sempre.
 func TestApplyAcimaDoTetoSobIgnoreGravaOEvento(t *testing.T) {
 	c := compilaComTeto(t, 2, schema.OnMaxColsIgnore)
-	m := New(c, fakestorage.New(fakestorage.Indexes{}))
+	m := mustNew(t, c, fakestorage.New(fakestorage.Indexes{}))
 
 	r := m.Apply([]byte(`{"id":"A","cabe":1,"naoCabe":2}`))
 	if r.Action != ActionCreated {
@@ -1107,7 +1119,7 @@ func TestApplyAcimaDoTetoSobIgnoreGravaOEvento(t *testing.T) {
 // alcançado não é nenhum dos dois.
 func TestApplyAcimaDoTetoSobStopTemCategoriaPropria(t *testing.T) {
 	c := compilaComTeto(t, 2, schema.OnMaxColsStop)
-	m := New(c, fakestorage.New(fakestorage.Indexes{}))
+	m := mustNew(t, c, fakestorage.New(fakestorage.Indexes{}))
 
 	r := m.Apply([]byte(`{"id":"A","cabe":1,"naoCabe":2}`))
 	if r.Action != ActionFailed || r.Category != CategoryFieldsExhausted {
@@ -1169,7 +1181,7 @@ func compilaComTetoAninhado(t *testing.T, maxCols int, onMax string) *schema.Com
 // comportamento de quem escolheu `ignore`, sem uma linha de log dizendo isso.
 func TestTetoSobStopParaAIngestaoTambemNoCaminhoANINHADO(t *testing.T) {
 	c := compilaComTetoAninhado(t, 3, schema.OnMaxColsStop)
-	m := New(c, fakestorage.New(fakestorage.Indexes{}))
+	m := mustNew(t, c, fakestorage.New(fakestorage.Indexes{}))
 
 	r := m.Apply([]byte(`{"id":"A","doc":{"cabe":1,"naoCabe":2}}`))
 	if r.Action != ActionFailed || r.Category != CategoryFieldsExhausted {
@@ -1183,7 +1195,7 @@ func TestTetoSobStopParaAIngestaoTambemNoCaminhoANINHADO(t *testing.T) {
 // trocou de lado.
 func TestTetoSobIgnoreNoCaminhoANINHADOGravaOEvento(t *testing.T) {
 	c := compilaComTetoAninhado(t, 3, schema.OnMaxColsIgnore)
-	m := New(c, fakestorage.New(fakestorage.Indexes{}))
+	m := mustNew(t, c, fakestorage.New(fakestorage.Indexes{}))
 
 	r := m.Apply([]byte(`{"id":"A","doc":{"cabe":1,"naoCabe":2}}`))
 	if r.Action != ActionCreated {

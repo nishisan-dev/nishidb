@@ -76,7 +76,10 @@ func semeia(t *testing.T, a *ambiente, nome string, n int) {
 		_ = st.Close()
 		t.Fatal(err)
 	}
-	mat := materializer.New(compilado, st)
+	mat, err := materializer.New(compilado, st)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for i := 0; i < n; i++ {
 		estado := "Start"
 		if i%2 == 0 {

@@ -140,7 +140,11 @@ func (b *bancada) abre() {
 		b.t.Fatalf("compile: %v", err)
 	}
 	b.st = st
-	b.mat = materializer.New(compilado, st)
+	mat, err := materializer.New(compilado, st)
+	if err != nil {
+		b.t.Fatalf("materializer.New: %v", err)
+	}
+	b.mat = mat
 }
 
 func (b *bancada) fecha() {

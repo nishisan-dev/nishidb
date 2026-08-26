@@ -223,7 +223,10 @@ func umaRodadaDireta(t *testing.T, entrada string) float64 {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mat := materializer.New(compilado, st)
+	mat, err := materializer.New(compilado, st)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// A conversão para bytes fica FORA do cronômetro: o CLI lê de um
 	// strings.Reader e fatia o buffer do Scanner, sem copiar por linha.

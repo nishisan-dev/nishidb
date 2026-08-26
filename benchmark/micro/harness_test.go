@@ -71,7 +71,11 @@ func fakeSetup(tb testing.TB) (*materializer.Materializer, *fakestorage.Store, *
 		idx.Bitmap = append(idx.Bitmap, f.ID)
 	}
 	st := fakestorage.New(idx)
-	return materializer.New(c, st), st, c
+	m, err := materializer.New(c, st)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return m, st, c
 }
 
 // realSetup abre um Store REAL em dir e monta o materializer sobre ele.
@@ -103,7 +107,11 @@ func realSetup(tb testing.TB, dir string, estimatedRows uint64) (*materializer.M
 	if err != nil {
 		tb.Fatal(err)
 	}
-	return materializer.New(c, st), st, c
+	m, err := materializer.New(c, st)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return m, st, c
 }
 
 // writableBenchDir devolve o diretório de escrita para benchmarks pesados, ou

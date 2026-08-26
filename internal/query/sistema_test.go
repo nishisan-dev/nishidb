@@ -41,7 +41,10 @@ func harnessComExpiracao(t *testing.T) *query.Engine {
 		t.Fatal(err)
 	}
 	st := fakestorage.New(fakestorage.Indexes{})
-	m := materializer.New(sch, st)
+	m, err := materializer.New(sch, st)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if r := m.Apply([]byte(`{"id":"A","severidade":3}`)); r.Err != nil {
 		t.Fatal(r.Err)
 	}

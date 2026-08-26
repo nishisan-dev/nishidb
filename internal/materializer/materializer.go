@@ -6,7 +6,9 @@ import (
 	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/jsonp"
+	"github.com/nishisan-dev/nishidb/internal/predicado"
 	"github.com/nishisan-dev/nishidb/internal/schema"
+	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
@@ -237,12 +239,38 @@ type Materializer struct {
 	// que só prova a expiração com prazos irrealistas.
 	agora func() time.Time
 
+	// regras são as de TTL já compiladas, e slots são os arrays de avaliação
+	// de cada uma — um por regra, alocados UMA vez aqui: a avaliação roda por
+	// evento e não pode alocar. fr é o leitor reusado da coleta do estado
+	// anterior, como todo buffer deste pacote.
+	regras []predicado.RegraCompilada
+	slots  [][]predicado.Slot
+	fr     encoding.FieldReader
+
 	metrics Metrics
 }
 
 // New monta o materializer do dataset sobre o store.
-func New(c *schema.Compiled, s Store) *Materializer {
-	return &Materializer{schema: c, store: s, agora: time.Now}
+//
+// Devolve erro quando uma regra de TTL não compila: a condição vem do YAML e
+// só pode ser checada com o schema compilado na mão, então este é o primeiro
+// ponto capaz de recusá-la. Falhar aqui é o que faz o dataset não subir com
+// uma regra que nunca casaria — a alternativa seria descobrir isso no primeiro
+// evento, com a ingestão já rodando.
+func New(c *schema.Compiled, s Store) (*Materializer, error) {
+	m := &Materializer{schema: c, store: s, agora: time.Now}
+	if len(c.RegrasTTL) > 0 {
+		regras, err := predicado.CompilaRegras(c.RegrasTTL, c)
+		if err != nil {
+			return nil, err
+		}
+		m.regras = regras
+		m.slots = make([][]predicado.Slot, len(regras))
+		for i := range regras {
+			m.slots[i] = predicado.NovosSlots(regras[i].Slots.IDs)
+		}
+	}
+	return m, nil
 }
 
 // UsaRelogio troca o relógio da injeção do campo de sistema. Exclusivo de
@@ -318,6 +346,23 @@ func (m *Materializer) Apply(event []byte) ApplyResult {
 	if presenca.Existe() && m.schema.Seq != nil && m.patch.seq <= m.prevRec.Sequence {
 		m.metrics.stale.Add(1)
 		return ApplyResult{Action: ActionStale, RowID: m.prevRec.RowID}
+	}
+
+	// O prazo é decidido DEPOIS do Parse e ANTES do merge: ele depende do
+	// estado anterior, que o Parse não tem, e a entry precisa entrar no patch
+	// antes de o payload novo ser montado.
+	if m.schema.Prazo != nil {
+		d, err := m.duracaoDe(m.prevRec.Payload, m.patch.entries)
+		if err != nil {
+			return m.failure(err)
+		}
+		// Emitida em TODA escrita, e não só quando o resultado muda. O merge
+		// preserva campo que o evento não menciona, então a emissão
+		// condicional deixaria o prazo curto de quando a condição valia
+		// sobreviver ao evento que a quebra — e a entidade morreria logo
+		// depois de o alarme reabrir. São 8 bytes por versão de record para
+		// tornar impossível a única falha que arruinaria a feature.
+		m.patch.emitePrazo(m.schema.Prazo, d)
 	}
 
 	// prevRec.Payload aponta para prevBuf e outBuf é um buffer DISTINTO: o

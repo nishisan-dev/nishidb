@@ -354,6 +354,13 @@ func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*
 			"valor não coube no tipo fixado da coluna aninhada; a coluna é removida nessa linha e o documento guarda o valor",
 			"coluna", coluna, "tipoFixado", fixado, "tipoQueVeio", veio)
 	})
+	mat, err := materializer.New(compilado, st)
+	if err != nil {
+		// Regra de TTL que não compila derruba a SUBIDA do dataset: um
+		// servidor que aceitasse a regra e a ignorasse expiraria pelo prazo
+		// errado, em silêncio.
+		return nil, fechandoStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
+	}
 	if err := s.eng.Register(spec.Name, compilado, st); err != nil {
 		return nil, fechandoStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}
@@ -362,7 +369,7 @@ func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*
 		spec: spec,
 		sch:  compilado,
 		st:   st,
-		mat:  materializer.New(compilado, st),
+		mat:  mat,
 	}, nil
 }
 

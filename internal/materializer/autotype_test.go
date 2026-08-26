@@ -208,7 +208,7 @@ func TestConflitoDeTipoNoDicionarioEhEventoRuim(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := New(c, fakestorage.New(fakestorage.Indexes{}))
+	m := mustNew(t, c, fakestorage.New(fakestorage.Indexes{}))
 
 	// Segundo Compiled sobre o MESMO dicionário — o dicionário é do dataset,
 	// não do processo.
@@ -216,7 +216,7 @@ func TestConflitoDeTipoNoDicionarioEhEventoRuim(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m2 := New(c2, fakestorage.New(fakestorage.Indexes{}))
+	m2 := mustNew(t, c2, fakestorage.New(fakestorage.Indexes{}))
 
 	// (1) O primeiro compilado resolve X sem fixar tipo (null não fixa).
 	if r := m.Apply([]byte(`{"id":"A","X":null}`)); r.Err != nil {
@@ -311,7 +311,7 @@ func TestFalhaDeIODoDicionarioAoFixarTipoEhFailed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := New(c, fakestorage.New(fakestorage.Indexes{}))
+	m := mustNew(t, c, fakestorage.New(fakestorage.Indexes{}))
 
 	r := m.Apply([]byte(`{"id":"A","X":5}`))
 

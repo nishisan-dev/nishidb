@@ -127,7 +127,10 @@ func semeiaComTextoLargo(t *testing.T, a *ambiente, nome string) {
 		_ = st.Close()
 		t.Fatal(err)
 	}
-	mat := materializer.New(compilado, st)
+	mat, err := materializer.New(compilado, st)
+	if err != nil {
+		t.Fatal(err)
+	}
 	aplica := func(ev string) {
 		if r := mat.Apply([]byte(ev)); r.Err != nil {
 			_ = st.Close()
