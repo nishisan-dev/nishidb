@@ -1,0 +1,62 @@
+# Empacotamento do client Python do NishiDB.
+#
+# ZERO dependência de runtime, e isso é doutrina, não conveniência: é a mesma
+# razão do binário único (§97), do driver JDBC com parser JSON próprio e do
+# painel scripts/nishidb-stats.py. Um client de banco que arrasta `requests`
+# não é instalável no host que se está diagnosticando.
+#
+# internal/gates/python_test.go lê ESTE arquivo como dado e reprova se
+# [project].dependencies ganhar qualquer entrada, ou se a versão aqui divergir
+# de nishidb.__version__.
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "nishidb"
+version = "0.1.0"
+description = "Client Python (DB-API 2.0 / PEP 249) do NishiDB"
+readme = "README.md"
+# 3.10 é o piso: datetime.UTC só chega no 3.11 (usamos timezone.utc, que vale
+# nos dois) e o zoneinfo dos testes de fuso entrou no 3.9.
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Lucas Nishimura" }]
+keywords = ["nishidb", "database", "dbapi", "pep249", "sql"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Topic :: Database",
+    "Topic :: Database :: Front-Ends",
+    "Typing :: Typed",
+]
+
+# VAZIO, e tem de continuar vazio — ver o cabeçalho.
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/nishisan-dev/nishidb"
+Source = "https://github.com/nishisan-dev/nishidb/tree/main/clients/python"
+
+[project.optional-dependencies]
+# Só ferramenta de desenvolvimento, nunca runtime. Versões FIXADAS na mesma
+# disciplina do golangci-lint@v2.12.2 do Makefile: versão de instrumento é
+# configuração, e um piso solto faz o CI mudar de resultado sozinho.
+dev = ["ruff==0.14.2", "mypy==1.18.2"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/nishidb"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+files = ["src/nishidb"]
