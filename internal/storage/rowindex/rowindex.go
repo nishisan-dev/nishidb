@@ -335,3 +335,70 @@ func (e *Escritas) Msync() error { return e.dense.region.Msync() }
 
 // Close libera o mapeamento.
 func (e *Escritas) Close() error { return e.dense.region.Close() }
+
+// PrazoImortal é o valor gravado para a entidade cuja regra decidiu que ela
+// NÃO expira.
+//
+// Existe porque denseFile.load devolve zero para a entrada nunca gravada,
+// então "gravei zero" e "nunca gravei" seriam o mesmo byte — e aqui os dois
+// não podem significar a mesma coisa. Desconhecido cai no prazo de fundo;
+// imortal não pode cair em lugar nenhum. Sem a distinção, a entidade que casa
+// com uma regra `never` num dataset que TAMBÉM declara regra de fundo herdaria
+// o prazo de fundo, e o alarme que o operador mandou nunca expirar sairia
+// sozinho.
+//
+// Não há colisão possível com uma duração real: a menor declarável é um
+// minuto, 60000 ms.
+const PrazoImortal uint64 = 1
+
+// Prazos é o índice rowId→duração de ociosidade, em millis.
+//
+// É DERIVADO, como o Escritas: a fonte da verdade é o campo de sistema no
+// payload, e o replay do tail o reconstrói pelo mesmo applyRecord que o Put
+// usa. Zero significa DESCONHECIDO — entidade anterior à adoção das regras —,
+// nunca imortal; para imortal existe o PrazoImortal.
+type Prazos struct {
+	dense *denseFile
+}
+
+var prazosMagic = [4]byte{'N', 'D', 'B', 'P'}
+
+// OpenPrazos cria/reabre o arquivo com capacidade para minRows.
+func OpenPrazos(path string, minRows uint64) (*Prazos, error) {
+	d, err := openDense(path, prazosMagic, minRows)
+	if err != nil {
+		return nil, err
+	}
+	return &Prazos{dense: d}, nil
+}
+
+// Get devolve a duração em millis, e conhecido=false quando a entrada nunca
+// foi gravada. Duração zero COM conhecido=true é a entidade imortal.
+func (p *Prazos) Get(rowID types.RowID) (millis int64, conhecido bool) {
+	v, ok := p.dense.load(rowID)
+	if !ok || v == 0 {
+		return 0, false
+	}
+	if v == PrazoImortal {
+		return 0, true
+	}
+	return int64(v), true
+}
+
+// Set grava a duração. Exclusivo do writer.
+//
+// Duração não positiva vira o sentinela: é a entidade que uma regra `never`
+// declarou imortal, e ela precisa ser distinguível da que nunca foi gravada.
+func (p *Prazos) Set(rowID types.RowID, millis int64) error {
+	v := uint64(millis)
+	if millis <= 0 {
+		v = PrazoImortal
+	}
+	return p.dense.store(rowID, v)
+}
+
+// Msync força as páginas sujas para disco.
+func (p *Prazos) Msync() error { return p.dense.region.Msync() }
+
+// Close libera o mapeamento.
+func (p *Prazos) Close() error { return p.dense.region.Close() }
