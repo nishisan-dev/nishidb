@@ -1069,9 +1069,51 @@ qualquer reprocessamento; a perda vem antes da interrupção por sinal porque o
 sinal foi pedido por quem chamou, e a perda é notícia. O desfecho que perdeu a
 precedência continua descrito no stderr.
 
+### Clients
+
+O protocolo remoto (§67-69) tem dois clients de primeira classe, no mesmo
+repositório e falando o mesmo fio.
+
+**Java — driver JDBC** ([clients/jdbc](clients/jdbc)), artefato
+`nishidb-jdbc.jar`, JDK 21+, zero dependência de runtime. É o que faz DBeaver e
+IntelliJ funcionarem:
+
+```
+jdbc:nishidb://db01:9142/radius_sessions?tls=true&tlsCaFile=/etc/nishidb/ca.pem
+```
+
+**Python — client DB-API 2.0** ([clients/python](clients/python)), pacote
+`nishidb`, Python 3.10+, também sem dependência de runtime. É o que faz
+`pandas.read_sql` e as ferramentas de BI funcionarem:
+
+```python
+import nishidb
+
+with nishidb.connect("nishidb://db01:9142/radius_sessions", user="leitor") as cx:
+    cur = cx.cursor()
+    cur.execute(
+        "SELECT user_name, nas_ip FROM radius_sessions WHERE status = ? LIMIT 100",
+        ("Stop",),
+    )
+    for linha in cur:
+        print(linha["user_name"], linha["nas_ip"])
+```
+
+A senha nunca entra na string de conexão — use `password=`, `password_file=` ou
+a variável `NISHIDB_PASSWORD`. Os dois clients recusam redirect, ignoram proxy
+do ambiente e **não têm caminho para desligar a verificação de certificado**.
+
+Os dois são **só leitura**, porque é isso que o NishiDB é: os dados entram por
+ingestão. E os dois são provados contra o binário de verdade, com o MESMO
+corpus — `make test-jdbc` e `make test-python-it` compartilham a montagem em
+[scripts/it-comum.sh](scripts/it-comum.sh).
+
+Detalhes de cada um em [clients/python/README.md](clients/python/README.md).
+
 ## Documentação
 
 - [Arquitetura](docs/architecture.md) — como o sistema funciona, com os números.
+- [Client Python](clients/python/README.md) — DB-API 2.0, tipos, erros e limites.
 - [Aceite do M1](docs/aceite-m1.md) — os 25 critérios, item a item.
 - [Aceite do M4](docs/aceite-m4.md) — a compaction em regime, com a escala e o
   ambiente da rodada declarados.

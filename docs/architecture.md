@@ -580,14 +580,58 @@ entrou antes de existir qualquer dataset que o ocupasse — uma linha agora,
 ## Formato de saída
 
 NDJSON: uma linha por row, terminada em LF. Colunas **sempre presentes**, com
-`null` explícito — o driver JDBC mapeia posição para valor e decodifica cada
+`null` explícito — os clients mapeiam POSIÇÃO para valor e decodificam cada
 linha num passe só.
+
+A posição, e não o nome, porque **chave repetida é legal**: `SELECT a, a`
+produz `{"a":1,"a":1}`, e um cliente que indexasse a linha por um mapa de nome
+perderia a segunda coluna em silêncio. É o `null` explícito que torna o
+casamento posicional possível — com o campo ausente, o número de chaves da row
+deixaria de ser o número de colunas do schema.
 
 Dois cuidados que o framing exige: o `json` armazenado guarda a janela crua do
 evento, então um documento pretty-printed chega com quebra de linha dentro (é
 sanitizada byte a byte); e uma string materializada **contém** control char cru,
 porque o tokenizer decodifica `\n` ao gravar (é escapada). Sem os dois, uma
 linha vira duas e o cliente dessincroniza.
+
+## Os clients
+
+O protocolo tem TRÊS falantes do lado de fora, e é por isso que
+`internal/protocolo` existe como pacote próprio em vez de morar dentro do
+servidor: o `nishidb query --server`, o driver JDBC (`clients/jdbc`) e o client
+Python (`clients/python`). Com os tipos dentro do servidor, cada cliente
+redeclararia o formato e as definições divergiriam no primeiro campo
+acrescentado, sem nada em camada nenhuma reclamar.
+
+| | JDBC | Python |
+|---|---|---|
+| Artefato | `nishidb-jdbc.jar` | `nishidb` (PyPI) |
+| Piso | JDK 21 | Python 3.10 |
+| Contrato | `java.sql` | PEP 249 (DB-API 2.0) |
+| Dependências de runtime | nenhuma | nenhuma |
+| Destrava | DBeaver, IntelliJ | pandas, SQLAlchemy, BI |
+
+**As mesmas quatro doutrinas de cliente nos dois**, herdadas de
+`internal/cli/credencial.go`: proxy do ambiente ignorado (o incidente do piloto
+em que o proxy corporativo respondia 403 e o operador culpava o servidor),
+**todo 3xx é erro** (a política padrão das bibliotecas preserva o
+`Authorization` em redirect same-host, e o NishiDB não redireciona), nenhum
+caminho para desligar a verificação de certificado, e senha que nunca é
+argumento de processo.
+
+E a mesma divisão de prova: os unitários de cada um falam com um servidor HTTP
+da própria plataforma, com respostas escritas à mão — eles provam que o client
+faz o que quem o escreveu ACHA que o servidor emite. A outra metade é
+`make test-jdbc` e `make test-python-it`, que sobem o BINÁRIO com TLS e
+credencial e o alimentam com o mesmo corpus (`scripts/it-comum.sh`). A distância
+entre as duas metades não é teórica: o bug de reuso de conexão do client Python
+passou pela suíte inteira e só apareceu contra o servidor real, porque o de
+verdade responde `/v1/query` em `chunked` e o de mentira respondia com
+`Content-Length`.
+
+**O que nenhum dos dois faz**, porque é o que o NishiDB é: escrita (os dados
+entram por ingestão), transação, e cursor rolável.
 
 ## O protocolo remoto
 

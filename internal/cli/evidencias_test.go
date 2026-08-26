@@ -25,9 +25,21 @@ import (
 
 var reNomeDeTeste = regexp.MustCompile(`\bTest[A-Z][A-Za-z0-9_]*`)
 
+// reNomeDeTestePython casa o nome de um teste Python (`test_algo_assim`).
+//
+// A segunda grafia existe porque o client Python é código de produção com
+// suíte própria, e um documento de aceite que só pudesse citar teste Go teria
+// de descrever a evidência em prosa — que é exatamente a liberdade de citar o
+// que não existe que este gate fecha.
+//
+// O `\b` antes de `test_` é o que impede um NOME DE ARQUIVO (`sql_test.py`,
+// `integracao_test.py`) de ser lido como citação: ali o "test" vem precedido
+// de `_`, que é caractere de palavra, e a fronteira não casa.
+var reNomeDeTestePython = regexp.MustCompile(`\btest_[a-z0-9_]+`)
+
 func TestEvidenciasCitadasNosDocumentosExistem(t *testing.T) {
 	docs := []string{"../../docs/aceite-m1.md", "../../docs/aceite-m2.md", "../../docs/aceite-fase6.md",
-		"../../docs/aceite-m4.md", "../../docs/aceite-m5.md",
+		"../../docs/aceite-m4.md", "../../docs/aceite-m5.md", "../../docs/aceite-client-python.md",
 		"../../docs/architecture.md", "../../docs/debitos.md", "../../docs/operacao-kafka.md", "../../README.md"}
 
 	existentes := testesDoRepositorio(t)
@@ -37,7 +49,9 @@ func TestEvidenciasCitadasNosDocumentosExistem(t *testing.T) {
 			t.Fatal(err)
 		}
 		vistos := map[string]bool{}
-		for _, nome := range reNomeDeTeste.FindAllString(string(conteudo), -1) {
+		nomes := reNomeDeTeste.FindAllString(string(conteudo), -1)
+		nomes = append(nomes, reNomeDeTestePython.FindAllString(string(conteudo), -1)...)
+		for _, nome := range nomes {
 			if vistos[nome] {
 				continue
 			}
@@ -70,7 +84,9 @@ func testesDoRepositorio(t *testing.T) map[string]bool {
 			}
 			return nil
 		}
-		if !strings.HasSuffix(d.Name(), "_test.go") {
+		ehGo := strings.HasSuffix(d.Name(), "_test.go")
+		ehPython := strings.HasSuffix(d.Name(), "_test.py")
+		if !ehGo && !ehPython {
 			return nil
 		}
 		conteudo, err := os.ReadFile(caminho)
@@ -78,10 +94,23 @@ func testesDoRepositorio(t *testing.T) map[string]bool {
 			return err
 		}
 		for _, linha := range strings.Split(string(conteudo), "\n") {
-			if !strings.HasPrefix(linha, "func Test") {
+			if ehGo {
+				if !strings.HasPrefix(linha, "func Test") {
+					continue
+				}
+				nome := strings.TrimPrefix(linha, "func ")
+				if i := strings.IndexByte(nome, '('); i > 0 {
+					out[nome[:i]] = true
+				}
 				continue
 			}
-			nome := strings.TrimPrefix(linha, "func ")
+			// Python: o método é indentado dentro da classe de teste, então a
+			// comparação é sobre a linha aparada.
+			corpo := strings.TrimSpace(linha)
+			if !strings.HasPrefix(corpo, "def test_") {
+				continue
+			}
+			nome := strings.TrimPrefix(corpo, "def ")
 			if i := strings.IndexByte(nome, '('); i > 0 {
 				out[nome[:i]] = true
 			}
