@@ -331,6 +331,11 @@ type Compiled struct {
 	// Não-nil exatamente quando há regras de TTL — sem expiração não há para
 	// que pagar 11 bytes por record.
 	Escrita *CompiledField
+	// Prazo é o campo de sistema que carrega a DURAÇÃO de ociosidade que vale
+	// para a entidade, em millis. Não-nil junto com o Escrita: os dois só
+	// fazem sentido em par — um diz quando foi a última escrita, o outro por
+	// quanto tempo ela vale.
+	Prazo *CompiledField
 
 	mu      sync.RWMutex
 	byName  map[string]*CompiledField
@@ -468,8 +473,12 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 	// assim ele ganha FieldID pelo mesmo caminho determinístico e o dicionário
 	// o registra de forma durável, que é o que faz o replay do tail conseguir
 	// reconstruir o índice de expiração a partir dos próprios records.
+	// A ordem é contratual, e a razão é a do comentário do Open do storage: o
+	// LookupOrCreate queima ids na ordem em que é chamado, e essa ordem decide
+	// o mapeamento nome→id de um dataset NOVO, gravado para sempre. _writtenAt
+	// primeiro, _expiresIn depois, sempre — nunca reordene.
 	if len(c.RegrasTTL) > 0 {
-		names = append(names, CampoInstanteDeEscrita)
+		names = append(names, CampoInstanteDeEscrita, CampoDePrazo)
 	}
 	sort.Strings(names)
 
@@ -518,6 +527,16 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 			// relógio do processo, e não há format nem inferência envolvidos.
 			cf.Type, cf.IsSystem = types.TypeTimestamp, true
 			c.Escrita = cf
+			c.byName[cf.Name] = cf
+			c.byID[cf.ID] = cf
+			continue
+		}
+		if name == CampoDePrazo {
+			// int64, e NÃO timestamp: ela carrega uma DURAÇÃO em millis, e
+			// timestamp faria `SELECT _expiresIn` renderizar 3 minutos como
+			// 1970-01-01T00:03:00Z — uma data que não é uma data.
+			cf.Type, cf.IsSystem = types.TypeInt64, true
+			c.Prazo = cf
 			c.byName[cf.Name] = cf
 			c.byID[cf.ID] = cf
 			continue

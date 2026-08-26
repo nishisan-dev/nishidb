@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
 // yamlComRegras monta uma spec mínima com a lista de regras dada, já indentada
@@ -107,5 +109,74 @@ func TestRegrasPreservamAOrdemDoArquivo(t *testing.T) {
 	}
 	if regras[2].When != "" || s.Materialization.DuracaoDeFundo != 7*24*time.Hour {
 		t.Errorf("a última é a de fundo: %+v / %v", regras[2], s.Materialization.DuracaoDeFundo)
+	}
+}
+
+func compilaComRegras(t *testing.T, regras string) *Compiled {
+	t.Helper()
+	s, err := Parse([]byte(yamlComRegras(regras)), DefaultsPadrao)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := s.Compile(newFakeDict())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func TestCompilaRegistraOCampoDePrazoQuandoHaRegras(t *testing.T) {
+	c := compilaComRegras(t, "  ttl:\n    - expireAfterWrite: 7d\n")
+	if c.Prazo == nil {
+		t.Fatal("o campo de prazo não foi registrado")
+	}
+	if !c.Prazo.IsSystem {
+		t.Error("o campo de prazo é do writer: tem de ser de sistema")
+	}
+	if c.Prazo.Type != types.TypeInt64 {
+		t.Errorf("tipo do prazo = %v, quero int64 — ele carrega uma DURAÇÃO em millis, e timestamp "+
+			"renderizaria 3 minutos como uma data", c.Prazo.Type)
+	}
+	if c.Escrita == nil {
+		t.Error("o instante de escrita continua obrigatório: é dele que a conta do prazo parte")
+	}
+}
+
+func TestSemRegrasNaoRegistraOCampoDePrazo(t *testing.T) {
+	c := compilaComRegras(t, "")
+	if c.Prazo != nil || c.Escrita != nil {
+		t.Error("dataset sem regras não paga campo de sistema nenhum")
+	}
+}
+
+// Quem pede "tudo" quer os campos do próprio dado, não a contabilidade
+// interna do banco.
+func TestCampoDePrazoFicaForaDoSelectStar(t *testing.T) {
+	c := compilaComRegras(t, "  ttl:\n    - expireAfterWrite: 7d\n")
+	for _, f := range c.FieldsByID() {
+		if f.Name == CampoDePrazo {
+			t.Fatal("o campo de prazo apareceria no SELECT * e no /v1/metadata")
+		}
+	}
+	achou := false
+	for _, f := range c.FieldsByIDIncluindoSistema() {
+		if f.Name == CampoDePrazo {
+			achou = true
+		}
+	}
+	if !achou {
+		t.Error("o conjunto FÍSICO precisa dele: é o que a compaction e o storage leem")
+	}
+}
+
+// A ordem do LookupOrCreate decide o mapeamento nome→id de um dataset NOVO, e
+// esse mapeamento é gravado para sempre: _writtenAt primeiro, _expiresIn
+// depois. Reordenar quebraria a leitura de todo dataset já criado.
+func TestCampoDeSistemaNaoPodeSerDeclaradoNoSchema(t *testing.T) {
+	yaml := yamlComRegras("  ttl:\n    - expireAfterWrite: 7d\n")
+	yaml = strings.Replace(yaml, "    id:\n      type: string\n",
+		"    id:\n      type: string\n    "+CampoDePrazo+":\n      type: int64\n", 1)
+	if _, err := Parse([]byte(yaml), DefaultsPadrao); err == nil {
+		t.Fatal("o campo de prazo foi aceito em schema.fields")
 	}
 }
