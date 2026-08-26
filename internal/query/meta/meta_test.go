@@ -374,13 +374,74 @@ func TestDivergenciaEhSubconjuntoDaOcorrencia(t *testing.T) {
 // naturalmente.
 func TestCampoDeTopoTemContadoresNulosENaoZerados(t *testing.T) {
 	c := alvoComDerivadas(t)
-	for _, l := range linhas(t, "SELECT name, parent, occurrences, typeMismatches FROM _meta.fields", c) {
+	for _, l := range linhas(t, "SELECT name, parent, occurrences, typeMismatches, coercions FROM _meta.fields", c) {
 		if l["parent"] != "" {
 			continue // é derivada
 		}
-		if l["occurrences"] != "" || l["typeMismatches"] != "" {
-			t.Errorf("campo de topo %q saiu com occurrences=%q typeMismatches=%q, quer os dois NULOS",
-				l["name"], l["occurrences"], l["typeMismatches"])
+		if l["occurrences"] != "" || l["typeMismatches"] != "" || l["coercions"] != "" {
+			t.Errorf("campo de topo %q saiu com occurrences=%q typeMismatches=%q coercions=%q, quer os três NULOS",
+				l["name"], l["occurrences"], l["typeMismatches"], l["coercions"])
 		}
+	}
+}
+
+// TestCoercoesSaemPorSQLSeparadasDasDivergencias é o que impede a coerção de
+// cegar o painel que o contador por coluna acabou de dar ao operador.
+//
+// O cenário: `tally` é declarada `int64`, e a origem passa a mandar o número
+// como TEXTO. Antes da coerção de tipo isso era divergência — o valor se perdia
+// e o `typeMismatches` subia, apontando a coluna. Convertendo, o valor é
+// preservado e aquele contador fica em ZERO: sem uma terceira coluna, a
+// inconsistência da origem sumiria do SQL sem ter sumido do dado, e a ressalva
+// da documentação (`"07"` e `"7"` continuam sendo duas strings) não teria como
+// ser medida em dataset nenhum.
+//
+// As três colunas são afirmações diferentes sobre a mesma chave, e o teste
+// afirma as três de uma vez: apareceu 4 vezes, 2 delas coergidas, 1 perdida.
+func TestCoercoesSaemPorSQLSeparadasDasDivergencias(t *testing.T) {
+	c := alvoComDerivadas(t)
+	m := materializer.New(c, fakestorage.New(fakestorage.Indexes{}))
+	for _, ev := range []string{
+		`{"id":"A","doc":{"tally":1}}`,            // nativo
+		`{"id":"B","doc":{"tally":"2"}}`,          // coerção: texto num int64
+		`{"id":"C","doc":{"tally":"3"}}`,          // coerção
+		`{"id":"D","doc":{"tally":"nem numero"}}`, // divergência: não converte
+	} {
+		if r := m.Apply([]byte(ev)); r.Err != nil {
+			t.Fatalf("Apply(%s): %v", ev, r.Err)
+		}
+	}
+
+	achou := false
+	for _, l := range linhas(t, "SELECT name, occurrences, typeMismatches, coercions FROM _meta.fields", c) {
+		if l["name"] != "tally" {
+			continue
+		}
+		achou = true
+		if l["occurrences"] != "4" {
+			t.Errorf("occurrences = %q, quer 4", l["occurrences"])
+		}
+		if l["coercions"] != "2" {
+			t.Errorf("coercions = %q, quer 2 (as duas strings numéricas)", l["coercions"])
+		}
+		if l["typeMismatches"] != "1" {
+			t.Errorf("typeMismatches = %q, quer 1: só o texto que não é número se perdeu", l["typeMismatches"])
+		}
+	}
+	if !achou {
+		t.Fatal("a coluna derivada `tally` não apareceu em _meta.fields")
+	}
+}
+
+// A coluna nova é projetável pelo curinga como qualquer outra, e o teste existe
+// porque `SELECT *` é como a tabela é descoberta na prática — quem abre o DBeaver
+// não sabe o nome de uma coluna que acabou de nascer.
+func TestCoercionsApareceNoCuringaDaTabelaVirtual(t *testing.T) {
+	linhas := linhas(t, "SELECT * FROM _meta.fields", alvoComDerivadas(t))
+	if len(linhas) == 0 {
+		t.Fatal("a tabela virtual não devolveu linha nenhuma")
+	}
+	if _, ok := linhas[0]["coercions"]; !ok {
+		t.Errorf("`coercions` fora do SELECT *; veio %v", linhas[0])
 	}
 }

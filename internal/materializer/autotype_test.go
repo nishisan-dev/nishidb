@@ -75,9 +75,39 @@ func TestAutoSegundaObservacaoDivergenteCoerceOuFalha(t *testing.T) {
 			},
 		},
 		{
-			nome:     "número num campo fixado como string",
+			// A OUTRA metade da simetria: assim como o int64 fixado aceita
+			// string numérica (caso acima), o string fixado aceita número. O
+			// Raw do parser é o texto-fonte, então gravar `7` como "7" não
+			// altera um byte do que a origem escreveu — e antes disto o evento
+			// inteiro era DESCARTADO por causa de uma grafia.
+			nome:     "número num campo fixado como string é coergido para o texto-fonte",
 			primeiro: `{"id":"A","X":"texto"}`,
 			segundo:  `{"id":"A","X":7}`,
+			verifica: func(t *testing.T, h *harness) {
+				h.wantString(h.state("A"), "X", "7")
+				// E a coerção NÃO refixa o tipo. É a parte que o R11 exige e
+				// que uma conversão bem-sucedida poderia fazer parecer
+				// dispensável: se o número redefinisse a coluna para int64, o
+				// mesmo campo passaria a ter significado diferente conforme a
+				// ordem de chegada dos eventos, e nenhuma query sobre ele seria
+				// confiável — que é exatamente o defeito que fixar o tipo na
+				// primeira observação existe para impedir.
+				f, ok := h.c.FieldByName([]byte("X"))
+				if !ok {
+					t.Fatal("campo X não compilado")
+				}
+				if got := f.EffectiveType(); got != types.TypeString {
+					t.Errorf("EffectiveType após a coerção = %v, quer string", got)
+				}
+			},
+		},
+		{
+			// O que a coerção NÃO alcança, e é o que mantém o "ou falha" do
+			// nome deste teste vivo para o alvo `string`: um documento inteiro
+			// não vira texto. A coluna existe para ser comparável.
+			nome:     "objeto num campo fixado como string",
+			primeiro: `{"id":"A","X":"texto"}`,
+			segundo:  `{"id":"A","X":{"a":1}}`,
 			querSkip: true,
 			verifica: func(t *testing.T, h *harness) {
 				h.wantString(h.state("A"), "X", "texto")

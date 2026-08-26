@@ -144,11 +144,11 @@ func (f *fonte) record(row types.RowID, c *schema.CompiledField, buf []byte) (ty
 	// AUSENTE, e não vazio: NULL é ausência, e string vazia diria "tem pai, e
 	// o nome dele é nada".
 	//
-	// `occurrences` e `typeMismatches` seguem o MESMO precedente, e pela mesma
-	// razão: são contadores de coluna DERIVADA. Num campo de topo eles seriam
-	// sempre 0, e 0 é indistinguível de "a chave nunca apareceu" — a coluna
-	// mentiria com um número em vez de calar. Como efeito colateral bem-vindo,
-	// `WHERE typeMismatches > 0` já filtra o topo naturalmente.
+	// `occurrences`, `typeMismatches` e `coercions` seguem o MESMO precedente, e
+	// pela mesma razão: são contadores de coluna DERIVADA. Num campo de topo
+	// eles seriam sempre 0, e 0 é indistinguível de "a chave nunca apareceu" — a
+	// coluna mentiria com um número em vez de calar. Como efeito colateral
+	// bem-vindo, `WHERE typeMismatches > 0` já filtra o topo naturalmente.
 	if c.Parent != nil {
 		vals = append(vals, struct {
 			nome string
@@ -161,7 +161,11 @@ func (f *fonte) record(row types.RowID, c *schema.CompiledField, buf []byte) (ty
 			struct {
 				nome string
 				v    types.Value
-			}{"typeMismatches", inteiro(c.Divergencias())})
+			}{"typeMismatches", inteiro(c.Divergencias())},
+			struct {
+				nome string
+				v    types.Value
+			}{"coercions", inteiro(c.Coercoes())})
 	}
 
 	type par struct {

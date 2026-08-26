@@ -65,9 +65,66 @@ func TestConvertString(t *testing.T) {
 	if string(v.Bytes) != "Interim-Update" {
 		t.Errorf("Bytes = %q", v.Bytes)
 	}
-	convErr(t, num("1"), types.TypeString)
-	convErr(t, boolean(true), types.TypeString)
 	convErr(t, obj(`{"a":1}`), types.TypeString)
+}
+
+// Número JSON numa coluna de texto grava o TEXTO-FONTE, byte a byte.
+//
+// É a razão de a coerção ser aceitável aqui: para KindNumber o Raw do parser é a
+// grafia da origem, não uma renderização do valor. Se fosse renderização, `1.50`
+// voltaria como `1.5` e `007` como `7` — e a "conversão sem perda" seria falsa.
+// O zero à direita e o zero à esquerda abaixo são exatamente os casos que
+// distinguem uma coisa da outra.
+//
+// Antes, tudo isto era recusado: a coluna ficava NULA e o valor só sobrevivia
+// dentro do documento, fora do alcance de qualquer WHERE.
+func TestNumeroEmColunaDeTextoGravaOTextoFonte(t *testing.T) {
+	casos := []string{"5", "1.50", "007", "-42", "1e3", "0.0"}
+	for _, in := range casos {
+		v := convOK(t, num(in), types.TypeString)
+		if string(v.Bytes) != in {
+			t.Errorf("Convert(num(%q), string) = %q, quer o texto-fonte %q", in, v.Bytes, in)
+		}
+	}
+}
+
+// Boolean numa coluna de texto grava o literal JSON, pela mesma razão do número
+// acima: `true`/`false` são o que a origem escreveu.
+func TestBooleanEmColunaDeTextoGravaOLiteral(t *testing.T) {
+	if v := convOK(t, boolean(true), types.TypeString); string(v.Bytes) != "true" {
+		t.Errorf("Convert(true, string) = %q, quer \"true\"", v.Bytes)
+	}
+	if v := convOK(t, boolean(false), types.TypeString); string(v.Bytes) != "false" {
+		t.Errorf("Convert(false, string) = %q, quer \"false\"", v.Bytes)
+	}
+}
+
+// Objeto e array continuam RECUSADOS numa coluna de texto, e a recusa é de outra
+// classe que a do número: não há escalar a preservar.
+//
+// Enfiar um documento inteiro em `string` destruiria a razão de a coluna existir
+// — `WHERE x = '...'` passaria a exigir casar a serialização byte a byte —, e a
+// coluna misturaria escalar com estrutura sem nada distinguindo os dois na
+// leitura. Quem quer o documento declara `type: json`.
+func TestObjetoEArrayContinuamRecusadosEmColunaDeTexto(t *testing.T) {
+	convErr(t, obj(`{"a":1}`), types.TypeString)
+	convErr(t, obj(`{}`), types.TypeString)
+	convErr(t, arr(`[1,2,3]`), types.TypeString)
+	convErr(t, arr(`[]`), types.TypeString)
+}
+
+// null numa coluna de texto continua devolvendo TypeNull SEM erro — ausência, e
+// não conversão. Está aqui para que a mudança acima não o arraste junto: o ramo
+// do null é anterior ao switch de alvo, e um refactor que o movesse para dentro
+// passaria a tratar null como "veio noutra forma".
+func TestNullEmColunaDeTextoContinuaSendoAusencia(t *testing.T) {
+	v, _, err := Convert(null(), types.TypeString, nil, nil)
+	if err != nil {
+		t.Fatalf("Convert(null, string) erro: %v", err)
+	}
+	if v.Type != types.TypeNull {
+		t.Errorf("Type = %v, quer TypeNull", v.Type)
+	}
 }
 
 func TestConvertInt64(t *testing.T) {
@@ -138,9 +195,19 @@ func TestCoerceDeclaredStringToNumeric(t *testing.T) {
 	convErr(t, str(" 1 "), types.TypeDouble)
 	convErr(t, str("01"), types.TypeDouble)
 
-	// A coerção NÃO se estende a bool nem à direção contrária.
+	// A coerção NÃO se estende ao bool: `"true"` continua sendo texto, e um
+	// campo declarado `boolean` que aceitasse a string passaria a depender de
+	// convenção de grafia da origem ("True", "1", "yes") para decidir o valor.
 	convErr(t, str("true"), types.TypeBool)
-	convErr(t, num("1"), types.TypeString)
+
+	// E NÃO se estende a int64 ← double. Truncar `5.7` em `5` grava um valor
+	// que ninguém mandou, e a coluna passa a mentir em silêncio: a soma bate
+	// diferente, o filtro por igualdade encontra a linha errada, e nada no
+	// caminho acusa. Perder o valor é ruim; inventar outro é pior — e é por
+	// isso que a simetria da coerção para de propósito aqui.
+	convErr(t, num("5.7"), types.TypeInt64)
+	convErr(t, num("5.0"), types.TypeInt64)
+	convErr(t, str("5.7"), types.TypeInt64)
 }
 
 func TestConvertExtNumberLong(t *testing.T) {

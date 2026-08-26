@@ -42,17 +42,69 @@ func (e *ConversionError) Unwrap() error { return ErrTypeConversion }
 // aqui dentro, para manter este arquivo sem importar schema — a coerção é
 // função do VALOR e do alvo, e é isso que permite ao binder SQL usar as
 // mesmas regras (risco R3).
+//
+// A COERÇÃO ENTRE ESCALARES É SIMÉTRICA, e a regra que a governa é uma só:
+// converte-se quando a conversão é SEM PERDA. int64 e double aceitam string
+// numérica desde o ajuste pós-amostra, porque o texto casa a mesma gramática que
+// o número casaria; string aceita número e boolean, porque o Raw dos dois é o
+// texto-fonte e gravá-lo não altera um byte do que a origem escreveu. O que NÃO
+// se faz é o oposto disso: int64 continua recusando `5.7`, porque truncar em `5`
+// seria gravar um valor que ninguém mandou, e a coluna passaria a mentir em
+// silêncio — perder o valor é ruim, inventar outro é pior.
+//
+// Convert NÃO conta a coerção: quem conta é o chamador, comparando f.Kind com
+// kindNativo(alvo). Contar aqui obrigaria a passar a coluna como parâmetro, e
+// este arquivo não importa schema de propósito.
 func Convert(f jsonp.Field, target types.FieldType, layout *typeparse.Layout, arena []byte) (types.Value, []byte, error) {
 	if f.Kind == jsonp.KindNull {
 		return types.Value{Type: types.TypeNull}, arena, nil
 	}
 	switch target {
 	case types.TypeString:
-		if f.Kind != jsonp.KindString {
-			return types.Value{}, arena, convErrf(target, "esperava string JSON, veio %v", f.Kind)
-		}
-		if !utf8.Valid(f.Raw) {
-			return types.Value{}, arena, convErrf(target, "utf-8 inválido: %s", truncVal(f.Raw))
+		switch f.Kind {
+		case jsonp.KindString:
+			// A validação de UTF-8 vale só para o KindString, e é aqui — e não
+			// depois do switch — por isso. O Raw de uma string é o conteúdo já
+			// DESESCAPADO pelo parser, então um par surrogate quebrado ou um
+			// byte cru inválido do input chegam intactos até esta porta; sem a
+			// checagem eles atravessariam a ingestão e reapareceriam como linha
+			// NDJSON inválida, quebrando o consumidor por um dado que deveria
+			// ter sido recusado na entrada.
+			if !utf8.Valid(f.Raw) {
+				return types.Value{}, arena, convErrf(target, "utf-8 inválido: %s", truncVal(f.Raw))
+			}
+		case jsonp.KindNumber, jsonp.KindBool:
+			// Número e boolean ENTRAM na coluna de texto, e isso não é
+			// leniência: para os dois o Raw é o TEXTO-FONTE. O parser devolve
+			// os dígitos do número como a origem os escreveu (o godoc do jsonp
+			// diz "number: dígitos") e o literal `true`/`false` do boolean.
+			// Gravar f.Raw aqui portanto não normaliza nada — `{"x":1.50}` vira
+			// "1.50", com o zero à direita preservado —, o que faz desta uma
+			// conversão SEM PERDA e não um "melhor que nada".
+			//
+			// A alternativa era o que existia antes: recusar, e a coluna ficava
+			// NULA enquanto o valor só sobrevivia dentro do documento, fora do
+			// alcance de qualquer WHERE. Perder o dado é pior que preservá-lo
+			// noutra forma. Fecha também a assimetria com int64/double, que já
+			// aceitavam string numérica desde o ajuste pós-amostra.
+			//
+			// NÃO se paga utf8.Valid nestes dois, e é seguro pular por
+			// construção da gramática JSON: um número só admite [-+0-9.eE] e um
+			// boolean é uma das duas palavras em minúsculas — tudo ASCII, e
+			// ASCII é UTF-8 válido byte a byte. O KindString acima é outra
+			// história justamente porque o Raw dele já passou pelo desescape,
+			// que é onde bytes inválidos podem nascer.
+		default:
+			// Objeto e array continuam RECUSADOS, e a recusa é de outra classe
+			// que a acima: não se trata de preservar um escalar noutra forma.
+			// Enfiar um documento inteiro numa coluna de texto destrói a razão
+			// de a coluna existir, que é ser COMPARÁVEL — `WHERE x = '...'`
+			// passaria a exigir casar a serialização byte a byte, com espaço e
+			// ordem de chave inclusos, e a coluna misturaria escalar com
+			// estrutura sem nada na leitura distinguindo os dois. Quem quer o
+			// documento declara `type: json`, que o guarda validado e o publica
+			// como JSON de verdade em vez de como texto opaco.
+			return types.Value{}, arena, convErrf(target, "esperava string, número ou boolean JSON, veio %v", f.Kind)
 		}
 		return appendBytesValue(target, f.Raw, arena)
 
@@ -211,6 +263,34 @@ func InferType(f jsonp.Field) types.FieldType {
 		return types.TypeJSON
 	}
 	return types.TypeNull
+}
+
+// kindNativo devolve a forma JSON em que um valor deste tipo alvo é escrito SEM
+// conversão, e se o tipo tem uma. É o que permite ao chamador dizer se o Convert
+// que deu certo COERGIU o valor ou apenas o leu.
+//
+// Só os tipos que o JSON também tem entram na tabela — string, int64, double e
+// boolean. Os outros ficam de fora deliberadamente, e a razão é que "veio noutra
+// forma" não é afirmação com sentido para eles: o JSON não tem timestamp,
+// datetime, time, ipv4, ipv6, prefixo nem bytes, então TODO valor desses tipos
+// chega necessariamente como texto ou número. Contá-los como coerção marcaria
+// 100% de coerção numa coluna que nunca viu nada de errado, e o contador —
+// que existe para apontar origem inconsistente — viraria ruído exatamente onde
+// deveria ser sinal.
+//
+// O `json` também fica fora, e ali por outro motivo: object e array são as duas
+// formas nativas dele, não uma. Um par de formas legítimas não cabe nesta função
+// e não precisa caber — o Convert já recusa qualquer terceira.
+func kindNativo(alvo types.FieldType) (jsonp.Kind, bool) {
+	switch alvo {
+	case types.TypeString:
+		return jsonp.KindString, true
+	case types.TypeInt64, types.TypeDouble:
+		return jsonp.KindNumber, true
+	case types.TypeBool:
+		return jsonp.KindBool, true
+	}
+	return 0, false
 }
 
 // appendBytesValue copia src para o arena e devolve o Value apontando para

@@ -33,6 +33,14 @@ func TestExtracaoNaoAloca(t *testing.T) {
 		// cada chamada. Sem este caso, o buffer que evita isso não é medido —
 		// e caminho raro que aloca é alocação que só aparece em produção.
 		{"pai com forma divergente", `{"id":"A","doc":[1,2,3]}`},
+		// A COERÇÃO é rota própria e precisa do próprio caso: ela grava o Raw
+		// num alvo diferente do nativo e incrementa um terceiro contador por
+		// coluna. Os casos acima passam todos pelo caminho nativo, então um
+		// conserto que alocasse só ao coergir — um Field escapando para a heap
+		// ao virar argumento, por exemplo — passaria por eles inteiro. Aqui
+		// `probeIpNode` é declarada string e recebe número, e `tally` é
+		// declarada int64 e recebe string: as duas direções da simetria.
+		{"coercao nas duas direcoes", `{"id":"A","doc":{"probeIpNode":10,"tally":"7"}}`},
 	}
 	for _, tc := range casos {
 		t.Run(tc.nome, func(t *testing.T) {
