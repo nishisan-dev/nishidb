@@ -620,9 +620,22 @@ O namespace `_meta` responde o que o dataset tem, por SQL, sem precisar de
 suporte em cliente nenhum:
 
 ```sql
-SELECT name, type, auto, index, indexed, parent FROM _meta.fields
+SELECT name, type, auto, index, indexed, parent, occurrences, typeMismatches FROM _meta.fields
 SELECT name FROM _meta.fields WHERE parent = 'persistent'
 ```
+
+`occurrences` é quantas vezes a chave apareceu no documento; `typeMismatches`,
+quantas dessas não couberam no tipo da coluna. São **duas colunas cruas e não
+uma razão**, porque a razão não compõe: `2.315 de 2.383` e `93 de 3.334` são
+problemas de ordens diferentes, e o numerador sozinho não os distingue. As duas
+são **NULL para campo de topo** — zero diria "a chave nunca apareceu", que é
+outra afirmação —, então `WHERE typeMismatches > 0` já filtra o topo. As N
+piores colunas saem por `ORDER BY typeMismatches DESC`.
+
+**São contadores de PROCESSO e zeram no restart**, como os demais do produto.
+Isso é aceitável para a pergunta que respondem — "esta coluna é confiável?" —,
+mas precisa estar dito: quem lê `0` num dataset recém-reiniciado está lendo
+"ainda não medi", não "estável".
 
 A resposta é **estado corrente, não declaração**: campo autodescoberto fixa o
 tipo na primeira observação, então duas execuções em momentos diferentes podem

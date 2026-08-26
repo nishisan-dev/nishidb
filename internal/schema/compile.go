@@ -150,7 +150,50 @@ type CompiledField struct {
 	// leem EffectiveType sem lock — um campo simples aqui seria data race que
 	// o -race pega no CI e nem sempre em dev.
 	autoType atomic.Uint32
+
+	// ocorrencias e divergencias são a densidade e a confiabilidade DESTA
+	// coluna, e existem porque o contador por DATASET é alarme sem endereço:
+	// ele diz "2.085.138 valores perdidos" e não diz qual das ~1.700 colunas
+	// respondeu por isso.
+	//
+	// São DUAS colunas cruas e não uma razão, porque a razão não compõe: saber
+	// que uma chave divergiu 2.315 vezes só significa alguma coisa contra as
+	// 2.383 em que ela apareceu, e `93 de 3.334` é problema de outra ordem. A
+	// divisão fica com quem consulta.
+	//
+	// ocorrencias conta a chave APARECER no documento — antes da conversão —,
+	// e não a materialização bem-sucedida. É o que faz divergencias ser um
+	// SUBCONJUNTO de ocorrencias e a leitura "2.315 de 2.383" sair direta do
+	// SQL; contando o sucesso, o denominador viraria uma soma na cabeça de
+	// quem consulta.
+	//
+	// Atômicos pela mesma razão do autoType logo acima, e é a família dos
+	// débitos 60, 69 e 70: as queries de _meta.fields leem estes campos
+	// enquanto o writer os incrementa. A lição registrada naqueles três é que
+	// "degrada com segurança" não sobreviveu ao -race.
+	//
+	// São contadores de PROCESSO e zeram no restart, como todos os outros. É
+	// aceitável para a pergunta que respondem — "esta coluna é confiável?" —,
+	// desde que esteja dito na documentação da tabela, senão alguém lê 0 e
+	// conclui "estável".
+	ocorrencias  atomic.Uint64
+	divergencias atomic.Uint64
 }
+
+// ContaOcorrencia registra que a chave desta coluna apareceu no documento.
+//
+// Roda no caminho mais quente do produto: uma vez por coluna derivada por
+// evento. Um atomic.Add não aloca — o que o gate do materializer cobra — e o
+// custo de CPU está medido em benchmark/baselines/segunda-passada-20260825.txt.
+func (f *CompiledField) ContaOcorrencia() { f.ocorrencias.Add(1) }
+
+// Ocorrencias é quantas vezes a chave desta coluna apareceu no documento desde
+// a abertura do dataset. Zero para coluna que não é derivada.
+func (f *CompiledField) Ocorrencias() uint64 { return f.ocorrencias.Load() }
+
+// Divergencias é quantas dessas ocorrências não couberam no tipo da coluna.
+// É sempre <= Ocorrencias.
+func (f *CompiledField) Divergencias() uint64 { return f.divergencias.Load() }
 
 // EffectiveType devolve o tipo contra o qual os valores deste campo devem ser
 // interpretados: o declarado no YAML ou, para campo auto, o FIXADO na
@@ -273,6 +316,7 @@ func (c *Compiled) AoValorIncompativel(fn func(coluna, fixado, veio string)) { c
 // operador sabe o que mudou na origem. O contador conta todas.
 func (c *Compiled) ContaValorIncompativel(coluna *CompiledField, veio types.FieldType) {
 	c.valoresIncompativeis.Add(1)
+	coluna.divergencias.Add(1)
 	if c.aoIncompativel == nil || !c.avisouIncompativel.CompareAndSwap(false, true) {
 		return
 	}

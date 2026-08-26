@@ -67,6 +67,10 @@ func (b *PatchBuffer) extraiDerivadas() error {
 			if !ok {
 				continue
 			}
+			// A chave APARECEU. Conta aqui, antes da conversão, e não no
+			// sucesso: é o que faz a divergência ser um subconjunto da
+			// ocorrência, e "2.315 de 2.383" sair direto do SQL.
+			d.ContaOcorrencia()
 			val, arena, err := Convert(f, d.EffectiveType(), d.Layout, b.arena)
 			if err != nil || val.Type == types.TypeNull {
 				// REMOÇÃO explícita, e não `continue`: no modo merge, campo
@@ -254,6 +258,7 @@ func (b *PatchBuffer) descobreAninhados(p paiVisto) error {
 			// guardando o valor. A perda do teto está no camposDescartados.
 			continue
 		}
+		cf.ContaOcorrencia()
 		alvo := cf.EffectiveType()
 		if alvo == types.TypeNull {
 			t := InferType(f)

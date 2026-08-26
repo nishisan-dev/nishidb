@@ -437,12 +437,31 @@ plano, já que o binder conhece o `LIMIT` da AST (débito 46).
 ### Introspecção pelo próprio SQL
 
 `_meta.fields` responde "o que este dataset tem" — nome, tipo, se é
-autodescoberto, índice declarado, índice físico e campo de origem — como uma
-tabela qualquer:
+autodescoberto, índice declarado, índice físico, campo de origem e a
+**densidade** de cada coluna derivada — como uma tabela qualquer:
 
 ```sql
-SELECT name, type, auto, index FROM _meta.fields WHERE parent = 'persistent'
+SELECT name, type, occurrences, typeMismatches FROM _meta.fields
+WHERE parent = 'persistent' AND typeMismatches > 0
 ```
+
+**`occurrences` e `typeMismatches` existem porque o contador por DATASET é
+alarme sem endereço.** Ele diz "2.085.138 valores perdidos" e não diz qual das
+~1.700 colunas respondeu por isso; a tabela que atribuía esse número só existiu
+uma vez, calculada por um script descartável sobre uma amostra de 20.000
+documentos. Com as duas colunas a mesma pergunta é respondida por SQL, sobre o
+dataset inteiro.
+
+São **duas colunas cruas e não uma razão**: a razão não compõe, e `2.315 de
+2.383` é problema de outra ordem que `93 de 3.334`. São **NULL para campo de
+topo**, pelo mesmo argumento que mantém `parent` ausente ali — zero diria "a
+chave nunca apareceu". E são **contadores de processo**, que zeram no restart:
+`0` num dataset recém-subido é "ainda não medi", não "estável".
+
+O custo está medido, e não raciocinado: o incremento roda uma vez por coluna
+derivada por evento, no caminho mais quente do produto, e a comparação contra
+`benchmark/baselines/segunda-passada-20260825.txt` não distingue o antes do
+depois (`p=0.310`), com zero alocação.
 
 Por SQL, e não por rota HTTP nova, porque uma tabela **não exige suporte em
 cliente nenhum**: DBeaver, CLI e driver já sabem executar `SELECT` e desenhar o

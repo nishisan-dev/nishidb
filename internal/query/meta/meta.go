@@ -109,6 +109,11 @@ func (e *erroDaTabela) Unwrap() error { return e.err }
 // à mão é o que garante que a tabela obedeça às mesmas regras — tipos, chave,
 // ordem determinística de FieldID — que qualquer outro dataset.
 //
+// `occurrences` e `typeMismatches` são DUAS colunas cruas e não uma razão,
+// porque a razão não compõe: `2.315 de 2.383` e `93 de 3.334` são problemas de
+// ordens diferentes, e o numerador sozinho não os distingue. A divisão fica com
+// quem consulta. As duas são NULL para campo de topo — ver o record().
+//
 // `type` e `auto` são DUAS colunas de propósito, e reusam o vocabulário que o
 // /v1/metadata já publica. Dizer só `auto` jogaria fora a informação que se foi
 // buscar ali: campo autodescoberto TEM tipo fixado depois da primeira
@@ -119,7 +124,7 @@ materialization:
   key:
     field: name
 schema:
-  include: [name, type, auto, index, indexed, parent, id]
+  include: [name, type, auto, index, indexed, parent, id, occurrences, typeMismatches]
   fields:
     name:
       type: string
@@ -134,6 +139,10 @@ schema:
     parent:
       type: string
     id:
+      type: int64
+    occurrences:
+      type: int64
+    typeMismatches:
       type: int64
 `
 
