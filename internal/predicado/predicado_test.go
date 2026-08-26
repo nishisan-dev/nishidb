@@ -1,4 +1,4 @@
-package executor
+package predicado
 
 import (
 	"fmt"
@@ -28,7 +28,7 @@ import (
 
 // avalia é o avaliador de REFERÊNCIA: recursivo, óbvio, escrito para ser
 // obviamente correto e não para ser rápido. É o oráculo.
-func avalia(e binder.BoundExpr, slots []slot) bool {
+func avalia(e binder.BoundExpr, slots []Slot) bool {
 	switch n := e.(type) {
 	case *binder.BoundLogical:
 		if n.Op == parser.LogicalAnd {
@@ -37,15 +37,15 @@ func avalia(e binder.BoundExpr, slots []slot) bool {
 		return avalia(n.Left, slots) || avalia(n.Right, slots)
 	case *binder.BoundComparison:
 		s := slots[n.Slot]
-		if !s.present {
+		if !s.Present {
 			return false
 		}
-		if s.val.Type != n.Field.EffectiveType() {
+		if s.Val.Type != n.Field.EffectiveType() {
 			return false
 		}
-		return ordemInt(n.Op, s.val.I64, n.Val.I64)
+		return ordemInt(n.Op, s.Val.I64, n.Val.I64)
 	case *binder.BoundNullCheck:
-		return slots[n.Slot].present == n.Not
+		return slots[n.Slot].Present == n.Not
 	default:
 		panic("nó desconhecido no oráculo")
 	}
@@ -64,24 +64,24 @@ func cmpInt(sl int, op parser.CmpOp, v int64) *binder.BoundComparison {
 
 // estados enumera TODAS as combinações de (ausente, valor 0, valor 1) para k
 // slots: 3^k. É a varredura exaustiva do espaço que o predicado observa.
-func estados(k int) [][]slot {
+func estados(k int) [][]Slot {
 	total := 1
 	for i := 0; i < k; i++ {
 		total *= 3
 	}
-	out := make([][]slot, 0, total)
+	out := make([][]Slot, 0, total)
 	for n := 0; n < total; n++ {
-		s := make([]slot, k)
+		s := make([]Slot, k)
 		x := n
 		for i := 0; i < k; i++ {
-			s[i].id = types.FieldID(i + 1)
+			s[i].ID = types.FieldID(i + 1)
 			switch x % 3 {
 			case 0:
-				s[i].present = false
+				s[i].Present = false
 			case 1:
-				s[i].present, s[i].val = true, types.Value{Type: types.TypeInt64, I64: 0}
+				s[i].Present, s[i].Val = true, types.Value{Type: types.TypeInt64, I64: 0}
 			case 2:
-				s[i].present, s[i].val = true, types.Value{Type: types.TypeInt64, I64: 1}
+				s[i].Present, s[i].Val = true, types.Value{Type: types.TypeInt64, I64: 1}
 			}
 			x /= 3
 		}
@@ -92,27 +92,27 @@ func estados(k int) [][]slot {
 
 func confere(t *testing.T, nome string, e binder.BoundExpr, k int) {
 	t.Helper()
-	p, err := compila(e, k)
+	p, err := Compila(e, k)
 	if err != nil {
-		t.Fatalf("%s: compila: %v", nome, err)
+		t.Fatalf("%s: Compila: %v", nome, err)
 	}
-	var cnt contadores
+	var mismatches int64
 	for _, s := range estados(k) {
 		want := avalia(e, s)
-		if got := p.eval(s, &cnt); got != want {
+		if got := p.Avalia(s, &mismatches); got != want {
 			t.Fatalf("%s com slots %v: programa = %v, árvore = %v", nome, resumo(s), got, want)
 		}
 	}
 }
 
-func resumo(s []slot) string {
+func resumo(s []Slot) string {
 	out := ""
 	for _, sl := range s {
-		if !sl.present {
+		if !sl.Present {
 			out += "_"
 			continue
 		}
-		out += fmt.Sprintf("%d", sl.val.I64)
+		out += fmt.Sprintf("%d", sl.Val.I64)
 	}
 	return out
 }

@@ -152,14 +152,14 @@ func (o *ordenador) acrescenta(slots []slot, rowID types.RowID) error {
 	ini := int32(len(o.arena))
 	var err error
 	for i := range slots {
-		if !slots[i].present {
+		if !slots[i].Present {
 			continue
 		}
 		// AppendField exige FieldID crescente e sem duplicata: os slots vêm do
 		// binder já nessa ordem, e é a mesma invariante que o payload real
 		// honra. Por isso a releitura pode ser o `coleta` de sempre, sem uma
 		// linha de desserialização nova.
-		if o.arena, err = encoding.AppendField(o.arena, slots[i].id, slots[i].val); err != nil {
+		if o.arena, err = encoding.AppendField(o.arena, slots[i].ID, slots[i].Val); err != nil {
 			return fmt.Errorf("executor: serializando a row %d para ordenar: %w", rowID, err)
 		}
 	}
@@ -169,14 +169,14 @@ func (o *ordenador) acrescenta(slots []slot, rowID types.RowID) error {
 
 	for _, k := range o.chaves {
 		s := &slots[k.Slot]
-		cv := chaveVal{presente: s.present && s.val.Type == k.Want}
+		cv := chaveVal{presente: s.Present && s.Val.Type == k.Want}
 		if cv.presente {
 			if k.Kind == binder.CompareBytes {
 				cv.ini = int32(len(o.arena))
-				o.arena = append(o.arena, s.val.Bytes...)
+				o.arena = append(o.arena, s.Val.Bytes...)
 				cv.fim = int32(len(o.arena))
 			} else {
-				cv.i64 = s.val.I64
+				cv.i64 = s.Val.I64
 			}
 		}
 		o.vals = append(o.vals, cv)
@@ -367,10 +367,10 @@ func (o *ordenador) comparaCabecas(a, b *cabeca) int {
 // janelas de bytes apontam para o buffer do leitor da cabeça, que está vivo —
 // por isso ini/fim não servem aqui, e o valor viaja direto.
 func doSlot(s *slot, k *binder.BoundOrderKey) chaveVal {
-	cv := chaveVal{presente: s.present && s.val.Type == k.Want}
+	cv := chaveVal{presente: s.Present && s.Val.Type == k.Want}
 	if cv.presente {
-		cv.i64 = s.val.I64
-		cv.direto = s.val.Bytes
+		cv.i64 = s.Val.I64
+		cv.direto = s.Val.Bytes
 	}
 	return cv
 }

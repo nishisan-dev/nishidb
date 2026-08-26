@@ -195,7 +195,11 @@ func Open(ctx context.Context, bq *binder.BoundQuery, plan planner.Plan, opts Op
 
 	pred, err := compila(bq.Where, len(it.slots))
 	if err != nil {
-		return nil, err
+		// O erro do avaliador é reembrulhado em ErrInvalidPlan porque a
+		// classificação é do EXECUTOR: quem consome (o servidor) decide o
+		// código HTTP por esse sentinela, e um programa mal formado continua
+		// sendo bug de plan-time, venha de onde vier.
+		return nil, fmt.Errorf("%w: %w", ErrInvalidPlan, err)
 	}
 	it.pred = pred
 
@@ -325,7 +329,7 @@ func (it *iterador) Next() bool {
 			it.termina(fmt.Errorf("executor: payload da row %d: %w", rec.RowID, err))
 			return false
 		}
-		if !it.pred.eval(it.slots, &it.cnt) {
+		if !it.pred.Avalia(it.slots, &it.cnt.typeMismatch) {
 			it.cnt.rejected++
 			continue
 		}
@@ -434,7 +438,7 @@ func (it *iterador) drena() bool {
 			it.termina(fmt.Errorf("executor: payload da row %d: %w", rec.RowID, err))
 			return false
 		}
-		if !it.pred.eval(it.slots, &it.cnt) {
+		if !it.pred.Avalia(it.slots, &it.cnt.typeMismatch) {
 			it.cnt.rejected++
 			continue
 		}
@@ -449,8 +453,8 @@ func (it *iterador) drena() bool {
 func (it *iterador) projeta() {
 	for j, s := range it.slotDaColuna {
 		sl := &it.slots[s]
-		if sl.present {
-			it.cols[j].Null, it.cols[j].Val = false, sl.val
+		if sl.Present {
+			it.cols[j].Null, it.cols[j].Val = false, sl.Val
 			continue
 		}
 		// Zerar o Val é obrigatório: o coleta reseta só o `present`, nunca o
