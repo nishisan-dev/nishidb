@@ -188,3 +188,56 @@ func TestCompactionDescartaRecordVencidoPorRegraCondicional(t *testing.T) {
 		t.Error("a linha continua legível depois da lápide")
 	}
 }
+
+// A lápide preserva o instante de escrita de propósito, então a linha
+// tombstonada continua "vencida" para sempre. Sem o pré-filtro, o coletor a
+// reexaminaria a cada passada e chamaria Expira — que toma o wmu só para ver a
+// flag e devolver false. Com prazo de MINUTOS isso é disputa contínua pelo
+// lock de escrita com a ingestão.
+func TestColetorNaoTentaExpirarLinhaJaTombstonada(t *testing.T) {
+	s, rel := storeComRegras(t, t.TempDir(), 7*24*time.Hour)
+	mustPut(t, s, "A", 1, payloadComPrazo(t, s, "A", rel.t, 3*time.Minute), nil)
+
+	rel.avanca(4 * time.Minute)
+	lim := LimitesDeExpiracao{MaxPorPassada: 10, TempoPorPassada: time.Second}
+	primeira, err := s.ExpiraUmaPassada(context.Background(), lim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if primeira.Expiradas != 1 {
+		t.Fatalf("primeira passada: %+v", primeira)
+	}
+
+	segunda, err := s.ExpiraUmaPassada(context.Background(), lim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if segunda.Expiradas != 0 || segunda.Renovadas != 0 {
+		t.Errorf("segunda passada tocou a linha tombstonada: %+v", segunda)
+	}
+}
+
+// O pré-filtro não pode travar a passada: o `continue` precisa avançar o
+// cursor como o fim do laço faria.
+func TestPreFiltroDeTombstoneNaoTravaAPassada(t *testing.T) {
+	s, rel := storeComRegras(t, t.TempDir(), 7*24*time.Hour)
+	for _, k := range []string{"A", "B", "C"} {
+		mustPut(t, s, k, 1, payloadComPrazo(t, s, k, rel.t, 3*time.Minute), nil)
+	}
+	rel.avanca(4 * time.Minute)
+	lim := LimitesDeExpiracao{MaxPorPassada: 10, TempoPorPassada: 2 * time.Second}
+	if r, err := s.ExpiraUmaPassada(context.Background(), lim); err != nil || r.Expiradas != 3 {
+		t.Fatalf("primeira passada: %+v (err=%v)", r, err)
+	}
+	// A passada seguinte percorre as TRÊS linhas tombstonadas e termina.
+	r, err := s.ExpiraUmaPassada(context.Background(), lim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Expiradas != 0 || r.Renovadas != 0 {
+		t.Errorf("segunda passada: %+v", r)
+	}
+	if !r.DeuVolta {
+		t.Error("a passada não completou o círculo: o cursor não avançou no pré-filtro")
+	}
+}
