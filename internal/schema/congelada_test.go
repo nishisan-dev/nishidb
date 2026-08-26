@@ -207,3 +207,25 @@ func TestIndiceSobreACongeladaDoRelogioEhRecusado(t *testing.T) {
 		"    criadoEm:\n      frozenFrom: \"@writeTime\"\n      index: hash\n"),
 		"timestamp", "hash")
 }
+
+// O format é do parsing da ORIGEM, e a congelada não o declara — mas precisa
+// dele: em datetime é o layout que converte o literal de texto do WHERE. Sem a
+// herança, a coluna guardaria o valor e recusaria a grafia que a origem aceita.
+func TestCongeladaDeDatetimeHerdaOLayoutDaOrigem(t *testing.T) {
+	c := compilaCongelada(t, yamlCongelada("", "    id:\n      type: string\n"+
+		"    visto:\n      type: datetime\n      format: \"MMM d, yyyy h:mm:ss a\"\n"+
+		"    primeiroVisto:\n      frozenFrom: visto\n"))
+	f, ok := c.FieldByName([]byte("primeiroVisto"))
+	if !ok {
+		t.Fatal("primeiroVisto não compilou")
+	}
+	if f.Type != types.TypeDateTime {
+		t.Fatalf("tipo = %v, quero datetime", f.Type)
+	}
+	if f.Layout == nil {
+		t.Fatal("o layout não foi herdado: o WHERE sobre a coluna recusaria todo literal de texto")
+	}
+	if origem, _ := c.FieldByName([]byte("visto")); f.Format != origem.Format {
+		t.Errorf("format = %q, a origem tem %q", f.Format, origem.Format)
+	}
+}

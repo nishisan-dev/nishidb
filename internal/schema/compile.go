@@ -610,6 +610,12 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 			}
 			cf.FrozenFrom = origem
 			cf.Type, cf.IsAuto = origem.Type, origem.IsAuto
+			// O Format/Layout vem junto com o tipo, e não é acessório: em
+			// datetime e time é ele que o binder usa para converter o literal
+			// de texto do WHERE. Sem herdá-lo, a coluna guardaria o valor e
+			// recusaria como "literal inválido" exatamente a grafia que a
+			// origem aceita — a coluna existiria e não seria consultável.
+			cf.Format, cf.Layout = origem.Format, origem.Layout
 			if cf.IsAuto {
 				// O hint é carregado aqui pela mesma razão do laço acima, e
 				// não de graça: a congelada tem FieldID PRÓPRIO, então o tipo
