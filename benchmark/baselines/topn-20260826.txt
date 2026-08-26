@@ -1,0 +1,440 @@
+// Linha de base do TOP-N COM HEAP contra o ORDER BY completo — 2026-08-26.
+//
+// Por que esta bancada existe: o caminho rápido de top-N é uma OTIMIZAÇÃO, e
+// otimização sem número medido não se justifica sozinha. Ela também é o que
+// fixa o teto de N do modo (tetoTopNPadrao, em internal/query/executor/topn.go)
+// — o valor não foi escolhido por gosto, saiu daqui.
+//
+// O que ela mede: a MESMA query ligada (ORDER BY nome ASC, n DESC, LIMIT N)
+// sobre o MESMO corpus, com o modo forçado pelos dois lados via
+// executor.Options.TopNMax. A fonte é um dublê sem alocação nenhuma — o
+// fakestorage monta e ordena um slice com todos os rowIds a cada ScanLive, e
+// sobre 100 mil linhas esse custo é da mesma ordem do sort que se quer medir.
+//
+// Cada bancada roda uma vez FORA do cronômetro com Metrics ligado e falha se o
+// modo medido não for o pedido (confereModo). A primeira rodada desta sessão
+// não tinha essa guarda: o n=16.384 caiu no caminho completo dos DOIS lados —
+// porque o teto padrão o recusava — e a tabela dizia "sem diferença", que era
+// verdade e não significava nada. Bancada que mede o caminho errado não dá
+// erro, dá um número.
+//
+// Três FORMAS de corpus, porque a forma decide quantas linhas o heap aceita, e
+// aceitar é todo o trabalho que o modo faz além de comparar:
+//   - aleatorio: permutação pseudo-aleatória, o caso realista;
+//   - pior:      chave decrescente na varredura, TODA linha é aceita e despeja
+//                outra — o teto de custo do modo;
+//   - melhor:    chave crescente, nada entra depois das N primeiras.
+//
+// Como reproduzir:
+//   go test ./internal/query/executor/ -run '^$' -bench BenchmarkOrdena \
+//     -benchmem -benchtime=10x -count=6 | tee novo.txt
+//   go test ./internal/query/executor/ -run '^$' -bench BenchmarkOrdenaCorpusCurto \
+//     -benchmem -benchtime=50x -count=6 | tee novo-curto.txt
+//
+// Como comparar:
+//   benchstat -col /caminho novo.txt
+//
+// Ambiente: Intel Core 7 150U (12 threads), Linux 6.8, Go 1.26.5.
+//
+// ------------------------------------------------------------------ LEITURA
+//
+// 1. SOBRE 100 MIL LINHAS O HEAP GANHA EM TODA A FAIXA MEDIDA, inclusive no
+//    pior formato de dado e inclusive em N=16.384. Isso contraria a intuição de
+//    que existe um N em que ele passa a perder — e é por isso que o teto NÃO
+//    pode ser justificado com esta bancada sozinha.
+//
+// 2. QUEM FIXA O TETO É O CORPUS CURTO. Sobre 20 mil linhas varridas, N=4.096
+//    (20% do varrido) ainda economiza 35% de tempo no pior formato e 59% no
+//    aleatório; N=16.384 (82% do varrido) não tem diferença estatística
+//    (p=0,065 nos dois formatos) e, no aleatório, a MEDIANA do heap já é pior.
+//    A conta explica: o heap custa O(varrido × log N) mais uma reescrita por
+//    linha aceita, o sort custa O(varrido × log varrido) mais uma cópia por
+//    linha; quando N se aproxima do varrido os expoentes se encontram e sobra
+//    só o sift.
+//
+// 3. O VARRIDO É DESCONHECIDO NO OPEN, que é quando o modo é escolhido. Então o
+//    teto tem de ser um valor fixo, e o maior que ainda ganha quando o dataset
+//    é pequeno. 4.096.
+//
+// 4. EM BYTES a economia é de outra ordem de grandeza, e é o que o modo promete:
+//    801 KiB retidos em N=4.096 contra os 91,6 MiB que o caminho completo
+//    materializa sobre 100 mil linhas — 117x. Em N=16.384 são 3,1 MiB, e no
+//    corpus curto os mesmos 3,1 MiB contra 16,7 MiB: cinco vezes menos em vez
+//    de cem. Teto que segura um quinto do dataset é quase nenhum teto.
+//
+// 5. ALOCAÇÕES: o heap aloca N buffers no AQUECIMENTO (25 em N=10, 4.111 em
+//    N=4.096) e ZERO por linha depois disso — é o que
+//    TestTopNReaproveitaOBufferDaEntradaDespejada trava por igualdade entre dois
+//    tamanhos de corpus. O caminho completo aloca ~114 vezes, porque o arena
+//    dobra: menos chamadas, 91,6 MiB. Contar alocações aqui engana; o que conta
+//    é a coluna de bytes.
+//
+// 6. DISPERSÃO de 2% a 27% entre rodadas. É da máquina, não do código — use as
+//    medianas do benchstat, nunca uma rodada.
+//
+// ================= benchstat -col /caminho (100 mil linhas) =================
+//
+// goos: linux
+// goarch: amd64
+// pkg: github.com/nishisan-dev/nishidb/internal/query/executor
+// cpu: Intel(R) Core(TM) 7 150U
+//                                   │     topn     │               completo                │
+//                                   │    sec/op    │    sec/op      vs base                │
+// Ordena/forma=aleatorio/n=10-12      12.07m ± 17%   131.21m ± 15%  +986.83% (p=0.002 n=6)
+// Ordena/forma=aleatorio/n=100-12     18.08m ± 14%   136.21m ± 10%  +653.58% (p=0.002 n=6)
+// Ordena/forma=aleatorio/n=1000-12    22.16m ± 12%   133.91m ± 27%  +504.34% (p=0.002 n=6)
+// Ordena/forma=aleatorio/n=4096-12    27.10m ± 20%   115.80m ± 17%  +327.27% (p=0.002 n=6)
+// Ordena/forma=aleatorio/n=16384-12   48.15m ±  6%    97.11m ±  4%  +101.70% (p=0.002 n=6)
+// Ordena/forma=pior/n=10-12           26.63m ±  3%    86.75m ± 25%  +225.76% (p=0.002 n=6)
+// Ordena/forma=pior/n=100-12          38.96m ±  5%    84.53m ±  9%  +116.94% (p=0.002 n=6)
+// Ordena/forma=pior/n=1000-12         50.27m ±  1%    88.13m ± 21%   +75.30% (p=0.002 n=6)
+// Ordena/forma=pior/n=4096-12         61.02m ±  2%    81.56m ±  8%   +33.67% (p=0.002 n=6)
+// Ordena/forma=pior/n=16384-12        70.09m ±  4%    81.13m ± 15%   +15.75% (p=0.002 n=6)
+// Ordena/forma=melhor/n=10-12         11.88m ±  2%    75.92m ±  8%  +538.97% (p=0.002 n=6)
+// Ordena/forma=melhor/n=100-12        17.52m ± 19%    78.62m ± 17%  +348.70% (p=0.002 n=6)
+// Ordena/forma=melhor/n=1000-12       12.52m ±  1%    75.43m ± 13%  +502.56% (p=0.002 n=6)
+// Ordena/forma=melhor/n=4096-12       14.96m ± 19%    76.06m ±  7%  +408.48% (p=0.002 n=6)
+// Ordena/forma=melhor/n=16384-12      25.50m ±  1%    78.52m ±  9%  +207.92% (p=0.002 n=6)
+// geomean                             25.69m          92.48m        +260.01%
+// 
+//                                   │     topn     │                   completo                   │
+//                                   │     B/op     │       B/op        vs base                    │
+// Ordena/forma=aleatorio/n=10-12      3.410Ki ± 0%   93771.442Ki ± 0%  +2749669.66% (p=0.002 n=6)
+// Ordena/forma=aleatorio/n=100-12     21.13Ki ± 0%    93771.44Ki ± 0%   +443706.39% (p=0.002 n=6)
+// Ordena/forma=aleatorio/n=1000-12    199.9Ki ± 0%     93771.4Ki ± 0%    +46814.13% (p=0.002 n=6)
+// Ordena/forma=aleatorio/n=4096-12    801.4Ki ± 0%     93771.5Ki ± 0%    +11601.26% (p=0.002 n=6)
+// Ordena/forma=aleatorio/n=16384-12   3.126Mi ± 0%      91.574Mi ± 0%     +2829.09% (p=0.002 n=6)
+// Ordena/forma=pior/n=10-12           3.410Ki ± 0%   93771.435Ki ± 0%  +2749669.46% (p=0.002 n=6)
+// Ordena/forma=pior/n=100-12          21.13Ki ± 0%    93771.44Ki ± 0%   +443706.41% (p=0.002 n=6)
+// Ordena/forma=pior/n=1000-12         199.9Ki ± 0%     93771.4Ki ± 0%    +46814.13% (p=0.002 n=6)
+// Ordena/forma=pior/n=4096-12         801.4Ki ± 0%     93771.4Ki ± 0%    +11601.26% (p=0.002 n=6)
+// Ordena/forma=pior/n=16384-12        3.126Mi ± 0%      91.574Mi ± 0%     +2829.09% (p=0.002 n=6)
+// Ordena/forma=melhor/n=10-12         3.410Ki ± 0%   93771.435Ki ± 0%  +2749669.46% (p=0.002 n=6)
+// Ordena/forma=melhor/n=100-12        21.13Ki ± 0%    93771.44Ki ± 0%   +443706.41% (p=0.002 n=6)
+// Ordena/forma=melhor/n=1000-12       199.9Ki ± 0%     93771.4Ki ± 0%    +46814.13% (p=0.002 n=6)
+// Ordena/forma=melhor/n=4096-12       801.4Ki ± 0%     93771.4Ki ± 0%    +11601.26% (p=0.002 n=6)
+// Ordena/forma=melhor/n=16384-12      3.126Mi ± 0%      91.574Mi ± 0%     +2829.09% (p=0.002 n=6)
+// geomean                             129.9Ki            91.57Mi         +72102.43%
+// 
+//                                   │     topn     │              completo               │
+//                                   │  allocs/op   │  allocs/op   vs base                │
+// Ordena/forma=aleatorio/n=10-12        25.00 ± 0%   114.00 ± 1%  +356.00% (p=0.002 n=6)
+// Ordena/forma=aleatorio/n=100-12       115.0 ± 0%    114.0 ± 0%    -0.87% (p=0.002 n=6)
+// Ordena/forma=aleatorio/n=1000-12     1015.0 ± 0%    114.0 ± 0%   -88.77% (p=0.002 n=6)
+// Ordena/forma=aleatorio/n=4096-12     4111.0 ± 0%    114.0 ± 0%   -97.23% (p=0.002 n=6)
+// Ordena/forma=aleatorio/n=16384-12   16399.0 ± 0%    114.0 ± 1%   -99.30% (p=0.002 n=6)
+// Ordena/forma=pior/n=10-12             25.00 ± 0%   114.00 ± 0%  +356.00% (p=0.002 n=6)
+// Ordena/forma=pior/n=100-12            115.0 ± 0%    114.0 ± 0%    -0.87% (p=0.002 n=6)
+// Ordena/forma=pior/n=1000-12          1015.0 ± 0%    114.0 ± 0%   -88.77% (p=0.002 n=6)
+// Ordena/forma=pior/n=4096-12          4111.0 ± 0%    114.0 ± 0%   -97.23% (p=0.002 n=6)
+// Ordena/forma=pior/n=16384-12        16399.0 ± 0%    114.0 ± 0%   -99.30% (p=0.002 n=6)
+// Ordena/forma=melhor/n=10-12           25.00 ± 0%   114.00 ± 0%  +356.00% (p=0.002 n=6)
+// Ordena/forma=melhor/n=100-12          115.0 ± 0%    114.0 ± 0%    -0.87% (p=0.002 n=6)
+// Ordena/forma=melhor/n=1000-12        1015.0 ± 0%    114.0 ± 0%   -88.77% (p=0.002 n=6)
+// Ordena/forma=melhor/n=4096-12        4111.0 ± 0%    114.0 ± 0%   -97.23% (p=0.002 n=6)
+// Ordena/forma=melhor/n=16384-12      16399.0 ± 0%    114.0 ± 0%   -99.30% (p=0.002 n=6)
+// geomean                               722.4         114.0        -84.22%
+//
+// ================= benchstat -col /caminho (20 mil linhas) ==================
+//
+// goos: linux
+// goarch: amd64
+// pkg: github.com/nishisan-dev/nishidb/internal/query/executor
+// cpu: Intel(R) Core(TM) 7 150U
+//                                              │     topn     │               completo                │
+//                                              │    sec/op    │    sec/op      vs base                │
+// OrdenaCorpusCurto/forma=pior/n=1024-12         10.51m ±  9%    19.17m ± 14%   +82.32% (p=0.002 n=6)
+// OrdenaCorpusCurto/forma=pior/n=4096-12         12.65m ±  3%    19.50m ±  5%   +54.07% (p=0.002 n=6)
+// OrdenaCorpusCurto/forma=pior/n=16384-12        19.21m ±  7%    17.26m ± 19%         ~ (p=0.065 n=6)
+// OrdenaCorpusCurto/forma=aleatorio/n=1024-12    4.476m ±  3%   21.924m ±  6%  +389.81% (p=0.002 n=6)
+// OrdenaCorpusCurto/forma=aleatorio/n=4096-12    9.035m ± 10%   22.112m ±  9%  +144.72% (p=0.002 n=6)
+// OrdenaCorpusCurto/forma=aleatorio/n=16384-12   21.69m ± 13%    19.49m ±  8%         ~ (p=0.065 n=6)
+// geomean                                        11.44m          19.84m         +73.42%
+// 
+//                                              │     topn     │                completo                 │
+//                                              │     B/op     │      B/op       vs base                 │
+// OrdenaCorpusCurto/forma=pior/n=1024-12         201.4Ki ± 0%   17075.5Ki ± 0%  +8379.27% (p=0.002 n=6)
+// OrdenaCorpusCurto/forma=pior/n=4096-12         801.4Ki ± 0%   17075.4Ki ± 0%  +2030.75% (p=0.002 n=6)
+// OrdenaCorpusCurto/forma=pior/n=16384-12        3.126Mi ± 0%    16.675Mi ± 0%   +433.38% (p=0.002 n=6)
+// OrdenaCorpusCurto/forma=aleatorio/n=1024-12    201.4Ki ± 0%   17075.4Ki ± 0%  +8379.26% (p=0.002 n=6)
+// OrdenaCorpusCurto/forma=aleatorio/n=4096-12    801.4Ki ± 0%   17075.4Ki ± 0%  +2030.75% (p=0.002 n=6)
+// OrdenaCorpusCurto/forma=aleatorio/n=16384-12   3.126Mi ± 0%    16.675Mi ± 0%   +433.38% (p=0.002 n=6)
+// geomean                                        802.4Ki          16.68Mi       +2028.02%
+// 
+//                                              │     topn      │             completo              │
+//                                              │   allocs/op   │ allocs/op   vs base               │
+// OrdenaCorpusCurto/forma=pior/n=1024-12          1039.00 ± 0%   92.00 ± 0%  -91.15% (p=0.002 n=6)
+// OrdenaCorpusCurto/forma=pior/n=4096-12          4111.00 ± 0%   92.00 ± 0%  -97.76% (p=0.002 n=6)
+// OrdenaCorpusCurto/forma=pior/n=16384-12        16399.00 ± 0%   92.00 ± 0%  -99.44% (p=0.002 n=6)
+// OrdenaCorpusCurto/forma=aleatorio/n=1024-12     1039.00 ± 0%   92.00 ± 0%  -91.15% (p=0.002 n=6)
+// OrdenaCorpusCurto/forma=aleatorio/n=4096-12     4111.00 ± 0%   92.00 ± 0%  -97.76% (p=0.002 n=6)
+// OrdenaCorpusCurto/forma=aleatorio/n=16384-12   16399.00 ± 0%   92.00 ± 0%  -99.44% (p=0.002 n=6)
+// geomean                                          4.122k        92.00       -97.77%
+//
+// =========================== SAÍDA BRUTA: 100 mil ===========================
+goos: linux
+goarch: amd64
+pkg: github.com/nishisan-dev/nishidb/internal/query/executor
+cpu: Intel(R) Core(TM) 7 150U
+BenchmarkOrdena/forma=aleatorio/n=10/caminho=topn-12         	      10	  12001152 ns/op	    3492 B/op	      25 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=10/caminho=topn-12         	      10	  12573172 ns/op	    3492 B/op	      25 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=10/caminho=topn-12         	      10	  12125375 ns/op	    3492 B/op	      25 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=10/caminho=topn-12         	      10	  14090970 ns/op	    3492 B/op	      25 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=10/caminho=topn-12         	      10	  12014334 ns/op	    3492 B/op	      25 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=10/caminho=topn-12         	      10	  12019671 ns/op	    3492 B/op	      25 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=10/caminho=completo-12     	      10	 120747416 ns/op	96022546 B/op	     115 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=10/caminho=completo-12     	      10	 112160863 ns/op	96022006 B/op	     114 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=10/caminho=completo-12     	      10	 127548713 ns/op	96021955 B/op	     114 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=10/caminho=completo-12     	      10	 149471856 ns/op	96021944 B/op	     114 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=10/caminho=completo-12     	      10	 134867407 ns/op	96021958 B/op	     114 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=10/caminho=completo-12     	      10	 140621540 ns/op	96021955 B/op	     114 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=100/caminho=topn-12        	      10	  18242608 ns/op	   21636 B/op	     115 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=100/caminho=topn-12        	      10	  20605880 ns/op	   21636 B/op	     115 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=100/caminho=topn-12        	      10	  17908593 ns/op	   21636 B/op	     115 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=100/caminho=topn-12        	      10	  17633338 ns/op	   21636 B/op	     115 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=100/caminho=topn-12        	      10	  17442719 ns/op	   21636 B/op	     115 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=100/caminho=topn-12        	      10	  19304329 ns/op	   21636 B/op	     115 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=100/caminho=completo-12    	      10	 150448530 ns/op	96021944 B/op	     114 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=100/caminho=completo-12    	      10	 131811289 ns/op	96021945 B/op	     114 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=100/caminho=completo-12    	      10	 137268428 ns/op	96021966 B/op	     114 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=100/caminho=completo-12    	      10	 128452132 ns/op	96021955 B/op	     114 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=100/caminho=completo-12    	      10	 135814246 ns/op	96021955 B/op	     114 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=100/caminho=completo-12    	      10	 136615004 ns/op	96021944 B/op	     114 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=1000/caminho=topn-12       	      10	  24165213 ns/op	  204676 B/op	    1015 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=1000/caminho=topn-12       	      10	  22354812 ns/op	  204676 B/op	    1015 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=1000/caminho=topn-12       	      10	  21840875 ns/op	  204676 B/op	    1015 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=1000/caminho=topn-12       	      10	  24711278 ns/op	  204676 B/op	    1015 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=1000/caminho=topn-12       	      10	  21254422 ns/op	  204676 B/op	    1015 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=1000/caminho=topn-12       	      10	  21962681 ns/op	  204676 B/op	    1015 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=1000/caminho=completo-12   	      10	 134520108 ns/op	96021955 B/op	     114 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=1000/caminho=completo-12   	      10	 127497998 ns/op	96021947 B/op	     114 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=1000/caminho=completo-12   	      10	 130120293 ns/op	96021977 B/op	     114 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=1000/caminho=completo-12   	      10	 133309489 ns/op	96021966 B/op	     114 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=1000/caminho=completo-12   	      10	 163207282 ns/op	96021955 B/op	     114 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=1000/caminho=completo-12   	      10	 169794512 ns/op	96021955 B/op	     114 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=4096/caminho=topn-12       	      10	  28638680 ns/op	  820612 B/op	    4111 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=4096/caminho=topn-12       	      10	  25567227 ns/op	  820612 B/op	    4111 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=4096/caminho=topn-12       	      10	  22614734 ns/op	  820612 B/op	    4111 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=4096/caminho=topn-12       	      10	  22444678 ns/op	  820612 B/op	    4111 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=4096/caminho=topn-12       	      10	  29460976 ns/op	  820612 B/op	    4111 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=4096/caminho=topn-12       	      10	  32418079 ns/op	  820612 B/op	    4111 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=4096/caminho=completo-12   	      10	 126498082 ns/op	96021958 B/op	     114 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=4096/caminho=completo-12   	      10	  95880938 ns/op	96021977 B/op	     114 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=4096/caminho=completo-12   	      10	 106084842 ns/op	96021977 B/op	     114 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=4096/caminho=completo-12   	      10	  97104411 ns/op	96021947 B/op	     114 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=4096/caminho=completo-12   	      10	 125522874 ns/op	96021977 B/op	     114 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=4096/caminho=completo-12   	      10	 128565656 ns/op	96021955 B/op	     114 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=16384/caminho=topn-12      	      10	  50871018 ns/op	 3278219 B/op	   16399 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=16384/caminho=topn-12      	      10	  48088994 ns/op	 3278227 B/op	   16399 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=16384/caminho=topn-12      	      10	  47646942 ns/op	 3278235 B/op	   16399 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=16384/caminho=topn-12      	      10	  48951396 ns/op	 3278224 B/op	   16399 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=16384/caminho=topn-12      	      10	  47407774 ns/op	 3278212 B/op	   16399 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=16384/caminho=topn-12      	      10	  48204118 ns/op	 3278214 B/op	   16399 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=16384/caminho=completo-12  	      10	  95335621 ns/op	96021955 B/op	     114 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=16384/caminho=completo-12  	      10	  96362093 ns/op	96021955 B/op	     114 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=16384/caminho=completo-12  	      10	  95879108 ns/op	96022535 B/op	     115 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=16384/caminho=completo-12  	      10	  99831748 ns/op	96021955 B/op	     114 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=16384/caminho=completo-12  	      10	  97859822 ns/op	96021944 B/op	     114 allocs/op
+BenchmarkOrdena/forma=aleatorio/n=16384/caminho=completo-12  	      10	 100592736 ns/op	96021955 B/op	     114 allocs/op
+BenchmarkOrdena/forma=pior/n=10/caminho=topn-12              	      10	  25795828 ns/op	    3492 B/op	      25 allocs/op
+BenchmarkOrdena/forma=pior/n=10/caminho=topn-12              	      10	  25772497 ns/op	    3492 B/op	      25 allocs/op
+BenchmarkOrdena/forma=pior/n=10/caminho=topn-12              	      10	  26897650 ns/op	    3492 B/op	      25 allocs/op
+BenchmarkOrdena/forma=pior/n=10/caminho=topn-12              	      10	  26363364 ns/op	    3492 B/op	      25 allocs/op
+BenchmarkOrdena/forma=pior/n=10/caminho=topn-12              	      10	  26969555 ns/op	    3492 B/op	      25 allocs/op
+BenchmarkOrdena/forma=pior/n=10/caminho=topn-12              	      10	  26972162 ns/op	    3492 B/op	      25 allocs/op
+BenchmarkOrdena/forma=pior/n=10/caminho=completo-12          	      10	  93939677 ns/op	96021955 B/op	     114 allocs/op
+BenchmarkOrdena/forma=pior/n=10/caminho=completo-12          	      10	 108068614 ns/op	96021944 B/op	     114 allocs/op
+BenchmarkOrdena/forma=pior/n=10/caminho=completo-12          	      10	  90295627 ns/op	96021944 B/op	     114 allocs/op
+BenchmarkOrdena/forma=pior/n=10/caminho=completo-12          	      10	  81277332 ns/op	96021955 B/op	     114 allocs/op
+BenchmarkOrdena/forma=pior/n=10/caminho=completo-12          	      10	  79076195 ns/op	96021944 B/op	     114 allocs/op
+BenchmarkOrdena/forma=pior/n=10/caminho=completo-12          	      10	  83205058 ns/op	96021955 B/op	     114 allocs/op
+BenchmarkOrdena/forma=pior/n=100/caminho=topn-12             	      10	  39297438 ns/op	   21636 B/op	     115 allocs/op
+BenchmarkOrdena/forma=pior/n=100/caminho=topn-12             	      10	  39268277 ns/op	   21636 B/op	     115 allocs/op
+BenchmarkOrdena/forma=pior/n=100/caminho=topn-12             	      10	  38548142 ns/op	   21636 B/op	     115 allocs/op
+BenchmarkOrdena/forma=pior/n=100/caminho=topn-12             	      10	  38495572 ns/op	   21636 B/op	     115 allocs/op
+BenchmarkOrdena/forma=pior/n=100/caminho=topn-12             	      10	  40940247 ns/op	   21636 B/op	     115 allocs/op
+BenchmarkOrdena/forma=pior/n=100/caminho=topn-12             	      10	  38656266 ns/op	   21636 B/op	     115 allocs/op
+BenchmarkOrdena/forma=pior/n=100/caminho=completo-12         	      10	  88826290 ns/op	96021955 B/op	     114 allocs/op
+BenchmarkOrdena/forma=pior/n=100/caminho=completo-12         	      10	  76746597 ns/op	96021944 B/op	     114 allocs/op
+BenchmarkOrdena/forma=pior/n=100/caminho=completo-12         	      10	  88445898 ns/op	96021955 B/op	     114 allocs/op
+BenchmarkOrdena/forma=pior/n=100/caminho=completo-12         	      10	  80779570 ns/op	96021944 B/op	     114 allocs/op
+BenchmarkOrdena/forma=pior/n=100/caminho=completo-12         	      10	  88271806 ns/op	96021955 B/op	     114 allocs/op
+BenchmarkOrdena/forma=pior/n=100/caminho=completo-12         	      10	  77916739 ns/op	96021955 B/op	     114 allocs/op
+BenchmarkOrdena/forma=pior/n=1000/caminho=topn-12            	      10	  50297663 ns/op	  204676 B/op	    1015 allocs/op
+BenchmarkOrdena/forma=pior/n=1000/caminho=topn-12            	      10	  50242993 ns/op	  204676 B/op	    1015 allocs/op
+BenchmarkOrdena/forma=pior/n=1000/caminho=topn-12            	      10	  50049826 ns/op	  204676 B/op	    1015 allocs/op
+BenchmarkOrdena/forma=pior/n=1000/caminho=topn-12            	      10	  50571229 ns/op	  204676 B/op	    1015 allocs/op
+BenchmarkOrdena/forma=pior/n=1000/caminho=topn-12            	      10	  50039524 ns/op	  204676 B/op	    1015 allocs/op
+BenchmarkOrdena/forma=pior/n=1000/caminho=topn-12            	      10	  50685173 ns/op	  204676 B/op	    1015 allocs/op
+BenchmarkOrdena/forma=pior/n=1000/caminho=completo-12        	      10	  78856976 ns/op	96021944 B/op	     114 allocs/op
+BenchmarkOrdena/forma=pior/n=1000/caminho=completo-12        	      10	  85082497 ns/op	96021955 B/op	     114 allocs/op
+BenchmarkOrdena/forma=pior/n=1000/caminho=completo-12        	      10	 103003418 ns/op	96021966 B/op	     114 allocs/op
+BenchmarkOrdena/forma=pior/n=1000/caminho=completo-12        	      10	 106397130 ns/op	96021955 B/op	     114 allocs/op
+BenchmarkOrdena/forma=pior/n=1000/caminho=completo-12        	      10	  91168428 ns/op	96021977 B/op	     114 allocs/op
+BenchmarkOrdena/forma=pior/n=1000/caminho=completo-12        	      10	  79129476 ns/op	96021966 B/op	     114 allocs/op
+BenchmarkOrdena/forma=pior/n=4096/caminho=topn-12            	      10	  60658473 ns/op	  820612 B/op	    4111 allocs/op
+BenchmarkOrdena/forma=pior/n=4096/caminho=topn-12            	      10	  61371554 ns/op	  820612 B/op	    4111 allocs/op
+BenchmarkOrdena/forma=pior/n=4096/caminho=topn-12            	      10	  61942575 ns/op	  820612 B/op	    4111 allocs/op
+BenchmarkOrdena/forma=pior/n=4096/caminho=topn-12            	      10	  61398919 ns/op	  820612 B/op	    4111 allocs/op
+BenchmarkOrdena/forma=pior/n=4096/caminho=topn-12            	      10	  60390640 ns/op	  820612 B/op	    4111 allocs/op
+BenchmarkOrdena/forma=pior/n=4096/caminho=topn-12            	      10	  60351820 ns/op	  820612 B/op	    4111 allocs/op
+BenchmarkOrdena/forma=pior/n=4096/caminho=completo-12        	      10	  82968511 ns/op	96021944 B/op	     114 allocs/op
+BenchmarkOrdena/forma=pior/n=4096/caminho=completo-12        	      10	  84210336 ns/op	96021966 B/op	     114 allocs/op
+BenchmarkOrdena/forma=pior/n=4096/caminho=completo-12        	      10	  87733864 ns/op	96021944 B/op	     114 allocs/op
+BenchmarkOrdena/forma=pior/n=4096/caminho=completo-12        	      10	  77012583 ns/op	96021966 B/op	     114 allocs/op
+BenchmarkOrdena/forma=pior/n=4096/caminho=completo-12        	      10	  78730767 ns/op	96021944 B/op	     114 allocs/op
+BenchmarkOrdena/forma=pior/n=4096/caminho=completo-12        	      10	  80154653 ns/op	96021944 B/op	     114 allocs/op
+BenchmarkOrdena/forma=pior/n=16384/caminho=topn-12           	      10	  68687164 ns/op	 3278214 B/op	   16399 allocs/op
+BenchmarkOrdena/forma=pior/n=16384/caminho=topn-12           	      10	  70605953 ns/op	 3278212 B/op	   16399 allocs/op
+BenchmarkOrdena/forma=pior/n=16384/caminho=topn-12           	      10	  71735890 ns/op	 3278212 B/op	   16399 allocs/op
+BenchmarkOrdena/forma=pior/n=16384/caminho=topn-12           	      10	  69266267 ns/op	 3278214 B/op	   16399 allocs/op
+BenchmarkOrdena/forma=pior/n=16384/caminho=topn-12           	      10	  69566300 ns/op	 3278214 B/op	   16399 allocs/op
+BenchmarkOrdena/forma=pior/n=16384/caminho=topn-12           	      10	  73231081 ns/op	 3278212 B/op	   16399 allocs/op
+BenchmarkOrdena/forma=pior/n=16384/caminho=completo-12       	      10	  80631106 ns/op	96021955 B/op	     114 allocs/op
+BenchmarkOrdena/forma=pior/n=16384/caminho=completo-12       	      10	  93335764 ns/op	96021944 B/op	     114 allocs/op
+BenchmarkOrdena/forma=pior/n=16384/caminho=completo-12       	      10	  80394982 ns/op	96021944 B/op	     114 allocs/op
+BenchmarkOrdena/forma=pior/n=16384/caminho=completo-12       	      10	  85408480 ns/op	96021944 B/op	     114 allocs/op
+BenchmarkOrdena/forma=pior/n=16384/caminho=completo-12       	      10	  81622404 ns/op	96021944 B/op	     114 allocs/op
+BenchmarkOrdena/forma=pior/n=16384/caminho=completo-12       	      10	  79965266 ns/op	96021966 B/op	     114 allocs/op
+BenchmarkOrdena/forma=melhor/n=10/caminho=topn-12            	      10	  11856730 ns/op	    3492 B/op	      25 allocs/op
+BenchmarkOrdena/forma=melhor/n=10/caminho=topn-12            	      10	  11856841 ns/op	    3492 B/op	      25 allocs/op
+BenchmarkOrdena/forma=melhor/n=10/caminho=topn-12            	      10	  11965927 ns/op	    3492 B/op	      25 allocs/op
+BenchmarkOrdena/forma=melhor/n=10/caminho=topn-12            	      10	  11905585 ns/op	    3492 B/op	      25 allocs/op
+BenchmarkOrdena/forma=melhor/n=10/caminho=topn-12            	      10	  11832442 ns/op	    3492 B/op	      25 allocs/op
+BenchmarkOrdena/forma=melhor/n=10/caminho=topn-12            	      10	  12142451 ns/op	    3492 B/op	      25 allocs/op
+BenchmarkOrdena/forma=melhor/n=10/caminho=completo-12        	      10	  73472359 ns/op	96021944 B/op	     114 allocs/op
+BenchmarkOrdena/forma=melhor/n=10/caminho=completo-12        	      10	  76950293 ns/op	96021966 B/op	     114 allocs/op
+BenchmarkOrdena/forma=melhor/n=10/caminho=completo-12        	      10	  73017547 ns/op	96021955 B/op	     114 allocs/op
+BenchmarkOrdena/forma=melhor/n=10/caminho=completo-12        	      10	  74884555 ns/op	96021955 B/op	     114 allocs/op
+BenchmarkOrdena/forma=melhor/n=10/caminho=completo-12        	      10	  81339511 ns/op	96021944 B/op	     114 allocs/op
+BenchmarkOrdena/forma=melhor/n=10/caminho=completo-12        	      10	  81723753 ns/op	96021944 B/op	     114 allocs/op
+BenchmarkOrdena/forma=melhor/n=100/caminho=topn-12           	      10	  17820065 ns/op	   21636 B/op	     115 allocs/op
+BenchmarkOrdena/forma=melhor/n=100/caminho=topn-12           	      10	  17221841 ns/op	   21636 B/op	     115 allocs/op
+BenchmarkOrdena/forma=melhor/n=100/caminho=topn-12           	      10	  18010042 ns/op	   21636 B/op	     115 allocs/op
+BenchmarkOrdena/forma=melhor/n=100/caminho=topn-12           	      10	  20906334 ns/op	   21636 B/op	     115 allocs/op
+BenchmarkOrdena/forma=melhor/n=100/caminho=topn-12           	      10	  15920941 ns/op	   21636 B/op	     115 allocs/op
+BenchmarkOrdena/forma=melhor/n=100/caminho=topn-12           	      10	  14416514 ns/op	   21636 B/op	     115 allocs/op
+BenchmarkOrdena/forma=melhor/n=100/caminho=completo-12       	      10	  76641712 ns/op	96021944 B/op	     114 allocs/op
+BenchmarkOrdena/forma=melhor/n=100/caminho=completo-12       	      10	  92142251 ns/op	96021955 B/op	     114 allocs/op
+BenchmarkOrdena/forma=melhor/n=100/caminho=completo-12       	      10	  81075417 ns/op	96021955 B/op	     114 allocs/op
+BenchmarkOrdena/forma=melhor/n=100/caminho=completo-12       	      10	  79067697 ns/op	96021966 B/op	     114 allocs/op
+BenchmarkOrdena/forma=melhor/n=100/caminho=completo-12       	      10	  78165068 ns/op	96021966 B/op	     114 allocs/op
+BenchmarkOrdena/forma=melhor/n=100/caminho=completo-12       	      10	  73438534 ns/op	96021955 B/op	     114 allocs/op
+BenchmarkOrdena/forma=melhor/n=1000/caminho=topn-12          	      10	  12608476 ns/op	  204676 B/op	    1015 allocs/op
+BenchmarkOrdena/forma=melhor/n=1000/caminho=topn-12          	      10	  12636007 ns/op	  204676 B/op	    1015 allocs/op
+BenchmarkOrdena/forma=melhor/n=1000/caminho=topn-12          	      10	  12529634 ns/op	  204676 B/op	    1015 allocs/op
+BenchmarkOrdena/forma=melhor/n=1000/caminho=topn-12          	      10	  12469925 ns/op	  204676 B/op	    1015 allocs/op
+BenchmarkOrdena/forma=melhor/n=1000/caminho=topn-12          	      10	  12507426 ns/op	  204676 B/op	    1015 allocs/op
+BenchmarkOrdena/forma=melhor/n=1000/caminho=topn-12          	      10	  12459293 ns/op	  204676 B/op	    1015 allocs/op
+BenchmarkOrdena/forma=melhor/n=1000/caminho=completo-12      	      10	  85330859 ns/op	96021955 B/op	     114 allocs/op
+BenchmarkOrdena/forma=melhor/n=1000/caminho=completo-12      	      10	  73617131 ns/op	96021944 B/op	     114 allocs/op
+BenchmarkOrdena/forma=melhor/n=1000/caminho=completo-12      	      10	  75923906 ns/op	96021977 B/op	     114 allocs/op
+BenchmarkOrdena/forma=melhor/n=1000/caminho=completo-12      	      10	  83839244 ns/op	96021966 B/op	     114 allocs/op
+BenchmarkOrdena/forma=melhor/n=1000/caminho=completo-12      	      10	  74329484 ns/op	96021966 B/op	     114 allocs/op
+BenchmarkOrdena/forma=melhor/n=1000/caminho=completo-12      	      10	  74938676 ns/op	96021944 B/op	     114 allocs/op
+BenchmarkOrdena/forma=melhor/n=4096/caminho=topn-12          	      10	  14782921 ns/op	  820612 B/op	    4111 allocs/op
+BenchmarkOrdena/forma=melhor/n=4096/caminho=topn-12          	      10	  17786286 ns/op	  820612 B/op	    4111 allocs/op
+BenchmarkOrdena/forma=melhor/n=4096/caminho=topn-12          	      10	  15133589 ns/op	  820612 B/op	    4111 allocs/op
+BenchmarkOrdena/forma=melhor/n=4096/caminho=topn-12          	      10	  14657897 ns/op	  820612 B/op	    4111 allocs/op
+BenchmarkOrdena/forma=melhor/n=4096/caminho=topn-12          	      10	  16745985 ns/op	  820612 B/op	    4111 allocs/op
+BenchmarkOrdena/forma=melhor/n=4096/caminho=topn-12          	      10	  14710816 ns/op	  820612 B/op	    4111 allocs/op
+BenchmarkOrdena/forma=melhor/n=4096/caminho=completo-12      	      10	  78324530 ns/op	96021966 B/op	     114 allocs/op
+BenchmarkOrdena/forma=melhor/n=4096/caminho=completo-12      	      10	  71473088 ns/op	96021977 B/op	     114 allocs/op
+BenchmarkOrdena/forma=melhor/n=4096/caminho=completo-12      	      10	  70655836 ns/op	96021955 B/op	     114 allocs/op
+BenchmarkOrdena/forma=melhor/n=4096/caminho=completo-12      	      10	  77633271 ns/op	96021955 B/op	     114 allocs/op
+BenchmarkOrdena/forma=melhor/n=4096/caminho=completo-12      	      10	  75687219 ns/op	96021955 B/op	     114 allocs/op
+BenchmarkOrdena/forma=melhor/n=4096/caminho=completo-12      	      10	  76433095 ns/op	96021944 B/op	     114 allocs/op
+BenchmarkOrdena/forma=melhor/n=16384/caminho=topn-12         	      10	  25505871 ns/op	 3278214 B/op	   16399 allocs/op
+BenchmarkOrdena/forma=melhor/n=16384/caminho=topn-12         	      10	  25403630 ns/op	 3278225 B/op	   16399 allocs/op
+BenchmarkOrdena/forma=melhor/n=16384/caminho=topn-12         	      10	  25508755 ns/op	 3278212 B/op	   16399 allocs/op
+BenchmarkOrdena/forma=melhor/n=16384/caminho=topn-12         	      10	  25491658 ns/op	 3278214 B/op	   16399 allocs/op
+BenchmarkOrdena/forma=melhor/n=16384/caminho=topn-12         	      10	  25788100 ns/op	 3278214 B/op	   16399 allocs/op
+BenchmarkOrdena/forma=melhor/n=16384/caminho=topn-12         	      10	  25191304 ns/op	 3278214 B/op	   16399 allocs/op
+BenchmarkOrdena/forma=melhor/n=16384/caminho=completo-12     	      10	  77262892 ns/op	96021955 B/op	     114 allocs/op
+BenchmarkOrdena/forma=melhor/n=16384/caminho=completo-12     	      10	  76080706 ns/op	96021955 B/op	     114 allocs/op
+BenchmarkOrdena/forma=melhor/n=16384/caminho=completo-12     	      10	  71379445 ns/op	96021966 B/op	     114 allocs/op
+BenchmarkOrdena/forma=melhor/n=16384/caminho=completo-12     	      10	  79769982 ns/op	96021955 B/op	     114 allocs/op
+BenchmarkOrdena/forma=melhor/n=16384/caminho=completo-12     	      10	  83366964 ns/op	96021944 B/op	     114 allocs/op
+BenchmarkOrdena/forma=melhor/n=16384/caminho=completo-12     	      10	  79783271 ns/op	96021966 B/op	     114 allocs/op
+PASS
+ok  	github.com/nishisan-dev/nishidb/internal/query/executor	150.258s
+
+// =========================== SAÍDA BRUTA: 20 mil ============================
+goos: linux
+goarch: amd64
+pkg: github.com/nishisan-dev/nishidb/internal/query/executor
+cpu: Intel(R) Core(TM) 7 150U
+BenchmarkOrdenaCorpusCurto/forma=pior/n=1024/caminho=topn-12         	      50	  10845514 ns/op	  206213 B/op	    1039 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=pior/n=1024/caminho=topn-12         	      50	  11425506 ns/op	  206212 B/op	    1039 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=pior/n=1024/caminho=topn-12         	      50	  10462440 ns/op	  206212 B/op	    1039 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=pior/n=1024/caminho=topn-12         	      50	  10564214 ns/op	  206214 B/op	    1039 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=pior/n=1024/caminho=topn-12         	      50	  10404640 ns/op	  206212 B/op	    1039 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=pior/n=1024/caminho=topn-12         	      50	  10399149 ns/op	  206212 B/op	    1039 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=pior/n=1024/caminho=completo-12     	      50	  19762469 ns/op	17485486 B/op	      92 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=pior/n=1024/caminho=completo-12     	      50	  19185884 ns/op	17485272 B/op	      92 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=pior/n=1024/caminho=completo-12     	      50	  16450452 ns/op	17485265 B/op	      92 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=pior/n=1024/caminho=completo-12     	      50	  19149601 ns/op	17485266 B/op	      92 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=pior/n=1024/caminho=completo-12     	      50	  18062919 ns/op	17485385 B/op	      92 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=pior/n=1024/caminho=completo-12     	      50	  20193120 ns/op	17485262 B/op	      92 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=pior/n=4096/caminho=topn-12         	      50	  12388006 ns/op	  820613 B/op	    4111 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=pior/n=4096/caminho=topn-12         	      50	  12539637 ns/op	  820616 B/op	    4111 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=pior/n=4096/caminho=topn-12         	      50	  13021905 ns/op	  820613 B/op	    4111 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=pior/n=4096/caminho=topn-12         	      50	  12583707 ns/op	  820616 B/op	    4111 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=pior/n=4096/caminho=topn-12         	      50	  12724121 ns/op	  820618 B/op	    4111 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=pior/n=4096/caminho=topn-12         	      50	  12728628 ns/op	  820615 B/op	    4111 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=pior/n=4096/caminho=completo-12     	      50	  18440464 ns/op	17485251 B/op	      92 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=pior/n=4096/caminho=completo-12     	      50	  19263175 ns/op	17485253 B/op	      92 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=pior/n=4096/caminho=completo-12     	      50	  19423572 ns/op	17485260 B/op	      92 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=pior/n=4096/caminho=completo-12     	      50	  19567502 ns/op	17485257 B/op	      92 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=pior/n=4096/caminho=completo-12     	      50	  20352873 ns/op	17485260 B/op	      92 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=pior/n=4096/caminho=completo-12     	      50	  20018022 ns/op	17485266 B/op	      92 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=pior/n=16384/caminho=topn-12        	      50	  20565803 ns/op	 3278234 B/op	   16399 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=pior/n=16384/caminho=topn-12        	      50	  19277394 ns/op	 3278232 B/op	   16399 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=pior/n=16384/caminho=topn-12        	      50	  18757864 ns/op	 3278228 B/op	   16399 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=pior/n=16384/caminho=topn-12        	      50	  19137453 ns/op	 3278226 B/op	   16399 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=pior/n=16384/caminho=topn-12        	      50	  19558948 ns/op	 3278226 B/op	   16399 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=pior/n=16384/caminho=topn-12        	      50	  18908900 ns/op	 3278226 B/op	   16399 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=pior/n=16384/caminho=completo-12    	      50	  20610197 ns/op	17485275 B/op	      92 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=pior/n=16384/caminho=completo-12    	      50	  17500982 ns/op	17485262 B/op	      92 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=pior/n=16384/caminho=completo-12    	      50	  15922451 ns/op	17485254 B/op	      92 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=pior/n=16384/caminho=completo-12    	      50	  15949833 ns/op	17485253 B/op	      92 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=pior/n=16384/caminho=completo-12    	      50	  17130143 ns/op	17485253 B/op	      92 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=pior/n=16384/caminho=completo-12    	      50	  17399824 ns/op	17485260 B/op	      92 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=aleatorio/n=1024/caminho=topn-12    	      50	   4559088 ns/op	  206212 B/op	    1039 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=aleatorio/n=1024/caminho=topn-12    	      50	   4381034 ns/op	  206212 B/op	    1039 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=aleatorio/n=1024/caminho=topn-12    	      50	   4349969 ns/op	  206212 B/op	    1039 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=aleatorio/n=1024/caminho=topn-12    	      50	   4504112 ns/op	  206212 B/op	    1039 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=aleatorio/n=1024/caminho=topn-12    	      50	   4570953 ns/op	  206212 B/op	    1039 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=aleatorio/n=1024/caminho=topn-12    	      50	   4447921 ns/op	  206212 B/op	    1039 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=aleatorio/n=1024/caminho=completo-12         	      50	  21336598 ns/op	17485264 B/op	      92 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=aleatorio/n=1024/caminho=completo-12         	      50	  22021111 ns/op	17485246 B/op	      92 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=aleatorio/n=1024/caminho=completo-12         	      50	  22054223 ns/op	17485251 B/op	      92 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=aleatorio/n=1024/caminho=completo-12         	      50	  21826868 ns/op	17485260 B/op	      92 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=aleatorio/n=1024/caminho=completo-12         	      50	  20595545 ns/op	17485248 B/op	      92 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=aleatorio/n=1024/caminho=completo-12         	      50	  22221233 ns/op	17485255 B/op	      92 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=aleatorio/n=4096/caminho=topn-12             	      50	   9960098 ns/op	  820613 B/op	    4111 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=aleatorio/n=4096/caminho=topn-12             	      50	   8956981 ns/op	  820617 B/op	    4111 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=aleatorio/n=4096/caminho=topn-12             	      50	   8786387 ns/op	  820614 B/op	    4111 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=aleatorio/n=4096/caminho=topn-12             	      50	   9113847 ns/op	  820613 B/op	    4111 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=aleatorio/n=4096/caminho=topn-12             	      50	   8799623 ns/op	  820613 B/op	    4111 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=aleatorio/n=4096/caminho=topn-12             	      50	   9972111 ns/op	  820616 B/op	    4111 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=aleatorio/n=4096/caminho=completo-12         	      50	  20013909 ns/op	17485248 B/op	      92 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=aleatorio/n=4096/caminho=completo-12         	      50	  22108246 ns/op	17485255 B/op	      92 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=aleatorio/n=4096/caminho=completo-12         	      50	  20347251 ns/op	17485255 B/op	      92 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=aleatorio/n=4096/caminho=completo-12         	      50	  23567116 ns/op	17485246 B/op	      92 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=aleatorio/n=4096/caminho=completo-12         	      50	  22114960 ns/op	17485260 B/op	      92 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=aleatorio/n=4096/caminho=completo-12         	      50	  22392918 ns/op	17485251 B/op	      92 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=aleatorio/n=16384/caminho=topn-12            	      50	  24125895 ns/op	 3278230 B/op	   16399 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=aleatorio/n=16384/caminho=topn-12            	      50	  21431292 ns/op	 3278224 B/op	   16399 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=aleatorio/n=16384/caminho=topn-12            	      50	  21954079 ns/op	 3278224 B/op	   16399 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=aleatorio/n=16384/caminho=topn-12            	      50	  22559312 ns/op	 3278224 B/op	   16399 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=aleatorio/n=16384/caminho=topn-12            	      50	  19903979 ns/op	 3278232 B/op	   16399 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=aleatorio/n=16384/caminho=topn-12            	      50	  18834323 ns/op	 3278228 B/op	   16399 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=aleatorio/n=16384/caminho=completo-12        	      50	  18695552 ns/op	17485260 B/op	      92 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=aleatorio/n=16384/caminho=completo-12        	      50	  18537899 ns/op	17485262 B/op	      92 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=aleatorio/n=16384/caminho=completo-12        	      50	  21040197 ns/op	17485251 B/op	      92 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=aleatorio/n=16384/caminho=completo-12        	      50	  19749588 ns/op	17485269 B/op	      92 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=aleatorio/n=16384/caminho=completo-12        	      50	  19238691 ns/op	17485255 B/op	      92 allocs/op
+BenchmarkOrdenaCorpusCurto/forma=aleatorio/n=16384/caminho=completo-12        	      50	  20256390 ns/op	17485260 B/op	      92 allocs/op
+PASS
+ok  	github.com/nishisan-dev/nishidb/internal/query/executor	63.154s

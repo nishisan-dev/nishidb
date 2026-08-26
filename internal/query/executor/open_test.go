@@ -59,11 +59,15 @@ func compilaSchema(t *testing.T) *schema.Compiled {
 	return c
 }
 
-func campo(t *testing.T, c *schema.Compiled, nome string) *schema.CompiledField {
-	t.Helper()
+// campo aceita testing.TB, e não *testing.T, porque as bancadas do top-N
+// montam o mesmo schema que os testes: um helper por sabor de T duplicaria a
+// resolução de campo, que é justamente onde uma divergência entre teste e
+// benchmark passaria despercebida.
+func campo(tb testing.TB, c *schema.Compiled, nome string) *schema.CompiledField {
+	tb.Helper()
 	f, ok := c.FieldByName([]byte(nome))
 	if !ok {
-		t.Fatalf("campo %q", nome)
+		tb.Fatalf("campo %q", nome)
 	}
 	return f
 }

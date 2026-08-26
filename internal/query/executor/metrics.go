@@ -35,6 +35,18 @@ type Metrics struct {
 	Emitted   atomic.Int64
 	Truncated atomic.Int64
 	Canceled  atomic.Int64
+
+	// TopN conta queries cujo ORDER BY foi resolvido pelo caminho rápido de
+	// heap limitado, e TopNDegradado, as que começaram nele e caíram no
+	// caminho completo por estourar o teto de MEMÓRIA.
+	//
+	// As duas existem por uma razão só, e ela não é curiosidade: sem elas a
+	// escolha de modo é invisível de fora, e um bug que desligasse o caminho
+	// rápido — ou que o ligasse onde não devia — não teria como ser acusado por
+	// teste nenhum. `TopN - TopNDegradado` é quantas de fato terminaram pelo
+	// heap.
+	TopN          atomic.Int64
+	TopNDegradado atomic.Int64
 }
 
 // contadores é o acumulador local de uma execução. Um flush por query.
@@ -44,6 +56,9 @@ type contadores struct {
 	rejected     int64
 	typeMismatch int64
 	emitted      int64
+	// topNDegradado é 0 ou 1: a degradação acontece no máximo uma vez por
+	// query, porque desligar o modo é irreversível.
+	topNDegradado int64
 }
 
 func (c *contadores) flush(m *Metrics) {
@@ -55,5 +70,6 @@ func (c *contadores) flush(m *Metrics) {
 	m.Rejected.Add(c.rejected)
 	m.TypeMismatch.Add(c.typeMismatch)
 	m.Emitted.Add(c.emitted)
+	m.TopNDegradado.Add(c.topNDegradado)
 	*c = contadores{}
 }
