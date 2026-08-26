@@ -435,3 +435,40 @@ func TestMergeAppendFieldErroPropaga(t *testing.T) {
 		t.Errorf("sobrescrita com Value inválida: erro = %v, want encoding.ErrInvalidPayload", err)
 	}
 }
+
+// peCongelada é a entry com a terceira política de escrita: preserva o
+// anterior em vez de sobrescrever.
+func peCongelada(id types.FieldID, v types.Value) patchEntry {
+	return patchEntry{field: &schema.CompiledField{ID: id}, val: v, congelada: true}
+}
+
+func TestMergeEntryCongeladaPreservaOAnterior(t *testing.T) {
+	prev := encodeFields(t, fieldKV{1, vi64(5)})
+	got := mustMerge(t, prev, []patchEntry{peCongelada(1, vi64(9))})
+	wantFields(t, got, fieldKV{1, vi64(5)}) // o 9 foi descartado
+}
+
+func TestMergeEntryCongeladaEscreveQuandoOAnteriorNaoTem(t *testing.T) {
+	prev := encodeFields(t, fieldKV{2, vstr("outro")})
+	got := mustMerge(t, prev, []patchEntry{peCongelada(1, vi64(9))})
+	wantFields(t, got, fieldKV{1, vi64(9)}, fieldKV{2, vstr("outro")})
+}
+
+// O caminho do create não tem estado anterior: lá a congelada é escrita como
+// qualquer outro campo, e o bit não muda nada.
+func TestEncodePatchIgnoraOBitCongelada(t *testing.T) {
+	got := mustEncode(t, []patchEntry{peCongelada(1, vi64(9))})
+	wantFields(t, got, fieldKV{1, vi64(9)})
+}
+
+// A congelada preservada não pode atrapalhar o merge dos vizinhos: o campo
+// anterior é copiado CRU e o cursor do prev avança uma vez só.
+func TestMergeCongeladaNoMeioNaoDesalinhaOsVizinhos(t *testing.T) {
+	prev := encodeFields(t, fieldKV{1, vi64(10)}, fieldKV{2, vi64(5)}, fieldKV{3, vstr("z")})
+	got := mustMerge(t, prev, []patchEntry{
+		pe(1, vi64(11)),
+		peCongelada(2, vi64(99)),
+		pe(3, vstr("w")),
+	})
+	wantFields(t, got, fieldKV{1, vi64(11)}, fieldKV{2, vi64(5)}, fieldKV{3, vstr("w")})
+}
