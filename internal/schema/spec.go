@@ -812,18 +812,13 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 			}
 			aliases[f.Alias] = name
 		}
-		switch f.Index {
-		case "":
-		case "bitmap":
-			if !bitmapIndexable(f.Type) {
-				return nil, specErrf("campo %q: tipo %q não suporta índice bitmap", name, f.Type)
+		// A congelada é indexável como qualquer coluna, mas o tipo contra o
+		// qual a indexabilidade se decide é o da ORIGEM — que este laço não
+		// tem resolvido. A checagem dela mora em validaCongeladas.
+		if f.FrozenFrom == "" {
+			if err := validaIndice(name, f.Index, f.Type); err != nil {
+				return nil, err
 			}
-		case "hash":
-			if !hashIndexable(f.Type) {
-				return nil, specErrf("campo %q: tipo %q não suporta índice hash", name, f.Type)
-			}
-		default:
-			return nil, specErrf("campo %q: index %q inválido (bitmap|hash)", name, f.Index)
 		}
 		if f.UnknownFields != "" {
 			if f.Type != "json" {

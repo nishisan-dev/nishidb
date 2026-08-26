@@ -189,3 +189,21 @@ func TestCongeladasSaemOrdenadasPorFieldID(t *testing.T) {
 		t.Errorf("fora de ordem: %d depois de %d", c.Congeladas[1].ID, c.Congeladas[0].ID)
 	}
 }
+
+// O índice da congelada se decide pelo tipo da ORIGEM: é o valor dela que vai
+// para a posting list.
+func TestIndiceDaCongeladaSegueOTipoDaOrigem(t *testing.T) {
+	aceitaCongelada(t, yamlCongelada("", "    id:\n      type: string\n"+
+		"    sev:\n      type: int64\n"+
+		"    origSev:\n      frozenFrom: sev\n      index: bitmap\n"))
+	recusaCongelada(t, yamlCongelada("", "    id:\n      type: string\n"+
+		"    quando:\n      type: timestamp\n"+
+		"    origQuando:\n      frozenFrom: quando\n      index: bitmap\n"),
+		"timestamp", "bitmap")
+}
+
+func TestIndiceSobreACongeladaDoRelogioEhRecusado(t *testing.T) {
+	recusaCongelada(t, yamlCongelada("", "    id:\n      type: string\n"+
+		"    criadoEm:\n      frozenFrom: \"@writeTime\"\n      index: hash\n"),
+		"timestamp", "hash")
+}
