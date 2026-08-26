@@ -43,6 +43,10 @@ type instr struct {
 	// payload continua sendo int64.
 	want types.FieldType
 	val  types.Value
+	// like é o padrão de LIKE já compilado, ou nil. Ponteiro para o padrão do
+	// binder, que é imutável depois do Open — a mesma disciplina do programa
+	// inteiro, e o que permite compartilhá-lo sem cópia.
+	like *binder.LikePattern
 
 	// Salto (opJumpIfFalse/opJumpIfTrue).
 	target int32
@@ -99,6 +103,13 @@ func (in *instr) testa(slots []slot, cnt *contadores) bool {
 		// arbitrário.
 		cnt.typeMismatch++
 		return false
+	}
+	if in.like != nil {
+		// LIKE entra DEPOIS das duas guardas acima, e é o que fixa a semântica
+		// sem regra nova: campo ausente é false inclusive em NOT LIKE, pela
+		// mesma razão que é false em `!=`. `WHERE x NOT LIKE 'a%'` não devolve
+		// a linha que não tem `x` — quem quer isso escreve IS NULL.
+		return in.like.Casa(s.val.Bytes) != in.not
 	}
 	// O despacho é pelo KIND, nunca por Val.Type: `octets > 1.5` numa coluna
 	// int64 e `ratio > 1.5` numa coluna double produzem um Val IDÊNTICO —
@@ -269,6 +280,24 @@ func (p *programa) emite(e binder.BoundExpr, nSlots int, pilha *[]tarefa) error 
 				ErrInvalidPlan, n.Field.Name, n.Slot, nSlots)
 		}
 		p.prog = append(p.prog, instr{op: opTest, slot: int32(n.Slot), isNull: true, not: n.Not})
+		return nil
+
+	case *binder.BoundLike:
+		if n.Field == nil {
+			return fmt.Errorf("%w: LIKE com campo nulo", ErrInvalidPlan)
+		}
+		if n.Slot < 0 || n.Slot >= nSlots {
+			return fmt.Errorf("%w: coluna %q com slot %d fora de [0,%d)",
+				ErrInvalidPlan, n.Field.Name, n.Slot, nSlots)
+		}
+		if n.Pat.Tipo == binder.PadraoInvalido {
+			// Zero value do padrão: BoundLike construído sem CompilaLike. É bug
+			// de plan-time, e casar nada em silêncio o esconderia.
+			return fmt.Errorf("%w: LIKE em %q com padrão não compilado", ErrInvalidPlan, n.Field.Name)
+		}
+		p.prog = append(p.prog, instr{
+			op: opTest, slot: int32(n.Slot), not: n.Not,
+			want: types.TypeString, like: &n.Pat})
 		return nil
 
 	default:

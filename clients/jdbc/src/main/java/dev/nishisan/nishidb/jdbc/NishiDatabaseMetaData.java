@@ -608,8 +608,11 @@ public final class NishiDatabaseMetaData implements DatabaseMetaData {
 
     @Override
     public String getSQLKeywords() {
-        // As palavras que a v1 reconhece além do SQL padrão. Vazio seria mentira
-        // curta; a lista é o que o lexer de fato trata como keyword.
+        // As palavras que o servidor reconhece ALEM do SQL padrao. Vazio e a
+        // resposta certa, e a razao mudou: nao e que o lexer nao tenha
+        // keywords, e que todas as que ele tem (SELECT, FROM, WHERE, LIMIT,
+        // AND, OR, IS, NOT, NULL, TRUE, FALSE) ja sao SQL padrao. LIKE tambem
+        // e, e por isso nao entra aqui.
         return "";
     }
 
@@ -751,6 +754,9 @@ public final class NishiDatabaseMetaData implements DatabaseMetaData {
 
     @Override
     public boolean supportsLikeEscapeClause() {
+        // LIKE existe desde o ciclo M6, e a cláusula ESCAPE nao. Este `false`
+        // deixou de ser vacuidade e passou a ser afirmacao verdadeira: sem
+        // ESCAPE, procurar um `%` ou um `_` LITERAL e impossivel no servidor.
         return false;
     }
 

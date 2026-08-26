@@ -18,6 +18,7 @@
 package binder
 
 import (
+	"fmt"
 	"sort"
 	"time"
 
@@ -104,9 +105,22 @@ type BoundNullCheck struct {
 	Not   bool
 }
 
+// BoundLike é `coluna [NOT] LIKE <padrão>` com o padrão já compilado.
+//
+// Só coluna `string`. Os demais tipos são recusados no bind e não no executor,
+// pela mesma razão que a tabela Comparable existe: erro de tipo tem de sair
+// como mensagem acionável na posição da coluna, não como resultado vazio.
+type BoundLike struct {
+	Field *schema.CompiledField
+	Slot  int
+	Not   bool
+	Pat   LikePattern
+}
+
 func (*BoundLogical) isBoundExpr()    {}
 func (*BoundComparison) isBoundExpr() {}
 func (*BoundNullCheck) isBoundExpr()  {}
+func (*BoundLike) isBoundExpr()       {}
 
 // Slots é o plano de coleta do executor: os FieldIDs de que a query precisa,
 // em ordem CRESCENTE e sem duplicatas — a mesma ordem do payload, o que
@@ -495,10 +509,60 @@ func (b *binder) folha(e parser.Expr) (BoundExpr, error) {
 		// e campo auto nunca observado.
 		return &BoundNullCheck{Field: f, Not: n.Not}, nil
 
+	case *parser.LikeExpr:
+		return b.like(n)
+
 	default:
 		// Nó novo na AST tem de falhar ALTO, não ser ignorado.
 		return nil, errNoPos("expressão não suportada: %T", e)
 	}
+}
+
+// like liga `coluna [NOT] LIKE <padrão>`.
+//
+// O padrão é compilado AQUI, uma vez por query. Fazer isso por linha seria o
+// erro clássico deste operador — e é também o que permite `LIKE ?` funcionar
+// sem caminho separado, porque o bind já recebe os parâmetros.
+func (b *binder) like(n *parser.LikeExpr) (BoundExpr, error) {
+	f, err := b.colunaTalvezQualificada(n.Qualifier, n.Column, n.ColumnPos)
+	if err != nil {
+		return nil, err
+	}
+	b.usa(f.ID)
+
+	t := f.EffectiveType()
+	if t == types.TypeNull {
+		return nil, errAt(n.ColumnPos, "coluna %q é auto e nunca foi observada neste dataset, "+
+			"então ainda não tem tipo; só admite IS NULL / IS NOT NULL", f.Name)
+	}
+	if t != types.TypeString {
+		return nil, errAt(n.ColumnPos, "LIKE só vale para coluna de texto; %q é %s", f.Name, t)
+	}
+
+	var pat []byte
+	switch n.Pattern.Kind {
+	case parser.OperandString:
+		pat = []byte(n.Pattern.S)
+	case parser.OperandParam:
+		idx := n.Pattern.ParamIdx
+		if idx < 0 || idx >= len(b.params) {
+			return nil, errNoPos("parser inconsistente: ParamIdx=%d fora de [0,%d)", idx, len(b.params))
+		}
+		b.nParams++
+		if b.params[idx].Type != types.TypeString {
+			return nil, errAt(n.Pattern.Pos, "o parâmetro %d do LIKE é %s; o padrão é texto",
+				idx+1, b.params[idx].Type)
+		}
+		pat = b.params[idx].Bytes
+	default:
+		return nil, errAt(n.Pattern.Pos, "o padrão de LIKE é texto ou parâmetro")
+	}
+	if len(pat) > parser.MaxLikePatternBytes {
+		return nil, errAt(n.Pattern.Pos, "padrão de LIKE acima de %d bytes", parser.MaxLikePatternBytes)
+	}
+	// CompilaLike copia os bytes, então o padrão sobrevive ao arena e ao
+	// buffer do chamador dos parâmetros.
+	return &BoundLike{Field: f, Not: n.Not, Pat: CompilaLike(pat)}, nil
 }
 
 func (b *binder) comparacao(n *parser.Comparison) (BoundExpr, error) {
@@ -645,6 +709,13 @@ func (b *binder) preencheSlots(bq *BoundQuery) {
 	// espinha iterativamente: uma cadeia de 50 mil termos é uma árvore de 50
 	// mil níveis, e um walk recursivo aqui gastaria um frame por termo —
 	// desfazendo, na segunda passada, o cuidado tomado na primeira.
+	// Query SEM WHERE tem bq.Where nil, e empilhá-lo faria o `default` abaixo
+	// entrar em pânico com um <nil>. Antes de o default existir, o nil caía no
+	// switch em silêncio — o que funcionava por acidente, e escondia que a
+	// pilha podia carregar algo que nenhum case trata.
+	if bq.Where == nil {
+		return
+	}
 	pilha := []BoundExpr{bq.Where}
 	for len(pilha) > 0 {
 		e := pilha[len(pilha)-1]
@@ -656,6 +727,16 @@ func (b *binder) preencheSlots(bq *BoundQuery) {
 			n.Slot, _ = bq.Slots.Index(n.Field.ID)
 		case *BoundNullCheck:
 			n.Slot, _ = bq.Slots.Index(n.Field.ID)
+		case *BoundLike:
+			n.Slot, _ = bq.Slots.Index(n.Field.ID)
+		default:
+			// Nó novo sem case aqui é FALHA SILENCIOSA, e a pior espécie: o
+			// Slot fica em 0, o predicado testa o campo de MENOR FieldID da
+			// query, e a resposta sai errada sem erro, sem log e sem métrica.
+			// A `folha` acima já falha alto por este motivo; este switch não
+			// falhava, e não há linter `exhaustive` no .golangci.yml para
+			// cobrar. Entra ANTES do primeiro nó novo precisar dele.
+			panic(fmt.Sprintf("binder: preencheSlots sem case para %T", e))
 		}
 	}
 }

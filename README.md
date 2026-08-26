@@ -598,11 +598,30 @@ nomeando quem já tinha sido processado com sucesso antes dele.
 SELECT <colunas | *> FROM <dataset>
   [WHERE <predicado>]
   [LIMIT <n>]
+
+<predicado> := <coluna> <comparador> <literal>
+             | <coluna> IS [NOT] NULL
+             | <coluna> [NOT] LIKE <padrão>
+             | <predicado> (AND | OR) <predicado>
+             | "(" <predicado> ")"
 ```
 
 Comparadores `=`, `!=`, `>`, `>=`, `<`, `<=`; `AND`, `OR`, parênteses;
-`IS NULL` / `IS NOT NULL`; alias e campos entre aspas duplas (obrigatórias para
-nomes com hífen, como `"Acct-Status-Type"`).
+`IS NULL` / `IS NOT NULL`; `LIKE` e `NOT LIKE`; alias e campos entre aspas
+duplas (obrigatórias para nomes com hífen, como `"Acct-Status-Type"`).
+
+`LIKE` vale só para coluna de **texto** — outro tipo é recusado no bind, com a
+posição da coluna, nunca com resultado vazio. `%` casa qualquer sequência e `_`
+casa **um caractere** (não um byte: `_` casa o `ç` inteiro). **Não há cláusula
+`ESCAPE`**, e a consequência precisa estar dita: procurar um `%` ou um `_`
+literal é impossível. O padrão é compilado uma vez no bind — inclusive quando
+vem por parâmetro (`LIKE ?`) — e o casamento não aloca por linha.
+
+`LIKE` **não usa índice** e degrada para varredura, sempre, inclusive
+`'prefixo%'`: os valores de string vão inline no payload e o dicionário do
+bitmap é chaveado por valor exato, não ordenado por prefixo. O bitmap do OUTRO
+termo de um `AND` continua valendo — `WHERE status = 'a' AND nome LIKE 'x%'` usa
+o índice de `status` e revalida o `LIKE`.
 
 Colunas extraídas de um campo `json` (ver `extract` acima) são projetáveis pelo
 nome, por `<campo>.*` — que expande as derivadas daquele documento — ou pelo
@@ -666,7 +685,7 @@ pelo alias (`SELECT id, service_id`) continua valendo, porque aí são duas
 chaves distintas na saída.
 
 Fora da v1: `ORDER BY`, `GROUP BY`, `JOIN`, agregações, `NOT` genérico,
-`OFFSET`. As sete cláusulas ausentes — `ORDER BY`, `GROUP BY`, `OFFSET`,
+`OFFSET`, e a cláusula `ESCAPE` do `LIKE`. As sete cláusulas ausentes — `ORDER BY`, `GROUP BY`, `OFFSET`,
 `JOIN`, `HAVING`, `DISTINCT`, `UNION` — são recusadas com o código
 `UNSUPPORTED_CLAUSE`, nomeando qual delas foi escrita. É o que separa "isto não
 existe aqui" de "você digitou errado" para quem escreve SQL numa ferramenta.
