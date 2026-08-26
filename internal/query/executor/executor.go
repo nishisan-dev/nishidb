@@ -7,6 +7,7 @@ import (
 
 	"github.com/nishisan-dev/nishidb/internal/query/binder"
 	"github.com/nishisan-dev/nishidb/internal/query/planner"
+	"github.com/nishisan-dev/nishidb/internal/query/spill"
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
@@ -56,6 +57,19 @@ type Options struct {
 	// query pode usar". Até lá vale o padrão, e o operador só o vê pela
 	// mensagem de recusa.
 	SortMemory int64
+	// SpillBytes é o teto de DISCO do transbordo de UMA query. 0 = sem teto.
+	SpillBytes int64
+}
+
+// DiretorioDeSpill é a capability opcional do Store que diz onde o transbordo
+// pode escrever.
+//
+// Store que não a implementa — ou que devolve vazio — faz o ORDER BY RECUSAR ao
+// estourar o orçamento de memória, em vez de degradar para disco. É o desfecho
+// certo: sem lugar declarado para escrever, escrever em os.TempDir seria o
+// motor inventando onde pôr dado do usuário.
+type DiretorioDeSpill interface {
+	DiretorioDeSpill() string
 }
 
 // sortMemoryPadrao é o teto do ORDER BY quando o dataset não o declara.
@@ -113,7 +127,17 @@ func Open(ctx context.Context, bq *binder.BoundQuery, plan planner.Plan, opts Op
 		if teto <= 0 {
 			teto = sortMemoryPadrao
 		}
-		it.ord = novoOrdenador(bq.OrderBy, teto)
+		var area *spill.Area
+		if d, ok := opts.Store.(DiretorioDeSpill); ok {
+			if dir := d.DiretorioDeSpill(); dir != "" {
+				a, err := spill.NovaArea(dir, opts.SpillBytes)
+				if err != nil {
+					return nil, err
+				}
+				area = a
+			}
+		}
+		it.ord = novoOrdenador(bq.OrderBy, teto, area, bq.Slots.IDs)
 	}
 
 	cols := make([]ColView, len(bq.Columns))
@@ -303,7 +327,10 @@ func (it *iterador) proximaOrdenada() bool {
 			return false
 		}
 		it.drenou = true
-		it.ord.ordena()
+		if err := it.ord.ordena(); err != nil {
+			it.termina(err)
+			return false
+		}
 		// A fonte já não serve para nada: fecha AGORA, e não no Close, para não
 		// segurar o iterador do índice durante a emissão inteira.
 		it.encerra()
@@ -437,6 +464,30 @@ func (it *iterador) termina(err error) {
 		it.err = err
 	}
 	it.encerra()
+	it.liberaSpill()
+}
+
+// liberaSpill remove os arquivos de transbordo desta query.
+//
+// SEPARADO do encerra de propósito, e a separação é o defeito que ela impede: o
+// encerra é chamado logo DEPOIS de ordenar, para soltar o iterador do índice
+// enquanto a emissão ainda vai acontecer — e nesse instante os runs em disco
+// ainda estão sendo LIDOS pelo merge. Fechá-los ali apagaria os arquivos sob os
+// pés do próprio operador.
+//
+// Roda no termina (fim normal, erro e timeout) e no Close (o defer de quem
+// consome), que juntos cobrem todos os caminhos de saída.
+func (it *iterador) liberaSpill() {
+	if it.ord == nil || it.ord.area == nil {
+		return
+	}
+	if err := it.ord.area.Close(); err != nil {
+		it.errClose = err
+		if it.err == nil {
+			it.err = err
+		}
+	}
+	it.ord.area = nil
 }
 
 // encerra fecha a fonte e cancela o contexto derivado. Idempotente: o
@@ -454,6 +505,7 @@ func (it *iterador) encerra() {
 			}
 		}
 	}
+
 	// cancel SEMPRE, inclusive na parada por LIMIT: senão o timer do
 	// WithTimeout fica vivo até o deadline em toda query com LIMIT.
 	it.cancel()
@@ -487,5 +539,6 @@ func (it *iterador) Err() error { return it.err }
 func (it *iterador) Close() error {
 	it.done = true
 	it.encerra()
+	it.liberaSpill()
 	return it.errClose
 }

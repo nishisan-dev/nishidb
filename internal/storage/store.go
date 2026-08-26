@@ -20,6 +20,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/index/primary"
 	"github.com/nishisan-dev/nishidb/internal/logging"
 	"github.com/nishisan-dev/nishidb/internal/metrics"
+	"github.com/nishisan-dev/nishidb/internal/query/spill"
 	"github.com/nishisan-dev/nishidb/internal/storage/checkpoint"
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 	"github.com/nishisan-dev/nishidb/internal/storage/fielddict"
@@ -612,11 +613,12 @@ func Open(opts Options) (*Store, error) {
 		opts.Log = logging.New(os.Stderr, logging.FormatoTexto, slog.LevelInfo)
 	}
 	opts.Log = opts.Log.Component("storage").Dataset(opts.Dataset)
+	spillDir := filepath.Join(opts.Dir, spill.NomeDoDiretorio)
 	metaDir := filepath.Join(opts.Dir, "metadata")
 	dataDir := filepath.Join(opts.Dir, "data")
 	idxDir := filepath.Join(opts.Dir, "indexes")
 	cpDir := filepath.Join(opts.Dir, "checkpoint")
-	for _, d := range []string{metaDir, dataDir, idxDir, cpDir} {
+	for _, d := range []string{metaDir, dataDir, idxDir, cpDir, spillDir} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return nil, fmt.Errorf("storage: criar %s: %w", d, err)
 		}
@@ -625,6 +627,10 @@ func Open(opts Options) (*Store, error) {
 	// diretórios recém-criados precisam ser duráveis — um power loss após o
 	// primeiro checkpoint não pode deixar Dir/ sem checkpoint/ (viraria
 	// "dados sem manifest" = erro fatal na recovery).
+	// spillDir fica FORA desta lista de propósito: o transbordo não é durável
+	// (não há fsync no conteúdo dele), então gastar um fsync na entrada de
+	// diretório seria custo sem consumidor. Um crash que perca o diretório
+	// inteiro é reparado pelo MkdirAll da subida seguinte.
 	for _, d := range []string{opts.Dir, metaDir, dataDir, idxDir, cpDir} {
 		if err := fsyncDir(d); err != nil {
 			return nil, err
@@ -658,6 +664,14 @@ func Open(opts Options) (*Store, error) {
 	var err error
 	if s.lock, err = acquireDatasetLock(opts.Dir); err != nil {
 		return nil, err
+	}
+	// Resíduo de transbordo de um processo MORTO sai aqui, e é seguro por
+	// construção: o flock acima já garantiu que nenhum outro processo tem este
+	// dataset, então todo arquivo em spill/ é de alguém que não existe mais.
+	// Não é "melhor esforço" — não poder limpar significa não poder confiar no
+	// que será escrito ali em seguida.
+	if err := spill.Limpa(opts.Dir); err != nil {
+		return nil, fmt.Errorf("storage: abrir o dataset %s: %w", opts.Dir, err)
 	}
 	if s.dict, err = fielddict.Open(filepath.Join(metaDir, "fields.dict")); err != nil {
 		// O erro do dicionário já traz arquivo, versão e remediação; aqui entra
@@ -1673,6 +1687,18 @@ func (s *Store) ScanLive() types.RowIDIterator {
 	}
 	defer s.sai()
 	return &liveIterator{s: s, limit: types.RowID(s.nextRowID.Load())}
+}
+
+// DiretorioDeSpill é onde o motor de consulta pode transbordar o que não cabe
+// na memória.
+//
+// Dentro do dataset, e não em os.TempDir, por três razões: fica sob o mesmo
+// flock exclusivo, então nenhum outro processo pode confundir os arquivos;
+// herda a política de filesystem do dataset (fallocate real, e não tmpfs); e o
+// operador que dimensionou o disco pelo §85 não precisa dimensionar um segundo
+// lugar.
+func (s *Store) DiretorioDeSpill() string {
+	return filepath.Join(s.opts.Dir, spill.NomeDoDiretorio)
 }
 
 // LookupBitmap consulta o índice bitmap do campo; valor nunca visto devolve

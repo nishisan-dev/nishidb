@@ -705,9 +705,16 @@ conjunto de colunas que muda entre execuções.
 **`ORDER BY` é um operador BLOQUEANTE, e isso muda o contrato**: a fonte é
 drenada por inteiro antes da primeira linha sair, porque a linha certa pode ser
 a última lida. O `LIMIT` deixa de ser teto de *trabalho* e passa a ser teto de
-*memória*. Há um teto de memória para o operador, e estourá-lo **recusa a
-query** — nunca entrega resultado parcial, porque "as N primeiras por rowId,
-depois ordenadas" não é prefixo de resposta nenhuma.
+*memória*. Quando o teto de memória do operador estoura, o lote corrente é
+gravado **ordenado em disco** e a acumulação recomeça; ao fim, os runs são
+mesclados. O transbordo vive em `<dataset>/spill/`, sob o mesmo flock do
+dataset, e os arquivos são removidos ao fechar a consulta — inclusive quando ela
+falha ou é cancelada. Resíduo de um processo morto é limpo na subida seguinte.
+
+O transbordo **não é durável** (não há `fsync`): um crash perde o rascunho de
+uma resposta que ninguém ia receber. Se não houver lugar declarado para
+transbordar, o estouro **recusa a query** em vez de entregar resultado parcial —
+"as N primeiras por rowId, depois ordenadas" não é prefixo de resposta nenhuma.
 
 `OFFSET` pula linhas que **passaram** no predicado, e o `LIMIT` continua
 contando só as **entregues** — `LIMIT 2 OFFSET 1` devolve duas linhas. A ordem
