@@ -243,7 +243,7 @@ func (s *Store) ExpiraUmaPassada(ctx context.Context, lim LimitesDeExpiracao) (R
 		}
 
 		r.Examinadas++
-		ms, conhecido := s.escritas.Get(id)
+		_, conhecido := s.escritas.Get(id)
 		switch {
 		case !conhecido:
 			dada, err := s.daCarencia(id)
@@ -253,7 +253,7 @@ func (s *Store) ExpiraUmaPassada(ctx context.Context, lim LimitesDeExpiracao) (R
 			if dada {
 				r.Carencias++
 			}
-		case s.agora().UnixMilli()-ms >= s.expireAfterWrite.Milliseconds():
+		case s.prazoVencido(id):
 			// O Expira releva a decisão dentro do wmu, então uma renovação
 			// que chegue entre esta leitura e a marca faz ele abortar sozinho.
 			expirou, err := s.Expira(id)

@@ -328,8 +328,10 @@ func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*
 		ColunasDerivadas: spec.NomesDasExtracoes(),
 		Log:              log,
 		Metrics:          s.reg,
-		ExpireAfterWrite: spec.Materialization.DuracaoDeFundo,
+		TTLAtivo:         len(spec.Materialization.RegrasTTL) > 0,
+		DuracaoDeFundo:   spec.Materialization.DuracaoDeFundo,
 		CampoDeEscrita:   schema.CampoInstanteDeEscrita,
+		CampoDePrazo:     schema.CampoDePrazo,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("dataset %q: %w", spec.Name, err)

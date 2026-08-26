@@ -90,8 +90,10 @@ func runOffsets(args []string, amb Ambiente) int {
 		BitmapFieldNames: bitmaps,
 		HashFieldNames:   hashes,
 		ColunasDerivadas: spec.NomesDasExtracoes(),
-		ExpireAfterWrite: spec.Materialization.DuracaoDeFundo,
+		TTLAtivo:         len(spec.Materialization.RegrasTTL) > 0,
+		DuracaoDeFundo:   spec.Materialization.DuracaoDeFundo,
 		CampoDeEscrita:   schema.CampoInstanteDeEscrita,
+		CampoDePrazo:     schema.CampoDePrazo,
 	})
 	if err != nil {
 		fmt.Fprintf(amb.Stderr, "offsets: %v\n", err)

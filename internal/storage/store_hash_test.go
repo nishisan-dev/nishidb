@@ -438,17 +438,25 @@ func TestCloseNoMeioDaVarreduraDoHashNaoDaPanic(t *testing.T) {
 func TestLapideLimpaAsPostingsDeHash(t *testing.T) {
 	dir := t.TempDir()
 	s := openStore(t, Options{
-		Dir:              dir,
-		ExpireAfterWrite: time.Hour,
-		CampoDeEscrita:   "_writtenAt",
-		HashFieldNames:   []string{"status"},
+		Dir:            dir,
+		TTLAtivo:       true,
+		DuracaoDeFundo: time.Hour,
+		CampoDeEscrita: "_writtenAt",
+		CampoDePrazo:   "_expiresIn",
+		HashFieldNames: []string{"status"},
 	})
 	rel := &relogioDeTeste{t: time.Date(2026, 8, 25, 20, 0, 0, 0, time.UTC)}
 	s.UsaRelogio(rel.agora)
 
+	// O id do `status` é resolvido pelo DICIONÁRIO, e não pela constante
+	// posicional do pacote: num dataset com expiração o Open registra os dois
+	// campos de sistema antes de qualquer campo indexado, então o id fixo
+	// apontaria para o `_expiresIn`.
+	statusID := idDoCampo(t, s, "status")
+
 	k := "CMP-V0001PPCLP-013"
 	row, _ := mustPut(t, s, k, 1, payloadComEscrita(t, s, k, "Start", rel.t), nil)
-	if got := postingsDeHashDeStatus(t, s, strVal("Start")); !slices.Equal(got, []types.RowID{row}) {
+	if got := postingsDeHashDeStatus(t, s, statusID, strVal("Start")); !slices.Equal(got, []types.RowID{row}) {
 		t.Fatalf("posting antes da lápide: %v", got)
 	}
 
@@ -460,14 +468,14 @@ func TestLapideLimpaAsPostingsDeHash(t *testing.T) {
 	if !expirou {
 		t.Fatal("Expira devolveu false para row vencida: o teste não chegou a exercitar a lápide")
 	}
-	if got := postingsDeHashDeStatus(t, s, strVal("Start")); len(got) != 0 {
+	if got := postingsDeHashDeStatus(t, s, statusID, strVal("Start")); len(got) != 0 {
 		t.Fatalf("a lápide não limpou a posting de hash: %v", got)
 	}
 }
 
-func postingsDeHashDeStatus(t *testing.T, s *Store, v types.Value) []types.RowID {
+func postingsDeHashDeStatus(t *testing.T, s *Store, campo types.FieldID, v types.Value) []types.RowID {
 	t.Helper()
-	it, err := s.LookupHash(fldStatus, v)
+	it, err := s.LookupHash(campo, v)
 	if err != nil {
 		t.Fatal(err)
 	}

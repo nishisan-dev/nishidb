@@ -1,0 +1,190 @@
+package storage
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/nishisan-dev/nishidb/internal/types"
+)
+
+// storeComRegras abre um dataset com expiração e duração de fundo dada, com
+// relógio controlado. Zero em fundo é o dataset que só tem regras
+// condicionais: quem não tiver prazo gravado não expira nunca.
+func storeComRegras(t *testing.T, dir string, fundo time.Duration) (*Store, *relogioDeTeste) {
+	t.Helper()
+	s := openStore(t, Options{
+		Dir:            dir,
+		TTLAtivo:       true,
+		DuracaoDeFundo: fundo,
+		CampoDeEscrita: "_writtenAt",
+		CampoDePrazo:   "_expiresIn",
+	})
+	rel := &relogioDeTeste{t: time.Date(2026, 8, 22, 20, 0, 0, 0, time.UTC)}
+	s.UsaRelogio(rel.agora)
+	return s, rel
+}
+
+// payloadComPrazo monta o payload que o materializer produz num dataset com
+// regras: o instante da escrita e a duração que a regra escolheu.
+func payloadComPrazo(t *testing.T, s *Store, key string, escrita time.Time, d time.Duration) []byte {
+	t.Helper()
+	return payloadOrdenado(t, s, map[string]types.Value{
+		"id":         {Type: types.TypeString, Bytes: []byte(key)},
+		"_writtenAt": {Type: types.TypeTimestamp, I64: escrita.UnixMilli()},
+		"_expiresIn": {Type: types.TypeInt64, I64: d.Milliseconds()},
+	})
+}
+
+// A duração da LINHA governa, e não uma configuração única do dataset: é o
+// ponto inteiro do TTL condicional.
+func TestPrazoVencidoUsaADuracaoDaLinha(t *testing.T) {
+	s, rel := storeComRegras(t, t.TempDir(), 7*24*time.Hour)
+	curto, _ := mustPut(t, s, "curto", 1, payloadComPrazo(t, s, "curto", rel.t, 3*time.Minute), nil)
+	longo, _ := mustPut(t, s, "longo", 1, payloadComPrazo(t, s, "longo", rel.t, 7*24*time.Hour), nil)
+
+	rel.avanca(4 * time.Minute)
+	if !s.prazoVencido(curto) {
+		t.Error("a linha de 3m não venceu depois de 4m")
+	}
+	if s.prazoVencido(longo) {
+		t.Error("a linha de 7d venceu depois de 4m")
+	}
+}
+
+// A prova da MIGRAÇÃO: a entidade materializada antes de as regras existirem
+// não tem o campo no documento, e continua expirando pelo prazo de fundo.
+func TestLinhaSemExpiresInCaiNaDuracaoDeFundo(t *testing.T) {
+	s, rel := storeComRegras(t, t.TempDir(), time.Hour)
+	id, _ := mustPut(t, s, "A", 1, payloadComEscrita(t, s, "A", "Start", rel.t), nil)
+
+	rel.avanca(30 * time.Minute)
+	if s.prazoVencido(id) {
+		t.Error("venceu antes da duração de fundo")
+	}
+	rel.avanca(31 * time.Minute)
+	if !s.prazoVencido(id) {
+		t.Error("a linha sem prazo gravado não caiu na duração de fundo")
+	}
+}
+
+func TestLinhaSemExpiresInESemFundoEhImortal(t *testing.T) {
+	s, rel := storeComRegras(t, t.TempDir(), 0)
+	id, _ := mustPut(t, s, "A", 1, payloadComEscrita(t, s, "A", "Start", rel.t), nil)
+
+	rel.avanca(365 * 24 * time.Hour)
+	if s.prazoVencido(id) {
+		t.Error("sem regra de fundo, a linha sem prazo gravado não pode vencer")
+	}
+}
+
+// O teste do SENTINELA, e o mais importante do conjunto: sem ele, um Get que
+// colapse imortal com desconhecido passa despercebido — e a entidade que uma
+// regra `never` declarou imortal herdaria o prazo de fundo.
+func TestLinhaImortalNaoHerdaADuracaoDeFundo(t *testing.T) {
+	s, rel := storeComRegras(t, t.TempDir(), time.Hour)
+	id, _ := mustPut(t, s, "A", 1, payloadComPrazo(t, s, "A", rel.t, 0), nil)
+
+	rel.avanca(48 * time.Hour)
+	if s.prazoVencido(id) {
+		t.Error("a linha imortal caiu na duração de fundo: o sentinela não está sendo distinguido")
+	}
+	if _, _, ok, err := s.GetByRowID(id, nil); err != nil || !ok {
+		t.Errorf("a linha imortal sumiu da leitura: ok=%v err=%v", ok, err)
+	}
+}
+
+// O índice é DERIVADO: a fonte da verdade é o campo no payload, e o replay do
+// tail repõe as mesmas durações pelo mesmo applyRecord.
+func TestReplayDoTailReconstroiOsPrazos(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		Dir:            dir,
+		SegmentSize:    1 << 20,
+		TTLAtivo:       true,
+		DuracaoDeFundo: 7 * 24 * time.Hour,
+		CampoDeEscrita: "_writtenAt",
+		CampoDePrazo:   "_expiresIn",
+	}
+	s, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rel := &relogioDeTeste{t: time.Date(2026, 8, 22, 20, 0, 0, 0, time.UTC)}
+	s.UsaRelogio(rel.agora)
+	id, _ := mustPut(t, s, "A", 1, payloadComPrazo(t, s, "A", rel.t, 3*time.Minute), nil)
+	// Close SEM checkpoint: o índice em heap morre e só os records sobrevivem.
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s2, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s2.Close() })
+	rel2 := &relogioDeTeste{t: rel.t.Add(4 * time.Minute)}
+	s2.UsaRelogio(rel2.agora)
+	if !s2.prazoVencido(id) {
+		t.Error("o replay não repôs a duração de 3m: a linha ganhou o prazo de fundo")
+	}
+}
+
+// A visibilidade NÃO depende do agendador: uma linha some assim que o prazo
+// DELA passa, mesmo com o coletor parado.
+func TestPrazoVencidoEscondeALinhaComOColetorParado(t *testing.T) {
+	s, rel := storeComRegras(t, t.TempDir(), 7*24*time.Hour)
+	id, _ := mustPut(t, s, "A", 1, payloadComPrazo(t, s, "A", rel.t, 3*time.Minute), nil)
+
+	if _, _, ok, _ := s.GetByRowID(id, nil); !ok {
+		t.Fatal("a linha nem apareceu")
+	}
+	rel.avanca(4 * time.Minute)
+	if _, _, ok, err := s.GetByRowID(id, nil); err != nil || ok {
+		t.Errorf("a linha vencida continua visível: ok=%v err=%v", ok, err)
+	}
+	if rows := collectRows(t, s.ScanLive()); len(rows) != 0 {
+		t.Errorf("ScanLive devolveu a linha vencida: %v", rows)
+	}
+}
+
+// A escrita seguinte reescreve o prazo, e é isso que CANCELA a expiração curta
+// quando a condição deixa de valer.
+func TestEscritaComOutroPrazoCancelaAExpiracaoCurta(t *testing.T) {
+	s, rel := storeComRegras(t, t.TempDir(), 7*24*time.Hour)
+	id, _ := mustPut(t, s, "A", 1, payloadComPrazo(t, s, "A", rel.t, 3*time.Minute), nil)
+
+	rel.avanca(90 * time.Second)
+	rec, _, pres, err := s.Estado([]byte("A"), nil)
+	if err != nil || pres != types.PresencaViva {
+		t.Fatalf("pres=%v err=%v", pres, err)
+	}
+	if _, _, err := s.Put([]byte("A"), 2, 0, payloadComPrazo(t, s, "A", rel.t, 7*24*time.Hour), &rec); err != nil {
+		t.Fatal(err)
+	}
+
+	rel.avanca(4 * time.Minute) // muito além dos 3m originais
+	if s.prazoVencido(id) {
+		t.Error("a entidade morreu pelo prazo antigo depois de a condição deixar de valer")
+	}
+}
+
+// A compaction descarta o record vencido pela regra da própria linha.
+func TestCompactionDescartaRecordVencidoPorRegraCondicional(t *testing.T) {
+	s, rel := storeComRegras(t, t.TempDir(), 7*24*time.Hour)
+	id, _ := mustPut(t, s, "A", 1, payloadComPrazo(t, s, "A", rel.t, 3*time.Minute), nil)
+
+	rel.avanca(4 * time.Minute)
+	r, err := s.ExpiraUmaPassada(context.Background(), LimitesDeExpiracao{
+		MaxPorPassada: 10, TempoPorPassada: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Expiradas != 1 {
+		t.Fatalf("passada expirou %d, quero 1 (%+v)", r.Expiradas, r)
+	}
+	if _, _, ok, _ := s.GetByRowID(id, nil); ok {
+		t.Error("a linha continua legível depois da lápide")
+	}
+}
