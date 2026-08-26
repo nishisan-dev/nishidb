@@ -225,6 +225,12 @@ type binder struct {
 	sc     *schema.Compiled
 	params []types.Value
 
+	// semParams marca o bind de uma CONDIÇÃO solta, que não tem quem forneça
+	// parâmetro posicional. A recusa precisa acontecer no ponto em que o `?`
+	// aparece: mais tarde, a mensagem sairia como "parser inconsistente" e
+	// mandaria o operador procurar um bug que não existe.
+	semParams bool
+
 	usados   map[types.FieldID]struct{}
 	arena    []byte
 	nParams  int      // comparações com parâmetro (invariante contra ParamCount)
@@ -615,6 +621,9 @@ func (b *binder) like(n *parser.LikeExpr) (BoundExpr, error) {
 	case parser.OperandString:
 		pat = []byte(n.Pattern.S)
 	case parser.OperandParam:
+		if b.semParams {
+			return nil, errAt(n.Pattern.Pos, "condição não aceita parâmetro posicional")
+		}
 		idx := n.Pattern.ParamIdx
 		if idx < 0 || idx >= len(b.params) {
 			return nil, errNoPos("parser inconsistente: ParamIdx=%d fora de [0,%d)", idx, len(b.params))
@@ -651,6 +660,9 @@ func (b *binder) comparacao(n *parser.Comparison) (BoundExpr, error) {
 		antes = len(b.arena)
 	)
 	if n.Operand.Kind == parser.OperandParam {
+		if b.semParams {
+			return nil, errAt(n.Operand.Pos, "condição não aceita parâmetro posicional")
+		}
 		idx := n.Operand.ParamIdx
 		if idx < 0 || idx >= len(b.params) {
 			return nil, errNoPos("parser inconsistente: ParamIdx=%d fora de [0,%d)", idx, len(b.params))
@@ -780,18 +792,26 @@ func (b *binder) preencheSlots(bq *BoundQuery) {
 		slot, _ := bq.Slots.Index(bq.OrderBy[i].Field.ID)
 		bq.OrderBy[i].Slot = slot
 	}
+	b.preencheSlotsDaExpr(bq.Where, bq.Slots)
+}
+
+// preencheSlotsDaExpr numera os slots de uma expressão contra um conjunto já
+// fechado. Vive separada porque tem DOIS chamadores — o WHERE de uma query e
+// a condição solta de uma regra de TTL —, e duas cópias divergiriam no dia em
+// que um nó novo entrasse no bound-AST.
+func (b *binder) preencheSlotsDaExpr(e BoundExpr, s Slots) {
 	// Percurso com PILHA EXPLÍCITA, pela mesma razão que o expr percorre a
 	// espinha iterativamente: uma cadeia de 50 mil termos é uma árvore de 50
 	// mil níveis, e um walk recursivo aqui gastaria um frame por termo —
 	// desfazendo, na segunda passada, o cuidado tomado na primeira.
-	// Query SEM WHERE tem bq.Where nil, e empilhá-lo faria o `default` abaixo
+	// Query SEM WHERE tem Where nil, e empilhá-lo faria o `default` abaixo
 	// entrar em pânico com um <nil>. Antes de o default existir, o nil caía no
 	// switch em silêncio — o que funcionava por acidente, e escondia que a
 	// pilha podia carregar algo que nenhum case trata.
-	if bq.Where == nil {
+	if e == nil {
 		return
 	}
-	pilha := []BoundExpr{bq.Where}
+	pilha := []BoundExpr{e}
 	for len(pilha) > 0 {
 		e := pilha[len(pilha)-1]
 		pilha = pilha[:len(pilha)-1]
@@ -799,11 +819,11 @@ func (b *binder) preencheSlots(bq *BoundQuery) {
 		case *BoundLogical:
 			pilha = append(pilha, n.Left, n.Right)
 		case *BoundComparison:
-			n.Slot, _ = bq.Slots.Index(n.Field.ID)
+			n.Slot, _ = s.Index(n.Field.ID)
 		case *BoundNullCheck:
-			n.Slot, _ = bq.Slots.Index(n.Field.ID)
+			n.Slot, _ = s.Index(n.Field.ID)
 		case *BoundLike:
-			n.Slot, _ = bq.Slots.Index(n.Field.ID)
+			n.Slot, _ = s.Index(n.Field.ID)
 		default:
 			// Nó novo sem case aqui é FALHA SILENCIOSA, e a pior espécie: o
 			// Slot fica em 0, o predicado testa o campo de MENOR FieldID da
