@@ -2,9 +2,11 @@ package meta_test
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/nishisan-dev/nishidb/internal/materializer"
 	"github.com/nishisan-dev/nishidb/internal/query/executor"
 	"github.com/nishisan-dev/nishidb/internal/query/meta"
 	"github.com/nishisan-dev/nishidb/internal/query/parser"
@@ -93,6 +95,13 @@ func texto(v types.Value) string {
 			return "true"
 		}
 		return "false"
+	case types.TypeInt64:
+		// Sem este ramo, o `default` abaixo devolvia string(v.Bytes) — vazio
+		// para todo tipo que carrega o valor em I64 —, e uma asserção sobre
+		// uma coluna int64 comparava "" com "" e passava por vacuidade. Foi
+		// assim que `id` conviveu com o helper desde o começo, sem ninguém
+		// afirmar nada sobre ela.
+		return strconv.FormatInt(v.I64, 10)
 	default:
 		return string(v.Bytes)
 	}
@@ -254,5 +263,124 @@ func TestCampoDeTopoTemParentNulo(t *testing.T) {
 	}
 	if len(got) < 2 {
 		t.Fatalf("campos de topo = %d, quer id e doc pelo menos", len(got))
+	}
+}
+
+// alvoComDerivadasYAML declara um campo json com extração e descoberta, que é
+// o que faz as colunas de contador terem sobre o que falar.
+const alvoComDerivadasYAML = `version: 1
+name: eventos
+materialization:
+  key:
+    field: id
+schema:
+  include: ["*"]
+  unknownFields: include
+  fields:
+    id:
+      type: string
+    doc:
+      type: json
+      unknownFields: include
+      extract:
+        - path: tally
+          type: int64
+`
+
+func alvoComDerivadas(t *testing.T) *schema.Compiled {
+	t.Helper()
+	s, err := schema.Parse([]byte(alvoComDerivadasYAML), schema.DefaultsPadrao)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := s.Compile(fakestorage.NewDict())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+// TestContadoresDeColunaSaemPorSQL é a consulta que o documento de melhorias
+// pediu, e a razão de as duas colunas existirem: o contador por DATASET diz
+// "2.085.138 valores perdidos" e não diz qual das ~1.700 colunas respondeu por
+// isso. Sem atribuição, o número é alarme sem endereço.
+func TestContadoresDeColunaSaemPorSQL(t *testing.T) {
+	c := alvoComDerivadas(t)
+	m := materializer.New(c, fakestorage.New(fakestorage.Indexes{}))
+
+	// tally recebe três inteiros e dois textos: 5 ocorrências, 2 divergências.
+	for _, ev := range []string{
+		`{"id":"A","doc":{"tally":1}}`,
+		`{"id":"B","doc":{"tally":2}}`,
+		`{"id":"C","doc":{"tally":3}}`,
+		`{"id":"D","doc":{"tally":"nao numerico"}}`,
+		`{"id":"E","doc":{"tally":"outro texto"}}`,
+	} {
+		if r := m.Apply([]byte(ev)); r.Err != nil {
+			t.Fatalf("Apply(%s): %v", ev, r.Err)
+		}
+	}
+
+	achou := false
+	for _, l := range linhas(t, "SELECT name, occurrences, typeMismatches FROM _meta.fields", c) {
+		if l["name"] != "tally" {
+			continue
+		}
+		achou = true
+		if l["occurrences"] != "5" {
+			t.Errorf("occurrences = %q, quer 5 (toda vez que a chave apareceu)", l["occurrences"])
+		}
+		if l["typeMismatches"] != "2" {
+			t.Errorf("typeMismatches = %q, quer 2", l["typeMismatches"])
+		}
+	}
+	if !achou {
+		t.Fatal("a coluna derivada `tally` não apareceu em _meta.fields")
+	}
+}
+
+// TestDivergenciaEhSubconjuntoDaOcorrencia é a razão de occurrences contar a
+// APARIÇÃO da chave e não a materialização bem-sucedida.
+//
+// Contando o sucesso, o denominador de "2.315 de 2.383" viraria uma soma na
+// cabeça de quem consulta — e a tabela existe justamente para que a decisão de
+// tipo saia de SQL em vez de script.
+func TestDivergenciaEhSubconjuntoDaOcorrencia(t *testing.T) {
+	c := alvoComDerivadas(t)
+	m := materializer.New(c, fakestorage.New(fakestorage.Indexes{}))
+	for _, ev := range []string{
+		`{"id":"A","doc":{"tally":1}}`,
+		`{"id":"B","doc":{"tally":"texto"}}`,
+	} {
+		if r := m.Apply([]byte(ev)); r.Err != nil {
+			t.Fatalf("Apply(%s): %v", ev, r.Err)
+		}
+	}
+	for _, l := range linhas(t, "SELECT name, occurrences, typeMismatches FROM _meta.fields", c) {
+		if l["name"] != "tally" {
+			continue
+		}
+		if l["occurrences"] != "2" || l["typeMismatches"] != "1" {
+			t.Errorf("occurrences=%q typeMismatches=%q, quer 2 e 1", l["occurrences"], l["typeMismatches"])
+		}
+	}
+}
+
+// Campo de TOPO sai com os contadores NULOS, não zerados.
+//
+// Zero é indistinguível de "a chave nunca apareceu", e a coluna mentiria com um
+// número em vez de calar — o mesmo argumento que já mantém `parent` ausente no
+// topo. Efeito colateral bem-vindo: `WHERE typeMismatches > 0` filtra o topo
+// naturalmente.
+func TestCampoDeTopoTemContadoresNulosENaoZerados(t *testing.T) {
+	c := alvoComDerivadas(t)
+	for _, l := range linhas(t, "SELECT name, parent, occurrences, typeMismatches FROM _meta.fields", c) {
+		if l["parent"] != "" {
+			continue // é derivada
+		}
+		if l["occurrences"] != "" || l["typeMismatches"] != "" {
+			t.Errorf("campo de topo %q saiu com occurrences=%q typeMismatches=%q, quer os dois NULOS",
+				l["name"], l["occurrences"], l["typeMismatches"])
+		}
 	}
 }
