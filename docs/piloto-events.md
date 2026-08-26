@@ -181,6 +181,92 @@ nishidb query --server 127.0.0.1:9142 --dataset events \
 Literal em outra grafia é **erro de bind**, com a mensagem nomeando o format
 declarado — nunca resultado vazio, que pareceria resposta.
 
+## Recriação com índice hash e tipos declarados (26/08/2026)
+
+Quarta recriação do dataset, e a primeira que serve a duas coisas de uma vez.
+
+### O que mudou
+
+**`node` passou a ter índice hash de verdade.** Ele sempre esteve declarado
+`index: hash`, e até aqui isso era metadado sem efeito — o planner tinha a
+regra, o executor sabia consumir, e o `Store` não implementava a capability
+(débito 19). Toda igualdade sobre `node` degradava para varredura, que é a
+causa do `SQL Error [57014] ... context deadline exceeded` visto em produção.
+
+Medido depois da recriação, com 31 mil linhas: a mesma consulta responde em
+**11 ms pelo índice contra 585 ms pela varredura**, com resultado idêntico. A
+razão cresce linearmente com o dataset — em 2,4 milhões de linhas é da ordem de
+mil vezes.
+
+O custo em disco é o argumento que o `index: hash` sempre teve: o índice ocupa
+**~1 MB por milhão de postings**, contra os **~9,6 GB** que um bitmap custaria
+para os 4.376+ valores distintos de `node`.
+
+### As 25 chaves declaradas, e a regra que decidiu quase todas
+
+O `persistent` ganhou um bloco `extract` com 25 caminhos. A escolha NÃO foi
+"qual tipo é maioria": ela saiu da assimetria da coerção, que é o contrário do
+que a intuição sugere.
+
+**`int64` e `double` aceitam número JSON E string numérica; `string` aceita só
+string.** Então para uma chave que chega ora como `5`, ora como `"5"`, declarar
+o tipo NUMÉRICO recupera as duas formas, e declarar `string` recupera metade.
+
+Recuperação medida sobre 30.000 documentos reais, antes de tocar o piloto:
+
+| chave | perdia | recupera | tipo |
+|---|---:|---:|---|
+| `codigoGrupoResponsavel` | 84,5% | **100%** | `int64` |
+| `ti` | 54,6% | **100%** | `int64` |
+| `severidade` | 41,3% | **100%** | `int64` |
+| `dataClear` | 25,5% | **98,9%** | `datetime` |
+| `dataFalha` | 14,0% | **98,9%** | `datetime` |
+| `slot` | 6,9% | 76,5% | `string` |
+
+**`slot` fica `string` de propósito**, mesmo com 23% de `int64` a recuperar: os
+valores têm zero à esquerda (`"07"`), e o `int64` os aceita NORMALIZANDO para
+`7` — o que tornaria `WHERE slot = '07'` impossível. Recuperar 23% a mais não
+paga perder a grafia.
+
+**As datas viraram `datetime`** com o mesmo `format` de `firstSeen`/`lastSeen`.
+Isso recupera o valor E dá ordem cronológica, que `string` não daria: como
+texto, `Aug` < `Dec` < `Feb`.
+
+**Os contadores (`curtoTally`, TTLs) ficam `int64` e a perda é aceita.** São
+`int64` em 97%, com `double` na cauda que o `int64` recusa — 0,8% medido.
+Declarar `double` recuperaria esses 0,8% ao preço de transformar todo contador
+em ponto flutuante, e um Tally é inteiro.
+
+### O resultado agregado
+
+`nestedTypeMismatch` caiu de **0,21 para 0,047 por evento** — 78% de redução.
+O documento de melhorias previa ~0,01 declarando as dez piores; declaramos 25 e
+chegamos a 0,047. A diferença é honesta e tem explicação: aquela previsão saiu
+de uma distribuição em que `dataFalha` sozinho respondia por 65% da perda, e a
+recriação refixou os tipos por sorte de qual evento chegou primeiro — a
+distribuição de hoje é outra.
+
+### Como a decisão foi tomada, e por que ela é repetível agora
+
+Pela primeira vez a lista quente saiu de **SQL sobre o dataset inteiro**, e não
+de um script descartável sobre amostra:
+
+```sql
+SELECT name, type, occurrences, typeMismatches FROM _meta.fields
+WHERE parent = 'persistent' AND typeMismatches > 0 ORDER BY typeMismatches DESC
+```
+
+Ela contradisse a tabela do documento original em três pontos:
+`codigoGrupoResponsavel` e `frontSATotal` precisavam ser **numéricos** e não
+`string`, e `ti` e `severidade` **não estavam na lista** — o script de amostra
+nunca as tinha visto.
+
+O contador diz QUE o tipo está errado, não QUAL é o certo; para isso ainda foi
+preciso uma amostra dirigida de 30.000 documentos, agora só sobre as chaves que
+o SQL apontou. É muito menos trabalho que a varredura cega anterior, e é o que
+a "Pergunta em aberto 3" do documento de melhorias descreve como alternativa ao
+contador por (coluna, tipo).
+
 ## Limites conhecidos deste piloto
 
 - **Sem autenticação e sem TLS** (Fase 11). Loopback é a única proteção, e por
@@ -211,7 +297,7 @@ declarado — nunca resultado vazio, que pareceria resposta.
     — 8 B por rowId alocado, e com 90 dias a resolução de 1 minuto é
     irrelevante, então ela roda de hora em hora.
 - ~~**Sem índice hash físico** (débito 19): consulta por `node` é full scan.~~ **O débito 19 FECHOU**: o índice hash físico existe e a consulta por `node` passa pelo índice. Vale para dataset CRIADO com o campo declarado — a abertura recusa acrescentar `index: hash` a um dataset que já tem linhas, porque o índice cobriria só o que vier depois.
-- **Sem `ORDER BY`, `GROUP BY` ou agregações** na v1 (§9, §59).
+- **Sem `GROUP BY` nem agregações** (§9). `ORDER BY`, `OFFSET` e `LIKE` entraram no ciclo M6.
 - **O binário não sabe dizer sua versão**: não há `--version`, então não há como
   correlacionar o que está no ar com um commit.
 
