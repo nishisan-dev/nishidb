@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/query/binder"
 	"github.com/nishisan-dev/nishidb/internal/query/executor"
@@ -30,6 +31,10 @@ func bqOrdenada(t *testing.T, c *schema.Compiled, maxRows int64) *binder.BoundQu
 			Field: nome, Slot: 1, Kind: binder.CompareBytes, Want: types.TypeString}},
 		MaxRows:        maxRows,
 		EffectiveLimit: maxRows,
+		// A guarda de prazo do executor recusa query ligada sem Timeout: um
+		// zero aqui significaria "sem limite", que é exatamente o que a query
+		// longa passou a NÃO admitir por omissão.
+		Timeout: 30 * time.Second,
 	}
 }
 
