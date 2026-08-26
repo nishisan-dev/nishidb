@@ -1470,7 +1470,7 @@ func seladosEmDisco(t *testing.T, dir string, corrente uint32) []uint32 {
 func chaveDoCorpus(i int) string           { return fmt.Sprintf("e2e-%04d", i) }
 func sequenceDoCorpus(rodada, i int) int64 { return int64(rodada*10000 + i) }
 
-func payloadDoCorpus(t *testing.T, s *Store, key string, rodada int) []byte {
+func payloadDoCorpus(t testing.TB, s *Store, key string, rodada int) []byte {
 	t.Helper()
 	return statusPayload(t, s, key, fmt.Sprintf("R%02d", rodada), int64(rodada))
 }
