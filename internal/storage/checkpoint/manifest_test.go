@@ -101,12 +101,33 @@ func TestManifestReservaACapacidadeDoLayoutQueGrava(t *testing.T) {
 
 	m := sampleManifest()
 	b := m.encode()
-	reservado := 96 + len(m.Segments)*36 + len(m.Bitmaps)*10
+	reservado := 96 + len(m.Segments)*36 + len(m.Bitmaps)*10 + TamanhoDaCaudaTLV(&m)
 	if len(b) > reservado {
 		t.Fatalf("o encode produziu %d bytes com reserva de %d: a fórmula não cobre o layout", len(b), reservado)
 	}
 	if cap(b) != reservado {
 		t.Errorf("cap = %d com reserva de %d: o append realocou no caminho do checkpoint", cap(b), reservado)
+	}
+
+	// A cauda TLV entrou na fórmula pela MESMA razão que os 36 bytes por
+	// segmento: ela é conteúdo novo no encode, e uma reserva que a ignorasse
+	// faria o append realocar em todo checkpoint de dataset com índice hash —
+	// o desperdício silencioso que este teste existe para acusar. O termo é
+	// TamanhoDaCaudaTLV, e não um literal, porque duplicar a conta foi
+	// exatamente o que deixou a capacidade em 12 quando o layout já gravava
+	// 36.
+	comHash := sampleManifest()
+	comHash.Hashes = []HashInfo{{FieldID: 4, SlotCount: 1 << 10}, {FieldID: 9, SlotCount: 1 << 14}}
+	bh := comHash.encode()
+	reservadoComHash := 96 + len(comHash.Segments)*36 + len(comHash.Bitmaps)*10 + TamanhoDaCaudaTLV(&comHash)
+	if len(bh) > reservadoComHash {
+		t.Fatalf("com cauda o encode produziu %d bytes com reserva de %d", len(bh), reservadoComHash)
+	}
+	if cap(bh) != reservadoComHash {
+		t.Errorf("cap = %d com reserva de %d: o append realocou com a cauda TLV", cap(bh), reservadoComHash)
+	}
+	if passo := len(bh) - len(b); passo != TamanhoDaCaudaTLV(&comHash) {
+		t.Errorf("a cauda ocupou %d bytes; TamanhoDaCaudaTLV declara %d", passo, TamanhoDaCaudaTLV(&comHash))
 	}
 }
 
@@ -123,6 +144,10 @@ func TestManifestGoldenHeader(t *testing.T) {
 	if !bytes.Equal(raw[0:4], []byte("NDBM")) {
 		t.Fatalf("magic: %q", raw[0:4])
 	}
+	// A asserção sobre raw[4] continua sendo 1, e a cauda TLV não a afrouxou:
+	// o sampleManifest não declara índice hash, então não há cauda a emitir e a
+	// versão gravada é a mesma de sempre. Quem cobre o outro lado — cauda
+	// presente obriga v2 — é o TestManifestComHashSobeParaV2.
 	if raw[4] != 1 {
 		t.Fatalf("version: %d", raw[4])
 	}

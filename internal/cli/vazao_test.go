@@ -203,16 +203,17 @@ func umaRodadaDireta(t *testing.T, entrada string) float64 {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var bitmaps []string
-	for campo, f := range spec.Schema.Fields {
-		if f.Index == "bitmap" {
-			bitmaps = append(bitmaps, campo)
-		}
-	}
+	// As duas listas saem de schema.CamposComBitmap/CamposComHash, e não de um
+	// laço local: um helper de teste que abre o dataset com um conjunto de
+	// índices diferente do que o servidor usa reproduz, dentro da suíte, o
+	// modo de falha cruzado que aquelas funções existem para impedir.
+	bitmaps := schema.CamposComBitmap(spec)
+	hashes := schema.CamposComHash(spec)
 	st, err := storage.Open(storage.Options{
 		Dir:              t.TempDir(),
 		SegmentSize:      8 << 20,
 		BitmapFieldNames: bitmaps,
+		HashFieldNames:   hashes,
 	})
 	if err != nil {
 		t.Fatal(err)

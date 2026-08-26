@@ -23,7 +23,7 @@ var ErrCorruptManifest = errors.New("checkpoint: manifest corrompido")
 // Layout do manifest.bin (little-endian):
 //
 //	0   4  magic "NDBM"
-//	4   1  version = 1
+//	4   1  version = 1 (sem cauda) ou 2 (com cauda TLV)
 //	5   3  reserved
 //	8   8  epoch (u64)
 //	16  8  createdAtUnixMs (i64)
@@ -38,9 +38,47 @@ var ErrCorruptManifest = errors.New("checkpoint: manifest corrompido")
 //	    fieldDictValidBytes i64
 //	    bitmapCount u16 | por bitmap: fieldID u16 | valuesDictValidBytes i64
 //	    kafkaCount u32 (=0, reservado p/ M3)
+//	    [cauda TLV, só na v2 — ver abaixo]
 //	    crc32c u32 (sobre tudo acima)
+//
+// A CAUDA TLV é o ponto de extensão do formato, e existe para que uma seção
+// nova (a primeira é o conjunto de índices hash) não obrigue a reescrever o
+// corpo nem a condenar todo manifest já gravado. Cada registro é
+// `tag u16 | len u32 | len bytes`, e a tag carrega a política de
+// compatibilidade no bit mais alto:
+//
+//	tag <  0x8000  IGNORÁVEL: um binário que não a conhece pula os bytes e
+//	               segue. Serve para informação puramente descritiva.
+//	tag >= 0x8000  CRÍTICA: um binário que não a conhece RECUSA o manifest.
+//	               Serve para o que muda o significado do dataset — a seção
+//	               de hashes é 0x8001 porque abrir o dataset ignorando-a
+//	               faria o índice parar de ser atualizado e reaparecer
+//	               INCOMPLETO, que é o mesmo modo de falha que o
+//	               AllowBitmapDrop existe para tornar deliberado.
+//
+// O byte de versão acompanha: um manifest SEM cauda continua saindo como v1,
+// byte a byte igual ao que a versão anterior do binário gravava. É isso que
+// preserva o rollback — enquanto ninguém declarar índice hash, um binário
+// antigo abre o dataset normalmente. A partir da primeira cauda o manifest é
+// v2, e o binário antigo recusa com "version desconhecida", que é a resposta
+// certa: ele não sabe manter o índice que o dataset tem.
 const (
-	manifestVersion = 1
+	// manifestV1 é o corpo sem cauda; manifestV2 é o corpo IDÊNTICO mais a
+	// cauda TLV. Não há v2 sem cauda: emitir a versão nova com cauda vazia
+	// quebraria o rollback sem nada em troca.
+	manifestV1 = 1
+	manifestV2 = 2
+
+	// tagCritica é o bit que separa as duas políticas acima.
+	tagCritica = 0x8000
+	// tagHashes é a seção do conjunto de índices hash (§ índice hash físico).
+	tagHashes = 0x8001
+
+	// tlvHeaderSize é `tag u16 | len u32`.
+	tlvHeaderSize = 6
+	// hashInfoSize é `fieldID u16 | slotCount u64`, o mesmo tamanho de uma
+	// entrada de bitmap.
+	hashInfoSize = 10
 )
 
 var (
@@ -91,6 +129,19 @@ type BitmapInfo struct {
 	ValuesDictValidBytes int64
 }
 
+// HashInfo descreve um índice hash secundário no manifest.
+//
+// SlotCount é ADVISORY, pela mesma razão do PrimarySlotCount: a fonte de
+// verdade é o header do arquivo do índice, e um rehash pós-checkpoint deixa o
+// manifest para trás — divergência é esperada, não erro. O que o manifest
+// carrega de load-bearing aqui é o CONJUNTO de FieldIDs: é ele que permite
+// recusar uma abertura que abandone um índice existente ou que declare um
+// índice novo sobre um dataset que já tem linhas.
+type HashInfo struct {
+	FieldID   types.FieldID
+	SlotCount uint64
+}
+
 // Manifest é o estado amarrado por um checkpoint.
 type Manifest struct {
 	Epoch               uint64
@@ -105,6 +156,34 @@ type Manifest struct {
 	HashKind            uint8
 	FieldDictValidBytes int64
 	Bitmaps             []BitmapInfo
+	// Hashes é a primeira seção da cauda TLV. Vazia mantém o manifest na v1,
+	// byte a byte igual ao que o binário anterior gravava.
+	Hashes []HashInfo
+}
+
+// TamanhoDaCaudaTLV devolve quantos bytes a cauda ocupa neste manifest, e
+// ZERO quando não há seção nenhuma — que é o caso em que o manifest continua
+// sendo v1.
+//
+// É exportado porque é metade da fórmula de reserva do encode, e a outra
+// metade vive no teste que trava a reserva. Deixar a conta duplicada foi
+// exatamente o defeito que deixou a capacidade em 12 quando o layout já
+// gravava 36 por segmento.
+func TamanhoDaCaudaTLV(m *Manifest) int {
+	if len(m.Hashes) == 0 {
+		return 0
+	}
+	// tag+len do registro, o u16 de contagem e as entradas.
+	return tlvHeaderSize + 2 + len(m.Hashes)*hashInfoSize
+}
+
+// versao decide o byte 4. Ver o comentário de layout: v1 enquanto não houver
+// cauda, para que o rollback continue possível.
+func (m *Manifest) versao() uint8 {
+	if TamanhoDaCaudaTLV(m) == 0 {
+		return manifestV1
+	}
+	return manifestV2
 }
 
 func (m *Manifest) encode() []byte {
@@ -112,9 +191,9 @@ func (m *Manifest) encode() []byte {
 	// liveness da S14. A capacidade estava em 12 e ficou para trás: não
 	// corrompia nada, mas fazia o append realocar em todo manifest com
 	// segmento — desperdício silencioso no caminho do checkpoint.
-	b := make([]byte, 0, 96+len(m.Segments)*36+len(m.Bitmaps)*10)
+	b := make([]byte, 0, 96+len(m.Segments)*36+len(m.Bitmaps)*10+TamanhoDaCaudaTLV(m))
 	b = append(b, manifestMagic[:]...)
-	b = append(b, manifestVersion, 0, 0, 0)
+	b = append(b, m.versao(), 0, 0, 0)
 	b = binary.LittleEndian.AppendUint64(b, m.Epoch)
 	b = binary.LittleEndian.AppendUint64(b, uint64(m.CreatedAtUnixMs))
 	b = binary.LittleEndian.AppendUint64(b, m.NextRowID)
@@ -139,7 +218,25 @@ func (m *Manifest) encode() []byte {
 		b = binary.LittleEndian.AppendUint64(b, uint64(bm.ValuesDictValidBytes))
 	}
 	b = binary.LittleEndian.AppendUint32(b, 0) // kafkaCount (M3)
+	b = m.appendCauda(b)
 	return binary.LittleEndian.AppendUint32(b, crc32.Checksum(b, castagnoli))
+}
+
+// appendCauda grava os registros TLV. Nada é emitido quando não há seção: um
+// registro de comprimento zero já bastaria para levar o manifest à v2 e matar
+// o rollback sem entregar informação nenhuma.
+func (m *Manifest) appendCauda(b []byte) []byte {
+	if len(m.Hashes) == 0 {
+		return b
+	}
+	b = binary.LittleEndian.AppendUint16(b, tagHashes)
+	b = binary.LittleEndian.AppendUint32(b, uint32(2+len(m.Hashes)*hashInfoSize))
+	b = binary.LittleEndian.AppendUint16(b, uint16(len(m.Hashes)))
+	for _, h := range m.Hashes {
+		b = binary.LittleEndian.AppendUint16(b, uint16(h.FieldID))
+		b = binary.LittleEndian.AppendUint64(b, h.SlotCount)
+	}
+	return b
 }
 
 // reader é um cursor de decodificação com detecção de truncamento.
@@ -168,7 +265,7 @@ func decode(raw []byte) (*Manifest, error) {
 	if len(raw) < 8 || [4]byte(raw[0:4]) != manifestMagic {
 		return nil, fmt.Errorf("%w: magic inválida", ErrCorruptManifest)
 	}
-	if raw[4] != manifestVersion {
+	if raw[4] != manifestV1 && raw[4] != manifestV2 {
 		return nil, fmt.Errorf("%w: version desconhecida %d", ErrCorruptManifest, raw[4])
 	}
 	if len(raw) < 12 {
@@ -217,10 +314,67 @@ func decode(raw []byte) (*Manifest, error) {
 	if kafka := r.u32(); kafka != 0 {
 		return nil, fmt.Errorf("%w: seção kafka inesperada (%d)", ErrCorruptManifest, kafka)
 	}
+	if err := decodeCauda(r, m); err != nil {
+		return nil, err
+	}
 	if r.bad || r.pos != len(body) {
 		return nil, fmt.Errorf("%w: tamanho inconsistente (pos=%d body=%d)", ErrCorruptManifest, r.pos, len(body))
 	}
 	return m, nil
+}
+
+// decodeCauda percorre os registros TLV até o fim do corpo. Um manifest v1
+// simplesmente não entra no laço: o corpo acaba no kafkaCount.
+//
+// A checagem de comprimento é feita ANTES de consumir o payload de propósito.
+// O `take` do reader devolve zeros e marca `bad` quando estoura, o que
+// bastaria para reprovar no fim — mas com um len adulterado para perto de
+// 4 GiB o laço só descobriria isso depois de tentar avançar o cursor por
+// aquele tanto, e um manifest corrompido não pode custar mais que a leitura
+// dos bytes que ele de fato tem.
+func decodeCauda(r *reader, m *Manifest) error {
+	for r.pos < len(r.b) && !r.bad {
+		tag := r.u16()
+		n := r.u32()
+		if r.bad || uint64(r.pos)+uint64(n) > uint64(len(r.b)) {
+			return fmt.Errorf("%w: registro TLV de tag %#04x declara %d bytes, além do fim do manifest", ErrCorruptManifest, tag, n)
+		}
+		payload := r.take(int(n))
+		switch {
+		case tag == tagHashes:
+			if err := decodeHashes(payload, m); err != nil {
+				return err
+			}
+		case tag&tagCritica != 0:
+			// Ignorar uma seção crítica desconhecida é o modo de falha que
+			// esta política existe para impedir: o dataset teria um índice
+			// que esta abertura não mantém, e ele reapareceria INCOMPLETO.
+			return fmt.Errorf("%w: seção crítica %#04x desconhecida por esta versão; o dataset foi escrito por um binário mais novo",
+				ErrCorruptManifest, tag)
+		}
+		// Tag ignorável desconhecida: os bytes já foram pulados acima.
+	}
+	return nil
+}
+
+// decodeHashes lê a seção 0x8001.
+func decodeHashes(payload []byte, m *Manifest) error {
+	hr := &reader{b: payload}
+	n := int(hr.u16())
+	if hr.bad || 2+n*hashInfoSize != len(payload) {
+		return fmt.Errorf("%w: seção de hashes declara %d entradas em %d bytes", ErrCorruptManifest, n, len(payload))
+	}
+	m.Hashes = make([]HashInfo, 0, n)
+	for i := 0; i < n; i++ {
+		m.Hashes = append(m.Hashes, HashInfo{
+			FieldID:   types.FieldID(hr.u16()),
+			SlotCount: hr.u64(),
+		})
+	}
+	if hr.bad {
+		return fmt.Errorf("%w: seção de hashes truncada", ErrCorruptManifest)
+	}
+	return nil
 }
 
 // writeTrace é o seam de teste da ordem de durabilidade do Write (nil em

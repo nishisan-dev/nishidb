@@ -514,14 +514,31 @@ func nomeDaExtracao(pai string, i int, e ExtractSpec) (string, error) {
 //
 // A ORDEM é contrato, não estética: ela decide os FieldID de um dataset novo,
 // e o produto promete mapeamento determinístico para o mesmo spec.
-func CamposComBitmap(s *DatasetSpec) []string {
+func CamposComBitmap(s *DatasetSpec) []string { return camposComIndice(s, "bitmap") }
+
+// CamposComHash é o mesmo para o motor hash, e existe pelo MESMO modo de falha
+// cruzado: enquanto o índice hash não tinha motor, o `index: hash` era só um
+// rótulo e ninguém precisava listá-lo; agora o Store abre um arquivo por campo
+// e grava o conjunto no manifest, então um sítio que esquecesse de passar a
+// lista criaria o dataset COM o índice pelo servidor e faria o `nishidb query`
+// seguinte RECUSAR abrir — porque o Store não deixa passar manifest que declara
+// índice que a abertura não conhece.
+//
+// A ordem é contrato pelo mesmo motivo: ela decide os FieldID de um dataset
+// novo.
+func CamposComHash(s *DatasetSpec) []string { return camposComIndice(s, "hash") }
+
+// camposComIndice é o laço único dos dois. Uma cópia por motor é exatamente o
+// que produziu o defeito que o godoc do CamposComBitmap descreve — quatro
+// cópias do mesmo laço, nenhuma conhecendo a coluna derivada.
+func camposComIndice(s *DatasetSpec, motor string) []string {
 	var out []string
 	for nome, f := range s.Schema.Fields {
-		if f.Index == "bitmap" {
+		if f.Index == motor {
 			out = append(out, nome)
 		}
 		for i, e := range f.Extract {
-			if e.Index != "bitmap" {
+			if e.Index != motor {
 				continue
 			}
 			derivada, err := nomeDaExtracao(nome, i, e)

@@ -150,8 +150,9 @@ func (s *Store) Expira(rowID types.RowID) (expirou bool, err error) {
 //
 // Não preservar o RESTO é o que devolve disco (o payload grande morre) e o
 // que limpa os índices secundários: com o payload novo sem campo indexado
-// nenhum, todo campo do anterior cai no ramo "campo que sai" do
-// applyBitmapClears.
+// nenhum, todo campo do anterior cai no ramo "campo que sai" — do
+// applyBitmapClears e do applyHashClears, que é o mesmo diff rodado nos DOIS
+// motores.
 //
 // Usa o tombBuf, que é do writer e está sob o wmu — os dois chamadores (o
 // coletor e a compaction) já estão dentro da seção crítica.

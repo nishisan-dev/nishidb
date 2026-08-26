@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/nishisan-dev/nishidb/internal/index/valuekey"
 	"github.com/nishisan-dev/nishidb/internal/storage/mmap"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
@@ -45,48 +46,6 @@ var (
 	bmMagic    = [4]byte{'N', 'D', 'B', 'B'}
 	castagnoli = crc32.MakeTable(crc32.Castagnoli)
 )
-
-// ValidateValue informa se o valor pode ser indexado.
-//
-// O Store precisa chamar isto ANTES de tornar o record durável. Descobrir a
-// violação depois do append é fatal e não apenas inconveniente: o record
-// fica no segmento, o replay do tail tenta reindexá-lo a cada abertura,
-// falha pelo mesmo motivo, e o dataset inteiro passa a ser INABRÍVEL — um
-// único evento externo bastaria para isso, já que o teto é atingível com a
-// configuração default.
-func ValidateValue(v types.Value) error {
-	switch v.Type {
-	case types.TypeInt64, types.TypeDouble, types.TypeBool, types.TypeTimestamp:
-		return nil // largura fixa, sempre cabe
-	case types.TypeString, types.TypeBytes, types.TypeJSON,
-		types.TypeIPv4, types.TypeIPv6, types.TypeIPv4Prefix, types.TypeIPv6Prefix:
-		if len(v.Bytes) > types.MaxIndexedValueBytes {
-			// types.ErrTooLarge: é culpa do EVENTO, e é por esse sentinela
-			// que o materializer o separa do balde de "bug nosso" (§101).
-			return fmt.Errorf("%w: bitmap: valor de %d bytes excede o teto de %d do values.dict",
-				types.ErrTooLarge, len(v.Bytes), types.MaxIndexedValueBytes)
-		}
-		return nil
-	default:
-		return fmt.Errorf("bitmap: tipo %#x não indexável", v.Type)
-	}
-}
-
-// canonicalValue serializa a Value em bytes canônicos [type][payload] para
-// chavear o dicionário de valores.
-func canonicalValue(dst []byte, v types.Value) ([]byte, error) {
-	switch v.Type {
-	case types.TypeInt64, types.TypeDouble, types.TypeBool, types.TypeTimestamp:
-		dst = append(dst, byte(v.Type))
-		return binary.LittleEndian.AppendUint64(dst, uint64(v.I64)), nil
-	case types.TypeString, types.TypeBytes, types.TypeJSON,
-		types.TypeIPv4, types.TypeIPv6, types.TypeIPv4Prefix, types.TypeIPv6Prefix:
-		dst = append(dst, byte(v.Type))
-		return append(dst, v.Bytes...), nil
-	default:
-		return nil, fmt.Errorf("bitmap: tipo %#x não indexável", v.Type)
-	}
-}
 
 // dictFile é a superfície de arquivo do values.dict. É interface para
 // permitir que testes verifiquem a ORDEM das chamadas de durabilidade
@@ -287,7 +246,7 @@ func wordOff(rowID types.RowID) int64 { return bmHeaderSize + int64(rowID/64)*8 
 // Set liga o bit do rowId no bitmap do valor, alocando valueID/arquivo na
 // primeira ocorrência do valor. Exclusivo do writer.
 func (ix *Index) Set(v types.Value, rowID types.RowID) error {
-	key, err := canonicalValue(ix.scratch[:0], v)
+	key, err := valuekey.Append(ix.scratch[:0], v)
 	if err != nil {
 		return err
 	}
@@ -318,7 +277,7 @@ func (ix *Index) Set(v types.Value, rowID types.RowID) error {
 // bitmap ausente ou rowId além do arquivo são no-ops (nada a limpar).
 // Exclusivo do writer.
 func (ix *Index) Clear(v types.Value, rowID types.RowID) error {
-	key, err := canonicalValue(ix.scratch[:0], v)
+	key, err := valuekey.Append(ix.scratch[:0], v)
 	if err != nil {
 		return err
 	}
@@ -342,7 +301,7 @@ func (ix *Index) Clear(v types.Value, rowID types.RowID) error {
 // Lookup devolve um iterador ordenado de rowIds com o bit ligado.
 // ok=false indica valor nunca visto pelo índice.
 func (ix *Index) Lookup(v types.Value) (*Iterator, bool, error) {
-	key, err := canonicalValue(nil, v)
+	key, err := valuekey.Append(nil, v)
 	if err != nil {
 		return nil, false, err
 	}

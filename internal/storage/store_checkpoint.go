@@ -117,6 +117,26 @@ func (s *Store) checkpoint() error {
 	}); err != nil {
 		return s.failWriter(err)
 	}
+	// O hash entra ENTRE os bitmaps e o manifest, e o lugar não é arbitrário:
+	// o §10.2 exige que nenhuma página de índice referencie record não durável
+	// e que o manifest seja o ÚLTIMO passo. Um msync depois do manifest
+	// declararia durável um índice que ainda está em página suja.
+	//
+	// O passo é EMITIDO SEMPRE, mesmo sem índice hash algum, e isso é
+	// deliberado: o TestCheckpointOrdemDeDurabilidade fixa a SEQUÊNCIA de
+	// passos, e um passo que aparece só às vezes tornaria a sequência
+	// dependente da configuração do dataset — o teste passaria a provar o
+	// dataset dele, não o protocolo.
+	if err := s.traceStep("msyncHash", func() error {
+		for field, ix := range s.hashes {
+			if err := ix.Msync(); err != nil {
+				return fmt.Errorf("storage: msync do índice hash %d: %w", field, err)
+			}
+		}
+		return nil
+	}); err != nil {
+		return s.failWriter(err)
+	}
 
 	segs, err := segment.ListSegments(filepath.Join(s.opts.Dir, "data"))
 	if err != nil {
@@ -208,9 +228,18 @@ func (s *Store) checkpoint() error {
 			ValuesDictValidBytes: ix.DictSizeBytes(),
 		})
 	}
+	for field, ix := range s.hashes {
+		m.Hashes = append(m.Hashes, checkpoint.HashInfo{
+			FieldID:   field,
+			SlotCount: ix.SlotCount(),
+		})
+	}
 	// Ordem determinística: dois checkpoints do mesmo estado produzem
 	// manifests idênticos byte a byte.
 	slices.SortFunc(m.Bitmaps, func(a, b checkpoint.BitmapInfo) int {
+		return cmp.Compare(a.FieldID, b.FieldID)
+	})
+	slices.SortFunc(m.Hashes, func(a, b checkpoint.HashInfo) int {
 		return cmp.Compare(a.FieldID, b.FieldID)
 	})
 	if err := s.traceStep("manifest", func() error {

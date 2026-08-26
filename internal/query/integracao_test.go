@@ -142,6 +142,7 @@ func (ig *integracao) abre() {
 	st, err := storage.Open(storage.Options{
 		Dir:              ig.dir,
 		BitmapFieldNames: camposBitmap,
+		HashFieldNames:   camposHash,
 		EstimatedRows:    10_000,
 	})
 	if err != nil {
@@ -279,6 +280,52 @@ func TestIntegracaoFimAFim(t *testing.T) {
 		})
 		got := ig.ids(`SELECT id FROM radius_sessions WHERE status = 'Stop' OR status = 'Start'`)
 		comparaConjuntos(t, "união", got, want)
+	})
+
+	// A regra R2 do planner e o motor hash, ponta a ponta. Este subteste é a
+	// prova de que o débito 19 fechou: enquanto o *storage.Store não
+	// implementava LookupHash, `p.hash` era nil, o plano caía para FullScan e
+	// a query varria o dataset inteiro — no piloto, 17,8M linhas por uma
+	// consulta que o índice resolve num probe.
+	//
+	// O oráculo é o mesmo dos bitmaps, e é o que impede o teste de se
+	// contentar com "veio alguma coisa": o índice hash devolve SUPERSET por
+	// desenho, então um resultado A MAIS seria defeito da revalidação e um
+	// resultado A MENOS seria defeito do índice. As duas direções são
+	// conferidas pelo comparaConjuntos.
+	t.Run("hash scan escolhe o indice e acerta o conjunto", func(t *testing.T) {
+		alvo := algumValor(t, ig.oracle, "NAS-Identifier")
+		want := ig.oracle.keysOnde(func(e map[string]any) bool { return campoIgual(e, "NAS-Identifier", alvo) })
+		antes := ig.engine.PlanMetrics().HashIndex.Load()
+		fullAntes := ig.engine.PlanMetrics().FullScan.Load()
+
+		got := ig.ids(`SELECT id FROM radius_sessions WHERE nas = ?`,
+			types.Value{Type: types.TypeString, Bytes: []byte(alvo)})
+		comparaConjuntos(t, "hash scan", got, want)
+
+		// A métrica do planner é o observável do PLANO escolhido, e conferi-la
+		// é o que separa "o resultado está certo" de "o índice foi usado": um
+		// FullScan devolveria exatamente o mesmo conjunto, varrendo tudo.
+		if depois := ig.engine.PlanMetrics().HashIndex.Load(); depois != antes+1 {
+			t.Errorf("query.hash_index não contou o plano: %d → %d", antes, depois)
+		}
+		if depois := ig.engine.PlanMetrics().FullScan.Load(); depois != fullAntes {
+			t.Errorf("a query degradou para FullScan (%d → %d) com o campo indexado por hash", fullAntes, depois)
+		}
+	})
+
+	// Hash e bitmap no MESMO OR. É o caso que o godoc do LookupHash chama de
+	// invariante: o IndexUnionPlan funde os dois iteradores num unionIter que
+	// assume ordem crescente dos DOIS lados. Um deles desordenado produziria
+	// união incompleta em silêncio, e nenhum teste de um motor só a pegaria.
+	t.Run("uniao mistura hash e bitmap", func(t *testing.T) {
+		alvo := algumValor(t, ig.oracle, "NAS-Identifier")
+		want := ig.oracle.keysOnde(func(e map[string]any) bool {
+			return campoIgual(e, "NAS-Identifier", alvo) || campoIgual(e, "Acct-Status-Type", "Stop")
+		})
+		got := ig.ids(`SELECT id FROM radius_sessions WHERE nas = ? OR status = 'Stop'`,
+			types.Value{Type: types.TypeString, Bytes: []byte(alvo)})
+		comparaConjuntos(t, "união hash+bitmap", got, want)
 	})
 
 	t.Run("full scan com campo nao indexado", func(t *testing.T) {

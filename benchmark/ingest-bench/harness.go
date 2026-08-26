@@ -411,15 +411,15 @@ func Run(cfg Config) (*Report, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ingest-bench: carregando spec: %w", err)
 	}
-	var bitmapFields []string
-	for name, f := range spec.Schema.Fields {
-		if f.Index == "bitmap" {
-			bitmapFields = append(bitmapFields, name)
-		}
-	}
-	sort.Strings(bitmapFields) // ordem determinística na criação do dicionário
+	// As duas listas saem do schema, e NÃO de um laço local: este arquivo era
+	// a quarta cópia do laço que o godoc de schema.CamposComBitmap descreve, e
+	// a cópia não conhecia coluna derivada — nem, agora, o motor hash. Um
+	// benchmark que abrisse o dataset com um conjunto de índices diferente do
+	// que o servidor usa mediria outro produto.
+	bitmapFields := schema.CamposComBitmap(spec)
+	hashFields := schema.CamposComHash(spec)
 
-	st, err := abreStore(cfg, bitmapFields...)
+	st, err := abreStore(cfg, bitmapFields, hashFields)
 	if err != nil {
 		return nil, err
 	}
@@ -588,7 +588,7 @@ func Run(cfg Config) (*Report, error) {
 	if err := st.Checkpoint(); err != nil {
 		return nil, fmt.Errorf("ingest-bench: checkpoint antes de medir o restart: %w", err)
 	}
-	rep.RestartSec = medeRestart(cfg, st, bitmapFields)
+	rep.RestartSec = medeRestart(cfg, st, bitmapFields, hashFields)
 	fmt.Fprintf(cfg.Out, "RESTART: %.2fs (§125)\n", rep.RestartSec)
 
 	rep.Gates = evaluateGates(cfg, rep)
@@ -1514,12 +1514,13 @@ func humanBytes(n uint64) string {
 // O Store devolvido pelo Open substitui o anterior no lugar certo: quem
 // chamou o Run tem um defer Close, e fechar duas vezes é seguro (o Close é
 // idempotente), mas deixar o segundo Store aberto vazaria o flock.
-func abreStore(cfg Config, bitmaps ...string) (*storage.Store, error) {
+func abreStore(cfg Config, bitmaps, hashes []string) (*storage.Store, error) {
 	st, err := storage.Open(storage.Options{
 		Dir:              cfg.DataDir,
 		SegmentSize:      cfg.SegmentSize,
 		EstimatedRows:    uint64(cfg.Entities),
 		BitmapFieldNames: bitmaps,
+		HashFieldNames:   hashes,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("ingest-bench: abrindo dataset: %w", err)
@@ -1527,13 +1528,13 @@ func abreStore(cfg Config, bitmaps ...string) (*storage.Store, error) {
 	return st, nil
 }
 
-func medeRestart(cfg Config, st *storage.Store, bitmaps []string) float64 {
+func medeRestart(cfg Config, st *storage.Store, bitmaps, hashes []string) float64 {
 	inicio := time.Now()
 	if err := st.Close(); err != nil {
 		fmt.Fprintf(cfg.Out, "AVISO: Close falhou ao medir o restart: %v\n", err)
 		return 0
 	}
-	novo, err := abreStore(cfg, bitmaps...)
+	novo, err := abreStore(cfg, bitmaps, hashes)
 	if err != nil {
 		fmt.Fprintf(cfg.Out, "AVISO: reabertura falhou ao medir o restart: %v\n", err)
 		return 0

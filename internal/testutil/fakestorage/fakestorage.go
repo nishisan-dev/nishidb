@@ -123,7 +123,7 @@ func New(idx Indexes) *Store {
 }
 
 // valKey serializa a Value na MESMA forma canônica do índice bitmap real
-// ([type][payload], bitmap.canonicalValue): tipo + os 8 bytes do I64 para os
+// ([type][payload], valuekey.Append): tipo + os 8 bytes do I64 para os
 // tipos de largura fixa, tipo + os bytes crus para os variáveis.
 //
 // Já foi um fmt.Sprintf. Era chamado por campo no diff, o que fazia um Apply

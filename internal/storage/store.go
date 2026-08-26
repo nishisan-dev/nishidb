@@ -17,7 +17,9 @@ import (
 	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/index/bitmap"
+	hashidx "github.com/nishisan-dev/nishidb/internal/index/hash"
 	"github.com/nishisan-dev/nishidb/internal/index/primary"
+	"github.com/nishisan-dev/nishidb/internal/index/valuekey"
 	"github.com/nishisan-dev/nishidb/internal/logging"
 	"github.com/nishisan-dev/nishidb/internal/metrics"
 	"github.com/nishisan-dev/nishidb/internal/query/spill"
@@ -91,6 +93,19 @@ type Options struct {
 	// parando de ser atualizado e, se o campo voltasse depois, reapareceria
 	// INCOMPLETO — falso negativo silencioso em query.
 	AllowBitmapDrop bool
+
+	// HashFields e HashFieldNames são os campos com índice hash, pelos MESMOS
+	// dois caminhos e pelas MESMAS razões dos de bitmap acima: ID para quem já
+	// resolveu o dicionário, NOME para quem ainda não pôde compilar o schema.
+	// Os dois se somam (união).
+	HashFields     []types.FieldID
+	HashFieldNames []string
+	// AllowHashDrop é o simétrico do AllowBitmapDrop, e existe pelo mesmo modo
+	// de falha: abrir o dataset sem um campo que o manifest declara indexado
+	// deixaria o índice em disco parando de receber sets e clears, e ele
+	// reapareceria INCOMPLETO se o campo voltasse — falso negativo silencioso
+	// em query.
+	AllowHashDrop bool
 
 	// ColunasDerivadas são os nomes declarados em `extract`. Chegam como
 	// STRING para não fazer o storage depender do schema: o que ele precisa
@@ -260,6 +275,11 @@ type Store struct {
 	// teste de prazo precisa avançar o tempo sem dormir.
 	agora   func() time.Time
 	bitmaps map[types.FieldID]*bitmap.Index
+	// hashes é o segundo motor de índice secundário. Mapa à parte do bitmaps, e
+	// não um mapa de interface: os dois têm formatos de arquivo, ciclos de
+	// crescimento e contratos de remoção diferentes, e uma interface comum
+	// esconderia justamente as diferenças que o applyRecord precisa respeitar.
+	hashes map[types.FieldID]*hashidx.Index
 
 	nextRowID atomic.Uint64
 	rowCount  atomic.Uint64
@@ -639,6 +659,7 @@ func Open(opts Options) (*Store, error) {
 	s := &Store{
 		opts:     opts,
 		bitmaps:  make(map[types.FieldID]*bitmap.Index),
+		hashes:   make(map[types.FieldID]*hashidx.Index),
 		segTally: make(map[uint32]*segStats),
 		segSize:  make(map[uint32]int64),
 		agora:    time.Now,
@@ -737,12 +758,25 @@ func Open(opts Options) (*Store, error) {
 		s.campoDeEscrita = id
 	}
 
-	campos, err := s.resolveBitmapFields(opts)
+	// A resolução dos DOIS conjuntos vem antes de abrir qualquer índice: os
+	// nomes viram FieldID pelo dicionário, e o LookupOrCreate queima ids na
+	// ordem em que é chamado. Bitmap primeiro e hash depois, sempre — a ordem
+	// entre os dois grupos é tão contratual quanto a ordem dentro de cada um,
+	// porque ela decide o mapeamento nome→id de um dataset novo, que é gravado
+	// para sempre.
+	campos, err := s.resolveCamposIndexados(opts.BitmapFields, opts.BitmapFieldNames, "bitmap")
+	if err != nil {
+		return nil, err
+	}
+	camposHash, err := s.resolveCamposIndexados(opts.HashFields, opts.HashFieldNames, "hash")
 	if err != nil {
 		return nil, err
 	}
 	if m != nil {
 		if err := validaBitmapsContraManifest(m, campos, opts.AllowBitmapDrop); err != nil {
+			return nil, err
+		}
+		if err := validaHashesContraManifest(m, camposHash, opts.AllowHashDrop); err != nil {
 			return nil, err
 		}
 	}
@@ -753,6 +787,18 @@ func Open(opts Options) (*Store, error) {
 			return nil, err
 		}
 		s.bitmaps[field] = ix
+	}
+	// O hash é dimensionado pelo MESMO EstimatedRows da primary, e não por um
+	// piso próprio: ele tem uma posting por row indexada, exatamente como a
+	// primary tem uma entrada por key. Subdimensionar aqui não perde dado —
+	// custa uma reconstrução, que reescreve o arquivo inteiro.
+	minSlotsHash := max(uint64(1<<10), opts.EstimatedRows*10/7)
+	for _, field := range camposHash {
+		ix, err := hashidx.Open(hashidx.Path(filepath.Join(idxDir, "hash"), field), field, minSlotsHash)
+		if err != nil {
+			return nil, err
+		}
+		s.hashes[field] = ix
 	}
 	switch {
 	case errors.Is(mErr, checkpoint.ErrNoManifest) && semRecords(refs):
@@ -836,15 +882,21 @@ func (s *Store) carregaOffsets() {
 	}
 }
 
-// resolveBitmapFields devolve a união, ordenada e sem duplicatas, dos
+// resolveCamposIndexados devolve a união, ordenada e sem duplicatas, dos
 // campos declarados por ID e por nome. Os nomes são resolvidos pelo
 // dicionário do dataset, criando a entry se ainda não existir (a regra
 // fsync-before-first-use vale, é o próprio LookupOrCreate que a aplica).
-func (s *Store) resolveBitmapFields(opts Options) ([]types.FieldID, error) {
-	set := make(map[types.FieldID]struct{}, len(opts.BitmapFields)+len(opts.BitmapFieldNames))
-	for _, field := range opts.BitmapFields {
+//
+// `motor` só entra nas mensagens de erro. A função é a MESMA para bitmap e
+// hash de propósito: a garantia que ela existe para dar — ordem canônica antes
+// de queimar id no dicionário — não é sobre o motor, é sobre a criação do
+// dataset, e um segundo laço para o segundo motor seria a primeira cópia a
+// divergir.
+func (s *Store) resolveCamposIndexados(ids []types.FieldID, nomesDeclarados []string, motor string) ([]types.FieldID, error) {
+	set := make(map[types.FieldID]struct{}, len(ids)+len(nomesDeclarados))
+	for _, field := range ids {
 		if field == 0 {
-			return nil, fmt.Errorf("%w: fieldID 0 em BitmapFields", ErrInvalidArgument)
+			return nil, fmt.Errorf("%w: fieldID 0 nos campos de %s", ErrInvalidArgument, motor)
 		}
 		set[field] = struct{}{}
 	}
@@ -857,15 +909,15 @@ func (s *Store) resolveBitmapFields(opts Options) ([]types.FieldID, error) {
 	//
 	// Cópia: o slice é do chamador, e reordená-lo no lugar seria efeito
 	// colateral de uma função que promete só abrir o dataset.
-	nomes := slices.Clone(opts.BitmapFieldNames)
+	nomes := slices.Clone(nomesDeclarados)
 	slices.Sort(nomes)
 	for _, nome := range nomes {
 		if nome == "" {
-			return nil, fmt.Errorf("%w: nome vazio em BitmapFieldNames", ErrInvalidArgument)
+			return nil, fmt.Errorf("%w: nome vazio nos campos de %s", ErrInvalidArgument, motor)
 		}
 		id, err := s.dict.LookupOrCreate([]byte(nome))
 		if err != nil {
-			return nil, fmt.Errorf("storage: resolver o campo de bitmap %q: %w", nome, err)
+			return nil, fmt.Errorf("storage: resolver o campo de %s %q: %w", motor, nome, err)
 		}
 		set[id] = struct{}{}
 	}
@@ -931,6 +983,64 @@ func validaBitmapsContraManifest(m *checkpoint.Manifest, campos []types.FieldID,
 	return nil
 }
 
+// validaHashesContraManifest é o simétrico de validaBitmapsContraManifest, e
+// recusa as MESMAS duas divergências pelo MESMO motivo: query indexada é
+// SUPERSET revalidado (§44), então falso positivo o executor filtra e falso
+// negativo ninguém recupera.
+//
+// São duas funções e não uma parametrizada porque as mensagens são o produto
+// aqui: elas nomeiam a opção de configuração que o operador tem de mexer
+// (BitmapFieldNames/AllowBitmapDrop contra HashFieldNames/AllowHashDrop), e um
+// erro genérico mandaria procurar a chave errada no YAML.
+func validaHashesContraManifest(m *checkpoint.Manifest, campos []types.FieldID, permiteDrop bool) error {
+	declarado := make(map[types.FieldID]bool, len(campos))
+	for _, field := range campos {
+		declarado[field] = true
+	}
+	noManifest := make(map[types.FieldID]bool, len(m.Hashes))
+	for _, hi := range m.Hashes {
+		noManifest[hi.FieldID] = true
+	}
+
+	// (1) Índice que o dataset tem e que esta abertura não declara.
+	if !permiteDrop {
+		var abandonados []types.FieldID
+		for _, hi := range m.Hashes {
+			if !declarado[hi.FieldID] {
+				abandonados = append(abandonados, hi.FieldID)
+			}
+		}
+		if len(abandonados) > 0 {
+			return fmt.Errorf(
+				"%w: o manifest declara índice hash para o(s) campo(s) %v, ausente(s) desta abertura; "+
+					"abrir assim faria o índice parar de ser atualizado e reaparecer INCOMPLETO depois. "+
+					"Declare o(s) campo(s) em HashFields/HashFieldNames ou use AllowHashDrop",
+				ErrDatasetCorrupt, abandonados)
+		}
+	}
+
+	// (2) Índice declarado agora sobre dataset que já tem rows: ele cobriria
+	// só o que vier daqui pra frente, e as rows antigas ficariam invisíveis à
+	// query indexada. O backfill continua não existindo — o débito 22 não
+	// fecha com este motor, ele passa a ter DOIS motores a reconstruir.
+	if m.RowCount > 0 {
+		var semBackfill []types.FieldID
+		for _, field := range campos {
+			if !noManifest[field] {
+				semBackfill = append(semBackfill, field)
+			}
+		}
+		if len(semBackfill) > 0 {
+			return fmt.Errorf(
+				"%w: campo(s) %v declarado(s) com índice hash num dataset que já tem %d rows; "+
+					"o índice cobriria apenas os records futuros e a query indexada omitiria as rows antigas. "+
+					"Reconstrução de índice não existe (débito 22) — crie o dataset já com o campo indexado",
+				ErrDatasetCorrupt, semBackfill, m.RowCount)
+		}
+	}
+	return nil
+}
+
 // fsyncDir durabiliza as entradas de um diretório.
 func fsyncDir(dir string) error {
 	d, err := os.Open(dir)
@@ -962,6 +1072,31 @@ func (s *Store) HasBitmap(field types.FieldID) bool {
 func (s *Store) BitmapFields() []types.FieldID {
 	out := make([]types.FieldID, 0, len(s.bitmaps))
 	for field := range s.bitmaps {
+		out = append(out, field)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// HasHash informa se o campo tem índice hash FÍSICO.
+//
+// É o capability check por campo que o planner já esperava (a interface
+// HashCapable, planner.go). Enquanto ele não existia, `p.hash` era nil e toda
+// igualdade sobre coluna declarada com `index: hash` degradava para FullScan —
+// que é correto e inutilizável: no piloto, 17,8M linhas varridas por uma
+// consulta que o índice resolve em um probe.
+//
+// O conjunto é fixado no Open, então a resposta é estável durante toda a vida
+// do Store.
+func (s *Store) HasHash(field types.FieldID) bool {
+	_, ok := s.hashes[field]
+	return ok
+}
+
+// HashFields devolve, em ordem crescente, os campos com índice hash.
+func (s *Store) HashFields() []types.FieldID {
+	out := make([]types.FieldID, 0, len(s.hashes))
+	for field := range s.hashes {
 		out = append(out, field)
 	}
 	slices.Sort(out)
@@ -1304,11 +1439,16 @@ func (s *Store) applyRecord(a recordApply) error {
 			}
 		}
 	}
-	// 5. fase de SET dos bitmaps ANTES do commit: a janela entre índice e
-	// location é sempre um SUPERSET de candidatos (falso positivo,
+	// 5. fase de SET dos índices secundários ANTES do commit: a janela entre
+	// índice e location é sempre um SUPERSET de candidatos (falso positivo,
 	// filtrado pela revalidação §44) — nunca falso negativo.
 	if len(s.bitmaps) > 0 {
 		if err := s.applyBitmapSets(a.rowID, a.prevPayload, a.payload); err != nil {
+			return err
+		}
+	}
+	if len(s.hashes) > 0 {
+		if err := s.applyHashSets(a.rowID, a.prevPayload, a.payload); err != nil {
 			return err
 		}
 	}
@@ -1346,10 +1486,13 @@ func (s *Store) applyRecord(a recordApply) error {
 	if a.countsAsNew {
 		s.rowCount.Add(1)
 	}
-	// 8. fase de CLEAR dos bitmaps DEPOIS do commit: erro aqui deixa só
-	// falso positivo (tolerável; contabilizado p/ métricas da S13).
+	// 8. fase de CLEAR dos índices secundários DEPOIS do commit: erro aqui
+	// deixa só falso positivo (tolerável; contabilizado p/ métricas da S13).
 	if len(s.bitmaps) > 0 {
 		s.applyBitmapClears(a.rowID, a.prevPayload, a.payload)
+	}
+	if len(s.hashes) > 0 {
+		s.applyHashClears(a.rowID, a.prevPayload, a.payload)
 	}
 	return nil
 }
@@ -1430,9 +1573,20 @@ func (s *Store) validatePayloadAgainstDataset(payload []byte) error {
 			return fmt.Errorf("%w: fieldID %d não existe no dicionário", ErrInvalidArgument, id)
 		}
 		if _, indexado := s.bitmaps[id]; indexado {
-			if err := bitmap.ValidateValue(v); err != nil {
+			if err := valuekey.Validate(v); err != nil {
 				nome, _ := s.dict.Name(id)
 				return fmt.Errorf("%w: campo %d (%q) tem índice bitmap: %w", ErrInvalidArgument, id, nome, err)
+			}
+		}
+		// O hash paga o MESMO pedágio, e pelo mesmo motivo fatal: a chave
+		// canônica é a mesma, e um valor que ela recusa só apareceria na fase
+		// de Set, DEPOIS do append. O record ficaria durável no segmento, o
+		// replay do tail tentaria reindexá-lo a cada abertura e falharia
+		// sempre — um único evento externo tornaria o dataset INABRÍVEL.
+		if _, indexado := s.hashes[id]; indexado {
+			if err := valuekey.Validate(v); err != nil {
+				nome, _ := s.dict.Name(id)
+				return fmt.Errorf("%w: campo %d (%q) tem índice hash: %w", ErrInvalidArgument, id, nome, err)
 			}
 		}
 	}
@@ -1585,6 +1739,108 @@ func (s *Store) clearBit(ix *bitmap.Index, field types.FieldID, v types.Value, r
 	return ix.Clear(v, rowID)
 }
 
+// applyHashSets liga as postings novas (campo que entra ou muda) — roda ANTES
+// do publish, no MESMO ponto e na MESMA forma do applyBitmapSets. Campo com o
+// mesmo valor não toca o índice.
+func (s *Store) applyHashSets(rowID types.RowID, prevPayload, newPayload []byte) error {
+	var pr, nr encoding.FieldReader
+	pr.Reset(prevPayload)
+	nr.Reset(newPayload)
+	pid, pv, pok := pr.Next()
+	nid, nv, nok := nr.Next()
+	for pok || nok {
+		switch {
+		case pok && (!nok || pid < nid):
+			// Campo que sai: o Clear correspondente roda pós-commit.
+			pid, pv, pok = pr.Next()
+		case nok && (!pok || nid < pid):
+			if ix := s.hashes[nid]; ix != nil {
+				if err := s.setHash(ix, nid, nv, rowID); err != nil {
+					return err
+				}
+			}
+			nid, nv, nok = nr.Next()
+		default: // pid == nid
+			if ix := s.hashes[pid]; ix != nil && !valueEqual(pv, nv) {
+				if err := s.setHash(ix, pid, nv, rowID); err != nil {
+					return err
+				}
+			}
+			pid, pv, pok = pr.Next()
+			nid, nv, nok = nr.Next()
+		}
+	}
+	if err := pr.Err(); err != nil {
+		return err
+	}
+	return nr.Err()
+}
+
+// setHash executa o Set com o MESMO seam de injeção de erro dos bitmaps: o
+// phantom commit do §14.12 precisa de falha pós-Append com payload replayável,
+// e o seam é por CAMPO — quem instala escolhe o campo, não o motor.
+func (s *Store) setHash(ix *hashidx.Index, field types.FieldID, v types.Value, rowID types.RowID) error {
+	if s.setErrHook != nil {
+		if err := s.setErrHook(field); err != nil {
+			return err
+		}
+	}
+	return ix.Set(v, rowID)
+}
+
+// applyHashClears desliga as postings antigas (campo que sai ou muda) — roda
+// DEPOIS do publish. Erro aqui deixa apenas falso positivo (a revalidação §44
+// filtra); é contabilizado em clearFailures.
+//
+// A diferença em relação ao applyBitmapClears está no ARGUMENTO: o Clear do
+// hash recebe também o valor ATUAL da row. O porquê está no godoc dele — o
+// índice hash endereça por um hash de 64 bits, e quando velho e novo caem no
+// mesmo slot a remoção apagaria a posting que o Set acabou de afirmar. O
+// bitmap não tem esse problema porque o values.dict distingue os valores
+// exatamente.
+func (s *Store) applyHashClears(rowID types.RowID, prevPayload, newPayload []byte) {
+	var pr, nr encoding.FieldReader
+	pr.Reset(prevPayload)
+	nr.Reset(newPayload)
+	pid, pv, pok := pr.Next()
+	nid, nv, nok := nr.Next()
+	for pok || nok {
+		switch {
+		case pok && (!nok || pid < nid):
+			if ix := s.hashes[pid]; ix != nil {
+				// Campo que SAIU da row: não há valor a preservar.
+				if err := s.clearHash(ix, pid, pv, types.Value{}, rowID); err != nil {
+					s.clearFailures.Add(1)
+				}
+			}
+			pid, pv, pok = pr.Next()
+		case nok && (!pok || nid < pid):
+			nid, nv, nok = nr.Next()
+		default: // pid == nid
+			if ix := s.hashes[pid]; ix != nil && !valueEqual(pv, nv) {
+				if err := s.clearHash(ix, pid, pv, nv, rowID); err != nil {
+					s.clearFailures.Add(1)
+				}
+			}
+			pid, pv, pok = pr.Next()
+			nid, nv, nok = nr.Next()
+		}
+	}
+	if pr.Err() != nil || nr.Err() != nil {
+		s.clearFailures.Add(1)
+	}
+}
+
+// clearHash executa o Clear com o seam de injeção de erro do caminho tolerado.
+func (s *Store) clearHash(ix *hashidx.Index, field types.FieldID, velho, atual types.Value, rowID types.RowID) error {
+	if s.clearErrHook != nil {
+		if err := s.clearErrHook(field); err != nil {
+			return err
+		}
+	}
+	return ix.Clear(velho, atual, rowID)
+}
+
 // liveIterator percorre lazy as rows vivas até o limite fixado na criação.
 type liveIterator struct {
 	s     *Store
@@ -1670,6 +1926,47 @@ func (it *bitmapIterator) Err() error {
 
 func (it *bitmapIterator) Close() error { return it.it.Close() }
 
+// hashIterator embrulha o iterador do índice hash para que os DOIS motores
+// tenham o mesmo comportamento diante de um Close do dataset no meio da
+// varredura: Err() devolve ErrDatasetClosed, sem panic.
+//
+// A razão é diferente da do bitmapIterator, e a diferença está escrita porque
+// ela é o que se perderia numa cópia sem pensar: o iterador de bitmap lê o
+// mmap a CADA avanço, então sem a reentrada o Close desmapeava a região sob os
+// pés dele. Aqui o Lookup já materializou as postings, então não há região a
+// perder — o que se protege é a UNIFORMIDADE do contrato, porque o executor
+// mistura os dois motores no mesmo intersectIter/unionIter e uma fonte que
+// seguisse produzindo linhas de um dataset fechado enquanto a outra para seria
+// a pior forma de descobrir a divergência.
+type hashIterator struct {
+	s   *Store
+	it  *hashidx.Iterator
+	err error
+}
+
+func (it *hashIterator) Next() bool {
+	if it.err != nil {
+		return false
+	}
+	if err := it.s.entra(); err != nil {
+		it.err = err
+		return false
+	}
+	defer it.s.sai()
+	return it.it.Next()
+}
+
+func (it *hashIterator) RowID() types.RowID { return it.it.RowID() }
+
+func (it *hashIterator) Err() error {
+	if it.err != nil {
+		return it.err
+	}
+	return it.it.Err()
+}
+
+func (it *hashIterator) Close() error { return it.it.Close() }
+
 // emptyIterator é um types.RowIDIterator sem elementos.
 type emptyIterator struct{}
 
@@ -1725,6 +2022,39 @@ func (s *Store) LookupBitmap(field types.FieldID, v types.Value) (types.RowIDIte
 		return emptyIterator{}, nil
 	}
 	return &bitmapIterator{s: s, it: it}, nil
+}
+
+// LookupHash consulta o índice hash do campo; valor nunca visto devolve
+// iterador vazio; campo não indexado é erro. O resultado é um SUPERSET de
+// candidatos — rows tombstoned, sem location, e rows que apenas COLIDEM no
+// hash podem aparecer. Valide liveness e predicate via GetByRowID (§44).
+//
+// Os rowIds saem em ordem estritamente CRESCENTE. Isso é contrato, não
+// detalhe: o intersectIter e o unionIter do executor assumem iteradores
+// ascendentes, e o planner mistura termos hash e bitmap no mesmo
+// IndexUnionPlan.
+//
+// O iterador devolvido é reentrante pelo MESMO contrato do de bitmap — um
+// Close do dataset no meio da varredura a interrompe com ErrDatasetClosed em
+// Err(), sem panic. Aqui a proteção não é contra desmapeamento (o Lookup já
+// materializou as postings antes de devolver), é contra a DIVERGÊNCIA de
+// contrato: o executor mistura os dois motores no mesmo iterador k-way, e uma
+// fonte que continuasse produzindo linhas de um dataset fechado enquanto a
+// outra para seria a pior forma de descobrir a diferença.
+func (s *Store) LookupHash(field types.FieldID, v types.Value) (types.RowIDIterator, error) {
+	if err := s.entra(); err != nil {
+		return nil, err
+	}
+	defer s.sai()
+	ix, ok := s.hashes[field]
+	if !ok {
+		return nil, fmt.Errorf("%w: campo %d não possui índice hash", ErrInvalidArgument, field)
+	}
+	it, err := ix.Lookup(v)
+	if err != nil {
+		return nil, err
+	}
+	return &hashIterator{s: s, it: it}, nil
 }
 
 // Sequence devolve a última sequence aplicada à row (ok=false para row sem
@@ -1872,6 +2202,11 @@ func (s *Store) Close() error {
 	// é concedido quando o RLock dela é liberado.
 	var errs []error
 	for _, ix := range s.bitmaps {
+		if ix != nil {
+			errs = append(errs, ix.Close())
+		}
+	}
+	for _, ix := range s.hashes {
 		if ix != nil {
 			errs = append(errs, ix.Close())
 		}

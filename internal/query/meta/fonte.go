@@ -93,12 +93,14 @@ func (f *fonte) GetByKey(key, buf []byte) (types.Record, []byte, bool, error) {
 
 func (f *fonte) ScanLive() types.RowIDIterator { return &iterador{n: len(f.campos), i: -1} }
 
-// HasBitmap responde SEMPRE false: a tabela virtual não declara índice no seu
-// YAML, então o planner degrada para varredura completa — que sobre sete
-// colunas e algumas dezenas de linhas é o plano certo de qualquer forma.
-// Confundir esta resposta com a do dataset ALVO seria o defeito: a coluna
-// `indexed` fala do alvo, este método fala da tabela.
+// HasBitmap e HasHash respondem SEMPRE false: a tabela virtual não declara
+// índice no seu YAML, então o planner degrada para varredura completa — que
+// sobre sete colunas e algumas dezenas de linhas é o plano certo de qualquer
+// forma. Confundir estas respostas com as do dataset ALVO seria o defeito: a
+// coluna `indexed` fala do alvo, estes métodos falam da tabela.
 func (f *fonte) HasBitmap(types.FieldID) bool { return false }
+
+func (f *fonte) HasHash(types.FieldID) bool { return false }
 
 // LookupBitmap nunca é chamado: a tabela virtual não declara índice nenhum no
 // YAML, então o planner jamais escolhe um plano indexado sobre ela. O erro
@@ -117,9 +119,14 @@ func (f *fonte) record(row types.RowID, c *schema.CompiledField, buf []byte) (ty
 	if t := c.EffectiveType(); t != types.TypeNull {
 		tipo = t.String()
 	}
+	// `indexed` fala do MOTOR, e a coluna `index` ao lado fala do que o YAML
+	// declara. As duas juntas é que respondem a pergunta do operador: "declarei
+	// e está valendo?". Enquanto só o bitmap tinha motor, uma coluna com
+	// `index: hash` saía com index=hash e indexed=false — correto na época,
+	// mentira a partir do motor físico.
 	indexado := false
 	if f.caps != nil {
-		indexado = f.caps.HasBitmap(c.ID)
+		indexado = f.caps.HasBitmap(c.ID) || f.caps.HasHash(c.ID)
 	}
 
 	vals := []struct {

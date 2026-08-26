@@ -35,18 +35,14 @@ func loadSpec(tb testing.TB) *schema.DatasetSpec {
 	return spec
 }
 
-// bitmapNames extrai do YAML os campos com índice bitmap. Sai do SPEC e não do
-// Compiled porque o Store precisa dos nomes ANTES de existir dicionário para
-// compilar contra — é o Open que cria as entradas.
-func bitmapNames(spec *schema.DatasetSpec) []string {
-	var out []string
-	for name, f := range spec.Schema.Fields {
-		if f.Index == "bitmap" {
-			out = append(out, name)
-		}
-	}
-	return out
-}
+// bitmapNames sai do SPEC e não do Compiled porque o Store precisa dos nomes
+// ANTES de existir dicionário para compilar contra — é o Open que cria as
+// entradas. O laço local virou chamada a schema.CamposComBitmap: ele era mais
+// uma cópia do laço que aquela função existe para centralizar, e não conhecia
+// nem coluna derivada nem o motor hash.
+func bitmapNames(spec *schema.DatasetSpec) []string { return schema.CamposComBitmap(spec) }
+
+func hashNames(spec *schema.DatasetSpec) []string { return schema.CamposComHash(spec) }
 
 // compiledSetup compila o YAML de produção contra um dicionário isolado.
 func compiledSetup(tb testing.TB) *schema.Compiled {
@@ -93,6 +89,7 @@ func realSetup(tb testing.TB, dir string, estimatedRows uint64) (*materializer.M
 		SegmentSize:      64 << 20,
 		EstimatedRows:    estimatedRows,
 		BitmapFieldNames: bitmapNames(spec),
+		HashFieldNames:   hashNames(spec),
 	})
 	if err != nil {
 		tb.Fatalf("abrindo store em %s: %v", dir, err)
