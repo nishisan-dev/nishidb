@@ -47,7 +47,13 @@ type BoundQuery struct {
 	// precisa dizer que truncou — um corte silencioso por MaxRows faria o
 	// cliente ler um resultado parcial como completo.
 	EffectiveLimit int64
-	Timeout        time.Duration
+	// Offset é quantas linhas QUE PASSARAM no predicado são puladas antes de a
+	// primeira sair. Não conta candidatos rejeitados, e não entra no
+	// EffectiveLimit: o teto é de linhas ENTREGUES, e somar as puladas a ele
+	// faria o `LIMIT 10 OFFSET 100` devolver menos de 10 linhas num dataset
+	// que tem de sobra.
+	Offset  int64
+	Timeout time.Duration
 
 	Slots Slots // campos a coletar por row (projeção ∪ WHERE)
 
@@ -221,6 +227,7 @@ func (b *binder) run() (*BoundQuery, error) {
 		Star:     b.stmt.Star,
 		HasLimit: b.stmt.HasLimit,
 		Limit:    b.stmt.Limit,
+		Offset:   b.stmt.Offset,
 		MaxRows:  int64(b.sc.MaxRows),
 		Timeout:  b.sc.Timeout,
 	}

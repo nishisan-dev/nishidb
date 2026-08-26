@@ -71,6 +71,7 @@ func Open(ctx context.Context, bq *binder.BoundQuery, plan planner.Plan, opts Op
 		metrics: opts.Metrics,
 		slots:   novosSlots(bq.Slots.IDs),
 		eff:     bq.EffectiveLimit,
+		pular:   bq.Offset,
 		// Truncamento por teto IMPLÍCITO: só quando a parada não veio de um
 		// LIMIT que o usuário escreveu e que é menor que o teto.
 		tetoImplicito: !bq.HasLimit || bq.Limit > bq.MaxRows,
@@ -163,6 +164,7 @@ type iterador struct {
 	eff           int64 // teto efetivo de linhas (min(LIMIT, maxRows))
 	tetoImplicito bool
 	emitidas      int64
+	pular         int64 // linhas do OFFSET ainda a descartar
 	n             int64 // candidatos consumidos, para a cadência de ctx
 	mask          int64
 
@@ -219,6 +221,13 @@ func (it *iterador) Next() bool {
 			continue
 		}
 
+		if it.pular > 0 {
+			// OFFSET: a linha PASSOU no predicado e é descartada mesmo assim.
+			// O contador de skip vive aqui, e não no ramo do predicado acima,
+			// porque pular não é rejeitar — o WHERE já disse que ela serve.
+			it.pular--
+			continue
+		}
 		it.projeta()
 		it.emitidas++
 		it.cnt.emitted++

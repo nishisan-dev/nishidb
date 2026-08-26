@@ -11,11 +11,14 @@ import "github.com/nishisan-dev/nishidb/internal/query/lexer"
 // posição de cláusula não pode ser outra coisa.
 //
 // A lista é a do §9, não uma escolha nova: JOIN, GROUP BY, HAVING, UNION e
-// DISTINCT estão nos não-objetivos da v1, e ORDER BY e OFFSET no README.
+// DISTINCT estão nos não-objetivos da v1, e ORDER BY no README.
+//
+// OFFSET SAIU desta lista quando passou a existir. Ela é de cláusulas que o
+// produto RECUSA nomeando, e manter aqui uma implementada faria a mensagem
+// mentir.
 var clausulasNaoSuportadas = map[string]string{
 	"order":    "ORDER BY",
 	"group":    "GROUP BY",
-	"offset":   "OFFSET",
 	"join":     "JOIN",
 	"having":   "HAVING",
 	"distinct": "DISTINCT",

@@ -598,6 +598,7 @@ nomeando quem já tinha sido processado com sucesso antes dele.
 SELECT <colunas | *> FROM <dataset>
   [WHERE <predicado>]
   [LIMIT <n>]
+  [OFFSET <n>]
 
 <predicado> := <coluna> <comparador> <literal>
              | <coluna> IS [NOT] NULL
@@ -684,8 +685,13 @@ silêncio — duas colunas pedidas, uma entregue. Pedir o mesmo campo pelo nome 
 pelo alias (`SELECT id, service_id`) continua valendo, porque aí são duas
 chaves distintas na saída.
 
-Fora da v1: `ORDER BY`, `GROUP BY`, `JOIN`, agregações, `NOT` genérico,
-`OFFSET`, e a cláusula `ESCAPE` do `LIKE`. As sete cláusulas ausentes — `ORDER BY`, `GROUP BY`, `OFFSET`,
+`OFFSET` pula linhas que **passaram** no predicado, e o `LIMIT` continua
+contando só as **entregues** — `LIMIT 2 OFFSET 1` devolve duas linhas. A ordem
+das cláusulas é fixa (`LIMIT` antes de `OFFSET`), e sem `ORDER BY` a paginação é
+sobre a ordem de rowId, que é estável só para linhas que não mudam.
+
+Fora da v1: `ORDER BY`, `GROUP BY`, `JOIN`, agregações, `NOT` genérico, e a
+cláusula `ESCAPE` do `LIKE`. As seis cláusulas ausentes — `ORDER BY`, `GROUP BY`,
 `JOIN`, `HAVING`, `DISTINCT`, `UNION` — são recusadas com o código
 `UNSUPPORTED_CLAUSE`, nomeando qual delas foi escrita. É o que separa "isto não
 existe aqui" de "você digitou errado" para quem escreve SQL numa ferramenta.

@@ -13,6 +13,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/query/binder"
 	"github.com/nishisan-dev/nishidb/internal/query/executor"
 	"github.com/nishisan-dev/nishidb/internal/query/lexer"
+	"github.com/nishisan-dev/nishidb/internal/query/parser"
 )
 
 func runQuery(args []string, amb Ambiente) int {
@@ -148,48 +149,69 @@ func runQuery(args []string, amb Ambiente) int {
 	return ExitOK
 }
 
-// comLimit acrescenta (ou substitui) o LIMIT da query.
+// comLimit acrescenta (ou substitui) o LIMIT da query, PRESERVANDO o OFFSET.
 //
-// A substituição é textual e deliberadamente simples: reescrever a AST exigiria
-// serializá-la de volta, e a v1 não tem serializador. Se a query já tem LIMIT,
-// o --limit vence, que é o que o operador espera de uma flag explícita.
+// A substituição continua textual — reescrever a AST exigiria serializá-la de
+// volta, e a v1 não tem serializador —, mas o corte deixou de ser "da última
+// cláusula LIMIT em diante". Com OFFSET, aquele corte produzia RESULTADO
+// ERRADO, não inconveniência:
+//
+//   - `... LIMIT 5 OFFSET 10` com --limit 3 virava `... LIMIT 3`. A paginação
+//     EVAPORAVA e o comando devolvia as 3 PRIMEIRAS linhas como se fossem a
+//     página pedida — sem erro, sem aviso.
+//   - `... OFFSET 10` sem LIMIT virava `... OFFSET 10 LIMIT 3`, que é ordem
+//     inválida: o usuário recebia erro de sintaxe sobre um texto que não
+//     escreveu.
+//
+// Agora o corte é no PRIMEIRO dos dois (LIMIT ou OFFSET), e o OFFSET original é
+// reemitido depois do LIMIT novo. Quem decide onde as cláusulas começam é o
+// PARSER de verdade, o mesmo que o Execute vai usar — pelo mesmo argumento que
+// já tinha tirado essa decisão de uma varredura textual própria: duas gramáticas
+// divergem, e a divergência aparece como query reescrita errada.
 func comLimit(sql string, n int) string {
 	corte := strings.TrimRight(strings.TrimSpace(sql), ";")
-	if i := ultimoLimit(corte); i >= 0 {
-		corte = strings.TrimSpace(corte[:i])
+	st, err := parser.Parse(corte)
+	if err != nil {
+		// Query que nem parseia: só anexa, como antes. Sem gramática íntegra
+		// não há como saber o que é cláusula, e cortar por adivinhação
+		// entregaria um erro de sintaxe sobre um texto que o usuário não
+		// escreveu.
+		return fmt.Sprintf("%s LIMIT %d", corte, n)
+	}
+	inicio := len(corte)
+	if st.HasLimit && st.LimitPos < inicio {
+		inicio = inicioDaClausula(corte, st.LimitPos)
+	}
+	if st.HasOffset && inicioDaClausula(corte, st.OffsetPos) < inicio {
+		inicio = inicioDaClausula(corte, st.OffsetPos)
+	}
+	corte = strings.TrimSpace(corte[:inicio])
+	if st.HasOffset {
+		return fmt.Sprintf("%s LIMIT %d OFFSET %d", corte, n, st.Offset)
 	}
 	return fmt.Sprintf("%s LIMIT %d", corte, n)
 }
 
-// ultimoLimit devolve o offset da última cláusula LIMIT fora de literal, ou -1.
+// inicioDaClausula recua da posição do LITERAL até o início da palavra-chave
+// que o precede.
 //
-// Quem decide o que é cláusula e o que é literal é o LEXER DE VERDADE, o mesmo
-// que o Execute vai usar. Uma varredura textual própria é uma segunda
-// gramática, e a daqui já divergia da de verdade: reconhecia só a aspa
-// SIMPLES, então um identificador entre aspas duplas — obrigatórias para
-// os nomes reais do dataset, que têm hífen e espaço — com a palavra limit no
-// meio fazia o corte cair DENTRO do identificador e reescrever a query.
-//
-// Query que nem tokeniza devolve -1, e o --limit é apenas anexado: sem
-// gramática íntegra não há como saber o que é literal, e cortar por adivinhação
-// entregaria ao usuário um erro de sintaxe sobre um texto que ele não escreveu.
-func ultimoLimit(sql string) int {
-	var lx lexer.Lexer
-	lx.Init(sql)
-	achado := -1
-	for {
-		tok, err := lx.Next()
-		if err != nil {
-			return -1
-		}
-		switch tok.Type {
-		case lexer.TokenEOF:
-			return achado
-		case lexer.TokenLimit:
-			achado = tok.Pos
-		}
+// O parser guarda a posição do NÚMERO (`LimitPos` aponta para o `10` de
+// `LIMIT 10`), que é o que a mensagem de erro precisa. Para cortar, é preciso a
+// posição da PALAVRA — cortar no número deixaria um `LIMIT` órfão no texto.
+func inicioDaClausula(sql string, posDoLiteral int) int {
+	i := posDoLiteral
+	// Recua o espaço entre a palavra e o número.
+	for i > 0 && (sql[i-1] == ' ' || sql[i-1] == '\t' || sql[i-1] == '\n' || sql[i-1] == '\r') {
+		i--
 	}
+	// Recua a palavra.
+	for i > 0 && !ehEspaco(sql[i-1]) {
+		i--
+	}
+	return i
 }
+
+func ehEspaco(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' }
 
 // imprimeErroDeQuery mostra a POSIÇÃO e o trecho ofensor, não só a mensagem.
 // A posição é a informação que o front-end já carrega e que o usuário precisa

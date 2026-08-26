@@ -20,7 +20,11 @@ func clausulaDe(t *testing.T, err error) string {
 	return se.Clausula
 }
 
-// As sete cláusulas que a v1 não tem são NOMEADAS, uma a uma.
+// As seis cláusulas que a v1 não tem são NOMEADAS, uma a uma.
+//
+// Eram sete até o OFFSET ser implementado. A lista encolhe quando uma delas
+// passa a existir — manter aqui uma cláusula implementada faria a mensagem de
+// recusa mentir, que é o oposto do que ela existe para fazer.
 //
 // A diferença que isto faz está na ferramenta de SQL: "conteúdo inesperado
 // após o fim da query" manda o usuário procurar o erro de digitação que não
@@ -29,7 +33,7 @@ func clausulaDe(t *testing.T, err error) string {
 //
 // A posição aponta para o token da CLÁUSULA, não para o seguinte: é ela que a
 // ferramenta sublinha.
-func TestAsSeteClausulasNaoSuportadasSaoNomeadasUmaAUma(t *testing.T) {
+func TestAsSeisClausulasNaoSuportadasSaoNomeadasUmaAUma(t *testing.T) {
 	casos := []struct {
 		sql      string
 		clausula string
@@ -37,7 +41,6 @@ func TestAsSeteClausulasNaoSuportadasSaoNomeadasUmaAUma(t *testing.T) {
 	}{
 		{"SELECT a FROM x ORDER BY a", "ORDER BY", 16},
 		{"SELECT a FROM x GROUP BY a", "GROUP BY", 16},
-		{"SELECT a FROM x LIMIT 10 OFFSET 5", "OFFSET", 25},
 		{"SELECT a FROM x JOIN y ON x.a = y.a", "JOIN", 16},
 		{"SELECT a FROM x GROUP BY a HAVING a > 1", "GROUP BY", 16},
 		{"SELECT a FROM x HAVING a > 1", "HAVING", 16},
@@ -79,7 +82,7 @@ func TestColunaChamadaOrderContinuaValida(t *testing.T) {
 		{"bare na projeção", "SELECT order FROM x"},
 		{"entre aspas na projeção", `SELECT "order" FROM x`},
 		{"bare no where", "SELECT a FROM x WHERE order = 1"},
-		{"as sete, bare, na projeção", "SELECT order, group, offset, join, having, distinct, union FROM x"},
+		{"as seis mais o offset, bare, na projeção", "SELECT order, group, offset, join, having, distinct, union FROM x"},
 	}
 	for _, c := range casos {
 		t.Run(c.nome, func(t *testing.T) {

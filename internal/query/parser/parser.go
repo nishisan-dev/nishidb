@@ -169,7 +169,48 @@ func (p *parser) parseSelect() (*SelectStmt, error) {
 			return nil, err
 		}
 	}
+	// OFFSET depois de LIMIT, e a ordem é fixa pela mesma razão de todas as
+	// outras: `OFFSET 10 LIMIT 5` cai no "conteúdo inesperado" do Parse em vez
+	// de ser aceito numa ordem que só este produto entenderia.
+	if ehPalavra(p.cur, "offset") {
+		if err := p.parseOffset(st); err != nil {
+			return nil, err
+		}
+	}
 	return st, nil
+}
+
+// parseOffset lê `OFFSET <n>`, com as MESMAS recusas do LIMIT: sem parâmetro,
+// sem fracionário e sem sinal.
+//
+// Reusa as regras em vez de afrouxá-las porque as duas cláusulas respondem à
+// mesma pergunta ("quantas linhas"), e divergir aqui seria uma inconsistência
+// que só apareceria para quem escrevesse a query errada — tarde demais.
+func (p *parser) parseOffset(st *SelectStmt) error {
+	if err := p.advance(); err != nil {
+		return err
+	}
+	if p.cur.Type == lexer.TokenPlaceholder {
+		return p.errAt(p.cur.Pos, "OFFSET não aceita parâmetro")
+	}
+	if p.cur.Type != lexer.TokenNumber {
+		return p.errAt(p.cur.Pos, "esperado literal inteiro após OFFSET")
+	}
+	tok := p.cur
+	if strings.ContainsAny(tok.Text, ".eE") {
+		return p.errAt(tok.Pos, "OFFSET exige literal inteiro")
+	}
+	if strings.HasPrefix(tok.Text, "-") {
+		return p.errAt(tok.Pos, "OFFSET exige literal inteiro sem sinal")
+	}
+	n, err := typeparse.Int64([]byte(tok.Text))
+	if err != nil {
+		return p.errAt(tok.Pos, "inteiro fora do intervalo de int64")
+	}
+	st.HasOffset = true
+	st.Offset = n
+	st.OffsetPos = tok.Pos
+	return p.advance()
 }
 
 func (p *parser) parseProjection(st *SelectStmt) error {
