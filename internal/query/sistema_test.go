@@ -19,7 +19,7 @@ materialization:
     field: id
   mode: merge
   ttl:
-    expireAfterWrite: 2h
+    - expireAfterWrite: 2h
 schema:
   include: ["*"]
   unknownFields: include
@@ -41,7 +41,10 @@ func harnessComExpiracao(t *testing.T) *query.Engine {
 		t.Fatal(err)
 	}
 	st := fakestorage.New(fakestorage.Indexes{})
-	m := materializer.New(sch, st)
+	m, err := materializer.New(sch, st)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if r := m.Apply([]byte(`{"id":"A","severidade":3}`)); r.Err != nil {
 		t.Fatal(r.Err)
 	}
@@ -105,7 +108,7 @@ func TestSelectNominalDoCampoDeSistemaFunciona(t *testing.T) {
 // Dataset sem expiração declarada não tem o campo, e pedi-lo é erro de coluna
 // inexistente — não uma coluna sempre nula.
 func TestSemExpiracaoOCampoDeSistemaNaoExiste(t *testing.T) {
-	yaml := strings.Replace(yamlComExpiracao, "  ttl:\n    expireAfterWrite: 2h\n", "", 1)
+	yaml := strings.Replace(yamlComExpiracao, "  ttl:\n    - expireAfterWrite: 2h\n", "", 1)
 	spec, err := schema.Parse([]byte(yaml), schema.DefaultsPadrao)
 	if err != nil {
 		t.Fatal(err)

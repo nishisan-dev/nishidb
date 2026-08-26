@@ -306,7 +306,10 @@ func alvoComDerivadas(t *testing.T) *schema.Compiled {
 // isso. Sem atribuição, o número é alarme sem endereço.
 func TestContadoresDeColunaSaemPorSQL(t *testing.T) {
 	c := alvoComDerivadas(t)
-	m := materializer.New(c, fakestorage.New(fakestorage.Indexes{}))
+	m, err := materializer.New(c, fakestorage.New(fakestorage.Indexes{}))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// tally recebe três inteiros e dois textos: 5 ocorrências, 2 divergências.
 	for _, ev := range []string{
@@ -347,7 +350,10 @@ func TestContadoresDeColunaSaemPorSQL(t *testing.T) {
 // tipo saia de SQL em vez de script.
 func TestDivergenciaEhSubconjuntoDaOcorrencia(t *testing.T) {
 	c := alvoComDerivadas(t)
-	m := materializer.New(c, fakestorage.New(fakestorage.Indexes{}))
+	m, err := materializer.New(c, fakestorage.New(fakestorage.Indexes{}))
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, ev := range []string{
 		`{"id":"A","doc":{"tally":1}}`,
 		`{"id":"B","doc":{"tally":"texto"}}`,
@@ -400,7 +406,10 @@ func TestCampoDeTopoTemContadoresNulosENaoZerados(t *testing.T) {
 // afirma as três de uma vez: apareceu 4 vezes, 2 delas coergidas, 1 perdida.
 func TestCoercoesSaemPorSQLSeparadasDasDivergencias(t *testing.T) {
 	c := alvoComDerivadas(t)
-	m := materializer.New(c, fakestorage.New(fakestorage.Indexes{}))
+	m, err := materializer.New(c, fakestorage.New(fakestorage.Indexes{}))
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, ev := range []string{
 		`{"id":"A","doc":{"tally":1}}`,            // nativo
 		`{"id":"B","doc":{"tally":"2"}}`,          // coerção: texto num int64

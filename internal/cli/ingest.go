@@ -135,7 +135,13 @@ func runIngest(args []string, amb Ambiente) int {
 	// comando seguinte assumir o dataset.
 	defer st.Close()
 
-	mat := materializer.New(compilado, st)
+	mat, err := materializer.New(compilado, st)
+	if err != nil {
+		// Regra de TTL que não compila é erro de CONFIGURAÇÃO: o dataset não
+		// sobe, e a ingestão nem começa.
+		fmt.Fprintln(amb.Stderr, "ingest:", err)
+		return codigoDoErro(err)
+	}
 	var resumo resumoIngest
 	inicio := time.Now()
 	ultimoCP := inicio

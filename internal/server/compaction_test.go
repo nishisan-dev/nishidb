@@ -84,7 +84,10 @@ func semeiaGarbage(t *testing.T, a *ambiente, nome string, keys, rodadas int) {
 		_ = st.Close()
 		t.Fatal(err)
 	}
-	mat := materializer.New(compilado, st)
+	mat, err := materializer.New(compilado, st)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for r := 0; r < rodadas; r++ {
 		for i := 0; i < keys; i++ {
 			estado := "Start"

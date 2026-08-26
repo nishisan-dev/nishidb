@@ -52,7 +52,11 @@ func novoTiposHarness(t *testing.T) *tiposHarness {
 	if err := eng.Register("todos_os_tipos", sch, st); err != nil {
 		t.Fatal(err)
 	}
-	return &tiposHarness{t: t, sch: sch, store: st, mat: materializer.New(sch, st), engine: eng}
+	mat, err := materializer.New(sch, st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &tiposHarness{t: t, sch: sch, store: st, mat: mat, engine: eng}
 }
 
 func (h *tiposHarness) ingere(evento string) {

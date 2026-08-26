@@ -278,7 +278,7 @@ func TestFalhaDeIODoDicionarioNoCaminhoANINHADOEhFailed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := New(c, fakestorage.New(fakestorage.Indexes{}))
+	m := mustNew(t, c, fakestorage.New(fakestorage.Indexes{}))
 
 	r := m.Apply([]byte(`{"id":"A","doc":{"podName":"pod-1"}}`))
 

@@ -223,7 +223,10 @@ func TestIntegracaoFimAFim(t *testing.T) {
 
 	// 2. Ingestão pelo pipeline real, com checkpoint periódico: sem ele o
 	// overlay de locations vive no heap e o consumo acompanha o dataset.
-	mat := materializer.New(ig.sch, ig.store)
+	mat, err := materializer.New(ig.sch, ig.store)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for i, ev := range corpus {
 		r := mat.Apply(ev)
 		if r.Err != nil {

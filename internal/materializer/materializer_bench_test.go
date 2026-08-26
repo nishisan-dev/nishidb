@@ -63,7 +63,11 @@ func newNullMaterializer(tb testing.TB, c *schema.Compiled, found bool, seq int6
 		key:     []byte("CMP-V0001PPCLP-013"),
 		found:   found,
 	}
-	return New(c, st)
+	m, err := New(c, st)
+	if err != nil {
+		tb.Fatalf("New: %v", err)
+	}
+	return m
 }
 
 // Gate da Q10: o Apply não aloca em steady state — nem no create, nem no
@@ -161,7 +165,11 @@ func newFakeMaterializer(tb testing.TB) (*Materializer, *schema.Compiled) {
 	if !ok {
 		tb.Fatal("Acct-Status-Type não compilado")
 	}
-	return New(c, fakestorage.New(fakestorage.Indexes{Bitmap: []types.FieldID{f.ID}})), c
+	m, err := New(c, fakestorage.New(fakestorage.Indexes{Bitmap: []types.FieldID{f.ID}}))
+	if err != nil {
+		tb.Fatalf("New: %v", err)
+	}
+	return m, c
 }
 
 // Evento cheio sobre estado cheio: o pior caso do merge no dublê.

@@ -167,14 +167,14 @@ func (o *ordenador) escreveEntradaTopN(e *entradaTopN, slots []slot, rowID types
 	buf := e.buf[:0]
 	var err error
 	for i := range slots {
-		if !slots[i].present {
+		if !slots[i].Present {
 			continue
 		}
 		// Mesma serialização do caminho completo, e por isso a releitura pode
 		// ser o `coleta` de sempre: um segundo formato aqui abriria a porta
 		// para uma linha ordenada pelo top-N e a mesma linha ordenada pelo sort
 		// completo produzirem valores diferentes.
-		if buf, err = encoding.AppendField(buf, slots[i].id, slots[i].val); err != nil {
+		if buf, err = encoding.AppendField(buf, slots[i].ID, slots[i].Val); err != nil {
 			e.buf = buf
 			o.bytesTN += int64(cap(buf)) - antes
 			return fmt.Errorf("executor: serializando a row %d para ordenar: %w", rowID, err)
@@ -186,14 +186,14 @@ func (o *ordenador) escreveEntradaTopN(e *entradaTopN, slots []slot, rowID types
 	for i := range o.chaves {
 		k := &o.chaves[i]
 		s := &slots[k.Slot]
-		cv := chaveVal{presente: s.present && s.val.Type == k.Want}
+		cv := chaveVal{presente: s.Present && s.Val.Type == k.Want}
 		if cv.presente {
 			if k.Kind == binder.CompareBytes {
 				cv.ini = int32(len(buf))
-				buf = append(buf, s.val.Bytes...)
+				buf = append(buf, s.Val.Bytes...)
 				cv.fim = int32(len(buf))
 			} else {
-				cv.i64 = s.val.I64
+				cv.i64 = s.Val.I64
 			}
 		}
 		vals[i] = cv

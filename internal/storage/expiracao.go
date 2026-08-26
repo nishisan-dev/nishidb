@@ -242,8 +242,28 @@ func (s *Store) ExpiraUmaPassada(ctx context.Context, lim LimitesDeExpiracao) (R
 			break
 		}
 
+		// A lápide preserva o instante de escrita de propósito, então a linha
+		// tombstonada continua "vencida" para sempre e o coletor a
+		// reexaminaria a cada passada, chamando Expira — que TOMA O wmu só
+		// para ver a flag e devolver false.
+		//
+		// Com prazo de dias isso é ruído. Com prazo de MINUTOS, que é o que as
+		// regras condicionais trouxeram, é disputa contínua pelo lock de
+		// escrita com a ingestão — e o freio de MaxPorPassada não protege,
+		// porque ele conta expirações efetivas, não chamadas.
+		//
+		// A leitura é sem lock, e o pré-filtro é seguro porque tombstone não
+		// se desfaz: a decisão só pode ficar mais conservadora, e o Expira
+		// continua revalidando tudo sob o lock.
+		if packed, tem := s.locs.Get(id); tem {
+			if _, _, flags := rowindex.Unpack(packed); flags&types.FlagTombstone != 0 {
+				id = avanca(id, limite, &r)
+				continue
+			}
+		}
+
 		r.Examinadas++
-		ms, conhecido := s.escritas.Get(id)
+		_, conhecido := s.escritas.Get(id)
 		switch {
 		case !conhecido:
 			dada, err := s.daCarencia(id)
@@ -253,7 +273,7 @@ func (s *Store) ExpiraUmaPassada(ctx context.Context, lim LimitesDeExpiracao) (R
 			if dada {
 				r.Carencias++
 			}
-		case s.agora().UnixMilli()-ms >= s.expireAfterWrite.Milliseconds():
+		case s.prazoVencido(id):
 			// O Expira releva a decisão dentro do wmu, então uma renovação
 			// que chegue entre esta leitura e a marca faz ele abortar sozinho.
 			expirou, err := s.Expira(id)
@@ -267,15 +287,25 @@ func (s *Store) ExpiraUmaPassada(ctx context.Context, lim LimitesDeExpiracao) (R
 			}
 		}
 
-		id++
-		if id >= limite {
-			id, r.DeuVolta = 0, true
-		}
+		id = avanca(id, limite, &r)
 	}
 	s.cursorExpiracao = id
 	s.examinadas.Add(uint64(r.Examinadas))
 	s.carencias.Add(uint64(r.Carencias))
 	return r, nil
+}
+
+// avanca move o cursor da passada uma posição, dando a volta no fim.
+//
+// É função, e não a linha solta que era, porque o pré-filtro de tombstone tem
+// um segundo ponto de saída do corpo do laço: um `continue` que pulasse o
+// incremento travaria a passada num laço infinito sobre a mesma linha.
+func avanca(id, limite types.RowID, r *ResultadoDaExpiracao) types.RowID {
+	id++
+	if id >= limite {
+		id, r.DeuVolta = 0, true
+	}
+	return id
 }
 
 // intervaloEntreExpiracoes é o cochilo entre passadas do coletor.

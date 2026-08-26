@@ -26,7 +26,8 @@ func TestGateDiscoCaiQuandoOKeySetEhAbandonado(t *testing.T) {
 	}
 	s := openStore(t, Options{
 		Dir: t.TempDir(), SegmentSize: 64 << 10,
-		ExpireAfterWrite: time.Hour, CampoDeEscrita: "_writtenAt",
+		TTLAtivo: true, DuracaoDeFundo: time.Hour,
+		CampoDeEscrita: "_writtenAt", CampoDePrazo: "_expiresIn",
 	})
 	rel := &relogioDeTeste{t: time.Date(2026, 8, 22, 20, 0, 0, 0, time.UTC)}
 	s.UsaRelogio(rel.agora)

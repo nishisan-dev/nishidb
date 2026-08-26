@@ -3,6 +3,7 @@ package materializer
 import (
 	"errors"
 	"fmt"
+	"sync/atomic"
 
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 	"github.com/nishisan-dev/nishidb/internal/types"
@@ -29,6 +30,10 @@ var ErrInternalState = errors.New("INTERNAL_STATE")
 // estado — um patch posterior que também não mencione o campo mantém a
 // ausência, e o executor lê ausência como NULL.
 //
+// Entry CONGELADA é a terceira política de escrita: o campo já presente no
+// estado anterior é preservado e o valor novo é descartado. Ela nunca chega
+// aqui com isNull — a captura não emite congelada de origem nula.
+//
 // out é usado no estilo append (como encoding.AppendField): passe out[:0]
 // para reaproveitar a capacidade sem herdar o conteúdo. Devolve SEMPRE o
 // slice resultante, inclusive no erro, para o caller reter o buffer crescido.
@@ -41,7 +46,10 @@ var ErrInternalState = errors.New("INTERNAL_STATE")
 //
 // A saída sai com FieldIDs estritamente crescentes e sem TypeNull —
 // pré-condição do Put, que a revalida antes de tornar o record durável.
-func mergeRecords(prevPayload []byte, patch []patchEntry, out []byte) ([]byte, error) {
+// congeladas conta os campos que o ramo congelado preservou. É ponteiro e
+// aceita nil porque os testes de unidade do merge não têm métricas a
+// alimentar; o Apply passa o contador do dataset.
+func mergeRecords(prevPayload []byte, patch []patchEntry, out []byte, congeladas *atomic.Int64) ([]byte, error) {
 	var (
 		r      encoding.FieldReader
 		lastID types.FieldID // 0 é reservado (§32): serve de sentinela inicial
@@ -66,6 +74,18 @@ func mergeRecords(prevPayload []byte, patch []patchEntry, out []byte) ([]byte, e
 		lastID = id
 		j++
 		if pok && pid == id {
+			if e.congelada {
+				if congeladas != nil {
+					congeladas.Add(1)
+				}
+				// Entry congelada com o campo JÁ no estado: preserva o
+				// anterior cru e descarta a nova. É o congelamento inteiro,
+				// e é o único lugar onde ele acontece — a política viaja na
+				// entry, e nem o replace nem o create precisam saber dela.
+				out = append(out, r.RawField()...)
+				pid, _, pok = r.Next()
+				continue
+			}
 			// Sobrescrita (ou remoção): o campo anterior é descartado.
 			pid, _, pok = r.Next()
 		}

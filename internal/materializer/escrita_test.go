@@ -19,7 +19,7 @@ materialization:
     field: id
   mode: merge
   ttl:
-    expireAfterWrite: 2h
+    - expireAfterWrite: 2h
 schema:
   include: ["*"]
   unknownFields: include
@@ -77,7 +77,7 @@ func TestCadaEscritaRenovaOInstante(t *testing.T) {
 		t.Run(modo, func(t *testing.T) {
 			yaml := strings.Replace(yamlComExpire, "mode: merge", "mode: "+modo, 1)
 			c, st := compiladoComExpire(t, yaml)
-			m := New(c, st)
+			m := mustNew(t, c, st)
 
 			relogio := time.Date(2026, 8, 22, 20, 0, 0, 0, time.UTC)
 			m.UsaRelogio(func() time.Time { return relogio })
@@ -109,12 +109,12 @@ func TestCadaEscritaRenovaOInstante(t *testing.T) {
 
 // Sem expiração declarada não há por que pagar 11 bytes por record.
 func TestSemExpireAfterWriteNaoHaCampoDeSistema(t *testing.T) {
-	yaml := strings.Replace(yamlComExpire, "  ttl:\n    expireAfterWrite: 2h\n", "", 1)
+	yaml := strings.Replace(yamlComExpire, "  ttl:\n    - expireAfterWrite: 2h\n", "", 1)
 	c, st := compiladoComExpire(t, yaml)
 	if c.Escrita != nil {
 		t.Fatal("campo de sistema compilado sem expiração declarada")
 	}
-	m := New(c, st)
+	m := mustNew(t, c, st)
 	if r := m.Apply([]byte(`{"id":"A","severidade":3}`)); r.Err != nil {
 		t.Fatal(r.Err)
 	}
@@ -139,7 +139,7 @@ func TestSemExpireAfterWriteNaoHaCampoDeSistema(t *testing.T) {
 // própria entidade expira — um valor no futuro a tornaria imortal, sem erro.
 func TestEventoQueTrazOCampoDeSistemaEhRecusado(t *testing.T) {
 	c, st := compiladoComExpire(t, yamlComExpire)
-	m := New(c, st)
+	m := mustNew(t, c, st)
 	r := m.Apply([]byte(`{"id":"A","` + schema.CampoInstanteDeEscrita + `":253402300799000}`))
 	if r.Err == nil {
 		t.Fatal("evento com o campo de sistema foi aceito")
@@ -156,7 +156,7 @@ func TestEventoQueTrazOCampoDeSistemaEhRecusado(t *testing.T) {
 // produziria carimbos distintos dentro de uma escrita só.
 func TestOInstanteEhOMesmoParaOEventoInteiro(t *testing.T) {
 	c, st := compiladoComExpire(t, yamlComExpire)
-	m := New(c, st)
+	m := mustNew(t, c, st)
 	chamadas := 0
 	base := time.Date(2026, 8, 22, 20, 0, 0, 0, time.UTC)
 	m.UsaRelogio(func() time.Time {
@@ -199,7 +199,7 @@ schema:
       type: int64
 `
 	c, st := compiladoComExpire(t, yaml)
-	m := New(c, st)
+	m := mustNew(t, c, st)
 
 	if r := m.Apply([]byte(`{"id":"A","seq":10,"severidade":3}`)); r.Err != nil {
 		t.Fatal(r.Err)
@@ -239,7 +239,7 @@ schema:
 // fechado.
 func TestRessurreicaoNaoFazMergeSobreOPayloadDaLapide(t *testing.T) {
 	c, st := compiladoComExpire(t, yamlComExpire)
-	m := New(c, st)
+	m := mustNew(t, c, st)
 
 	if r := m.Apply([]byte(`{"id":"A","severidade":3,"extra":"velho"}`)); r.Err != nil {
 		t.Fatal(r.Err)

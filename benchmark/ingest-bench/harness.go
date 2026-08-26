@@ -441,7 +441,10 @@ func Run(cfg Config) (*Report, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ingest-bench: compilando spec: %w", err)
 	}
-	m := materializer.New(c, st)
+	m, err := materializer.New(c, st)
+	if err != nil {
+		return nil, err
+	}
 
 	rep := &Report{
 		StartedAt:      time.Now(),

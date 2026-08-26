@@ -85,7 +85,7 @@ func peNull(id types.FieldID) patchEntry {
 
 func mustMerge(t *testing.T, prev []byte, patch []patchEntry) []byte {
 	t.Helper()
-	out, err := mergeRecords(prev, patch, nil)
+	out, err := mergeRecords(prev, patch, nil, nil)
 	if err != nil {
 		t.Fatalf("mergeRecords: %v", err)
 	}
@@ -287,12 +287,12 @@ func TestMergeTodosOsTiposRoundTrip(t *testing.T) {
 // carregar resíduo do primeiro nem apontar para dentro do prev.
 func TestMergeReutilizaBufferDeSaida(t *testing.T) {
 	prev1 := encodeFields(t, fieldKV{1, vstr("primeiro-payload-longo")}, fieldKV{2, vi64(1)})
-	out, err := mergeRecords(prev1, []patchEntry{pe(3, vi64(3))}, nil)
+	out, err := mergeRecords(prev1, []patchEntry{pe(3, vi64(3))}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	prev2 := encodeFields(t, fieldKV{4, vi64(4)})
-	out2, err := mergeRecords(prev2, []patchEntry{pe(5, vi64(5))}, out[:0])
+	out2, err := mergeRecords(prev2, []patchEntry{pe(5, vi64(5))}, out[:0], nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,7 +308,7 @@ func TestMergeNaoEscreveNoPrev(t *testing.T) {
 	copia := append([]byte(nil), prev...)
 
 	out := make([]byte, 0, 256)
-	got, err := mergeRecords(prev, []patchEntry{pe(2, vstr("novo")), pe(9, vi64(90))}, out)
+	got, err := mergeRecords(prev, []patchEntry{pe(2, vstr("novo")), pe(9, vi64(90))}, out, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -344,7 +344,7 @@ func TestMergePrevCorrompido(t *testing.T) {
 	prev := encodeFields(t, fieldKV{1, vi64(10)}, fieldKV{2, vstr("abc")})
 	truncado := prev[:len(prev)-2] // corta o valor da string
 
-	_, err := mergeRecords(truncado, []patchEntry{pe(9, vi64(9))}, nil)
+	_, err := mergeRecords(truncado, []patchEntry{pe(9, vi64(9))}, nil, nil)
 	if err == nil {
 		t.Fatal("merge sobre payload truncado deveria falhar")
 	}
@@ -365,7 +365,7 @@ func TestMergePrevComTagInvalida(t *testing.T) {
 	prev := encodeFields(t, fieldKV{1, vi64(10)}, fieldKV{2, vi64(20)})
 	prev[11+2] = 0x00 // TYPE do segundo campo vira TypeNull (proibido em payload)
 
-	_, err := mergeRecords(prev, nil, nil)
+	_, err := mergeRecords(prev, nil, nil, nil)
 	if !errors.Is(err, ErrInternalState) || !errors.Is(err, encoding.ErrCorrupt) {
 		t.Fatalf("erro = %v, want ErrInternalState + encoding.ErrCorrupt", err)
 	}
@@ -373,7 +373,7 @@ func TestMergePrevComTagInvalida(t *testing.T) {
 
 func TestMergePatchForaDeOrdem(t *testing.T) {
 	prev := encodeFields(t, fieldKV{1, vi64(10)})
-	_, err := mergeRecords(prev, []patchEntry{pe(5, vi64(5)), pe(3, vi64(3))}, nil)
+	_, err := mergeRecords(prev, []patchEntry{pe(5, vi64(5)), pe(3, vi64(3))}, nil, nil)
 	if !errors.Is(err, ErrInternalState) {
 		t.Fatalf("erro = %v, want ErrInternalState", err)
 	}
@@ -383,7 +383,7 @@ func TestMergePatchForaDeOrdem(t *testing.T) {
 }
 
 func TestMergePatchComIDDuplicado(t *testing.T) {
-	_, err := mergeRecords(nil, []patchEntry{pe(3, vi64(3)), pe(3, vi64(4))}, nil)
+	_, err := mergeRecords(nil, []patchEntry{pe(3, vi64(3)), pe(3, vi64(4))}, nil, nil)
 	if !errors.Is(err, ErrInternalState) {
 		t.Fatalf("erro = %v, want ErrInternalState (duplicata quebra a ordem estrita)", err)
 	}
@@ -392,7 +392,7 @@ func TestMergePatchComIDDuplicado(t *testing.T) {
 // FieldID 0 é reservado pelo dicionário (§32): o merge o recusa em vez de
 // gravar um campo que nenhum nome resolve.
 func TestMergePatchComIDReservado(t *testing.T) {
-	_, err := mergeRecords(nil, []patchEntry{pe(0, vi64(1))}, nil)
+	_, err := mergeRecords(nil, []patchEntry{pe(0, vi64(1))}, nil, nil)
 	if !errors.Is(err, ErrInternalState) {
 		t.Fatalf("erro = %v, want ErrInternalState", err)
 	}
@@ -421,7 +421,7 @@ func TestMergeAppendFieldErroPropaga(t *testing.T) {
 	prev := encodeFields(t, fieldKV{1, vi64(10)})
 	inválida := types.Value{Type: types.TypeIPv4, Bytes: []byte{1, 2}} // ipv4 exige 4 bytes
 
-	_, err := mergeRecords(prev, []patchEntry{pe(2, inválida)}, nil)
+	_, err := mergeRecords(prev, []patchEntry{pe(2, inválida)}, nil, nil)
 	if !errors.Is(err, encoding.ErrInvalidPayload) {
 		t.Fatalf("erro = %v, want encoding.ErrInvalidPayload", err)
 	}
@@ -431,7 +431,44 @@ func TestMergeAppendFieldErroPropaga(t *testing.T) {
 
 	// E também quando o campo inválido sobrescreve um do prev (o ramo em que o
 	// cursor do prev já avançou).
-	if _, err := mergeRecords(prev, []patchEntry{pe(1, inválida)}, nil); !errors.Is(err, encoding.ErrInvalidPayload) {
+	if _, err := mergeRecords(prev, []patchEntry{pe(1, inválida)}, nil, nil); !errors.Is(err, encoding.ErrInvalidPayload) {
 		t.Errorf("sobrescrita com Value inválida: erro = %v, want encoding.ErrInvalidPayload", err)
 	}
+}
+
+// peCongelada é a entry com a terceira política de escrita: preserva o
+// anterior em vez de sobrescrever.
+func peCongelada(id types.FieldID, v types.Value) patchEntry {
+	return patchEntry{field: &schema.CompiledField{ID: id}, val: v, congelada: true}
+}
+
+func TestMergeEntryCongeladaPreservaOAnterior(t *testing.T) {
+	prev := encodeFields(t, fieldKV{1, vi64(5)})
+	got := mustMerge(t, prev, []patchEntry{peCongelada(1, vi64(9))})
+	wantFields(t, got, fieldKV{1, vi64(5)}) // o 9 foi descartado
+}
+
+func TestMergeEntryCongeladaEscreveQuandoOAnteriorNaoTem(t *testing.T) {
+	prev := encodeFields(t, fieldKV{2, vstr("outro")})
+	got := mustMerge(t, prev, []patchEntry{peCongelada(1, vi64(9))})
+	wantFields(t, got, fieldKV{1, vi64(9)}, fieldKV{2, vstr("outro")})
+}
+
+// O caminho do create não tem estado anterior: lá a congelada é escrita como
+// qualquer outro campo, e o bit não muda nada.
+func TestEncodePatchIgnoraOBitCongelada(t *testing.T) {
+	got := mustEncode(t, []patchEntry{peCongelada(1, vi64(9))})
+	wantFields(t, got, fieldKV{1, vi64(9)})
+}
+
+// A congelada preservada não pode atrapalhar o merge dos vizinhos: o campo
+// anterior é copiado CRU e o cursor do prev avança uma vez só.
+func TestMergeCongeladaNoMeioNaoDesalinhaOsVizinhos(t *testing.T) {
+	prev := encodeFields(t, fieldKV{1, vi64(10)}, fieldKV{2, vi64(5)}, fieldKV{3, vstr("z")})
+	got := mustMerge(t, prev, []patchEntry{
+		pe(1, vi64(11)),
+		peCongelada(2, vi64(99)),
+		pe(3, vstr("w")),
+	})
+	wantFields(t, got, fieldKV{1, vi64(11)}, fieldKV{2, vi64(5)}, fieldKV{3, vstr("w")})
 }

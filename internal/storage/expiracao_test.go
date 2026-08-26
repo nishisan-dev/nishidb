@@ -31,9 +31,11 @@ func (r *relogioDeTeste) avanca(d time.Duration) { r.t = r.t.Add(d) }
 func storeComExpiracao(t *testing.T, dir string, d time.Duration) (*Store, *relogioDeTeste) {
 	t.Helper()
 	s := openStore(t, Options{
-		Dir:              dir,
-		ExpireAfterWrite: d,
-		CampoDeEscrita:   "_writtenAt",
+		Dir:            dir,
+		TTLAtivo:       true,
+		DuracaoDeFundo: d,
+		CampoDeEscrita: "_writtenAt",
+		CampoDePrazo:   "_expiresIn",
 	})
 	rel := &relogioDeTeste{t: time.Date(2026, 8, 22, 20, 0, 0, 0, time.UTC)}
 	s.UsaRelogio(rel.agora)
@@ -249,7 +251,7 @@ func TestExpiryIdxEhReconstruidoPeloReplayDoTail(t *testing.T) {
 // FieldID 0 é reservado: sem o campo, nada teria de onde tirar o instante e
 // a expiração nunca aconteceria, em silêncio.
 func TestExpiracaoSemCampoDeEscritaEhRecusadaNaAbertura(t *testing.T) {
-	_, err := Open(Options{Dir: t.TempDir(), ExpireAfterWrite: time.Hour})
+	_, err := Open(Options{Dir: t.TempDir(), TTLAtivo: true})
 	if err == nil {
 		t.Fatal("aberto sem CampoDeEscrita")
 	}

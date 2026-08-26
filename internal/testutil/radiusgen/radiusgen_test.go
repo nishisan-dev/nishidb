@@ -424,7 +424,10 @@ func TestCorpusIngerivelPeloMaterializer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := materializer.New(c, fakestorage.New(fakestorage.Indexes{}))
+	m, err := materializer.New(c, fakestorage.New(fakestorage.Indexes{}))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	g := gen(t, radiusgen.Config{Seed: 21, Entities: 300, UnknownFieldRatio: 0.02, NullFieldRatio: 0.1})
 	var buf []byte

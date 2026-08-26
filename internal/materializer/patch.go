@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync/atomic"
 	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/jsonp"
@@ -25,7 +26,11 @@ var (
 type patchEntry struct {
 	field  *schema.CompiledField
 	isNull bool
-	val    types.Value
+	// congelada faz o merge PRESERVAR o valor anterior em vez de sobrescrever.
+	// É a terceira política de escrita, ao lado de "sobrescreve" (default) e
+	// "remove" (isNull).
+	congelada bool
+	val       types.Value
 }
 
 // PatchBuffer converte um evento JSON em entries tipadas ordenadas por
@@ -53,6 +58,10 @@ type PatchBuffer struct {
 	// ainda que este caminho seja raro: um caminho raro que aloca é uma
 	// alocação que só aparece em produção.
 	filhosBuf []*schema.CompiledField
+	// congeladasCapturadas é o contador do dataset, injetado pelo
+	// Materializer. Ponteiro porque o PatchBuffer é usado direto em testes,
+	// onde não há métrica nenhuma para alimentar.
+	congeladasCapturadas *atomic.Int64
 	// compilado é o schema do Parse corrente. A descoberta precisa dele para
 	// registrar coluna nova, e passá-lo por parâmetro em toda a cadeia da
 	// segunda passada só o faria viajar de graça.
@@ -98,10 +107,16 @@ func (b *PatchBuffer) Parse(event []byte, c *schema.Compiled, agora time.Time) e
 			break
 		}
 		cf, found := c.FieldByName(f.Key)
-		if found && cf.IsSystem {
-			// O evento não pode escrever o relógio do writer. Aceitar isto
-			// deixaria o produtor controlar quando a própria entidade expira,
-			// e um valor no futuro a tornaria imortal — sem erro nenhum.
+		if found && (cf.IsSystem || cf.FrozenFrom != nil || cf.DoRelogio) {
+			// O evento não pode escrever nem o relógio do writer nem uma
+			// coluna congelada. No primeiro caso o produtor controlaria quando
+			// a entidade expira; no segundo, decidiria qual é o valor
+			// "original" — e a coluna passaria a mentir sem erro nenhum.
+			//
+			// É diferente da coluna derivada, ignorada em silêncio logo
+			// abaixo: lá o nome de topo pode existir legitimamente no evento
+			// com outro significado, aqui o nome foi inventado pelo operador
+			// para esta finalidade.
 			return fmt.Errorf("%w: campo %q é reservado ao writer e não pode vir no evento",
 				schema.ErrUnknownField, f.Key) // SCHEMA_VALIDATION
 		}
@@ -204,6 +219,15 @@ func (b *PatchBuffer) Parse(event []byte, c *schema.Compiled, agora time.Time) e
 	// sort e do dedup como qualquer outra entry.
 	if err := b.extraiDerivadas(); err != nil {
 		return err
+	}
+
+	// As congeladas entram depois das derivadas e antes da ordenação: podem
+	// ter origem numa coluna extraída, e precisam participar do sort e do
+	// dedup como qualquer outra entry.
+	if len(c.Congeladas) > 0 {
+		if err := b.capturaCongeladas(c, agora, b.congeladasCapturadas); err != nil {
+			return err
+		}
 	}
 
 	// O campo de sistema entra ANTES da ordenação, como uma entry qualquer:

@@ -271,12 +271,32 @@ contador por (coluna, tipo).
 
 - **Sem autenticação e sem TLS** (Fase 11). Loopback é a única proteção, e por
   isso o bind não deve mudar.
-- **Expiração ligada em `90d`, sem coletor ainda** (M6). `ttl.expireAfterWrite:
-  90d` está declarado: cada escrita renova o prazo, então alarme ativo nunca
-  expira e alarme abandonado sai da query após 3 meses sem update. O
-  **predicado de leitura** vale desde já; o **coletor** é a Fase 4, e até ele
-  entrar o disco não é devolvido — a entidade some da consulta e o record
-  fica.
+- **Expiração por regras condicionais** (a chave `ttl:` deixou de ser um bloco
+  único e virou uma LISTA). O YAML do piloto precisa migrar antes da próxima
+  subida — a forma antiga é recusada no load, com a mensagem apontando a nova:
+
+  ```yaml
+  materialization:
+    ttl:
+      # Alarme FECHADO sai em minutos, não em meses: a condição usa a mesma
+      # gramática do WHERE e é avaliada sobre o estado pós-merge.
+      - when: "severidade = 0"
+        expireAfterWrite: 30m
+      # Regra de fundo: o prazo que o piloto já tinha, para todo o resto.
+      - expireAfterWrite: 90d
+  ```
+
+  Cada escrita reavalia as regras e regrava o prazo, então o alarme que REABRE
+  volta ao prazo longo — o prazo curto é cancelado pela própria escrita. Alarme
+  ativo nunca expira; alarme abandonado sai da query depois do prazo da regra
+  que casou. O **predicado de leitura** vale desde já; o **coletor** é a Fase 4,
+  e até ele entrar o disco não é devolvido — a entidade some da consulta e o
+  record fica.
+
+  As entidades já materializadas não têm o campo `_expiresIn` no documento e
+  caem na duração da regra de **fundo** — os 90 dias de sempre —, passando a
+  obedecer as condicionais na primeira escrita seguinte. A migração não exige
+  reprocessar nada.
   - Ligar não exigiu recriar o dataset: as entidades materializadas ANTES
     ficam sem `_writtenAt`, o que o índice lê como prazo **desconhecido** —
     e desconhecido nunca vence. Elas ganham o campo assim que receberem

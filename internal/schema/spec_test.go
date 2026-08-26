@@ -20,9 +20,6 @@ materialization:
     field: _SEQ
     type: int64
     strategy: greater
-  ttl:
-    field: EventExpireDate
-    type: timestamp
 schema:
   include:
     - "*"
@@ -167,12 +164,10 @@ func TestParseValidationErrors(t *testing.T) {
 		// Sequence/ttl referenciados devem estar DECLARADOS em fields
 		// incondicionalmente (como a key): sob include explícito, um campo
 		// não declarado compilaria como auto/TypeNull e quebraria o greater
-		// do materializer (sequence) e a expiração (ttl).
+		// do materializer.
 		{"sequence nao declarada", "version: 1\nname: t\nmaterialization:\n  key:\n    field: id\n  sequence:\n    field: _SEQ\nschema:\n  include: [id, _SEQ]\n  fields:\n    id:\n      type: string\n", "sequence"},
-		{"ttl nao declarada", "version: 1\nname: t\nmaterialization:\n  key:\n    field: id\n  ttl:\n    field: exp\nschema:\n  include: [id, exp]\n  fields:\n    id:\n      type: string\n", "ttl"},
 		{"sequence declarada com outro tipo", repl("    _SEQ:\n      type: int64", "    _SEQ:\n      type: string"), "_SEQ"},
-		{"ttl tipo invalido", repl("  ttl:\n    field: EventExpireDate\n    type: timestamp", "  ttl:\n    field: EventExpireDate\n    type: string"), "ttl.type"},
-		{"ttl declarado com outro tipo", repl("    EventExpireDate:\n      type: timestamp", "    EventExpireDate:\n      type: string"), "EventExpireDate"},
+		{"ttl na forma antiga", "version: 1\nname: t\nmaterialization:\n  key:\n    field: id\n  ttl:\n    expireAfterWrite: 2h\nschema:\n  include: [id]\n  fields:\n    id:\n      type: string\n", "lista"},
 		{"unknownFields invalido", repl("unknownFields: include", "unknownFields: drop"), "unknownFields"},
 		{"tipo de campo invalido", repl("      type: double", "      type: float"), "float"},
 		{"index invalido", repl("index: bitmap", "index: btree"), "btree"},
@@ -187,7 +182,6 @@ func TestParseValidationErrors(t *testing.T) {
 		// excluir por alias seria um no-op silencioso.
 		{"exclude da key", repl("  exclude:\n    - debug", "  exclude:\n    - id"), "key"},
 		{"exclude da sequence", repl("  exclude:\n    - debug", "  exclude:\n    - _SEQ"), "sequence"},
-		{"exclude do ttl", repl("  exclude:\n    - debug", "  exclude:\n    - EventExpireDate"), "ttl"},
 		{"exclude por alias", repl("  exclude:\n    - debug", "  exclude:\n    - status"), "alias"},
 		{"maxRows negativo", repl("maxRows: 50000", "maxRows: -1"), "maxRows"},
 		{"maxCols zero", repl("  unknownFields: include", "  unknownFields: include\n  maxCols: 0"), "maxCols"},

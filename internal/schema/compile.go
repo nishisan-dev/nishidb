@@ -106,13 +106,13 @@ type FieldDictionary interface {
 //
 // SEMPRE use por ponteiro: o atômico o torna não-copiável (go vet -copylocks).
 type CompiledField struct {
-	ID                       types.FieldID
-	Name                     string
-	Alias                    string          // "" se ausente
-	Type                     types.FieldType // tipo DECLARADO; TypeNull quando IsAuto
-	IsAuto                   bool            // tipo resolvido na primeira observação
-	Index                    IndexKind
-	IsKey, IsSequence, IsTTL bool
+	ID                types.FieldID
+	Name              string
+	Alias             string          // "" se ausente
+	Type              types.FieldType // tipo DECLARADO; TypeNull quando IsAuto
+	IsAuto            bool            // tipo resolvido na primeira observação
+	Index             IndexKind
+	IsKey, IsSequence bool
 
 	// IsSystem marca campo que o WRITER injeta e o operador não declara.
 	// Ele existe no schema como qualquer outro — tem FieldID, é gravado no
@@ -141,6 +141,16 @@ type CompiledField struct {
 	// evento: procurar as filhas varrendo o mapa no hot path custaria o preço
 	// de um SELECT * por evento.
 	Derivadas []*CompiledField
+
+	// FrozenFrom é a coluna de onde o valor congelado vem; nil quando esta
+	// não é congelada. DoRelogio marca a congelada cuja origem é o relógio do
+	// writer, que não tem CompiledField para apontar.
+	//
+	// A congelada é uma coluna NORMAL em tudo o que importa ao binder, ao
+	// planner e ao encoder — tem FieldID, tipo e índice, aparece no SELECT *
+	// e no /v1/metadata. O par governa uma coisa só: quem escreve o valor.
+	FrozenFrom *CompiledField
+	DoRelogio  bool
 
 	// Format é o padrão declarado no YAML e Layout é ele compilado. Não-nil
 	// exatamente quando Type é datetime ou time; o Format é guardado ao lado
@@ -301,16 +311,31 @@ type Compiled struct {
 	// carregar o YAML duas vezes.
 	Errors ErrorsSpec
 
-	Key, Seq, TTL *CompiledField
+	Key, Seq *CompiledField
 
-	// ExpireAfterWrite é o idle timeout do dataset; zero = sem expiração por
-	// escrita. Mutuamente exclusivo com TTL, pela validação da spec.
-	ExpireAfterWrite time.Duration
+	// Congeladas são as colunas com frozenFrom, em ordem de FieldID.
+	// Pré-computada e ordenada pela mesma razão das Derivadas: o materializer
+	// a percorre por evento, e varrer o mapa no caminho quente custaria caro.
+	Congeladas []*CompiledField
+
+	// RegrasTTL são as regras de expiração validadas, na ordem do arquivo —
+	// que é semântica: a primeira que casa vence. O `when` continua em TEXTO
+	// aqui de propósito: compilá-lo exige o binder, e o binder importa este
+	// pacote. Quem compila é internal/predicado, o único ponto da árvore que
+	// pode importar os dois.
+	RegrasTTL []RegraTTL
+	// DuracaoDeFundo é a duração da regra sem `when`, ou zero quando não há.
+	DuracaoDeFundo time.Duration
 
 	// Escrita é o campo de sistema que registra o instante da escrita.
-	// Não-nil exatamente quando ExpireAfterWrite > 0 — sem expiração não há
-	// para que pagar 11 bytes por record.
+	// Não-nil exatamente quando há regras de TTL — sem expiração não há para
+	// que pagar 11 bytes por record.
 	Escrita *CompiledField
+	// Prazo é o campo de sistema que carrega a DURAÇÃO de ociosidade que vale
+	// para a entidade, em millis. Não-nil junto com o Escrita: os dois só
+	// fazem sentido em par — um diz quando foi a última escrita, o outro por
+	// quanto tempo ela vale.
+	Prazo *CompiledField
 
 	mu      sync.RWMutex
 	byName  map[string]*CompiledField
@@ -406,9 +431,8 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 		exclude:       make(map[string]struct{}, len(s.Schema.Exclude)),
 		dict:          dict,
 	}
-	if ttl := s.Materialization.TTL; ttl != nil {
-		c.ExpireAfterWrite = ttl.ExpireAfterWrite
-	}
+	c.RegrasTTL = s.Materialization.RegrasTTL
+	c.DuracaoDeFundo = s.Materialization.DuracaoDeFundo
 	if s.Materialization.Mode == "replace" {
 		c.Mode = ModeReplace
 	}
@@ -449,8 +473,12 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 	// assim ele ganha FieldID pelo mesmo caminho determinístico e o dicionário
 	// o registra de forma durável, que é o que faz o replay do tail conseguir
 	// reconstruir o índice de expiração a partir dos próprios records.
-	if c.ExpireAfterWrite > 0 {
-		names = append(names, CampoInstanteDeEscrita)
+	// A ordem é contratual, e a razão é a do comentário do Open do storage: o
+	// LookupOrCreate queima ids na ordem em que é chamado, e essa ordem decide
+	// o mapeamento nome→id de um dataset NOVO, gravado para sempre. _writtenAt
+	// primeiro, _expiresIn depois, sempre — nunca reordene.
+	if len(c.RegrasTTL) > 0 {
+		names = append(names, CampoInstanteDeEscrita, CampoDePrazo)
 	}
 	sort.Strings(names)
 
@@ -480,11 +508,6 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 	if s.Materialization.Sequence != nil {
 		seqField = s.Materialization.Sequence.Field
 	}
-	ttlField := ""
-	if s.Materialization.TTL != nil {
-		ttlField = s.Materialization.TTL.Field
-	}
-
 	for _, name := range names {
 		if _, excluded := c.exclude[name]; excluded {
 			continue
@@ -498,13 +521,22 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 			Name:       name,
 			IsKey:      name == s.Materialization.Key.Field,
 			IsSequence: name == seqField,
-			IsTTL:      name == ttlField,
 		}
 		if name == CampoInstanteDeEscrita {
 			// Tipo fixo, não declarável: é o writer que o preenche, com o
 			// relógio do processo, e não há format nem inferência envolvidos.
 			cf.Type, cf.IsSystem = types.TypeTimestamp, true
 			c.Escrita = cf
+			c.byName[cf.Name] = cf
+			c.byID[cf.ID] = cf
+			continue
+		}
+		if name == CampoDePrazo {
+			// int64, e NÃO timestamp: ela carrega uma DURAÇÃO em millis, e
+			// timestamp faria `SELECT _expiresIn` renderizar 3 minutos como
+			// 1970-01-01T00:03:00Z — uma data que não é uma data.
+			cf.Type, cf.IsSystem = types.TypeInt64, true
+			c.Prazo = cf
 			c.byName[cf.Name] = cf
 			c.byID[cf.ID] = cf
 			continue
@@ -556,10 +588,42 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 		if cf.IsSequence {
 			c.Seq = cf
 		}
-		if cf.IsTTL {
-			c.TTL = cf
-		}
 	}
+
+	// A religação das congeladas roda DEPOIS do laço porque a origem pode ter
+	// sido compilada depois da congelada — os nomes são percorridos em ordem
+	// alfabética, e `originalSeverity` vem antes de `severity`.
+	for name, spec := range s.Schema.Fields {
+		if spec.FrozenFrom == "" {
+			continue
+		}
+		cf, ok := c.byName[name]
+		if !ok {
+			continue // excluída do dataset
+		}
+		if spec.FrozenFrom == OrigemRelogio {
+			cf.Type, cf.DoRelogio = types.TypeTimestamp, true
+		} else {
+			origem, ok := c.byName[spec.FrozenFrom]
+			if !ok {
+				return nil, specErrf("campo %q: origem %q não compilou (excluída?)", name, spec.FrozenFrom)
+			}
+			cf.FrozenFrom = origem
+			cf.Type, cf.IsAuto = origem.Type, origem.IsAuto
+			if cf.IsAuto {
+				// O hint é carregado aqui pela mesma razão do laço acima, e
+				// não de graça: a congelada tem FieldID PRÓPRIO, então o tipo
+				// que ela fixou numa execução anterior está sob o id DELA. Sem
+				// esta leitura, o processo reiniciado trataria uma coluna que
+				// já tem dados gravados como nunca observada.
+				if t, ok := dict.TypeHint(cf.ID); ok {
+					cf.autoType.Store(uint32(t))
+				}
+			}
+		}
+		c.Congeladas = append(c.Congeladas, cf)
+	}
+	sort.Slice(c.Congeladas, func(i, j int) bool { return c.Congeladas[i].ID < c.Congeladas[j].ID })
 
 	// Campos que o DICIONÁRIO conhece e o YAML não: campos auto que uma
 	// execução anterior materializou via ResolveUnknown. Sem carregá-los aqui,

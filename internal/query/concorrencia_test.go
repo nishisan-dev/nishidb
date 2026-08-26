@@ -35,7 +35,10 @@ func TestConcorrenciaWriterELeitoresPeloSQL(t *testing.T) {
 	// leitura que devolva um par fora desta lista viu estado parcial.
 	pares := [][2]string{{"Start", "PPPoE"}, {"Stop", "PPP"}, {"Alive", "PPPoE"}}
 
-	mat := materializer.New(ig.sch, ig.store)
+	mat, err := materializer.New(ig.sch, ig.store)
+	if err != nil {
+		t.Fatal(err)
+	}
 	// Estado inicial, para que os leitores tenham o que ler desde o começo.
 	for i := 0; i < entidades; i++ {
 		ev := fmt.Sprintf(`{"id":"K%04d","_SEQ":1,"Acct-Status-Type":%q,"Framed-Protocol":%q}`,
@@ -145,7 +148,10 @@ func TestPointLookupConcorrenteComEscritaDaMesmaKey(t *testing.T) {
 	ig := &integracao{t: t, dir: t.TempDir() + "/conc2", oracle: oraculo{}}
 	ig.abre()
 
-	mat := materializer.New(ig.sch, ig.store)
+	mat, err := materializer.New(ig.sch, ig.store)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if r := mat.Apply([]byte(`{"id":"K","_SEQ":1,"Acct-Status-Type":"Start","User-Name":"v1"}`)); r.Err != nil {
 		t.Fatal(r.Err)
 	}

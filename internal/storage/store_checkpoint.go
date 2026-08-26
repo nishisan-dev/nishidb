@@ -99,6 +99,11 @@ func (s *Store) checkpoint() error {
 	if err := s.traceStep("msyncLocations", s.locs.Msync); err != nil {
 		return s.failWriter(err)
 	}
+	if s.prazos != nil {
+		if err := s.traceStep("msyncPrazos", s.prazos.Msync); err != nil {
+			return err
+		}
+	}
 	if s.escritas != nil {
 		if err := s.traceStep("msyncEscritas", s.escritas.Msync); err != nil {
 			return err

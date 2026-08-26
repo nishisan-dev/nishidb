@@ -36,7 +36,14 @@ type MaterializationSpec struct {
 	Key      KeySpec
 	Mode     string // merge | replace
 	Sequence *SequenceSpec
-	TTL      *TTLSpec
+	// RegrasTTL são as regras de expiração VALIDADAS, na ordem do arquivo —
+	// que é semântica: a primeira que casa vence. Vazia significa dataset sem
+	// expiração.
+	RegrasTTL []RegraTTL
+	// DuracaoDeFundo é a duração da regra sem `when`, ou zero quando não há.
+	// Sai pré-computada porque quem a consome — os montadores de Options do
+	// storage — não deve reimplementar a busca pela última regra.
+	DuracaoDeFundo time.Duration
 	// TombstoneRetention é por quanto tempo a lápide de uma entidade expirada
 	// precisa sobreviver antes de a key poder ser esquecida. VALIDADO aqui e
 	// ainda SEM MOTOR: implementá-lo exige purgar a primary (remoção em
@@ -59,24 +66,6 @@ type SequenceSpec struct {
 	Field    string
 	Type     string // int64 (único no v1)
 	Strategy string // greater (único no v1)
-}
-
-// TTLSpec é a política de expiração do dataset, e admite EXATAMENTE uma das
-// duas formas: um campo de deadline absoluto vindo do payload (§56, ainda sem
-// motor) ou um idle timeout renovado a cada escrita (implementado).
-//
-// São mutuamente exclusivas porque precisam de agendadores diferentes: com
-// duração uniforme o prazo é monótono na ordem de escrita, e a fila de
-// expiração é uma deque de baldes com append sempre na cauda; com o prazo
-// vindo do payload ele pode chegar no passado ou daqui a três anos, a deque
-// vira heap e a semeadura O(n) vira O(n log n). Suportar as duas juntas é
-// escrever dois agendadores.
-type TTLSpec struct {
-	Field string
-	Type  string // timestamp (único no v1)
-	// ExpireAfterWrite é o idle timeout: a entidade expira se não receber
-	// escrita dentro da duração. Zero = não declarado.
-	ExpireAfterWrite time.Duration
 }
 
 // ResolucaoDaExpiracao é o passo do agendador (§57). Duração menor que isto é
@@ -151,6 +140,15 @@ type FieldSpec struct {
 	// verdade. Só vale sobre type: json — nos outros tipos não há o que
 	// percorrer, e aceitar em silêncio seria configuração sem leitor.
 	Extract []ExtractSpec `yaml:"extract"`
+
+	// FrozenFrom nomeia a ORIGEM de uma coluna congelada: outra coluna
+	// declarada, ou OrigemRelogio. A coluna recebe o primeiro valor que a
+	// origem tiver e nunca mais muda.
+	//
+	// A tag é explícita como todas as outras: sem ela o yaml.v3 procuraria
+	// "frozenfrom" e a chave camelCase do arquivo não casaria com nada, em
+	// silêncio — este struct é decodificado sem KnownFields.
+	FrozenFrom string `yaml:"frozenFrom"`
 }
 
 // ExtractSpec é uma chave de dentro de um documento json promovida a coluna.
@@ -211,19 +209,17 @@ type rawSpec struct {
 }
 
 type rawMat struct {
-	Key                rawKey        `yaml:"key"`
-	Mode               string        `yaml:"mode"`
-	Sequence           *SequenceSpec `yaml:"sequence"`
-	TTL                *rawTTL       `yaml:"ttl"`
-	TombstoneRetention string        `yaml:"tombstoneRetention"`
-}
-
-// rawTTL tem a duração como STRING porque é assim que ela vem do YAML; a
-// gramática é a do units.Duracao, e a conversão acontece na validação.
-type rawTTL struct {
-	Field            string `yaml:"field"`
-	Type             string `yaml:"type"`
-	ExpireAfterWrite string `yaml:"expireAfterWrite"`
+	Key      rawKey        `yaml:"key"`
+	Mode     string        `yaml:"mode"`
+	Sequence *SequenceSpec `yaml:"sequence"`
+	// TTL é yaml.Node, e não []RegraTTLSpec direto, para que a forma ANTIGA —
+	// o mapa único — seja recusada com uma mensagem que nomeia a lista, em vez
+	// da mensagem do yaml.v3 sobre tipos que o operador nunca escreveu.
+	//
+	// Valor e não ponteiro pela razão do rawSpec: o yaml.v3 só trata
+	// yaml.Node de forma especial no tipo valor.
+	TTL                yaml.Node `yaml:"ttl"`
+	TombstoneRetention string    `yaml:"tombstoneRetention"`
 }
 
 type rawKey struct {
@@ -394,6 +390,7 @@ func isValidTypeName(name string) bool {
 // fixture de tipos. Reservar o prefixo recusaria datasets que hoje sobem.
 var nomesDeSistema = map[string]string{
 	CampoInstanteDeEscrita: "é injetado pelo writer a cada escrita",
+	CampoDePrazo:           "é calculado pelo writer a partir das regras de ttl",
 }
 
 // CampoInstanteDeEscrita registra QUANDO o writer gravou a entidade. É um
@@ -719,37 +716,15 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 		s.Materialization.Sequence = seq
 	}
 
-	if raw := raw.Materialization.TTL; raw != nil {
-		ttl := &TTLSpec{Field: raw.Field, Type: raw.Type}
-		temCampo, temIdle := raw.Field != "", raw.ExpireAfterWrite != ""
-		switch {
-		case temCampo && temIdle:
-			return nil, specErrf("materialization.ttl declara field e expireAfterWrite ao mesmo tempo; " +
-				"escolha um: field expira pelo prazo que o evento traz, expireAfterWrite expira o que não recebe escrita")
-		case !temCampo && !temIdle:
-			return nil, specErrf("materialization.ttl exige field ou expireAfterWrite")
-		case temIdle:
-			if raw.Type != "" {
-				return nil, specErrf("materialization.ttl.type só se aplica a ttl.field")
-			}
-			d, err := units.DuracaoComDias(raw.ExpireAfterWrite, 0)
-			if err != nil {
-				return nil, specErrf("materialization.ttl.expireAfterWrite: %s", err)
-			}
-			if d < ResolucaoDaExpiracao {
-				return nil, specErrf("materialization.ttl.expireAfterWrite %q é menor que a resolução do agendador (%s); "+
-					"abaixo dela o prazo real seria maior que o declarado", raw.ExpireAfterWrite, ResolucaoDaExpiracao)
-			}
-			ttl.ExpireAfterWrite = d
-		default:
-			if ttl.Type == "" {
-				ttl.Type = "timestamp"
-			}
-			if ttl.Type != "timestamp" {
-				return nil, specErrf("materialization.ttl.type %q não suportado (v1: timestamp)", ttl.Type)
-			}
+	if regras, err := regrasDoNo(&raw.Materialization.TTL); err != nil {
+		return nil, err
+	} else if regras != nil {
+		validadas, err := validaRegrasTTL(regras)
+		if err != nil {
+			return nil, err
 		}
-		s.Materialization.TTL = ttl
+		s.Materialization.RegrasTTL = validadas
+		s.Materialization.DuracaoDeFundo = duracaoDeFundo(validadas)
 	}
 
 	// schema.fields
@@ -765,7 +740,11 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 		if motivo, reservado := nomesDeSistema[name]; reservado {
 			return nil, specErrf("campo %q é reservado: %s", name, motivo)
 		}
-		if !isValidTypeName(f.Type) {
+		// A coluna congelada NÃO declara tipo: ele é herdado da origem na
+		// compilação, e o isValidTypeName recusa vazio. A validação própria
+		// dela — inclusive a recusa de `type` junto — mora em
+		// validaCongeladas, que precisa do mapa inteiro na mão.
+		if f.FrozenFrom == "" && !isValidTypeName(f.Type) {
 			return nil, specErrf("campo %q: tipo %q inválido", name, f.Type)
 		}
 		// O format é compilado AQUI, no load, e o layout resultante é
@@ -777,8 +756,15 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 		// `format:` sob um campo que não o usa decodifica com sucesso e não
 		// faz nada — configuração sem leitor, que é o defeito que o débito 37
 		// registra.
-		if _, err := CompilaFormato(f.Type, f.Format); err != nil {
-			return nil, specErrf("campo %q: %s", name, semPrefixoDeSpec(err))
+		//
+		// A congelada fica de fora: ela não declara tipo, então não há o que
+		// compilar, e a recusa de `format` sobre ela mora em validaCongeladas
+		// — com a mensagem que nomeia frozenFrom, que é a que o operador
+		// precisa ler.
+		if f.FrozenFrom == "" {
+			if _, err := CompilaFormato(f.Type, f.Format); err != nil {
+				return nil, specErrf("campo %q: %s", name, semPrefixoDeSpec(err))
+			}
 		}
 		if f.Alias != "" {
 			if !isIdentName(f.Alias) {
@@ -792,18 +778,13 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 			}
 			aliases[f.Alias] = name
 		}
-		switch f.Index {
-		case "":
-		case "bitmap":
-			if !bitmapIndexable(f.Type) {
-				return nil, specErrf("campo %q: tipo %q não suporta índice bitmap", name, f.Type)
+		// A congelada é indexável como qualquer coluna, mas o tipo contra o
+		// qual a indexabilidade se decide é o da ORIGEM — que este laço não
+		// tem resolvido. A checagem dela mora em validaCongeladas.
+		if f.FrozenFrom == "" {
+			if err := validaIndice(name, f.Index, f.Type); err != nil {
+				return nil, err
 			}
-		case "hash":
-			if !hashIndexable(f.Type) {
-				return nil, specErrf("campo %q: tipo %q não suporta índice hash", name, f.Type)
-			}
-		default:
-			return nil, specErrf("campo %q: index %q inválido (bitmap|hash)", name, f.Index)
 		}
 		if f.UnknownFields != "" {
 			if f.Type != "json" {
@@ -824,6 +805,14 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 	}
 	s.Schema.Fields = fields
 
+	// As congeladas são validadas com o mapa inteiro na mão, e depois de key e
+	// mode estarem resolvidos: as três regras que dependem de outro campo —
+	// cadeia, autorreferência e origem inexistente — não são decidíveis dentro
+	// do laço por campo.
+	if err := validaCongeladas(fields, key.Field, mode); err != nil {
+		return nil, err
+	}
+
 	// Consistência de key/sequence/ttl com as declarações.
 	if kf, ok := fields[key.Field]; !ok {
 		return nil, specErrf("materialization.key.field %q não declarado em schema.fields", key.Field)
@@ -842,15 +831,6 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 		}
 		if sf.Type != "int64" {
 			return nil, specErrf("campo sequence %q deve ser int64, é %q", seq.Field, sf.Type)
-		}
-	}
-	if ttl := s.Materialization.TTL; ttl != nil && ttl.Field != "" {
-		tf, ok := fields[ttl.Field]
-		if !ok {
-			return nil, specErrf("materialization.ttl.field %q não declarado em schema.fields", ttl.Field)
-		}
-		if tf.Type != "timestamp" {
-			return nil, specErrf("campo ttl %q deve ser timestamp, é %q", ttl.Field, tf.Type)
 		}
 	}
 
@@ -886,8 +866,6 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 			return nil, specErrf("campo key %q não pode estar no exclude", name)
 		case s.Materialization.Sequence != nil && name == s.Materialization.Sequence.Field:
 			return nil, specErrf("campo sequence %q não pode estar no exclude", name)
-		case s.Materialization.TTL != nil && s.Materialization.TTL.Field != "" && name == s.Materialization.TTL.Field:
-			return nil, specErrf("campo ttl %q não pode estar no exclude", name)
 		}
 		if owner, isAlias := aliases[name]; isAlias {
 			return nil, specErrf("exclude %q é alias do campo %q; exclua pelo nome", name, owner)
@@ -1004,19 +982,4 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 	s.Query.MaxTimeout = maxTimeout
 
 	return s, nil
-}
-
-// ExpiraApos devolve o idle timeout declarado, ou zero quando o dataset não
-// expira por escrita.
-//
-// Existe como método, e não como acesso direto ao campo, porque o bloco ttl
-// admite duas formas e só uma tem motor: quem lê
-// Materialization.TTL.ExpireAfterWrite na mão esquece o nil do bloco, e o
-// esquecimento não aparece em dataset nenhum que declare ttl — só nos que não
-// declaram, com um panic no caminho de abertura.
-func (s *DatasetSpec) ExpiraApos() time.Duration {
-	if s == nil || s.Materialization.TTL == nil {
-		return 0
-	}
-	return s.Materialization.TTL.ExpireAfterWrite
 }

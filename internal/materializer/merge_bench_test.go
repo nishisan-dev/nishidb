@@ -71,7 +71,7 @@ func BenchmarkMergeRadiusPatch(b *testing.B) {
 	b.SetBytes(int64(len(state)))
 	for b.Loop() {
 		var err error
-		out, err = mergeRecords(state, patch, out[:0])
+		out, err = mergeRecords(state, patch, out[:0], nil)
 		if err != nil {
 			b.Fatal(err)
 		}

@@ -112,20 +112,33 @@ type Options struct {
 	// saber é só se o nome já está no dicionário.
 	ColunasDerivadas []string
 	SyncEveryPut     bool // durability=sync (testes/config)
-	// ExpireAfterWrite liga o idle timeout: a row deixa de ser visível quando
-	// passa este tempo sem escrita. Zero desliga tudo — nem o índice é aberto.
-	ExpireAfterWrite time.Duration
+	// TTLAtivo liga a expiração: o dataset declarou ao menos uma regra. Sem
+	// ela nem os índices são abertos — o dataset não paga dois mmaps para não
+	// fazer nada.
+	TTLAtivo bool
+	// DuracaoDeFundo é a duração da regra SEM `when`, ou zero quando não há.
+	//
+	// Ela vale para a linha cuja entrada em prazos.idx é DESCONHECIDA — a que
+	// foi materializada antes de as regras existirem. É o que permite adotar
+	// as regras num dataset já populado sem que ele fique imortal da noite
+	// para o dia, e é o que faz a migração da forma escalar não mudar
+	// comportamento nenhum.
+	DuracaoDeFundo time.Duration
 	// CampoDeEscrita é o NOME do campo de sistema que carrega o instante da
 	// escrita, resolvido pelo dicionário do próprio dataset durante o Open.
-	// Obrigatório quando ExpireAfterWrite > 0: é dele que o applyRecord tira
-	// o valor, tanto no Put quanto no replay do tail, e é por isso que o
-	// índice de expiração é reconstruível depois de um crash.
+	// Obrigatório quando TTLAtivo: é dele que o applyRecord tira o valor,
+	// tanto no Put quanto no replay do tail, e é por isso que o índice de
+	// expiração é reconstruível depois de um crash.
 	//
 	// Nome e não FieldID pela mesma razão do BitmapFieldNames: os ids nascem
 	// de schema.Compile, que precisa do dicionário — e o dicionário vive
 	// dentro do Store. Exigir o id aqui obrigaria a abrir o dataset sem
 	// expiração, compilar, fechar e reabrir.
 	CampoDeEscrita string
+	// CampoDePrazo é o NOME do campo de sistema que carrega a DURAÇÃO de
+	// ociosidade da entidade, em millis. Obrigatório quando TTLAtivo, e pela
+	// mesma razão do CampoDeEscrita: os dois são lidos do payload.
+	CampoDePrazo string
 	// Log é o logger estruturado do §95. Quando nil, o Store escreve em
 	// stderr no formato texto — que é o comportamento que os log.Printf
 	// tinham antes, e perder a divergência de recovery só porque o chamador
@@ -249,9 +262,11 @@ type Store struct {
 	seqs *rowindex.Sequences
 	// escritas é nil quando o dataset não declara expiração: sem ela não há
 	// o que indexar, e abrir o arquivo custaria mmap por nada.
-	escritas         *rowindex.Escritas
-	expireAfterWrite time.Duration
-	campoDeEscrita   types.FieldID
+	escritas       *rowindex.Escritas
+	prazos         *rowindex.Prazos
+	duracaoDeFundo time.Duration
+	campoDeEscrita types.FieldID
+	campoDePrazo   types.FieldID
 	// expiraBuf e tombBuf são do Expira, owned pelo wmu como o compactBuf:
 	// reter os dois evita realocar o record lido e o payload da lápide a cada
 	// expiração, e a varredura expira em rajada.
@@ -718,17 +733,20 @@ func Open(opts Options) (*Store, error) {
 	if s.seqs, err = rowindex.OpenSequences(filepath.Join(idxDir, "sequences.idx"), minRows); err != nil {
 		return nil, err
 	}
-	if opts.ExpireAfterWrite > 0 {
-		if opts.CampoDeEscrita == "" {
-			// Sem o campo o applyRecord não teria de onde tirar o instante, e
-			// toda row ficaria com prazo desconhecido — a expiração nunca
-			// aconteceria, em silêncio.
-			return nil, fmt.Errorf("%w: ExpireAfterWrite exige CampoDeEscrita", ErrInvalidArgument)
+	if opts.TTLAtivo {
+		if opts.CampoDeEscrita == "" || opts.CampoDePrazo == "" {
+			// Sem os campos o applyRecord não teria de onde tirar o instante
+			// nem a duração, e toda row ficaria com prazo desconhecido — a
+			// expiração nunca aconteceria, em silêncio.
+			return nil, fmt.Errorf("%w: TTLAtivo exige CampoDeEscrita e CampoDePrazo", ErrInvalidArgument)
 		}
 		if s.escritas, err = rowindex.OpenEscritas(filepath.Join(idxDir, "expiry.idx"), minRows); err != nil {
 			return nil, err
 		}
-		s.expireAfterWrite = opts.ExpireAfterWrite
+		if s.prazos, err = rowindex.OpenPrazos(filepath.Join(idxDir, "prazos.idx"), minRows); err != nil {
+			return nil, err
+		}
+		s.duracaoDeFundo = opts.DuracaoDeFundo
 	}
 	m, mErr := checkpoint.Load(s.manifestPath())
 	refs, err := segment.ListSegments(dataDir)
@@ -747,15 +765,17 @@ func Open(opts Options) (*Store, error) {
 	}
 
 	if s.escritas != nil {
-		// LookupOrCreate e não Lookup: num dataset novo o campo ainda não
-		// existe, e criá-lo aqui é o que garante que o id seja o MESMO que o
-		// schema.Compile vai resolver depois — os dois passam pelo mesmo
-		// dicionário durável.
-		id, err := s.dict.LookupOrCreate([]byte(opts.CampoDeEscrita))
-		if err != nil {
+		// LookupOrCreate e não Lookup, e nesta ORDEM. O id sai daqui e tem de
+		// ser o MESMO que o schema.Compile resolve depois, e a ordem das
+		// chamadas decide o mapeamento nome→id de um dataset NOVO, gravado
+		// para sempre: _writtenAt, _expiresIn, bitmaps, hashes. Nunca
+		// reordene.
+		if s.campoDeEscrita, err = s.dict.LookupOrCreate([]byte(opts.CampoDeEscrita)); err != nil {
 			return nil, fmt.Errorf("storage: registrando %q no dicionário: %w", opts.CampoDeEscrita, err)
 		}
-		s.campoDeEscrita = id
+		if s.campoDePrazo, err = s.dict.LookupOrCreate([]byte(opts.CampoDePrazo)); err != nil {
+			return nil, fmt.Errorf("storage: registrando %q no dicionário: %w", opts.CampoDePrazo, err)
+		}
 	}
 
 	// A resolução dos DOIS conjuntos vem antes de abrir qualquer índice: os
@@ -1471,6 +1491,15 @@ func (s *Store) applyRecord(a recordApply) error {
 			}
 		}
 	}
+	// 6c. duração de ociosidade da linha, LIDA DO PAYLOAD pela mesma razão do
+	// instante: o replay do tail repõe as MESMAS durações depois de um crash.
+	if s.prazos != nil {
+		if ms, ok := campoDoPayload(a.payload, s.campoDePrazo, types.TypeInt64); ok {
+			if err := s.prazos.Set(a.rowID, ms); err != nil {
+				return err
+			}
+		}
+	}
 	// 7. COMMIT POINT: publica a location.
 	if a.mode == applyReplay {
 		// Recovery: grava direto no mmap, sem overlay. A invariante §6.1
@@ -1500,6 +1529,17 @@ func (s *Store) applyRecord(a recordApply) error {
 // instanteDeEscrita extrai o campo de sistema do payload. Ausente devolve
 // ok=false, que o índice registra como DESCONHECIDO — nunca como vencido.
 func instanteDeEscrita(payload []byte, campo types.FieldID) (int64, bool) {
+	return campoDoPayload(payload, campo, types.TypeTimestamp)
+}
+
+// campoDoPayload lê o I64 de um campo de sistema, exigindo o tipo esperado.
+//
+// É uma função só para os dois campos da expiração — o instante (timestamp) e
+// a duração (int64) — porque a varredura é idêntica e duplicá-la faria as duas
+// divergirem no dia em que o formato do payload mudar. O tipo entra por
+// parâmetro porque errá-lo é o modo de falha silencioso: um int64 lido como
+// timestamp devolveria um prazo que não é um prazo.
+func campoDoPayload(payload []byte, campo types.FieldID, esperado types.FieldType) (int64, bool) {
 	var r encoding.FieldReader
 	r.Reset(payload)
 	for {
@@ -1508,7 +1548,7 @@ func instanteDeEscrita(payload []byte, campo types.FieldID) (int64, bool) {
 			return 0, false
 		}
 		if id == campo {
-			return v.I64, v.Type == types.TypeTimestamp
+			return v.I64, v.Type == esperado
 		}
 		if id > campo {
 			return 0, false // payload é ordenado por FieldID: passou, não tem
@@ -1529,11 +1569,35 @@ func (s *Store) prazoVencido(rowID types.RowID) bool {
 	if s.escritas == nil {
 		return false
 	}
+	d := s.duracaoEfetiva(rowID)
+	if d <= 0 {
+		return false
+	}
 	ms, conhecido := s.escritas.Get(rowID)
 	if !conhecido {
 		return false
 	}
-	return s.agora().UnixMilli()-ms >= s.expireAfterWrite.Milliseconds()
+	return s.agora().UnixMilli()-ms >= d.Milliseconds()
+}
+
+// duracaoEfetiva devolve por quanto tempo esta linha pode ficar sem escrita.
+//
+// Entrada DESCONHECIDA cai na duração de FUNDO, e é isso que faz a adoção das
+// regras num dataset já materializado não mudar comportamento: as entidades
+// que não têm o campo de prazo no documento continuam expirando pelo prazo que
+// a regra de fundo declara, e passam a obedecer as condicionais na primeira
+// escrita seguinte.
+//
+// Zero devolvido COM conhecido=true é a entidade imortal, e ela NÃO cai no
+// fundo — é para essa distinção que o rowindex.PrazoImortal existe.
+func (s *Store) duracaoEfetiva(rowID types.RowID) time.Duration {
+	if s.prazos == nil {
+		return 0
+	}
+	if ms, conhecido := s.prazos.Get(rowID); conhecido {
+		return time.Duration(ms) * time.Millisecond
+	}
+	return s.duracaoDeFundo
 }
 
 // failWriter registra o primeiro erro pós-Append e o devolve embrulhado em
@@ -2210,6 +2274,9 @@ func (s *Store) Close() error {
 		if ix != nil {
 			errs = append(errs, ix.Close())
 		}
+	}
+	if s.prazos != nil {
+		errs = append(errs, s.prazos.Close())
 	}
 	if s.escritas != nil {
 		errs = append(errs, s.escritas.Close())

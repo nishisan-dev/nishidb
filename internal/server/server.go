@@ -328,8 +328,10 @@ func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*
 		ColunasDerivadas: spec.NomesDasExtracoes(),
 		Log:              log,
 		Metrics:          s.reg,
-		ExpireAfterWrite: spec.ExpiraApos(),
+		TTLAtivo:         len(spec.Materialization.RegrasTTL) > 0,
+		DuracaoDeFundo:   spec.Materialization.DuracaoDeFundo,
 		CampoDeEscrita:   schema.CampoInstanteDeEscrita,
+		CampoDePrazo:     schema.CampoDePrazo,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("dataset %q: %w", spec.Name, err)
@@ -354,6 +356,22 @@ func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*
 			"valor não coube no tipo fixado da coluna aninhada; a coluna é removida nessa linha e o documento guarda o valor",
 			"coluna", coluna, "tipoFixado", fixado, "tipoQueVeio", veio)
 	})
+	if regras := spec.Materialization.RegrasTTL; len(regras) > 0 {
+		// O operador precisa poder conferir que o YAML que escreveu é o que o
+		// processo entendeu — inclusive a ORDEM, que aqui é semântica.
+		log.Info("ttl.regras",
+			"regras de expiração carregadas",
+			"dataset", spec.Name, "total", len(regras),
+			"temFundo", spec.Materialization.DuracaoDeFundo > 0,
+			"regras", schema.DescreveRegras(regras))
+	}
+	mat, err := materializer.New(compilado, st)
+	if err != nil {
+		// Regra de TTL que não compila derruba a SUBIDA do dataset: um
+		// servidor que aceitasse a regra e a ignorasse expiraria pelo prazo
+		// errado, em silêncio.
+		return nil, fechandoStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
+	}
 	if err := s.eng.Register(spec.Name, compilado, st); err != nil {
 		return nil, fechandoStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}
@@ -362,7 +380,7 @@ func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*
 		spec: spec,
 		sch:  compilado,
 		st:   st,
-		mat:  materializer.New(compilado, st),
+		mat:  mat,
 	}, nil
 }
 
@@ -506,11 +524,6 @@ func avisaChavesSemMotor(specs map[string]*schema.DatasetSpec, log *logging.Logg
 			log.Warn("ttl.tombstoneRetention.sem_motor",
 				"a chave é válida e NÃO tem efeito: esquecer a key exige purgar a primary e ensinar a compaction a descartar lápide vencida",
 				"dataset", nome, "tombstoneRetention", d)
-		}
-		if ttl := spec.Materialization.TTL; ttl != nil && ttl.Field != "" {
-			log.Warn("ttl.field.sem_motor",
-				"a chave é válida e NÃO tem efeito: a expiração implementada é a ttl.expireAfterWrite",
-				"dataset", nome, "field", ttl.Field)
 		}
 	}
 }
