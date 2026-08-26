@@ -42,8 +42,16 @@ const TabelaFields = "fields"
 // Interface, e não o *storage.Store, porque a tabela não lê dado nenhum: ela
 // só quer saber se um índice EXISTE. nil é aceito e vale "não sei", que
 // reporta indexed=false.
+//
+// Os DOIS motores estão aqui, e é por isso que a coluna `indexed` volta a
+// significar alguma coisa. Enquanto só havia HasBitmap, uma coluna com
+// `index: hash` saía com indexed=false — o que era verdade (não havia motor) e
+// virou mentira no instante em que o motor entrou. Um Store que não implemente
+// HasHash continua sendo aceito: a asserção de tipo em fonte.record trata a
+// ausência como "não tem".
 type Capacidades interface {
 	HasBitmap(types.FieldID) bool
+	HasHash(types.FieldID) bool
 }
 
 // Reconhece informa se o statement endereça o namespace reservado.

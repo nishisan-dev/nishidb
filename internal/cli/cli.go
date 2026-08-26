@@ -232,11 +232,13 @@ func abreDataset(cfg *nishiconfig.Config, nome string) (*storage.Store, *schema.
 	}
 
 	bitmaps := schema.CamposComBitmap(spec)
+	hashes := schema.CamposComHash(spec)
 
 	st, err := storage.Open(storage.Options{
 		Dir:              cfg.DirDoDataset(nome),
 		SegmentSize:      cfg.SegmentSize(),
 		BitmapFieldNames: bitmaps,
+		HashFieldNames:   hashes,
 		ColunasDerivadas: spec.NomesDasExtracoes(),
 		ExpireAfterWrite: spec.ExpiraApos(),
 		CampoDeEscrita:   schema.CampoInstanteDeEscrita,

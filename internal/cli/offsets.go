@@ -82,11 +82,13 @@ func runOffsets(args []string, amb Ambiente) int {
 	// dataset cujo manifest declara índices que a abertura não conhece,
 	// porque o índice pararia de ser atualizado e reapareceria incompleto.
 	bitmaps := schema.CamposComBitmap(spec)
+	hashes := schema.CamposComHash(spec)
 	st, err := storage.Open(storage.Options{
 		Dir:              cfg.DirDoDataset(*dataset),
 		Dataset:          *dataset,
 		SegmentSize:      cfg.SegmentSize(),
 		BitmapFieldNames: bitmaps,
+		HashFieldNames:   hashes,
 		ColunasDerivadas: spec.NomesDasExtracoes(),
 		ExpireAfterWrite: spec.ExpiraApos(),
 		CampoDeEscrita:   schema.CampoInstanteDeEscrita,

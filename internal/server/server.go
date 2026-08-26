@@ -298,11 +298,13 @@ func Novo(cfg *config.Config, o Opcoes) (*Servidor, error) {
 func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*dataset, error) {
 	dir := s.cfg.CaminhoDoDataset(spec.Name)
 	bitmaps := schema.CamposComBitmap(spec)
+	hashes := schema.CamposComHash(spec)
 	st, err := storage.Open(storage.Options{
 		Dir:              dir,
 		Dataset:          spec.Name,
 		SegmentSize:      s.cfg.SegmentSize(),
 		BitmapFieldNames: bitmaps,
+		HashFieldNames:   hashes,
 		ColunasDerivadas: spec.NomesDasExtracoes(),
 		Log:              log,
 		Metrics:          s.reg,

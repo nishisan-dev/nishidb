@@ -61,7 +61,8 @@ func servidorSpec106(t *testing.T) *server.Servidor {
 		Dir:              cfg.DirDoDataset("d"),
 		Dataset:          "d",
 		SegmentSize:      cfg.SegmentSize(),
-		BitmapFieldNames: []string{"Acct-Status-Type"},
+		BitmapFieldNames: schema.CamposComBitmap(spec),
+		HashFieldNames:   schema.CamposComHash(spec),
 	})
 	if err != nil {
 		t.Fatal(err)

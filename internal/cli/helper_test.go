@@ -16,15 +16,14 @@ func abreDireto(t *testing.T, a *ambiente) (*storage.Store, *schema.Compiled) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var bitmaps []string
-	for campo, f := range spec.Schema.Fields {
-		if f.Index == "bitmap" {
-			bitmaps = append(bitmaps, campo)
-		}
-	}
+	// Os dois conjuntos saem do schema, e não de um laço local: abrir o dataset
+	// com um conjunto de índices diferente do que o CLI usa faria este helper
+	// reproduzir, dentro da suíte, o modo de falha cruzado que
+	// schema.CamposComBitmap/CamposComHash existem para impedir.
 	st, err := storage.Open(storage.Options{
 		Dir:              filepath.Join(a.dir, "dados", "radius_sessions"),
-		BitmapFieldNames: bitmaps,
+		BitmapFieldNames: schema.CamposComBitmap(spec),
+		HashFieldNames:   schema.CamposComHash(spec),
 	})
 	if err != nil {
 		t.Fatal(err)
