@@ -42,7 +42,29 @@ type Options struct {
 	// violou o requisito de memória. 0 usa 256; valores não potência de dois
 	// são arredondados para cima, porque a cadência é medida com máscara.
 	BatchSize int
+	// SortMemory é o teto de memória do operador de ORDER BY, em bytes. 0 usa
+	// sortMemoryPadrao.
+	//
+	// É teto de MEMÓRIA e não de linhas: o custo de uma linha ordenada depende
+	// do tamanho dos valores, e um teto em linhas trataria uma coluna de 8
+	// bytes e um documento de 4 KiB como a mesma coisa.
+	//
+	// AINDA NÃO TEM CHAVE DE CONFIGURAÇÃO, e é deliberado: o lugar dele é o
+	// orçamento de memória por query do §80
+	// (`runtime.query.maxBufferPerQuery`), e inventar uma segunda chave
+	// paralela agora deixaria duas fontes de verdade para "quanta memória uma
+	// query pode usar". Até lá vale o padrão, e o operador só o vê pela
+	// mensagem de recusa.
+	SortMemory int64
 }
+
+// sortMemoryPadrao é o teto do ORDER BY quando o dataset não o declara.
+//
+// 64 MiB é folgado para o uso normal (100 mil linhas de poucas colunas cabem
+// com sobra) e pequeno o bastante para que uma query descuidada seja RECUSADA
+// em vez de derrubar o processo — que é o desfecho que o §128 exige quando o
+// buffer deixa de ser proporcional ao batch.
+const sortMemoryPadrao = 64 << 20
 
 const batchPadrao = 256
 
@@ -75,6 +97,23 @@ func Open(ctx context.Context, bq *binder.BoundQuery, plan planner.Plan, opts Op
 		// Truncamento por teto IMPLÍCITO: só quando a parada não veio de um
 		// LIMIT que o usuário escreveu e que é menor que o teto.
 		tetoImplicito: !bq.HasLimit || bq.Limit > bq.MaxRows,
+	}
+	if len(bq.OrderBy) > 0 {
+		for i := range bq.OrderBy {
+			k := &bq.OrderBy[i]
+			if k.Field == nil || k.Kind == binder.CompareUnset {
+				return nil, fmt.Errorf("%w: chave de ordenação sem campo ou sem kind", ErrInvalidPlan)
+			}
+			if k.Slot < 0 || k.Slot >= len(it.slots) {
+				return nil, fmt.Errorf("%w: chave de ordenação %q com slot %d fora de [0,%d)",
+					ErrInvalidPlan, k.Field.Name, k.Slot, len(it.slots))
+			}
+		}
+		teto := opts.SortMemory
+		if teto <= 0 {
+			teto = sortMemoryPadrao
+		}
+		it.ord = novoOrdenador(bq.OrderBy, teto)
 	}
 
 	cols := make([]ColView, len(bq.Columns))
@@ -165,8 +204,12 @@ type iterador struct {
 	tetoImplicito bool
 	emitidas      int64
 	pular         int64 // linhas do OFFSET ainda a descartar
-	n             int64 // candidatos consumidos, para a cadência de ctx
-	mask          int64
+	// ord é nil quando não há ORDER BY, e a query segue estritamente
+	// streaming. Não-nil, o executor troca de modo: drena e depois emite.
+	ord    *ordenador
+	drenou bool
+	n      int64 // candidatos consumidos, para a cadência de ctx
+	mask   int64
 
 	cnt      contadores
 	done     bool
@@ -183,6 +226,9 @@ func (it *iterador) Next() bool {
 		// Inclui LIMIT 0: termina antes de tocar o Store.
 		it.termina(nil)
 		return false
+	}
+	if it.ord != nil {
+		return it.proximaOrdenada()
 	}
 	for {
 		if it.mask == 0 || it.n&it.mask == 0 {
@@ -239,6 +285,97 @@ func (it *iterador) Next() bool {
 			it.marcaTruncado()
 		}
 		return true
+	}
+}
+
+// proximaOrdenada é o Next no modo ORDER BY.
+//
+// Na primeira chamada DRENA a fonte inteira; nas seguintes só emite. É o que
+// torna o operador bloqueante, e a razão é aritmética: a menor linha pode ser a
+// última lida, então não há como emitir nada antes de ver todas.
+//
+// O OFFSET é aplicado DEPOIS de ordenar — pular antes ordenaria o conjunto
+// errado. O LIMIT continua sendo teto de linhas ENTREGUES, e agora corta um
+// PREFIXO LEGÍTIMO da resposta ordenada, em vez de "as N primeiras por rowId".
+func (it *iterador) proximaOrdenada() bool {
+	if !it.drenou {
+		if !it.drena() {
+			return false
+		}
+		it.drenou = true
+		it.ord.ordena()
+		// A fonte já não serve para nada: fecha AGORA, e não no Close, para não
+		// segurar o iterador do índice durante a emissão inteira.
+		it.encerra()
+		for it.pular > 0 {
+			if _, ok, err := it.ord.proxima(it.slots); err != nil {
+				it.termina(err)
+				return false
+			} else if !ok {
+				break
+			}
+			it.pular--
+		}
+	}
+	_, ok, err := it.ord.proxima(it.slots)
+	if err != nil {
+		it.termina(err)
+		return false
+	}
+	if !ok {
+		it.termina(nil)
+		return false
+	}
+	it.projeta()
+	it.emitidas++
+	it.cnt.emitted++
+	if it.emitidas >= it.eff {
+		it.marcaTruncado()
+	}
+	return true
+}
+
+// drena consome a fonte inteira alimentando o ordenador. Devolve false quando
+// terminou por erro (o iterador já está encerrado).
+func (it *iterador) drena() bool {
+	for {
+		if it.mask == 0 || it.n&it.mask == 0 {
+			if err := it.ctx.Err(); err != nil {
+				it.contaCancel()
+				// A mensagem NOMEIA A FASE: com ORDER BY, "interrompida após N
+				// candidatos" sem mais nada faria o operador procurar lentidão
+				// na entrega, quando o tempo foi todo na varredura.
+				it.termina(fmt.Errorf("executor: query interrompida ao ordenar, após %d candidatos: %w", it.n, err))
+				return false
+			}
+		}
+		rec, buf, more, live, err := it.src.advance(it.rowBuf)
+		it.rowBuf = buf
+		if err != nil {
+			it.termina(err)
+			return false
+		}
+		if !more {
+			return true
+		}
+		it.n++
+		it.cnt.candidates++
+		if !live {
+			it.cnt.deadSkipped++
+			continue
+		}
+		if err := coleta(it.slots, &it.fr, rec.Payload); err != nil {
+			it.termina(fmt.Errorf("executor: payload da row %d: %w", rec.RowID, err))
+			return false
+		}
+		if !it.pred.eval(it.slots, &it.cnt) {
+			it.cnt.rejected++
+			continue
+		}
+		if err := it.ord.acrescenta(it.slots, rec.RowID); err != nil {
+			it.termina(err)
+			return false
+		}
 	}
 }
 

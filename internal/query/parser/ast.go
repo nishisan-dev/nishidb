@@ -27,16 +27,35 @@ type SelectStmt struct {
 	// "dataset desconhecido" do binder.
 	Dataset    string
 	DatasetPos int
-	Where      Expr  // nil se ausente
-	HasLimit   bool  // LIMIT presente na query
-	Limit      int64 // válido só com HasLimit; sempre >= 0
-	LimitPos   int   // posição do literal do LIMIT; válido só com HasLimit
+	Where      Expr // nil se ausente
+	// OrderBy é a lista de chaves de ordenação, na ordem escrita. nil quando
+	// ausente — e ausente NÃO é o mesmo que "ordenar por rowId": sem ORDER BY o
+	// executor continua streaming, e a ordem de saída é consequência do plano,
+	// não contrato.
+	OrderBy  []OrderKey
+	HasLimit bool  // LIMIT presente na query
+	Limit    int64 // válido só com HasLimit; sempre >= 0
+	LimitPos int   // posição do literal do LIMIT; válido só com HasLimit
 	// OFFSET é ADITIVO, no molde exato do LIMIT: HasOffset distingue "ausente"
 	// de "OFFSET 0", que um int sozinho confundiria.
 	HasOffset  bool
 	Offset     int64 // válido só com HasOffset; sempre >= 0
 	OffsetPos  int   // posição do literal do OFFSET
 	ParamCount int
+}
+
+// OrderKey é uma chave do ORDER BY.
+//
+// `Desc` e `NullsFirst` são bool e não enums de três estados porque os dois têm
+// DEFAULT explícito na gramática (ASC e NULLS LAST), e o default é o valor zero
+// — um nó mal construído ordena crescente com nulos ao fim, que é o
+// comportamento documentado, e não um estado inválido.
+type OrderKey struct {
+	Qualifier  string
+	Column     string
+	ColumnPos  int
+	Desc       bool
+	NullsFirst bool
 }
 
 // ColumnRef é um item da projeção com a posição de byte do token no SQL — é

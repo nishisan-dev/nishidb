@@ -597,8 +597,11 @@ nomeando quem já tinha sido processado com sucesso antes dele.
 ```sql
 SELECT <colunas | *> FROM <dataset>
   [WHERE <predicado>]
+  [ORDER BY <chave> [, <chave>]*]
   [LIMIT <n>]
   [OFFSET <n>]
+
+<chave> := <coluna> [ASC | DESC] [NULLS (FIRST | LAST)]
 
 <predicado> := <coluna> <comparador> <literal>
              | <coluna> IS [NOT] NULL
@@ -685,13 +688,34 @@ silêncio — duas colunas pedidas, uma entregue. Pedir o mesmo campo pelo nome 
 pelo alias (`SELECT id, service_id`) continua valendo, porque aí são duas
 chaves distintas na saída.
 
+`ORDER BY` aceita até 16 chaves, com `ASC` (padrão) ou `DESC`. **Campo ausente
+vai por ÚLTIMO nas duas direções**, e `NULLS FIRST` inverte só os ausentes.
+Isso diverge de PostgreSQL e Oracle (que invertem o lugar do nulo no `DESC`) e
+de MySQL e SQLite (que tratam NULL como o menor), e é deliberado: é o único
+default em que `ORDER BY x DESC LIMIT 10` significa "os 10 maiores" e não "10
+linhas sem valor". O desempate final é sempre por rowId crescente — sem ordem
+total, duas páginas de um resultado com empates se sobrepõem e omitem linhas.
+
+Ordenar por coluna **fora da projeção** vale. Colunas `bytes`, `json` e prefixo
+de rede não têm ordem definida e são recusadas no bind: a ordem de bytes de um
+prefixo é endereço-e-máscara, que *parece* ordem de rede e não é. Ordenar por
+posição (`ORDER BY 1`) fica de fora — com `SELECT *` a posição endereçaria um
+conjunto de colunas que muda entre execuções.
+
+**`ORDER BY` é um operador BLOQUEANTE, e isso muda o contrato**: a fonte é
+drenada por inteiro antes da primeira linha sair, porque a linha certa pode ser
+a última lida. O `LIMIT` deixa de ser teto de *trabalho* e passa a ser teto de
+*memória*. Há um teto de memória para o operador, e estourá-lo **recusa a
+query** — nunca entrega resultado parcial, porque "as N primeiras por rowId,
+depois ordenadas" não é prefixo de resposta nenhuma.
+
 `OFFSET` pula linhas que **passaram** no predicado, e o `LIMIT` continua
 contando só as **entregues** — `LIMIT 2 OFFSET 1` devolve duas linhas. A ordem
 das cláusulas é fixa (`LIMIT` antes de `OFFSET`), e sem `ORDER BY` a paginação é
 sobre a ordem de rowId, que é estável só para linhas que não mudam.
 
-Fora da v1: `ORDER BY`, `GROUP BY`, `JOIN`, agregações, `NOT` genérico, e a
-cláusula `ESCAPE` do `LIKE`. As seis cláusulas ausentes — `ORDER BY`, `GROUP BY`,
+Fora da v1: `GROUP BY`, `JOIN`, agregações, `NOT` genérico, e a cláusula
+`ESCAPE` do `LIKE`. As cinco cláusulas ausentes — `GROUP BY`,
 `JOIN`, `HAVING`, `DISTINCT`, `UNION` — são recusadas com o código
 `UNSUPPORTED_CLAUSE`, nomeando qual delas foi escrita. É o que separa "isto não
 existe aqui" de "você digitou errado" para quem escreve SQL numa ferramenta.

@@ -870,7 +870,7 @@ func TestALinhaDeSchemaSaiNoSeuProprioChunk(t *testing.T) {
 func TestUnsupportedClauseSaiCom400EPosicaoNoProtocolo(t *testing.T) {
 	srv := servidorComDados(t, 1, blocoPadrao)
 
-	resp := consulta(t, srv, `{"dataset":"d","sql":"SELECT id FROM d ORDER BY id"}`)
+	resp := consulta(t, srv, `{"dataset":"d","sql":"SELECT id FROM d GROUP BY id"}`)
 	if resp.StatusCode != http.StatusBadRequest {
 		fecha(t, resp)
 		t.Fatalf("status = %d, quer 400", resp.StatusCode)
@@ -879,7 +879,7 @@ func TestUnsupportedClauseSaiCom400EPosicaoNoProtocolo(t *testing.T) {
 	if f.Code != protocolo.CodClausulaNaoSuportada {
 		t.Errorf("código = %q, quer %q", f.Code, protocolo.CodClausulaNaoSuportada)
 	}
-	if !strings.Contains(f.Message, "ORDER BY") {
+	if !strings.Contains(f.Message, "GROUP BY") {
 		t.Errorf("a mensagem não nomeia a cláusula: %q", f.Message)
 	}
 	// 1-based, apontando para o token da CLÁUSULA e não para o seguinte: é ele

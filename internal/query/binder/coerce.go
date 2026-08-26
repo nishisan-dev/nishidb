@@ -186,6 +186,37 @@ func admitsOp(col types.FieldType, op parser.CmpOp) bool {
 	}
 }
 
+// admiteOrdenacao reporta se uma coluna pode ser CHAVE DE ORDENAÇÃO, e devolve
+// o CompareKind a usar.
+//
+// DIVERGE do admitsOp acima de propósito, nos dois sentidos, e o contraste é o
+// ponto:
+//
+//   - `bool` PODE ser ordenado (false < true). O admitsOp recusa `>` em bool
+//     porque `x > true` é filtro sem sentido; `ORDER BY ativo DESC` é pedido
+//     legítimo e sem ambiguidade.
+//   - `ipv4_prefix`/`ipv6_prefix` NÃO podem. A ordem de bytes deles é
+//     endereço-e-máscara, que PARECE ordem de rede e não é — 10.0.0.0/8
+//     ordenaria antes de 10.0.0.0/24 por causa do byte da máscara, não do
+//     alcance. Ordem que parece certa e não é seria pior que ordem nenhuma.
+//
+// `bytes` e `json` ficam de fora pela mesma razão que já os mantém fora da
+// comparação: não há ordem definida sobre eles neste produto.
+func admiteOrdenacao(col types.FieldType) (CompareKind, bool) {
+	switch col {
+	case types.TypeInt64, types.TypeBool, types.TypeTimestamp,
+		types.TypeDateTime, types.TypeTime:
+		return CompareInt, true
+	case types.TypeDouble:
+		return CompareFloatBits, true
+	case types.TypeString, types.TypeIPv4, types.TypeIPv6:
+		return CompareBytes, true
+	default:
+		// TypeNull (auto nunca observado), TypeBytes, TypeJSON e os prefixos.
+		return CompareUnset, false
+	}
+}
+
 // coerceLiteral converte o operando da AST para a representação binária da
 // COLUNA, com os parsers da ingestão.
 //

@@ -20,9 +20,9 @@ func clausulaDe(t *testing.T, err error) string {
 	return se.Clausula
 }
 
-// As seis cláusulas que a v1 não tem são NOMEADAS, uma a uma.
+// As cinco cláusulas que a v1 não tem são NOMEADAS, uma a uma.
 //
-// Eram sete até o OFFSET ser implementado. A lista encolhe quando uma delas
+// Eram sete; o OFFSET e o ORDER BY saíram ao serem implementados. A lista encolhe quando uma delas
 // passa a existir — manter aqui uma cláusula implementada faria a mensagem de
 // recusa mentir, que é o oposto do que ela existe para fazer.
 //
@@ -33,13 +33,12 @@ func clausulaDe(t *testing.T, err error) string {
 //
 // A posição aponta para o token da CLÁUSULA, não para o seguinte: é ela que a
 // ferramenta sublinha.
-func TestAsSeisClausulasNaoSuportadasSaoNomeadasUmaAUma(t *testing.T) {
+func TestAsCincoClausulasNaoSuportadasSaoNomeadasUmaAUma(t *testing.T) {
 	casos := []struct {
 		sql      string
 		clausula string
 		pos      int
 	}{
-		{"SELECT a FROM x ORDER BY a", "ORDER BY", 16},
 		{"SELECT a FROM x GROUP BY a", "GROUP BY", 16},
 		{"SELECT a FROM x JOIN y ON x.a = y.a", "JOIN", 16},
 		{"SELECT a FROM x GROUP BY a HAVING a > 1", "GROUP BY", 16},
@@ -125,7 +124,7 @@ func TestColunaChamadaDistinctSozinhaNaProjecaoContinuaValida(t *testing.T) {
 // errors.As. Um tipo de erro NOVO teria quebrado os dois em silêncio — o
 // campo, não.
 func TestClausulaNaoSuportadaContinuaSendoErroDeSintaxeParaOsClassificadores(t *testing.T) {
-	_, err := parser.Parse("SELECT a FROM x ORDER BY a")
+	_, err := parser.Parse("SELECT a FROM x GROUP BY a")
 	if err == nil {
 		t.Fatal("quer erro")
 	}

@@ -5,19 +5,18 @@ import "github.com/nishisan-dev/nishidb/internal/query/lexer"
 // clausulasNaoSuportadas mapeia a palavra que abre uma cláusula ausente da v1
 // para o nome que a mensagem publica.
 //
-// ORDER e GROUP publicam "ORDER BY" e "GROUP BY" mesmo sem o BY ter sido lido.
+// GROUP publica "GROUP BY" mesmo sem o BY ter sido lido.
 // Exigir o BY custaria um SEGUNDO lookahead num parser que se declara LL(1)
 // ("a gramática é LL(1) e um passo basta"), e não compraria nada: ORDER em
 // posição de cláusula não pode ser outra coisa.
 //
 // A lista é a do §9, não uma escolha nova: JOIN, GROUP BY, HAVING, UNION e
-// DISTINCT estão nos não-objetivos da v1, e ORDER BY no README.
+// DISTINCT estão nos não-objetivos da v1.
 //
 // OFFSET SAIU desta lista quando passou a existir. Ela é de cláusulas que o
 // produto RECUSA nomeando, e manter aqui uma implementada faria a mensagem
 // mentir.
 var clausulasNaoSuportadas = map[string]string{
-	"order":    "ORDER BY",
 	"group":    "GROUP BY",
 	"join":     "JOIN",
 	"having":   "HAVING",

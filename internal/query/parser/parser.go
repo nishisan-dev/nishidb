@@ -162,6 +162,12 @@ func (p *parser) parseSelect() (*SelectStmt, error) {
 		}
 		st.Where = where
 	}
+	// ORDER BY entra entre WHERE e LIMIT, que é a ordem do SQL padrão.
+	if ehPalavra(p.cur, "order") {
+		if err := p.parseOrderBy(st); err != nil {
+			return nil, err
+		}
+	}
 	// A ordem das cláusulas é fixa: LIMIT antes de WHERE cai no "conteúdo
 	// inesperado" do Parse, e não é aceito em silêncio.
 	if p.cur.Type == lexer.TokenLimit {
@@ -178,6 +184,106 @@ func (p *parser) parseSelect() (*SelectStmt, error) {
 		}
 	}
 	return st, nil
+}
+
+// MaxOrderKeys limita quantas chaves um ORDER BY pode ter.
+//
+// Teto de RECURSO, no espírito de MaxWhereTerms: cada chave é um slot a mais a
+// coletar por linha e uma comparação a mais por par no sort. Dezesseis é muito
+// além de qualquer uso real e muito aquém de qualquer patologia.
+const MaxOrderKeys = 16
+
+// parseOrderBy lê `ORDER BY <chave> [, <chave>]*`.
+//
+// A palavra `ORDER` é reconhecida POR POSIÇÃO — ela só chega aqui num ponto em
+// que a gramática não aceitaria um identificador —, e o `BY` é EXIGIDO logo
+// depois. Isso é consumo, não lookahead: o parser se compromete ao ver ORDER e
+// então cobra o resto. `SELECT order FROM t` e `WHERE order = 1` continuam
+// válidos, porque ali `order` está em posição de identificador.
+func (p *parser) parseOrderBy(st *SelectStmt) error {
+	if err := p.advance(); err != nil {
+		return err
+	}
+	if !ehPalavra(p.cur, "by") {
+		return p.errAt(p.cur.Pos, "esperado BY depois de ORDER")
+	}
+	if err := p.advance(); err != nil {
+		return err
+	}
+	for {
+		if len(st.OrderBy) >= MaxOrderKeys {
+			return p.errAt(p.cur.Pos, "ORDER BY tem no máximo "+itoa(MaxOrderKeys)+" chaves")
+		}
+		k, err := p.parseOrderKey()
+		if err != nil {
+			return err
+		}
+		st.OrderBy = append(st.OrderBy, k)
+		if p.cur.Type != lexer.TokenComma {
+			return nil
+		}
+		if err := p.advance(); err != nil {
+			return err
+		}
+	}
+}
+
+func (p *parser) parseOrderKey() (OrderKey, error) {
+	// Ordenar por POSIÇÃO (`ORDER BY 1`) fica de fora, e a mensagem nomeia a
+	// regra: com `SELECT *` a posição endereçaria um conjunto de colunas que
+	// muda entre execuções, porque o universo de campos cresce com os eventos.
+	if p.cur.Type == lexer.TokenNumber {
+		return OrderKey{}, p.errAt(p.cur.Pos, "ORDER BY exige nome de coluna, não posição")
+	}
+	nome, pos, ok := p.identifier()
+	if !ok {
+		return OrderKey{}, p.errAt(p.cur.Pos, "esperado nome de coluna no ORDER BY")
+	}
+	k := OrderKey{Column: nome, ColumnPos: pos}
+	if err := p.advance(); err != nil {
+		return OrderKey{}, err
+	}
+	// Caminho qualificado (`doc.chave`), como no predicado e na projeção.
+	if p.cur.Type == lexer.TokenDot {
+		if err := p.advance(); err != nil {
+			return OrderKey{}, err
+		}
+		caminho, cpos, ok := p.identifier()
+		if !ok {
+			return OrderKey{}, p.errAt(p.cur.Pos, "esperado caminho depois de \""+nome+".\"")
+		}
+		k.Qualifier, k.Column, k.ColumnPos = nome, caminho, cpos
+		if err := p.advance(); err != nil {
+			return OrderKey{}, err
+		}
+	}
+	switch {
+	case ehPalavra(p.cur, "asc"):
+		if err := p.advance(); err != nil {
+			return OrderKey{}, err
+		}
+	case ehPalavra(p.cur, "desc"):
+		k.Desc = true
+		if err := p.advance(); err != nil {
+			return OrderKey{}, err
+		}
+	}
+	if ehPalavra(p.cur, "nulls") {
+		if err := p.advance(); err != nil {
+			return OrderKey{}, err
+		}
+		switch {
+		case ehPalavra(p.cur, "first"):
+			k.NullsFirst = true
+		case ehPalavra(p.cur, "last"):
+		default:
+			return OrderKey{}, p.errAt(p.cur.Pos, "esperado FIRST ou LAST depois de NULLS")
+		}
+		if err := p.advance(); err != nil {
+			return OrderKey{}, err
+		}
+	}
+	return k, nil
 }
 
 // parseOffset lê `OFFSET <n>`, com as MESMAS recusas do LIMIT: sem parâmetro,
