@@ -1,5 +1,38 @@
 # Ciclo M6 — Query longa, ordenação, e densidade de campos
 
+## Estado da execução (26/08/2026)
+
+| Bloco | Estado | Validação |
+|---|---|---|
+| **C0+C1** vazamento de inode | **no ar** (`v0.6.0-83`) | 459 fds / 123,21 GB presos no piloto; depois do deploy, 115 GB devolvidos e contador em zero |
+| **A1–A4** rotas de perda | **em `main`** | quatro correções, cada uma provada nos dois sentidos |
+| **B1–B2** densidade por coluna | **em `main`** | custo do contador indistinguível na bancada (`p=0.310`) |
+| **D0** `LIKE`/`NOT LIKE` | **em `main`** | matcher a 3,8 ns no prefixo, zero alocação |
+| **D1** `OFFSET` + `--limit` | **em `main`** | o `--limit` apagava a paginação em silêncio |
+| **D2** `ORDER BY` | **em `main`** | desempate por rowId; paginação contígua verificada no piloto |
+| **S1+S2** spill e sort externo | **no ar** (`v0.6.0-96`) | diferencial memória × disco idêntico linha a linha |
+| **D5** índice hash físico | em curso | |
+| **C3+C4** query longa e orçamento | em curso | |
+| **D3** top-N com heap | **não feito** | o `ORDER BY` funciona pelo caminho completo; sem o atalho, `LIMIT 10` ainda acumula até o teto |
+| **C2** snapshot de leitura | **não feito** | query longa ainda vê mistura temporal |
+| **D6** scan paralelo | **não feito** | |
+| **E** tipos declarados | **não feito** | depende de recriar o dataset |
+
+**A consulta que costura as três frentes responde em produção:**
+
+```sql
+SELECT name, type, occurrences, typeMismatches FROM _meta.fields
+WHERE parent = 'persistent' ORDER BY typeMismatches DESC LIMIT 12
+```
+
+E já entregou achado que a amostragem original não tinha: `persistent.severidade`
+(37% de divergência) e `persistent.classificacao` **não estavam na tabela do
+documento** — o script de amostra nunca as viu. O `dataFalha` fixou como
+`string` desta vez, contra `int64` na medição original, o que confirma na
+prática que o tipo sai por sorte de qual evento chega primeiro.
+
+---
+
 > **Antes do ciclo, uma correção urgente e separada:** os blocos **C0 e C1** saem
 > numa branch `fix/` própria, mergeada antes do resto. Motivo no achado 8: a
 > compaction hoje não devolve disco ao filesystem enquanto o processo vive, e o
