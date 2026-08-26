@@ -32,6 +32,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/materializer"
 	"github.com/nishisan-dev/nishidb/internal/metrics"
 	"github.com/nishisan-dev/nishidb/internal/query"
+	"github.com/nishisan-dev/nishidb/internal/query/orcamento"
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/storage"
 )
@@ -90,10 +91,16 @@ type Servidor struct {
 	vagasLongas chan struct{}
 	// emVoo é o registro de QUAIS consultas estão correndo, ao lado do medidor
 	// que diz quantas. Ver emvoo.go.
-	emVoo    *emVoo
-	http     *http.Server
-	ln       net.Listener
-	pprofSrv *http.Server
+	emVoo *emVoo
+	// orcamento é o teto de memória de consulta do §80
+	// (runtime.memoryTarget), do qual cada requisição toma uma fatia limitada
+	// por runtime.query.maxBufferPerQuery. É do PROCESSO pela mesma razão do
+	// semáforo: o §82 diz que todos os datasets dividem o mesmo orçamento, e um
+	// por dataset multiplicaria o pior caso pelo número deles.
+	orcamento *orcamento.Global
+	http      *http.Server
+	ln        net.Listener
+	pprofSrv  *http.Server
 
 	// credenciais é o cache imutável de server.authentication.users já
 	// resolvido contra o ambiente (§74-77, resolveCredenciais em
@@ -250,10 +257,11 @@ func Novo(cfg *config.Config, o Opcoes) (*Servidor, error) {
 		vagas:       make(chan struct{}, cfg.MaxConcurrent()),
 		vagasLongas: make(chan struct{}, cfg.MaxLongRunning()),
 		emVoo:       novoEmVoo(),
+		orcamento:   orcamento.NovoGlobal(cfg.MemoryTarget()),
 		credenciais: credenciais,
 		tlsCert:     certificado,
 	}
-	s.met = registraMetricasDeQuery(reg, s.eng, s.emVoo)
+	s.met = registraMetricasDeQuery(reg, s.eng, s.emVoo, s.orcamento)
 	s.authFalhas = registraMetricasDeAuth(reg)
 
 	// O bind vem ANTES de abrir os datasets: descobrir porta ocupada depois

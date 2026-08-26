@@ -124,3 +124,86 @@ func TestDefaultMaxTimeoutAbaixoDoDefaultTimeoutEhRecusado(t *testing.T) {
 		t.Fatalf("teto igual ao prazo padrão tem de ser aceito: %v", err)
 	}
 }
+
+// runtime.memoryTarget e runtime.query.maxBufferPerQuery têm LEITOR.
+//
+// As duas eram parseadas e nunca lidas (metade do débito 15), e a chave não era
+// só inócua: quem escreve `memoryTarget: 1GiB` dimensiona a MÁQUINA por ela. O
+// teste cobre os três estados que separam "tem leitor" de "está no arquivo":
+// o default do §80, o valor declarado, e a recusa do valor inválido pela chave.
+func TestMaxBufferPerQueryTemLeitorEValidacao(t *testing.T) {
+	c, err := CarregaConfig(escreveConfig(t, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.MaxBufferPerQuery() != 4<<20 {
+		t.Fatalf("MaxBufferPerQuery padrão = %d, quer 4MiB (§80)", c.MaxBufferPerQuery())
+	}
+	if c.MemoryTarget() != 512<<20 {
+		t.Fatalf("MemoryTarget padrão = %d, quer 512MiB (§80)", c.MemoryTarget())
+	}
+
+	c, err = CarregaConfig(escreveConfig(t,
+		"runtime:\n  memoryTarget: 2GiB\n  query:\n    maxBufferPerQuery: 16MiB\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.MaxBufferPerQuery() != 16<<20 {
+		t.Fatalf("MaxBufferPerQuery = %d, quer 16MiB", c.MaxBufferPerQuery())
+	}
+	if c.MemoryTarget() != 2<<30 {
+		t.Fatalf("MemoryTarget = %d, quer 2GiB", c.MemoryTarget())
+	}
+
+	// Valor inválido é recusado NOMEANDO a chave — e a unidade DECIMAL é
+	// recusada junto, porque units.Tamanho não aceita as duas grafias: "4MB" e
+	// "4MiB" pareceriam a mesma coisa e diferiam em 5%.
+	for _, v := range []string{"quatro", "0", "-1", "4MB"} {
+		t.Run("maxBufferPerQuery "+v, func(t *testing.T) {
+			_, err := CarregaConfig(escreveConfig(t, "runtime:\n  query:\n    maxBufferPerQuery: \""+v+"\"\n"))
+			if err == nil {
+				t.Fatalf("maxBufferPerQuery %q deveria ser recusado", v)
+			}
+			if !strings.Contains(err.Error(), "runtime.query.maxBufferPerQuery") {
+				t.Fatalf("a mensagem não nomeia a chave: %v", err)
+			}
+		})
+	}
+	for _, v := range []string{"quatro", "0", "-1", "512MB"} {
+		t.Run("memoryTarget "+v, func(t *testing.T) {
+			_, err := CarregaConfig(escreveConfig(t, "runtime:\n  memoryTarget: \""+v+"\"\n"))
+			if err == nil {
+				t.Fatalf("memoryTarget %q deveria ser recusado", v)
+			}
+			if !strings.Contains(err.Error(), "runtime.memoryTarget") {
+				t.Fatalf("a mensagem não nomeia a chave: %v", err)
+			}
+		})
+	}
+}
+
+// Orçamento por consulta acima do orçamento do processo é contradição.
+//
+// A PRIMEIRA consulta a chegar perto do próprio limite já seria recusada pelo
+// global, e o operador leria a recusa como defeito do motor em vez de como a
+// contradição que ele escreveu. Recusar na abertura, nomeando as duas chaves, é
+// o que transforma isso num erro de configuração legível.
+func TestMaxBufferPerQueryAcimaDoMemoryTargetEhRecusado(t *testing.T) {
+	_, err := CarregaConfig(escreveConfig(t,
+		"runtime:\n  memoryTarget: 8MiB\n  query:\n    maxBufferPerQuery: 16MiB\n"))
+	if err == nil {
+		t.Fatal("quer recusa: o orçamento de UMA consulta não pode passar o do processo")
+	}
+	for _, chave := range []string{"runtime.query.maxBufferPerQuery", "runtime.memoryTarget"} {
+		if !strings.Contains(err.Error(), chave) {
+			t.Errorf("a mensagem não nomeia %s: %v", chave, err)
+		}
+	}
+
+	// Igual passa: um processo de uma consulta só é configuração legítima, e um
+	// `>=` no lugar do `>` a recusaria.
+	if _, err := CarregaConfig(escreveConfig(t,
+		"runtime:\n  memoryTarget: 8MiB\n  query:\n    maxBufferPerQuery: 8MiB\n")); err != nil {
+		t.Fatalf("orçamento por consulta igual ao do processo tem de ser aceito: %v", err)
+	}
+}

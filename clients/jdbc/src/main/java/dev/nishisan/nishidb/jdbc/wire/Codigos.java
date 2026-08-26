@@ -28,6 +28,7 @@ public final class Codigos {
     public static final String TOO_MANY_LONG_QUERIES = "TOO_MANY_LONG_QUERIES";
     public static final String TIMEOUT = "TIMEOUT";
     public static final String MAX_ROWS_EXCEEDED = "MAX_ROWS_EXCEEDED";
+    public static final String ROW_TOO_LARGE = "ROW_TOO_LARGE";
     public static final String DATASET_CORRUPT = "DATASET_CORRUPT";
     public static final String INTERNAL = "INTERNAL";
     public static final String UNAUTHENTICATED = "UNAUTHENTICATED";

@@ -125,6 +125,28 @@ const (
 	// esta é a razão, e ela mora aqui junto das constantes.
 	MetQueryLongestRunningSeconds = "nishidb_query_longest_running_seconds"
 	MetQueryLongRejectedTotal     = "nishidb_query_long_rejected_total"
+
+	// MetQueryBufferBytes e MetQueryBudgetRejectedTotal são do orçamento de
+	// memória de consulta (§80: runtime.memoryTarget e
+	// runtime.query.maxBufferPerQuery). Não estão no §92 porque, quando aquela
+	// seção foi escrita, as duas chaves eram parseadas e nunca lidas — não havia
+	// orçamento, e por isso não havia o que medir. Era metade do débito 15.
+	//
+	// MetQueryBufferBytes é MEDIDOR e é lido no scrape, do próprio contador
+	// atômico do orçamento: é o único número que responde "o memoryTarget que
+	// eu configurei está apertado?" antes de a primeira recusa acontecer. Sem
+	// ele, o operador só descobriria o teto pelo erro — e aí já perdeu uma
+	// consulta para aprender o que um painel diria de graça.
+	//
+	// MetQueryBudgetRejectedTotal conta as linhas recusadas por não caberem no
+	// orçamento (ROW_TOO_LARGE). É separada de
+	// nishidb_query_errors{categoria="ROW_TOO_LARGE"} pela mesma razão que
+	// MetQueryLongRejectedTotal é separada da dela: a série de erros é por
+	// dataset e serve ao diagnóstico de um; esta é do PROCESSO e serve a uma
+	// decisão de capacidade, que é subir a chave. Somar categorias sobre todos
+	// os datasets não é conta que alguém escreva num alerta.
+	MetQueryBufferBytes         = "nishidb_query_buffer_bytes"
+	MetQueryBudgetRejectedTotal = "nishidb_query_budget_rejected_total"
 )
 
 // Séries INVENTADAS no M2, com o defeito que cada uma corrige.

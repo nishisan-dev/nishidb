@@ -155,6 +155,42 @@ O default do sub-pool é limitado pelo pool, e a chave explícita não é:
 `maxConcurrent: 1` é configuração legítima e existente, e um default fixo de 2
 recusaria, na primeira troca de binário, um arquivo que ninguém editou.
 
+### Orçamento de memória de consulta
+
+`runtime.memoryTarget` e `runtime.query.maxBufferPerQuery` eram **parseados e
+nunca lidos** — metade do débito 15. A chave não era só inócua: quem escreve
+`memoryTarget: 1GiB` dimensiona a **máquina** por ela, e não havia teto nenhum.
+Agora os dois têm leitor, com os defaults do §80 (512 MiB e 4 MiB), e saíram da
+lista de chaves que a subida nomeia como sem efeito — continuar avisando sobre
+uma chave que passou a valer mentiria na direção oposta.
+
+O orçamento tem dois níveis, e cada um recusa uma coisa diferente:
+
+| nível | o que impede | quando recusa |
+|---|---|---|
+| `runtime.memoryTarget` | que N consultas **somadas** estourem a máquina | na **admissão**, com 503 + `Retry-After` |
+| `runtime.query.maxBufferPerQuery` | que **uma** consulta patológica consuma o que era de todas | por **linha**, com `ROW_TOO_LARGE` |
+
+A reserva é de **admissão**, e não conforme o buffer cresce, porque a alternativa
+é cruel: com reserva incremental o orçamento do processo pode acabar na linha
+quarenta mil, e o cliente perde o resultado por causa da memória de *outra*
+consulta. Reservado na entrada, ou a consulta tem o orçamento dela inteiro antes
+do primeiro byte, ou recebe um 503 honesto. O efeito colateral é que o caminho
+quente do writer não chama o orçamento nenhuma vez — sem CAS por linha, sem
+contenção entre as consultas simultâneas.
+
+**Primeiro consumidor real: o `StreamWriter`** (débito 28). Ele nunca encolhia:
+uma linha de 1 MiB esticava o buffer e o `buf[:0]` mantinha a capacidade pela
+vida do writer, mesmo que as 100 mil linhas seguintes fossem pequenas — e com N
+consultas simultâneas o pior caso era N × maiorLinha de RSS residente. O sintoma
+não era um erro, era memória, num processo que ninguém ligava àquela consulta.
+Hoje a capacidade não passa do teto, e a linha que não cabe vira `ROW_TOO_LARGE`
+nomeando o próprio tamanho e a chave a ajustar.
+
+Duas séries novas: `nishidb_query_buffer_bytes` (o medidor que responde "o
+`memoryTarget` está apertado?" **antes** da primeira recusa) e
+`nishidb_query_budget_rejected_total`.
+
 ### Ver a consulta longa em andamento
 
 `nishidb status` e `/v1/stats` passam a listar as consultas **em voo** — dataset,
@@ -176,7 +212,8 @@ não positivo também, e `server.enabled: false` faz o `nishidb server` recusar 
 subida em vez de ignorar a chave. `server.tls`, `server.authentication` e
 `server.loopback` **ganharam leitor na Fase 11** (§74-77) — ver "Segurança:
 autenticação e TLS" abaixo. O que ainda não tem implementação
-(`runtime`, `storage.durability`) continua aceito e ignorado de propósito,
+(`runtime.managedMemoryTarget`, `storage.durability`) continua aceito e ignorado
+de propósito,
 para que o arquivo do M3 continue válido para este binário —
 `storage.durability` está registrada como débito 50, porque quem lê
 `interval: 100ms` conclui uma garantia que não existe.

@@ -512,6 +512,29 @@ podia. Hoje `executor.Open` só aplica o prazo do dataset quando o chamador NÃO
 trouxe deadline, e recusa uma query ligada sem prazo com `ErrInvalidPlan` em vez
 de cair num default próprio.
 
+**A memória de consulta virou orçamento, e não mais uma chave sem leitor.**
+`runtime.memoryTarget` e `runtime.query.maxBufferPerQuery` eram parseados e nunca
+lidos (metade do débito 15). `internal/query/orcamento` é o teto: dois
+`atomic.Int64`, sem mutex e sem alocação — o consumidor é chamado uma vez por
+row, e o gate de alocação do executor exige igualdade exata entre 1.000 e 8.000
+linhas. O `Global` recusa na ADMISSÃO (503 + `Retry-After`, ao lado do semáforo)
+e o `PorQuery` recusa POR LINHA, dentro do writer. A reserva é do teto inteiro na
+entrada: com reserva incremental o orçamento do processo pode acabar na linha
+quarenta mil, e o cliente perde o resultado por causa da memória de outra
+consulta.
+
+**Primeiro consumidor real: o `StreamWriter`** — o débito 28, cujo próprio texto
+já dizia que o remédio era o `maxBufferPerQuery` do §80. Ele nunca encolhia: uma
+linha de 1 MiB fixava a capacidade pela vida do writer, e o pior caso era
+N × maiorLinha de RSS residente. Hoje o teto vale sobre a CAPACIDADE (é o array
+que ocupa memória, e era ele que o `buf[:0]` preservava), a linha que não cabe
+sai como `ROW_TOO_LARGE` com o próprio tamanho e a chave na mensagem, e o array
+grande vira lixo na hora — recusar sem soltar a memória teria evitado o sintoma
+errado. O buffer inicial fica em METADE do teto quando o teto é apertado: o
+append que cruza o limiar de flush é o que estica o array, e sem folga um
+`maxBufferPerQuery` abaixo dos 64 KiB default do stream viraria "nenhuma consulta
+funciona".
+
 **Quem está segurando as vagas fica visível.** Um registro de consultas em voo
 (`{dataset, início, hash do SQL}`, alimentado ao lado de `s.met.admite` e limpo
 no defer) alimenta o `/v1/stats` e o `nishidb status`. O medidor

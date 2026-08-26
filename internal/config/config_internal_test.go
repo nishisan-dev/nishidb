@@ -165,14 +165,21 @@ func TestMaxConcurrentTemLeitorEValidacao(t *testing.T) {
 }
 
 // Chave aceita e não implementada não pode ficar em silêncio: quem escreve
-// memoryTarget dimensiona a máquina por ela (débito 15).
+// managedMemoryTarget dimensiona a máquina por ela (resto do débito 15).
+//
+// A lista ENCOLHEU quando memoryTarget e query.maxBufferPerQuery ganharam
+// leitor, e encolher é obrigatório — não é ajuste de teste. Um aviso que
+// continua dizendo "esta chave não faz nada" sobre uma chave que passou a fazer
+// mente na direção OPOSTA, e é a pior das duas mentiras: o operador desconfia de
+// um limite que está de fato valendo, e sobe o valor para "compensar" um teto
+// que ele acha inexistente.
 func TestChavesDeRuntimeSemImplementacaoSaoNomeadas(t *testing.T) {
 	c, err := CarregaConfig(escreveConfig(t,
 		"runtime:\n  memoryTarget: 1GiB\n  managedMemoryTarget: 512MiB\n  query:\n    maxBufferPerQuery: 4MiB\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	quer := []string{"runtime.memoryTarget", "runtime.managedMemoryTarget", "runtime.query.maxBufferPerQuery"}
+	quer := []string{"runtime.managedMemoryTarget"}
 	got := c.ChavesDeRuntimeIgnoradas()
 	if len(got) != len(quer) {
 		t.Fatalf("chaves = %v, quer %v", got, quer)
@@ -181,6 +188,16 @@ func TestChavesDeRuntimeSemImplementacaoSaoNomeadas(t *testing.T) {
 		if got[i] != quer[i] {
 			t.Fatalf("chaves = %v, quer %v", got, quer)
 		}
+	}
+
+	// E as duas que SAÍRAM da lista têm de estar de fato valendo: sem esta
+	// asserção, tirá-las do aviso e esquecer de ligá-las passaria — que é o
+	// mesmo silêncio de antes, com o aviso a menos.
+	if c.MemoryTarget() != 1<<30 {
+		t.Errorf("MemoryTarget() = %d, quer 1GiB: a chave saiu do aviso e precisa ter leitor", c.MemoryTarget())
+	}
+	if c.MaxBufferPerQuery() != 4<<20 {
+		t.Errorf("MaxBufferPerQuery() = %d, quer 4MiB", c.MaxBufferPerQuery())
 	}
 
 	// O bloco §78 sem as chaves não avisa nada — aviso que aparece sempre é

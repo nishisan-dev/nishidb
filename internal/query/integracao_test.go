@@ -11,6 +11,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/materializer"
 	"github.com/nishisan-dev/nishidb/internal/query"
 	"github.com/nishisan-dev/nishidb/internal/query/executor"
+	"github.com/nishisan-dev/nishidb/internal/query/orcamento"
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/storage"
 	"github.com/nishisan-dev/nishidb/internal/testutil/radiusgen"
@@ -340,7 +341,7 @@ func TestIntegracaoFimAFim(t *testing.T) {
 		defer it.Close()
 
 		var buf bytes.Buffer
-		w := executor.NewStreamWriter(&buf, 512) // pequeno de propósito: força flushes
+		w := executor.NewStreamWriter(&buf, 512, orcamento.NovoGlobal(0).Query(0)) // pequeno de propósito: força flushes
 		linhas := 0
 		for it.Next() {
 			if err := w.WriteRow(it.Row()); err != nil {

@@ -123,14 +123,16 @@ type Config struct {
 		Loopback       LoopbackSpec       `yaml:"loopback"`
 	} `yaml:"server"`
 
-	// Runtime é o bloco §79/§80. Só query.maxConcurrent tem leitor: é o teto
-	// de consultas simultâneas que o §80 nomeia e que o §81 autoriza a fazer
-	// valer REJEITANDO consulta antes de comprometer a ingestão.
+	// Runtime é o bloco §79/§80, e desde o fechamento de metade do débito 15
+	// quase todo ele tem leitor: query.maxConcurrent é o teto de consultas
+	// simultâneas do §80, query.maxLongRunning é o sub-pool da consulta longa,
+	// e memoryTarget/query.maxBufferPerQuery são o orçamento de memória de
+	// consulta (internal/query/orcamento), cujo primeiro consumidor real é o
+	// StreamWriter.
 	//
-	// As demais chaves continuam aceitas e sem efeito (débito 15), mas não em
-	// silêncio: quem escreve `memoryTarget: 1GiB` conclui que há um teto de
-	// memória, e não há. A subida avisa — no mesmo molde do aviso que
-	// storage.durability recebe (débito 50, ChavesDeStorageIgnoradas).
+	// managedMemoryTarget continua aceita e sem efeito, e não em silêncio:
+	// quem a escreve conclui que há um teto que não há, e a subida avisa — no
+	// mesmo molde de storage.durability (débito 50, ChavesDeStorageIgnoradas).
 	Runtime struct {
 		MemoryTarget        string `yaml:"memoryTarget"`
 		ManagedMemoryTarget string `yaml:"managedMemoryTarget"`
@@ -179,6 +181,8 @@ type Config struct {
 	serverPort         int
 	maxConcurrent      int
 	maxLongRunning     int
+	memoryTarget       int64
+	maxBufferPerQuery  int64
 	minimumLiveRatio   float64
 	expiracaoMax       int
 	expiracaoTempo     time.Duration
@@ -209,6 +213,17 @@ const (
 	// export em paralelo) e deixam 14 das 16 vagas do default sempre
 	// disponíveis para quem responde em milissegundos.
 	maxLongRunningPadrao = 2
+
+	// Os dois defaults do §80, literais da spec: 512 MiB de orçamento de
+	// memória de consulta para o processo e 4 MiB de buffer por consulta.
+	//
+	// A relação entre eles não é arbitrária: 4 MiB × os 16 do maxConcurrent
+	// padrão são 64 MiB, um oitavo do alvo — folga suficiente para que o
+	// orçamento por consulta seja o que de fato recusa a linha patológica, e
+	// não o global, que recusaria por culpa de uma consulta a consulta de
+	// outro cliente.
+	memoryTargetPadrao      = 512 << 20
+	maxBufferPerQueryPadrao = 4 << 20
 
 	// Defaults da coleta de expiração. Mil marcações por passada a 452 ev/s
 	// do piloto são ~136 KB escritos por passada — ruído perto da ingestão —,
@@ -353,6 +368,24 @@ func CarregaConfig(path string) (*Config, error) {
 				"a consulta longa toma uma vaga de CADA pool, então o sub-pool não pode ser maior que o pool",
 			path, c.maxLongRunning, c.maxConcurrent)
 	}
+	if c.memoryTarget, err = units.Tamanho(c.Runtime.MemoryTarget, memoryTargetPadrao); err != nil {
+		return nil, fmt.Errorf("configuração %s: runtime.memoryTarget: %w", path, err)
+	}
+	if c.maxBufferPerQuery, err = units.Tamanho(c.Runtime.Query.MaxBufferPerQuery, maxBufferPerQueryPadrao); err != nil {
+		return nil, fmt.Errorf("configuração %s: runtime.query.maxBufferPerQuery: %w", path, err)
+	}
+	if c.maxBufferPerQuery > c.memoryTarget {
+		// Um teto por consulta acima do orçamento do processo é uma promessa
+		// que o processo nunca poderia cumprir: a PRIMEIRA consulta a chegar
+		// perto do próprio limite já seria recusada pelo global, e o operador
+		// leria a recusa como defeito do motor em vez de como a contradição que
+		// ele escreveu. Recusar na abertura, nomeando as duas chaves, é o que
+		// transforma isso num erro de configuração legível.
+		return nil, fmt.Errorf(
+			"configuração %s: runtime.query.maxBufferPerQuery (%d bytes) acima de runtime.memoryTarget "+
+				"(%d bytes): o orçamento de UMA consulta não pode passar do orçamento do processo inteiro",
+			path, c.maxBufferPerQuery, c.memoryTarget)
+	}
 	if c.serverPort > 65535 {
 		return nil, fmt.Errorf("configuração %s: server.port %d fora de 1..65535", path, c.serverPort)
 	}
@@ -484,6 +517,24 @@ func (c *Config) MaxConcurrent() int { return c.maxConcurrent }
 // milissegundos passar a receber 503.
 func (c *Config) MaxLongRunning() int { return c.maxLongRunning }
 
+// MemoryTarget é o orçamento de memória de CONSULTA do processo (§80), e
+// MaxBufferPerQuery é a fatia dele que uma consulta pode tomar.
+//
+// Os dois eram parseados e nunca lidos (metade do débito 15). A chave não era
+// só inócua: quem escreve `memoryTarget: 1GiB` dimensiona a máquina por ela, e
+// não havia teto nenhum. Hoje alimentam internal/query/orcamento, cujo primeiro
+// consumidor real é o StreamWriter — que também nunca encolhia (débito 28), e
+// cujo texto já dizia que o remédio era esta chave.
+//
+// MemoryTarget NÃO é um teto de RSS do processo: é o orçamento dos buffers de
+// consulta, que é o que este pacote sabe contar. Chamar de teto de memória o
+// que não inclui índices, mmap e heap do consumidor seria a mesma mentira que a
+// chave sem leitor era, com um número a mais.
+func (c *Config) MemoryTarget() int64 { return c.memoryTarget }
+
+// MaxBufferPerQuery é o teto de buffer de UMA consulta (§80). Ver MemoryTarget.
+func (c *Config) MaxBufferPerQuery() int64 { return c.maxBufferPerQuery }
+
 // BindExposto diz se o servidor vai escutar fora do loopback.
 //
 // Existe para a subida poder AVISAR ou RECUSAR (§77): a autenticação do
@@ -511,23 +562,27 @@ func (c *Config) BindExposto() bool {
 }
 
 // ChavesDeRuntimeIgnoradas nomeia as chaves de `runtime` que este binário
-// aceita e não implementa (débito 15).
+// aceita e não implementa (resto do débito 15).
 //
 // A lista existe porque configuração que mente é pior que configuração
-// ausente: quem escreve `memoryTarget: 1GiB` e não recebe aviso nenhum conclui
-// que há um teto de memória, e vai dimensionar a máquina por ele. É a mesma
-// doutrina que ChavesDeStorageIgnoradas, logo abaixo, aplica a
-// storage.durability (débito 50).
+// ausente: quem escreve uma chave de memória e não recebe aviso nenhum conclui
+// que há um teto, e vai dimensionar a máquina por ele. É a mesma doutrina que
+// ChavesDeStorageIgnoradas, logo abaixo, aplica a storage.durability (débito
+// 50).
+//
+// Sobrou UMA. `memoryTarget` e `query.maxBufferPerQuery` SAÍRAM daqui ao
+// ganharem leitor — e sair é obrigatório, não cosmético: um aviso que continua
+// dizendo "esta chave não faz nada" sobre uma chave que passou a fazer mente na
+// direção OPOSTA, e é a pior das duas, porque agora o operador desconfia de um
+// limite que está de fato valendo.
+//
+// `managedMemoryTarget` fica: ela descreve o teto do runtime Go
+// (GOMEMLIMIT/soft limit), que é outra coisa do orçamento de buffers de
+// consulta, e não tem leitor.
 func (c *Config) ChavesDeRuntimeIgnoradas() []string {
 	var out []string
-	if c.Runtime.MemoryTarget != "" {
-		out = append(out, "runtime.memoryTarget")
-	}
 	if c.Runtime.ManagedMemoryTarget != "" {
 		out = append(out, "runtime.managedMemoryTarget")
-	}
-	if c.Runtime.Query.MaxBufferPerQuery != "" {
-		out = append(out, "runtime.query.maxBufferPerQuery")
 	}
 	return out
 }

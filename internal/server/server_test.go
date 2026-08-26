@@ -431,14 +431,42 @@ func TestBindEmLoopbackSemNadaDeSegurancaDeclaradoNaoLogaNada(t *testing.T) {
 	}
 }
 
-// Chave de runtime aceita e não implementada é nomeada na subida (débito 15).
+// Chave de runtime aceita e não implementada é nomeada na subida (resto do
+// débito 15).
+//
+// A chave do teste MUDOU de `memoryTarget` para `managedMemoryTarget` porque a
+// primeira ganhou leitor — e continuar avisando sobre ela seria mentir na
+// direção OPOSTA: o operador desconfiaria de um limite que está de fato valendo,
+// e subiria o valor para "compensar" um teto que ele acha inexistente. O
+// contrapositivo — que a chave COM leitor não avisa mais — é a segunda metade
+// deste teste.
 func TestChaveDeRuntimeIgnoradaApareceNaSubida(t *testing.T) {
-	a := novoAmbienteCom(t, "\nserver:\n  bind: 127.0.0.1\n  port: %d\nruntime:\n  memoryTarget: 1GiB\n")
+	a := novoAmbienteCom(t,
+		"\nserver:\n  bind: 127.0.0.1\n  port: %d\nruntime:\n  managedMemoryTarget: 1GiB\n")
 	a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))
 
 	saida := sobeCapturandoLog(t, a)
-	if !strings.Contains(saida, "runtime.memoryTarget") {
+	if !strings.Contains(saida, "runtime.managedMemoryTarget") {
 		t.Fatalf("a chave sem implementação não foi nomeada: %s", saida)
+	}
+}
+
+// E a chave que GANHOU leitor não é mais nomeada.
+//
+// Sem esta metade, tirar `memoryTarget` da lista de ignoradas e esquecer de
+// ligá-la passaria — o operador deixaria de receber o aviso E continuaria sem
+// teto, que é estritamente pior do que o estado anterior.
+func TestChaveDeRuntimeComLeitorNaoEhMaisNomeadaNaSubida(t *testing.T) {
+	a := novoAmbienteCom(t,
+		"\nserver:\n  bind: 127.0.0.1\n  port: %d\nruntime:\n  memoryTarget: 1GiB\n"+
+			"  query:\n    maxBufferPerQuery: 4MiB\n")
+	a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))
+
+	saida := sobeCapturandoLog(t, a)
+	for _, chave := range []string{"runtime.memoryTarget", "runtime.query.maxBufferPerQuery"} {
+		if strings.Contains(saida, chave) {
+			t.Errorf("a subida ainda avisa que %s não tem efeito, e ela tem: %s", chave, saida)
+		}
 	}
 }
 

@@ -8,8 +8,18 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nishisan-dev/nishidb/internal/query/orcamento"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
+
+// semTeto é o orçamento ILIMITADO, para os testes cujo assunto NÃO é o
+// orçamento — concatenação, flush, erro sticky, estabilidade da capacidade.
+//
+// Passar um teto real neles acoplaria cada asserção a um número que não tem
+// nada a ver com o que ela afirma, e a primeira mudança de default quebraria a
+// suíte inteira por um motivo que não é o dela. Os testes que EXERCEM o
+// orçamento declaram o teto deles, explicitamente — ver orcamento_writer_test.go.
+func semTeto() *orcamento.PorQuery { return orcamento.NovoGlobal(0).Query(0) }
 
 func rowDeTeste(i int) Row {
 	return Row{cols: []ColView{
@@ -20,7 +30,7 @@ func rowDeTeste(i int) Row {
 
 func TestStreamWriterConcatena(t *testing.T) {
 	var buf bytes.Buffer
-	s := NewStreamWriter(&buf, 64) // buffer pequeno de propósito: força vários flushes
+	s := NewStreamWriter(&buf, 64, semTeto()) // buffer pequeno de propósito: força vários flushes
 
 	var esperado []byte
 	for i := 0; i < 50; i++ {
@@ -45,7 +55,7 @@ func TestStreamWriterConcatena(t *testing.T) {
 // esquecer produz um resultado truncado que parece completo.
 func TestStreamWriterExigeFlush(t *testing.T) {
 	var buf bytes.Buffer
-	s := NewStreamWriter(&buf, 1<<20)
+	s := NewStreamWriter(&buf, 1<<20, semTeto())
 	if err := s.WriteRow(rowDeTeste(0)); err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +91,7 @@ func (e *espiao) Write(p []byte) (int, error) {
 func TestStreamWriterErroEhStickyEIdentificavel(t *testing.T) {
 	falha := errors.New("cano quebrado")
 	e := &espiao{falha: falha}
-	s := NewStreamWriter(e, 16)
+	s := NewStreamWriter(e, 16, semTeto())
 
 	err := s.WriteRow(rowDeTeste(0))
 	if err == nil {
@@ -116,7 +126,7 @@ func TestStreamWriterErroEhStickyEIdentificavel(t *testing.T) {
 }
 
 func TestStreamWriterShortWrite(t *testing.T) {
-	s := NewStreamWriter(&espiao{curto: true}, 16)
+	s := NewStreamWriter(&espiao{curto: true}, 16, semTeto())
 	err := s.WriteRow(rowDeTeste(0))
 	if !errors.Is(err, io.ErrShortWrite) {
 		t.Errorf("erro = %v, want io.ErrShortWrite", err)
@@ -129,7 +139,7 @@ func TestStreamWriterShortWrite(t *testing.T) {
 // Linha maior que o buffer: cresce, escreve e não trava.
 func TestStreamWriterLinhaMaiorQueOBuffer(t *testing.T) {
 	var buf bytes.Buffer
-	s := NewStreamWriter(&buf, 8)
+	s := NewStreamWriter(&buf, 8, semTeto())
 	grande := Row{cols: []ColView{col("txt", str(strings.Repeat("x", 10_000)))}}
 
 	if err := s.WriteRow(grande); err != nil {
@@ -152,7 +162,7 @@ func TestStreamWriterLinhaMaiorQueOBuffer(t *testing.T) {
 // este projeto existe para não fazer.
 func TestStreamWriterCapEstavel(t *testing.T) {
 	capacidade := func(linhas int) int {
-		s := NewStreamWriter(io.Discard, 4096)
+		s := NewStreamWriter(io.Discard, 4096, semTeto())
 		for i := 0; i < linhas; i++ {
 			if err := s.WriteRow(rowDeTeste(i)); err != nil {
 				t.Fatal(err)
@@ -175,7 +185,10 @@ func TestStreamWriterCapEstavel(t *testing.T) {
 	}
 	// O teto é bufSize + a maior linha, arredondado pela política de
 	// crescimento do runtime: o append que ultrapassa o limiar acontece ANTES
-	// do flush, então a capacidade estaciona um pouco acima de bufSize.
+	// do flush, então a capacidade estaciona um pouco acima de bufSize. É
+	// exatamente essa folga que o orçamento por consulta limita hoje — ver
+	// TestStreamWriterRecusaCrescerAlemDoOrcamento —, e é por ela que o
+	// bufSize inicial fica em METADE do teto quando o teto é apertado.
 	if quatrocentosMil > 2*4096 {
 		t.Errorf("cap(buf) = %d, want <= 2x bufSize", quatrocentosMil)
 	}
@@ -185,7 +198,7 @@ func TestStreamWriterCapEstavel(t *testing.T) {
 // bufSize <= 0 cai no padrão: um writer com buffer zero faria flush por linha.
 func TestStreamWriterBufPadrao(t *testing.T) {
 	for _, n := range []int{0, -1} {
-		s := NewStreamWriter(io.Discard, n)
+		s := NewStreamWriter(io.Discard, n, semTeto())
 		if cap(s.buf) != DefaultBufSize || s.flushAt != DefaultBufSize {
 			t.Errorf("bufSize %d: cap=%d flushAt=%d, want %d", n, cap(s.buf), s.flushAt, DefaultBufSize)
 		}
@@ -195,7 +208,7 @@ func TestStreamWriterBufPadrao(t *testing.T) {
 // Nenhum byte extra, nenhum byte perdido.
 func TestStreamWriterBytesEscritos(t *testing.T) {
 	var buf bytes.Buffer
-	s := NewStreamWriter(&buf, 128)
+	s := NewStreamWriter(&buf, 128, semTeto())
 	total := 0
 	for i := 0; i < 500; i++ {
 		r := rowDeTeste(i)
@@ -279,7 +292,7 @@ func TestGateAppendValueZeroAllocPorTipo(t *testing.T) {
 // (bufSize + maiorLinha) e SÓ DEPOIS entra em regime. Medir o aquecimento
 // junto mediria o crescimento, não o regime.
 func TestGateStreamWriterZeroAllocEmRegime(t *testing.T) {
-	s := NewStreamWriter(io.Discard, 4096)
+	s := NewStreamWriter(io.Discard, 4096, semTeto())
 	row := rowDeTeste(1)
 	for i := 0; i < 2000; i++ { // aquecimento: leva o buffer ao teto
 		if err := s.WriteRow(row); err != nil {
@@ -388,8 +401,30 @@ de linha`)
 	lixo = dst
 }
 
+// BenchmarkStreamWriterComOrcamento mede o caminho de PRODUÇÃO: teto ativo.
+//
+// O BenchmarkStreamWriter logo abaixo roda sem teto, e o `s.teto > 0` do
+// WriteRow curto-circuita nele — ou seja, ele NÃO mede o custo do orçamento.
+// Medir só aquele e concluir "não custou nada" seria medir o ramo que não
+// existe em produção. Os dois juntos é que respondem quanto o teto cobra.
+func BenchmarkStreamWriterComOrcamento(b *testing.B) {
+	orc := orcamento.NovoGlobal(512 << 20).Query(4 << 20)
+	if !orc.Admite() {
+		b.Fatal("o orçamento do benchmark não coube")
+	}
+	s := NewStreamWriter(io.Discard, DefaultBufSize, orc)
+	r := rowDeTeste(7)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := s.WriteRow(r); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func BenchmarkStreamWriter(b *testing.B) {
-	s := NewStreamWriter(io.Discard, DefaultBufSize)
+	s := NewStreamWriter(io.Discard, DefaultBufSize, semTeto())
 	row := rowDeTeste(1)
 	b.ReportAllocs()
 	b.ResetTimer()

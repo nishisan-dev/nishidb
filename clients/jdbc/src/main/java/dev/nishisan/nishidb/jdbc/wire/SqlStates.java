@@ -121,6 +121,13 @@ public final class SqlStates {
             Map.entry(Codigos.COMPACTION_BUSY, new Entrada(OBJETO_EM_USO, SQLTransientException::new)),
             Map.entry(Codigos.REQUEST_TOO_LARGE, new Entrada(LIMITE_DE_PROGRAMA, SQLNonTransientException::new)),
 
+            // ROW_TOO_LARGE divide o 54000 com REQUEST_TOO_LARGE: os dois são
+            // "não coube num limite deste programa", um na entrada e outro na
+            // saída. NÃO é transient — repetir a mesma consulta produz a mesma
+            // linha grande —, e o que resolve é projetar menos colunas ou o
+            // operador subir runtime.query.maxBufferPerQuery.
+            Map.entry(Codigos.ROW_TOO_LARGE, new Entrada(LIMITE_DE_PROGRAMA, SQLNonTransientException::new)),
+
             // TIMEOUT ganha a única subclasse que o JDBC dedica a um caso
             // nosso, e é o que faz uma ferramenta oferecer "tentar de novo com
             // mais tempo" em vez de mostrar erro genérico.

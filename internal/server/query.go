@@ -15,6 +15,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/query/binder"
 	"github.com/nishisan-dev/nishidb/internal/query/executor"
 	"github.com/nishisan-dev/nishidb/internal/query/lexer"
+	"github.com/nishisan-dev/nishidb/internal/query/orcamento"
 	"github.com/nishisan-dev/nishidb/internal/query/parser"
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/storage"
@@ -144,6 +145,32 @@ func (s *Servidor) handleQuery(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// O orçamento de memória desta consulta é reservado AQUI, ao lado das vagas
+	// e antes de tocar o Store — é decisão de admissão, não de meio de stream.
+	//
+	// Reservado de uma vez, o desfecho é honesto: ou a consulta tem o orçamento
+	// dela inteiro antes do primeiro byte, ou recebe 503 com Retry-After. Com
+	// reserva conforme o buffer cresce, o `memoryTarget` poderia acabar na linha
+	// quarenta mil, e o cliente perderia o resultado por causa da memória de
+	// OUTRA consulta que nada tem a ver com a dele.
+	//
+	// A recusa reusa TOO_MANY_QUERIES, e não ganha código próprio, porque a AÇÃO
+	// do cliente é idêntica à do semáforo cheio — esperar e repetir. O que muda
+	// é a CAUSA, e ela vai na mensagem, nomeando a chave.
+	orc := s.orcamento.Query(s.cfg.MaxBufferPerQuery())
+	if !orc.Admite() {
+		w.Header().Set("Retry-After", "1")
+		s.recusa(w, r, http.StatusServiceUnavailable, d.nome, protocolo.Falha{
+			Code: protocolo.CodMuitasQueries,
+			Message: fmt.Sprintf(
+				"o orçamento de memória de consulta do processo está esgotado (runtime.memoryTarget, %d bytes); "+
+					"esta consulta precisa de %d bytes (runtime.query.maxBufferPerQuery)",
+				s.cfg.MemoryTarget(), s.cfg.MaxBufferPerQuery()),
+		})
+		return
+	}
+	defer orc.Libera()
+
 	encerra := s.met.admite(d.nome)
 	defer encerra()
 	// O registro de queries em voo nasce ao LADO do admite, e não dentro dele,
@@ -177,7 +204,7 @@ func (s *Servidor) handleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.transmite(w, r, d, req, it, colunas, tetoDoRequest, inicio)
+	s.transmite(w, r, d, req, it, colunas, tetoDoRequest, inicio, orc)
 }
 
 // ehJSON aceita application/json com ou sem parâmetros (charset, por exemplo).
@@ -310,6 +337,7 @@ func colunaReservada(cols []executor.ColMeta) (string, bool) {
 func (s *Servidor) transmite(
 	w http.ResponseWriter, r *http.Request, d *dataset, req protocolo.Requisicao,
 	it executor.RowIterator, colunas []executor.ColMeta, tetoDoRequest int, inicio time.Time,
+	orc *orcamento.PorQuery,
 ) {
 	log := s.log.Dataset(d.nome)
 
@@ -348,13 +376,16 @@ func (s *Servidor) transmite(
 	}
 
 	lote := s.cfg.ResultBatchSize()
-	sw := executor.NewStreamWriter(w, executor.DefaultBufSize)
+	// O orçamento já foi ADMITIDO em handleQuery, e é devolvido lá, no defer que
+	// cobre todos os caminhos de saída. Aqui ele só informa ao writer o teto que
+	// ele tem de fazer valer.
+	sw := executor.NewStreamWriter(w, executor.DefaultBufSize, orc)
 
 	var emitidas int64
 	truncadoPeloRequest := false
 	for it.Next() {
 		if err := sw.WriteRow(it.Row()); err != nil {
-			s.fechaComErro(w, d, protocolo.CodInterno, emitidas, err, log)
+			s.fechaComErro(w, d, s.codigoDeErroDeEscrita(err), emitidas, err, log)
 			return
 		}
 		emitidas++
@@ -371,7 +402,7 @@ func (s *Servidor) transmite(
 			// chunk ao fio. Só o primeiro deixaria os bytes parados no
 			// servidor; só o segundo não teria o que entregar.
 			if err := sw.Flush(); err != nil {
-				s.fechaComErro(w, d, protocolo.CodInterno, emitidas, err, log)
+				s.fechaComErro(w, d, s.codigoDeErroDeEscrita(err), emitidas, err, log)
 				return
 			}
 			if flusher != nil {
@@ -381,7 +412,7 @@ func (s *Servidor) transmite(
 	}
 
 	if err := sw.Flush(); err != nil {
-		s.fechaComErro(w, d, protocolo.CodInterno, emitidas, err, log)
+		s.fechaComErro(w, d, s.codigoDeErroDeEscrita(err), emitidas, err, log)
 		return
 	}
 	if err := it.Err(); err != nil {
@@ -490,6 +521,26 @@ func traduzErroDeAbertura(err error, sql string) (int, protocolo.Falha) {
 		// cliente: 500 é a resposta honesta.
 		return http.StatusInternalServerError, protocolo.Falha{Code: protocolo.CodInterno, Message: err.Error()}
 	}
+}
+
+// codigoDeErroDeEscrita classifica a falha do StreamWriter.
+//
+// Existe porque nem toda falha de escrita é defeito do servidor. A linha que não
+// cabe no orçamento de buffer (§80) é o teto de memória sendo APLICADO, com ação
+// possível do cliente — projetar menos colunas — e do operador — subir
+// runtime.query.maxBufferPerQuery. Publicá-la como INTERNAL mandaria os dois
+// procurar um bug que não existe, e é o que acontecia enquanto o writer crescia
+// em silêncio: não havia nem erro para classificar.
+//
+// A recusa também alimenta o contador do PROCESSO, aqui e não no executor: é a
+// mesma doutrina de metricasDeQuery — as séries de consulta nascem no protocolo,
+// que é quem conhece requisições, e não no motor, que conhece iteradores.
+func (s *Servidor) codigoDeErroDeEscrita(err error) string {
+	if errors.Is(err, executor.ErrRowTooLarge) {
+		s.met.recusaPorOrcamento()
+		return protocolo.CodLinhaGrande
+	}
+	return protocolo.CodInterno
 }
 
 // codigoDeErroDeQuery classifica a falha que aparece DEPOIS das rows, no

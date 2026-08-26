@@ -214,8 +214,20 @@ const (
 	CodMuitasQueriesLongas = "TOO_MANY_LONG_QUERIES"
 	CodTimeout             = "TIMEOUT"
 	CodMaxRows             = "MAX_ROWS_EXCEEDED"
-	CodDatasetCorrompido   = "DATASET_CORRUPT"
-	CodInterno             = "INTERNAL"
+	// CodLinhaGrande é a linha que não coube no orçamento de buffer da consulta
+	// (runtime.query.maxBufferPerQuery, §80).
+	//
+	// Tem código próprio, e não CodInterno, porque não é defeito do servidor: é
+	// o teto de memória sendo aplicado, e existe ação do cliente — projetar
+	// menos colunas, ou o operador subir a chave. Enquanto o StreamWriter
+	// crescia em silêncio (débito 28) não havia erro nenhum para nomear, e o
+	// sintoma aparecia como RSS num processo que ninguém ligava àquela consulta.
+	//
+	// Sai SEMPRE na linha de fecho, depois das rows: quando a linha grande
+	// aparece, o status HTTP já foi enviado junto com o schema.
+	CodLinhaGrande       = "ROW_TOO_LARGE"
+	CodDatasetCorrompido = "DATASET_CORRUPT"
+	CodInterno           = "INTERNAL"
 
 	// CodUnauthenticated e CodForbidden são do middleware de autenticação e
 	// papéis do §74-77 (Fase 11, Task B3) — os dois primeiros códigos deste

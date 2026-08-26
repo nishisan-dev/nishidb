@@ -5,6 +5,7 @@ import (
 
 	"github.com/nishisan-dev/nishidb/internal/metrics"
 	"github.com/nishisan-dev/nishidb/internal/query"
+	"github.com/nishisan-dev/nishidb/internal/query/orcamento"
 )
 
 // metricasDeQuery são as séries de consulta do §92.
@@ -25,6 +26,10 @@ type metricasDeQuery struct {
 	// maxConcurrent —, e um label que o dado não sustenta faria quem somasse
 	// por dataset contar a mesma recusa N vezes.
 	longasRecusadas *metrics.FamiliaContador
+	// orcamentoRecusado conta as linhas barradas pelo orçamento de buffer
+	// (ROW_TOO_LARGE). Sem label, e do PROCESSO, pela mesma razão de
+	// longasRecusadas: o orçamento é um só para todos os datasets (§82).
+	orcamentoRecusado *metrics.FamiliaContador
 }
 
 // datasetDesconhecido é o valor de label usado quando a requisição falha ANTES
@@ -36,7 +41,9 @@ type metricasDeQuery struct {
 // Com o valor fixo, o custo de um pedido inválido é uma série, uma vez.
 const datasetDesconhecido = "?"
 
-func registraMetricasDeQuery(reg *metrics.Registry, eng *query.Engine, voo *emVoo) *metricasDeQuery {
+func registraMetricasDeQuery(
+	reg *metrics.Registry, eng *query.Engine, voo *emVoo, orc *orcamento.Global,
+) *metricasDeQuery {
 	m := &metricasDeQuery{
 		total: reg.Contador(metrics.MetQueryTotal,
 			"consultas admitidas pelo protocolo remoto", metrics.LabelDataset),
@@ -48,6 +55,8 @@ func registraMetricasDeQuery(reg *metrics.Registry, eng *query.Engine, voo *emVo
 			"duração da consulta, do request ao último byte", metrics.LimitesPadrao, metrics.LabelDataset),
 		longasRecusadas: reg.Contador(metrics.MetQueryLongRejectedTotal,
 			"consultas longas recusadas por falta de vaga no sub-pool (runtime.query.maxLongRunning)"),
+		orcamentoRecusado: reg.Contador(metrics.MetQueryBudgetRejectedTotal,
+			"linhas recusadas por não caberem no orçamento de buffer (runtime.query.maxBufferPerQuery)"),
 	}
 
 	// A idade da consulta mais antiga entra como coletor PULL, lido na hora do
@@ -67,6 +76,25 @@ func registraMetricasDeQuery(reg *metrics.Registry, eng *query.Engine, voo *emVo
 			Ajuda:   "idade da consulta em voo há mais tempo; 0 quando não há nenhuma",
 			Tipo:    metrics.TipoMedidor,
 			Valor:   voo.maisAntiga(time.Now()),
+		}}
+	}))
+
+	// O orçamento de buffer entra pelo MESMO caminho, e pelo mesmo motivo: o
+	// valor é o contador atômico do próprio orçamento, lido no scrape. Copiá-lo
+	// para um medidor a cada reserva daria duas fontes para o mesmo número — e
+	// a divergência apareceria como um painel que discorda do teto que de fato
+	// está sendo aplicado.
+	//
+	// É a série que responde "o memoryTarget está apertado?" ANTES da primeira
+	// recusa. Sem ela, o operador só descobriria o teto pelo erro, e aí já
+	// perdeu uma consulta para aprender o que o painel diria de graça.
+	reg.Coletor(metrics.ColetorFunc(func() []metrics.Amostra {
+		return []metrics.Amostra{{
+			Familia: metrics.MetQueryBufferBytes,
+			Nome:    metrics.MetQueryBufferBytes,
+			Ajuda:   "bytes de buffer de consulta reservados neste instante (runtime.memoryTarget)",
+			Tipo:    metrics.TipoMedidor,
+			Valor:   float64(orc.Usado()),
 		}}
 	}))
 
@@ -116,6 +144,10 @@ func (m *metricasDeQuery) erro(dataset, categoria string) {
 // outra pergunta — "preciso subir runtime.query.maxLongRunning?" —, que é do
 // processo e não sai de uma soma sobre datasets.
 func (m *metricasDeQuery) recusaLonga() { m.longasRecusadas.Sozinha().Inc() }
+
+// recusaPorOrcamento conta uma linha barrada pelo teto de buffer da consulta.
+// Chamada ALÉM de erro(), pela mesma razão de recusaLonga.
+func (m *metricasDeQuery) recusaPorOrcamento() { m.orcamentoRecusado.Sozinha().Inc() }
 
 // observa registra a duração total, do request ao último byte escrito. Inclui o
 // tempo de rede do cliente lento de propósito: é a latência que o usuário sente,
