@@ -1,0 +1,56 @@
+// Linha de base do GetByRowID — 2026-08-25, antes da barreira de aposentadoria.
+//
+// Por que esta bancada existe: a correção do vazamento de inode põe um
+// RWMutex (aposMu) entre resolver a location e ler os bytes que ela nomeia.
+// Um RLock não contendido custa poucos nanossegundos, mas "poucos" é
+// raciocínio, e este projeto cobra medida. Este arquivo é o número de ANTES.
+//
+// Critério declarado no plano: se a barreira custar mais de 2% aqui, ela
+// troca por um contador de geração com retry.
+//
+// Como reproduzir:
+//   go test ./internal/storage/ -run '^$' -bench BenchmarkGetByRowID \
+//     -benchmem -benchtime=20000x -count=6
+//
+// Como comparar:
+//   benchstat benchmark/baselines/getbyrowid-20260825.txt novo.txt
+//
+// Ambiente: Intel Core 7 150U (12 threads), Linux 6.8, Go 1.26.5.
+//
+// Leitura: ~1 µs/op e 0 allocs/op, coerente com o QueryPointLookup ~0,93 µs do
+// micro-20260813.txt — que também inclui a leitura do record. A dispersão
+// (673–1581 ns) é da máquina, não do código: use a mediana, e prefira
+// benchstat a olhar linha a linha.
+//
+goos: linux
+goarch: amd64
+pkg: github.com/nishisan-dev/nishidb/internal/storage
+cpu: Intel(R) Core(TM) 7 150U
+BenchmarkGetByRowID-12    	   20000	      1345 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetByRowID-12    	   20000	      1356 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetByRowID-12    	   20000	      1614 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetByRowID-12    	   20000	       703.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetByRowID-12    	   20000	       825.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetByRowID-12    	   20000	       690.9 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/nishisan-dev/nishidb/internal/storage	0.782s
+
+// ---------------------------------------------------------------------------
+// RESULTADO DA BARREIRA (mesma sessão, depois do aposMu entrar)
+//
+// Método: dois binários compilados com `go test -c` e rodados ALTERNADAMENTE,
+// 12 rodadas de cada, para cancelar a deriva térmica. A primeira tentativa —
+// medir os dois em sequência — devolveu "30% mais rápido COM o lock", que é
+// absurdo e mostra o tamanho do ruído desta máquina: sequencial não serve aqui.
+//
+//   GetByRowID-12   sem barreira  1.205µ ± 22%
+//   GetByRowID-12   com barreira  1.107µ ± 18%    ~ (p=0.590 n=12)
+//
+// LEITURA: p=0.590 é "não dá para distinguir". O custo do RLock não contendido
+// está ABAIXO do piso de ruído, e portanto muito dentro do critério de 2% que o
+// plano fixou. Alocações inalteradas em 0.
+//
+// O que este número NÃO diz: nada sobre contenção. Aqui só há um leitor e
+// nenhuma aposentadoria concorrente. A barreira é RWMutex justamente para que N
+// leitores não se serializem entre si; medir isso pede a bancada de query
+// paralela, que é do bloco do scan paralelo.

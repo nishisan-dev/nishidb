@@ -24,7 +24,7 @@ const (
 	fldCounter types.FieldID = 3
 )
 
-func openStore(t *testing.T, opts Options) *Store {
+func openStore(t testing.TB, opts Options) *Store {
 	t.Helper()
 	if opts.Dir == "" {
 		opts.Dir = t.TempDir()
@@ -50,7 +50,7 @@ func mustAppendField(tb testing.TB, dst []byte, id types.FieldID, v types.Value)
 	return out
 }
 
-func statusPayload(t *testing.T, s *Store, key, status string, counter int64) []byte {
+func statusPayload(t testing.TB, s *Store, key, status string, counter int64) []byte {
 	t.Helper()
 	for _, name := range []string{"id", "status", "counter"} {
 		if _, err := s.FieldDict().LookupOrCreate([]byte(name)); err != nil {
@@ -81,7 +81,7 @@ func collectRows(t *testing.T, it types.RowIDIterator) []types.RowID {
 	return rows
 }
 
-func mustPut(t *testing.T, s *Store, key string, seq int64, payload []byte, prev *types.Record) (types.RowID, bool) {
+func mustPut(t testing.TB, s *Store, key string, seq int64, payload []byte, prev *types.Record) (types.RowID, bool) {
 	t.Helper()
 	id, created, err := s.Put([]byte(key), seq, 0, payload, prev)
 	if err != nil {

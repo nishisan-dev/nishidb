@@ -275,6 +275,28 @@ então unlink. Inverter os dois últimos é a troca que perde dado: um unlink co
 manifest ainda nomeando o segmento produz "listado e ausente", que o `Open`
 trata como `ErrDatasetCorrupt`.
 
+**O unlink sozinho não devolve os blocos, e isso custou uma errata.** O
+`os.Remove` do quarto passo remove o **nome**; enquanto qualquer descritor
+mantiver o inode aberto, os blocos seguem alocados. E o cache de descritores do
+`segment.Reader` não tem despejo — o descritor que a própria varredura abriu
+para ler o segmento ficaria aberto pela vida do processo. Por isso a
+aposentadoria **fecha o descritor** (`Reader.FechaSegmento`) antes do unlink.
+Antes disso, a compaction devolvia disco ao *listing* do diretório e nada ao
+dispositivo, e os três instrumentos do projeto — `dirBytes`, `discoDosSegmentos`
+e o `Stats.StorageBytes` — somam o listing e não viam a diferença (débito 78, e
+a errata do [aceite do M4](aceite-m4.md)).
+
+Fechar o descritor **remove um acidente que a leitura usava**: com o inode ainda
+aberto, um `pread` sobre o arquivo já removido devolvia os bytes certos, com CRC
+válido. Quem põe algo no lugar é o `aposMu`, o terceiro lock do `Store`, que
+guarda a janela entre **resolver uma location e ler os bytes que ela nomeia**. A
+seção crítica da aposentadoria é só fechar o descritor e apagar o arquivo — os
+dois checkpoints e a poda ficam de fora, porque tomam o `wmu`, e a invariante é
+que **`aposMu` é sempre o lock mais interno**: invertida, a ordem seria
+`wmu→aposMu` de um lado e `aposMu→wmu` do outro, que é deadlock. O rename fica
+de fora por outra razão: um descritor já aberto sobrevive a ele, porque o rename
+move o nome e não o inode.
+
 Os dois intervalos entre esses passos são **janelas de crash**, e o `Open` as
 repara pelo manifest: segmento **listado** com o canônico ausente é
 **restaurado**; segmento **não listado** é **removido**. O reparo roda antes de

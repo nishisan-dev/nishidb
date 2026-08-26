@@ -57,6 +57,12 @@ func (s *Store) Expira(rowID types.RowID) (expirou bool, err error) {
 	// Mover qualquer uma delas para fora do lock NÃO produz acesso de memória
 	// não sincronizado — locs.Get é seguro para leitor concorrente —, então o
 	// -race não veria a violação de atomicidade. Só um teste com seam vê.
+	// Par (Get, Read) sob a barreira de aposentadoria: ver o godoc de aposMu.
+	// A barreira segue segurada pelo resto do método, e é aceitável: este
+	// caminho já tem o wmu na mão, a ordem wmu→aposMu é a do godoc, e o que
+	// se paga é atrasar uma aposentadoria por um trabalho limitado.
+	s.aposMu.RLock()
+	defer s.aposMu.RUnlock()
 	packed, had := s.locs.Get(rowID)
 	if !had {
 		return false, nil
