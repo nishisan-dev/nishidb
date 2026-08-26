@@ -151,6 +151,15 @@ type FieldSpec struct {
 	// verdade. Só vale sobre type: json — nos outros tipos não há o que
 	// percorrer, e aceitar em silêncio seria configuração sem leitor.
 	Extract []ExtractSpec `yaml:"extract"`
+
+	// FrozenFrom nomeia a ORIGEM de uma coluna congelada: outra coluna
+	// declarada, ou OrigemRelogio. A coluna recebe o primeiro valor que a
+	// origem tiver e nunca mais muda.
+	//
+	// A tag é explícita como todas as outras: sem ela o yaml.v3 procuraria
+	// "frozenfrom" e a chave camelCase do arquivo não casaria com nada, em
+	// silêncio — este struct é decodificado sem KnownFields.
+	FrozenFrom string `yaml:"frozenFrom"`
 }
 
 // ExtractSpec é uma chave de dentro de um documento json promovida a coluna.
@@ -765,7 +774,11 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 		if motivo, reservado := nomesDeSistema[name]; reservado {
 			return nil, specErrf("campo %q é reservado: %s", name, motivo)
 		}
-		if !isValidTypeName(f.Type) {
+		// A coluna congelada NÃO declara tipo: ele é herdado da origem na
+		// compilação, e o isValidTypeName recusa vazio. A validação própria
+		// dela — inclusive a recusa de `type` junto — mora em
+		// validaCongeladas, que precisa do mapa inteiro na mão.
+		if f.FrozenFrom == "" && !isValidTypeName(f.Type) {
 			return nil, specErrf("campo %q: tipo %q inválido", name, f.Type)
 		}
 		// O format é compilado AQUI, no load, e o layout resultante é
@@ -777,8 +790,15 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 		// `format:` sob um campo que não o usa decodifica com sucesso e não
 		// faz nada — configuração sem leitor, que é o defeito que o débito 37
 		// registra.
-		if _, err := CompilaFormato(f.Type, f.Format); err != nil {
-			return nil, specErrf("campo %q: %s", name, semPrefixoDeSpec(err))
+		//
+		// A congelada fica de fora: ela não declara tipo, então não há o que
+		// compilar, e a recusa de `format` sobre ela mora em validaCongeladas
+		// — com a mensagem que nomeia frozenFrom, que é a que o operador
+		// precisa ler.
+		if f.FrozenFrom == "" {
+			if _, err := CompilaFormato(f.Type, f.Format); err != nil {
+				return nil, specErrf("campo %q: %s", name, semPrefixoDeSpec(err))
+			}
 		}
 		if f.Alias != "" {
 			if !isIdentName(f.Alias) {
@@ -823,6 +843,14 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 		}
 	}
 	s.Schema.Fields = fields
+
+	// As congeladas são validadas com o mapa inteiro na mão, e depois de key e
+	// mode estarem resolvidos: as três regras que dependem de outro campo —
+	// cadeia, autorreferência e origem inexistente — não são decidíveis dentro
+	// do laço por campo.
+	if err := validaCongeladas(fields, key.Field, mode); err != nil {
+		return nil, err
+	}
 
 	// Consistência de key/sequence/ttl com as declarações.
 	if kf, ok := fields[key.Field]; !ok {
