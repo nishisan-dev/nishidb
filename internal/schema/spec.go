@@ -141,6 +141,11 @@ type FieldSpec struct {
 	// percorrer, e aceitar em silêncio seria configuração sem leitor.
 	Extract []ExtractSpec `yaml:"extract"`
 
+	// Merge é a política de escrita do campo quando o merge roda: vazio
+	// sobrescreve (o default), MergeSoma acumula. Ver o godoc da constante
+	// para o que a soma custa em idempotência.
+	Merge string `yaml:"merge"`
+
 	// FrozenFrom nomeia a ORIGEM de uma coluna congelada: outra coluna
 	// declarada, ou OrigemRelogio. A coluna recebe o primeiro valor que a
 	// origem tiver e nunca mais muda.
@@ -810,6 +815,13 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 	// cadeia, autorreferência e origem inexistente — não são decidíveis dentro
 	// do laço por campo.
 	if err := validaCongeladas(fields, key.Field, mode); err != nil {
+		return nil, err
+	}
+	seqDeclarada := ""
+	if seq := s.Materialization.Sequence; seq != nil {
+		seqDeclarada = seq.Field
+	}
+	if err := validaPoliticasDeMerge(fields, key.Field, seqDeclarada, mode); err != nil {
 		return nil, err
 	}
 

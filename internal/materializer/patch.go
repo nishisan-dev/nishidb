@@ -26,10 +26,12 @@ var (
 type patchEntry struct {
 	field  *schema.CompiledField
 	isNull bool
-	// congelada faz o merge PRESERVAR o valor anterior em vez de sobrescrever.
-	// É a terceira política de escrita, ao lado de "sobrescreve" (default) e
-	// "remove" (isNull).
+	// congelada faz o merge PRESERVAR o valor anterior em vez de sobrescrever,
+	// e acumula o faz SOMAR o novo ao anterior. Com "sobrescreve" (default) e
+	// "remove" (isNull), são as quatro políticas de escrita — e todas elas
+	// viajam na entry, para que o merge seja o único lugar que as conhece.
 	congelada bool
+	acumula   bool
 	val       types.Value
 }
 
@@ -211,7 +213,9 @@ func (b *PatchBuffer) Parse(event []byte, c *schema.Compiled, agora time.Time) e
 			}
 			b.pais = append(b.pais, pv)
 		}
-		b.entries = append(b.entries, patchEntry{field: cf, isNull: isNull, val: val})
+		b.entries = append(b.entries, patchEntry{
+			field: cf, isNull: isNull, acumula: cf.Acumula, val: val,
+		})
 	}
 
 	// A extração roda DEPOIS do laço, porque precisa da última ocorrência de

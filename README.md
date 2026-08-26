@@ -434,6 +434,44 @@ Cadeia (`b` congela `a`, `c` congela `b`), autorreferência, congelar a própria
 key e `format:` junto de `frozenFrom` são todos recusados no load, com a
 mensagem nomeando o motivo.
 
+#### Colunas que acumulam: `merge: sum`
+
+Por padrão o merge **sobrescreve**: o valor do evento substitui o que estava.
+Para o campo que a origem emite como *parcela* — um contador de correlação, uma
+contagem de repetições —, isso perde o acumulado. `merge: sum` troca a política
+desse campo:
+
+```yaml
+schema:
+  fields:
+    matchedCounter:
+      type: int64
+      merge: sum      # o valor do evento é SOMADO ao que já está no estado
+```
+
+O que precisa estar claro antes de ligar:
+
+- **Não é idempotente, e isso é o custo real.** Reprocessar o mesmo evento soma
+  de novo. Um crash entre o commit do offset e a queda faz a janela reentregue
+  somar duas vezes, e o total fica **acima** do real. O campo passa a ser
+  aproximado sob crash. Onde a exatidão importa mais que o acumulado, a
+  política certa continua sendo a sobrescrita, com a origem mandando o total.
+- **Só `int64`.** Soma de ponto flutuante acumula erro a cada parcela, e um
+  total que deriva do próprio histórico não pode depender da ordem de chegada.
+  Campo `auto` também é recusado: sem tipo declarado, a soma valeria ou não
+  conforme o primeiro evento.
+- **O teto satura, não dá a volta.** Ao bater em `MaxInt64` o valor para ali e
+  o contador `Saturadas` sobe. Recusar o evento travaria a entidade para
+  sempre, porque todo evento seguinte estouraria igual.
+- **`null` continua apagando**, e a coluna recomeça do zero no próximo evento.
+  Entidade que expira e volta também recomeça: a encarnação nova não herda o
+  total da anterior.
+- **Chave repetida no mesmo evento continua last-wins.** A soma é sobre o
+  estado anterior, não sobre as ocorrências de um evento malformado.
+
+Não vale em `mode: replace`, na key, na sequence, nem junto de `frozenFrom` —
+esta e a congelada são políticas de escrita opostas do mesmo campo.
+
 #### Expiração: regras de TTL condicionais
 
 O bloco `ttl:` é uma **lista de regras**. Cada evento é avaliado contra elas na

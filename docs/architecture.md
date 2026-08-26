@@ -951,6 +951,34 @@ conhecê-las. Cada uma tem dono em [`debitos.md`](debitos.md).
   substituições existem no total e somem do detalhe, que deixa de fechar com
   `aplicados`. É o **débito 48**.
 
+## Políticas de escrita por campo
+
+O merge do §2.6 tem UMA regra para todo campo — o valor do evento substitui o
+do estado —, e três exceções declaráveis. Todas viajam na `patchEntry`, e é o
+merge o único lugar que as conhece: nem o create nem o replace precisam saber
+que existem.
+
+| Política | Declaração | O que o merge faz |
+|---|---|---|
+| Sobrescreve | (default) | o valor do evento substitui o anterior |
+| Remove | `null` no evento | o campo sai do estado (D2/§24) |
+| Congela | `frozenFrom:` | preserva o anterior e descarta o novo |
+| Acumula | `merge: sum` | grava anterior + parcela do evento |
+
+A soma custa uma propriedade que o resto do pipeline tem: **idempotência**.
+Sobrescrever o mesmo evento duas vezes dá o mesmo estado; somar não. O replay
+do tail continua seguro (ele reaplica RECORDS já materializados, não eventos),
+mas a reentrega do Kafka depois de um crash soma de novo a janela entre o
+último offset commitado e a queda. Onde há `sequence`, o stale check do §25
+barra o reprocessamento; sem ela, o valor fica aproximado — acima do real, nunca
+abaixo.
+
+O valor anterior é redecodificado do `RawField` no ramo aditivo, em vez de vir
+do `Next()` do laço. Não é desperdício: guardar o valor de todo campo do estado
+só para usá-lo nesse ramo custou **43% do merge** quando medido (415→595 ns/op
+no `BenchmarkMergeRadiusPatch`), num laço cujo caso normal é copiar dezenas de
+campos crus e tocar poucos.
+
 ## Expiração por inatividade
 
 `materialization.ttl` é uma **lista de regras**: cada uma tem uma condição

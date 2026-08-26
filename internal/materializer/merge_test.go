@@ -472,3 +472,69 @@ func TestMergeCongeladaNoMeioNaoDesalinhaOsVizinhos(t *testing.T) {
 	})
 	wantFields(t, got, fieldKV{1, vi64(11)}, fieldKV{2, vi64(5)}, fieldKV{3, vstr("w")})
 }
+
+// peAcumula é a entry com a política aditiva: soma ao anterior em vez de
+// sobrescrevê-lo.
+func peAcumula(id types.FieldID, v types.Value) patchEntry {
+	return patchEntry{field: &schema.CompiledField{ID: id}, val: v, acumula: true}
+}
+
+func TestMergeEntryAcumuladaSomaAoAnterior(t *testing.T) {
+	prev := encodeFields(t, fieldKV{1, vi64(10)})
+	got := mustMerge(t, prev, []patchEntry{peAcumula(1, vi64(7))})
+	wantFields(t, got, fieldKV{1, vi64(17)})
+}
+
+// Sem valor anterior a soma é o próprio valor: é o create, e ele não tem a que
+// somar.
+func TestMergeEntryAcumuladaSemAnteriorEscreveOValor(t *testing.T) {
+	prev := encodeFields(t, fieldKV{2, vstr("outro")})
+	got := mustMerge(t, prev, []patchEntry{peAcumula(1, vi64(7))})
+	wantFields(t, got, fieldKV{1, vi64(7)}, fieldKV{2, vstr("outro")})
+}
+
+func TestEncodePatchIgnoraOBitAcumula(t *testing.T) {
+	got := mustEncode(t, []patchEntry{peAcumula(1, vi64(7))})
+	wantFields(t, got, fieldKV{1, vi64(7)})
+}
+
+// Parcela negativa subtrai: a política é de SOMA, e recusar o negativo aqui
+// inventaria uma regra que a origem não pediu.
+func TestMergeEntryAcumuladaAceitaParcelaNegativa(t *testing.T) {
+	prev := encodeFields(t, fieldKV{1, vi64(10)})
+	got := mustMerge(t, prev, []patchEntry{peAcumula(1, vi64(-4))})
+	wantFields(t, got, fieldKV{1, vi64(6)})
+}
+
+// Um contador que só cresce chega no teto em algum momento. Recusar o evento
+// travaria a entidade para sempre — todo evento seguinte também estouraria —,
+// então o valor SATURA e o operador vê pelo contador.
+func TestMergeEntryAcumuladaSaturaNoTetoEmVezDeDarVolta(t *testing.T) {
+	prev := encodeFields(t, fieldKV{1, vi64(math.MaxInt64 - 2)})
+	got := mustMerge(t, prev, []patchEntry{peAcumula(1, vi64(10))})
+	wantFields(t, got, fieldKV{1, vi64(math.MaxInt64)})
+}
+
+func TestMergeEntryAcumuladaSaturaNoPisoComParcelaNegativa(t *testing.T) {
+	prev := encodeFields(t, fieldKV{1, vi64(math.MinInt64 + 2)})
+	got := mustMerge(t, prev, []patchEntry{peAcumula(1, vi64(-10))})
+	wantFields(t, got, fieldKV{1, vi64(math.MinInt64)})
+}
+
+// null explícito continua REMOVENDO o campo, como em qualquer outra entry: a
+// política governa como o valor entra, não o que a ausência significa.
+func TestMergeEntryAcumuladaComNullRemoveOCampo(t *testing.T) {
+	prev := encodeFields(t, fieldKV{1, vi64(10)})
+	e := peAcumula(1, types.Value{Type: types.TypeNull})
+	e.isNull = true
+	got := mustMerge(t, prev, []patchEntry{e})
+	wantFields(t, got)
+}
+
+// O valor anterior com OUTRO tipo físico não é somável: a soma é descartada e
+// o valor novo entra, que é o mesmo desfecho da sobrescrita.
+func TestMergeEntryAcumuladaComAnteriorDeOutroTipoSobrescreve(t *testing.T) {
+	prev := encodeFields(t, fieldKV{1, vstr("texto")})
+	got := mustMerge(t, prev, []patchEntry{peAcumula(1, vi64(7))})
+	wantFields(t, got, fieldKV{1, vi64(7)})
+}

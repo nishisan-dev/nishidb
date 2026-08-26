@@ -3,6 +3,7 @@ package materializer
 import (
 	"errors"
 	"fmt"
+	"math"
 	"sync/atomic"
 
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
@@ -46,10 +47,21 @@ var ErrInternalState = errors.New("INTERNAL_STATE")
 //
 // A saída sai com FieldIDs estritamente crescentes e sem TypeNull —
 // pré-condição do Put, que a revalida antes de tornar o record durável.
-// congeladas conta os campos que o ramo congelado preservou. É ponteiro e
-// aceita nil porque os testes de unidade do merge não têm métricas a
-// alimentar; o Apply passa o contador do dataset.
-func mergeRecords(prevPayload []byte, patch []patchEntry, out []byte, congeladas *atomic.Int64) ([]byte, error) {
+// efeitosDoMerge são os contadores das políticas de escrita que só o merge
+// enxerga: o dado gravado não diz quantas vezes um valor foi preservado nem
+// somado, e sem contá-los a política é invisível em produção.
+//
+// É ponteiro e aceita nil porque os testes de unidade do merge não têm
+// métricas a alimentar; o Apply passa os do dataset.
+type efeitosDoMerge struct {
+	congeladas atomic.Int64
+	acumuladas atomic.Int64
+	// saturadas é o único desfecho em que o valor gravado deixa de ser
+	// verdade: a soma bateu no teto do int64 e parou ali.
+	saturadas atomic.Int64
+}
+
+func mergeRecords(prevPayload []byte, patch []patchEntry, out []byte, ef *efeitosDoMerge) ([]byte, error) {
 	var (
 		r      encoding.FieldReader
 		lastID types.FieldID // 0 é reservado (§32): serve de sentinela inicial
@@ -75,8 +87,8 @@ func mergeRecords(prevPayload []byte, patch []patchEntry, out []byte, congeladas
 		j++
 		if pok && pid == id {
 			if e.congelada {
-				if congeladas != nil {
-					congeladas.Add(1)
+				if ef != nil {
+					ef.congeladas.Add(1)
 				}
 				// Entry congelada com o campo JÁ no estado: preserva o
 				// anterior cru e descarta a nova. É o congelamento inteiro,
@@ -85,6 +97,37 @@ func mergeRecords(prevPayload []byte, patch []patchEntry, out []byte, congeladas
 				out = append(out, r.RawField()...)
 				pid, _, pok = r.Next()
 				continue
+			}
+			if e.acumula && !e.isNull {
+				// Entry aditiva: o valor gravado é a SOMA da parcela do evento
+				// com o que já estava.
+				//
+				// O valor anterior é redecodificado do RawField em vez de vir
+				// do Next() — e isso não é desperdício, é o que mantém o
+				// caminho comum de graça. Guardar o valor de TODO campo do
+				// estado só para usá-lo neste ramo custou 43% do merge quando
+				// medido (415→595 ns/op no BenchmarkMergeRadiusPatch), num
+				// laço em que o normal é copiar 35 campos crus e tocar 8.
+				// Aqui o custo é uma decodificação por campo aditivo, que é
+				// no máximo um punhado por evento.
+				if e.val.Type == types.TypeInt64 {
+					var ra encoding.FieldReader
+					ra.Reset(r.RawField())
+					if _, anterior, ok := ra.Next(); ok && anterior.Type == types.TypeInt64 {
+						soma := somaSaturada(anterior.I64, e.val.I64)
+						if ef != nil {
+							ef.acumuladas.Add(1)
+							if soma == math.MaxInt64 || soma == math.MinInt64 {
+								ef.saturadas.Add(1)
+							}
+						}
+						e.val.I64 = soma
+					}
+					// Anterior de outro tipo físico não é somável (payload de
+					// antes de a coluna ter tipo declarado, ou dado
+					// heterogêneo): a parcela apenas sobrescreve, que é o
+					// mesmo desfecho que a política default daria.
+				}
 			}
 			// Sobrescrita (ou remoção): o campo anterior é descartado.
 			pid, _, pok = r.Next()
@@ -104,6 +147,26 @@ func mergeRecords(prevPayload []byte, patch []patchEntry, out []byte, congeladas
 		return out, fmt.Errorf("%w: estado anterior ilegível: %w", ErrInternalState, cerr)
 	}
 	return out, nil
+}
+
+// somaSaturada soma dois int64 parando nos extremos em vez de dar a volta.
+//
+// Saturar, e não recusar o evento: um contador que só cresce chega no teto em
+// algum momento, e recusar ali travaria a entidade PARA SEMPRE — todo evento
+// seguinte estouraria igual, e a entidade pararia de receber qualquer outra
+// atualização por causa de um campo. Saturado, o valor para de crescer, o
+// resto do documento continua entrando, e o operador vê pelo contador.
+func somaSaturada(a, b int64) int64 {
+	soma := a + b
+	// O overflow do int64 é detectável pelo SINAL: a soma só pode divergir do
+	// sinal comum das parcelas se deu a volta.
+	if (a > 0 && b > 0 && soma < 0) || (a > 0 && b == math.MaxInt64) {
+		return math.MaxInt64
+	}
+	if a < 0 && b < 0 && soma >= 0 {
+		return math.MinInt64
+	}
+	return soma
 }
 
 // encodePatch materializa SÓ os campos do patch, omitindo os nulls. É o
