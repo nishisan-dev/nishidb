@@ -152,6 +152,11 @@ type CompiledField struct {
 	FrozenFrom *CompiledField
 	DoRelogio  bool
 
+	// Acumula faz o merge SOMAR o valor do evento ao que já está no estado,
+	// em vez de sobrescrevê-lo. Ver schema.MergeSoma para o que a soma custa
+	// em idempotência.
+	Acumula bool
+
 	// Format é o padrão declarado no YAML e Layout é ele compilado. Não-nil
 	// exatamente quando Type é datetime ou time; o Format é guardado ao lado
 	// do Layout porque a mensagem de literal inválido precisa dizer o que se
@@ -555,6 +560,7 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 				cf.Format, cf.Layout = spec.Format, l
 			}
 			cf.Index = indexKindDe(spec.Index)
+			cf.Acumula = spec.Merge == MergeSoma
 		} else {
 			cf.IsAuto = true
 		}
