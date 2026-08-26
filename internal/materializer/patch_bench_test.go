@@ -1,6 +1,7 @@
 package materializer
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -42,6 +43,107 @@ func BenchmarkPatchParseRadiusEvent(b *testing.B) {
 	b.SetBytes(int64(len(benchRadiusEvent)))
 	for b.Loop() {
 		if err := pb.Parse(benchRadiusEvent, c, time.Now()); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// benchDescobertaYAML tem um campo json com descoberta ligada e NENHUM extract
+// declarado — a forma exata do dataset do piloto, onde `persistent` é
+// `type: json` + `unknownFields: include` e mais nada.
+//
+// Isso é o ponto desta bancada. O YAML dos benchmarks existentes
+// (testdata/radius.materialization.yaml) não tem um único campo `type: json`,
+// então nenhuma medição de vazão do projeto exercitava a segunda passada:
+// nem a busca por caminho, nem a descoberta, nem a resolução de tipo. O
+// caminho mais quente do dataset real era o único sem instrumento.
+const benchDescobertaYAML = `version: 1
+name: eventos
+materialization:
+  key:
+    field: id
+schema:
+  include: ["*"]
+  unknownFields: include
+  fields:
+    id:
+      type: string
+    persistent:
+      type: json
+      unknownFields: include
+`
+
+// Documento de 11 chaves, que é a ordem de grandeza medida no piloto, com os
+// três tipos que aparecem lá (texto, inteiro, booleano) e um objeto aninhado —
+// que a descoberta de UM nível transforma em coluna json inteira, e é um custo
+// diferente de copiar um escalar.
+var benchEventoComDocumento = []byte(`{"id":"CMP-V0001PPCLP-013","severity":3,"node":"i-br-sp-cmp-cmp-hl4-01",` +
+	`"persistent":{"dataFalha":"2026-08-11 22:28:10","dataClear":"2026-08-11 23:01:44","curtoTally":4,` +
+	`"curtoTTL":300,"longoTally":11,"longoTTL":86400,"medioTally":7,"medioTTL":3600,` +
+	`"slot":"1/1/1","frontPersistence":"on","frontPodName":"pod-alarme-07",` +
+	`"origem":{"host":"nms-03","porta":9142}}}`)
+
+// BenchmarkParseComDescoberta mede a segunda passada em REGIME — com todas as
+// colunas do documento já registradas no dicionário e com o tipo já fixado.
+//
+// É a linha de base contra a qual o contador por coluna do bloco seguinte
+// precisa ser medido: ele incrementaria uma vez por coluna derivada por evento,
+// no caminho mais quente do produto, e a promessa de que o custo "sai de
+// medição, não de raciocínio" não tinha como ser cumprida sem esta bancada.
+//
+// O gate de alocação do pacote cobre alocação e NÃO cobre CPU; esta cobre CPU e
+// reporta alocação junto, para que uma regressão em qualquer das duas apareça.
+func BenchmarkParseComDescoberta(b *testing.B) {
+	s, err := schema.Parse([]byte(benchDescobertaYAML), schema.DefaultsPadrao)
+	if err != nil {
+		b.Fatal(err)
+	}
+	c, err := s.Compile(fakestorage.NewDict())
+	if err != nil {
+		b.Fatal(err)
+	}
+	var pb PatchBuffer
+	// Warm-up: registra as 11 colunas derivadas e fixa o tipo de cada uma.
+	// Sem ele a bancada mediria a DESCOBERTA (uma vez na vida do dataset) em
+	// vez do regime (todo evento), que é o custo que interessa.
+	if err := pb.Parse(benchEventoComDocumento, c, time.Now()); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.SetBytes(int64(len(benchEventoComDocumento)))
+	for b.Loop() {
+		if err := pb.Parse(benchEventoComDocumento, c, time.Now()); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkParseSemDescoberta é o MESMO evento contra um schema em que
+// `persistent` é json opaco — sem descoberta, sem extract.
+//
+// Existe para que o custo da segunda passada seja legível por SUBTRAÇÃO. Sem
+// ele, o número da bancada acima é um absoluto que não diz quanto do tempo é o
+// documento sendo percorrido e quanto é o resto do evento.
+func BenchmarkParseSemDescoberta(b *testing.B) {
+	yaml := strings.Replace(benchDescobertaYAML,
+		"    persistent:\n      type: json\n      unknownFields: include\n",
+		"    persistent:\n      type: json\n", 1)
+	s, err := schema.Parse([]byte(yaml), schema.DefaultsPadrao)
+	if err != nil {
+		b.Fatal(err)
+	}
+	c, err := s.Compile(fakestorage.NewDict())
+	if err != nil {
+		b.Fatal(err)
+	}
+	var pb PatchBuffer
+	if err := pb.Parse(benchEventoComDocumento, c, time.Now()); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.SetBytes(int64(len(benchEventoComDocumento)))
+	for b.Loop() {
+		if err := pb.Parse(benchEventoComDocumento, c, time.Now()); err != nil {
 			b.Fatal(err)
 		}
 	}

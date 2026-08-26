@@ -128,14 +128,34 @@ consultável — coluna `json` não é comparável e o binder recusa `WHERE`. O 
 SEGUNDA passada do parser sobre o documento do pai. O documento original não é
 tocado: extrair não é mover.
 
-Essa passada **nunca propaga erro**, e é a regra que mais importa nela. O pai
-pode ser legitimamente um array ou um null — o conversor de `json` aceita os
-dois —, o caminho pode trazer outro tipo, o valor pode ser uma lista. Deixar
+Essa passada **nunca propaga erro de DADO**, e é a regra que mais importa nela.
+O pai pode ser legitimamente um array ou um null — o conversor de `json` aceita
+os dois —, o caminho pode trazer outro tipo, o valor pode ser uma lista. Deixar
 qualquer uma dessas falhas subir faria o evento inteiro cair como
 `INVALID_JSON`, e a política `log-and-skip` o descartaria: as dezenas de
-colunas de TOPO iriam junto por causa de uma chave interna. A coluna fica
-ausente, que é a mesma resposta do caminho não encontrado. Custo: **zero
+colunas de TOPO iriam junto por causa de uma chave interna. Custo: **zero
 alocações por evento**, com gate.
+
+Ela **propaga** exatamente duas coisas, e nenhuma delas é dado: falha de INFRA
+ao registrar a coluna ou gravar o tipo (`STORAGE_ERROR`) e o teto de campos sob
+`onMaxCols: stop` (`FIELDS_EXHAUSTED`). É a mesma doutrina de três baldes que o
+caminho de topo aplica — bug e infra nunca entram no balde de dado ruim —, e ela
+não valia aqui: um `continue` seco tratava disco cheio como "a coluna não existe
+neste evento", e rebaixava silenciosamente a política `stop` a `ignore`.
+
+**Ausente e removida não são a mesma coisa**, e a distinção é o que impede a
+coluna de mentir. No modo `merge`, campo ausente do patch PRESERVA o valor
+anterior — então calar sobre uma coluna que o documento corrente contradiz a
+deixaria respondendo por um evento passado, com a query devolvendo valor velho
+com cara de corrente. Onde o documento contradiz a coluna, a passada emite
+REMOÇÃO explícita: valor de tipo divergente, `null` explícito, e documento com
+forma errada (array, null, escalar), este último removendo todas as colunas
+daquele pai, declaradas e descobertas. Onde a chave apenas SOME de um documento
+que continua sendo objeto, a coluna segue o merge e preserva — corrigir isso
+custaria ~1.639 entries por evento num documento de 11 chaves sobre ~1.650
+colunas, e a diferença entre os dois casos é a frequência: o primeiro é raro (no
+piloto, 3.000 de 3.000 documentos são objeto), o segundo acontece em todo
+evento.
 
 A coluna derivada fica FORA do `SELECT *`, pelo mesmo mecanismo que esconde os
 campos de sistema. Sem isso o `events` do piloto nasceria com centenas de

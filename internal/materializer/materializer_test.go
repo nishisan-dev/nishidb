@@ -1127,3 +1127,72 @@ func TestCategoriaDeTetoNaoEEventoRuim(t *testing.T) {
 		t.Errorf("String() = %q, quer FIELDS_EXHAUSTED", got)
 	}
 }
+
+const tetoAninhadoYAMLTmpl = `version: 1
+name: t
+materialization:
+  key:
+    field: id
+schema:
+  include: ["*"]
+  unknownFields: include
+  maxCols: %d
+  onMaxCols: %s
+  fields:
+    id:
+      type: string
+    doc:
+      type: json
+      unknownFields: include
+`
+
+func compilaComTetoAninhado(t *testing.T, maxCols int, onMax string) *schema.Compiled {
+	t.Helper()
+	s, err := schema.Parse([]byte(fmt.Sprintf(tetoAninhadoYAMLTmpl, maxCols, onMax)), schema.DefaultsPadrao)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := s.Compile(fakestorage.NewDict())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+// TestTetoSobStopParaAIngestaoTambemNoCaminhoANINHADO fixa a metade que
+// faltava: a política que o operador declarou valia no caminho de topo e era
+// silenciosamente REBAIXADA a `ignore` no caminho aninhado.
+//
+// O ResolveAninhado devolvia erro para as duas políticas, e o `continue` do
+// extract engolia as duas — então `stop` seguia ingerindo, com o contador de
+// descarte subindo e nada parando. O operador que escolheu `stop` recebia o
+// comportamento de quem escolheu `ignore`, sem uma linha de log dizendo isso.
+func TestTetoSobStopParaAIngestaoTambemNoCaminhoANINHADO(t *testing.T) {
+	c := compilaComTetoAninhado(t, 3, schema.OnMaxColsStop)
+	m := New(c, fakestorage.New(fakestorage.Indexes{}))
+
+	r := m.Apply([]byte(`{"id":"A","doc":{"cabe":1,"naoCabe":2}}`))
+	if r.Action != ActionFailed || r.Category != CategoryFieldsExhausted {
+		t.Fatalf("resultado = %+v, quer Failed/FIELDS_EXHAUSTED", r)
+	}
+}
+
+// E sob `ignore` o caminho aninhado continua fazendo o que sempre fez: a chave
+// excedente some, o evento entra, e a perda fica no contador. É a metade que
+// JÁ funcionava, e ela está aqui para provar que a correção do `stop` não a
+// trocou de lado.
+func TestTetoSobIgnoreNoCaminhoANINHADOGravaOEvento(t *testing.T) {
+	c := compilaComTetoAninhado(t, 3, schema.OnMaxColsIgnore)
+	m := New(c, fakestorage.New(fakestorage.Indexes{}))
+
+	r := m.Apply([]byte(`{"id":"A","doc":{"cabe":1,"naoCabe":2}}`))
+	if r.Action != ActionCreated {
+		t.Fatalf("resultado = %+v, quer Created — o evento tem de entrar", r)
+	}
+	if got := c.CamposDescartados(); got == 0 {
+		t.Error("CamposDescartados = 0; a chave excedente sumiu sem ser contada")
+	}
+	if mt := m.Metrics(); mt.FailedTotal != 0 || mt.InvalidTotal != 0 {
+		t.Errorf("métricas = %+v; descartar campo não é falha de evento", mt)
+	}
+}

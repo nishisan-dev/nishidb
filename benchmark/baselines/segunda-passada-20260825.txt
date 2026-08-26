@@ -1,0 +1,52 @@
+// Linha de base da SEGUNDA PASSADA (extração e descoberta) — 2026-08-25.
+//
+// Por que esta bancada existe: nenhum benchmark do projeto exercitava o
+// caminho aninhado. O YAML dos micro-benchmarks
+// (testdata/radius.materialization.yaml) não tem um único campo `type: json`,
+// então a busca por caminho, a descoberta e a resolução de tipo — o caminho
+// mais quente do dataset real — eram os únicos sem instrumento.
+//
+// O que ela mede: um documento de 11 chaves, a ordem de grandeza do piloto,
+// com os três tipos que aparecem lá e um objeto aninhado. Em REGIME: as
+// colunas já registradas no dicionário e o tipo já fixado.
+//
+// Como reproduzir:
+//   go test ./internal/materializer/ -run '^$' \
+//     -bench 'BenchmarkParse(Com|Sem)Descoberta' -benchmem -benchtime=20000x -count=6
+//
+// Ambiente: Intel Core 7 150U (12 threads), Linux 6.8, Go 1.26.5.
+//
+// LEITURA. A subtração é o número que importa: pelas MEDIANAS abaixo,
+// ~2.925 ns com descoberta contra ~1.456 ns sem, a segunda passada custa
+// ~1,47 us por evento — cerca de METADE do Parse de um evento com documento.
+// A 500 ev/s do piloto isso são ~0,74 ms de CPU por segundo de relógio. Zero
+// alocação nos dois lados, que é o que o gate do pacote já exigia e esta
+// bancada confirma sob carga.
+//
+// ERRATA DA PRÓPRIA SESSÃO, e ela vale como método: a primeira redação deste
+// cabeçalho dizia "~5,97 us, 66% do Parse", tirados de UMA rodada de cada
+// bancada. A rodada de seis desmentiu os dois números. Medição única aqui é
+// ruído frio, não sinal — use a mediana, e prefira benchstat a olhar linha a
+// linha.
+//
+// PARA QUE ELA SERVE ADIANTE: o contador por coluna do bloco de densidade
+// incrementaria uma vez por coluna derivada por evento — 11 vezes aqui — no
+// caminho mais quente do produto. A promessa de que esse custo "sai de medição,
+// não de raciocínio" não tinha instrumento antes disto.
+//
+goos: linux
+goarch: amd64
+pkg: github.com/nishisan-dev/nishidb/internal/materializer
+cpu: Intel(R) Core(TM) 7 150U
+BenchmarkParseComDescoberta-12    	   20000	      2920 ns/op	 122.95 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseComDescoberta-12    	   20000	      3710 ns/op	  96.76 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseComDescoberta-12    	   20000	      2898 ns/op	 123.90 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseComDescoberta-12    	   20000	      3186 ns/op	 112.69 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseComDescoberta-12    	   20000	      2931 ns/op	 122.46 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseComDescoberta-12    	   20000	      2919 ns/op	 122.98 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseSemDescoberta-12    	   20000	      1455 ns/op	 246.65 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseSemDescoberta-12    	   20000	      1456 ns/op	 246.54 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseSemDescoberta-12    	   20000	      1494 ns/op	 240.24 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseSemDescoberta-12    	   20000	      1452 ns/op	 247.31 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseSemDescoberta-12    	   20000	      1493 ns/op	 240.47 MB/s	       0 B/op	       0 allocs/op
+BenchmarkParseSemDescoberta-12    	   20000	      2242 ns/op	 160.13 MB/s	       0 B/op	       0 allocs/op

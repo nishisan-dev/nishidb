@@ -1,8 +1,11 @@
 package materializer
 
 import (
+	"errors"
 	"testing"
 
+	"github.com/nishisan-dev/nishidb/internal/schema"
+	"github.com/nishisan-dev/nishidb/internal/testutil/fakestorage"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
@@ -251,4 +254,109 @@ func TestChaveQueSomeDoDocumentoSegueOMerge(t *testing.T) {
 	if got := string(st["doc"].Bytes); got != `{"outra":"coisa"}` {
 		t.Errorf("doc = %s", got)
 	}
+}
+
+// TestFalhaDeIODoDicionarioNoCaminhoANINHADOEhFailed é o irmão de
+// TestFalhaDeIODoDicionarioAoFixarTipoEhFailed, e a existência do irmão é o
+// ponto: a doutrina dos três baldes valia no caminho de TOPO e não valia aqui.
+//
+// A descoberta fixa o tipo da coluna aninhada pelo mesmo FixAutoType, e o
+// `continue` que estava neste ponto tratava disco cheio como "a coluna não
+// existe neste evento": sem erro, sem log, sem métrica, com Failed=0 no painel.
+// Pior no modo merge, onde a coluna ainda ficava congelada no valor anterior.
+func TestFalhaDeIODoDicionarioNoCaminhoANINHADOEhFailed(t *testing.T) {
+	s, err := schema.Parse([]byte(descobreYAML), schema.DefaultsPadrao)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eio := errors.New(`fielddict: fsync do tipo de "doc.podName": input/output error`)
+	c, err := s.Compile(dictFalhaAoFixar{inner: fakestorage.NewDict(), err: eio})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := New(c, fakestorage.New(fakestorage.Indexes{}))
+
+	r := m.Apply([]byte(`{"id":"A","doc":{"podName":"pod-1"}}`))
+
+	if r.Action != ActionFailed {
+		t.Fatalf("Action = %v (%v), want Failed: falha do dicionário não é evento ruim", r.Action, r.Err)
+	}
+	if r.Category != CategoryStorage {
+		t.Errorf("Category = %v, want STORAGE_ERROR", r.Category)
+	}
+	if errors.Is(r.Err, ErrTypeConversion) {
+		t.Errorf("erro = %v, want SEM ErrTypeConversion: é infra, não conversão", r.Err)
+	}
+	if !errors.Is(r.Err, eio) {
+		t.Errorf("erro = %v, want preservar o erro do dicionário", r.Err)
+	}
+	if mt := m.Metrics(); mt.InvalidTotal != 0 || mt.FailedTotal != 1 {
+		t.Errorf("métricas = %+v, want InvalidTotal=0 FailedTotal=1", mt)
+	}
+}
+
+// CONFLITO de tipo no dicionário, no caminho aninhado, continua sendo DADO: o
+// campo mudou de formato na origem.
+//
+// A diferença em relação ao caminho de topo é deliberada e é a regra desta
+// passada: lá o conflito derruba o EVENTO (TYPE_CONVERSION), aqui ele derruba
+// só a COLUNA. Derrubar o evento inteiro por causa de uma chave de dentro de um
+// documento levaria junto as dezenas de colunas de topo, que é exatamente o que
+// a segunda passada existe para não fazer.
+func TestConflitoDeTipoNoCaminhoAninhadoRemoveAColunaSemDerrubarOEvento(t *testing.T) {
+	h := newHarness(t, descobreYAML)
+	h.apply(`{"id":"A","doc":{"podName":"texto"}}`)
+	antes := h.c.ValoresIncompativeis()
+
+	// O tipo já está fixado como string; um número no mesmo caminho diverge.
+	r := h.m.Apply([]byte(`{"id":"A","doc":{"podName":42}}`))
+	if r.Err != nil {
+		t.Fatalf("o evento caiu por causa de uma chave interna: %v", r.Err)
+	}
+	h.wantAbsent(h.state("A"), "doc.podName")
+	if got := h.c.ValoresIncompativeis() - antes; got != 1 {
+		t.Errorf("contador subiu %d, quer 1", got)
+	}
+}
+
+// TestNullExplicitoNaoContaComoTipoIncompativel separa duas coisas que caíam no
+// mesmo contador.
+//
+// Convert devolve Value{Type: TypeNull} SEM erro para o null do JSON, e a
+// mesma condição que pega "o valor não coube no tipo declarado" pegava também
+// "a origem mandou null". Não são a mesma coisa: null é a origem dizendo que
+// não há valor, e a coluna ficar ausente é a resposta certa.
+//
+// Isso importa porque o contador é o número que decide quais chaves ganham tipo
+// declarado. Inflado por null, ele aponta para colunas cujo problema não é o
+// tipo — e a decisão sai errada exatamente onde deveria sair de medição.
+func TestNullExplicitoNaoContaComoTipoIncompativel(t *testing.T) {
+	h := newHarness(t, descobreYAML)
+	h.apply(`{"id":"A","doc":{"podName":"pod-1"}}`)
+	antes := h.c.ValoresIncompativeis()
+
+	h.apply(`{"id":"A","doc":{"podName":null}}`)
+	if got := h.c.ValoresIncompativeis() - antes; got != 0 {
+		t.Errorf("contador subiu %d com um null explícito, quer 0", got)
+	}
+
+	// E a divergência de verdade continua contando, no mesmo dataset e na
+	// mesma coluna — sem isto o teste acima passaria com o contador quebrado.
+	antes = h.c.ValoresIncompativeis()
+	h.apply(`{"id":"A","doc":{"podName":42}}`)
+	if got := h.c.ValoresIncompativeis() - antes; got != 1 {
+		t.Errorf("contador subiu %d com tipo divergente, quer 1", got)
+	}
+}
+
+// O null explícito CONTINUA limpando a coluna. É a metade que não pode mudar:
+// sem a remoção, no modo merge a coluna seguiria mostrando o valor de um evento
+// anterior enquanto o documento da mesma linha diz null.
+func TestNullExplicitoAindaLimpaAColuna(t *testing.T) {
+	h := newHarness(t, descobreYAML)
+	h.apply(`{"id":"MESMA","doc":{"podName":"pod-1"}}`)
+	h.wantString(h.state("MESMA"), "doc.podName", "pod-1")
+
+	h.apply(`{"id":"MESMA","doc":{"podName":null}}`)
+	h.wantAbsent(h.state("MESMA"), "doc.podName")
 }

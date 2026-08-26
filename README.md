@@ -218,7 +218,18 @@ sido prevista, é ela existir quando alguém for investigar. A descoberta é de
 **um nível**: objeto aninhado vira coluna `json`, inteiro, e quem precisa da
 chave lá dentro declara o caminho. O nome da coluna é qualificado
 (`persistent.probeIpNode`), e o tipo é fixado na primeira observação — valor
-divergente depois fica nulo **na coluna**, com o documento preservando-o.
+divergente depois é **removido da coluna**, com o documento preservando-o.
+
+**A leitura correta de uma coluna derivada é "o último valor visto para esta
+chave"**, e não "o valor no documento desta linha". No modo `merge`, campo
+ausente do patch preserva o valor anterior, e uma chave que simplesmente
+DESAPARECE do documento não é removida da coluna: corrigir isso exigiria emitir
+uma remoção por coluna conhecida e ausente, o que num documento de 11 chaves
+sobre ~1.650 colunas seriam ~1.639 entries por evento — inviável no caminho
+quente. O que **é** corrigido são os casos em que o documento contradiz a
+coluna: valor de tipo divergente, `null` explícito, e documento que chega com
+forma errada (array, null, escalar) — nos três a coluna é removida, porque a
+frequência deles é baixa e o custo, portanto, pagável.
 
 Campo descoberto **não indexa** (é a mesma restrição do campo autodescoberto de
 topo), então filtro sobre ele é varredura. Declarar continua sendo o caminho
@@ -239,9 +250,18 @@ Regras que valem a pena saber antes de declarar:
 - **Índice:** `bitmap` aceita `string`, `int64` e `boolean`. `ipv4` só aceita
   `hash`, que ainda **não tem motor** — declarar hash hoje é metadado sem
   efeito. Uma chave que precise de índice agora deve ser declarada `string`.
-- **O que não vira coluna:** caminho ausente, valor que é lista, ou valor de
-  tipo incompatível com o declarado. Nos três a coluna fica **nula** e o evento
-  entra normalmente — uma chave interna nunca derruba o evento.
+- **O que não vira coluna:** caminho ausente, valor que é lista, valor de tipo
+  incompatível com o declarado, `null` explícito, e documento que chega com
+  forma errada. Em todos a coluna fica **nula** e o evento entra normalmente —
+  uma chave interna nunca derruba o evento. Só duas coisas o derrubam, e
+  nenhuma delas é dado: **falha de infra** ao registrar a coluna ou a gravar o
+  tipo (disco cheio, EIO), que sai como `STORAGE_ERROR`; e o **teto de campos
+  sob `onMaxCols: stop`**, que sai como `FIELDS_EXHAUSTED`. Bug e infra nunca
+  entram no balde de dado ruim.
+- **O contador de valor incompatível conta divergência de TIPO, e só ela.**
+  `null` explícito remove a coluna sem contar — é a origem dizendo que não há
+  valor, não uma perda por tipo. Documento com forma errada conta **uma vez**,
+  no campo pai: o que divergiu foi um documento, e as colunas nem estavam nele.
 
 #### Teto de campos
 

@@ -47,6 +47,12 @@ type PatchBuffer struct {
 	folha       []byte
 	descobridor *jsonp.Parser
 	nomeBuf     []byte
+	// filhosBuf serve ao caminho do pai com forma divergente (array, null,
+	// escalar), que precisa enumerar TODAS as colunas daquele documento para
+	// removê-las. É buffer e não slice novo pela mesma razão dos vizinhos,
+	// ainda que este caminho seja raro: um caminho raro que aloca é uma
+	// alocação que só aparece em produção.
+	filhosBuf []*schema.CompiledField
 	// compilado é o schema do Parse corrente. A descoberta precisa dele para
 	// registrar coluna nova, e passá-lo por parâmetro em toda a cadeia da
 	// segunda passada só o faria viajar de graça.
@@ -196,7 +202,9 @@ func (b *PatchBuffer) Parse(event []byte, c *schema.Compiled, agora time.Time) e
 	// A extração roda DEPOIS do laço, porque precisa da última ocorrência de
 	// cada pai, e ANTES da ordenação, para que as derivadas participem do
 	// sort e do dedup como qualquer outra entry.
-	b.extraiDerivadas()
+	if err := b.extraiDerivadas(); err != nil {
+		return err
+	}
 
 	// O campo de sistema entra ANTES da ordenação, como uma entry qualquer:
 	// assim o merge e o replace o incluem pelo mesmo caminho, sem que nenhum
