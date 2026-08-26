@@ -47,10 +47,14 @@ const (
 
 // IndexKind é o índice secundário declarado para o campo no YAML.
 //
-// IndexHash é ACEITO na configuração desde o M1, mas o índice físico só
-// existe a partir da Fase 8 (M4): até lá o metadado é carregado sem efeito
-// colateral e as queries sobre o campo caem no caminho de scan. Declarar
-// hash hoje é, portanto, um forward-compat sem penalidade.
+// Os DOIS têm motor físico (internal/index/bitmap e internal/index/hash), e a
+// escolha entre eles é de CARDINALIDADE: o bitmap mantém um arquivo de bits
+// por valor distinto e serve coluna de poucos valores; o hash mantém uma
+// tabela única por campo e serve coluna de muitos.
+//
+// IndexHash foi ACEITO na configuração desde o M1 sem motor por trás — o
+// metadado era carregado e a query caía no caminho de scan. Deixou de ser
+// assim: o débito 19 fechou, e declarar hash passou a mudar o plano.
 type IndexKind uint8
 
 const (

@@ -14,6 +14,9 @@ folder "<dataset>/" {
     folder "bitmap/" {
       artifact "00003/  — um diretório por FieldID\n(5 dígitos, zeros à esquerda)\n  values.dict\n  00000001.bm, 00000002.bm, …\n  (uma posting por valorID, 8 dígitos,\n  1-based: não existe 00000000.bm)" as bmp
     }
+    folder "hash/" {
+      artifact "00004.hidx — UM arquivo por FieldID\n(5 dígitos, zeros à esquerda)\nheader 64 B (magic NDBH) +\nslots de 16 B: [hash u64][rowId u64]" as hsh
+    }
   }
   folder "metadata/" {
     artifact "fields.dict\nnome → fieldID (v2, com typeHint)" as fd
@@ -53,6 +56,18 @@ note bottom of bmp
   YAML — a tradução está no fields.dict.
   É por isso que a recusa de bitmap
   também nomeia o campo por número.
+end note
+
+note bottom of hsh
+  Alta cardinalidade: uma tabela por
+  CAMPO, e não um arquivo por valor.
+  Remove posting por LÁPIDE (update
+  troca o valor da coluna); esvaziar o
+  slot cortaria a cadeia de probe dos
+  vizinhos. A ocupação é RECONTADA no
+  Open — o header não a guarda, porque
+  contador em página mmap não sobrevive
+  a um crash com credibilidade.
 end note
 
 note bottom of man

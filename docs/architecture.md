@@ -176,10 +176,22 @@ os 8 leitores, e inclui os buffers deles.
 - **locations** — um `u64` atômico por rowId (segmento, offset, flags). A
   location é publicada **por último**: até ela existir, a row não é visível;
 - **sequences** — um `int64` por rowId, para o stale check;
-- **bitmaps** — posting list por valor, com dicionário de valores. A chave
-  inclui o **byte de tipo**, e é por isso que o planner recusa usar índice com
-  valor de tipo promovido: um `double` jamais casaria postings gravados como
-  `int64`, e o resultado seria vazio em silêncio.
+- **bitmaps** — posting list por valor, com dicionário de valores. Serve
+  **baixa cardinalidade**: um arquivo de bits por valor distinto;
+- **hash secundário** — tabela open-addressing sobre mmap, um arquivo por
+  campo, com slots de 16 bytes (`[hash u64][rowId u64]`). Serve **alta
+  cardinalidade**, que é onde o bitmap custaria um arquivo por valor. Ao
+  contrário da primary, ele **remove** postings: um update troca o valor da
+  coluna, e a remoção é por **lápide** — esvaziar o slot cortaria a cadeia de
+  probe dos vizinhos e produziria falso negativo permanente. As lápides são
+  purgadas na reconstrução, que dimensiona pelas postings **vivas** e não pelo
+  tamanho atual: cada update deixa uma lápide, e dobrar por reflexo daria
+  arquivo sem limite com o número de linhas parado.
+
+A chave dos dois inclui o **byte de tipo** — `internal/index/valuekey` é o dono
+único dela —, e é por isso que o planner recusa usar índice com valor de tipo
+promovido: um `double` jamais casaria postings gravadas como `int64`, e o
+resultado seria vazio em silêncio.
 
 **Um writer, muitos leitores — DENTRO do processo.** O writer é serializado por
 mutex; as leituras são concorrentes com ele. O `Close` faz **quiesce**: espera
@@ -319,7 +331,11 @@ executor filtra; falso negativo ninguém recupera.
 
 **A prioridade do planner é fixa** (primary → hash → bitmap → interseção/união →
 full scan), sem otimizador por custo. Toda dúvida degrada para full scan, que é
-sempre correto — só mais lento.
+sempre correto — só mais lento. Os dois motores de índice secundário se
+misturam num mesmo `OR`: o `IndexUnionPlan` funde iteradores de hash e de
+bitmap, e é por isso que o `LookupHash` devolve rowIds em ordem **estritamente
+crescente** — desordenado, a interseção k-way pararia cedo e o resultado sairia
+incompleto sem erro.
 
 **Nada do resultado é materializado.** O predicado é compilado uma vez para um
 programa linear com saltos, os campos são coletados por merge linear numa
@@ -682,8 +698,12 @@ conhecê-las. Cada uma tem dono em [`debitos.md`](debitos.md).
 - **Campo indexado tem teto de 64 KiB** (`types.MaxIndexedValueBytes`, limite do
   `u16` do dicionário de valores). Valor acima disso faz o evento inteiro
   falhar.
-- **O conjunto de bitmaps é IMUTÁVEL depois da primeira row CHECKPOINTADA, nas
-  duas direções** — e a remoção, na prática, desde a criação do dataset. O gate
+- **O conjunto de índices secundários é IMUTÁVEL depois da primeira row
+  CHECKPOINTADA, nas duas direções** — e a remoção, na prática, desde a criação
+  do dataset. Vale para os DOIS motores: o índice hash físico entrou com as
+  mesmas duas guardas e as mesmas mensagens, trocando
+  `BitmapFields`/`AllowBitmapDrop` por `HashFields`/`AllowHashDrop`. O débito 22
+  não fechou com ele — passou a ter dois motores a reconstruir. O gate
   de acréscimo é o `RowCount` do **manifest**, não as rows em disco: rows
   escritas e ainda não checkpointadas não o alimentam. O tamanho dos valores
   **não entra em nenhuma das duas decisões**:

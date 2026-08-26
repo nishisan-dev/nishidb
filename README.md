@@ -236,9 +236,11 @@ Regras que valem a pena saber antes de declarar:
   então acrescentá-la a um dataset que já tem linhas é recusado na subida: as
   linhas antigas ficariam sem a coluna e o filtro sobre ela as omitiria em
   silêncio.
-- **Índice:** `bitmap` aceita `string`, `int64` e `boolean`. `ipv4` só aceita
-  `hash`, que ainda **não tem motor** — declarar hash hoje é metadado sem
-  efeito. Uma chave que precise de índice agora deve ser declarada `string`.
+- **Índice:** `bitmap` aceita `string`, `int64` e `boolean`; `hash` aceita
+  `string`, `int64`, `ipv4` e `ipv6`. Os dois têm motor físico. A escolha é de
+  CARDINALIDADE: bitmap mantém um arquivo de bits por valor distinto e serve
+  coluna de poucos valores (status, protocolo); hash mantém uma tabela única
+  por campo e serve coluna de muitos valores (endereço, identificador de nó).
 - **O que não vira coluna:** caminho ausente, valor que é lista, ou valor de
   tipo incompatível com o declarado. Nos três a coluna fica **nula** e o evento
   entra normalmente — uma chave interna nunca derruba o evento.
@@ -260,14 +262,23 @@ as outras, e a perda é contável — `nishidb_dataset_fields_dropped_total` e o
 bloco `schema` do `/v1/stats`. Com `stop`, a ingestão para de forma observável.
 O teto efetivo é publicado no `/v1/metadata`.
 
-O `index: bitmap` dos campos é **definitivo**: acrescentar um bitmap passa a ser
-recusado assim que o manifest registra a primeira row, e **remover** um bitmap
-existente é recusado desde a criação — os dois com exit 3, num dataset íntegro,
-e o tamanho dos valores não tem nada a ver com isso. Não há backfill nem
-migração in-place: a única saída é reprocessar a fonte para um dataset com o
-conjunto definitivo. Vale escolher agora — a mecânica e os dois caminhos
-possíveis estão em [`docs/architecture.md`](docs/architecture.md), seção
-"Operar isto".
+O `index:` dos campos é **definitivo**, e vale igual para `bitmap` e `hash`:
+acrescentar um índice passa a ser recusado assim que o manifest registra a
+primeira row, e **remover** um índice existente é recusado desde a criação — os
+dois com exit 3, num dataset íntegro, e o tamanho dos valores não tem nada a ver
+com isso. Não há backfill nem migração in-place: a única saída é reprocessar a
+fonte para um dataset com o conjunto definitivo. Vale escolher agora — a
+mecânica e os dois caminhos possíveis estão em
+[`docs/architecture.md`](docs/architecture.md), seção "Operar isto".
+
+**Qual dos dois declarar** é uma pergunta de cardinalidade, não de gosto. O
+`bitmap` mantém um arquivo de bits por valor distinto: é imbatível em coluna de
+poucos valores (`status`, `protocol`) e cobra um arquivo por valor em coluna de
+muitos. O `hash` mantém uma tabela única por campo, com um slot de 16 bytes por
+linha indexada: é o índice de alta cardinalidade (endereço IP, identificador de
+nó). Declarar `bitmap` numa coluna de milhares de valores distintos custa
+milhares de arquivos; declarar `hash` numa coluna de três valores funciona, e
+desperdiça a tabela.
 
 `mode: replace` (no lugar de `merge`) faz cada evento substituir o estado
 inteiro da chave. Ele funciona, mas **não aparece no resumo do `ingest`**: a

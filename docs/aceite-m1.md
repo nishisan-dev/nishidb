@@ -82,7 +82,9 @@ para auditar:
   exit 3. Os números de leitura concorrente vêm de leitores **in-process**
   (`benchmark/ingest-bench`).
 - **O índice hash é da Fase 8:** a rota de hash degrada para full scan no Store
-  real.
+  real. **Errata:** isto descreve o M1 e deixou de valer — o débito 19 fechou e
+  o índice hash físico existe. O registro fica como estava porque este
+  documento é o aceite do M1, não o estado corrente.
 - **`allocs/evento` do STEADY mistura ingestão e query** (367,9 com 4 leitores
   SQL): o numerador inclui as alocações das consultas e o denominador só os
   30.000 eventos. O número de ingestão é o do LOAD: **0,0086**.

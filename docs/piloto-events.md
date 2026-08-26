@@ -71,11 +71,18 @@ O índice bitmap é **um arquivo de bits denso por valor distinto** (§41). Com
 | **`node`** | **4.376+** | **~9,6 GB** | **`index: hash`** |
 
 `node` é a dimensão de consulta mais valiosa e a mais cara como bitmap. Ficou
-com `index: hash`, que hoje degrada para full scan (débito 19) e passa a valer
-quando a Fase 8 entregar o índice físico.
+com `index: hash`, e o **índice hash físico existe** — o débito 19 fechou. Um
+`WHERE node = 'x'` que varria 17,8M linhas e morria com `context deadline
+exceeded` depois de 1.175.015 candidatos passa a resolver pelo índice.
 
-**O conjunto de bitmaps é imutável depois da primeira row** (débito 22): mudar
-exige reprocessar o tópico para um dataset novo — e ver a janela de retenção
+**Dataset já criado não ganha o índice retroativamente.** A abertura RECUSA
+declarar `index: hash` sobre um dataset com linhas, pelo mesmo motivo do bitmap:
+o índice cobriria só o que vier daqui pra frente e a query omitiria as linhas
+antigas em silêncio. Para o piloto, isso significa recriar o dataset.
+
+**O conjunto de índices secundários é imutável depois da primeira row** (débito
+22, que agora vale para os dois motores): mudar exige reprocessar o tópico para
+um dataset novo — e ver a janela de retenção
 abaixo antes de contar com isso.
 
 ### 4. A cauda da distribuição de chaves estoura o teto do storage
@@ -203,7 +210,7 @@ declarado — nunca resultado vazio, que pareceria resposta.
     28 GB de heap. Para prazo longo a varredura completa é a estratégia certa
     — 8 B por rowId alocado, e com 90 dias a resolução de 1 minuto é
     irrelevante, então ela roda de hora em hora.
-- **Sem índice hash físico** (débito 19): consulta por `node` é full scan.
+- ~~**Sem índice hash físico** (débito 19): consulta por `node` é full scan.~~ **O débito 19 FECHOU**: o índice hash físico existe e a consulta por `node` passa pelo índice. Vale para dataset CRIADO com o campo declarado — a abertura recusa acrescentar `index: hash` a um dataset que já tem linhas, porque o índice cobriria só o que vier depois.
 - **Sem `ORDER BY`, `GROUP BY` ou agregações** na v1 (§9, §59).
 - **O binário não sabe dizer sua versão**: não há `--version`, então não há como
   correlacionar o que está no ar com um commit.
