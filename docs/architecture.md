@@ -450,6 +450,63 @@ troca de o comando nunca mais executar texto que ninguém escreveu.
 Essa reescrita textual tem prazo: no M2 o `--limit` deve virar parâmetro do
 plano, já que o binder conhece o `LIMIT` da AST (débito 46).
 
+### `ORDER BY`: um operador, três modos
+
+`ORDER BY` é o único operador **bloqueante** do motor: a fonte é drenada por
+inteiro antes da primeira linha sair, porque a linha certa pode ser a última
+lida. Isso inverte o papel do `LIMIT`, que deixa de ser teto de *trabalho* e
+passa a ser teto de *memória*.
+
+O operador é **um só** (`internal/query/executor/sort.go`), com três modos que
+compartilham a mesma função de comparação. O compartilhamento é requisito, não
+economia: duas regras de ordenação divergiriam no primeiro empate, e o resultado
+passaria a depender de qual modo foi escolhido.
+
+| Modo | Quando | Memória |
+|---|---|---|
+| **completo** | default | O(resultado): arena que cresce por append |
+| **transbordo** | o orçamento de memória estourou e há lugar em disco | O(lote) + runs em `<dataset>/spill/`, merge k-way na saída |
+| **top-N** | `OFFSET + limite efetivo` ≤ **4.096**, decidido no `Open` | O(N): um heap limitado |
+
+**O top-N é um heap de máximos segundo a ordem PEDIDA** — a raiz é a *pior* das
+retidas, e é ela que sai quando entra alguém melhor. Com `ORDER BY x ASC LIMIT
+10`, a raiz é o maior dos dez menores. O `OFFSET` entra no **tamanho** do heap,
+não é aplicado antes: as linhas puladas também precisam ser as certas.
+
+O ponto que não pode ser "simplificado" é o **reuso do buffer da entrada
+despejada**. O caminho completo copia tudo para um arena único porque nada é
+removido dele; no top-N a entrada é substituída *individualmente*, e o espaço
+dela fica no meio do arena. Escrever a linha nova no fim faria a memória crescer
+com o número de linhas **varridas** em vez de com N — o modo deixaria de ser
+limitado, que é a única razão de ele existir. Por isso cada entrada tem o seu
+buffer, reusado na substituição, e o gate
+`TestTopNReaproveitaOBufferDaEntradaDespejada` trava isso por **igualdade de
+alocações** entre dois tamanhos de corpus, no formato de dado em que toda linha
+é aceita.
+
+O teto de 4.096 é **medido**, não escolhido
+(`benchmark/baselines/topn-20260826.txt`, `-count=6` com benchstat). Sobre 100
+mil linhas o heap ganha em toda a faixa testada, inclusive em N=16.384 — então
+não é lá que o teto se decide. Quem o decide é o corpus **curto**: com 20 mil
+linhas varridas, N=4.096 (20% do varrido) ainda economiza 35% de tempo no pior
+formato, e N=16.384 (82% do varrido) não tem diferença estatística. O número de
+linhas varridas é desconhecido no `Open`, então o teto tem de ser fixo e tem de
+ser o maior que ainda ganha quando o dataset é pequeno.
+
+O teto de **bytes** (`Options.SortMemory`) continua valendo dentro do modo
+rápido, e a saída dele é **degradar**, não recusar: as N linhas retidas voltam
+para o caminho completo, que transborda. A degradação é correta e não aproximada
+— nenhuma linha fora das N melhores de um prefixo pode estar nas N melhores do
+total, então o que o heap já descartou não muda a resposta. Provas:
+`TestTopNDegradaEmVezDeRecusarQuandoOOrcamentoEstoura` (resultado idêntico ao do
+caminho completo) e `TestTopNDegradadoRecusaQuandoNaoHaOndeTransbordar` (sem
+disco, a degradação termina onde o caminho completo termina).
+
+Os contadores `TopN` e `TopNDegradado` (`executor.Metrics`) dizem qual modo cada
+consulta usou. Eles existem porque sem eles a escolha é invisível de fora, e um
+diferencial entre os dois caminhos passaria por **vacuidade** — comparando um
+caminho consigo mesmo — sem que nada acusasse.
+
 ### Introspecção pelo próprio SQL
 
 `_meta.fields` responde "o que este dataset tem" — nome, tipo, se é

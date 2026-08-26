@@ -835,6 +835,35 @@ uma resposta que ninguém ia receber. Se não houver lugar declarado para
 transbordar, o estouro **recusa a query** em vez de entregar resultado parcial —
 "as N primeiras por rowId, depois ordenadas" não é prefixo de resposta nenhuma.
 
+**`ORDER BY … LIMIT` pequeno não acumula o dataset.** Quando `OFFSET + LIMIT`
+cabe em **4.096 linhas**, o operador resolve a consulta com um **heap limitado**:
+retém só as N melhores vistas até agora e descarta o resto na hora, sem copiar.
+O resultado é *idêntico* ao do caminho completo — mesmas chaves, mesma política
+de ausentes, mesmo desempate por rowId —, e é isso que
+`TestTopNDaOMesmoResultadoQueOSortCompleto` prova, comparando os dois caminhos
+linha a linha sobre um corpus cheio de empates.
+
+O que muda é o custo. Medido sobre 100 mil linhas varridas
+(`benchmark/baselines/topn-20260826.txt`, `-count=6` com benchstat), com
+`LIMIT 1000`: **83% menos tempo** no caso realista e **43% menos** no pior
+formato de dado possível — aquele em que toda linha varrida entra no heap e
+despeja outra. Em memória a diferença é de outra ordem: **200 KiB retidos contra
+91,6 MiB** materializados pelo caminho completo. Depois de aquecido, o heap
+**não aloca por linha** (`TestTopNReaproveitaOBufferDaEntradaDespejada`).
+
+Acima de 4.096 vale o caminho completo. O teto é de **linhas**, e é decidido na
+abertura da consulta — quando ainda não se sabe quantas linhas serão varridas.
+Foi medido, e o que o fixa é o dataset PEQUENO: com 20 mil linhas varridas,
+4.096 ainda economiza 35% de tempo no pior formato, e 16.384 já não tem
+diferença estatística. Acima do teto a pergunta deixa de ser "quanto custa
+ordenar" e passa a ser "e se não couber" — e quem responde essa é o transbordo,
+não um heap maior.
+
+Se o teto de **memória** estourar dentro do modo rápido — N linhas de JSON
+grande, por exemplo —, a consulta **degrada para o caminho completo** e segue
+transbordando, em vez de ser recusada: um modo novo não pode fazer falhar uma
+consulta que já respondia.
+
 `OFFSET` pula linhas que **passaram** no predicado, e o `LIMIT` continua
 contando só as **entregues** — `LIMIT 2 OFFSET 1` devolve duas linhas. A ordem
 das cláusulas é fixa (`LIMIT` antes de `OFFSET`), e sem `ORDER BY` a paginação é
