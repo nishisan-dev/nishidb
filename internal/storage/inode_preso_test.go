@@ -2,10 +2,13 @@ package storage
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
@@ -47,46 +50,200 @@ func fdsApagadosEm(t *testing.T, dir string) []string {
 	return presos
 }
 
-// TestSegmentoAposentadoFicaComInodePresoPorFdAberto é um teste de
-// CARACTERIZAÇÃO: ele afirma o defeito, não o conserto.
+// TestSegmentoAposentadoDevolveOsBlocosAoFilesystem é a inversão do teste de
+// caracterização que este arquivo trazia antes: onde ele exigia um inode preso
+// por segmento aposentado, agora se exige nenhum.
 //
-// A cadeia é determinística, e não uma corrida. compactaSegmento lê o segmento
-// que vai aposentar pelo s.segR.ScanFrom, e o ScanFrom chama r.file(seg), que
-// ABRE e CACHEIA o descritor. O cache do Reader não tem despejo — o único
-// delete(r.fds, id) vive dentro do Reader.Close, que só roda quando o Store
-// inteiro fecha. Depois, aposentaSegmento faz os.Remove, e o unlink do POSIX
-// remove o NOME e não o INODE.
+// O que mudou: aposentaSegmento passou a FECHAR o descritor cacheado antes do
+// unlink. O unlink do POSIX remove o nome e nunca o inode, e o cache de fds do
+// segment.Reader não tem despejo — sem o fechamento, os blocos de todo segmento
+// aposentado seguiam alocados enquanto o processo vivesse, e a compaction
+// devolvia disco ao LISTING do diretório sem devolver um byte ao dispositivo.
 //
-// Resultado: os blocos de todo segmento aposentado seguem alocados enquanto o
-// processo vive, e a compaction devolve disco ao LISTING do diretório sem
-// devolver um byte ao filesystem.
-//
-// Nenhum instrumento do projeto via isso: dirBytes do harness, discoDosSegmentos
-// do e2e e o Stats.StorageBytes somam o listing, e para os três o arquivo sumiu.
-//
-// A fase seguinte INVERTE esta asserção. Que ela exista primeiro é o que torna
-// o conserto bisectável.
-func TestSegmentoAposentadoFicaComInodePresoPorFdAberto(t *testing.T) {
+// A asserção é de IGUALDADE A ZERO e não de "diminuiu": o vazamento era
+// determinístico, um inode por aposentadoria, então qualquer número acima de
+// zero é o defeito de volta em escala menor.
+func TestSegmentoAposentadoDevolveOsBlocosAoFilesystem(t *testing.T) {
 	dir := t.TempDir()
 	s := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10})
 	corpusDeSegmentosSelados(t, s, 40, 30)
-
-	if presos := fdsApagadosEm(t, dir); len(presos) != 0 {
-		t.Fatalf("antes de compactar já havia %d inode(s) preso(s): %v — a montagem não isola o que o teste mede", len(presos), presos)
-	}
 
 	res, err := s.CompactaUmaVez(context.Background(), 0.5)
 	if err != nil {
 		t.Fatalf("CompactaUmaVez: %v", err)
 	}
 	if res.SegmentosAposentados == 0 {
-		t.Fatal("nenhum segmento aposentado: sem aposentadoria não há o que este teste caracterize")
+		t.Fatal("nenhum segmento aposentado: sem aposentadoria a asserção abaixo passaria por vacuidade")
 	}
 
-	presos := fdsApagadosEm(t, dir)
-	if len(presos) != res.SegmentosAposentados {
-		t.Errorf("inodes presos = %d, quer %d (um por segmento aposentado): %v",
+	if presos := fdsApagadosEm(t, dir); len(presos) != 0 {
+		t.Errorf("%d inode(s) preso(s) depois de %d aposentadoria(s): %v",
 			len(presos), res.SegmentosAposentados, presos)
+	}
+}
+
+// TestCorpusContinuaLegivelDepoisDaAposentadoria existe porque o fechamento do
+// descritor removeu o ACIDENTE que fazia a leitura funcionar.
+//
+// Antes, o pread sobre um inode sem nome devolvia os bytes certos porque o
+// descritor vazado o mantinha vivo. Fechá-lo torna a leitura de uma location
+// que ainda aponte para o segmento aposentado um erro de verdade — e é por isso
+// que a barreira existe. Este teste cobra a outra metade: depois da
+// aposentadoria, TODA key do corpus continua legível, o que só vale se a
+// varredura republicou tudo o que estava vivo antes de o arquivo sumir.
+//
+// Confere key a key, sem amostragem, pelo mesmo motivo do
+// exigeCorpusNaUltimaRodada: o modo de falha é UMA row apontando para o arquivo
+// removido, e um sorteio a perde e devolve verde.
+func TestCorpusContinuaLegivelDepoisDaAposentadoria(t *testing.T) {
+	s := openStore(t, Options{Dir: t.TempDir(), SegmentSize: 8 << 10})
+	const keys, rodadas = 40, 30
+	corpusDeSegmentosSelados(t, s, keys, rodadas)
+
+	res, err := s.CompactaUmaVez(context.Background(), 0.5)
+	if err != nil {
+		t.Fatalf("CompactaUmaVez: %v", err)
+	}
+	if res.SegmentosAposentados == 0 {
+		t.Fatal("nenhum segmento aposentado: o teste não exercitaria nada")
+	}
+	exigeCorpusNaUltimaRodada(t, s, keys, rodadas-1, "após a aposentadoria fechar os descritores")
+}
+
+// TestAposentadoriaEsperaALeituraEmVoo é o teste da BARREIRA, e o oráculo é
+// uma relação de ACONTECE-DEPOIS, não um tempo de espera.
+//
+// Por que não dá para provar isto com uma corrida natural. Quando o segmento é
+// aposentado, a varredura do compactaSegmento já republicou tudo o que estava
+// vivo — é essa varredura que dá autoridade para afirmar que nenhuma location
+// aponta para dentro do arquivo. Então um leitor que CHEGA depois nunca lê o
+// segmento que vai sumir. A janela real é outra e é estreita: o leitor resolve
+// a location ANTES de o copy-forward movê-la, e ainda não leu os bytes quando o
+// descritor fecha. São nanossegundos entre duas linhas adjacentes, e um teste
+// de carga a perde — verificado: com a barreira REMOVIDA, oito leitores
+// varrendo o dataset inteiro durante uma compaction completa passaram três
+// vezes seguidas. Teste que passa com e sem o conserto não é oráculo.
+//
+// O que este teste faz, então, é ocupar a barreira do lado do leitor e exigir
+// que a aposentadoria só termine DEPOIS de ela ser liberada. Remover o
+// aposMu.Lock do fechaODescritorEApaga faz a compaction terminar enquanto o
+// leitor ainda está dentro, e a comparação de instantes reprova.
+//
+// A asserção é de ordem entre dois instantes registrados, e não "esperou N
+// milissegundos": uma máquina lenta só aumenta a folga, nunca inverte a ordem.
+func TestAposentadoriaEsperaALeituraEmVoo(t *testing.T) {
+	s := openStore(t, Options{Dir: t.TempDir(), SegmentSize: 8 << 10})
+	corpusDeSegmentosSelados(t, s, 40, 30)
+
+	// Ocupa a barreira como um leitor que resolveu a location e ainda não leu
+	// os bytes. É exatamente o estado que o par (Get, Read) produz.
+	s.aposMu.RLock()
+
+	var (
+		liberouEm  time.Time
+		terminouEm time.Time
+		res        ResultadoCompactacao
+		errComp    error
+		fim        = make(chan struct{})
+	)
+	go func() {
+		defer close(fim)
+		res, errComp = s.CompactaUmaVez(context.Background(), 0.5)
+		terminouEm = time.Now()
+	}()
+
+	// Dá à compaction tempo de chegar até a seção crítica. Se a barreira não
+	// existir, ela atravessa e termina aqui dentro.
+	select {
+	case <-fim:
+		s.aposMu.RUnlock()
+		t.Fatal("a compaction terminou com um leitor DENTRO da barreira: o fechaODescritorEApaga fechou o descritor debaixo de uma leitura em voo")
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	liberouEm = time.Now()
+	s.aposMu.RUnlock()
+	<-fim
+
+	if errComp != nil {
+		t.Fatalf("CompactaUmaVez: %v", errComp)
+	}
+	if res.SegmentosAposentados == 0 {
+		t.Fatal("nenhum segmento aposentado: a barreira não foi exercitada")
+	}
+	if !terminouEm.After(liberouEm) {
+		t.Errorf("a aposentadoria terminou em %v, ANTES de o leitor liberar a barreira em %v", terminouEm, liberouEm)
+	}
+}
+
+// TestLeituraConcorrenteSobreviveAUmaCompactionInteira não é o teste da
+// barreira — ver o godoc acima para por que uma corrida natural não a prova. É
+// o teste de FUMAÇA do caminho inteiro: oito leitores varrendo por GetByRowID
+// enquanto a compaction aposenta segmentos debaixo deles, exigindo que nenhuma
+// leitura falhe e nenhuma volte vazia.
+//
+// Ele pega uma classe diferente de defeito, e por isso fica: um fechamento de
+// descritor no lugar errado (fechar o segmento de DESTINO, ou fechar antes da
+// varredura terminar) quebra este teste de imediato, sem depender de janela
+// nenhuma.
+func TestLeituraConcorrenteSobreviveAUmaCompactionInteira(t *testing.T) {
+	s := openStore(t, Options{Dir: t.TempDir(), SegmentSize: 8 << 10})
+	const keys, rodadas = 40, 30
+	corpusDeSegmentosSelados(t, s, keys, rodadas)
+
+	ids := make([]types.RowID, 0, keys)
+	for i := 0; i < keys; i++ {
+		rec, _, ok, err := s.GetByKey([]byte(chaveDoCorpus(i)), nil)
+		if err != nil || !ok {
+			t.Fatalf("GetByKey(%s): ok=%v err=%v", chaveDoCorpus(i), ok, err)
+		}
+		ids = append(ids, rec.RowID)
+	}
+
+	const leitores = 8
+	var wg sync.WaitGroup
+	pare := make(chan struct{})
+	falhas := make(chan error, leitores)
+	for l := 0; l < leitores; l++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var buf []byte
+			for {
+				select {
+				case <-pare:
+					return
+				default:
+				}
+				for _, id := range ids {
+					rec, out, ok, err := s.GetByRowID(id, buf)
+					buf = out
+					if err != nil {
+						falhas <- fmt.Errorf("GetByRowID(%d): %w", id, err)
+						return
+					}
+					if !ok || len(rec.Payload) == 0 {
+						falhas <- fmt.Errorf("GetByRowID(%d): ok=%v payload=%d bytes", id, ok, len(rec.Payload))
+						return
+					}
+				}
+			}
+		}()
+	}
+
+	res, err := s.CompactaUmaVez(context.Background(), 0.5)
+	close(pare)
+	wg.Wait()
+	close(falhas)
+
+	if err != nil {
+		t.Fatalf("CompactaUmaVez: %v", err)
+	}
+	if res.SegmentosAposentados == 0 {
+		t.Fatal("nenhum segmento aposentado durante a varredura dos leitores: nada foi exercitado")
+	}
+	for e := range falhas {
+		t.Error(e)
 	}
 }
 

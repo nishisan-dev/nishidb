@@ -442,6 +442,53 @@ func (s *Store) tamanhoDoSegmento(seg uint32) (int64, error) {
 // pressupõe que a varredura completa do compactaSegmento já rodou — é ela que
 // dá autoridade para afirmar que nenhuma location aponta para dentro deste
 // arquivo.
+// fechaODescritorEApaga é a SEÇÃO CRÍTICA da aposentadoria, e ela é só isto:
+// fechar o descritor cacheado do segmento e apagar o arquivo, sob a barreira
+// que impede uma leitura de acontecer no meio.
+//
+// Por que o descritor precisa ser fechado. O unlink do POSIX remove o NOME e
+// nunca o INODE: enquanto qualquer descritor o mantiver aberto, os blocos
+// seguem alocados. E o cache de fds do segment.Reader não tem despejo, então o
+// descritor que a PRÓPRIA varredura desta compaction abriu (compactaSegmento
+// chama ScanFrom, que cacheia) ficaria aberto pela vida do processo. O efeito
+// era um inode preso por segmento aposentado, e a compaction devolvendo disco
+// ao listing do diretório sem devolver um byte ao dispositivo — invisível para
+// dirBytes, para discoDosSegmentos e para o Stats.StorageBytes, que somam o
+// listing, e invisível até para o log desta função, que anuncia bytes
+// devolvidos. Provado pelo TestSegmentoAposentadoDevolveOsBlocosAoFilesystem.
+//
+// Por que a barreira precisa existir junto. Era exatamente aquele descritor
+// vazado que fazia a leitura concorrente funcionar: com o inode aberto, o pread
+// sobre um arquivo já removido devolve os bytes certos e com CRC válido.
+// Fechá-lo sem barreira faz a leitura seguinte cair em os.ErrClosed (segmento
+// cacheado) ou ENOENT (não cacheado), e as duas abortam a query. Corrigir o
+// vazamento e pôr a barreira não são duas tarefas: são uma.
+//
+// Por que a seção é CURTA e não cobre os passos vizinhos. Os dois Checkpoint
+// tomam wmu e podem levar dezenas de segundos; o podaSegmentoAposentado também
+// toma wmu. Qualquer um deles aqui dentro inverteria a ordem de lock que o
+// godoc de aposMu fixa — wmu→aposMu de um lado, aposMu→wmu do outro — e isso é
+// deadlock. O rename fica fora por outra razão: descritor já aberto sobrevive a
+// ele, porque o rename move o nome e não o inode.
+//
+// NÃO há rótulo de apTrace aqui, e a ausência é deliberada: o apTrace existe
+// para que os testes de crash parem ENTRE passos que mudam estado durável, e
+// fechar um descritor não muda nenhum. Um crash entre o fechamento e o unlink
+// deixa um `.retired` sem manifest, que é exatamente o estado que o
+// reparaAposentados já trata. Rótulo que nenhum teste precisa é mecanismo sem
+// oráculo.
+func (s *Store) fechaODescritorEApaga(seg uint32, aposentado string) error {
+	s.aposMu.Lock()
+	defer s.aposMu.Unlock()
+	if err := s.segR.FechaSegmento(seg); err != nil {
+		return err
+	}
+	if err := os.Remove(aposentado); err != nil {
+		return fmt.Errorf("storage: remover o segmento aposentado %d: %w", seg, err)
+	}
+	return nil
+}
+
 func (s *Store) aposentaSegmento(seg uint32) error {
 	dataDir := filepath.Join(s.opts.Dir, "data")
 	canonico := caminhoCanonicoDoSegmento(dataDir, seg)
@@ -488,8 +535,8 @@ func (s *Store) aposentaSegmento(seg uint32) error {
 	}
 	s.passoDaAposentadoria("checkpointDoManifest")
 
-	if err := os.Remove(aposentado); err != nil {
-		return fmt.Errorf("storage: remover o segmento aposentado %d: %w", seg, err)
+	if err := s.fechaODescritorEApaga(seg, aposentado); err != nil {
+		return err
 	}
 	// O segundo fsync é o `syncDir(dir)` do fim que o bloco da tarefa previa,
 	// e fecha a mesma pergunta na outra ponta: sem ele a REMOÇÃO fica só na

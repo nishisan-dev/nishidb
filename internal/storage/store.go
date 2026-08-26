@@ -332,6 +332,35 @@ type Store struct {
 	vida    sync.RWMutex
 	fechado bool
 
+	// aposMu guarda a JANELA ENTRE RESOLVER UMA LOCATION E LER OS BYTES QUE
+	// ELA NOMEIA. É o terceiro lock do Store, e é preciso dizer o que ele NÃO
+	// é, porque os três se parecem: `vida` guarda o ciclo de vida (o quiesce
+	// do Close), `wmu` serializa o writer, e este guarda o par (Get, Read)
+	// contra a aposentadoria de um segmento acontecendo no meio dele.
+	//
+	// Antes dele, o que impedia a query de morrer era um ACIDENTE: o cache de
+	// fds do segment.Reader não tem despejo, então o descritor que a própria
+	// compaction abriu para varrer o segmento continuava aberto depois do
+	// unlink, e o pread seguinte devolvia os bytes certos sobre um inode sem
+	// nome. O preço desse acidente era o inode preso — os blocos nunca
+	// voltavam ao filesystem enquanto o processo vivesse. Fechar o descritor
+	// devolve os blocos E remove o acidente; esta barreira é o que põe algo
+	// no lugar dele.
+	//
+	// INVARIANTE DE ORDEM, e ela é a parte perigosa: aposMu é sempre o lock
+	// MAIS INTERNO. Put, Expira e os dois validadores da primary tomam wmu (ou
+	// o RLock da primary) e só depois entram aqui. Nada tomado sob aposMu pode
+	// tomar wmu — em particular, o podaSegmentoAposentado toma wmu e por isso
+	// roda FORA da seção crítica da aposentadoria. Invertida, a ordem é
+	// wmu→aposMu de um lado e aposMu→wmu do outro, que é deadlock.
+	//
+	// A seção crítica da aposentadoria é deliberadamente CURTA — fechar o
+	// descritor e apagar o arquivo — e não cobre os dois Checkpoint, que
+	// tomam wmu e podem levar dezenas de segundos. O rename também fica fora:
+	// um descritor já aberto sobrevive a ele, porque o rename move o nome e
+	// não o inode.
+	aposMu sync.RWMutex
+
 	// compCancela e compEmVoo são o ciclo de vida da goroutine de compaction
 	// (§53-55, decisão D7). Ela NÃO se junta ao entra()/sai() pela duração da
 	// passada: o Close toma vida.Lock(), que é quiesce, e uma varredura de
@@ -934,6 +963,12 @@ func (s *Store) BitmapFields() []types.FieldID {
 func (s *Store) lookup(key, buf []byte) (rec types.Record, out []byte, exists, live bool, err error) {
 	out = buf
 	validate := func(rid types.RowID) (bool, error) {
+		// Par (Get, Read) sob a barreira de aposentadoria: ver o godoc de
+		// aposMu. O RLock entra AQUI e não em volta do prim.Find inteiro
+		// porque o probe pode visitar vários slots, e segurar a barreira por
+		// todos eles alargaria a seção sem necessidade.
+		s.aposMu.RLock()
+		defer s.aposMu.RUnlock()
 		packed, ok := s.locs.Get(rid)
 		if !ok {
 			// Slot da primary sem location (janela de crash): não é a row.
@@ -1013,6 +1048,9 @@ func (s *Store) GetByRowID(id types.RowID, buf []byte) (types.Record, []byte, bo
 		return types.Record{}, buf, false, err
 	}
 	defer s.sai()
+	// Par (Get, Read) sob a barreira de aposentadoria: ver o godoc de aposMu.
+	s.aposMu.RLock()
+	defer s.aposMu.RUnlock()
 	packed, ok := s.locs.Get(id)
 	if !ok {
 		return types.Record{}, buf, false, nil
@@ -1391,6 +1429,11 @@ func (s *Store) validatePayloadAgainstDataset(payload []byte) error {
 // próprio para não invalidar o prevPayload em uso pelo Put.
 func (s *Store) insertValidator(key []byte) primary.ValidateFunc {
 	return func(rid types.RowID) (bool, error) {
+		// Par (Get, Read) sob a barreira de aposentadoria: ver o godoc de
+		// aposMu. Este validador roda com o wmu do Put na mão, e a ordem
+		// wmu→aposMu é a invariante que o godoc fixa.
+		s.aposMu.RLock()
+		defer s.aposMu.RUnlock()
 		packed, ok := s.locs.Get(rid)
 		if !ok {
 			return false, nil
