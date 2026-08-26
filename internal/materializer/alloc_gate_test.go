@@ -27,6 +27,12 @@ func TestExtracaoNaoAloca(t *testing.T) {
 		{"pai sem chave extraida", `{"id":"A","doc":{"nada":"x"}}`},
 		{"uma extracao", `{"id":"A","doc":{"probeIpNode":"10.0.0.1"}}`},
 		{"duas e uma aninhada", `{"id":"A","doc":{"probeIpNode":"1","tally":2,"alvo":{"nome":"z"}}}`},
+		// O pai com forma divergente enumera TODAS as colunas do documento
+		// para removê-las, e é o caminho mais fácil de alocar por engano: a
+		// enumeração natural (FieldsByParent) devolve slice novo e ordenado a
+		// cada chamada. Sem este caso, o buffer que evita isso não é medido —
+		// e caminho raro que aloca é alocação que só aparece em produção.
+		{"pai com forma divergente", `{"id":"A","doc":[1,2,3]}`},
 	}
 	for _, tc := range casos {
 		t.Run(tc.nome, func(t *testing.T) {

@@ -154,3 +154,98 @@ func wantDoc(t *testing.T, st map[string]types.Value, quer string) {
 		t.Errorf("doc = %s, quer %s", v.Bytes, quer)
 	}
 }
+
+// TestPaiArrayNaoCongelaAColunaAnterior fecha a errata de 25/08 pela porta que
+// ficou aberta.
+//
+// Aquela errata corrigiu o VALOR de tipo divergente: a segunda passada saía com
+// `continue` seco e, no modo merge, campo ausente do patch preserva o valor
+// anterior — a coluna respondia pelo evento passado enquanto o documento da
+// mesma linha trazia o novo. A correção emitiu remoção explícita.
+//
+// A FORMA divergente do pai ficou com o defeito. `doc` chegando como array não
+// tem objeto onde procurar, e o `continue` de então fazia exatamente o que a
+// errata tinha acabado de proibir.
+//
+// TestPaiArrayNaoDerrubaOEvento não pegava isto porque usa entidade NOVA, e
+// sem valor anterior não há o que congelar.
+func TestPaiArrayNaoCongelaAColunaAnterior(t *testing.T) {
+	h := newHarness(t, extractYAML)
+	h.apply(`{"id":"MESMA","doc":{"probeIpNode":"10.0.0.1"}}`)
+	h.wantString(h.state("MESMA"), "probe_ip", "10.0.0.1")
+
+	h.apply(`{"id":"MESMA","doc":[1,2,3]}`)
+	st := h.state("MESMA")
+	h.wantAbsent(st, "probe_ip")
+	wantDoc(t, st, `[1,2,3]`)
+}
+
+// O mesmo para o pai nulo, que é o outro Kind que chega até aqui.
+func TestPaiNuloNaoCongelaAColunaAnterior(t *testing.T) {
+	h := newHarness(t, extractYAML)
+	h.apply(`{"id":"MESMA","doc":{"probeIpNode":"10.0.0.1","tally":7}}`)
+	st := h.state("MESMA")
+	h.wantString(st, "probe_ip", "10.0.0.1")
+	h.wantInt(st, "tally", 7)
+
+	h.apply(`{"id":"MESMA","doc":null}`)
+	st = h.state("MESMA")
+	h.wantAbsent(st, "probe_ip")
+	h.wantAbsent(st, "tally")
+}
+
+// TestPaiArrayRemoveTambemAsColunasDESCOBERTAS é o teste que decide se a
+// correção serve ao dataset em que o defeito foi medido.
+//
+// `pai.Derivadas` guarda só as extrações DECLARADAS. O piloto declara ZERO — o
+// campo `persistent` tem `unknownFields: include` e mais nada —, então uma
+// correção que percorresse apenas as Derivadas passaria neste arquivo inteiro e
+// não removeria uma coluna sequer lá. É a diferença entre consertar o defeito e
+// consertar o exemplo dele.
+func TestPaiArrayRemoveTambemAsColunasDESCOBERTAS(t *testing.T) {
+	h := newHarness(t, descobreYAML)
+	h.apply(`{"id":"MESMA","doc":{"podName":"pod-1","tally":9}}`)
+	st := h.state("MESMA")
+	h.wantString(st, "doc.podName", "pod-1")
+	h.wantInt(st, "doc.tally", 9)
+
+	h.apply(`{"id":"MESMA","doc":[1,2,3]}`)
+	st = h.state("MESMA")
+	h.wantAbsent(st, "doc.podName")
+	h.wantAbsent(st, "doc.tally")
+	if got := string(st["doc"].Bytes); got != `[1,2,3]` {
+		t.Errorf("doc = %s, quer o documento do evento corrente", got)
+	}
+}
+
+// A divergência de FORMA conta UMA vez, no pai — não uma por coluna removida.
+//
+// Contar por coluna afogaria o sinal: um documento de 1.650 colunas somaria
+// 1.650 num contador que existe para dizer quais colunas deixaram de responder.
+// E seria afirmação errada, porque as colunas não estavam no documento — não
+// havia objeto onde procurá-las. O que divergiu foi UM documento.
+func TestPaiComFormaDivergenteContaUmaVezSoNoPai(t *testing.T) {
+	h := newHarness(t, descobreYAML)
+	h.apply(`{"id":"MESMA","doc":{"podName":"pod-1","tally":9,"outra":"x"}}`)
+	antes := h.c.ValoresIncompativeis()
+
+	h.apply(`{"id":"MESMA","doc":[1,2,3]}`)
+	if got := h.c.ValoresIncompativeis() - antes; got != 1 {
+		t.Errorf("contador subiu %d com três colunas removidas, quer 1 (uma por documento divergente)", got)
+	}
+}
+
+// O mesmo para a extração DECLARADA: null explícito limpa a coluna e não conta
+// como divergência de tipo.
+func TestNullExplicitoNaExtracaoDeclaradaLimpaSemContar(t *testing.T) {
+	h := newHarness(t, extractYAML)
+	h.apply(`{"id":"MESMA","doc":{"tally":7}}`)
+	h.wantInt(h.state("MESMA"), "tally", 7)
+	antes := h.c.ValoresIncompativeis()
+
+	h.apply(`{"id":"MESMA","doc":{"tally":null}}`)
+	h.wantAbsent(h.state("MESMA"), "tally")
+	if got := h.c.ValoresIncompativeis() - antes; got != 0 {
+		t.Errorf("contador subiu %d com um null explícito, quer 0", got)
+	}
+}

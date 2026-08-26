@@ -667,7 +667,16 @@ func (c *Compiled) ResolveAninhado(pai *CompiledField, nomeQualificado, caminho 
 		return f, nil
 	}
 	if recusa := c.tetoAlcancado(string(nomeQualificado)); recusa != nil {
-		return nil, recusa
+		if TetoIgnorou(recusa) {
+			// ignore: a coluna não existe, o evento é gravado com todo o resto,
+			// e a perda fica no contador. Mesmo desfecho do ResolveUnknown.
+			return nil, nil
+		}
+		// stop: o erro PRECISA subir. Devolver os dois casos como erro e deixar
+		// o chamador tratá-los igual — que era o que esta função fazia — fazia a
+		// política `stop` ser silenciosamente rebaixada a `ignore` no caminho
+		// aninhado, enquanto o caminho de topo a honrava.
+		return nil, fmt.Errorf("%w: %s", recusa, nomeQualificado)
 	}
 	id, err := c.dict.LookupOrCreate(nomeQualificado)
 	if err != nil {
@@ -800,6 +809,35 @@ func (c *Compiled) FieldsByParent(pai string) []*CompiledField {
 	c.mu.RUnlock()
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
+}
+
+// AnexaFilhos acrescenta a dst todas as colunas derivadas de pai — as
+// DECLARADAS por `extract` e as DESCOBERTAS por `unknownFields: include` —, e
+// devolve o slice possivelmente crescido.
+//
+// Existe separada de FieldsByParent por dois motivos, e os dois importam. O
+// primeiro é o buffer: FieldsByParent aloca um slice novo e o ordena a cada
+// chamada, o que serve à projeção (uma vez por query) e não ao caminho de
+// ingestão. Esta anexa num buffer do chamador e não ordena — quem consome as
+// entries já as ordena por FieldID depois.
+//
+// O segundo é o conjunto. `pai.Derivadas` tem só as DECLARADAS: ResolveAninhado
+// registra a coluna descoberta em byName/byID com o Parent apontado, e nunca a
+// anexa à lista do pai. Quem precisar tratar "todas as colunas deste
+// documento" e olhar só as Derivadas trata um dataset de descoberta pura — o
+// caso do piloto — como se ele não tivesse coluna nenhuma.
+//
+// A ordem NÃO é estável entre chamadas (varre um map). Quem precisar de ordem
+// estável usa FieldsByParent.
+func (c *Compiled) AnexaFilhos(pai *CompiledField, dst []*CompiledField) []*CompiledField {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for _, f := range c.byID {
+		if f.Parent == pai {
+			dst = append(dst, f)
+		}
+	}
+	return dst
 }
 
 // FieldByID resolve pelo ID do dicionário.
