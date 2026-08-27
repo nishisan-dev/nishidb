@@ -30,6 +30,13 @@ type DatasetSpec struct {
 	Materialization MaterializationSpec
 	Schema          SchemaSpec
 	Query           QuerySpec
+	// Historico é o bloco `history` validado, ou nil no dataset sem tabela
+	// irmã. Ver DerivaHistorico para a spec que ele gera.
+	Historico *HistoricoSpec
+	// EhHistorico marca a spec DERIVADA — a da própria tabela irmã. Ela não
+	// vem de arquivo nenhum: nasce de DerivaHistorico e existe só em memória,
+	// e é por isso que ListaDatasets nunca a enxerga.
+	EhHistorico bool
 }
 
 type MaterializationSpec struct {
@@ -206,8 +213,12 @@ type rawSpec struct {
 	// São VALOR e não ponteiro porque o yaml.v3 só trata yaml.Node de forma
 	// especial no tipo valor: um campo *yaml.Node fica com o nó zerado, sem
 	// erro nenhum. Bloco ausente é Kind == 0.
-	Source          yaml.Node `yaml:"source"`
-	Errors          yaml.Node `yaml:"errors"`
+	Source yaml.Node `yaml:"source"`
+	Errors yaml.Node `yaml:"errors"`
+	// History é nó cru pela MESMA razão de source e errors: bloco novo, sem
+	// legado a preservar, e a recusa de chave desconhecida ali é o que separa
+	// `maxByte: 1GiB` (typo) de uma retenção que simplesmente não existe.
+	History         yaml.Node `yaml:"history"`
 	Materialization rawMat    `yaml:"materialization"`
 	Schema          rawSchema `yaml:"schema"`
 	Query           rawQuery  `yaml:"query"`
@@ -943,6 +954,13 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 	s.Schema.MaxNestedCols = maxNested
 
 	if err := validaExtracoes(s, fields, aliases, include, includeAll); err != nil {
+		return nil, err
+	}
+
+	// O histórico vem por último entre as validações de schema porque toda a
+	// checagem de `history.fields` é cruzada: a coluna precisa existir, o tipo
+	// dela decide a indexabilidade, e a congelada precisa ser reconhecida.
+	if s.Historico, err = validaHistorico(&raw.History, s.Name, fields); err != nil {
 		return nil, err
 	}
 

@@ -732,9 +732,22 @@ public final class NishiDatabaseMetaData implements DatabaseMetaData {
         return false;
     }
 
+    /**
+     * O servidor ORDENA por coluna que não está na projeção.
+     *
+     * <p>Medido, e não deduzido: {@code SELECT identifier FROM events ORDER BY
+     * severity} devolve as linhas ordenadas. O executor coleta a chave de
+     * ordenação junto da projeção e a descarta na serialização, então a coluna
+     * não precisa aparecer no SELECT.
+     *
+     * <p>Declarar {@code false} aqui não é conservador — é errado, e custa
+     * caro no lugar onde este método é lido: um construtor de query gráfico
+     * (DBeaver, JasperReports) desabilita a ordenação por coluna não
+     * projetada, e o usuário conclui que o banco não faz o que ele faz.
+     */
     @Override
     public boolean supportsOrderByUnrelated() {
-        return false;
+        return true;
     }
 
     @Override
@@ -1111,6 +1124,21 @@ public final class NishiDatabaseMetaData implements DatabaseMetaData {
     // Zero é a convenção do JDBC para "sem limite conhecido", e é a resposta
     // certa aqui: os tetos reais do produto são por dataset (maxRows,
     // timeoutMs) e saem por getTables, não por estas constantes globais.
+    //
+    // A exceção é o ORDER BY, que tem teto global de verdade — ver
+    // getMaxColumnsInOrderBy.
+
+    /**
+     * Teto de chaves do ORDER BY, espelhando {@code MaxOrderKeys} do parser
+     * do servidor (internal/query/parser/parser.go).
+     *
+     * <p>O número é duplicado aqui porque o driver não fala com o servidor
+     * para responder a {@link java.sql.DatabaseMetaData}: ele responde antes
+     * de qualquer query. Duplicar um número que muda junto do formato de fio
+     * é o custo aceito; o que não seria aceitável é responder "sem limite"
+     * para um limite que existe.
+     */
+    private static final int MAX_CHAVES_DE_ORDENACAO = 16;
 
     @Override
     public int getMaxBinaryLiteralLength() {
@@ -1137,9 +1165,19 @@ public final class NishiDatabaseMetaData implements DatabaseMetaData {
         return 0;
     }
 
+    /**
+     * Dezesseis, e não zero: o ORDER BY tem teto REAL.
+     *
+     * <p>É a exceção da regra do bloco acima. Os outros limites são "sem
+     * limite conhecido" porque os tetos do produto são por dataset; este é uma
+     * constante do parser ({@code MaxOrderKeys}, internal/query/parser),
+     * global e conferida em toda query. Responder zero seria dizer que não há
+     * teto para um limite que existe — e quem monta ORDER BY por programa
+     * descobriria o número por erro de sintaxe em produção.
+     */
     @Override
     public int getMaxColumnsInOrderBy() {
-        return 0;
+        return MAX_CHAVES_DE_ORDENACAO;
     }
 
     @Override

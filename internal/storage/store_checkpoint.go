@@ -93,8 +93,12 @@ func (s *Store) checkpoint() error {
 	if err := s.traceStep("applyOverlay", s.locs.ApplyOverlay); err != nil {
 		return err // erro lógico: retentável, manifest antigo governa
 	}
-	if err := s.traceStep("msyncPrimary", s.prim.Msync); err != nil {
-		return s.failWriter(err)
+	// Primary e sequences não existem no histórico; os traceSteps deles somem
+	// junto, e é isso que os testes de ordem de durabilidade observam.
+	if s.prim != nil {
+		if err := s.traceStep("msyncPrimary", s.prim.Msync); err != nil {
+			return s.failWriter(err)
+		}
 	}
 	if err := s.traceStep("msyncLocations", s.locs.Msync); err != nil {
 		return s.failWriter(err)
@@ -109,8 +113,10 @@ func (s *Store) checkpoint() error {
 			return err
 		}
 	}
-	if err := s.traceStep("msyncSequences", s.seqs.Msync); err != nil {
-		return s.failWriter(err)
+	if s.seqs != nil {
+		if err := s.traceStep("msyncSequences", s.seqs.Msync); err != nil {
+			return s.failWriter(err)
+		}
 	}
 	if err := s.traceStep("msyncBitmaps", func() error {
 		for field, ix := range s.bitmaps {
@@ -154,10 +160,14 @@ func (s *Store) checkpoint() error {
 		RowCount:            s.rowCount.Load(),
 		CurrentSegment:      segID,
 		DurableOffset:       uint64(off),
-		PrimarySlotCount:    s.prim.SlotCount(),
-		PrimaryUsed:         s.prim.Used(),
-		HashKind:            s.prim.HashKind(),
 		FieldDictValidBytes: s.dict.SizeBytes(),
+		Modo:                uint8(s.opts.Modo),
+		RowIDBase:           s.rowIDBase.Load(),
+	}
+	if s.prim != nil {
+		m.PrimarySlotCount = s.prim.SlotCount()
+		m.PrimaryUsed = s.prim.Used()
+		m.HashKind = s.prim.HashKind()
 	}
 	// Este ListSegments é o único ponto do código que sabe QUAIS segmentos
 	// existem, e ele roda sob o mutex do writer: a listagem é um snapshot

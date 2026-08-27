@@ -267,6 +267,89 @@ o SQL apontou. É muito menos trabalho que a varredura cega anterior, e é o que
 a "Pergunta em aberto 3" do documento de melhorias descreve como alternativa ao
 contador por (coluna, tipo).
 
+## A tabela histórica: o que subir e o que medir
+
+Ainda **não** subiu. O que segue é o plano, com os números do próprio piloto.
+
+O piloto é o caso que a feature existe para servir: com 4,38 eventos por
+entidade e ~17,8M entidades, o `events` guarda o estado corrente de cada alarme
+e descarta o caminho que ele percorreu. Depurar "por que esta coluna está
+assim" exige inferir o merge a partir do resultado.
+
+### O YAML a acrescentar
+
+```yaml
+history:
+  expireAfterWrite: 3d
+  maxBytes: 30GiB
+  fields:
+    identifier: { index: hash }
+    node:       { index: hash }
+```
+
+`identifier` ganha índice **aqui** e não no base: lá ele é a key e a primary já
+o indexa, e o schema recusa `index:` sobre a key por isso. No histórico não há
+primary, e ele é a coluna de consulta mais provável de todas.
+
+`node` repete a decisão que a recriação de 26/08 já tomou pelo mesmo motivo —
+4.376+ valores distintos custariam ~9,6 GB como bitmap e ~1 MB por milhão de
+postings como hash. A tabela irmã tem mais linhas que o base, então a razão
+entre os dois só piora.
+
+`alertGroup` e `manager` ficam de fora do histórico mesmo tendo bitmap no base:
+o bitmap custa (distintos × rows / 8), e as rows aqui são as de EVENTOS, não as
+de entidades. É por isso que o índice não é herdado — herdar multiplicaria o
+custo sem ninguém pedir.
+
+### O que dimensionar antes
+
+| Grandeza | Como sai |
+|---|---|
+| Linhas do histórico | eventos/entidade × entidades ≈ **78M** no backlog |
+| Bytes por linha | menor que a do base: só os campos do evento, sem os preservados pelo merge |
+| Prazo efetivo | `min(expireAfterWrite, o que o maxBytes deixa)` — a série de instante mais antigo diz qual dos dois está mandando |
+
+**O `maxBytes` não é opcional na prática.** Com 78M linhas de backlog, é ele
+que decide o disco, e o `expireAfterWrite` só passa a mandar quando o fluxo
+estabiliza.
+
+### A pegadinha do reprocessamento
+
+Vale a mesma que a recriação de 26/08 registrou, e aqui ela morde mais forte: o
+`_writtenAt` de todo evento é o instante da **ingestão**, não o do evento
+original. Num replay do tópico do início, o histórico inteiro nasce com a data
+do replay — e a retenção por tempo conta a partir dali, não da data real do
+alarme.
+
+Consequência prática: subir o histórico **junto** de um reprocessamento faz os
+78M eventos do backlog entrarem todos dentro da janela de prazo ao mesmo tempo,
+e quem decide o corte passa a ser o `maxBytes`. Subir sobre o dataset já
+materializado é o contrário — a tabela começa vazia e cresce no ritmo do
+tópico, que é o regime para o qual o prazo foi escolhido.
+
+**Ligar o histórico NÃO exige recriar o `events`**, e é a diferença em relação
+às congeladas (débito 83): a tabela irmã é um dataset novo e vazio, e o base
+segue como está.
+
+### O que medir depois de subir
+
+Nesta ordem, porque cada uma responde a pergunta que a anterior abre:
+
+1. `nishidb_history_rows_total` contra `nishidb_ingest_events_total` — a tabela
+   está recebendo tudo?
+2. `nishidb_history_dropped_total` e `nishidb_history_degraded` — perdeu
+   alguma coisa, e por quê?
+3. `nishidb_history_oldest_written_at` — a janela real que ela cobre. Se ficar
+   bem abaixo dos 3 dias declarados, o `maxBytes` está mandando.
+4. `nishidb_history_segments_purged_total{reason}` — confirma qual das duas
+   políticas decidiu.
+5. `nishidb_history_data_bytes` contra `nishidb_history_index_bytes` — quanto
+   do disco a purga NÃO consegue devolver.
+
+E a medida que fecha o dimensionamento: a razão entre bytes por linha do
+histórico e do base. Ela não foi medida ainda, e é ela que transforma "78M
+linhas" num número de gigabytes.
+
 ## Limites conhecidos deste piloto
 
 - **Sem autenticação e sem TLS** (Fase 11). Loopback é a única proteção, e por

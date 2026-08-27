@@ -48,6 +48,13 @@ type dataset struct {
 	st  *storage.Store
 	mat *materializer.Materializer
 
+	// irma é a tabela histórica deste dataset, ou nil. Ela é um dataset de
+	// pleno direito para /v1/metadata, /v1/health e as métricas — o que ela
+	// não tem é consumer próprio, compaction e coletor de expiração.
+	irma *dataset
+	// ehHistorico marca a própria tabela irmã.
+	ehHistorico bool
+
 	// cons é nil quando o dataset não declara Kafka ou está com
 	// `enabled: false` — o botão de pausa declarativo.
 	cons *kafka.Consumidor
@@ -206,6 +213,9 @@ func Novo(cfg *config.Config, o Opcoes) (*Servidor, error) {
 	if err := config.ValidaUnicidadeDeGroup(specs); err != nil {
 		return nil, err
 	}
+	if err := validaNomesDeHistorico(specs); err != nil {
+		return nil, err
+	}
 	avisaChavesSemMotor(specs, log)
 
 	// A segurança do §74-78 é resolvida ANTES do bind: falha de credencial,
@@ -307,6 +317,14 @@ func Novo(cfg *config.Config, o Opcoes) (*Servidor, error) {
 		}
 		s.datasets = append(s.datasets, d)
 		s.porNome[d.nome] = d
+		// A irmã entra na lista logo depois do base, e não numa lista à parte:
+		// /v1/metadata, /v1/health e as métricas por dataset a tratam como
+		// qualquer outra, e é isso que a faz aparecer na árvore do DBeaver sem
+		// nenhuma mudança no driver.
+		if d.irma != nil {
+			s.datasets = append(s.datasets, d.irma)
+			s.porNome[d.irma.nome] = d.irma
+		}
 	}
 	// Depois do loop: o coletor percorre a lista pronta, e registrá-lo antes
 	// exporia um scrape com metade dos datasets durante a subida.
@@ -375,13 +393,22 @@ func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*
 	if err := s.eng.Register(spec.Name, compilado, st); err != nil {
 		return nil, fechandoStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}
-	return &dataset{
+	d := &dataset{
 		nome: spec.Name,
 		spec: spec,
 		sch:  compilado,
 		st:   st,
 		mat:  mat,
-	}, nil
+	}
+	// A irmã abre por ÚLTIMO, depois de o base estar inteiro: ela recebe o
+	// dicionário dele e espelha o Compiled dele, e as duas coisas exigem que
+	// ele já exista.
+	irma, err := s.abreHistorico(d, log)
+	if err != nil {
+		return nil, fechandoStore(st, err)
+	}
+	d.irma = irma
+	return d, nil
 }
 
 // fechandoStore devolve o erro original, fechando o Store antes. O erro do
@@ -416,6 +443,7 @@ func (s *Servidor) Roda(ctx context.Context, pprofAddr string) error {
 		"datasets", len(s.datasets), "endereco", s.cfg.Endereco(), "versao", buildinfo.String())
 	s.ligaCompaction(ctx)
 	s.ligaExpiracao(ctx)
+	s.ligaRetencao(ctx)
 
 	var wg sync.WaitGroup
 	for _, d := range s.datasets {
@@ -462,8 +490,24 @@ func (s *Servidor) rodaIngestao(ctx context.Context, d *dataset) {
 			"erro", err.Error())
 		return
 	}
+	// O Store do writer é o PAR quando há tabela irmã: o §48 manda checkpoint
+	// durável antes do commit do offset, e sem incluir o histórico nesse
+	// checkpoint os eventos que ele ainda não gravou sairiam da janela de
+	// replay quando o offset avançasse.
+	var fonte kafka.Store = d.st
+	if d.irma != nil {
+		fonte = storage.ParComHistorico{
+			Store: d.st,
+			Hist:  d.irma.st,
+			AoFalharOHistorico: func(err error) {
+				log.Error("historico.checkpoint_falhou",
+					"a tabela histórica não durabilizou; a ingestão do dataset base segue",
+					"historico", d.irma.nome, "erro", err.Error())
+			},
+		}
+	}
 	cons, err := kafka.Abre(ctx, cfg, kafka.Opcoes{
-		Store:   d.st,
+		Store:   fonte,
 		Mat:     d.mat,
 		Log:     s.log,
 		Metrics: s.reg,
@@ -709,8 +753,14 @@ func (s *Servidor) encerra() error {
 // fechaDatasets faz o quiesce de cada Store, que é o que devolve o flock.
 func (s *Servidor) fechaDatasets() error {
 	var errs []error
-	for _, d := range s.datasets {
-		if d.st != nil {
+	// Ordem INVERSA à da abertura, e a razão é o dicionário compartilhado: a
+	// irmã entra na lista logo depois do seu base, então fechar de trás para
+	// frente garante que ela sempre feche ANTES dele. Na ordem direta, o base
+	// fecharia o fields.dict enquanto a passada de retenção da irmã ainda
+	// pudesse estar num Checkpoint que o lê — e o Close dela é justamente
+	// quem cancela e aguarda essa passada.
+	for i := len(s.datasets) - 1; i >= 0; i-- {
+		if d := s.datasets[i]; d.st != nil {
 			errs = append(errs, d.st.Close())
 		}
 	}

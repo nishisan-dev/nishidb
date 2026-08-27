@@ -1116,6 +1116,193 @@ primary nomear a key, e esquecê-la exige `tombstoneRetention`, que ainda não
 tem motor. Cada entidade expirada deixa um resíduo do tamanho da lápide
 (header + key + 11 bytes).
 
+## A tabela histórica
+
+![Tabela histórica: do evento cru à linha, o que o Apenda não faz, e a retenção por prazo e por tamanho](https://uml.nishisan.dev/proxy?src=https://git-raw.nishisan.dev/nishisan-dev/nishidb/main/docs/diagrams/historico_flow.puml)
+
+O produto materializa **estado corrente**, e é isso que o torna cego ao que a
+origem mandou: cada evento é mergeado no record da entidade e a versão anterior
+vira garbage que a compaction recupera. Descobrir por que uma coluna tem
+determinado valor exige inferir o merge a partir do resultado.
+
+O bloco `history` acrescenta uma **segunda tabela por dataset**, com as mesmas
+colunas tipadas e uma linha por evento:
+
+```yaml
+history:
+  suffix: _history          # default; a tabela é <name><suffix>
+  expireAfterWrite: 7d      # opcional
+  maxBytes: 40GiB           # opcional; teto dos SEGMENTOS DE DADOS
+  segmentSize: 128MiB       # opcional; granularidade da purga
+  rawPayload: false         # opcional; acrescenta a coluna _raw
+  fields:                   # opcional; só overrides de índice
+    identifier: { index: hash }
+```
+
+Declarar o bloco sem nenhuma das duas políticas de retenção é **recusado**: um
+histórico que não expira e não tem teto é disco que cresce para sempre, e
+aceitá-lo em silêncio é a configuração que mente do débito 37. O teto precisa
+comportar quatro segmentos, porque o corrente nunca é purgado.
+
+**A consulta às duas tabelas sai de graça.** A irmã é registrada no motor sob o
+próprio nome, e o driver JDBC já roteia pelo nome que está no FROM
+(`NishiStatement.java:76`). `SELECT ... FROM events_history` funciona da mesma
+conexão a `events` sem uma linha de mudança em lexer, parser, binder,
+protocolo, client Python ou driver.
+
+### Um dicionário, dois Compiled
+
+É o ponto que decide se as duas tabelas têm de fato as mesmas colunas.
+
+A irmã **não tem `fields.dict` próprio**: ela usa o do dataset base. O payload
+que ela guarda é o mesmo que o patch do base montou, endereçado por FieldID —
+dois dicionários independentes atribuiriam ids pelo mesmo algoritmo
+determinístico e coincidiriam até o primeiro campo autodescoberto, o primeiro
+teto de campos alcançado num só dos dois, ou a primeira recriação de um deles.
+A partir dali a mesma coluna teria ids diferentes nas duas tabelas e o payload
+decodificaria colunas trocadas, **sem erro e com o CRC batendo**.
+
+O `Compiled` é próprio, porque três coisas diferem: o nome (o binder o confere
+contra o FROM), os índices declarados em `history.fields`, e a ausência da key,
+da sequence e das colunas congeladas.
+
+O dicionário resolve o restart; ele não resolve a sessão. Num dataset de
+universo aberto, a chave promovida a coluna **depois** da subida só existiria no
+`Compiled` do base — a mesma consulta responderia numa tabela e diria "coluna
+não existe" na outra até o processo reiniciar. `Compiled.Espelha` registra o
+par, e `ResolveUnknown`, `ResolveAninhado` e `FixAutoType` propagam.
+
+### O que entra na linha, e o que não entra
+
+O enxerto fica em `Apply`, **depois do Parse e antes do stale check**. Três
+consequências, e as três são o desenho:
+
+| Fato | Por quê |
+|---|---|
+| `patch.entries` **é** o evento cru mapeado | as colunas derivadas de `extract` já estão resolvidas e o `_writtenAt` já foi injetado — nenhum decode a mais |
+| o evento **stale** também é gravado | é justamente o que se quer ver ao depurar um descarte por sequence |
+| o `_expiresIn` não entra | ele ainda não foi emitido, e o prazo por entidade não significa nada aqui |
+
+**As congeladas saem.** A captura emite a entry com o valor CORRENTE da origem,
+e é o merge que preserva o primeiro; sem merge, `originalSeverity` seria igual a
+`severity` em toda linha — duplicação com cara de informação.
+
+**`merge: sum` guarda a PARCELA**, não o acumulado. É o que a origem mandou, que
+é o que se quer ver ao depurar um total.
+
+**A coluna `_raw`** é opcional e entra na posição do FieldID dela, não no fim: o
+payload exige ordem estritamente crescente, e toda coluna descoberta depois do
+Compile da irmã ganha um id acima do dela. É ela que permite gravar o evento que
+**não parseia** — o ponto cego em que um JSON inválido é hoje apenas um número
+num contador. Falha de infra não vira linha: não é o evento que está errado.
+
+### O modo é durável, e a divergência é recusa
+
+O modo viaja numa **seção crítica** da cauda TLV do manifest (`0x8002`), ao lado
+da marca-d'água de retenção. Crítica porque o modo de falha que ela impede não é
+índice incompleto: é abrir um log append-only como se fosse estado corrente,
+com cada entidade aparecendo uma vez por evento e o CRC batendo em todas. A
+direção inversa é pior — sem primary, o primeiro `Apenda` duplicaria uma
+entidade de forma durável.
+
+O dataset materializado tem modo e marca zerados e continua gravando um
+manifest **v1**, byte a byte igual ao de antes desta seção existir: o rollback
+segue possível para quem nunca declarou `history`.
+
+No modo histórico, `primary.idx` e `sequences.idx` **não abrem** — a primary É o
+mecanismo de dedup e a sequence só serve ao stale check. `expiry.idx` e
+`prazos.idx` também não: o prazo ali é do dataset, não da linha. Sobra o
+`locations.idx`, que é o commit point de visibilidade.
+
+### Retenção: exata na leitura, por segmento no disco
+
+`expireAfterWrite: 7d` significa sete dias, e não "sete dias mais o resto do
+segmento". A visibilidade é decidida por uma **marca-d'água** de rowId, achada
+por busca binária a cada passada — O(log n) preads, 27 leituras numa tabela de
+100 milhões de linhas.
+
+A busca binária é possível por uma propriedade que só esta tabela tem: os
+appends são serializados pelo mutex do writer e o `_writtenAt` é o relógio da
+ingestão, então ele é **não-decrescente por rowId**. No dataset materializado a
+mesma pergunta exige varrer o índice de escritas, porque cada update reescreve o
+instante de uma linha qualquer.
+
+Instante **desconhecido nunca vence**, e é a mesma regra do coletor do §57:
+presumir que venceu apagaria dado por omissão.
+
+O disco volta por **descarte de segmento inteiro**, reusando os quatro passos da
+aposentadoria que a compaction já tinha — sem o copy-forward antes, porque aqui
+não há record vivo a copiar. A ordem é a garantia: a marca anda ANTES de
+qualquer byte sair do disco, e o primeiro dos quatro passos é o `Checkpoint` que
+a torna durável. Na ordem inversa, um crash deixaria locations vivas apontando
+para um arquivo que já não existe.
+
+O prefixo morto do `locations.idx` sai por `fallocate(PUNCH_HOLE)`. É a exceção
+deliberada à regra do `allocate`, e ela tem argumento: a regra existe porque
+página esparsa mais disco cheio no writeback mata o processo com SIGBUS — mas
+isso vale para página que ainda vai ser **escrita**, e rowId nunca regride nem é
+reutilizado. O que sobra é leitura, e ler um buraco não aloca. Filesystem sem
+suporte degrada em **espaço**, nunca em correção.
+
+**`maxBytes` governa os segmentos de dados, e só eles**, porque é o que a purga
+sabe devolver. Índices e `locations.idx` são publicados em separado — um teto
+que a purga não consegue perseguir seria um teto que mente. E quando o teto
+morde, ele **empurra a marca**: honrar a promessa sobre disco significa deixar
+de enxergar linhas que o prazo ainda não tinha vencido.
+
+### Falha do histórico não derruba a ingestão
+
+O histórico é ferramenta; o produto é o dataset base. Um erro em `Apenda` conta,
+marca a degradação como **sticky** e segue — sem a marca, cada evento retentaria
+um disco cheio e o log viraria uma linha por evento sobre uma condição que não
+muda sozinha. O `ApplyResult` não muda.
+
+O checkpoint da irmã acontece **antes** do base, que é a ordem do §48 aplicada a
+mais um arquivo: o do base torna a posição da fonte durável, então um crash
+entre os dois deixa o offset atrás dos dois e o replay produz **duplicatas,
+nunca buracos**. A falha da irmã não bloqueia o checkpoint do base — bloqueá-la
+travaria o avanço do offset, e a ingestão de produção pararia por causa da
+tabela de debug.
+
+### Como se enxerga isso em produção
+
+O bloco `history` do `/v1/stats` e as séries correspondentes do `/metrics` saem
+da MESMA leitura de snapshot, pela razão de sempre: dois contadores para o mesmo
+fato divergem no dia em que um caminho de erro esquece de somar.
+
+| Série | Responde |
+|---|---|
+| `nishidb_history_rows_total` / `_dropped_total` | a tabela está COMPLETA? |
+| `nishidb_history_degraded` | ela parou de receber? |
+| `nishidb_history_data_bytes` | o que o `maxBytes` governa |
+| `nishidb_history_index_bytes` | o que a purga NÃO devolve, medido em blocos |
+| `nishidb_history_oldest_written_at` | a janela real que a tabela cobre |
+| `nishidb_history_segments_purged_total{reason}` | qual das duas políticas está decidindo |
+| `nishidb_history_retention_running` | o motor está de pé? |
+
+`nishidb_history_oldest_written_at` é a que se olha primeiro: é ela que mostra o
+`maxBytes` engolindo o `expireAfterWrite` declarado.
+
+Os bytes de índice são medidos em **blocos** (`st_blocks`), e não pelo tamanho
+aparente. A diferença não é cosmética: a purga libera o prefixo morto com
+punch-hole, o que devolve blocos sem mudar o tamanho do arquivo. Somar `Size()`
+mostraria disco que já voltou ao dispositivo — a mesma classe de erro do débito
+78, com o sinal trocado.
+
+### Limites conhecidos
+
+- **Não há backfill.** A tabela começa vazia no momento em que é ligada, e não
+  há como preenchê-la: o base guarda estado mergeado, não os eventos. Ligar a
+  chave **não** exige recriar o dataset, que é a diferença em relação às
+  congeladas (débito 83).
+- **`_writtenAt` é o instante da INGESTÃO**, não o do evento. Num
+  reprocessamento do tópico, o histórico inteiro nasce com a data do replay.
+- **A irmã não abre sozinha.** Ela usa o dicionário do base, então quem a abrir
+  precisa abrir o base primeiro — e é por isso que ela não aparece em
+  `datasets.directory`.
+- **`_raw` dobra o disco** em eventos JSON grandes. Por isso o default é
+  `false`.
+
 ## Referência de tipos de campo
 
 O que `type:` aceita no YAML do dataset, o que cada um aceita como **entrada** e
@@ -1354,8 +1541,9 @@ quem só deveria raspar `/metrics`.
 
 ## O que ainda não existe
 
-Índice hash físico, TTL e tombstones por retenção (M6), e **backfill de índice
-bitmap** (débito 22): declarar `index: bitmap` sobre um dataset que já tem
+Índice hash físico, TTL e tombstones por retenção (M6), **backfill da tabela
+histórica** (ela começa vazia quando é ligada, e o dataset base não guarda os
+eventos que a preencheriam), e **backfill de índice bitmap** (débito 22): declarar `index: bitmap` sobre um dataset que já tem
 linhas continua sendo recusado na ABERTURA, porque o índice cobriria só os
 records futuros e a query indexada omitiria as linhas antigas. Pela mesma razão
 e com o mesmo remédio, acrescentar `extract` a um dataset com linhas também é

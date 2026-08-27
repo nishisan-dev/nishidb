@@ -95,13 +95,13 @@ func runQuery(args []string, amb Ambiente) int {
 		return ExitUso
 	}
 
-	st, compilado, err := abreDataset(cfg, *dataset)
+	st, compilado, fecha, err := abreParaConsulta(cfg, *dataset)
 	if err != nil {
 		fmt.Fprintln(amb.Stderr, "query:", err)
 		dicaDeServidor(err, *argConfig, *dataset, amb)
 		return codigoDoErro(err)
 	}
-	defer st.Close()
+	defer fecha()
 
 	eng := query.NewEngine()
 	if err := eng.Register(*dataset, compilado, st); err != nil {

@@ -562,6 +562,54 @@ nó). Declarar `bitmap` numa coluna de milhares de valores distintos custa
 milhares de arquivos; declarar `hash` numa coluna de três valores funciona, e
 desperdiça a tabela.
 
+#### Guardar o evento cru: a tabela histórica
+
+O dataset materializa **estado corrente**, e o que a origem mandou não
+sobrevive ao merge. O bloco `history` acrescenta uma **segunda tabela**, com as
+mesmas colunas tipadas e uma linha por evento — sem deduplicação, sem merge e
+sem update:
+
+```yaml
+name: events
+history:
+  suffix: _history          # default; a tabela é events_history
+  expireAfterWrite: 7d      # prazo de uma linha, contado da escrita
+  maxBytes: 40GiB           # teto dos segmentos de dados
+  segmentSize: 128MiB       # opcional; granularidade da purga
+  rawPayload: false         # opcional; acrescenta a coluna _raw
+  fields:                   # opcional; só overrides de índice
+    identifier: { index: hash }
+```
+
+Da **mesma conexão**, as duas tabelas respondem:
+
+```sql
+SELECT severity, lastSeen FROM events         WHERE node = 'sw-01'
+SELECT severity, lastSeen FROM events_history WHERE node = 'sw-01' ORDER BY _writtenAt
+```
+
+As colunas são as mesmas, com os mesmos tipos — inclusive as derivadas de
+`extract`. O que a irmã **não** tem: as colunas congeladas (são produto do
+merge, e não há merge ali) e a key (sem primary não há dedup, que é a definição
+da tabela). Uma coluna `merge: sum` guarda a **parcela** do evento, não o
+acumulado.
+
+Declarar o bloco **sem** `expireAfterWrite` nem `maxBytes` é recusado: um
+histórico sem retenção é disco que cresce para sempre. Os dois convivem, e vence
+o primeiro a bater — a série `nishidb_history_oldest_written_at` é a que mostra
+o teto de tamanho engolindo o prazo declarado.
+
+`rawPayload: true` acrescenta a coluna `_raw` com os bytes originais do evento,
+e é ela que permite gravar também o evento que **não parseia** — hoje um JSON
+inválido é apenas um número num contador. Ela dobra o disco da tabela em eventos
+grandes, e por isso o default é `false`.
+
+Dois limites que valem saber antes de ligar: **não há backfill** (a tabela
+começa vazia, e o dataset base não guarda os eventos que a preencheriam — mas
+ligá-la **não** exige recriar o dataset), e o `_writtenAt` é o instante da
+**ingestão**, não o do evento. A mecânica inteira está em
+[`docs/architecture.md`](docs/architecture.md), seção "A tabela histórica".
+
 `mode: replace` (no lugar de `merge`) faz cada evento substituir o estado
 inteiro da chave. Ele funciona, mas **não aparece no resumo do `ingest`**: a
 quebra impressa é criados/atualizados/stale, e a substituição não cai em

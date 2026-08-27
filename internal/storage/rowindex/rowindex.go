@@ -402,3 +402,26 @@ func (p *Prazos) Msync() error { return p.dense.region.Msync() }
 
 // Close libera o mapeamento.
 func (p *Prazos) Close() error { return p.dense.region.Close() }
+
+// LiberaAte devolve ao filesystem os blocos das entradas ABAIXO de rowID.
+//
+// A purga do histórico é de segmento e move uma marca-d'água, não limpa
+// entrada por entrada: zerar milhões de u64 sob o lock do writer a cada
+// passada disputaria a escrita por um trabalho proporcional ao que foi
+// apagado, quando o que mudou é um número só. O custo dessa escolha é o
+// prefixo morto do arquivo, que continua alocado — e é ele que sai aqui.
+//
+// O tamanho APARENTE do arquivo não muda: um índice denso é endereçado por
+// offset, e encolhê-lo pela frente mudaria o endereço de toda entrada viva.
+// Quem quiser medir o que o histórico ocupa de verdade precisa ler blocos
+// (st_blocks), não Size().
+//
+// Erro de filesystem sem suporte sobe para o chamador decidir: é degradação
+// de espaço, nunca de correção.
+func (l *Locations) LiberaAte(rowID types.RowID) error {
+	fim := entryOff(rowID)
+	if fim <= headerSize {
+		return nil
+	}
+	return l.dense.region.LiberaBlocos(headerSize, fim-headerSize)
+}

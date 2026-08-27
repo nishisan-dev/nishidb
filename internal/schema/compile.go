@@ -284,6 +284,14 @@ func (c *Compiled) FixAutoType(f *CompiledField, t types.FieldType) error {
 		return err
 	}
 	f.autoType.Store(uint32(t))
+	// O typeHint é DURÁVEL e compartilhado, então o espelho já o veria no
+	// próximo restart. Propagar agora é o que impede a janela em que a mesma
+	// coluna tem tipo no dataset base e "sem tipo conhecido" na tabela irmã —
+	// janela em que o binder recusaria, na irmã, a comparação que aceita no
+	// base.
+	for _, m := range c.listaDeEspelhos() {
+		m.fixaTipoEspelhado(f.ID, t)
+	}
 	return nil
 }
 
@@ -317,6 +325,26 @@ type Compiled struct {
 	Errors ErrorsSpec
 
 	Key, Seq *CompiledField
+
+	// espelhos são os Compiled que recebem, em RUNTIME, toda coluna que este
+	// aqui descobrir. O único caso hoje é a tabela histórica: ela tem Compiled
+	// próprio (o nome, os índices e a ausência das congeladas diferem), mas
+	// compartilha o dicionário — e sem o espelho uma chave promovida a coluna
+	// depois da subida seria consultável no dataset base e invisível na tabela
+	// irmã até o restart, quando a reidratação pelo dicionário a traria de
+	// volta. Divergência entre as duas tabelas é exatamente o que a feature
+	// existe para não ter.
+	//
+	// atomic.Pointer, e não um campo sob c.mu, porque os dois pontos de
+	// propagação estão em regimes de lock diferentes: ResolveUnknown e
+	// ResolveAninhado já seguram c.mu na escrita, e FixAutoType não segura
+	// nada. Ler um slice imutável por ponteiro atômico serve aos dois sem
+	// inventar uma segunda ordem de travamento.
+	//
+	// Espelho NÃO se encadeia: quem recebe a propagação não a repassa. Um
+	// espelho de espelho tomaria dois locks em cadeia a partir do writer, e o
+	// produto não tem caso que peça isso.
+	espelhos atomic.Pointer[[]*Compiled]
 
 	// Congeladas são as colunas com frozenFrom, em ordem de FieldID.
 	// Pré-computada e ordenada pela mesma razão das Derivadas: o materializer
@@ -482,8 +510,18 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 	// LookupOrCreate queima ids na ordem em que é chamado, e essa ordem decide
 	// o mapeamento nome→id de um dataset NOVO, gravado para sempre. _writtenAt
 	// primeiro, _expiresIn depois, sempre — nunca reordene.
+	//
+	// Os dois campos têm gatilhos DIFERENTES, e separá-los foi o que a tabela
+	// histórica exigiu: ela precisa do instante de escrita para a retenção por
+	// tempo, e não tem prazo por linha para guardar. Enquanto o gatilho era um
+	// só, ligar `history.expireAfterWrite` num dataset sem regras de TTL
+	// produzia um histórico sem `_writtenAt` — e um motor de retenção sem nada
+	// contra o que comparar, que não expiraria coisa alguma sem erro e sem log.
+	if s.ExigeInstanteDeEscrita() {
+		names = append(names, CampoInstanteDeEscrita)
+	}
 	if len(c.RegrasTTL) > 0 {
-		names = append(names, CampoInstanteDeEscrita, CampoDePrazo)
+		names = append(names, CampoDePrazo)
 	}
 	sort.Strings(names)
 
@@ -662,6 +700,16 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 	// campo. Num universo fechado o que sobra no dicionário é resíduo de uma
 	// configuração anterior, e o operador que tirou o campo da lista o quer
 	// fora.
+	// O dicionário é COMPARTILHADO entre o dataset base e a tabela irmã, e a
+	// reidratação abaixo adota tudo o que estiver nele. Sem estes nomes fora
+	// do universo, cada lado adotaria as colunas do outro como campo auto sem
+	// tipo: o `_raw` apareceria no SELECT * do base sempre nulo, e a congelada
+	// e o `_expiresIn` voltariam ao da irmã depois de a derivação os ter
+	// tirado — os três com `IS NULL` eterno e recusa de comparação por "sem
+	// tipo conhecido", que é pior do que a coluna não existir.
+	for _, nome := range nomesForaDoUniverso(s) {
+		c.exclude[nome] = struct{}{}
+	}
 	if c.IncludeAll && c.Unknown == UnknownInclude {
 		for i := 1; i <= dict.Len(); i++ {
 			id := types.FieldID(i)
@@ -707,7 +755,12 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 		}
 	}
 
-	if c.Key == nil {
+	// Key nil é erro quando a spec DECLARA uma key — é o include que a deixou
+	// de fora. A spec que não declara nenhuma é a do histórico, e ali a
+	// ausência é o desenho: sem key não há primary, sem primary não há dedup,
+	// e é o Key nil que impede o planner de eleger o point lookup (planner.go:94)
+	// sobre um Store que não tem contra o que resolvê-lo.
+	if s.Materialization.Key.Field != "" && c.Key == nil {
 		return nil, specErrf("materialization.key.field %q fora do conjunto incluído", s.Materialization.Key.Field)
 	}
 	if seqField != "" && c.Seq == nil {
@@ -861,6 +914,7 @@ func (c *Compiled) ResolveAninhado(pai *CompiledField, nomeQualificado, caminho 
 	}
 	c.byName[cf.Name] = cf
 	c.byID[cf.ID] = cf
+	c.propagaAosEspelhos(cf)
 	return cf, nil
 }
 
@@ -1084,5 +1138,6 @@ func (c *Compiled) ResolveUnknown(name []byte) (*CompiledField, error) {
 	}
 	c.byName[cf.Name] = cf
 	c.byID[cf.ID] = cf
+	c.propagaAosEspelhos(cf)
 	return cf, nil
 }

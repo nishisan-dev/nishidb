@@ -260,14 +260,25 @@ class DriverIT {
         }
     }
 
-    /** O erro do servidor chega com o SQLState certo, e não como falha genérica. */
+    /**
+     * O erro do servidor chega com o SQLState certo, e não como falha genérica.
+     *
+     * <p>A cláusula recusada aqui é o GROUP BY, e não o ORDER BY como era até
+     * a v1 ganhar ordenação: o ORDER BY passou a ser suportado (três modos, em
+     * internal/query/executor/sort.go) e saiu de `clausulasNaoSuportadas`,
+     * mas este teste ficou para trás e cobrava dele um erro que o servidor
+     * deixou de emitir. O GROUP BY continua recusado e mantém a intenção
+     * original — provar que UNSUPPORTED_CLAUSE chega traduzido —, e o
+     * ORDER BY ganhou asserção PRÓPRIA, do outro lado, em
+     * {@link #oOrderByEhSuportado()}.
+     */
     @Test
     void oErroDoServidorChegaTraduzido() throws SQLException {
         try (Connection c = conecta(); Statement st = c.createStatement()) {
             SQLException clausula = assertThrows(SQLException.class,
-                    () -> st.executeQuery("SELECT id FROM todos_os_tipos ORDER BY id"));
+                    () -> st.executeQuery("SELECT id FROM todos_os_tipos GROUP BY id"));
             assertEquals("0A000", clausula.getSQLState(), clausula.getMessage());
-            assertTrue(clausula.getMessage().contains("ORDER BY"), clausula.getMessage());
+            assertTrue(clausula.getMessage().contains("GROUP BY"), clausula.getMessage());
 
             SQLException sintaxe = assertThrows(SQLException.class,
                     () -> st.executeQuery("SELECT id FROM"));
@@ -276,6 +287,43 @@ class DriverIT {
             SQLException tabela = assertThrows(SQLException.class,
                     () -> st.executeQuery("SELECT id FROM nao_existe"));
             assertEquals("42S02", tabela.getSQLState(), tabela.getMessage());
+        }
+    }
+
+    /**
+     * O ORDER BY atravessa o driver, inclusive por coluna que NÃO está na
+     * projeção — que é o que o getMaxColumnsInOrderBy e o
+     * supportsOrderByUnrelated do DatabaseMetaData prometem.
+     *
+     * <p>Ele existe porque a asserção que este arquivo tinha era a negativa:
+     * cobrava do servidor um erro que ele deixou de emitir, e passou a falhar
+     * quando a ordenação entrou. Uma negativa obsoleta some ao ser corrigida;
+     * sem esta positiva no lugar, o driver ficaria sem nenhuma prova de que
+     * ordena.
+     */
+    @Test
+    void oOrderByEhSuportado() throws SQLException {
+        try (Connection c = conecta(); Statement st = c.createStatement()) {
+            try (ResultSet rs = st.executeQuery(
+                    "SELECT id FROM todos_os_tipos ORDER BY id LIMIT 5")) {
+                String anterior = null;
+                while (rs.next()) {
+                    String atual = rs.getString("id");
+                    if (anterior != null) {
+                        assertTrue(anterior.compareTo(atual) <= 0,
+                                "fora de ordem: " + anterior + " veio antes de " + atual);
+                    }
+                    anterior = atual;
+                }
+                assertNotNull(anterior, "o ORDER BY não devolveu linha nenhuma");
+            }
+            // Coluna de ordenação FORA da projeção: é o caso que o
+            // supportsOrderByUnrelated declara, e o que uma asserção só sobre
+            // `ORDER BY id` não distinguiria.
+            try (ResultSet rs = st.executeQuery(
+                    "SELECT id FROM todos_os_tipos ORDER BY inteiro LIMIT 1")) {
+                assertTrue(rs.next(), "ORDER BY por coluna não projetada não devolveu linha");
+            }
         }
     }
 

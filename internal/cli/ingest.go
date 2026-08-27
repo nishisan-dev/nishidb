@@ -12,6 +12,7 @@ import (
 	nishiconfig "github.com/nishisan-dev/nishidb/internal/config"
 	"github.com/nishisan-dev/nishidb/internal/materializer"
 	"github.com/nishisan-dev/nishidb/internal/schema"
+	"github.com/nishisan-dev/nishidb/internal/storage"
 )
 
 // Padrões do checkpoint periódico.
@@ -126,7 +127,7 @@ func runIngest(args []string, amb Ambiente) int {
 	}
 	defer fechar()
 
-	st, compilado, err := abreDataset(cfg, *dataset)
+	st, compilado, spec, err := abreDataset(cfg, *dataset)
 	if err != nil {
 		fmt.Fprintln(amb.Stderr, "ingest:", err)
 		return codigoDoErro(err)
@@ -135,12 +136,36 @@ func runIngest(args []string, amb Ambiente) int {
 	// comando seguinte assumir o dataset.
 	defer st.Close()
 
+	// A tabela irmã abre DEPOIS do base e fecha ANTES dele (o defer é LIFO):
+	// ela usa o dicionário do base, e fechá-lo primeiro derrubaria o
+	// checkpoint dela no meio.
+	hist, campoRaw, err := abreHistorico(cfg, spec, compilado, st.FieldDict())
+	if err != nil {
+		_, _ = fmt.Fprintln(amb.Stderr, "ingest:", err)
+		return codigoDoErro(err)
+	}
+	if hist != nil {
+		// O erro do Close da irmã é REPORTADO, e não engolido como o do base
+		// logo acima: ali o quiesce que interessa é o do dataset de produção,
+		// e aqui um Close que falha significa linha de evidência que não
+		// chegou ao disco. Ele não muda o código de saída — a ingestão do base
+		// terminou —, mas quem ingeriu precisa saber.
+		defer func() {
+			if err := hist.Close(); err != nil {
+				_, _ = fmt.Fprintln(amb.Stderr, "ingest: fechando a tabela histórica:", err)
+			}
+		}()
+	}
+
 	mat, err := materializer.New(compilado, st)
 	if err != nil {
 		// Regra de TTL que não compila é erro de CONFIGURAÇÃO: o dataset não
 		// sobe, e a ingestão nem começa.
 		fmt.Fprintln(amb.Stderr, "ingest:", err)
 		return codigoDoErro(err)
+	}
+	if hist != nil {
+		mat.LigaHistorico(hist, campoRaw)
 	}
 	var resumo resumoIngest
 	inicio := time.Now()
@@ -175,7 +200,7 @@ func runIngest(args []string, amb Ambiente) int {
 		if err := amb.Ctx.Err(); err != nil {
 			fmt.Fprintln(amb.Stderr, "ingest: interrompido; gravando checkpoint do que foi aplicado")
 			motivo := ExitInterromp
-			if cperr := st.Checkpoint(); cperr != nil {
+			if cperr := checkpointDoPar(st, hist); cperr != nil {
 				fmt.Fprintln(amb.Stderr, "ingest: checkpoint final:", cperr)
 				motivo = desfechoMaisGrave(motivo, codigoDoErro(cperr))
 			}
@@ -226,7 +251,7 @@ func runIngest(args []string, amb Ambiente) int {
 		}
 
 		if precisaCheckpoint(*everyN, resumo.lidos, ultimoCP, cfg.IntervaloDeCheckpoint()) {
-			if err := st.Checkpoint(); err != nil {
+			if err := checkpointDoPar(st, hist); err != nil {
 				fmt.Fprintln(amb.Stderr, "ingest: checkpoint:", err)
 				return encerra(codigoDoErro(err))
 			}
@@ -253,7 +278,7 @@ func runIngest(args []string, amb Ambiente) int {
 	if erroLeitura != nil {
 		motivo = ExitPerdaDeDados
 	}
-	if err := st.Checkpoint(); err != nil {
+	if err := checkpointDoPar(st, hist); err != nil {
 		fmt.Fprintln(amb.Stderr, "ingest: checkpoint final:", err)
 		motivo = desfechoMaisGrave(motivo, codigoDoErro(err))
 	}
@@ -322,4 +347,17 @@ func linhaPorCategoria(w io.Writer, rotulo string, total int64, por [materialize
 		}
 	}
 	fmt.Fprintln(w)
+}
+
+// checkpointDoPar durabiliza a tabela irmã ANTES do dataset base.
+//
+// Mesma ordem do §48 aplicada ao servidor, e pela mesma razão: o checkpoint
+// do base é o ponto a partir do qual o trabalho é considerado feito, e um
+// crash entre os dois precisa deixar o histórico à FRENTE, nunca atrás. A
+// falha da irmã não impede o do base — o produto é o dataset materializado.
+func checkpointDoPar(base, hist *storage.Store) error {
+	if hist == nil {
+		return base.Checkpoint()
+	}
+	return storage.ParComHistorico{Store: base, Hist: hist}.Checkpoint()
 }

@@ -308,7 +308,6 @@ class NishiDatabaseMetaDataTest {
                 assertFalse(m.supportsOuterJoins());
                 assertFalse(m.supportsSubqueriesInComparisons());
                 assertFalse(m.supportsUnion());
-                assertFalse(m.supportsOrderByUnrelated());
                 assertFalse(m.supportsTransactions());
                 assertFalse(m.supportsStoredProcedures());
                 assertFalse(m.supportsBatchUpdates());
@@ -328,6 +327,38 @@ class NishiDatabaseMetaDataTest {
                 assertEquals(java.sql.RowIdLifetime.ROWID_UNSUPPORTED, m.getRowIdLifetime());
                 assertEquals(DatabaseMetaData.sqlStateSQL, m.getSQLStateType());
                 assertEquals(1, m.getMaxTablesInSelect());
+            } catch (SQLException e) {
+                throw new IllegalStateException(e);
+            }
+        });
+    }
+
+    /**
+     * O ORDER BY existe, e o metadado precisa dizer as três coisas certas
+     * sobre ele — nem uma a menos, nem uma a mais.
+     *
+     * <p>As três foram MEDIDAS contra o servidor, e não deduzidas da spec:
+     * ordenar por coluna fora da projeção funciona, ordenar por posição
+     * ({@code ORDER BY 1}) e por expressão ({@code ORDER BY a + 1}) são
+     * recusados na sintaxe, e o parser cobra teto de 16 chaves.
+     *
+     * <p>Enquanto {@code supportsOrderByUnrelated} respondia false, um
+     * construtor de query gráfico desabilitava a ordenação por coluna não
+     * projetada — o usuário concluía que o banco não faz o que ele faz. E
+     * enquanto {@code getMaxColumnsInOrderBy} respondia zero ("sem limite"),
+     * quem monta ORDER BY por programa descobriria o 16 por erro de sintaxe
+     * em produção.
+     */
+    @Test
+    void oMetadadoDescreveOOrderByComoEleE() throws Exception {
+        comMetadata(m -> {
+            try {
+                assertTrue(m.supportsOrderByUnrelated(),
+                        "o servidor ordena por coluna fora da projeção");
+                assertFalse(m.supportsExpressionsInOrderBy(),
+                        "expressão no ORDER BY é erro de sintaxe no servidor");
+                assertEquals(16, m.getMaxColumnsInOrderBy(),
+                        "o teto é o MaxOrderKeys do parser, não 'sem limite'");
             } catch (SQLException e) {
                 throw new IllegalStateException(e);
             }

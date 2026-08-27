@@ -213,6 +213,14 @@ type Metrics struct {
 	// coluna que nunca congelou.
 	congeladasCapturadas atomic.Int64
 	efeitos              efeitosDoMerge
+
+	// histLinhas conta as linhas gravadas na tabela irmã e histDescartadas os
+	// eventos que não viraram linha nenhuma. Os dois juntos são o que diz se
+	// o histórico está COMPLETO — e é a pergunta que importa numa tabela cuja
+	// razão de existir é servir de evidência.
+	histLinhas      atomic.Int64
+	histDescartadas atomic.Int64
+	histDegradado   atomic.Bool
 }
 
 // MetricsSnapshot é a leitura consistente-por-contador dos contadores. Não é
@@ -244,6 +252,13 @@ type MetricsSnapshot struct {
 	// verdade, então ele precisa ser visível sem ninguém ir procurar.
 	Acumuladas int64
 	Saturadas  int64
+
+	// HistoricoLinhas e HistoricoDescartadas contam as duas metades da tabela
+	// irmã; HistoricoDegradado diz se ela parou de receber. Zeradas no dataset
+	// que não declara `history`.
+	HistoricoLinhas      int64
+	HistoricoDescartadas int64
+	HistoricoDegradado   bool
 }
 
 // Materializer aplica eventos JSON sobre o estado materializado de um
@@ -260,6 +275,19 @@ type Materializer struct {
 	prevRec types.Record // estado corrente lido; janela sobre prevBuf
 	prevBuf []byte       // destino do GetByKey
 	outBuf  []byte       // payload de saída
+
+	// hist é a tabela irmã append-only, ou nil no dataset sem `history`.
+	// histRaw é a coluna _raw, ou nil quando `rawPayload` está desligado.
+	// histBuf é reutilizado entre eventos como os demais buffers — o payload
+	// do histórico é montado uma vez por evento, e alocá-lo a cada um
+	// dobraria o custo de GC do caminho quente para a tabela de debug.
+	hist    EscritorDeHistorico
+	histRaw *schema.CompiledField
+	histBuf []byte
+	// histCausa é a degradação STICKY do histórico. Não é atômico porque
+	// pertence à goroutine do writer, como todo o resto daqui; quem observa de
+	// fora lê o espelho em metrics.histDegradado.
+	histCausa error
 
 	// agora é o relógio da injeção do campo de sistema. Campo, e não uma
 	// chamada direta a time.Now, para que um teste de expiração possa avançar
@@ -337,6 +365,9 @@ func (m *Materializer) Metrics() MetricsSnapshot {
 	s.CongeladasPreservadas = m.metrics.efeitos.congeladas.Load()
 	s.Acumuladas = m.metrics.efeitos.acumuladas.Load()
 	s.Saturadas = m.metrics.efeitos.saturadas.Load()
+	s.HistoricoLinhas = m.metrics.histLinhas.Load()
+	s.HistoricoDescartadas = m.metrics.histDescartadas.Load()
+	s.HistoricoDegradado = m.metrics.histDegradado.Load()
 	// events é lido por ÚLTIMO, de propósito: o Apply o incrementa na ENTRADA
 	// e o desfecho na SAÍDA, então ler events primeiro deixaria o writer
 	// avançar entre as leituras e produziria um snapshot com
@@ -362,8 +393,17 @@ func (m *Materializer) Apply(event []byte) ApplyResult {
 	m.metrics.events.Add(1)
 
 	if err := m.patch.Parse(event, m.schema, m.agora()); err != nil {
-		return m.failure(err)
+		res := m.failure(err)
+		// Evento RUIM vai para o histórico com `_raw`, se ele existir: é o
+		// ponto cego que a coluna existe para fechar. Falha de INFRA não vai —
+		// não é o evento que está errado, e gravá-lo faria o histórico
+		// registrar como dado ruim o que é problema de disco nosso.
+		if res.Category.BadEvent() {
+			m.apendaEventoRuimNoHistorico(event)
+		}
+		return res
 	}
+	m.apendaNoHistorico(event)
 
 	var (
 		presenca types.Presenca
