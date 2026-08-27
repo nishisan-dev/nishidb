@@ -267,24 +267,89 @@ o SQL apontou. É muito menos trabalho que a varredura cega anterior, e é o que
 a "Pergunta em aberto 3" do documento de melhorias descreve como alternativa ao
 contador por (coluna, tipo).
 
-## A tabela histórica: o que subir e o que medir
+## A tabela histórica: o que subiu, e o que a primeira medição disse
 
-Ainda **não** subiu. O que segue é o plano, com os números do próprio piloto.
+**Subiu em 26/08/2026, 22:53**, na release `v0.6.0-155-g381cc1f`, com
+`expireAfterWrite: 30d`, `maxBytes: 250GiB` e índice hash em `identifier` e
+`node`. O dataset `events` **não** foi recriado: a tabela irmã nasce vazia e o
+base segue como estava, o que é a diferença em relação às congeladas (débito
+83).
+
+### A medição que contrariou o dimensionamento
+
+Sessenta segundos depois da subida, com o backlog ainda em replay:
+
+| Grandeza | Medido |
+|---|---:|
+| Linhas gravadas | 84.181 |
+| Bytes dos segmentos | 232.978.556 |
+| **Bytes por linha** | **2.767** |
+| Descartadas / degradado | 0 / não |
+
+O número por linha é o que fecha a conta, e ele **derruba o prazo declarado**:
+
+| Pergunta | Resposta |
+|---|---|
+| Quantas linhas cabem em 250 GiB? | 268.435.456.000 / 2.767 = **97 milhões** |
+| Quanto tempo isso é, a 452 ev/s? | **~2,5 dias** |
+| Quanto disco custariam 30 dias? | 1,17 bilhão × 2.767 = **3,24 TB** |
+| Quanto o host tem livre? | **1,1 TB** |
+
+Ou seja: **os 30 dias não são alcançáveis neste host**, nem subindo o teto. O
+`maxBytes` manda sozinho, e a janela real é de dias. Isso não é defeito de
+configuração — as duas políticas convivem por desenho e vence a primeira que
+bate —, mas o `expireAfterWrite: 30d` do YAML é hoje decorativo, e quem ler o
+arquivo sem ler esta tabela vai acreditar nele.
+
+A série que diz a verdade é `nishidb_history_oldest_written_at`. É por ela que
+o bloco deve ser reajustado — com número medido, não estimado.
+
+**A estimativa anterior errou por 5×, e o registro fica.** Antes de subir, duas
+contas indiretas davam 683 B/linha (pelo estado vivo do base) e 3.510 B/linha
+(pela contagem de segmentos menos o copy-forward da compaction). O valor real
+ficou perto do teto do intervalo. A lição é a mesma que a razão eventos/entidade
+já tinha ensinado nesta página: **dimensionamento de tabela histórica não sai de
+aritmética sobre o dataset materializado.** Suba com teto conservador, meça, e
+só então declare o prazo.
+
+### A primeira consulta
+
+O alarme `SBC-TROP-ALERTKEY_PAPIE_NGNTRO_SBC05_192586005` aparece no `events`
+como `severity: 5, type: 1` — aberto e crítico. No histórico, pelo índice hash:
+
+```
+severity 5, type 1
+severity 5, type 1
+severity 0, type 2
+severity 5, type 1
+severity 0, type 2
+severity 5, type 1
+```
+
+Ele está **flapando**: abre crítico, resolve, reabre. O estado corrente não
+tinha como mostrar isso, e é exatamente o que a tabela existe para responder.
+
+### O que ficou registrado do plano original
 
 O piloto é o caso que a feature existe para servir: com 4,38 eventos por
 entidade e ~17,8M entidades, o `events` guarda o estado corrente de cada alarme
 e descarta o caminho que ele percorreu. Depurar "por que esta coluna está
 assim" exige inferir o merge a partir do resultado.
 
-### O YAML a acrescentar
+O que segue é o raciocínio de subida, preservado porque o critério de escolha
+dos índices continua valendo.
+
+### O YAML que subiu
 
 ```yaml
 history:
-  expireAfterWrite: 3d
-  maxBytes: 30GiB
+  expireAfterWrite: 30d
+  maxBytes: 250GiB
   fields:
-    identifier: { index: hash }
-    node:       { index: hash }
+    identifier:
+      index: hash
+    node:
+      index: hash
 ```
 
 `identifier` ganha índice **aqui** e não no base: lá ele é a key e a primary já
@@ -301,17 +366,10 @@ o bitmap custa (distintos × rows / 8), e as rows aqui são as de EVENTOS, não 
 de entidades. É por isso que o índice não é herdado — herdar multiplicaria o
 custo sem ninguém pedir.
 
-### O que dimensionar antes
-
-| Grandeza | Como sai |
-|---|---|
-| Linhas do histórico | eventos/entidade × entidades ≈ **78M** no backlog |
-| Bytes por linha | menor que a do base: só os campos do evento, sem os preservados pelo merge |
-| Prazo efetivo | `min(expireAfterWrite, o que o maxBytes deixa)` — a série de instante mais antigo diz qual dos dois está mandando |
-
-**O `maxBytes` não é opcional na prática.** Com 78M linhas de backlog, é ele
-que decide o disco, e o `expireAfterWrite` só passa a mandar quando o fluxo
-estabiliza.
+**Os índices não podem ser acrescentados depois.** A abertura recusa `index:`
+sobre uma tabela com linhas, pela mesma razão do débito 22 — o índice cobriria
+só o que viesse dali para frente. Foi por isso que os dois subiram junto com a
+tabela, e não numa segunda passada depois de medir.
 
 ### A pegadinha do reprocessamento
 
@@ -331,7 +389,7 @@ tópico, que é o regime para o qual o prazo foi escolhido.
 às congeladas (débito 83): a tabela irmã é um dataset novo e vazio, e o base
 segue como está.
 
-### O que medir depois de subir
+### O que continuar medindo
 
 Nesta ordem, porque cada uma responde a pergunta que a anterior abre:
 
@@ -346,9 +404,11 @@ Nesta ordem, porque cada uma responde a pergunta que a anterior abre:
 5. `nishidb_history_data_bytes` contra `nishidb_history_index_bytes` — quanto
    do disco a purga NÃO consegue devolver.
 
-E a medida que fecha o dimensionamento: a razão entre bytes por linha do
-histórico e do base. Ela não foi medida ainda, e é ela que transforma "78M
-linhas" num número de gigabytes.
+A medida que fechava o dimensionamento — bytes por linha — **saiu**, e está no
+topo desta seção: 2.767. O que falta agora é a mesma medida no regime ESTÁVEL,
+depois que o replay do backlog terminar: o evento de replay e o de fluxo normal
+não têm por que ter o mesmo tamanho, e é o segundo que dimensiona o disco a
+longo prazo.
 
 ## Limites conhecidos deste piloto
 
