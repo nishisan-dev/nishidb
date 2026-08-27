@@ -73,12 +73,22 @@ const (
 	tagCritica = 0x8000
 	// tagHashes é a seção do conjunto de índices hash (§ índice hash físico).
 	tagHashes = 0x8001
+	// tagHistorico é a seção do MODO do dataset e da marca-d'água de
+	// retenção. Ela é crítica pelo pior modo de falha que este formato tem:
+	// um binário que a ignorasse abriria um log append-only de eventos como
+	// se fosse estado corrente materializado, e leria uma tabela em que cada
+	// entidade aparece dezenas de vezes como se cada linha fosse uma entidade.
+	// Não é índice incompleto — é a resposta errada, com o CRC batendo.
+	tagHistorico = 0x8002
 
 	// tlvHeaderSize é `tag u16 | len u32`.
 	tlvHeaderSize = 6
 	// hashInfoSize é `fieldID u16 | slotCount u64`, o mesmo tamanho de uma
 	// entrada de bitmap.
 	hashInfoSize = 10
+
+	// historicoInfoSize é `modo u8 | rowIDBase u64`.
+	historicoInfoSize = 9
 )
 
 var (
@@ -159,7 +169,23 @@ type Manifest struct {
 	// Hashes é a primeira seção da cauda TLV. Vazia mantém o manifest na v1,
 	// byte a byte igual ao que o binário anterior gravava.
 	Hashes []HashInfo
+
+	// Modo é a engine do dataset: 0 materializado, 1 histórico. O tipo é
+	// uint8 cru e não um enum do storage porque este pacote descreve um
+	// FORMATO — importar o vocabulário de quem o consome inverteria a
+	// dependência para ganhar um nome.
+	Modo uint8
+	// RowIDBase é a marca-d'água de retenção do dataset histórico: rowId
+	// abaixo dela foi purgado e não é mais visível. Zero no dataset
+	// materializado, e é isso que o mantém na v1.
+	RowIDBase uint64
 }
+
+// temHistorico diz se a seção 0x8002 precisa ser emitida. O dataset
+// materializado tem os dois campos zerados e continua gravando um manifest v1
+// byte a byte igual ao de antes desta seção existir — o rollback segue
+// possível para quem nunca declarou `history`.
+func (m *Manifest) temHistorico() bool { return m.Modo != 0 || m.RowIDBase != 0 }
 
 // TamanhoDaCaudaTLV devolve quantos bytes a cauda ocupa neste manifest, e
 // ZERO quando não há seção nenhuma — que é o caso em que o manifest continua
@@ -170,11 +196,15 @@ type Manifest struct {
 // exatamente o defeito que deixou a capacidade em 12 quando o layout já
 // gravava 36 por segmento.
 func TamanhoDaCaudaTLV(m *Manifest) int {
-	if len(m.Hashes) == 0 {
-		return 0
+	n := 0
+	if len(m.Hashes) > 0 {
+		// tag+len do registro, o u16 de contagem e as entradas.
+		n += tlvHeaderSize + 2 + len(m.Hashes)*hashInfoSize
 	}
-	// tag+len do registro, o u16 de contagem e as entradas.
-	return tlvHeaderSize + 2 + len(m.Hashes)*hashInfoSize
+	if m.temHistorico() {
+		n += tlvHeaderSize + historicoInfoSize
+	}
+	return n
 }
 
 // versao decide o byte 4. Ver o comentário de layout: v1 enquanto não houver
@@ -226,15 +256,24 @@ func (m *Manifest) encode() []byte {
 // registro de comprimento zero já bastaria para levar o manifest à v2 e matar
 // o rollback sem entregar informação nenhuma.
 func (m *Manifest) appendCauda(b []byte) []byte {
-	if len(m.Hashes) == 0 {
-		return b
+	// Ordem CRESCENTE de tag, e não a ordem em que as seções foram inventadas:
+	// o manifest é comparado byte a byte pelos testes de formato, e uma ordem
+	// que dependesse do histórico do produto mudaria o arquivo sem que o
+	// conteúdo mudasse.
+	if len(m.Hashes) > 0 {
+		b = binary.LittleEndian.AppendUint16(b, tagHashes)
+		b = binary.LittleEndian.AppendUint32(b, uint32(2+len(m.Hashes)*hashInfoSize))
+		b = binary.LittleEndian.AppendUint16(b, uint16(len(m.Hashes)))
+		for _, h := range m.Hashes {
+			b = binary.LittleEndian.AppendUint16(b, uint16(h.FieldID))
+			b = binary.LittleEndian.AppendUint64(b, h.SlotCount)
+		}
 	}
-	b = binary.LittleEndian.AppendUint16(b, tagHashes)
-	b = binary.LittleEndian.AppendUint32(b, uint32(2+len(m.Hashes)*hashInfoSize))
-	b = binary.LittleEndian.AppendUint16(b, uint16(len(m.Hashes)))
-	for _, h := range m.Hashes {
-		b = binary.LittleEndian.AppendUint16(b, uint16(h.FieldID))
-		b = binary.LittleEndian.AppendUint64(b, h.SlotCount)
+	if m.temHistorico() {
+		b = binary.LittleEndian.AppendUint16(b, tagHistorico)
+		b = binary.LittleEndian.AppendUint32(b, historicoInfoSize)
+		b = append(b, m.Modo)
+		b = binary.LittleEndian.AppendUint64(b, m.RowIDBase)
 	}
 	return b
 }
@@ -345,6 +384,10 @@ func decodeCauda(r *reader, m *Manifest) error {
 			if err := decodeHashes(payload, m); err != nil {
 				return err
 			}
+		case tag == tagHistorico:
+			if err := decodeHistorico(payload, m); err != nil {
+				return err
+			}
 		case tag&tagCritica != 0:
 			// Ignorar uma seção crítica desconhecida é o modo de falha que
 			// esta política existe para impedir: o dataset teria um índice
@@ -373,6 +416,21 @@ func decodeHashes(payload []byte, m *Manifest) error {
 	}
 	if hr.bad {
 		return fmt.Errorf("%w: seção de hashes truncada", ErrCorruptManifest)
+	}
+	return nil
+}
+
+// decodeHistorico lê a seção 0x8002.
+func decodeHistorico(payload []byte, m *Manifest) error {
+	if len(payload) != historicoInfoSize {
+		return fmt.Errorf("%w: seção de histórico tem %d bytes, esperado %d",
+			ErrCorruptManifest, len(payload), historicoInfoSize)
+	}
+	hr := &reader{b: payload}
+	m.Modo = hr.take(1)[0]
+	m.RowIDBase = hr.u64()
+	if hr.bad {
+		return fmt.Errorf("%w: seção de histórico truncada", ErrCorruptManifest)
 	}
 	return nil
 }

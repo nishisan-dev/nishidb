@@ -465,19 +465,20 @@ func (c *Compiled) propagaAosEspelhos(cf *CompiledField) {
 	}
 }
 
-// adotaDescoberta cria neste Compiled a coluna equivalente à do original.
+// adotaDescoberta cria a coluna equivalente à do original. O receptor aqui é
+// sempre o ESPELHO, e o parâmetro é o campo do Compiled que a descobriu.
 //
 // O CompiledField é NOVO, e não o ponteiro do original, porque `Index` mora
 // nele e é justamente o que difere entre as duas tabelas: compartilhar o
 // ponteiro faria o índice declarado em `history.fields` valer para o dataset
 // base também.
-func (m *Compiled) adotaDescoberta(orig *CompiledField) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if _, tomado := m.byName[orig.Name]; tomado {
+func (c *Compiled) adotaDescoberta(orig *CompiledField) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, tomado := c.byName[orig.Name]; tomado {
 		return
 	}
-	if _, tomado := m.byID[orig.ID]; tomado {
+	if _, tomado := c.byID[orig.ID]; tomado {
 		return
 	}
 	cf := &CompiledField{
@@ -492,7 +493,7 @@ func (m *Compiled) adotaDescoberta(orig *CompiledField) {
 		// Compiled faria a expansão não achar as filhas — e, pior, a coluna
 		// derivada apareceria no SELECT * daqui, porque é a ligação com o pai
 		// que a mantém fora dele.
-		pai, ok := m.byID[orig.Parent.ID]
+		pai, ok := c.byID[orig.Parent.ID]
 		if !ok {
 			// Pai ausente neste espelho: adotar a filha a deixaria órfã e
 			// visível no SELECT *, que é pior do que não a ter.
@@ -501,20 +502,21 @@ func (m *Compiled) adotaDescoberta(orig *CompiledField) {
 		cf.Parent = pai
 	}
 	cf.autoType.Store(orig.autoType.Load())
-	m.byName[cf.Name] = cf
-	m.byID[cf.ID] = cf
+	c.byName[cf.Name] = cf
+	c.byID[cf.ID] = cf
 }
 
-// fixaTipoEspelhado replica no espelho o tipo que o original acabou de fixar.
+// fixaTipoEspelhado replica o tipo que o original acabou de fixar. Como em
+// adotaDescoberta, o receptor é o ESPELHO.
 //
 // Não passa por FixAutoType de propósito: aquele PERSISTE no dicionário, e o
 // dicionário é o mesmo — gravar de novo seria uma segunda escrita durável para
 // o mesmo fato, com a única consequência possível sendo um conflito espúrio se
 // as duas chegarem fora de ordem.
-func (m *Compiled) fixaTipoEspelhado(id types.FieldID, t types.FieldType) {
-	m.mu.RLock()
-	f, ok := m.byID[id]
-	m.mu.RUnlock()
+func (c *Compiled) fixaTipoEspelhado(id types.FieldID, t types.FieldType) {
+	c.mu.RLock()
+	f, ok := c.byID[id]
+	c.mu.RUnlock()
 	if ok && f.IsAuto {
 		f.autoType.Store(uint32(t))
 	}

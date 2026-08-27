@@ -74,6 +74,30 @@ func semRecords(refs []segment.SegmentRef) bool {
 	return true
 }
 
+// Modo é a engine do dataset. Ele é DURÁVEL: viaja numa seção crítica do
+// manifest, e abrir um dataset com o modo errado é recusado em vez de
+// tentado. O modo de falha que isso impede não é índice incompleto — é ler um
+// log append-only de eventos como se fosse estado corrente, com cada entidade
+// aparecendo dezenas de vezes e o CRC batendo em todas.
+type Modo uint8
+
+const (
+	// ModoMaterializado é o dataset do produto: uma linha por entidade,
+	// deduplicada pela primary e atualizada por merge. É o zero value, e é
+	// por isso que todo dataset já em disco continua abrindo sem migração.
+	ModoMaterializado Modo = 0
+	// ModoHistorico é a tabela irmã append-only: uma linha por evento, sem
+	// key, sem dedup e sem update. Ver o godoc de Apenda.
+	ModoHistorico Modo = 1
+)
+
+func (m Modo) String() string {
+	if m == ModoHistorico {
+		return "historico"
+	}
+	return "materializado"
+}
+
 // Options configura a abertura de um Store.
 type Options struct {
 	Dir           string
@@ -106,6 +130,11 @@ type Options struct {
 	// reapareceria INCOMPLETO se o campo voltasse — falso negativo silencioso
 	// em query.
 	AllowHashDrop bool
+
+	// Modo é a engine do dataset (ver o tipo). O default — o zero value — é o
+	// dataset materializado, e é isso que faz todo dataset já em disco
+	// continuar abrindo sem migração nenhuma.
+	Modo Modo
 
 	// DictCompartilhado faz este Store USAR o dicionário de campos de outro,
 	// em vez de abrir o seu.
@@ -319,6 +348,20 @@ type Store struct {
 
 	nextRowID atomic.Uint64
 	rowCount  atomic.Uint64
+	// rowIDBase é a marca-d'água de retenção do dataset histórico: rowId
+	// ABAIXO dela já não é visível, e os bytes dele ou já saíram do disco (o
+	// segmento foi aposentado) ou vão sair na próxima passada.
+	//
+	// Uma marca-d'água, e não a limpeza entrada por entrada do locations.idx,
+	// porque a purga é de SEGMENTO: zerar milhões de entradas sob o wmu a cada
+	// passada disputaria o lock com a ingestão por um trabalho proporcional ao
+	// que foi apagado, quando o que mudou é um número só. Ela é durável no
+	// manifest — sem isso, o restart devolveria à consulta as linhas que a
+	// retenção já tinha tirado dela.
+	//
+	// Zero no dataset materializado, onde nada a move: lá a visibilidade é
+	// decidida pela location e pelo prazo da linha.
+	rowIDBase atomic.Uint64
 	epoch     uint64 // último epoch de manifest gravado (writer-only)
 
 	// curSegID espelha o segmento corrente para leitura concorrente em
@@ -715,6 +758,10 @@ func Open(opts Options) (*Store, error) {
 		}
 	}()
 
+	if err := validaOpcoesDoModo(opts); err != nil {
+		return nil, err
+	}
+
 	// Lock antes de tocar em qualquer arquivo do dataset. O Close no defer
 	// acima o libera nos caminhos de erro — um Open que falha não pode
 	// deixar o dataset travado até o processo morrer.
@@ -747,15 +794,22 @@ func Open(opts Options) (*Store, error) {
 	if opts.EstimatedRows > 1<<40 {
 		return nil, fmt.Errorf("%w: EstimatedRows %d acima do teto de sanidade (2^40)", ErrInvalidArgument, opts.EstimatedRows)
 	}
-	minSlots := max(uint64(1<<20), opts.EstimatedRows*10/7)
-	if s.prim, err = primary.Open(filepath.Join(idxDir, "primary.idx"), minSlots); err != nil {
-		return nil, err
-	}
 	minRows := max(uint64(512), opts.EstimatedRows)
-	if s.locs, err = rowindex.OpenLocations(filepath.Join(idxDir, "locations.idx"), minRows); err != nil {
-		return nil, err
+	// A primary É o mecanismo de dedup por identifier, e a sequence só serve
+	// ao stale check — os dois descrevem estado corrente. No histórico não há
+	// nem um nem outro, e abri-los seria pagar dois mmaps (um deles com rehash
+	// a 70% de ocupação, sobre dezenas de milhões de linhas) para não fazer
+	// nada. É a mesma economia que o TTLAtivo já faz com expiry.idx.
+	if opts.Modo != ModoHistorico {
+		minSlots := max(uint64(1<<20), opts.EstimatedRows*10/7)
+		if s.prim, err = primary.Open(filepath.Join(idxDir, "primary.idx"), minSlots); err != nil {
+			return nil, err
+		}
+		if s.seqs, err = rowindex.OpenSequences(filepath.Join(idxDir, "sequences.idx"), minRows); err != nil {
+			return nil, err
+		}
 	}
-	if s.seqs, err = rowindex.OpenSequences(filepath.Join(idxDir, "sequences.idx"), minRows); err != nil {
+	if s.locs, err = rowindex.OpenLocations(filepath.Join(idxDir, "locations.idx"), minRows); err != nil {
 		return nil, err
 	}
 	if opts.TTLAtivo {
@@ -786,6 +840,14 @@ func Open(opts Options) (*Store, error) {
 	// e o dicionário é append-only. Uma subida abortada depois disso deixaria
 	// o nome registrado para sempre.
 	if err := validaDerivadasContraDicionario(m, s.dict, opts.ColunasDerivadas); err != nil {
+		return nil, err
+	}
+
+	// O modo e a marca-d'água vêm do manifest ANTES de qualquer ramo de
+	// recovery: os dois governam o que é visível, e uma abertura que decidisse
+	// isso depois de já ter reconstruído índices leria linhas que a retenção
+	// tinha tirado da consulta.
+	if err := s.adotaModoDoManifest(m); err != nil {
 		return nil, err
 	}
 
@@ -1156,6 +1218,15 @@ func (s *Store) HashFields() []types.FieldID {
 // mínimo: locations.Get + pread + comparação de key (spec §36).
 func (s *Store) lookup(key, buf []byte) (rec types.Record, out []byte, exists, live bool, err error) {
 	out = buf
+	if s.prim == nil {
+		// Sem primary não há como resolver uma key, e devolver "não existe"
+		// seria pior que o erro: o executor trataria como linha ausente e a
+		// consulta responderia vazio sobre uma tabela cheia. O planner já não
+		// elege este caminho (o Compiled do histórico não tem Key), então
+		// chegar aqui é defeito de programa, não de dado.
+		return rec, out, false, false, fmt.Errorf("%w: %s não tem índice primary: a tabela histórica não resolve por key",
+			ErrInvalidArgument, s.opts.Dataset)
+	}
 	validate := func(rid types.RowID) (bool, error) {
 		// Par (Get, Read) sob a barreira de aposentadoria: ver o godoc de
 		// aposMu. O RLock entra AQUI e não em volta do prim.Find inteiro
@@ -1250,7 +1321,7 @@ func (s *Store) GetByRowID(id types.RowID, buf []byte) (types.Record, []byte, bo
 		return types.Record{}, buf, false, nil
 	}
 	seg, off, locFlags := rowindex.Unpack(packed)
-	if locFlags&types.FlagTombstone != 0 || s.prazoVencido(id) {
+	if locFlags&types.FlagTombstone != 0 || s.prazoVencido(id) || s.purgada(id) {
 		return types.Record{}, buf, false, nil
 	}
 	rec, out, err := s.segR.ReadRecord(seg, off, buf)
@@ -1288,6 +1359,11 @@ func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *ty
 	defer s.wmu.Unlock()
 	if s.stickyErr != nil {
 		return 0, false, fmt.Errorf("%w: %w", ErrWriterFailed, s.stickyErr)
+	}
+	if s.EhHistorico() {
+		// Put resolve a key pela primary e decide entre criar e atualizar. A
+		// tabela histórica não faz nem uma coisa nem outra: ver Apenda.
+		return 0, false, fmt.Errorf("%w: %s é uma tabela histórica; use Apenda", ErrInvalidArgument, s.opts.Dataset)
 	}
 	if len(key) == 0 {
 		return 0, false, fmt.Errorf("%w: key vazia", ErrInvalidArgument)
@@ -1465,7 +1541,7 @@ func (s *Store) applyRecord(a recordApply) error {
 	// (o lookup já resolveu as demais); no replay roda SEMPRE, porque um
 	// checkpoint interrompido pode ter deixado a primary atrás das
 	// locations — e o Insert é idempotente.
-	if a.countsAsNew || a.mode == applyReplay {
+	if s.prim != nil && (a.countsAsNew || a.mode == applyReplay) {
 		validate := s.insertValidator(a.key)
 		if a.mode == applyReplay {
 			validate = s.replayValidator(a.key, a.rowID)
@@ -1497,9 +1573,12 @@ func (s *Store) applyRecord(a recordApply) error {
 			return err
 		}
 	}
-	// 6. sequence.
-	if err := s.seqs.Set(a.rowID, a.seq); err != nil {
-		return err
+	// 6. sequence. Ausente no histórico: ela só serve ao stale check, que só
+	// existe porque há estado a sobrescrever.
+	if s.seqs != nil {
+		if err := s.seqs.Set(a.rowID, a.seq); err != nil {
+			return err
+		}
 	}
 	// 6b. instante da escrita, LIDO DO PAYLOAD.
 	//
@@ -1965,7 +2044,7 @@ func (it *liveIterator) Next() bool {
 		if _, _, locFlags := rowindex.Unpack(packed); locFlags&types.FlagTombstone != 0 {
 			continue
 		}
-		if it.s.prazoVencido(id) {
+		if it.s.prazoVencido(id) || it.s.purgada(id) {
 			continue
 		}
 		it.cur = id
@@ -2072,7 +2151,10 @@ func (s *Store) ScanLive() types.RowIDIterator {
 		return &liveIterator{err: err}
 	}
 	defer s.sai()
-	return &liveIterator{s: s, limit: types.RowID(s.nextRowID.Load())}
+	// A varredura começa na marca-d'água, e não em zero: no histórico o
+	// prefixo purgado pode ser de dezenas de milhões de rowIds, e percorrê-los
+	// para descartar cada um seria pagar pela retenção em toda consulta.
+	return &liveIterator{s: s, next: s.RowIDBase(), limit: types.RowID(s.nextRowID.Load())}
 }
 
 // DiretorioDeSpill é onde o motor de consulta pode transbordar o que não cabe
@@ -2166,9 +2248,9 @@ func (s *Store) Sequence(id types.RowID) (int64, types.Presenca) {
 	// entidade. Quem pergunta a sequence de uma row está decidindo sobre
 	// ordem, e "não sei" é a pior resposta possível.
 	if _, _, flags := rowindex.Unpack(packed); flags&types.FlagTombstone != 0 || s.prazoVencido(id) {
-		return s.seqs.Get(id), types.PresencaExpirada
+		return s.sequenceDe(id), types.PresencaExpirada
 	}
-	return s.seqs.Get(id), types.PresencaViva
+	return s.sequenceDe(id), types.PresencaViva
 }
 
 // Sync força fdatasync do segmento corrente (loop de durability batch).
@@ -2220,8 +2302,10 @@ func (s *Store) Stats() Stats {
 	defer s.sai()
 	segID := s.curSegID.Load()
 	var lf float64
-	if slots := s.prim.SlotCount(); slots > 0 {
-		lf = float64(s.prim.Used()) / float64(slots)
+	if s.prim != nil {
+		if slots := s.prim.SlotCount(); slots > 0 {
+			lf = float64(s.prim.Used()) / float64(slots)
+		}
 	}
 	// SegmentsTotal vem do espelho do tally, e não do segSize, porque o tally
 	// é o mapa que anda nos DOIS relógios: ganha entrada no applyRecord, então
@@ -2370,4 +2454,158 @@ func validaDerivadasContraDicionario(m *checkpoint.Manifest, dict *fielddict.Dic
 			"a extração roda na ingestão, então as linhas antigas ficariam sem a coluna e o filtro sobre ela "+
 			"as omitiria em silêncio. Declare extract na CRIAÇÃO do dataset, ou recrie este",
 		ErrDatasetCorrupt, novas, m.RowCount)
+}
+
+// validaOpcoesDoModo recusa as combinações que produziriam um dataset
+// histórico malformado. As duas recusas são de CONFIGURAÇÃO e saem antes do
+// flock: um Open que vai falhar não pode travar o dataset nem tocar arquivo.
+func validaOpcoesDoModo(opts Options) error {
+	if opts.Modo != ModoHistorico {
+		return nil
+	}
+	if opts.DictCompartilhado == nil {
+		// O histórico não tem dicionário próprio por desenho: o payload que
+		// ele guarda é o que o patch do base montou, endereçado por FieldID.
+		// Sem o dicionário do base, os ids seriam outros e todo record
+		// decodificaria colunas trocadas — sem erro e com o CRC batendo.
+		return fmt.Errorf("%w: ModoHistorico exige DictCompartilhado: a tabela irmã não tem dicionário próprio", ErrInvalidArgument)
+	}
+	if opts.TTLAtivo {
+		// A expiração por inatividade renova o prazo a cada escrita, e no
+		// histórico nenhuma linha é reescrita: a regra nunca teria a segunda
+		// escrita que ela existe para observar. A retenção daqui é outra, e é
+		// por segmento.
+		return fmt.Errorf("%w: ModoHistorico não tem expiração por inatividade; a retenção é por tempo de escrita e por tamanho", ErrInvalidArgument)
+	}
+	return nil
+}
+
+// EhHistorico reporta se este Store é a tabela irmã append-only.
+func (s *Store) EhHistorico() bool { return s.opts.Modo == ModoHistorico }
+
+// sequenceDe lê o índice de sequences, ou zero quando ele não existe.
+//
+// Zero é o valor certo e não um placeholder: a tabela histórica não declara
+// sequence, e o stale check do materializer só compara quando o schema tem
+// uma. Quem chama Sequence sobre o histórico está perguntando por algo que a
+// tabela não guarda, e a resposta honesta é o zero que o formato já usa para
+// "sem sequence".
+func (s *Store) sequenceDe(id types.RowID) int64 {
+	if s.seqs == nil {
+		return 0
+	}
+	return s.seqs.Get(id)
+}
+
+// adotaModoDoManifest confere o modo declarado nas Options contra o que está
+// gravado, e semeia a marca-d'água de retenção.
+//
+// A divergência é ErrDatasetCorrupt, e não um aviso, porque as duas direções
+// são catastróficas em silêncio. Abrir um histórico como materializado leria
+// um log de eventos como se fosse estado corrente: cada entidade apareceria
+// uma vez por evento, e o operador teria uma tabela plausível e errada. Abrir
+// um materializado como histórico é pior ainda — a primary não seria aberta,
+// e o primeiro Apenda gravaria uma segunda linha para uma key que já existe,
+// duplicando a entidade de forma durável.
+//
+// Manifest ausente é dataset NOVO: ele nasce com o modo que as Options pedem,
+// e o primeiro Checkpoint o grava.
+func (s *Store) adotaModoDoManifest(m *checkpoint.Manifest) error {
+	if m == nil {
+		return nil
+	}
+	gravado := Modo(m.Modo)
+	if gravado != s.opts.Modo {
+		return fmt.Errorf("%w: o dataset %s está gravado como %s e a configuração pede %s; "+
+			"o modo é imutável — recrie o dataset ou corrija o YAML",
+			ErrDatasetCorrupt, s.opts.Dir, gravado, s.opts.Modo)
+	}
+	s.rowIDBase.Store(m.RowIDBase)
+	return nil
+}
+
+// RowIDBase é a marca-d'água de retenção corrente. Zero fora do histórico.
+func (s *Store) RowIDBase() types.RowID { return types.RowID(s.rowIDBase.Load()) }
+
+// purgada reporta que o rowId ficou abaixo da marca-d'água e não é mais
+// visível.
+//
+// É o quinto ponto de liveness do Store, ao lado dos quatro que o prazo já
+// tinha, e o mais barato de todos: uma comparação contra um atômico, sem
+// tocar índice nenhum.
+func (s *Store) purgada(id types.RowID) bool {
+	return uint64(id) < s.rowIDBase.Load()
+}
+
+// Apenda grava uma linha nova na tabela histórica e devolve o rowId dela.
+// Exclusivo do writer.
+//
+// É método próprio, e não um Put com key vazia, pela mesma razão que Expira
+// também é: o Put resolve a key pela primary e DECIDE entre criar e atualizar.
+// Aqui não há decisão nenhuma a tomar — toda chamada é uma linha nova. Passar
+// por ele obrigaria a inventar uma key sintética por evento, que a primary
+// indexaria para nunca ser consultada: um hash de 16 bytes por linha, com
+// rehash a 70% de ocupação, sobre a tabela que mais cresce do produto.
+//
+// O que ele NÃO faz, e cada ausência é o desenho e não uma economia: não
+// procura estado anterior (não há), não decrementa liveness de segmento (sem
+// update não há garbage), não insere na primary (não existe) e não passa pela
+// fase de CLEAR dos índices secundários (nada sai de um índice numa tabela em
+// que a linha nunca muda).
+//
+// Erros: antes do Append nada foi gravado. Depois dele não há rollback
+// parcial, e o writer entra em modo FALHO sticky como em qualquer outra
+// escrita. Quem chama trata a falha como degradação do histórico, e não da
+// ingestão: o produto é o dataset base.
+func (s *Store) Apenda(payload []byte) (types.RowID, error) {
+	if err := s.entra(); err != nil {
+		return 0, err
+	}
+	defer s.sai()
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	if !s.EhHistorico() {
+		return 0, fmt.Errorf("%w: %s é um dataset materializado; use Put", ErrInvalidArgument, s.opts.Dataset)
+	}
+	if s.stickyErr != nil {
+		return 0, fmt.Errorf("%w: %w", ErrWriterFailed, s.stickyErr)
+	}
+	// Validação ANTES de queimar um rowId, pela razão do Put: ids nunca são
+	// reutilizados, e validar depois deixaria buracos no intervalo do
+	// ScanLive proporcionais ao ruído da fonte.
+	if _, err := encoding.ValidateRecord(nil, payload); err != nil {
+		return 0, err
+	}
+	if err := s.validatePayloadAgainstDataset(payload); err != nil {
+		return 0, err
+	}
+	rowID := types.RowID(s.nextRowID.Add(1) - 1)
+
+	rec, err := encoding.BuildRecord(s.buildBuf[:0], rowID, 0, 0, nil, payload)
+	s.buildBuf = rec
+	if err != nil {
+		return 0, err
+	}
+	seg, off, err := s.segW.Append(rec)
+	if err != nil {
+		return 0, s.failWriter(err)
+	}
+	s.curSegID.Store(seg)
+	if err := s.applyRecord(recordApply{
+		rowID:       rowID,
+		payload:     payload,
+		hadPrevious: false,
+		countsAsNew: true,
+		seg:         seg,
+		off:         off,
+		recLen:      len(rec),
+	}); err != nil {
+		return 0, s.failWriter(err)
+	}
+	if s.opts.SyncEveryPut {
+		if err := s.syncLocked(); err != nil {
+			return rowID, err
+		}
+	}
+	return rowID, nil
 }

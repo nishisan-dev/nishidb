@@ -60,16 +60,18 @@ func (s *Store) recoverFrom(m *checkpoint.Manifest, refs []segment.SegmentRef, d
 	// PrimarySlotCount/HashKind do manifest são ADVISORY: a fonte de
 	// verdade é o header do primary.idx (um rehash pós-checkpoint deixa o
 	// manifest para trás — divergência é esperada, não erro).
-	if m.PrimarySlotCount != s.prim.SlotCount() {
-		s.opts.Log.Info("recovery.primary_slots_divergem",
-			"manifest declara outro número de slots na primary; o header prevalece",
-			"manifest_slots", m.PrimarySlotCount, "header_slots", s.prim.SlotCount(),
-			"causa", "rehash pós-checkpoint")
-	}
-	if m.HashKind != s.prim.HashKind() {
-		s.opts.Log.Info("recovery.hashkind_diverge",
-			"manifest declara outro hashKind; o header prevalece",
-			"manifest_hashkind", m.HashKind, "header_hashkind", s.prim.HashKind())
+	if s.prim != nil {
+		if m.PrimarySlotCount != s.prim.SlotCount() {
+			s.opts.Log.Info("recovery.primary_slots_divergem",
+				"manifest declara outro número de slots na primary; o header prevalece",
+				"manifest_slots", m.PrimarySlotCount, "header_slots", s.prim.SlotCount(),
+				"causa", "rehash pós-checkpoint")
+		}
+		if m.HashKind != s.prim.HashKind() {
+			s.opts.Log.Info("recovery.hashkind_diverge",
+				"manifest declara outro hashKind; o header prevalece",
+				"manifest_hashkind", m.HashKind, "header_hashkind", s.prim.HashKind())
+		}
 	}
 
 	// As duas janelas de crash da aposentadoria (§53-55, decisão D5) são
