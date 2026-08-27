@@ -213,6 +213,17 @@ const (
 	// dado é diagnóstico errado (D8).
 	MetKafkaErrorsTotal = "nishidb_kafka_errors_total"
 
+	// MetKafkaWatchdogTrips conta as vezes que o watchdog recriou o
+	// consumidor por falta de progresso, e MetKafkaWatchdogDesistiu marca 1
+	// quando ele esgotou as tentativas.
+	//
+	// Duas séries e não uma: recriar é recuperação — o produto se consertou e
+	// seguiu —, enquanto desistir é ingestão morta com consultas de pé. Somar
+	// as duas faria um alarme disparar igual nos dois casos, e só um deles
+	// pede alguém acordado.
+	MetKafkaWatchdogTrips    = "nishidb_kafka_watchdog_trips_total"
+	MetKafkaWatchdogDesistiu = "nishidb_kafka_watchdog_desistiu"
+
 	// MetKafkaQueueDepth e MetKafkaQueueBytes expõem os dois gates da fila
 	// limitada. O §79 exige "Kafka buffers" entre os itens de memória, e
 	// contar registros não é unidade de memória (D16).

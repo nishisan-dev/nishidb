@@ -756,6 +756,59 @@ linhas e sem `kafka.offsets`), posição ilegível, origem divergente (o YAML
 aponta para outro tópico, group ou cluster), e assignment parcial (outra
 instância no mesmo group).
 
+#### Quando o consumidor para de receber
+
+Um consumidor pode parar de entregar registros sem erro nenhum: a conexão
+segue de pé, o processo segue saudável, o `/v1/health` responde UP — e nada
+chega. Aconteceu no piloto em 27/08/2026, e a ingestão ficou parada por uma
+hora até alguém olhar.
+
+O watchdog recria o consumidor quando isso acontece:
+
+```yaml
+source:
+  kafka:
+    consumer:
+      watchdogTimeout: 60s      # default; `never` desliga; piso de 10s
+      watchdogTentativas: 3     # default
+```
+
+**O gatilho é uma conjunção de três fatos, e são três porque dois não bastam:**
+
+| Fato | Por que sozinho não serve |
+|---|---|
+| os eventos não avançaram na janela | um tópico legitimamente parado produz o mesmo sintoma |
+| o broker declara mensagens pendentes | diz que há o que consumir, não diz de quem é a culpa |
+| a fila poller→writer está **vazia** | é este que separa as duas causas |
+
+O terceiro é a guarda contra **backpressure da persistência**. Fila vazia
+significa que o writer não tem o que fazer, logo quem não entrega é o poller.
+Fila com itens significa o contrário — disco lento, checkpoint longo, storage
+em modo falho —, e aí recriar a conexão seria errado e destrutivo: abortaria
+trabalho em voo por um problema que não é de conexão, e a fila voltaria a
+encher do mesmo jeito. Nesse caso o watchdog **não age** e registra
+`ingestao.sem_progresso`.
+
+O lag é perguntado ao broker pelo cliente **admin**, que é uma conexão
+distinta da do consumo — foi por isso que ele continuou respondendo durante
+todo o travamento, e é o que torna este watchdog construível. Se um dia os
+dois travarem juntos, o watchdog se abstém: agir sobre o que não se sabe seria
+recriar o consumidor por causa de uma consulta que falhou.
+
+**A recriação passa pelo mesmo `kafka.Abre` da subida.** O §49 põe o
+checkpoint local como autoritativo e lista quatro situações que recusam subir
+a ingestão; um caminho de reconexão que redescobrisse a posição por conta
+própria seria um segundo boot, menos testado, que divergiria do primeiro no
+dia em que alguém mexesse num dos dois.
+
+A contagem é de tentativas **consecutivas** e zera quando o consumidor volta a
+andar — sem isso, meses de uptime acumulariam três blips não relacionados e a
+ingestão desistiria para sempre. Esgotadas as tentativas, o dataset cai no
+estado que a ingestão falha já tem hoje: **consultas de pé**, health
+reportando, e `ingestao.desistiu` no log. Duas séries acompanham,
+`nishidb_kafka_watchdog_trips_total` e `nishidb_kafka_watchdog_desistiu` —
+separadas porque recriar é recuperação e desistir é alguém acordado.
+
 ### Segurança: autenticação e TLS (§74-77)
 
 Exemplo mínimo com os três blocos — TLS, usuários e o listener loopback

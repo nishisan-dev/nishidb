@@ -506,7 +506,7 @@ func (s *Servidor) rodaIngestao(ctx context.Context, d *dataset) {
 			},
 		}
 	}
-	cons, err := kafka.Abre(ctx, cfg, kafka.Opcoes{
+	opcoes := kafka.Opcoes{
 		Store:   fonte,
 		Mat:     d.mat,
 		Log:     s.log,
@@ -515,23 +515,62 @@ func (s *Servidor) rodaIngestao(ctx context.Context, d *dataset) {
 			Eventos:   checkpointEventosPadrao,
 			Intervalo: s.cfg.IntervaloDeCheckpoint(),
 		},
-	})
-	if err != nil {
-		d.falha(err)
-		log.Error("ingestao.nao_subiu", "a ingestão não pôde subir; as consultas seguem de pé (§51)",
-			"erro", err.Error())
-		return
 	}
-	d.mu.Lock()
-	d.cons = cons
-	d.mu.Unlock()
-	defer cons.Fecha()
 
-	log.Info("ingestao.subiu", "consumindo", "topico", cfg.Topic, "group", cfg.GroupID)
-	if err := cons.Roda(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		d.falha(err)
-		log.Error("ingestao.parou", "a ingestão parou; as consultas seguem de pé (§51)",
-			"erro", err.Error())
+	// A recriação passa pelo MESMO kafka.Abre da subida, e é o ponto inteiro
+	// do desenho. O §49 põe o checkpoint local como autoritativo e lista
+	// quatro situações que RECUSAM subir a ingestão; um caminho de reconexão
+	// que redescobrisse a posição por conta própria seria um segundo boot,
+	// menos testado, que divergiria do primeiro no dia em que alguém mexesse
+	// num dos dois. Aqui há uma implementação de posicionamento, não duas.
+	tentativas := cfg.WatchdogTentativas
+	for tentativa := 0; ; tentativa++ {
+		cons, err := kafka.Abre(ctx, cfg, opcoes)
+		if err != nil {
+			d.falha(err)
+			log.Error("ingestao.nao_subiu", "a ingestão não pôde subir; as consultas seguem de pé (§51)",
+				"erro", err.Error())
+			return
+		}
+		d.mu.Lock()
+		d.cons = cons
+		d.mu.Unlock()
+
+		log.Info("ingestao.subiu", "consumindo", "topico", cfg.Topic, "group", cfg.GroupID)
+		err = cons.Roda(ctx)
+		cons.Fecha()
+
+		if err == nil || errors.Is(err, context.Canceled) {
+			return
+		}
+		if !errors.Is(err, kafka.ErrSemProgresso) {
+			d.falha(err)
+			log.Error("ingestao.parou", "a ingestão parou; as consultas seguem de pé (§51)",
+				"erro", err.Error())
+			return
+		}
+		// Só o watchdog chega aqui. A contagem é de tentativas CONSECUTIVAS:
+		// ela nasce a cada rodaIngestao e o laço só a incrementa enquanto
+		// recriar não resolver — um consumidor que volte a andar sai do laço
+		// pelo caminho de cima, e o próximo travamento recomeça do zero.
+		// Sem isso, meses de uptime acumulariam três blips não relacionados e
+		// a ingestão desistiria para sempre.
+		if tentativa+1 >= tentativas {
+			d.falha(err)
+			log.Error("ingestao.desistiu",
+				"o watchdog esgotou as tentativas de recriar o consumidor; a ingestão fica PARADA e as consultas seguem de pé (§51)",
+				"tentativas", tentativas, "erro", err.Error())
+			s.reg.Medidor(metrics.MetKafkaWatchdogDesistiu,
+				"1 quando o watchdog esgotou as tentativas e a ingestão do dataset ficou parada.",
+				metrics.LabelDataset).Com(d.nome).Set(1)
+			return
+		}
+		s.reg.Contador(metrics.MetKafkaWatchdogTrips,
+			"Recriações do consumidor por falta de progresso com lag pendente.",
+			metrics.LabelDataset).Com(d.nome).Inc()
+		log.Warn("ingestao.recriando",
+			"o consumidor parou de receber com mensagens pendentes no broker; recriando pelo caminho da subida",
+			"tentativa", tentativa+1, "de", tentativas, "erro", err.Error())
 	}
 }
 

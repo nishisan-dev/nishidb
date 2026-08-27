@@ -61,6 +61,9 @@ type Consumidor struct {
 	// erroAssign carrega a falha detectada dentro do callback de assignment,
 	// que não tem por onde devolver erro.
 	erroAssign atomic.Value
+	// erroVigia guarda a causa do watchdog. Escrito ANTES do cancelamento
+	// que ele dispara, para que o Roda a encontre depois de o poll voltar.
+	erroVigia atomic.Value
 	// cancelaPoll interrompe o PollRecords em curso. Sem ele, uma recusa de
 	// assignment só seria vista quando o poll voltasse — e num assignment
 	// parcial o poll pode não voltar nunca, porque as partições que sobraram
@@ -497,12 +500,29 @@ func (c *Consumidor) Roda(ctx context.Context) error {
 		}
 	}()
 
+	// O watchdog cancela o ctx quando conclui que não há progresso, e é isso
+	// que acorda um PollRecords travado. Ele guarda a causa ANTES de
+	// cancelar, porque o poll devolve nil sob cancelamento ("encerramento
+	// pedido; não é falha") — sem a causa guardada, a recriação viraria um
+	// encerramento limpo e ninguém tentaria de novo.
+	go func() {
+		if err := c.vigia(ctx, c.cfg.WatchdogTimeout); err != nil {
+			c.erroVigia.Store(err)
+			cancela()
+		}
+	}()
+
 	erro := c.poll(ctx)
 
 	// Fecha a fila para o writer drenar o que sobrou e checkpointar.
 	c.fila.Fecha()
 	if e := <-erroWriter; e != nil && erro == nil {
 		erro = e
+	}
+	// A causa do watchdog vence o nil do poll, e perde para um erro real: uma
+	// falha de assignment ou do writer descreve melhor o que houve.
+	if v := c.erroVigia.Load(); v != nil && erro == nil {
+		erro = v.(error)
 	}
 	return erro
 }

@@ -9,6 +9,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/nishisan-dev/nishidb/internal/units"
+	"time"
 )
 
 // SourceSpec é a fonte de eventos do dataset (§12).
@@ -65,6 +66,18 @@ type ConsumerSpec struct {
 	// que nenhuma regra de contagem reclame. O §79 exige expor "Kafka
 	// buffers" e o §108 exige a rodada de 8M com ingestão Kafka real.
 	IngestionQueueBytes int64
+	// WatchdogTimeout é por quanto tempo a ingestão pode ficar SEM PROGRESSO
+	// com o broker declarando mensagens antes de o consumidor ser recriado.
+	// Zero desliga o watchdog.
+	//
+	// "Sem progresso" é uma conjunção de três fatos, e são três porque dois
+	// não bastam — ver o godoc do watchdog no pacote kafka. O que importa
+	// aqui: um tópico legitimamente parado NÃO dispara, porque o lag é zero.
+	WatchdogTimeout time.Duration
+	// WatchdogTentativas é quantas vezes o consumidor é recriado antes de
+	// desistir. Desistir devolve o dataset ao estado que a ingestão falha já
+	// tem hoje: consultas de pé, health reportando, e nada em silêncio.
+	WatchdogTentativas int
 }
 
 // SecuritySpec é `source.kafka.security` (§12).
@@ -134,7 +147,27 @@ const (
 	MaxPollRecordsPadrao      = 1000
 	IngestionQueueSizePadrao  = 5000
 	IngestionQueueBytesPadrao = 64 << 20
+
+	// WatchdogTimeoutPadrao é a janela sem progresso que recria o consumidor.
+	//
+	// Um minuto sai da assimetria entre os dois erros. Disparar cedo demais
+	// recria um consumidor que estava só esperando o writer terminar um lote
+	// grande; disparar tarde demais deixa a ingestão morta pelo tempo que a
+	// janela custar — e o incidente de 27/08/2026 no piloto durou uma hora
+	// porque NINGUÉM estava olhando. Sessenta segundos é curto o bastante
+	// para não perder o turno e longo o bastante para não brigar com um
+	// checkpoint, que no piloto para o writer por 774 ms.
+	WatchdogTimeoutPadrao = time.Minute
+	// WatchdogTimeoutMinimo é o piso declarável.
+	WatchdogTimeoutMinimo = 10 * time.Second
+	// WatchdogTentativasPadrao é quantas recriações antes de desistir.
+	WatchdogTentativasPadrao = 3
 )
+
+// WatchdogDesligado é o literal que desliga o watchdog. `0` seria recusado
+// como qualquer outra duração não positiva: zero não é "sem watchdog", é uma
+// janela que nenhum relógio poderia honrar.
+const WatchdogDesligado = "never"
 
 // SASL diz se o protocolo exige credencial.
 func (s SecuritySpec) SASL() bool {
@@ -324,12 +357,15 @@ func validaConsumer(n *yaml.Node) (ConsumerSpec, error) {
 		MaxPollRecords:      MaxPollRecordsPadrao,
 		IngestionQueueSize:  IngestionQueueSizePadrao,
 		IngestionQueueBytes: IngestionQueueBytesPadrao,
+		WatchdogTimeout:     WatchdogTimeoutPadrao,
+		WatchdogTentativas:  WatchdogTentativasPadrao,
 	}
 	if n == nil {
 		return c, specErrf("source.kafka.consumer.groupId obrigatório")
 	}
 	m, err := bloco(n, "source.kafka.consumer",
-		"groupId", "autoOffsetReset", "maxPollRecords", "ingestionQueueSize", "ingestionQueueBytes")
+		"groupId", "autoOffsetReset", "maxPollRecords", "ingestionQueueSize", "ingestionQueueBytes",
+		"watchdogTimeout", "watchdogTentativas")
 	if err != nil {
 		return c, err
 	}
@@ -364,6 +400,30 @@ func validaConsumer(n *yaml.Node) (ConsumerSpec, error) {
 		return c, err
 	} else if c.IngestionQueueBytes, err = units.Tamanho(bytesTxt, IngestionQueueBytesPadrao); err != nil {
 		return c, specErrf("source.kafka.consumer.ingestionQueueBytes: %v", err)
+	}
+
+	if v, err := texto(m, "source.kafka.consumer", "watchdogTimeout"); err != nil {
+		return c, err
+	} else if v == WatchdogDesligado {
+		c.WatchdogTimeout = 0
+	} else if v != "" {
+		if c.WatchdogTimeout, err = units.Duracao(v, 0); err != nil {
+			return c, specErrf("source.kafka.consumer.watchdogTimeout: %v", err)
+		}
+		if c.WatchdogTimeout < WatchdogTimeoutMinimo {
+			// Abaixo disso o watchdog compete com o próprio produto: um
+			// checkpoint do piloto para o writer por centenas de
+			// milissegundos, e uma janela curta transformaria essa pausa
+			// normal em recriação de consumidor.
+			return c, specErrf(
+				"source.kafka.consumer.watchdogTimeout %s é menor que o mínimo de %s — "+
+					"abaixo disso uma pausa NORMAL de checkpoint viraria recriação de consumidor; "+
+					"use %q para desligar",
+				v, WatchdogTimeoutMinimo, WatchdogDesligado)
+		}
+	}
+	if c.WatchdogTentativas, err = inteiro(m, "source.kafka.consumer", "watchdogTentativas", WatchdogTentativasPadrao); err != nil {
+		return c, err
 	}
 	return c, nil
 }

@@ -29,6 +29,7 @@ import (
 
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/storage/checkpoint"
+	"time"
 )
 
 // ErrConfig categoriza erro de configuração efetiva do consumer: o que o
@@ -56,6 +57,11 @@ type Config struct {
 	MaxPollRecords  int
 	QueueSize       int
 	QueueBytes      int64
+	// WatchdogTimeout e WatchdogTentativas governam a recriação do consumidor
+	// quando ele para de receber com o broker declarando mensagens. Zero no
+	// timeout desliga. Ver o godoc de vigia.
+	WatchdogTimeout    time.Duration
+	WatchdogTentativas int
 
 	// InvalidEvent é a política do §101 já resolvida.
 	InvalidEvent string
@@ -101,6 +107,9 @@ func Resolve(dataset string, k *schema.KafkaSpec, e schema.ErrorsSpec) (*Config,
 		QueueSize:       k.Consumer.IngestionQueueSize,
 		QueueBytes:      k.Consumer.IngestionQueueBytes,
 		InvalidEvent:    e.InvalidEvent,
+
+		WatchdogTimeout:    k.Consumer.WatchdogTimeout,
+		WatchdogTentativas: k.Consumer.WatchdogTentativas,
 	}
 
 	sec := k.Security

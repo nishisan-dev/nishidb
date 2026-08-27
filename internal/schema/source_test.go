@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/schema"
 )
@@ -331,5 +332,68 @@ func TestFixtureDoSpec12ContinuaValidoEInerte(t *testing.T) {
 	}
 	if k.Security.Protocol != schema.ProtocolSASLSSL || k.Security.SASLMechanism != schema.SASLScramSHA512 {
 		t.Errorf("security = %+v", k.Security)
+	}
+}
+
+// yamlComConsumer monta uma spec com o bloco consumer dado.
+func yamlComConsumer(consumer string) string {
+	return "version: 1\nname: t\n" +
+		"source:\n  type: kafka\n  kafka:\n    bootstrapServers: [\"h:9092\"]\n    topic: t\n" +
+		"    consumer:\n      groupId: g\n" + consumer +
+		"materialization:\n  key:\n    field: id\n" +
+		"schema:\n  include: [id]\n  fields:\n    id:\n      type: string\n"
+}
+
+func TestWatchdogTemDefaultDeUmMinutoETresTentativas(t *testing.T) {
+	s, err := schema.Parse([]byte(yamlComConsumer("")), schema.DefaultsPadrao)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	c := s.Source.Kafka.Consumer
+	if c.WatchdogTimeout != time.Minute {
+		t.Errorf("WatchdogTimeout = %s, quer 1m", c.WatchdogTimeout)
+	}
+	if c.WatchdogTentativas != 3 {
+		t.Errorf("WatchdogTentativas = %d, quer 3", c.WatchdogTentativas)
+	}
+}
+
+func TestWatchdogEhConfiguravel(t *testing.T) {
+	s, err := schema.Parse([]byte(yamlComConsumer("      watchdogTimeout: 90s\n      watchdogTentativas: 5\n")), schema.DefaultsPadrao)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	c := s.Source.Kafka.Consumer
+	if c.WatchdogTimeout != 90*time.Second {
+		t.Errorf("WatchdogTimeout = %s, quer 90s", c.WatchdogTimeout)
+	}
+	if c.WatchdogTentativas != 5 {
+		t.Errorf("WatchdogTentativas = %d, quer 5", c.WatchdogTentativas)
+	}
+}
+
+// Zero seria uma janela que nenhum relógio poderia honrar; quem quer desligar
+// diz isso com uma palavra.
+func TestWatchdogDesligaComNever(t *testing.T) {
+	s, err := schema.Parse([]byte(yamlComConsumer("      watchdogTimeout: never\n")), schema.DefaultsPadrao)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if got := s.Source.Kafka.Consumer.WatchdogTimeout; got != 0 {
+		t.Fatalf("WatchdogTimeout = %s, quer zero (desligado)", got)
+	}
+}
+
+// Abaixo do piso, uma pausa NORMAL de checkpoint viraria recriação de
+// consumidor — no piloto ele para o writer por 774 ms.
+func TestWatchdogAbaixoDoPisoEhRecusado(t *testing.T) {
+	_, err := schema.Parse([]byte(yamlComConsumer("      watchdogTimeout: 3s\n")), schema.DefaultsPadrao)
+	if err == nil {
+		t.Fatal("3s foi aceito")
+	}
+	for _, trecho := range []string{"watchdogTimeout", "never"} {
+		if !strings.Contains(err.Error(), trecho) {
+			t.Errorf("a mensagem precisa nomear %q: %v", trecho, err)
+		}
 	}
 }
