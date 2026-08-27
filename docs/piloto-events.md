@@ -291,7 +291,7 @@ O número por linha é o que fecha a conta, e ele **derruba o prazo declarado**:
 | Pergunta | Resposta |
 |---|---|
 | Quantas linhas cabem em 250 GiB? | 268.435.456.000 / 2.767 = **97 milhões** |
-| Quanto tempo isso é, a 452 ev/s? | **~2,5 dias** |
+| Quanto tempo isso é, a 452 ev/s (a taxa de produção medida acima)? | **~2,5 dias** |
 | Quanto disco custariam 30 dias? | 1,17 bilhão × 2.767 = **3,24 TB** |
 | Quanto o host tem livre? | **1,1 TB** |
 

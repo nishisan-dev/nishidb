@@ -186,9 +186,19 @@ func encodeEventoRuim(escrita, raw *schema.CompiledField, agoraMs int64, evento 
 
 // valorBruto embrulha os bytes do evento como documento json.
 //
-// json e não bytes: o valor É um documento, e declarar o tipo certo é o que
-// permite `_raw.chave` na projeção do dia em que alguém precisar disso — sem
-// mudar o que está gravado.
+// json e não bytes, e a razão é o que sai na consulta: o tipo json serializa o
+// valor como OBJETO no NDJSON, enquanto bytes sairia como base64. Quem consulta
+// o `_raw` está lendo o evento com os próprios olhos, e base64 o obrigaria a
+// decodificar à mão exatamente no momento em que ele quer ler.
+//
+// O que o tipo NÃO dá, e vale escrito porque a intuição diz o contrário:
+// `_raw.chave` não é projetável. A projeção aninhada exige `extract` declarado
+// ou descoberta ligada no campo pai, e o `_raw` não tem nem um nem outro — a
+// consulta sai com "não há coluna a projetar". Ligar a descoberta depois
+// também não resolveria o passado, pela mesma regra de sempre: o writer só
+// escreve o que passa por ele. Quem precisar de uma chave do documento como
+// COLUNA declara um `extract` sobre o campo json de origem, que é onde ele
+// existe de verdade.
 func valorBruto(evento []byte) types.Value {
 	return types.Value{Type: types.TypeJSON, Bytes: evento}
 }
