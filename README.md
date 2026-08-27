@@ -49,10 +49,15 @@ tem `maxCols`, política de estouro e contador. O que ficou de fora é o
 **backfill** — declarar índice ou extração sobre um dataset que já tem linhas
 continua recusado na abertura (débito 22).
 
-Próximos, na ordem do roadmap: a **Fase 7** (driver JDBC, §70-73), que agora
-pode seguir — publicá-la antes da auth multiplicaria os pontos de acesso não
-autenticado em vez de fechar um, e essa condição já não vale mais. Depois vem
-o **M6** (TTL e tombstones por retenção, índice hash físico).
+**Dois clients do protocolo remoto, entregues.** A **Fase 7** (driver JDBC,
+§70-73) saiu — ela esperava a autenticação, porque publicar um driver antes
+dela multiplicaria os pontos de acesso não autenticado em vez de fechar um — e
+ao lado dela entrou o **client Python** (DB-API 2.0). Os dois são só leitura,
+sem dependência de runtime, e provados contra o binário real; ver
+[Clients](#clients).
+
+Próximo, na ordem do roadmap: o **M6** (TTL e tombstones por retenção, índice
+hash físico).
 
 ## Instalação
 
