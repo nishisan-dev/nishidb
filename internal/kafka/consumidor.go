@@ -226,6 +226,7 @@ func Abre(ctx context.Context, cfg *Config, o Opcoes) (*Consumidor, error) {
 	}
 
 	c.fila = NovaFila(cfg.QueueSize, cfg.QueueBytes)
+	met.OlhaAFila(c.fila.Profundidade)
 	c.w = NovoWriter(cfg, o.Mat, o.Store, c.fila, log, met, c.offsetsIniciais, o.Cadencia, c.commitNoBroker)
 	close(c.wPronto)
 	return c, nil
@@ -544,10 +545,6 @@ func (c *Consumidor) poll(ctx context.Context) error {
 				enfileirados++
 			}
 		})
-		reg, bytes := c.fila.Profundidade()
-		c.met.filaRegistros.Set(float64(reg))
-		c.met.filaBytes.Set(float64(bytes))
-
 		if enfileirados > 0 {
 			// Espera o writer decidir o lote inteiro antes de liberar o
 			// rebalance: é isso que garante que o commit seguinte só toque

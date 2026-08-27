@@ -30,9 +30,25 @@ type metricas struct {
 	// enxergar só um total misturado com INVALID_JSON e as outras quatro.
 	famInvalidos *metrics.FamiliaContador
 
-	bloqueado      *metrics.SerieMedidor
-	filaRegistros  *metrics.SerieMedidor
-	filaBytes      *metrics.SerieMedidor
+	bloqueado *metrics.SerieMedidor
+	// filaViva é lida no instante do SCRAPE, e não gravada pelo laço de poll.
+	//
+	// Ela era um par de medidores que o poller atualizava depois de enfileirar
+	// o lote (consumidor.go). O defeito disso não aparece em regime: aparece
+	// exatamente quando alguém precisa dela. Com o poller travado dentro do
+	// PollRecords, os dois medidores CONGELAM no último valor amostrado — e o
+	// writer, que segue drenando, esvazia a fila sem que ninguém reescreva o
+	// número. O painel passa a afirmar "479 registros esperando" sobre uma
+	// fila vazia, no minuto em que a pergunta é justamente se o gargalo está
+	// antes ou depois dela.
+	//
+	// Isso não é hipótese: foi o que aconteceu no piloto em 27/08/2026, e a
+	// série congelada apontou a investigação para o componente errado.
+	//
+	// Como coletor, o valor sai de len(ch) no momento do scrape. Ele não pode
+	// mentir por travamento de ninguém — no máximo não é emitido, e ausência
+	// é uma resposta honesta que a série congelada não dava.
+	filaViva       func() (int, int64)
 	partAtribuidas *metrics.SerieMedidor
 	partTotal      *metrics.SerieMedidor
 
@@ -67,7 +83,7 @@ func registraMetricas(r *metrics.Registry, dataset string) *metricas {
 			famInvalidos.Com(dataset, cat.String())
 		}
 	}
-	return &metricas{
+	m := &metricas{
 		eventos:      contador(metrics.MetIngestEventsTotal, "Eventos oferecidos à ingestão."),
 		stale:        contador(metrics.MetIngestStaleTotal, "Eventos descartados por sequence (§25). Não é erro."),
 		famInvalidos: famInvalidos,
@@ -78,8 +94,6 @@ func registraMetricas(r *metrics.Registry, dataset string) *metricas {
 
 		bloqueado: medidor(metrics.MetIngestBlocked,
 			"1 quando a ingestão do dataset está PARADA por política de erro. Sem ela, a pausa do `invalidEvent: stop` seria um consumer silenciosamente parado."),
-		filaRegistros: medidor(metrics.MetKafkaQueueDepth, "Registros na fila limitada poller→writer."),
-		filaBytes:     medidor(metrics.MetKafkaQueueBytes, "Bytes retidos na fila limitada (§79, Kafka buffers)."),
 		partAtribuidas: medidor(metrics.MetKafkaPartitionsAssigned,
 			"Partições atribuídas a esta instância. Comparar com o total é o que torna visível o assignment parcial."),
 		partTotal: medidor(metrics.MetKafkaPartitionsTotal, "Partições do tópico."),
@@ -87,6 +101,43 @@ func registraMetricas(r *metrics.Registry, dataset string) *metricas {
 		famLag:    r.Medidor(metrics.MetKafkaLag, "Lag por partição.", metrics.LabelDataset, metrics.LabelPartition),
 		famOffset: r.Medidor(metrics.MetKafkaOffset, "Próximo offset a consumir, por partição.", metrics.LabelDataset, metrics.LabelPartition),
 		dataset:   dataset,
+	}
+
+	// O coletor é registrado AQUI, junto das famílias, e não onde a fila
+	// nasce: a fonte é instalada depois (OlhaAFila), e até lá o coletor não
+	// emite nada. Registrar cedo mantém a ordem de exposição estável entre
+	// um consumidor que subiu e um que não subiu.
+	r.Coletor(metrics.ColetorFunc(m.amostrasDaFila))
+	return m
+}
+
+// OlhaAFila instala a fonte de profundidade. Chamado uma vez, quando a fila
+// existe.
+func (m *metricas) OlhaAFila(f func() (int, int64)) { m.filaViva = f }
+
+// amostrasDaFila lê a fila no instante do scrape.
+//
+// Sem fonte instalada não emite nada, e isso é deliberado: o dataset sem
+// consumidor Kafka não tem fila, e publicar zero ali afirmaria que existe uma
+// e está vazia. É a mesma distinção entre "medi e deu zero" e "não há o que
+// medir" que o resto do produto faz.
+func (m *metricas) amostrasDaFila() []metrics.Amostra {
+	if m.filaViva == nil {
+		return nil
+	}
+	reg, bytes := m.filaViva()
+	rotulo := []metrics.Label{{Nome: metrics.LabelDataset, Valor: m.dataset}}
+	return []metrics.Amostra{
+		{
+			Nome: metrics.MetKafkaQueueDepth, Tipo: metrics.TipoMedidor, Valor: float64(reg),
+			Ajuda:  "Registros na fila limitada poller→writer, lidos no instante do scrape.",
+			Labels: rotulo,
+		},
+		{
+			Nome: metrics.MetKafkaQueueBytes, Tipo: metrics.TipoMedidor, Valor: float64(bytes),
+			Ajuda:  "Bytes retidos na fila limitada (§79), lidos no instante do scrape.",
+			Labels: rotulo,
+		},
 	}
 }
 
