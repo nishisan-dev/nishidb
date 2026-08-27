@@ -1,0 +1,110 @@
+@startuml historico_flow
+title Tabela histórica: do evento cru à linha, e a retenção que a devolve ao disco
+
+start
+
+partition "Ingestão — uma passada por evento" {
+  :materializer.Apply(evento);
+  :patch.Parse: tokeniza, resolve contra o schema,
+  extrai as colunas aninhadas e injeta _writtenAt;
+  if (parseou?) then (não)
+    if (evento RUIM e rawPayload?) then (sim)
+      :linha só com _writtenAt e _raw;
+      note right
+        É o ponto cego que a coluna existe para
+        fechar: sem ela, um JSON inválido é apenas
+        um número num contador.
+
+        Falha de INFRA não vira linha — não é o
+        evento que está errado.
+      end note
+      :historico.Apenda;
+    endif
+    stop
+  endif
+  :encodePatchHistorico: copia as entries,
+  PULA as congeladas, insere _raw na posição do FieldID;
+  note right
+    A congelada sai porque a captura emite o valor
+    CORRENTE da origem e é o MERGE que preserva o
+    primeiro. Sem merge, originalSeverity seria
+    igual a severity em toda linha.
+  end note
+  :historico.Apenda(payload);
+  note left
+    ANTES do stale check, de propósito: o evento
+    que a sequence descartaria é justamente o que
+    se quer ver ao depurar um descarte.
+
+    Erro aqui NÃO muda o ApplyResult. Conta,
+    degrada em modo sticky e segue — o produto é
+    o dataset base.
+  end note
+  :stale check, merge e Put no dataset base;
+}
+
+partition "Apenda — o que ele NÃO faz" {
+  :rowID = nextRowID++ (sem lookup de key);
+  :BuildRecord com key VAZIA;
+  :segW.Append;
+  :applyRecord: sem primary, sem sequence,
+  sem decremento de liveness, sem fase de CLEAR;
+  note right
+    Cada ausência é o desenho, não uma economia:
+    não há estado anterior, não há update, não há
+    garbage e nada sai de um índice numa tabela
+    em que a linha nunca muda.
+  end note
+  :locs.Publish — commit point de visibilidade;
+}
+
+partition "Retenção — uma passada por minuto" {
+  if (expireAfterWrite declarado?) then (sim)
+    :busca BINÁRIA pela fronteira do prazo;
+    note right
+      Possível por uma propriedade que só esta
+      tabela tem: os appends são serializados pelo
+      writer, então _writtenAt é NÃO-DECRESCENTE
+      por rowId.
+
+      O(log n) preads. É o que faz "7d" significar
+      sete dias, e não "sete dias mais o resto do
+      segmento".
+    end note
+    :avança rowIDBase;
+  endif
+  while (segmento mais antigo coberto pela marca?) is (sim)
+    :aposentaSegmento — os MESMOS quatro passos
+    da compaction, sem o copy-forward antes;
+    note right
+      1. Checkpoint    (a marca vira durável)
+      2. rename .retired + fsync do diretório
+      3. Checkpoint    (o manifest deixa de listar)
+      4. fecha o descritor, unlink, fsync
+
+      A marca anda ANTES de qualquer byte sair do
+      disco. Na ordem inversa, um crash deixaria
+      locations vivas apontando para um arquivo
+      que já não existe.
+    end note
+    :punch-hole no prefixo morto do locations.idx;
+  endwhile (não)
+  while (soma dos segmentos > maxBytes?) is (sim)
+    :empurra a marca para o primeiro rowId
+    do segmento seguinte e aposenta o mais antigo;
+    note right
+      Aqui o teto EMPURRA a marca, e não o
+      contrário: honrar a promessa sobre disco
+      significa deixar de enxergar linhas que o
+      prazo ainda não tinha vencido.
+
+      É o que a série de instante mais antigo
+      mostra — o maxBytes engolindo o prazo.
+    end note
+  endwhile (não)
+  :o segmento CORRENTE nunca é aposentado (D6);
+}
+
+stop
+
+@enduml

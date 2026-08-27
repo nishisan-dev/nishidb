@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/nishisan-dev/nishidb/internal/buildinfo"
 	nishiconfig "github.com/nishisan-dev/nishidb/internal/config"
@@ -322,4 +323,75 @@ func fechandoStore(st *storage.Store, causa error) error {
 		return errors.Join(causa, err)
 	}
 	return causa
+}
+
+// abreParaConsulta resolve o nome pedido contra os YAMLs de
+// `datasets.directory` e devolve o Store da tabela — que pode ser a IRMÃ de um
+// dataset, e não um dataset declarado.
+//
+// A tabela irmã não tem YAML próprio: ela nasce do bloco `history` do base. Sem
+// esta resolução, `--dataset events_history` responderia "arquivo não existe"
+// sobre uma tabela que demonstravelmente está lá — o comando mentiria sobre o
+// que o dataset tem, que é o defeito que este projeto trata como tal.
+//
+// O fechamento devolve os DOIS Stores, na ordem certa: a irmã usa o dicionário
+// do base, então ela fecha primeiro.
+func abreParaConsulta(cfg *nishiconfig.Config, nome string) (*storage.Store, *schema.Compiled, func(), error) {
+	if arquivoExiste(cfg.SpecDoDataset(nome)) {
+		st, compilado, _, err := abreDataset(cfg, nome)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		return st, compilado, func() { _ = st.Close() }, nil
+	}
+	base, err := datasetQueDerivaAIrma(cfg, nome)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	stBase, compiladoBase, spec, err := abreDataset(cfg, base)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	stIrma, _, err := abreHistorico(cfg, spec, compiladoBase, stBase.FieldDict())
+	if err != nil {
+		return nil, nil, nil, fechandoStore(stBase, err)
+	}
+	compiladoIrma, err := spec.DerivaHistorico().Compile(stBase.FieldDict())
+	if err != nil {
+		return nil, nil, nil, errors.Join(fechandoStore(stIrma, err), stBase.Close())
+	}
+	return stIrma, compiladoIrma, func() {
+		_ = stIrma.Close()
+		_ = stBase.Close()
+	}, nil
+}
+
+// datasetQueDerivaAIrma acha o dataset cujo bloco `history` produz este nome.
+//
+// A varredura é sobre o diretório inteiro porque o sufixo é declarável: não dá
+// para inverter o nome sem saber qual sufixo cada dataset escolheu. São alguns
+// arquivos YAML lidos uma vez, no caminho de um comando interativo.
+func datasetQueDerivaAIrma(cfg *nishiconfig.Config, nome string) (string, error) {
+	nomes, err := cfg.ListaDatasets()
+	if err != nil {
+		return "", err
+	}
+	for _, candidato := range nomes {
+		spec, err := schema.Load(cfg.SpecDoDataset(candidato), cfg.DefaultsDeQuery())
+		if err != nil {
+			// Um YAML quebrado no diretório não pode impedir a consulta a
+			// OUTRO dataset: ele já será recusado quando alguém o pedir.
+			continue
+		}
+		if spec.Historico != nil && spec.Historico.NomeDaTabela(candidato) == nome {
+			return candidato, nil
+		}
+	}
+	return "", fmt.Errorf("dataset %q: não há %s nem nenhum dataset cujo bloco `history` derive esse nome",
+		nome, cfg.SpecDoDataset(nome))
+}
+
+func arquivoExiste(caminho string) bool {
+	_, err := os.Stat(caminho)
+	return err == nil
 }

@@ -314,11 +314,24 @@ func (s *DatasetSpec) DerivaHistorico() *DatasetSpec {
 	if s == nil || s.Historico == nil {
 		return nil
 	}
+	// A spec derivada carrega o bloco (ver abaixo), então derivar de novo a
+	// partir dela produziria uma irmã da irmã. O par tem exatamente dois
+	// lados, e é o EhHistorico que fecha a recursão.
+	if s.EhHistorico {
+		return nil
+	}
 	h := &DatasetSpec{
 		Version:     1,
 		Name:        s.Historico.NomeDaTabela(s.Name),
 		EhHistorico: true,
 		Query:       s.Query,
+		// O bloco viaja para a spec derivada porque é a IRMÃ quem roda a
+		// retenção: o motor vive no Store dela, e quem sobe a goroutine
+		// percorre a lista de datasets perguntando a cada um pela própria
+		// configuração. Sem isto ela subiria sem política nenhuma, e o disco
+		// cresceria para sempre com o YAML declarando um teto — a configuração
+		// aceita e sem efeito que este bloco existe para não ser.
+		Historico: s.Historico,
 	}
 	// Sem `source`: o histórico não tem consumer próprio. Quem escreve nele é
 	// o materializer do base, no mesmo evento.
@@ -353,7 +366,46 @@ func (s *DatasetSpec) DerivaHistorico() *DatasetSpec {
 		h.Schema.Fields[CampoRaw] = FieldSpec{Type: "json"}
 	}
 	h.Schema.Include = includeDoHistorico(s, h.Schema.Fields)
+	// As congeladas viajam no `exclude` da spec derivada, e não só na ausência
+	// delas em Fields: com o dicionário compartilhado, a reidratação do
+	// Compile as adotaria de volta como campo auto sem tipo.
+	h.Schema.Exclude = nomesDasCongeladas(s.Schema.Fields)
 	return h
+}
+
+// nomesDasCongeladas devolve, em ordem, as colunas com frozenFrom.
+func nomesDasCongeladas(fields map[string]FieldSpec) []string {
+	var out []string
+	for nome, f := range fields {
+		if f.FrozenFrom != "" {
+			out = append(out, nome)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// nomesForaDoUniverso são as colunas que este dataset NÃO pode adotar do
+// dicionário compartilhado, além do que o `exclude` do YAML já diz.
+//
+// São as colunas que pertencem ao OUTRO lado do par: o `_raw` é da tabela
+// irmã, e o `_expiresIn` é do dataset base. Uma coluna adotada assim não teria
+// valor nenhum gravado deste lado — ela existiria só para responder nulo, e
+// para fazer o SELECT * das duas tabelas divergir do que a documentação
+// promete.
+func nomesForaDoUniverso(s *DatasetSpec) []string {
+	if s == nil {
+		return nil
+	}
+	if s.EhHistorico {
+		// O prazo por linha é do dataset base: aqui a retenção é do dataset
+		// inteiro, e é uma constante.
+		return []string{CampoDePrazo}
+	}
+	if s.Historico != nil && s.Historico.RawPayload {
+		return []string{CampoRaw}
+	}
+	return nil
 }
 
 // espelhaExtracoes copia as extrações do campo pai. A cópia é necessária

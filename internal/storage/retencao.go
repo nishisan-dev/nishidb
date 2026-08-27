@@ -4,9 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
-
+	"os"
 	"path/filepath"
+	"syscall"
+	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/storage/mmap"
 	"github.com/nishisan-dev/nishidb/internal/storage/rowindex"
@@ -252,6 +253,7 @@ func (s *Store) aposentaOQueVenceu(ctx context.Context, res *ResultadoDeRetencao
 			return err
 		}
 		res.PorTempo++
+		s.retPorTempo.Add(1)
 		res.BytesDevolvidos += bytes
 	}
 }
@@ -298,6 +300,7 @@ func (s *Store) aposentaAteCaber(ctx context.Context, maxBytes int64, res *Resul
 			return err
 		}
 		res.PorTamanho++
+		s.retPorTamanho.Add(1)
 		res.BytesDevolvidos += bytes
 	}
 }
@@ -417,4 +420,97 @@ func (s *Store) bytesDosSegmentos() (int64, error) {
 
 func (s *Store) listaSegmentos() ([]segment.SegmentRef, error) {
 	return segment.ListSegments(filepath.Join(s.opts.Dir, "data"))
+}
+
+// EstatisticasDeRetencao é o retrato da tabela histórica em disco.
+type EstatisticasDeRetencao struct {
+	// DataBytes é a soma dos segmentos; IndexBytes é o resto do diretório.
+	DataBytes, IndexBytes int64
+	// InstanteMaisAntigo é o _writtenAt da linha mais antiga ainda visível,
+	// em millis, ou zero quando a tabela está vazia.
+	InstanteMaisAntigo int64
+	// PurgadosPorTTL e PurgadosPorTamanho contam desde a subida.
+	PurgadosPorTTL, PurgadosPorTamanho int64
+	// MarcaDagua é o rowId a partir do qual a tabela é visível.
+	MarcaDagua types.RowID
+}
+
+// EstatisticasDeRetencao lê o estado sem tomar o lock do writer.
+func (s *Store) EstatisticasDeRetencao() EstatisticasDeRetencao {
+	e := EstatisticasDeRetencao{
+		PurgadosPorTTL:     s.retPorTempo.Load(),
+		PurgadosPorTamanho: s.retPorTamanho.Load(),
+		MarcaDagua:         s.RowIDBase(),
+	}
+	if dados, err := s.bytesDosSegmentos(); err == nil {
+		e.DataBytes = dados
+	}
+	e.IndexBytes = blocosDoDiretorio(filepath.Join(s.opts.Dir, "indexes")) +
+		blocosDoDiretorio(filepath.Join(s.opts.Dir, "checkpoint"))
+	if ms, ok := s.instanteMaisAntigo(); ok {
+		e.InstanteMaisAntigo = ms
+	}
+	return e
+}
+
+// instanteMaisAntigo lê o _writtenAt da primeira linha visível.
+//
+// Uma leitura só, na marca-d'água: a linha mais antiga viva é exatamente a
+// que está nela, porque o rowId cresce com o tempo de escrita. Varrer para
+// achá-la seria pagar a tabela inteira por um número de painel.
+func (s *Store) instanteMaisAntigo() (int64, bool) {
+	if !s.EhHistorico() {
+		return 0, false
+	}
+	base := s.RowIDBase()
+	if uint64(base) >= s.nextRowID.Load() {
+		return 0, false
+	}
+	s.aposMu.RLock()
+	defer s.aposMu.RUnlock()
+	packed, ok := s.locs.Get(base)
+	if !ok {
+		return 0, false
+	}
+	seg, off, _ := rowindex.Unpack(packed)
+	rec, _, err := s.segR.ReadRecord(seg, off, nil)
+	if err != nil {
+		return 0, false
+	}
+	return instanteDeEscrita(rec.Payload, s.campoDeEscrita)
+}
+
+// blocosDoDiretorio soma os BLOCOS alocados dos arquivos, e não o tamanho
+// aparente deles.
+//
+// A diferença não é cosmética aqui: a purga libera o prefixo morto do
+// locations.idx com punch-hole, o que devolve blocos sem mudar o tamanho do
+// arquivo. Somar Size() faria o painel mostrar disco que já voltou ao
+// dispositivo — que é a mesma classe de erro que o débito 78 registrou na
+// compaction, com o sinal trocado.
+//
+// Erro de leitura devolve o que deu para somar: é número de painel, e um
+// diretório que sumiu no meio da varredura não justifica derrubar o /v1/stats.
+func blocosDoDiretorio(dir string) int64 {
+	entradas, err := os.ReadDir(dir)
+	if err != nil {
+		return 0
+	}
+	var total int64
+	for _, e := range entradas {
+		if e.IsDir() {
+			total += blocosDoDiretorio(filepath.Join(dir, e.Name()))
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if st, ok := info.Sys().(*syscall.Stat_t); ok {
+			total += st.Blocks * 512
+			continue
+		}
+		total += info.Size()
+	}
+	return total
 }

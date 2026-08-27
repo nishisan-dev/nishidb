@@ -86,6 +86,35 @@ const (
 	// porque é a ordem que decide qual vence.
 	MetTTLRuleMatched = "nishidb_ttl_rule_matched_total"
 	MetTTLUnmatched   = "nishidb_ttl_unmatched_total"
+
+	// Séries da tabela histórica, publicadas no rótulo do dataset BASE — é
+	// nele que o operador declarou o bloco, e é nele que vai procurar.
+	//
+	// MetHistoryRows e MetHistoryDropped somam os eventos que passaram, e
+	// juntas respondem a única pergunta que importa numa tabela cuja razão de
+	// existir é servir de evidência: ela está COMPLETA?
+	MetHistoryRows    = "nishidb_history_rows_total"
+	MetHistoryDropped = "nishidb_history_dropped_total"
+	// MetHistoryDegraded é 1 quando a tabela entrou em modo falho sticky e
+	// parou de receber. A consulta a ela continua respondendo — o que sumiu é
+	// a escrita, e é isso que precisa de alarme.
+	MetHistoryDegraded = "nishidb_history_degraded"
+	// MetHistoryDataBytes é o que o maxBytes governa; MetHistoryIndexBytes é
+	// o resto do diretório, medido em BLOCOS. Separadas porque a purga só
+	// alcança a primeira: somá-las num número só faria o operador dimensionar
+	// o teto contra disco que a retenção não consegue baixar.
+	MetHistoryDataBytes  = "nishidb_history_data_bytes"
+	MetHistoryIndexBytes = "nishidb_history_index_bytes"
+	// MetHistoryOldestWrittenAt é a série que se olha primeiro: é ela que
+	// mostra o maxBytes engolindo o expireAfterWrite declarado.
+	MetHistoryOldestWrittenAt = "nishidb_history_oldest_written_at"
+	// MetHistoryPurged tem o rótulo `reason` (ttl|size) porque qual das duas
+	// políticas está decidindo é a pergunta, não quantos segmentos saíram.
+	MetHistoryPurged = "nishidb_history_segments_purged_total"
+	// MetHistoryRetentionRunning responde "o motor está de pé?" — ele para de
+	// vez na primeira falha, e sem esta série isso é indistinguível de "não
+	// há o que purgar".
+	MetHistoryRetentionRunning = "nishidb_history_retention_running"
 	// MetExpiryGraceTotal conta carências dadas a entidades sem instante de
 	// escrita. É a série que responde "o coletor está trabalhando?" nos
 	// primeiros minutos depois de ligar a expiração num dataset já

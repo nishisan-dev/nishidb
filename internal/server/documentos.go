@@ -187,7 +187,14 @@ func (s *Servidor) handleStats(w http.ResponseWriter, r *http.Request) {
 				State:   estado,
 				Paused:  detalhe,
 			},
-			Materialization: materializacaoStats(d.spec, d.mat.Metrics()),
+			History: historicoStats(d),
+		}
+		// A tabela irmã não tem materializer: quem escreve nela é o do
+		// dataset base, no mesmo evento. Publicar um bloco zerado ali seria
+		// dizer que nenhuma política de escrita agiu, quando na verdade elas
+		// agiram — do outro lado.
+		if d.mat != nil {
+			ds.Materialization = materializacaoStats(d.spec, d.mat.Metrics())
 		}
 		ds.Query.Errors = s.errosDoDataset(d.nome)
 

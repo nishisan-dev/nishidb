@@ -375,7 +375,13 @@ type Store struct {
 	retEmVoo     sync.WaitGroup
 	retAtiva     atomic.Bool
 	retBuf       []byte
-	epoch        uint64 // último epoch de manifest gravado (writer-only)
+	// retPorTempo e retPorTamanho contam os segmentos aposentados por cada
+	// política desde a subida. Duas séries e não uma: qual das duas está
+	// decidindo é a pergunta que separa "o prazo está sendo honrado" de "o
+	// teto está engolindo o prazo".
+	retPorTempo   atomic.Int64
+	retPorTamanho atomic.Int64
+	epoch         uint64 // último epoch de manifest gravado (writer-only)
 
 	// curSegID espelha o segmento corrente para leitura concorrente em
 	// Stats (segment.Writer não é thread-safe).

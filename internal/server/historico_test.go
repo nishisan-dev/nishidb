@@ -128,3 +128,60 @@ func TestSemBlocoHistoryNaoHaTabelaIrma(t *testing.T) {
 		t.Fatalf("%d datasets, quer 1: %+v", len(meta.Datasets), meta.Datasets)
 	}
 }
+
+// O /v1/stats e o /metrics precisam responder com a tabela irmã de pé: ela
+// não tem materializer — quem escreve nela é o do dataset base —, e o laço
+// que percorre todos os datasets passa por ela.
+func TestStatsRespondeComATabelaIrma(t *testing.T) {
+	srv := servidorComHistorico(t, specComHistorico)
+	st := leJSON[protocolo.Estatisticas](t, srv, "/v1/stats")
+	var base, irma *protocolo.DatasetStats
+	for i := range st.Datasets {
+		switch st.Datasets[i].Name {
+		case "eventos":
+			base = &st.Datasets[i]
+		case "eventos_history":
+			irma = &st.Datasets[i]
+		}
+	}
+	if base == nil || irma == nil {
+		t.Fatalf("datasets = %+v", st.Datasets)
+	}
+	// O bloco `history` vive no BASE: é nele que o operador declarou a chave.
+	if base.History == nil {
+		t.Fatal("o dataset base não publica o bloco history")
+	}
+	if base.History.Table != "eventos_history" {
+		t.Errorf("History.Table = %q", base.History.Table)
+	}
+	if base.History.ExpireAfterWrite == "" {
+		t.Error("History.ExpireAfterWrite vazio com a chave declarada")
+	}
+	if base.History.MaxBytes == 0 {
+		t.Error("History.MaxBytes zerado com a chave declarada")
+	}
+	// E a irmã NÃO publica um bloco history próprio: ela é a tabela, não a
+	// dona da configuração.
+	if irma.History != nil {
+		t.Errorf("a irmã publica um bloco history: %+v", irma.History)
+	}
+}
+
+func TestMetricasDoHistoricoSaemNoRotuloDoBase(t *testing.T) {
+	srv := servidorComHistorico(t, specComHistorico)
+	corpo := pega(t, srv, "/metrics")
+	for _, serie := range []string{
+		"nishidb_history_rows_total",
+		"nishidb_history_dropped_total",
+		"nishidb_history_degraded",
+		"nishidb_history_data_bytes",
+		"nishidb_history_index_bytes",
+		"nishidb_history_segments_purged_total",
+		"nishidb_history_retention_running",
+	} {
+		if !strings.Contains(corpo, serie+`{dataset="eventos"}`) &&
+			!strings.Contains(corpo, serie+`{dataset="eventos",`) {
+			t.Errorf("a série %s não saiu no rótulo do dataset base", serie)
+		}
+	}
+}

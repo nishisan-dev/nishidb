@@ -212,6 +212,50 @@ type DatasetStats struct {
 	// bloco só é preenchido quando há consumidor Kafka, e estes números valem
 	// para qualquer rota de escrita.
 	Materialization MaterializacaoStats `json:"materialization"`
+	// History descreve a tabela irmã append-only, e é preenchido no DATASET
+	// BASE — não na irmã. É lá que o operador procura: quem declarou
+	// `history:` num YAML quer saber o que aquele bloco está fazendo, e a
+	// irmã aparece na lista com os próprios números de storage e query como
+	// qualquer outro dataset.
+	History *HistoricoStats `json:"history,omitempty"`
+}
+
+// HistoricoStats é o que o bloco `history` está fazendo.
+//
+// Os três primeiros campos respondem a única pergunta que importa numa tabela
+// cuja razão de existir é servir de evidência: ela está COMPLETA? Linhas e
+// descartadas somam os eventos que passaram; Degraded diz se ela parou de
+// receber.
+type HistoricoStats struct {
+	// Table é o nome da tabela irmã — o mesmo que vai no FROM.
+	Table string `json:"table"`
+	// Rows são as linhas gravadas e Dropped os eventos que não viraram linha
+	// nenhuma. Contadores de PROCESSO: zeram no restart, como os de densidade.
+	Rows    int64 `json:"rows"`
+	Dropped int64 `json:"dropped"`
+	// Degraded diz que a tabela entrou em modo falho sticky e parou de
+	// receber. A consulta a ela continua respondendo, sobre o que já gravou.
+	Degraded bool `json:"degraded"`
+	// DataBytes é a soma dos SEGMENTOS, que é o que o maxBytes governa e o que
+	// a purga sabe devolver. IndexBytes é o resto do diretório — índices e
+	// locations.idx —, publicado em separado justamente porque a purga não o
+	// alcança: somá-lo ao teto faria a retenção perseguir um número que ela
+	// não consegue baixar.
+	DataBytes  int64 `json:"dataBytes"`
+	IndexBytes int64 `json:"indexBytes"`
+	// OldestWrittenAt é o instante da linha mais antiga ainda visível, em
+	// millis. É a série que o operador olha primeiro: é ela que mostra o
+	// maxBytes engolindo o expireAfterWrite declarado. Zero quando a tabela
+	// está vazia.
+	OldestWrittenAt int64 `json:"oldestWrittenAt"`
+	// SegmentsPurged conta os segmentos aposentados por cada política desde a
+	// subida.
+	PurgedByTTL  int64 `json:"purgedByTtl"`
+	PurgedBySize int64 `json:"purgedBySize"`
+	// ExpireAfterWrite e MaxBytes ecoam o que o YAML declarou. Sem eles, quem
+	// lê o painel não sabe contra o que comparar os números acima.
+	ExpireAfterWrite string `json:"expireAfterWrite,omitempty"`
+	MaxBytes         int64  `json:"maxBytes,omitempty"`
 }
 
 // MaterializacaoStats conta o que o dado gravado NÃO diz.

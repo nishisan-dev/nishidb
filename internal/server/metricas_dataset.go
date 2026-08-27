@@ -82,7 +82,13 @@ func registraMetricasDeDataset(reg *metrics.Registry, s *Servidor) {
 			// do snapshot que alimenta o /v1/stats: dois contadores para o
 			// mesmo fato divergem no dia em que um caminho de erro esquece de
 			// somar, e em produção alguém lê o errado.
-			out = append(out, amostrasDeMaterializacao(d.nome, d.spec, d.mat.Metrics())...)
+			// A tabela irmã não tem materializer — quem escreve nela é o do
+			// dataset base. As séries de política de escrita saem no rótulo
+			// de quem as aplicou.
+			if d.mat != nil {
+				out = append(out, amostrasDeMaterializacao(d.nome, d.spec, d.mat.Metrics())...)
+			}
+			out = append(out, amostrasDeHistorico(d)...)
 			rotulo := []metrics.Label{{Nome: metrics.LabelDataset, Valor: d.nome}}
 			// O formato de exposição só tem número, e Go não converte bool
 			// para float: o 0/1 do medidor se escreve aqui, uma vez, em vez de

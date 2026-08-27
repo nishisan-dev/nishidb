@@ -6,6 +6,8 @@ import (
 	"sort"
 
 	"github.com/nishisan-dev/nishidb/internal/logging"
+	"github.com/nishisan-dev/nishidb/internal/metrics"
+	"github.com/nishisan-dev/nishidb/internal/protocolo"
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/storage"
 )
@@ -154,4 +156,80 @@ func (s *Servidor) ligaRetencao(ctx context.Context) {
 	sort.Strings(comRetencao)
 	s.log.Info("retencao.ligada",
 		"o motor de retenção das tabelas históricas está de pé", "tabelas", comRetencao)
+}
+
+// historicoStats monta o bloco `history` do /v1/stats.
+//
+// Ele é preenchido no dataset BASE, e não na irmã: quem declarou `history:`
+// num YAML quer saber o que aquele bloco está fazendo, e a irmã já aparece na
+// lista com os próprios números de storage e query como qualquer outro
+// dataset.
+func historicoStats(base *dataset) *protocolo.HistoricoStats {
+	if base.irma == nil || base.spec.Historico == nil {
+		return nil
+	}
+	h := base.spec.Historico
+	snap := base.mat.Metrics()
+	e := base.irma.st.EstatisticasDeRetencao()
+	out := &protocolo.HistoricoStats{
+		Table:           base.irma.nome,
+		Rows:            snap.HistoricoLinhas,
+		Dropped:         snap.HistoricoDescartadas,
+		Degraded:        snap.HistoricoDegradado,
+		DataBytes:       e.DataBytes,
+		IndexBytes:      e.IndexBytes,
+		OldestWrittenAt: e.InstanteMaisAntigo,
+		PurgedByTTL:     e.PurgadosPorTTL,
+		PurgedBySize:    e.PurgadosPorTamanho,
+		MaxBytes:        h.MaxBytes,
+	}
+	if h.ExpireAfterWrite > 0 {
+		out.ExpireAfterWrite = h.ExpireAfterWrite.String()
+	}
+	return out
+}
+
+// amostrasDeHistorico publica as mesmas contagens no /metrics.
+//
+// Saem da MESMA leitura de snapshot que alimenta o /v1/stats, pela razão que
+// o metricas_dataset.go já registra: dois contadores para o mesmo fato
+// divergem no dia em que um caminho de erro esquece de somar, e em produção
+// alguém lê o errado.
+func amostrasDeHistorico(base *dataset) []metrics.Amostra {
+	if base.irma == nil || base.spec.Historico == nil {
+		return nil
+	}
+	snap := base.mat.Metrics()
+	e := base.irma.st.EstatisticasDeRetencao()
+	rotulo := []metrics.Label{{Nome: metrics.LabelDataset, Valor: base.nome}}
+	// O formato de exposição só tem número, e Go não converte bool para
+	// float: os 0/1 se escrevem aqui, uma vez, em vez de dentro do literal.
+	var degradado, rodando float64
+	if snap.HistoricoDegradado {
+		degradado = 1
+	}
+	if base.irma.st.RetencaoAtiva() {
+		rodando = 1
+	}
+	return []metrics.Amostra{
+		{Nome: metrics.MetHistoryRows, Tipo: metrics.TipoContador, Valor: float64(snap.HistoricoLinhas),
+			Ajuda: "Linhas gravadas na tabela histórica.", Labels: rotulo},
+		{Nome: metrics.MetHistoryDropped, Tipo: metrics.TipoContador, Valor: float64(snap.HistoricoDescartadas),
+			Ajuda: "Eventos que não viraram linha na tabela histórica.", Labels: rotulo},
+		{Nome: metrics.MetHistoryDegraded, Tipo: metrics.TipoMedidor, Valor: degradado,
+			Ajuda: "1 quando a tabela histórica parou de receber (modo falho sticky).", Labels: rotulo},
+		{Nome: metrics.MetHistoryDataBytes, Tipo: metrics.TipoMedidor, Valor: float64(e.DataBytes),
+			Ajuda: "Bytes dos segmentos da tabela histórica — o que o maxBytes governa.", Labels: rotulo},
+		{Nome: metrics.MetHistoryIndexBytes, Tipo: metrics.TipoMedidor, Valor: float64(e.IndexBytes),
+			Ajuda: "Blocos alocados pelos índices da tabela histórica; a purga NÃO os devolve.", Labels: rotulo},
+		{Nome: metrics.MetHistoryOldestWrittenAt, Tipo: metrics.TipoMedidor, Valor: float64(e.InstanteMaisAntigo),
+			Ajuda: "Instante da linha mais antiga ainda visível, em millis. Mostra o maxBytes engolindo o prazo declarado.", Labels: rotulo},
+		{Nome: metrics.MetHistoryPurged, Tipo: metrics.TipoContador, Valor: float64(e.PurgadosPorTTL),
+			Ajuda:  "Segmentos aposentados pela retenção da tabela histórica.",
+			Labels: append(append([]metrics.Label{}, rotulo...), metrics.Label{Nome: "reason", Valor: "ttl"})},
+		{Nome: metrics.MetHistoryPurged, Tipo: metrics.TipoContador, Valor: float64(e.PurgadosPorTamanho),
+			Labels: append(append([]metrics.Label{}, rotulo...), metrics.Label{Nome: "reason", Valor: "size"})},
+		{Nome: metrics.MetHistoryRetentionRunning, Tipo: metrics.TipoMedidor, Valor: rodando,
+			Ajuda: "1 quando o motor de retenção está de pé. Ele para de vez na primeira falha.", Labels: rotulo},
+	}
 }

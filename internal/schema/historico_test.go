@@ -1,6 +1,7 @@
 package schema
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -534,5 +535,143 @@ func TestEspelharASiMesmoEhIgnorado(t *testing.T) {
 	base.Espelha(base)
 	if n := len(base.listaDeEspelhos()); n != 1 {
 		t.Fatalf("espelhos = %d, quer 1 (só o histórico)", n)
+	}
+}
+
+// especParComRaw é o par completo: universo aberto (que é o que liga a
+// reidratação pelo dicionário), congelada, TTL e rawPayload.
+const especParComRaw = `version: 1
+name: events
+materialization:
+  key:
+    field: identifier
+  ttl:
+    - expireAfterWrite: 90d
+history:
+  expireAfterWrite: 7d
+  rawPayload: true
+schema:
+  include: ["*"]
+  unknownFields: include
+  fields:
+    identifier:
+      type: string
+    severity:
+      type: int64
+    originalSeverity:
+      frozenFrom: severity
+`
+
+// Com o dicionário compartilhado, a reidratação do Compile adota tudo o que
+// estiver nele. Sem os nomes fora do universo, cada lado do par adotaria as
+// colunas do outro como campo auto SEM TIPO — `IS NULL` eterno e recusa de
+// comparação por "sem tipo conhecido", que é pior do que a coluna não existir.
+func TestNenhumLadoDoParAdotaAsColunasDoOutro(t *testing.T) {
+	spec, err := Parse([]byte(especParComRaw), DefaultsPadrao)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	d := newFakeDict()
+	if _, err := spec.Compile(d); err != nil {
+		t.Fatalf("Compile do base: %v", err)
+	}
+	if _, err := spec.DerivaHistorico().Compile(d); err != nil {
+		t.Fatalf("Compile do histórico: %v", err)
+	}
+	// Recompila os DOIS contra o dicionário já povoado: é o que acontece no
+	// restart, e é aí que a reidratação tem o que adotar.
+	base, err := spec.Compile(d)
+	if err != nil {
+		t.Fatalf("recompilando o base: %v", err)
+	}
+	hist, err := spec.DerivaHistorico().Compile(d)
+	if err != nil {
+		t.Fatalf("recompilando o histórico: %v", err)
+	}
+
+	// O `_raw` é da irmã.
+	if _, tem := base.FieldByName([]byte(CampoRaw)); tem {
+		t.Errorf("o dataset base adotou %s do dicionário", CampoRaw)
+	}
+	// O prazo por linha e a congelada são do base.
+	if _, tem := hist.FieldByName([]byte(CampoDePrazo)); tem {
+		t.Errorf("o histórico adotou %s do dicionário", CampoDePrazo)
+	}
+	if _, tem := hist.FieldByName([]byte("originalSeverity")); tem {
+		t.Error("o histórico adotou a congelada do dicionário")
+	}
+	// E o que é dos dois continua nos dois.
+	for _, nome := range []string{"identifier", "severity", CampoInstanteDeEscrita} {
+		if _, tem := base.FieldByName([]byte(nome)); !tem {
+			t.Errorf("o base perdeu %q", nome)
+		}
+		if _, tem := hist.FieldByName([]byte(nome)); !tem {
+			t.Errorf("o histórico perdeu %q", nome)
+		}
+	}
+}
+
+// A exclusão precisa valer para o SELECT *, que é o que o operador vê.
+func TestOSelectEstrelaDeCadaLadoNaoTemAColunaDoOutro(t *testing.T) {
+	spec, err := Parse([]byte(especParComRaw), DefaultsPadrao)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := newFakeDict()
+	if _, err := spec.Compile(d); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := spec.DerivaHistorico().Compile(d); err != nil {
+		t.Fatal(err)
+	}
+	base, _ := spec.Compile(d)
+	hist, _ := spec.DerivaHistorico().Compile(d)
+
+	nomes := func(c *Compiled) []string {
+		var out []string
+		for _, f := range c.FieldsByID() {
+			out = append(out, f.Name)
+		}
+		return out
+	}
+	baseNomes, histNomes := nomes(base), nomes(hist)
+	if slices.Contains(baseNomes, CampoRaw) {
+		t.Errorf("%s no SELECT * do base: %v", CampoRaw, baseNomes)
+	}
+	if slices.Contains(histNomes, "originalSeverity") {
+		t.Errorf("congelada no SELECT * do histórico: %v", histNomes)
+	}
+	if slices.Contains(histNomes, CampoDePrazo) {
+		t.Errorf("%s no SELECT * do histórico: %v", CampoDePrazo, histNomes)
+	}
+	if !slices.Contains(histNomes, CampoRaw) {
+		t.Errorf("%s fora do SELECT * do histórico: %v", CampoRaw, histNomes)
+	}
+}
+
+// Quem roda a retenção é a IRMÃ: o motor vive no Store dela, e quem sobe a
+// goroutine percorre a lista de datasets perguntando a cada um pela própria
+// configuração. Sem o bloco na spec derivada ela subia sem política nenhuma, e
+// o disco crescia para sempre com o YAML declarando um teto.
+func TestASpecDerivadaCarregaOBlocoDeRetencao(t *testing.T) {
+	s := specComHistorico(t, "history:\n  expireAfterWrite: 7d\n  maxBytes: 4GiB\n")
+	h := s.DerivaHistorico()
+	if h.Historico == nil {
+		t.Fatal("a spec derivada não carrega o bloco history")
+	}
+	if h.Historico.ExpireAfterWrite != 7*24*time.Hour {
+		t.Errorf("ExpireAfterWrite = %s", h.Historico.ExpireAfterWrite)
+	}
+	if h.Historico.MaxBytes != 4<<30 {
+		t.Errorf("MaxBytes = %d", h.Historico.MaxBytes)
+	}
+}
+
+// O par tem exatamente dois lados: derivar a partir da irmã produziria uma
+// irmã da irmã, e é o EhHistorico que fecha a recursão.
+func TestAIrmaNaoDerivaOutraIrma(t *testing.T) {
+	s := specComHistorico(t, "history:\n  expireAfterWrite: 7d\n")
+	if neta := s.DerivaHistorico().DerivaHistorico(); neta != nil {
+		t.Fatalf("a irmã derivou %q", neta.Name)
 	}
 }

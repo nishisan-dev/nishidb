@@ -700,6 +700,16 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 	// campo. Num universo fechado o que sobra no dicionário é resíduo de uma
 	// configuração anterior, e o operador que tirou o campo da lista o quer
 	// fora.
+	// O dicionário é COMPARTILHADO entre o dataset base e a tabela irmã, e a
+	// reidratação abaixo adota tudo o que estiver nele. Sem estes nomes fora
+	// do universo, cada lado adotaria as colunas do outro como campo auto sem
+	// tipo: o `_raw` apareceria no SELECT * do base sempre nulo, e a congelada
+	// e o `_expiresIn` voltariam ao da irmã depois de a derivação os ter
+	// tirado — os três com `IS NULL` eterno e recusa de comparação por "sem
+	// tipo conhecido", que é pior do que a coluna não existir.
+	for _, nome := range nomesForaDoUniverso(s) {
+		c.exclude[nome] = struct{}{}
+	}
 	if c.IncludeAll && c.Unknown == UnknownInclude {
 		for i := 1; i <= dict.Len(); i++ {
 			id := types.FieldID(i)
