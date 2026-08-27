@@ -482,8 +482,18 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 	// LookupOrCreate queima ids na ordem em que é chamado, e essa ordem decide
 	// o mapeamento nome→id de um dataset NOVO, gravado para sempre. _writtenAt
 	// primeiro, _expiresIn depois, sempre — nunca reordene.
+	//
+	// Os dois campos têm gatilhos DIFERENTES, e separá-los foi o que a tabela
+	// histórica exigiu: ela precisa do instante de escrita para a retenção por
+	// tempo, e não tem prazo por linha para guardar. Enquanto o gatilho era um
+	// só, ligar `history.expireAfterWrite` num dataset sem regras de TTL
+	// produzia um histórico sem `_writtenAt` — e um motor de retenção sem nada
+	// contra o que comparar, que não expiraria coisa alguma sem erro e sem log.
+	if s.ExigeInstanteDeEscrita() {
+		names = append(names, CampoInstanteDeEscrita)
+	}
 	if len(c.RegrasTTL) > 0 {
-		names = append(names, CampoInstanteDeEscrita, CampoDePrazo)
+		names = append(names, CampoDePrazo)
 	}
 	sort.Strings(names)
 
@@ -707,7 +717,12 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 		}
 	}
 
-	if c.Key == nil {
+	// Key nil é erro quando a spec DECLARA uma key — é o include que a deixou
+	// de fora. A spec que não declara nenhuma é a do histórico, e ali a
+	// ausência é o desenho: sem key não há primary, sem primary não há dedup,
+	// e é o Key nil que impede o planner de eleger o point lookup (planner.go:94)
+	// sobre um Store que não tem contra o que resolvê-lo.
+	if s.Materialization.Key.Field != "" && c.Key == nil {
 		return nil, specErrf("materialization.key.field %q fora do conjunto incluído", s.Materialization.Key.Field)
 	}
 	if seqField != "" && c.Seq == nil {
