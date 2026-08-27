@@ -410,6 +410,84 @@ depois que o replay do backlog terminar: o evento de replay e o de fluxo normal
 não têm por que ter o mesmo tamanho, e é o segundo que dimensiona o disco a
 longo prazo.
 
+## O travamento de 27/08/2026, e o que ele ensinou
+
+A ingestão ficou **parada por uma hora** sem que nada acusasse. O
+`/v1/health` respondia UP, `ingestion.state` dizia UP, não havia erro no log,
+e o lag subia. Fica registrado com o método, porque o diagnóstico errado veio
+antes do certo.
+
+### O que parecia, e o que era
+
+| Sintoma | Conclusão apressada | O que era de fato |
+|---|---|---|
+| `%CPU` do `ps` em 104% | "está girando" | `%CPU` é a média da VIDA do processo, não o instantâneo. Nove horas de ingestão dão isso. Não havia spin |
+| só `expiry_scanned_total` se movia, a 18 mil/s | "o coletor monopolizou" | era o único componente COM trabalho a fazer. 460 milhões de varreduras é o cursor circular com a fila de expirações cheia — comportamento documentado |
+| `queue_depth` em 479 | "acordar perdido na nossa fila" | a série estava **congelada**. Ver abaixo |
+
+A causa real: o poller ficou dentro do `kgo.PollRecords` e nunca voltou. Todo
+o resto estava correto e ocioso — writer esperando num channel vazio,
+compaction, expiração e retenção dormindo entre passadas, **nenhuma goroutine
+bloqueada em lock**, `AllowRebalance` chamado em todos os caminhos. Não era
+deadlock nem contenção: era fome, vinda de cima do storage.
+
+### A série que mentiu
+
+`nishidb_kafka_queue_depth` e `queue_bytes` eram gravadas **dentro** do laço de
+poll. Com o poller travado, elas pararam no último valor amostrado enquanto o
+writer seguia drenando — e o painel passou a afirmar 479 registros esperando
+sobre uma fila vazia, no minuto exato em que a pergunta era se o gargalo
+estava antes ou depois dela.
+
+**Série congelada é pior que série ausente.** Ela não diz "não sei"; afirma um
+número velho com a mesma cara de um número novo. Hoje a profundidade sai de um
+coletor, lida no instante do scrape — e a prova de que a correção pegou é que
+três leituras seguidas em produção dão números diferentes (159 → 206 → 254).
+
+### O que mudou por causa disso
+
+**O watchdog** (release `v0.6.0-160-g8caad2c`, ligado por padrão: 60 s,
+3 tentativas). O mecanismo está em [`architecture.md`](architecture.md), seção
+"O watchdog". O que importa aqui: se o `PollRecords` travar de novo, o
+consumidor é recriado em até um minuto em vez de uma hora parada.
+
+**O pprof, em loopback.** O diagnóstico custou um `kill -QUIT` — a única forma
+de ver as pilhas num binário sem pprof, e ela mata o processo. Foi aceitável
+porque a ingestão já estava morta e o restart era a mitigação de qualquer
+forma, mas transformou uma consulta numa interrupção. A unit passou a subir
+com:
+
+```
+--pprof 127.0.0.1:9144
+```
+
+O endereço é explícito **de propósito**: o código binda onde mandarem, sem
+forçar loopback. Exposto, o pprof entrega despejo de heap e o
+`/debug/pprof/profile` vira vetor de negação de serviço. Foi conferido de fora
+do host — a porta recusa conexão, enquanto a de consulta TLS na mesma máquina
+responde 401.
+
+O despejo que custou uma parada virou:
+
+```bash
+curl -s "http://127.0.0.1:9144/debug/pprof/goroutine?debug=2"
+```
+
+A unit NÃO é versionada neste repositório; o backup do estado anterior ficou
+em `/etc/systemd/system/nishidb.service.bak-20260827-084139`.
+
+### O que continua em aberto
+
+**Por que o `PollRecords` travou** é interno ao franz-go e não foi isolado —
+débito 90. O watchdog trata o sintoma, e trata bem. Se ele disparar mais de
+uma vez sem que a recriação resolva, o problema é outro e precisa de
+instrumentação dentro do poll.
+
+E vale a ressalva honesta: **o watchdog nunca disparou em produção.** Está
+testado em unidade, com as guardas escritas, mas o primeiro disparo real ainda
+não aconteceu. `nishidb_kafka_watchdog_trips_total` subindo com a ingestão
+voltando confirma o desenho; subindo sem voltar, refuta.
+
 ## Limites conhecidos deste piloto
 
 - **Sem autenticação e sem TLS** (Fase 11). Loopback é a única proteção, e por

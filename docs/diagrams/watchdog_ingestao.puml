@@ -1,0 +1,121 @@
+@startuml watchdog_ingestao
+title Watchdog da ingestão: por que três fatos, e por que a fila decide
+
+start
+
+:a cada janela/4, lê os eventos consumidos;
+
+if (os eventos avançaram?) then (sim)
+  :reinicia o relógio de progresso;
+  note right
+    Progresso é a única saída barata. Só quando
+    ele falta o watchdog paga por perguntar ao
+    broker e olhar a fila — consultar a cada tique
+    de um consumidor saudável seria tráfego
+    administrativo por nada.
+  end note
+  detach
+endif
+
+if (parado há menos que a janela?) then (sim)
+  :aguarda o próximo tique;
+  detach
+endif
+
+:pergunta o lag ao BROKER, pelo cliente ADMIN;
+note right
+  Pergunta, e NÃO lê a série do /metrics: aquela é
+  atualizada pelo scrape, então num processo que
+  ninguém raspa ela fica velha e a decisão sairia
+  de um número de idade desconhecida.
+
+  O admin é conexão distinta da do consumo, e foi
+  por isso que ele continuou respondendo durante
+  todo o travamento de 27/08/2026. É o que torna
+  este watchdog construível.
+end note
+
+if (o lag é conhecido?) then (não)
+  :reinicia o relógio e se abstém;
+  note right
+    "Não sei" não autoriza agir. Recriar o consumidor
+    por causa de uma consulta que falhou seria trocar
+    um problema por outro.
+  end note
+  detach
+endif
+
+if (lag > 0?) then (não)
+  :reinicia o relógio;
+  note right
+    Tópico em dia — o falso positivo clássico. Um
+    watchdog disparado por "sem eventos há N segundos"
+    recriaria o consumidor toda madrugada de baixo
+    movimento.
+  end note
+  detach
+endif
+
+if (a fila poller-writer tem itens?) then (sim)
+  :registra ingestao.sem_progresso e NÃO age;
+  note right
+    **A guarda contra backpressure da persistência.**
+
+    Fila com itens = o writer não está dando conta
+    (disco lento, checkpoint longo, storage em modo
+    falho). Recriar a conexão aqui seria ERRADO e
+    destrutivo: abortaria trabalho em voo por um
+    problema que não é de conexão, e a fila voltaria
+    a encher do mesmo jeito.
+
+    Um item só já basta para se abster: a asserção é
+    "o writer tem o que fazer", não "a fila está cheia".
+  end note
+  detach
+endif
+
+:fila VAZIA — o writer não tem o que fazer,
+logo quem não entrega é o poller;
+
+:guarda a causa e CANCELA o contexto;
+note right
+  A causa é guardada ANTES do cancelamento: o poll
+  devolve nil sob cancelamento ("encerramento pedido;
+  não é falha"), e sem ela a recriação viraria um
+  encerramento limpo que ninguém tentaria de novo.
+end note
+
+:o poll acorda e o Roda devolve ErrSemProgresso;
+
+if (tentativas consecutivas esgotadas?) then (sim)
+  :ingestao.desistiu, watchdog_desistiu = 1;
+  note right
+    Cai no estado que a ingestão falha já tem:
+    CONSULTAS DE PÉ (§51), health reportando, e
+    nada em silêncio.
+  end note
+  stop
+endif
+
+:watchdog_trips++ e recria pelo MESMO kafka.Abre da subida;
+note right
+  O §49 põe o checkpoint local como autoritativo e
+  lista quatro situações que RECUSAM subir a ingestão.
+  Um caminho de reconexão que redescobrisse a posição
+  por conta própria seria um segundo boot, menos
+  testado, que divergiria do primeiro no dia em que
+  alguém mexesse num deles.
+
+  Uma implementação de posicionamento, não duas.
+end note
+
+:a contagem zera quando o consumidor volta a andar;
+note right
+  Consecutivas, não acumuladas. Sem isso, meses de
+  uptime somariam três blips não relacionados e a
+  ingestão desistiria para sempre.
+end note
+
+stop
+
+@enduml

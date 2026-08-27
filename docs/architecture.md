@@ -87,6 +87,75 @@ põe `start queries` antes de `resume ingestion`:
 A saída de todas elas é o comando `nishidb offsets`, que exige o servidor
 parado (toma o flock) e confirmação explícita para escrever.
 
+### O watchdog: quando o consumidor para de receber
+
+![Watchdog da ingestão: os três fatos do gatilho, a guarda contra backpressure e a escada de recriação](https://uml.nishisan.dev/proxy?src=https://git-raw.nishisan.dev/nishisan-dev/nishidb/main/docs/diagrams/watchdog_ingestao.puml)
+
+Um consumidor pode parar de entregar registros **sem erro nenhum**. A conexão
+segue de pé, o processo segue saudável, o `/v1/health` responde UP — e nada
+chega. Aconteceu no piloto em 27/08/2026: o poller ficou dentro do
+`PollRecords` e a ingestão ficou parada por uma hora, com 3,2 milhões de
+mensagens pendentes no broker, até alguém olhar.
+
+**O gatilho é uma conjunção de TRÊS fatos, e são três porque dois não bastam.**
+
+| Fato | Por que sozinho não serve |
+|---|---|
+| os eventos não avançaram na janela | um tópico legitimamente parado produz o MESMO sintoma |
+| o broker declara mensagens pendentes | diz que há o que consumir, não de quem é a culpa |
+| a fila poller→writer está **vazia** | é este que separa as duas causas |
+
+O terceiro é a **guarda contra backpressure da persistência**, e é o que
+impede o watchdog de tratar um problema de disco como se fosse de rede:
+
+- **fila vazia** — o writer não tem o que fazer, logo quem não entrega é o
+  poller. Recriar o cliente é o remédio certo.
+- **fila com itens** — o writer não está dando conta (disco lento, checkpoint
+  longo, storage em modo falho). Recriar a conexão aqui seria **errado e
+  destrutivo**: abortaria trabalho em voo por um problema que não é de
+  conexão, e a fila voltaria a encher do mesmo jeito.
+
+Um item só já basta para se abster: a asserção é "o writer tem o que fazer",
+não "a fila está cheia".
+
+**O lag é perguntado ao BROKER, e não lido da série do `/metrics`.** Aquela é
+atualizada pelo *scrape* (`AtualizaLag`), então num processo que ninguém raspa
+ela fica velha e a decisão sairia de um número de idade desconhecida. A
+pergunta vai pelo cliente **admin**, que é uma conexão distinta da do consumo
+— e é exatamente por isso que este watchdog é construível: no incidente, o
+admin seguiu respondendo o tempo todo em que o `PollRecords` estava travado.
+Se um dia os dois travarem juntos, o watchdog **se abstém**, porque agir sobre
+o que não se sabe seria recriar o consumidor por causa de uma consulta que
+falhou.
+
+**A recriação passa pelo MESMO `kafka.Abre` da subida.** O §49 põe o
+checkpoint local como autoritativo e lista quatro situações que recusam subir
+a ingestão; um caminho de reconexão que redescobrisse a posição por conta
+própria seria um segundo boot, menos testado, que divergiria do primeiro no
+dia em que alguém mexesse num deles. Há uma implementação de posicionamento,
+não duas.
+
+A contagem é de tentativas **consecutivas** e zera quando o consumidor volta a
+andar — sem isso, meses de uptime somariam três blips não relacionados e a
+ingestão desistiria para sempre. Esgotadas, o dataset cai no estado que a
+ingestão falha já tem: **consultas de pé** (§51), health reportando, e
+`ingestao.desistiu` no log.
+
+`nishidb_kafka_watchdog_trips_total` e `nishidb_kafka_watchdog_desistiu` são
+duas séries e não uma, porque recriar é **recuperação** — o produto se
+consertou e seguiu — enquanto desistir é ingestão morta. Somá-las faria um
+alarme disparar igual nos dois casos, e só um deles pede alguém acordado. As
+duas nascem com zero na subida: série que só aparece quando há o que mostrar
+não se distingue de alvo fora do ar.
+
+> **A lição que veio junto, e ela é sobre instrumentação.** A profundidade da
+> fila era gravada pelo laço de poll. Com o poller travado, os dois medidores
+> CONGELARAM no último valor: o `/metrics` afirmava "479 registros esperando"
+> sobre uma fila que o writer já tinha esvaziado, e a série apontou a
+> investigação para o componente errado. Hoje ela sai de um coletor, lida no
+> instante do scrape. **Série congelada é pior que série ausente** — ela não
+> diz "não sei", afirma um número velho com a cara de um número novo.
+
 Um evento passa por: tokenização sem cópia → resolução de campos contra o
 schema → conversão tipada para um arena reutilizado → merge com o estado
 anterior → gravação.
