@@ -284,6 +284,14 @@ func (c *Compiled) FixAutoType(f *CompiledField, t types.FieldType) error {
 		return err
 	}
 	f.autoType.Store(uint32(t))
+	// O typeHint é DURÁVEL e compartilhado, então o espelho já o veria no
+	// próximo restart. Propagar agora é o que impede a janela em que a mesma
+	// coluna tem tipo no dataset base e "sem tipo conhecido" na tabela irmã —
+	// janela em que o binder recusaria, na irmã, a comparação que aceita no
+	// base.
+	for _, m := range c.listaDeEspelhos() {
+		m.fixaTipoEspelhado(f.ID, t)
+	}
 	return nil
 }
 
@@ -317,6 +325,26 @@ type Compiled struct {
 	Errors ErrorsSpec
 
 	Key, Seq *CompiledField
+
+	// espelhos são os Compiled que recebem, em RUNTIME, toda coluna que este
+	// aqui descobrir. O único caso hoje é a tabela histórica: ela tem Compiled
+	// próprio (o nome, os índices e a ausência das congeladas diferem), mas
+	// compartilha o dicionário — e sem o espelho uma chave promovida a coluna
+	// depois da subida seria consultável no dataset base e invisível na tabela
+	// irmã até o restart, quando a reidratação pelo dicionário a traria de
+	// volta. Divergência entre as duas tabelas é exatamente o que a feature
+	// existe para não ter.
+	//
+	// atomic.Pointer, e não um campo sob c.mu, porque os dois pontos de
+	// propagação estão em regimes de lock diferentes: ResolveUnknown e
+	// ResolveAninhado já seguram c.mu na escrita, e FixAutoType não segura
+	// nada. Ler um slice imutável por ponteiro atômico serve aos dois sem
+	// inventar uma segunda ordem de travamento.
+	//
+	// Espelho NÃO se encadeia: quem recebe a propagação não a repassa. Um
+	// espelho de espelho tomaria dois locks em cadeia a partir do writer, e o
+	// produto não tem caso que peça isso.
+	espelhos atomic.Pointer[[]*Compiled]
 
 	// Congeladas são as colunas com frozenFrom, em ordem de FieldID.
 	// Pré-computada e ordenada pela mesma razão das Derivadas: o materializer
@@ -876,6 +904,7 @@ func (c *Compiled) ResolveAninhado(pai *CompiledField, nomeQualificado, caminho 
 	}
 	c.byName[cf.Name] = cf
 	c.byID[cf.ID] = cf
+	c.propagaAosEspelhos(cf)
 	return cf, nil
 }
 
@@ -1099,5 +1128,6 @@ func (c *Compiled) ResolveUnknown(name []byte) (*CompiledField, error) {
 	}
 	c.byName[cf.Name] = cf
 	c.byID[cf.ID] = cf
+	c.propagaAosEspelhos(cf)
 	return cf, nil
 }

@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
 // yamlComHistorico monta uma spec de dataset base com o bloco `history` dado.
@@ -392,5 +394,145 @@ func TestOsIndicesDoHistoricoChegamAoCompilado(t *testing.T) {
 	hn, _ := hist.FieldByName([]byte("node"))
 	if hn.Index != IndexNone {
 		t.Errorf("node.Index = %v no histórico, quer nenhum", hn.Index)
+	}
+}
+
+// parComDescoberta compila base e histórico contra o mesmo dicionário e já
+// registra o espelho, que é como o servidor os abre.
+func parComDescoberta(t *testing.T, extraSchema string) (base, hist *Compiled) {
+	t.Helper()
+	yaml := "version: 1\nname: events\n" +
+		"materialization:\n  key:\n    field: identifier\n" +
+		"history:\n  expireAfterWrite: 7d\n" +
+		"schema:\n  include: [\"*\"]\n  unknownFields: include\n" + extraSchema + "  fields:\n" +
+		"    identifier:\n      type: string\n" +
+		"    doc:\n      type: json\n      unknownFields: include\n"
+	s, err := Parse([]byte(yaml), DefaultsPadrao)
+	if err != nil {
+		t.Fatalf("a spec foi recusada: %v", err)
+	}
+	d := newFakeDict()
+	if base, err = s.Compile(d); err != nil {
+		t.Fatalf("compilando o base: %v", err)
+	}
+	if hist, err = s.DerivaHistorico().Compile(d); err != nil {
+		t.Fatalf("compilando o histórico: %v", err)
+	}
+	base.Espelha(hist)
+	return base, hist
+}
+
+func TestCampoDescobertoEmRuntimeApareceNasDuasTabelas(t *testing.T) {
+	base, hist := parComDescoberta(t, "")
+	cf, err := base.ResolveUnknown([]byte("novo"))
+	if err != nil || cf == nil {
+		t.Fatalf("ResolveUnknown = (%v, %v)", cf, err)
+	}
+	hf, ok := hist.FieldByName([]byte("novo"))
+	if !ok {
+		t.Fatal("a coluna descoberta não chegou ao histórico")
+	}
+	if hf.ID != cf.ID {
+		t.Errorf("FieldID %d no base e %d no histórico", cf.ID, hf.ID)
+	}
+	if !hf.IsAuto {
+		t.Error("a coluna espelhada não é auto")
+	}
+	// Ponteiros distintos: o Index mora no CompiledField, e é ele que difere
+	// entre as duas tabelas.
+	if hf == cf {
+		t.Error("o histórico compartilhou o ponteiro do CompiledField do base")
+	}
+}
+
+// A derivada é mantida fora do SELECT * pela ligação com o pai. Reatá-la ao
+// pai DESTE Compiled é o que faz `doc.*` achá-la aqui.
+func TestColunaAninhadaDescobertaReataAoPaiDoHistorico(t *testing.T) {
+	base, hist := parComDescoberta(t, "")
+	paiBase, ok := base.FieldByName([]byte("doc"))
+	if !ok {
+		t.Fatal("o base não tem doc")
+	}
+	cf, err := base.ResolveAninhado(paiBase, []byte("doc.ti"), []byte("ti"))
+	if err != nil || cf == nil {
+		t.Fatalf("ResolveAninhado = (%v, %v)", cf, err)
+	}
+	hf, ok := hist.FieldByName([]byte("doc.ti"))
+	if !ok {
+		t.Fatal("a coluna aninhada não chegou ao histórico")
+	}
+	paiHist, _ := hist.FieldByName([]byte("doc"))
+	if hf.Parent != paiHist {
+		t.Fatalf("Parent = %p, quer o doc do histórico (%p)", hf.Parent, paiHist)
+	}
+	if hf.Parent == paiBase {
+		t.Fatal("o histórico reatou a filha ao pai do BASE")
+	}
+	if hf.Path != "ti" {
+		t.Errorf("Path = %q, quer %q", hf.Path, "ti")
+	}
+	// E ela continua fora do SELECT * dos dois lados.
+	for _, f := range hist.FieldsByID() {
+		if f.Name == "doc.ti" {
+			t.Fatal("a derivada entrou no SELECT * do histórico")
+		}
+	}
+}
+
+func TestFixAutoTypeChegaAoEspelho(t *testing.T) {
+	base, hist := parComDescoberta(t, "")
+	cf, err := base.ResolveUnknown([]byte("contador"))
+	if err != nil || cf == nil {
+		t.Fatalf("ResolveUnknown = (%v, %v)", cf, err)
+	}
+	hf, _ := hist.FieldByName([]byte("contador"))
+	if hf.EffectiveType() != types.TypeNull {
+		t.Fatalf("o tipo já estava fixado antes da observação: %v", hf.EffectiveType())
+	}
+	if err := base.FixAutoType(cf, types.TypeInt64); err != nil {
+		t.Fatalf("FixAutoType: %v", err)
+	}
+	if got := hf.EffectiveType(); got != types.TypeInt64 {
+		t.Fatalf("tipo no histórico = %v, quer int64", got)
+	}
+}
+
+// O teto governa o crescimento do dicionário, e o espelho não pode contorná-lo:
+// a coluna que o base recusou não existe em lugar nenhum.
+func TestColunaRecusadaPeloTetoNaoChegaAoEspelho(t *testing.T) {
+	base, hist := parComDescoberta(t, "  maxCols: 3\n")
+	antes := len(hist.FieldsByIDIncluindoSistema())
+	cf, err := base.ResolveUnknown([]byte("excedente"))
+	if err != nil {
+		t.Fatalf("ResolveUnknown: %v", err)
+	}
+	if cf != nil {
+		t.Fatal("a fixture não alcançou o teto — o caso se perdeu")
+	}
+	if _, ok := hist.FieldByName([]byte("excedente")); ok {
+		t.Fatal("a coluna recusada pelo teto apareceu no histórico")
+	}
+	if depois := len(hist.FieldsByIDIncluindoSistema()); depois != antes {
+		t.Fatalf("o histórico foi de %d para %d colunas", antes, depois)
+	}
+}
+
+func TestEspelharDuasVezesNaoDuplicaAPropagacao(t *testing.T) {
+	base, hist := parComDescoberta(t, "")
+	base.Espelha(hist)
+	base.Espelha(hist)
+	if _, err := base.ResolveUnknown([]byte("novo")); err != nil {
+		t.Fatalf("ResolveUnknown: %v", err)
+	}
+	if _, ok := hist.FieldByName([]byte("novo")); !ok {
+		t.Fatal("a coluna não chegou ao histórico")
+	}
+}
+
+func TestEspelharASiMesmoEhIgnorado(t *testing.T) {
+	base, _ := parComDescoberta(t, "")
+	base.Espelha(base)
+	if n := len(base.listaDeEspelhos()); n != 1 {
+		t.Fatalf("espelhos = %d, quer 1 (só o histórico)", n)
 	}
 }

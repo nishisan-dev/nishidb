@@ -2,12 +2,14 @@ package schema
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/nishisan-dev/nishidb/internal/types"
 	"github.com/nishisan-dev/nishidb/internal/units"
 )
 
@@ -413,4 +415,107 @@ func DescreveHistorico(nome string, h *HistoricoSpec) string {
 		}
 	}
 	return sb.String()
+}
+
+// Espelha registra m para receber, em runtime, toda coluna que c descobrir.
+//
+// É chamado UMA vez por par, na subida, antes de a ingestão começar. O
+// registro é aditivo e idempotente por identidade: espelhar duas vezes o mesmo
+// Compiled não duplica a propagação.
+//
+// A rota que ele cobre é estreita e específica: o dataset de universo ABERTO
+// (`include: ["*"]` com `unknownFields: include`) promove chaves a coluna
+// conforme elas aparecem. Depois de um restart isso não precisaria de nada — a
+// reidratação pelo dicionário compartilhado traz a coluna para os dois lados —,
+// mas DENTRO da sessão em que a chave apareceu só o base a conhece.
+func (c *Compiled) Espelha(m *Compiled) {
+	if c == nil || m == nil || m == c {
+		return
+	}
+	atual := c.listaDeEspelhos()
+	if slices.Contains(atual, m) {
+		return
+	}
+	nova := make([]*Compiled, len(atual), len(atual)+1)
+	copy(nova, atual)
+	nova = append(nova, m)
+	c.espelhos.Store(&nova)
+}
+
+// listaDeEspelhos devolve o slice imutável corrente, ou nil.
+func (c *Compiled) listaDeEspelhos() []*Compiled {
+	if c == nil {
+		return nil
+	}
+	if p := c.espelhos.Load(); p != nil {
+		return *p
+	}
+	return nil
+}
+
+// propagaAosEspelhos replica a coluna recém-descoberta. Chamado pelo writer
+// com c.mu já travado na escrita — por isso ele não pode tocar c.mu, e por
+// isso a lista vive num ponteiro atômico.
+//
+// A ordem de travamento é sempre base→espelho, e como o espelho não repassa a
+// propagação, não há cadeia em que ela pudesse se inverter.
+func (c *Compiled) propagaAosEspelhos(cf *CompiledField) {
+	for _, m := range c.listaDeEspelhos() {
+		m.adotaDescoberta(cf)
+	}
+}
+
+// adotaDescoberta cria neste Compiled a coluna equivalente à do original.
+//
+// O CompiledField é NOVO, e não o ponteiro do original, porque `Index` mora
+// nele e é justamente o que difere entre as duas tabelas: compartilhar o
+// ponteiro faria o índice declarado em `history.fields` valer para o dataset
+// base também.
+func (m *Compiled) adotaDescoberta(orig *CompiledField) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, tomado := m.byName[orig.Name]; tomado {
+		return
+	}
+	if _, tomado := m.byID[orig.ID]; tomado {
+		return
+	}
+	cf := &CompiledField{
+		ID:     orig.ID,
+		Name:   orig.Name,
+		IsAuto: true,
+		Path:   orig.Path,
+	}
+	if orig.Parent != nil {
+		// O pai é reatado POR ID a este Compiled, e nunca copiado do original:
+		// o `pai.*` compara ponteiro de pai, e apontar para o campo do outro
+		// Compiled faria a expansão não achar as filhas — e, pior, a coluna
+		// derivada apareceria no SELECT * daqui, porque é a ligação com o pai
+		// que a mantém fora dele.
+		pai, ok := m.byID[orig.Parent.ID]
+		if !ok {
+			// Pai ausente neste espelho: adotar a filha a deixaria órfã e
+			// visível no SELECT *, que é pior do que não a ter.
+			return
+		}
+		cf.Parent = pai
+	}
+	cf.autoType.Store(orig.autoType.Load())
+	m.byName[cf.Name] = cf
+	m.byID[cf.ID] = cf
+}
+
+// fixaTipoEspelhado replica no espelho o tipo que o original acabou de fixar.
+//
+// Não passa por FixAutoType de propósito: aquele PERSISTE no dicionário, e o
+// dicionário é o mesmo — gravar de novo seria uma segunda escrita durável para
+// o mesmo fato, com a única consequência possível sendo um conflito espúrio se
+// as duas chegarem fora de ordem.
+func (m *Compiled) fixaTipoEspelhado(id types.FieldID, t types.FieldType) {
+	m.mu.RLock()
+	f, ok := m.byID[id]
+	m.mu.RUnlock()
+	if ok && f.IsAuto {
+		f.autoType.Store(uint32(t))
+	}
 }

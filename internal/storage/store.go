@@ -107,6 +107,23 @@ type Options struct {
 	// em query.
 	AllowHashDrop bool
 
+	// DictCompartilhado faz este Store USAR o dicionário de campos de outro,
+	// em vez de abrir o seu.
+	//
+	// Existe para a tabela histórica, e a razão é a identidade das colunas: o
+	// payload gravado nela é o mesmo que o patch do dataset base montou,
+	// endereçado por FieldID. Dois dicionários independentes atribuiriam ids
+	// pelo mesmo algoritmo determinístico e coincidiriam — até o primeiro
+	// campo autodescoberto, o primeiro teto de campos alcançado num só dos
+	// dois, ou a primeira recriação de um deles. A partir daí a mesma coluna
+	// teria ids diferentes nas duas tabelas e o payload decodificaria errado,
+	// sem erro e sem CRC quebrado.
+	//
+	// Quem passa o dicionário CONTINUA dono dele: este Store não o fecha. A
+	// consequência operacional fica escrita — o dataset que compartilha não
+	// abre sozinho, e quem o abrir precisa abrir o dono primeiro.
+	DictCompartilhado *fielddict.Dict
+
 	// ColunasDerivadas são os nomes declarados em `extract`. Chegam como
 	// STRING para não fazer o storage depender do schema: o que ele precisa
 	// saber é só se o nome já está no dicionário.
@@ -255,11 +272,15 @@ type Store struct {
 	opts Options
 
 	dict *fielddict.Dict
-	segW *segment.Writer
-	segR *segment.Reader
-	prim *primary.Index
-	locs *rowindex.Locations
-	seqs *rowindex.Sequences
+	// dictProprio diz se este Store abriu o dicionário e portanto o fecha. É
+	// false no dataset que recebeu DictCompartilhado: fechar o dicionário de
+	// outro derrubaria a ingestão do dono no meio de um LookupOrCreate.
+	dictProprio bool
+	segW        *segment.Writer
+	segR        *segment.Reader
+	prim        *primary.Index
+	locs        *rowindex.Locations
+	seqs        *rowindex.Sequences
 	// escritas é nil quando o dataset não declara expiração: sem ela não há
 	// o que indexar, e abrir o arquivo custaria mmap por nada.
 	escritas       *rowindex.Escritas
@@ -709,10 +730,14 @@ func Open(opts Options) (*Store, error) {
 	if err := spill.Limpa(opts.Dir); err != nil {
 		return nil, fmt.Errorf("storage: abrir o dataset %s: %w", opts.Dir, err)
 	}
-	if s.dict, err = fielddict.Open(filepath.Join(metaDir, "fields.dict")); err != nil {
+	if opts.DictCompartilhado != nil {
+		s.dict = opts.DictCompartilhado
+	} else if s.dict, err = fielddict.Open(filepath.Join(metaDir, "fields.dict")); err != nil {
 		// O erro do dicionário já traz arquivo, versão e remediação; aqui entra
 		// o dataset, que é o identificador que o operador tem na mão.
 		return nil, fmt.Errorf("storage: abrir o dataset %s: %w", opts.Dir, err)
+	} else {
+		s.dictProprio = true
 	}
 	if s.segR, err = segment.OpenReader(dataDir); err != nil {
 		return nil, err
@@ -2296,7 +2321,9 @@ func (s *Store) Close() error {
 	if s.segW != nil {
 		errs = append(errs, s.segW.Close())
 	}
-	if s.dict != nil {
+	// Só fecha o dicionário que ele mesmo abriu: o compartilhado pertence ao
+	// dataset base, que segue ingerindo.
+	if s.dict != nil && s.dictProprio {
 		errs = append(errs, s.dict.Close())
 	}
 	// O lock sai por ÚLTIMO: enquanto qualquer arquivo do dataset estiver
