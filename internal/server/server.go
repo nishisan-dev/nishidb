@@ -523,6 +523,19 @@ func (s *Servidor) rodaIngestao(ctx context.Context, d *dataset) {
 	// que redescobrisse a posição por conta própria seria um segundo boot,
 	// menos testado, que divergiria do primeiro no dia em que alguém mexesse
 	// num dos dois. Aqui há uma implementação de posicionamento, não duas.
+	// As duas séries do watchdog nascem AQUI, com zero, e não no ramo que as
+	// usa. Série que só aparece quando há o que mostrar vira lacuna no
+	// gráfico, e lacuna não se distingue de alvo fora do ar — é a mesma regra
+	// que as séries de compaction já seguem. Alarmar em "desistiu" exige que
+	// ela exista ANTES de desistir.
+	trips := s.reg.Contador(metrics.MetKafkaWatchdogTrips,
+		"Recriações do consumidor por falta de progresso com lag pendente.",
+		metrics.LabelDataset).Com(d.nome)
+	desistiu := s.reg.Medidor(metrics.MetKafkaWatchdogDesistiu,
+		"1 quando o watchdog esgotou as tentativas e a ingestão do dataset ficou parada.",
+		metrics.LabelDataset).Com(d.nome)
+	desistiu.Set(0)
+
 	tentativas := cfg.WatchdogTentativas
 	for tentativa := 0; ; tentativa++ {
 		cons, err := kafka.Abre(ctx, cfg, opcoes)
@@ -560,14 +573,10 @@ func (s *Servidor) rodaIngestao(ctx context.Context, d *dataset) {
 			log.Error("ingestao.desistiu",
 				"o watchdog esgotou as tentativas de recriar o consumidor; a ingestão fica PARADA e as consultas seguem de pé (§51)",
 				"tentativas", tentativas, "erro", err.Error())
-			s.reg.Medidor(metrics.MetKafkaWatchdogDesistiu,
-				"1 quando o watchdog esgotou as tentativas e a ingestão do dataset ficou parada.",
-				metrics.LabelDataset).Com(d.nome).Set(1)
+			desistiu.Set(1)
 			return
 		}
-		s.reg.Contador(metrics.MetKafkaWatchdogTrips,
-			"Recriações do consumidor por falta de progresso com lag pendente.",
-			metrics.LabelDataset).Com(d.nome).Inc()
+		trips.Inc()
 		log.Warn("ingestao.recriando",
 			"o consumidor parou de receber com mensagens pendentes no broker; recriando pelo caminho da subida",
 			"tentativa", tentativa+1, "de", tentativas, "erro", err.Error())

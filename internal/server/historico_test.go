@@ -185,3 +185,28 @@ func TestMetricasDoHistoricoSaemNoRotuloDoBase(t *testing.T) {
 		}
 	}
 }
+
+// As séries do watchdog existem desde a subida, com zero.
+//
+// Série que só aparece quando há o que mostrar vira lacuna no gráfico, e
+// lacuna não se distingue de alvo fora do ar. Alarmar em "desistiu" exige que
+// ela exista ANTES de desistir — que é justamente quando ninguém está olhando.
+func TestSeriesDoWatchdogNascemComZero(t *testing.T) {
+	a := novoAmbienteCom(t, blocoPadrao)
+	a.escreveDataset("eventos", preenche(specComKafka, "eventos", "true"))
+	srv, err := server.Novo(a.carrega(), server.Opcoes{})
+	if err != nil {
+		t.Fatalf("subida: %v", err)
+	}
+	roda(t, srv)
+
+	corpo := pega(t, srv, "/metrics")
+	for _, serie := range []string{
+		`nishidb_kafka_watchdog_trips_total{dataset="eventos"} 0`,
+		`nishidb_kafka_watchdog_desistiu{dataset="eventos"} 0`,
+	} {
+		if !strings.Contains(corpo, serie) {
+			t.Errorf("a série não nasceu com zero: %s", serie)
+		}
+	}
+}
