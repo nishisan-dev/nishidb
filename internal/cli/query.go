@@ -95,7 +95,7 @@ func runQuery(args []string, amb Ambiente) int {
 		return ExitUso
 	}
 
-	st, compilado, err := abreDataset(cfg, *dataset)
+	st, compilado, _, err := abreDataset(cfg, *dataset)
 	if err != nil {
 		fmt.Fprintln(amb.Stderr, "query:", err)
 		dicaDeServidor(err, *argConfig, *dataset, amb)

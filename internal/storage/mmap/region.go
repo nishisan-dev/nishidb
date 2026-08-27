@@ -207,3 +207,37 @@ func (r *Region) Close() error {
 	}
 	return errors.Join(errs...)
 }
+
+// LiberaBlocos devolve ao filesystem os blocos de [off, off+length),
+// mantendo o TAMANHO do arquivo e o mapeamento válidos. Leitura da faixa
+// passa a devolver zeros sem alocar nada.
+//
+// É a exceção deliberada à regra do allocate, e a exceção precisa do
+// argumento por escrito. O NishiDB exige alocação real porque página esparsa
+// mais disco cheio no writeback mata o processo com SIGBUS — mas isso vale
+// para página que ainda vai ser ESCRITA. Aqui a faixa liberada é a de rowIds
+// abaixo da marca-d'água de retenção, e rowId nunca regride nem é reutilizado
+// (bijeção rowId↔record, e a recovery reconcilia por max): nenhuma escrita
+// futura pode cair ali. O que sobra é leitura, e ler um buraco não aloca.
+//
+// Filesystem sem suporte devolve ErrFallocateUnsupported, e o chamador trata
+// como degradação de ESPAÇO: os segmentos voltam ao disco de qualquer jeito, e
+// o que fica para trás é o prefixo morto de um índice denso.
+func (r *Region) LiberaBlocos(off, length int64) error {
+	if length <= 0 {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if off < 0 || off+length > r.size {
+		return fmt.Errorf("mmap: LiberaBlocos [%d,%d) fora do mapeamento de %d bytes", off, off+length, r.size)
+	}
+	const punch = unix.FALLOC_FL_PUNCH_HOLE | unix.FALLOC_FL_KEEP_SIZE
+	if err := unix.Fallocate(int(r.f.Fd()), punch, off, length); err != nil {
+		if fallocateUnsupported(err) {
+			return fmt.Errorf("%w (%s: %v)", ErrFallocateUnsupported, r.f.Name(), err)
+		}
+		return fmt.Errorf("fallocate punch %s: %w", r.f.Name(), err)
+	}
+	return nil
+}

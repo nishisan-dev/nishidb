@@ -704,6 +704,14 @@ func (s *Store) candidatos(ratio float64) []uint32 {
 // disputariam o wmu record a record e poderiam eleger o mesmo segmento, com a
 // segunda aposentando um arquivo que a primeira ainda está varrendo.
 func (s *Store) IniciaCompaction(ctx context.Context, ratio float64) {
+	if s.EhHistorico() {
+		// Sem update não há garbage, e a compaction existe para recuperar
+		// versões superadas. Aqui o disco volta por descarte de segmento
+		// inteiro, que é o motor de retenção. Recusar dentro do Inicia — e não
+		// no chamador — é o que permite ao servidor ligá-la sobre a lista
+		// inteira de datasets sem perguntar o modo de cada um.
+		return
+	}
 	s.compMu.Lock()
 	defer s.compMu.Unlock()
 	if s.compCancela != nil {

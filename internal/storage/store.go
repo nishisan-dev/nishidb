@@ -362,7 +362,20 @@ type Store struct {
 	// Zero no dataset materializado, onde nada a move: lá a visibilidade é
 	// decidida pela location e pelo prazo da linha.
 	rowIDBase atomic.Uint64
-	epoch     uint64 // último epoch de manifest gravado (writer-only)
+
+	// Estado da goroutine de retenção do dataset histórico, no mesmo molde do
+	// da compaction: retMu guarda o cancelamento, retPassadaMu serializa as
+	// passadas (duas concorrentes disputariam a mesma aposentadoria e a
+	// segunda encontraria o segmento já renomeado), retAtiva é o medidor que
+	// o Stats publica e retBuf é o destino reusado dos preads da busca
+	// binária.
+	retMu        sync.Mutex
+	retPassadaMu sync.Mutex
+	retCancela   context.CancelFunc
+	retEmVoo     sync.WaitGroup
+	retAtiva     atomic.Bool
+	retBuf       []byte
+	epoch        uint64 // último epoch de manifest gravado (writer-only)
 
 	// curSegID espelha o segmento corrente para leitura concorrente em
 	// Stats (segment.Writer não é thread-safe).
@@ -851,6 +864,16 @@ func Open(opts Options) (*Store, error) {
 		return nil, err
 	}
 
+	// O histórico resolve o campo de escrita SEM abrir expiry.idx: quem lê o
+	// _writtenAt lá é a busca binária da marca-d'água, direto do payload. O
+	// nome já está no dicionário compartilhado — o dataset base o registrou
+	// antes, porque declarar `history.expireAfterWrite` faz o Compile dele
+	// exigir o campo.
+	if s.escritas == nil && opts.Modo == ModoHistorico && opts.CampoDeEscrita != "" {
+		if s.campoDeEscrita, err = s.dict.LookupOrCreate([]byte(opts.CampoDeEscrita)); err != nil {
+			return nil, fmt.Errorf("storage: registrando %q no dicionário: %w", opts.CampoDeEscrita, err)
+		}
+	}
 	if s.escritas != nil {
 		// LookupOrCreate e não Lookup, e nesta ORDEM. O id sai daqui e tem de
 		// ser o MESMO que o schema.Compile resolve depois, e a ordem das
@@ -2362,6 +2385,9 @@ func (s *Store) Close() error {
 	// e lê o mmap do índice de escritas, então um Close que vencesse a corrida
 	// desmapearia a região sob os pés da passada.
 	s.ParaExpiracao()
+	// E a retenção pela terceira vez a mesma razão: a passada dela renomeia e
+	// apaga arquivo, e lê o segR por pread na busca binária.
+	s.ParaRetencao()
 
 	s.vida.Lock()
 	defer s.vida.Unlock()
