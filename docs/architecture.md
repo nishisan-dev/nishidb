@@ -606,7 +606,7 @@ acrescentado, sem nada em camada nenhuma reclamar.
 
 | | JDBC | Python |
 |---|---|---|
-| Artefato | `nishidb-jdbc.jar` | `nishidb` (PyPI) |
+| Artefato | `nishidb-jdbc.jar` | wheel `nishidb`, montado do repositório |
 | Piso | JDK 21 | Python 3.10 |
 | Contrato | `java.sql` | PEP 249 (DB-API 2.0) |
 | Dependências de runtime | nenhuma | nenhuma |

@@ -8,9 +8,50 @@ fala o mesmo protocolo, com as mesmas garantias.
 um binário único: um client de banco tem de ser instalável no host em que se
 está diagnosticando.
 
+## Instalação
+
+O pacote **ainda não está no PyPI**: por ora ele é instalado a partir do
+repositório. Escolha o caminho conforme o que você está fazendo.
+
+**Usando o client numa aplicação sua**, a partir de um clone:
+
 ```bash
-pip install nishidb
+pip install ./clients/python
 ```
+
+**Sem clonar**, direto do git (o `subdirectory` é o que aponta para o pacote
+dentro do monorepo):
+
+```bash
+pip install "git+https://github.com/nishisan-dev/nishidb@main#subdirectory=clients/python"
+```
+
+**Desenvolvendo o próprio client** — modo editável, para que a edição valha sem
+reinstalar:
+
+```bash
+pip install -e ./clients/python
+```
+
+**Distribuindo internamente** um artefato fechado (é o que substitui o PyPI
+hoje: o wheel é publicável num índice interno, num S3 ou anexado a uma release):
+
+```bash
+python -m build clients/python
+# gera clients/python/dist/nishidb-0.1.0-py3-none-any.whl
+pip install clients/python/dist/nishidb-0.1.0-py3-none-any.whl
+```
+
+**Sem instalar nada.** Como o client é stdlib pura, o diretório `src/` funciona
+sozinho no `PYTHONPATH` — é o caminho para um host onde você não quer (ou não
+pode) mexer no ambiente Python, e é o mesmo espírito de copiar o binário único
+para a máquina:
+
+```bash
+PYTHONPATH=/caminho/para/nishidb/clients/python/src python3 meu_script.py
+```
+
+Nenhuma das formas acima baixa dependência nenhuma — não há o que resolver.
 
 ## Uso
 

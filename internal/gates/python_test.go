@@ -1,6 +1,8 @@
 package gates_test
 
 import (
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -214,6 +216,28 @@ func TestWorkflowDeCIPinaPythonNoPisoDoPyproject(t *testing.T) {
 			t.Errorf("python-version = %q no workflow e requires-python >= %q no pyproject: "+
 				"o CI validaria o client num Python que não é o piso declarado", achado[1], piso)
 		}
+	}
+}
+
+// O classifier `Typing :: Typed` só é verdade com o marcador da PEP 561.
+//
+// Sem o `py.typed`, o pacote INSTALADO não expõe as anotações: o mypy de quem
+// consome o client trata tudo como `Any` e o classifier vira propaganda. O modo
+// de falha é silencioso dos dois lados — o pacote instala, importa e funciona;
+// só a checagem de tipos do consumidor emudece.
+//
+// Não é hipótese: o arquivo nasceu ausente neste próprio pacote (um `touch` que
+// não chegou a rodar), e o defeito só apareceu ao inspecionar o wheel montado.
+func TestOClientPythonPublicaOMarcadorDeTipagem(t *testing.T) {
+	bloco := blocoProject(t)
+	if !strings.Contains(bloco, "Typing :: Typed") {
+		// Sem o classifier não há o que sustentar, e o gate não se aplica.
+		return
+	}
+	caminho := filepath.Join(raizDoRepo, "clients/python/src/nishidb/py.typed")
+	if _, err := os.Stat(caminho); err != nil {
+		t.Errorf("o pyproject declara `Typing :: Typed` mas src/nishidb/py.typed não existe: "+
+			"o mypy de quem instala o pacote não veria anotação nenhuma (%v)", err)
 	}
 }
 

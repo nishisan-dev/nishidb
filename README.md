@@ -1084,7 +1084,14 @@ jdbc:nishidb://db01:9142/radius_sessions?tls=true&tlsCaFile=/etc/nishidb/ca.pem
 
 **Python — client DB-API 2.0** ([clients/python](clients/python)), pacote
 `nishidb`, Python 3.10+, também sem dependência de runtime. É o que faz
-`pandas.read_sql` e as ferramentas de BI funcionarem:
+`pandas.read_sql` e as ferramentas de BI funcionarem.
+
+Ainda **não está no PyPI**: instala-se a partir do repositório, e como é stdlib
+pura nenhuma das formas baixa dependência nenhuma.
+
+```bash
+pip install ./clients/python
+```
 
 ```python
 import nishidb

@@ -156,6 +156,7 @@ Os três ficam SEPARADOS: fim, erro do servidor e falha de transporte.
 | 12.1 | Zero dependência de runtime | `TestOPyprojectDoClientPythonNaoTemDependenciaDeRuntime` |
 | 12.2 | A versão do pacote e a do módulo não divergem | `TestAVersaoDoClientPythonEhADoPyproject` |
 | 12.3 | Os artefatos de build não são versionáveis por acidente | `TestOsArtefatosDoClientPythonEstaoNoGitignore` |
+| 12.3b | O marcador da PEP 561 existe, e o classifier `Typing :: Typed` não é propaganda | `TestOClientPythonPublicaOMarcadorDeTipagem` |
 | 12.4 | O CI roda a integração contra o binário real | `TestWorkflowDeCIRodaOTesteDeIntegracaoDoClientPython` |
 | 12.5 | O CI roda lint e tipagem | `TestWorkflowDeCIRodaOLintDoClientPython` |
 | 12.6 | A versão de Python do CI é o piso EXATO do `requires-python` | `TestWorkflowDeCIPinaPythonNoPisoDoPyproject` |
@@ -168,6 +169,7 @@ Os três ficam SEPARADOS: fim, erro do servidor e falha de transporte.
 | Item | Razão |
 |---|---|
 | Rotas `POST /v1/compact` e `/v1/checkpoint` (papel ADMIN) | Decisão de escopo: o client é de LEITURA. São dois POSTs sobre o mesmo transporte já pronto e entram depois sem redesenho |
+| Publicação no PyPI | Decisão de escopo: por ora o pacote é instalado do repositório (`pip install ./clients/python`) ou distribuído como wheel montado com `python -m build`. O `pyproject` já está pronto para publicar; falta só o ato — criar o projeto no PyPI e cadastrar o publisher confiável |
 | Dialeto SQLAlchemy | Fase seguinte, sobre um DB-API já provado. O ganho é BI (Superset, Metabase); o custo é declarar honestamente a ausência de JOIN e GROUP BY, que é trabalho de projeto e não de tradução |
 | Client asyncio | Dobraria a superfície de teste, e o núcleo é síncrono ponta a ponta |
 | Integração explícita com pandas | Não é preciso: `pandas.read_sql` fala DB-API. Escrever um adaptador seria criar um segundo caminho para o que já funciona |
