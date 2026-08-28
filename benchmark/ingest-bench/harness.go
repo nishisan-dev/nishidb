@@ -30,6 +30,7 @@ import (
 	"runtime"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -96,8 +97,21 @@ type Config struct {
 }
 
 // PhaseReport agrega uma fase.
+// Motivos pelos quais uma fase terminou. Sem isto, uma fase Kafka que esvaziou
+// o tópico e uma que rodou a janela inteira produzem relatórios com a mesma
+// cara, e quem lê events_per_sec não sabe se está olhando para vazão ou para
+// fim de corpus.
+const (
+	pararPorEventos   = "events"
+	pararPorDuracao   = "duration"
+	pararPorFonteSeca = "source_drained"
+)
+
 type PhaseReport struct {
-	Name        string  `json:"name"`
+	Name string `json:"name"`
+	// StopReason diz POR QUE a fase terminou: "events", "duration" ou
+	// "source_drained". Ver as constantes acima.
+	StopReason  string  `json:"stop_reason"`
 	Events      int64   `json:"events"`
 	Created     int64   `json:"created"`
 	Updated     int64   `json:"updated"`
@@ -128,12 +142,17 @@ type PhaseReport struct {
 
 // QueryStats são as latências de uma classe de leitura.
 type QueryStats struct {
-	Class   string  `json:"class"`
-	Count   int64   `json:"count"`
-	P50Micr float64 `json:"p50_us"`
-	P95Micr float64 `json:"p95_us"`
-	P99Micr float64 `json:"p99_us"`
-	MaxMicr float64 `json:"max_us"`
+	Class string `json:"class"`
+	Count int64  `json:"count"`
+	// RowsExpected é o oráculo da rota e OracleFails quantas consultas o
+	// violaram. Sem eles a bancada não conferia resultado nenhum (débito 6), e
+	// um bug que zerasse toda query passava em todos os gates com p95 melhor.
+	RowsExpected int64   `json:"rows_expected"`
+	OracleFails  int64   `json:"oracle_fails"`
+	P50Micr      float64 `json:"p50_us"`
+	P95Micr      float64 `json:"p95_us"`
+	P99Micr      float64 `json:"p99_us"`
+	MaxMicr      float64 `json:"max_us"`
 }
 
 // GateStatus é o veredito de um gate, e tem TRÊS estados de propósito.
@@ -639,22 +658,42 @@ func runPhase(a phaseArgs) (PhaseReport, error) {
 		return rep, err
 	}
 
+	// O prazo da fase vira CONTEXTO, e é ele que atravessa até o Recebe da
+	// fila. Sem isso, a checagem de `fim` acima nunca era reavaliada quando o
+	// tópico esvaziava: o Next bloqueava para sempre e a fase não terminava.
+	// É o débito 67, e ele contaminou a rodada de aceite do M4.
+	ctxFase := context.Background()
+	if !fim.IsZero() {
+		var cancela context.CancelFunc
+		ctxFase, cancela = context.WithDeadline(ctxFase, fim)
+		defer cancela()
+	}
+
 	for i := int64(0); ; i++ {
 		if a.events > 0 && i >= a.events {
+			rep.StopReason = pararPorEventos
 			break
 		}
 		if !fim.IsZero() && time.Now().After(fim) {
+			rep.StopReason = pararPorDuracao
 			break
 		}
 		if limiter != nil {
 			limiter.wait()
 		}
 
-		buf = a.gen.Next(buf[:0])
+		buf = a.gen.Next(ctxFase, buf[:0])
 		if buf == nil {
-			// Fonte encerrada (só acontece no modo Kafka). Parar aqui é o
-			// certo: insistir produziria eventos vazios e um relatório que
-			// mente sobre quantos eventos existiram.
+			// Fonte encerrada, ou prazo da fase atingido dentro do Next.
+			// Distinguir os dois importa: uma fase que esvaziou o tópico
+			// produz MENOS que taxa × duração, e sem StopReason quem lê
+			// events_per_sec não sabe se olha para vazão ou para fim de
+			// corpus.
+			if ctxFase.Err() != nil {
+				rep.StopReason = pararPorDuracao
+			} else {
+				rep.StopReason = pararPorFonteSeca
+			}
 			break
 		}
 		r := a.m.Apply(buf)
@@ -1099,6 +1138,34 @@ func evaluateGates(cfg Config, rep *Report) []GateResult {
 			Name: "no_query_error", Spec: "§106", Hard: true,
 			Status: statusDe(rep.SQLErrors == 0),
 			Detail: fmt.Sprintf("%d erros nas consultas SQL concorrentes com a ingestão", rep.SQLErrors),
+		})
+		// O ORÁCULO, e o gate que fecha o débito 6.
+		//
+		// no_query_error só afirma que nenhuma consulta ERROU. Uma consulta que
+		// devolve zero linhas sem erro passava por ele — e passava também nos
+		// gates de latência, com p95 MELHOR, porque não devolver linha é mais
+		// rápido que devolver. Um bug que zerasse todo resultado deixava a
+		// rodada inteira verde, e otimização de performance é justamente o
+		// tipo de mudança que produz esse bug.
+		var falhas int64
+		var detalhe strings.Builder
+		for _, q := range rep.Queries {
+			falhas += q.OracleFails
+			if q.OracleFails > 0 {
+				if detalhe.Len() > 0 {
+					detalhe.WriteString("; ")
+				}
+				fmt.Fprintf(&detalhe, "%s: %d de %d consultas não devolveram %d linha(s)",
+					q.Class, q.OracleFails, q.Count, q.RowsExpected)
+			}
+		}
+		if detalhe.Len() == 0 {
+			fmt.Fprintf(&detalhe, "todas as consultas devolveram a contagem de linhas esperada")
+		}
+		gates = append(gates, GateResult{
+			Name: "query_oracle", Spec: "débito 6", Hard: true,
+			Status: statusDe(falhas == 0),
+			Detail: detalhe.String(),
 		})
 	}
 	gates = append(gates, GateResult{

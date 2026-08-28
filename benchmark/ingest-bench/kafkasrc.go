@@ -22,14 +22,25 @@ import (
 // ficava inteiramente FORA do número que o critério de aceite publicava. Era o
 // débito M2 #2.
 type fonte interface {
-	// Next devolve o próximo evento, reusando dst.
-	Next(dst []byte) []byte
+	// Next devolve o próximo evento, reusando dst. Devolve nil quando o
+	// contexto acaba ou a fonte encerra.
+	//
+	// O ctx é o conserto do débito 67. Sem ele, fonteKafka.Next bloqueava em
+	// Recebe(context.Background()) — contexto SEM prazo — e, como a checagem
+	// de duração do runPhase acontece ANTES do Next, ela nunca era reavaliada:
+	// tópico que esvaziava dentro da janela travava a fase para sempre. A
+	// rodada de aceite do M4 publicou duration_sec de 1.327,6 s para 600 s de
+	// ingestão, e com ela events_per_sec, allocs_per_event e gc_per_min
+	// contaminados.
+	Next(ctx context.Context, dst []byte) []byte
 }
 
 // fonteMemoria é o gerador do M1, que continua servindo às rodadas rápidas.
 type fonteMemoria struct{ gen *radiusgen.Generator }
 
-func (f fonteMemoria) Next(dst []byte) []byte { return f.gen.Next(dst) }
+// O gerador nunca esvazia e nunca bloqueia, então o contexto não tem o que
+// fazer aqui — ele existe na interface por causa da fonte Kafka.
+func (f fonteMemoria) Next(_ context.Context, dst []byte) []byte { return f.gen.Next(dst) }
 
 // fonteKafka lê de um tópico real pelo MESMO caminho que a produção usa: o
 // cliente franz-go e a fila limitada do internal/kafka, com os dois gates.
@@ -124,9 +135,9 @@ func (f *fonteKafka) poll(ctx context.Context, maxPoll int) {
 	}
 }
 
-// Next bloqueia até haver evento. Devolve nil quando a fonte encerrou.
-func (f *fonteKafka) Next(dst []byte) []byte {
-	it, ok := f.fila.Recebe(context.Background())
+// Next bloqueia até haver evento, o contexto acabar, ou a fonte encerrar.
+func (f *fonteKafka) Next(ctx context.Context, dst []byte) []byte {
+	it, ok := f.fila.Recebe(ctx)
 	if !ok || it.Rec == nil {
 		return nil
 	}

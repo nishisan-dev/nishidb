@@ -1256,3 +1256,60 @@ func writeReport(t *testing.T, path string, rep *Report) {
 		t.Fatal(err)
 	}
 }
+
+// A PROVA POR MUTAÇÃO do débito 6: com o oráculo violado, a rodada tem de
+// ficar VERMELHA.
+//
+// Antes deste gate, uma consulta que devolvesse zero linhas sem erro passava
+// em no_query_error (não errou) e passava melhor ainda nos gates de latência,
+// porque não devolver linha é mais rápido que devolver. Um bug que zerasse
+// todo resultado deixava a rodada inteira verde — e otimização de performance
+// é justamente o tipo de mudança que produz esse bug.
+//
+// A mutação é injetada no Report em vez de no executor de propósito: o que se
+// está provando é que o GATE reprova, e um teste que dependesse de quebrar o
+// executor mediria as duas coisas ao mesmo tempo.
+func TestGateDoOraculoReprovaConsultaQueNaoDevolveLinha(t *testing.T) {
+	rep := Report{
+		Config:    ConfigSummary{SQLReaders: 2},
+		SQLErrors: 0,
+		Queries: []QueryStats{
+			{Class: "sql_point_lookup", Count: 500, RowsExpected: 1, OracleFails: 0},
+			{Class: "sql_bitmap_limit_100", Count: 500, RowsExpected: 100, OracleFails: 500},
+		},
+	}
+	gates := evaluateGates(Config{SQLReaders: 2}, &rep)
+
+	var achou bool
+	for _, g := range gates {
+		if g.Name != "query_oracle" {
+			continue
+		}
+		achou = true
+		if !g.Hard {
+			t.Error("query_oracle não é gate DURO; um oráculo que não reprova é decoração")
+		}
+		if g.Status != GateReprovou {
+			t.Errorf("query_oracle = %v com 500 violações; quer reprovado", g.Status)
+		}
+		if !strings.Contains(g.Detail, "sql_bitmap_limit_100") {
+			t.Errorf("o detalhe não nomeia a rota que violou: %q", g.Detail)
+		}
+	}
+	if !achou {
+		t.Fatal("gate query_oracle não foi avaliado com leitores SQL ligados")
+	}
+}
+
+// E o contrário: sem violação, o gate passa e diz por quê.
+func TestGateDoOraculoPassaQuandoTodasDevolvemOEsperado(t *testing.T) {
+	rep := Report{
+		Config:  ConfigSummary{SQLReaders: 2},
+		Queries: []QueryStats{{Class: "sql_point_lookup", Count: 500, RowsExpected: 1}},
+	}
+	for _, g := range evaluateGates(Config{SQLReaders: 2}, &rep) {
+		if g.Name == "query_oracle" && g.Status != GatePassou {
+			t.Fatalf("query_oracle = %+v sem nenhuma violação", g)
+		}
+	}
+}

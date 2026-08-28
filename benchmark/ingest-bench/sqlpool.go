@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/query"
@@ -26,17 +27,29 @@ var rotasSQL = []struct {
 	sql  string
 	// param preenche o '?' quando a rota é parametrizada.
 	usaKey bool
+	// linhas é o ORÁCULO da rota: quantas linhas ela TEM de devolver.
+	//
+	// Sem isto, a bancada não conferia resultado nenhum — era o débito 6 — e
+	// um bug que fizesse toda query devolver zero linhas passava em TODOS os
+	// gates, com p95 MELHOR, porque não devolver linha é mais rápido que
+	// devolver. Otimização de performance é exatamente o tipo de mudança que
+	// produz esse bug, então a bancada que a julga não pode ser cega a ele.
+	//
+	// Os números não são estimativa: o point lookup usa uma key sorteada do
+	// dataset e devolve exatamente uma; as rotas com LIMIT 100 têm corpus que
+	// garante o corte; e a varredura que não casa nada devolve zero.
+	linhas int64
 }{
-	{nome: "sql_point_lookup", sql: `SELECT id, status FROM radius_sessions WHERE service_id = ?`, usaKey: true},
-	{nome: "sql_bitmap_limit_100", sql: `SELECT id, status FROM radius_sessions WHERE status = 'Interim-Update' LIMIT 100`},
-	{nome: "sql_intersect_limit_100", sql: `SELECT id FROM radius_sessions WHERE status = 'Interim-Update' AND protocol = 'PPP' LIMIT 100`},
-	{nome: "sql_union_limit_100", sql: `SELECT id FROM radius_sessions WHERE status = 'Stop' OR status = 'Start' LIMIT 100`},
+	{nome: "sql_point_lookup", sql: `SELECT id, status FROM radius_sessions WHERE service_id = ?`, usaKey: true, linhas: 1},
+	{nome: "sql_bitmap_limit_100", sql: `SELECT id, status FROM radius_sessions WHERE status = 'Interim-Update' LIMIT 100`, linhas: 100},
+	{nome: "sql_intersect_limit_100", sql: `SELECT id FROM radius_sessions WHERE status = 'Interim-Update' AND protocol = 'PPP' LIMIT 100`, linhas: 100},
+	{nome: "sql_union_limit_100", sql: `SELECT id FROM radius_sessions WHERE status = 'Stop' OR status = 'Start' LIMIT 100`, linhas: 100},
 	// O predicado CASA, para que o LIMIT corte cedo: é o full scan com
 	// early-exit da §91. Um predicado que não casasse varreria o dataset
 	// inteiro a cada consulta — a 8M rows isso são segundos por query, e o
 	// que estaria sendo medido seria a varredura completa, não o caminho que
 	// o usuário paga com LIMIT.
-	{nome: "sql_full_scan_limit_100", sql: `SELECT id FROM radius_sessions WHERE connect_info >= 0 LIMIT 100`},
+	{nome: "sql_full_scan_limit_100", sql: `SELECT id FROM radius_sessions WHERE connect_info >= 0 LIMIT 100`, linhas: 100},
 }
 
 // varreduraCompleta é o full scan que NÃO casa nada: percorre o dataset
@@ -59,7 +72,13 @@ func (p *sqlPool) MedeVarreduraCompleta() (time.Duration, int64, error) {
 	// existe em produção.
 	w := executor.NewStreamWriter(saida, 8<<10, orcamentoDoBench())
 	início := time.Now()
-	err := p.roda(w, varreduraCompleta, nil)
+	// A varredura completa usa um predicado que não casa nada de propósito, e
+	// por isso o oráculo dela é ZERO linhas — conferido aqui, já que ela roda
+	// fora do rodízio.
+	linhas, err := p.roda(w, varreduraCompleta, nil)
+	if err == nil && linhas != 0 {
+		err = fmt.Errorf("varredura completa devolveu %d linhas; o predicado não casa nada e o oráculo é 0", linhas)
+	}
 	return time.Since(início), saida.bytes, err
 }
 
@@ -88,10 +107,17 @@ type sqlPool struct {
 	eng    *query.Engine
 	erros  int64
 	mu     sync.Mutex
+	// violacoes conta, POR ROTA, quantas consultas devolveram um número de
+	// linhas diferente do oráculo. Atômico porque os leitores são N goroutines.
+	violacoes []atomic.Int64
 }
 
 func startSQLReaders(cfg Config, st *storage.Store, c *schema.Compiled, keys [][]byte) *sqlPool {
-	p := &sqlPool{stopCh: make(chan struct{}), lat: make([]*latencyRec, len(rotasSQL))}
+	p := &sqlPool{
+		stopCh:    make(chan struct{}),
+		lat:       make([]*latencyRec, len(rotasSQL)),
+		violacoes: make([]atomic.Int64, len(rotasSQL)),
+	}
 	for i := range p.lat {
 		p.lat[i] = newLatencyRec()
 	}
@@ -126,12 +152,17 @@ func startSQLReaders(cfg Config, st *storage.Store, c *schema.Compiled, keys [][
 					params = []types.Value{{Type: types.TypeString, Bytes: keys[n%len(keys)]}}
 				}
 				início := time.Now()
-				err := p.roda(w, rotasSQL[rota].sql, params)
+				linhas, err := p.roda(w, rotasSQL[rota].sql, params)
 				p.lat[rota].add(time.Since(início))
 				if err != nil {
 					p.mu.Lock()
 					p.erros++
 					p.mu.Unlock()
+				} else if linhas != rotasSQL[rota].linhas {
+					// O ORÁCULO. Contado, e não abortado: uma rodada de
+					// benchmark que morre no primeiro desvio não diz QUANTAS
+					// consultas erraram nem se o erro é sistemático.
+					p.violacoes[rota].Add(1)
 				}
 				n++
 			}
@@ -142,21 +173,23 @@ func startSQLReaders(cfg Config, st *storage.Store, c *schema.Compiled, keys [][
 
 // roda executa uma consulta e SERIALIZA o resultado, para que a medição
 // inclua o encoder.
-func (p *sqlPool) roda(w *executor.StreamWriter, sql string, params []types.Value) error {
+func (p *sqlPool) roda(w *executor.StreamWriter, sql string, params []types.Value) (int64, error) {
 	it, err := p.eng.Execute(context.Background(), "radius_sessions", sql, params)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer it.Close()
+	var linhas int64
 	for it.Next() {
 		if err := w.WriteRow(it.Row()); err != nil {
-			return err
+			return linhas, err
 		}
+		linhas++
 	}
 	if err := w.Flush(); err != nil {
-		return err
+		return linhas, err
 	}
-	return it.Err()
+	return linhas, it.Err()
 }
 
 func (p *sqlPool) stop() ([]QueryStats, int64) {
@@ -165,6 +198,8 @@ func (p *sqlPool) stop() ([]QueryStats, int64) {
 	var out []QueryStats
 	for i, rec := range p.lat {
 		if s, ok := rec.stats(rotasSQL[i].nome); ok {
+			s.RowsExpected = rotasSQL[i].linhas
+			s.OracleFails = p.violacoes[i].Load()
 			out = append(out, s)
 		}
 	}
