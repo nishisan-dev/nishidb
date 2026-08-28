@@ -488,6 +488,86 @@ testado em unidade, com as guardas escritas, mas o primeiro disparo real ainda
 não aconteceu. `nishidb_kafka_watchdog_trips_total` subindo com a ingestão
 voltando confirma o desenho; subindo sem voltar, refuta.
 
+## A quarta medição: o lag que mentia (28/08/2026)
+
+A investigação começou por uma pergunta de operação — "com o `history` ligado a
+instância não dá conta, o lag cresce" — e a primeira coisa medida contrariou o
+enunciado.
+
+`nishidb_kafka_lag` vinha de `kadm.Lag`, que devolve o lag do offset
+**commitado no consumer group**. O commit só sai **depois do checkpoint
+durável** (§48), a cada 30 s. Entre dois commits o offset do group fica parado
+e a série cresce exatamente à taxa de produção — com o consumidor
+perfeitamente em dia.
+
+Amostrando a 1 Hz durante 181 s:
+
+| O que a série fazia | Medido |
+|---|---:|
+| Pico entre commits | **14.167** |
+| Valor logo após o commit | **515** |
+| Eventos consumidos no segundo da queda | **478** |
+| Crescimento da série entre commits | **450 ev/s** |
+| Produção documentada do tópico | **452 ev/s** |
+
+O lag despencava 13.652 num segundo em que 478 eventos foram consumidos: não
+era drenagem, era o denominador se movendo. E o crescimento entre commits
+batia com a produção, que é a assinatura de um numerador congelado.
+
+**O lag real, lido logo depois de cada commit, ficou entre 515 e 994
+mensagens** — 1 a 2 segundos de atraso, sem tendência de crescimento na janela
+inteira.
+
+### O que mais a mesma rodada mediu
+
+| Grandeza | Medido | Como |
+|---|---:|---|
+| CPU por evento | **902 µs** | `/proc/<pid>/stat` × `nishidb_ingest_events_total`, 60 s |
+| CPU do processo | **0,336 de um core** | o host tem 32 |
+| Teto com um core saturado | **~1.109 ev/s** | 1/902 µs |
+| Consumo | 372–430 ev/s | — |
+
+O pipeline inteiro — poll, parse, merge, `Put`, `Apenda` — roda numa goroutine
+única. O produto não fica sem CPU: fica sem paralelismo.
+
+Onde vão os 902 µs, por profile de 45 s em produção:
+
+| Componente | % do CPU |
+|---|---:|
+| `buscaCaminho` — a extração declarada, varrendo o documento uma vez por path | **21,6%** |
+| `ExpiraUmaPassada` — varredura de TTL, em background | **18,8%** |
+| `Store.Put` — tabela base | 16,0% |
+| `Apenda` — tabela histórica | **11,4%** |
+| parse do evento em si | 1,8% |
+
+A tabela histórica custa ~17% a mais no caminho de ingestão. É real, e não é o
+dominante — a varredura repetida da extração custava mais que ela, e era
+trabalho puramente redundante (ver `docs/architecture.md`).
+
+### Bytes por linha do histórico, em REGIME
+
+O número publicado na medição anterior (2.767 B/linha) foi colhido durante o
+replay do backlog, e o próprio documento registrava que faltava medi-lo em
+regime. Medido agora, sobre 120 s e 46.800 linhas:
+
+| | Replay | **Regime** |
+|---|---:|---:|
+| Bytes por linha | 2.767 | **2.394** |
+| Janela real em 250 GiB | ~2,5 dias | **~3,3 dias** |
+| Escrita do histórico | — | **80,6 GB/dia** |
+
+Na mesma janela o dataset base **encolheu 19,8 MB**: a compaction está ganhando
+do crescimento nesta escala.
+
+### E uma parada longa que ainda não chegou
+
+`primary.idx` está em **exatamente 128 MiB** (2²³ slots × 16 B) com 4.570.919
+linhas — **54,5% de ocupação**. O rehash dispara aos 70%, a ~1,3 milhão de
+entidades daqui, e quando disparar vai alocar 268 MiB e reescrever todo slot
+vivo **sob o lock do writer**, com a ingestão parada. Não é a causa dos stalls
+de até 2,4 s já observados — o arquivo não cresceu durante a medição —, mas é a
+próxima parada longa a caminho.
+
 ## Limites conhecidos deste piloto
 
 - **Sem autenticação e sem TLS** (Fase 11). Loopback é a única proteção, e por

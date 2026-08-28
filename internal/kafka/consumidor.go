@@ -7,6 +7,7 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -401,7 +402,7 @@ func (c *Consumidor) ajustaOffsets(_ context.Context, doGroup map[string]map[int
 
 	sort.Slice(usados, func(i, j int) bool { return usados[i] < usados[j] })
 	for _, p := range usados {
-		c.met.offset(p).Set(float64(c.offsetsIniciais[p]))
+		c.met.posicaoDe(p).Store(c.offsetsIniciais[p])
 	}
 	c.log.Info("offsets.seek", "retomando pela posição do checkpoint local (§49)",
 		"particoes", len(usados))
@@ -624,22 +625,43 @@ func (c *Consumidor) registraErrosDeFetch(f kgo.Fetches) error {
 	return fatal
 }
 
-// AtualizaLag publica o lag por partição (§92). É chamado pelo scrape, e não
-// por um timer: consultar o broker num timer publicaria um número velho cuja
-// idade o operador não conhece.
-func (c *Consumidor) AtualizaLag(ctx context.Context) {
-	lags, err := c.adm.Lag(ctx, c.cfg.GroupID)
+// AtualizaMarcaDagua lê o fim do log no broker (§92). É chamado pelo scrape, e
+// não por um timer: consultar num timer publicaria um número velho cuja idade
+// o operador não conhece.
+//
+// ListEndOffsets, e não kadm.Lag. São duas mudanças numa:
+//
+//  1. CORRETUDE. kadm.Lag devolve o lag do offset COMMITADO no group, e o
+//     commit só sai depois do checkpoint durável (§48). Entre dois checkpoints
+//     a série crescia à taxa de produção com o consumidor em dia — ver o godoc
+//     de amostrasDaPosicao para a medição no piloto.
+//  2. CUSTO. kadm.Lag é um processo de TRÊS requisições (DescribeGroups,
+//     FetchOffsets, ListEndOffsets). Esta é UMA. O scrape passa a custar um
+//     terço do que já custava; não há trade-off a negociar aqui.
+//
+// Erro por PARTIÇÃO omite só aquela partição, não a leitura inteira: uma
+// partição sem líder não é razão para o painel perder as outras.
+func (c *Consumidor) AtualizaMarcaDagua(ctx context.Context) {
+	fins, err := c.adm.ListEndOffsets(ctx, c.cfg.Topic)
 	if err != nil {
 		c.met.errosKafka.Inc()
 		return
 	}
-	l, ok := lags[c.cfg.GroupID]
-	if !ok {
+	m := make(map[int32]int64)
+	fins.Each(func(o kadm.ListedOffset) {
+		if o.Err != nil || o.Topic != c.cfg.Topic || o.Offset < 0 {
+			return
+		}
+		m[o.Partition] = o.Offset
+	})
+	if len(m) == 0 {
+		// Nada utilizável: preserva a marca anterior e deixa a validade
+		// decidir. Publicar um mapa vazio faria as séries sumirem por uma
+		// resposta ruim, e não por falta de resposta.
+		c.met.errosKafka.Inc()
 		return
 	}
-	for _, porParticao := range l.Lag[c.cfg.Topic] {
-		c.met.lag(porParticao.Partition).Set(float64(porParticao.Lag))
-	}
+	c.met.publicaMarca(m, time.Now())
 }
 
 // Pausa devolve o motivo da parada da ingestão, ou nil.

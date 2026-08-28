@@ -8,8 +8,10 @@ import (
 	"net/http"
 	"net/http/pprof"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/nishisan-dev/nishidb/internal/kafka"
 	"github.com/nishisan-dev/nishidb/internal/logging"
 	"github.com/nishisan-dev/nishidb/internal/protocolo"
 )
@@ -34,22 +36,36 @@ func metodoDeLeitura(r *http.Request) bool {
 func (s *Servidor) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	// PRIMEIRA linha do handler, antes do laço abaixo. Enquanto o método vivia
 	// no padrão de registro, o mux recusava de graça; agora a recusa é nossa, e
-	// pô-la depois do laço faria cada POST inválido disparar AtualizaLag contra
-	// o broker, com o timeout de 5 s do scrape — numa rota que um cron raspa.
+	// pô-la depois do laço faria cada POST inválido disparar a consulta ao
+	// broker, com o timeout de 5 s do scrape — numa rota que um cron raspa.
 	if !metodoDeLeitura(r) {
 		s.recusaSimples(w, r, permitidoEmLeitura)
 		return
 	}
 	ctx, cancela := timeoutDoScrape(r)
 	defer cancela()
+	// Em PARALELO, e com prazo POR DATASET. Em série, dentro de um orçamento
+	// único, o último dataset da lista recebe o que sobrou dos anteriores — e
+	// com brokers lentos isso é zero, então ele nunca publica marca d'água
+	// enquanto os primeiros publicam sempre. O prazo próprio é o que mantém a
+	// leitura de cada dataset independente da sorte dos vizinhos.
+	var espera sync.WaitGroup
 	for _, d := range s.datasets {
 		d.mu.Lock()
 		cons := d.cons
 		d.mu.Unlock()
-		if cons != nil {
-			cons.AtualizaLag(ctx)
+		if cons == nil {
+			continue
 		}
+		espera.Add(1)
+		go func(c *kafka.Consumidor) {
+			defer espera.Done()
+			ctxD, cancelaD := context.WithTimeout(ctx, prazoDaMarcaDagua)
+			defer cancelaD()
+			c.AtualizaMarcaDagua(ctxD)
+		}(cons)
 	}
+	espera.Wait()
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	if _, err := s.reg.WriteTo(w); err != nil {
 		s.log.Warn("metrics.escrita_falhou", "scrape interrompido", "erro", err.Error())
@@ -59,6 +75,13 @@ func (s *Servidor) handleMetrics(w http.ResponseWriter, r *http.Request) {
 func timeoutDoScrape(r *http.Request) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(r.Context(), 5*time.Second)
 }
+
+// prazoDaMarcaDagua é o teto de UMA consulta de fim de log, por dataset.
+//
+// Folgado dentro dos 5 s do scrape: mesmo com vários datasets em paralelo, o
+// pior caso de cada um é este, e não a soma. Estourá-lo omite as séries
+// daquele dataset naquela raspagem, que é a resposta honesta.
+const prazoDaMarcaDagua = 2 * time.Second
 
 // handleHealth serve o §94.
 //

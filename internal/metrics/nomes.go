@@ -29,8 +29,16 @@ const (
 	MetIngestInvalidTotal = "nishidb_ingest_invalid_total"
 
 	// Kafka (§92).
-	MetKafkaLag    = "nishidb_kafka_lag"
-	MetKafkaOffset = "nishidb_kafka_offset"
+	//
+	// As três saem do MESMO instantâneo, por um coletor só, e é isso que faz
+	// `lag == high_watermark - offset` valer dentro de uma raspagem. Emitidas
+	// por famílias independentes elas descreveriam instantes diferentes, e o
+	// painel do piloto já pagou por isso: nishidb-stats.py derivava a produção
+	// de Δ(offset + lag) e imprimiu `produz -310/s`, porque as duas parcelas
+	// vinham de leituras distintas.
+	MetKafkaLag           = "nishidb_kafka_lag"
+	MetKafkaOffset        = "nishidb_kafka_offset"
+	MetKafkaHighWatermark = "nishidb_kafka_high_watermark"
 
 	// Materialização (§92).
 	MetDatasetFields        = "nishidb_dataset_fields"

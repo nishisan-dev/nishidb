@@ -159,10 +159,34 @@ tirar a instância de rotação sem interpretar o corpo. A chave `kafka` AGREGA:
 basta um dataset parado para ela sair de `UP`, e `detalhes` nomeia qual.
 
 As métricas que respondem "está ingerindo?": `nishidb_ingest_events_total`,
-`nishidb_kafka_offset` (por partição), `nishidb_kafka_lag`. As que respondem
-"está saudável?": `nishidb_ingest_blocked` (1 = ingestão parada por política),
+`nishidb_kafka_offset` (por partição), `nishidb_kafka_high_watermark` e
+`nishidb_kafka_lag`. As que respondem "está saudável?":
+`nishidb_ingest_blocked` (1 = ingestão parada por política),
 `nishidb_ingest_failed_total`, `nishidb_kafka_errors_total`, e
 `nishidb_kafka_partitions_assigned` contra `nishidb_kafka_partitions_total`.
+
+**As três da posição saem do MESMO instantâneo**, por um coletor só, e é isso
+que faz `lag == high_watermark - offset` valer dentro de uma raspagem. A
+produção do tópico é `rate(nishidb_kafka_high_watermark)` e o consumo é
+`rate(nishidb_ingest_events_total)`; comparar os dois é o veredito de "dá
+conta". Antes o painel derivava a produção de `Δ(offset + lag)` e chegou a
+imprimir `produz -310/s` no piloto, porque as parcelas vinham de instantes
+diferentes.
+
+**O lag mede a posição APLICADA, não a commitada.** Até 28/08/2026 ele vinha de
+`kadm.Lag`, que devolve o lag do offset commitado no consumer group — e o
+commit só sai depois do checkpoint durável (§48), a cada 30 s. Entre dois
+commits o offset do group ficava parado e a série crescia à taxa de produção
+com o consumidor em dia: medido no piloto, subia até **14.167** e caía para
+**515** num único segundo em que **478** eventos foram consumidos. Quem tiver
+alerta calibrado no número inflado precisa recalibrar — o lag real do piloto é
+da ordem de **centenas**, não de milhares.
+
+**Ausência é resposta.** Se o broker não responde, `nishidb_kafka_lag` e
+`nishidb_kafka_high_watermark` **não são emitidas** naquela raspagem, e
+`nishidb_kafka_errors_total` sobe. Zero seria uma medição falsa; ausência é
+honesta, e `absent(nishidb_kafka_lag)` é um alerta que se consegue escrever.
+`nishidb_kafka_offset` continua saindo — ela não depende do broker.
 
 ## 6. Encerrar
 

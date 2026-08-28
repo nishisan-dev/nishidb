@@ -14,6 +14,21 @@ import (
 // este manda tentar de novo pelo mesmo caminho da subida.
 var ErrSemProgresso = errors.New("kafka: consumidor sem progresso com lag pendente")
 
+// A CONSULTA DO VIGIA MUDOU JUNTO COM A MÉTRICA, e pela mesma razão.
+//
+// Ela usava kadm.Lag, que devolve o lag do offset COMMITADO no group — e o
+// commit só sai depois do checkpoint durável (§48). Com watchdogTimeout no
+// piso declarável de 10 s e storage.checkpoint.interval em 30 s, existia uma
+// janela real em que o tópico silencia, os eventos param, o commit ainda não
+// saiu e o broker responde "há o que consumir" sobre um consumidor
+// perfeitamente em dia — com a fila vazia, que é exatamente a conjunção de
+// vereditoRecria. Isso é RECRIAÇÃO ESPÚRIA de consumidor saudável, e o godoc
+// abaixo a descartava apoiado justamente na leitura que não valia.
+//
+// Agora a pergunta é "o broker tem offset além do que eu APLIQUEI", que é a
+// que o vigia sempre quis fazer, e ela não depende da cadência de checkpoint.
+// De quebra, uma requisição em vez de três.
+//
 // prazoDaConsultaDeLag limita a pergunta ao broker. Ela roda no laço do
 // watchdog, e um admin que também travasse não pode travar o vigia junto.
 const prazoDaConsultaDeLag = 10 * time.Second
@@ -172,23 +187,25 @@ func (v *vigilante) avalia(l leitura, agora time.Time) veredito {
 func (c *Consumidor) lagPendente(ctx context.Context) (pendente, ok bool) {
 	ctx, cancela := context.WithTimeout(ctx, prazoDaConsultaDeLag)
 	defer cancela()
-	lags, err := c.adm.Lag(ctx, c.cfg.GroupID)
+	fins, err := c.adm.ListEndOffsets(ctx, c.cfg.Topic)
 	if err != nil {
 		c.met.errosKafka.Inc()
 		return false, false
 	}
-	l, achou := lags[c.cfg.GroupID]
-	if !achou {
-		return false, false
-	}
-	porParticao, achou := l.Lag[c.cfg.Topic]
-	if !achou || len(porParticao) == 0 {
-		return false, false
-	}
-	for _, p := range porParticao {
-		if p.Lag > 0 {
-			return true, true
+	var viu bool
+	for _, ps := range fins {
+		for _, o := range ps {
+			if o.Err != nil || o.Topic != c.cfg.Topic || o.Offset < 0 {
+				continue
+			}
+			viu = true
+			if o.Offset > c.met.posicaoDe(o.Partition).Load() {
+				return true, true
+			}
 		}
+	}
+	if !viu {
+		return false, false
 	}
 	return false, true
 }

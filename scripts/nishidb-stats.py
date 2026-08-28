@@ -85,6 +85,15 @@ class Amostra:
     def soma(self, nome: str) -> float:
         return sum(v for (n, _), v in self.series.items() if n == nome)
 
+    def tem(self, nome: str) -> bool:
+        """Distingue "somei e deu zero" de "a série não existe".
+
+        `soma` devolve 0.0 nos dois casos, e tratar o segundo como zero faria o
+        painel imprimir um número sobre uma medição que não aconteceu — que é
+        exatamente o erro que a série de lag cometia do outro lado.
+        """
+        return any(n == nome for (n, _) in self.series)
+
     def por_rotulo(self, nome: str, rotulo: str) -> dict[str, float]:
         out: dict[str, float] = {}
         for (n, rs), v in self.series.items():
@@ -361,15 +370,28 @@ def desenha(base: str, saude: dict, stats: dict, m: Amostra, ant: Amostra | None
             if ev is not None and ev_ant is not None and dt > 0:
                 drenagem = (ev - ev_ant) / dt
                 eta = f"   consome {milhar(round(drenagem))}/s"
-                # O BALANÇO sai da variação do próprio lag, que é medida.
+                # A PRODUÇÃO agora é MEDIDA, e não derivada.
                 #
                 # Aqui morava uma derivação: produção = variação de
                 # `offset + lag`, supondo que a soma fosse o fim do tópico.
-                # Ela É — mas as duas parcelas não vêm do mesmo instante. O
-                # offset avança a cada lote e o lag é atualizado por consulta
-                # periódica ao broker, então a soma anda para trás e o painel
-                # chegou a imprimir `produz -310/s` no piloto. O lag em si não
-                # tem esse problema: se ele cai, o consumo está dando conta.
+                # Ela É — mas as duas parcelas não vinham do mesmo instante. O
+                # offset avançava a cada lote e o lag saía de uma consulta
+                # própria ao broker, então a soma andava para trás e o painel
+                # chegou a imprimir `produz -310/s` no piloto.
+                #
+                # `nishidb_kafka_high_watermark` fecha isso na raiz: o binário
+                # publica o fim do log, o offset e o lag do MESMO instantâneo,
+                # por um coletor só. A variação dele é a produção, sem
+                # subtração entre leituras de instantes diferentes.
+                #
+                # Binário anterior a esta série não a publica, e `soma`
+                # devolveria 0.0 — indistinguível de um tópico parado. Por isso
+                # a pergunta é `tem`, e não o valor: sem a série, a produção
+                # simplesmente não é impressa, em vez de sair como zero.
+                if m.tem("nishidb_kafka_high_watermark") and ant and ant.tem("nishidb_kafka_high_watermark"):
+                    producao = (m.soma("nishidb_kafka_high_watermark")
+                                - ant.soma("nishidb_kafka_high_watermark")) / dt
+                    eta += f", produz {milhar(round(producao))}/s"
                 if lag_ant is not None:
                     variacao = (lag - lag_ant) / dt
                     if variacao < 0:

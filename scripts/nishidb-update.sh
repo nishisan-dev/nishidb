@@ -197,6 +197,31 @@ soma_metrica() {
   ' <<<"$texto"
 }
 
+# tem_metrica diz se a série EXISTE no corpo, o que soma_metrica não distingue.
+#
+# soma_metrica devolve 0 tanto para "somei e deu zero" quanto para "a série não
+# está lá", e desde 28/08/2026 a segunda situação é REAL e esperada: quando o
+# broker não responde, nishidb_kafka_lag e nishidb_kafka_high_watermark deixam
+# de ser emitidas de propósito (ausência é honesta, zero seria medição falsa).
+#
+# Sem esta distinção, a verificação de vida abaixo tinha um falso positivo
+# silencioso: broker respondendo na primeira amostra (lag=500) e mudo na
+# segunda (série ausente, soma=0) dava 0 < 500 — "o lag caiu" — e o deploy era
+# aprovado por um sinal que não existia.
+tem_metrica() {
+  local texto="$1" nome="$2"
+  awk -v nome="$nome" '
+    /^#/ { next }
+    NF == 0 { next }
+    {
+      chave = $1
+      sub(/\{.*/, "", chave)
+      if (chave == nome) { achou = 1; exit }
+    }
+    END { exit achou ? 0 : 1 }
+  ' <<<"$texto"
+}
+
 # compara_numeros afirma "a $op b" em ponto flutuante (bash só compara
 # inteiro nativamente, e os contadores do /metrics podem chegar como "0"
 # vindos do awk, mas em geral são números decimais do Prometheus).
@@ -399,7 +424,7 @@ verifica_pos_start() {
   fim=$(( $(date +%s) + NISHIDB_UPDATE_TIMEOUT ))
 
   local ok_saude=0 ok_versao=0 ok_ingestao=0 ok_invalido=1
-  local base_eventos="" base_lag="" base_invalido=""
+  local base_eventos="" base_lag="" base_invalido="" base_tem_lag=0
   local ultima_versao="" ultimo_status="" ultimo_delta_invalido="0"
 
   while true; do
@@ -422,14 +447,19 @@ verifica_pos_start() {
     fi
 
     if corpo_metrics=$(curl_rota /metrics); then
-      local eventos lag invalido
+      local eventos lag invalido tem_lag
       eventos=$(soma_metrica "$corpo_metrics" nishidb_ingest_events_total)
       lag=$(soma_metrica "$corpo_metrics" nishidb_kafka_lag)
       invalido=$(soma_metrica "$corpo_metrics" nishidb_ingest_invalid_total)
+      tem_lag=0
+      if tem_metrica "$corpo_metrics" nishidb_kafka_lag; then tem_lag=1; fi
 
       if [[ -z "$base_eventos" ]]; then
         base_eventos="$eventos"; base_lag="$lag"; base_invalido="$invalido"
-      elif compara_numeros "$eventos" ">" "$base_eventos" || compara_numeros "$lag" "<" "$base_lag"; then
+        base_tem_lag="$tem_lag"
+      elif compara_numeros "$eventos" ">" "$base_eventos" ||
+           { [[ "$tem_lag" -eq 1 && "$base_tem_lag" -eq 1 ]] &&
+             compara_numeros "$lag" "<" "$base_lag"; }; then
         ok_ingestao=1
       fi
 

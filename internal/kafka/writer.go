@@ -281,7 +281,7 @@ func (w *Writer) avanca(rec *kgo.Record) {
 	w.offsets[rec.Partition] = rec.Offset + 1
 	w.desdeCP++
 	w.posMu.Unlock()
-	w.met.offset(rec.Partition).Set(float64(rec.Offset + 1))
+	w.met.posicaoDe(rec.Partition).Store(rec.Offset + 1)
 }
 
 // para registra a pausa de forma observável e torna durável o que já entrou.

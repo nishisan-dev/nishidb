@@ -1,7 +1,11 @@
 package kafka
 
 import (
+	"sort"
 	"strconv"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/materializer"
 	"github.com/nishisan-dev/nishidb/internal/metrics"
@@ -52,10 +56,45 @@ type metricas struct {
 	partAtribuidas *metrics.SerieMedidor
 	partTotal      *metrics.SerieMedidor
 
-	famLag    *metrics.FamiliaMedidor
-	famOffset *metrics.FamiliaMedidor
-	dataset   string
+	// posicoes é a posição APLICADA por partição — o próximo offset a
+	// consumir —, publicada pelo writer a cada evento decidido.
+	//
+	// Mapa IMUTÁVEL trocado por ponteiro atômico, e não uma família de
+	// medidores. O caminho quente só faz Store no *atomic.Int64 que já existe;
+	// nada é criado por evento. Antes, avanca chamava
+	// famOffset.Com(dataset, strconv.Itoa(p)), e Com monta a chave com
+	// strings.Join(valores, "\xff") — uma string nova A CADA EVENTO, mais o
+	// slice variádico, no caminho quente de um projeto cuja doutrina é zero
+	// alocação ali. Nenhum gate cobria esse trecho: os de alocação medem
+	// PatchBuffer.Parse e Materializer.Apply, e o writer Kafka está fora dos
+	// dois.
+	posicoes atomic.Pointer[map[int32]*atomic.Int64]
+	// novasPart serializa a criação do mapa; fora do caminho quente.
+	novasPart sync.Mutex
+
+	// marca é o fim do log por partição, como o broker respondeu, com o
+	// instante da resposta. Só o scrape a escreve.
+	marca   atomic.Pointer[marcaDagua]
+	dataset string
 }
+
+// marcaDagua é um instantâneo do fim do log, com a hora em que ele foi colhido.
+//
+// O instante viaja junto porque um valor velho não pode ser publicado como se
+// fosse de agora: ele erraria para BAIXO, que é o lado que ESCONDE incidente.
+type marcaDagua struct {
+	fim map[int32]int64
+	em  time.Time
+}
+
+// validadeDaMarcaDagua é por quanto tempo a última resposta do broker ainda
+// descreve o presente.
+//
+// Um minuto é mais que um intervalo de scrape típico e menos que qualquer
+// janela em que o operador consiga nomear o instante. Vencida sem leitura
+// nova, as séries que dependem do broker somem — ausência é resposta honesta,
+// número velho não é.
+const validadeDaMarcaDagua = time.Minute
 
 // registraMetricas instala as séries do dataset.
 func registraMetricas(r *metrics.Registry, dataset string) *metricas {
@@ -98,9 +137,7 @@ func registraMetricas(r *metrics.Registry, dataset string) *metricas {
 			"Partições atribuídas a esta instância. Comparar com o total é o que torna visível o assignment parcial."),
 		partTotal: medidor(metrics.MetKafkaPartitionsTotal, "Partições do tópico."),
 
-		famLag:    r.Medidor(metrics.MetKafkaLag, "Lag por partição.", metrics.LabelDataset, metrics.LabelPartition),
-		famOffset: r.Medidor(metrics.MetKafkaOffset, "Próximo offset a consumir, por partição.", metrics.LabelDataset, metrics.LabelPartition),
-		dataset:   dataset,
+		dataset: dataset,
 	}
 
 	// O coletor é registrado AQUI, junto das famílias, e não onde a fila
@@ -108,6 +145,7 @@ func registraMetricas(r *metrics.Registry, dataset string) *metricas {
 	// emite nada. Registrar cedo mantém a ordem de exposição estável entre
 	// um consumidor que subiu e um que não subiu.
 	r.Coletor(metrics.ColetorFunc(m.amostrasDaFila))
+	r.Coletor(metrics.ColetorFunc(m.amostrasDaPosicao))
 	return m
 }
 
@@ -141,12 +179,127 @@ func (m *metricas) amostrasDaFila() []metrics.Amostra {
 	}
 }
 
-func (m *metricas) lag(p int32) *metrics.SerieMedidor {
-	return m.famLag.Com(m.dataset, strconv.Itoa(int(p)))
+// posicaoDe devolve o slot atômico da partição, criando-o se for a primeira
+// vez.
+//
+// O caminho quente é o ramo de cima: uma carga atômica e um lookup num mapa de
+// int32, sem alocar. A criação é rara — uma vez por partição por assignment —
+// e paga um mutex e a cópia do mapa, que é o preço de o leitor nunca precisar
+// de lock.
+func (m *metricas) posicaoDe(p int32) *atomic.Int64 {
+	if mp := m.posicoes.Load(); mp != nil {
+		if s, ok := (*mp)[p]; ok {
+			return s
+		}
+	}
+	return m.registraParticao(p)
 }
 
-func (m *metricas) offset(p int32) *metrics.SerieMedidor {
-	return m.famOffset.Com(m.dataset, strconv.Itoa(int(p)))
+func (m *metricas) registraParticao(p int32) *atomic.Int64 {
+	m.novasPart.Lock()
+	defer m.novasPart.Unlock()
+	// Recheca sob o lock: duas goroutines podem ter falhado o ramo rápido.
+	if mp := m.posicoes.Load(); mp != nil {
+		if s, ok := (*mp)[p]; ok {
+			return s
+		}
+	}
+	novo := make(map[int32]*atomic.Int64)
+	if mp := m.posicoes.Load(); mp != nil {
+		for k, v := range *mp {
+			novo[k] = v
+		}
+	}
+	s := &atomic.Int64{}
+	novo[p] = s
+	m.posicoes.Store(&novo)
+	return s
+}
+
+// publicaMarca guarda o instantâneo do broker, carimbado com o agora.
+func (m *metricas) publicaMarca(fim map[int32]int64, em time.Time) {
+	m.marca.Store(&marcaDagua{fim: fim, em: em})
+}
+
+// amostrasDaPosicao emite offset, high watermark e lag DO MESMO INSTANTÂNEO.
+//
+// É o coletor que torna `lag == high_watermark - offset` um invariante dentro
+// de uma raspagem, e portanto testável.
+//
+// O DEFEITO QUE ISTO FECHA. nishidb_kafka_lag vinha de kadm.Lag, que devolve o
+// lag do offset COMMITADO no consumer group — e o commit só sai depois do
+// checkpoint durável (§48), a cada 30s no piloto. Entre dois commits o offset
+// do group fica parado e a série cresce à taxa de PRODUÇÃO, com o consumidor
+// perfeitamente em dia. Medido no piloto em 28/08/2026: a série subia até
+// 14.167 e caía para 515 num único segundo em que 478 eventos foram
+// consumidos, e o crescimento entre commits era de 450 ev/s contra 452 ev/s de
+// produção. O painel mandou a investigação atrás de um gargalo de vazão que
+// não era o problema.
+//
+// Agora o lag é fim-do-log menos posição APLICADA. A posição aplicada, e não a
+// pollada: escolher a pollada faria offset + lag != high watermark e
+// reintroduziria, num terceiro lugar, a divergência que já quebrou o painel.
+//
+// Sob falha do broker, as séries que dependem dele NÃO SAEM. Zero é medição;
+// ausência é ausência de medição, e `absent(nishidb_kafka_lag)` é um alerta
+// que o operador consegue escrever. É a mesma doutrina do coletor da fila.
+func (m *metricas) amostrasDaPosicao() []metrics.Amostra {
+	mp := m.posicoes.Load()
+	if mp == nil || len(*mp) == 0 {
+		return nil
+	}
+	// Ordem estável: a iteração de mapa em Go é aleatória, e um /metrics que
+	// muda a ordem das linhas a cada raspagem é ruído em qualquer diff.
+	parts := make([]int32, 0, len(*mp))
+	for p := range *mp {
+		parts = append(parts, p)
+	}
+	sort.Slice(parts, func(i, j int) bool { return parts[i] < parts[j] })
+
+	md := m.marca.Load()
+	valida := md != nil && time.Since(md.em) <= validadeDaMarcaDagua
+
+	out := make([]metrics.Amostra, 0, len(parts)*3)
+	for _, p := range parts {
+		rot := []metrics.Label{
+			{Nome: metrics.LabelDataset, Valor: m.dataset},
+			{Nome: metrics.LabelPartition, Valor: strconv.Itoa(int(p))},
+		}
+		aplicado := (*mp)[p].Load()
+		out = append(out, metrics.Amostra{
+			Nome: metrics.MetKafkaOffset, Tipo: metrics.TipoMedidor, Valor: float64(aplicado),
+			Ajuda:  "Próximo offset a consumir, por partição: a posição APLICADA pelo writer.",
+			Labels: rot,
+		})
+		if !valida {
+			continue
+		}
+		fim, ok := md.fim[p]
+		if !ok {
+			// Partição que o broker não respondeu nesta leitura: omite as duas
+			// que dependem dela, e não a partição inteira.
+			continue
+		}
+		atraso := fim - aplicado
+		if atraso < 0 {
+			// O fim do log é anterior à posição aplicada: leitura do broker
+			// mais velha que o consumo. Não é lag negativo, é zero.
+			atraso = 0
+		}
+		out = append(out,
+			metrics.Amostra{
+				Nome: metrics.MetKafkaHighWatermark, Tipo: metrics.TipoMedidor, Valor: float64(fim),
+				Ajuda:  "Fim do log por partição, como o broker respondeu no instante desta raspagem.",
+				Labels: rot,
+			},
+			metrics.Amostra{
+				Nome: metrics.MetKafkaLag, Tipo: metrics.TipoMedidor, Valor: float64(atraso),
+				Ajuda:  "Mensagens entre a posição aplicada e o fim do log. Não depende do commit no group.",
+				Labels: rot,
+			},
+		)
+	}
+	return out
 }
 
 // invalido devolve a série do motivo dado — o nome da categoria §101
