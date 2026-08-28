@@ -3,9 +3,12 @@ package storage
 import (
 	"fmt"
 	"math/rand/v2"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/nishisan-dev/nishidb/internal/storage/checkpoint"
 	"github.com/nishisan-dev/nishidb/internal/storage/rowindex"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
@@ -206,5 +209,219 @@ func TestCheckpointDurabilizaAAgendaAntesDoManifest(t *testing.T) {
 		if p := pos(antes); p < 0 || p > agenda {
 			t.Fatalf("%s não veio antes da agenda que deriva dele: %v", antes, trace)
 		}
+	}
+}
+
+// opcoesComExpiracao repete a configuração de storeComExpiracao para os testes
+// que precisam reabrir o MESMO diretório com parâmetros variados.
+func opcoesComExpiracao(dir string, d time.Duration) Options {
+	return Options{
+		Dir: dir, SegmentSize: 1 << 20, TTLAtivo: true, DuracaoDeFundo: d,
+		CampoDeEscrita: "_writtenAt", CampoDePrazo: "_expiresIn",
+	}
+}
+
+// simulaDatasetAnteriorAAgenda deixa o dataset exatamente como um binário sem
+// agenda o teria deixado: os arquivos da árvore não existem, e o manifest não
+// tem a seção 0x8003.
+//
+// As duas coisas juntas, e não só a primeira: apagar os arquivos mantendo a
+// seção descreveria um dataset que nenhum binário produz, e o teste passaria a
+// exercitar um estado impossível em vez da migração real.
+func simulaDatasetAnteriorAAgenda(t *testing.T, dir string) {
+	t.Helper()
+	arquivos, err := filepath.Glob(filepath.Join(dir, "indexes", "vencimentos*.idx"))
+	if err != nil || len(arquivos) == 0 {
+		t.Fatalf("nenhum arquivo de agenda encontrado em %s (glob: %v)", dir, err)
+	}
+	for _, p := range arquivos {
+		if err := os.Remove(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	manifest := filepath.Join(dir, "checkpoint", "manifest.bin")
+	m, err := checkpoint.Load(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Agenda = nil
+	if err := checkpoint.Write(manifest, m); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A MIGRAÇÃO, e a razão de ela não ser o débito 22.
+//
+// Um dataset materializado antes de a agenda existir tem expiry.idx e
+// prazos.idx populados e nenhum arquivo de vencimentos. Ele NÃO precisa ser
+// recriado nem reingerido: a agenda é derivada desses dois índices mais as
+// locations, todos densos e em mmap, e a construção os lê sequencialmente sem
+// tocar em um único record de segmento.
+//
+// É essa a fronteira contra o débito 22, que é sobre bitmap e hash: aqueles
+// indexam valores EXTRAÍDOS do payload, e reconstruí-los exige ler todo
+// record de todo segmento — a janela de 18,8 h que o piloto teria de pagar.
+// Aqui não há record nenhum a ler.
+func TestAgendaAusenteEhConstruidaNaAberturaSemLerRecord(t *testing.T) {
+	dir := t.TempDir()
+	s := openStore(t, opcoesComExpiracao(dir, time.Hour))
+	rel := &relogioDeTeste{t: time.Date(2026, 8, 22, 20, 0, 0, 0, time.UTC)}
+	s.UsaRelogio(rel.agora)
+	var ids []types.RowID
+	for i := 0; i < 50; i++ {
+		key := fmt.Sprintf("k-%02d", i)
+		id, _ := mustPut(t, s, key, 1, payloadComEscrita(t, s, key, "Start", rel.t), nil)
+		ids = append(ids, id)
+	}
+	if err := s.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Apaga os arquivos da agenda: é o estado de um dataset anterior a ela.
+	simulaDatasetAnteriorAAgenda(t, dir)
+
+	s2 := openStore(t, opcoesComExpiracao(dir, time.Hour))
+	s2.UsaRelogio(rel.agora)
+	for _, id := range ids {
+		if v := s2.agenda.Get(id); v != s2.vencimentoDe(id) {
+			t.Fatalf("row %d ficou em %d depois da construção, quer %d", id, v, s2.vencimentoDe(id))
+		}
+	}
+	if err := s2.AuditaAgenda(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A DURAÇÃO DE FUNDO mudou: a agenda em disco derivou de um número que este
+// binário já não honra, e adotá-la deixaria as linhas com prazo desconhecido
+// vencendo na data errada — ou nunca. Tem de ser reconstruída.
+//
+// MUTAÇÃO QUE ESTE TESTE PEGA: adotar a agenda sem comparar os parâmetros do
+// manifest.
+func TestAgendaEhReconstruidaQuandoADuracaoDeFundoMuda(t *testing.T) {
+	dir := t.TempDir()
+	base := time.Date(2026, 8, 22, 20, 0, 0, 0, time.UTC)
+	s := openStore(t, opcoesComExpiracao(dir, time.Hour))
+	rel := &relogioDeTeste{t: base}
+	s.UsaRelogio(rel.agora)
+	// Sem _expiresIn: a linha herda a duração de FUNDO, que é o que muda.
+	id, _ := mustPut(t, s, "A", 1, payloadComEscrita(t, s, "A", "Start", rel.t), nil)
+	antes := s.agenda.Get(id)
+	if querido := uint64(base.Add(time.Hour).UnixMilli()); antes != querido {
+		t.Fatalf("vencimento inicial %d, quer %d", antes, querido)
+	}
+	if err := s.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reabre com OUTRA duração de fundo.
+	s2 := openStore(t, opcoesComExpiracao(dir, 10*time.Hour))
+	s2.UsaRelogio(rel.agora)
+	depois := s2.agenda.Get(id)
+	if querido := uint64(base.Add(10 * time.Hour).UnixMilli()); depois != querido {
+		t.Fatalf("depois de mudar a duração de fundo o vencimento é %d, quer %d (a agenda não foi reconstruída)",
+			depois, querido)
+	}
+	if err := s2.AuditaAgenda(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A agenda íntegra e com os mesmos parâmetros é ADOTADA: reconstruir a cada
+// abertura desperdiçaria uma varredura completa do dataset justamente na
+// operação que a agenda existe para tornar desnecessária.
+func TestAgendaCoerenteEhAdotadaSemReconstrucao(t *testing.T) {
+	dir := t.TempDir()
+	s := openStore(t, opcoesComExpiracao(dir, time.Hour))
+	rel := &relogioDeTeste{t: time.Date(2026, 8, 22, 20, 0, 0, 0, time.UTC)}
+	s.UsaRelogio(rel.agora)
+	id, _ := mustPut(t, s, "A", 1, payloadComEscrita(t, s, "A", "Start", rel.t), nil)
+	if err := s.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s2 := openStore(t, opcoesComExpiracao(dir, time.Hour))
+	s2.UsaRelogio(rel.agora)
+	if s2.agendaReconstruida {
+		t.Fatal("a agenda foi reconstruída sem nenhum parâmetro ter mudado")
+	}
+	if v := s2.agenda.Get(id); v != s2.vencimentoDe(id) {
+		t.Fatalf("a agenda adotada diverge: %d != %d", v, s2.vencimentoDe(id))
+	}
+}
+
+// A auditoria reprova a agenda que diverge do que os índices dizem — é ela
+// que dá aos testes de crash uma afirmação a fazer sobre o dataset inteiro.
+func TestAuditoriaReprovaAAgendaDivergente(t *testing.T) {
+	s, rel := storeComExpiracao(t, t.TempDir(), time.Hour)
+	id, _ := mustPut(t, s, "A", 1, payloadComEscrita(t, s, "A", "Start", rel.t), nil)
+	if err := s.AuditaAgenda(); err != nil {
+		t.Fatalf("agenda íntegra reprovada: %v", err)
+	}
+	// Empurra a folha para o infinito: a linha continua vencendo pelos
+	// índices, mas o coletor nunca mais a alcança.
+	if err := s.agenda.Atualiza(id, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AuditaAgenda(); err == nil {
+		t.Fatal("a auditoria aceitou uma linha que saiu da agenda sem ter saído do prazo")
+	}
+}
+
+// A seção do manifest declara os PARÂMETROS da agenda, não a existência dela.
+//
+// Um dataset cujos arquivos de vencimento sumiram — apagados por engano,
+// perdidos numa cópia parcial, truncados por um filesystem cheio — abriria com
+// a seção batendo e uma árvore vazia. Árvore vazia significa "nada vence
+// nunca": é o mesmo modo de falha silencioso que a seção crítica existe para
+// impedir, entrando pela porta que ela não cobre. Daí a checagem de cobertura,
+// que custa um Size() por nível.
+//
+// MUTAÇÃO QUE ESTE TESTE PEGA: decidir a adoção só pelos parâmetros do
+// manifest, sem conferir se os arquivos alcançam as linhas.
+func TestAgendaQueNaoCobreODatasetEhReconstruida(t *testing.T) {
+	dir := t.TempDir()
+	s := openStore(t, opcoesComExpiracao(dir, time.Hour))
+	rel := &relogioDeTeste{t: time.Date(2026, 8, 22, 20, 0, 0, 0, time.UTC)}
+	s.UsaRelogio(rel.agora)
+	id, _ := mustPut(t, s, "A", 1, payloadComEscrita(t, s, "A", "Start", rel.t), nil)
+	if err := s.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Só os arquivos: o manifest continua declarando a agenda, com os mesmos
+	// parâmetros desta abertura.
+	arquivos, err := filepath.Glob(filepath.Join(dir, "indexes", "vencimentos*.idx"))
+	if err != nil || len(arquivos) == 0 {
+		t.Fatalf("nenhum arquivo de agenda encontrado (glob: %v)", err)
+	}
+	for _, p := range arquivos {
+		if err := os.Remove(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	s2 := openStore(t, opcoesComExpiracao(dir, time.Hour))
+	s2.UsaRelogio(rel.agora)
+	if !s2.agendaReconstruida {
+		t.Fatal("a agenda vazia foi adotada: nenhuma linha voltaria a vencer")
+	}
+	if v := s2.agenda.Get(id); v != s2.vencimentoDe(id) {
+		t.Fatalf("row %d ficou em %d, quer %d", id, v, s2.vencimentoDe(id))
+	}
+	if err := s2.AuditaAgenda(); err != nil {
+		t.Fatal(err)
 	}
 }

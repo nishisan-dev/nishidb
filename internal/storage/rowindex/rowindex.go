@@ -51,6 +51,11 @@ func Unpack(p uint64) (segmentID, offset uint32, flags uint8) {
 // header de 64 bytes. Base comum de Locations e Sequences.
 type denseFile struct {
 	region *mmap.Region
+	// nasceu registra que ESTA abertura criou o arquivo, e não que ela o
+	// reencontrou. É o único sinal que distingue "índice ainda não existia"
+	// de "índice existe e está vazio" — os dois têm o mesmo conteúdo, e para
+	// um índice derivado a diferença decide entre construir e adotar.
+	nasceu bool
 }
 
 func openDense(path string, magic [4]byte, minRows uint64) (*denseFile, error) {
@@ -60,9 +65,11 @@ func openDense(path string, magic [4]byte, minRows uint64) (*denseFile, error) {
 		return nil, err
 	}
 	var hdrErr error
+	var nasceu bool
 	r.WithBytes(0, headerSize, func(h []byte) {
 		if [4]byte(h[0:4]) == [4]byte{0, 0, 0, 0} && h[4] == 0 {
 			// Arquivo novo: grava o header.
+			nasceu = true
 			copy(h[0:4], magic[:])
 			h[4] = fileVersion
 			h[5] = entrySize
@@ -81,7 +88,7 @@ func openDense(path string, magic [4]byte, minRows uint64) (*denseFile, error) {
 		r.Close()
 		return nil, hdrErr
 	}
-	return &denseFile{region: r}, nil
+	return &denseFile{region: r, nasceu: nasceu}, nil
 }
 
 func entryOff(rowID types.RowID) int64 { return headerSize + int64(rowID)*entrySize }

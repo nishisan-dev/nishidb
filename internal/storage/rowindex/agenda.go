@@ -360,6 +360,76 @@ func (a *Agenda) desce(nivel int, idx, ate uint64, visita func(types.RowID) bool
 	return true
 }
 
+// PrecisaConstruir reporta se a árvore em disco não serve para o dataset que
+// tem `limite` linhas, e tem de ser reconstruída antes de qualquer uso.
+//
+// Existe porque o manifest declara os PARÂMETROS da agenda, não a existência
+// dela. Um dataset cujos arquivos de vencimento sumiram — apagados por engano,
+// perdidos numa cópia parcial, truncados por um filesystem cheio — abriria com
+// a seção batendo e uma árvore VAZIA, e árvore vazia significa "nada vence
+// nunca": o mesmo modo de falha silencioso que a seção crítica existe para
+// impedir, entrando pela porta que ela não cobre.
+//
+// Duas perguntas, porque são dois estragos diferentes e nenhuma vê o outro:
+//
+//   - NASCEU nesta abertura. É o sinal decisivo, e o único que enxerga o
+//     arquivo apagado: openDense recria o que não existe já no tamanho de
+//     piso, então um dataset pequeno passaria folgado por qualquer checagem
+//     de tamanho.
+//   - não COBRE as linhas. Pega o arquivo que sobreviveu com o header intacto
+//     e perdeu a cauda, que nenhuma checagem de existência veria.
+//
+// As duas custam um campo e um Size() por nível — nada é varrido.
+func (a *Agenda) PrecisaConstruir(limite types.RowID) bool {
+	for nivel := range a.niveis {
+		if a.niveis[nivel].nasceu {
+			return true
+		}
+	}
+	if limite == 0 {
+		return false
+	}
+	for nivel := range a.niveis {
+		if a.entradas(nivel) <= uint64(limite-1)>>(agendaShift*nivel) {
+			return true
+		}
+	}
+	return false
+}
+
+// Reconstroi reescreve a árvore inteira a partir de venc, que devolve o
+// vencimento de cada linha. Exclusivo do writer, e sem leitores — é o caminho
+// do Open.
+//
+// Preenche as folhas linearmente e só então computa os sumários de baixo para
+// cima, em vez de chamar Atualiza linha a linha. As duas formas dão a mesma
+// árvore; esta paga uma escrita por entrada em vez de uma por entrada mais os
+// abaixamentos em cascata que a ordem de chegada provocaria, e lê cada nível
+// uma vez só, sequencialmente. É o que mantém a construção de milhões de
+// linhas na casa dos milissegundos, e é o que torna "construir na abertura"
+// preferível a "exigir recriação do dataset".
+//
+// Todo o arquivo de cada nível é reescrito, e não só a parte derivada de
+// limite: quando a reconstrução acontece por divergência de parâmetros, o que
+// está em disco é uma árvore VÁLIDA de outro mundo, e deixar qualquer entrada
+// dela para trás misturaria as duas.
+func (a *Agenda) Reconstroi(limite types.RowID, venc func(types.RowID) uint64) error {
+	for id := types.RowID(0); id < limite; id++ {
+		if err := a.niveis[0].store(id, venc(id)); err != nil {
+			return err
+		}
+	}
+	for nivel := 1; nivel < len(a.niveis); nivel++ {
+		n := max(a.entradas(nivel), uint64(limite)>>(agendaShift*nivel)+1)
+		for idx := uint64(0); idx < n; idx++ {
+			if err := a.niveis[nivel].store(types.RowID(idx), a.minimoDosFilhos(nivel, idx)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // Confere verifica a invariante em toda a árvore, e é o que dá ao teste de
 // crash uma afirmação a fazer.
 //

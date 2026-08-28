@@ -331,6 +331,12 @@ type Store struct {
 	expiradas  atomic.Uint64
 	carencias  atomic.Uint64
 	examinadas atomic.Uint64
+	// agendaReconstruida registra que esta abertura teve de construir a
+	// agenda em vez de adotar a que estava em disco. É o que permite ao teste
+	// afirmar a NÃO reconstrução — sem isso, "adotou" e "reconstruiu e
+	// chegou ao mesmo resultado" seriam indistinguíveis.
+	agendaReconstruida bool
+
 	// cursorExpiracao é onde a próxima passada do coletor recomeça. Só o
 	// laço do coletor o toca, e sempre sob o entra()/sai().
 	cursorExpiracao types.RowID
@@ -991,6 +997,13 @@ func Open(opts Options) (*Store, error) {
 				opts.Dir, err)
 		}
 	}
+	// A agenda vem DEPOIS do ramo de recovery: ela deriva das locations, e o
+	// replay do tail ainda as estava publicando. Construí-la antes daria uma
+	// árvore que ignora tudo que o tail trouxe.
+	if err := s.adotaOuConstroiAgenda(m); err != nil {
+		return nil, err
+	}
+
 	// Offsets ANTES do checkpoint imediato: o Checkpoint reescreve o
 	// kafka.offsets a partir do estado em memória, então carregar depois
 	// apagaria a posição na primeira reabertura do dataset.
