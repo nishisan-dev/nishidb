@@ -306,7 +306,7 @@ acidental reprocessa ou pula uma janela inteira do tópico.
 |---|---|
 | `ingestionQueueSize`, `ingestionQueueBytes` | Sim. Só afeta o intake |
 | `maxPollRecords` | Sim, mas **desde a Fase 4 ele não afeta só o intake**: é ele que dimensiona a esteira de decodificação, arredondado para cima até a potência de dois. Subi-lo multiplica os slots do anel, e cada slot retém buffers entre eventos; baixá-lo é o remédio quando `nishidb_ingest_decode_arena_bytes` incomoda. O limiar por slot acompanha, porque é `ingestionQueueBytes` dividido por essa janela |
-| `decodeWorkers` | Sim, e o resultado **não muda o dado**: o golden `workers:1 × workers:8` compara `SELECT *` e `_meta.fields` byte a byte. O que muda é memória — cada slot da esteira retém buffers até a marca d'água —, e o ganho satura cedo: medido em laboratório, 2 dão 2,09× e 8 REGRIDEM para 1,49×. Suba de 1 para 2 e meça; de 4 em diante, só com medição do próprio dataset |
+| `decodeWorkers` | Sim, e o resultado **não muda o dado**: o golden `workers:1 × workers:8` compara `SELECT *` e `_meta.fields` byte a byte. O que muda é memória — cada slot da esteira retém buffers até a marca d'água —, e o ganho satura cedo: medido em laboratório, 2 dão 1,75× e 8 REGRIDEM para 1,53×. Suba de 1 para 2 e meça; de 4 em diante, só com medição do próprio dataset |
 | `errors.invalidEvent` | Sim |
 | `enabled: false` | Sim — é o botão de pausa declarativo de UM dataset |
 | `autoOffsetReset` | Inócuo depois da primeira subida: com posição local, ele não é consultado |

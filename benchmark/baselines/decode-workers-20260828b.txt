@@ -1,0 +1,103 @@
+BenchmarkDecodeWorkers — decodificadores da ingestão Kafka, 1/2/4/8
+===================================================================
+
+Data:    2026-08-28 (segunda rodada, depois dos consertos de memória)
+Máquina: Intel(R) Core(TM) 7 150U, 12 vCPU, Linux 6.8.0-136-generic
+Go:      go1.25 (o CI pina 1.26.5)
+Commit:  395a422 (a primeira rodada, decode-workers-20260828.txt, mediu o código
+         ANTES do conserto que faz o slot soltar o buffer do evento)
+Comando: go test ./internal/kafka/ -run XXX -bench BenchmarkDecodeWorkers \
+             -benchtime 50000x -count=1        (10 rodadas)
+
+O QUE ESTE NÚMERO É, E O QUE ELE NÃO É
+--------------------------------------
+O benchmark mede o PIPELINE INTEIRO — fila, decodificadores, esteira e writer —
+sobre um store em memória (testutil/fakestorage). Isso torna a metade de
+APLICAÇÃO muito mais barata do que em produção, onde Put, Apenda e os índices
+tocam mmap e disco. A consequência precisa ser lida junto do número:
+
+  * a vazão absoluta aqui (centenas de milhares de ev/s) NÃO é a de produção,
+    que o diagnóstico da Fase 4 mediu no piloto em ~1.109 ev/s com um core;
+  * a FORMA da curva é o que este benchmark responde, e ela é conservadora: com
+    a aplicação mais cara, a fração serial cresce e a saturação chega ANTES.
+
+MEDIDAS (mínimo de 10 rodadas; a dispersão desta máquina foi de 30% a 46% nesta
+rodada, então a mediana de poucas rodadas não distinguiria nada)
+--------------------------------------------------------------------------
+ workers   min ns/op   max ns/op   dispersão   ev/s (melhor)   speedup   KiB esteira
+       1        9696       13206         36%         103.140     1,00x         2.991
+       2        5530        7624         38%         180.827     1,75x         2.991
+       4        5845        7599         30%         171.097     1,66x         2.991
+       8        6345        9243         46%         157.612     1,53x         2.991
+
+CONTRA A PRIMEIRA RODADA
+------------------------
+A primeira rodada (mesmo dia, código sem os consertos de memória) deu 1,00x /
+2,09x / 1,98x / 1,49x, com dispersão de 18% a 39%. As duas rodadas DIFEREM POR
+MENOS QUE A DISPERSÃO DE QUALQUER UMA DELAS, e a forma é a mesma: ganho real em
+dois, saturação em quatro, regressão em oito.
+
+Seria cômodo atribuir a diferença ao trabalho que o `Libera` acrescentou por
+evento — um `clear` de dois elementos e três atribuições de nil —, e seria
+desonesto: isso é da ordem de nanossegundos, e a diferença medida é de
+centenas. O que estas duas rodadas dizem juntas é que esta máquina não separa
+1,75x de 2,09x, e é por isso que o baseline publica os MÍNIMOS e a dispersão em
+vez de uma média com cara de precisão.
+
+LEITURA
+-------
+Dois decodificadores dão o ganho; quatro não acrescentam; oito REGRIDEM. A
+regressão é contenção — mutex da esteira, mutex da fila, cache compartilhado — e
+NÃO foi atribuída a um lock (débito 98): o `mutex` profile existe no binário
+desde a Fase 0.4 e não foi coletado.
+
+É por isso que a chave nasce em 1 e existe: o valor certo é medida do dataset,
+não constante. Subir de 1 para 2 é a única mudança que este baseline sustenta
+sem medição própria.
+
+A memória do anel NÃO depende do número de decodificadores — 2.991 KiB nas
+quatro configurações. Quem a dimensiona é a janela (1.024 slots), e o
+paralelismo não entra na conta.
+
+RODADAS CRUAS
+-------------
+BenchmarkDecodeWorkers/workers=1-12         	   50000	     10134 ns/op	      2991 KiB_esteira	     98673 ev/s	    1204 B/op	       6 allocs/op
+BenchmarkDecodeWorkers/workers=2-12         	   50000	      5530 ns/op	      2991 KiB_esteira	    180827 ev/s	    1197 B/op	       6 allocs/op
+BenchmarkDecodeWorkers/workers=4-12         	   50000	      5845 ns/op	      2991 KiB_esteira	    171097 ev/s	    1200 B/op	       6 allocs/op
+BenchmarkDecodeWorkers/workers=8-12         	   50000	      6951 ns/op	      2991 KiB_esteira	    143856 ev/s	    1214 B/op	       6 allocs/op
+BenchmarkDecodeWorkers/workers=1-12         	   50000	     11303 ns/op	      2991 KiB_esteira	     88476 ev/s	    1205 B/op	       6 allocs/op
+BenchmarkDecodeWorkers/workers=2-12         	   50000	      7624 ns/op	      2991 KiB_esteira	    131165 ev/s	    1197 B/op	       6 allocs/op
+BenchmarkDecodeWorkers/workers=4-12         	   50000	      7332 ns/op	      2991 KiB_esteira	    136388 ev/s	    1202 B/op	       6 allocs/op
+BenchmarkDecodeWorkers/workers=8-12         	   50000	      7957 ns/op	      2991 KiB_esteira	    125668 ev/s	    1217 B/op	       6 allocs/op
+BenchmarkDecodeWorkers/workers=1-12         	   50000	     11515 ns/op	      2991 KiB_esteira	     86841 ev/s	    1205 B/op	       6 allocs/op
+BenchmarkDecodeWorkers/workers=2-12         	   50000	      6747 ns/op	      2991 KiB_esteira	    148219 ev/s	    1198 B/op	       6 allocs/op
+BenchmarkDecodeWorkers/workers=4-12         	   50000	      7599 ns/op	      2991 KiB_esteira	    131593 ev/s	    1201 B/op	       6 allocs/op
+BenchmarkDecodeWorkers/workers=8-12         	   50000	      9243 ns/op	      2991 KiB_esteira	    108191 ev/s	    1218 B/op	       6 allocs/op
+BenchmarkDecodeWorkers/workers=1-12         	   50000	     10462 ns/op	      2991 KiB_esteira	     95580 ev/s	    1204 B/op	       6 allocs/op
+BenchmarkDecodeWorkers/workers=2-12         	   50000	      6429 ns/op	      2991 KiB_esteira	    155552 ev/s	    1198 B/op	       6 allocs/op
+BenchmarkDecodeWorkers/workers=4-12         	   50000	      6562 ns/op	      2991 KiB_esteira	    152398 ev/s	    1201 B/op	       6 allocs/op
+BenchmarkDecodeWorkers/workers=8-12         	   50000	      6540 ns/op	      2991 KiB_esteira	    152903 ev/s	    1214 B/op	       6 allocs/op
+BenchmarkDecodeWorkers/workers=1-12         	   50000	      9696 ns/op	      2991 KiB_esteira	    103140 ev/s	    1204 B/op	       6 allocs/op
+BenchmarkDecodeWorkers/workers=2-12         	   50000	      6367 ns/op	      2991 KiB_esteira	    157050 ev/s	    1197 B/op	       6 allocs/op
+BenchmarkDecodeWorkers/workers=4-12         	   50000	      6393 ns/op	      2991 KiB_esteira	    156413 ev/s	    1200 B/op	       6 allocs/op
+BenchmarkDecodeWorkers/workers=8-12         	   50000	      6965 ns/op	      2991 KiB_esteira	    143565 ev/s	    1216 B/op	       6 allocs/op
+BenchmarkDecodeWorkers/workers=1-12         	   50000	     13206 ns/op	      2991 KiB_esteira	     75723 ev/s	    1203 B/op	       6 allocs/op
+BenchmarkDecodeWorkers/workers=2-12         	   50000	      6041 ns/op	      2991 KiB_esteira	    165545 ev/s	    1197 B/op	       6 allocs/op
+BenchmarkDecodeWorkers/workers=4-12         	   50000	      6486 ns/op	      2991 KiB_esteira	    154188 ev/s	    1201 B/op	       6 allocs/op
+BenchmarkDecodeWorkers/workers=8-12         	   50000	      6523 ns/op	      2991 KiB_esteira	    153303 ev/s	    1214 B/op	       6 allocs/op
+BenchmarkDecodeWorkers/workers=1-12         	   50000	     11632 ns/op	      2991 KiB_esteira	     85967 ev/s	    1204 B/op	       6 allocs/op
+BenchmarkDecodeWorkers/workers=2-12         	   50000	      6037 ns/op	      2991 KiB_esteira	    165657 ev/s	    1198 B/op	       6 allocs/op
+BenchmarkDecodeWorkers/workers=4-12         	   50000	      5905 ns/op	      2991 KiB_esteira	    169360 ev/s	    1200 B/op	       6 allocs/op
+BenchmarkDecodeWorkers/workers=8-12         	   50000	      6460 ns/op	      2991 KiB_esteira	    154808 ev/s	    1214 B/op	       6 allocs/op
+BenchmarkDecodeWorkers/workers=1-12         	   50000	     10469 ns/op	      2991 KiB_esteira	     95518 ev/s	    1204 B/op	       6 allocs/op
+BenchmarkDecodeWorkers/workers=2-12         	   50000	      5842 ns/op	      2991 KiB_esteira	    171189 ev/s	    1198 B/op	       6 allocs/op
+BenchmarkDecodeWorkers/workers=4-12         	   50000	      6849 ns/op	      2991 KiB_esteira	    146014 ev/s	    1200 B/op	       6 allocs/op
+BenchmarkDecodeWorkers/workers=8-12         	   50000	      7246 ns/op	      2991 KiB_esteira	    138008 ev/s	    1216 B/op	       6 allocs/op
+BenchmarkDecodeWorkers/workers=1-12         	   50000	     10294 ns/op	      2991 KiB_esteira	     97148 ev/s	    1203 B/op	       6 allocs/op
+BenchmarkDecodeWorkers/workers=2-12         	   50000	      6380 ns/op	      2991 KiB_esteira	    156733 ev/s	    1197 B/op	       6 allocs/op
+BenchmarkDecodeWorkers/workers=4-12         	   50000	      6221 ns/op	      2991 KiB_esteira	    160757 ev/s	    1201 B/op	       6 allocs/op
+BenchmarkDecodeWorkers/workers=8-12         	   50000	      6345 ns/op	      2991 KiB_esteira	    157612 ev/s	    1214 B/op	       6 allocs/op
+BenchmarkDecodeWorkers/workers=1-12         	   50000	     10748 ns/op	      2991 KiB_esteira	     93044 ev/s	    1205 B/op	       6 allocs/op
+BenchmarkDecodeWorkers/workers=2-12         	   50000	      6752 ns/op	      2991 KiB_esteira	    148115 ev/s	    1197 B/op	       6 allocs/op
+BenchmarkDecodeWorkers/workers=4-12         	   50000	      6949 ns/op	      2991 KiB_esteira	    143914 ev/s	    1202 B/op	       6 allocs/op
+BenchmarkDecodeWorkers/workers=8-12         	   50000	      7853 ns/op	      2991 KiB_esteira	    127337 ev/s	    1215 B/op	       6 allocs/op

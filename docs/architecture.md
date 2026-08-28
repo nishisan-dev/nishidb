@@ -82,9 +82,11 @@ EVENTO de descoberta, medido em `nishidb_ingest_decode_serial_total`.
 
 **Quantos workers usar é medida, não intuição.** O ganho é limitado pela fração
 que continua serial, então ele satura cedo. Medido em laboratório com store em
-memória (`benchmark/baselines/decode-workers-20260828.txt`, mínimo de 10
-rodadas): **2 workers dão 2,09×; 4 empatam com 2 dentro da dispersão; 8
-regridem para 1,49×** por contenção. Em produção a aplicação é mais cara, então
+memória (`benchmark/baselines/decode-workers-20260828b.txt`, mínimo de 10
+rodadas): **2 workers dão 1,75×; 4 não acrescentam; 8 regridem para 1,53×** por
+contenção. Duas rodadas do mesmo dia diferiram por menos que a dispersão desta
+máquina (30% a 46%) e concordaram na forma — é a forma que este número afirma,
+não a terceira casa. Em produção a aplicação é mais cara, então
 a saturação chega antes, nunca depois. O default é `1` e subir para `2` é a
 única mudança que esse baseline sustenta sem medição própria do dataset.
 

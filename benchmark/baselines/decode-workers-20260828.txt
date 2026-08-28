@@ -1,6 +1,13 @@
 BenchmarkDecodeWorkers — decodificadores da ingestão Kafka, 1/2/4/8
 ===================================================================
 
+>> SUPERADO por decode-workers-20260828b.txt, e mantido como registro da rodada.
+>> Este arquivo mediu o código ANTES do conserto que faz o slot soltar o buffer
+>> do evento (commit 395a422). A rodada nova tem a mesma FORMA — ganho em dois,
+>> saturação em quatro, regressão em oito — com números que diferem por menos
+>> que a dispersão de qualquer uma das duas. Quem for citar um número, cite o
+>> arquivo `b`.
+
 Data:    2026-08-28
 Máquina: Intel(R) Core(TM) 7 150U, 12 vCPU, Linux 6.8.0-136-generic
 Go:      go1.25 (o CI pina 1.26.5)

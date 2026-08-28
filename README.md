@@ -719,9 +719,9 @@ produziria. O resultado é idêntico: há um golden que compara `SELECT *` e
 `_meta.fields` byte a byte entre 1 e 8 decodificadores.
 
 O default é `1`, e subir é decisão de MEDIÇÃO. O ganho satura cedo, porque a
-metade que escreve continua serial: em laboratório, 2 decodificadores dão 2,09×,
-4 empatam com 2 e **8 regridem para 1,49×** por contenção
-(`benchmark/baselines/decode-workers-20260828.txt`). Cada worker a mais também é
+metade que escreve continua serial: em laboratório, 2 decodificadores dão 1,75×,
+4 não acrescentam e **8 regridem para 1,53×** por contenção
+(`benchmark/baselines/decode-workers-20260828b.txt`). Cada worker a mais também é
 memória: os slots da esteira retêm os buffers do decode, publicados em
 `nishidb_ingest_decode_arena_bytes`. Suba para 2, meça, e só então considere mais.
 
