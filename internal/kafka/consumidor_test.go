@@ -212,10 +212,17 @@ func TestAoRevogarEsperaWProntoAntesDeLerW(t *testing.T) {
 	}
 
 	// Libera o gate como Abre faria: c.w ganha seu valor final e só DEPOIS o
-	// canal fecha. Um Writer zero-value com offsets vazio é seguro de
-	// checkpointar sem depender de store/materializer reais — o mesmo padrão
-	// de cadencia_test.go (`&Writer{cad: caso.cad}`).
-	c.w = &Writer{}
+	// canal fecha.
+	//
+	// O writer nasce com `parado` JÁ FECHADO, o que também exercita o braço
+	// mais perigoso do Quiesce: um writer que encerrou antes de alcançar a
+	// barreira. Sem esse braço, o Quiesce esperaria para sempre DENTRO de um
+	// callback do franz-go — o group cairia por callback travado, as partições
+	// seriam revogadas e a ingestão morreria em silêncio. Aqui ele tem de
+	// voltar na hora, sem store nem materializer reais.
+	parado := make(chan struct{})
+	close(parado)
+	c.w = &Writer{fila: NovaFila(1, 1<<20), parado: parado}
 	close(c.wPronto)
 
 	select {

@@ -79,15 +79,24 @@ type Writer struct {
 
 	// posMu protege offsets, desdeCP e ultimoCP.
 	//
-	// Não basta ser "do writer": aoRevogar chama checkpoint da goroutine do
-	// group do franz-go, e o writer pode estar em talvezCheckpoint pelo
-	// despertador ao mesmo tempo. A barreira de fim de lote esvazia a FILA,
-	// não para a GOROUTINE — sem este lock, as duas leem e escrevem o mapa de
-	// offsets em paralelo. A detecção de escrita concorrente em mapa no
-	// runtime é best-effort: quando ela pega, é
-	// `fatal error: concurrent map read and map write` — throw não recuperável,
-	// que derruba o processo inteiro e não só a goroutine. Quando não pega, o
-	// desfecho é o mapa corrompido em silêncio, que é pior.
+	// HISTÓRIA, porque ela explica por que o lock continua aqui. aoRevogar
+	// chamava w.checkpoint DIRETO, da goroutine do group do franz-go, enquanto
+	// o writer podia estar em talvezCheckpoint pelo despertador — a barreira
+	// de fim de lote esvaziava a FILA, não parava a GOROUTINE. As duas liam e
+	// escreviam o mapa de offsets em paralelo, e a detecção de escrita
+	// concorrente em mapa é best-effort no runtime: quando pega, é
+	// `fatal error: concurrent map read and map write`, throw não recuperável
+	// que derruba o processo; quando não pega, corrompe o mapa em silêncio.
+	//
+	// Com o Quiesce, o checkpoint voltou a rodar SÓ na goroutine do writer:
+	// quem pede o quiesce apenas enfileira uma barreira e espera. A corrida
+	// deixou de existir por construção, e este lock passou a ser redundante.
+	//
+	// Ele fica assim mesmo, e não é dívida: um mutex não contendido custa
+	// dezenas de nanossegundos por checkpoint — que acontece uma vez a cada 30
+	// segundos —, e é o que impede que a próxima chamada de checkpoint vinda de
+	// fora da goroutine do writer reintroduza o throw em silêncio. O godoc
+	// acima é o aviso; este lock é a rede.
 	//
 	// É lock SEPARADO do mu de propósito. O checkpoint segura este durante o
 	// fsync inteiro (centenas de ms), e o poller chama Pausa() a cada volta do
@@ -101,6 +110,15 @@ type Writer struct {
 	mu       sync.Mutex
 	pausa    error
 	desfecho Desfecho
+
+	// parado fecha quando Roda retorna, e existe para o Quiesce.
+	//
+	// É o braço que impede o modo de falha mais perigoso desta mudança: um
+	// writer que já saiu (por ErrPausado, por exemplo) nunca alcançaria a
+	// barreira, e o Quiesce — que roda DENTRO de um callback do franz-go —
+	// esperaria para sempre. O group cairia por callback travado, as partições
+	// seriam revogadas e a ingestão morreria em silêncio.
+	parado chan struct{}
 }
 
 // Desfecho resume o que a ingestão fez, para o resumo e para os testes.
@@ -133,6 +151,7 @@ func NovoWriter(cfg *Config, mat *materializer.Materializer, st Store, fila *Fil
 		commit:   commit,
 		offsets:  o,
 		ultimoCP: time.Now(),
+		parado:   make(chan struct{}),
 	}
 }
 
@@ -155,6 +174,8 @@ func (w *Writer) Desfecho() Desfecho {
 func (w *Writer) Roda(ctx context.Context) error {
 	acorda, paraDespertador := w.despertador()
 	defer paraDespertador()
+	// Fechar isto é o que destrava um Quiesce que chegou tarde demais.
+	defer close(w.parado)
 
 	for {
 		it, ok, acordou := w.fila.recebeOuAcorda(ctx, acorda)
@@ -176,8 +197,12 @@ func (w *Writer) Roda(ctx context.Context) error {
 			// aplicado antes de sair. Sem isto, um encerramento gracioso
 			// jogaria fora até um intervalo inteiro de checkpoint.
 			return w.finaliza(ctx)
-		case it.Marca != nil:
-			close(it.Marca)
+		case it.Barreira != nil:
+			// Quiesce: tudo o que entrou na fila antes desta barreira já foi
+			// aplicado, então é AQUI que a posição vira durável. Checkpoint
+			// incondicional, e não talvezCheckpoint: quem pede o quiesce é a
+			// revogação, e "ainda não deu a hora" não é resposta para ela.
+			it.Barreira.conclui(w.checkpoint(ctx))
 		default:
 			if err := w.aplica(ctx, it); err != nil {
 				return err
@@ -308,6 +333,43 @@ func (w *Writer) para(ctx context.Context, motivo error, evento string, rec *kgo
 	w.log.Error(evento, "ingestão PARADA; as consultas seguem de pé (§51). Use `nishidb offsets` para reposicionar",
 		"partition", rec.Partition, "offset", rec.Offset, "motivo", motivo.Error())
 	return w.Pausa()
+}
+
+// Quiesce drena o que já está na fila, torna durável e só então volta.
+//
+// É a barreira que o poller emitia a cada lote, movida para onde ela de fato é
+// necessária: a revogação. A propriedade a preservar é que nenhum commit rode
+// para uma partição depois de a revogação dela ter sido reconhecida — e isso
+// exige drenar quando a revogação chega, não a cada volta do poll.
+//
+// A ordem por partição (§26) NÃO depende disto e nunca dependeu: ela vem de
+// "uma FIFO, um consumidor". Está escrito aqui porque a barreira parecia
+// sustentá-la, e sem o registro a próxima revisão a reintroduz "por segurança".
+//
+// Roda dentro de um callback do franz-go, então NUNCA pode esperar para
+// sempre: os três braços do select são a barreira, o writer que já saiu, e o
+// contexto.
+func (w *Writer) Quiesce(ctx context.Context) error {
+	b := novaBarreira()
+	if err := w.fila.EnviaBarreira(ctx, b); err != nil {
+		if errors.Is(err, ErrFilaFechada) {
+			// O consumidor está encerrando: o writer drena o que sobrou e faz
+			// o checkpoint final por conta própria (ver finaliza). Não há o
+			// que pedir, e insistir seria erro sobre um caminho saudável.
+			return nil
+		}
+		return err
+	}
+	select {
+	case <-b.pronto:
+		return b.err
+	case <-w.parado:
+		// O writer encerrou antes de alcançar a barreira. Não há o que
+		// drenar, e insistir travaria o callback.
+		return w.Pausa()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (w *Writer) talvezCheckpoint(ctx context.Context) error {

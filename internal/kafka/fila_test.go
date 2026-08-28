@@ -123,24 +123,24 @@ func TestConsumidorAcordaOProdutorBloqueado(t *testing.T) {
 	}
 }
 
-// O marcador de fim de lote não pode consumir orçamento de bytes: ele existe
-// para sinalizar, e cobrá-lo do teto tornaria a contabilidade de memória
-// dependente do tamanho do lote.
-func TestMarcaNaoConsomeOrcamento(t *testing.T) {
+// O marcador de quiesce não pode consumir orçamento de bytes: ele existe para
+// sinalizar, e cobrá-lo do teto tornaria a contabilidade de memória
+// dependente de quantas revogações aconteceram.
+func TestBarreiraNaoConsomeOrcamento(t *testing.T) {
 	f := NovaFila(10, 100)
 	ctx, cancela := context.WithTimeout(context.Background(), time.Second)
 	defer cancela()
 
-	marca := make(chan struct{})
-	if err := f.EnviaMarca(ctx, marca); err != nil {
+	b := novaBarreira()
+	if err := f.EnviaBarreira(ctx, b); err != nil {
 		t.Fatal(err)
 	}
 	if _, bytes := f.Profundidade(); bytes != 0 {
-		t.Errorf("a marca consumiu %d bytes do orçamento", bytes)
+		t.Errorf("a barreira consumiu %d bytes do orçamento", bytes)
 	}
 	it, ok := f.Recebe(ctx)
-	if !ok || it.Marca == nil {
-		t.Fatalf("Recebe = (%+v, %v), quer o marcador", it, ok)
+	if !ok || it.Barreira == nil {
+		t.Fatalf("Recebe = (%+v, %v), quer o marcador de quiesce", it, ok)
 	}
 }
 

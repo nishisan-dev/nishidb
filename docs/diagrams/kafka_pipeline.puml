@@ -31,10 +31,18 @@ loop cada record
     end note
   end
 end
-poll -> fila : EnviaMarca(fim de lote)
+poll -> kafka : AllowRebalance
+note right of poll
+  Logo depois de enfileirar, SEM esperar o writer.
+  Aqui havia uma barreira de fim de lote, e ela
+  custava o overlap inteiro: writer 72% ocioso,
+  poller 28% parado nela (medido no piloto).
+  O dreno mora agora na revogação — ver Quiesce.
+end note
+deactivate poll
 
-== materialize ==
-loop até a marca
+== materialize (em paralelo com o próximo poll) ==
+loop enquanto houver item
   wr -> fila : Recebe()
   fila --> wr : record
   wr -> mat : Apply(record.Value)
@@ -82,7 +90,26 @@ alt cadência atingida (contagem OU tempo)
   end note
 end
 
-poll -> kafka : AllowRebalance
+== quiesce (só na revogação e no encerramento) ==
+kafka -> poll : OnPartitionsRevoked
+activate poll
+poll -> fila : EnviaBarreira()
+note right of fila
+  A barreira vai para o FIM da fila: tudo o que
+  entrou antes dela já terá sido aplicado quando
+  o writer a alcançar. É essa a garantia de que
+  nenhum commit toca partição já revogada.
+end note
+fila -> wr : barreira
+wr -> wr : checkpoint incondicional
+wr --> poll : conclui(err)
+note right of poll
+  O select tem TRÊS braços: a barreira, o writer
+  já encerrado, e o contexto. Sem o segundo, um
+  writer que saiu por ErrPausado travaria este
+  callback — o group cairia e a ingestão morreria
+  em silêncio.
+end note
 deactivate poll
 
 @enduml

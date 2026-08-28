@@ -431,8 +431,16 @@ func (c *Consumidor) aoRevogar(ctx context.Context, _ *kgo.Client, revogadas map
 	if c.w == nil {
 		return
 	}
-	if err := c.w.checkpoint(ctx); err != nil {
-		c.log.Error("checkpoint.falhou", "checkpoint na revogação falhou; o próximo dono reprocessa desde o último ponto durável",
+	// Quiesce, e não checkpoint direto. Duas razões:
+	//
+	//  1. Sem a barreira de fim de lote, pode haver evento em voo na fila
+	//     quando a revogação chega. Checkpointar agora publicaria uma posição
+	//     que não corresponde ao que foi aplicado.
+	//  2. O checkpoint volta a rodar na goroutine do WRITER, que é a única
+	//     que toca offsets/desdeCP/ultimoCP. A corrida entre esta goroutine e
+	//     a do writer deixa de existir por construção, em vez de por lock.
+	if err := c.w.Quiesce(ctx); err != nil {
+		c.log.Error("checkpoint.falhou", "quiesce na revogação falhou; o próximo dono reprocessa desde o último ponto durável",
 			"erro", err.Error())
 	}
 	c.met.partAtribuidas.Set(0)
@@ -565,27 +573,32 @@ func (c *Consumidor) poll(ctx context.Context) error {
 			return err
 		}
 
-		enfileirados := 0
 		fetches.EachRecord(func(r *kgo.Record) {
 			if ctx.Err() != nil {
 				return
 			}
-			if err := c.fila.Envia(ctx, r); err == nil {
-				enfileirados++
-			}
+			_ = c.fila.Envia(ctx, r)
 		})
-		if enfileirados > 0 {
-			// Espera o writer decidir o lote inteiro antes de liberar o
-			// rebalance: é isso que garante que o commit seguinte só toque
-			// partições que ainda são nossas.
-			marca := make(chan struct{})
-			if err := c.fila.EnviaMarca(ctx, marca); err == nil {
-				select {
-				case <-marca:
-				case <-ctx.Done():
-				}
-			}
-		}
+		// AllowRebalance logo depois de enfileirar, SEM esperar o writer.
+		//
+		// Aqui havia uma barreira: o poller emitia um marcador de fim de lote
+		// e bloqueava até o writer alcançá-lo. Ela dizia garantir que "o
+		// commit seguinte só toque partições que ainda são nossas", mas a
+		// garantia não precisa disso, e o preço era o overlap inteiro entre
+		// poller e writer — medido no piloto, o writer ficava 72% do tempo
+		// ocioso e o poller 28% parado nesta linha.
+		//
+		// Duas coisas sustentam a garantia sem a barreira:
+		//
+		//  1. O franz-go já impede que um callback de revogação rode enquanto
+		//     o poller segura um lote não-vazio (é o que BlockRebalanceOnPoll
+		//     faz, e vale até o AllowRebalance abaixo).
+		//  2. O dreno migrou para onde ele é de fato necessário: aoRevogar
+		//     chama w.Quiesce, que só volta depois de o writer ter aplicado
+		//     tudo o que estava na fila e tornado a posição durável.
+		//
+		// E o §26 não entra nisso: a ordem por partição vem de "uma FIFO, um
+		// consumidor", não da barreira.
 		c.cl.AllowRebalance()
 	}
 }

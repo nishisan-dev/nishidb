@@ -57,6 +57,27 @@ dizer que 500 ev/s não justifica múltiplos writers, é o pipeline de uma
 goroutine de ponta a ponta que preserva a ordem por partição, que o §26 usa
 como critério de correção quando o dataset não declara `sequence`.
 
+**O poller não espera mais o writer a cada lote.** Até 28/08/2026 ele emitia um
+marcador de fim de lote e bloqueava até o writer alcançá-lo, para só então
+liberar o rebalance. A garantia que isso comprava é real — nenhum commit pode
+rodar para uma partição depois de a revogação dela ter sido reconhecida —, mas
+a barreira era forma forte demais: ela exige drenar **quando a revogação
+chega**, não a cada volta do poll. Medido no piloto, o preço era o overlap
+inteiro entre as duas goroutines: o writer ficava **72% do tempo ocioso** e o
+poller **28% parado** nessa espera.
+
+Hoje o dreno mora em `aoRevogar`, que chama `Writer.Quiesce`: uma barreira vai
+para o fim da fila, e o quiesce só volta depois que o writer a alcança, tendo
+aplicado tudo o que estava à frente e tornado a posição durável. Duas coisas de
+graça vieram junto — o checkpoint voltou a rodar só na goroutine do writer, o
+que elimina por construção a corrida sobre o mapa de offsets, e o quiesce
+carrega o erro de volta, coisa que o marcador não fazia.
+
+O `select` do quiesce tem **três** braços: a barreira, o writer que já
+encerrou, e o contexto. O segundo não é zelo — ele roda dentro de um callback
+do franz-go, e um writer que saiu por `ErrPausado` nunca alcançaria a barreira:
+o callback travaria, o group cairia e a ingestão morreria em silêncio.
+
 A fila tem **dois** gates. O de registros é o `ingestionQueueSize` da spec; o
 de bytes é inventado, e existe porque contar registros não é unidade de
 memória — 5000 slots com payload grande estouram o orçamento de 1 GiB sem que

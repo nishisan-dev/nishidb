@@ -2,6 +2,7 @@ package kafka
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -11,19 +12,43 @@ import (
 
 // Item é o que trafega na fila.
 //
-// Marca != nil identifica o MARCADOR DE FIM DE LOTE, que não carrega evento.
-// Ele existe porque o poller precisa saber quando o writer terminou o lote
-// para liberar o rebalance (kgo.AllowRebalance) — e a fila é FIFO com um
-// consumidor só, então um marcador no fim do lote é sinal exato e sem
-// contador compartilhado.
+// Barreira != nil identifica o MARCADOR DE QUIESCE, que não carrega evento.
+//
+// Ele era marcador de FIM DE LOTE, e o poller o emitia — e esperava — a cada
+// volta do PollRecords. Isso custava caro sem comprar a garantia que dizia
+// comprar: o que o produto precisa é que nenhum commit rode para uma partição
+// depois de a revogação dela ter sido reconhecida, e isso exige drenar QUANDO
+// A REVOGAÇÃO CHEGA, não a cada lote. Drenar a cada lote destruía o overlap
+// entre poller e writer — medido no piloto: o writer ficava 72% do tempo
+// ocioso e o poller 28% parado nesta barreira.
+//
+// Agora quem o emite é o quiesce, na revogação e no encerramento.
 //
 // É exportado para que o harness de benchmark possa usar a fila DE VERDADE em
 // vez de uma imitação: o §108 exige medir a rodada de 8M com ingestão Kafka
 // real, e uma fila de mentira mediria o orçamento de memória errado.
 type Item struct {
-	Rec   *kgo.Record
-	Marca chan struct{}
-	bytes int64
+	Rec      *kgo.Record
+	Barreira *barreira
+	bytes    int64
+}
+
+// barreira é o encontro entre quem pede o quiesce e o writer que o executa.
+//
+// Carrega o erro de volta, coisa que o `chan struct{}` de antes não fazia: o
+// checkpoint do quiesce pode falhar, e quem pediu — o callback de revogação —
+// precisa poder registrar isso em vez de seguir como se tivesse dado certo.
+type barreira struct {
+	pronto chan struct{}
+	err    error
+}
+
+func novaBarreira() *barreira { return &barreira{pronto: make(chan struct{})} }
+
+// conclui libera quem espera. Só o writer chama, uma vez.
+func (b *barreira) conclui(err error) {
+	b.err = err
+	close(b.pronto)
 }
 
 // Fila é o bounded channel do §27 com os DOIS gates que o §29 e o §128
@@ -73,7 +98,19 @@ type Fila struct {
 	// legível no scrape de agora.
 	desdeBloq atomic.Int64
 	desdeOcio atomic.Int64
+
+	// vida protege o par (conferir se está fechada, enfileirar) contra o
+	// Fecha, e existe porque a barreira de quiesce é enfileirada por uma
+	// goroutine que NÃO é o poller: aoRevogar roda na goroutine do group do
+	// franz-go e pode chegar depois de Roda ter fechado a fila. Enfileirar num
+	// channel fechado é panic, não erro — e o encerramento é exatamente a
+	// janela em que uma revogação é mais provável.
+	vida    sync.RWMutex
+	fechada bool
 }
+
+// ErrFilaFechada é devolvido a quem tenta enfileirar durante o encerramento.
+var ErrFilaFechada = errors.New("kafka: fila encerrada")
 
 // marcaEspera registra o início de uma espera e devolve a função que a fecha,
 // somando o trecho ao acumulado.
@@ -139,13 +176,26 @@ func (f *Fila) Envia(ctx context.Context, r *kgo.Record) error {
 	}
 }
 
-// EnviaMarca põe o marcador de fim de lote. Não consome orçamento de bytes.
-func (f *Fila) EnviaMarca(ctx context.Context, marca chan struct{}) error {
+// EnviaBarreira põe o marcador de quiesce. Não consome orçamento de bytes.
+//
+// Vai para o FIM da fila como qualquer item, e é isso que dá a garantia: tudo
+// o que foi enfileirado antes já terá sido aplicado quando o writer a
+// alcançar.
+func (f *Fila) EnviaBarreira(ctx context.Context, b *barreira) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	// O RLock cobre a checagem E o envio: sem ele, Fecha poderia rodar entre
+	// as duas e o send cairia num channel já fechado. Segurar um RLock durante
+	// um envio bloqueante é seguro porque o writer drena sem precisar deste
+	// lock — quem espera aqui é liberado pelo consumo, não pelo Fecha.
+	f.vida.RLock()
+	defer f.vida.RUnlock()
+	if f.fechada {
+		return ErrFilaFechada
+	}
 	select {
-	case f.ch <- Item{Marca: marca}:
+	case f.ch <- Item{Barreira: b}:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -266,7 +316,16 @@ func (f *Fila) Tempos() (bloqueado, ocioso time.Duration) {
 }
 
 // Fecha encerra a fila. Só o produtor pode chamar.
-func (f *Fila) Fecha() { close(f.ch) }
+//
+// Marca a fila como fechada ANTES de fechar o channel, sob o lock que
+// EnviaBarreira também toma: é o que garante que nenhum envio esteja em voo
+// quando o close acontece.
+func (f *Fila) Fecha() {
+	f.vida.Lock()
+	f.fechada = true
+	f.vida.Unlock()
+	close(f.ch)
+}
 
 // Profundidade devolve o ocupado nos dois gates, para o §79.
 func (f *Fila) Profundidade() (registros int, bytes int64) {

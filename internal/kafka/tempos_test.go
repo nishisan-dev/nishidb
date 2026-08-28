@@ -2,6 +2,7 @@ package kafka
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -128,5 +129,79 @@ func TestDespertadorNaoEEngolidoPelaFilaCheia(t *testing.T) {
 	if viuTique == 0 {
 		t.Fatalf("em %d rodadas com fila cheia E despertador pronto, o tique NUNCA foi visto; "+
 			"o checkpoint por tempo deixou de disparar sob carga (débito 56)", rodadas)
+	}
+}
+
+// Enfileirar numa fila JÁ FECHADA é erro, não panic.
+//
+// A barreira de quiesce é enfileirada por uma goroutine que não é o poller:
+// aoRevogar roda na do group do franz-go e pode chegar depois de Roda ter
+// fechado a fila — o encerramento é justamente a janela em que uma revogação é
+// mais provável, porque sair do group a provoca.
+//
+// Sem a proteção do ciclo de vida isto é `panic: send on closed channel`, que
+// derruba o processo. Foi encontrado assim, pela suíte, ao mover a barreira de
+// fim de lote para a revogação.
+func TestEnfileirarEmFilaFechadaEErroENaoPanico(t *testing.T) {
+	f := NovaFila(4, 1<<20)
+	f.Fecha()
+
+	defer func() {
+		if v := recover(); v != nil {
+			t.Fatalf("enfileirar em fila fechada paniquei: %v", v)
+		}
+	}()
+	err := f.EnviaBarreira(context.Background(), novaBarreira())
+	if !errors.Is(err, ErrFilaFechada) {
+		t.Fatalf("EnviaBarreira devolveu %v, quer ErrFilaFechada", err)
+	}
+}
+
+// O quiesce só volta depois de o writer ter APLICADO tudo o que estava na
+// fila. É a propriedade inteira que a barreira de fim de lote sustentava, agora
+// paga uma vez por revogação em vez de uma vez por lote.
+func TestQuiesceSoVoltaDepoisDeDrenar(t *testing.T) {
+	st := &storeLento{demora: time.Millisecond}
+	cfg := &Config{Dataset: "eventos", Topic: "eventos", GroupID: "g", Brokers: []string{"127.0.0.1:9092"}}
+	fila := NovaFila(64, 1<<20)
+	w := NovoWriter(cfg, nil, st, fila, nil, registraMetricas(nil, "eventos"),
+		map[int32]int64{0: 0}, Cadencia{Eventos: 1 << 30, Intervalo: time.Hour}, nil)
+
+	// Enfileira barreira numa fila que já tem itens à frente dela. Sem writer
+	// rodando, o Quiesce tem de ficar esperando.
+	ctx, cancela := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancela()
+	for i := 0; i < 8; i++ {
+		if err := fila.Envia(ctx, &kgo.Record{Partition: 0, Offset: int64(i), Value: []byte("x")}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	pronto := make(chan error, 1)
+	go func() { pronto <- w.Quiesce(ctx) }()
+
+	select {
+	case err := <-pronto:
+		t.Fatalf("Quiesce voltou sem ninguém ter drenado a fila: %v", err)
+	case <-time.After(80 * time.Millisecond):
+		// Ainda esperando — o esperado.
+	}
+
+	// Drena tudo até a barreira, como o writer faria.
+	for {
+		it, ok, _ := fila.recebeOuAcorda(ctx, nil)
+		if !ok {
+			t.Fatal("fila esvaziou sem entregar a barreira")
+		}
+		if it.Barreira != nil {
+			it.Barreira.conclui(nil)
+			break
+		}
+	}
+	if err := <-pronto; err != nil {
+		t.Fatalf("Quiesce: %v", err)
+	}
+	if st.chamadas != 0 {
+		t.Fatalf("o dublê registrou %d checkpoints: quem checkpointa é o writer, não o Quiesce", st.chamadas)
 	}
 }

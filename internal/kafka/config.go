@@ -7,11 +7,16 @@
 //
 // Os decode workers que o §27 marca como OPCIONAIS não existem: o §28 diz que
 // a meta de 500 ev/s não justifica múltiplos writers, e o M1 mediu 132.931
-// ev/s de aplicação pura. Mais importante, o pipeline de uma goroutine só de
-// ponta a ponta é o que preserva a ordem de recebimento — e portanto a ordem
-// POR PARTIÇÃO, que o §26 usa como critério de correção quando o dataset não
-// declara `sequence`. Paralelizar o decode exigiria reordenar antes do writer,
-// que é trabalho e risco por um ganho que a meta não pede.
+// ev/s de aplicação pura. Paralelizar o decode exigiria reordenar antes do
+// writer para preservar a ordem POR PARTIÇÃO, que o §26 usa como critério de
+// correção quando o dataset não declara `sequence`.
+//
+// O que preserva essa ordem é o WRITER único consumindo uma FIFO — não o
+// número de goroutines do pipeline. Poller e writer sempre foram duas, e desde
+// 28/08/2026 elas se sobrepõem de verdade: a barreira que o poller emitia a
+// cada lote foi movida para a revogação, que é onde a garantia sobre o commit
+// de fato precisa dela. Está escrito aqui porque a barreira PARECIA sustentar
+// a ordem, e sem o registro a próxima revisão a reintroduz "por segurança".
 package kafka
 
 import (
