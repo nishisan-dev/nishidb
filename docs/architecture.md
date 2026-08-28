@@ -1176,14 +1176,106 @@ A coleta tem **duas rotas**, e elas cobrem coisas diferentes:
 | Rota | Como acha | O que ela não alcança |
 |---|---|---|
 | **Oportunista**, na compaction | Ela já lê todo record do segmento que elegeu, então conferir o prazo custa uma carga de 8 bytes. Ao achar um vencido, grava a lápide direto no destino em vez de copiar o payload | Segmento sem garbage. Garbage vem de update, e entidade abandonada não recebe update — então o segmento onde ela mora nunca é candidato |
-| **Coletor**, por passada | Varre o índice de escritas, não os segmentos | Nada; é ele que cobre o ponto cego acima |
+| **Coletor**, por passada | Desce a **agenda de vencimentos** e trata só quem venceu | Nada; é ele que cobre o ponto cego acima |
 
 A passada do coletor tem freio duplo, em `storage.expiracao`, e vence o
 primeiro a bater: `maxPorPassada` (default 1000) e `tempoPorPassada` (default
 5s). São dois porque os riscos são opostos — **marcar é um append**, então uma
 leva grande escreve muito antes de a compaction recuperar qualquer coisa e
-disputa o lock de escrita com a ingestão; e varrer milhões de entradas sem
-achar nada não escreve nada, mas seguraria a goroutine.
+disputa o lock de escrita com a ingestão; e uma descida que entre em vários
+ramos sem achar nada não escreve nada, mas seguraria a goroutine.
+
+### A agenda de vencimentos
+
+![Agenda de vencimentos: a min-tree que troca varrer por perguntar, a ordem de escrita assimétrica e a construção na abertura](https://uml.nishisan.dev/proxy?src=https://git-raw.nishisan.dev/nishisan-dev/nishidb/main/docs/diagrams/expiracao_agenda.puml)
+
+O coletor **pergunta** quem venceu, em vez de procurar. Antes ele varria o
+índice de escritas a partir de um cursor circular, lendo toda linha do dataset
+para achar as poucas vencidas — e o custo disso foi medido no piloto: **19% do
+CPU da ingestão, 171 µs por evento**, com `expiry_scanned_total` em **24,1
+milhões** no dataset base contra **zero** no histórico. O que dispara a cadência
+é a regra condicional `type = 2 → 3m`, que obriga uma volta completa nas 4,57M
+linhas a cada ~2,5 minutos para achar as ~0,4% vencidas.
+
+A estrutura é uma **min-tree B-ária sobre array denso em mmap**, indexada por
+`rowId`: `vencimentos.idx` guarda o instante de vencimento de cada linha, e
+cada nível de sumário (`vencimentos.s1.idx` em diante, B = 64, três níveis)
+guarda um limite inferior do mínimo dos seus 64 filhos.
+
+A família foi escolhida pelo requisito que aparece em **todo evento**:
+atualizar o prazo de uma entidade. Só ela dá atualização O(1) esperada, porque
+separa o valor (denso, escrito no lugar) da ordenação (o sumário, que quase
+nunca precisa ser recomputado). Descartados: **heap persistente**, que paga
+~log(n) escritas aleatórias por evento e cujo sift interrompido por crash
+quebra a invariante sem sintoma; **buckets por janela de tempo**, que morrem no
+espaço, porque com renovação a cada evento cada escrita insere uma entrada que
+vive o prazo inteiro; **timing wheel em memória**, que não é durável e poria um
+nó por entidade no heap.
+
+**A invariante é a corretude inteira:** `nivel[i][b] ≤ min{filhos}`, em todo
+instante, para um leitor sem lock. O nó é limite **inferior**, nunca superior, e
+a assimetria é deliberada:
+
+| Estado do nó | Custo |
+|---|---|
+| **abaixo** do mínimo real (frouxo) | uma descida desperdiçada; o writer revalida cada linha sob o lock antes de marcar |
+| **acima** do mínimo real | a descida pula o ramo e a linha vencida **nunca mais é recuperada** |
+
+É essa assimetria que fixa a ordem de escrita — abaixando, os ancestrais vêm de
+cima para baixo e a folha por último; subindo, a folha primeiro e o recompute
+de baixo para cima, parando no primeiro nó cujo mínimo vinha de outro filho — e
+é ela também que torna a estrutura segura contra crash **sem journal nenhum**:
+toda interrupção no meio de uma atualização deixa nós menores que o exato, que é
+o lado barato. Medido em `TestRenovacaoNaoRecomputaAArvoreInteira`: **1,0165
+escritas e 0,0165 recomputes por renovação**.
+
+Zero significa **infinito**, e não `MaxUint64`, para que crescer a agenda não
+recompute nada: o bloco novo nasce zerado pelo `fallocate`, e zero já é a
+resposta certa para linhas que ainda não existem.
+
+**Duas coisas somem junto com a varredura.** O cursor, e com ele a pergunta "de
+onde recomeçar depois de um restart". E o pré-filtro de tombstone: a linha
+tombstonada recebe o sentinela "nunca" no mesmo `applyRecord` que grava a
+lápide e sai da árvore, em vez de continuar vencida para sempre e ser
+reexaminada em toda volta.
+
+O laço também deixa de acordar por relógio: dorme até o vencimento que a agenda
+conhece, com teto de um minuto por cima. O teto existe porque uma linha pode
+entrar na agenda com vencimento anterior àquele em que o coletor foi dormir — o
+writer atualiza a árvore, não a goroutine adormecida. Acordá-lo a partir do
+write path fecharia isso por construção e custaria um acoplamento que o teto
+compra por nada: o ganho é não **varrer**, e ler o topo da árvore uma vez por
+minuto é da ordem de microssegundos.
+
+`prazoVencido` **não** lê a agenda. Ele continua lendo `expiry.idx` e
+`prazos.idx`, e a agenda decide apenas quando o coletor olha. Fazê-la responder
+pela visibilidade transformaria um bug de árvore num bug de query — a linha
+sumiria do `SELECT` por causa de uma entrada de sumário errada. O preço dessa
+separação é ter de provar que as duas concordam, e é o que
+`TestAgendaConcordaComPrazoVencidoSobCargaAleatoria` faz.
+
+**A adoção não exige recriação, e isto NÃO é o débito 22.** O débito 22 é sobre
+bitmap e hash: aqueles indexam um valor extraído do payload, e reconstruí-los
+exige ler todo record de todo segmento. A agenda deriva de `expiry.idx`,
+`prazos.idx` e `locations.idx`, que já estão populados, densos e em mmap — zero
+records lidos, zero dicionário tocado. Um dataset existente ganha a agenda ao
+subir o binário novo.
+
+A abertura reconstrói em três situações: manifest sem a seção (a migração);
+parâmetros divergentes; e arquivos que não descrevem o dataset. Os parâmetros
+viajam numa seção **crítica** do manifest (`0x8003`:
+`duracaoDeFundoMs | blockShift | niveis`), e a criticidade é pelo modo de falha
+mais silencioso das três seções críticas — um binário que a ignorasse manteria
+uma árvore derivada de uma duração de fundo que ele já não honra, e as linhas
+simplesmente **nunca venceriam**, com o CRC batendo e sem erro, log ou métrica.
+Efeito colateral de honestidade: mudar `expireAfterWrite` no YAML deixa de mover
+vencimentos em silêncio e vira um rebuild explícito, logado e com custo medido.
+
+> **Para quem opera:** `nishidb_expiry_scanned_total` muda de significado. Ela
+> media **esforço** (crescia com o tamanho do dataset a cada volta do cursor) e
+> passa a medir **trabalho** (cresce com o que venceu). Uma taxa que despenca
+> depois da subida é o resultado esperado, não uma parada do coletor — quem
+> quiser saber se ele está vivo olha `nishidb_expiry_running`.
 
 Entidade materializada **antes** de a expiração ser ligada não tem `_writtenAt`,
 o que o índice lê como instante **desconhecido** — e desconhecido nunca vence. A
@@ -1194,12 +1286,6 @@ reprocessar nada, e o que impede essas entidades de ficarem imortais.
 Já a entidade que tem instante mas não tem `_expiresIn` — a materializada antes
 das REGRAS — cai na duração da regra de **fundo**. Sem regra de fundo, ela não
 expira até a primeira escrita seguinte, que lhe grava um prazo.
-
-O coletor pula linha já tombstonada antes de qualquer trabalho: a lápide
-preserva o instante de escrita, então ela continua "vencida" para sempre, e sem
-o pré-filtro cada passada chamaria `Expira` só para ver a flag e desistir —
-tomando o lock de escrita a cada vez. Com prazos de minutos, que é o que as
-regras condicionais trouxeram, isso é disputa contínua com a ingestão.
 
 O que **não** volta é a chave: a lápide é copiada para frente enquanto a
 primary nomear a key, e esquecê-la exige `tombstoneRetention`, que ainda não

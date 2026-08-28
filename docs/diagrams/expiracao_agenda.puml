@@ -1,0 +1,135 @@
+@startuml expiracao_agenda
+title Agenda de vencimentos: a min-tree que troca varrer por perguntar (§57)
+
+start
+
+partition "Abertura" {
+  :lê a seção crítica 0x8003 do manifest
+  (duracaoDeFundoMs | blockShift | niveis);
+  note right
+    CRÍTICA pelo modo de falha mais silencioso das três
+    seções críticas do manifest: um binário que a
+    ignorasse manteria uma árvore derivada de uma duração
+    de fundo que ele já não honra, e as linhas nunca
+    venceriam — com o CRC batendo, sem erro, sem log e
+    sem métrica.
+  end note
+
+  if (parâmetros batem E os arquivos descrevem o dataset?) then (sim)
+    :adota a árvore que está em disco;
+  else (não)
+    :constrói varrendo expiry.idx, prazos.idx
+    e locations.idx — ZERO records lidos;
+    note right
+      Isto NÃO é o débito 22. Aquele é sobre bitmap e
+      hash, que indexam um valor extraído do payload e
+      cuja reconstrução exige ler todo record de todo
+      segmento. A agenda deriva de três arrays densos que
+      já estão populados, em mmap, um u64 por linha.
+
+      Um dataset existente ganha a agenda ao subir o
+      binário novo: sem recriação, sem reingestão.
+
+      Preenche as folhas linearmente e só então computa os
+      sumários de baixo para cima — uma escrita por
+      entrada, em vez dos abaixamentos em cascata que a
+      ordem de chegada provocaria.
+    end note
+  endif
+}
+
+partition "Escrita (applyRecord, sob o wmu)" {
+  :publica a location — commit de visibilidade;
+  :vencimentoDe(rowId) = escrita + duração efetiva;
+  note right
+    DEPOIS do commit da location, porque o vencimento é
+    função dela: linha sem location e linha tombstonada
+    não vencem. Ler antes agendaria a partir do estado
+    anterior, e a lápide recém-gravada continuaria
+    agendada para o vencimento que ela veio cancelar.
+  end note
+
+  if (o vencimento novo é MENOR que o atual?) then (abaixando)
+    :escreve os ancestrais do TOPO para BAIXO;
+    :escreve a folha POR ÚLTIMO;
+    note right
+      A ordem é a invariante. Baixar a folha primeiro
+      deixaria, entre duas escritas, um ancestral ACIMA do
+      mínimo dos filhos — e um leitor sem lock que
+      descesse nessa janela pularia o ramo e perderia a
+      linha para sempre.
+    end note
+  else (subindo — a renovação de todo evento)
+    :escreve a folha PRIMEIRO;
+    :recomputa de baixo para cima, parando no
+    primeiro nó cujo mínimo vinha de outro filho;
+    note right
+      Aumentar a folha não viola nada: o ancestral segue
+      sendo limite inferior de um mínimo que só cresceu.
+
+      A parada é o que decide o custo em regime. Medido:
+      1,0165 escritas e 0,0165 recomputes por renovação.
+      Sem ela, os recomputes vão a 1,02 por evento e o
+      número de ESCRITAS não muda — por isso o gate conta
+      as duas coisas.
+    end note
+  endif
+}
+
+partition "Coletor" {
+  :ProximoVencimento() = mínimo do topo;
+  :dorme até lá, com teto de um minuto;
+  note right
+    O valor é um limite INFERIOR do vencimento real, pela
+    invariante: errar só pode acordar o coletor cedo,
+    nunca tarde.
+
+    O teto existe porque uma linha pode entrar na agenda
+    com vencimento anterior àquele em que o coletor foi
+    dormir — o writer atualiza a árvore, não a goroutine
+    adormecida. Acordá-lo pelo write path fecharia isso
+    por construção e custaria um acoplamento que o teto
+    compra por nada.
+  end note
+
+  :desce, entrando só nos ramos que prometem vencimento;
+  note right
+    A entrega é COMPLETA pela invariante: se uma linha
+    vence, todo ancestral dela tem valor <= o vencimento
+    dela, então nenhum ramo que a contenha é pulado.
+
+    Pode entregar linhas A MAIS — nó frouxo faz descer em
+    ramo sem nada vencido — e quem revalida é o writer.
+  end note
+
+  repeat
+    if (instante de escrita conhecido?) then (não)
+      :daCarencia: grava agora e reagenda;
+    else (sim)
+      :Expira: revalida sob o wmu e publica a lápide;
+      note right
+        prazoVencido NÃO lê a agenda. Ele continua lendo
+        expiry.idx e prazos.idx, e a agenda decide apenas
+        QUANDO o coletor olha. Fazê-la responder pela
+        visibilidade transformaria um bug de árvore num
+        bug de query.
+      end note
+    endif
+    if (a ação teve efeito?) then (não)
+      :reagenda a linha pelo vencimento real;
+      note right
+        Garante PROGRESSO. Uma folha que promete um
+        vencimento que já não existe seria reentregue em
+        toda passada, para sempre, e o coletor gastaria o
+        teto de tempo inteiro tomando o lock do writer
+        para não fazer nada.
+      end note
+    else (sim)
+    endif
+  repeat while (dentro de maxPorPassada e tempoPorPassada?) is (sim)
+  -> não;
+}
+
+stop
+
+@enduml
