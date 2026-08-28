@@ -397,3 +397,42 @@ func TestWatchdogAbaixoDoPisoEhRecusado(t *testing.T) {
 		}
 	}
 }
+
+// decodeWorkers nasce em 1: a ingestão é serial até alguém medir e decidir o
+// contrário. Ligar paralelismo por default mudaria o perfil de memória de todo
+// dataset existente — cada slot da esteira retém buffers até a marca d'água —
+// sem medição que o justifique no dataset de quem atualiza.
+func TestDecodeWorkersNasceEmUm(t *testing.T) {
+	s := parseSource(t, comSource(kafkaMinimo))
+	if got := s.Source.Kafka.Consumer.DecodeWorkers; got != schema.DecodeWorkersPadrao {
+		t.Errorf("decodeWorkers = %d, quer %d", got, schema.DecodeWorkersPadrao)
+	}
+	if schema.DecodeWorkersPadrao != 1 {
+		t.Errorf("DecodeWorkersPadrao = %d; o default é 1 por decisão registrada",
+			schema.DecodeWorkersPadrao)
+	}
+}
+
+func TestDecodeWorkersEhConfiguravel(t *testing.T) {
+	s := parseSource(t, comSource(kafkaMinimo+"\n      decodeWorkers: 4"))
+	if got := s.Source.Kafka.Consumer.DecodeWorkers; got != 4 {
+		t.Errorf("decodeWorkers = %d, quer 4", got)
+	}
+}
+
+// Zero e negativo seguem a regra dos irmãos: não são "sem valor". E o TETO é
+// recusa, não arredondamento — a chave dimensiona goroutinas E memória, e quem
+// escreveu 10000 tem uma expectativa errada sobre o que ela faz. Um processo
+// que aceitasse em silêncio o deixaria com essa expectativa até o OOM killer
+// explicá-la.
+func TestDecodeWorkersForaDaFaixaEhRecusado(t *testing.T) {
+	for _, v := range []string{"0", "-1"} {
+		recusa(t, comSource(kafkaMinimo+"\n      decodeWorkers: "+v), "decodeWorkers")
+	}
+	recusa(t, comSource(kafkaMinimo+"\n      decodeWorkers: 65"), "decodeWorkers")
+	// E o teto EXATO passa: uma recusa em 64 seria off-by-one silencioso.
+	s := parseSource(t, comSource(kafkaMinimo+"\n      decodeWorkers: 64"))
+	if got := s.Source.Kafka.Consumer.DecodeWorkers; got != schema.DecodeWorkersMaximo {
+		t.Errorf("decodeWorkers no teto = %d, quer %d", got, schema.DecodeWorkersMaximo)
+	}
+}
