@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/pprof"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -171,6 +172,15 @@ func estadoDaIngestao(d *dataset) (estado, detalhe string) {
 }
 
 // sobePprof liga os endpoints do §112 num listener PRÓPRIO.
+// taxaDoBlockProfile amostra um evento de bloqueio a cada N nanossegundos de
+// espera acumulada. 10 µs registra o que dura o suficiente para importar sem
+// instrumentar cada sincronização curta.
+const taxaDoBlockProfile = 10_000
+
+// fracaoDoMutexProfile amostra 1 em cada N eventos de contenção. 100 é o valor
+// que a documentação do runtime usa como ponto de partida razoável.
+const fracaoDoMutexProfile = 100
+
 func (s *Servidor) sobePprof(addr string) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/debug/pprof/", pprof.Index)
@@ -178,6 +188,23 @@ func (s *Servidor) sobePprof(addr string) {
 	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
 	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
 	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+
+	// O Index já serve /debug/pprof/block e /debug/pprof/mutex, e os DOIS
+	// nascem desligados no runtime: sem SetBlockProfileRate e
+	// SetMutexProfileFraction eles respondem "sampling period=0", ou seja, um
+	// perfil vazio. Conferido no piloto em 28/08/2026 — as duas rotas
+	// existiam e não serviam para nada.
+	//
+	// Isso importa porque contenção de lock é exatamente o que este produto
+	// precisa diagnosticar: o writer é serializado por um mutex por dataset, e
+	// stalls de segundos já foram observados sem atribuição possível.
+	//
+	// Ligados aqui, e não por default no processo: a amostragem custa em TODA
+	// aquisição de lock e em TODO bloqueio, e o pprof já é modo
+	// administrativo. Quem abre a porta aceita o preço; quem não a abre não
+	// paga nada.
+	runtime.SetBlockProfileRate(taxaDoBlockProfile)
+	runtime.SetMutexProfileFraction(fracaoDoMutexProfile)
 
 	s.pprofSrv = &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	go func() {

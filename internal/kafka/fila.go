@@ -3,6 +3,7 @@ package kafka
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -46,6 +47,55 @@ type Fila struct {
 	// espera é sinalizado (não bloqueante) quando bytes diminuem. Buffer 1
 	// basta porque há um único produtor à espera.
 	espera chan struct{}
+
+	// bloqueado e ocioso acumulam NANOSSEGUNDOS de espera de cada lado.
+	//
+	// São a integral que a profundidade instantânea não dá: uma fila que
+	// oscila cheia e vazia entre dois scrapes lê zero em len(ch) e horas
+	// aqui. É o par que separa "o writer é o gargalo" de "o tópico está
+	// calado", e hoje a profundidade fica em zero nos dois casos.
+	//
+	// O relógio só é lido QUANDO HOUVE bloqueio: cada caminho tenta primeiro
+	// de forma não bloqueante e só paga o time.Now() ao cair no default. Um
+	// par de time.Now() por evento no caminho rápido seria instrumentação
+	// mudando o que ela mede.
+	bloqueado atomic.Int64
+	ocioso    atomic.Int64
+
+	// desdeBloq e desdeOcio marcam o INÍCIO do bloqueio em curso (unix nano;
+	// 0 = ninguém esperando), e Tempos soma esse trecho ao acumulado.
+	//
+	// Sem eles a métrica só andaria quando a espera TERMINASSE — e o caso que
+	// mais importa é justamente aquele em que ela não termina. No travamento
+	// de 27/08/2026 o poller ficou preso uma hora dentro do PollRecords: um
+	// contador que só soma no fim teria ficado imóvel a hora inteira e depois
+	// dado um salto, ou nunca teria somado. "Está bloqueado agora" tem de ser
+	// legível no scrape de agora.
+	desdeBloq atomic.Int64
+	desdeOcio atomic.Int64
+}
+
+// marcaEspera registra o início de uma espera e devolve a função que a fecha,
+// somando o trecho ao acumulado.
+func marcaEspera(inicio, acumulado *atomic.Int64) func() {
+	comeco := time.Now()
+	inicio.Store(comeco.UnixNano())
+	return func() {
+		inicio.Store(0)
+		acumulado.Add(int64(time.Since(comeco)))
+	}
+}
+
+// emCurso é o trecho da espera que ainda não terminou, no instante da leitura.
+func emCurso(inicio *atomic.Int64) int64 {
+	t := inicio.Load()
+	if t == 0 {
+		return 0
+	}
+	if d := time.Since(time.Unix(0, t)); d > 0 {
+		return int64(d)
+	}
+	return 0
 }
 
 // NovaFila constrói a fila com os dois tetos.
@@ -70,10 +120,20 @@ func (f *Fila) Envia(ctx context.Context, r *kgo.Record) error {
 	if err := f.reserva(ctx, n); err != nil {
 		return err
 	}
+	it := Item{Rec: r, bytes: n}
+	// Caminho rápido: cabe agora, e nada é medido porque nada esperou.
 	select {
-	case f.ch <- Item{Rec: r, bytes: n}:
+	case f.ch <- it:
+		return nil
+	default:
+	}
+	fecha := marcaEspera(&f.desdeBloq, &f.bloqueado)
+	select {
+	case f.ch <- it:
+		fecha()
 		return nil
 	case <-ctx.Done():
+		fecha()
 		f.libera(n)
 		return ctx.Err()
 	}
@@ -108,9 +168,13 @@ func (f *Fila) reserva(ctx context.Context, n int64) error {
 			return nil
 		}
 		f.mu.Unlock()
+		// Só aqui houve espera de verdade: o gate de bytes recusou.
+		fecha := marcaEspera(&f.desdeBloq, &f.bloqueado)
 		select {
 		case <-f.espera:
+			fecha()
 		case <-ctx.Done():
+			fecha()
 			return ctx.Err()
 		}
 	}
@@ -155,6 +219,13 @@ func (f *Fila) recebeOuAcorda(ctx context.Context, acorda <-chan time.Time) (Ite
 	if ctx.Err() != nil {
 		return Item{}, false, false
 	}
+	// Caminho rápido, com os DOIS casos prontos incluídos.
+	//
+	// O `acorda` entra aqui de propósito. Tentar só o f.ch primeiro faria a
+	// fila vencer sempre que tivesse item, e o tique do despertador só seria
+	// visto com a fila vazia — o checkpoint por TEMPO deixaria de disparar sob
+	// carga, que é exatamente o débito 56 reaberto. Com os dois no mesmo
+	// select, a escolha aleatória do Go entre casos prontos é preservada.
 	select {
 	case it, ok := <-f.ch:
 		if !ok {
@@ -164,9 +235,34 @@ func (f *Fila) recebeOuAcorda(ctx context.Context, acorda <-chan time.Time) (Ite
 		return it, true, false
 	case <-acorda:
 		return Item{}, false, true
+	default:
+	}
+	// Nada pronto: daqui em diante o writer está ocioso de verdade.
+	fecha := marcaEspera(&f.desdeOcio, &f.ocioso)
+	select {
+	case it, ok := <-f.ch:
+		fecha()
+		if !ok {
+			return Item{}, false, false
+		}
+		f.libera(it.bytes)
+		return it, true, false
+	case <-acorda:
+		fecha()
+		return Item{}, false, true
 	case <-ctx.Done():
+		fecha()
 		return Item{}, false, false
 	}
+}
+
+// Tempos devolve a espera dos dois lados, INCLUINDO a que ainda está em curso.
+//
+// Somar o trecho em curso é o que torna a série útil no caso que interessa: um
+// lado preso agora aparece agora, e não só quando (ou se) ele destravar.
+func (f *Fila) Tempos() (bloqueado, ocioso time.Duration) {
+	return time.Duration(f.bloqueado.Load() + emCurso(&f.desdeBloq)),
+		time.Duration(f.ocioso.Load() + emCurso(&f.desdeOcio))
 }
 
 // Fecha encerra a fila. Só o produtor pode chamar.

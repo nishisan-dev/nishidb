@@ -52,7 +52,10 @@ type metricas struct {
 	// Como coletor, o valor sai de len(ch) no momento do scrape. Ele não pode
 	// mentir por travamento de ninguém — no máximo não é emitido, e ausência
 	// é uma resposta honesta que a série congelada não dava.
-	filaViva       func() (int, int64)
+	filaViva func() (int, int64)
+	// temposDaFila é a integral de espera dos dois lados, lida no scrape pela
+	// mesma razão da profundidade.
+	temposDaFila   func() (time.Duration, time.Duration)
 	partAtribuidas *metrics.SerieMedidor
 	partTotal      *metrics.SerieMedidor
 
@@ -74,7 +77,11 @@ type metricas struct {
 
 	// marca é o fim do log por partição, como o broker respondeu, com o
 	// instante da resposta. Só o scrape a escreve.
-	marca   atomic.Pointer[marcaDagua]
+	marca atomic.Pointer[marcaDagua]
+
+	// aplicaSeg é a latência de um evento pelo Apply.
+	aplicaSeg *metrics.SerieHistograma
+
 	dataset string
 }
 
@@ -85,6 +92,17 @@ type metricas struct {
 type marcaDagua struct {
 	fim map[int32]int64
 	em  time.Time
+}
+
+// limitesDoApply são os buckets do histograma do Apply.
+//
+// Próprios, e não os LimitesPadrao: aqueles começam em 50 µs, e a mediana
+// medida no piloto é da ordem de 8 µs — o primeiro bucket engoliria quase
+// tudo e o histograma não distinguiria nada abaixo dele. O topo em 1 s é o que
+// torna os stalls de segundos ATRIBUÍVEIS ao Apply, em vez de a "algo".
+var limitesDoApply = []float64{
+	0.000005, 0.00001, 0.000025, 0.00005, 0.0001, 0.00025, 0.0005,
+	0.001, 0.005, 0.01, 0.05, 0.1, 1,
 }
 
 // validadeDaMarcaDagua é por quanto tempo a última resposta do broker ainda
@@ -137,6 +155,9 @@ func registraMetricas(r *metrics.Registry, dataset string) *metricas {
 			"Partições atribuídas a esta instância. Comparar com o total é o que torna visível o assignment parcial."),
 		partTotal: medidor(metrics.MetKafkaPartitionsTotal, "Partições do tópico."),
 
+		aplicaSeg: r.Histograma(metrics.MetIngestApplySeconds,
+			"Latência de um evento pelo Apply: parse, estado, merge, Put e o Apenda do histórico. O checkpoint fica fora — ele tem histograma próprio.",
+			limitesDoApply, metrics.LabelDataset).Com(dataset),
 		dataset: dataset,
 	}
 
@@ -153,6 +174,9 @@ func registraMetricas(r *metrics.Registry, dataset string) *metricas {
 // existe.
 func (m *metricas) OlhaAFila(f func() (int, int64)) { m.filaViva = f }
 
+// OlhaOsTempos instala a fonte da integral de espera. Mesma vida da OlhaAFila.
+func (m *metricas) OlhaOsTempos(f func() (time.Duration, time.Duration)) { m.temposDaFila = f }
+
 // amostrasDaFila lê a fila no instante do scrape.
 //
 // Sem fonte instalada não emite nada, e isso é deliberado: o dataset sem
@@ -165,7 +189,7 @@ func (m *metricas) amostrasDaFila() []metrics.Amostra {
 	}
 	reg, bytes := m.filaViva()
 	rotulo := []metrics.Label{{Nome: metrics.LabelDataset, Valor: m.dataset}}
-	return []metrics.Amostra{
+	out := []metrics.Amostra{
 		{
 			Nome: metrics.MetKafkaQueueDepth, Tipo: metrics.TipoMedidor, Valor: float64(reg),
 			Ajuda:  "Registros na fila limitada poller→writer, lidos no instante do scrape.",
@@ -177,6 +201,24 @@ func (m *metricas) amostrasDaFila() []metrics.Amostra {
 			Labels: rotulo,
 		},
 	}
+	if m.temposDaFila == nil {
+		return out
+	}
+	bloqueado, ocioso := m.temposDaFila()
+	return append(out,
+		metrics.Amostra{
+			Nome: metrics.MetKafkaPollBlockedSeconds, Tipo: metrics.TipoContador,
+			Valor:  bloqueado.Seconds(),
+			Ajuda:  "Segundos que o poller passou esperando espaço na fila. rate() é a fração do tempo em que o writer foi o gargalo.",
+			Labels: rotulo,
+		},
+		metrics.Amostra{
+			Nome: metrics.MetKafkaWriterIdleSeconds, Tipo: metrics.TipoContador,
+			Valor:  ocioso.Seconds(),
+			Ajuda:  "Segundos que o writer passou esperando evento. rate() alto com lag alto significa que quem não entrega é o poller.",
+			Labels: rotulo,
+		},
+	)
 }
 
 // posicaoDe devolve o slot atômico da partição, criando-o se for a primeira

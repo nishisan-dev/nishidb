@@ -188,6 +188,45 @@ da ordem de **centenas**, não de milhares.
 honesta, e `absent(nishidb_kafka_lag)` é um alerta que se consegue escrever.
 `nishidb_kafka_offset` continua saindo — ela não depende do broker.
 
+### Saturado, ou sem produção?
+
+`nishidb_kafka_queue_depth` **não** responde isso: é amostra instantânea, e uma
+fila que oscila cheia e vazia entre dois scrapes lê zero nos dois casos. Quem
+responde é o par de contadores de segundos acumulados, porque `rate()` sobre um
+contador em segundos é diretamente a *fração de tempo* — ou seja, utilização:
+
+| `rate(nishidb_kafka_poll_blocked_seconds_total)` | `rate(nishidb_kafka_writer_idle_seconds_total)` | lag | Leitura |
+|---|---|---|---|
+| ≈ 1 | ≈ 0 | subindo | **Saturado** — a fila enche, o writer é o gargalo |
+| ≈ 0 | ≈ 1 | ≈ 0 | **Sem produção** — o tópico está calado |
+| ≈ 0 | ≈ 1 | subindo | **O poller não entrega** — é a assinatura do travamento de 27/08; jurisdição do watchdog |
+| ≈ 0 | ≈ 0 | ≈ 0 | Fluindo |
+
+Os dois incluem a espera **em curso**, e não só a que já terminou: um lado preso
+agora aparece no scrape de agora. Um contador que só somasse ao fim da espera
+ficaria imóvel durante uma hora de travamento — que foi exatamente a duração do
+incidente de 27/08.
+
+`nishidb_ingest_apply_seconds` é a latência de um evento pelo Apply (parse,
+estado, merge, `Put`, `Apenda`). O checkpoint fica fora dele de propósito: tem
+histograma próprio em `nishidb_checkpoint_duration_seconds`, e somá-lo aqui
+produziria um bimodal cujo p99 é sempre o stall de checkpoint. O bucket de topo
+é 1 s, o que torna stalls de segundos atribuíveis ao Apply em vez de a "algo".
+
+### Perfis de contenção
+
+`--pprof` passou a ligar também o **block** e o **mutex** profile
+(`SetBlockProfileRate`, `SetMutexProfileFraction`). As duas rotas já existiam no
+índice do pprof e respondiam `sampling period=0` — perfil vazio —, o que as
+tornava inúteis justamente para o que este produto precisa diagnosticar:
+contenção do lock do writer. A amostragem custa em toda aquisição de lock, e
+por isso só é ligada junto do pprof, que já é modo administrativo.
+
+```bash
+curl -s --noproxy '*' 'http://127.0.0.1:9144/debug/pprof/mutex?debug=1' | head -30
+curl -s --noproxy '*' 'http://127.0.0.1:9144/debug/pprof/block?debug=1' | head -30
+```
+
 ## 6. Encerrar
 
 `SIGTERM` (ou `SIGINT`): o servidor para os pollers, drena a fila, faz um

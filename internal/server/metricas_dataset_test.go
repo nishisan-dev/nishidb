@@ -194,6 +194,24 @@ func TestMetricaDeDiscoEhPublicadaComSemanticaDeLimite(t *testing.T) {
 	if _, ok := achaAmostra(amostras, metrics.MetStorageLiveBytes); ok {
 		t.Error("nishidb_storage_live_bytes foi publicada: o tally ainda é limite superior")
 	}
+
+	// As outras duas declaradas e sem alimentador passam a ter a MESMA
+	// proteção, e pela mesma razão: sem teste, "sem alimentador por decisão" e
+	// "sem alimentador por esquecimento" são indistinguíveis, e a próxima
+	// pessoa alimenta a série achando que fecha uma pendência.
+	//
+	// nishidb_ingest_events_rate: taxa derivada no exportador tem janela que o
+	// operador não escolheu, e discordaria do contador ao lado. A pergunta é
+	// rate() sobre o contador, com a janela declarada no alerta.
+	if _, ok := achaAmostra(amostras, metrics.MetIngestEventsRate); ok {
+		t.Error("nishidb_ingest_events_rate foi publicada: a taxa é do alerta, não do exportador")
+	}
+	// nishidb_materialized_tombstones: exige contador de lápides vivas
+	// mantido em applyRecord e reconstruível no replay. É milestone, não
+	// encanamento de métrica.
+	if _, ok := achaAmostra(amostras, metrics.MetMaterializedTombstones); ok {
+		t.Error("nishidb_materialized_tombstones foi publicada sem o contador de lápides vivas")
+	}
 }
 
 // TestStorageBytesBateComOsArquivosEmDisco é o oráculo que faltava: a série

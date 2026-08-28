@@ -23,7 +23,16 @@ const (
 	MetGoHeapObjects   = "nishidb_go_heap_objects"
 
 	// Ingestão (§92).
-	MetIngestEventsTotal  = "nishidb_ingest_events_total"
+	MetIngestEventsTotal = "nishidb_ingest_events_total"
+	// MetIngestEventsRate NÃO TEM ALIMENTADOR, e isso é decisão, não esquecimento.
+	//
+	// Taxa derivada dentro do exportador é um número cuja JANELA o operador não
+	// escolheu, e que discordaria do contador ao lado sempre que a janela dele
+	// fosse outra — alguém acabaria lendo o errado. `rate(nishidb_ingest_events_total[5m])`
+	// é a mesma pergunta com a janela declarada no alerta, que é onde ela deve
+	// ser declarada. Mesma doutrina que já recusa timer em favor do scrape.
+	//
+	// A omissão é travada por teste; ver internal/server/metricas_dataset_test.go.
 	MetIngestEventsRate   = "nishidb_ingest_events_rate"
 	MetIngestStaleTotal   = "nishidb_ingest_stale_total"
 	MetIngestInvalidTotal = "nishidb_ingest_invalid_total"
@@ -40,12 +49,51 @@ const (
 	MetKafkaOffset        = "nishidb_kafka_offset"
 	MetKafkaHighWatermark = "nishidb_kafka_high_watermark"
 
+	// Os dois contadores de SEGUNDOS ACUMULADOS que separam "saturado" de
+	// "sem produção".
+	//
+	// A profundidade da fila não consegue fazer essa distinção: ela é amostra
+	// instantânea e fica em zero nos dois casos — uma fila que oscila cheia e
+	// vazia entre dois scrapes é invisível para ela. A integral de tempo não
+	// tem esse buraco, e rate() sobre um contador em segundos é diretamente a
+	// FRAÇÃO de tempo bloqueado, ou seja, utilização.
+	//
+	//	rate(poll_blocked)≈1, rate(writer_idle)≈0  → o writer é o gargalo
+	//	rate(poll_blocked)≈0, rate(writer_idle)≈1  → o tópico está calado
+	//	                       ... com lag subindo → o poller não entrega
+	MetKafkaPollBlockedSeconds = "nishidb_kafka_poll_blocked_seconds_total"
+	MetKafkaWriterIdleSeconds  = "nishidb_kafka_writer_idle_seconds_total"
+
+	// MetIngestApplySeconds é a latência de UM evento pelo Apply: parse,
+	// leitura do estado, merge, Put e o Apenda do histórico.
+	//
+	// Medida no Writer.aplica, e NÃO dentro do Materializer, de propósito: os
+	// gates de alocação e o BenchmarkApplyIngestReal medem o Materializer.Apply,
+	// e instrumentar por dentro mudaria o baseline do próprio instrumento com
+	// que a otimização vai ser julgada.
+	//
+	// O checkpoint fica FORA: ele já tem dono em
+	// nishidb_checkpoint_duration_seconds, e somá-lo aqui produziria um
+	// histograma bimodal cujo p99 é sempre o stall de checkpoint.
+	MetIngestApplySeconds = "nishidb_ingest_apply_seconds"
+
 	// Materialização (§92).
 	MetDatasetFields        = "nishidb_dataset_fields"
 	MetDatasetFieldsDropped = "nishidb_dataset_fields_dropped_total"
 	MetNestedTypeMismatch   = "nishidb_dataset_nested_type_mismatch_total"
 
-	MetMaterializedRows       = "nishidb_materialized_rows"
+	MetMaterializedRows = "nishidb_materialized_rows"
+	// MetMaterializedTombstones segue SEM ALIMENTADOR, agora como débito
+	// nomeado em vez de promessa aberta.
+	//
+	// Alimentá-la honestamente exige um contador de lápides VIVAS mantido em
+	// applyRecord — o único caminho de aplicação —, reconstruível no replay,
+	// decrementado na ressurreição e ajustado pela compaction que as descarta.
+	// É trabalho de milestone, não encanamento de métrica, e não é
+	// pré-requisito de nenhuma otimização de ingestão.
+	//
+	// planning/tipos-temporais-e-expire-after-write.md prometeu alimentá-la e
+	// não o fez; a promessa aberta virou débito com número.
 	MetMaterializedTombstones = "nishidb_materialized_tombstones"
 
 	// Storage (§92).

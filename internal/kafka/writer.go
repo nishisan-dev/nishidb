@@ -206,7 +206,13 @@ func (w *Writer) despertador() (<-chan time.Time, func()) {
 }
 
 func (w *Writer) aplica(ctx context.Context, it Item) error {
+	// A medida cobre SÓ o Apply. O talvezCheckpoint lá embaixo fica fora de
+	// propósito: ele tem histograma próprio, e somá-lo aqui produziria um
+	// bimodal cujo p99 é sempre o stall de checkpoint, escondendo a cauda que
+	// o Apply de fato tem.
+	inicio := time.Now()
 	r := w.mat.Apply(it.Rec.Value)
+	w.met.aplicaSeg.Observa(time.Since(inicio).Seconds())
 	w.conta(r)
 
 	switch {

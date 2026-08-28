@@ -231,6 +231,7 @@ func Abre(ctx context.Context, cfg *Config, o Opcoes) (*Consumidor, error) {
 
 	c.fila = NovaFila(cfg.QueueSize, cfg.QueueBytes)
 	met.OlhaAFila(c.fila.Profundidade)
+	met.OlhaOsTempos(c.fila.Tempos)
 	c.w = NovoWriter(cfg, o.Mat, o.Store, c.fila, log, met, c.offsetsIniciais, o.Cadencia, c.commitNoBroker)
 	close(c.wPronto)
 	return c, nil
