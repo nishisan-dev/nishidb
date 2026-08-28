@@ -552,3 +552,78 @@ func TestEntradaFrouxaEhCorrigidaNaPrimeiraVisita(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// O REPLAY DO TAIL reconstrói a agenda junto com os índices de que ela deriva.
+//
+// A janela é a de sempre: records no segmento que o manifest ainda não conhece.
+// A agenda passa por ela de graça, porque applyRecord é o único caminho de
+// aplicação de estado e o replay usa o mesmo — mas "de graça" é uma afirmação,
+// e sem teste ela seria só uma expectativa.
+func TestAgendaEhReconstruidaPeloReplayDoTail(t *testing.T) {
+	dir := t.TempDir()
+	s, rel := storeComExpiracao(t, dir, time.Hour)
+	escrita := rel.t
+	id, _ := mustPut(t, s, "A", 1, payloadComEscrita(t, s, "A", "Start", escrita), nil)
+	// SEM checkpoint: nem o record nem a agenda estão duráveis.
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s2, rel2 := storeComExpiracao(t, dir, time.Hour)
+	rel2.t = escrita
+	if v := s2.agenda.Get(id); v != uint64(escrita.Add(time.Hour).UnixMilli()) {
+		t.Fatalf("depois do replay a agenda diz %d, quer %d", v, escrita.Add(time.Hour).UnixMilli())
+	}
+	if err := s2.AuditaAgenda(); err != nil {
+		t.Fatal(err)
+	}
+	// E o vencimento veio do PAYLOAD, não do relógio do replay: o coletor
+	// entrega a linha no prazo original.
+	rel2.t = escrita.Add(2 * time.Hour)
+	r, err := s2.ExpiraUmaPassada(context.Background(), limitesDeTeste())
+	if err != nil || r.Expiradas != 1 {
+		t.Fatalf("a linha replayada não venceu no prazo do payload: %+v (err=%v)", r, err)
+	}
+}
+
+// A CARÊNCIA não gera record, e é por isso que ela merece um teste de crash
+// próprio.
+//
+// Uma queda depois da carência e antes do checkpoint pode deixar o instante
+// de escrita gravado e a agenda para trás, ou o contrário — o replay do tail
+// não repõe nenhum dos dois, porque não há record que os descreva. Os dois
+// desencontros têm de se resolver sozinhos na primeira visita, e nenhum pode
+// deixar a linha imortal.
+func TestCarenciaInterrompidaSeResolveNaVisitaSeguinte(t *testing.T) {
+	dir := t.TempDir()
+	s := openStore(t, opcoesComExpiracao(dir, time.Hour))
+	rel := &relogioDeTeste{t: time.Date(2026, 8, 22, 20, 0, 0, 0, time.UTC)}
+	s.UsaRelogio(rel.agora)
+	id, _ := mustPut(t, s, "legada", 1, payloadSemEscrita(t, s, "legada"), nil)
+
+	// O desencontro: o instante de escrita foi gravado e a agenda ficou no
+	// sentinela de carência, como se a queda tivesse acontecido entre os dois.
+	if err := s.escritas.Set(id, rel.t.UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	if s.agenda.Get(id) != rowindex.Carencia {
+		t.Fatal("o cenário não montou: a agenda não está na carência")
+	}
+
+	r, err := s.ExpiraUmaPassada(context.Background(), limitesDeTeste())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Carencias != 0 || r.Expiradas != 0 {
+		t.Fatalf("a passada agiu sobre uma linha que já tinha instante: %+v", r)
+	}
+	if v := s.agenda.Get(id); v != uint64(rel.t.Add(time.Hour).UnixMilli()) {
+		t.Fatalf("a agenda ficou em %d; a carência pendente não foi resolvida", v)
+	}
+	// E a linha vence no prazo, em vez de ficar presa no sentinela.
+	rel.avanca(2 * time.Hour)
+	r2, err := s.ExpiraUmaPassada(context.Background(), limitesDeTeste())
+	if err != nil || r2.Expiradas != 1 {
+		t.Fatalf("a linha não venceu depois da carência resolvida: %+v (err=%v)", r2, err)
+	}
+}

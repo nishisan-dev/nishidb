@@ -385,3 +385,59 @@ func TestRenovacaoNaoRecomputaAArvoreInteira(t *testing.T) {
 			media, recomputes, renovacoes)
 	}
 }
+
+// A INTERRUPÇÃO NO MEIO DE UMA ATUALIZAÇÃO só pode deixar nós MENORES que o
+// exato, e é essa assimetria que dispensa journal.
+//
+// O teste força o pior caso do lado seguro: todos os sumários no chão, como
+// uma sequência de abaixamentos interrompidos antes das folhas deixaria. A
+// árvore fica frouxa — a descida entra em ramos onde não há nada —, Confere a
+// aprova, e NENHUMA linha vencida se perde. É o oposto exato do estado que o
+// TestConfereReprovaOSumarioAcimaDoMinimo cobre.
+func TestArvoreFrouxaPorInterrupcaoEntregaTodosOsVencidos(t *testing.T) {
+	a := abreAgenda(t, 1<<13)
+	r := rand.New(rand.NewPCG(31, 37))
+	querem := map[types.RowID]bool{}
+	for row := types.RowID(0); row < 4_000; row++ {
+		venc := uint64(r.UintN(2_000) + 10)
+		if err := a.Atualiza(row, venc); err != nil {
+			t.Fatal(err)
+		}
+		if venc <= 1_000 {
+			querem[row] = true
+		}
+	}
+
+	// Todo sumário vivo vai para o menor vencimento possível: é o estado que
+	// uma queda no meio de vários abaixamentos deixa.
+	for nivel := 1; nivel < len(a.niveis); nivel++ {
+		for idx, n := uint64(0), a.entradas(nivel); idx < n; idx++ {
+			if a.valor(nivel, idx) == Nunca {
+				continue
+			}
+			if err := a.niveis[nivel].store(types.RowID(idx), PrimeiroVencimentoReal); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := a.Confere(); err != nil {
+		t.Fatalf("a árvore frouxa foi reprovada, e ela é o estado SEGURO: %v", err)
+	}
+
+	achados := map[types.RowID]bool{}
+	a.Vencidos(1_000, func(row types.RowID) bool {
+		achados[row] = true
+		return true
+	})
+	for row := range querem {
+		if !achados[row] {
+			t.Fatalf("a árvore frouxa perdeu a linha %d, que venceu", row)
+		}
+	}
+	// E a frouxidão não inventa vencimento: a folha continua sendo a verdade.
+	for row := range achados {
+		if !querem[row] {
+			t.Fatalf("a descida entregou a linha %d, que não venceu", row)
+		}
+	}
+}
