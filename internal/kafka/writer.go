@@ -77,10 +77,24 @@ type Writer struct {
 	// É injetado pelo consumer para manter o writer testável sem broker.
 	commit func(context.Context, map[int32]int64) error
 
-	// offsets é a posição por partição: PRÓXIMO offset a consumir. Só a
-	// goroutine do writer o toca.
-	offsets map[int32]int64
-
+	// posMu protege offsets, desdeCP e ultimoCP.
+	//
+	// Não basta ser "do writer": aoRevogar chama checkpoint da goroutine do
+	// group do franz-go, e o writer pode estar em talvezCheckpoint pelo
+	// despertador ao mesmo tempo. A barreira de fim de lote esvazia a FILA,
+	// não para a GOROUTINE — sem este lock, as duas leem e escrevem o mapa de
+	// offsets em paralelo. A detecção de escrita concorrente em mapa no
+	// runtime é best-effort: quando ela pega, é
+	// `fatal error: concurrent map read and map write` — throw não recuperável,
+	// que derruba o processo inteiro e não só a goroutine. Quando não pega, o
+	// desfecho é o mapa corrompido em silêncio, que é pior.
+	//
+	// É lock SEPARADO do mu de propósito. O checkpoint segura este durante o
+	// fsync inteiro (centenas de ms), e o poller chama Pausa() a cada volta do
+	// laço: se as duas coisas dividissem um mutex, o poller pararia junto com
+	// cada checkpoint.
+	posMu    sync.Mutex
+	offsets  map[int32]int64
 	desdeCP  int64
 	ultimoCP time.Time
 
@@ -263,8 +277,10 @@ func (w *Writer) conta(r materializer.ApplyResult) {
 // chamado para eventos DECIDIDOS — aplicados, stale ou descartados por
 // política. Evento que parou a ingestão nunca avança.
 func (w *Writer) avanca(rec *kgo.Record) {
+	w.posMu.Lock()
 	w.offsets[rec.Partition] = rec.Offset + 1
 	w.desdeCP++
+	w.posMu.Unlock()
 	w.met.offset(rec.Partition).Set(float64(rec.Offset + 1))
 }
 
@@ -289,7 +305,10 @@ func (w *Writer) para(ctx context.Context, motivo error, evento string, rec *kgo
 }
 
 func (w *Writer) talvezCheckpoint(ctx context.Context) error {
-	if !precisaCheckpoint(w.cad, w.desdeCP, w.ultimoCP) {
+	w.posMu.Lock()
+	precisa := precisaCheckpoint(w.cad, w.desdeCP, w.ultimoCP)
+	w.posMu.Unlock()
+	if !precisa {
 		return nil
 	}
 	return w.checkpoint(ctx)
@@ -305,10 +324,26 @@ func (w *Writer) talvezCheckpoint(ctx context.Context) error {
 // checkpoint local é autoritativo (§49) e o commit existe para lag e para
 // terceiros.
 func (w *Writer) checkpoint(ctx context.Context) error {
+	// O lock cobre o corpo INTEIRO, e não só o acesso ao mapa. Duas razões:
+	// aoRevogar e o despertador do writer podem chegar aqui ao mesmo tempo, e
+	// deixá-los intercalar faria o SetSourceOffsets de um durabilizar sob o
+	// Checkpoint do outro — a ordem do §48 é sobre a sequência inteira, não
+	// sobre cada passo isolado.
+	w.posMu.Lock()
+	defer w.posMu.Unlock()
+
 	if len(w.offsets) == 0 {
 		return nil
 	}
-	o := checkpoint.SourceOffsets{Origem: w.origem, Offsets: w.offsets}
+	// Cópia, e não a referência: o mapa atravessa duas fronteiras (o store, que
+	// o guarda até gravar, e o commit no broker) e continuaria sendo mutado por
+	// avanca assim que o lock saísse. Passar w.offsets direto manteria a corrida
+	// viva do outro lado, onde este lock não alcança.
+	snap := make(map[int32]int64, len(w.offsets))
+	for p, v := range w.offsets {
+		snap[p] = v
+	}
+	o := checkpoint.SourceOffsets{Origem: w.origem, Offsets: snap}
 	if err := w.store.SetSourceOffsets(o); err != nil {
 		return err
 	}
@@ -321,7 +356,7 @@ func (w *Writer) checkpoint(ctx context.Context) error {
 	if w.commit == nil {
 		return nil
 	}
-	if err := w.commit(ctx, w.offsets); err != nil {
+	if err := w.commit(ctx, snap); err != nil {
 		w.met.errosKafka.Inc()
 		w.log.Warn("offset.commit_falhou",
 			"commit no broker falhou; o checkpoint local é autoritativo (§49) e o consumo não é afetado",

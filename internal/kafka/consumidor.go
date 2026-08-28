@@ -411,8 +411,15 @@ func (c *Consumidor) ajustaOffsets(_ context.Context, doGroup map[string]map[int
 // aoRevogar torna durável o que já entrou antes de perder as partições.
 //
 // Com BlockRebalanceOnPoll, este callback só roda quando o lote corrente já
-// foi processado, então não há evento em voo na fila. O checkpoint aqui é o
+// foi processado, então não há evento em voo na FILA. O checkpoint aqui é o
 // que evita reprocessar desde o último ponto durável a cada rebalance.
+//
+// CUIDADO, e a correção que este comentário já induziu ao erro uma vez: fila
+// vazia NÃO quer dizer goroutine parada. O writer segue vivo no select de
+// recebeOuAcorda e o despertador pode acordá-lo para talvezCheckpoint a
+// qualquer instante — inclusive agora. Este checkpoint roda na goroutine do
+// GROUP do franz-go, não na do writer, e as duas se encontram em offsets,
+// desdeCP e ultimoCP. É por isso que o Writer tem o posMu; ver o godoc dele.
 func (c *Consumidor) aoRevogar(ctx context.Context, _ *kgo.Client, revogadas map[string][]int32) {
 	// Débito 70: o group pode revogar antes de c.w existir (a mesma raiz
 	// assíncrona do 60/69). wPronto fecha só depois de Abre atribuir c.w —
