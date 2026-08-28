@@ -60,19 +60,24 @@ func TestFilaCheiaContaEsperaDoPollerENaoDoWriter(t *testing.T) {
 	}
 }
 
-// Fila vazia: quem espera é o WRITER, e só ele.
-func TestFilaVaziaContaOciosidadeDoWriterENaoDoPoller(t *testing.T) {
+// Fila vazia: quem espera é quem CONSOME a fila, e só ele.
+//
+// Desde a Fase 4 quem consome a fila são os DECODIFICADORES, não o writer: ele
+// espera na esteira, e é de lá que sai o `nishidb_kafka_writer_idle_seconds_total`.
+// Este acumulador virou o `decode_idle`, que é a espera SOMADA de K
+// decodificadores — daí o nome do teste ter deixado de dizer "writer".
+func TestFilaVaziaContaOciosidadeDeQuemConsomeENaoDoPoller(t *testing.T) {
 	f := NovaFila(4, 1<<20)
 	ctx, cancela := context.WithTimeout(context.Background(), 40*time.Millisecond)
 	defer cancela()
 
-	// Nada na fila: o writer bloqueia até o contexto acabar.
+	// Nada na fila: quem consome bloqueia até o contexto acabar.
 	if _, ok, _ := f.recebeOuAcorda(ctx, nil); ok {
 		t.Fatal("recebeu item de uma fila vazia")
 	}
 	bloqueado, ocioso := f.Tempos()
 	if ocioso <= 0 {
-		t.Fatal("ociosidade do writer não foi contada")
+		t.Fatal("ociosidade de quem consome não foi contada")
 	}
 	if bloqueado != 0 {
 		t.Fatalf("poller contou %v de bloqueio sem nunca ter enviado", bloqueado)

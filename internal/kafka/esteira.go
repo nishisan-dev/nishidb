@@ -58,6 +58,23 @@ type esteira struct {
 	// sinal não pode se perder entre a checagem e o bloqueio.
 	pronto chan struct{}
 
+	// ocioso acumula NANOSSEGUNDOS que o WRITER passou esperando trabalho, e
+	// desdeOcio marca o início da espera em curso.
+	//
+	// A contabilidade migrou da Fila para cá junto com o writer. Enquanto ele
+	// consumia a fila, `nishidb_kafka_writer_idle_seconds_total` saía de lá; com
+	// os decodificadores no meio, quem espera na fila são ELES, e continuar
+	// publicando aquele número como ociosidade do writer seria uma métrica
+	// mentindo o nome — pior, mentindo por um FATOR: com K decodificadores
+	// parados, o acumulado sobe K segundos por segundo, e a tabela de decisão de
+	// docs/operacao-kafka.md compara `rate()` com 1.
+	//
+	// O trecho em curso é somado na leitura pela mesma razão que na Fila: o caso
+	// que mais importa é aquele em que a espera NÃO termina, e um contador que
+	// só soma no fim fica imóvel exatamente aí.
+	ocioso    atomic.Int64
+	desdeOcio atomic.Int64
+
 	// semMais marca que nenhum decodificador vai publicar de novo. O writer
 	// drena o que sobrou, em ordem, e só então encerra.
 	semMais bool
@@ -184,11 +201,19 @@ func (e *esteira) consome(ctx context.Context, acorda <-chan time.Time) (*slot, 
 			// não há mais nada. Não existe buraco a pular.
 			return nil, false, false
 		}
+		// Daqui em diante o writer está ocioso de verdade: o caminho rápido
+		// acima já não achou trabalho. O relógio só é lido QUANDO HOUVE espera,
+		// como na Fila — um time.Now() por evento no caminho rápido seria
+		// instrumentação mudando o que ela mede.
+		fecha := marcaEspera(&e.desdeOcio, &e.ocioso)
 		select {
 		case <-e.pronto:
+			fecha()
 		case <-acorda:
+			fecha()
 			return nil, false, true
 		case <-ctx.Done():
+			fecha()
 			return nil, false, false
 		}
 	}
@@ -224,6 +249,12 @@ func (e *esteira) bytesRetidos() int64 {
 		n += e.slots[i].retidos.Load()
 	}
 	return n
+}
+
+// Ocioso é o tempo que o writer passou esperando trabalho, INCLUINDO a espera
+// que ainda está em curso.
+func (e *esteira) Ocioso() time.Duration {
+	return time.Duration(e.ocioso.Load() + emCurso(&e.desdeOcio))
 }
 
 // SemMaisEventos declara que nenhum decodificador vai publicar de novo.

@@ -336,6 +336,20 @@ const (
 	// operador não tem de ir ao YAML para descobrir isso.
 	MetIngestDecodeWorkers = "nishidb_ingest_decode_workers"
 
+	// MetKafkaDecodeIdleSeconds é a espera SOMADA dos decodificadores pela
+	// fila, e ela existe porque a ociosidade do WRITER mudou de dono.
+	//
+	// Até a Fase 4 o writer consumia a fila, e a espera dele era a da fila. Com
+	// os decodificadores no meio, quem espera ali são eles — e são K. Publicar
+	// aquele número como `writer_idle` mentiria por um FATOR: com oito
+	// decodificadores parados o acumulado sobe oito segundos por segundo, e a
+	// tabela de decisão de docs/operacao-kafka.md compara `rate()` com 1. O
+	// writer_idle passou a sair da esteira, que é onde o writer de fato espera,
+	// e esta série guarda o outro lado — dividida por
+	// nishidb_ingest_decode_workers, ela é a fração de tempo em que os
+	// decodificadores não tinham o que fazer.
+	MetKafkaDecodeIdleSeconds = "nishidb_kafka_decode_idle_seconds_total"
+
 	// MetKafkaPartitionsAssigned contra MetKafkaPartitionsTotal é o que
 	// torna visível o assignment parcial — duas instâncias no mesmo group
 	// dividindo partições, cada dataset materializando metade (D10).

@@ -175,6 +175,7 @@ diferentes:
 |---|---|
 | `nishidb_ingest_decode_serial_total` | Eventos que o writer teve de decodificar sozinho, por trazerem coluna ou tipo novo. Em regime é **plana**; `rate()` acima de zero por muito tempo diz que a origem não para de inventar chave — ou que o dicionário está no teto sob `onMaxCols: ignore`, e aí todo evento paga o parse dobrado |
 | `nishidb_ingest_decode_arena_bytes` | Memória que os slots da esteira seguram entre eventos. É o terceiro consumidor de memória da ingestão, e nenhum dos dois gates da fila o conta |
+| `nishidb_kafka_decode_idle_seconds_total` | Espera SOMADA dos decodificadores pela fila. Dividida por `nishidb_ingest_decode_workers`, é a fração de tempo em que eles não tinham o que fazer — e o contraste com `nishidb_kafka_writer_idle_seconds_total` diz de que lado está a folga |
 | `nishidb_ingest_decode_slots_shrunk_total` | Slots que passaram do limiar e tiveram os buffers soltos. Zero com `arena_bytes` alto é memória presa; crescimento constante é churn de alocação, e aí o limiar está apertado demais para o tamanho dos eventos |
 
 **As três da posição saem do MESMO instantâneo**, por um coletor só, e é isso
@@ -219,8 +220,26 @@ agora aparece no scrape de agora. Um contador que só somasse ao fim da espera
 ficaria imóvel durante uma hora de travamento — que foi exatamente a duração do
 incidente de 27/08.
 
-`nishidb_ingest_apply_seconds` é a latência de um evento pelo Apply (parse,
-estado, merge, `Put`, `Apenda`). O checkpoint fica fora dele de propósito: tem
+**As duas séries mudaram de dono na Fase 4, e o número na tabela continua sendo
+1.** O writer não consome mais a fila: quem espera nela são os
+DECODIFICADORES, e a espera deles virou
+`nishidb_kafka_decode_idle_seconds_total`, que é uma SOMA — com oito
+decodificadores parados, `rate()` é 8, não 1. Para lê-la como fração, divida
+por `nishidb_ingest_decode_workers`. O `writer_idle` passou a sair da esteira,
+que é onde o writer de fato espera, e por isso a tabela acima segue valendo
+sem ajuste de limiar.
+
+Com os dois na mão, a terceira linha ganha um desdobramento útil:
+`writer_idle ≈ 1` com `decode_idle/workers ≈ 0` é o writer esperando os
+decodificadores — o único cenário em que subir `decodeWorkers` ajuda. Com os
+dois altos, quem não entrega está antes: é poller ou broker, e mais
+decodificadores não mudam nada.
+
+`nishidb_ingest_apply_seconds` é a latência de um evento pelo `Aplica`
+(estado, merge, `Put`, `Apenda`) — e **não** inclui mais o decode, que passou a
+ser concorrente: somá-lo aqui faria o histograma medir a soma de trabalhos
+paralelos como se fosse latência serial. A pergunta que este número responde é
+"o writer é o gargalo?", e o writer é o `Aplica`. O checkpoint fica fora dele de propósito: tem
 histograma próprio em `nishidb_checkpoint_duration_seconds`, e somá-lo aqui
 produziria um bimodal cujo p99 é sempre o stall de checkpoint. O bucket de topo
 é 1 s, o que torna stalls de segundos atribuíveis ao Apply em vez de a "algo".

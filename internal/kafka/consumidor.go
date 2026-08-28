@@ -233,7 +233,7 @@ func Abre(ctx context.Context, cfg *Config, o Opcoes) (*Consumidor, error) {
 	met.OlhaAFila(c.fila.Profundidade)
 	met.OlhaOsTempos(c.fila.Tempos)
 	c.w = NovoWriter(cfg, o.Mat, o.Store, c.fila, log, met, c.offsetsIniciais, o.Cadencia, c.commitNoBroker)
-	met.OlhaAEsteira(c.w.est.bytesRetidos)
+	met.OlhaAEsteira(c.w.est.bytesRetidos, c.w.est.Ocioso)
 	met.decodeWorkers.Set(float64(cfg.DecodeWorkers))
 	log.Info("decode.workers", "decodificadores da ingestão",
 		"workers", cfg.DecodeWorkers, "janela", c.w.est.tamanho(),

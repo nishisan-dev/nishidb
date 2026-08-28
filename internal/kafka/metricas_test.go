@@ -2,6 +2,7 @@ package kafka
 
 import (
 	"testing"
+	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/materializer"
 	"github.com/nishisan-dev/nishidb/internal/metrics"
@@ -59,5 +60,50 @@ func TestRegistraMetricasPreRegistraAsSeisCategoriasDeEventoRuimEmZero(t *testin
 	}
 	if len(vistas) != len(esperadas) {
 		t.Errorf("%s nasceu com %d série(s), esperava exatamente %d (nenhuma categoria a mais nem a menos)", metrics.MetIngestInvalidTotal, len(vistas), len(esperadas))
+	}
+}
+
+// Cada série de espera sai da sua fonte, e cada nome sai UMA vez.
+//
+// A Fase 4 pôs os decodificadores entre a fila e o writer, e com isso a espera
+// da FILA deixou de ser a do writer. Trocar as duas fontes não quebraria nada
+// visível — as duas séries continuariam sendo emitidas, com números plausíveis
+// —, e o painel passaria a ler ociosidade de K decodificadores como se fosse a
+// de um writer. A tabela de decisão de docs/operacao-kafka.md compara `rate()`
+// com 1: com oito decodificadores parados, o número certo é 8.
+//
+// Os valores são distintos e improváveis de propósito: um teste que instalasse
+// as duas fontes com o mesmo número passaria com elas trocadas.
+func TestCadaEsperaSaiDaSuaFonteEUmaVezSo(t *testing.T) {
+	const (
+		esperaDosDecodificadores = 11 * time.Second
+		esperaDoWriter           = 23 * time.Second
+	)
+	m := registraMetricas(nil, "events")
+	m.OlhaAFila(func() (int, int64) { return 0, 0 })
+	m.OlhaOsTempos(func() (time.Duration, time.Duration) { return 0, esperaDosDecodificadores })
+	m.OlhaAEsteira(func() int64 { return 0 }, func() time.Duration { return esperaDoWriter })
+
+	valores := map[string][]float64{}
+	for _, a := range append(m.amostrasDaFila(), m.amostrasDaEsteira()...) {
+		valores[a.Nome] = append(valores[a.Nome], a.Valor)
+	}
+
+	for nome, quero := range map[string]float64{
+		metrics.MetKafkaWriterIdleSeconds: esperaDoWriter.Seconds(),
+		metrics.MetKafkaDecodeIdleSeconds: esperaDosDecodificadores.Seconds(),
+	} {
+		got, ok := valores[nome]
+		if !ok {
+			t.Errorf("%s não foi emitida", nome)
+			continue
+		}
+		if len(got) != 1 {
+			t.Errorf("%s foi emitida %d vezes; nome repetido é exposição malformada", nome, len(got))
+			continue
+		}
+		if got[0] != quero {
+			t.Errorf("%s = %v, quero %v — as duas fontes estão trocadas", nome, got[0], quero)
+		}
 	}
 }

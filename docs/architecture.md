@@ -98,6 +98,16 @@ débito 28 —, e o limiar por slot é derivado: `ingestionQueueBytes` dividido 
 janela, com piso de uma página. `nishidb_ingest_decode_arena_bytes` e
 `nishidb_ingest_decode_slots_shrunk_total` são as duas metades da história.
 
+**Duas séries mudaram de dono junto, e a troca seria invisível.** O
+`nishidb_kafka_writer_idle_seconds_total` saía do acumulador da FILA, porque era
+o writer quem a consumia; com os decodificadores no meio, quem espera na fila
+são eles, e são K. Continuar publicando aquele número como ociosidade do writer
+mentiria por um fator — com oito decodificadores parados, `rate()` seria 8 — e a
+espera do writer, que é a metade que decide se ele é o gargalo, deixaria de ser
+medida. O `writer_idle` passou a sair da esteira; a espera dos decodificadores
+virou `nishidb_kafka_decode_idle_seconds_total`, com a divisão por
+`nishidb_ingest_decode_workers` documentada em `operacao-kafka.md`.
+
 **O poller não espera mais o writer a cada lote.** Até 28/08/2026 ele emitia um
 marcador de fim de lote e bloqueava até o writer alcançá-lo, para só então
 liberar o rebalance. A garantia que isso comprava é real — nenhum commit pode

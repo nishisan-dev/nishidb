@@ -53,9 +53,11 @@ type metricas struct {
 	// mentir por travamento de ninguém — no máximo não é emitido, e ausência
 	// é uma resposta honesta que a série congelada não dava.
 	filaViva func() (int, int64)
-	// esteiraViva é a memória retida pelos slots de decodificação, lida no
-	// scrape pela mesma razão da filaViva.
-	esteiraViva func() int64
+	// esteiraViva é a memória retida pelos slots de decodificação, e
+	// esteiraOciosa é o tempo que o WRITER passou esperando trabalho nela. As
+	// duas são lidas no scrape pela mesma razão da filaViva.
+	esteiraViva   func() int64
+	esteiraOciosa func() time.Duration
 	// temposDaFila é a integral de espera dos dois lados, lida no scrape pela
 	// mesma razão da profundidade.
 	temposDaFila   func() (time.Duration, time.Duration)
@@ -191,8 +193,11 @@ func (m *metricas) OlhaAFila(f func() (int, int64)) { m.filaViva = f }
 // OlhaOsTempos instala a fonte da integral de espera. Mesma vida da OlhaAFila.
 func (m *metricas) OlhaOsTempos(f func() (time.Duration, time.Duration)) { m.temposDaFila = f }
 
-// OlhaAEsteira instala a fonte da memória retida pelos slots de decodificação.
-func (m *metricas) OlhaAEsteira(f func() int64) { m.esteiraViva = f }
+// OlhaAEsteira instala as fontes da esteira: a memória retida pelos slots e a
+// ociosidade do writer.
+func (m *metricas) OlhaAEsteira(bytes func() int64, ocioso func() time.Duration) {
+	m.esteiraViva, m.esteiraOciosa = bytes, ocioso
+}
 
 // amostrasDaEsteira lê a memória dos slots no instante do scrape.
 //
@@ -207,12 +212,21 @@ func (m *metricas) amostrasDaEsteira() []metrics.Amostra {
 	if m.esteiraViva == nil {
 		return nil
 	}
-	return []metrics.Amostra{{
-		Nome: metrics.MetIngestDecodeArenaBytes, Tipo: metrics.TipoMedidor,
-		Valor:  float64(m.esteiraViva()),
-		Ajuda:  "Bytes que os slots da esteira de decodificação seguram entre eventos. Nenhum dos dois gates da fila conta esta memória.",
-		Labels: []metrics.Label{{Nome: metrics.LabelDataset, Valor: m.dataset}},
-	}}
+	rotulo := []metrics.Label{{Nome: metrics.LabelDataset, Valor: m.dataset}}
+	return []metrics.Amostra{
+		{
+			Nome: metrics.MetIngestDecodeArenaBytes, Tipo: metrics.TipoMedidor,
+			Valor:  float64(m.esteiraViva()),
+			Ajuda:  "Bytes que os slots da esteira de decodificação seguram entre eventos. Nenhum dos dois gates da fila conta esta memória.",
+			Labels: rotulo,
+		},
+		{
+			Nome: metrics.MetKafkaWriterIdleSeconds, Tipo: metrics.TipoContador,
+			Valor:  m.esteiraOciosa().Seconds(),
+			Ajuda:  "Segundos que o writer passou esperando trabalho na esteira. rate() alto com lag alto significa que quem não entrega é o poller ou os decodificadores.",
+			Labels: rotulo,
+		},
+	}
 }
 
 // amostrasDaFila lê a fila no instante do scrape.
@@ -251,9 +265,9 @@ func (m *metricas) amostrasDaFila() []metrics.Amostra {
 			Labels: rotulo,
 		},
 		metrics.Amostra{
-			Nome: metrics.MetKafkaWriterIdleSeconds, Tipo: metrics.TipoContador,
+			Nome: metrics.MetKafkaDecodeIdleSeconds, Tipo: metrics.TipoContador,
 			Valor:  ocioso.Seconds(),
-			Ajuda:  "Segundos que o writer passou esperando evento. rate() alto com lag alto significa que quem não entrega é o poller.",
+			Ajuda:  "Segundos SOMADOS que os decodificadores passaram esperando evento na fila. Divida por nishidb_ingest_decode_workers para ler como fração.",
 			Labels: rotulo,
 		},
 	)

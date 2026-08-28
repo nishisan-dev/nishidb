@@ -198,3 +198,38 @@ func TestEncerramentoDrenaTudoENaoTrava(t *testing.T) {
 		t.Fatal("reserva ficou presa depois do abandono: o encerramento trava aqui")
 	}
 }
+
+// A ociosidade do WRITER sai da esteira, e não da fila.
+//
+// É uma armadilha de instrumentação que a Fase 4 abriu e que passaria calada.
+// Até aqui o writer consumia a fila, e `nishidb_kafka_writer_idle_seconds_total`
+// saía do acumulador dela. Com os decodificadores no meio, quem espera na fila
+// são ELES — e são K. Continuar publicando aquele número como ociosidade do
+// writer mentiria por um FATOR: com oito decodificadores parados o acumulado
+// sobe oito segundos por segundo, e a tabela de decisão de
+// docs/operacao-kafka.md compara `rate()` com 1. Pior: a espera do writer, que é
+// a metade que decide se ele é o gargalo, deixaria de ser medida.
+func TestAOciosidadeDoWriterSaiDaEsteiraENaoDaFila(t *testing.T) {
+	e := novaEsteira(4)
+	f := NovaFila(4, 1<<20)
+
+	if d := e.Ocioso(); d != 0 {
+		t.Fatalf("esteira nasceu com %v de ociosidade", d)
+	}
+
+	// O writer espera na esteira, sem nada publicado.
+	ctx, cancela := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancela()
+	if _, ok, _ := e.consome(ctx, nil); ok {
+		t.Fatal("consome devolveu slot de uma esteira vazia")
+	}
+	if d := e.Ocioso(); d <= 0 {
+		t.Fatal("a esteira não contou a espera do writer")
+	}
+
+	// E a fila, que ninguém consumiu, não contou ociosidade nenhuma: com a
+	// contabilidade no lugar errado, ela é que teria o número.
+	if _, ocioso := f.Tempos(); ocioso != 0 {
+		t.Fatalf("a fila contou %v de ociosidade sem ninguém a consumir", ocioso)
+	}
+}
