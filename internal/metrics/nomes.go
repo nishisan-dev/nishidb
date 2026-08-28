@@ -178,8 +178,20 @@ const (
 	// coisa acontecendo. Sem ela, esse período é indistinguível de um coletor
 	// que não subiu, que foi exatamente a confusão vivida ao ligar no piloto.
 	MetExpiryGraceTotal = "nishidb_expiry_grace_total"
-	// MetExpiryScannedTotal conta entradas do índice examinadas. Comparada com
-	// o total de rows, diz se o cursor está dando a volta ou empacando.
+	// MetExpiryScannedTotal conta entradas do índice de expiração examinadas.
+	//
+	// A LEITURA MUDOU com a agenda de vencimentos, e o número antigo não é
+	// comparável com o novo. Enquanto o coletor varria, esta série media
+	// ESFORÇO: crescia com o tamanho do dataset a cada volta do cursor —
+	// 24,1 milhões no piloto — e servia para saber se o cursor dava a volta
+	// ou empacava. Agora ela conta as entradas da árvore em que a descida
+	// entrou, e portanto mede TRABALHO: cresce com o que venceu, não com o
+	// que existe.
+	//
+	// Consequência para quem opera: uma taxa que despenca depois da subida é
+	// o resultado esperado, não uma parada do coletor. Quem quiser saber se
+	// ele está vivo olha MetExpiryRunning; quem quiser saber se ele está
+	// trabalhando compara esta série com as de expiradas e carências.
 	MetExpiryScannedTotal = "nishidb_expiry_scanned_total"
 
 	// Checkpoint (§92).

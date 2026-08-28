@@ -217,9 +217,16 @@ func TestColetorNaoTentaExpirarLinhaJaTombstonada(t *testing.T) {
 	}
 }
 
-// O pré-filtro não pode travar a passada: o `continue` precisa avançar o
-// cursor como o fim do laço faria.
-func TestPreFiltroDeTombstoneNaoTravaAPassada(t *testing.T) {
+// A linha tombstonada não é sequer ENTREGUE, que é a forma forte da
+// propriedade que o pré-filtro da varredura garantia de forma fraca.
+//
+// A lápide preserva o instante de escrita de propósito, então a linha
+// tombstonada continua vencida para sempre pelo predicado. Na varredura isso
+// obrigava um pré-filtro explícito — sem ele, cada volta chamava Expira em
+// toda linha morta só para tomar o lock do writer e ver a flag. Com a agenda o
+// pré-filtro some: a linha recebe o sentinela "nunca" no mesmo applyRecord que
+// grava a lápide e sai da árvore.
+func TestLinhaTombstonadaNaoEhEntreguePelaAgenda(t *testing.T) {
 	s, rel := storeComRegras(t, t.TempDir(), 7*24*time.Hour)
 	for _, k := range []string{"A", "B", "C"} {
 		mustPut(t, s, k, 1, payloadComPrazo(t, s, k, rel.t, 3*time.Minute), nil)
@@ -229,15 +236,15 @@ func TestPreFiltroDeTombstoneNaoTravaAPassada(t *testing.T) {
 	if r, err := s.ExpiraUmaPassada(context.Background(), lim); err != nil || r.Expiradas != 3 {
 		t.Fatalf("primeira passada: %+v (err=%v)", r, err)
 	}
-	// A passada seguinte percorre as TRÊS linhas tombstonadas e termina.
+	// A passada seguinte não tem o que examinar: as três saíram da agenda.
 	r, err := s.ExpiraUmaPassada(context.Background(), lim)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if r.Expiradas != 0 || r.Renovadas != 0 {
-		t.Errorf("segunda passada: %+v", r)
+		t.Errorf("segunda passada tocou linha tombstonada: %+v", r)
 	}
-	if !r.DeuVolta {
-		t.Error("a passada não completou o círculo: o cursor não avançou no pré-filtro")
+	if r.Examinadas != 0 {
+		t.Errorf("a agenda entregou %d linhas tombstonadas; quer 0", r.Examinadas)
 	}
 }

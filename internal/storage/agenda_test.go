@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"fmt"
 	"math/rand/v2"
 	"os"
@@ -422,6 +423,132 @@ func TestAgendaQueNaoCobreODatasetEhReconstruida(t *testing.T) {
 		t.Fatalf("row %d ficou em %d, quer %d", id, v, s2.vencimentoDe(id))
 	}
 	if err := s2.AuditaAgenda(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// O CRITÉRIO DE ACEITE DA FASE: o esforço da passada acompanha o que venceu,
+// não o tamanho do dataset.
+//
+// Era esta a conta que custava 19% do CPU da ingestão no piloto. A varredura
+// lia toda linha para achar as poucas vencidas — com a regra condicional de
+// três minutos, uma volta completa nos 4,57 milhões a cada ~2,5 minutos, e
+// expiry_scanned_total marcando 24,1 milhões contra 0 no histórico.
+//
+// A afirmação é por ESCALA, e não por um teto absoluto, porque um teto não
+// distingue as duas implementações: uma varredura que filtrasse por
+// prazoVencido antes de entregar produziria exatamente as mesmas linhas
+// expiradas e o mesmo número de marcas. O que a separa é como o ESFORÇO
+// responde ao tamanho do dataset — e é isso que se mede, rodando a mesma carga
+// de vencidas sobre dois datasets de tamanhos bem diferentes.
+//
+// MUTAÇÃO QUE ESTE TESTE PEGA: voltar a percorrer as linhas em vez de descer a
+// agenda, com ou sem pré-filtro.
+func TestOEsforcoDaPassadaNaoAcompanhaOTamanhoDoDataset(t *testing.T) {
+	esforco := func(linhas int) int {
+		t.Helper()
+		s, rel := storeComExpiracao(t, t.TempDir(), 100*time.Hour)
+		// Todas com prazo longo; as três primeiras com prazo curto, para que
+		// o TRABALHO seja idêntico nos dois datasets e só o tamanho mude.
+		for i := 0; i < linhas; i++ {
+			key := fmt.Sprintf("k-%05d", i)
+			campos := map[string]types.Value{
+				"id":         {Type: types.TypeString, Bytes: []byte(key)},
+				"_writtenAt": {Type: types.TypeTimestamp, I64: rel.t.UnixMilli()},
+			}
+			if i < 3 {
+				campos["_expiresIn"] = types.Value{Type: types.TypeInt64, I64: int64(time.Minute / time.Millisecond)}
+			}
+			mustPut(t, s, key, 1, payloadOrdenado(t, s, campos), nil)
+		}
+		rel.avanca(5 * time.Minute) // vence as três curtas, nenhuma das longas
+
+		r, err := s.ExpiraUmaPassada(context.Background(), limitesDeTeste())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Expiradas != 3 {
+			t.Fatalf("dataset de %d linhas: expiradas=%d, quer 3 (%+v)", linhas, r.Expiradas, r)
+		}
+		if r.Examinadas == 0 {
+			t.Fatalf("dataset de %d linhas: a passada expirou 3 linhas sem tocar a agenda — não está descendo a árvore", linhas)
+		}
+		return r.Examinadas
+	}
+
+	pequeno, grande := esforco(200), esforco(20_000)
+	// Cem vezes mais linhas, o mesmo trabalho. A descida toca alguns nós a
+	// mais porque a árvore fica mais funda, mas o esforço não pode ACOMPANHAR
+	// o tamanho: o dobro é folga larga para a profundidade, e uma varredura
+	// mediria cem vezes.
+	if grande > 2*pequeno {
+		t.Fatalf("esforço saltou de %d para %d ao multiplicar o dataset por 100: a passada está varrendo",
+			pequeno, grande)
+	}
+}
+
+// O coletor dorme até o vencimento, e não por relógio fixo.
+//
+// É a outra metade do ganho: sem a agenda ele acordava de minuto em minuto
+// para varrer o dataset e quase sempre não achar nada. O teto de um minuto
+// continua valendo por cima, porque uma linha pode entrar na agenda com
+// vencimento anterior àquele em que o coletor foi dormir.
+func TestOColetorDormeAteOProximoVencimento(t *testing.T) {
+	s, rel := storeComExpiracao(t, t.TempDir(), time.Hour)
+	mustPut(t, s, "A", 1, payloadComEscrita(t, s, "A", "Start", rel.t), nil)
+
+	// Falta muito mais que o teto: a espera é limitada por ele.
+	if espera := s.esperaAteOProximoVencimento(ResultadoDaExpiracao{}); espera != tetoDeEspera {
+		t.Fatalf("com o vencimento a uma hora, a espera é %v; quer o teto de %v", espera, tetoDeEspera)
+	}
+	// Agora falta menos que o teto: a espera encolhe para o vencimento.
+	rel.avanca(time.Hour - 10*time.Second)
+	espera := s.esperaAteOProximoVencimento(ResultadoDaExpiracao{})
+	if espera != 10*time.Second {
+		t.Fatalf("faltando 10s para o vencimento, a espera é %v", espera)
+	}
+	// Passada que bateu o teto volta já: há trabalho represado.
+	if espera := s.esperaAteOProximoVencimento(ResultadoDaExpiracao{BateuTeto: true}); espera != 0 {
+		t.Fatalf("passada represada esperou %v", espera)
+	}
+	// Sem nada agendado, o teto: dormir para sempre deixaria a primeira linha
+	// escrita depois disso sem coletor nenhum.
+	s2, _ := storeComExpiracao(t, t.TempDir(), time.Hour)
+	if espera := s2.esperaAteOProximoVencimento(ResultadoDaExpiracao{}); espera != tetoDeEspera {
+		t.Fatalf("agenda vazia esperou %v; quer o teto de %v", espera, tetoDeEspera)
+	}
+}
+
+// A entrada FROUXA deixada por uma interrupção é corrigida na primeira visita.
+//
+// Sem isso, uma folha que promete um vencimento que já não existe seria
+// reentregue em toda passada, para sempre: o coletor gastaria o teto de tempo
+// inteiro tomando o lock do writer para descobrir que não há nada a fazer. É a
+// diferença entre uma estrutura auto-corretiva e um laço.
+func TestEntradaFrouxaEhCorrigidaNaPrimeiraVisita(t *testing.T) {
+	s, rel := storeComExpiracao(t, t.TempDir(), time.Hour)
+	id, _ := mustPut(t, s, "A", 1, payloadComEscrita(t, s, "A", "Start", rel.t), nil)
+
+	// Simula o que uma interrupção deixa: a folha promete um vencimento muito
+	// anterior ao real. A linha NÃO venceu — prazoVencido diz que não.
+	if err := s.agenda.Atualiza(id, rowindex.PrimeiroVencimentoReal); err != nil {
+		t.Fatal(err)
+	}
+	primeira, err := s.ExpiraUmaPassada(context.Background(), limitesDeTeste())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if primeira.Renovadas != 1 || primeira.Expiradas != 0 || primeira.Examinadas == 0 {
+		t.Fatalf("a primeira passada devia descer até a entrada frouxa e não marcar nada: %+v", primeira)
+	}
+	segunda, err := s.ExpiraUmaPassada(context.Background(), limitesDeTeste())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if segunda.Examinadas != 0 || segunda.Renovadas != 0 {
+		t.Fatalf("a entrada frouxa foi reentregue: %+v", segunda)
+	}
+	if err := s.AuditaAgenda(); err != nil {
 		t.Fatal(err)
 	}
 }

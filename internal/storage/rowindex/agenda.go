@@ -320,26 +320,35 @@ func (a *Agenda) ProximoVencimento() (uint64, bool) {
 // Vencidos visita, em ordem de rowId, cada linha cujo vencimento agendado é
 // menor ou igual a `ate`. A visita que devolve false interrompe a descida.
 //
+// Devolve quantas ENTRADAS a descida tocou — os nós de sumário em que ela
+// entrou mais as folhas entregues. É a medida do esforço, e ela existe para
+// poder ser afirmada: uma implementação que varresse o dataset entregaria as
+// mesmas linhas e não tocaria entrada nenhuma da árvore, então contar só o que
+// foi entregue não distinguiria as duas.
+//
 // A entrega é COMPLETA pela invariante: se uma linha vence, todo ancestral
 // dela tem valor <= o vencimento dela <= `ate`, então nenhum ramo que a
 // contenha é pulado. Pode entregar linhas a mais — um nó frouxo faz descer
 // num ramo sem nada vencido —, e é o chamador que revalida.
-func (a *Agenda) Vencidos(ate uint64, visita func(types.RowID) bool) {
+func (a *Agenda) Vencidos(ate uint64, visita func(types.RowID) bool) int {
 	topo := len(a.niveis) - 1
+	tocadas := 0
 	for idx, n := uint64(0), a.entradas(topo); idx < n; idx++ {
 		v := a.valor(topo, idx)
 		if v == Nunca || v > ate {
 			continue
 		}
-		if !a.desce(topo, idx, ate, visita) {
-			return
+		tocadas++
+		if !a.desce(topo, idx, ate, visita, &tocadas) {
+			return tocadas
 		}
 	}
+	return tocadas
 }
 
 // desce percorre os filhos de um nó, e devolve false quando a visita pediu
-// para parar.
-func (a *Agenda) desce(nivel int, idx, ate uint64, visita func(types.RowID) bool) bool {
+// para parar. `tocadas` acumula as entradas em que a descida ENTROU.
+func (a *Agenda) desce(nivel int, idx, ate uint64, visita func(types.RowID) bool, tocadas *int) bool {
 	base := idx << agendaShift
 	for i := uint64(0); i < agendaB; i++ {
 		filho := base + i
@@ -347,13 +356,14 @@ func (a *Agenda) desce(nivel int, idx, ate uint64, visita func(types.RowID) bool
 		if v == Nunca || v > ate {
 			continue
 		}
+		*tocadas++
 		if nivel-1 == 0 {
 			if !visita(types.RowID(filho)) {
 				return false
 			}
 			continue
 		}
-		if !a.desce(nivel-1, filho, ate, visita) {
+		if !a.desce(nivel-1, filho, ate, visita, tocadas) {
 			return false
 		}
 	}

@@ -337,10 +337,6 @@ type Store struct {
 	// chegou ao mesmo resultado" seriam indistinguíveis.
 	agendaReconstruida bool
 
-	// cursorExpiracao é onde a próxima passada do coletor recomeça. Só o
-	// laço do coletor o toca, e sempre sob o entra()/sai().
-	cursorExpiracao types.RowID
-
 	// Ciclo de vida do coletor, no molde do da compaction: expMu guarda o
 	// par cancela/emVoo, expAtiva é o medidor observável e expEmVoo é o que
 	// o Close aguarda antes do quiesce.
