@@ -228,3 +228,50 @@ func TestReprocessoImprodutivoAvisaUmaVez(t *testing.T) {
 		t.Errorf("avisos = %d; o aviso é de uma vez só", avisos)
 	}
 }
+
+// O documento que vira ARRAY apaga as colunas descobertas, mesmo quando o
+// decode correu à frente do writer.
+//
+// É a armadilha que a esteira abriu, e ela é a mais silenciosa das que a Fase 4
+// podia abrir. `removeAsColunasDoPai` enumera as colunas do pai para emitir uma
+// remoção por coluna — sem isso, no modo merge, a coluna fica com o valor de um
+// evento passado enquanto o documento da MESMA linha é um array. O conjunto de
+// colunas CRESCE com os eventos que o writer ainda não aplicou, e um
+// decodificador adiantado vê um conjunto menor: a coluna que ficou de fora da
+// enumeração sobrevive.
+//
+// O teste decodifica os DOIS eventos antes de aplicar qualquer um, que é o que
+// a esteira permite — inclusive com decodeWorkers=1, porque o decodificador
+// roda até uma janela inteira à frente. E o desfecho tem de ser o mesmo da
+// execução serial, que a segunda metade do teste fixa como oráculo.
+func TestDocumentoQueViraArrayApagaColunaDescobertaAindaQueODecodeSeAdiante(t *testing.T) {
+	comEsteira := func(t *testing.T) map[string]types.Value {
+		h := newHarness(t, descobreYAML)
+		var d1, d2 Decodificado
+		h.m.Decodifica(&d1, []byte(`{"id":"A","doc":{"novo":1}}`))
+		// O decode de E2 acontece ANTES de E1 ser aplicado: neste instante a
+		// coluna `doc.novo` ainda não existe no schema.
+		h.m.Decodifica(&d2, []byte(`{"id":"A","doc":[1,2,3]}`))
+		if r := h.m.Aplica(&d1); r.Err != nil {
+			t.Fatalf("E1: %v", r.Err)
+		}
+		if r := h.m.Aplica(&d2); r.Err != nil {
+			t.Fatalf("E2: %v", r.Err)
+		}
+		return h.state("A")
+	}
+	serial := func(t *testing.T) map[string]types.Value {
+		h := newHarness(t, descobreYAML)
+		h.apply(`{"id":"A","doc":{"novo":1}}`)
+		h.apply(`{"id":"A","doc":[1,2,3]}`)
+		return h.state("A")
+	}
+
+	if v, ok := serial(t)["doc.novo"]; ok {
+		t.Fatalf("o ORÁCULO já está errado: doc.novo sobreviveu na execução serial (%+v)", v)
+	}
+	if v, ok := comEsteira(t)["doc.novo"]; ok {
+		t.Errorf("doc.novo = %+v depois de doc=[1,2,3]: o decode adiantado enumerou "+
+			"as colunas do pai com o schema de antes, e a remoção ficou de fora", v)
+	}
+}

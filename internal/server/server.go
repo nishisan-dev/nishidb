@@ -390,15 +390,18 @@ func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*
 		// errado, em silêncio.
 		return nil, fechandoStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}
-	// O decode paralelo é somente-leitura, e todo evento que traga metadado
-	// novo volta para o writer decodificar sozinho. Isso é transitório num
-	// dataset saudável: descoberta acaba. Reprocesso seguido que NÃO faz o
-	// dicionário crescer não acaba — o caso conhecido é o teto de campos sob
-	// `ignore`, em que a coluna nunca nasce e todo evento paga o parse dobrado
-	// para sempre. Uma vez por dataset, como os avisos irmãos acima.
+	// O decode paralelo é somente-leitura, e três coisas o mandam de volta ao
+	// writer: coluna a criar, tipo a fixar, e documento com forma divergente
+	// (que precisa enumerar as colunas do pai com o schema já aplicado). As duas
+	// primeiras acabam num dataset saudável — descoberta termina. Reprocesso
+	// seguido que NÃO faz o dicionário crescer não acaba, e a mensagem nomeia as
+	// três causas em vez de afirmar uma: o caso conhecido é o teto de campos sob
+	// `ignore`, mas uma origem que mande `null` no documento com frequência
+	// produz o mesmo sintoma sem defeito nenhum. Uma vez por dataset, como os
+	// avisos irmãos acima.
 	mat.AoReprocessar(func(seguidos int64, colunas int) {
 		log.Warn("ingest.reprocesso_improdutivo",
-			"o writer está redecodificando eventos sem que colunas novas apareçam; a ingestão perdeu o ganho do decode paralelo",
+			"o writer está redecodificando eventos sem que colunas novas apareçam; a ingestão perdeu o ganho do decode paralelo. Causas: teto de campos sob `ignore`, ou documento chegando com forma divergente (array/null) com frequência",
 			"dataset", spec.Name, "seguidos", seguidos, "colunas", colunas,
 			"maxCols", compilado.MaxCols, "politica", compilado.OnMaxCols)
 	})

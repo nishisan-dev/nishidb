@@ -54,7 +54,9 @@ func (b *PatchBuffer) extraiDerivadas() error {
 		}
 		b.paisFeitos = append(b.paisFeitos, p.campo.ID)
 		if p.kind != jsonp.KindObject {
-			b.removeAsColunasDoPai(p)
+			if err := b.removeAsColunasDoPai(p); err != nil {
+				return err
+			}
 			continue
 		}
 		if p.campo.DescobreAninhados {
@@ -129,15 +131,42 @@ func (b *PatchBuffer) extraiDerivadas() error {
 // afirmação diferente e mais honesta: o que divergiu foi UM documento, e as
 // colunas nem estavam nele — não havia objeto onde procurá-las. Contar 1.650
 // afogaria o sinal por coluna que o contador existe para dar.
-func (b *PatchBuffer) removeAsColunasDoPai(p paiVisto) {
+func (b *PatchBuffer) removeAsColunasDoPai(p paiVisto) error {
+	if b.soLeitura {
+		// AQUI ESTÁ A ÚNICA LEITURA DO SCHEMA QUE O DECODE NÃO PODE FAZER.
+		//
+		// Todas as outras ou são imutáveis depois do Compile (Derivadas,
+		// Congeladas, a política de campo desconhecido) ou devolvem "precisa do
+		// writer" quando o que falta ainda não existe. Esta enumera o CONJUNTO
+		// de colunas de um pai, e o conjunto CRESCE com os eventos que o writer
+		// ainda não aplicou — um decodificador que corra à frente vê um
+		// conjunto menor e emite menos remoções do que deveria.
+		//
+		// E o defeito que isso produz é exatamente o que esta função existe
+		// para impedir: a coluna que ficou de fora da enumeração é PRESERVADA
+		// pelo merge, e a linha passa a mostrar um valor de um evento anterior
+		// enquanto o documento da mesma linha é um array. Linha errada, não
+		// linha a menos.
+		//
+		// Vale MESMO com decodeWorkers=1: o decodificador roda até uma janela
+		// inteira à frente do writer.
+		//
+		// O remédio é o mecanismo que já existe — o evento volta para o writer,
+		// que o refaz com o schema no estado que a execução serial teria. O
+		// custo é o mesmo que o bloco abaixo já aceita: este caminho só acontece
+		// quando a origem manda a forma errada, e no piloto isso foi medido em
+		// 0 de 3.000 documentos.
+		return errPrecisaDoWriter
+	}
 	b.filhosBuf = b.compilado.AnexaFilhos(p.campo, b.filhosBuf[:0])
 	if len(b.filhosBuf) == 0 {
-		return
+		return nil
 	}
 	for _, f := range b.filhosBuf {
 		b.entries = append(b.entries, patchEntry{field: f, isNull: true})
 	}
 	b.conta(contaDivergencia, p.campo, InferType(jsonp.Field{Kind: p.kind}))
+	return nil
 }
 
 func (b *PatchBuffer) jaResolvido(id types.FieldID) bool {

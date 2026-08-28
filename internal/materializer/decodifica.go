@@ -137,13 +137,20 @@ func (m *Materializer) reprocessa(evento []byte) *Decodificado {
 // avaliaReprocessoInutil dispara, uma vez, o aviso de que o reprocesso deixou
 // de ser transitório.
 //
-// O QUE ELE DETECTA. Todo reprocesso legítimo produz metadado: uma coluna nova,
-// ou o tipo de uma coluna auto. Os dois são limitados pelo número de colunas do
-// dataset, então uma sequência longa de reprocessos que NÃO faz o dicionário
-// crescer não é descoberta em curso — é o decodificador pedindo o writer para
-// alguma coisa que o writer não entrega. O caso conhecido é o dicionário no
-// teto sob `onMaxCols: ignore`: o campo nunca vira coluna, e todo evento que o
-// traga volta a ser reprocessado, para sempre.
+// O QUE ELE DETECTA. O reprocesso tem três causas, e duas delas são limitadas
+// pelo número de colunas do dataset: criar coluna e fixar tipo. Uma sequência
+// longa de reprocessos que NÃO faz o dicionário crescer não é descoberta em
+// curso — é o decodificador pedindo o writer para alguma coisa que ele não
+// entrega. O caso conhecido é o dicionário no teto sob `onMaxCols: ignore`: o
+// campo nunca vira coluna, e todo evento que o traga volta a ser reprocessado,
+// para sempre.
+//
+// A TERCEIRA CAUSA é legítima e também não faz o dicionário crescer: o
+// documento que chega com forma divergente (array, null, escalar) precisa
+// enumerar as colunas do pai, e essa enumeração só é correta no writer. Uma
+// origem que mande `null` no documento com frequência dispara este aviso sem
+// ter defeito nenhum — e é por isso que a mensagem nomeia as três, em vez de
+// afirmar o teto de campos.
 //
 // A fixação de tipo não faz o dicionário crescer e por isso "suja" a série,
 // mas ela é limitada pelo número de colunas: mil delas seguidas sem uma coluna
