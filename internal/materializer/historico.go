@@ -47,7 +47,7 @@ func (m *Materializer) HistoricoDegradado() error { return m.histCausa }
 //     exatamente o que se quer ver ao depurar um descarte por stale.
 //  3. o `_expiresIn` ainda não foi emitido, então ele não entra na linha sem
 //     precisar de filtro: o prazo por entidade não significa nada aqui.
-func (m *Materializer) apendaNoHistorico(evento []byte) {
+func (m *Materializer) apendaNoHistorico(d *Decodificado) {
 	if m.hist == nil {
 		return
 	}
@@ -55,7 +55,7 @@ func (m *Materializer) apendaNoHistorico(evento []byte) {
 		m.metrics.histDescartadas.Add(1)
 		return
 	}
-	payload, err := encodePatchHistorico(m.patch.entries, evento, m.histRaw, m.histBuf[:0])
+	payload, err := encodePatchHistorico(d.entries, d.evento, m.histRaw, m.histBuf[:0])
 	m.histBuf = payload
 	if err == nil {
 		_, err = m.hist.Apenda(payload)

@@ -271,7 +271,9 @@ type Materializer struct {
 	schema *schema.Compiled
 	store  Store
 
-	patch   PatchBuffer
+	// patch é o decode do writer: o único Decodificado quando ninguém
+	// decodifica em paralelo, e o do REPROCESSO quando alguém decodifica.
+	patch   Decodificado
 	prevRec types.Record // estado corrente lido; janela sobre prevBuf
 	prevBuf []byte       // destino do GetByKey
 	outBuf  []byte       // payload de saída
@@ -368,7 +370,7 @@ func (m *Materializer) Metrics() MetricsSnapshot {
 	s.HistoricoLinhas = m.metrics.histLinhas.Load()
 	s.HistoricoDescartadas = m.metrics.histDescartadas.Load()
 	s.HistoricoDegradado = m.metrics.histDegradado.Load()
-	// events é lido por ÚLTIMO, de propósito: o Apply o incrementa na ENTRADA
+	// events é lido por ÚLTIMO, de propósito: o Aplica o incrementa na ENTRADA
 	// e o desfecho na SAÍDA, então ler events primeiro deixaria o writer
 	// avançar entre as leituras e produziria um snapshot com
 	// soma(desfechos) > EventsTotal — um exporter que publique "eventos em
@@ -390,20 +392,47 @@ func (m *Materializer) Metrics() MetricsSnapshot {
 // Failed para o que não é culpa do evento (com Fatal marcando o writer em
 // modo falho, quando o caller precisa parar de vez).
 func (m *Materializer) Apply(event []byte) ApplyResult {
+	m.Decodifica(&m.patch, event)
+	return m.Aplica(&m.patch)
+}
+
+// Aplica publica no storage um evento já decodificado: carimba o relógio, lê o
+// estado corrente, roda o sequence check, decide o prazo, faz o merge ou o
+// replace e chama o Put.
+//
+// É a metade NÃO paralelizável do Apply, e continua valendo aqui tudo o que
+// vale para o Materializer: pertence à goroutine do writer único (§28) e
+// reutiliza prevBuf, outBuf e histBuf entre eventos.
+//
+// O contador de EVENTOS vive aqui, e não no Decodifica, e isso não é
+// arrumação. `nishidb_ingest_events_total` é o sinal de progresso que o
+// watchdog da ingestão consulta: contado no decode, um writer morto com N
+// decodificadores ocupados publicaria um contador subindo — e o watchdog, que
+// exige a CONJUNÇÃO de eventos parados, lag no broker e fila vazia, nunca
+// disparia. O contador tem de medir o que ATRAVESSOU o gargalo, não o que
+// entrou nele.
+func (m *Materializer) Aplica(d *Decodificado) ApplyResult {
 	m.metrics.events.Add(1)
 
-	if err := m.patch.Parse(event, m.schema, m.agora()); err != nil {
+	if err := d.erro; err != nil {
 		res := m.failure(err)
 		// Evento RUIM vai para o histórico com `_raw`, se ele existir: é o
 		// ponto cego que a coluna existe para fechar. Falha de INFRA não vai —
 		// não é o evento que está errado, e gravá-lo faria o histórico
 		// registrar como dado ruim o que é problema de disco nosso.
 		if res.Category.BadEvent() {
-			m.apendaEventoRuimNoHistorico(event)
+			m.apendaEventoRuimNoHistorico(d.evento)
 		}
 		return res
 	}
-	m.apendaNoHistorico(event)
+
+	// O relógio é lido UMA vez por evento, aqui, e o mesmo instante carimba
+	// `_writtenAt`, as congeladas de relógio e — logo abaixo, por diferença —
+	// o vencimento que a agenda deriva. Ler duas vezes daria carimbos
+	// distintos dentro de uma escrita só, que é o que
+	// TestOInstanteEhOMesmoParaOEventoInteiro trava.
+	d.carimbaRelogio(m.schema, m.agora().UnixMilli())
+	m.apendaNoHistorico(d)
 
 	var (
 		presenca types.Presenca
@@ -411,7 +440,7 @@ func (m *Materializer) Apply(event []byte) ApplyResult {
 	)
 	// O buf devolvido é reatribuído SEMPRE (pode ter crescido), inclusive no
 	// erro — descartá-lo faria o próximo evento realocar do zero.
-	m.prevRec, m.prevBuf, presenca, err = m.store.Estado(m.patch.key, m.prevBuf[:0])
+	m.prevRec, m.prevBuf, presenca, err = m.store.Estado(d.key, m.prevBuf[:0])
 	if err != nil {
 		return m.failure(err)
 	}
@@ -424,7 +453,7 @@ func (m *Materializer) Apply(event []byte) ApplyResult {
 	// A entidade expirada mantém RowID e Sequence, então o stale check tem
 	// contra o que comparar — e um evento antigo é descartado em vez de
 	// recriar a entidade que acabou de expirar.
-	if presenca.Existe() && m.schema.Seq != nil && m.patch.seq <= m.prevRec.Sequence {
+	if presenca.Existe() && m.schema.Seq != nil && d.seq <= m.prevRec.Sequence {
 		m.metrics.stale.Add(1)
 		return ApplyResult{Action: ActionStale, RowID: m.prevRec.RowID}
 	}
@@ -433,7 +462,7 @@ func (m *Materializer) Apply(event []byte) ApplyResult {
 	// estado anterior, que o Parse não tem, e a entry precisa entrar no patch
 	// antes de o payload novo ser montado.
 	if m.schema.Prazo != nil {
-		d, err := m.duracaoDe(m.prevRec.Payload, m.patch.entries)
+		dur, err := m.duracaoDe(m.prevRec.Payload, d.entries)
 		if err != nil {
 			return m.failure(err)
 		}
@@ -443,7 +472,7 @@ func (m *Materializer) Apply(event []byte) ApplyResult {
 		// sobreviver ao evento que a quebra — e a entidade morreria logo
 		// depois de o alarme reabrir. São 8 bytes por versão de record para
 		// tornar impossível a única falha que arruinaria a feature.
-		m.patch.emitePrazo(m.schema.Prazo, d)
+		d.emitePrazo(m.schema.Prazo, dur)
 	}
 
 	// prevRec.Payload aponta para prevBuf e outBuf é um buffer DISTINTO: o
@@ -454,11 +483,11 @@ func (m *Materializer) Apply(event []byte) ApplyResult {
 	// encarnação anterior para a entidade que está reabrindo — um alarme novo
 	// herdaria a severidade do que foi fechado.
 	if presenca == types.PresencaViva && !replace {
-		payload, err = mergeRecords(m.prevRec.Payload, m.patch.entries, m.outBuf[:0], &m.metrics.efeitos)
+		payload, err = mergeRecords(m.prevRec.Payload, d.entries, m.outBuf[:0], &m.metrics.efeitos)
 	} else {
 		// Create (não há estado anterior) e replace (§23, o estado anterior é
 		// descartado) chegam ao mesmo lugar: o payload é só o patch.
-		payload, err = encodePatch(m.patch.entries, m.outBuf[:0])
+		payload, err = encodePatch(d.entries, m.outBuf[:0])
 	}
 	m.outBuf = payload
 	if err != nil {
@@ -476,7 +505,7 @@ func (m *Materializer) Apply(event []byte) ApplyResult {
 	if presenca.Existe() {
 		prev = &m.prevRec
 	}
-	rowID, created, err := m.store.Put(m.patch.key, m.patch.seq, 0, payload, prev)
+	rowID, created, err := m.store.Put(d.key, d.seq, 0, payload, prev)
 	if err != nil {
 		// O rowID devolvido junto com erro é descartado de propósito. Com
 		// SyncEveryPut, uma falha de fsync devolve (rowID, created, err) com o
