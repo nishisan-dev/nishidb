@@ -242,12 +242,19 @@ func (e *esteira) avanca(limiarDeEncolhimento int) bool {
 	return encolheu
 }
 
-// BytesRetidos soma a memória que os slots seguram entre eventos.
+// BytesRetidos soma a memória que os slots seguram — a de regime e a em voo.
 //
 // É o número que o gauge publica, e ele existe porque a esteira é o TERCEIRO
 // consumidor de memória da ingestão: os dois gates da fila contam registros
-// enfileirados e bytes de payload cru, e nenhum dos dois enxerga o arena tipado
-// que o decode produziu e o slot reteve.
+// enfileirados e bytes de payload cru, e nenhum dos dois enxerga o que o slot
+// segura. O de registros porque o record já saiu da fila; o de bytes porque ele
+// devolveu o orçamento no recebimento, de propósito e documentado lá.
+//
+// São as DUAS parcelas de propósito. A de regime é a marca d'água dos buffers
+// que o slot carrega de um evento para o próximo, que o limiar de encolhimento
+// governa. A em voo é o payload do evento decodificado e ainda não aplicado, que
+// nenhum limiar governa — ver o débito 101. Publicar só a primeira faria o gauge
+// ficar plano exatamente quando o pico acontece.
 func (e *esteira) bytesRetidos() int64 {
 	var n int64
 	for i := range e.slots {
