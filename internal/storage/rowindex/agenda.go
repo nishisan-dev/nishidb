@@ -79,6 +79,16 @@ type Agenda struct {
 	aposRecompute func()
 }
 
+// AgendaBlockShift e AgendaNiveis são a GEOMETRIA da árvore, exportadas
+// porque é o manifest que as grava: uma agenda lida com fanout ou
+// profundidade diferentes dos que a construíram endereça o bloco errado em
+// cada nível, e é para detectar essa divergência que os dois viajam no
+// manifest em vez de serem inferidos dos arquivos.
+const (
+	AgendaBlockShift = agendaShift
+	AgendaNiveis     = agendaNiveis
+)
+
 const (
 	// agendaShift dá B = 64 filhos por nó. O tamanho é o de uma linha de
 	// cache de 512 bytes vezes oito: um recompute lê 64 words contíguas, que

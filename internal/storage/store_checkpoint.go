@@ -113,6 +113,21 @@ func (s *Store) checkpoint() error {
 			return err
 		}
 	}
+	// A agenda vem DEPOIS dos dois índices de que ela deriva, e antes do
+	// manifest como todo o resto: é o manifest que declara o ponto S
+	// recuperável, e um msync depois dele declararia durável uma árvore ainda
+	// em página suja.
+	//
+	// A falha aqui não é sticky, pela mesma razão que a de prazos e escritas
+	// não é: os três são DERIVADOS e reconstruíveis — o replay do tail repõe
+	// os dois primeiros pelo applyRecord, e a agenda é reconstruída inteira a
+	// partir deles. Matar o writer por um índice que a próxima abertura refaz
+	// sozinha trocaria uma degradação recuperável por uma parada.
+	if s.agenda != nil {
+		if err := s.traceStep("msyncVencimentos", s.agenda.Msync); err != nil {
+			return err
+		}
+	}
 	if s.seqs != nil {
 		if err := s.traceStep("msyncSequences", s.seqs.Msync); err != nil {
 			return s.failWriter(err)
@@ -163,6 +178,7 @@ func (s *Store) checkpoint() error {
 		FieldDictValidBytes: s.dict.SizeBytes(),
 		Modo:                uint8(s.opts.Modo),
 		RowIDBase:           s.rowIDBase.Load(),
+		Agenda:              s.infoDaAgenda(),
 	}
 	if s.prim != nil {
 		m.PrimarySlotCount = s.prim.SlotCount()

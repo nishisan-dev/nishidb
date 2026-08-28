@@ -312,8 +312,14 @@ type Store struct {
 	seqs        *rowindex.Sequences
 	// escritas é nil quando o dataset não declara expiração: sem ela não há
 	// o que indexar, e abrir o arquivo custaria mmap por nada.
-	escritas       *rowindex.Escritas
-	prazos         *rowindex.Prazos
+	escritas *rowindex.Escritas
+	prazos   *rowindex.Prazos
+	// agenda é o índice de QUANDO cada linha vence, e acompanha o escritas:
+	// nil junto com ele. Ela não é fonte de verdade de nada — prazoVencido
+	// continua lendo escritas e prazos —, é o que permite ao coletor
+	// perguntar pelo próximo vencimento em vez de varrer o dataset atrás
+	// dele.
+	agenda         *rowindex.Agenda
 	duracaoDeFundo time.Duration
 	campoDeEscrita types.FieldID
 	campoDePrazo   types.FieldID
@@ -842,6 +848,9 @@ func Open(opts Options) (*Store, error) {
 			return nil, err
 		}
 		if s.prazos, err = rowindex.OpenPrazos(filepath.Join(idxDir, "prazos.idx"), minRows); err != nil {
+			return nil, err
+		}
+		if s.agenda, err = rowindex.OpenAgenda(idxDir, minRows); err != nil {
 			return nil, err
 		}
 		s.duracaoDeFundo = opts.DuracaoDeFundo
@@ -1648,6 +1657,23 @@ func (s *Store) applyRecord(a recordApply) error {
 	if a.countsAsNew {
 		s.rowCount.Add(1)
 	}
+	// 7b. agenda de vencimentos, DEPOIS do commit da location.
+	//
+	// Depois, e não antes, porque o vencimento é função da location: linha sem
+	// location publicada e linha tombstonada não vencem, e ler a location
+	// antes do Publish agendaria a partir do estado ANTERIOR — a lápide que
+	// acabou de ser gravada continuaria agendada para o vencimento que ela
+	// veio cancelar, e o coletor a reentregaria em toda descida.
+	//
+	// A agenda é derivada e não participa da durabilidade do §6.1: ela guarda
+	// um instante, não uma referência a record. Uma janela entre o Publish e
+	// esta linha custaria, no pior caso, uma passada de atraso na expiração —
+	// e ela não existe, porque as duas rodam sob o mesmo wmu.
+	if s.agenda != nil {
+		if err := s.agenda.Atualiza(a.rowID, s.vencimentoDe(a.rowID)); err != nil {
+			return err
+		}
+	}
 	// 8. fase de CLEAR dos índices secundários DEPOIS do commit: erro aqui
 	// deixa só falso positivo (tolerável; contabilizado p/ métricas da S13).
 	if len(s.bitmaps) > 0 {
@@ -1711,6 +1737,81 @@ func (s *Store) prazoVencido(rowID types.RowID) bool {
 		return false
 	}
 	return s.agora().UnixMilli()-ms >= d.Milliseconds()
+}
+
+// vencimentoDe calcula QUANDO esta linha vence, no formato que a agenda
+// guarda. É função pura do estado indexado — location, escritas, prazos e a
+// duração de fundo —, e é essa pureza que permite reconstruir a agenda inteira
+// a partir dos arquivos que já existem, sem ler um record sequer.
+//
+// A relação com prazoVencido é deliberadamente de DERIVAÇÃO, não de
+// substituição: prazoVencido continua sendo o predicado que decide
+// visibilidade, lendo os mesmos dois índices. A agenda só decide quando o
+// coletor olha. Fazer prazoVencido ler o vencimento materializado
+// transformaria um bug de agenda em um bug de query — a linha sumiria da
+// consulta por causa de uma entrada de árvore errada —, e é por isso que ele
+// não lê.
+//
+// Os três casos que não são um instante:
+//
+//   - sem location, ou tombstonada: rowindex.Nunca. A linha não vence porque
+//     não há o que expirar, e a lápide preserva o instante de escrita de
+//     propósito, então sem este ramo ela ficaria vencida para sempre.
+//   - instante DESCONHECIDO: rowindex.Carencia. Ela não venceu, mas precisa da
+//     atenção do coletor para receber o prazo cheio. É o único caso em que a
+//     agenda pede uma visita sem que prazoVencido concorde, e é assim que a
+//     entidade materializada antes de a expiração ser ligada deixa de ficar
+//     imortal por acidente de calendário.
+//   - duração não positiva: rowindex.Nunca. É a linha que uma regra `never`
+//     declarou imortal, ou o dataset sem duração de fundo.
+func (s *Store) vencimentoDe(rowID types.RowID) uint64 {
+	if s.escritas == nil {
+		return rowindex.Nunca
+	}
+	packed, publicada := s.locs.Get(rowID)
+	if !publicada {
+		return rowindex.Nunca
+	}
+	if _, _, flags := rowindex.Unpack(packed); flags&types.FlagTombstone != 0 {
+		return rowindex.Nunca
+	}
+	ms, conhecido := s.escritas.Get(rowID)
+	if !conhecido {
+		return rowindex.Carencia
+	}
+	d := s.duracaoEfetiva(rowID)
+	if d <= 0 {
+		return rowindex.Nunca
+	}
+	venc := ms + d.Milliseconds()
+	if venc < ms {
+		// Estouro: instante somado a uma duração absurda. Uma linha que
+		// vencesse "antes de ter sido escrita" seria expirada na primeira
+		// descida, apagando dado vivo por causa de uma aritmética. Fora da
+		// agenda é o lado seguro — prazoVencido continua respondendo sobre
+		// ela.
+		return rowindex.Nunca
+	}
+	if venc < int64(rowindex.PrimeiroVencimentoReal) {
+		// Um instante tão antigo que colidiria com os sentinelas. Elevar é
+		// seguro: o efeito é vencer em 1970 em vez de 1969.
+		return rowindex.PrimeiroVencimentoReal
+	}
+	return uint64(venc)
+}
+
+// infoDaAgenda descreve, para o manifest, os parâmetros de que a agenda em
+// disco deriva. Devolve nil no dataset sem expiração — e é isso que mantém o
+// manifest dele na v1.
+func (s *Store) infoDaAgenda() *checkpoint.AgendaInfo {
+	if s.agenda == nil {
+		return nil
+	}
+	return &checkpoint.AgendaInfo{
+		DuracaoDeFundoMs: uint64(s.duracaoDeFundo.Milliseconds()),
+		BlockShift:       rowindex.AgendaBlockShift,
+		Niveis:           rowindex.AgendaNiveis,
+	}
 }
 
 // duracaoEfetiva devolve por quanto tempo esta linha pode ficar sem escrita.
@@ -2415,6 +2516,9 @@ func (s *Store) Close() error {
 		if ix != nil {
 			errs = append(errs, ix.Close())
 		}
+	}
+	if s.agenda != nil {
+		errs = append(errs, s.agenda.Close())
 	}
 	if s.prazos != nil {
 		errs = append(errs, s.prazos.Close())

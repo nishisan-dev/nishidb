@@ -445,5 +445,14 @@ func (s *Store) daCarencia(id types.RowID) (bool, error) {
 	if err := s.escritas.Set(id, s.agora().UnixMilli()); err != nil {
 		return false, err
 	}
+	// A agenda sai do sentinela de carência e passa a apontar o vencimento de
+	// verdade. Sem esta linha a entrada ficaria em Carencia para sempre, e a
+	// linha seria reentregue em toda descida — o coletor daria a mesma
+	// carência indefinidamente, tomando o lock do writer a cada volta.
+	if s.agenda != nil {
+		if err := s.agenda.Atualiza(id, s.vencimentoDe(id)); err != nil {
+			return false, err
+		}
+	}
 	return true, nil
 }
