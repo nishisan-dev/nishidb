@@ -1,9 +1,11 @@
 @startuml kafka_pipeline
-title Ingestão Kafka — do fetch ao commit, na ordem que o §48 fixa
+title Ingestão Kafka — do fetch ao commit, na ordem que o §48 fixa\n(decode em K goroutines; aplicação em uma só)
 
 participant "Kafka broker" as kafka
 participant "Poller\n(1 goroutine)" as poll
 participant "Fila limitada\nregistros + bytes" as fila
+participant "Decodificadores\n(K goroutines)" as dec
+participant "Esteira\nanel por seq" as est
 participant "Writer único\n(§27)" as wr
 participant "Materializer" as mat
 participant "Store" as st
@@ -20,7 +22,7 @@ end note
 kafka --> poll : lote de records
 
 loop cada record
-  poll -> fila : Envia(record)
+  poll -> fila : Envia(record) — seq atribuído aqui
   alt fila cheia (registros OU bytes)
     fila --> poll : BLOQUEIA
     note right of fila
@@ -41,14 +43,57 @@ note right of poll
 end note
 deactivate poll
 
-== materialize (em paralelo com o próximo poll) ==
-loop enquanto houver item
-  wr -> fila : Recebe()
-  fila --> wr : record
-  wr -> mat : Apply(record.Value)
+== decode (K em paralelo, e em paralelo com o próximo poll) ==
+loop cada decodificador
+  dec -> fila : Recebe()
+  fila --> dec : record + seq
+  dec -> est : reserva(seq)
+  alt seq - proxima >= janela
+    est --> dec : ESPERA
+    note right of est
+      Backpressure, reordenação e reciclagem de
+      buffer são a MESMA aritmética. Quem segura
+      `proxima` nunca espera vaga, então o writer
+      sempre avança e as vagas sempre saem — é o
+      que impede o anel de travar.
+    end note
+  end
+  est --> dec : buffer do slot
+  dec -> mat : Decodifica(slot, record.Value)
+  activate mat
+  note right of mat
+    SOMENTE LEITURA sobre o schema. Coluna nova e
+    tipo fixado ficam de fora: LookupOrCreate
+    atribui o FieldID na ordem de chamada, e com K
+    decodificadores essa ordem seria a de quem
+    ganha o mutex. FieldID é formato de disco e a
+    posição da coluna no SELECT * é contrato do
+    driver JDBC.
+  end note
+  mat --> dec : decodificado, ou "precisa do writer"
+  deactivate mat
+  dec -> est : publica(seq)
+end
+
+== materialize (writer único, em ordem de seq) ==
+loop enquanto houver slot
+  wr -> est : consome()
+  est --> wr : slot de `proxima`
+  alt o decode parou em metadado a criar
+    wr -> mat : reprocessa pelo caminho COMPLETO
+    note right of wr
+      A coluna nasce aqui, na ordem de offset e por
+      uma goroutine só — a mesma ordem que a
+      execução serial produziria. Em regime não
+      acontece; o custo aparece em
+      nishidb_ingest_decode_serial_total.
+    end note
+  end
+  wr -> mat : Aplica(slot)
   activate mat
   mat --> wr : ApplyResult
   deactivate mat
+  wr -> est : avanca() — libera o slot e encolhe se passou do limiar
 
   alt aplicado, stale, ou descartado por log-and-skip
     wr -> wr : offsets[p] = record.Offset + 1
@@ -95,12 +140,16 @@ kafka -> poll : OnPartitionsRevoked
 activate poll
 poll -> fila : EnviaBarreira()
 note right of fila
-  A barreira vai para o FIM da fila: tudo o que
-  entrou antes dela já terá sido aplicado quando
-  o writer a alcançar. É essa a garantia de que
-  nenhum commit toca partição já revogada.
+  A barreira recebe um seq como qualquer evento e
+  atravessa a esteira: é isso que a faz chegar ao
+  writer DEPOIS de tudo o que entrou antes dela,
+  mesmo com K decodificadores terminando fora de
+  ordem. É a garantia de que nenhum commit toca
+  partição já revogada.
 end note
-fila -> wr : barreira
+fila -> dec : barreira
+dec -> est : publica(seq, barreira)
+est -> wr : barreira
 wr -> wr : checkpoint incondicional
 wr --> poll : conclui(err)
 note right of poll

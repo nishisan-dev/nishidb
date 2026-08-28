@@ -700,6 +700,7 @@ source:
       maxPollRecords: 1000
       ingestionQueueSize: 5000     # gate de registros da fila limitada
       ingestionQueueBytes: 64MiB   # gate de BYTES — registros não são memória
+      decodeWorkers: 1             # decodificadores em paralelo; 1 é o default
     security:
       protocol: SASL_SSL
       saslMechanism: SCRAM-SHA-512
@@ -709,6 +710,20 @@ source:
 errors:
   invalidEvent: log-and-skip       # ou `stop`, que PARA a ingestão
 ```
+
+**`decodeWorkers` paraleliza o DECODE, nunca a escrita.** O parse do JSON, a
+resolução contra o schema e a conversão de tipos passam a rodar em N goroutines;
+o estado anterior, o merge e o `Put` continuam numa só, e uma esteira devolve os
+decodes ao writer na ordem de chegada — a mesma ordem que a execução serial
+produziria. O resultado é idêntico: há um golden que compara `SELECT *` e
+`_meta.fields` byte a byte entre 1 e 8 decodificadores.
+
+O default é `1`, e subir é decisão de MEDIÇÃO. O ganho satura cedo, porque a
+metade que escreve continua serial: em laboratório, 2 decodificadores dão 2,09×,
+4 empatam com 2 e **8 regridem para 1,49×** por contenção
+(`benchmark/baselines/decode-workers-20260828.txt`). Cada worker a mais também é
+memória: os slots da esteira retêm os buffers do decode, publicados em
+`nishidb_ingest_decode_arena_bytes`. Suba para 2, meça, e só então considere mais.
 
 ```bash
 nishidb server --config nishidb.yaml

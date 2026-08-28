@@ -83,6 +83,7 @@ source:
       maxPollRecords: 1000
       ingestionQueueSize: 5000             # gate de registros
       ingestionQueueBytes: 64MiB           # gate de BYTES
+      decodeWorkers: 1                     # decodificadores em paralelo; 1 é o default
     security:
       protocol: SASL_SSL
       saslMechanism: SCRAM-SHA-512
@@ -164,6 +165,17 @@ As métricas que respondem "está ingerindo?": `nishidb_ingest_events_total`,
 `nishidb_ingest_blocked` (1 = ingestão parada por política),
 `nishidb_ingest_failed_total`, `nishidb_kafka_errors_total`, e
 `nishidb_kafka_partitions_assigned` contra `nishidb_kafka_partitions_total`.
+
+As do **decode paralelo**, que só dizem alguma coisa junto de
+`nishidb_ingest_decode_workers` — o denominador de qualquer leitura de vazão,
+porque a mesma taxa de eventos com 1 e com 8 decodificadores significa coisas
+diferentes:
+
+| Série | O que ela responde |
+|---|---|
+| `nishidb_ingest_decode_serial_total` | Eventos que o writer teve de decodificar sozinho, por trazerem coluna ou tipo novo. Em regime é **plana**; `rate()` acima de zero por muito tempo diz que a origem não para de inventar chave — ou que o dicionário está no teto sob `onMaxCols: ignore`, e aí todo evento paga o parse dobrado |
+| `nishidb_ingest_decode_arena_bytes` | Memória que os slots da esteira seguram entre eventos. É o terceiro consumidor de memória da ingestão, e nenhum dos dois gates da fila o conta |
+| `nishidb_ingest_decode_slots_shrunk_total` | Slots que passaram do limiar e tiveram os buffers soltos. Zero com `arena_bytes` alto é memória presa; crescimento constante é churn de alocação, e aí o limiar está apertado demais para o tamanho dos eventos |
 
 **As três da posição saem do MESMO instantâneo**, por um coletor só, e é isso
 que faz `lag == high_watermark - offset` valer dentro de uma raspagem. A
@@ -274,6 +286,7 @@ acidental reprocessa ou pula uma janela inteira do tópico.
 | Mudança | Seguro? |
 |---|---|
 | `ingestionQueueSize`, `ingestionQueueBytes`, `maxPollRecords` | Sim. Só afeta o intake |
+| `decodeWorkers` | Sim, e o resultado **não muda o dado**: o golden `workers:1 × workers:8` compara `SELECT *` e `_meta.fields` byte a byte. O que muda é memória — cada slot da esteira retém buffers até a marca d'água —, e o ganho satura cedo: medido em laboratório, 2 dão 2,09× e 8 REGRIDEM para 1,49×. Suba de 1 para 2 e meça; de 4 em diante, só com medição do próprio dataset |
 | `errors.invalidEvent` | Sim |
 | `enabled: false` | Sim — é o botão de pausa declarativo de UM dataset |
 | `autoOffsetReset` | Inócuo depois da primeira subida: com posição local, ele não é consultado |

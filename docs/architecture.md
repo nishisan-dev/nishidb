@@ -51,11 +51,52 @@ materializa NDJSON num dataset; `query` executa SQL e escreve NDJSON.
 
 O caminho por arquivo (`nishidb ingest`) e o por tópico (`nishidb server`)
 compartilham materializer e storage; o que o Kafka acrescenta é a **posição**.
-O pipeline é o do §27 sem desvio — poller único, fila limitada, writer único —
-e os decode workers que o §27 marca como opcionais não existem: além de o §28
-dizer que 500 ev/s não justifica múltiplos writers, é o pipeline de uma
-goroutine de ponta a ponta que preserva a ordem por partição, que o §26 usa
-como critério de correção quando o dataset não declara `sequence`.
+O pipeline é o do §27 — poller único, fila limitada, writer único — com os
+**decode workers** que o §27 marca como opcionais, ligados por
+`source.kafka.consumer.decodeWorkers` e desligados por padrão (`1`).
+
+**O writer continua sendo um só, e isso não é negociável.** O que passou a ser
+paralelo é o DECODE: parse do JSON, resolução contra o schema e conversão de
+tipos, que o profile do piloto mediu em 298 dos 902 µs de CPU por evento. A
+aplicação — estado anterior, sequence check, merge, `Put`, `Apenda` — segue numa
+goroutine única, porque é ela que escreve, e o §28 continua valendo para ela.
+
+A ordem por partição do §26 também não depende mais de "uma goroutine de ponta a
+ponta", e a garantia que a substituiu é MAIS FORTE. Cada item recebe um número
+de sequência no ENVIO, que é sequencial; uma **esteira** — anel indexado por
+`seq & mask` — devolve os decodes ao writer nessa ordem. Consumir por `seq`
+crescente reproduz exatamente a sequência que a goroutine única veria: os mesmos
+vizinhos e o mesmo estado anterior em cada `Put`. A ordem por partição sai disso
+como caso particular.
+
+**A descoberta de campos NÃO é paralela, e a razão é de correção, não de
+desempenho.** `LookupOrCreate` atribui o FieldID na ordem de chamada, o FieldID
+é formato de disco e a posição da coluna no `SELECT *` é contrato do driver
+JDBC — com N decodificadores, essa ordem viraria a de quem ganha o mutex, e "o
+tipo é fixado na primeira observação" viraria "na primeira a chegar no lock". O
+decode é somente-leitura sobre o schema: ele para no primeiro metadado que teria
+de criar e devolve o evento intacto, e o writer o refaz pelo caminho completo,
+na ordem de offset. Em regime isso não acontece — o piloto tem ~1.700 colunas e
+não descobre mais nenhuma —, e o custo, quando acontece, é um parse dobrado por
+EVENTO de descoberta, medido em `nishidb_ingest_decode_serial_total`.
+
+**Quantos workers usar é medida, não intuição.** O ganho é limitado pela fração
+que continua serial, então ele satura cedo. Medido em laboratório com store em
+memória (`benchmark/baselines/decode-workers-20260828.txt`, mínimo de 10
+rodadas): **2 workers dão 2,09×; 4 empatam com 2 dentro da dispersão; 8
+regridem para 1,49×** por contenção. Em produção a aplicação é mais cara, então
+a saturação chega antes, nunca depois. O default é `1` e subir para `2` é a
+única mudança que esse baseline sustenta sem medição própria do dataset.
+
+**A esteira é o terceiro consumidor de memória da ingestão**, e nenhum dos dois
+gates da fila o enxerga: um conta registros enfileirados, o outro conta bytes de
+payload cru, e nenhum vê o arena tipado que o decode produziu e o slot reteve
+até a marca d'água. A janela do anel é o `maxPollRecords` (o trabalho em voo) e
+não o `ingestionQueueSize` (a rajada de entrada), o slot que passa do limiar tem
+os buffers SOLTOS ao ser liberado — o array, não o comprimento, que é a lição do
+débito 28 —, e o limiar por slot é derivado: `ingestionQueueBytes` dividido pela
+janela, com piso de uma página. `nishidb_ingest_decode_arena_bytes` e
+`nishidb_ingest_decode_slots_shrunk_total` são as duas metades da história.
 
 **O poller não espera mais o writer a cada lote.** Até 28/08/2026 ele emitia um
 marcador de fim de lote e bloqueava até o writer alcançá-lo, para só então
@@ -85,7 +126,7 @@ nenhuma contagem reclame. Um record acima do teto passa sozinho com a fila
 vazia, senão a ingestão travaria para sempre num deadlock que nenhuma métrica
 explicaria.
 
-![Pipeline de ingestão Kafka: fetch, fila limitada com backpressure, writer único, e a ordem persist → checkpoint durável → commit do offset](https://uml.nishisan.dev/proxy?src=https://git-raw.nishisan.dev/nishisan-dev/nishidb/main/docs/diagrams/kafka_pipeline.puml)
+![Pipeline de ingestão Kafka: fetch, fila limitada com backpressure, decode em K goroutines, esteira de reordenação por seq, writer único, e a ordem persist → checkpoint durável → commit do offset](https://uml.nishisan.dev/proxy?src=https://git-raw.nishisan.dev/nishisan-dev/nishidb/main/docs/diagrams/kafka_pipeline.puml)
 
 **A ordem do §48 é a única proteção contra perda.** O `manifest.bin` e o
 `kafka.offsets` são dois arquivos e dois renames, sem transação entre eles. Na
