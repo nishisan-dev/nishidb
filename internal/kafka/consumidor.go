@@ -233,6 +233,11 @@ func Abre(ctx context.Context, cfg *Config, o Opcoes) (*Consumidor, error) {
 	met.OlhaAFila(c.fila.Profundidade)
 	met.OlhaOsTempos(c.fila.Tempos)
 	c.w = NovoWriter(cfg, o.Mat, o.Store, c.fila, log, met, c.offsetsIniciais, o.Cadencia, c.commitNoBroker)
+	met.OlhaAEsteira(c.w.est.bytesRetidos)
+	met.decodeWorkers.Set(float64(cfg.DecodeWorkers))
+	log.Info("decode.workers", "decodificadores da ingestão",
+		"workers", cfg.DecodeWorkers, "janela", c.w.est.tamanho(),
+		"limiarPorSlot", c.w.limiarDeEncolhimento)
 	close(c.wPronto)
 	return c, nil
 }
@@ -504,6 +509,13 @@ func (c *Consumidor) Roda(ctx context.Context) error {
 	defer cancela()
 	c.cancelaPoll.Store(cancela)
 
+	// Os decodificadores sobem ANTES do writer. A ordem inversa deixaria o
+	// writer esperando num anel que ninguém alimenta até a última goroutine
+	// nascer — inofensivo, mas o encerramento tem ordem oposta e simétrica, e
+	// escrever as duas na mesma direção é o que torna a simetria legível.
+	pool := novoPoolDeDecode(c.cfg.DecodeWorkers, c.fila, c.w.est, c.w.mat, c.met, c.w.limiarDeEncolhimento)
+	esperaDecode := pool.Sobe(ctx)
+
 	erroWriter := make(chan error, 1)
 	go func() {
 		err := c.w.Roda(ctx)
@@ -531,8 +543,13 @@ func (c *Consumidor) Roda(ctx context.Context) error {
 
 	erro := c.poll(ctx)
 
-	// Fecha a fila para o writer drenar o que sobrou e checkpointar.
+	// Fecha a fila; os decodificadores drenam o que sobrou, publicam tudo o
+	// que reservaram e saem. SÓ ENTÃO a esteira é declarada sem mais eventos —
+	// com um decodificador vivo, um slot vazio no meio do anel é
+	// indistinguível de um decode em curso, e o writer encerraria com evento
+	// por aplicar.
 	c.fila.Fecha()
+	esperaDecode()
 	if e := <-erroWriter; e != nil && erro == nil {
 		erro = e
 	}

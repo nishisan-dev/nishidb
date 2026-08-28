@@ -2,6 +2,7 @@ package materializer
 
 import (
 	"errors"
+	"reflect"
 	"sort"
 	"time"
 
@@ -206,4 +207,84 @@ func (d *Decodificado) carimba(id types.FieldID, agoraMs int64) {
 	if i < len(d.entries) && d.entries[i].field.ID == id {
 		d.entries[i].val.I64 = agoraMs
 	}
+}
+
+// Tamanho dos elementos dos slices que a contabilidade de memória soma.
+//
+// Por reflexão, e não por unsafe.Sizeof: `internal/storage/mmap` é o único
+// pacote do projeto autorizado a importar unsafe, e a regra não abre exceção
+// para um uso benigno — a exceção é que corrói a regra. São `var` de pacote,
+// resolvidas uma vez na subida, então o custo não toca o caminho quente.
+var (
+	bytesPorEntry    = int(reflect.TypeOf(patchEntry{}).Size())
+	bytesPorContagem = int(reflect.TypeOf(contagem{}).Size())
+	bytesPorPai      = int(reflect.TypeOf(paiVisto{}).Size())
+	bytesPorFieldID  = int(reflect.TypeOf(types.FieldID(0)).Size())
+	bytesPorPonteiro = int(reflect.TypeOf((*schema.CompiledField)(nil)).Size())
+)
+
+// BytesRetidos é a memória que este Decodificado SEGURA entre eventos.
+//
+// É a soma das CAPACIDADES, e não dos comprimentos: o que ocupa memória é o
+// array, e todo buffer daqui é reusado com `[:0]`, que preserva o array
+// inteiro. É a mesma leitura que fechou o débito 28 no StreamWriter.
+//
+// POR QUE ISSO PRECISA SER MEDIDO. Com um decodificador só, este número é
+// irrelevante — é um buffer. Com uma esteira de K slots vivos ao mesmo tempo,
+// ele é multiplicado por K e passa a ser um consumidor de memória que nenhum
+// dos dois gates da fila conta: o de registros conta itens e o de bytes conta o
+// payload cru enfileirado, não o arena tipado que o decode produziu. Um evento
+// de 4 MiB decodificado uma vez prenderia 4 MiB naquele slot para sempre.
+//
+// O arena domina a soma, mas as parcelas menores entram porque a marca d'água
+// de cada uma é independente: um documento com 1.650 chaves infla `entries` e
+// `contagens` sem inflar o arena, e um valor com escape muito longo infla só o
+// scratch do parser.
+func (d *Decodificado) BytesRetidos() int {
+	n := cap(d.arena) + cap(d.folha) + cap(d.nomeBuf)
+	n += cap(d.entries)*bytesPorEntry + cap(d.contagens)*bytesPorContagem
+	n += cap(d.pais)*bytesPorPai + cap(d.paisFeitos)*bytesPorFieldID
+	n += cap(d.filhosBuf) * bytesPorPonteiro
+	n += d.parser.BytesRetidos()
+	for _, p := range d.aninhados {
+		n += p.BytesRetidos()
+	}
+	if d.descobridor != nil {
+		n += d.descobridor.BytesRetidos()
+	}
+	return n
+}
+
+// Encolhe solta os buffers deste Decodificado quando ele passou do limiar.
+//
+// Devolve true quando encolheu. O próximo evento realoca — que é o ponto: o
+// custo de uma realocação ocasional é preferível a K slots segurando, para
+// sempre, a marca d'água do maior evento que cada um viu.
+//
+// Solta TUDO, e não só o arena. Encolher a parcela dominante e deixar as outras
+// faria o número voltar a subir sem que ninguém entendesse por quê, e o slot
+// recém-encolhido é justamente aquele em que realocar custa menos: ele acabou
+// de ser drenado.
+//
+// Atribui nil, e não `[:0]`: o comprimento não é o que ocupa memória. É a mesma
+// correção do débito 28.
+func (d *Decodificado) Encolhe(limiar int) bool {
+	if limiar <= 0 || d.BytesRetidos() <= limiar {
+		return false
+	}
+	d.arena, d.folha, d.nomeBuf = nil, nil, nil
+	d.entries, d.contagens = nil, nil
+	d.pais, d.paisFeitos, d.filhosBuf = nil, nil, nil
+	d.parser.Encolhe()
+	for _, p := range d.aninhados {
+		p.Encolhe()
+	}
+	if d.descobridor != nil {
+		d.descobridor.Encolhe()
+	}
+	// O evento é uma janela sobre o record do lote anterior, e segurá-la
+	// impediria o lote inteiro de ser coletado — um slot ocioso manteria vivo o
+	// buffer de fetch que o originou.
+	d.evento = nil
+	return true
 }

@@ -78,6 +78,20 @@ type ConsumerSpec struct {
 	// desistir. Desistir devolve o dataset ao estado que a ingestão falha já
 	// tem hoje: consultas de pé, health reportando, e nada em silêncio.
 	WatchdogTentativas int
+	// DecodeWorkers é quantas goroutinas decodificam eventos em paralelo antes
+	// da esteira que os reordena para o writer único.
+	//
+	// Nasce em 1, e o default não é timidez: ligar paralelismo por default
+	// mudaria o perfil de memória de todo dataset existente — cada slot da
+	// esteira retém buffers até a marca d'água — sem medição que o justifique
+	// no dataset de quem atualiza. É a mesma convenção que o débito 95 fixou
+	// para `query.scanWorkers`.
+	//
+	// Aplicar não é aumentar sem pensar: o decode é ~33% do CPU por evento, e
+	// pela lei de Amdahl o ganho satura perto de 1,5× por mais que se
+	// acrescente. O benchmark de 1/2/4/8 existe para que a escolha saia de
+	// medida, não de intuição.
+	DecodeWorkers int
 }
 
 // SecuritySpec é `source.kafka.security` (§12).
@@ -162,6 +176,19 @@ const (
 	WatchdogTimeoutMinimo = 10 * time.Second
 	// WatchdogTentativasPadrao é quantas recriações antes de desistir.
 	WatchdogTentativasPadrao = 3
+
+	// DecodeWorkersPadrao é um: a ingestão nasce serial, como sempre foi.
+	DecodeWorkersPadrao = 1
+	// DecodeWorkersMaximo é o teto declarável.
+	//
+	// Existe porque a chave dimensiona goroutinas E memória: cada
+	// decodificador a mais é um slot a mais em voo, cada slot retém buffers
+	// até a marca d'água, e o orçamento do §109 é de 1 GiB para o processo
+	// inteiro. Um 10000 digitado por engano não deve ser aceito e depois
+	// explicado pelo OOM killer. O valor é folgado — o ganho satura em poucos
+	// workers, pela fração serial do pipeline —, então recusar acima dele não
+	// tira nada de ninguém.
+	DecodeWorkersMaximo = 64
 )
 
 // WatchdogDesligado é o literal que desliga o watchdog. `0` seria recusado
@@ -359,13 +386,14 @@ func validaConsumer(n *yaml.Node) (ConsumerSpec, error) {
 		IngestionQueueBytes: IngestionQueueBytesPadrao,
 		WatchdogTimeout:     WatchdogTimeoutPadrao,
 		WatchdogTentativas:  WatchdogTentativasPadrao,
+		DecodeWorkers:       DecodeWorkersPadrao,
 	}
 	if n == nil {
 		return c, specErrf("source.kafka.consumer.groupId obrigatório")
 	}
 	m, err := bloco(n, "source.kafka.consumer",
 		"groupId", "autoOffsetReset", "maxPollRecords", "ingestionQueueSize", "ingestionQueueBytes",
-		"watchdogTimeout", "watchdogTentativas")
+		"watchdogTimeout", "watchdogTentativas", "decodeWorkers")
 	if err != nil {
 		return c, err
 	}
@@ -424,6 +452,19 @@ func validaConsumer(n *yaml.Node) (ConsumerSpec, error) {
 	}
 	if c.WatchdogTentativas, err = inteiro(m, "source.kafka.consumer", "watchdogTentativas", WatchdogTentativasPadrao); err != nil {
 		return c, err
+	}
+	if c.DecodeWorkers, err = inteiro(m, "source.kafka.consumer", "decodeWorkers", DecodeWorkersPadrao); err != nil {
+		return c, err
+	}
+	if c.DecodeWorkers > DecodeWorkersMaximo {
+		// RECUSA, e não arredondamento para o teto: o operador que escreveu
+		// 10000 tem uma expectativa errada sobre o que a chave faz, e um
+		// processo que aceitasse em silêncio o deixaria com essa expectativa.
+		return c, specErrf(
+			"source.kafka.consumer.decodeWorkers %d passa do máximo de %d — "+
+				"cada decodificador é um slot em voo com buffers retidos, e o orçamento "+
+				"de memória do processo é de 1 GiB (§109)",
+			c.DecodeWorkers, DecodeWorkersMaximo)
 	}
 	return c, nil
 }

@@ -64,14 +64,24 @@ type Cadencia struct {
 // Materializer reusa patch/prevBuf/outBuf entre eventos e não é thread-safe:
 // duas goroutines aqui corromperiam o payload em construção.
 type Writer struct {
-	cfg    *Config
-	mat    *materializer.Materializer
-	store  Store
-	fila   *Fila
-	log    *logging.Logger
-	met    *metricas
-	origem checkpoint.Origem
-	cad    Cadencia
+	cfg   *Config
+	mat   *materializer.Materializer
+	store Store
+	// fila é a entrada do pipeline. O writer NÃO a consome: quem tira dela são
+	// os decodificadores. Ele a mantém porque o Quiesce enfileira a barreira
+	// nela, que é como a revogação entra na ordem total dos eventos.
+	fila *Fila
+	// est é a esteira de reordenação, a saída dos decodificadores e a única
+	// entrada do writer. Com decodeWorkers=1 ela tem um produtor só, e ainda
+	// assim está no caminho: um caminho de código, dimensionado diferente.
+	est *esteira
+	// limiarDeEncolhimento é o teto de memória retida por slot acima do qual os
+	// buffers são soltos ao liberar o slot. Ver o godoc de limiarDeSlot.
+	limiarDeEncolhimento int
+	log                  *logging.Logger
+	met                  *metricas
+	origem               checkpoint.Origem
+	cad                  Cadencia
 
 	// commit publica o offset no broker DEPOIS do checkpoint durável (§48).
 	// É injetado pelo consumer para manter o writer testável sem broker.
@@ -144,14 +154,16 @@ func NovoWriter(cfg *Config, mat *materializer.Materializer, st Store, fila *Fil
 	}
 	return &Writer{
 		cfg: cfg, mat: mat, store: st, fila: fila,
-		log:      log.Component("kafka").Dataset(cfg.Dataset),
-		met:      met,
-		origem:   cfg.Origem(),
-		cad:      cad,
-		commit:   commit,
-		offsets:  o,
-		ultimoCP: time.Now(),
-		parado:   make(chan struct{}),
+		est:                  novaEsteira(cfg.MaxPollRecords),
+		limiarDeEncolhimento: limiarDeSlot(cfg),
+		log:                  log.Component("kafka").Dataset(cfg.Dataset),
+		met:                  met,
+		origem:               cfg.Origem(),
+		cad:                  cad,
+		commit:               commit,
+		offsets:              o,
+		ultimoCP:             time.Now(),
+		parado:               make(chan struct{}),
 	}
 }
 
@@ -176,9 +188,13 @@ func (w *Writer) Roda(ctx context.Context) error {
 	defer paraDespertador()
 	// Fechar isto é o que destrava um Quiesce que chegou tarde demais.
 	defer close(w.parado)
+	// E isto destrava um decodificador esperando vaga na esteira. Sem ele, o
+	// writer que sai por ErrPausado deixa K goroutinas presas e o encerramento
+	// nunca termina — o supervisor mata o processo no meio de um checkpoint.
+	defer w.est.abandona()
 
 	for {
-		it, ok, acordou := w.fila.recebeOuAcorda(ctx, acorda)
+		s, ok, acordou := w.est.consome(ctx, acorda)
 		switch {
 		case acordou:
 			// Débito 56: sem evento novo o disparo por CONTAGEM nunca vem, e
@@ -197,14 +213,22 @@ func (w *Writer) Roda(ctx context.Context) error {
 			// aplicado antes de sair. Sem isto, um encerramento gracioso
 			// jogaria fora até um intervalo inteiro de checkpoint.
 			return w.finaliza(ctx)
-		case it.Barreira != nil:
+		case s.barreira != nil:
 			// Quiesce: tudo o que entrou na fila antes desta barreira já foi
 			// aplicado, então é AQUI que a posição vira durável. Checkpoint
 			// incondicional, e não talvezCheckpoint: quem pede o quiesce é a
 			// revogação, e "ainda não deu a hora" não é resposta para ela.
-			it.Barreira.conclui(w.checkpoint(ctx))
+			//
+			// A barreira atravessa a esteira como um evento qualquer, com seq
+			// próprio: é isso que garante que ela chegue ao writer DEPOIS de
+			// tudo o que foi enfileirado antes dela, mesmo com K
+			// decodificadores terminando fora de ordem.
+			s.barreira.conclui(w.checkpoint(ctx))
+			w.liberaSlot()
 		default:
-			if err := w.aplica(ctx, it); err != nil {
+			err := w.aplica(ctx, s)
+			w.liberaSlot()
+			if err != nil {
 				return err
 			}
 		}
@@ -230,13 +254,29 @@ func (w *Writer) despertador() (<-chan time.Time, func()) {
 	return t.C, t.Stop
 }
 
-func (w *Writer) aplica(ctx context.Context, it Item) error {
-	// A medida cobre SÓ o Apply. O talvezCheckpoint lá embaixo fica fora de
+// liberaSlot devolve o slot ao anel e contabiliza o encolhimento.
+//
+// Sempre depois de aplicar, inclusive no caminho de erro: o slot preso seria
+// uma vaga a menos para sempre, e com a janela cheia os decodificadores param.
+func (w *Writer) liberaSlot() {
+	if w.est.avanca(w.limiarDeEncolhimento) {
+		w.met.slotsEncolhidos.Inc()
+	}
+}
+
+func (w *Writer) aplica(ctx context.Context, s *slot) error {
+	it := Item{Rec: s.rec}
+	// A medida cobre SÓ o Aplica. O talvezCheckpoint lá embaixo fica fora de
 	// propósito: ele tem histograma próprio, e somá-lo aqui produziria um
 	// bimodal cujo p99 é sempre o stall de checkpoint, escondendo a cauda que
-	// o Apply de fato tem.
+	// o Aplica de fato tem.
+	//
+	// E cobre só a APLICAÇÃO, não o decode: com K decodificadores o tempo de
+	// decode passa a ser concorrente, e somá-lo aqui faria o histograma medir
+	// a soma de trabalhos paralelos como se fosse latência serial. O que este
+	// número responde é "o writer é o gargalo?", e o writer é o Aplica.
 	inicio := time.Now()
-	r := w.mat.Apply(it.Rec.Value)
+	r := w.mat.Aplica(&s.dec)
 	w.met.aplicaSeg.Observa(time.Since(inicio).Seconds())
 	w.conta(r)
 

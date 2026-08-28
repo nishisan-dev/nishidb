@@ -31,6 +31,13 @@ type Item struct {
 	Rec      *kgo.Record
 	Barreira *barreira
 	bytes    int64
+
+	// seq é a posição do item na sequência TOTAL de entrada, atribuída no
+	// envio. É por ela que a esteira reordena o que os decodificadores
+	// produzem fora de ordem, e é o que torna a afirmação de correção mais
+	// forte do que "preserva a ordem por partição": consumir por seq crescente
+	// reproduz exatamente a sequência que uma goroutine única veria.
+	seq int64
 }
 
 // barreira é o encontro entre quem pede o quiesce e o writer que o executa.
@@ -66,6 +73,18 @@ func (b *barreira) conclui(err error) {
 type Fila struct {
 	ch       chan Item
 	maxBytes int64
+
+	// proximaSeq numera os itens na ordem de ENVIO, que é a ordem que a
+	// esteira restaura do outro lado.
+	//
+	// POR QUE UM ATÔMICO BASTA, e a razão precisa estar escrita porque a
+	// ordem — não a unicidade — é o que importa. Há dois produtores: o poller,
+	// dentro do EachRecord, e a revogação, que enfileira a barreira do quiesce.
+	// Eles NÃO podem correr: com BlockRebalanceOnPoll, o franz-go impede um
+	// callback de revogação de rodar enquanto o poller segura o lote, e o
+	// EachRecord vive inteiro dentro dessa janela. É a mesma garantia em que o
+	// laço do poll já se apoia para ter tirado a barreira de fim de lote.
+	proximaSeq atomic.Int64
 
 	mu    sync.Mutex
 	bytes int64
@@ -157,7 +176,7 @@ func (f *Fila) Envia(ctx context.Context, r *kgo.Record) error {
 	if err := f.reserva(ctx, n); err != nil {
 		return err
 	}
-	it := Item{Rec: r, bytes: n}
+	it := Item{Rec: r, bytes: n, seq: f.proximaSeq.Add(1) - 1}
 	// Caminho rápido: cabe agora, e nada é medido porque nada esperou.
 	select {
 	case f.ch <- it:
@@ -195,7 +214,7 @@ func (f *Fila) EnviaBarreira(ctx context.Context, b *barreira) error {
 		return ErrFilaFechada
 	}
 	select {
-	case f.ch <- Item{Barreira: b}:
+	case f.ch <- Item{Barreira: b, seq: f.proximaSeq.Add(1) - 1}:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()

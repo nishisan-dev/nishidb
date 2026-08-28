@@ -53,11 +53,19 @@ type metricas struct {
 	// mentir por travamento de ninguém — no máximo não é emitido, e ausência
 	// é uma resposta honesta que a série congelada não dava.
 	filaViva func() (int, int64)
+	// esteiraViva é a memória retida pelos slots de decodificação, lida no
+	// scrape pela mesma razão da filaViva.
+	esteiraViva func() int64
 	// temposDaFila é a integral de espera dos dois lados, lida no scrape pela
 	// mesma razão da profundidade.
 	temposDaFila   func() (time.Duration, time.Duration)
 	partAtribuidas *metrics.SerieMedidor
 	partTotal      *metrics.SerieMedidor
+	// slotsEncolhidos e decodeWorkers são as duas séries da esteira de
+	// decodificação: quantas vezes um slot devolveu memória, e com quantos
+	// decodificadores o dataset subiu.
+	slotsEncolhidos *metrics.SerieContador
+	decodeWorkers   *metrics.SerieMedidor
 
 	// posicoes é a posição APLICADA por partição — o próximo offset a
 	// consumir —, publicada pelo writer a cada evento decidido.
@@ -155,6 +163,11 @@ func registraMetricas(r *metrics.Registry, dataset string) *metricas {
 			"Partições atribuídas a esta instância. Comparar com o total é o que torna visível o assignment parcial."),
 		partTotal: medidor(metrics.MetKafkaPartitionsTotal, "Partições do tópico."),
 
+		slotsEncolhidos: contador(metrics.MetIngestDecodeSlotsShrunk,
+			"Slots da esteira de decodificação cujos buffers foram soltos por passarem do limiar de memória retida. Crescimento constante é churn de alocação; zero com arena_bytes alto é memória presa."),
+		decodeWorkers: medidor(metrics.MetIngestDecodeWorkers,
+			"Decodificadores configurados para este dataset (source.kafka.consumer.decodeWorkers). É o denominador de qualquer leitura de vazão."),
+
 		aplicaSeg: r.Histograma(metrics.MetIngestApplySeconds,
 			"Latência de um evento pelo Apply: parse, estado, merge, Put e o Apenda do histórico. O checkpoint fica fora — ele tem histograma próprio.",
 			limitesDoApply, metrics.LabelDataset).Com(dataset),
@@ -166,6 +179,7 @@ func registraMetricas(r *metrics.Registry, dataset string) *metricas {
 	// emite nada. Registrar cedo mantém a ordem de exposição estável entre
 	// um consumidor que subiu e um que não subiu.
 	r.Coletor(metrics.ColetorFunc(m.amostrasDaFila))
+	r.Coletor(metrics.ColetorFunc(m.amostrasDaEsteira))
 	r.Coletor(metrics.ColetorFunc(m.amostrasDaPosicao))
 	return m
 }
@@ -176,6 +190,30 @@ func (m *metricas) OlhaAFila(f func() (int, int64)) { m.filaViva = f }
 
 // OlhaOsTempos instala a fonte da integral de espera. Mesma vida da OlhaAFila.
 func (m *metricas) OlhaOsTempos(f func() (time.Duration, time.Duration)) { m.temposDaFila = f }
+
+// OlhaAEsteira instala a fonte da memória retida pelos slots de decodificação.
+func (m *metricas) OlhaAEsteira(f func() int64) { m.esteiraViva = f }
+
+// amostrasDaEsteira lê a memória dos slots no instante do scrape.
+//
+// Lida da estrutura VIVA, e não de um medidor escrito pelo writer, pela mesma
+// razão que a profundidade da fila: um medidor escrito pelo laço congela
+// exatamente quando o laço trava, e foi assim que a profundidade mentiu no
+// travamento de 27/08/2026.
+//
+// Sem fonte instalada não emite nada: o dataset sem consumidor Kafka não tem
+// esteira, e zero ali afirmaria que existe uma e está vazia.
+func (m *metricas) amostrasDaEsteira() []metrics.Amostra {
+	if m.esteiraViva == nil {
+		return nil
+	}
+	return []metrics.Amostra{{
+		Nome: metrics.MetIngestDecodeArenaBytes, Tipo: metrics.TipoMedidor,
+		Valor:  float64(m.esteiraViva()),
+		Ajuda:  "Bytes que os slots da esteira de decodificação seguram entre eventos. Nenhum dos dois gates da fila conta esta memória.",
+		Labels: []metrics.Label{{Nome: metrics.LabelDataset, Valor: m.dataset}},
+	}}
+}
 
 // amostrasDaFila lê a fila no instante do scrape.
 //

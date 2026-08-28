@@ -310,6 +310,32 @@ const (
 	// então `rate()` acima de zero por muito tempo é a pergunta a fazer.
 	MetIngestDecodeSerial = "nishidb_ingest_decode_serial_total"
 
+	// MetIngestDecodeArenaBytes é a memória que os slots da esteira de
+	// decodificação seguram entre eventos, e MetIngestDecodeSlotsShrunk conta
+	// as vezes que um slot foi solto por passar do limiar.
+	//
+	// A esteira é o TERCEIRO consumidor de memória da ingestão, e os dois gates
+	// da fila não o enxergam: um conta registros enfileirados, o outro conta
+	// bytes de payload CRU, e nenhum vê o arena tipado que o decode produziu e
+	// o slot reteve até a marca d'água. Sem esta série, um evento de 4 MiB
+	// prenderia 4 MiB por slot para sempre, dentro de um orçamento de 1 GiB
+	// (§109), e a única pista seria o RSS subindo sem explicação.
+	//
+	// As duas juntas contam a história: a primeira diz quanto está preso, a
+	// segunda diz se o encolhimento está trabalhando. Só a primeira deixaria
+	// "não cresce" indistinguível de "cresce e é aparado sem parar", e o
+	// segundo é churn de alocação no caminho quente.
+	MetIngestDecodeArenaBytes  = "nishidb_ingest_decode_arena_bytes"
+	MetIngestDecodeSlotsShrunk = "nishidb_ingest_decode_slots_shrunk_total"
+
+	// MetIngestDecodeWorkers é quantos decodificadores o dataset subiu.
+	//
+	// Configuração publicada como série, e não só no log da subida, porque ela
+	// é o denominador de toda leitura de vazão do painel: `events_total` de um
+	// dataset com 8 decodificadores e de outro com 1 não são comparáveis, e o
+	// operador não tem de ir ao YAML para descobrir isso.
+	MetIngestDecodeWorkers = "nishidb_ingest_decode_workers"
+
 	// MetKafkaPartitionsAssigned contra MetKafkaPartitionsTotal é o que
 	// torna visível o assignment parcial — duas instâncias no mesmo group
 	// dividindo partições, cada dataset materializando metade (D10).

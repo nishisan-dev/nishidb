@@ -1,0 +1,200 @@
+package kafka
+
+import (
+	"context"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/twmb/franz-go/pkg/kgo"
+)
+
+// A esteira entrega em ordem de seq, publiquem os decodificadores na ordem que
+// publicarem.
+//
+// É a propriedade inteira do anel, e a afirmação é mais forte que "preserva a
+// ordem por partição": o seq é atribuído no envio, que é sequencial, então
+// consumir por seq crescente reproduz EXATAMENTE a sequência que a goroutine
+// única veria — os mesmos vizinhos e o mesmo estado anterior em cada Put. A
+// ordem por partição (§26) é um caso particular disso.
+//
+// A publicação é feita de trás para frente de propósito: é o pior caso, e o que
+// um anel quebrado entregaria invertido.
+func TestAEsteiraEntregaEmOrdemDeSeq(t *testing.T) {
+	e := novaEsteira(8)
+	ctx := context.Background()
+
+	const n = 8
+	for seq := int64(n - 1); seq >= 0; seq-- {
+		if d := e.reserva(seq); d == nil {
+			t.Fatalf("reserva(%d) devolveu nil", seq)
+		}
+		e.publica(seq, &kgo.Record{Offset: seq}, nil)
+	}
+
+	for quero := int64(0); quero < n; quero++ {
+		s, ok, acordou := e.consome(ctx, nil)
+		if !ok || acordou {
+			t.Fatalf("consome na posição %d: ok=%v acordou=%v", quero, ok, acordou)
+		}
+		if s.rec.Offset != quero {
+			t.Fatalf("consome devolveu offset %d, quero %d", s.rec.Offset, quero)
+		}
+		e.avanca(0)
+	}
+}
+
+// A janela é backpressure: reservar além dela ESPERA, e é o writer que
+// destrava.
+//
+// Sem isso o anel não seria limitado — um decodificador adiantado sobrescreveria
+// o slot de um evento ainda não aplicado, e o writer aplicaria o evento errado
+// sem que nada acusasse.
+func TestAJanelaSeguraQuemSeAdianta(t *testing.T) {
+	e := novaEsteira(2) // janela 2: seq 2 só cabe depois de o writer passar do 0
+
+	for seq := int64(0); seq < 2; seq++ {
+		e.reserva(seq)
+		e.publica(seq, &kgo.Record{Offset: seq}, nil)
+	}
+
+	entrou := make(chan struct{})
+	go func() {
+		e.reserva(2)
+		close(entrou)
+	}()
+	select {
+	case <-entrou:
+		t.Fatal("reserva(2) passou com a janela cheia: o anel não é limitado")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	s, ok, _ := e.consome(context.Background(), nil)
+	if !ok {
+		t.Fatal("consome não devolveu o slot 0")
+	}
+	_ = s
+	e.avanca(0)
+
+	select {
+	case <-entrou:
+	case <-time.After(time.Second):
+		t.Fatal("reserva(2) continuou presa depois de o writer avançar")
+	}
+}
+
+// K decodificadores concorrentes, ordem preservada.
+//
+// O teste anterior prova a reordenação com publicações sequenciais e
+// controladas; este a prova sob escalonamento real, que é onde um anel com
+// aritmética errada falha de vez em quando em vez de sempre. As goroutinas
+// pegam seq fora de ordem de propósito e dormem tempos diferentes.
+func TestEsteiraComKDecodificadoresPreservaAOrdem(t *testing.T) {
+	const n = 512
+	e := novaEsteira(64)
+	ctx := context.Background()
+
+	vistos := make([]int64, 0, n)
+	writerPronto := make(chan struct{})
+	go func() {
+		defer close(writerPronto)
+		for i := 0; i < n; i++ {
+			s, ok, _ := e.consome(ctx, nil)
+			if !ok {
+				return
+			}
+			vistos = append(vistos, s.rec.Offset)
+			e.avanca(0)
+		}
+	}()
+
+	// Um "poller" único distribui os seq em ordem para K workers, que é
+	// exatamente o que a FIFO faz: o conjunto em voo é sempre contíguo.
+	const k = 8
+	entrada := make(chan int64)
+	var wg sync.WaitGroup
+	for w := 0; w < k; w++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			for seq := range entrada {
+				if d := e.reserva(seq); d == nil {
+					return
+				}
+				// Tempos de decode diferentes por worker: é o que faz as
+				// publicações chegarem fora de ordem.
+				time.Sleep(time.Duration(w%3) * 50 * time.Microsecond)
+				e.publica(seq, &kgo.Record{Offset: seq}, nil)
+			}
+		}(w)
+	}
+	for seq := int64(0); seq < n; seq++ {
+		entrada <- seq
+	}
+	close(entrada)
+	wg.Wait()
+
+	select {
+	case <-writerPronto:
+	case <-time.After(10 * time.Second):
+		t.Fatal("o writer não consumiu tudo: o anel travou")
+	}
+	if len(vistos) != n {
+		t.Fatalf("o writer viu %d eventos, quero %d", len(vistos), n)
+	}
+	for i, v := range vistos {
+		if v != int64(i) {
+			t.Fatalf("posição %d entregou o seq %d: a esteira não reordenou", i, v)
+		}
+	}
+}
+
+// O encerramento não perde evento e não trava.
+//
+// São as duas metades do mesmo desenho: a esteira só é declarada sem mais
+// eventos DEPOIS de todo decodificador ter saído — antes disso, um slot vazio é
+// indistinguível de um decode em curso —, e quem espera vaga precisa ser
+// destravado quando o writer vai embora, ou o encerramento nunca termina.
+func TestEncerramentoDrenaTudoENaoTrava(t *testing.T) {
+	e := novaEsteira(16)
+	ctx := context.Background()
+
+	for seq := int64(0); seq < 8; seq++ {
+		e.reserva(seq)
+		e.publica(seq, &kgo.Record{Offset: seq}, nil)
+	}
+	e.semMaisEventos()
+
+	var vistos int
+	for {
+		_, ok, _ := e.consome(ctx, nil)
+		if !ok {
+			break
+		}
+		vistos++
+		e.avanca(0)
+	}
+	if vistos != 8 {
+		t.Fatalf("drenou %d de 8 eventos publicados antes do encerramento", vistos)
+	}
+
+	// E o outro lado: quem espera vaga com o writer já fora.
+	e2 := novaEsteira(1)
+	e2.reserva(0)
+	e2.publica(0, &kgo.Record{}, nil)
+	saiu := make(chan bool, 1)
+	go func() {
+		d := e2.reserva(1) // janela 1, slot 0 ocupado: espera
+		saiu <- d == nil
+	}()
+	time.Sleep(20 * time.Millisecond)
+	e2.abandona()
+	select {
+	case nulo := <-saiu:
+		if !nulo {
+			t.Error("reserva devolveu slot numa esteira abandonada")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("reserva ficou presa depois do abandono: o encerramento trava aqui")
+	}
+}

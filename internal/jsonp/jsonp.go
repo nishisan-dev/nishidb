@@ -97,6 +97,20 @@ type Parser struct {
 	err     error
 }
 
+// BytesRetidos é a capacidade do scratch que este parser segura entre eventos.
+//
+// Existe para a contabilidade de memória da ingestão paralela: com N slots de
+// decodificação vivos ao mesmo tempo, o scratch de cada um sobrevive entre
+// eventos e cresce até a marca d'água do maior valor com escape que passou por
+// ele. Sem esta leitura o gauge de memória dos slots mentiria por omissão.
+func (p *Parser) BytesRetidos() int { return cap(p.scratch) }
+
+// Encolhe solta o scratch, devolvendo a memória ao coletor.
+//
+// O que ocupa memória é o ARRAY, não o comprimento — é a lição do débito 28 —,
+// então `p.scratch[:0]` não devolveria nada. O próximo evento realoca.
+func (p *Parser) Encolhe() { p.scratch = nil }
+
 // Reset prepara o parser para um novo evento, reutilizando o scratch.
 func (p *Parser) Reset(data []byte) {
 	p.data = data

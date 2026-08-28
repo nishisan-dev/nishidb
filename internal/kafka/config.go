@@ -68,6 +68,13 @@ type Config struct {
 	WatchdogTimeout    time.Duration
 	WatchdogTentativas int
 
+	// DecodeWorkers é quantas goroutinas decodificam em paralelo antes da
+	// esteira que reordena para o writer único. Um é o default e a ingestão
+	// serial de sempre — mas passando pela esteira do mesmo jeito, porque um
+	// caminho de código dimensionado diferente é mais barato de manter, e de
+	// testar, do que dois.
+	DecodeWorkers int
+
 	// InvalidEvent é a política do §101 já resolvida.
 	InvalidEvent string
 
@@ -115,6 +122,7 @@ func Resolve(dataset string, k *schema.KafkaSpec, e schema.ErrorsSpec) (*Config,
 
 		WatchdogTimeout:    k.Consumer.WatchdogTimeout,
 		WatchdogTentativas: k.Consumer.WatchdogTentativas,
+		DecodeWorkers:      k.Consumer.DecodeWorkers,
 	}
 
 	sec := k.Security
