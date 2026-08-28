@@ -129,6 +129,27 @@ type Writer struct {
 	// esperaria para sempre. O group cairia por callback travado, as partições
 	// seriam revogadas e a ingestão morreria em silêncio.
 	parado chan struct{}
+
+	// iniciado fecha quando Roda começa, e é o QUARTO caso do Quiesce.
+	//
+	// O plano da Fase 3 nomeou três: barreira pronta, writer que já saiu, e
+	// contexto. Falta o writer que NUNCA subiu — e ele existe de verdade: o
+	// group do franz-go pode revogar partições durante o próprio Abre, antes de
+	// o Consumidor.Roda ter lançado goroutine nenhuma. Nesse instante a fila
+	// aceita a barreira (está aberta), ninguém a consome, `parado` não está
+	// fechado porque Roda não retornou, e o contexto que o franz-go passa ao
+	// callback de revogação não está cancelado. O Quiesce espera para sempre,
+	// dentro de um callback: o group cai, e o Close do cliente trava atrás dele.
+	//
+	// Medido: 2 travamentos em 12 execuções de
+	// TestDatasetVazioSemOffsetsSobeNormalmente sob -race, contra 0 em 12 antes
+	// da esteira. O buraco é ANTERIOR a ela — a Fase 3 já o tinha —, e a Fase 4
+	// só o tornou provável ao mudar o tempo da subida.
+	//
+	// Sem writer, a resposta é nil e não é atalho: a garantia do quiesce é que
+	// tudo o que entrou antes dele foi APLICADO e tornado durável, e nada foi
+	// aplicado. Ela vale por vacuidade.
+	iniciado chan struct{}
 }
 
 // Desfecho resume o que a ingestão fez, para o resumo e para os testes.
@@ -164,6 +185,7 @@ func NovoWriter(cfg *Config, mat *materializer.Materializer, st Store, fila *Fil
 		offsets:              o,
 		ultimoCP:             time.Now(),
 		parado:               make(chan struct{}),
+		iniciado:             make(chan struct{}),
 	}
 }
 
@@ -184,6 +206,10 @@ func (w *Writer) Desfecho() Desfecho {
 // Roda drena a fila até o contexto acabar, a fila fechar ou a ingestão
 // pausar. Devolve ErrPausado quando parou por política.
 func (w *Writer) Roda(ctx context.Context) error {
+	// Antes de qualquer outra coisa: é este fechamento que autoriza o Quiesce a
+	// esperar. Fechá-lo depois deixaria uma janela — estreita, e já basta — em
+	// que a revogação vê o writer como "não iniciado" enquanto ele está subindo.
+	close(w.iniciado)
 	acorda, paraDespertador := w.despertador()
 	defer paraDespertador()
 	// Fechar isto é o que destrava um Quiesce que chegou tarde demais.
@@ -390,6 +416,16 @@ func (w *Writer) para(ctx context.Context, motivo error, evento string, rec *kgo
 // sempre: os três braços do select são a barreira, o writer que já saiu, e o
 // contexto.
 func (w *Writer) Quiesce(ctx context.Context) error {
+	select {
+	case <-w.iniciado:
+	default:
+		// O writer nunca subiu — a revogação chegou durante o Abre. Não há o
+		// que drenar e não há quem drene: enfileirar a barreira aqui a deixaria
+		// órfã na fila e o callback esperando por ela para sempre. Ver o godoc
+		// de iniciado.
+		return nil
+	}
+
 	b := novaBarreira()
 	if err := w.fila.EnviaBarreira(ctx, b); err != nil {
 		if errors.Is(err, ErrFilaFechada) {

@@ -172,8 +172,15 @@ func TestQuiesceSoVoltaDepoisDeDrenar(t *testing.T) {
 	w := NovoWriter(cfg, nil, st, fila, nil, registraMetricas(nil, "eventos"),
 		map[int32]int64{0: 0}, Cadencia{Eventos: 1 << 30, Intervalo: time.Hour}, nil)
 
-	// Enfileira barreira numa fila que já tem itens à frente dela. Sem writer
-	// rodando, o Quiesce tem de ficar esperando.
+	// O writer é marcado como INICIADO sem que Roda rode: é a precondição que
+	// torna a afirmação deste teste possível de fazer. O Quiesce ganhou um
+	// quarto caso — writer que nunca subiu devolve nil na hora, porque nada foi
+	// aplicado e não há quem drene —, e sem esta marca o teste passaria por
+	// aquele atalho em vez de pelo caminho da barreira.
+	close(w.iniciado)
+
+	// Enfileira barreira numa fila que já tem itens à frente dela. Sem ninguém
+	// drenando, o Quiesce tem de ficar esperando.
 	ctx, cancela := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancela()
 	for i := 0; i < 8; i++ {
@@ -208,5 +215,47 @@ func TestQuiesceSoVoltaDepoisDeDrenar(t *testing.T) {
 	}
 	if st.chamadas != 0 {
 		t.Fatalf("o dublê registrou %d checkpoints: quem checkpointa é o writer, não o Quiesce", st.chamadas)
+	}
+}
+
+// O Quiesce volta na hora quando o writer NUNCA subiu.
+//
+// É o quarto caso, e o que faltava. O plano nomeou três — barreira pronta,
+// writer que já saiu, contexto —, e o group do franz-go pode revogar partições
+// durante o próprio Abre, antes de o Consumidor.Roda ter lançado goroutine
+// nenhuma. Nesse instante a fila aceita a barreira, ninguém a consome, `parado`
+// não está fechado porque Roda não retornou, e o contexto do callback não está
+// cancelado: o Quiesce espera para sempre DENTRO de um callback do franz-go, o
+// group cai atrás dele e o Close do cliente trava.
+//
+// Medido antes do conserto: 2 travamentos em 12 execuções de
+// TestDatasetVazioSemOffsetsSobeNormalmente sob -race.
+//
+// Devolver nil não é atalho: a garantia do quiesce é que tudo o que entrou
+// antes dele foi APLICADO e tornado durável, e sem writer nada foi aplicado.
+func TestQuiesceVoltaNaHoraSeOWriterNuncaSubiu(t *testing.T) {
+	cfg := &Config{Dataset: "eventos", Topic: "eventos", GroupID: "g",
+		Brokers: []string{"127.0.0.1:9092"}, MaxPollRecords: 8, QueueSize: 8, QueueBytes: 1 << 20}
+	fila := NovaFila(cfg.QueueSize, cfg.QueueBytes)
+	w := NovoWriter(cfg, nil, &storeLento{}, fila, nil, registraMetricas(nil, "eventos"),
+		map[int32]int64{0: 0}, Cadencia{Eventos: 1 << 30, Intervalo: time.Hour}, nil)
+
+	pronto := make(chan error, 1)
+	go func() { pronto <- w.Quiesce(context.Background()) }()
+	select {
+	case err := <-pronto:
+		if err != nil {
+			t.Fatalf("Quiesce = %v, quero nil", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Quiesce ficou esperando um writer que nunca subiu; é assim que o " +
+			"callback de revogação trava e o group cai atrás dele")
+	}
+
+	// E a barreira NÃO foi enfileirada: uma barreira órfã na fila seria
+	// consumida pelo primeiro decodificador que subisse, e o writer faria um
+	// checkpoint por uma revogação que já passou.
+	if reg, _ := fila.Profundidade(); reg != 0 {
+		t.Errorf("a fila ficou com %d item(ns); o Quiesce sem writer não pode enfileirar nada", reg)
 	}
 }

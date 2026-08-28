@@ -222,7 +222,13 @@ func TestAoRevogarEsperaWProntoAntesDeLerW(t *testing.T) {
 	// voltar na hora, sem store nem materializer reais.
 	parado := make(chan struct{})
 	close(parado)
-	c.w = &Writer{fila: NovaFila(1, 1<<20), parado: parado}
+	// `iniciado` fechado é o que mantém este teste medindo o que ele diz: o
+	// Quiesce ganhou um quarto caso — writer que NUNCA subiu — que devolve nil
+	// de imediato, e com ele aberto o teste passaria por esse atalho em vez de
+	// pelo braço do `parado`.
+	iniciado := make(chan struct{})
+	close(iniciado)
+	c.w = &Writer{fila: NovaFila(1, 1<<20), parado: parado, iniciado: iniciado}
 	close(c.wPronto)
 
 	select {
