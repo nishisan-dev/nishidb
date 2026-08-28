@@ -7,6 +7,7 @@ import (
 	"hash/crc32"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/nishisan-dev/nishidb/internal/types"
@@ -258,4 +259,139 @@ func TestHashInfoUsaFieldIDDeVerdade(t *testing.T) {
 	if len(got.Hashes) != 1 || got.Hashes[0].FieldID != 4242 {
 		t.Fatalf("FieldID não sobreviveu: %+v", got.Hashes)
 	}
+}
+
+// A seção da agenda de vencimentos faz o round-trip e leva o manifest à v2.
+func TestManifestComAgendaRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "manifest.bin")
+	want := sampleManifest()
+	want.Agenda = &AgendaInfo{DuracaoDeFundoMs: 2_592_000_000, BlockShift: 6, Niveis: 4}
+	if want.encode()[4] != manifestV2 {
+		t.Fatal("manifest com agenda não subiu para a v2")
+	}
+	if err := Write(path, &want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Agenda == nil {
+		t.Fatal("a seção da agenda sumiu no round-trip")
+	}
+	if *got.Agenda != *want.Agenda {
+		t.Fatalf("agenda voltou %+v, quer %+v", *got.Agenda, *want.Agenda)
+	}
+	// O corpo v1 tem de sobreviver intacto ao lado da cauda.
+	if len(got.Bitmaps) != 2 || got.Bitmaps[0] != want.Bitmaps[0] {
+		t.Fatalf("a cauda deslocou os bitmaps: %+v", got.Bitmaps)
+	}
+	if len(got.Segments) != 3 || got.Segments[2] != want.Segments[2] {
+		t.Fatalf("a cauda deslocou os segmentos: %+v", got.Segments)
+	}
+}
+
+// Sem agenda declarada o manifest continua na v1, byte a byte igual ao que o
+// binário anterior gravava: o rollback segue possível para quem nunca ligou a
+// expiração.
+func TestManifestSemAgendaContinuaV1(t *testing.T) {
+	m := sampleManifest()
+	if m.encode()[4] != manifestV1 {
+		t.Fatal("manifest sem agenda não saiu na v1")
+	}
+	if TamanhoDaCaudaTLV(&m) != 0 {
+		t.Fatalf("cauda de %d bytes num manifest sem seção nenhuma", TamanhoDaCaudaTLV(&m))
+	}
+	// E a reserva do encode tem de contar a seção quando ela existe: foi a
+	// conta duplicada que deixou a capacidade para trás quando o layout mudou.
+	comAgenda := sampleManifest()
+	comAgenda.Agenda = &AgendaInfo{DuracaoDeFundoMs: 1, BlockShift: 6, Niveis: 4}
+	if crescimento := len(comAgenda.encode()) - len(m.encode()); crescimento != TamanhoDaCaudaTLV(&comAgenda) {
+		t.Fatalf("a seção ocupou %d bytes; TamanhoDaCaudaTLV declara %d",
+			crescimento, TamanhoDaCaudaTLV(&comAgenda))
+	}
+}
+
+// A ordem dos registros é CRESCENTE por tag, e não a ordem em que as seções
+// foram inventadas: o manifest é comparado byte a byte pelos testes de
+// formato, e uma ordem que dependesse do histórico do produto mudaria o
+// arquivo sem que o conteúdo mudasse.
+func TestCaudaSaiEmOrdemCrescenteDeTagComAgenda(t *testing.T) {
+	m := sampleManifest()
+	m.Hashes = []HashInfo{{FieldID: 7, SlotCount: 1024}}
+	m.Modo, m.RowIDBase = 1, 500
+	m.Agenda = &AgendaInfo{DuracaoDeFundoMs: 60_000, BlockShift: 6, Niveis: 4}
+	raw := m.encode()
+	cauda := raw[len(raw)-4-TamanhoDaCaudaTLV(&m) : len(raw)-4]
+
+	var tags []uint16
+	for pos := 0; pos+tlvHeaderSize <= len(cauda); {
+		tag := binary.LittleEndian.Uint16(cauda[pos:])
+		n := binary.LittleEndian.Uint32(cauda[pos+2:])
+		tags = append(tags, tag)
+		pos += tlvHeaderSize + int(n)
+	}
+	if len(tags) != 3 {
+		t.Fatalf("a cauda tem %d registros, quer 3: %#04x", len(tags), tags)
+	}
+	if !slices.IsSorted(tags) {
+		t.Fatalf("as tags saíram fora de ordem crescente: %#04x", tags)
+	}
+}
+
+// A seção é CRÍTICA, e o modo de falha que isso impede não é índice
+// incompleto — é silêncio.
+//
+// A agenda é derivada da duração de fundo. Um binário que a adotasse sem
+// saber que ela existe manteria uma árvore construída a partir de uma duração
+// que ele já não honra, e as linhas simplesmente nunca venceriam: com o CRC
+// batendo, sem erro, sem log e sem métrica. Por isso a tag carrega o bit
+// crítico, que obriga a recusa.
+func TestSecaoDaAgendaEhCritica(t *testing.T) {
+	if tagAgenda&tagCritica == 0 {
+		t.Fatalf("a tag da agenda é %#04x, sem o bit crítico: um binário antigo a ignoraria em silêncio", tagAgenda)
+	}
+	m := sampleManifest()
+	m.Agenda = &AgendaInfo{DuracaoDeFundoMs: 60_000, BlockShift: 6, Niveis: 4}
+	raw := m.encode()
+	// Troca a tag por outra crítica que ninguém conhece: é o que um binário
+	// mais novo produziria, e a decodificação tem de RECUSAR.
+	var marca [2]byte
+	binary.LittleEndian.PutUint16(marca[:], tagAgenda)
+	i := bytes.Index(raw, marca[:])
+	if i < 0 {
+		t.Fatal("registro da agenda não encontrado")
+	}
+	binary.LittleEndian.PutUint16(raw[i:], 0x8FFF)
+	recrc(raw)
+	if _, err := decode(raw); !errors.Is(err, ErrCorruptManifest) {
+		t.Fatalf("seção crítica desconhecida foi aceita: %v", err)
+	}
+}
+
+// Seção da agenda com tamanho errado é corrupção, não "campo ausente": ler
+// pela metade daria uma agenda com blockShift zero, que endereça tudo no
+// mesmo bloco.
+func TestSecaoDaAgendaTruncadaEhRecusada(t *testing.T) {
+	m := sampleManifest()
+	m.Agenda = &AgendaInfo{DuracaoDeFundoMs: 60_000, BlockShift: 6, Niveis: 4}
+	raw := m.encode()
+	var marca [2]byte
+	binary.LittleEndian.PutUint16(marca[:], tagAgenda)
+	i := bytes.Index(raw, marca[:])
+	if i < 0 {
+		t.Fatal("registro da agenda não encontrado")
+	}
+	binary.LittleEndian.PutUint32(raw[i+2:], agendaInfoSize-1)
+	recrc(raw)
+	if _, err := decode(raw); err == nil {
+		t.Fatal("manifest com seção de agenda truncada foi aceito")
+	}
+}
+
+// recrc reescreve o checksum depois de uma adulteração, para que a recusa
+// venha da checagem que o teste quer exercitar e não do CRC.
+func recrc(raw []byte) {
+	corpo := raw[:len(raw)-4]
+	binary.LittleEndian.PutUint32(raw[len(raw)-4:], crc32.Checksum(corpo, castagnoli))
 }

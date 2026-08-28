@@ -73,6 +73,16 @@ const (
 	tagCritica = 0x8000
 	// tagHashes é a seção do conjunto de índices hash (§ índice hash físico).
 	tagHashes = 0x8001
+	// tagAgenda é a seção da agenda de vencimentos. Ela é crítica pelo mesmo
+	// motivo das outras duas, com um modo de falha próprio: a agenda é
+	// DERIVADA da duração de fundo, do fanout e do número de níveis, e um
+	// binário que a ignorasse continuaria adotando uma árvore construída a
+	// partir de parâmetros que ele já não honra. O sintoma não seria índice
+	// incompleto nem resposta errada — seria linha que NUNCA vence, com o CRC
+	// batendo, sem erro, sem log e sem métrica. É a única das três seções em
+	// que a falha é puramente silenciosa.
+	tagAgenda = 0x8003
+
 	// tagHistorico é a seção do MODO do dataset e da marca-d'água de
 	// retenção. Ela é crítica pelo pior modo de falha que este formato tem:
 	// um binário que a ignorasse abriria um log append-only de eventos como
@@ -89,6 +99,9 @@ const (
 
 	// historicoInfoSize é `modo u8 | rowIDBase u64`.
 	historicoInfoSize = 9
+
+	// agendaInfoSize é `duracaoDeFundoMs u64 | blockShift u8 | niveis u8`.
+	agendaInfoSize = 10
 )
 
 var (
@@ -152,6 +165,26 @@ type HashInfo struct {
 	SlotCount uint64
 }
 
+// AgendaInfo descreve a agenda de vencimentos gravada no dataset.
+//
+// Os três campos são os que DECIDEM o conteúdo da árvore, e é por isso que
+// eles moram no manifest em vez de serem inferidos dos arquivos: divergir em
+// qualquer um deles obriga a reconstruir.
+//
+// DuracaoDeFundoMs é o mais importante dos três, e o menos óbvio. A linha sem
+// prazo próprio herda a duração de fundo, então o vencimento agendado dela é
+// função dela — mudar a duração no YAML move, em silêncio, o vencimento de
+// toda linha com prazo desconhecido. Hoje esse efeito é invisível; com a
+// agenda ele vira um rebuild explícito, logado e com custo medido.
+//
+// BlockShift e Niveis são a geometria: uma árvore lida com o fanout errado
+// endereça o bloco errado em cada nível.
+type AgendaInfo struct {
+	DuracaoDeFundoMs uint64
+	BlockShift       uint8
+	Niveis           uint8
+}
+
 // Manifest é o estado amarrado por um checkpoint.
 type Manifest struct {
 	Epoch               uint64
@@ -169,6 +202,10 @@ type Manifest struct {
 	// Hashes é a primeira seção da cauda TLV. Vazia mantém o manifest na v1,
 	// byte a byte igual ao que o binário anterior gravava.
 	Hashes []HashInfo
+
+	// Agenda é a seção 0x8003, e é nil no dataset sem expiração declarada —
+	// que é o que o mantém na v1.
+	Agenda *AgendaInfo
 
 	// Modo é a engine do dataset: 0 materializado, 1 histórico. O tipo é
 	// uint8 cru e não um enum do storage porque este pacote descreve um
@@ -203,6 +240,9 @@ func TamanhoDaCaudaTLV(m *Manifest) int {
 	}
 	if m.temHistorico() {
 		n += tlvHeaderSize + historicoInfoSize
+	}
+	if m.Agenda != nil {
+		n += tlvHeaderSize + agendaInfoSize
 	}
 	return n
 }
@@ -274,6 +314,12 @@ func (m *Manifest) appendCauda(b []byte) []byte {
 		b = binary.LittleEndian.AppendUint32(b, historicoInfoSize)
 		b = append(b, m.Modo)
 		b = binary.LittleEndian.AppendUint64(b, m.RowIDBase)
+	}
+	if m.Agenda != nil {
+		b = binary.LittleEndian.AppendUint16(b, tagAgenda)
+		b = binary.LittleEndian.AppendUint32(b, agendaInfoSize)
+		b = binary.LittleEndian.AppendUint64(b, m.Agenda.DuracaoDeFundoMs)
+		b = append(b, m.Agenda.BlockShift, m.Agenda.Niveis)
 	}
 	return b
 }
@@ -388,6 +434,10 @@ func decodeCauda(r *reader, m *Manifest) error {
 			if err := decodeHistorico(payload, m); err != nil {
 				return err
 			}
+		case tag == tagAgenda:
+			if err := decodeAgenda(payload, m); err != nil {
+				return err
+			}
 		case tag&tagCritica != 0:
 			// Ignorar uma seção crítica desconhecida é o modo de falha que
 			// esta política existe para impedir: o dataset teria um índice
@@ -432,6 +482,28 @@ func decodeHistorico(payload []byte, m *Manifest) error {
 	if hr.bad {
 		return fmt.Errorf("%w: seção de histórico truncada", ErrCorruptManifest)
 	}
+	return nil
+}
+
+// decodeAgenda lê a seção 0x8003.
+//
+// Tamanho exato, e não "pelo menos": uma seção curta lida pela metade daria
+// blockShift zero, que endereça o dataset inteiro num bloco só, e niveis zero,
+// que é uma árvore sem folhas. Nenhum dos dois falha na leitura — os dois
+// falham depois, agendando errado.
+func decodeAgenda(payload []byte, m *Manifest) error {
+	if len(payload) != agendaInfoSize {
+		return fmt.Errorf("%w: seção da agenda tem %d bytes, esperado %d",
+			ErrCorruptManifest, len(payload), agendaInfoSize)
+	}
+	ar := &reader{b: payload}
+	info := AgendaInfo{DuracaoDeFundoMs: ar.u64()}
+	info.BlockShift = ar.u8()
+	info.Niveis = ar.u8()
+	if ar.bad {
+		return fmt.Errorf("%w: seção da agenda truncada", ErrCorruptManifest)
+	}
+	m.Agenda = &info
 	return nil
 }
 
