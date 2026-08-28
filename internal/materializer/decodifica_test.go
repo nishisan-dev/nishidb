@@ -4,6 +4,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nishisan-dev/nishidb/internal/jsonp"
+
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 	"github.com/nishisan-dev/nishidb/internal/testutil/fakestorage"
@@ -187,5 +189,89 @@ func TestDoisDecodificadosNaoSeAtrapalham(t *testing.T) {
 		if v.I64 != quero {
 			t.Errorf("%s.severidade = %d, quero %d", key, v.I64, quero)
 		}
+	}
+}
+
+// O slot não segura o buffer do evento depois de aplicado.
+//
+// O evento é uma JANELA sobre o record que o franz-go entregou, e o record é
+// uma janela sobre o buffer de fetch do lote. Um slot ocioso que guarde essa
+// janela mantém vivo o lote INTEIRO — megabytes por causa de alguns KiB —, e o
+// anel tem uma janela de slots. É memória que nenhum dos dois gates da fila
+// conta, porque a fila já devolveu o orçamento de bytes no Recebe.
+//
+// São cinco referências e faltar uma é o mesmo que faltar todas: a direta, a do
+// documento do pai, e o `data` dos três parsers. O teste cobra as cinco,
+// porque uma sobrevivente segura o mesmo lote que as outras cinco juntas.
+func TestOSlotNaoSeguraOBufferDoEventoDepoisDeAplicar(t *testing.T) {
+	c, st := compiladoComExpire(t, descobreYAML)
+	_ = st
+	m := mustNew(t, c, fakestorage.New(fakestorage.Indexes{}))
+
+	var d Decodificado
+	m.Decodifica(&d, []byte(`{"id":"A","doc":{"a":1,"b":"x"}}`))
+	if r := m.Aplica(&d); r.Err != nil {
+		t.Fatalf("Aplica: %v", r.Err)
+	}
+	// Antes do Libera, o slot segura o evento — é o estado normal em voo.
+	if d.evento == nil {
+		t.Fatal("o teste não alcançou o estado que ele mede: o evento já estava solto")
+	}
+
+	d.Libera()
+
+	if d.evento != nil {
+		t.Error("evento continua preso ao slot")
+	}
+	for i := range d.pais {
+		if d.pais[i].valor != nil || d.pais[i].campo != nil {
+			t.Errorf("pais[%d] continua apontando para o documento do evento", i)
+		}
+	}
+	// O `clear` antes do truncamento é o que faz a asserção acima valer: com
+	// `pais[:0]` puro, os ponteiros ficam além do comprimento e o coletor os
+	// enxerga do mesmo jeito.
+	for _, p := range append([]*jsonp.Parser{&d.parser, d.descobridor}, d.aninhados...) {
+		if p == nil {
+			continue
+		}
+		if p.BytesDeEntradaRetidos() != 0 {
+			t.Errorf("um parser continua com %d bytes do evento", p.BytesDeEntradaRetidos())
+		}
+	}
+}
+
+// Encolher solta o arena DE VERDADE, e não só o cabeçalho dele.
+//
+// `key` é uma janela sobre o arena. Anular o arena e deixar a key faria o array
+// continuar vivo por aquela referência — e o gauge, que soma `cap(arena)` e
+// passou a ver zero, AFIRMARIA que a memória foi devolvida. Métrica mentindo é
+// pior que memória presa: tira de quem opera a chance de descobrir.
+func TestEncolherSoltaAKeyJuntoComOArena(t *testing.T) {
+	c, _ := compiladoComExpire(t, descobreYAML)
+	m := mustNew(t, c, fakestorage.New(fakestorage.Indexes{}))
+
+	var d Decodificado
+	m.Decodifica(&d, []byte(`{"id":"A","doc":{"a":1}}`))
+	if r := m.Aplica(&d); r.Err != nil {
+		t.Fatalf("Aplica: %v", r.Err)
+	}
+	if len(d.key) == 0 {
+		t.Fatal("o teste não alcançou o estado que ele mede: a key está vazia")
+	}
+	// Na ordem da produção: o anel chama Libera e depois Encolhe, e as duas
+	// juntas é que devolvem o slot vazio. Chamar só uma delas mediria metade.
+	d.Libera()
+	if !d.Encolhe(1) { // limiar 1: encolhe sempre
+		t.Fatal("Encolhe não encolheu com limiar 1")
+	}
+	if d.key != nil {
+		t.Error("key continua apontando para o arena que o Encolhe diz ter soltado")
+	}
+	if d.arena != nil {
+		t.Error("arena continua apontado")
+	}
+	if n := d.BytesRetidos(); n != 0 {
+		t.Errorf("BytesRetidos = %d depois de encolher tudo, quero 0", n)
 	}
 }

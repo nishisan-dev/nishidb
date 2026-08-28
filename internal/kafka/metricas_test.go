@@ -1,6 +1,9 @@
 package kafka
 
 import (
+	"bytes"
+	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -105,5 +108,53 @@ func TestCadaEsperaSaiDaSuaFonteEUmaVezSo(t *testing.T) {
 		if got[0] != quero {
 			t.Errorf("%s = %v, quero %v — as duas fontes estão trocadas", nome, got[0], quero)
 		}
+	}
+}
+
+// O gauge de decodificadores nunca publica ZERO.
+//
+// A família materializa a série assim que ela é criada, e o Registry não
+// desregistra: um dataset cujo consumidor não sobe — broker fora, assignment
+// recusado, posição divergente — publicaria `decodeWorkers = 0` se o Set
+// estivesse depois do primeiro caminho de erro. E zero não descreve estado
+// nenhum: o parse do YAML RECUSA 0, então o valor é impossível por construção.
+// Ele descreveria o gauge não ter sido escrito, que é a única coisa que o
+// operador não pode adivinhar olhando o painel.
+func TestOGaugeDeDecodificadoresNuncaSaiEmZero(t *testing.T) {
+	// A prova é feita pelo Abre de verdade, e num caminho que FALHA cedo: sem
+	// broker, ele não passa do primeiro contato. Se o Set estivesse depois desse
+	// ponto, o gauge ficaria no zero com que a família nasce.
+	cfg := &Config{
+		Dataset: "events", Topic: "t", GroupID: "g",
+		Brokers:        []string{"127.0.0.1:1"}, // recusa conexão
+		MaxPollRecords: 32, QueueSize: 8, QueueBytes: 1 << 20,
+		DecodeWorkers: 3,
+	}
+	reg := metrics.NewRegistry()
+	ctx, cancela := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancela()
+	if c, err := Abre(ctx, cfg, Opcoes{Store: storeGolden{}, Metrics: reg}); err == nil {
+		c.Fecha()
+		t.Skip("o Abre subiu: este teste precisa do caminho de falha para valer")
+	}
+
+	// Lê pela superfície de exposição, que é o que o operador vê.
+	var buf bytes.Buffer
+	if _, err := reg.WriteTo(&buf); err != nil {
+		t.Fatal(err)
+	}
+	var linha string
+	for _, l := range strings.Split(buf.String(), "\n") {
+		if strings.HasPrefix(l, metrics.MetIngestDecodeWorkers+"{") {
+			linha = l
+		}
+	}
+	if linha == "" {
+		t.Fatalf("%s não foi publicada", metrics.MetIngestDecodeWorkers)
+	}
+	if !strings.HasSuffix(linha, " 3") {
+		t.Errorf("%s depois de um Abre que falhou: %q. Quero 3 — zero é impossível, "+
+			"o parse do YAML recusa 0, e só significaria que o Set ficou atrás de um "+
+			"caminho de erro", metrics.MetIngestDecodeWorkers, linha)
 	}
 }

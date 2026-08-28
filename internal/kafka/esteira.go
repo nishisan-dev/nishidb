@@ -229,6 +229,11 @@ func (e *esteira) avanca(limiarDeEncolhimento int) bool {
 	e.mu.Lock()
 	s := &e.slots[e.proxima&e.mask]
 	s.pronto, s.rec, s.barreira = false, nil, nil
+	// Libera SEMPRE, Encolhe só acima do limiar. São coisas diferentes: a
+	// primeira solta memória de outro dono (o buffer de fetch de que o evento é
+	// janela), e segurá-la num slot ocioso mantém vivo o lote inteiro; a segunda
+	// devolve os buffers que são nossos, ao preço de o próximo evento realocar.
+	s.dec.Libera()
 	encolheu := s.dec.Encolhe(limiarDeEncolhimento)
 	s.retidos.Store(int64(s.dec.BytesRetidos()))
 	e.proxima++
@@ -285,8 +290,27 @@ func (e *esteira) abandona() {
 	e.livre.Broadcast()
 }
 
-// potenciaDeDois arredonda a janela para cima até a potência de dois.
+// janelaMaxima é o teto do anel, em slots.
+//
+// Existe porque `maxPollRecords` é um inteiro positivo sem teto declarado, e o
+// arredondamento para potência de dois é um laço de deslocamento: com um valor
+// perto de 2^62 o deslocamento estoura para negativo, depois para zero, e o
+// laço NUNCA converge — o processo trava na subida, sem log, sem erro e sem
+// diagnóstico. Um teto transforma "trava" em "degrada".
+//
+// 65.536 slots é ordem de grandeza acima de qualquer lote de poll plausível
+// (o padrão é 1.000) e já custa alguns MiB só em estruturas de slot. Acima
+// disso o anel deixa de comprar sobreposição — o trabalho em voo é limitado
+// pela velocidade dos decodificadores, não pelo tamanho do anel — e passa a ser
+// só memória.
+const janelaMaxima = 1 << 16
+
+// potenciaDeDois arredonda a janela para cima até a potência de dois, limitada
+// a janelaMaxima.
 func potenciaDeDois(janela int) int64 {
+	if janela >= janelaMaxima {
+		return janelaMaxima
+	}
 	n := int64(1)
 	for n < int64(janela) {
 		n <<= 1
@@ -308,9 +332,21 @@ const paginaDoSO = 4096
 // segurar de eventos em voo: `ingestionQueueBytes`, o segundo gate da fila. A
 // esteira é um consumidor da mesma natureza — memória presa por evento que
 // ainda não virou linha —, e cada um dos seus slots pode reter, no máximo, a
-// parte média desse orçamento. Com isso o total retido pela esteira fica na
-// mesma ordem do que a fila já podia reter: a memória em voo da ingestão no
-// máximo dobra, em vez de crescer sem teto.
+// parte média desse orçamento.
+//
+// O QUE ESTE LIMIAR GOVERNA, E O QUE ELE NÃO GOVERNA. Ele é aplicado ao LIBERAR
+// o slot, então o que ele limita é o que os slots OCIOSOS carregam de um evento
+// para o próximo — a marca d'água que nunca encolhe, que é o vazamento lento
+// que a Fase 4 podia introduzir. Ele NÃO limita o pico: um anel cheio de
+// eventos decodificados e ainda não aplicados segura os arenas de todos eles,
+// cada um do tamanho do seu evento, e o gate de bytes da fila já devolveu esse
+// orçamento no dequeue. O teto do pico é a janela vezes o maior evento em voo.
+//
+// Não há gate para o pico, e não há um de propósito: recusar um evento por
+// causa da soma dos vizinhos seria descartar dado por pressão de memória, que é
+// exatamente o que o §101 não autoriza. O que existe é a MEDIDA —
+// `nishidb_ingest_decode_arena_bytes`, lida da estrutura viva no scrape —, e é
+// dela que sai a decisão de baixar `maxPollRecords`. Registrado como débito.
 //
 // Nos padrões do produto — 64 MiB de fila e janela de 1.024 — dá 64 KiB por
 // slot, o que é folgado para um evento RADIUS (~2,4 KiB medidos no piloto) e

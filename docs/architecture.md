@@ -92,10 +92,20 @@ a saturação chega antes, nunca depois. O default é `1` e subir para `2` é a
 gates da fila o enxerga: um conta registros enfileirados, o outro conta bytes de
 payload cru, e nenhum vê o arena tipado que o decode produziu e o slot reteve
 até a marca d'água. A janela do anel é o `maxPollRecords` (o trabalho em voo) e
-não o `ingestionQueueSize` (a rajada de entrada), o slot que passa do limiar tem
-os buffers SOLTOS ao ser liberado — o array, não o comprimento, que é a lição do
-débito 28 —, e o limiar por slot é derivado: `ingestionQueueBytes` dividido pela
-janela, com piso de uma página. `nishidb_ingest_decode_arena_bytes` e
+não o `ingestionQueueSize` (a rajada de entrada), **arredondado para cima até a
+potência de dois** — o índice do anel é `seq & mask`, e a máscara só existe
+assim; com o padrão de 1.000, a janela efetiva é 1.024. O slot que passa do
+limiar tem os buffers SOLTOS ao ser liberado — o array, não o comprimento, que é
+a lição do débito 28 —, e o limiar por slot é derivado: `ingestionQueueBytes`
+dividido por essa janela efetiva, com piso de uma página.
+
+**Soltar o buffer e soltar a referência são coisas diferentes**, e confundi-las
+custou um conserto. O slot devolve SEMPRE as janelas sobre o evento — a direta,
+a do documento do pai e o `data` dos parsers —, porque essa memória é do buffer
+de fetch do franz-go e segurá-la num slot ocioso mantém vivo o lote inteiro. Já
+os buffers do decode, que são nossos, só são soltos acima do limiar, e aí a
+`key` vai junto do arena: ela é uma janela sobre ele, e esquecê-la manteria o
+array vivo enquanto o gauge afirmaria que a memória voltou. `nishidb_ingest_decode_arena_bytes` e
 `nishidb_ingest_decode_slots_shrunk_total` são as duas metades da história.
 
 **Duas séries mudaram de dono junto, e a troca seria invisível.** O

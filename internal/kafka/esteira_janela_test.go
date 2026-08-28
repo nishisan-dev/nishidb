@@ -43,3 +43,23 @@ func TestAJanelaArredondaParaCima(t *testing.T) {
 		}
 	}
 }
+
+// A janela tem TETO, e o teto existe para trocar "trava" por "degrada".
+//
+// `maxPollRecords` é um inteiro positivo sem limite superior declarado, e o
+// arredondamento é um laço de deslocamento: perto de 2^62 o deslocamento estoura
+// para negativo, depois para zero, e o laço nunca converge. O processo travaria
+// na subida — sem log, sem erro, sem diagnóstico —, que é o pior desfecho
+// possível para um valor de configuração absurdo.
+func TestAJanelaTemTetoENaoTravaComValorAbsurdo(t *testing.T) {
+	for _, pedido := range []int{janelaMaxima, janelaMaxima + 1, 1 << 40, int(^uint(0) >> 1)} {
+		got := potenciaDeDois(pedido)
+		if got != janelaMaxima {
+			t.Errorf("potenciaDeDois(%d) = %d, quero o teto de %d", pedido, got, janelaMaxima)
+		}
+	}
+	// E o teto não pode ter engolido a faixa útil.
+	if got := potenciaDeDois(1000); got != 1024 {
+		t.Errorf("potenciaDeDois(1000) = %d, quero 1024", got)
+	}
+}

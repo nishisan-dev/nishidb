@@ -174,7 +174,7 @@ diferentes:
 | Série | O que ela responde |
 |---|---|
 | `nishidb_ingest_decode_serial_total` | Eventos que o writer teve de decodificar sozinho, por trazerem coluna ou tipo novo. Em regime é **plana**; `rate()` acima de zero por muito tempo diz que a origem não para de inventar chave — ou que o dicionário está no teto sob `onMaxCols: ignore`, e aí todo evento paga o parse dobrado |
-| `nishidb_ingest_decode_arena_bytes` | Memória que os slots da esteira seguram entre eventos. É o terceiro consumidor de memória da ingestão, e nenhum dos dois gates da fila o conta |
+| `nishidb_ingest_decode_arena_bytes` | Memória que os slots da esteira seguram, tanto entre eventos quanto em voo. É o terceiro consumidor de memória da ingestão, e nenhum dos dois gates da fila o conta — o de registros porque o record já saiu da fila, o de bytes porque ele devolveu o orçamento no dequeue. **É a única medida do pico**, e o remédio quando ela incomoda é baixar `maxPollRecords` |
 | `nishidb_kafka_decode_idle_seconds_total` | Espera SOMADA dos decodificadores pela fila. Dividida por `nishidb_ingest_decode_workers`, é a fração de tempo em que eles não tinham o que fazer — e o contraste com `nishidb_kafka_writer_idle_seconds_total` diz de que lado está a folga |
 | `nishidb_ingest_decode_slots_shrunk_total` | Slots que passaram do limiar e tiveram os buffers soltos. Zero com `arena_bytes` alto é memória presa; crescimento constante é churn de alocação, e aí o limiar está apertado demais para o tamanho dos eventos |
 
@@ -304,7 +304,8 @@ acidental reprocessa ou pula uma janela inteira do tópico.
 
 | Mudança | Seguro? |
 |---|---|
-| `ingestionQueueSize`, `ingestionQueueBytes`, `maxPollRecords` | Sim. Só afeta o intake |
+| `ingestionQueueSize`, `ingestionQueueBytes` | Sim. Só afeta o intake |
+| `maxPollRecords` | Sim, mas **desde a Fase 4 ele não afeta só o intake**: é ele que dimensiona a esteira de decodificação, arredondado para cima até a potência de dois. Subi-lo multiplica os slots do anel, e cada slot retém buffers entre eventos; baixá-lo é o remédio quando `nishidb_ingest_decode_arena_bytes` incomoda. O limiar por slot acompanha, porque é `ingestionQueueBytes` dividido por essa janela |
 | `decodeWorkers` | Sim, e o resultado **não muda o dado**: o golden `workers:1 × workers:8` compara `SELECT *` e `_meta.fields` byte a byte. O que muda é memória — cada slot da esteira retém buffers até a marca d'água —, e o ganho satura cedo: medido em laboratório, 2 dão 2,09× e 8 REGRIDEM para 1,49×. Suba de 1 para 2 e meça; de 4 em diante, só com medição do próprio dataset |
 | `errors.invalidEvent` | Sim |
 | `enabled: false` | Sim — é o botão de pausa declarativo de UM dataset |

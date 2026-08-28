@@ -248,7 +248,11 @@ var (
 // `contagens` sem inflar o arena, e um valor com escape muito longo infla só o
 // scratch do parser.
 func (d *Decodificado) BytesRetidos() int {
-	n := cap(d.arena) + cap(d.folha) + cap(d.nomeBuf)
+	// cap(d.evento) entra porque o slot PRENDE aquele buffer enquanto o
+	// segura, e a fila já devolveu o orçamento de bytes dele no Recebe: sem
+	// esta parcela, a memória do evento em voo não é contada em lugar nenhum.
+	// Depois do Libera ela é zero, que é o estado de regime.
+	n := cap(d.arena) + cap(d.folha) + cap(d.nomeBuf) + cap(d.evento)
 	n += cap(d.entries)*bytesPorEntry + cap(d.contagens)*bytesPorContagem
 	n += cap(d.pais)*bytesPorPai + cap(d.paisFeitos)*bytesPorFieldID
 	n += cap(d.filhosBuf) * bytesPorPonteiro
@@ -281,7 +285,16 @@ func (d *Decodificado) Encolhe(limiar int) bool {
 	}
 	d.arena, d.folha, d.nomeBuf = nil, nil, nil
 	d.entries, d.contagens = nil, nil
+	// pais entra aqui e TAMBÉM no Libera, e as duas coisas são diferentes: o
+	// Libera zera os elementos e trunca, porque quer soltar as janelas sobre o
+	// evento mantendo o array para reuso; o Encolhe solta o array.
 	d.pais, d.paisFeitos, d.filhosBuf = nil, nil, nil
+	// key é JANELA SOBRE O ARENA (patch.go a aponta para o Bytes convertido), e
+	// esquecer isto é soltar o arena sem soltar coisa nenhuma: o array continua
+	// vivo por esta referência, e o gauge — que soma cap(arena), agora zero —
+	// passa a AFIRMAR que a memória foi devolvida. Métrica mentindo é pior que
+	// memória presa, porque tira a chance de alguém descobrir.
+	d.key = nil
 	d.parser.Encolhe()
 	for _, p := range d.aninhados {
 		p.Encolhe()
@@ -289,9 +302,35 @@ func (d *Decodificado) Encolhe(limiar int) bool {
 	if d.descobridor != nil {
 		d.descobridor.Encolhe()
 	}
-	// O evento é uma janela sobre o record do lote anterior, e segurá-la
-	// impediria o lote inteiro de ser coletado — um slot ocioso manteria vivo o
-	// buffer de fetch que o originou.
-	d.evento = nil
 	return true
+}
+
+// Libera solta as referências ao EVENTO deste slot. Sempre, não só ao encolher.
+//
+// É outra coisa que o Encolhe, e confundir as duas foi o defeito: o Encolhe
+// devolve o buffer que é NOSSO e que o próximo evento realoca; este solta
+// memória de OUTRO DONO — o buffer de fetch do franz-go, do qual o evento é uma
+// janela. Segurá-la num slot ocioso mantém vivo o lote inteiro que a trouxe:
+// megabytes por causa de alguns KiB, multiplicados pelos slots do anel.
+//
+// São CINCO referências, e faltar uma é o mesmo que faltar todas:
+//   - evento, a janela direta;
+//   - pais[i].valor, a janela sobre o documento do pai (extract.go a aponta
+//     para o Raw do objeto, que é fatia do evento);
+//   - o data dos parsers — o de topo, os de nível e o da descoberta —, que o
+//     Reset guarda até o Reset seguinte.
+//
+// O `clear` antes do truncamento não é zelo: `pais[:0]` preserva o array, e o
+// coletor enxerga os ponteiros que ficaram além do comprimento.
+func (d *Decodificado) Libera() {
+	d.evento = nil
+	clear(d.pais)
+	d.pais = d.pais[:0]
+	d.parser.SoltaEntrada()
+	for _, p := range d.aninhados {
+		p.SoltaEntrada()
+	}
+	if d.descobridor != nil {
+		d.descobridor.SoltaEntrada()
+	}
 }

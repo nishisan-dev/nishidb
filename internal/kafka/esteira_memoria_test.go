@@ -104,3 +104,76 @@ func TestOLimiarPorSlotSaiDoOrcamentoDaFila(t *testing.T) {
 		t.Errorf("limiarDeSlot com fila minúscula = %d, quero o piso de %d", got, paginaDoSO)
 	}
 }
+
+// Abaixo do limiar o slot NÃO encolhe, e o contador não sobe.
+//
+// É a metade negativa que faltava. Só provar que o evento grande encolhe deixa
+// passar a mutação oposta — encolher sempre —, que devolve a memória e a
+// realoca no evento seguinte: churn de alocação no caminho quente, com o
+// contador de slots encolhidos subindo a cada evento. As duas metades juntas
+// são o que diz que o limiar governa alguma coisa.
+func TestAbaixoDoLimiarOSlotNaoEncolhe(t *testing.T) {
+	mat := matDoGolden(t)
+	e := novaEsteira(4)
+	ctx := context.Background()
+
+	const limiar = 64 << 10
+	var encolhimentos int
+	for seq := int64(0); seq < 12; seq++ {
+		d := e.reserva(seq)
+		mat.Decodifica(d, []byte(`{"id":"A","sev":1,"doc":{"k":"v"}}`))
+		e.publica(seq, &kgo.Record{Offset: seq}, nil)
+		s, ok, _ := e.consome(ctx, nil)
+		if !ok {
+			t.Fatal("consome não devolveu o slot")
+		}
+		if r := mat.Aplica(&s.dec); r.Err != nil {
+			t.Fatalf("Aplica: %v", r.Err)
+		}
+		if e.avanca(limiar) {
+			encolhimentos++
+		}
+	}
+	if encolhimentos != 0 {
+		t.Errorf("%d slots encolhidos com eventos muito abaixo do limiar de %d bytes; "+
+			"encolher aqui é devolver memória para realocá-la no evento seguinte", encolhimentos, limiar)
+	}
+	// E o slot seguiu carregando os buffers, que é o ponto de não encolher.
+	if e.bytesRetidos() == 0 {
+		t.Error("os slots não retiveram buffer nenhum: não há reuso a preservar")
+	}
+}
+
+// O contador de slots encolhidos acompanha o que de fato encolheu.
+//
+// Sem esta asserção, `nishidb_ingest_decode_slots_shrunk_total` podia ficar
+// preso em zero para sempre e ninguém notaria — e é justamente o contraste
+// entre ele e o gauge de arena que separa "memória presa" de "aparada sem
+// parar".
+func TestOContadorDeSlotsEncolhidosAcompanhaOEncolhimento(t *testing.T) {
+	mat := matDoGolden(t)
+	e := novaEsteira(4)
+	ctx := context.Background()
+	gordo := `{"id":"A","sev":1,"doc":{"grande":"` + strings.Repeat("x", 256<<10) + `"}}`
+
+	const limiar = 64 << 10
+	var encolhimentos int
+	for seq := int64(0); seq < 3; seq++ {
+		d := e.reserva(seq)
+		mat.Decodifica(d, []byte(gordo))
+		e.publica(seq, &kgo.Record{Offset: seq}, nil)
+		s, ok, _ := e.consome(ctx, nil)
+		if !ok {
+			t.Fatal("consome não devolveu o slot")
+		}
+		if r := mat.Aplica(&s.dec); r.Err != nil {
+			t.Fatalf("Aplica: %v", r.Err)
+		}
+		if e.avanca(limiar) {
+			encolhimentos++
+		}
+	}
+	if encolhimentos != 3 {
+		t.Errorf("avanca reportou %d encolhimentos em 3 eventos que passam do limiar; quero 3", encolhimentos)
+	}
+}

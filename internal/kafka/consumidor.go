@@ -182,6 +182,13 @@ func Abre(ctx context.Context, cfg *Config, o Opcoes) (*Consumidor, error) {
 	}
 	log = log.Component("kafka").Dataset(cfg.Dataset)
 	met := registraMetricas(o.Metrics, cfg.Dataset)
+	// O gauge é escrito AQUI, antes de qualquer caminho de erro do Abre.
+	// A família materializa a série em zero assim que é criada, e zero nunca é
+	// um valor válido desta chave — o parse recusa 0. Um dataset cujo consumidor
+	// não sobe (broker fora, assignment recusado, posição divergente) publicaria
+	// "decodeWorkers = 0", que não descreve estado nenhum: descreve o gauge não
+	// ter sido escrito. A configuração é conhecida desde a primeira linha.
+	met.decodeWorkers.Set(float64(cfg.DecodeWorkers))
 
 	c := &Consumidor{
 		cfg: cfg, log: log, met: met, origem: cfg.Origem(),
@@ -234,7 +241,6 @@ func Abre(ctx context.Context, cfg *Config, o Opcoes) (*Consumidor, error) {
 	met.OlhaOsTempos(c.fila.Tempos)
 	c.w = NovoWriter(cfg, o.Mat, o.Store, c.fila, log, met, c.offsetsIniciais, o.Cadencia, c.commitNoBroker)
 	met.OlhaAEsteira(c.w.est.bytesRetidos, c.w.est.Ocioso)
-	met.decodeWorkers.Set(float64(cfg.DecodeWorkers))
 	log.Info("decode.workers", "decodificadores da ingestão",
 		"workers", cfg.DecodeWorkers, "janela", c.w.est.tamanho(),
 		"limiarPorSlot", c.w.limiarDeEncolhimento)
