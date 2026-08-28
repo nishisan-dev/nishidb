@@ -70,7 +70,7 @@ func (b *PatchBuffer) extraiDerivadas() error {
 			// A chave APARECEU. Conta aqui, antes da conversão, e não no
 			// sucesso: é o que faz a divergência ser um subconjunto da
 			// ocorrência, e "2.315 de 2.383" sair direto do SQL.
-			d.ContaOcorrencia()
+			b.conta(contaOcorrencia, d, types.TypeNull)
 			alvo := d.EffectiveType()
 			val, arena, err := Convert(f, alvo, d.Layout, b.arena)
 			if err != nil || val.Type == types.TypeNull {
@@ -87,11 +87,11 @@ func (b *PatchBuffer) extraiDerivadas() error {
 				// O arena pode ter crescido mesmo no erro, então ele é
 				// reatribuído aqui como em qualquer outro caminho.
 				b.arena = arena
-				contaSeDivergiu(b.compilado, d, f)
+				b.contaSeDivergiu(d, f)
 				continue
 			}
 			b.arena = arena
-			contaSeCoergiu(d, f, alvo)
+			b.contaSeCoergiu(d, f, alvo)
 			b.entries = append(b.entries, patchEntry{field: d, val: val})
 		}
 	}
@@ -137,7 +137,7 @@ func (b *PatchBuffer) removeAsColunasDoPai(p paiVisto) {
 	for _, f := range b.filhosBuf {
 		b.entries = append(b.entries, patchEntry{field: f, isNull: true})
 	}
-	b.compilado.ContaValorIncompativel(p.campo, InferType(jsonp.Field{Kind: p.kind}))
+	b.conta(contaDivergencia, p.campo, InferType(jsonp.Field{Kind: p.kind}))
 }
 
 func (b *PatchBuffer) jaResolvido(id types.FieldID) bool {
@@ -244,7 +244,7 @@ func (b *PatchBuffer) descobreAninhados(p paiVisto) error {
 		// "pai.chave" num buffer reusado — um nome novo por chave por evento
 		// seria alocação no hot path.
 		b.nomeBuf = append(append(append(b.nomeBuf[:0], p.campo.Name...), '.'), f.Key...)
-		cf, err := b.compilado.ResolveAninhado(p.campo, b.nomeBuf, f.Key)
+		cf, err := b.resolveAninhado(p.campo, b.nomeBuf, f.Key)
 		if err != nil {
 			// Teto sob política `stop` (schema.ErrTetoDeCampos, que o classify
 			// mapeia para FIELDS_EXHAUSTED e que PARA a ingestão) ou falha do
@@ -260,14 +260,14 @@ func (b *PatchBuffer) descobreAninhados(p paiVisto) error {
 			// guardando o valor. A perda do teto está no camposDescartados.
 			continue
 		}
-		cf.ContaOcorrencia()
+		b.conta(contaOcorrencia, cf, types.TypeNull)
 		alvo := cf.EffectiveType()
 		if alvo == types.TypeNull {
 			t := InferType(f)
 			if t == types.TypeNull {
 				continue // null JSON não fixa tipo
 			}
-			if err := b.compilado.FixAutoType(cf, t); err != nil {
+			if err := b.fixaTipo(b.compilado, cf, t); err != nil {
 				if !errors.Is(err, fielddict.ErrTypeHintConflict) {
 					// Falha de I/O ao persistir o hint: disco cheio, EIO. É do
 					// DATASET, não do evento. O `continue` que estava aqui a
@@ -282,7 +282,7 @@ func (b *PatchBuffer) descobreAninhados(p paiVisto) error {
 				// não cabe — a coluna é removida e a divergência é contada —, e
 				// NÃO derruba o evento, que é a regra desta passada.
 				b.entries = append(b.entries, patchEntry{field: cf, isNull: true})
-				b.compilado.ContaValorIncompativel(cf, t)
+				b.conta(contaDivergencia, cf, t)
 				continue
 			}
 			alvo = t
@@ -303,76 +303,12 @@ func (b *PatchBuffer) descobreAninhados(p paiVisto) error {
 			// evento chegou primeiro, não por quem escreveu o schema, então
 			// divergir é esperado e precisa ser contável.
 			b.entries = append(b.entries, patchEntry{field: cf, isNull: true})
-			contaSeDivergiu(b.compilado, cf, f)
+			b.contaSeDivergiu(cf, f)
 			continue
 		}
-		contaSeCoergiu(cf, f, alvo)
+		b.contaSeCoergiu(cf, f, alvo)
 		b.entries = append(b.entries, patchEntry{field: cf, val: val})
 	}
-}
-
-// contaSeDivergiu incrementa o contador de valor incompatível SÓ quando houve
-// divergência de tipo de verdade.
-//
-// O caso que ele exclui é o `null` EXPLÍCITO no documento. Convert devolve
-// Value{Type: TypeNull} SEM erro para KindNull (typeconv.go), então a mesma
-// condição que pega "o valor não coube no tipo declarado" pegava também "a
-// origem mandou null" — e as duas seguiam para o mesmo contador. Não são a
-// mesma coisa: null é a origem dizendo que não há valor, e a coluna ficar
-// ausente é a resposta CERTA, não uma perda por tipo.
-//
-// A REMOÇÃO continua sendo emitida nos dois casos, e é o que importa para a
-// corretude: sem ela, no modo merge, a coluna seguiria mostrando o valor de um
-// evento anterior enquanto o documento da mesma linha diz null. O que muda aqui
-// é só a CONTAGEM.
-//
-// Por que isso importa além da estética: o contador de valor incompatível é o
-// número que decide quais chaves ganham tipo declarado. Inflado por null, ele
-// aponta para colunas cujo problema não é o tipo — e a decisão sai errada
-// justamente onde ela deveria sair de medição.
-func contaSeDivergiu(c *schema.Compiled, coluna *schema.CompiledField, f jsonp.Field) {
-	veio := InferType(f)
-	if veio == types.TypeNull {
-		return
-	}
-	c.ContaValorIncompativel(coluna, veio)
-}
-
-// contaSeCoergiu registra que o valor chegou noutra forma JSON e ainda assim
-// entrou na coluna — número numa coluna de texto, string numérica numa coluna
-// int64 ou double.
-//
-// POR QUE O CONTADOR EXISTE. A coerção resolve uma perda e cria uma cegueira. O
-// número numa coluna `string` era recusado, a coluna ficava nula e o
-// typeMismatches subia — o operador via, pelo contador, que a origem estava
-// inconsistente. Convertendo, o valor é preservado e aquele contador vai a ZERO
-// no mesmo cenário: a inconsistência da origem some do painel sem ter sumido do
-// dado. Sem este terceiro contador, a mudança trocaria uma perda visível por uma
-// inconsistência invisível, e a ressalva da documentação — `"07"` e `"7"`
-// continuam sendo duas strings — não teria como ser MEDIDA em dataset nenhum.
-//
-// ONDE ELE É CHAMADO, e por que só aqui. Convert é usado em três sítios: os dois
-// desta segunda passada e o campo de TOPO em patch.go. O topo fica de fora
-// porque os contadores por coluna são publicados só para as DERIVADAS — no topo
-// o `_meta.fields` os emite NULL, e incrementar um número que ninguém lê seria
-// custo no caminho quente sem leitor. Os dois sítios daqui não se sobrepõem: a
-// descoberta pula toda chave já DECLARADA (ver `declarado`), então nenhuma
-// ocorrência é contada duas vezes.
-//
-// A COMPARAÇÃO É f.Kind CONTRA A FORMA NATIVA DO ALVO, e não InferType contra o
-// alvo. A segunda seria mais curta e estaria errada: InferType de uma string
-// RFC3339 é TypeString, que difere de TypeTimestamp, e toda coluna de timestamp
-// marcaria 100% de coerção. O JSON não tem timestamp — ver kindNativo, que é
-// onde essa tabela mora e onde ela precisa ser mantida junto do Convert.
-//
-// Só é chamado no caminho de SUCESSO. Ocorrência que falhou é divergência e já
-// tem contador; ocorrência que veio `null` não é nem uma coisa nem outra.
-func contaSeCoergiu(coluna *schema.CompiledField, f jsonp.Field, alvo types.FieldType) {
-	nativo, temNativo := kindNativo(alvo)
-	if !temNativo || f.Kind == nativo {
-		return
-	}
-	coluna.ContaCoercao()
 }
 
 // declarado informa se o caminho de um nível já é coberto por um extract.

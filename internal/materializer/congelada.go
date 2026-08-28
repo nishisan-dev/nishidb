@@ -3,7 +3,6 @@ package materializer
 import (
 	"errors"
 	"fmt"
-	"sync/atomic"
 	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/schema"
@@ -28,7 +27,7 @@ import (
 // congeladas sobre algumas dezenas de entries é ruído; um dataset que declare
 // muitas e cujo bench acuse deve guardar o índice da entry durante o parsing,
 // não trocar isto por um mapa alocado por evento.
-func (b *PatchBuffer) capturaCongeladas(c *schema.Compiled, agora time.Time, capturadas *atomic.Int64) error {
+func (b *PatchBuffer) capturaCongeladas(c *schema.Compiled, agora time.Time) error {
 	for _, cf := range c.Congeladas {
 		if cf.DoRelogio {
 			b.entries = append(b.entries, patchEntry{
@@ -36,9 +35,7 @@ func (b *PatchBuffer) capturaCongeladas(c *schema.Compiled, agora time.Time, cap
 				val:       types.Value{Type: types.TypeTimestamp, I64: agora.UnixMilli()},
 				congelada: true,
 			})
-			if capturadas != nil {
-				capturadas.Add(1)
-			}
+			b.conta(contaCongelada, cf, types.TypeNull)
 			continue
 		}
 		for i := range b.entries {
@@ -53,7 +50,10 @@ func (b *PatchBuffer) capturaCongeladas(c *schema.Compiled, agora time.Time, cap
 			// para sempre sem tipo, gravada com dado dentro e invisível a
 			// qualquer WHERE.
 			if cf.IsAuto && cf.EffectiveType() == types.TypeNull && e.val.Type != types.TypeNull {
-				if err := c.FixAutoType(cf, e.val.Type); err != nil {
+				if err := b.fixaTipo(c, cf, e.val.Type); err != nil {
+					if errors.Is(err, errPrecisaDoWriter) {
+						return err
+					}
 					// A classificação é a mesma do laço do Parse, e pela mesma
 					// razão: só o CONFLITO é evento ruim.
 					if errors.Is(err, fielddict.ErrTypeHintConflict) {
@@ -65,9 +65,7 @@ func (b *PatchBuffer) capturaCongeladas(c *schema.Compiled, agora time.Time, cap
 			b.entries = append(b.entries, patchEntry{
 				field: cf, val: e.val, congelada: true,
 			})
-			if capturadas != nil {
-				capturadas.Add(1)
-			}
+			b.conta(contaCongelada, cf, types.TypeNull)
 			break
 		}
 	}

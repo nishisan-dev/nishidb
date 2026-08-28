@@ -86,6 +86,12 @@ func amostrasDeMaterializacao(dataset string, spec *schema.DatasetSpec, snap mat
 			Labels: rotulo, Valor: float64(snap.Saturadas),
 		},
 		{
+			Familia: metrics.MetIngestDecodeSerial, Nome: metrics.MetIngestDecodeSerial,
+			Ajuda:  "eventos que o writer decodificou de novo, sozinho, porque o decode paralelo é somente-leitura e encontrou coluna a criar ou tipo a fixar; em regime é plana",
+			Tipo:   metrics.TipoContador,
+			Labels: rotulo, Valor: float64(snap.DecodeSerialTotal),
+		},
+		{
 			Familia: metrics.MetTTLUnmatched, Nome: metrics.MetTTLUnmatched,
 			Ajuda:  "escritas que não casaram com regra de ttl nenhuma; só acontece em dataset sem regra de fundo",
 			Tipo:   metrics.TipoContador,

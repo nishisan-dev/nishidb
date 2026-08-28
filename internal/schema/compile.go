@@ -866,18 +866,36 @@ func (c *Compiled) registraDerivadas(s *DatasetSpec, dict FieldDictionary) error
 //
 // Chamado apenas pela goroutine do writer.
 func (c *Compiled) ResolveAninhado(pai *CompiledField, nomeQualificado, caminho []byte) (*CompiledField, error) {
+	if f, precisa := c.ResolveAninhadoSoLeitura(pai, nomeQualificado); !precisa {
+		return f, nil
+	}
+	return c.criaAninhado(pai, nomeQualificado, caminho)
+}
+
+// ResolveAninhadoSoLeitura é o ResolveAninhado SEM NENHUM EFEITO.
+//
+// `precisa=true` marca o exato ponto em que a coluna seria criada. O caso
+// `f.Parent != pai` — nome tomado por uma coluna de topo com ponto no nome —
+// continua sendo um NÃO legítimo, e não um "precisaria criar": ele nunca vira
+// coluna, em decodificador nenhum, e devolvê-lo como pendência faria o writer
+// reprocessar o mesmo evento para sempre.
+func (c *Compiled) ResolveAninhadoSoLeitura(pai *CompiledField, nomeQualificado []byte) (*CompiledField, bool) {
 	c.mu.RLock()
 	f, ok := c.byName[string(nomeQualificado)]
 	c.mu.RUnlock()
-	if ok {
-		if f.Parent != pai {
-			// Nome já tomado por outra coluna: não adota. Só acontece se
-			// alguém declarar um campo de topo com ponto no nome.
-			return nil, nil
-		}
-		return f, nil
+	if !ok {
+		return nil, true
 	}
+	if f.Parent != pai {
+		// Nome já tomado por outra coluna: não adota. Só acontece se alguém
+		// declarar um campo de topo com ponto no nome.
+		return nil, false
+	}
+	return f, false
+}
 
+// criaAninhado é a metade que ESCREVE. Exclusivo da goroutine do writer.
+func (c *Compiled) criaAninhado(pai *CompiledField, nomeQualificado, caminho []byte) (*CompiledField, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if f, ok := c.byName[string(nomeQualificado)]; ok {
@@ -1096,17 +1114,72 @@ func (c *Compiled) Excluded(name []byte) bool {
 // Chamado apenas pela goroutine do writer; leitores concorrentes de
 // FieldByName/FieldByID são protegidos pelo RWMutex.
 func (c *Compiled) ResolveUnknown(name []byte) (*CompiledField, error) {
+	f, precisa, err := c.resolveDesconhecido(name)
+	if err != nil || !precisa {
+		return f, err
+	}
+	return c.criaDesconhecido(name)
+}
+
+// ResolveUnknownSoLeitura é o ResolveUnknown SEM NENHUM EFEITO.
+//
+// Devolve `precisa=true` no exato ponto em que o ResolveUnknown criaria a
+// coluna — e nem um passo além. É o que permite decodificar um evento fora da
+// goroutine do writer: o decodificador descobre que não pode decidir e para,
+// sem ter tocado o dicionário, os contadores nem o aviso do teto.
+//
+// A DISTINÇÃO QUE NÃO PODE COLAPSAR. Há quatro maneiras de um campo
+// desconhecido NÃO virar coluna — excluído, universo fechado, política
+// `ignore` e política `reject` —, e nenhuma delas é "precisaria criar". Um
+// leitor que devolvesse `precisa=true` para todas faria o writer reprocessar
+// todo evento que traga um campo excluído, para sempre, num laço que nenhuma
+// métrica explicaria.
+//
+// O TETO FICA DE FORA de propósito, e é a única assimetria. Ele podia ser
+// consultado puramente (`dict.Len() >= MaxCols`), mas o ResolveUnknown
+// CONTABILIZA a recusa — camposDescartados e o aviso de uma vez só — antes de
+// decidir entre parar e ignorar. Antecipar essa contabilidade aqui a duplicaria
+// no evento reprocessado; adiá-la exigiria uma terceira via. A escolha é
+// devolver `precisa=true` e deixar o writer decidir, ao custo de um parse
+// dobrado por evento enquanto o dicionário estiver cheio sob `ignore` — a
+// degradação nomeada no plano da Fase 4: nunca pior que a vazão de antes, e
+// visível em nishidb_ingest_decode_serial_total.
+func (c *Compiled) ResolveUnknownSoLeitura(name []byte) (*CompiledField, bool, error) {
+	return c.resolveDesconhecido(name)
+}
+
+// resolveDesconhecido é a parte PURA do ResolveUnknown: a política e o cache.
+// precisa=true significa "daqui em diante só o writer pode seguir".
+func (c *Compiled) resolveDesconhecido(name []byte) (*CompiledField, bool, error) {
 	if _, excluded := c.exclude[string(name)]; excluded {
-		return nil, nil
+		return nil, false, nil
 	}
 	if !c.IncludeAll || c.Unknown == UnknownIgnore {
-		return nil, nil
+		return nil, false, nil
 	}
 	if c.Unknown == UnknownReject {
-		return nil, fmt.Errorf("%w: %s", ErrUnknownField, name)
+		return nil, false, fmt.Errorf("%w: %s", ErrUnknownField, name)
 	}
+	// RLock, e não Lock: esta metade é consulta, e ela roda em N
+	// decodificadores ao mesmo tempo. A escrita mora no criaDesconhecido, que
+	// retoma o lock exclusivo e reconfere o cache.
+	c.mu.RLock()
+	f, ok := c.byName[string(name)]
+	c.mu.RUnlock()
+	if ok {
+		return f, false, nil
+	}
+	return nil, true, nil
+}
+
+// criaDesconhecido é a metade que ESCREVE: teto, dicionário, cache e espelhos.
+// Exclusivo da goroutine do writer.
+func (c *Compiled) criaDesconhecido(name []byte) (*CompiledField, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// Reconfere sob o lock exclusivo: entre o RLock do resolveDesconhecido e
+	// este Lock, o próprio writer pode ter criado a coluna ao reprocessar um
+	// evento anterior do mesmo lote.
 	if f, ok := c.byName[string(name)]; ok {
 		return f, nil
 	}

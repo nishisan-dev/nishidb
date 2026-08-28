@@ -221,6 +221,12 @@ type Metrics struct {
 	histLinhas      atomic.Int64
 	histDescartadas atomic.Int64
 	histDegradado   atomic.Bool
+
+	// decodeSerial conta os eventos que o decodificador somente-leitura não
+	// pôde terminar e o writer refez pelo caminho completo. É a medida do que
+	// a Fase 4.2 custa: em regime tende a zero, e uma origem que emite chave
+	// nova a cada evento a faz acompanhar a contagem de eventos.
+	decodeSerial atomic.Int64
 }
 
 // MetricsSnapshot é a leitura consistente-por-contador dos contadores. Não é
@@ -259,6 +265,11 @@ type MetricsSnapshot struct {
 	HistoricoLinhas      int64
 	HistoricoDescartadas int64
 	HistoricoDegradado   bool
+
+	// DecodeSerialTotal são os eventos que o writer teve de decodificar de
+	// novo, pelo caminho completo, porque o decode somente-leitura alcançou uma
+	// coluna a criar ou um tipo a fixar.
+	DecodeSerialTotal int64
 }
 
 // Materializer aplica eventos JSON sobre o estado materializado de um
@@ -305,6 +316,14 @@ type Materializer struct {
 	slots  [][]predicado.Slot
 	fr     encoding.FieldReader
 
+	// reprocessosInuteis conta os reprocessos SEGUIDOS que não fizeram o
+	// dicionário crescer, e aoReprocessar é o aviso de uma vez só. Pertencem à
+	// goroutine do writer, como o resto daqui; só o avisou é atômico, porque
+	// ele guarda um "uma vez só" que precisa valer mesmo se a fiação mudar.
+	reprocessosInuteis int64
+	aoReprocessar      func(seguidos int64, colunas int)
+	avisouReprocesso   atomic.Bool
+
 	metrics Metrics
 }
 
@@ -317,7 +336,6 @@ type Materializer struct {
 // evento, com a ingestão já rodando.
 func New(c *schema.Compiled, s Store) (*Materializer, error) {
 	m := &Materializer{schema: c, store: s, agora: time.Now}
-	m.patch.congeladasCapturadas = &m.metrics.congeladasCapturadas
 	if len(c.RegrasTTL) > 0 {
 		regras, err := predicado.CompilaRegras(c.RegrasTTL, c)
 		if err != nil {
@@ -370,6 +388,7 @@ func (m *Materializer) Metrics() MetricsSnapshot {
 	s.HistoricoLinhas = m.metrics.histLinhas.Load()
 	s.HistoricoDescartadas = m.metrics.histDescartadas.Load()
 	s.HistoricoDegradado = m.metrics.histDegradado.Load()
+	s.DecodeSerialTotal = m.metrics.decodeSerial.Load()
 	// events é lido por ÚLTIMO, de propósito: o Aplica o incrementa na ENTRADA
 	// e o desfecho na SAÍDA, então ler events primeiro deixaria o writer
 	// avançar entre as leituras e produziria um snapshot com
@@ -412,6 +431,17 @@ func (m *Materializer) Apply(event []byte) ApplyResult {
 // disparia. O contador tem de medir o que ATRAVESSOU o gargalo, não o que
 // entrou nele.
 func (m *Materializer) Aplica(d *Decodificado) ApplyResult {
+	if d.precisaDoWriter {
+		d = m.reprocessa(d.evento)
+	}
+	// As contagens por coluna são executadas AQUI, e não dentro do Parse: o
+	// evento reprocessado passa pelo parse duas vezes, e contar lá dobraria as
+	// ocorrências, coerções e divergências que o `_meta.fields` publica. As do
+	// decode abortado morrem com ele, que é o desfecho certo.
+	//
+	// Roda antes de qualquer desvio, inclusive o do evento ruim: o contador por
+	// coluna sempre contou o que o Parse alcançou antes de falhar.
+	d.aplicaContagens(&m.metrics)
 	m.metrics.events.Add(1)
 
 	if err := d.erro; err != nil {

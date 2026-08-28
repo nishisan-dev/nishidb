@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"sync/atomic"
 	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/jsonp"
@@ -60,14 +59,81 @@ type PatchBuffer struct {
 	// ainda que este caminho seja raro: um caminho raro que aloca é uma
 	// alocação que só aparece em produção.
 	filhosBuf []*schema.CompiledField
-	// congeladasCapturadas é o contador do dataset, injetado pelo
-	// Materializer. Ponteiro porque o PatchBuffer é usado direto em testes,
-	// onde não há métrica nenhuma para alimentar.
-	congeladasCapturadas *atomic.Int64
 	// compilado é o schema do Parse corrente. A descoberta precisa dele para
 	// registrar coluna nova, e passá-lo por parâmetro em toda a cadeia da
 	// segunda passada só o faria viajar de graça.
 	compilado *schema.Compiled
+
+	// contagens são os incrementos de contador ADIADOS até a aplicação. Ver o
+	// godoc do tipo contagem para o porquê — em uma linha: o evento que o
+	// writer reprocessa passa pelo Parse duas vezes, e contar dentro dele
+	// dobraria os números que o `_meta.fields` publica.
+	contagens []contagem
+
+	// soLeitura proíbe este Parse de CRIAR metadado: coluna nova e tipo fixado
+	// ficam de fora, e o Parse para com errPrecisaDoWriter no ponto exato em
+	// que precisaria de um dos dois.
+	//
+	// É o que permite decodificar fora da goroutine do writer. Deixar N
+	// decodificadores descobrirem campos não é questão de desempenho, é de
+	// CORREÇÃO: LookupOrCreate atribui o FieldID na ordem de chamada, FieldID é
+	// formato de disco e a posição da coluna no `SELECT *` é contrato do driver
+	// JDBC. Com workers, essa ordem viraria a de quem ganha o mutex — e "o tipo
+	// é fixado na primeira observação" viraria "na primeira a chegar no lock",
+	// não "no menor offset". A violação já foi vista em produção; ver
+	// internal/cli/determinismo_test.go.
+	soLeitura bool
+}
+
+// errPrecisaDoWriter interrompe um Parse somente-leitura que alcançou um
+// metadado a criar.
+//
+// É sentinela INTERNA: nunca chega ao classify e nunca vira categoria do §101.
+// Quem a recebe é o Decodifica, que a traduz em `precisaDoWriter` e devolve o
+// evento intacto para o writer refazer pelo caminho completo.
+var errPrecisaDoWriter = errors.New("materializer: decode somente-leitura alcançou metadado a criar")
+
+// resolveDesconhecido resolve o campo de topo que o FieldByName não conhece,
+// honrando o modo somente-leitura.
+func (b *PatchBuffer) resolveDesconhecido(c *schema.Compiled, nome []byte) (*schema.CompiledField, error) {
+	if !b.soLeitura {
+		return c.ResolveUnknown(nome)
+	}
+	cf, precisa, err := c.ResolveUnknownSoLeitura(nome)
+	if err != nil {
+		return nil, err
+	}
+	if precisa {
+		return nil, errPrecisaDoWriter
+	}
+	return cf, nil
+}
+
+// resolveAninhado resolve a coluna de uma chave descoberta dentro de um
+// documento, honrando o modo somente-leitura.
+func (b *PatchBuffer) resolveAninhado(pai *schema.CompiledField, nomeQualificado, caminho []byte) (*schema.CompiledField, error) {
+	if !b.soLeitura {
+		return b.compilado.ResolveAninhado(pai, nomeQualificado, caminho)
+	}
+	cf, precisa := b.compilado.ResolveAninhadoSoLeitura(pai, nomeQualificado)
+	if precisa {
+		return nil, errPrecisaDoWriter
+	}
+	return cf, nil
+}
+
+// fixaTipo fixa o tipo de um campo auto na primeira observação, honrando o modo
+// somente-leitura.
+//
+// A fixação é escrita DURÁVEL no dicionário e publicação em memória, e mais: ela
+// se propaga ao Compiled da tabela irmã. Nada disso pode sair da goroutine do
+// writer, e é por isso que o modo somente-leitura devolve a pendência em vez de
+// tentar.
+func (b *PatchBuffer) fixaTipo(c *schema.Compiled, cf *schema.CompiledField, t types.FieldType) error {
+	if b.soLeitura {
+		return errPrecisaDoWriter
+	}
+	return c.FixAutoType(cf, t)
 }
 
 // Parse processa um evento completo em um único passo: tokeniza, resolve
@@ -97,6 +163,7 @@ func (b *PatchBuffer) Parse(event []byte, c *schema.Compiled, agora time.Time) e
 	b.seq = 0
 	b.hasSeq = false
 	b.pais = b.pais[:0]
+	b.contagens = b.contagens[:0]
 	b.compilado = c
 
 	b.parser.Reset(event)
@@ -134,8 +201,14 @@ func (b *PatchBuffer) Parse(event []byte, c *schema.Compiled, agora time.Time) e
 			// Campo excluído não está compilado: cai aqui e o
 			// ResolveUnknown o descarta — uma comparação a menos por campo
 			// por evento no hot path.
-			cf, err = c.ResolveUnknown(f.Key)
+			cf, err = b.resolveDesconhecido(c, f.Key)
 			if err != nil {
+				// A pendência do decode somente-leitura sobe CRUA: ela não é
+				// erro do evento, e embrulhá-la aqui a faria chegar ao
+				// Decodifica vestida de SCHEMA_VALIDATION.
+				if errors.Is(err, errPrecisaDoWriter) {
+					return err
+				}
 				return fmt.Errorf("campo %q: %w", f.Key, err) // SCHEMA_VALIDATION
 			}
 			if cf == nil {
@@ -152,7 +225,10 @@ func (b *PatchBuffer) Parse(event []byte, c *schema.Compiled, agora time.Time) e
 		if cf.IsAuto && target == types.TypeNull {
 			// null JSON não fixa tipo: gravaria "sem tipo" e travaria o campo.
 			if t := InferType(f); t != types.TypeNull {
-				if err := c.FixAutoType(cf, t); err != nil {
+				if err := b.fixaTipo(c, cf, t); err != nil {
+					if errors.Is(err, errPrecisaDoWriter) {
+						return err
+					}
 					// Só o CONFLITO é evento ruim: o campo mudou de formato na
 					// origem. Ele precisa carregar ErrTypeConversion, senão o
 					// classify cai no default e PARA a ingestão por causa de um
@@ -229,7 +305,7 @@ func (b *PatchBuffer) Parse(event []byte, c *schema.Compiled, agora time.Time) e
 	// ter origem numa coluna extraída, e precisam participar do sort e do
 	// dedup como qualquer outra entry.
 	if len(c.Congeladas) > 0 {
-		if err := b.capturaCongeladas(c, agora, b.congeladasCapturadas); err != nil {
+		if err := b.capturaCongeladas(c, agora); err != nil {
 			return err
 		}
 	}

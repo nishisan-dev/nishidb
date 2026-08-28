@@ -390,6 +390,18 @@ func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*
 		// errado, em silêncio.
 		return nil, fechandoStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}
+	// O decode paralelo é somente-leitura, e todo evento que traga metadado
+	// novo volta para o writer decodificar sozinho. Isso é transitório num
+	// dataset saudável: descoberta acaba. Reprocesso seguido que NÃO faz o
+	// dicionário crescer não acaba — o caso conhecido é o teto de campos sob
+	// `ignore`, em que a coluna nunca nasce e todo evento paga o parse dobrado
+	// para sempre. Uma vez por dataset, como os avisos irmãos acima.
+	mat.AoReprocessar(func(seguidos int64, colunas int) {
+		log.Warn("ingest.reprocesso_improdutivo",
+			"o writer está redecodificando eventos sem que colunas novas apareçam; a ingestão perdeu o ganho do decode paralelo",
+			"dataset", spec.Name, "seguidos", seguidos, "colunas", colunas,
+			"maxCols", compilado.MaxCols, "politica", compilado.OnMaxCols)
+	})
 	if err := s.eng.Register(spec.Name, compilado, st); err != nil {
 		return nil, fechandoStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}

@@ -298,6 +298,18 @@ const (
 	MetKafkaQueueDepth = "nishidb_kafka_queue_depth"
 	MetKafkaQueueBytes = "nishidb_kafka_queue_bytes"
 
+	// MetIngestDecodeSerial conta os eventos que o writer teve de decodificar
+	// de novo, pelo caminho completo, porque o decode paralelo é
+	// somente-leitura e alcançou uma coluna a criar ou um tipo a fixar.
+	//
+	// É invenção da Fase 4, e o defeito que ela mede é o único jeito de a
+	// paralelização do decode ficar mais lenta do que a execução serial: uma
+	// origem que emita chave nova a cada evento, ou um dicionário no teto sob
+	// `onMaxCols: ignore`, fazem todo evento pagar o parse dobrado. Em regime a
+	// série é PLANA — o piloto tem ~1.700 colunas e não descobre mais nenhuma —,
+	// então `rate()` acima de zero por muito tempo é a pergunta a fazer.
+	MetIngestDecodeSerial = "nishidb_ingest_decode_serial_total"
+
 	// MetKafkaPartitionsAssigned contra MetKafkaPartitionsTotal é o que
 	// torna visível o assignment parcial — duas instâncias no mesmo group
 	// dividindo partições, cada dataset materializando metade (D10).
