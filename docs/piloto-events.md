@@ -568,6 +568,101 @@ vivo **sob o lock do writer**, com a ingestão parada. Não é a causa dos stall
 de até 2,4 s já observados — o arquivo não cresceu durante a medição —, mas é a
 próxima parada longa a caminho.
 
+## A quinta medição: o gargalo mudou de lugar (28/08/2026)
+
+Medição feita para servir de "antes" da subida do ciclo de folga de capacidade.
+Ela acabou **cancelando a subida**, porque o que ela mostrou não é o que o
+diagnóstico daquele ciclo descreve. Fica aqui no formato que este documento já
+usa: o que foi medido, não o que se esperava.
+
+Binário no ar: `v0.6.0-160-g8caad2c`. Nenhuma fase do ciclo estava em produção.
+
+### O piloto está saturado em um core
+
+Quatro janelas de 60 s, `/proc/<pid>/stat` cruzado com
+`nishidb_ingest_events_total` — o mesmo método que produziu os 902 µs/evento do
+diagnóstico:
+
+| Janela | eventos | CPU | µs/evento | ev/s | cores | teto de 1 core |
+|---|---:|---:|---:|---:|---:|---:|
+| 1 | 19.771 | 58,27 s | **2.947** | 329 | 0,969 | 339 ev/s |
+| 2 | 18.626 | 63,80 s | **3.425** | 309 | 1,060 | 292 ev/s |
+| 3 | 19.419 | 67,23 s | **3.462** | 323 | 1,117 | 289 ev/s |
+| 4 | 17.980 | 58,07 s | **3.230** | 299 | 0,965 | 310 ev/s |
+
+Contra o diagnóstico de 26/08: **902 µs/evento e 0,336 de um core**. O custo por
+evento **triplicou** e o processo passou de um terço de core para um core
+inteiro. Ele não tem mais folga para consumir: a produção documentada é de ~452
+ev/s e o consumo medido ficou entre 299 e 329.
+
+Estado do dataset na medição: 5.086.149 linhas no base (eram 4.570.919),
+10.327.180 no histórico, `expiry_scanned_total` em 651.686.022.
+
+### E não é onde o ciclo estava olhando
+
+Profile de CPU de 45 s (38,65 s de amostras), versionado em
+`benchmark/baselines/piloto-perfil-20260828.pb.gz` — abra com
+`go tool pprof -top benchmark/baselines/piloto-perfil-20260828.pb.gz`:
+
+| Componente | % do CPU |
+|---|---:|
+| `hash.(*Index).Set` (cumulativo) | **82,66%** |
+| └─ `mmap.(*Region).AtomicLoad64` | 77,67% |
+| &nbsp;&nbsp;&nbsp;└─ `sync/atomic.(*Int32).Add` (plano) | **50,66%** |
+| `jsonp.(*Parser).Next` — o parse | 2,46% |
+| `PatchBuffer.buscaCaminho` — a segunda passada | 2,25% |
+
+Metade do CPU do processo é **um `atomic.Add` de 32 bits**, e ele vem do
+`RLock`/`RUnlock` que `mmap.Region.AtomicLoad64` toma **a cada leitura de 64
+bits**:
+
+```go
+func (r *Region) AtomicLoad64(off int64) uint64 {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return atomic.LoadUint64(r.word(off))
+}
+```
+
+`hash.Index.Set` faz sondagem linear e chama isso **uma vez por sonda**. Cada
+par `RLock`/`RUnlock` são duas operações atômicas de leitura-modificação-escrita
+sobre a MESMA palavra (`readerCount` do RWMutex), compartilhada por todas as
+goroutines que tocam a região — writer, consultas, compaction e coletor. É
+disputa de linha de cache no caminho mais quente que existe.
+
+O índice em disco: um arquivo, `00010.hidx`, 32 MiB = **2^21 slots**, com
+reconstrução declarada em 70% de ocupação efetiva. Como cada update faz um `Set`
+e um `Clear`, a coluna acumula lápides sem ganhar postings — e lápide conta para
+a ocupação efetiva, alongando a cadeia de sondagem até a próxima reconstrução
+passar a faxina.
+
+### O que isso significa para o ciclo de folga de capacidade
+
+O ciclo foi desenhado contra um perfil em que o parse era 33% e a varredura de
+TTL 19%. Nesse perfil, hoje, o parse é **2,5%** e a varredura não aparece no
+topo. A Fase 4 paraleliza o decode: ela atacaria 2,5% do CPU atual.
+
+Isso não invalida o ciclo — o lag honesto, a instrumentação e a agenda de
+vencimentos continuam valendo por si. O que muda é a expectativa: **subir o
+ciclo hoje não faria o piloto acompanhar a produção**, e medir a subida contra
+este "antes" mediria outra coisa.
+
+### Por que a subida foi cancelada
+
+Dois fatos, e o segundo é o que decidiu:
+
+1. O gargalo medido não é o que o ciclo ataca (acima).
+2. **A subida é porta de mão única.** A agenda de vencimentos grava a seção
+   `0x8003` no manifest, e ela é CRÍTICA: um binário que não a conheça recusa o
+   dataset, e o servidor recusa subir com um dataset que não abre. O rollback
+   automático do `nishidb-update.sh` — que é o que torna cada fase reversível —
+   voltaria o symlink, o binário velho falharia ao abrir e o serviço ficaria
+   FORA. A volta exigiria restaurar uma cópia dos 28 GB, tirada com o serviço
+   parado, ou recriar e reingerir.
+
+O piloto ficou intocado: `current` segue em `v0.6.0-160-g8caad2c`.
+
+
 ## Limites conhecidos deste piloto
 
 - **Sem autenticação e sem TLS** (Fase 11). Loopback é a única proteção, e por
