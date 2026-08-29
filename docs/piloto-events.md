@@ -647,20 +647,110 @@ vencimentos continuam valendo por si. O que muda é a expectativa: **subir o
 ciclo hoje não faria o piloto acompanhar a produção**, e medir a subida contra
 este "antes" mediria outra coisa.
 
-### Por que a subida foi cancelada
+### A subida foi primeiro cancelada, e depois feita de outro jeito
 
-Dois fatos, e o segundo é o que decidiu:
+Dois fatos cancelaram a subida na forma em que ela estava planejada:
 
 1. O gargalo medido não é o que o ciclo ataca (acima).
-2. **A subida é porta de mão única.** A agenda de vencimentos grava a seção
-   `0x8003` no manifest, e ela é CRÍTICA: um binário que não a conheça recusa o
-   dataset, e o servidor recusa subir com um dataset que não abre. O rollback
-   automático do `nishidb-update.sh` — que é o que torna cada fase reversível —
-   voltaria o symlink, o binário velho falharia ao abrir e o serviço ficaria
-   FORA. A volta exigiria restaurar uma cópia dos 28 GB, tirada com o serviço
-   parado, ou recriar e reingerir.
+2. **Ela é porta de mão única.** A agenda de vencimentos grava a seção `0x8003`
+   no manifest, e ela é CRÍTICA: um binário que não a conheça recusa o dataset,
+   e o servidor recusa subir com um dataset que não abre. O rollback automático
+   do `nishidb-update.sh` — que é o que torna cada fase reversível — voltaria o
+   symlink, o binário velho falharia ao abrir e o serviço ficaria FORA, não
+   degradado.
 
-O piloto ficou intocado: `current` segue em `v0.6.0-160-g8caad2c`.
+A decisão foi então **recriar o dataset e subir sobre ele**, que é o que a
+seção seguinte registra. Com dataset novo o argumento (2) muda de forma: o
+caminho de volta deixa de ser o rollback do script e passa a ser o dataset
+ANTERIOR, movido de lado em vez de apagado.
+
+
+
+## A sexta medição: o ciclo no ar, com dataset novo (28/08/2026)
+
+Subida de `v0.6.0-188-gf41ef67` — o ciclo de folga de capacidade inteiro exceto
+a Fase 1 (passada única no `extract`), que ficou noutra branch. O dataset
+anterior foi MOVIDO para `/app/nishidb/dados.pre-ciclo-20260828`, não apagado:
+28 GB num disco com 1 TB livre, e a volta é um `mv` mais a troca do symlink.
+
+O consumidor retomou perto da ponta do tópico, e não do começo. Com dataset
+vazio e sem offsets locais, `ajustaOffsets` devolve os offsets DO GRUPO — o
+`autoOffsetReset: earliest` só vale para partição sem commit, e o grupo
+`nishidb-events-piloto-8` vinha commitando havia 50 h. Sem replay.
+
+### O que a subida provou
+
+**O lag parou de mentir.** Antes: serrote de 1.481 a 9.712 com o consumidor em
+dia. Depois: `nishidb_kafka_lag` em **0**, com `high_watermark` publicado pelo
+mesmo coletor, e picos isolados e legíveis (203, 39, 22) quando o writer de fato
+não acompanhou por um instante.
+
+**A divisão da Fase 4 é real, e a proporção também.** No profile de 45 s
+(`benchmark/baselines/piloto-perfil-fase4-20260828.pb.gz`):
+
+| Cadeia | % cumulativo |
+|---|---:|
+| `decodificadores.roda` → `Decodifica` → `PatchBuffer.Parse` | **33,2%** |
+| `Writer.aplica` → `Materializer.Aplica` | **33,8%** |
+
+Meio a meio. É a medida do teto que o godoc de `decodeWorkers` afirmava por
+teoria: tirar 33% do caminho do writer vale ~1,5×, e não mais.
+
+**O diagnóstico original estava certo — para um dataset NOVO.** O mesmo profile
+traz `PatchBuffer.Parse` em 33,20% e `buscaCaminho` em 19,65%, quase idênticos
+aos 32,55% e 21,55% de 26/08. E `hash.Index.Set` caiu de 82,66% para 10,94%.
+O gargalo não é "o parse" nem "o índice hash": é o índice hash **conforme o
+dataset cresce**.
+
+### A curva de degradação
+
+Doze janelas de 2 minutos, do dataset com 48 mil linhas até 91 mil:
+
+| hora | linhas | µs/evento | cores | lag | arena (KiB) | reprocessos |
+|---|---:|---:|---:|---:|---:|---:|
+| 21:25 | 48.784 | 858 | 0,270 | 0 | 31.469 | 1.064 |
+| 21:27 | 54.075 | 854 | 0,271 | 0 | 31.815 | 1.068 |
+| 21:29 | 57.865 | 868 | 0,233 | 0 | 31.897 | 1.070 |
+| 21:31 | 62.109 | 1.014 | 0,299 | 0 | 32.101 | 1.074 |
+| 21:33 | 66.385 | 923 | 0,284 | 6 | 32.161 | 1.078 |
+| 21:35 | 70.058 | 1.133 | 0,342 | 203 | 32.285 | 1.085 |
+| 21:37 | 73.800 | 1.012 | 0,308 | 22 | 32.406 | 1.086 |
+| 21:39 | 77.427 | 948 | 0,269 | 0 | 32.442 | 1.090 |
+| 21:41 | 81.056 | 1.019 | 0,305 | 0 | 32.568 | 1.091 |
+| 21:43 | 84.251 | 891 | 0,261 | 3 | 32.630 | 1.091 |
+| 21:45 | 88.208 | 1.050 | 0,325 | 0 | 32.699 | 1.109 |
+| 21:47 | 91.283 | 1.013 | 0,308 | 39 | 32.755 | 1.109 |
+
+**O que ela mostra, e o que ela NÃO mostra.** O dataset quase dobrou (48 mil →
+91 mil linhas) e o custo por evento subiu de ~860 para ~1.010 µs. É subida real,
+mas ela é da MESMA ordem da dispersão da própria série (854 a 1.133 na janela
+inteira): nesta faixa a curva ainda é rasa. O joelho que leva aos 3.200 µs
+medidos com 5,09 milhões de linhas está muito mais adiante, e este piloto vai
+atravessá-lo sozinho nos próximos dias — é o que há para observar.
+
+**Duas afirmações da Fase 4 se sustentaram fora da bancada:**
+
+- Os reprocessos por descoberta subiram **45 em ~130 mil eventos** (0,03%),
+  contra os 1.064 do aquecimento inicial. A promessa era "em regime tende a
+  zero", e é o que a série faz.
+- A memória da esteira ficou **parada** em ~32 MiB durante a janela inteira, com
+  `slots_shrunk_total` em zero: nada passou do limiar de 64 KiB por slot. O
+  gauge nasceu de desconfiança e serviu para mostrar que a desconfiança não se
+  confirmou, que também é resposta.
+
+### O que fica para observar
+
+O piloto está com 0,3 de um core e lag zero. O dataset anterior, com 5,09
+milhões de linhas, estava com 1,0 core e não acompanhava. **A variável que
+separa os dois estados é o tamanho do dataset**, e o piloto vai percorrer essa
+distância sozinho. O que vale acompanhar, nessa ordem:
+
+1. `nishidb_kafka_lag` deixando de voltar a zero — é o primeiro sinal honesto
+   de que a folga acabou;
+2. o custo por evento contra o número de linhas, para localizar o joelho;
+3. `nishidb_ingest_decode_serial_total`, que deve continuar plano — se ele
+   passar a acompanhar a contagem de eventos, é a origem inventando chave nova,
+   não descoberta em curso.
 
 
 ## Limites conhecidos deste piloto
