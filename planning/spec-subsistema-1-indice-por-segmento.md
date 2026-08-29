@@ -249,17 +249,31 @@ Um arquivo por segmento, **todos os campos indexados dentro**:
 ```
 header 64 B: magic "NDBX" | version u8 | flags u8 | secCount u16
              | segmentID u64 | baseRowID u64 | maxRowID u64
-             | postingWidth u8 | crc32c u32
+             | postingWidth u8 | reservado até 64
 
 tabela de seções, secCount × 24 B:
     fieldID u16 | pad u16 | distintos u32 | dirOff u64 | postOff u64
 
 por seção:
     diretório ORDENADO por hash (busca binária)   16 B por valor distinto:
-        [hash u64][postOff u32][count u32]
+        [hash u64][postIdx u32][count u32]
     postings: array de deltas (postingWidth B), contíguo por valor,
               ascendente dentro do grupo
+
+EOF-4: crc32c u32 sobre [0, EOF-4)
 ```
+
+Duas precisões que a Tarefa 2 lê do `mmap` sem parser tolerante a desvio, e
+que por isso não podem ficar implícitas:
+
+- **O `crc32c` fica no FIM do arquivo e cobre tudo antes dele**, header
+  inclusive — não dentro do header. É o idioma que o `manifest.bin` já usa, e
+  cobrir o header é o ponto: um header corrompido que passasse pelo checksum
+  levaria a busca binária a offsets arbitrários dentro do mapeamento.
+- **`postIdx` é o ÍNDICE DO ELEMENTO** dentro do array de postings da seção,
+  não um offset em bytes. O endereço é `postOff + postIdx × postingWidth`.
+  Chamá-lo de offset faria a leitura errar por um fator igual à largura da
+  posting — e errar para dentro do arquivo, sem estourar limite nenhum.
 
 A rotação do segmento converte WIP → selado: ordena, agrupa, **re-baseia**,
 escreve `.sidx.tmp`, `fsync`, renomeia e desliga os `.widx`. Para 224 mil linhas
