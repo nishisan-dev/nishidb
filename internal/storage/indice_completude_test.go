@@ -12,9 +12,11 @@ package storage
 // nada acusasse.
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
+	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
 // exigeBitmapCompleto verifica a propriedade da qual a spec §44 depende:
@@ -83,5 +85,35 @@ func exigeBitmapCompleto(t *testing.T, s *Store) {
 	}
 	if err := it.Err(); err != nil {
 		t.Fatalf("guarda de bitmap: ScanLive: %v", err)
+	}
+}
+
+// exigeCandidatos afirma o CONTRATO do índice contra a lista de rows que o
+// predicado realmente satisfaz: elas TÊM de estar entre os candidatos.
+//
+// Ela não afirma igualdade, e a assimetria é o desenho (spec §5.2): o índice por
+// segmento não tem fase de CLEAR, então a posting de um valor que a linha já não
+// tem sobrevive como candidato até o segmento ser compactado ou aposentado.
+// Candidato a mais o executor descarta na revalidação do §44; candidato a menos
+// é falso negativo, e nenhuma camada acima recupera uma linha que o índice não
+// devolveu.
+//
+// Um teste que exija igualdade aqui está medindo a ESTREITEZA do superconjunto,
+// que era propriedade do motor global — lá a posting não pertencia a segmento
+// nenhum e o Clear tinha onde acontecer. Quem quiser afirmar o que o produto
+// devolve deve subir um nível e olhar o resultado pós-revalidação.
+func exigeCandidatos(t *testing.T, rotulo string, candidatos, querem []types.RowID) {
+	t.Helper()
+	for _, id := range querem {
+		if !slices.Contains(candidatos, id) {
+			t.Errorf("%s: a row %d satisfaz o predicado e NÃO está entre os candidatos %v — falso negativo",
+				rotulo, id, candidatos)
+		}
+	}
+	for i := 1; i < len(candidatos); i++ {
+		if candidatos[i-1] >= candidatos[i] {
+			t.Errorf("%s: candidatos fora de ordem estritamente crescente: %v", rotulo, candidatos)
+			return
+		}
 	}
 }

@@ -282,13 +282,20 @@ func TestApplyReplaceDescartaEstadoELimpaPostings(t *testing.T) {
 	h.wantAbsent(st, "Acct-Input-Octets") // estado anterior descartado
 
 	// No replace o estado anterior é descartado do PAYLOAD, mas o prev vai
-	// para o Put assim mesmo: é dele que sai a limpeza dos postings antigos.
+	// para o Put assim mesmo: é dele que o storage resolve o rowId da linha
+	// sem refazer o Find.
 	if put := h.lastPut(); !put.HadPrev {
-		t.Error("replace precisa repassar prev ao Put para limpar os postings antigos")
+		t.Error("replace precisa repassar prev ao Put")
 	}
 
-	if rows := h.bitmapRows("Acct-Status-Type", start); len(rows) != 0 {
-		t.Errorf("postings de Start = %v, want vazio (valor antigo precisa sumir)", rows)
+	// A posting do valor ANTIGO sobrevive, e isso deixou de ser defeito: o
+	// índice por segmento não tem fase de CLEAR (spec §5.2), porque a posting
+	// mora no índice do segmento em que o record está e morre quando aquele
+	// segmento é aposentado. Ela é candidato a mais, que a revalidação do §44
+	// descarta contra o payload corrente — e o payload corrente já foi conferido
+	// acima, com o wantString/wantAbsent.
+	if rows := h.bitmapRows("Acct-Status-Type", start); len(rows) != 1 || rows[0] != created.RowID {
+		t.Errorf("postings de Start = %v, want [%d]: candidato tolerado, não resultado", rows, created.RowID)
 	}
 	stop := types.Value{Type: types.TypeString, Bytes: []byte("Stop")}
 	if rows := h.bitmapRows("Acct-Status-Type", stop); len(rows) != 1 || rows[0] != created.RowID {
@@ -1044,10 +1051,13 @@ func TestApplyFixtureRadiusCompletoDepoisPatch(t *testing.T) {
 		}
 	}
 
-	// O bitmap acompanhou a troca de status.
+	// O índice acompanhou a troca de status: o valor NOVO tem de estar lá
+	// (falso negativo nunca), e o antigo permanece como candidato porque não há
+	// fase de CLEAR no índice por segmento (spec §5.2). O estado corrente já foi
+	// conferido campo a campo acima, que é onde a troca realmente se prova.
 	alive := types.Value{Type: types.TypeString, Bytes: []byte("Alive")}
-	if rows := h.bitmapRows("Acct-Status-Type", alive); len(rows) != 0 {
-		t.Errorf("postings de Alive = %v, want vazio", rows)
+	if rows := h.bitmapRows("Acct-Status-Type", alive); len(rows) != 1 || rows[0] != created.RowID {
+		t.Errorf("postings de Alive = %v, want [%d]: candidato tolerado, não resultado", rows, created.RowID)
 	}
 	stop := types.Value{Type: types.TypeString, Bytes: []byte("Stop")}
 	if rows := h.bitmapRows("Acct-Status-Type", stop); len(rows) != 1 || rows[0] != created.RowID {

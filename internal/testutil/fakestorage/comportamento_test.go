@@ -30,7 +30,7 @@ var (
 )
 
 // O roteiro cobre o que o executor observa: identidade de rowId, update sobre
-// a mesma key, diff de postings, liveness e os erros de argumento.
+// a mesma key, indexação de postings, liveness e os erros de argumento.
 func TestComportamentoDoDubleEDoRealCoincidem(t *testing.T) {
 	const (
 		statusID = types.FieldID(1) // indexado
@@ -111,11 +111,20 @@ func TestComportamentoDoDubleEDoRealCoincidem(t *testing.T) {
 				t.Errorf("Sequence = %d, want 2", rec.Sequence)
 			}
 
-			// 4. O diff de postings: o valor ANTIGO deixa de apontar a row, e o
-			// novo passa a apontar. Um dublê que só acrescentasse postings
-			// deixaria o teste de superset passar e o de resultado falhar.
-			if ids := colhe(t, st, statusID, str("Start")); len(ids) != 0 {
-				t.Errorf("posting do valor antigo sobreviveu: %v", ids)
+			// 4. A indexação: o valor NOVO passa a apontar a row, e o ANTIGO
+			// CONTINUA apontando — o índice por segmento não tem fase de CLEAR
+			// (spec §5.2), porque a posting vive no índice do segmento em que o
+			// record está e morre quando aquele segmento é aposentado.
+			//
+			// Esta asserção INVERTEU junto com o dublê, e a inversão é a parte
+			// que mais importa deste arquivo: um dublê que limpasse a posting
+			// antiga ficaria MAIS PRECISO QUE O REAL, e as dezenas de testes que
+			// o consomem como fonte de candidatos passariam a afirmar, em verde,
+			// uma estreiteza de superconjunto que o produto não tem. O dublê
+			// existe para reproduzir o real, inclusive no que o real faz de
+			// feio; a divergência só apareceria na integração.
+			if ids := colhe(t, st, statusID, str("Start")); len(ids) != 1 || ids[0] != id {
+				t.Errorf("posting do valor antigo = %v, want [%d]: ela sobrevive como candidato, e o §44 a descarta", ids, id)
 			}
 			if ids := colhe(t, st, statusID, str("Stop")); len(ids) != 1 || ids[0] != id {
 				t.Errorf("posting do valor novo = %v, want [%d]", ids, id)

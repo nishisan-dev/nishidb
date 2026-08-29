@@ -428,19 +428,21 @@ func TestReopenBitmapConverge(t *testing.T) {
 	mustPut(t, s, "bc", 2, statusPayload(t, s, "bc", "Stop", 2), &prev)
 
 	s2 := reopen(t, s, opts)
-	itA, err := s2.LookupBitmap(fldStatus, strVal("Start"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if rows := collectRows(t, itA); len(rows) != 0 {
-		t.Fatalf("posting antiga deveria ter sido limpa no replay: %v", rows)
-	}
+	// A convergência que este teste mede é a do estado NOVO: o update A→B
+	// perdido do heap tem de voltar pelo replay. Essa asserção segue exata.
 	itB, err := s2.LookupBitmap(fldStatus, strVal("Stop"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if rows := collectRows(t, itB); !slices.Equal(rows, []types.RowID{id}) {
 		t.Fatalf("posting nova pós-replay: %v", rows)
+	}
+	// A posting ANTIGA já não é limpa pelo replay, porque não há Clear a
+	// reaplicar (spec §5.2). Ela fica como candidato e some com o segmento; o
+	// que o produto devolve — query pós-restart igual à pré-crash, que é a frase
+	// do cabeçalho deste teste — é o resultado pós-revalidação.
+	if rows := lookupRevalidado(t, s2, fldStatus, strVal("Start")); len(rows) != 0 {
+		t.Fatalf("pós-revalidação, status=Start deveria ser vazio depois do replay: %v", rows)
 	}
 	exigeBitmapCompleto(t, s2)
 }
@@ -478,13 +480,22 @@ func TestCrashEntreApplyEManifest(t *testing.T) {
 	if st := s2.Stats(); st.RowCount != 2 {
 		t.Fatalf("sem duplicação: RowCount=%d", st.RowCount)
 	}
+	// O que este teste prova é a IDEMPOTÊNCIA do replay por cima de índices já
+	// à frente do manifest — e as asserções que a medem (visibilidade das duas
+	// keys, Sequence de ca-1 e RowCount==2, acima) seguem intactas.
+	//
+	// A asserção de que a posting antiga de ca-1 "está limpa" media o Clear
+	// reaplicado pelo replay, que deixou de existir (§5.2). Sem Clear, uma
+	// re-aplicação duplicada não teria como se manifestar apagando de menos;
+	// ela se manifestaria como rowId REPETIDO no iterador — e é isso que a
+	// asserção passa a cobrar, junto do resultado pós-revalidação.
 	itA, err := s2.LookupBitmap(fldStatus, strVal("Start"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	rowsA := collectRows(t, itA)
-	if slices.Contains(rowsA, id1) {
-		t.Fatalf("posting antiga de ca-1 deveria estar limpa: %v", rowsA)
+	exigeCandidatos(t, "Start", collectRows(t, itA), nil)
+	if rows := lookupRevalidado(t, s2, fldStatus, strVal("Start")); !slices.Equal(rows, []types.RowID{id1 + 1}) {
+		t.Fatalf("pós-revalidação status=Start deveria ser só ca-2 (%d): %v", id1+1, rows)
 	}
 	exigeBitmapCompleto(t, s2)
 }

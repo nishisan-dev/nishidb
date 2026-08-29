@@ -452,8 +452,10 @@ func TestPhantomCommitEmUpdateMaterializaEstadoNovo(t *testing.T) {
 	if err != nil || !ok || rec.RowID != id || rec.Sequence != 2 {
 		t.Fatalf("o update órfão deveria estar visível pós-restart: (%+v, ok=%v, err=%v)", rec, ok, err)
 	}
-	// A transição de bitmap foi reexecutada inteira: entra em Stop e sai de
-	// Start (o Put falho não chegou a nenhuma das duas fases).
+	// A indexação foi reexecutada: a row entra em Stop. Esta é a metade que
+	// importa e ela segue EXATA — o Put falho não chegou a indexar nada, então
+	// perder a row aqui seria falso negativo nascido de um phantom commit, que é
+	// o modo de falha que este teste existe para pegar.
 	itStop, err := s2.LookupBitmap(fldStatus, strVal("Stop"))
 	if err != nil {
 		t.Fatal(err)
@@ -461,14 +463,12 @@ func TestPhantomCommitEmUpdateMaterializaEstadoNovo(t *testing.T) {
 	if rows := collectRows(t, itStop); len(rows) != 1 || rows[0] != id {
 		t.Fatalf("postings de Stop após o replay: %v", rows)
 	}
-	itStart, err := s2.LookupBitmap(fldStatus, strVal("Start"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, r := range collectRows(t, itStart) {
-		if r == id {
-			t.Fatal("a posting antiga de Start deveria ter sido limpa pelo replay")
-		}
+	// A outra metade — "sai de Start" — era a fase de CLEAR, que o índice por
+	// segmento não tem (spec §5.2). A posting antiga sobrevive como candidato e
+	// quem a descarta é a revalidação do §44; o que o replay tem de garantir é
+	// que o estado NOVO manda, e é isso que a linha abaixo afirma.
+	if rows := lookupRevalidado(t, s2, fldStatus, strVal("Start")); len(rows) != 0 {
+		t.Fatalf("pós-revalidação status=Start deveria ser vazio após o replay: %v", rows)
 	}
 	// A row não pode ter sido contada duas vezes.
 	if got := s2.Stats().RowCount; got != 1 {

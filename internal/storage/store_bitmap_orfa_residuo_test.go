@@ -103,27 +103,44 @@ func TestPostingOrfaDoReplayNaoConverge(t *testing.T) {
 	final := postingsDeStatus(t, s2, "Start", "Stop", "Idle")
 	t.Logf("após o terceiro update + checkpoint: postings de Start=%v Stop=%v Idle=%v",
 		final["Start"], final["Stop"], final["Idle"])
-	if len(final["Stop"]) != 0 {
-		t.Fatalf("após o terceiro update + checkpoint: a posting de Stop deveria ter sido limpa "+
-			"(esse prev o replay conhecia), obtido %v", final["Stop"])
-	}
+	// A asserção que estava aqui — "a posting de Stop deveria ter sido limpa,
+	// esse prev o replay conhecia" — media a fase de CLEAR, que o índice por
+	// segmento não tem (spec §5.2). Sem Clear, Stop vira órfã pela MESMA porta
+	// que Start, e não há mais "prev que o replay conhecia" a distinguir.
 	exigeOrfaDeStatus(t, "após o terceiro update + checkpoint", final, id, "Start", "Idle")
+	exigeOrfaDeStatus(t, "após o terceiro update + checkpoint", final, id, "Stop", "Idle")
 
 	// 5. E o resíduo NÃO é falso negativo: o valor corrente está nas postings,
 	// que é a única propriedade da qual o §44 depende.
 	exigeBitmapCompleto(t, s2)
 
-	// 6. Contraprova: a MESMA sequência de escritas sem crash nenhum fecha a
-	// conta exata. O resíduo é do REPLAY, não do write path.
+	// 6. A contraprova mudou de sentido, e a mudança é o ganho do desenho novo.
+	//
+	// Ela existia para provar que o resíduo era do REPLAY e não do write path —
+	// uma ASSIMETRIA entre os dois caminhos, que é o que fazia o débito 45 ser
+	// um débito. Com o índice por segmento não há Clear em caminho nenhum
+	// (§5.2), então os dois convergem para o MESMO estado, e é essa
+	// convergência que o teste passa a afirmar. Assimetria entre write path e
+	// replay é que seria defeito: significaria que a recuperação não reproduz o
+	// que a ingestão faz.
+	//
+	// E o resíduo deixou de ser eterno, que era a outra metade do débito: a
+	// posting órfã mora no índice do segmento em que foi escrita e sai de disco
+	// quando a compaction ou a retenção aposenta aquele segmento.
 	semCrash := postingsSemCrash(t)
-	for _, v := range []string{"Start", "Stop"} {
-		if len(semCrash[v]) != 0 {
-			t.Fatalf("write path sem crash deveria ter limpado a posting de %s, obtido %v", v, semCrash[v])
+	for _, v := range []string{"Start", "Stop", "Idle"} {
+		if len(semCrash[v]) != 1 || semCrash[v][0] != id {
+			t.Fatalf("write path sem crash: postings de %s = %v, esperado [%d] — o write path e o "+
+				"replay têm de convergir para o mesmo estado", v, semCrash[v], id)
 		}
 	}
-	if len(semCrash["Idle"]) != 1 || semCrash["Idle"][0] != id {
-		t.Fatalf("write path sem crash deveria deixar só a posting de Idle com a row %d, obtido %v",
-			id, semCrash["Idle"])
+	// A propriedade de produto, nos dois caminhos: só o valor CORRENTE
+	// sobrevive à revalidação.
+	if rows := lookupRevalidado(t, s2, fldStatus, strVal("Start")); len(rows) != 0 {
+		t.Fatalf("pós-revalidação, status=Start deveria ser vazio: %v", rows)
+	}
+	if rows := lookupRevalidado(t, s2, fldStatus, strVal("Idle")); len(rows) != 1 || rows[0] != id {
+		t.Fatalf("pós-revalidação, status=Idle deveria ser [%d]: %v", id, rows)
 	}
 }
 

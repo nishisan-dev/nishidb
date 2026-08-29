@@ -13,12 +13,19 @@ import (
 
 // A QUARTA rota de leitura. O quiesce da I2 cobriu Put, GetByKey, GetByRowID e
 // ScanLive, e o teste daquela tarefa asseriu "toda operação após o Close" — mas
-// o helper `abre` não configura índice bitmap, então `LookupBitmap` estava fora
-// do alcance da asserção. A invariante valia em três rotas e falhava na quarta.
+// o helper `abre` não configura índice, então o Lookup estava fora do alcance da
+// asserção. A invariante valia em três rotas e falhava na quarta.
 //
-// O iterador de bitmap é o mais exposto de todos: ele SOBREVIVE à chamada que o
+// O iterador do índice é o mais exposto de todos: ele SOBREVIVE à chamada que o
 // criou (é lazy por construção) e lê o mmap a cada Next. É a fonte de candidatos
 // de 4 dos 6 planos do executor.
+//
+// ESTE ARQUIVO NÃO SAI COM O MOTOR ANTIGO, e o nome dele mudou para dizer isso.
+// Os quatro testes daqui cobrem o contrato de Close do iterador que o
+// LookupBitmap devolve — que hoje é o do índice POR SEGMENTO —, e nenhum deles
+// tem equivalente no close_quiesce_test.go. Removê-los junto com o pacote
+// bitmap deixaria a rota mais exposta do motor novo sem asserção de quiesce
+// nenhuma.
 
 func abreComBitmap(t *testing.T, campo string) (*storage.Store, types.FieldID) {
 	t.Helper()
@@ -142,8 +149,21 @@ func TestCloseConcorrenteComIteradoresDeBitmap(t *testing.T) {
 	wg.Wait()
 }
 
-// Valor nunca visto devolve iterador vazio, e o vazio também precisa sobreviver
-// ao Close — ele é o mesmo tipo devolvido nas outras rotas.
+// Valor nunca visto devolve iterador vazio, e o vazio segue a MESMA regra de
+// quiesce das outras rotas: interrompido pelo Close, ele reporta
+// ErrDatasetClosed.
+//
+// Esta expectativa INVERTEU com o índice por segmento, e a inversão é a
+// correção de um defeito, não uma concessão ao motor novo. Antes, o motor global
+// sabia de antemão que o valor nunca fora visto e devolvia um iterador vazio
+// NÃO embrulhado — imune ao Close, e portanto capaz de afirmar "varri até o fim,
+// está tudo bem" sobre um dataset que já tinha fechado. Um vazio honesto e um
+// vazio por interrupção ficavam indistinguíveis, e é a segunda leitura que
+// engana.
+//
+// O motor por segmento não sabe de antemão: ele monta uma fonte por segmento e
+// só descobre o vazio DURANTE a varredura, que reentra no Store a cada avanço.
+// Se o dataset fechou, ele diz que fechou.
 func TestIteradorVazioDeBitmapSobreviveAoClose(t *testing.T) {
 	st, campo := abreComBitmap(t, "status")
 	povoa(t, st, campo, "Stop", 8)
@@ -158,8 +178,27 @@ func TestIteradorVazioDeBitmapSobreviveAoClose(t *testing.T) {
 	if it.Next() {
 		t.Error("iterador de valor inexistente devolveu row")
 	}
-	if err := it.Err(); err != nil {
-		t.Errorf("Err() = %v, want nil (não houve o que interromper)", err)
+	if err := it.Err(); !errors.Is(err, storage.ErrDatasetClosed) {
+		t.Errorf("Err() = %v, want ErrDatasetClosed — o vazio não pode afirmar varredura completa sobre um dataset fechado", err)
 	}
 	it.Close()
+
+	// E sem o Close no meio, o mesmo valor inexistente é vazio SEM erro: a
+	// asserção acima não pode estar passando por um erro que aparece sempre.
+	st2, campo2 := abreComBitmap(t, "status")
+	povoa(t, st2, campo2, "Stop", 8)
+	defer func() { _ = st2.Close() }()
+	it2, err := st2.LookupBitmap(campo2, types.Value{Type: types.TypeString, Bytes: []byte("Start")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if it2.Next() {
+		t.Error("iterador de valor inexistente devolveu row com o dataset aberto")
+	}
+	if err := it2.Err(); err != nil {
+		t.Errorf("com o dataset aberto, Err() = %v, want nil", err)
+	}
+	if err := it2.Close(); err != nil {
+		t.Errorf("Close do iterador: %v", err)
+	}
 }

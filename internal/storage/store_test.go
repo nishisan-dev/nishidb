@@ -180,25 +180,25 @@ func TestPutSemPrevParaKeyExistenteFazFallback(t *testing.T) {
 	s := openStore(t, Options{BitmapFields: []types.FieldID{fldStatus}})
 	mustPut(t, s, "fb", 1, statusPayload(t, s, "fb", "Start", 1), nil)
 
-	// prev=nil com key existente: o Store lê o prev sozinho, não cria, e o
-	// diff de bitmap enxerga o estado antigo.
+	// prev=nil com key existente: o Store lê o prev sozinho e não cria rowId
+	// novo. É ISSO que este teste mede, e a asserção segue intacta.
 	id2, created := mustPut(t, s, "fb", 2, statusPayload(t, s, "fb", "Stop", 2), nil)
 	if created {
 		t.Fatal("fallback não pode criar rowId novo")
-	}
-	itStart, err := s.LookupBitmap(fldStatus, strVal("Start"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if rows := collectRows(t, itStart); len(rows) != 0 {
-		t.Fatalf("bitmap Start deveria esvaziar, tem %v", rows)
 	}
 	itStop, err := s.LookupBitmap(fldStatus, strVal("Stop"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rows := collectRows(t, itStop); !slices.Equal(rows, []types.RowID{id2}) {
-		t.Fatalf("bitmap Stop: %v", rows)
+	exigeCandidatos(t, "Stop", collectRows(t, itStop), []types.RowID{id2})
+
+	// A asserção que ESTE teste tinha em Start — "o bitmap deveria esvaziar" —
+	// media o diff do motor global, que não existe mais: o índice por segmento
+	// não tem fase de CLEAR (spec §5.2), então a posting de Start sobrevive como
+	// candidato. O que o produto devolve é o resultado pós-revalidação, e é ele
+	// que continua vazio.
+	if rows := lookupRevalidado(t, s, fldStatus, strVal("Start")); len(rows) != 0 {
+		t.Fatalf("depois da revalidação, status=Start deveria ser vazio, tem %v", rows)
 	}
 }
 
@@ -213,13 +213,24 @@ func TestBitmapDiffEmUpdate(t *testing.T) {
 	}
 	mustPut(t, s, "k2", 10, statusPayload(t, s, "k2", "Stop", 1), &prev)
 
+	// Em Start a asserção passa de igualdade para SUPERCONJUNTO, e a razão é a
+	// §5.2: sem fase de CLEAR, a row 1 — que era Start e virou Stop — sobrevive
+	// como candidato até o segmento ser compactado. Exigir [0 2] aqui seria
+	// medir a estreiteza do motor global. O que o produto devolve é a linha de
+	// baixo, pós-revalidação, e essa continua exata.
 	itStart, err := s.LookupBitmap(fldStatus, strVal("Start"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rows := collectRows(t, itStart); !slices.Equal(rows, []types.RowID{0, 2}) {
-		t.Fatalf("Start: esperado [0 2], obtido %v", rows)
+	exigeCandidatos(t, "Start", collectRows(t, itStart), []types.RowID{0, 2})
+	if rows := lookupRevalidado(t, s, fldStatus, strVal("Start")); !slices.Equal(rows, []types.RowID{0, 2}) {
+		t.Fatalf("Start pós-revalidação: esperado [0 2], obtido %v", rows)
 	}
+
+	// Em Stop a IGUALDADE é preservada, e de propósito: nenhuma linha deixou de
+	// ser Stop, então não há falso positivo que a explique. Afrouxá-la aqui
+	// junto com a de cima teria apagado uma asserção que o desenho novo não
+	// exige apagar.
 	itStop, err := s.LookupBitmap(fldStatus, strVal("Stop"))
 	if err != nil {
 		t.Fatal(err)
@@ -228,17 +239,14 @@ func TestBitmapDiffEmUpdate(t *testing.T) {
 		t.Fatalf("Stop: esperado [1], obtido %v", rows)
 	}
 
-	// A→A (mesmo valor): pertinência inalterada.
+	// A→A (mesmo valor): pertinência inalterada. Preservado integralmente — é a
+	// guarda contra um Set que se confundisse com update de valor.
 	prev2, _, _, err := s.GetByKey([]byte("k1"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	mustPut(t, s, "k1", 20, statusPayload(t, s, "k1", "Start", 9), &prev2)
-	itStart2, err := s.LookupBitmap(fldStatus, strVal("Start"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if rows := collectRows(t, itStart2); !slices.Equal(rows, []types.RowID{0, 2}) {
+	if rows := lookupRevalidado(t, s, fldStatus, strVal("Start")); !slices.Equal(rows, []types.RowID{0, 2}) {
 		t.Fatalf("Start pós A→A: %v", rows)
 	}
 }

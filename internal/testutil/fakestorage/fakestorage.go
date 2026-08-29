@@ -85,7 +85,7 @@ type Store struct {
 	nextRow  types.RowID
 	bitmap   map[types.FieldID]bool
 	hash     map[types.FieldID]bool
-	indexed  map[types.FieldID]bool // união bitmap+hash (o diff é igual)
+	indexed  map[types.FieldID]bool // união bitmap+hash: um motor só (spec D5)
 	postings map[postingKey]map[types.RowID]struct{}
 
 	// PutCalls instrumenta as chamadas na ordem em que ocorreram.
@@ -126,7 +126,7 @@ func New(idx Indexes) *Store {
 // ([type][payload], valuekey.Append): tipo + os 8 bytes do I64 para os
 // tipos de largura fixa, tipo + os bytes crus para os variáveis.
 //
-// Já foi um fmt.Sprintf. Era chamado por campo no diff, o que fazia um Apply
+// Já foi um fmt.Sprintf. Era chamado por campo na indexação, o que fazia um Apply
 // de evento RADIUS custar ~120 alocações — todas do dublê, escondendo a
 // medição do código sob teste nos benchmarks que o usam.
 func valKey(v types.Value) string {
@@ -144,17 +144,10 @@ func valKey(v types.Value) string {
 	return string(b)
 }
 
-// sameValue compara duas Values sem passar por valKey — o diff só precisa
-// saber se o valor MUDOU, e comparar campo a campo não constrói string
-// nenhuma.
-func sameValue(a, b types.Value) bool {
-	return a.Type == b.Type && a.I64 == b.I64 && bytes.Equal(a.Bytes, b.Bytes)
-}
-
 // Put espelha o write path do Store real: valida os argumentos, resolve o
 // rowId (novo, do prev ou da key existente), valida o payload (ordem
-// crescente de FieldID, tag 0x00 proibida), diffa os campos indexados
-// prev↔novo e publica. Sequence NÃO é checada aqui — stale check é
+// crescente de FieldID, tag 0x00 proibida), indexa os campos indexados do
+// payload novo e publica. Sequence NÃO é checada aqui — stale check é
 // responsabilidade do Apply.
 //
 // Contrato do prev (idêntico ao real): quando fornecido, prev DEVE ser o
@@ -186,18 +179,18 @@ func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *ty
 		return 0, false, err
 	}
 
+	// O payload ANTERIOR deixou de ser lido aqui, e a ausência é o espelho do
+	// real: a indexação é aditiva (ver aplicaPostings), então não há diff a
+	// fazer e o prev serve apenas para resolver o rowId.
 	var (
-		rowID       types.RowID
-		created     bool
-		prevPayload []byte
+		rowID   types.RowID
+		created bool
 	)
 	switch existing, exists := s.byKey[string(key)]; {
 	case prev != nil:
 		rowID = prev.RowID
-		prevPayload = prev.Payload
 	case exists:
 		rowID = existing
-		prevPayload = s.rows[existing].payload
 	default:
 		rowID = s.nextRow
 		s.nextRow++
@@ -205,7 +198,7 @@ func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *ty
 	}
 
 	s.byKey[string(key)] = rowID
-	s.diffPostings(rowID, prevPayload, payload)
+	s.aplicaPostings(rowID, payload)
 	s.rows[rowID] = &row{
 		rowID:   rowID,
 		seq:     seq,
@@ -243,34 +236,38 @@ func (s *Store) validateIndexable(payload []byte) error {
 	}
 }
 
-// diffPostings percorre os dois payloads ordenados (merge linear, como o
-// Store real) removendo postings antigos e inserindo novos dos campos
-// indexados.
-func (s *Store) diffPostings(rowID types.RowID, prevPayload, newPayload []byte) {
-	var pr, nr encoding.FieldReader
-	pr.Reset(prevPayload)
-	nr.Reset(newPayload)
-	pid, pv, pok := pr.Next()
-	nid, nv, nok := nr.Next()
-	for pok || nok {
-		switch {
-		case pok && (!nok || pid < nid):
-			s.removePosting(pid, pv, rowID)
-			pid, pv, pok = pr.Next()
-		case nok && (!pok || nid < pid):
-			s.addPosting(nid, nv, rowID)
-			nid, nv, nok = nr.Next()
-		default: // mesmo id
-			// O check de índice vem ANTES da comparação: campo sem índice não
-			// tem posting a atualizar, e é a maioria esmagadora dos campos de
-			// um evento.
-			if s.indexed[pid] && !sameValue(pv, nv) {
-				s.removePosting(pid, pv, rowID)
-				s.addPosting(nid, nv, rowID)
-			}
-			pid, pv, pok = pr.Next()
-			nid, nv, nok = nr.Next()
+// aplicaPostings liga uma posting para CADA campo indexado presente no payload
+// novo, e não remove nenhuma. É o espelho exato do aplicaIndiceSets do Store
+// real, e a palavra "exato" é o requisito, não um elogio.
+//
+// Ela substituiu um diff (merge linear sobre os dois payloads, removendo o valor
+// antigo e inserindo o novo) quando o índice por segmento passou a responder às
+// consultas: lá não existe fase de CLEAR (spec §5.2), porque a posting vive no
+// índice do SEGMENTO em que o record está e morre quando aquele segmento é
+// compactado ou aposentado.
+//
+// UM DUBLÊ MAIS PRECISO QUE O REAL É PIOR QUE UM DUBLÊ IMPRECISO, e é por isso
+// que esta mudança não é opcional. Cerca de trinta arquivos de teste tomam o
+// fake como fonte de candidatos; se ele continuasse limpando a posting antiga,
+// todos passariam a afirmar — em verde — uma estreiteza de superconjunto que o
+// produto não tem, e a divergência só apareceria na integração. O dublê existe
+// para reproduzir o real, inclusive no que o real faz de feio.
+//
+// Entra CADA campo indexado do payload, e não só o que mudou, pela mesma razão
+// que vale no real: quando um update move a linha para outro segmento, pular o
+// campo inalterado deixaria a única posting dela no segmento ANTIGO, e ela
+// morreria com ele. Falso negativo, que é a única coisa que o §44 não perdoa.
+//
+// Não há parâmetro prevPayload porque não há diff a fazer.
+func (s *Store) aplicaPostings(rowID types.RowID, payload []byte) {
+	var r encoding.FieldReader
+	r.Reset(payload)
+	for {
+		id, v, ok := r.Next()
+		if !ok {
+			return
 		}
+		s.addPosting(id, v, rowID)
 	}
 }
 
@@ -285,13 +282,6 @@ func (s *Store) addPosting(field types.FieldID, v types.Value, rowID types.RowID
 		s.postings[k] = set
 	}
 	set[rowID] = struct{}{}
-}
-
-func (s *Store) removePosting(field types.FieldID, v types.Value, rowID types.RowID) {
-	if !s.indexed[field] {
-		return
-	}
-	delete(s.postings[postingKey{field, valKey(v)}], rowID)
 }
 
 // GetByKey devolve o record corrente da key, copiado para buf (Record.Key e

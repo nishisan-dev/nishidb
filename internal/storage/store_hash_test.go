@@ -92,9 +92,22 @@ func TestLookupHashDeCampoNaoIndexadoEhErro(t *testing.T) {
 	}
 }
 
-// TestUpdateRemoveAPostingDoValorAntigo é o teste que separa este índice de um
-// que só sabe crescer: um update troca o valor da coluna, e sem o Clear a
-// query devolveria a row sob um valor que ela não tem mais.
+// TestUpdateRemoveAPostingDoValorAntigo mede hoje o que SUBSTITUIU a remoção
+// que dá nome a ele. O nome fica porque `docs/debitos.md` o cita como prova do
+// débito 19, e renomeá-lo quebraria a conferência do
+// TestEvidenciasCitadasNosDocumentosExistem.
+//
+// O índice por segmento não tem fase de CLEAR (spec §5.2), e a ausência é o
+// desenho: a posting do valor antigo mora no índice do segmento ANTIGO, vira
+// falso positivo e morre quando a compaction ou a retenção aposenta aquele
+// segmento. Com o Clear somem a lápide e o falso negativo que ela existia para
+// evitar.
+//
+// Então a asserção sobe um nível: o que a query devolve — o resultado
+// pós-revalidação (§44) — continua exato, e é ele que este teste passa a
+// afirmar. A posting do valor NOVO segue exigida com igualdade: perdê-la seria
+// falso negativo, e nenhuma camada acima recupera candidato que o índice não
+// devolveu.
 func TestUpdateRemoveAPostingDoValorAntigo(t *testing.T) {
 	s := openStore(t, Options{HashFields: []types.FieldID{fldStatus}})
 	k := "CMP-V0001PPCLP-013"
@@ -106,19 +119,15 @@ func TestUpdateRemoveAPostingDoValorAntigo(t *testing.T) {
 	}
 	mustPut(t, s, k, 2, statusPayload(t, s, k, "Stop", 2), &prev)
 
-	itVelho, err := s.LookupHash(fldStatus, strVal("Start"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := collectRows(t, itVelho); len(got) != 0 {
-		t.Fatalf("a posting do valor ANTIGO sobreviveu ao update: %v", got)
-	}
 	itNovo, err := s.LookupHash(fldStatus, strVal("Stop"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := collectRows(t, itNovo); !slices.Equal(got, []types.RowID{row}) {
 		t.Fatalf("LookupHash(Stop) = %v, esperado [%d]", got, row)
+	}
+	if got := lookupRevalidado(t, s, fldStatus, strVal("Start")); len(got) != 0 {
+		t.Fatalf("pós-revalidação, a row não pode mais responder pelo valor ANTIGO: %v", got)
 	}
 }
 
@@ -197,9 +206,16 @@ func TestReplayDoTailReconstroiAsPostings(t *testing.T) {
 	}
 }
 
-// TestReplayReaplicaOClearDoUpdate é a outra metade do replay: não basta
-// religar as postings novas, o valor ANTIGO tem de sair. Um replay que só
-// somasse deixaria a row respondendo pelos dois valores para sempre.
+// TestReplayReaplicaOClearDoUpdate mantém o nome porque `docs/debitos.md` o
+// cita no débito 19, mas o Clear que ele media não existe mais no índice por
+// segmento (spec §5.2) — e, com ele, sumiu a categoria inteira de "o replay
+// esqueceu de limpar". Um replay que só SOMA é agora o comportamento correto:
+// não há lápide a reaplicar, e a posting sobrante é o falso positivo que o §44
+// descarta.
+//
+// O que continua sendo propriedade de produto, e é o que este teste afirma: o
+// replay religa a posting do valor NOVO (falso negativo nunca) e a query
+// pós-restart devolve o mesmo conjunto que devolveria sem o crash.
 func TestReplayReaplicaOClearDoUpdate(t *testing.T) {
 	dir := t.TempDir()
 	opts := Options{Dir: dir, HashFields: []types.FieldID{fldStatus}}
@@ -231,12 +247,8 @@ func TestReplayReaplicaOClearDoUpdate(t *testing.T) {
 	if got := collectRows(t, it); len(got) != 1 {
 		t.Fatalf("o replay não religou a posting do valor novo: %v", got)
 	}
-	itVelho, err := s2.LookupHash(fldStatus, strVal("Start"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := collectRows(t, itVelho); len(got) != 0 {
-		t.Fatalf("o replay não reaplicou o Clear do valor antigo: %v", got)
+	if got := lookupRevalidado(t, s2, fldStatus, strVal("Start")); len(got) != 0 {
+		t.Fatalf("pós-replay e pós-revalidação, o valor ANTIGO não pode devolver a row: %v", got)
 	}
 }
 
@@ -426,15 +438,20 @@ func TestCloseNoMeioDaVarreduraDoHashNaoDaPanic(t *testing.T) {
 	}
 }
 
-// TestLapideLimpaAsPostingsDeHash trava o "secondary indexes são limpos" do §56
-// para o segundo motor.
+// TestLapideLimpaAsPostingsDeHash mantém o nome — `docs/debitos.md` o cita —
+// mas o que ele trava mudou de lugar, e o próprio comentário original já
+// antecipava a razão: a limpeza da lápide nunca foi corretude, e sim custo.
+// "A revalidação do §44 a filtraria, então o custo não seria resultado errado:
+// seria candidato morto varrido para sempre."
 //
-// A lápide preserva o instante de escrita e NADA mais, e é dessa ausência que
-// vem a limpeza: com o payload novo sem campo indexado nenhum, todo campo do
-// anterior cai no ramo "campo que sai" do applyHashClears. Sem isso, a row
-// morta continuaria respondendo pelo valor que tinha em vida — e a revalidação
-// do §44 a filtraria, então o custo não seria resultado errado: seria candidato
-// morto varrido para sempre, no índice que existe justamente para não varrer.
+// No índice por segmento não há Clear (spec §5.2), então a posting da row morta
+// sobrevive — e o custo que ela representa tem prazo, ao contrário do que tinha
+// no motor global: ela morre quando a compaction ou a retenção aposenta o
+// segmento em que mora. É a segunda dor da spec resolvida por construção.
+//
+// O que este teste afirma agora é a propriedade de PRODUTO: depois da lápide, a
+// row expirada não é devolvida pela consulta — o que é asserção sobre o
+// resultado pós-revalidação, e não sobre a estreiteza do superconjunto.
 func TestLapideLimpaAsPostingsDeHash(t *testing.T) {
 	dir := t.TempDir()
 	s := openStore(t, Options{
@@ -468,8 +485,8 @@ func TestLapideLimpaAsPostingsDeHash(t *testing.T) {
 	if !expirou {
 		t.Fatal("Expira devolveu false para row vencida: o teste não chegou a exercitar a lápide")
 	}
-	if got := postingsDeHashDeStatus(t, s, statusID, strVal("Start")); len(got) != 0 {
-		t.Fatalf("a lápide não limpou a posting de hash: %v", got)
+	if got := lookupRevalidado(t, s, statusID, strVal("Start")); len(got) != 0 {
+		t.Fatalf("a row expirada continuou sendo devolvida por status=Start: %v", got)
 	}
 }
 

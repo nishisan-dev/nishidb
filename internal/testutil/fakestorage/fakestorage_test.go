@@ -169,7 +169,10 @@ func TestPutUpdateDiffsIndexPostings(t *testing.T) {
 	}
 	assertPosting(t, s, 2, strVal("Start"), []types.RowID{rowID})
 
-	// Update trocando o valor indexado: posting antigo sai, novo entra.
+	// Update trocando o valor indexado: o novo entra e o ANTIGO permanece.
+	// A indexação é aditiva, espelhando o índice por segmento do Store real,
+	// que não tem fase de CLEAR (spec §5.2) — ver aplicaPostings. Exigir que o
+	// antigo saísse aqui deixaria o dublê mais preciso que o real.
 	var buf []byte
 	prev, _, _, _ := s.GetByKey([]byte("ABC"), buf)
 	p2 := payload(t, fv(1, strVal("ABC")), fv(2, strVal("Stop")))
@@ -177,7 +180,7 @@ func TestPutUpdateDiffsIndexPostings(t *testing.T) {
 	if err != nil || created || rowID2 != rowID {
 		t.Fatalf("update: rowID=%d created=%v err=%v", rowID2, created, err)
 	}
-	assertPosting(t, s, 2, strVal("Start"), nil)
+	assertPosting(t, s, 2, strVal("Start"), []types.RowID{rowID})
 	assertPosting(t, s, 2, strVal("Stop"), []types.RowID{rowID})
 }
 
@@ -242,24 +245,58 @@ func TestPutValorIndexadoInalteradoMantemPosting(t *testing.T) {
 	assertPosting(t, s, 2, strVal("Start"), []types.RowID{rowID})
 }
 
+// TestPutRemovedFieldClearsPosting mantém o nome e inverteu a expectativa: o
+// campo que SAI do payload (NULL = ausência) já não limpa posting nenhuma,
+// porque o índice por segmento do Store real não tem fase de CLEAR (§5.2).
+//
+// A remoção do campo continua tendo efeito onde ele importa — o payload
+// corrente não tem mais o campo, então a revalidação do §44 descarta a row —,
+// e é isso que o teste afirma: a posting sobrevive como candidato E o payload
+// corrente já não a justifica.
 func TestPutRemovedFieldClearsPosting(t *testing.T) {
 	s := New(Indexes{Bitmap: []types.FieldID{2}})
 	p1 := payload(t, fv(1, strVal("ABC")), fv(2, strVal("Start")))
 	rowID, _, _ := s.Put([]byte("ABC"), 1, 0, p1, nil)
-	// Novo payload sem o campo 2 (NULL = ausência): posting deve sumir.
 	p2 := payload(t, fv(1, strVal("ABC")))
 	var buf []byte
 	prev, _, _, _ := s.GetByKey([]byte("ABC"), buf)
 	if _, _, err := s.Put([]byte("ABC"), 2, 0, p2, &prev); err != nil {
 		t.Fatal(err)
 	}
-	assertPosting(t, s, 2, strVal("Start"), nil)
-	_ = rowID
+	assertPosting(t, s, 2, strVal("Start"), []types.RowID{rowID})
+	rec, _, ok, err := s.GetByKey([]byte("ABC"), nil)
+	if err != nil || !ok {
+		t.Fatalf("GetByKey: ok=%v err=%v", ok, err)
+	}
+	if temCampo(t, rec.Payload, 2) {
+		t.Error("o campo removido continua no payload corrente: a revalidação não descartaria a row")
+	}
+}
+
+// temCampo diz se o payload carrega o campo — é o que a revalidação do §44 faz
+// com cada candidato que o índice devolve.
+func temCampo(t *testing.T, payload []byte, id types.FieldID) bool {
+	t.Helper()
+	var r encoding.FieldReader
+	r.Reset(payload)
+	for {
+		fid, _, ok := r.Next()
+		if !ok {
+			if err := r.Err(); err != nil {
+				t.Fatal(err)
+			}
+			return false
+		}
+		if fid == id {
+			return true
+		}
+	}
 }
 
 func TestPutWithNilPrevResolvesInternally(t *testing.T) {
 	// prev==nil com key existente: o Put resolve sozinho (fallback do
-	// contrato) e o diff continua correto.
+	// contrato) e a indexação continua correta — o valor novo entra, e o antigo
+	// permanece como candidato (§5.2, sem fase de CLEAR).
 	s := New(Indexes{Bitmap: []types.FieldID{2}})
 	p1 := payload(t, fv(1, strVal("ABC")), fv(2, strVal("Start")))
 	rowID, _, _ := s.Put([]byte("ABC"), 1, 0, p1, nil)
@@ -268,7 +305,7 @@ func TestPutWithNilPrevResolvesInternally(t *testing.T) {
 	if err != nil || created || rowID2 != rowID {
 		t.Fatalf("rowID=%d created=%v err=%v", rowID2, created, err)
 	}
-	assertPosting(t, s, 2, strVal("Start"), nil)
+	assertPosting(t, s, 2, strVal("Start"), []types.RowID{rowID})
 	assertPosting(t, s, 2, strVal("Stop"), []types.RowID{rowID})
 }
 

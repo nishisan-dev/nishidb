@@ -173,6 +173,10 @@ func uniaoDeCampos(a, b []types.FieldID) []types.FieldID {
 // Falha no meio fecha o que já abriu: um WIP órfão manteria mapeamento de pé
 // depois de o Open ter desistido, e o Close do Store não teria como alcançá-lo
 // porque o mapa só é publicado no fim.
+//
+// Os arquivos são abertos FORA do selMu e o mapa é publicado sob ele: a
+// consulta lê s.wips pelo mesmo lock, e segurá-lo por N mmaps travaria toda
+// leitura do dataset atrás de uma rotação de segmento.
 func (s *Store) abreWIPsDoCorrente() error {
 	if len(s.camposIndexados) == 0 {
 		return nil
@@ -189,7 +193,9 @@ func (s *Store) abreWIPsDoCorrente() error {
 		}
 		wips[campo] = w
 	}
+	s.selMu.Lock()
 	s.wips = wips
+	s.selMu.Unlock()
 	return nil
 }
 
@@ -200,7 +206,20 @@ func (s *Store) abreWIPsDoCorrente() error {
 // fim e entra em pânico nomeado de propósito (segindex/wip.go), então um WIP
 // que continuasse no mapa depois de uma falha parcial derrubaria o processo no
 // Close em vez de devolver o erro que já está sendo devolvido aqui.
+//
+// O Fecha acontece DENTRO do selMu, e não só a troca do mapa: uma consulta que
+// tivesse pegado o ponteiro caminharia a cadeia de um mapeamento desmontado, e
+// o WIP responde a isso com o pânico nomeado do exigeAberto. Fechar sob o mesmo
+// lock que a consulta segura durante o Lookup é o que torna a janela
+// inexistente em vez de improvável.
+//
+// Entre este fecha e o abreWIPsDoCorrente seguinte o mapa fica vazio, e a
+// consulta trata isso como qualquer outro segmento sem índice: ENUMERA. É
+// correto por construção e dispensa raciocinar sobre a ordem entre a troca do
+// curSegID e a publicação da location do record que causou a rotação.
 func (s *Store) fechaWIPs() error {
+	s.selMu.Lock()
+	defer s.selMu.Unlock()
 	var errs []error
 	for _, w := range s.wips {
 		errs = append(errs, w.Fecha())

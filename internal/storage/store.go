@@ -360,18 +360,30 @@ type Store struct {
 	// FieldID, uma vez por campo do payload.
 	//
 	// Enquanto durar a migração, este motor CONVIVE com os bitmaps e os hashes
-	// acima: ele é mantido em toda escrita e não responde a consulta nenhuma. É
-	// andaime declarado, não fallback — a leitura troca de motor e os dois
-	// pacotes antigos saem, nas tarefas seguintes.
+	// acima: eles seguem sendo mantidos em toda escrita e já não respondem a
+	// consulta nenhuma. É andaime declarado, não fallback — os dois pacotes
+	// antigos saem na tarefa seguinte.
+	//
+	// A LEITURA DO MAPA PELO CAMINHO DE ESCRITA (aplicaIndiceSets) dispensa o
+	// selMu, e a razão é que ele já tem o wmu na mão: as duas únicas escritas
+	// deste campo — abreWIPsDoCorrente e fechaWIPs — só acontecem sob o wmu, no
+	// aposAppend, ou no Open, antes de existir concorrência. Contra a CONSULTA,
+	// que não toma o wmu por desenho, o que separa leitura de escrita é o selMu.
 	wips map[types.FieldID]*segindex.WIP
 	// selados são os índices imutáveis, abertos SOB DEMANDA e mantidos
 	// mapeados. Não há LRU: o mapeamento somente-leitura não retém descritor
 	// (open → mmap → close), e 500 VMAs num teto padrão de 65.530 não é
 	// pressão.
 	selados map[uint32]*segindex.Selado
-	// selMu protege o mapa acima, e é FOLHA na ordem de locks: nada tomado sob
-	// ele toma wmu ou aposMu. Ele existe porque o mapa é escrito pela
-	// aposentadoria e lido pela consulta, que são goroutines diferentes.
+	// selMu protege os DOIS mapas de índice por segmento — selados e wips —, e
+	// é FOLHA na ordem de locks: nada tomado sob ele toma wmu ou aposMu. Ele
+	// existe porque os mapas são escritos pela aposentadoria e pela rotação e
+	// lidos pela consulta, que são goroutines diferentes.
+	//
+	// UM lock para os dois, e não dois: a consulta monta uma fonte por segmento
+	// numa passada só, e um segundo mutex apenas acrescentaria uma ordem a
+	// respeitar sem separar contenção nenhuma — os dois mapas são escritos pelo
+	// mesmo evento, a rotação de segmento.
 	selMu sync.RWMutex
 	// camposIndexados é o conjunto ordenado, resolvido no Open e IMUTÁVEL na
 	// vida do Store — a mesma promessa de estabilidade que HasBitmap e HasHash
@@ -2251,58 +2263,30 @@ func (it *liveIterator) RowID() types.RowID { return it.cur }
 func (it *liveIterator) Err() error         { return it.err }
 func (it *liveIterator) Close() error       { return nil }
 
-// bitmapIterator embrulha o iterador do índice bitmap pelo MESMO motivo do
-// liveIterator: ele sobrevive à chamada que o criou e lê o mmap a cada avanço,
-// então precisa reentrar no Store a cada Next — devolver o iterador cru deixava
-// o Close desmapear a região sob os pés da varredura, e o bounds check da
-// região (que passa a comparar contra size=0) virava panic.
+// hashIterator embrulha o iterador do índice por segmento para que um Close do
+// dataset no meio da varredura devolva ErrDatasetClosed em Err(), sem panic.
 //
-// Só o Next reentra. RowID lê um campo já materializado, e o Close do iterador
-// de bitmap não toca a região.
-type bitmapIterator struct {
-	s   *Store
-	it  *bitmap.Iterator
-	err error
-}
-
-func (it *bitmapIterator) Next() bool {
-	if it.err != nil {
-		return false
-	}
-	if err := it.s.entra(); err != nil {
-		it.err = err
-		return false
-	}
-	defer it.s.sai()
-	return it.it.Next()
-}
-
-func (it *bitmapIterator) RowID() types.RowID { return it.it.RowID() }
-
-func (it *bitmapIterator) Err() error {
-	if it.err != nil {
-		return it.err
-	}
-	return it.it.Err()
-}
-
-func (it *bitmapIterator) Close() error { return it.it.Close() }
-
-// hashIterator embrulha o iterador do índice hash para que os DOIS motores
-// tenham o mesmo comportamento diante de um Close do dataset no meio da
-// varredura: Err() devolve ErrDatasetClosed, sem panic.
+// A razão é a MESMA do liveIterator: o iterador SOBREVIVE à chamada que o criou
+// e as fontes seladas e a do locations leem o mmap a CADA avanço, então sem a
+// reentrada o Close desmaparia a região sob os pés da varredura e o bounds check
+// (que passa a comparar contra size=0) viraria pânico. Some disso a
+// uniformidade de contrato: o executor mistura as fontes no mesmo
+// intersectIter/unionIter, e uma que seguisse produzindo linhas de um dataset
+// fechado enquanto a outra para seria a pior forma de descobrir a divergência.
 //
-// A razão é diferente da do bitmapIterator, e a diferença está escrita porque
-// ela é o que se perderia numa cópia sem pensar: o iterador de bitmap lê o
-// mmap a CADA avanço, então sem a reentrada o Close desmapeava a região sob os
-// pés dele. Aqui o Lookup já materializou as postings, então não há região a
-// perder — o que se protege é a UNIFORMIDADE do contrato, porque o executor
-// mistura os dois motores no mesmo intersectIter/unionIter e uma fonte que
-// seguisse produzindo linhas de um dataset fechado enquanto a outra para seria
-// a pior forma de descobrir a divergência.
+// Só o Next reentra. RowID lê um campo já materializado, e o Close das fontes
+// não toca região nenhuma — o dono dos mapeamentos é o Store.
+//
+// O embrulho do índice bitmap saiu daqui junto com o motor que ele servia: com
+// LookupBitmap e LookupHash respondendo pelo mesmo índice por segmento, dois
+// embrulhos idênticos seriam duas cópias de uma regra só.
+//
+// O campo é a INTERFACE, e não o iterador de um motor: a união de fontes da
+// §3.3 devolve concatenação, merge k-way ou vazio conforme os dados, e amarrar
+// um tipo concreto aqui obrigaria o embrulho a mudar junto com a estratégia.
 type hashIterator struct {
 	s   *Store
-	it  *hashidx.Iterator
+	it  types.RowIDIterator
 	err error
 }
 
@@ -2363,63 +2347,40 @@ func (s *Store) DiretorioDeSpill() string {
 	return filepath.Join(s.opts.Dir, spill.NomeDoDiretorio)
 }
 
-// LookupBitmap consulta o índice bitmap do campo; valor nunca visto devolve
-// iterador vazio; campo não indexado é erro. O resultado é um SUPERSET de
-// candidatos: rows tombstoned/sem location podem aparecer — valide liveness
-// e predicate via GetByRowID (spec §44).
+// LookupBitmap consulta o índice do campo; valor nunca visto devolve iterador
+// vazio; campo não indexado é erro. O resultado é um SUPERSET de candidatos:
+// rows tombstoned/sem location podem aparecer — valide liveness e predicate via
+// GetByRowID (spec §44).
 //
 // O iterador devolvido é reentrante: um Close do dataset no meio da varredura
 // a interrompe com ErrDatasetClosed em Err(), sem panic.
+//
+// O NOME sobrevive ao motor que o batizou. Ele e o LookupHash respondem hoje
+// pelo MESMO índice por segmento (spec §3.1): com um motor só, a distinção
+// bitmap/hash deixou de existir, e manter as duas assinaturas até a unificação
+// do planner é o que permite à suíte inteira de storage e de query exercitar o
+// motor novo sem uma linha de teste mudada.
 func (s *Store) LookupBitmap(field types.FieldID, v types.Value) (types.RowIDIterator, error) {
-	if err := s.entra(); err != nil {
-		return nil, err
-	}
-	defer s.sai()
-	ix, ok := s.bitmaps[field]
-	if !ok {
-		return nil, fmt.Errorf("%w: campo %d não possui índice bitmap", ErrInvalidArgument, field)
-	}
-	it, found, err := ix.Lookup(v)
-	if err != nil {
-		return nil, err
-	}
-	if !found {
-		return emptyIterator{}, nil
-	}
-	return &bitmapIterator{s: s, it: it}, nil
+	return s.lookupIndexado(field, v)
 }
 
-// LookupHash consulta o índice hash do campo; valor nunca visto devolve
-// iterador vazio; campo não indexado é erro. O resultado é um SUPERSET de
-// candidatos — rows tombstoned, sem location, e rows que apenas COLIDEM no
-// hash podem aparecer. Valide liveness e predicate via GetByRowID (§44).
+// LookupHash consulta o índice do campo; valor nunca visto devolve iterador
+// vazio; campo não indexado é erro. O resultado é um SUPERSET de candidatos —
+// rows tombstoned, sem location, rows que apenas COLIDEM no hash e, nos
+// segmentos sem índice, as linhas que o segmento inteiro enumera. Valide
+// liveness e predicate via GetByRowID (§44).
 //
 // Os rowIds saem em ordem estritamente CRESCENTE. Isso é contrato, não
 // detalhe: o intersectIter e o unionIter do executor assumem iteradores
-// ascendentes, e o planner mistura termos hash e bitmap no mesmo
-// IndexUnionPlan.
+// ascendentes, e o planner mistura os termos no mesmo IndexUnionPlan.
 //
-// O iterador devolvido é reentrante pelo MESMO contrato do de bitmap — um
-// Close do dataset no meio da varredura a interrompe com ErrDatasetClosed em
-// Err(), sem panic. Aqui a proteção não é contra desmapeamento (o Lookup já
-// materializou as postings antes de devolver), é contra a DIVERGÊNCIA de
-// contrato: o executor mistura os dois motores no mesmo iterador k-way, e uma
-// fonte que continuasse produzindo linhas de um dataset fechado enquanto a
-// outra para seria a pior forma de descobrir a diferença.
+// O iterador devolvido é reentrante — um Close do dataset no meio da varredura
+// a interrompe com ErrDatasetClosed em Err(), sem panic. Com o motor por
+// segmento a proteção deixou de ser só uniformidade de contrato e voltou a ser
+// literal: as fontes seladas e a do locations leem mmap a CADA avanço, então
+// sem a reentrada o Close desmaparia a região sob os pés da varredura.
 func (s *Store) LookupHash(field types.FieldID, v types.Value) (types.RowIDIterator, error) {
-	if err := s.entra(); err != nil {
-		return nil, err
-	}
-	defer s.sai()
-	ix, ok := s.hashes[field]
-	if !ok {
-		return nil, fmt.Errorf("%w: campo %d não possui índice hash", ErrInvalidArgument, field)
-	}
-	it, err := ix.Lookup(v)
-	if err != nil {
-		return nil, err
-	}
-	return &hashIterator{s: s, it: it}, nil
+	return s.lookupIndexado(field, v)
 }
 
 // Sequence devolve a última sequence aplicada à row (ok=false para row sem

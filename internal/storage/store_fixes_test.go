@@ -216,13 +216,19 @@ func TestBitmapCampoQueEntraESai(t *testing.T) {
 		t.Fatalf("campo que entra: %v", rows)
 	}
 
+	// O ramo "campo que sai" media o Clear pós-commit, que o índice por segmento
+	// não tem (spec §5.2): a posting de Start sobrevive como candidato depois de
+	// o campo deixar o payload. A propriedade de produto — a linha não é mais
+	// devolvida por status='Start' — vive um nível acima, na revalidação, e é
+	// ela que este teste passa a afirmar. O ramo "campo que entra", acima, segue
+	// exato: ali não há falso positivo que justifique afrouxar nada.
 	prev2, _, _, err := s.GetByKey([]byte("es"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	mustPut(t, s, "es", 3, payloadSemStatus(t, s, "es", 3), &prev2) // campo sai
-	if rows := lookup(); len(rows) != 0 {
-		t.Fatalf("campo que sai (Clear pós-commit): %v", rows)
+	if rows := lookupRevalidado(t, s, fldStatus, strVal("Start")); len(rows) != 0 {
+		t.Fatalf("campo que sai: pós-revalidação status=Start deveria ser vazio, tem %v", rows)
 	}
 }
 
@@ -253,11 +259,16 @@ func TestValueEqualNumericoNoBitmap(t *testing.T) {
 		t.Fatal(err)
 	}
 	mustPut(t, s, "num", 3, statusPayload(t, s, "num", "Stop", 8), &prev2) // counter 7→8
-	if rows := lookup(7); len(rows) != 0 {
-		t.Fatalf("7→8 deveria limpar a posting antiga: %v", rows)
-	}
+	// A posting nova é EXATA e continua exigida assim: perder a row em
+	// counter=8 seria falso negativo, que nenhuma camada acima recupera.
 	if rows := lookup(8); len(rows) != 1 || rows[0] != id {
 		t.Fatalf("7→8 deveria criar a posting nova: %v", rows)
+	}
+	// A antiga não é mais LIMPA — o índice por segmento não tem Clear (§5.2) —,
+	// então ela sobra como candidato e quem a descarta é a revalidação. O 7→7
+	// acima segue com igualdade: lá a posting é legítima, não resíduo.
+	if rows := lookupRevalidado(t, s, fldCounter, i64(7)); len(rows) != 0 {
+		t.Fatalf("7→8: pós-revalidação counter=7 deveria ser vazio, tem %v", rows)
 	}
 }
 
