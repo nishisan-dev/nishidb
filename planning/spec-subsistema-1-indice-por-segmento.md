@@ -172,15 +172,33 @@ um alocador dentro do arquivo — que seria a parte cara e frágil do desenho.
 Um arquivo por campo: `data/segment-%08d-%05d.widx`.
 
 ```
-header 64 B: magic "NDBW" | version u8 | fieldID u16 | baseRowID u64
-             | postingWidth u8 | dirSlots u32 | postCount u32
+header 64 B: magic "NDBW" | version u8 | fieldID u16
+             | dirSlots u32 | postCount u32
 
 diretório (open addressing, sobre VALORES DISTINTOS)   16 B por slot:
-    [hash u64][ultimo u32][contagem u32]
+    [hash u64][estado u64]        estado = (contagem << 32) | ultimo
 
-postings (array append-only)                            8 B por posting:
-    [delta u32][anterior u32]
+postings (array append-only)                           16 B por posting:
+    [rowID u64][anterior u64]
 ```
+
+`ultimo` e `anterior` são índices 1-based; `0` é "não há". `hash == 0` marca
+slot vazio, e isso é seguro porque `primary.HashKey` nunca devolve 0 nem 1.
+
+**`contagem` e `ultimo` moram na MESMA palavra de 64 bits, e isso é a
+linearização.** Publicá-los em duas escritas deixaria um leitor ver a cabeça
+nova com a contagem velha — ele dimensionaria a fatia com um elemento a menos
+que a caminhada produz. Uma escrita atômica de `estado`, depois de a posting
+estar visível, publica os dois juntos.
+
+**O rowId é ABSOLUTO na forma WIP, e a posting tem 16 bytes.** Não há
+`baseRowID` nem `postingWidth` aqui, e a razão é o dataset materializado: um
+`update` traz para o segmento corrente uma linha de rowId arbitrário,
+possivelmente menor que o do primeiro record dele, então não existe base
+conhecida antes do fato. Os 16 bytes também mantêm tudo alinhado em 8, que é o
+que o `mmap.Region` exige das cargas atômicas. O desperdício é de UM segmento —
+3,6 MB para 224 mil linhas — e a forma selada, que é quem dimensiona o disco,
+re-baseia para 4 bytes (§1.2).
 
 `anterior` encadeia as postings do mesmo valor para trás. `ultimo` é a cabeça
 da lista. Inserir a posting `(v, rowID)` é:
@@ -213,14 +231,15 @@ Crescimento: o array de postings dobra por `mmap.Region.Grow`; o diretório
 recresce por rehash quando a ocupação passa do load factor — e o rehash reescreve
 só o diretório (16 B × slots), nunca as postings.
 
-**A largura da posting é decidida pelo modo, e conservadoramente.** No histórico
-o rowId é monotônico, então `baseRowID` é o primeiro rowId do segmento e o delta
-cabe em `u32` com folga. No materializado um `update` traz para o segmento
-corrente uma linha de rowId ARBITRÁRIO, possivelmente menor que o do primeiro
-record dele — não há base conhecida antes do fato, então o WIP do materializado
-usa `baseRowID = 0` e `postingWidth = 8`. Ele existe para um segmento por vez e
-não é o que dimensiona o disco; quem dimensiona é a forma selada, e ela
-**re-baseia** (§1.2).
+**A ordem da caminhada não é crescente no materializado.** No histórico o rowId
+é monotônico e a cadeia percorrida ao contrário já sai ascendente. No
+materializado não: um `update` insere um rowId arbitrário. Então o `Lookup` do
+WIP preenche de trás para frente, confere `slices.IsSorted` — que é O(n) sem
+alocação e passa sempre no histórico — e só ordena quando precisa. Depois
+compacta, porque a mesma linha pode receber dois records com o mesmo valor
+dentro de um segmento e o contrato do iterador é ESTRITAMENTE crescente.
+
+Na forma selada nada disso sobra: o escritor ordena e deduplica na construção.
 
 ### 1.2 Forma selada — todo segmento aposentado, imutável
 
