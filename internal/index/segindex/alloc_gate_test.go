@@ -4,7 +4,44 @@ package segindex_test
 
 import (
 	"testing"
+
+	"github.com/nishisan-dev/nishidb/internal/types"
 )
+
+// TestSetNoWIPNaoAloca: é o caminho quente da ingestão, chamado uma vez por
+// campo indexado por evento. internal/storage/ não tinha nenhum gate de
+// alocação até aqui; este é o primeiro da família.
+func TestSetNoWIPNaoAloca(t *testing.T) {
+	w := abreWIPDeTeste(t)
+	defer fechaWIP(t, w)
+	var i int
+	media := testing.AllocsPerRun(1000, func() {
+		i++
+		_ = w.Set(uint64(i%997)+2, types.RowID(i))
+	})
+	if media != 0 {
+		t.Errorf("AllocsPerRun(Set) = %v, quero 0", media)
+	}
+}
+
+// TestLookupNoWIPAlocaExatamenteUmaVez. A igualdade é deliberada: 0 significa
+// que não materializou (e a ordem sai errada, porque a cadeia é percorrida ao
+// contrário); 2 significa que o slice cresceu (e o tamanho exato veio da
+// contagem errada). Os dois desvios são bugs diferentes, e um teto de "<= 1"
+// esconderia o primeiro.
+func TestLookupNoWIPAlocaExatamenteUmaVez(t *testing.T) {
+	w := abreWIPDeTeste(t)
+	defer fechaWIP(t, w)
+	for i := range 100 {
+		if err := w.Set(100, types.RowID(i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	media := testing.AllocsPerRun(1000, func() { _ = w.Lookup(100) })
+	if media != 1 {
+		t.Errorf("AllocsPerRun(Lookup) = %v, quero exatamente 1", media)
+	}
+}
 
 // TestIterarSeladoNaoAlocaPorLinha: o resultado é fatia contígua do mmap, e
 // alocação POR LINHA é sinal de cópia indevida. A medida é da ITERAÇÃO, não do

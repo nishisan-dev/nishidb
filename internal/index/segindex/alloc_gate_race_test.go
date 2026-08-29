@@ -17,3 +17,21 @@ import "testing"
 func TestIterarSeladoNaoAlocaPorLinha(t *testing.T) {
 	t.Skip("gate de alocação não roda sob -race: a instrumentação altera a contagem")
 }
+
+// TestSetNoWIPNaoAloca é o caminho quente da ingestão, e a propriedade medida —
+// zero alocação por Set — é o que separa este motor do anterior em RSS.
+func TestSetNoWIPNaoAloca(t *testing.T) {
+	t.Skip("gate de alocação não roda sob -race: a instrumentação altera a contagem")
+}
+
+// TestLookupNoWIPAlocaExatamenteUmaVez afirma IGUALDADE, e não teto: 0 seria
+// "não materializou" e 2 seria "o slice cresceu". Perder essa distinção em
+// silêncio numa rodada com -race apagaria o sinal exatamente onde ninguém olha.
+func TestLookupNoWIPAlocaExatamenteUmaVez(t *testing.T) {
+	t.Skip("gate de alocação não roda sob -race: a instrumentação altera a contagem")
+}
+
+// O gate de CUSTO do Set (custo_gate_test.go) NÃO aparece aqui de propósito:
+// ele conta sondas, que a instrumentação não altera, e roda nas duas rodadas.
+// Uma entrada de SKIP para ele seria a mentira oposta à do débito 53 — anunciar
+// como pulado um gate que está rodando.
