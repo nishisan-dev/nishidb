@@ -236,6 +236,132 @@ func TestUnePropagaOPrimeiroErro(t *testing.T) {
 	}
 }
 
+// fonteFechavel embrulha uma Fonte e registra se Close() foi chamado.
+//
+// Prova a exigência do dispatch da Tarefa 5: "Close de qualquer combinador
+// fecha TODAS as fontes restantes" — inclusive as que a varredura nunca
+// consumiu (parou no meio por LIMIT, erro de outra fonte ou cancelamento do
+// cliente) e as vazias que Une descarta ANTES de qualquer decisão de
+// estratégia. Um dataset em regime abre até 500 fontes por consulta; um
+// Close que não fecha todas vaza um mapeamento por fonte esquecida, e isso
+// só aparece em produção como esgotamento de descritor, sem apontar a causa.
+type fonteFechavel struct {
+	segindex.Fonte
+	fechada bool
+}
+
+func (f *fonteFechavel) Close() error {
+	f.fechada = true
+	return f.Fonte.Close()
+}
+
+// TestConcatIterCloseFechaTodasAsFontesInclusiveAsNaoConsumidas trava que o
+// Close da concatenação NÃO é seletivo: interromper a varredura no meio
+// (parar de chamar Next antes do fim) e só então fechar tem de fechar tudo —
+// a fonte corrente E as que a concatenação nunca chegou a tocar.
+func TestConcatIterCloseFechaTodasAsFontesInclusiveAsNaoConsumidas(t *testing.T) {
+	f1 := &fonteFechavel{Fonte: fonteFalsa{10, 20}}
+	f2 := &fonteFechavel{Fonte: fonteFalsa{30, 40}}
+	f3 := &fonteFechavel{Fonte: fonteFalsa{50, 60}}
+	it := segindex.Une([]segindex.Fonte{f1, f2, f3})
+	if got := segindex.EstrategiaDe(it); got != "concatenacao" {
+		t.Fatalf("estratégia = %q, quero \"concatenacao\"", got)
+	}
+
+	// Interrompe no meio: drena f1 por completo (2 linhas) e entra em f2 (1
+	// linha) — o suficiente para o cursor da concatenação já ter avançado
+	// PARA ALÉM de f1, que esgotou sozinha mas nunca foi fechada
+	// individualmente. f3 fica sem ser tocada. Se Close fechasse só
+	// `fontes[idx:]` (o que sobrou À FRENTE do cursor), f1 escaparia — ela já
+	// não está mais "à frente" depois de esgotar, mas também não foi fechada
+	// por ninguém até aqui.
+	for i, want := range []types.RowID{10, 20, 30} {
+		if !it.Next() {
+			t.Fatalf("Next() = false na linha %d (queria %d)", i, want)
+		}
+		if got := it.RowID(); got != want {
+			t.Fatalf("RowID() = %d, quero %d", got, want)
+		}
+	}
+	if err := it.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if !f1.fechada {
+		t.Error("f1 (já esgotada, cursor passou dela) não foi fechada")
+	}
+	if !f2.fechada {
+		t.Error("f2 (corrente, parcialmente consumida) não foi fechada")
+	}
+	if !f3.fechada {
+		t.Error("f3 (nunca consumida) não foi fechada")
+	}
+}
+
+// TestMergeIterCloseFechaTodasAsFontesInclusiveAsNaoConsumidas é o mesmo
+// requisito sobre o caminho de merge: o heap só guarda o que resta avançar, e
+// Close precisa conhecer a lista COMPLETA das fontes de entrada para não
+// vazar as que nunca entraram no heap ou já saíram dele.
+func TestMergeIterCloseFechaTodasAsFontesInclusiveAsNaoConsumidas(t *testing.T) {
+	f1 := &fonteFechavel{Fonte: fonteFalsa{10, 30, 50}}
+	f2 := &fonteFechavel{Fonte: fonteFalsa{20, 30, 40}}
+	it := segindex.Une([]segindex.Fonte{f1, f2})
+	if got := segindex.EstrategiaDe(it); got != "merge" {
+		t.Fatalf("estratégia = %q, quero \"merge\"", got)
+	}
+
+	// Drena até f2 esgotar E SAIR DO HEAP sem ser recolocada — f1{10,30,50} e
+	// f2{20,30,40} emitem 10,20,30(dedup),40 nessa ordem, e é na quarta linha
+	// que f2 esgota sozinha. Dali em diante ela não está mais "no heap": se
+	// Close fechasse só o que o heap ainda guarda (em vez da lista completa
+	// de entrada), f2 escaparia — exauriu, mas ninguém a fechou.
+	for i, want := range []types.RowID{10, 20, 30, 40} {
+		if !it.Next() {
+			t.Fatalf("Next() = false na linha %d (queria %d)", i, want)
+		}
+		if got := it.RowID(); got != want {
+			t.Fatalf("RowID() = %d, quero %d", got, want)
+		}
+	}
+	if err := it.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if !f1.fechada {
+		t.Error("f1 (ainda no heap, com o 50 por emitir) não foi fechada")
+	}
+	if !f2.fechada {
+		t.Error("f2 (já esgotou e saiu do heap) não foi fechada")
+	}
+}
+
+// TestUneFechaAsFontesVaziasDescartadasAntesDeCombinar prova que descartar
+// não é vazar: Une fecha uma fonte vazia no MOMENTO do descarte — antes de
+// qualquer decisão de estratégia —, e não deixa essa responsabilidade para o
+// Close do combinador, que nem chega a saber que ela existiu.
+func TestUneFechaAsFontesVaziasDescartadasAntesDeCombinar(t *testing.T) {
+	vazia := &fonteFechavel{Fonte: fonteVaziaDeTeste{}}
+	f1 := &fonteFechavel{Fonte: fonteFalsa{10, 20}}
+	f2 := &fonteFechavel{Fonte: fonteFalsa{30, 40}}
+	it := segindex.Une([]segindex.Fonte{f1, vazia, f2})
+
+	// A vazia já tem de estar fechada AQUI, antes de qualquer Next ou Close no
+	// iterador devolvido — quem fecha é o descarte de Une, não o Close do
+	// combinador.
+	if !vazia.fechada {
+		t.Error("a fonte vazia não foi fechada no descarte, antes da decisão de estratégia")
+	}
+
+	drena(t, it)
+	if err := it.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if !f1.fechada {
+		t.Error("f1 não foi fechada pelo Close do combinador")
+	}
+	if !f2.fechada {
+		t.Error("f2 não foi fechada pelo Close do combinador")
+	}
+}
+
 // TestUneEhEquivalenteAUniaoOrdenada compara contra um oráculo trivial sobre
 // entrada aleatória: junta tudo, ordena, compacta. É este teste que reprova a
 // mutação M3 (concatenar sempre) e a M2 (merge sem dedup) da spec.
