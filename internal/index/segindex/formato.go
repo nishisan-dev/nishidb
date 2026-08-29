@@ -49,6 +49,14 @@ import (
 //	              valor e ascendente dentro do grupo
 //	EOF-4  crc32c u32 sobre [0, EOF-4)
 //
+// postIdx é o ÍNDICE do elemento dentro do array de postings da SEÇÃO — não
+// offset em bytes. O endereço do primeiro delta do valor é
+// `postOff + postIdx * postingWidth`. A distinção importa porque as duas
+// leituras nunca estouram limite nenhum: um leitor que tratasse postIdx como
+// offset em bytes andaria para DENTRO do array de deltas (por um fator igual
+// a postingWidth), leria lixo de outro valor como se fosse rowId, e nada no
+// formato acusaria — sem erro, sem crash, só resposta errada.
+//
 // O crc fica no FIM e cobre tudo antes dele, que é o idioma que o manifest já
 // usa (checkpoint/manifest.go). Cobrir o header inclusive é o ponto: um header
 // corrompido que passasse pelo crc levaria a busca binária a offsets

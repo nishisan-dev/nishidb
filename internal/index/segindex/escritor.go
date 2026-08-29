@@ -69,12 +69,19 @@ func (e *Escritor) Escreve(caminho string, seg uint32) error {
 	}
 	largura := larguraPara(uint64(maxRow - base))
 
-	corpo := e.montaCorpo(base, largura)
+	// corpo e secCount vêm da MESMA travessia de e.ents: secCount é o campo
+	// que diz ao leitor quantas entradas de 24 bytes da tabela de seções
+	// existem, e uma segunda contagem independente — por mais que hoje dê o
+	// mesmo número — seria uma segunda fonte de verdade para exatamente o
+	// dado que não pode divergir (a mesma razão de formato.go não ter
+	// minRowID: aqui a consequência de divergir é o leitor caminhar para
+	// dentro dos bytes do diretório, não só uma inconsistência cosmética).
+	corpo, secCount := e.montaCorpo(base, largura)
 
 	buf := make([]byte, 0, HeaderSelado+len(corpo)+TamCRC)
 	buf = append(buf, MagicSelado...)
 	buf = append(buf, VersaoSelado, 0)
-	buf = binary.LittleEndian.AppendUint16(buf, uint16(e.contaCampos()))
+	buf = binary.LittleEndian.AppendUint16(buf, uint16(secCount))
 	buf = binary.LittleEndian.AppendUint64(buf, uint64(seg))
 	buf = binary.LittleEndian.AppendUint64(buf, uint64(base))
 	buf = binary.LittleEndian.AppendUint64(buf, uint64(maxRow))
@@ -84,20 +91,6 @@ func (e *Escritor) Escreve(caminho string, seg uint32) error {
 	buf = binary.LittleEndian.AppendUint32(buf, crc32.Checksum(buf, castagnoli))
 
 	return escreveAtomico(caminho, buf)
-}
-
-// contaCampos conta os fieldIDs distintos em e.ents. Chamado só depois da
-// ordenação em Escreve, então uma corrida do mesmo campo é sempre contígua.
-func (e *Escritor) contaCampos() int {
-	n := 0
-	var atual types.FieldID
-	for i, en := range e.ents {
-		if i == 0 || en.campo != atual {
-			n++
-			atual = en.campo
-		}
-	}
-	return n
 }
 
 // secaoInfo é o resultado da primeira passada de montaCorpo: quanto uma
@@ -126,7 +119,16 @@ type secaoInfo struct {
 // e.ents já está ordenado por row dentro do grupo). dirOff e postOff são
 // ABSOLUTOS a partir do início do arquivo selado — o leitor (Tarefa 2) fatia
 // o mmap direto por eles, sem recompor uma base a cada Lookup.
-func (e *Escritor) montaCorpo(base types.RowID, largura uint8) []byte {
+//
+// O segundo retorno é len(secoes): o número de seções que Escreve grava como
+// secCount no header. Ele sai desta MESMA travessia de e.ents em vez de uma
+// contagem própria em Escreve porque secCount é o campo que diz ao leitor
+// quantas entradas de 24 bytes da tabela de seções existem — um segundo
+// código contando "fieldIDs distintos" por conta própria seria uma segunda
+// fonte de verdade para o mesmo número, e se um dia as duas contagens
+// discordassem o leitor caminharia para dentro dos bytes do diretório sem
+// erro nenhum no meio. É a mesma razão de não existir minRowID.
+func (e *Escritor) montaCorpo(base types.RowID, largura uint8) ([]byte, int) {
 	// --- primeira passada: dimensiona ---
 	var secoes []secaoInfo
 	for i := 0; i < len(e.ents); {
@@ -209,7 +211,7 @@ func (e *Escritor) montaCorpo(base types.RowID, largura uint8) []byte {
 		i = fimSecao
 	}
 
-	return corpo
+	return corpo, len(secoes)
 }
 
 // escreveAtomico grava tmp -> fsync -> rename -> fsync do diretório: a mesma
