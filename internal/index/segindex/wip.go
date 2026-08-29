@@ -250,6 +250,17 @@ func ListaWIP(dir string, seg uint32) ([]types.FieldID, error) {
 // não tem mais .dat, então nenhuma enumeração que parta dos dados o alcançaria,
 // e ele ficaria em disco para sempre — contado pelo IndexBytes como disco que
 // nada explica, que é o modo de falha que aquela contagem existe para eliminar.
+//
+// A CONSEQUÊNCIA DE RECUSAR AQUI É MAIOR DO QUE NO ListaWIP, e quem chamar
+// precisa saber: como a abertura varre o diretório INTEIRO por esta função, um
+// .widx de nome ilegível de QUALQUER segmento deixa de custar "a selagem perde um
+// campo" e passa a custar "o dataset não abre". A doutrina continua sendo
+// recusar em vez de pular — um arquivo neste espaço de nomes que não saiu daqui
+// significa que outra coisa escreveu no diretório do dataset, e seguir em frente
+// seria decidir sobre um diretório que já não se entende. Mas o chamador tem de
+// classificar o ErrFormato numa sentinela de dataset ilegível: sem isso ele cai
+// no exit code genérico de erro de uso, que manda o operador olhar a linha de
+// comando em vez do dataset.
 func SegmentosComWIP(dir string) ([]uint32, error) {
 	entradas, err := os.ReadDir(dir)
 	if err != nil {

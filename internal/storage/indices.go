@@ -98,14 +98,36 @@ func (s *Store) abreIndicesDeSegmento(campos []types.FieldID) error {
 func (s *Store) descartaTodosOsWIPs() error {
 	segs, err := segindex.SegmentosComWIP(s.dirDeDados())
 	if err != nil {
-		return err
+		return classificaNomeIlegivelDeIndice(err, s.dirDeDados())
 	}
 	for _, seg := range segs {
 		if err := s.apagaWIPsPeloNome(seg); err != nil {
-			return err
+			return classificaNomeIlegivelDeIndice(err, s.dirDeDados())
 		}
 	}
 	return nil
+}
+
+// classificaNomeIlegivelDeIndice põe o ErrFormato do espaço de nomes .widx na
+// sentinela que o exit code entende.
+//
+// Sem isto o erro sobe cru e cai no default do codigoDoErro (cli.go) — exit 1,
+// "erro de uso", o único código que manda o operador olhar a LINHA DE COMANDO em
+// vez do dataset. E aqui a linha de comando está certa: o que há é um arquivo em
+// data/ que este binário não escreveu, e ele impede a abertura porque a varredura
+// da §2.5 percorre o diretório inteiro. ErrDatasetCorrupt é a classificação
+// honesta — não afirma perda de dado, afirma que a resposta operacional é olhar o
+// diretório do dataset —, e leva ao mesmo exit 4 do manifest ilegível.
+//
+// Erro que não é de formato passa intacto: EIO ao listar o diretório é falha de
+// infra, e chamá-la de corrupção induz a resposta destrutiva (restaurar backup).
+// São os três baldes do §101, e este só mexe no primeiro.
+func classificaNomeIlegivelDeIndice(err error, dir string) error {
+	if err == nil || !errors.Is(err, segindex.ErrFormato) {
+		return err
+	}
+	return fmt.Errorf("%w: %s tem um arquivo no espaço de nomes .widx que este binário não escreveu: %w",
+		ErrDatasetCorrupt, dir, err)
 }
 
 // apagaWIPsPeloNome remove os .widx do segmento SEM abrir nenhum deles.

@@ -3,6 +3,7 @@ package storage
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -208,6 +209,146 @@ func TestOsWIPsQueNaoSaoDoCorrenteSaemNaAberturaESoQuemTemDadoEntraNaFila(t *tes
 	if !slices.Equal(pendentes, []uint32{alvo}) {
 		t.Errorf("SegmentosPendentesDeReconstrucao = %v, quero [%d]: o corrente (%d) tem WIP e o 9999 não tem dado",
 			pendentes, alvo, corrente)
+	}
+}
+
+// TestOWIPOrfaoDeUmSegmentoJaSeladoSaiSemMexerNoSelado cobre o QUARTO estado da
+// §2.5, que é o meio-termo que o aposAppend admite explicitamente: crash entre o
+// rename do .sidx e o unlink dos .widx deixa um segmento não corrente COM as duas
+// formas do índice ao mesmo tempo.
+//
+// As duas metades importam. O .widx tem de sair, porque é lixo que ninguém mais
+// lê. E o .sidx tem de sobreviver BYTE A BYTE: ele é imutável e já é a verdade
+// daquele segmento, então reescrevê-lo seria trabalho por nada — e um Sela
+// reinvocado nesse estado o ENCOLHERIA, porque o Escritor novo só enxergaria os
+// campos cujo .widx sobreviveu. O segmento também não pode entrar na fila: ele
+// não está pendente de coisa nenhuma.
+func TestOWIPOrfaoDeUmSegmentoJaSeladoSaiSemMexerNoSelado(t *testing.T) {
+	campos := []string{"node"}
+	s, dir := abreStoreIndexadoComSegmentoPequeno(t, campos, 64<<10)
+	alvo := s.curSegID.Load()
+	campo := campoDoDicionario(t, s, "node")
+	poeLinhasAteRotacionar(t, s, alvo)
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	dados := filepath.Join(dir, "data")
+	selado := segindex.CaminhoSelado(dados, alvo)
+	antes, err := os.ReadFile(selado)
+	if err != nil {
+		t.Fatalf("pré-condição: o segmento %d deveria estar selado: %v", alvo, err)
+	}
+	orfao := segindex.CaminhoWIP(dados, alvo, campo)
+	if err := os.WriteFile(orfao, bytes.Repeat([]byte{0xAA}, 4096), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s2 := openStore(t, Options{
+		Dir: dir, SegmentSize: 64 << 10,
+		HashFieldNames: campos, BitmapFieldNames: campos,
+	})
+	if _, err := os.Stat(orfao); !os.IsNotExist(err) {
+		t.Errorf("Stat(%s) = %v, quero IsNotExist: o .widx do segmento já selado tem de sair na abertura",
+			filepath.Base(orfao), err)
+	}
+	depois, err := os.ReadFile(selado)
+	if err != nil {
+		t.Fatalf("a abertura removeu o .sidx de um segmento selado: %v", err)
+	}
+	if !bytes.Equal(antes, depois) {
+		t.Errorf("o .sidx do segmento %d mudou de %d para %d bytes: a abertura o reescreveu",
+			alvo, len(antes), len(depois))
+	}
+	pendentes, err := s2.SegmentosPendentesDeReconstrucao()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pendentes) != 0 {
+		t.Errorf("SegmentosPendentesDeReconstrucao = %v, quero vazio: o segmento %d já tem .sidx", pendentes, alvo)
+	}
+}
+
+// TestConstruirOIndiceDoSegmentoCorrenteEhRecusado trava a guarda que fecha o
+// falso negativo petrificado: o .sidx é IMUTÁVEL, e gravá-lo para um segmento que
+// ainda recebe records congelaria um índice sem tudo que vier depois — e o §44 só
+// sabe descartar candidato a mais.
+func TestConstruirOIndiceDoSegmentoCorrenteEhRecusado(t *testing.T) {
+	s, dir := abreStoreIndexadoComSegmentoPequeno(t, []string{"node"}, 1<<20)
+	poeLinhas(t, s, 10)
+	corrente := s.curSegID.Load()
+
+	err := s.ConstroiIndiceDoSegmento(t.Context(), corrente, s.CamposIndexados())
+	if !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("ConstroiIndiceDoSegmento(corrente) = %v, quero ErrInvalidArgument", err)
+	}
+	caminho := segindex.CaminhoSelado(filepath.Join(dir, "data"), corrente)
+	if _, err := os.Stat(caminho); !os.IsNotExist(err) {
+		t.Errorf("Stat(%s) = %v, quero IsNotExist: a recusa não pode ter gravado nada",
+			filepath.Base(caminho), err)
+	}
+}
+
+// TestConstruirComSubconjuntoDeCamposEhRecusado fecha o falso negativo
+// petrificado pela segunda porta. Um .sidx parcial é imutável como qualquer
+// outro, e como a pendência é decidida por "tem .sidx?", ele faria o segmento
+// contar como PRONTO com campos que ninguém indexou.
+func TestConstruirComSubconjuntoDeCamposEhRecusado(t *testing.T) {
+	campos := []string{"node", "type"}
+	s, dir := abreStoreIndexadoComSegmentoPequeno(t, campos, 64<<10)
+	alvo := s.curSegID.Load()
+	poeLinhasAteRotacionar(t, s, alvo)
+	caminho := segindex.CaminhoSelado(filepath.Join(dir, "data"), alvo)
+	// O selado da rotação sai de cena para que "não gravou" não se confunda com
+	// "já estava lá".
+	if err := os.Remove(caminho); err != nil {
+		t.Fatal(err)
+	}
+
+	subconjunto := s.CamposIndexados()[:1]
+	err := s.ConstroiIndiceDoSegmento(t.Context(), alvo, subconjunto)
+	if !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("ConstroiIndiceDoSegmento(%v de %v) = %v, quero ErrInvalidArgument",
+			subconjunto, s.CamposIndexados(), err)
+	}
+	if _, err := os.Stat(caminho); !os.IsNotExist(err) {
+		t.Errorf("Stat(%s) = %v, quero IsNotExist: um .sidx parcial passaria por pronto",
+			filepath.Base(caminho), err)
+	}
+}
+
+// TestNomeIlegivelNoEspacoDoWIPSaiComoDatasetIlegivel: a varredura da §2.5
+// percorre o diretório INTEIRO, então recusar um nome ilegível deixou de custar
+// "a selagem perde um campo" e passou a custar "o dataset não abre". A recusa é a
+// doutrina; o que este teste trava é a CLASSIFICAÇÃO. Sem ela o erro cai no
+// default do codigoDoErro e sai como exit 1, "erro de uso" — o único código que
+// manda o operador olhar a linha de comando em vez do dataset, que aqui está
+// certa.
+func TestNomeIlegivelNoEspacoDoWIPSaiComoDatasetIlegivel(t *testing.T) {
+	campos := []string{"node"}
+	s, dir := abreStoreIndexadoComSegmentoPequeno(t, campos, 1<<20)
+	poeLinhas(t, s, 5)
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	intruso := filepath.Join(dir, "data", "segment-7-00003.widx")
+	if err := os.WriteFile(intruso, []byte("nada"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s2, err := Open(Options{
+		Dir: dir, SegmentSize: 1 << 20,
+		HashFieldNames: campos, BitmapFieldNames: campos,
+	})
+	if err == nil {
+		_ = s2.Close()
+		t.Fatal("a abertura aceitou um arquivo no espaço de nomes .widx que este binário não escreveu")
+	}
+	if !errors.Is(err, ErrDatasetCorrupt) {
+		t.Errorf("Open = %v, quero ErrDatasetCorrupt (exit 4); sem a sentinela isto vira exit 1", err)
+	}
+	if !errors.Is(err, segindex.ErrFormato) {
+		t.Errorf("Open = %v: a causa original tem de continuar alcançável por errors.Is", err)
 	}
 }
 

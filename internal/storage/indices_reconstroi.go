@@ -39,16 +39,46 @@ import (
 // "sem índice" é um estado que o Lookup resolve por enumeração, e um .sidx vazio
 // faria o segmento passar por indexado.
 //
-// NÃO toma o wmu, e a §2.4 é explícita quanto a isso: a leitura dos records, a
-// extração dos valores, a ordenação e a escrita do temporário são o custo
-// inteiro da operação, e segurar o writer único por elas transformaria a
-// reconstrução no terceiro laço de fundo disputando a ingestão. Coordenar a
-// publicação contra uma aposentadoria concorrente do MESMO segmento é do
-// chamador — durante a abertura não há concorrência, e no laço de fundo é o pin
-// de segmento que a governa.
+// A PUBLICAÇÃO NÃO TOMA O wmu, e a §2.4 emendada é explícita quanto a isso: a
+// exigência anterior — tomá-lo "só no rename" — era inexequível, porque
+// Escritor.Escreve faz escrita-tmp, fsync, rename e fsync do diretório numa
+// chamada só, e segurar o lock pela escrita inteira é o que a mesma seção
+// proíbe. O que substitui o lock são três fatos: o rename já é atômico, o
+// temporário passa a ter nome único por escritor (é da Tarefa 14, junto com o
+// laço — hoje ele ainda é fixo), e a selagem e a reconstrução produzem arquivos
+// BYTE A BYTE IDÊNTICOS, o que o golden prova. Com a igualdade provada, uma
+// corrida no nome final é neutra em conteúdo: quem renomear por último grava os
+// mesmos bytes.
+//
+// O QUE O CHAMADOR AINDA PRECISA GARANTIR, e é concreto: esta função lê pelo
+// s.segR, e a aposentadoria fecha o descritor por segR.FechaSegmento, que exige
+// que nenhuma leitura esteja em voo — barreira que no Store é o aposMu. O Close
+// fecha o segR inteiro. Um laço de fundo que varra sem o mesmo par claim/Add que
+// a compaction usa colhe os.ErrClosed no meio da varredura, e o resíduo aceito
+// da §2.4 (publicar o .sidx de um segmento recém-aposentado) vira erro em vez de
+// órfão recuperável.
 func (s *Store) ConstroiIndiceDoSegmento(ctx context.Context, seg uint32, campos []types.FieldID) error {
 	if len(campos) == 0 {
 		return nil
+	}
+	// O conjunto tem de ser o do dataset INTEIRO, e a recusa fecha o falso
+	// negativo petrificado por uma segunda porta. Um subconjunto gravaria um
+	// .sidx IMUTÁVEL e PARCIAL — e como a pendência é decidida por "tem .sidx?"
+	// (SegmentosPendentesDeReconstrucao), o segmento passaria a contar como
+	// pronto com campos que ninguém indexou: falso negativo permanente, sem erro
+	// e sem log.
+	//
+	// A TENSÃO COM A §2.4 FICA ESCRITA, porque ela é real: lá a unidade de
+	// trabalho é (segmento, campo), para que a §2.6 possa acrescentar um campo
+	// ao schema de um dataset povoado. Quando essa unidade existir de fato, é o
+	// TESTE DE PENDÊNCIA que precisa mudar primeiro — de "tem .sidx?" para "o
+	// .sidx tem seção para cada campo indexado?" —, e só então esta recusa pode
+	// afrouxar. Afrouxá-la antes trocaria uma recusa alta por um índice parcial
+	// que se declara completo.
+	if !slices.Equal(campos, s.camposIndexados) {
+		return fmt.Errorf("%w: reconstrução do segmento %d pedida para %v, mas o dataset indexa %v; "+
+			"o .sidx é imutável e um parcial passaria por pronto",
+			ErrInvalidArgument, seg, campos, s.camposIndexados)
 	}
 	// O segmento CORRENTE é recusado, e a guarda não é defensiva: o .sidx é
 	// IMUTÁVEL, e gravá-lo para um segmento que ainda recebe records
@@ -87,16 +117,26 @@ func (s *Store) ConstroiIndiceDoSegmento(ctx context.Context, seg uint32, campos
 //
 // Dataset sem campo indexado devolve fila vazia: não há o que reconstruir.
 //
+// DOS QUATRO GATILHOS DA §2.4, ESTA FUNÇÃO COBRE UM: o formato novo sobre
+// dataset antigo (migração), que é "tem dado e não tem .sidx". Os outros três
+// ainda não têm resposta aqui, e o nome da função promete mais do que ela
+// entrega até que tenham — a janela alargada depende da janela existir; o crc32c
+// divergente (§1.5) só é conhecido na primeira consulta da seção, e quem o
+// detectar precisa apagar o arquivo para o segmento voltar a ser pendente por
+// esta mesma regra; e o campo acrescentado ao schema (§2.6) exige o teste de
+// pendência por SEÇÃO discutido no godoc de ConstroiIndiceDoSegmento.
+//
 // DUAS ARESTAS que quem montar o laço de fundo (§2.4) precisa tratar, e que
 // ficam escritas aqui porque nenhuma delas é visível de dentro desta função:
 //
 //   - A resposta é um instantâneo, e o segmento recém-rotacionado aparece nela
 //     por uma janela. O aposAppend troca o curSegID ANTES de selar o anterior
 //     (indices.go), então entre as duas coisas o anterior tem dado e ainda não
-//     tem .sidx. Reconstruí-lo ali produziria os mesmos bytes — a igualdade é
-//     por construção —, mas os dois caminhos escreveriam no MESMO `<sidx>.tmp`,
-//     que é nome fixo (segindex/escritor.go). O laço tem de excluir o segmento
-//     que acabou de deixar de ser o corrente, ou serializar-se contra a selagem.
+//     tem .sidx. A corrida no nome FINAL é neutra — a igualdade byte a byte é
+//     provada pelo golden —, mas hoje os dois caminhos escreveriam no MESMO
+//     `<sidx>.tmp`, que ainda é nome FIXO (segindex/escritor.go), e o arquivo
+//     sairia rasgado. É esta a correção que a §2.4 emendada põe na Tarefa 14:
+//     nome de temporário único por escritor, e não exclusão mútua.
 //   - Segmento cujos records não têm campo indexado nenhum NUNCA sai da fila:
 //     o Escritor vazio não cria arquivo, de propósito, e a pergunta "tem .sidx?"
 //     continua respondendo não. O laço não pode tratar a fila como trabalho que
