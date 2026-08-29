@@ -11,6 +11,24 @@ import (
 // TestSetNoWIPNaoAloca: é o caminho quente da ingestão, chamado uma vez por
 // campo indexado por evento. internal/storage/ não tinha nenhum gate de
 // alocação até aqui; este é o primeiro da família.
+//
+// # O que este gate mede, e o que ele NÃO afirma
+//
+// Ele mede o REGIME. A chamada que faz o índice CRESCER aloca por construção, e
+// isso não é regressão nem defeito a consertar: crescer passa por
+// mmap.Region.Grow, que chama unix.Mmap, que devolve uma slice nova e registra
+// o mapeamento — alocação que não está sob controle deste pacote.
+//
+// É por isso que abreWIPDeTeste abre folgado (4.096 slots, capacidade de
+// postings de sobra): as 1.001 chamadas medidas aqui não crescem nada, e o zero
+// que sai é o custo do Set em si. Um WIP apertado mediria o mmap junto e o
+// número diria outra coisa.
+//
+// A leitura correta do gate é "Set não aloca em regime", nunca "Set nunca
+// aloca". Quem vir alocação numa medição de produção deve conferir primeiro se
+// ela é proporcional aos CRESCIMENTOS — que são logarítmicos no tamanho do
+// segmento — antes de tratar como regressão. O crescimento tem gate próprio, de
+// corretude: TestOWIPCresceSemPerderPosting.
 func TestSetNoWIPNaoAloca(t *testing.T) {
 	w := abreWIPDeTeste(t)
 	defer fechaWIP(t, w)

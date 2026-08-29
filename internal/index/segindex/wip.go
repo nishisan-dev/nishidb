@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/nishisan-dev/nishidb/internal/storage/mmap"
 	"github.com/nishisan-dev/nishidb/internal/types"
@@ -86,19 +87,41 @@ const (
 // de postings, então a N-ésima posting de um valor custa o mesmo que a
 // primeira.
 //
-// # Concorrência, e o que ela ainda NÃO cobre
+// # Concorrência
 //
 // Set é exclusivo do writer único, como o resto do caminho de escrita do
-// storage. Um leitor concorrente ao Set é seguro por construção: contagem e
-// cabeça viajam na mesma palavra de 64 bits, e a posting é gravada antes de
-// essa palavra ser publicada.
+// storage. Lookup e ParaCada aceitam N leitores concorrentes ao Set, e a
+// segurança vem de duas coisas distintas que não se substituem.
 //
-// Um leitor concorrente ao CRESCIMENTO não é. O rehash muda dirSlots e
-// postBase — campos Go simples — e desloca o array de postings com um memmove
-// que não é atômico em lugar nenhum. Quem consultar o segmento corrente terá de
-// se ordenar com o writer por fora deste tipo; a forma disso é da união das
-// fontes, não desta estrutura, e está deliberadamente não resolvida aqui.
+// Contra o SET, a linearização: contagem e cabeça viajam na mesma palavra de 64
+// bits, e a posting é gravada antes de essa palavra ser publicada. Um leitor
+// que enxerga a cabeça nova enxerga o rowId e o elo dela, e dimensiona a fatia
+// com a contagem que corresponde àquela cabeça.
+//
+// Contra o CRESCIMENTO, o mu. O rehash muda dirSlots e postBase — campos Go
+// simples — e desloca o array de postings com um memmove que não é atômico em
+// lugar nenhum; nenhuma palavra publicada salva um leitor disso. O lock existe
+// pela MESMA razão que `mu` existe no motor que este pacote substitui
+// (internal/index/hash/index.go, "protege region/slotCount contra o swap da
+// reconstrução"), e o lugar dele é aqui: o Une da união é combinador puro sobre
+// Fontes já abertas e não tem referência ao writer, e a fonte que lê o WIP numa
+// consulta só poderia se serializar pelo wmu — o que serializaria consulta
+// contra ingestão, que é exatamente o que este ciclo existe para evitar, além
+// de violar a ordem de locks vida → wmu → aposMu.
+//
+// O custo é um par RLock/RUnlock por Set e por Lookup, e ele é ruído: é a
+// alternativa (a) do débito 102 — UM lock por operação, não um por SONDA. O que
+// o débito mediu (68% do custo de sondar um slot) era o par do mmap.Region
+// pago DENTRO do laço de sondagem. Fora do laço, some.
+//
+// O que este lock NÃO promete é atomicidade entre operações: dois Set
+// concorrentes continuam proibidos (o writer é único), e um Lookup que corra
+// com um Set pode ver a inserção ou não — as duas respostas são corretas para
+// um índice cujo contrato é superconjunto de candidatos (§44).
 type WIP struct {
+	// mu protege dirSlots, postBase, postCap e o CONTEÚDO deslocado pelo
+	// crescimento. Escrita só no crescimento; leitura no Set e no Lookup.
+	mu      sync.RWMutex
 	reg     *mmap.Region
 	caminho string
 	// postBase é o offset da primeira posting: HeaderWIP + dirSlots*TamSlotWIP.
@@ -303,10 +326,16 @@ func (w *WIP) Campo() types.FieldID { return w.campo }
 // tamanho do array append-only, e não o número de pares distintos: a mesma
 // linha pode receber dois records com o mesmo valor dentro de um segmento, e é
 // o Lookup (e o Escritor, na selagem) quem compacta.
+//
+// Acessor do lado do WRITER, ao contrário de Lookup e ParaCada: o contador é
+// escrito pelo Set sob lock compartilhado, então lê-lo de outro goroutine é
+// corrida. Quem o consome é a selagem, que roda no writer.
 func (w *WIP) Postings() uint32 { return w.postCount }
 
 // Distintos devolve quantos valores distintos ocupam o diretório. É a carga
 // que dimensiona a sondagem — e, portanto, o número que explica o custo do Set.
+//
+// Acessor do lado do WRITER, pela mesma razão de Postings.
 func (w *WIP) Distintos() uint32 { return w.distintos }
 
 // slotOff devolve o offset do slot de diretório.
@@ -328,6 +357,15 @@ func (w *WIP) Set(h uint64, row types.RowID) error {
 	if err := w.talvezCresce(); err != nil {
 		return err
 	}
+	// O RLock entra DEPOIS do crescimento, e não pode entrar antes: o
+	// crescimento toma o mesmo mu em modo exclusivo, e o RWMutex do Go não é
+	// reentrante. postCount e sondas são escritos aqui sob lock COMPARTILHADO,
+	// e isso é correto porque o writer é único — o que o mu serializa é o
+	// layout (dirSlots, postBase e os bytes que o rehash desloca), não o
+	// contador de quem já é dono exclusivo da escrita.
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
 	slot := w.sondaOuCria(h) // conta as sondas em w.sondas
 	idx := w.postCount       // 0-based; publicado como idx+1
 	off := w.postOff(idx)
@@ -361,6 +399,9 @@ func (w *WIP) Set(h uint64, row types.RowID) error {
 // ESTRITAMENTE crescente — um id repetido faria o unionIter do executor emitir
 // a mesma linha duas vezes num OR.
 func (w *WIP) Lookup(h uint64) []types.RowID {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
 	slot, ok := w.busca(h)
 	if !ok {
 		return nil
@@ -392,7 +433,14 @@ func (w *WIP) Lookup(h uint64) []types.RowID {
 //
 // A varredura é por CADEIA, e não pelo array de postings, porque a posting não
 // carrega o hash: só o slot de diretório sabe a que valor ela pertence.
+//
+// fn roda com o lock de leitura tomado e NÃO pode reentrar no WIP: um Set de
+// dentro dela travaria contra o próprio RLock desta varredura assim que
+// precisasse crescer. Quem a consome é a selagem, e ela só alimenta o Escritor.
 func (w *WIP) ParaCada(fn func(h uint64, row types.RowID)) error {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
 	for slot := uint32(0); slot < w.dirSlots; slot++ {
 		off := w.slotOff(slot)
 		h := w.reg.AtomicLoad64(off)
@@ -462,6 +510,19 @@ func (w *WIP) sondaOuCria(h uint64) uint32 {
 // O rehash vem PRIMEIRO porque ele desloca o array de postings: crescer o array
 // antes seria dimensioná-lo contra uma base que o rehash muda em seguida.
 func (w *WIP) talvezCresce() error {
+	// O caminho comum — que é o de TODO Set em regime — nem toca o lock
+	// exclusivo. Ler os quatro campos aqui sem lock nenhum é seguro porque
+	// quem os escreve é o writer, e o writer é este goroutine: os leitores
+	// concorrentes só leem.
+	if uint64(w.distintos)+1 <= uint64(w.dirSlots)*cargaNum/cargaDen && w.postCount < w.postCap {
+		return nil
+	}
+	// Daqui para baixo o layout muda debaixo de quem estiver lendo: dirSlots e
+	// postBase mudam de valor e as postings mudam de endereço. O lock exclusivo
+	// cobre o Grow, o rehash e o memmove como UMA seção crítica — dividi-la
+	// deixaria um leitor entrar entre o memmove e a publicação do postBase novo.
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	if uint64(w.distintos)+1 > uint64(w.dirSlots)*cargaNum/cargaDen {
 		if err := w.rehash(); err != nil {
 			return err
@@ -607,6 +668,13 @@ func (w *WIP) gravaHeader() {
 // CORRENTE, dado derivado, e a recuperação mais barata que está correta é
 // derivá-lo de novo a partir do próprio segmento.
 func (w *WIP) Fecha() error {
+	// O lock exclusivo não substitui o quiesce do dono — desmontar o
+	// mapeamento debaixo de um Lookup em voo seria SIGSEGV, e nenhum lock
+	// deste tipo alcança uma fatia que já escapou para dentro do mmap. Ele
+	// está aqui pelo mesmo motivo do resto: fechar é a última mudança de
+	// layout, e ela não pode cruzar com uma leitura dos campos.
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	w.gravaHeader()
 	return w.reg.Close()
 }
@@ -621,6 +689,8 @@ func (w *WIP) Fecha() error {
 // resto de uma execução anterior, e o estado desejado — não existir — é o
 // mesmo.
 func (w *WIP) Apaga() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	errs := []error{w.reg.Close()}
 	if err := os.Remove(w.caminho); err != nil && !errors.Is(err, os.ErrNotExist) {
 		errs = append(errs, fmt.Errorf("segindex: remover %s: %w", w.caminho, err))

@@ -2,8 +2,12 @@ package segindex_test
 
 import (
 	"errors"
+	"fmt"
 	"os"
+	"runtime"
 	"slices"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/nishisan-dev/nishidb/internal/index/segindex"
@@ -100,6 +104,129 @@ func TestOWIPCresceSemPerderPosting(t *testing.T) {
 	}
 	if got := w.Distintos(); got != n {
 		t.Errorf("Distintos() = %d, quero %d", got, n)
+	}
+}
+
+// TestOWIPAtendeLeitorConcorrenteDuranteOCrescimento é o gate do contrato de
+// concorrência, e ele existe por causa do CRESCIMENTO, não do Set.
+//
+// A linearização (contagem e cabeça na mesma palavra) já protege o leitor
+// contra o Set. Contra o rehash ela não protege nada: dirSlots e postBase
+// mudam de valor e as postings mudam de ENDEREÇO, com um memmove que não é
+// atômico em lugar nenhum. Um leitor que atravessasse essa janela leria a
+// cadeia no lugar errado — e o resultado não seria um erro, seriam rowIds de
+// lixo, que o executor revalidaria a um custo qualquer, ou rowIds PERDIDOS,
+// que é o desfecho que este produto não tolera.
+//
+// O WIP é aberto APERTADO de propósito: com 16 slots iniciais, os 5.000 valores
+// distintos do enchimento forçam nove rehashes e as 10.000 postings forçam dez
+// crescimentos do array. Sem isso o teste não exercitaria nada.
+//
+// A cadeia observada recebe exatamente os rowIds 0, 1, 2, ... em ordem, então o
+// resultado CORRETO em qualquer instante é o prefixo [0, k). É por isso que a
+// asserção do leitor é tão dura: qualquer rowId fora de posição é um id que
+// nunca foi inserido, e qualquer encurtamento é um id publicado que se perdeu.
+//
+// Sob -race o detector acrescenta a prova de que não há corrida de dados; as
+// asserções valem nas duas rodadas.
+func TestOWIPAtendeLeitorConcorrenteDuranteOCrescimento(t *testing.T) {
+	const (
+		observado = uint64(7)
+		n         = 5000
+	)
+	w := abreWIPDeTesteComSlots(t, 16)
+	defer fechaWIP(t, w)
+
+	var (
+		mu       sync.Mutex
+		queixas  []string
+		lidas    atomic.Uint64
+		visto    atomic.Int64 // último comprimento observado pelo leitor
+		wg       sync.WaitGroup
+		pronto   = make(chan struct{})
+		anotaUma = func(formato string, args ...any) {
+			mu.Lock()
+			defer mu.Unlock()
+			if len(queixas) < 8 {
+				queixas = append(queixas, fmt.Sprintf(formato, args...))
+			}
+		}
+	)
+	// LIFO: fecha o canal, espera o leitor sair e SÓ ENTÃO o fechaWIP desmonta
+	// o mapeamento. Invertido, um Lookup em voo leria memória desmontada.
+	defer wg.Wait()
+	defer close(pronto)
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		maior := 0
+		for {
+			select {
+			case <-pronto:
+				return
+			default:
+			}
+			rows := w.Lookup(observado)
+			for i, r := range rows {
+				if r != types.RowID(i) {
+					anotaUma("Lookup de %d elementos tem rowId %d na posição %d", len(rows), r, i)
+					break
+				}
+			}
+			if len(rows) < maior {
+				anotaUma("Lookup encolheu de %d para %d — uma posting publicada se perdeu", maior, len(rows))
+			}
+			maior = max(maior, len(rows))
+			visto.Store(int64(len(rows)))
+			lidas.Add(1)
+		}
+	}()
+
+	var parcial int64
+	for i := range n {
+		if err := w.Set(observado, types.RowID(i)); err != nil {
+			t.Errorf("Set(observado, %d): %v", i, err)
+			break
+		}
+		// Enchimento com valores DISTINTOS: é ele que faz o diretório dobrar.
+		if err := w.Set(uint64(i)+1000, types.RowID(i)); err != nil {
+			t.Errorf("Set(enchimento, %d): %v", i, err)
+			break
+		}
+		if i == n/2 {
+			// Barreira de NÃO-VACUIDADE: o escritor só passa daqui depois que o
+			// leitor tiver enxergado um estado intermediário. Sem ela, a
+			// sobreposição entre escrita e leitura seria decisão do
+			// escalonador, e uma rodada em que o leitor só rodasse no fim
+			// passaria sem nunca ter havido concorrência. Não trava: o leitor
+			// só sai quando `pronto` fecha, e isso é depois daqui.
+			for {
+				if parcial = visto.Load(); parcial > 0 {
+					break
+				}
+				runtime.Gosched()
+			}
+		}
+		if i%64 == 0 {
+			runtime.Gosched()
+		}
+	}
+
+	mu.Lock()
+	registradas := slices.Clone(queixas)
+	mu.Unlock()
+	for _, q := range registradas {
+		t.Error(q)
+	}
+	if lidas.Load() == 0 {
+		t.Error("o leitor não completou nenhum Lookup — o teste mediu um laço vazio")
+	}
+	if parcial <= 0 || parcial >= n {
+		t.Errorf("o leitor observou o comprimento parcial %d, quero algo em (0, %d) — ele não atravessou o crescimento", parcial, n)
+	}
+	if got := w.Lookup(observado); len(got) != n {
+		t.Fatalf("Lookup final devolveu %d rowIds, quero %d", len(got), n)
 	}
 }
 
