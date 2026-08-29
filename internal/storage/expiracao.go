@@ -114,7 +114,9 @@ func (s *Store) Expira(rowID types.RowID) (expirou bool, err error) {
 	if err != nil {
 		return false, s.failWriter(err)
 	}
-	s.curSegID.Store(novoSeg)
+	if err := s.aposAppend(novoSeg); err != nil {
+		return false, s.failWriter(err)
+	}
 
 	// applyRecord entrega o resto de graça: baixa da liveness do segmento de
 	// origem (é o que o torna candidato à compaction), limpeza das postings,

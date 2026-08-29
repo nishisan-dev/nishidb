@@ -203,7 +203,9 @@ func (s *Store) reapendaSeVivo(seg, off uint32, rec types.Record) (copiado bool,
 	if err != nil {
 		return false, 0, s.failWriter(err)
 	}
-	s.curSegID.Store(novoSeg)
+	if err := s.aposAppend(novoSeg); err != nil {
+		return false, 0, s.failWriter(err)
+	}
 	// prevPayload é o PRÓPRIO payload, e hadPrevious é true, porque o "estado
 	// anterior" desta row é literalmente o record que se está copiando: é o
 	// que faz o applyRecord descontar do segmento de ORIGEM exatamente o
@@ -538,6 +540,19 @@ func (s *Store) aposentaSegmento(seg uint32) error {
 	if err := s.fechaODescritorEApaga(seg, aposentado); err != nil {
 		return err
 	}
+	// O índice do segmento sai no MESMO passo que o .dat, e é isso que faz
+	// "purgar o segmento leva o índice junto" ser código em vez de promessa —
+	// antes, nada removia as postings de um segmento aposentado, e cada órfã
+	// alongava a cadeia de quem ainda estava vivo.
+	//
+	// Fora do fechaODescritorEApaga de propósito: aquela seção crítica segura o
+	// aposMu, e o mapa de índices selados tem lock próprio — aninhar os dois
+	// criaria uma ordem que ninguém precisa. Depois dele, e não antes, porque a
+	// janela sobrevivente é a inofensiva: dado sem índice ENUMERA, que é o
+	// estado normal de qualquer segmento fora da janela de indexação.
+	//
+	// O segundo fsync do diretório, logo abaixo, cobre também esta remoção.
+	s.removeIndiceDoSegmento(seg)
 	// O segundo fsync é o `syncDir(dir)` do fim que o bloco da tarefa previa,
 	// e fecha a mesma pergunta na outra ponta: sem ele a REMOÇÃO fica só na
 	// entrada de diretório em cache, e o ciclo seguinte de compaction acharia

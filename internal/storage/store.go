@@ -19,6 +19,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/index/bitmap"
 	hashidx "github.com/nishisan-dev/nishidb/internal/index/hash"
 	"github.com/nishisan-dev/nishidb/internal/index/primary"
+	"github.com/nishisan-dev/nishidb/internal/index/segindex"
 	"github.com/nishisan-dev/nishidb/internal/index/valuekey"
 	"github.com/nishisan-dev/nishidb/internal/logging"
 	"github.com/nishisan-dev/nishidb/internal/metrics"
@@ -353,6 +354,34 @@ type Store struct {
 	// crescimento e contratos de remoção diferentes, e uma interface comum
 	// esconderia justamente as diferenças que o applyRecord precisa respeitar.
 	hashes map[types.FieldID]*hashidx.Index
+
+	// wips são os índices de segmento MUTÁVEIS — um por campo indexado, todos
+	// do segmento corrente. Mapa e não slice porque o applyRecord endereça por
+	// FieldID, uma vez por campo do payload.
+	//
+	// Enquanto durar a migração, este motor CONVIVE com os bitmaps e os hashes
+	// acima: ele é mantido em toda escrita e não responde a consulta nenhuma. É
+	// andaime declarado, não fallback — a leitura troca de motor e os dois
+	// pacotes antigos saem, nas tarefas seguintes.
+	wips map[types.FieldID]*segindex.WIP
+	// selados são os índices imutáveis, abertos SOB DEMANDA e mantidos
+	// mapeados. Não há LRU: o mapeamento somente-leitura não retém descritor
+	// (open → mmap → close), e 500 VMAs num teto padrão de 65.530 não é
+	// pressão.
+	selados map[uint32]*segindex.Selado
+	// selMu protege o mapa acima, e é FOLHA na ordem de locks: nada tomado sob
+	// ele toma wmu ou aposMu. Ele existe porque o mapa é escrito pela
+	// aposentadoria e lido pela consulta, que são goroutines diferentes.
+	selMu sync.RWMutex
+	// camposIndexados é o conjunto ordenado, resolvido no Open e IMUTÁVEL na
+	// vida do Store — a mesma promessa de estabilidade que HasBitmap e HasHash
+	// já fazem, e o que permite responder a CamposIndexados sem lock.
+	camposIndexados []types.FieldID
+	// chaveIndiceBuf é o buffer da chave canônica do índice por segmento,
+	// reusado a cada campo de cada evento. É do Store, e writer-only, pelo
+	// mesmo motivo dos outros buffers do caminho quente: uma alocação por campo
+	// por evento é o que separa o gate de zero alocação de uma regressão.
+	chaveIndiceBuf []byte
 
 	nextRowID atomic.Uint64
 	rowCount  atomic.Uint64
@@ -993,6 +1022,20 @@ func Open(opts Options) (*Store, error) {
 				opts.Dir, err)
 		}
 	}
+	// O índice por segmento cobre a UNIÃO dos dois motores acima, e a união é o
+	// desenho: com um motor só, `hash` e `bitmap` deixam de nomear coisas
+	// diferentes (spec D5) — os dois viram "valor → conjunto ordenado de rowIds
+	// dentro do segmento", e densidade passa a ser decisão de codificação.
+	//
+	// Ele abre DEPOIS do ramo de recovery, e não junto dos outros dois, porque
+	// os WIPs pertencem ao SEGMENTO CORRENTE e é o ramo quem o decide: antes
+	// dele, curSegID ainda é zero num dataset existente. Os campos, esses, vêm
+	// do resolveCamposIndexados lá em cima, cuja ordem de LookupOrCreate é
+	// contratual e não pode ser tocada.
+	if err := s.abreIndicesDeSegmento(uniaoDeCampos(campos, camposHash)); err != nil {
+		return nil, err
+	}
+
 	// A agenda vem DEPOIS do ramo de recovery: ela deriva das locations, e o
 	// replay do tail ainda as estava publicando. Construí-la antes daria uma
 	// árvore que ignora tudo que o tail trouxe.
@@ -1472,7 +1515,9 @@ func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *ty
 	if err != nil {
 		return 0, false, s.failWriter(err)
 	}
-	s.curSegID.Store(seg)
+	if err := s.aposAppend(seg); err != nil {
+		return 0, false, s.failWriter(err)
+	}
 	// 3-8. aplicação do estado aos índices, até o commit da location.
 	if err := s.applyRecord(recordApply{
 		rowID:       rowID,
@@ -1617,6 +1662,16 @@ func (s *Store) applyRecord(a recordApply) error {
 	}
 	if len(s.hashes) > 0 {
 		if err := s.applyHashSets(a.rowID, a.prevPayload, a.payload); err != nil {
+			return err
+		}
+	}
+	// O índice por segmento entra no MESMO passo 5 e pela mesma razão, DEPOIS
+	// dos dois motores antigos: enquanto a migração durar, quem decide se um
+	// valor é indexável continua sendo o motor que responde às consultas, e
+	// inverter a ordem trocaria o erro que a ingestão vê por um erro
+	// equivalente vindo de um índice que ninguém lê.
+	if len(s.wips) > 0 {
+		if err := s.aplicaIndiceSets(a.rowID, a.payload); err != nil {
 			return err
 		}
 	}
@@ -2526,6 +2581,7 @@ func (s *Store) Close() error {
 			errs = append(errs, ix.Close())
 		}
 	}
+	errs = append(errs, s.fechaIndices())
 	if s.agenda != nil {
 		errs = append(errs, s.agenda.Close())
 	}
@@ -2735,7 +2791,9 @@ func (s *Store) Apenda(payload []byte) (types.RowID, error) {
 	if err != nil {
 		return 0, s.failWriter(err)
 	}
-	s.curSegID.Store(seg)
+	if err := s.aposAppend(seg); err != nil {
+		return 0, s.failWriter(err)
+	}
 	if err := s.applyRecord(recordApply{
 		rowID:       rowID,
 		payload:     payload,
