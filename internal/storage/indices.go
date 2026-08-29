@@ -73,16 +73,26 @@ func (s *Store) abreIndicesDeSegmento(campos []types.FieldID) error {
 // descarte, o TestKill9NoMeioDaIngestaoPreservaOEstadoConfirmado passa a
 // reabrir com "o slot 572 declara contagem 10426 contra 0 postings".
 //
-// A remoção é por os.Remove sobre o NOME, e não pelo Apaga do segindex, porque
-// o Apaga precisa mapear e validar o arquivo antes — exatamente o que um .widx
-// rasgado não permite.
-//
 // Esta é a primeira METADE do §2.5: descartar. A segunda — reconstruir o índice
 // do segmento corrente lendo o próprio segmento — é da tarefa seguinte, e a
 // ausência dela não deixa nada incorreto aqui, porque nenhuma consulta lê deste
 // motor ainda.
 func (s *Store) descartaWIPsDoCorrente() error {
-	seg := s.curSegID.Load()
+	return s.apagaWIPsPeloNome(s.curSegID.Load())
+}
+
+// apagaWIPsPeloNome remove os .widx do segmento SEM abrir nenhum deles.
+//
+// É o único lugar que apaga .widx fora da selagem, e ele é um só de propósito:
+// os dois consumidores — o descarte da abertura e a aposentadoria do segmento —
+// precisam da MESMA regra, e uma segunda cópia divergiria na primeira vez que a
+// regra mudasse.
+//
+// Por NOME, e nunca pelo segindex.ApagaWIPs: aquele abre o arquivo com o
+// AbreWIP, que mapeia e valida o header antes de remover. Um .widx rasgado por
+// crash é justamente o que não se deixa abrir — a limpeza do lixo não pode
+// depender de o lixo estar íntegro (spec §2.5).
+func (s *Store) apagaWIPsPeloNome(seg uint32) error {
 	campos, err := segindex.ListaWIP(s.dirDeDados(), seg)
 	if err != nil {
 		return err
@@ -90,7 +100,7 @@ func (s *Store) descartaWIPsDoCorrente() error {
 	for _, campo := range campos {
 		caminho := segindex.CaminhoWIP(s.dirDeDados(), seg, campo)
 		if err := os.Remove(caminho); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("storage: descartar o índice %s do segmento corrente: %w", caminho, err)
+			return fmt.Errorf("storage: remover o índice WIP %s: %w", caminho, err)
 		}
 	}
 	return nil
@@ -245,7 +255,16 @@ func (s *Store) aplicaIndiceSets(row types.RowID, payload []byte) error {
 	}
 }
 
-// removeIndiceDoSegmento apaga o .sidx de um segmento aposentado.
+// removeIndiceDoSegmento apaga o índice de um segmento aposentado: o .sidx e
+// também os .widx que tenham sobrado dele.
+//
+// O .widx não é hipótese: um crash entre a rotação e a selagem deixa .widx de um
+// segmento que já não é o corrente, e o descarte da abertura só alcança o
+// corrente. Sem esta remoção, o .dat e o .sidx sairiam e o .widx ficaria em
+// disco PARA SEMPRE — e como o IndexBytes passou a contar os arquivos de índice
+// que moram em data/, ele viraria disco visível que nada explica, que é
+// exatamente o modo de falha que aquela contagem existe para eliminar
+// (spec §2.5, terceiro caso).
 //
 // Erro NÃO falha a aposentadoria: quando esta função roda, o .dat já saiu e o
 // disco já voltou ao dispositivo — desfazer não é possível, e propagar o erro
@@ -271,6 +290,11 @@ func (s *Store) removeIndiceDoSegmento(seg uint32) {
 	if err := os.Remove(segindex.CaminhoSelado(s.dirDeDados(), seg)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		s.opts.Log.Warn("indice.orfao_apos_aposentadoria",
 			"o índice do segmento aposentado continuou em disco; ele é inofensivo e sai na limpeza de órfãos",
+			"segmento", seg, "erro", err.Error())
+	}
+	if err := s.apagaWIPsPeloNome(seg); err != nil {
+		s.opts.Log.Warn("indice.wip_orfao_apos_aposentadoria",
+			"sobrou .widx de um segmento aposentado; ele ocupa disco que o IndexBytes conta e nada explica",
 			"segmento", seg, "erro", err.Error())
 	}
 }

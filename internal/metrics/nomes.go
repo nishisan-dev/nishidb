@@ -156,9 +156,17 @@ const (
 	// a escrita, e é isso que precisa de alarme.
 	MetHistoryDegraded = "nishidb_history_degraded"
 	// MetHistoryDataBytes é o que o maxBytes governa; MetHistoryIndexBytes é
-	// o resto do diretório, medido em BLOCOS. Separadas porque a purga só
-	// alcança a primeira: somá-las num número só faria o operador dimensionar
-	// o teto contra disco que a retenção não consegue baixar.
+	// todo o índice do dataset, medido em BLOCOS — inclusive o índice por
+	// segmento, que mora em data/ ao lado do .dat.
+	//
+	// Separadas porque o teto declarado pelo operador governa DADO e o índice
+	// tem teto próprio: somá-las num número só faria ele dimensionar
+	// `history.maxBytes` contra bytes que aquela chave não comanda.
+	//
+	// A purga alcança as DUAS, e a série de índice CAI depois de uma passada:
+	// o .sidx sai no mesmo passo que remove o .dat. Ela não caía quando todo
+	// índice era global — era esse o motivo antigo desta separação, e ele
+	// deixou de valer.
 	MetHistoryDataBytes  = "nishidb_history_data_bytes"
 	MetHistoryIndexBytes = "nishidb_history_index_bytes"
 	// MetHistoryOldestWrittenAt é a série que se olha primeiro: é ela que

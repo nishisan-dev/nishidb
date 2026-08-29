@@ -404,9 +404,18 @@ func (s *Store) primeiroRowIDDoSeguinte(alvo uint32) (uint64, bool, error) {
 }
 
 // bytesDosSegmentos soma o tamanho dos arquivos de dados — que é o que o
-// maxBytes governa, e só ele. Índices e locations.idx ficam de fora porque a
-// purga não sabe devolvê-los: um teto que a purga não consegue perseguir
+// maxBytes governa, e só ele.
+//
+// O locations.idx e o resto de indexes/ ficam de fora pelo motivo original: a
+// purga não sabe devolvê-los, e um teto que a purga não consegue perseguir
 // seria um teto que mente.
+//
+// O índice POR SEGMENTO fica de fora por outro motivo, e a distinção importa
+// porque a purga DEVOLVE o .sidx — ele sai no mesmo passo que remove o .dat.
+// Ele fica de fora porque `history.maxBytes` é a intenção que o operador
+// declarou sobre DADO, e o índice tem teto próprio (`history.index.maxBytes`).
+// Somá-lo aqui mudaria em silêncio o significado de uma chave que já está em
+// produção.
 func (s *Store) bytesDosSegmentos() (int64, error) {
 	refs, err := s.listaSegmentos()
 	if err != nil {

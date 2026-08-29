@@ -1514,7 +1514,7 @@ fato divergem no dia em que um caminho de erro esquece de somar.
 | `nishidb_history_rows_total` / `_dropped_total` | a tabela está COMPLETA? |
 | `nishidb_history_degraded` | ela parou de receber? |
 | `nishidb_history_data_bytes` | o que o `maxBytes` governa |
-| `nishidb_history_index_bytes` | o que a purga NÃO devolve, medido em blocos |
+| `nishidb_history_index_bytes` | o disco de índice, medido em blocos — a purga também o devolve |
 | `nishidb_history_oldest_written_at` | a janela real que a tabela cobre |
 | `nishidb_history_segments_purged_total{reason}` | qual das duas políticas está decidindo |
 | `nishidb_history_retention_running` | o motor está de pé? |

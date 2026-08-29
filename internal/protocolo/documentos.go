@@ -236,11 +236,15 @@ type HistoricoStats struct {
 	// Degraded diz que a tabela entrou em modo falho sticky e parou de
 	// receber. A consulta a ela continua respondendo, sobre o que já gravou.
 	Degraded bool `json:"degraded"`
-	// DataBytes é a soma dos SEGMENTOS, que é o que o maxBytes governa e o que
-	// a purga sabe devolver. IndexBytes é o resto do diretório — índices e
-	// locations.idx —, publicado em separado justamente porque a purga não o
-	// alcança: somá-lo ao teto faria a retenção perseguir um número que ela
-	// não consegue baixar.
+	// DataBytes é a soma dos SEGMENTOS, que é o que o maxBytes governa.
+	// IndexBytes é todo o índice do dataset — indexes/, checkpoint/ e o índice
+	// POR SEGMENTO, que mora em data/ ao lado do .dat.
+	//
+	// Publicado em separado porque o teto declarado governa DADO e o índice tem
+	// teto próprio; somá-lo ao teto mudaria o significado de uma chave de
+	// configuração. A purga devolve os DOIS — o .sidx sai junto com o .dat —,
+	// então este número CAI depois de uma passada, ao contrário do que valia
+	// quando todo índice era global.
 	DataBytes  int64 `json:"dataBytes"`
 	IndexBytes int64 `json:"indexBytes"`
 	// OldestWrittenAt é o instante da linha mais antiga ainda visível, em

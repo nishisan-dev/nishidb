@@ -57,10 +57,22 @@ func abreStoreIndexado(t *testing.T, campos []string) (*Store, string) {
 	return abreStoreIndexadoComSegmentoPequeno(t, campos, 1<<20)
 }
 
+// Os MESMOS campos entram nos dois motores antigos de propósito. O índice por
+// segmento cobre a união dos dois (spec D5), e é essa declaração dupla que gateia
+// a deduplicação: sem ela, camposIndexados sairia com cada campo duas vezes, o
+// abreWIPsDoCorrente abriria o mesmo .widx duas vezes vazando um mapeamento, e
+// o Set — que é append incondicional, sem varredura de dedup, e é isso que o
+// torna O(1) — gravaria cada posting em duplicata. O Lookup compacta, então o
+// RESULTADO sairia certo e o desperdício ficaria sem prova.
 func abreStoreIndexadoComSegmentoPequeno(t *testing.T, campos []string, segSize int64) (*Store, string) {
 	t.Helper()
 	dir := t.TempDir()
-	s := openStore(t, Options{Dir: dir, SegmentSize: segSize, HashFieldNames: campos})
+	s := openStore(t, Options{
+		Dir:              dir,
+		SegmentSize:      segSize,
+		HashFieldNames:   campos,
+		BitmapFieldNames: campos,
+	})
 	return s, dir
 }
 
@@ -207,6 +219,34 @@ func TestOWIPDeUmaExecucaoAnteriorEhDescartadoNaAbertura(t *testing.T) {
 	// E o índice novo aceita escrita: um arquivo recriado que não recebesse
 	// posting seria descarte sem substituição.
 	poeLinhas(t, s2, 1)
+}
+
+// TestAAposentadoriaLevaOWIPOrfaoJunto cobre o terceiro caso da §2.5. Um crash
+// entre a rotação e a selagem deixa .widx de um segmento que já NÃO é o
+// corrente, e o descarte da abertura só alcança o corrente — então, sem esta
+// remoção, o .dat e o .sidx sairiam na aposentadoria e o .widx ficaria em disco
+// para sempre. E ele agora é CONTADO no IndexBytes: viraria disco visível que
+// nada explica, que é o modo de falha que aquela contagem existe para eliminar.
+func TestAAposentadoriaLevaOWIPOrfaoJunto(t *testing.T) {
+	s, dir := abreStoreHistoricoIndexado(t, []string{"node"}, 64<<10)
+	alvo := s.curSegID.Load()
+	poeLinhasAteRotacionar(t, s, alvo)
+
+	// O resíduo é gravado com bytes que NENHUM AbreWIP aceitaria, e isso é o
+	// ponto: a limpeza tem de ser por nome, porque um .widx rasgado por crash é
+	// justamente o que não se deixa abrir.
+	orfao := segindex.CaminhoWIP(filepath.Join(dir, "data"), alvo, campoDoDicionario(t, s, "node"))
+	if err := os.WriteFile(orfao, bytes.Repeat([]byte{0xAA}, 4096), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.RetencaoUmaPassada(context.Background(), LimitesDeRetencao{MaxBytes: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(orfao); !os.IsNotExist(err) {
+		t.Errorf("Stat(%s) = %v, quero IsNotExist — o .widx órfão tem de sair com o segmento",
+			filepath.Base(orfao), err)
+	}
 }
 
 // TestOIndiceDeSegmentoEntraNoIndexBytes: o índice por segmento mora em data/,
