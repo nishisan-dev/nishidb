@@ -427,7 +427,21 @@ No `Open`:
 - segmento **não corrente** com `.widx` e sem `.sidx` → apaga o `.widx` e entra
   na fila de reconstrução;
 - segmento **corrente** → apaga o `.widx` e reconstrói lendo o próprio segmento
-  (≤ 512 MiB, ~1 s), antes do primeiro `Put`.
+  (≤ 512 MiB, ~1 s), antes do primeiro `Put`;
+- `.widx` de segmento que **não tem mais `.dat`** → apaga, e nada entra em fila.
+
+O terceiro caso não é hipotético e não estava nesta lista: um crash entre a
+rotação e a selagem deixa `.widx` de um segmento que já não é o corrente, e se
+esse segmento for aposentado depois, o `.dat` e o `.sidx` saem enquanto o
+`.widx` fica. Sem esta regra ele ficaria em disco **para sempre** — e como o
+`IndexBytes` passou a contar os arquivos de índice que moram em `data/`, ele
+viraria disco visível que nada explica, que é exatamente o modo de falha que a
+contagem existe para eliminar.
+
+A remoção é por **nome**, com `ListaWIP` mais `os.Remove` — nunca por
+`ApagaWIPs`, que abre e valida o arquivo. Um `.widx` rasgado por crash é
+justamente o que não se deixa abrir, e a limpeza não pode depender de o lixo
+estar íntegro.
 
 Isso elimina de uma vez o `msync` do índice no checkpoint, a invariante de ordem
 entre ele e o `durableOffset`, e a classe inteira de janelas de crash do índice
