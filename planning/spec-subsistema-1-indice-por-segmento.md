@@ -407,9 +407,34 @@ segmento**: os campos pendentes de um mesmo segmento são resolvidos na MESMA
 leitura sequencial dos records. Ler o segmento duas vezes para dois campos
 seria pagar o dobro pelo I/O que é o custo inteiro da operação.
 
-Ela toma o `wmu` **só no `rename`** do `.sidx.tmp` para o nome canônico, mais o
-`fsync` do diretório. A leitura dos records, a extração dos valores, a ordenação
-e a escrita do arquivo temporário acontecem inteiramente fora dele. Pacing pelo mesmo orçamento de ciclo de trabalho da
+**A publicação NÃO toma o `wmu`, e a exigência anterior era inexequível.** A §2.4
+mandava tomá-lo "só no `rename`", mas `Escritor.Escreve` faz escrita-tmp, `fsync`,
+`rename` e `fsync` do diretório numa chamada só — não há como tomar o lock apenas
+no terceiro passo sem partir a API, e segurá-lo pela escrita inteira é o que esta
+mesma seção proíbe. O requisito não era difícil: era impossível para qualquer
+chamador.
+
+O que substitui o lock são três fatos, e o terceiro é o que torna os dois
+primeiros suficientes:
+
+1. o `rename` já é atômico, então nenhum leitor vê arquivo pela metade;
+2. o arquivo temporário passa a ter **nome único por escritor**. Hoje ele é fixo,
+   e a selagem do segmento recém-rotacionado pode coincidir com a reconstrução do
+   mesmo segmento — as duas escreveriam no mesmo `.tmp` e produziriam um arquivo
+   rasgado. É esta a correção que o lock aparentava dar e não dava;
+3. **a selagem e a reconstrução produzem arquivos byte a byte idênticos**, o que
+   o golden da §6.3 prova. Logo uma corrida no nome FINAL é neutra em conteúdo:
+   quem renomear por último grava os mesmos bytes.
+
+O item 3 é um caso raro de teste comprando simplificação de desenho: sem a
+igualdade provada, a corrida no nome final exigiria exclusão mútua; com ela,
+exige apenas que ninguém veja o arquivo pela metade.
+
+Fica aberto um resíduo aceito: a reconstrução pode publicar o `.sidx` de um
+segmento que a retenção acabou de aposentar, deixando órfão. É recuperável — o
+`Open` limpa, e um `Lookup` sobre segmento sem `.dat` devolve candidatos que não
+resolvem —, e o laço da §2.4 reduz a janela pulando segmento que já não aparece
+na listagem. Pacing pelo mesmo orçamento de ciclo de trabalho da
 compaction — sem isso ela vira o terceiro laço de fundo disputando o writer, que
 é o defeito que o ciclo anterior mediu e nomeou.
 
