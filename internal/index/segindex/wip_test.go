@@ -1,14 +1,17 @@
 package segindex_test
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/index/segindex"
 	"github.com/nishisan-dev/nishidb/internal/types"
@@ -81,9 +84,15 @@ func TestOWIPDevolveOrdemEstritamenteCrescenteComRowIdsForaDeOrdem(t *testing.T)
 }
 
 // TestOWIPCresceSemPerderPosting: o array de postings dobra e o diretório
-// rehasheia, e nenhum dos dois pode perder uma posting. O rehash reescreve SÓ o
-// diretório — as postings não se movem, porque o índice 1-based delas é o que
-// a cadeia guarda.
+// rehasheia, e nenhum dos dois pode perder uma posting.
+//
+// O que o rehash NÃO faz é renumerar as postings — o que a cadeia guarda é o
+// índice 1-based delas, e renumerar invalidaria todo elo `anterior` já gravado.
+// Os BYTES delas se movem, com um memmove, porque o layout põe o diretório
+// antes do array e dobrar o diretório empurra o array para frente. As duas
+// afirmações são diferentes e só a segunda é sobre endereços; confundi-las é o
+// caminho mais curto para um leitor concluir que o memmove de rehash() é
+// código morto.
 func TestOWIPCresceSemPerderPosting(t *testing.T) {
 	w := abreWIPDeTesteComSlots(t, 16) // força vários rehashes
 	defer fechaWIP(t, w)
@@ -201,9 +210,17 @@ func TestOWIPAtendeLeitorConcorrenteDuranteOCrescimento(t *testing.T) {
 			// escalonador, e uma rodada em que o leitor só rodasse no fim
 			// passaria sem nunca ter havido concorrência. Não trava: o leitor
 			// só sai quando `pronto` fecha, e isso é depois daqui.
+			// O prazo é o que separa "falha" de "trava": sem ele, um Lookup
+			// que regredisse para devolver sempre nil faria este laço girar
+			// até o timeout de dez minutos do go test — sinal caro e sem nome.
+			// Com ele, a mesma regressão falha em segundos, nomeada.
+			limite := time.Now().Add(30 * time.Second)
 			for {
 				if parcial = visto.Load(); parcial > 0 {
 					break
+				}
+				if time.Now().After(limite) {
+					t.Fatal("o leitor nunca observou estado intermediário em 30s — o Lookup deixou de devolver as postings publicadas")
 				}
 				runtime.Gosched()
 			}
@@ -434,4 +451,199 @@ func TestApagaRemoveOArquivoDoWIP(t *testing.T) {
 	if len(campos) != 0 {
 		t.Errorf("ListaWIP após Apaga = %v, quero vazio", campos)
 	}
+}
+
+// Offsets do header do WIP — escritos aqui, e não emprestados do pacote, pela
+// mesma razão do bloco equivalente de selado_test.go: quem mutila um formato de
+// disco tem de saber onde está pondo a mão. Um teste que derivasse os offsets
+// das constantes do pacote passaria a mutilar o lugar errado no dia em que o
+// layout mudasse, e continuaria verde.
+const (
+	offMagicWIP     = 0  // 4 bytes
+	offVersaoNoWIP  = 4  // u8
+	offCampoNoWIP   = 6  // u16
+	offDirSlotsNoW  = 8  // u32
+	offPostCountNoW = 12 // u32
+)
+
+// escreveWIPDeTeste emite um .widx bem-formado — um campo, dois valores, três
+// postings — e devolve o diretório e os bytes do arquivo, para os testes que
+// precisam estragá-lo.
+func escreveWIPDeTeste(t *testing.T) (string, []byte) {
+	t.Helper()
+	dir := t.TempDir()
+	w, err := segindex.AbreWIP(dir, segmentoDeTeste, campoDeTeste, 16)
+	if err != nil {
+		t.Fatalf("AbreWIP: %v", err)
+	}
+	for _, p := range []struct {
+		h   uint64
+		row types.RowID
+	}{{100, 30}, {100, 10}, {200, 20}} {
+		if err := w.Set(p.h, p.row); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Fecha(); err != nil {
+		t.Fatalf("Fecha: %v", err)
+	}
+	b, err := os.ReadFile(segindex.CaminhoWIP(dir, segmentoDeTeste, campoDeTeste))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir, b
+}
+
+// TestWIPRecusaHeaderInvalido cobre as recusas de FORMATO da abertura.
+//
+// O irmão selado tem o gate equivalente desde a Tarefa 2, e a ausência dele
+// aqui deixava sem prova a afirmação mais load-bearing do godoc de montaWIP: a
+// conferência do fieldID, que impede um arquivo renomeado de responder pelo
+// campo errado. Um Lookup sobre o campo errado devolve linhas erradas sem
+// sintoma nenhum — não é um erro que apareça, é um resultado que mente.
+//
+// As mutilações são CIRÚRGICAS, um guarda por caso: escrever 0xFF em tudo
+// provaria só que o guarda mais externo funciona.
+func TestWIPRecusaHeaderInvalido(t *testing.T) {
+	casos := map[string]func(b []byte){
+		"magic trocado": func(b []byte) { copy(b[offMagicWIP:offMagicWIP+4], "XXXX") },
+		"versão desconhecida": func(b []byte) {
+			b[offVersaoNoWIP] = segindex.VersaoWIP + 1
+		},
+		"campo divergente do nome do arquivo": func(b []byte) {
+			// O nome diz campoDeTeste e o header passa a dizer outro. É o caso
+			// do arquivo renomeado, e o único desfecho tolerável é a recusa.
+			binary.LittleEndian.PutUint16(b[offCampoNoWIP:offCampoNoWIP+2], uint16(campoDeTeste)+1)
+		},
+		"dirSlots zero": func(b []byte) {
+			// Máscara dirSlots-1 viraria 0xFFFFFFFF e a sondagem andaria fora
+			// do diretório.
+			binary.LittleEndian.PutUint32(b[offDirSlotsNoW:offDirSlotsNoW+4], 0)
+		},
+		"dirSlots não é potência de dois": func(b []byte) {
+			binary.LittleEndian.PutUint32(b[offDirSlotsNoW:offDirSlotsNoW+4], 24)
+		},
+		"postCount maior que o arquivo": func(b []byte) {
+			binary.LittleEndian.PutUint32(b[offPostCountNoW:offPostCountNoW+4], 1<<20)
+		},
+		"cabeça de cadeia além do postCount": func(b []byte) {
+			// O caso do .widx sobrevivente de crash: o header só ganha o
+			// postCount definitivo no Fecha, então a contagem fica atrasada e
+			// as cadeias apontam além dela. Adotado assim, o próximo Set
+			// sobrescreveria postings vivas em silêncio.
+			binary.LittleEndian.PutUint32(b[offPostCountNoW:offPostCountNoW+4], 1)
+		},
+	}
+	for nome, estraga := range casos {
+		t.Run(nome, func(t *testing.T) {
+			dir, original := escreveWIPDeTeste(t)
+			b := append([]byte(nil), original...)
+			estraga(b)
+			if err := os.WriteFile(segindex.CaminhoWIP(dir, segmentoDeTeste, campoDeTeste), b, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			w, err := segindex.AbreWIP(dir, segmentoDeTeste, campoDeTeste, 0)
+			if err == nil {
+				_ = w.Fecha()
+				t.Fatal("AbreWIP aceitou o header mutilado")
+			}
+			if !errors.Is(err, segindex.ErrFormato) {
+				t.Errorf("erro = %v, quero ErrFormato", err)
+			}
+		})
+	}
+}
+
+// TestListaWIPRecusaFieldIDIlegivel: o espaço de nomes `segment-NNNNNNNN-*.widx`
+// é deste pacote, e um arquivo ali que não saiu daqui significa que outra coisa
+// escreveu no diretório do dataset. Pular em silêncio faria a selagem perder um
+// campo inteiro — o segmento seria selado sem a seção dele e responderia zero
+// linhas onde tem linhas.
+func TestListaWIPRecusaFieldIDIlegivel(t *testing.T) {
+	dir := t.TempDir()
+	intruso := filepath.Join(dir, fmt.Sprintf("segment-%08d-abcde.widx", segmentoDeTeste))
+	if err := os.WriteFile(intruso, []byte("nada"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := segindex.ListaWIP(dir, segmentoDeTeste); !errors.Is(err, segindex.ErrFormato) {
+		t.Errorf("ListaWIP = %v, quero ErrFormato", err)
+	}
+}
+
+// TestUsarOWIPAposFecharPanicaEmVezDeFalharMudo trava a rede do nível de baixo.
+//
+// Region.Close zera data e size, então o gravaHeader de um segundo Fecha não
+// daria erro: daria um pânico de bounds vindo de DENTRO do mmap, sem nome de
+// método e sem nome de arquivo — e o Lookup leria um mapeamento desmontado. O
+// pânico nomeado troca isso por uma falha que aponta para a linha certa, como
+// TestLookupAposFechaPanicaEmVezDeLerMemoriaDesmontada já faz no selado.
+func TestUsarOWIPAposFecharPanicaEmVezDeFalharMudo(t *testing.T) {
+	operacoes := map[string]func(w *segindex.WIP){
+		"Set":      func(w *segindex.WIP) { _ = w.Set(100, 1) },
+		"Lookup":   func(w *segindex.WIP) { _ = w.Lookup(100) },
+		"ParaCada": func(w *segindex.WIP) { _ = w.ParaCada(func(uint64, types.RowID) {}) },
+		"Fecha":    func(w *segindex.WIP) { _ = w.Fecha() },
+	}
+	for nome, op := range operacoes {
+		t.Run(nome, func(t *testing.T) {
+			w := abreWIPDeTesteComSlots(t, 16)
+			if err := w.Fecha(); err != nil {
+				t.Fatalf("Fecha: %v", err)
+			}
+			defer func() {
+				if recover() == nil {
+					t.Errorf("%s após Fecha deveria entrar em pânico", nome)
+				}
+			}()
+			op(w)
+		})
+	}
+}
+
+// TestApagaDepoisDeFecharNaoDevolveErro é o encadeamento que a selagem faz:
+// emite o .sidx, fecha o .widx e o apaga.
+//
+// Apaga é a operação TERMINAL, e é a única que aceita ser chamada depois do
+// Fecha. Um Apaga que recusasse região já fechada devolveria à selagem o erro
+// de "descritor já fechado" — que ela leria como falha de uma selagem que deu
+// certo. Chamar Apaga duas vezes também não é erro: o estado desejado é o
+// mesmo.
+func TestApagaDepoisDeFecharNaoDevolveErro(t *testing.T) {
+	dir := t.TempDir()
+	w, err := segindex.AbreWIP(dir, segmentoDeTeste, campoDeTeste, 16)
+	if err != nil {
+		t.Fatalf("AbreWIP: %v", err)
+	}
+	if err := w.Set(100, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Fecha(); err != nil {
+		t.Fatalf("Fecha: %v", err)
+	}
+	if err := w.Apaga(); err != nil {
+		t.Fatalf("Apaga após Fecha: %v — a selagem leria isso como falha", err)
+	}
+	if err := w.Apaga(); err != nil {
+		t.Errorf("Apaga repetido: %v, quero nil", err)
+	}
+	if _, err := os.Stat(segindex.CaminhoWIP(dir, segmentoDeTeste, campoDeTeste)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("stat após Apaga = %v, quero não-existe", err)
+	}
+}
+
+// TestSetComHashZeroPanica: 0 é o sentinela de slot vazio. Um Set com hash 0
+// ocuparia um slot que todo leitor continua lendo como vazio, incrementaria os
+// distintos e faria a posting sumir em SILÊNCIO — falso negativo permanente.
+//
+// A segurança vem hoje de primary.HashKey nunca devolver 0 nem 1, mas isso é
+// convenção de OUTRO pacote; o pânico é o que a transforma em invariante deste.
+func TestSetComHashZeroPanica(t *testing.T) {
+	w := abreWIPDeTesteComSlots(t, 16)
+	defer fechaWIP(t, w)
+	defer func() {
+		if recover() == nil {
+			t.Error("Set com hash 0 deveria entrar em pânico")
+		}
+	}()
+	_ = w.Set(0, 1)
 }
