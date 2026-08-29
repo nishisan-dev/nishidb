@@ -1,0 +1,87 @@
+package storage
+
+// A propriedade de que o §44 inteiro depende, e o arquivo existe para que ela
+// SOBREVIVA à troca de motor de índice.
+//
+// Ela nasceu em store_recovery_bitmap_test.go, junto dos cenários que a
+// estrearam, e mora aqui porque aquele arquivo é do motor ANTIGO e sai com ele.
+// Seis cenários de recovery — em store_recovery_test.go e store_sc_lacunas_test.go,
+// que ficam — chamam este guarda como asserção final, e é a única prova de
+// ausência de falso negativo que eles têm. Deixá-la no arquivo condenado faria a
+// remoção do motor antigo levar junto a rede de proteção do motor novo, sem que
+// nada acusasse.
+
+import (
+	"testing"
+
+	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
+)
+
+// exigeBitmapCompleto verifica a propriedade da qual a spec §44 depende:
+// para toda row viva, todo campo indexado do payload CORRENTE aparece nas
+// postings do seu valor.
+//
+// É uma propriedade, e não um caso de teste, por causa da assimetria do
+// §14.16: falso positivo o executor filtra na revalidação, falso negativo é
+// invisível — nenhuma camada acima recupera um candidato que o índice não
+// devolveu, e a query volta silenciosamente incompleta.
+//
+// Limite: cobre as rows alcançáveis pelo ScanLive. Uma row cuja location se
+// perdeu não é varrida aqui — isso é responsabilidade das asserções de
+// visibilidade por key de cada cenário.
+func exigeBitmapCompleto(t *testing.T, s *Store) {
+	t.Helper()
+	// Sem índice declarado o guarda não verifica nada. Falhar aqui evita que
+	// ele vire um no-op invisível se algum cenário perder a configuração de
+	// bitmap — uma rede que passa sempre é pior que rede nenhuma.
+	if len(s.bitmaps) == 0 {
+		t.Fatal("guarda de bitmap chamado num Store sem índice: o cenário precisa declarar BitmapFields, senão a asserção não verifica nada")
+	}
+	it := s.ScanLive()
+	defer it.Close()
+	var buf []byte
+	for it.Next() {
+		id := it.RowID()
+		rec, b, vivo, err := s.GetByRowID(id, buf)
+		buf = b
+		if err != nil {
+			t.Fatalf("guarda de bitmap: GetByRowID(%d): %v", id, err)
+		}
+		if !vivo {
+			continue
+		}
+		var r encoding.FieldReader
+		r.Reset(rec.Payload)
+		for {
+			fid, v, ok := r.Next()
+			if !ok {
+				break
+			}
+			if _, indexado := s.bitmaps[fid]; !indexado {
+				continue
+			}
+			postings, err := s.LookupBitmap(fid, v)
+			if err != nil {
+				t.Fatalf("guarda de bitmap: LookupBitmap(%d): %v", fid, err)
+			}
+			achou := false
+			for postings.Next() {
+				if postings.RowID() == id {
+					achou = true
+					break
+				}
+			}
+			postings.Close()
+			if !achou {
+				t.Fatalf("FALSO NEGATIVO no bitmap: a row %d tem o campo %d=%q no payload corrente, mas não aparece nas postings desse valor",
+					id, fid, v.Bytes)
+			}
+		}
+		if err := r.Err(); err != nil {
+			t.Fatalf("guarda de bitmap: payload da row %d: %v", id, err)
+		}
+	}
+	if err := it.Err(); err != nil {
+		t.Fatalf("guarda de bitmap: ScanLive: %v", err)
+	}
+}
