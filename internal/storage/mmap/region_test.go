@@ -1,6 +1,7 @@
 package mmap
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -207,6 +208,129 @@ func TestOffsetForaDosLimitesPanica(t *testing.T) {
 		}
 	}()
 	r.AtomicLoad64(4096)
+}
+
+// TestAbreSomenteLeituraNaoRetemDescritor é a razão de esta função existir:
+// um dataset de 250 GiB tem 500 segmentos, e um descritor por segmento
+// estouraria o ulimit -n típico de 1024. No Linux o mapeamento sobrevive ao
+// close do fd, e um arquivo selado nunca precisa do fd de volta — não cresce,
+// não faz msync e não faz punch-hole.
+func TestAbreSomenteLeituraNaoRetemDescritor(t *testing.T) {
+	caminho := filepath.Join(t.TempDir(), "r.bin")
+	if err := os.WriteFile(caminho, []byte("abcdefgh"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	antes := descritoresAbertos(t)
+	r, err := AbreSomenteLeitura(caminho)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = r.Close() }()
+	if depois := descritoresAbertos(t); depois != antes {
+		t.Errorf("descritores abertos: %d antes, %d depois — quero iguais", antes, depois)
+	}
+	if got := string(r.Bytes()); got != "abcdefgh" {
+		t.Errorf("Bytes() = %q, quero %q — o mapeamento tem de sobreviver ao close", got, "abcdefgh")
+	}
+}
+
+// descritoresAbertos conta as entradas de /proc/self/fd.
+func descritoresAbertos(t *testing.T) int {
+	t.Helper()
+	e, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Skipf("sem /proc/self/fd: %v", err)
+	}
+	return len(e)
+}
+
+// TestRegiaoDeEscritaRecusaBytes trava a fronteira: entregar o slice cru de uma
+// região que o Grow pode remapear devolveria memória liberada ao chamador
+// depois do primeiro crescimento. Este é o tipo de erro que só aparece em
+// produção, e o pânico o transforma em falha de teste.
+func TestRegiaoDeEscritaRecusaBytes(t *testing.T) {
+	r, err := Open(filepath.Join(t.TempDir(), "w.bin"), 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = r.Close() }()
+	defer func() {
+		if recover() == nil {
+			t.Error("Bytes() numa região de escrita deveria entrar em pânico")
+		}
+	}()
+	_ = r.Bytes()
+}
+
+// TestRegiaoSomenteLeituraRecusaMutacao cobre a outra metade da fronteira: a
+// região somente-leitura não tem descritor e o mapeamento é PROT_READ, então
+// TODO caminho de escrita precisa parar ANTES de chegar ao unix — em r.f, que
+// é nil, viraria nil pointer dereference, e no mapeamento viraria SIGSEGV
+// incapturável. Os que devolvem erro recusam com erro; os que não têm por onde
+// devolver, entram em pânico.
+func TestRegiaoSomenteLeituraRecusaMutacao(t *testing.T) {
+	caminho := filepath.Join(t.TempDir(), "ro.bin")
+	if err := os.WriteFile(caminho, make([]byte, 4096), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r, err := AbreSomenteLeitura(caminho)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = r.Close() }()
+
+	comErro := map[string]func() error{
+		"Grow":         func() error { return r.Grow(8192) },
+		"Msync":        func() error { return r.Msync() },
+		"LiberaBlocos": func() error { return r.LiberaBlocos(0, 4096) },
+	}
+	for nome, fn := range comErro {
+		if err := fn(); err == nil {
+			t.Errorf("%s numa região somente-leitura devolveu nil — quero erro", nome)
+		}
+	}
+
+	comPanico := map[string]func(){
+		"AtomicStore64": func() { r.AtomicStore64(0, 1) },
+		"AtomicOr64":    func() { r.AtomicOr64(0, 1) },
+		"AtomicAnd64":   func() { r.AtomicAnd64(0, 1) },
+		"WithBytes":     func() { r.WithBytes(0, 8, func([]byte) {}) },
+	}
+	for nome, fn := range comPanico {
+		t.Run(nome, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("%s numa região somente-leitura deveria entrar em pânico", nome)
+				}
+			}()
+			fn()
+		})
+	}
+
+	// Ler continua valendo: é para isso que a região existe.
+	if got := r.AtomicLoad64(0); got != 0 {
+		t.Errorf("AtomicLoad64(0) = %d, quero 0", got)
+	}
+}
+
+// TestAbreSomenteLeituraRecusaArquivoVazio: unix.Mmap com length 0 falha com
+// EINVAL, e devolver esse errno cru não diria nada ao operador. Um .sidx de
+// zero bytes só existe como escrita truncada — o escritor recusa emitir índice
+// vazio —, então a recusa nomeada é a resposta certa, e o chamador a trata
+// como "sem índice" e reconstrói.
+func TestAbreSomenteLeituraRecusaArquivoVazio(t *testing.T) {
+	caminho := filepath.Join(t.TempDir(), "vazio.bin")
+	if err := os.WriteFile(caminho, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r, err := AbreSomenteLeitura(caminho)
+	if err == nil {
+		_ = r.Close()
+		t.Fatal("AbreSomenteLeitura de arquivo vazio deveria falhar")
+	}
+	if !errors.Is(err, ErrArquivoVazio) {
+		t.Errorf("erro = %v, quero ErrArquivoVazio", err)
+	}
 }
 
 func TestLeituraConcorrenteComGrow(t *testing.T) {
