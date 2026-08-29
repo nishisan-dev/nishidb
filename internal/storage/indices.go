@@ -117,7 +117,9 @@ func (s *Store) descartaTodosOsWIPs() error {
 // data/ que este binário não escreveu, e ele impede a abertura porque a varredura
 // da §2.5 percorre o diretório inteiro. ErrDatasetCorrupt é a classificação
 // honesta — não afirma perda de dado, afirma que a resposta operacional é olhar o
-// diretório do dataset —, e leva ao mesmo exit 4 do manifest ilegível.
+// diretório do dataset —, e leva ao mesmo ExitDataset (3) do manifest ilegível.
+// Três, e não quatro: quatro é o ExitWriter, writer em modo falho, que é outra
+// categoria e outra ação do operador (reabrir o dataset, não investigá-lo).
 //
 // Erro que não é de formato passa intacto: EIO ao listar o diretório é falha de
 // infra, e chamá-la de corrupção induz a resposta destrutiva (restaurar backup).

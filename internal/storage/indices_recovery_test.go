@@ -345,7 +345,7 @@ func TestNomeIlegivelNoEspacoDoWIPSaiComoDatasetIlegivel(t *testing.T) {
 		t.Fatal("a abertura aceitou um arquivo no espaço de nomes .widx que este binário não escreveu")
 	}
 	if !errors.Is(err, ErrDatasetCorrupt) {
-		t.Errorf("Open = %v, quero ErrDatasetCorrupt (exit 4); sem a sentinela isto vira exit 1", err)
+		t.Errorf("Open = %v, quero ErrDatasetCorrupt (exit 3); sem a sentinela isto vira exit 1", err)
 	}
 	if !errors.Is(err, segindex.ErrFormato) {
 		t.Errorf("Open = %v: a causa original tem de continuar alcançável por errors.Is", err)
