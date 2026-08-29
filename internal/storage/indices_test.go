@@ -209,6 +209,47 @@ func TestOWIPDeUmaExecucaoAnteriorEhDescartadoNaAbertura(t *testing.T) {
 	poeLinhas(t, s2, 1)
 }
 
+// TestOIndiceDeSegmentoEntraNoIndexBytes: o índice por segmento mora em data/,
+// ao lado do .dat, e o DataBytes soma SÓ os segment-%08d.dat. Sem esta
+// contagem, o dataset passa a consumir disco que NENHUMA das duas séries
+// explica — que é o pior modo de falha possível para uma estatística que existe
+// justamente para o operador ver para onde o disco foi.
+func TestOIndiceDeSegmentoEntraNoIndexBytes(t *testing.T) {
+	s, dir := abreStoreHistoricoIndexado(t, []string{"node"}, 64<<10)
+	alvo := s.curSegID.Load()
+	poeLinhasAteRotacionar(t, s, alvo)
+
+	caminho := segindex.CaminhoSelado(filepath.Join(dir, "data"), alvo)
+	info, err := os.Stat(caminho)
+	if err != nil {
+		t.Fatalf("pré-condição: o segmento %d deveria estar selado: %v", alvo, err)
+	}
+
+	antes := s.EstatisticasDeRetencao()
+	if antes.IndexBytes <= 0 {
+		t.Fatalf("IndexBytes = %d com um .sidx de %d bytes em disco", antes.IndexBytes, info.Size())
+	}
+	// O oráculo é a DIFERENÇA, e não um valor absoluto: o IndexBytes já somava
+	// indexes/ e checkpoint/ antes desta tarefa, então um teste de "> 0"
+	// passaria com o índice de segmento inteiro invisível. Remover o .sidx é a
+	// única mudança entre as duas medidas.
+	if err := os.Remove(caminho); err != nil {
+		t.Fatal(err)
+	}
+	depois := s.EstatisticasDeRetencao()
+	if queda := antes.IndexBytes - depois.IndexBytes; queda < info.Size() {
+		t.Errorf("o IndexBytes caiu %d ao remover um .sidx de %d bytes: o índice em data/ não está sendo contado",
+			queda, info.Size())
+	}
+	// E ele NÃO pode ter entrado no DataBytes: `history.maxBytes` governa DADO,
+	// e o índice tem teto próprio. Somá-los mudaria o significado de uma chave
+	// de configuração que já está em produção.
+	if antes.DataBytes != depois.DataBytes {
+		t.Errorf("o DataBytes mudou de %d para %d ao remover um índice: o teto de dado passou a contar índice",
+			antes.DataBytes, depois.DataBytes)
+	}
+}
+
 // TestAAposentadoriaLevaOIndiceJunto é a segunda dor da spec, e o teste que
 // prova que ela foi resolvida por CONSTRUÇÃO. Antes, nada removia as postings
 // de um segmento aposentado, e cada órfã alongava a cadeia de quem estava vivo.

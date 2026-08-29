@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"path/filepath"
+	"strings"
 )
 
 // Layout da forma SELADA, little-endian (arquivo data/segment-%08d.sidx):
@@ -98,6 +99,24 @@ var castagnoli = crc32.MakeTable(crc32.Castagnoli)
 // uma linha de código em vez de uma promessa.
 func CaminhoSelado(dir string, seg uint32) string {
 	return filepath.Join(dir, fmt.Sprintf("segment-%08d.sidx", seg))
+}
+
+// EhArquivoDeIndice reporta se o nome pertence ao espaço de nomes DESTE pacote
+// dentro do diretório de dados: a forma selada, o temporário dela e a forma WIP.
+//
+// Ela é exportada para quem CONTA o disco do dataset, e mora aqui pela mesma
+// razão que ListaWIP mora aqui: o nome é deste pacote. Uma segunda cópia da
+// convenção em internal/storage pararia de contar em SILÊNCIO no dia em que a
+// extensão mudasse, e a série que ela alimenta existe justamente para que
+// nenhum byte do dataset fique sem explicação.
+//
+// Ela não valida conteúdo, de propósito: um arquivo com o nome certo e bytes
+// podres é recusado na abertura e continua ocupando disco até ser removido — que
+// é exatamente o que quem conta precisa enxergar.
+func EhArquivoDeIndice(nome string) bool {
+	return strings.HasSuffix(nome, ".sidx") ||
+		strings.HasSuffix(nome, ".sidx.tmp") ||
+		strings.HasSuffix(nome, ".widx")
 }
 
 // larguraPara devolve a menor largura de posting que cobre o intervalo.

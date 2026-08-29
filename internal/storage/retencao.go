@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nishisan-dev/nishidb/internal/index/segindex"
 	"github.com/nishisan-dev/nishidb/internal/storage/mmap"
 	"github.com/nishisan-dev/nishidb/internal/storage/rowindex"
 	"github.com/nishisan-dev/nishidb/internal/storage/segment"
@@ -424,7 +425,9 @@ func (s *Store) listaSegmentos() ([]segment.SegmentRef, error) {
 
 // EstatisticasDeRetencao é o retrato da tabela histórica em disco.
 type EstatisticasDeRetencao struct {
-	// DataBytes é a soma dos segmentos; IndexBytes é o resto do diretório.
+	// DataBytes é a soma dos segmentos de DADO; IndexBytes é todo o índice do
+	// dataset — indexes/, checkpoint/ e o índice por segmento, que mora em
+	// data/ ao lado do .dat. Juntos, os dois explicam o disco do dataset.
 	DataBytes, IndexBytes int64
 	// InstanteMaisAntigo é o _writtenAt da linha mais antiga ainda visível,
 	// em millis, ou zero quando a tabela está vazia.
@@ -445,8 +448,27 @@ func (s *Store) EstatisticasDeRetencao() EstatisticasDeRetencao {
 	if dados, err := s.bytesDosSegmentos(); err == nil {
 		e.DataBytes = dados
 	}
+	// O índice por segmento mora em data/, ao lado do .dat, e por isso não
+	// era contado por nenhuma das duas parcelas que este número tinha: o
+	// DataBytes acima soma só os segment-%08d.dat do ListSegments, e indexes/ e
+	// checkpoint/ são outros diretórios. Sem a terceira parcela, o dataset
+	// consome disco que NENHUMA das duas séries explica — e elas existem
+	// exatamente para o operador ver para onde o disco foi.
+	//
+	// Os dois números continuam SEPARADOS apesar de o índice agora morar junto
+	// do dado, e a separação é a que o operador declarou: a purga devolve os
+	// dois de uma vez, mas `history.maxBytes` governa DADO — é o que o
+	// bytesDosSegmentos soma e o que a aposentaAteCaber compara —, e o índice
+	// tem teto próprio (`history.index.maxBytes`). Somá-los aqui mudaria em
+	// silêncio o significado de uma chave de configuração que já está em
+	// produção.
+	//
+	// O predicado vem do segindex, e não de uma lista de extensões escrita
+	// aqui: o espaço de nomes é daquele pacote, e uma cópia dele pararia de
+	// contar sem avisar no dia em que a extensão mudasse.
 	e.IndexBytes = blocosDoDiretorio(filepath.Join(s.opts.Dir, "indexes")) +
-		blocosDoDiretorio(filepath.Join(s.opts.Dir, "checkpoint"))
+		blocosDoDiretorio(filepath.Join(s.opts.Dir, "checkpoint")) +
+		blocosDoDiretorioSe(s.dirDeDados(), segindex.EhArquivoDeIndice)
 	if ms, ok := s.instanteMaisAntigo(); ok {
 		e.InstanteMaisAntigo = ms
 	}
@@ -492,6 +514,17 @@ func (s *Store) instanteMaisAntigo() (int64, bool) {
 // Erro de leitura devolve o que deu para somar: é número de painel, e um
 // diretório que sumiu no meio da varredura não justifica derrubar o /v1/stats.
 func blocosDoDiretorio(dir string) int64 {
+	return blocosDoDiretorioSe(dir, nil)
+}
+
+// blocosDoDiretorioSe é o blocosDoDiretorio com um filtro por NOME de arquivo,
+// para o diretório que guarda dado e índice lado a lado. `aceita` nil soma
+// tudo.
+//
+// O filtro é por nome e não por conteúdo porque quem conta disco não pode
+// depender de o arquivo estar íntegro: um índice ilegível ocupa exatamente os
+// mesmos blocos de um íntegro, e é sobre blocos que a série fala.
+func blocosDoDiretorioSe(dir string, aceita func(nome string) bool) int64 {
 	entradas, err := os.ReadDir(dir)
 	if err != nil {
 		return 0
@@ -499,7 +532,10 @@ func blocosDoDiretorio(dir string) int64 {
 	var total int64
 	for _, e := range entradas {
 		if e.IsDir() {
-			total += blocosDoDiretorio(filepath.Join(dir, e.Name()))
+			total += blocosDoDiretorioSe(filepath.Join(dir, e.Name()), aceita)
+			continue
+		}
+		if aceita != nil && !aceita(e.Name()) {
 			continue
 		}
 		info, err := e.Info()
