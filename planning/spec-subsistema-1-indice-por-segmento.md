@@ -709,11 +709,18 @@ Primeiros do pacote. `testing.AllocsPerRun`:
 | Caminho | Exigido | Por quê exatamente esse número |
 |---|---:|---|
 | `Set` no WIP | **0** | é o caminho quente da ingestão |
-| `Lookup` sobre seção selada | **0** | o resultado é fatia contígua; qualquer alocação é sinal de cópia indevida |
+| Iterar postings de seção selada | **0 por linha** | o resultado é fatia contígua do mmap; alocação por linha é sinal de cópia indevida |
 | `Lookup` sobre o WIP | **exatamente 1** | a materialização de tamanho exato. `0` significaria que não materializou (ordem errada); `2` significaria que o slice cresceu (tamanho errado) |
 
 O `1` é afirmado como igualdade, e não como teto, de propósito: os dois desvios
 possíveis são bugs diferentes e o gate precisa separar os dois.
+
+**A medida do selado é POR LINHA ITERADA, não por `Lookup`.** Montar a lista de
+fontes de uma consulta custa um boxing de interface por segmento — 500 alocações
+por consulta com o dataset cheio, e não por linha. É um custo de abertura, da
+mesma família da abertura de iterador que o executor já paga hoje; medi-lo junto
+com a iteração esconderia justamente a regressão que importa, que é a cópia por
+linha.
 
 ### 6.3 Goldens
 
