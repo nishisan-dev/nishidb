@@ -1,7 +1,9 @@
 package segindex_test
 
 import (
+	"encoding/binary"
 	"errors"
+	"hash/crc32"
 	"os"
 	"testing"
 
@@ -149,6 +151,61 @@ func TestOSeladoDevolveOQueOEscritorRecebeu(t *testing.T) {
 	exigeRows(t, coleta(t, f), []types.RowID{12}, "campo 3, hash 999")
 }
 
+// TestOSeladoLeAsPostingsDeOitoBytes fecha a outra metade do formato. Todos os
+// outros corpora do pacote têm span < 2³² e produzem postingWidth 4, então o
+// ramo de 8 bytes do leitor — que o formato promete e o escritor demonstra
+// emitir (TestGoldenDoSelado tem um golden de largura 8 congelado em disco) —
+// nunca era executado.
+//
+// A largura não é hipótese remota: o rowId de um segmento não é contíguo. No
+// dataset materializado a linha é regravada no segmento corrente mantendo o
+// rowId, então um segmento tardio carrega postings de entidades antigas e
+// novas ao mesmo tempo, e o span entre elas cresce com a vida do dataset.
+//
+// A asserção sobre o byte 32 é parte do teste, não conferência decorativa: sem
+// ela, uma mudança em larguraPara faria este teste passar a exercitar o mesmo
+// ramo de 4 bytes que todos os outros já cobrem, e a perda de cobertura seria
+// invisível.
+func TestOSeladoLeAsPostingsDeOitoBytes(t *testing.T) {
+	const longe = types.RowID(1) << 33 // span >= 2³² a partir de 0
+
+	e := segindex.NovoEscritor()
+	e.Adiciona(7, 100, 0)
+	e.Adiciona(7, 100, longe)
+	caminho := segindex.CaminhoSelado(t.TempDir(), 1)
+	if err := e.Escreve(caminho, 1); err != nil {
+		t.Fatalf("Escreve: %v", err)
+	}
+	b, err := os.ReadFile(caminho)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := b[offLargura]; got != 8 {
+		t.Fatalf("postingWidth = %d, quero 8 — o corpus deixou de exercitar o ramo de 8 bytes", got)
+	}
+
+	s, err := segindex.AbreSelado(caminho)
+	if err != nil {
+		t.Fatalf("AbreSelado: %v", err)
+	}
+	defer func() {
+		if err := s.Fecha(); err != nil {
+			t.Errorf("Fecha: %v", err)
+		}
+	}()
+	f, ok := s.Lookup(7, 100)
+	if !ok {
+		t.Fatal("Lookup(7, 100) devolveu ok=false")
+	}
+	if got, want := f.MinRowID(), types.RowID(0); got != want {
+		t.Errorf("MinRowID() = %d, quero %d", got, want)
+	}
+	if got, want := f.MaxRowID(), longe; got != want {
+		t.Errorf("MaxRowID() = %d, quero %d", got, want)
+	}
+	exigeRows(t, coleta(t, f), []types.RowID{0, longe}, "postings de 8 bytes")
+}
+
 // TestValorAusenteEhFonteVaziaCampoAusenteEhOkFalso trava a distinção que
 // decide o plano do chamador. Campo sem seção significa "este segmento não
 // responde por este campo" e obriga a enumerar o segmento inteiro (§3.2 da
@@ -238,32 +295,97 @@ func TestCRCIntegroNaoReportaErroDeIntegridade(t *testing.T) {
 	}
 }
 
+// Offsets do corpus de escreveSeladoDeTeste — um campo, um valor, três rows.
+// Estão escritos aqui, e não derivados do pacote, porque quem mutila um formato
+// de disco tem de saber onde está pondo a mão: o arquivo tem 120 bytes, a
+// tabela de seções vai de 64 a 88, o diretório de 88 a 104, as postings de 104
+// a 116 e o crc de 116 a 120.
+const (
+	offSecCount     = 6                          // u16
+	offBaseRowID    = 16                         // u64
+	offLargura      = 32                         // u8
+	offDistintos    = segindex.HeaderSelado + 4  // u32 da seção 0
+	offDirOff       = segindex.HeaderSelado + 8  // u64 da seção 0
+	offPostOff      = segindex.HeaderSelado + 16 // u64 da seção 0
+	offPostIdx      = 96                         // u32 do slot 0 do diretório
+	offCount        = 100                        // u32 do slot 0 do diretório
+	fimTabelaCorpus = 88
+	fimCorpoCorpus  = 116
+)
+
+func poeU64(b []byte, off int, v uint64) { binary.LittleEndian.PutUint64(b[off:off+8], v) }
+func poeU32(b []byte, off int, v uint32) { binary.LittleEndian.PutUint32(b[off:off+4], v) }
+
 // TestSeladoRecusaHeaderInvalido cobre as recusas de FORMATO, que são
 // separadas do crc de propósito: formato inválido é bug ou versão de arquivo
-// que este binário não conhece, e o remédio não é reconstruir. As três
-// mutilações do header são as que levariam a busca binária para offsets
-// arbitrários dentro do mapeamento se passassem — e o crc, que as pegaria, só
-// é conferido na primeira CONSULTA, não aqui.
+// que este binário não conhece, e o remédio não é reconstruir.
+//
+// A validação de limites existe MESMO havendo crc porque as duas não rodam no
+// mesmo momento: o crc só é conferido na primeira consulta, e entre o Open e
+// ela a tabela de seções já foi lida. Cada caso abaixo é um offset que, se
+// passasse, levaria a busca binária a comparar bytes arbitrários do mapeamento
+// — ou a estourar o slice com um pânico que não nomeia o arquivo. São
+// mutilações CIRÚRGICAS, um guarda por caso: escrever 0xFF em tudo provaria só
+// que o guarda mais externo funciona.
 func TestSeladoRecusaHeaderInvalido(t *testing.T) {
 	casos := map[string]func(b []byte) []byte{
 		"magic trocado":       func(b []byte) []byte { copy(b[0:4], "XXXX"); return b },
 		"versão desconhecida": func(b []byte) []byte { b[4] = segindex.VersaoSelado + 1; return b },
 		"largura de posting inválida": func(b []byte) []byte {
-			b[32] = 5
-			return b
-		},
-		"dirOff além do fim": func(b []byte) []byte {
-			// dirOff da primeira seção fica em HeaderSelado+8.
-			for i := range 8 {
-				b[segindex.HeaderSelado+8+i] = 0xFF
-			}
-			return b
-		},
-		"secCount maior que o arquivo": func(b []byte) []byte {
-			b[6], b[7] = 0xFF, 0xFF
+			b[offLargura] = 5
 			return b
 		},
 		"truncado antes do header": func(b []byte) []byte { return b[:16] },
+
+		// --- header ---
+		"secCount zero": func(b []byte) []byte {
+			// "Sem índice" é arquivo AUSENTE. Um selado sem seção nenhuma faria
+			// a fila de reconstrução considerar o segmento pronto.
+			binary.LittleEndian.PutUint16(b[offSecCount:offSecCount+2], 0)
+			return b
+		},
+		"secCount maior que o arquivo": func(b []byte) []byte {
+			binary.LittleEndian.PutUint16(b[offSecCount:offSecCount+2], 0xFFFF)
+			return b
+		},
+		"baseRowID acima do maxRowID": func(b []byte) []byte {
+			// base é a origem dos deltas: acima do máximo, todo delta seria
+			// negativo, e em u32 isso vira um rowId gigante — falso negativo
+			// silencioso.
+			poeU64(b, offBaseRowID, 100)
+			return b
+		},
+
+		// --- tabela de seções ---
+		"dirOff dentro da tabela de seções": func(b []byte) []byte {
+			poeU64(b, offDirOff, fimTabelaCorpus-8)
+			return b
+		},
+		"dirOff com wrap na aritmética": func(b []byte) []byte {
+			// dirOff + distintos*16 estoura o u64 e dá a volta: sem o guarda de
+			// wrap, dirFim ficaria PEQUENO e passaria pelo teste do fim.
+			poeU64(b, offDirOff, ^uint64(0))
+			return b
+		},
+		"diretório passando do fim do corpo": func(b []byte) []byte {
+			poeU32(b, offDistintos, 100) // 88 + 100*16 = 1688 > 116
+			return b
+		},
+		"postOff dentro do diretório": func(b []byte) []byte {
+			poeU64(b, offPostOff, fimTabelaCorpus) // 88 < dirFim (104)
+			return b
+		},
+		"postOff além do fim do corpo": func(b []byte) []byte {
+			poeU64(b, offPostOff, fimCorpoCorpus+8)
+			return b
+		},
+		"postings não múltiplas da largura": func(b []byte) []byte {
+			// 116 - 105 = 11 bytes de postings, que não é múltiplo de 4. O
+			// número de postings é DERIVADO da contiguidade das seções, e uma
+			// derivação fracionária significa que a contiguidade quebrou.
+			poeU64(b, offPostOff, fimCorpoCorpus-11)
+			return b
+		},
 	}
 	original, err := os.ReadFile(escreveSeladoDeTeste(t))
 	if err != nil {
@@ -283,6 +405,124 @@ func TestSeladoRecusaHeaderInvalido(t *testing.T) {
 			}
 			if !errors.Is(err, segindex.ErrFormato) {
 				t.Errorf("erro = %v, quero ErrFormato", err)
+			}
+		})
+	}
+}
+
+// TestSeladoRecusaTabelaDeSecoesForaDeOrdem é o guarda que protege contra
+// FALSO NEGATIVO, e por isso ganha teste próprio em vez de virar mais uma
+// linha do mapa acima.
+//
+// A busca binária de secao() tem a ordenação por fieldID como pré-condição.
+// Sem o guarda, uma tabela desordenada não derrubaria nada e não corromperia
+// memória nenhuma: ela simplesmente faria o Lookup NÃO ACHAR um campo que está
+// no arquivo, o segmento responderia "zero linhas" onde tem linhas, e a
+// consulta devolveria menos resultados do que deveria — em silêncio, para
+// sempre. É o único desfecho que este produto não tolera.
+//
+// Precisa de duas seções, o que o corpus de um campo não dá.
+func TestSeladoRecusaTabelaDeSecoesForaDeOrdem(t *testing.T) {
+	e := segindex.NovoEscritor()
+	e.Adiciona(3, 999, 12)
+	e.Adiciona(7, 100, 10)
+	origem := segindex.CaminhoSelado(t.TempDir(), 1)
+	if err := e.Escreve(origem, 1); err != nil {
+		t.Fatalf("Escreve: %v", err)
+	}
+	original, err := os.ReadFile(origem)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Só os fieldIDs são trocados: os offsets das duas seções continuam
+	// válidos, então a recusa só pode vir do guarda de ordenação.
+	const offCampo0 = segindex.HeaderSelado
+	const offCampo1 = segindex.HeaderSelado + segindex.TamSecao
+	casos := map[string][2]uint16{
+		"decrescente": {7, 3},
+		"repetido":    {7, 7},
+	}
+	for nome, campos := range casos {
+		t.Run(nome, func(t *testing.T) {
+			b := append([]byte(nil), original...)
+			binary.LittleEndian.PutUint16(b[offCampo0:offCampo0+2], campos[0])
+			binary.LittleEndian.PutUint16(b[offCampo1:offCampo1+2], campos[1])
+			caminho := segindex.CaminhoSelado(t.TempDir(), 1)
+			if err := os.WriteFile(caminho, b, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			s, err := segindex.AbreSelado(caminho)
+			if err == nil {
+				_ = s.Fecha()
+				t.Fatal("AbreSelado aceitou a tabela de seções fora de ordem")
+			}
+			if !errors.Is(err, segindex.ErrFormato) {
+				t.Errorf("erro = %v, quero ErrFormato", err)
+			}
+		})
+	}
+}
+
+// regravaCRC recalcula o crc32c sobre [0, EOF-4) e o grava nos últimos quatro
+// bytes.
+//
+// A tabela é montada AQUI, e não emprestada do pacote, porque um teste que
+// reutilizasse a variável de produção não estaria conferindo o algoritmo — só
+// que o arquivo é consistente consigo mesmo.
+func regravaCRC(b []byte) []byte {
+	corpo := b[:len(b)-segindex.TamCRC]
+	soma := crc32.Checksum(corpo, crc32.MakeTable(crc32.Castagnoli))
+	binary.LittleEndian.PutUint32(b[len(b)-segindex.TamCRC:], soma)
+	return b
+}
+
+// TestPostingsForaDaFaixaDegradamEmVezDePanicar cobre o último guarda do
+// caminho de leitura, e é o único que separa "resposta degradada" de PÂNICO DE
+// SLICE — que no caminho de consulta derruba o processo, não a query.
+//
+// O caso que sobra para ele é o ESCRITOR COM BUG: um postIdx ou um count
+// inválido gravado sobre bytes que o crc cobre corretamente. Por isso cada
+// mutilação vem com o crc REGRAVADO — sem isso o Lookup sairia antes, no
+// confereCRC, e o teste estaria medindo o guarda errado. A asserção de que
+// ErroDeIntegridade() continua nil é o que prova que foi este guarda, e não o
+// checksum, que pegou.
+func TestPostingsForaDaFaixaDegradamEmVezDePanicar(t *testing.T) {
+	casos := map[string]func(b []byte){
+		"count zero":            func(b []byte) { poeU32(b, offCount, 0) },
+		"count além das 3 rows": func(b []byte) { poeU32(b, offCount, 999) },
+		"postIdx além do fim":   func(b []byte) { poeU32(b, offPostIdx, 5) },
+		"postIdx e count estourando juntos": func(b []byte) {
+			poeU32(b, offPostIdx, 2)
+			poeU32(b, offCount, 3) // 2+3 = 5 > 3 postings
+		},
+	}
+	original, err := os.ReadFile(escreveSeladoDeTeste(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for nome, estraga := range casos {
+		t.Run(nome, func(t *testing.T) {
+			b := append([]byte(nil), original...)
+			estraga(b)
+			caminho := segindex.CaminhoSelado(t.TempDir(), 1)
+			if err := os.WriteFile(caminho, regravaCRC(b), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			s, err := segindex.AbreSelado(caminho)
+			if err != nil {
+				t.Fatalf("AbreSelado: %v — o diretório só é lido na consulta, não na abertura", err)
+			}
+			defer func() {
+				if err := s.Fecha(); err != nil {
+					t.Errorf("Fecha: %v", err)
+				}
+			}()
+			if _, ok := s.Lookup(7, 100); ok {
+				t.Error("Lookup sobre postings fora da faixa devolveu ok=true")
+			}
+			if err := s.ErroDeIntegridade(); err != nil {
+				t.Errorf("ErroDeIntegridade() = %v, quero nil — o crc está correto, quem recusou tem de ser o guarda de faixa", err)
 			}
 		})
 	}

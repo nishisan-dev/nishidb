@@ -285,9 +285,24 @@ func TestRegiaoSomenteLeituraRecusaMutacao(t *testing.T) {
 		"LiberaBlocos": func() error { return r.LiberaBlocos(0, 4096) },
 	}
 	for nome, fn := range comErro {
-		if err := fn(); err == nil {
+		// A asserção é pela SENTINELA, não por "err != nil": os três já tinham
+		// caminhos de erro antes (Grow que não excede, LiberaBlocos fora dos
+		// limites), então um erro qualquer não prova que a recusa veio da
+		// guarda de somente-leitura. É o errors.Is que o chamador vai usar.
+		err := fn()
+		if err == nil {
 			t.Errorf("%s numa região somente-leitura devolveu nil — quero erro", nome)
+			continue
 		}
+		if !errors.Is(err, ErrSomenteLeitura) {
+			t.Errorf("%s devolveu %v, quero ErrSomenteLeitura", nome, err)
+		}
+	}
+	// Comprimento zero também recusa: deixar o curto-circuito de length <= 0
+	// preceder a guarda faria a mesma chamada errada devolver nil ou erro
+	// conforme o argumento.
+	if err := r.LiberaBlocos(0, 0); !errors.Is(err, ErrSomenteLeitura) {
+		t.Errorf("LiberaBlocos(0, 0) devolveu %v, quero ErrSomenteLeitura", err)
 	}
 
 	comPanico := map[string]func(){

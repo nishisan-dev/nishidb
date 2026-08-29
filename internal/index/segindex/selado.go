@@ -250,6 +250,10 @@ func (s *Selado) MaxRowID() types.RowID { return s.maxRowID }
 //
 // Devolve uma cópia: a tabela de seções é a estrutura de que a busca binária
 // depende, e emprestá-la deixaria um chamador distraído reordená-la.
+//
+// Como o TemCampo, responde sobre a EXISTÊNCIA das seções e não confere o crc
+// — a ressalva está escrita por extenso no godoc do TemCampo, e vale igual
+// aqui.
 func (s *Selado) Campos() []types.FieldID {
 	campos := make([]types.FieldID, len(s.secoes))
 	for i := range s.secoes {
@@ -263,6 +267,25 @@ func (s *Selado) Campos() []types.FieldID {
 // Responder false NÃO é "o campo não existe no schema": é "este segmento não
 // foi indexado por ele", o que acontece entre acrescentar o campo ao schema e a
 // reconstrução alcançar este segmento. O chamador resolve por enumeração.
+//
+// # Não use isto para decidir indexar-ou-enumerar
+//
+// TemCampo e Campos respondem sobre a EXISTÊNCIA da seção; só o Lookup responde
+// sobre a capacidade de SERVI-LA. Os dois primeiros leem a tabela de seções, já
+// validada e em heap, e de propósito não conferem o crc: planejar uma consulta
+// não pode custar a leitura de 2,25 GB de índice, e o custo teria de ser pago
+// por segmento, em todos os 500.
+//
+// A consequência é que sobre um arquivo CORROMPIDO os dois discordam do Lookup:
+// TemCampo devolve true e o Lookup devolve ok=false. Quem usasse TemCampo como
+// predicado de plano leria o segmento corrompido como "indexado, e a resposta é
+// zero linhas" em vez de "enumere" — e perderia linhas que existem. Falso
+// positivo o executor absorve (ele SEMPRE reavalia o WHERE completo, §44);
+// falso negativo, nunca.
+//
+// Quem decide entre índice e enumeração usa o `ok` do Lookup, que é o único a
+// integrar as três razões de não responder: campo sem seção, seção que o
+// binário não consegue ler e arquivo corrompido.
 func (s *Selado) TemCampo(campo types.FieldID) bool {
 	_, ok := s.secao(campo)
 	return ok

@@ -180,7 +180,12 @@ func AbreSomenteLeitura(path string) (*Region, error) {
 // binary.LittleEndian direto, sem lock e sem cópia (débito 102: o RWMutex sai
 // do caminho quente).
 //
-// O RLock aqui protege apenas contra um Close concorrente; o chamador guarda o
+// O RLock aqui NÃO protege a slice devolvida — ela escapa do lock, e é para
+// isso que serve. O que ele protege é a leitura do cabeçalho de slice contra o
+// Close concorrente que o zera; um Close logo depois do retorno desmonta
+// memória que o chamador ainda tem em mãos, e nenhum lock deste método pode
+// impedir isso. Quem garante que não acontece é o dono, que faz quiesce antes
+// de fechar — a mesma disciplina do resto do storage. O chamador guarda o
 // resultado UMA vez, na abertura, e não volta a este método por leitura.
 func (r *Region) Bytes() []byte {
 	if !r.somenteLeitura {
@@ -367,16 +372,22 @@ func (r *Region) Close() error {
 // como degradação de ESPAÇO: os segmentos voltam ao disco de qualquer jeito, e
 // o que fica para trás é o prefixo morto de um índice denso.
 func (r *Region) LiberaBlocos(off, length int64) error {
-	if length <= 0 {
-		return nil
-	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	// Punch-hole exige o descritor, e a região somente-leitura não tem um. É a
 	// terceira das três operações que a imutabilidade elimina, e a razão de
 	// AbreSomenteLeitura poder fechar o fd (spec §1.4).
+	//
+	// A guarda vem ANTES do curto-circuito de length <= 0 de propósito: recusar
+	// é a resposta, e deixar o comprimento zero escapar como no-op faria a
+	// mesma chamada errada devolver nil ou erro conforme o argumento. Um
+	// chamador que acredita estar liberando blocos numa região que não pode
+	// tem de descobrir isso sempre, não só quando pede um punch não vazio.
 	if r.somenteLeitura {
 		return fmt.Errorf("%w: LiberaBlocos em %s", ErrSomenteLeitura, r.nome)
+	}
+	if length <= 0 {
+		return nil
 	}
 	if off < 0 || off+length > r.size {
 		return fmt.Errorf("mmap: LiberaBlocos [%d,%d) fora do mapeamento de %d bytes", off, off+length, r.size)
