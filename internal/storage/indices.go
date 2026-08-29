@@ -41,28 +41,36 @@ func (s *Store) dirDeDados() string { return filepath.Join(s.opts.Dir, "data") }
 // a fatia de dentro deixaria qualquer chamador quebrar a promessa por engano.
 func (s *Store) CamposIndexados() []types.FieldID { return slices.Clone(s.camposIndexados) }
 
-// abreIndicesDeSegmento fixa o conjunto indexado e abre os índices mutáveis do
-// segmento corrente.
+// abreIndicesDeSegmento fixa o conjunto indexado, descarta os WIPs herdados do
+// processo anterior, abre os do segmento corrente e os RECONSTRÓI a partir dos
+// records dele. É a §2.5 inteira, num ponto só.
 //
 // Roda no Open DEPOIS do ramo de recovery, e a posição não é escolha de estilo:
 // os campos vêm do resolveCamposIndexados (cuja ordem de LookupOrCreate é
 // contratual e não pode ser tocada), mas os WIPs precisam do SEGMENTO CORRENTE,
 // e quem o decide é o ramo de recovery — antes dele, curSegID ainda é zero num
-// dataset existente.
+// dataset existente. E roda ANTES de o Open devolver o Store, o que é a outra
+// metade do requisito: o primeiro Put não pode ser aceito sobre um WIP vazio,
+// porque a rotação seguinte selaria esse vazio num .sidx IMUTÁVEL — falso
+// negativo petrificado, e a revalidação do §44 só sabe descartar candidato a
+// mais.
 func (s *Store) abreIndicesDeSegmento(campos []types.FieldID) error {
 	s.camposIndexados = campos
-	if err := s.descartaWIPsDoCorrente(); err != nil {
+	if err := s.descartaTodosOsWIPs(); err != nil {
 		return err
 	}
 	if len(campos) == 0 {
 		return nil
 	}
 	s.selados = make(map[uint32]*segindex.Selado)
-	return s.abreWIPsDoCorrente()
+	if err := s.abreWIPsDoCorrente(); err != nil {
+		return err
+	}
+	return s.reconstroiOIndiceDoCorrente()
 }
 
-// descartaWIPsDoCorrente apaga os .widx que o segmento corrente trouxe de uma
-// execução anterior.
+// descartaTodosOsWIPs apaga TODO .widx que o diretório de dados carregue de uma
+// execução anterior — do segmento corrente e de qualquer outro.
 //
 // O .widx NUNCA é confiado através de um restart (spec §2.5), e a razão não é
 // prudência: o postCount só vai para o header no Fecha, então um processo morto
@@ -73,12 +81,31 @@ func (s *Store) abreIndicesDeSegmento(campos []types.FieldID) error {
 // descarte, o TestKill9NoMeioDaIngestaoPreservaOEstadoConfirmado passa a
 // reabrir com "o slot 572 declara contagem 10426 contra 0 postings".
 //
-// Esta é a primeira METADE do §2.5: descartar. A segunda — reconstruir o índice
-// do segmento corrente lendo o próprio segmento — é da tarefa seguinte, e a
-// ausência dela não deixa nada incorreto aqui, porque nenhuma consulta lê deste
-// motor ainda.
-func (s *Store) descartaWIPsDoCorrente() error {
-	return s.apagaWIPsPeloNome(s.curSegID.Load())
+// UM ato só para os três casos da §2.5, e é isso que justifica a varredura ser
+// do diretório inteiro: o que muda entre eles não é o descarte, é o que vem
+// DEPOIS dele.
+//
+//	corrente               → reconstroiOIndiceDoCorrente, aqui mesmo, lendo o
+//	                         próprio segmento antes do primeiro Put;
+//	não corrente, com .dat → SegmentosPendentesDeReconstrucao o devolve, e o
+//	                         laço de fundo (§2.4) o refaz quando puder;
+//	sem .dat               → nada. O segmento foi aposentado, e o .widx é o
+//	                         resíduo de um crash entre o unlink do dado e a
+//	                         limpeza do índice. Sem esta varredura ele ficaria
+//	                         em disco PARA SEMPRE, porque nenhuma enumeração que
+//	                         parta dos dados o alcança — e o IndexBytes o
+//	                         contaria como disco que nada explica.
+func (s *Store) descartaTodosOsWIPs() error {
+	segs, err := segindex.SegmentosComWIP(s.dirDeDados())
+	if err != nil {
+		return err
+	}
+	for _, seg := range segs {
+		if err := s.apagaWIPsPeloNome(seg); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // apagaWIPsPeloNome remove os .widx do segmento SEM abrir nenhum deles.

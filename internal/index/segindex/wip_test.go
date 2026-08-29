@@ -426,6 +426,57 @@ func TestCaminhoEListaDoWIP(t *testing.T) {
 	}
 }
 
+// TestSegmentosComWIPEnumeraODiretorioInteiro: a abertura descarta o .widx de
+// TODO segmento (spec §2.5), e o caso que obriga a pergunta a ser feita ao
+// diretório — e não à lista de segmentos — é o do segmento já aposentado: ele
+// não tem mais .dat, então nenhuma enumeração que parta dos dados o alcança, e
+// sem esta função ele ficaria em disco para sempre.
+func TestSegmentosComWIPEnumeraODiretorioInteiro(t *testing.T) {
+	dir := t.TempDir()
+	for _, par := range []struct {
+		seg   uint32
+		campo types.FieldID
+	}{{7, 3}, {7, 9}, {2, 1}} {
+		w, err := segindex.AbreWIP(dir, par.seg, par.campo, 16)
+		if err != nil {
+			t.Fatalf("AbreWIP(%d, %d): %v", par.seg, par.campo, err)
+		}
+		if err := w.Fecha(); err != nil {
+			t.Fatalf("Fecha(%d, %d): %v", par.seg, par.campo, err)
+		}
+	}
+	// Vizinhos que NÃO são .widx: o diretório de dados é compartilhado com os
+	// segmentos e com a forma selada, e confundi-los faria a limpeza da
+	// abertura remover dado.
+	for _, nome := range []string{"segment-00000007.dat", "segment-00000007.sidx", "segment-00000007.sidx.tmp"} {
+		if err := os.WriteFile(filepath.Join(dir, nome), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	segs, err := segindex.SegmentosComWIP(dir)
+	if err != nil {
+		t.Fatalf("SegmentosComWIP: %v", err)
+	}
+	if !slices.Equal(segs, []uint32{2, 7}) {
+		t.Errorf("SegmentosComWIP = %v, quero [2 7] (ordenado e sem repetir o segmento de dois campos)", segs)
+	}
+}
+
+// TestSegmentosComWIPRecusaNomeForaDoCanonico: quem enumera .widx REMOVE o que
+// encontra, e a remoção reconstrói o caminho por CaminhoWIP. Aceitar um nome com
+// padding divergente faria a limpeza mirar um arquivo que não existe e reportar
+// sucesso sobre o resíduo intacto.
+func TestSegmentosComWIPRecusaNomeForaDoCanonico(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "segment-7-00003.widx"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := segindex.SegmentosComWIP(dir); !errors.Is(err, segindex.ErrFormato) {
+		t.Errorf("SegmentosComWIP = %v, quero ErrFormato", err)
+	}
+}
+
 // TestApagaRemoveOArquivoDoWIP: a selagem desliga os .widx depois de emitir o
 // .sidx, e o Open descarta os órfãos (spec §2.5). Os dois passam por aqui, e um
 // Apaga que fechasse sem remover deixaria o segmento com índice em duas formas.

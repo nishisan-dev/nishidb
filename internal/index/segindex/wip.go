@@ -169,37 +169,108 @@ func CaminhoWIP(dir string, seg uint32, campo types.FieldID) string {
 	return filepath.Join(dir, fmt.Sprintf("segment-%08d-%05d.widx", seg, campo))
 }
 
+// decompoeNomeWIP separa segmento e campo de um nome do espaço
+// `segment-%08d-%05d.widx`.
+//
+// ok=false significa "este nome não é um .widx", e não é anomalia: o diretório
+// de dados também tem .dat, .sidx e temporários. Já um nome QUE É um .widx e não
+// decompõe — fieldID ilegível, segmento ilegível, padding divergente — é
+// RECUSADO com ErrFormato, nunca pulado: esse espaço de nomes é deste pacote, e
+// um arquivo ali que não saiu daqui significa que outra coisa escreveu no
+// diretório do dataset. Pular seria perder um campo inteiro da selagem em
+// silêncio, ou deixar em disco um resíduo que a limpeza da abertura não alcança.
+//
+// A comparação final contra o nome canônico é o mesmo cuidado do
+// segment.ListSegments, e ela é load-bearing aqui por um motivo que lá não
+// existe: quem enumera .widx REMOVE o que encontra, e a remoção reconstrói o
+// caminho por CaminhoWIP. Aceitar `segment-1-3.widx` como o segmento 1 campo 3
+// faria a limpeza mirar um nome canônico que não existe e devolver "removido"
+// sobre um arquivo intacto.
+func decompoeNomeWIP(nome string) (uint32, types.FieldID, bool, error) {
+	const prefixo = "segment-"
+	if !strings.HasPrefix(nome, prefixo) || !strings.HasSuffix(nome, ".widx") {
+		return 0, 0, false, nil
+	}
+	miolo := nome[len(prefixo) : len(nome)-len(".widx")]
+	sep := strings.IndexByte(miolo, '-')
+	if sep < 0 {
+		return 0, 0, false, fmt.Errorf("%w: %s não separa segmento e campo em %q", ErrFormato, nome, miolo)
+	}
+	seg, err := strconv.ParseUint(miolo[:sep], 10, 32)
+	if err != nil {
+		return 0, 0, false, fmt.Errorf("%w: %s não tem um segmento legível em %q", ErrFormato, nome, miolo[:sep])
+	}
+	campo, err := strconv.ParseUint(miolo[sep+1:], 10, 16)
+	if err != nil {
+		return 0, 0, false, fmt.Errorf("%w: %s não tem um fieldID legível em %q", ErrFormato, nome, miolo[sep+1:])
+	}
+	if canonico := filepath.Base(CaminhoWIP("", uint32(seg), types.FieldID(campo))); nome != canonico {
+		return 0, 0, false, fmt.Errorf("%w: %s não é o nome canônico do par (%d, %d), que seria %s",
+			ErrFormato, nome, seg, campo, canonico)
+	}
+	return uint32(seg), types.FieldID(campo), true, nil
+}
+
 // ListaWIP devolve, em ordem crescente, os campos que têm .widx no segmento.
 //
 // O FILESYSTEM é a verdade sobre quais campos o segmento corrente indexa: nada
 // no manifest lista isso, seguindo a doutrina que primeiroRowIDDoSeguinte já
 // escreve — "um metadado a menos é uma janela de crash a menos" (spec §5.3).
-//
-// Um nome dentro do padrão com fieldID ilegível é RECUSADO em vez de pulado:
-// esse espaço de nomes é deste pacote, e um arquivo ali que não saiu daqui
-// significa que outra coisa escreveu no diretório do dataset. Pular seria
-// perder um campo inteiro da selagem em silêncio.
 func ListaWIP(dir string, seg uint32) ([]types.FieldID, error) {
-	prefixo := fmt.Sprintf("segment-%08d-", seg)
 	entradas, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, fmt.Errorf("segindex: listar os .widx de %s: %w", dir, err)
 	}
 	var campos []types.FieldID
 	for _, e := range entradas {
-		nome := e.Name()
-		if e.IsDir() || !strings.HasPrefix(nome, prefixo) || !strings.HasSuffix(nome, ".widx") {
+		if e.IsDir() {
 			continue
 		}
-		miolo := nome[len(prefixo) : len(nome)-len(".widx")]
-		id, err := strconv.ParseUint(miolo, 10, 16)
+		doArquivo, campo, ok, err := decompoeNomeWIP(e.Name())
 		if err != nil {
-			return nil, fmt.Errorf("%w: %s não tem um fieldID legível em %q", ErrFormato, nome, miolo)
+			return nil, err
 		}
-		campos = append(campos, types.FieldID(id))
+		if !ok || doArquivo != seg {
+			continue
+		}
+		campos = append(campos, campo)
 	}
 	slices.Sort(campos)
 	return campos, nil
+}
+
+// SegmentosComWIP devolve, em ordem crescente e sem repetição, os segmentos com
+// ao menos um .widx em dir.
+//
+// Ela é a contrapartida de ListaWIP para quem precisa da pergunta ao contrário —
+// "de quais segmentos há WIP em disco?" —, e quem precisa é a abertura: a §2.5
+// manda descartar o .widx de TODO segmento, e os dois casos que não são o
+// corrente só existem como resíduo de crash. O de um segmento já aposentado é o
+// que obriga esta varredura a ser do DIRETÓRIO e não da lista de segmentos: ele
+// não tem mais .dat, então nenhuma enumeração que parta dos dados o alcançaria,
+// e ele ficaria em disco para sempre — contado pelo IndexBytes como disco que
+// nada explica, que é o modo de falha que aquela contagem existe para eliminar.
+func SegmentosComWIP(dir string) ([]uint32, error) {
+	entradas, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("segindex: listar os .widx de %s: %w", dir, err)
+	}
+	var segs []uint32
+	for _, e := range entradas {
+		if e.IsDir() {
+			continue
+		}
+		seg, _, ok, err := decompoeNomeWIP(e.Name())
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		segs = append(segs, seg)
+	}
+	slices.Sort(segs)
+	return slices.Compact(segs), nil
 }
 
 // AbreWIP abre — criando se preciso — o índice WIP do par (segmento, campo).
