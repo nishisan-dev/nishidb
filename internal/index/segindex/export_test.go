@@ -18,13 +18,24 @@ func (w *WIP) SondasDoUltimoSet() int { return w.sondas }
 // só o resultado — um bug que trocasse concatenação por merge (ou vice-versa)
 // mas ainda produzisse a resposta certa por acidente de dados pequenos
 // passaria batido sem isto.
+//
+// "direta" é o ramo de fonte única: Une devolve a própria Fonte sem embrulhar
+// quando só uma sobrevive ao descarte de vazias. Não é caso de borda — é o
+// caminho quente em produção para colunas de alta cardinalidade (ex.:
+// identifier), onde um valor mora em praticamente um segmento só. Como
+// nenhum tipo de Une é exposto para esse ramo (a Fonte devolvida é do
+// chamador, não um combinador deste pacote), ele é o único jeito de o switch
+// cair no default sem ambiguidade — "vazia" e os dois combinadores já têm
+// case próprio.
 func EstrategiaDe(it types.RowIDIterator) string {
 	switch it.(type) {
 	case *concatIter:
 		return "concatenacao"
 	case *mergeIter:
 		return "merge"
+	case vazio:
+		return "vazia"
 	default:
-		return "outra"
+		return "direta"
 	}
 }

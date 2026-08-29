@@ -229,6 +229,30 @@ func TestUneNaoConcatenaQuandoAsFaixasSeTocam(t *testing.T) {
 func TestUnePropagaOPrimeiroErro(t *testing.T) {
 	quebrada := fonteComErro{rows: []types.RowID{10}, err: errors.New("mmap sumiu")}
 	it := segindex.Une([]segindex.Fonte{fonteFalsa{1, 2}, quebrada})
+	if got := segindex.EstrategiaDe(it); got != "concatenacao" {
+		t.Fatalf("estratégia = %q, quero \"concatenacao\" — este teste só cobre concatIter.Err()", got)
+	}
+	for it.Next() {
+	}
+	if it.Err() == nil {
+		t.Fatal("Err() = nil, quero o erro da fonte quebrada")
+	}
+}
+
+// TestUneMergePropagaOPrimeiroErro é o mesmo requisito de
+// TestUnePropagaOPrimeiroErro, mas sobre o caminho de MERGE: lá as faixas são
+// disjuntas ([1,2] e [10,10]), então aquele teste só exercita
+// concatIter.Err(). Aqui fonteFalsa{10,20} e a quebrada (contendo 15) TÊM
+// faixas sobrepostas, forçando merge — e é exatamente o caminho que o
+// dataset materializado sempre usa. "Erro nunca vira resultado menor" é a
+// invariante mais dura do produto (resultado truncado sem erro é falso
+// negativo), e ela não pode ficar sem prova justamente aqui.
+func TestUneMergePropagaOPrimeiroErro(t *testing.T) {
+	quebrada := fonteComErro{rows: []types.RowID{15}, err: errors.New("mmap sumiu")}
+	it := segindex.Une([]segindex.Fonte{fonteFalsa{10, 20}, quebrada})
+	if got := segindex.EstrategiaDe(it); got != "merge" {
+		t.Fatalf("estratégia = %q, quero \"merge\" — este teste não estaria cobrindo o mergeIter", got)
+	}
 	for it.Next() {
 	}
 	if it.Err() == nil {
@@ -359,6 +383,43 @@ func TestUneFechaAsFontesVaziasDescartadasAntesDeCombinar(t *testing.T) {
 	}
 	if !f2.fechada {
 		t.Error("f2 não foi fechada pelo Close do combinador")
+	}
+}
+
+// TestUneDevolveAFonteDiretaQuandoSoUmaEViva cobre o ramo de fonte única, que
+// nenhum outro teste deste arquivo exercita: quando só uma fonte sobra depois
+// do descarte de vazias, Une a devolve SEM embrulhar em concatIter nem
+// mergeIter. Não é caso de borda — é o caminho quente em produção para
+// colunas de alta cardinalidade (ex.: identifier), onde um valor mora em
+// praticamente um segmento só, e um ramo sem asserção aí é o lugar errado
+// para economizar teste.
+func TestUneDevolveAFonteDiretaQuandoSoUmaEViva(t *testing.T) {
+	f := &fonteFechavel{Fonte: fonteFalsa{10, 20, 30}}
+	it := segindex.Une([]segindex.Fonte{f})
+	if got := segindex.EstrategiaDe(it); got != "direta" {
+		t.Fatalf("estratégia = %q, quero \"direta\"", got)
+	}
+	if got := drena(t, it); !slices.Equal(got, []types.RowID{10, 20, 30}) {
+		t.Errorf("drena = %v, quero o conteúdo da própria fonte", got)
+	}
+	if err := it.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if !f.fechada {
+		t.Error("a fonte única não foi fechada por Close — Une não pode devolvê-la sem que o Close do chamador continue fechando o que ela abriu")
+	}
+}
+
+// TestUneDevolveVazioQuandoTodasAsFontesSaoVazias fecha o ramo que sobra no
+// switch de EstrategiaDe depois de "direta" ganhar case próprio: zero fontes
+// vivas depois do descarte.
+func TestUneDevolveVazioQuandoTodasAsFontesSaoVazias(t *testing.T) {
+	it := segindex.Une([]segindex.Fonte{fonteVaziaDeTeste{}})
+	if got := segindex.EstrategiaDe(it); got != "vazia" {
+		t.Errorf("estratégia = %q, quero \"vazia\"", got)
+	}
+	if got := drena(t, it); got != nil {
+		t.Errorf("drena = %v, quero vazio", got)
 	}
 }
 
