@@ -277,11 +277,32 @@ func TestOWIPGuardaOCampoQueFoiPedido(t *testing.T) {
 // TestParaCadaVarreTodasAsPostingsUmaVez é o que a selagem (Tarefa 4) consome
 // para alimentar o Escritor.
 //
-// A varredura NÃO promete ordem, e a asserção é feita sobre um multiconjunto de
-// propósito: o Escritor já ordena e deduplica, e ordenar aqui seria a mesma
-// ordenação em dois lugares — que divergem na primeira mudança de critério. O
-// que ela promete é COBERTURA: cada posting exatamente uma vez, duplicatas
-// incluídas, senão a selagem perderia postings que o WIP tem.
+// A varredura NÃO promete ordem, e não se assere ordem nenhuma de propósito: o
+// Escritor já ordena e deduplica, e ordenar aqui seria a mesma ordenação em dois
+// lugares — que divergem na primeira mudança de critério. O que ela promete é
+// COBERTURA: cada posting do array visitada exatamente uma vez, senão a selagem
+// perderia postings que o WIP tem.
+//
+// # O oráculo do total é w.Postings(), e NÃO len(postadas)
+//
+// A diferença separa duas coisas que a primeira versão deste teste confundia, e
+// foi a disciplina de mutação que a expôs. "Quantas postings o array guarda" é
+// política do Set — ele é append-only, então dois Set com o MESMO par (h, row)
+// deixam duas entradas —, enquanto "ParaCada visita todas elas, uma vez cada" é o
+// contrato desta função. Asserir o total contra len(postadas) amarra o contrato
+// da varredura à política de escrita, e o preço é que a suíte deixa de saber
+// separar bug de regressão de desempenho: um Set que voltasse a varrer a cadeia
+// para deduplicar — a forma exata do O(n²) que este pacote existe para matar —
+// produz respostas IDÊNTICAS em Lookup e no .sidx selado, e mesmo assim deixava
+// este teste vermelho ("ParaCada visitou 5 postings, quero 6"). Ele tem de
+// reprovar em TestOCustoDoSetNaoAcompanhaOTamanhoDoSegmento e em mais lugar
+// nenhum.
+//
+// Contra w.Postings(), o teste continua pegando o defeito que lhe cabe, e mais
+// apertado: o total é o que o WIP diz que tem no array, então uma cadeia
+// interrompida cedo, um slot pulado ou uma visita repetida reprovam qualquer que
+// seja a política de escrita. A duplicata deliberada do corpus fica, porque é ela
+// que põe duas entradas na MESMA cadeia sob a política de hoje.
 func TestParaCadaVarreTodasAsPostingsUmaVez(t *testing.T) {
 	w := abreWIPDeTeste(t)
 	defer fechaWIP(t, w)
@@ -299,6 +320,11 @@ func TestParaCadaVarreTodasAsPostingsUmaVez(t *testing.T) {
 		}
 	}
 
+	// Sem esta guarda o teste passaria com um WIP vazio: 0 == 0 é verdade, e a
+	// asserção de cobertura mediria uma varredura que não roda.
+	if w.Postings() == 0 {
+		t.Fatal("o corpus não gravou posting nenhuma — a asserção de cobertura mede um laço vazio")
+	}
 	vistas := map[[2]uint64]int{}
 	total := 0
 	if err := w.ParaCada(func(h uint64, row types.RowID) {
@@ -307,16 +333,19 @@ func TestParaCadaVarreTodasAsPostingsUmaVez(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("ParaCada: %v", err)
 	}
-	if total != len(postadas) {
-		t.Errorf("ParaCada visitou %d postings, quero %d", total, len(postadas))
+	if total != int(w.Postings()) {
+		t.Errorf("ParaCada visitou %d postings e o array tem %d", total, w.Postings())
 	}
 	querido := map[[2]uint64]int{}
 	for _, p := range postadas {
 		querido[[2]uint64{p.h, uint64(p.row)}]++
 	}
-	for chave, n := range querido {
-		if vistas[chave] != n {
-			t.Errorf("ParaCada viu (h=%d,row=%d) %d vezes, quero %d", chave[0], chave[1], vistas[chave], n)
+	// Cobertura é sobre o CONJUNTO de pares: cada par postado tem de aparecer, e
+	// a multiplicidade de cada um é consequência da política do Set, medida pelo
+	// total acima.
+	for chave := range querido {
+		if vistas[chave] == 0 {
+			t.Errorf("ParaCada não visitou (h=%d,row=%d)", chave[0], chave[1])
 		}
 	}
 	for chave := range vistas {

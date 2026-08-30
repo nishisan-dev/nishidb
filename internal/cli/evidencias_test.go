@@ -38,9 +38,16 @@ var reNomeDeTeste = regexp.MustCompile(`\bTest[A-Z][A-Za-z0-9_]*`)
 var reNomeDeTestePython = regexp.MustCompile(`\btest_[a-z0-9_]+`)
 
 func TestEvidenciasCitadasNosDocumentosExistem(t *testing.T) {
+	// mutacoes-indice-por-segmento.md entra aqui porque ele é FEITO de citações:
+	// o documento inteiro é uma tabela de "mutação → teste que reprovou →
+	// mensagem", e um nome de teste errado ali não é imprecisão de prosa, é a
+	// afirmação de cobertura que ninguém pode conferir. Cinco dos nomes que o
+	// diário do ciclo registrou já não existiam quando ele foi escrito, todos por
+	// rename de tarefas posteriores — a classe exata que este gate fecha.
 	docs := []string{"../../docs/aceite-m1.md", "../../docs/aceite-m2.md", "../../docs/aceite-fase6.md",
 		"../../docs/aceite-m4.md", "../../docs/aceite-m5.md", "../../docs/aceite-client-python.md",
-		"../../docs/architecture.md", "../../docs/debitos.md", "../../docs/operacao-kafka.md", "../../README.md"}
+		"../../docs/architecture.md", "../../docs/debitos.md", "../../docs/operacao-kafka.md",
+		"../../docs/mutacoes-indice-por-segmento.md", "../../README.md"}
 
 	existentes := testesDoRepositorio(t)
 	for _, doc := range docs {
