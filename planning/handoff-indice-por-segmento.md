@@ -1,7 +1,8 @@
 # Handoff — subsistema 1: índice por segmento
 
-Estado em 30/08/2026. Branch `feature/indice-por-segmento`, 59 commits sobre
-`main`, 166 arquivos, +21.322/−5.378.
+Estado em 30/08/2026, 14h. Branch `feature/indice-por-segmento`.
+**16 das 17 tarefas fechadas. Falta a 17 (docs + aceite) e o fechamento da branch.**
+O piloto está no ar com este código há 2h, saudável.
 
 ## O que este ciclo faz
 
@@ -54,9 +55,10 @@ lembre de tê-los criado. **Leia-o antes de decidir qualquer coisa.**
 | 10–12 | Superfície: recusa, interseção, unificação interna | ✅ |
 | 13 | A janela de indexação | ✅ |
 | 14 | Laço de reconstrução — **fecha o débito 22** | ✅ |
-| 15 | **Disciplina de mutação** (documento) | ❌ **falta** |
+| 15 | Disciplina de mutação (`docs/mutacoes-indice-por-segmento.md`) | ✅ zero das 7 escaparam |
 | 16 | Métricas | ✅ (2 rodadas de correção; 20 achados) |
-| 17 | **Docs + aceite no piloto** | ❌ **falta** |
+| 17 | **Docs + aceite no piloto** | ❌ **É O QUE FALTA** |
+| extra | Doutrina de verificação (branch do usuário, integrada e consertada) | ✅ |
 
 ## O que fazer, em ordem
 
@@ -83,10 +85,17 @@ barata.
 é o resultado melhor — o `lag` zerou. Os 733 eram o sistema correndo atrás do
 atraso que os próprios congelamentos acumulavam.
 
-**O que falta aqui:** acompanhar o soak por ~1 dia e refazer a medida de custo
-por evento com a fila drenada (a de 2.646 µs incluía a primeira passada de
-reconstrução correndo junto, e não é comparável). Confirmar que o RSS fica
-plano e que nenhum episódio de parada aparece.
+**Soak às 2h (a medida que vale para o aceite):** RSS **estabilizou** em ~597 MB
+(432 → 585 → 599 → 597 — a curva era mmap aquecendo, não vazamento).
+`poll_blocked` segue **exatamente 0** desde a subida. 375 ev/s a **32% de um
+núcleo**, 855 µs/evento, com `lag` oscilando perto de zero (487 numa rajada).
+
+A **janela está reciclando sozinha**: `fora` 372 → 401 e `selado` 68 → 58
+conforme segmentos passam das 6h e perdem o índice, com `pendente` fixo em **0**.
+É a expulsão e a indexação em linha funcionando em regime, não só na migração.
+
+**O que ainda falta observar:** completar ~1 dia para afirmar ausência de
+episódio de parada. Nada até aqui sugere um.
 
 **Se precisar subir de novo**, o que segue continua valendo:
 
@@ -231,9 +240,16 @@ convergência que passa com o defeito presente não prova nada.
   fila lê a tabela de seções sem conferir crc, então o arquivo corrompido parece
   completo. Consequência limitada e correta (enumeração), nunca falso negativo.
 - **102** — a selagem sob `wmu` a cada rotação ainda toca a ingestão.
-- `internal/kafka/metricas.go` — nove amostras sem o campo `Familia`, então os
-  cabeçalhos `# HELP`/`# TYPE` saem com nome vazio. Não urgente: **não há
-  Prometheus no piloto**. Fora do escopo deste ciclo por decisão registrada.
+- ~~`internal/kafka/metricas.go` sem `Familia`~~ — **resolvido** no commit
+  `dfb36b2` (autoria do usuário), com gate `TestAmostrasDeMetricaTemFamiliaENome`
+  que alcança 58 de 58 literais. Registre que a afirmação "o Prometheus recusa o
+  scrape inteiro" é **verdadeira**: medida contra o `textparse.PromParser` (o do
+  scrape real), não contra o `expfmt.TextParser` (leniente). Uma revisão deste
+  ciclo refutou isso por engano usando o parser errado.
+- **Achatamento de namespace `§NN`** entre as quatro specs declaradas: uma citação
+  pode resolver contra o documento errado. Nomeado no godoc de
+  `internal/gates/verificacao_test.go`; fechar exigiria marcador qualificado em
+  milhares de ocorrências.
 
 ## Em aberto, sem decisão
 
