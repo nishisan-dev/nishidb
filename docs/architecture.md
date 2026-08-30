@@ -1113,14 +1113,24 @@ conhecê-las. Cada uma tem dono em [`debitos.md`](debitos.md).
   - **Acrescentar** um campo indexado a um dataset povoado é aceito, e a consulta
     responde certo desde o primeiro instante, inclusive sobre as linhas gravadas
     antes da declaração.
-  - **Remover** também é aceito: as seções param de ser escritas e as existentes
-    viram candidato a mais até o segmento ser aposentado.
+  - **Remover** também é aceito: as seções param de ser escritas, e as que
+    existem saem na reescrita do índice daquele segmento.
 
-  **A ressalva, e ela é de desempenho:** nada agenda ainda a reconstrução dos
-  segmentos que já existiam quando o campo foi declarado. Eles têm arquivo de
-  índice sem a seção do campo novo, e por isso não entram na fila de
-  reconstrução — enumeram indefinidamente, a um custo proporcional ao dataset
-  inteiro e não ao resultado. É o que mantém o débito 22 aberto.
+  **E os segmentos antigos passaram a ser AGENDADOS**, que é metade do que o
+  débito 22 pede. A pendência de reconstrução é decidida por **(segmento,
+  campo)**: a fila compara o conjunto de seções do `.sidx` com o conjunto
+  indexado do dataset, nos dois sentidos — seção que falta agenda a
+  reconstrução, seção de campo que deixou de ser indexado agenda a reescrita que
+  a apaga. Como o `.sidx` é imutável, "acrescentar uma seção" é reescrever o
+  arquivo inteiro, e a reconstrução cobre a **união** dos campos pendentes com os
+  que o arquivo já cobria e continuam declarados: sem isso, a passada seguinte
+  reescreveria com o campo antigo e perderia o novo.
+
+  **A outra metade não existe, e é o que mantém o débito 22 ABERTO:** nada
+  CONSOME a fila. Enquanto a goroutine de reconstrução não sobe, os segmentos
+  agendados **enumeram indefinidamente** — correto e mais caro, que é o mesmo
+  desfecho de antes por outro motivo —, e só é drenado o que alguém drenar
+  chamando a reconstrução na mão.
 
 - **Duas pausas visíveis, aceitas no M1:** o rehash da primary **pausa a
   ingestão** enquanto redistribui os slots, e o `msync` do checkpoint **pausa o
@@ -1311,8 +1321,9 @@ separação é ter de provar que as duas concordam, e é o que
 `TestAgendaConcordaComPrazoVencidoSobCargaAleatoria` faz.
 
 **A adoção não exige recriação, e isto NÃO é o débito 22.** O débito 22 é sobre
-bitmap e hash: aqueles indexam um valor extraído do payload, e reconstruí-los
-exige ler todo record de todo segmento. A agenda deriva de `expiry.idx`,
+o índice secundário: ele indexa um valor extraído do payload, e reconstruí-lo
+exige ler todo record de todo segmento — conta que o índice por segmento partiu
+em uma varredura por segmento, mas não eliminou. A agenda deriva de `expiry.idx`,
 `prazos.idx` e `locations.idx`, que já estão populados, densos e em mmap — zero
 records lidos, zero dicionário tocado. Um dataset existente ganha a agenda ao
 subir o binário novo.
@@ -1773,15 +1784,16 @@ quem só deveria raspar `/metrics`.
 
 ## O que ainda não existe
 
-TTL e tombstones por retenção (M6), **backfill da tabela histórica** (ela começa
-vazia quando é ligada, e o dataset base não guarda os eventos que a
+TTL e tombstones por retenção (M6), o **backfill da tabela histórica** (ela
+começa vazia quando é ligada, e o dataset base não guarda os eventos que a
 preencheriam), e o **backfill do índice secundário** (débito 22). Este último
-mudou de forma: declarar um campo indexado sobre um dataset que já tem linhas
-deixou de ser recusado na abertura — a consulta responde certo, enumerando —,
-mas nada agenda ainda a reconstrução dos segmentos antigos, que enumeram
-indefinidamente. Acrescentar `extract` a um dataset com linhas continua sendo
-recusado, e ali a razão é outra: o valor extraído não existe nos records já
-gravados. **A compaction saiu desta lista no M4** e está
+andou e não chegou: declarar um campo indexado sobre um dataset que já tem linhas
+deixou de ser recusado, e os segmentos antigos passaram a ser AGENDADOS para
+reconstrução, por (segmento, campo) — mas **nada consome a fila** até a goroutine
+de reconstrução subir, então eles enumeram indefinidamente. Acrescentar `extract`
+a um dataset com linhas continua sendo recusado, e ali a razão é outra, que
+nenhuma reconstrução resolve: o valor extraído não existe nos records já
+gravados, e não há de onde derivá-lo. **A compaction saiu desta lista no M4** e está
 descrita acima; **autenticação e TLS saíram nesta fase (Fase 11)** e estão
 descritas em "Segurança: autenticação e TLS" — o que falta ali é
 operacional, não de mecanismo: o deploy no piloto com certificado e usuários

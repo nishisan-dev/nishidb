@@ -45,7 +45,10 @@ note right
   é aceito. Segmento sem a seção do campo
   ENUMERA as linhas dele como candidatas, e o
   executor revalida — o resultado é o mesmo,
-  só mais caro (débito 22).
+  só mais caro. E ele entra na fila de
+  reconstrução, decidida por (segmento, campo);
+  quem CONSOME essa fila ainda não existe, e é
+  o que mantém o débito 22 aberto.
 end note
 
 if (manifest ausente?) then (sim)

@@ -78,9 +78,13 @@ func TestCamposIndexadosPorIDEPorNomeSaoUniao(t *testing.T) {
 // É a resposta da spec à pergunta que travava o débito 22. Ela sai correta de
 // graça porque o contrato do Lookup sempre foi superconjunto com revalidação: um
 // segmento sem a seção do campo enumera as linhas dele como candidatas, e o
-// executor filtra. O que ainda NÃO existe é a parte de custo — nada agenda a
-// reconstrução daqueles segmentos, então eles enumeram indefinidamente. Correto
-// e lento é o estado deste commit, e está registrado no débito 22.
+// executor filtra. A parte de CUSTO — os segmentos antigos enumerarem
+// indefinidamente — está a meio caminho: a pendência passou a ser por (segmento,
+// campo), e um .sidx sem a seção do campo declarado entra na fila de
+// reconstrução, mas nada CONSOME essa fila ainda, e é por isso que o débito 22
+// segue aberto. Quem prova o agendamento é
+// TestAcrescentarIndiceEmDatasetPovoadoAgendaReconstrucao; o que este teste
+// guarda é a corretude, que vale ANTES de a reconstrução alcançar o segmento.
 func TestIndiceNovoEmDatasetPovoadoEhAceitoEResponde(t *testing.T) {
 	dir := t.TempDir()
 	s := audOpen(t, Options{Dir: dir})

@@ -289,33 +289,17 @@ func TestConstruirOIndiceDoSegmentoCorrenteEhRecusado(t *testing.T) {
 	}
 }
 
-// TestConstruirComSubconjuntoDeCamposEhRecusado fecha o falso negativo
-// petrificado pela segunda porta. Um .sidx parcial é imutável como qualquer
-// outro, e como a pendência é decidida por "tem .sidx?", ele faria o segmento
-// contar como PRONTO com campos que ninguém indexou.
-func TestConstruirComSubconjuntoDeCamposEhRecusado(t *testing.T) {
-	campos := []string{"node", "type"}
-	s, dir := abreStoreIndexadoComSegmentoPequeno(t, campos, 64<<10)
-	alvo := s.curSegID.Load()
-	poeLinhasAteRotacionar(t, s, alvo)
-	caminho := segindex.CaminhoSelado(filepath.Join(dir, "data"), alvo)
-	// O selado da rotação sai de cena para que "não gravou" não se confunda com
-	// "já estava lá".
-	if err := os.Remove(caminho); err != nil {
-		t.Fatal(err)
-	}
-
-	subconjunto := s.CamposIndexados()[:1]
-	err := s.ConstroiIndiceDoSegmento(t.Context(), alvo, subconjunto)
-	if !errors.Is(err, ErrInvalidArgument) {
-		t.Fatalf("ConstroiIndiceDoSegmento(%v de %v) = %v, quero ErrInvalidArgument",
-			subconjunto, s.CamposIndexados(), err)
-	}
-	if _, err := os.Stat(caminho); !os.IsNotExist(err) {
-		t.Errorf("Stat(%s) = %v, quero IsNotExist: um .sidx parcial passaria por pronto",
-			filepath.Base(caminho), err)
-	}
-}
+// A recusa de SUBCONJUNTO de campos vivia aqui, e ela saiu com o agendamento por
+// (segmento, campo) do débito 22: ela existia porque a pendência era decidida por
+// "tem .sidx?", e um .sidx parcial
+// faria o segmento contar como PRONTO com campos que ninguém indexou. Com o
+// teste de pendência olhando seção por campo, pedir "reconstrua o campo que
+// falta" passou a ser pergunta legítima — e o que impede o arquivo de ENCOLHER
+// deixou de ser uma recusa e passou a ser a união da cobertura, provada por
+// TestReconstruirSoOsCamposQueFaltamPreservaOsQueJaEstavam. A metade da recusa
+// que continua verdadeira — campo fora do conjunto declarado — é
+// TestConstruirComCampoNaoIndexadoEhRecusado. As duas moram em
+// indices_backfill_test.go.
 
 // TestNomeIlegivelNoEspacoDoWIPSaiComoDatasetIlegivel: a varredura da §2.5
 // percorre o diretório INTEIRO, então recusar um nome ilegível deixou de custar

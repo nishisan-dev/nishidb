@@ -2,7 +2,9 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"slices"
 
 	"github.com/nishisan-dev/nishidb/internal/index/primary"
@@ -33,11 +35,22 @@ import (
 // alimentam o mesmo segindex.Escritor — é ele quem ordena, deduplica, re-baseia
 // e escolhe a largura da posting. O que o golden
 // (TestConstruirDoSegmentoDaOMesmoArquivoQueSelarOWIP) prova é a outra metade: que
-// a ALIMENTAÇÃO é equivalente, que é onde o erro moraria.
+// a ALIMENTAÇÃO é equivalente, que é onde o erro moraria. A igualdade vale para a
+// mesma COBERTURA, e é por isso que reconstruir só o campo que falta produz o
+// mesmo arquivo que reconstruir tudo — a cobertura é a mesma nos dois casos
+// (TestReconstruirSoOsCamposQueFaltamPreservaOsQueJaEstavam).
 //
 // Segmento sem posting nenhuma não gera arquivo (contrato de Escritor.Escreve):
 // "sem índice" é um estado que o Lookup resolve por enumeração, e um .sidx vazio
-// faria o segmento passar por indexado.
+// faria o segmento passar por indexado. Um .sidx ANTERIOR nesse caso é removido,
+// porque ele só pode conter seções de campos que deixaram de ser indexados.
+//
+// `campos` são os campos PENDENTES daquele segmento, e podem ser um subconjunto
+// do conjunto indexado — é a §2.6, que precisa acrescentar um campo ao schema de
+// um dataset povoado. O arquivo publicado cobre a UNIÃO deles com o que o .sidx
+// atual já cobria e continua declarado (coberturaDaReconstrucao), e a união é
+// obrigatória: o arquivo é imutável, "acrescentar seção" é reescrevê-lo inteiro,
+// e reescrevê-lo só com o campo pedido apagaria as seções que já estavam lá.
 //
 // A PUBLICAÇÃO NÃO TOMA O wmu, e a §2.4 emendada é explícita quanto a isso: a
 // exigência anterior — tomá-lo "só no rename" — era inexequível, porque
@@ -61,24 +74,25 @@ func (s *Store) ConstroiIndiceDoSegmento(ctx context.Context, seg uint32, campos
 	if len(campos) == 0 {
 		return nil
 	}
-	// O conjunto tem de ser o do dataset INTEIRO, e a recusa fecha o falso
-	// negativo petrificado por uma segunda porta. Um subconjunto gravaria um
-	// .sidx IMUTÁVEL e PARCIAL — e como a pendência é decidida por "tem .sidx?"
-	// (SegmentosPendentesDeReconstrucao), o segmento passaria a contar como
-	// pronto com campos que ninguém indexou: falso negativo permanente, sem erro
-	// e sem log.
+	// A recusa que sobrou é a que continua verdadeira: campo FORA do conjunto
+	// declarado. Gravar a seção dele produziria um índice que a ingestão não
+	// alimenta — o próximo record daquele segmento não teria posting, e o
+	// arquivo passaria a afirmar mais do que sabe.
 	//
-	// A TENSÃO COM A §2.4 FICA ESCRITA, porque ela é real: lá a unidade de
-	// trabalho é (segmento, campo), para que a §2.6 possa acrescentar um campo
-	// ao schema de um dataset povoado. Quando essa unidade existir de fato, é o
-	// TESTE DE PENDÊNCIA que precisa mudar primeiro — de "tem .sidx?" para "o
-	// .sidx tem seção para cada campo indexado?" —, e só então esta recusa pode
-	// afrouxar. Afrouxá-la antes trocaria uma recusa alta por um índice parcial
-	// que se declara completo.
-	if !slices.Equal(campos, s.camposIndexados) {
-		return fmt.Errorf("%w: reconstrução do segmento %d pedida para %v, mas o dataset indexa %v; "+
-			"o .sidx é imutável e um parcial passaria por pronto",
-			ErrInvalidArgument, seg, campos, s.camposIndexados)
+	// A recusa de SUBCONJUNTO saiu, e a ordem em que isso pôde acontecer é o
+	// desenho, não o histórico: ela existia porque a pendência era decidida por
+	// "tem .sidx?", e um .sidx imutável e parcial faria o segmento contar como
+	// PRONTO com campos que ninguém indexou — falso negativo petrificado, sem
+	// erro e sem log. Só depois de o teste de pendência passar a olhar SEÇÃO POR
+	// CAMPO (SegmentosPendentesDeReconstrucao) um arquivo incompleto deixou de
+	// poder se declarar completo, e só então pedir "reconstrua o campo que
+	// falta" virou pergunta legítima.
+	for _, campo := range campos {
+		if !slices.Contains(s.camposIndexados, campo) {
+			return fmt.Errorf("%w: reconstrução do segmento %d pedida para o campo %d, que o dataset não indexa (indexados: %v); "+
+				"a seção existiria sem ninguém para alimentá-la",
+				ErrInvalidArgument, seg, campo, s.camposIndexados)
+		}
 	}
 	// O segmento CORRENTE é recusado, e a guarda não é defensiva: o .sidx é
 	// IMUTÁVEL, e gravá-lo para um segmento que ainda recebe records
@@ -89,19 +103,119 @@ func (s *Store) ConstroiIndiceDoSegmento(ctx context.Context, seg uint32, campos
 		return fmt.Errorf("%w: o segmento %d é o corrente; o índice dele é o WIP, não um .sidx imutável",
 			ErrInvalidArgument, seg)
 	}
+	caminho := segindex.CaminhoSelado(s.dirDeDados(), seg)
+	cobertura, err := s.coberturaDaReconstrucao(caminho, campos)
+	if err != nil {
+		return err
+	}
 	e := segindex.NovoEscritor()
-	if err := s.varreOsRecordsDoSegmento(ctx, seg, campos,
+	if err := s.varreOsRecordsDoSegmento(ctx, seg, cobertura,
 		func(campo types.FieldID, h uint64, row types.RowID) error {
 			e.Adiciona(campo, h, row)
 			return nil
 		}); err != nil {
 		return err
 	}
-	return e.Escreve(segindex.CaminhoSelado(s.dirDeDados(), seg), seg)
+	if e.Vazio() {
+		// Nenhuma posting sob a cobertura inteira: o índice CORRETO deste
+		// segmento é arquivo AUSENTE, e é isso que o Escritor vazio já diz ao
+		// não criar nada. O que ele não faz — porque não conhece o que estava lá
+		// antes — é tirar do caminho um .sidx anterior, e aqui ele só pode ser
+		// uma de duas coisas: seções de campos que deixaram de ser indexados, ou
+		// um arquivo que não descreve este segmento. Nos dois casos remover é o
+		// certo; deixá-lo seria manter em disco um arquivo que ninguém consulta
+		// e que o IndexBytes conta, que é o mesmo modo de falha que o .widx
+		// órfão obrigou a fechar.
+		return s.removeSeladoObsoleto(seg, caminho)
+	}
+	if err := e.Escreve(caminho, seg); err != nil {
+		return err
+	}
+	// A evição vem DEPOIS do rename, e sem ela a reconstrução seria trabalho
+	// invisível: o s.selados guarda o mapeamento do arquivo ANTERIOR, e o mmap
+	// sobrevive ao rename (é o inode que ele segura, não o nome). Uma consulta
+	// que já tivesse tocado este segmento continuaria lendo o índice velho —
+	// sem a seção do campo novo, portanto ENUMERANDO — até a próxima abertura
+	// do dataset, e ainda prenderia o inode substituído.
+	//
+	// Ela usa o mecanismo que já existe, e não um segundo: o Fecha do Selado
+	// impede leitores novos e adia o munmap até a última Fonte em voo sair
+	// (contagem de vidas). É a mesma barreira da aposentadoria de segmento, pelo
+	// mesmo selMu — e é ela que torna a reescrita segura contra uma varredura em
+	// voo. A varredura que sobrevive lê o arquivo ANTIGO até terminar, o que é
+	// correto: índice é superconjunto de candidatos, e o executor revalida (§44).
+	s.esqueceSelado(seg)
+	return nil
 }
 
-// SegmentosPendentesDeReconstrucao devolve, em ordem crescente, os segmentos que
-// têm dado e não têm índice selado.
+// coberturaDaReconstrucao decide quais campos o arquivo novo vai cobrir: os
+// pedidos MAIS os que o .sidx atual já cobre e continuam declarados.
+//
+// A união não é generosidade, é a consequência de o arquivo ser IMUTÁVEL.
+// "Acrescentar uma seção" é reescrever o arquivo inteiro (§2.6), e um arquivo
+// reescrito só com o campo pedido APAGARIA as seções que já estavam lá. O falso
+// negativo petrificado voltaria pela porta oposta — e pior, oscilando: a passada
+// seguinte veria o campo antigo pendente, reescreveria com ele e perderia o
+// novo, para sempre.
+//
+// Preservar é RE-DERIVAR, e não copiar do arquivo velho, e essa escolha é o
+// desenho inteiro em uma linha: os records de um segmento não corrente são
+// imutáveis, então as postings derivadas deles são bit a bit as mesmas que estão
+// no .sidx atual — e a varredura do segmento, que é o custo inteiro da operação,
+// já vai acontecer de qualquer jeito para o campo que falta. Copiar do índice
+// velho seria mais código para os mesmos bytes, com um segundo caminho de
+// produção do .sidx ao lado do Escritor e uma dependência nova: confiar em dado
+// derivado para produzir dado derivado, que é justamente o que a §2.5 recusa
+// fazer com o .widx.
+//
+// Um .sidx ausente ou ilegível não impede nada: não há o que preservar, e a
+// cobertura é o que o chamador pediu. Erro que não é de formato sobe — EIO é
+// falha de infra, e reescrever o índice por cima dela seria decidir sobre um
+// arquivo que ninguém conseguiu ler (§101).
+func (s *Store) coberturaDaReconstrucao(caminho string, campos []types.FieldID) ([]types.FieldID, error) {
+	cobertura := slices.Clone(campos)
+	existentes, err := segindex.CamposSelados(caminho)
+	switch {
+	case errors.Is(err, os.ErrNotExist), errors.Is(err, segindex.ErrFormato):
+		existentes = nil
+	case err != nil:
+		return nil, err
+	}
+	for _, campo := range existentes {
+		// O filtro pelo conjunto declarado é o que faz a §2.6 valer nos DOIS
+		// sentidos: a seção de um campo que deixou de ser indexado não entra na
+		// cobertura, e por isso a reescrita a apaga. É a única forma de remover
+		// seção de um arquivo imutável, e é a mesma operação da selagem.
+		if slices.Contains(s.camposIndexados, campo) && !slices.Contains(cobertura, campo) {
+			cobertura = append(cobertura, campo)
+		}
+	}
+	// Ordenada e sem repetição: é o que o varreOsRecordsDoSegmento espera e o
+	// que torna o arquivo produzido independente da ORDEM em que o chamador
+	// listou os campos pendentes — sem isso, dois chamadores com o mesmo
+	// conjunto poderiam produzir arquivos diferentes e o golden da §6.3 passaria
+	// a depender de quem chamou.
+	slices.Sort(cobertura)
+	return slices.Compact(cobertura), nil
+}
+
+// removeSeladoObsoleto tira do caminho um .sidx que a reconstrução acabou de
+// declarar sem conteúdo. Ausência do arquivo não é anomalia: é o estado normal
+// de um segmento sem posting nenhuma.
+func (s *Store) removeSeladoObsoleto(seg uint32, caminho string) error {
+	// O mapeamento é largado ANTES do unlink, e não depois, porque é ele que
+	// segura o inode: na ordem inversa, o disco só voltaria ao dispositivo
+	// quando a última Fonte em voo terminasse, e um leitor lento manteria vivo
+	// um arquivo que já não tem nome.
+	s.esqueceSelado(seg)
+	if err := os.Remove(caminho); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("storage: remover o índice obsoleto %s: %w", caminho, err)
+	}
+	return nil
+}
+
+// SegmentosPendentesDeReconstrucao devolve, em ordem crescente, os segmentos
+// cujo índice selado não descreve o conjunto indexado do dataset.
 //
 // A fila é DERIVADA do disco a cada chamada, e não uma lista persistida, pela
 // mesma razão que o índice é derivado dos records: um metadado a menos é uma
@@ -109,22 +223,53 @@ func (s *Store) ConstroiIndiceDoSegmento(ctx context.Context, seg uint32, campos
 // ordem contra a selagem e contra a aposentadoria, e uma fila em memória se
 // perderia no restart — que é justamente quando ela é mais necessária.
 //
-// Quem entra é o segmento com .dat e sem .sidx, exceto o corrente: o índice do
-// corrente é o WIP, que a abertura reconstrói antes do primeiro Put. Um .widx
-// de segmento sem .dat nunca aparece aqui porque a enumeração parte dos DADOS —
+// O TESTE É POR (SEGMENTO, CAMPO), E NÃO POR "TEM .sidx?" — é a metade do débito
+// 22 que esta função entrega. Um segmento selado ANTES de um campo ser declarado
+// indexado TEM o
+// arquivo e não tem a seção daquele campo: pela pergunta antiga ele contava como
+// pronto, e o campo novo enumerava indefinidamente, a um custo proporcional ao
+// dataset inteiro e não ao resultado. A comparação é de CONJUNTO, nos dois
+// sentidos, e a segunda direção é o outro lado da §2.6: seção de um campo que
+// deixou de ser indexado também põe o segmento na fila, porque a reescrita é o
+// único jeito de tirá-la de um arquivo imutável.
+//
+// O PREÇO DA PERGUNTA NOVA é um open + mmap + munmap por segmento, no lugar de
+// um stat: só o header e a tabela de seções são tocados (segindex.CamposSelados),
+// e nem o crc nem uma página de diretório entram na conta. São dezenas de
+// microssegundos por arquivo contra a varredura de até 512 MiB que a resposta
+// agenda — e é o mínimo que responde a pergunta certa, porque "existe o arquivo?"
+// não distingue os dois estados que importam.
+//
+// Quem entra, então, é o segmento com .dat cujo .sidx está ausente, ilegível ou
+// com um conjunto de seções diferente do declarado — exceto o corrente, cujo
+// índice é o WIP que a abertura reconstrói antes do primeiro Put. Um .widx de
+// segmento sem .dat nunca aparece aqui porque a enumeração parte dos DADOS —
 // enfileirá-lo seria mandar a reconstrução varrer um arquivo que não existe,
 // para sempre. A remoção dele é da abertura (§2.5, terceiro caso).
 //
-// Dataset sem campo indexado devolve fila vazia: não há o que reconstruir.
+// Dataset sem campo indexado devolve fila vazia: não há o que reconstruir, e é
+// por isso que tirar o ÚLTIMO `index: true` não apaga os .sidx que sobraram —
+// sem campo declarado não há reconstrução que os reescreva. Eles não respondem
+// nada (o Lookup recusa campo não indexado antes de chegar ao arquivo) e saem de
+// disco quando a compaction ou a retenção aposenta o segmento, pelo
+// removeIndiceDoSegmento. Uma varredura de limpeza na abertura seria a
+// alternativa, e ela é pior: apagaria o índice inteiro de um dataset aberto por
+// qualquer caminho que simplesmente não declare os campos.
 //
-// DOS QUATRO GATILHOS DA §2.4, ESTA FUNÇÃO COBRE UM: o formato novo sobre
-// dataset antigo (migração), que é "tem dado e não tem .sidx". Os outros três
-// ainda não têm resposta aqui, e o nome da função promete mais do que ela
-// entrega até que tenham — a janela alargada depende da janela existir; o crc32c
-// divergente (§1.5) só é conhecido na primeira consulta da seção, e quem o
-// detectar precisa apagar o arquivo para o segmento voltar a ser pendente por
-// esta mesma regra; e o campo acrescentado ao schema (§2.6) exige o teste de
-// pendência por SEÇÃO discutido no godoc de ConstroiIndiceDoSegmento.
+// A FILA É UM SUPERCONJUNTO DO TRABALHO REAL, e isso é deliberado — é a mesma
+// doutrina do índice que ela alimenta (§44): candidato a mais custa trabalho,
+// candidato a menos é falso negativo, e aqui o falso negativo é um campo que
+// enumera para sempre. Dois casos dizem "pendente" sem terem o que fazer, e o
+// laço de fundo (§2.4) NÃO pode tratar a fila como trabalho que encolhe a cada
+// passada:
+//
+//   - segmento cujos records não têm campo indexado nenhum: o Escritor vazio não
+//     cria arquivo, de propósito, e "ausente" continua sendo pendente;
+//   - segmento em que UM dos campos declarados não aparece em record algum: a
+//     seção dele não existe e não tem como existir. Distinguir isso de "a seção
+//     ainda não foi construída" exigiria o formato dizer quais campos foram
+//     CONSIDERADOS, e não só quais produziram posting — e o formato do .sidx não
+//     muda neste ciclo.
 //
 // DUAS ARESTAS que quem montar o laço de fundo (§2.4) precisa tratar, e que
 // ficam escritas aqui porque nenhuma delas é visível de dentro desta função:
@@ -137,10 +282,19 @@ func (s *Store) ConstroiIndiceDoSegmento(ctx context.Context, seg uint32, campos
 //     `<sidx>.tmp`, que ainda é nome FIXO (segindex/escritor.go), e o arquivo
 //     sairia rasgado. É esta a correção que a §2.4 emendada põe na Tarefa 14:
 //     nome de temporário único por escritor, e não exclusão mútua.
-//   - Segmento cujos records não têm campo indexado nenhum NUNCA sai da fila:
-//     o Escritor vazio não cria arquivo, de propósito, e a pergunta "tem .sidx?"
-//     continua respondendo não. O laço não pode tratar a fila como trabalho que
-//     encolhe a cada passada.
+//   - Um leitor que abra o .sidx ANTES da reescrita e o publique no cache DEPOIS
+//     da evição que a reescrita faz (ConstroiIndiceDoSegmento) fica com o
+//     mapeamento velho até a próxima abertura do dataset. Degrada na direção
+//     segura — seção ausente ENUMERA —, mas o segmento perde o ganho até lá.
+//     Fechar isso pede uma geração no cache de selados, e ela pertence a quem
+//     introduzir a concorrência: hoje não há chamador de fundo.
+//
+// DOS QUATRO GATILHOS DA §2.4, ESTA FUNÇÃO COBRE DOIS: o formato novo sobre
+// dataset antigo (migração) e o campo acrescentado ao schema (§2.6). A janela
+// alargada depende de a janela existir; o crc32c divergente (§1.5) só é
+// conhecido na primeira consulta da seção, e quem o detectar precisa apagar o
+// arquivo para o segmento voltar a ser pendente por AUSÊNCIA, que é a pergunta
+// barata desta função.
 func (s *Store) SegmentosPendentesDeReconstrucao() ([]uint32, error) {
 	if len(s.camposIndexados) == 0 {
 		return nil, nil
@@ -156,15 +310,40 @@ func (s *Store) SegmentosPendentesDeReconstrucao() ([]uint32, error) {
 		if ref.ID == corrente {
 			continue
 		}
-		presente, err := arquivoExiste(segindex.CaminhoSelado(dir, ref.ID))
+		pendente, err := s.segmentoPendente(dir, ref.ID)
 		if err != nil {
 			return nil, err
 		}
-		if !presente {
+		if pendente {
 			pendentes = append(pendentes, ref.ID)
 		}
 	}
 	return pendentes, nil // ListSegments já devolve ordenado por ID
+}
+
+// segmentoPendente responde se o .sidx do segmento descreve exatamente o
+// conjunto indexado do dataset.
+//
+// Os dois conjuntos são comparados com slices.Equal porque os DOIS são
+// crescentes por contrato: a tabela de seções é validada como ordenada na
+// abertura (segindex.leTabelaDeSecoes) e o s.camposIndexados sai ordenado do
+// resolveCamposIndexados. Ordenar aqui de novo seria esconder uma quebra dessas
+// duas garantias em vez de deixá-la aparecer.
+//
+// Arquivo ILEGÍVEL conta como pendente, e não como erro: um .sidx que este
+// binário não decodifica é dado derivado que não serve, e a resposta para dado
+// derivado que não serve é derivá-lo de novo. Erro que NÃO é de formato sobe
+// intacto — EIO ao abrir o índice é falha de infra, e chamá-la de "reconstrua"
+// mandaria o laço varrer 512 MiB por um disco doente (§101, três baldes).
+func (s *Store) segmentoPendente(dir string, seg uint32) (bool, error) {
+	campos, err := segindex.CamposSelados(segindex.CaminhoSelado(dir, seg))
+	switch {
+	case errors.Is(err, os.ErrNotExist), errors.Is(err, segindex.ErrFormato):
+		return true, nil
+	case err != nil:
+		return false, err
+	}
+	return !slices.Equal(campos, s.camposIndexados), nil
 }
 
 // reconstroiOIndiceDoCorrente realimenta os WIPs recém-abertos lendo o próprio
@@ -217,10 +396,14 @@ func (s *Store) reconstroiOIndiceDoCorrente() error {
 // ter tail rasgado — a recovery recusa o dataset em que isso aconteça, e a
 // rotação sela o anterior com fdatasync antes de criar o próximo.
 //
-// A pertinência do campo sai de `campos`, e o chamador passa o MESMO conjunto que
-// a ingestão usa (s.camposIndexados). É essa igualdade que faz a alimentação
-// incremental e a reconstruída coincidirem; slices.Contains sobre um conjunto
-// ordenado de punhado de campos é mais barato que o mapa que o substituiria.
+// A pertinência do campo sai de `campos`, que é sempre um SUBCONJUNTO do que a
+// ingestão indexa (s.camposIndexados): o WIP do corrente usa o conjunto inteiro e
+// a reconstrução usa a cobertura decidida pelo coberturaDaReconstrucao. É essa
+// contenção que faz a alimentação incremental e a reconstruída coincidirem campo
+// a campo — um campo FORA do conjunto indexado ganharia seção que a ingestão não
+// alimenta, e é por isso que ConstroiIndiceDoSegmento o recusa antes de chegar
+// aqui. slices.Contains sobre um conjunto ordenado de punhado de campos é mais
+// barato que o mapa que o substituiria.
 //
 // A chave canônica é montada com valuekey.Append sobre um buffer LOCAL, e não
 // sobre o s.chaveIndiceBuf do caminho de escrita: aquele é reutilizado sob o wmu,

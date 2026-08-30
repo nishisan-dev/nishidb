@@ -14,10 +14,11 @@ import (
 //
 // # Por que isto NÃO é o débito 22
 //
-// O débito 22 é sobre bitmap e hash: aqueles índices mapeiam um valor
-// EXTRAÍDO do payload, e reconstruí-los exige ler todo record de todo
-// segmento — a janela de horas que faz "declare o índice na criação do
-// dataset ou recrie" ser a política.
+// O débito 22 é sobre o índice secundário: ele mapeia um valor EXTRAÍDO do
+// payload, e reconstruí-lo exige ler todo record de todo segmento. Foi essa
+// leitura que fez "declare o índice na criação do dataset ou recrie" ser a
+// política, até o índice por segmento partir a conta em uma varredura por
+// segmento, agendável (§2.4).
 //
 // A agenda não tem essa propriedade. Ela deriva de expiry.idx, prazos.idx e
 // locations.idx, que já estão populados, densos e em mmap: um u64 por linha,

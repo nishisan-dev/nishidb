@@ -259,10 +259,11 @@ func simulaDatasetAnteriorAAgenda(t *testing.T, dir string) {
 // locations, todos densos e em mmap, e a construção os lê sequencialmente sem
 // tocar em um único record de segmento.
 //
-// É essa a fronteira contra o débito 22, que é sobre bitmap e hash: aqueles
-// indexam valores EXTRAÍDOS do payload, e reconstruí-los exige ler todo
-// record de todo segmento — a janela de 18,8 h que o piloto teria de pagar.
-// Aqui não há record nenhum a ler.
+// É essa a fronteira contra o débito 22, que é sobre o índice secundário: ele
+// indexa valores EXTRAÍDOS do payload, e reconstruí-lo exige ler todo record
+// de todo segmento — a janela de 18,8 h que o piloto teria de pagar de uma
+// vez, e que o índice por segmento parte em uma varredura por segmento. Aqui
+// não há record nenhum a ler.
 func TestAgendaAusenteEhConstruidaNaAberturaSemLerRecord(t *testing.T) {
 	dir := t.TempDir()
 	s := openStore(t, opcoesComExpiracao(dir, time.Hour))

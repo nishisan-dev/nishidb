@@ -293,6 +293,40 @@ func (s *Selado) Campos() []types.FieldID {
 	return campos
 }
 
+// CamposSelados abre o arquivo só para ler a tabela de seções e devolve os
+// campos que ele cobre, em ordem crescente, SEM deixar mapeamento de pé.
+//
+// Ela existe para o teste de pendência da reconstrução (§2.6), que precisa
+// responder "este segmento tem a seção deste campo?" para CADA segmento do
+// dataset a cada passada — e a pergunta anterior, "existe o arquivo?", deixou de
+// bastar no dia em que um campo pôde ser acrescentado ao schema depois de o
+// segmento ter sido selado.
+//
+// O formato fica DENTRO deste pacote, e é por isso que ela não é um pread de 64
+// bytes em internal/storage: o header e a tabela de seções são lidos pelo mesmo
+// montaSelado que a consulta usa, com as mesmas validações de limite. Uma
+// segunda decodificação da tabela passaria a divergir na primeira vez que o
+// layout mudasse — e divergiria em SILÊNCIO, porque as duas continuariam
+// produzindo listas de fieldIDs plausíveis.
+//
+// NÃO confere o crc, pela mesma razão que Campos e TemCampo não conferem: um
+// segmento com coluna quase-única chega a 2,25 GB, e pagar essa varredura por
+// arquivo a cada passada da fila custaria mais que a reconstrução que ela
+// agenda. Arquivo corrompido continua sendo assunto do gatilho 3 da §2.4 — quem
+// o detecta na consulta apaga o arquivo, e o segmento volta a ser pendente por
+// AUSÊNCIA, que é a pergunta barata.
+func CamposSelados(caminho string) ([]types.FieldID, error) {
+	s, err := AbreSelado(caminho)
+	if err != nil {
+		return nil, err
+	}
+	campos := s.Campos()
+	if err := s.Fecha(); err != nil {
+		return nil, err
+	}
+	return campos, nil
+}
+
 // TemCampo reporta se este segmento tem seção para o campo.
 //
 // Responder false NÃO é "o campo não existe no schema": é "este segmento não

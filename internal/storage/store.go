@@ -966,9 +966,15 @@ func Open(opts Options) (*Store, error) {
 	// evitar um dano que não pode mais acontecer é obstáculo, não proteção — e o
 	// manifest deixou de carregar o conjunto contra o qual ela decidia.
 	//
-	// O que ainda NÃO existe é a outra metade do débito 22: acrescentar um campo
-	// indexado a um dataset povoado é aceito daqui em diante, mas nada agenda a
-	// reconstrução dos segmentos antigos — eles enumeram indefinidamente.
+	// A OUTRA METADE DO DÉBITO 22 ANDOU E NÃO CHEGOU: acrescentar um campo
+	// indexado a um dataset povoado não só é aceito como AGENDA a reconstrução
+	// dos segmentos antigos, porque a pendência passou a ser decidida por
+	// (segmento, campo) — um .sidx sem a seção do campo declarado entra na fila
+	// (SegmentosPendentesDeReconstrucao). Remover um campo entra pela mesma
+	// porta, no sentido inverso: a seção que sobrou é apagada pela reescrita.
+	// O que ainda NÃO existe é quem CONSUMA a fila: a goroutine da §2.4. Sem ela
+	// o agendamento não vira trabalho, e os segmentos antigos enumeram
+	// indefinidamente — é por isso que o débito 22 continua aberto.
 	campos, err := s.resolveCamposIndexados(opts.CamposIndexados, opts.CamposIndexadosPorNome)
 	if err != nil {
 		return nil, err

@@ -345,16 +345,7 @@ func (s *Store) aplicaIndiceSets(row types.RowID, payload []byte) error {
 // Arquivo ausente não é anomalia: o segmento pode nunca ter tido índice (fora
 // da janela, ou gravado por um binário anterior).
 func (s *Store) removeIndiceDoSegmento(seg uint32) {
-	s.selMu.Lock()
-	if sel := s.selados[seg]; sel != nil {
-		if err := sel.Fecha(); err != nil {
-			s.opts.Log.Warn("indice.selado_nao_fechou",
-				"o mapeamento do índice do segmento aposentado não pôde ser desmontado",
-				"segmento", seg, "erro", err.Error())
-		}
-		delete(s.selados, seg)
-	}
-	s.selMu.Unlock()
+	s.esqueceSelado(seg)
 	if err := os.Remove(segindex.CaminhoSelado(s.dirDeDados(), seg)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		s.opts.Log.Warn("indice.orfao_apos_aposentadoria",
 			"o índice do segmento aposentado continuou em disco; ele é inofensivo e sai na limpeza de órfãos",
@@ -365,6 +356,42 @@ func (s *Store) removeIndiceDoSegmento(seg uint32) {
 			"sobrou .widx de um segmento aposentado; ele ocupa disco que o IndexBytes conta e nada explica",
 			"segmento", seg, "erro", err.Error())
 	}
+}
+
+// esqueceSelado tira o índice do segmento do cache de mapeamentos, fechando-o.
+//
+// DOIS donos, UMA regra: a aposentadoria do segmento (removeIndiceDoSegmento) e
+// a reescrita do .sidx pela reconstrução (ConstroiIndiceDoSegmento). Os dois
+// precisam da MESMA sequência — fechar sob o selMu e tirar do mapa —, e uma
+// segunda cópia divergiria na primeira vez que a regra mudasse.
+//
+// O que ela usa é o mecanismo que já existe, e não um segundo: o Fecha do Selado
+// impede leitores NOVOS e adia o munmap até a última Fonte em voo sair (contagem
+// de vidas, segindex/selado.go). Sem essa espera o desfecho não seria resultado
+// degradado, seria SIGSEGV — sinal incapturável, longe da linha que errou. O
+// selMu é o que impede um Lookup de entrar no Selado depois do Fecha; ele é lock
+// FOLHA, e nada sob ele toma o wmu.
+//
+// Depois dela, o segmento volta a ser resolvido pelo garanteSelado na consulta
+// seguinte: sem cache, o arquivo é reaberto — que é exatamente o que a reescrita
+// precisa, porque o mmap antigo sobrevive ao rename e continuaria servindo o
+// conteúdo anterior.
+//
+// Erro do desmonte não sobe: quem chama está aposentando ou republicando um
+// índice, e não há resposta operacional para um munmap que falhou além do log.
+func (s *Store) esqueceSelado(seg uint32) {
+	s.selMu.Lock()
+	defer s.selMu.Unlock()
+	sel := s.selados[seg]
+	if sel == nil {
+		return
+	}
+	if err := sel.Fecha(); err != nil {
+		s.opts.Log.Warn("indice.selado_nao_fechou",
+			"o mapeamento do índice do segmento não pôde ser desmontado",
+			"segmento", seg, "erro", err.Error())
+	}
+	delete(s.selados, seg)
 }
 
 // fechaIndices desmonta tudo que o índice por segmento mantém mapeado. Roda no

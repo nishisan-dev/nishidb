@@ -366,10 +366,15 @@ o bitmap custa (distintos × rows / 8), e as rows aqui são as de EVENTOS, não 
 de entidades. É por isso que o índice não é herdado — herdar multiplicaria o
 custo sem ninguém pedir.
 
-**Os índices não podem ser acrescentados depois.** A abertura recusa `index:`
-sobre uma tabela com linhas, pela mesma razão do débito 22 — o índice cobriria
-só o que viesse dali para frente. Foi por isso que os dois subiram junto com a
-tabela, e não numa segunda passada depois de medir.
+**Os índices podiam ser declarados só na criação, e isso mudou no M6.** A
+abertura recusava `index:` sobre uma tabela com linhas, porque o índice global
+cobriria só o que viesse dali para frente — foi por isso que os dois subiram
+junto com a tabela, e não numa segunda passada depois de medir. Com o índice por
+segmento a recusa saiu: declarar um campo depois é aceito, responde certo desde o
+primeiro instante (segmento sem a seção enumera) e agenda a reconstrução dos
+segmentos antigos. O que ainda não existe é quem CONSUMA essa fila, e é por isso
+que o débito 22 segue aberto — na prática, os segmentos anteriores à declaração
+continuam varrendo.
 
 ### A pegadinha do reprocessamento
 
