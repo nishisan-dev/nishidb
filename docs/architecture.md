@@ -45,7 +45,7 @@ materializa NDJSON num dataset; `query` executa SQL e escreve NDJSON.
 
 ## Ingestão
 
-![Fluxo de ingestão: do evento JSON à location publicada, com o commit point entre a fase SET e a fase CLEAR dos bitmaps](https://uml.nishisan.dev/proxy?src=https://git-raw.nishisan.dev/nishisan-dev/nishidb/main/docs/diagrams/ingest_flow.puml)
+![Fluxo de ingestão: do evento JSON à location publicada, com a fase SET do índice antes do commit point e sem fase de CLEAR](https://uml.nishisan.dev/proxy?src=https://git-raw.nishisan.dev/nishisan-dev/nishidb/main/docs/diagrams/ingest_flow.puml)
 
 ### Ingestão por Kafka
 
@@ -349,19 +349,25 @@ os 8 leitores, e inclui os buffers deles.
 - **locations** — um `u64` atômico por rowId (segmento, offset, flags). A
   location é publicada **por último**: até ela existir, a row não é visível;
 - **sequences** — um `int64` por rowId, para o stale check;
-- **bitmaps** — posting list por valor, com dicionário de valores. Serve
-  **baixa cardinalidade**: um arquivo de bits por valor distinto;
-- **hash secundário** — tabela open-addressing sobre mmap, um arquivo por
-  campo, com slots de 16 bytes (`[hash u64][rowId u64]`). Serve **alta
-  cardinalidade**, que é onde o bitmap custaria um arquivo por valor. Ao
-  contrário da primary, ele **remove** postings: um update troca o valor da
-  coluna, e a remoção é por **lápide** — esvaziar o slot cortaria a cadeia de
-  probe dos vizinhos e produziria falso negativo permanente. As lápides são
-  purgadas na reconstrução, que dimensiona pelas postings **vivas** e não pelo
-  tamanho atual: cada update deixa uma lápide, e dobrar por reflexo daria
-  arquivo sem limite com o número de linhas parado.
+- **índice secundário, por segmento** — um por (segmento, campo), ao lado do
+  `.dat`. `index: bitmap` e `index: hash` alimentam a MESMA estrutura: uma
+  lista de postings esparsa que mapeia hash do valor → rowIds daquele segmento,
+  em ordem crescente. Densidade deixou de ser escolha de motor e virou decisão
+  de codificação, e a distinção baixa/alta cardinalidade deixou de existir na
+  configuração.
 
-A chave dos dois inclui o **byte de tipo** — `internal/index/valuekey` é o dono
+  Duas propriedades explicam o resto do desenho. Não há fase de **CLEAR**: a
+  posting do valor antigo mora no índice do segmento antigo, vira candidato a
+  mais e morre quando a compaction ou a retenção aposenta aquele segmento — com
+  ela somem a lápide e o falso negativo que a lápide existia para evitar. E o
+  índice **não atravessa um restart**: o arquivo mutável do segmento corrente é
+  descartado na abertura e reconstruído a partir dos próprios records, o que
+  tira o `msync` do índice do checkpoint e elimina a classe inteira de janelas
+  de crash do índice secundário. Segmento sem índice — fora da janela, ou
+  gravado por um binário anterior — responde ENUMERANDO as linhas dele como
+  candidatas, o que é correto pelo mesmo contrato de superconjunto do §44
+
+A chave do índice inclui o **byte de tipo** — `internal/index/valuekey` é o dono
 único dela —, e é por isso que o planner recusa usar índice com valor de tipo
 promovido: um `double` jamais casaria postings gravadas como `int64`, e o
 resultado seria vazio em silêncio.
@@ -1091,44 +1097,31 @@ conhecê-las. Cada uma tem dono em [`debitos.md`](debitos.md).
 - **Campo indexado tem teto de 64 KiB** (`types.MaxIndexedValueBytes`, limite do
   `u16` do dicionário de valores). Valor acima disso faz o evento inteiro
   falhar.
-- **O conjunto de índices secundários é IMUTÁVEL depois da primeira row
-  CHECKPOINTADA, nas duas direções** — e a remoção, na prática, desde a criação
-  do dataset. Vale para os DOIS motores: o índice hash físico entrou com as
-  mesmas duas guardas e as mesmas mensagens, trocando
-  `BitmapFields`/`AllowBitmapDrop` por `HashFields`/`AllowHashDrop`. O débito 22
-  não fechou com ele — passou a ter dois motores a reconstruir. O gate
-  de acréscimo é o `RowCount` do **manifest**, não as rows em disco: rows
-  escritas e ainda não checkpointadas não o alimentam. O tamanho dos valores
-  **não entra em nenhuma das duas decisões**:
-  - **Acrescentar** `index: bitmap` a um campo é recusado assim que o manifest
-    registra `RowCount > 0` (`internal/storage/store.go:420-438`), qualquer que seja
-    o valor gravado: o índice cobriria só os records futuros e a query indexada
-    omitiria as rows antigas. Backfill não existe no M1 (débito 22). Enquanto o
-    dataset está vazio, acrescentar é permitido.
-  - **Remover** `index: bitmap` de um campo já indexado é recusado sem
-    condição nenhuma de contagem (`store.go:404-418`): basta o manifest declarar
-    o índice, o que acontece já no checkpoint da criação. O índice pararia de
-    receber sets/clears e reapareceria incompleto se o campo voltasse depois. O
-    `Store` tem o opt-out `AllowBitmapDrop`, mas **o CLI não tem flag para ele**
-    — pelo binário, a remoção é simplesmente impossível.
+- **O conjunto de índices secundários passou a ser MUTÁVEL nas duas direções, e
+  o que resta é custo, não recusa.** Foi assim até o M6: as duas guardas do
+  débito 22 recusavam acrescentar `index` a um dataset com `RowCount > 0` e
+  recusavam abrir sem um campo que o manifest declarasse indexado, saindo com
+  **exit 3** num dataset íntegro. As duas saíram junto com os motores globais.
 
-  Nos dois casos o comando seguinte — `ingest` ou `query` — sai com **exit 3**
-  ("dataset corrompido") num dataset perfeitamente íntegro, e a mensagem nomeia
-  o campo pelo **FieldID numérico**, não pelo nome do YAML. Medido com o
-  binário, num dataset cujo único valor indexado tem 5 bytes (`"Start"`):
-  `campo(s) [3] declarado(s) com índice bitmap num dataset que já tem 1 rows` ao
-  adicionar, e `o manifest declara índice bitmap para o(s) campo(s) [1],
-  ausente(s) desta abertura` ao remover — este segundo reproduzido também num
-  dataset **com zero rows**, criado com o campo indexado e reaberto sem ele.
+  O que as justificava era um índice GLOBAL que cobrisse só um pedaço do dataset
+  e devolvesse **menos** linhas do que existem — falso negativo, que nenhuma
+  camada acima recupera. O índice por segmento não consegue produzir isso: um
+  segmento cujo índice não tem a seção do campo **enumera** as linhas dele como
+  candidatas, e o executor revalida o predicado contra o payload corrente (§44).
+  O resultado é o mesmo do full scan filtrado, e a diferença é só de custo.
 
-  **O que fazer quando o conjunto precisar mudar:** reprocessar a fonte para um
-  dataset com o conjunto definitivo. São os dois únicos caminhos que o código
-  permite hoje — (a) criar um dataset **novo** (outro `name`, outro YAML, outro
-  diretório em `storage.path/<nome>`), ingerir a fonte nele e trocar o nome nas
-  consultas; ou (b) apagar o diretório do dataset e reingerir a fonte sob o
-  mesmo nome, o que **destrói** o estado atual e só serve se a fonte inteira
-  ainda existir. Não há rebuild, backfill nem migração in-place. Escolha o
-  conjunto de bitmaps na criação do dataset.
+  - **Acrescentar** um campo indexado a um dataset povoado é aceito, e a consulta
+    responde certo desde o primeiro instante, inclusive sobre as linhas gravadas
+    antes da declaração.
+  - **Remover** também é aceito: as seções param de ser escritas e as existentes
+    viram candidato a mais até o segmento ser aposentado.
+
+  **A ressalva, e ela é de desempenho:** nada agenda ainda a reconstrução dos
+  segmentos que já existiam quando o campo foi declarado. Eles têm arquivo de
+  índice sem a seção do campo novo, e por isso não entram na fila de
+  reconstrução — enumeram indefinidamente, a um custo proporcional ao dataset
+  inteiro e não ao resultado. É o que mantém o débito 22 aberto.
+
 - **Duas pausas visíveis, aceitas no M1:** o rehash da primary **pausa a
   ingestão** enquanto redistribui os slots, e o `msync` do checkpoint **pausa o
   writer**. Com `checkpoint.interval: 30s`, isso aparece como serrilha
@@ -1780,13 +1773,15 @@ quem só deveria raspar `/metrics`.
 
 ## O que ainda não existe
 
-Índice hash físico, TTL e tombstones por retenção (M6), **backfill da tabela
-histórica** (ela começa vazia quando é ligada, e o dataset base não guarda os
-eventos que a preencheriam), e **backfill de índice bitmap** (débito 22): declarar `index: bitmap` sobre um dataset que já tem
-linhas continua sendo recusado na ABERTURA, porque o índice cobriria só os
-records futuros e a query indexada omitiria as linhas antigas. Pela mesma razão
-e com o mesmo remédio, acrescentar `extract` a um dataset com linhas também é
-recusado. **A compaction saiu desta lista no M4** e está
+TTL e tombstones por retenção (M6), **backfill da tabela histórica** (ela começa
+vazia quando é ligada, e o dataset base não guarda os eventos que a
+preencheriam), e o **backfill do índice secundário** (débito 22). Este último
+mudou de forma: declarar um campo indexado sobre um dataset que já tem linhas
+deixou de ser recusado na abertura — a consulta responde certo, enumerando —,
+mas nada agenda ainda a reconstrução dos segmentos antigos, que enumeram
+indefinidamente. Acrescentar `extract` a um dataset com linhas continua sendo
+recusado, e ali a razão é outra: o valor extraído não existe nos records já
+gravados. **A compaction saiu desta lista no M4** e está
 descrita acima; **autenticação e TLS saíram nesta fase (Fase 11)** e estão
 descritas em "Segurança: autenticação e TLS" — o que falta ali é
 operacional, não de mecanismo: o deploy no piloto com certificado e usuários

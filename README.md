@@ -46,8 +46,11 @@ e sem tocar no documento original — é o que torna `WHERE persistent.probeIpNo
 namespace `_meta` responde por SQL o que o dataset tem. No caminho, o teto de
 65.535 campos do dicionário deixou de **derrubar o writer para sempre**: ele
 tem `maxCols`, política de estouro e contador. O que ficou de fora é o
-**backfill** — declarar índice ou extração sobre um dataset que já tem linhas
-continua recusado na abertura (débito 22).
+**backfill** do índice: declarar um campo indexado sobre um dataset que já tem
+linhas deixou de ser recusado — a consulta responde certo desde o primeiro
+instante —, mas os segmentos antigos ainda não são reconstruídos, e enumeram até
+que sejam (débito 22). Acrescentar `extract` a um dataset com linhas continua
+recusado.
 
 **Dois clients do protocolo remoto, entregues.** A **Fase 7** (driver JDBC,
 §70-73) saiu — ela esperava a autenticação, porque publicar um driver antes
@@ -361,10 +364,10 @@ Regras que valem a pena saber antes de declarar:
   linhas antigas ficariam sem a coluna e o filtro sobre ela as omitiria em
   silêncio.
 - **Índice:** `bitmap` aceita `string`, `int64` e `boolean`; `hash` aceita
-  `string`, `int64`, `ipv4` e `ipv6`. Os dois têm motor físico. A escolha é de
-  CARDINALIDADE: bitmap mantém um arquivo de bits por valor distinto e serve
-  coluna de poucos valores (status, protocolo); hash mantém uma tabela única
-  por campo e serve coluna de muitos valores (endereço, identificador de nó).
+  `string`, `int64`, `ipv4` e `ipv6`. As duas grafias declaram o MESMO índice —
+  há um motor só, por segmento —, e a escolha entre elas deixou de mudar
+  qualquer coisa em disco. Elas continuam existindo para não quebrar a
+  configuração de quem já as escreveu.
 - **O que ENTRA na coluna mesmo vindo noutra forma:** numa coluna `string`,
   número e `true`/`false` são gravados como o **texto-fonte** (`5` → `"5"`,
   `1.50` → `"1.50"`, `true` → `"true"`); numa coluna `int64` ou `double`, a
@@ -544,23 +547,22 @@ as outras, e a perda é contável — `nishidb_dataset_fields_dropped_total` e o
 bloco `schema` do `/v1/stats`. Com `stop`, a ingestão para de forma observável.
 O teto efetivo é publicado no `/v1/metadata`.
 
-O `index:` dos campos é **definitivo**, e vale igual para `bitmap` e `hash`:
-acrescentar um índice passa a ser recusado assim que o manifest registra a
-primeira row, e **remover** um índice existente é recusado desde a criação — os
-dois com exit 3, num dataset íntegro, e o tamanho dos valores não tem nada a ver
-com isso. Não há backfill nem migração in-place: a única saída é reprocessar a
-fonte para um dataset com o conjunto definitivo. Vale escolher agora — a
-mecânica e os dois caminhos possíveis estão em
-[`docs/architecture.md`](docs/architecture.md), seção "Operar isto".
+O `index:` dos campos **deixou de ser definitivo**. Acrescentar um índice a um
+dataset povoado e removê-lo de um campo já indexado passaram a ser aceitos: as
+duas recusas com exit 3 saíram, porque o dano que elas evitavam — um índice que
+cobrisse só parte do dataset e devolvesse MENOS linhas do que existem — não é
+mais construível. O índice mora dentro de cada segmento, e segmento sem a seção
+do campo devolve as linhas dele como candidatas para o filtro revalidar.
 
-**Qual dos dois declarar** é uma pergunta de cardinalidade, não de gosto. O
-`bitmap` mantém um arquivo de bits por valor distinto: é imbatível em coluna de
-poucos valores (`status`, `protocol`) e cobra um arquivo por valor em coluna de
-muitos. O `hash` mantém uma tabela única por campo, com um slot de 16 bytes por
-linha indexada: é o índice de alta cardinalidade (endereço IP, identificador de
-nó). Declarar `bitmap` numa coluna de milhares de valores distintos custa
-milhares de arquivos; declarar `hash` numa coluna de três valores funciona, e
-desperdiça a tabela.
+**A ressalva é de custo, e vale conhecer antes de declarar:** os segmentos que já
+existiam quando o campo foi declarado ainda não são reconstruídos, então eles
+varrem em vez de indexar — o ganho vale para o que for gravado a partir dali, e
+o resto chega quando a reconstrução existir (débito 22).
+
+**`bitmap` e `hash` deixaram de ser escolhas diferentes.** As duas grafias
+declaram o mesmo índice, e a distinção de cardinalidade que elas carregavam
+desapareceu com os dois motores que a justificavam: hoje é uma lista de postings
+por segmento, e densidade é decisão de codificação, não de configuração.
 
 #### Guardar o evento cru: a tabela histórica
 
@@ -1011,8 +1013,8 @@ literal é impossível. O padrão é compilado uma vez no bind — inclusive qua
 vem por parâmetro (`LIKE ?`) — e o casamento não aloca por linha.
 
 `LIKE` **não usa índice** e degrada para varredura, sempre, inclusive
-`'prefixo%'`: os valores de string vão inline no payload e o dicionário do
-bitmap é chaveado por valor exato, não ordenado por prefixo. O bitmap do OUTRO
+`'prefixo%'`: os valores de string vão inline no payload e o índice é chaveado
+pelo HASH do valor exato, que não preserva ordem nem prefixo. O índice do OUTRO
 termo de um `AND` continua valendo — `WHERE status = 'a' AND nome LIKE 'x%'` usa
 o índice de `status` e revalida o `LIKE`.
 

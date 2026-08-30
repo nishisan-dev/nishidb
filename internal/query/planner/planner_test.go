@@ -305,10 +305,9 @@ func TestPlanUmBitmapScan(t *testing.T) {
 	}
 }
 
-// O conjunto de bitmaps é decidido na CRIAÇÃO do dataset: um Open com
-// AllowBitmapDrop abre sem um índice que o YAML declara. Sem o capability
-// check, o executor chamaria LookupBitmap e a query FALHARIA em vez de
-// degradar.
+// O conjunto indexado é o que a ABERTURA do dataset declarou, e ele pode não
+// cobrir o que o YAML pede. Sem o capability check, o executor chamaria
+// LookupBitmap num campo sem índice e a query FALHARIA em vez de degradar.
 func TestPlanBitmapSemCapabilityFullScan(t *testing.T) {
 	c := compilar(t)
 	semEsseBitmap := fakestorage.New(fakestorage.Indexes{Bitmap: fid(t, c, "Framed-Protocol")})

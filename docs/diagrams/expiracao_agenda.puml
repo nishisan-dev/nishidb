@@ -21,8 +21,8 @@ partition "Abertura" {
     :constrói varrendo expiry.idx, prazos.idx
     e locations.idx — ZERO records lidos;
     note right
-      Isto NÃO é o débito 22. Aquele é sobre bitmap e
-      hash, que indexam um valor extraído do payload e
+      Isto NÃO é o débito 22. Aquele é sobre o índice
+      secundário, que indexa um valor extraído do payload e
       cuja reconstrução exige ler todo record de todo
       segmento. A agenda deriva de três arrays densos que
       já estão populados, em mmap, um u64 por linha.

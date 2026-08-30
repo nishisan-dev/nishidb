@@ -53,13 +53,20 @@ seg --> st : offset
 st -> st : primary insert-if-absent\n(só para key nova)
 
 group Fase SET — ANTES do commit
-  st -> idx : liga as postings dos valores NOVOS\n(bitmap)
+  st -> idx : liga uma posting por campo indexado\ndo payload, no índice do segmento
 end
 note right of idx
   Enquanto a location não foi publicada o
-  bitmap é um SUPERSET de candidatos: falso
+  índice é um SUPERSET de candidatos: falso
   POSITIVO, que a revalidação do WHERE (§44)
   filtra linha a linha. Nunca falso negativo.
+
+  Entra CADA campo indexado do payload, e não
+  só o que mudou: a posting vive no índice do
+  segmento em que o record está, e pular o
+  campo inalterado deixaria a única posting
+  dela no segmento ANTIGO — que a compaction
+  aposenta, e com ele a posting.
 end note
 
 st -> idx : sequences.Set(rowID, seq)
@@ -72,20 +79,20 @@ note right of idx
   EXATAMENTE aqui, e não antes.
 end note
 
-group Fase CLEAR — DEPOIS do commit
-  st -> idx : desliga as postings dos valores ANTIGOS\n(bitmap)
-end
 note right of idx
-  Erro aqui é TOLERADO: conta em clearFailures,
-  a ingestão segue, e o resíduo é posting órfã
-  — falso positivo de novo.
+  NÃO HÁ fase de CLEAR, e a ausência é o
+  desenho (spec §5.2).
 
-  Antecipar o Clear para antes do commit
-  inverteria a garantia: a posting sumiria
-  com a location ainda apontando para o
-  record ANTIGO, ou seja falso NEGATIVO.
-  Falso negativo revalidação nenhuma recupera:
-  a linha simplesmente não é oferecida.
+  A posting do valor antigo mora no índice do
+  segmento ANTIGO: ela vira falso positivo, que
+  a revalidação descarta, e morre quando a
+  compaction ou a retenção aposenta aquele
+  segmento. Com o Clear somem a lápide e o
+  falso negativo que ela existia para evitar —
+  antecipá-lo para antes do commit fazia a
+  posting sumir com a location ainda apontando
+  para o record ANTIGO, e falso negativo
+  revalidação nenhuma recupera.
 end note
 
 st --> mat : rowID, criado?

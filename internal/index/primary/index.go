@@ -35,7 +35,20 @@ const (
 	headerSize = 64
 	slotSize   = 16
 
-	idxVersion  = 1
+	idxVersion = 1
+	// hashKindFnv é o ÚNICO kind que existe, e o header o recusa quando difere
+	// (ver Open). Enquanto ele for único, "o header aceita" e "é o kind que este
+	// dataset sempre usou" são a mesma frase.
+	//
+	// Deixam de ser no dia em que um segundo kind for declarado aqui, e é isso
+	// que esta nota existe para lembrar: o manifest CARREGAVA uma cópia deste
+	// valor e deixou de carregá-la na v3, porque com um kind só ela era
+	// duplicação advisory — a única coisa que ela detectava era divergência
+	// entre duas cópias do mesmo fato. Com dois kinds ela passaria a detectar
+	// outra coisa: um primary.idx de OUTRO dataset, com kind diferente mas
+	// conhecido, que o header aceitaria e cujas buscas errariam em silêncio.
+	// Quem acrescentar o segundo kind decide se essa informação precisa voltar
+	// ao manifest.
 	hashKindFnv = 1
 
 	slotEmpty   = 0

@@ -207,9 +207,9 @@ func eqTermOf(e binder.BoundExpr) (eqTerm, bool) {
 // bitmapEligible: o schema declara E o store atende.
 //
 // O HasBitmap é obrigatório mesmo com o YAML dizendo `index: bitmap` porque o
-// conjunto de bitmaps é decidido na CRIAÇÃO do dataset: um Open com
-// AllowBitmapDrop abre o dataset SEM um índice declarado. Sem o check, o
-// executor chamaria LookupBitmap num campo sem índice, receberia
+// conjunto indexado é o que a ABERTURA do dataset declarou, e nada garante que
+// ele cubra o que o YAML pede — um Store aberto sem o campo é legítimo. Sem o
+// check, o executor chamaria LookupBitmap num campo sem índice, receberia
 // ErrInvalidArgument e a query FALHARIA em vez de degradar.
 func (p *Planner) bitmapEligible(f *schema.CompiledField) bool {
 	return f != nil && f.Index == schema.IndexBitmap && p.store != nil && p.store.HasBitmap(f.ID)

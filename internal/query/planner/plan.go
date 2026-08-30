@@ -11,9 +11,9 @@
 //   - o planner NÃO remove, reescreve nem simplifica a árvore WHERE. Ele a LÊ
 //     e devolve um plano; a árvore inteira segue para o executor;
 //   - um índice só é escolhido quando o schema o declara E o store confirma
-//     que o atende (capability check). O conjunto de bitmaps é decidido na
-//     criação do dataset, e um Open com AllowBitmapDrop abre o dataset sem um
-//     índice que o YAML declara;
+//     que o atende (capability check). Os dois podem discordar: o conjunto
+//     indexado é o que a ABERTURA do dataset declarou, e nada obriga quem abriu
+//     o Store a ter passado tudo o que o YAML pede;
 //   - a v1 não tem optimizer por custo (§63): nenhuma estimativa de
 //     seletividade, nenhuma estatística. A prioridade é fixa —
 //     primary → hash → bitmap → interseção/união → full scan.

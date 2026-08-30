@@ -171,9 +171,15 @@ func TestReplayDeTombstone(t *testing.T) {
 }
 
 func TestAdvisoryDoManifestNaoViraErro(t *testing.T) {
-	// MINOR 4: PrimarySlotCount/HashKind divergentes são advisory (§14.15) —
-	// o header do primary.idx prevalece. Sem teste, um refactor pode
-	// transformar o log em erro e travar datasets legítimos pós-rehash.
+	// MINOR 4: PrimarySlotCount divergente é advisory (§14.15) — o header do
+	// primary.idx prevalece. Sem teste, um refactor pode transformar o log em
+	// erro e travar datasets legítimos pós-rehash.
+	//
+	// O HashKind era a outra metade deste teste e saiu do manifest na v3: o
+	// header do primary.idx já RECUSA um kind desconhecido, o que fazia da cópia
+	// no manifest uma segunda declaração do mesmo fato. O que se perde no dia em
+	// que houver um segundo kind está anotado em internal/index/primary, junto de
+	// onde esse segundo kind seria declarado.
 	dir := t.TempDir()
 	opts := Options{Dir: dir}
 	s := audOpen(t, opts)
@@ -190,7 +196,6 @@ func TestAdvisoryDoManifestNaoViraErro(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.PrimarySlotCount *= 4 // como se um rehash tivesse acontecido pós-checkpoint
-	m.HashKind = 7          // valor desconhecido
 	if err := checkpoint.Write(audManifestPath(dir), m); err != nil {
 		t.Fatal(err)
 	}

@@ -2,6 +2,7 @@ package checkpoint
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"os"
 	"path/filepath"
@@ -23,12 +24,7 @@ func sampleManifest() Manifest {
 		},
 		PrimarySlotCount:    1 << 24,
 		PrimaryUsed:         4183900,
-		HashKind:            1,
 		FieldDictValidBytes: 1024,
-		Bitmaps: []BitmapInfo{
-			{FieldID: 2, ValuesDictValidBytes: 96},
-			{FieldID: 7, ValuesDictValidBytes: 48},
-		},
 	}
 }
 
@@ -46,20 +42,41 @@ func TestManifestRoundTrip(t *testing.T) {
 		got.NextRowID != want.NextRowID || got.RowCount != want.RowCount ||
 		got.CurrentSegment != want.CurrentSegment || got.DurableOffset != want.DurableOffset ||
 		got.PrimarySlotCount != want.PrimarySlotCount || got.PrimaryUsed != want.PrimaryUsed ||
-		got.HashKind != want.HashKind || got.FieldDictValidBytes != want.FieldDictValidBytes {
+		got.FieldDictValidBytes != want.FieldDictValidBytes {
 		t.Fatalf("campos escalares diferem:\nwant %+v\ngot  %+v", want, *got)
 	}
 	if len(got.Segments) != 3 || got.Segments[2] != want.Segments[2] {
 		t.Fatalf("segments: %+v", got.Segments)
 	}
-	if len(got.Bitmaps) != 2 || got.Bitmaps[0] != want.Bitmaps[0] || got.Bitmaps[1] != want.Bitmaps[1] {
-		t.Fatalf("bitmaps: %+v", got.Bitmaps)
+}
+
+// TestOsDoisCamposReservadosSaoGravadosComoZero trava a decisão da v3 no lugar
+// em que ela é observável: os bytes.
+//
+// hashKind e bitmapCount continuam ocupando as mesmas posições — tirá-los
+// obrigaria a reescrever o parser do corpo e a condenar todo manifest já
+// gravado —, mas nada mais os preenche. Gravar um valor neles voltaria a
+// publicar um fato que o produto não mantém, e é assim que nasce a próxima
+// leitura errada.
+func TestOsDoisCamposReservadosSaoGravadosComoZero(t *testing.T) {
+	m := sampleManifest()
+	raw := m.encode()
+	// hashKind vem logo depois de primarySlotCount e primaryUsed, que por sua
+	// vez vêm depois do último segmento. O offset é calculado, e não literal:
+	// um literal deixaria de apontar para o campo no dia em que o registro por
+	// segmento crescesse, e o teste passaria a afirmar sobre outro byte.
+	off := 56 + len(m.Segments)*36 + 8 + 8
+	if raw[off] != 0 {
+		t.Errorf("hashKind gravado como %d; a v3 o reserva em zero", raw[off])
+	}
+	if bm := binary.LittleEndian.Uint16(raw[off+1+8:]); bm != 0 {
+		t.Errorf("bitmapCount gravado como %d; a v3 o reserva em zero", bm)
 	}
 }
 
 func TestManifestVazioRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "manifest.bin")
-	want := Manifest{Epoch: 1, CurrentSegment: 1, DurableOffset: 64, HashKind: 1}
+	want := Manifest{Epoch: 1, CurrentSegment: 1, DurableOffset: 64}
 	if err := Write(path, &want); err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +84,7 @@ func TestManifestVazioRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Epoch != 1 || len(got.Segments) != 0 || len(got.Bitmaps) != 0 {
+	if got.Epoch != 1 || len(got.Segments) != 0 {
 		t.Fatalf("%+v", *got)
 	}
 }
@@ -89,7 +106,7 @@ func TestManifestVazioRoundTrip(t *testing.T) {
 // que a fórmula acompanhe quebra este teste — que é exatamente o alarme que
 // faltou da primeira vez.
 func TestManifestReservaACapacidadeDoLayoutQueGrava(t *testing.T) {
-	base := Manifest{Epoch: 1, CurrentSegment: 1, HashKind: 1}
+	base := Manifest{Epoch: 1, CurrentSegment: 1}
 	semSegmento := len(base.encode())
 	comUm := base
 	comUm.Segments = []SegmentInfo{
@@ -101,7 +118,7 @@ func TestManifestReservaACapacidadeDoLayoutQueGrava(t *testing.T) {
 
 	m := sampleManifest()
 	b := m.encode()
-	reservado := 96 + len(m.Segments)*36 + len(m.Bitmaps)*10 + TamanhoDaCaudaTLV(&m)
+	reservado := 96 + len(m.Segments)*36 + TamanhoDaCaudaTLV(&m)
 	if len(b) > reservado {
 		t.Fatalf("o encode produziu %d bytes com reserva de %d: a fórmula não cobre o layout", len(b), reservado)
 	}
@@ -111,23 +128,23 @@ func TestManifestReservaACapacidadeDoLayoutQueGrava(t *testing.T) {
 
 	// A cauda TLV entrou na fórmula pela MESMA razão que os 36 bytes por
 	// segmento: ela é conteúdo novo no encode, e uma reserva que a ignorasse
-	// faria o append realocar em todo checkpoint de dataset com índice hash —
-	// o desperdício silencioso que este teste existe para acusar. O termo é
-	// TamanhoDaCaudaTLV, e não um literal, porque duplicar a conta foi
-	// exatamente o que deixou a capacidade em 12 quando o layout já gravava
-	// 36.
-	comHash := sampleManifest()
-	comHash.Hashes = []HashInfo{{FieldID: 4, SlotCount: 1 << 10}, {FieldID: 9, SlotCount: 1 << 14}}
-	bh := comHash.encode()
-	reservadoComHash := 96 + len(comHash.Segments)*36 + len(comHash.Bitmaps)*10 + TamanhoDaCaudaTLV(&comHash)
-	if len(bh) > reservadoComHash {
-		t.Fatalf("com cauda o encode produziu %d bytes com reserva de %d", len(bh), reservadoComHash)
+	// faria o append realocar em todo checkpoint. O termo é TamanhoDaCaudaTLV,
+	// e não um literal, porque duplicar a conta foi exatamente o que deixou a
+	// capacidade em 12 quando o layout já gravava 36.
+	comSecoes := sampleManifest()
+	comSecoes.Modo, comSecoes.RowIDBase = 1, 500
+	comSecoes.Agenda = &AgendaInfo{DuracaoDeFundoMs: 60_000, BlockShift: 6, Niveis: 4}
+	bs := comSecoes.encode()
+	reservadoComSecoes := 96 + len(comSecoes.Segments)*36 + TamanhoDaCaudaTLV(&comSecoes)
+	if len(bs) > reservadoComSecoes {
+		t.Fatalf("com cauda o encode produziu %d bytes com reserva de %d", len(bs), reservadoComSecoes)
 	}
-	if cap(bh) != reservadoComHash {
-		t.Errorf("cap = %d com reserva de %d: o append realocou com a cauda TLV", cap(bh), reservadoComHash)
+	if cap(bs) != reservadoComSecoes {
+		t.Errorf("cap = %d com reserva de %d: o append realocou com a cauda TLV", cap(bs), reservadoComSecoes)
 	}
-	if passo := len(bh) - len(b); passo != TamanhoDaCaudaTLV(&comHash) {
-		t.Errorf("a cauda ocupou %d bytes; TamanhoDaCaudaTLV declara %d", passo, TamanhoDaCaudaTLV(&comHash))
+	if passo := len(bs) - len(b); passo != TamanhoDaCaudaTLV(&comSecoes)-TamanhoDaCaudaTLV(&m) {
+		t.Errorf("as seções a mais ocuparam %d bytes; TamanhoDaCaudaTLV declara %d",
+			passo, TamanhoDaCaudaTLV(&comSecoes)-TamanhoDaCaudaTLV(&m))
 	}
 }
 
@@ -144,11 +161,11 @@ func TestManifestGoldenHeader(t *testing.T) {
 	if !bytes.Equal(raw[0:4], []byte("NDBM")) {
 		t.Fatalf("magic: %q", raw[0:4])
 	}
-	// A asserção sobre raw[4] continua sendo 1, e a cauda TLV não a afrouxou:
-	// o sampleManifest não declara índice hash, então não há cauda a emitir e a
-	// versão gravada é a mesma de sempre. Quem cobre o outro lado — cauda
-	// presente obriga v2 — é o TestManifestComHashSobeParaV2.
-	if raw[4] != 1 {
+	// A versão é v3 SEMPRE, e não mais condicional à existência de cauda: a
+	// seção do índice por segmento é incondicional, e é a versão — não uma tag —
+	// que impede um binário anterior de abrir este dataset. Quem trava esse
+	// "sempre" é o TestTodoManifestSaiNaV3.
+	if raw[4] != manifestV3 {
 		t.Fatalf("version: %d", raw[4])
 	}
 }
@@ -230,7 +247,7 @@ func TestWriteEhAtomico(t *testing.T) {
 
 func TestManifestMuitosSegmentos(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "manifest.bin")
-	m := Manifest{Epoch: 1, CurrentSegment: 200, HashKind: 1}
+	m := Manifest{Epoch: 1, CurrentSegment: 200}
 	for i := uint32(1); i <= 200; i++ {
 		m.Segments = append(m.Segments, SegmentInfo{ID: i, SizeBytes: int64(i) * 1000})
 	}

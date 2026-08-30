@@ -10,8 +10,6 @@ import (
 	"hash/crc32"
 	"os"
 	"path/filepath"
-
-	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
 // ErrNoManifest indica dataset sem manifest (cold start).
@@ -23,7 +21,7 @@ var ErrCorruptManifest = errors.New("checkpoint: manifest corrompido")
 // Layout do manifest.bin (little-endian):
 //
 //	0   4  magic "NDBM"
-//	4   1  version = 1 (sem cauda) ou 2 (com cauda TLV)
+//	4   1  version = 1 (sem cauda), 2 (com cauda TLV) ou 3 (índice por segmento)
 //	5   3  reserved
 //	8   8  epoch (u64)
 //	16  8  createdAtUnixMs (i64)
@@ -34,44 +32,71 @@ var ErrCorruptManifest = errors.New("checkpoint: manifest corrompido")
 //	52  4  segmentCount (u32)
 //	    por segmento: id u32 | sizeBytes i64 | totalRecords u64 |
 //	                  liveRecords u64 | liveBytes u64  (36 bytes)
-//	    primarySlotCount u64 | primaryUsed u64 | hashKind u8
+//	    primarySlotCount u64 | primaryUsed u64 | hashKind u8 (RESERVADO — ver abaixo)
 //	    fieldDictValidBytes i64
-//	    bitmapCount u16 | por bitmap: fieldID u16 | valuesDictValidBytes i64
+//	    bitmapCount u16 (RESERVADO) | por bitmap: fieldID u16 | valuesDictValidBytes i64
 //	    kafkaCount u32 (=0, reservado p/ M3)
-//	    [cauda TLV, só na v2 — ver abaixo]
+//	    [cauda TLV, a partir da v2 — ver abaixo]
 //	    crc32c u32 (sobre tudo acima)
 //
+// DOIS CAMPOS RESERVADOS, e o porquê fica escrito aqui porque campo reservado
+// que ninguém sabe explicar é como nasce a próxima leitura errada:
+//
+//   - `hashKind` descrevia o algoritmo de hash do índice primary. Ele é gravado
+//     como ZERO e ignorado na leitura desde a v3. A informação não se perdeu:
+//     o header do próprio primary.idx a carrega e RECUSA um kind desconhecido
+//     (internal/index/primary), então a cópia daqui era advisory e o único uso
+//     dela era um log de divergência entre duas cópias do mesmo fato.
+//   - `bitmapCount` descrevia o conjunto de índices bitmap GLOBAIS, que
+//     deixaram de existir. Ele é gravado como ZERO desde a v3. Na LEITURA a
+//     contagem ainda é consumida e as entradas ainda são PULADAS, e isso não é
+//     zelo: é o que faz um manifest v1 ou v2 escrito por um binário anterior
+//     continuar parseando, porque o que vem depois dele no corpo (o kafkaCount)
+//     está a `bitmapCount * 10` bytes de distância.
+//
+// Os dois campos continuam ocupando os mesmos bytes de propósito: tirá-los
+// obrigaria a reescrever o parser do corpo e a condenar todo manifest já
+// gravado, em troca de onze bytes por checkpoint.
+//
 // A CAUDA TLV é o ponto de extensão do formato, e existe para que uma seção
-// nova (a primeira é o conjunto de índices hash) não obrigue a reescrever o
-// corpo nem a condenar todo manifest já gravado. Cada registro é
+// nova não obrigue a reescrever o corpo nem a condenar todo manifest já gravado. Cada registro é
 // `tag u16 | len u32 | len bytes`, e a tag carrega a política de
 // compatibilidade no bit mais alto:
 //
 //	tag <  0x8000  IGNORÁVEL: um binário que não a conhece pula os bytes e
 //	               segue. Serve para informação puramente descritiva.
 //	tag >= 0x8000  CRÍTICA: um binário que não a conhece RECUSA o manifest.
-//	               Serve para o que muda o significado do dataset — a seção
-//	               de hashes é 0x8001 porque abrir o dataset ignorando-a
-//	               faria o índice parar de ser atualizado e reaparecer
-//	               INCOMPLETO, que é o mesmo modo de falha que o
-//	               AllowBitmapDrop existe para tornar deliberado.
+//	               Serve para o que muda o significado do dataset — abrir o
+//	               dataset ignorando uma delas produz índice incompleto,
+//	               tabela lida com a engine errada ou linha que nunca vence.
 //
-// O byte de versão acompanha: um manifest SEM cauda continua saindo como v1,
-// byte a byte igual ao que a versão anterior do binário gravava. É isso que
-// preserva o rollback — enquanto ninguém declarar índice hash, um binário
-// antigo abre o dataset normalmente. A partir da primeira cauda o manifest é
-// v2, e o binário antigo recusa com "version desconhecida", que é a resposta
-// certa: ele não sabe manter o índice que o dataset tem.
+// O byte de versão acompanha, e a partir da v3 ele é o que decide o rollback: o
+// manifest deste binário é SEMPRE v3, e um binário anterior o recusa com
+// "version desconhecida". É a resposta certa, e ela precisa vir da VERSÃO e não
+// de uma tag: um binário v2 que abrisse este dataset manteria os índices globais
+// que ele conhece, ignoraria os de segmento — que ele não sabe que existem — e
+// os de segmento reapareceriam INCOMPLETOS na volta.
 const (
 	// manifestV1 é o corpo sem cauda; manifestV2 é o corpo IDÊNTICO mais a
-	// cauda TLV. Não há v2 sem cauda: emitir a versão nova com cauda vazia
-	// quebraria o rollback sem nada em troca.
+	// cauda TLV. Os dois ainda são LIDOS — é o que faz um dataset escrito por um
+	// binário anterior abrir sem ser recriado, que é a promessa de migração
+	// deste ciclo — mas nenhum dos dois é escrito.
 	manifestV1 = 1
 	manifestV2 = 2
+	// manifestV3 é o corpo com hashKind e bitmapCount zerados mais a cauda com
+	// a seção do índice por segmento. É a versão que este binário grava, sempre,
+	// e é ela que bloqueia o binário anterior.
+	manifestV3 = 3
 
 	// tagCritica é o bit que separa as duas políticas acima.
 	tagCritica = 0x8000
-	// tagHashes é a seção do conjunto de índices hash (§ índice hash físico).
+	// tagHashes ERA a seção do conjunto de índices hash globais. Ela não é mais
+	// emitida, e continua nomeada aqui porque a LEITURA precisa reconhecê-la
+	// para descartá-la: sem este nome ela cairia no ramo de seção crítica
+	// desconhecida e o dataset seria recusado com "escrito por um binário mais
+	// novo" — diagnóstico exatamente invertido, sobre um dataset escrito por um
+	// binário mais VELHO, e a recusa mandaria o operador procurar o problema no
+	// lugar errado.
 	tagHashes = 0x8001
 	// tagAgenda é a seção da agenda de vencimentos. Ela é crítica pelo mesmo
 	// motivo das outras duas, com um modo de falha próprio: a agenda é
@@ -91,10 +116,25 @@ const (
 	// Não é índice incompleto — é a resposta errada, com o CRC batendo.
 	tagHistorico = 0x8002
 
+	// tagIndicePorSegmento declara o FORMATO do índice que mora dentro de cada
+	// segmento. Ela é crítica pela mesma razão das outras.
+	//
+	// Ela NÃO é o que bloqueia o binário anterior — a versão já faz isso, e
+	// depender de uma tag para bloquear seria depender de o outro lado ler algo
+	// que ele não conhece. Ela existe para que a PRÓXIMA mudança de formato do
+	// índice tenha onde ser declarada sem outro bump de versão do manifest, que
+	// é exatamente o que a cauda TLV foi criada para evitar.
+	tagIndicePorSegmento = 0x8004
+	// formatoDoIndiceAtual é o valor gravado hoje. Um binário que ler um formato
+	// que não conhece recusa o dataset, e a recusa é a resposta certa: ele não
+	// saberia manter — nem ler — o índice que o dataset tem.
+	formatoDoIndiceAtual = 1
+
 	// tlvHeaderSize é `tag u16 | len u32`.
 	tlvHeaderSize = 6
-	// hashInfoSize é `fieldID u16 | slotCount u64`, o mesmo tamanho de uma
-	// entrada de bitmap.
+	// hashInfoSize é `fieldID u16 | slotCount u64`, o tamanho de uma entrada da
+	// seção 0x8001. Só a LEITURA ainda o usa, para conferir o comprimento da
+	// seção legada antes de descartá-la.
 	hashInfoSize = 10
 
 	// historicoInfoSize é `modo u8 | rowIDBase u64`.
@@ -102,6 +142,9 @@ const (
 
 	// agendaInfoSize é `duracaoDeFundoMs u64 | blockShift u8 | niveis u8`.
 	agendaInfoSize = 10
+
+	// indiceInfoSize é `formatoDoIndice u8`.
+	indiceInfoSize = 1
 )
 
 var (
@@ -146,25 +189,6 @@ type SegmentInfo struct {
 	LiveBytes    uint64
 }
 
-// BitmapInfo descreve um índice bitmap no manifest.
-type BitmapInfo struct {
-	FieldID              types.FieldID
-	ValuesDictValidBytes int64
-}
-
-// HashInfo descreve um índice hash secundário no manifest.
-//
-// SlotCount é ADVISORY, pela mesma razão do PrimarySlotCount: a fonte de
-// verdade é o header do arquivo do índice, e um rehash pós-checkpoint deixa o
-// manifest para trás — divergência é esperada, não erro. O que o manifest
-// carrega de load-bearing aqui é o CONJUNTO de FieldIDs: é ele que permite
-// recusar uma abertura que abandone um índice existente ou que declare um
-// índice novo sobre um dataset que já tem linhas.
-type HashInfo struct {
-	FieldID   types.FieldID
-	SlotCount uint64
-}
-
 // AgendaInfo descreve a agenda de vencimentos gravada no dataset.
 //
 // Os três campos são os que DECIDEM o conteúdo da árvore, e é por isso que
@@ -196,15 +220,9 @@ type Manifest struct {
 	Segments            []SegmentInfo
 	PrimarySlotCount    uint64
 	PrimaryUsed         uint64
-	HashKind            uint8
 	FieldDictValidBytes int64
-	Bitmaps             []BitmapInfo
-	// Hashes é a primeira seção da cauda TLV. Vazia mantém o manifest na v1,
-	// byte a byte igual ao que o binário anterior gravava.
-	Hashes []HashInfo
 
-	// Agenda é a seção 0x8003, e é nil no dataset sem expiração declarada —
-	// que é o que o mantém na v1.
+	// Agenda é a seção 0x8003, e é nil no dataset sem expiração declarada.
 	Agenda *AgendaInfo
 
 	// Modo é a engine do dataset: 0 materializado, 1 histórico. O tipo é
@@ -218,26 +236,18 @@ type Manifest struct {
 	RowIDBase uint64
 }
 
-// temHistorico diz se a seção 0x8002 precisa ser emitida. O dataset
-// materializado tem os dois campos zerados e continua gravando um manifest v1
-// byte a byte igual ao de antes desta seção existir — o rollback segue
-// possível para quem nunca declarou `history`.
+// temHistorico diz se a seção 0x8002 precisa ser emitida.
 func (m *Manifest) temHistorico() bool { return m.Modo != 0 || m.RowIDBase != 0 }
 
-// TamanhoDaCaudaTLV devolve quantos bytes a cauda ocupa neste manifest, e
-// ZERO quando não há seção nenhuma — que é o caso em que o manifest continua
-// sendo v1.
+// TamanhoDaCaudaTLV devolve quantos bytes a cauda ocupa neste manifest. Ela
+// nunca é vazia: a seção do índice por segmento é emitida SEMPRE.
 //
 // É exportado porque é metade da fórmula de reserva do encode, e a outra
 // metade vive no teste que trava a reserva. Deixar a conta duplicada foi
 // exatamente o defeito que deixou a capacidade em 12 quando o layout já
 // gravava 36 por segmento.
 func TamanhoDaCaudaTLV(m *Manifest) int {
-	n := 0
-	if len(m.Hashes) > 0 {
-		// tag+len do registro, o u16 de contagem e as entradas.
-		n += tlvHeaderSize + 2 + len(m.Hashes)*hashInfoSize
-	}
+	n := tlvHeaderSize + indiceInfoSize
 	if m.temHistorico() {
 		n += tlvHeaderSize + historicoInfoSize
 	}
@@ -247,21 +257,24 @@ func TamanhoDaCaudaTLV(m *Manifest) int {
 	return n
 }
 
-// versao decide o byte 4. Ver o comentário de layout: v1 enquanto não houver
-// cauda, para que o rollback continue possível.
-func (m *Manifest) versao() uint8 {
-	if TamanhoDaCaudaTLV(m) == 0 {
-		return manifestV1
-	}
-	return manifestV2
-}
+// versao decide o byte 4, e a resposta é SEMPRE v3.
+//
+// Era condicional enquanto valia a pena preservar o rollback: um dataset que
+// não declarasse índice hash nem histórico saía como v1, byte a byte igual ao
+// que o binário anterior gravava, e podia ser reaberto por ele. Isso acabou aqui
+// — e de propósito. Um binário anterior que abrisse ESTE dataset manteria os
+// índices globais que ele conhece, ignoraria os de segmento e os deixaria
+// incompletos na volta; recusá-lo pela versão é o que torna o dano impossível em
+// vez de improvável. É a única propriedade deste formato que se paga com uma
+// migração de mão única, e ela está registrada na §5.4 da spec do subsistema.
+func (m *Manifest) versao() uint8 { return manifestV3 }
 
 func (m *Manifest) encode() []byte {
 	// 36 por segmento, que é o que o laço abaixo grava desde os stats de
 	// liveness da S14. A capacidade estava em 12 e ficou para trás: não
 	// corrompia nada, mas fazia o append realocar em todo manifest com
 	// segmento — desperdício silencioso no caminho do checkpoint.
-	b := make([]byte, 0, 96+len(m.Segments)*36+len(m.Bitmaps)*10+TamanhoDaCaudaTLV(m))
+	b := make([]byte, 0, 96+len(m.Segments)*36+TamanhoDaCaudaTLV(m))
 	b = append(b, manifestMagic[:]...)
 	b = append(b, m.versao(), 0, 0, 0)
 	b = binary.LittleEndian.AppendUint64(b, m.Epoch)
@@ -280,35 +293,20 @@ func (m *Manifest) encode() []byte {
 	}
 	b = binary.LittleEndian.AppendUint64(b, m.PrimarySlotCount)
 	b = binary.LittleEndian.AppendUint64(b, m.PrimaryUsed)
-	b = append(b, m.HashKind)
+	b = append(b, 0) // hashKind: reservado (ver o layout)
 	b = binary.LittleEndian.AppendUint64(b, uint64(m.FieldDictValidBytes))
-	b = binary.LittleEndian.AppendUint16(b, uint16(len(m.Bitmaps)))
-	for _, bm := range m.Bitmaps {
-		b = binary.LittleEndian.AppendUint16(b, uint16(bm.FieldID))
-		b = binary.LittleEndian.AppendUint64(b, uint64(bm.ValuesDictValidBytes))
-	}
+	b = binary.LittleEndian.AppendUint16(b, 0) // bitmapCount: reservado (ver o layout)
 	b = binary.LittleEndian.AppendUint32(b, 0) // kafkaCount (M3)
 	b = m.appendCauda(b)
 	return binary.LittleEndian.AppendUint32(b, crc32.Checksum(b, castagnoli))
 }
 
-// appendCauda grava os registros TLV. Nada é emitido quando não há seção: um
-// registro de comprimento zero já bastaria para levar o manifest à v2 e matar
-// o rollback sem entregar informação nenhuma.
+// appendCauda grava os registros TLV.
 func (m *Manifest) appendCauda(b []byte) []byte {
 	// Ordem CRESCENTE de tag, e não a ordem em que as seções foram inventadas:
 	// o manifest é comparado byte a byte pelos testes de formato, e uma ordem
 	// que dependesse do histórico do produto mudaria o arquivo sem que o
 	// conteúdo mudasse.
-	if len(m.Hashes) > 0 {
-		b = binary.LittleEndian.AppendUint16(b, tagHashes)
-		b = binary.LittleEndian.AppendUint32(b, uint32(2+len(m.Hashes)*hashInfoSize))
-		b = binary.LittleEndian.AppendUint16(b, uint16(len(m.Hashes)))
-		for _, h := range m.Hashes {
-			b = binary.LittleEndian.AppendUint16(b, uint16(h.FieldID))
-			b = binary.LittleEndian.AppendUint64(b, h.SlotCount)
-		}
-	}
 	if m.temHistorico() {
 		b = binary.LittleEndian.AppendUint16(b, tagHistorico)
 		b = binary.LittleEndian.AppendUint32(b, historicoInfoSize)
@@ -321,7 +319,15 @@ func (m *Manifest) appendCauda(b []byte) []byte {
 		b = binary.LittleEndian.AppendUint64(b, m.Agenda.DuracaoDeFundoMs)
 		b = append(b, m.Agenda.BlockShift, m.Agenda.Niveis)
 	}
-	return b
+	// A seção do índice por segmento é INCONDICIONAL, inclusive no dataset que
+	// não declara campo indexado nenhum. Ela descreve o formato que este binário
+	// escreveria, e não o que o dataset por acaso tem hoje: emiti-la só quando há
+	// índice faria um dataset ganhar a declaração — e a versão que ela acompanha
+	// — no dia em que alguém acrescentasse um campo, mudando o formato do
+	// arquivo por uma alteração de configuração.
+	b = binary.LittleEndian.AppendUint16(b, tagIndicePorSegmento)
+	b = binary.LittleEndian.AppendUint32(b, indiceInfoSize)
+	return append(b, formatoDoIndiceAtual)
 }
 
 // reader é um cursor de decodificação com detecção de truncamento.
@@ -350,7 +356,11 @@ func decode(raw []byte) (*Manifest, error) {
 	if len(raw) < 8 || [4]byte(raw[0:4]) != manifestMagic {
 		return nil, fmt.Errorf("%w: magic inválida", ErrCorruptManifest)
 	}
-	if raw[4] != manifestV1 && raw[4] != manifestV2 {
+	// As três versões são lidas, e só a v3 é escrita. Ler as duas antigas é o
+	// que faz um dataset gravado por um binário anterior abrir sem ser
+	// recriado — a promessa de migração deste ciclo —, e o primeiro checkpoint
+	// depois disso já o reescreve em v3.
+	if raw[4] != manifestV1 && raw[4] != manifestV2 && raw[4] != manifestV3 {
 		return nil, fmt.Errorf("%w: version desconhecida %d", ErrCorruptManifest, raw[4])
 	}
 	if len(raw) < 12 {
@@ -386,15 +396,15 @@ func decode(raw []byte) (*Manifest, error) {
 	}
 	m.PrimarySlotCount = r.u64()
 	m.PrimaryUsed = r.u64()
-	m.HashKind = r.u8()
+	r.u8() // hashKind: reservado, lido e descartado (ver o layout)
 	m.FieldDictValidBytes = int64(r.u64())
-	bmCount := r.u16()
-	m.Bitmaps = make([]BitmapInfo, 0, bmCount)
-	for i := uint16(0); i < bmCount; i++ {
-		m.Bitmaps = append(m.Bitmaps, BitmapInfo{
-			FieldID:              types.FieldID(r.u16()),
-			ValuesDictValidBytes: int64(r.u64()),
-		})
+	// bitmapCount é reservado e vale zero em todo manifest v3. As entradas ainda
+	// são PULADAS porque um manifest v1 ou v2 legado as tem, e o kafkaCount que
+	// vem em seguida está exatamente `bmCount * 10` bytes adiante: sem este
+	// avanço o corpo legado sairia desalinhado e o dataset seria recusado como
+	// corrompido sem ter nada de errado.
+	if bmCount := r.u16(); bmCount > 0 {
+		r.take(int(bmCount) * 10)
 	}
 	if kafka := r.u32(); kafka != 0 {
 		return nil, fmt.Errorf("%w: seção kafka inesperada (%d)", ErrCorruptManifest, kafka)
@@ -427,7 +437,11 @@ func decodeCauda(r *reader, m *Manifest) error {
 		payload := r.take(int(n))
 		switch {
 		case tag == tagHashes:
-			if err := decodeHashes(payload, m); err != nil {
+			if err := confereHashesLegados(payload); err != nil {
+				return err
+			}
+		case tag == tagIndicePorSegmento:
+			if err := decodeIndicePorSegmento(payload); err != nil {
 				return err
 			}
 		case tag == tagHistorico:
@@ -450,22 +464,44 @@ func decodeCauda(r *reader, m *Manifest) error {
 	return nil
 }
 
-// decodeHashes lê a seção 0x8001.
-func decodeHashes(payload []byte, m *Manifest) error {
+// confereHashesLegados lê a seção 0x8001 de um manifest escrito por um binário
+// anterior, confere o comprimento e DESCARTA o conteúdo.
+//
+// Descartar é o certo: a seção nomeava os campos com índice hash GLOBAL, e esse
+// motor não existe mais — os arquivos dele são apagados na abertura, e o índice
+// por segmento cobre os mesmos campos por outra estrutura. Não descartar seria
+// pior de duas formas: ou o dataset seria recusado como "escrito por um binário
+// mais novo", que é o inverso da verdade, ou o Store adotaria um conjunto de
+// campos que nenhuma parte dele sabe manter.
+//
+// O comprimento continua conferido mesmo sem uso do conteúdo, e não é zelo
+// vazio: uma seção incoerente é sinal de manifest corrompido, e um manifest
+// corrompido não pode passar por causa de uma seção que por acaso ficou sem
+// leitor.
+func confereHashesLegados(payload []byte) error {
 	hr := &reader{b: payload}
 	n := int(hr.u16())
 	if hr.bad || 2+n*hashInfoSize != len(payload) {
 		return fmt.Errorf("%w: seção de hashes declara %d entradas em %d bytes", ErrCorruptManifest, n, len(payload))
 	}
-	m.Hashes = make([]HashInfo, 0, n)
-	for i := 0; i < n; i++ {
-		m.Hashes = append(m.Hashes, HashInfo{
-			FieldID:   types.FieldID(hr.u16()),
-			SlotCount: hr.u64(),
-		})
+	return nil
+}
+
+// decodeIndicePorSegmento lê a seção 0x8004 e RECUSA um formato desconhecido.
+//
+// Recusar é a resposta certa, e é a razão de a seção existir: um binário que não
+// conhece o formato do índice não sabe lê-lo nem mantê-lo, e abrir assim
+// deixaria o índice parar de ser atualizado — falso negativo silencioso, que a
+// revalidação do §44 não conserta. É este ramo que a PRÓXIMA mudança de formato
+// vai usar, em vez de mais um bump de versão do manifest.
+func decodeIndicePorSegmento(payload []byte) error {
+	if len(payload) != indiceInfoSize {
+		return fmt.Errorf("%w: seção do índice por segmento tem %d bytes, esperado %d",
+			ErrCorruptManifest, len(payload), indiceInfoSize)
 	}
-	if hr.bad {
-		return fmt.Errorf("%w: seção de hashes truncada", ErrCorruptManifest)
+	if formato := payload[0]; formato != formatoDoIndiceAtual {
+		return fmt.Errorf("%w: o índice por segmento deste dataset está no formato %d, e esta versão só sabe o %d; o dataset foi escrito por um binário mais novo",
+			ErrCorruptManifest, formato, formatoDoIndiceAtual)
 	}
 	return nil
 }

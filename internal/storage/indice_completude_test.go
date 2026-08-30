@@ -4,12 +4,14 @@ package storage
 // SOBREVIVA à troca de motor de índice.
 //
 // Ela nasceu em store_recovery_bitmap_test.go, junto dos cenários que a
-// estrearam, e mora aqui porque aquele arquivo é do motor ANTIGO e sai com ele.
-// Seis cenários de recovery — em store_recovery_test.go e store_sc_lacunas_test.go,
-// que ficam — chamam este guarda como asserção final, e é a única prova de
-// ausência de falso negativo que eles têm. Deixá-la no arquivo condenado faria a
-// remoção do motor antigo levar junto a rede de proteção do motor novo, sem que
-// nada acusasse.
+// estrearam, e mudou de arquivo antes de o motor antigo sair. Seis cenários de
+// recovery chamam este guarda como asserção final, e é a única prova de ausência
+// de falso negativo que eles têm — deixá-la junto dos testes que atacavam o
+// formato antigo teria feito a remoção do motor levar junto a rede de proteção
+// do motor novo, sem que nada acusasse.
+//
+// A fonte do conjunto indexado é o camposIndexados, e não um mapa por motor: com
+// um motor só, "campo com bitmap" e "campo com hash" viraram a mesma pergunta.
 
 import (
 	"slices"
@@ -35,8 +37,8 @@ func exigeBitmapCompleto(t *testing.T, s *Store) {
 	t.Helper()
 	// Sem índice declarado o guarda não verifica nada. Falhar aqui evita que
 	// ele vire um no-op invisível se algum cenário perder a configuração de
-	// bitmap — uma rede que passa sempre é pior que rede nenhuma.
-	if len(s.bitmaps) == 0 {
+	// índice — uma rede que passa sempre é pior que rede nenhuma.
+	if len(s.camposIndexados) == 0 {
 		t.Fatal("guarda de bitmap chamado num Store sem índice: o cenário precisa declarar BitmapFields, senão a asserção não verifica nada")
 	}
 	it := s.ScanLive()
@@ -59,7 +61,7 @@ func exigeBitmapCompleto(t *testing.T, s *Store) {
 			if !ok {
 				break
 			}
-			if _, indexado := s.bitmaps[fid]; !indexado {
+			if !slices.Contains(s.camposIndexados, fid) {
 				continue
 			}
 			postings, err := s.LookupBitmap(fid, v)

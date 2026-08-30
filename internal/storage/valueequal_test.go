@@ -1,16 +1,39 @@
 package storage
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// valueEqual decide se o diff do write path toca o índice. Um tipo de largura
-// fixa que caísse no ramo dos bytes compararia nil com nil, devolveria true
-// para valores DIFERENTES, e a posting simplesmente não seria atualizada —
-// sem erro, sem log, sem métrica. Este teste é o que torna esse esquecimento
-// visível.
+// valueEqual compara duas Values de mesmo campo.
+//
+// Ela ERA código de produção: decidia se o diff do write path tocava o índice.
+// O índice por segmento não diffa — entra cada campo indexado do payload, sempre
+// (spec §5.2) —, então o último chamador de produção saiu com os motores
+// globais, e ela veio junto para o arquivo de teste. Manter no pacote de
+// produção uma função que só teste chama é o começo do próximo motor morto.
+//
+// Ela continua valendo o teste abaixo porque os testes de índice comparam
+// valores de payload pelo mesmo critério que o produto usa em outros pontos, e o
+// modo de falha que o teste guarda é o mesmo de sempre.
+func valueEqual(a, b types.Value) bool {
+	if a.Type != b.Type {
+		return false
+	}
+	// CarregaI64 e não um switch local: tipo de largura fixa esquecido no
+	// ramo de bytes compara nil com nil e devolve true para valores
+	// diferentes, e a comparação conclui em silêncio que o campo não mudou.
+	if a.Type.CarregaI64() {
+		return a.I64 == b.I64
+	}
+	return bytes.Equal(a.Bytes, b.Bytes)
+}
+
+// Um tipo de largura fixa que caísse no ramo dos bytes compararia nil com nil e
+// devolveria true para valores DIFERENTES — sem erro, sem log, sem métrica.
+// Este teste é o que torna esse esquecimento visível.
 func TestValueEqualDistingueValoresDeTodoTipoDeLarguraFixa(t *testing.T) {
 	fixos := []types.FieldType{
 		types.TypeInt64, types.TypeDouble, types.TypeBool,

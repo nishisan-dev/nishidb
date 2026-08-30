@@ -2,60 +2,31 @@ package storage
 
 // Critical 1 e Important 3 da revisão da S12: o replay derivava o "estado
 // anterior" de uma location que pode estar À FRENTE do ponto S, e as duas
-// consequências disso — posting perdida e liveness decrementada de record
-// vivo. Traz também o teste-guarda de propriedade do bitmap, usado ao final
-// de todos os cenários de recovery.
+// consequências disso — posting perdida e liveness decrementada de record vivo.
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/nishisan-dev/nishidb/internal/storage/checkpoint"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// copiaDir copia um diretório raso (arquivos apenas) para dst, substituindo
-// o destino. Usado para regredir índices ao estado do último checkpoint.
-func copiaDir(t *testing.T, src, dst string) {
-	t.Helper()
-	if err := os.RemoveAll(dst); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(dst, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	entries, err := os.ReadDir(src)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		raw, err := os.ReadFile(filepath.Join(src, e.Name()))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(dst, e.Name()), raw, 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-
-func bitmapDir(dir string, field types.FieldID) string {
-	return filepath.Join(dir, "indexes", "bitmap", fmt.Sprintf("%05d", field))
-}
-
 func TestReplayRestauraPostingComBitmapAtrasDasLocations(t *testing.T) {
-	// CRITICAL 1. O §10.2 msynca as locations (passo 3) ANTES dos bitmaps e
-	// antes do manifest (passo 4), então após um crash é NORMAL a location
-	// já apontar para o record do tail enquanto a posting não chegou ao
-	// disco. Derivar o prev dessa location faz o replay comparar o record
-	// consigo mesmo: diff vazio, Set suprimido, posting nunca restaurada.
-	// Observável: row visível por GetByKey com o estado novo e LookupBitmap
-	// devolvendo VAZIO — query indexada incompleta após restart.
+	// CRITICAL 1. O §10.2 msynca as locations (passo 3) antes do manifest
+	// (passo 4), então após um crash é NORMAL a location já apontar para o
+	// record do tail enquanto o índice não conhece a posting. Derivar o prev
+	// dessa location fazia o replay comparar o record consigo mesmo: diff
+	// vazio, Set suprimido, posting nunca restaurada. Observável: row visível
+	// por GetByKey com o estado novo e o Lookup devolvendo VAZIO — query
+	// indexada incompleta após restart.
+	//
+	// A montagem deixou de regredir o índice a um backup do ponto S, e o motivo
+	// é que não existe mais o que regredir: o índice por segmento não é
+	// durabilizado no checkpoint e é reconstruído em toda abertura (spec §2.5).
+	// O crash que o teste ainda encena é o que importa — locations duráveis à
+	// frente do manifest —, e é ele que decide se o replay do tail repõe a
+	// posting.
 	dir := t.TempDir()
 	opts := Options{Dir: dir, BitmapFields: []types.FieldID{fldStatus}}
 	s := audOpen(t, opts)
@@ -64,25 +35,18 @@ func TestReplayRestauraPostingComBitmapAtrasDasLocations(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Estado dos bitmaps no ponto S, para regredir depois.
-	backup := filepath.Join(t.TempDir(), "bm-em-S")
-	copiaDir(t, bitmapDir(dir, fldStatus), backup)
-
 	prev, _, ok, err := s.GetByKey([]byte("bm"), nil)
 	if err != nil || !ok {
 		t.Fatal(err)
 	}
 	mustPut(t, s, "bm", 2, statusPayload(t, s, "bm", "Stop", 2), &prev)
-	// Crash entre msyncLocations e msyncBitmaps: as locations do tail já
-	// estão duráveis…
+	// Crash com as locations do tail já duráveis e o manifest ainda no ponto S.
 	if err := s.PartialCheckpointForTest(); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	// …e as postings, não.
-	copiaDir(t, backup, bitmapDir(dir, fldStatus))
 
 	s2 := audOpen(t, opts)
 	defer s2.Close()

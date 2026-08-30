@@ -104,9 +104,9 @@ const (
 // Contra o CRESCIMENTO, o mu. O rehash muda dirSlots e postBase — campos Go
 // simples — e desloca o array de postings com um memmove que não é atômico em
 // lugar nenhum; nenhuma palavra publicada salva um leitor disso. O lock existe
-// pela MESMA razão que `mu` existe no motor que este pacote substitui
-// (internal/index/hash/index.go, "protege region/slotCount contra o swap da
-// reconstrução"), e o lugar dele é aqui: o Une da união é combinador puro sobre
+// pela MESMA razão que existia no motor global que este pacote substituiu —
+// proteger a região mapeada e a contagem de slots contra o swap da
+// reconstrução —, e o lugar dele é aqui: o Une da união é combinador puro sobre
 // Fontes já abertas e não tem referência ao writer, e a fonte que lê o WIP numa
 // consulta só poderia se serializar pelo wmu — o que serializaria consulta
 // contra ingestão, que é exatamente o que este ciclo existe para evitar, além
@@ -767,8 +767,8 @@ func (w *WIP) rehash() error {
 			if w.reg.AtomicLoad64(off) == 0 {
 				// Estado primeiro, hash por último: o hash é o marcador de
 				// ocupação, e publicá-lo antes exporia um slot que se diz
-				// habitado com contagem zero. É a mesma ordem do Set e a mesma
-				// que internal/index/hash/index.go documenta.
+				// habitado com contagem zero. É a mesma ordem do Set, e era a
+				// mesma do motor global que este pacote substituiu.
 				w.reg.AtomicStore64(off+8, estado)
 				w.reg.AtomicStore64(off, h)
 				reinserido = true

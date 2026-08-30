@@ -10,17 +10,19 @@ import (
 	"testing"
 )
 
-// O dataset materializado tem Modo e RowIDBase zerados e continua gravando um
-// manifest v1 — é isso que preserva o rollback para quem nunca declarou
-// `history`. Falhar aqui significa todo dataset em produção virar v2 no
-// primeiro deploy, sem nada em troca.
-func TestManifestSemHistoricoContinuaNaV1(t *testing.T) {
+// O dataset materializado tem Modo e RowIDBase zerados e não emite a seção
+// 0x8002. Ele já não fica na v1 por causa disso — a versão passou a ser sempre
+// v3 —, mas a seção continua CONDICIONAL, e é isso que este teste guarda:
+// emiti-la zerada gravaria "este dataset é histórico com marca-d'água em zero"
+// em todo dataset materializado do produto.
+func TestManifestSemHistoricoNaoEmiteASecao(t *testing.T) {
 	m := &Manifest{Epoch: 3, NextRowID: 10}
-	if n := TamanhoDaCaudaTLV(m); n != 0 {
-		t.Fatalf("cauda = %d bytes, quer 0", n)
+	if n := TamanhoDaCaudaTLV(m); n != tlvHeaderSize+indiceInfoSize {
+		t.Fatalf("cauda = %d bytes, quer só a seção do índice (%d)", n, tlvHeaderSize+indiceInfoSize)
 	}
-	if got := m.encode()[4]; got != manifestV1 {
-		t.Fatalf("version = %d, quer %d", got, manifestV1)
+	marca := binary.LittleEndian.AppendUint16(nil, tagHistorico)
+	if i := bytes.Index(m.encode(), marca); i >= 0 {
+		t.Fatalf("a seção de histórico foi emitida em %d num dataset materializado", i)
 	}
 }
 
@@ -38,12 +40,13 @@ func TestModoHistoricoSobreviveAoIdaEVolta(t *testing.T) {
 	}
 }
 
-// A marca-d'água sozinha já leva o manifest à v2: ela muda o que é VISÍVEL, e
-// um binário que a ignorasse devolveria linhas já purgadas.
-func TestRowIDBaseSozinhaLevaAV2(t *testing.T) {
+// A marca-d'água sozinha já emite a seção: ela muda o que é VISÍVEL, e um
+// binário que a ignorasse devolveria linhas já purgadas.
+func TestRowIDBaseSozinhaEmiteASecao(t *testing.T) {
 	m := &Manifest{RowIDBase: 7}
-	if got := m.encode()[4]; got != manifestV2 {
-		t.Fatalf("version = %d, quer %d", got, manifestV2)
+	marca := binary.LittleEndian.AppendUint16(nil, tagHistorico)
+	if i := bytes.Index(m.encode(), marca); i < 0 {
+		t.Fatal("a marca-d'água sozinha não emitiu a seção de histórico")
 	}
 	volta, err := decode(m.encode())
 	if err != nil {
@@ -54,31 +57,25 @@ func TestRowIDBaseSozinhaLevaAV2(t *testing.T) {
 	}
 }
 
-// As duas seções convivem, e a ordem é CRESCENTE por tag: uma ordem que
-// dependesse de quando cada seção foi inventada mudaria o arquivo sem que o
-// conteúdo mudasse.
-func TestHashesEHistoricoConvivemEmOrdemDeTag(t *testing.T) {
-	m := &Manifest{
-		Hashes:    []HashInfo{{FieldID: 4, SlotCount: 1024}},
-		Modo:      1,
-		RowIDBase: 64,
-	}
+// As seções convivem, e a ordem é CRESCENTE por tag: uma ordem que dependesse
+// de quando cada seção foi inventada mudaria o arquivo sem que o conteúdo
+// mudasse. A do índice por segmento é a última porque a tag dela é a maior, e
+// não porque foi a última a existir.
+func TestHistoricoEIndiceConvivemEmOrdemDeTag(t *testing.T) {
+	m := &Manifest{Modo: 1, RowIDBase: 64}
 	b := m.encode()
 	volta, err := decode(b)
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(volta.Hashes) != 1 || volta.Hashes[0].FieldID != 4 {
-		t.Errorf("Hashes = %+v", volta.Hashes)
-	}
 	if volta.Modo != 1 || volta.RowIDBase != 64 {
 		t.Errorf("Modo = %d, RowIDBase = %d", volta.Modo, volta.RowIDBase)
 	}
-	hash := binary.LittleEndian.AppendUint16(nil, tagHashes)
 	hist := binary.LittleEndian.AppendUint16(nil, tagHistorico)
-	iHash, iHist := bytes.Index(b, hash), bytes.Index(b, hist)
-	if iHash < 0 || iHist < 0 || iHash > iHist {
-		t.Fatalf("posições: hashes em %d, histórico em %d", iHash, iHist)
+	indice := binary.LittleEndian.AppendUint16(nil, tagIndicePorSegmento)
+	iHist, iIndice := bytes.Index(b, hist), bytes.Index(b, indice)
+	if iHist < 0 || iIndice < 0 || iHist > iIndice {
+		t.Fatalf("posições: histórico em %d, índice em %d", iHist, iIndice)
 	}
 }
 

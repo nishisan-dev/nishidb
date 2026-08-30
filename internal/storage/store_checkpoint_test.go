@@ -49,15 +49,17 @@ func TestCheckpointEscreveManifestCoerente(t *testing.T) {
 	if m.DurableOffset <= 64 {
 		t.Fatalf("DurableOffset deveria estar após o header: %d", m.DurableOffset)
 	}
-	if m.PrimarySlotCount != 1<<20 || m.PrimaryUsed != n || m.HashKind != 1 {
+	if m.PrimarySlotCount != 1<<20 || m.PrimaryUsed != n {
 		t.Fatalf("primary no manifest: %+v", *m)
 	}
 	if m.FieldDictValidBytes <= 8 {
 		t.Fatalf("FieldDictValidBytes: %d", m.FieldDictValidBytes)
 	}
-	if len(m.Bitmaps) != 1 || m.Bitmaps[0].FieldID != fldStatus || m.Bitmaps[0].ValuesDictValidBytes <= 8 {
-		t.Fatalf("bitmaps no manifest: %+v", m.Bitmaps)
-	}
+	// O manifest não descreve mais o conjunto indexado, e a asserção que estava
+	// aqui saiu com ele. Quem descreve o índice é o próprio arquivo dentro do
+	// segmento: o .sidx tem uma seção por campo, e "qual campo este dataset
+	// indexa" se lê de lá — não de uma segunda cópia no manifest, que o primeiro
+	// checkpoint atrasado já deixaria divergente.
 }
 
 func TestCheckpointEsvaziaOverlayEMantemLeitura(t *testing.T) {

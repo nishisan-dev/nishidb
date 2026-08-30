@@ -57,21 +57,20 @@ func (s *Store) recoverFrom(m *checkpoint.Manifest, refs []segment.SegmentRef, d
 	// espelho continua sendo cópia fiel do SEU mapa.
 	s.segCount.Store(segmentosDoManifest)
 	s.liveBytesAll.Store(vivoDoManifest)
-	// PrimarySlotCount/HashKind do manifest são ADVISORY: a fonte de
-	// verdade é o header do primary.idx (um rehash pós-checkpoint deixa o
-	// manifest para trás — divergência é esperada, não erro).
-	if s.prim != nil {
-		if m.PrimarySlotCount != s.prim.SlotCount() {
-			s.opts.Log.Info("recovery.primary_slots_divergem",
-				"manifest declara outro número de slots na primary; o header prevalece",
-				"manifest_slots", m.PrimarySlotCount, "header_slots", s.prim.SlotCount(),
-				"causa", "rehash pós-checkpoint")
-		}
-		if m.HashKind != s.prim.HashKind() {
-			s.opts.Log.Info("recovery.hashkind_diverge",
-				"manifest declara outro hashKind; o header prevalece",
-				"manifest_hashkind", m.HashKind, "header_hashkind", s.prim.HashKind())
-		}
+	// PrimarySlotCount do manifest é ADVISORY: a fonte de verdade é o header do
+	// primary.idx (um rehash pós-checkpoint deixa o manifest para trás —
+	// divergência é esperada, não erro).
+	//
+	// A conferência IRMÃ, do hashKind, saiu junto com o campo: o manifest deixou
+	// de gravá-lo na v3 porque o header do primary.idx já RECUSA um kind
+	// desconhecido, o que fazia daqui uma segunda cópia do mesmo fato. O que se
+	// perderia no dia em que houvesse um segundo kind está anotado no primary,
+	// que é onde esse dia começa.
+	if s.prim != nil && m.PrimarySlotCount != s.prim.SlotCount() {
+		s.opts.Log.Info("recovery.primary_slots_divergem",
+			"manifest declara outro número de slots na primary; o header prevalece",
+			"manifest_slots", m.PrimarySlotCount, "header_slots", s.prim.SlotCount(),
+			"causa", "rehash pós-checkpoint")
 	}
 
 	// As duas janelas de crash da aposentadoria (§53-55, decisão D5) são

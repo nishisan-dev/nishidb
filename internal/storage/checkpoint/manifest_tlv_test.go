@@ -9,8 +9,6 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
-
-	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
 // manifestV1Golden monta um manifest.bin da versão 1 SEM passar pelo encode
@@ -48,9 +46,14 @@ func manifestV1Golden() []byte {
 	return binary.LittleEndian.AppendUint32(b, crc32.Checksum(b, castagnoli))
 }
 
-// TestManifestV1ContinuaSendoLido é a garantia de rollback do formato: todo
-// dataset já materializado tem no disco um manifest da versão 1, e a cauda TLV
-// não pode torná-lo ilegível.
+// TestManifestV1ContinuaSendoLido é a garantia de MIGRAÇÃO do formato: todo
+// dataset já materializado tem no disco um manifest da versão 1 ou 2, e nem a
+// cauda TLV nem a v3 podem torná-lo ilegível.
+//
+// A direção importa, e ela é de mão única desde a v3: o binário novo LÊ o
+// manifest antigo, o binário antigo NÃO lê o novo. É a segunda metade que
+// bloqueia o rollback de propósito; esta primeira é o que dispensa recriar
+// dataset para subir.
 //
 // A consequência de falhar aqui não é um teste vermelho: é todo dataset em
 // produção recusando a abertura com "manifest corrompido" no primeiro deploy,
@@ -70,87 +73,110 @@ func TestManifestV1ContinuaSendoLido(t *testing.T) {
 	if len(m.Segments) != 1 || m.Segments[0].ID != 3 || m.Segments[0].LiveBytes != 3000 {
 		t.Fatalf("segmentos do v1: %+v", m.Segments)
 	}
-	if len(m.Bitmaps) != 1 || m.Bitmaps[0].FieldID != 5 || m.Bitmaps[0].ValuesDictValidBytes != 96 {
-		t.Fatalf("bitmaps do v1: %+v", m.Bitmaps)
-	}
-	if len(m.Hashes) != 0 {
-		t.Fatalf("manifest v1 não declara hash nenhum, veio %+v", m.Hashes)
-	}
+	// As entradas de bitmap do corpo legado não têm mais destino no Manifest,
+	// mas continuam tendo de ser PULADAS — e é o próprio sucesso do Load que
+	// prova isso. O que vem depois delas é o kafkaCount, que o decode exige
+	// zero: sem o avanço, ele leria os quatro primeiros bytes da entrada de
+	// bitmap deste golden e recusaria o manifest com "seção kafka inesperada".
+	// Um teste que só aferisse os escalares de cima não distinguiria os dois
+	// casos, porque eles são lidos ANTES.
 }
 
-// TestManifestSemCaudaContinuaSaindoV1 é a outra metade do rollback: enquanto
-// nenhum dataset declarar índice hash, o binário novo grava EXATAMENTE o que o
-// antigo gravava. Sem isto, subir a versão e voltar atrás deixaria de ser uma
-// operação reversível.
-func TestManifestSemCaudaContinuaSaindoV1(t *testing.T) {
-	m := sampleManifest()
-	b := m.encode()
-	if b[4] != 1 {
-		t.Fatalf("manifest sem cauda saiu na versão %d; o rollback exige v1", b[4])
-	}
-	// E o corpo é byte a byte o mesmo do golden montado à mão, para o caso em
-	// que os dois manifests coincidem.
-	esperado := manifestV1Golden()
-	equivalente := Manifest{
-		Epoch: 7, CreatedAtUnixMs: 100, NextRowID: 42, RowCount: 40,
-		CurrentSegment: 3, DurableOffset: 512,
-		Segments: []SegmentInfo{
-			{ID: 3, SizeBytes: 4096, TotalRecords: 9, LiveRecords: 8, LiveBytes: 3000},
+// TestTodoManifestSaiNaV3 trava a decisão que torna esta migração de mão única.
+//
+// Não há mais condição: o dataset sem histórico, sem agenda e sem campo
+// indexado grava v3 igual a qualquer outro. Um binário anterior recusa os três
+// com "version desconhecida", que é a resposta certa — ele manteria os índices
+// globais que conhece, ignoraria os de segmento e os devolveria INCOMPLETOS.
+//
+// A alternativa que existia até aqui — v1 enquanto não houvesse cauda, para
+// preservar o rollback — deixou de ser possível: o índice por segmento existe em
+// TODO dataset que este binário abre, inclusive no que hoje não indexa campo
+// nenhum, porque é a abertura seguinte que pode declarar um.
+func TestTodoManifestSaiNaV3(t *testing.T) {
+	casos := map[string]func(*Manifest){
+		"sem seção nenhuma": func(*Manifest) {},
+		"com histórico":     func(m *Manifest) { m.Modo, m.RowIDBase = 1, 500 },
+		"com agenda": func(m *Manifest) {
+			m.Agenda = &AgendaInfo{DuracaoDeFundoMs: 60_000, BlockShift: 6, Niveis: 4}
 		},
-		PrimarySlotCount: 1 << 20, PrimaryUsed: 40, HashKind: 1,
-		FieldDictValidBytes: 256,
-		Bitmaps:             []BitmapInfo{{FieldID: 5, ValuesDictValidBytes: 96}},
 	}
-	got := equivalente.encode()
-	if !bytes.Equal(got, esperado) {
-		t.Fatalf("o encode divergiu do layout v1 escrito à mão:\nobtido   %x\nesperado %x", got, esperado)
+	for nome, ajusta := range casos {
+		t.Run(nome, func(t *testing.T) {
+			m := sampleManifest()
+			ajusta(&m)
+			if v := m.encode()[4]; v != manifestV3 {
+				t.Fatalf("manifest saiu na versão %d, esperado %d", v, manifestV3)
+			}
+		})
 	}
 }
 
-// TestManifestComHashSobeParaV2 trava a única condição que muda o byte de
-// versão. Emitir v2 sem cauda mataria o rollback sem entregar informação; ficar
-// em v1 COM cauda faria um binário antigo ler o corpo, ignorar a seção crítica
-// e abrir o dataset sem manter o índice hash — que é o falso negativo
-// silencioso que a política de tags existe para impedir.
-func TestManifestComHashSobeParaV2(t *testing.T) {
+// TestASecaoDoIndicePorSegmentoEhSempreEmitida cobre a seção 0x8004 nos dois
+// lados: ela sai em todo manifest e o decode recusa um formato que não conhece.
+//
+// A recusa é a razão de a seção existir. Ela não é o que bloqueia o binário
+// ANTERIOR — a versão já faz isso —, é o que vai bloquear o binário anterior à
+// PRÓXIMA mudança de formato do índice, sem custar mais um bump de versão do
+// manifest.
+func TestASecaoDoIndicePorSegmentoEhSempreEmitida(t *testing.T) {
 	m := sampleManifest()
-	m.Hashes = []HashInfo{{FieldID: 4, SlotCount: 1 << 10}}
-	b := m.encode()
-	if b[4] != 2 {
-		t.Fatalf("manifest com cauda saiu na versão %d, esperado 2", b[4])
+	raw := m.encode()
+	var marca [2]byte
+	binary.LittleEndian.PutUint16(marca[:], tagIndicePorSegmento)
+	i := bytes.Index(raw, marca[:])
+	if i < 0 {
+		t.Fatal("a seção do índice por segmento não foi emitida")
 	}
-	semCaudaM := sampleManifest()
-	semCauda := semCaudaM.encode()
-	if len(b)-len(semCauda) != TamanhoDaCaudaTLV(&m) {
-		t.Fatalf("a cauda ocupou %d bytes; TamanhoDaCaudaTLV declara %d",
-			len(b)-len(semCauda), TamanhoDaCaudaTLV(&m))
+	if n := binary.LittleEndian.Uint32(raw[i+2:]); n != indiceInfoSize {
+		t.Fatalf("a seção declara %d bytes, esperado %d", n, indiceInfoSize)
+	}
+	if f := raw[i+tlvHeaderSize]; f != formatoDoIndiceAtual {
+		t.Fatalf("formato gravado %d, esperado %d", f, formatoDoIndiceAtual)
+	}
+	if tagIndicePorSegmento&tagCritica == 0 {
+		t.Fatalf("a tag do índice é %#04x, sem o bit crítico", tagIndicePorSegmento)
+	}
+
+	// Formato desconhecido: é o que um binário mais novo gravaria, e a leitura
+	// tem de RECUSAR em vez de abrir o dataset sem saber manter o índice dele.
+	raw[i+tlvHeaderSize] = formatoDoIndiceAtual + 1
+	recrc(raw)
+	if _, err := decode(raw); !errors.Is(err, ErrCorruptManifest) {
+		t.Fatalf("formato de índice desconhecido foi aceito: %v", err)
 	}
 }
 
-// TestManifestComHashRoundTrip cobre o caminho completo em disco.
-func TestManifestComHashRoundTrip(t *testing.T) {
+// TestSecaoDeHashesLegadaEhDescartadaSemRecusarODataset é o outro lado da
+// remoção do motor global, e o modo de falha que ele fecha é de DIAGNÓSTICO.
+//
+// Um dataset que declarou `index: hash` tem a seção 0x8001 no manifest. Sem um
+// ramo que a reconheça, ela cairia no ramo de seção crítica desconhecida e o
+// dataset seria recusado com "escrito por um binário mais novo" — a afirmação
+// exatamente invertida sobre um dataset escrito por um binário mais VELHO, que
+// mandaria o operador procurar o problema no lugar errado.
+func TestSecaoDeHashesLegadaEhDescartadaSemRecusarODataset(t *testing.T) {
+	raw := manifestV1Golden()
+	body := raw[:len(raw)-4]
+	body[4] = manifestV2
+	payload := binary.LittleEndian.AppendUint16(nil, 1)
+	payload = binary.LittleEndian.AppendUint16(payload, 4)
+	payload = binary.LittleEndian.AppendUint64(payload, 1<<10)
+	body = binary.LittleEndian.AppendUint16(body, tagHashes)
+	body = binary.LittleEndian.AppendUint32(body, uint32(len(payload)))
+	body = append(body, payload...)
+	body = binary.LittleEndian.AppendUint32(body, crc32.Checksum(body, castagnoli))
+
 	path := filepath.Join(t.TempDir(), "manifest.bin")
-	want := sampleManifest()
-	want.Hashes = []HashInfo{
-		{FieldID: 4, SlotCount: 1 << 10},
-		{FieldID: 9, SlotCount: 1 << 14},
-	}
-	if err := Write(path, &want); err != nil {
+	if err := os.WriteFile(path, body, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got, err := Load(path)
+	m, err := Load(path)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("manifest legado com seção de hashes foi recusado: %v", err)
 	}
-	if len(got.Hashes) != 2 || got.Hashes[0] != want.Hashes[0] || got.Hashes[1] != want.Hashes[1] {
-		t.Fatalf("hashes: %+v", got.Hashes)
-	}
-	// O corpo v1 tem de sobreviver intacto ao lado da cauda.
-	if len(got.Bitmaps) != 2 || got.Bitmaps[0] != want.Bitmaps[0] {
-		t.Fatalf("a cauda deslocou os bitmaps: %+v", got.Bitmaps)
-	}
-	if len(got.Segments) != 3 || got.Segments[2] != want.Segments[2] {
-		t.Fatalf("a cauda deslocou os segmentos: %+v", got.Segments)
+	if m.Epoch != 7 {
+		t.Fatalf("o corpo não sobreviveu à seção descartada: %+v", *m)
 	}
 }
 
@@ -217,10 +243,15 @@ func TestCaudaComComprimentoAdulteradoEhRecusada(t *testing.T) {
 	}
 }
 
-// TestSecaoDeHashesInconsistenteEhRecusada cobre a contagem interna da seção:
-// um `count` que não bate com o tamanho do payload não pode virar uma lista
-// truncada em silêncio, porque essa lista é o CONJUNTO contra o qual a
-// abertura decide se um índice foi abandonado.
+// TestSecaoDeHashesInconsistenteEhRecusada cobre a contagem interna da seção
+// legada, que continua conferida mesmo depois de o CONTEÚDO dela ter deixado de
+// ter leitor.
+//
+// A checagem não é zelo vazio: uma seção cujo `count` não bate com o tamanho do
+// payload é sinal de manifest corrompido, e um manifest corrompido não pode
+// passar por causa de uma seção que por acaso ficou sem uso. Descartar o
+// conteúdo é decisão de produto; deixar de olhar para os bytes seria trocar uma
+// recusa por uma abertura sobre arquivo adulterado.
 func TestSecaoDeHashesInconsistenteEhRecusada(t *testing.T) {
 	raw := manifestV1Golden()
 	body := raw[:len(raw)-4]
@@ -242,33 +273,11 @@ func TestSecaoDeHashesInconsistenteEhRecusada(t *testing.T) {
 	}
 }
 
-// TestHashInfoUsaFieldIDDeVerdade evita a regressão preguiçosa de gravar o
-// FieldID como u8 ou de truncá-lo: o dicionário do dataset chega a IDs bem
-// acima de 255, e um truncamento faria a seção nomear o campo ERRADO.
-func TestHashInfoUsaFieldIDDeVerdade(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "manifest.bin")
-	m := sampleManifest()
-	m.Hashes = []HashInfo{{FieldID: types.FieldID(4242), SlotCount: 1 << 20}}
-	if err := Write(path, &m); err != nil {
-		t.Fatal(err)
-	}
-	got, err := Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got.Hashes) != 1 || got.Hashes[0].FieldID != 4242 {
-		t.Fatalf("FieldID não sobreviveu: %+v", got.Hashes)
-	}
-}
-
-// A seção da agenda de vencimentos faz o round-trip e leva o manifest à v2.
+// A seção da agenda de vencimentos faz o round-trip ao lado das outras.
 func TestManifestComAgendaRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "manifest.bin")
 	want := sampleManifest()
 	want.Agenda = &AgendaInfo{DuracaoDeFundoMs: 2_592_000_000, BlockShift: 6, Niveis: 4}
-	if want.encode()[4] != manifestV2 {
-		t.Fatal("manifest com agenda não subiu para a v2")
-	}
 	if err := Write(path, &want); err != nil {
 		t.Fatal(err)
 	}
@@ -282,33 +291,25 @@ func TestManifestComAgendaRoundTrip(t *testing.T) {
 	if *got.Agenda != *want.Agenda {
 		t.Fatalf("agenda voltou %+v, quer %+v", *got.Agenda, *want.Agenda)
 	}
-	// O corpo v1 tem de sobreviver intacto ao lado da cauda.
-	if len(got.Bitmaps) != 2 || got.Bitmaps[0] != want.Bitmaps[0] {
-		t.Fatalf("a cauda deslocou os bitmaps: %+v", got.Bitmaps)
-	}
+	// O corpo tem de sobreviver intacto ao lado da cauda.
 	if len(got.Segments) != 3 || got.Segments[2] != want.Segments[2] {
 		t.Fatalf("a cauda deslocou os segmentos: %+v", got.Segments)
 	}
 }
 
-// Sem agenda declarada o manifest continua na v1, byte a byte igual ao que o
-// binário anterior gravava: o rollback segue possível para quem nunca ligou a
-// expiração.
-func TestManifestSemAgendaContinuaV1(t *testing.T) {
+// A cauda NUNCA é vazia, e a reserva do encode tem de contar cada seção que
+// entra: foi a conta duplicada que deixou a capacidade para trás quando o
+// layout mudou.
+func TestACaudaNuncaEhVaziaEAReservaAcompanha(t *testing.T) {
 	m := sampleManifest()
-	if m.encode()[4] != manifestV1 {
-		t.Fatal("manifest sem agenda não saiu na v1")
+	if n := TamanhoDaCaudaTLV(&m); n != tlvHeaderSize+indiceInfoSize {
+		t.Fatalf("cauda de %d bytes num manifest sem histórico e sem agenda; a seção do índice é incondicional", n)
 	}
-	if TamanhoDaCaudaTLV(&m) != 0 {
-		t.Fatalf("cauda de %d bytes num manifest sem seção nenhuma", TamanhoDaCaudaTLV(&m))
-	}
-	// E a reserva do encode tem de contar a seção quando ela existe: foi a
-	// conta duplicada que deixou a capacidade para trás quando o layout mudou.
 	comAgenda := sampleManifest()
 	comAgenda.Agenda = &AgendaInfo{DuracaoDeFundoMs: 1, BlockShift: 6, Niveis: 4}
-	if crescimento := len(comAgenda.encode()) - len(m.encode()); crescimento != TamanhoDaCaudaTLV(&comAgenda) {
-		t.Fatalf("a seção ocupou %d bytes; TamanhoDaCaudaTLV declara %d",
-			crescimento, TamanhoDaCaudaTLV(&comAgenda))
+	crescimento := len(comAgenda.encode()) - len(m.encode())
+	if declarado := TamanhoDaCaudaTLV(&comAgenda) - TamanhoDaCaudaTLV(&m); crescimento != declarado {
+		t.Fatalf("a seção ocupou %d bytes; TamanhoDaCaudaTLV declara %d", crescimento, declarado)
 	}
 }
 
@@ -318,7 +319,6 @@ func TestManifestSemAgendaContinuaV1(t *testing.T) {
 // arquivo sem que o conteúdo mudasse.
 func TestCaudaSaiEmOrdemCrescenteDeTagComAgenda(t *testing.T) {
 	m := sampleManifest()
-	m.Hashes = []HashInfo{{FieldID: 7, SlotCount: 1024}}
 	m.Modo, m.RowIDBase = 1, 500
 	m.Agenda = &AgendaInfo{DuracaoDeFundoMs: 60_000, BlockShift: 6, Niveis: 4}
 	raw := m.encode()

@@ -6,15 +6,12 @@ import "github.com/nishisan-dev/nishidb/internal/types"
 // Checkpoint (seam de teste; nil em produção).
 func (s *Store) SetCheckpointTraceForTest(fn func(step string)) { s.cpTrace = fn }
 
-// ClearFailuresForTest expõe o contador de erros tolerados na fase de Clear.
-func (s *Store) ClearFailuresForTest() uint64 { return s.clearFailures.Load() }
-
-// SetClearErrHookForTest injeta falhas na fase de Clear dos bitmaps para
-// exercitar o caminho tolerado pós-commit.
-func (s *Store) SetClearErrHookForTest(fn func(types.FieldID) error) { s.clearErrHook = fn }
-
-// SetSetErrHookForTest injeta falhas na fase de Set dos bitmaps — produz o
+// SetSetErrHookForTest injeta falhas na fase de Set do índice — produz o
 // phantom commit (§14.12) com payload replayável.
+//
+// O seam da fase de CLEAR saiu junto com os motores globais: o índice por
+// segmento não tem Clear (spec §5.2), e um seam para uma fase que não existe
+// injetaria falha num caminho que o produto não percorre.
 func (s *Store) SetSetErrHookForTest(fn func(types.FieldID) error) { s.setErrHook = fn }
 
 // PrimaryUsedForTest expõe a ocupação da primary: é o observável que denuncia
@@ -31,6 +28,11 @@ func (s *Store) EspelhosDivergentesForTest() uint64 { return s.espelhosDivergent
 // PartialCheckpointForTest executa os passos 1-3 do checkpoint (segSync,
 // ApplyOverlay, msyncs) SEM gravar o manifest — simula o crash entre os
 // passos 3 e 4 do §10.2 (índices em disco à frente do manifest).
+//
+// Os índices que ele durabiliza são os que o checkpoint durabiliza, e a lista
+// encolheu junto com ele: o índice secundário não tem mais msync no protocolo
+// (spec §2.5), então incluí-lo aqui faria o seam simular um crash que o produto
+// não produz.
 func (s *Store) PartialCheckpointForTest() error {
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
@@ -46,24 +48,7 @@ func (s *Store) PartialCheckpointForTest() error {
 	if err := s.locs.Msync(); err != nil {
 		return err
 	}
-	if err := s.seqs.Msync(); err != nil {
-		return err
-	}
-	for _, ix := range s.bitmaps {
-		if err := ix.Msync(); err != nil {
-			return err
-		}
-	}
-	// O hash entra aqui pela mesma razão dos bitmaps: este seam reproduz o
-	// crash entre os passos 3 e 4 do §10.2, e o estado que ele tem de deixar é
-	// "todo índice durável, manifest ainda não". Esquecer um motor faria o seam
-	// simular um crash que o protocolo não produz.
-	for _, ix := range s.hashes {
-		if err := ix.Msync(); err != nil {
-			return err
-		}
-	}
-	return nil
+	return s.seqs.Msync()
 }
 
 // CorrompeEspelhoParaTeste move os espelhos atômicos por fora dos mapas de

@@ -1,10 +1,8 @@
 package storage
 
 import (
-	"cmp"
 	"fmt"
 	"path/filepath"
-	"slices"
 	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/storage/checkpoint"
@@ -16,7 +14,7 @@ import (
 //  1. fdatasync do segmento corrente (records ≤ S' ficam duráveis)
 //  2. aplica o overlay de locations ao mmap (invariante §6.1: nenhuma
 //     página de índice referencia record não durável)
-//  3. msync de primary, locations, sequences e bitmaps
+//  3. msync de primary, locations e sequences
 //  4. manifest atômico com S'
 //
 // Serializado com Put/Sync pelo mutex do writer; leitores seguem operando
@@ -133,37 +131,15 @@ func (s *Store) checkpoint() error {
 			return s.failWriter(err)
 		}
 	}
-	if err := s.traceStep("msyncBitmaps", func() error {
-		for field, ix := range s.bitmaps {
-			if err := ix.Msync(); err != nil {
-				return fmt.Errorf("storage: msync do bitmap %d: %w", field, err)
-			}
-		}
-		return nil
-	}); err != nil {
-		return s.failWriter(err)
-	}
-	// O hash entra ENTRE os bitmaps e o manifest, e o lugar não é arbitrário:
-	// o §10.2 exige que nenhuma página de índice referencie record não durável
-	// e que o manifest seja o ÚLTIMO passo. Um msync depois do manifest
-	// declararia durável um índice que ainda está em página suja.
+	// O ÍNDICE SECUNDÁRIO NÃO TEM PASSO AQUI, e a ausência é o desenho.
 	//
-	// O passo é EMITIDO SEMPRE, mesmo sem índice hash algum, e isso é
-	// deliberado: o TestCheckpointOrdemDeDurabilidade fixa a SEQUÊNCIA de
-	// passos, e um passo que aparece só às vezes tornaria a sequência
-	// dependente da configuração do dataset — o teste passaria a provar o
-	// dataset dele, não o protocolo.
-	if err := s.traceStep("msyncHash", func() error {
-		for field, ix := range s.hashes {
-			if err := ix.Msync(); err != nil {
-				return fmt.Errorf("storage: msync do índice hash %d: %w", field, err)
-			}
-		}
-		return nil
-	}); err != nil {
-		return s.failWriter(err)
-	}
-
+	// Os dois passos que existiam — msyncBitmaps e msyncHash — davam ao índice
+	// global a durabilidade que o §10.2 exige antes do manifest, e com ela vinha
+	// uma invariante de ordem contra o durableOffset e uma classe inteira de
+	// janelas de crash. O índice por segmento não paga nada disso porque o .widx
+	// NUNCA é confiado através de um restart (spec §2.5): a abertura o descarta
+	// e o reconstrói a partir dos próprios records. Índice é dado DERIVADO, e a
+	// recuperação mais barata que está correta é derivá-lo de novo.
 	segs, err := segment.ListSegments(filepath.Join(s.opts.Dir, "data"))
 	if err != nil {
 		return err
@@ -183,7 +159,6 @@ func (s *Store) checkpoint() error {
 	if s.prim != nil {
 		m.PrimarySlotCount = s.prim.SlotCount()
 		m.PrimaryUsed = s.prim.Used()
-		m.HashKind = s.prim.HashKind()
 	}
 	// Este ListSegments é o único ponto do código que sabe QUAIS segmentos
 	// existem, e ele roda sob o mutex do writer: a listagem é um snapshot
@@ -253,26 +228,6 @@ func (s *Store) checkpoint() error {
 	s.segCount.Store(segmentos)
 	s.liveBytesAll.Store(vivoTotal)
 	s.diskBytesAll.Store(discoTotal)
-	for field, ix := range s.bitmaps {
-		m.Bitmaps = append(m.Bitmaps, checkpoint.BitmapInfo{
-			FieldID:              field,
-			ValuesDictValidBytes: ix.DictSizeBytes(),
-		})
-	}
-	for field, ix := range s.hashes {
-		m.Hashes = append(m.Hashes, checkpoint.HashInfo{
-			FieldID:   field,
-			SlotCount: ix.SlotCount(),
-		})
-	}
-	// Ordem determinística: dois checkpoints do mesmo estado produzem
-	// manifests idênticos byte a byte.
-	slices.SortFunc(m.Bitmaps, func(a, b checkpoint.BitmapInfo) int {
-		return cmp.Compare(a.FieldID, b.FieldID)
-	})
-	slices.SortFunc(m.Hashes, func(a, b checkpoint.HashInfo) int {
-		return cmp.Compare(a.FieldID, b.FieldID)
-	})
 	if err := s.traceStep("manifest", func() error {
 		return checkpoint.Write(s.manifestPath(), &m)
 	}); err != nil {

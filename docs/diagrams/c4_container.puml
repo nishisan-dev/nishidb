@@ -20,7 +20,7 @@ package "nishidb (binário único)" {
 database "Dataset em disco" as ds {
   file "data/segment-00000001.dat\n(append-only)" as seg
   file "indexes/primary.idx\nindexes/locations.idx\nindexes/sequences.idx\n(mmap)" as idx
-  file "indexes/bitmap/00003/\nvalues.dict + 00000001.bm" as bmp
+  file "data/segment-00000001.sidx\níndice do segmento (uma seção por campo)" as bmp
   file "metadata/fields.dict" as fdic
   file "checkpoint/manifest.bin" as man
   file "LOCK\n(flock exclusivo)" as lock

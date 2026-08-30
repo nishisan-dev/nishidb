@@ -164,64 +164,21 @@ func TestEncolhimentoDeSegmentoSeladoEhFatal(t *testing.T) {
 	}
 }
 
-func TestAllowBitmapDropNaoAutorizaIndiceSemBackfill(t *testing.T) {
-	// W1: a mensagem da direção 1 INSTRUI o operador a ligar
-	// AllowBitmapDrop, e o checkpoint do fim do Open já apaga o campo do
-	// manifest. Se a flag também relaxasse a direção 2, o ciclo
-	// drop → escrever → re-adicionar devolveria um índice incompleto — que
-	// é exatamente o que o R-A existe para impedir.
-	dir := t.TempDir()
-	comBitmap := Options{Dir: dir, BitmapFields: []types.FieldID{fldStatus}}
-	s := audOpen(t, comBitmap)
-	mustPut(t, s, "w1", 1, statusPayload(t, s, "w1", "Start", 1), nil)
-	if err := s.Checkpoint(); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	// Abre dropando o índice e grava mais uma row: o intervalo em que o
-	// índice ficou parado agora tem conteúdo.
-	s2, err := Open(Options{Dir: dir, AllowBitmapDrop: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	mustPut(t, s2, "w1-b", 2, statusPayload(t, s2, "w1-b", "Stop", 2), nil)
-	if err := s2.Checkpoint(); err != nil {
-		t.Fatal(err)
-	}
-	if err := s2.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	// Re-declarar o campo, mesmo com a flag ligada, tem que ser recusado.
-	if _, err := Open(Options{Dir: dir, BitmapFields: []types.FieldID{fldStatus}, AllowBitmapDrop: true}); !errors.Is(err, ErrDatasetCorrupt) {
-		t.Fatalf("AllowBitmapDrop não pode autorizar índice sem backfill, obtido %v", err)
-	}
-}
-
-func TestUmaUnicaRowJaBloqueiaIndiceNovo(t *testing.T) {
-	// W7: o teste anterior usava 3 rows e asseria "3 rows", deixando passar
-	// qualquer limiar entre 1 e 3.
-	dir := t.TempDir()
-	s := audOpen(t, Options{Dir: dir})
-	mustPut(t, s, "unica", 1, statusPayload(t, s, "unica", "Start", 1), nil)
-	if err := s.Checkpoint(); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err := Open(Options{Dir: dir, BitmapFields: []types.FieldID{fldStatus}})
-	if !errors.Is(err, ErrDatasetCorrupt) {
-		t.Fatalf("uma única row já ficaria de fora do índice, obtido %v", err)
-	}
-	if !strings.Contains(err.Error(), "1 rows") {
-		t.Fatalf("a mensagem precisa dizer quantas rows ficariam de fora: %v", err)
-	}
-}
+// Os dois testes que estavam aqui — TestAllowBitmapDropNaoAutorizaIndiceSemBackfill
+// e TestUmaUnicaRowJaBloqueiaIndiceNovo — saíram com as guardas que eles
+// exercitavam, e nenhum dos dois afirmava mais nada além da RECUSA.
+//
+// O primeiro provava que o opt-out da direção 1 (abrir sem um campo indexado)
+// não relaxava a direção 2 (redeclarar o campo depois), fechando o ciclo
+// drop → escrever → re-adicionar. O segundo provava que UMA linha já bastava
+// para bloquear, e que a mensagem dizia quantas ficariam de fora.
+//
+// As duas direções eram sobre o mesmo dano: um índice GLOBAL que cobrisse só
+// parte do dataset devolveria menos linhas do que existem. O índice por segmento
+// não tem como produzi-lo — segmento sem a seção do campo enumera as linhas dele
+// como candidatas —, e o que substitui as duas recusas é o
+// TestIndiceNovoEmDatasetPovoadoEhAceitoEResponde, que afirma o oposto: a
+// consulta devolve inclusive as linhas gravadas antes de o campo ser declarado.
 
 func TestBitmapFieldsRejeitaFieldIDZeroENomeVazio(t *testing.T) {
 	// W6/X6: um bitmap no campo 0 ENTRA no manifest, e a direção 1 passa a

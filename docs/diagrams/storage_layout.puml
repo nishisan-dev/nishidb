@@ -6,17 +6,13 @@ skinparam componentStyle rectangle
 folder "<dataset>/" {
   folder "data/" {
     artifact "segment-00000001.dat\nsegment-00000002.dat\n…" as seg
+    artifact "segment-00000001.sidx\nÍNDICE SELADO do segmento:\nimutável, uma seção por campo" as sidx
+    artifact "segment-00000002-00003.widx\nÍNDICE WIP: só do segmento CORRENTE,\num arquivo por (segmento, campo)" as widx
   }
   folder "indexes/" {
     artifact "primary.idx\nhash aberto, linear probing\nslots de 16 B" as prim
     artifact "locations.idx\nu64 por rowId:\nsegmento | offset | flags" as loc
     artifact "sequences.idx\nint64 por rowId" as seqs
-    folder "bitmap/" {
-      artifact "00003/  — um diretório por FieldID\n(5 dígitos, zeros à esquerda)\n  values.dict\n  00000001.bm, 00000002.bm, …\n  (uma posting por valorID, 8 dígitos,\n  1-based: não existe 00000000.bm)" as bmp
-    }
-    folder "hash/" {
-      artifact "00004.hidx — UM arquivo por FieldID\n(5 dígitos, zeros à esquerda)\nheader 64 B (magic NDBH) +\nslots de 16 B: [hash u64][rowId u64]" as hsh
-    }
   }
   folder "metadata/" {
     artifact "fields.dict\nnome → fieldID (v2, com typeHint)" as fd
@@ -50,24 +46,31 @@ note right of loc
   anônimo (aceite-8m-20260815.md).
 end note
 
-note bottom of bmp
-  O diretório é nomeado pelo FieldID
-  NUMÉRICO, não pelo nome do campo do
-  YAML — a tradução está no fields.dict.
-  É por isso que a recusa de bitmap
-  também nomeia o campo por número.
+note bottom of sidx
+  O índice mora AO LADO do .dat, e não
+  num diretório próprio: o par (dado,
+  índice) nasce e morre junto, e é essa
+  vizinhança que faz "purgar o segmento
+  leva o índice junto" ser uma linha de
+  código em vez de uma promessa.
+
+  O campo é nomeado pelo FieldID
+  NUMÉRICO, não pelo nome do YAML — a
+  tradução está no fields.dict.
 end note
 
-note bottom of hsh
-  Alta cardinalidade: uma tabela por
-  CAMPO, e não um arquivo por valor.
-  Remove posting por LÁPIDE (update
-  troca o valor da coluna); esvaziar o
-  slot cortaria a cadeia de probe dos
-  vizinhos. A ocupação é RECONTADA no
-  Open — o header não a guarda, porque
-  contador em página mmap não sobrevive
-  a um crash com credibilidade.
+note bottom of widx
+  O .widx NUNCA é confiado através de um
+  restart: a abertura apaga todo .widx do
+  diretório e reconstrói o do segmento
+  corrente lendo os próprios records.
+
+  É isso que tira o msync do índice do
+  checkpoint e elimina a classe inteira
+  de janelas de crash do índice
+  secundário — índice é dado DERIVADO, e
+  a recuperação mais barata que está
+  correta é derivá-lo de novo.
 end note
 
 note bottom of man

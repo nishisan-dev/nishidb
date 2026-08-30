@@ -1,8 +1,18 @@
 package storage
 
-// R-A, R-C e item 14 da SC: o conjunto de campos indexados é validado contra
-// o manifest na abertura, os campos podem ser declarados por nome, e um
-// segmento que encolheu por fora é fatal.
+// R-C e item 14 da SC: os campos indexados podem ser declarados por NOME, a
+// união dos dois caminhos é o conjunto do dataset, e um segmento que encolheu
+// por fora é fatal.
+//
+// O R-A saiu daqui junto com o motor global. Ele exigia que o conjunto indexado
+// fosse validado contra o manifest na abertura, e as duas recusas que ele
+// produzia — abrir sem um campo que o dataset declara indexado, e declarar um
+// campo novo sobre um dataset povoado — existiam para impedir um índice global
+// que cobrisse só um pedaço do dataset e devolvesse MENOS linhas do que existem.
+// Com o índice por segmento, segmento sem a seção do campo não devolve menos:
+// ele ENUMERA as linhas dele como candidatas, e o resultado é o mesmo, só mais
+// caro. A recusa passou a ser obstáculo sem dano a evitar, e o manifest deixou
+// de carregar o conjunto contra o qual ela decidia.
 
 import (
 	"errors"
@@ -60,44 +70,18 @@ func TestBitmapFieldsEBitmapFieldNamesSaoUniao(t *testing.T) {
 	}
 }
 
-func TestAberturaSemCampoDoManifestEhRejeitada(t *testing.T) {
-	// R-A: o índice ficaria em disco parando de receber sets/clears; se o
-	// campo voltasse depois, a query indexada devolveria resultado
-	// incompleto sem nenhum sintoma.
-	dir := t.TempDir()
-	comBitmap := Options{Dir: dir, BitmapFields: []types.FieldID{fldStatus}}
-	s := audOpen(t, comBitmap)
-	mustPut(t, s, "ra", 1, statusPayload(t, s, "ra", "Start", 1), nil)
-	if err := s.Checkpoint(); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err := Open(Options{Dir: dir})
-	if !errors.Is(err, ErrDatasetCorrupt) {
-		t.Fatalf("abrir sem o campo indexado deveria falhar, obtido %v", err)
-	}
-	if !strings.Contains(err.Error(), "AllowBitmapDrop") {
-		t.Fatalf("o erro precisa dizer como prosseguir de propósito: %v", err)
-	}
-
-	// Opt-out explícito destrava.
-	s2, err := Open(Options{Dir: dir, AllowBitmapDrop: true})
-	if err != nil {
-		t.Fatalf("AllowBitmapDrop deveria permitir: %v", err)
-	}
-	defer s2.Close()
-	if s2.HasBitmap(fldStatus) {
-		t.Fatal("o campo foi dropado nesta abertura")
-	}
-}
-
-func TestIndiceNovoEmDatasetComRowsEhRejeitado(t *testing.T) {
-	// Terceiro caminho do mesmo dano: um bitmap criado agora num dataset que
-	// já tem rows cobre apenas os records futuros — as rows antigas somem da
-	// query indexada. Backfill não existe no M1.
+// TestIndiceNovoEmDatasetPovoadoEhAceitoEResponde é o que substitui as duas
+// recusas do R-A, e ele afirma a coisa mais forte que se pode afirmar aqui: a
+// consulta sobre o campo recém-declarado devolve o MESMO conjunto que o full
+// scan filtrado, inclusive para as linhas gravadas ANTES da declaração.
+//
+// É a resposta da spec à pergunta que travava o débito 22. Ela sai correta de
+// graça porque o contrato do Lookup sempre foi superconjunto com revalidação: um
+// segmento sem a seção do campo enumera as linhas dele como candidatas, e o
+// executor filtra. O que ainda NÃO existe é a parte de custo — nada agenda a
+// reconstrução daqueles segmentos, então eles enumeram indefinidamente. Correto
+// e lento é o estado deste commit, e está registrado no débito 22.
+func TestIndiceNovoEmDatasetPovoadoEhAceitoEResponde(t *testing.T) {
 	dir := t.TempDir()
 	s := audOpen(t, Options{Dir: dir})
 	for i := 0; i < 3; i++ {
@@ -111,12 +95,49 @@ func TestIndiceNovoEmDatasetComRowsEhRejeitado(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := Open(Options{Dir: dir, BitmapFields: []types.FieldID{fldStatus}})
-	if !errors.Is(err, ErrDatasetCorrupt) {
-		t.Fatalf("índice novo sobre rows existentes deveria falhar, obtido %v", err)
+	s2, err := Open(Options{Dir: dir, BitmapFields: []types.FieldID{fldStatus}})
+	if err != nil {
+		t.Fatalf("declarar índice sobre dataset povoado deveria ser aceito: %v", err)
 	}
-	if !strings.Contains(err.Error(), "3 rows") {
-		t.Fatalf("o erro precisa dizer quantas rows ficariam de fora: %v", err)
+	defer s2.Close()
+
+	it, err := s2.LookupBitmap(fldStatus, strVal("Start"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidatos := collectRows(t, it)
+	// Asserção CRUA sobre o índice, ao lado da de produto: sem ela, um Lookup
+	// que devolvesse zero candidatos passaria — a revalidação decide contra o
+	// payload e o full scan também devolveria vazio se o índice estivesse
+	// quebrado de outra forma.
+	exigeCandidatos(t, "índice declarado sobre dataset povoado", candidatos, []types.RowID{0, 1, 2})
+	if got := lookupRevalidado(t, s2, fldStatus, strVal("Start")); len(got) != 3 {
+		t.Fatalf("pós-revalidação deveriam vir as 3 linhas anteriores à declaração: %v", got)
+	}
+}
+
+// TestAbrirSemUmCampoAntesIndexadoEhAceito é a outra metade do R-A que caiu. O
+// dano que a recusa evitava era o índice global parar de receber sets e
+// reaparecer INCOMPLETO se o campo voltasse; no índice por segmento os segmentos
+// escritos no intervalo simplesmente não têm a seção do campo, e enumeram.
+func TestAbrirSemUmCampoAntesIndexadoEhAceito(t *testing.T) {
+	dir := t.TempDir()
+	s := audOpen(t, Options{Dir: dir, BitmapFields: []types.FieldID{fldStatus}})
+	mustPut(t, s, "ra", 1, statusPayload(t, s, "ra", "Start", 1), nil)
+	if err := s.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s2, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("abrir sem o campo antes indexado deveria ser aceito: %v", err)
+	}
+	defer s2.Close()
+	if s2.HasBitmap(fldStatus) {
+		t.Fatal("o campo não foi declarado nesta abertura")
 	}
 }
 

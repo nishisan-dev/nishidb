@@ -4,7 +4,6 @@ package storage
 // checkpoint), I1 (liveness real por segmento), I2 (writer serializado).
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,17 +33,19 @@ func TestCheckpointOrdemDeDurabilidade(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// msyncHash entra ENTRE msyncBitmaps e manifest, e a posição é o que se
-	// trava aqui: o §10.2 exige que todo índice esteja durável antes do
+	// O que continua travado é a REGRA do §10.2: todo índice durável antes do
 	// manifest, porque é o manifest que declara o ponto S como recuperável. Um
 	// msync depois dele declararia durável um índice ainda em página suja, e a
 	// recovery seguinte confiaria na declaração.
 	//
-	// O passo aparece mesmo neste dataset, que não tem índice hash algum, e
-	// isso é deliberado: um passo emitido só quando há conteúdo tornaria a
-	// SEQUÊNCIA dependente da configuração do dataset, e este teste passaria a
-	// provar o dataset dele em vez do protocolo.
-	want := []string{"segSync", "applyOverlay", "msyncPrimary", "msyncLocations", "msyncSequences", "msyncBitmaps", "msyncHash", "manifest"}
+	// Os dois passos do índice secundário — msyncBitmaps e msyncHash — SAÍRAM da
+	// sequência, e a ausência é a propriedade, não uma perda: o índice por
+	// segmento não é durabilizado no checkpoint porque o .widx nunca é confiado
+	// através de um restart (spec §2.5). Ele é reconstruído a partir dos próprios
+	// records, o que elimina a invariante de ordem contra o durableOffset e a
+	// classe inteira de janelas de crash do índice secundário. Um passo que
+	// voltasse aqui seria o sinal de que essa decisão foi desfeita.
+	want := []string{"segSync", "applyOverlay", "msyncPrimary", "msyncLocations", "msyncSequences", "manifest"}
 	if !slices.Equal(trace, want) {
 		t.Fatalf("ordem de durabilidade violada:\nesperado %v\nobtido   %v", want, trace)
 	}
@@ -127,49 +128,19 @@ func TestErroDeAppendNaRotacaoEhSticky(t *testing.T) {
 	}
 }
 
-func TestErroToleradoNoClearContabilizaEPreservaCommit(t *testing.T) {
-	// Round 2 N4: erro na fase de Clear (pós-commit) é tolerado — o Put
-	// SUCEDE, o estado novo fica visível, o contador registra e a posting
-	// antiga sobra como falso positivo (filtrado pela revalidação §44).
-	s := openStore(t, Options{BitmapFields: []types.FieldID{fldStatus}})
-	id, _ := mustPut(t, s, "cl", 1, statusPayload(t, s, "cl", "Start", 1), nil)
-
-	s.SetClearErrHookForTest(func(types.FieldID) error { return errors.New("clear falho simulado") })
-	prev, _, ok, err := s.GetByKey([]byte("cl"), nil)
-	if err != nil || !ok {
-		t.Fatal(err)
-	}
-	got, created, err := s.Put([]byte("cl"), 2, 0, statusPayload(t, s, "cl", "Stop", 2), &prev)
-	if err != nil || created || got != id {
-		t.Fatalf("Put com Clear falho deveria suceder: (%d,%v,%v)", got, created, err)
-	}
-	if n := s.ClearFailuresForTest(); n != 1 {
-		t.Fatalf("clearFailures: esperado 1, obtido %d", n)
-	}
-	rec, _, ok, err := s.GetByKey([]byte("cl"), nil)
-	if err != nil || !ok || rec.Sequence != 2 {
-		t.Fatalf("estado novo deveria estar visível: (%+v,%v,%v)", rec, ok, err)
-	}
-	// Falso positivo residual: a posting antiga permanece (Clear falhou)…
-	itStart, err := s.LookupBitmap(fldStatus, strVal("Start"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if rows := collectRows(t, itStart); !slices.Equal(rows, []types.RowID{id}) {
-		t.Fatalf("posting antiga deveria sobrar como falso positivo: %v", rows)
-	}
-	// …e a nova existe (Set rodou pré-commit).
-	itStop, err := s.LookupBitmap(fldStatus, strVal("Stop"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if rows := collectRows(t, itStop); !slices.Equal(rows, []types.RowID{id}) {
-		t.Fatalf("posting nova: %v", rows)
-	}
-	// Writer segue utilizável: erro tolerado não é sticky.
-	s.SetClearErrHookForTest(nil)
-	mustPut(t, s, "cl2", 1, statusPayload(t, s, "cl2", "Start", 1), nil)
-}
+// O TestErroToleradoNoClearContabilizaEPreservaCommit (Round 2 N4) saiu daqui, e
+// não foi migrado, porque o que ele media deixou de existir: a fase de CLEAR.
+//
+// Ele afirmava que um erro pós-commit era TOLERADO — o Put sucedia, o contador
+// clearFailures registrava, a posting antiga sobrava como falso positivo e a
+// nova existia. No índice por segmento não há Clear (spec §5.2), então não há
+// erro pós-commit a tolerar nem contador a manter: o passo 8 do applyRecord
+// simplesmente não existe.
+//
+// As duas metades que continuam sendo propriedade do produto sobreviveram, e sem
+// encenação nenhuma: que a posting do valor antigo permanece como falso positivo
+// e que a do valor novo existe é o que o TestPostingOrfaEhSupersetEOExecutorFiltra
+// e o TestUpdateRemoveAPostingDoValorAntigo afirmam com um update comum.
 
 func TestCheckpointConcorrenteComPutSerializa(t *testing.T) {
 	// S11-I2: writer-only deixou de ser convenção — o mutex do writer

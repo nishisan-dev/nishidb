@@ -17,9 +17,9 @@
 //
 //   - lock de dataset (storage.ErrDatasetLocked): não há diretório nem Open
 //     aqui, então não existe exclusão mútua a violar;
-//   - Options.BitmapFieldNames e AllowBitmapDrop: o análogo é o struct
-//     Indexes, fixado na criação — não há backfill nem drop autorizado a
-//     testar, e o conjunto de índices nunca muda em vida;
+//   - Options.BitmapFieldNames: o análogo é o struct Indexes, fixado na
+//     criação — o conjunto de índices nunca muda na vida do fake, que é a
+//     mesma promessa que o Store real faz;
 //   - modo falho sticky (types.ErrWriterFailed): o fake não tem append
 //     durável, então nada o mata. O Apply (Q10) precisa exercitar esse
 //     caminho e vai instalar um seam de injeção quando o teste existir;

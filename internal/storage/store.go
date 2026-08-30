@@ -16,8 +16,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/nishisan-dev/nishidb/internal/index/bitmap"
-	hashidx "github.com/nishisan-dev/nishidb/internal/index/hash"
 	"github.com/nishisan-dev/nishidb/internal/index/primary"
 	"github.com/nishisan-dev/nishidb/internal/index/segindex"
 	"github.com/nishisan-dev/nishidb/internal/index/valuekey"
@@ -104,7 +102,13 @@ type Options struct {
 	Dir           string
 	SegmentSize   int64  // default 512 MiB; teto validado pelo segment
 	EstimatedRows uint64 // pre-sizing da primary (piso 1<<20 slots)
-	// BitmapFields são os campos com índice bitmap, por ID.
+	// BitmapFields são campos indexados, por ID.
+	//
+	// O nome sobrevive ao motor que o batizou: com um motor só, ele e o
+	// HashFields alimentam o MESMO índice por segmento, e a união dos dois é o
+	// conjunto indexado do dataset. Continuam separados enquanto o planner não
+	// é unificado — trocá-los por um campo só é a mesma mudança que aposenta
+	// `index: hash` e `index: bitmap` no YAML.
 	BitmapFields []types.FieldID
 	// BitmapFieldNames são os mesmos campos por NOME, resolvidos pelo
 	// dicionário do próprio dataset durante o Open (criando a entry se
@@ -113,24 +117,13 @@ type Options struct {
 	// IDs aqui obrigaria a abrir o dataset sem índices, compilar, fechar e
 	// reabrir. Os dois campos se somam (união).
 	BitmapFieldNames []string
-	// AllowBitmapDrop autoriza abrir o dataset SEM um campo que o manifest
-	// declara como indexado. Fora disso é erro: o índice ficaria em disco
-	// parando de ser atualizado e, se o campo voltasse depois, reapareceria
-	// INCOMPLETO — falso negativo silencioso em query.
-	AllowBitmapDrop bool
 
-	// HashFields e HashFieldNames são os campos com índice hash, pelos MESMOS
-	// dois caminhos e pelas MESMAS razões dos de bitmap acima: ID para quem já
-	// resolveu o dicionário, NOME para quem ainda não pôde compilar o schema.
-	// Os dois se somam (união).
+	// HashFields e HashFieldNames são campos indexados pelos MESMOS dois
+	// caminhos e pelas MESMAS razões dos de cima: ID para quem já resolveu o
+	// dicionário, NOME para quem ainda não pôde compilar o schema. Os quatro se
+	// somam (união).
 	HashFields     []types.FieldID
 	HashFieldNames []string
-	// AllowHashDrop é o simétrico do AllowBitmapDrop, e existe pelo mesmo modo
-	// de falha: abrir o dataset sem um campo que o manifest declara indexado
-	// deixaria o índice em disco parando de receber sets e clears, e ele
-	// reapareceria INCOMPLETO se o campo voltasse — falso negativo silencioso
-	// em query.
-	AllowHashDrop bool
 
 	// Modo é a engine do dataset (ver o tipo). O default — o zero value — é o
 	// dataset materializado, e é isso que faz todo dataset já em disco
@@ -347,22 +340,11 @@ type Store struct {
 	expAtiva   atomic.Bool
 	// agora é o relógio da expiração. Campo, e não time.Now direto, porque um
 	// teste de prazo precisa avançar o tempo sem dormir.
-	agora   func() time.Time
-	bitmaps map[types.FieldID]*bitmap.Index
-	// hashes é o segundo motor de índice secundário. Mapa à parte do bitmaps, e
-	// não um mapa de interface: os dois têm formatos de arquivo, ciclos de
-	// crescimento e contratos de remoção diferentes, e uma interface comum
-	// esconderia justamente as diferenças que o applyRecord precisa respeitar.
-	hashes map[types.FieldID]*hashidx.Index
+	agora func() time.Time
 
 	// wips são os índices de segmento MUTÁVEIS — um por campo indexado, todos
 	// do segmento corrente. Mapa e não slice porque o applyRecord endereça por
 	// FieldID, uma vez por campo do payload.
-	//
-	// Enquanto durar a migração, este motor CONVIVE com os bitmaps e os hashes
-	// acima: eles seguem sendo mantidos em toda escrita e já não respondem a
-	// consulta nenhuma. É andaime declarado, não fallback — os dois pacotes
-	// antigos saem na tarefa seguinte.
 	//
 	// A LEITURA DO MAPA PELO CAMINHO DE ESCRITA (aplicaIndiceSets) dispensa o
 	// selMu, e a razão é que ele já tem o wmu na mão: as duas únicas escritas
@@ -386,8 +368,9 @@ type Store struct {
 	// mesmo evento, a rotação de segmento.
 	selMu sync.RWMutex
 	// camposIndexados é o conjunto ordenado, resolvido no Open e IMUTÁVEL na
-	// vida do Store — a mesma promessa de estabilidade que HasBitmap e HasHash
-	// já fazem, e o que permite responder a CamposIndexados sem lock.
+	// vida do Store. É ele que responde HasBitmap, HasHash, BitmapFields,
+	// HashFields e CamposIndexados, e a imutabilidade é o que permite responder
+	// aos cinco sem lock.
 	camposIndexados []types.FieldID
 	// chaveIndiceBuf é o buffer da chave canônica do índice por segmento,
 	// reusado a cada campo de cada evento. É do Store, e writer-only, pelo
@@ -476,9 +459,6 @@ type Store struct {
 	// enquanto durou, o /v1/stats e a nishidb_garbage_bytes descreveram um
 	// dataset que não existe. Ver conferaEspelhos.
 	espelhosDivergentes atomic.Uint64
-	// clearFailures conta erros tolerados na fase de Clear dos bitmaps
-	// (deixam falso positivo, filtrado pelo §44); exposto via métricas na S13.
-	clearFailures atomic.Uint64
 	// stickyErr: primeiro erro pós-Append ou de durabilidade. Sem rollback
 	// parcial, o writer fica FALHO até Close + reabertura com recovery.
 	// Protegido por wmu.
@@ -662,11 +642,22 @@ type Store struct {
 	// que "houve fsync depois do rename e antes do manifest" vira asserção
 	// sobre o disco, e não sobre a ordem em que alguém escreveu rótulos.
 	apDirSync func(dir string)
-	// clearErrHook/setErrHook são seams de teste das fases de Clear e Set
-	// dos bitmaps (nil em produção; setErrHook viabiliza o phantom commit
-	// com payload replayável).
-	clearErrHook func(types.FieldID) error
-	setErrHook   func(types.FieldID) error
+	// setErrHook é o seam de teste da fase de SET do índice (nil em produção).
+	//
+	// Ele é o único jeito de produzir o phantom commit do §14.12 com payload
+	// REPLAYÁVEL: um erro depois do Append e antes da publicação da location,
+	// que é onde não existe rollback parcial. Todo outro caminho até esse ponto
+	// ou é recusado antes do Append (o teto do valor indexável) ou grava um
+	// record que o replay não conseguiria reindexar — e um dataset inabrível
+	// não serve de montagem para nada.
+	//
+	// Ele mora no motor por segmento desde que os dois motores globais saíram.
+	// A migração do seam é o que preserva os sete cenários que dependem dele
+	// (writer sticky, phantom commit em insert e em update, recusa da compaction
+	// com o writer morto): nenhum deles fala de bitmap ou de hash — todos falam
+	// de "erro pós-Append" —, e deixá-los sem seam trocaria sete provas por
+	// nenhuma.
+	setErrHook func(types.FieldID) error
 
 	// segTally acumula os totais por segmento que o writer conhece (para as
 	// stats do manifest §9; em memória — a S12 os reconstrói no replay).
@@ -805,8 +796,6 @@ func Open(opts Options) (*Store, error) {
 	}
 	s := &Store{
 		opts:     opts,
-		bitmaps:  make(map[types.FieldID]*bitmap.Index),
-		hashes:   make(map[types.FieldID]*hashidx.Index),
 		segTally: make(map[uint32]*segStats),
 		segSize:  make(map[uint32]int64),
 		agora:    time.Now,
@@ -952,6 +941,22 @@ func Open(opts Options) (*Store, error) {
 	// entre os dois grupos é tão contratual quanto a ordem dentro de cada um,
 	// porque ela decide o mapeamento nome→id de um dataset novo, que é gravado
 	// para sempre.
+	//
+	// NÃO HÁ VALIDAÇÃO DO CONJUNTO CONTRA O MANIFEST, e a ausência é a decisão.
+	// Eram duas, e recusavam (1) abrir sem um campo que o dataset declara
+	// indexado e (2) declarar um índice num dataset que já tem linhas. As duas
+	// eram sobre a mesma coisa: um índice GLOBAL que cobriria só um pedaço do
+	// dataset e responderia MENOS linhas do que existem — falso negativo, que a
+	// revalidação do §44 não sabe consertar porque ela só descarta candidato a
+	// mais. Com o índice por segmento, segmento sem a seção do campo não
+	// responde menos: ele ENUMERA as linhas dele como candidatas (spec §3.2), e
+	// o resultado é o mesmo, só mais caro. Uma guarda que recusa a subida para
+	// evitar um dano que não pode mais acontecer é obstáculo, não proteção — e o
+	// manifest deixou de carregar o conjunto contra o qual ela decidia.
+	//
+	// O que ainda NÃO existe é a outra metade do débito 22: acrescentar um campo
+	// indexado a um dataset povoado é aceito daqui em diante, mas nada agenda a
+	// reconstrução dos segmentos antigos — eles enumeram indefinidamente.
 	campos, err := s.resolveCamposIndexados(opts.BitmapFields, opts.BitmapFieldNames, "bitmap")
 	if err != nil {
 		return nil, err
@@ -960,34 +965,7 @@ func Open(opts Options) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	if m != nil {
-		if err := validaBitmapsContraManifest(m, campos, opts.AllowBitmapDrop); err != nil {
-			return nil, err
-		}
-		if err := validaHashesContraManifest(m, camposHash, opts.AllowHashDrop); err != nil {
-			return nil, err
-		}
-	}
-	for _, field := range campos {
-		dir := filepath.Join(idxDir, "bitmap", fmt.Sprintf("%05d", field))
-		ix, err := bitmap.Open(dir, field)
-		if err != nil {
-			return nil, err
-		}
-		s.bitmaps[field] = ix
-	}
-	// O hash é dimensionado pelo MESMO EstimatedRows da primary, e não por um
-	// piso próprio: ele tem uma posting por row indexada, exatamente como a
-	// primary tem uma entrada por key. Subdimensionar aqui não perde dado —
-	// custa uma reconstrução, que reescreve o arquivo inteiro.
-	minSlotsHash := max(uint64(1<<10), opts.EstimatedRows*10/7)
-	for _, field := range camposHash {
-		ix, err := hashidx.Open(hashidx.Path(filepath.Join(idxDir, "hash"), field), field, minSlotsHash)
-		if err != nil {
-			return nil, err
-		}
-		s.hashes[field] = ix
-	}
+
 	switch {
 	case errors.Is(mErr, checkpoint.ErrNoManifest) && semRecords(refs):
 		// Dataset novo. Entram aqui tanto o diretório virgem quanto o
@@ -1065,6 +1043,13 @@ func Open(opts Options) (*Store, error) {
 	if err := s.Checkpoint(); err != nil {
 		return nil, err
 	}
+	// A limpeza dos índices globais legados vem DEPOIS deste checkpoint, e a
+	// ordem é a única coisa que a torna segura: é ele que grava o manifest v3,
+	// e é o v3 que faz um binário anterior recusar o dataset. Antes dele o
+	// dataset ainda pode ser aberto pelo binário que criou aqueles arquivos, e
+	// apagá-los ali deixaria justamente o índice INCOMPLETO que este ciclo
+	// inteiro existe para tornar impossível.
+	limparIndicesGlobaisLegados(s.opts.Log, idxDir)
 	ok = true
 	return s, nil
 }
@@ -1138,116 +1123,50 @@ func (s *Store) resolveCamposIndexados(ids []types.FieldID, nomesDeclarados []st
 	return out, nil
 }
 
-// validaBitmapsContraManifest rejeita as duas divergências que produzem
-// índice incompleto sem sintoma. Query indexada é SUPERSET revalidado
-// (§44): falso positivo o executor filtra, falso negativo ninguém recupera.
-func validaBitmapsContraManifest(m *checkpoint.Manifest, campos []types.FieldID, permiteDrop bool) error {
-	declarado := make(map[types.FieldID]bool, len(campos))
-	for _, field := range campos {
-		declarado[field] = true
-	}
-	noManifest := make(map[types.FieldID]bool, len(m.Bitmaps))
-	for _, bi := range m.Bitmaps {
-		noManifest[bi.FieldID] = true
-	}
-
-	// (1) Índice que o dataset tem e que esta abertura não declara: ele
-	// pararia de receber sets/clears e reapareceria incompleto se o campo
-	// voltasse.
-	if !permiteDrop {
-		var abandonados []types.FieldID
-		for _, bi := range m.Bitmaps {
-			if !declarado[bi.FieldID] {
-				abandonados = append(abandonados, bi.FieldID)
-			}
-		}
-		if len(abandonados) > 0 {
-			return fmt.Errorf(
-				"%w: o manifest declara índice bitmap para o(s) campo(s) %v, ausente(s) desta abertura; "+
-					"abrir assim faria o índice parar de ser atualizado e reaparecer INCOMPLETO depois. "+
-					"Declare o(s) campo(s) em BitmapFields/BitmapFieldNames ou use AllowBitmapDrop",
-				ErrDatasetCorrupt, abandonados)
-		}
-	}
-
-	// (2) Índice declarado agora que o dataset não tem, com rows já
-	// gravadas: ele nasceria cobrindo só o que vier daqui pra frente, e as
-	// rows antigas ficariam invisíveis à query indexada. Reconstruir o
-	// índice (backfill) não existe no M1.
-	if m.RowCount > 0 {
-		var semBackfill []types.FieldID
-		for _, field := range campos {
-			if !noManifest[field] {
-				semBackfill = append(semBackfill, field)
-			}
-		}
-		if len(semBackfill) > 0 {
-			return fmt.Errorf(
-				"%w: campo(s) %v declarado(s) com índice bitmap num dataset que já tem %d rows; "+
-					"o índice cobriria apenas os records futuros e a query indexada omitiria as rows antigas. "+
-					"Reconstrução de índice não existe no M1 — crie o dataset já com o campo indexado",
-				ErrDatasetCorrupt, semBackfill, m.RowCount)
-		}
-	}
-	return nil
-}
-
-// validaHashesContraManifest é o simétrico de validaBitmapsContraManifest, e
-// recusa as MESMAS duas divergências pelo MESMO motivo: query indexada é
-// SUPERSET revalidado (§44), então falso positivo o executor filtra e falso
-// negativo ninguém recupera.
+// limparIndicesGlobaisLegados apaga os arquivos dos dois motores de índice que
+// este binário não tem mais: indexes/bitmap/ e indexes/hash/.
 //
-// São duas funções e não uma parametrizada porque as mensagens são o produto
-// aqui: elas nomeiam a opção de configuração que o operador tem de mexer
-// (BitmapFieldNames/AllowBitmapDrop contra HashFieldNames/AllowHashDrop), e um
-// erro genérico mandaria procurar a chave errada no YAML.
-func validaHashesContraManifest(m *checkpoint.Manifest, campos []types.FieldID, permiteDrop bool) error {
-	declarado := make(map[types.FieldID]bool, len(campos))
-	for _, field := range campos {
-		declarado[field] = true
-	}
-	noManifest := make(map[types.FieldID]bool, len(m.Hashes))
-	for _, hi := range m.Hashes {
-		noManifest[hi.FieldID] = true
-	}
-
-	// (1) Índice que o dataset tem e que esta abertura não declara.
-	if !permiteDrop {
-		var abandonados []types.FieldID
-		for _, hi := range m.Hashes {
-			if !declarado[hi.FieldID] {
-				abandonados = append(abandonados, hi.FieldID)
-			}
+// Eles não têm leitor nenhum a partir daqui, e por isso não podem ficar. O
+// IndexBytes soma o diretório indexes/ inteiro (retencao.go), então deixá-los
+// seria publicar disco ocupado que nada no produto explica — e num dataset
+// grande a soma dos dois é da ordem do próprio dado. É o mesmo modo de falha
+// que o .widx órfão de segmento aposentado já obrigou a fechar: métrica de
+// disco que aponta para arquivo que ninguém sabe nomear vira, na próxima
+// investigação, uma hipótese errada sobre onde o espaço foi.
+//
+// Só o dataset LEGADO tem esses diretórios; num dataset criado por este binário
+// o Stat falha e nada acontece. E o momento importa: ela roda DEPOIS do
+// checkpoint incondicional do Open, que é quem grava o manifest v3 — a partir
+// dali um binário anterior recusa o dataset com "version desconhecida", e não
+// existe mais volta que fosse usar estes arquivos. Chamada antes daquele
+// checkpoint, ela deixaria uma janela em que o binário antigo ainda abre o
+// dataset e reconstrói os índices dele VAZIOS, que é o falso negativo silencioso
+// que este ciclo inteiro existe para tornar impossível.
+//
+// Falha NÃO impede a abertura, e a assimetria é deliberada: o que está em jogo é
+// disco desperdiçado, não corretude. Recusar o Open por um RemoveAll que não deu
+// certo trocaria um dataset que funciona por um dataset fora do ar. Fica o WARN
+// nomeado, e a próxima abertura tenta de novo.
+func limparIndicesGlobaisLegados(log *logging.Logger, idxDir string) {
+	for _, motor := range []string{"bitmap", "hash"} {
+		dir := filepath.Join(idxDir, motor)
+		if _, err := os.Stat(dir); err != nil {
+			continue
 		}
-		if len(abandonados) > 0 {
-			return fmt.Errorf(
-				"%w: o manifest declara índice hash para o(s) campo(s) %v, ausente(s) desta abertura; "+
-					"abrir assim faria o índice parar de ser atualizado e reaparecer INCOMPLETO depois. "+
-					"Declare o(s) campo(s) em HashFields/HashFieldNames ou use AllowHashDrop",
-				ErrDatasetCorrupt, abandonados)
+		// Medido ANTES do RemoveAll e pela MESMA função do IndexBytes: é assim
+		// que o número do log é o mesmo que o operador vê descer na
+		// nishidb_index_bytes, em vez de uma segunda contagem que diverge.
+		ocupado := blocosDoDiretorio(dir)
+		if err := os.RemoveAll(dir); err != nil {
+			log.Warn("indice.legado_nao_removido",
+				"o índice global de um binário anterior continuou em disco; ele não tem leitor e é contado pelo index_bytes",
+				"diretorio", dir, "bytes", ocupado, "erro", err.Error())
+			continue
 		}
+		log.Info("indice.legado_removido",
+			"o índice global de um binário anterior foi apagado; este binário responde pelo índice por segmento",
+			"diretorio", dir, "bytes", ocupado)
 	}
-
-	// (2) Índice declarado agora sobre dataset que já tem rows: ele cobriria
-	// só o que vier daqui pra frente, e as rows antigas ficariam invisíveis à
-	// query indexada. O backfill continua não existindo — o débito 22 não
-	// fecha com este motor, ele passa a ter DOIS motores a reconstruir.
-	if m.RowCount > 0 {
-		var semBackfill []types.FieldID
-		for _, field := range campos {
-			if !noManifest[field] {
-				semBackfill = append(semBackfill, field)
-			}
-		}
-		if len(semBackfill) > 0 {
-			return fmt.Errorf(
-				"%w: campo(s) %v declarado(s) com índice hash num dataset que já tem %d rows; "+
-					"o índice cobriria apenas os records futuros e a query indexada omitiria as rows antigas. "+
-					"Reconstrução de índice não existe (débito 22) — crie o dataset já com o campo indexado",
-				ErrDatasetCorrupt, semBackfill, m.RowCount)
-		}
-	}
-	return nil
 }
 
 // fsyncDir durabiliza as entradas de um diretório.
@@ -1266,51 +1185,43 @@ func fsyncDir(dir string) error {
 // FieldDict expõe o dicionário de campos do dataset.
 func (s *Store) FieldDict() *fielddict.Dict { return s.dict }
 
-// HasBitmap informa se o campo tem índice bitmap.
+// HasBitmap informa se o campo é indexado.
 //
 // É o capability check do planner: sem ele o plano escolhe o caminho
 // indexado e a query falha em RUNTIME, em vez de degradar para full scan
 // como o design promete. O conjunto é fixado no Open, então a resposta é
 // estável durante toda a vida do Store.
+//
+// Ele e o HasHash respondem HOJE PELA MESMA FONTE — o conjunto indexado do
+// dataset —, porque existe um motor só. Os dois nomes sobrevivem enquanto o
+// planner não é unificado, e a duplicação é temporária por desenho: enquanto
+// eles não colapsam num Indexado, a suíte que os exercita continua valendo sem
+// uma linha mudada.
 func (s *Store) HasBitmap(field types.FieldID) bool {
-	_, ok := s.bitmaps[field]
-	return ok
+	return slices.Contains(s.camposIndexados, field)
 }
 
-// BitmapFields devolve, em ordem crescente, os campos com índice bitmap.
-func (s *Store) BitmapFields() []types.FieldID {
-	out := make([]types.FieldID, 0, len(s.bitmaps))
-	for field := range s.bitmaps {
-		out = append(out, field)
-	}
-	slices.Sort(out)
-	return out
-}
+// BitmapFields devolve, em ordem crescente, os campos indexados.
+//
+// Cópia, e não o slice interno: o conjunto é imutável por contrato, e devolver
+// a fatia de dentro deixaria qualquer chamador quebrar a promessa por engano.
+func (s *Store) BitmapFields() []types.FieldID { return slices.Clone(s.camposIndexados) }
 
-// HasHash informa se o campo tem índice hash FÍSICO.
+// HasHash informa se o campo é indexado — hoje, a MESMA pergunta que o
+// HasBitmap, pela mesma fonte (ver o godoc dele).
 //
-// É o capability check por campo que o planner já esperava (a interface
-// HashCapable, planner.go). Enquanto ele não existia, `p.hash` era nil e toda
-// igualdade sobre coluna declarada com `index: hash` degradava para FullScan —
-// que é correto e inutilizável: no piloto, 17,8M linhas varridas por uma
-// consulta que o índice resolve em um probe.
-//
-// O conjunto é fixado no Open, então a resposta é estável durante toda a vida
-// do Store.
+// Ele existe porque era o capability check por campo que o planner já esperava
+// (a interface HashCapable, planner.go). Enquanto ele não existia, `p.hash` era
+// nil e toda igualdade sobre coluna declarada com `index: hash` degradava para
+// FullScan — que é correto e inutilizável: no piloto, 17,8M linhas varridas por
+// uma consulta que o índice resolve em um probe.
 func (s *Store) HasHash(field types.FieldID) bool {
-	_, ok := s.hashes[field]
-	return ok
+	return slices.Contains(s.camposIndexados, field)
 }
 
-// HashFields devolve, em ordem crescente, os campos com índice hash.
-func (s *Store) HashFields() []types.FieldID {
-	out := make([]types.FieldID, 0, len(s.hashes))
-	for field := range s.hashes {
-		out = append(out, field)
-	}
-	slices.Sort(out)
-	return out
-}
+// HashFields devolve, em ordem crescente, os campos indexados — o mesmo
+// conjunto que o BitmapFields, pela mesma razão.
+func (s *Store) HashFields() []types.FieldID { return slices.Clone(s.camposIndexados) }
 
 // lookup resolve a key pela primary, lendo o record corrente em buf.
 // exists = key presente; live = sem flag de tombstone na location.
@@ -1664,24 +1575,9 @@ func (s *Store) applyRecord(a recordApply) error {
 			}
 		}
 	}
-	// 5. fase de SET dos índices secundários ANTES do commit: a janela entre
+	// 5. fase de SET do índice secundário ANTES do commit: a janela entre
 	// índice e location é sempre um SUPERSET de candidatos (falso positivo,
 	// filtrado pela revalidação §44) — nunca falso negativo.
-	if len(s.bitmaps) > 0 {
-		if err := s.applyBitmapSets(a.rowID, a.prevPayload, a.payload); err != nil {
-			return err
-		}
-	}
-	if len(s.hashes) > 0 {
-		if err := s.applyHashSets(a.rowID, a.prevPayload, a.payload); err != nil {
-			return err
-		}
-	}
-	// O índice por segmento entra no MESMO passo 5 e pela mesma razão, DEPOIS
-	// dos dois motores antigos: enquanto a migração durar, quem decide se um
-	// valor é indexável continua sendo o motor que responde às consultas, e
-	// inverter a ordem trocaria o erro que a ingestão vê por um erro
-	// equivalente vindo de um índice que ninguém lê.
 	if len(s.wips) > 0 {
 		if err := s.aplicaIndiceSets(a.rowID, a.payload); err != nil {
 			return err
@@ -1750,14 +1646,12 @@ func (s *Store) applyRecord(a recordApply) error {
 			return err
 		}
 	}
-	// 8. fase de CLEAR dos índices secundários DEPOIS do commit: erro aqui
-	// deixa só falso positivo (tolerável; contabilizado p/ métricas da S13).
-	if len(s.bitmaps) > 0 {
-		s.applyBitmapClears(a.rowID, a.prevPayload, a.payload)
-	}
-	if len(s.hashes) > 0 {
-		s.applyHashClears(a.rowID, a.prevPayload, a.payload)
-	}
+	// NÃO HÁ passo 8. A fase de CLEAR saiu junto com os motores globais, e a
+	// ausência é o desenho (spec §5.2): a posting do valor antigo mora no índice
+	// do segmento ANTIGO, vira falso positivo — que a revalidação do §44
+	// descarta — e morre quando a compaction ou a retenção aposenta aquele
+	// segmento. Com o Clear somem a lápide, a categoria inteira de "o replay
+	// esqueceu de limpar" e o falso negativo que a lápide existia para evitar.
 	return nil
 }
 
@@ -1946,21 +1840,17 @@ func (s *Store) validatePayloadAgainstDataset(payload []byte) error {
 		if _, known := s.dict.Name(id); !known {
 			return fmt.Errorf("%w: fieldID %d não existe no dicionário", ErrInvalidArgument, id)
 		}
-		if _, indexado := s.bitmaps[id]; indexado {
+		// A chave canônica do índice é a MESMA em todo caminho — ingestão,
+		// reconstrução e consulta —, então validá-la aqui é o que impede o dano
+		// fatal descrito acima. O conjunto consultado é o camposIndexados, e não
+		// o mapa de WIPs: durante a janela de rotação em que os WIPs estão
+		// fechados o mapa fica vazio, e validar por ele deixaria passar
+		// justamente o record que a reconstrução seguinte não conseguiria
+		// indexar.
+		if slices.Contains(s.camposIndexados, id) {
 			if err := valuekey.Validate(v); err != nil {
 				nome, _ := s.dict.Name(id)
-				return fmt.Errorf("%w: campo %d (%q) tem índice bitmap: %w", ErrInvalidArgument, id, nome, err)
-			}
-		}
-		// O hash paga o MESMO pedágio, e pelo mesmo motivo fatal: a chave
-		// canônica é a mesma, e um valor que ela recusa só apareceria na fase
-		// de Set, DEPOIS do append. O record ficaria durável no segmento, o
-		// replay do tail tentaria reindexá-lo a cada abertura e falharia
-		// sempre — um único evento externo tornaria o dataset INABRÍVEL.
-		if _, indexado := s.hashes[id]; indexado {
-			if err := valuekey.Validate(v); err != nil {
-				nome, _ := s.dict.Name(id)
-				return fmt.Errorf("%w: campo %d (%q) tem índice hash: %w", ErrInvalidArgument, id, nome, err)
+				return fmt.Errorf("%w: campo %d (%q) é indexado: %w", ErrInvalidArgument, id, nome, err)
 			}
 		}
 	}
@@ -2004,215 +1894,6 @@ func (s *Store) replayValidator(key []byte, rowID types.RowID) primary.ValidateF
 		}
 		return byRead(rid)
 	}
-}
-
-// valueEqual compara duas Values de mesmo campo.
-func valueEqual(a, b types.Value) bool {
-	if a.Type != b.Type {
-		return false
-	}
-	// CarregaI64 e não um switch local: tipo de largura fixa esquecido no
-	// ramo de bytes compara nil com nil e devolve true para valores
-	// diferentes, e o diff conclui em silêncio que o campo não mudou.
-	if a.Type.CarregaI64() {
-		return a.I64 == b.I64
-	}
-	return bytes.Equal(a.Bytes, b.Bytes)
-}
-
-// applyBitmapSets liga as postings novas (campo que entra ou muda) — roda
-// ANTES do publish. Campo com o mesmo valor não toca o bitmap.
-func (s *Store) applyBitmapSets(rowID types.RowID, prevPayload, newPayload []byte) error {
-	var pr, nr encoding.FieldReader
-	pr.Reset(prevPayload)
-	nr.Reset(newPayload)
-	pid, pv, pok := pr.Next()
-	nid, nv, nok := nr.Next()
-	for pok || nok {
-		switch {
-		case pok && (!nok || pid < nid):
-			// Campo que sai: o Clear correspondente roda pós-commit.
-			pid, pv, pok = pr.Next()
-		case nok && (!pok || nid < pid):
-			if ix := s.bitmaps[nid]; ix != nil {
-				if err := s.setBit(ix, nid, nv, rowID); err != nil {
-					return err
-				}
-			}
-			nid, nv, nok = nr.Next()
-		default: // pid == nid
-			if ix := s.bitmaps[pid]; ix != nil && !valueEqual(pv, nv) {
-				if err := s.setBit(ix, pid, nv, rowID); err != nil {
-					return err
-				}
-			}
-			pid, pv, pok = pr.Next()
-			nid, nv, nok = nr.Next()
-		}
-	}
-	if err := pr.Err(); err != nil {
-		return err
-	}
-	return nr.Err()
-}
-
-// setBit executa o Set com o seam de injeção de erro dos testes (phantom
-// commit precisa de falha pós-Append com payload replayável).
-func (s *Store) setBit(ix *bitmap.Index, field types.FieldID, v types.Value, rowID types.RowID) error {
-	if s.setErrHook != nil {
-		if err := s.setErrHook(field); err != nil {
-			return err
-		}
-	}
-	return ix.Set(v, rowID)
-}
-
-// applyBitmapClears desliga as postings antigas (campo que sai ou muda) —
-// roda DEPOIS do publish. Erro aqui deixa apenas falso positivo (a
-// revalidação §44 filtra); é contabilizado em clearFailures.
-func (s *Store) applyBitmapClears(rowID types.RowID, prevPayload, newPayload []byte) {
-	var pr, nr encoding.FieldReader
-	pr.Reset(prevPayload)
-	nr.Reset(newPayload)
-	pid, pv, pok := pr.Next()
-	nid, nv, nok := nr.Next()
-	for pok || nok {
-		switch {
-		case pok && (!nok || pid < nid):
-			if ix := s.bitmaps[pid]; ix != nil {
-				if err := s.clearBit(ix, pid, pv, rowID); err != nil {
-					s.clearFailures.Add(1)
-				}
-			}
-			pid, pv, pok = pr.Next()
-		case nok && (!pok || nid < pid):
-			nid, nv, nok = nr.Next()
-		default: // pid == nid
-			if ix := s.bitmaps[pid]; ix != nil && !valueEqual(pv, nv) {
-				if err := s.clearBit(ix, pid, pv, rowID); err != nil {
-					s.clearFailures.Add(1)
-				}
-			}
-			pid, pv, pok = pr.Next()
-			nid, nv, nok = nr.Next()
-		}
-	}
-	if pr.Err() != nil || nr.Err() != nil {
-		s.clearFailures.Add(1)
-	}
-}
-
-// clearBit executa o Clear com o seam de injeção de erro dos testes do
-// caminho tolerado (nil em produção).
-func (s *Store) clearBit(ix *bitmap.Index, field types.FieldID, v types.Value, rowID types.RowID) error {
-	if s.clearErrHook != nil {
-		if err := s.clearErrHook(field); err != nil {
-			return err
-		}
-	}
-	return ix.Clear(v, rowID)
-}
-
-// applyHashSets liga as postings novas (campo que entra ou muda) — roda ANTES
-// do publish, no MESMO ponto e na MESMA forma do applyBitmapSets. Campo com o
-// mesmo valor não toca o índice.
-func (s *Store) applyHashSets(rowID types.RowID, prevPayload, newPayload []byte) error {
-	var pr, nr encoding.FieldReader
-	pr.Reset(prevPayload)
-	nr.Reset(newPayload)
-	pid, pv, pok := pr.Next()
-	nid, nv, nok := nr.Next()
-	for pok || nok {
-		switch {
-		case pok && (!nok || pid < nid):
-			// Campo que sai: o Clear correspondente roda pós-commit.
-			pid, pv, pok = pr.Next()
-		case nok && (!pok || nid < pid):
-			if ix := s.hashes[nid]; ix != nil {
-				if err := s.setHash(ix, nid, nv, rowID); err != nil {
-					return err
-				}
-			}
-			nid, nv, nok = nr.Next()
-		default: // pid == nid
-			if ix := s.hashes[pid]; ix != nil && !valueEqual(pv, nv) {
-				if err := s.setHash(ix, pid, nv, rowID); err != nil {
-					return err
-				}
-			}
-			pid, pv, pok = pr.Next()
-			nid, nv, nok = nr.Next()
-		}
-	}
-	if err := pr.Err(); err != nil {
-		return err
-	}
-	return nr.Err()
-}
-
-// setHash executa o Set com o MESMO seam de injeção de erro dos bitmaps: o
-// phantom commit do §14.12 precisa de falha pós-Append com payload replayável,
-// e o seam é por CAMPO — quem instala escolhe o campo, não o motor.
-func (s *Store) setHash(ix *hashidx.Index, field types.FieldID, v types.Value, rowID types.RowID) error {
-	if s.setErrHook != nil {
-		if err := s.setErrHook(field); err != nil {
-			return err
-		}
-	}
-	return ix.Set(v, rowID)
-}
-
-// applyHashClears desliga as postings antigas (campo que sai ou muda) — roda
-// DEPOIS do publish. Erro aqui deixa apenas falso positivo (a revalidação §44
-// filtra); é contabilizado em clearFailures.
-//
-// A diferença em relação ao applyBitmapClears está no ARGUMENTO: o Clear do
-// hash recebe também o valor ATUAL da row. O porquê está no godoc dele — o
-// índice hash endereça por um hash de 64 bits, e quando velho e novo caem no
-// mesmo slot a remoção apagaria a posting que o Set acabou de afirmar. O
-// bitmap não tem esse problema porque o values.dict distingue os valores
-// exatamente.
-func (s *Store) applyHashClears(rowID types.RowID, prevPayload, newPayload []byte) {
-	var pr, nr encoding.FieldReader
-	pr.Reset(prevPayload)
-	nr.Reset(newPayload)
-	pid, pv, pok := pr.Next()
-	nid, nv, nok := nr.Next()
-	for pok || nok {
-		switch {
-		case pok && (!nok || pid < nid):
-			if ix := s.hashes[pid]; ix != nil {
-				// Campo que SAIU da row: não há valor a preservar.
-				if err := s.clearHash(ix, pid, pv, types.Value{}, rowID); err != nil {
-					s.clearFailures.Add(1)
-				}
-			}
-			pid, pv, pok = pr.Next()
-		case nok && (!pok || nid < pid):
-			nid, nv, nok = nr.Next()
-		default: // pid == nid
-			if ix := s.hashes[pid]; ix != nil && !valueEqual(pv, nv) {
-				if err := s.clearHash(ix, pid, pv, nv, rowID); err != nil {
-					s.clearFailures.Add(1)
-				}
-			}
-			pid, pv, pok = pr.Next()
-			nid, nv, nok = nr.Next()
-		}
-	}
-	if pr.Err() != nil || nr.Err() != nil {
-		s.clearFailures.Add(1)
-	}
-}
-
-// clearHash executa o Clear com o seam de injeção de erro do caminho tolerado.
-func (s *Store) clearHash(ix *hashidx.Index, field types.FieldID, velho, atual types.Value, rowID types.RowID) error {
-	if s.clearErrHook != nil {
-		if err := s.clearErrHook(field); err != nil {
-			return err
-		}
-	}
-	return ix.Clear(velho, atual, rowID)
 }
 
 // liveIterator percorre lazy as rows vivas até o limite fixado na criação.
@@ -2537,16 +2218,6 @@ func (s *Store) Close() error {
 	// entra() e está dentro do wmu termina antes daqui, porque o Lock acima só
 	// é concedido quando o RLock dela é liberado.
 	var errs []error
-	for _, ix := range s.bitmaps {
-		if ix != nil {
-			errs = append(errs, ix.Close())
-		}
-	}
-	for _, ix := range s.hashes {
-		if ix != nil {
-			errs = append(errs, ix.Close())
-		}
-	}
 	errs = append(errs, s.fechaIndices())
 	if s.agenda != nil {
 		errs = append(errs, s.agenda.Close())
@@ -2596,8 +2267,11 @@ func (s *Store) RowCount() uint64 { return s.rowCount.Load() }
 //
 // A extração roda na ingestão: as linhas gravadas antes de a coluna existir
 // não a têm, e um filtro sobre ela as omitiria — sem erro, sem log e sem
-// métrica. É o mesmo defeito que validaBitmapsContraManifest já recusa para
-// índice declarado sobre dataset com linhas, e a razão é idêntica.
+// métrica. Era o mesmo defeito que a validação do conjunto indexado contra o
+// manifest recusava, e ela saiu — mas por uma razão que NÃO vale aqui: o índice
+// de um segmento sem a seção do campo enumera as linhas dele e a consulta
+// responde certo, enquanto a coluna extraída simplesmente NÃO EXISTE nos records
+// já gravados. Não há o que enumerar, e por isso esta recusa fica.
 //
 // O critério é a AUSÊNCIA no dicionário, e não a mera presença de linhas: o
 // dataset criado já com extract tem a coluna registrada desde a primeira

@@ -9,15 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nishisan-dev/nishidb/internal/storage/checkpoint"
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
-
-// hashDir é o diretório dos arquivos de índice hash do dataset — um por
-// campo. Os testes de recovery o regridem ao estado do último checkpoint, que
-// é o que um power loss deixaria.
-func hashDir(dir string) string { return filepath.Join(dir, "indexes", "hash") }
 
 func chaveDe(i int) string { return fmt.Sprintf("CMP-V0001PPCLP-%03d", i) }
 
@@ -158,14 +152,16 @@ func TestPostingSobreviveAoRestart(t *testing.T) {
 }
 
 // TestReplayDoTailReconstroiAsPostings é o caso de CRASH, e é diferente do
-// restart limpo acima: o índice em disco fica no estado do último checkpoint, e
-// tudo o que veio depois só existe no tail dos segmentos.
-//
-// O índice é restaurado de um backup tirado no ponto do checkpoint — que é
-// exatamente o que um power loss deixaria, já que o msync do índice acontece
-// ali — e a abertura seguinte tem de reconstruir as postings replayando os
-// records. Sem isso, a query depois do crash omitiria as rows escritas no
+// restart limpo acima: o que veio depois do último checkpoint só existe no tail
+// dos segmentos, e a abertura seguinte tem de reconstruir as postings a partir
+// dos records. Sem isso, a query depois do crash omitiria as rows escritas no
 // intervalo, sem erro em camada nenhuma.
+//
+// O teste PAROU de regredir o índice a um backup do ponto S, e a mudança não é
+// de conveniência: com o índice por segmento não existe backup a regredir — o
+// .widx nunca é confiado através de um restart (spec §2.5), então TODA abertura
+// já parte de um índice descartado e o reconstrói. A montagem antiga simulava um
+// estado que o produto não produz mais.
 func TestReplayDoTailReconstroiAsPostings(t *testing.T) {
 	dir := t.TempDir()
 	opts := Options{Dir: dir, HashFields: []types.FieldID{fldStatus}}
@@ -176,11 +172,9 @@ func TestReplayDoTailReconstroiAsPostings(t *testing.T) {
 	if err := s.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
-	// Estado do índice NO ponto S.
-	backup := filepath.Join(t.TempDir(), "hash-em-S")
-	copiaDir(t, hashDir(dir), backup)
 
-	// Escritas depois do checkpoint: só o tail as conhece.
+	// Escritas depois do checkpoint: só o tail as conhece. O Close não
+	// checkpointa, então a abertura seguinte replaya de verdade.
 	var depois []types.RowID
 	for i := 1; i <= 3; i++ {
 		k := chaveDe(i)
@@ -190,8 +184,6 @@ func TestReplayDoTailReconstroiAsPostings(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	// Volta o índice para o estado de S: é o que o crash teria deixado.
-	copiaDir(t, backup, hashDir(dir))
 
 	s2 := openStore(t, opts)
 	it, err := s2.LookupHash(fldStatus, strVal("Start"))
@@ -201,9 +193,7 @@ func TestReplayDoTailReconstroiAsPostings(t *testing.T) {
 	got := collectRows(t, it)
 	quer := append([]types.RowID{row0}, depois...)
 	slices.Sort(quer)
-	if !slices.Equal(got, quer) {
-		t.Fatalf("o replay do tail não reconstruiu as postings: %v, esperado %v", got, quer)
-	}
+	exigeCandidatos(t, "postings pós-replay do tail", got, quer)
 }
 
 // TestReplayReaplicaOClearDoUpdate mantém o nome porque `docs/debitos.md` o
@@ -222,12 +212,10 @@ func TestReplayReaplicaOClearDoUpdate(t *testing.T) {
 	s := openStore(t, opts)
 
 	k := "CMP-V0001PPCLP-013"
-	mustPut(t, s, k, 1, statusPayload(t, s, k, "Start", 1), nil)
+	row, _ := mustPut(t, s, k, 1, statusPayload(t, s, k, "Start", 1), nil)
 	if err := s.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
-	backup := filepath.Join(t.TempDir(), "hash-em-S")
-	copiaDir(t, hashDir(dir), backup)
 
 	prev, _, ok, err := s.GetByKey([]byte(k), nil)
 	if err != nil || !ok {
@@ -237,108 +225,50 @@ func TestReplayReaplicaOClearDoUpdate(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	copiaDir(t, backup, hashDir(dir))
 
 	s2 := openStore(t, opts)
 	it, err := s2.LookupHash(fldStatus, strVal("Stop"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := collectRows(t, it); len(got) != 1 {
-		t.Fatalf("o replay não religou a posting do valor novo: %v", got)
-	}
+	// Asserção CRUA sobre o índice: o replay religou a posting do valor NOVO.
+	// Sem ela, a asserção pós-revalidação abaixo passaria com um Lookup que
+	// devolvesse zero candidatos, porque quem decide lá é o payload corrente.
+	exigeCandidatos(t, "posting do valor novo pós-replay", collectRows(t, it), []types.RowID{row})
 	if got := lookupRevalidado(t, s2, fldStatus, strVal("Start")); len(got) != 0 {
 		t.Fatalf("pós-replay e pós-revalidação, o valor ANTIGO não pode devolver a row: %v", got)
 	}
 }
 
-// TestDeclararHashEmDatasetComLinhasEhRecusado: o índice nasceria cobrindo só
-// o que vier daqui pra frente, e a query indexada omitiria as rows antigas —
-// sem erro, sem log e sem métrica. Backfill não existe (débito 22).
-func TestDeclararHashEmDatasetComLinhasEhRecusado(t *testing.T) {
+// TestOsIndicesGlobaisLegadosSaoApagadosNaAbertura: os arquivos dos dois motores
+// que saíram não têm mais leitor, e o IndexBytes soma o diretório indexes/
+// inteiro. Deixá-los seria publicar disco ocupado que nada no produto explica —
+// e num dataset do tamanho do piloto a soma dos dois é da ordem do próprio dado.
+//
+// A montagem os cria à mão porque este binário não sabe mais criá-los, que é
+// justamente o ponto: o dataset legado chega com eles em disco.
+func TestOsIndicesGlobaisLegadosSaoApagadosNaAbertura(t *testing.T) {
 	dir := t.TempDir()
-	s := openStore(t, Options{Dir: dir})
-	k := "CMP-V0001PPCLP-013"
-	mustPut(t, s, k, 1, statusPayload(t, s, k, "Start", 1), nil)
-	if err := s.Checkpoint(); err != nil {
-		t.Fatal(err)
-	}
+	s := openStore(t, Options{Dir: dir, HashFields: []types.FieldID{fldStatus}})
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-
-	_, err := Open(Options{Dir: dir, HashFields: []types.FieldID{fldStatus}})
-	if !errors.Is(err, ErrDatasetCorrupt) {
-		t.Fatalf("esperado ErrDatasetCorrupt ao declarar hash sobre dataset com linhas, obtido %v", err)
-	}
-}
-
-// TestAbandonarHashDeclaradoNoManifestEhRecusado e a autorização explícita:
-// abrir sem o campo faria o índice parar de receber sets e clears, e ele
-// reapareceria INCOMPLETO se o campo voltasse.
-func TestAbandonarHashDeclaradoNoManifestEhRecusado(t *testing.T) {
-	dir := t.TempDir()
-	comHash := Options{Dir: dir, HashFields: []types.FieldID{fldStatus}}
-	s := openStore(t, comHash)
-	k := "CMP-V0001PPCLP-013"
-	mustPut(t, s, k, 1, statusPayload(t, s, k, "Start", 1), nil)
-	if err := s.Checkpoint(); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Close(); err != nil {
-		t.Fatal(err)
+	for _, motor := range []string{"bitmap", "hash"} {
+		alvo := filepath.Join(dir, "indexes", motor, "00002")
+		if err := os.MkdirAll(alvo, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(alvo, "lixo.bin"), make([]byte, 4096), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 
-	if _, err := Open(Options{Dir: dir}); !errors.Is(err, ErrDatasetCorrupt) {
-		t.Fatalf("abrir sem o campo indexado devia ser recusado, obtido %v", err)
-	}
-	s2, err := Open(Options{Dir: dir, AllowHashDrop: true})
-	if err != nil {
-		t.Fatalf("AllowHashDrop devia autorizar a abertura: %v", err)
-	}
-	defer func() { _ = s2.Close() }()
-	if s2.HasHash(fldStatus) {
-		t.Fatal("com o campo dropado o Store não pode declarar a capability")
-	}
-}
-
-// TestManifestPublicaOConjuntoDeHashes: é dele que a abertura seguinte tira o
-// conjunto contra o qual decide abandono e backfill. Um manifest que não o
-// nomeasse tornaria as duas guardas acima inúteis.
-func TestManifestPublicaOConjuntoDeHashes(t *testing.T) {
-	dir := t.TempDir()
-	s := openStore(t, Options{Dir: dir, HashFields: []types.FieldID{fldStatus, fldCounter}})
-	if err := s.Checkpoint(); err != nil {
-		t.Fatal(err)
-	}
-	m, err := checkpoint.Load(filepath.Join(dir, "checkpoint", "manifest.bin"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(m.Hashes) != 2 {
-		t.Fatalf("Hashes no manifest: %+v", m.Hashes)
-	}
-	// Ordem determinística: dois checkpoints do mesmo estado produzem
-	// manifests idênticos byte a byte, e um mapa Go itera sorteado.
-	if m.Hashes[0].FieldID != fldStatus || m.Hashes[1].FieldID != fldCounter {
-		t.Fatalf("ordem não canônica: %+v", m.Hashes)
-	}
-	if m.Hashes[0].SlotCount == 0 {
-		t.Fatalf("SlotCount não foi publicado: %+v", m.Hashes)
-	}
-	// Um dataset SEM índice hash não pode ganhar cauda: é o que preserva o
-	// rollback do formato do manifest.
-	semHash := t.TempDir()
-	s2 := openStore(t, Options{Dir: semHash})
-	if err := s2.Checkpoint(); err != nil {
-		t.Fatal(err)
-	}
-	raw, err := os.ReadFile(filepath.Join(semHash, "checkpoint", "manifest.bin"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if raw[4] != 1 {
-		t.Fatalf("dataset sem hash gravou manifest v%d; o rollback exige v1", raw[4])
+	s2 := openStore(t, Options{Dir: dir, HashFields: []types.FieldID{fldStatus}})
+	defer s2.Close()
+	for _, motor := range []string{"bitmap", "hash"} {
+		if _, err := os.Stat(filepath.Join(dir, "indexes", motor)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("indexes/%s sobreviveu à abertura: %v", motor, err)
+		}
 	}
 }
 
@@ -363,19 +293,20 @@ func TestValorAcimaDoTetoEmCampoComHashEhRecusadoAntesDoAppend(t *testing.T) {
 	}
 }
 
-// TestPostingOrfaEhSupersetEOExecutorFiltra prova o contrato do §44 no motor
-// hash: o índice devolve candidato a MAIS, nunca a menos, e quem decide é a
-// revalidação.
+// TestPostingOrfaEhSupersetEOExecutorFiltra prova o contrato do §44, e ele é a
+// afirmação em que o índice por segmento inteiro se apoia: o índice devolve
+// candidato a MAIS, nunca a menos, e quem decide é a revalidação contra o
+// payload corrente.
 //
-// A posting órfã é forçada aqui pela falha injetada na fase de Clear, que é o
-// caminho tolerado do §10.1 — e é a MESMA forma de falso positivo que uma
-// colisão de hash produz, já que o índice não valida colisão por desenho (o
-// godoc de LookupHash diz isso). Forçar uma colisão real de 64 bits não é
-// construível num teste; forçar o Clear a falhar é, e o candidato resultante é
-// indistinguível para o executor.
+// A posting órfã DEIXOU DE PRECISAR DE ENCENAÇÃO, e é essa a diferença entre
+// este teste e o que ele substitui. Antes ela era forçada por uma falha injetada
+// na fase de Clear — o caminho tolerado do §10.1 —, porque no motor global a
+// posting antiga normalmente seria apagada. No índice por segmento não existe
+// Clear (spec §5.2): basta um update para a posting do valor anterior ficar
+// onde está. O teste passou a exercitar o caminho real, e o hook saiu junto com
+// a fase que ele injetava.
 func TestPostingOrfaEhSupersetEOExecutorFiltra(t *testing.T) {
 	s := openStore(t, Options{HashFields: []types.FieldID{fldStatus}})
-	s.SetClearErrHookForTest(func(types.FieldID) error { return errors.New("clear de mentira") })
 
 	k := "CMP-V0001PPCLP-013"
 	row, _ := mustPut(t, s, k, 1, statusPayload(t, s, k, "Start", 1), nil)
@@ -390,7 +321,7 @@ func TestPostingOrfaEhSupersetEOExecutorFiltra(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := collectRows(t, it); !slices.Equal(got, []types.RowID{row}) {
-		t.Fatalf("o Clear falho devia deixar a posting órfã (superset): %v", got)
+		t.Fatalf("o update devia deixar a posting do valor antigo como órfã (superset): %v", got)
 	}
 	// A revalidação é do executor, e ela parte do record CORRENTE: a row
 	// existe, está viva, e o valor dela já é o novo. É por isso que o
@@ -401,6 +332,9 @@ func TestPostingOrfaEhSupersetEOExecutorFiltra(t *testing.T) {
 	}
 	if v, achou := valorDoCampo(rec.Payload, fldStatus); !achou || string(v.Bytes) != "Stop" {
 		t.Fatalf("o estado corrente da row devia ser Stop: %q (achou=%v)", v.Bytes, achou)
+	}
+	if got := lookupRevalidado(t, s, fldStatus, strVal("Start")); len(got) != 0 {
+		t.Fatalf("pós-revalidação, o candidato órfão não pode virar linha: %v", got)
 	}
 }
 

@@ -14,7 +14,7 @@ func TestWriteOrdemDeDurabilidade(t *testing.T) {
 	restore := SetWriteTraceForTest(func(step string) { trace = append(trace, step) })
 	defer restore()
 
-	m := Manifest{Epoch: 1, CurrentSegment: 1, DurableOffset: 64, HashKind: 1}
+	m := Manifest{Epoch: 1, CurrentSegment: 1, DurableOffset: 64}
 	if err := Write(filepath.Join(t.TempDir(), "manifest.bin"), &m); err != nil {
 		t.Fatal(err)
 	}

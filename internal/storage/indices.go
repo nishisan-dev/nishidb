@@ -316,6 +316,15 @@ func (s *Store) aplicaIndiceSets(row types.RowID, payload []byte) error {
 			return err
 		}
 		s.chaveIndiceBuf = chave
+		// O seam de erro fica ANTES do Set, e é o único ponto do produto que
+		// produz o phantom commit do §14.12 sob demanda: um erro daqui é
+		// posterior ao Append e anterior à publicação da location, que é
+		// exatamente a janela sem rollback parcial. Ver o godoc do campo.
+		if s.setErrHook != nil {
+			if err := s.setErrHook(id); err != nil {
+				return err
+			}
+		}
 		// primary.HashKey é a MESMA função que o índice primário usa, e a
 		// escolha não é gosto: ela nunca devolve 0 nem 1, e o Set do WIP entra
 		// em pânico com hash 0 porque 0 é o sentinela de slot vazio.

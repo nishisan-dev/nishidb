@@ -36,11 +36,17 @@ endif
 e sequences.idx (mmap);
 :carrega o manifest e lista os segmentos;
 
-if (o conjunto de bitmaps declarado\ndiverge do manifest?) then (sim)
-  #pink:ErrDatasetCorrupt\nbitmap abandonado (sem AllowBitmapDrop),\nou bitmap novo com RowCount > 0\n(não há backfill no M1);
-  stop
-endif
-:abre os índices bitmap declarados;
+:descarta TODO .widx herdado do processo
+anterior e abre os do segmento corrente;
+
+note right
+  Não há guarda de conjunto indexado contra
+  o manifest: acrescentar ou remover um campo
+  é aceito. Segmento sem a seção do campo
+  ENUMERA as linhas dele como candidatas, e o
+  executor revalida — o resultado é o mesmo,
+  só mais caro (débito 22).
+end note
 
 if (manifest ausente?) then (sim)
   if (algum segmento tem record?) then (sim)
@@ -63,7 +69,7 @@ else (não)
   :adota segmentos posteriores\nao checkpoint (inclusive órfão\nde rotação);
   :TAIL SCAN a partir do ponto S;
   while (há record íntegro no tail?) is (sim)
-    :replay: reindexa primary,\nlocations, sequences e bitmaps\n(o MESMO applyRecord da escrita);
+    :replay: reindexa primary, locations,\nsequences e o índice do segmento\n(o MESMO applyRecord da escrita);
   endwhile (não)
   :TRUNCA o rasgo no último\nboundary válido;
   note right

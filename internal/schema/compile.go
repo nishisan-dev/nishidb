@@ -47,14 +47,15 @@ const (
 
 // IndexKind é o índice secundário declarado para o campo no YAML.
 //
-// Os DOIS têm motor físico (internal/index/bitmap e internal/index/hash), e a
-// escolha entre eles é de CARDINALIDADE: o bitmap mantém um arquivo de bits
-// por valor distinto e serve coluna de poucos valores; o hash mantém uma
-// tabela única por campo e serve coluna de muitos.
+// As duas grafias declaram HOJE A MESMA COISA: existe um motor só
+// (internal/index/segindex), e ele é por segmento. A distinção de cardinalidade
+// que separava os dois — arquivo de bits por valor distinto contra tabela única
+// por campo — morreu com os dois motores globais que a sustentavam, e densidade
+// virou decisão de codificação dentro de uma estrutura só.
 //
-// IndexHash foi ACEITO na configuração desde o M1 sem motor por trás — o
-// metadado era carregado e a query caía no caminho de scan. Deixou de ser
-// assim: o débito 19 fechou, e declarar hash passou a mudar o plano.
+// O tipo sobrevive enquanto a configuração aceitar as duas grafias, e é isso que
+// evita quebrar o YAML de quem já as escreveu. Um campo booleano no lugar dele é
+// a mudança que aposenta as duas.
 type IndexKind uint8
 
 const (

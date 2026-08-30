@@ -1,17 +1,20 @@
 package storage
 
 // O resíduo IRMÃO do de liveness: o mesmo ramo do replayRecord que deixa
-// LiveRecords acima do real deixa também uma POSTING DE BITMAP órfã. Quando o
-// prev é desconhecido (location durável já à frente do ponto S), o replay roda
-// applyBitmapSets — que liga as postings do payload novo — e a fase de Clear
-// não tem o que limpar, porque o prevPayload que ela recebe é nil. O bit do
-// valor ANTIGO fica ligado para sempre.
+// LiveRecords acima do real deixa também uma POSTING órfã.
+//
+// A origem mudou de lugar quando o motor mudou, e o resíduo continuou. No motor
+// global ele nascia de um diff cego: prev desconhecido (location durável já à
+// frente do ponto S) fazia a fase de Set ligar as postings do payload novo
+// enquanto a de Clear não tinha o que limpar. No índice por segmento não há fase
+// de Clear em caminho nenhum (spec §5.2), então a posting do valor anterior fica
+// onde está por DESENHO, e não por um ramo do replay — o que faz o write path e
+// o replay convergirem para o mesmo estado, que é o que este teste passou a
+// afirmar.
 //
 // Este arquivo existe pela mesma razão do store_liveness_residuo_test.go: o
 // fato precisa estar em TESTE, e não só em prosa, porque quem vai fechar a
-// conta é a compaction/rebuild do M4 e precisa encontrar a medida. NÃO
-// conserta o replay — isso é escopo do M4 —, apenas fixa o que ele produz
-// hoje e a direção da assimetria.
+// conta é a compaction/rebuild do M4 e precisa encontrar a medida.
 //
 // Direção da assimetria (é o que separa este resíduo de um bug de corretude):
 // a órfã é um FALSO POSITIVO. O índice devolve um superset de candidatos e o
@@ -22,7 +25,6 @@ package storage
 // recovery.
 
 import (
-	"path/filepath"
 	"testing"
 
 	"github.com/nishisan-dev/nishidb/internal/types"
@@ -47,10 +49,9 @@ func postingsDeStatus(t *testing.T, s *Store, valores ...string) map[string][]ty
 // se corrige sozinha.
 //
 // O cenário é exatamente o crash que o §10.2 admite: o checkpoint msynca as
-// locations (passo 3) antes de gravar o manifest (passo 4), e as páginas dos
-// bitmaps podem não ter chegado ao disco quando a energia cai — o que regride
-// as postings ao estado do ponto S enquanto a location já aponta para o record
-// do tail. É a mesma montagem do TestReplayRestauraPostingComBitmapAtrasDasLocations,
+// locations (passo 3) antes de gravar o manifest (passo 4), então a location já
+// aponta para o record do tail enquanto o ponto S recuperável ficou para trás.
+// É a mesma montagem do TestReplayRestauraPostingComBitmapAtrasDasLocations,
 // que mede a outra metade: lá, que a posting NOVA é restaurada; aqui, que a
 // ANTIGA não é apagada.
 func TestPostingOrfaDoReplayNaoConverge(t *testing.T) {
@@ -64,12 +65,11 @@ func TestPostingOrfaDoReplayNaoConverge(t *testing.T) {
 	if err := s.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
-	// Estado das postings no ponto S, para regredir depois do crash.
-	emS := filepath.Join(t.TempDir(), "bm-em-S")
-	copiaDir(t, bitmapDir(dir, fldStatus), emS)
 
 	// 2. Update no tail (Start→Stop) e crash entre os passos 3 e 4: as
-	// locations ficam duráveis apontando para o record NOVO…
+	// locations ficam duráveis apontando para o record NOVO, e o manifest fica
+	// no ponto S. O índice não entra mais nessa encenação porque ele não é
+	// durabilizado no checkpoint: toda abertura o reconstrói (spec §2.5).
 	prev := mustGetAud(t, s, "bm")
 	mustPut(t, s, "bm", 2, statusPayload(t, s, "bm", "Stop", 2), &prev)
 	if err := s.PartialCheckpointForTest(); err != nil {
@@ -78,8 +78,6 @@ func TestPostingOrfaDoReplayNaoConverge(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	// …e as páginas dos bitmaps, não.
-	copiaDir(t, emS, bitmapDir(dir, fldStatus))
 
 	// 3. Recovery: o replay reaplica o update sem conhecer o estado anterior.
 	s2 := audOpen(t, opts)
