@@ -386,8 +386,16 @@ func (s *Selado) Lookup(campo types.FieldID, h uint64) (Fonte, bool) {
 	// A fonteVazia não lê nada e por isso não conta: fazê-la contar seria adiar
 	// um munmap por uma leitura que nunca acontece.
 	//
-	// Um Selado já em desmonte responde ok=false, e o chamador ENUMERA o
-	// segmento — a mesma degradação de um índice ausente, que é sempre correta.
+	// Um Selado que já começou a fechar responde ok=false, e o chamador ENUMERA
+	// o segmento — a mesma degradação de um índice ausente, e ela é correta.
+	//
+	// ISSO NÃO TORNA O Lookup SEGURO CONTRA UM Fecha CONCORRENTE, e a ressalva é
+	// a mesma dos godocs do Selado e do Fecha. O ramo abaixo só é alcançado
+	// quando o fecho começou com LEITOR VIVO, e por isso o mapeamento ainda está
+	// de pé. Com zero leitores o Fecha desmonta dentro de si mesmo, e um Lookup
+	// concorrente teria entrado em pânico no exigeAberto lá em cima — nunca
+	// chega a esta linha para receber a degradação que ela promete. Quem exclui
+	// um do outro é o chamador; no Store, o selMu.
 	if !s.adquire() {
 		return nil, false
 	}
