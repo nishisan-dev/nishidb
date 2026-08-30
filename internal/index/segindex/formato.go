@@ -26,7 +26,10 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -111,6 +114,35 @@ const sufixoSelado = ".sidx"
 // uma linha de código em vez de uma promessa.
 func CaminhoSelado(dir string, seg uint32) string {
 	return filepath.Join(dir, fmt.Sprintf("segment-%08d%s", seg, sufixoSelado))
+}
+
+// SegmentosComSelado devolve, em ordem crescente, os segmentos que têm .sidx
+// no diretório — a mesma pergunta do SegmentosComWIP, para a forma selada.
+//
+// Existe para a limpeza de órfãos da abertura (spec §2.3): um crash entre o
+// unlink do .dat e a remoção do índice deixa .sidx de um segmento que não
+// existe mais, e nenhuma enumeração que parta dos dados o alcança. Nome no
+// espaço .sidx que não é o canônico é ErrFormato, como no espaço .widx: a
+// limpeza do lixo não pode adivinhar o que um arquivo desconhecido significa.
+func SegmentosComSelado(dir string) ([]uint32, error) {
+	entradas, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("segindex: listar os %s de %s: %w", sufixoSelado, dir, err)
+	}
+	var segs []uint32
+	for _, e := range entradas {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), sufixoSelado) {
+			continue
+		}
+		miolo := strings.TrimSuffix(strings.TrimPrefix(e.Name(), "segment-"), sufixoSelado)
+		seg, err := strconv.ParseUint(miolo, 10, 32)
+		if err != nil || e.Name() != filepath.Base(CaminhoSelado("", uint32(seg))) {
+			return nil, fmt.Errorf("%w: %s não é um nome canônico de índice selado", ErrFormato, e.Name())
+		}
+		segs = append(segs, uint32(seg))
+	}
+	slices.Sort(segs)
+	return segs, nil
 }
 
 // EhArquivoDeIndice reporta se o nome pertence ao espaço de nomes DESTE pacote

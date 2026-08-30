@@ -3,6 +3,7 @@ package storage
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -305,5 +306,33 @@ func TestAAposentadoriaLevaOIndiceJunto(t *testing.T) {
 	}
 	if _, err := os.Stat(caminho); !os.IsNotExist(err) {
 		t.Errorf("Stat(%s) = %v, quero IsNotExist — o índice tem de sair com o .dat", filepath.Base(caminho), err)
+	}
+}
+
+// TestOSidxOrfaoDeSegmentoAposentadoSaiNaAbertura fecha a promessa da §2.3 que
+// estava só em prosa: um crash entre o unlink do .dat e a remoção do índice na
+// aposentadoria deixa .sidx de um segmento que não existe mais, e nenhuma
+// enumeração que parta dos dados o alcança — sem a limpeza da abertura ele
+// ficaria em disco PARA SEMPRE, contado pelo IndexBytes como disco que nada
+// explica. O .widx órfão já saía; o .sidx era o irmão esquecido.
+func TestOSidxOrfaoDeSegmentoAposentadoSaiNaAbertura(t *testing.T) {
+	s, dir := abreStoreIndexado(t, []string{"node"})
+	poeLinhas(t, s, 5)
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// O órfão: um .sidx de segmento que nunca existiu neste dataset — o estado
+	// que o crash da aposentadoria deixa (o .dat saiu, o índice ficou).
+	orfao := segindex.CaminhoSelado(filepath.Join(dir, "data"), 77)
+	e := segindex.NovoEscritor()
+	e.Adiciona(campoDoDicionario(t, s, "node"), 42, 1)
+	if err := e.Escreve(orfao, 77); err != nil {
+		t.Fatal(err)
+	}
+
+	abreStoreIndexadoEm(t, dir, []string{"node"}, 1<<20)
+	if _, err := os.Stat(orfao); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("o .sidx órfão sobreviveu à abertura (stat: %v): ele ficaria em disco para sempre", err)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/index/segindex"
 	"github.com/nishisan-dev/nishidb/internal/index/valuekey"
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
+	"github.com/nishisan-dev/nishidb/internal/storage/segment"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
@@ -69,6 +70,17 @@ func (s *Store) abreIndicesDeSegmento(campos []types.FieldID) error {
 	if err := segindex.ApagaTemporarios(s.dirDeDados()); err != nil {
 		return err
 	}
+	// O .sidx ÓRFÃO — de segmento que já não tem .dat — sai aqui, no mesmo
+	// ponto em que o .retired e o .widx órfão já saem (spec §2.3): um crash
+	// entre o unlink do .dat e a remoção do índice na aposentadoria o deixa
+	// para trás, e nenhuma enumeração que parta dos dados o alcança. Sem esta
+	// varredura ele ficaria em disco para sempre, contado pelo IndexBytes como
+	// disco que nada explica. Roda ANTES do early-return de campos vazios de
+	// propósito: um dataset que deixou de indexar continua tendo órfãos a
+	// limpar.
+	if err := s.apagaSidxOrfaos(); err != nil {
+		return err
+	}
 	if len(campos) == 0 {
 		return nil
 	}
@@ -114,6 +126,45 @@ func (s *Store) descartaTodosOsWIPs() error {
 		if err := s.apagaWIPsPeloNome(seg); err != nil {
 			return classificaNomeIlegivelDeIndice(err, s.dirDeDados())
 		}
+	}
+	return nil
+}
+
+// apagaSidxOrfaos remove todo .sidx cujo segmento já não tem .dat — o resíduo
+// de um crash entre o unlink do dado e a remoção do índice na aposentadoria
+// (spec §2.3). Por NOME, como toda limpeza de lixo deste arquivo: um .sidx
+// rasgado é justamente o que não se deixa abrir.
+//
+// A comparação é contra a listagem canônica de segmentos (segment.ListSegments,
+// a mesma que a recovery usa), e não contra o manifest: o filesystem é a
+// verdade sobre quais segmentos existem (spec §5.3).
+func (s *Store) apagaSidxOrfaos() error {
+	comSelado, err := segindex.SegmentosComSelado(s.dirDeDados())
+	if err != nil {
+		return classificaNomeIlegivelDeIndice(err, s.dirDeDados())
+	}
+	if len(comSelado) == 0 {
+		return nil
+	}
+	refs, err := segment.ListSegments(s.dirDeDados())
+	if err != nil {
+		return err
+	}
+	comDat := make(map[uint32]struct{}, len(refs))
+	for _, ref := range refs {
+		comDat[ref.ID] = struct{}{}
+	}
+	for _, seg := range comSelado {
+		if _, ok := comDat[seg]; ok {
+			continue
+		}
+		caminho := segindex.CaminhoSelado(s.dirDeDados(), seg)
+		if err := os.Remove(caminho); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("storage: remover o índice órfão %s: %w", caminho, err)
+		}
+		s.opts.Log.Info("indice.orfao_removido",
+			"o índice de um segmento aposentado sobrou de um crash e saiu na abertura",
+			"segmento", seg)
 	}
 	return nil
 }
