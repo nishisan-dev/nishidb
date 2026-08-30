@@ -35,3 +35,10 @@ func TestLookupNoWIPAlocaExatamenteUmaVez(t *testing.T) {
 // ele conta sondas, que a instrumentação não altera, e roda nas duas rodadas.
 // Uma entrada de SKIP para ele seria a mentira oposta à do débito 53 — anunciar
 // como pulado um gate que está rodando.
+
+// A camada de TEMPO do gate de custo (§6.1), essa sim, mede relógio — e o
+// detector de corrida multiplica o custo de cada acesso, o que dobraria a
+// razão medida por um fator do instrumento e não do código.
+func TestARazaoDeTempoDoSetEntreEscalasEhConstante(t *testing.T) {
+	t.Skip("gate de tempo não roda sob -race: a instrumentação altera o que ele mede")
+}
