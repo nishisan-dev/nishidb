@@ -17,6 +17,15 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
+// errSegmentoEhOCorrente marca a recusa da guarda de segmento corrente do
+// constroiIndiceDoSegmento, por baixo do ErrInvalidArgument que o chamador
+// externo enxerga. A sentinela existe porque o laço de fundo precisa separar
+// esta recusa do ErrInvalidArgument genuíno (campo não indexado, que é bug do
+// chamador e TEM de parar o laço): a fila é uma fotografia, e o .dat do
+// segmento novo nasce antes de o aposAppend trocar o curSegID — o segmento
+// pode ser listado como pendente e JÁ ser o corrente quando o laço o alcança.
+var errSegmentoEhOCorrente = errors.New("o segmento é o corrente")
+
 // IniciaReconstrucao sobe a goroutine que consome a fila de reconstrução por
 // conta própria (§2.4). É ela que fecha o débito 22: até aqui o mecanismo
 // existia e a fila era derivada corretamente, mas NADA a drenava — o operador
@@ -201,6 +210,17 @@ func (s *Store) reconstroiOsPendentes(ctx context.Context, pendentes []uint32) (
 				// primeira sobreposição e o dataset inteiro voltar a enumerar. O
 				// segmento não existe mais, logo não há índice a construir para
 				// ele, e ele já não aparece na fila da próxima passada.
+				continue
+			}
+			if errors.Is(err, errSegmentoEhOCorrente) {
+				// A corrida SIMÉTRICA da de cima: o .dat do segmento novo nasce
+				// dentro do Append, ANTES de o aposAppend trocar o curSegID, então
+				// a fotografia da fila pode listá-lo enquanto o Load ainda devolve
+				// o anterior — e quando o laço o alcança, ele JÁ é o corrente. O
+				// desfecho certo é pular: a própria rotação o sela quando ele
+				// deixar de ser corrente. Parar aqui mataria o laço até a
+				// reabertura do dataset por uma janela de milissegundos que se
+				// resolve sozinha.
 				continue
 			}
 			return feitos, fmt.Errorf("reconstruir o índice do segmento %d: %w", seg, err)
@@ -457,8 +477,8 @@ func (s *Store) constroiIndiceDoSegmento(ctx context.Context, seg uint32, campos
 	// permanente, que é exatamente o desfecho que esta tarefa existe para
 	// eliminar. O índice do corrente é o WIP, e ele se reconstrói na abertura.
 	if corrente := s.curSegID.Load(); seg == corrente {
-		return false, fmt.Errorf("%w: o segmento %d é o corrente; o índice dele é o WIP, não um .sidx imutável",
-			ErrInvalidArgument, seg)
+		return false, fmt.Errorf("%w: o segmento %d é o corrente; o índice dele é o WIP, não um .sidx imutável: %w",
+			ErrInvalidArgument, seg, errSegmentoEhOCorrente)
 	}
 	caminho := segindex.CaminhoSelado(s.dirDeDados(), seg)
 	cobertura, err := s.coberturaDaReconstrucao(caminho, campos)
@@ -466,12 +486,32 @@ func (s *Store) constroiIndiceDoSegmento(ctx context.Context, seg uint32, campos
 		return false, err
 	}
 	e := segindex.NovoEscritor()
-	if err := s.varreOsRecordsDoSegmento(ctx, seg, cobertura,
+	fimValido, err := s.varreOsRecordsDoSegmento(ctx, seg, cobertura,
 		func(campo types.FieldID, h uint64, row types.RowID) error {
 			e.Adiciona(campo, h, row)
 			return nil
-		}); err != nil {
+		})
+	if err != nil {
 		return false, err
+	}
+	// A varredura que PAROU antes do fim é corrupção no meio de um segmento
+	// selado — o ScanFrom para no primeiro record inválido sem erro (§52), e num
+	// selado não existe tail legítimo. Publicar o .sidx desta varredura seria o
+	// pior desfecho do produto: as seções sairiam completas, a fila o contaria
+	// como pronto, o crc do arquivo — escrito corretamente a partir de uma
+	// varredura incompleta — passaria, e as rows posteriores à corrupção nunca
+	// virariam candidatas enquanto o locations continua servindo-as. Falso
+	// negativo permanente. É o espelho exato da guarda da compaction sobre a
+	// mesma operação (compaction.go, fimValido != tamanho).
+	tamanho, err := s.tamanhoDoSegmento(seg)
+	if err != nil {
+		return false, err
+	}
+	if fimValido != tamanho {
+		return false, fmt.Errorf(
+			"%w: a varredura de reconstrução do segmento %d parou em %d de %d bytes; "+
+				"um .sidx desta varredura declararia completo um índice sem as rows posteriores à corrupção",
+			ErrDatasetCorrupt, seg, fimValido, tamanho)
 	}
 	if e.Vazio() {
 		// Nenhuma posting sob a cobertura inteira: o índice CORRETO deste
@@ -840,12 +880,18 @@ func (s *Store) reconstroiOIndiceDoCorrente() error {
 	if len(s.wips) == 0 {
 		return nil
 	}
-	return s.varreOsRecordsDoSegmento(context.Background(), s.curSegID.Load(), s.camposIndexados,
+	// O fim válido é descartado DE PROPÓSITO, e só aqui: no segmento corrente a
+	// parada antes do fim é o estado normal — o OpenWriter já truncou o lixo
+	// além do fim válido, e o WIP é mutável e continua sendo alimentado. A
+	// guarda de varredura incompleta é do caminho SELADO, onde o arquivo
+	// publicado seria imutável.
+	_, err := s.varreOsRecordsDoSegmento(context.Background(), s.curSegID.Load(), s.camposIndexados,
 		func(campo types.FieldID, h uint64, row types.RowID) error {
 			// O mapa não pode errar: ele foi construído a partir DESTE mesmo
 			// s.camposIndexados, no abreWIPsDoCorrente, algumas linhas acima.
 			return s.wips[campo].Set(h, row)
 		})
+	return err
 }
 
 // varreOsRecordsDoSegmento percorre os records do segmento e emite, para cada
@@ -860,10 +906,13 @@ func (s *Store) reconstroiOIndiceDoCorrente() error {
 // O ScanFrom é o MESMO iterador que o replay do tail usa, pela mesma razão que o
 // replay passa pelo applyRecord: um segundo leitor do formato de record é um
 // segundo lugar para o formato mudar pela metade. Ele para no primeiro record
-// inválido sem erro (§52), e isso está certo aqui: no segmento corrente o
-// OpenWriter já truncou o lixo além do fim válido, e nenhum outro segmento pode
-// ter tail rasgado — a recovery recusa o dataset em que isso aconteça, e a
-// rotação sela o anterior com fdatasync antes de criar o próximo.
+// inválido SEM erro (§52), e é por isso que o fim válido volta ao chamador em
+// vez de ser descartado: no segmento CORRENTE a parada é o estado normal (o
+// OpenWriter já truncou o lixo além do fim válido), mas num segmento SELADO
+// ela é corrupção no MEIO do arquivo — e a recovery não a pegaria, porque ela
+// só varre [CurrentSegment..maxID] e dos anteriores confere apenas o tamanho.
+// Quem decide o que fazer com o fim válido é o chamador, porque só ele sabe em
+// qual dos dois casos está.
 //
 // A pertinência do campo sai de `campos`, que é sempre um SUBCONJUNTO do que a
 // ingestão indexa (s.camposIndexados): o WIP do corrente usa o conjunto inteiro e
@@ -882,7 +931,7 @@ func (s *Store) varreOsRecordsDoSegmento(
 	seg uint32,
 	campos []types.FieldID,
 	emite func(campo types.FieldID, h uint64, row types.RowID) error,
-) error {
+) (int64, error) {
 	// O contador sobe na ENTRADA, e conta a varredura pedida — não a concluída.
 	// É o que ele precisa medir: a leitura de até 512 MiB é paga assim que
 	// começa, e uma varredura cancelada no meio já custou o prefixo. Zerá-la aqui
@@ -893,7 +942,7 @@ func (s *Store) varreOsRecordsDoSegmento(
 		chave  []byte
 		leitor encoding.FieldReader
 	)
-	_, err := s.segR.ScanFrom(seg, int64(segment.HeaderSize), func(_ uint32, rec types.Record) error {
+	fimValido, err := s.segR.ScanFrom(seg, int64(segment.HeaderSize), func(_ uint32, rec types.Record) error {
 		// O cancelamento é conferido por RECORD, e não por segmento: um
 		// segmento de 512 MiB é a unidade que se quer poder abandonar no meio,
 		// e conferir só na entrada tornaria o ctx decorativo.
@@ -923,5 +972,5 @@ func (s *Store) varreOsRecordsDoSegmento(
 			}
 		}
 	})
-	return err
+	return fimValido, err
 }

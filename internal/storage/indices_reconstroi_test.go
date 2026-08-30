@@ -3,12 +3,15 @@ package storage
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/index/segindex"
+	"github.com/nishisan-dev/nishidb/internal/storage/segment"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
@@ -511,4 +514,96 @@ func camposDoSeladoEmCache(t *testing.T, s *Store, seg uint32) []types.FieldID {
 		t.Fatalf("o segmento %d não tem índice em cache depois do garanteSelado", seg)
 	}
 	return sel.Campos()
+}
+
+// TestOSegmentoQueVirouCorrenteEntreAFotografiaEAVarreduraNaoMataOLaco fecha a
+// corrida simétrica à do segmento aposentado: o .dat do segmento novo nasce
+// dentro do Append, ANTES de o aposAppend trocar o curSegID, então a fotografia
+// da fila pode listá-lo enquanto o Load ainda devolve o anterior — e quando o
+// laço o alcança, ele JÁ é o corrente. A guarda de imutabilidade recusa (certo),
+// mas sem a sentinela a recusa subia como falha da passada, o laço logava
+// reconstrucao.parou e NÃO voltava até a reabertura do dataset: uma janela de
+// milissegundos que se resolve sozinha matava a cura da §2.4 inteira.
+func TestOSegmentoQueVirouCorrenteEntreAFotografiaEAVarreduraNaoMataOLaco(t *testing.T) {
+	s, _ := abreStoreIndexadoComSegmentoPequeno(t, []string{"node"}, 1<<20)
+	poeLinhas(t, s, 5)
+	corrente := s.curSegID.Load()
+
+	// A fila fotografada com o corrente dentro — o estado que a corrida produz.
+	feitos, err := s.reconstroiOsPendentes(context.Background(), []uint32{corrente})
+	if err != nil {
+		t.Fatalf("a passada morreu com o corrente na fila: %v — o laço pararia de vez por uma corrida benigna", err)
+	}
+	if feitos != 0 {
+		t.Errorf("feitos = %d, quero 0: o corrente é pulado, não reconstruído", feitos)
+	}
+
+	// A recusa DIRETA continua classificada para o chamador externo: pular no
+	// laço não pode afrouxar o contrato de quem pede a reconstrução na mão.
+	err = s.ConstroiIndiceDoSegmento(context.Background(), corrente, s.camposIndexados)
+	if !errors.Is(err, ErrInvalidArgument) {
+		t.Errorf("ConstroiIndiceDoSegmento(corrente) = %v, quero ErrInvalidArgument", err)
+	}
+}
+
+// TestAReconstrucaoRecusaSegmentoSeladoComCorrupcaoNoMeio guarda o desfecho
+// mais caro do produto. O ScanFrom para no primeiro record inválido SEM erro
+// (§52); num segmento selado isso é bit rot no meio do arquivo, não tail de
+// crash — e a recovery não o pegaria, porque só varre do corrente em diante.
+// Sem a guarda do fim válido, a reconstrução publicava um .sidx com todas as
+// seções declaradas e SEM as postings das rows posteriores à corrupção: a fila
+// o contava como pronto (ela compara seções, nunca conteúdo), o crc do arquivo
+// — escrito corretamente a partir de uma varredura incompleta — passava, e as
+// rows omitidas nunca viravam candidatas enquanto o locations continuava a
+// serví-las. Falso negativo permanente. A compaction guarda a operação idêntica
+// com a mesma comparação (fimValido != tamanho).
+func TestAReconstrucaoRecusaSegmentoSeladoComCorrupcaoNoMeio(t *testing.T) {
+	dir := t.TempDir()
+	s := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, CamposIndexadosPorNome: []string{"node"}})
+	alvo := s.curSegID.Load()
+	poeLinhasAteRotacionar(t, s, alvo)
+	// O checkpoint avança o ponto S do manifest para DEPOIS do segmento alvo:
+	// é o estado normal de qualquer segmento selado em regime, e é o que deixa
+	// a corrupção dele INVISÍVEL para a recovery — o replay da abertura varre
+	// [CurrentSegment..max], e dos anteriores confere só o tamanho.
+	if err := s.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// O segmento selado perde o índice (fica pendente) e ganha um byte podre no
+	// MEIO do dado — depois do header do segmento, longe do fim.
+	caminhoSidx := segindex.CaminhoSelado(filepath.Join(dir, "data"), alvo)
+	if err := os.Remove(caminhoSidx); err != nil {
+		t.Fatal(err)
+	}
+	caminhoDat := filepath.Join(dir, "data", fmt.Sprintf("segment-%08d.dat", alvo))
+	info, err := os.Stat(caminhoDat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(caminhoDat, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meio := int64(segment.HeaderSize) + (info.Size()-int64(segment.HeaderSize))/2
+	if _, err := f.WriteAt([]byte{0xFF, 0xFF, 0xFF, 0xFF}, meio); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s2 := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, CamposIndexadosPorNome: []string{"node"}})
+	err = s2.ConstroiIndiceDoSegmento(context.Background(), alvo, s2.camposIndexados)
+	if !errors.Is(err, ErrDatasetCorrupt) {
+		t.Fatalf("ConstroiIndiceDoSegmento sobre segmento podre = %v, quero ErrDatasetCorrupt: "+
+			"a varredura parou no meio e o índice sairia sem as rows posteriores", err)
+	}
+	if _, statErr := os.Stat(caminhoSidx); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("um .sidx foi publicado (%v) a partir de uma varredura incompleta: "+
+			"ele declararia completo um índice com falso negativo permanente", statErr)
+	}
 }
