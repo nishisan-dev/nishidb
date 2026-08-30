@@ -1,0 +1,70 @@
+@startuml indice_por_segmento
+title Índice por segmento: os quatro estados (§2.1) e as quatro fontes do Lookup (§3.2)
+
+state "CORRENTE" as corrente {
+  state ".widx — um arquivo por campo, mutável" as widx
+  widx : Set a cada applyRecord: sondagem no diretório
+  widx : de valores DISTINTOS + append da posting. O(1),
+  widx : sem varrer cadeia — é aqui que o O(n²) morre.
+}
+
+state "SELADO" as selado {
+  state ".sidx — um arquivo por segmento, imutável" as sidx
+  sidx : Todos os campos dentro (uma seção por campo).
+  sidx : Ordenado, dimensionado exato, PROT_READ,
+  sidx : crc32c no fim. NUNCA cresce: não há rehash.
+}
+
+state "AUSENTE" as ausente {
+  state "fora da janela" as fora
+  fora : deliberado — a maioria num dataset grande;\nna métrica: estado="fora"
+  state "pendente" as pendente
+  pendente : dentro da janela, na fila;\nna métrica: estado="pendente"
+}
+
+state "EM RECONSTRUÇÃO" as reconstrucao
+reconstrucao : goroutine de fundo escreve .sidx.tmp\n(nome único por escritor) e renomeia.\nBytes IDÊNTICOS aos da selagem — golden §6.3.
+
+[*] --> corrente : segmento novo\n(rotação do anterior)
+corrente --> selado : rotação: Sela ordena, agrupa,\nre-baseia, fsync, rename
+corrente --> corrente : restart: o .widx é DESCARTADO\ne refeito do próprio segmento (§2.5)
+selado --> pendente : campo acrescentado ao schema:\nfalta a seção dele (§2.6)
+selado --> fora : expulsão da janela:\no .sidx sai do disco (§4)
+fora --> pendente : janela alargada (§4.4)
+pendente --> reconstrucao : a fila compara seções do .sidx\ncom os campos declarados
+reconstrucao --> selado : rename atômico
+selado --> [*] : aposentadoria: o .sidx morre\nno mesmo passo do .dat (§2.3)
+fora --> [*] : aposentadoria\n(não há índice a remover)
+
+note bottom of corrente
+  **Fonte do Lookup:** caminhada da cadeia
+  do valor, materializada em `contagem`
+  elementos — UMA alocação, de tamanho exato.
+end note
+
+note bottom of selado
+  **Fonte do Lookup:** fatia CONTÍGUA do
+  array de postings, já ascendente —
+  ZERO alocação. crc32c divergente vira
+  ok=false e o segmento enumera (débito 103).
+end note
+
+note bottom of ausente
+  **Fontes do Lookup (enumeração):**
+  histórico — a faixa [primeiro, primeiroDoSeguinte),
+  sem ler record nenhum;
+  materializado — caminhada do locations.idx
+  emitindo os rowIds que apontam para o segmento.
+  Correto pelo contrato de superconjunto (§44):
+  o executor SEMPRE revalida o WHERE.
+end note
+
+note as uniao
+  **A união das fontes (§3.3)** vem do DADO
+  (min/maxRowID nos cabeçalhos), nunca do modo:
+  faixas disjuntas → CONCATENAÇÃO (histórico, sempre);
+  faixas sobrepostas → merge k-way com dedup
+  (materializado, sempre).
+end note
+
+@enduml

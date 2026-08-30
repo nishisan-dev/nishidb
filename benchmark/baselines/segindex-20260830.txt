@@ -1,0 +1,151 @@
+// Baseline dos micro-benchmarks com o índice por segmento — 2026-08-30,
+// commit base 550a320 (branch feature/indice-por-segmento, fim do ciclo do
+// subsistema 1: internal/index/hash e internal/index/bitmap apagados,
+// internal/index/segindex no lugar).
+//
+// Como reproduzir:
+//   NISHIDB_BENCH_DIR=/caminho/em/disco make bench-micro
+//
+// Como comparar com um baseline novo:
+//   benchstat benchmark/baselines/segindex-20260830.txt novo.txt
+//
+// Ambiente: Intel Core 7 150U (12 threads), Linux 6.8, Go 1.26.5, NVMe (ext4).
+// Parâmetros: Apply* com -benchtime=20000x, Query*/FullScan com -benchtime=2000x,
+// -count=6 por invocação; DUAS invocações completas concatenadas (12 amostras
+// por benchmark), porque a dispersão no laptop chega a 15-27% e a leitura que
+// vale é o MÍNIMO, nunca a mediana de poucas rodadas.
+//
+// NÃO comparável 1:1 com micro-20260813.txt: entre as duas datas o Apply ganhou
+// TTL condicional, colunas congeladas, merge: sum e a tabela histórica — o
+// custo por evento inclui trabalho que em 13/08 não existia.
+//
+// O nome BenchmarkQueryBitmapLimit100 é herdado (a consulta é a mesma: campo
+// indexado de baixa cardinalidade + LIMIT 100); renomeá-lo quebraria o
+// benchstat contra as baselines antigas.
+//
+// ===== rodada 1 =====
+go test ./benchmark/micro/ -run='^$' -bench='BenchmarkApply' -benchmem -benchtime=20000x -count=6
+goos: linux
+goarch: amd64
+pkg: github.com/nishisan-dev/nishidb/benchmark/micro
+cpu: Intel(R) Core(TM) 7 150U
+BenchmarkApplyCreate-12        	   20000	     11918 ns/op	 131.06 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyCreate-12        	   20000	     12752 ns/op	 122.50 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyCreate-12        	   20000	     11054 ns/op	 141.31 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyCreate-12        	   20000	     10988 ns/op	 142.16 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyCreate-12        	   20000	      9982 ns/op	 156.49 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyCreate-12        	   20000	     10024 ns/op	 155.82 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyMergePatch-12    	   20000	      2857 ns/op	  96.60 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyMergePatch-12    	   20000	      3001 ns/op	  91.98 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyMergePatch-12    	   20000	      2145 ns/op	 128.68 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyMergePatch-12    	   20000	      2895 ns/op	  95.32 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyMergePatch-12    	   20000	      2509 ns/op	 109.98 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyMergePatch-12    	   20000	      2780 ns/op	  99.29 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyStale-12         	   20000	      1819 ns/op	 151.14 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyStale-12         	   20000	      2316 ns/op	 118.72 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyStale-12         	   20000	      1677 ns/op	 163.99 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyStale-12         	   20000	      1614 ns/op	 170.39 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyStale-12         	   20000	      1653 ns/op	 166.39 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyStale-12         	   20000	      1641 ns/op	 167.57 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyIngestFake-12    	   20000	      4398 ns/op	  62.76 MB/s	     313 B/op	       3 allocs/op
+BenchmarkApplyIngestFake-12    	   20000	      5866 ns/op	  47.05 MB/s	     315 B/op	       3 allocs/op
+BenchmarkApplyIngestFake-12    	   20000	      4489 ns/op	  61.49 MB/s	     313 B/op	       3 allocs/op
+BenchmarkApplyIngestFake-12    	   20000	      5940 ns/op	  46.46 MB/s	     313 B/op	       3 allocs/op
+BenchmarkApplyIngestFake-12    	   20000	      4029 ns/op	  68.51 MB/s	     313 B/op	       3 allocs/op
+BenchmarkApplyIngestFake-12    	   20000	      4086 ns/op	  67.55 MB/s	     318 B/op	       3 allocs/op
+BenchmarkApplyIngestReal-12    	   20000	     17206 ns/op	  16.04 MB/s	      16 B/op	       0 allocs/op
+BenchmarkApplyIngestReal-12    	   20000	     15986 ns/op	  17.26 MB/s	      14 B/op	       0 allocs/op
+BenchmarkApplyIngestReal-12    	   20000	     16947 ns/op	  16.29 MB/s	      16 B/op	       0 allocs/op
+BenchmarkApplyIngestReal-12    	   20000	     16055 ns/op	  17.19 MB/s	      14 B/op	       0 allocs/op
+BenchmarkApplyIngestReal-12    	   20000	     16894 ns/op	  16.34 MB/s	      14 B/op	       0 allocs/op
+BenchmarkApplyIngestReal-12    	   20000	     16954 ns/op	  16.28 MB/s	      14 B/op	       0 allocs/op
+PASS
+ok  	github.com/nishisan-dev/nishidb/benchmark/micro	5.574s
+go test ./benchmark/micro/ -run='^$' -bench='BenchmarkQuery|BenchmarkFullScan' -benchmem -benchtime=2000x -count=6
+goos: linux
+goarch: amd64
+pkg: github.com/nishisan-dev/nishidb/benchmark/micro
+cpu: Intel(R) Core(TM) 7 150U
+BenchmarkQueryPointLookup-12       	    2000	      1033 ns/op	       2 B/op	       0 allocs/op
+BenchmarkQueryPointLookup-12       	    2000	      1079 ns/op	       2 B/op	       0 allocs/op
+BenchmarkQueryPointLookup-12       	    2000	      1039 ns/op	       2 B/op	       0 allocs/op
+BenchmarkQueryPointLookup-12       	    2000	      1058 ns/op	       2 B/op	       0 allocs/op
+BenchmarkQueryPointLookup-12       	    2000	      1214 ns/op	       2 B/op	       0 allocs/op
+BenchmarkQueryPointLookup-12       	    2000	      1190 ns/op	       2 B/op	       0 allocs/op
+BenchmarkQueryBitmapLimit100-12    	    2000	    320583 ns/op	   32699 B/op	     108 allocs/op
+BenchmarkQueryBitmapLimit100-12    	    2000	    347879 ns/op	   32706 B/op	     108 allocs/op
+BenchmarkQueryBitmapLimit100-12    	    2000	    281488 ns/op	   32703 B/op	     108 allocs/op
+BenchmarkQueryBitmapLimit100-12    	    2000	    334530 ns/op	   32706 B/op	     108 allocs/op
+BenchmarkQueryBitmapLimit100-12    	    2000	    309074 ns/op	   32710 B/op	     108 allocs/op
+BenchmarkQueryBitmapLimit100-12    	    2000	    331764 ns/op	   32695 B/op	     108 allocs/op
+BenchmarkFullScan1k-12             	    2000	    657995 ns/op	      50 B/op	       1 allocs/op
+BenchmarkFullScan1k-12             	    2000	    734616 ns/op	      50 B/op	       1 allocs/op
+BenchmarkFullScan1k-12             	    2000	    690888 ns/op	      50 B/op	       1 allocs/op
+BenchmarkFullScan1k-12             	    2000	    717351 ns/op	      50 B/op	       1 allocs/op
+BenchmarkFullScan1k-12             	    2000	    838307 ns/op	      50 B/op	       1 allocs/op
+BenchmarkFullScan1k-12             	    2000	    722150 ns/op	      50 B/op	       1 allocs/op
+PASS
+ok  	github.com/nishisan-dev/nishidb/benchmark/micro	19.226s
+// ===== rodada 2 =====
+go test ./benchmark/micro/ -run='^$' -bench='BenchmarkApply' -benchmem -benchtime=20000x -count=6
+goos: linux
+goarch: amd64
+pkg: github.com/nishisan-dev/nishidb/benchmark/micro
+cpu: Intel(R) Core(TM) 7 150U
+BenchmarkApplyCreate-12        	   20000	     11147 ns/op	 140.13 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyCreate-12        	   20000	     11006 ns/op	 141.93 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyCreate-12        	   20000	     12636 ns/op	 123.61 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyCreate-12        	   20000	     10504 ns/op	 148.71 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyCreate-12        	   20000	     13067 ns/op	 119.54 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyCreate-12        	   20000	     11303 ns/op	 138.19 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyMergePatch-12    	   20000	      2559 ns/op	 107.85 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyMergePatch-12    	   20000	      3117 ns/op	  88.54 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyMergePatch-12    	   20000	      3181 ns/op	  86.77 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyMergePatch-12    	   20000	      2130 ns/op	 129.56 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyMergePatch-12    	   20000	      2169 ns/op	 127.27 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyMergePatch-12    	   20000	      2234 ns/op	 123.55 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyStale-12         	   20000	      1696 ns/op	 162.11 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyStale-12         	   20000	      1641 ns/op	 167.54 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyStale-12         	   20000	      1639 ns/op	 167.81 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyStale-12         	   20000	      1939 ns/op	 141.85 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyStale-12         	   20000	      1806 ns/op	 152.27 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyStale-12         	   20000	      1619 ns/op	 169.87 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyIngestFake-12    	   20000	      4269 ns/op	  64.65 MB/s	     315 B/op	       3 allocs/op
+BenchmarkApplyIngestFake-12    	   20000	      3853 ns/op	  71.62 MB/s	     318 B/op	       3 allocs/op
+BenchmarkApplyIngestFake-12    	   20000	      3975 ns/op	  69.44 MB/s	     313 B/op	       3 allocs/op
+BenchmarkApplyIngestFake-12    	   20000	      3834 ns/op	  71.98 MB/s	     313 B/op	       3 allocs/op
+BenchmarkApplyIngestFake-12    	   20000	      3894 ns/op	  70.87 MB/s	     313 B/op	       3 allocs/op
+BenchmarkApplyIngestFake-12    	   20000	      4629 ns/op	  59.62 MB/s	     313 B/op	       3 allocs/op
+BenchmarkApplyIngestReal-12    	   20000	     11558 ns/op	  23.88 MB/s	      14 B/op	       0 allocs/op
+BenchmarkApplyIngestReal-12    	   20000	     13214 ns/op	  20.89 MB/s	      16 B/op	       0 allocs/op
+BenchmarkApplyIngestReal-12    	   20000	     12923 ns/op	  21.36 MB/s	      14 B/op	       0 allocs/op
+BenchmarkApplyIngestReal-12    	   20000	     13707 ns/op	  20.14 MB/s	      14 B/op	       0 allocs/op
+BenchmarkApplyIngestReal-12    	   20000	     14921 ns/op	  18.50 MB/s	      14 B/op	       0 allocs/op
+BenchmarkApplyIngestReal-12    	   20000	     12060 ns/op	  22.89 MB/s	      14 B/op	       0 allocs/op
+PASS
+ok  	github.com/nishisan-dev/nishidb/benchmark/micro	5.013s
+go test ./benchmark/micro/ -run='^$' -bench='BenchmarkQuery|BenchmarkFullScan' -benchmem -benchtime=2000x -count=6
+goos: linux
+goarch: amd64
+pkg: github.com/nishisan-dev/nishidb/benchmark/micro
+cpu: Intel(R) Core(TM) 7 150U
+BenchmarkQueryPointLookup-12       	    2000	      1028 ns/op	       2 B/op	       0 allocs/op
+BenchmarkQueryPointLookup-12       	    2000	      2237 ns/op	       2 B/op	       0 allocs/op
+BenchmarkQueryPointLookup-12       	    2000	      1107 ns/op	       2 B/op	       0 allocs/op
+BenchmarkQueryPointLookup-12       	    2000	      1628 ns/op	       2 B/op	       0 allocs/op
+BenchmarkQueryPointLookup-12       	    2000	       996.8 ns/op	       2 B/op	       0 allocs/op
+BenchmarkQueryPointLookup-12       	    2000	      1077 ns/op	       2 B/op	       0 allocs/op
+BenchmarkQueryBitmapLimit100-12    	    2000	    300823 ns/op	   32696 B/op	     108 allocs/op
+BenchmarkQueryBitmapLimit100-12    	    2000	    287485 ns/op	   32678 B/op	     108 allocs/op
+BenchmarkQueryBitmapLimit100-12    	    2000	    272389 ns/op	   32687 B/op	     108 allocs/op
+BenchmarkQueryBitmapLimit100-12    	    2000	    285343 ns/op	   32686 B/op	     108 allocs/op
+BenchmarkQueryBitmapLimit100-12    	    2000	    289217 ns/op	   32678 B/op	     108 allocs/op
+BenchmarkQueryBitmapLimit100-12    	    2000	    324628 ns/op	   32678 B/op	     108 allocs/op
+BenchmarkFullScan1k-12             	    2000	    673543 ns/op	      50 B/op	       1 allocs/op
+BenchmarkFullScan1k-12             	    2000	    667666 ns/op	      50 B/op	       1 allocs/op
+BenchmarkFullScan1k-12             	    2000	    672096 ns/op	      50 B/op	       1 allocs/op
+BenchmarkFullScan1k-12             	    2000	    649103 ns/op	      50 B/op	       1 allocs/op
+BenchmarkFullScan1k-12             	    2000	    726251 ns/op	      50 B/op	       1 allocs/op
+BenchmarkFullScan1k-12             	    2000	    661894 ns/op	      50 B/op	       1 allocs/op
+PASS
+ok  	github.com/nishisan-dev/nishidb/benchmark/micro	17.720s

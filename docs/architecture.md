@@ -373,6 +373,32 @@ A chave do índice inclui o **byte de tipo** — `internal/index/valuekey` é o 
 promovido: um `double` jamais casaria postings gravadas como `int64`, e o
 resultado seria vazio em silêncio.
 
+### O ciclo de vida do índice por segmento
+
+![Índice por segmento: os quatro estados do segmento e as quatro fontes do Lookup, com a união decidida pelo dado](https://uml.nishisan.dev/proxy?src=https://git-raw.nishisan.dev/nishisan-dev/nishidb/main/docs/diagrams/indice_por_segmento.puml)
+
+O desenho substituiu os dois motores globais (`hash` e `bitmap`) porque o
+global tinha um modo de falha medido em produção, e a medida está em
+[`benchmark/baselines/piloto-pre-ciclo-20260830.md`](../benchmark/baselines/piloto-pre-ciclo-20260830.md):
+com 47 M de linhas e o índice em 3,46 GiB, a recópia do rehash — que corre sob
+o `wmu` — congelou a ingestão por **18 a 52 minutos**, com 99,16% do CPU numa
+única pilha e 64% dentro de um só `atomic.Int32.Add` (o mutex por slot do
+`mmap`, tomado uma vez por slot varrido). O episódio era **recorrente e
+dobrava** de duração a cada ocorrência, porque a resposta ao fator de carga é
+dobrar a tabela. No `.sidx` selado não existe fator de carga, não existe lápide
+e não existe tabela para dobrar: o modo de falha não ficou raro, ficou
+**inexprimível**.
+
+O que a troca custou e devolveu no mesmo piloto, no mesmo dia, com o dataset de
+135 GiB migrado em produção
+([`benchmark/baselines/piloto-pos-ciclo-20260830.md`](../benchmark/baselines/piloto-pos-ciclo-20260830.md)):
+RSS de 2.812 para **432 MiB** na subida; bytes de índice de 3.716 para
+**614 MB**; `poll_blocked` de 32.319 s acumulados para **exatamente 0**; fila e
+lag **zerados**. A migração dos segmentos dentro da janela drenou sozinha em
+~5 minutos (`pendente` 63 → 0, com a ingestão correndo ao lado), e os 372
+segmentos fora da janela **não foram tocados** — é a janela que torna a
+migração barata.
+
 **Um writer, muitos leitores — DENTRO do processo.** O writer é serializado por
 mutex; as leituras são concorrentes com ele. O `Close` faz **quiesce**: espera
 as operações em voo e só então libera o lock do dataset, e todo iterador
@@ -565,7 +591,14 @@ Ou seja: por query o custo é da ordem de algumas dezenas de alocações e depen
 da forma da consulta; **por linha é zero**, e é essa a propriedade gateada.
 
 Latências medidas com 8M rows, com as consultas concorrentes a uma **tentativa**
-de escrita — não a escrita sustentada (ver a ressalva logo abaixo da tabela):
+de escrita — não a escrita sustentada (ver a ressalva logo abaixo da tabela).
+A rodada é de 14/08, **anterior ao índice por segmento**: as linhas "bitmap" e
+"interseção" atravessavam os motores globais que o subsistema 1 substituiu, e
+valem como registro daquele motor contra os tetos da spec. O caminho indexado
+novo tem medida própria em
+[`benchmark/baselines/segindex-20260830.txt`](../benchmark/baselines/segindex-20260830.txt)
+(corpus micro, não comparável ao de 8M): mínimo de **272 µs** na consulta
+indexada de baixa cardinalidade com LIMIT 100, contra o teto de 50 ms do §90.
 
 | Rota | p95 (SQL completo) | p95 (Store direto) | Teto da spec |
 |---|---:|---:|---:|
@@ -1154,7 +1187,10 @@ conhecê-las. Cada uma tem dono em [`debitos.md`](debitos.md).
   gravado" vai divergir do dataset no próximo restart.
 - **`mode: replace` existe, mas some do resumo do `ingest`.** Além do `merge`
   (default), a materialização aceita `mode: replace`, em que cada evento
-  substitui o estado inteiro da chave e as postings antigas são limpas. O
+  substitui o estado inteiro da chave — as postings do valor antigo **ficam**
+  no índice do segmento em que nasceram, como candidato a mais que a
+  revalidação do §44 descarta, e morrem quando aquele segmento é aposentado
+  (não há fase de CLEAR, §5.2). O
   contador dessa ação (`ActionReplaced`) **não é impresso**: o resumo só quebra
   em criados/atualizados/stale, e a substituição não cai em nenhum deles.
   Medido com o binário, 3 eventos da mesma chave num dataset `mode: replace`:
@@ -1912,7 +1948,10 @@ quem só deveria raspar `/metrics`.
 
 ## O que ainda não existe
 
-TTL e tombstones por retenção (M6) e o **backfill da tabela histórica** (ela
+**Tombstones por retenção** — a expiração por inatividade existe e está
+descrita acima; o que não existe é o tombstone que devolveria o **disco** da
+entidade expirada, que hoje some da consulta e continua nos segmentos — e o
+**backfill da tabela histórica** (ela
 começa vazia quando é ligada, e o dataset base não guarda os eventos que a
 preencheriam). O **backfill do índice secundário** (débito 22) SAIU desta lista:
 declarar um campo indexado sobre um dataset que já tem linhas deixou de ser
