@@ -319,10 +319,14 @@ func escreveInspect(w io.Writer, d protocolo.DatasetMeta) {
 		if c.Auto {
 			auto = "sim"
 		}
-		// O índice sai com o nome do YAML ("none", "bitmap", "hash") e não
-		// como sim/não: é ele que decide se a consulta faz lookup ou cai em
-		// full scan, e apagar a diferença entre bitmap e hash tiraria do
-		// operador exatamente a informação que ele veio buscar.
+		// O índice sai com a palavra do wire ("bitmap" ou "none") e não como
+		// sim/não: é ela que diz se a consulta faz lookup ou cai em full scan,
+		// que é a informação que o operador veio buscar.
+		//
+		// Eram TRÊS palavras, e a terceira distinguia os motores: "hash" saiu
+		// quando o motor único tornou a distinção inexistente. As outras duas
+		// ficaram por serem contrato — ver o godoc de protocolo.MotorStats e de
+		// schema.CompiledField.NomeDoIndice.
 		linha(w, c.Name, alias, c.Type, c.JDBC, c.Index, auto)
 	}
 }

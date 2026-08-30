@@ -16,10 +16,11 @@ func abreDireto(t *testing.T, a *ambiente) (*storage.Store, *schema.Compiled) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Os dois conjuntos saem do schema, e não de um laço local: abrir o dataset
-	// com um conjunto de índices diferente do que o CLI usa faria este helper
+	// O conjunto sai do schema, e não de um laço local: abrir o dataset com um
+	// conjunto de índices diferente do que o CLI usa faria este helper
 	// reproduzir, dentro da suíte, o modo de falha cruzado que
-	// schema.CamposComIndice/CamposComIndice existem para impedir.
+	// schema.CamposComIndice existe para impedir — e que o par
+	// CamposComBitmap/CamposComHash existia para impedir antes dela.
 	st, err := storage.Open(storage.Options{
 		Dir:                    filepath.Join(a.dir, "dados", "radius_sessions"),
 		CamposIndexadosPorNome: schema.CamposComIndice(spec),

@@ -104,8 +104,8 @@ type Options struct {
 	EstimatedRows uint64 // pre-sizing da primary (piso 1<<20 slots)
 	// CamposIndexados são os campos com índice por segmento, por ID.
 	//
-	// É UM par, e não mais os quatro campos de dois motores (CamposIndexados,
-	// CamposIndexadosPorNome, CamposIndexados, CamposIndexadosPorNome): com um motor só, os dois
+	// É UM par, e não mais os quatro campos de dois motores (BitmapFields,
+	// BitmapFieldNames, HashFields, HashFieldNames): com um motor só, os dois
 	// grupos alimentavam o MESMO índice, e o Store abria a união deles. Um par
 	// de campos que só sabe declarar o mesmo conjunto duas vezes é convite ao
 	// dia em que alguém preenche um e esquece o outro.

@@ -285,19 +285,19 @@ func TestIntegracaoFimAFim(t *testing.T) {
 	})
 
 	// Era a regra R2 do planner e o motor hash, ponta a ponta — a prova de que
-	// o débito 19 fechou (enquanto o *storage.Store não implementava
-	// Lookup, `p.hash` era nil, o plano caía para FullScan e a query
-	// varria o dataset inteiro, 17,8M linhas no piloto por uma consulta que o
-	// índice resolve num probe).
+	// o débito 19 fechou (enquanto o *storage.Store não implementava LookupHash,
+	// `p.hash` era nil, o plano caía para FullScan e a query varria o dataset
+	// inteiro, 17,8M linhas no piloto por uma consulta que o índice resolve num
+	// probe).
 	//
 	// A D5 aposentou `index: hash`: `nas` sai indexado como qualquer outro
-	// campo, e o plano que o atende é o IndexScan — a métrica trocou de nome,
-	// o resto do teste (e a razão de existir) não. O oráculo continua o mesmo
-	// dos outros campos indexados, e segue impedindo o teste de se contentar
-	// com "veio alguma
-	// coisa": o índice devolve SUPERSET por desenho, então um resultado A MAIS
-	// seria defeito da revalidação e A MENOS seria defeito do índice — as duas
-	// direções seguem conferidas pelo comparaConjuntos.
+	// campo, e o plano que o atende é o IndexScan (era o BitmapScan, e antes
+	// dele o HashIndex) — a métrica trocou de nome, o resto do teste (e a razão
+	// de existir) não. O oráculo continua o mesmo dos outros campos indexados, e
+	// segue impedindo o teste de se contentar com "veio alguma coisa": o índice
+	// devolve SUPERSET por desenho, então um resultado A MAIS seria defeito da
+	// revalidação e A MENOS seria defeito do índice — as duas direções seguem
+	// conferidas pelo comparaConjuntos.
 	t.Run("indice escolhe o plano e acerta o conjunto", func(t *testing.T) {
 		alvo := algumValor(t, ig.oracle, "NAS-Identifier")
 		want := ig.oracle.keysOnde(func(e map[string]any) bool { return campoIgual(e, "NAS-Identifier", alvo) })

@@ -199,8 +199,8 @@ func candidatos(t *testing.T, s *fakestorage.Store, plan planner.Plan) map[types
 	return out
 }
 
-// O despacho por term.Kind saiu daqui junto com o campo: os dois ramos
-// chamavam o Lookup do motor do termo, e existe um motor só.
+// O despacho por term.Kind saiu daqui junto com o campo: um ramo chamava
+// LookupHash e o outro LookupBitmap, e existe um motor só.
 func lookup(t *testing.T, s *fakestorage.Store, term planner.IndexTerm) types.RowIDIterator {
 	t.Helper()
 	it, err := s.Lookup(term.Field.ID, term.Val)

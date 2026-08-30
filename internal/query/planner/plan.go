@@ -68,7 +68,7 @@ type PointLookupPlan struct {
 
 // IndexScanPlan: Store.Lookup(Field.ID, Val).
 //
-// É UM tipo, e não mais o par IndexScanPlan/IndexScanPlan: os dois nomeavam o
+// É UM tipo, e não mais o par BitmapScanPlan/HashIndexPlan: os dois nomeavam o
 // mesmo despacho para dois motores que colapsaram num só (spec §3.1).
 type IndexScanPlan struct {
 	Field *schema.CompiledField

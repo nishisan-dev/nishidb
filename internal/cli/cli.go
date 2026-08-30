@@ -229,9 +229,9 @@ func codigoDoErro(err error) int {
 // abreDataset resolve a configuração, carrega o schema do dataset e abre o
 // Store com os índices que o YAML declara.
 //
-// Os bitmaps saem do PRÓPRIO YAML, e são passados por NOME: os FieldIDs
-// nascem do dicionário, que vive dentro do Store — exigir IDs aqui obrigaria
-// a abrir sem índice, compilar, fechar e reabrir.
+// Os campos indexados saem do PRÓPRIO YAML, e são passados por NOME: os
+// FieldIDs nascem do dicionário, que vive dentro do Store — exigir IDs aqui
+// obrigaria a abrir sem índice, compilar, fechar e reabrir.
 func abreDataset(cfg *nishiconfig.Config, nome string) (*storage.Store, *schema.Compiled, *schema.DatasetSpec, error) {
 	spec, err := schema.Load(cfg.SpecDoDataset(nome), cfg.DefaultsDeQuery())
 	if err != nil {

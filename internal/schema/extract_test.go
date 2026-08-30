@@ -265,6 +265,16 @@ func TestDerivadaSobreviveAoReopenSemVirarCampoDeTopo(t *testing.T) {
 // do CLI e o benchmark —, e nenhum deles conhecia a coluna derivada: o
 // servidor criaria o dataset com o índice, e o `nishidb query` seguinte
 // recusaria abrir por divergência com o manifest.
+//
+// A função chamava-se CamposComBitmap, e tinha uma gêmea, CamposComHash, com um
+// arquivo de teste próprio — campos_hash_test.go, com TestCamposComHashInclui-
+// ADerivada, TestCamposComHashVazioSemIndice e TestCamposComBitmapEComHash-
+// DevolvemOMesmoConjunto. As duas liam a MESMA chave do YAML desde a D5 e
+// colapsaram numa só quando storage.Options unificou o par de campos por motor;
+// o arquivo saiu junto, porque os três casos dele são os dois daqui campo por
+// campo — a derivada indexada, a lista vazia e a ordem alfabética entre dois
+// campos de topo. O NOME destes dois testes fica: ele diz de qual das duas
+// gêmeas esta cobertura veio.
 func TestCamposComBitmapIncluiADerivada(t *testing.T) {
 	yml := strings.Replace(extractYAML,
 		"          as: probe_ip\n          type: string",

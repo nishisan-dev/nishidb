@@ -56,9 +56,17 @@ func New(store Store, m *Metrics) *Planner {
 // NUNCA entra em panic: toda incerteza vira FullScan, que é sempre correto —
 // só mais lento — porque o executor revalida o WHERE inteiro (§44).
 //
-// A ordem das regras é a prioridade da spec §63, e ela é FIXA: R1 primary, R2
-// índice, R5 união de OR na raiz, full scan. Não existe desempate — com um
-// motor de índice só, não há "qual dos dois" a decidir.
+// A ordem é a prioridade da spec §63, e ela é FIXA: primary, índice, união de
+// OR na raiz, full scan. Não existe desempate — com um motor de índice só, não
+// há "qual dos dois" a decidir.
+//
+// Os rótulos R1/R2/R5 que marcam os blocos abaixo são HISTÓRICOS: eles vêm das
+// regras numeradas do §63 ORIGINAL, que tinha cinco passos (primary, hash,
+// bitmap, interseção/união, full scan). A seção hoje lista quatro, e os números
+// dela não correspondem mais aos rótulos daqui — a R5 é o passo 3 da lista. Os
+// rótulos ficam porque é por eles que a suíte e os comentários deste ciclo
+// nomeiam as regras; quem for reconciliar as duas numerações renumera os dois
+// lados de uma vez, nunca só um.
 func (p *Planner) Plan(bq *binder.BoundQuery) Plan {
 	if bq == nil || bq.Where == nil {
 		return p.conta(FullScan())
