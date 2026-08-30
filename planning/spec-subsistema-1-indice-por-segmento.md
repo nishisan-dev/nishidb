@@ -916,5 +916,11 @@ mediana de 3.
 - `docs/debitos.md` — fecha o **22** (§2.6) e tira o **102** da rota crítica
   (§1.2, com o item solto da §6 da direção continuando válido para `primary` e
   `denseFile`); débitos novos a partir do 103;
-- `README.md` e CHANGELOG — a mudança de contrato de configuração da D5
+Recusa na subida com **exit 3**, não aceitação com WARN: um alias que ainda
+funciona é fallback para legado, e o operador continuaria escrevendo uma
+distinção que não existe. É mudança de contrato de configuração e entra
+declarada no **README** e na **descrição da release** — o repositório não tem
+arquivo de changelog, e o §8 do `CLAUDE.md` põe o changelog na release, criada
+à mão por `gh release create`. Um segundo changelog em arquivo divergiria do
+primeiro, que é o erro que esta spec recusa em toda parte.
   (`index: hash`/`index: bitmap` recusadas, exit 3).
