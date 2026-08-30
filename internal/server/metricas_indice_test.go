@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -382,7 +383,7 @@ func dentroDeComRotulo(raiz ast.Node, alvo ast.Node) bool {
 // índices corrompidos: os dez números saem diferentes de zero e diferentes entre
 // si, e aí qualquer troca de fio ou de rótulo fica vermelha sozinha.
 func TestStatsEMetricsLeemAMesmaEstrutura(t *testing.T) {
-	srv := bancadaDeIndice(t)
+	srv, _, _ := bancadaDeIndice(t)
 	idx := indiceDoDataset(t, srv, tabelaDaBancada)
 	exigeDezNumerosDistintos(t, idx)
 
@@ -557,11 +558,12 @@ var (
 // então o materializer com o histórico ligado. Reproduzir em vez de importar é o
 // preço de não haver rota HTTP de ingestão; o que não pode é DIVERGIR, e por isso
 // os campos indexados saem de schema.CamposComIndice, como no servidor.
-func bancadaDeIndice(t *testing.T) *server.Servidor {
+func bancadaDeIndice(t *testing.T) (*server.Servidor, string, string) {
 	t.Helper()
 	a := novoAmbienteCom(t, blocoPadrao)
 	a.escreveDataset("eventos", specDaBancadaDeIndice)
-	dir := filepath.Join(semeiaHistorico(t, a, "eventos", eventosComNode, eventosSemNode), "data")
+	dirIrma := semeiaHistorico(t, a, "eventos", eventosComNode, eventosSemNode)
+	dir := filepath.Join(dirIrma, "data")
 
 	for _, seg := range segmentosSemIndice {
 		if err := os.Remove(segindex.CaminhoSelado(dir, seg)); err != nil {
@@ -589,7 +591,7 @@ func bancadaDeIndice(t *testing.T) *server.Servidor {
 		t.Fatalf("a consulta indexada da bancada devolveu %d", resp.StatusCode)
 	}
 	fecha(t, resp)
-	return srv
+	return srv, a.carrega().DirDoDataset("eventos"), dirIrma
 }
 
 // esperaOsEstadosAssentarem bloqueia até o retrato parar de mudar.
@@ -740,7 +742,8 @@ func TestAAjudaDoContadorDeCrcNaoPrometeTaxa(t *testing.T) {
 // anterior comparava os dois números do MESMO Store, no storage, onde a contenção
 // vale trivialmente e o cruzamento é invisível.
 func TestOsBytesDeIndiceVivemNoRotuloDaIrma(t *testing.T) {
-	amostras := coletaAmostras(t, bancadaDeIndice(t))
+	srv, dirBase, dirIrma := bancadaDeIndice(t)
+	amostras := coletaAmostras(t, srv)
 
 	valor := func(familia, ds string) float64 {
 		t.Helper()
@@ -751,29 +754,91 @@ func TestOsBytesDeIndiceVivemNoRotuloDaIrma(t *testing.T) {
 		return a.Valor
 	}
 	totalNoBase := valor(metrics.MetHistoryIndexBytes, "eventos")
-	parcelaNoBase := valor(metrics.MetIndexBytes, "eventos")
 	parcelaNaIrma := valor(metrics.MetIndexBytes, tabelaDaBancada)
 
-	if totalNoBase <= 0 || parcelaNaIrma <= 0 {
-		t.Fatalf("montagem: total no base = %v e parcela na irmã = %v; sem os dois em disco nada abaixo discrimina",
-			totalNoBase, parcelaNaIrma)
+	// O ORÁCULO É O DISCO, medido por fora do processo em cada um dos dois
+	// diretórios. Comparar as duas SÉRIES entre si não bastava: a do base soma
+	// indexes/ e checkpoint/ do base, que já são maiores que a parcela da irmã, e
+	// por isso "a parcela é menor que o total" continuava verdadeiro mesmo com o
+	// history_index_bytes lendo o Store ERRADO. O que discrimina é de QUAL
+	// diretório o número saiu.
+	deDisco := func(dir string) float64 {
+		t.Helper()
+		return float64(blocosDeIndiceEm(t, dir))
 	}
-	// A contenção verdadeira, e ela é ENTRE RÓTULOS.
-	if parcelaNaIrma >= totalNoBase {
-		t.Errorf("%s{dataset=%q} = %v não é menor que %s{dataset=\"eventos\"} = %v: a parcela por segmento tem de ser "+
-			"estritamente menor que o total, que soma também indexes/ e checkpoint/",
-			metrics.MetIndexBytes, tabelaDaBancada, parcelaNaIrma, metrics.MetHistoryIndexBytes, totalNoBase)
+	if quer := deDisco(dirIrma); totalNoBase != quer {
+		t.Errorf("%s{dataset=\"eventos\"} = %v e o índice em disco da IRMÃ soma %v blocos: a série do bloco `history` "+
+			"descreve a tabela irmã e sai no rótulo do BASE — se ela passar a descrever o próprio base, toda a prosa "+
+			"sobre a parcela vira mentira de novo", metrics.MetHistoryIndexBytes, totalNoBase, quer)
 	}
-	// E a conta que o texto antigo induzia: no rótulo do BASE a série por segmento
-	// é a do PRÓPRIO base, e subtraí-la não cancela parcela nenhuma.
-	if totalNoBase-parcelaNoBase != totalNoBase {
-		t.Logf("no rótulo do base a série por segmento vale %v; o base tem índice próprio nesta bancada", parcelaNoBase)
+	if doBase := deDisco(dirBase); totalNoBase == doBase {
+		t.Errorf("%s{dataset=\"eventos\"} = %v é igual ao índice em disco do PRÓPRIO base: com os dois iguais este "+
+			"oráculo não distingue de qual Store o número veio, e a bancada precisa ser retunada",
+			metrics.MetHistoryIndexBytes, totalNoBase)
 	}
-	if parcelaNoBase == parcelaNaIrma {
+	// E a contenção, agora sabendo que os dois lados descrevem a mesma tabela por
+	// rótulos diferentes.
+	if parcelaNaIrma <= 0 || parcelaNaIrma >= totalNoBase {
+		t.Errorf("%s{dataset=%q} = %v contra o total %v: a parcela por segmento tem de ser positiva e estritamente "+
+			"menor que o total, que soma também indexes/ e checkpoint/ da MESMA tabela",
+			metrics.MetIndexBytes, tabelaDaBancada, parcelaNaIrma, totalNoBase)
+	}
+	// A conta que o texto antigo induzia, escrita como asserção: no rótulo do BASE
+	// a série por segmento descreve o PRÓPRIO base, então subtraí-la ali não
+	// cancela parcela nenhuma.
+	if parcelaNoBase := valor(metrics.MetIndexBytes, "eventos"); parcelaNoBase == parcelaNaIrma {
 		t.Errorf("%s vale %v tanto em {dataset=\"eventos\"} quanto em {dataset=%q}: se os dois rótulos publicassem o "+
-			"MESMO número, o cruzamento que este teste mede não existiria e a prosa corrigida seria desnecessária",
+			"MESMO número, o cruzamento que esta prosa corrige não existiria",
 			metrics.MetIndexBytes, parcelaNoBase, tabelaDaBancada)
 	}
+}
+
+// blocosDeIndiceEm é o `du` do operador sobre tudo que conta como índice de um
+// dataset: indexes/, checkpoint/ e os arquivos de índice que moram em data/.
+//
+// Medido em BLOCOS, como a produção mede, e por fora do processo — é a única
+// forma de dizer de QUAL diretório um número publicado saiu.
+func blocosDeIndiceEm(t *testing.T, dir string) int64 {
+	t.Helper()
+	var total int64
+	for _, sub := range []string{"indexes", "checkpoint"} {
+		total += somaBlocos(t, filepath.Join(dir, sub), nil)
+	}
+	total += somaBlocos(t, filepath.Join(dir, "data"), func(nome string) bool {
+		return strings.HasSuffix(nome, ".sidx") || strings.HasSuffix(nome, ".widx") || strings.HasSuffix(nome, ".tmp")
+	})
+	return total
+}
+
+// somaBlocos percorre o diretório somando os blocos ALOCADOS dos arquivos que
+// passam no filtro. Diretório ausente soma zero: é o estado normal de um dataset
+// que ainda não tem aquela parte.
+func somaBlocos(t *testing.T, dir string, aceita func(string) bool) int64 {
+	t.Helper()
+	entradas, err := os.ReadDir(dir)
+	if err != nil {
+		return 0
+	}
+	var total int64
+	for _, e := range entradas {
+		if e.IsDir() {
+			total += somaBlocos(t, filepath.Join(dir, e.Name()), aceita)
+			continue
+		}
+		if aceita != nil && !aceita(e.Name()) {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		st, ok := info.Sys().(*syscall.Stat_t)
+		if !ok {
+			t.Fatalf("stat de %s não trouxe Stat_t: este oráculo mede BLOCOS, e sem eles ele mediria outra coisa", e.Name())
+		}
+		total += st.Blocks * 512
+	}
+	return total
 }
 
 // TestOsCabecalhosSaemNomeadosParaCadaFamilia é o oráculo do campo Familia, que
