@@ -505,10 +505,14 @@ type Store struct {
 	//
 	// A CONSEQUÊNCIA PARA QUEM OPERA, e ela é o oposto do que esta série já
 	// afirmou de si mesma: um alerta por `rate()` dá um pico e se auto-resolve em
-	// minutos, enquanto o segmento continua enumerando indefinidamente. Quem
-	// responde "há índice podre AGORA" é a enumeração persistente
-	// (segPorEnumeracao) num dataset que deveria estar indexado; esta série
-	// responde "quantos arquivos já foram pegos desde a subida".
+	// minutos, enquanto o segmento continua enumerando indefinidamente.
+	//
+	// E não há série a que redirecionar, o que é o limite honesto a registrar. O
+	// gauge de estados é CEGO: o arquivo reprovado conta como `selado`, porque a
+	// pendência lê a tabela de seções sem conferir crc (débito 103). O
+	// segPorEnumeracao sobe, mas no MESMO balde de um segmento fora da janela, sem
+	// rótulo que separe a causa. O sinal é o WARN indice.selado_corrompido; esta
+	// série diz "quantos foram pegos desde a subida".
 	crcFalhas atomic.Int64
 	// segPorIndice e segPorEnumeracao contam os segmentos que cada Lookup
 	// resolveu por cada caminho (§3.4). São a ÚNICA coisa que o chamador enxerga

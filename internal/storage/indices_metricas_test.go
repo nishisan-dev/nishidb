@@ -498,3 +498,98 @@ func TestAPassadaQueFalhaPreservaORetratoAnterior(t *testing.T) {
 			"encolhendo quando o que encolheu foi a medição", e, bom)
 	}
 }
+
+// TestOGaugeDeEstadosEhCegoAIndicePodre é o LIMITE do subsistema, medido em vez
+// de presumido — e é ele que sustenta a prosa da nishidb_index_crc_falhas_total,
+// que já mandou o operador olhar a série errada duas vezes neste ciclo.
+//
+// A intuição diz que um dataset com índices corrompidos deve aparecer diferente
+// de um saudável em alguma série. No gauge de estados ele é IDÊNTICO, e a razão é
+// estrutural: a fila de pendência é derivada da TABELA DE SEÇÕES, que não confere
+// crc — não pode, seriam até 2,25 GB de leitura por arquivo a cada passada
+// (débito 103). Para a contagem de estados, o arquivo podre é um índice completo,
+// e ele é contado como `selado`.
+//
+// Esse é justamente o gauge que a migração acompanha minuto a minuto. Ele pode
+// mostrar a fila drenando e todos os segmentos `selado` num dataset em que metade
+// dos índices não responde.
+//
+// O QUE A ENUMERAÇÃO FAZ, e por que ela também não serve de alarme: ela sobe, sim
+// — o segmento corrompido responde sem índice —, mas o incremento é o MESMO que
+// um segmento fora da janela ou na fila produz, no mesmo balde e sem rótulo que
+// separe a causa. Ela conta "quantos responderam sem índice", nunca "quantos
+// deveriam ter índice e não tinham". Este teste mede as duas metades.
+//
+// Se um dia o gauge passar a discriminar — apagando o arquivo reprovado, que é o
+// remédio do débito 103 —, ele reprova e manda atualizar a prosa junto. É o
+// acoplamento que se quer: o limite escrito e o limite medido caem juntos.
+func TestOGaugeDeEstadosEhCegoAIndicePodre(t *testing.T) {
+	retrato := func(corromper int) EstatisticasDeIndice {
+		t.Helper()
+		base := openStore(t, Options{})
+		dir := t.TempDir()
+		s := abreHistoricoIndexadoEm(t, base, dir, []string{"node"}, 8<<10)
+		for range 4 {
+			poeLinhasAteRotacionar(t, s, s.curSegID.Load())
+		}
+		campo := campoDoDicionario(t, s, "node")
+		for seg := uint32(1); seg <= uint32(corromper); seg++ {
+			corrompeOUltimoByte(t, segindex.CaminhoSelado(filepath.Join(dir, "data"), seg))
+		}
+		// A passada de pendência é o que publica os estados; sem ela o retrato
+		// nasce zerado e a comparação abaixo seria entre dois nadas.
+		pendentes(t, s, JanelaDeIndice{})
+		candidatosCrus(t, s, campo, strVal("n1"))
+		return s.EstatisticasDeIndice()
+	}
+
+	const podres = 2
+	saudavel := retrato(0)
+	podre := retrato(podres)
+
+	if podre.CRCFalhas != podres || saudavel.CRCFalhas != 0 {
+		t.Fatalf("montagem: crc_falhas = %d no podre e %d no saudável, queria %d e 0; sem a corrupção detectada "+
+			"a comparação abaixo não descreve nada", podre.CRCFalhas, saudavel.CRCFalhas, podres)
+	}
+	if saudavel.Estados == (EstadosDeSegmento{}) {
+		t.Fatalf("montagem: os estados nasceram zerados (%+v); a igualdade abaixo passaria por vacuidade", saudavel.Estados)
+	}
+
+	// A metade que carrega o limite: o gauge não se move.
+	if saudavel.Estados != podre.Estados {
+		t.Errorf("os estados DIFEREM entre o dataset saudável (%+v) e o corrompido (%+v): se isso passou a ser "+
+			"verdade, o gauge deixou de ser cego à corrupção — atualize a Ajuda da série de crc, este godoc e o "+
+			"débito 103 junto", saudavel.Estados, podre.Estados)
+	}
+
+	// A outra metade: a enumeração sobe exatamente como subiria com mais dois
+	// segmentos sem índice por qualquer outra causa. O número é o mesmo; a causa
+	// não viaja com ele.
+	if delta := podre.PorEnumeracao - saudavel.PorEnumeracao; delta != podres {
+		t.Errorf("a enumeração subiu %d com %d índices podres, queria %d: o incremento é o de um segmento sem "+
+			"índice, e é por isso que ele não distingue corrupção de segmento fora da janela", delta, podres, podres)
+	}
+}
+
+// corrompeOUltimoByte troca o byte final do arquivo, que é onde o crc32c mora.
+//
+// O FIM, e não o começo: corrompendo o cabeçalho o arquivo vira "ilegível", cai
+// no indiceIlegivel e o segmento é reagendado — a corrupção some e o teste passa
+// a medir outra coisa. É o mesmo cuidado que a bancada do servidor documenta.
+func corrompeOUltimoByte(t *testing.T, caminho string) {
+	t.Helper()
+	fi, err := os.Stat(caminho)
+	if err != nil {
+		t.Fatalf("montagem: stat de %s: %v", caminho, err)
+	}
+	f, err := os.OpenFile(caminho, os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("montagem: abrir %s: %v", caminho, err)
+	}
+	if _, err := f.WriteAt([]byte{0xAA}, fi.Size()-1); err != nil {
+		t.Fatalf("montagem: corromper %s: %v", caminho, err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("montagem: fechar %s: %v", caminho, err)
+	}
+}

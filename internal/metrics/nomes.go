@@ -331,10 +331,10 @@ const (
 	// IRMÃ e sai rotulado pelo dataset BASE, onde o operador declarou a política;
 	// esta descreve a mecânica do Store em que sai, e num par X/X_history a
 	// parcela vive em {dataset="X_history"}. Um `history_index_bytes -
-	// index_bytes` casa por rótulo idêntico (o default do PromQL) e devolve o
-	// número inteiro de volta, porque no rótulo do base esta série é o índice do
-	// PRÓPRIO base — tipicamente zero. A comparação certa é entre rótulos
-	// diferentes.
+	// index_bytes` casa por rótulo idêntico (o default do PromQL) e subtrai a
+	// série ERRADA: em {dataset="X"} ela é o índice do PRÓPRIO base — zero quando
+	// o base não indexa nada, e um número sem relação nenhuma com o total quando
+	// indexa. A comparação certa é entre rótulos diferentes.
 	MetIndexBytes = "nishidb_index_bytes"
 	// MetIndexReconstrucoesTotal conta os segmentos cujo índice a reconstrução
 	// publicou desde a abertura do dataset. É a taxa que diz se a fila está
@@ -361,11 +361,22 @@ const (
 	// indefinidamente — e essa foi a leitura errada que a primeira redação desta
 	// série induziu.
 	//
-	// Quem responde "há índice podre AGORA" é
-	// MetIndexSegmentosConsultadosTotal{modo="enumeracao"} subindo de forma
-	// persistente num dataset que deveria estar indexado. Esta responde "quantos
-	// arquivos já foram pegos desde a subida", que é o gatilho de investigar, não
-	// de acompanhar.
+	// E NENHUMA SÉRIE RESPONDE "há índice podre AGORA", o que é um limite e não um
+	// descuido. São dois fatos, os dois medidos em
+	// TestOGaugeDeEstadosEhCegoAIndicePodre:
+	//
+	//   - MetIndexSegmentos é CEGO à corrupção. Os quatro estados saem idênticos
+	//     entre um dataset saudável e um com dois .sidx podres, porque o arquivo
+	//     reprovado continua contado como `selado`: a fila é derivada da tabela de
+	//     seções e ela não confere crc (débito 103). É justamente o gauge que a
+	//     migração acompanha;
+	//   - MetIndexSegmentosConsultadosTotal{modo="enumeracao"} SOBE, mas sem
+	//     atribuir causa: o incremento é o mesmo que um segmento fora da janela ou
+	//     na fila produz, no mesmo balde e sem rótulo que os separe.
+	//
+	// O sinal disponível é o WARN indice.selado_corrompido no log. Esta série
+	// responde "quantos arquivos já foram pegos desde a subida", que é gatilho de
+	// investigar, não de acompanhar.
 	MetIndexCrcFalhasTotal = "nishidb_index_crc_falhas_total"
 	// MetIndexSegmentosConsultadosTotal conta, pelo rótulo LabelModo, quantos
 	// segmentos cada Lookup resolveu por índice e quantos por enumeração (§3.4).

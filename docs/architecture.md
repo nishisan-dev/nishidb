@@ -1829,8 +1829,18 @@ faz.
 no cache o mapeamento reprovado — publicar mantém o `sync.Once` do crc cumprido, e
 recusar obrigaria toda consulta a remapear e revarrer o arquivo podre inteiro —,
 então cada arquivo soma uma vez por processo. Um alerta por `rate()` sobre ela dá
-um pico e se auto-resolve em minutos, enquanto o segmento continua enumerando. O
-sinal de *"há índice podre agora"* é a enumeração persistente da série abaixo.
+um pico e se auto-resolve em minutos, enquanto o segmento continua enumerando.
+
+**E nenhuma série responde se ainda há índice podre**, por duas razões que se
+somam. O gauge `nishidb_index_segmentos` é **cego** à corrupção: os quatro estados
+saem idênticos entre um dataset saudável e um com `.sidx` podres, porque o arquivo
+reprovado continua contado como `selado` — a fila é derivada da tabela de seções e
+ela não confere crc. E a enumeração **sobe sem atribuir causa**: o incremento é o
+mesmo que um segmento fora da janela ou na fila produz, no mesmo balde e sem
+rótulo que os separe. O sinal disponível é o WARN `indice.selado_corrompido` no
+log, e a lacuna é o **débito 103**. Fica escrito em vez de presumido, pela mesma
+razão que o `durabilizaODiretorio` registra o que nenhum teste deste repositório
+afirma. Medido em `TestOGaugeDeEstadosEhCegoAIndicePodre`.
 
 `nishidb_index_segmentos_consultados_total{modo}` é o **único** observável da
 degradação: a fonte de enumeração é apenas mais um iterador ascendente na mesma
@@ -1846,8 +1856,9 @@ pelo dataset BASE (é lá que a política foi declarada), enquanto a primeira
 descreve o Store em que sai. Num par `X`/`X_history` a parcela vive em
 `{dataset="X_history"}` e o total em `{dataset="X"}`, então
 `nishidb_history_index_bytes - nishidb_index_bytes` — que casa por rótulo
-idêntico, o default do PromQL — devolve o total de volta, porque no rótulo do
-base a série por segmento é a do próprio base. A **janela efetiva não está nesta
+idêntico, o default do PromQL — subtrai a série errada: no rótulo do base ela
+descreve o índice do PRÓPRIO base, que é zero quando ele não indexa nada e um
+número sem relação com o total quando indexa. A **janela efetiva não está nesta
 família**: quem a publica é `nishidb_history_index_window_seconds`, rotulada
 pelo dataset BASE. A razão é que a janela é *política* declarada num YAML, e a
 série existe espelhando `nishidb_history_oldest_written_at`, que é do mesmo

@@ -278,8 +278,10 @@ type IndiceStats struct {
 	RebuildRunning bool  `json:"rebuildRunning"`
 	// CRCFailures conta os índices selados reprovados no crc32c. É DEGRAU e não
 	// taxa: o mapeamento reprovado fica em cache, então cada arquivo podre soma uma
-	// vez por processo. Para saber se o defeito continua de pé, olhe
-	// SegmentsByScan subindo num dataset que deveria estar indexado.
+	// vez por processo. Nenhum campo deste bloco diz se o defeito CONTINUA de pé: o
+	// corrompido conta como Sealed, e o SegmentsByScan que ele soma é
+	// indistinguível do de um segmento fora da janela. O sinal disponível é o WARN
+	// indice.selado_corrompido no log (débito 103).
 	CRCFailures int64 `json:"crcFailures"`
 	// SegmentsByIndex e SegmentsByScan contam por qual caminho os Lookups
 	// resolveram cada segmento. São o único observável da degradação da §3.4 — o

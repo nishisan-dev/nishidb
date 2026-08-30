@@ -96,11 +96,12 @@ func amostrasDeIndice(nome string, e storage.EstatisticasDeIndice) []metrics.Amo
 		metrics.Amostra{
 			Familia: metrics.MetIndexCrcFalhasTotal,
 			Nome:    metrics.MetIndexCrcFalhasTotal,
-			Ajuda: "índices selados reprovados no crc32c. É DEGRAU, não taxa: o mapeamento reprovado fica em cache, " +
-				"então cada arquivo podre soma UMA vez por processo e um rate() sobre isto se auto-resolve enquanto o " +
-				"segmento segue enumerando. Para saber se há índice podre AGORA, olhe " +
-				"nishidb_index_segmentos_consultados_total{modo=\"enumeracao\"} subindo de forma persistente num dataset " +
-				"que deveria estar indexado",
+			Ajuda: "índices selados reprovados no crc32c desde a subida. É DEGRAU e não taxa: o mapeamento reprovado " +
+				"fica em cache, então cada arquivo podre soma UMA vez por processo e um rate() sobre isto se auto-resolve " +
+				"enquanto o segmento segue enumerando. Nenhuma série responde \"há corrupção AGORA\": o gauge de estados é " +
+				"cego a ela (o arquivo reprovado conta como selado, porque a fila não confere crc) e a enumeração sobe " +
+				"sem atribuir causa, no mesmo balde de um segmento fora da janela. O sinal é o WARN " +
+				"indice.selado_corrompido no log. É o débito 103",
 			Tipo:   metrics.TipoContador,
 			Labels: rotulo,
 			Valor:  float64(e.CRCFalhas),

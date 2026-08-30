@@ -1,6 +1,8 @@
 package server_test
 
 import (
+	"log/slog"
+
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -14,6 +16,7 @@ import (
 	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/index/segindex"
+	"github.com/nishisan-dev/nishidb/internal/logging"
 	"github.com/nishisan-dev/nishidb/internal/metrics"
 	"github.com/nishisan-dev/nishidb/internal/protocolo"
 	"github.com/nishisan-dev/nishidb/internal/server"
@@ -655,75 +658,49 @@ func corrompeOFimDoIndice(t *testing.T, caminho string) {
 	}
 }
 
-// TestAAjudaDoIndiceDoHistoricoNaoNegaAPurga pina a metade PROSA de um fato que
-// mudou neste ciclo.
+// TestAAjudaDoContadorDeCrcNaoApontaSerieQueNaoDiscrimina afirma uma PROPRIEDADE
+// do texto, e não a presença de uma palavra nele.
 //
-// Enquanto todo índice era global, a purga de segmento não devolvia byte nenhum
-// de índice, e a Ajuda de nishidb_history_index_bytes dizia isso. Com o índice
-// por segmento o .sidx sai no mesmo passo que remove o .dat, e a frase virou
-// mentira — que é pior que ausência: quem lê o painel dimensiona disco por ela e
-// conclui que o número só sobe.
+// A propriedade: a Ajuda desta série não pode indicar NENHUMA outra série da
+// família como o sinal de "há corrupção agora", porque nenhuma delas discrimina.
+// Quem mede isso é TestOGaugeDeEstadosEhCegoAIndicePodre, no storage: o gauge de
+// estados sai idêntico entre um dataset saudável e um com .sidx podres, e a
+// enumeração sobe no mesmo balde de um segmento fora da janela.
 //
-// O FATO está provado no storage (TestAJanelaNaoDeixaIndiceDeSegmentoAposentado e
-// TestOsBytesDoIndicePorSegmentoSaoParcelaEstritaDoIndexBytes); o que falta é o
-// texto que viaja até o operador não contradizê-lo. Uma métrica com o valor certo
-// e a ajuda errada é lida errado — é o mesmo argumento que fez a ressalva de
-// limite inferior do garbage_bytes virar asserção.
-func TestAAjudaDoIndiceDoHistoricoNaoNegaAPurga(t *testing.T) {
-	srv := servidorComHistorico(t, specComHistorico)
-	a, ok := achaSerie(coletaAmostras(t, srv), metrics.MetHistoryIndexBytes,
-		map[string]string{metrics.LabelDataset: "eventos"})
-	if !ok {
-		t.Fatalf("%s não saiu no rótulo do dataset base", metrics.MetHistoryIndexBytes)
-	}
-	if strings.Contains(a.Ajuda, "NÃO os devolve") {
-		t.Errorf("a ajuda de %s ainda afirma que a purga não devolve os bytes de índice: %q — "+
-			"com o índice por segmento o .sidx sai no mesmo passo que remove o .dat, e a série CAI depois de uma passada",
-			metrics.MetHistoryIndexBytes, a.Ajuda)
-	}
-	// A ajuda tem de nomear a série irmã E o RÓTULO em que ela vive. Exigir só o
-	// nome era a versão anterior deste oráculo, e ela passava com o texto que
-	// mandava o operador subtrair as duas no mesmo rótulo — a conta errada que o
-	// TestOsBytesDeIndiceVivemNoRotuloDaIrma mede logo abaixo.
-	for _, exigido := range []string{metrics.MetIndexBytes, "_history"} {
-		if !strings.Contains(a.Ajuda, exigido) {
-			t.Errorf("a ajuda de %s não menciona %q: as duas séries medem conjuntos encaixados em rótulos DIFERENTES, "+
-				"e quem lê a maior sem saber disso escreve a subtração errada. Ajuda = %q",
-				metrics.MetHistoryIndexBytes, exigido, a.Ajuda)
-		}
-	}
-}
-
-// TestAAjudaDoContadorDeCrcNaoPrometeTaxa pina o texto que o operador lê contra
-// o comportamento que o TestOCrcDivergenteContaUmDegrauEEnumeraSempre mede.
-//
-// A primeira redação desta série dizia "contados por ABERTURA do arquivo: a falha
-// não é memorizada", e daí para "escreva um alerta com rate()" é um passo. O
-// código faz o oposto: o garanteSelado publica o mapeamento reprovado no cache, o
-// contador dá um degrau e o alerta se auto-resolve em minutos enquanto o segmento
-// segue enumerando — que é a degradação silenciosa que as seis séries existem para
-// acabar.
-//
-// A ajuda é a superfície mais difícil de corrigir depois, porque viaja para dentro
-// do Prometheus do operador junto do número. Por isso ela é pinada aqui, e por isso
-// a asserção exige que ela REDIRECIONE para o sinal que continua verdadeiro em vez
-// de só remover a frase errada.
-func TestAAjudaDoContadorDeCrcNaoPrometeTaxa(t *testing.T) {
+// A lista de proibidos sai de `familiasDeIndice`, e não de nomes escritos aqui:
+// uma série NOVA que alguém acrescente entra na proibição sozinha, e é ela que
+// alguém tentaria apontar. Foi exatamente essa a redação que este ciclo já
+// escreveu duas vezes — primeiro "leia rate()", depois "olhe a enumeração" —, e
+// as duas passariam por um oráculo de substring.
+func TestAAjudaDoContadorDeCrcNaoApontaSerieQueNaoDiscrimina(t *testing.T) {
 	srv := servidorComHistorico(t, specComHistorico)
 	a, ok := achaSerie(coletaAmostras(t, srv), metrics.MetIndexCrcFalhasTotal,
 		map[string]string{metrics.LabelDataset: "eventos_history"})
 	if !ok {
 		t.Fatalf("%s não saiu no scrape", metrics.MetIndexCrcFalhasTotal)
 	}
-	if strings.Contains(a.Ajuda, "não é memorizada") {
-		t.Errorf("a ajuda de %s ainda afirma que a falha não é memorizada: %q — o garanteSelado publica o mapeamento "+
-			"reprovado no cache, então o contador dá um DEGRAU e um rate() sobre ele se auto-resolve",
-			metrics.MetIndexCrcFalhasTotal, a.Ajuda)
+	for _, familia := range familiasDeIndice {
+		if familia == metrics.MetIndexCrcFalhasTotal {
+			continue // ela pode falar de si mesma
+		}
+		if strings.Contains(a.Ajuda, familia) {
+			t.Errorf("a ajuda de %s aponta para %s, e nenhuma série da família discrimina índice podre de segmento "+
+				"legitimamente sem índice (TestOGaugeDeEstadosEhCegoAIndicePodre): o gauge de estados é cego e a "+
+				"enumeração não atribui causa. Ajuda = %q", metrics.MetIndexCrcFalhasTotal, familia, a.Ajuda)
+		}
 	}
-	if !strings.Contains(a.Ajuda, metrics.MetIndexSegmentosConsultadosTotal) {
-		t.Errorf("a ajuda de %s não aponta para %s: remover a frase errada não basta, porque quem lia esta série "+
-			"queria saber se HÁ índice podre agora — e quem responde isso é a enumeração persistente. Ajuda = %q",
-			metrics.MetIndexCrcFalhasTotal, metrics.MetIndexSegmentosConsultadosTotal, a.Ajuda)
+	// E o outro lado da propriedade: remover o conselho errado não basta, porque
+	// quem lê a série quer saber o que olhar. O único sinal que existe hoje é o
+	// WARN, e o texto tem de nomeá-lo — junto do débito que fecharia a lacuna.
+	for _, exigido := range []string{"indice.selado_corrompido", "103"} {
+		if !strings.Contains(a.Ajuda, exigido) {
+			t.Errorf("a ajuda de %s não menciona %q: sem o sinal que de fato existe e sem o número do débito, ela "+
+				"deixa o operador sem saída. Ajuda = %q", metrics.MetIndexCrcFalhasTotal, exigido, a.Ajuda)
+		}
+	}
+	if strings.Contains(a.Ajuda, "não é memorizada") {
+		t.Errorf("a ajuda de %s voltou a afirmar que a falha não é memorizada: o garanteSelado publica o mapeamento "+
+			"reprovado no cache, então o contador é DEGRAU. Ajuda = %q", metrics.MetIndexCrcFalhasTotal, a.Ajuda)
 	}
 }
 
@@ -741,6 +718,16 @@ func TestAAjudaDoContadorDeCrcNaoPrometeTaxa(t *testing.T) {
 // O oráculo mora no pacote `server` porque é aqui que o rótulo existe. A versão
 // anterior comparava os dois números do MESMO Store, no storage, onde a contenção
 // vale trivialmente e o cruzamento é invisível.
+//
+// Ele cobre os DOIS lados do cano — o /metrics e o /v1/stats — porque a
+// proveniência é escolhida em duas funções diferentes (amostrasDeHistorico e
+// historicoStats), e apontar UMA delas para o Store errado passava verde na suíte
+// inteira. É o mesmo defeito que originou a correção de prosa, do outro lado.
+//
+// E as asserções de PROSA moram aqui, coladas na medição, em vez de num teste de
+// substring próprio: o que elas exigem do texto é derivado do que as linhas acima
+// acabaram de medir — se a parcela deixar de viver noutro rótulo, a exigência de
+// que o texto qualifique por rótulo cai junto.
 func TestOsBytesDeIndiceVivemNoRotuloDaIrma(t *testing.T) {
 	srv, dirBase, dirIrma := bancadaDeIndice(t)
 	amostras := coletaAmostras(t, srv)
@@ -791,6 +778,61 @@ func TestOsBytesDeIndiceVivemNoRotuloDaIrma(t *testing.T) {
 			"MESMO número, o cruzamento que esta prosa corrige não existiria",
 			metrics.MetIndexBytes, parcelaNoBase, tabelaDaBancada)
 	}
+
+	// O MESMO oráculo do outro lado do cano. O bloco `history` do /v1/stats sai de
+	// historicoStats, uma função diferente da que emite as séries, e ela escolhe a
+	// proveniência por conta própria: trocar base.irma.st por base.st ali passava
+	// verde na suíte inteira.
+	hist := historicoDoDataset(t, srv, "eventos")
+	if quer := deDisco(dirIrma); hist.IndexBytes != int64(quer) {
+		t.Errorf("/v1/stats: history.indexBytes de \"eventos\" = %d e o índice em disco da IRMÃ soma %v blocos: "+
+			"o bloco `history` descreve a tabela irmã, e lê-lo do Store do base publica o dataset errado sob o "+
+			"rótulo certo", hist.IndexBytes, quer)
+	}
+	if doBase := deDisco(dirBase); hist.IndexBytes == int64(doBase) {
+		t.Errorf("/v1/stats: history.indexBytes = %d é igual ao índice em disco do PRÓPRIO base: com os dois iguais "+
+			"este oráculo não distingue de qual Store o número veio", hist.IndexBytes)
+	}
+	// E o /metrics e o /v1/stats têm de concordar, porque leem a mesma estrutura.
+	if hist.IndexBytes != int64(totalNoBase) {
+		t.Errorf("/v1/stats diz %d e /metrics diz %v para o índice da tabela histórica: duas fontes para o mesmo "+
+			"fato divergem", hist.IndexBytes, totalNoBase)
+	}
+
+	// A PROSA, derivada do que acabou de ser medido. As duas séries carregam
+	// números da mesma tabela sob rótulos diferentes, então o texto que as
+	// relaciona só é útil se qualificar por rótulo — e não pode reinstaurar a
+	// afirmação de que a purga não devolve os bytes, que foi o outro erro deste
+	// mesmo texto.
+	ajuda, ok := achaSerie(amostras, metrics.MetHistoryIndexBytes, map[string]string{metrics.LabelDataset: "eventos"})
+	if !ok {
+		t.Fatalf("%s não saiu no scrape", metrics.MetHistoryIndexBytes)
+	}
+	if strings.Contains(ajuda.Ajuda, "NÃO os devolve") {
+		t.Errorf("a ajuda de %s voltou a afirmar que a purga não devolve os bytes de índice: %q — o .sidx sai no "+
+			"mesmo passo que remove o .dat", metrics.MetHistoryIndexBytes, ajuda.Ajuda)
+	}
+	if !strings.Contains(ajuda.Ajuda, metrics.MetIndexBytes) || !strings.Contains(ajuda.Ajuda, "dataset=") {
+		t.Errorf("a ajuda de %s relaciona as duas séries sem qualificar por RÓTULO (%q): as linhas acima acabaram de "+
+			"medir que a parcela vive em {dataset=%q} e este número em {dataset=\"eventos\"}, então um texto que "+
+			"não diga isso induz a subtração no mesmo rótulo — que subtrai a série errada",
+			metrics.MetHistoryIndexBytes, ajuda.Ajuda, tabelaDaBancada)
+	}
+}
+
+// historicoDoDataset lê o bloco `history` de um dataset no /v1/stats.
+func historicoDoDataset(t *testing.T, srv *server.Servidor, nome string) protocolo.HistoricoStats {
+	t.Helper()
+	for _, ds := range leJSON[protocolo.Estatisticas](t, srv, "/v1/stats").Datasets {
+		if ds.Name == nome {
+			if ds.History == nil {
+				t.Fatalf("o dataset %q não publicou o bloco history", nome)
+			}
+			return *ds.History
+		}
+	}
+	t.Fatalf("o dataset %q não apareceu no /v1/stats", nome)
+	return protocolo.HistoricoStats{}
 }
 
 // blocosDeIndiceEm é o `du` do operador sobre tudo que conta como índice de um
@@ -930,5 +972,103 @@ func TestAsSeriesDeIndiceSaemSoPelasConstantes(t *testing.T) {
 	}
 	if vistas == 0 {
 		t.Fatal("nenhuma série nishidb_index_* no scrape: a conferência passaria por vacuidade")
+	}
+}
+
+// TestASerieDaReconstrucaoDesceQuandoOLacoMorre é o oráculo do DÉCIMO fio, e ele
+// existe porque nenhum outro teste do repositório o cobria.
+//
+// # POR QUE OS OUTROS NÃO PEGAM
+//
+// O oráculo principal desta família compara `/metrics` contra `/v1/stats`. Quando
+// uma mutação alimenta os DOIS lados da mesma fonte errada — trocar
+// `umSeVerdadeiro(e.ReconstrucaoAtiva)` por `float64(e.Estados.Corrente)` nas duas
+// funções —, a comparação vira `1 == 1` e não vê nada. E num servidor saudável os
+// dois números são estruturalmente iguais: só existe um segmento corrente, o laço
+// sobe sempre que há campo indexado, e `Corrente` só é publicado quando há campo
+// indexado. Correlação perfeita, oráculo cego.
+//
+// TestOMedidorDaReconstrucaoNaoEhOContadorDeCorrentes, no storage, afirma sobre a
+// ESTRUTURA DE ORIGEM. A camada de publicação — que é o que a bancada existe para
+// gatear — ficava descoberta justamente neste fio.
+//
+// # O CASO QUE DISCRIMINA
+//
+// É o alarme que a própria Ajuda da série promete: *"ele para de vez na primeira
+// falha"*. Um `.sidx` substituído por um DIRETÓRIO faz o mmap devolver ENODEV, que
+// não é nenhum dos três estados não-anômalos do indiceIlegivel: a passada seguinte
+// falha, o laço morre e o medidor desce. O retrato de estados ANTERIOR fica de pé,
+// porque uma passada que falhou não publica — então o dataset passa a ter
+// `corrente=1` com `reconstrucao_ativa=0`, que é o único estado em que os dois
+// fios divergem.
+//
+// A sabotagem vem DEPOIS da subida de propósito: plantada antes, a primeira
+// passada falharia sem nunca publicar retrato nenhum, e `corrente` ficaria em zero
+// junto com o medidor — os dois iguais de novo, e o oráculo cego outra vez.
+//
+// A CONSEQUÊNCIA OPERACIONAL justifica o teste sozinha: com o fio ecoando a
+// contagem de correntes, a série responde 1 para todo dataset com dado, o laço
+// morto nunca aparece e o dataset degrada para enumeração em silêncio.
+func TestASerieDaReconstrucaoDesceQuandoOLacoMorre(t *testing.T) {
+	a := novoAmbienteComStorage(t, blocoPadrao, "  segmentSize: 8KiB\n")
+	a.escreveDataset("eventos", specComJanelaApertada)
+	dirIrma := semeiaHistorico(t, a, "eventos", 0, 600)
+
+	registro := &registroDoServidor{}
+	srv, err := server.Novo(a.carrega(), server.Opcoes{Log: logging.New(registro, logging.FormatoTexto, slog.LevelInfo)})
+	if err != nil {
+		t.Fatalf("subida: %v", err)
+	}
+	roda(t, srv)
+
+	// Pré-condição: o laço de pé E o retrato publicado. Sem os dois, o estado
+	// final abaixo não distingue "desceu" de "nunca subiu".
+	esperaAte(t, func() bool {
+		e := indiceDoDataset(t, srv, tabelaDaBancada)
+		return e.RebuildRunning && e.Current == 1
+	}, "o laço não subiu com o retrato publicado (RebuildRunning e Current=1) em 30s")
+
+	// A sabotagem: um diretório no lugar do .sidx do segmento mais novo, que é o
+	// único que a janela apertada admite — e portanto o único que a pendência
+	// abre.
+	selados := seladosDoDataset(t, dirIrma)
+	alvo := indiceDe(selados[len(selados)-1])
+	if err := os.Remove(alvo); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("montagem: remover %s: %v", alvo, err)
+	}
+	if err := os.Mkdir(alvo, 0o755); err != nil {
+		t.Fatalf("montagem: plantar diretório em %s: %v", alvo, err)
+	}
+
+	// A espera é pelo LOG, e não pelo medidor, e a diferença é o teste inteiro: o
+	// log é o fato INDEPENDENTE de que o laço morreu, enquanto o medidor é
+	// justamente o que está em julgamento. Esperar pelo medidor faria a mutação
+	// reprovar por timeout, com a mensagem errada — "o laço não morreu", quando o
+	// que aconteceu foi a série não ter contado.
+	esperaAte(t, func() bool {
+		return strings.Contains(registro.String(), "event=reconstrucao.parou")
+	}, "o laço não parou em 30s: o diretório plantado devia fazer a passada falhar com ENODEV, "+
+		"e sem a morte dele os dois fios continuam iguais e este oráculo não discrimina")
+
+	// O ESTADO QUE DISCRIMINA, lido no /v1/stats e no /metrics.
+	e := indiceDoDataset(t, srv, tabelaDaBancada)
+	if e.RebuildRunning {
+		t.Errorf("/v1/stats: rebuildRunning continua verdadeiro depois de o log registrar reconstrucao.parou (%+v): "+
+			"o medidor está ecoando outra coisa — zero é o alarme que a Ajuda promete", e)
+	}
+	if e.Current != 1 {
+		t.Fatalf("corrente = %d depois de o laço morrer, queria 1 (%+v): o retrato anterior tem de ficar de pé, "+
+			"senão os dois fios voltam a ser iguais e este oráculo não discrimina", e.Current, e)
+	}
+	rotulo := map[string]string{metrics.LabelDataset: tabelaDaBancada}
+	ativa, ok := achaSerie(coletaAmostras(t, srv), metrics.MetIndexReconstrucaoAtiva, rotulo)
+	if !ok {
+		t.Fatalf("%s não saiu para %q", metrics.MetIndexReconstrucaoAtiva, tabelaDaBancada)
+	}
+	if ativa.Valor != 0 {
+		t.Errorf("%s = %v com o laço MORTO e corrente = %d: zero é o alarme que a própria Ajuda desta série "+
+			"promete, e um fio que ecoe a contagem de correntes responde 1 para todo dataset com dado — o laço "+
+			"morto nunca aparece e o dataset degrada para enumeração em silêncio",
+			metrics.MetIndexReconstrucaoAtiva, ativa.Valor, e.Current)
 	}
 }

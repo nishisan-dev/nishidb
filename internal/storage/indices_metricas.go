@@ -66,7 +66,8 @@ type EstatisticasDeIndice struct {
 	ReconstrucaoAtiva bool
 	// CRCFalhas conta os .sidx reprovados no crc32c. É DEGRAU, não taxa: o
 	// mapeamento reprovado fica em cache, então o incremento acontece uma vez por
-	// segmento por processo. Ver o godoc do campo crcFalhas.
+	// segmento por processo — e nenhum outro campo deste retrato distingue um
+	// índice podre de um segmento fora da janela. Ver o godoc do campo crcFalhas.
 	CRCFalhas int64
 	// PorIndice e PorEnumeracao contam os segmentos que os Lookups resolveram por
 	// cada caminho (§3.4). São o único observável da degradação — para o planner,
