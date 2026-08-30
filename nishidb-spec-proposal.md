@@ -1630,10 +1630,11 @@ Prioridade:
 4 full scan
 ```
 
-Os passos 2 e 3 eram quatro — `hash index`, `bitmap index` e
-`index intersection/union` —, e viraram dois porque existe **um motor de índice
-só**: `hash` e `bitmap` deixaram de nomear coisas diferentes. O desenho desse
-motor, e o que a unificação muda no `Store`, no planner e no executor, estão em
+Os passos 2 e 3 substituem `hash index`, `bitmap index` e
+`index intersection/union`, que eram passos separados aqui: eles viraram dois
+porque existe **um motor de índice só**, e `hash` e `bitmap` deixaram de nomear
+coisas diferentes. O desenho desse motor, e o que a unificação muda no `Store`,
+no planner e no executor, estão em
 `planning/spec-subsistema-1-indice-por-segmento.md` (D5 e §3.1); aqui fica só a
 regra.
 

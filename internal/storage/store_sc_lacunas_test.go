@@ -180,8 +180,8 @@ func TestEncolhimentoDeSegmentoSeladoEhFatal(t *testing.T) {
 // TestIndiceNovoEmDatasetPovoadoEhAceitoEResponde, que afirma o oposto: a
 // consulta devolve inclusive as linhas gravadas antes de o campo ser declarado.
 
-func TestBitmapFieldsRejeitaFieldIDZeroENomeVazio(t *testing.T) {
-	// W6/X6: um bitmap no campo 0 ENTRA no manifest, e a direção 1 passa a
+func TestCamposIndexadosRejeitaFieldIDZeroENomeVazio(t *testing.T) {
+	// W6/X6: um índice no campo 0 ENTRA no manifest, e a direção 1 passa a
 	// exigi-lo em toda abertura — dataset refém de um índice que nunca
 	// indexaria nada (o fieldID 0 é reservado).
 	if _, err := Open(Options{Dir: t.TempDir(), CamposIndexados: []types.FieldID{0}}); !errors.Is(err, ErrInvalidArgument) {
@@ -192,7 +192,7 @@ func TestBitmapFieldsRejeitaFieldIDZeroENomeVazio(t *testing.T) {
 	}
 }
 
-func TestBitmapFieldsDevolveEmOrdemCrescente(t *testing.T) {
+func TestCamposIndexadosDevolveEmOrdemCrescente(t *testing.T) {
 	// X1: o doc promete ordem crescente e a fonte é um map, cuja iteração é
 	// aleatória por construção.
 	s := openStore(t, Options{CamposIndexados: []types.FieldID{fldCounter, fldStatus, fldID}})

@@ -60,13 +60,18 @@ func New(store Store, m *Metrics) *Planner {
 // OR na raiz, full scan. Não existe desempate — com um motor de índice só, não
 // há "qual dos dois" a decidir.
 //
-// Os rótulos R1/R2/R5 que marcam os blocos abaixo são HISTÓRICOS: eles vêm das
-// regras numeradas do §63 ORIGINAL, que tinha cinco passos (primary, hash,
-// bitmap, interseção/união, full scan). A seção hoje lista quatro, e os números
-// dela não correspondem mais aos rótulos daqui — a R5 é o passo 3 da lista. Os
-// rótulos ficam porque é por eles que a suíte e os comentários deste ciclo
-// nomeiam as regras; quem for reconciliar as duas numerações renumera os dois
-// lados de uma vez, nunca só um.
+// Os rótulos R1/R2/R5 que marcam os blocos abaixo são HISTÓRICOS, e não são a
+// numeração do §63: eles vêm da tabela de regras do
+// planning/m1-design-materializer-query.md §3.5, cujos rótulos eram R1 primary,
+// R2 hash, R3 interseção de bitmaps, R4 bitmap scan e R5 união — o full scan era
+// a linha "Caso contrário", sem rótulo. A R2 daqui é a fusão da R2 com a R3/R4
+// de lá, e a R5 guardou o nome.
+//
+// Os números do §63 nunca coincidiram com esses rótulos (lá o bitmap era um
+// passo só) e hoje coincidem menos ainda — a R5 é o passo 3 da lista de agora.
+// Os rótulos ficam porque é por eles que a suíte e os comentários deste ciclo
+// nomeiam as regras; quem for reconciliar as duas numerações mexe nos dois
+// lados de uma vez, nunca só num.
 func (p *Planner) Plan(bq *binder.BoundQuery) Plan {
 	if bq == nil || bq.Where == nil {
 		return p.conta(FullScan())

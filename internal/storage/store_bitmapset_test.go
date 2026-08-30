@@ -24,7 +24,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-func TestBitmapFieldNamesResolvePeloDicionario(t *testing.T) {
+func TestCamposIndexadosPorNomeResolvemPeloDicionario(t *testing.T) {
 	// R-C: os FieldIDs nascem de schema.Compile, que precisa do dicionário —
 	// e o dicionário vive dentro do Store. Sem declarar por nome, o
 	// bootstrap exigiria abrir sem índices, compilar, fechar e reabrir.
@@ -36,7 +36,7 @@ func TestBitmapFieldNamesResolvePeloDicionario(t *testing.T) {
 	// A ordem de criação no dicionário fixa os IDs 1..3.
 	for _, want := range []types.FieldID{fldID, fldStatus, fldCounter} {
 		if !s.Indexado(want) {
-			t.Fatalf("campo %d declarado por nome deveria ter bitmap; conjunto=%v", want, s.CamposIndexados())
+			t.Fatalf("campo %d declarado por nome deveria ser indexado; conjunto=%v", want, s.CamposIndexados())
 		}
 	}
 	mustPut(t, s, "bn", 1, statusPayload(t, s, "bn", "Start", 1), nil)
@@ -49,7 +49,7 @@ func TestBitmapFieldNamesResolvePeloDicionario(t *testing.T) {
 	}
 }
 
-func TestBitmapFieldsEBitmapFieldNamesSaoUniao(t *testing.T) {
+func TestCamposIndexadosPorIDEPorNomeSaoUniao(t *testing.T) {
 	dir := t.TempDir()
 	s := audOpen(t, Options{Dir: dir})
 	// Registra os campos para que os nomes resolvam para 1..3.
