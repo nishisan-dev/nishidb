@@ -55,15 +55,40 @@ lembre de tê-los criado. **Leia-o antes de decidir qualquer coisa.**
 | 13 | A janela de indexação | ✅ |
 | 14 | Laço de reconstrução — **fecha o débito 22** | ✅ |
 | 15 | **Disciplina de mutação** (documento) | ❌ **falta** |
-| 16 | Métricas | ⏳ em re-revisão |
+| 16 | Métricas | ✅ (2 rodadas de correção; 20 achados) |
 | 17 | **Docs + aceite no piloto** | ❌ **falta** |
 
 ## O que fazer, em ordem
 
-### 1. Subir no piloto e começar o soak — FAÇA ISTO PRIMEIRO
+### 1. Piloto — JÁ SUBIU em 30/08 11:52. O soak está correndo.
 
-É o item de maior prazo (precisa de ~1 dia rodando) e foi indevidamente
-empurrado para o fim. **Não espere as tarefas 15 e 17.**
+Binário `v0.6.0-250-ge13a6dd` no ar, dataset de 135 GiB migrado em produção
+(manifest v2 → v3, índices globais apagados do disco). Resultado registrado em
+`benchmark/baselines/piloto-pos-ciclo-20260830.md`:
+
+| Grandeza | Antes | Depois |
+|---|---|---|
+| RSS | 2.812 MiB | **432 MiB** |
+| Bytes de índice | 3.716 MB | **614 MB** |
+| `poll_blocked` | 32.319 s | **0** |
+| Fila / lag | 5.000 (teto) / backlog | **0 / 0** |
+| Congelamentos | 18–52 min, recorrentes | **nenhum** |
+
+A migração drenou sozinha: `pendente` 63 → **0** e `selado` 1 → **65** em ~5
+minutos, com a ingestão correndo ao lado, e ficou drenada. `fora = 372` — a
+janela poupou a esmagadora maioria dos segmentos, que é o que tornou a migração
+barata.
+
+**Cuidado ao ler a taxa:** 387 ev/s contra 733 do binário antigo. O número menor
+é o resultado melhor — o `lag` zerou. Os 733 eram o sistema correndo atrás do
+atraso que os próprios congelamentos acumulavam.
+
+**O que falta aqui:** acompanhar o soak por ~1 dia e refazer a medida de custo
+por evento com a fila drenada (a de 2.646 µs incluía a primeira passada de
+reconstrução correndo junto, e não é comparável). Confirmar que o RSS fica
+plano e que nenhum episódio de parada aparece.
+
+**Se precisar subir de novo**, o que segue continua valendo:
 
 Acesso: `ssh root@10.200.20.218`, direto. Dados são **descartáveis por
 autorização permanente do usuário** — pode apagar, resetar offset, remandar o
@@ -103,6 +128,18 @@ rollback espúrio).
 Procedimento: snapshot do YAML datado + `offsets --show` guardado → `systemctl
 stop nishidb` → nova pasta em `releases/` com binário e YAML → repontar
 `current` → `systemctl start` → acompanhar.
+
+**ARMADILHA que já derrubou uma partida:** a unidade systemd roda
+`ExecStart=/app/nishidb/current/nishidb server --config /app/nishidb/current/nishidb.yaml`
+— o `nishidb.yaml` tem de estar **dentro da pasta da release**, não em
+`/app/nishidb/`. Copie-o da release anterior. Há também um
+`/app/nishidb/bin/nishidb` **obsoleto** que nem lê o YAML atual (erro de
+`TTLSpec`); use sempre o binário da release corrente para `offsets`.
+
+Rollback em `/app/nishidb/`: `datasets/events.yaml.bak-20260830-114938`,
+`offsets.bak-20260830-114938` (`0=56842934477`), `snapshot-20260830-114938/`
+com os manifests, e a release anterior `v0.6.0-188-gf41ef67` intacta. Note que o
+manifest v3 é irreversível para binário antigo.
 
 **Critério de aceite:** com `node` indexado no histórico, manter ou melhorar
 1.636 ev/s e RSS ~227 MB, `poll_blocked` sem crescer, e **nenhum congelamento**.
