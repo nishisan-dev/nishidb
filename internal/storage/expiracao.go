@@ -92,10 +92,12 @@ func (s *Store) Expira(rowID types.RowID) (expirou bool, err error) {
 	// entrada como DESCONHECIDA depois de um crash — a row voltaria a ganhar
 	// carência e a lápide seria reescrita a cada reinício.
 	//
-	// Não preservar o RESTO é o que faz a fase de CLEAR do applyRecord limpar
-	// todas as postings da row: com o payload novo sem campo indexado nenhum,
-	// todo campo do anterior cai no ramo "campo que sai". É o "secondary
-	// indexes são limpos" do §56, sem uma linha nova.
+	// Não preservar o RESTO é o que tira a row do índice dali em diante: a
+	// lápide não tem campo indexado nenhum, então nenhuma posting nova nasce
+	// para ela (não há fase de Clear desde a §5.2 do subsistema 1 — as
+	// postings antigas viram candidatas que o §44 descarta e morrem com os
+	// segmentos). É o "secondary indexes são limpos" do §56 no OBSERVÁVEL,
+	// sem uma linha nova.
 	tomb, err := s.montaLapide(rec.Payload)
 	if err != nil {
 		return false, err
@@ -151,10 +153,13 @@ func (s *Store) Expira(rowID types.RowID) (expirou bool, err error) {
 // carência e a lápide ser reescrita a cada reinício.
 //
 // Não preservar o RESTO é o que devolve disco (o payload grande morre) e o
-// que limpa os índices secundários: com o payload novo sem campo indexado
-// nenhum, todo campo do anterior cai no ramo "campo que sai" — do
-// applyBitmapClears e do applyHashClears, que é o mesmo diff rodado nos DOIS
-// motores.
+// que tira a row do índice DALI EM DIANTE: a lápide não tem campo indexado
+// nenhum, então aplicaIndiceSets não grava posting nenhuma para ela. As
+// postings ANTIGAS ninguém limpa — não há fase de Clear desde a §5.2 do
+// subsistema 1 —, elas ficam nos segmentos em que nasceram como candidatas que
+// a revalidação do §44 descarta, e morrem com os segmentos. O "secondary
+// indexes são limpos" do §56 continua verdadeiro no OBSERVÁVEL (a row expirada
+// não sai em consulta indexada), por outro mecanismo.
 //
 // Usa o tombBuf, que é do writer e está sob o wmu — os dois chamadores (o
 // coletor e a compaction) já estão dentro da seção crítica.

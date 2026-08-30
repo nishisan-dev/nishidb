@@ -130,7 +130,7 @@ const (
 type FieldSpec struct {
 	Type   string `yaml:"type"`
 	Alias  string `yaml:"alias"`
-	Index  string `yaml:"index"`  // "" | bitmap | hash
+	Index  string `yaml:"index"`  // "" | "true" — hash e bitmap são RECUSADOS na subida (D5)
 	Format string `yaml:"format"` // padrão de parsing; obrigatório em datetime/time, proibido no resto
 	// UnknownFields liga a DESCOBERTA das chaves de dentro de um campo json:
 	// "include" as promove a coluna conforme aparecem, "ignore" (default)

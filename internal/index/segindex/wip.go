@@ -112,10 +112,15 @@ const (
 // contra ingestão, que é exatamente o que este ciclo existe para evitar, além
 // de violar a ordem de locks vida → wmu → aposMu.
 //
-// O custo é um par RLock/RUnlock por Set e por Lookup, e ele é ruído: é a
-// alternativa (a) do débito 102 — UM lock por operação, não um por SONDA. O que
-// o débito mediu (68% do custo de sondar um slot) era o par do mmap.Region
-// pago DENTRO do laço de sondagem. Fora do laço, some.
+// O custo DESTE lock é um par RLock/RUnlock por Set e por Lookup, e ele é
+// ruído. O que ele NÃO elimina — e o texto anterior afirmava que sim — é o par
+// interno do mmap.Region, que cada acesso ao mapeamento (w.le, AtomicStore64)
+// continua pagando: a alternativa (a) do débito 102 NÃO está aplicada aqui. O
+// que matou o custo medido no piloto foi outra coisa: o NÚMERO de acessos por
+// operação caiu por desenho — a sondagem é sobre valores DISTINTOS (1-2
+// acessos) e a caminhada é só sobre as postings do valor —, então o par por
+// acesso, que antes era pago centenas de milhares de vezes por Set, é pago um
+// punhado de vezes. O débito 102 segue aberto para o custo por acesso.
 //
 // O que este lock NÃO promete é atomicidade entre operações: dois Set
 // concorrentes continuam proibidos (o writer é único), e um Lookup que corra
@@ -405,7 +410,10 @@ func montaWIP(reg *mmap.Region, caminho string, campo types.FieldID) (*WIP, erro
 	return w, nil
 }
 
-// potenciaDeDois arredonda n para cima até a próxima potência de dois.
+// potenciaDeDois arredonda n para cima até a próxima potência de dois — exceto
+// acima de 2^31, onde devolve 2^31 (o clamp arredonda para BAIXO: não existe
+// potência de dois maior num uint32, e um diretório desse tamanho já teria
+// 32 GiB só de slots).
 func potenciaDeDois(n uint32) uint32 {
 	if n <= 1 {
 		return 1
@@ -460,6 +468,13 @@ func (w *WIP) Set(h uint64, row types.RowID) error {
 		panic("segindex: Set com hash 0 em " + w.caminho +
 			" — 0 é o sentinela de slot vazio, e primary.HashKey nunca o devolve")
 	}
+	// O uso-após-fim é conferido ANTES de qualquer trabalho — inclusive do
+	// crescimento, que com o array cheio tocaria o mapeamento desmontado e
+	// devolveria um erro de mmap no lugar do pânico nomeado que o godoc
+	// promete. Fora do lock de propósito, e é seguro: o flag é atômico, e Set e
+	// Fecha são serializados pelo mesmo dono (o writer único, sob o wmu) — não
+	// existe Fecha concorrente com um Set em voo.
+	w.exigeAberto("Set")
 	if err := w.talvezCresce(); err != nil {
 		return err
 	}
@@ -471,7 +486,6 @@ func (w *WIP) Set(h uint64, row types.RowID) error {
 	// contador de quem já é dono exclusivo da escrita.
 	w.mu.RLock()
 	defer w.mu.RUnlock()
-	w.exigeAberto("Set")
 
 	w.sondas = 0              // o contador do gate de custo cobre o Set INTEIRO
 	slot := w.sondaOuCria(h)  // conta os acessos em w.sondas
@@ -640,7 +654,8 @@ func (w *WIP) busca(h uint64) (uint32, bool) {
 }
 
 // sondaOuCria devolve o slot do hash, ocupando um vazio se ele ainda não
-// estiver no diretório. Conta os slots examinados em w.sondas.
+// estiver no diretório. O que sobe em w.sondas são os ACESSOS AO MAPEAMENTO
+// (via w.le), não os slots examinados — é a unidade que o gate de custo mede.
 //
 // O hash é publicado ANTES de qualquer estado, e o slot recém-ocupado tem
 // estado zero — um leitor que enxergue o hash novo lê contagem 0 e devolve

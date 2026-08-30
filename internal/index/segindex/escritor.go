@@ -84,6 +84,9 @@ func (e *Escritor) Escreve(caminho string, seg uint32) error {
 	buf := make([]byte, 0, HeaderSelado+len(corpo)+TamCRC)
 	buf = append(buf, MagicSelado...)
 	buf = append(buf, VersaoSelado, 0)
+	// O truncamento do uint16 é inalcançável: secCount é o número de campos
+	// com posting, e o fielddict tem teto de 65.535 campos — o formato herda o
+	// teto da fonte dos FieldIDs.
 	buf = binary.LittleEndian.AppendUint16(buf, uint16(secCount))
 	buf = binary.LittleEndian.AppendUint64(buf, uint64(seg))
 	buf = binary.LittleEndian.AppendUint64(buf, uint64(base))

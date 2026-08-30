@@ -477,7 +477,9 @@ type Store struct {
 	// tomá-lo. É também ele que dá o happens-before do recPontoFixo, tocado só
 	// dentro da passada.
 	recPassadaMu sync.Mutex
-	// Os SEIS contadores atômicos das séries do índice por segmento (§6.6).
+	// Os contadores atômicos das séries do índice por segmento (§6.6) — sem
+	// número no nome de propósito: contá-los aqui divergiria do bloco na
+	// primeira série nova, e quem precisa da lista tem os campos logo abaixo.
 	//
 	// São atômicos, e não uma coleta que vá ler o disco no scrape, por uma razão
 	// de LOCK e não de custo: os números de estado de segmento só existem sob o

@@ -284,7 +284,8 @@ func TestCopyForwardConcorrenteComOWriterNuncaRegrideOValor(t *testing.T) {
 // Ele existe porque as duas fontes de flags do copy-forward só divergem aí: o
 // Put não valida o byte de flags e o grava inteiro no segmento, enquanto o
 // applyRecord empacota apenas `a.flags&types.FlagTombstone` na location
-// (store.go:909). Sem esse bit, escolher a location ou o record dá exatamente
+// (o passo de publicação do applyRecord — por símbolo, não por linha: a
+// referência numérica anterior já apontava para outro lugar). Sem esse bit, escolher a location ou o record dá exatamente
 // o mesmo resultado e nenhuma asserção consegue separar as duas fontes.
 const flagForaDoTombstone uint8 = 0x02
 
@@ -468,7 +469,8 @@ func TestCopyForwardRecusaResiduoSemLocationEmVezDeRessuscitarOEstado(t *testing
 
 // TestCopyForwardRecusaComOWriterEmModoFalho cobre o primeiro ramo da função,
 // que também estava sem teste. O modo falho é sticky porque depois do Append
-// não existe rollback parcial (store.go:1012): apendar a cópia por cima de um
+// não existe rollback parcial (o godoc do stickyErr em store.go conta a
+// história inteira): apendar a cópia por cima de um
 // writer que já falhou é escrever num segmento cujo estado ninguém sabe
 // descrever. A varredura da Task 5 recebe este erro e para — é o sentinela
 // que separa "pule este record" de "pare a compaction".
@@ -721,7 +723,7 @@ func paradaNoWmuEm(marca string, prazo time.Duration) bool {
 }
 
 // publicaUpdateSobOWmu grava um update da row com o mutex do writer JÁ na mão
-// de quem chama. É o núcleo do Put (store.go:828-857) — BuildRecord, Append e
+// de quem chama. É o núcleo do Put — BuildRecord, Append e
 // applyRecord, nesta ordem —, sem a validação de argumento e sem o lookup do
 // estado anterior, que são justamente as partes que precisariam do lock que o
 // teste está segurando.
@@ -2191,8 +2193,8 @@ func TestCandidatoSoSaiAbaixoDoMinimumLiveRatio(t *testing.T) {
 // nenhum distingue "o segmento tem tamanho conhecido" de "alguém checkpointou".
 //
 // O que se afirma aqui é o caso sem checkpoint nenhum do chamador. O Checkpoint
-// incondicional do Open (store.go:605) reconstrói o segSize a partir do
-// ListSegments (store_checkpoint.go:142), e num dataset recém-criado o único
+// incondicional do Open reconstrói o segSize a partir do ListSegments que o
+// checkpoint() de store_checkpoint.go faz ao montar o manifest, e num dataset recém-criado o único
 // arquivo listado é o corrente, ainda do tamanho do header
 // (segment.HeaderSize). O segmento 1 nasce, portanto, com DENOMINADOR
 // conhecido: selado o arquivo e superada a última row nascida nele, a eleição o

@@ -10,10 +10,16 @@ import "github.com/nishisan-dev/nishidb/internal/types"
 // ele responderia por enumeração até a reconstrução alcançá-lo — correto, mas
 // trabalho que não precisava existir.
 //
-// Idempotente: um segmento sem .widx é no-op, presente ou não o .sidx. É
-// exatamente o estado que um crash entre o rename do .sidx e o unlink dos
-// .widx deixa, e Sela precisa atravessá-lo sem reescrever nada — o teste que
-// cobre isso confere que o arquivo não muda byte nenhum na segunda chamada.
+// Idempotente em dois estados, e eles são DIFERENTES. Um segmento sem .widx é
+// no-op, presente ou não o .sidx — é o estado que uma selagem COMPLETA deixa, e
+// o teste da idempotência confere que o arquivo não muda byte nenhum na segunda
+// chamada. Já o crash entre o rename do .sidx e o unlink dos .widx deixa OS
+// DOIS em disco (o texto anterior afirmava o estado oposto): um Sela reinvocado
+// ali releria os .widx e regravaria os MESMOS bytes (golden §6.3) antes de
+// completar o unlink — mas essa reinvocação não existe em processo (o Swap do
+// aposAppend garante uma selagem por segmento), e através de um restart o Open
+// descarta os .widx antes de qualquer Sela (§2.5). O estado é alcançável; o
+// caminho que o atravessaria, não.
 func Sela(dir string, seg uint32) error {
 	campos, err := ListaWIP(dir, seg)
 	if err != nil {
