@@ -61,9 +61,9 @@ type secaoSelada struct {
 // sondagem no piloto) — ele existe para proteger contra o remap do Grow, e um
 // arquivo selado nunca cresce.
 //
-// Seguro para uso concorrente por N leitores. Fecha NÃO é: ele desmonta o
-// mapeamento, e a garantia de que nenhuma Fonte viva sobrou é do dono, como no
-// resto do storage.
+// Seguro para uso concorrente por N leitores, INCLUSIVE com o Fecha: as Fontes
+// devolvidas pelo Lookup leem o mapeamento direto, e o desmonte espera a última
+// delas sair. Ver o godoc do Fecha.
 type Selado struct {
 	reg     *mmap.Region
 	caminho string
@@ -84,6 +84,27 @@ type Selado struct {
 	// única vez por processo.
 	umaVez          sync.Once
 	erroIntegridade error
+
+	// vidas conta as Fontes que ainda podem ler o mapeamento, e existe para que
+	// o munmap nunca aconteça sob os pés de uma varredura.
+	//
+	// NÃO É PROTEÇÃO CONTRA DESCUIDO: é o único desfecho seguro de uma corrida
+	// que o produto TEM. A aposentadoria de segmento (retenção e compaction)
+	// roda em goroutine de fundo e fecha o índice do segmento que acabou de
+	// sair; uma consulta longa iniciada antes dela continua com a Fonte na mão.
+	// O Close do dataset está coberto pelo quiesce do Store, mas a
+	// aposentadoria não passa por ele — e o desfecho de ler memória desmapeada
+	// não é resultado degradado, é SIGSEGV: sinal incapturável, sem nome de
+	// arquivo e longe da linha que errou.
+	//
+	// O mutex NÃO entra na rota crítica: Lookup o toma uma vez por (segmento,
+	// consulta) e a varredura não o toca. É o oposto do RWMutex do mmap.Region
+	// que esta forma existe para eliminar (débito 102), que era por LEITURA.
+	vidasMu      sync.Mutex
+	vidas        int
+	fechando     bool
+	desmontado   bool
+	erroDesmonte error
 }
 
 // AbreSelado mapeia o índice selado do segmento e valida o header e a tabela
@@ -344,8 +365,51 @@ func (s *Selado) Lookup(campo types.FieldID, h uint64) (Fonte, bool) {
 	if count == 0 || fim > sec.postings {
 		return nil, false
 	}
+	// A vida é adquirida AQUI, e não no Fonte.Close do chamador, porque é este
+	// o único ponto em que se sabe que a Fonte devolvida vai ler o mapeamento.
+	// A fonteVazia não lê nada e por isso não conta: fazê-la contar seria adiar
+	// um munmap por uma leitura que nunca acontece.
+	//
+	// Um Selado já em desmonte responde ok=false, e o chamador ENUMERA o
+	// segmento — a mesma degradação de um índice ausente, que é sempre correta.
+	if !s.adquire() {
+		return nil, false
+	}
 	ini := sec.postOff + int(postIdx)*s.largura
-	return novoIterSelado(s.dados, s.baseRowID, s.largura, ini, ini+int(count)*s.largura), true
+	return novoIterSelado(s, s.dados, s.baseRowID, s.largura, ini, ini+int(count)*s.largura), true
+}
+
+// adquire registra mais um leitor do mapeamento, ou recusa se ele já está em
+// desmonte.
+func (s *Selado) adquire() bool {
+	s.vidasMu.Lock()
+	defer s.vidasMu.Unlock()
+	if s.fechando {
+		return false
+	}
+	s.vidas++
+	return true
+}
+
+// libera tira um leitor e desmonta o mapeamento se ele era o último de um
+// Selado já fechado.
+func (s *Selado) libera() {
+	s.vidasMu.Lock()
+	defer s.vidasMu.Unlock()
+	s.vidas--
+	if s.vidas == 0 && s.fechando {
+		s.desmonta()
+	}
+}
+
+// desmonta faz o munmap de verdade. Chamado com o vidasMu na mão.
+func (s *Selado) desmonta() {
+	if s.desmontado {
+		return
+	}
+	s.desmontado = true
+	s.dados = nil
+	s.erroDesmonte = s.reg.Close()
 }
 
 // buscaNoDiretorio acha o valor no diretório ORDENADO por hash da seção.
@@ -410,15 +474,35 @@ func (s *Selado) confereCRC() error {
 	return s.erroIntegridade
 }
 
-// Fecha desmonta o mapeamento.
+// Fecha impede leitores NOVOS e desmonta o mapeamento assim que o último dos
+// atuais sair — o que pode ser aqui mesmo, se não houver nenhum.
 //
-// É responsabilidade do DONO garantir que nenhuma Fonte devolvida por Lookup
-// continua viva: as fontes leem o mapeamento direto, sem cópia, e é isso que
-// as torna gratuitas. A mesma disciplina de quiesce que o Store já aplica aos
-// seus arquivos vale aqui.
+// A espera é o ponto, e ela substitui uma exigência que o dono não tinha como
+// cumprir: as Fontes leem o mapeamento direto, sem cópia, e sobrevivem à
+// chamada que as criou. O Store desmonta índice em DOIS momentos, e só um deles
+// passa pelo quiesce — o Close do dataset. A aposentadoria de segmento não
+// passa, porque roda na goroutine de retenção enquanto uma consulta longa
+// varre. Ali, exigir que "nenhuma Fonte viva sobrou" seria exigir do dono uma
+// garantia que ele não tem; sem a espera, o desfecho é SIGSEGV.
+//
+// Depois desta chamada o Lookup responde ok=false, e o chamador degrada para
+// enumeração — correto por construção, e é o mesmo que ele já faz com índice
+// ausente.
+//
+// O ERRO DO munmap ADIADO NÃO SOBE por aqui: quando há leitor, o desmonte
+// acontece depois, no Close do último deles, e já não há chamada a que
+// devolvê-lo. Fecha devolve nil nesse caso. É perda aceitável — falha de munmap
+// não tem resposta operacional além do log —, e não vale inventar um canal de
+// erro assíncrono para ela.
 func (s *Selado) Fecha() error {
-	s.dados = nil
-	return s.reg.Close()
+	s.vidasMu.Lock()
+	defer s.vidasMu.Unlock()
+	s.fechando = true
+	if s.vidas > 0 {
+		return nil
+	}
+	s.desmonta()
+	return s.erroDesmonte
 }
 
 // fonteVazia é a resposta de "respondo por este campo, e a resposta é zero
@@ -440,11 +524,14 @@ func (fonteVazia) MinRowID() types.RowID { return math.MaxUint64 }
 
 // iterSelado percorre uma faixa contígua do array de postings.
 //
-// Não guarda ponteiro para o Selado: os quatro campos de que precisa cabem
-// aqui, e resolvê-los na construção poupa uma indireção por linha. Não tem
-// lock nem atômico — o arquivo é imutável, e é essa a metade do ganho desta
-// forma (débito 102).
+// Os quatro campos de que a VARREDURA precisa são resolvidos na construção, e
+// resolvê-los ali poupa uma indireção por linha. Não tem lock nem atômico — o
+// arquivo é imutável, e é essa a metade do ganho desta forma (débito 102).
+//
+// O ponteiro para o Selado existe só para o Close devolver a vida adquirida no
+// Lookup, e por isso não custa nada por linha: Next e RowID não o tocam.
 type iterSelado struct {
+	sel     *Selado
 	dados   []byte
 	base    types.RowID
 	row     types.RowID
@@ -464,8 +551,9 @@ type iterSelado struct {
 // ascendente por construção do escritor. A chamada devolve Fonte — o boxing da
 // interface é uma alocação por SEGMENTO, e é por isso que o gate mede a
 // varredura e não o Lookup.
-func novoIterSelado(dados []byte, base types.RowID, largura, ini, fim int) *iterSelado {
+func novoIterSelado(sel *Selado, dados []byte, base types.RowID, largura, ini, fim int) *iterSelado {
 	it := &iterSelado{
+		sel:     sel,
 		dados:   dados,
 		base:    base,
 		ini:     ini,
@@ -504,8 +592,22 @@ func (it *iterSelado) RowID() types.RowID { return it.row }
 // consulta, então não sobra decisão para tomar durante a varredura.
 func (it *iterSelado) Err() error { return nil }
 
-// Close não faz nada: o iterador não é dono do mapeamento, o Selado é.
-func (it *iterSelado) Close() error { return nil }
+// Close devolve a vida adquirida no Lookup, e é ele que autoriza o munmap de um
+// Selado já fechado. Idempotente: fechar duas vezes não derruba a contagem
+// duas vezes, e a união chega a fechar a mesma fonte por mais de um caminho.
+//
+// Iterador que NUNCA é fechado adia o munmap até o fim do processo. É a troca
+// deliberada: memória virtual retida é barata e visível; ler memória
+// desmapeada mata o processo.
+func (it *iterSelado) Close() error {
+	if it.sel == nil {
+		return nil
+	}
+	sel := it.sel
+	it.sel = nil
+	sel.libera()
+	return nil
+}
 
 // MinRowID devolve o menor rowId que esta fonte vai emitir.
 func (it *iterSelado) MinRowID() types.RowID { return it.min }

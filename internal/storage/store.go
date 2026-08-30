@@ -2348,7 +2348,12 @@ func (s *Store) DiretorioDeSpill() string {
 }
 
 // LookupBitmap consulta o índice do campo; valor nunca visto devolve iterador
-// vazio; campo não indexado é erro. O resultado é um SUPERSET de candidatos:
+// vazio. Campo sem índice POR SEGMENTO é ErrInvalidArgument — e a recusa passou
+// a ser essa, e não mais "sem índice bitmap": com um motor só, o conjunto
+// indexado é a união das duas declarações antigas (spec D5), então um campo
+// declarado apenas como hash já não é recusado aqui. O planner nunca alcança
+// essa diferença, porque consulta as capabilities antes; ela desaparece na
+// unificação da §3.1. O resultado é um SUPERSET de candidatos:
 // rows tombstoned/sem location podem aparecer — valide liveness e predicate via
 // GetByRowID (spec §44).
 //

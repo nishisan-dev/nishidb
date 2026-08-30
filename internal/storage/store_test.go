@@ -186,11 +186,16 @@ func TestPutSemPrevParaKeyExistenteFazFallback(t *testing.T) {
 	if created {
 		t.Fatal("fallback não pode criar rowId novo")
 	}
+	// IGUALDADE, e não superconjunto: um dataset, uma row, um segmento — não há
+	// falso positivo possível em Stop, e afrouxar aqui seria apagar asserção sem
+	// que o desenho novo peça.
 	itStop, err := s.LookupBitmap(fldStatus, strVal("Stop"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	exigeCandidatos(t, "Stop", collectRows(t, itStop), []types.RowID{id2})
+	if rows := collectRows(t, itStop); !slices.Equal(rows, []types.RowID{id2}) {
+		t.Fatalf("bitmap Stop: %v", rows)
+	}
 
 	// A asserção que ESTE teste tinha em Start — "o bitmap deveria esvaziar" —
 	// media o diff do motor global, que não existe mais: o índice por segmento

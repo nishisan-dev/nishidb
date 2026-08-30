@@ -1,6 +1,8 @@
 package storage
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -482,6 +484,9 @@ func TestAPostingDoCampoInalteradoSobreviveASelagemEAoRestart(t *testing.T) {
 		t.Fatalf("GetByKey: %v (ok=%v)", err, ok)
 	}
 	mustPut(t, s, "viajante", 2, linhaIndexada(t, s, "viajante", "estavel", 9), &prev)
+	if s.curSegID.Load() != destino {
+		t.Fatalf("o update rotacionou de novo (%d), o teste perdeu o alvo", s.curSegID.Load())
+	}
 
 	// Rotaciona de novo: agora o segmento de destino está SELADO.
 	poeLinhasAteRotacionar(t, s, destino)
@@ -516,5 +521,120 @@ func TestAPostingDoCampoInalteradoSobreviveASelagemEAoRestart(t *testing.T) {
 	s2 := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, HashFieldNames: []string{"node", "type"}})
 	if rows := lookupRevalidado(t, s2, campoNode, strVal("estavel")); !slices.Contains(rows, row) {
 		t.Errorf("depois do restart, WHERE node='estavel' não devolveu a row %d: %v", row, rows)
+	}
+}
+
+// TestAAposentadoriaNaoDesmapeiaOIndiceSobUmaVarreduraEmVoo alcança a janela que
+// esta tarefa ABRIU: antes dela nada lia .sidx durante uma consulta, então
+// desmontar o índice de um segmento aposentado era inofensivo.
+//
+// O cenário é o do piloto que motivou o subsistema: retenção de fundo passando
+// enquanto uma consulta longa varre. A Fonte selada lê o mmap a CADA avanço, e a
+// aposentadoria não passa pelo quiesce do Store — ela roda na goroutine de
+// retenção. Sem a contagem de vidas do Selado, o Next seguinte ao munmap não
+// devolve resultado errado: mata o processo com SIGSEGV, que é sinal
+// incapturável e não aponta para a linha que errou.
+//
+// O teste vale como oráculo porque o RESULTADO também é conferido: um iterador
+// que parasse calado depois da aposentadoria passaria num teste que só afirma
+// "não entrou em pânico".
+func TestAAposentadoriaNaoDesmapeiaOIndiceSobUmaVarreduraEmVoo(t *testing.T) {
+	base := openStore(t, Options{})
+	dir := t.TempDir()
+	s := abreHistoricoIndexadoEm(t, base, dir, []string{"node"}, 8<<10)
+	alvo := s.curSegID.Load()
+	poeLinhasAteRotacionar(t, s, alvo)
+	poeLinhasAteRotacionar(t, s, s.curSegID.Load())
+	campo := campoDoDicionario(t, s, "node")
+	if _, err := os.Stat(segindex.CaminhoSelado(filepath.Join(dir, "data"), alvo)); err != nil {
+		t.Fatalf("pré-condição: o segmento %d deveria estar selado: %v", alvo, err)
+	}
+
+	it, err := s.LookupHash(campo, strVal("n1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = it.Close() }()
+
+	// A varredura entra em voo: o primeiro avanço já resolveu a fonte do
+	// segmento alvo e guardou o slice do mapeamento.
+	if !it.Next() {
+		t.Fatalf("pré-condição: o Lookup não devolveu candidato nenhum (Err=%v)", it.Err())
+	}
+	rows := []types.RowID{it.RowID()}
+
+	// A retenção aposenta o segmento mais antigo — e com ele o .sidx que a
+	// varredura está lendo.
+	if _, err := s.RetencaoUmaPassada(context.Background(), LimitesDeRetencao{MaxBytes: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(segindex.CaminhoSelado(filepath.Join(dir, "data"), alvo)); !os.IsNotExist(err) {
+		t.Fatalf("pré-condição: o índice do segmento %d deveria ter saído: %v", alvo, err)
+	}
+
+	// Daqui para baixo, cada Next lê um mapeamento que a aposentadoria já
+	// mandou desmontar.
+	for it.Next() {
+		rows = append(rows, it.RowID())
+	}
+	if err := it.Err(); err != nil {
+		t.Fatalf("a varredura falhou depois da aposentadoria: %v", err)
+	}
+	if len(rows) < 2 {
+		t.Fatalf("a varredura devolveu %d linhas: ela não chegou a atravessar a aposentadoria", len(rows))
+	}
+	for i := 1; i < len(rows); i++ {
+		if rows[i-1] >= rows[i] {
+			t.Fatalf("a varredura saiu de ordem ao atravessar a aposentadoria: %v", rows)
+		}
+	}
+}
+
+// TestSegmentoAposentadoEntreAListagemEOPreadViraFonteVazia cobre a corrida que
+// o godoc do fonteDaFaixa descreve: a lista de segmentos é capturada UMA vez,
+// fora do aposMu, e os preads acontecem depois. Uma passada de retenção no meio
+// deixa a consulta com o nome de um arquivo que já saiu.
+//
+// O desfecho tem de ser fonte VAZIA, e não erro. Linha aposentada é linha morta,
+// e é assim que o resto do executor já se comporta — ela some pela location, em
+// silêncio. Propagar o erro faria a consulta inteira falhar por uma passada de
+// retenção que aconteceu ao lado, onde o motor antigo devolvia resultado
+// normalmente: seria uma regressão de disponibilidade nascida do índice novo.
+func TestSegmentoAposentadoEntreAListagemEOPreadViraFonteVazia(t *testing.T) {
+	base := openStore(t, Options{})
+	dir := t.TempDir()
+	s := abreHistoricoIndexadoEm(t, base, dir, []string{"node"}, 8<<10)
+	poeLinhasAteRotacionar(t, s, s.curSegID.Load())
+	poeLinhasAteRotacionar(t, s, s.curSegID.Load())
+
+	refs, err := s.listaSegmentos()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) < 2 {
+		t.Fatalf("pré-condição: %d segmentos, o teste precisa de ao menos 2", len(refs))
+	}
+	// A retenção passou entre a listagem e o pread. Encenar isso exige os DOIS
+	// atos da aposentadoria, na ordem dela: fechar o descritor cacheado e só
+	// então remover o arquivo. Só o unlink não basta — o descritor aberto mantém
+	// o inode vivo e o pread continua funcionando, que é justamente por que os
+	// blocos não voltam ao dispositivo sem o FechaSegmento.
+	if err := s.segR.FechaSegmento(refs[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dir, "data", fmt.Sprintf("segment-%08d.dat", refs[0].ID))); err != nil {
+		t.Fatal(err)
+	}
+
+	f, err := s.fonteDaFaixa(refs, 0)
+	if err != nil {
+		t.Fatalf("fonteDaFaixa sobre segmento aposentado devolveu erro: %v — deveria ser fonte vazia", err)
+	}
+	defer func() { _ = f.Close() }()
+	if f.MinRowID() <= f.MaxRowID() {
+		t.Errorf("a fonte deveria estar vazia por declaração, tem [%d,%d]", f.MinRowID(), f.MaxRowID())
+	}
+	if f.Next() {
+		t.Errorf("a fonte de um segmento aposentado emitiu a row %d", f.RowID())
 	}
 }

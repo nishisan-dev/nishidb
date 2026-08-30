@@ -493,7 +493,7 @@ func TestCrashEntreApplyEManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	exigeCandidatos(t, "Start", collectRows(t, itA), nil)
+	exigeCandidatos(t, "Start", collectRows(t, itA), []types.RowID{id1 + 1})
 	if rows := lookupRevalidado(t, s2, fldStatus, strVal("Start")); !slices.Equal(rows, []types.RowID{id1 + 1}) {
 		t.Fatalf("pós-revalidação status=Start deveria ser só ca-2 (%d): %v", id1+1, rows)
 	}

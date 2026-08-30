@@ -120,15 +120,33 @@ func (s *Store) fonteIndexada(seg, corrente uint32, campo types.FieldID, h uint6
 	if seg == corrente {
 		return s.fonteDoWIP(campo, h)
 	}
-	sel := s.seladoDe(seg)
+	s.garanteSelado(seg)
+	// O Lookup roda SOB o selMu, e não só a busca no mapa, pela mesma razão que
+	// o fonteDoWIP segura o lock durante a caminhada da cadeia: entre pegar o
+	// ponteiro e usá-lo, a aposentadoria pode fechar o índice. É lá dentro que a
+	// Fonte registra a vida que impede o munmap (segindex.Selado.Fecha), e
+	// registrar fora do lock deixaria justamente a janela que a vida existe para
+	// fechar.
+	//
+	// O QUE ISSO SEGURA, escrito porque não é óbvio: a PRIMEIRA consulta a um
+	// segmento confere o crc32c aqui dentro, e num índice grande isso é uma
+	// varredura de centenas de MB. Enquanto ela roda, a aposentadoria daquele
+	// dataset espera. É uma vez por segmento por processo (sync.Once), e a
+	// alternativa — adquirir a vida fora do Lookup — obrigaria a embrulhar a
+	// Fonte só para devolvê-la no Close, pagando uma indireção por LINHA para
+	// poupar uma espera por SEGMENTO.
+	s.selMu.RLock()
+	defer s.selMu.RUnlock()
+	sel := s.selados[seg]
 	if sel == nil {
 		return nil, false
 	}
 	return sel.Lookup(campo, h)
 }
 
-// seladoDe devolve o índice selado do segmento, abrindo-o sob demanda, ou nil
-// quando ele não existe ou não pode ser lido.
+// garanteSelado abre o índice selado do segmento sob demanda e o publica no
+// cache. Não devolve nada de propósito: quem for usá-lo tem de relê-lo do mapa
+// sob o selMu, porque entre publicar e usar a aposentadoria pode ter passado.
 //
 // O mapeamento fica CACHEADO no s.selados até a aposentadoria do segmento ou o
 // Close do dataset, e não há LRU: o mapeamento somente-leitura não retém
@@ -139,18 +157,22 @@ func (s *Store) fonteIndexada(seg, corrente uint32, campo types.FieldID, h uint6
 // enumeração que vem logo depois — e memorizar a ausência exigiria um segundo
 // estado no mapa que o Close teria de saber distinguir de um Selado vivo.
 //
-// JANELA CONHECIDA, e ela é do subsistema 3 (pin de segmento contra a
-// retenção): a aposentadoria fecha o Selado por removeIndiceDoSegmento sem
-// esperar as leituras em voo, e as fontes seladas leem o mapeamento direto. O
-// Close do dataset está coberto — o hashIterator reentra pelo entra() a cada
-// avanço e sai com ErrDatasetClosed —, mas a aposentadoria não passa pelo lock
-// de vida. Fechá-la exige o pin de segmento, que tem ciclo próprio.
-func (s *Store) seladoDe(seg uint32) *segindex.Selado {
+// A APOSENTADORIA PODE FECHAR O ÍNDICE COM UMA VARREDURA EM VOO, e quem resolve
+// isso é a contagem de vidas do segindex.Selado: o Fecha impede leitores novos e
+// adia o munmap até a última Fonte sair. Sem ela o desfecho não seria resultado
+// degradado, seria SIGSEGV — o Close do dataset está coberto pelo quiesce (o
+// hashIterator reentra pelo entra() a cada avanço), mas a aposentadoria roda na
+// goroutine de retenção e não passa por lock de vida nenhum.
+//
+// O que continua fora daqui é o PIN de segmento (subsistema 3), que é outra
+// pergunta: se a consulta longa deve continuar ENXERGANDO as linhas que a
+// retenção tirou. Aquilo é visibilidade de dado; isto é segurança de memória.
+func (s *Store) garanteSelado(seg uint32) {
 	s.selMu.RLock()
-	sel, ok := s.selados[seg]
+	_, ok := s.selados[seg]
 	s.selMu.RUnlock()
 	if ok {
-		return sel
+		return
 	}
 	novo, err := segindex.AbreSelado(segindex.CaminhoSelado(s.dirDeDados(), seg))
 	if err != nil {
@@ -171,7 +193,7 @@ func (s *Store) seladoDe(seg uint32) *segindex.Selado {
 				"o índice do segmento não pôde ser aberto; ele responde por enumeração",
 				"segmento", seg, "erro", err.Error())
 		}
-		return nil
+		return
 	}
 	s.selMu.Lock()
 	defer s.selMu.Unlock()
@@ -181,17 +203,16 @@ func (s *Store) seladoDe(seg uint32) *segindex.Selado {
 		// escrever num mapa nil — pânico —, e o preço dela é fechar o
 		// mapeamento que ninguém mais teria como alcançar.
 		_ = novo.Fecha()
-		return nil
+		return
 	}
 	// Duas consultas podem ter aberto o mesmo arquivo em paralelo: quem chega
-	// depois adota o mapeamento já publicado e desmonta o próprio, senão o
+	// depois descarta o próprio mapeamento e fica com o já publicado, senão o
 	// segundo vazaria — o Close só alcança o que está no mapa.
-	if ja, ok := s.selados[seg]; ok {
+	if _, ok := s.selados[seg]; ok {
 		_ = novo.Fecha()
-		return ja
+		return
 	}
 	s.selados[seg] = novo
-	return novo
 }
 
 // fonteDoWIP caminha a cadeia do valor no índice MUTÁVEL do segmento corrente.
@@ -261,9 +282,20 @@ func (s *Store) fonteDeEnumeracao(refs []segment.SegmentRef, i int) (segindex.Fo
 // deixaria a faixa curta — que é falso negativo. Quando nenhum seguinte
 // responde, o fim é o nextRowID, que é frouxo e seguro.
 //
-// O par (listar, ler o primeiro record) roda sob o aposMu pela MESMA razão do
-// GetByRowID: sem a barreira, a aposentadoria pode fechar o descritor entre a
-// listagem e o pread.
+// A LISTAGEM NÃO ESTÁ SOB A MESMA BARREIRA QUE OS PREADS, e o comentário diz
+// isso porque a diferença tem consequência. O `refs` é capturado uma vez, no
+// fontesDoCampo, fora do aposMu; os preads acontecem aqui, sob ele. Entre os
+// dois, a retenção pode aposentar um segmento — e então o arquivo que a listagem
+// nomeou já não existe.
+//
+// Esse desfecho é tratado como fonte VAZIA, e não como erro: linha aposentada é
+// linha morta, e é assim que o resto do executor já se comporta — ela some pela
+// location, em silêncio. Propagar o erro faria uma consulta inteira falhar por
+// uma passada de retenção que aconteceu ao lado, onde o motor antigo — que não
+// tocava segmento nenhum — devolvia resultado normalmente.
+//
+// O aposMu continua aqui pela razão do GetByRowID: ele impede que o descritor
+// feche ENTRE o pread e a leitura dos bytes.
 func (s *Store) fonteDaFaixa(refs []segment.SegmentRef, i int) (segindex.Fonte, error) {
 	s.aposMu.RLock()
 	defer s.aposMu.RUnlock()
@@ -305,6 +337,15 @@ func (s *Store) primeiroRowIDDe(ref segment.SegmentRef, buf []byte) (types.RowID
 	}
 	rec, out, err := s.segR.ReadRecord(ref.ID, uint32(segment.HeaderSize), buf)
 	if err != nil {
+		// Segmento aposentado entre a listagem e este pread responde "não tenho
+		// primeiro rowId", e não erro: ele já não tem linha viva nenhuma, e a
+		// consulta que o encontrou nesse estado devolve o que sobrou — que é o
+		// mesmo que ela devolveria se a passada de retenção tivesse acontecido
+		// um instante antes. Errar aqui derrubaria a consulta inteira por uma
+		// corrida cujo desfecho correto é ignorar o segmento.
+		if errors.Is(err, os.ErrNotExist) {
+			return 0, out, false, nil
+		}
 		return 0, out, false, err
 	}
 	return rec.RowID, out, true, nil
