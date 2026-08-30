@@ -2609,8 +2609,9 @@ Obrigatórios:
 Obrigatórios:
 
 * primary lookup;
-* bitmap lookup;
-* hash lookup;
+* index lookup — o motor é ÚNICO e por segmento desde o subsistema 1
+  (`planning/spec-subsistema-1-indice-por-segmento.md` é a autoridade); os
+  itens "bitmap lookup" e "hash lookup" desta lista colapsaram nele;
 * AND;
 * OR;
 * comparison;
@@ -2807,6 +2808,12 @@ Eles oferecem:
 * baixo footprint;
 * implementação simples;
 * excelente benefício para o dataset.
+
+> **Nota (M6):** esta fase descreve o plano da época, e o raciocínio fica como
+> registro. Os dois motores globais que saíram dela (bitmap, e depois hash)
+> foram substituídos pelo **índice por segmento** — a autoridade é
+> `planning/spec-subsistema-1-indice-por-segmento.md`, e `index: true` é a
+> única grafia de configuração.
 
 ---
 
