@@ -197,11 +197,12 @@ convergência que passa com o defeito presente não prova nada.
   é o esperado. Quem move a contagem ajusta o arquivo no mesmo PR com a razão.
 - **Sem fallback para legado.** Migração vai sempre para o definitivo.
 - **`make build` é a única fonte do build.** Nunca um `go build` próprio.
-- **Três arquivos NÃO são desta branch e não podem ser tocados nem commitados:**
-  `planning/m6-ciclo-query-longa-ordenacao-densidade.md` (modificado),
-  `CLAUDE.md` e `planning/melhorias-performance-fase1-leitura-scan.md`. Eles
-  aparecem sujos no `git status` de propósito. **Nunca `git add -A`** — sempre
-  por caminho explícito.
+- **Dois arquivos NÃO são desta branch e não podem ser tocados nem commitados:**
+  `planning/m6-ciclo-query-longa-ordenacao-densidade.md` (modificado) e
+  `planning/melhorias-performance-fase1-leitura-scan.md`. Eles aparecem sujos no
+  `git status` de propósito. **Nunca `git add -A`** — sempre por caminho
+  explícito. (O `CLAUDE.md` era o terceiro; ele passou a ser **rastreado** no
+  commit `dfb36b2` e agora é editável normalmente.)
 - Ao fazer grep, excluir `.claude/worktrees/`.
 - Docs mudam no MESMO commit que o código.
 - **Agentes de revisão já deixaram mutação na árvore.** Confira `git status`
