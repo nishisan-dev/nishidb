@@ -47,7 +47,8 @@ func TestEvidenciasCitadasNosDocumentosExistem(t *testing.T) {
 	docs := []string{"../../docs/aceite-m1.md", "../../docs/aceite-m2.md", "../../docs/aceite-fase6.md",
 		"../../docs/aceite-m4.md", "../../docs/aceite-m5.md", "../../docs/aceite-client-python.md",
 		"../../docs/architecture.md", "../../docs/debitos.md", "../../docs/operacao-kafka.md",
-		"../../docs/mutacoes-indice-por-segmento.md", "../../README.md"}
+		"../../docs/mutacoes-indice-por-segmento.md",
+		"../../docs/doutrina-de-verificacao.md", "../../README.md"}
 
 	existentes := testesDoRepositorio(t)
 	for _, doc := range docs {

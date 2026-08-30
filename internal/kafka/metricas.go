@@ -215,13 +215,13 @@ func (m *metricas) amostrasDaEsteira() []metrics.Amostra {
 	rotulo := []metrics.Label{{Nome: metrics.LabelDataset, Valor: m.dataset}}
 	return []metrics.Amostra{
 		{
-			Nome: metrics.MetIngestDecodeArenaBytes, Tipo: metrics.TipoMedidor,
+			Familia: metrics.MetIngestDecodeArenaBytes, Nome: metrics.MetIngestDecodeArenaBytes, Tipo: metrics.TipoMedidor,
 			Valor:  float64(m.esteiraViva()),
 			Ajuda:  "Bytes que os slots da esteira de decodificação seguram entre eventos. Nenhum dos dois gates da fila conta esta memória.",
 			Labels: rotulo,
 		},
 		{
-			Nome: metrics.MetKafkaWriterIdleSeconds, Tipo: metrics.TipoContador,
+			Familia: metrics.MetKafkaWriterIdleSeconds, Nome: metrics.MetKafkaWriterIdleSeconds, Tipo: metrics.TipoContador,
 			Valor:  m.esteiraOciosa().Seconds(),
 			Ajuda:  "Segundos que o writer passou esperando trabalho na esteira. rate() alto com lag alto significa que quem não entrega é o poller ou os decodificadores.",
 			Labels: rotulo,
@@ -243,12 +243,12 @@ func (m *metricas) amostrasDaFila() []metrics.Amostra {
 	rotulo := []metrics.Label{{Nome: metrics.LabelDataset, Valor: m.dataset}}
 	out := []metrics.Amostra{
 		{
-			Nome: metrics.MetKafkaQueueDepth, Tipo: metrics.TipoMedidor, Valor: float64(reg),
+			Familia: metrics.MetKafkaQueueDepth, Nome: metrics.MetKafkaQueueDepth, Tipo: metrics.TipoMedidor, Valor: float64(reg),
 			Ajuda:  "Registros na fila limitada poller→writer, lidos no instante do scrape.",
 			Labels: rotulo,
 		},
 		{
-			Nome: metrics.MetKafkaQueueBytes, Tipo: metrics.TipoMedidor, Valor: float64(bytes),
+			Familia: metrics.MetKafkaQueueBytes, Nome: metrics.MetKafkaQueueBytes, Tipo: metrics.TipoMedidor, Valor: float64(bytes),
 			Ajuda:  "Bytes retidos na fila limitada (§79), lidos no instante do scrape.",
 			Labels: rotulo,
 		},
@@ -259,13 +259,13 @@ func (m *metricas) amostrasDaFila() []metrics.Amostra {
 	bloqueado, ocioso := m.temposDaFila()
 	return append(out,
 		metrics.Amostra{
-			Nome: metrics.MetKafkaPollBlockedSeconds, Tipo: metrics.TipoContador,
+			Familia: metrics.MetKafkaPollBlockedSeconds, Nome: metrics.MetKafkaPollBlockedSeconds, Tipo: metrics.TipoContador,
 			Valor:  bloqueado.Seconds(),
 			Ajuda:  "Segundos que o poller passou esperando espaço na fila. rate() é a fração do tempo em que o writer foi o gargalo.",
 			Labels: rotulo,
 		},
 		metrics.Amostra{
-			Nome: metrics.MetKafkaDecodeIdleSeconds, Tipo: metrics.TipoContador,
+			Familia: metrics.MetKafkaDecodeIdleSeconds, Nome: metrics.MetKafkaDecodeIdleSeconds, Tipo: metrics.TipoContador,
 			Valor:  ocioso.Seconds(),
 			Ajuda:  "Segundos SOMADOS que os decodificadores passaram esperando evento na fila. Divida por nishidb_ingest_decode_workers para ler como fração.",
 			Labels: rotulo,
@@ -361,7 +361,7 @@ func (m *metricas) amostrasDaPosicao() []metrics.Amostra {
 		}
 		aplicado := (*mp)[p].Load()
 		out = append(out, metrics.Amostra{
-			Nome: metrics.MetKafkaOffset, Tipo: metrics.TipoMedidor, Valor: float64(aplicado),
+			Familia: metrics.MetKafkaOffset, Nome: metrics.MetKafkaOffset, Tipo: metrics.TipoMedidor, Valor: float64(aplicado),
 			Ajuda:  "Próximo offset a consumir, por partição: a posição APLICADA pelo writer.",
 			Labels: rot,
 		})
@@ -382,12 +382,12 @@ func (m *metricas) amostrasDaPosicao() []metrics.Amostra {
 		}
 		out = append(out,
 			metrics.Amostra{
-				Nome: metrics.MetKafkaHighWatermark, Tipo: metrics.TipoMedidor, Valor: float64(fim),
+				Familia: metrics.MetKafkaHighWatermark, Nome: metrics.MetKafkaHighWatermark, Tipo: metrics.TipoMedidor, Valor: float64(fim),
 				Ajuda:  "Fim do log por partição, como o broker respondeu no instante desta raspagem.",
 				Labels: rot,
 			},
 			metrics.Amostra{
-				Nome: metrics.MetKafkaLag, Tipo: metrics.TipoMedidor, Valor: float64(atraso),
+				Familia: metrics.MetKafkaLag, Nome: metrics.MetKafkaLag, Tipo: metrics.TipoMedidor, Valor: float64(atraso),
 				Ajuda:  "Mensagens entre a posição aplicada e o fim do log. Não depende do commit no group.",
 				Labels: rot,
 			},
