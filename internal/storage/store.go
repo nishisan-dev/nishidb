@@ -345,6 +345,20 @@ type Store struct {
 	// aposAppend, ou no Open, antes de existir concorrência. Contra a CONSULTA,
 	// que não toma o wmu por desenho, o que separa leitura de escrita é o selMu.
 	wips map[types.FieldID]*segindex.WIP
+	// wipsSeg é o segmento DONO dos WIPs publicados em wips, e existe porque a
+	// consulta decide "este segmento é o corrente?" com um snapshot do curSegID
+	// que a rotação pode ter tornado obsoleto. Sem a identidade, uma consulta
+	// que atravessasse a rotação inteira (Swap → fechaWIPs → Sela →
+	// abreWIPsDoCorrente) chegava ao segmento ANTIGO acreditando que ele era o
+	// corrente e recebia ok=true com os WIPs do segmento NOVO — o .sidx
+	// recém-selado nunca era consultado e nenhuma fonte de enumeração cobria o
+	// segmento: FALSO NEGATIVO, a única coisa que a revalidação do §44 não
+	// conserta. Com a identidade, o descompasso cai para o caminho selado, que
+	// responde pelo .sidx ou manda enumerar.
+	//
+	// Zero significa "não há WIP publicado" (o segmento 0 não existe depois do
+	// Open — ver aposAppend). Escrita junto com o mapa, sob o mesmo selMu.
+	wipsSeg uint32
 	// selados são os índices imutáveis, abertos SOB DEMANDA e mantidos
 	// mapeados. Não há LRU: o mapeamento somente-leitura não retém descritor
 	// (open → mmap → close), e 500 VMAs num teto padrão de 65.530 não é

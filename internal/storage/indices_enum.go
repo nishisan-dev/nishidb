@@ -146,7 +146,18 @@ func (s *Store) fontesDoCampo(campo types.FieldID, h uint64) ([]segindex.Fonte, 
 // lá: se uma CONSULTA pode apagar arquivo do dataset.
 func (s *Store) fonteIndexada(seg, corrente uint32, campo types.FieldID, h uint64) (segindex.Fonte, bool) {
 	if seg == corrente {
-		return s.fonteDoWIP(campo, h)
+		if f, ok := s.fonteDoWIP(seg, campo, h); ok {
+			return f, true
+		}
+		// ok=false aqui tem DUAS causas, e as duas caem certas no caminho
+		// selado: o mapa vazio da janela de rotação (o .sidx deste segmento
+		// ainda não existe → enumera), e o snapshot de `corrente` OBSOLETO —
+		// a rotação completou no meio da consulta e os WIPs publicados já são
+		// do segmento novo (wipsSeg difere). Neste segundo caso o segmento
+		// acabou de ganhar .sidx, e é ele que responde; devolver ok=false
+		// direto o faria enumerar sem necessidade, e devolver o WIP do
+		// segmento errado — o que este código fazia — suprimia as linhas dele
+		// dos candidatos: falso negativo, que o §44 não conserta.
 	}
 	s.garanteSelado(seg)
 	// O Lookup roda SOB o selMu, e não só a busca no mapa, pela mesma razão que
@@ -311,20 +322,27 @@ func (s *Store) publicaSelado(seg uint32, novo *segindex.Selado, geracao uint64)
 
 // fonteDoWIP caminha a cadeia do valor no índice MUTÁVEL do segmento corrente.
 //
-// ok=false quando não há WIP para o campo, e o caso real é a janela de rotação:
-// o aposAppend fecha os WIPs do segmento que deixou de ser corrente, sela e só
-// então abre os do novo. Enumerar nessa janela é correto por construção e
-// dispensa raciocinar sobre a ordem entre a troca do curSegID e a publicação da
-// location — a regra "sem índice, enumera" vale aqui como em qualquer outro
-// segmento.
+// ok=false em dois casos. O primeiro é não haver WIP para o campo — a janela de
+// rotação, em que o aposAppend fecha os WIPs do segmento que deixou de ser
+// corrente, sela e só então abre os do novo. O segundo é a IDENTIDADE: `seg` é
+// o que o CHAMADOR acredita ser o corrente (um snapshot do curSegID tirado no
+// início da consulta), e os WIPs publicados podem já pertencer ao segmento
+// seguinte quando a rotação completou no meio. Responder pelo WIP do segmento
+// errado devolveria ok=true com as postings de OUTRO segmento e suprimiria as
+// deste dos candidatos — falso negativo. Nos dois casos o chamador cai para o
+// caminho selado, que responde pelo .sidx recém-selado ou manda enumerar.
 //
 // O selMu é segurado DURANTE o Lookup, e não só para ler o mapa: o WIP entra em
 // pânico nomeado se for usado depois do Fecha, e sem o lock a rotação poderia
 // fechá-lo entre pegar o ponteiro e caminhar a cadeia. É lock FOLHA e a
-// consulta não toma o wmu por baixo dele.
-func (s *Store) fonteDoWIP(campo types.FieldID, h uint64) (segindex.Fonte, bool) {
+// consulta não toma o wmu por baixo dele. A identidade mora sob o MESMO lock
+// que publica mapa e dono juntos — não há janela entre conferir e caminhar.
+func (s *Store) fonteDoWIP(seg uint32, campo types.FieldID, h uint64) (segindex.Fonte, bool) {
 	s.selMu.RLock()
 	defer s.selMu.RUnlock()
+	if s.wipsSeg != seg {
+		return nil, false
+	}
 	w := s.wips[campo]
 	if w == nil {
 		return nil, false

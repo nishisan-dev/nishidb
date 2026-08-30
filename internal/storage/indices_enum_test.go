@@ -698,3 +698,53 @@ func TestOCrcEhConferidoAntesDeOSeladoEntrarNoCache(t *testing.T) {
 		t.Errorf("o segmento passou a enumerar (%d candidatos) depois da corrupção", len(crus))
 	}
 }
+
+// TestSnapshotVelhoDoCorrenteNaoRespondePeloWIPDoSegmentoNovo fecha a corrida
+// da rotação contra a consulta em voo. fontesDoCampo tira UM snapshot do
+// curSegID no início; se a rotação inteira (Swap → fechaWIPs → Sela →
+// abreWIPsDoCorrente) completar antes de o laço alcançar o segmento antigo, os
+// WIPs publicados já são do segmento NOVO. Sem a identidade wipsSeg, o
+// fonteDoWIP respondia ok=true com as postings do segmento errado, o .sidx
+// recém-selado nunca era consultado e nenhuma fonte de enumeração cobria o
+// segmento: as linhas dele sumiam dos candidatos — falso negativo, que a
+// revalidação do §44 não conserta.
+//
+// O teste injeta o entrelaçamento em vez de correr atrás dele: chama
+// fonteIndexada com `corrente` FORJADO no valor velho, depois de a rotação já
+// ter acontecido — que é exatamente o estado que uma consulta em voo carrega.
+func TestSnapshotVelhoDoCorrenteNaoRespondePeloWIPDoSegmentoNovo(t *testing.T) {
+	s, _ := abreStoreIndexadoComSegmentoPequeno(t, []string{"node"}, 16<<10)
+	campo := campoDoDicionario(t, s, "node")
+	seg1 := s.curSegID.Load()
+
+	// Linhas com node="alvo" enquanto o seg1 é o corrente.
+	var esperadas []types.RowID
+	for i := range 8 {
+		payload := linhaIndexada(t, s, "alvo"+strconv.Itoa(i), "alvo", int64(i%3))
+		row, _ := mustPut(t, s, "alvo"+strconv.Itoa(i), int64(i+1), payload, nil)
+		esperadas = append(esperadas, row)
+	}
+	if got := s.curSegID.Load(); got != seg1 {
+		t.Fatalf("as linhas do alvo já rotacionaram o segmento (%d → %d); aumente o SegmentSize do teste", seg1, got)
+	}
+	// Enchimento com OUTRO valor até rotacionar: o seg1 sela, e os WIPs
+	// publicados passam a ser do segmento novo.
+	poeLinhasAteRotacionar(t, s, seg1)
+	if s.wipsSeg == seg1 {
+		t.Fatalf("a rotação não republicou os WIPs: wipsSeg ainda é %d", seg1)
+	}
+
+	h := hashIndexado(t, strVal("alvo"))
+	// O entrelaçamento: a consulta acredita que o seg1 AINDA é o corrente.
+	f, ok := s.fonteIndexada(seg1, seg1, campo, h)
+	if !ok {
+		t.Fatalf("fonteIndexada(seg1 com snapshot velho) = ok=false: o segmento recém-selado devia responder pelo .sidx")
+	}
+	got := collectRows(t, f)
+	for _, want := range esperadas {
+		if !slices.Contains(got, want) {
+			t.Fatalf("a row %d (node=alvo, gravada no seg %d) sumiu dos candidatos: a fonte devolveu %v — "+
+				"é o falso negativo da rotação, o WIP do segmento novo respondendo pelo antigo", want, seg1, got)
+		}
+	}
+}

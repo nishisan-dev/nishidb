@@ -194,6 +194,7 @@ func (s *Store) abreWIPsDoCorrente() error {
 	}
 	s.selMu.Lock()
 	s.wips = wips
+	s.wipsSeg = seg
 	s.selMu.Unlock()
 	return nil
 }
@@ -213,9 +214,12 @@ func (s *Store) abreWIPsDoCorrente() error {
 // inexistente em vez de improvável.
 //
 // Entre este fecha e o abreWIPsDoCorrente seguinte o mapa fica vazio, e a
-// consulta trata isso como qualquer outro segmento sem índice: ENUMERA. É
-// correto por construção e dispensa raciocinar sobre a ordem entre a troca do
-// curSegID e a publicação da location do record que causou a rotação.
+// consulta trata isso como qualquer outro segmento sem índice: cai para o
+// caminho selado, que responde pelo .sidx quando ele existe ou manda enumerar.
+// A sub-janela seguinte — mapa REPOVOADO com os WIPs do segmento novo e uma
+// consulta ainda com snapshot velho do corrente — é fechada pela identidade
+// wipsSeg, conferida no fonteDoWIP: sem ela, a consulta receberia as postings
+// do segmento errado com ok=true e o segmento antigo sumiria dos candidatos.
 func (s *Store) fechaWIPs() error {
 	s.selMu.Lock()
 	defer s.selMu.Unlock()
@@ -224,6 +228,7 @@ func (s *Store) fechaWIPs() error {
 		errs = append(errs, w.Fecha())
 	}
 	s.wips = nil
+	s.wipsSeg = 0
 	return errors.Join(errs...)
 }
 
