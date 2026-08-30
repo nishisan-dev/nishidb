@@ -35,13 +35,13 @@ schema:
 
 // TestIndexedRefleteACapacidadeDoMotor: a coluna `indexed` fala do MOTOR, e a
 // coluna `index` ao lado fala do que o YAML declara. Antes da D5, um campo
-// `index: hash` sobre um Store que só respondia pelo bitmap saía com index=hash
-// e indexed=false — correto na época, mentira a partir do motor físico (fonte.go
+// `index: hash` sobre um Store que só respondia HasBitmap saía com index=hash e
+// indexed=false — correto na época, mentira a partir do motor físico (fonte.go
 // documenta o histórico).
 //
 // Chamava-se TestIndexedSomaAsDuasCapacidadesDeMotor e montava um cenário
 // sintético — status só em Bitmap, node só em Hash — para exercitar os dois
-// lados da SOMA das duas capabilities por motor. A soma virou uma chamada só
+// lados da SOMA `HasBitmap(c.ID) || HasHash(c.ID)`. A soma virou uma chamada só
 // (fonte.record), e o cenário deixou de ser construível: as duas colunas
 // entram no mesmo conjunto indexado. As asserções abaixo são as MESMAS, valor
 // por valor, incluindo o vocabulário de wire da coluna `index`.

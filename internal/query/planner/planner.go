@@ -12,12 +12,12 @@ import (
 // Store é a ÚNICA superfície do storage que o planner enxerga: CAPABILITY,
 // nunca dado. *storage.Store e *fakestorage.Store a satisfazem.
 //
-// UM método, e não mais a capability do bitmap somada às duas capabilities
-// OPCIONAIS do hash, detectadas por type assertion no New: as três perguntavam
-// a mesma coisa a um Store que tem um motor de índice só (spec §3.1). As
-// opcionais eram um risco próprio — um Store que não as implementasse era
-// tratado como "atende tudo", e a diferença entre "não sei responder" e "sim"
-// só aparecia como erro em runtime no executor.
+// UM método, e não mais o HasBitmap somado às capabilities OPCIONAIS
+// HashLookuper e HashCapable, detectadas por type assertion no New: as três
+// perguntavam a mesma coisa a um Store que tem um motor de índice só (spec
+// §3.1). As opcionais eram um risco próprio — um Store que não as implementasse
+// era tratado como "atende tudo", e a diferença entre "não sei responder" e
+// "sim" só aparecia como erro em runtime no executor.
 type Store interface {
 	Indexado(field types.FieldID) bool
 }

@@ -934,8 +934,8 @@ func Open(opts Options) (*Store, error) {
 	//
 	// ATÉ A D5 (planning/spec-subsistema-1-indice-por-segmento.md) havia DOIS
 	// conjuntos e duas chamadas aqui, e a ordem entre elas decidia mais do que
-	// "canônica dentro de cada lista": as duas listas vinham de grafias
-	// DIFERENTES do YAML (`index: bitmap` e `index: hash`), então
+	// "canônica dentro de cada lista": BitmapFieldNames e HashFieldNames vinham
+	// de grafias DIFERENTES do YAML (`index: bitmap` e `index: hash`), então
 	// "bitmap primeiro, hash depois" também decidia QUAL GRUPO pegava os ids
 	// mais baixos — e por isso a ordem ENTRE os dois grupos era chamada de tão
 	// contratual quanto a ordem DENTRO de cada um.
@@ -1199,13 +1199,13 @@ func (s *Store) FieldDict() *fielddict.Dict { return s.dict }
 // como o design promete. O conjunto é fixado no Open, então a resposta é
 // estável durante toda a vida do Store.
 //
-// É UM método, e não mais o par de capabilities por motor: os dois respondiam pela
+// É UM método, e não mais o par HasBitmap/HasHash: os dois respondiam pela
 // MESMA fonte — o conjunto indexado do dataset — desde que passou a existir um
 // motor só, e duas perguntas com uma resposta só é convite a alguém consultar
 // uma delas e concluir a outra.
 //
 // A enumeração do conjunto é o CamposIndexados (indices.go), que já era a
-// terceira grafia da mesma coisa quando havia um enumerador por motor.
+// terceira grafia da mesma coisa quando BitmapFields e HashFields existiam.
 func (s *Store) Indexado(field types.FieldID) bool {
 	return slices.Contains(s.camposIndexados, field)
 }
@@ -2021,7 +2021,7 @@ func (s *Store) DiretorioDeSpill() string {
 // hash do valor e, nos segmentos sem índice, as linhas que o segmento inteiro
 // enumera. Valide liveness e predicate via GetByRowID (§44).
 //
-// É UM método, e não mais um lookup por motor: os dois já delegavam
+// É UM método, e não mais o par LookupBitmap/LookupHash: os dois já delegavam
 // para o mesmo lookupIndexado desde que passou a existir um motor só (spec D5),
 // e a §3.1 é o ponto em que as duas assinaturas colapsam. Enquanto o planner
 // ainda distinguia os motores, manter os dois nomes era o que permitia à suíte

@@ -18,9 +18,9 @@ import (
 // lookupIndexado é a superfície ÚNICA de consulta ao índice por segmento, e é
 // ela que o Store.Lookup chama (spec §3.1).
 //
-// Ela nasceu como o corpo comum dos DOIS lookups por motor que o Store expunha:
-// mantendo os dois nomes antigos e as duas assinaturas enquanto o planner ainda
-// distinguia os motores, a suíte inteira de storage e de query — que já testa o
+// Ela nasceu como o corpo comum de LookupBitmap e LookupHash: mantendo os dois
+// nomes e as duas assinaturas enquanto o planner ainda distinguia os motores, a
+// suíte inteira de storage e de query — que já testa o
 // contrato de superconjunto com ordem estritamente crescente e reentrância
 // contra o Close — passou a exercitar o motor novo sem uma linha de teste
 // mudada. Foi o oráculo da migração; com o planner unificado, resta um chamador

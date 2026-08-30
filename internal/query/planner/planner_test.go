@@ -229,25 +229,27 @@ func TestPlanKeyVenceIndiceIndependenteDaOrdem(t *testing.T) {
 
 // --------------------------------------------------- 5-8: a assimetria extinta
 //
-// As quatro regras 5-8 do §63 original testavam a ASSIMETRIA entre a R2 do
-// hash (devolve um plano e para) e a R3/R4 do bitmap (intersecta): a que provava
-// que a R2 vencia quando as duas se aplicavam, as duas da degradação da
-// capability opcional da R2 e a do capability check por campo dela. A D5 tirou
-// a grafia (`index: hash`) que alimentava a R2, e as quatro passaram a provar um
-// caminho que este binário não alcançava mais por configuração nenhuma; esta
-// tarefa apagou a própria R2, e com ela a segunda regra que poderia atender um
-// termo.
+// As quatro regras 5-8 do §63 original testavam a ASSIMETRIA entre R2 (hash:
+// devolve um plano e para) e R3/R4 (bitmap: intersecta): TestPlanHashVenceBitmap
+// (R2 vence quando os dois se aplicam), TestPlanSemCapabilityHashDegradaPara-
+// Bitmap e TestPlanSemCapabilityHashSemOutroIndiceFullScan (degradação da
+// capability opcional HashLookuper) e TestPlanHasHashFalsoDegrada (o capability
+// check por campo, HashCapable). A D5 tirou a grafia (`index: hash`) que
+// alimentava a R2, e as quatro passaram a provar um caminho que este binário não
+// alcançava mais por configuração nenhuma; esta tarefa apagou a própria R2 —
+// junto com HashIndexPlan, HashLookuper e HashCapable —, e com ela a segunda
+// regra que poderia atender um termo.
 //
 // TestPlanHashVenceBitmap sobrevive REPROPOSITADO: a mesma query (nas_ip AND
 // status, os dois indexados) agora prova a intersecção que a D5 introduz — a
 // consequência "para melhor" que a spec já registrava.
 
 // TestDoisCamposIndexadosAgoraIntersectam: antes da D5, `nas_ip` era
-// `index: hash` e a regra R2 devolvia UM plano (HashIndex) e parava — `status`
-// nunca entrava, e o executor revalidava `status` linha a linha sobre o
-// superset do hash. Com `index: true` como grafia única os dois campos saem
-// indexados do mesmo jeito, e com UMA regra de índice eles caem na mesma
-// colheita, que junta todos os termos elegíveis antes de decidir.
+// `index: hash` e a regra R2 devolvia UM plano (HashIndexPlan) e parava —
+// `status` nunca entrava, e o executor revalidava `status` linha a linha sobre o
+// superset do hash. Com `index: true` como grafia única os dois campos compilam
+// para o mesmo estado (era IndexKind, hoje um bool) e caem na MESMA regra, que
+// junta todos os termos elegíveis antes de decidir.
 func TestDoisCamposIndexadosAgoraIntersectam(t *testing.T) {
 	p, c, _ := novo(t)
 	where := and(eq(campo(t, c, "nas_ip"), ipv4(t, "10.0.0.1")), eq(campo(t, c, "status"), str("Stop")))
@@ -756,12 +758,13 @@ func TestPlanMetricas(t *testing.T) {
 			func(m *planner.Metrics) int64 { return m.FullScan.Load() }},
 		{"point lookup", eq(campo(t, c, "id"), str("a")),
 			func(m *planner.Metrics) int64 { return m.PointLookup.Load() }},
-		// O caso "hash" saiu daqui na D5, quando nenhuma config passou a produzir
-		// um plano de hash. O `total` abaixo continuou somando o contador daquele
-		// plano DE PROPÓSITO, para que o dia em que ele fosse apagado este teste
-		// acusasse por falha de compilação em vez de silenciar. Foi o que
-		// aconteceu: a parcela saiu junto com o contador, e a soma abaixo é
-		// DELIBERADAMENTE de cinco parcelas em vez de seis.
+		// O caso "hash" saiu daqui na D5, quando nenhuma config passou a compilar
+		// um campo para IndexKind hash e, portanto, a produzir um HashIndexPlan. O
+		// `total` abaixo continuou somando m.HashIndex.Load() DE PROPÓSITO, para
+		// que o dia em que o contador fosse apagado este teste acusasse por falha
+		// de compilação em vez de silenciar. Foi o que aconteceu: a parcela saiu
+		// junto com o contador, e a soma abaixo é DELIBERADAMENTE de cinco
+		// parcelas em vez de seis.
 		{"index scan", eq(campo(t, c, "status"), str("Stop")),
 			func(m *planner.Metrics) int64 { return m.IndexScan.Load() }},
 		{"intersect", and(eq(campo(t, c, "status"), str("Stop")), eq(campo(t, c, "protocol"), str("P"))),

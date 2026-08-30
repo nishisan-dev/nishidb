@@ -14,8 +14,9 @@ import (
 // specComHash declara uma coluna indexada — o caso do piloto, em que a
 // dimensão de consulta mais valiosa (`node`) precisa de índice. A grafia
 // mudou com a D5 (`index: true`, não mais `index: hash`), e a função que ele
-// exercita virou uma só — schema.CamposComIndice, no lugar do par por motor —,
-// mas o nome do fixture e o caminho continuam os mesmos.
+// exercita virou uma só — schema.CamposComIndice, no lugar do par
+// CamposComBitmap/CamposComHash —, mas o nome do fixture e o caminho continuam
+// os mesmos.
 const specComHash = `version: 1
 name: d
 materialization:

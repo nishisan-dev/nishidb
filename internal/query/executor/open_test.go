@@ -22,10 +22,11 @@ import (
 // consumidor. Uma divergência de assinatura — ainda que só uint64 no lugar de
 // types.RowID — torna os dois mutuamente inutilizáveis.
 //
-// Havia uma terceira asserção, sobre a capability OPCIONAL do índice hash: ela
-// cobrava do dublê o lookup que o Store real não implementava. Saiu porque o
-// Lookup entrou na própria interface Store — as duas linhas acima já cobram dos
-// DOIS o método que ela cobrava de um.
+// A terceira asserção era `_ executor.HashLookuper = (*fakestorage.Store)(nil)`
+// e cobria a capability OPCIONAL do índice hash, que o Store real não
+// implementava e o dublê sim. Saiu porque o Lookup entrou na própria interface
+// Store — as duas linhas acima já cobram dos DOIS o método que ela cobrava de
+// um.
 var (
 	_ executor.Store = (*storage.Store)(nil)
 	_ executor.Store = (*fakestorage.Store)(nil)
@@ -141,8 +142,8 @@ func TestPlanoInvalido(t *testing.T) {
 			&planner.PointLookupPlan{Field: id, Key: types.Value{Type: types.TypeString}}, st, "key sem bytes"},
 		// O caso "hash sem capability no store" saiu daqui, junto com o dublê
 		// semHash que ele usava: os dois cobriam o ramo em que o executor
-		// recebia um plano de hash e o store NÃO implementava a capability
-		// OPCIONAL daquele motor. Com o Lookup dentro da interface Store, esse
+		// recebia um HashIndexPlan e o store NÃO implementava a capability
+		// OPCIONAL HashLookuper. Com o Lookup dentro da interface Store, esse
 		// store não compila — o erro deixou de ser alcançável em runtime.
 		{"comparação sobre coluna json", func() *binder.BoundQuery {
 			bq := bqBase(t, c)

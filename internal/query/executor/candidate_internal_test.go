@@ -188,7 +188,7 @@ func TestAbreTermosFechaOsJaAbertosNoErro(t *testing.T) {
 }
 
 // TestAbreTermosSemCapabilityDeHash saiu daqui: ele cobria o ramo
-// `hash == nil` do abreTermos, e esse ramo era a capability OPCIONAL do índice
-// hash — detectada por type assertion e ausente do recorte Store. Com o Lookup
-// dentro da interface, um store que não o implementa não compila, e o erro que o
-// teste afirmava não tem mais como ser produzido em runtime.
+// `hash == nil` do abreTermos, e esse ramo era a capability OPCIONAL
+// HashLookuper — detectada por type assertion e ausente do recorte Store. Com o
+// Lookup dentro da interface, um store que não o implementa não compila, e o
+// erro que o teste afirmava não tem mais como ser produzido em runtime.

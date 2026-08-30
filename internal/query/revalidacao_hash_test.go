@@ -13,9 +13,10 @@ import (
 // do §44 — distinto da posting órfã que já bastava para o bitmap.
 //
 // O motor que sustentava essa distinção saiu (Tarefa 9 — índice por segmento
-// único), e a D5 aposentou a grafia que a declarava: `nas` (NAS-Identifier) sai
-// indexado exatamente como `status`, e o
-// candidato a mais que este teste injeta com InjectPosting representa a MESMA
+// único), e a D5 aposentou a grafia que a declarava: `nas` (NAS-Identifier)
+// passou a compilar para o mesmo estado que `status` — era o mesmo IndexKind
+// (IndexBitmap), hoje o mesmo bool — e o candidato a mais que este teste injeta
+// com InjectPosting representa a MESMA
 // causa do bitmap (posting que sobrevive à mudança de valor, não colisão de
 // hash). O nome ficou histórico; o que o teste continua provando — e que o
 // gêmeo não prova sozinho — é que Candidates=1/Rejected=1 vêm acompanhados do

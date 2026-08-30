@@ -512,9 +512,10 @@ func TestScanLiveAscending(t *testing.T) {
 // O lookup devolve rowIds ASCENDENTES, sobre campo textual e sobre campo
 // inteiro, e valor sem posting devolve iterador vazio em vez de erro.
 //
-// O nome trazia os dois motores, de quando os campos 2 e 3 eram de motores
-// diferentes e cada metade era consultada pelo lookup do seu. Os campos e as
-// asserções são os mesmos; o que sumiu foi a distinção entre as duas chamadas.
+// Chamava-se TestLookupBitmapAndHashAscending, de quando os campos 2 e 3 eram de
+// motores diferentes e cada metade era consultada pelo seu — LookupBitmap e
+// LookupHash. Os campos e as asserções são os mesmos; o que sumiu foi a
+// distinção entre as duas chamadas.
 func TestLookupAscendente(t *testing.T) {
 	s := New(Indexes{Campos: []types.FieldID{2, 3}})
 	for i, k := range []string{"K1", "K2", "K3"} {
@@ -557,8 +558,9 @@ func TestLookupAscendente(t *testing.T) {
 // planner que escolha caminho indexado para campo não indexado precisa
 // quebrar no teste, não passar por acaso com resultado vazio.
 //
-// As duas asserções cruzadas que este teste tinha — consultar pelo bitmap um
-// campo declarado só no hash, e o contrário — saíram por FALTA DE SUJEITO:
+// As duas asserções cruzadas que este teste tinha — LookupBitmap sobre um campo
+// declarado só no hash, e LookupHash sobre um declarado só no bitmap — saíram
+// por FALTA DE SUJEITO:
 // declarar um campo num motor e não no outro deixou de ser construível. O que
 // elas guardavam (campo fora do conjunto indexado é ErrInvalidArgument)
 // continua guardado pela primeira asserção, sobre o campo 1.

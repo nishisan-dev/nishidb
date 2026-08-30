@@ -471,8 +471,8 @@ func yamlComIndiceDeclarado(grafia string) string {
 }
 
 // TestIndexTrueEhAceito prova que `index: true` marca o campo como indexado.
-// Com um motor só (D5) não há mais um enum de três valores a conferir: o campo
-// compilado carrega um bool, e a regra do planner que o lê é uma — a que
+// Com um motor só (D5) não há mais um IndexKind de três valores a conferir: o
+// campo compilado carrega um bool, e a regra do planner que o lê é uma — a que
 // intersecta todos os termos elegíveis.
 func TestIndexTrueEhAceito(t *testing.T) {
 	s := parseOK(t, yamlComIndiceDeclarado("true"))

@@ -49,7 +49,8 @@ func TestLoadSpec12YAML(t *testing.T) {
 		index  bool
 	}{
 		// nas_ip e ip eram index: hash antes da D5; hoje `index: true` é a única
-		// grafia, e os dois saem indexados como status e terminate_cause.
+		// grafia, e os dois saem indexados como status e terminate_cause (era o
+		// mesmo IndexKind; hoje o mesmo bool).
 		{"nas_ip", "NAS-IP-Address", types.TypeIPv4, true},
 		{"status", "Acct-Status-Type", types.TypeString, true},
 		{"ip", "Framed-IP-Address", types.TypeIPv4, true},

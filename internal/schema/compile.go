@@ -228,8 +228,8 @@ func (f *CompiledField) EffectiveType() types.FieldType {
 }
 
 // NomeDoIndice devolve o índice em texto, para a coluna `index` do
-// /v1/metadata e da homônima de `_meta.fields`. Substitui o String() do enum de
-// índice, que morreu com os dois motores, e devolve as MESMAS duas palavras que
+// /v1/metadata e da homônima de `_meta.fields`. Substitui o IndexKind.String()
+// que morreu com o enum dos dois motores, e devolve as MESMAS duas palavras que
 // ele devolvia.
 //
 // "bitmap" e "none" são vocabulário de WIRE, e é por isso que eles não

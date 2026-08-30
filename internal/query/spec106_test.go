@@ -71,10 +71,11 @@ func TestSpec106BitmapLookup(t *testing.T) {
 }
 
 // §106 — item histórico "hash lookup": antes da D5, `nas` (NAS-Identifier)
-// era `index: hash` e o fixture o mantinha DELIBERADAMENTE fora do conjunto do
-// outro motor, para provar que o plano de hash respondia sozinho. Com
-// `index: true` como grafia única, `nas` sai indexado como qualquer outro campo
-// e entra no MESMO conjunto — novoHarness não distingue mais os dois. O nome do teste ficou porque o
+// era `index: hash` e o fixture o mantinha DELIBERADAMENTE fora do conjunto
+// bitmap, para provar que o plano de hash respondia sozinho. Com `index: true`
+// como grafia única, `nas` compila para o mesmo estado que qualquer outro campo
+// indexado (era IndexKind, hoje CompiledField.Indexado) e entra no MESMO
+// conjunto — novoHarness não distingue mais os dois. O nome do teste ficou porque o
 // item numerado do §106 é este; o que ele prova — a consulta por `nas`
 // resolve sem varredura — não mudou.
 func TestSpec106HashLookup(t *testing.T) {
@@ -174,8 +175,9 @@ func TestUniaoMisturaBitmapEHash(t *testing.T) {
 		`SELECT id FROM radius_sessions WHERE status = 'Start' OR nas_ip = '10.0.0.2'`)
 
 	// CMP-0002 por status='Start', CMP-0003 e CMP-0004 por nas_ip — os dois
-	// termos indexados (o nome do teste é histórico: antes da D5 um dos dois
-	// era `index: hash`; hoje os dois saem indexados do mesmo jeito).
+	// termos indexados (o nome do teste é histórico: antes da D5 um dos dois era
+	// `index: hash`; hoje os dois compilam para o mesmo estado — era o mesmo
+	// IndexKind, hoje o mesmo bool).
 	got := chaves(rows, "id")
 	if !reflect.DeepEqual(got, []string{"CMP-0002", "CMP-0003", "CMP-0004"}) {
 		t.Fatalf("resultado = %v", got)

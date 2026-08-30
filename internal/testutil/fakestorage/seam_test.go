@@ -13,8 +13,9 @@ import (
 // escolher o caminho indexado e o executor falhar em runtime — exatamente o que
 // a degradação para full scan existe para evitar.
 //
-// Este teste cruzava as DUAS capabilities por motor: além dos casos abaixo, ele
-// afirmava que "campo bitmap não é atendido pelo hash" e vice-versa. Essa asserção não perdeu força — perdeu SUJEITO: com um motor só,
+// Este teste chamava-se TestHasHash e cruzava as DUAS capabilities, HasBitmap e
+// HasHash: além dos casos abaixo, ele afirmava que "campo bitmap não é atendido
+// pelo hash" e vice-versa. Essa asserção não perdeu força — perdeu SUJEITO: com um motor só,
 // declarar um campo em um motor e não no outro deixou de ser um estado
 // construível, aqui e no Store real.
 func TestIndexado(t *testing.T) {
@@ -92,8 +93,9 @@ func TestInjectPostingRowInexistente(t *testing.T) {
 // perderia o int silenciosamente.
 //
 // Chamava-se TestInjectPostingHash e provava que "o falso positivo não é
-// exclusividade do bitmap" — asserção sem sujeito desde que há um motor só. O
-// corpo não mudou: o campo 3 continua sendo o campo de valor inteiro.
+// exclusividade do bitmap" — asserção sem sujeito desde que há um motor só, e
+// sem API desde que LookupHash colapsou em Lookup. O corpo não mudou: o campo 3
+// continua sendo o campo de valor inteiro.
 func TestInjectPostingValorInteiro(t *testing.T) {
 	s := New(Indexes{Campos: []types.FieldID{3}})
 	if err := s.InjectPosting(3, intVal(7), types.RowID(1)); err != nil {

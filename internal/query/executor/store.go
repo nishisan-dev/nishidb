@@ -28,9 +28,9 @@ type Store interface {
 	ScanLive() types.RowIDIterator
 	// Lookup abre o iterador de candidatos de um termo `campo = valor`.
 	//
-	// É UM método na interface, e não mais o lookup do bitmap somado à
-	// capability OPCIONAL do hash, detectada por type assertion: existe um motor
-	// de índice só (spec §3.1), e a opcional obrigava todo caminho de abertura a
+	// É UM método na interface, e não mais o LookupBitmap somado à capability
+	// OPCIONAL HashLookuper, detectada por type assertion: existe um motor de
+	// índice só (spec §3.1), e a opcional obrigava todo caminho de abertura a
 	// carregar o ramo "e se o store não a implementar" para um erro que o
 	// planner já tinha o dever de não deixar chegar aqui.
 	Lookup(field types.FieldID, v types.Value) (types.RowIDIterator, error)
