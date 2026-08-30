@@ -436,7 +436,7 @@ schema:
     Acct-Authentic:
       type: string
       alias: acct_authentic
-      index: bitmap
+      index: true
 
     Acct-Session-Id:
       type: string
@@ -445,7 +445,7 @@ schema:
     Acct-Status-Type:
       type: string
       alias: status
-      index: bitmap
+      index: true
 
     Calling-Station-Id:
       type: string
@@ -469,7 +469,7 @@ schema:
     Filter-Id:
       type: string
       alias: filter_id
-      index: bitmap
+      index: true
 
     Framed-IPv6-Prefix:
       type: ipv6_prefix
@@ -481,7 +481,7 @@ schema:
     Framed-Protocol:
       type: string
       alias: protocol
-      index: bitmap
+      index: true
 
     Idle-Timeout:
       type: int64
@@ -492,12 +492,12 @@ schema:
     NAS-IP-Address:
       type: ipv4
       alias: nas_ip
-      index: hash
+      index: true
 
     NAS-Identifier:
       type: string
       alias: nas
-      index: hash
+      index: true
 
     NAS-Port:
       type: int64
@@ -508,14 +508,14 @@ schema:
 
     NAS-Port-Type:
       type: string
-      index: bitmap
+      index: true
 
     PSA-SERVER:
       type: ipv4
 
     Service-Type:
       type: string
-      index: bitmap
+      index: true
 
     Session-Timeout:
       type: int64
@@ -554,7 +554,7 @@ schema:
     Framed-IP-Address:
       type: ipv4
       alias: ip
-      index: hash
+      index: true
 
     LastSessionAliveDate:
       type: timestamp
@@ -565,7 +565,7 @@ schema:
     Acct-Terminate-Cause:
       type: string
       alias: terminate_cause
-      index: bitmap
+      index: true
 
     LastSessionStoppedDate:
       type: timestamp
