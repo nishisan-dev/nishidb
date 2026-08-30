@@ -61,9 +61,19 @@ type secaoSelada struct {
 // sondagem no piloto) — ele existe para proteger contra o remap do Grow, e um
 // arquivo selado nunca cresce.
 //
-// Seguro para uso concorrente por N leitores, INCLUSIVE com o Fecha: as Fontes
-// devolvidas pelo Lookup leem o mapeamento direto, e o desmonte espera a última
-// delas sair. Ver o godoc do Fecha.
+// Seguro para uso concorrente por N leitores.
+//
+// # O que a contagem de vidas cobre, e o que ela NÃO cobre
+//
+// Ela cobre a Fonte DEPOIS que o Lookup retornou: o Fecha espera a última sair
+// antes do munmap, e por isso uma varredura em voo nunca lê memória desmapeada.
+//
+// Ela NÃO torna o Lookup seguro contra um Fecha CONCORRENTE. Com vidas == 0 o
+// Fecha desmonta na hora e zera `dados`; um Lookup que entrasse depois disso
+// tomaria o pânico do exigeAberto, e não um ok=false. Quem chama o Lookup tem de
+// garantir, por conta própria, que ele não corre com o Fecha — no Store isso é o
+// selMu, que a aposentadoria toma para fechar. Esta é a fronteira que um segundo
+// chamador (o laço de reconstrução da §2.4) precisa respeitar.
 type Selado struct {
 	reg     *mmap.Region
 	caminho string
@@ -341,6 +351,12 @@ func (s *Selado) secao(campo types.FieldID) (*secaoSelada, bool) {
 // derivado, o chamador degrada para enumeração e a resposta continua correta.
 // Quem precisa saber que foi corrupção — para apagar o arquivo, logar ERROR e
 // contar a métrica — pergunta a ErroDeIntegridade.
+//
+// NÃO é seguro chamar isto concorrentemente com o Fecha: a exclusão entre os
+// dois é do chamador (ver o godoc do Selado). E convém que a conferência do crc
+// já tenha acontecido antes — ela é preguiçosa e a primeira chamada varre o
+// arquivo inteiro, o que num chamador que segure lock para invocar o Lookup põe
+// centenas de MB de varredura debaixo desse lock.
 func (s *Selado) Lookup(campo types.FieldID, h uint64) (Fonte, bool) {
 	s.exigeAberto("Lookup")
 	if err := s.confereCRC(); err != nil {
@@ -485,9 +501,13 @@ func (s *Selado) confereCRC() error {
 // varre. Ali, exigir que "nenhuma Fonte viva sobrou" seria exigir do dono uma
 // garantia que ele não tem; sem a espera, o desfecho é SIGSEGV.
 //
-// Depois desta chamada o Lookup responde ok=false, e o chamador degrada para
-// enumeração — correto por construção, e é o mesmo que ele já faz com índice
-// ausente.
+// Depois desta chamada, um Lookup que AINDA ALCANCE este Selado responde
+// ok=false, e o chamador degrada para enumeração — correto por construção, e é
+// o mesmo que ele já faz com índice ausente. "Ainda alcance" é a ressalva
+// inteira: isso vale no ramo em que havia leitor e o mapeamento continua de pé.
+// Sem leitor nenhum o desmonte é imediato e o Lookup seguinte PANICA no
+// exigeAberto — por isso a exclusão entre Lookup e Fecha é do chamador, e não
+// desta contagem (ver o godoc do Selado).
 //
 // O ERRO DO munmap ADIADO NÃO SOBE por aqui: quando há leitor, o desmonte
 // acontece depois, no Close do último deles, e já não há chamada a que

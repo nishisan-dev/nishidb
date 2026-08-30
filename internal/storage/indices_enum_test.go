@@ -638,3 +638,63 @@ func TestSegmentoAposentadoEntreAListagemEOPreadViraFonteVazia(t *testing.T) {
 		t.Errorf("a fonte de um segmento aposentado emitiu a row %d", f.RowID())
 	}
 }
+
+// TestOCrcEhConferidoAntesDeOSeladoEntrarNoCache fixa ONDE a conferência do
+// crc32c acontece, e o lugar é uma propriedade de concorrência, não um detalhe.
+//
+// O selMu é o lock da ROTAÇÃO — o aposAppend o toma a cada segmento novo, sob o
+// wmu, no caminho do Put e do Apenda. Com escritor pendente o RWMutex barra os
+// RLock seguintes, então uma varredura de centenas de MB debaixo dele faria a
+// primeira consulta a um .sidx grande e frio serializar consulta contra
+// ingestão: o defeito que este ciclo inteiro existe para eliminar. O Lookup roda
+// sob esse lock; o garanteSelado, não.
+//
+// O oráculo separa os dois momentos, que é a única forma de distingui-los de
+// fora: chama o garanteSelado SOZINHO, corrompe o arquivo e só então pergunta.
+// Como o mapeamento é MAP_SHARED, o Selado passa a enxergar os bytes podres —
+// então um crc ainda não conferido reprovaria agora. Ele não reprova, e é isso
+// que prova que a conta já foi paga fora do lock.
+//
+// Uma consulta comum NÃO serve de oráculo aqui: ela chama o garanteSelado e o
+// Lookup em sequência, e o sync.Once fica cumprido nos dois desenhos.
+func TestOCrcEhConferidoAntesDeOSeladoEntrarNoCache(t *testing.T) {
+	base := openStore(t, Options{})
+	dir := t.TempDir()
+	s := abreHistoricoIndexadoEm(t, base, dir, []string{"node"}, 8<<10)
+	alvo := s.curSegID.Load()
+	poeLinhasAteRotacionar(t, s, alvo)
+	poeLinhasAteRotacionar(t, s, s.curSegID.Load())
+	campo := campoDoDicionario(t, s, "node")
+
+	s.garanteSelado(alvo)
+	s.selMu.RLock()
+	sel := s.selados[alvo]
+	s.selMu.RUnlock()
+	if sel == nil {
+		t.Fatalf("pré-condição: o segmento %d não entrou no cache de selados", alvo)
+	}
+
+	// Corrompe o corpo do .sidx em disco. MAP_SHARED: o Selado já aberto passa
+	// a ver estes bytes.
+	caminho := segindex.CaminhoSelado(filepath.Join(dir, "data"), alvo)
+	f, err := os.OpenFile(caminho, os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteAt([]byte{0xAA, 0xBB, 0xCC, 0xDD}, 64); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := sel.ErroDeIntegridade(); err != nil {
+		t.Fatalf("o crc reprovou DEPOIS da corrupção (%v): ele não foi conferido no garanteSelado, "+
+			"e portanto seria pago no Lookup — que roda sob o selMu, o mesmo lock da rotação", err)
+	}
+	// E o efeito observável: o segmento continua respondendo pelo índice em vez
+	// de degradar para enumeração.
+	if crus := candidatosCrus(t, s, campo, strVal("nunca-visto")); len(crus) != 0 {
+		t.Errorf("o segmento passou a enumerar (%d candidatos) depois da corrupção", len(crus))
+	}
+}

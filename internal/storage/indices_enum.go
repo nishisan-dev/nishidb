@@ -128,13 +128,11 @@ func (s *Store) fonteIndexada(seg, corrente uint32, campo types.FieldID, h uint6
 	// registrar fora do lock deixaria justamente a janela que a vida existe para
 	// fechar.
 	//
-	// O QUE ISSO SEGURA, escrito porque não é óbvio: a PRIMEIRA consulta a um
-	// segmento confere o crc32c aqui dentro, e num índice grande isso é uma
-	// varredura de centenas de MB. Enquanto ela roda, a aposentadoria daquele
-	// dataset espera. É uma vez por segmento por processo (sync.Once), e a
-	// alternativa — adquirir a vida fora do Lookup — obrigaria a embrulhar a
-	// Fonte só para devolvê-la no Close, pagando uma indireção por LINHA para
-	// poupar uma espera por SEGMENTO.
+	// O QUE NÃO PODE ACONTECER DEBAIXO DESTE LOCK é trabalho longo, e o crc32c
+	// era isso: o selMu é o mesmo lock que o aposAppend toma a cada rotação, sob
+	// o wmu. Por isso o garanteSelado já o conferiu, fora de lock nenhum, e o
+	// Lookup daqui encontra o sync.Once cumprido. O que sobra sob o lock é busca
+	// binária em tabela de dezenas de entradas mais o incremento da vida.
 	s.selMu.RLock()
 	defer s.selMu.RUnlock()
 	sel := s.selados[seg]
@@ -194,6 +192,31 @@ func (s *Store) garanteSelado(seg uint32) {
 				"segmento", seg, "erro", err.Error())
 		}
 		return
+	}
+	// O crc32c é conferido AQUI, fora de qualquer lock, e não deixado para a
+	// primeira consulta.
+	//
+	// A verificação continua PREGUIÇOSA no sentido da §1.5 — o que ela proíbe é
+	// conferir na subida, porque um segmento com coluna quase-única chega a
+	// 2,25 GB e a conta seria paga por 500 arquivos que a consulta talvez nem
+	// toque. Aqui ela só acontece quando uma consulta de fato precisou deste
+	// segmento, que é a mesma economia. O que muda é ONDE a conta é paga.
+	//
+	// DEIXÁ-LA PARA O Lookup A PORIA DEBAIXO DO selMu, e o selMu é o lock da
+	// ROTAÇÃO: o aposAppend o toma a cada segmento novo, sob o wmu, no caminho
+	// do Put e do Apenda. Com escritor pendente o RWMutex barra os RLock
+	// seguintes, então uma varredura de centenas de MB debaixo dele faria a
+	// primeira consulta a um .sidx grande e frio serializar consulta contra
+	// ingestão — exatamente o defeito que este ciclo existe para eliminar.
+	//
+	// Crc divergente NÃO impede a publicação: o Lookup passa a responder
+	// ok=false e o segmento enumera, que é a degradação correta. Publicar
+	// mantém o Once cumprido e faz esse ok=false custar nada; recusar obrigaria
+	// a próxima consulta a reabrir e reconferir o arquivo podre inteiro.
+	if err := novo.ErroDeIntegridade(); err != nil {
+		s.opts.Log.Warn("indice.selado_corrompido",
+			"o índice do segmento não passou no crc32c; ele responde por enumeração até ser reconstruído",
+			"segmento", seg, "erro", err.Error())
 	}
 	s.selMu.Lock()
 	defer s.selMu.Unlock()
