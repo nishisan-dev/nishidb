@@ -277,8 +277,13 @@ type HistoricoStats struct {
 	// (`history.index.maxBytes`) assumiu o comando — do mesmo jeito que
 	// OldestWrittenAt mostra o maxBytes engolindo o expireAfterWrite.
 	//
-	// Vazio/zero quando o bloco `history.index` não foi declarado: a janela é
-	// infinita e não há o que comparar.
+	// Os dois são omitidos por razões DIFERENTES, e a assimetria é deliberada:
+	// IndexWindow some quando o bloco `history.index` não declarou `window` (não
+	// há intenção a ecoar), e EffectiveIndexWindow some quando não há cobertura
+	// nenhuma a reportar — tabela vazia ou sem campo indexado. A cobertura é
+	// publicada MESMO sem janela declarada: ela continua sendo o que o índice
+	// alcança, e é o único jeito de o operador descobrir que declarar uma janela
+	// não mudaria nada.
 	IndexWindow          string  `json:"indexWindow,omitempty"`
 	EffectiveIndexWindow float64 `json:"effectiveIndexWindowSeconds,omitempty"`
 }

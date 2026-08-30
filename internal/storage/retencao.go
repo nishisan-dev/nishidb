@@ -138,8 +138,13 @@ func (s *Store) rodaRetencao(ctx context.Context, lim LimitesDeRetencao) {
 			return
 		}
 		if res.PorTempo+res.PorTamanho+res.IndicesExpulsos > 0 {
+			// A mensagem NÃO diz "segmentos aposentados": uma passada em que só
+			// a janela agiu não tirou linha nenhuma da consulta, e afirmar
+			// aposentadoria ali é exatamente o que o godoc do IndicesExpulsos diz
+			// querer evitar. Os três contadores contam a história; a frase só
+			// nomeia o que aconteceu.
 			s.opts.Log.Info("retencao.passada",
-				"segmentos aposentados pela retenção do histórico",
+				"a passada de retenção do histórico devolveu disco",
 				"dataset", s.opts.Dataset,
 				"porTempo", res.PorTempo, "porTamanho", res.PorTamanho,
 				"indicesExpulsos", res.IndicesExpulsos,

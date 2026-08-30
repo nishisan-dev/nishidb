@@ -59,6 +59,10 @@ type janelaDeSegmentos struct {
 	// crescente. A diferença entre os dois conjuntos é exatamente o que a
 	// expulsão remove.
 	comIndice []uint32
+	// tamanho são os bytes do .sidx de cada segmento SELADO, zero para quem não
+	// tem. As chaves dele são, por construção, os segmentos vivos que a janela
+	// governa — e é isso que a expulsão usa para podar o tamanhoExpulso.
+	tamanho map[uint32]int64
 }
 
 // AplicaJanela expulsa os .sidx dos segmentos que saíram da janela e devolve
@@ -82,6 +86,11 @@ func (s *Store) AplicaJanela(ctx context.Context, j JanelaDeIndice) (int, error)
 	if j.Infinita() {
 		return 0, nil
 	}
+	// Uma passada por vez, e o MESMO lock da retenção: a expulsão e a pendência
+	// precisam se enxergar como atômicas uma para a outra — ver o godoc do
+	// SegmentosPendentesDeReconstrucao.
+	s.retPassadaMu.Lock()
+	defer s.retPassadaMu.Unlock()
 	if err := s.entra(); err != nil {
 		return 0, err
 	}
@@ -121,6 +130,10 @@ func (s *Store) aplicaJanela(ctx context.Context, j JanelaDeIndice) (int, error)
 		// disco só voltaria ao dispositivo quando a última consulta em voo
 		// terminasse.
 		s.esqueceSelado(seg)
+		// O tamanho é lembrado ANTES do unlink, porque depois dele o arquivo já
+		// não pode ser medido — e é justamente essa medida que impede a passada
+		// seguinte de readmitir o segmento por subestimá-lo.
+		s.lembraTamanhoExpulso(seg, estado.tamanho[seg])
 		if err := os.Remove(segindex.CaminhoSelado(s.dirDeDados(), seg)); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				continue
@@ -138,6 +151,9 @@ func (s *Store) aplicaJanela(ctx context.Context, j JanelaDeIndice) (int, error)
 		}
 		expulsos++
 	}
+	// A poda vem no fim da passada, e não a cada expulsão: por expulsão ela
+	// seria O(n) dentro de um laço de n, para um mapa que só encolhe.
+	s.podaTamanhosExpulsos(estado.tamanho)
 	return expulsos, nil
 }
 
@@ -190,47 +206,79 @@ func (s *Store) exigeJanelaAplicavel(j JanelaDeIndice) error {
 //  3. a pendência pergunta de novo, o expulso volta a custar zero, cabe, entra
 //     na fila — e volta ao passo 2. Para sempre, sem oscilação externa nenhuma.
 //
-// O que se cobra dele é o MAIOR .sidx que existe em disco — medido sobre TODOS
-// os segmentos selados, inclusive os que a fronteira por tempo já deixou de
-// fora, porque eles são a mesma amostra do que um índice custa neste dataset e
-// o stat deles já aconteceu. Maior, e não a média, porque a estimativa aqui tem
-// de errar para o lado seguro:
+// O que se cobra dele é o MAIOR entre duas coisas:
+//
+//	max( maior .sidx que existe em disco,  o tamanho que ESTE segmento tinha
+//	     quando a janela o expulsou )
+//
+// A segunda parcela (tamanhoExpulso) não é opcional, e a primeira sozinha É
+// DEFEITUOSA — o estimador "maior em disco" NÃO é monótono, porque a própria
+// expulsão apaga arquivos e portanto move o maior. Traço com cinco selados, o
+// mais velho atípico (40M) e os outros quatro pequenos (4M), teto 20M:
+//
+//	passada 1   maior=40M → s1 não cabe (16+40 > 20) → expulso
+//	pendência   maior=4M  ← o de 40M ACABOU de ser apagado
+//	                      → s1 cobrado 4M → 16+4 = 20 ≤ 20 → ADMITIDO
+//	                      → reconstruído, e volta a ocupar 40M
+//	passada 2   maior=40M → estoura → expulso. Para sempre.
+//
+// É o mesmo moinho de cima com "custo zero" trocado por "custo subestimado", e
+// a condição geral é `tamanho_real(b) > max(mantidos)` com folga de orçamento —
+// exatamente o segmento de cardinalidade atípica. Com o tamanhoExpulso, o passo
+// da pendência cobra 40M de s1 porque foi isso que ele custou: para o caso do
+// moinho a cobrança é EXATA, não estimativa, e não há aproximação a errar.
+//
+// Para o segmento NUNCA construído continua valendo o maior em disco. Maior, e
+// não a média, porque a estimativa tem de errar para o lado seguro:
 // superestimar deixa um segmento sem índice, e sem índice ele responde por
 // ENUMERAÇÃO, que é correta; subestimar publica um índice que a passada
-// seguinte expulsa, que é o moinho. A estimativa é barata porque os segmentos
+// seguinte expulsa, que é o moinho. É barato e é razoável porque os segmentos
 // de um dataset rotacionam no mesmo tamanho e o dado é homogêneo, então os
-// .sidx deles ficam próximos (§1.3: 16 × distintos + 4 × linhas).
+// .sidx ficam próximos (§1.3: 16 × distintos + 4 × linhas). O maior é medido
+// sobre TODOS os selados, inclusive os que a fronteira por tempo já deixou de
+// fora: eles são a mesma amostra e o stat deles já aconteceu.
 //
-// A CONSEQUÊNCIA, e ela é surpreendente para quem só leu o `maxBytes`: um
-// .sidx atípico — um segmento com muito mais valores distintos que os vizinhos
-// — ENCOLHE a janela efetiva, porque passa a ser o preço cobrado de todo mundo.
-// E os segmentos que ficarem de fora por causa dele nunca são construídos,
-// então a estimativa nunca melhora para eles. É estável e é seguro (o que fica
-// de fora enumera), mas não é o que o número declarado sugere. Onde o operador
-// enxerga isso é a JanelaEfetiva: ela mostra a cobertura REAL ficando menor que
-// o `window` declarado, e é essa comparação que transforma o conservadorismo em
-// ajuste de configuração em vez de chamado de suporte.
+// A CONSEQUÊNCIA, e ela é surpreendente para quem só leu o `maxBytes`: um .sidx
+// atípico ENCOLHE a janela efetiva, porque passa a ser o preço cobrado de quem
+// ainda não foi construído. Onde o operador enxerga isso é a JanelaEfetiva: ela
+// mostra a cobertura REAL ficando menor que o `window` declarado, e é essa
+// comparação que transforma o conservadorismo em ajuste de configuração em vez
+// de chamado de suporte.
 //
-// ENQUANTO NENHUM .sidx EXISTE não há o que medir, e aí o teto não cobra nada:
-// o primeiro índice é a medição. É a mesma forma do aposentaAteCaber, que fica
-// acima do teto quando não sobrou o que aposentar — um teto que ainda não tem
-// contra o que ser aferido não pode ser perseguido, e um teto que a política
-// não consegue perseguir seria um teto que mente.
+// O tamanhoExpulso vive em MEMÓRIA. No restart o estimador volta ao
+// conservador, e o dataset paga UMA reconstrução desperdiçada por segmento
+// atípico antes de estabilizar de novo. É o preço honesto de não persistir, e é
+// limitado: a segunda passada já lembra o tamanho real.
+//
+// ENQUANTO NENHUM .sidx EXISTE não há o que medir, e aí o teto admite SÓ O MAIS
+// NOVO — nunca "todo mundo por custar zero". A diferença decide a migração: num
+// dataset com milhares de selados aberto pela primeira vez, admitir todos
+// mandaria o laço da §2.4 varrer o dataset INTEIRO antes de a primeira expulsão
+// cortar. Admitindo um, a passada seguinte já tem a medição e admite quantos
+// couberem. É a mesma forma do aposentaAteCaber, que fica acima do teto quando
+// não sobrou o que aposentar — um teto que ainda não tem contra o que ser
+// aferido não pode ser perseguido.
 //
 // O MAIS NOVO DENTRO DA JANELA POR TEMPO NUNCA SAI SÓ POR BYTES, espelhando o
 // "só sobrou o segmento corrente" da retenção: sem isso, um teto menor que um
 // único índice zeraria o índice do dataset inteiro e a janela viraria
 // decorativa.
 //
-// # A ALTERNATIVA RECUSADA, E ELA VOLTA A SER TENTADORA
+// # AS ALTERNATIVAS RECUSADAS, E ELAS VOLTAM A SER TENTADORAS
 //
-// Dá para matar o moinho definindo a fronteira pelo segmento INDEXADO mais
-// antigo que sobrou — quem foi expulso é mais velho que ele, logo está fora, e
-// nunca volta. É mais simples e é errado: vira CATRACA. Alargar a janela ou
-// subir o teto não traria ninguém de volta, porque a fronteira só sabe andar
-// para a frente — e a reversibilidade é metade do que a janela promete (§4.4).
-// Quem for simplificar isto daqui a um ano vai chegar nessa saída; ela foi
-// considerada e recusada por este motivo.
+// Três, e todas parecem simplificações:
+//
+//   - A FRONTEIRA PELO SEGMENTO INDEXADO MAIS ANTIGO QUE SOBROU — quem foi
+//     expulso é mais velho que ele, logo está fora, e nunca volta. Mata o
+//     moinho e vira CATRACA: alargar a janela ou subir o teto não traria
+//     ninguém de volta, e a reversibilidade é metade do que a §4.4 promete.
+//   - ESTIMAR PELO PRÓPRIO .dat (§1.3, com `distintos ≤ linhas` dando o limite
+//     de 20 bytes por linha): é monótona por construção e sem estado nenhum —
+//     mas superestima ~4,6× contra os ~4,3 bytes/linha medidos para `node`, e
+//     encolheria a janela declarada por um fator que o operador não pediu.
+//   - "O MAIOR JÁ OBSERVADO", guardado uma vez: mesma simplicidade do
+//     tamanhoExpulso, mas infla PERMANENTEMENTE a estimativa de TODO segmento
+//     por causa de um único atípico, em vez de só a dele.
 func (s *Store) janelaDeSegmentos(j JanelaDeIndice, refs []segment.SegmentRef) (janelaDeSegmentos, error) {
 	corrente := s.curSegID.Load()
 	// Candidatos são os SELADOS, do mais novo para o mais antigo. O corrente
@@ -242,8 +290,11 @@ func (s *Store) janelaDeSegmentos(j JanelaDeIndice, refs []segment.SegmentRef) (
 			cand = append(cand, i)
 		}
 	}
-	est := janelaDeSegmentos{dentro: make(map[uint32]struct{}, len(cand))}
-	tamanho := make(map[uint32]int64, len(cand))
+	est := janelaDeSegmentos{
+		dentro:  make(map[uint32]struct{}, len(cand)),
+		tamanho: make(map[uint32]int64, len(cand)),
+	}
+	tamanho := est.tamanho
 	var maior int64
 	for _, i := range cand {
 		b := s.bytesDoIndiceDoSegmento(refs[i].ID)
@@ -289,15 +340,50 @@ func (s *Store) janelaDeSegmentos(j JanelaDeIndice, refs []segment.SegmentRef) (
 		id := refs[i].ID
 		custo := tamanho[id]
 		if custo == 0 {
-			custo = maior
+			// Não construído: o maior em disco, ou o que ELE mesmo custou da
+			// última vez, o que for maior. O max é o que torna a cobrança
+			// monótona — sem ele, apagar o maior arquivo BAIXA a estimativa de
+			// quem acabou de ser apagado.
+			custo = max(maior, s.tamanhoExpulso[id])
 		}
-		if k > 0 && acumulado+custo > j.MaxBytes {
+		// custo == 0 aqui só acontece com NADA medido no dataset inteiro: nem
+		// arquivo em disco, nem memória de expulsão. Admitir todo mundo por
+		// "custar zero" mandaria o laço da §2.4 varrer um dataset inteiro antes
+		// de a primeira expulsão cortar; admitir só o mais novo dá a medição
+		// para a passada seguinte decidir de verdade.
+		if k > 0 && (custo == 0 || acumulado+custo > j.MaxBytes) {
 			break
 		}
 		acumulado += custo
 		est.dentro[id] = struct{}{}
 	}
 	return est, nil
+}
+
+// lembraTamanhoExpulso guarda o que o .sidx do segmento ocupava no instante em
+// que a janela o apagou. Sob o retPassadaMu, como todo acesso ao mapa.
+func (s *Store) lembraTamanhoExpulso(seg uint32, bytes int64) {
+	if bytes <= 0 {
+		return
+	}
+	if s.tamanhoExpulso == nil {
+		s.tamanhoExpulso = make(map[uint32]int64, 1)
+	}
+	s.tamanhoExpulso[seg] = bytes
+}
+
+// podaTamanhosExpulsos descarta a memória de segmentos que já não existem.
+//
+// A poda é contra a lista de segmentos VIVOS, e não por idade: um dataset que
+// aposenta segmentos o dia inteiro acumularia uma entrada por segmento morto,
+// para sempre. `vivos` é o mapa de tamanhos da passada, cujas chaves são por
+// construção os selados que a janela governa.
+func (s *Store) podaTamanhosExpulsos(vivos map[uint32]int64) {
+	for id := range s.tamanhoExpulso {
+		if _, vivo := vivos[id]; !vivo {
+			delete(s.tamanhoExpulso, id)
+		}
+	}
 }
 
 // bytesDoIndiceDoSegmento devolve os BLOCOS alocados pelo .sidx do segmento, ou
@@ -401,6 +487,10 @@ func (s *Store) instanteDoRecordMaisNovo(refs []segment.SegmentRef, i int, buf [
 // efetiva ZERO num dataset cujo segmento corrente responde por índice — um
 // número que mente na direção alarmante.
 //
+// Ela é medida da MARCA-D'ÁGUA para cá, e não do primeiro record físico, porque
+// a série irmã (InstanteMaisAntigo) também é — e é a comparação entre as duas
+// que os documentos mandam o operador fazer. Ver instanteVisivelDe.
+//
 // Zero significa "não há janela a reportar": dataset materializado, dataset sem
 // campo indexado, tabela vazia, ou dado sem o campo de escrita. É número de
 // painel, então erro de leitura devolve zero em vez de subir — um diretório que
@@ -425,12 +515,12 @@ func (s *Store) JanelaEfetiva() time.Duration {
 		if ref.ID != corrente && s.bytesDoIndiceDoSegmento(ref.ID) == 0 {
 			continue
 		}
-		ms, out, ok := s.primeiroInstanteDe(ref, buf)
+		ms, out, ok := s.instanteVisivelDe(ref, buf)
 		buf = out
 		if !ok {
-			// Segmento vazio ou sem campo de escrita: o seguinte responde. Não
-			// é anomalia, e desistir aqui publicaria zero para um dataset com
-			// índice.
+			// Segmento vazio, inteiro abaixo da marca, ou sem campo de escrita:
+			// o seguinte responde. Não é anomalia, e desistir aqui publicaria
+			// zero para um dataset com índice.
 			continue
 		}
 		if d := time.Duration(s.agora().UnixMilli()-ms) * time.Millisecond; d > 0 {
@@ -441,18 +531,49 @@ func (s *Store) JanelaEfetiva() time.Duration {
 	return 0
 }
 
-// primeiroInstanteDe lê o _writtenAt do PRIMEIRO record do segmento — o mais
-// antigo dele, porque o rowId cresce com o tempo de escrita.
+// instanteVisivelDe lê o _writtenAt do record mais antigo do segmento que ainda
+// está VISÍVEL — o primeiro dele, ou a marca-d'água, o que vier depois.
+//
+// A marca-d'água entra na conta porque a JanelaEfetiva existe para ser comparada
+// com o InstanteMaisAntigo, e aquele é lido NA marca. Medir daqui do primeiro
+// record FÍSICO faria as duas séries falarem de pontos de partida diferentes: o
+// prefixo de um segmento pode já ter vencido sem que o arquivo tenha saído do
+// disco, e a janela efetiva pareceria cobrir linhas que a consulta já não vê.
+// Justamente a comparação que os documentos mandam o operador fazer é a que
+// ficaria errada.
+//
+// ok=false quando o segmento está vazio, quando ele está INTEIRO abaixo da marca
+// (a location do início cai noutro segmento) ou quando o record não carrega o
+// campo de escrita. Nos três casos o chamador tenta o segmento seguinte.
 //
 // Sob o aposMu pela razão do primeiroRowIDDe: ele impede o descritor de fechar
 // entre o pread e a leitura dos bytes.
-func (s *Store) primeiroInstanteDe(ref segment.SegmentRef, buf []byte) (int64, []byte, bool) {
+func (s *Store) instanteVisivelDe(ref segment.SegmentRef, buf []byte) (int64, []byte, bool) {
 	if ref.SizeBytes <= segment.HeaderSize {
 		return 0, buf, false
 	}
 	s.aposMu.RLock()
 	defer s.aposMu.RUnlock()
-	rec, out, err := s.segR.ReadRecord(ref.ID, uint32(segment.HeaderSize), buf)
+	primeiro, out, ok, err := s.primeiroRowIDDe(ref, buf)
+	buf = out
+	if err != nil || !ok {
+		return 0, buf, false
+	}
+	inicio := max(primeiro, s.RowIDBase())
+	if uint64(inicio) >= s.nextRowID.Load() {
+		return 0, buf, false
+	}
+	packed, ok := s.locs.Get(inicio)
+	if !ok {
+		return 0, buf, false
+	}
+	seg, off, _ := rowindex.Unpack(packed)
+	if seg != ref.ID {
+		// A marca já passou deste segmento inteiro: ele não tem linha visível, e
+		// o instante dele não descreve cobertura nenhuma.
+		return 0, buf, false
+	}
+	rec, out, err := s.segR.ReadRecord(seg, off, buf)
 	buf = out
 	if err != nil {
 		return 0, buf, false

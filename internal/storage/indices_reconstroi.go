@@ -322,10 +322,20 @@ func (s *Store) removeSeladoObsoleto(seg uint32, caminho string) error {
 // Janela INFINITA — o default, e o que todo dataset materializado tem por
 // construção — não filtra nada, e o comportamento é exatamente o de antes de a
 // janela existir.
+//
+// ELA TOMA O retPassadaMu, e não é para serializar duas pendências: é para
+// serializar contra a EXPULSÃO. As duas leem o mesmo disco, e uma pendência que
+// caia no MEIO de uma expulsão vê parte dos .sidx já removidos — estimador
+// menor, mais segmentos admitidos — e agenda a reconstrução exatamente do que
+// está sendo apagado. Isolado isso é desperdício; combinado com o estimador
+// baseado no maior arquivo, é o moinho por outro gatilho. É também o que protege
+// o tamanhoExpulso, que a expulsão escreve e esta função lê.
 func (s *Store) SegmentosPendentesDeReconstrucao(j JanelaDeIndice) ([]uint32, error) {
 	if err := s.exigeJanelaAplicavel(j); err != nil {
 		return nil, err
 	}
+	s.retPassadaMu.Lock()
+	defer s.retPassadaMu.Unlock()
 	if len(s.camposIndexados) == 0 {
 		return nil, nil
 	}

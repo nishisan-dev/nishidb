@@ -690,10 +690,17 @@ func TestAdmissaoDaJanela(t *testing.T) {
 		nome, historico string
 		recusa          bool
 		trechos         []string
+		// janelaInfinita cobra que o caso aceito NÃO produziu bloco `index`.
+		// Sem ele a linha do default seria a única das cinco cuja RESPOSTA
+		// ninguém confere — o teste diria só que o YAML parseia, e "bloco
+		// ausente é janela infinita" é justamente uma afirmação sobre o
+		// comportamento, não sobre a sintaxe.
+		janelaInfinita bool
 	}{
 		{
-			nome:      "bloco ausente é janela infinita",
-			historico: "history:\n  maxBytes: 100MiB\n",
+			nome:           "bloco ausente é janela infinita",
+			historico:      "history:\n  maxBytes: 100MiB\n",
+			janelaInfinita: true,
 		},
 		{
 			nome:      "index fora do bloco history",
@@ -722,7 +729,11 @@ func TestAdmissaoDaJanela(t *testing.T) {
 				recusaHistorico(t, c.historico, c.trechos...)
 				return
 			}
-			specComHistorico(t, c.historico)
+			h := specComHistorico(t, c.historico).Historico
+			if c.janelaInfinita && h.Janela != nil {
+				t.Fatalf("Janela = %+v, quer nil: sem o bloco index: a janela é INFINITA, "+
+					"e indexa tudo que a retenção mantém", h.Janela)
+			}
 		})
 	}
 }

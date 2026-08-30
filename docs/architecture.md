@@ -1527,6 +1527,14 @@ fato divergem no dia em que um caminho de erro esquece de somar.
 `nishidb_history_oldest_written_at` é a que se olha primeiro: é ela que mostra o
 `maxBytes` engolindo o `expireAfterWrite` declarado.
 
+O `history.index.maxBytes` persegue uma parcela ESTRITAMENTE MENOR do que a
+série `nishidb_history_index_bytes` publica: o teto governa só os `.sidx`
+selados — a única parcela que a expulsão da janela sabe devolver —, e a série
+soma também `.sidx.tmp`, `.widx`, `indexes/` e `checkpoint/`. A série acima do
+teto é o estado normal, e não sinal de que o teto não funciona. É o mesmo
+princípio que já mantém o `locations.idx` fora do `history.maxBytes`: um teto que
+a purga não consegue perseguir seria um teto que mente.
+
 `nishidb_history_index_window_seconds` é a irmã dela do lado do índice, e faz o
 mesmo serviço para o par `history.index.window` / `history.index.maxBytes`:
 comparada com o `window` declarado, ela diz se o teto de bytes assumiu o

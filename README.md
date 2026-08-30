@@ -638,6 +638,15 @@ rápido as últimas N horas. Estreitar a janela expulsa os índices que saíram 
 próxima passada de retenção (≤ 1 min); **alargar volta a indexar**, de forma
 progressiva.
 
+**A série de disco e o teto NÃO medem a mesma coisa**, e vale saber antes de
+dimensionar: `nishidb_history_index_bytes` soma *todo* o índice do dataset — os
+`.sidx` selados, os temporários, os `.widx` do segmento corrente, mais `indexes/`
+e `checkpoint/` —, enquanto `history.index.maxBytes` governa **só os `.sidx`
+selados**, que é a única parcela que a expulsão sabe devolver. Ver a série
+permanentemente acima do teto é o esperado, não defeito: é o mesmo princípio que
+mantém o `locations.idx` fora do `history.maxBytes` — *um teto que a purga não
+consegue perseguir seria um teto que mente*.
+
 `nishidb_history_index_window_seconds` publica o intervalo **realmente** coberto
 pelos segmentos indexados. Compare com o `window` declarado: menor significa que
 o teto de bytes assumiu o comando. Ela é a irmã da

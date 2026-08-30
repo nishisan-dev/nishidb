@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -72,6 +73,46 @@ func faixasDosSegmentos(t *testing.T, s *Store) map[uint32][2]types.RowID {
 		faixas[seg] = faixa
 	}
 	return faixas
+}
+
+// apendaComStatus apenda uma linha com o `status` dado — o campo INDEXADO desta
+// suíte.
+//
+// Ele existe para produzir VARIEDADE de tamanho de .sidx: o índice de um segmento
+// custa 16 bytes por valor distinto mais 4 por linha (§1.3), então um segmento
+// com status todo diferente tem índice vários blocos maior que um de status
+// constante. Sem essa variedade, `maior` é invariante à expulsão e NENHUMA
+// escolha de estimador é distinguível — o teste do moinho aprovaria qualquer
+// desenho.
+func apendaComStatus(t *testing.T, hist *Store, status string, quando time.Time) types.RowID {
+	t.Helper()
+	ids := map[string]types.FieldID{}
+	for _, n := range []string{"id", "status", "counter", "_writtenAt"} {
+		id, err := hist.FieldDict().LookupOrCreate([]byte(n))
+		if err != nil {
+			t.Fatalf("LookupOrCreate(%s): %v", n, err)
+		}
+		ids[n] = id
+	}
+	type campo struct {
+		id types.FieldID
+		v  types.Value
+	}
+	campos := []campo{
+		{ids["id"], types.Value{Type: types.TypeString, Bytes: []byte("a")}},
+		{ids["status"], types.Value{Type: types.TypeString, Bytes: []byte(status)}},
+		{ids["_writtenAt"], types.Value{Type: types.TypeTimestamp, I64: quando.UnixMilli()}},
+	}
+	slices.SortFunc(campos, func(a, b campo) int { return int(a.id) - int(b.id) })
+	var p []byte
+	for _, c := range campos {
+		p = mustAppendField(t, p, c.id, c.v)
+	}
+	id, err := hist.Apenda(p)
+	if err != nil {
+		t.Fatalf("Apenda: %v", err)
+	}
+	return id
 }
 
 // povoaHistorico apenda n linhas espaçadas de passo, e devolve o instante de
@@ -351,36 +392,71 @@ func maiorIndiceEmDisco(t *testing.T, s *Store) int64 {
 }
 
 // TestAJanelaConvergeEmVezDeMoer é o teste do MOINHO, e ele é o motivo de a
-// cobrança do segmento não construído existir.
+// cobrança do segmento não construído existir e de ela ser MONÓTONA.
 //
-// O moinho, concreto: com o teto de bytes apertado, a expulsão tira o .sidx do
-// segmento mais antigo. Se a pendência cobrasse ZERO por um segmento sem índice
-// — que é o que a soma literal dos .sidx EXISTENTES faz —, esse segmento
-// caberia de novo no orçamento, voltaria à fila, seria reconstruído e seria
-// expulso outra vez. Para sempre, sem oscilação externa nenhuma: o laço se
-// alimenta sozinho.
+// O fixture tem VARIEDADE de propósito: o segmento mais velho tem índice
+// atípico (status todo distinto) e os outros quatro têm índice pequeno. Sem
+// isso, `maior` seria invariante à expulsão e NENHUMA escolha de estimador
+// seria distinguível — o teste aprovaria qualquer desenho, inclusive os dois
+// defeituosos que ele existe para reprovar.
 //
-// O que este teste afirma é CONVERGÊNCIA: a segunda rodada de (expulsão,
-// pendência) devolve exatamente o mesmo conjunto da primeira. E ele
-// DISCRIMINA — trocar a cobrança do não construído por zero o deixa vermelho na
-// segunda pendência, que passaria a nomear o segmento recém-expulso.
+// O traço, com os números que o fixture produz (atípico 20K, pequenos 8K cada,
+// teto = soma dos pequenos + uma vaga de 8K):
+//
+//	passada 1   maior=20K → os quatro pequenos cabem (32K ≤ 40K)
+//	                      → o atípico não (32K+20K > 40K) → EXPULSO
+//	pendência   maior=8K  ← o de 20K ACABOU de ser apagado
+//	                      → cobrado max(8K, tamanhoExpulso=20K) = 20K
+//	                      → 32K+20K > 40K → FORA. Não é pendente.
+//	passada 2   nada sai. Ponto fixo.
+//
+// Ele DISCRIMINA os dois desenhos errados, e a vaga de folga no teto é o que
+// torna isso possível:
+//
+//   - cobrar ZERO pelo não construído → 32K+0 ≤ 40K → readmitido;
+//   - cobrar só o MAIOR EM DISCO → 32K+8K = 40K ≤ 40K → readmitido.
+//
+// Nos dois casos o segmento recém-expulso volta para a fila, é reconstruído,
+// volta a ocupar 20K e é expulso de novo. Para sempre.
 func TestAJanelaConvergeEmVezDeMoer(t *testing.T) {
-	hist, rel := histIndexado(t, 512)
-	povoaHistorico(t, hist, rel, 40, time.Minute)
+	hist, rel := histIndexado(t, 64<<10)
+	povoaComAtipicoNoMaisVelho(t, hist, rel, 5)
 
-	// Teto que comporta o mais novo e não comporta dois: é a configuração
-	// exata em que a expulsão e a pendência podem discordar.
-	teto := maiorIndiceEmDisco(t, hist) + maiorIndiceEmDisco(t, hist)/2
-	j := JanelaDeIndice{MaxBytes: teto}
+	sel := selados(t, hist)
+	if len(sel) < 3 {
+		t.Fatalf("%d segmentos selados; o teste precisa de uma pilha", len(sel))
+	}
+	atipico := sel[0]
+	tamanhoAtipico := hist.bytesDoIndiceDoSegmento(atipico)
+	var somaPequenos, maiorPequeno int64
+	for _, seg := range sel[1:] {
+		b := hist.bytesDoIndiceDoSegmento(seg)
+		somaPequenos += b
+		maiorPequeno = max(maiorPequeno, b)
+	}
+	// A precondição é o teste do próprio fixture: sem um índice maior que os
+	// outros, os três estimadores dariam a mesma resposta e o oráculo abaixo
+	// não provaria nada.
+	if tamanhoAtipico <= maiorPequeno {
+		t.Fatalf("o segmento mais velho tem índice de %d bytes e o maior dos outros tem %d: "+
+			"o fixture não produziu variedade, e sem ela nenhum estimador é distinguível",
+			tamanhoAtipico, maiorPequeno)
+	}
+	// Teto com UMA vaga de folga além dos pequenos: é ela que um estimador
+	// subestimado usaria para readmitir o atípico.
+	j := JanelaDeIndice{MaxBytes: somaPequenos + maiorPequeno}
 
 	if n := aplicaJanela(t, hist, j); n == 0 {
 		t.Fatal("o teto de bytes não expulsou nada; o moinho não pode nem começar")
 	}
 	primeira := segmentosComIndice(t, hist)
-	filaPrimeira := pendentes(t, hist, j)
-	if len(filaPrimeira) != 0 {
-		t.Fatalf("pendentes = %v logo depois da expulsão: o que o teto acabou de expulsar não é pendente",
-			filaPrimeira)
+	if slices.Contains(primeira, atipico) {
+		t.Fatalf("com índice = %v: o atípico %d não cabia no teto e continuou indexado", primeira, atipico)
+	}
+	if fila := pendentes(t, hist, j); len(fila) != 0 {
+		t.Fatalf("pendentes = %v logo depois da expulsão: o que o teto acabou de expulsar não é "+
+			"pendente — cobrá-lo por menos do que ele custou o readmite, e o laço da §2.4 o "+
+			"reconstrói para a passada seguinte expulsá-lo de novo", fila)
 	}
 
 	// Segunda rodada: nada mais sai, e nada volta para a fila. É a definição de
@@ -394,8 +470,40 @@ func TestAJanelaConvergeEmVezDeMoer(t *testing.T) {
 			segunda, primeira)
 	}
 	if fila := pendentes(t, hist, j); len(fila) != 0 {
-		t.Fatalf("pendentes = %v na segunda rodada: o segmento que o teto expulsou voltou para a fila, "+
-			"e o laço da §2.4 o reconstruiria para o teto expulsá-lo de novo", fila)
+		t.Fatalf("pendentes = %v na segunda rodada: o segmento que o teto expulsou voltou para a fila", fila)
+	}
+}
+
+// Alargar o teto traz de volta o segmento que a memória de expulsão mantinha
+// fora: a cobrança monótona não pode virar catraca.
+//
+// É o par obrigatório do teste acima. Um estimador que só soubesse EXCLUIR
+// passaria naquele e falharia aqui — e a reversibilidade é metade do que a §4.4
+// promete.
+func TestOTamanhoLembradoNaoViraCatraca(t *testing.T) {
+	hist, rel := histIndexado(t, 64<<10)
+	povoaComAtipicoNoMaisVelho(t, hist, rel, 5)
+
+	sel := selados(t, hist)
+	atipico := sel[0]
+	tamanhoAtipico := hist.bytesDoIndiceDoSegmento(atipico)
+	var somaPequenos, maiorPequeno int64
+	for _, seg := range sel[1:] {
+		b := hist.bytesDoIndiceDoSegmento(seg)
+		somaPequenos += b
+		maiorPequeno = max(maiorPequeno, b)
+	}
+	apertado := JanelaDeIndice{MaxBytes: somaPequenos + maiorPequeno}
+	if n := aplicaJanela(t, hist, apertado); n == 0 {
+		t.Fatal("o teto apertado não expulsou nada")
+	}
+	// Agora o teto comporta todo mundo, inclusive o atípico pelo tamanho REAL
+	// que a expulsão lembrou.
+	folgado := JanelaDeIndice{MaxBytes: somaPequenos + tamanhoAtipico}
+	fila := pendentes(t, hist, folgado)
+	if !slices.Contains(fila, atipico) {
+		t.Fatalf("pendentes = %v: subir o teto não trouxe o segmento %d de volta; "+
+			"a cobrança lembrada virou catraca", fila, atipico)
 	}
 }
 
@@ -496,5 +604,68 @@ func TestAJanelaNaoDeixaIndiceDeSegmentoAposentado(t *testing.T) {
 			e.Name()[:len(e.Name())-len(".sidx")]+".dat")); err != nil {
 			t.Fatalf("o índice %s não tem .dat", e.Name())
 		}
+	}
+}
+
+// povoaComAtipicoNoMaisVelho monta o dataset que o teste do moinho exige: o
+// segmento MAIS VELHO com índice atípico (status todo distinto) e os demais com
+// índice pequeno (status constante).
+//
+// A fase 1 termina pela ROTAÇÃO observada, e não por uma contagem de linhas
+// calculada à mão: o tamanho do record é detalhe de codificação, e amarrar o
+// fixture a ele o quebraria no dia em que um campo mudasse de largura.
+func povoaComAtipicoNoMaisVelho(t *testing.T, hist *Store, rel *relogioFalso, selados uint32) {
+	t.Helper()
+	primeiro := hist.curSegID.Load()
+	for i := 0; hist.curSegID.Load() == primeiro; i++ {
+		apendaComStatus(t, hist, fmt.Sprintf("valor-%08d", i), rel.t)
+		rel.avanca(time.Second)
+	}
+	for hist.curSegID.Load() < primeiro+selados {
+		apendaComStatus(t, hist, "aberto", rel.t)
+		rel.avanca(time.Second)
+	}
+}
+
+// No bootstrap — nenhum .sidx em disco, nada lembrado — o teto admite SÓ O MAIS
+// NOVO, e não o dataset inteiro por "custar zero".
+//
+// A diferença decide a MIGRAÇÃO, que é o gatilho 1 da §2.4: um dataset com
+// milhares de selados aberto pela primeira vez com este formato não tem índice
+// nenhum. Admitindo todos, o laço da §2.4 varreria o dataset inteiro — centenas
+// de MiB por segmento — antes de a primeira expulsão cortar. Admitindo um, a
+// passada seguinte já tem a medição e admite quantos couberem de verdade.
+func TestNoBootstrapOTetoAdmiteSoOMaisNovo(t *testing.T) {
+	hist, rel := histIndexado(t, 64<<10)
+	povoaComAtipicoNoMaisVelho(t, hist, rel, 5)
+
+	sel := selados(t, hist)
+	// O dataset migrado: nenhum .sidx em disco, e nada lembrado em memória.
+	for _, seg := range sel {
+		if err := os.Remove(segindex.CaminhoSelado(hist.dirDeDados(), seg)); err != nil {
+			t.Fatalf("Remove(%d): %v", seg, err)
+		}
+		hist.esqueceSelado(seg)
+	}
+	if n := len(segmentosComIndice(t, hist)); n != 0 {
+		t.Fatalf("%d índices em disco; o teste precisa do dataset sem índice nenhum", n)
+	}
+
+	fila := pendentes(t, hist, JanelaDeIndice{MaxBytes: 1 << 30})
+	if len(fila) != 1 {
+		t.Fatalf("pendentes = %v, quer só o mais novo selado: sem nada medido, o teto não pode "+
+			"admitir o dataset inteiro — o laço da §2.4 varreria tudo antes do primeiro corte", fila)
+	}
+	if fila[0] != sel[len(sel)-1] {
+		t.Fatalf("pendente = %d, quer o mais novo selado (%d)", fila[0], sel[len(sel)-1])
+	}
+	// Construído o primeiro, a medição existe e a passada seguinte admite o
+	// resto: o bootstrap atrasa UMA passada, não trava a fila.
+	if err := hist.ConstroiIndiceDoSegmento(t.Context(), fila[0], hist.CamposIndexados()); err != nil {
+		t.Fatalf("ConstroiIndiceDoSegmento: %v", err)
+	}
+	if n := len(pendentes(t, hist, JanelaDeIndice{MaxBytes: 1 << 30})); n != len(sel)-1 {
+		t.Fatalf("%d pendentes depois da primeira medição, quer %d: o bootstrap travou a fila",
+			n, len(sel)-1)
 	}
 }

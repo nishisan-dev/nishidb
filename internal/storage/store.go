@@ -393,12 +393,35 @@ type Store struct {
 	// segunda encontraria o segmento já renomeado), retAtiva é o medidor que
 	// o Stats publica e retBuf é o destino reusado dos preads da busca
 	// binária.
+	//
+	// O retPassadaMu serializa MAIS que as passadas: ele é também a barreira
+	// entre a expulsão da janela e a pendência de reconstrução, e é sob ele que
+	// o tamanhoExpulso vive. Ver o godoc de janelaDeSegmentos.
 	retMu        sync.Mutex
 	retPassadaMu sync.Mutex
-	retCancela   context.CancelFunc
-	retEmVoo     sync.WaitGroup
-	retAtiva     atomic.Bool
-	retBuf       []byte
+	// tamanhoExpulso lembra, POR SEGMENTO, quantos bytes o .sidx dele ocupava
+	// no instante em que a janela o expulsou.
+	//
+	// Existe porque o estimador da janela precisa ser MONÓTONO e "o maior .sidx
+	// em disco" não é: a própria expulsão apaga arquivos, então apagar o maior
+	// BAIXA a estimativa e readmite quem acabou de sair — o moinho, com "custo
+	// zero" trocado por "custo subestimado". Para o segmento recém-expulso este
+	// mapa não é estimativa nenhuma: é o tamanho que ele de fato teve.
+	//
+	// Em MEMÓRIA, e nunca em disco: um metadado a menos é uma janela de crash a
+	// menos, que é a mesma escolha do primeiroRowIDDoSeguinte e da §2.5. O preço
+	// é que um restart volta ao estimador conservador e paga UMA reconstrução
+	// desperdiçada por segmento atípico antes de estabilizar de novo — limitado,
+	// e barato ao lado de mais um arquivo durável a recuperar.
+	//
+	// Protegido pelo retPassadaMu. Podado na expulsão, contra a lista de
+	// segmentos vivos: sem isso ele cresceria para sempre num dataset que
+	// aposenta segmentos o dia inteiro.
+	tamanhoExpulso map[uint32]int64
+	retCancela     context.CancelFunc
+	retEmVoo       sync.WaitGroup
+	retAtiva       atomic.Bool
+	retBuf         []byte
 	// retPorTempo e retPorTamanho contam os segmentos aposentados por cada
 	// política desde a subida. Duas séries e não uma: qual das duas está
 	// decidindo é a pergunta que separa "o prazo está sendo honrado" de "o
