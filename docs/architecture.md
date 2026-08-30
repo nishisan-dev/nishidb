@@ -1538,10 +1538,30 @@ a purga não consegue perseguir seria um teto que mente.
 `nishidb_history_index_window_seconds` é a irmã dela do lado do índice, e faz o
 mesmo serviço para o par `history.index.window` / `history.index.maxBytes`:
 comparada com o `window` declarado, ela diz se o teto de bytes assumiu o
-comando. Ela é o único observável em que aparece o conservadorismo da janela —
-um segmento ainda sem índice é cobrado do orçamento pelo MAIOR `.sidx` em disco,
-para que reconstruir e expulsar não virem um ciclo, e a consequência é uma
-cobertura menor que a que o teto declarado sugeriria.
+comando. Ela é o único observável em que aparece o conservadorismo da janela, e a
+consequência dele é uma cobertura menor que a que o teto declarado sugeriria.
+
+O conservadorismo tem uma causa precisa, e ela vale escrever porque a
+simplificação óbvia reintroduz um defeito. O teto tem de dar um preço ao segmento
+que **ainda não tem índice**; cobrar zero o faria caber sempre, entrar na fila,
+ser reconstruído e ser expulso na passada seguinte — um moinho que se alimenta
+sozinho. O preço cobrado é
+
+    max( maior .sidx em disco,  o que ESTE segmento custou ao ser expulso )
+
+e as **duas** parcelas são necessárias. Só a primeira **não é monótona**: a
+própria expulsão apaga arquivos, então apagar o maior BAIXA a estimativa, e quem
+ela passa a subestimar é exatamente o segmento que acabou de sair — ele volta a
+caber, é reconstruído, estoura o teto de novo e é expulso de novo. A segunda
+parcela (`Store.tamanhoExpulso`) é gravada em memória no instante do `unlink`;
+para o caso do moinho ela não é estimativa nenhuma, é o tamanho que o arquivo de
+fato teve. Ela não é persistida — um metadado a menos é uma janela de crash a
+menos —, e o preço é uma reconstrução desperdiçada por segmento atípico depois
+de um restart.
+
+Sem nada medido (dataset migrado, nenhum `.sidx` em disco) o teto admite **só o
+segmento mais novo**: admitir todos mandaria a reconstrução varrer o dataset
+inteiro antes de o primeiro corte acontecer.
 
 Os bytes de índice são medidos em **blocos** (`st_blocks`), e não pelo tamanho
 aparente. A diferença não é cosmética: a purga libera o prefixo morto com

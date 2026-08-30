@@ -650,10 +650,18 @@ consegue perseguir seria um teto que mente*.
 `nishidb_history_index_window_seconds` publica o intervalo **realmente** coberto
 pelos segmentos indexados. Compare com o `window` declarado: menor significa que
 o teto de bytes assumiu o comando. Ela é a irmã da
-`nishidb_history_oldest_written_at`, do lado do índice — e é o único lugar em
-que a cobrança conservadora do teto aparece (um segmento ainda sem índice é
-cobrado pelo maior `.sidx` em disco, para que reconstruir e expulsar não vire um
-ciclo).
+`nishidb_history_oldest_written_at`, do lado do índice, e é o único lugar em que
+a cobrança conservadora do teto aparece.
+
+Essa cobrança existe porque o teto precisa dar um preço a um segmento que **ainda
+não tem índice** — e cobrar zero dele o faria caber sempre, ser reconstruído e
+ser expulso na passada seguinte, para sempre. O preço é
+`max(maior .sidx em disco, o que aquele segmento custou quando foi expulso)`, e
+as **duas** parcelas são necessárias: só a primeira não serve, porque a própria
+expulsão apaga arquivos e portanto baixa o maior — o segmento recém-expulso seria
+cobrado por menos do que custou e voltaria a caber. A segunda parcela é
+lembrada em memória e some num restart, que então paga uma reconstrução
+desperdiçada por segmento atípico antes de estabilizar.
 
 `rawPayload: true` acrescenta a coluna `_raw` com os bytes originais do evento,
 e é ela que permite gravar também o evento que **não parseia** — hoje um JSON

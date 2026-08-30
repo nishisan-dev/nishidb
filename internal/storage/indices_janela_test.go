@@ -87,7 +87,7 @@ func faixasDosSegmentos(t *testing.T, s *Store) map[uint32][2]types.RowID {
 func apendaComStatus(t *testing.T, hist *Store, status string, quando time.Time) types.RowID {
 	t.Helper()
 	ids := map[string]types.FieldID{}
-	for _, n := range []string{"id", "status", "counter", "_writtenAt"} {
+	for _, n := range []string{"id", "status", "_writtenAt"} {
 		id, err := hist.FieldDict().LookupOrCreate([]byte(n))
 		if err != nil {
 			t.Fatalf("LookupOrCreate(%s): %v", n, err)
@@ -410,14 +410,17 @@ func maiorIndiceEmDisco(t *testing.T, s *Store) int64 {
 //	                      → 32K+20K > 40K → FORA. Não é pendente.
 //	passada 2   nada sai. Ponto fixo.
 //
-// Ele DISCRIMINA os dois desenhos errados, e a vaga de folga no teto é o que
-// torna isso possível:
+// Ele DISCRIMINA o estimador "só o maior em disco" — 32K+8K = 40K ≤ 40K, e o
+// recém-expulso volta para a fila, é reconstruído, volta a ocupar 20K e é
+// expulso de novo, para sempre. A vaga de folga no teto é o que torna isso
+// possível: sem ela até o estimador errado recusaria o atípico, pelo motivo
+// errado.
 //
-//   - cobrar ZERO pelo não construído → 32K+0 ≤ 40K → readmitido;
-//   - cobrar só o MAIOR EM DISCO → 32K+8K = 40K ≤ 40K → readmitido.
-//
-// Nos dois casos o segmento recém-expulso volta para a fila, é reconstruído,
-// volta a ocupar 20K e é expulso de novo. Para sempre.
+// ELE NÃO DISCRIMINA "cobrar zero", e o comentário diz isso porque a leitura
+// natural é supor que sim: cobrar zero não chega a readmitir ninguém hoje, já
+// que a guarda de bootstrap (custo == 0 ⇒ para o laço) trata o não medido antes
+// de o orçamento opinar. Quem cobre aquela classe é o
+// TestNoBootstrapOTetoAdmiteSoOMaisNovo.
 func TestAJanelaConvergeEmVezDeMoer(t *testing.T) {
 	hist, rel := histIndexado(t, 64<<10)
 	povoaComAtipicoNoMaisVelho(t, hist, rel, 5)
@@ -651,6 +654,14 @@ func TestNoBootstrapOTetoAdmiteSoOMaisNovo(t *testing.T) {
 		t.Fatalf("%d índices em disco; o teste precisa do dataset sem índice nenhum", n)
 	}
 
+	// AS DUAS ASSERÇÕES ABAIXO PEGAM MUTAÇÕES DIFERENTES, e nenhuma é
+	// decoração — foi medido:
+	//
+	//   - o TAMANHO da fila pega remover a guarda de bootstrap: sem ela o
+	//     orçamento admite todo mundo por custar zero (pendentes = [1 2 3 4 5]);
+	//   - QUEM está nela pega a direção do orçamento: caminhando do mais velho
+	//     para o mais novo, a fila continua tendo um só elemento e ele é o
+	//     errado (pendente = 1, quer 5). A primeira asserção sobrevive a essa.
 	fila := pendentes(t, hist, JanelaDeIndice{MaxBytes: 1 << 30})
 	if len(fila) != 1 {
 		t.Fatalf("pendentes = %v, quer só o mais novo selado: sem nada medido, o teto não pode "+
@@ -667,5 +678,75 @@ func TestNoBootstrapOTetoAdmiteSoOMaisNovo(t *testing.T) {
 	if n := len(pendentes(t, hist, JanelaDeIndice{MaxBytes: 1 << 30})); n != len(sel)-1 {
 		t.Fatalf("%d pendentes depois da primeira medição, quer %d: o bootstrap travou a fila",
 			n, len(sel)-1)
+	}
+}
+
+// TestAJanelaEfetivaRespeitaAMarcaDagua cobre os três ramos que a correção do
+// ponto de partida introduziu, e sem ele a correção não teria prova: os testes
+// que chamam a JanelaEfetiva nunca movem a marca, então passariam IDÊNTICOS com
+// o comportamento anterior (medir do primeiro record físico).
+//
+// E a diferença importa porque é justamente a comparação entre a JanelaEfetiva e
+// o instante mais antigo que a documentação manda o operador fazer para saber
+// qual política está mandando. Medidas de pontos de partida diferentes, as duas
+// séries diriam que o índice cobre linhas que a consulta já não vê.
+func TestAJanelaEfetivaRespeitaAMarcaDagua(t *testing.T) {
+	hist, rel := histIndexado(t, 512)
+	tempos := povoaHistorico(t, hist, rel, 40, time.Minute)
+
+	sel := selados(t, hist)
+	if len(sel) < 3 {
+		t.Fatalf("%d segmentos selados; o teste precisa de uma pilha", len(sel))
+	}
+	faixas := faixasDosSegmentos(t, hist)
+	velho, seguinte := sel[0], sel[1]
+	faixaVelho := faixas[velho]
+	if faixaVelho[1]-faixaVelho[0] < 3 {
+		t.Fatalf("o segmento %d tem %d linhas; o teste precisa que a marca caia DENTRO dele",
+			velho, faixaVelho[1]-faixaVelho[0]+1)
+	}
+
+	// 1. A marca cai DENTRO do segmento mais velho, que por isso NÃO é
+	//    aposentado: o arquivo e o índice continuam lá, e só parte das linhas
+	//    dele é visível.
+	alvo := faixaVelho[0] + 2
+	prazo := rel.t.Sub(tempos[alvo])
+	res := passada(t, hist, LimitesDeRetencao{ExpireAfterWrite: prazo})
+	if res.PorTempo != 0 {
+		t.Fatalf("aposentou %d segmentos: o teste precisa do segmento VIVO com prefixo vencido",
+			res.PorTempo)
+	}
+	if hist.RowIDBase() != alvo {
+		t.Fatalf("marca = %d, quer %d", hist.RowIDBase(), alvo)
+	}
+	if !slices.Contains(segmentosComIndice(t, hist), velho) {
+		t.Fatalf("o segmento %d perdeu o índice; o teste precisa dele indexado", velho)
+	}
+	quer := rel.t.Sub(tempos[alvo])
+	if got := hist.JanelaEfetiva(); got != quer {
+		t.Fatalf("JanelaEfetiva = %s, quer %s: ela precisa partir da MARCA, e não do primeiro "+
+			"record físico (que daria %s) — senão ela e a série de instante mais antigo falam "+
+			"de pontos de partida diferentes",
+			got, quer, rel.t.Sub(tempos[faixaVelho[0]]))
+	}
+
+	// 2. A marca passa do segmento mais velho INTEIRO sem que ele saia do disco.
+	//    É um estado real: o avancaMarcaDagua roda ANTES do aposentaOQueVenceu
+	//    na mesma passada, e um scrape entre os dois vê exatamente isto. O
+	//    segmento sem linha visível não descreve cobertura nenhuma e é pulado.
+	inicioSeguinte := faixas[seguinte][0]
+	hist.rowIDBase.Store(uint64(inicioSeguinte))
+	quer = rel.t.Sub(tempos[inicioSeguinte])
+	if got := hist.JanelaEfetiva(); got != quer {
+		t.Fatalf("JanelaEfetiva = %s, quer %s: o segmento inteiro abaixo da marca não tem linha "+
+			"visível e não pode decidir a cobertura", got, quer)
+	}
+
+	// 3. A marca passa de TUDO: não há linha visível, e não há cobertura a
+	//    reportar. Zero, e não um número negativo nem o instante de um record
+	//    que ninguém mais enxerga.
+	hist.rowIDBase.Store(hist.nextRowID.Load())
+	if got := hist.JanelaEfetiva(); got != 0 {
+		t.Fatalf("JanelaEfetiva = %s com a tabela inteira abaixo da marca, quer 0", got)
 	}
 }
