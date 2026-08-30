@@ -10,7 +10,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/nishisan-dev/nishidb/internal/index/segindex"
 	"github.com/nishisan-dev/nishidb/internal/storage/mmap"
 	"github.com/nishisan-dev/nishidb/internal/storage/rowindex"
 	"github.com/nishisan-dev/nishidb/internal/storage/segment"
@@ -516,12 +515,14 @@ func (s *Store) EstatisticasDeRetencao() EstatisticasDeRetencao {
 	// silêncio o significado de uma chave de configuração que já está em
 	// produção.
 	//
-	// O predicado vem do segindex, e não de uma lista de extensões escrita
-	// aqui: o espaço de nomes é daquele pacote, e uma cópia dele pararia de
-	// contar sem avisar no dia em que a extensão mudasse.
+	// A terceira parcela sai da MESMA função que alimenta a série
+	// nishidb_index_bytes, e não de uma soma igual escrita aqui: as duas
+	// descrevem o mesmo conjunto de arquivos, e duas definições dele divergiriam
+	// no dia em que a extensão mudasse. O predicado é do segindex pela mesma
+	// razão — o espaço de nomes é daquele pacote.
 	e.IndexBytes = blocosDoDiretorio(filepath.Join(s.opts.Dir, "indexes")) +
 		blocosDoDiretorio(filepath.Join(s.opts.Dir, "checkpoint")) +
-		blocosDoDiretorioSe(s.dirDeDados(), segindex.EhArquivoDeIndice)
+		s.bytesDoIndicePorSegmento()
 	if ms, ok := s.instanteMaisAntigo(); ok {
 		e.InstanteMaisAntigo = ms
 	}

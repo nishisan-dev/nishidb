@@ -205,6 +205,13 @@ func (s *Store) reconstroiOsPendentes(ctx context.Context, pendentes []uint32) (
 			return feitos, fmt.Errorf("reconstruir o índice do segmento %d: %w", seg, err)
 		}
 		feitos++
+		// O contador sobe por segmento CONCLUÍDO, e não por passada: o que o
+		// operador acompanha durante uma migração é a fila drenando, e uma
+		// passada que reconstruiu quarenta segmentos e outra que reconstruiu um
+		// não são o mesmo fato. É também o que separa este número do varreduras,
+		// que conta leituras — inclusive a que terminou sem posting nenhuma e
+		// não publicou arquivo.
+		s.recFeitas.Add(1)
 		if err := s.anotaOPontoFixo(seg); err != nil {
 			return feitos, err
 		}
@@ -643,6 +650,19 @@ func (s *Store) removeSeladoObsoleto(seg uint32, caminho string) error {
 // construção — não filtra nada, e o comportamento é exatamente o de antes de a
 // janela existir.
 //
+// # ELA É TAMBÉM QUEM PUBLICA A SÉRIE nishidb_index_segmentos
+//
+// Os quatro estados (§6.6) saem daqui, e não de uma coleta própria, porque é
+// aqui que os quatro são decididos pela MESMA conta que decide a fila. Uma
+// segunda passada só para contar seria um terceiro lugar respondendo "este
+// segmento deve ter índice?", ao lado da expulsão e da pendência — e o godoc
+// inteiro desta função existe para explicar por que dois já seriam um moinho.
+//
+// A publicação é em ATÔMICO, e o scrape só os lê. A alternativa — uma coleta que
+// chamasse esta função — pediria o retPassadaMu de fora da cadeia
+// vida → wmu → aposMu, sobre a qual ele fica; a inversão só apareceria sob carga,
+// que é exatamente quando o /metrics precisa responder.
+//
 // ELA TOMA O retPassadaMu, e não é para serializar duas pendências: é para
 // serializar contra a EXPULSÃO. As duas leem o mesmo disco, e uma pendência que
 // caia no MEIO de uma expulsão vê parte dos .sidx já removidos — estimador
@@ -675,13 +695,18 @@ func (s *Store) SegmentosPendentesDeReconstrucao(j JanelaDeIndice) ([]uint32, er
 		dentro = estado.dentro
 	}
 	corrente := s.curSegID.Load()
-	var pendentes []uint32
+	var (
+		pendentes []uint32
+		estados   EstadosDeSegmento
+	)
 	for _, ref := range refs {
 		if ref.ID == corrente {
+			estados.Corrente++
 			continue
 		}
 		if dentro != nil {
 			if _, ok := dentro[ref.ID]; !ok {
+				estados.Fora++
 				continue
 			}
 		}
@@ -691,8 +716,17 @@ func (s *Store) SegmentosPendentesDeReconstrucao(j JanelaDeIndice) ([]uint32, er
 		}
 		if pendente {
 			pendentes = append(pendentes, ref.ID)
+			estados.Pendente++
+			continue
 		}
+		estados.Selado++
 	}
+	// A publicação vem depois do laço COMPLETO, e por isso não acontece nos
+	// retornos de erro acima: uma passada que morreu no meio descreve um dataset
+	// pela metade, e publicá-la faria a fila parecer ter encolhido quando o que
+	// encolheu foi a varredura. O retrato anterior fica, que é o que um medidor
+	// deve fazer quando a medição falhou.
+	s.publicaEstadosDeSegmento(estados)
 	return pendentes, nil // ListSegments já devolve ordenado por ID
 }
 

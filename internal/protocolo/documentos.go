@@ -228,6 +228,56 @@ type DatasetStats struct {
 	// irmã aparece na lista com os próprios números de storage e query como
 	// qualquer outro dataset.
 	History *HistoricoStats `json:"history,omitempty"`
+	// Index é a mecânica do índice por segmento DESTE dataset, e sai em todos
+	// eles — inclusive na irmã, ao contrário do bloco History acima.
+	//
+	// A assimetria é o desenho: `history` descreve uma POLÍTICA, declarada no
+	// YAML do base, e por isso é publicada onde ela foi escrita; `index` descreve
+	// o motor de índice de um Store, que existe nos dois modos de dataset
+	// (decisão D1) e tem números próprios em cada um.
+	//
+	// Não é ponteiro porque não há dataset sem a resposta: um sem campo indexado
+	// tem os quatro estados em zero e a reconstrução desligada, e isso é
+	// informação — bloco omitido seria indistinguível de versão antiga do
+	// servidor.
+	Index IndiceStats `json:"index"`
+}
+
+// IndiceStats é o retrato do índice por segmento, e é a MESMA estrutura que
+// alimenta as séries nishidb_index_*.
+//
+// A janela efetiva NÃO está aqui: ela é política do histórico e continua no
+// bloco History, como EffectiveIndexWindow. Ver o comentário da família em
+// internal/metrics/nomes.go.
+type IndiceStats struct {
+	// Os quatro estados PARTICIONAM os segmentos do dataset. Pending e
+	// OutOfWindow são duas ausências de significado OPOSTO, e é por isso que são
+	// dois campos: OutOfWindow é o segmento que a janela deliberadamente não
+	// cobre — num dataset grande, a maioria esmagadora, e o sistema funcionando
+	// como projetado —, enquanto Pending é trabalho na fila. Somados, o número é
+	// enorme, normal e não responde "o laço está avançando?".
+	Sealed      int64 `json:"sealed"`
+	Current     int64 `json:"current"`
+	Pending     int64 `json:"pending"`
+	OutOfWindow int64 `json:"outOfWindow"`
+	// Bytes são os blocos do índice por segmento — parcela ESTRITA do
+	// History.IndexBytes, que soma também indexes/ e checkpoint/. Separado porque
+	// é este número que precisa parar de crescer com a tabela em regime.
+	Bytes int64 `json:"bytes"`
+	// Rebuilds conta os segmentos cujo índice a reconstrução publicou e
+	// RebuildRunning é o 0/1 do laço, que para de vez na primeira falha.
+	// Contador de PROCESSO: zera no restart.
+	Rebuilds       int64 `json:"rebuilds"`
+	RebuildRunning bool  `json:"rebuildRunning"`
+	// CRCFailures conta os índices selados reprovados no crc32c, por ABERTURA do
+	// arquivo e não por arquivo distinto: a falha não é memorizada, então o mesmo
+	// arquivo podre é reprovado a cada consulta que toque aquele segmento.
+	CRCFailures int64 `json:"crcFailures"`
+	// SegmentsByIndex e SegmentsByScan contam por qual caminho os Lookups
+	// resolveram cada segmento. São o único observável da degradação da §3.4 — o
+	// resultado é o mesmo pelos dois caminhos, e só o custo muda.
+	SegmentsByIndex int64 `json:"segmentsByIndex"`
+	SegmentsByScan  int64 `json:"segmentsByScan"`
 }
 
 // HistoricoStats é o que o bloco `history` está fazendo.

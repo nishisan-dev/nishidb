@@ -188,6 +188,12 @@ func (s *Servidor) handleStats(w http.ResponseWriter, r *http.Request) {
 				Paused:  detalhe,
 			},
 			History: historicoStats(d),
+			// Da MESMA estrutura que alimenta as séries nishidb_index_*, pela
+			// regra deste handler. O bloco sai em todos os datasets, inclusive na
+			// irmã, porque o índice por segmento é mecânica do Store e não
+			// política declarada no YAML do base — que é o que o bloco History
+			// acima descreve.
+			Index: indiceStats(d.st.EstatisticasDeIndice()),
 		}
 		// A tabela irmã não tem materializer: quem escreve nela é o do
 		// dataset base, no mesmo evento. Publicar um bloco zerado ali seria

@@ -663,6 +663,33 @@ cobrado por menos do que custou e voltaria a caber. A segunda parcela é
 lembrada em memória e some num restart, que então paga uma reconstrução
 desperdiçada por segmento atípico antes de estabilizar.
 
+**O que acompanhar enquanto a janela trabalha** são as seis séries do índice por
+segmento, que saem em **todo** dataset — o motor de índice é um só nos dois
+modos, então elas não pertencem ao bloco `history`:
+
+| Série | Responde |
+|---|---|
+| `nishidb_index_segmentos{estado}` | quantos segmentos em cada estado de índice |
+| `nishidb_index_bytes` | o disco do índice por segmento |
+| `nishidb_index_reconstrucoes_total` | a fila está drenando? |
+| `nishidb_index_reconstrucao_ativa` | o laço está de pé? |
+| `nishidb_index_crc_falhas_total` | há `.sidx` reprovado no crc32c? |
+| `nishidb_index_segmentos_consultados_total{modo}` | quantos responderam por índice, quantos por enumeração |
+
+`estado` tem quatro valores, e a distinção entre dois deles é a que importa:
+`pendente` é o segmento **dentro** da janela ainda na fila — trabalho por fazer —
+e `fora` é o segmento que a janela deliberadamente não cobre, que num dataset
+grande é a maioria esmagadora e é o sistema funcionando como projetado. Os
+outros dois são `selado` (o `.sidx` cobre o conjunto indexado) e `corrente` (o
+índice é o WIP). Somar `pendente` com `fora` daria um número enorme, normal e
+constante, que não responde *"o laço está avançando?"*.
+
+`nishidb_index_segmentos_consultados_total{modo}` é o único jeito de ver a
+degradação: o resultado da consulta é **idêntico** pelos dois caminhos — é essa
+a tese do desenho —, e só o contador distingue um dataset indexado de um dataset
+que está enumerando. `nishidb_index_bytes` é parcela estrita de
+`nishidb_history_index_bytes`, que soma também `indexes/` e `checkpoint/`.
+
 `rawPayload: true` acrescenta a coluna `_raw` com os bytes originais do evento,
 e é ela que permite gravar também o evento que **não parseia** — hoje um JSON
 inválido é apenas um número num contador. Ela dobra o disco da tabela em eventos

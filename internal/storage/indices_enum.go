@@ -69,6 +69,11 @@ func (s *Store) lookupIndexado(field types.FieldID, v types.Value) (types.RowIDI
 //	sem índice, histórico     → a faixa [primeiro, primeiroDoSeguinte);
 //	sem índice, materializado → os rowIds cuja location aponta para o segmento.
 //
+// É AQUI que a §3.4 é contada. Cada segmento cai num dos dois baldes de
+// nishidb_index_segmentos_consultados_total, e essa é a ÚNICA coisa que a
+// degradação torna visível: para o planner, o executor e o driver, os dois
+// caminhos são o mesmo iterador ascendente.
+//
 // "Sem índice" NÃO é só "arquivo ausente": inclui o selado cuja tabela de
 // seções não tem o campo, o selado que o crc32c reprovou e o segmento corrente
 // na janela de rotação em que os WIPs foram fechados e ainda não reabertos. Os
@@ -93,9 +98,16 @@ func (s *Store) fontesDoCampo(campo types.FieldID, h uint64) ([]segindex.Fonte, 
 		}
 		return nil, err
 	}
+	// As duas contagens são LOCAIS e viram dois Add no fim, e não um Add por
+	// segmento: um dataset com 500 segmentos pagaria 500 escritas atômicas na
+	// mesma linha de cache por Lookup, e é justamente contenção de atômico que a
+	// medição pré-ciclo do piloto encontrou consumindo 64% do CPU. Duas somas por
+	// consulta não aparecem em gate nenhum — os gates medem por LINHA varrida.
+	var porIndice, porEnumeracao int64
 	for i, ref := range refs {
 		if f, ok := s.fonteIndexada(ref.ID, corrente, campo, h); ok {
 			fontes = append(fontes, f)
+			porIndice++
 			continue
 		}
 		f, err := s.fonteDeEnumeracao(refs, i)
@@ -103,7 +115,14 @@ func (s *Store) fontesDoCampo(campo types.FieldID, h uint64) ([]segindex.Fonte, 
 			return desiste(err)
 		}
 		fontes = append(fontes, f)
+		porEnumeracao++
 	}
+	// Publicadas mesmo com a montagem tendo falhado? Não: o desiste() acima
+	// retorna antes, e o que ele desfaz são as fontes, não o trabalho de decidir
+	// por qual caminho cada segmento responderia. Contar uma montagem abortada
+	// diria que houve consulta onde não houve.
+	s.segPorIndice.Add(porIndice)
+	s.segPorEnumeracao.Add(porEnumeracao)
 	return fontes, nil
 }
 
@@ -204,9 +223,11 @@ func (s *Store) garanteSelado(seg uint32) {
 			// Deduplicá-lo exigiria memorizar a falha, e memorizar impediria a
 			// adoção do arquivo que a reconstrução (§2.4) vier a publicar no
 			// lugar. Quem fecharia isso é a remoção do arquivo reprovado por
-			// quem o detecta — o gatilho 3 da §2.4, ainda sem dono — e a série
-			// da §3.4, que é o observável certo para "quantos segmentos
-			// responderam por enumeração".
+			// quem o detecta — o gatilho 3 da §2.4, ainda sem dono. O observável
+			// já existe: nishidb_index_segmentos_consultados_total{modo}, que
+			// conta quantos segmentos responderam por cada caminho, e
+			// nishidb_index_crc_falhas_total, que separa o arquivo podre do
+			// simplesmente ausente.
 			s.opts.Log.Warn("indice.selado_ilegivel",
 				"o índice do segmento não pôde ser aberto; ele responde por enumeração",
 				"segmento", seg, "erro", err.Error())
@@ -234,6 +255,14 @@ func (s *Store) garanteSelado(seg uint32) {
 	// mantém o Once cumprido e faz esse ok=false custar nada; recusar obrigaria
 	// a próxima consulta a reabrir e reconferir o arquivo podre inteiro.
 	if err := novo.ErroDeIntegridade(); err != nil {
+		// A série sobe junto do WARN, e no mesmo ponto, porque as duas descrevem
+		// o mesmo evento: um arquivo de índice reprovado. Ela conta por ABERTURA
+		// e não por processo — a falha não é memorizada, então o mesmo arquivo
+		// podre é reaberto e reprovado a cada consulta que toque o segmento. Quem
+		// lê o painel lê a TAXA, que é proporcional ao tráfego sobre o segmento
+		// doente e cai a zero quando a reconstrução publicar o arquivo bom por
+		// cima. O total acumulado não significa "tantos arquivos corrompidos".
+		s.crcFalhas.Add(1)
 		s.opts.Log.Warn("indice.selado_corrompido",
 			"o índice do segmento não passou no crc32c; ele responde por enumeração até ser reconstruído",
 			"segmento", seg, "erro", err.Error())

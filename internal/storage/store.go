@@ -463,6 +463,49 @@ type Store struct {
 	// tomá-lo. É também ele que dá o happens-before do recPontoFixo, tocado só
 	// dentro da passada.
 	recPassadaMu sync.Mutex
+	// Os SEIS contadores atômicos das séries do índice por segmento (§6.6).
+	//
+	// São atômicos, e não uma coleta que vá ler o disco no scrape, por uma razão
+	// de LOCK e não de custo: os números de estado de segmento só existem sob o
+	// retPassadaMu, que fica ACIMA da cadeia vida → wmu → aposMu. Uma raspagem
+	// que fosse buscá-los pediria esse lock de fora da cadeia, e a inversão só
+	// apareceria sob carga — que é exatamente quando o /metrics precisa
+	// responder. Quem já segura o lock publica; o scrape lê átomo.
+	//
+	// segSelados/segCorrentes/segPendentes/segFora são os quatro estados, e eles
+	// PARTICIONAM os segmentos do dataset: corrente é o único cujo índice é o
+	// WIP; entre os selados, `fora` está deliberadamente sem índice (a janela o
+	// expulsou), `pendente` está na fila e `selado` tem o .sidx que descreve o
+	// conjunto indexado inteiro. A distinção entre os dois últimos é a razão de
+	// a série existir — com um rótulo só, o gauge não responde "o laço está
+	// avançando?", que é a única pergunta que uma migração faz.
+	//
+	// Escritos pelo SegmentosPendentesDeReconstrucao, que é o único lugar onde
+	// os quatro são decididos pela mesma conta; ver o godoc de lá.
+	segSelados   atomic.Int64
+	segCorrentes atomic.Int64
+	segPendentes atomic.Int64
+	segFora      atomic.Int64
+	// recFeitas conta os segmentos cujo índice a reconstrução PUBLICOU, e é
+	// diferente do varreduras: aquele conta leituras de segmento (inclusive a da
+	// abertura, e inclusive a que terminou sem posting nenhuma), este conta
+	// trabalho concluído. A distância entre os dois é o que a fila-superconjunto
+	// custa.
+	recFeitas atomic.Int64
+	// crcFalhas conta os .sidx que o crc32c reprovou.
+	//
+	// Ela sobe UMA VEZ POR ABERTURA do arquivo, e não uma vez por processo: a
+	// falha não é memorizada (garanteSelado), então um índice podre é reaberto e
+	// reprovado a cada consulta que toque aquele segmento. A taxa, e não o total,
+	// é o que se lê — ela é proporcional ao tráfego sobre o segmento doente, e
+	// some sozinha quando a reconstrução publicar o arquivo bom por cima.
+	crcFalhas atomic.Int64
+	// segPorIndice e segPorEnumeracao contam os segmentos que cada Lookup
+	// resolveu por cada caminho (§3.4). São a ÚNICA coisa que o chamador enxerga
+	// da degradação: planner, executor e driver veem um iterador ascendente e
+	// nada mais.
+	segPorIndice     atomic.Int64
+	segPorEnumeracao atomic.Int64
 	// recPontoFixo é o que impede o MOINHO da fila-superconjunto.
 	//
 	// A fila é derivada do disco e é um superconjunto do trabalho real: um

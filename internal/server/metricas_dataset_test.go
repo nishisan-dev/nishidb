@@ -30,11 +30,18 @@ import (
 // mesmas linhas publicadas como medidor produzem um número que sobe para
 // sempre e um `rate()` que o Prometheus recusa a calcular, e a diferença entre
 // as duas leituras não aparece no valor: aparece no `# TYPE`.
+// Os Labels entram pela Tarefa 16, e por um motivo que os campos anteriores não
+// cobriam: as séries do índice por segmento só existem em conjunto com os
+// rótulos. `nishidb_index_segmentos` sem o `estado` é um número sem pergunta, e
+// o contrato que precisa de prova — quatro estados fechados, seis combinações
+// SEMPRE emitidas — é inteiramente sobre eles. Um helper que descarta rótulo
+// aprovaria uma implementação que publicasse a mesma série quatro vezes.
 type amostraExposta struct {
-	Nome  string
-	Ajuda string
-	Tipo  metrics.Tipo
-	Valor float64
+	Nome   string
+	Ajuda  string
+	Tipo   metrics.Tipo
+	Labels map[string]string
+	Valor  float64
 }
 
 // coletaAmostras raspa o /metrics e devolve as amostras com a ajuda da
@@ -72,19 +79,97 @@ func coletaAmostras(t *testing.T, srv *server.Servidor) []amostraExposta {
 		if i < 0 {
 			t.Fatalf("linha sem valor no scrape: %q", linha)
 		}
-		nome, _, _ := strings.Cut(linha[:i], "{")
+		nome, resto, _ := strings.Cut(linha[:i], "{")
 		v, err := strconv.ParseFloat(linha[i+1:], 64)
 		if err != nil {
 			t.Fatalf("valor ilegível em %q: %v", linha, err)
 		}
+		rotulos := rotulosDoScrape(t, linha, resto)
 		// A ajuda e o tipo são indexados pela FAMÍLIA, e o nome da linha pode
 		// carregar sufixo de histograma (_bucket/_sum/_count). O sufixo não
 		// chega às séries de disco nem às de compaction, mas o helper serve o
 		// pacote inteiro.
 		familia := familiaDe(nome, ajuda)
-		out = append(out, amostraExposta{Nome: nome, Ajuda: ajuda[familia], Tipo: tipos[familia], Valor: v})
+		out = append(out, amostraExposta{
+			Nome: nome, Ajuda: ajuda[familia], Tipo: tipos[familia], Labels: rotulos, Valor: v,
+		})
 	}
 	return out
+}
+
+// rotulosDoScrape desmonta o `{k="v",k2="v2"}` de uma linha de exposição.
+//
+// Escrito à mão, e não por Split na vírgula, porque o formato permite vírgula e
+// aspa DENTRO do valor (escapadas), e um split ingênuo partiria a linha no lugar
+// errado — devolvendo rótulos que ninguém publicou. O oráculo dos conjuntos
+// fechados leria esse lixo como "valor de estado inesperado" e a falha apontaria
+// para o produto em vez de para o parser.
+//
+// Linha sem `{` devolve nil, que é o certo: série sem rótulo nenhum.
+func rotulosDoScrape(t *testing.T, linha, dentro string) map[string]string {
+	t.Helper()
+	dentro = strings.TrimSuffix(dentro, "}")
+	if dentro == "" {
+		return nil
+	}
+	out := map[string]string{}
+	for i := 0; i < len(dentro); {
+		eq := strings.IndexByte(dentro[i:], '=')
+		if eq < 0 || i+eq+1 >= len(dentro) || dentro[i+eq+1] != '"' {
+			t.Fatalf("rótulo malformado em %q", linha)
+		}
+		nome := dentro[i : i+eq]
+		var valor strings.Builder
+		j := i + eq + 2
+		for ; j < len(dentro) && dentro[j] != '"'; j++ {
+			if dentro[j] == '\\' && j+1 < len(dentro) {
+				j++
+				switch dentro[j] {
+				case 'n':
+					valor.WriteByte('\n')
+				default:
+					valor.WriteByte(dentro[j])
+				}
+				continue
+			}
+			valor.WriteByte(dentro[j])
+		}
+		if j >= len(dentro) {
+			t.Fatalf("aspa não fechada em %q", linha)
+		}
+		out[nome] = valor.String()
+		i = j + 1
+		if i < len(dentro) && dentro[i] == ',' {
+			i++
+		}
+	}
+	return out
+}
+
+// achaSerie devolve a amostra da série com EXATAMENTE os rótulos pedidos.
+//
+// O achaAmostra acima devolve a primeira do nome e serve aos testes de um
+// dataset só; este é o que as séries de índice exigem, porque elas saem quatro
+// vezes por dataset com o mesmo nome e uma bancada com tabela histórica sobe
+// DOIS datasets. Pegar a primeira ali seria pegar uma série qualquer e afirmar
+// coisas sobre ela.
+func achaSerie(amostras []amostraExposta, nome string, rotulos map[string]string) (amostraExposta, bool) {
+	for _, a := range amostras {
+		if a.Nome != nome {
+			continue
+		}
+		casa := true
+		for k, v := range rotulos {
+			if a.Labels[k] != v {
+				casa = false
+				break
+			}
+		}
+		if casa {
+			return a, true
+		}
+	}
+	return amostraExposta{}, false
 }
 
 // tipoDoScrape traduz o `# TYPE` de volta ao tipo do registry.

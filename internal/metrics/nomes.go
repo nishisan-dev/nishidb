@@ -281,6 +281,125 @@ const (
 	MetQueryBudgetRejectedTotal = "nishidb_query_budget_rejected_total"
 )
 
+// As séries do ÍNDICE POR SEGMENTO (spec do subsistema 1, §6.6). Não estão no
+// §92 porque quando aquela seção foi escrita o índice era global: não havia
+// segmento a classificar, não havia janela, não havia reconstrução e não havia
+// caminho degradado a contar.
+//
+// Elas existem porque o terceiro dos três defeitos que o ciclo corrige é
+// "nada avisa o operador". Os outros dois — o Set quadrático e a purga que não
+// tocava o índice — são de mecanismo, e o desenho novo os torna inexprimíveis;
+// este é de observabilidade, e só some se alguém publicar os números.
+//
+// A JANELA EFETIVA NÃO ESTÁ AQUI, e a ausência é decisão registrada na §6.6.
+// Quem publica o intervalo realmente coberto pelos segmentos indexados é
+// MetHistoryIndexWindow (nishidb_history_index_window_seconds), mais acima neste
+// arquivo. A razão está na §4.5: a série existe espelhando a de instante mais
+// antigo, que mostra o `maxBytes` engolindo o `expireAfterWrite` — e essa série
+// espelhada é do bloco `history`, rotulada pelo dataset BASE, onde o operador
+// declarou a política. As duas famílias respondem perguntas diferentes:
+// `nishidb_history_*` diz o que a política do histórico de X está fazendo, vista
+// de X, e `nishidb_index_*` diz o que a MECÂNICA de índice de cada Store está
+// fazendo, saindo também na tabela irmã. A janela é política, não mecânica; pô-la
+// aqui deixaria uma série rotulada pelo base dentro de uma família rotulada pela
+// irmã, ou seja dois números iguais em séries que parecem falar de coisas
+// diferentes. Este parágrafo é o ponteiro que impede a decisão de virar
+// armadilha para quem procurar a janela nesta família.
+const (
+	// MetIndexSegmentos classifica os segmentos do dataset pelo rótulo
+	// LabelEstado, e os quatro valores PARTICIONAM o dataset.
+	//
+	// Os quatro, e não três, por causa de duas ausências de significado oposto:
+	// EstadoFora é o segmento que a janela deixou de cobrir — deliberadamente sem
+	// índice, e num dataset grande a maioria esmagadora —, enquanto EstadoPendente
+	// é o segmento dentro da janela ainda na fila. Conflá-los num "ausente" daria
+	// um número enorme, normal e mudo, e o gauge deixaria de responder "o laço
+	// está avançando?", que é a única pergunta que uma migração faz.
+	MetIndexSegmentos = "nishidb_index_segmentos"
+	// MetIndexBytes são os BLOCOS do índice por segmento: os .sidx selados, os
+	// temporários e os .widx do corrente.
+	//
+	// É parcela ESTRITA de MetHistoryIndexBytes, que soma também indexes/ e
+	// checkpoint/, e as duas saem da mesma função de disco — uma definição, dois
+	// leitores. Separada porque é ela que carrega a promessa central do ciclo, e
+	// promessa sem número é opinião: com a tabela histórica em regime, ESTE valor
+	// para de crescer. Hoje o índice é o único componente que não para, mesmo com
+	// a retenção funcionando e o dataset estável.
+	MetIndexBytes = "nishidb_index_bytes"
+	// MetIndexReconstrucoesTotal conta os segmentos cujo índice a reconstrução
+	// publicou desde a abertura do dataset. É a taxa que diz se a fila está
+	// drenando; a fila em si é MetIndexSegmentos{estado="pendente"}.
+	MetIndexReconstrucoesTotal = "nishidb_index_reconstrucoes_total"
+	// MetIndexReconstrucaoAtiva é o 0/1 do laço da §2.4, no molde de
+	// MetCompactionRunning e MetHistoryRetentionRunning — e pelo mesmo motivo: ele
+	// para de vez na primeira falha, e sem esta série isso é indistinguível de
+	// "não há o que reconstruir".
+	//
+	// Ela sobe ANTES da goroutine (§92): quem chamou IniciaReconstrucao tem
+	// direito de ver o estado que acabou de instalar, e uma leitura entre a
+	// chamada e o primeiro escalonamento não pode responder que nada subiu. Por
+	// isso ela NASCE EM 1 num dataset com campo indexado — o valor verdadeiro na
+	// subida — e não em zero como os contadores ao lado.
+	MetIndexReconstrucaoAtiva = "nishidb_index_reconstrucao_ativa"
+	// MetIndexCrcFalhasTotal conta os .sidx reprovados no crc32c.
+	//
+	// Uma vez por ABERTURA do arquivo, não por processo: a falha não é memorizada,
+	// então o mesmo arquivo podre é reprovado a cada consulta que toque aquele
+	// segmento. Lê-se a TAXA — proporcional ao tráfego sobre o segmento doente, e
+	// zerada quando a reconstrução publicar o arquivo bom por cima. O total
+	// acumulado NÃO é "tantos arquivos corrompidos".
+	MetIndexCrcFalhasTotal = "nishidb_index_crc_falhas_total"
+	// MetIndexSegmentosConsultadosTotal conta, pelo rótulo LabelModo, quantos
+	// segmentos cada Lookup resolveu por índice e quantos por enumeração (§3.4).
+	//
+	// É o ÚNICO observável da degradação: a fonte de enumeração é apenas mais um
+	// iterador ascendente na mesma combinação, e planner, executor e driver não
+	// têm como distingui-la. Sem esta série, um dataset inteiro respondendo por
+	// enumeração é indistinguível de um dataset inteiro indexado — a mesma
+	// resposta, com outro custo.
+	MetIndexSegmentosConsultadosTotal = "nishidb_index_segmentos_consultados_total"
+)
+
+// Os rótulos das séries de índice, e os CONJUNTOS FECHADOS de valores que cada
+// um aceita.
+//
+// Eles são constantes exportadas, e não literais no ponto de publicação, pela
+// razão que o LabelReason já registra: label nunca vem de entrada do cliente.
+// Aqui a garantia é mais forte que uma convenção, porque a enumeração está
+// escrita uma vez e é o teste que a compara com o que sai na porta — um valor
+// novo que aparecesse no scrape sem passar por aqui reprova.
+const (
+	LabelEstado = "estado"
+	LabelModo   = "modo"
+)
+
+// Os quatro estados de MetIndexSegmentos. Ver o godoc da série.
+const (
+	EstadoSelado   = "selado"
+	EstadoCorrente = "corrente"
+	EstadoPendente = "pendente"
+	EstadoFora     = "fora"
+)
+
+// Os dois modos de MetIndexSegmentosConsultadosTotal.
+const (
+	ModoIndice     = "indice"
+	ModoEnumeracao = "enumeracao"
+)
+
+// EstadosDeIndice é a enumeração fechada de LabelEstado, na ordem em que as
+// séries são emitidas.
+//
+// Ela existe como FATIA, e não só como quatro constantes, porque tem dois
+// consumidores que precisam concordar: o coletor, que emite as quatro séries
+// sempre — inclusive as zeradas, senão `rate()` mente até o primeiro segmento
+// mudar de estado —, e o teste, que confere que o scrape não traz um quinto
+// valor. Duas listas escritas à mão divergiriam na primeira adição.
+var EstadosDeIndice = []string{EstadoSelado, EstadoCorrente, EstadoPendente, EstadoFora}
+
+// ModosDeConsultaDeIndice é a enumeração fechada de LabelModo, pela mesma razão.
+var ModosDeConsultaDeIndice = []string{ModoIndice, ModoEnumeracao}
+
 // Séries INVENTADAS no M2, com o defeito que cada uma corrige.
 const (
 	// MetIngestFailedTotal separa "não entrou por falha" de "não entrou por

@@ -1530,7 +1530,7 @@ fato divergem no dia em que um caminho de erro esquece de somar.
 | `nishidb_history_rows_total` / `_dropped_total` | a tabela está COMPLETA? |
 | `nishidb_history_degraded` | ela parou de receber? |
 | `nishidb_history_data_bytes` | o que o `maxBytes` governa |
-| `nishidb_history_index_bytes` | o disco de índice, medido em blocos — a purga também o devolve |
+| `nishidb_history_index_bytes` | o disco de índice, medido em blocos — a purga também o devolve; `nishidb_index_bytes` é a parcela por segmento |
 | `nishidb_history_oldest_written_at` | a janela real que a tabela cobre |
 | `nishidb_history_index_window_seconds` | a janela real que o ÍNDICE cobre |
 | `nishidb_history_segments_purged_total{reason}` | qual das duas políticas está decidindo |
@@ -1801,10 +1801,64 @@ viva da desligada. `nishidb_compaction_bytes_read` e `_bytes_written` são
 devolvido — contadores, e não medidores, porque o painel pede a TAXA de bytes
 movidos, e taxa não se calcula sobre um número que zera a cada passada.
 
+**As seis séries do índice por segmento** existem porque o terceiro dos três
+defeitos que aquele subsistema corrige é *"nada avisa o operador"*. Os outros
+dois são de mecanismo e o desenho novo os torna inexprimíveis; este só some se
+alguém publicar os números. Elas saem em **todo** dataset, materializado e
+histórico, porque o motor de índice é um só nos dois modos.
+
+| Série | Responde |
+|---|---|
+| `nishidb_index_segmentos{estado}` | quantos segmentos estão em cada estado de índice |
+| `nishidb_index_bytes` | o disco do índice por segmento — o número que precisa parar de crescer |
+| `nishidb_index_reconstrucoes_total` | a fila está drenando? |
+| `nishidb_index_reconstrucao_ativa` | o laço está de pé? Ele para de vez na primeira falha |
+| `nishidb_index_crc_falhas_total` | há `.sidx` reprovado no crc32c sendo reaberto? |
+| `nishidb_index_segmentos_consultados_total{modo}` | quantos segmentos responderam por índice e quantos por enumeração |
+
+`estado` tem **quatro** valores e a partição é o produto inteiro da série:
+`selado` (o `.sidx` cobre o conjunto indexado), `corrente` (o índice é o WIP),
+`pendente` (dentro da janela e na fila) e `fora` (a janela não o cobre, e ele
+responde por enumeração **de propósito**). Um rótulo só para as duas ausências
+somaria, num dataset grande, a maioria esmagadora dos segmentos com a fila de
+trabalho — o número seria enorme, normal e constante, e o gauge deixaria de
+responder *"o laço está avançando?"*, que é a única pergunta que uma migração
+faz.
+
+`nishidb_index_segmentos_consultados_total{modo}` é o **único** observável da
+degradação: a fonte de enumeração é apenas mais um iterador ascendente na mesma
+combinação, e planner, executor e driver não têm como distingui-la. Sem essa
+série, um dataset inteiro respondendo por enumeração é indistinguível de um
+dataset inteiro indexado — a mesma resposta, com outro custo.
+
+`nishidb_index_bytes` é parcela **estrita** de `nishidb_history_index_bytes`,
+que soma também `indexes/` e `checkpoint/`, e as duas saem da mesma função de
+disco — uma definição, dois leitores. A **janela efetiva não está nesta
+família**: quem a publica é `nishidb_history_index_window_seconds`, rotulada
+pelo dataset BASE. A razão é que a janela é *política* declarada num YAML, e a
+série existe espelhando `nishidb_history_oldest_written_at`, que é do mesmo
+bloco; esta família descreve a *mecânica* de índice de cada Store e sai também
+na tabela irmã. Pôr a janela aqui deixaria uma série rotulada pelo base dentro
+de uma família rotulada pela irmã.
+
 O nome de dataset vindo do request **nunca** vira label: label alimentado por
 entrada do cliente é uma série nova por requisição, e um cliente em loop
 consumiria a memória do processo. Erro antes de o dataset ser resolvido é
-contado sob o valor fixo `?`.
+contado sob o valor fixo `?`. Nas séries de índice a garantia é mais forte que
+uma convenção: `estado` e `modo` são enumerações exportadas de `nomes.go`, o
+coletor só pode alimentá-las percorrendo essas listas, e
+`TestOsLabelsDeIndiceSaoConjuntosFechados` confere as duas coisas — o conjunto
+que sai na porta e, pelo `go/ast`, a origem do valor no código.
+
+**Cabeçalho por família.** Toda `metrics.Amostra` precisa preencher `Familia`,
+e não só `Nome`. O `WriteTo` agrupa `# HELP`/`# TYPE` por aquele campo, então
+amostras com `Familia` vazia caem num grupo só: o par sai uma vez, **com o nome
+do metric vazio**, e as demais famílias chegam ao operador sem tipo e sem ajuda.
+Nada disso muda um número — foi por isso que o bloco `nishidb_history_*`
+conviveu com a omissão —, mas sem `# TYPE` o `rate()` não se aplica, e metade do
+contrato de várias séries viaja no texto da ajuda.
+`TestOsCabecalhosSaemNomeadosParaCadaFamilia` cobre o bloco do histórico e o do
+índice.
 
 **`/v1/stats` não duplica contador.** Ele lê as mesmas estruturas que o
 `/metrics` lê, no instante da chamada. A divisão entre `process` e `datasets`

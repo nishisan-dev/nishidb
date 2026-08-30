@@ -287,6 +287,19 @@ func historicoStats(base *dataset) *protocolo.HistoricoStats {
 // o metricas_dataset.go já registra: dois contadores para o mesmo fato
 // divergem no dia em que um caminho de erro esquece de somar, e em produção
 // alguém lê o errado.
+//
+// O CAMPO Familia É OBRIGATÓRIO em cada amostra, e a omissão dele era um defeito
+// silencioso: o WriteTo agrupa os cabeçalhos por Familia, então dez amostras com
+// Familia vazia compartilhavam UM grupo — o `# HELP` e o `# TYPE` saíam uma vez
+// só, com o nome VAZIO (`# HELP  Linhas gravadas...`), e as dez séries chegavam
+// ao operador sem tipo e sem ajuda. É a mesma armadilha que o godoc da Amostra
+// descreve para o histograma, com o sinal trocado: lá o perigo é emitir cabeçalho
+// demais, aqui é emitir de menos.
+//
+// Isso importa além da estética: metade do contrato de
+// nishidb_history_index_bytes viaja no TEXTO — é ali que se diz que a purga
+// devolve estes bytes desde que o índice passou a ser por segmento —, e uma
+// ajuda que nunca é emitida é prosa que ninguém lê.
 func amostrasDeHistorico(base *dataset) []metrics.Amostra {
 	if base.irma == nil || base.spec.Historico == nil {
 		return nil
@@ -304,26 +317,26 @@ func amostrasDeHistorico(base *dataset) []metrics.Amostra {
 		rodando = 1
 	}
 	return []metrics.Amostra{
-		{Nome: metrics.MetHistoryRows, Tipo: metrics.TipoContador, Valor: float64(snap.HistoricoLinhas),
+		{Familia: metrics.MetHistoryRows, Nome: metrics.MetHistoryRows, Tipo: metrics.TipoContador, Valor: float64(snap.HistoricoLinhas),
 			Ajuda: "Linhas gravadas na tabela histórica.", Labels: rotulo},
-		{Nome: metrics.MetHistoryDropped, Tipo: metrics.TipoContador, Valor: float64(snap.HistoricoDescartadas),
+		{Familia: metrics.MetHistoryDropped, Nome: metrics.MetHistoryDropped, Tipo: metrics.TipoContador, Valor: float64(snap.HistoricoDescartadas),
 			Ajuda: "Eventos que não viraram linha na tabela histórica.", Labels: rotulo},
-		{Nome: metrics.MetHistoryDegraded, Tipo: metrics.TipoMedidor, Valor: degradado,
+		{Familia: metrics.MetHistoryDegraded, Nome: metrics.MetHistoryDegraded, Tipo: metrics.TipoMedidor, Valor: degradado,
 			Ajuda: "1 quando a tabela histórica parou de receber (modo falho sticky).", Labels: rotulo},
-		{Nome: metrics.MetHistoryDataBytes, Tipo: metrics.TipoMedidor, Valor: float64(e.DataBytes),
+		{Familia: metrics.MetHistoryDataBytes, Nome: metrics.MetHistoryDataBytes, Tipo: metrics.TipoMedidor, Valor: float64(e.DataBytes),
 			Ajuda: "Bytes dos segmentos da tabela histórica — o que o maxBytes governa.", Labels: rotulo},
-		{Nome: metrics.MetHistoryIndexBytes, Tipo: metrics.TipoMedidor, Valor: float64(e.IndexBytes),
-			Ajuda: "Blocos alocados pelos índices da tabela histórica; a purga NÃO os devolve.", Labels: rotulo},
-		{Nome: metrics.MetHistoryOldestWrittenAt, Tipo: metrics.TipoMedidor, Valor: float64(e.InstanteMaisAntigo),
+		{Familia: metrics.MetHistoryIndexBytes, Nome: metrics.MetHistoryIndexBytes, Tipo: metrics.TipoMedidor, Valor: float64(e.IndexBytes),
+			Ajuda: "Blocos alocados pelos índices da tabela histórica; a purga também os devolve, porque o .sidx sai no mesmo passo que remove o .dat. Inclui nishidb_index_bytes, mais indexes/ e checkpoint/.", Labels: rotulo},
+		{Familia: metrics.MetHistoryOldestWrittenAt, Nome: metrics.MetHistoryOldestWrittenAt, Tipo: metrics.TipoMedidor, Valor: float64(e.InstanteMaisAntigo),
 			Ajuda: "Instante da linha mais antiga ainda visível, em millis. Mostra o maxBytes engolindo o prazo declarado.", Labels: rotulo},
-		{Nome: metrics.MetHistoryIndexWindow, Tipo: metrics.TipoMedidor, Valor: e.JanelaEfetiva.Seconds(),
+		{Familia: metrics.MetHistoryIndexWindow, Nome: metrics.MetHistoryIndexWindow, Tipo: metrics.TipoMedidor, Valor: e.JanelaEfetiva.Seconds(),
 			Ajuda: "Intervalo realmente coberto pelos segmentos indexados. Compare com history.index.window: menor significa que o teto do índice assumiu o comando.", Labels: rotulo},
-		{Nome: metrics.MetHistoryPurged, Tipo: metrics.TipoContador, Valor: float64(e.PurgadosPorTTL),
+		{Familia: metrics.MetHistoryPurged, Nome: metrics.MetHistoryPurged, Tipo: metrics.TipoContador, Valor: float64(e.PurgadosPorTTL),
 			Ajuda:  "Segmentos aposentados pela retenção da tabela histórica.",
 			Labels: append(append([]metrics.Label{}, rotulo...), metrics.Label{Nome: "reason", Valor: "ttl"})},
-		{Nome: metrics.MetHistoryPurged, Tipo: metrics.TipoContador, Valor: float64(e.PurgadosPorTamanho),
+		{Familia: metrics.MetHistoryPurged, Nome: metrics.MetHistoryPurged, Tipo: metrics.TipoContador, Valor: float64(e.PurgadosPorTamanho),
 			Labels: append(append([]metrics.Label{}, rotulo...), metrics.Label{Nome: "reason", Valor: "size"})},
-		{Nome: metrics.MetHistoryRetentionRunning, Tipo: metrics.TipoMedidor, Valor: rodando,
+		{Familia: metrics.MetHistoryRetentionRunning, Nome: metrics.MetHistoryRetentionRunning, Tipo: metrics.TipoMedidor, Valor: rodando,
 			Ajuda: "1 quando o motor de retenção está de pé. Ele para de vez na primeira falha.", Labels: rotulo},
 	}
 }
