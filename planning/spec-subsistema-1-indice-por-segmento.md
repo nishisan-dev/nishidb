@@ -852,15 +852,35 @@ lendo a MESMA estrutura; nascendo com zero na subida, porque todas podem alarmar
 
 | Série | Tipo |
 |---|---|
-| `nishidb_index_segmentos{estado="selado"\|"corrente"\|"ausente"\|"reconstruindo"}` | gauge |
+| `nishidb_index_segmentos{estado="selado"\|"corrente"\|"pendente"\|"fora"}` | gauge |
 | `nishidb_index_bytes` | gauge |
-| `nishidb_index_janela_efetiva_segundos` | gauge |
 | `nishidb_index_reconstrucoes_total` | counter |
 | `nishidb_index_reconstrucao_ativa` | gauge (§92: sobe antes da goroutine) |
 | `nishidb_index_crc_falhas_total` | counter |
 | `nishidb_index_segmentos_consultados_total{modo="indice"\|"enumeracao"}` | counter |
 
 Label nunca vem de entrada do cliente; `estado` e `modo` são conjuntos fechados.
+
+**Os quatro valores de `estado` separam duas ausências de significado oposto.**
+Uma versão anterior desta tabela dizia `ausente`, e isso conflaria o segmento
+fora da janela — que **deve** estar sem índice, e que num dataset grande é a
+maioria esmagadora — com o segmento dentro da janela ainda na fila, que é
+trabalho por fazer. Com um rótulo só, o gauge não responde *"o laço está
+avançando?"*, que é a única pergunta que a migração faz. `reconstruindo` saiu
+por ser redundante com `nishidb_index_reconstrucao_ativa`.
+
+**A janela efetiva NÃO entra nesta família.** Uma versão anterior listava aqui
+`nishidb_index_janela_efetiva_segundos`; quem publica o número é
+`nishidb_history_index_window_seconds`, e é ali que ele deve ficar. A razão está
+na própria §4.5: a série existe *espelhando a de instante mais antigo, que mostra
+o `maxBytes` engolindo o `expireAfterWrite`* — e essa série que ela espelha é uma
+`nishidb_history_*`, rotulada pelo dataset **base**, onde o operador declarou a
+política. As duas famílias respondem perguntas diferentes: `nishidb_history_*`
+diz o que a política do histórico de X está fazendo, vista de X;
+`nishidb_index_*` diz o que a mecânica de índice de cada Store está fazendo, e
+sai também na irmã. Pôr a janela na segunda deixaria uma série rotulada pelo
+base dentro de uma família rotulada pela irmã — dois números iguais em séries que
+parecem falar de coisas diferentes, que é a duplicação que a doutrina proíbe.
 
 ### 6.7 A guarda de cardinalidade da §6 da direção
 
