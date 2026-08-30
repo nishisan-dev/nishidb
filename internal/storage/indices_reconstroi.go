@@ -11,6 +11,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/index/segindex"
 	"github.com/nishisan-dev/nishidb/internal/index/valuekey"
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
+	"github.com/nishisan-dev/nishidb/internal/storage/mmap"
 	"github.com/nishisan-dev/nishidb/internal/storage/segment"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
@@ -169,14 +170,17 @@ func (s *Store) ConstroiIndiceDoSegmento(ctx context.Context, seg uint32, campos
 // fazer com o .widx.
 //
 // Um .sidx ausente ou ilegível não impede nada: não há o que preservar, e a
-// cobertura é o que o chamador pediu. Erro que não é de formato sobe — EIO é
-// falha de infra, e reescrever o índice por cima dela seria decidir sobre um
-// arquivo que ninguém conseguiu ler (§101).
+// cobertura é o que o chamador pediu. A lista de ilegíveis é a MESMA do
+// segmentoPendente, e tem de continuar sendo: um arquivo que a fila julga
+// refazível e a cobertura julga fatal produziria um segmento eternamente
+// pendente cuja reconstrução sempre falha. Erro fora dela sobe — EIO é falha de
+// infra, e reescrever o índice por cima dela seria decidir sobre um arquivo que
+// ninguém conseguiu ler (§101).
 func (s *Store) coberturaDaReconstrucao(caminho string, campos []types.FieldID) ([]types.FieldID, error) {
 	cobertura := slices.Clone(campos)
 	existentes, err := segindex.CamposSelados(caminho)
 	switch {
-	case errors.Is(err, os.ErrNotExist), errors.Is(err, segindex.ErrFormato):
+	case indiceIlegivel(err):
 		existentes = nil
 	case err != nil:
 		return nil, err
@@ -332,18 +336,44 @@ func (s *Store) SegmentosPendentesDeReconstrucao() ([]uint32, error) {
 //
 // Arquivo ILEGÍVEL conta como pendente, e não como erro: um .sidx que este
 // binário não decodifica é dado derivado que não serve, e a resposta para dado
-// derivado que não serve é derivá-lo de novo. Erro que NÃO é de formato sobe
-// intacto — EIO ao abrir o índice é falha de infra, e chamá-la de "reconstrua"
-// mandaria o laço varrer 512 MiB por um disco doente (§101, três baldes).
+// derivado que não serve é derivá-lo de novo (indiceIlegivel). Erro fora dessa
+// lista sobe intacto — EIO ao abrir o índice é falha de infra, e chamá-la de
+// "reconstrua" mandaria o laço varrer 512 MiB por um disco doente (§101, três
+// baldes).
 func (s *Store) segmentoPendente(dir string, seg uint32) (bool, error) {
 	campos, err := segindex.CamposSelados(segindex.CaminhoSelado(dir, seg))
 	switch {
-	case errors.Is(err, os.ErrNotExist), errors.Is(err, segindex.ErrFormato):
+	case indiceIlegivel(err):
 		return true, nil
 	case err != nil:
 		return false, err
 	}
 	return !slices.Equal(campos, s.camposIndexados), nil
+}
+
+// indiceIlegivel separa "este .sidx não serve, refaça" de "o disco falhou,
+// pare". É a fronteira do §101 aplicada ao índice, e ela é UMA função porque os
+// dois chamadores — o teste de pendência e a cobertura da reconstrução —
+// precisam concordar: um arquivo que a fila julgasse refazível e a cobertura
+// julgasse fatal daria um segmento eternamente pendente cuja reconstrução sempre
+// falha.
+//
+// São três estados, e nenhum deles é anomalia de infra:
+//
+//   - AUSENTE: o segmento nunca teve índice (fora da janela, ou gravado por um
+//     binário anterior);
+//   - FORMATO inválido: bytes que este binário não decodifica;
+//   - VAZIO: zero bytes, que o mmap recusa ANTES do parser — por isso ele não
+//     chega como ErrFormato e precisa do sentinela próprio. Um .sidx de zero
+//     bytes só existe como escrita truncada (o Escritor se recusa a emitir
+//     índice vazio), e o caminho conhecido para produzi-lo é a corrida no
+//     `<sidx>.tmp` de nome FIXO, que a §2.4 emendada manda a Tarefa 14 fechar
+//     com nome único por escritor. É o próprio godoc do mmap.ErrArquivoVazio que
+//     manda tratá-lo como "sem índice".
+func indiceIlegivel(err error) bool {
+	return errors.Is(err, os.ErrNotExist) ||
+		errors.Is(err, segindex.ErrFormato) ||
+		errors.Is(err, mmap.ErrArquivoVazio)
 }
 
 // reconstroiOIndiceDoCorrente realimenta os WIPs recém-abertos lendo o próprio

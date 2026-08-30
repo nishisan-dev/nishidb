@@ -295,3 +295,60 @@ func TestConstruirComCampoNaoIndexadoEhRecusado(t *testing.T) {
 		t.Errorf("a recusa reescreveu o .sidx: %d bytes viraram %d", len(antes), len(depois))
 	}
 }
+
+// TestSidxDeZeroBytesEhPendenteEmVezDeDerrubarAFila fecha a terceira porta da
+// classificação de "índice ilegível". Um arquivo de zero bytes não chega ao
+// parser: o mmap o recusa antes, com mmap.ErrArquivoVazio, e sem o sentinela na
+// mesma lista ele cairia no ramo genérico de erro e derrubaria a passada INTEIRA
+// da fila por uma falha de infra que não é falha de infra.
+//
+// Não é hipótese, e o gatilho é conhecido: o temporário da escrita ainda tem nome
+// FIXO (segindex/escritor.go), então dois escritores sobre o mesmo `<sidx>.tmp` —
+// o O_TRUNC de um contra o rename do outro — publicam um arquivo final vazio. É a
+// corrida que a §2.4 emendada manda a Tarefa 14 fechar com nome único por
+// escritor; quem a criar não pode encontrar uma fila que morre em vez de um
+// arquivo que se refaz.
+//
+// A doutrina é a do godoc logo acima do segmentoPendente, e vale aqui sem
+// emenda: dado derivado que não serve, derive de novo.
+func TestSidxDeZeroBytesEhPendenteEmVezDeDerrubarAFila(t *testing.T) {
+	dir := t.TempDir()
+	s := abreStoreIndexadoEm(t, dir, []string{"node"}, 64<<10)
+	alvo := s.curSegID.Load()
+	poeLinhasAteRotacionar(t, s, alvo)
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	caminho := segindex.CaminhoSelado(filepath.Join(dir, "data"), alvo)
+	if _, err := os.Stat(caminho); err != nil {
+		t.Fatalf("pré-condição: o segmento %d deveria estar selado: %v", alvo, err)
+	}
+	// Zero bytes, que é o que a corrida do temporário publica.
+	if err := os.WriteFile(caminho, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s2 := abreStoreIndexadoEm(t, dir, []string{"node"}, 64<<10)
+	campo := campoDoDicionario(t, s2, "node")
+	pendentes, err := s2.SegmentosPendentesDeReconstrucao()
+	if err != nil {
+		t.Fatalf("SegmentosPendentesDeReconstrucao = %v: um .sidx vazio derrubou a fila inteira", err)
+	}
+	if !slices.Contains(pendentes, alvo) {
+		t.Fatalf("SegmentosPendentesDeReconstrucao = %v, quero o segmento %d: um .sidx vazio não entrou na fila",
+			pendentes, alvo)
+	}
+
+	// E a reconstrução tem de atravessar o arquivo vazio, não tropeçar nele: a
+	// cobertura pergunta ao .sidx atual quais campos preservar, e é a MESMA
+	// classificação que responde ali.
+	rodaReconstrucaoAteEsvaziar(t, s2)
+
+	if campos := camposDoSelado(t, dir, alvo); !slices.Equal(campos, []types.FieldID{campo}) {
+		t.Errorf("o .sidx do segmento %d ficou com %v, quero [%d]: o arquivo vazio não foi refeito",
+			alvo, campos, campo)
+	}
+	if got := lookupRevalidado(t, s2, campo, strVal("n1")); len(got) == 0 {
+		t.Error("o índice refeito sobre o arquivo vazio não responde")
+	}
+}
