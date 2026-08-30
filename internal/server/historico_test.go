@@ -1,15 +1,22 @@
 package server_test
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/logging"
+	"github.com/nishisan-dev/nishidb/internal/materializer"
 	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/server"
+	"github.com/nishisan-dev/nishidb/internal/storage"
 )
 
 const specComHistorico = `version: 1
@@ -358,4 +365,222 @@ func esperaLinhaDoLog(t *testing.T, registro *registroDoServidor, evento string)
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
+}
+
+// specComJanelaApertada declara uma janela de indexação por BYTES tão pequena
+// que ela admite UM segmento selado — o mais novo — e mais nenhum.
+//
+// Por bytes, e não por tempo, porque o corte tem de valer sem depender do
+// relógio: com `maxBytes` abaixo de um bloco, o primeiro candidato entra (a
+// janela nunca fica vazia, espelhando o "só sobrou o corrente" da retenção) e o
+// segundo já estoura, tanto ANTES de existir `.sidx` para medir quanto depois.
+// Uma janela por tempo exigiria envelhecer os records, e o `_writtenAt` sai do
+// relógio da ingestão.
+const specComJanelaApertada = `version: 1
+name: eventos
+materialization:
+  key:
+    field: id
+history:
+  expireAfterWrite: 7d
+  maxBytes: 4GiB
+  index:
+    maxBytes: 4KiB
+  fields:
+    id:
+      index: true
+schema:
+  include: ["*"]
+  fields:
+    id:
+      type: string
+    severity:
+      type: int64
+`
+
+// semeiaHistorico enche a tabela IRMÃ pelo pipeline real — Materializer.Apply
+// com o histórico ligado —, do mesmo jeito que o `semeia` do dataset base, e
+// pela mesma razão: o que este teste mede depende de segmentos selados de
+// verdade, com índice escrito pelo writer, e um arquivo montado à mão não
+// exercitaria nem a selagem nem a rotação.
+//
+// A montagem repete a ordem do abreHistorico (dicionário do base para a irmã,
+// compilação contra esse mesmo dicionário, e só então o LigaHistorico) porque é
+// ela que faz os FieldIDs das duas tabelas coincidirem — divergir aqui faria o
+// payload da irmã decodificar colunas trocadas, e o teste mediria outra coisa.
+func semeiaHistorico(t *testing.T, a *ambiente, nome string, n int) {
+	t.Helper()
+	cfg := a.carrega()
+	spec, err := schema.Load(cfg.SpecDoDataset(nome), cfg.DefaultsDeQuery())
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := storage.Open(storage.Options{
+		Dir:                    cfg.CaminhoDoDataset(nome),
+		Dataset:                nome,
+		SegmentSize:            cfg.SegmentSize(),
+		CamposIndexadosPorNome: schema.CamposComIndice(spec),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := base.Close(); err != nil {
+			t.Errorf("Close do base: %v", err)
+		}
+	}()
+	specIrma := spec.DerivaHistorico()
+	hist, err := storage.Open(storage.Options{
+		Dir:                    cfg.CaminhoDoDataset(specIrma.Name),
+		Dataset:                specIrma.Name,
+		SegmentSize:            cfg.SegmentSize(),
+		Modo:                   storage.ModoHistorico,
+		DictCompartilhado:      base.FieldDict(),
+		CamposIndexadosPorNome: schema.CamposComIndice(specIrma),
+		CampoDeEscrita:         schema.CampoInstanteDeEscrita,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := hist.Close(); err != nil {
+			t.Errorf("Close da irmã: %v", err)
+		}
+	}()
+	compilado, err := spec.Compile(base.FieldDict())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := specIrma.Compile(base.FieldDict()); err != nil {
+		t.Fatal(err)
+	}
+	mat, err := materializer.New(compilado, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mat.LigaHistorico(hist, nil)
+	for i := range n {
+		ev := fmt.Sprintf(`{"id":"S-%06d","severity":%d}`, i, i%4)
+		if r := mat.Apply([]byte(ev)); r.Err != nil {
+			t.Fatalf("evento %d: %v", i, r.Err)
+		}
+	}
+	if err := hist.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if err := base.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// seladosDoDataset devolve os segmentos selados de um dataset em ordem
+// crescente — todos os `.dat` menos o último, que é o corrente (o writer sempre
+// apenda no de maior id, e este teste não escreve nada depois de o servidor
+// subir).
+func seladosDoDataset(t *testing.T, dir string) []string {
+	t.Helper()
+	dats, err := filepath.Glob(filepath.Join(dir, "data", "segment-*.dat"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Strings(dats)
+	if len(dats) < 2 {
+		t.Fatalf("a montagem produziu %d segmento(s) em %s: sem selado não há fila", len(dats), dir)
+	}
+	return dats[:len(dats)-1]
+}
+
+// apagaOsIndicesSelados põe o dataset no estado do gatilho 1 da §2.4 — dado
+// gravado por um binário que não escrevia índice —, que é o estado em que a fila
+// de reconstrução nasce cheia.
+func apagaOsIndicesSelados(t *testing.T, dir string) {
+	t.Helper()
+	sidx, err := filepath.Glob(filepath.Join(dir, "data", "segment-*.sidx"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sidx) == 0 {
+		t.Fatal("a montagem não produziu índice selado nenhum: apagar nada deixaria a fila vazia por outro motivo")
+	}
+	for _, s := range sidx {
+		if err := os.Remove(s); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestOLacoDeReconstrucaoObedeceAMESMAJanelaDaExpulsao é a rede da restrição 4, e
+// ela guarda a DIVERGÊNCIA, não um valor.
+//
+// A janela entra na assinatura do IniciaReconstrucao para que quem monta o laço
+// não possa esquecê-la, mas o compilador não sabe QUAL é a certa: ela tem de ser
+// a mesma que a expulsão usa (`AplicaJanela`, dentro da passada de retenção). Se
+// as duas discordarem, a que responde "sim" reconstrói o que a outra acabou de
+// apagar: a expulsão tira o `.sidx` do segmento fora da janela, a fila — operando
+// com uma janela mais larga — o relista por AUSÊNCIA do arquivo, o laço o
+// reconstrói, e a passada seguinte o expulsa de novo. O ponto fixo não segura
+// nada, e não é para segurar: ele se invalida exatamente quando o arquivo some,
+// que é o gatilho *janela alargada*. É um moinho perpétuo, a até 512 MiB de
+// leitura por segmento por volta.
+//
+// O ORÁCULO É O CORTE, e não a chamada: a janela declarada admite UM segmento
+// selado, então o laço tem de reconstruir esse e mais nenhum. Passar qualquer
+// janela mais larga — a infinita inclusive, que é a mutação óbvia — reconstrói os
+// outros também, e os outros são justamente os que a expulsão apagaria.
+//
+// A espera é por um marcador POSITIVO, não por um prazo: a fila é percorrida em
+// ordem crescente de segmento, e o admitido é o mais NOVO, logo o último. Quando
+// o `.sidx` dele aparece, quem seria reconstruído a mais já teria sido.
+func TestOLacoDeReconstrucaoObedeceAMESMAJanelaDaExpulsao(t *testing.T) {
+	a := novoAmbienteComStorage(t, blocoPadrao, "  segmentSize: 8KiB\n")
+	a.escreveDataset("eventos", specComJanelaApertada)
+	semeiaHistorico(t, a, "eventos", 600)
+
+	cfg := a.carrega()
+	dirIrma := cfg.CaminhoDoDataset("eventos_history")
+	apagaOsIndicesSelados(t, dirIrma)
+	selados := seladosDoDataset(t, dirIrma)
+	if len(selados) < 3 {
+		t.Fatalf("a montagem produziu %d selado(s): com menos de três não há como distinguir "+
+			"\"o laço respeitou a janela\" de \"o laço reconstruiu tudo\"", len(selados))
+	}
+	admitido := selados[len(selados)-1] // o mais novo é o único que a janela admite
+
+	srv, err := server.Novo(cfg, server.Opcoes{})
+	if err != nil {
+		t.Fatalf("subida: %v", err)
+	}
+	roda(t, srv)
+
+	esperaAte(t, func() bool { return existe(indiceDe(admitido)) },
+		"o laço não reconstruiu nem o segmento que a janela admite: sem isso a asserção abaixo passaria por vacuidade")
+	for _, fora := range selados[:len(selados)-1] {
+		if existe(indiceDe(fora)) {
+			t.Fatalf("o laço reconstruiu o índice de %s, que está FORA da janela declarada: a expulsão o apaga a cada "+
+				"passada de retenção e a fila o relista por ausência — reconstrói, expulsa, reconstrói, para sempre, "+
+				"a até 512 MiB de leitura por volta", filepath.Base(fora))
+		}
+	}
+}
+
+func indiceDe(dat string) string { return strings.TrimSuffix(dat, ".dat") + ".sidx" }
+
+func existe(caminho string) bool {
+	_, err := os.Stat(caminho)
+	return err == nil
+}
+
+// esperaAte espera a condição virar verdadeira, e falha nomeando o que não
+// aconteceu. O prazo é folgado de propósito: ele existe para o teste não pendurar
+// a suíte, não para medir tempo de nada.
+func esperaAte(t *testing.T, cond func() bool, oQueFalhou string) {
+	t.Helper()
+	prazo := time.Now().Add(30 * time.Second)
+	for time.Now().Before(prazo) {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal(oQueFalhou)
 }

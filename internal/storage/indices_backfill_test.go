@@ -27,8 +27,15 @@ func abreStoreIndexadoEm(t *testing.T, dir string, campos []string, segSize int6
 	})
 }
 
-// rodaReconstrucaoAteEsvaziar drena a fila do jeito que o laço de fundo (§2.4)
-// vai drenar: pede os pendentes, reconstrói cada um e pergunta de novo.
+// rodaReconstrucaoAteEsvaziar drena a fila NA MÃO, e é assim de propósito: o
+// laço de fundo (§2.4) existe e é testado em indices_reconstroi_test.go, mas os
+// testes deste arquivo afirmam sobre a FILA e a RECONSTRUÇÃO — quem agenda o quê,
+// e o que o arquivo publicado cobre. Acoplá-los à goroutine trocaria um oráculo
+// direto por uma espera, e a falha viraria "o teste travou".
+//
+// Ela é mais simples que o laço porque não precisa convergir: pede os pendentes,
+// reconstrói cada um e pergunta de novo. O laço de verdade guarda o ponto fixo de
+// cada segmento, que é o que o teto abaixo substitui aqui.
 //
 // O teto de passadas não é decoração. A fila é um SUPERCONJUNTO do trabalho real
 // — um segmento cujos records não trazem um campo declarado continua pendente
@@ -70,10 +77,11 @@ func camposDoSelado(t *testing.T, dir string, seg uint32) []types.FieldID {
 // backfill, e a reconstrução da §2.4 É o backfill — mesmo código, gatilho
 // diferente. Manter a recusa seria ter a capacidade e negar o uso dela.
 //
-// Quem drena a fila aqui é o TESTE (rodaReconstrucaoAteEsvaziar), e não o
-// produto: o laço de fundo é da §2.4 e ainda não existe, que é o que mantém o
-// débito 22 aberto. O que este teste prova é que a fila agenda o segmento certo e
-// que a reconstrução dela serve a consulta.
+// Quem drena a fila aqui é o TESTE (rodaReconstrucaoAteEsvaziar), e não o laço de
+// fundo — que existe desde a Tarefa 14 e fechou o débito 22. A separação é de
+// oráculo: o que este teste prova é que a fila agenda o segmento certo e que a
+// reconstrução dela serve a CONSULTA; que alguém a drene sozinho é assunto do
+// TestOLacoDeReconstrucaoDrenaAFilaSozinho.
 //
 // O oráculo é o conjunto CRU de candidatos para um valor que nunca existiu:
 // segmento que responde por índice devolve zero, segmento que enumera devolve as
@@ -302,12 +310,13 @@ func TestConstruirComCampoNaoIndexadoEhRecusado(t *testing.T) {
 // mesma lista ele cairia no ramo genérico de erro e derrubaria a passada INTEIRA
 // da fila por uma falha de infra que não é falha de infra.
 //
-// Não é hipótese, e o gatilho é conhecido: o temporário da escrita ainda tem nome
-// FIXO (segindex/escritor.go), então dois escritores sobre o mesmo `<sidx>.tmp` —
-// o O_TRUNC de um contra o rename do outro — publicam um arquivo final vazio. É a
-// corrida que a §2.4 emendada manda a Tarefa 14 fechar com nome único por
-// escritor; quem a criar não pode encontrar uma fila que morre em vez de um
-// arquivo que se refaz.
+// Não é hipótese, e o gatilho era conhecido: com o temporário de nome FIXO, dois
+// escritores sobre o mesmo `<sidx>.tmp` — o O_TRUNC de um contra o rename do
+// outro — publicavam um arquivo final vazio. A Tarefa 14 fechou aquela corrida
+// com nome único por escritor (segindex.caminhoTemporario), e ESTA classificação
+// continua valendo por dois motivos: o arquivo de zero bytes que um binário
+// anterior deixou em disco continua lá, e uma fila que morre em vez de refazer o
+// arquivo é o modo de falha errado para qualquer origem que ele venha a ter.
 //
 // A doutrina é a do godoc logo acima do segmentoPendente, e vale aqui sem
 // emenda: dado derivado que não serve, derive de novo.

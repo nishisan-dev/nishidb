@@ -123,8 +123,8 @@ func (s *Store) fontesDoCampo(campo types.FieldID, h uint64) ([]segindex.Fonte, 
 // por arquivo a cada passada) — então um .sidx corrompido continua parecendo
 // completo para ela. Curá-lo exige que quem detecta a divergência AQUI apague o
 // arquivo, para o segmento voltar a ser pendente por AUSÊNCIA; é o gatilho 3 da
-// §2.4, e ele fica registrado no débito 22 como o resíduo que a Tarefa 14 não
-// fechou.
+// §2.4, e ele tem número próprio — débito 103 —, com a decisão que falta escrita
+// lá: se uma CONSULTA pode apagar arquivo do dataset.
 func (s *Store) fonteIndexada(seg, corrente uint32, campo types.FieldID, h uint64) (segindex.Fonte, bool) {
 	if seg == corrente {
 		return s.fonteDoWIP(campo, h)
