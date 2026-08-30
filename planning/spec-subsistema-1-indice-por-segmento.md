@@ -477,7 +477,7 @@ reconstrução da §2.4, não um segundo caminho.
 O §6.1 ("página de índice nunca referencia record não durável") não é afrouxado
 por isto: ele vale para *locations*, e postings podem ser superconjunto (§44).
 
-### 2.6 O débito 22 fecha aqui
+### 2.6 O débito 22 deixa de ser impossível aqui — e fecha na §2.4
 
 A guarda de hoje recusa declarar índice sobre um dataset com `RowCount > 0`
 porque não existe backfill, com `AllowHashDrop`/`AllowBitmapDrop` como opt-out e
