@@ -438,12 +438,27 @@ na listagem. Pacing pelo mesmo orçamento de ciclo de trabalho da
 compaction — sem isso ela vira o terceiro laço de fundo disputando o writer, que
 é o defeito que o ciclo anterior mediu e nomeou.
 
-Gatilhos, todos o mesmo mecanismo:
+Gatilhos:
 
 1. formato novo sobre dataset antigo (migração);
 2. janela alargada;
-3. `crc32c` divergente (§1.5);
+3. `crc32c` divergente (§1.5) — **este NÃO é coberto**, ver abaixo;
 4. **campo acrescentado ao schema** — ver §2.6.
+
+Os gatilhos 1, 2 e 4 são o mesmo mecanismo: a fila decide por "as seções do
+`.sidx` são o conjunto de campos declarados?", e os três produzem seções
+faltando.
+
+**O gatilho 3 não entra por aí, e a diferença importa.** Um arquivo reprovado no
+`crc32c` tem a tabela de seções perfeitamente legível — a corrupção pode estar
+nas postings —, então ele **parece completo** para a fila. Detectá-lo exigiria
+conferir o checksum de cada `.sidx` a cada passada, que é a varredura que a §1.5
+existe para evitar.
+
+A consequência é limitada e não é falso negativo: o `Lookup` já devolve
+`ok=false` sobre arquivo com crc divergente, e o segmento **responde por
+enumeração** — correto, só lento. O que não acontece é a cura: ele enumera para
+sempre. Registrado como **débito 103**, com dono a definir.
 
 ### 2.5 O `.widx` nunca é confiado através de um restart
 
