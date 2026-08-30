@@ -62,8 +62,9 @@ func New(store Store, m *Metrics) *Planner {
 //
 // Os rótulos R1/R2/R5 que marcam os blocos abaixo são HISTÓRICOS, e não são a
 // numeração do §63: eles vêm da tabela de regras do
-// planning/m1-design-materializer-query.md §3.5, cujos rótulos eram R1 primary,
-// R2 hash, R3 interseção de bitmaps, R4 bitmap scan e R5 união — o full scan era
+// planning/m1-design-materializer-query.md §3.5, cuja ordem era 1 primary,
+// 2 hash, 3 interseção de bitmaps, 4 bitmap scan e 5 união — a coluna de lá
+// chama-se "Ordem" e não traz o prefixo R; o full scan era
 // a linha "Caso contrário", sem rótulo. A R2 daqui é a fusão da R2 com a R3/R4
 // de lá, e a R5 guardou o nome.
 //

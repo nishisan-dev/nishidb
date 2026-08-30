@@ -258,10 +258,13 @@ schema:
       type: int64
 `
 
-// §23: o replace descarta o estado anterior inteiro — e os postings do valor
-// antigo somem do índice bitmap (o Put diffa prev↔novo; aqui provamos que o
-// Apply entregou o prev certo para isso acontecer).
-func TestApplyReplaceDescartaEstadoELimpaPostings(t *testing.T) {
+// §23: o replace descarta o estado anterior inteiro do PAYLOAD. A posting do
+// valor antigo NÃO é limpa — não há fase de Clear (spec do subsistema 1, §5.2):
+// ela fica no índice do segmento em que nasceu como candidata a mais, que a
+// revalidação do §44 descarta. O que este teste prova é o par: estado trocado
+// por inteiro, e prev entregue ao Put mesmo assim (é dele que o storage
+// resolve o rowId sem refazer o Find).
+func TestApplyReplaceDescartaOEstadoEAPostingAntigaSobrevive(t *testing.T) {
 	h := newHarness(t, replaceYAML, "Acct-Status-Type")
 	created := h.apply(`{"id":"CMP-001","_SEQ":100,"Acct-Status-Type":"Start","Acct-Input-Octets":10}`)
 
