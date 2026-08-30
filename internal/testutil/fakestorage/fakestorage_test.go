@@ -27,8 +27,8 @@ type consumerStore interface {
 	GetByRowID(id types.RowID, buf []byte) (types.Record, []byte, bool, error)
 	Put(key []byte, seq int64, flags uint8, payload []byte, prev *types.Record) (types.RowID, bool, error)
 	ScanLive() types.RowIDIterator
-	LookupBitmap(field types.FieldID, v types.Value) (types.RowIDIterator, error)
-	HasBitmap(field types.FieldID) bool
+	Lookup(field types.FieldID, v types.Value) (types.RowIDIterator, error)
+	Indexado(field types.FieldID) bool
 	Sequence(id types.RowID) (int64, types.Presenca)
 	// Estado é o que a ingestão usa, e entra aqui pelo mesmo motivo dos
 	// outros: é assinatura que dublê e real precisam compartilhar, e o
@@ -82,7 +82,7 @@ func intVal(n int64) types.Value {
 }
 
 func TestPutCreateAndGetByKey(t *testing.T) {
-	s := New(Indexes{Bitmap: []types.FieldID{2}, Hash: []types.FieldID{3}})
+	s := New(Indexes{Campos: []types.FieldID{2, 3}})
 	p := payload(t, fv(1, strVal("ABC")), fv(2, strVal("Start")), fv(3, intVal(7)))
 	rowID, created, err := s.Put([]byte("ABC"), 100, 0, p, nil)
 	if err != nil || !created {
@@ -161,7 +161,7 @@ func TestBufferOwnershipBothDirections(t *testing.T) {
 }
 
 func TestPutUpdateDiffsIndexPostings(t *testing.T) {
-	s := New(Indexes{Bitmap: []types.FieldID{2}})
+	s := New(Indexes{Campos: []types.FieldID{2}})
 	p1 := payload(t, fv(1, strVal("ABC")), fv(2, strVal("Start")))
 	rowID, _, err := s.Put([]byte("ABC"), 1, 0, p1, nil)
 	if err != nil {
@@ -190,7 +190,7 @@ func TestPutUpdateDiffsIndexPostings(t *testing.T) {
 // o lookup devolveria a row errada — que é exatamente o tipo de divergência
 // que o dublê existe para expor.
 func TestPostingKeySeparaTiposComMesmosBytes(t *testing.T) {
-	s := New(Indexes{Bitmap: []types.FieldID{2, 3}})
+	s := New(Indexes{Campos: []types.FieldID{2, 3}})
 	mesmoConteudo := []byte("0100")
 	comoString := types.Value{Type: types.TypeString, Bytes: mesmoConteudo}
 	comoBytes := types.Value{Type: types.TypeBytes, Bytes: mesmoConteudo}
@@ -229,7 +229,7 @@ func TestPostingKeySeparaTiposComMesmosBytes(t *testing.T) {
 // Campo indexado cujo valor NÃO mudou mantém o posting: o diff compara os
 // valores e só mexe no índice quando há troca real.
 func TestPutValorIndexadoInalteradoMantemPosting(t *testing.T) {
-	s := New(Indexes{Bitmap: []types.FieldID{2}})
+	s := New(Indexes{Campos: []types.FieldID{2}})
 	p1 := payload(t, fv(1, strVal("ABC")), fv(2, strVal("Start")))
 	rowID, _, err := s.Put([]byte("ABC"), 1, 0, p1, nil)
 	if err != nil {
@@ -254,7 +254,7 @@ func TestPutValorIndexadoInalteradoMantemPosting(t *testing.T) {
 // e é isso que o teste afirma: a posting sobrevive como candidato E o payload
 // corrente já não a justifica.
 func TestPutRemovedFieldClearsPosting(t *testing.T) {
-	s := New(Indexes{Bitmap: []types.FieldID{2}})
+	s := New(Indexes{Campos: []types.FieldID{2}})
 	p1 := payload(t, fv(1, strVal("ABC")), fv(2, strVal("Start")))
 	rowID, _, _ := s.Put([]byte("ABC"), 1, 0, p1, nil)
 	p2 := payload(t, fv(1, strVal("ABC")))
@@ -297,7 +297,7 @@ func TestPutWithNilPrevResolvesInternally(t *testing.T) {
 	// prev==nil com key existente: o Put resolve sozinho (fallback do
 	// contrato) e a indexação continua correta — o valor novo entra, e o antigo
 	// permanece como candidato (§5.2, sem fase de CLEAR).
-	s := New(Indexes{Bitmap: []types.FieldID{2}})
+	s := New(Indexes{Campos: []types.FieldID{2}})
 	p1 := payload(t, fv(1, strVal("ABC")), fv(2, strVal("Start")))
 	rowID, _, _ := s.Put([]byte("ABC"), 1, 0, p1, nil)
 	p2 := payload(t, fv(1, strVal("ABC")), fv(2, strVal("Stop")))
@@ -361,7 +361,7 @@ func TestPutRejectsInvalidArguments(t *testing.T) {
 // append deixa o dataset inabrível para sempre. Campo sem índice aceita o
 // mesmo valor: o teto é do índice, não do payload.
 func TestPutRejectsOversizedIndexedValue(t *testing.T) {
-	s := New(Indexes{Bitmap: []types.FieldID{2}})
+	s := New(Indexes{Campos: []types.FieldID{2}})
 	big := make([]byte, types.MaxIndexedValueBytes+1)
 	for i := range big {
 		big[i] = 'x'
@@ -509,36 +509,42 @@ func TestScanLiveAscending(t *testing.T) {
 	}
 }
 
-func TestLookupBitmapAndHashAscending(t *testing.T) {
-	s := New(Indexes{Bitmap: []types.FieldID{2}, Hash: []types.FieldID{3}})
+// O lookup devolve rowIds ASCENDENTES, sobre campo textual e sobre campo
+// inteiro, e valor sem posting devolve iterador vazio em vez de erro.
+//
+// O nome trazia os dois motores, de quando os campos 2 e 3 eram de motores
+// diferentes e cada metade era consultada pelo lookup do seu. Os campos e as
+// asserções são os mesmos; o que sumiu foi a distinção entre as duas chamadas.
+func TestLookupAscendente(t *testing.T) {
+	s := New(Indexes{Campos: []types.FieldID{2, 3}})
 	for i, k := range []string{"K1", "K2", "K3"} {
 		p := payload(t, fv(1, strVal(k)), fv(2, strVal("Start")), fv(3, intVal(int64(i%2))))
 		if _, _, err := s.Put([]byte(k), 1, 0, p, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
-	it, err := s.LookupBitmap(2, strVal("Start"))
+	it, err := s.Lookup(2, strVal("Start"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := drain(t, it)
 	if len(got) != 3 {
-		t.Fatalf("bitmap Start = %v", got)
+		t.Fatalf("campo 2 = Start = %v", got)
 	}
 	for i := 1; i < len(got); i++ {
 		if got[i] <= got[i-1] {
 			t.Fatalf("rowIds fora de ordem: %v", got)
 		}
 	}
-	it, err = s.LookupHash(3, intVal(0))
+	it, err = s.Lookup(3, intVal(0))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := drain(t, it); len(got) != 2 {
-		t.Errorf("hash 0 = %v", got)
+		t.Errorf("campo 3 = 0 = %v", got)
 	}
 	// Valor sem postings → iterador vazio, não erro.
-	it, err = s.LookupBitmap(2, strVal("Inexistente"))
+	it, err = s.Lookup(2, strVal("Inexistente"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -550,25 +556,28 @@ func TestLookupBitmapAndHashAscending(t *testing.T) {
 // Campo sem o índice consultado é erro de argumento, nunca iterador vazio: um
 // planner que escolha caminho indexado para campo não indexado precisa
 // quebrar no teste, não passar por acaso com resultado vazio.
+//
+// As duas asserções cruzadas que este teste tinha — consultar pelo bitmap um
+// campo declarado só no hash, e o contrário — saíram por FALTA DE SUJEITO:
+// declarar um campo num motor e não no outro deixou de ser construível. O que
+// elas guardavam (campo fora do conjunto indexado é ErrInvalidArgument)
+// continua guardado pela primeira asserção, sobre o campo 1.
 func TestLookupWithoutIndexIsError(t *testing.T) {
-	s := New(Indexes{Bitmap: []types.FieldID{2}, Hash: []types.FieldID{3}})
+	s := New(Indexes{Campos: []types.FieldID{2}})
 	if _, _, err := s.Put([]byte("K"), 1, 0, payload(t, fv(1, strVal("K")), fv(2, strVal("Start"))), nil); err != nil {
 		t.Fatal(err)
 	}
-	_, err := s.LookupBitmap(1, strVal("K"))
-	assertInvalidArgument(t, err, "não possui índice bitmap")
-	// Índice hash não atende consulta bitmap e vice-versa.
-	_, err = s.LookupBitmap(3, intVal(0))
-	assertInvalidArgument(t, err, "não possui índice bitmap")
-	_, err = s.LookupHash(2, strVal("Start"))
-	assertInvalidArgument(t, err, "não possui índice hash")
+	_, err := s.Lookup(1, strVal("K"))
+	assertInvalidArgument(t, err, "não possui índice")
+	_, err = s.Lookup(3, intVal(0))
+	assertInvalidArgument(t, err, "não possui índice")
 
 	// O capability check concorda com o que o lookup aceita.
-	if s.HasBitmap(1) || s.HasBitmap(3) || !s.HasBitmap(2) {
-		t.Error("HasBitmap diverge dos índices declarados")
+	if s.Indexado(1) || s.Indexado(3) || !s.Indexado(2) {
+		t.Error("Indexado diverge dos índices declarados")
 	}
-	if got := s.BitmapFields(); len(got) != 1 || got[0] != 2 {
-		t.Errorf("BitmapFields = %v, want [2]", got)
+	if got := s.CamposIndexados(); len(got) != 1 || got[0] != 2 {
+		t.Errorf("CamposIndexados = %v, want [2]", got)
 	}
 }
 
@@ -577,7 +586,7 @@ func TestLookupWithoutIndexIsError(t *testing.T) {
 // GetByRowID. Um fake que pré-filtrasse esconderia o bug de rows mortas
 // vazando no resultado.
 func TestLookupReturnsSupersetWithTombstones(t *testing.T) {
-	s := New(Indexes{Bitmap: []types.FieldID{2}})
+	s := New(Indexes{Campos: []types.FieldID{2}})
 	p := payload(t, fv(1, strVal("K1")), fv(2, strVal("Start")))
 	rowID, _, err := s.Put([]byte("K1"), 1, 0, p, nil)
 	if err != nil {
@@ -585,7 +594,7 @@ func TestLookupReturnsSupersetWithTombstones(t *testing.T) {
 	}
 	s.SetTombstone(rowID)
 
-	it, err := s.LookupBitmap(2, strVal("Start"))
+	it, err := s.Lookup(2, strVal("Start"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -634,7 +643,7 @@ func drain(t *testing.T, it types.RowIDIterator) []types.RowID {
 
 func assertPosting(t *testing.T, s *Store, field types.FieldID, v types.Value, want []types.RowID) {
 	t.Helper()
-	it, err := s.LookupBitmap(field, v)
+	it, err := s.Lookup(field, v)
 	if err != nil {
 		t.Fatal(err)
 	}

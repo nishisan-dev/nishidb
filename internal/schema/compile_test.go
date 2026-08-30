@@ -102,7 +102,7 @@ func TestCompileFieldLookupByNameAndAlias(t *testing.T) {
 	if !ok1 || !ok2 || byName != byAlias {
 		t.Fatalf("nome e alias devem resolver para o mesmo campo: %p vs %p", byName, byAlias)
 	}
-	if byName.Index != IndexBitmap || byName.Type != types.TypeString {
+	if !byName.Indexado || byName.Type != types.TypeString {
 		t.Errorf("campo = %+v", byName)
 	}
 	if _, ok := c.FieldByName([]byte("inexistente")); ok {
@@ -471,11 +471,9 @@ func yamlComIndiceDeclarado(grafia string) string {
 }
 
 // TestIndexTrueEhAceito prova que `index: true` marca o campo como indexado.
-// Com um motor só (D5), ela mapeia para o MESMO IndexKind que `index: bitmap`
-// mapeava antes — a rota R3/R4, que intersecta em vez de parar no primeiro
-// termo (R2, o caminho de IndexHash, fica morto: nenhuma config válida o
-// alcança mais). A Tarefa 11 apaga esse enum; aqui ele sobrevive porque o
-// planner ainda o consulta.
+// Com um motor só (D5) não há mais um enum de três valores a conferir: o campo
+// compilado carrega um bool, e a regra do planner que o lê é uma — a que
+// intersecta todos os termos elegíveis.
 func TestIndexTrueEhAceito(t *testing.T) {
 	s := parseOK(t, yamlComIndiceDeclarado("true"))
 	c, err := s.Compile(newFakeDict())
@@ -486,8 +484,8 @@ func TestIndexTrueEhAceito(t *testing.T) {
 	if !ok {
 		t.Fatal("campo node não compilou")
 	}
-	if f.Index != IndexBitmap {
-		t.Errorf("index: true não marcou o campo como indexado (Index = %v, quer bitmap)", f.Index)
+	if !f.Indexado {
+		t.Error("index: true não marcou o campo como indexado")
 	}
 }
 

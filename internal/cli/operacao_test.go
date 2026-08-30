@@ -833,11 +833,13 @@ func storageDoDataset(t *testing.T, a *ambienteRemoto) protocolo.StorageStats {
 // 0, são indistinguíveis entre si, e trocar a fonte de um pelo campo do
 // vizinho não muda uma vírgula da saída. Por isso este teste roda consulta
 // antes de perguntar o status, e roda cada família de plano um número
-// diferente de vezes — 2 full scans, 3 point lookups, 4 bitmap scans, 6
-// uniões, 5 linhas emitidas e 1 truncamento.
+// diferente de vezes — 2 full scans, 3 point lookups, 4 index scans, 6
+// uniões, 5 linhas emitidas e 1 truncamento. O rótulo publicado continua sendo
+// "bitmap scans": é nome de WIRE, e ele não acompanhou a unificação dos motores
+// (ver o godoc de protocolo.MotorStats).
 //
-// Os planos são os do §63: chave no WHERE dá point lookup, campo bitmap dá
-// bitmap scan, OR de dois termos indexados dá união, e campo sem índice cai em
+// Os planos são os do §63: chave no WHERE dá point lookup, campo indexado dá
+// index scan, OR de dois termos indexados dá união, e campo sem índice cai em
 // full scan. Todos batem em valor que não existe, para que a única emissão do
 // fixture seja a da consulta sem WHERE — que estoura o teto de 5 linhas do
 // dataset e produz o truncamento.
@@ -1099,9 +1101,10 @@ func TestInspectDetalhaColunasEIndices(t *testing.T) {
 	// desta coluna é bitmap".
 	//
 	// As DUAS saem "bitmap": antes da D5, NAS-IP-Address era `index: hash` e
-	// saía diferente de Acct-Status-Type. Com um motor só, `index: true`
-	// sempre compila para o mesmo IndexKind (compile.go), e o wire — que
-	// publica o plano, não a grafia de entrada — reflete isso.
+	// saía diferente de Acct-Status-Type. Com um motor só, `index: true` é a
+	// única grafia e o campo compilado carrega um bool
+	// (schema.CompiledField.Indexado); "bitmap" e "none" continuam sendo as
+	// duas palavras que o wire publica — ver o godoc do NomeDoIndice.
 	for coluna, quer := range map[string]string{"Acct-Status-Type": "bitmap", "NAS-IP-Address": "bitmap"} {
 		if got := celulaSobORotulo(t, cabecalho, linhaDaTabela(t, linhas, coluna), "ÍNDICE"); got != quer {
 			t.Errorf("o índice de %s saiu %q, queria %q", coluna, got, quer)

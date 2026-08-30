@@ -55,12 +55,12 @@ func TestBind106PrimaryLookupComParametro(t *testing.T) {
 	}
 }
 
-func TestBind106BitmapLookup(t *testing.T) {
+func TestBind106IndexLookup(t *testing.T) {
 	bq := bindOK(t, "SELECT id FROM radius_sessions WHERE status = 'Stop'")
 	c := comparacaoDe(t, bq)
-	// O planner escolhe o caminho indexado por Index + CmpEq.
-	if c.Field.Index != 1 { // schema.IndexBitmap
-		t.Errorf("Index = %v, want bitmap", c.Field.Index)
+	// O planner escolhe o caminho indexado por Indexado + CmpEq.
+	if !c.Field.Indexado {
+		t.Error("Indexado = false, want true")
 	}
 	if c.Op != parser.CmpEq {
 		t.Errorf("Op = %v", c.Op)

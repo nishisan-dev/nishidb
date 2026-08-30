@@ -47,7 +47,7 @@ func newHarness(t *testing.T, yml string, bitmapFields ...string) *harness {
 		if !ok {
 			t.Fatalf("campo %q não compilado", name)
 		}
-		idx.Bitmap = append(idx.Bitmap, f.ID)
+		idx.Campos = append(idx.Campos, f.ID)
 	}
 	st := fakestorage.New(idx)
 	return &harness{t: t, m: mustNew(t, c, st), st: st, c: c}
@@ -145,7 +145,7 @@ func (h *harness) lastPut() fakestorage.PutCall {
 // bitmapRows lista as rows que o índice bitmap devolve para o valor.
 func (h *harness) bitmapRows(name string, v types.Value) []types.RowID {
 	h.t.Helper()
-	it, err := h.st.LookupBitmap(h.fieldID(name), v)
+	it, err := h.st.Lookup(h.fieldID(name), v)
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -989,7 +989,7 @@ func TestApplyFixtureRadiusCompletoDepoisPatch(t *testing.T) {
 	if !ok {
 		t.Fatal("Acct-Status-Type não compilado")
 	}
-	st := fakestorage.New(fakestorage.Indexes{Bitmap: []types.FieldID{statusField.ID}})
+	st := fakestorage.New(fakestorage.Indexes{Campos: []types.FieldID{statusField.ID}})
 	m := mustNew(t, c, st)
 	h := &harness{t: t, m: m, st: st, c: c}
 

@@ -35,29 +35,30 @@ func valorDoCampo(payload []byte, campo types.FieldID) (types.Value, bool) {
 	}
 }
 
-// TestHasHashEhACapabilityQueOPlannerEsperava é a razão de esta frente
-// existir. O `index: hash` era aceito no YAML e o planner tinha a regra R2,
-// mas nenhum Store implementava a capability: `p.hash` ficava nil e toda
-// igualdade sobre a coluna degradava para FullScan em silêncio.
-func TestHasHashEhACapabilityQueOPlannerEsperava(t *testing.T) {
-	s := openStore(t, Options{HashFieldNames: []string{"id", "status", "counter"}})
+// TestIndexadoEhACapabilityQueOPlannerEsperava é a razão de esta frente
+// existir. O `index: hash` era aceito no YAML e o planner tinha a regra do
+// segundo motor, mas nenhum Store implementava a capability que ela consultava:
+// o ponteiro ficava nil e toda igualdade sobre a coluna degradava para FullScan
+// em silêncio.
+func TestIndexadoEhACapabilityQueOPlannerEsperava(t *testing.T) {
+	s := openStore(t, Options{CamposIndexadosPorNome: []string{"id", "status", "counter"}})
 	for _, campo := range []types.FieldID{fldID, fldStatus, fldCounter} {
-		if !s.HasHash(campo) {
-			t.Fatalf("HasHash(%d) = false num campo declarado", campo)
+		if !s.Indexado(campo) {
+			t.Fatalf("Indexado(%d) = false num campo declarado", campo)
 		}
 	}
-	if s.HasHash(999) {
-		t.Fatal("HasHash de campo não declarado devia ser false")
+	if s.Indexado(999) {
+		t.Fatal("Indexado de campo não declarado devia ser false")
 	}
-	if got := s.HashFields(); !slices.Equal(got, []types.FieldID{fldID, fldStatus, fldCounter}) {
-		t.Fatalf("HashFields = %v", got)
+	if got := s.CamposIndexados(); !slices.Equal(got, []types.FieldID{fldID, fldStatus, fldCounter}) {
+		t.Fatalf("CamposIndexados = %v", got)
 	}
 }
 
-// TestLookupHashEncontraAsRowsDoValor cobre o caminho feliz ponta a ponta no
+// TestLookupEncontraAsRowsDoValor cobre o caminho feliz ponta a ponta no
 // Store, incluindo a ORDEM crescente que o executor assume.
-func TestLookupHashEncontraAsRowsDoValor(t *testing.T) {
-	s := openStore(t, Options{HashFields: []types.FieldID{fldStatus}})
+func TestLookupEncontraAsRowsDoValor(t *testing.T) {
+	s := openStore(t, Options{CamposIndexados: []types.FieldID{fldStatus}})
 	var esperadas []types.RowID
 	for i, estado := range []string{"Start", "Stop", "Start", "Interim", "Start"} {
 		k := chaveDe(i)
@@ -66,25 +67,25 @@ func TestLookupHashEncontraAsRowsDoValor(t *testing.T) {
 			esperadas = append(esperadas, row)
 		}
 	}
-	it, err := s.LookupHash(fldStatus, strVal("Start"))
+	it, err := s.Lookup(fldStatus, strVal("Start"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := collectRows(t, it)
 	slices.Sort(esperadas)
 	if !slices.Equal(got, esperadas) {
-		t.Fatalf("LookupHash(Start) = %v, esperado %v", got, esperadas)
+		t.Fatalf("Lookup(Start) = %v, esperado %v", got, esperadas)
 	}
 	if !slices.IsSorted(got) {
-		t.Fatalf("LookupHash devolveu fora de ordem: %v", got)
+		t.Fatalf("Lookup devolveu fora de ordem: %v", got)
 	}
 }
 
-// TestLookupHashDeCampoNaoIndexadoEhErro: o planner degrada quando a
-// capability falta, então chegar aqui é bug de plan-time — e ele tem de doer.
-func TestLookupHashDeCampoNaoIndexadoEhErro(t *testing.T) {
+// TestLookupDeCampoNaoIndexadoEhErro: o planner degrada quando a capability
+// falta, então chegar aqui é bug de plan-time — e ele tem de doer.
+func TestLookupDeCampoNaoIndexadoEhErro(t *testing.T) {
 	s := openStore(t, Options{})
-	if _, err := s.LookupHash(fldStatus, strVal("Start")); !errors.Is(err, ErrInvalidArgument) {
+	if _, err := s.Lookup(fldStatus, strVal("Start")); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("esperado ErrInvalidArgument, obtido %v", err)
 	}
 }
@@ -106,7 +107,7 @@ func TestLookupHashDeCampoNaoIndexadoEhErro(t *testing.T) {
 // falso negativo, e nenhuma camada acima recupera candidato que o índice não
 // devolveu.
 func TestUpdateRemoveAPostingDoValorAntigo(t *testing.T) {
-	s := openStore(t, Options{HashFields: []types.FieldID{fldStatus}})
+	s := openStore(t, Options{CamposIndexados: []types.FieldID{fldStatus}})
 	k := "CMP-V0001PPCLP-013"
 	row, _ := mustPut(t, s, k, 1, statusPayload(t, s, k, "Start", 1), nil)
 
@@ -116,12 +117,12 @@ func TestUpdateRemoveAPostingDoValorAntigo(t *testing.T) {
 	}
 	mustPut(t, s, k, 2, statusPayload(t, s, k, "Stop", 2), &prev)
 
-	itNovo, err := s.LookupHash(fldStatus, strVal("Stop"))
+	itNovo, err := s.Lookup(fldStatus, strVal("Stop"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := collectRows(t, itNovo); !slices.Equal(got, []types.RowID{row}) {
-		t.Fatalf("LookupHash(Stop) = %v, esperado [%d]", got, row)
+		t.Fatalf("Lookup(Stop) = %v, esperado [%d]", got, row)
 	}
 	if got := lookupRevalidado(t, s, fldStatus, strVal("Start")); len(got) != 0 {
 		t.Fatalf("pós-revalidação, a row não pode mais responder pelo valor ANTIGO: %v", got)
@@ -133,7 +134,7 @@ func TestUpdateRemoveAPostingDoValorAntigo(t *testing.T) {
 // menos linhas do que existem.
 func TestPostingSobreviveAoRestart(t *testing.T) {
 	dir := t.TempDir()
-	opts := Options{Dir: dir, HashFields: []types.FieldID{fldStatus}}
+	opts := Options{Dir: dir, CamposIndexados: []types.FieldID{fldStatus}}
 	s := openStore(t, opts)
 	k := "CMP-V0001PPCLP-013"
 	row, _ := mustPut(t, s, k, 1, statusPayload(t, s, k, "Start", 1), nil)
@@ -145,7 +146,7 @@ func TestPostingSobreviveAoRestart(t *testing.T) {
 	}
 
 	s2 := openStore(t, opts)
-	it, err := s2.LookupHash(fldStatus, strVal("Start"))
+	it, err := s2.Lookup(fldStatus, strVal("Start"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +168,7 @@ func TestPostingSobreviveAoRestart(t *testing.T) {
 // estado que o produto não produz mais.
 func TestReplayDoTailReconstroiAsPostings(t *testing.T) {
 	dir := t.TempDir()
-	opts := Options{Dir: dir, HashFields: []types.FieldID{fldStatus}}
+	opts := Options{Dir: dir, CamposIndexados: []types.FieldID{fldStatus}}
 	s := openStore(t, opts)
 
 	k0 := chaveDe(0)
@@ -189,7 +190,7 @@ func TestReplayDoTailReconstroiAsPostings(t *testing.T) {
 	}
 
 	s2 := openStore(t, opts)
-	it, err := s2.LookupHash(fldStatus, strVal("Start"))
+	it, err := s2.Lookup(fldStatus, strVal("Start"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +212,7 @@ func TestReplayDoTailReconstroiAsPostings(t *testing.T) {
 // pós-restart devolve o mesmo conjunto que devolveria sem o crash.
 func TestReplayReaplicaOClearDoUpdate(t *testing.T) {
 	dir := t.TempDir()
-	opts := Options{Dir: dir, HashFields: []types.FieldID{fldStatus}}
+	opts := Options{Dir: dir, CamposIndexados: []types.FieldID{fldStatus}}
 	s := openStore(t, opts)
 
 	k := "CMP-V0001PPCLP-013"
@@ -230,7 +231,7 @@ func TestReplayReaplicaOClearDoUpdate(t *testing.T) {
 	}
 
 	s2 := openStore(t, opts)
-	it, err := s2.LookupHash(fldStatus, strVal("Stop"))
+	it, err := s2.Lookup(fldStatus, strVal("Stop"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +317,7 @@ func rebaixaManifestParaLegado(t *testing.T, caminho string) {
 // inerte. A única mudança entre as duas medidas é a abertura.
 func TestDatasetLegadoAbreEOsIndicesGlobaisSaemDoDisco(t *testing.T) {
 	dir := t.TempDir()
-	opts := Options{Dir: dir, BitmapFields: []types.FieldID{fldStatus}}
+	opts := Options{Dir: dir, CamposIndexados: []types.FieldID{fldStatus}}
 	s := openStore(t, opts)
 	for i := 0; i < 5; i++ {
 		k := chaveDe(i)
@@ -393,7 +394,7 @@ func TestDatasetLegadoAbreEOsIndicesGlobaisSaemDoDisco(t *testing.T) {
 // tenta reindexá-lo a cada abertura, falha sempre, e o dataset inteiro passa a
 // ser INABRÍVEL.
 func TestValorAcimaDoTetoEmCampoComHashEhRecusadoAntesDoAppend(t *testing.T) {
-	s := openStore(t, Options{HashFields: []types.FieldID{fldStatus}})
+	s := openStore(t, Options{CamposIndexados: []types.FieldID{fldStatus}})
 	k := "CMP-V0001PPCLP-013"
 	grande := string(make([]byte, types.MaxIndexedValueBytes+1))
 	_, _, err := s.Put([]byte(k), 1, 0, statusPayload(t, s, k, grande, 1), nil)
@@ -422,7 +423,7 @@ func TestValorAcimaDoTetoEmCampoComHashEhRecusadoAntesDoAppend(t *testing.T) {
 // onde está. O teste passou a exercitar o caminho real, e o hook saiu junto com
 // a fase que ele injetava.
 func TestPostingOrfaEhSupersetEOExecutorFiltra(t *testing.T) {
-	s := openStore(t, Options{HashFields: []types.FieldID{fldStatus}})
+	s := openStore(t, Options{CamposIndexados: []types.FieldID{fldStatus}})
 
 	k := "CMP-V0001PPCLP-013"
 	row, _ := mustPut(t, s, k, 1, statusPayload(t, s, k, "Start", 1), nil)
@@ -432,7 +433,7 @@ func TestPostingOrfaEhSupersetEOExecutorFiltra(t *testing.T) {
 	}
 	mustPut(t, s, k, 2, statusPayload(t, s, k, "Stop", 2), &prev)
 
-	it, err := s.LookupHash(fldStatus, strVal("Start"))
+	it, err := s.Lookup(fldStatus, strVal("Start"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -459,7 +460,7 @@ func TestPostingOrfaEhSupersetEOExecutorFiltra(t *testing.T) {
 // log-and-skip da ingestão não captura panic, ela derruba o processo.
 func TestCloseNoMeioDaVarreduraDoHashNaoDaPanic(t *testing.T) {
 	dir := t.TempDir()
-	s, err := Open(Options{Dir: dir, SegmentSize: 1 << 20, HashFields: []types.FieldID{fldStatus}})
+	s, err := Open(Options{Dir: dir, SegmentSize: 1 << 20, CamposIndexados: []types.FieldID{fldStatus}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -467,7 +468,7 @@ func TestCloseNoMeioDaVarreduraDoHashNaoDaPanic(t *testing.T) {
 		k := chaveDe(i)
 		mustPut(t, s, k, int64(i), statusPayload(t, s, k, "Start", int64(i)), nil)
 	}
-	it, err := s.LookupHash(fldStatus, strVal("Start"))
+	it, err := s.Lookup(fldStatus, strVal("Start"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -505,12 +506,12 @@ func TestCloseNoMeioDaVarreduraDoHashNaoDaPanic(t *testing.T) {
 func TestLapideLimpaAsPostingsDeHash(t *testing.T) {
 	dir := t.TempDir()
 	s := openStore(t, Options{
-		Dir:            dir,
-		TTLAtivo:       true,
-		DuracaoDeFundo: time.Hour,
-		CampoDeEscrita: "_writtenAt",
-		CampoDePrazo:   "_expiresIn",
-		HashFieldNames: []string{"status"},
+		Dir:                    dir,
+		TTLAtivo:               true,
+		DuracaoDeFundo:         time.Hour,
+		CampoDeEscrita:         "_writtenAt",
+		CampoDePrazo:           "_expiresIn",
+		CamposIndexadosPorNome: []string{"status"},
 	})
 	rel := &relogioDeTeste{t: time.Date(2026, 8, 25, 20, 0, 0, 0, time.UTC)}
 	s.UsaRelogio(rel.agora)
@@ -542,7 +543,7 @@ func TestLapideLimpaAsPostingsDeHash(t *testing.T) {
 
 func postingsDeHashDeStatus(t *testing.T, s *Store, campo types.FieldID, v types.Value) []types.RowID {
 	t.Helper()
-	it, err := s.LookupHash(campo, v)
+	it, err := s.Lookup(campo, v)
 	if err != nil {
 		t.Fatal(err)
 	}

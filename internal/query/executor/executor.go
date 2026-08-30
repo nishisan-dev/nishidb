@@ -228,8 +228,7 @@ func Open(ctx context.Context, bq *binder.BoundQuery, plan planner.Plan, opts Op
 
 	// A fonte é aberta POR ÚLTIMO: qualquer erro acima não pode deixar
 	// iteradores de índice abertos e sem dono.
-	hash, _ := opts.Store.(HashLookuper)
-	src, err := fonteDoPlano(plan, opts.Store, hash, opts.Metrics)
+	src, err := fonteDoPlano(plan, opts.Store, opts.Metrics)
 	if err != nil {
 		it.cancel()
 		return nil, err

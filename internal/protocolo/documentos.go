@@ -91,11 +91,14 @@ type DatasetMeta struct {
 
 // ColunaMeta descreve uma coluna do dataset.
 //
-// Index é o índice DECLARADO no YAML ("none", "bitmap" ou "hash"), não uma
-// promessa de plano: o hash é aceito na configuração desde o M1 e o índice
-// físico só chega na Fase 8, quando as queries sobre o campo deixam de cair em
-// scan. É metadado de schema, e quem quiser saber o plano escolhido olha
-// nishidb_query_full_scans.
+// Index diz se a coluna tem índice: "bitmap" quando o YAML declara
+// `index: true`, "none" quando não. Não é promessa de plano — é metadado de
+// schema, e quem quiser saber o plano escolhido olha nishidb_query_full_scans.
+//
+// Eram TRÊS valores possíveis. O "hash" saiu porque existe um motor de índice
+// só: nem a config nem o schema compilado sabem mais produzi-lo. As outras duas
+// palavras ficaram como estavam — o driver JDBC decide por igualdade com "none"
+// se a coluna entra no getIndexInfo, e o IT do client Python afirma "bitmap".
 //
 // Auto marca o campo sem tipo declarado. Quando ele ainda não foi observado,
 // Type é "unknown" e JDBC é "OTHER" — a única resposta honesta, já que o
@@ -186,6 +189,13 @@ type ConsultaEmVoo struct {
 // diagnóstico. Rejected > 0 é a prova de que a revalidação do §44 está fazendo
 // trabalho de verdade — o índice devolve um superset e o executor descarta o
 // que não casa o predicado corrente.
+//
+// BitmapScans conserva o nome de wire depois de o motor bitmap deixar de
+// existir, e a fonte dele passou a ser o contador de plano IndexScan. O NÚMERO
+// é o mesmo — nenhuma config produzia plano de hash desde a D5, então não havia
+// segunda parcela a somar —, e é o número que o `nishidb status` e qualquer
+// coletor do operador leem. Renomear a chave JSON quebraria os dois sem
+// entregar informação nova.
 type MotorStats struct {
 	FullScans    int64 `json:"fullScans"`
 	PointLookups int64 `json:"pointLookups"`

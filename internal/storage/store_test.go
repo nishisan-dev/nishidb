@@ -16,7 +16,7 @@ import (
 )
 
 // Ordem de criação dos campos nos testes: "id"=1, "status"=2, "counter"=3.
-// BitmapFields usa IDs (contrato do brief); o dicionário é determinístico
+// CamposIndexados usa IDs (contrato do brief); o dicionário é determinístico
 // na ordem de LookupOrCreate, fixada pelo statusPayload.
 const (
 	fldID      types.FieldID = 1
@@ -177,7 +177,7 @@ func TestPutComPrevConfiaNoRowIDSemRefazerFind(t *testing.T) {
 }
 
 func TestPutSemPrevParaKeyExistenteFazFallback(t *testing.T) {
-	s := openStore(t, Options{BitmapFields: []types.FieldID{fldStatus}})
+	s := openStore(t, Options{CamposIndexados: []types.FieldID{fldStatus}})
 	mustPut(t, s, "fb", 1, statusPayload(t, s, "fb", "Start", 1), nil)
 
 	// prev=nil com key existente: o Store lê o prev sozinho e não cria rowId
@@ -189,7 +189,7 @@ func TestPutSemPrevParaKeyExistenteFazFallback(t *testing.T) {
 	// IGUALDADE, e não superconjunto: um dataset, uma row, um segmento — não há
 	// falso positivo possível em Stop, e afrouxar aqui seria apagar asserção sem
 	// que o desenho novo peça.
-	itStop, err := s.LookupBitmap(fldStatus, strVal("Stop"))
+	itStop, err := s.Lookup(fldStatus, strVal("Stop"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ func TestPutSemPrevParaKeyExistenteFazFallback(t *testing.T) {
 }
 
 func TestBitmapDiffEmUpdate(t *testing.T) {
-	s := openStore(t, Options{BitmapFields: []types.FieldID{fldStatus}})
+	s := openStore(t, Options{CamposIndexados: []types.FieldID{fldStatus}})
 	for i, k := range []string{"k1", "k2", "k3"} {
 		mustPut(t, s, k, int64(i), statusPayload(t, s, k, "Start", 0), nil)
 	}
@@ -223,7 +223,7 @@ func TestBitmapDiffEmUpdate(t *testing.T) {
 	// como candidato até o segmento ser compactado. Exigir [0 2] aqui seria
 	// medir a estreiteza do motor global. O que o produto devolve é a linha de
 	// baixo, pós-revalidação, e essa continua exata.
-	itStart, err := s.LookupBitmap(fldStatus, strVal("Start"))
+	itStart, err := s.Lookup(fldStatus, strVal("Start"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +236,7 @@ func TestBitmapDiffEmUpdate(t *testing.T) {
 	// ser Stop, então não há falso positivo que a explique. Afrouxá-la aqui
 	// junto com a de cima teria apagado uma asserção que o desenho novo não
 	// exige apagar.
-	itStop, err := s.LookupBitmap(fldStatus, strVal("Stop"))
+	itStop, err := s.Lookup(fldStatus, strVal("Stop"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,14 +256,14 @@ func TestBitmapDiffEmUpdate(t *testing.T) {
 	}
 }
 
-func TestLookupBitmapCampoNaoIndexadoEValorDesconhecido(t *testing.T) {
-	s := openStore(t, Options{BitmapFields: []types.FieldID{fldStatus}})
+func TestLookupCampoNaoIndexadoEValorDesconhecido(t *testing.T) {
+	s := openStore(t, Options{CamposIndexados: []types.FieldID{fldStatus}})
 	mustPut(t, s, "x", 1, statusPayload(t, s, "x", "Start", 0), nil)
 
-	if _, err := s.LookupBitmap(999, strVal("qualquer")); err == nil {
+	if _, err := s.Lookup(999, strVal("qualquer")); err == nil {
 		t.Fatal("campo sem índice bitmap deveria falhar")
 	}
-	it, err := s.LookupBitmap(fldStatus, strVal("nunca-visto"))
+	it, err := s.Lookup(fldStatus, strVal("nunca-visto"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -556,7 +556,7 @@ func TestStatsDeDatasetSemRecordContaOSegmentoInicial(t *testing.T) {
 func TestVisibilidadeLeitorConcorrente(t *testing.T) {
 	// A location é o commit point: um leitor em loop nunca vê estado
 	// parcial — a key sempre confere e a sequence nunca regride.
-	s := openStore(t, Options{BitmapFields: []types.FieldID{fldStatus}})
+	s := openStore(t, Options{CamposIndexados: []types.FieldID{fldStatus}})
 	key := []byte("concurrent")
 	mustPut(t, s, "concurrent", 0, statusPayload(t, s, "concurrent", "Start", 0), nil)
 

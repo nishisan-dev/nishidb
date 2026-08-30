@@ -21,10 +21,14 @@ import (
 // compilarem, o Store real e o dublê são intercambiáveis em qualquer
 // consumidor. Uma divergência de assinatura — ainda que só uint64 no lugar de
 // types.RowID — torna os dois mutuamente inutilizáveis.
+//
+// Havia uma terceira asserção, sobre a capability OPCIONAL do índice hash: ela
+// cobrava do dublê o lookup que o Store real não implementava. Saiu porque o
+// Lookup entrou na própria interface Store — as duas linhas acima já cobram dos
+// DOIS o método que ela cobrava de um.
 var (
-	_ executor.Store        = (*storage.Store)(nil)
-	_ executor.Store        = (*fakestorage.Store)(nil)
-	_ executor.HashLookuper = (*fakestorage.Store)(nil)
+	_ executor.Store = (*storage.Store)(nil)
+	_ executor.Store = (*fakestorage.Store)(nil)
 )
 
 const yamlTeste = `
@@ -135,9 +139,11 @@ func TestPlanoInvalido(t *testing.T) {
 		}, planner.FullScan(), st, "fora de"},
 		{"point lookup sem bytes na key", func() *binder.BoundQuery { return bqBase(t, c) },
 			&planner.PointLookupPlan{Field: id, Key: types.Value{Type: types.TypeString}}, st, "key sem bytes"},
-		{"hash sem capability no store", func() *binder.BoundQuery { return bqBase(t, c) },
-			&planner.HashIndexPlan{Field: id, Val: types.Value{Type: types.TypeString, Bytes: []byte("x")}},
-			semHash{st}, "LookupHash"},
+		// O caso "hash sem capability no store" saiu daqui, junto com o dublê
+		// semHash que ele usava: os dois cobriam o ramo em que o executor
+		// recebia um plano de hash e o store NÃO implementava a capability
+		// OPCIONAL daquele motor. Com o Lookup dentro da interface Store, esse
+		// store não compila — o erro deixou de ser alcançável em runtime.
 		{"comparação sobre coluna json", func() *binder.BoundQuery {
 			bq := bqBase(t, c)
 			bq.Slots = binder.Slots{IDs: []types.FieldID{id.ID, doc.ID}}
@@ -181,24 +187,6 @@ func TestPlanoInvalido(t *testing.T) {
 	}
 }
 
-// semHash esconde a capability de hash do dublê: é o Store real do M1, onde o
-// índice hash ainda não existe.
-type semHash struct{ inner *fakestorage.Store }
-
-func (s semHash) GetByRowID(id types.RowID, buf []byte) (types.Record, []byte, bool, error) {
-	return s.inner.GetByRowID(id, buf)
-}
-
-func (s semHash) GetByKey(key, buf []byte) (types.Record, []byte, bool, error) {
-	return s.inner.GetByKey(key, buf)
-}
-
-func (s semHash) ScanLive() types.RowIDIterator { return s.inner.ScanLive() }
-
-func (s semHash) LookupBitmap(f types.FieldID, v types.Value) (types.RowIDIterator, error) {
-	return s.inner.LookupBitmap(f, v)
-}
-
 // Open não lê NADA: a primeira row só é buscada no primeiro Next. É o que
 // torna o LIMIT 0 gratuito e o streaming honesto.
 func TestOpenNaoLeDados(t *testing.T) {
@@ -235,7 +223,7 @@ func (s *storeQueExplode) GetByKey([]byte, []byte) (types.Record, []byte, bool, 
 
 func (s *storeQueExplode) ScanLive() types.RowIDIterator { return vazio{} }
 
-func (s *storeQueExplode) LookupBitmap(types.FieldID, types.Value) (types.RowIDIterator, error) {
+func (s *storeQueExplode) Lookup(types.FieldID, types.Value) (types.RowIDIterator, error) {
 	return vazio{}, nil
 }
 

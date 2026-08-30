@@ -384,17 +384,17 @@ func TestOsIndicesDoHistoricoChegamAoCompilado(t *testing.T) {
 	base, hist := compilaPar(t, "history:\n  expireAfterWrite: 7d\n  fields:\n"+
 		"    identifier:\n      index: true\n")
 	hf, _ := hist.FieldByName([]byte("identifier"))
-	if hf.Index != IndexBitmap {
-		t.Errorf("identifier.Index = %v no histórico, quer bitmap", hf.Index)
+	if !hf.Indexado {
+		t.Error("identifier não saiu indexado no histórico")
 	}
 	// E o node, que é indexado no BASE, não herda nada.
 	bn, _ := base.FieldByName([]byte("node"))
-	if bn.Index != IndexBitmap {
+	if !bn.Indexado {
 		t.Fatal("a fixture perdeu o índice do base")
 	}
 	hn, _ := hist.FieldByName([]byte("node"))
-	if hn.Index != IndexNone {
-		t.Errorf("node.Index = %v no histórico, quer nenhum", hn.Index)
+	if hn.Indexado {
+		t.Error("node saiu indexado no histórico, quer sem índice")
 	}
 }
 

@@ -241,19 +241,17 @@ func abreDataset(cfg *nishiconfig.Config, nome string) (*storage.Store, *schema.
 		return nil, nil, nil, fmt.Errorf("dataset %q: o arquivo declara name: %q", nome, spec.Name)
 	}
 
-	bitmaps := schema.CamposComBitmap(spec)
-	hashes := schema.CamposComHash(spec)
+	indexados := schema.CamposComIndice(spec)
 
 	st, err := storage.Open(storage.Options{
-		Dir:              cfg.DirDoDataset(nome),
-		SegmentSize:      cfg.SegmentSize(),
-		BitmapFieldNames: bitmaps,
-		HashFieldNames:   hashes,
-		ColunasDerivadas: spec.NomesDasExtracoes(),
-		TTLAtivo:         len(spec.Materialization.RegrasTTL) > 0,
-		DuracaoDeFundo:   spec.Materialization.DuracaoDeFundo,
-		CampoDeEscrita:   schema.CampoInstanteDeEscrita,
-		CampoDePrazo:     schema.CampoDePrazo,
+		Dir:                    cfg.DirDoDataset(nome),
+		SegmentSize:            cfg.SegmentSize(),
+		CamposIndexadosPorNome: indexados,
+		ColunasDerivadas:       spec.NomesDasExtracoes(),
+		TTLAtivo:               len(spec.Materialization.RegrasTTL) > 0,
+		DuracaoDeFundo:         spec.Materialization.DuracaoDeFundo,
+		CampoDeEscrita:         schema.CampoInstanteDeEscrita,
+		CampoDePrazo:           schema.CampoDePrazo,
 	})
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("abrindo o dataset %q: %w", nome, err)
@@ -288,15 +286,14 @@ func abreHistorico(cfg *nishiconfig.Config, spec *schema.DatasetSpec, base *sche
 		return nil, nil, fmt.Errorf("dataset %q: %w", spec.Name, err)
 	}
 	st, err := storage.Open(storage.Options{
-		Dir:               cfg.DirDoDataset(irma.Name),
-		Dataset:           irma.Name,
-		SegmentSize:       segmento,
-		Modo:              storage.ModoHistorico,
-		DictCompartilhado: dict,
-		BitmapFieldNames:  schema.CamposComBitmap(irma),
-		HashFieldNames:    schema.CamposComHash(irma),
-		ColunasDerivadas:  irma.NomesDasExtracoes(),
-		CampoDeEscrita:    schema.CampoInstanteDeEscrita,
+		Dir:                    cfg.DirDoDataset(irma.Name),
+		Dataset:                irma.Name,
+		SegmentSize:            segmento,
+		Modo:                   storage.ModoHistorico,
+		DictCompartilhado:      dict,
+		CamposIndexadosPorNome: schema.CamposComIndice(irma),
+		ColunasDerivadas:       irma.NomesDasExtracoes(),
+		CampoDeEscrita:         schema.CampoInstanteDeEscrita,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("tabela histórica de %q: %w", spec.Name, err)

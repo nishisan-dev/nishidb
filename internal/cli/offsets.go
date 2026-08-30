@@ -78,22 +78,20 @@ func runOffsets(args []string, amb Ambiente) int {
 		return ExitUso
 	}
 
-	// Os campos com bitmap PRECISAM ser declarados: o Store recusa abrir um
+	// Os campos indexados PRECISAM ser declarados: o Store recusa abrir um
 	// dataset cujo manifest declara índices que a abertura não conhece,
 	// porque o índice pararia de ser atualizado e reapareceria incompleto.
-	bitmaps := schema.CamposComBitmap(spec)
-	hashes := schema.CamposComHash(spec)
+	indexados := schema.CamposComIndice(spec)
 	st, err := storage.Open(storage.Options{
-		Dir:              cfg.DirDoDataset(*dataset),
-		Dataset:          *dataset,
-		SegmentSize:      cfg.SegmentSize(),
-		BitmapFieldNames: bitmaps,
-		HashFieldNames:   hashes,
-		ColunasDerivadas: spec.NomesDasExtracoes(),
-		TTLAtivo:         len(spec.Materialization.RegrasTTL) > 0,
-		DuracaoDeFundo:   spec.Materialization.DuracaoDeFundo,
-		CampoDeEscrita:   schema.CampoInstanteDeEscrita,
-		CampoDePrazo:     schema.CampoDePrazo,
+		Dir:                    cfg.DirDoDataset(*dataset),
+		Dataset:                *dataset,
+		SegmentSize:            cfg.SegmentSize(),
+		CamposIndexadosPorNome: indexados,
+		ColunasDerivadas:       spec.NomesDasExtracoes(),
+		TTLAtivo:               len(spec.Materialization.RegrasTTL) > 0,
+		DuracaoDeFundo:         spec.Materialization.DuracaoDeFundo,
+		CampoDeEscrita:         schema.CampoInstanteDeEscrita,
+		CampoDePrazo:           schema.CampoDePrazo,
 	})
 	if err != nil {
 		fmt.Fprintf(amb.Stderr, "offsets: %v\n", err)

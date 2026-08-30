@@ -44,11 +44,11 @@ func (f *fonteDeBancada) ScanLive() types.RowIDIterator {
 	return &f.it
 }
 
-func (f *fonteDeBancada) LookupBitmap(types.FieldID, types.Value) (types.RowIDIterator, error) {
+func (f *fonteDeBancada) Lookup(types.FieldID, types.Value) (types.RowIDIterator, error) {
 	return nil, fmt.Errorf("%w: bancada sem bitmap", types.ErrInvalidArgument)
 }
 
-func (f *fonteDeBancada) HasBitmap(types.FieldID) bool { return false }
+func (f *fonteDeBancada) Indexado(types.FieldID) bool { return false }
 
 type iteradorDeBancada struct {
 	f   *fonteDeBancada

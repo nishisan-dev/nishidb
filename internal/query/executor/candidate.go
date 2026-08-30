@@ -5,7 +5,6 @@ import (
 	"sync/atomic"
 
 	"github.com/nishisan-dev/nishidb/internal/query/planner"
-	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
@@ -72,7 +71,7 @@ func (s *keySource) close() error { return nil }
 
 // fonteDoPlano traduz o plano na fonte de candidatos. Nenhuma leitura de dado
 // acontece aqui além de abrir iteradores.
-func fonteDoPlano(plan planner.Plan, st Store, hash HashLookuper, m *Metrics) (rowSource, error) {
+func fonteDoPlano(plan planner.Plan, st Store, m *Metrics) (rowSource, error) {
 	switch p := plan.(type) {
 	case *planner.FullScanPlan:
 		contaFonte(m, func(m *Metrics) *atomic.Int64 { return &m.SourceFullScan })
@@ -85,29 +84,16 @@ func fonteDoPlano(plan planner.Plan, st Store, hash HashLookuper, m *Metrics) (r
 		contaFonte(m, func(m *Metrics) *atomic.Int64 { return &m.PointLookups })
 		return &keySource{st: st, key: p.Key.Bytes}, nil
 
-	case *planner.BitmapScanPlan:
-		it, err := st.LookupBitmap(p.Field.ID, p.Val)
+	case *planner.IndexScanPlan:
+		it, err := st.Lookup(p.Field.ID, p.Val)
 		if err != nil {
-			return nil, fmt.Errorf("executor: abrir bitmap de %q: %w", p.Field.Name, err)
+			return nil, fmt.Errorf("executor: abrir índice de %q: %w", p.Field.Name, err)
 		}
 		contaFonte(m, func(m *Metrics) *atomic.Int64 { return &m.IndexScans })
 		return &candidateSource{it: it, st: st}, nil
 
-	case *planner.HashIndexPlan:
-		if hash == nil {
-			// O planner só escolhe este plano quando a capability existe; chegar
-			// aqui sem ela é bug de plan-time, não erro do usuário.
-			return nil, fmt.Errorf("%w: store não implementa LookupHash", ErrInvalidPlan)
-		}
-		it, err := hash.LookupHash(p.Field.ID, p.Val)
-		if err != nil {
-			return nil, fmt.Errorf("executor: abrir hash de %q: %w", p.Field.Name, err)
-		}
-		contaFonte(m, func(m *Metrics) *atomic.Int64 { return &m.IndexScans })
-		return &candidateSource{it: it, st: st}, nil
-
-	case *planner.BitmapIntersectPlan:
-		its, err := abreTermos(p.Terms, st, hash)
+	case *planner.IndexIntersectPlan:
+		its, err := abreTermos(p.Terms, st)
 		if err != nil {
 			return nil, err
 		}
@@ -115,7 +101,7 @@ func fonteDoPlano(plan planner.Plan, st Store, hash HashLookuper, m *Metrics) (r
 		return &candidateSource{it: &intersectIter{its: its, cur: make([]types.RowID, len(its))}, st: st}, nil
 
 	case *planner.IndexUnionPlan:
-		its, err := abreTermos(p.Terms, st, hash)
+		its, err := abreTermos(p.Terms, st)
 		if err != nil {
 			return nil, err
 		}
@@ -131,21 +117,10 @@ func fonteDoPlano(plan planner.Plan, st Store, hash HashLookuper, m *Metrics) (r
 // abreTermos abre um iterador por termo. Falha no termo i FECHA os i-1 já
 // abertos: vazar iterador de índice num caminho de erro é o tipo de coisa que
 // só aparece como file descriptor esgotado em produção.
-func abreTermos(terms []planner.IndexTerm, st Store, hash HashLookuper) ([]types.RowIDIterator, error) {
+func abreTermos(terms []planner.IndexTerm, st Store) ([]types.RowIDIterator, error) {
 	its := make([]types.RowIDIterator, 0, len(terms))
 	for _, t := range terms {
-		var (
-			it  types.RowIDIterator
-			err error
-		)
-		switch {
-		case t.Kind == schema.IndexHash && hash == nil:
-			err = fmt.Errorf("%w: store não implementa LookupHash", ErrInvalidPlan)
-		case t.Kind == schema.IndexHash:
-			it, err = hash.LookupHash(t.Field.ID, t.Val)
-		default:
-			it, err = st.LookupBitmap(t.Field.ID, t.Val)
-		}
+		it, err := st.Lookup(t.Field.ID, t.Val)
 		if err != nil {
 			for _, aberto := range its {
 				aberto.Close()

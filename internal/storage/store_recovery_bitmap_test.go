@@ -28,7 +28,7 @@ func TestReplayRestauraPostingComBitmapAtrasDasLocations(t *testing.T) {
 	// frente do manifest —, e é ele que decide se o replay do tail repõe a
 	// posting.
 	dir := t.TempDir()
-	opts := Options{Dir: dir, BitmapFields: []types.FieldID{fldStatus}}
+	opts := Options{Dir: dir, CamposIndexados: []types.FieldID{fldStatus}}
 	s := audOpen(t, opts)
 	id, _ := mustPut(t, s, "bm", 1, statusPayload(t, s, "bm", "Start", 1), nil)
 	if err := s.Checkpoint(); err != nil {
@@ -54,7 +54,7 @@ func TestReplayRestauraPostingComBitmapAtrasDasLocations(t *testing.T) {
 	if rec := mustGetAud(t, s2, "bm"); rec.Sequence != 2 {
 		t.Fatalf("o estado novo deveria estar visível: %+v", rec)
 	}
-	it, err := s2.LookupBitmap(fldStatus, strVal("Stop"))
+	it, err := s2.Lookup(fldStatus, strVal("Stop"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestReplayNaoDecrementaLivenessDeRecordVivo(t *testing.T) {
 	monta := func(t *testing.T, modo string) []checkpoint.SegmentInfo {
 		t.Helper()
 		dir := t.TempDir()
-		opts := Options{Dir: dir, BitmapFields: []types.FieldID{fldStatus}}
+		opts := Options{Dir: dir, CamposIndexados: []types.FieldID{fldStatus}}
 		s := audOpen(t, opts)
 		for i := 0; i < 4; i++ {
 			k := fmt.Sprintf("tl-%d", i)

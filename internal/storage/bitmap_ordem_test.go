@@ -9,7 +9,7 @@ import (
 )
 
 // Os FieldIDs de um dataset novo precisam depender só do SPEC, não da ordem em
-// que o chamador listou os campos indexados. O Open resolve BitmapFieldNames
+// que o chamador listou os campos indexados. O Open resolve CamposIndexadosPorNome
 // por LookupOrCreate na ordem do slice recebido, e essa ordem queima os
 // primeiros IDs do dicionário: dois datasets criados do mesmo YAML com a lista
 // em ordens diferentes ficavam com mapeamentos nome→ID diferentes PARA SEMPRE.
@@ -27,8 +27,8 @@ func TestOrdemDosNomesDeBitmapNaoMudaOsFieldIDs(t *testing.T) {
 	ids := func(lista []string) map[string]types.FieldID {
 		t.Helper()
 		st, err := storage.Open(storage.Options{
-			Dir:              filepath.Join(t.TempDir(), "ds"),
-			BitmapFieldNames: lista,
+			Dir:                    filepath.Join(t.TempDir(), "ds"),
+			CamposIndexadosPorNome: lista,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -60,8 +60,8 @@ func TestOpenNaoReordenaOSliceDoChamador(t *testing.T) {
 	original := append([]string(nil), nomes...)
 
 	st, err := storage.Open(storage.Options{
-		Dir:              filepath.Join(t.TempDir(), "ds"),
-		BitmapFieldNames: nomes,
+		Dir:                    filepath.Join(t.TempDir(), "ds"),
+		CamposIndexadosPorNome: nomes,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -70,7 +70,7 @@ func TestOpenNaoReordenaOSliceDoChamador(t *testing.T) {
 
 	for i := range original {
 		if nomes[i] != original[i] {
-			t.Fatalf("BitmapFieldNames foi reordenado no lugar: %v, want %v", nomes, original)
+			t.Fatalf("CamposIndexadosPorNome foi reordenado no lugar: %v, want %v", nomes, original)
 		}
 	}
 }

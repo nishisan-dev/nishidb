@@ -55,18 +55,16 @@ func semeia(t *testing.T, a *ambiente, nome string, n int) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// As duas listas saem de schema.CamposComBitmap/CamposComHash, e não de um
-	// laço local: um helper de teste que abre o dataset com um conjunto de
-	// índices diferente do que o servidor usa reproduz, dentro da suíte, o
-	// modo de falha cruzado que aquelas funções existem para impedir.
-	bitmaps := schema.CamposComBitmap(spec)
-	hashes := schema.CamposComHash(spec)
+	// A lista sai de schema.CamposComIndice, e não de um laço local: um helper de
+	// teste que abre o dataset com um conjunto de índices diferente do que o
+	// servidor usa reproduz, dentro da suíte, o modo de falha cruzado que aquela
+	// função existe para impedir.
+	indexados := schema.CamposComIndice(spec)
 	st, err := storage.Open(storage.Options{
-		Dir:              cfg.DirDoDataset(nome),
-		Dataset:          nome,
-		SegmentSize:      cfg.SegmentSize(),
-		BitmapFieldNames: bitmaps,
-		HashFieldNames:   hashes,
+		Dir:                    cfg.DirDoDataset(nome),
+		Dataset:                nome,
+		SegmentSize:            cfg.SegmentSize(),
+		CamposIndexadosPorNome: indexados,
 	})
 	if err != nil {
 		t.Fatal(err)

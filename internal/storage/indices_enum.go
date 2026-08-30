@@ -16,13 +16,15 @@ import (
 )
 
 // lookupIndexado é a superfície ÚNICA de consulta ao índice por segmento, e é
-// ela que LookupHash e LookupBitmap passam a chamar (spec §3.1).
+// ela que o Store.Lookup chama (spec §3.1).
 //
-// Os dois nomes antigos sobrevivem de propósito enquanto o planner não é
-// unificado: mantendo nome e assinatura, a suíte inteira de storage e de query
-// — que já testa o contrato de superconjunto com ordem estritamente crescente e
-// reentrância contra o Close — passa a exercitar o motor novo sem uma linha de
-// teste mudada. É o oráculo da migração.
+// Ela nasceu como o corpo comum dos DOIS lookups por motor que o Store expunha:
+// mantendo os dois nomes antigos e as duas assinaturas enquanto o planner ainda
+// distinguia os motores, a suíte inteira de storage e de query — que já testa o
+// contrato de superconjunto com ordem estritamente crescente e reentrância
+// contra o Close — passou a exercitar o motor novo sem uma linha de teste
+// mudada. Foi o oráculo da migração; com o planner unificado, resta um chamador
+// só.
 //
 // UMA CONSULTA NUNCA TOMA O wmu, e isso é o ciclo inteiro: serializar consulta
 // contra ingestão é o defeito que este motor existe para eliminar. O que ela

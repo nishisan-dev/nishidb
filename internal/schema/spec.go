@@ -554,7 +554,7 @@ func nomeDaExtracao(pai string, i int, e ExtractSpec) (string, error) {
 	return nome, nil
 }
 
-// CamposComBitmap devolve, em ordem determinística, os campos que o Store
+// CamposComIndice devolve, em ordem determinística, os campos que o Store
 // precisa abrir com índice — os de topo E as colunas derivadas.
 //
 // É o ÚNICO lugar que decide isso. O laço vivia copiado em quatro sítios —
@@ -566,27 +566,12 @@ func nomeDaExtracao(pai string, i int, e ExtractSpec) (string, error) {
 // A ORDEM é contrato, não estética: ela decide os FieldID de um dataset novo,
 // e o produto promete mapeamento determinístico para o mesmo spec.
 //
-// Devolve o MESMO conjunto que CamposComHash (ver o godoc dela para o
-// porquê): a D5 aposentou as duas grafias que os separavam, e `index: true` é
-// a única que sobrou.
-func CamposComBitmap(s *DatasetSpec) []string { return camposComIndice(s) }
-
-// CamposComHash devolve, em ordem determinística, os MESMOS campos que
-// CamposComBitmap.
-//
-// As duas funções sobrevivem separadas — e não uma função só — porque
-// storage.Options ainda tem BitmapFieldNames e HashFieldNames como campos
-// DISTINTOS: unificá-los é a Tarefa 11, junto com o planner. Até lá, todo
-// chamador passa as duas listas (hoje idênticas) para os dois campos de
-// Options, e o Store trata a UNIÃO delas como o conjunto indexado — chamar
-// esta função com um resultado igual ao de CamposComBitmap é inofensivo por
-// construção, nunca um jeito de declarar dois conjuntos diferentes.
-func CamposComHash(s *DatasetSpec) []string { return camposComIndice(s) }
-
-// camposComIndice é o laço único dos dois. Uma cópia por motor é exatamente o
-// que produziu o defeito que o godoc do CamposComBitmap descreve — quatro
-// cópias do mesmo laço, nenhuma conhecendo a coluna derivada.
-func camposComIndice(s *DatasetSpec) []string {
+// É UMA função, e não mais o par CamposComBitmap/CamposComHash: as duas
+// devolviam o MESMO conjunto desde a D5, e sobreviviam separadas apenas porque
+// storage.Options ainda tinha um par de campos por motor. Com o par unificado
+// não resta chamador para a segunda — e duas funções idênticas são a primeira
+// cópia a divergir.
+func CamposComIndice(s *DatasetSpec) []string {
 	var out []string
 	for nome, f := range s.Schema.Fields {
 		if f.Index == "true" {

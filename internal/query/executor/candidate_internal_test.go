@@ -3,7 +3,6 @@ package executor
 import (
 	"errors"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/nishisan-dev/nishidb/internal/query/planner"
@@ -159,7 +158,7 @@ func (s *storeFalhaNoSegundo) GetByKey([]byte, []byte) (types.Record, []byte, bo
 
 func (s *storeFalhaNoSegundo) ScanLive() types.RowIDIterator { return lista() }
 
-func (s *storeFalhaNoSegundo) LookupBitmap(types.FieldID, types.Value) (types.RowIDIterator, error) {
+func (s *storeFalhaNoSegundo) Lookup(types.FieldID, types.Value) (types.RowIDIterator, error) {
 	s.n++
 	if s.n >= 2 {
 		return nil, errors.New("índice indisponível")
@@ -174,13 +173,10 @@ func (s *storeFalhaNoSegundo) LookupBitmap(types.FieldID, types.Value) (types.Ro
 // descritor esgotado depois de horas.
 func TestAbreTermosFechaOsJaAbertosNoErro(t *testing.T) {
 	st := &storeFalhaNoSegundo{}
-	campo := &schema.CompiledField{ID: 1, Name: "x", Index: schema.IndexBitmap}
-	termos := []planner.IndexTerm{
-		{Field: campo, Kind: schema.IndexBitmap},
-		{Field: campo, Kind: schema.IndexBitmap},
-	}
+	campo := &schema.CompiledField{ID: 1, Name: "x", Indexado: true}
+	termos := []planner.IndexTerm{{Field: campo}, {Field: campo}}
 
-	if _, err := abreTermos(termos, st, nil); err == nil {
+	if _, err := abreTermos(termos, st); err == nil {
 		t.Fatal("abreTermos não propagou o erro")
 	}
 	if len(st.abertos) != 1 {
@@ -191,15 +187,8 @@ func TestAbreTermosFechaOsJaAbertosNoErro(t *testing.T) {
 	}
 }
 
-// Termo de hash sem a capability: erro claro, e nada aberto fica pendurado.
-func TestAbreTermosSemCapabilityDeHash(t *testing.T) {
-	st := &storeFalhaNoSegundo{}
-	campo := &schema.CompiledField{ID: 1, Name: "x", Index: schema.IndexHash}
-	_, err := abreTermos([]planner.IndexTerm{{Field: campo, Kind: schema.IndexHash}}, st, nil)
-	if !errors.Is(err, ErrInvalidPlan) {
-		t.Fatalf("erro = %v, want ErrInvalidPlan", err)
-	}
-	if !strings.Contains(err.Error(), "LookupHash") {
-		t.Errorf("mensagem = %q", err)
-	}
-}
+// TestAbreTermosSemCapabilityDeHash saiu daqui: ele cobria o ramo
+// `hash == nil` do abreTermos, e esse ramo era a capability OPCIONAL do índice
+// hash — detectada por type assertion e ausente do recorte Store. Com o Lookup
+// dentro da interface, um store que não o implementa não compila, e o erro que o
+// teste afirmava não tem mais como ser produzido em runtime.

@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/nishisan-dev/nishidb/internal/query/planner"
-	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
@@ -32,34 +31,34 @@ func TestPlanString(t *testing.T) {
 			`PointLookup(id="CMP-V0001PPCLP-001")`},
 		{"aspas internas", &planner.PointLookupPlan{Field: id, Key: str(`a"b`)},
 			`PointLookup(id="a\"b")`},
-		{"hash com ipv4 em hex", &planner.HashIndexPlan{Field: nasIP, Val: ipv4(t, "10.0.0.1")},
-			"HashIndex(NAS-IP-Address=0x0a000001)"},
-		{"bitmap scan", &planner.BitmapScanPlan{Field: status, Val: str("Stop")},
-			`BitmapScan(Acct-Status-Type="Stop")`},
-		{"int64", &planner.BitmapScanPlan{Field: octets, Val: i64(4096)},
-			"BitmapScan(Acct-Input-Octets=4096)"},
-		{"timestamp", &planner.BitmapScanPlan{Field: quando, Val: types.Value{Type: types.TypeTimestamp, I64: 1723500000000}},
-			"BitmapScan(Event-Timestamp=1723500000000)"},
-		{"double", &planner.BitmapScanPlan{Field: octets,
+		{"ipv4 em hex", &planner.IndexScanPlan{Field: nasIP, Val: ipv4(t, "10.0.0.1")},
+			"IndexScan(NAS-IP-Address=0x0a000001)"},
+		{"index scan", &planner.IndexScanPlan{Field: status, Val: str("Stop")},
+			`IndexScan(Acct-Status-Type="Stop")`},
+		{"int64", &planner.IndexScanPlan{Field: octets, Val: i64(4096)},
+			"IndexScan(Acct-Input-Octets=4096)"},
+		{"timestamp", &planner.IndexScanPlan{Field: quando, Val: types.Value{Type: types.TypeTimestamp, I64: 1723500000000}},
+			"IndexScan(Event-Timestamp=1723500000000)"},
+		{"double", &planner.IndexScanPlan{Field: octets,
 			Val: types.Value{Type: types.TypeDouble, I64: int64(math.Float64bits(10.5))}},
-			"BitmapScan(Acct-Input-Octets=10.5)"},
-		{"bool", &planner.BitmapScanPlan{Field: octets, Val: types.Value{Type: types.TypeBool, I64: 1}},
-			"BitmapScan(Acct-Input-Octets=true)"},
-		{"bool falso", &planner.BitmapScanPlan{Field: octets, Val: types.Value{Type: types.TypeBool}},
-			"BitmapScan(Acct-Input-Octets=false)"},
-		{"prefixo em hex", &planner.BitmapScanPlan{Field: prefixo,
+			"IndexScan(Acct-Input-Octets=10.5)"},
+		{"bool", &planner.IndexScanPlan{Field: octets, Val: types.Value{Type: types.TypeBool, I64: 1}},
+			"IndexScan(Acct-Input-Octets=true)"},
+		{"bool falso", &planner.IndexScanPlan{Field: octets, Val: types.Value{Type: types.TypeBool}},
+			"IndexScan(Acct-Input-Octets=false)"},
+		{"prefixo em hex", &planner.IndexScanPlan{Field: prefixo,
 			Val: types.Value{Type: types.TypeIPv6Prefix, Bytes: []byte{0x40, 0x20, 0x01, 0x0d, 0xb8}}},
-			"BitmapScan(Framed-IPv6-Prefix=0x4020010db8)"},
-		{"interseção preserva a ordem dos termos", &planner.BitmapIntersectPlan{Terms: []planner.IndexTerm{
-			{Field: status, Val: str("Stop"), Kind: schema.IndexBitmap},
-			{Field: protocol, Val: str("PPPoE"), Kind: schema.IndexBitmap},
-		}}, `BitmapIntersect(Acct-Status-Type="Stop", Framed-Protocol="PPPoE")`},
-		// Só a união prefixa o índice: na interseção todos são bitmap por
-		// construção e o prefixo seria ruído.
-		{"união prefixa o índice de cada termo", &planner.IndexUnionPlan{Terms: []planner.IndexTerm{
-			{Field: status, Val: str("Stop"), Kind: schema.IndexBitmap},
-			{Field: nasIP, Val: ipv4(t, "10.0.0.1"), Kind: schema.IndexHash},
-		}}, `IndexUnion(bitmap:Acct-Status-Type="Stop", hash:NAS-IP-Address=0x0a000001)`},
+			"IndexScan(Framed-IPv6-Prefix=0x4020010db8)"},
+		{"interseção preserva a ordem dos termos", &planner.IndexIntersectPlan{Terms: []planner.IndexTerm{
+			{Field: status, Val: str("Stop")},
+			{Field: protocol, Val: str("PPPoE")},
+		}}, `IndexIntersect(Acct-Status-Type="Stop", Framed-Protocol="PPPoE")`},
+		// A união também preserva a ordem dos termos, e já não prefixa cada um
+		// com o motor: o prefixo distinguia bitmap de hash, e não há mais dois.
+		{"união preserva a ordem dos termos", &planner.IndexUnionPlan{Terms: []planner.IndexTerm{
+			{Field: status, Val: str("Stop")},
+			{Field: nasIP, Val: ipv4(t, "10.0.0.1")},
+		}}, `IndexUnion(Acct-Status-Type="Stop", NAS-IP-Address=0x0a000001)`},
 	}
 	for _, tc := range casos {
 		t.Run(tc.nome, func(t *testing.T) {
@@ -80,7 +79,7 @@ func TestPlanStringUsaNomeOriginalENaoAlias(t *testing.T) {
 	if porAlias.String() != porNome.String() {
 		t.Errorf("alias = %s, nome = %s: deveriam ser iguais", porAlias, porNome)
 	}
-	if porAlias.String() != `BitmapScan(Acct-Status-Type="Stop")` {
+	if porAlias.String() != `IndexScan(Acct-Status-Type="Stop")` {
 		t.Errorf("String() = %s, want o nome original", porAlias)
 	}
 }
@@ -89,10 +88,11 @@ func TestPlanStringUsaNomeOriginalENaoAlias(t *testing.T) {
 // nunca produz mas um teste ou um dump podem construir) tem de render texto,
 // não derrubar o processo que estava só tentando registrar o que aconteceu.
 func TestPlanStringNaoQuebraComCampoNil(t *testing.T) {
+	// Eram quatro entradas: o BitmapScanPlan e o HashIndexPlan viraram a MESMA
+	// forma de plano, e listar IndexScanPlan duas vezes não acrescenta caso.
 	planos := []planner.Plan{
-		&planner.BitmapScanPlan{Val: str("Stop")},
+		&planner.IndexScanPlan{Val: str("Stop")},
 		&planner.PointLookupPlan{Key: str("A")},
-		&planner.HashIndexPlan{Val: str("x")},
 		&planner.IndexUnionPlan{Terms: []planner.IndexTerm{{Val: str("a")}, {Val: str("b")}}},
 	}
 	for _, pl := range planos {

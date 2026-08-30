@@ -1625,13 +1625,21 @@ Prioridade:
 
 ```text
 1 primary key lookup
-2 hash index
-3 bitmap index
-4 index intersection/union
-5 full scan
+2 índice (1 termo = scan, >= 2 = interseção)
+3 união de índice (OR na raiz)
+4 full scan
 ```
 
-Não implementar optimizer baseado em custo na v1.
+Os passos 2 e 3 eram quatro — `hash index`, `bitmap index` e
+`index intersection/union` —, e viraram dois porque existe **um motor de índice
+só**: `hash` e `bitmap` deixaram de nomear coisas diferentes. O desenho desse
+motor, e o que a unificação muda no `Store`, no planner e no executor, estão em
+`planning/spec-subsistema-1-indice-por-segmento.md` (D5 e §3.1); aqui fica só a
+regra.
+
+A prioridade é **fixa** e o planner **nunca falha**: toda dúvida degrada para
+full scan, que é sempre correto porque o executor revalida o WHERE inteiro
+(§44). Não implementar optimizer baseado em custo na v1.
 
 ---
 

@@ -29,18 +29,18 @@ func TestBitmapFieldNamesResolvePeloDicionario(t *testing.T) {
 	// e o dicionário vive dentro do Store. Sem declarar por nome, o
 	// bootstrap exigiria abrir sem índices, compilar, fechar e reabrir.
 	dir := t.TempDir()
-	opts := Options{Dir: dir, BitmapFieldNames: []string{"id", "status", "counter"}}
+	opts := Options{Dir: dir, CamposIndexadosPorNome: []string{"id", "status", "counter"}}
 	s := audOpen(t, opts)
 	defer s.Close()
 
 	// A ordem de criação no dicionário fixa os IDs 1..3.
 	for _, want := range []types.FieldID{fldID, fldStatus, fldCounter} {
-		if !s.HasBitmap(want) {
-			t.Fatalf("campo %d declarado por nome deveria ter bitmap; conjunto=%v", want, s.BitmapFields())
+		if !s.Indexado(want) {
+			t.Fatalf("campo %d declarado por nome deveria ter bitmap; conjunto=%v", want, s.CamposIndexados())
 		}
 	}
 	mustPut(t, s, "bn", 1, statusPayload(t, s, "bn", "Start", 1), nil)
-	it, err := s.LookupBitmap(fldStatus, strVal("Start"))
+	it, err := s.Lookup(fldStatus, strVal("Start"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,11 +61,11 @@ func TestBitmapFieldsEBitmapFieldNamesSaoUniao(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	opts := Options{Dir: dir, BitmapFields: []types.FieldID{fldStatus}, BitmapFieldNames: []string{"id", "status"}}
+	opts := Options{Dir: dir, CamposIndexados: []types.FieldID{fldStatus}, CamposIndexadosPorNome: []string{"id", "status"}}
 	s2 := audOpen(t, opts)
 	defer s2.Close()
 	// "status" aparece dos dois lados: entra uma vez só.
-	if got := s2.BitmapFields(); len(got) != 2 {
+	if got := s2.CamposIndexados(); len(got) != 2 {
 		t.Fatalf("união deveria ter 2 campos distintos, obtido %v", got)
 	}
 }
@@ -95,13 +95,13 @@ func TestIndiceNovoEmDatasetPovoadoEhAceitoEResponde(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s2, err := Open(Options{Dir: dir, BitmapFields: []types.FieldID{fldStatus}})
+	s2, err := Open(Options{Dir: dir, CamposIndexados: []types.FieldID{fldStatus}})
 	if err != nil {
 		t.Fatalf("declarar índice sobre dataset povoado deveria ser aceito: %v", err)
 	}
 	defer s2.Close()
 
-	it, err := s2.LookupBitmap(fldStatus, strVal("Start"))
+	it, err := s2.Lookup(fldStatus, strVal("Start"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestIndiceNovoEmDatasetPovoadoEhAceitoEResponde(t *testing.T) {
 // escritos no intervalo simplesmente não têm a seção do campo, e enumeram.
 func TestAbrirSemUmCampoAntesIndexadoEhAceito(t *testing.T) {
 	dir := t.TempDir()
-	s := audOpen(t, Options{Dir: dir, BitmapFields: []types.FieldID{fldStatus}})
+	s := audOpen(t, Options{Dir: dir, CamposIndexados: []types.FieldID{fldStatus}})
 	mustPut(t, s, "ra", 1, statusPayload(t, s, "ra", "Start", 1), nil)
 	if err := s.Checkpoint(); err != nil {
 		t.Fatal(err)
@@ -136,7 +136,7 @@ func TestAbrirSemUmCampoAntesIndexadoEhAceito(t *testing.T) {
 		t.Fatalf("abrir sem o campo antes indexado deveria ser aceito: %v", err)
 	}
 	defer s2.Close()
-	if s2.HasBitmap(fldStatus) {
+	if s2.Indexado(fldStatus) {
 		t.Fatal("o campo não foi declarado nesta abertura")
 	}
 }
@@ -149,13 +149,13 @@ func TestIndiceNovoEmDatasetVazioEhPermitido(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s2, err := Open(Options{Dir: dir, BitmapFieldNames: []string{"id", "status", "counter"}})
+	s2, err := Open(Options{Dir: dir, CamposIndexadosPorNome: []string{"id", "status", "counter"}})
 	if err != nil {
 		t.Fatalf("dataset vazio deveria aceitar índice novo: %v", err)
 	}
 	defer s2.Close()
 	mustPut(t, s2, "vz", 1, statusPayload(t, s2, "vz", "Start", 1), nil)
-	it, err := s2.LookupBitmap(fldStatus, strVal("Start"))
+	it, err := s2.Lookup(fldStatus, strVal("Start"))
 	if err != nil {
 		t.Fatal(err)
 	}

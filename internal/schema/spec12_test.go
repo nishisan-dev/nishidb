@@ -46,21 +46,20 @@ func TestLoadSpec12YAML(t *testing.T) {
 		lookup string
 		name   string
 		typ    types.FieldType
-		index  IndexKind
+		index  bool
 	}{
-		// nas_ip e ip eram index: hash antes da D5; hoje `index: true` mapeia
-		// SEMPRE para IndexBitmap (R3/R4, a regra que intersecta), então os
-		// dois saem com o mesmo IndexKind que status e terminate_cause.
-		{"nas_ip", "NAS-IP-Address", types.TypeIPv4, IndexBitmap},
-		{"status", "Acct-Status-Type", types.TypeString, IndexBitmap},
-		{"ip", "Framed-IP-Address", types.TypeIPv4, IndexBitmap},
-		{"username", "User-Name", types.TypeString, IndexNone},
-		{"service_id", "id", types.TypeString, IndexNone},
-		{"connect_info", "Connect-Info", types.TypeInt64, IndexNone},
-		{"ipv6_prefix", "Framed-IPv6-Prefix", types.TypeIPv6Prefix, IndexNone},
-		{"terminate_cause", "Acct-Terminate-Cause", types.TypeString, IndexBitmap},
-		{"NAS-Port-Type", "NAS-Port-Type", types.TypeString, IndexBitmap},
-		{"PSA-SERVER", "PSA-SERVER", types.TypeIPv4, IndexNone},
+		// nas_ip e ip eram index: hash antes da D5; hoje `index: true` é a única
+		// grafia, e os dois saem indexados como status e terminate_cause.
+		{"nas_ip", "NAS-IP-Address", types.TypeIPv4, true},
+		{"status", "Acct-Status-Type", types.TypeString, true},
+		{"ip", "Framed-IP-Address", types.TypeIPv4, true},
+		{"username", "User-Name", types.TypeString, false},
+		{"service_id", "id", types.TypeString, false},
+		{"connect_info", "Connect-Info", types.TypeInt64, false},
+		{"ipv6_prefix", "Framed-IPv6-Prefix", types.TypeIPv6Prefix, false},
+		{"terminate_cause", "Acct-Terminate-Cause", types.TypeString, true},
+		{"NAS-Port-Type", "NAS-Port-Type", types.TypeString, true},
+		{"PSA-SERVER", "PSA-SERVER", types.TypeIPv4, false},
 	}
 	for _, tc := range checks {
 		cf, ok := c.FieldByName([]byte(tc.lookup))
@@ -68,9 +67,9 @@ func TestLoadSpec12YAML(t *testing.T) {
 			t.Errorf("lookup %q não resolve", tc.lookup)
 			continue
 		}
-		if cf.Name != tc.name || cf.Type != tc.typ || cf.Index != tc.index {
-			t.Errorf("%q → {Name:%s Type:%v Index:%v}, want {%s %v %v}",
-				tc.lookup, cf.Name, cf.Type, cf.Index, tc.name, tc.typ, tc.index)
+		if cf.Name != tc.name || cf.Type != tc.typ || cf.Indexado != tc.index {
+			t.Errorf("%q → {Name:%s Type:%v Indexado:%v}, want {%s %v %v}",
+				tc.lookup, cf.Name, cf.Type, cf.Indexado, tc.name, tc.typ, tc.index)
 		}
 	}
 

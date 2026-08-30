@@ -294,7 +294,7 @@ de planejamento.
 
 | # | Item | Quando reabrir |
 |---|---|---|
-| 26 | **Penhasco posicional do flatten** em 67 conjuncts: a mesma query com termos reordenados muda de `BitmapScan` para `FullScan` | Se aparecer query real com dezenas de conjuncts |
+| 26 | **Penhasco posicional do flatten** em 67 conjuncts: a mesma query com termos reordenados muda de `IndexScan` para `FullScan` | Se aparecer query real com dezenas de conjuncts |
 | 27 | **Grupo OR indexável dentro de AND** não vira união (a regra 5 vale só na raiz), e `key='a' OR key='b'` não vira união de point lookups | Otimização; ambos são superset correto hoje |
 | 28 | ~~**`StreamWriter` nunca encolhe**: uma linha de 1 MiB fixa a capacidade pela vida do writer~~ — **FECHADO na fase de consulta longa** | Fechou exatamente como o próprio texto deste item previa: virou o `runtime.query.maxBufferPerQuery` do §80. O teto vale sobre a CAPACIDADE do buffer (é o array que ocupa memória, e era ele que o `buf[:0]` preservava), a linha que não cabe sai como `ROW_TOO_LARGE` nomeando o próprio tamanho e a chave, e o array grande vira lixo na hora — recusar sem soltar a memória teria evitado o sintoma errado. Provas: `TestStreamWriterRecusaCrescerAlemDoOrcamento`, `TestLinhaAcimaDoOrcamentoNomeiaOLimiteEmVezDeCrescer`, `TestLinhaRecusadaNaoDescartaAsLinhasJaEscritas`, `TestBufferInicialNaoNasceMaiorQueOOrcamento` e, fim a fim pelo protocolo, `TestLinhaAcimaDoOrcamentoSaiComoRowTooLargeNoFecho` com o par `TestAMesmaLinhaPassaComOrcamentoQueAComporta` |
 | 29 | **Alarme falso do teto exato**: resultado com exatamente `maxRows` linhas reporta truncamento | Distinguir exigiria varrer o resto do dataset |

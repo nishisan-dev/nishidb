@@ -260,7 +260,7 @@ func TestDerivadaSobreviveAoReopenSemVirarCampoDeTopo(t *testing.T) {
 	}
 }
 
-// CamposComBitmap é o ÚNICO lugar que decide quais campos o Store abre com
+// CamposComIndice é o ÚNICO lugar que decide quais campos o Store abre com
 // índice. Existia como um laço copiado em quatro sítios — servidor, duas rotas
 // do CLI e o benchmark —, e nenhum deles conhecia a coluna derivada: o
 // servidor criaria o dataset com o índice, e o `nishidb query` seguinte
@@ -273,21 +273,21 @@ func TestCamposComBitmapIncluiADerivada(t *testing.T) {
 		"    id:\n      type: string\n    status:\n      type: string\n      index: true", 1)
 	s := parseOK(t, yml)
 
-	got := CamposComBitmap(s)
+	got := CamposComIndice(s)
 	quer := []string{"probe_ip", "status"} // ordenado
 	if len(got) != len(quer) {
-		t.Fatalf("CamposComBitmap = %v, quer %v", got, quer)
+		t.Fatalf("CamposComIndice = %v, quer %v", got, quer)
 	}
 	for i := range quer {
 		if got[i] != quer[i] {
-			t.Fatalf("CamposComBitmap = %v, quer %v (ordem é contrato: ela decide o FieldID de um dataset novo)", got, quer)
+			t.Fatalf("CamposComIndice = %v, quer %v (ordem é contrato: ela decide o FieldID de um dataset novo)", got, quer)
 		}
 	}
 }
 
 func TestCamposComBitmapVazioSemIndice(t *testing.T) {
-	if got := CamposComBitmap(parseOK(t, extractYAML)); len(got) != 0 {
-		t.Errorf("CamposComBitmap = %v, quer vazio", got)
+	if got := CamposComIndice(parseOK(t, extractYAML)); len(got) != 0 {
+		t.Errorf("CamposComIndice = %v, quer vazio", got)
 	}
 }
 

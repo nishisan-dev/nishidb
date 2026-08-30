@@ -57,13 +57,12 @@ func novaBancadaTTL(t *testing.T, yaml string) *bancadaTTL {
 		t.Fatal(err)
 	}
 	st, err := storage.Open(storage.Options{
-		Dir:              filepath.Join(dir, "dados"),
-		BitmapFieldNames: schema.CamposComBitmap(spec),
-		HashFieldNames:   schema.CamposComHash(spec),
-		TTLAtivo:         len(spec.Materialization.RegrasTTL) > 0,
-		DuracaoDeFundo:   spec.Materialization.DuracaoDeFundo,
-		CampoDeEscrita:   schema.CampoInstanteDeEscrita,
-		CampoDePrazo:     schema.CampoDePrazo,
+		Dir:                    filepath.Join(dir, "dados"),
+		CamposIndexadosPorNome: schema.CamposComIndice(spec),
+		TTLAtivo:               len(spec.Materialization.RegrasTTL) > 0,
+		DuracaoDeFundo:         spec.Materialization.DuracaoDeFundo,
+		CampoDeEscrita:         schema.CampoInstanteDeEscrita,
+		CampoDePrazo:           schema.CampoDePrazo,
 	})
 	if err != nil {
 		t.Fatal(err)

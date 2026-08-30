@@ -12,8 +12,7 @@ import (
 )
 
 // alvoComIndiceYAML declara dois campos com `index: true` — a única grafia
-// desde a D5 — para o teste abaixo verificar a coluna `indexed`, que soma
-// HasBitmap e HasHash.
+// desde a D5 — para o teste abaixo verificar a coluna `indexed`.
 const alvoComIndiceYAML = `version: 1
 name: eventos
 materialization:
@@ -34,20 +33,19 @@ schema:
       type: string
 `
 
-// TestIndexedSomaAsDuasCapacidadesDeMotor: a coluna `indexed` fala do MOTOR, e
-// a coluna `index` ao lado fala do que o YAML declara. Antes da D5, um campo
-// `index: hash` sobre um Store que só respondia HasBitmap saía com
-// index=hash e indexed=false — correto na época, mentira a partir do motor
-// físico (fonte.go documenta o histórico).
+// TestIndexedRefleteACapacidadeDoMotor: a coluna `indexed` fala do MOTOR, e a
+// coluna `index` ao lado fala do que o YAML declara. Antes da D5, um campo
+// `index: hash` sobre um Store que só respondia pelo bitmap saía com index=hash
+// e indexed=false — correto na época, mentira a partir do motor físico (fonte.go
+// documenta o histórico).
 //
-// A D5 aposentou a grafia `hash`, e todo campo indexado compila para o mesmo
-// IndexKind (compile.go, indexKindDe) — então `index` só pode sair "bitmap" ou
-// "none" agora. O que este teste continua provando é a soma: HasBitmap OU
-// HasHash reporta `indexed=true`, mesmo quando só UMA das duas capabilities
-// enxerga o campo — o cenário sintético abaixo (status só em Bitmap, node só
-// em Hash) é o que exercita os dois lados da soma ao mesmo tempo. A soma em
-// si é código que a Tarefa 11 funde; até lá, ela precisa continuar certa.
-func TestIndexedSomaAsDuasCapacidadesDeMotor(t *testing.T) {
+// Chamava-se TestIndexedSomaAsDuasCapacidadesDeMotor e montava um cenário
+// sintético — status só em Bitmap, node só em Hash — para exercitar os dois
+// lados da SOMA das duas capabilities por motor. A soma virou uma chamada só
+// (fonte.record), e o cenário deixou de ser construível: as duas colunas
+// entram no mesmo conjunto indexado. As asserções abaixo são as MESMAS, valor
+// por valor, incluindo o vocabulário de wire da coluna `index`.
+func TestIndexedRefleteACapacidadeDoMotor(t *testing.T) {
 	spec, err := schema.Parse([]byte(alvoComIndiceYAML), schema.DefaultsPadrao)
 	if err != nil {
 		t.Fatal(err)
@@ -64,8 +62,7 @@ func TestIndexedSomaAsDuasCapacidadesDeMotor(t *testing.T) {
 		return f.ID
 	}
 	st := fakestorage.New(fakestorage.Indexes{
-		Bitmap: []types.FieldID{id("status")},
-		Hash:   []types.FieldID{id("node")},
+		Campos: []types.FieldID{id("status"), id("node")},
 	})
 
 	visto := map[string][2]string{}

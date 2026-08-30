@@ -39,7 +39,7 @@ func exigeBitmapCompleto(t *testing.T, s *Store) {
 	// ele vire um no-op invisível se algum cenário perder a configuração de
 	// índice — uma rede que passa sempre é pior que rede nenhuma.
 	if len(s.camposIndexados) == 0 {
-		t.Fatal("guarda de bitmap chamado num Store sem índice: o cenário precisa declarar BitmapFields, senão a asserção não verifica nada")
+		t.Fatal("guarda de bitmap chamado num Store sem índice: o cenário precisa declarar CamposIndexados, senão a asserção não verifica nada")
 	}
 	it := s.ScanLive()
 	defer it.Close()
@@ -64,9 +64,9 @@ func exigeBitmapCompleto(t *testing.T, s *Store) {
 			if !slices.Contains(s.camposIndexados, fid) {
 				continue
 			}
-			postings, err := s.LookupBitmap(fid, v)
+			postings, err := s.Lookup(fid, v)
 			if err != nil {
-				t.Fatalf("guarda de bitmap: LookupBitmap(%d): %v", fid, err)
+				t.Fatalf("guarda de bitmap: Lookup(%d): %v", fid, err)
 			}
 			achou := false
 			for postings.Next() {

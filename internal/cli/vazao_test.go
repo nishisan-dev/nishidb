@@ -203,17 +203,15 @@ func umaRodadaDireta(t *testing.T, entrada string) float64 {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// As duas listas saem de schema.CamposComBitmap/CamposComHash, e não de um
-	// laço local: um helper de teste que abre o dataset com um conjunto de
-	// índices diferente do que o servidor usa reproduz, dentro da suíte, o
-	// modo de falha cruzado que aquelas funções existem para impedir.
-	bitmaps := schema.CamposComBitmap(spec)
-	hashes := schema.CamposComHash(spec)
+	// A lista sai de schema.CamposComIndice, e não de um laço local: um helper de
+	// teste que abre o dataset com um conjunto de índices diferente do que o
+	// servidor usa reproduz, dentro da suíte, o modo de falha cruzado que aquela
+	// função existe para impedir.
+	indexados := schema.CamposComIndice(spec)
 	st, err := storage.Open(storage.Options{
-		Dir:              t.TempDir(),
-		SegmentSize:      8 << 20,
-		BitmapFieldNames: bitmaps,
-		HashFieldNames:   hashes,
+		Dir:                    t.TempDir(),
+		SegmentSize:            8 << 20,
+		CamposIndexadosPorNome: indexados,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -335,21 +335,19 @@ func Novo(cfg *config.Config, o Opcoes) (*Servidor, error) {
 
 func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*dataset, error) {
 	dir := s.cfg.CaminhoDoDataset(spec.Name)
-	bitmaps := schema.CamposComBitmap(spec)
-	hashes := schema.CamposComHash(spec)
+	indexados := schema.CamposComIndice(spec)
 	st, err := storage.Open(storage.Options{
-		Dir:              dir,
-		Dataset:          spec.Name,
-		SegmentSize:      s.cfg.SegmentSize(),
-		BitmapFieldNames: bitmaps,
-		HashFieldNames:   hashes,
-		ColunasDerivadas: spec.NomesDasExtracoes(),
-		Log:              log,
-		Metrics:          s.reg,
-		TTLAtivo:         len(spec.Materialization.RegrasTTL) > 0,
-		DuracaoDeFundo:   spec.Materialization.DuracaoDeFundo,
-		CampoDeEscrita:   schema.CampoInstanteDeEscrita,
-		CampoDePrazo:     schema.CampoDePrazo,
+		Dir:                    dir,
+		Dataset:                spec.Name,
+		SegmentSize:            s.cfg.SegmentSize(),
+		CamposIndexadosPorNome: indexados,
+		ColunasDerivadas:       spec.NomesDasExtracoes(),
+		Log:                    log,
+		Metrics:                s.reg,
+		TTLAtivo:               len(spec.Materialization.RegrasTTL) > 0,
+		DuracaoDeFundo:         spec.Materialization.DuracaoDeFundo,
+		CampoDeEscrita:         schema.CampoInstanteDeEscrita,
+		CampoDePrazo:           schema.CampoDePrazo,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("dataset %q: %w", spec.Name, err)

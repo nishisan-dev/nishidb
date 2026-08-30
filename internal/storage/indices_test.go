@@ -68,10 +68,9 @@ func abreStoreIndexadoComSegmentoPequeno(t *testing.T, campos []string, segSize 
 	t.Helper()
 	dir := t.TempDir()
 	s := openStore(t, Options{
-		Dir:              dir,
-		SegmentSize:      segSize,
-		HashFieldNames:   campos,
-		BitmapFieldNames: campos,
+		Dir:                    dir,
+		SegmentSize:            segSize,
+		CamposIndexadosPorNome: campos,
 	})
 	return s, dir
 }
@@ -84,13 +83,13 @@ func abreStoreHistoricoIndexado(t *testing.T, campos []string, segSize int64) (*
 	base := openStore(t, Options{})
 	dir := t.TempDir()
 	hist := openStore(t, Options{
-		Dir:               dir,
-		Dataset:           "events_history",
-		SegmentSize:       segSize,
-		Modo:              ModoHistorico,
-		DictCompartilhado: base.FieldDict(),
-		CampoDeEscrita:    "_writtenAt",
-		HashFieldNames:    campos,
+		Dir:                    dir,
+		Dataset:                "events_history",
+		SegmentSize:            segSize,
+		Modo:                   ModoHistorico,
+		DictCompartilhado:      base.FieldDict(),
+		CampoDeEscrita:         "_writtenAt",
+		CamposIndexadosPorNome: campos,
 	})
 	return hist, dir
 }
@@ -193,7 +192,7 @@ func TestARotacaoSelaOSegmentoAnterior(t *testing.T) {
 // dataset inacessível.
 func TestOWIPDeUmaExecucaoAnteriorEhDescartadoNaAbertura(t *testing.T) {
 	dir := t.TempDir()
-	s := openStore(t, Options{Dir: dir, HashFieldNames: []string{"node"}})
+	s := openStore(t, Options{Dir: dir, CamposIndexadosPorNome: []string{"node"}})
 	poeLinhas(t, s, 50)
 	seg := s.curSegID.Load()
 	caminho := segindex.CaminhoWIP(filepath.Join(dir, "data"), seg, campoDoDicionario(t, s, "node"))
@@ -208,7 +207,7 @@ func TestOWIPDeUmaExecucaoAnteriorEhDescartadoNaAbertura(t *testing.T) {
 
 	// openStore falha o teste se o Open recusar: é essa recusa que o descarte
 	// existe para não acontecer.
-	s2 := openStore(t, Options{Dir: dir, HashFieldNames: []string{"node"}})
+	s2 := openStore(t, Options{Dir: dir, CamposIndexadosPorNome: []string{"node"}})
 	depois, err := os.ReadFile(caminho)
 	if err != nil {
 		t.Fatalf("o segmento corrente ficou sem .widx depois da abertura: %v", err)

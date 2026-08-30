@@ -36,8 +36,8 @@ bnd -> bnd : coage literais E parâmetros\npara a representação da COLUNA
 bnd -> bnd : numera os slots (projeção ∪ WHERE)
 bnd --> pln : BoundQuery
 
-pln -> st : HasBitmap(field) — só CAPABILITY
-pln -> pln : R1 primary → R2 hash → R3/R4 bitmap\n→ R5 união → R6 full scan
+pln -> st : Indexado(field) — só CAPABILITY
+pln -> pln : R1 primary → R2 índice (scan/interseção)\n→ R5 união → full scan
 note right of pln
   O plano é só a FONTE DE CANDIDATOS.
   Toda dúvida degrada para full scan:
@@ -64,7 +64,7 @@ cli -> w : NewStreamWriter(stdout, DefaultBufSize)\n— criado pelo CONSUMIDOR
 loop enquanto it.Next() for true
   cli -> exe : Next()
   activate exe
-  exe -> exe : puxa o próximo candidato da fonte\njá aberta (GetByKey | LookupBitmap | ScanLive | k-way)
+  exe -> exe : puxa o próximo candidato da fonte\njá aberta (GetByKey | Lookup | ScanLive | k-way)
   exe -> st : GetByRowID(id, buf)
   st --> exe : Record ou "morto"
   alt row sem location ou tombstoned

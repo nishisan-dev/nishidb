@@ -68,11 +68,11 @@ func (s *stub) ScanLive() types.RowIDIterator {
 	return &stubIter{s: s, ids: s.ids}
 }
 
-func (s *stub) LookupBitmap(types.FieldID, types.Value) (types.RowIDIterator, error) {
+func (s *stub) Lookup(types.FieldID, types.Value) (types.RowIDIterator, error) {
 	return nil, fmt.Errorf("%w: stub sem bitmap", types.ErrInvalidArgument)
 }
 
-func (s *stub) HasBitmap(types.FieldID) bool { return false }
+func (s *stub) Indexado(types.FieldID) bool { return false }
 
 type stubIter struct {
 	s      *stub

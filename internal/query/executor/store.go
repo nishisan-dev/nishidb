@@ -26,13 +26,12 @@ type Store interface {
 	GetByRowID(id types.RowID, buf []byte) (types.Record, []byte, bool, error)
 	GetByKey(key, buf []byte) (types.Record, []byte, bool, error)
 	ScanLive() types.RowIDIterator
-	LookupBitmap(field types.FieldID, v types.Value) (types.RowIDIterator, error)
-}
-
-// HashLookuper é a capability do índice hash (Fase 8, M4). O *storage.Store do
-// M1 NÃO a implementa; o dublê de teste implementa. A detecção é por type
-// assertion, feita uma vez em Open — e o planner já degradou o plano quando
-// ela falta, então o executor nunca falha em runtime por falta de índice.
-type HashLookuper interface {
-	LookupHash(field types.FieldID, v types.Value) (types.RowIDIterator, error)
+	// Lookup abre o iterador de candidatos de um termo `campo = valor`.
+	//
+	// É UM método na interface, e não mais o lookup do bitmap somado à
+	// capability OPCIONAL do hash, detectada por type assertion: existe um motor
+	// de índice só (spec §3.1), e a opcional obrigava todo caminho de abertura a
+	// carregar o ramo "e se o store não a implementar" para um erro que o
+	// planner já tinha o dever de não deixar chegar aqui.
+	Lookup(field types.FieldID, v types.Value) (types.RowIDIterator, error)
 }

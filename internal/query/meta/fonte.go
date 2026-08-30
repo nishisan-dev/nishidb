@@ -93,19 +93,17 @@ func (f *fonte) GetByKey(key, buf []byte) (types.Record, []byte, bool, error) {
 
 func (f *fonte) ScanLive() types.RowIDIterator { return &iterador{n: len(f.campos), i: -1} }
 
-// HasBitmap e HasHash respondem SEMPRE false: a tabela virtual não declara
-// índice no seu YAML, então o planner degrada para varredura completa — que
-// sobre sete colunas e algumas dezenas de linhas é o plano certo de qualquer
-// forma. Confundir estas respostas com as do dataset ALVO seria o defeito: a
-// coluna `indexed` fala do alvo, estes métodos falam da tabela.
-func (f *fonte) HasBitmap(types.FieldID) bool { return false }
+// Indexado responde SEMPRE false: a tabela virtual não declara índice no seu
+// YAML, então o planner degrada para varredura completa — que sobre sete
+// colunas e algumas dezenas de linhas é o plano certo de qualquer forma.
+// Confundir esta resposta com a do dataset ALVO seria o defeito: a coluna
+// `indexed` fala do alvo, este método fala da tabela.
+func (f *fonte) Indexado(types.FieldID) bool { return false }
 
-func (f *fonte) HasHash(types.FieldID) bool { return false }
-
-// LookupBitmap nunca é chamado: a tabela virtual não declara índice nenhum no
+// Lookup nunca é chamado: a tabela virtual não declara índice nenhum no
 // YAML, então o planner jamais escolhe um plano indexado sobre ela. O erro
 // aqui é rede de segurança contra um plano impossível, não um caminho vivo.
-func (f *fonte) LookupBitmap(field types.FieldID, _ types.Value) (types.RowIDIterator, error) {
+func (f *fonte) Lookup(field types.FieldID, _ types.Value) (types.RowIDIterator, error) {
 	return nil, fmt.Errorf("meta: a tabela virtual não tem índice (campo %d)", field)
 }
 
@@ -126,7 +124,7 @@ func (f *fonte) record(row types.RowID, c *schema.CompiledField, buf []byte) (ty
 	// mentira a partir do motor físico.
 	indexado := false
 	if f.caps != nil {
-		indexado = f.caps.HasBitmap(c.ID) || f.caps.HasHash(c.ID)
+		indexado = f.caps.Indexado(c.ID)
 	}
 
 	vals := []struct {
@@ -136,7 +134,7 @@ func (f *fonte) record(row types.RowID, c *schema.CompiledField, buf []byte) (ty
 		{"name", texto(c.Name)},
 		{"type", texto(tipo)},
 		{"auto", booleano(c.IsAuto)},
-		{"index", texto(c.Index.String())},
+		{"index", texto(c.NomeDoIndice())},
 		{"indexed", booleano(indexado)},
 		{"id", types.Value{Type: types.TypeInt64, I64: int64(c.ID)}},
 	}

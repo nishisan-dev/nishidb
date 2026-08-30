@@ -1,7 +1,7 @@
 // Package fakestorage é o dublê de teste do Store do storage engine para o
 // ramo materializer/query. Implementa a MESMA superfície do *storage.Store
 // (§15A item 4 do plano de storage): GetByKey/Put para o writer e
-// GetByRowID/ScanLive/LookupBitmap/Sequence para o executor, com assinaturas
+// GetByRowID/ScanLive/Lookup/Sequence para o executor, com assinaturas
 // idênticas às do real para que qualquer interface declarada no consumidor
 // aceite os dois.
 //
@@ -17,7 +17,7 @@
 //
 //   - lock de dataset (storage.ErrDatasetLocked): não há diretório nem Open
 //     aqui, então não existe exclusão mútua a violar;
-//   - Options.BitmapFieldNames: o análogo é o struct Indexes, fixado na
+//   - Options.CamposIndexadosPorNome: o análogo é o struct Indexes, fixado na
 //     criação — o conjunto de índices nunca muda na vida do fake, que é a
 //     mesma promessa que o Store real faz;
 //   - modo falho sticky (types.ErrWriterFailed): o fake não tem append
@@ -52,9 +52,13 @@ import (
 
 // Indexes declara quais campos têm índice secundário no fake (o Store real
 // deriva isso do schema do dataset).
+//
+// UM campo, e não mais o par Bitmap/Hash: o Store real tem um motor de índice
+// só (spec D5), e um dublê que ainda soubesse declarar dois conjuntos poderia
+// montar um estado que o real não alcança — que é exatamente o que um dublê não
+// pode fazer.
 type Indexes struct {
-	Bitmap []types.FieldID
-	Hash   []types.FieldID
+	Campos []types.FieldID
 }
 
 type row struct {
@@ -83,9 +87,7 @@ type Store struct {
 	byKey    map[string]types.RowID
 	rows     map[types.RowID]*row
 	nextRow  types.RowID
-	bitmap   map[types.FieldID]bool
-	hash     map[types.FieldID]bool
-	indexed  map[types.FieldID]bool // união bitmap+hash: um motor só (spec D5)
+	indexado map[types.FieldID]bool
 	postings map[postingKey]map[types.RowID]struct{}
 
 	// PutCalls instrumenta as chamadas na ordem em que ocorreram.
@@ -106,18 +108,11 @@ func New(idx Indexes) *Store {
 		// contador zerado): os índices densos indexam por rowId, e começar
 		// em 1 desperdiçaria o slot 0 em todos eles.
 		nextRow:  0,
-		bitmap:   map[types.FieldID]bool{},
-		hash:     map[types.FieldID]bool{},
-		indexed:  map[types.FieldID]bool{},
+		indexado: map[types.FieldID]bool{},
 		postings: map[postingKey]map[types.RowID]struct{}{},
 	}
-	for _, f := range idx.Bitmap {
-		s.bitmap[f] = true
-		s.indexed[f] = true
-	}
-	for _, f := range idx.Hash {
-		s.hash[f] = true
-		s.indexed[f] = true
+	for _, f := range idx.Campos {
+		s.indexado[f] = true
 	}
 	return s
 }
@@ -212,12 +207,11 @@ func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *ty
 	return rowID, created, nil
 }
 
-// validateIndexable recusa valor grande demais para o dicionário de valores
-// do índice bitmap, como o real faz ANTES de tornar o record durável.
+// validateIndexable recusa valor grande demais para o dicionário de valores do
+// índice, como o real faz ANTES de tornar o record durável.
 //
-// Vale só para campo COM índice bitmap: o teto é do values.dict, não do
-// payload — campo sem índice aceita o mesmo valor sem reclamar, e o teste
-// prova os dois lados. Espelhar isto importa porque a violação, no real, é
+// Vale só para campo INDEXADO: o teto é do values.dict, não do payload — campo
+// sem índice aceita o mesmo valor sem reclamar, e o teste prova os dois lados. Espelhar isto importa porque a violação, no real, é
 // fatal se escapar: o record fica durável, o replay do tail tenta reindexá-lo
 // a cada abertura e o dataset inteiro deixa de abrir. Um dublê que aceitasse
 // deixaria o teste passar e a integração explodir.
@@ -229,8 +223,8 @@ func (s *Store) validateIndexable(payload []byte) error {
 		if !ok {
 			return r.Err()
 		}
-		if s.bitmap[id] && len(v.Bytes) > types.MaxIndexedValueBytes {
-			return fmt.Errorf("%w: campo %d tem índice bitmap e valor de %d bytes, acima do teto de %d",
+		if s.indexado[id] && len(v.Bytes) > types.MaxIndexedValueBytes {
+			return fmt.Errorf("%w: campo %d é indexado e tem valor de %d bytes, acima do teto de %d",
 				types.ErrInvalidArgument, id, len(v.Bytes), types.MaxIndexedValueBytes)
 		}
 	}
@@ -272,7 +266,7 @@ func (s *Store) aplicaPostings(rowID types.RowID, payload []byte) {
 }
 
 func (s *Store) addPosting(field types.FieldID, v types.Value, rowID types.RowID) {
-	if !s.indexed[field] {
+	if !s.indexado[field] {
 		return
 	}
 	k := postingKey{field, valKey(v)}
@@ -398,17 +392,10 @@ func (s *Store) ScanLive() types.RowIDIterator {
 	return &rowIDIter{ids: ids}
 }
 
-// HasBitmap informa se o campo tem índice bitmap — o capability check do
-// planner. Sem ele o plano escolhe o caminho indexado e a query falha em
-// runtime, em vez de degradar para full scan como o design promete.
-func (s *Store) HasBitmap(field types.FieldID) bool { return s.bitmap[field] }
-
-// HasHash informa se o campo tem índice hash — o capability check POR CAMPO
-// do planner (Fase 8), análogo do HasBitmap. Sem ele, um schema que declara
-// `index: hash` num campo que o store não indexa faria o planner escolher o
-// plano de hash e o executor falhar em runtime, que é exatamente o que a
-// degradação para full scan existe para evitar.
-func (s *Store) HasHash(field types.FieldID) bool { return s.hash[field] }
+// Indexado informa se o campo tem índice — o capability check do planner. Sem
+// ele o plano escolhe o caminho indexado e a query falha em runtime, em vez de
+// degradar para full scan como o design promete.
+func (s *Store) Indexado(field types.FieldID) bool { return s.indexado[field] }
 
 // InjectPosting insere um posting no índice do campo SEM alterar o estado da
 // row. Existe para reproduzir o falso positivo que o Store real tolera por
@@ -422,43 +409,34 @@ func (s *Store) HasHash(field types.FieldID) bool { return s.hash[field] }
 // inexistente é ACEITO — posting apontando para row que não está mais lá é
 // justamente um dos estados órfãos do real.
 func (s *Store) InjectPosting(field types.FieldID, v types.Value, id types.RowID) error {
-	if !s.indexed[field] {
+	if !s.indexado[field] {
 		return fmt.Errorf("%w: campo %d não possui índice", types.ErrInvalidArgument, field)
 	}
-	if s.bitmap[field] && len(v.Bytes) > types.MaxIndexedValueBytes {
-		return fmt.Errorf("%w: campo %d tem índice bitmap e valor de %d bytes, acima do teto de %d",
+	if len(v.Bytes) > types.MaxIndexedValueBytes {
+		return fmt.Errorf("%w: campo %d é indexado e tem valor de %d bytes, acima do teto de %d",
 			types.ErrInvalidArgument, field, len(v.Bytes), types.MaxIndexedValueBytes)
 	}
 	s.addPosting(field, v, id)
 	return nil
 }
 
-// BitmapFields devolve, em ordem crescente, os campos com índice bitmap.
-func (s *Store) BitmapFields() []types.FieldID {
-	out := make([]types.FieldID, 0, len(s.bitmap))
-	for field := range s.bitmap {
+// CamposIndexados devolve, em ordem crescente, os campos com índice.
+func (s *Store) CamposIndexados() []types.FieldID {
+	out := make([]types.FieldID, 0, len(s.indexado))
+	for field := range s.indexado {
 		out = append(out, field)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out
 }
 
-// LookupBitmap consulta o índice bitmap do campo; valor nunca visto devolve
-// iterador vazio; campo sem índice bitmap é ErrInvalidArgument. O resultado
-// é um SUPERSET de candidatos: rows tombstoned podem aparecer — valide
-// liveness e predicate via GetByRowID (spec §44).
-func (s *Store) LookupBitmap(field types.FieldID, v types.Value) (types.RowIDIterator, error) {
-	if !s.bitmap[field] {
-		return nil, fmt.Errorf("%w: campo %d não possui índice bitmap", types.ErrInvalidArgument, field)
-	}
-	return s.lookup(field, v), nil
-}
-
-// LookupHash é a capability da Fase 8 — no fake, idêntica ao bitmap sobre os
-// campos declarados com índice hash.
-func (s *Store) LookupHash(field types.FieldID, v types.Value) (types.RowIDIterator, error) {
-	if !s.hash[field] {
-		return nil, fmt.Errorf("%w: campo %d não possui índice hash", types.ErrInvalidArgument, field)
+// Lookup consulta o índice do campo; valor nunca visto devolve iterador vazio;
+// campo sem índice é ErrInvalidArgument. O resultado é um SUPERSET de
+// candidatos: rows tombstoned podem aparecer — valide liveness e predicate via
+// GetByRowID (spec §44).
+func (s *Store) Lookup(field types.FieldID, v types.Value) (types.RowIDIterator, error) {
+	if !s.indexado[field] {
+		return nil, fmt.Errorf("%w: campo %d não possui índice", types.ErrInvalidArgument, field)
 	}
 	return s.lookup(field, v), nil
 }

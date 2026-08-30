@@ -26,13 +26,13 @@ import (
 func abreHistoricoIndexadoEm(t *testing.T, base *Store, dir string, campos []string, segSize int64) *Store {
 	t.Helper()
 	return openStore(t, Options{
-		Dir:               dir,
-		Dataset:           "events_history",
-		SegmentSize:       segSize,
-		Modo:              ModoHistorico,
-		DictCompartilhado: base.FieldDict(),
-		CampoDeEscrita:    "_writtenAt",
-		HashFieldNames:    campos,
+		Dir:                    dir,
+		Dataset:                "events_history",
+		SegmentSize:            segSize,
+		Modo:                   ModoHistorico,
+		DictCompartilhado:      base.FieldDict(),
+		CampoDeEscrita:         "_writtenAt",
+		CamposIndexadosPorNome: campos,
 	})
 }
 
@@ -44,9 +44,9 @@ func abreHistoricoIndexadoEm(t *testing.T, base *Store, dir string, campos []str
 // inteiro virou candidato".
 func candidatosCrus(t *testing.T, s *Store, campo types.FieldID, v types.Value) []types.RowID {
 	t.Helper()
-	it, err := s.LookupHash(campo, v)
+	it, err := s.Lookup(campo, v)
 	if err != nil {
-		t.Fatalf("LookupHash(%d): %v", campo, err)
+		t.Fatalf("Lookup(%d): %v", campo, err)
 	}
 	return collectRows(t, it)
 }
@@ -278,7 +278,7 @@ func rowsDoSegmento(t *testing.T, s *Store, seg uint32) []types.RowID {
 // conjunto cru é exatamente o que o segmento sem índice enumerou.
 func TestAEnumeracaoDoMaterializadoUsaOLocationsENaoOsRecords(t *testing.T) {
 	dir := t.TempDir()
-	s := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, HashFieldNames: []string{"node"}})
+	s := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, CamposIndexadosPorNome: []string{"node"}})
 	alvo := s.curSegID.Load()
 	poeLinhasAteRotacionar(t, s, alvo)
 	// Os updates espalham rowIds antigos pelo segmento novo: é essa mistura que
@@ -299,7 +299,7 @@ func TestAEnumeracaoDoMaterializadoUsaOLocationsENaoOsRecords(t *testing.T) {
 	if err := os.Remove(segindex.CaminhoSelado(filepath.Join(dir, "data"), alvo)); err != nil {
 		t.Fatal(err)
 	}
-	s2 := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, HashFieldNames: []string{"node"}})
+	s2 := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, CamposIndexadosPorNome: []string{"node"}})
 
 	esperado := rowsComLocationNoSegmento(t, s2, alvo)
 	if len(esperado) == 0 {
@@ -344,7 +344,7 @@ func TestOResultadoNaoMudaComOSegmentoIndexadoOuNao(t *testing.T) {
 				if caso.historico {
 					return abreHistoricoIndexadoEm(t, base, dir, []string{"node"}, 8<<10)
 				}
-				return openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, HashFieldNames: []string{"node"}})
+				return openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, CamposIndexadosPorNome: []string{"node"}})
 			}
 			s := abre()
 			poeLinhasAteRotacionar(t, s, s.curSegID.Load())
@@ -424,7 +424,7 @@ func apagaTodosOsSelados(t *testing.T, dir string) {
 // medir a coincidência.
 func TestUpdateQueCruzaSegmentoLevaAPostingDoCampoInalterado(t *testing.T) {
 	dir := t.TempDir()
-	s := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, HashFieldNames: []string{"node", "type"}})
+	s := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, CamposIndexadosPorNome: []string{"node", "type"}})
 	campoNode := campoDoDicionario(t, s, "node")
 
 	row, _ := mustPut(t, s, "viajante", 1, linhaIndexada(t, s, "viajante", "estavel", 1), nil)
@@ -471,7 +471,7 @@ func TestUpdateQueCruzaSegmentoLevaAPostingDoCampoInalterado(t *testing.T) {
 // seria invisível ao teste anterior.
 func TestAPostingDoCampoInalteradoSobreviveASelagemEAoRestart(t *testing.T) {
 	dir := t.TempDir()
-	s := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, HashFieldNames: []string{"node", "type"}})
+	s := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, CamposIndexadosPorNome: []string{"node", "type"}})
 	campoNode := campoDoDicionario(t, s, "node")
 
 	row, _ := mustPut(t, s, "viajante", 1, linhaIndexada(t, s, "viajante", "estavel", 1), nil)
@@ -518,7 +518,7 @@ func TestAPostingDoCampoInalteradoSobreviveASelagemEAoRestart(t *testing.T) {
 	}
 
 	// E o dataset reaberto continua devolvendo a linha.
-	s2 := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, HashFieldNames: []string{"node", "type"}})
+	s2 := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, CamposIndexadosPorNome: []string{"node", "type"}})
 	if rows := lookupRevalidado(t, s2, campoNode, strVal("estavel")); !slices.Contains(rows, row) {
 		t.Errorf("depois do restart, WHERE node='estavel' não devolveu a row %d: %v", row, rows)
 	}
@@ -550,7 +550,7 @@ func TestAAposentadoriaNaoDesmapeiaOIndiceSobUmaVarreduraEmVoo(t *testing.T) {
 		t.Fatalf("pré-condição: o segmento %d deveria estar selado: %v", alvo, err)
 	}
 
-	it, err := s.LookupHash(campo, strVal("n1"))
+	it, err := s.Lookup(campo, strVal("n1"))
 	if err != nil {
 		t.Fatal(err)
 	}

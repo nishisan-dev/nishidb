@@ -40,20 +40,14 @@ func novoHarness(t *testing.T) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// TODOS os campos indexados do fixture entram em Bitmap E em Hash: o
-	// Store REAL (store.go, HasBitmap/HasHash) devolve true para os dois em
-	// QUALQUER campo do conjunto indexado — desde a D5, `index: true` é a
-	// única grafia e não há mais como declarar um campo que só uma das duas
-	// capabilities enxerga. Um dublê que só marcasse Bitmap divergiria do
-	// Store na direção que já custou uma rodada na Tarefa 8: capability
-	// otimista de menos, escondendo o dia em que algum código passar a
-	// consultar HasHash de verdade. Hoje é inofensivo — hashEligible testa o
-	// Kind (sempre IndexBitmap) ANTES da capability —, mas o dublê tem de
-	// continuar sendo uma descrição fiel do Store.
+	// TODOS os campos indexados do fixture entram no conjunto do dublê. A lista
+	// era passada em Bitmap E em Hash enquanto o dublê tinha dois conjuntos,
+	// porque o Store real respondia true nos dois para qualquer campo indexado;
+	// com um conjunto só, a paridade com o real é estrutural.
 	todosOsIndexados := ids(t, sch, "Acct-Status-Type", "Framed-Protocol", "Acct-Terminate-Cause",
 		"Filter-Id", "NAS-Port-Type", "Service-Type", "Acct-Authentic",
 		"NAS-IP-Address", "NAS-Identifier", "Framed-IP-Address")
-	idx := fakestorage.Indexes{Bitmap: todosOsIndexados, Hash: todosOsIndexados}
+	idx := fakestorage.Indexes{Campos: todosOsIndexados}
 	st := fakestorage.New(idx)
 	eng := query.NewEngine()
 	if err := eng.Register(dataset, sch, st); err != nil {

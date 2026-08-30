@@ -38,7 +38,7 @@ cliapp --> eng : SQL
 srv --> eng : /v1/query, /v1/metadata,\n/v1/stats, /v1/health, /metrics
 srv --> sto : /v1/compact, /v1/checkpoint\n(ADMIN, síncronas)
 mat --> sto : Put(key, seq, payload, prev)
-eng --> sto : GetByKey / GetByRowID\nScanLive / LookupBitmap
+eng --> sto : GetByKey / GetByRowID\nScanLive / Lookup
 sto --> seg
 sto --> idx
 sto --> bmp

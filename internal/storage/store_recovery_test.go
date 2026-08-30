@@ -39,7 +39,7 @@ func TestRestartBasico_WriteRestartLookup(t *testing.T) {
 	// N puts checkpointados + M puts só no overlay (perdidos no heap) —
 	// o replay do tail recupera os M.
 	dir := t.TempDir()
-	opts := Options{Dir: dir, BitmapFields: []types.FieldID{fldStatus}}
+	opts := Options{Dir: dir, CamposIndexados: []types.FieldID{fldStatus}}
 	s := openStore(t, opts)
 	for i := 0; i < 3; i++ {
 		k := fmt.Sprintf("rb-%d", i)
@@ -67,7 +67,7 @@ func TestRestartBasico_WriteRestartLookup(t *testing.T) {
 	if rows := collectRows(t, s2.ScanLive()); !slices.Equal(rows, []types.RowID{0, 1, 2, 3, 4}) {
 		t.Fatalf("ScanLive pós-restart: %v", rows)
 	}
-	it, err := s2.LookupBitmap(fldStatus, strVal("Start"))
+	it, err := s2.Lookup(fldStatus, strVal("Start"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,7 +286,7 @@ func TestPhantomCommitViraVisivelNoReplay(t *testing.T) {
 	// semântica aceita e documentada. O seam de erro na fase de Set produz
 	// o phantom com payload REPLAYÁVEL.
 	dir := t.TempDir()
-	opts := Options{Dir: dir, BitmapFields: []types.FieldID{fldStatus}}
+	opts := Options{Dir: dir, CamposIndexados: []types.FieldID{fldStatus}}
 	s := openStore(t, opts)
 	mustPut(t, s, "ph-ok", 1, statusPayload(t, s, "ph-ok", "Start", 1), nil)
 	if err := s.Checkpoint(); err != nil {
@@ -415,7 +415,7 @@ func TestReopenBitmapConverge(t *testing.T) {
 	// Transições do tail reconvergem os bitmaps: update A→B pós-checkpoint
 	// perdido do heap volta pelo replay — query pós-restart = pré-crash.
 	dir := t.TempDir()
-	opts := Options{Dir: dir, BitmapFields: []types.FieldID{fldStatus}}
+	opts := Options{Dir: dir, CamposIndexados: []types.FieldID{fldStatus}}
 	s := openStore(t, opts)
 	id, _ := mustPut(t, s, "bc", 1, statusPayload(t, s, "bc", "Start", 1), nil)
 	if err := s.Checkpoint(); err != nil {
@@ -430,7 +430,7 @@ func TestReopenBitmapConverge(t *testing.T) {
 	s2 := reopen(t, s, opts)
 	// A convergência que este teste mede é a do estado NOVO: o update A→B
 	// perdido do heap tem de voltar pelo replay. Essa asserção segue exata.
-	itB, err := s2.LookupBitmap(fldStatus, strVal("Stop"))
+	itB, err := s2.Lookup(fldStatus, strVal("Stop"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -452,7 +452,7 @@ func TestCrashEntreApplyEManifest(t *testing.T) {
 	// os índices em disco ficam À FRENTE do manifest. O replay re-aplica
 	// S→tail por cima — idempotente (§10.2), sem duplicação.
 	dir := t.TempDir()
-	opts := Options{Dir: dir, BitmapFields: []types.FieldID{fldStatus}}
+	opts := Options{Dir: dir, CamposIndexados: []types.FieldID{fldStatus}}
 	s := openStore(t, opts)
 	id1, _ := mustPut(t, s, "ca-1", 1, statusPayload(t, s, "ca-1", "Start", 1), nil)
 	if err := s.Checkpoint(); err != nil {
@@ -489,7 +489,7 @@ func TestCrashEntreApplyEManifest(t *testing.T) {
 	// re-aplicação duplicada não teria como se manifestar apagando de menos;
 	// ela se manifestaria como rowId REPETIDO no iterador — e é isso que a
 	// asserção passa a cobrar, junto do resultado pós-revalidação.
-	itA, err := s2.LookupBitmap(fldStatus, strVal("Start"))
+	itA, err := s2.Lookup(fldStatus, strVal("Start"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -502,7 +502,7 @@ func TestCrashEntreApplyEManifest(t *testing.T) {
 
 func TestDoubleReopenEhIdempotente(t *testing.T) {
 	dir := t.TempDir()
-	opts := Options{Dir: dir, BitmapFields: []types.FieldID{fldStatus}}
+	opts := Options{Dir: dir, CamposIndexados: []types.FieldID{fldStatus}}
 	s := openStore(t, opts)
 	for i := 0; i < 4; i++ {
 		k := fmt.Sprintf("dr-%d", i)

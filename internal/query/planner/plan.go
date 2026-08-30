@@ -16,7 +16,7 @@
 //     o Store a ter passado tudo o que o YAML pede;
 //   - a v1 não tem optimizer por custo (§63): nenhuma estimativa de
 //     seletividade, nenhuma estatística. A prioridade é fixa —
-//     primary → hash → bitmap → interseção/união → full scan.
+//     primary → índice (scan/interseção) → união → full scan.
 //
 // Três propriedades do binder das quais o planner DEPENDE:
 //
@@ -49,12 +49,13 @@ type Plan interface {
 	isPlan()
 }
 
-// IndexTerm é um termo `campo = valor` resolvido para lookup indexado. Kind
-// diz QUAL índice atende o termo.
+// IndexTerm é um termo `campo = valor` resolvido para lookup indexado.
+//
+// Não há mais um Kind dizendo QUAL índice atende o termo: existe um motor só
+// (spec D5), e o executor abre todos os termos pelo mesmo Store.Lookup.
 type IndexTerm struct {
 	Field *schema.CompiledField
 	Val   types.Value
-	Kind  schema.IndexKind
 }
 
 // PointLookupPlan: no máximo 1 candidato, via primary (Store.GetByKey).
@@ -65,26 +66,22 @@ type PointLookupPlan struct {
 	Key   types.Value
 }
 
-// HashIndexPlan: Store.(HashLookuper).LookupHash(Field.ID, Val).
-type HashIndexPlan struct {
+// IndexScanPlan: Store.Lookup(Field.ID, Val).
+//
+// É UM tipo, e não mais o par IndexScanPlan/IndexScanPlan: os dois nomeavam o
+// mesmo despacho para dois motores que colapsaram num só (spec §3.1).
+type IndexScanPlan struct {
 	Field *schema.CompiledField
 	Val   types.Value
 }
 
-// BitmapScanPlan: Store.LookupBitmap(Field.ID, Val).
-type BitmapScanPlan struct {
-	Field *schema.CompiledField
-	Val   types.Value
-}
-
-// BitmapIntersectPlan: interseção dos iteradores. len(Terms) >= 2 sempre,
-// todos com Kind == schema.IndexBitmap e sem duplicatas exatas.
-type BitmapIntersectPlan struct {
+// IndexIntersectPlan: interseção dos iteradores. len(Terms) >= 2 sempre, sem
+// duplicatas exatas.
+type IndexIntersectPlan struct {
 	Terms []IndexTerm
 }
 
-// IndexUnionPlan: união COM DEDUP dos iteradores. len(Terms) >= 2 sempre;
-// Kind pode misturar bitmap e hash.
+// IndexUnionPlan: união COM DEDUP dos iteradores. len(Terms) >= 2 sempre.
 type IndexUnionPlan struct {
 	Terms []IndexTerm
 }
@@ -100,12 +97,11 @@ var fullScan = &FullScanPlan{}
 // WHERE — o mais comum em teste e no CLI — não aloque nada.
 func FullScan() *FullScanPlan { return fullScan }
 
-func (*PointLookupPlan) isPlan()     {}
-func (*HashIndexPlan) isPlan()       {}
-func (*BitmapScanPlan) isPlan()      {}
-func (*BitmapIntersectPlan) isPlan() {}
-func (*IndexUnionPlan) isPlan()      {}
-func (*FullScanPlan) isPlan()        {}
+func (*PointLookupPlan) isPlan()    {}
+func (*IndexScanPlan) isPlan()      {}
+func (*IndexIntersectPlan) isPlan() {}
+func (*IndexUnionPlan) isPlan()     {}
+func (*FullScanPlan) isPlan()       {}
 
 // As formas abaixo são determinísticas: sem mapas, sem ordenação por endereço,
 // e o nome do campo é SEMPRE Field.Name (nunca o alias), para que a mesma
@@ -117,37 +113,27 @@ func (p *PointLookupPlan) String() string {
 	return "PointLookup(" + nomeCampo(p.Field) + "=" + formatValue(p.Key) + ")"
 }
 
-func (p *HashIndexPlan) String() string {
-	return "HashIndex(" + nomeCampo(p.Field) + "=" + formatValue(p.Val) + ")"
+func (p *IndexScanPlan) String() string {
+	return "IndexScan(" + nomeCampo(p.Field) + "=" + formatValue(p.Val) + ")"
 }
 
-func (p *BitmapScanPlan) String() string {
-	return "BitmapScan(" + nomeCampo(p.Field) + "=" + formatValue(p.Val) + ")"
+func (p *IndexIntersectPlan) String() string {
+	return "IndexIntersect(" + termos(p.Terms) + ")"
 }
 
-func (p *BitmapIntersectPlan) String() string {
-	return "BitmapIntersect(" + termos(p.Terms, false) + ")"
-}
-
-// Só a UNIÃO prefixa o índice de cada termo: na interseção todos são bitmap
-// por construção, e o prefixo seria ruído.
+// A união NÃO prefixa mais o índice de cada termo. O prefixo dizia qual dos
+// dois motores atendia o termo — a única forma de plano em que eles podiam se
+// misturar —, e com um motor só ele seria a mesma palavra repetida em toda
+// linha de diagnóstico.
 func (p *IndexUnionPlan) String() string {
-	return "IndexUnion(" + termos(p.Terms, true) + ")"
+	return "IndexUnion(" + termos(p.Terms) + ")"
 }
 
-func termos(ts []IndexTerm, comPrefixo bool) string {
+func termos(ts []IndexTerm) string {
 	var b strings.Builder
 	for i, t := range ts {
 		if i > 0 {
 			b.WriteString(", ")
-		}
-		if comPrefixo {
-			switch t.Kind {
-			case schema.IndexHash:
-				b.WriteString("hash:")
-			default:
-				b.WriteString("bitmap:")
-			}
 		}
 		b.WriteString(nomeCampo(t.Field))
 		b.WriteByte('=')

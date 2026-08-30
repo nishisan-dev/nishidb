@@ -35,7 +35,7 @@ func (s *Store) dirDeDados() string { return filepath.Join(s.opts.Dir, "data") }
 
 // CamposIndexados devolve, em ordem crescente, os campos com índice por
 // segmento. O conjunto é resolvido no Open e IMUTÁVEL na vida do Store, então a
-// resposta é estável — é a mesma promessa que HasBitmap e HasHash já fazem.
+// resposta é estável — é a mesma promessa que o Indexado faz.
 //
 // Cópia, e não o slice interno: o conjunto é imutável por contrato, e devolver
 // a fatia de dentro deixaria qualquer chamador quebrar a promessa por engano.
@@ -155,17 +155,6 @@ func (s *Store) apagaWIPsPeloNome(seg uint32) error {
 		}
 	}
 	return nil
-}
-
-// uniaoDeCampos funde os conjuntos dos dois motores antigos em um só,
-// ordenado e sem duplicatas — um campo declarado nos dois tem UM índice de
-// segmento, não dois.
-func uniaoDeCampos(a, b []types.FieldID) []types.FieldID {
-	out := make([]types.FieldID, 0, len(a)+len(b))
-	out = append(out, a...)
-	out = append(out, b...)
-	slices.Sort(out)
-	return slices.Compact(out)
 }
 
 // abreWIPsDoCorrente abre um .widx por campo indexado para o segmento corrente.

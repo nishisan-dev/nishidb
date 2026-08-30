@@ -44,7 +44,7 @@ func hashIndexado(t testing.TB, v types.Value) uint64 {
 // revalidação do §44 não perdoa, porque ela só sabe descartar candidato a mais.
 func TestOWIPNaoEhAdotadoAtravesDeUmRestart(t *testing.T) {
 	dir := t.TempDir()
-	s := openStore(t, Options{Dir: dir, HashFieldNames: []string{"node"}})
+	s := openStore(t, Options{Dir: dir, CamposIndexadosPorNome: []string{"node"}})
 	poeLinhas(t, s, 100)
 	campo := campoDoDicionario(t, s, "node")
 	seg := s.curSegID.Load()
@@ -66,7 +66,7 @@ func TestOWIPNaoEhAdotadoAtravesDeUmRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s2 := openStore(t, Options{Dir: dir, HashFieldNames: []string{"node"}})
+	s2 := openStore(t, Options{Dir: dir, CamposIndexadosPorNome: []string{"node"}})
 	depois := s2.wips[campo].Lookup(h)
 	if len(depois) == 0 {
 		t.Fatal("o índice do segmento corrente não foi reconstruído na abertura")
@@ -194,7 +194,7 @@ func TestOsWIPsQueNaoSaoDoCorrenteSaemNaAberturaESoQuemTemDadoEntraNaFila(t *tes
 
 	s2 := openStore(t, Options{
 		Dir: dir, SegmentSize: 64 << 10,
-		HashFieldNames: campos, BitmapFieldNames: campos,
+		CamposIndexadosPorNome: campos,
 	})
 	for _, caminho := range []string{comDado, semDado} {
 		if _, err := os.Stat(caminho); !os.IsNotExist(err) {
@@ -246,7 +246,7 @@ func TestOWIPOrfaoDeUmSegmentoJaSeladoSaiSemMexerNoSelado(t *testing.T) {
 
 	s2 := openStore(t, Options{
 		Dir: dir, SegmentSize: 64 << 10,
-		HashFieldNames: campos, BitmapFieldNames: campos,
+		CamposIndexadosPorNome: campos,
 	})
 	if _, err := os.Stat(orfao); !os.IsNotExist(err) {
 		t.Errorf("Stat(%s) = %v, quero IsNotExist: o .widx do segmento já selado tem de sair na abertura",
@@ -338,7 +338,7 @@ func TestNomeIlegivelNoEspacoDoWIPSaiComoDatasetIlegivel(t *testing.T) {
 
 	s2, err := Open(Options{
 		Dir: dir, SegmentSize: 1 << 20,
-		HashFieldNames: campos, BitmapFieldNames: campos,
+		CamposIndexadosPorNome: campos,
 	})
 	if err == nil {
 		_ = s2.Close()
@@ -359,14 +359,13 @@ func TestNomeIlegivelNoEspacoDoWIPSaiComoDatasetIlegivel(t *testing.T) {
 func storeIndexadoComExpiracao(t *testing.T, dir string, campos []string) (*Store, *relogioDeTeste) {
 	t.Helper()
 	s := openStore(t, Options{
-		Dir:              dir,
-		SegmentSize:      64 << 10,
-		HashFieldNames:   campos,
-		BitmapFieldNames: campos,
-		TTLAtivo:         true,
-		DuracaoDeFundo:   time.Hour,
-		CampoDeEscrita:   "_writtenAt",
-		CampoDePrazo:     "_expiresIn",
+		Dir:                    dir,
+		SegmentSize:            64 << 10,
+		CamposIndexadosPorNome: campos,
+		TTLAtivo:               true,
+		DuracaoDeFundo:         time.Hour,
+		CampoDeEscrita:         "_writtenAt",
+		CampoDePrazo:           "_expiresIn",
 	})
 	rel := &relogioDeTeste{t: time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)}
 	s.UsaRelogio(rel.agora)

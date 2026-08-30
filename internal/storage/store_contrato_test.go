@@ -19,8 +19,8 @@ var (
 	_ types.RowIDIterator = emptyIterator{}
 )
 
-func TestScanLiveELookupBitmapDevolvemAInterfaceCompartilhada(t *testing.T) {
-	s := openStore(t, Options{BitmapFields: []types.FieldID{fldStatus}})
+func TestScanLiveELookupDevolvemAInterfaceCompartilhada(t *testing.T) {
+	s := openStore(t, Options{CamposIndexados: []types.FieldID{fldStatus}})
 	mustPut(t, s, "it", 1, statusPayload(t, s, "it", "Start", 1), nil)
 
 	// A atribuição a types.RowIDIterator é o que o teste verifica: se as
@@ -31,14 +31,14 @@ func TestScanLiveELookupBitmapDevolvemAInterfaceCompartilhada(t *testing.T) {
 		t.Fatal("ScanLive deveria devolver a row")
 	}
 
-	lookup, err := s.LookupBitmap(fldStatus, strVal("Start"))
+	lookup, err := s.Lookup(fldStatus, strVal("Start"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	var _ types.RowIDIterator = lookup
 	defer lookup.Close()
 	if !lookup.Next() {
-		t.Fatal("LookupBitmap deveria devolver a posting")
+		t.Fatal("Lookup deveria devolver a posting")
 	}
 }
 
@@ -46,7 +46,7 @@ func TestErrWriterFailedDistingueWriterMortoDeEventoRuim(t *testing.T) {
 	// C4: sem o sentinela, a política de log-and-skip por evento (§101) não
 	// consegue separar "pule este evento" de "pare a ingestão" e vira um
 	// skip infinito com o writer morto.
-	s := openStore(t, Options{BitmapFields: []types.FieldID{fldStatus}})
+	s := openStore(t, Options{CamposIndexados: []types.FieldID{fldStatus}})
 	mustPut(t, s, "w", 1, statusPayload(t, s, "w", "Start", 1), nil)
 
 	// Evento ruim: erro de argumento, writer segue vivo.
@@ -106,32 +106,32 @@ func TestSentinelasSaoOsMesmosValoresDeTypes(t *testing.T) {
 	}
 }
 
-func TestHasBitmapEhCapabilityCheck(t *testing.T) {
+func TestIndexadoEhCapabilityCheck(t *testing.T) {
 	// G1: sem isto o planner escolhe caminho indexado e a query falha em
 	// runtime em vez de degradar para full scan.
-	s := openStore(t, Options{BitmapFields: []types.FieldID{fldStatus}})
-	if !s.HasBitmap(fldStatus) {
+	s := openStore(t, Options{CamposIndexados: []types.FieldID{fldStatus}})
+	if !s.Indexado(fldStatus) {
 		t.Fatal("campo declarado deveria ter bitmap")
 	}
-	if s.HasBitmap(fldCounter) {
+	if s.Indexado(fldCounter) {
 		t.Fatal("campo não declarado não pode reportar bitmap")
 	}
-	if got := s.BitmapFields(); len(got) != 1 || got[0] != fldStatus {
-		t.Fatalf("BitmapFields: %v", got)
+	if got := s.CamposIndexados(); len(got) != 1 || got[0] != fldStatus {
+		t.Fatalf("CamposIndexados: %v", got)
 	}
-	// A resposta bate com o comportamento real do LookupBitmap.
-	if _, err := s.LookupBitmap(fldCounter, strVal("x")); err == nil {
-		t.Fatal("LookupBitmap de campo sem índice deveria falhar")
+	// A resposta bate com o comportamento real do Lookup.
+	if _, err := s.Lookup(fldCounter, strVal("x")); err == nil {
+		t.Fatal("Lookup de campo sem índice deveria falhar")
 	}
-	if _, err := s.LookupBitmap(fldStatus, strVal("Start")); err != nil {
-		t.Fatalf("LookupBitmap de campo indexado: %v", err)
+	if _, err := s.Lookup(fldStatus, strVal("Start")); err != nil {
+		t.Fatalf("Lookup de campo indexado: %v", err)
 	}
 
 	semBitmap := openStore(t, Options{})
-	if semBitmap.HasBitmap(fldStatus) {
+	if semBitmap.Indexado(fldStatus) {
 		t.Fatal("store sem bitmaps não pode reportar capability")
 	}
-	if got := semBitmap.BitmapFields(); len(got) != 0 {
-		t.Fatalf("BitmapFields sem índices: %v", got)
+	if got := semBitmap.CamposIndexados(); len(got) != 0 {
+		t.Fatalf("CamposIndexados sem índices: %v", got)
 	}
 }

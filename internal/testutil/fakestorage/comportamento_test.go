@@ -20,8 +20,8 @@ type storeSobTeste interface {
 	GetByKey(key, buf []byte) (types.Record, []byte, bool, error)
 	GetByRowID(id types.RowID, buf []byte) (types.Record, []byte, bool, error)
 	ScanLive() types.RowIDIterator
-	LookupBitmap(field types.FieldID, v types.Value) (types.RowIDIterator, error)
-	HasBitmap(field types.FieldID) bool
+	Lookup(field types.FieldID, v types.Value) (types.RowIDIterator, error)
+	Indexado(field types.FieldID) bool
 }
 
 var (
@@ -53,7 +53,7 @@ func TestComportamentoDoDubleEDoRealCoincidem(t *testing.T) {
 		st, err := storage.Open(storage.Options{
 			Dir: filepath.Join(t.TempDir(), "ds"),
 			// A ordem dos nomes define os IDs: status=1, nome=2, terceiro=3.
-			BitmapFieldNames: []string{"status"},
+			CamposIndexadosPorNome: []string{"status"},
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -69,7 +69,7 @@ func TestComportamentoDoDubleEDoRealCoincidem(t *testing.T) {
 
 	stores := map[string]func(t *testing.T) storeSobTeste{
 		"fake": func(*testing.T) storeSobTeste {
-			return fakestorage.New(fakestorage.Indexes{Bitmap: []types.FieldID{statusID}})
+			return fakestorage.New(fakestorage.Indexes{Campos: []types.FieldID{statusID}})
 		},
 		"real": novoReal,
 	}
@@ -136,14 +136,14 @@ func TestComportamentoDoDubleEDoRealCoincidem(t *testing.T) {
 			}
 
 			// 6. Campo sem índice bitmap é ErrInvalidArgument nos dois.
-			if _, err := st.LookupBitmap(nomeID, str("ze")); !errors.Is(err, types.ErrInvalidArgument) {
-				t.Errorf("LookupBitmap em campo sem índice: %v", err)
+			if _, err := st.Lookup(nomeID, str("ze")); !errors.Is(err, types.ErrInvalidArgument) {
+				t.Errorf("Lookup em campo sem índice: %v", err)
 			}
-			if st.HasBitmap(nomeID) || st.HasBitmap(semIndex) {
-				t.Error("HasBitmap true para campo sem índice")
+			if st.Indexado(nomeID) || st.Indexado(semIndex) {
+				t.Error("Indexado true para campo sem índice")
 			}
-			if !st.HasBitmap(statusID) {
-				t.Error("HasBitmap false para o campo indexado")
+			if !st.Indexado(statusID) {
+				t.Error("Indexado false para o campo indexado")
 			}
 
 			// 7. rowId inexistente: ok=false SEM erro (não é falha, é ausência).
@@ -221,9 +221,9 @@ func TestOrdemDoScanLiveCoincide(t *testing.T) {
 
 func colhe(t *testing.T, st storeSobTeste, f types.FieldID, v types.Value) []types.RowID {
 	t.Helper()
-	it, err := st.LookupBitmap(f, v)
+	it, err := st.Lookup(f, v)
 	if err != nil {
-		t.Fatalf("LookupBitmap: %v", err)
+		t.Fatalf("Lookup: %v", err)
 	}
 	defer it.Close()
 	var out []types.RowID

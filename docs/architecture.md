@@ -531,13 +531,12 @@ devolve um superset por construção (posting órfão é estado tolerado), entã
 confiar nele produziria linhas que não satisfazem o filtro. Falso positivo o
 executor filtra; falso negativo ninguém recupera.
 
-**A prioridade do planner é fixa** (primary → hash → bitmap → interseção/união →
-full scan), sem otimizador por custo. Toda dúvida degrada para full scan, que é
-sempre correto — só mais lento. Os dois motores de índice secundário se
-misturam num mesmo `OR`: o `IndexUnionPlan` funde iteradores de hash e de
-bitmap, e é por isso que o `LookupHash` devolve rowIds em ordem **estritamente
-crescente** — desordenado, a interseção k-way pararia cedo e o resultado sairia
-incompleto sem erro.
+**A prioridade do planner é fixa** (primary → índice → união → full scan), sem
+otimizador por custo. Toda dúvida degrada para full scan, que é sempre correto —
+só mais lento. Há **um** motor de índice secundário, e o `IndexIntersectPlan` e o
+`IndexUnionPlan` fundem vários iteradores dele: é por isso que o `Lookup` devolve
+rowIds em ordem **estritamente crescente** — desordenado, a interseção k-way
+pararia cedo e o resultado sairia incompleto sem erro.
 
 **Nada do resultado é materializado.** O predicado é compilado uma vez para um
 programa linear com saltos, os campos são coletados por merge linear numa

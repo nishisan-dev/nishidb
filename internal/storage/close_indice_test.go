@@ -22,7 +22,7 @@ import (
 //
 // ESTE ARQUIVO NÃO SAI COM O MOTOR ANTIGO, e o nome dele mudou para dizer isso.
 // Os quatro testes daqui cobrem o contrato de Close do iterador que o
-// LookupBitmap devolve — que hoje é o do índice POR SEGMENTO —, e nenhum deles
+// Lookup devolve — que hoje é o do índice POR SEGMENTO —, e nenhum deles
 // tem equivalente no close_quiesce_test.go. Removê-los junto com o pacote
 // bitmap deixaria a rota mais exposta do motor novo sem asserção de quiesce
 // nenhuma.
@@ -30,7 +30,7 @@ import (
 func abreComBitmap(t *testing.T, campo string) (*storage.Store, types.FieldID) {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "ds")
-	st, err := storage.Open(storage.Options{Dir: dir, BitmapFieldNames: []string{campo}})
+	st, err := storage.Open(storage.Options{Dir: dir, CamposIndexadosPorNome: []string{campo}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestIteradorDeBitmapEmVooNaoEntraEmPanicNoClose(t *testing.T) {
 	st, campo := abreComBitmap(t, "status")
 	povoa(t, st, campo, "Stop", 4096)
 
-	it, err := st.LookupBitmap(campo, types.Value{Type: types.TypeString, Bytes: []byte("Stop")})
+	it, err := st.Lookup(campo, types.Value{Type: types.TypeString, Bytes: []byte("Stop")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,16 +91,16 @@ func TestIteradorDeBitmapEmVooNaoEntraEmPanicNoClose(t *testing.T) {
 	}
 }
 
-// Iterador de bitmap criado DEPOIS do Close: sem panic, sem row, com o motivo.
-func TestLookupBitmapAposCloseDevolveErro(t *testing.T) {
+// Iterador de índice criado DEPOIS do Close: sem panic, sem row, com o motivo.
+func TestLookupAposCloseDevolveErro(t *testing.T) {
 	st, campo := abreComBitmap(t, "status")
 	povoa(t, st, campo, "Stop", 64)
 
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.LookupBitmap(campo, types.Value{Type: types.TypeString, Bytes: []byte("Stop")}); !errors.Is(err, storage.ErrDatasetClosed) {
-		t.Errorf("LookupBitmap após Close = %v, want ErrDatasetClosed", err)
+	if _, err := st.Lookup(campo, types.Value{Type: types.TypeString, Bytes: []byte("Stop")}); !errors.Is(err, storage.ErrDatasetClosed) {
+		t.Errorf("Lookup após Close = %v, want ErrDatasetClosed", err)
 	}
 }
 
@@ -119,10 +119,10 @@ func TestCloseConcorrenteComIteradoresDeBitmap(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for range 2_000 {
-				it, err := st.LookupBitmap(campo, valor)
+				it, err := st.Lookup(campo, valor)
 				if err != nil {
 					if !errors.Is(err, storage.ErrDatasetClosed) {
-						t.Errorf("LookupBitmap: %v", err)
+						t.Errorf("Lookup: %v", err)
 					}
 					return
 				}
@@ -168,7 +168,7 @@ func TestIteradorVazioDeBitmapSobreviveAoClose(t *testing.T) {
 	st, campo := abreComBitmap(t, "status")
 	povoa(t, st, campo, "Stop", 8)
 
-	it, err := st.LookupBitmap(campo, types.Value{Type: types.TypeString, Bytes: []byte("Start")})
+	it, err := st.Lookup(campo, types.Value{Type: types.TypeString, Bytes: []byte("Start")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func TestIteradorVazioDeBitmapSobreviveAoClose(t *testing.T) {
 	st2, campo2 := abreComBitmap(t, "status")
 	povoa(t, st2, campo2, "Stop", 8)
 	defer func() { _ = st2.Close() }()
-	it2, err := st2.LookupBitmap(campo2, types.Value{Type: types.TypeString, Bytes: []byte("Start")})
+	it2, err := st2.Lookup(campo2, types.Value{Type: types.TypeString, Bytes: []byte("Start")})
 	if err != nil {
 		t.Fatal(err)
 	}

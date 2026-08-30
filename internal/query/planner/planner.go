@@ -11,22 +11,15 @@ import (
 
 // Store é a ÚNICA superfície do storage que o planner enxerga: CAPABILITY,
 // nunca dado. *storage.Store e *fakestorage.Store a satisfazem.
+//
+// UM método, e não mais a capability do bitmap somada às duas capabilities
+// OPCIONAIS do hash, detectadas por type assertion no New: as três perguntavam
+// a mesma coisa a um Store que tem um motor de índice só (spec §3.1). As
+// opcionais eram um risco próprio — um Store que não as implementasse era
+// tratado como "atende tudo", e a diferença entre "não sei responder" e "sim"
+// só aparecia como erro em runtime no executor.
 type Store interface {
-	HasBitmap(field types.FieldID) bool
-}
-
-// HashLookuper é a capability do índice hash (Fase 8, M4). NÃO existe no
-// *storage.Store do M1; o dublê de teste implementa. A detecção é por type
-// assertion, feita uma única vez no New.
-type HashLookuper interface {
-	LookupHash(field types.FieldID, v types.Value) (types.RowIDIterator, error)
-}
-
-// HashCapable é o capability check POR CAMPO do índice hash, análogo do
-// HasBitmap. É opcional: um store que não a implementa é tratado como "atende
-// todo campo declarado com index: hash".
-type HashCapable interface {
-	HasHash(field types.FieldID) bool
+	Indexado(field types.FieldID) bool
 }
 
 // maxFlattenDepth limita a recursão do achatamento. Estourá-lo não é erro: a
@@ -40,7 +33,7 @@ type HashCapable interface {
 // INÍCIO da cláusula (TestPenhascoDoBudgetDeFlatten).
 //
 // A consequência a conhecer: a fronteira é POSICIONAL, não de tamanho. A mesma
-// query com os termos reordenados pode mudar de BitmapScan para FullScan,
+// query com os termos reordenados pode mudar de IndexScan para FullScan,
 // porque o que conta é a profundidade do termo indexável na espinha. É um
 // penhasco de performance silencioso; nunca de correção, porque degradar para
 // full scan não perde row nenhuma.
@@ -51,28 +44,21 @@ const maxFlattenDepth = 64
 // incrementa contadores atômicos.
 type Planner struct {
 	store   Store
-	hash    HashLookuper // nil quando o store não tem a capability
-	hashCap HashCapable  // nil quando o store não expõe HasHash
-	metrics *Metrics     // pode ser nil
+	metrics *Metrics // pode ser nil
 }
 
-// New resolve as capabilities opcionais UMA vez, fora do caminho de query.
-// store == nil é aceito e degrada tudo para FullScan.
+// New guarda o store. store == nil é aceito e degrada tudo para FullScan.
 func New(store Store, m *Metrics) *Planner {
-	p := &Planner{store: store, metrics: m}
-	if store != nil {
-		p.hash, _ = store.(HashLookuper)
-		p.hashCap, _ = store.(HashCapable)
-	}
-	return p
+	return &Planner{store: store, metrics: m}
 }
 
 // Plan escolhe a fonte de candidatos. NUNCA devolve nil, NUNCA devolve erro,
 // NUNCA entra em panic: toda incerteza vira FullScan, que é sempre correto —
 // só mais lento — porque o executor revalida o WHERE inteiro (§44).
 //
-// A ordem das regras é a prioridade da spec §63. O empate "preferir hash a
-// bitmap" já está codificado por ela; não existe lógica extra de desempate.
+// A ordem das regras é a prioridade da spec §63, e ela é FIXA: R1 primary, R2
+// índice, R5 união de OR na raiz, full scan. Não existe desempate — com um
+// motor de índice só, não há "qual dos dois" a decidir.
 func (p *Planner) Plan(bq *binder.BoundQuery) Plan {
 	if bq == nil || bq.Where == nil {
 		return p.conta(FullScan())
@@ -96,30 +82,27 @@ func (p *Planner) Plan(bq *binder.BoundQuery) Plan {
 		}
 	}
 
-	// R2 — hash. Varredura separada da R1 de propósito: a prioridade é da
-	// REGRA, não da posição no AST. `nas_ip=x AND id=y` é point lookup.
-	for _, t := range eqs {
-		if p.hashEligible(t.field) {
-			return p.conta(&HashIndexPlan{Field: t.field, Val: t.val})
-		}
-	}
-
-	// R3/R4 — bitmap. Termos na ordem do AST, deduplicados por (Field.ID,
-	// Val): `status='a' AND status='a'` colapsa, mas `status='a' AND
-	// status='b'` NÃO — são dois termos, a interseção é vazia, e é o
-	// resultado correto.
+	// R2 — índice. UMA regra, e é a colheita completa: antes eram duas, e a de
+	// hash devolvia o PRIMEIRO termo elegível e parava — `node='x' AND type=2`
+	// indexava node e revalidava type linha a linha. Varredura separada da R1
+	// de propósito: a prioridade é da REGRA, não da posição no AST.
+	// `nas_ip=x AND id=y` é point lookup.
+	//
+	// Termos na ordem do AST, deduplicados por (Field.ID, Val):
+	// `status='a' AND status='a'` colapsa, mas `status='a' AND status='b'` NÃO
+	// — são dois termos, a interseção é vazia, e é o resultado correto.
 	var terms []IndexTerm
 	for _, t := range eqs {
-		if !p.bitmapEligible(t.field) {
+		if !p.indexavel(t.field) {
 			continue
 		}
-		terms = appendDedup(terms, IndexTerm{Field: t.field, Val: t.val, Kind: schema.IndexBitmap})
+		terms = appendDedup(terms, IndexTerm{Field: t.field, Val: t.val})
 	}
 	switch {
 	case len(terms) >= 2:
-		return p.conta(&BitmapIntersectPlan{Terms: terms})
+		return p.conta(&IndexIntersectPlan{Terms: terms})
 	case len(terms) == 1:
-		return p.conta(&BitmapScanPlan{Field: terms[0].Field, Val: terms[0].Val})
+		return p.conta(&IndexScanPlan{Field: terms[0].Field, Val: terms[0].Val})
 	}
 
 	// R5 — OR na raiz. Só se aplica quando o flatten de AND produziu um único
@@ -145,22 +128,14 @@ func (p *Planner) uniao(raiz *binder.BoundLogical) Plan {
 		if !ok {
 			return p.conta(FullScan())
 		}
-		switch {
-		case p.hashEligible(t.field):
-			terms = appendDedup(terms, IndexTerm{Field: t.field, Val: t.val, Kind: schema.IndexHash})
-		case p.bitmapEligible(t.field):
-			terms = appendDedup(terms, IndexTerm{Field: t.field, Val: t.val, Kind: schema.IndexBitmap})
-		default:
+		if !p.indexavel(t.field) {
 			return p.conta(FullScan())
 		}
+		terms = appendDedup(terms, IndexTerm{Field: t.field, Val: t.val})
 	}
-	// Um termo só depois do dedup não é união: colapsa para o plano simples do
-	// índice que o atende.
+	// Um termo só depois do dedup não é união: colapsa para o scan.
 	if len(terms) == 1 {
-		if terms[0].Kind == schema.IndexHash {
-			return p.conta(&HashIndexPlan{Field: terms[0].Field, Val: terms[0].Val})
-		}
-		return p.conta(&BitmapScanPlan{Field: terms[0].Field, Val: terms[0].Val})
+		return p.conta(&IndexScanPlan{Field: terms[0].Field, Val: terms[0].Val})
 	}
 	return p.conta(&IndexUnionPlan{Terms: terms})
 }
@@ -204,24 +179,15 @@ func eqTermOf(e binder.BoundExpr) (eqTerm, bool) {
 	return eqTerm{field: f, val: c.Val}, true
 }
 
-// bitmapEligible: o schema declara E o store atende.
+// indexavel: o schema declara E o store atende.
 //
-// O HasBitmap é obrigatório mesmo com o YAML dizendo `index: bitmap` porque o
+// O Indexado é obrigatório mesmo com o YAML dizendo `index: true` porque o
 // conjunto indexado é o que a ABERTURA do dataset declarou, e nada garante que
 // ele cubra o que o YAML pede — um Store aberto sem o campo é legítimo. Sem o
-// check, o executor chamaria LookupBitmap num campo sem índice, receberia
+// check, o executor chamaria Lookup num campo sem índice, receberia
 // ErrInvalidArgument e a query FALHARIA em vez de degradar.
-func (p *Planner) bitmapEligible(f *schema.CompiledField) bool {
-	return f != nil && f.Index == schema.IndexBitmap && p.store != nil && p.store.HasBitmap(f.ID)
-}
-
-// hashEligible: o schema declara E o store tem a capability da Fase 8 E, se
-// expuser o check por campo, ele confirma.
-func (p *Planner) hashEligible(f *schema.CompiledField) bool {
-	if f == nil || f.Index != schema.IndexHash || p.hash == nil {
-		return false
-	}
-	return p.hashCap == nil || p.hashCap.HasHash(f.ID)
+func (p *Planner) indexavel(f *schema.CompiledField) bool {
+	return f != nil && f.Indexado && p.store != nil && p.store.Indexado(f.ID)
 }
 
 // flattenAnd colhe as folhas do spine de AND no topo da árvore. Um nó OR (ou
@@ -279,12 +245,10 @@ func (p *Planner) conta(pl Plan) Plan {
 		p.metrics.FullScan.Add(1)
 	case *PointLookupPlan:
 		p.metrics.PointLookup.Add(1)
-	case *HashIndexPlan:
-		p.metrics.HashIndex.Add(1)
-	case *BitmapScanPlan:
-		p.metrics.BitmapScan.Add(1)
-	case *BitmapIntersectPlan:
-		p.metrics.BitmapIntersect.Add(1)
+	case *IndexScanPlan:
+		p.metrics.IndexScan.Add(1)
+	case *IndexIntersectPlan:
+		p.metrics.IndexIntersect.Add(1)
 	case *IndexUnionPlan:
 		p.metrics.IndexUnion.Add(1)
 	}

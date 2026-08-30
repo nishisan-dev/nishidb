@@ -13,7 +13,7 @@ import (
 
 func TestCheckpointEscreveManifestCoerente(t *testing.T) {
 	dir := t.TempDir()
-	s := openStore(t, Options{Dir: dir, BitmapFields: []types.FieldID{fldStatus}})
+	s := openStore(t, Options{Dir: dir, CamposIndexados: []types.FieldID{fldStatus}})
 	const n = 8
 	for i := 0; i < n; i++ {
 		k := fmt.Sprintf("cp-%d", i)

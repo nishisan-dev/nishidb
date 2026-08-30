@@ -95,44 +95,31 @@ func consulta(where binder.BoundExpr) *binder.BoundQuery {
 
 // todosOsIndices é o store que atende tudo o que o fixture declara.
 //
-// TODOS os campos entram em Bitmap E em Hash: o Store REAL (store.go,
-// HasBitmap/HasHash) devolve true para os dois em QUALQUER campo do conjunto
-// indexado — desde a D5, `index: true` é a única grafia e não há mais como
-// declarar um campo que só uma das duas capabilities enxerga. Um dublê que
-// só marcasse Bitmap divergiria do Store na direção que já custou uma rodada
-// na Tarefa 8: capability otimista de menos, escondendo o dia em que algum
-// código (a Tarefa 11, por exemplo) passar a consultar HasHash de verdade.
-// Hoje isso é inofensivo — hashEligible testa o Kind (sempre IndexBitmap)
-// ANTES da capability, então HasHash nunca chega a ser consultado por
-// nenhuma query real —, mas o dublê tem de continuar sendo uma descrição
-// fiel do Store, não uma economia de linhas.
+// A lista era passada em Bitmap E em Hash enquanto o dublê tinha dois
+// conjuntos, porque o Store REAL respondia true nos dois para QUALQUER campo
+// indexado e um dublê que só marcasse um divergiria dele. Com um conjunto só a
+// paridade é estrutural: não existe mais como declarar um campo que só uma das
+// capabilities enxerga, nem aqui nem no real.
 func todosOsIndices(tb testing.TB, c *schema.Compiled) *fakestorage.Store {
 	tb.Helper()
 	todos := fid(tb, c, "Acct-Status-Type", "Framed-Protocol", "Acct-Terminate-Cause",
 		"Filter-Id", "NAS-Port-Type", "Service-Type", "Acct-Authentic",
 		"NAS-IP-Address", "NAS-Identifier", "Framed-IP-Address")
-	return fakestorage.New(fakestorage.Indexes{Bitmap: todos, Hash: todos})
+	return fakestorage.New(fakestorage.Indexes{Campos: todos})
 }
 
-// espiao falha o teste se o planner tocar em DADOS. Só LookupHash é
-// alcançável de fato: a interface Store do planner tem apenas HasBitmap, e o
-// resto do Store nem entra no type switch — mas o dublê carrega os métodos
-// para que uma ampliação futura da interface acuse aqui.
+// espiao falha o teste se o planner tocar em DADOS. Nenhum dos métodos de dado
+// é alcançável de fato: a interface Store do planner tem apenas Indexado — mas
+// o dublê os carrega para que uma ampliação futura da interface acuse aqui.
 type espiao struct {
 	t     *testing.T
 	inner *fakestorage.Store
 }
 
-func (s *espiao) HasBitmap(f types.FieldID) bool { return s.inner.HasBitmap(f) }
-func (s *espiao) HasHash(f types.FieldID) bool   { return s.inner.HasHash(f) }
+func (s *espiao) Indexado(f types.FieldID) bool { return s.inner.Indexado(f) }
 
-func (s *espiao) LookupHash(f types.FieldID, v types.Value) (types.RowIDIterator, error) {
-	s.t.Fatalf("o planner consultou DADOS no plan-time: LookupHash(%d)", f)
-	return nil, nil
-}
-
-func (s *espiao) LookupBitmap(f types.FieldID, v types.Value) (types.RowIDIterator, error) {
-	s.t.Fatalf("o planner consultou DADOS no plan-time: LookupBitmap(%d)", f)
+func (s *espiao) Lookup(f types.FieldID, v types.Value) (types.RowIDIterator, error) {
+	s.t.Fatalf("o planner consultou DADOS no plan-time: Lookup(%d)", f)
 	return nil, nil
 }
 
@@ -222,15 +209,15 @@ func TestPlanKeyEmANDProfundoPointLookup(t *testing.T) {
 	querString(t, planeja(t, p, where), `PointLookup(id="CMP-1")`)
 }
 
-// A prioridade da §63 é da REGRA (R1 acima de R2/R3/R4), não da POSIÇÃO no
+// A prioridade da §63 é da REGRA (R1 acima de R2), não da POSIÇÃO no
 // AST: a key vence o índice secundário mesmo aparecendo depois dele. Sem este
 // caso, trocar a ordem das regras não quebra teste nenhum — e o plano passa a
 // ler o índice quando existe um lookup de no máximo uma row disponível.
 //
 // nas_ip é o campo que, antes da D5, tinha `index: hash` — o nome da variável
 // ficou porque a query em si (id AND nas_ip, nas duas ordens) não muda: o que
-// mudou é só QUAL regra do planner atende nas_ip agora (R3/R4 em vez de R2), e
-// R1 continua vencendo as duas.
+// mudou foi só QUAL regra atende nas_ip — hoje a R2 única —, e R1 continua
+// vencendo.
 func TestPlanKeyVenceIndiceIndependenteDaOrdem(t *testing.T) {
 	p, c, _ := novo(t)
 	chave, nasIP := campo(t, c, "id"), campo(t, c, "nas_ip")
@@ -240,19 +227,16 @@ func TestPlanKeyVenceIndiceIndependenteDaOrdem(t *testing.T) {
 	querString(t, planeja(t, p, and(eq(chave, str("CMP-1")), eq(nasIP, ip))), `PointLookup(id="CMP-1")`)
 }
 
-// ---------------------------------------------------------------- 5-8: hash
+// --------------------------------------------------- 5-8: a assimetria extinta
 //
-// As quatro regras 5-8 do §63 original testavam a ASSIMETRIA entre R2 (hash:
-// devolve um plano e para) e R3/R4 (bitmap: intersecta): TestPlanHashVenceBitmap
-// (R2 vence quando os dois se aplicam), TestPlanSemCapabilityHashDegradaPara-
-// Bitmap e TestPlanSemCapabilityHashSemOutroIndiceFullScan (degradação da
-// capability opcional de R2) e TestPlanHasHashFalsoDegrada (capability por
-// campo de R2). A D5 tirou a grafia (`index: hash`) que alimentava R2: nenhuma
-// config válida compila mais um campo para IndexHash, então as quatro
-// provavam um caminho que este binário não alcança mais por configuração
-// nenhuma — testá-lo exigiria construir um *schema.CompiledField{Index:
-// IndexHash} à mão, o que provaria só que o código morto ainda executa, não
-// que o produto se comporta de um jeito que alguém pode configurar.
+// As quatro regras 5-8 do §63 original testavam a ASSIMETRIA entre a R2 do
+// hash (devolve um plano e para) e a R3/R4 do bitmap (intersecta): a que provava
+// que a R2 vencia quando as duas se aplicavam, as duas da degradação da
+// capability opcional da R2 e a do capability check por campo dela. A D5 tirou
+// a grafia (`index: hash`) que alimentava a R2, e as quatro passaram a provar um
+// caminho que este binário não alcançava mais por configuração nenhuma; esta
+// tarefa apagou a própria R2, e com ela a segunda regra que poderia atender um
+// termo.
 //
 // TestPlanHashVenceBitmap sobrevive REPROPOSITADO: a mesma query (nas_ip AND
 // status, os dois indexados) agora prova a intersecção que a D5 introduz — a
@@ -261,64 +245,63 @@ func TestPlanKeyVenceIndiceIndependenteDaOrdem(t *testing.T) {
 // TestDoisCamposIndexadosAgoraIntersectam: antes da D5, `nas_ip` era
 // `index: hash` e a regra R2 devolvia UM plano (HashIndex) e parava — `status`
 // nunca entrava, e o executor revalidava `status` linha a linha sobre o
-// superset do hash. Com `index: true` como grafia única, os dois campos
-// compilam para o MESMO IndexKind (IndexBitmap) e caem na MESMA regra R3/R4,
-// que colhe todos os termos elegíveis antes de decidir — a assimetria não
-// existe mais porque não há mais "qual dos dois" para escolher.
+// superset do hash. Com `index: true` como grafia única os dois campos saem
+// indexados do mesmo jeito, e com UMA regra de índice eles caem na mesma
+// colheita, que junta todos os termos elegíveis antes de decidir.
 func TestDoisCamposIndexadosAgoraIntersectam(t *testing.T) {
 	p, c, _ := novo(t)
 	where := and(eq(campo(t, c, "nas_ip"), ipv4(t, "10.0.0.1")), eq(campo(t, c, "status"), str("Stop")))
 	pl := planeja(t, p, where)
-	bi, ok := pl.(*planner.BitmapIntersectPlan)
+	bi, ok := pl.(*planner.IndexIntersectPlan)
 	if !ok {
-		t.Fatalf("plano = %T, want *BitmapIntersectPlan", pl)
+		t.Fatalf("plano = %T, want *IndexIntersectPlan", pl)
 	}
 	if len(bi.Terms) != 2 {
 		t.Fatalf("termos = %d, want 2", len(bi.Terms))
 	}
-	querString(t, pl, `BitmapIntersect(NAS-IP-Address=0x0a000001, Acct-Status-Type="Stop")`)
+	querString(t, pl, `IndexIntersect(NAS-IP-Address=0x0a000001, Acct-Status-Type="Stop")`)
 }
 
-// ---------------------------------------------------------------- 9-14: bitmap
+// ---------------------------------------------------------------- 9-14: índice
 
-func TestPlanDoisBitmapsIntersect(t *testing.T) {
+func TestPlanDoisIndicesIntersect(t *testing.T) {
 	p, c, _ := novo(t)
 	where := and(eq(campo(t, c, "status"), str("Stop")), eq(campo(t, c, "protocol"), str("PPPoE")))
 	pl := planeja(t, p, where)
-	bi, ok := pl.(*planner.BitmapIntersectPlan)
+	bi, ok := pl.(*planner.IndexIntersectPlan)
 	if !ok {
-		t.Fatalf("plano = %T, want *BitmapIntersectPlan", pl)
+		t.Fatalf("plano = %T, want *IndexIntersectPlan", pl)
 	}
 	if len(bi.Terms) != 2 {
 		t.Fatalf("termos = %d, want 2", len(bi.Terms))
 	}
-	querString(t, pl, `BitmapIntersect(Acct-Status-Type="Stop", Framed-Protocol="PPPoE")`)
+	querString(t, pl, `IndexIntersect(Acct-Status-Type="Stop", Framed-Protocol="PPPoE")`)
 }
 
-func TestPlanTresBitmapsIntersect(t *testing.T) {
+func TestPlanTresIndicesIntersect(t *testing.T) {
 	p, c, _ := novo(t)
 	where := and(
 		and(eq(campo(t, c, "status"), str("Stop")), eq(campo(t, c, "protocol"), str("PPPoE"))),
 		eq(campo(t, c, "terminate_cause"), str("NAS-Reboot")),
 	)
 	querString(t, planeja(t, p, where),
-		`BitmapIntersect(Acct-Status-Type="Stop", Framed-Protocol="PPPoE", Acct-Terminate-Cause="NAS-Reboot")`)
+		`IndexIntersect(Acct-Status-Type="Stop", Framed-Protocol="PPPoE", Acct-Terminate-Cause="NAS-Reboot")`)
 }
 
-func TestPlanUmBitmapScan(t *testing.T) {
+func TestPlanUmIndexScan(t *testing.T) {
 	p, c, _ := novo(t)
 	pl := planeja(t, p, eq(campo(t, c, "status"), str("Stop")))
-	if _, ok := pl.(*planner.BitmapScanPlan); !ok {
-		t.Fatalf("plano = %T, want *BitmapScanPlan", pl)
+	if _, ok := pl.(*planner.IndexScanPlan); !ok {
+		t.Fatalf("plano = %T, want *IndexScanPlan", pl)
 	}
 }
 
 // O conjunto indexado é o que a ABERTURA do dataset declarou, e ele pode não
 // cobrir o que o YAML pede. Sem o capability check, o executor chamaria
-// LookupBitmap num campo sem índice e a query FALHARIA em vez de degradar.
+// Lookup num campo sem índice e a query FALHARIA em vez de degradar.
 func TestPlanBitmapSemCapabilityFullScan(t *testing.T) {
 	c := compilar(t)
-	semEsseBitmap := fakestorage.New(fakestorage.Indexes{Bitmap: fid(t, c, "Framed-Protocol")})
+	semEsseBitmap := fakestorage.New(fakestorage.Indexes{Campos: fid(t, c, "Framed-Protocol")})
 	p := planner.New(semEsseBitmap, nil)
 	if pl := planeja(t, p, eq(campo(t, c, "status"), str("Stop"))); pl != planner.FullScan() {
 		t.Fatalf("plano = %T, want FullScan", pl)
@@ -329,8 +312,8 @@ func TestPlanBitmapDuplicadoDedupParaScan(t *testing.T) {
 	p, c, _ := novo(t)
 	where := and(eq(campo(t, c, "status"), str("Stop")), eq(campo(t, c, "status"), str("Stop")))
 	pl := planeja(t, p, where)
-	if _, ok := pl.(*planner.BitmapScanPlan); !ok {
-		t.Fatalf("plano = %T, want *BitmapScanPlan (termo idêntico colapsa)", pl)
+	if _, ok := pl.(*planner.IndexScanPlan); !ok {
+		t.Fatalf("plano = %T, want *IndexScanPlan (termo idêntico colapsa)", pl)
 	}
 }
 
@@ -340,9 +323,9 @@ func TestPlanBitmapMesmoCampoValoresDiferentes(t *testing.T) {
 	p, c, _ := novo(t)
 	where := and(eq(campo(t, c, "status"), str("Stop")), eq(campo(t, c, "status"), str("Start")))
 	pl := planeja(t, p, where)
-	bi, ok := pl.(*planner.BitmapIntersectPlan)
+	bi, ok := pl.(*planner.IndexIntersectPlan)
 	if !ok || len(bi.Terms) != 2 {
-		t.Fatalf("plano = %T, want *BitmapIntersectPlan com 2 termos", pl)
+		t.Fatalf("plano = %T, want *IndexIntersectPlan com 2 termos", pl)
 	}
 }
 
@@ -356,16 +339,13 @@ func TestPlanOrTodosIndexaveisUnion(t *testing.T) {
 	if !ok || len(u.Terms) != 2 {
 		t.Fatalf("plano = %T, want *IndexUnionPlan com 2 termos", pl)
 	}
-	for _, term := range u.Terms {
-		if term.Kind != schema.IndexBitmap {
-			t.Errorf("termo %v com Kind %v, want bitmap", term.Field.Name, term.Kind)
-		}
-	}
+	// A conferência do Kind de cada termo saiu com o campo: o termo não nomeia
+	// mais um motor, porque não há dois a nomear.
 }
 
 // Antes da D5 este caso misturava um termo bitmap com um hash NUM MESMO
-// IndexUnionPlan — hoje nas_ip também compila para IndexBitmap, então os dois
-// termos saem com o MESMO prefixo. A cobertura de "união com dois campos
+// IndexUnionPlan, e a string do plano prefixava cada termo com o seu motor —
+// prefixo que saiu junto com o campo Kind. A cobertura de "união com dois campos
 // diferentes" continua existindo (TestPlanOrTodosIndexaveisUnion, com status e
 // protocol); o que este caso acrescenta é nas_ip especificamente, que é o
 // campo que a spec do piloto usava como exemplo de índice de alta
@@ -374,7 +354,7 @@ func TestPlanOrDeDoisCamposIndexadosUniao(t *testing.T) {
 	p, c, _ := novo(t)
 	where := or(eq(campo(t, c, "status"), str("Stop")), eq(campo(t, c, "nas_ip"), ipv4(t, "10.0.0.1")))
 	querString(t, planeja(t, p, where),
-		`IndexUnion(bitmap:Acct-Status-Type="Stop", bitmap:NAS-IP-Address=0x0a000001)`)
+		`IndexUnion(Acct-Status-Type="Stop", NAS-IP-Address=0x0a000001)`)
 }
 
 // Risco #4: união PARCIAL perderia candidatos e devolveria resultado
@@ -416,8 +396,8 @@ func TestPlanOrDuplicadoColapsaParaScan(t *testing.T) {
 	p, c, _ := novo(t)
 	where := or(eq(campo(t, c, "status"), str("Stop")), eq(campo(t, c, "status"), str("Stop")))
 	pl := planeja(t, p, where)
-	if _, ok := pl.(*planner.BitmapScanPlan); !ok {
-		t.Fatalf("plano = %T, want *BitmapScanPlan (união de 1 termo colapsa)", pl)
+	if _, ok := pl.(*planner.IndexScanPlan); !ok {
+		t.Fatalf("plano = %T, want *IndexScanPlan (união de 1 termo colapsa)", pl)
 	}
 }
 
@@ -434,20 +414,20 @@ func TestPlanOrMesmoCampoValoresDeMesmoComprimento(t *testing.T) {
 	status := campo(t, c, "Acct-Status-Type")
 	pl := planeja(t, p, or(eq(status, str("Stop")), eq(status, str("Star"))))
 
-	querString(t, pl, `IndexUnion(bitmap:Acct-Status-Type="Stop", bitmap:Acct-Status-Type="Star")`)
+	querString(t, pl, `IndexUnion(Acct-Status-Type="Stop", Acct-Status-Type="Star")`)
 	u, ok := pl.(*planner.IndexUnionPlan)
 	if !ok || len(u.Terms) != 2 {
 		t.Fatalf("plano = %T, want IndexUnion com 2 termos", pl)
 	}
 }
 
-// O colapso respeita o índice do termo. Antes da D5 este caso (chamado
-// TestPlanOrDuplicadoDeHashColapsaParaHash) provava isso com um termo de HASH
-// — colapsando para HashIndex, não BitmapScan. Com `index: true` como única
-// grafia todo termo é bitmap, e o caso ficou idêntico, campo por campo, a
-// TestPlanOrDuplicadoColapsaParaScan (união de 1 termo, mesmo campo, mesmo
-// valor, colapsa para BitmapScan): a mesma asserção, sobre `status` em vez de
-// `nas_ip`. Retirado por duplicar cobertura, não por perder alguma.
+// O colapso da união de um termo só. Antes da D5 este caso (chamado
+// TestPlanOrDuplicadoDeHashColapsaParaHash) provava que ele respeitava o índice
+// do termo, colapsando para HashIndex e não para BitmapScan. Com uma grafia só
+// ele ficou idêntico, campo por campo, a TestPlanOrDuplicadoColapsaParaScan
+// (união de 1 termo, mesmo campo, mesmo valor): a mesma asserção, sobre
+// `status` em vez de `nas_ip`. Retirado por duplicar cobertura, não por perder
+// alguma.
 
 // OR aninhado DENTRO de AND: o conjunct indexado é um superset válido, e o OR
 // inteiro é resolvido na revalidação do executor.
@@ -457,7 +437,7 @@ func TestPlanOrAninhadoDentroDeAndUsaOutroConjunct(t *testing.T) {
 		eq(campo(t, c, "status"), str("Stop")),
 		or(eq(campo(t, c, "protocol"), str("PPPoE")), eq(campo(t, c, "username"), str("ze"))),
 	)
-	querString(t, planeja(t, p, where), `BitmapScan(Acct-Status-Type="Stop")`)
+	querString(t, planeja(t, p, where), `IndexScan(Acct-Status-Type="Stop")`)
 }
 
 // Limitação registrada: grupo OR indexável aninhado em AND NÃO vira união na
@@ -529,12 +509,12 @@ func TestPlanTipoPromovidoNaoUsaIndice(t *testing.T) {
 		t.Fatal(err)
 	}
 	vlan := campo(t, c, "vlan")
-	store := fakestorage.New(fakestorage.Indexes{Bitmap: []types.FieldID{vlan.ID}})
+	store := fakestorage.New(fakestorage.Indexes{Campos: []types.FieldID{vlan.ID}})
 	p := planner.New(store, nil)
 
 	// Literal int: casa o tipo da coluna, usa o índice.
-	if pl := planeja(t, p, eq(vlan, i64(10))); pl.String() != "BitmapScan(vlan=10)" {
-		t.Errorf("literal int: plano = %s, want BitmapScan(vlan=10)", pl)
+	if pl := planeja(t, p, eq(vlan, i64(10))); pl.String() != "IndexScan(vlan=10)" {
+		t.Errorf("literal int: plano = %s, want IndexScan(vlan=10)", pl)
 	}
 	// Literal float sobre coluna int64: o binder promoveu os dois para double,
 	// e esse valor NÃO existe no índice.
@@ -587,14 +567,14 @@ func TestPlanCampoAutoNaoUsaIndice(t *testing.T) {
 	// vez de autoType. Sem esta asserção, a guarda seria decoração.
 	sintetico := &schema.CompiledField{
 		ID: 999, Name: "sintetico", Type: types.TypeString,
-		IsAuto: true, Index: schema.IndexBitmap,
+		IsAuto: true, Indexado: true,
 	}
-	comBitmap := planner.New(fakestorage.New(fakestorage.Indexes{
-		Bitmap: []types.FieldID{sintetico.ID},
+	comIndice := planner.New(fakestorage.New(fakestorage.Indexes{
+		Campos: []types.FieldID{sintetico.ID},
 	}), nil)
-	if pl := planeja(t, comBitmap, eq(sintetico, str("x"))); pl != planner.FullScan() {
+	if pl := planeja(t, comIndice, eq(sintetico, str("x"))); pl != planner.FullScan() {
 		t.Errorf("plano = %s, want FullScan: campo auto não é elegível a índice "+
-			"mesmo com tipo declarado e bitmap disponível", pl)
+			"mesmo com tipo declarado e índice disponível", pl)
 	}
 }
 
@@ -624,7 +604,7 @@ func TestPlanProfundidadeAcimaDoBudgetDegrada(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		raso = and(raso, ruido)
 	}
-	querString(t, planeja(t, p, raso), `BitmapScan(Acct-Status-Type="Stop")`)
+	querString(t, planeja(t, p, raso), `IndexScan(Acct-Status-Type="Stop")`)
 
 	// O MESMO termo a 200 níveis: a subárvore vira conjunct opaco.
 	var fundo binder.BoundExpr = indexavel
@@ -637,7 +617,7 @@ func TestPlanProfundidadeAcimaDoBudgetDegrada(t *testing.T) {
 }
 
 // O penhasco do budget é EXATO e depende da POSIÇÃO do termo, não do tamanho
-// da query: a mesma consulta com os termos reordenados muda de BitmapScan para
+// da query: a mesma consulta com os termos reordenados muda de IndexScan para
 // FullScan. O teste mede a fronteira em vez de afirmá-la, para que ela conste
 // do código e não de um relatório.
 func TestPenhascoDoBudgetDeFlatten(t *testing.T) {
@@ -776,16 +756,16 @@ func TestPlanMetricas(t *testing.T) {
 			func(m *planner.Metrics) int64 { return m.FullScan.Load() }},
 		{"point lookup", eq(campo(t, c, "id"), str("a")),
 			func(m *planner.Metrics) int64 { return m.PointLookup.Load() }},
-		// O caso "hash" saiu daqui: com `index: true` como grafia única (D5),
-		// nenhuma config compila mais um campo para IndexHash, então
-		// m.HashIndex fica em zero por construção — não há mais como produzir
-		// um HashIndexPlan para contar. O `total` abaixo continua somando
-		// m.HashIndex.Load() de propósito: o dia em que a Tarefa 11 apagar o
-		// contador, este teste acusa a divergência de compilação.
-		{"bitmap scan", eq(campo(t, c, "status"), str("Stop")),
-			func(m *planner.Metrics) int64 { return m.BitmapScan.Load() }},
+		// O caso "hash" saiu daqui na D5, quando nenhuma config passou a produzir
+		// um plano de hash. O `total` abaixo continuou somando o contador daquele
+		// plano DE PROPÓSITO, para que o dia em que ele fosse apagado este teste
+		// acusasse por falha de compilação em vez de silenciar. Foi o que
+		// aconteceu: a parcela saiu junto com o contador, e a soma abaixo é
+		// DELIBERADAMENTE de cinco parcelas em vez de seis.
+		{"index scan", eq(campo(t, c, "status"), str("Stop")),
+			func(m *planner.Metrics) int64 { return m.IndexScan.Load() }},
 		{"intersect", and(eq(campo(t, c, "status"), str("Stop")), eq(campo(t, c, "protocol"), str("P"))),
-			func(m *planner.Metrics) int64 { return m.BitmapIntersect.Load() }},
+			func(m *planner.Metrics) int64 { return m.IndexIntersect.Load() }},
 		{"union", or(eq(campo(t, c, "status"), str("Stop")), eq(campo(t, c, "protocol"), str("P"))),
 			func(m *planner.Metrics) int64 { return m.IndexUnion.Load() }},
 	}
@@ -798,8 +778,8 @@ func TestPlanMetricas(t *testing.T) {
 			if got := tc.conta(m); got != 1 {
 				t.Errorf("contador do plano = %d, want 1", got)
 			}
-			total := m.FullScan.Load() + m.PointLookup.Load() + m.HashIndex.Load() +
-				m.BitmapScan.Load() + m.BitmapIntersect.Load() + m.IndexUnion.Load()
+			total := m.FullScan.Load() + m.PointLookup.Load() +
+				m.IndexScan.Load() + m.IndexIntersect.Load() + m.IndexUnion.Load()
 			if total != 1 {
 				t.Errorf("total de contadores = %d, want 1: só o plano escolhido conta", total)
 			}
@@ -854,11 +834,11 @@ func TestPlanConcorrente(t *testing.T) {
 	}
 	close(pronto)
 	for i := 0; i < goroutines; i++ {
-		if got := <-fim; got != `BitmapIntersect(Acct-Status-Type="Stop", Framed-Protocol="PPPoE")` {
+		if got := <-fim; got != `IndexIntersect(Acct-Status-Type="Stop", Framed-Protocol="PPPoE")` {
 			t.Errorf("plano concorrente = %s", got)
 		}
 	}
-	if got := m.BitmapIntersect.Load(); got != goroutines*porGoroutine {
+	if got := m.IndexIntersect.Load(); got != goroutines*porGoroutine {
 		t.Errorf("contador = %d, want %d", got, goroutines*porGoroutine)
 	}
 }

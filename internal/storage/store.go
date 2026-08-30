@@ -102,28 +102,21 @@ type Options struct {
 	Dir           string
 	SegmentSize   int64  // default 512 MiB; teto validado pelo segment
 	EstimatedRows uint64 // pre-sizing da primary (piso 1<<20 slots)
-	// BitmapFields são campos indexados, por ID.
+	// CamposIndexados são os campos com índice por segmento, por ID.
 	//
-	// O nome sobrevive ao motor que o batizou: com um motor só, ele e o
-	// HashFields alimentam o MESMO índice por segmento, e a união dos dois é o
-	// conjunto indexado do dataset. Continuam separados enquanto o planner não
-	// é unificado — trocá-los por um campo só é a mesma mudança que aposenta
-	// `index: hash` e `index: bitmap` no YAML.
-	BitmapFields []types.FieldID
-	// BitmapFieldNames são os mesmos campos por NOME, resolvidos pelo
+	// É UM par, e não mais os quatro campos de dois motores (CamposIndexados,
+	// CamposIndexadosPorNome, CamposIndexados, CamposIndexadosPorNome): com um motor só, os dois
+	// grupos alimentavam o MESMO índice, e o Store abria a união deles. Um par
+	// de campos que só sabe declarar o mesmo conjunto duas vezes é convite ao
+	// dia em que alguém preenche um e esquece o outro.
+	CamposIndexados []types.FieldID
+	// CamposIndexadosPorNome são os mesmos campos por NOME, resolvidos pelo
 	// dicionário do próprio dataset durante o Open (criando a entry se
 	// necessário). Existe porque os FieldIDs nascem de schema.Compile, que
 	// precisa do dicionário — e o dicionário vive dentro do Store: exigir
 	// IDs aqui obrigaria a abrir o dataset sem índices, compilar, fechar e
 	// reabrir. Os dois campos se somam (união).
-	BitmapFieldNames []string
-
-	// HashFields e HashFieldNames são campos indexados pelos MESMOS dois
-	// caminhos e pelas MESMAS razões dos de cima: ID para quem já resolveu o
-	// dicionário, NOME para quem ainda não pôde compilar o schema. Os quatro se
-	// somam (união).
-	HashFields     []types.FieldID
-	HashFieldNames []string
+	CamposIndexadosPorNome []string
 
 	// Modo é a engine do dataset (ver o tipo). O default — o zero value — é o
 	// dataset materializado, e é isso que faz todo dataset já em disco
@@ -170,7 +163,7 @@ type Options struct {
 	// tanto no Put quanto no replay do tail, e é por isso que o índice de
 	// expiração é reconstruível depois de um crash.
 	//
-	// Nome e não FieldID pela mesma razão do BitmapFieldNames: os ids nascem
+	// Nome e não FieldID pela mesma razão do CamposIndexadosPorNome: os ids nascem
 	// de schema.Compile, que precisa do dicionário — e o dicionário vive
 	// dentro do Store. Exigir o id aqui obrigaria a abrir o dataset sem
 	// expiração, compilar, fechar e reabrir.
@@ -289,7 +282,7 @@ const defaultSegmentSize = 512 << 20
 // Store é a fachada do storage.
 //
 // Concorrência: Put e Sync são exclusivos do writer único (não são
-// thread-safe entre si); GetByKey/GetByRowID/ScanLive/LookupBitmap/Sequence/
+// thread-safe entre si); GetByKey/GetByRowID/ScanLive/Lookup/Sequence/
 // Stats são seguros para leitores concorrentes com o writer.
 type Store struct {
 	opts Options
@@ -368,9 +361,8 @@ type Store struct {
 	// mesmo evento, a rotação de segmento.
 	selMu sync.RWMutex
 	// camposIndexados é o conjunto ordenado, resolvido no Open e IMUTÁVEL na
-	// vida do Store. É ele que responde HasBitmap, HasHash, BitmapFields,
-	// HashFields e CamposIndexados, e a imutabilidade é o que permite responder
-	// aos cinco sem lock.
+	// vida do Store. É ele que responde Indexado e CamposIndexados, e a
+	// imutabilidade é o que permite responder aos dois sem lock.
 	camposIndexados []types.FieldID
 	// chaveIndiceBuf é o buffer da chave canônica do índice por segmento,
 	// reusado a cada campo de cada evento. É do Store, e writer-only, pelo
@@ -936,34 +928,26 @@ func Open(opts Options) (*Store, error) {
 		}
 	}
 
-	// A resolução dos DOIS conjuntos vem antes de abrir qualquer índice: os
+	// A resolução do conjunto indexado vem antes de abrir qualquer índice: os
 	// nomes viram FieldID pelo dicionário, e o LookupOrCreate queima ids na
 	// ordem em que é chamado.
 	//
-	// ATÉ A D5 (planning/spec-subsistema-1-indice-por-segmento.md), esta ordem
-	// decidia mais do que "canônica dentro de cada lista": BitmapFieldNames e
-	// HashFieldNames vinham de grafias DIFERENTES do YAML (`index: bitmap` e
-	// `index: hash`), então "bitmap primeiro, hash depois" também decidia QUAL
-	// GRUPO pegava os ids mais baixos — e por isso esta ordem ENTRE os dois
-	// grupos era chamada de tão contratual quanto a ordem DENTRO de cada um.
+	// ATÉ A D5 (planning/spec-subsistema-1-indice-por-segmento.md) havia DOIS
+	// conjuntos e duas chamadas aqui, e a ordem entre elas decidia mais do que
+	// "canônica dentro de cada lista": as duas listas vinham de grafias
+	// DIFERENTES do YAML (`index: bitmap` e `index: hash`), então
+	// "bitmap primeiro, hash depois" também decidia QUAL GRUPO pegava os ids
+	// mais baixos — e por isso a ordem ENTRE os dois grupos era chamada de tão
+	// contratual quanto a ordem DENTRO de cada um.
 	//
-	// Com `index: true` como única grafia, schema.CamposComBitmap e
-	// schema.CamposComHash devolvem o MESMO conjunto (camposComIndice, em
-	// spec.go) — as duas chamadas logo abaixo recebem listas IDÊNTICAS. A
-	// primeira queima um id por campo indexado, em ordem alfabética; a
-	// segunda resolve os MESMOS nomes, e o LookupOrCreate devolve os ids já
-	// atribuídos sem queimar nenhum novo — é idempotente por nome (ver o
-	// godoc de resolveCamposIndexados). Não existe mais "grupo bitmap" nem
-	// "grupo hash": existe UM grupo, os campos indexados, numa corrida
-	// alfabética só.
+	// Não existe mais "grupo bitmap" nem "grupo hash": existe UM grupo, os
+	// campos indexados, numa corrida alfabética só.
 	//
 	// O que CONTINUA contrato: "mesmo spec → mesmo mapeamento" — para uma
 	// config dada, o conjunto indexado e a ordem alfabética dentro dele são
 	// determinísticos, e um dataset novo sempre nasce com o mesmo mapa
 	// nome→id. O que DEIXOU de ser contrato foi a relação ENTRE os dois
-	// grupos (quem vem primeiro): não há mais dois grupos a ordenar entre si,
-	// só um — chamar esta função duas vezes com a MESMA lista é seguro por
-	// ser idempotente, não porque a ordem das duas chamadas ainda importe.
+	// grupos (quem vem primeiro): não há mais dois grupos a ordenar entre si.
 	//
 	// Nada disto muda um dataset JÁ ABERTO: o fielddict é append-only em
 	// disco, e um FieldID já gravado não é revisitado — a mudança só decide o
@@ -985,11 +969,7 @@ func Open(opts Options) (*Store, error) {
 	// O que ainda NÃO existe é a outra metade do débito 22: acrescentar um campo
 	// indexado a um dataset povoado é aceito daqui em diante, mas nada agenda a
 	// reconstrução dos segmentos antigos — eles enumeram indefinidamente.
-	campos, err := s.resolveCamposIndexados(opts.BitmapFields, opts.BitmapFieldNames, "bitmap")
-	if err != nil {
-		return nil, err
-	}
-	camposHash, err := s.resolveCamposIndexados(opts.HashFields, opts.HashFieldNames, "hash")
+	campos, err := s.resolveCamposIndexados(opts.CamposIndexados, opts.CamposIndexadosPorNome)
 	if err != nil {
 		return nil, err
 	}
@@ -1040,17 +1020,17 @@ func Open(opts Options) (*Store, error) {
 				opts.Dir, err)
 		}
 	}
-	// O índice por segmento cobre a UNIÃO dos dois motores acima, e a união é o
-	// desenho: com um motor só, `hash` e `bitmap` deixam de nomear coisas
-	// diferentes (spec D5) — os dois viram "valor → conjunto ordenado de rowIds
-	// dentro do segmento", e densidade passa a ser decisão de codificação.
+	// O índice por segmento cobre TODO campo indexado, sem distinção de motor:
+	// com um motor só, `hash` e `bitmap` deixam de nomear coisas diferentes
+	// (spec D5) — os dois viram "valor → conjunto ordenado de rowIds dentro do
+	// segmento", e densidade passa a ser decisão de codificação.
 	//
 	// Ele abre DEPOIS do ramo de recovery, e não junto dos outros dois, porque
 	// os WIPs pertencem ao SEGMENTO CORRENTE e é o ramo quem o decide: antes
 	// dele, curSegID ainda é zero num dataset existente. Os campos, esses, vêm
 	// do resolveCamposIndexados lá em cima, cuja ordem de LookupOrCreate é
 	// contratual e não pode ser tocada.
-	if err := s.abreIndicesDeSegmento(uniaoDeCampos(campos, camposHash)); err != nil {
+	if err := s.abreIndicesDeSegmento(campos); err != nil {
 		return nil, err
 	}
 
@@ -1109,23 +1089,15 @@ func (s *Store) carregaOffsets() {
 // dicionário do dataset, criando a entry se ainda não existir (a regra
 // fsync-before-first-use vale, é o próprio LookupOrCreate que a aplica).
 //
-// `motor` só entra nas mensagens de erro. A função é a MESMA para bitmap e
-// hash de propósito: a garantia que ela existe para dar — ordem canônica antes
-// de queimar id no dicionário — não é sobre o motor, é sobre a criação do
-// dataset, e um segundo laço para o segundo motor seria a primeira cópia a
-// divergir.
-//
-// É IDEMPOTENTE por nome: LookupOrCreate devolve o id já atribuído para um
-// nome que já está no dicionário, sem queimar um novo. É essa propriedade que
-// torna inofensivo chamar esta função duas vezes com a MESMA lista de nomes —
-// o caso normal desde a D5, em que schema.CamposComBitmap e
-// schema.CamposComHash devolvem o mesmo conjunto (ver o comentário no
-// chamador, acima, no Open).
-func (s *Store) resolveCamposIndexados(ids []types.FieldID, nomesDeclarados []string, motor string) ([]types.FieldID, error) {
+// A garantia que ela existe para dar — ordem canônica antes de queimar id no
+// dicionário — não é sobre motor de índice, é sobre a criação do dataset. Era
+// por isso que ela já era UMA função quando havia dois motores: um segundo laço
+// para o segundo motor seria a primeira cópia a divergir.
+func (s *Store) resolveCamposIndexados(ids []types.FieldID, nomesDeclarados []string) ([]types.FieldID, error) {
 	set := make(map[types.FieldID]struct{}, len(ids)+len(nomesDeclarados))
 	for _, field := range ids {
 		if field == 0 {
-			return nil, fmt.Errorf("%w: fieldID 0 nos campos de %s", ErrInvalidArgument, motor)
+			return nil, fmt.Errorf("%w: fieldID 0 nos campos indexados", ErrInvalidArgument)
 		}
 		set[field] = struct{}{}
 	}
@@ -1142,11 +1114,11 @@ func (s *Store) resolveCamposIndexados(ids []types.FieldID, nomesDeclarados []st
 	slices.Sort(nomes)
 	for _, nome := range nomes {
 		if nome == "" {
-			return nil, fmt.Errorf("%w: nome vazio nos campos de %s", ErrInvalidArgument, motor)
+			return nil, fmt.Errorf("%w: nome vazio nos campos indexados", ErrInvalidArgument)
 		}
 		id, err := s.dict.LookupOrCreate([]byte(nome))
 		if err != nil {
-			return nil, fmt.Errorf("storage: resolver o campo de %s %q: %w", motor, nome, err)
+			return nil, fmt.Errorf("storage: resolver o campo indexado %q: %w", nome, err)
 		}
 		set[id] = struct{}{}
 	}
@@ -1220,43 +1192,23 @@ func fsyncDir(dir string) error {
 // FieldDict expõe o dicionário de campos do dataset.
 func (s *Store) FieldDict() *fielddict.Dict { return s.dict }
 
-// HasBitmap informa se o campo é indexado.
+// Indexado informa se o campo tem índice.
 //
 // É o capability check do planner: sem ele o plano escolhe o caminho
 // indexado e a query falha em RUNTIME, em vez de degradar para full scan
 // como o design promete. O conjunto é fixado no Open, então a resposta é
 // estável durante toda a vida do Store.
 //
-// Ele e o HasHash respondem HOJE PELA MESMA FONTE — o conjunto indexado do
-// dataset —, porque existe um motor só. Os dois nomes sobrevivem enquanto o
-// planner não é unificado, e a duplicação é temporária por desenho: enquanto
-// eles não colapsam num Indexado, a suíte que os exercita continua valendo sem
-// uma linha mudada.
-func (s *Store) HasBitmap(field types.FieldID) bool {
+// É UM método, e não mais o par de capabilities por motor: os dois respondiam pela
+// MESMA fonte — o conjunto indexado do dataset — desde que passou a existir um
+// motor só, e duas perguntas com uma resposta só é convite a alguém consultar
+// uma delas e concluir a outra.
+//
+// A enumeração do conjunto é o CamposIndexados (indices.go), que já era a
+// terceira grafia da mesma coisa quando havia um enumerador por motor.
+func (s *Store) Indexado(field types.FieldID) bool {
 	return slices.Contains(s.camposIndexados, field)
 }
-
-// BitmapFields devolve, em ordem crescente, os campos indexados.
-//
-// Cópia, e não o slice interno: o conjunto é imutável por contrato, e devolver
-// a fatia de dentro deixaria qualquer chamador quebrar a promessa por engano.
-func (s *Store) BitmapFields() []types.FieldID { return slices.Clone(s.camposIndexados) }
-
-// HasHash informa se o campo é indexado — hoje, a MESMA pergunta que o
-// HasBitmap, pela mesma fonte (ver o godoc dele).
-//
-// Ele existe porque era o capability check por campo que o planner já esperava
-// (a interface HashCapable, planner.go). Enquanto ele não existia, `p.hash` era
-// nil e toda igualdade sobre coluna declarada com `index: hash` degradava para
-// FullScan — que é correto e inutilizável: no piloto, 17,8M linhas varridas por
-// uma consulta que o índice resolve em um probe.
-func (s *Store) HasHash(field types.FieldID) bool {
-	return slices.Contains(s.camposIndexados, field)
-}
-
-// HashFields devolve, em ordem crescente, os campos indexados — o mesmo
-// conjunto que o BitmapFields, pela mesma razão.
-func (s *Store) HashFields() []types.FieldID { return slices.Clone(s.camposIndexados) }
 
 // lookup resolve a key pela primary, lendo o record corrente em buf.
 // exists = key presente; live = sem flag de tombstone na location.
@@ -1994,8 +1946,8 @@ func (it *liveIterator) Close() error       { return nil }
 // não toca região nenhuma — o dono dos mapeamentos é o Store.
 //
 // O embrulho do índice bitmap saiu daqui junto com o motor que ele servia: com
-// LookupBitmap e LookupHash respondendo pelo mesmo índice por segmento, dois
-// embrulhos idênticos seriam duas cópias de uma regra só.
+// um Lookup só respondendo pelo índice por segmento, dois embrulhos idênticos
+// seriam duas cópias de uma regra só.
 //
 // O campo é a INTERFACE, e não o iterador de um motor: a união de fontes da
 // §3.3 devolve concatenação, merge k-way ou vazio conforme os dados, e amarrar
@@ -2063,33 +2015,18 @@ func (s *Store) DiretorioDeSpill() string {
 	return filepath.Join(s.opts.Dir, spill.NomeDoDiretorio)
 }
 
-// LookupBitmap consulta o índice do campo; valor nunca visto devolve iterador
-// vazio. Campo sem índice POR SEGMENTO é ErrInvalidArgument — e a recusa passou
-// a ser essa, e não mais "sem índice bitmap": com um motor só, o conjunto
-// indexado é a união das duas declarações antigas (spec D5), então um campo
-// declarado apenas como hash já não é recusado aqui. O planner nunca alcança
-// essa diferença, porque consulta as capabilities antes; ela desaparece na
-// unificação da §3.1. O resultado é um SUPERSET de candidatos:
-// rows tombstoned/sem location podem aparecer — valide liveness e predicate via
-// GetByRowID (spec §44).
+// Lookup consulta o índice do campo; valor nunca visto devolve iterador vazio;
+// campo sem índice POR SEGMENTO é ErrInvalidArgument. O resultado é um SUPERSET
+// de candidatos — rows tombstoned, sem location, rows que apenas COLIDEM no
+// hash do valor e, nos segmentos sem índice, as linhas que o segmento inteiro
+// enumera. Valide liveness e predicate via GetByRowID (§44).
 //
-// O iterador devolvido é reentrante: um Close do dataset no meio da varredura
-// a interrompe com ErrDatasetClosed em Err(), sem panic.
-//
-// O NOME sobrevive ao motor que o batizou. Ele e o LookupHash respondem hoje
-// pelo MESMO índice por segmento (spec §3.1): com um motor só, a distinção
-// bitmap/hash deixou de existir, e manter as duas assinaturas até a unificação
-// do planner é o que permite à suíte inteira de storage e de query exercitar o
-// motor novo sem uma linha de teste mudada.
-func (s *Store) LookupBitmap(field types.FieldID, v types.Value) (types.RowIDIterator, error) {
-	return s.lookupIndexado(field, v)
-}
-
-// LookupHash consulta o índice do campo; valor nunca visto devolve iterador
-// vazio; campo não indexado é erro. O resultado é um SUPERSET de candidatos —
-// rows tombstoned, sem location, rows que apenas COLIDEM no hash e, nos
-// segmentos sem índice, as linhas que o segmento inteiro enumera. Valide
-// liveness e predicate via GetByRowID (§44).
+// É UM método, e não mais um lookup por motor: os dois já delegavam
+// para o mesmo lookupIndexado desde que passou a existir um motor só (spec D5),
+// e a §3.1 é o ponto em que as duas assinaturas colapsam. Enquanto o planner
+// ainda distinguia os motores, manter os dois nomes era o que permitia à suíte
+// exercitar o motor novo sem uma linha de teste mudada; unificado o planner, o
+// segundo nome não descreve mais nada que o primeiro não descreva.
 //
 // Os rowIds saem em ordem estritamente CRESCENTE. Isso é contrato, não
 // detalhe: o intersectIter e o unionIter do executor assumem iteradores
@@ -2100,7 +2037,7 @@ func (s *Store) LookupBitmap(field types.FieldID, v types.Value) (types.RowIDIte
 // segmento a proteção deixou de ser só uniformidade de contrato e voltou a ser
 // literal: as fontes seladas e a do locations leem mmap a CADA avanço, então
 // sem a reentrada o Close desmaparia a região sob os pés da varredura.
-func (s *Store) LookupHash(field types.FieldID, v types.Value) (types.RowIDIterator, error) {
+func (s *Store) Lookup(field types.FieldID, v types.Value) (types.RowIDIterator, error) {
 	return s.lookupIndexado(field, v)
 }
 

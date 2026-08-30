@@ -165,7 +165,7 @@ func newFakeMaterializer(tb testing.TB) (*Materializer, *schema.Compiled) {
 	if !ok {
 		tb.Fatal("Acct-Status-Type não compilado")
 	}
-	m, err := New(c, fakestorage.New(fakestorage.Indexes{Bitmap: []types.FieldID{f.ID}}))
+	m, err := New(c, fakestorage.New(fakestorage.Indexes{Campos: []types.FieldID{f.ID}}))
 	if err != nil {
 		tb.Fatalf("New: %v", err)
 	}

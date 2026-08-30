@@ -94,7 +94,7 @@ func BenchmarkQueryBitmapLimit100(b *testing.B) {
 	var buf []byte
 	b.ReportAllocs()
 	for b.Loop() {
-		it, err := st.LookupBitmap(field, valor)
+		it, err := st.Lookup(field, valor)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -123,7 +123,7 @@ func BenchmarkQueryBitmapLimit100(b *testing.B) {
 
 func contaPostings(b *testing.B, st *storage.Store, field types.FieldID, v types.Value) int {
 	b.Helper()
-	it, err := st.LookupBitmap(field, v)
+	it, err := st.Lookup(field, v)
 	if err != nil {
 		b.Fatal(err)
 	}

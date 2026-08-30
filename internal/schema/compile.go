@@ -45,44 +45,6 @@ const (
 	UnknownReject
 )
 
-// IndexKind é o índice secundário do campo, resolvido a partir do YAML.
-//
-// A partir da D5 (planning/spec-subsistema-1-indice-por-segmento.md),
-// `index: true` é a ÚNICA grafia que o YAML aceita — `hash` e `bitmap` são
-// recusados na subida (ver validaIndice, em congelada.go). O tipo continua
-// tendo três valores porque o PLANNER ainda os distingue (a regra R2 lê
-// IndexHash, R3/R4 leem IndexBitmap): `index: true` sempre compila para
-// IndexBitmap, que é a regra que INTERSECTA vários termos em vez de parar no
-// primeiro — a rota certa agora que não há mais "qual dos dois" para escolher.
-// IndexHash fica, mas nenhuma config válida o produz mais: é o enum morto que
-// a Tarefa 11 apaga, junto com a regra R2 e o rename dos planos.
-type IndexKind uint8
-
-const (
-	IndexNone IndexKind = iota
-	IndexBitmap
-	IndexHash
-)
-
-// String devolve o índice em texto, para o `index` do /v1/metadata.
-//
-// Deixou de ser o mesmo vocabulário do YAML com a D5: a config só aceita
-// `true`, mas o wire continua nomeando o PLANO que o planner escolhe
-// (bitmap/hash/none) — é essa distinção interna, não a grafia de entrada, que
-// o operador quer ver ao perguntar "que índice esta coluna tem".
-func (k IndexKind) String() string {
-	switch k {
-	case IndexNone:
-		return "none"
-	case IndexBitmap:
-		return "bitmap"
-	case IndexHash:
-		return "hash"
-	default:
-		return "desconhecido"
-	}
-}
-
 // FieldDictionary é o que o schema consome do storage (fielddict): IDs
 // estáveis e persistentes por nome de campo, e o tipo FIXADO dos campos sem
 // declaração (R11).
@@ -113,7 +75,7 @@ type CompiledField struct {
 	Alias             string          // "" se ausente
 	Type              types.FieldType // tipo DECLARADO; TypeNull quando IsAuto
 	IsAuto            bool            // tipo resolvido na primeira observação
-	Index             IndexKind
+	Indexado          bool            // `index: true` no YAML — a única grafia desde a D5
 	IsKey, IsSequence bool
 
 	// IsSystem marca campo que o WRITER injeta e o operador não declara.
@@ -263,6 +225,28 @@ func (f *CompiledField) EffectiveType() types.FieldType {
 		return f.Type
 	}
 	return types.FieldType(f.autoType.Load())
+}
+
+// NomeDoIndice devolve o índice em texto, para a coluna `index` do
+// /v1/metadata e da homônima de `_meta.fields`. Substitui o String() do enum de
+// índice, que morreu com os dois motores, e devolve as MESMAS duas palavras que
+// ele devolvia.
+//
+// "bitmap" e "none" são vocabulário de WIRE, e é por isso que eles não
+// acompanharam a unificação dos motores: o driver JDBC decide por igualdade com
+// "none" se a coluna entra no getIndexInfo (NishiDatabaseMetaData), e o teste de
+// integração do client Python afirma "bitmap" contra o servidor real. Trocar as
+// palavras aqui seria mudança de comportamento — em duas linguagens de cliente —
+// vestida de rename, e ela não pertence a esta tarefa.
+//
+// O que a unificação de fato tirou do wire foi o terceiro valor: "hash" não é
+// mais alcançável por config nenhuma desde a D5, e desde esta tarefa não existe
+// sequer o tipo que o representava.
+func (f *CompiledField) NomeDoIndice() string {
+	if f.Indexado {
+		return "bitmap"
+	}
+	return "none"
 }
 
 // FixAutoType fixa o tipo de um campo auto na primeira observação: persiste
@@ -599,7 +583,7 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 				}
 				cf.Format, cf.Layout = spec.Format, l
 			}
-			cf.Index = indexKindDe(spec.Index)
+			cf.Indexado = indexadoNoYAML(spec.Index)
 			cf.Acumula = spec.Merge == MergeSoma
 		} else {
 			cf.IsAuto = true
@@ -771,23 +755,16 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 	return c, nil
 }
 
-// indexKindDe traduz o vocabulário do YAML já validado (validaIndice, em
+// indexadoNoYAML traduz o vocabulário do YAML já validado (validaIndice, em
 // congelada.go, só deixa passar "" ou "true" — chamar isto sobre um valor cru
 // não validado seria bug de quem compila sem ter passado pelo validate).
 // Vive numa função só porque o campo de topo e a coluna derivada leem a MESMA
-// chave, e duas traduções divergiriam no dia em que o planner deixasse de
-// precisar do enum (Tarefa 11).
+// chave, e duas traduções divergiriam.
 //
-// `true` mapeia para IndexBitmap, e não para um terceiro valor: é a regra
-// R3/R4 do planner (bitmapEligible) que passa a atender TODO campo indexado,
-// porque ela intersecta múltiplos termos em vez de escolher um só — a
-// distinção que fazia `hash` valer a pena morreu com o motor único.
-func indexKindDe(yaml string) IndexKind {
-	if yaml == "true" {
-		return IndexBitmap
-	}
-	return IndexNone
-}
+// O resultado é um bool, e não mais um enum de três valores, porque existe um
+// motor de índice só (D5): "qual dos dois" deixou de ser uma pergunta, e o que
+// resta é "tem ou não tem".
+func indexadoNoYAML(yaml string) bool { return yaml == "true" }
 
 // registraDerivadas compila as colunas declaradas em `extract`.
 //
@@ -838,14 +815,14 @@ func (c *Compiled) registraDerivadas(s *DatasetSpec, dict FieldDictionary) error
 					ErrColunaDerivada, nome, tipo, t)
 			}
 			cf := &CompiledField{
-				ID:     id,
-				Name:   nome,
-				Type:   tipo,
-				Index:  indexKindDe(e.Index),
-				Format: e.Format,
-				Layout: layout,
-				Parent: pai,
-				Path:   e.Path,
+				ID:       id,
+				Name:     nome,
+				Type:     tipo,
+				Indexado: indexadoNoYAML(e.Index),
+				Format:   e.Format,
+				Layout:   layout,
+				Parent:   pai,
+				Path:     e.Path,
 			}
 			c.byName[cf.Name] = cf
 			c.byID[cf.ID] = cf

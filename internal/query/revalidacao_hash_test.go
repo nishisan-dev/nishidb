@@ -13,8 +13,8 @@ import (
 // do §44 — distinto da posting órfã que já bastava para o bitmap.
 //
 // O motor que sustentava essa distinção saiu (Tarefa 9 — índice por segmento
-// único), e a D5 aposentou a grafia que a declarava: `nas` (NAS-Identifier)
-// compila para o MESMO IndexKind que `status` agora (IndexBitmap), e o
+// único), e a D5 aposentou a grafia que a declarava: `nas` (NAS-Identifier) sai
+// indexado exatamente como `status`, e o
 // candidato a mais que este teste injeta com InjectPosting representa a MESMA
 // causa do bitmap (posting que sobrevive à mudança de valor, não colisão de
 // hash). O nome ficou histórico; o que o teste continua provando — e que o
@@ -45,7 +45,7 @@ func TestRevalidacaoDeCandidatoDoIndiceHash(t *testing.T) {
 
 	m := h.engine.Metrics()
 	if got := m.Candidates.Load(); got != 1 {
-		t.Errorf("Candidates = %d, want 1: o índice hash devolveu o candidato", got)
+		t.Errorf("Candidates = %d, want 1: o índice devolveu o candidato", got)
 	}
 	if got := m.Rejected.Load(); got != 1 {
 		t.Errorf("Rejected = %d, want 1: o predicado foi reavaliado e recusou", got)
@@ -55,7 +55,7 @@ func TestRevalidacaoDeCandidatoDoIndiceHash(t *testing.T) {
 	}
 	// E o plano foi mesmo o indexado: com FullScan a asserção acima passaria
 	// pelo motivo errado — a varredura também não emitiria a row.
-	if got := h.engine.PlanMetrics().BitmapScan.Load(); got != 1 {
-		t.Errorf("query.bitmap_scan = %d, want 1: a query não usou o índice", got)
+	if got := h.engine.PlanMetrics().IndexScan.Load(); got != 1 {
+		t.Errorf("contador de index scan = %d, want 1: a query não usou o índice", got)
 	}
 }

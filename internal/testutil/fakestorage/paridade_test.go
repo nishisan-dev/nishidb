@@ -121,9 +121,9 @@ func TestParidadeDoTetoDeValorIndexado(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fake := fakestorage.New(fakestorage.Indexes{Bitmap: []types.FieldID{1}})
+	fake := fakestorage.New(fakestorage.Indexes{Campos: []types.FieldID{1}})
 	real, err := storage.Open(storage.Options{
-		Dir: filepath.Join(t.TempDir(), "ds"), BitmapFieldNames: []string{"campo"},
+		Dir: filepath.Join(t.TempDir(), "ds"), CamposIndexadosPorNome: []string{"campo"},
 	})
 	if err != nil {
 		t.Fatal(err)

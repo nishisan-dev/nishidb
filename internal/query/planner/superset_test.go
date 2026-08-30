@@ -82,15 +82,15 @@ func TestPlanCandidatosSaoSuperset(t *testing.T) {
 		esperado []string // rows VIVAS que satisfazem o WHERE
 	}{
 		{"point lookup", eq(id, str("A")), `PointLookup(id="A")`, []string{"A"}},
-		{"bitmap scan", eq(status, str("Stop")), `BitmapScan(Acct-Status-Type="Stop")`,
+		{"index scan", eq(status, str("Stop")), `IndexScan(Acct-Status-Type="Stop")`,
 			[]string{"A", "C", "D"}},
 		{"interseção", and(eq(status, str("Stop")), eq(protocol, str("PPPoE"))),
-			`BitmapIntersect(Acct-Status-Type="Stop", Framed-Protocol="PPPoE")`, []string{"A", "D"}},
+			`IndexIntersect(Acct-Status-Type="Stop", Framed-Protocol="PPPoE")`, []string{"A", "D"}},
 		// nasIP era `index: hash` antes da D5; com `index: true` como grafia
-		// única ele compila para o mesmo IndexBitmap que status, e os dois
-		// termos da união saem com o mesmo prefixo.
+		// única ele sai indexado como status, e a string da união já não prefixa
+		// termo nenhum com o motor.
 		{"união de dois campos indexados", or(eq(status, str("Stop")), eq(nasIP, ipv4(t, "10.0.0.3"))),
-			`IndexUnion(bitmap:Acct-Status-Type="Stop", bitmap:NAS-IP-Address=0x0a000003)`,
+			`IndexUnion(Acct-Status-Type="Stop", NAS-IP-Address=0x0a000003)`,
 			[]string{"A", "C", "D", "F"}},
 		// OR com um disjunct não indexado degrada por inteiro: uma união
 		// parcial deixaria B de fora.
@@ -166,21 +166,14 @@ func candidatos(t *testing.T, s *fakestorage.Store, plan planner.Plan) map[types
 			out[rec.RowID] = true
 		}
 
-	case *planner.BitmapScanPlan:
-		it, err := s.LookupBitmap(pl.Field.ID, pl.Val)
+	case *planner.IndexScanPlan:
+		it, err := s.Lookup(pl.Field.ID, pl.Val)
 		if err != nil {
 			t.Fatal(err)
 		}
 		coleta(t, it, out)
 
-	case *planner.HashIndexPlan:
-		it, err := s.LookupHash(pl.Field.ID, pl.Val)
-		if err != nil {
-			t.Fatal(err)
-		}
-		coleta(t, it, out)
-
-	case *planner.BitmapIntersectPlan:
+	case *planner.IndexIntersectPlan:
 		for i, term := range pl.Terms {
 			parcial := map[types.RowID]bool{}
 			coleta(t, lookup(t, s, term), parcial)
@@ -206,17 +199,11 @@ func candidatos(t *testing.T, s *fakestorage.Store, plan planner.Plan) map[types
 	return out
 }
 
+// O despacho por term.Kind saiu daqui junto com o campo: os dois ramos
+// chamavam o Lookup do motor do termo, e existe um motor só.
 func lookup(t *testing.T, s *fakestorage.Store, term planner.IndexTerm) types.RowIDIterator {
 	t.Helper()
-	var (
-		it  types.RowIDIterator
-		err error
-	)
-	if term.Kind == schema.IndexHash {
-		it, err = s.LookupHash(term.Field.ID, term.Val)
-	} else {
-		it, err = s.LookupBitmap(term.Field.ID, term.Val)
-	}
+	it, err := s.Lookup(term.Field.ID, term.Val)
 	if err != nil {
 		t.Fatalf("lookup de %s: %v", term.Field.Name, err)
 	}

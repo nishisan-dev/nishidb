@@ -123,11 +123,11 @@ func (b *bancada) carregaSpec() {
 func (b *bancada) abre() {
 	b.t.Helper()
 	st, err := storage.Open(storage.Options{
-		Dir:              filepath.Join(b.dir, "radius_sessions"),
-		Dataset:          "radius_sessions",
-		SegmentSize:      1 << 20,
-		BitmapFieldNames: []string{"status"},
-		Metrics:          b.reg,
+		Dir:                    filepath.Join(b.dir, "radius_sessions"),
+		Dataset:                "radius_sessions",
+		SegmentSize:            1 << 20,
+		CamposIndexadosPorNome: []string{"status"},
+		Metrics:                b.reg,
 	})
 	if err != nil {
 		b.t.Fatalf("storage.Open: %v", err)

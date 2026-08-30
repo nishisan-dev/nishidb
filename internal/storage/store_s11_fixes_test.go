@@ -21,7 +21,7 @@ func TestCheckpointOrdemDeDurabilidade(t *testing.T) {
 	// ANTES do apply do overlay, os 4 msyncs depois, manifest POR ÚLTIMO.
 	// As mutações da revisão (inverter Sync↔ApplyOverlay; remover msyncs;
 	// remover fsync do manifest) falham este teste.
-	s := openStore(t, Options{BitmapFields: []types.FieldID{fldStatus}})
+	s := openStore(t, Options{CamposIndexados: []types.FieldID{fldStatus}})
 	var trace []string
 	s.SetCheckpointTraceForTest(func(step string) { trace = append(trace, step) })
 

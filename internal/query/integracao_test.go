@@ -128,12 +128,11 @@ type integracao struct {
 	oracle oraculo
 }
 
-// bitmaps e hashes do YAML de produção.
-var (
-	camposBitmap = []string{"Acct-Status-Type", "Framed-Protocol", "Acct-Terminate-Cause",
-		"Filter-Id", "NAS-Port-Type", "Service-Type", "Acct-Authentic"}
-	camposHash = []string{"NAS-IP-Address", "NAS-Identifier", "Framed-IP-Address"}
-)
+// Os campos indexados do YAML de produção. Eram duas listas — a do bitmap e a
+// do hash — enquanto as duas grafias existiam no YAML; com um motor só, é uma.
+var camposIndexados = []string{"Acct-Status-Type", "Framed-Protocol", "Acct-Terminate-Cause",
+	"Filter-Id", "NAS-Port-Type", "Service-Type", "Acct-Authentic",
+	"NAS-IP-Address", "NAS-Identifier", "Framed-IP-Address"}
 
 // abre (ou reabre) o dataset e recompila o schema contra o dicionário DO
 // STORE — é ele que atribui os FieldIDs duráveis, e usar outro dicionário faria
@@ -141,10 +140,9 @@ var (
 func (ig *integracao) abre() {
 	ig.t.Helper()
 	st, err := storage.Open(storage.Options{
-		Dir:              ig.dir,
-		BitmapFieldNames: camposBitmap,
-		HashFieldNames:   camposHash,
-		EstimatedRows:    10_000,
+		Dir:                    ig.dir,
+		CamposIndexadosPorNome: camposIndexados,
+		EstimatedRows:          10_000,
 	})
 	if err != nil {
 		ig.t.Fatal(err)
@@ -288,22 +286,22 @@ func TestIntegracaoFimAFim(t *testing.T) {
 
 	// Era a regra R2 do planner e o motor hash, ponta a ponta — a prova de que
 	// o débito 19 fechou (enquanto o *storage.Store não implementava
-	// LookupHash, `p.hash` era nil, o plano caía para FullScan e a query
+	// Lookup, `p.hash` era nil, o plano caía para FullScan e a query
 	// varria o dataset inteiro, 17,8M linhas no piloto por uma consulta que o
 	// índice resolve num probe).
 	//
-	// A D5 aposentou `index: hash`: `nas` agora compila para IndexBitmap como
-	// qualquer outro campo indexado (compile.go, indexKindDe), e o plano que
-	// o atende é BitmapScan, não HashIndex — a métrica trocou, o resto do
-	// teste (e a razão de existir) não. O oráculo continua o mesmo dos outros
-	// bitmaps, e segue impedindo o teste de se contentar com "veio alguma
+	// A D5 aposentou `index: hash`: `nas` sai indexado como qualquer outro
+	// campo, e o plano que o atende é o IndexScan — a métrica trocou de nome,
+	// o resto do teste (e a razão de existir) não. O oráculo continua o mesmo
+	// dos outros campos indexados, e segue impedindo o teste de se contentar
+	// com "veio alguma
 	// coisa": o índice devolve SUPERSET por desenho, então um resultado A MAIS
 	// seria defeito da revalidação e A MENOS seria defeito do índice — as duas
 	// direções seguem conferidas pelo comparaConjuntos.
 	t.Run("indice escolhe o plano e acerta o conjunto", func(t *testing.T) {
 		alvo := algumValor(t, ig.oracle, "NAS-Identifier")
 		want := ig.oracle.keysOnde(func(e map[string]any) bool { return campoIgual(e, "NAS-Identifier", alvo) })
-		antes := ig.engine.PlanMetrics().BitmapScan.Load()
+		antes := ig.engine.PlanMetrics().IndexScan.Load()
 		fullAntes := ig.engine.PlanMetrics().FullScan.Load()
 
 		got := ig.ids(`SELECT id FROM radius_sessions WHERE nas = ?`,
@@ -313,15 +311,15 @@ func TestIntegracaoFimAFim(t *testing.T) {
 		// A métrica do planner é o observável do PLANO escolhido, e conferi-la
 		// é o que separa "o resultado está certo" de "o índice foi usado": um
 		// FullScan devolveria exatamente o mesmo conjunto, varrendo tudo.
-		if depois := ig.engine.PlanMetrics().BitmapScan.Load(); depois != antes+1 {
-			t.Errorf("query.bitmap_scan não contou o plano: %d → %d", antes, depois)
+		if depois := ig.engine.PlanMetrics().IndexScan.Load(); depois != antes+1 {
+			t.Errorf("o contador de index scan não contou o plano: %d → %d", antes, depois)
 		}
 		if depois := ig.engine.PlanMetrics().FullScan.Load(); depois != fullAntes {
 			t.Errorf("a query degradou para FullScan (%d → %d) com o campo indexado", fullAntes, depois)
 		}
 	})
 
-	// Dois campos indexados no MESMO OR. É o caso que o godoc do LookupBitmap
+	// Dois campos indexados no MESMO OR. É o caso que o godoc do Lookup
 	// chama de invariante: o IndexUnionPlan funde os dois iteradores num
 	// unionIter que assume ordem crescente dos DOIS lados. Um deles
 	// desordenado produziria união incompleta em silêncio, e nenhum teste de

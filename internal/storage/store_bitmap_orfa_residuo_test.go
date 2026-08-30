@@ -36,9 +36,9 @@ func postingsDeStatus(t *testing.T, s *Store, valores ...string) map[string][]ty
 	t.Helper()
 	out := make(map[string][]types.RowID, len(valores))
 	for _, v := range valores {
-		it, err := s.LookupBitmap(fldStatus, strVal(v))
+		it, err := s.Lookup(fldStatus, strVal(v))
 		if err != nil {
-			t.Fatalf("LookupBitmap(status=%q): %v", v, err)
+			t.Fatalf("Lookup(status=%q): %v", v, err)
 		}
 		out[v] = collectRows(t, it)
 	}
@@ -56,7 +56,7 @@ func postingsDeStatus(t *testing.T, s *Store, valores ...string) map[string][]ty
 // ANTIGA não é apagada.
 func TestPostingOrfaDoReplayNaoConverge(t *testing.T) {
 	dir := t.TempDir()
-	opts := Options{Dir: dir, BitmapFields: []types.FieldID{fldStatus}}
+	opts := Options{Dir: dir, CamposIndexados: []types.FieldID{fldStatus}}
 
 	// 1. Row criada com status=Start e CHECKPOINTADA: a partir daqui ela
 	// existe no ponto S, e é o bit de Start que vai virar órfão.
@@ -171,7 +171,7 @@ func exigeOrfaDeStatus(t *testing.T, momento string, postings map[string][]types
 func postingsSemCrash(t *testing.T) map[string][]types.RowID {
 	t.Helper()
 	dir := t.TempDir()
-	s := audOpen(t, Options{Dir: dir, BitmapFields: []types.FieldID{fldStatus}})
+	s := audOpen(t, Options{Dir: dir, CamposIndexados: []types.FieldID{fldStatus}})
 	defer s.Close()
 
 	mustPut(t, s, "bm", 1, statusPayload(t, s, "bm", "Start", 1), nil)

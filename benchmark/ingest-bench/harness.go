@@ -430,15 +430,13 @@ func Run(cfg Config) (*Report, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ingest-bench: carregando spec: %w", err)
 	}
-	// As duas listas saem do schema, e NÃO de um laço local: este arquivo era
-	// a quarta cópia do laço que o godoc de schema.CamposComBitmap descreve, e
-	// a cópia não conhecia coluna derivada — nem, agora, o motor hash. Um
-	// benchmark que abrisse o dataset com um conjunto de índices diferente do
-	// que o servidor usa mediria outro produto.
-	bitmapFields := schema.CamposComBitmap(spec)
-	hashFields := schema.CamposComHash(spec)
+	// A lista sai do schema, e NÃO de um laço local: este arquivo era a quarta
+	// cópia do laço que o godoc de schema.CamposComIndice descreve, e a cópia
+	// não conhecia coluna derivada. Um benchmark que abrisse o dataset com um
+	// conjunto de índices diferente do que o servidor usa mediria outro produto.
+	camposIndexados := schema.CamposComIndice(spec)
 
-	st, err := abreStore(cfg, bitmapFields, hashFields)
+	st, err := abreStore(cfg, camposIndexados)
 	if err != nil {
 		return nil, err
 	}
@@ -610,7 +608,7 @@ func Run(cfg Config) (*Report, error) {
 	if err := st.Checkpoint(); err != nil {
 		return nil, fmt.Errorf("ingest-bench: checkpoint antes de medir o restart: %w", err)
 	}
-	rep.RestartSec = medeRestart(cfg, st, bitmapFields, hashFields)
+	rep.RestartSec = medeRestart(cfg, st, camposIndexados)
 	fmt.Fprintf(cfg.Out, "RESTART: %.2fs (§125)\n", rep.RestartSec)
 
 	rep.Gates = evaluateGates(cfg, rep)
@@ -919,7 +917,7 @@ func startReaders(cfg Config, st *storage.Store, c *schema.Compiled) *readerPool
 					_, out, _, _ := st.GetByKey(keys[n%len(keys)], rbuf[:0])
 					rbuf = out
 				case 1:
-					rbuf = lookupBitmapLimit(st, statusField.ID, rbuf, 100)
+					rbuf = lookupIndexadoLimit(st, statusField.ID, rbuf, 100)
 				default:
 					rbuf = scanLimit(st, rbuf, 1000)
 				}
@@ -943,9 +941,9 @@ func (p *readerPool) stop() []QueryStats {
 	return out
 }
 
-func lookupBitmapLimit(st *storage.Store, field types.FieldID, buf []byte, limit int) []byte {
+func lookupIndexadoLimit(st *storage.Store, field types.FieldID, buf []byte, limit int) []byte {
 	v := types.Value{Type: types.TypeString, Bytes: []byte("Interim-Update")}
-	it, err := st.LookupBitmap(field, v)
+	it, err := st.Lookup(field, v)
 	if err != nil {
 		return buf
 	}
@@ -1584,13 +1582,12 @@ func humanBytes(n uint64) string {
 // O Store devolvido pelo Open substitui o anterior no lugar certo: quem
 // chamou o Run tem um defer Close, e fechar duas vezes é seguro (o Close é
 // idempotente), mas deixar o segundo Store aberto vazaria o flock.
-func abreStore(cfg Config, bitmaps, hashes []string) (*storage.Store, error) {
+func abreStore(cfg Config, indexados []string) (*storage.Store, error) {
 	st, err := storage.Open(storage.Options{
-		Dir:              cfg.DataDir,
-		SegmentSize:      cfg.SegmentSize,
-		EstimatedRows:    uint64(cfg.Entities),
-		BitmapFieldNames: bitmaps,
-		HashFieldNames:   hashes,
+		Dir:                    cfg.DataDir,
+		SegmentSize:            cfg.SegmentSize,
+		EstimatedRows:          uint64(cfg.Entities),
+		CamposIndexadosPorNome: indexados,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("ingest-bench: abrindo dataset: %w", err)
@@ -1598,13 +1595,13 @@ func abreStore(cfg Config, bitmaps, hashes []string) (*storage.Store, error) {
 	return st, nil
 }
 
-func medeRestart(cfg Config, st *storage.Store, bitmaps, hashes []string) float64 {
+func medeRestart(cfg Config, st *storage.Store, indexados []string) float64 {
 	inicio := time.Now()
 	if err := st.Close(); err != nil {
 		fmt.Fprintf(cfg.Out, "AVISO: Close falhou ao medir o restart: %v\n", err)
 		return 0
 	}
-	novo, err := abreStore(cfg, bitmaps, hashes)
+	novo, err := abreStore(cfg, indexados)
 	if err != nil {
 		fmt.Fprintf(cfg.Out, "AVISO: reabertura falhou ao medir o restart: %v\n", err)
 		return 0

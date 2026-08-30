@@ -94,7 +94,7 @@ func colunaMeta(f *schema.CompiledField) protocolo.ColunaMeta {
 		Precision:   d.Precision,
 		Scale:       d.Scale,
 		DisplaySize: d.DisplaySize,
-		Index:       f.Index.String(),
+		Index:       f.NomeDoIndice(),
 		Auto:        f.IsAuto,
 	}
 	if f.Alias != "" {
@@ -124,7 +124,7 @@ func (s *Servidor) handleStats(w http.ResponseWriter, r *http.Request) {
 			Query: protocolo.MotorStats{
 				FullScans:    pm.FullScan.Load(),
 				PointLookups: pm.PointLookup.Load(),
-				BitmapScans:  pm.BitmapScan.Load(),
+				BitmapScans:  pm.IndexScan.Load(),
 				IndexUnions:  pm.IndexUnion.Load(),
 				Candidates:   em.Candidates.Load(),
 				Rejected:     em.Rejected.Load(),

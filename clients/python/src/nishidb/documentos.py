@@ -39,8 +39,15 @@ class ColunaMeta:
     precision: int
     scale: int
     display_size: int
-    #: O índice DECLARADO no YAML ("none", "bitmap", "hash"), não o plano
-    #: escolhido. Quem quer o plano olha `_meta.fields.indexed`.
+    #: Se a coluna tem índice: "bitmap" quando o YAML declara `index: true`,
+    #: "none" quando não. NÃO é o plano escolhido — quem quer o plano olha
+    #: `_meta.fields.indexed`.
+    #:
+    #: Eram três valores possíveis. O "hash" saiu porque o servidor passou a ter
+    #: um motor de índice só, e nem a config nem o schema compilado sabem mais
+    #: produzi-lo. As outras duas palavras ficaram como estão: elas são
+    #: vocabulário de wire, e trocá-las mudaria o comportamento de quem já lê
+    #: esta rota.
     index: str
     #: Campo sem tipo declarado. Enquanto nenhum evento o fixa, `type` é
     #: "unknown" e `jdbc` é "OTHER".
