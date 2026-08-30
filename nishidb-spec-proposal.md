@@ -1227,10 +1227,10 @@ dataset: radius_sessions
 estimated rows: 8,000,000
 
 indexes:
-  status(bitmap): ~3 MB
-  protocol(bitmap): ~3 MB
-  nas(hash): ~...
-  ip(hash): ~...
+  status(index): ~3 MB
+  protocol(index): ~3 MB
+  nas(index): ~...
+  ip(index): ~...
 ```
 
 Não é necessário impedir startup, mas deve ser possível gerar warning.
