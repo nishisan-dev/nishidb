@@ -24,12 +24,18 @@ const readmePath = "../../README.md"
 
 // blocosDeCodigo devolve o conteúdo de cada bloco cercado por ``` com a
 // linguagem pedida, na ordem em que aparecem.
+//
+// Só blocos SEM indentação contam: a cerca indentada vive dentro de um item de
+// lista e é trecho ilustrativo (o snippet de `history.index` da nota de
+// upgrade), não um arquivo executável do quickstart. A versão com TrimSpace
+// promovia o snippet a yamls[0] e o quickstart passava a "instalar" um YAML
+// que nem tem storage.path.
 func blocosDeCodigo(t *testing.T, md, lang string) []string {
 	t.Helper()
 	var out []string
 	linhas := strings.Split(md, "\n")
 	for i := 0; i < len(linhas); i++ {
-		if strings.TrimSpace(linhas[i]) != "```"+lang {
+		if linhas[i] != "```"+lang {
 			continue
 		}
 		var corpo []string

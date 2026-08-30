@@ -31,12 +31,29 @@ estão em
 [`docs/aceite-m4.md`](docs/aceite-m4.md) e
 [`docs/aceite-m5.md`](docs/aceite-m5.md).
 
-**Autenticação e TLS (§74-77) chegaram, mas o piloto ainda fala com a versão
-sem senha.** O mecanismo está pronto e testado — a seção "Segurança" abaixo
-mostra o exemplo mínimo de config —, mas ligá-lo em produção (certificado da
-CA do piloto, usuários reais, a porta exposta com firewall restrito) é a
-**Fase C** do ciclo, ainda não rodada; [`docs/aceite-m5.md`](docs/aceite-m5.md)
-registra o que falta.
+**Autenticação e TLS (§74-77) estão no ar no piloto** desde 23/08: TLS +
+Basic auth com papéis READ/ADMIN num plano seguro, e o plano loopback
+mantido só-leitura para painel e scripts. O que resta da **Fase C** é a
+exposição à rede (firewall com origem restrita), pendente de terceiros;
+[`docs/aceite-m5.md`](docs/aceite-m5.md) registra o desenho e a seção
+"Segurança" abaixo mostra a config mínima.
+
+**O índice secundário virou POR SEGMENTO — e o motivo foi medido em
+produção.** Os dois motores globais (`hash` e `bitmap`) foram apagados; no
+lugar, um índice por segmento em duas formas — mutável só no segmento
+corrente, selado e **imutável** nos demais — com janela de indexação
+declarável na tabela histórica (`history.index`). O defeito que motivou: o
+rehash do índice global, correndo sob o lock do writer, congelava a ingestão
+do piloto por **18 a 52 minutos** por episódio, recorrente
+([`benchmark/baselines/piloto-pre-ciclo-20260830.md`](benchmark/baselines/piloto-pre-ciclo-20260830.md)).
+No desenho novo não há tabela para dobrar: o modo de falha é inexprimível. Na
+subida em produção, com 135 GiB migrados no lugar: RSS de 2.812 para
+**432 MiB**, índice de 3.716 para **614 MB**, espera bloqueada do consumidor
+**zerada**
+([`benchmark/baselines/piloto-pos-ciclo-20260830.md`](benchmark/baselines/piloto-pos-ciclo-20260830.md)).
+`index: hash` e `index: bitmap` foram substituídos por `index: true`, e a
+subida **recusa** as grafias antigas — quem tem dataset anterior lê a nota de
+upgrade logo abaixo antes de trocar o binário.
 
 **Campos aninhados consultáveis.** Chaves de dentro de um campo `json` podem
 ser declaradas como colunas de verdade (`extract`), com tipo e índice próprios
@@ -60,8 +77,42 @@ ao lado dela entrou o **client Python** (DB-API 2.0). Os dois são só leitura,
 sem dependência de runtime, e provados contra o binário real; ver
 [Clients](#clients).
 
-Próximo, na ordem do roadmap: o **M6** (TTL e tombstones por retenção, índice
-hash físico).
+Próximo, na ordem do roadmap: os subsistemas 2-5 da direção pós-incidente
+(snapshot de leitura, pin de segmento contra a retenção, jobs assíncronos,
+tabela de resultado em disco) e o ciclo da consulta longa — ordenação e
+densidade, onde hoje moram os timeouts de `ORDER BY` sobre milhões de
+candidatos.
+
+### Upgrade: dataset criado antes do índice por segmento
+
+O formato migra sozinho na primeira abertura — manifest v1/v2 → v3, os índices
+globais saem do disco — e a migração é **irreversível**: binário anterior
+recusa o dataset com "version desconhecida", e voltar é restaurar backup. Dois
+pré-requisitos de config, os dois aprendidos em ensaio contra a config real do
+piloto; sem o primeiro a subida **não acontece**, sem o segundo ela custa uma
+varredura completa:
+
+1. **Converta `index: hash` e `index: bitmap` para `index: true` ANTES de
+   subir.** O binário recusa as grafias antigas com exit 3, nomeando o campo e
+   a grafia nova. Um YAML não convertido não sobe.
+2. **Declare `history.index` ANTES de subir, se o dataset tem tabela
+   histórica.** Sem o bloco a janela de indexação é **infinita** — a leitura
+   honesta de "declarei campos indexados e nenhum limite" — e, num dataset
+   migrado, é a reconstrução de fundo varrendo o histórico INTEIRO para
+   reindexá-lo (135 GB, no caso do piloto). Com a janela declarada, a primeira
+   passada só toca os segmentos que ela admite — foi o que fez a migração do
+   piloto drenar em ~5 minutos, com a ingestão correndo ao lado:
+
+   ```yaml
+   history:
+     index:
+       window: 6h
+       maxBytes: 2GiB
+   ```
+
+Acompanhe a migração por `nishidb_index_segmentos{estado="pendente"}` caindo a
+zero e `nishidb_index_reconstrucoes_total` estabilizando; a mecânica das séries
+está na seção da janela de indexação, abaixo.
 
 ## Instalação
 
