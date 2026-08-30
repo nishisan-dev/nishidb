@@ -358,38 +358,39 @@ func (s *Store) replayRecord(st *replayState, seg, off uint32, rec types.Record)
 	if uint64(id)+1 > s.nextRowID.Load() {
 		s.nextRowID.Store(uint64(id) + 1)
 	}
-	// Estado anterior da row: base do diff de bitmaps e do decremento de
-	// liveness.
+	// Estado anterior da row, e ele tem UM consumidor só: o decremento de
+	// liveness do segmento antigo (applyRecord, store.go).
 	//
-	// O §10.2 afirma que esse prev está sempre correto no replay forward,
-	// mas a premissa NÃO vale quando a location está à frente do ponto S —
-	// situação normal de crash, porque o checkpoint msynca as locations
-	// (passo 3) antes dos bitmaps e antes do manifest (passo 4). Nesse caso
-	// a location nomeia este mesmo record (ou um posterior do tail): usá-lo
-	// como "anterior" faria o diff comparar o record consigo mesmo,
-	// suprimindo o Set — falso negativo permanente no bitmap, que a
-	// revalidação do §44 não recupera — e decrementaria a liveness de um
-	// record VIVO.
+	// Eram dois. O outro era a base do diff do índice secundário, e sumiu com
+	// os motores globais: o índice por segmento não diffa — entra cada campo
+	// indexado do payload, sempre (spec §5.2) —, então o prev deixou de ter
+	// qualquer influência sobre o que é indexado.
+	//
+	// O §10.2 afirma que esse prev está sempre correto no replay forward, mas a
+	// premissa NÃO vale quando a location está à frente do ponto S — situação
+	// normal de crash, porque o checkpoint msynca as locations (passo 3) antes
+	// do manifest (passo 4). Nesse caso a location nomeia este mesmo record (ou
+	// um posterior do tail), e usá-lo como "anterior" decrementaria a liveness
+	// de um record VIVO.
 	//
 	// Só uma location ESTRITAMENTE atrás do cursor do replay é passado
 	// legítimo (estado de S ou record já replayado). Fora disso o prev é
-	// desconhecido, e prev desconhecido é tratado como ausente: liga todas
-	// as postings do payload novo (Set é idempotente), não limpa nenhuma
-	// (Clear a menos = falso positivo, tolerado pelo §44) e não decrementa
-	// liveness.
+	// desconhecido, e prev desconhecido é tratado como ausente: não decrementa
+	// liveness. A indexação não muda de comportamento nos dois ramos, porque
+	// ela não olha para o prev.
 	//
-	// Esse ramo deixa DOIS resíduos, ambos permanentes e da mesma raiz.
-	//
-	// Resíduo 1, no bitmap: o bit do valor que a row tinha em S continua
-	// ligado — POSTING ÓRFÃ. Nenhum update seguinte a apaga, porque o Clear
-	// de cada update parte do prev que a location nomeia, que é o record do
-	// tail e nunca o de antes dele; só uma varredura (compaction/rebuild,
-	// M4) reconstrói o bitmap. NÃO é falso negativo: o valor corrente está
-	// nas postings, que é a única propriedade da qual o §44 depende, então
-	// o custo é candidato a mais varrido, nunca resultado errado. Medido em
+	// Esse ramo deixa UM resíduo — o do tally, abaixo. O resíduo IRMÃO, a
+	// posting órfã do valor que a row tinha em S, continua existindo e MUDOU DE
+	// DONO: ele já não nasce aqui. Ele é consequência de não haver fase de CLEAR
+	// em caminho nenhum, o que faz o write path e o replay convergirem para o
+	// mesmo estado — assimetria entre os dois é que seria defeito. E ele deixou
+	// de ser permanente: a posting mora no índice do segmento em que foi escrita
+	// e sai de disco quando a compaction ou a retenção aposenta aquele segmento.
+	// Nunca foi falso negativo, porque o valor corrente está nas postings, que é
+	// a única propriedade da qual o §44 depende. Medido em
 	// TestPostingOrfaDoReplayNaoConverge; débito 45.
 	//
-	// Resíduo 2, no tally: quando a row já existia em S e o tail traz
+	// Resíduo do tally: quando a row já existia em S e o tail traz
 	// um update cuja location está à frente, o record antigo continua
 	// contado como vivo — LiveRecords fica ACIMA do real (2 onde o certo é
 	// 1, com LiveBytes em 127 onde o certo é 63). É a direção segura da

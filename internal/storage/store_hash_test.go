@@ -1,14 +1,17 @@
 package storage
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"os"
 	"path/filepath"
 	"slices"
 	"testing"
 	"time"
 
+	"github.com/nishisan-dev/nishidb/internal/storage/checkpoint"
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
@@ -240,35 +243,148 @@ func TestReplayReaplicaOClearDoUpdate(t *testing.T) {
 	}
 }
 
-// TestOsIndicesGlobaisLegadosSaoApagadosNaAbertura: os arquivos dos dois motores
-// que saíram não têm mais leitor, e o IndexBytes soma o diretório indexes/
-// inteiro. Deixá-los seria publicar disco ocupado que nada no produto explica —
-// e num dataset do tamanho do piloto a soma dos dois é da ordem do próprio dado.
+// rebaixaManifestParaLegado reescreve o manifest.bin no formato que um binário
+// ANTERIOR gravaria: versão 1, sem cauda TLV, com hashKind preenchido e com uma
+// entrada no array de bitmaps do corpo.
 //
-// A montagem os cria à mão porque este binário não sabe mais criá-los, que é
-// justamente o ponto: o dataset legado chega com eles em disco.
-func TestOsIndicesGlobaisLegadosSaoApagadosNaAbertura(t *testing.T) {
+// A cirurgia é feita nos BYTES, e não chamando o encoder deste repositório, pela
+// mesma razão do manifestV1Golden do pacote checkpoint: um "teste de migração"
+// que gerasse o arquivo antigo pelo encoder novo provaria só que o encoder
+// concorda consigo mesmo. Aqui o ponto é mais forte ainda — o encoder novo NÃO
+// SABE MAIS escrever a v1, então gerar o legado por ele seria impossível sem
+// ressuscitar o código que este commit apagou.
+//
+// O que ela monta é exatamente o que um dataset em produção tem hoje em disco, e
+// é sobre esse arquivo que a promessa "não é preciso recriar dataset para subir"
+// tem de valer.
+func rebaixaManifestParaLegado(t *testing.T, caminho string) {
+	t.Helper()
+	raw, err := os.ReadFile(caminho)
+	if err != nil {
+		t.Fatal(err)
+	}
+	corpo := raw[:len(raw)-4] // fora o CRC
+
+	// Offsets do layout do corpo (checkpoint/manifest.go): segmentCount em 52,
+	// 36 bytes por segmento a partir de 56, e então primarySlotCount (8) +
+	// primaryUsed (8) antes do hashKind.
+	segCount := int(binary.LittleEndian.Uint32(corpo[52:]))
+	offHashKind := 56 + segCount*36 + 8 + 8
+	offBitmapCount := offHashKind + 1 + 8
+	offKafka := offBitmapCount + 2
+
+	novo := make([]byte, 0, len(corpo)+16)
+	novo = append(novo, corpo[:offHashKind]...)
+	novo = append(novo, 1) // hashKind: o valor que o binário anterior gravava
+	novo = append(novo, corpo[offHashKind+1:offBitmapCount]...)
+	novo = binary.LittleEndian.AppendUint16(novo, 1) // bitmapCount = 1…
+	novo = binary.LittleEndian.AppendUint16(novo, uint16(fldStatus))
+	novo = binary.LittleEndian.AppendUint64(novo, 96) // …e a entrada dela
+	// kafkaCount, e SÓ ele: a cauda TLV do v3 fica de fora, que é o que faz o
+	// arquivo ser um v1 de verdade em vez de um v3 com a versão adulterada.
+	novo = append(novo, corpo[offKafka:offKafka+4]...)
+	novo[4] = 1
+
+	novo = binary.LittleEndian.AppendUint32(novo, crc32.Checksum(novo, crc32.MakeTable(crc32.Castagnoli)))
+	if err := os.WriteFile(caminho, novo, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Pré-condição do teste, e não asserção dele: se a cirurgia não produziu um
+	// manifest legado LEGÍVEL, o que vem depois não estaria medindo migração.
+	if novo[4] != 1 {
+		t.Fatalf("a cirurgia não rebaixou a versão: %d", novo[4])
+	}
+	if _, err := checkpoint.Load(caminho); err != nil {
+		t.Fatalf("o manifest legado montado à mão não é legível: %v", err)
+	}
+}
+
+// TestDatasetLegadoAbreEOsIndicesGlobaisSaemDoDisco é a promessa de migração no
+// nível do STORE, que é onde ela importa para o operador: um dataset gravado
+// pelo binário anterior — manifest v1, com a seção de bitmaps no corpo e os
+// arquivos dos dois motores globais em disco — abre sem ser recriado, e o disco
+// daqueles motores volta.
+//
+// A prova de migração existia só dentro do pacote checkpoint, sobre bytes. Aqui
+// ela atravessa o Store inteiro: recovery, abertura dos índices e o primeiro
+// checkpoint, que é quem reescreve o manifest em v3.
+//
+// O oráculo do disco é a QUEDA, e não a existência. É a mesma lição do
+// TestOIndiceDeSegmentoEntraNoIndexBytes: o indexes/ já tinha bytes antes desta
+// tarefa, então um "o diretório sumiu" passaria sem que byte nenhum tivesse
+// voltado ao dispositivo, e um "IndexBytes > 0" passaria com a limpeza inteira
+// inerte. A única mudança entre as duas medidas é a abertura.
+func TestDatasetLegadoAbreEOsIndicesGlobaisSaemDoDisco(t *testing.T) {
 	dir := t.TempDir()
-	s := openStore(t, Options{Dir: dir, HashFields: []types.FieldID{fldStatus}})
+	opts := Options{Dir: dir, BitmapFields: []types.FieldID{fldStatus}}
+	s := openStore(t, opts)
+	for i := 0; i < 5; i++ {
+		k := chaveDe(i)
+		mustPut(t, s, k, int64(i), statusPayload(t, s, k, "Start", int64(i)), nil)
+	}
+	if err := s.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
+
+	// O dataset legado: os arquivos dos dois motores que este binário não sabe
+	// mais criar, e o manifest na versão que ele não sabe mais gravar.
+	const porMotor = 2 << 20
+	idxDir := filepath.Join(dir, "indexes")
 	for _, motor := range []string{"bitmap", "hash"} {
-		alvo := filepath.Join(dir, "indexes", motor, "00002")
+		alvo := filepath.Join(idxDir, motor, "00003")
 		if err := os.MkdirAll(alvo, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(alvo, "lixo.bin"), make([]byte, 4096), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(alvo, "legado.bin"), make([]byte, porMotor), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
+	rebaixaManifestParaLegado(t, audManifestPath(dir))
 
-	s2 := openStore(t, Options{Dir: dir, HashFields: []types.FieldID{fldStatus}})
+	// A MESMA função que o IndexBytes usa (retencao.go), e não uma segunda
+	// contagem: uma cópia da convenção divergiria da série que o operador vê.
+	antes := blocosDoDiretorio(idxDir)
+
+	s2, err := Open(opts)
+	if err != nil {
+		t.Fatalf("dataset gravado pelo binário anterior não abriu: %v", err)
+	}
 	defer s2.Close()
+
+	// 1. A migração: o dado continua lá, e o índice responde sobre ele.
+	if got := lookupRevalidado(t, s2, fldStatus, strVal("Start")); len(got) != 5 {
+		t.Errorf("pós-migração a consulta indexada devolveu %v, quero as 5 linhas", got)
+	}
+
+	// 2. O disco voltou, e a medida é a diferença.
+	depois := blocosDoDiretorio(idxDir)
+	if queda := antes - depois; queda < 2*porMotor {
+		t.Errorf("o indexes/ caiu %d bytes com %d plantados nos dois motores: a limpeza não devolveu o disco",
+			queda, 2*porMotor)
+	}
+	// 3. E os bytes que voltaram não são mais contados por ninguém: o IndexBytes
+	// de agora tem de ser menor que o que o indexes/ sozinho ocupava antes.
+	if idx := s2.EstatisticasDeRetencao().IndexBytes; idx >= antes {
+		t.Errorf("IndexBytes = %d contra %d que o indexes/ ocupava com o lixo: os arquivos legados continuam contados",
+			idx, antes)
+	}
 	for _, motor := range []string{"bitmap", "hash"} {
-		if _, err := os.Stat(filepath.Join(dir, "indexes", motor)); !errors.Is(err, os.ErrNotExist) {
+		if _, err := os.Stat(filepath.Join(idxDir, motor)); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("indexes/%s sobreviveu à abertura: %v", motor, err)
 		}
+	}
+
+	// 4. E o manifest subiu para v3 — é ele que fecha a volta, e é por isso que
+	// a limpeza pôde acontecer.
+	raw, err := os.ReadFile(audManifestPath(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw[4] != 3 {
+		t.Errorf("o manifest continuou na v%d depois da migração", raw[4])
 	}
 }
 

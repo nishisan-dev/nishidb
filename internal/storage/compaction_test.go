@@ -479,8 +479,9 @@ func TestCopyForwardRecusaComOWriterEmModoFalho(t *testing.T) {
 	origSeg, origOff := localizacaoDaRow(t, s, rowID)
 	rec := recordEm(t, s, origSeg, origOff)
 
-	// Falha no Set dos bitmaps: erro DEPOIS do Append, que é exatamente o
-	// que deixa o writer morto (§14.12).
+	// Falha na fase de Set do índice: erro DEPOIS do Append e antes da
+	// publicação da location, que é exatamente onde não há rollback parcial e o
+	// writer fica morto (§14.12).
 	s.SetSetErrHookForTest(func(types.FieldID) error { return errors.New("set falho simulado") })
 	if _, _, err := s.Put([]byte("cf-sticky-2"), 1, 0, statusPayload(t, s, "cf-sticky-2", "Start", 1), nil); err == nil {
 		t.Fatal("montagem: o Put com Set falho deveria falhar e deixar o writer em modo falho")
@@ -2413,8 +2414,10 @@ func (r *registroDeLog) String() string {
 }
 
 // mataOWriter põe o writer em modo falho STICKY pelo caminho que o produto tem:
-// erro na fase de Set dos bitmaps, ou seja DEPOIS do Append (§14.12), que é
-// justamente onde não existe rollback parcial (store.go:1012).
+// erro na fase de Set do índice, ou seja DEPOIS do Append e antes da publicação
+// da location (§14.12) — justamente a janela em que não existe rollback
+// parcial, porque o record já está no segmento e a row ainda não existe para
+// leitor nenhum.
 //
 // É a mesma montagem que o TestCopyForwardRecusaComOWriterEmModoFalho faz em
 // linha, e a repetição é deliberada: aquele teste afirma sobre a RECUSA DA

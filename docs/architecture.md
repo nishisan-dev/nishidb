@@ -365,7 +365,7 @@ os 8 leitores, e inclui os buffers deles.
   tira o `msync` do índice do checkpoint e elimina a classe inteira de janelas
   de crash do índice secundário. Segmento sem índice — fora da janela, ou
   gravado por um binário anterior — responde ENUMERANDO as linhas dele como
-  candidatas, o que é correto pelo mesmo contrato de superconjunto do §44
+  candidatas, o que é correto pelo mesmo contrato de superconjunto do §44.
 
 A chave do índice inclui o **byte de tipo** — `internal/index/valuekey` é o dono
 único dela —, e é por isso que o planner recusa usar índice com valor de tipo

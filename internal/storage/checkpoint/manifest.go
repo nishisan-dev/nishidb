@@ -52,7 +52,7 @@ var ErrCorruptManifest = errors.New("checkpoint: manifest corrompido")
 //     contagem ainda é consumida e as entradas ainda são PULADAS, e isso não é
 //     zelo: é o que faz um manifest v1 ou v2 escrito por um binário anterior
 //     continuar parseando, porque o que vem depois dele no corpo (o kafkaCount)
-//     está a `bitmapCount * 10` bytes de distância.
+//     está a `bitmapCount * bitmapInfoSize` bytes de distância.
 //
 // Os dois campos continuam ocupando os mesmos bytes de propósito: tirá-los
 // obrigaria a reescrever o parser do corpo e a condenar todo manifest já
@@ -145,6 +145,15 @@ const (
 
 	// indiceInfoSize é `formatoDoIndice u8`.
 	indiceInfoSize = 1
+
+	// bitmapInfoSize é `fieldID u16 | valuesDictValidBytes i64`, a entrada do
+	// array de bitmaps do CORPO. Nada a escreve mais — bitmapCount é reservado e
+	// vale zero desde a v3 —, e ela existe porque a leitura de um manifest v1 ou
+	// v2 ainda precisa PULAR essas entradas para chegar ao kafkaCount. Constante
+	// nomeada, e não um 10 solto no salto: o valor deriva do layout do corpo
+	// declarado no topo deste arquivo, e um literal deixaria a leitura desalinhar
+	// em silêncio no dia em que a entrada mudasse de tamanho.
+	bitmapInfoSize = 10
 )
 
 var (
@@ -400,11 +409,11 @@ func decode(raw []byte) (*Manifest, error) {
 	m.FieldDictValidBytes = int64(r.u64())
 	// bitmapCount é reservado e vale zero em todo manifest v3. As entradas ainda
 	// são PULADAS porque um manifest v1 ou v2 legado as tem, e o kafkaCount que
-	// vem em seguida está exatamente `bmCount * 10` bytes adiante: sem este
+	// vem em seguida está exatamente `bmCount * bitmapInfoSize` bytes adiante: sem este
 	// avanço o corpo legado sairia desalinhado e o dataset seria recusado como
 	// corrompido sem ter nada de errado.
 	if bmCount := r.u16(); bmCount > 0 {
-		r.take(int(bmCount) * 10)
+		r.take(int(bmCount) * bitmapInfoSize)
 	}
 	if kafka := r.u32(); kafka != 0 {
 		return nil, fmt.Errorf("%w: seção kafka inesperada (%d)", ErrCorruptManifest, kafka)

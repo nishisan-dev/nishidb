@@ -30,8 +30,10 @@ func TestRevalidacaoDeCandidatoDoIndiceHash(t *testing.T) {
 		t.Fatal("NAS-Identifier não existe no fixture")
 	}
 	// O candidato a mais: o índice passa a responder por um valor que a row
-	// não tem. É o que uma colisão de hash produz, e é o que a fase de Clear
-	// deixa para trás quando falha.
+	// não tem. É o que uma colisão de hash produz, e é também o estado NORMAL
+	// depois de um update — o índice por segmento não tem fase de Clear
+	// (spec §5.2), então a posting do valor anterior fica onde está até o
+	// segmento ser aposentado.
 	if err := h.store.InjectPosting(nas.ID,
 		types.Value{Type: types.TypeString, Bytes: []byte("core-99")}, h.rowID("CMP-0001")); err != nil {
 		t.Fatal(err)
