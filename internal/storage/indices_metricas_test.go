@@ -3,6 +3,7 @@ package storage
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -147,6 +148,41 @@ func TestOsEstadosMigramDePendenteParaSeladoAoReconstruir(t *testing.T) {
 	}
 }
 
+// TestOMedidorDaReconstrucaoNaoEhOContadorDeCorrentes separa o único par de
+// números do bloco `index` que a bancada do servidor não consegue distinguir.
+//
+// Lá, `Corrente` é estruturalmente 1 — só existe um segmento corrente — e
+// `RebuildRunning` também é 1, porque o servidor sobe o laço. Dois números iguais
+// tornam invisível trocar um pelo outro, e a guarda de distinção do
+// exigeDezNumerosDistintos declara essa exceção apontando para cá.
+//
+// Aqui os dois se separam porque este Store tem segmento corrente e NÃO tem laço:
+// o histIndexado abre o dataset sem chamar IniciaReconstrucao. É o estado de
+// qualquer dataset aberto pelo CLI, e nele um medidor que respondesse 1 sempre —
+// ou que ecoasse a contagem de correntes — estaria dizendo que a reconstrução
+// está de pé num processo onde ela nunca subiu.
+func TestOMedidorDaReconstrucaoNaoEhOContadorDeCorrentes(t *testing.T) {
+	hist, rel := histIndexado(t, 512)
+	povoaHistorico(t, hist, rel, 40, time.Minute)
+
+	e := estados(t, hist, JanelaDeIndice{})
+	if e.Corrente != 1 {
+		t.Fatalf("montagem: corrente = %d, quer 1 (%+v)", e.Corrente, e)
+	}
+	if est := hist.EstatisticasDeIndice(); est.ReconstrucaoAtiva {
+		t.Errorf("reconstrucao_ativa = true num Store cujo laço nunca subiu, com corrente = %d: "+
+			"o medidor está ecoando outra coisa, e no servidor os dois valem 1 — lá a troca seria invisível",
+			e.Corrente)
+	}
+	// E a outra ponta do par: com o laço de pé, ele sobe.
+	hist.IniciaReconstrucao(t.Context(), JanelaDeIndice{})
+	defer hist.ParaReconstrucao()
+	if est := hist.EstatisticasDeIndice(); !est.ReconstrucaoAtiva {
+		t.Error("reconstrucao_ativa = false logo depois do IniciaReconstrucao: o §92 manda o medidor subir ANTES " +
+			"da goroutine, e sem esta metade um medidor preso em false passaria pela primeira")
+	}
+}
+
 // TestOsSegmentosConsultadosSeparamIndiceDeEnumeracao é o oráculo da §3.4, e ele
 // é o ÚNICO observável daquela seção: o resultado da consulta é idêntico pelos
 // dois caminhos — essa é a tese —, e só o contador distingue um dataset inteiro
@@ -196,13 +232,15 @@ func TestOsSegmentosConsultadosSeparamIndiceDeEnumeracao(t *testing.T) {
 	}
 }
 
-// TestOCrcDivergenteContaFalhaEDegradaParaEnumeracao liga o contador ao efeito.
+// TestOCrcDivergenteContaUmDegrauEEnumeraSempre liga o contador ao efeito e fixa
+// a SEMÂNTICA dele, que é onde a prosa deste ciclo errou.
 //
-// As duas metades juntas, porque cada uma sozinha passa com o defeito da outra:
-// contar sem degradar seria uma consulta derrubada por índice podre, e degradar
-// sem contar é exatamente o estado anterior a esta tarefa — o dataset responde
-// certo e devagar, para sempre, sem ninguém saber por quê.
-func TestOCrcDivergenteContaFalhaEDegradaParaEnumeracao(t *testing.T) {
+// Três afirmações, e nenhuma basta sozinha: contar sem degradar seria uma consulta
+// derrubada por índice podre; degradar sem contar é o estado anterior a esta
+// tarefa, em que o dataset responde certo e devagar para sempre sem ninguém
+// saber; e contar UMA VEZ enquanto a enumeração persiste é o que separa o alarme
+// que se auto-resolve do sinal que continua verdadeiro.
+func TestOCrcDivergenteContaUmDegrauEEnumeraSempre(t *testing.T) {
 	base := openStore(t, Options{})
 	dir := t.TempDir()
 	s := abreHistoricoIndexadoEm(t, base, dir, []string{"node"}, 8<<10)
@@ -225,33 +263,67 @@ func TestOCrcDivergenteContaFalhaEDegradaParaEnumeracao(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// TRÊS consultas, e não uma: é a segunda e a terceira que fixam a SEMÂNTICA
+	// da série, e uma medição de consulta única não distingue "conta por abertura"
+	// de "conta por consulta".
 	antes := s.EstatisticasDeIndice()
-	crus := candidatosCrus(t, s, campo, strVal("nunca-visto"))
-	depois := s.EstatisticasDeIndice()
+	var deltasCrc, deltasEnum []int64
+	for range 3 {
+		crus := candidatosCrus(t, s, campo, strVal("nunca-visto"))
+		if len(crus) == 0 {
+			t.Fatal("o segmento corrompido não virou candidato: ele tem de DEGRADAR para enumeração, não responder " +
+				"zero linhas — falso negativo é a única coisa que a revalidação do §44 não sabe consertar")
+		}
+		depois := s.EstatisticasDeIndice()
+		deltasCrc = append(deltasCrc, depois.CRCFalhas-antes.CRCFalhas)
+		deltasEnum = append(deltasEnum, depois.PorEnumeracao-antes.PorEnumeracao)
+		antes = depois
+	}
 
-	if depois.CRCFalhas-antes.CRCFalhas != 1 {
-		t.Errorf("crc_falhas subiu %d ao abrir um .sidx corrompido, quer 1: sem esta série um índice podre responde "+
-			"por enumeração para sempre e nada denuncia", depois.CRCFalhas-antes.CRCFalhas)
+	// O contador é um DEGRAU, e a razão é o cache: o garanteSelado publica o .sidx
+	// reprovado no s.selados (publicar mantém o sync.Once do crc cumprido, e
+	// recusar obrigaria toda consulta a remapear e reconferir o arquivo podre
+	// inteiro). Da segunda consulta em diante o fonteIndexada acha o mapeamento no
+	// cache e volta antes de reconferir nada, então a série NÃO sobe.
+	//
+	// Isto está aqui como oráculo, e não como lamento: a prosa das quatro
+	// superfícies desta série — inclusive a Ajuda emitida no scrape — já afirmou o
+	// contrário ("uma vez por abertura, a falha não é memorizada"), mandando o
+	// operador ler uma taxa que na prática dá um degrau e se auto-resolve. O
+	// conserto foi alinhar o texto ao código, e este teste é o que impede a
+	// afirmação de voltar.
+	if quer := []int64{1, 0, 0}; !slices.Equal(deltasCrc, quer) {
+		t.Errorf("crc_falhas subiu %v em três consultas ao MESMO segmento podre, queria %v: "+
+			"se ela subisse a cada consulta seria taxa, e a Ajuda poderia mandar ler rate(); "+
+			"como é degrau, quem responde \"há índice podre agora\" é a enumeração persistente", deltasCrc, quer)
 	}
-	if len(crus) == 0 {
-		t.Fatal("o segmento corrompido não virou candidato: ele tem de DEGRADAR para enumeração, não responder zero linhas — " +
-			"falso negativo é a única coisa que a revalidação do §44 não sabe consertar")
-	}
-	if depois.PorEnumeracao-antes.PorEnumeracao == 0 {
-		t.Error("nenhum segmento foi contado como enumerado depois da corrupção: o arquivo reprovado no crc é " +
-			"exatamente um segmento sem índice, e o painel precisa vê-lo assim")
+	// E a outra metade, que é o sinal que o operador de fato tem: a enumeração
+	// sobe a CADA consulta, porque o segmento continua respondendo sem índice.
+	for i, d := range deltasEnum {
+		if d == 0 {
+			t.Errorf("a consulta %d não contou enumeração nenhuma (%v): o segmento reprovado no crc responde por "+
+				"enumeração em TODA consulta, e é essa persistência — não o degrau do contador de crc — que denuncia "+
+				"um índice podre que ninguém consertou", i+1, deltasEnum)
+		}
 	}
 }
 
-// TestOsBytesDoIndicePorSegmentoSaoParcelaEstritaDoIndexBytes fixa a relação
-// entre as duas séries de disco, que é o que impede a próxima leitura de tratar
-// uma como a outra.
+// TestOsBytesDeIndiceContamExatamenteOsArquivosDeIndice fixa QUAIS ARQUIVOS a
+// série soma, que é a única pergunta que este pacote consegue responder sobre
+// ela.
 //
-// nishidb_index_bytes é o que este subsistema governa e o que precisa PARAR DE
-// CRESCER com a tabela em regime; nishidb_history_index_bytes soma também
-// indexes/ e checkpoint/, que nenhuma janela devolve. Publicar as duas iguais
-// faria o aceite do ciclo ser medido sobre um número que o desenho não promete.
-func TestOsBytesDoIndicePorSegmentoSaoParcelaEstritaDoIndexBytes(t *testing.T) {
+// O teste já se chamou "...SaoParcelaEstritaDoIndexBytes" e o nome prometia
+// demais: a contenção contra o history_index_bytes é trivial dentro de um Store
+// só — aquele número é este mais indexes/ e checkpoint/, por construção, e
+// nenhuma mutação plausível a quebra. Pior, ela escondia o que de fato importa,
+// que é o CRUZAMENTO DE RÓTULOS: no servidor o history_index_bytes sai no rótulo
+// do dataset BASE com os números da IRMÃ, e a comparação entre as duas séries é
+// entre rótulos diferentes. Quem prova isso é
+// TestOsBytesDeIndiceVivemNoRotuloDaIrma, no pacote server, que é onde o rótulo
+// existe.
+//
+// O que sobra aqui, e vale: o conjunto de arquivos contado.
+func TestOsBytesDeIndiceContamExatamenteOsArquivosDeIndice(t *testing.T) {
 	hist, rel := histIndexado(t, 512)
 	povoaHistorico(t, hist, rel, 40, time.Minute)
 
@@ -268,12 +340,6 @@ func TestOsBytesDoIndicePorSegmentoSaoParcelaEstritaDoIndexBytes(t *testing.T) {
 		t.Errorf("index_bytes = %d e os arquivos de índice em data/ somam %d blocos: a série está contando um "+
 			"conjunto de arquivos diferente do que promete (.sidx, .sidx.tmp e .widx)", idx, quer)
 	}
-	ret := hist.EstatisticasDeRetencao().IndexBytes
-	if idx >= ret {
-		t.Errorf("index_bytes = %d e history_index_bytes = %d: o segundo soma também indexes/ e checkpoint/, "+
-			"então o primeiro tem de ser ESTRITAMENTE menor — iguais significa que um dos dois parou de contar "+
-			"o que promete", idx, ret)
-	}
 
 	// E ele responde à expulsão, que é a metade que dá sentido ao aceite: um
 	// número que só sobe não distingue "o índice parou de crescer" de "a série
@@ -287,15 +353,27 @@ func TestOsBytesDoIndicePorSegmentoSaoParcelaEstritaDoIndexBytes(t *testing.T) {
 	}
 }
 
-// TestAsReconstrucoesSaoContadasPorSegmentoPublicado separa este contador do
-// varreduras, que é o vizinho fácil de confundir.
+// TestAsReconstrucoesSaoContadasPorSegmentoPublicado tem DUAS metades, e é a
+// segunda que carrega o teste.
 //
-// varreduras conta LEITURAS de segmento — inclusive a da abertura e inclusive a
-// que terminou sem posting nenhuma e não publicou arquivo. Este conta trabalho
-// concluído, e é ele que responde "a fila está drenando?". Somá-los faria a taxa
-// parecer alta num laço que só relê e não publica, que é precisamente o moinho
-// que a fila-superconjunto pode produzir.
+// A primeira mede o caso feliz: uma passada sobre segmentos cujo índice foi
+// expulso publica arquivo para todos, e o contador acompanha. Sozinha ela é
+// tautológica — quando toda visita publica, "contar visita" e "contar publicação"
+// dão o mesmo número, e foi assim que a versão anterior deste teste aprovou o
+// contador que subia para o segmento pulado.
+//
+// A segunda metade é o segmento SEM CAMPO INDEXADO em record algum. Ele é
+// visitado, varrido inteiro, não produz posting nenhuma, não gera arquivo — e
+// FICA na fila de propósito (§2.4), porque "ausente" é pendência e o formato do
+// .sidx não sabe dizer "considerei este campo e ele não aparece". Contá-lo como
+// reconstrução faria a série crescer para sempre num dataset estável, e taxa que
+// nunca zera é exatamente o sintoma de moinho que ela existe para denunciar.
+//
+// São TRÊS contagens diferentes no mesmo laço, e o teste as separa: `varreduras`
+// (leituras, o custo), `feitos` (visitados nesta passada, o que a §2.4 afirma) e
+// `Reconstrucoes` (publicados, o que a série promete).
 func TestAsReconstrucoesSaoContadasPorSegmentoPublicado(t *testing.T) {
+	// Metade 1 — quem publica é contado.
 	hist, rel := histIndexado(t, 512)
 	povoaHistorico(t, hist, rel, 40, time.Minute)
 
@@ -315,12 +393,43 @@ func TestAsReconstrucoesSaoContadasPorSegmentoPublicado(t *testing.T) {
 	}
 	depois := hist.EstatisticasDeIndice().Reconstrucoes
 	if feitos != len(fila) {
-		t.Fatalf("a passada reconstruiu %d de %d pendentes; o oráculo abaixo compara contra a fila inteira",
+		t.Fatalf("a passada visitou %d de %d pendentes; o oráculo abaixo compara contra a fila inteira",
 			feitos, len(fila))
 	}
 	if depois-antes != int64(feitos) {
 		t.Errorf("reconstrucoes subiu %d e a passada publicou %d segmento(s): um contador que não acompanha o "+
 			"trabalho concluído não distingue a fila drenando de um laço moendo", depois-antes, feitos)
+	}
+
+	// Metade 2 — quem NÃO publica não é contado. Sem ela, contar a visita passa.
+	mudo, _ := datasetComPendencias(t, 2, []string{"campo-que-nenhum-record-tem"})
+	muda := pendentes(t, mudo, JanelaDeIndice{})
+	if len(muda) == 0 {
+		t.Fatal("montagem: a fila do dataset sem campo indexado nasceu vazia")
+	}
+
+	varrAntes := mudo.varreduras.Load()
+	recAntes := mudo.EstatisticasDeIndice().Reconstrucoes
+	visitados, err := mudo.reconstroiOsPendentes(t.Context(), muda)
+	if err != nil {
+		t.Fatalf("reconstroiOsPendentes (sem campo): %v", err)
+	}
+	if visitados != len(muda) {
+		t.Fatalf("montagem: a passada visitou %d de %d pendentes; sem visita não há o que deixar de contar",
+			visitados, len(muda))
+	}
+	if lidas := mudo.varreduras.Load() - varrAntes; lidas != int64(len(muda)) {
+		t.Fatalf("montagem: a passada varreu %d segmentos para %d pendentes; o trabalho tem de ter acontecido "+
+			"de verdade para o oráculo abaixo significar alguma coisa", lidas, len(muda))
+	}
+	if subiu := mudo.EstatisticasDeIndice().Reconstrucoes - recAntes; subiu != 0 {
+		t.Errorf("reconstrucoes subiu %d para %d segmento(s) que foram varridos e NÃO publicaram arquivo nenhum: "+
+			"eles ficam na fila de propósito, então num dataset estável a série cresceria para sempre — e taxa que "+
+			"nunca zera é o próprio sintoma de moinho que ela existe para denunciar", subiu, len(muda))
+	}
+	// E a fila continua lá, que é a pré-condição de tudo isso ser um problema.
+	if depois := pendentes(t, mudo, JanelaDeIndice{}); len(depois) != len(muda) {
+		t.Fatalf("a fila mudou de %v para %v: o segmento sem campo indexado tem de CONTINUAR pendente", muda, depois)
 	}
 }
 

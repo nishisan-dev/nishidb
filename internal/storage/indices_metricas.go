@@ -64,8 +64,9 @@ type EstatisticasDeIndice struct {
 	// ReconstrucaoAtiva é o 0/1 do laço da §2.4. Ele para de vez na primeira
 	// falha, e sem esta série isso é indistinguível de "não há o que reconstruir".
 	ReconstrucaoAtiva bool
-	// CRCFalhas conta os .sidx reprovados no crc32c, uma vez por ABERTURA. Ver o
-	// godoc do campo crcFalhas.
+	// CRCFalhas conta os .sidx reprovados no crc32c. É DEGRAU, não taxa: o
+	// mapeamento reprovado fica em cache, então o incremento acontece uma vez por
+	// segmento por processo. Ver o godoc do campo crcFalhas.
 	CRCFalhas int64
 	// PorIndice e PorEnumeracao contam os segmentos que os Lookups resolveram por
 	// cada caminho (§3.4). São o único observável da degradação — para o planner,

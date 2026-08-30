@@ -292,7 +292,7 @@ func TestOErroDoSegmentoSumidoEhOQueOLacoTolera(t *testing.T) {
 	s, dir := datasetComPendencias(t, 2, []string{"node"})
 	alvo := pendentes(t, s, JanelaDeIndice{})[0]
 	aposenta(t, s, dir, alvo)
-	err := s.reconstroiUmSegmento(t.Context(), alvo)
+	_, err := s.reconstroiUmSegmento(t.Context(), alvo)
 	if err == nil {
 		t.Fatal("reconstruir um segmento que já não existe devolveu nil")
 	}

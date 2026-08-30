@@ -326,7 +326,7 @@ func amostrasDeHistorico(base *dataset) []metrics.Amostra {
 		{Familia: metrics.MetHistoryDataBytes, Nome: metrics.MetHistoryDataBytes, Tipo: metrics.TipoMedidor, Valor: float64(e.DataBytes),
 			Ajuda: "Bytes dos segmentos da tabela histórica — o que o maxBytes governa.", Labels: rotulo},
 		{Familia: metrics.MetHistoryIndexBytes, Nome: metrics.MetHistoryIndexBytes, Tipo: metrics.TipoMedidor, Valor: float64(e.IndexBytes),
-			Ajuda: "Blocos alocados pelos índices da tabela histórica; a purga também os devolve, porque o .sidx sai no mesmo passo que remove o .dat. Inclui nishidb_index_bytes, mais indexes/ e checkpoint/.", Labels: rotulo},
+			Ajuda: "Blocos alocados pelos índices da tabela histórica; a purga também os devolve, porque o .sidx sai no mesmo passo que remove o .dat. O número é da tabela IRMÃ, publicado no rótulo do dataset BASE; a parcela por segmento dele é nishidb_index_bytes{dataset=\"X_history\"}, que sai em OUTRO rótulo — subtrair as duas no mesmo rótulo dá o número inteiro de volta.", Labels: rotulo},
 		{Familia: metrics.MetHistoryOldestWrittenAt, Nome: metrics.MetHistoryOldestWrittenAt, Tipo: metrics.TipoMedidor, Valor: float64(e.InstanteMaisAntigo),
 			Ajuda: "Instante da linha mais antiga ainda visível, em millis. Mostra o maxBytes engolindo o prazo declarado.", Labels: rotulo},
 		{Familia: metrics.MetHistoryIndexWindow, Nome: metrics.MetHistoryIndexWindow, Tipo: metrics.TipoMedidor, Valor: e.JanelaEfetiva.Seconds(),

@@ -673,7 +673,7 @@ modos, então elas não pertencem ao bloco `history`:
 | `nishidb_index_bytes` | o disco do índice por segmento |
 | `nishidb_index_reconstrucoes_total` | a fila está drenando? |
 | `nishidb_index_reconstrucao_ativa` | o laço está de pé? |
-| `nishidb_index_crc_falhas_total` | há `.sidx` reprovado no crc32c? |
+| `nishidb_index_crc_falhas_total` | quantos `.sidx` já foram reprovados no crc32c desde a subida |
 | `nishidb_index_segmentos_consultados_total{modo}` | quantos responderam por índice, quantos por enumeração |
 
 `estado` tem quatro valores, e a distinção entre dois deles é a que importa:
@@ -687,8 +687,28 @@ constante, que não responde *"o laço está avançando?"*.
 `nishidb_index_segmentos_consultados_total{modo}` é o único jeito de ver a
 degradação: o resultado da consulta é **idêntico** pelos dois caminhos — é essa
 a tese do desenho —, e só o contador distingue um dataset indexado de um dataset
-que está enumerando. `nishidb_index_bytes` é parcela estrita de
-`nishidb_history_index_bytes`, que soma também `indexes/` e `checkpoint/`.
+que está enumerando. É também ele, e **não** `nishidb_index_crc_falhas_total`, que
+responde *"há índice podre agora?"*: o contador de crc é **degrau**, porque o
+mapeamento reprovado fica em cache e cada arquivo soma uma vez por processo — um
+alerta por `rate()` sobre ele se auto-resolve em minutos enquanto o segmento
+continua enumerando.
+
+**`nishidb_index_bytes` e `nishidb_history_index_bytes` não se comparam no mesmo
+rótulo**, e a diferença morde quem escrever a subtração óbvia. A segunda é do
+bloco `history`: ela descreve a tabela **irmã** e sai rotulada pelo dataset
+**base**, onde o operador declarou a política. A primeira descreve o Store em que
+sai. Num par `eventos` / `eventos_history`:
+
+```promql
+nishidb_index_bytes{dataset="eventos_history"}          # a parcela por segmento
+nishidb_history_index_bytes{dataset="eventos"}          # ela mais indexes/ e checkpoint/
+nishidb_history_index_bytes - nishidb_index_bytes       # ERRADO: casa por rótulo igual
+```
+
+A última linha devolve o total inteiro de volta, porque em `{dataset="eventos"}`
+a série de índice por segmento é a do **próprio base** — tipicamente zero. É
+também no rótulo da irmã que se acompanha a promessa do ciclo: é `eventos_history`
+que precisa parar de crescer.
 
 `rawPayload: true` acrescenta a coluna `_raw` com os bytes originais do evento,
 e é ela que permite gravar também o evento que **não parseia** — hoje um JSON

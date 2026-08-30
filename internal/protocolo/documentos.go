@@ -260,18 +260,26 @@ type IndiceStats struct {
 	Current     int64 `json:"current"`
 	Pending     int64 `json:"pending"`
 	OutOfWindow int64 `json:"outOfWindow"`
-	// Bytes são os blocos do índice por segmento — parcela ESTRITA do
-	// History.IndexBytes, que soma também indexes/ e checkpoint/. Separado porque
-	// é este número que precisa parar de crescer com a tabela em regime.
+	// Bytes são os blocos do índice por segmento DESTE dataset. Separado porque é
+	// este número que precisa parar de crescer com a tabela em regime.
+	//
+	// Ele é parcela estrita do History.IndexBytes — que soma também indexes/ e
+	// checkpoint/ — mas os dois NÃO ficam no mesmo lugar, e a diferença é fácil de
+	// ler errado: o bloco History é preenchido no dataset BASE com os números da
+	// IRMÃ, enquanto este bloco descreve o Store do dataset em que sai. Num par
+	// `X` / `X_history`, a parcela mora em `X_history`.Index.Bytes e o total em
+	// `X`.History.IndexBytes. No base, Index.Bytes é o índice do PRÓPRIO base, que
+	// não tem relação nenhuma com o total publicado ao lado dele.
 	Bytes int64 `json:"bytes"`
 	// Rebuilds conta os segmentos cujo índice a reconstrução publicou e
 	// RebuildRunning é o 0/1 do laço, que para de vez na primeira falha.
 	// Contador de PROCESSO: zera no restart.
 	Rebuilds       int64 `json:"rebuilds"`
 	RebuildRunning bool  `json:"rebuildRunning"`
-	// CRCFailures conta os índices selados reprovados no crc32c, por ABERTURA do
-	// arquivo e não por arquivo distinto: a falha não é memorizada, então o mesmo
-	// arquivo podre é reprovado a cada consulta que toque aquele segmento.
+	// CRCFailures conta os índices selados reprovados no crc32c. É DEGRAU e não
+	// taxa: o mapeamento reprovado fica em cache, então cada arquivo podre soma uma
+	// vez por processo. Para saber se o defeito continua de pé, olhe
+	// SegmentsByScan subindo num dataset que deveria estar indexado.
 	CRCFailures int64 `json:"crcFailures"`
 	// SegmentsByIndex e SegmentsByScan contam por qual caminho os Lookups
 	// resolveram cada segmento. São o único observável da degradação da §3.4 — o

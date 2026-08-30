@@ -1813,7 +1813,7 @@ histórico, porque o motor de índice é um só nos dois modos.
 | `nishidb_index_bytes` | o disco do índice por segmento — o número que precisa parar de crescer |
 | `nishidb_index_reconstrucoes_total` | a fila está drenando? |
 | `nishidb_index_reconstrucao_ativa` | o laço está de pé? Ele para de vez na primeira falha |
-| `nishidb_index_crc_falhas_total` | há `.sidx` reprovado no crc32c sendo reaberto? |
+| `nishidb_index_crc_falhas_total` | quantos `.sidx` já foram reprovados no crc32c desde a subida |
 | `nishidb_index_segmentos_consultados_total{modo}` | quantos segmentos responderam por índice e quantos por enumeração |
 
 `estado` tem **quatro** valores e a partição é o produto inteiro da série:
@@ -1825,6 +1825,13 @@ trabalho — o número seria enorme, normal e constante, e o gauge deixaria de
 responder *"o laço está avançando?"*, que é a única pergunta que uma migração
 faz.
 
+`nishidb_index_crc_falhas_total` é **degrau, não taxa**: o `garanteSelado` publica
+no cache o mapeamento reprovado — publicar mantém o `sync.Once` do crc cumprido, e
+recusar obrigaria toda consulta a remapear e revarrer o arquivo podre inteiro —,
+então cada arquivo soma uma vez por processo. Um alerta por `rate()` sobre ela dá
+um pico e se auto-resolve em minutos, enquanto o segmento continua enumerando. O
+sinal de *"há índice podre agora"* é a enumeração persistente da série abaixo.
+
 `nishidb_index_segmentos_consultados_total{modo}` é o **único** observável da
 degradação: a fonte de enumeração é apenas mais um iterador ascendente na mesma
 combinação, e planner, executor e driver não têm como distingui-la. Sem essa
@@ -1833,7 +1840,14 @@ dataset inteiro indexado — a mesma resposta, com outro custo.
 
 `nishidb_index_bytes` é parcela **estrita** de `nishidb_history_index_bytes`,
 que soma também `indexes/` e `checkpoint/`, e as duas saem da mesma função de
-disco — uma definição, dois leitores. A **janela efetiva não está nesta
+disco — uma definição, dois leitores. **Mas elas não se comparam no mesmo
+rótulo**: a segunda é do bloco `history`, descreve a tabela IRMÃ e sai rotulada
+pelo dataset BASE (é lá que a política foi declarada), enquanto a primeira
+descreve o Store em que sai. Num par `X`/`X_history` a parcela vive em
+`{dataset="X_history"}` e o total em `{dataset="X"}`, então
+`nishidb_history_index_bytes - nishidb_index_bytes` — que casa por rótulo
+idêntico, o default do PromQL — devolve o total de volta, porque no rótulo do
+base a série por segmento é a do próprio base. A **janela efetiva não está nesta
 família**: quem a publica é `nishidb_history_index_window_seconds`, rotulada
 pelo dataset BASE. A razão é que a janela é *política* declarada num YAML, e a
 série existe espelhando `nishidb_history_oldest_written_at`, que é do mesmo

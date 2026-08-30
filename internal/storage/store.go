@@ -492,13 +492,23 @@ type Store struct {
 	// trabalho concluído. A distância entre os dois é o que a fila-superconjunto
 	// custa.
 	recFeitas atomic.Int64
-	// crcFalhas conta os .sidx que o crc32c reprovou.
+	// crcFalhas conta os .sidx que o crc32c reprovou, e ela é um DEGRAU — não uma
+	// taxa.
 	//
-	// Ela sobe UMA VEZ POR ABERTURA do arquivo, e não uma vez por processo: a
-	// falha não é memorizada (garanteSelado), então um índice podre é reaberto e
-	// reprovado a cada consulta que toque aquele segmento. A taxa, e não o total,
-	// é o que se lê — ela é proporcional ao tráfego sobre o segmento doente, e
-	// some sozinha quando a reconstrução publicar o arquivo bom por cima.
+	// Sobe uma vez por ABERTURA do arquivo, e a abertura acontece uma vez por
+	// segmento por processo: o garanteSelado PUBLICA no cache o mapeamento
+	// reprovado (publicar mantém o sync.Once do crc cumprido; recusar obrigaria
+	// toda consulta a remapear e revarrer o arquivo podre inteiro). Da segunda
+	// consulta em diante o fonteIndexada acha o mapeamento no s.selados e volta
+	// antes de reconferir nada. Só há incremento novo se o mapeamento for evictado
+	// — reconstrução, aposentadoria — ou se o dataset for reaberto.
+	//
+	// A CONSEQUÊNCIA PARA QUEM OPERA, e ela é o oposto do que esta série já
+	// afirmou de si mesma: um alerta por `rate()` dá um pico e se auto-resolve em
+	// minutos, enquanto o segmento continua enumerando indefinidamente. Quem
+	// responde "há índice podre AGORA" é a enumeração persistente
+	// (segPorEnumeracao) num dataset que deveria estar indexado; esta série
+	// responde "quantos arquivos já foram pegos desde a subida".
 	crcFalhas atomic.Int64
 	// segPorIndice e segPorEnumeracao contam os segmentos que cada Lookup
 	// resolveu por cada caminho (§3.4). São a ÚNICA coisa que o chamador enxerga

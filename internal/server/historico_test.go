@@ -400,15 +400,25 @@ schema:
 
 // semeiaHistorico enche a tabela IRMÃ pelo pipeline real — Materializer.Apply
 // com o histórico ligado —, do mesmo jeito que o `semeia` do dataset base, e
-// pela mesma razão: o que este teste mede depende de segmentos selados de
+// pela mesma razão: o que os testes medem depende de segmentos selados de
 // verdade, com índice escrito pelo writer, e um arquivo montado à mão não
 // exercitaria nem a selagem nem a rotação.
 //
 // A montagem repete a ordem do abreHistorico (dicionário do base para a irmã,
-// compilação contra esse mesmo dicionário, e só então o LigaHistorico) porque é
-// ela que faz os FieldIDs das duas tabelas coincidirem — divergir aqui faria o
-// payload da irmã decodificar colunas trocadas, e o teste mediria outra coisa.
-func semeiaHistorico(t *testing.T, a *ambiente, nome string, n int) {
+// compilação contra esse mesmo dicionário, o espelho, e só então o LigaHistorico)
+// porque é ela que faz os FieldIDs das duas tabelas coincidirem — divergir aqui
+// faria o payload da irmã decodificar colunas trocadas, e o teste mediria outra
+// coisa. Pela mesma razão o segmentSize da irmã segue a regra do servidor: o
+// `history.segmentSize` declarado, ou o global quando ele é omitido.
+//
+// São DOIS contadores de evento porque a presença do campo indexado é o que
+// decide o estado do segmento. Os `comCampo` produzem segmentos que geram .sidx;
+// os `semCampo` não produzem posting nenhuma, logo não geram arquivo, logo ficam
+// permanentemente PENDENTES (§2.4) — e eles vão por último de propósito, para
+// caírem entre os segmentos mais novos, que é onde a janela os mantém dentro.
+//
+// Devolve o diretório da irmã, que é onde moram os .sidx que os testes sabotam.
+func semeiaHistorico(t *testing.T, a *ambiente, nome string, comCampo, semCampo int) string {
 	t.Helper()
 	cfg := a.carrega()
 	spec, err := schema.Load(cfg.SpecDoDataset(nome), cfg.DefaultsDeQuery())
@@ -430,10 +440,15 @@ func semeiaHistorico(t *testing.T, a *ambiente, nome string, n int) {
 		}
 	}()
 	specIrma := spec.DerivaHistorico()
+	segmentoDaIrma := cfg.SegmentSize()
+	if spec.Historico != nil && spec.Historico.SegmentSize > 0 {
+		segmentoDaIrma = spec.Historico.SegmentSize
+	}
+	dirIrma := cfg.CaminhoDoDataset(specIrma.Name)
 	hist, err := storage.Open(storage.Options{
-		Dir:                    cfg.CaminhoDoDataset(specIrma.Name),
+		Dir:                    dirIrma,
 		Dataset:                specIrma.Name,
-		SegmentSize:            cfg.SegmentSize(),
+		SegmentSize:            segmentoDaIrma,
 		Modo:                   storage.ModoHistorico,
 		DictCompartilhado:      base.FieldDict(),
 		CamposIndexadosPorNome: schema.CamposComIndice(specIrma),
@@ -451,19 +466,26 @@ func semeiaHistorico(t *testing.T, a *ambiente, nome string, n int) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := specIrma.Compile(base.FieldDict()); err != nil {
+	compiladoIrma, err := specIrma.Compile(base.FieldDict())
+	if err != nil {
 		t.Fatal(err)
 	}
+	compilado.Espelha(compiladoIrma)
 	mat, err := materializer.New(compilado, base)
 	if err != nil {
 		t.Fatal(err)
 	}
 	mat.LigaHistorico(hist, nil)
-	for i := range n {
-		ev := fmt.Sprintf(`{"id":"S-%06d","severity":%d}`, i, i%4)
+	aplica := func(ev string) {
 		if r := mat.Apply([]byte(ev)); r.Err != nil {
-			t.Fatalf("evento %d: %v", i, r.Err)
+			t.Fatalf("evento %q: %v", ev, r.Err)
 		}
+	}
+	for i := range comCampo {
+		aplica(fmt.Sprintf(`{"id":"E-%06d","node":"n%d","severity":%d}`, i, i%3, i%7))
+	}
+	for i := range semCampo {
+		aplica(fmt.Sprintf(`{"id":"S-%06d","severity":%d}`, i, i%4))
 	}
 	if err := hist.Checkpoint(); err != nil {
 		t.Fatal(err)
@@ -471,6 +493,7 @@ func semeiaHistorico(t *testing.T, a *ambiente, nome string, n int) {
 	if err := base.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
+	return dirIrma
 }
 
 // seladosDoDataset devolve os segmentos selados de um dataset em ordem
@@ -534,7 +557,7 @@ func apagaOsIndicesSelados(t *testing.T, dir string) {
 func TestOLacoDeReconstrucaoObedeceAMESMAJanelaDaExpulsao(t *testing.T) {
 	a := novoAmbienteComStorage(t, blocoPadrao, "  segmentSize: 8KiB\n")
 	a.escreveDataset("eventos", specComJanelaApertada)
-	semeiaHistorico(t, a, "eventos", 600)
+	semeiaHistorico(t, a, "eventos", 0, 600)
 
 	cfg := a.carrega()
 	dirIrma := cfg.CaminhoDoDataset("eventos_history")

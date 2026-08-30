@@ -256,12 +256,15 @@ func (s *Store) garanteSelado(seg uint32) {
 	// a próxima consulta a reabrir e reconferir o arquivo podre inteiro.
 	if err := novo.ErroDeIntegridade(); err != nil {
 		// A série sobe junto do WARN, e no mesmo ponto, porque as duas descrevem
-		// o mesmo evento: um arquivo de índice reprovado. Ela conta por ABERTURA
-		// e não por processo — a falha não é memorizada, então o mesmo arquivo
-		// podre é reaberto e reprovado a cada consulta que toque o segmento. Quem
-		// lê o painel lê a TAXA, que é proporcional ao tráfego sobre o segmento
-		// doente e cai a zero quando a reconstrução publicar o arquivo bom por
-		// cima. O total acumulado não significa "tantos arquivos corrompidos".
+		// o mesmo evento: um arquivo de índice reprovado.
+		//
+		// Ela conta por ABERTURA, e a linha logo abaixo é o que torna isso quase
+		// "uma vez por processo": o publicaSelado instala o mapeamento REPROVADO
+		// no cache, então a consulta seguinte o encontra lá e volta sem reconferir
+		// o crc. O incremento só se repete se a evição tirar o mapeamento do
+		// caminho. Por isso a série é DEGRAU e não taxa — e por isso a Ajuda dela
+		// manda o operador olhar a enumeração persistente para saber se o defeito
+		// continua de pé. O WARN acompanha o degrau pela mesma razão.
 		s.crcFalhas.Add(1)
 		s.opts.Log.Warn("indice.selado_corrompido",
 			"o índice do segmento não passou no crc32c; ele responde por enumeração até ser reconstruído",

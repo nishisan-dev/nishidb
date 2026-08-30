@@ -5,11 +5,14 @@ import (
 	"go/parser"
 	"go/token"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/nishisan-dev/nishidb/internal/index/segindex"
 	"github.com/nishisan-dev/nishidb/internal/metrics"
 	"github.com/nishisan-dev/nishidb/internal/protocolo"
 	"github.com/nishisan-dev/nishidb/internal/server"
@@ -358,71 +361,109 @@ func dentroDeComRotulo(raiz ast.Node, alvo ast.Node) bool {
 // as séries nishidb_index_* descrevem o MESMO estado, e não dois contadores que
 // por acaso concordam hoje.
 //
-// A bancada espera a fila DRENAR antes de comparar, e não é conveniência: com o
-// laço de reconstrução em voo, `pendente` e `selado` mudam entre as duas
-// requisições, e uma discordância legítima seria indistinguível do defeito que o
-// teste procura. Com a fila em zero nada mais se move sem o teste mandar.
+// # POR QUE A BANCADA É HISTÓRICA, GRANDE E CARA
 //
-// A conferência de NÃO-TRIVIALIDADE vem antes das igualdades pela razão de
-// sempre: dez comparações de 0 contra 0 passam com os dois lados devolvendo
-// constante zero, que é exatamente o mutante mais fácil de escrever.
+// A versão anterior deste teste rodava sobre um dataset MATERIALIZADO com a fila
+// já drenada, e ali CINCO dos dez números são zero por construção: `Fora` porque
+// a janela é infinita, `Pending` porque drenou, e `Rebuilds`, `CRCFailures` e
+// `SegmentsByScan` porque nada os produz. Cinco comparações de 0 contra 0 — que é
+// o defeito que o próprio godoc dizia estar impedindo. Medido: publicar
+// `modo="enumeracao"`, `crc_falhas` ou `reconstrucoes` como CONSTANTE ZERO passava
+// verde, e trocar os rótulos `pendente` e `fora` no mapa de amostrasDeIndice
+// também.
+//
+// A troca de rótulos é o pior modo de falha possível desta família. Durante a
+// migração do piloto, `fora` é um número enorme e praticamente constante — a
+// maioria dos 135 GB está fora da janela — e `pendente` é a fila encolhendo.
+// Trocados, o painel mostra uma fila gigante e imóvel, que é exatamente a leitura
+// que faz o operador concluir que o laço travou.
+//
+// Por isso a bancada monta um HISTÓRICO com teto de bytes, índices apagados e
+// índices corrompidos: os dez números saem diferentes de zero e diferentes entre
+// si, e aí qualquer troca de fio ou de rótulo fica vermelha sozinha.
 func TestStatsEMetricsLeemAMesmaEstrutura(t *testing.T) {
-	srv, _ := servidorComDadosDiretorioEStorage(t, 400, blocoPadrao, "  segmentSize: 8KiB\n")
-	esperaFilaDrenar(t, srv, "d")
+	srv := bancadaDeIndice(t)
+	idx := indiceDoDataset(t, srv, tabelaDaBancada)
+	exigeDezNumerosDistintos(t, idx)
 
-	// Uma consulta indexada, para que os contadores de caminho tenham o que
-	// comparar: sem ela, segmentsByIndex e segmentsByScan seriam 0 == 0.
-	resp := consulta(t, srv, `{"dataset":"d","sql":"SELECT id FROM d WHERE status = 'Stop'"}`)
-	if resp.StatusCode != http.StatusOK {
-		fecha(t, resp)
-		t.Fatalf("consulta indexada devolveu %d", resp.StatusCode)
-	}
-	fecha(t, resp)
-
-	est := leJSON[protocolo.Estatisticas](t, srv, "/v1/stats")
 	amostras := coletaAmostras(t, srv)
-
-	var achou bool
-	for _, ds := range est.Datasets {
-		if ds.Name != "d" {
-			continue
-		}
-		achou = true
-		idx := ds.Index
-		if idx.Bytes == 0 || idx.Current == 0 || idx.Sealed == 0 || idx.SegmentsByIndex == 0 {
-			t.Fatalf("o bloco index de %q saiu trivial (%+v): sem segmento selado, sem bytes e sem consulta indexada, "+
-				"as igualdades abaixo seriam 0 == 0 e um par de constantes zero passaria por elas", ds.Name, idx)
-		}
-		rotulo := map[string]string{metrics.LabelDataset: "d"}
-		porEstado := map[string]int64{
-			metrics.EstadoSelado:   idx.Sealed,
-			metrics.EstadoCorrente: idx.Current,
-			metrics.EstadoPendente: idx.Pending,
-			metrics.EstadoFora:     idx.OutOfWindow,
-		}
-		for _, estado := range metrics.EstadosDeIndice {
-			confereIgual(t, amostras, metrics.MetIndexSegmentos,
-				map[string]string{metrics.LabelDataset: "d", metrics.LabelEstado: estado}, porEstado[estado])
-		}
-		porModo := map[string]int64{
-			metrics.ModoIndice:     idx.SegmentsByIndex,
-			metrics.ModoEnumeracao: idx.SegmentsByScan,
-		}
-		for _, modo := range metrics.ModosDeConsultaDeIndice {
-			confereIgual(t, amostras, metrics.MetIndexSegmentosConsultadosTotal,
-				map[string]string{metrics.LabelDataset: "d", metrics.LabelModo: modo}, porModo[modo])
-		}
-		confereIgual(t, amostras, metrics.MetIndexBytes, rotulo, idx.Bytes)
-		confereIgual(t, amostras, metrics.MetIndexReconstrucoesTotal, rotulo, idx.Rebuilds)
-		confereIgual(t, amostras, metrics.MetIndexCrcFalhasTotal, rotulo, idx.CRCFailures)
-		var ativa int64
-		if idx.RebuildRunning {
-			ativa = 1
-		}
-		confereIgual(t, amostras, metrics.MetIndexReconstrucaoAtiva, rotulo, ativa)
+	rotulo := map[string]string{metrics.LabelDataset: tabelaDaBancada}
+	porEstado := map[string]int64{
+		metrics.EstadoSelado:   idx.Sealed,
+		metrics.EstadoCorrente: idx.Current,
+		metrics.EstadoPendente: idx.Pending,
+		metrics.EstadoFora:     idx.OutOfWindow,
 	}
-	if !achou {
-		t.Fatal("o dataset \"d\" não apareceu no /v1/stats")
+	for _, estado := range metrics.EstadosDeIndice {
+		confereIgual(t, amostras, metrics.MetIndexSegmentos,
+			map[string]string{metrics.LabelDataset: tabelaDaBancada, metrics.LabelEstado: estado}, porEstado[estado])
+	}
+	porModo := map[string]int64{
+		metrics.ModoIndice:     idx.SegmentsByIndex,
+		metrics.ModoEnumeracao: idx.SegmentsByScan,
+	}
+	for _, modo := range metrics.ModosDeConsultaDeIndice {
+		confereIgual(t, amostras, metrics.MetIndexSegmentosConsultadosTotal,
+			map[string]string{metrics.LabelDataset: tabelaDaBancada, metrics.LabelModo: modo}, porModo[modo])
+	}
+	confereIgual(t, amostras, metrics.MetIndexBytes, rotulo, idx.Bytes)
+	confereIgual(t, amostras, metrics.MetIndexReconstrucoesTotal, rotulo, idx.Rebuilds)
+	confereIgual(t, amostras, metrics.MetIndexCrcFalhasTotal, rotulo, idx.CRCFailures)
+	var ativa int64
+	if idx.RebuildRunning {
+		ativa = 1
+	}
+	confereIgual(t, amostras, metrics.MetIndexReconstrucaoAtiva, rotulo, ativa)
+}
+
+// exigeDezNumerosDistintos é a guarda de não-trivialidade, e ela cobre os DEZ
+// campos do bloco — não os quatro que por acaso não eram zero.
+//
+// Os nove numéricos precisam ser diferentes de zero E diferentes entre si. A
+// distinção entre os dois requisitos importa: não-zero mata o fio congelado em
+// constante, e a distinção mútua mata a troca de fio ou de rótulo, que é
+// invisível quando dois números coincidem. O décimo campo, RebuildRunning, é 0/1
+// por natureza — o par dele com `Corrente` (que é estruturalmente 1, porque só há
+// um segmento corrente) é o único que esta bancada não consegue separar, e quem o
+// separa é TestOMedidorDaReconstrucaoNaoEhOContadorDeCorrentes, no storage, onde
+// existe um Store com segmento corrente e sem laço de pé.
+//
+// Se a distinção quebrar por causa de uma mudança no empacotamento de segmentos,
+// a falha diz quais números colidiram: o conserto é retunar a bancada, nunca
+// afrouxar a asserção.
+func exigeDezNumerosDistintos(t *testing.T, idx protocolo.IndiceStats) {
+	t.Helper()
+	numeros := []struct {
+		nome string
+		v    int64
+	}{
+		{"Sealed", idx.Sealed},
+		{"Current", idx.Current},
+		{"Pending", idx.Pending},
+		{"OutOfWindow", idx.OutOfWindow},
+		{"Bytes", idx.Bytes},
+		{"Rebuilds", idx.Rebuilds},
+		{"CRCFailures", idx.CRCFailures},
+		{"SegmentsByIndex", idx.SegmentsByIndex},
+		{"SegmentsByScan", idx.SegmentsByScan},
+	}
+	for _, n := range numeros {
+		if n.v == 0 {
+			t.Fatalf("o bloco index saiu com %s = 0 (%+v): um campo zerado transforma a comparação com o /metrics "+
+				"em 0 == 0, e um fio congelado em constante zero passa por ela", n.nome, idx)
+		}
+	}
+	for i := range numeros {
+		for j := i + 1; j < len(numeros); j++ {
+			if numeros[i].v == numeros[j].v {
+				t.Fatalf("o bloco index saiu com %s == %s == %d (%+v): com dois números iguais, trocar um fio pelo "+
+					"outro fica invisível. Retune a bancada — nunca afrouxe esta asserção",
+					numeros[i].nome, numeros[j].nome, numeros[i].v, idx)
+			}
+		}
+	}
+	if !idx.RebuildRunning {
+		t.Fatalf("o bloco index saiu com RebuildRunning falso (%+v): o laço tem de estar de pé para o 0/1 significar algo", idx)
 	}
 }
 
@@ -441,30 +482,175 @@ func confereIgual(t *testing.T, amostras []amostraExposta, familia string, rotul
 	}
 }
 
-// esperaFilaDrenar bloqueia até a reconstrução não ter mais o que fazer, ou
-// falha dizendo o que ficou para trás.
+// tabelaDaBancada é a tabela irmã em que os dez números da bancada vivem. O
+// índice por segmento é do STORE, então quem tem os números é a irmã — não o
+// dataset base, que só declara a política.
+const tabelaDaBancada = "eventos_history"
+
+// specDaBancadaDeIndice é o dataset da bancada rica.
 //
-// A espera é sobre o /v1/stats e não sobre o log porque é o número que o teste
-// vai comparar depois; esperar por outro sinal deixaria a corrida de pé no
-// observável que importa.
-func esperaFilaDrenar(t *testing.T, srv *server.Servidor, nome string) {
+// Cada chave está aqui por um dos dez números:
+//
+//   - `segmentSize: 4KiB` produz ~21 segmentos com o volume semeado, que é o que
+//     dá margem para os quatro estados terem contagens distintas;
+//   - `index.maxBytes` (e NÃO `window`) é o que empurra os mais antigos para
+//     `fora`. O teto de bytes foi escolhido em lugar da janela por tempo porque é
+//     DETERMINÍSTICO: a fronteira por tempo anda com o relógio durante o teste, e
+//     um segmento migraria de `selado` para `fora` no meio das asserções;
+//   - `node` indexado é o campo sobre o qual as consultas resolvem por índice, e é
+//     a AUSÊNCIA dele em parte dos eventos que produz os segmentos permanentemente
+//     pendentes.
+const specDaBancadaDeIndice = `version: 1
+name: eventos
+materialization:
+  key:
+    field: id
+history:
+  expireAfterWrite: 720h
+  maxBytes: 4GiB
+  segmentSize: 4KiB
+  index:
+    maxBytes: 64KiB
+  fields:
+    node:
+      index: true
+schema:
+  include: ["*"]
+  fields:
+    id:
+      type: string
+    node:
+      type: string
+    severity:
+      type: int64
+`
+
+// Quantos eventos com e sem o campo indexado. Os números são resultado de uma
+// CALIBRAÇÃO, não gosto: eles põem os nove numéricos do bloco `index` em valores
+// distintos. Mexer em qualquer um muda o empacotamento dos segmentos, e o
+// exigeDezNumerosDistintos reprova dizendo quais colidiram.
+const (
+	eventosComNode = 950
+	eventosSemNode = 220
+)
+
+var (
+	// segmentosSemIndice têm o .sidx APAGADO antes da subida: eles entram na fila
+	// por ausência e a reconstrução os publica de volta — é daí que sai Rebuilds.
+	segmentosSemIndice = []uint32{6, 7, 8, 9, 10, 11, 12}
+	// segmentosCorrompidos têm o ÚLTIMO byte trocado, que é onde o crc32c mora.
+	//
+	// É deliberadamente o FIM do arquivo, e não o começo: a tabela de seções
+	// continua legível, então a fila de reconstrução — que não confere crc, por
+	// não poder — julga o arquivo completo e NÃO o refaz. Corrompendo o cabeçalho
+	// o segmento viraria "ilegível", seria reconstruído, e a corrupção sumiria
+	// antes da primeira consulta. Foi o que aconteceu na primeira calibração
+	// desta bancada, e o sintoma era CRCFailures ficar em zero.
+	segmentosCorrompidos = []uint32{13, 14}
+)
+
+// bancadaDeIndice sobe um servidor cuja tabela histórica tem os quatro estados de
+// segmento povoados, reconstruções feitas e índices reprovados no crc.
+//
+// A semeadura acontece ANTES da subida e reproduz a ordem do abreHistorico —
+// dicionário compartilhado, spec derivada compilada contra ele, espelho, e só
+// então o materializer com o histórico ligado. Reproduzir em vez de importar é o
+// preço de não haver rota HTTP de ingestão; o que não pode é DIVERGIR, e por isso
+// os campos indexados saem de schema.CamposComIndice, como no servidor.
+func bancadaDeIndice(t *testing.T) *server.Servidor {
 	t.Helper()
-	prazo := time.Now().Add(30 * time.Second)
-	var ultimo protocolo.IndiceStats
-	for time.Now().Before(prazo) {
-		est := leJSON[protocolo.Estatisticas](t, srv, "/v1/stats")
-		for _, ds := range est.Datasets {
-			if ds.Name != nome {
-				continue
-			}
-			ultimo = ds.Index
-			if ultimo.Pending == 0 && ultimo.Sealed > 0 {
-				return
-			}
+	a := novoAmbienteCom(t, blocoPadrao)
+	a.escreveDataset("eventos", specDaBancadaDeIndice)
+	dir := filepath.Join(semeiaHistorico(t, a, "eventos", eventosComNode, eventosSemNode), "data")
+
+	for _, seg := range segmentosSemIndice {
+		if err := os.Remove(segindex.CaminhoSelado(dir, seg)); err != nil {
+			t.Fatalf("montagem: apagar o índice do segmento %d: %v", seg, err)
 		}
-		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("a fila de reconstrução de %q não drenou em 30s; último retrato: %+v", nome, ultimo)
+	for _, seg := range segmentosCorrompidos {
+		corrompeOFimDoIndice(t, segindex.CaminhoSelado(dir, seg))
+	}
+
+	srv, err := server.Novo(a.carrega(), server.Opcoes{})
+	if err != nil {
+		t.Fatalf("subida: %v", err)
+	}
+	roda(t, srv)
+	esperaOsEstadosAssentarem(t, srv)
+
+	// Uma consulta pelo campo indexado: é ela que faz os dois contadores de
+	// caminho e o de crc saírem de zero. Vem DEPOIS do assentamento, para que os
+	// segmentos que a reconstrução ia publicar já tenham índice — senão os
+	// números de caminho descreveriam um estado que já não existe.
+	resp := consulta(t, srv, `{"dataset":"`+tabelaDaBancada+`","sql":"SELECT id FROM `+tabelaDaBancada+` WHERE node = 'n1'"}`)
+	if resp.StatusCode != http.StatusOK {
+		fecha(t, resp)
+		t.Fatalf("a consulta indexada da bancada devolveu %d", resp.StatusCode)
+	}
+	fecha(t, resp)
+	return srv
+}
+
+// esperaOsEstadosAssentarem bloqueia até o retrato parar de mudar.
+//
+// O critério é uma leitura ESTÁVEL por mais de uma passada do laço, e não "a fila
+// esvaziou": nesta bancada ela nunca esvazia — os segmentos sem o campo indexado
+// ficam pendentes de propósito (§2.4), e esperar pelo zero travaria para sempre.
+//
+// A espera existe porque o SegmentosPendentesDeReconstrucao publica o retrato no
+// INÍCIO da passada, antes do trabalho dela: a primeira leitura descreve o
+// dataset antes das reconstruções, e comparar contra ela mediria um instante que
+// já passou.
+func esperaOsEstadosAssentarem(t *testing.T, srv *server.Servidor) {
+	t.Helper()
+	var (
+		anterior protocolo.IndiceStats
+		desde    = time.Now()
+		prazo    = time.Now().Add(90 * time.Second)
+	)
+	for time.Now().Before(prazo) {
+		atual := indiceDoDataset(t, srv, tabelaDaBancada)
+		switch {
+		case atual != anterior:
+			anterior, desde = atual, time.Now()
+		case time.Since(desde) > 6*time.Second:
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Fatalf("os estados de segmento não assentaram em 90s; último retrato: %+v", anterior)
+}
+
+// indiceDoDataset lê o bloco `index` de um dataset no /v1/stats.
+func indiceDoDataset(t *testing.T, srv *server.Servidor, nome string) protocolo.IndiceStats {
+	t.Helper()
+	for _, ds := range leJSON[protocolo.Estatisticas](t, srv, "/v1/stats").Datasets {
+		if ds.Name == nome {
+			return ds.Index
+		}
+	}
+	t.Fatalf("o dataset %q não apareceu no /v1/stats", nome)
+	return protocolo.IndiceStats{}
+}
+
+// corrompeOFimDoIndice troca o último byte do arquivo, que é onde o crc32c mora.
+func corrompeOFimDoIndice(t *testing.T, caminho string) {
+	t.Helper()
+	fi, err := os.Stat(caminho)
+	if err != nil {
+		t.Fatalf("montagem: stat de %s: %v", caminho, err)
+	}
+	f, err := os.OpenFile(caminho, os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("montagem: abrir %s: %v", caminho, err)
+	}
+	if _, err := f.WriteAt([]byte{0xAA}, fi.Size()-1); err != nil {
+		t.Fatalf("montagem: corromper %s: %v", caminho, err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("montagem: fechar %s: %v", caminho, err)
+	}
 }
 
 // TestAAjudaDoIndiceDoHistoricoNaoNegaAPurga pina a metade PROSA de um fato que
@@ -493,10 +679,100 @@ func TestAAjudaDoIndiceDoHistoricoNaoNegaAPurga(t *testing.T) {
 			"com o índice por segmento o .sidx sai no mesmo passo que remove o .dat, e a série CAI depois de uma passada",
 			metrics.MetHistoryIndexBytes, a.Ajuda)
 	}
-	if !strings.Contains(a.Ajuda, metrics.MetIndexBytes) {
-		t.Errorf("a ajuda de %s não aponta para %s: as duas séries medem conjuntos encaixados, e quem lê a maior "+
-			"precisa saber qual parcela tem teto próprio. Ajuda = %q",
-			metrics.MetHistoryIndexBytes, metrics.MetIndexBytes, a.Ajuda)
+	// A ajuda tem de nomear a série irmã E o RÓTULO em que ela vive. Exigir só o
+	// nome era a versão anterior deste oráculo, e ela passava com o texto que
+	// mandava o operador subtrair as duas no mesmo rótulo — a conta errada que o
+	// TestOsBytesDeIndiceVivemNoRotuloDaIrma mede logo abaixo.
+	for _, exigido := range []string{metrics.MetIndexBytes, "_history"} {
+		if !strings.Contains(a.Ajuda, exigido) {
+			t.Errorf("a ajuda de %s não menciona %q: as duas séries medem conjuntos encaixados em rótulos DIFERENTES, "+
+				"e quem lê a maior sem saber disso escreve a subtração errada. Ajuda = %q",
+				metrics.MetHistoryIndexBytes, exigido, a.Ajuda)
+		}
+	}
+}
+
+// TestAAjudaDoContadorDeCrcNaoPrometeTaxa pina o texto que o operador lê contra
+// o comportamento que o TestOCrcDivergenteContaUmDegrauEEnumeraSempre mede.
+//
+// A primeira redação desta série dizia "contados por ABERTURA do arquivo: a falha
+// não é memorizada", e daí para "escreva um alerta com rate()" é um passo. O
+// código faz o oposto: o garanteSelado publica o mapeamento reprovado no cache, o
+// contador dá um degrau e o alerta se auto-resolve em minutos enquanto o segmento
+// segue enumerando — que é a degradação silenciosa que as seis séries existem para
+// acabar.
+//
+// A ajuda é a superfície mais difícil de corrigir depois, porque viaja para dentro
+// do Prometheus do operador junto do número. Por isso ela é pinada aqui, e por isso
+// a asserção exige que ela REDIRECIONE para o sinal que continua verdadeiro em vez
+// de só remover a frase errada.
+func TestAAjudaDoContadorDeCrcNaoPrometeTaxa(t *testing.T) {
+	srv := servidorComHistorico(t, specComHistorico)
+	a, ok := achaSerie(coletaAmostras(t, srv), metrics.MetIndexCrcFalhasTotal,
+		map[string]string{metrics.LabelDataset: "eventos_history"})
+	if !ok {
+		t.Fatalf("%s não saiu no scrape", metrics.MetIndexCrcFalhasTotal)
+	}
+	if strings.Contains(a.Ajuda, "não é memorizada") {
+		t.Errorf("a ajuda de %s ainda afirma que a falha não é memorizada: %q — o garanteSelado publica o mapeamento "+
+			"reprovado no cache, então o contador dá um DEGRAU e um rate() sobre ele se auto-resolve",
+			metrics.MetIndexCrcFalhasTotal, a.Ajuda)
+	}
+	if !strings.Contains(a.Ajuda, metrics.MetIndexSegmentosConsultadosTotal) {
+		t.Errorf("a ajuda de %s não aponta para %s: remover a frase errada não basta, porque quem lia esta série "+
+			"queria saber se HÁ índice podre agora — e quem responde isso é a enumeração persistente. Ajuda = %q",
+			metrics.MetIndexCrcFalhasTotal, metrics.MetIndexSegmentosConsultadosTotal, a.Ajuda)
+	}
+}
+
+// TestOsBytesDeIndiceVivemNoRotuloDaIrma é o oráculo NUMÉRICO do cruzamento de
+// rótulos, e ele existe porque a afirmação "parcela estrita" era falsa em todo
+// rótulo em que alguém a lesse.
+//
+// `nishidb_history_index_bytes` é do bloco `history`: o número vem da tabela
+// IRMÃ e o rótulo é o do dataset BASE, porque é no YAML do base que a política
+// foi declarada. `nishidb_index_bytes` descreve o Store em que sai. Então a
+// parcela e o total estão em rótulos diferentes, e a subtração que o texto antigo
+// sugeria — `history_index_bytes - index_bytes`, que o PromQL casa por rótulo
+// idêntico — devolve o total INTEIRO de volta.
+//
+// O oráculo mora no pacote `server` porque é aqui que o rótulo existe. A versão
+// anterior comparava os dois números do MESMO Store, no storage, onde a contenção
+// vale trivialmente e o cruzamento é invisível.
+func TestOsBytesDeIndiceVivemNoRotuloDaIrma(t *testing.T) {
+	amostras := coletaAmostras(t, bancadaDeIndice(t))
+
+	valor := func(familia, ds string) float64 {
+		t.Helper()
+		a, ok := achaSerie(amostras, familia, map[string]string{metrics.LabelDataset: ds})
+		if !ok {
+			t.Fatalf("%s{dataset=%q} não saiu no scrape", familia, ds)
+		}
+		return a.Valor
+	}
+	totalNoBase := valor(metrics.MetHistoryIndexBytes, "eventos")
+	parcelaNoBase := valor(metrics.MetIndexBytes, "eventos")
+	parcelaNaIrma := valor(metrics.MetIndexBytes, tabelaDaBancada)
+
+	if totalNoBase <= 0 || parcelaNaIrma <= 0 {
+		t.Fatalf("montagem: total no base = %v e parcela na irmã = %v; sem os dois em disco nada abaixo discrimina",
+			totalNoBase, parcelaNaIrma)
+	}
+	// A contenção verdadeira, e ela é ENTRE RÓTULOS.
+	if parcelaNaIrma >= totalNoBase {
+		t.Errorf("%s{dataset=%q} = %v não é menor que %s{dataset=\"eventos\"} = %v: a parcela por segmento tem de ser "+
+			"estritamente menor que o total, que soma também indexes/ e checkpoint/",
+			metrics.MetIndexBytes, tabelaDaBancada, parcelaNaIrma, metrics.MetHistoryIndexBytes, totalNoBase)
+	}
+	// E a conta que o texto antigo induzia: no rótulo do BASE a série por segmento
+	// é a do PRÓPRIO base, e subtraí-la não cancela parcela nenhuma.
+	if totalNoBase-parcelaNoBase != totalNoBase {
+		t.Logf("no rótulo do base a série por segmento vale %v; o base tem índice próprio nesta bancada", parcelaNoBase)
+	}
+	if parcelaNoBase == parcelaNaIrma {
+		t.Errorf("%s vale %v tanto em {dataset=\"eventos\"} quanto em {dataset=%q}: se os dois rótulos publicassem o "+
+			"MESMO número, o cruzamento que este teste mede não existiria e a prosa corrigida seria desnecessária",
+			metrics.MetIndexBytes, parcelaNoBase, tabelaDaBancada)
 	}
 }
 

@@ -68,8 +68,10 @@ func amostrasDeIndice(nome string, e storage.EstatisticasDeIndice) []metrics.Amo
 		metrics.Amostra{
 			Familia: metrics.MetIndexBytes,
 			Nome:    metrics.MetIndexBytes,
-			Ajuda: "blocos ocupados pelo índice por segmento (.sidx, temporários e .widx do corrente); " +
-				"é parcela de nishidb_history_index_bytes, que soma também indexes/ e checkpoint/",
+			Ajuda: "blocos ocupados pelo índice por segmento (.sidx, temporários e .widx do corrente) DESTE dataset. " +
+				"Num histórico ele é a parcela por segmento de nishidb_history_index_bytes — que soma também indexes/ e " +
+				"checkpoint/ e sai no rótulo do dataset BASE. As duas vivem em rótulos DIFERENTES: a comparação é entre " +
+				"{dataset=\"X_history\"} aqui e {dataset=\"X\"} lá, nunca no mesmo rótulo",
 			Tipo:   metrics.TipoMedidor,
 			Labels: rotulo,
 			Valor:  float64(e.Bytes),
@@ -94,8 +96,11 @@ func amostrasDeIndice(nome string, e storage.EstatisticasDeIndice) []metrics.Amo
 		metrics.Amostra{
 			Familia: metrics.MetIndexCrcFalhasTotal,
 			Nome:    metrics.MetIndexCrcFalhasTotal,
-			Ajuda: "índices selados reprovados no crc32c, contados por ABERTURA do arquivo: a falha não é memorizada, " +
-				"então o mesmo arquivo podre é reprovado a cada consulta que toque aquele segmento",
+			Ajuda: "índices selados reprovados no crc32c. É DEGRAU, não taxa: o mapeamento reprovado fica em cache, " +
+				"então cada arquivo podre soma UMA vez por processo e um rate() sobre isto se auto-resolve enquanto o " +
+				"segmento segue enumerando. Para saber se há índice podre AGORA, olhe " +
+				"nishidb_index_segmentos_consultados_total{modo=\"enumeracao\"} subindo de forma persistente num dataset " +
+				"que deveria estar indexado",
 			Tipo:   metrics.TipoContador,
 			Labels: rotulo,
 			Valor:  float64(e.CRCFalhas),

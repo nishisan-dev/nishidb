@@ -191,7 +191,8 @@ func (s *Store) reconstroiOsPendentes(ctx context.Context, pendentes []uint32) (
 		if fixo {
 			continue
 		}
-		if err := s.reconstroiUmSegmento(ctx, seg); err != nil {
+		publicou, err := s.reconstroiUmSegmento(ctx, seg)
+		if err != nil {
 			if oSegmentoSaiuDoDataset(err) {
 				// A retenção ou a compaction aposentou o segmento entre a
 				// fotografia da fila e esta varredura. Não é falha da passada e
@@ -205,13 +206,25 @@ func (s *Store) reconstroiOsPendentes(ctx context.Context, pendentes []uint32) (
 			return feitos, fmt.Errorf("reconstruir o índice do segmento %d: %w", seg, err)
 		}
 		feitos++
-		// O contador sobe por segmento CONCLUÍDO, e não por passada: o que o
-		// operador acompanha durante uma migração é a fila drenando, e uma
-		// passada que reconstruiu quarenta segmentos e outra que reconstruiu um
-		// não são o mesmo fato. É também o que separa este número do varreduras,
-		// que conta leituras — inclusive a que terminou sem posting nenhuma e
-		// não publicou arquivo.
-		s.recFeitas.Add(1)
+		// O contador sobe por segmento que PUBLICOU índice, e não por segmento
+		// varrido nem por passada. As três contagens são diferentes e cada uma
+		// tem dono:
+		//
+		//   - `varreduras` conta LEITURAS de segmento, que é o custo;
+		//   - `feitos` conta os visitados nesta passada, que é o que os testes
+		//     da §2.4 afirmam sobre a convergência da fila;
+		//   - `recFeitas` conta os que produziram arquivo, que é o que a série
+		//     nishidb_index_reconstrucoes_total promete.
+		//
+		// Contar aqui o segmento que não publicou seria contar o que não
+		// aconteceu — e pior de todos os jeitos possíveis: o segmento sem campo
+		// indexado em record algum fica na fila DE PROPÓSITO (§2.4), então num
+		// dataset estável ele faria a série crescer para sempre. Uma taxa que
+		// nunca zera é exatamente o sintoma de um moinho, que é o que esta série
+		// existe para denunciar.
+		if publicou {
+			s.recFeitas.Add(1)
+		}
 		if err := s.anotaOPontoFixo(seg); err != nil {
 			return feitos, err
 		}
@@ -237,12 +250,12 @@ func (s *Store) reconstroiOsPendentes(ctx context.Context, pendentes []uint32) (
 // por ter a seção de um campo que deixou de ser indexado tem conjunto faltante
 // VAZIO, e ConstroiIndiceDoSegmento com lista vazia não faz nada. Ele ficaria
 // pendente para sempre, com a seção morta em disco, que é o outro lado da §2.6.
-func (s *Store) reconstroiUmSegmento(ctx context.Context, seg uint32) error {
+func (s *Store) reconstroiUmSegmento(ctx context.Context, seg uint32) (bool, error) {
 	if err := s.entra(); err != nil {
-		return err
+		return false, err
 	}
 	defer s.sai()
-	return s.ConstroiIndiceDoSegmento(ctx, seg, s.camposIndexados)
+	return s.constroiIndiceDoSegmento(ctx, seg, s.camposIndexados)
 }
 
 // oSegmentoSaiuDoDataset separa a corrida BENIGNA — o segmento aposentado entre
@@ -395,8 +408,28 @@ func (s *Store) secoesDoSelado(seg uint32) ([]types.FieldID, error) {
 // escritor pendente. Varredura interrompida não publica índice parcial: o erro
 // sobe antes do Escreve.
 func (s *Store) ConstroiIndiceDoSegmento(ctx context.Context, seg uint32, campos []types.FieldID) error {
+	_, err := s.constroiIndiceDoSegmento(ctx, seg, campos)
+	return err
+}
+
+// constroiIndiceDoSegmento é o corpo, e devolve TAMBÉM se um arquivo de índice
+// foi de fato publicado.
+//
+// O booleano existe por causa da série nishidb_index_reconstrucoes_total, que
+// promete contar "segmentos cujo índice a reconstrução PUBLICOU". Sem ele o
+// contador subia também para o segmento que a varredura visitou e do qual não
+// saiu arquivo nenhum — o segmento sem campo indexado em record algum, que a
+// §2.4 mantém na fila de propósito. Num dataset estável esse segmento faz a
+// série crescer para sempre, e uma taxa que nunca zera é indistinguível de um
+// moinho real: exatamente o defeito que a série existe para denunciar.
+//
+// A distinção não sai do erro nem do `feitos` da passada: os dois já significam
+// outra coisa. `feitos` conta segmentos VARRIDOS, que é o custo da passada e o
+// que os testes da §2.4 afirmam; publicar é o resultado. Um segmento visitado que
+// não publica é trabalho legítimo com produto vazio, não falha.
+func (s *Store) constroiIndiceDoSegmento(ctx context.Context, seg uint32, campos []types.FieldID) (bool, error) {
 	if len(campos) == 0 {
-		return nil
+		return false, nil
 	}
 	// A recusa que sobrou é a que continua verdadeira: campo FORA do conjunto
 	// declarado. Gravar a seção dele produziria um índice que a ingestão não
@@ -413,7 +446,7 @@ func (s *Store) ConstroiIndiceDoSegmento(ctx context.Context, seg uint32, campos
 	// falta" virou pergunta legítima.
 	for _, campo := range campos {
 		if !slices.Contains(s.camposIndexados, campo) {
-			return fmt.Errorf("%w: reconstrução do segmento %d pedida para o campo %d, que o dataset não indexa (indexados: %v); "+
+			return false, fmt.Errorf("%w: reconstrução do segmento %d pedida para o campo %d, que o dataset não indexa (indexados: %v); "+
 				"a seção existiria sem ninguém para alimentá-la",
 				ErrInvalidArgument, seg, campo, s.camposIndexados)
 		}
@@ -424,13 +457,13 @@ func (s *Store) ConstroiIndiceDoSegmento(ctx context.Context, seg uint32, campos
 	// permanente, que é exatamente o desfecho que esta tarefa existe para
 	// eliminar. O índice do corrente é o WIP, e ele se reconstrói na abertura.
 	if corrente := s.curSegID.Load(); seg == corrente {
-		return fmt.Errorf("%w: o segmento %d é o corrente; o índice dele é o WIP, não um .sidx imutável",
+		return false, fmt.Errorf("%w: o segmento %d é o corrente; o índice dele é o WIP, não um .sidx imutável",
 			ErrInvalidArgument, seg)
 	}
 	caminho := segindex.CaminhoSelado(s.dirDeDados(), seg)
 	cobertura, err := s.coberturaDaReconstrucao(caminho, campos)
 	if err != nil {
-		return err
+		return false, err
 	}
 	e := segindex.NovoEscritor()
 	if err := s.varreOsRecordsDoSegmento(ctx, seg, cobertura,
@@ -438,7 +471,7 @@ func (s *Store) ConstroiIndiceDoSegmento(ctx context.Context, seg uint32, campos
 			e.Adiciona(campo, h, row)
 			return nil
 		}); err != nil {
-		return err
+		return false, err
 	}
 	if e.Vazio() {
 		// Nenhuma posting sob a cobertura inteira: o índice CORRETO deste
@@ -450,10 +483,10 @@ func (s *Store) ConstroiIndiceDoSegmento(ctx context.Context, seg uint32, campos
 		// certo; deixá-lo seria manter em disco um arquivo que ninguém consulta
 		// e que o IndexBytes conta, que é o mesmo modo de falha que o .widx
 		// órfão obrigou a fechar.
-		return s.removeSeladoObsoleto(seg, caminho)
+		return false, s.removeSeladoObsoleto(seg, caminho)
 	}
 	if err := e.Escreve(caminho, seg); err != nil {
-		return err
+		return false, err
 	}
 	// A evição vem DEPOIS do rename, e sem ela a reconstrução seria trabalho
 	// invisível: o s.selados guarda o mapeamento do arquivo ANTERIOR, e o mmap
@@ -469,7 +502,7 @@ func (s *Store) ConstroiIndiceDoSegmento(ctx context.Context, seg uint32, campos
 	// voo. A varredura que sobrevive lê o arquivo ANTIGO até terminar, o que é
 	// correto: índice é superconjunto de candidatos, e o executor revalida (§44).
 	s.esqueceSelado(seg)
-	return nil
+	return true, nil
 }
 
 // coberturaDaReconstrucao decide quais campos o arquivo novo vai cobrir: os

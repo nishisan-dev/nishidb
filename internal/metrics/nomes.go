@@ -319,12 +319,22 @@ const (
 	// MetIndexBytes são os BLOCOS do índice por segmento: os .sidx selados, os
 	// temporários e os .widx do corrente.
 	//
-	// É parcela ESTRITA de MetHistoryIndexBytes, que soma também indexes/ e
-	// checkpoint/, e as duas saem da mesma função de disco — uma definição, dois
+	// Ela é parcela estrita de MetHistoryIndexBytes — que soma também indexes/ e
+	// checkpoint/ —, e as duas saem da mesma função de disco: uma definição, dois
 	// leitores. Separada porque é ela que carrega a promessa central do ciclo, e
 	// promessa sem número é opinião: com a tabela histórica em regime, ESTE valor
 	// para de crescer. Hoje o índice é o único componente que não para, mesmo com
 	// a retenção funcionando e o dataset estável.
+	//
+	// AS DUAS SÉRIES NÃO SE COMPARAM NO MESMO RÓTULO, e isto é o oposto de um
+	// detalhe: MetHistoryIndexBytes é do bloco `history`, que descreve a tabela
+	// IRMÃ e sai rotulado pelo dataset BASE, onde o operador declarou a política;
+	// esta descreve a mecânica do Store em que sai, e num par X/X_history a
+	// parcela vive em {dataset="X_history"}. Um `history_index_bytes -
+	// index_bytes` casa por rótulo idêntico (o default do PromQL) e devolve o
+	// número inteiro de volta, porque no rótulo do base esta série é o índice do
+	// PRÓPRIO base — tipicamente zero. A comparação certa é entre rótulos
+	// diferentes.
 	MetIndexBytes = "nishidb_index_bytes"
 	// MetIndexReconstrucoesTotal conta os segmentos cujo índice a reconstrução
 	// publicou desde a abertura do dataset. É a taxa que diz se a fila está
@@ -341,13 +351,21 @@ const (
 	// isso ela NASCE EM 1 num dataset com campo indexado — o valor verdadeiro na
 	// subida — e não em zero como os contadores ao lado.
 	MetIndexReconstrucaoAtiva = "nishidb_index_reconstrucao_ativa"
-	// MetIndexCrcFalhasTotal conta os .sidx reprovados no crc32c.
+	// MetIndexCrcFalhasTotal conta os .sidx reprovados no crc32c, e é DEGRAU — não
+	// taxa.
 	//
-	// Uma vez por ABERTURA do arquivo, não por processo: a falha não é memorizada,
-	// então o mesmo arquivo podre é reprovado a cada consulta que toque aquele
-	// segmento. Lê-se a TAXA — proporcional ao tráfego sobre o segmento doente, e
-	// zerada quando a reconstrução publicar o arquivo bom por cima. O total
-	// acumulado NÃO é "tantos arquivos corrompidos".
+	// Ela sobe uma vez por ABERTURA do arquivo, e o garanteSelado publica no cache
+	// o mapeamento reprovado, de modo que a abertura acontece uma vez por segmento
+	// por processo. Um alerta escrito com rate() sobre ela dá um pico e se
+	// auto-resolve em minutos, enquanto o segmento segue enumerando
+	// indefinidamente — e essa foi a leitura errada que a primeira redação desta
+	// série induziu.
+	//
+	// Quem responde "há índice podre AGORA" é
+	// MetIndexSegmentosConsultadosTotal{modo="enumeracao"} subindo de forma
+	// persistente num dataset que deveria estar indexado. Esta responde "quantos
+	// arquivos já foram pegos desde a subida", que é o gatilho de investigar, não
+	// de acompanhar.
 	MetIndexCrcFalhasTotal = "nishidb_index_crc_falhas_total"
 	// MetIndexSegmentosConsultadosTotal conta, pelo rótulo LabelModo, quantos
 	// segmentos cada Lookup resolveu por índice e quantos por enumeração (§3.4).
