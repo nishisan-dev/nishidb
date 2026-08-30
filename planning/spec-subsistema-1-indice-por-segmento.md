@@ -544,7 +544,20 @@ Em ordem crescente de segmento:
 | Selado, **com** seção do campo | fatia contígua do array de postings | **zero** |
 | Corrente (WIP) | caminhada da cadeia, materializada em `contagem` elementos | uma, de tamanho exato |
 | Sem índice — histórico | a faixa `[primeiro, primeiroDoSeguinte)` | zero |
-| Sem índice — materializado | rowIds cuja location aponta para o segmento | zero |
+| Sem índice — materializado | **colapsa a consulta**: ver abaixo | zero |
+
+**No materializado, UM segmento sem índice colapsa a consulta inteira numa
+caminhada única do `locations.idx`** — todo rowId com location publicada vira
+candidato, como num full scan. A versão anterior desta tabela dava a cada
+segmento sem índice uma fonte própria filtrando pelo *dono* da location, e essa
+forma tinha uma corrida de falso negativo que a revisão de branch encontrou: o
+dono é lido no instante da **iteração**, o WIP do corrente é um snapshot da
+**construção**, e a linha que um update concorrente movesse entre os dois
+instantes sumia das duas fontes — o único desfecho que a revalidação do §44 não
+conserta. A caminhada única lê cada location UMA vez e a linha sai por onde
+quer que more; de quebra custa uma passada onde a forma anterior custava uma
+por segmento sem índice. O histórico não precisa do colapso: lá não existe
+update, e as faixas de rowId são estáticas.
 
 "Sem índice" inclui o **segmento selado cuja tabela de seções não tem o campo** —
 o que acontece entre acrescentar o campo ao schema (§2.6) e a reconstrução
