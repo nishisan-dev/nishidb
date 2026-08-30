@@ -1178,53 +1178,41 @@ publish new location
 
 # 40. Índices secundários
 
-Tipos v1:
+O desenho original (v1) previa dois motores:
 
 ```text
 bitmap
 hash
 ```
 
+Os dois foram unificados num índice único por segmento — densidade virou
+decisão de codificação, não de configuração —, e a escolha entre os dois
+motores deixou de existir: `index: true` é a única grafia, e o desenho
+autoritativo vive em `planning/spec-subsistema-1-indice-por-segmento.md`. §41
+e §42 abaixo descrevem os dois motores como eram declarados nesta v1, para
+registro de como se chegou aqui — não como configuração vigente.
+
 ---
 
 # 41. Bitmap indexes
 
-Usar para baixa cardinalidade.
+Descontinuado. O desenho original reservava este motor para baixa
+cardinalidade (`status`, `protocol`, `serviceType`, `terminateCause`), com um
+bitmap de ~1 MB para 8 milhões de rows, file-backed.
 
-Exemplo:
-
-```text
-status
-protocol
-serviceType
-terminateCause
-```
-
-Um bitmap de 8 milhões de rows:
-
-```text
-~1 MB
-```
-
-Os bitmaps devem ser file-backed sempre que possível.
+Unificado com o hash secondary index (§42) num índice único por segmento —
+ver `planning/spec-subsistema-1-indice-por-segmento.md` para o desenho atual.
 
 ---
 
 # 42. Hash secondary indexes
 
-Utilizar apenas quando explicitamente configurados.
+Descontinuado. O desenho original reservava este motor para campos de alta
+cardinalidade (`sessionId`, `username`, `callingStationId`), tratados como
+recurso caro e nunca habilitados automaticamente.
 
-Devem ser tratados como recursos potencialmente caros.
-
-Campos de alta cardinalidade como:
-
-```text
-sessionId
-username
-callingStationId
-```
-
-não devem ganhar índice automaticamente.
+Unificado com o bitmap index (§41) num índice único por segmento — ver
+`planning/spec-subsistema-1-indice-por-segmento.md` para o desenho atual.
 
 ---
 
@@ -2056,25 +2044,27 @@ Exemplo:
 
             data/
                 segment-00000001.dat
+                segment-00000001.sidx          # índice selado do segmento (todos os campos indexados)
                 segment-00000002.dat
+                segment-00000002-00042.widx    # índice do segmento CORRENTE, um arquivo por campo
 
             indexes/
                 primary.idx
                 locations.idx
                 sequences.idx
 
-                bitmap/
-                    status/
-                    protocol/
-
-                hash/
-                    ip/
-                    nas/
-
             checkpoint/
                 manifest.bin
                 kafka.offsets
 ```
+
+O `bitmap/` e o `hash/` do desenho original não existem mais como diretórios
+à parte (fato desatualizado desde a unificação dos dois motores num índice
+único por segmento): o índice secundário mora AO LADO do `.dat`, dentro de
+`data/` — um `.sidx` por segmento já selado, com a seção de todo campo
+indexado, ou um `.widx` por (segmento corrente, campo) enquanto ele ainda
+recebe escrita. Desenho atual em
+`planning/spec-subsistema-1-indice-por-segmento.md`.
 
 ---
 
@@ -2103,13 +2093,10 @@ TTL metadata:
 ~64 MB ou estrutura equivalente
 ```
 
-Bitmap indexes:
-
-```text
-~1 MB por bitmap de 8M rows
-```
-
-Hash indexes dependem fortemente de cardinalidade.
+Índice secundário por segmento (bitmap e hash unificados — §40): o tamanho
+depende da cardinalidade do campo E do tamanho do segmento, não mais de um
+dicionário global por dataset inteiro. Os números medidos vivem em
+`planning/spec-subsistema-1-indice-por-segmento.md`, não aqui.
 
 ---
 
@@ -2407,8 +2394,8 @@ nishidb/
 │   │   └── compaction/
 │   ├── index/
 │   │   ├── primary/
-│   │   ├── bitmap/
-│   │   └── hash/
+│   │   ├── segindex/       # índice único por segmento (bitmap e hash unificados, §40)
+│   │   └── valuekey/
 │   ├── query/
 │   │   ├── lexer/
 │   │   ├── parser/
