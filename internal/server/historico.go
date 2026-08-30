@@ -163,7 +163,7 @@ func (s *Servidor) ligaRetencao(ctx context.Context) {
 		d.st.IniciaRetencao(ctx, storage.LimitesDeRetencao{
 			ExpireAfterWrite: h.ExpireAfterWrite,
 			MaxBytes:         h.MaxBytes,
-			Janela:           janelaDaSpec(h),
+			Janela:           janelaDoDataset(d),
 		})
 		comRetencao = append(comRetencao, d.nome)
 	}
@@ -173,6 +173,57 @@ func (s *Servidor) ligaRetencao(ctx context.Context) {
 	sort.Strings(comRetencao)
 	s.log.Info("retencao.ligada",
 		"o motor de retenção das tabelas históricas está de pé", "tabelas", comRetencao)
+}
+
+// ligaReconstrucao sobe o laço que consome a fila de reconstrução do índice por
+// segmento (§2.4), e é ele que faz `index: true` num dataset já povoado
+// significar alguma coisa: sem ele os segmentos entram na fila e ninguém a
+// drena, então o campo continua enumerando indefinidamente.
+//
+// Em TODOS os datasets, e não só nos históricos, porque a reconstrução vale para
+// os dois modos (decisão D1): o backfill de um campo acrescentado ao schema
+// acontece no materializado, onde não há passada de retenção nenhuma. É a
+// diferença entre ela e a expulsão da janela, que roda dentro da retenção
+// justamente por ser exclusiva do histórico.
+//
+// Depois da retenção, na mesma ordem do §51 que a compaction e a retenção já
+// seguem: primeiro quem DEVOLVE disco, depois quem o consome. Uma reconstrução
+// que subisse antes gastaria varredura em segmentos que a primeira passada de
+// retenção vai aposentar em seguida.
+func (s *Servidor) ligaReconstrucao(ctx context.Context) {
+	var comReconstrucao []string
+	for _, d := range s.datasets {
+		d.st.IniciaReconstrucao(ctx, janelaDoDataset(d))
+		if d.st.ReconstrucaoAtiva() {
+			comReconstrucao = append(comReconstrucao, d.nome)
+		}
+	}
+	if len(comReconstrucao) == 0 {
+		return
+	}
+	sort.Strings(comReconstrucao)
+	s.log.Info("reconstrucao.ligada",
+		"o laço de reconstrução do índice por segmento está de pé", "datasets", comReconstrucao)
+}
+
+// janelaDoDataset devolve a janela de indexação que vale para um dataset, e ela
+// é UMA função porque os DOIS consumidores da janela — a expulsão, dentro da
+// retenção, e o laço de reconstrução — têm de responder pela MESMA conta.
+//
+// Se eles discordarem, a que responde "sim" reconstrói o que a outra acabou de
+// apagar, para sempre, a até 512 MiB de leitura por volta. É o moinho da §4, e a
+// única defesa contra ele é não haver dois lugares onde a resposta é decidida.
+//
+// O dataset MATERIALIZADO recebe a janela INFINITA mesmo quando declara
+// `history:`, e essa linha é a armadilha que a função existe para fechar: o bloco
+// `history` de um base descreve a tabela IRMÃ, e traduzi-lo aqui daria uma janela
+// finita para um store materializado — que o storage recusa, com razão, porque lá
+// a linha vive no segmento corrente independente da idade dela.
+func janelaDoDataset(d *dataset) storage.JanelaDeIndice {
+	if !d.ehHistorico {
+		return storage.JanelaDeIndice{}
+	}
+	return janelaDaSpec(d.spec.Historico)
 }
 
 // janelaDaSpec traduz o bloco `history.index` na política que o storage

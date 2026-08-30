@@ -350,6 +350,23 @@ type Store struct {
 	// (open → mmap → close), e 500 VMAs num teto padrão de 65.530 não é
 	// pressão.
 	selados map[uint32]*segindex.Selado
+	// selGeracao conta as EVIÇÕES do mapa de selados, e existe por causa de uma
+	// janela que só passou a ser alcançável quando o laço da §2.4 subiu: o
+	// garanteSelado abre o arquivo FORA de lock nenhum (o crc32c de um índice
+	// grande não pode rodar sob o selMu, que é o lock da rotação), então entre
+	// abrir e publicar cabe uma reescrita inteira da reconstrução. Sem a geração,
+	// o mapeamento VELHO era publicado depois da evição e o segmento respondia
+	// pelo índice anterior — sem a seção do campo novo, portanto ENUMERANDO — até
+	// a próxima abertura do dataset, ainda prendendo o inode substituído.
+	//
+	// Ela é um contador GLOBAL e não por segmento, e a diferença é só de custo:
+	// uma evição de qualquer segmento faz um mapeamento em voo de outro ser
+	// descartado, o que custa reabrir o arquivo na consulta seguinte. Errar para
+	// esse lado é o barato; a alternativa (um contador por segmento) seria um
+	// segundo mapa a podar contra a lista de segmentos vivos.
+	//
+	// Protegida pelo selMu, como os dois mapas.
+	selGeracao uint64
 	// selMu protege os DOIS mapas de índice por segmento — selados e wips —, e
 	// é FOLHA na ordem de locks: nada tomado sob ele toma wmu ou aposMu. Ele
 	// existe porque os mapas são escritos pela aposentadoria e pela rotação e
@@ -422,6 +439,59 @@ type Store struct {
 	retEmVoo       sync.WaitGroup
 	retAtiva       atomic.Bool
 	retBuf         []byte
+
+	// Ciclo de vida do laço de RECONSTRUÇÃO do índice por segmento (§2.4), no
+	// molde do da compaction e do da retenção: recMu guarda o par
+	// cancela/emVoo, recAtiva é o medidor observável e recEmVoo é o que o Close
+	// aguarda antes do quiesce.
+	//
+	// Ele é goroutine PRÓPRIA, e não mais um trecho da passada de retenção como a
+	// expulsão da janela, porque vale para os DOIS modos de dataset: o backfill de
+	// um campo acrescentado ao schema (§2.6) acontece no materializado, onde não
+	// há passada de retenção nenhuma.
+	recMu      sync.Mutex
+	recCancela context.CancelFunc
+	recEmVoo   sync.WaitGroup
+	recAtiva   atomic.Bool
+	// recPassadaMu serializa as passadas de reconstrução, como o retPassadaMu faz
+	// com as de retenção: duas concorrentes varreriam o mesmo segmento e
+	// publicariam o mesmo arquivo duas vezes.
+	//
+	// Ele é o lock MAIS EXTERNO das duas cadeias que a passada percorre —
+	// recPassadaMu → retPassadaMu (dentro da pendência) e recPassadaMu → vida
+	// (dentro de cada reconstrução) —, e nada tomado sob os outros dois volta a
+	// tomá-lo. É também ele que dá o happens-before do recPontoFixo, tocado só
+	// dentro da passada.
+	recPassadaMu sync.Mutex
+	// recPontoFixo é o que impede o MOINHO da fila-superconjunto.
+	//
+	// A fila é derivada do disco e é um superconjunto do trabalho real: um
+	// segmento cujos records não trazem nenhum campo declarado continua PENDENTE
+	// depois de reconstruído, porque o Escritor vazio não cria arquivo e
+	// "ausente" é pendência. Sem memória, o laço o varreria de novo a cada
+	// passada, para sempre — até 512 MiB de leitura por volta, e é isso que
+	// separa "o laço não converge" de "o laço não tem o que fazer".
+	//
+	// O que se guarda é o conjunto de seções que o arquivo tinha DEPOIS da
+	// reconstrução, e não um "já tentei": os records de um segmento selado são
+	// imutáveis e a cobertura é determinística, então repetir a varredura daria
+	// exatamente esse mesmo conjunto. Guardá-lo é o que torna a memória
+	// AUTO-INVALIDÁVEL — se a janela expulsar o .sidx, o conjunto em disco deixa
+	// de casar e o segmento é reconstruído, que é justamente o gatilho "janela
+	// alargada" da §2.4. Um simples booleano transformaria aquele gatilho em
+	// falso negativo permanente.
+	//
+	// Em MEMÓRIA e podado a cada passada contra a fila: o que sai da fila (porque
+	// ficou completo, foi aposentado ou saiu da janela) sai daqui junto.
+	recPontoFixo map[uint32][]types.FieldID
+	// varreduras conta as leituras COMPLETAS de segmento feitas para construir
+	// índice — a da abertura (o WIP do corrente) e as da reconstrução.
+	//
+	// É o observável do custo que decide esta parte do produto: a varredura é o
+	// preço inteiro da operação, e "o laço convergiu" só se distingue de "o laço
+	// está moendo" contando quantas ele fez. É também o que prova que os campos
+	// pendentes de um segmento são resolvidos numa leitura só.
+	varreduras atomic.Int64
 	// retPorTempo e retPorTamanho contam os segmentos aposentados por cada
 	// política desde a subida. Duas séries e não uma: qual das duas está
 	// decidindo é a pergunta que separa "o prazo está sendo honrado" de "o
@@ -2207,6 +2277,12 @@ func (s *Store) Close() error {
 	// E a retenção pela terceira vez a mesma razão: a passada dela renomeia e
 	// apaga arquivo, e lê o segR por pread na busca binária.
 	s.ParaRetencao()
+	// A reconstrução é a quarta, e nela a razão é a mais direta das quatro: a
+	// varredura de um segmento inteiro é uma leitura pelo s.segR, que o
+	// fechaIndices/segR.Close logo abaixo fecha inteiro. Sem o join aqui, ela
+	// colheria os.ErrClosed no meio de até 512 MiB de leitura — e o laço
+	// anunciaria como falha o que é o encerramento normal do processo.
+	s.ParaReconstrucao()
 
 	s.vida.Lock()
 	defer s.vida.Unlock()

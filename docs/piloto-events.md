@@ -372,9 +372,9 @@ cobriria só o que viesse dali para frente — foi por isso que os dois subiram
 junto com a tabela, e não numa segunda passada depois de medir. Com o índice por
 segmento a recusa saiu: declarar um campo depois é aceito, responde certo desde o
 primeiro instante (segmento sem a seção enumera) e agenda a reconstrução dos
-segmentos antigos. O que ainda não existe é quem CONSUMA essa fila, e é por isso
-que o débito 22 segue aberto — na prática, os segmentos anteriores à declaração
-continuam varrendo.
+segmentos antigos. Quem CONSOME essa fila é o laço de reconstrução, que subiu no
+ciclo do índice por segmento e fechou o débito 22 — os segmentos anteriores à
+declaração varrem só até a reconstrução alcançar cada um deles.
 
 ### A pegadinha do reprocessamento
 

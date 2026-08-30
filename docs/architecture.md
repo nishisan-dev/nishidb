@@ -1116,8 +1116,8 @@ conhecê-las. Cada uma tem dono em [`debitos.md`](debitos.md).
   - **Remover** também é aceito: as seções param de ser escritas, e as que
     existem saem na reescrita do índice daquele segmento.
 
-  **E os segmentos antigos passaram a ser AGENDADOS**, que é metade do que o
-  débito 22 pede. A pendência de reconstrução é decidida por **(segmento,
+  **E os segmentos antigos passaram a ser AGENDADOS**, que é a primeira metade
+  do débito 22. A pendência de reconstrução é decidida por **(segmento,
   campo)**: a fila compara o conjunto de seções do `.sidx` com o conjunto
   indexado do dataset, nos dois sentidos — seção que falta agenda a
   reconstrução, seção de campo que deixou de ser indexado agenda a reescrita que
@@ -1126,11 +1126,22 @@ conhecê-las. Cada uma tem dono em [`debitos.md`](debitos.md).
   que o arquivo já cobria e continuam declarados: sem isso, a passada seguinte
   reescreveria com o campo antigo e perderia o novo.
 
-  **A outra metade não existe, e é o que mantém o débito 22 ABERTO:** nada
-  CONSOME a fila. Enquanto a goroutine de reconstrução não sobe, os segmentos
-  agendados **enumeram indefinidamente** — correto e mais caro, que é o mesmo
-  desfecho de antes por outro motivo —, e só é drenado o que alguém drenar
-  chamando a reconstrução na mão.
+  **E a outra metade fechou o débito 22:** uma goroutine por dataset CONSOME a
+  fila — primeira passada imediata, cochilo pelo mesmo orçamento de ciclo de
+  trabalho da compaction, cancelamento por contexto e `Close` que cancela e
+  aguarda. O servidor a liga em todos os datasets, e não só nos históricos: a
+  reconstrução vale para os dois modos, e o backfill de um campo novo acontece
+  no materializado, onde não há passada de retenção nenhuma.
+
+  A unidade de trabalho é (segmento, campo) e o processamento é por SEGMENTO —
+  os campos pendentes de um segmento saem na mesma leitura sequencial, porque
+  ler duas vezes para dois campos pagaria o dobro pelo I/O, que é o custo
+  inteiro da operação. O laço **não trata a fila como trabalho que encolhe**:
+  ela é um superconjunto por construção (um segmento em que um campo declarado
+  não aparece em record nenhum fica pendente para sempre), então ele guarda o
+  conjunto de seções que deixou em cada arquivo e só refaz quando o disco deixa
+  de ser aquilo — é isso que o faz convergir sem deixar de reagir à janela
+  alargada, que remove o `.sidx` de um segmento vivo.
 
 - **Duas pausas visíveis, aceitas no M1:** o rehash da primary **pausa a
   ingestão** enquanto redistribui os slots, e o `msync` do checkpoint **pausa o
@@ -1320,10 +1331,11 @@ sumiria do `SELECT` por causa de uma entrada de sumário errada. O preço dessa
 separação é ter de provar que as duas concordam, e é o que
 `TestAgendaConcordaComPrazoVencidoSobCargaAleatoria` faz.
 
-**A adoção não exige recriação, e isto NÃO é o débito 22.** O débito 22 é sobre
+**A adoção não exige recriação, e isto NÃO é o débito 22.** O débito 22 era sobre
 o índice secundário: ele indexa um valor extraído do payload, e reconstruí-lo
 exige ler todo record de todo segmento — conta que o índice por segmento partiu
-em uma varredura por segmento, mas não eliminou. A agenda deriva de `expiry.idx`,
+em uma varredura por segmento, cancelável e paga em segundo plano, mas não
+eliminou. A agenda deriva de `expiry.idx`,
 `prazos.idx` e `locations.idx`, que já estão populados, densos e em mmap — zero
 records lidos, zero dicionário tocado. Um dataset existente ganha a agenda ao
 subir o binário novo.
@@ -1821,15 +1833,17 @@ quem só deveria raspar `/metrics`.
 
 ## O que ainda não existe
 
-TTL e tombstones por retenção (M6), o **backfill da tabela histórica** (ela
+TTL e tombstones por retenção (M6) e o **backfill da tabela histórica** (ela
 começa vazia quando é ligada, e o dataset base não guarda os eventos que a
-preencheriam), e o **backfill do índice secundário** (débito 22). Este último
-andou e não chegou: declarar um campo indexado sobre um dataset que já tem linhas
-deixou de ser recusado, e os segmentos antigos passaram a ser AGENDADOS para
-reconstrução, por (segmento, campo) — mas **nada consome a fila** até a goroutine
-de reconstrução subir, então eles enumeram indefinidamente. Acrescentar `extract`
-a um dataset com linhas continua sendo recusado, e ali a razão é outra, que
-nenhuma reconstrução resolve: o valor extraído não existe nos records já
+preencheriam). O **backfill do índice secundário** (débito 22) SAIU desta lista:
+declarar um campo indexado sobre um dataset que já tem linhas deixou de ser
+recusado, os segmentos antigos são agendados por (segmento, campo) e a goroutine
+de reconstrução drena a fila sozinha, em todos os datasets. O que sobrou dali é
+um caso só, e ele tem número próprio (débito 103): o `.sidx` reprovado no
+`crc32c` não é reagendado, porque a fila lê a tabela de seções sem conferir crc —
+o segmento responde por enumeração até alguém apagar o arquivo. Acrescentar
+`extract` a um dataset com linhas continua sendo recusado, e ali a razão é outra,
+que nenhuma reconstrução resolve: o valor extraído não existe nos records já
 gravados, e não há de onde derivá-lo. **A compaction saiu desta lista no M4** e está
 descrita acima; **autenticação e TLS saíram nesta fase (Fase 11)** e estão
 descritas em "Segurança: autenticação e TLS" — o que falta ali é

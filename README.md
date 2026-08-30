@@ -45,13 +45,13 @@ e sem tocar no documento original — é o que torna `WHERE persistent.probeIpNo
 `SELECT *` e são pedidas por nome, por `persistent.*` ou pelo caminho. O
 namespace `_meta` responde por SQL o que o dataset tem. No caminho, o teto de
 65.535 campos do dicionário deixou de **derrubar o writer para sempre**: ele
-tem `maxCols`, política de estouro e contador. O que ainda falta é o **backfill**
-do índice: declarar um campo indexado sobre um dataset que já tem linhas deixou
-de ser recusado — a consulta responde certo desde o primeiro instante — e os
-segmentos antigos passaram a ser agendados para reconstrução, campo a campo, mas
-nada consome essa fila ainda, e até lá eles enumeram (débito 22). Acrescentar
-`extract` a um dataset com linhas continua recusado, e ali a razão é outra: o
-valor extraído não existe nos records já gravados.
+tem `maxCols`, política de estouro e contador. O **backfill** do índice fechou:
+declarar um campo indexado sobre um dataset que já tem linhas deixou de ser
+recusado — a consulta responde certo desde o primeiro instante —, os segmentos
+antigos são agendados para reconstrução campo a campo e um laço em segundo plano
+drena essa fila sozinho (débito 22). Acrescentar `extract` a um dataset com
+linhas continua recusado, e ali a razão é outra: o valor extraído não existe nos
+records já gravados.
 
 **Dois clients do protocolo remoto, entregues.** A **Fase 7** (driver JDBC,
 §70-73) saiu — ela esperava a autenticação, porque publicar um driver antes
@@ -560,10 +560,10 @@ arquivo e não tem a seção do campo novo — é agendado para ser refeito. Rem
 campo entra pela mesma porta, no sentido inverso: a seção que sobrou sai na
 reescrita.
 
-**A ressalva é de custo, e vale conhecer antes de declarar:** por enquanto
-**ninguém consome essa fila** — o laço de reconstrução em segundo plano ainda não
-existe (débito 22) —, então os segmentos antigos varrem em vez de indexar. A
-resposta é a mesma; o preço não.
+**A ressalva é de custo, e vale conhecer antes de declarar:** a fila é drenada
+por um laço em segundo plano, um segmento por vez, com cochilo entre as passadas
+— então os segmentos antigos varrem em vez de indexar até a reconstrução alcançar
+cada um. A resposta é a mesma desde o primeiro instante; o preço não.
 
 **`index: hash` e `index: bitmap` foram substituídos por `index: true`.** A
 distinção de cardinalidade que as duas grafias carregavam desapareceu com os

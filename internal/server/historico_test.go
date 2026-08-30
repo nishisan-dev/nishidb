@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/logging"
 	"github.com/nishisan-dev/nishidb/internal/protocolo"
@@ -283,5 +284,78 @@ func TestOStatsPublicaAJanelaDeclaradaEAEfetiva(t *testing.T) {
 	}
 	if !achou {
 		t.Fatal("nenhum dataset publicou o bloco history no /v1/stats")
+	}
+}
+
+// TestAReconstrucaoSobeNosDoisModosComAJanelaCerta é o que faz o débito 22
+// fechar no PRODUTO e não só no storage: o laço da §2.4 tem de estar de pé, e
+// com a janela certa, em cada dataset aberto — senão o operador declara
+// `index: true` num campo já povoado e o campo continua enumerando para sempre.
+//
+// A spec declara `history.index.window`, e é isso que arma a armadilha que o
+// janelaDoDataset existe para fechar: o bloco `history` de um dataset BASE
+// descreve a tabela IRMÃ, e traduzi-lo para o base — que é materializado — daria
+// uma janela finita que o storage recusa, com razão. Nesse caso o base não subiria
+// o laço e sairia o `reconstrucao.janela_recusada` no log; as duas asserções
+// abaixo são as duas metades disso.
+func TestAReconstrucaoSobeNosDoisModosComAJanelaCerta(t *testing.T) {
+	a := novoAmbienteCom(t, blocoPadrao)
+	// O `index: true` entra nos DOIS lados: no bloco history (a irmã) e no schema
+	// do base. É o que faz este teste medir os dois modos de dataset — a
+	// reconstrução vale para ambos (D1), e é só no materializado que a janela tem
+	// de ser trocada pela infinita.
+	spec := strings.Replace(specComHistorico,
+		"  fields:\n    id:\n      index: true\n",
+		"  index:\n    window: 6h\n  fields:\n    id:\n      index: true\n", 1)
+	spec = strings.Replace(spec, "    severity:\n      type: int64\n",
+		"    severity:\n      type: int64\n      index: true\n", 1)
+	a.escreveDataset("eventos", spec)
+	registro := &registroDoServidor{}
+	srv, err := server.Novo(a.carrega(), server.Opcoes{
+		Log: logging.New(registro, logging.FormatoTexto, slog.LevelInfo),
+	})
+	if err != nil {
+		t.Fatalf("subida: %v", err)
+	}
+	roda(t, srv)
+
+	// O ligaReconstrucao roda dentro do Roda, que é assíncrono — ao contrário do
+	// aviso da janela inócua, que sai do Novo. Esperar pelo evento é o que separa
+	// "não subiu" de "ainda não subiu".
+	linha := esperaLinhaDoLog(t, registro, "reconstrucao.ligada")
+	if strings.Contains(registro.String(), "reconstrucao.janela_recusada") {
+		t.Fatalf("a reconstrução recusou a janela de algum dataset: a janela do materializado é infinita por "+
+			"construção, e o bloco history dele descreve a IRMÃ\n%s", registro.String())
+	}
+	// Os nomes são conferidos com o delimitador, e não por substring solta:
+	// "eventos" é prefixo de "eventos_history", então um Contains cru diria que o
+	// base subiu sempre que a irmã tivesse subido — exatamente o caso que o
+	// janelaDoDataset pode quebrar.
+	for _, nome := range []string{"[eventos ", " eventos_history]"} {
+		if !strings.Contains(linha, nome) {
+			t.Errorf("o laço de reconstrução não subiu para %q: a fila daquele dataset não é drenada por ninguém, "+
+				"e o índice declarado nunca alcança os segmentos já selados\n%s", nome, linha)
+		}
+	}
+}
+
+// esperaLinhaDoLog devolve a linha que carrega o evento nomeado, esperando por
+// ela até um prazo. Falha nomeando o evento que faltou: "o evento não apareceu" e
+// "apareceu sem o dataset" são falhas diferentes, e um Contains sobre o log
+// inteiro as confundiria.
+func esperaLinhaDoLog(t *testing.T, registro *registroDoServidor, evento string) string {
+	t.Helper()
+	prazo := time.Now().Add(30 * time.Second)
+	for {
+		log := registro.String()
+		for _, linha := range strings.Split(log, "\n") {
+			if strings.Contains(linha, "event="+evento) {
+				return linha
+			}
+		}
+		if time.Now().After(prazo) {
+			t.Fatalf("o evento %q não saiu no log:\n%s", evento, log)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }

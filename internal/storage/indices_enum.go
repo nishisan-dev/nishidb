@@ -114,10 +114,17 @@ func (s *Store) fontesDoCampo(campo types.FieldID, h uint64) ([]segindex.Fonte, 
 // binário não lê, ou corrompido é dado DERIVADO faltando, e a resposta correta
 // para dado derivado faltando é derivá-lo de novo — ou, aqui, responder sem
 // ele. Subir o erro transformaria um índice podre em consulta indisponível
-// sobre dado íntegro. Quem precisa CURAR o arquivo (apagá-lo, logar ERROR e
-// contar a métrica) é o laço de reconstrução, e ele não existe ainda: até lá o
-// dataset responde certo e devagar, que é exatamente o estado de qualquer
-// segmento fora da janela de indexação.
+// sobre dado íntegro. O dataset responde certo e devagar, que é exatamente o
+// estado de qualquer segmento fora da janela de indexação.
+//
+// O QUE CONTINUA SEM DONO é o arquivo REPROVADO NO CRC. O laço de reconstrução
+// da §2.4 já existe e drena a fila, mas a fila é derivada da tabela de seções,
+// que não confere crc (segindex.CamposSelados, e ela não pode: são até 2,25 GB
+// por arquivo a cada passada) — então um .sidx corrompido continua parecendo
+// completo para ela. Curá-lo exige que quem detecta a divergência AQUI apague o
+// arquivo, para o segmento voltar a ser pendente por AUSÊNCIA; é o gatilho 3 da
+// §2.4, e ele fica registrado no débito 22 como o resíduo que a Tarefa 14 não
+// fechou.
 func (s *Store) fonteIndexada(seg, corrente uint32, campo types.FieldID, h uint64) (segindex.Fonte, bool) {
 	if seg == corrente {
 		return s.fonteDoWIP(campo, h)
@@ -167,9 +174,19 @@ func (s *Store) fonteIndexada(seg, corrente uint32, campo types.FieldID, h uint6
 // O que continua fora daqui é o PIN de segmento (subsistema 3), que é outra
 // pergunta: se a consulta longa deve continuar ENXERGANDO as linhas que a
 // retenção tirou. Aquilo é visibilidade de dado; isto é segurança de memória.
+//
+// A GERAÇÃO LIDA ANTES DA ABERTURA é a terceira aresta desta função, e ela
+// deixou de ser teórica quando o laço da §2.4 subiu: entre abrir o arquivo aqui
+// e publicá-lo lá embaixo cabe uma reescrita inteira da reconstrução, e o
+// mapeamento aberto ANTES dela descreve o arquivo anterior — o mmap segura o
+// inode, então ele sobrevive ao rename e continuaria servindo o conteúdo velho.
+// Publicá-lo depois da evição faria o segmento responder sem a seção do campo
+// novo (ou seja, ENUMERANDO) até a próxima abertura do dataset, e ainda
+// prenderia o inode substituído. Ver o godoc do selGeracao.
 func (s *Store) garanteSelado(seg uint32) {
 	s.selMu.RLock()
 	_, ok := s.selados[seg]
+	geracao := s.selGeracao
 	s.selMu.RUnlock()
 	if ok {
 		return
@@ -186,9 +203,10 @@ func (s *Store) garanteSelado(seg uint32) {
 			// podre emite este WARN uma vez por CONSULTA, não uma por processo.
 			// Deduplicá-lo exigiria memorizar a falha, e memorizar impediria a
 			// adoção do arquivo que a reconstrução (§2.4) vier a publicar no
-			// lugar. Quem fecha isso é o laço de fundo, que apaga o arquivo
-			// reprovado e o refaz — e a série da §3.4, que é o observável certo
-			// para "quantos segmentos responderam por enumeração".
+			// lugar. Quem fecharia isso é a remoção do arquivo reprovado por
+			// quem o detecta — o gatilho 3 da §2.4, ainda sem dono — e a série
+			// da §3.4, que é o observável certo para "quantos segmentos
+			// responderam por enumeração".
 			s.opts.Log.Warn("indice.selado_ilegivel",
 				"o índice do segmento não pôde ser aberto; ele responde por enumeração",
 				"segmento", seg, "erro", err.Error())
@@ -220,6 +238,21 @@ func (s *Store) garanteSelado(seg uint32) {
 			"o índice do segmento não passou no crc32c; ele responde por enumeração até ser reconstruído",
 			"segmento", seg, "erro", err.Error())
 	}
+	s.publicaSelado(seg, novo, geracao)
+}
+
+// publicaSelado instala no cache o mapeamento aberto pelo garanteSelado, ou o
+// descarta quando ele já não descreve o arquivo que está em disco.
+//
+// Função própria, e não o rabo do garanteSelado, porque a janela que ela fecha é
+// entre DUAS chamadas — abrir e publicar — e um teste que não consiga se meter no
+// meio delas não prova nada sobre a geração.
+//
+// Descartar um mapeamento que ainda estava bom é possível (a evição pode ter sido
+// de OUTRO segmento) e é o lado barato do erro: a consulta seguinte reabre o
+// arquivo. O lado caro é o oposto — publicar o velho, que degrada até a próxima
+// abertura do dataset.
+func (s *Store) publicaSelado(seg uint32, novo *segindex.Selado, geracao uint64) {
 	s.selMu.Lock()
 	defer s.selMu.Unlock()
 	if s.selados == nil {
@@ -227,6 +260,10 @@ func (s *Store) garanteSelado(seg uint32) {
 		// recusou antes de chegar aqui. A guarda existe porque a alternativa é
 		// escrever num mapa nil — pânico —, e o preço dela é fechar o
 		// mapeamento que ninguém mais teria como alcançar.
+		_ = novo.Fecha()
+		return
+	}
+	if s.selGeracao != geracao {
 		_ = novo.Fecha()
 		return
 	}
@@ -281,10 +318,10 @@ func (s *Store) fonteDoWIP(campo types.FieldID, h uint64) (segindex.Fonte, bool)
 // descoberta em produção: no MATERIALIZADO, cada segmento enumerado varre o
 // locations.idx INTEIRO, então N segmentos sem índice custam N passadas. É
 // transitório por desenho — a D6 manda reconstruir o que está dentro da janela,
-// e a janela do materializado é infinita —, mas até o laço de fundo existir um
-// dataset inteiro migrado paga isso em toda consulta indexada. Uma passada
-// única que distribuísse os rowIds entre as fontes mudaria a forma da §3.2 e
-// não entra aqui.
+// e a janela do materializado é infinita —, e o que o torna transitório de fato é
+// o laço da §2.4: um dataset inteiro migrado paga isso apenas até as passadas de
+// reconstrução alcançarem os segmentos. Uma passada única que distribuísse os
+// rowIds entre as fontes mudaria a forma da §3.2 e não entra aqui.
 func (s *Store) fonteDeEnumeracao(refs []segment.SegmentRef, i int) (segindex.Fonte, error) {
 	if s.EhHistorico() {
 		return s.fonteDaFaixa(refs, i)

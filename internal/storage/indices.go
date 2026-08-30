@@ -59,6 +59,16 @@ func (s *Store) abreIndicesDeSegmento(campos []types.FieldID) error {
 	if err := s.descartaTodosOsWIPs(); err != nil {
 		return err
 	}
+	// Os temporários da forma SELADA saem no mesmo ponto, e pela mesma razão que
+	// o .widx de segmento aposentado: nenhuma enumeração que parta dos dados os
+	// alcança. Eles ganharam nome único por escritor na §2.4 — é o que impede a
+	// selagem e a reconstrução de rasgarem o arquivo uma da outra —, e o preço
+	// disso é que a escrita seguinte já não os trunca por cima. Sem esta limpeza,
+	// cada crash entre o WriteFile e o rename deixaria em disco um arquivo que
+	// o IndexBytes conta e ninguém explica.
+	if err := segindex.ApagaTemporarios(s.dirDeDados()); err != nil {
+		return err
+	}
 	if len(campos) == 0 {
 		return nil
 	}
@@ -377,11 +387,20 @@ func (s *Store) removeIndiceDoSegmento(seg uint32) {
 // precisa, porque o mmap antigo sobrevive ao rename e continuaria servindo o
 // conteúdo anterior.
 //
+// A GERAÇÃO SOBE SEMPRE, inclusive quando não havia nada em cache, e isso não é
+// contabilidade: é a correção inteira da terceira aresta. O caso perigoso é
+// justamente o mapa VAZIO — uma consulta abriu o arquivo velho, ainda não o
+// publicou, e a reescrita acontece nesse meio. Se a geração só subisse quando
+// houvesse entrada a remover, essa consulta publicaria o mapeamento velho depois
+// da reescrita e o segmento responderia pelo índice anterior até a próxima
+// abertura do dataset.
+//
 // Erro do desmonte não sobe: quem chama está aposentando ou republicando um
 // índice, e não há resposta operacional para um munmap que falhou além do log.
 func (s *Store) esqueceSelado(seg uint32) {
 	s.selMu.Lock()
 	defer s.selMu.Unlock()
+	s.selGeracao++
 	sel := s.selados[seg]
 	if sel == nil {
 		return

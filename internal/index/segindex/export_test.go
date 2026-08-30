@@ -11,6 +11,17 @@ import "github.com/nishisan-dev/nishidb/internal/types"
 // máquina".
 func (w *WIP) SondasDoUltimoSet() int { return w.sondas }
 
+// CaminhoTemporarioParaTeste expõe o nome do arquivo intermediário de UMA
+// escrita.
+//
+// Só existe no binário de teste, e é o único observável direto do que a §2.4
+// corrigiu: com o nome fixo anterior, dois escritores simultâneos do mesmo
+// segmento — a selagem da rotação e a reconstrução da fila — escreviam no MESMO
+// arquivo e o resultado saía rasgado. Provar isso só pelo comportamento
+// dependeria de vencer uma corrida; aqui a propriedade que o impede é afirmada
+// diretamente.
+func CaminhoTemporarioParaTeste(caminho string) string { return caminhoTemporario(caminho) }
+
 // EstrategiaDe expõe qual caminho um iterador devolvido por Une tomou.
 //
 // Só existe no binário de teste: é o que permite ao teste de fronteira (faixas

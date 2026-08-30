@@ -457,6 +457,7 @@ func (s *Servidor) Roda(ctx context.Context, pprofAddr string) error {
 	s.ligaCompaction(ctx)
 	s.ligaExpiracao(ctx)
 	s.ligaRetencao(ctx)
+	s.ligaReconstrucao(ctx)
 
 	var wg sync.WaitGroup
 	for _, d := range s.datasets {

@@ -93,12 +93,24 @@ var (
 
 var castagnoli = crc32.MakeTable(crc32.Castagnoli)
 
+// sufixoSelado é a extensão da forma selada, e ela é constante porque TRÊS
+// lugares precisam concordar com ela: o caminho do arquivo (CaminhoSelado), o
+// nome do temporário que o publica (caminhoTemporario) e o predicado que conta o
+// disco do dataset (EhArquivoDeIndice).
+//
+// A terceira concordância é a que quebraria em SILÊNCIO. O temporário deixou de
+// ter nome fixo (§2.4, Tarefa 14) e passou a carregar um número no meio do nome;
+// se ele tivesse deixado de casar com EhArquivoDeIndice, sairia da conta do
+// IndexBytes e viraria disco que nada explica — que é exatamente o modo de falha
+// que aquela contagem existe para eliminar.
+const sufixoSelado = ".sidx"
+
 // CaminhoSelado devolve o caminho do índice selado do segmento dentro de dir.
 // Ele mora ao lado do .dat de propósito: a aposentadoria remove os dois no
 // mesmo passo, e é isso que faz "purgar o segmento leva o índice junto" ser
 // uma linha de código em vez de uma promessa.
 func CaminhoSelado(dir string, seg uint32) string {
-	return filepath.Join(dir, fmt.Sprintf("segment-%08d.sidx", seg))
+	return filepath.Join(dir, fmt.Sprintf("segment-%08d%s", seg, sufixoSelado))
 }
 
 // EhArquivoDeIndice reporta se o nome pertence ao espaço de nomes DESTE pacote
@@ -114,9 +126,22 @@ func CaminhoSelado(dir string, seg uint32) string {
 // podres é recusado na abertura e continua ocupando disco até ser removido — que
 // é exatamente o que quem conta precisa enxergar.
 func EhArquivoDeIndice(nome string) bool {
-	return strings.HasSuffix(nome, ".sidx") ||
-		strings.HasSuffix(nome, ".sidx.tmp") ||
+	return strings.HasSuffix(nome, sufixoSelado) ||
+		EhTemporarioDeIndice(nome) ||
 		strings.HasSuffix(nome, ".widx")
+}
+
+// EhTemporarioDeIndice reporta se o nome é um temporário da forma selada — o
+// arquivo intermediário do .tmp + fsync + rename, que desde a §2.4 tem nome
+// ÚNICO POR ESCRITOR (ver caminhoTemporario).
+//
+// Ela é exportada porque quem LIMPA os temporários de uma execução anterior é a
+// abertura do dataset, em internal/storage, e a convenção de nome é deste
+// pacote: uma segunda cópia dela em cima pararia de casar em silêncio no dia em
+// que o formato do nome mudasse, e o resíduo passaria a ficar em disco para
+// sempre.
+func EhTemporarioDeIndice(nome string) bool {
+	return strings.HasSuffix(nome, sufixoSelado+".tmp")
 }
 
 // larguraPara devolve a menor largura de posting que cobre o intervalo.

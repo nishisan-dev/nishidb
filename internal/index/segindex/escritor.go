@@ -3,11 +3,14 @@ package segindex
 import (
 	"cmp"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
+	"sync/atomic"
 
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
@@ -214,6 +217,39 @@ func (e *Escritor) montaCorpo(base types.RowID, largura uint8) ([]byte, int) {
 	return corpo, len(secoes)
 }
 
+// numeroDoTemporario numera as escritas de índice selado DESTE processo. Um
+// atômico, e não um nome sorteado, porque o que se precisa aqui é apenas que
+// dois escritores VIVOS ao mesmo tempo não colidam: o dataset tem flock
+// exclusivo por processo, então não há um terceiro escritor para desempatar.
+//
+// Reiniciar em zero a cada subida é PROPRIEDADE, e não descuido: um temporário
+// que sobreviva a um crash volta a ser um nome alcançável pela próxima execução,
+// em vez de virar lixo de nome único que só cresce. A limpeza da abertura
+// (ApagaTemporarios) é quem o remove de fato; isto é só o que impede o resíduo
+// de ser ilimitado se aquela limpeza um dia falhar.
+var numeroDoTemporario atomic.Uint64
+
+// caminhoTemporario devolve o arquivo intermediário de UMA escrita, com nome
+// único por escritor.
+//
+// O NOME FIXO ANTERIOR ERA UM DEFEITO, e ele é o segundo dos três fatos que a
+// §2.4 emendada põe no lugar do wmu na publicação do índice. O aposAppend troca
+// o segmento CORRENTE antes de selar o anterior (storage/indices.go), então
+// existe uma janela em que o segmento recém-rotacionado aparece na fila de
+// reconstrução: a selagem e a reconstrução escreviam no MESMO `<sidx>.tmp` e
+// produziam um arquivo rasgado — inclusive o .sidx de ZERO BYTES que o
+// mmap.ErrArquivoVazio existe para tolerar. Com nomes distintos as duas escritas
+// não se tocam, e a corrida que sobra é no nome FINAL, que é neutra: o rename é
+// atômico e os dois caminhos produzem arquivos byte a byte idênticos (golden da
+// §6.3), então quem renomeia por último grava os mesmos bytes.
+//
+// O número vai no MEIO do nome, e não no fim, para que ele continue terminando
+// em ".sidx.tmp": é assim que EhArquivoDeIndice segue contando estes bytes no
+// IndexBytes e que a limpeza da abertura segue os encontrando.
+func caminhoTemporario(caminho string) string {
+	return fmt.Sprintf("%s.%d%s.tmp", strings.TrimSuffix(caminho, sufixoSelado), numeroDoTemporario.Add(1), sufixoSelado)
+}
+
 // escreveAtomico grava tmp -> fsync -> rename -> fsync do diretório: a mesma
 // política de rename durável do design §9/M18 que checkpoint/manifest.go já
 // usa, replicada aqui — e não importada de lá — porque segindex vive sob
@@ -223,8 +259,21 @@ func (e *Escritor) montaCorpo(base types.RowID, largura uint8) ([]byte, int) {
 // Sem isto o arquivo pode sobreviver a um crash com o nome `.tmp`, e o Open
 // do leitor (Tarefa 2) o trataria como órfão em vez de como o índice do
 // segmento.
+//
+// O TEMPORÁRIO QUE NÃO CHEGOU A SER RENOMEADO É REMOVIDO AQUI MESMO, e isso
+// passou a ser obrigatório junto com o nome único: com o nome fixo, a escrita
+// seguinte truncava o resíduo por cima e o disco voltava sozinho; com um nome
+// por escritor, cada falha entre o WriteFile e o rename deixaria um arquivo que
+// nada mais alcança. O que a remoção não cobre é o processo MORTO no meio — esse
+// é da ApagaTemporarios, na abertura.
 func escreveAtomico(caminho string, dados []byte) error {
-	tmp := caminho + ".tmp"
+	tmp := caminhoTemporario(caminho)
+	renomeou := false
+	defer func() {
+		if !renomeou {
+			_ = os.Remove(tmp)
+		}
+	}()
 	if err := os.WriteFile(tmp, dados, 0o644); err != nil {
 		return fmt.Errorf("segindex: escrever %s: %w", tmp, err)
 	}
@@ -242,7 +291,37 @@ func escreveAtomico(caminho string, dados []byte) error {
 	if err := os.Rename(tmp, caminho); err != nil {
 		return fmt.Errorf("segindex: rename de %s: %w", filepath.Base(caminho), err)
 	}
+	renomeou = true
 	return syncDir(filepath.Dir(caminho))
+}
+
+// ApagaTemporarios remove os temporários de índice selado que sobraram de uma
+// execução anterior. Roda na ABERTURA do dataset, junto do descarte dos .widx, e
+// é a contrapartida do nome único: um processo morto entre o WriteFile e o
+// rename deixa em disco um arquivo que nenhuma escrita futura vai reaproveitar.
+//
+// Nesse instante ela é sempre segura: o flock do dataset é exclusivo por
+// processo e a abertura acontece antes de qualquer escritor deste processo
+// existir, então todo `*.sidx.tmp` que estiver ali é, por construção, de um
+// processo que já morreu.
+//
+// Arquivo que some entre a listagem e o unlink não é anomalia: é o mesmo estado
+// que a remoção pretendia produzir.
+func ApagaTemporarios(dir string) error {
+	entradas, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("segindex: listar os temporários de %s: %w", dir, err)
+	}
+	for _, e := range entradas {
+		if e.IsDir() || !EhTemporarioDeIndice(e.Name()) {
+			continue
+		}
+		caminho := filepath.Join(dir, e.Name())
+		if err := os.Remove(caminho); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("segindex: remover o temporário %s: %w", caminho, err)
+		}
+	}
+	return nil
 }
 
 // syncDir força a durabilidade da entrada de diretório após um rename.
