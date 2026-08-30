@@ -815,6 +815,13 @@ type Store struct {
 	// nenhuma.
 	setErrHook func(types.FieldID) error
 
+	// entreRemoverEEsquecerHook é o seam de teste do removeSidxDoDisco (nil em
+	// produção): roda entre o unlink do .sidx e o esquecimento do cache. É o
+	// único jeito determinístico de pôr uma consulta DENTRO dessa janela — que
+	// é onde a ordem inversa (esquecer primeiro) deixava a consulta publicar o
+	// mapeamento de um arquivo já removido, sem ninguém para evictá-lo.
+	entreRemoverEEsquecerHook func(seg uint32)
+
 	// segTally acumula os totais por segmento que o writer conhece (para as
 	// stats do manifest §9; em memória — a S12 os reconstrói no replay).
 	// Writer-only.

@@ -360,8 +360,7 @@ func (s *Store) aplicaIndiceSets(row types.RowID, payload []byte) error {
 // Arquivo ausente não é anomalia: o segmento pode nunca ter tido índice (fora
 // da janela, ou gravado por um binário anterior).
 func (s *Store) removeIndiceDoSegmento(seg uint32) {
-	s.esqueceSelado(seg)
-	if err := os.Remove(segindex.CaminhoSelado(s.dirDeDados(), seg)); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if _, err := s.removeSidxDoDisco(seg); err != nil {
 		s.opts.Log.Warn("indice.orfao_apos_aposentadoria",
 			"o índice do segmento aposentado continuou em disco; ele é inofensivo e sai na limpeza de órfãos",
 			"segmento", seg, "erro", err.Error())
@@ -373,12 +372,54 @@ func (s *Store) removeIndiceDoSegmento(seg uint32) {
 	}
 }
 
+// removeSidxDoDisco apaga o .sidx do segmento e SÓ DEPOIS larga o mapeamento em
+// cache — nesta ordem, e a ordem é a correção de uma corrida.
+//
+// Com o esquecimento primeiro, uma consulta que lesse a geração DEPOIS do bump
+// e abrisse o arquivo ANTES do unlink passava pelas duas guardas do
+// publicaSelado e instalava no cache o mapeamento de um arquivo já removido —
+// e nada o evictava até a próxima evição DESTE segmento: inode preso, e o
+// segmento respondendo por um índice que a expulsão tinha mandado embora. Com o
+// arquivo fora do disco primeiro, a abertura tardia falha com ENOENT; a que
+// começou antes ou publica com geração velha (descartada) ou é removida pelo
+// esquecimento que vem em seguida. Não há terceira janela.
+//
+// A ordem NÃO muda quando o disco volta ao dispositivo: o munmap espera a
+// última Fonte em voo (contagem de vidas) nos dois desenhos — o unlink só
+// remove o nome. A justificativa antiga da ordem inversa afirmava o contrário,
+// e estava errada.
+//
+// UM helper para os três donos da remoção — aposentadoria, expulsão da janela e
+// o obsoleto da reconstrução —, porque uma segunda cópia divergiria na primeira
+// vez que a ordem mudasse. Arquivo ausente não é erro — é o estado normal de
+// segmento que nunca teve índice —, mas volta como removido=false: a expulsão
+// da janela conta só o que de fato saiu do disco.
+func (s *Store) removeSidxDoDisco(seg uint32) (bool, error) {
+	err := os.Remove(segindex.CaminhoSelado(s.dirDeDados(), seg))
+	if s.entreRemoverEEsquecerHook != nil {
+		s.entreRemoverEEsquecerHook(seg)
+	}
+	s.esqueceSelado(seg)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, os.ErrNotExist):
+		return false, nil
+	default:
+		return false, err
+	}
+}
+
 // esqueceSelado tira o índice do segmento do cache de mapeamentos, fechando-o.
 //
-// DOIS donos, UMA regra: a aposentadoria do segmento (removeIndiceDoSegmento) e
-// a reescrita do .sidx pela reconstrução (ConstroiIndiceDoSegmento). Os dois
-// precisam da MESMA sequência — fechar sob o selMu e tirar do mapa —, e uma
-// segunda cópia divergiria na primeira vez que a regra mudasse.
+// Os donos são os caminhos que mudam o .sidx por fora do cache — a remoção
+// (removeSidxDoDisco, que serve à aposentadoria, à expulsão da janela e ao
+// obsoleto da reconstrução) e a reescrita (ConstroiIndiceDoSegmento) — e todos
+// precisam da MESMA sequência: fechar sob o selMu e tirar do mapa. A regra de
+// ORDEM vale para todos: o esquecimento vem DEPOIS da operação de arquivo
+// (unlink ou rename), senão uma consulta que abrisse o arquivo entre o bump da
+// geração e a operação publicaria o mapeamento do estado anterior sem ninguém
+// para evictá-lo — ver o godoc do removeSidxDoDisco.
 //
 // O que ela usa é o mecanismo que já existe, e não um segundo: o Fecha do Selado
 // impede leitores NOVOS e adia o munmap até a última Fonte em voo sair (contagem

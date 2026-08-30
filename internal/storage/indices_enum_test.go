@@ -814,3 +814,50 @@ func TestUpdateDuranteAConsultaNaoSomeDaEnumeracaoColapsada(t *testing.T) {
 			"é o falso negativo do cérebro dividido entre snapshot do WIP e dono da location", rowMovel)
 	}
 }
+
+// TestAConsultaNaJanelaDaExpulsaoNaoPublicaMapeamentoDeArquivoRemovido fecha a
+// terceira aresta da geração pelo lado que faltava. O selGeracao protege a
+// consulta que abriu o arquivo ANTES da evição; a consulta que LÊ a geração
+// depois do bump e ABRE o arquivo antes do unlink passava pelas duas guardas do
+// publicaSelado e instalava o mapeamento de um arquivo já removido — sem
+// ninguém para evictá-lo até a próxima evição deste segmento: inode preso e o
+// segmento respondendo por um índice que a expulsão mandou embora. A correção é
+// de ORDEM (unlink antes do esquecimento, removeSidxDoDisco), e o hook põe a
+// consulta exatamente na janela entre os dois passos.
+func TestAConsultaNaJanelaDaExpulsaoNaoPublicaMapeamentoDeArquivoRemovido(t *testing.T) {
+	dir := t.TempDir()
+	s := openStore(t, Options{Dir: dir, SegmentSize: 16 << 10, CamposIndexadosPorNome: []string{"node"}})
+	alvo := s.curSegID.Load()
+	poeLinhasAteRotacionar(t, s, alvo)
+
+	// A consulta entra NA JANELA: entre a operação de arquivo e o esquecimento.
+	// Na ordem corrigida o arquivo já saiu do disco e a abertura falha; na ordem
+	// antiga (esquecer primeiro) este mesmo instante tinha o arquivo AINDA em
+	// disco e a geração JÁ bumpada — a publicação era aceita e ficava.
+	s.entreRemoverEEsquecerHook = func(seg uint32) {
+		if seg != alvo {
+			return
+		}
+		s.selMu.RLock()
+		geracao := s.selGeracao
+		s.selMu.RUnlock()
+		sel, err := segindex.AbreSelado(segindex.CaminhoSelado(s.dirDeDados(), alvo))
+		if err != nil {
+			return // ordem corrigida: o arquivo já não existe, não há o que publicar
+		}
+		s.publicaSelado(alvo, sel, geracao)
+	}
+	defer func() { s.entreRemoverEEsquecerHook = nil }()
+
+	if _, err := s.removeSidxDoDisco(alvo); err != nil {
+		t.Fatalf("removeSidxDoDisco: %v", err)
+	}
+
+	s.selMu.RLock()
+	sobrou := s.selados[alvo]
+	s.selMu.RUnlock()
+	if sobrou != nil {
+		t.Fatalf("o cache ficou com o mapeamento de um .sidx removido: o segmento responderia por um índice "+
+			"que a expulsão mandou embora, com o inode preso até a próxima evição (selados[%d] != nil)", alvo)
+	}
+}

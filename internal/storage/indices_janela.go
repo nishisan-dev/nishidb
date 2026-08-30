@@ -125,19 +125,14 @@ func (s *Store) aplicaJanela(ctx context.Context, j JanelaDeIndice) (int, error)
 		if _, dentro := estado.dentro[seg]; dentro {
 			continue
 		}
-		// O mapeamento é largado ANTES do unlink, pela razão do
-		// removeSeladoObsoleto: é ele que segura o inode, e na ordem inversa o
-		// disco só voltaria ao dispositivo quando a última consulta em voo
-		// terminasse.
-		s.esqueceSelado(seg)
 		// O tamanho é lembrado ANTES do unlink, porque depois dele o arquivo já
 		// não pode ser medido — e é justamente essa medida que impede a passada
 		// seguinte de readmitir o segmento por subestimá-lo.
 		s.lembraTamanhoExpulso(seg, estado.tamanho[seg])
-		if err := os.Remove(segindex.CaminhoSelado(s.dirDeDados(), seg)); err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				continue
-			}
+		// O unlink vem ANTES do esquecimento, e é o removeSidxDoDisco quem
+		// impõe a ordem — o godoc dele explica a corrida que a inversa abria.
+		removido, err := s.removeSidxDoDisco(seg)
+		if err != nil {
 			// Erro NÃO derruba a passada, e a assimetria com o resto da retenção
 			// é deliberada: quem chama isto para de vez na primeira falha
 			// (rodaRetencao), e um unlink que falhou num arquivo DERIVADO não
@@ -149,7 +144,9 @@ func (s *Store) aplicaJanela(ctx context.Context, j JanelaDeIndice) (int, error)
 				"dataset", s.opts.Dataset, "segmento", seg, "erro", err.Error())
 			continue
 		}
-		expulsos++
+		if removido {
+			expulsos++
+		}
 	}
 	// A poda vem no fim da passada, e não a cada expulsão: por expulsão ela
 	// seria O(n) dentro de um laço de n, para um mapa que só encolhe.

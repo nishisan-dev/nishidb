@@ -601,14 +601,12 @@ func (s *Store) coberturaDaReconstrucao(caminho string, campos []types.FieldID) 
 
 // removeSeladoObsoleto tira do caminho um .sidx que a reconstrução acabou de
 // declarar sem conteúdo. Ausência do arquivo não é anomalia: é o estado normal
-// de um segmento sem posting nenhuma.
+// de um segmento sem posting nenhuma. A ordem unlink-antes-de-esquecer é do
+// removeSidxDoDisco, e o godoc de lá explica a corrida que a inversa abria —
+// a justificativa antiga desta função para a ordem inversa (o inode preso)
+// estava errada: o munmap espera as vidas nos dois desenhos.
 func (s *Store) removeSeladoObsoleto(seg uint32, caminho string) error {
-	// O mapeamento é largado ANTES do unlink, e não depois, porque é ele que
-	// segura o inode: na ordem inversa, o disco só voltaria ao dispositivo
-	// quando a última Fonte em voo terminasse, e um leitor lento manteria vivo
-	// um arquivo que já não tem nome.
-	s.esqueceSelado(seg)
-	if err := os.Remove(caminho); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if _, err := s.removeSidxDoDisco(seg); err != nil {
 		return fmt.Errorf("storage: remover o índice obsoleto %s: %w", caminho, err)
 	}
 	return nil
