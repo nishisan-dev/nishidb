@@ -55,13 +55,31 @@ comparando duas extrações — a mesma doutrina dos outros gates de
 `internal/gates`:
 
 - `TestCitacoesDeSecaoResolvem` — toda citação `§NN`/`§NN.M` em docs, README,
-  planning e comentários Go resolve em uma seção ou item de spec.
+  CLAUDE.md, planning e comentários Go resolve em uma seção ou item das specs
+  declaradas. O `.go` é lido por AST (só comentários) e o `.md` pula os blocos
+  cercados: `§` dentro de string literal ou de exemplo não é citação.
 - `TestAmostrasDeMetricaTemFamiliaENome` — todo literal `metrics.Amostra{...}`
   em código de produção declara `Familia` e `Nome` por constante, nunca string
-  literal.
+  literal, e o `Nome` pertence à `Familia` (a mesma constante, ou ela mais um
+  sufixo de histograma). "Todo" inclui a forma elidida `[]metrics.Amostra{{…}}`,
+  que é quase 40% dos literais.
 
 Eles não julgam se a citação aponta para o lugar certo — isso é revisão. Eles
 fecham a classe barata: citar o que não existe.
+
+## O gate também é código
+
+Os dois gates acima nasceram, eles próprios, na classe 1. O de família só
+enxergava o literal com o tipo escrito e era cego à forma elidida — a dominante
+no repositório —, e entre os literais invisíveis estavam justamente os quatro do
+coletor Kafka que o commit da doutrina tinha acabado de consertar: eles podiam
+regredir com o gate verde. O de citação lia `.go` como bytes crus, procurando
+`§` em prosa, contra a doutrina de ler código como DADO que ele mesmo pregava.
+
+Nenhum dos dois foi pego por leitura. Os dois foram pegos aplicando a mutação
+**na forma dominante do repositório**, e não só na forma que o autor do teste
+tinha na cabeça. É a lição operacional da classe 1 aplicada ao ferramental:
+mutar o caso que você escreveu prova o caso que você escreveu.
 
 ## O que nenhum gate alcança
 

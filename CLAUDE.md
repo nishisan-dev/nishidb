@@ -32,7 +32,7 @@ make bench-micro        # exige NISHIDB_BENCH_DIR apontando para DISCO REAL (fal
                         # centenas de MiB por rodada; em tmpfs trava a máquina)
 ```
 
-Teste único: `go test ./internal/<pacote>/ -run 'TestNome' -count=1`.
+Teste único: `go test ./internal/<pacote>/ -run '<nome-do-teste>' -count=1`.
 
 **Lint é ratchet bidirecional**: `.golangci-baseline` guarda a contagem e o CI
 compara — acima **e abaixo** da baseline falham. PR que fecha apontamento abaixa
@@ -168,7 +168,8 @@ Quatro classes de defeito que nenhum compilador pega, e como este repo as fecha:
   `TestCitacoesDeSecaoResolvem`.
 - **Amostra de métrica sem `Familia`** — `# HELP`/`# TYPE` sai com nome vazio e
   o Prometheus recusa o scrape inteiro. Gate:
-  `TestAmostrasDeMetricaTemFamiliaENome`.
+  `TestAmostrasDeMetricaTemFamiliaENome`, que também recusa `Nome` de outra
+  família (a exceção é o sufixo de histograma).
 - **Resíduo de mutação** — constante hardcoded ou lock deixado por agente de
   revisão. Confira `git status` antes de commitar.
 
@@ -176,12 +177,24 @@ O método completo está em `docs/doutrina-de-verificacao.md`. Os gates fecham a
 classe barata (citar o que não existe); julgar se o teste prova o critério e se
 o texto diz a verdade continua sendo revisão humana.
 
+**O gate também é código, e cai na primeira classe.** Os dois nasceram cegos ao
+que diziam cobrir — um só enxergava o literal com o tipo escrito e perdia 23 dos
+58; o outro lia `.go` como bytes crus, contra a doutrina de ler código como
+DADO. Gate de doutrina que não discrimina é pior que gate nenhum: mute o defeito
+NA FORMA DOMINANTE do repositório, não só na que você escreveu no teste.
+
 ## Convenções de documentação
 
-- **`§NN`** cita a spec normativa `nishidb-spec-proposal.md` (raiz). **"débito
-  NN"** cita `docs/debitos.md`, cuja numeração é ESTÁVEL: item novo entra no fim,
-  nada é renumerado. Os comentários longos explicando o porquê são normativos —
-  siga o estilo e cite §/débito quando aplicável.
+- **`§NN`** cita seção de spec, e o marcador serve a MAIS DE UM documento: a
+  normativa `nishidb-spec-proposal.md` (raiz), os dois designs de M1 em
+  `planning/` e a spec do subsistema 1 numeram as suas seções cada um por si —
+  `store.go` cita §92 da raiz, §10.2 do design de storage e §2.4 do subsistema.
+  O conjunto é FECHADO e declarado em `specsDoMarcador`
+  (`internal/gates/verificacao_test.go`), com o preço do achatamento nomeado no
+  godoc; documento novo que passe a ser citado entra na lista. **"débito NN"**
+  cita `docs/debitos.md`, cuja numeração é ESTÁVEL: item novo entra no fim, nada
+  é renumerado. Os comentários longos explicando o porquê são normativos — siga
+  o estilo e cite §/débito quando aplicável.
 - Docs mudam no MESMO commit que o código. `docs/architecture.md` só afirma
   número medido (com origem em `benchmark/baselines/` ou num `docs/aceite-*.md`);
   registros de rodada não são reescritos. `TestEvidenciasCitadasNosDocumentosExistem`

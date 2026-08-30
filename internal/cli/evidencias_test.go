@@ -44,11 +44,17 @@ func TestEvidenciasCitadasNosDocumentosExistem(t *testing.T) {
 	// afirmação de cobertura que ninguém pode conferir. Cinco dos nomes que o
 	// diário do ciclo registrou já não existiam quando ele foi escrito, todos por
 	// rename de tarefas posteriores — a classe exata que este gate fecha.
+	//
+	// O CLAUDE.md entra porque ele passou a ser VERSIONADO e é prosa normativa:
+	// ele cita cinco testes como prova das convenções que impõe, e um nome
+	// obsoleto ali manda o leitor seguinte procurar cobertura que não existe.
+	// Enquanto ficou de fora, era a única prosa normativa do repositório sem
+	// compilador.
 	docs := []string{"../../docs/aceite-m1.md", "../../docs/aceite-m2.md", "../../docs/aceite-fase6.md",
 		"../../docs/aceite-m4.md", "../../docs/aceite-m5.md", "../../docs/aceite-client-python.md",
 		"../../docs/architecture.md", "../../docs/debitos.md", "../../docs/operacao-kafka.md",
 		"../../docs/mutacoes-indice-por-segmento.md",
-		"../../docs/doutrina-de-verificacao.md", "../../README.md"}
+		"../../docs/doutrina-de-verificacao.md", "../../README.md", "../../CLAUDE.md"}
 
 	existentes := testesDoRepositorio(t)
 	for _, doc := range docs {
