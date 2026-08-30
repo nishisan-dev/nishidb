@@ -40,17 +40,20 @@ func novoHarness(t *testing.T) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// TODOS os campos indexados do fixture entram em Bitmap, e nenhum em
-	// Hash: a D5 aposentou `index: hash` do YAML, e `index: true` mapeia
-	// SEMPRE para IndexBitmap (compile.go, indexKindDe) — a regra R3/R4 do
-	// planner, que intersecta em vez de parar no primeiro termo. Nenhum campo
-	// do fixture (testdata/radius.materialization.yaml) compila mais para
-	// IndexHash, então nenhum pertence a Hash aqui.
-	idx := fakestorage.Indexes{
-		Bitmap: ids(t, sch, "Acct-Status-Type", "Framed-Protocol", "Acct-Terminate-Cause",
-			"Filter-Id", "NAS-Port-Type", "Service-Type", "Acct-Authentic",
-			"NAS-IP-Address", "NAS-Identifier", "Framed-IP-Address"),
-	}
+	// TODOS os campos indexados do fixture entram em Bitmap E em Hash: o
+	// Store REAL (store.go, HasBitmap/HasHash) devolve true para os dois em
+	// QUALQUER campo do conjunto indexado — desde a D5, `index: true` é a
+	// única grafia e não há mais como declarar um campo que só uma das duas
+	// capabilities enxerga. Um dublê que só marcasse Bitmap divergiria do
+	// Store na direção que já custou uma rodada na Tarefa 8: capability
+	// otimista de menos, escondendo o dia em que algum código passar a
+	// consultar HasHash de verdade. Hoje é inofensivo — hashEligible testa o
+	// Kind (sempre IndexBitmap) ANTES da capability —, mas o dublê tem de
+	// continuar sendo uma descrição fiel do Store.
+	todosOsIndexados := ids(t, sch, "Acct-Status-Type", "Framed-Protocol", "Acct-Terminate-Cause",
+		"Filter-Id", "NAS-Port-Type", "Service-Type", "Acct-Authentic",
+		"NAS-IP-Address", "NAS-Identifier", "Framed-IP-Address")
+	idx := fakestorage.Indexes{Bitmap: todosOsIndexados, Hash: todosOsIndexados}
 	st := fakestorage.New(idx)
 	eng := query.NewEngine()
 	if err := eng.Register(dataset, sch, st); err != nil {

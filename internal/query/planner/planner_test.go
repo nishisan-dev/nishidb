@@ -95,21 +95,23 @@ func consulta(where binder.BoundExpr) *binder.BoundQuery {
 
 // todosOsIndices é o store que atende tudo o que o fixture declara.
 //
-// TODOS os campos entram em Bitmap, e nenhum em Hash: a D5 aposentou
-// `index: hash` do YAML, e `index: true` mapeia SEMPRE para IndexBitmap
-// (compile.go, indexKindDe) — a regra R3/R4 do planner, que intersecta em vez
-// de parar no primeiro termo. R2 (o caminho de IndexHash) fica morto: nenhum
-// campo do fixture — carregado de verdade via testdata/radius.materialization
-// .yaml — compila mais para IndexHash, então nenhum pertence a Hash aqui. A
-// Tarefa 11 apaga esse caminho; até lá ele seria só código que este fixture
-// não alcança.
+// TODOS os campos entram em Bitmap E em Hash: o Store REAL (store.go,
+// HasBitmap/HasHash) devolve true para os dois em QUALQUER campo do conjunto
+// indexado — desde a D5, `index: true` é a única grafia e não há mais como
+// declarar um campo que só uma das duas capabilities enxerga. Um dublê que
+// só marcasse Bitmap divergiria do Store na direção que já custou uma rodada
+// na Tarefa 8: capability otimista de menos, escondendo o dia em que algum
+// código (a Tarefa 11, por exemplo) passar a consultar HasHash de verdade.
+// Hoje isso é inofensivo — hashEligible testa o Kind (sempre IndexBitmap)
+// ANTES da capability, então HasHash nunca chega a ser consultado por
+// nenhuma query real —, mas o dublê tem de continuar sendo uma descrição
+// fiel do Store, não uma economia de linhas.
 func todosOsIndices(tb testing.TB, c *schema.Compiled) *fakestorage.Store {
 	tb.Helper()
-	return fakestorage.New(fakestorage.Indexes{
-		Bitmap: fid(tb, c, "Acct-Status-Type", "Framed-Protocol", "Acct-Terminate-Cause",
-			"Filter-Id", "NAS-Port-Type", "Service-Type", "Acct-Authentic",
-			"NAS-IP-Address", "NAS-Identifier", "Framed-IP-Address"),
-	})
+	todos := fid(tb, c, "Acct-Status-Type", "Framed-Protocol", "Acct-Terminate-Cause",
+		"Filter-Id", "NAS-Port-Type", "Service-Type", "Acct-Authentic",
+		"NAS-IP-Address", "NAS-Identifier", "Framed-IP-Address")
+	return fakestorage.New(fakestorage.Indexes{Bitmap: todos, Hash: todos})
 }
 
 // espiao falha o teste se o planner tocar em DADOS. Só LookupHash é

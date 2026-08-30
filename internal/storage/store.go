@@ -925,8 +925,9 @@ func Open(opts Options) (*Store, error) {
 		// LookupOrCreate e não Lookup, e nesta ORDEM. O id sai daqui e tem de
 		// ser o MESMO que o schema.Compile resolve depois, e a ordem das
 		// chamadas decide o mapeamento nome→id de um dataset NOVO, gravado
-		// para sempre: _writtenAt, _expiresIn, bitmaps, hashes. Nunca
-		// reordene.
+		// para sempre: _writtenAt, _expiresIn, e só então os campos indexados,
+		// resolvidos logo abaixo (ver o comentário ali para o que mudou DENTRO
+		// desse último grupo desde a D5). Nunca reordene esta sequência.
 		if s.campoDeEscrita, err = s.dict.LookupOrCreate([]byte(opts.CampoDeEscrita)); err != nil {
 			return nil, fmt.Errorf("storage: registrando %q no dicionário: %w", opts.CampoDeEscrita, err)
 		}
@@ -937,10 +938,37 @@ func Open(opts Options) (*Store, error) {
 
 	// A resolução dos DOIS conjuntos vem antes de abrir qualquer índice: os
 	// nomes viram FieldID pelo dicionário, e o LookupOrCreate queima ids na
-	// ordem em que é chamado. Bitmap primeiro e hash depois, sempre — a ordem
-	// entre os dois grupos é tão contratual quanto a ordem dentro de cada um,
-	// porque ela decide o mapeamento nome→id de um dataset novo, que é gravado
-	// para sempre.
+	// ordem em que é chamado.
+	//
+	// ATÉ A D5 (planning/spec-subsistema-1-indice-por-segmento.md), esta ordem
+	// decidia mais do que "canônica dentro de cada lista": BitmapFieldNames e
+	// HashFieldNames vinham de grafias DIFERENTES do YAML (`index: bitmap` e
+	// `index: hash`), então "bitmap primeiro, hash depois" também decidia QUAL
+	// GRUPO pegava os ids mais baixos — e por isso esta ordem ENTRE os dois
+	// grupos era chamada de tão contratual quanto a ordem DENTRO de cada um.
+	//
+	// Com `index: true` como única grafia, schema.CamposComBitmap e
+	// schema.CamposComHash devolvem o MESMO conjunto (camposComIndice, em
+	// spec.go) — as duas chamadas logo abaixo recebem listas IDÊNTICAS. A
+	// primeira queima um id por campo indexado, em ordem alfabética; a
+	// segunda resolve os MESMOS nomes, e o LookupOrCreate devolve os ids já
+	// atribuídos sem queimar nenhum novo — é idempotente por nome (ver o
+	// godoc de resolveCamposIndexados). Não existe mais "grupo bitmap" nem
+	// "grupo hash": existe UM grupo, os campos indexados, numa corrida
+	// alfabética só.
+	//
+	// O que CONTINUA contrato: "mesmo spec → mesmo mapeamento" — para uma
+	// config dada, o conjunto indexado e a ordem alfabética dentro dele são
+	// determinísticos, e um dataset novo sempre nasce com o mesmo mapa
+	// nome→id. O que DEIXOU de ser contrato foi a relação ENTRE os dois
+	// grupos (quem vem primeiro): não há mais dois grupos a ordenar entre si,
+	// só um — chamar esta função duas vezes com a MESMA lista é seguro por
+	// ser idempotente, não porque a ordem das duas chamadas ainda importe.
+	//
+	// Nada disto muda um dataset JÁ ABERTO: o fielddict é append-only em
+	// disco, e um FieldID já gravado não é revisitado — a mudança só decide o
+	// mapeamento de um dataset NOVO, porque foi a CONFIG (a spec, não o
+	// formato) que mudou.
 	//
 	// NÃO HÁ VALIDAÇÃO DO CONJUNTO CONTRA O MANIFEST, e a ausência é a decisão.
 	// Eram duas, e recusavam (1) abrir sem um campo que o dataset declara
@@ -1086,6 +1114,13 @@ func (s *Store) carregaOffsets() {
 // de queimar id no dicionário — não é sobre o motor, é sobre a criação do
 // dataset, e um segundo laço para o segundo motor seria a primeira cópia a
 // divergir.
+//
+// É IDEMPOTENTE por nome: LookupOrCreate devolve o id já atribuído para um
+// nome que já está no dicionário, sem queimar um novo. É essa propriedade que
+// torna inofensivo chamar esta função duas vezes com a MESMA lista de nomes —
+// o caso normal desde a D5, em que schema.CamposComBitmap e
+// schema.CamposComHash devolvem o mesmo conjunto (ver o comentário no
+// chamador, acima, no Open).
 func (s *Store) resolveCamposIndexados(ids []types.FieldID, nomesDeclarados []string, motor string) ([]types.FieldID, error) {
 	set := make(map[types.FieldID]struct{}, len(ids)+len(nomesDeclarados))
 	for _, field := range ids {

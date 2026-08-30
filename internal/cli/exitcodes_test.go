@@ -271,3 +271,26 @@ func TestDatasetComGrafiaDeIndiceObsoletaSaiComExitDataset(t *testing.T) {
 		t.Errorf("stderr não ensina a grafia nova: %q", a.stderr.String())
 	}
 }
+
+// TestServidorComGrafiaDeIndiceObsoletaSaiComExitDataset é o MESMO gate,
+// pela SUBIDA de verdade — "nishidb server", que é a subida de que o README
+// fala ("a subida recusa com exit 3"). O gate acima só cobre "nishidb
+// query"; sem este, a frase do README ficava sem trava sobre o comando que
+// ela de fato descreve. server.Novo carrega e valida TODAS as specs do
+// diretório antes de abrir qualquer dataset (internal/server/server.go), e
+// roteia pelo MESMO codigoDoErro que "query" — o teste conta com isso, não
+// com um caminho de erro próprio do server.
+func TestServidorComGrafiaDeIndiceObsoletaSaiComExitDataset(t *testing.T) {
+	a := novoAmbiente(t)
+	caminho := filepath.Join(a.dir, "datasets", "grafiaantiga.yaml")
+	if err := os.WriteFile(caminho, []byte(yamlGrafiaDeIndiceObsoleta), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code := a.roda("server", "--config", a.config)
+	if code != cli.ExitDataset {
+		t.Fatalf("code = %d, want %d (ExitDataset)\n%s", code, cli.ExitDataset, a.stderr.String())
+	}
+	if !strings.Contains(a.stderr.String(), "index: true") {
+		t.Errorf("stderr não ensina a grafia nova: %q", a.stderr.String())
+	}
+}
