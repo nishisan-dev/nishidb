@@ -206,12 +206,20 @@ func codigoDoErro(err error) int {
 	case errors.Is(err, types.ErrWriterFailed):
 		return ExitWriter
 	case errors.Is(err, storage.ErrDatasetLocked), errors.Is(err, storage.ErrDatasetCorrupt),
-		errors.Is(err, storage.ErrDatasetClosed), errors.Is(err, encoding.ErrCorrupt):
+		errors.Is(err, storage.ErrDatasetClosed), errors.Is(err, encoding.ErrCorrupt),
+		errors.Is(err, schema.ErrGrafiaDeIndiceObsoleta):
 		// encoding.ErrCorrupt é o sentinela que chega de VERDADE quando um byte
 		// da região durável está adulterado: a detecção é lazy, no read, e o
 		// erro sobe pelo executor. Sem ele aqui, corrupção de dataset caía no
 		// default e saía como "erro de uso" — o único código que manda o
 		// operador olhar a linha de comando em vez do dataset.
+		//
+		// schema.ErrGrafiaDeIndiceObsoleta (D5: `index: hash`/`index: bitmap`
+		// recusados) entra na MESMA categoria por razão idêntica: é config do
+		// DATASET recusada na subida, não erro de uso da linha de comando — e
+		// sem o errors.Is aqui ela cairia no default (ExitUso, 1) igual a
+		// qualquer flag digitada errado, escondendo que o problema está no
+		// YAML do dataset.
 		return ExitDataset
 	default:
 		return ExitUso

@@ -20,9 +20,10 @@ import (
 // usar. Um campo quoted que chegasse ao cliente com o nome errado passaria
 // verde na suíte do motor.
 
-// spec106YAML tem o que os doze casos exigem: chave, campo com alias E índice
-// bitmap, campo com índice hash, numérico para comparação, campo com hífen (que
-// obriga aspas no SQL) e um campo que NENHUM evento traz, para o caso NULL.
+// spec106YAML tem o que os doze casos exigem: chave, campo com alias E índice,
+// SEGUNDO campo indexado (para o AND/OR de dois termos), numérico para
+// comparação, campo com hífen (que obriga aspas no SQL) e um campo que NENHUM
+// evento traz, para o caso NULL.
 const spec106YAML = `version: 1
 name: %s
 materialization:
@@ -35,10 +36,10 @@ schema:
     Acct-Status-Type:
       type: string
       alias: status
-      index: bitmap
+      index: true
     nas:
       type: string
-      index: hash
+      index: true
     porta:
       type: int64
     ip:
@@ -138,8 +139,9 @@ func TestSpec106PeloProtocoloHTTP(t *testing.T) {
 		{"bitmap lookup", `{"dataset":"d","sql":"SELECT id FROM d WHERE status = 'Stop'"}`,
 			[]string{"L-2", "L-3", "L-5"}},
 
-		// O índice hash é aceito na configuração e o físico só chega na Fase 8:
-		// o plano degrada para scan e o RESULTADO tem de ser o mesmo.
+		// "hash lookup" é o nome histórico do caso — `nas` usa o MESMO índice
+		// único que `status` desde a D5 (index: true é a única grafia); o que
+		// o caso prova é que um SEGUNDO campo indexado responde certo.
 		{"hash lookup", `{"dataset":"d","sql":"SELECT id FROM d WHERE nas = 'nas-b'"}`,
 			[]string{"L-3", "L-4"}},
 

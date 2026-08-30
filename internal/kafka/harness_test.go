@@ -55,7 +55,7 @@ schema:
       type: int64
     status:
       type: string
-      index: bitmap
+      index: true
 `
 
 // bancada é um dataset real (storage + materializer) ligado a um broker

@@ -36,7 +36,7 @@ schema:
     status:
       type: string
       alias: estado
-      index: bitmap
+      index: true
     porta:
       type: int64
     ip:

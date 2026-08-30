@@ -466,7 +466,7 @@ schema:
       type: int64
     resultado:
       type: string
-      index: bitmap
+      index: true
 query:
   maxRows: 77
   timeout: 12s
@@ -1060,8 +1060,10 @@ func TestInspectDetalhaColunasEIndices(t *testing.T) {
 	// A coluna AUTO diz se o TIPO daquela coluna foi declarado no YAML ou fixado
 	// pela primeira observação — e é o que explica ao operador por que um campo
 	// aparece como "unknown", ou por que ele não pode receber índice. O ÍNDICE
-	// sai com o nome do YAML pelo mesmo motivo: publicá-lo como "sim/não"
-	// apagaria a diferença entre bitmap e hash, que decide o plano.
+	// publica o NOME do plano (bitmap/hash/none) e não um "sim/não": a D5
+	// unificou a GRAFIA de entrada (`index: true` é a única), mas o wire
+	// continua nomeando o plano que o executor de fato usa, que é a pergunta
+	// operacional real.
 	var auto int
 	oraculos := make([]map[string]string, 0, len(d.Columns))
 	for _, c := range d.Columns {
@@ -1091,10 +1093,16 @@ func TestInspectDetalhaColunasEIndices(t *testing.T) {
 		conferePorCelula(t, "coluna "+c.Name, cabecalho, linhaDaTabela(t, linhas, c.Name), oraculos[i])
 	}
 
-	// Os dois índices declarados pelo fixture do §12, conferidos na CÉLULA do
-	// índice: é a diferença entre "a palavra bitmap aparece em algum lugar da
-	// linha" e "o índice desta coluna é bitmap".
-	for coluna, quer := range map[string]string{"Acct-Status-Type": "bitmap", "NAS-IP-Address": "hash"} {
+	// Os dois campos indexados do fixture do §12, conferidos na CÉLULA do
+	// índice — e não com um `strings.Contains` na linha inteira, que não
+	// distinguiria "a palavra bitmap aparece em algum lugar" de "o índice
+	// desta coluna é bitmap".
+	//
+	// As DUAS saem "bitmap": antes da D5, NAS-IP-Address era `index: hash` e
+	// saía diferente de Acct-Status-Type. Com um motor só, `index: true`
+	// sempre compila para o mesmo IndexKind (compile.go), e o wire — que
+	// publica o plano, não a grafia de entrada — reflete isso.
+	for coluna, quer := range map[string]string{"Acct-Status-Type": "bitmap", "NAS-IP-Address": "bitmap"} {
 		if got := celulaSobORotulo(t, cabecalho, linhaDaTabela(t, linhas, coluna), "ÍNDICE"); got != quer {
 			t.Errorf("o índice de %s saiu %q, queria %q", coluna, got, quer)
 		}

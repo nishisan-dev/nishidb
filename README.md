@@ -280,14 +280,14 @@ schema:
     Acct-Status-Type:
       type: string
       alias: status
-      index: bitmap
+      index: true
     Acct-Terminate-Cause:
       type: string
       alias: terminate_cause
     NAS-IP-Address:
       type: ipv4
       alias: nas_ip
-      index: hash
+      index: true
     User-Name:
       type: string
       alias: username
@@ -311,7 +311,7 @@ com tipo e índice próprios:
         - path: probeIpNode
           as: probe_ip
           type: string
-          index: bitmap
+          index: true
         - path: alarme.id       # caminho de mais de um nível
           as: alarme_id
           type: string
@@ -363,11 +363,10 @@ Regras que valem a pena saber antes de declarar:
   então acrescentá-la a um dataset que já tem linhas é recusado na subida: as
   linhas antigas ficariam sem a coluna e o filtro sobre ela as omitiria em
   silêncio.
-- **Índice:** `bitmap` aceita `string`, `int64` e `boolean`; `hash` aceita
-  `string`, `int64`, `ipv4` e `ipv6`. As duas grafias declaram o MESMO índice —
-  há um motor só, por segmento —, e a escolha entre elas deixou de mudar
-  qualquer coisa em disco. Elas continuam existindo para não quebrar a
-  configuração de quem já as escreveu.
+- **Índice:** `index: true` é a **única** grafia aceita — `index: hash` e
+  `index: bitmap` foram substituídos por um índice único e a subida **recusa**
+  as duas com exit 3. O conjunto indexável é a união do que os dois motores
+  antigos aceitavam: `string`, `int64`, `boolean`, `ipv4` e `ipv6`.
 - **O que ENTRA na coluna mesmo vindo noutra forma:** numa coluna `string`,
   número e `true`/`false` são gravados como o **texto-fonte** (`5` → `"5"`,
   `1.50` → `"1.50"`, `true` → `"true"`); numa coluna `int64` ou `double`, a
@@ -414,7 +413,7 @@ schema:
     # origem, e declarar os dois abriria a porta para eles divergirem.
     originalSeverity:
       frozenFrom: severity
-      index: bitmap          # é coluna normal: indexável e consultável
+      index: true            # é coluna normal: indexável e consultável
     # Congela o RELÓGIO do writer — o mesmo instante do `_writtenAt` do evento
     # que criou a entidade.
     createdAt:
@@ -559,10 +558,13 @@ existiam quando o campo foi declarado ainda não são reconstruídos, então ele
 varrem em vez de indexar — o ganho vale para o que for gravado a partir dali, e
 o resto chega quando a reconstrução existir (débito 22).
 
-**`bitmap` e `hash` deixaram de ser escolhas diferentes.** As duas grafias
-declaram o mesmo índice, e a distinção de cardinalidade que elas carregavam
-desapareceu com os dois motores que a justificavam: hoje é uma lista de postings
-por segmento, e densidade é decisão de codificação, não de configuração.
+**`index: hash` e `index: bitmap` foram substituídos por `index: true`.** A
+distinção de cardinalidade que as duas grafias carregavam desapareceu com os
+dois motores globais que a justificavam — hoje é uma lista de postings por
+segmento, e densidade é decisão de codificação, não de configuração. Aceitá-las
+como sinônimo de `index: true` deixaria o operador escrevendo uma distinção que
+não existe mais, então a subida **recusa as duas com exit 3**, com a mensagem
+ensinando a grafia nova.
 
 #### Guardar o evento cru: a tabela histórica
 
@@ -580,7 +582,7 @@ history:
   segmentSize: 128MiB       # opcional; granularidade da purga
   rawPayload: false         # opcional; acrescenta a coluna _raw
   fields:                   # opcional; só overrides de índice
-    identifier: { index: hash }
+    identifier: { index: true }
 ```
 
 Da **mesma conexão**, as duas tabelas respondem:
@@ -1173,6 +1175,11 @@ keywords do lexer, e a recusa só acontece onde a query já ia falhar.
 | 6 | interrompido por sinal |
 | 7 | eventos não entraram por falha (perda de dado): investigue e reprocesse |
 | 8 | ingestão parada por `errors.invalidEvent: stop` — veja o evento e decida |
+
+Config do DATASET recusada na subida também sai **3** — inclusive `index: hash`
+e `index: bitmap`, que a subida recusa desde que foram substituídos por
+`index: true` — pela mesma razão do manifest ilegível: o problema está no
+YAML do dataset, não na linha de comando.
 
 O 7 é o que separa perda de sucesso. Evento **ruim** (JSON inválido, key
 ausente, tipo incompatível) é descartado pela política §101 e a ingestão termina

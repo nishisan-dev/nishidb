@@ -37,7 +37,7 @@ schema:
       type: int64
     status:
       type: string
-      index: bitmap
+      index: true
 query:
   maxRows: 3
   timeout: 30s
@@ -229,5 +229,45 @@ func TestIngestDeArquivo(t *testing.T) {
 	}
 	if !strings.Contains(a.stderr.String(), "100 lidos") {
 		t.Errorf("resumo = %q", a.stderr.String())
+	}
+}
+
+// Um dataset com uma grafia de índice que a D5 aposentou.
+const yamlGrafiaDeIndiceObsoleta = `
+version: 1
+name: grafiaantiga
+materialization:
+  key:
+    field: id
+schema:
+  fields:
+    id:
+      type: string
+    status:
+      type: string
+      index: hash
+`
+
+// TestDatasetComGrafiaDeIndiceObsoletaSaiComExitDataset é o gate de exit code
+// da D5: sem ele, a recusa do schema poderia sair pelo default genérico do
+// codigoDoErro (ExitUso, 1) sem que ninguém percebesse — e exit 1 manda o
+// operador olhar a LINHA DE COMANDO, não o dataset. `index: hash`/`index:
+// bitmap` são config RECUSADA na subida (o `Config recusa na subida` do
+// README), a mesma categoria do manifest ilegível e do dataset travado, e por
+// isso o código certo é o 3 (ExitDataset) — não o 4 (ExitWriter, que é writer
+// em modo falho, categoria diferente), nem o 1 do default.
+func TestDatasetComGrafiaDeIndiceObsoletaSaiComExitDataset(t *testing.T) {
+	a := novoAmbiente(t)
+	caminho := filepath.Join(a.dir, "datasets", "grafiaantiga.yaml")
+	if err := os.WriteFile(caminho, []byte(yamlGrafiaDeIndiceObsoleta), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code := a.roda("query", "--config", a.config, "--dataset", "grafiaantiga",
+		"SELECT id FROM grafiaantiga")
+	if code != cli.ExitDataset {
+		t.Fatalf("code = %d, want %d (ExitDataset)\n%s", code, cli.ExitDataset, a.stderr.String())
+	}
+	if !strings.Contains(a.stderr.String(), "index: true") {
+		t.Errorf("stderr não ensina a grafia nova: %q", a.stderr.String())
 	}
 }

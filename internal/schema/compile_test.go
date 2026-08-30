@@ -459,3 +459,55 @@ func TestCompileRecusaCamposDeclaradosAcimaDoTeto(t *testing.T) {
 		t.Errorf("Compile = %v, quer ErrTetoDeCampos", err)
 	}
 }
+
+// yamlComIndiceDeclarado monta uma spec mínima com um campo `node` que
+// declara `index: <grafia>` — usado pelos dois testes de D5 abaixo, que
+// precisam de um YAML isolado do baseYAML porque o baseYAML está migrando
+// para a grafia nova junto com o resto da suíte.
+func yamlComIndiceDeclarado(grafia string) string {
+	return "version: 1\nname: t\nmaterialization:\n  key:\n    field: id\n" +
+		"schema:\n  fields:\n    id:\n      type: string\n" +
+		"    node:\n      type: string\n      index: " + grafia + "\n"
+}
+
+// TestIndexTrueEhAceito prova que `index: true` marca o campo como indexado.
+// Com um motor só (D5), ela mapeia para o MESMO IndexKind que `index: bitmap`
+// mapeava antes — a rota R3/R4, que intersecta em vez de parar no primeiro
+// termo (R2, o caminho de IndexHash, fica morto: nenhuma config válida o
+// alcança mais). A Tarefa 11 apaga esse enum; aqui ele sobrevive porque o
+// planner ainda o consulta.
+func TestIndexTrueEhAceito(t *testing.T) {
+	s := parseOK(t, yamlComIndiceDeclarado("true"))
+	c, err := s.Compile(newFakeDict())
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	f, ok := c.FieldByName([]byte("node"))
+	if !ok {
+		t.Fatal("campo node não compilou")
+	}
+	if f.Index != IndexBitmap {
+		t.Errorf("index: true não marcou o campo como indexado (Index = %v, quer bitmap)", f.Index)
+	}
+}
+
+// TestAsGrafiasAntigasSaoRecusadas. Com um motor só, hash e bitmap
+// construiriam a mesma coisa — e config que declara uma escolha que o motor
+// ignora é o expireAfterWrite decorativo que o projeto já carrega como débito.
+// Aceitá-las como sinônimo seria pior: o operador continuaria escrevendo uma
+// distinção que não existe, e o WARN vira ruído que ninguém lê.
+func TestAsGrafiasAntigasSaoRecusadas(t *testing.T) {
+	for _, grafia := range []string{"hash", "bitmap"} {
+		t.Run(grafia, func(t *testing.T) {
+			_, err := Parse([]byte(yamlComIndiceDeclarado(grafia)), DefaultsPadrao)
+			if err == nil {
+				t.Fatalf("index: %s foi aceito", grafia)
+			}
+			// A mensagem tem de dizer o que ESCREVER, e não só o que está
+			// errado: quem lê isso está com o servidor fora do ar.
+			if !strings.Contains(err.Error(), "index: true") {
+				t.Errorf("a mensagem não ensina a grafia nova: %v", err)
+			}
+		})
+	}
+}

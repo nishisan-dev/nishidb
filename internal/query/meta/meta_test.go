@@ -28,7 +28,7 @@ schema:
       type: string
     status:
       type: string
-      index: bitmap
+      index: true
     doc:
       type: json
     livre:

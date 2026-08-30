@@ -48,9 +48,12 @@ func TestLoadSpec12YAML(t *testing.T) {
 		typ    types.FieldType
 		index  IndexKind
 	}{
-		{"nas_ip", "NAS-IP-Address", types.TypeIPv4, IndexHash},
+		// nas_ip e ip eram index: hash antes da D5; hoje `index: true` mapeia
+		// SEMPRE para IndexBitmap (R3/R4, a regra que intersecta), então os
+		// dois saem com o mesmo IndexKind que status e terminate_cause.
+		{"nas_ip", "NAS-IP-Address", types.TypeIPv4, IndexBitmap},
 		{"status", "Acct-Status-Type", types.TypeString, IndexBitmap},
-		{"ip", "Framed-IP-Address", types.TypeIPv4, IndexHash},
+		{"ip", "Framed-IP-Address", types.TypeIPv4, IndexBitmap},
 		{"username", "User-Name", types.TypeString, IndexNone},
 		{"service_id", "id", types.TypeString, IndexNone},
 		{"connect_info", "Connect-Info", types.TypeInt64, IndexNone},

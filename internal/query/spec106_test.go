@@ -70,19 +70,20 @@ func TestSpec106BitmapLookup(t *testing.T) {
 	}
 }
 
-// §106 — hash lookup. Roda contra o DUBLÊ: o índice hash real é da Fase 8, e o
-// *storage.Store do M1 não implementa LookupHash.
+// §106 — item histórico "hash lookup": antes da D5, `nas` (NAS-Identifier)
+// era `index: hash` e o fixture o mantinha DELIBERADAMENTE fora do conjunto
+// bitmap, para provar que o plano hash respondia sozinho. Com `index: true`
+// como grafia única, `nas` compila para o MESMO IndexKind que qualquer outro
+// campo indexado (compile.go, indexKindDe) e entra no MESMO conjunto —
+// novoHarness não distingue mais os dois. O nome do teste ficou porque o
+// item numerado do §106 é este; o que ele prova — a consulta por `nas`
+// resolve sem varredura — não mudou.
 func TestSpec106HashLookup(t *testing.T) {
 	h := semeado(t)
 	rows := h.consultaOK(`SELECT id FROM radius_sessions WHERE nas = 'NAS-9'`)
 
 	if got := chaves(rows, "id"); !reflect.DeepEqual(got, []string{"CMP-0003", "CMP-0004"}) {
 		t.Fatalf("resultado = %v", got)
-	}
-	// O campo tem índice hash e NÃO tem bitmap: é o caminho do hash mesmo.
-	f, _ := h.sch.FieldByName([]byte("NAS-Identifier"))
-	if h.store.HasBitmap(f.ID) {
-		t.Error("fixture inválido: o campo deveria ter só índice hash")
 	}
 	if n := h.engine.Metrics().SourceFullScan.Load(); n != 0 {
 		t.Errorf("SourceFullScan = %d, want 0", n)
@@ -173,7 +174,9 @@ func TestUniaoMisturaBitmapEHash(t *testing.T) {
 	rows := h.consultaOK(
 		`SELECT id FROM radius_sessions WHERE status = 'Start' OR nas_ip = '10.0.0.2'`)
 
-	// CMP-0002 pelo bitmap (status Start), CMP-0003 e CMP-0004 pelo hash.
+	// CMP-0002 por status='Start', CMP-0003 e CMP-0004 por nas_ip — os dois
+	// termos indexados (o nome do teste é histórico: antes da D5 um dos dois
+	// era `index: hash`; hoje os dois compilam para o mesmo IndexKind).
 	got := chaves(rows, "id")
 	if !reflect.DeepEqual(got, []string{"CMP-0002", "CMP-0003", "CMP-0004"}) {
 		t.Fatalf("resultado = %v", got)

@@ -32,7 +32,7 @@ schema:
       alias: service_id
     status:
       type: string
-      index: bitmap
+      index: true
     octets:
       type: int64
     ratio:

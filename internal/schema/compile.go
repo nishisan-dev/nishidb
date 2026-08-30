@@ -45,17 +45,17 @@ const (
 	UnknownReject
 )
 
-// IndexKind é o índice secundário declarado para o campo no YAML.
+// IndexKind é o índice secundário do campo, resolvido a partir do YAML.
 //
-// As duas grafias declaram HOJE A MESMA COISA: existe um motor só
-// (internal/index/segindex), e ele é por segmento. A distinção de cardinalidade
-// que separava os dois — arquivo de bits por valor distinto contra tabela única
-// por campo — morreu com os dois motores globais que a sustentavam, e densidade
-// virou decisão de codificação dentro de uma estrutura só.
-//
-// O tipo sobrevive enquanto a configuração aceitar as duas grafias, e é isso que
-// evita quebrar o YAML de quem já as escreveu. Um campo booleano no lugar dele é
-// a mudança que aposenta as duas.
+// A partir da D5 (planning/spec-subsistema-1-indice-por-segmento.md),
+// `index: true` é a ÚNICA grafia que o YAML aceita — `hash` e `bitmap` são
+// recusados na subida (ver validaIndice, em congelada.go). O tipo continua
+// tendo três valores porque o PLANNER ainda os distingue (a regra R2 lê
+// IndexHash, R3/R4 leem IndexBitmap): `index: true` sempre compila para
+// IndexBitmap, que é a regra que INTERSECTA vários termos em vez de parar no
+// primeiro — a rota certa agora que não há mais "qual dos dois" para escolher.
+// IndexHash fica, mas nenhuma config válida o produz mais: é o enum morto que
+// a Tarefa 11 apaga, junto com a regra R2 e o rename dos planos.
 type IndexKind uint8
 
 const (
@@ -64,11 +64,12 @@ const (
 	IndexHash
 )
 
-// String devolve o índice como o operador o escreveu no YAML.
+// String devolve o índice em texto, para o `index` do /v1/metadata.
 //
-// O vocabulário do YAML é também o do wire (o `index` de /v1/metadata): são a
-// mesma informação — o que a configuração declara —, e traduzi-la para um
-// segundo conjunto de palavras só criaria a chance de os dois divergirem.
+// Deixou de ser o mesmo vocabulário do YAML com a D5: a config só aceita
+// `true`, mas o wire continua nomeando o PLANO que o planner escolhe
+// (bitmap/hash/none) — é essa distinção interna, não a grafia de entrada, que
+// o operador quer ver ao perguntar "que índice esta coluna tem".
 func (k IndexKind) String() string {
 	switch k {
 	case IndexNone:
@@ -770,18 +771,22 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 	return c, nil
 }
 
-// indexKindDe traduz o vocabulário do YAML. Vive numa função só porque o
-// campo de topo e a coluna derivada leem a MESMA chave, e duas traduções
-// divergiriam no dia em que um índice novo entrasse.
+// indexKindDe traduz o vocabulário do YAML já validado (validaIndice, em
+// congelada.go, só deixa passar "" ou "true" — chamar isto sobre um valor cru
+// não validado seria bug de quem compila sem ter passado pelo validate).
+// Vive numa função só porque o campo de topo e a coluna derivada leem a MESMA
+// chave, e duas traduções divergiriam no dia em que o planner deixasse de
+// precisar do enum (Tarefa 11).
+//
+// `true` mapeia para IndexBitmap, e não para um terceiro valor: é a regra
+// R3/R4 do planner (bitmapEligible) que passa a atender TODO campo indexado,
+// porque ela intersecta múltiplos termos em vez de escolher um só — a
+// distinção que fazia `hash` valer a pena morreu com o motor único.
 func indexKindDe(yaml string) IndexKind {
-	switch yaml {
-	case "bitmap":
+	if yaml == "true" {
 		return IndexBitmap
-	case "hash":
-		return IndexHash
-	default:
-		return IndexNone
 	}
+	return IndexNone
 }
 
 // registraDerivadas compila as colunas declaradas em `extract`.

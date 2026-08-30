@@ -86,8 +86,11 @@ func TestPlanCandidatosSaoSuperset(t *testing.T) {
 			[]string{"A", "C", "D"}},
 		{"interseção", and(eq(status, str("Stop")), eq(protocol, str("PPPoE"))),
 			`BitmapIntersect(Acct-Status-Type="Stop", Framed-Protocol="PPPoE")`, []string{"A", "D"}},
-		{"união bitmap+hash", or(eq(status, str("Stop")), eq(nasIP, ipv4(t, "10.0.0.3"))),
-			`IndexUnion(bitmap:Acct-Status-Type="Stop", hash:NAS-IP-Address=0x0a000003)`,
+		// nasIP era `index: hash` antes da D5; com `index: true` como grafia
+		// única ele compila para o mesmo IndexBitmap que status, e os dois
+		// termos da união saem com o mesmo prefixo.
+		{"união de dois campos indexados", or(eq(status, str("Stop")), eq(nasIP, ipv4(t, "10.0.0.3"))),
+			`IndexUnion(bitmap:Acct-Status-Type="Stop", bitmap:NAS-IP-Address=0x0a000003)`,
 			[]string{"A", "C", "D", "F"}},
 		// OR com um disjunct não indexado degrada por inteiro: uma união
 		// parcial deixaria B de fora.

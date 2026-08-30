@@ -139,7 +139,7 @@ schema:
       type: int64
     Acct-Status-Type:
       type: string
-      index: bitmap
+      index: true
     Framed-IP-Address:
       type: ipv4
     Event-Timestamp:

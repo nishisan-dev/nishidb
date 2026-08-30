@@ -195,17 +195,17 @@ func TestCongeladasSaemOrdenadasPorFieldID(t *testing.T) {
 func TestIndiceDaCongeladaSegueOTipoDaOrigem(t *testing.T) {
 	aceitaCongelada(t, yamlCongelada("", "    id:\n      type: string\n"+
 		"    sev:\n      type: int64\n"+
-		"    origSev:\n      frozenFrom: sev\n      index: bitmap\n"))
+		"    origSev:\n      frozenFrom: sev\n      index: true\n"))
 	recusaCongelada(t, yamlCongelada("", "    id:\n      type: string\n"+
 		"    quando:\n      type: timestamp\n"+
-		"    origQuando:\n      frozenFrom: quando\n      index: bitmap\n"),
-		"timestamp", "bitmap")
+		"    origQuando:\n      frozenFrom: quando\n      index: true\n"),
+		"timestamp")
 }
 
 func TestIndiceSobreACongeladaDoRelogioEhRecusado(t *testing.T) {
 	recusaCongelada(t, yamlCongelada("", "    id:\n      type: string\n"+
-		"    criadoEm:\n      frozenFrom: \"@writeTime\"\n      index: hash\n"),
-		"timestamp", "hash")
+		"    criadoEm:\n      frozenFrom: \"@writeTime\"\n      index: true\n"),
+		"timestamp")
 }
 
 // O format é do parsing da ORIGEM, e a congelada não o declara — mas precisa

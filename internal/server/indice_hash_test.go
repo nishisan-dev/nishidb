@@ -11,8 +11,12 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// specComHash declara uma coluna com índice hash — o caso do piloto, em que a
-// dimensão de consulta mais valiosa (`node`) é hash.
+// specComHash declara uma coluna indexada — o caso do piloto, em que a
+// dimensão de consulta mais valiosa (`node`) precisa de índice. A grafia
+// mudou com a D5 (`index: true`, não mais `index: hash`), mas o nome do
+// fixture e o caminho que ele exercita — schema.CamposComHash — continuam os
+// mesmos: as duas funções sobrevivem separadas até a Tarefa 11 unificar
+// storage.Options.
 const specComHash = `version: 1
 name: d
 materialization:
@@ -24,7 +28,7 @@ schema:
       type: string
     node:
       type: string
-      index: hash
+      index: true
 `
 
 // TestServidorAbreODatasetComOsCamposDeHashDeclarados prova, pelo caminho de

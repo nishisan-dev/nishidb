@@ -109,7 +109,7 @@ schema:
   fields:
     id: { type: string }
     _SEQ: { type: int64 }
-    Acct-Status-Type: { type: string, alias: status, index: bitmap }
+    Acct-Status-Type: { type: string, alias: status, index: true }
     Framed-IP-Address: { type: ipv4, alias: ip }
 ```
 

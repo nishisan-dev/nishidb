@@ -34,11 +34,11 @@ schema:
     Acct-Status-Type:
       type: string
       alias: status
-      index: bitmap
+      index: true
     Framed-IP-Address:
       type: ipv4
       alias: ip
-      index: hash
+      index: true
     Event-Timestamp:
       type: timestamp
     Acct-Input-Octets:

@@ -47,7 +47,7 @@ schema:
       type: int64
     status:
       type: string
-      index: bitmap
+      index: true
 `
 
 // trocaQueryGlobal regrava o bloco `query:` do nishidb.yaml do ambiente. O

@@ -253,7 +253,7 @@ schema:
       type: int64
     Acct-Status-Type:
       type: string
-      index: bitmap
+      index: true
     Acct-Input-Octets:
       type: int64
 `

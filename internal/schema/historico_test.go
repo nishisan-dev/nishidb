@@ -18,7 +18,7 @@ func yamlComHistorico(historico string) string {
 		historico +
 		"schema:\n  include: [\"*\"]\n  fields:\n" +
 		"    identifier:\n      type: string\n" +
-		"    node:\n      type: string\n      index: hash\n" +
+		"    node:\n      type: string\n      index: true\n" +
 		"    severity:\n      type: int64\n" +
 		"    latencia:\n      type: double\n" +
 		"    doc:\n      type: json\n" +
@@ -132,7 +132,7 @@ func TestValidaContraSegmentoEfetivoConfereODeclaradoNaAbertura(t *testing.T) {
 }
 
 func TestIndiceDoHistoricoSobreCampoInexistenteEhRecusado(t *testing.T) {
-	recusaHistorico(t, "history:\n  expireAfterWrite: 7d\n  fields:\n    inexistente:\n      index: hash\n",
+	recusaHistorico(t, "history:\n  expireAfterWrite: 7d\n  fields:\n    inexistente:\n      index: true\n",
 		"inexistente")
 }
 
@@ -149,23 +149,23 @@ func TestIndiceInvalidoNoHistoricoEhRecusado(t *testing.T) {
 }
 
 func TestTipoNaoIndexavelNoHistoricoEhRecusado(t *testing.T) {
-	recusaHistorico(t, "history:\n  expireAfterWrite: 7d\n  fields:\n    latencia:\n      index: bitmap\n",
+	recusaHistorico(t, "history:\n  expireAfterWrite: 7d\n  fields:\n    latencia:\n      index: true\n",
 		"não suporta")
 }
 
 // A congelada é produto do merge, e o histórico não tem merge: a coluna não
 // existe lá, então indexá-la é indexar o que não há.
 func TestCongeladaNaoPodeSerIndexadaNoHistorico(t *testing.T) {
-	recusaHistorico(t, "history:\n  expireAfterWrite: 7d\n  fields:\n    originalSeverity:\n      index: bitmap\n",
+	recusaHistorico(t, "history:\n  expireAfterWrite: 7d\n  fields:\n    originalSeverity:\n      index: true\n",
 		"originalSeverity", "congelada")
 }
 
 // No base a key é recusada porque a primary já a indexa. No histórico não há
 // primary, e ela é a coluna de consulta mais provável de todas.
 func TestAKeyDoBasePodeSerIndexadaNoHistorico(t *testing.T) {
-	s := specComHistorico(t, "history:\n  expireAfterWrite: 7d\n  fields:\n    identifier:\n      index: hash\n")
-	if got := s.Historico.Indices["identifier"]; got != "hash" {
-		t.Fatalf("Indices[identifier] = %q, quer %q", got, "hash")
+	s := specComHistorico(t, "history:\n  expireAfterWrite: 7d\n  fields:\n    identifier:\n      index: true\n")
+	if got := s.Historico.Indices["identifier"]; got != "true" {
+		t.Fatalf("Indices[identifier] = %q, quer %q", got, "true")
 	}
 }
 
@@ -235,12 +235,12 @@ func TestDerivaHistoricoNaoHerdaIndiceDoBase(t *testing.T) {
 
 func TestDerivaHistoricoAplicaOsIndicesDeclarados(t *testing.T) {
 	h := specComHistorico(t, "history:\n  expireAfterWrite: 7d\n  fields:\n"+
-		"    identifier:\n      index: hash\n    severity:\n      index: bitmap\n").DerivaHistorico()
-	if idx := h.Schema.Fields["identifier"].Index; idx != "hash" {
-		t.Errorf("identifier.Index = %q, quer hash", idx)
+		"    identifier:\n      index: true\n    severity:\n      index: true\n").DerivaHistorico()
+	if idx := h.Schema.Fields["identifier"].Index; idx != "true" {
+		t.Errorf("identifier.Index = %q, quer true", idx)
 	}
-	if idx := h.Schema.Fields["severity"].Index; idx != "bitmap" {
-		t.Errorf("severity.Index = %q, quer bitmap", idx)
+	if idx := h.Schema.Fields["severity"].Index; idx != "true" {
+		t.Errorf("severity.Index = %q, quer true", idx)
 	}
 }
 
@@ -382,14 +382,14 @@ func TestOHistoricoNaoCompilaAsCongeladas(t *testing.T) {
 
 func TestOsIndicesDoHistoricoChegamAoCompilado(t *testing.T) {
 	base, hist := compilaPar(t, "history:\n  expireAfterWrite: 7d\n  fields:\n"+
-		"    identifier:\n      index: hash\n")
+		"    identifier:\n      index: true\n")
 	hf, _ := hist.FieldByName([]byte("identifier"))
-	if hf.Index != IndexHash {
-		t.Errorf("identifier.Index = %v no histórico, quer hash", hf.Index)
+	if hf.Index != IndexBitmap {
+		t.Errorf("identifier.Index = %v no histórico, quer bitmap", hf.Index)
 	}
-	// E o node, que é hash no BASE, não herda nada.
+	// E o node, que é indexado no BASE, não herda nada.
 	bn, _ := base.FieldByName([]byte("node"))
-	if bn.Index != IndexHash {
+	if bn.Index != IndexBitmap {
 		t.Fatal("a fixture perdeu o índice do base")
 	}
 	hn, _ := hist.FieldByName([]byte("node"))

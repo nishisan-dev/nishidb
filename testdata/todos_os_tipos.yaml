@@ -30,7 +30,7 @@ schema:
     texto:
       type: string
       alias: t
-      index: bitmap
+      index: true
     inteiro:
       type: int64
     real:
@@ -41,7 +41,7 @@ schema:
       type: timestamp
     v4:
       type: ipv4
-      index: hash
+      index: true
     v6:
       type: ipv6
     rede4:

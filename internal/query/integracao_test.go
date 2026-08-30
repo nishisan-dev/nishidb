@@ -286,42 +286,48 @@ func TestIntegracaoFimAFim(t *testing.T) {
 		comparaConjuntos(t, "união", got, want)
 	})
 
-	// A regra R2 do planner e o motor hash, ponta a ponta. Este subteste é a
-	// prova de que o débito 19 fechou: enquanto o *storage.Store não
-	// implementava LookupHash, `p.hash` era nil, o plano caía para FullScan e
-	// a query varria o dataset inteiro — no piloto, 17,8M linhas por uma
-	// consulta que o índice resolve num probe.
+	// Era a regra R2 do planner e o motor hash, ponta a ponta — a prova de que
+	// o débito 19 fechou (enquanto o *storage.Store não implementava
+	// LookupHash, `p.hash` era nil, o plano caía para FullScan e a query
+	// varria o dataset inteiro, 17,8M linhas no piloto por uma consulta que o
+	// índice resolve num probe).
 	//
-	// O oráculo é o mesmo dos bitmaps, e é o que impede o teste de se
-	// contentar com "veio alguma coisa": o índice hash devolve SUPERSET por
-	// desenho, então um resultado A MAIS seria defeito da revalidação e um
-	// resultado A MENOS seria defeito do índice. As duas direções são
-	// conferidas pelo comparaConjuntos.
-	t.Run("hash scan escolhe o indice e acerta o conjunto", func(t *testing.T) {
+	// A D5 aposentou `index: hash`: `nas` agora compila para IndexBitmap como
+	// qualquer outro campo indexado (compile.go, indexKindDe), e o plano que
+	// o atende é BitmapScan, não HashIndex — a métrica trocou, o resto do
+	// teste (e a razão de existir) não. O oráculo continua o mesmo dos outros
+	// bitmaps, e segue impedindo o teste de se contentar com "veio alguma
+	// coisa": o índice devolve SUPERSET por desenho, então um resultado A MAIS
+	// seria defeito da revalidação e A MENOS seria defeito do índice — as duas
+	// direções seguem conferidas pelo comparaConjuntos.
+	t.Run("indice escolhe o plano e acerta o conjunto", func(t *testing.T) {
 		alvo := algumValor(t, ig.oracle, "NAS-Identifier")
 		want := ig.oracle.keysOnde(func(e map[string]any) bool { return campoIgual(e, "NAS-Identifier", alvo) })
-		antes := ig.engine.PlanMetrics().HashIndex.Load()
+		antes := ig.engine.PlanMetrics().BitmapScan.Load()
 		fullAntes := ig.engine.PlanMetrics().FullScan.Load()
 
 		got := ig.ids(`SELECT id FROM radius_sessions WHERE nas = ?`,
 			types.Value{Type: types.TypeString, Bytes: []byte(alvo)})
-		comparaConjuntos(t, "hash scan", got, want)
+		comparaConjuntos(t, "index scan", got, want)
 
 		// A métrica do planner é o observável do PLANO escolhido, e conferi-la
 		// é o que separa "o resultado está certo" de "o índice foi usado": um
 		// FullScan devolveria exatamente o mesmo conjunto, varrendo tudo.
-		if depois := ig.engine.PlanMetrics().HashIndex.Load(); depois != antes+1 {
-			t.Errorf("query.hash_index não contou o plano: %d → %d", antes, depois)
+		if depois := ig.engine.PlanMetrics().BitmapScan.Load(); depois != antes+1 {
+			t.Errorf("query.bitmap_scan não contou o plano: %d → %d", antes, depois)
 		}
 		if depois := ig.engine.PlanMetrics().FullScan.Load(); depois != fullAntes {
-			t.Errorf("a query degradou para FullScan (%d → %d) com o campo indexado por hash", fullAntes, depois)
+			t.Errorf("a query degradou para FullScan (%d → %d) com o campo indexado", fullAntes, depois)
 		}
 	})
 
-	// Hash e bitmap no MESMO OR. É o caso que o godoc do LookupHash chama de
-	// invariante: o IndexUnionPlan funde os dois iteradores num unionIter que
-	// assume ordem crescente dos DOIS lados. Um deles desordenado produziria
-	// união incompleta em silêncio, e nenhum teste de um motor só a pegaria.
+	// Dois campos indexados no MESMO OR. É o caso que o godoc do LookupBitmap
+	// chama de invariante: o IndexUnionPlan funde os dois iteradores num
+	// unionIter que assume ordem crescente dos DOIS lados. Um deles
+	// desordenado produziria união incompleta em silêncio, e nenhum teste de
+	// um motor só a pegaria. O nome do subteste é histórico — antes da D5 um
+	// dos dois campos era `index: hash` — e o comportamento que ele prova
+	// (união correta entre dois termos indexados quaisquer) não mudou.
 	t.Run("uniao mistura hash e bitmap", func(t *testing.T) {
 		alvo := algumValor(t, ig.oracle, "NAS-Identifier")
 		want := ig.oracle.keysOnde(func(e map[string]any) bool {

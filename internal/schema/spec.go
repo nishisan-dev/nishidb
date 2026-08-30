@@ -428,14 +428,27 @@ func isIdentName(s string) bool {
 	return true
 }
 
-// bitmapIndexable/hashIndexable definem os tipos indexáveis por índice
-// (design §2.1); auto não é indexável (tipo desconhecido até runtime).
+// bitmapIndexable/hashIndexable definem os tipos que cada um dos DOIS motores
+// GLOBAIS aceitava (design §2.1) — histórico, porque os dois motores saíram
+// (Tarefa 9), mas os dois conjuntos continuam vivos como a base do que
+// indexavel une logo abaixo: `auto` não entra em nenhum dos dois porque o tipo
+// só é conhecido em runtime.
 func bitmapIndexable(t string) bool {
 	return t == "string" || t == "int64" || t == "boolean"
 }
 
 func hashIndexable(t string) bool {
 	return t == "string" || t == "int64" || t == "ipv4" || t == "ipv6"
+}
+
+// indexavel é o conjunto que `index: true` aceita: a UNIÃO dos dois motores
+// antigos, e não a interseção. Com um motor só, a distinção de cardinalidade
+// que os separava morreu — mas nenhuma coluna pode PERDER a indexabilidade que
+// já tinha só porque as duas grafias viraram uma: um campo `ipv4` que só
+// bitmapIndexable recusava (e só hashIndexable aceitava) continua indexável
+// com `index: true`, exatamente como continuava indexável com `index: hash`.
+func indexavel(t string) bool {
+	return bitmapIndexable(t) || hashIndexable(t)
 }
 
 // validaExtracoes confere o bloco `extract` de todos os campos.
@@ -501,18 +514,11 @@ func validaExtracoes(s *DatasetSpec, fields map[string]FieldSpec, aliases map[st
 				return specErrf("extract %q declarado duas vezes (campos %q e %q)", nome, antes, pai)
 			}
 			vistos[nome] = pai
-			switch e.Index {
-			case "":
-			case "bitmap":
-				if !bitmapIndexable(e.Type) {
-					return specErrf("extract %q: tipo %q não suporta índice bitmap", nome, e.Type)
-				}
-			case "hash":
-				if !hashIndexable(e.Type) {
-					return specErrf("extract %q: tipo %q não suporta índice hash", nome, e.Type)
-				}
-			default:
-				return specErrf("extract %q: index %q inválido (bitmap|hash)", nome, e.Index)
+			// A mesma validaIndice do campo de topo, e não uma segunda cópia: as
+			// duas fazem a MESMA pergunta (grafia aceita? tipo indexável?), e
+			// divergiriam no dia em que uma das duas mudasse sozinha.
+			if err := validaIndice(nome, e.Index, e.Type); err != nil {
+				return err
 			}
 		}
 	}
@@ -549,7 +555,7 @@ func nomeDaExtracao(pai string, i int, e ExtractSpec) (string, error) {
 }
 
 // CamposComBitmap devolve, em ordem determinística, os campos que o Store
-// precisa abrir com índice bitmap — os de topo E as colunas derivadas.
+// precisa abrir com índice — os de topo E as colunas derivadas.
 //
 // É o ÚNICO lugar que decide isso. O laço vivia copiado em quatro sítios —
 // servidor, duas rotas do CLI e o benchmark — e nenhuma cópia conhecia a
@@ -559,31 +565,35 @@ func nomeDaExtracao(pai string, i int, e ExtractSpec) (string, error) {
 //
 // A ORDEM é contrato, não estética: ela decide os FieldID de um dataset novo,
 // e o produto promete mapeamento determinístico para o mesmo spec.
-func CamposComBitmap(s *DatasetSpec) []string { return camposComIndice(s, "bitmap") }
-
-// CamposComHash é o mesmo para o motor hash, e existe pelo MESMO modo de falha
-// cruzado: enquanto o índice hash não tinha motor, o `index: hash` era só um
-// rótulo e ninguém precisava listá-lo; agora o Store abre um arquivo por campo
-// e grava o conjunto no manifest, então um sítio que esquecesse de passar a
-// lista criaria o dataset COM o índice pelo servidor e faria o `nishidb query`
-// seguinte RECUSAR abrir — porque o Store não deixa passar manifest que declara
-// índice que a abertura não conhece.
 //
-// A ordem é contrato pelo mesmo motivo: ela decide os FieldID de um dataset
-// novo.
-func CamposComHash(s *DatasetSpec) []string { return camposComIndice(s, "hash") }
+// Devolve o MESMO conjunto que CamposComHash (ver o godoc dela para o
+// porquê): a D5 aposentou as duas grafias que os separavam, e `index: true` é
+// a única que sobrou.
+func CamposComBitmap(s *DatasetSpec) []string { return camposComIndice(s) }
+
+// CamposComHash devolve, em ordem determinística, os MESMOS campos que
+// CamposComBitmap.
+//
+// As duas funções sobrevivem separadas — e não uma função só — porque
+// storage.Options ainda tem BitmapFieldNames e HashFieldNames como campos
+// DISTINTOS: unificá-los é a Tarefa 11, junto com o planner. Até lá, todo
+// chamador passa as duas listas (hoje idênticas) para os dois campos de
+// Options, e o Store trata a UNIÃO delas como o conjunto indexado — chamar
+// esta função com um resultado igual ao de CamposComBitmap é inofensivo por
+// construção, nunca um jeito de declarar dois conjuntos diferentes.
+func CamposComHash(s *DatasetSpec) []string { return camposComIndice(s) }
 
 // camposComIndice é o laço único dos dois. Uma cópia por motor é exatamente o
 // que produziu o defeito que o godoc do CamposComBitmap descreve — quatro
 // cópias do mesmo laço, nenhuma conhecendo a coluna derivada.
-func camposComIndice(s *DatasetSpec, motor string) []string {
+func camposComIndice(s *DatasetSpec) []string {
 	var out []string
 	for nome, f := range s.Schema.Fields {
-		if f.Index == motor {
+		if f.Index == "true" {
 			out = append(out, nome)
 		}
 		for i, e := range f.Extract {
-			if e.Index != motor {
+			if e.Index != "true" {
 				continue
 			}
 			derivada, err := nomeDaExtracao(nome, i, e)

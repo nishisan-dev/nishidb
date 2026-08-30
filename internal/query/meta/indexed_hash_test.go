@@ -11,7 +11,10 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-const alvoComHashYAML = `version: 1
+// alvoComIndiceYAML declara dois campos com `index: true` — a única grafia
+// desde a D5 — para o teste abaixo verificar a coluna `indexed`, que soma
+// HasBitmap e HasHash.
+const alvoComIndiceYAML = `version: 1
 name: eventos
 materialization:
   key:
@@ -23,25 +26,29 @@ schema:
       type: string
     status:
       type: string
-      index: bitmap
+      index: true
     node:
       type: string
-      index: hash
+      index: true
     livre:
       type: string
 `
 
-// TestIndexedReportaOMotorHash: a coluna `indexed` fala do MOTOR, e a coluna
-// `index` ao lado fala do que o YAML declara. Enquanto só o bitmap tinha
-// motor, uma coluna com `index: hash` saía com indexed=false — correto na
-// época, e mentira a partir do motor físico.
+// TestIndexedSomaAsDuasCapacidadesDeMotor: a coluna `indexed` fala do MOTOR, e
+// a coluna `index` ao lado fala do que o YAML declara. Antes da D5, um campo
+// `index: hash` sobre um Store que só respondia HasBitmap saía com
+// index=hash e indexed=false — correto na época, mentira a partir do motor
+// físico (fonte.go documenta o histórico).
 //
-// Esta é a única superfície pela qual o operador distingue "declarei hash e
-// está valendo" de "declarei e a query degradou para varredura". Deixá-la
-// respondendo false depois de o motor entrar seria pior do que não ter a
-// coluna: ela afirmaria ativamente que o índice não existe.
-func TestIndexedReportaOMotorHash(t *testing.T) {
-	spec, err := schema.Parse([]byte(alvoComHashYAML), schema.DefaultsPadrao)
+// A D5 aposentou a grafia `hash`, e todo campo indexado compila para o mesmo
+// IndexKind (compile.go, indexKindDe) — então `index` só pode sair "bitmap" ou
+// "none" agora. O que este teste continua provando é a soma: HasBitmap OU
+// HasHash reporta `indexed=true`, mesmo quando só UMA das duas capabilities
+// enxerga o campo — o cenário sintético abaixo (status só em Bitmap, node só
+// em Hash) é o que exercita os dois lados da soma ao mesmo tempo. A soma em
+// si é código que a Tarefa 11 funde; até lá, ela precisa continuar certa.
+func TestIndexedSomaAsDuasCapacidadesDeMotor(t *testing.T) {
+	spec, err := schema.Parse([]byte(alvoComIndiceYAML), schema.DefaultsPadrao)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +75,7 @@ func TestIndexedReportaOMotorHash(t *testing.T) {
 
 	casos := []struct{ nome, index, indexed string }{
 		{"status", "bitmap", "true"},
-		{"node", "hash", "true"},
+		{"node", "bitmap", "true"},
 		{"livre", "none", "false"},
 		// A key é indexada pela primary, e não por índice secundário: o YAML
 		// recusa `index:` nela. Reportá-la como indexada aqui confundiria as

@@ -35,15 +35,15 @@ schema:
     Acct-Status-Type:
       type: string
       alias: status
-      index: bitmap
+      index: true
     NAS-Identifier:
       type: string
       alias: nas
-      index: hash
+      index: true
     Framed-IP-Address:
       type: ipv4
       alias: ip
-      index: hash
+      index: true
     Event-Timestamp:
       type: timestamp
     EventExpireDate:
@@ -97,7 +97,7 @@ func TestParseBaseYAML(t *testing.T) {
 	if s.Schema.UnknownFields != "include" {
 		t.Errorf("UnknownFields = %q", s.Schema.UnknownFields)
 	}
-	if got := s.Schema.Fields["Acct-Status-Type"]; got.Alias != "status" || got.Index != "bitmap" {
+	if got := s.Schema.Fields["Acct-Status-Type"]; got.Alias != "status" || got.Index != "true" {
 		t.Errorf("Acct-Status-Type = %+v", got)
 	}
 	if s.Query.MaxRows != 50000 || s.Query.Timeout != 10*time.Second {
@@ -170,10 +170,22 @@ func TestParseValidationErrors(t *testing.T) {
 		{"ttl na forma antiga", "version: 1\nname: t\nmaterialization:\n  key:\n    field: id\n  ttl:\n    expireAfterWrite: 2h\nschema:\n  include: [id]\n  fields:\n    id:\n      type: string\n", "lista"},
 		{"unknownFields invalido", repl("unknownFields: include", "unknownFields: drop"), "unknownFields"},
 		{"tipo de campo invalido", repl("      type: double", "      type: float"), "float"},
-		{"index invalido", repl("index: bitmap", "index: btree"), "btree"},
-		{"bitmap em double", repl("    ratio:\n      type: double", "    ratio:\n      type: double\n      index: bitmap"), "ratio"},
-		{"hash em json", repl("    extra:\n      type: auto", "    extra:\n      type: json\n      index: hash"), "extra"},
-		{"index na key", repl("      alias: service_id", "      alias: service_id\n      index: hash"), "key"},
+		{"index invalido", repl("index: true", "index: btree"), "btree"},
+		// D5: index: hash e index: bitmap foram as duas grafias GLOBAIS que o
+		// motor único aposentou. A rejeição tem sentinela própria
+		// (ErrGrafiaDeIndiceObsoleta, testada em cli.TestDatasetComGrafiaDe...
+		// e em schema.TestAsGrafiasAntigasSaoRecusadas); aqui só se confere que
+		// ela também sai pelo caminho comum de validação de campo, com a
+		// mensagem ensinando a grafia nova.
+		{"grafia hash obsoleta", repl("index: true", "index: hash"), "index: true"},
+		{"grafia bitmap obsoleta", repl("index: true", "index: bitmap"), "index: true"},
+		// bitmap/hash não distinguem mais nada (D5): o que sobrevive da
+		// checagem antiga é só "o tipo é indexável?", e a resposta não mudou
+		// para double nem para json — a UNIÃO dos dois conjuntos antigos
+		// continua sem os dois.
+		{"index em tipo nao indexavel (double)", repl("    ratio:\n      type: double", "    ratio:\n      type: double\n      index: true"), "ratio"},
+		{"index em tipo nao indexavel (json)", repl("    extra:\n      type: auto", "    extra:\n      type: json\n      index: true"), "extra"},
+		{"index na key", repl("      alias: service_id", "      alias: service_id\n      index: true"), "key"},
 		{"alias duplicado", repl("      alias: nas", "      alias: status"), "status"},
 		{"alias colide com nome", repl("      alias: nas", "      alias: _SEQ"), "_SEQ"},
 		{"exclude sem wildcard", strings.Replace(repl("    - \"*\"", "    - id"), "  exclude:\n    - debug\n", "  exclude:\n    - debug\n", 1), "exclude"},

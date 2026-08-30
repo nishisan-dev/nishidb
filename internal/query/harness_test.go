@@ -40,10 +40,16 @@ func novoHarness(t *testing.T) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// TODOS os campos indexados do fixture entram em Bitmap, e nenhum em
+	// Hash: a D5 aposentou `index: hash` do YAML, e `index: true` mapeia
+	// SEMPRE para IndexBitmap (compile.go, indexKindDe) — a regra R3/R4 do
+	// planner, que intersecta em vez de parar no primeiro termo. Nenhum campo
+	// do fixture (testdata/radius.materialization.yaml) compila mais para
+	// IndexHash, então nenhum pertence a Hash aqui.
 	idx := fakestorage.Indexes{
 		Bitmap: ids(t, sch, "Acct-Status-Type", "Framed-Protocol", "Acct-Terminate-Cause",
-			"Filter-Id", "NAS-Port-Type", "Service-Type", "Acct-Authentic"),
-		Hash: ids(t, sch, "NAS-IP-Address", "NAS-Identifier", "Framed-IP-Address"),
+			"Filter-Id", "NAS-Port-Type", "Service-Type", "Acct-Authentic",
+			"NAS-IP-Address", "NAS-Identifier", "Framed-IP-Address"),
 	}
 	st := fakestorage.New(idx)
 	eng := query.NewEngine()

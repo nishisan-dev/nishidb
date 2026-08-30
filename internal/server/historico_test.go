@@ -19,7 +19,7 @@ history:
   maxBytes: 4GiB
   fields:
     id:
-      index: hash
+      index: true
 schema:
   include: ["*"]
   fields:

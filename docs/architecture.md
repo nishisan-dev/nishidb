@@ -350,11 +350,12 @@ os 8 leitores, e inclui os buffers deles.
   location é publicada **por último**: até ela existir, a row não é visível;
 - **sequences** — um `int64` por rowId, para o stale check;
 - **índice secundário, por segmento** — um por (segmento, campo), ao lado do
-  `.dat`. `index: bitmap` e `index: hash` alimentam a MESMA estrutura: uma
-  lista de postings esparsa que mapeia hash do valor → rowIds daquele segmento,
-  em ordem crescente. Densidade deixou de ser escolha de motor e virou decisão
-  de codificação, e a distinção baixa/alta cardinalidade deixou de existir na
-  configuração.
+  `.dat`. `index: true` é a única grafia que declara indexação (D5:
+  `index: hash` e `index: bitmap` são recusados na subida, exit 3); a
+  estrutura por trás é uma lista de postings esparsa que mapeia hash do valor
+  → rowIds daquele segmento, em ordem crescente. Densidade deixou de ser
+  escolha de motor e virou decisão de codificação, e a distinção baixa/alta
+  cardinalidade deixou de existir na configuração.
 
   Duas propriedades explicam o resto do desenho. Não há fase de **CLEAR**: a
   posting do valor antigo mora no índice do segmento antigo, vira candidato a
@@ -1368,7 +1369,7 @@ history:
   segmentSize: 128MiB       # opcional; granularidade da purga
   rawPayload: false         # opcional; acrescenta a coluna _raw
   fields:                   # opcional; só overrides de índice
-    identifier: { index: hash }
+    identifier: { index: true }
 ```
 
 Declarar o bloco sem nenhuma das duas políticas de retenção é **recusado**: um
@@ -1540,22 +1541,22 @@ mostraria disco que já voltou ao dispositivo — a mesma classe de erro do déb
 O que `type:` aceita no YAML do dataset, o que cada um aceita como **entrada** e
 onde pode ser usado. Sem esta tabela, escrever um YAML novo é tentativa e erro.
 
-| `type:` | Entrada aceita no evento | `index: bitmap` | `index: hash` |
-|---|---|:---:|:---:|
-| `string` | string JSON, e ela precisa ser **UTF-8 válido**; **número e `true`/`false` também entram**, gravados como o **texto-fonte** (`1.50` → `"1.50"`, `007` → `"007"`, `true` → `"true"`) — não há normalização e nada se perde. **Object e array continuam recusados** | sim | sim |
-| `int64` | número inteiro (sem `.`, `e` nem `E`), `{"$numberLong":"<dígitos>"}` **ou string de dígitos** — `-?[0-9]+`, sem espaço em volta, sem sinal `+`, sem fração e sem expoente; zero à esquerda é aceito (`"007"` → 7) e estouro do range de `int64` é **recusado** | sim | sim |
-| `double` | número JSON **ou string com a mesma gramática de número JSON** (opcionalmente com fração e expoente). São recusados `NaN`, `Inf`, hexadecimal, separador `_`, sinal `+`, zero à esquerda (`"01"`), ponto sem dígito (`"1."`) e espaço em volta | não | não |
-| `boolean` | `true`/`false` JSON — a **string** `"true"` não serve | sim | não |
-| `timestamp` | **RFC3339(Nano)** com fuso **obrigatório** (`Z` ou `±hh:mm`) e fração **truncada em milissegundos**; **número = epoch millis** (inteiro); `{"$date":"<rfc3339>"}` e `{"$date":{"$numberLong":"<ms>"}}` | não | não |
-| `ipv4` | string `a.b.c.d`, octeto decimal **sem zero à esquerda** e sem espaço em volta | não | sim |
-| `ipv6` | string RFC 4291, inclusive a forma comprimida e `::ffff:a.b.c.d`; endereço **v4 puro é recusado** (`10.0.0.1` não vira v4-mapped), e zona (`%eth0`) também | não | sim |
-| `ipv4_prefix` | string `a.b.c.d/len`, com os **host bits preservados** — `10.0.0.1/24` é gravado como `10.0.0.1/24`, não mascarado | não | não |
-| `ipv6_prefix` | string `addr/len`, mesmas regras do `ipv4_prefix`; prefixo v4 é recusado, e prefixo v6 é recusado no `ipv4_prefix` | não | não |
-| `bytes` | string **base64** (`StdEncoding`: alfabeto padrão, com padding). base64url é recusado | não | não |
-| `json` | **só object ou array** (guardado cru, exatamente como veio); escalar — string, número, `true`/`false` — é **recusado** | não | não |
-| `datetime` | string no **`format:` declarado** (obrigatório), **sem fuso** — o instante é resolvido pelo fuso do **host**; **número = epoch millis**, como no `timestamp` | não | não |
-| `time` | string no **`format:` declarado** (obrigatório): hora do dia, sem data e sem fuso; **número = millis desde a meia-noite**, e fora de `[0, 86400000)` é recusado | não | não |
-| `auto` | qualquer entrada, mas o tipo inferido sai de um conjunto **restrito**: string→`string`, número inteiro→`int64`, número com fração ou expoente→`double`, `true`/`false`→`boolean`, object/array→`json`, `$numberLong`→`int64`, `$date`→`timestamp`. **Nunca** infere `ipv4`, `ipv6`, prefixo ou `bytes` — uma string com cara de IP vira `string`. O tipo é **fixado na primeira observação** e persistido | não | não |
+| `type:` | Entrada aceita no evento | `index: true` |
+|---|---|:---:|
+| `string` | string JSON, e ela precisa ser **UTF-8 válido**; **número e `true`/`false` também entram**, gravados como o **texto-fonte** (`1.50` → `"1.50"`, `007` → `"007"`, `true` → `"true"`) — não há normalização e nada se perde. **Object e array continuam recusados** | sim |
+| `int64` | número inteiro (sem `.`, `e` nem `E`), `{"$numberLong":"<dígitos>"}` **ou string de dígitos** — `-?[0-9]+`, sem espaço em volta, sem sinal `+`, sem fração e sem expoente; zero à esquerda é aceito (`"007"` → 7) e estouro do range de `int64` é **recusado** | sim |
+| `double` | número JSON **ou string com a mesma gramática de número JSON** (opcionalmente com fração e expoente). São recusados `NaN`, `Inf`, hexadecimal, separador `_`, sinal `+`, zero à esquerda (`"01"`), ponto sem dígito (`"1."`) e espaço em volta | não |
+| `boolean` | `true`/`false` JSON — a **string** `"true"` não serve | sim |
+| `timestamp` | **RFC3339(Nano)** com fuso **obrigatório** (`Z` ou `±hh:mm`) e fração **truncada em milissegundos**; **número = epoch millis** (inteiro); `{"$date":"<rfc3339>"}` e `{"$date":{"$numberLong":"<ms>"}}` | não |
+| `ipv4` | string `a.b.c.d`, octeto decimal **sem zero à esquerda** e sem espaço em volta | sim |
+| `ipv6` | string RFC 4291, inclusive a forma comprimida e `::ffff:a.b.c.d`; endereço **v4 puro é recusado** (`10.0.0.1` não vira v4-mapped), e zona (`%eth0`) também | sim |
+| `ipv4_prefix` | string `a.b.c.d/len`, com os **host bits preservados** — `10.0.0.1/24` é gravado como `10.0.0.1/24`, não mascarado | não |
+| `ipv6_prefix` | string `addr/len`, mesmas regras do `ipv4_prefix`; prefixo v4 é recusado, e prefixo v6 é recusado no `ipv4_prefix` | não |
+| `bytes` | string **base64** (`StdEncoding`: alfabeto padrão, com padding). base64url é recusado | não |
+| `json` | **só object ou array** (guardado cru, exatamente como veio); escalar — string, número, `true`/`false` — é **recusado** | não |
+| `datetime` | string no **`format:` declarado** (obrigatório), **sem fuso** — o instante é resolvido pelo fuso do **host**; **número = epoch millis**, como no `timestamp` | não |
+| `time` | string no **`format:` declarado** (obrigatório): hora do dia, sem data e sem fuso; **número = millis desde a meia-noite**, e fora de `[0, 86400000)` é recusado | não |
+| `auto` | qualquer entrada, mas o tipo inferido sai de um conjunto **restrito**: string→`string`, número inteiro→`int64`, número com fração ou expoente→`double`, `true`/`false`→`boolean`, object/array→`json`, `$numberLong`→`int64`, `$date`→`timestamp`. **Nunca** infere `ipv4`, `ipv6`, prefixo ou `bytes` — uma string com cara de IP vira `string`. O tipo é **fixado na primeira observação** e persistido | não |
 
 Restrições da v1: a **key** (`materialization.key.type`) só pode ser `string`, e
 a **sequence** (`materialization.sequence.type`) só pode ser `int64`. Campo

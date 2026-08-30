@@ -32,7 +32,7 @@ schema:
       type: int64
     origSev:
       frozenFrom: sev
-      index: bitmap
+      index: true
     criadoEm:
       frozenFrom: "@writeTime"
 `

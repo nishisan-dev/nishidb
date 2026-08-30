@@ -177,10 +177,14 @@ func TestExtractRecusas(t *testing.T) {
 			"float",
 		},
 		{
-			"bitmap em tipo que nao aceita",
+			// ipv4 SAIU deste caso: com um índice só (D5), ipv4 é indexável —
+			// era o hashIndexable que já o aceitava, e a união com bitmapIndexable
+			// não perde nada que qualquer um dos dois já tinha. double continua
+			// fora dos dois, então é ele que prova a recusa por tipo.
+			"index em tipo que nao aceita",
 			strings.Replace(extractYAML, "          as: probe_ip\n          type: string",
-				"          as: probe_ip\n          type: ipv4\n          index: bitmap", 1),
-			"bitmap",
+				"          as: probe_ip\n          type: double\n          index: true", 1),
+			"não suporta",
 		},
 		{
 			"pai excluido",
@@ -264,9 +268,9 @@ func TestDerivadaSobreviveAoReopenSemVirarCampoDeTopo(t *testing.T) {
 func TestCamposComBitmapIncluiADerivada(t *testing.T) {
 	yml := strings.Replace(extractYAML,
 		"          as: probe_ip\n          type: string",
-		"          as: probe_ip\n          type: string\n          index: bitmap", 1)
+		"          as: probe_ip\n          type: string\n          index: true", 1)
 	yml = strings.Replace(yml, "    id:\n      type: string",
-		"    id:\n      type: string\n    status:\n      type: string\n      index: bitmap", 1)
+		"    id:\n      type: string\n    status:\n      type: string\n      index: true", 1)
 	s := parseOK(t, yml)
 
 	got := CamposComBitmap(s)
