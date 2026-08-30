@@ -1520,11 +1520,20 @@ fato divergem no dia em que um caminho de erro esquece de somar.
 | `nishidb_history_data_bytes` | o que o `maxBytes` governa |
 | `nishidb_history_index_bytes` | o disco de índice, medido em blocos — a purga também o devolve |
 | `nishidb_history_oldest_written_at` | a janela real que a tabela cobre |
+| `nishidb_history_index_window_seconds` | a janela real que o ÍNDICE cobre |
 | `nishidb_history_segments_purged_total{reason}` | qual das duas políticas está decidindo |
 | `nishidb_history_retention_running` | o motor está de pé? |
 
 `nishidb_history_oldest_written_at` é a que se olha primeiro: é ela que mostra o
 `maxBytes` engolindo o `expireAfterWrite` declarado.
+
+`nishidb_history_index_window_seconds` é a irmã dela do lado do índice, e faz o
+mesmo serviço para o par `history.index.window` / `history.index.maxBytes`:
+comparada com o `window` declarado, ela diz se o teto de bytes assumiu o
+comando. Ela é o único observável em que aparece o conservadorismo da janela —
+um segmento ainda sem índice é cobrado do orçamento pelo MAIOR `.sidx` em disco,
+para que reconstruir e expulsar não virem um ciclo, e a consequência é uma
+cobertura menor que a que o teto declarado sugeriria.
 
 Os bytes de índice são medidos em **blocos** (`st_blocks`), e não pelo tamanho
 aparente. A diferença não é cosmética: a purga libera o prefixo morto com

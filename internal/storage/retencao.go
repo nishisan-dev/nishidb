@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -33,10 +34,25 @@ type LimitesDeRetencao struct {
 	ExpireAfterWrite time.Duration
 	// MaxBytes é o teto dos SEGMENTOS DE DADOS — o que a purga sabe devolver.
 	MaxBytes int64
+	// Janela é quanto do histórico vale INDEXAR (§4). Ela viaja junto das duas
+	// políticas de dado porque é aplicada na MESMA passada: a de um minuto já é
+	// exclusiva do histórico e já tem em mãos a lista de segmentos e os
+	// tamanhos, e um laço de fundo a menos é um laço a menos disputando o
+	// writer. Zerada é a janela infinita, que é o default.
+	Janela JanelaDeIndice
 }
 
 // Ativa reporta se há alguma política declarada.
-func (l LimitesDeRetencao) Ativa() bool { return l.ExpireAfterWrite > 0 || l.MaxBytes > 0 }
+//
+// A janela entra na conta apesar de não aposentar dado nenhum: é a passada de
+// retenção que a aplica, e uma janela declarada sobre limites que a desligassem
+// seria configuração aceita e sem efeito. Hoje o schema já exige
+// expireAfterWrite ou maxBytes para declarar `history:`, então a combinação não
+// chega aqui — mas depender disso deixaria a dependência escrita em outro
+// arquivo, e é o tipo de acoplamento que some numa refatoração.
+func (l LimitesDeRetencao) Ativa() bool {
+	return l.ExpireAfterWrite > 0 || l.MaxBytes > 0 || !l.Janela.Infinita()
+}
 
 // ResultadoDeRetencao é o que uma passada fez.
 type ResultadoDeRetencao struct {
@@ -46,6 +62,12 @@ type ResultadoDeRetencao struct {
 	PorTempo, PorTamanho int
 	// BytesDevolvidos é a soma dos tamanhos dos segmentos removidos.
 	BytesDevolvidos int64
+	// IndicesExpulsos são os .sidx que saíram por terem ficado FORA DA JANELA
+	// de indexação. É contagem separada de propósito: eles não tiram linha
+	// nenhuma da consulta — o segmento continua respondendo por enumeração —, e
+	// somá-los aos segmentos aposentados faria o log de retenção dizer que
+	// linhas sumiram quando só o atalho para elas sumiu.
+	IndicesExpulsos int
 }
 
 // IniciaRetencao sobe a goroutine de retenção do dataset histórico.
@@ -115,11 +137,12 @@ func (s *Store) rodaRetencao(ctx context.Context, lim LimitesDeRetencao) {
 				"dataset", s.opts.Dataset, "erro", err)
 			return
 		}
-		if res.PorTempo+res.PorTamanho > 0 {
+		if res.PorTempo+res.PorTamanho+res.IndicesExpulsos > 0 {
 			s.opts.Log.Info("retencao.passada",
 				"segmentos aposentados pela retenção do histórico",
 				"dataset", s.opts.Dataset,
 				"porTempo", res.PorTempo, "porTamanho", res.PorTamanho,
+				"indicesExpulsos", res.IndicesExpulsos,
 				"bytes", res.BytesDevolvidos, "marcaDagua", s.rowIDBase.Load())
 		}
 		t.Reset(intervaloEntreRetencoes)
@@ -167,6 +190,17 @@ func (s *Store) RetencaoUmaPassada(ctx context.Context, lim LimitesDeRetencao) (
 			return res, err
 		}
 	}
+	// A janela vem POR ÚLTIMO, depois de toda aposentadoria, e a ordem é o que
+	// impede a expulsão de decidir sobre um segmento que está saindo do disco:
+	// aposentar já leva o .sidx junto (removeIndiceDoSegmento), então o que
+	// sobra para a janela julgar é só o que continua vivo. Na ordem inversa ela
+	// gastaria preads medindo a fronteira de segmentos que a passada iria
+	// remover em seguida.
+	expulsos, err := s.aplicaJanela(ctx, lim.Janela)
+	if err != nil {
+		return res, err
+	}
+	res.IndicesExpulsos = expulsos
 	return res, nil
 }
 
@@ -441,6 +475,11 @@ type EstatisticasDeRetencao struct {
 	// InstanteMaisAntigo é o _writtenAt da linha mais antiga ainda visível,
 	// em millis, ou zero quando a tabela está vazia.
 	InstanteMaisAntigo int64
+	// JanelaEfetiva é o intervalo REALMENTE coberto pelos segmentos indexados.
+	// É a irmã do InstanteMaisAntigo do lado do índice: um mostra o
+	// `history.maxBytes` engolindo o `expireAfterWrite`, o outro mostra o
+	// `history.index.maxBytes` engolindo o `window`.
+	JanelaEfetiva time.Duration
 	// PurgadosPorTTL e PurgadosPorTamanho contam desde a subida.
 	PurgadosPorTTL, PurgadosPorTamanho int64
 	// MarcaDagua é o rowId a partir do qual a tabela é visível.
@@ -481,6 +520,7 @@ func (s *Store) EstatisticasDeRetencao() EstatisticasDeRetencao {
 	if ms, ok := s.instanteMaisAntigo(); ok {
 		e.InstanteMaisAntigo = ms
 	}
+	e.JanelaEfetiva = s.JanelaEfetiva()
 	return e
 }
 
@@ -551,11 +591,22 @@ func blocosDoDiretorioSe(dir string, aceita func(nome string) bool) int64 {
 		if err != nil {
 			continue
 		}
-		if st, ok := info.Sys().(*syscall.Stat_t); ok {
-			total += st.Blocks * 512
-			continue
-		}
-		total += info.Size()
+		total += blocosDe(info)
 	}
 	return total
+}
+
+// blocosDe é a conversão de um arquivo em BLOCOS alocados, numa função porque
+// dois contadores de disco precisam concordar: a soma por diretório e o teto da
+// janela de indexação. Duas cópias divergiriam no dia em que uma delas passasse
+// a somar o tamanho aparente, e as duas séries que o operador compara passariam
+// a falar de coisas diferentes.
+//
+// O fallback para o tamanho aparente cobre o filesystem que não expõe Stat_t —
+// nenhum dos suportados, mas devolver zero ali faria o disco sumir do painel.
+func blocosDe(info fs.FileInfo) int64 {
+	if st, ok := info.Sys().(*syscall.Stat_t); ok {
+		return st.Blocks * 512
+	}
+	return info.Size()
 }

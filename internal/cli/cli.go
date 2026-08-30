@@ -207,7 +207,8 @@ func codigoDoErro(err error) int {
 		return ExitWriter
 	case errors.Is(err, storage.ErrDatasetLocked), errors.Is(err, storage.ErrDatasetCorrupt),
 		errors.Is(err, storage.ErrDatasetClosed), errors.Is(err, encoding.ErrCorrupt),
-		errors.Is(err, schema.ErrGrafiaDeIndiceObsoleta):
+		errors.Is(err, schema.ErrGrafiaDeIndiceObsoleta),
+		errors.Is(err, schema.ErrJanelaDeIndiceInvalida):
 		// encoding.ErrCorrupt é o sentinela que chega de VERDADE quando um byte
 		// da região durável está adulterado: a detecção é lazy, no read, e o
 		// erro sobe pelo executor. Sem ele aqui, corrupção de dataset caía no
@@ -220,6 +221,10 @@ func codigoDoErro(err error) int {
 		// sem o errors.Is aqui ela cairia no default (ExitUso, 1) igual a
 		// qualquer flag digitada errado, escondendo que o problema está no
 		// YAML do dataset.
+		//
+		// schema.ErrJanelaDeIndiceInvalida (§4.1: `history.index` com janela
+		// ambígua, bloco vazio ou escrito fora do `history:`) entra pela mesma
+		// porta e pelo mesmo motivo.
 		return ExitDataset
 	default:
 		return ExitUso

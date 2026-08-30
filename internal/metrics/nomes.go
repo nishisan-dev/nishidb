@@ -172,6 +172,17 @@ const (
 	// MetHistoryOldestWrittenAt é a série que se olha primeiro: é ela que
 	// mostra o maxBytes engolindo o expireAfterWrite declarado.
 	MetHistoryOldestWrittenAt = "nishidb_history_oldest_written_at"
+	// MetHistoryIndexWindow é a irmã da MetHistoryOldestWrittenAt, do lado do
+	// ÍNDICE: ela publica o intervalo REALMENTE coberto pelos segmentos
+	// indexados, em segundos.
+	//
+	// Comparada com o `history.index.window` declarado, ela diz numa olhada se
+	// o teto de bytes assumiu o comando — e é o único lugar em que o
+	// conservadorismo da janela aparece. A cobrança do segmento ainda não
+	// construído é pelo MAIOR índice em disco, então um .sidx atípico encolhe a
+	// cobertura sem que nada mais no painel mude; sem esta série isso seria
+	// consulta lenta sem explicação.
+	MetHistoryIndexWindow = "nishidb_history_index_window_seconds"
 	// MetHistoryPurged tem o rótulo `reason` (ttl|size) porque qual das duas
 	// políticas está decidindo é a pergunta, não quantos segmentos saíram.
 	MetHistoryPurged = "nishidb_history_segments_purged_total"

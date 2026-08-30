@@ -1,6 +1,7 @@
 package schema
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -17,6 +18,20 @@ import (
 // por extenso, e não uma abreviação: quem lê `events_history` num FROM sabe o
 // que está consultando sem abrir o YAML.
 const SufixoHistoricoPadrao = "_history"
+
+// ErrJanelaDeIndiceInvalida marca as recusas do bloco `history.index`.
+//
+// Tem sentinela PRÓPRIA pela mesma razão de ErrGrafiaDeIndiceObsoleta: a subida
+// precisa sair com ExitDataset (3), e quem decide isso é o errors.Is do
+// codigoDoErro do cli. Sem ela, uma janela recusada cairia no default (ExitUso,
+// 1) — o único código que manda o operador olhar a linha de comando em vez do
+// YAML do dataset.
+var ErrJanelaDeIndiceInvalida = errors.New("history.index inválido")
+
+// errJanelaf é o specErrf da janela: mesma forma, sentinela diferente.
+func errJanelaf(format string, args ...any) error {
+	return fmt.Errorf("%w: %s", ErrJanelaDeIndiceInvalida, fmt.Sprintf(format, args...))
+}
 
 // CampoRaw guarda os bytes originais do evento, quando `rawPayload: true`.
 //
@@ -71,6 +86,56 @@ type HistoricoSpec struct {
 	// Eles NÃO são herdados do base de propósito: o bitmap custa
 	// (distintos × rows / 8), e o histórico tem muito mais rows.
 	Indices map[string]string
+	// Janela é o bloco `history.index`. NIL é a janela INFINITA — indexa tudo
+	// que a retenção mantém —, que é o default e o comportamento de sempre.
+	//
+	// Ela vive no bloco `history` e só nele porque é política EXCLUSIVA da
+	// tabela histórica (D1): no dataset materializado a linha vive no segmento
+	// corrente independente da idade dela, e uma janela ali não teria contra o
+	// que cortar.
+	Janela *JanelaDeIndiceSpec
+}
+
+// JanelaDeIndiceSpec é o bloco `history.index` validado: quanto do histórico
+// vale indexar.
+//
+// A simetria com a retenção é deliberada. `history.expireAfterWrite` +
+// `history.maxBytes` limitam o DADO; `history.index.window` +
+// `history.index.maxBytes` limitam o ÍNDICE — e nos dois casos o teto de bytes
+// é a política forte, que engole o prazo declarado. Quem já entendeu uma
+// entende a outra sem documentação nova.
+//
+// Fora da janela a consulta continua respondendo: o segmento sem índice é
+// varrido por ENUMERAÇÃO, que é correta e mais lenta. A janela decide custo, e
+// nunca resultado.
+type JanelaDeIndiceSpec struct {
+	// Duracao é a intenção em tempo. Zero significa SEM fronteira por tempo, e
+	// nunca "janela de duração zero": `window: 0` é recusado no load
+	// justamente porque as duas leituras são opostas.
+	Duracao time.Duration
+	// MaxBytes é o teto do ÍNDICE — dos .sidx —, e não do dado indexado. Zero
+	// significa sem teto, e `maxBytes: 0` é recusado pela mesma razão que o
+	// `window: 0`.
+	MaxBytes int64
+}
+
+// JanelaExcedeARetencao reporta a redundância que a subida ANUNCIA sem recusar:
+// uma janela maior que o prazo de retenção não indexa nada a mais, porque a
+// retenção aposenta o segmento antes de a janela o alcançar.
+//
+// Não é erro, é inócuo — e recusar transformaria redundância em queda de
+// serviço. O WARN nomeado é o meio-termo que a doutrina pede: a configuração
+// nunca é ignorada em silêncio, mas só é recusada quando estar errada tem
+// consequência.
+//
+// Sem `expireAfterWrite` declarado não há prazo contra o qual comparar: o
+// `maxBytes` da retenção limita disco, não idade, e avisar ali seria ruído
+// sobre uma configuração que não tem nada de redundante.
+func (h *HistoricoSpec) JanelaExcedeARetencao() bool {
+	if h == nil || h.Janela == nil {
+		return false
+	}
+	return h.Janela.Duracao > 0 && h.ExpireAfterWrite > 0 && h.Janela.Duracao > h.ExpireAfterWrite
 }
 
 // NomeDaTabela é o nome do dataset irmão.
@@ -127,7 +192,7 @@ func validaHistorico(n *yaml.Node, nomeBase string, fields map[string]FieldSpec)
 		return nil, nil
 	}
 	m, err := bloco(n, "history",
-		"suffix", "expireAfterWrite", "maxBytes", "segmentSize", "rawPayload", "fields")
+		"suffix", "expireAfterWrite", "maxBytes", "segmentSize", "rawPayload", "fields", "index")
 	if err != nil {
 		return nil, err
 	}
@@ -201,7 +266,94 @@ func validaHistorico(n *yaml.Node, nomeBase string, fields map[string]FieldSpec)
 	if h.Indices, err = indicesDoHistorico(m["fields"], fields); err != nil {
 		return nil, err
 	}
+	if h.Janela, err = validaJanela(m["index"]); err != nil {
+		return nil, err
+	}
 	return h, nil
+}
+
+// validaJanela lê `history.index`. Bloco ausente devolve nil, que é a janela
+// INFINITA: indexa tudo que a retenção mantém, o default e o comportamento de
+// sempre.
+//
+// As recusas aqui saem com ErrJanelaDeIndiceInvalida, e não com o specErrf do
+// resto do arquivo, por uma razão de CONTRATO e não de estilo: recusa de
+// configuração de dataset tem de sair com ExitDataset (3), e é o errors.Is do
+// codigoDoErro que decide isso. Sem sentinela própria elas cairiam no default
+// (ExitUso, 1) e mandariam o operador conferir a linha de comando quando o
+// problema está no YAML.
+func validaJanela(n *yaml.Node) (*JanelaDeIndiceSpec, error) {
+	if ausente(n) {
+		return nil, nil
+	}
+	m, err := bloco(n, "history.index", "window", "maxBytes")
+	if err != nil {
+		return nil, err
+	}
+	j := &JanelaDeIndiceSpec{}
+	if wn, ok := m["window"]; ok {
+		var bruto string
+		if err := decodeEm(wn, "history.index.window", &bruto); err != nil {
+			return nil, err
+		}
+		// O `units` já recusa zero e negativo, e é ele que fecha o caso
+		// `window: 0` da tabela de admissão: zero é AMBÍGUO entre "não indexe
+		// nada" e "indexe tudo", e as duas leituras têm consequências opostas —
+		// uma tira o índice do dataset inteiro, a outra é o default. Não há
+		// grafia que escolha por si, e escolher no código faria metade dos
+		// operadores receber o oposto do que quis.
+		//
+		// A saída fica no fim da mensagem, e ela é a mesma para QUALQUER valor
+		// recusado — zero, negativo ou typo: o operador que não quer janela por
+		// tempo omite o bloco. Dizê-la sempre custa uma oração e poupa uma ida
+		// à documentação; dizê-la só no caso do zero exigiria distinguir os
+		// modos de falha do units pela mensagem dele, que é acoplamento pior
+		// que a oração a mais.
+		d, err := units.DuracaoComDias(bruto, 0)
+		if err != nil {
+			return nil, errJanelaf("history.index.window: %s — a janela não tem grafia para \"nada\": "+
+				"omita o bloco index: para indexar tudo que a retenção mantém", semPrefixoDeSpec(err))
+		}
+		j.Duracao = d
+	}
+	if tn, ok := m["maxBytes"]; ok {
+		var bruto string
+		if err := decodeEm(tn, "history.index.maxBytes", &bruto); err != nil {
+			return nil, err
+		}
+		// Mesma ambiguidade do window, e a mesma saída: um teto de zero bytes
+		// tanto pode significar "nenhum índice" quanto "sem teto".
+		b, err := units.Tamanho(bruto, 0)
+		if err != nil {
+			return nil, errJanelaf("history.index.maxBytes: %s — omita a chave para não limitar o índice por bytes",
+				semPrefixoDeSpec(err))
+		}
+		j.MaxBytes = b
+	}
+	// Bloco declarado e vazio é a mesma recusa que `history:` sem política
+	// nenhuma: o operador escreveu uma intenção que o motor não tem como
+	// executar, e aceitá-la seria a configuração decorativa.
+	if j.Duracao == 0 && j.MaxBytes == 0 {
+		return nil, errJanelaf("history.index: declare window, maxBytes ou os dois — " +
+			"um bloco vazio não diz o que indexar; omita-o para indexar tudo que a retenção mantém")
+	}
+	return j, nil
+}
+
+// recusaJanelaForaDoHistorico recusa uma chave `index:` no TOPO do documento.
+//
+// A janela é `history.index` e só isso: ela é política da tabela histórica, e o
+// dataset materializado tem janela infinita por construção (D1). Escrita no
+// topo, a chave seria IGNORADA em silêncio — o rawSpec não usa
+// yaml.KnownFields —, e o operador ficaria com o comportamento default achando
+// que declarou uma janela.
+func recusaJanelaForaDoHistorico(n *yaml.Node) error {
+	if ausente(n) {
+		return nil
+	}
+	return errJanelaf("index: não é chave de topo — a janela de indexação é history.index e é " +
+		"exclusiva da tabela histórica, porque no dataset materializado a linha vive no segmento " +
+		"corrente independente da idade dela")
 }
 
 // prazoDoHistorico lê expireAfterWrite. O `never` das regras de TTL não vale
@@ -455,6 +607,18 @@ func DescreveHistorico(nome string, h *HistoricoSpec) string {
 	}
 	if h.RawPayload {
 		sb.WriteString(" raw")
+	}
+	// A janela entra na mesma linha, e a razão é a desta função inteira: o
+	// operador precisa poder conferir que o YAML que escreveu é o que o
+	// processo entendeu. Sem ela, `history.index` seria a única política do
+	// bloco invisível na subida.
+	if h.Janela != nil {
+		if h.Janela.Duracao > 0 {
+			fmt.Fprintf(&sb, " indexWindow=%s", h.Janela.Duracao)
+		}
+		if h.Janela.MaxBytes > 0 {
+			fmt.Fprintf(&sb, " indexMaxBytes=%d", h.Janela.MaxBytes)
+		}
 	}
 	if len(h.Indices) > 0 {
 		nomes := make([]string, 0, len(h.Indices))

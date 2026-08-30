@@ -293,13 +293,39 @@ func (s *Store) removeSeladoObsoleto(seg uint32, caminho string) error {
 //     Fechar isso pede uma geração no cache de selados, e ela pertence a quem
 //     introduzir a concorrência: hoje não há chamador de fundo.
 //
-// DOS QUATRO GATILHOS DA §2.4, ESTA FUNÇÃO COBRE DOIS: o formato novo sobre
-// dataset antigo (migração) e o campo acrescentado ao schema (§2.6). A janela
-// alargada depende de a janela existir; o crc32c divergente (§1.5) só é
-// conhecido na primeira consulta da seção, e quem o detectar precisa apagar o
-// arquivo para o segmento voltar a ser pendente por AUSÊNCIA, que é a pergunta
-// barata desta função.
-func (s *Store) SegmentosPendentesDeReconstrucao() ([]uint32, error) {
+// DOS QUATRO GATILHOS DA §2.4, ESTA FUNÇÃO COBRE TRÊS: o formato novo sobre
+// dataset antigo (migração), o campo acrescentado ao schema (§2.6) e a JANELA
+// ALARGADA — um segmento que volta para dentro da janela reaparece aqui, porque
+// o .sidx dele foi expulso e a ausência é pendência. O crc32c divergente (§1.5)
+// só é conhecido na primeira consulta da seção, e quem o detectar precisa
+// apagar o arquivo para o segmento voltar a ser pendente por AUSÊNCIA, que é a
+// pergunta barata desta função.
+//
+// # A JANELA É PARÂMETRO, E É ELA QUE IMPEDE O MOINHO
+//
+// Um segmento FORA da janela não tem .sidx — ele foi expulso —, e pela pergunta
+// por (segmento, campo) isso o tornaria PERMANENTEMENTE pendente. O laço de
+// fundo da §2.4 o reconstruiria, a passada de retenção o expulsaria, ele
+// voltaria para a fila: um moinho que se alimenta sozinho, varrendo até 512 MiB
+// por volta.
+//
+// Fora da janela não é "pendente": é DELIBERADAMENTE SEM ÍNDICE, e é por isso
+// que a janela entra pela assinatura em vez de ficar guardada no Store. Quem
+// montar o laço não tem como esquecê-la — o compilador cobra o que um
+// comentário não cobraria.
+//
+// A conta de "dentro da janela" é a MESMA da expulsão (janelaDeSegmentos), e
+// tem de ser: se as duas respondessem por contas diferentes, a que responde
+// "sim" reconstruiria o que a outra acabou de apagar. É a doutrina de nunca ter
+// a mesma coisa em dois lugares, aplicada a uma decisão.
+//
+// Janela INFINITA — o default, e o que todo dataset materializado tem por
+// construção — não filtra nada, e o comportamento é exatamente o de antes de a
+// janela existir.
+func (s *Store) SegmentosPendentesDeReconstrucao(j JanelaDeIndice) ([]uint32, error) {
+	if err := s.exigeJanelaAplicavel(j); err != nil {
+		return nil, err
+	}
 	if len(s.camposIndexados) == 0 {
 		return nil, nil
 	}
@@ -308,11 +334,26 @@ func (s *Store) SegmentosPendentesDeReconstrucao() ([]uint32, error) {
 	if err != nil {
 		return nil, err
 	}
+	// dentro nil significa "não filtre": é a janela infinita, e distinguir isso
+	// de um conjunto vazio é o que impede a janela infinita de esvaziar a fila.
+	var dentro map[uint32]struct{}
+	if !j.Infinita() {
+		estado, err := s.janelaDeSegmentos(j, refs)
+		if err != nil {
+			return nil, err
+		}
+		dentro = estado.dentro
+	}
 	corrente := s.curSegID.Load()
 	var pendentes []uint32
 	for _, ref := range refs {
 		if ref.ID == corrente {
 			continue
+		}
+		if dentro != nil {
+			if _, ok := dentro[ref.ID]; !ok {
+				continue
+			}
 		}
 		pendente, err := s.segmentoPendente(dir, ref.ID)
 		if err != nil {

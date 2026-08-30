@@ -1,6 +1,7 @@
 package schema
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -674,4 +675,130 @@ func TestAIrmaNaoDerivaOutraIrma(t *testing.T) {
 	if neta := s.DerivaHistorico().DerivaHistorico(); neta != nil {
 		t.Fatalf("a irmã derivou %q", neta.Name)
 	}
+}
+
+// TestAdmissaoDaJanela é a tabela de admissão da §4.1 inteira, uma linha por
+// caso.
+//
+// Ela existe como tabela e não como cinco funções porque as cinco respostas só
+// fazem sentido lidas juntas: o que separa "recusa" de "aceita com WARN" é uma
+// decisão de produto — configuração ERRADA para a subida, configuração INÓCUA
+// não —, e essa fronteira é mais fácil de conferir quando os casos estão um
+// embaixo do outro.
+func TestAdmissaoDaJanela(t *testing.T) {
+	casos := []struct {
+		nome, historico string
+		recusa          bool
+		trechos         []string
+	}{
+		{
+			nome:      "bloco ausente é janela infinita",
+			historico: "history:\n  maxBytes: 100MiB\n",
+		},
+		{
+			nome:      "index fora do bloco history",
+			historico: "index:\n  window: 6h\n",
+			recusa:    true,
+			trechos:   []string{"history.index", "exclusiva da tabela histórica"},
+		},
+		{
+			nome:      "window zero é ambíguo",
+			historico: "history:\n  maxBytes: 100MiB\n  index:\n    window: 0\n",
+			recusa:    true,
+			trechos:   []string{"history.index.window", "omita"},
+		},
+		{
+			nome:      "maxBytes sem window é válido",
+			historico: "history:\n  maxBytes: 100MiB\n  index:\n    maxBytes: 1GiB\n",
+		},
+		{
+			nome:      "window maior que a retenção passa",
+			historico: "history:\n  expireAfterWrite: 1h\n  index:\n    window: 7d\n",
+		},
+	}
+	for _, c := range casos {
+		t.Run(c.nome, func(t *testing.T) {
+			if c.recusa {
+				recusaHistorico(t, c.historico, c.trechos...)
+				return
+			}
+			specComHistorico(t, c.historico)
+		})
+	}
+}
+
+// A recusa da janela sai com ExitDataset (3), e não com o exit de uso: o
+// problema está no YAML do dataset, não na linha de comando. O sentinela é o
+// que o codigoDoErro do cli consulta — sem ele a recusa cairia no default, e o
+// operador seria mandado conferir a flag que digitou.
+func TestRecusaDaJanelaTemSentinelaPropria(t *testing.T) {
+	casos := map[string]string{
+		"fora do history": "index:\n  window: 6h\n",
+		"window zero":     "history:\n  maxBytes: 100MiB\n  index:\n    window: 0\n",
+		"bloco vazio":     "history:\n  maxBytes: 100MiB\n  index: {}\n",
+	}
+	for nome, historico := range casos {
+		t.Run(nome, func(t *testing.T) {
+			_, err := Parse([]byte(yamlComHistorico(historico)), DefaultsPadrao)
+			if !errors.Is(err, ErrJanelaDeIndiceInvalida) {
+				t.Fatalf("erro = %v, quer ErrJanelaDeIndiceInvalida", err)
+			}
+		})
+	}
+}
+
+// Janela maior que a retenção não está ERRADA, é INÓCUA — a retenção já limita
+// antes —, e recusá-la transformaria redundância em queda de serviço. O que ela
+// ganha é um WARN nomeado, e é este predicado que a subida consulta para
+// emiti-lo.
+func TestJanelaMaiorQueARetencaoEhAnunciada(t *testing.T) {
+	h := specComHistorico(t, "history:\n  expireAfterWrite: 1h\n  index:\n    window: 7d\n").Historico
+	if h.Janela == nil {
+		t.Fatal("o bloco index: não foi lido")
+	}
+	if !h.JanelaExcedeARetencao() {
+		t.Fatal("window: 7d sobre expireAfterWrite: 1h precisa anunciar que a janela é inócua")
+	}
+	// E o contrário não anuncia nada: janela menor que a retenção é o caso
+	// para o qual a chave existe.
+	menor := specComHistorico(t, "history:\n  expireAfterWrite: 7d\n  index:\n    window: 6h\n").Historico
+	if menor.JanelaExcedeARetencao() {
+		t.Fatal("window: 6h sobre expireAfterWrite: 7d é o caso normal e não pode avisar nada")
+	}
+	// Sem prazo declarado não há contra o que comparar: o maxBytes da retenção
+	// não é um instante, e avisar aqui seria ruído sobre uma configuração que
+	// não tem nada de redundante.
+	semPrazo := specComHistorico(t, "history:\n  maxBytes: 100MiB\n  index:\n    window: 6h\n").Historico
+	if semPrazo.JanelaExcedeARetencao() {
+		t.Fatal("sem expireAfterWrite não há prazo contra o qual a janela pudesse ser inócua")
+	}
+}
+
+// O bloco lido é o bloco declarado: uma janela que o processo entendeu pela
+// metade é a configuração decorativa que a §4.1 existe para não ser.
+func TestJanelaDeclaradaChegaNaSpec(t *testing.T) {
+	h := specComHistorico(t,
+		"history:\n  expireAfterWrite: 7d\n  index:\n    window: 6h\n    maxBytes: 2GiB\n").Historico
+	if h.Janela == nil {
+		t.Fatal("o bloco index: não foi lido")
+	}
+	if h.Janela.Duracao != 6*time.Hour {
+		t.Fatalf("Duracao = %s, quer 6h", h.Janela.Duracao)
+	}
+	if h.Janela.MaxBytes != 2<<30 {
+		t.Fatalf("MaxBytes = %d, quer %d", h.Janela.MaxBytes, 2<<30)
+	}
+}
+
+func TestJanelaRecusaChaveDesconhecida(t *testing.T) {
+	recusaHistorico(t, "history:\n  maxBytes: 100MiB\n  index:\n    windows: 6h\n",
+		"history.index.windows", "chave desconhecida")
+}
+
+// maxBytes: 0 é recusado pela MESMA razão que window: 0 — um teto de zero bytes
+// é ambíguo entre "nenhum índice" e "sem teto", e as duas leituras têm
+// consequências opostas. Desligar o teto se diz OMITINDO a chave.
+func TestTetoDeIndiceZeradoEhRecusado(t *testing.T) {
+	recusaHistorico(t, "history:\n  maxBytes: 100MiB\n  index:\n    maxBytes: 0\n",
+		"history.index.maxBytes", "omita")
 }

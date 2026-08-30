@@ -202,7 +202,7 @@ func TestOsWIPsQueNaoSaoDoCorrenteSaemNaAberturaESoQuemTemDadoEntraNaFila(t *tes
 				filepath.Base(caminho), err)
 		}
 	}
-	pendentes, err := s2.SegmentosPendentesDeReconstrucao()
+	pendentes, err := s2.SegmentosPendentesDeReconstrucao(JanelaDeIndice{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +260,7 @@ func TestOWIPOrfaoDeUmSegmentoJaSeladoSaiSemMexerNoSelado(t *testing.T) {
 		t.Errorf("o .sidx do segmento %d mudou de %d para %d bytes: a abertura o reescreveu",
 			alvo, len(antes), len(depois))
 	}
-	pendentes, err := s2.SegmentosPendentesDeReconstrucao()
+	pendentes, err := s2.SegmentosPendentesDeReconstrucao(JanelaDeIndice{})
 	if err != nil {
 		t.Fatal(err)
 	}

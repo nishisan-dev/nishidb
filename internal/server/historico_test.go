@@ -1,10 +1,12 @@
 package server_test
 
 import (
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
 
+	"github.com/nishisan-dev/nishidb/internal/logging"
 	"github.com/nishisan-dev/nishidb/internal/protocolo"
 	"github.com/nishisan-dev/nishidb/internal/server"
 )
@@ -176,6 +178,7 @@ func TestMetricasDoHistoricoSaemNoRotuloDoBase(t *testing.T) {
 		"nishidb_history_degraded",
 		"nishidb_history_data_bytes",
 		"nishidb_history_index_bytes",
+		"nishidb_history_index_window_seconds",
 		"nishidb_history_segments_purged_total",
 		"nishidb_history_retention_running",
 	} {
@@ -208,5 +211,77 @@ func TestSeriesDoWatchdogNascemComZero(t *testing.T) {
 		if !strings.Contains(corpo, serie) {
 			t.Errorf("a série não nasceu com zero: %s", serie)
 		}
+	}
+}
+
+// Uma janela maior que a retenção: não indexa nada a mais, porque a retenção
+// aposenta o segmento antes de a janela o alcançar.
+const specComJanelaInocua = `version: 1
+name: eventos
+materialization:
+  key:
+    field: id
+history:
+  expireAfterWrite: 1h
+  maxBytes: 4GiB
+  index:
+    window: 7d
+  fields:
+    id:
+      index: true
+schema:
+  include: ["*"]
+  fields:
+    id:
+      type: string
+    severity:
+      type: int64
+`
+
+// A janela inócua ANUNCIA e não recusa, e as duas metades importam: recusar
+// transformaria redundância em queda de serviço, e aceitar calado deixaria o
+// operador com uma chave que não faz o que ele acha que faz.
+func TestJanelaMaiorQueARetencaoSobeComWarn(t *testing.T) {
+	a := novoAmbienteCom(t, blocoPadrao)
+	a.escreveDataset("eventos", specComJanelaInocua)
+	registro := &registroDoServidor{}
+	srv, err := server.Novo(a.carrega(), server.Opcoes{
+		Log: logging.New(registro, logging.FormatoTexto, slog.LevelInfo),
+	})
+	if err != nil {
+		t.Fatalf("subida: %v — a janela inócua não pode derrubar o servidor", err)
+	}
+	roda(t, srv)
+	// Sem espera: o aviso sai do abreHistorico, que roda DENTRO do Novo — se
+	// ele não está aqui, não vai chegar depois.
+	if !strings.Contains(registro.String(), "janela.maior_que_retencao") {
+		t.Fatalf("o WARN nomeado não foi emitido:\n%s", registro.String())
+	}
+	// E ele nomeia o dataset BASE, que é onde o YAML com a chave está: nomear
+	// só a tabela irmã mandaria o operador procurar num arquivo que não existe.
+	if !strings.Contains(registro.String(), "dataset=eventos ") {
+		t.Fatalf("o aviso não nomeia o dataset base:\n%s", registro.String())
+	}
+}
+
+// E a janela declarada aparece no /v1/stats junto da cobertura REAL: é a
+// comparação entre as duas que diz se o teto do índice assumiu o comando.
+func TestOStatsPublicaAJanelaDeclaradaEAEfetiva(t *testing.T) {
+	srv := servidorComHistorico(t, strings.Replace(specComHistorico,
+		"  fields:\n    id:\n      index: true\n",
+		"  index:\n    window: 6h\n  fields:\n    id:\n      index: true\n", 1))
+	stats := leJSON[protocolo.Estatisticas](t, srv, "/v1/stats")
+	var achou bool
+	for _, d := range stats.Datasets {
+		if d.History == nil {
+			continue
+		}
+		achou = true
+		if d.History.IndexWindow != "6h0m0s" {
+			t.Fatalf("IndexWindow = %q, quer a janela declarada", d.History.IndexWindow)
+		}
+	}
+	if !achou {
+		t.Fatal("nenhum dataset publicou o bloco history no /v1/stats")
 	}
 }

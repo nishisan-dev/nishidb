@@ -294,3 +294,41 @@ func TestServidorComGrafiaDeIndiceObsoletaSaiComExitDataset(t *testing.T) {
 		t.Errorf("stderr não ensina a grafia nova: %q", a.stderr.String())
 	}
 }
+
+// Um dataset cuja janela de indexação é ambígua: `window: 0` não escolhe entre
+// não indexar nada e indexar tudo.
+const yamlJanelaAmbigua = `
+version: 1
+name: janelaruim
+materialization:
+  key:
+    field: id
+history:
+  maxBytes: 1GiB
+  index:
+    window: 0
+schema:
+  fields:
+    id:
+      type: string
+`
+
+// TestDatasetComJanelaInvalidaSaiComExitDataset é o gate de exit code da §4.1,
+// no mesmo molde do gate da D5 e pelo mesmo motivo: a recusa da janela é config
+// do DATASET recusada na subida, e sem o errors.Is no codigoDoErro ela cairia no
+// default (ExitUso, 1) — o código que manda o operador olhar a linha de comando
+// em vez do YAML.
+func TestDatasetComJanelaInvalidaSaiComExitDataset(t *testing.T) {
+	a := novoAmbiente(t)
+	caminho := filepath.Join(a.dir, "datasets", "janelaruim.yaml")
+	if err := os.WriteFile(caminho, []byte(yamlJanelaAmbigua), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code := a.roda("server", "--config", a.config)
+	if code != cli.ExitDataset {
+		t.Fatalf("code = %d, want %d (ExitDataset)\n%s", code, cli.ExitDataset, a.stderr.String())
+	}
+	if !strings.Contains(a.stderr.String(), "history.index.window") {
+		t.Errorf("stderr não nomeia a chave recusada: %q", a.stderr.String())
+	}
+}

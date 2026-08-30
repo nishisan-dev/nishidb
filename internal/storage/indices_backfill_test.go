@@ -38,7 +38,7 @@ func abreStoreIndexadoEm(t *testing.T, dir string, campos []string, segSize int6
 func rodaReconstrucaoAteEsvaziar(t *testing.T, s *Store) {
 	t.Helper()
 	for range 10 {
-		pendentes, err := s.SegmentosPendentesDeReconstrucao()
+		pendentes, err := s.SegmentosPendentesDeReconstrucao(JanelaDeIndice{})
 		if err != nil {
 			t.Fatalf("SegmentosPendentesDeReconstrucao: %v", err)
 		}
@@ -90,7 +90,7 @@ func TestAcrescentarIndiceEmDatasetPovoadoAgendaReconstrucao(t *testing.T) {
 
 	s2 := abreStoreIndexadoEm(t, dir, []string{"node"}, 64<<10) // acrescenta agora
 	campo := campoDoDicionario(t, s2, "node")
-	pendentes, err := s2.SegmentosPendentesDeReconstrucao()
+	pendentes, err := s2.SegmentosPendentesDeReconstrucao(JanelaDeIndice{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +145,7 @@ func TestSegmentoSeladoSemASecaoDoCampoNovoEntraNaFila(t *testing.T) {
 	campoType := campoDoDicionario(t, s2, "type")
 	inexistente := types.Value{Type: types.TypeInt64, I64: 99}
 
-	pendentes, err := s2.SegmentosPendentesDeReconstrucao()
+	pendentes, err := s2.SegmentosPendentesDeReconstrucao(JanelaDeIndice{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +243,7 @@ func TestRemoverIndiceApagaAsSecoes(t *testing.T) {
 	s2 := abreStoreIndexadoEm(t, dir, []string{"node"}, 64<<10)
 	campoNode := campoDoDicionario(t, s2, "node")
 
-	pendentes, err := s2.SegmentosPendentesDeReconstrucao()
+	pendentes, err := s2.SegmentosPendentesDeReconstrucao(JanelaDeIndice{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -330,7 +330,7 @@ func TestSidxDeZeroBytesEhPendenteEmVezDeDerrubarAFila(t *testing.T) {
 
 	s2 := abreStoreIndexadoEm(t, dir, []string{"node"}, 64<<10)
 	campo := campoDoDicionario(t, s2, "node")
-	pendentes, err := s2.SegmentosPendentesDeReconstrucao()
+	pendentes, err := s2.SegmentosPendentesDeReconstrucao(JanelaDeIndice{})
 	if err != nil {
 		t.Fatalf("SegmentosPendentesDeReconstrucao = %v: um .sidx vazio derrubou a fila inteira", err)
 	}

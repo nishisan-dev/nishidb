@@ -120,6 +120,23 @@ func (s *Servidor) abreHistorico(base *dataset, log *logging.Logger) (*dataset, 
 		"a tabela histórica está de pé",
 		"dataset", base.nome, "tabela", specIrma.Name,
 		"config", schema.DescreveHistorico(specIrma.Name, h))
+	// Janela maior que a retenção não é erro, é INÓCUA: a retenção aposenta o
+	// segmento antes de a janela o alcançar. O WARN é o meio-termo que a
+	// doutrina pede — a configuração nunca é ignorada em silêncio, mas só é
+	// recusada quando estar errada tem consequência, e aqui não tem: recusar
+	// transformaria redundância em queda de serviço.
+	//
+	// Sai daqui, e não do ligaRetencao, porque é aqui que os DOIS nomes existem:
+	// quem lê o aviso precisa do dataset BASE para achar o YAML em que a chave
+	// foi escrita, e lá só há a tabela irmã.
+	if h.JanelaExcedeARetencao() {
+		log.Warn("janela.maior_que_retencao",
+			"history.index.window é maior que history.expireAfterWrite e não indexa nada a mais: "+
+				"a retenção aposenta o segmento antes de a janela o alcançar",
+			"dataset", base.nome, "tabela", specIrma.Name,
+			"window", h.Janela.Duracao.String(),
+			"expireAfterWrite", h.ExpireAfterWrite.String())
+	}
 
 	return &dataset{
 		nome:        specIrma.Name,
@@ -146,6 +163,7 @@ func (s *Servidor) ligaRetencao(ctx context.Context) {
 		d.st.IniciaRetencao(ctx, storage.LimitesDeRetencao{
 			ExpireAfterWrite: h.ExpireAfterWrite,
 			MaxBytes:         h.MaxBytes,
+			Janela:           janelaDaSpec(h),
 		})
 		comRetencao = append(comRetencao, d.nome)
 	}
@@ -155,6 +173,23 @@ func (s *Servidor) ligaRetencao(ctx context.Context) {
 	sort.Strings(comRetencao)
 	s.log.Info("retencao.ligada",
 		"o motor de retenção das tabelas históricas está de pé", "tabelas", comRetencao)
+}
+
+// janelaDaSpec traduz o bloco `history.index` na política que o storage
+// aplica. Bloco ausente vira a janela INFINITA — indexa tudo que a retenção
+// mantém —, que é o default e o comportamento de sempre.
+//
+// A tradução mora aqui, e não no schema, porque o schema não pode importar o
+// storage: quem lê o YAML é a camada de cima. É a mesma fronteira que faz os
+// campos indexados viajarem por NOME até o Open.
+func janelaDaSpec(h *schema.HistoricoSpec) storage.JanelaDeIndice {
+	if h == nil || h.Janela == nil {
+		return storage.JanelaDeIndice{}
+	}
+	return storage.JanelaDeIndice{
+		Duracao:  h.Janela.Duracao,
+		MaxBytes: h.Janela.MaxBytes,
+	}
 }
 
 // historicoStats monta o bloco `history` do /v1/stats.
@@ -184,6 +219,13 @@ func historicoStats(base *dataset) *protocolo.HistoricoStats {
 	}
 	if h.ExpireAfterWrite > 0 {
 		out.ExpireAfterWrite = h.ExpireAfterWrite.String()
+	}
+	// A cobertura efetiva sai SEMPRE que há índice, e o `window` declarado só
+	// quando existe: sem a janela declarada a comparação é contra o infinito, e
+	// ecoar um "0" ali faria o painel parecer dizer que a janela é nula.
+	out.EffectiveIndexWindow = e.JanelaEfetiva.Seconds()
+	if h.Janela != nil && h.Janela.Duracao > 0 {
+		out.IndexWindow = h.Janela.Duracao.String()
 	}
 	return out
 }
@@ -223,6 +265,8 @@ func amostrasDeHistorico(base *dataset) []metrics.Amostra {
 			Ajuda: "Blocos alocados pelos índices da tabela histórica; a purga NÃO os devolve.", Labels: rotulo},
 		{Nome: metrics.MetHistoryOldestWrittenAt, Tipo: metrics.TipoMedidor, Valor: float64(e.InstanteMaisAntigo),
 			Ajuda: "Instante da linha mais antiga ainda visível, em millis. Mostra o maxBytes engolindo o prazo declarado.", Labels: rotulo},
+		{Nome: metrics.MetHistoryIndexWindow, Tipo: metrics.TipoMedidor, Valor: e.JanelaEfetiva.Seconds(),
+			Ajuda: "Intervalo realmente coberto pelos segmentos indexados. Compare com history.index.window: menor significa que o teto do índice assumiu o comando.", Labels: rotulo},
 		{Nome: metrics.MetHistoryPurged, Tipo: metrics.TipoContador, Valor: float64(e.PurgadosPorTTL),
 			Ajuda:  "Segmentos aposentados pela retenção da tabela histórica.",
 			Labels: append(append([]metrics.Label{}, rotulo...), metrics.Label{Nome: "reason", Valor: "ttl"})},

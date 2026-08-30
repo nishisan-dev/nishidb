@@ -270,6 +270,17 @@ type HistoricoStats struct {
 	// lê o painel não sabe contra o que comparar os números acima.
 	ExpireAfterWrite string `json:"expireAfterWrite,omitempty"`
 	MaxBytes         int64  `json:"maxBytes,omitempty"`
+	// IndexWindow ecoa o `history.index.window` declarado e
+	// EffectiveIndexWindow é o intervalo REALMENTE coberto pelos segmentos
+	// indexados, em segundos. O par existe pela mesma razão do par acima: é a
+	// comparação entre os dois que diz se o teto do índice
+	// (`history.index.maxBytes`) assumiu o comando — do mesmo jeito que
+	// OldestWrittenAt mostra o maxBytes engolindo o expireAfterWrite.
+	//
+	// Vazio/zero quando o bloco `history.index` não foi declarado: a janela é
+	// infinita e não há o que comparar.
+	IndexWindow          string  `json:"indexWindow,omitempty"`
+	EffectiveIndexWindow float64 `json:"effectiveIndexWindowSeconds,omitempty"`
 }
 
 // MaterializacaoStats conta o que o dado gravado NÃO diz.

@@ -218,7 +218,15 @@ type rawSpec struct {
 	// History é nó cru pela MESMA razão de source e errors: bloco novo, sem
 	// legado a preservar, e a recusa de chave desconhecida ali é o que separa
 	// `maxByte: 1GiB` (typo) de uma retenção que simplesmente não existe.
-	History         yaml.Node `yaml:"history"`
+	History yaml.Node `yaml:"history"`
+	// Index existe aqui para ser RECUSADO, e não para ser lido: a janela de
+	// indexação é `history.index`, e uma chave `index:` no topo do documento
+	// seria simplesmente IGNORADA — o rawSpec não usa yaml.KnownFields, então
+	// chave desconhecida de topo passa em silêncio. O operador escreveria a
+	// janela no lugar errado e receberia o comportamento default sem uma linha
+	// de log, que é exatamente a configuração aceita e sem efeito que este
+	// projeto recusa na porta de entrada.
+	Index           yaml.Node `yaml:"index"`
 	Materialization rawMat    `yaml:"materialization"`
 	Schema          rawSchema `yaml:"schema"`
 	Query           rawQuery  `yaml:"query"`
@@ -952,6 +960,9 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 		return nil, err
 	}
 
+	if err := recusaJanelaForaDoHistorico(&raw.Index); err != nil {
+		return nil, err
+	}
 	// O histórico vem por último entre as validações de schema porque toda a
 	// checagem de `history.fields` é cruzada: a coluna precisa existir, o tipo
 	// dela decide a indexabilidade, e a congelada precisa ser reconhecida.

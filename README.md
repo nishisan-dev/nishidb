@@ -590,6 +590,9 @@ history:
   rawPayload: false         # opcional; acrescenta a coluna _raw
   fields:                   # opcional; só overrides de índice
     identifier: { index: true }
+  index:                    # opcional; quanto do histórico vale INDEXAR
+    window: 6h              #   intenção, em tempo
+    maxBytes: 2GiB          #   teto do ÍNDICE; vence quando os dois discordam
 ```
 
 Da **mesma conexão**, as duas tabelas respondem:
@@ -609,6 +612,39 @@ Declarar o bloco **sem** `expireAfterWrite` nem `maxBytes` é recusado: um
 histórico sem retenção é disco que cresce para sempre. Os dois convivem, e vence
 o primeiro a bater — a série `nishidb_history_oldest_written_at` é a que mostra
 o teto de tamanho engolindo o prazo declarado.
+
+##### A janela de indexação: `history.index`
+
+O bloco `index` declara **quanto do histórico vale indexar**. Fora da janela a
+consulta **continua respondendo** — por enumeração, que é correta e mais lenta.
+A janela decide custo, nunca resultado.
+
+A simetria com a retenção é deliberada: `history.maxBytes` limita o **dado**,
+`history.index.maxBytes` limita o **índice**, e nos dois casos o teto de bytes é
+a política forte que engole o prazo declarado. Quem entendeu uma entende a
+outra.
+
+| Caso | Resposta |
+|---|---|
+| bloco `index:` ausente | **janela infinita** — indexa tudo que a retenção mantém. É o default |
+| `index:` fora do bloco `history:` | recusado, **exit 3** — a janela é da tabela histórica |
+| `window: 0` | recusado, **exit 3** — ambíguo entre "nada" e "tudo"; desligar é omitir o bloco |
+| `window` maior que `expireAfterWrite` | aceito, com **WARN** `janela.maior_que_retencao`: é inócuo, a retenção limita antes |
+| `index.maxBytes` sem `window` | aceito — teto puro é declaração válida |
+
+A fronteira por tempo usa o record **mais novo** de cada segmento: um segmento
+que atravessa a fronteira mantém o índice, porque a janela promete consultar
+rápido as últimas N horas. Estreitar a janela expulsa os índices que saíram na
+próxima passada de retenção (≤ 1 min); **alargar volta a indexar**, de forma
+progressiva.
+
+`nishidb_history_index_window_seconds` publica o intervalo **realmente** coberto
+pelos segmentos indexados. Compare com o `window` declarado: menor significa que
+o teto de bytes assumiu o comando. Ela é a irmã da
+`nishidb_history_oldest_written_at`, do lado do índice — e é o único lugar em
+que a cobrança conservadora do teto aparece (um segmento ainda sem índice é
+cobrado pelo maior `.sidx` em disco, para que reconstruir e expulsar não vire um
+ciclo).
 
 `rawPayload: true` acrescenta a coluna `_raw` com os bytes originais do evento,
 e é ela que permite gravar também o evento que **não parseia** — hoje um JSON
