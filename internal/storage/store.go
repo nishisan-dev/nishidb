@@ -888,7 +888,7 @@ func Open(opts Options) (*Store, error) {
 	// A recusa de coluna derivada nova sobre dataset com linhas mora AQUI, e
 	// não antes do Open nem depois: o dicionário já está aberto (é o que
 	// permite saber se a coluna é nova) e nada foi gravado nele ainda —
-	// _writtenAt e os campos de bitmap são registrados logo abaixo, com fsync,
+	// _writtenAt e os campos indexados são registrados logo abaixo, com fsync,
 	// e o dicionário é append-only. Uma subida abortada depois disso deixaria
 	// o nome registrado para sempre.
 	if err := validaDerivadasContraDicionario(m, s.dict, opts.ColunasDerivadas); err != nil {

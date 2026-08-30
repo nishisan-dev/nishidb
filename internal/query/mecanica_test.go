@@ -69,7 +69,7 @@ func (s *stub) ScanLive() types.RowIDIterator {
 }
 
 func (s *stub) Lookup(types.FieldID, types.Value) (types.RowIDIterator, error) {
-	return nil, fmt.Errorf("%w: stub sem bitmap", types.ErrInvalidArgument)
+	return nil, fmt.Errorf("%w: stub sem índice", types.ErrInvalidArgument)
 }
 
 func (s *stub) Indexado(types.FieldID) bool { return false }
