@@ -10,7 +10,6 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/index/primary"
 	"github.com/nishisan-dev/nishidb/internal/index/segindex"
 	"github.com/nishisan-dev/nishidb/internal/index/valuekey"
-	"github.com/nishisan-dev/nishidb/internal/storage/rowindex"
 	"github.com/nishisan-dev/nishidb/internal/storage/segment"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
@@ -110,7 +109,33 @@ func (s *Store) fontesDoCampo(campo types.FieldID, h uint64) ([]segindex.Fonte, 
 			porIndice++
 			continue
 		}
-		f, err := s.fonteDeEnumeracao(refs, i)
+		// NO MATERIALIZADO, um único segmento sem índice COLAPSA a consulta
+		// inteira numa caminhada só do locations.idx — todas as linhas vivas
+		// viram candidatas, como num full scan. Não é pessimismo, é a única
+		// resposta correta: a enumeração por dono da location decide a
+		// pertinência no instante da ITERAÇÃO, enquanto o WIP do corrente é um
+		// snapshot da CONSTRUÇÃO — um update concorrente que movesse a linha do
+		// segmento enumerado para o corrente a faria sumir das duas fontes
+		// (falso negativo, que o §44 não conserta). Uma caminhada única não tem
+		// o cérebro dividido: cada location é lida UMA vez, e a linha sai por
+		// onde quer que more. De quebra, ela custa UMA passada onde o desenho
+		// anterior custava uma POR SEGMENTO sem índice.
+		//
+		// O histórico não precisa disso: lá não existe update, as faixas de
+		// rowId são estáticas e a enumeração por faixa não consulta estado
+		// concorrente nenhum.
+		if !s.EhHistorico() {
+			for _, f := range fontes {
+				_ = f.Close()
+			}
+			// O colapso É a degradação, e a métrica diz isso: todos os
+			// segmentos responderam pela enumeração única. Contar os que
+			// "teriam" respondido por índice esconderia exatamente o que a
+			// série existe para mostrar.
+			s.segPorEnumeracao.Add(int64(len(refs)))
+			return []segindex.Fonte{s.fonteDeTodasAsLocations()}, nil
+		}
+		f, err := s.fonteDaFaixa(refs, i)
 		if err != nil {
 			return desiste(err)
 		}
@@ -355,29 +380,19 @@ func (s *Store) fonteDoWIP(seg uint32, campo types.FieldID, h uint64) (segindex.
 	return &fonteMaterializada{rows: w.Lookup(h)}, true
 }
 
-// fonteDeEnumeracao é a resposta de um segmento SEM índice para o campo, e a
-// §3.2 da spec dá duas — uma por modo de dataset.
+// A enumeração — a resposta de segmento SEM índice — tem uma forma por modo de
+// dataset, e as duas moram no laço do fontesDoCampo:
+//
+//	histórico     → fonteDaFaixa, por segmento: as faixas de rowId são
+//	                estáticas e a fonte não consulta estado concorrente nenhum;
+//	materializado → fonteDeTodasAsLocations, para a CONSULTA INTEIRA: a
+//	                caminhada única do locations.idx, pelo colapso explicado lá.
 //
 // NÃO HÁ REGRESSÃO CONTRA O FULL SCAN, e esta é a frase que impede a próxima
-// revisão de "otimizar" a enumeração para fora: para um segmento enumerado o
+// revisão de "otimizar" a enumeração para fora: para o caminho enumerado o
 // executor faz EXATAMENTE o que faria varrendo — recebe rowIds crescentes e
-// chama GetByRowID em cada um. O caminho degradado é o caminho de hoje,
-// restrito a menos segmentos.
-//
-// A ressalva que a frase acima não cobre, e que fica escrita para não ser
-// descoberta em produção: no MATERIALIZADO, cada segmento enumerado varre o
-// locations.idx INTEIRO, então N segmentos sem índice custam N passadas. É
-// transitório por desenho — a D6 manda reconstruir o que está dentro da janela,
-// e a janela do materializado é infinita —, e o que o torna transitório de fato é
-// o laço da §2.4: um dataset inteiro migrado paga isso apenas até as passadas de
-// reconstrução alcançarem os segmentos. Uma passada única que distribuísse os
-// rowIds entre as fontes mudaria a forma da §3.2 e não entra aqui.
-func (s *Store) fonteDeEnumeracao(refs []segment.SegmentRef, i int) (segindex.Fonte, error) {
-	if s.EhHistorico() {
-		return s.fonteDaFaixa(refs, i)
-	}
-	return s.fonteDoLocations(refs[i].ID), nil
-}
+// chama GetByRowID em cada um. No materializado a frase é literal: a caminhada
+// única É a fonte de candidatos de um full scan.
 
 // fonteDaFaixa monta a enumeração do HISTÓRICO: a faixa [primeiro,
 // primeiroDoSeguinte).
@@ -463,13 +478,14 @@ func (s *Store) primeiroRowIDDe(ref segment.SegmentRef, buf []byte) (types.RowID
 	return rec.RowID, out, true, nil
 }
 
-// fonteDoLocations monta a enumeração do MATERIALIZADO.
+// fonteDeTodasAsLocations monta a enumeração do MATERIALIZADO: a caminhada
+// única sobre o locations.idx que o colapso do fontesDoCampo usa.
 //
 // Os limites são a marca-d'água e o nextRowID, tomados uma vez: a fonte é um
 // instantâneo do limite superior, como o ScanLive.
-func (s *Store) fonteDoLocations(seg uint32) segindex.Fonte {
+func (s *Store) fonteDeTodasAsLocations() segindex.Fonte {
 	base := s.RowIDBase()
-	return &fonteLocations{s: s, seg: seg, ini: base, prox: base, fim: types.RowID(s.nextRowID.Load())}
+	return &fonteLocations{s: s, ini: base, prox: base, fim: types.RowID(s.nextRowID.Load())}
 }
 
 // fonteMaterializada percorre uma fatia de rowIds já pronta — hoje, só a que o
@@ -555,29 +571,31 @@ func (f *fonteFaixa) MaxRowID() types.RowID {
 	return f.fim - 1
 }
 
-// fonteLocations enumera os rowIds cuja location aponta para um segmento, no
-// dataset MATERIALIZADO — onde a propriedade da fonteFaixa não vale, porque um
-// update traz para o segmento corrente uma linha de rowId arbitrário,
-// possivelmente menor que o do primeiro record dele.
+// fonteLocations enumera TODOS os rowIds com location publicada, no dataset
+// MATERIALIZADO — onde a propriedade da fonteFaixa não vale, porque um update
+// traz para o segmento corrente uma linha de rowId arbitrário, possivelmente
+// menor que o do primeiro record dele.
+//
+// Ela NÃO filtra por segmento, e a ausência é a correção de uma corrida: a
+// versão por segmento decidia a pertinência pelo DONO da location no instante
+// da iteração, enquanto o WIP do corrente era um snapshot da construção — a
+// linha que um update concorrente movesse entre os dois instantes sumia das
+// duas fontes, e falso negativo é o que o §44 não conserta. Sem o filtro, cada
+// location é lida UMA vez e a linha sai por onde quer que more.
 //
 // A varredura é sobre o locations.idx, que é array denso em mmap: 8 milhões de
 // linhas são 64 MB sequenciais. Ela é PREGUIÇOSA e não materializa nada — o
 // consumo é constante, independente de quantas linhas casem —, e a ordem
 // crescente sai da própria caminhada.
 //
-// MinRowID/MaxRowID são a marca-d'água e o nextRowID, e NÃO o intervalo real
-// dos rowIds que moram no segmento: descobrir o real exigiria a varredura que
-// ainda não aconteceu. É um limite CORRETO e frouxo, e frouxo empurra a união
-// para o merge — que é sempre certo, só mais caro. O erro simétrico não é
-// simétrico: um limite estreito e errado faria a união concatenar faixas que se
-// sobrepõem, e o iterador emitiria a mesma linha duas vezes.
+// MinRowID/MaxRowID são a marca-d'água e o nextRowID: o intervalo inteiro do
+// dataset, que é exatamente o que a fonte pode emitir.
 type fonteLocations struct {
 	s                   *Store
-	seg                 uint32
 	ini, prox, fim, cur types.RowID
 }
 
-// Next avança até o próximo rowId que mora neste segmento.
+// Next avança até o próximo rowId com location publicada.
 //
 // Não confere tombstone, prazo nem marca-d'água: filtrar aqui criaria uma
 // SEGUNDA definição de "vivo" ao lado da do executor, e as duas divergiriam na
@@ -587,11 +605,7 @@ func (f *fonteLocations) Next() bool {
 	for f.prox < f.fim {
 		id := f.prox
 		f.prox++
-		packed, ok := f.s.locs.Get(id)
-		if !ok {
-			continue
-		}
-		if dono, _, _ := rowindex.Unpack(packed); dono != f.seg {
+		if _, ok := f.s.locs.Get(id); !ok {
 			continue
 		}
 		f.cur = id

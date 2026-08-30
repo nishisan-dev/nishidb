@@ -268,15 +268,19 @@ func rowsDoSegmento(t *testing.T, s *Store, seg uint32) []types.RowID {
 	return out
 }
 
-// TestAEnumeracaoDoMaterializadoUsaOLocationsENaoOsRecords: no materializado os
-// rowIds de um segmento não formam faixa contígua, então a fonte tem de sair do
-// locations.idx. Ler os records para descobrir quem mora ali seria pagar
-// exatamente o custo que a enumeração existe para adiar até a revalidação.
+// TestAEnumeracaoDoMaterializadoColapsaNumaCaminhadaUnicaDoLocations: no
+// materializado, UM segmento sem índice colapsa a consulta inteira numa
+// caminhada só do locations.idx — cada rowId com location publicada sai UMA
+// vez, em ordem, more onde morar. O colapso é a correção de uma corrida: a
+// enumeração por dono da location decidia a pertinência no instante da
+// iteração, enquanto o WIP do corrente era snapshot da construção, e a linha
+// que um update concorrente movesse entre os dois instantes sumia das duas
+// fontes — falso negativo, que a revalidação do §44 não conserta.
 //
-// O oráculo isola a fonte de enumeração perguntando por um valor que NÃO existe
-// em lugar nenhum: os segmentos indexados respondem zero, e o que sobra no
-// conjunto cru é exatamente o que o segmento sem índice enumerou.
-func TestAEnumeracaoDoMaterializadoUsaOLocationsENaoOsRecords(t *testing.T) {
+// O oráculo pergunta por um valor que NÃO existe em lugar nenhum: com o
+// colapso, o conjunto cru é TODAS as linhas com location — a fonte de
+// candidatos de um full scan —, e não só as do segmento sem índice.
+func TestAEnumeracaoDoMaterializadoColapsaNumaCaminhadaUnicaDoLocations(t *testing.T) {
 	dir := t.TempDir()
 	s := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, CamposIndexadosPorNome: []string{"node"}})
 	alvo := s.curSegID.Load()
@@ -301,19 +305,21 @@ func TestAEnumeracaoDoMaterializadoUsaOLocationsENaoOsRecords(t *testing.T) {
 	}
 	s2 := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, CamposIndexadosPorNome: []string{"node"}})
 
-	esperado := rowsComLocationNoSegmento(t, s2, alvo)
-	if len(esperado) == 0 {
+	noAlvo := rowsComLocationNoSegmento(t, s2, alvo)
+	if len(noAlvo) == 0 {
 		t.Fatal("pré-condição: nenhuma location aponta para o segmento sem índice")
 	}
+	esperado := todasAsRowsComLocation(t, s2)
 	crus := candidatosCrus(t, s2, campo, strVal("valor-que-nunca-existiu"))
 	if !slices.Equal(crus, esperado) {
-		t.Errorf("a enumeração do materializado deu %v, quero as rows do locations.idx %v", crus, esperado)
+		t.Errorf("a enumeração colapsada deu %d candidatos, quero as %d rows com location publicada",
+			len(crus), len(esperado))
 	}
 }
 
-// rowsComLocationNoSegmento é o conjunto de referência da fonte do
-// materializado: os rowIds cuja location aponta para o segmento, em ordem
-// crescente, lidos pela MESMA estrutura que a fonte caminha.
+// rowsComLocationNoSegmento diz quais rowIds moram no segmento — só serve à
+// PRÉ-CONDIÇÃO dos testes (o segmento sem índice tem linha a perder); a fonte
+// do produto não filtra por segmento desde o colapso.
 func rowsComLocationNoSegmento(t *testing.T, s *Store, seg uint32) []types.RowID {
 	t.Helper()
 	var out []types.RowID
@@ -323,6 +329,20 @@ func rowsComLocationNoSegmento(t *testing.T, s *Store, seg uint32) []types.RowID
 			continue
 		}
 		if dono, _, _ := rowindex.Unpack(packed); dono == seg {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// todasAsRowsComLocation é o conjunto de referência da enumeração colapsada:
+// todo rowId com location publicada, em ordem crescente, lido pela MESMA
+// estrutura que a fonte caminha.
+func todasAsRowsComLocation(t *testing.T, s *Store) []types.RowID {
+	t.Helper()
+	var out []types.RowID
+	for id := s.RowIDBase(); id < types.RowID(s.nextRowID.Load()); id++ {
+		if _, ok := s.locs.Get(id); ok {
 			out = append(out, id)
 		}
 	}
@@ -746,5 +766,51 @@ func TestSnapshotVelhoDoCorrenteNaoRespondePeloWIPDoSegmentoNovo(t *testing.T) {
 			t.Fatalf("a row %d (node=alvo, gravada no seg %d) sumiu dos candidatos: a fonte devolveu %v — "+
 				"é o falso negativo da rotação, o WIP do segmento novo respondendo pelo antigo", want, seg1, got)
 		}
+	}
+}
+
+// TestUpdateDuranteAConsultaNaoSomeDaEnumeracaoColapsada encena o falso
+// negativo que o colapso fecha. Na forma por segmento, a fonte de enumeração
+// decidia a pertinência pelo DONO da location no instante da iteração, e o WIP
+// do corrente era um snapshot da construção: um update que movesse a linha do
+// segmento enumerado para o corrente ENTRE os dois instantes a fazia sumir das
+// duas fontes — nem o índice do corrente (snapshot velho) nem a enumeração
+// (dono já mudou) a emitiam, e a revalidação do §44 não recupera candidato que
+// nunca chegou. Com a caminhada única, a location é lida UMA vez e a linha sai
+// por onde quer que more.
+func TestUpdateDuranteAConsultaNaoSomeDaEnumeracaoColapsada(t *testing.T) {
+	dir := t.TempDir()
+	s := openStore(t, Options{Dir: dir, SegmentSize: 16 << 10, CamposIndexadosPorNome: []string{"node"}})
+	campo := campoDoDicionario(t, s, "node")
+	seg1 := s.curSegID.Load()
+	payload := linhaIndexada(t, s, "movel", "alvo", 1)
+	rowMovel, _ := mustPut(t, s, "movel", 1, payload, nil)
+	poeLinhasAteRotacionar(t, s, seg1)
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	// O seg1 perde o .sidx: é o segmento na janela de migração/crash — o estado
+	// que obriga a enumeração.
+	if err := os.Remove(segindex.CaminhoSelado(filepath.Join(dir, "data"), seg1)); err != nil {
+		t.Fatal(err)
+	}
+	s2 := openStore(t, Options{Dir: dir, SegmentSize: 16 << 10, CamposIndexadosPorNome: []string{"node"}})
+
+	// A consulta constrói as fontes AGORA (o snapshot do WIP é deste instante)...
+	it, err := s2.Lookup(campo, strVal("alvo"))
+	if err != nil {
+		t.Fatalf("Lookup: %v", err)
+	}
+	// ...e o update move a linha para o corrente ANTES de a iteração alcançá-la.
+	prev, _, ok, err := s2.GetByKey([]byte("movel"), nil)
+	if err != nil || !ok {
+		t.Fatalf("GetByKey(movel): %v (ok=%v)", err, ok)
+	}
+	mustPut(t, s2, "movel", 2, linhaIndexada(t, s2, "movel", "alvo", 2), &prev)
+
+	crus := collectRows(t, it)
+	if !slices.Contains(crus, rowMovel) {
+		t.Fatalf("a row %d (node=alvo) sumiu dos candidatos depois de o update movê-la para o corrente: "+
+			"é o falso negativo do cérebro dividido entre snapshot do WIP e dono da location", rowMovel)
 	}
 }
