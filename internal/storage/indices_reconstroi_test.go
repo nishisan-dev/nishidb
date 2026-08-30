@@ -607,3 +607,28 @@ func TestAReconstrucaoRecusaSegmentoSeladoComCorrupcaoNoMeio(t *testing.T) {
 			"ele declararia completo um índice com falso negativo permanente", statErr)
 	}
 }
+
+// TestOSegmentoAusenteNaGuardaDeTamanhoEhCorridaBenigna guarda a classificação
+// que a re-revisão dos consertos exigiu: a guarda de varredura incompleta mede
+// o tamanho por stat direto, e um segmento que a retenção aposentou tem de
+// sair como a corrida benigna que o laço já tolera (os.ErrNotExist) — a
+// primeira forma da guarda media DEPOIS, pela listagem, e devolvia a ausência
+// como ErrDatasetCorrupt: o laço morria de vez por uma sobreposição com a
+// aposentadoria que ele próprio declara tolerar.
+func TestOSegmentoAusenteNaGuardaDeTamanhoEhCorridaBenigna(t *testing.T) {
+	s, _ := abreStoreIndexadoComSegmentoPequeno(t, []string{"node"}, 1<<20)
+	poeLinhas(t, s, 3)
+
+	_, err := s.constroiIndiceDoSegmento(context.Background(), 999, s.camposIndexados)
+	if !oSegmentoSaiuDoDataset(err) {
+		t.Fatalf("segmento ausente classificado como %v: tem de ser a corrida benigna (os.ErrNotExist), "+
+			"senão a aposentadoria concorrente mata o laço", err)
+	}
+	feitos, err := s.reconstroiOsPendentes(context.Background(), []uint32{999})
+	if err != nil {
+		t.Fatalf("a passada morreu com um segmento ausente na fila: %v", err)
+	}
+	if feitos != 0 {
+		t.Errorf("feitos = %d, quero 0", feitos)
+	}
+}

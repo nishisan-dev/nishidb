@@ -43,6 +43,14 @@ func segmentPath(dir string, id uint32) string {
 	return filepath.Join(dir, fmt.Sprintf("segment-%08d.dat", id))
 }
 
+// Path é o caminho canônico do .dat do segmento — exportado para quem precisa
+// de um stat direto no arquivo sem passar pela listagem (a guarda de varredura
+// incompleta da reconstrução): a listagem é uma fotografia, e consultá-la para
+// responder "que tamanho este arquivo tem AGORA?" transforma uma aposentadoria
+// concorrente em resposta errada. O nome é deste pacote; uma cópia do formato
+// em outro lugar deixaria de casar no dia em que ele mudasse.
+func Path(dir string, id uint32) string { return segmentPath(dir, id) }
+
 func writeHeader(f *os.File, id uint32, sizeHint int64) error {
 	var h [HeaderSize]byte
 	copy(h[0:4], segmentMagic[:])

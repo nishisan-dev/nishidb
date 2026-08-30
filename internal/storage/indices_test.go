@@ -336,3 +336,30 @@ func TestOSidxOrfaoDeSegmentoAposentadoSaiNaAbertura(t *testing.T) {
 		t.Fatalf("o .sidx órfão sobreviveu à abertura (stat: %v): ele ficaria em disco para sempre", err)
 	}
 }
+
+// TestOSidxOrfaoSaiMesmoSemCampoIndexadoNenhum prova o POSICIONAMENTO da
+// limpeza: ela roda antes do early-return de campos vazios. Um dataset que
+// deixou de indexar continua tendo órfão a limpar — com a limpeza depois do
+// early-return, este teste ficaria vermelho e o resíduo viveria para sempre
+// num dataset sem index: true nenhum.
+func TestOSidxOrfaoSaiMesmoSemCampoIndexadoNenhum(t *testing.T) {
+	s, dir := abreStoreIndexado(t, []string{"node"})
+	campo := campoDoDicionario(t, s, "node")
+	poeLinhas(t, s, 5)
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	orfao := segindex.CaminhoSelado(filepath.Join(dir, "data"), 88)
+	e := segindex.NovoEscritor()
+	e.Adiciona(campo, 42, 1)
+	if err := e.Escreve(orfao, 88); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reabre SEM campo indexado nenhum — o índice foi removido do YAML.
+	openStore(t, Options{Dir: dir, SegmentSize: 1 << 20})
+	if _, err := os.Stat(orfao); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("o .sidx órfão sobreviveu à abertura sem campos indexados (stat: %v): "+
+			"a limpeza tem de rodar antes do early-return de campos vazios", err)
+	}
+}

@@ -60,13 +60,16 @@ func (s *Store) lookupIndexado(field types.FieldID, v types.Value) (types.RowIDI
 	return &hashIterator{s: s, it: segindex.Une(fontes)}, nil
 }
 
-// fontesDoCampo monta UMA fonte por segmento, em ordem crescente de segmento
-// (spec §3.2). São quatro estados e quatro fontes:
+// fontesDoCampo monta as fontes da consulta, em ordem crescente de segmento
+// (spec §3.2):
 //
 //	selado COM seção do campo → a fatia contígua das postings, zero alocação;
 //	corrente (WIP)            → a caminhada da cadeia;
 //	sem índice, histórico     → a faixa [primeiro, primeiroDoSeguinte);
-//	sem índice, materializado → os rowIds cuja location aponta para o segmento.
+//	sem índice, materializado → COLAPSA a consulta inteira numa caminhada
+//	                            única do locations.idx (ver o comentário no
+//	                            corpo — a forma por segmento tinha uma corrida
+//	                            de falso negativo).
 //
 // É AQUI que a §3.4 é contada. Cada segmento cai num dos dois baldes de
 // nishidb_index_segmentos_consultados_total, e essa é a ÚNICA coisa que a

@@ -11,12 +11,19 @@ import (
 
 // A SEGUNDA camada do gate de custo da §6.1. A primeira
 // (TestOCustoDoSetNaoAcompanhaOTamanhoDoSegmento) conta acessos ao mapeamento e
-// prova a FORMA do algoritmo — mas só enxerga o que passa pelo contador. Uma
-// regressão que viesse de FORA dele — um lock por acesso reintroduzido no
-// mmap.Region, uma syscall no caminho do Set, um crescimento que deixasse de
-// amortizar — manteria os acessos constantes e o tempo crescendo, e a primeira
-// camada aprovaria em silêncio. É exatamente a classe de defeito que o débito
-// 102 descreve: o RLock por sonda não mudava contagem nenhuma, só o relógio.
+// prova a FORMA do algoritmo — mas só enxerga o que passa pelo contador. Esta
+// pega a regressão cujo custo CRESCE COM O TAMANHO do segmento por um caminho
+// que o contador não vê: um crescimento que deixou de amortizar, uma varredura
+// proporcional à cadeia escondida atrás de um acesso só.
+//
+// O QUE ELA NÃO PEGA, por construção — e a primeira versão deste texto
+// afirmava o contrário: regressão de FATOR CONSTANTE. Um lock por acesso, uma
+// syscall por Set (a classe do débito 102) multiplicam o ns/op das DUAS
+// escalas quase igualmente, e a razão os cancela — pelo mesmo argumento que a
+// torna imune à dispersão da máquina. Fator constante é caçado pelo
+// bench-micro contra a baseline versionada, que compara valores absolutos
+// entre commits na mesma máquina; aqui seria um teto absoluto de ns/op, que é
+// exatamente o ratchet por máquina que este gate existe para dispensar.
 //
 // A medida é uma RAZÃO entre duas escalas do mesmo processo, e não um teto
 // absoluto de ns/op: a dispersão da máquina afeta as duas medições quase

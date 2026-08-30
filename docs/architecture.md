@@ -1138,10 +1138,16 @@ conhecê-las. Cada uma tem dono em [`debitos.md`](debitos.md).
 
   O que as justificava era um índice GLOBAL que cobrisse só um pedaço do dataset
   e devolvesse **menos** linhas do que existem — falso negativo, que nenhuma
-  camada acima recupera. O índice por segmento não consegue produzir isso: um
-  segmento cujo índice não tem a seção do campo **enumera** as linhas dele como
-  candidatas, e o executor revalida o predicado contra o payload corrente (§44).
-  O resultado é o mesmo do full scan filtrado, e a diferença é só de custo.
+  camada acima recupera. O índice por segmento não consegue produzir isso, e a
+  resposta ao segmento sem a seção do campo tem uma forma por modo: no
+  **histórico**, o segmento enumera a própria faixa de rowIds como candidata; no
+  **materializado**, UM segmento sem índice **colapsa a consulta inteira numa
+  caminhada única do `locations.idx`** — todas as linhas com location viram
+  candidatas, como num full scan (a forma por segmento tinha uma corrida de
+  falso negativo com updates concorrentes, e a caminhada única a fecha lendo
+  cada location uma vez só). Nos dois modos o executor revalida o predicado
+  contra o payload corrente (§44): o resultado é o mesmo do full scan filtrado,
+  e a diferença é só de custo.
 
   - **Acrescentar** um campo indexado a um dataset povoado é aceito, e a consulta
     responde certo desde o primeiro instante, inclusive sobre as linhas gravadas

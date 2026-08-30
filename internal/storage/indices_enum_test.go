@@ -310,10 +310,25 @@ func TestAEnumeracaoDoMaterializadoColapsaNumaCaminhadaUnicaDoLocations(t *testi
 		t.Fatal("pré-condição: nenhuma location aponta para o segmento sem índice")
 	}
 	esperado := todasAsRowsComLocation(t, s2)
+	refs, err := s2.listaSegmentos()
+	if err != nil {
+		t.Fatalf("listaSegmentos: %v", err)
+	}
+	antesEnum, antesIdx := s2.segPorEnumeracao.Load(), s2.segPorIndice.Load()
 	crus := candidatosCrus(t, s2, campo, strVal("valor-que-nunca-existiu"))
 	if !slices.Equal(crus, esperado) {
 		t.Errorf("a enumeração colapsada deu %d candidatos, quero as %d rows com location publicada",
 			len(crus), len(esperado))
+	}
+	// A métrica do colapso: TODOS os segmentos contam como enumerados — é a
+	// única visão da degradação, e contar os que "teriam" respondido por
+	// índice a esconderia. Sem esta asserção, trocar o Add(len(refs)) por
+	// Add(1) (ou por nada) passava pela suíte inteira.
+	if got := s2.segPorEnumeracao.Load() - antesEnum; got != int64(len(refs)) {
+		t.Errorf("segPorEnumeracao subiu %d no colapso, quero %d (todos os segmentos)", got, len(refs))
+	}
+	if got := s2.segPorIndice.Load() - antesIdx; got != 0 {
+		t.Errorf("segPorIndice subiu %d no colapso, quero 0", got)
 	}
 }
 

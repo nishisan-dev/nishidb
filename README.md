@@ -612,9 +612,13 @@ campo entra pela mesma porta, no sentido inverso: a seção que sobrou sai na
 reescrita.
 
 **A ressalva é de custo, e vale conhecer antes de declarar:** a fila é drenada
-por um laço em segundo plano, um segmento por vez, com cochilo entre as passadas
-— então os segmentos antigos varrem em vez de indexar até a reconstrução alcançar
-cada um. A resposta é a mesma desde o primeiro instante; o preço não.
+por um laço em segundo plano, um segmento por vez, com cochilo entre as
+passadas. No **histórico** o custo melhora segmento a segmento, conforme a
+reconstrução alcança cada um. No **materializado** ele é um DEGRAU: enquanto
+existir UM segmento sem índice, a consulta pelo campo colapsa numa caminhada
+única do `locations.idx` — o custo de um full scan de candidatos, pago por
+inteiro até o último segmento pendente ganhar índice, e zerado dali em diante.
+A resposta é a mesma desde o primeiro instante; o preço não.
 
 **`index: hash` e `index: bitmap` foram substituídos por `index: true`.** A
 distinção de cardinalidade que as duas grafias carregavam desapareceu com os

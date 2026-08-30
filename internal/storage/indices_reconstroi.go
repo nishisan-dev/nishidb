@@ -480,6 +480,27 @@ func (s *Store) constroiIndiceDoSegmento(ctx context.Context, seg uint32, campos
 		return false, fmt.Errorf("%w: o segmento %d é o corrente; o índice dele é o WIP, não um .sidx imutável: %w",
 			ErrInvalidArgument, seg, errSegmentoEhOCorrente)
 	}
+	// O tamanho é medido ANTES da varredura, por stat DIRETO no arquivo — e as
+	// duas escolhas são a diferença entre pegar corrupção e matar o laço numa
+	// corrida benigna. A primeira forma desta guarda media DEPOIS, pela
+	// listagem, e morria de dois jeitos que a re-revisão encontrou: a retenção
+	// podia aposentar o segmento entre a varredura completa e a listagem — e a
+	// ausência era devolvida como ErrDatasetCorrupt, que nenhum classificador
+	// benigno reconhece —, e o segmento PRÉ-SWAP (listado como pendente antes
+	// de o curSegID trocar) podia crescer entre a varredura e a medida. Com a
+	// medida anterior os dois viram desfechos benignos: o aposentado falha o
+	// stat com ENOENT, que é a corrida que o laço já tolera; e o que cresceu dá
+	// fimValido >= tamanho, que não é corrupção — o .sidx que ele viesse a
+	// publicar é o resíduo que a §2.4 aceita, reescrito pela selagem da própria
+	// rotação.
+	info, err := os.Stat(segment.Path(s.dirDeDados(), seg))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, fmt.Errorf("o segmento %d saiu do dataset antes da reconstrução: %w", seg, os.ErrNotExist)
+		}
+		return false, err
+	}
+	tamanho := info.Size()
 	caminho := segindex.CaminhoSelado(s.dirDeDados(), seg)
 	cobertura, err := s.coberturaDaReconstrucao(caminho, campos)
 	if err != nil {
@@ -494,20 +515,17 @@ func (s *Store) constroiIndiceDoSegmento(ctx context.Context, seg uint32, campos
 	if err != nil {
 		return false, err
 	}
-	// A varredura que PAROU antes do fim é corrupção no meio de um segmento
-	// selado — o ScanFrom para no primeiro record inválido sem erro (§52), e num
-	// selado não existe tail legítimo. Publicar o .sidx desta varredura seria o
-	// pior desfecho do produto: as seções sairiam completas, a fila o contaria
-	// como pronto, o crc do arquivo — escrito corretamente a partir de uma
-	// varredura incompleta — passaria, e as rows posteriores à corrupção nunca
-	// virariam candidatas enquanto o locations continua servindo-as. Falso
-	// negativo permanente. É o espelho exato da guarda da compaction sobre a
-	// mesma operação (compaction.go, fimValido != tamanho).
-	tamanho, err := s.tamanhoDoSegmento(seg)
-	if err != nil {
-		return false, err
-	}
-	if fimValido != tamanho {
+	// A varredura que PAROU antes do fim medido é corrupção no meio de um
+	// segmento selado — o ScanFrom para no primeiro record inválido sem erro
+	// (§52), e num selado não existe tail legítimo. Publicar o .sidx desta
+	// varredura seria o pior desfecho do produto: as seções sairiam completas,
+	// a fila o contaria como pronto, o crc do arquivo — escrito corretamente a
+	// partir de uma varredura incompleta — passaria, e as rows posteriores à
+	// corrupção nunca virariam candidatas enquanto o locations continua
+	// servindo-as. Falso negativo permanente. `<` e não `!=`: fimValido acima
+	// do tamanho medido é o segmento pré-swap que cresceu durante a varredura,
+	// e isso é a corrida benigna acima, não corrupção.
+	if fimValido < tamanho {
 		return false, fmt.Errorf(
 			"%w: a varredura de reconstrução do segmento %d parou em %d de %d bytes; "+
 				"um .sidx desta varredura declararia completo um índice sem as rows posteriores à corrupção",
