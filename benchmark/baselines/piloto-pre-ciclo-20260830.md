@@ -63,3 +63,21 @@ Um índice por segmento selado é escrito uma vez, ordenado, dimensionado exato,
 **nunca cresce**. Não existe fator de carga, não existe lápide, não existe
 tabela para dobrar — logo não existe `reconstroi`. O modo de falha desta página
 não fica mais raro no desenho novo: fica impossível de exprimir.
+
+## Adendo — 06:43, dezoito minutos depois
+
+Segunda leitura dos mesmos contadores, sem tocar no processo:
+
+| Contador | 06:25 | 06:43 | Δ |
+|---|---|---|---|
+| `nishidb_ingest_events_total` | 46.976.204 | 46.976.204 | **0** |
+| `nishidb_kafka_queue_depth` | 5.000 | 5.000 | 0 (no teto) |
+| `nishidb_kafka_poll_blocked_seconds_total` | 28.145,7 | 29.225,8 | **+1.080,1 s** |
+
+O poll bloqueado cresceu 1.080 s em 1.080 s de relógio: bloqueado **100% do
+tempo**. E nenhum evento comprometido no intervalo inteiro.
+
+Isto separa as duas hipóteses que a primeira medida deixava em aberto. Não é um
+rehash lento que ainda vai terminar: é uma parada que já dura pelo menos dezoito
+minutos com um núcleo saturado. O trabalho que o processo faz não avança o
+contador de ingestão em nenhuma unidade.
