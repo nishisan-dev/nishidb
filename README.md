@@ -77,11 +77,24 @@ ao lado dela entrou o **client Python** (DB-API 2.0). Os dois são só leitura,
 sem dependência de runtime, e provados contra o binário real; ver
 [Clients](#clients).
 
-Próximo, na ordem do roadmap: os subsistemas 2-5 da direção pós-incidente
-(snapshot de leitura, pin de segmento contra a retenção, jobs assíncronos,
-tabela de resultado em disco) e o ciclo da consulta longa — ordenação e
-densidade, onde hoje moram os timeouts de `ORDER BY` sobre milhões de
-candidatos.
+**Snapshot de leitura com isolamento, entregue.** Uma consulta enxerga o
+dataset como ele estava quando ela abriu: o mesmo conjunto de linhas do começo
+ao fim, cada uma na versão daquele instante, com o relógio da expiração
+congelado. A ingestão, a compaction e a retenção continuam correndo por baixo —
+o que elas não fazem é apagar o passado que uma consulta ainda alcança.
+
+Custa 24 bytes por atualização enquanto há consulta aberta, e nada quando não
+há: os segmentos são append-only, então a versão anterior de uma linha já está
+em disco e o que se guarda é o endereço dela, não uma cópia. O teto é
+`runtime.query.snapshotMaxBytes`; estourado, a consulta mais antiga é recusada
+com `SNAPSHOT_TOO_OLD` e a ingestão nunca para. O `/v1/stats` e o `/metrics`
+publicam o que está retido, há quanto tempo, e quantos segmentos a compaction
+deixou de aposentar por causa disso.
+
+Próximo, na ordem do roadmap: os subsistemas 4-5 da direção pós-incidente (jobs
+assíncronos, tabela de resultado em disco) e o que sobrou do ciclo da consulta
+longa — o scan paralelo do débito 95, onde todo full scan ainda usa um núcleo
+só.
 
 ### Upgrade: dataset criado antes do índice por segmento
 

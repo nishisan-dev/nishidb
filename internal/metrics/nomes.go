@@ -258,6 +258,29 @@ const (
 	MetQueryLongestRunningSeconds = "nishidb_query_longest_running_seconds"
 	MetQueryLongRejectedTotal     = "nishidb_query_long_rejected_total"
 
+	// As três do ISOLAMENTO DE LEITURA. Também fora do §92, e pela mesma razão
+	// das duas acima: quando aquela seção foi escrita não existia snapshot, e
+	// não havia o que medir.
+	//
+	// Elas respondem a três perguntas diferentes, e nenhuma substitui as
+	// outras. MetQuerySnapshotBytes é MEDIDOR e diz quanto do teto está em uso
+	// AGORA — é o número que responde "o snapshotMaxBytes que eu configurei
+	// está apertado?" antes da primeira recusa. MetQuerySnapshotOldestSeconds
+	// diz HÁ QUANTO TEMPO o dataset está guardando passado, que é o que trava
+	// a compaction e a retenção; ela é irmã da longest_running e não a mesma
+	// coisa, porque uma consulta pode estar em voo sem reter versão nenhuma.
+	// MetQuerySnapshotExpiredTotal conta as recusas por teto, e é a única das
+	// três que alarma: enquanto for zero, o teto está sobrando.
+	//
+	// A quarta é da COMPACTION, e não da consulta, porque é lá que o efeito
+	// aparece: segmento pinado é segmento que não devolve disco. Sem ela, uma
+	// compaction parada por consulta longa é indistinguível de uma compaction
+	// sem trabalho — as duas publicam zero aposentadorias.
+	MetQuerySnapshotBytes         = "nishidb_query_snapshot_bytes"
+	MetQuerySnapshotOldestSeconds = "nishidb_query_snapshot_oldest_seconds"
+	MetQuerySnapshotExpiredTotal  = "nishidb_query_snapshot_expired_total"
+	MetCompactionSegmentosPinados = "nishidb_compaction_segmentos_pinados"
+
 	// MetQueryBufferBytes e MetQueryBudgetRejectedTotal são do orçamento de
 	// memória de consulta (§80: runtime.memoryTarget e
 	// runtime.query.maxBufferPerQuery). Não estão no §92 porque, quando aquela

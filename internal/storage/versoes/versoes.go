@@ -161,3 +161,11 @@ func (c *Cadeias) Entradas() int {
 	defer c.mu.RUnlock()
 	return c.n
 }
+
+// SegmentosPinados é quantos segmentos guardam versão retida — o que a
+// compaction não pode aposentar agora.
+func (c *Cadeias) SegmentosPinados() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.pin)
+}

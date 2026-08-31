@@ -651,6 +651,76 @@ troca de o comando nunca mais executar texto que ninguém escreveu.
 Essa reescrita textual tem prazo: no M2 o `--limit` deve virar parâmetro do
 plano, já que o binder conhece o `LIMIT` da AST (débito 46).
 
+### O snapshot de leitura: uma consulta vê um instante do banco
+
+Uma consulta abre um `Snapshot` e o devolve no `Close`. Enquanto ele existe, a
+consulta enxerga o dataset como ele estava naquele instante: o mesmo conjunto
+de linhas do começo ao fim, cada uma na versão daquele momento, com o relógio
+da expiração parado. A ingestão, a compaction e a retenção continuam correndo —
+o que elas deixam de fazer é apagar o passado que a consulta ainda alcança.
+
+![Snapshot de leitura](https://uml.nishisan.dev/proxy?src=https://raw.githubusercontent.com/nishisan-dev/nishidb/main/docs/diagrams/snapshot_isolamento.puml)
+
+O snapshot congela quatro coisas, e nenhuma substitui as outras:
+
+| | O que congela | O que quebra sem ele |
+|---|---|---|
+| `Epoca` | a versão de cada linha | o resultado mistura estados: as linhas alcançadas antes de uma atualização saem velhas, as de depois saem novas |
+| `Instante` | o relógio da expiração | uma linha viva quando a consulta abriu some do MEIO do resultado |
+| `LimiteRowID` | o teto de rowId | nada hoje: as fontes do índice por segmento já fixam o seu na construção. O campo torna o teto explícito e comum aos quatro planos |
+| `BaseRowID` | o piso | a purga do histórico abre buraco por baixo da varredura em curso |
+
+Ele é **tipo de valor e viaja em parâmetro**, nunca em campo do `Store`: dois
+leitores concorrentes têm universos diferentes, e um campo os fundiria num só.
+
+**O isolamento não copia dado.** Os segmentos são append-only, então a versão
+anterior de uma linha continua fisicamente onde estava até a compaction
+aposentá-la — o que falta para alcançá-la é só o endereço, e o writer já o tem
+na mão no passo do `applyRecord` que desconta a liveness do segmento antigo.
+`internal/storage/versoes` guarda `(rowId, location anterior, época)`: 24 bytes
+por atualização, e **zero enquanto nenhuma consulta está aberta**. Sem leitor
+vivo o journal não recebe uma entrada sequer, e a ingestão paga apenas a
+comparação de um atômico.
+
+Três decisões separam o que parece igual:
+
+- **Put e `Expira` versionam; o copy-forward da compaction não.** Ele também
+  publica location nova com `hadPrevious`, mas só move bytes: o conteúdo é
+  idêntico e o leitor deve seguir a location nova. Se versionasse, cada passada
+  criaria versões apontando para o segmento que ela está aposentando, e o pin
+  travaria a própria passada que as gerou.
+- **A busca devolve a versão de menor época maior que a do leitor.** Com uma
+  atualização só, "a primeira que achar" acerta por acidente; com duas, só a
+  regra certa acerta.
+- **A expiração da versão entregue é derivada do payload** — os índices
+  descrevem a versão corrente. Mas só quando o payload declara o instante: a
+  linha legada não tem o campo, e o instante dela é o da carência, semeado pelo
+  coletor, que não existe em record algum.
+
+**O que o snapshot obriga os outros a respeitar.** A compaction não elege
+segmento com versão retida (a recusa é na eleição, não na aposentadoria: varrer
+para descobrir no fim que ele não pode sair seria pagar o I/O por nada), e a
+descoberta oportunista da expiração decide pelo instante do snapshot mais
+antigo — com o relógio de agora, ela apagava o payload que o relógio congelado
+tinha acabado de preservar. A purga do histórico para no piso da consulta mais
+antiga, e o que ela deixou de avançar sai no log: uma retenção segurada e uma
+retenção sem trabalho são estados diferentes e não podem publicar o mesmo
+silêncio.
+
+**O teto.** A memória retida é proporcional a (taxa de escrita × duração da
+consulta mais longa viva), e `runtime.query.snapshotMaxBytes` a limita — por
+padrão, um oitavo do `memoryTarget`, no máximo 64 MiB. Estourado, é a consulta
+mais antiga que é invalidada, nunca a ingestão que é barrada: o dataset existe
+para ingerir, e uma consulta recusada com `SNAPSHOT_TOO_OLD` é um resultado que
+o cliente sabe tratar. Degradar em silêncio para a versão corrente seria o
+único desfecho inaceitável — as duas respostas são indistinguíveis no wire e só
+uma é verdadeira.
+
+**O que fica de fora, e é semântica pretendida:** o journal é heap e morre com
+o processo, então consulta não atravessa reinício; a tabela histórica não
+versiona (linhas só nascem); e o `_meta` ignora o snapshot por já ser um
+retrato do materializer.
+
 ### `ORDER BY`: um operador, três modos
 
 `ORDER BY` é o único operador **bloqueante** do motor: a fonte é drenada por

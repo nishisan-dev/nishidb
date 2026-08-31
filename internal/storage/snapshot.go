@@ -293,6 +293,7 @@ func (s *Store) invalidaOMaisAntigoSeEstourou() {
 		// deixa de ser servível.
 		s.snaps.invalidaAte(menor + 1)
 		s.snaps.esquece(menor)
+		s.snapsExpirados.Add(1)
 		if antes := s.vers.Entradas(); s.vers.Poda(s.snaps.menorEpocaViva()) == 0 && antes == s.vers.Entradas() {
 			// Nada saiu: insistir seria laço infinito. Acontece quando o
 			// journal está cheio de versões que o PRÓPRIO leitor seguinte
@@ -301,3 +302,29 @@ func (s *Store) invalidaOMaisAntigoSeEstourou() {
 		}
 	}
 }
+
+// IdadeDoSnapshotMaisAntigo é há quanto tempo a consulta mais antiga está
+// segurando o passado deste dataset, e zero quando não há nenhuma.
+//
+// É medida contra o relógio DO STORE, e não contra time.Now, porque é o mesmo
+// relógio que decidiu o instante do snapshot — misturar os dois faria a série
+// mentir em qualquer teste com relógio controlado, e mentir por um valor que
+// parece plausível.
+func (s *Store) IdadeDoSnapshotMaisAntigo() time.Duration {
+	t, ok := s.snaps.instanteMaisAntigoVivo()
+	if !ok {
+		return 0
+	}
+	if d := s.agora().Sub(t); d > 0 {
+		return d
+	}
+	return 0
+}
+
+// SegmentosPinados é quantos segmentos a compaction não pode aposentar porque
+// guardam versões que uma consulta ainda alcança.
+func (s *Store) SegmentosPinados() int { return s.vers.SegmentosPinados() }
+
+// SnapshotsExpirados conta as consultas invalidadas pelo teto de memória do
+// journal desde a subida. Enquanto for zero, o teto está sobrando.
+func (s *Store) SnapshotsExpirados() uint64 { return s.snapsExpirados.Load() }

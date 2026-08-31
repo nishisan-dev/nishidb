@@ -450,6 +450,10 @@ type Store struct {
 	snaps *registroDeSnapshots
 	// vers guarda as locations anteriores enquanto algum leitor as alcança.
 	vers *versoes.Cadeias
+	// snapsExpirados conta as consultas invalidadas pelo teto do journal. É
+	// contador, e não medidor, porque a pergunta é "isto ACONTECEU?" — um
+	// medidor que voltasse a zero esconderia a recusa entre dois scrapes.
+	snapsExpirados atomic.Uint64
 
 	// Estado da goroutine de retenção do dataset histórico, no mesmo molde do
 	// da compaction: retMu guarda o cancelamento, retPassadaMu serializa as

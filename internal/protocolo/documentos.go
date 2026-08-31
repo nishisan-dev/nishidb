@@ -241,6 +241,31 @@ type DatasetStats struct {
 	// informação — bloco omitido seria indistinguível de versão antiga do
 	// servidor.
 	Index IndiceStats `json:"index"`
+	// Snapshot é o que o isolamento de leitura está segurando neste dataset,
+	// e sai da MESMA estrutura que alimenta as séries nishidb_query_snapshot_*
+	// — dois contadores para o mesmo fato divergem no dia em que um caminho de
+	// erro esquece de somar, e em produção alguém lê o errado.
+	//
+	// Não é ponteiro pela mesma razão do Index: um dataset sem consulta aberta
+	// tem os quatro campos em zero, e isso é informação. Bloco omitido seria
+	// indistinguível de versão antiga do servidor.
+	Snapshot SnapshotStats `json:"snapshot"`
+}
+
+// SnapshotStats é o retrato do isolamento de leitura: o que as consultas
+// abertas estão impedindo o dataset de descartar.
+//
+// Os quatro números respondem a perguntas diferentes, e é por isso que são
+// quatro. Bytes diz quanto do teto está em uso AGORA; OldestSeconds diz há
+// quanto tempo o passado está retido, que é o que trava a compaction e a
+// retenção; PinnedSegments diz o efeito disso no disco; e ExpiredTotal conta
+// as consultas que o teto já recusou — a única que alarma, porque enquanto for
+// zero o teto está sobrando.
+type SnapshotStats struct {
+	Bytes          int64   `json:"bytes"`
+	OldestSeconds  float64 `json:"oldestSeconds"`
+	PinnedSegments int     `json:"pinnedSegments"`
+	ExpiredTotal   uint64  `json:"expiredTotal"`
 }
 
 // IndiceStats é o retrato do índice por segmento, e é a MESMA estrutura que
