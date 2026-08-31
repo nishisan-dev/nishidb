@@ -443,7 +443,7 @@ func TestPostingOrfaEhSupersetEOExecutorFiltra(t *testing.T) {
 	// A revalidação é do executor, e ela parte do record CORRENTE: a row
 	// existe, está viva, e o valor dela já é o novo. É por isso que o
 	// candidato a mais nunca vira linha a mais.
-	rec, _, vivo, err := s.GetByRowID(row, nil)
+	rec, _, vivo, err := s.GetByRowID(s.AbreSnapshot(), row, nil)
 	if err != nil || !vivo {
 		t.Fatalf("GetByRowID: (%v,%v)", vivo, err)
 	}

@@ -63,10 +63,10 @@ func TestAgendaConcordaComPrazoVencidoSobCargaAleatoria(t *testing.T) {
 			if venc == rowindex.Carencia {
 				continue
 			}
-			if agendadoVencido != s.prazoVencido(id) {
+			if agendadoVencido != s.prazoVencido(id, s.agora()) {
 				ms, conhecido := s.escritas.Get(id)
 				t.Fatalf("%s: row %d diverge — agenda diz vencida=%v (venc=%d, agora=%d), prazoVencido diz %v (escrita=%d conhecido=%v, duração=%v)",
-					momento, id, agendadoVencido, venc, agora, s.prazoVencido(id), ms, conhecido, s.duracaoEfetiva(id))
+					momento, id, agendadoVencido, venc, agora, s.prazoVencido(id, s.agora()), ms, conhecido, s.duracaoEfetiva(id))
 			}
 		}
 	}

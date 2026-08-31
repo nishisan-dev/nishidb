@@ -79,7 +79,7 @@ func fullScanFiltrado(t *testing.T, s *Store, campo types.FieldID, v types.Value
 	t.Helper()
 	var out []types.RowID
 	var buf []byte
-	it := s.ScanLive()
+	it := s.ScanLive(s.AbreSnapshot())
 	defer func() { _ = it.Close() }()
 	for it.Next() {
 		ok, b := linhaCasa(t, s, it.RowID(), campo, v, buf)
@@ -97,7 +97,7 @@ func fullScanFiltrado(t *testing.T, s *Store, campo types.FieldID, v types.Value
 // linhaCasa devolve se a row está viva e tem o campo com o valor.
 func linhaCasa(t *testing.T, s *Store, id types.RowID, campo types.FieldID, v types.Value, buf []byte) (bool, []byte) {
 	t.Helper()
-	rec, out, ok, err := s.GetByRowID(id, buf)
+	rec, out, ok, err := s.GetByRowID(s.AbreSnapshot(), id, buf)
 	if err != nil {
 		t.Fatalf("GetByRowID(%d): %v", id, err)
 	}

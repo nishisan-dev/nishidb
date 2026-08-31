@@ -41,12 +41,12 @@ func exigeBitmapCompleto(t *testing.T, s *Store) {
 	if len(s.camposIndexados) == 0 {
 		t.Fatal("guarda de bitmap chamado num Store sem índice: o cenário precisa declarar CamposIndexados, senão a asserção não verifica nada")
 	}
-	it := s.ScanLive()
+	it := s.ScanLive(s.AbreSnapshot())
 	defer it.Close()
 	var buf []byte
 	for it.Next() {
 		id := it.RowID()
-		rec, b, vivo, err := s.GetByRowID(id, buf)
+		rec, b, vivo, err := s.GetByRowID(s.AbreSnapshot(), id, buf)
 		buf = b
 		if err != nil {
 			t.Fatalf("guarda de bitmap: GetByRowID(%d): %v", id, err)

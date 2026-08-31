@@ -31,7 +31,7 @@ func TestCarenciaGravaNoIndiceENaoNoPayload(t *testing.T) {
 		t.Fatal("a carência não chegou ao índice")
 	}
 	// ...e o PAYLOAD continua sem o campo.
-	rec, _, ok, err := s.GetByRowID(id, nil)
+	rec, _, ok, err := s.GetByRowID(s.AbreSnapshot(), id, nil)
 	if err != nil || !ok {
 		t.Fatal(err)
 	}

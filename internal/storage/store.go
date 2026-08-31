@@ -1432,7 +1432,7 @@ func (s *Store) lookup(key, buf []byte) (rec types.Record, out []byte, exists, l
 		// A liveness tem DUAS causas de morte: a lápide já publicada e o
 		// prazo vencido que o coletor ainda não recolheu. Contá-las juntas
 		// aqui é o que faz a visibilidade não depender do agendador.
-		live = locFlags&types.FlagTombstone == 0 && !s.prazoVencido(rid)
+		live = locFlags&types.FlagTombstone == 0 && !s.prazoVencido(rid, s.agora())
 		return true, nil
 	}
 	_, exists, err = s.prim.Find(key, validate)
@@ -1487,7 +1487,7 @@ func (s *Store) Estado(key, buf []byte) (types.Record, []byte, types.Presenca, e
 
 // GetByRowID devolve o record corrente da row. ok=false para row sem
 // location ou tombstoned (checagem de liveness dos caminhos indexados).
-func (s *Store) GetByRowID(id types.RowID, buf []byte) (types.Record, []byte, bool, error) {
+func (s *Store) GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (types.Record, []byte, bool, error) {
 	if err := s.entra(); err != nil {
 		return types.Record{}, buf, false, err
 	}
@@ -1500,7 +1500,7 @@ func (s *Store) GetByRowID(id types.RowID, buf []byte) (types.Record, []byte, bo
 		return types.Record{}, buf, false, nil
 	}
 	seg, off, locFlags := rowindex.Unpack(packed)
-	if locFlags&types.FlagTombstone != 0 || s.prazoVencido(id) || s.purgada(id) {
+	if locFlags&types.FlagTombstone != 0 || s.prazoVencido(id, snap.Instante) || s.purgada(id) {
 		return types.Record{}, buf, false, nil
 	}
 	rec, out, err := s.segR.ReadRecord(seg, off, buf)
@@ -1860,7 +1860,13 @@ func campoDoPayload(payload []byte, campo types.FieldID, esperado types.FieldTyp
 // Prazo DESCONHECIDO (entrada zerada) não vence: é a row anterior à ativação
 // da expiração, ou a que perdeu o índice, e apagá-la seria perder dado vivo
 // por falta de informação. Ela ganha carência na primeira varredura.
-func (s *Store) prazoVencido(rowID types.RowID) bool {
+//
+// O instante entra por PARÂMETRO, e não por s.agora(), porque quem pergunta
+// decide o relógio. O leitor passa o Instante do seu Snapshot — congelado na
+// abertura da consulta —, e é isso que impede uma linha viva em T0 de sumir do
+// meio do resultado. O writer passa s.agora(): a expiração oportunista é dele,
+// e ela decide sobre o presente.
+func (s *Store) prazoVencido(rowID types.RowID, em time.Time) bool {
 	if s.escritas == nil {
 		return false
 	}
@@ -1872,7 +1878,7 @@ func (s *Store) prazoVencido(rowID types.RowID) bool {
 	if !conhecido {
 		return false
 	}
-	return s.agora().UnixMilli()-ms >= d.Milliseconds()
+	return em.UnixMilli()-ms >= d.Milliseconds()
 }
 
 // vencimentoDe calcula QUANDO esta linha vence, no formato que a agenda
@@ -2064,7 +2070,12 @@ func (s *Store) replayValidator(key []byte, rowID types.RowID) primary.ValidateF
 
 // liveIterator percorre lazy as rows vivas até o limite fixado na criação.
 type liveIterator struct {
-	s     *Store
+	s *Store
+	// snap é o universo da varredura, e ele é COPIADO para dentro do iterador
+	// porque o iterador sobrevive à chamada que o criou: o teto, o piso e o
+	// relógio têm de ser os do instante da abertura em todo avanço, inclusive
+	// no último.
+	snap  types.Snapshot
 	next  types.RowID
 	limit types.RowID
 	cur   types.RowID
@@ -2097,7 +2108,7 @@ func (it *liveIterator) Next() bool {
 		if _, _, locFlags := rowindex.Unpack(packed); locFlags&types.FlagTombstone != 0 {
 			continue
 		}
-		if it.s.prazoVencido(id) || it.s.purgada(id) {
+		if it.s.prazoVencido(id, it.snap.Instante) || it.s.purgada(id) {
 			continue
 		}
 		it.cur = id
@@ -2171,7 +2182,7 @@ func (emptyIterator) Close() error       { return nil }
 // ScanLive devolve um iterador lazy das rows vivas (rowIds crescentes,
 // location válida — overlay incluso — e sem tombstone). Rows criadas após a
 // chamada não aparecem (snapshot do limite superior).
-func (s *Store) ScanLive() types.RowIDIterator {
+func (s *Store) ScanLive(snap types.Snapshot) types.RowIDIterator {
 	if err := s.entra(); err != nil {
 		return &liveIterator{err: err}
 	}
@@ -2179,7 +2190,7 @@ func (s *Store) ScanLive() types.RowIDIterator {
 	// A varredura começa na marca-d'água, e não em zero: no histórico o
 	// prefixo purgado pode ser de dezenas de milhões de rowIds, e percorrê-los
 	// para descartar cada um seria pagar pela retenção em toda consulta.
-	return &liveIterator{s: s, next: s.RowIDBase(), limit: types.RowID(s.nextRowID.Load())}
+	return &liveIterator{s: s, snap: snap, next: snap.BaseRowID, limit: snap.LimiteRowID}
 }
 
 // DiretorioDeSpill é onde o motor de consulta pode transbordar o que não cabe
@@ -2239,7 +2250,7 @@ func (s *Store) Sequence(id types.RowID) (int64, types.Presenca) {
 	// lastSequence, e é ela que impede um evento antigo de reabrir a
 	// entidade. Quem pergunta a sequence de uma row está decidindo sobre
 	// ordem, e "não sei" é a pior resposta possível.
-	if _, _, flags := rowindex.Unpack(packed); flags&types.FlagTombstone != 0 || s.prazoVencido(id) {
+	if _, _, flags := rowindex.Unpack(packed); flags&types.FlagTombstone != 0 || s.prazoVencido(id, s.agora()) {
 		return s.sequenceDe(id), types.PresencaExpirada
 	}
 	return s.sequenceDe(id), types.PresencaViva

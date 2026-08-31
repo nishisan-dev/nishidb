@@ -216,7 +216,7 @@ func TestLeituraConcorrenteSobreviveAUmaCompactionInteira(t *testing.T) {
 				default:
 				}
 				for _, id := range ids {
-					rec, out, ok, err := s.GetByRowID(id, buf)
+					rec, out, ok, err := s.GetByRowID(s.AbreSnapshot(), id, buf)
 					buf = out
 					if err != nil {
 						falhas <- fmt.Errorf("GetByRowID(%d): %w", id, err)
@@ -276,7 +276,7 @@ func BenchmarkGetByRowID(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		rec, out, ok, err := s.GetByRowID(ids[i%keys], buf)
+		rec, out, ok, err := s.GetByRowID(s.AbreSnapshot(), ids[i%keys], buf)
 		buf = out
 		if err != nil || !ok {
 			b.Fatalf("GetByRowID(%d): ok=%v err=%v", ids[i%keys], ok, err)

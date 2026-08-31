@@ -943,6 +943,7 @@ func (p *readerPool) stop() []QueryStats {
 
 func lookupIndexadoLimit(st *storage.Store, field types.FieldID, buf []byte, limit int) []byte {
 	v := types.Value{Type: types.TypeString, Bytes: []byte("Interim-Update")}
+	snap := st.AbreSnapshot()
 	it, err := st.Lookup(field, v)
 	if err != nil {
 		return buf
@@ -950,7 +951,7 @@ func lookupIndexadoLimit(st *storage.Store, field types.FieldID, buf []byte, lim
 	defer it.Close()
 	n := 0
 	for n < limit && it.Next() {
-		_, out, ok, err := st.GetByRowID(it.RowID(), buf[:0])
+		_, out, ok, err := st.GetByRowID(snap, it.RowID(), buf[:0])
 		buf = out
 		if err == nil && ok {
 			n++
@@ -960,11 +961,12 @@ func lookupIndexadoLimit(st *storage.Store, field types.FieldID, buf []byte, lim
 }
 
 func scanLimit(st *storage.Store, buf []byte, limit int) []byte {
-	it := st.ScanLive()
+	snap := st.AbreSnapshot()
+	it := st.ScanLive(snap)
 	defer it.Close()
 	n := 0
 	for n < limit && it.Next() {
-		_, out, ok, err := st.GetByRowID(it.RowID(), buf[:0])
+		_, out, ok, err := st.GetByRowID(snap, it.RowID(), buf[:0])
 		buf = out
 		if err == nil && ok {
 			n++

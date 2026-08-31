@@ -24,9 +24,10 @@ import (
 // redeclarada em cada lado, nenhuma das duas satisfaria a mesma assinatura.
 type consumerStore interface {
 	GetByKey(key, buf []byte) (types.Record, []byte, bool, error)
-	GetByRowID(id types.RowID, buf []byte) (types.Record, []byte, bool, error)
+	GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (types.Record, []byte, bool, error)
 	Put(key []byte, seq int64, flags uint8, payload []byte, prev *types.Record) (types.RowID, bool, error)
-	ScanLive() types.RowIDIterator
+	ScanLive(snap types.Snapshot) types.RowIDIterator
+	AbreSnapshot() types.Snapshot
 	Lookup(field types.FieldID, v types.Value) (types.RowIDIterator, error)
 	Indexado(field types.FieldID) bool
 	Sequence(id types.RowID) (int64, types.Presenca)
@@ -426,22 +427,22 @@ func TestGetByRowIDAndLiveness(t *testing.T) {
 	s := New(Indexes{})
 	p := payload(t, fv(1, strVal("ABC")))
 	rowID, _, _ := s.Put([]byte("ABC"), 1, 0, p, nil)
-	rec, _, ok, err := s.GetByRowID(rowID, nil)
+	rec, _, ok, err := s.GetByRowID(s.AbreSnapshot(), rowID, nil)
 	if err != nil || !ok || !bytes.Equal(rec.Payload, p) {
 		t.Fatalf("GetByRowID: ok=%v err=%v", ok, err)
 	}
-	if _, _, ok, _ := s.GetByRowID(999, nil); ok {
+	if _, _, ok, _ := s.GetByRowID(s.AbreSnapshot(), 999, nil); ok {
 		t.Error("row inexistente")
 	}
 	// Tombstone: some das leituras (inclusive por key) e do scan.
 	s.SetTombstone(rowID)
-	if _, _, ok, _ := s.GetByRowID(rowID, nil); ok {
+	if _, _, ok, _ := s.GetByRowID(s.AbreSnapshot(), rowID, nil); ok {
 		t.Error("tombstoned deveria dar ok=false")
 	}
 	if _, _, ok, _ := s.GetByKey([]byte("ABC"), nil); ok {
 		t.Error("GetByKey de row tombstoned deveria dar ok=false")
 	}
-	if got := drain(t, s.ScanLive()); len(got) != 0 {
+	if got := drain(t, s.ScanLive(s.AbreSnapshot())); len(got) != 0 {
 		t.Errorf("ScanLive com tombstone = %v", got)
 	}
 }
@@ -455,17 +456,17 @@ func TestPutFlagsDriveLiveness(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, ok, _ := s.GetByRowID(rowID, nil); ok {
+	if _, _, ok, _ := s.GetByRowID(s.AbreSnapshot(), rowID, nil); ok {
 		t.Error("Put com FlagTombstone deveria nascer morta")
 	}
-	if got := drain(t, s.ScanLive()); len(got) != 0 {
+	if got := drain(t, s.ScanLive(s.AbreSnapshot())); len(got) != 0 {
 		t.Errorf("ScanLive = %v", got)
 	}
 	// Ressuscitar é um Put sem a flag.
 	if _, _, err := s.Put([]byte("ABC"), 2, 0, p, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, ok, _ := s.GetByRowID(rowID, nil); !ok {
+	if _, _, ok, _ := s.GetByRowID(s.AbreSnapshot(), rowID, nil); !ok {
 		t.Error("Put sem flag deveria reviver a row")
 	}
 }
@@ -498,7 +499,7 @@ func TestScanLiveAscending(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	got := drain(t, s.ScanLive())
+	got := drain(t, s.ScanLive(s.AbreSnapshot()))
 	for i := 1; i < len(got); i++ {
 		if got[i] <= got[i-1] {
 			t.Fatalf("rowIds fora de ordem: %v", got)
@@ -604,7 +605,7 @@ func TestLookupReturnsSupersetWithTombstones(t *testing.T) {
 	if len(got) != 1 || got[0] != rowID {
 		t.Fatalf("lookup deveria devolver o candidato morto: %v", got)
 	}
-	if _, _, ok, _ := s.GetByRowID(got[0], nil); ok {
+	if _, _, ok, _ := s.GetByRowID(s.AbreSnapshot(), got[0], nil); ok {
 		t.Error("a revalidação por GetByRowID é que derruba o candidato")
 	}
 }

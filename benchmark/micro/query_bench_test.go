@@ -100,7 +100,7 @@ func BenchmarkQueryBitmapLimit100(b *testing.B) {
 		}
 		n := 0
 		for n < 100 && it.Next() {
-			rec, out, ok, err := st.GetByRowID(it.RowID(), buf[:0])
+			rec, out, ok, err := st.GetByRowID(st.AbreSnapshot(), it.RowID(), buf[:0])
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -146,10 +146,10 @@ func BenchmarkFullScan1k(b *testing.B) {
 	var buf []byte
 	b.ReportAllocs()
 	for b.Loop() {
-		it := st.ScanLive()
+		it := st.ScanLive(st.AbreSnapshot())
 		n := 0
 		for n < 1000 && it.Next() {
-			rec, out, ok, err := st.GetByRowID(it.RowID(), buf[:0])
+			rec, out, ok, err := st.GetByRowID(st.AbreSnapshot(), it.RowID(), buf[:0])
 			if err != nil {
 				b.Fatal(err)
 			}

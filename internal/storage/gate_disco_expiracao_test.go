@@ -112,7 +112,7 @@ func TestGateDiscoCaiQuandoOKeySetEhAbandonado(t *testing.T) {
 
 func contaVisiveis(t *testing.T, s *Store) int {
 	t.Helper()
-	it := s.ScanLive()
+	it := s.ScanLive(s.AbreSnapshot())
 	defer func() { _ = it.Close() }()
 	n := 0
 	for it.Next() {

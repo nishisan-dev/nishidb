@@ -133,7 +133,7 @@ func TestPutUpdateMantemRowIDETrocaEstado(t *testing.T) {
 	}
 
 	// Leitura por rowId com buffer reutilizado vê o estado novo.
-	rec, buf2, ok, err := s.GetByRowID(id1, buf)
+	rec, buf2, ok, err := s.GetByRowID(s.AbreSnapshot(), id1, buf)
 	if err != nil || !ok {
 		t.Fatalf("GetByRowID: (%v,%v)", ok, err)
 	}
@@ -141,7 +141,7 @@ func TestPutUpdateMantemRowIDETrocaEstado(t *testing.T) {
 		t.Fatalf("estado novo não visível: seq=%d", rec.Sequence)
 	}
 	// Reuso do buffer devolvido em nova leitura.
-	rec, _, ok, err = s.GetByRowID(id1, buf2)
+	rec, _, ok, err = s.GetByRowID(s.AbreSnapshot(), id1, buf2)
 	if err != nil || !ok || rec.Sequence != 2 {
 		t.Fatalf("releitura com buf reutilizado: (%+v,%v,%v)", rec, ok, err)
 	}
@@ -166,12 +166,12 @@ func TestPutComPrevConfiaNoRowIDSemRefazerFind(t *testing.T) {
 	if created || got != 999 {
 		t.Fatalf("Put deveria confiar no rowId forjado 999, obtido (%d,%v)", got, created)
 	}
-	rec, _, ok, err := s.GetByRowID(999, nil)
+	rec, _, ok, err := s.GetByRowID(s.AbreSnapshot(), 999, nil)
 	if err != nil || !ok || rec.Sequence != 2 || !bytes.Equal(rec.Key, []byte("key-a")) {
 		t.Fatalf("estado deveria estar na row 999: (%+v,%v,%v)", rec, ok, err)
 	}
 	// A row original não foi tocada (nenhum re-Find aconteceu).
-	if rec, _, ok, _ := s.GetByRowID(idA, nil); !ok || rec.Sequence != 1 {
+	if rec, _, ok, _ := s.GetByRowID(s.AbreSnapshot(), idA, nil); !ok || rec.Sequence != 1 {
 		t.Fatalf("row original alterada: (%+v,%v)", rec, ok)
 	}
 }
@@ -289,7 +289,7 @@ func TestScanLiveOrdemTombstoneEOverlay(t *testing.T) {
 
 	// Todas as rows estão só no overlay (nenhum checkpoint ainda): o scan
 	// precisa enxergá-las mesmo assim, em ordem crescente, pulando a 2.
-	rows := collectRows(t, s.ScanLive())
+	rows := collectRows(t, s.ScanLive(s.AbreSnapshot()))
 	if !slices.Equal(rows, []types.RowID{0, 1, 3, 4}) {
 		t.Fatalf("ScanLive: esperado [0 1 3 4], obtido %v", rows)
 	}
@@ -305,13 +305,13 @@ func TestGetTombstonedNaoEhLive(t *testing.T) {
 	if _, _, err := s.Put([]byte("morta"), 2, types.FlagTombstone, nil, &prev); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, ok, _ := s.GetByRowID(id, nil); ok {
+	if _, _, ok, _ := s.GetByRowID(s.AbreSnapshot(), id, nil); ok {
 		t.Fatal("GetByRowID de tombstone deveria ser ok=false")
 	}
 	if _, _, ok, _ := s.GetByKey([]byte("morta"), nil); ok {
 		t.Fatal("GetByKey de tombstone deveria ser ok=false")
 	}
-	if _, _, ok, _ := s.GetByRowID(9999, nil); ok {
+	if _, _, ok, _ := s.GetByRowID(s.AbreSnapshot(), 9999, nil); ok {
 		t.Fatal("rowId inexistente deveria ser ok=false")
 	}
 }

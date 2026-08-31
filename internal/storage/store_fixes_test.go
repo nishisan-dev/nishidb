@@ -82,7 +82,7 @@ func TestEventoInvalidoNaoQueimaRowID(t *testing.T) {
 	if !created || id != 0 {
 		t.Fatalf("nenhum id pode ter sido queimado pelos 3 Puts inválidos: esperado id=0, obtido %d", id)
 	}
-	if rows := collectRows(t, s.ScanLive()); len(rows) != 1 || rows[0] != 0 {
+	if rows := collectRows(t, s.ScanLive(s.AbreSnapshot())); len(rows) != 1 || rows[0] != 0 {
 		t.Fatalf("ScanLive: esperado [0], obtido %v", rows)
 	}
 }

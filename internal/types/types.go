@@ -24,6 +24,7 @@ import (
 	"errors"
 	"math"
 	"strconv"
+	"time"
 )
 
 // MaxIndexedValueBytes é o teto de um valor que pode entrar num índice
@@ -246,4 +247,40 @@ type Record struct {
 	Flags    uint8
 	Key      []byte
 	Payload  []byte
+}
+
+// Snapshot é o universo que UMA consulta enxerga, do primeiro ao último byte
+// do resultado.
+//
+// É tipo de VALOR, e viaja em parâmetro — nunca em campo do Store. A
+// distinção não é estilística: dois leitores concorrentes têm snapshots
+// diferentes, e um campo no Store os fundiria num só, de modo que a consulta
+// que abriu depois arrastaria a que abriu antes para o seu próprio universo.
+//
+// Os três limites respondem a três formas diferentes de o dataset mudar
+// debaixo de uma varredura em curso, e nenhum deles substitui os outros:
+//
+//   - Instante congela o relógio da expiração. Sem ele, prazoVencido consulta
+//     s.agora() a cada row testada e uma linha viva quando a consulta abriu
+//     desaparece do MEIO do resultado.
+//   - LimiteRowID torna o teto EXPLÍCITO e comum aos quatro planos. Ele não
+//     conserta um defeito ativo, e dizer que conserta seria repetir o que o
+//     débito 94 afirma sem que o código sustente: as fontes do índice por
+//     segmento já fixam o seu teto na CONSTRUÇÃO — o WIP do corrente
+//     materializa a fatia de rowIds no Lookup e a fonte de todas as locations
+//     nasce com `fim` carregado —, e a construção acontece no Open. O que o
+//     campo entrega é que o teto passe a vir de UMA leitura, no início da
+//     consulta, em vez de uma por fonte: fonte nova não precisa redescobrir a
+//     regra, e o filtro do executor pode aplicá-la uniformemente.
+//   - BaseRowID congela o piso. Sem ele, a purga do histórico avança a
+//     marca-d'água durante a varredura e abre buraco por baixo.
+type Snapshot struct {
+	// Instante é o relógio da expiração para esta consulta.
+	Instante time.Time
+	// LimiteRowID é EXCLUSIVO: rowIds a partir dele nasceram depois da
+	// consulta e não pertencem ao universo dela.
+	LimiteRowID RowID
+	// BaseRowID é INCLUSIVO: rowIds abaixo dele já tinham sido purgados
+	// quando a consulta abriu.
+	BaseRowID RowID
 }

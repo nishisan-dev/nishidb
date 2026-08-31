@@ -226,9 +226,14 @@ func Open(ctx context.Context, bq *binder.BoundQuery, plan planner.Plan, opts Op
 		it.ctx, it.cancel = context.WithTimeout(ctx, bq.Timeout)
 	}
 
+	// O snapshot é fixado ANTES da fonte, e uma vez só para a consulta
+	// inteira: é ele que dá ao plano indexado e ao full scan o MESMO universo,
+	// e é a ordem que importa — aberta a fonte, o teto já teria escapado.
+	snap := opts.Store.AbreSnapshot()
+
 	// A fonte é aberta POR ÚLTIMO: qualquer erro acima não pode deixar
 	// iteradores de índice abertos e sem dono.
-	src, err := fonteDoPlano(plan, opts.Store, opts.Metrics)
+	src, err := fonteDoPlano(plan, opts.Store, opts.Metrics, snap)
 	if err != nil {
 		it.cancel()
 		return nil, err

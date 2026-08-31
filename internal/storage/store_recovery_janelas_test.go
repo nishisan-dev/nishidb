@@ -126,10 +126,10 @@ func TestReplayDeTombstone(t *testing.T) {
 		if _, _, ok, _ := s2.GetByKey([]byte("del"), nil); ok {
 			t.Fatal("o tombstone do tail não pode ressuscitar a row no replay")
 		}
-		if _, _, ok, _ := s2.GetByRowID(id, nil); ok {
+		if _, _, ok, _ := s2.GetByRowID(s2.AbreSnapshot(), id, nil); ok {
 			t.Fatal("GetByRowID deveria respeitar o tombstone replayado")
 		}
-		if rows := collectRows(t, s2.ScanLive()); len(rows) != 0 {
+		if rows := collectRows(t, s2.ScanLive(s2.AbreSnapshot())); len(rows) != 0 {
 			t.Fatalf("ScanLive não pode listar row tombstoned: %v", rows)
 		}
 	})

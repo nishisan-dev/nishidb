@@ -186,7 +186,7 @@ func (s *Store) reapendaSeVivo(seg, off uint32, rec types.Record) (copiado bool,
 	// pega o resto.
 	payload, flagsSaida := rec.Payload, flags
 	expirou := false
-	if s.escritas != nil && flags&types.FlagTombstone == 0 && s.prazoVencido(rec.RowID) {
+	if s.escritas != nil && flags&types.FlagTombstone == 0 && s.prazoVencido(rec.RowID, s.agora()) {
 		lapide, err := s.montaLapide(rec.Payload)
 		if err != nil {
 			return false, 0, err

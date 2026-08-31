@@ -71,7 +71,7 @@ func (s *Store) Expira(rowID types.RowID) (expirou bool, err error) {
 	if flags&types.FlagTombstone != 0 {
 		return false, nil // idempotente
 	}
-	if !s.prazoVencido(rowID) {
+	if !s.prazoVencido(rowID, s.agora()) {
 		return false, nil // renovada entre a decisão e agora
 	}
 

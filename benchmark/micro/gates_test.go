@@ -172,7 +172,7 @@ func estadoDeReferenciaT(t *testing.T, events [][]byte) (key, payload []byte) {
 	if r.Err != nil {
 		t.Fatal(r.Err)
 	}
-	rec, _, ok, err := st.GetByRowID(r.RowID, nil)
+	rec, _, ok, err := st.GetByRowID(st.AbreSnapshot(), r.RowID, nil)
 	if err != nil || !ok {
 		t.Fatalf("estado de referência ausente: ok=%v err=%v", ok, err)
 	}

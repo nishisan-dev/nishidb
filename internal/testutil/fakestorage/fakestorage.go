@@ -315,7 +315,7 @@ func (s *Store) Estado(key, buf []byte) (types.Record, []byte, types.Presenca, e
 
 // GetByRowID idem, por rowId; ok=false para row inexistente ou tombstoned
 // (é a checagem de liveness dos caminhos indexados).
-func (s *Store) GetByRowID(id types.RowID, buf []byte) (types.Record, []byte, bool, error) {
+func (s *Store) GetByRowID(_ types.Snapshot, id types.RowID, buf []byte) (types.Record, []byte, bool, error) {
 	r, ok := s.rows[id]
 	if !ok || !r.live() {
 		return types.Record{}, buf, false, nil
@@ -381,7 +381,7 @@ func (s *Store) RowIDDaKey(key string) (types.RowID, bool) {
 
 // ScanLive devolve um iterador de rowIds vivos em ordem CRESCENTE
 // (pré-condição das interseções/uniões do executor).
-func (s *Store) ScanLive() types.RowIDIterator {
+func (s *Store) ScanLive(types.Snapshot) types.RowIDIterator {
 	ids := make([]types.RowID, 0, len(s.rows))
 	for id, r := range s.rows {
 		if r.live() {
@@ -544,3 +544,8 @@ func (d *Dict) SetTypeHint(id types.FieldID, t types.FieldType) error {
 			fielddict.ErrTypeHintConflict, d.names[id], atual, t)
 	}
 }
+
+// AbreSnapshot devolve o snapshot ZERO. O dublê não tem relógio de expiração
+// nem rowId nascendo por baixo — o que ele precisa dublar é a ASSINATURA, para
+// que o executor sob teste percorra o mesmo caminho que percorre em produção.
+func (s *Store) AbreSnapshot() types.Snapshot { return types.Snapshot{} }

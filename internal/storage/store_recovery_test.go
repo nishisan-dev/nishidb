@@ -60,11 +60,11 @@ func TestRestartBasico_WriteRestartLookup(t *testing.T) {
 		if err != nil || !ok || rec.Sequence != int64(i) {
 			t.Fatalf("GetByKey(%q) pós-restart: (%+v,%v,%v)", k, rec, ok, err)
 		}
-		if rec2, _, ok, err := s2.GetByRowID(rec.RowID, nil); err != nil || !ok || !bytes.Equal(rec2.Key, []byte(k)) {
+		if rec2, _, ok, err := s2.GetByRowID(s2.AbreSnapshot(), rec.RowID, nil); err != nil || !ok || !bytes.Equal(rec2.Key, []byte(k)) {
 			t.Fatalf("GetByRowID(%d): (%v,%v)", rec.RowID, ok, err)
 		}
 	}
-	if rows := collectRows(t, s2.ScanLive()); !slices.Equal(rows, []types.RowID{0, 1, 2, 3, 4}) {
+	if rows := collectRows(t, s2.ScanLive(s2.AbreSnapshot())); !slices.Equal(rows, []types.RowID{0, 1, 2, 3, 4}) {
 		t.Fatalf("ScanLive pós-restart: %v", rows)
 	}
 	it, err := s2.Lookup(fldStatus, strVal("Start"))
@@ -523,7 +523,7 @@ func TestDoubleReopenEhIdempotente(t *testing.T) {
 			t.Fatalf("GetByKey(%q) no 2º reopen: (%v,%v)", k, ok, err)
 		}
 	}
-	if rows := collectRows(t, s3.ScanLive()); !slices.Equal(rows, []types.RowID{0, 1, 2, 3, 4}) {
+	if rows := collectRows(t, s3.ScanLive(s3.AbreSnapshot())); !slices.Equal(rows, []types.RowID{0, 1, 2, 3, 4}) {
 		t.Fatalf("ScanLive: %v", rows)
 	}
 	if st := s3.Stats(); st.RowCount != 5 {

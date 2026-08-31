@@ -85,7 +85,7 @@ func TestCheckpointEsvaziaOverlayEMantemLeitura(t *testing.T) {
 			t.Fatalf("GetByKey(%q) pós-checkpoint: (%v,%v)", k, ok, err)
 		}
 	}
-	if rows := collectRows(t, s.ScanLive()); !slices.Equal(rows, []types.RowID{0, 1, 2, 3, 4}) {
+	if rows := collectRows(t, s.ScanLive(s.AbreSnapshot())); !slices.Equal(rows, []types.RowID{0, 1, 2, 3, 4}) {
 		t.Fatalf("ScanLive pós-checkpoint: %v", rows)
 	}
 }
