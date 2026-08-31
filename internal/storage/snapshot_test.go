@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
+	"github.com/nishisan-dev/nishidb/internal/types"
 	"testing"
 	"time"
 )
@@ -290,5 +291,129 @@ func TestCopyForwardNaoCriaVersaoENaoTravaAPropriaPassada(t *testing.T) {
 	}
 	if got := s.vers.Entradas(); got != antes {
 		t.Errorf("Entradas() = %d, quero %d: o copy-forward criou versão e vai pinar o segmento que ele mesmo aposenta", got, antes)
+	}
+}
+
+// A COMPACTION NÃO PODE APAGAR O PAYLOAD QUE UMA CONSULTA AINDA VÊ.
+//
+// A descoberta oportunista da expiração testa o prazo com o relógio ATUAL e,
+// se venceu, grava a lápide no destino em vez de copiar o payload. Sob um
+// snapshot com o relógio congelado a linha ainda é visível — e o payload dela
+// morreria ali, sem nenhuma entrada de journal que o recuperasse: o
+// copy-forward não versiona, de propósito.
+//
+// A saída é a compaction usar o instante do snapshot mais ANTIGO vivo. A linha
+// é copiada normalmente, o leitor a alcança pela location nova, e nada precisa
+// ser pinado.
+func TestCompactionNaoLapidaLinhaVisivelAoSnapshotMaisAntigo(t *testing.T) {
+	// SegmentSize pequeno é o que faz a rotação acontecer e a eleição ter o
+	// que escolher: com o padrão, o corpus inteiro cabe no segmento corrente e
+	// a compaction não elege nada — a D6 nunca elege o corrente.
+	s := openStore(t, Options{
+		Dir: t.TempDir(), SegmentSize: 8 << 10,
+		TTLAtivo: true, DuracaoDeFundo: time.Hour,
+		CampoDeEscrita: "_writtenAt", CampoDePrazo: "_expiresIn",
+	})
+	rel := &relogioDeTeste{t: time.Date(2026, 8, 22, 20, 0, 0, 0, time.UTC)}
+	s.UsaRelogio(rel.agora)
+
+	escreve := func(k string, seq int64) {
+		t.Helper()
+		p := payloadOrdenado(t, s, map[string]types.Value{
+			"id":         {Type: types.TypeString, Bytes: []byte(k)},
+			"status":     {Type: types.TypeString, Bytes: []byte(k + "-payload-de-tamanho-razoavel-para-encher-segmento")},
+			"_writtenAt": {Type: types.TypeTimestamp, I64: rel.t.UnixMilli()},
+		})
+		rec, _, pres, err := s.Estado([]byte(k), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var prev *types.Record
+		if pres.Existe() {
+			prev = &rec
+		}
+		if _, _, err := s.Put([]byte(k), seq, 0, p, prev); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	escreve("abandonada", 1)
+	ativas := make([]string, 20)
+	for i := range ativas {
+		ativas[i] = "ativa-" + string(rune('a'+i))
+	}
+	rodada := int64(1)
+	for r := 0; r < 15; r++ {
+		for _, k := range ativas {
+			escreve(k, rodada)
+		}
+		rodada++
+	}
+
+	// A consulta abre com TUDO vivo. É este instante que a compaction tem de
+	// respeitar.
+	snap := s.AbreSnapshot()
+	defer s.FechaSnapshot(snap)
+
+	rel.avanca(2 * time.Hour) // a abandonada vence DEPOIS do snapshot
+	for r := 0; r < 15; r++ {
+		for _, k := range ativas {
+			escreve(k, rodada)
+		}
+		rodada++
+	}
+	if err := s.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.candidatos(0.5)) == 0 {
+		t.Fatal("nenhum segmento candidato: o cenário não exercita a descoberta oportunista")
+	}
+	if _, err := s.CompactaUmaVez(context.Background(), 0.5); err != nil {
+		t.Fatal(err)
+	}
+
+	// A linha continua legível pelo snapshot, COM payload: uma lápide teria
+	// levado o campo embora.
+	rec, _, ok, err := s.GetByKey(snap, []byte("abandonada"), nil)
+	if err != nil || !ok {
+		t.Fatalf("a linha sumiu da consulta em voo: ok=%v err=%v", ok, err)
+	}
+	if got := statusDoPayload(t, s, rec.Payload); got == "" {
+		t.Error("a linha voltou sem o campo status: a compaction lapidou o que a consulta ainda vê")
+	}
+}
+
+// A RETENÇÃO NÃO PODE ABRIR BURACO POR BAIXO de uma consulta em voo.
+//
+// O snapshot congela o piso, mas congelar o piso sozinho não bastaria: a purga
+// não só move a marca-d'água, ela APAGA os segmentos cobertos por ela. Um
+// leitor com o piso antigo passaria de "não vê a linha" para "erra ao lê-la",
+// que é pior. A marca só avança até onde o snapshot mais antigo já não olha.
+func TestRetencaoNaoUltrapassaOPisoDoSnapshotVivo(t *testing.T) {
+	_, hist, rel := parComRetencao(t, 1<<20)
+	for range 50 {
+		apenda(t, hist, "a", rel.t)
+		rel.avanca(time.Minute)
+	}
+
+	// A consulta abre com as 50 linhas vivas: o piso dela é o rowId zero.
+	snap := hist.AbreSnapshot()
+	defer hist.FechaSnapshot(snap)
+
+	// A mesma passada que, sem leitor, avançaria a marca em 20.
+	res := passada(t, hist, LimitesDeRetencao{ExpireAfterWrite: 30 * time.Minute})
+	if res.MarcaAvancou != 0 {
+		t.Errorf("a marca avançou %d com uma consulta cujo piso é o rowId 0: a purga passou por baixo dela", res.MarcaAvancou)
+	}
+	if n := contaVivas(t, hist); n != 50 {
+		t.Errorf("%d linhas vivas, quero 50: a purga tirou do dataset linhas que a consulta ainda alcança", n)
+	}
+
+	// A contraprova: fechada a consulta, a mesma passada avança normalmente —
+	// sem ela, este teste passaria com uma retenção que nunca avança.
+	hist.FechaSnapshot(snap)
+	res = passada(t, hist, LimitesDeRetencao{ExpireAfterWrite: 30 * time.Minute})
+	if res.MarcaAvancou != 20 {
+		t.Errorf("a marca avançou %d depois de a consulta fechar, quero 20: a retenção não recuperou o alcance", res.MarcaAvancou)
 	}
 }

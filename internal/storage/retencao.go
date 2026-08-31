@@ -244,7 +244,21 @@ func (s *Store) avancaMarcaDagua(prazo time.Duration) (uint64, error) {
 		}
 		lo = meio + 1
 	}
-	if lo == base {
+	// A marca não passa do piso do snapshot mais antigo vivo. A purga APAGA os
+	// segmentos que a marca cobre, e um leitor com o piso congelado sobre um
+	// segmento removido erraria ao ler em vez de simplesmente não ver a linha.
+	//
+	// O corte é aqui, e não na busca binária, para que o LOG e a métrica
+	// contem a distância entre o que o prazo mandava e o que a consulta
+	// permitiu — silenciar isso faria uma retenção travada parecer uma
+	// retenção sem trabalho.
+	if piso := s.pisoDaRetencao(); lo > piso {
+		s.opts.Log.Info("retencao.marca_segurada_por_consulta",
+			"a marca-d'água parou no piso da consulta mais antiga em voo",
+			"marca_pelo_prazo", lo, "marca_aplicada", piso, "linhas_seguradas", lo-piso)
+		lo = piso
+	}
+	if lo <= base {
 		return 0, nil
 	}
 	s.rowIDBase.Store(lo)
