@@ -101,6 +101,10 @@ func (f *fonte) ScanLive(types.Snapshot) types.RowIDIterator {
 // Store de verdade, aqui já está congelado por construção.
 func (f *fonte) AbreSnapshot() types.Snapshot { return types.Snapshot{} }
 
+// FechaSnapshot é no-op porque o Abre não retém nada: não há journal de
+// versões sobre uma fonte que não é escrita.
+func (f *fonte) FechaSnapshot(types.Snapshot) {}
+
 // Indexado responde SEMPRE false: a tabela virtual não declara índice no seu
 // YAML, então o planner degrada para varredura completa — que sobre sete
 // colunas e algumas dezenas de linhas é o plano certo de qualquer forma.

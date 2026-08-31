@@ -79,7 +79,7 @@ func fullScanFiltrado(t *testing.T, s *Store, campo types.FieldID, v types.Value
 	t.Helper()
 	var out []types.RowID
 	var buf []byte
-	it := s.ScanLive(s.AbreSnapshot())
+	it := s.ScanLive(s.presente())
 	defer func() { _ = it.Close() }()
 	for it.Next() {
 		ok, b := linhaCasa(t, s, it.RowID(), campo, v, buf)
@@ -97,7 +97,7 @@ func fullScanFiltrado(t *testing.T, s *Store, campo types.FieldID, v types.Value
 // linhaCasa devolve se a row está viva e tem o campo com o valor.
 func linhaCasa(t *testing.T, s *Store, id types.RowID, campo types.FieldID, v types.Value, buf []byte) (bool, []byte) {
 	t.Helper()
-	rec, out, ok, err := s.GetByRowID(s.AbreSnapshot(), id, buf)
+	rec, out, ok, err := s.GetByRowID(s.presente(), id, buf)
 	if err != nil {
 		t.Fatalf("GetByRowID(%d): %v", id, err)
 	}
@@ -289,7 +289,7 @@ func TestAEnumeracaoDoMaterializadoColapsaNumaCaminhadaUnicaDoLocations(t *testi
 	// torna a faixa contígua do histórico inválida aqui.
 	for i := range 40 {
 		key := "rot" + strconv.Itoa(i)
-		prev, _, ok, err := s.GetByKey(s.AbreSnapshot(), []byte(key), nil)
+		prev, _, ok, err := s.GetByKey(s.presente(), []byte(key), nil)
 		if err != nil || !ok {
 			t.Fatalf("GetByKey(%s): %v (ok=%v)", key, err, ok)
 		}
@@ -471,7 +471,7 @@ func TestUpdateQueCruzaSegmentoLevaAPostingDoCampoInalterado(t *testing.T) {
 	}
 
 	// O update mexe SÓ no type; node continua "estavel".
-	prev, _, ok, err := s.GetByKey(s.AbreSnapshot(), []byte("viajante"), nil)
+	prev, _, ok, err := s.GetByKey(s.presente(), []byte("viajante"), nil)
 	if err != nil || !ok {
 		t.Fatalf("GetByKey: %v (ok=%v)", err, ok)
 	}
@@ -514,7 +514,7 @@ func TestAPostingDoCampoInalteradoSobreviveASelagemEAoRestart(t *testing.T) {
 	poeLinhasAteRotacionar(t, s, origem)
 	destino := s.curSegID.Load()
 
-	prev, _, ok, err := s.GetByKey(s.AbreSnapshot(), []byte("viajante"), nil)
+	prev, _, ok, err := s.GetByKey(s.presente(), []byte("viajante"), nil)
 	if err != nil || !ok {
 		t.Fatalf("GetByKey: %v (ok=%v)", err, ok)
 	}
@@ -817,7 +817,7 @@ func TestUpdateDuranteAConsultaNaoSomeDaEnumeracaoColapsada(t *testing.T) {
 		t.Fatalf("Lookup: %v", err)
 	}
 	// ...e o update move a linha para o corrente ANTES de a iteração alcançá-la.
-	prev, _, ok, err := s2.GetByKey(s2.AbreSnapshot(), []byte("movel"), nil)
+	prev, _, ok, err := s2.GetByKey(s2.presente(), []byte("movel"), nil)
 	if err != nil || !ok {
 		t.Fatalf("GetByKey(movel): %v (ok=%v)", err, ok)
 	}

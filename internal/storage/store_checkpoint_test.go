@@ -81,11 +81,11 @@ func TestCheckpointEsvaziaOverlayEMantemLeitura(t *testing.T) {
 	// Leituras seguem funcionando (agora via mmap) e o scan não muda.
 	for i := 0; i < n; i++ {
 		k := fmt.Sprintf("ov-%d", i)
-		if _, _, ok, err := s.GetByKey(s.AbreSnapshot(), []byte(k), nil); err != nil || !ok {
+		if _, _, ok, err := s.GetByKey(s.presente(), []byte(k), nil); err != nil || !ok {
 			t.Fatalf("GetByKey(%q) pós-checkpoint: (%v,%v)", k, ok, err)
 		}
 	}
-	if rows := collectRows(t, s.ScanLive(s.AbreSnapshot())); !slices.Equal(rows, []types.RowID{0, 1, 2, 3, 4}) {
+	if rows := collectRows(t, s.ScanLive(s.presente())); !slices.Equal(rows, []types.RowID{0, 1, 2, 3, 4}) {
 		t.Fatalf("ScanLive pós-checkpoint: %v", rows)
 	}
 }
@@ -130,7 +130,7 @@ func TestCheckpointComLeitoresConcorrentes(t *testing.T) {
 				return
 			default:
 			}
-			if _, b, ok, err := s.GetByKey(s.AbreSnapshot(), key, buf); err != nil || !ok {
+			if _, b, ok, err := s.GetByKey(s.presente(), key, buf); err != nil || !ok {
 				t.Errorf("leitura durante checkpoint: (%v,%v)", ok, err)
 				return
 			} else {
@@ -143,7 +143,7 @@ func TestCheckpointComLeitoresConcorrentes(t *testing.T) {
 	var ok bool
 	var err error
 	for i := int64(1); i <= 50; i++ {
-		prev, buf, ok, err = s.GetByKey(s.AbreSnapshot(), key, buf)
+		prev, buf, ok, err = s.GetByKey(s.presente(), key, buf)
 		if err != nil || !ok {
 			t.Fatal(err)
 		}

@@ -25,7 +25,7 @@ func TestScanLiveELookupDevolvemAInterfaceCompartilhada(t *testing.T) {
 
 	// A atribuição a types.RowIDIterator é o que o teste verifica: se as
 	// assinaturas voltarem a ser uma interface local do pacote, não compila.
-	var scan types.RowIDIterator = s.ScanLive(s.AbreSnapshot())
+	var scan types.RowIDIterator = s.ScanLive(s.presente())
 	defer scan.Close()
 	if !scan.Next() {
 		t.Fatal("ScanLive deveria devolver a row")

@@ -65,6 +65,8 @@ func (s *stub) GetByKey(_ types.Snapshot, key, buf []byte) (types.Record, []byte
 
 func (s *stub) AbreSnapshot() types.Snapshot { return types.Snapshot{} }
 
+func (s *stub) FechaSnapshot(types.Snapshot) {}
+
 func (s *stub) ScanLive(types.Snapshot) types.RowIDIterator {
 	s.scans++
 	return &stubIter{s: s, ids: s.ids}

@@ -160,6 +160,8 @@ func (s *storeFalhaNoSegundo) ScanLive(types.Snapshot) types.RowIDIterator { ret
 
 func (s *storeFalhaNoSegundo) AbreSnapshot() types.Snapshot { return types.Snapshot{} }
 
+func (s *storeFalhaNoSegundo) FechaSnapshot(types.Snapshot) {}
+
 func (s *storeFalhaNoSegundo) Lookup(types.FieldID, types.Value) (types.RowIDIterator, error) {
 	s.n++
 	if s.n >= 2 {

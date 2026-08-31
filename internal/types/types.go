@@ -260,6 +260,10 @@ type Record struct {
 // Os três limites respondem a três formas diferentes de o dataset mudar
 // debaixo de uma varredura em curso, e nenhum deles substitui os outros:
 //
+//   - Epoca congela a VERSÃO de cada linha. Sem ela a consulta vê o mesmo
+//     conjunto de linhas do começo ao fim, mas mistura estados: as que a
+//     varredura alcançou antes de uma atualização saem velhas e as de depois
+//     saem novas, e o resultado não corresponde a instante nenhum do banco.
 //   - Instante congela o relógio da expiração. Sem ele, prazoVencido consulta
 //     s.agora() a cada row testada e uma linha viva quando a consulta abriu
 //     desaparece do MEIO do resultado.
@@ -275,6 +279,11 @@ type Record struct {
 //   - BaseRowID congela o piso. Sem ele, a purga do histórico avança a
 //     marca-d'água durante a varredura e abre buraco por baixo.
 type Snapshot struct {
+	// Epoca é a versão do dataset em T0: a consulta enxerga tudo que foi
+	// publicado ATÉ ela, e nada do que veio depois. É o que dá isolamento —
+	// uma linha atualizada com a consulta em voo é entregue na versão desta
+	// época, não na corrente.
+	Epoca uint64
 	// Instante é o relógio da expiração para esta consulta.
 	Instante time.Time
 	// LimiteRowID é EXCLUSIVO: rowIds a partir dele nasceram depois da

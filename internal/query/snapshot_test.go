@@ -95,3 +95,48 @@ func TestRowNascidaDepoisDoOpenNaoApareceEmPlanoNenhum(t *testing.T) {
 		})
 	}
 }
+
+// O executor devolve o snapshot no Close — em todos os caminhos.
+//
+// É a metade operacional do isolamento: enquanto uma consulta está aberta, o
+// writer guarda as versões anteriores e a compaction não aposenta os segmentos
+// onde elas moram. Uma consulta que não devolve o seu snapshot deixa as duas
+// coisas presas pela vida do processo, e nada no resultado dela denuncia isso.
+func TestConsultaFechadaDevolveAsVersoesQueSegurava(t *testing.T) {
+	ig := &integracao{t: t, dir: filepath.Join(t.TempDir(), "radius"), oracle: oraculo{}}
+	ig.abre()
+	defer ig.fecha()
+
+	mat, err := materializer.New(ig.sch, ig.store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ingere := func(eventos ...string) {
+		t.Helper()
+		for _, ev := range eventos {
+			if r := mat.Apply([]byte(ev)); r.Err != nil {
+				t.Fatalf("ingestão de %s: %v (%v)", ev, r.Err, r.Category)
+			}
+		}
+	}
+	ingere(stopA, stopB)
+
+	it, err := ig.engine.Execute(context.Background(), dataset,
+		`SELECT id FROM radius_sessions WHERE "Acct-Status-Type" = 'Stop'`, nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	// Com a consulta em voo, atualizar A retém a versão que ela ainda vê.
+	ingere(`{"id":"A","_SEQ":2,"Acct-Status-Type":"Stop","User-Name":"ana2"}`)
+	if got := ig.store.VersoesRetidas(); got == 0 {
+		t.Fatal("VersoesRetidas() = 0 com consulta aberta e linha atualizada: o writer não guardou a versão, e o teste do Close abaixo não provaria nada")
+	}
+
+	if err := it.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if got := ig.store.VersoesRetidas(); got != 0 {
+		t.Errorf("VersoesRetidas() = %d após o Close, quero 0: o executor não devolveu o snapshot", got)
+	}
+}

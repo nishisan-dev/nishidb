@@ -549,3 +549,9 @@ func (d *Dict) SetTypeHint(id types.FieldID, t types.FieldType) error {
 // nem rowId nascendo por baixo — o que ele precisa dublar é a ASSINATURA, para
 // que o executor sob teste percorra o mesmo caminho que percorre em produção.
 func (s *Store) AbreSnapshot() types.Snapshot { return types.Snapshot{} }
+
+// FechaSnapshot é no-op: o dublê não retém versão nenhuma. Ele existe para que
+// o executor sob teste percorra o MESMO caminho de abertura e fechamento que
+// percorre em produção — inclusive o Close duplo, que é onde um contador de
+// leitores quebra.
+func (s *Store) FechaSnapshot(types.Snapshot) {}

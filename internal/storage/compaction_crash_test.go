@@ -249,7 +249,7 @@ func TestKill9NoMeioDaCompactionPreservaOEstadoConfirmado(t *testing.T) {
 	}
 	for i := 0; i < rowsDoKill9; i++ {
 		k := chaveDoKill9(i)
-		rec, _, ok, err := s.GetByKey(s.AbreSnapshot(), []byte(k), nil)
+		rec, _, ok, err := s.GetByKey(s.presente(), []byte(k), nil)
 		if err != nil || !ok {
 			t.Fatalf("a row %q, confirmada pelo checkpoint, não sobreviveu ao kill -9 no meio da compaction: (ok=%v, err=%v)", k, ok, err)
 		}
@@ -321,7 +321,7 @@ func exigeCorpusDaAposentadoriaIntacto(t *testing.T, s *Store, quando string) {
 	t.Helper()
 	for i := 0; i < rowsDaAposentadoria; i++ {
 		k := chaveDaAposentadoria(i)
-		rec, _, ok, err := s.GetByKey(s.AbreSnapshot(), []byte(k), nil)
+		rec, _, ok, err := s.GetByKey(s.presente(), []byte(k), nil)
 		if err != nil || !ok {
 			t.Fatalf("%s: a row %q sumiu (ok=%v, err=%v)", quando, k, ok, err)
 		}

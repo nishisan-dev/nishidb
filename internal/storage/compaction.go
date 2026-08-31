@@ -699,6 +699,18 @@ func (s *Store) candidatos(ratio float64) []uint32 {
 		if !ok || tam <= 0 {
 			continue
 		}
+		// Segmento com versão retida não é candidato: uma consulta aberta
+		// ainda alcança bytes que moram nele, e aposentá-lo os levaria junto.
+		// A recusa é na ELEIÇÃO, e não na aposentadoria, porque varrer o
+		// segmento inteiro para descobrir no fim que ele não pode sair seria
+		// pagar o I/O da passada por nada.
+		//
+		// O pin sai sozinho quando a última consulta que o segurava fecha, e é
+		// por isso que ele não precisa de prazo nem de desempate: o teto de
+		// memória do journal é que limita quanto tempo isso pode durar.
+		if s.vers.Pinado(id) {
+			continue
+		}
 		if float64(t.liveBytes)/float64(tam) < ratio {
 			out = append(out, id)
 		}

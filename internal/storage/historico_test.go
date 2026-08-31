@@ -30,7 +30,7 @@ func TestApendaGravaUmaLinhaVisivel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Apenda: %v", err)
 	}
-	rec, _, ok, err := hist.GetByRowID(hist.AbreSnapshot(), id, nil)
+	rec, _, ok, err := hist.GetByRowID(hist.presente(), id, nil)
 	if err != nil || !ok {
 		t.Fatalf("GetByRowID = (%v, %v)", ok, err)
 	}
@@ -65,7 +65,7 @@ func TestApendaNaoDeduplica(t *testing.T) {
 
 func contaVivas(t *testing.T, s *Store) int {
 	t.Helper()
-	it := s.ScanLive(s.AbreSnapshot())
+	it := s.ScanLive(s.presente())
 	defer func() { _ = it.Close() }()
 	n := 0
 	for it.Next() {
@@ -228,7 +228,7 @@ func TestLinhaAbaixoDaMarcaSomeDoGetByRowID(t *testing.T) {
 		t.Fatalf("Apenda: %v", err)
 	}
 	hist.rowIDBase.Store(uint64(id) + 1)
-	if _, _, ok, err := hist.GetByRowID(hist.AbreSnapshot(), id, nil); err != nil || ok {
+	if _, _, ok, err := hist.GetByRowID(hist.presente(), id, nil); err != nil || ok {
 		t.Fatalf("GetByRowID = (%v, %v), quer (false, nil)", ok, err)
 	}
 }

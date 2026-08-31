@@ -27,6 +27,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/storage/fielddict"
 	"github.com/nishisan-dev/nishidb/internal/storage/rowindex"
 	"github.com/nishisan-dev/nishidb/internal/storage/segment"
+	"github.com/nishisan-dev/nishidb/internal/storage/versoes"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
@@ -417,6 +418,19 @@ type Store struct {
 	// Zero no dataset materializado, onde nada a move: lá a visibilidade é
 	// decidida pela location e pelo prazo da linha.
 	rowIDBase atomic.Uint64
+
+	// epocaPub é o contador de PUBLICAÇÕES do writer, e é o relógio lógico do
+	// isolamento: um snapshot nasce carregando o valor corrente, e enxerga
+	// tudo publicado até ele e nada do que veio depois. Monotônico e escrito
+	// só sob o wmu — é o mesmo lock que serializa o publish, então a época e a
+	// location que ela nomeia nunca saem de ordem.
+	epocaPub atomic.Uint64
+	// snaps conta as consultas abertas por época. É ele que responde "ainda há
+	// leitor atrás desta versão?", que é a pergunta de que dependem o journal,
+	// a poda e a expiração oportunista da compaction.
+	snaps *registroDeSnapshots
+	// vers guarda as locations anteriores enquanto algum leitor as alcança.
+	vers *versoes.Cadeias
 
 	// Estado da goroutine de retenção do dataset histórico, no mesmo molde do
 	// da compaction: retMu guarda o cancelamento, retPassadaMu serializa as
@@ -964,6 +978,8 @@ func Open(opts Options) (*Store, error) {
 		segTally: make(map[uint32]*segStats),
 		segSize:  make(map[uint32]int64),
 		agora:    time.Now,
+		snaps:    novoRegistroDeSnapshots(),
+		vers:     versoes.Novas(),
 	}
 	if opts.Metrics != nil {
 		s.cpDuracao = opts.Metrics.Histograma(metrics.MetCheckpointDurationSeconds,
@@ -1395,7 +1411,7 @@ func (s *Store) Indexado(field types.FieldID) bool {
 // O callback de validação roda sob o RLock do índice primary: ele NÃO pode
 // reentrar no índice (deadlock com um rehash enfileirado) — mantém-se
 // mínimo: locations.Get + pread + comparação de key (spec §36).
-func (s *Store) lookup(key, buf []byte, em time.Time) (rec types.Record, out []byte, exists, live bool, err error) {
+func (s *Store) lookup(key, buf []byte, snap types.Snapshot) (rec types.Record, out []byte, exists, live bool, err error) {
 	out = buf
 	if s.prim == nil {
 		// Sem primary não há como resolver uma key, e devolver "não existe"
@@ -1413,10 +1429,16 @@ func (s *Store) lookup(key, buf []byte, em time.Time) (rec types.Record, out []b
 		// todos eles alargaria a seção sem necessidade.
 		s.aposMu.RLock()
 		defer s.aposMu.RUnlock()
-		packed, ok := s.locs.Get(rid)
+		// A location da ÉPOCA do leitor, pela mesma razão do GetByRowID: sem
+		// ela o point lookup responderia sobre o presente enquanto o resto da
+		// consulta responde sobre T0. A key não muda entre versões, então a
+		// validação de colisão logo abaixo continua valendo sobre a antiga.
+		packed, ok := s.vers.Em(rid, snap.Epoca)
 		if !ok {
-			// Slot da primary sem location (janela de crash): não é a row.
-			return false, nil
+			if packed, ok = s.locs.Get(rid); !ok {
+				// Slot da primary sem location (janela de crash): não é a row.
+				return false, nil
+			}
 		}
 		seg, off, locFlags := rowindex.Unpack(packed)
 		var r types.Record
@@ -1432,7 +1454,7 @@ func (s *Store) lookup(key, buf []byte, em time.Time) (rec types.Record, out []b
 		// A liveness tem DUAS causas de morte: a lápide já publicada e o
 		// prazo vencido que o coletor ainda não recolheu. Contá-las juntas
 		// aqui é o que faz a visibilidade não depender do agendador.
-		live = locFlags&types.FlagTombstone == 0 && !s.prazoVencido(rid, em)
+		live = locFlags&types.FlagTombstone == 0 && !s.venceuNaVersao(r, snap.Instante)
 		return true, nil
 	}
 	_, exists, err = s.prim.Find(key, validate)
@@ -1450,7 +1472,7 @@ func (s *Store) GetByKey(snap types.Snapshot, key, buf []byte) (types.Record, []
 		return types.Record{}, buf, false, err
 	}
 	defer s.sai()
-	rec, out, exists, live, err := s.lookup(key, buf, snap.Instante)
+	rec, out, exists, live, err := s.lookup(key, buf, snap)
 	if err != nil || !exists || !live {
 		return types.Record{}, out, false, err
 	}
@@ -1471,7 +1493,7 @@ func (s *Store) Estado(key, buf []byte) (types.Record, []byte, types.Presenca, e
 		return types.Record{}, buf, types.PresencaAusente, err
 	}
 	defer s.sai()
-	rec, out, exists, live, err := s.lookup(key, buf, s.agora())
+	rec, out, exists, live, err := s.lookup(key, buf, s.presente())
 	switch {
 	case err != nil:
 		return types.Record{}, out, types.PresencaAusente, err
@@ -1495,12 +1517,19 @@ func (s *Store) GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (typ
 	// Par (Get, Read) sob a barreira de aposentadoria: ver o godoc de aposMu.
 	s.aposMu.RLock()
 	defer s.aposMu.RUnlock()
-	packed, ok := s.locs.Get(id)
+	// A location da ÉPOCA do leitor, que só difere da corrente quando a linha
+	// foi atualizada com esta consulta em voo. O journal é consultado ANTES do
+	// locs.Get e o lock dele é solto na saída da chamada: nada é segurado
+	// enquanto o aposMu está na mão, e o segmento apontado não pode ser
+	// aposentado porque o pin pertence ao snapshot vivo, não a esta leitura.
+	packed, ok := s.vers.Em(id, snap.Epoca)
 	if !ok {
-		return types.Record{}, buf, false, nil
+		if packed, ok = s.locs.Get(id); !ok {
+			return types.Record{}, buf, false, nil
+		}
 	}
 	seg, off, locFlags := rowindex.Unpack(packed)
-	if locFlags&types.FlagTombstone != 0 || s.prazoVencido(id, snap.Instante) || s.purgada(id) {
+	if locFlags&types.FlagTombstone != 0 || s.purgada(id) {
 		return types.Record{}, buf, false, nil
 	}
 	rec, out, err := s.segR.ReadRecord(seg, off, buf)
@@ -1510,6 +1539,15 @@ func (s *Store) GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (typ
 	if rec.RowID != id {
 		return types.Record{}, out, false, fmt.Errorf("%w: location da row %d aponta para record da row %d",
 			encoding.ErrCorrupt, id, rec.RowID)
+	}
+	// A expiração é avaliada sobre o PAYLOAD que o leitor está recebendo, e
+	// não sobre os índices de escrita e prazo — que descrevem a versão
+	// CORRENTE. Numa linha reescrita durante a consulta os dois discordam, e é
+	// o payload que manda: ele é a fonte da verdade de que os índices são
+	// derivados (ver o godoc de rowindex.Escritas), então derivar daqui é a
+	// MESMA conta que o applyRecord faz, sobre a versão certa.
+	if s.venceuNaVersao(rec, snap.Instante) {
+		return types.Record{}, out, false, nil
 	}
 	return rec, out, true, nil
 }
@@ -1571,7 +1609,7 @@ func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *ty
 		rowID = prev.RowID
 		prevPayload = prev.Payload
 	} else {
-		found, out, exists, _, err := s.lookup(key, s.prevBuf[:0], s.agora())
+		found, out, exists, _, err := s.lookup(key, s.prevBuf[:0], s.presente())
 		s.prevBuf = out
 		if err != nil {
 			return 0, false, err
@@ -1617,6 +1655,7 @@ func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *ty
 		prevPayload: prevPayload,
 		hadPrevious: !created,
 		countsAsNew: created,
+		versiona:    true,
 		seg:         seg,
 		off:         off,
 		recLen:      len(rec),
@@ -1665,6 +1704,16 @@ type recordApply struct {
 	off         uint32
 	recLen      int
 	mode        applyMode
+	// versiona diz se esta publicação muda o estado VISÍVEL da linha, e por
+	// isso precisa guardar a versão anterior para os leitores em voo.
+	//
+	// A distinção não é decorativa e não pode sair do `mode`: o copy-forward da
+	// compaction também publica location nova com hadPrevious, e também é
+	// applyWrite — mas ele só MOVE bytes, o conteúdo é idêntico, e o leitor com
+	// snapshot deve seguir a location nova. Se ele versionasse, cada passada
+	// criaria versões apontando para o segmento que ela está aposentando, e o
+	// pin bloquearia a própria compaction que o gerou.
+	versiona bool
 }
 
 // applyRecord executa os passos 3-8 do §10.1 (offset accounting, primary,
@@ -1781,6 +1830,26 @@ func (s *Store) applyRecord(a recordApply) error {
 		}
 	}
 	// 7. COMMIT POINT: publica a location.
+	//
+	// A época avança AQUI, junto do publish e sob o mesmo wmu, porque é a
+	// publicação que ela numera. Avançá-la antes deixaria uma janela em que um
+	// snapshot nasceria numa época cuja location ainda não está visível — e o
+	// leitor procuraria no journal uma versão que ninguém guardou.
+	//
+	// A versão anterior é guardada ANTES do publish, enquanto locs.Get ainda
+	// devolve a location velha, e só quando há leitor atrás dela: sem consulta
+	// aberta o journal não recebe uma entrada sequer, e a ingestão não paga
+	// nada além da comparação de um atômico.
+	if a.versiona && a.mode == applyWrite {
+		if s.snaps.menorEpocaViva() != versoes.SemLeitor {
+			if anterior, tinha := s.locs.Get(a.rowID); tinha {
+				s.vers.Registra(a.rowID, anterior, s.epocaPub.Load()+1)
+			}
+		}
+	}
+	if a.mode == applyWrite {
+		s.epocaPub.Add(1)
+	}
 	if a.mode == applyReplay {
 		// Recovery: grava direto no mmap, sem overlay. A invariante §6.1
 		// (página de índice nunca referencia record não durável) continua
@@ -1849,6 +1918,55 @@ func campoDoPayload(payload []byte, campo types.FieldID, esperado types.FieldTyp
 			return 0, false // payload é ordenado por FieldID: passou, não tem
 		}
 	}
+}
+
+// venceuNaVersao decide a expiração da VERSÃO que o leitor está recebendo.
+//
+// Existe porque prazoVencido consulta os índices, e os índices descrevem a
+// versão CORRENTE: numa linha reescrita durante a consulta eles já carregam o
+// instante novo, e a conta sairia sobre um estado que este leitor não vê.
+//
+// O payload manda QUANDO ELE DECLARA o instante — aí ele é a fonte da verdade
+// de que o índice é derivado, e a conta é a mesma do applyRecord sobre a
+// versão certa. Quando ele NÃO declara, a resposta volta para o índice, e essa
+// metade não é um detalhe: o godoc de rowindex.Escritas diz que a fonte da
+// verdade é o campo do payload, e isso é verdade só para a linha que o tem. A
+// linha LEGADA — materializada antes de as regras existirem — não tem campo
+// nenhum, e o instante dela é o da CARÊNCIA, semeado pelo coletor na primeira
+// passada, que não existe em record algum. Derivar só do payload a tornaria
+// imortal, e é isso que TestPassadaDaCarenciaAQuemNaoTemInstante recusa.
+//
+// O caso que sobra sem isolamento é estreito e está nomeado aqui de propósito:
+// uma linha SEM o campo de escrita, reescrita durante a consulta, é avaliada
+// pelo índice corrente. Ela não tem versão própria do instante para ser
+// avaliada por — não existe dado que a responda —, e a carência é a única
+// resposta que o dataset tem.
+func (s *Store) venceuNaVersao(rec types.Record, em time.Time) bool {
+	if s.escritas == nil {
+		return false
+	}
+	ms, declarado := instanteDeEscrita(rec.Payload, s.campoDeEscrita)
+	if !declarado {
+		return s.prazoVencido(rec.RowID, em)
+	}
+	d := s.duracaoDoPayload(rec.Payload)
+	if d <= 0 {
+		return false
+	}
+	return em.UnixMilli()-ms >= d.Milliseconds()
+}
+
+// duracaoDoPayload devolve a duração de ociosidade que ESTE payload declara,
+// caindo na duração de fundo quando ele não declara nenhuma — a mesma
+// precedência de duracaoEfetiva, sobre o payload em vez do índice.
+func (s *Store) duracaoDoPayload(payload []byte) time.Duration {
+	if ms, ok := campoDoPayload(payload, s.campoDePrazo, types.TypeInt64); ok {
+		if ms <= 0 {
+			return 0 // imortal declarado pela regra `never`
+		}
+		return time.Duration(ms) * time.Millisecond
+	}
+	return s.duracaoDeFundo
 }
 
 // prazoVencido é o predicado de leitura da expiração, e ele existe para que a

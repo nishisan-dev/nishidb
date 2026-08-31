@@ -89,7 +89,7 @@ func TestLinhaImortalNaoHerdaADuracaoDeFundo(t *testing.T) {
 	if s.prazoVencido(id, s.agora()) {
 		t.Error("a linha imortal caiu na duração de fundo: o sentinela não está sendo distinguido")
 	}
-	if _, _, ok, err := s.GetByRowID(s.AbreSnapshot(), id, nil); err != nil || !ok {
+	if _, _, ok, err := s.GetByRowID(s.presente(), id, nil); err != nil || !ok {
 		t.Errorf("a linha imortal sumiu da leitura: ok=%v err=%v", ok, err)
 	}
 }
@@ -136,14 +136,14 @@ func TestPrazoVencidoEscondeALinhaComOColetorParado(t *testing.T) {
 	s, rel := storeComRegras(t, t.TempDir(), 7*24*time.Hour)
 	id, _ := mustPut(t, s, "A", 1, payloadComPrazo(t, s, "A", rel.t, 3*time.Minute), nil)
 
-	if _, _, ok, _ := s.GetByRowID(s.AbreSnapshot(), id, nil); !ok {
+	if _, _, ok, _ := s.GetByRowID(s.presente(), id, nil); !ok {
 		t.Fatal("a linha nem apareceu")
 	}
 	rel.avanca(4 * time.Minute)
-	if _, _, ok, err := s.GetByRowID(s.AbreSnapshot(), id, nil); err != nil || ok {
+	if _, _, ok, err := s.GetByRowID(s.presente(), id, nil); err != nil || ok {
 		t.Errorf("a linha vencida continua visível: ok=%v err=%v", ok, err)
 	}
-	if rows := collectRows(t, s.ScanLive(s.AbreSnapshot())); len(rows) != 0 {
+	if rows := collectRows(t, s.ScanLive(s.presente())); len(rows) != 0 {
 		t.Errorf("ScanLive devolveu a linha vencida: %v", rows)
 	}
 }
@@ -184,7 +184,7 @@ func TestCompactionDescartaRecordVencidoPorRegraCondicional(t *testing.T) {
 	if r.Expiradas != 1 {
 		t.Fatalf("passada expirou %d, quero 1 (%+v)", r.Expiradas, r)
 	}
-	if _, _, ok, _ := s.GetByRowID(s.AbreSnapshot(), id, nil); ok {
+	if _, _, ok, _ := s.GetByRowID(s.presente(), id, nil); ok {
 		t.Error("a linha continua legível depois da lápide")
 	}
 }

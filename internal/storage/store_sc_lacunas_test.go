@@ -54,7 +54,7 @@ func TestValorIndexavelGiganteEhBarradoAntesDoAppend(t *testing.T) {
 	defer s2.Close()
 	mustGetAud(t, s2, "ok")
 	mustGetAud(t, s2, "depois")
-	if _, _, ok, _ := s2.GetByKey(s2.AbreSnapshot(), []byte("bomba"), nil); ok {
+	if _, _, ok, _ := s2.GetByKey(s2.presente(), []byte("bomba"), nil); ok {
 		t.Fatal("o evento rejeitado não pode ter sido gravado")
 	}
 	exigeBitmapCompleto(t, s2)

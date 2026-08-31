@@ -224,6 +224,8 @@ func (s *storeQueExplode) GetByKey(types.Snapshot, []byte, []byte) (types.Record
 
 func (s *storeQueExplode) AbreSnapshot() types.Snapshot { return types.Snapshot{} }
 
+func (s *storeQueExplode) FechaSnapshot(types.Snapshot) {}
+
 func (s *storeQueExplode) ScanLive(types.Snapshot) types.RowIDIterator { return vazio{} }
 
 func (s *storeQueExplode) Lookup(types.FieldID, types.Value) (types.RowIDIterator, error) {

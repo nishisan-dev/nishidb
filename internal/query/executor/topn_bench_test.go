@@ -41,6 +41,8 @@ func (f *fonteDeBancada) GetByKey(_ types.Snapshot, _, buf []byte) (types.Record
 // queries — que são os dois, igualmente, mas o ponto é medir o operador.
 func (f *fonteDeBancada) AbreSnapshot() types.Snapshot { return types.Snapshot{} }
 
+func (f *fonteDeBancada) FechaSnapshot(types.Snapshot) {}
+
 func (f *fonteDeBancada) ScanLive(types.Snapshot) types.RowIDIterator {
 	f.it.f, f.it.pos = f, 0
 	return &f.it

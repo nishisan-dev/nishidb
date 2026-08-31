@@ -27,10 +27,10 @@ func TestPassadaMarcaSoQuemVenceu(t *testing.T) {
 	if r.Expiradas != 1 {
 		t.Fatalf("expiradas=%d, quer 1 (só a velha): %+v", r.Expiradas, r)
 	}
-	if _, _, ok, _ := s.GetByRowID(s.AbreSnapshot(), velha, nil); ok {
+	if _, _, ok, _ := s.GetByRowID(s.presente(), velha, nil); ok {
 		t.Error("a entidade vencida continua visível")
 	}
-	if _, _, ok, _ := s.GetByRowID(s.AbreSnapshot(), nova, nil); !ok {
+	if _, _, ok, _ := s.GetByRowID(s.presente(), nova, nil); !ok {
 		t.Error("a entidade dentro do prazo foi marcada")
 	}
 }
@@ -112,16 +112,16 @@ func TestPassadaDaCarenciaAQuemNaoTemInstante(t *testing.T) {
 	if r.Expiradas != 0 {
 		t.Fatal("entidade sem instante de escrita foi marcada")
 	}
-	if _, _, ok, _ := s.GetByRowID(s.AbreSnapshot(), id, nil); !ok {
+	if _, _, ok, _ := s.GetByRowID(s.presente(), id, nil); !ok {
 		t.Fatal("entidade sem instante sumiu")
 	}
 	// Agora ela TEM prazo, contado a partir da carência.
 	rel.avanca(30 * time.Minute)
-	if _, _, ok, _ := s.GetByRowID(s.AbreSnapshot(), id, nil); !ok {
+	if _, _, ok, _ := s.GetByRowID(s.presente(), id, nil); !ok {
 		t.Fatal("expirou antes do prazo cheio de carência")
 	}
 	rel.avanca(31 * time.Minute)
-	if _, _, ok, _ := s.GetByRowID(s.AbreSnapshot(), id, nil); ok {
+	if _, _, ok, _ := s.GetByRowID(s.presente(), id, nil); ok {
 		t.Fatal("a carência não venceu: a entidade ficou imortal")
 	}
 }
@@ -204,7 +204,7 @@ func TestCompactionMarcaOVencidoQueEncontra(t *testing.T) {
 		t.Fatal("a compaction copiou os vencidos para frente em vez de marcá-los")
 	}
 	for _, id := range abandonadas {
-		if _, _, ok, _ := s.GetByRowID(s.AbreSnapshot(), id, nil); ok {
+		if _, _, ok, _ := s.GetByRowID(s.presente(), id, nil); ok {
 			t.Errorf("row abandonada %d continua visível depois da compaction", id)
 		}
 	}
@@ -243,7 +243,7 @@ func TestCompactionNaoMarcaQuemEstaNoPrazo(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, id := range ids {
-		if _, _, ok, err := s.GetByRowID(s.AbreSnapshot(), id, nil); err != nil || !ok {
+		if _, _, ok, err := s.GetByRowID(s.presente(), id, nil); err != nil || !ok {
 			t.Fatalf("a compaction marcou uma row dentro do prazo: id=%d ok=%v err=%v", id, ok, err)
 		}
 	}

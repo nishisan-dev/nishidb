@@ -230,12 +230,19 @@ func Open(ctx context.Context, bq *binder.BoundQuery, plan planner.Plan, opts Op
 	// inteira: é ele que dá ao plano indexado e ao full scan o MESMO universo,
 	// e é a ordem que importa — aberta a fonte, o teto já teria escapado.
 	snap := opts.Store.AbreSnapshot()
+	it.snap = snap
 
 	// A fonte é aberta POR ÚLTIMO: qualquer erro acima não pode deixar
 	// iteradores de índice abertos e sem dono.
 	src, err := fonteDoPlano(plan, opts.Store, opts.Metrics, snap)
 	if err != nil {
 		it.cancel()
+		// O Open que falha DEPOIS de abrir o snapshot é o único caminho em
+		// que ninguém chamará o Close: o iterador não chega ao caller. Sem
+		// esta linha, toda consulta recusada na abertura da fonte deixaria um
+		// leitor fantasma na contagem.
+		it.snapFechado = true
+		opts.Store.FechaSnapshot(snap)
 		return nil, err
 	}
 	it.src = src
@@ -259,6 +266,10 @@ type iterador struct {
 	st      Store
 	src     rowSource
 	metrics *Metrics
+
+	// snap é o universo desta consulta, guardado para ser devolvido no Close.
+	snap        types.Snapshot
+	snapFechado bool
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -592,5 +603,14 @@ func (it *iterador) Close() error {
 	it.done = true
 	it.encerra()
 	it.liberaSpill()
+	// O snapshot é devolvido DEPOIS do encerra: enquanto a fonte upstream
+	// pode estar lendo, as versões que ela alcança têm de continuar retidas.
+	// O guard de idempotência é do contrato do Close (ele é chamado por
+	// defer e de novo pelo caller), e sem ele um Close a mais tiraria da
+	// contagem um leitor que nunca existiu.
+	if !it.snapFechado {
+		it.snapFechado = true
+		it.st.FechaSnapshot(it.snap)
+	}
 	return it.errClose
 }

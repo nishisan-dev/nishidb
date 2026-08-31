@@ -89,22 +89,22 @@ func TestRowVencidaSomeDaLeituraSemNenhumColetorTerRodado(t *testing.T) {
 	s, rel := storeComExpiracao(t, t.TempDir(), time.Hour)
 	id, _ := mustPut(t, s, "A", 1, payloadComEscrita(t, s, "A", "Start", rel.t), nil)
 
-	if _, _, ok, err := s.GetByKey(s.AbreSnapshot(), []byte("A"), nil); err != nil || !ok {
+	if _, _, ok, err := s.GetByKey(s.presente(), []byte("A"), nil); err != nil || !ok {
 		t.Fatalf("antes do prazo: ok=%v err=%v", ok, err)
 	}
-	if rows := collectRows(t, s.ScanLive(s.AbreSnapshot())); len(rows) != 1 {
+	if rows := collectRows(t, s.ScanLive(s.presente())); len(rows) != 1 {
 		t.Fatalf("ScanLive antes do prazo: %v", rows)
 	}
 
 	rel.avanca(time.Hour + time.Minute)
 
-	if _, _, ok, err := s.GetByKey(s.AbreSnapshot(), []byte("A"), nil); err != nil || ok {
+	if _, _, ok, err := s.GetByKey(s.presente(), []byte("A"), nil); err != nil || ok {
 		t.Fatalf("depois do prazo GetByKey: ok=%v err=%v", ok, err)
 	}
-	if _, _, ok, err := s.GetByRowID(s.AbreSnapshot(), id, nil); err != nil || ok {
+	if _, _, ok, err := s.GetByRowID(s.presente(), id, nil); err != nil || ok {
 		t.Fatalf("depois do prazo GetByRowID: ok=%v err=%v", ok, err)
 	}
-	if rows := collectRows(t, s.ScanLive(s.AbreSnapshot())); len(rows) != 0 {
+	if rows := collectRows(t, s.ScanLive(s.presente())); len(rows) != 0 {
 		t.Fatalf("ScanLive depois do prazo: %v", rows)
 	}
 	// Mas a ingestão continua vendo a entidade, e é isso que impede a
@@ -132,7 +132,7 @@ func TestEscritaNovaRenovaOPrazo(t *testing.T) {
 	}
 
 	rel.avanca(50 * time.Minute) // 100 min do primeiro Put, 50 do segundo
-	if _, _, ok, err := s.GetByRowID(s.AbreSnapshot(), id, nil); err != nil || !ok {
+	if _, _, ok, err := s.GetByRowID(s.presente(), id, nil); err != nil || !ok {
 		t.Fatalf("a escrita não renovou o prazo: ok=%v err=%v", ok, err)
 	}
 }
@@ -146,7 +146,7 @@ func TestRowSemInstanteDeEscritaNaoVence(t *testing.T) {
 	id, _ := mustPut(t, s, "A", 1, payloadSemEscrita(t, s, "A"), nil)
 
 	rel.avanca(100 * time.Hour)
-	if _, _, ok, err := s.GetByRowID(s.AbreSnapshot(), id, nil); err != nil || !ok {
+	if _, _, ok, err := s.GetByRowID(s.presente(), id, nil); err != nil || !ok {
 		t.Fatalf("row com prazo desconhecido sumiu: ok=%v err=%v", ok, err)
 	}
 }
@@ -186,7 +186,7 @@ func TestExpiraPublicaLapideDuravelEBaixaALiveness(t *testing.T) {
 	// Reabre: a lápide sobreviveu porque é record.
 	s2, rel2 := storeComExpiracao(t, dir, time.Hour)
 	rel2.avanca(3 * time.Hour)
-	if _, _, ok, err := s2.GetByRowID(s2.AbreSnapshot(), id, nil); err != nil || ok {
+	if _, _, ok, err := s2.GetByRowID(s2.presente(), id, nil); err != nil || ok {
 		t.Fatalf("a row voltou a ser visível depois de reabrir: ok=%v err=%v", ok, err)
 	}
 	if _, _, pres, err := s2.Estado([]byte("A"), nil); err != nil || pres != types.PresencaExpirada {
@@ -216,7 +216,7 @@ func TestExpiraAbortaSemEscreverQuandoARowFoiRenovada(t *testing.T) {
 	if expirou {
 		t.Fatal("o coletor expirou uma row renovada")
 	}
-	if _, _, ok, err := s.GetByRowID(s.AbreSnapshot(), id, nil); err != nil || !ok {
+	if _, _, ok, err := s.GetByRowID(s.presente(), id, nil); err != nil || !ok {
 		t.Fatalf("a row renovada sumiu: ok=%v err=%v", ok, err)
 	}
 }
@@ -239,11 +239,11 @@ func TestExpiryIdxEhReconstruidoPeloReplayDoTail(t *testing.T) {
 	// O instante reconstruído tem de ser o do PAYLOAD, não o do replay: se
 	// viesse do relógio, o prazo teria sido empurrado para frente.
 	rel2.t = escrita.Add(2 * time.Hour)
-	if _, _, ok, err := s2.GetByRowID(s2.AbreSnapshot(), id, nil); err != nil || ok {
+	if _, _, ok, err := s2.GetByRowID(s2.presente(), id, nil); err != nil || ok {
 		t.Fatalf("o prazo foi reancorado no replay: ok=%v err=%v", ok, err)
 	}
 	rel2.t = escrita.Add(30 * time.Minute)
-	if _, _, ok, err := s2.GetByRowID(s2.AbreSnapshot(), id, nil); err != nil || !ok {
+	if _, _, ok, err := s2.GetByRowID(s2.presente(), id, nil); err != nil || !ok {
 		t.Fatalf("antes do prazo a row sumiu: ok=%v err=%v", ok, err)
 	}
 }
