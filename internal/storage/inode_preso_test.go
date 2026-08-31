@@ -193,7 +193,7 @@ func TestLeituraConcorrenteSobreviveAUmaCompactionInteira(t *testing.T) {
 
 	ids := make([]types.RowID, 0, keys)
 	for i := 0; i < keys; i++ {
-		rec, _, ok, err := s.GetByKey([]byte(chaveDoCorpus(i)), nil)
+		rec, _, ok, err := s.GetByKey(s.AbreSnapshot(), []byte(chaveDoCorpus(i)), nil)
 		if err != nil || !ok {
 			t.Fatalf("GetByKey(%s): ok=%v err=%v", chaveDoCorpus(i), ok, err)
 		}

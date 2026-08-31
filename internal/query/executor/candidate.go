@@ -54,7 +54,12 @@ func (s *candidateSource) close() error { return s.it.Close() }
 // leitura dupla que existiria se o plano devolvesse um rowID para o fetcher
 // reler.
 type keySource struct {
-	st   Store
+	st Store
+	// snap entra aqui pela MESMA razão do candidateSource: o point lookup
+	// decide liveness por conta própria, sem passar pelo GetByRowID, e um
+	// snapshot que não chegasse até ele deixaria `WHERE id = ?` respondendo
+	// sobre um instante diferente do resto da mesma consulta.
+	snap types.Snapshot
 	key  []byte
 	done bool
 }
@@ -64,7 +69,7 @@ func (s *keySource) advance(buf []byte) (types.Record, []byte, bool, bool, error
 		return types.Record{}, buf, false, false, nil
 	}
 	s.done = true
-	rec, out, ok, err := s.st.GetByKey(s.key, buf)
+	rec, out, ok, err := s.st.GetByKey(s.snap, s.key, buf)
 	if err != nil {
 		return types.Record{}, out, false, false, fmt.Errorf("executor: leitura da key %q: %w", s.key, err)
 	}
@@ -86,7 +91,7 @@ func fonteDoPlano(plan planner.Plan, st Store, m *Metrics, snap types.Snapshot) 
 			return nil, fmt.Errorf("%w: PointLookupPlan com key sem bytes", ErrInvalidPlan)
 		}
 		contaFonte(m, func(m *Metrics) *atomic.Int64 { return &m.PointLookups })
-		return &keySource{st: st, key: p.Key.Bytes}, nil
+		return &keySource{st: st, snap: snap, key: p.Key.Bytes}, nil
 
 	case *planner.IndexScanPlan:
 		it, err := st.Lookup(p.Field.ID, p.Val)

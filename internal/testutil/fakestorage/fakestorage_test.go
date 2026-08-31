@@ -23,7 +23,7 @@ import (
 // com o RowIDIterator morando em internal/types — com a interface
 // redeclarada em cada lado, nenhuma das duas satisfaria a mesma assinatura.
 type consumerStore interface {
-	GetByKey(key, buf []byte) (types.Record, []byte, bool, error)
+	GetByKey(snap types.Snapshot, key, buf []byte) (types.Record, []byte, bool, error)
 	GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (types.Record, []byte, bool, error)
 	Put(key []byte, seq int64, flags uint8, payload []byte, prev *types.Record) (types.RowID, bool, error)
 	ScanLive(snap types.Snapshot) types.RowIDIterator
@@ -94,7 +94,7 @@ func TestPutCreateAndGetByKey(t *testing.T) {
 		t.Errorf("primeiro rowId = %d, want 0", rowID)
 	}
 	var buf []byte
-	rec, buf2, ok, err := s.GetByKey([]byte("ABC"), buf)
+	rec, buf2, ok, err := s.GetByKey(s.AbreSnapshot(), []byte("ABC"), buf)
 	if err != nil || !ok {
 		t.Fatalf("GetByKey: ok=%v err=%v", ok, err)
 	}
@@ -105,7 +105,7 @@ func TestPutCreateAndGetByKey(t *testing.T) {
 		t.Errorf("Key/Payload incorretos")
 	}
 	_ = buf2
-	if _, _, ok, _ := s.GetByKey([]byte("NOPE"), nil); ok {
+	if _, _, ok, _ := s.GetByKey(s.AbreSnapshot(), []byte("NOPE"), nil); ok {
 		t.Error("key inexistente não deveria resolver")
 	}
 }
@@ -126,7 +126,7 @@ func TestBufferOwnershipBothDirections(t *testing.T) {
 	// (a) Record.Key/Payload são janelas sobre o buf do caller, não sobre o
 	// estado interno — a checagem de identidade é o que distingue cópia real
 	// de "mutei outra região e não percebi".
-	rec, buf, ok, err := s.GetByKey(key, nil)
+	rec, buf, ok, err := s.GetByKey(s.AbreSnapshot(), key, nil)
 	if err != nil || !ok {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestBufferOwnershipBothDirections(t *testing.T) {
 	for i := range buf {
 		buf[i] = 0xAA
 	}
-	rec2, _, ok, _ := s.GetByKey(key, nil)
+	rec2, _, ok, _ := s.GetByKey(s.AbreSnapshot(), key, nil)
 	if !ok || !bytes.Equal(rec2.Payload, want) {
 		t.Errorf("estado interno corrompido via buf do caller: %x", rec2.Payload)
 	}
@@ -152,7 +152,7 @@ func TestBufferOwnershipBothDirections(t *testing.T) {
 	for i := range p {
 		p[i] = 0xFF
 	}
-	rec3, _, ok, _ := s.GetByKey([]byte("ABC"), nil)
+	rec3, _, ok, _ := s.GetByKey(s.AbreSnapshot(), []byte("ABC"), nil)
 	if !ok {
 		t.Fatal("key mutada pelo caller apagou a row")
 	}
@@ -175,7 +175,7 @@ func TestPutUpdateDiffsIndexPostings(t *testing.T) {
 	// que não tem fase de CLEAR (spec §5.2) — ver aplicaPostings. Exigir que o
 	// antigo saísse aqui deixaria o dublê mais preciso que o real.
 	var buf []byte
-	prev, _, _, _ := s.GetByKey([]byte("ABC"), buf)
+	prev, _, _, _ := s.GetByKey(s.AbreSnapshot(), []byte("ABC"), buf)
 	p2 := payload(t, fv(1, strVal("ABC")), fv(2, strVal("Stop")))
 	rowID2, created, err := s.Put([]byte("ABC"), 2, 0, p2, &prev)
 	if err != nil || created || rowID2 != rowID {
@@ -238,7 +238,7 @@ func TestPutValorIndexadoInalteradoMantemPosting(t *testing.T) {
 	}
 	// Só o campo 1 muda; o indexado fica igual.
 	var buf []byte
-	prev, _, _, _ := s.GetByKey([]byte("ABC"), buf)
+	prev, _, _, _ := s.GetByKey(s.AbreSnapshot(), []byte("ABC"), buf)
 	p2 := payload(t, fv(1, strVal("XYZ")), fv(2, strVal("Start")))
 	if _, _, err := s.Put([]byte("ABC"), 2, 0, p2, &prev); err != nil {
 		t.Fatal(err)
@@ -260,12 +260,12 @@ func TestPutRemovedFieldClearsPosting(t *testing.T) {
 	rowID, _, _ := s.Put([]byte("ABC"), 1, 0, p1, nil)
 	p2 := payload(t, fv(1, strVal("ABC")))
 	var buf []byte
-	prev, _, _, _ := s.GetByKey([]byte("ABC"), buf)
+	prev, _, _, _ := s.GetByKey(s.AbreSnapshot(), []byte("ABC"), buf)
 	if _, _, err := s.Put([]byte("ABC"), 2, 0, p2, &prev); err != nil {
 		t.Fatal(err)
 	}
 	assertPosting(t, s, 2, strVal("Start"), []types.RowID{rowID})
-	rec, _, ok, err := s.GetByKey([]byte("ABC"), nil)
+	rec, _, ok, err := s.GetByKey(s.AbreSnapshot(), []byte("ABC"), nil)
 	if err != nil || !ok {
 		t.Fatalf("GetByKey: ok=%v err=%v", ok, err)
 	}
@@ -348,7 +348,7 @@ func TestPutRejectsInvalidArguments(t *testing.T) {
 	if _, _, err := s.Put([]byte("A"), 1, 0, p, nil); err != nil {
 		t.Fatal(err)
 	}
-	prevA, _, _, _ := s.GetByKey([]byte("A"), nil)
+	prevA, _, _, _ := s.GetByKey(s.AbreSnapshot(), []byte("A"), nil)
 	pb := payload(t, fv(1, strVal("B")))
 	_, _, err = s.Put([]byte("B"), 1, 0, pb, &prevA)
 	assertInvalidArgument(t, err, "prev pertence à key")
@@ -439,7 +439,7 @@ func TestGetByRowIDAndLiveness(t *testing.T) {
 	if _, _, ok, _ := s.GetByRowID(s.AbreSnapshot(), rowID, nil); ok {
 		t.Error("tombstoned deveria dar ok=false")
 	}
-	if _, _, ok, _ := s.GetByKey([]byte("ABC"), nil); ok {
+	if _, _, ok, _ := s.GetByKey(s.AbreSnapshot(), []byte("ABC"), nil); ok {
 		t.Error("GetByKey de row tombstoned deveria dar ok=false")
 	}
 	if got := drain(t, s.ScanLive(s.AbreSnapshot())); len(got) != 0 {

@@ -54,7 +54,7 @@ func (s *stub) GetByRowID(_ types.Snapshot, id types.RowID, buf []byte) (types.R
 	return types.Record{RowID: id, Payload: buf}, buf, true, nil
 }
 
-func (s *stub) GetByKey(key, buf []byte) (types.Record, []byte, bool, error) {
+func (s *stub) GetByKey(_ types.Snapshot, key, buf []byte) (types.Record, []byte, bool, error) {
 	s.getsPorKey++
 	id, ok := s.keys[string(key)]
 	if !ok {

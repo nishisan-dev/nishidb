@@ -158,7 +158,7 @@ func candidatos(t *testing.T, s *fakestorage.Store, plan planner.Plan) map[types
 		coleta(t, s.ScanLive(s.AbreSnapshot()), out)
 
 	case *planner.PointLookupPlan:
-		rec, _, ok, err := s.GetByKey(pl.Key.Bytes, nil)
+		rec, _, ok, err := s.GetByKey(s.AbreSnapshot(), pl.Key.Bytes, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

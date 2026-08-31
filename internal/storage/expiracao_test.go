@@ -89,7 +89,7 @@ func TestRowVencidaSomeDaLeituraSemNenhumColetorTerRodado(t *testing.T) {
 	s, rel := storeComExpiracao(t, t.TempDir(), time.Hour)
 	id, _ := mustPut(t, s, "A", 1, payloadComEscrita(t, s, "A", "Start", rel.t), nil)
 
-	if _, _, ok, err := s.GetByKey([]byte("A"), nil); err != nil || !ok {
+	if _, _, ok, err := s.GetByKey(s.AbreSnapshot(), []byte("A"), nil); err != nil || !ok {
 		t.Fatalf("antes do prazo: ok=%v err=%v", ok, err)
 	}
 	if rows := collectRows(t, s.ScanLive(s.AbreSnapshot())); len(rows) != 1 {
@@ -98,7 +98,7 @@ func TestRowVencidaSomeDaLeituraSemNenhumColetorTerRodado(t *testing.T) {
 
 	rel.avanca(time.Hour + time.Minute)
 
-	if _, _, ok, err := s.GetByKey([]byte("A"), nil); err != nil || ok {
+	if _, _, ok, err := s.GetByKey(s.AbreSnapshot(), []byte("A"), nil); err != nil || ok {
 		t.Fatalf("depois do prazo GetByKey: ok=%v err=%v", ok, err)
 	}
 	if _, _, ok, err := s.GetByRowID(s.AbreSnapshot(), id, nil); err != nil || ok {

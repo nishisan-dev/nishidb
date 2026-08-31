@@ -100,7 +100,7 @@ func TestPutCreateEGetByKeyRoundTrip(t *testing.T) {
 		t.Fatal("primeira escrita deveria criar")
 	}
 
-	rec, _, ok, err := s.GetByKey([]byte(key), nil)
+	rec, _, ok, err := s.GetByKey(s.AbreSnapshot(), []byte(key), nil)
 	if err != nil || !ok {
 		t.Fatalf("GetByKey: (%v,%v)", ok, err)
 	}
@@ -114,7 +114,7 @@ func TestPutCreateEGetByKeyRoundTrip(t *testing.T) {
 
 func TestGetByKeyAusente(t *testing.T) {
 	s := openStore(t, Options{})
-	if _, _, ok, err := s.GetByKey([]byte("nao-existe"), nil); ok || err != nil {
+	if _, _, ok, err := s.GetByKey(s.AbreSnapshot(), []byte("nao-existe"), nil); ok || err != nil {
 		t.Fatalf("esperado (false,nil), obtido (%v,%v)", ok, err)
 	}
 }
@@ -123,7 +123,7 @@ func TestPutUpdateMantemRowIDETrocaEstado(t *testing.T) {
 	s := openStore(t, Options{})
 	id1, _ := mustPut(t, s, "upd", 1, statusPayload(t, s, "upd", "Start", 1), nil)
 
-	prev, buf, ok, err := s.GetByKey([]byte("upd"), nil)
+	prev, buf, ok, err := s.GetByKey(s.AbreSnapshot(), []byte("upd"), nil)
 	if err != nil || !ok {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func TestPutComPrevConfiaNoRowIDSemRefazerFind(t *testing.T) {
 	s := openStore(t, Options{})
 	idA, _ := mustPut(t, s, "key-a", 1, statusPayload(t, s, "key-a", "Start", 1), nil)
 
-	prevA, _, ok, err := s.GetByKey([]byte("key-a"), nil)
+	prevA, _, ok, err := s.GetByKey(s.AbreSnapshot(), []byte("key-a"), nil)
 	if err != nil || !ok {
 		t.Fatal(err)
 	}
@@ -212,7 +212,7 @@ func TestBitmapDiffEmUpdate(t *testing.T) {
 	for i, k := range []string{"k1", "k2", "k3"} {
 		mustPut(t, s, k, int64(i), statusPayload(t, s, k, "Start", 0), nil)
 	}
-	prev, _, _, err := s.GetByKey([]byte("k2"), nil)
+	prev, _, _, err := s.GetByKey(s.AbreSnapshot(), []byte("k2"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +246,7 @@ func TestBitmapDiffEmUpdate(t *testing.T) {
 
 	// A→A (mesmo valor): pertinência inalterada. Preservado integralmente — é a
 	// guarda contra um Set que se confundisse com update de valor.
-	prev2, _, _, err := s.GetByKey([]byte("k1"), nil)
+	prev2, _, _, err := s.GetByKey(s.AbreSnapshot(), []byte("k1"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +279,7 @@ func TestScanLiveOrdemTombstoneEOverlay(t *testing.T) {
 		mustPut(t, s, k, int64(i), statusPayload(t, s, k, "Start", 0), nil)
 	}
 	// Row 2 vira tombstone (o caminho existe desde já; a Fase 9 o usará).
-	prev, _, _, err := s.GetByKey([]byte("scan-2"), nil)
+	prev, _, _, err := s.GetByKey(s.AbreSnapshot(), []byte("scan-2"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,7 +298,7 @@ func TestScanLiveOrdemTombstoneEOverlay(t *testing.T) {
 func TestGetTombstonedNaoEhLive(t *testing.T) {
 	s := openStore(t, Options{})
 	id, _ := mustPut(t, s, "morta", 1, statusPayload(t, s, "morta", "Start", 0), nil)
-	prev, _, _, err := s.GetByKey([]byte("morta"), nil)
+	prev, _, _, err := s.GetByKey(s.AbreSnapshot(), []byte("morta"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,7 +308,7 @@ func TestGetTombstonedNaoEhLive(t *testing.T) {
 	if _, _, ok, _ := s.GetByRowID(s.AbreSnapshot(), id, nil); ok {
 		t.Fatal("GetByRowID de tombstone deveria ser ok=false")
 	}
-	if _, _, ok, _ := s.GetByKey([]byte("morta"), nil); ok {
+	if _, _, ok, _ := s.GetByKey(s.AbreSnapshot(), []byte("morta"), nil); ok {
 		t.Fatal("GetByKey de tombstone deveria ser ok=false")
 	}
 	if _, _, ok, _ := s.GetByRowID(s.AbreSnapshot(), 9999, nil); ok {
@@ -337,7 +337,7 @@ func TestRotacaoDeSegmentoNoPut(t *testing.T) {
 	}
 	for i := 0; i < 6; i++ {
 		k := fmt.Sprintf("rot-%d", i)
-		rec, _, ok, err := s.GetByKey([]byte(k), nil)
+		rec, _, ok, err := s.GetByKey(s.AbreSnapshot(), []byte(k), nil)
 		if err != nil || !ok || !bytes.Equal(rec.Key, []byte(k)) {
 			t.Fatalf("GetByKey(%q) pós-rotação: (%v,%v)", k, ok, err)
 		}
@@ -376,7 +376,7 @@ func TestOpenRejeitaSegmentSizeInvalido(t *testing.T) {
 func TestSyncEveryPutSmoke(t *testing.T) {
 	s := openStore(t, Options{SyncEveryPut: true})
 	mustPut(t, s, "durable", 1, statusPayload(t, s, "durable", "Start", 0), nil)
-	if _, _, ok, err := s.GetByKey([]byte("durable"), nil); err != nil || !ok {
+	if _, _, ok, err := s.GetByKey(s.AbreSnapshot(), []byte("durable"), nil); err != nil || !ok {
 		t.Fatalf("(%v,%v)", ok, err)
 	}
 }
@@ -574,7 +574,7 @@ func TestVisibilidadeLeitorConcorrente(t *testing.T) {
 					return
 				default:
 				}
-				rec, b, ok, err := s.GetByKey(key, buf)
+				rec, b, ok, err := s.GetByKey(s.AbreSnapshot(), key, buf)
 				buf = b
 				if err != nil || !ok {
 					t.Errorf("GetByKey concorrente: (%v,%v)", ok, err)
@@ -616,7 +616,7 @@ func TestVisibilidadeLeitorConcorrente(t *testing.T) {
 	var ok bool
 	var err error
 	for i := int64(1); i <= 400; i++ {
-		prev, buf, ok, err = s.GetByKey(key, buf)
+		prev, buf, ok, err = s.GetByKey(s.AbreSnapshot(), key, buf)
 		if err != nil || !ok {
 			t.Fatal(err)
 		}

@@ -131,7 +131,7 @@ func TestGateAllocsPointLookupReal(t *testing.T) {
 	var buf []byte
 	i := 0
 	got := testing.AllocsPerRun(200, func() {
-		rec, out, ok, err := st.GetByKey(keys[i%len(keys)], buf[:0])
+		rec, out, ok, err := st.GetByKey(st.AbreSnapshot(), keys[i%len(keys)], buf[:0])
 		if err != nil || !ok {
 			t.Fatalf("lookup falhou: ok=%v err=%v", ok, err)
 		}

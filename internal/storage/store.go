@@ -1395,7 +1395,7 @@ func (s *Store) Indexado(field types.FieldID) bool {
 // O callback de validação roda sob o RLock do índice primary: ele NÃO pode
 // reentrar no índice (deadlock com um rehash enfileirado) — mantém-se
 // mínimo: locations.Get + pread + comparação de key (spec §36).
-func (s *Store) lookup(key, buf []byte) (rec types.Record, out []byte, exists, live bool, err error) {
+func (s *Store) lookup(key, buf []byte, em time.Time) (rec types.Record, out []byte, exists, live bool, err error) {
 	out = buf
 	if s.prim == nil {
 		// Sem primary não há como resolver uma key, e devolver "não existe"
@@ -1432,7 +1432,7 @@ func (s *Store) lookup(key, buf []byte) (rec types.Record, out []byte, exists, l
 		// A liveness tem DUAS causas de morte: a lápide já publicada e o
 		// prazo vencido que o coletor ainda não recolheu. Contá-las juntas
 		// aqui é o que faz a visibilidade não depender do agendador.
-		live = locFlags&types.FlagTombstone == 0 && !s.prazoVencido(rid, s.agora())
+		live = locFlags&types.FlagTombstone == 0 && !s.prazoVencido(rid, em)
 		return true, nil
 	}
 	_, exists, err = s.prim.Find(key, validate)
@@ -1445,12 +1445,12 @@ func (s *Store) lookup(key, buf []byte) (rec types.Record, out []byte, exists, l
 // GetByKey resolve a key pela primary (validação de colisão inclusa) e
 // devolve o record corrente sobre buf (possivelmente crescido).
 // ok=false para key ausente ou tombstoned.
-func (s *Store) GetByKey(key, buf []byte) (types.Record, []byte, bool, error) {
+func (s *Store) GetByKey(snap types.Snapshot, key, buf []byte) (types.Record, []byte, bool, error) {
 	if err := s.entra(); err != nil {
 		return types.Record{}, buf, false, err
 	}
 	defer s.sai()
-	rec, out, exists, live, err := s.lookup(key, buf)
+	rec, out, exists, live, err := s.lookup(key, buf, snap.Instante)
 	if err != nil || !exists || !live {
 		return types.Record{}, out, false, err
 	}
@@ -1471,7 +1471,7 @@ func (s *Store) Estado(key, buf []byte) (types.Record, []byte, types.Presenca, e
 		return types.Record{}, buf, types.PresencaAusente, err
 	}
 	defer s.sai()
-	rec, out, exists, live, err := s.lookup(key, buf)
+	rec, out, exists, live, err := s.lookup(key, buf, s.agora())
 	switch {
 	case err != nil:
 		return types.Record{}, out, types.PresencaAusente, err
@@ -1571,7 +1571,7 @@ func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *ty
 		rowID = prev.RowID
 		prevPayload = prev.Payload
 	} else {
-		found, out, exists, _, err := s.lookup(key, s.prevBuf[:0])
+		found, out, exists, _, err := s.lookup(key, s.prevBuf[:0], s.agora())
 		s.prevBuf = out
 		if err != nil {
 			return 0, false, err

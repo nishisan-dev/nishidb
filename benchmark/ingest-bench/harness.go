@@ -914,7 +914,7 @@ func startReaders(cfg Config, st *storage.Store, c *schema.Compiled) *readerPool
 				início := time.Now()
 				switch classe {
 				case 0:
-					_, out, _, _ := st.GetByKey(keys[n%len(keys)], rbuf[:0])
+					_, out, _, _ := st.GetByKey(st.AbreSnapshot(), keys[n%len(keys)], rbuf[:0])
 					rbuf = out
 				case 1:
 					rbuf = lookupIndexadoLimit(st, statusField.ID, rbuf, 100)

@@ -111,7 +111,7 @@ func TestUpdateRemoveAPostingDoValorAntigo(t *testing.T) {
 	k := "CMP-V0001PPCLP-013"
 	row, _ := mustPut(t, s, k, 1, statusPayload(t, s, k, "Start", 1), nil)
 
-	prev, _, ok, err := s.GetByKey([]byte(k), nil)
+	prev, _, ok, err := s.GetByKey(s.AbreSnapshot(), []byte(k), nil)
 	if err != nil || !ok {
 		t.Fatalf("GetByKey: (%v,%v)", ok, err)
 	}
@@ -221,7 +221,7 @@ func TestReplayReaplicaOClearDoUpdate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	prev, _, ok, err := s.GetByKey([]byte(k), nil)
+	prev, _, ok, err := s.GetByKey(s.AbreSnapshot(), []byte(k), nil)
 	if err != nil || !ok {
 		t.Fatalf("GetByKey: (%v,%v)", ok, err)
 	}
@@ -427,7 +427,7 @@ func TestPostingOrfaEhSupersetEOExecutorFiltra(t *testing.T) {
 
 	k := "CMP-V0001PPCLP-013"
 	row, _ := mustPut(t, s, k, 1, statusPayload(t, s, k, "Start", 1), nil)
-	prev, _, ok, err := s.GetByKey([]byte(k), nil)
+	prev, _, ok, err := s.GetByKey(s.AbreSnapshot(), []byte(k), nil)
 	if err != nil || !ok {
 		t.Fatalf("GetByKey: (%v,%v)", ok, err)
 	}

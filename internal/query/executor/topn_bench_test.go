@@ -32,7 +32,7 @@ func (f *fonteDeBancada) GetByRowID(_ types.Snapshot, id types.RowID, buf []byte
 	return types.Record{RowID: id, Payload: buf}, buf, true, nil
 }
 
-func (f *fonteDeBancada) GetByKey(_, buf []byte) (types.Record, []byte, bool, error) {
+func (f *fonteDeBancada) GetByKey(_ types.Snapshot, _, buf []byte) (types.Record, []byte, bool, error) {
 	return types.Record{}, buf, false, nil
 }
 

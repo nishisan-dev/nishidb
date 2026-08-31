@@ -24,7 +24,7 @@ type Store interface {
 	// err!=nil: perder o retorno faz o executor realocar por row e deixa
 	// rec.Payload apontando para um buffer que ele não conhece mais.
 	GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (types.Record, []byte, bool, error)
-	GetByKey(key, buf []byte) (types.Record, []byte, bool, error)
+	GetByKey(snap types.Snapshot, key, buf []byte) (types.Record, []byte, bool, error)
 	// AbreSnapshot fixa o universo desta consulta. É chamado UMA vez por
 	// Open, antes de qualquer fonte ser aberta: um snapshot por fonte daria
 	// a cada plano um universo próprio, que é exatamente o defeito que ele

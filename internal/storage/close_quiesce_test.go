@@ -95,7 +95,7 @@ func TestCloseConcorrenteComPutNaoEntraEmPanic(t *testing.T) {
 	if _, _, err := st.Put([]byte("Z"), 1, 0, p, nil); !errors.Is(err, storage.ErrDatasetClosed) {
 		t.Errorf("Put após Close = %v, want ErrDatasetClosed", err)
 	}
-	if _, _, _, err := st.GetByKey([]byte("K"), nil); !errors.Is(err, storage.ErrDatasetClosed) {
+	if _, _, _, err := st.GetByKey(st.AbreSnapshot(), []byte("K"), nil); !errors.Is(err, storage.ErrDatasetClosed) {
 		t.Errorf("GetByKey após Close = %v, want ErrDatasetClosed", err)
 	}
 	if _, _, _, err := st.GetByRowID(st.AbreSnapshot(), 0, nil); !errors.Is(err, storage.ErrDatasetClosed) {

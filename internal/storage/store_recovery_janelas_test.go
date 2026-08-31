@@ -110,7 +110,7 @@ func TestReplayDeTombstone(t *testing.T) {
 		if err := s.Checkpoint(); err != nil {
 			t.Fatal(err)
 		}
-		prev, _, ok, err := s.GetByKey([]byte("del"), nil)
+		prev, _, ok, err := s.GetByKey(s.AbreSnapshot(), []byte("del"), nil)
 		if err != nil || !ok {
 			t.Fatal(err)
 		}
@@ -123,7 +123,7 @@ func TestReplayDeTombstone(t *testing.T) {
 
 		s2 := audOpen(t, opts)
 		defer s2.Close()
-		if _, _, ok, _ := s2.GetByKey([]byte("del"), nil); ok {
+		if _, _, ok, _ := s2.GetByKey(s2.AbreSnapshot(), []byte("del"), nil); ok {
 			t.Fatal("o tombstone do tail não pode ressuscitar a row no replay")
 		}
 		if _, _, ok, _ := s2.GetByRowID(s2.AbreSnapshot(), id, nil); ok {
@@ -139,7 +139,7 @@ func TestReplayDeTombstone(t *testing.T) {
 		opts := Options{Dir: dir}
 		s := audOpen(t, opts)
 		id, _ := mustPut(t, s, "res", 1, statusPayload(t, s, "res", "Start", 1), nil)
-		prev, _, ok, err := s.GetByKey([]byte("res"), nil)
+		prev, _, ok, err := s.GetByKey(s.AbreSnapshot(), []byte("res"), nil)
 		if err != nil || !ok {
 			t.Fatal(err)
 		}
@@ -160,7 +160,7 @@ func TestReplayDeTombstone(t *testing.T) {
 
 		s2 := audOpen(t, opts)
 		defer s2.Close()
-		rec, _, ok, err := s2.GetByKey([]byte("res"), nil)
+		rec, _, ok, err := s2.GetByKey(s2.AbreSnapshot(), []byte("res"), nil)
 		if err != nil || !ok {
 			t.Fatalf("a ressurreição do tail deveria valer pós-replay: (ok=%v, err=%v)", ok, err)
 		}

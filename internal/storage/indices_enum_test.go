@@ -289,7 +289,7 @@ func TestAEnumeracaoDoMaterializadoColapsaNumaCaminhadaUnicaDoLocations(t *testi
 	// torna a faixa contígua do histórico inválida aqui.
 	for i := range 40 {
 		key := "rot" + strconv.Itoa(i)
-		prev, _, ok, err := s.GetByKey([]byte(key), nil)
+		prev, _, ok, err := s.GetByKey(s.AbreSnapshot(), []byte(key), nil)
 		if err != nil || !ok {
 			t.Fatalf("GetByKey(%s): %v (ok=%v)", key, err, ok)
 		}
@@ -471,7 +471,7 @@ func TestUpdateQueCruzaSegmentoLevaAPostingDoCampoInalterado(t *testing.T) {
 	}
 
 	// O update mexe SÓ no type; node continua "estavel".
-	prev, _, ok, err := s.GetByKey([]byte("viajante"), nil)
+	prev, _, ok, err := s.GetByKey(s.AbreSnapshot(), []byte("viajante"), nil)
 	if err != nil || !ok {
 		t.Fatalf("GetByKey: %v (ok=%v)", err, ok)
 	}
@@ -514,7 +514,7 @@ func TestAPostingDoCampoInalteradoSobreviveASelagemEAoRestart(t *testing.T) {
 	poeLinhasAteRotacionar(t, s, origem)
 	destino := s.curSegID.Load()
 
-	prev, _, ok, err := s.GetByKey([]byte("viajante"), nil)
+	prev, _, ok, err := s.GetByKey(s.AbreSnapshot(), []byte("viajante"), nil)
 	if err != nil || !ok {
 		t.Fatalf("GetByKey: %v (ok=%v)", err, ok)
 	}
@@ -817,7 +817,7 @@ func TestUpdateDuranteAConsultaNaoSomeDaEnumeracaoColapsada(t *testing.T) {
 		t.Fatalf("Lookup: %v", err)
 	}
 	// ...e o update move a linha para o corrente ANTES de a iteração alcançá-la.
-	prev, _, ok, err := s2.GetByKey([]byte("movel"), nil)
+	prev, _, ok, err := s2.GetByKey(s2.AbreSnapshot(), []byte("movel"), nil)
 	if err != nil || !ok {
 		t.Fatalf("GetByKey(movel): %v (ok=%v)", err, ok)
 	}

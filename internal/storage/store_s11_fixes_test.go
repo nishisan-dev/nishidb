@@ -65,7 +65,7 @@ func TestLivenessDecrementaEmUpdate(t *testing.T) {
 		mustPut(t, s, k, 1, statusPayload(t, s, k, "Start", 1), nil)
 	}
 	for seq := int64(2); seq <= 3; seq++ {
-		prev, _, ok, err := s.GetByKey([]byte("lv-0"), nil)
+		prev, _, ok, err := s.GetByKey(s.AbreSnapshot(), []byte("lv-0"), nil)
 		if err != nil || !ok {
 			t.Fatal(err)
 		}

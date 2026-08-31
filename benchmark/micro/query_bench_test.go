@@ -63,7 +63,7 @@ func BenchmarkQueryPointLookup(b *testing.B) {
 	b.ReportAllocs()
 	i := 0
 	for b.Loop() {
-		rec, out, ok, err := st.GetByKey(keys[i%len(keys)], buf[:0])
+		rec, out, ok, err := st.GetByKey(st.AbreSnapshot(), keys[i%len(keys)], buf[:0])
 		if err != nil {
 			b.Fatal(err)
 		}

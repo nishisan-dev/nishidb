@@ -17,7 +17,7 @@ import (
 // não alcançam — o COMPORTAMENTO nas bordas.
 type escritor interface {
 	Put(key []byte, seq int64, flags uint8, payload []byte, prev *types.Record) (types.RowID, bool, error)
-	GetByKey(key, buf []byte) (types.Record, []byte, bool, error)
+	GetByKey(snap types.Snapshot, key, buf []byte) (types.Record, []byte, bool, error)
 }
 
 var (

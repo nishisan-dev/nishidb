@@ -17,7 +17,7 @@ import (
 // e só um roteiro compartilhado garante que se COMPORTAM iguais.
 type storeSobTeste interface {
 	Put(key []byte, seq int64, flags uint8, payload []byte, prev *types.Record) (types.RowID, bool, error)
-	GetByKey(key, buf []byte) (types.Record, []byte, bool, error)
+	GetByKey(snap types.Snapshot, key, buf []byte) (types.Record, []byte, bool, error)
 	GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (types.Record, []byte, bool, error)
 	ScanLive(snap types.Snapshot) types.RowIDIterator
 	AbreSnapshot() types.Snapshot
@@ -101,7 +101,7 @@ func TestComportamentoDoDubleEDoRealCoincidem(t *testing.T) {
 			}
 
 			// 3. O estado corrente é o do último Put.
-			rec, _, ok, err := st.GetByKey([]byte("A"), nil)
+			rec, _, ok, err := st.GetByKey(st.AbreSnapshot(), []byte("A"), nil)
 			if err != nil || !ok {
 				t.Fatalf("GetByKey: ok=%v err=%v", ok, err)
 			}
@@ -152,7 +152,7 @@ func TestComportamentoDoDubleEDoRealCoincidem(t *testing.T) {
 				t.Errorf("GetByRowID inexistente: ok=%v err=%v", ok, err)
 			}
 			// Key inexistente idem.
-			if _, _, ok, err := st.GetByKey([]byte("NAO-EXISTE"), nil); ok || err != nil {
+			if _, _, ok, err := st.GetByKey(st.AbreSnapshot(), []byte("NAO-EXISTE"), nil); ok || err != nil {
 				t.Errorf("GetByKey inexistente: ok=%v err=%v", ok, err)
 			}
 
@@ -161,7 +161,7 @@ func TestComportamentoDoDubleEDoRealCoincidem(t *testing.T) {
 			if _, _, err := st.Put([]byte("A"), 3, types.FlagTombstone, payload("Stop", "ze"), nil); err != nil {
 				t.Fatal(err)
 			}
-			if _, _, ok, _ := st.GetByKey([]byte("A"), nil); ok {
+			if _, _, ok, _ := st.GetByKey(st.AbreSnapshot(), []byte("A"), nil); ok {
 				t.Error("row tombstoned continuou visível no GetByKey")
 			}
 			if _, _, ok, _ := st.GetByRowID(st.AbreSnapshot(), id, nil); ok {

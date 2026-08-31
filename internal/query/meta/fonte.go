@@ -82,7 +82,7 @@ func (f *fonte) GetByRowID(_ types.Snapshot, id types.RowID, buf []byte) (types.
 	return f.record(id, f.campos[id], buf)
 }
 
-func (f *fonte) GetByKey(key, buf []byte) (types.Record, []byte, bool, error) {
+func (f *fonte) GetByKey(_ types.Snapshot, key, buf []byte) (types.Record, []byte, bool, error) {
 	for i, c := range f.campos {
 		if c.Name == string(key) {
 			return f.record(types.RowID(i), c, buf)

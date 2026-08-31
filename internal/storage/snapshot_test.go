@@ -68,3 +68,23 @@ func TestGetByRowIDUsaORelogioDoSnapshotENaoODoPresente(t *testing.T) {
 		t.Error("sob um snapshot do presente a linha continua visível: o teste acima não distingue congelar o relógio de não olhá-lo")
 	}
 }
+
+// O point lookup é o QUARTO ponto de liveness, e o mais fácil de esquecer: ele
+// não passa nem pela varredura nem pelo GetByRowID — o keySource do executor
+// resolve a key direto, para não pagar a leitura dupla. Um snapshot que valesse
+// nos três primeiros e não neste deixaria `WHERE id = ?` respondendo sobre um
+// instante diferente do de `WHERE status = ?` na mesma consulta.
+func TestGetByKeyUsaORelogioDoSnapshotENaoODoPresente(t *testing.T) {
+	s, rel := storeComRegras(t, t.TempDir(), 0)
+	mustPut(t, s, "A", 1, payloadComPrazo(t, s, "A", rel.t, 3*time.Minute), nil)
+
+	snap := s.AbreSnapshot()
+	rel.avanca(4 * time.Minute)
+
+	if _, _, ok, err := s.GetByKey(snap, []byte("A"), nil); err != nil || !ok {
+		t.Errorf("GetByKey sob o snapshot: ok=%v err=%v; a linha viva em T0 sumiu do point lookup", ok, err)
+	}
+	if _, _, ok, _ := s.GetByKey(s.AbreSnapshot(), []byte("A"), nil); ok {
+		t.Error("sob um snapshot do presente a linha continua visível: o teste acima não distingue congelar o relógio de não olhá-lo")
+	}
+}

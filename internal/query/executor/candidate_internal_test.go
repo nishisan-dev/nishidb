@@ -152,7 +152,7 @@ func (s *storeFalhaNoSegundo) GetByRowID(types.Snapshot, types.RowID, []byte) (t
 	return types.Record{}, nil, false, nil
 }
 
-func (s *storeFalhaNoSegundo) GetByKey([]byte, []byte) (types.Record, []byte, bool, error) {
+func (s *storeFalhaNoSegundo) GetByKey(types.Snapshot, []byte, []byte) (types.Record, []byte, bool, error) {
 	return types.Record{}, nil, false, nil
 }
 

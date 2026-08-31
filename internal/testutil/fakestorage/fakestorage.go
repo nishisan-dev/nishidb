@@ -282,7 +282,7 @@ func (s *Store) addPosting(field types.FieldID, v types.Value, rowID types.RowID
 // Record.Payload são janelas zero-copy sobre o buf devolvido — mesmo
 // contrato de lifetime do Store real). ok=false para key ausente OU
 // tombstoned.
-func (s *Store) GetByKey(key, buf []byte) (types.Record, []byte, bool, error) {
+func (s *Store) GetByKey(_ types.Snapshot, key, buf []byte) (types.Record, []byte, bool, error) {
 	rowID, ok := s.byKey[string(key)]
 	if !ok {
 		return types.Record{}, buf, false, nil

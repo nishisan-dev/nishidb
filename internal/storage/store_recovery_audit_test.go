@@ -43,7 +43,7 @@ func audOpen(t *testing.T, opts Options) *Store {
 // demais sem o helper.
 func mustGetAud(t *testing.T, s *Store, key string) types.Record {
 	t.Helper()
-	rec, _, ok, err := s.GetByKey([]byte(key), nil)
+	rec, _, ok, err := s.GetByKey(s.AbreSnapshot(), []byte(key), nil)
 	if err != nil || !ok {
 		t.Fatalf("GetByKey(%q): (ok=%v, err=%v)", key, ok, err)
 	}
@@ -88,7 +88,7 @@ func TestReplayReinsereKeyComPrimaryAtrasDasLocations(t *testing.T) {
 	s2 := audOpen(t, opts)
 	defer s2.Close()
 	for _, k := range []string{"base", "tail-1", "tail-2"} {
-		rec, _, ok, err := s2.GetByKey([]byte(k), nil)
+		rec, _, ok, err := s2.GetByKey(s2.AbreSnapshot(), []byte(k), nil)
 		if err != nil || !ok {
 			t.Fatalf("GetByKey(%q) após replay com primary atrasada: (ok=%v, err=%v)", k, ok, err)
 		}
@@ -130,7 +130,7 @@ func TestOpenAposCrashAntesDoPrimeiroManifest(t *testing.T) {
 	}
 	defer s2.Close()
 	mustPut(t, s2, "pos-crash", 1, statusPayload(t, s2, "pos-crash", "Start", 1), nil)
-	if _, _, ok, err := s2.GetByKey([]byte("pos-crash"), nil); !ok || err != nil {
+	if _, _, ok, err := s2.GetByKey(s2.AbreSnapshot(), []byte("pos-crash"), nil); !ok || err != nil {
 		t.Fatalf("escrita após o recomeço: (ok=%v, err=%v)", ok, err)
 	}
 }
@@ -294,7 +294,7 @@ func TestReplayUsaOMesmoCodePathDoWritePath(t *testing.T) {
 		}
 		// Dois updates: viram garbage no mesmo segmento.
 		for _, k := range []string{"cp-0", "cp-1"} {
-			prev, _, ok, err := s.GetByKey([]byte(k), nil)
+			prev, _, ok, err := s.GetByKey(s.AbreSnapshot(), []byte(k), nil)
 			if err != nil || !ok {
 				t.Fatal(err)
 			}
@@ -417,7 +417,7 @@ func TestRotacaoSeguinteAposAdotarOrfao(t *testing.T) {
 	}
 	for i := 0; i <= 10; i++ {
 		k := fmt.Sprintf("rot-%d", i)
-		if _, _, ok, err := s2.GetByKey([]byte(k), nil); !ok || err != nil {
+		if _, _, ok, err := s2.GetByKey(s2.AbreSnapshot(), []byte(k), nil); !ok || err != nil {
 			t.Fatalf("GetByKey(%q) após a rotação: (ok=%v, err=%v)", k, ok, err)
 		}
 	}
@@ -434,7 +434,7 @@ func TestPhantomCommitEmUpdateMaterializaEstadoNovo(t *testing.T) {
 	if err := s.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
-	prev, _, ok, err := s.GetByKey([]byte("phu"), nil)
+	prev, _, ok, err := s.GetByKey(s.AbreSnapshot(), []byte("phu"), nil)
 	if err != nil || !ok {
 		t.Fatal(err)
 	}
@@ -448,7 +448,7 @@ func TestPhantomCommitEmUpdateMaterializaEstadoNovo(t *testing.T) {
 
 	s2 := audOpen(t, opts)
 	defer s2.Close()
-	rec, _, ok, err := s2.GetByKey([]byte("phu"), nil)
+	rec, _, ok, err := s2.GetByKey(s2.AbreSnapshot(), []byte("phu"), nil)
 	if err != nil || !ok || rec.RowID != id || rec.Sequence != 2 {
 		t.Fatalf("o update órfão deveria estar visível pós-restart: (%+v, ok=%v, err=%v)", rec, ok, err)
 	}

@@ -265,7 +265,7 @@ func TestSpec105QueueBackpressure(t *testing.T) {
 // convergência antes e depois de um reprocessamento.
 func leEstado(t *testing.T, b *bancada, id string) string {
 	t.Helper()
-	rec, _, ok, err := b.st.GetByKey([]byte(id), nil)
+	rec, _, ok, err := b.st.GetByKey(b.st.AbreSnapshot(), []byte(id), nil)
 	if err != nil {
 		t.Fatalf("GetByKey(%q): %v", id, err)
 	}
