@@ -145,6 +145,15 @@ type Config struct {
 			// entregaria a consulta interativa no lugar dela.
 			MaxLongRunning    *int   `yaml:"maxLongRunning"`
 			MaxBufferPerQuery string `yaml:"maxBufferPerQuery"`
+			// SnapshotMaxBytes é o teto de heap do journal de VERSÕES: a
+			// memória que o isolamento de leitura pode reter enquanto
+			// consultas estão abertas. Ele completa o orçamento do §80 —
+			// maxBufferPerQuery limita o que UMA consulta bufferiza, e este
+			// limita o que TODAS elas juntas fazem o writer segurar.
+			//
+			// Estourado, é a consulta mais antiga que é invalidada
+			// (SNAPSHOT_TOO_OLD), nunca a ingestão que é barrada.
+			SnapshotMaxBytes string `yaml:"snapshotMaxBytes"`
 		} `yaml:"query"`
 	} `yaml:"runtime"`
 
@@ -183,6 +192,7 @@ type Config struct {
 	maxLongRunning     int
 	memoryTarget       int64
 	maxBufferPerQuery  int64
+	snapshotMaxBytes   int64
 	minimumLiveRatio   float64
 	expiracaoMax       int
 	expiracaoTempo     time.Duration
@@ -224,6 +234,11 @@ const (
 	// outro cliente.
 	memoryTargetPadrao      = 512 << 20
 	maxBufferPerQueryPadrao = 4 << 20
+	// snapshotMaxBytesPadrao são ~2,7 milhões de versões retidas: folga larga
+	// para o relatório de minutos que a consulta longa serve, e pequeno o
+	// bastante para que uma consulta esquecida seja RECUSADA em vez de
+	// competir com o 1 GiB de RSS do §97.
+	snapshotMaxBytesPadrao = 64 << 20
 
 	// Defaults da coleta de expiração. Mil marcações por passada a 452 ev/s
 	// do piloto são ~136 KB escritos por passada — ruído perto da ingestão —,
@@ -373,6 +388,28 @@ func CarregaConfig(path string) (*Config, error) {
 	}
 	if c.maxBufferPerQuery, err = units.Tamanho(c.Runtime.Query.MaxBufferPerQuery, maxBufferPerQueryPadrao); err != nil {
 		return nil, fmt.Errorf("configuração %s: runtime.query.maxBufferPerQuery: %w", path, err)
+	}
+	// O DEFAULT escala com o orçamento do processo, e é isso que o separa de
+	// uma constante: num processo de 8 MiB, um journal de 64 MiB não é um teto
+	// — é o orçamento inteiro entregue a uma consulta. Um oitavo do
+	// memoryTarget, limitado pelo teto absoluto, dá uma folga proporcional em
+	// qualquer tamanho de máquina.
+	//
+	// Ele também não pode RECUSAR a subida: uma configuração que hoje sobe tem
+	// de continuar subindo depois de a chave existir, e derrubar o processo por
+	// causa de um valor que o operador nunca escreveu é o oposto de "config
+	// recusa na subida, nunca ignora em silêncio" — não há nada que ele tenha
+	// declarado para recusar.
+	padrao := min(int64(snapshotMaxBytesPadrao), c.memoryTarget/8)
+	if c.snapshotMaxBytes, err = units.Tamanho(c.Runtime.Query.SnapshotMaxBytes, padrao); err != nil {
+		return nil, fmt.Errorf("configuração %s: runtime.query.snapshotMaxBytes: %w", path, err)
+	}
+	// A recusa vale só para o valor DECLARADO, pela razão acima.
+	if c.Runtime.Query.SnapshotMaxBytes != "" && c.snapshotMaxBytes > c.memoryTarget {
+		return nil, fmt.Errorf(
+			"configuração %s: runtime.query.snapshotMaxBytes (%d bytes) acima de runtime.memoryTarget "+
+				"(%d bytes): o journal de versões sozinho estouraria o orçamento do processo",
+			path, c.snapshotMaxBytes, c.memoryTarget)
 	}
 	if c.maxBufferPerQuery > c.memoryTarget {
 		// Um teto por consulta acima do orçamento do processo é uma promessa
@@ -534,6 +571,10 @@ func (c *Config) MemoryTarget() int64 { return c.memoryTarget }
 
 // MaxBufferPerQuery é o teto de buffer de UMA consulta (§80). Ver MemoryTarget.
 func (c *Config) MaxBufferPerQuery() int64 { return c.maxBufferPerQuery }
+
+// SnapshotMaxBytes é o teto de heap do journal de versões do isolamento de
+// leitura. Chega ao Store por storage.Options.SnapshotMaxBytes.
+func (c *Config) SnapshotMaxBytes() int64 { return c.snapshotMaxBytes }
 
 // BindExposto diz se o servidor vai escutar fora do loopback.
 //

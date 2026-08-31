@@ -40,6 +40,7 @@ TOO_MANY_LONG_QUERIES = "TOO_MANY_LONG_QUERIES"
 TIMEOUT = "TIMEOUT"
 MAX_ROWS_EXCEEDED = "MAX_ROWS_EXCEEDED"
 ROW_TOO_LARGE = "ROW_TOO_LARGE"
+SNAPSHOT_TOO_OLD = "SNAPSHOT_TOO_OLD"
 DATASET_CORRUPT = "DATASET_CORRUPT"
 INTERNAL = "INTERNAL"
 UNAUTHENTICATED = "UNAUTHENTICATED"
@@ -199,6 +200,12 @@ CODIGOS: dict[str, type[Warning] | type[Error]] = {
     COMPACTION_BUSY: OperationalError,
     REQUEST_TOO_LARGE: OperationalError,
     ROW_TOO_LARGE: OperationalError,
+    # SNAPSHOT_TOO_OLD é falha de RECURSO do servidor, não do SQL nem do dado:
+    # o isolamento não conseguiu guardar o passado até o fim da consulta.
+    # OperationalError é a classe da PEP 249 para isso, e é a mesma dos outros
+    # tetos — a diferença é que aqui repetir de fato resolve, porque a consulta
+    # nova abre um snapshot que ainda não retém nada.
+    SNAPSHOT_TOO_OLD: OperationalError,
     WRITER_FAILED: OperationalError,
     # Credencial recusada e papel insuficiente não têm classe própria na PEP
     # 249; OperationalError é onde ela documenta "authentication error".

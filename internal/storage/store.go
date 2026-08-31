@@ -44,6 +44,17 @@ var (
 	ErrDatasetClosed = errors.New("storage: dataset fechado")
 
 	ErrWriterFailed = types.ErrWriterFailed
+
+	// ErrSnapshotExpirado indica consulta cujo universo o dataset não consegue
+	// mais reconstruir: o journal de versões estourou o teto de memória e as
+	// versões que ela veria foram descartadas.
+	//
+	// É ERRO, e não uma degradação silenciosa para a versão corrente, porque
+	// as duas respostas são indistinguíveis para o cliente e só uma delas é
+	// verdadeira. Um resultado que mistura estados sem avisar é o único
+	// desfecho que o isolamento não pode ter — quem pediu isolamento precisa
+	// saber quando não o recebeu.
+	ErrSnapshotExpirado = errors.New("storage: snapshot expirado: o journal de versões estourou o teto de memória")
 )
 
 // ErrDatasetCorrupt indica dataset que a recovery não consegue recuperar
@@ -158,6 +169,14 @@ type Options struct {
 	// para o dia, e é o que faz a migração da forma escalar não mudar
 	// comportamento nenhum.
 	DuracaoDeFundo time.Duration
+	// SnapshotMaxBytes é o teto de heap do journal de versões — a memória que
+	// o isolamento de leitura pode reter enquanto consultas estão abertas.
+	//
+	// Zero usa o padrão. Estourado o teto, é a CONSULTA mais antiga que é
+	// invalidada, nunca a ingestão que é barrada: o dataset existe para
+	// ingerir, e uma consulta recusada com código próprio é um resultado que o
+	// cliente sabe tratar.
+	SnapshotMaxBytes int64
 	// CampoDeEscrita é o NOME do campo de sistema que carrega o instante da
 	// escrita, resolvido pelo dicionário do próprio dataset durante o Open.
 	// Obrigatório quando TTLAtivo: é dele que o applyRecord tira o valor,
@@ -1472,6 +1491,9 @@ func (s *Store) GetByKey(snap types.Snapshot, key, buf []byte) (types.Record, []
 		return types.Record{}, buf, false, err
 	}
 	defer s.sai()
+	if !s.snaps.valido(snap.Epoca) {
+		return types.Record{}, buf, false, ErrSnapshotExpirado
+	}
 	rec, out, exists, live, err := s.lookup(key, buf, snap)
 	if err != nil || !exists || !live {
 		return types.Record{}, out, false, err
@@ -1514,6 +1536,9 @@ func (s *Store) GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (typ
 		return types.Record{}, buf, false, err
 	}
 	defer s.sai()
+	if !s.snaps.valido(snap.Epoca) {
+		return types.Record{}, buf, false, ErrSnapshotExpirado
+	}
 	// Par (Get, Read) sob a barreira de aposentadoria: ver o godoc de aposMu.
 	s.aposMu.RLock()
 	defer s.aposMu.RUnlock()
@@ -1844,6 +1869,7 @@ func (s *Store) applyRecord(a recordApply) error {
 		if s.snaps.menorEpocaViva() != versoes.SemLeitor {
 			if anterior, tinha := s.locs.Get(a.rowID); tinha {
 				s.vers.Registra(a.rowID, anterior, s.epocaPub.Load()+1)
+				s.invalidaOMaisAntigoSeEstourou()
 			}
 		}
 	}

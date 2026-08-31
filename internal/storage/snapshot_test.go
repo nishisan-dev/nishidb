@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 	"github.com/nishisan-dev/nishidb/internal/types"
 	"testing"
@@ -415,5 +416,42 @@ func TestRetencaoNaoUltrapassaOPisoDoSnapshotVivo(t *testing.T) {
 	res = passada(t, hist, LimitesDeRetencao{ExpireAfterWrite: 30 * time.Minute})
 	if res.MarcaAvancou != 20 {
 		t.Errorf("a marca avançou %d depois de a consulta fechar, quero 20: a retenção não recuperou o alcance", res.MarcaAvancou)
+	}
+}
+
+// O TETO DO JOURNAL, e o que acontece quando ele estoura.
+//
+// O isolamento retém memória proporcional a (taxa de escrita × duração da
+// consulta mais longa viva). Sem teto, uma consulta longa esquecida derruba o
+// processo — e derrubar o processo é pior que qualquer resposta.
+//
+// A escolha, quando estoura, é entre parar a INGESTÃO e recusar a CONSULTA. É a
+// consulta que perde: a ingestão é o que o dataset existe para fazer, e uma
+// consulta recusada com código próprio é um resultado que o cliente sabe
+// tratar. Recusar em silêncio, devolvendo a versão corrente, seria o único
+// desfecho inaceitável — o cliente receberia um resultado que não corresponde a
+// instante nenhum sem nunca saber disso.
+func TestSnapshotQueEstouraOTetoEhInvalidadoEAIngestaoContinua(t *testing.T) {
+	s := openStore(t, Options{SnapshotMaxBytes: 48}) // duas versões cabem
+	id, _ := mustPut(t, s, "A", 1, statusPayload(t, s, "A", "T0", 1), nil)
+
+	snap := s.AbreSnapshot()
+	defer s.FechaSnapshot(snap)
+
+	// Cada atualização retém uma versão. A quarta estoura o teto.
+	for seq := int64(2); seq <= 5; seq++ {
+		if _, _, err := s.Put([]byte("A"), seq, 0, statusPayload(t, s, "A", "v", seq), nil); err != nil {
+			t.Fatalf("a ingestão PAROU por causa de uma consulta (seq %d): %v", seq, err)
+		}
+	}
+
+	if _, _, _, err := s.GetByRowID(snap, id, nil); !errors.Is(err, ErrSnapshotExpirado) {
+		t.Errorf("GetByRowID = %v, quero ErrSnapshotExpirado: o snapshot invalidado respondeu como se ainda valesse", err)
+	}
+
+	// A contraprova: uma consulta nova continua funcionando. Sem ela, um Store
+	// que passasse a recusar TUDO passaria na asserção acima.
+	if _, _, ok, err := s.GetByRowID(s.presente(), id, nil); err != nil || !ok {
+		t.Errorf("consulta nova: ok=%v err=%v; o teto derrubou o dataset inteiro, não só o snapshot velho", ok, err)
 	}
 }

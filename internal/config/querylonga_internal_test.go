@@ -207,3 +207,46 @@ func TestMaxBufferPerQueryAcimaDoMemoryTargetEhRecusado(t *testing.T) {
 		t.Fatalf("orçamento por consulta igual ao do processo tem de ser aceito: %v", err)
 	}
 }
+
+// A chave do teto do journal de versões segue a política de config do projeto:
+// ausente usa o padrão, presente e fora de faixa é RECUSADO na subida — nunca
+// arredondado, que faria o operador acreditar ter configurado o que não
+// configurou.
+func TestSnapshotMaxBytesAusenteUsaOPadraoEAcimaDoMemoryTargetRecusa(t *testing.T) {
+	// Com o memoryTarget padrão (512 MiB), um oitavo dá 64 MiB — o teto
+	// absoluto. É o caso comum, e o que o operador vê sem declarar nada.
+	c, err := CarregaConfig(escreveConfig(t, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.SnapshotMaxBytes(); got != snapshotMaxBytesPadrao {
+		t.Errorf("SnapshotMaxBytes ausente = %d, quero o padrão %d", got, snapshotMaxBytesPadrao)
+	}
+
+	// Num processo pequeno o padrão ENCOLHE junto, e não derruba a subida: uma
+	// configuração que sobe hoje tem de continuar subindo depois de a chave
+	// existir.
+	c, err = CarregaConfig(escreveConfig(t, "runtime:\n  memoryTarget: 8MiB\n"))
+	if err != nil {
+		t.Fatalf("o padrão do journal derrubou a subida de um processo pequeno: %v", err)
+	}
+	if got := c.SnapshotMaxBytes(); got != 1<<20 {
+		t.Errorf("SnapshotMaxBytes com memoryTarget de 8MiB = %d, quero 1MiB (um oitavo)", got)
+	}
+
+	c, err = CarregaConfig(escreveConfig(t, "runtime:\n  query:\n    snapshotMaxBytes: 128MiB\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.SnapshotMaxBytes(); got != 128<<20 {
+		t.Errorf("SnapshotMaxBytes = %d, quero 128MiB", got)
+	}
+
+	// Acima do memoryTarget, o journal sozinho estouraria o orçamento do
+	// processo inteiro — é a mesma recusa que o maxBufferPerQuery já faz, e
+	// pela mesma razão: um teto que não cabe no teto de cima não é teto.
+	_, err = CarregaConfig(escreveConfig(t, "runtime:\n  memoryTarget: 64MiB\n  query:\n    snapshotMaxBytes: 128MiB\n"))
+	if err == nil {
+		t.Error("snapshotMaxBytes acima do memoryTarget foi ACEITO: o journal sozinho estouraria o orçamento do processo")
+	}
+}

@@ -48,6 +48,10 @@ type registroDeSnapshots struct {
 	// um leitor com o piso congelado sobre um segmento removido passaria de
 	// "não vê a linha" para "erra ao lê-la". SemPiso quando não há leitor.
 	menorBase atomic.Uint64
+	// epocaMinimaValida é a fronteira da invalidação: snapshot com época ABAIXO
+	// dela teve as suas versões descartadas pelo teto de memória e não pode
+	// mais ser servido. Só avança, e só sob a pressão do teto.
+	epocaMinimaValida atomic.Uint64
 }
 
 // SemPiso é o valor de menorBase sem consulta aberta: nada a segurar, e a
@@ -118,6 +122,32 @@ func (r *registroDeSnapshots) recalculaLocked() {
 	r.menor.Store(menor)
 	r.menorInstante.Store(menorMs)
 	r.menorBase.Store(menorBase)
+}
+
+// invalidaAte marca como não-servíveis todos os snapshots de época abaixo de
+// `epoca`. Monotônico: a fronteira nunca desce.
+func (r *registroDeSnapshots) invalidaAte(epoca uint64) {
+	for {
+		atual := r.epocaMinimaValida.Load()
+		if epoca <= atual || r.epocaMinimaValida.CompareAndSwap(atual, epoca) {
+			return
+		}
+	}
+}
+
+// esquece retira a época inteira da contagem de vivos — todos os leitores dela
+// de uma vez. É o que a invalidação por teto faz: os snapshots continuam
+// existindo do lado do dono, mas deixam de segurar versão nenhuma.
+func (r *registroDeSnapshots) esquece(epoca uint64) {
+	r.mu.Lock()
+	delete(r.porEpoca, epoca)
+	r.recalculaLocked()
+	r.mu.Unlock()
+}
+
+// valido responde se um snapshot ainda pode ser servido.
+func (r *registroDeSnapshots) valido(epoca uint64) bool {
+	return epoca >= r.epocaMinimaValida.Load()
 }
 
 // instanteMaisAntigoVivo devolve o relógio do snapshot mais antigo aberto, e
@@ -222,3 +252,52 @@ func (s *Store) relogioDaExpiracaoOportunista() time.Time {
 // marca-d'água: o piso do snapshot mais antigo vivo, ou SemPiso quando não há
 // consulta nenhuma.
 func (s *Store) pisoDaRetencao() uint64 { return s.snaps.menorBase.Load() }
+
+// snapshotMaxBytesPadrao é o teto de heap do journal de versões quando o
+// dataset não declara um.
+//
+// 64 MiB são cerca de 2,7 milhões de versões retidas — folga larga para o
+// relatório de minutos que a consulta longa existe para servir, e pequeno o
+// bastante para que uma consulta esquecida seja RECUSADA em vez de competir
+// com o 1 GiB de RSS que o produto inteiro se propõe a caber (§97). É o mesmo
+// critério do sortMemoryPadrao do executor.
+const snapshotMaxBytesPadrao = 64 << 20
+
+// invalidaOMaisAntigoSeEstourou devolve memória quando o journal passa do teto,
+// invalidando a consulta mais antiga.
+//
+// Roda no caminho do writer, logo depois de registrar uma versão, e é o único
+// lugar que avança a fronteira de invalidação. A escolha da VÍTIMA é a consulta
+// mais antiga por dois motivos que apontam para o mesmo lado: ela é a que mais
+// versões segura (o journal retém tudo publicado desde que ela abriu) e a que
+// há mais tempo não entrega resultado.
+//
+// Invalidar não é o mesmo que fechar: o snapshot continua registrado, e é o
+// Close do dono que o retira. Fechá-lo aqui faria o Fecha do dono derrubar a
+// contagem de um leitor que já não existe.
+func (s *Store) invalidaOMaisAntigoSeEstourou() {
+	teto := s.opts.SnapshotMaxBytes
+	if teto <= 0 {
+		teto = snapshotMaxBytesPadrao
+	}
+	for s.vers.Bytes() > teto {
+		menor := s.snaps.menorEpocaViva()
+		if menor == versoes.SemLeitor {
+			// Journal acima do teto sem leitor nenhum: não há consulta a
+			// invalidar, e a poda comum resolve. Acontece na janela entre o
+			// último Fecha e a poda dele.
+			s.vers.Poda(versoes.SemLeitor)
+			return
+		}
+		// A fronteira sobe para DEPOIS da vítima: tudo que ela via, e só ela,
+		// deixa de ser servível.
+		s.snaps.invalidaAte(menor + 1)
+		s.snaps.esquece(menor)
+		if antes := s.vers.Entradas(); s.vers.Poda(s.snaps.menorEpocaViva()) == 0 && antes == s.vers.Entradas() {
+			// Nada saiu: insistir seria laço infinito. Acontece quando o
+			// journal está cheio de versões que o PRÓPRIO leitor seguinte
+			// ainda alcança, e aí o teto já não tem o que devolver.
+			return
+		}
+	}
+}

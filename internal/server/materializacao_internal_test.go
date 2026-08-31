@@ -1,12 +1,16 @@
 package server
 
 import (
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/materializer"
 	"github.com/nishisan-dev/nishidb/internal/metrics"
+	"github.com/nishisan-dev/nishidb/internal/protocolo"
 	"github.com/nishisan-dev/nishidb/internal/schema"
+	"github.com/nishisan-dev/nishidb/internal/storage"
 )
 
 // specComPoliticas descreve um dataset que usa as três políticas de escrita
@@ -119,5 +123,28 @@ func TestAmostrasDeMaterializacaoPublicamAsSeries(t *testing.T) {
 		if got, ok := valores[nome]; !ok || got != v {
 			t.Errorf("%s = %v (presente=%v), quero %v", nome, got, ok, v)
 		}
+	}
+}
+
+// O snapshot invalidado pelo teto tem de sair no wire com CÓDIGO PRÓPRIO, e é
+// aqui que ele se separa do INTERNAL.
+//
+// A distinção não é cosmética: INTERNAL manda o operador procurar um bug do
+// servidor, e não há bug nenhum — é um teto de memória sendo aplicado, com
+// ação do cliente (repetir, que abre um snapshot novo) e do operador (subir
+// runtime.query.snapshotMaxBytes). É a mesma razão pela qual o ROW_TOO_LARGE
+// ganhou código próprio quando o orçamento de buffer passou a ser aplicado.
+func TestSnapshotExpiradoSaiComCodigoProprioENaoComoInterno(t *testing.T) {
+	// O erro chega embrulhado, como chega de verdade: o executor o propaga
+	// pelo it.Err() depois de o storage o devolver na leitura de uma row.
+	err := fmt.Errorf("executor: leitura da row 42: %w", storage.ErrSnapshotExpirado)
+
+	if got := codigoDeErroDeQuery(err); got != protocolo.CodSnapshotExpirado {
+		t.Errorf("codigoDeErroDeQuery = %q, quero %q", got, protocolo.CodSnapshotExpirado)
+	}
+	// A contraprova: um erro qualquer continua caindo em INTERNAL. Sem ela, um
+	// mapeamento que devolvesse SNAPSHOT_TOO_OLD para tudo passaria acima.
+	if got := codigoDeErroDeQuery(errors.New("qualquer outra coisa")); got != protocolo.CodInterno {
+		t.Errorf("codigoDeErroDeQuery de um erro genérico = %q, quero %q", got, protocolo.CodInterno)
 	}
 }
