@@ -12,10 +12,11 @@ O runbook operacional vive no servidor, em `/app/nishidb/RUNBOOK.md`.
 | Item | Valor |
 |---|---|
 | Host | `10.200.20.218`, `/app/nishidb`, unit `nishidb.service` |
-| Tópico | `events`, **1 partição**, group `nishidb-events-piloto` |
+| Binário | `/app/nishidb/current/nishidb` (symlink para `releases/<versão>/`) |
+| Tópico | `events`, **1 partição**, group `nishidb-events-piloto-1` |
 | Brokers | `10.113.144.229, .230, .237, .238:9093` (texto claro, sem TLS) |
 | Chave | `identifier`, `mode: merge`, **sem `sequence`** |
-| Bind | `127.0.0.1:9142` — sem autenticação, loopback é a única proteção |
+| Bind | `127.0.0.1:9142` (leitura, sem credencial) e `127.0.0.1:9143` (TLS + Basic auth) — nada exposto à rede |
 
 ## As três medições que contrariaram a previsão
 
@@ -850,3 +851,40 @@ O `scripts/nishidb-stats.py` desliga a descoberta de proxy por construção
 ```bash
 curl -s --noproxy '*' 127.0.0.1:9142/v1/stats
 ```
+
+## A sétima medição: o índice por segmento em produção (30-31/08/2026)
+
+A subida do `v0.6.0-250-ge13a6dd` em 30/08 às 11:52 trocou os dois motores
+globais de índice pelo índice por segmento, com o dataset de 135 GiB migrado
+**no lugar** (manifest v2 → v3, irreversível). O YAML precisou de duas mudanças
+que só o ensaio revelou — as 10 declarações `index: hash`/`index: bitmap`
+viraram `index: true`, e o `history` ganhou `index: {window: 6h, maxBytes:
+2GiB}` — e `node` voltou a ser indexado no histórico, desfazendo o paliativo de
+28/08.
+
+O registro da subida está em
+[`piloto-pos-ciclo-20260830.md`](../benchmark/baselines/piloto-pos-ciclo-20260830.md)
+e o aceite completo, com as 25 horas de soak, em
+[`aceite-indice-por-segmento.md`](aceite-indice-por-segmento.md). O que fica
+aqui é o que muda a leitura deste piloto:
+
+- **O congelamento acabou.** `poll_blocked` ficou em **0,0 durante as 25 h**
+  — nas 273 amostras do soak, sem exceção. Na madrugada anterior à subida o
+  mesmo contador crescia 1:1 com o relógio havia dezoito minutos.
+- **A taxa que se lê mudou de significado.** 332–375 ev/s com `lag ≈ 0` é o
+  tópico sendo acompanhado em tempo real; os 733 ev/s do binário antigo eram
+  o sistema correndo atrás do atraso que os próprios congelamentos criavam.
+  Por CPU: 863 µs/evento contra 2.360 µs do binário antigo no mesmo dataset —
+  2,7× menos.
+- **O índice parou de crescer.** A parcela por segmento oscilou entre 102 e
+  127 MB com a janela de 6 h reciclando (`selado` 56–69, `fora` 402 → 633),
+  contra o teto de 2 GiB. O `nishidb_history_index_bytes` total continua
+  subindo — são os arquivos densos por-linha da história, que acumulam até a
+  marca-d'água dos 15 dias de retenção; é comportamento anterior a este ciclo
+  e a série da janela não o governa.
+- **RSS pede decomposição, não susto:** ~869 MiB totais ao fim, dos quais
+  **126 MB anônimos** (heap) — o resto é page cache de mmap que o kernel
+  recolhe sob pressão, e este host tem 57 GiB livres.
+- Os únicos erros das 25 h foram **5 `query.falhou`** por TIMEOUT de `ORDER
+  BY` sobre milhões de candidatos — o tema do ciclo da consulta longa, que
+  este piloto continua evidenciando a cada consulta grande.

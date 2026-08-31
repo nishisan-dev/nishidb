@@ -399,6 +399,15 @@ lag **zerados**. A migração dos segmentos dentro da janela drenou sozinha em
 segmentos fora da janela **não foram tocados** — é a janela que torna a
 migração barata.
 
+O soak de **25 horas** que fechou o aceite
+([`docs/aceite-indice-por-segmento.md`](aceite-indice-por-segmento.md)) provou
+o regime: `poll_blocked` em **0,0 nas 273 amostras**, nenhum congelamento,
+**863 µs/evento** contra 2.360 µs do binário antigo no mesmo dataset (2,7×
+menos CPU), a parcela de índice **oscilando entre 102 e 127 MB** com a janela
+de 6 h reciclando — parou de crescer, que era o aceite secundário — e heap
+anônimo estável em **126 MB** (o resto do RSS é page cache de mmap, que o
+kernel governa).
+
 **Um writer, muitos leitores — DENTRO do processo.** O writer é serializado por
 mutex; as leituras são concorrentes com ele. O `Close` faz **quiesce**: espera
 as operações em voo e só então libera o lock do dataset, e todo iterador
