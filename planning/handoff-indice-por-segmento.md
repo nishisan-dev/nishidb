@@ -1,8 +1,15 @@
 # Handoff — subsistema 1: índice por segmento
 
-Estado em 30/08/2026, 14h. Branch `feature/indice-por-segmento`.
-**16 das 17 tarefas fechadas. Falta a 17 (docs + aceite) e o fechamento da branch.**
-O piloto está no ar com este código há 2h, saudável.
+Estado em 31/08/2026, 13h. Branch `feature/indice-por-segmento`.
+**17 de 17 tarefas fechadas. O aceite está escrito
+(`docs/aceite-indice-por-segmento.md`): 25 h de soak em produção, ACEITO.**
+A revisão de branch rodou em duas rodadas (23 + 11 agentes) e fechou três
+corridas de falso negativo com prova por mutação (commits `bf384c5..eca97fd`);
+o binário soakado NÃO as contém — a release as leva. A descrição da release
+está pronta em `planning/release-descricao-indice-por-segmento.md`. O que
+resta é o ato de fechar a branch (merge/release, decisão do dono).
+
+*(O texto abaixo é o handoff original de 30/08, mantido como registro.)*
 
 ## O que este ciclo faz
 
@@ -57,7 +64,7 @@ lembre de tê-los criado. **Leia-o antes de decidir qualquer coisa.**
 | 14 | Laço de reconstrução — **fecha o débito 22** | ✅ |
 | 15 | Disciplina de mutação (`docs/mutacoes-indice-por-segmento.md`) | ✅ zero das 7 escaparam |
 | 16 | Métricas | ✅ (2 rodadas de correção; 20 achados) |
-| 17 | **Docs + aceite no piloto** | ❌ **É O QUE FALTA** |
+| 17 | **Docs + aceite no piloto** | ✅ (31/08: soak de 25 h, aceite escrito) |
 | extra | Doutrina de verificação (branch do usuário, integrada e consertada) | ✅ |
 
 ## O que fazer, em ordem
