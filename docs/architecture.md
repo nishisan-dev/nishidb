@@ -716,6 +716,14 @@ o cliente sabe tratar. Degradar em silêncio para a versão corrente seria o
 único desfecho inaceitável — as duas respostas são indistinguíveis no wire e só
 uma é verdadeira.
 
+**O que ele custa, medido.** A ingestão não regrediu: `BenchmarkApplyIngestReal`
+sai de 32,3 µs para 28,5 µs por evento (dentro do ruído da bancada), com os
+mesmos 0 allocs/op — sem consulta aberta, o journal não recebe nada. A leitura
+paga 3,5% no full scan: `BenchmarkFullScan1k` sai de 634,5 µs para 656,9 µs,
+medido alternando as duas árvores no mesmo diretório de bancada com o dataset
+recriado a cada troca. São ~22 ns por linha varrida, e a causa não foi isolada
+— está registrada como débito 106, com o que já foi descartado por medição.
+
 **O que fica de fora, e é semântica pretendida:** o journal é heap e morre com
 o processo, então consulta não atravessa reinício; a tabela histórica não
 versiona (linhas só nascem); e o `_meta` ignora o snapshot por já ser um

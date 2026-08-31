@@ -15,6 +15,7 @@ package versoes
 import (
 	"math"
 	"sync"
+	"sync/atomic"
 
 	"github.com/nishisan-dev/nishidb/internal/storage/rowindex"
 	"github.com/nishisan-dev/nishidb/internal/types"
@@ -56,6 +57,18 @@ type Cadeias struct {
 	// passado de alguém.
 	pin map[uint32]int
 	n   int
+	// vivas espelha n para leitura SEM LOCK, e existe por causa do caminho
+	// quente: Em é chamado a CADA linha varrida, e o caso dominante é o
+	// journal vazio — nenhuma consulta concorrente com escrita. Sem o
+	// atômico, toda linha de todo full scan pagaria um RLock e um lookup de
+	// mapa para descobrir que não há nada a descobrir.
+	//
+	// Ele pode estar momentaneamente atrasado em relação a n, e isso é seguro
+	// na única direção que importa: ele é escrito DENTRO do mesmo mu que
+	// protege n, então um leitor que veja zero está vendo um estado em que o
+	// journal esteve vazio — e nesse estado a location corrente é a resposta
+	// certa para qualquer época.
+	vivas atomic.Int64
 }
 
 // Novas devolve um journal vazio.
@@ -78,8 +91,17 @@ func (c *Cadeias) Registra(row types.RowID, packedAnterior, epoca uint64) {
 	c.porRow[row] = append(c.porRow[row], versao{epoca: epoca, packed: packedAnterior})
 	c.pin[seg]++
 	c.n++
+	c.vivas.Store(int64(c.n))
 	c.mu.Unlock()
 }
+
+// Vazio responde se não há versão retida nenhuma — o estado de todo dataset
+// sem consulta concorrente com escrita.
+//
+// É método próprio, e minúsculo de propósito: ele fica no caminho por LINHA de
+// todo full scan, e um corpo que o compilador não inline põe uma chamada de
+// função onde bastava um load.
+func (c *Cadeias) Vazio() bool { return c.vivas.Load() == 0 }
 
 // Em devolve a location que a linha tinha na época dada, e achou=false quando
 // a location CORRENTE já é a certa para esse leitor.
@@ -89,6 +111,11 @@ func (c *Cadeias) Registra(row types.RowID, packedAnterior, epoca uint64) {
 // aparecer — erra em toda linha atualizada duas vezes durante a mesma consulta,
 // que é o caso que nenhum teste de uma atualização só distingue.
 func (c *Cadeias) Em(row types.RowID, epoca uint64) (uint64, bool) {
+	// Saída sem lock para o caso dominante: journal vazio, que é o estado de
+	// todo dataset sem consulta concorrente com escrita. Ver o campo `vivas`.
+	if c.vivas.Load() == 0 {
+		return 0, false
+	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	vs := c.porRow[row]
@@ -136,6 +163,7 @@ func (c *Cadeias) Poda(menorEpocaViva uint64) int {
 		c.porRow[row] = resto
 	}
 	c.n -= saíram
+	c.vivas.Store(int64(c.n))
 	return saíram
 }
 

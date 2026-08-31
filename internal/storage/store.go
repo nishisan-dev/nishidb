@@ -1456,7 +1456,11 @@ func (s *Store) lookup(key, buf []byte, snap types.Snapshot) (rec types.Record, 
 		// ela o point lookup responderia sobre o presente enquanto o resto da
 		// consulta responde sobre T0. A key não muda entre versões, então a
 		// validação de colisão logo abaixo continua valendo sobre a antiga.
-		packed, ok := s.vers.Em(rid, snap.Epoca)
+		var packed uint64
+		var ok bool
+		if !s.vers.Vazio() {
+			packed, ok = s.vers.Em(rid, snap.Epoca)
+		}
 		if !ok {
 			if packed, ok = s.locs.Get(rid); !ok {
 				// Slot da primary sem location (janela de crash): não é a row.
@@ -1551,7 +1555,13 @@ func (s *Store) GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (typ
 	// locs.Get e o lock dele é solto na saída da chamada: nada é segurado
 	// enquanto o aposMu está na mão, e o segmento apontado não pode ser
 	// aposentado porque o pin pertence ao snapshot vivo, não a esta leitura.
-	packed, ok := s.vers.Em(id, snap.Epoca)
+	var packed uint64
+	var ok bool
+	// O Vazio() na frente evita a chamada de Em no caso dominante — journal
+	// sem nada retido —, e é por linha varrida que isso conta.
+	if !s.vers.Vazio() {
+		packed, ok = s.vers.Em(id, snap.Epoca)
+	}
 	if !ok {
 		if packed, ok = s.locs.Get(id); !ok {
 			return types.Record{}, buf, false, nil
@@ -1575,7 +1585,7 @@ func (s *Store) GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (typ
 	// o payload que manda: ele é a fonte da verdade de que os índices são
 	// derivados (ver o godoc de rowindex.Escritas), então derivar daqui é a
 	// MESMA conta que o applyRecord faz, sobre a versão certa.
-	if s.venceuNaVersao(rec, snap.Instante) {
+	if s.escritas != nil && s.venceuNaVersao(rec, snap.Instante) {
 		return types.Record{}, out, false, nil
 	}
 	return rec, out, true, nil
