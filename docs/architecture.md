@@ -408,6 +408,23 @@ de 6 h reciclando — parou de crescer, que era o aceite secundário — e heap
 anônimo estável em **126 MB** (o resto do RSS é page cache de mmap, que o
 kernel governa).
 
+**A janela é barata na migração e cara na consulta, e as duas coisas são a
+mesma escolha.** Os 372 segmentos fora da janela não serem tocados é o que
+torna a migração de minutos; e é exatamente o que faz uma consulta sobre eles
+enumerar. No piloto isso ficou por meses invisível e custou um timeout que
+parecia de prazo: com `window: 6h` sobre um histórico de 15 dias, **667 de 733
+segmentos** respondiam por enumeração, e uma busca por chave indexada varria 90
+milhões de linhas. Subir o prazo de 30 s para 900 s mediu o problema três vezes
+sem resolvê-lo; alargar a janela levou a mesma consulta a **206 ms**. O registro
+completo, com as contas de custo, está em
+[`docs/piloto-events.md`](piloto-events.md).
+
+A regra que sai daí: **a janela do índice é uma declaração sobre o padrão de
+CONSULTA, não sobre o volume de dado.** Ela precisa cobrir o intervalo em que
+alguém vai buscar por chave; guardar 15 dias e indexar 6 horas é guardar o que
+não se consegue procurar. E o número que denuncia o descompasso já é publicado:
+`nishidb_index_segmentos{estado="fora"}` contra os demais estados.
+
 **Um writer, muitos leitores — DENTRO do processo.** O writer é serializado por
 mutex; as leituras são concorrentes com ele. O `Close` faz **quiesce**: espera
 as operações em voo e só então libera o lock do dataset, e todo iterador

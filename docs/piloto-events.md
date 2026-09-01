@@ -888,3 +888,170 @@ aqui é o que muda a leitura deste piloto:
 - Os únicos erros das 25 h foram **5 `query.falhou`** por TIMEOUT de `ORDER
   BY` sobre milhões de candidatos — o tema do ciclo da consulta longa, que
   este piloto continua evidenciando a cada consulta grande.
+
+## Snapshot de leitura, a janela do índice e a primeira purga (31/08–01/09/2026)
+
+Três coisas aconteceram nesta janela, e a ordem em que estão escritas não é a
+de importância: o que subiu foi o **snapshot de leitura com isolamento**, mas o
+que mudou a vida do piloto foi um achado que apareceu no caminho — **91% do
+histórico estava sem índice**, e ninguém sabia.
+
+### O que subiu
+
+`v0.6.0-281-g4ada9d8`, por troca de symlink com verificação automática
+(`nishidb-update.sh`), vindo de `v0.6.0-250-ge13a6dd`. Junto foram os 24
+commits da `main` que o piloto nunca tinha visto — em sua maioria documentação
+e gates do ciclo do índice por segmento, mais quatro correções de código do
+storage.
+
+A verificação pós-start fechou sozinha: health UP, versão confirmada, ingestão
+viva, `invalid_total` com Δ=0.
+
+**Soak de ~20 h sem reinício**, com 23,2 milhões de eventos ingeridos, lag do
+Kafka voltando a zero a cada oscilação e o heap anônimo estável entre **120 e
+130 MB** (o RSS total de 2,3–2,6 GB é page cache de mmap: `RssFile`, que o
+kernel recolhe sob pressão).
+
+As quatro séries novas nasceram com zero nos dois datasets, como o gate exige.
+
+### O achado: a janela do índice cobria 6 h de um dado que vive 15 dias
+
+A pergunta que destravou isto foi operacional — *"por que esta consulta dá
+timeout?"*:
+
+```sql
+SELECT node, alertKey, manager, firstSeen, lastSeen, summary, description, type, severity
+FROM events_history WHERE identifier = '<uma chave>';
+```
+
+`identifier` **é** declarado com `index: true` no histórico. O que a derrubava
+era o bloco `history.index`, com `window: 6h` contra `expireAfterWrite: 15d`:
+
+| | antes |
+|---|---|
+| Segmentos com índice | 65 selados + 1 corrente |
+| Segmentos **fora** da janela | **667** |
+| Lookups resolvidos por índice | 132 |
+| Lookups resolvidos por **enumeração** | **1330** |
+
+O prazo foi aumentado três vezes antes de a causa aparecer, e cada aumento
+mediu a mesma coisa por outro ângulo — a progressão é linear porque a consulta
+estava lendo o histórico inteiro, uma linha por vez:
+
+| Prazo | Candidatos varridos | Desfecho |
+|---|---:|---|
+| 30 s | 4.248.320 | timeout |
+| 600 s | 55.040.000 | timeout, 1 linha entregue |
+| 900 s | 81.187.072 | timeout, 1 linha entregue |
+| — | ~90.500.000 | seria preciso ~1000 s, e o histórico cresce |
+
+**A lição de método é a mesma da §1 deste documento, por outra porta:** subir o
+prazo mede o problema, não o resolve. O número que denunciava a causa já estava
+publicado — `nishidb_index_segmentos{estado="fora"}` em 667 — e ninguém o
+estava lendo.
+
+### O conserto, e o que ele custou
+
+`window: 6h` → `15d`. A reconstrução processou os **734 segmentos** em ~25
+minutos, em background, com o lock por segmento: o lag do Kafka oscilou (picos
+de ~500) e voltou a zero a cada vez. A ingestão nunca ficou para trás.
+
+| | estimado | medido |
+|---|---:|---:|
+| Índice do histórico | ~1,3 GB | **1,33 GB** |
+| Teto declarado (`index.maxBytes`) | | 2 GiB |
+| Segmentos fora da janela | | **0** |
+
+E a consulta que não terminava em 900 s:
+
+| | |
+|---|---:|
+| Logo após a reconstrução | **3,1 s** |
+| Com o cache quente, no dia seguinte | **206 ms** |
+
+Outras latências medidas na mesma rodada: lookup por `node` com 100 linhas em
+918 ms, consulta indexada no `events` em 181 ms, `_meta.fields` em 31 ms.
+
+### A primeira purga do histórico, e a interação que o snapshot introduziu
+
+O dataset bateu o teto de 250 GiB em 01/09 às 16:34, com o crescimento medido
+em 1,80 GB/h. A purga disparou sozinha e passou a devolver **um segmento
+(268 MB) por passada**, a cada ~5 minutos:
+
+```json
+{"event":"retencao.passada","porTempo":0,"porTamanho":1,
+ "indicesExpulsos":0,"bytes":268435279,"marcaDagua":118351}
+```
+
+Em ~1 h e 20 segmentos purgados, o dado ficou **ancorado no teto**, oscilando
+±30 MB em torno dele. Nenhum `retencao.sem_punch_hole`: o ext4 devolveu os
+blocos de verdade, e o teto não mente.
+
+**A interação com o snapshot foi exercitada de propósito**, porque as 17
+primeiras purgas rodaram sem consulta nenhuma em voo e o painel de isolamento
+marcava zero em tudo. Com uma varredura longa aberta sobre o histórico, a
+passada seguinte registrou:
+
+```json
+{"event":"retencao.marca_segurada_por_consulta",
+ "marca_pelo_prazo":2265975,"marca_aplicada":2150138,"linhas_seguradas":115837}
+```
+
+**115.837 linhas seguradas** — as que, antes deste ciclo, teriam desaparecido do
+meio do resultado sem erro e sem log. E a contraprova, que importa tanto quanto:
+fechada a consulta, a passada seguinte avançou livre para a marca 2.387.143 e
+devolveu os 268 MB. Segura enquanto precisa, libera assim que pode.
+
+Um achado de brinde, que não estava em teste nenhum: o cliente foi **morto
+abruptamente** no meio da varredura, e o snapshot voltou a zero mesmo assim — o
+servidor detectou a desconexão e devolveu o que estava retido.
+
+### A configuração que passou a valer
+
+Duas mudanças na config do servidor e uma no YAML do dataset:
+
+```yaml
+# nishidb.yaml
+runtime:
+  memoryTarget: 8GiB
+  query:
+    maxBufferPerQuery: 64MiB     # era 4 MiB (padrão)
+    snapshotMaxBytes: 512MiB     # teto do journal de versões
+query:
+  defaultTimeout: 900s           # era 30s
+
+# datasets/events.yaml
+history:
+  index:
+    window: 15d                  # era 6h
+```
+
+**Sobre o orçamento de memória, o que é honesto dizer:** o host tem 62 GB e 56
+deles já estavam em page cache servindo os 228 GB do dataset. Estas chaves
+governam o buffer da linha de **saída** — o que recusa uma consulta com
+`ROW_TOO_LARGE` —, e não a varredura. Elevá-las não acelera leitura; o que faz
+a leitura andar é o page cache, que não se configura por YAML.
+
+**Uma armadilha operacional que custou uma medição errada:** o host tem DOIS
+`nishidb.yaml`. O de `/app/nishidb/` é órfão do layout anterior a
+`releases/<versão>/`, ninguém o lê, e ele estava desatualizado em muito mais que
+o timeout — sem TLS e sem autenticação. O que vale é
+`/app/nishidb/current/nishidb.yaml`, apontado explicitamente no `ExecStart` da
+unit. A confirmação de qualquer prazo se faz pelo que o servidor **publica** em
+`/v1/metadata`, nunca pelo YAML que se encontra primeiro.
+
+### O que este ciclo NÃO provou
+
+- **Os dois tetos ainda não se encontraram.** O índice está em 1,68 GB contra o
+  teto de 2 GiB, e `indicesExpulsos` continua zero. Quando ele encostar, a
+  janela passará a expulsar por cima enquanto a purga corta por baixo, e a
+  janela efetiva vai estabilizar no menor dos dois limites — o número que dirá
+  qual venceu é `nishidb_history_index_window_seconds`.
+- **O journal de versões nunca reteve nada em produção.** Todos os painéis
+  marcaram `bytes: 0`: no histórico a linha nunca é atualizada (custo zero por
+  construção), e no `events` não houve consulta longa concorrente com
+  atualização da mesma linha. O caminho está provado por teste e por mutação,
+  não por carga.
+- **`expiredTotal` continua zero** — nenhuma consulta foi recusada por estourar
+  o teto do journal, o que significa que o teto está sobrando e ainda não
+  sabemos como ele se comporta sob pressão.
