@@ -64,7 +64,7 @@ func TestInjectPostingCriaFalsoPositivo(t *testing.T) {
 		t.Errorf("Lookup(Start) = %v, want [%d]", got, rowID)
 	}
 	// O ESTADO da row não muda — é o que separa um posting órfão de um update.
-	rec, _, ok, err := s.GetByRowID(rowID, nil)
+	rec, _, ok, err := s.GetByRowID(s.AbreSnapshot(), rowID, nil)
 	if err != nil || !ok {
 		t.Fatalf("GetByRowID: ok=%v err=%v", ok, err)
 	}
@@ -83,7 +83,7 @@ func TestInjectPostingRowInexistente(t *testing.T) {
 	if got := ids(t, s, 2, strVal("Stop")); len(got) != 1 || got[0] != 42 {
 		t.Errorf("candidatos = %v, want [42]", got)
 	}
-	if _, _, ok, err := s.GetByRowID(42, nil); ok || err != nil {
+	if _, _, ok, err := s.GetByRowID(s.AbreSnapshot(), 42, nil); ok || err != nil {
 		t.Errorf("GetByRowID(42) = ok:%v err:%v, want false/nil", ok, err)
 	}
 }

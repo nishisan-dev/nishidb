@@ -35,7 +35,7 @@ func TestReplayRestauraPostingComBitmapAtrasDasLocations(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	prev, _, ok, err := s.GetByKey([]byte("bm"), nil)
+	prev, _, ok, err := s.GetByKey(s.presente(), []byte("bm"), nil)
 	if err != nil || !ok {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestReplayNaoDecrementaLivenessDeRecordVivo(t *testing.T) {
 			mustPut(t, s, k, 1, statusPayload(t, s, k, "Start", 1), nil)
 		}
 		for _, k := range []string{"tl-0", "tl-1"} {
-			prev, _, ok, err := s.GetByKey([]byte(k), nil)
+			prev, _, ok, err := s.GetByKey(s.presente(), []byte(k), nil)
 			if err != nil || !ok {
 				t.Fatal(err)
 			}

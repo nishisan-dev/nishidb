@@ -391,7 +391,7 @@ func TestCopyForwardCopiaORecordTombstonadoSemRessuscitarARow(t *testing.T) {
 	if novoSeg == tumSeg && novoOff == tumOff {
 		t.Fatalf("a location continua em (%d, %d): o segmento de origem nunca ficaria elegível à aposentadoria", tumSeg, tumOff)
 	}
-	if _, _, ok, err := s.GetByKey([]byte(key), nil); err != nil || ok {
+	if _, _, ok, err := s.GetByKey(s.presente(), []byte(key), nil); err != nil || ok {
 		t.Fatalf("a cópia ressuscitou a row: GetByKey ok=%v, err=%v", ok, err)
 	}
 	if f := flagsDaLocation(t, s, rowID); f&types.FlagTombstone == 0 {
@@ -462,7 +462,7 @@ func TestCopyForwardRecusaResiduoSemLocationEmVezDeRessuscitarOEstado(t *testing
 	if _, ok := s.locs.Get(rowID); ok {
 		t.Error("a cópia criou location para a row do resíduo: o estado ressuscitou pela compaction")
 	}
-	if _, _, ok, err := s.GetByKey([]byte(key), nil); err != nil || ok {
+	if _, _, ok, err := s.GetByKey(s.presente(), []byte(key), nil); err != nil || ok {
 		t.Errorf("a key do resíduo ficou visível: ok=%v, err=%v", ok, err)
 	}
 }
@@ -1486,7 +1486,7 @@ func exigeCorpusNaUltimaRodada(t *testing.T, s *Store, keys, rodada int, quando 
 	t.Helper()
 	for i := 0; i < keys; i++ {
 		k := chaveDoCorpus(i)
-		rec, _, ok, err := s.GetByKey([]byte(k), nil)
+		rec, _, ok, err := s.GetByKey(s.presente(), []byte(k), nil)
 		if err != nil || !ok {
 			t.Fatalf("%s: a row %q sumiu (ok=%v, err=%v)", quando, k, ok, err)
 		}
@@ -2560,7 +2560,7 @@ func rowsVivasPorSegmento(t *testing.T, s *Store, keys int) map[uint32]int64 {
 	fora := make(map[uint32]int64)
 	for i := 0; i < keys; i++ {
 		k := chaveDoCorpus(i)
-		rec, _, ok, err := s.GetByKey([]byte(k), nil)
+		rec, _, ok, err := s.GetByKey(s.presente(), []byte(k), nil)
 		if err != nil || !ok {
 			t.Fatalf("a row %q sumiu antes da passada (ok=%v, err=%v)", k, ok, err)
 		}

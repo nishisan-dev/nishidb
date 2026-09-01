@@ -194,6 +194,14 @@ func (s *Servidor) handleStats(w http.ResponseWriter, r *http.Request) {
 			// política declarada no YAML do base — que é o que o bloco History
 			// acima descreve.
 			Index: indiceStats(d.st.EstatisticasDeIndice()),
+			// Do MESMO Store que alimenta as séries nishidb_query_snapshot_*,
+			// pela regra deste handler.
+			Snapshot: protocolo.SnapshotStats{
+				Bytes:          d.st.BytesRetidos(),
+				OldestSeconds:  d.st.IdadeDoSnapshotMaisAntigo().Seconds(),
+				PinnedSegments: d.st.SegmentosPinados(),
+				ExpiredTotal:   d.st.SnapshotsExpirados(),
+			},
 		}
 		// A tabela irmã não tem materializer: quem escreve nela é o do
 		// dataset base, no mesmo evento. Publicar um bloco zerado ali seria

@@ -201,7 +201,15 @@ func codigoDoErro(err error) int {
 	case errors.Is(err, parser.ErrSyntax), errors.Is(err, binder.ErrBind),
 		errors.Is(err, executor.ErrInvalidPlan):
 		return ExitQuery
-	case errors.Is(err, executor.ErrMaxRowsExceeded):
+	case errors.Is(err, executor.ErrMaxRowsExceeded), errors.Is(err, storage.ErrSnapshotExpirado):
+		// ErrSnapshotExpirado divide o 5 com o teto de linhas, e não ganha
+		// código próprio, porque a DECISÃO do operador é a mesma: o resultado
+		// que saiu está incompleto e não deve ser tratado como completo. O que
+		// muda é o remédio — ali, subir o maxRows ou estreitar a projeção;
+		// aqui, repetir (a consulta nova abre um snapshot que ainda não retém
+		// nada) ou subir runtime.query.snapshotMaxBytes. Um código novo mudaria
+		// a tabela de exit codes, que é contrato, para separar dois casos que
+		// pedem o mesmo do script que os lê.
 		return ExitTruncado
 	case errors.Is(err, types.ErrWriterFailed):
 		return ExitWriter
@@ -257,6 +265,7 @@ func abreDataset(cfg *nishiconfig.Config, nome string) (*storage.Store, *schema.
 		DuracaoDeFundo:         spec.Materialization.DuracaoDeFundo,
 		CampoDeEscrita:         schema.CampoInstanteDeEscrita,
 		CampoDePrazo:           schema.CampoDePrazo,
+		SnapshotMaxBytes:       cfg.SnapshotMaxBytes(),
 	})
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("abrindo o dataset %q: %w", nome, err)

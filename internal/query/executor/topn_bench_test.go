@@ -27,19 +27,23 @@ type fonteDeBancada struct {
 	it       iteradorDeBancada
 }
 
-func (f *fonteDeBancada) GetByRowID(id types.RowID, buf []byte) (types.Record, []byte, bool, error) {
+func (f *fonteDeBancada) GetByRowID(_ types.Snapshot, id types.RowID, buf []byte) (types.Record, []byte, bool, error) {
 	buf = append(buf[:0], f.payloads[id]...)
 	return types.Record{RowID: id, Payload: buf}, buf, true, nil
 }
 
-func (f *fonteDeBancada) GetByKey(_, buf []byte) (types.Record, []byte, bool, error) {
+func (f *fonteDeBancada) GetByKey(_ types.Snapshot, _, buf []byte) (types.Record, []byte, bool, error) {
 	return types.Record{}, buf, false, nil
 }
 
 // ScanLive REUSA o iterador: a bancada roda serialmente, e devolver um novo a
 // cada query poria uma alocação por query na medida do lado que abre mais
 // queries — que são os dois, igualmente, mas o ponto é medir o operador.
-func (f *fonteDeBancada) ScanLive() types.RowIDIterator {
+func (f *fonteDeBancada) AbreSnapshot() types.Snapshot { return types.Snapshot{} }
+
+func (f *fonteDeBancada) FechaSnapshot(types.Snapshot) {}
+
+func (f *fonteDeBancada) ScanLive(types.Snapshot) types.RowIDIterator {
 	f.it.f, f.it.pos = f, 0
 	return &f.it
 }

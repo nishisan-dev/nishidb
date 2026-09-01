@@ -516,6 +516,10 @@ func traduzErroDeAbertura(err error, sql string) (int, protocolo.Falha) {
 		return http.StatusGatewayTimeout, protocolo.Falha{Code: protocolo.CodTimeout, Message: err.Error()}
 	case errors.Is(err, storage.ErrDatasetCorrupt), errors.Is(err, encoding.ErrCorrupt):
 		return http.StatusInternalServerError, protocolo.Falha{Code: protocolo.CodDatasetCorrompido, Message: err.Error()}
+	case errors.Is(err, storage.ErrSnapshotExpirado):
+		// 503, e não 500: o servidor está íntegro e a consulta pode ser
+		// repetida — a nova abre um snapshot que ainda não retém nada.
+		return http.StatusServiceUnavailable, protocolo.Falha{Code: protocolo.CodSnapshotExpirado, Message: err.Error()}
 	default:
 		// Inclui executor.ErrInvalidPlan, que é bug do binder/planner e não do
 		// cliente: 500 é a resposta honesta.
@@ -553,6 +557,13 @@ func codigoDeErroDeQuery(err error) string {
 		return protocolo.CodTimeout
 	case errors.Is(err, storage.ErrDatasetCorrupt), errors.Is(err, encoding.ErrCorrupt):
 		return protocolo.CodDatasetCorrompido
+	case errors.Is(err, storage.ErrSnapshotExpirado):
+		// Sai DEPOIS das rows, e é onde ele aparece na prática: o Open não lê
+		// nada, então o journal só pode estourar com a consulta já correndo.
+		// As linhas já entregues são do universo de T0 e continuam válidas —
+		// o que o cliente não pode fazer é tratá-las como resultado completo,
+		// e é para isso que a linha de fecho carrega o código.
+		return protocolo.CodSnapshotExpirado
 	default:
 		return protocolo.CodInterno
 	}

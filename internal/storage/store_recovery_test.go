@@ -56,15 +56,15 @@ func TestRestartBasico_WriteRestartLookup(t *testing.T) {
 	s2 := reopen(t, s, opts)
 	for i := 0; i < 5; i++ {
 		k := fmt.Sprintf("rb-%d", i)
-		rec, _, ok, err := s2.GetByKey([]byte(k), nil)
+		rec, _, ok, err := s2.GetByKey(s2.presente(), []byte(k), nil)
 		if err != nil || !ok || rec.Sequence != int64(i) {
 			t.Fatalf("GetByKey(%q) pós-restart: (%+v,%v,%v)", k, rec, ok, err)
 		}
-		if rec2, _, ok, err := s2.GetByRowID(rec.RowID, nil); err != nil || !ok || !bytes.Equal(rec2.Key, []byte(k)) {
+		if rec2, _, ok, err := s2.GetByRowID(s2.presente(), rec.RowID, nil); err != nil || !ok || !bytes.Equal(rec2.Key, []byte(k)) {
 			t.Fatalf("GetByRowID(%d): (%v,%v)", rec.RowID, ok, err)
 		}
 	}
-	if rows := collectRows(t, s2.ScanLive()); !slices.Equal(rows, []types.RowID{0, 1, 2, 3, 4}) {
+	if rows := collectRows(t, s2.ScanLive(s2.presente())); !slices.Equal(rows, []types.RowID{0, 1, 2, 3, 4}) {
 		t.Fatalf("ScanLive pós-restart: %v", rows)
 	}
 	it, err := s2.Lookup(fldStatus, strVal("Start"))
@@ -80,7 +80,7 @@ func TestRestartBasico_WriteRestartLookup(t *testing.T) {
 	exigeBitmapCompleto(t, s2)
 	// O writer está posicionado: escrever depois do restart funciona.
 	mustPut(t, s2, "rb-nova", 99, statusPayload(t, s2, "rb-nova", "Start", 99), nil)
-	if _, _, ok, _ := s2.GetByKey([]byte("rb-nova"), nil); !ok {
+	if _, _, ok, _ := s2.GetByKey(s2.presente(), []byte("rb-nova"), nil); !ok {
 		t.Fatal("put pós-restart deveria funcionar")
 	}
 	exigeBitmapCompleto(t, s2)
@@ -110,7 +110,7 @@ func TestReopenTailIncompleto(t *testing.T) {
 	}
 	// Dois estados de ti-1 no tail: o corte no meio do 2º preserva o 1º.
 	mustPut(t, s, "ti-1", 1, statusPayload(t, s, "ti-1", "Start", 1), nil)
-	prev, _, _, err := s.GetByKey([]byte("ti-1"), nil)
+	prev, _, _, err := s.GetByKey(s.presente(), []byte("ti-1"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func TestReopenTailIncompleto(t *testing.T) {
 		t.Fatalf("reopen com tail truncado: %v", err)
 	}
 	defer s2.Close()
-	rec, _, ok, err := s2.GetByKey([]byte("ti-1"), nil)
+	rec, _, ok, err := s2.GetByKey(s2.presente(), []byte("ti-1"), nil)
 	if err != nil || !ok || rec.Sequence != 1 {
 		t.Fatalf("ti-1 deveria voltar ao estado anterior ao corte: (%+v,%v,%v)", rec, ok, err)
 	}
@@ -190,11 +190,11 @@ func TestReopenCRCCorrompidoNoTailDescartaDali(t *testing.T) {
 		t.Fatalf("reopen: %v", err)
 	}
 	defer s2.Close()
-	if _, _, ok, _ := s2.GetByKey([]byte("cc-1"), nil); !ok {
+	if _, _, ok, _ := s2.GetByKey(s2.presente(), []byte("cc-1"), nil); !ok {
 		t.Fatal("cc-1 (antes da corrupção) deveria estar visível")
 	}
 	for _, k := range []string{"cc-2", "cc-3"} {
-		if _, _, ok, _ := s2.GetByKey([]byte(k), nil); ok {
+		if _, _, ok, _ := s2.GetByKey(s2.presente(), []byte(k), nil); ok {
 			t.Fatalf("%s (a partir da corrupção) deveria ter sido descartado", k)
 		}
 	}
@@ -228,7 +228,7 @@ func TestReopenSegmentosPosCheckpointDescobertos(t *testing.T) {
 	s2 := reopen(t, s, opts)
 	for i := 0; i <= n; i++ {
 		k := fmt.Sprintf("sp-%d", i)
-		if _, _, ok, err := s2.GetByKey([]byte(k), nil); err != nil || !ok {
+		if _, _, ok, err := s2.GetByKey(s2.presente(), []byte(k), nil); err != nil || !ok {
 			t.Fatalf("GetByKey(%q): (%v,%v)", k, ok, err)
 		}
 	}
@@ -269,7 +269,7 @@ func TestReopenSegmentoOrfaoAdotado(t *testing.T) {
 		t.Fatalf("reopen com órfão: %v", err)
 	}
 	defer s2.Close()
-	if _, _, ok, _ := s2.GetByKey([]byte("orf-0"), nil); !ok {
+	if _, _, ok, _ := s2.GetByKey(s2.presente(), []byte("orf-0"), nil); !ok {
 		t.Fatal("estado anterior deveria sobreviver")
 	}
 	// O writer adotou o órfão: o próximo put aterrissa no segmento 2 sem
@@ -297,7 +297,7 @@ func TestPhantomCommitViraVisivelNoReplay(t *testing.T) {
 		t.Fatal("o Put do phantom deveria falhar")
 	}
 	// Invisível agora, e o writer está sticky.
-	if _, _, ok, _ := s.GetByKey([]byte("ph-fantasma"), nil); ok {
+	if _, _, ok, _ := s.GetByKey(s.presente(), []byte("ph-fantasma"), nil); ok {
 		t.Fatal("phantom não pode estar visível antes do restart")
 	}
 	if _, _, err := s.Put([]byte("ph-outra"), 1, 0, statusPayload(t, s, "ph-outra", "Start", 1), nil); err == nil ||
@@ -307,7 +307,7 @@ func TestPhantomCommitViraVisivelNoReplay(t *testing.T) {
 
 	s2 := reopen(t, s, opts)
 	// Visível após o replay, com o estado do record órfão.
-	rec, _, ok, err := s2.GetByKey([]byte("ph-fantasma"), nil)
+	rec, _, ok, err := s2.GetByKey(s2.presente(), []byte("ph-fantasma"), nil)
 	if err != nil || !ok || rec.Sequence != 7 {
 		t.Fatalf("phantom deveria estar visível pós-restart: (%+v,%v,%v)", rec, ok, err)
 	}
@@ -357,7 +357,7 @@ func TestTalliesSobrevivemAoRestart(t *testing.T) {
 		mustPut(t, s, k, 1, statusPayload(t, s, k, "Start", 1), nil)
 	}
 	for seq := int64(2); seq <= 3; seq++ {
-		prev, _, _, err := s.GetByKey([]byte("tl-0"), nil)
+		prev, _, _, err := s.GetByKey(s.presente(), []byte("tl-0"), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -421,7 +421,7 @@ func TestReopenBitmapConverge(t *testing.T) {
 	if err := s.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
-	prev, _, _, err := s.GetByKey([]byte("bc"), nil)
+	prev, _, _, err := s.GetByKey(s.presente(), []byte("bc"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -458,7 +458,7 @@ func TestCrashEntreApplyEManifest(t *testing.T) {
 	if err := s.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
-	prev, _, _, err := s.GetByKey([]byte("ca-1"), nil)
+	prev, _, _, err := s.GetByKey(s.presente(), []byte("ca-1"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -470,11 +470,11 @@ func TestCrashEntreApplyEManifest(t *testing.T) {
 	}
 
 	s2 := reopen(t, s, opts)
-	rec, _, ok, err := s2.GetByKey([]byte("ca-1"), nil)
+	rec, _, ok, err := s2.GetByKey(s2.presente(), []byte("ca-1"), nil)
 	if err != nil || !ok || rec.Sequence != 2 {
 		t.Fatalf("ca-1: (%+v,%v,%v)", rec, ok, err)
 	}
-	if _, _, ok, _ := s2.GetByKey([]byte("ca-2"), nil); !ok {
+	if _, _, ok, _ := s2.GetByKey(s2.presente(), []byte("ca-2"), nil); !ok {
 		t.Fatal("ca-2 deveria estar visível")
 	}
 	if st := s2.Stats(); st.RowCount != 2 {
@@ -519,11 +519,11 @@ func TestDoubleReopenEhIdempotente(t *testing.T) {
 	manifestB := loadManifestAud(t, dir)
 	for i := 0; i < 5; i++ {
 		k := fmt.Sprintf("dr-%d", i)
-		if _, _, ok, err := s3.GetByKey([]byte(k), nil); err != nil || !ok {
+		if _, _, ok, err := s3.GetByKey(s3.presente(), []byte(k), nil); err != nil || !ok {
 			t.Fatalf("GetByKey(%q) no 2º reopen: (%v,%v)", k, ok, err)
 		}
 	}
-	if rows := collectRows(t, s3.ScanLive()); !slices.Equal(rows, []types.RowID{0, 1, 2, 3, 4}) {
+	if rows := collectRows(t, s3.ScanLive(s3.presente())); !slices.Equal(rows, []types.RowID{0, 1, 2, 3, 4}) {
 		t.Fatalf("ScanLive: %v", rows)
 	}
 	if st := s3.Stats(); st.RowCount != 5 {

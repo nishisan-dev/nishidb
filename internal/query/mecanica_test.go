@@ -38,7 +38,7 @@ type stub struct {
 	fechamentos int
 }
 
-func (s *stub) GetByRowID(id types.RowID, buf []byte) (types.Record, []byte, bool, error) {
+func (s *stub) GetByRowID(_ types.Snapshot, id types.RowID, buf []byte) (types.Record, []byte, bool, error) {
 	s.gets++
 	if s.temErro && id == s.erroEm {
 		return types.Record{}, buf, false, fmt.Errorf("disco caiu na row %d", id)
@@ -54,16 +54,20 @@ func (s *stub) GetByRowID(id types.RowID, buf []byte) (types.Record, []byte, boo
 	return types.Record{RowID: id, Payload: buf}, buf, true, nil
 }
 
-func (s *stub) GetByKey(key, buf []byte) (types.Record, []byte, bool, error) {
+func (s *stub) GetByKey(_ types.Snapshot, key, buf []byte) (types.Record, []byte, bool, error) {
 	s.getsPorKey++
 	id, ok := s.keys[string(key)]
 	if !ok {
 		return types.Record{}, buf, false, nil
 	}
-	return s.GetByRowID(id, buf)
+	return s.GetByRowID(s.AbreSnapshot(), id, buf)
 }
 
-func (s *stub) ScanLive() types.RowIDIterator {
+func (s *stub) AbreSnapshot() types.Snapshot { return types.Snapshot{} }
+
+func (s *stub) FechaSnapshot(types.Snapshot) {}
+
+func (s *stub) ScanLive(types.Snapshot) types.RowIDIterator {
 	s.scans++
 	return &stubIter{s: s, ids: s.ids}
 }

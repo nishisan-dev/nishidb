@@ -95,6 +95,7 @@ func registraMetricasDeDataset(reg *metrics.Registry, s *Servidor) {
 			// pela mesma porta. Elas vêm de uma leitura própria porque a
 			// EstatisticasDeRetencao não vale fora do histórico.
 			out = append(out, amostrasDeIndice(d.nome, d.st.EstatisticasDeIndice())...)
+			out = append(out, amostrasDeIsolamento(d.nome, d.st)...)
 			rotulo := []metrics.Label{{Nome: metrics.LabelDataset, Valor: d.nome}}
 			// O formato de exposição só tem número, e Go não converte bool
 			// para float: o 0/1 do medidor se escreve aqui, uma vez, em vez de
@@ -229,4 +230,53 @@ func umSeVerdadeiro(v bool) float64 {
 		return 1
 	}
 	return 0
+}
+
+// amostrasDeIsolamento publica o que o snapshot de leitura está segurando
+// neste dataset.
+//
+// As quatro nascem com ZERO na subida, como todas as que podem alarmar: uma
+// série que só aparece quando há o que mostrar vira lacuna no gráfico, e
+// lacuna não se distingue de alvo fora do ar.
+//
+// São lidas no SCRAPE, e não escritas na admissão, pela mesma razão da
+// longest_running: a idade cresce sozinha com o tempo, e um medidor escrito
+// quando a consulta abriu ficaria congelado mostrando a idade que ela tinha ao
+// nascer — que é sempre zero.
+func amostrasDeIsolamento(dataset string, st *storage.Store) []metrics.Amostra {
+	rotulo := []metrics.Label{{Nome: metrics.LabelDataset, Valor: dataset}}
+	return []metrics.Amostra{
+		{
+			Familia: metrics.MetQuerySnapshotBytes,
+			Nome:    metrics.MetQuerySnapshotBytes,
+			Ajuda:   "heap retido pelo journal de versões do isolamento de leitura",
+			Tipo:    metrics.TipoMedidor,
+			Valor:   float64(st.BytesRetidos()),
+			Labels:  rotulo,
+		},
+		{
+			Familia: metrics.MetQuerySnapshotOldestSeconds,
+			Nome:    metrics.MetQuerySnapshotOldestSeconds,
+			Ajuda:   "há quanto tempo a consulta mais antiga segura o passado; 0 quando não há nenhuma",
+			Tipo:    metrics.TipoMedidor,
+			Valor:   st.IdadeDoSnapshotMaisAntigo().Seconds(),
+			Labels:  rotulo,
+		},
+		{
+			Familia: metrics.MetQuerySnapshotExpiredTotal,
+			Nome:    metrics.MetQuerySnapshotExpiredTotal,
+			Ajuda:   "consultas invalidadas por o journal de versões estourar runtime.query.snapshotMaxBytes",
+			Tipo:    metrics.TipoContador,
+			Valor:   float64(st.SnapshotsExpirados()),
+			Labels:  rotulo,
+		},
+		{
+			Familia: metrics.MetCompactionSegmentosPinados,
+			Nome:    metrics.MetCompactionSegmentosPinados,
+			Ajuda:   "segmentos que a compaction não pode aposentar por guardarem versões de consultas em voo",
+			Tipo:    metrics.TipoMedidor,
+			Valor:   float64(st.SegmentosPinados()),
+			Labels:  rotulo,
+		},
+	}
 }

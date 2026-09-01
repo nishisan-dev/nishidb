@@ -225,7 +225,22 @@ const (
 	//
 	// Sai SEMPRE na linha de fecho, depois das rows: quando a linha grande
 	// aparece, o status HTTP já foi enviado junto com o schema.
-	CodLinhaGrande       = "ROW_TOO_LARGE"
+	CodLinhaGrande = "ROW_TOO_LARGE"
+	// CodSnapshotExpirado é a consulta cujo universo o servidor não consegue
+	// mais reconstruir: o journal de versões do isolamento estourou o teto de
+	// memória (runtime.query.snapshotMaxBytes) e as versões que ela veria
+	// foram descartadas.
+	//
+	// Tem código próprio, e não CodInterno, pela mesma razão do ROW_TOO_LARGE:
+	// não é defeito do servidor, é um teto sendo aplicado, e existe ação do
+	// cliente — repetir a consulta (a nova abre um snapshot atual e passa a
+	// ver o estado corrente), estreitá-la para terminar antes, ou pedir ao
+	// operador para subir a chave.
+	//
+	// Não degradar para a versão corrente é o ponto: as duas respostas são
+	// indistinguíveis no wire e só uma é verdadeira. Quem pediu isolamento
+	// precisa saber quando não o recebeu.
+	CodSnapshotExpirado  = "SNAPSHOT_TOO_OLD"
 	CodDatasetCorrompido = "DATASET_CORRUPT"
 	CodInterno           = "INTERNAL"
 

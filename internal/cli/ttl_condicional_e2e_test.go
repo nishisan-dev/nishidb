@@ -95,7 +95,7 @@ func (b *bancadaTTL) avanca(d time.Duration) { b.agora = b.agora.Add(d) }
 // visivel responde a pergunta da CONSULTA: a entidade aparece?
 func (b *bancadaTTL) visivel(key string) bool {
 	b.t.Helper()
-	_, _, ok, err := b.st.GetByKey([]byte(key), nil)
+	_, _, ok, err := b.st.GetByKey(b.st.AbreSnapshot(), []byte(key), nil)
 	if err != nil {
 		b.t.Fatal(err)
 	}

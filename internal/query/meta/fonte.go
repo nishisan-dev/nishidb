@@ -75,14 +75,14 @@ func novaFonte(alvo *schema.Compiled, caps Capacidades, _ *schema.Compiled) *fon
 	return &fonte{campos: alvo.FieldsParaMetadata(), caps: caps, ids: colunasIDs}
 }
 
-func (f *fonte) GetByRowID(id types.RowID, buf []byte) (types.Record, []byte, bool, error) {
+func (f *fonte) GetByRowID(_ types.Snapshot, id types.RowID, buf []byte) (types.Record, []byte, bool, error) {
 	if int(id) >= len(f.campos) {
 		return types.Record{}, buf, false, nil
 	}
 	return f.record(id, f.campos[id], buf)
 }
 
-func (f *fonte) GetByKey(key, buf []byte) (types.Record, []byte, bool, error) {
+func (f *fonte) GetByKey(_ types.Snapshot, key, buf []byte) (types.Record, []byte, bool, error) {
 	for i, c := range f.campos {
 		if c.Name == string(key) {
 			return f.record(types.RowID(i), c, buf)
@@ -91,7 +91,19 @@ func (f *fonte) GetByKey(key, buf []byte) (types.Record, []byte, bool, error) {
 	return types.Record{}, buf, false, nil
 }
 
-func (f *fonte) ScanLive() types.RowIDIterator { return &iterador{n: len(f.campos), i: -1} }
+func (f *fonte) ScanLive(types.Snapshot) types.RowIDIterator {
+	return &iterador{n: len(f.campos), i: -1}
+}
+
+// AbreSnapshot devolve o snapshot ZERO, e o ignora na leitura: a fonte já é um
+// retrato, tirado uma vez no Abre (ver o godoc do tipo). Não há relógio que
+// ande nem rowId que nasça no meio da varredura — o que o snapshot congela no
+// Store de verdade, aqui já está congelado por construção.
+func (f *fonte) AbreSnapshot() types.Snapshot { return types.Snapshot{} }
+
+// FechaSnapshot é no-op porque o Abre não retém nada: não há journal de
+// versões sobre uma fonte que não é escrita.
+func (f *fonte) FechaSnapshot(types.Snapshot) {}
 
 // Indexado responde SEMPRE false: a tabela virtual não declara índice no seu
 // YAML, então o planner degrada para varredura completa — que sobre sete

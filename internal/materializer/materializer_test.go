@@ -76,7 +76,7 @@ func (h *harness) apply(event string) ApplyResult {
 // a visão que o executor terá.
 func (h *harness) state(key string) map[string]types.Value {
 	h.t.Helper()
-	rec, _, ok, err := h.st.GetByKey([]byte(key), nil)
+	rec, _, ok, err := h.st.GetByKey(h.st.AbreSnapshot(), []byte(key), nil)
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -700,11 +700,11 @@ func (s storeErro) Estado(key, buf []byte) (types.Record, []byte, types.Presenca
 	return s.Store.Estado(key, buf)
 }
 
-func (s storeErro) GetByKey(key, buf []byte) (types.Record, []byte, bool, error) {
+func (s storeErro) GetByKey(snap types.Snapshot, key, buf []byte) (types.Record, []byte, bool, error) {
 	if s.get != nil {
 		return types.Record{}, buf, false, s.get
 	}
-	return s.Store.GetByKey(key, buf)
+	return s.Store.GetByKey(snap, key, buf)
 }
 
 // Writer em modo falho (§14.14) é o único erro TERMINAL: reprocessar o evento
@@ -797,7 +797,7 @@ func (s storePayloadTruncado) Estado(key, buf []byte) (types.Record, []byte, typ
 	}, buf, types.PresencaViva, nil
 }
 
-func (s storePayloadTruncado) GetByKey(key, buf []byte) (types.Record, []byte, bool, error) {
+func (s storePayloadTruncado) GetByKey(_ types.Snapshot, key, buf []byte) (types.Record, []byte, bool, error) {
 	buf = buf[:0]
 	buf = append(buf, key...)
 	keyEnd := len(buf)

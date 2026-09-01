@@ -71,7 +71,7 @@ func (s *Store) Expira(rowID types.RowID) (expirou bool, err error) {
 	if flags&types.FlagTombstone != 0 {
 		return false, nil // idempotente
 	}
-	if !s.prazoVencido(rowID) {
+	if !s.prazoVencido(rowID, s.agora()) {
 		return false, nil // renovada entre a decisão e agora
 	}
 
@@ -133,10 +133,15 @@ func (s *Store) Expira(rowID types.RowID) (expirou bool, err error) {
 		prevPayload: rec.Payload,
 		hadPrevious: true,
 		countsAsNew: false,
-		seg:         novoSeg,
-		off:         novoOff,
-		recLen:      len(buf),
-		mode:        applyWrite,
+		// A lápide MUDA o estado visível: quem abriu a consulta antes dela
+		// tem de continuar recebendo a linha. Sem versionar aqui, o coletor
+		// de expiração apagaria do meio do resultado a linha que o relógio
+		// congelado acabou de preservar — os dois mecanismos se anulariam.
+		versiona: true,
+		seg:      novoSeg,
+		off:      novoOff,
+		recLen:   len(buf),
+		mode:     applyWrite,
 	}); err != nil {
 		return false, s.failWriter(err)
 	}

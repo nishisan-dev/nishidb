@@ -128,6 +128,16 @@ public final class SqlStates {
             // operador subir runtime.query.maxBufferPerQuery.
             Map.entry(Codigos.ROW_TOO_LARGE, new Entrada(LIMITE_DE_PROGRAMA, SQLNonTransientException::new)),
 
+            // SNAPSHOT_TOO_OLD é TRANSIENT, e é a única entrada desta família
+            // em que repetir de fato resolve: a consulta nova abre um snapshot
+            // atual, que nada retém ainda. Ela cai em 53000 — recurso
+            // insuficiente — porque foi memória que faltou, e não um limite do
+            // programa como o ROW_TOO_LARGE ao lado: o servidor não conseguiu
+            // guardar o passado por tempo suficiente, e o resultado que ele
+            // teria de entregar não existe mais.
+            Map.entry(Codigos.SNAPSHOT_TOO_OLD,
+                    new Entrada(RECURSO_INSUFICIENTE, SQLTransientException::new)),
+
             // TIMEOUT ganha a única subclasse que o JDBC dedica a um caso
             // nosso, e é o que faz uma ferramenta oferecer "tentar de novo com
             // mais tempo" em vez de mostrar erro genérico.

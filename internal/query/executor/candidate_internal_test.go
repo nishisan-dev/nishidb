@@ -148,15 +148,19 @@ type storeFalhaNoSegundo struct {
 	n       int
 }
 
-func (s *storeFalhaNoSegundo) GetByRowID(types.RowID, []byte) (types.Record, []byte, bool, error) {
+func (s *storeFalhaNoSegundo) GetByRowID(types.Snapshot, types.RowID, []byte) (types.Record, []byte, bool, error) {
 	return types.Record{}, nil, false, nil
 }
 
-func (s *storeFalhaNoSegundo) GetByKey([]byte, []byte) (types.Record, []byte, bool, error) {
+func (s *storeFalhaNoSegundo) GetByKey(types.Snapshot, []byte, []byte) (types.Record, []byte, bool, error) {
 	return types.Record{}, nil, false, nil
 }
 
-func (s *storeFalhaNoSegundo) ScanLive() types.RowIDIterator { return lista() }
+func (s *storeFalhaNoSegundo) ScanLive(types.Snapshot) types.RowIDIterator { return lista() }
+
+func (s *storeFalhaNoSegundo) AbreSnapshot() types.Snapshot { return types.Snapshot{} }
+
+func (s *storeFalhaNoSegundo) FechaSnapshot(types.Snapshot) {}
 
 func (s *storeFalhaNoSegundo) Lookup(types.FieldID, types.Value) (types.RowIDIterator, error) {
 	s.n++

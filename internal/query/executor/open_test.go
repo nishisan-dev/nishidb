@@ -210,19 +210,23 @@ type storeQueExplode struct {
 	leituras int
 }
 
-func (s *storeQueExplode) GetByRowID(types.RowID, []byte) (types.Record, []byte, bool, error) {
+func (s *storeQueExplode) GetByRowID(types.Snapshot, types.RowID, []byte) (types.Record, []byte, bool, error) {
 	s.leituras++
 	s.t.Fatal("Open leu uma row")
 	return types.Record{}, nil, false, nil
 }
 
-func (s *storeQueExplode) GetByKey([]byte, []byte) (types.Record, []byte, bool, error) {
+func (s *storeQueExplode) GetByKey(types.Snapshot, []byte, []byte) (types.Record, []byte, bool, error) {
 	s.leituras++
 	s.t.Fatal("Open leu uma row por key")
 	return types.Record{}, nil, false, nil
 }
 
-func (s *storeQueExplode) ScanLive() types.RowIDIterator { return vazio{} }
+func (s *storeQueExplode) AbreSnapshot() types.Snapshot { return types.Snapshot{} }
+
+func (s *storeQueExplode) FechaSnapshot(types.Snapshot) {}
+
+func (s *storeQueExplode) ScanLive(types.Snapshot) types.RowIDIterator { return vazio{} }
 
 func (s *storeQueExplode) Lookup(types.FieldID, types.Value) (types.RowIDIterator, error) {
 	return vazio{}, nil

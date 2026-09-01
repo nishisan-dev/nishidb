@@ -95,10 +95,12 @@ func TestCloseConcorrenteComPutNaoEntraEmPanic(t *testing.T) {
 	if _, _, err := st.Put([]byte("Z"), 1, 0, p, nil); !errors.Is(err, storage.ErrDatasetClosed) {
 		t.Errorf("Put após Close = %v, want ErrDatasetClosed", err)
 	}
-	if _, _, _, err := st.GetByKey([]byte("K"), nil); !errors.Is(err, storage.ErrDatasetClosed) {
+	snapPos := st.AbreSnapshot()
+	defer st.FechaSnapshot(snapPos)
+	if _, _, _, err := st.GetByKey(snapPos, []byte("K"), nil); !errors.Is(err, storage.ErrDatasetClosed) {
 		t.Errorf("GetByKey após Close = %v, want ErrDatasetClosed", err)
 	}
-	if _, _, _, err := st.GetByRowID(0, nil); !errors.Is(err, storage.ErrDatasetClosed) {
+	if _, _, _, err := st.GetByRowID(snapPos, 0, nil); !errors.Is(err, storage.ErrDatasetClosed) {
 		t.Errorf("GetByRowID após Close = %v, want ErrDatasetClosed", err)
 	}
 	if err := st.Sync(); !errors.Is(err, storage.ErrDatasetClosed) {
@@ -129,26 +131,35 @@ func TestCloseConcorrenteComLeiturasNaoEntraEmPanic(t *testing.T) {
 			for i := 0; i < 5_000; i++ {
 				// Varredura completa: é a leitura que mais tempo passa dentro
 				// do mmap, e a que o Close tinha mais chance de atropelar.
-				it := st.ScanLive()
-				for it.Next() {
-					if _, _, _, err := st.GetByRowID(it.RowID(), nil); err != nil {
-						if errors.Is(err, storage.ErrDatasetClosed) {
-							it.Close()
-							return
+				//
+				// O par snapshot/varredura vive numa função própria para que o
+				// defer devolva o snapshot em TODOS os caminhos de saída — os
+				// três returns abaixo inclusos. Sem isso o teste vazaria 5 mil
+				// leitores por goroutine, e o pin da compaction ficaria preso
+				// por um leitor que já foi embora.
+				if !func() bool {
+					snap := st.AbreSnapshot()
+					defer st.FechaSnapshot(snap)
+					it := st.ScanLive(snap)
+					defer it.Close()
+					for it.Next() {
+						if _, _, _, err := st.GetByRowID(snap, it.RowID(), nil); err != nil {
+							if !errors.Is(err, storage.ErrDatasetClosed) {
+								t.Errorf("GetByRowID: %v", err)
+							}
+							return false
 						}
-						t.Errorf("GetByRowID: %v", err)
-						it.Close()
-						return
 					}
-				}
-				if err := it.Err(); err != nil {
-					if !errors.Is(err, storage.ErrDatasetClosed) {
-						t.Errorf("iteração: %v", err)
+					if err := it.Err(); err != nil {
+						if !errors.Is(err, storage.ErrDatasetClosed) {
+							t.Errorf("iteração: %v", err)
+						}
+						return false
 					}
-					it.Close()
+					return true
+				}() {
 					return
 				}
-				it.Close()
 			}
 		}()
 	}
@@ -164,7 +175,9 @@ func TestCloseConcorrenteComLeiturasNaoEntraEmPanic(t *testing.T) {
 	wg.Wait()
 
 	// O iterador criado DEPOIS do Close não itera e reporta o motivo.
-	it := st.ScanLive()
+	snapPosClose := st.AbreSnapshot()
+	defer st.FechaSnapshot(snapPosClose)
+	it := st.ScanLive(snapPosClose)
 	if it.Next() {
 		t.Error("ScanLive após Close devolveu row")
 	}

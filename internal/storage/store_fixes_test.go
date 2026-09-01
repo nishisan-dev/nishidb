@@ -38,7 +38,7 @@ func TestPutRejeitaPrevDeOutraKey(t *testing.T) {
 	mustPut(t, s, "key-a", 1, statusPayload(t, s, "key-a", "Start", 1), nil)
 	mustPut(t, s, "key-b", 1, statusPayload(t, s, "key-b", "Start", 1), nil)
 
-	prevB, _, ok, err := s.GetByKey([]byte("key-b"), nil)
+	prevB, _, ok, err := s.GetByKey(s.presente(), []byte("key-b"), nil)
 	if err != nil || !ok {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestPutRejeitaPrevDeOutraKey(t *testing.T) {
 	}
 	// Nada mudou: as duas keys seguem visíveis com o estado original.
 	for _, k := range []string{"key-a", "key-b"} {
-		rec, _, ok, err := s.GetByKey([]byte(k), nil)
+		rec, _, ok, err := s.GetByKey(s.presente(), []byte(k), nil)
 		if err != nil || !ok || rec.Sequence != 1 {
 			t.Fatalf("estado de %q alterado: (%+v,%v,%v)", k, rec, ok, err)
 		}
@@ -82,7 +82,7 @@ func TestEventoInvalidoNaoQueimaRowID(t *testing.T) {
 	if !created || id != 0 {
 		t.Fatalf("nenhum id pode ter sido queimado pelos 3 Puts inválidos: esperado id=0, obtido %d", id)
 	}
-	if rows := collectRows(t, s.ScanLive()); len(rows) != 1 || rows[0] != 0 {
+	if rows := collectRows(t, s.ScanLive(s.presente())); len(rows) != 1 || rows[0] != 0 {
 		t.Fatalf("ScanLive: esperado [0], obtido %v", rows)
 	}
 }
@@ -110,7 +110,7 @@ func TestWriterStickyFailedAposErroPosAppend(t *testing.T) {
 	s := openStore(t, Options{CamposIndexados: []types.FieldID{fldStatus}})
 	id, _ := mustPut(t, s, "k1", 1, statusPayload(t, s, "k1", "Start", 1), nil)
 
-	prev, _, ok, err := s.GetByKey([]byte("k1"), nil)
+	prev, _, ok, err := s.GetByKey(s.presente(), []byte("k1"), nil)
 	if err != nil || !ok {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestWriterStickyFailedAposErroPosAppend(t *testing.T) {
 		t.Fatalf("posting antiga deveria estar intacta (falso negativo eliminado): %v", rows)
 	}
 	// Visibilidade intacta: estado antigo (seq=1), location nunca publicada.
-	rec, _, ok, err := s.GetByKey([]byte("k1"), nil)
+	rec, _, ok, err := s.GetByKey(s.presente(), []byte("k1"), nil)
 	if err != nil || !ok || rec.Sequence != 1 {
 		t.Fatalf("estado visível deveria ser o antigo: (%+v,%v,%v)", rec, ok, err)
 	}
@@ -207,7 +207,7 @@ func TestBitmapCampoQueEntraESai(t *testing.T) {
 		t.Fatalf("sem campo status ainda: %v", rows)
 	}
 
-	prev, _, _, err := s.GetByKey([]byte("es"), nil)
+	prev, _, _, err := s.GetByKey(s.presente(), []byte("es"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +222,7 @@ func TestBitmapCampoQueEntraESai(t *testing.T) {
 	// devolvida por status='Start' — vive um nível acima, na revalidação, e é
 	// ela que este teste passa a afirmar. O ramo "campo que entra", acima, segue
 	// exato: ali não há falso positivo que justifique afrouxar nada.
-	prev2, _, _, err := s.GetByKey([]byte("es"), nil)
+	prev2, _, _, err := s.GetByKey(s.presente(), []byte("es"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +246,7 @@ func TestValueEqualNumericoNoBitmap(t *testing.T) {
 		}
 		return collectRows(t, it)
 	}
-	prev, _, _, err := s.GetByKey([]byte("num"), nil)
+	prev, _, _, err := s.GetByKey(s.presente(), []byte("num"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +254,7 @@ func TestValueEqualNumericoNoBitmap(t *testing.T) {
 	if rows := lookup(7); len(rows) != 1 || rows[0] != id {
 		t.Fatalf("7→7 deveria manter a posting: %v", rows)
 	}
-	prev2, _, _, err := s.GetByKey([]byte("num"), nil)
+	prev2, _, _, err := s.GetByKey(s.presente(), []byte("num"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,7 +308,7 @@ func TestVisibilidadeJanelaDeCriacao(t *testing.T) {
 				}
 				for i := 0; i < n; i += 17 {
 					key := fmt.Appendf(nil, "cria-%d", i)
-					rec, b, ok, err := s.GetByKey(key, buf)
+					rec, b, ok, err := s.GetByKey(s.presente(), key, buf)
 					buf = b
 					if err != nil {
 						t.Errorf("GetByKey na janela de criação: %v", err)
@@ -330,7 +330,7 @@ func TestVisibilidadeJanelaDeCriacao(t *testing.T) {
 	wg.Wait()
 	for i := 0; i < n; i++ {
 		k := fmt.Sprintf("cria-%d", i)
-		if _, _, ok, err := s.GetByKey([]byte(k), nil); err != nil || !ok {
+		if _, _, ok, err := s.GetByKey(s.presente(), []byte(k), nil); err != nil || !ok {
 			t.Fatalf("key %q deveria estar visível ao final: (%v,%v)", k, ok, err)
 		}
 	}

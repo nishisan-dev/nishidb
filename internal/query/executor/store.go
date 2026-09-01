@@ -23,9 +23,20 @@ type Store interface {
 	// reatribuído pelo caller em TODOS os caminhos, inclusive ok=false e
 	// err!=nil: perder o retorno faz o executor realocar por row e deixa
 	// rec.Payload apontando para um buffer que ele não conhece mais.
-	GetByRowID(id types.RowID, buf []byte) (types.Record, []byte, bool, error)
-	GetByKey(key, buf []byte) (types.Record, []byte, bool, error)
-	ScanLive() types.RowIDIterator
+	GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (types.Record, []byte, bool, error)
+	GetByKey(snap types.Snapshot, key, buf []byte) (types.Record, []byte, bool, error)
+	// AbreSnapshot fixa o universo desta consulta. É chamado UMA vez por
+	// Open, antes de qualquer fonte ser aberta: um snapshot por fonte daria
+	// a cada plano um universo próprio, que é exatamente o defeito que ele
+	// existe para fechar.
+	AbreSnapshot() types.Snapshot
+	// FechaSnapshot devolve o que o snapshot segurava, e o Close do iterador
+	// o chama em TODOS os caminhos de saída — inclusive erro e cancelamento.
+	// Uma consulta que não fecha o seu deixa o writer guardando versões que
+	// ninguém vai ler e a compaction sem poder aposentar os segmentos onde
+	// elas moram, pela vida do processo.
+	FechaSnapshot(snap types.Snapshot)
+	ScanLive(snap types.Snapshot) types.RowIDIterator
 	// Lookup abre o iterador de candidatos de um termo `campo = valor`.
 	//
 	// É UM método na interface, e não mais o LookupBitmap somado à capability

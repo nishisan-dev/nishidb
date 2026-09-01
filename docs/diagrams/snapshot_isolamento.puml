@@ -1,0 +1,81 @@
+@startuml snapshot_isolamento
+title Snapshot de leitura — a consulta vê UM instante, e o writer segue escrevendo
+
+participant "consulta\n(executor)" as q
+participant "Store" as st
+participant "registro de\nsnapshots" as reg
+participant "journal de\nversões" as jr
+participant "writer\n(Put/Expira)" as w
+participant "compaction /\nretenção" as c
+
+== abertura ==
+q -> st : AbreSnapshot()
+st -> reg : abre(época, instante, piso)
+st --> q : Snapshot{Epoca, Instante,\nLimiteRowID, BaseRowID}
+note right of q
+  Tipo de VALOR, em parâmetro.
+  Em campo do Store, dois leitores
+  concorrentes se fundiriam num só.
+end note
+
+== o dataset muda debaixo dela ==
+w -> st : Put(key, ...) — atualiza uma linha
+st -> reg : há leitor vivo?
+alt sem leitor
+  st -> w : publica e segue\n(journal não recebe NADA)
+else com leitor
+  st -> jr : Registra(rowId, location ANTERIOR, época+1)
+  note right of jr
+    24 bytes. Não copia o record:
+    ele continua no segmento
+    append-only até ser aposentado.
+  end note
+  st -> jr : pin[segmento anterior]++
+end
+
+== a leitura ==
+q -> st : GetByRowID(snap, rowId)
+st -> jr : Em(rowId, snap.Epoca)
+alt há versão retida para esta época
+  jr --> st : location de T0
+else
+  st -> st : location CORRENTE
+end
+st -> st : liveness pelo snap.Instante\n(relógio congelado)
+st --> q : record da versão de T0
+
+== quem tem de esperar ==
+c -> jr : Pinado(segmento)?
+alt pinado
+  c -> c : não elege — o passado dele\nainda é alcançável
+end
+c -> reg : instante do snapshot mais antigo
+note right of c
+  A expiração oportunista decide por ELE:
+  com o relógio de agora, ela apagaria o
+  payload que o snapshot preservou —
+  e o copy-forward NÃO versiona.
+end note
+c -> reg : piso do snapshot mais antigo
+note right of c
+  A purga do histórico para aí.
+  O que ela deixou de avançar sai no log.
+end note
+
+== fechamento ==
+q -> st : FechaSnapshot(snap)  (no Close do iterador)
+st -> reg : fecha(época)
+st -> jr : Poda(menor época viva)
+jr -> jr : pin liberado; heap devolvido
+
+== quando o teto estoura ==
+w -> st : Put(...) e o journal passa de\nruntime.query.snapshotMaxBytes
+st -> reg : invalida a consulta MAIS ANTIGA
+note right of st
+  A vítima é a consulta, nunca a ingestão:
+  o dataset existe para ingerir. Ela falha
+  com SNAPSHOT_TOO_OLD na leitura seguinte
+  — degradar em silêncio para a versão
+  corrente seria indistinguível no wire.
+end note
+@enduml

@@ -46,7 +46,7 @@ func compiladoComExpire(t *testing.T, yaml string) (*schema.Compiled, *fakestora
 // leInstanteDeEscrita extrai o campo de sistema do payload materializado.
 func leInstanteDeEscrita(t *testing.T, c *schema.Compiled, st *fakestorage.Store, key string) (int64, bool) {
 	t.Helper()
-	rec, _, presente, err := st.GetByKey([]byte(key), nil)
+	rec, _, presente, err := st.GetByKey(st.AbreSnapshot(), []byte(key), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestSemExpireAfterWriteNaoHaCampoDeSistema(t *testing.T) {
 	if r := m.Apply([]byte(`{"id":"A","severidade":3}`)); r.Err != nil {
 		t.Fatal(r.Err)
 	}
-	rec, _, presente, err := st.GetByKey([]byte("A"), nil)
+	rec, _, presente, err := st.GetByKey(st.AbreSnapshot(), []byte("A"), nil)
 	if err != nil || !presente {
 		t.Fatalf("presente=%v err=%v", presente, err)
 	}
@@ -255,7 +255,7 @@ func TestRessurreicaoNaoFazMergeSobreOPayloadDaLapide(t *testing.T) {
 	}
 	st.LimpaTombstone(rowID)
 
-	rec, _, presente, err := st.GetByKey([]byte("A"), nil)
+	rec, _, presente, err := st.GetByKey(st.AbreSnapshot(), []byte("A"), nil)
 	if err != nil || !presente {
 		t.Fatalf("presente=%v err=%v", presente, err)
 	}

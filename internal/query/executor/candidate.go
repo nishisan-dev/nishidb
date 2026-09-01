@@ -27,6 +27,10 @@ type rowSource interface {
 type candidateSource struct {
 	it types.RowIDIterator
 	st Store
+	// snap é o universo desta consulta, e ele viaja com a FONTE porque é o
+	// fetch que decide liveness (§44): o iterador entrega candidatos, e quem
+	// diz se cada um estava vivo em T0 é o GetByRowID abaixo.
+	snap types.Snapshot
 }
 
 func (s *candidateSource) advance(buf []byte) (types.Record, []byte, bool, bool, error) {
@@ -37,7 +41,7 @@ func (s *candidateSource) advance(buf []byte) (types.Record, []byte, bool, bool,
 		return types.Record{}, buf, false, false, nil
 	}
 	id := s.it.RowID()
-	rec, out, ok, err := s.st.GetByRowID(id, buf)
+	rec, out, ok, err := s.st.GetByRowID(s.snap, id, buf)
 	if err != nil {
 		return types.Record{}, out, false, false, fmt.Errorf("executor: leitura da row %d: %w", id, err)
 	}
@@ -50,7 +54,12 @@ func (s *candidateSource) close() error { return s.it.Close() }
 // leitura dupla que existiria se o plano devolvesse um rowID para o fetcher
 // reler.
 type keySource struct {
-	st   Store
+	st Store
+	// snap entra aqui pela MESMA razão do candidateSource: o point lookup
+	// decide liveness por conta própria, sem passar pelo GetByRowID, e um
+	// snapshot que não chegasse até ele deixaria `WHERE id = ?` respondendo
+	// sobre um instante diferente do resto da mesma consulta.
+	snap types.Snapshot
 	key  []byte
 	done bool
 }
@@ -60,7 +69,7 @@ func (s *keySource) advance(buf []byte) (types.Record, []byte, bool, bool, error
 		return types.Record{}, buf, false, false, nil
 	}
 	s.done = true
-	rec, out, ok, err := s.st.GetByKey(s.key, buf)
+	rec, out, ok, err := s.st.GetByKey(s.snap, s.key, buf)
 	if err != nil {
 		return types.Record{}, out, false, false, fmt.Errorf("executor: leitura da key %q: %w", s.key, err)
 	}
@@ -71,18 +80,18 @@ func (s *keySource) close() error { return nil }
 
 // fonteDoPlano traduz o plano na fonte de candidatos. Nenhuma leitura de dado
 // acontece aqui além de abrir iteradores.
-func fonteDoPlano(plan planner.Plan, st Store, m *Metrics) (rowSource, error) {
+func fonteDoPlano(plan planner.Plan, st Store, m *Metrics, snap types.Snapshot) (rowSource, error) {
 	switch p := plan.(type) {
 	case *planner.FullScanPlan:
 		contaFonte(m, func(m *Metrics) *atomic.Int64 { return &m.SourceFullScan })
-		return &candidateSource{it: st.ScanLive(), st: st}, nil
+		return &candidateSource{it: st.ScanLive(snap), st: st, snap: snap}, nil
 
 	case *planner.PointLookupPlan:
 		if len(p.Key.Bytes) == 0 {
 			return nil, fmt.Errorf("%w: PointLookupPlan com key sem bytes", ErrInvalidPlan)
 		}
 		contaFonte(m, func(m *Metrics) *atomic.Int64 { return &m.PointLookups })
-		return &keySource{st: st, key: p.Key.Bytes}, nil
+		return &keySource{st: st, snap: snap, key: p.Key.Bytes}, nil
 
 	case *planner.IndexScanPlan:
 		it, err := st.Lookup(p.Field.ID, p.Val)
@@ -90,7 +99,7 @@ func fonteDoPlano(plan planner.Plan, st Store, m *Metrics) (rowSource, error) {
 			return nil, fmt.Errorf("executor: abrir índice de %q: %w", p.Field.Name, err)
 		}
 		contaFonte(m, func(m *Metrics) *atomic.Int64 { return &m.IndexScans })
-		return &candidateSource{it: it, st: st}, nil
+		return &candidateSource{it: it, st: st, snap: snap}, nil
 
 	case *planner.IndexIntersectPlan:
 		its, err := abreTermos(p.Terms, st)
@@ -98,7 +107,7 @@ func fonteDoPlano(plan planner.Plan, st Store, m *Metrics) (rowSource, error) {
 			return nil, err
 		}
 		contaFonte(m, func(m *Metrics) *atomic.Int64 { return &m.IndexScans })
-		return &candidateSource{it: &intersectIter{its: its, cur: make([]types.RowID, len(its))}, st: st}, nil
+		return &candidateSource{it: &intersectIter{its: its, cur: make([]types.RowID, len(its))}, st: st, snap: snap}, nil
 
 	case *planner.IndexUnionPlan:
 		its, err := abreTermos(p.Terms, st)
@@ -106,7 +115,7 @@ func fonteDoPlano(plan planner.Plan, st Store, m *Metrics) (rowSource, error) {
 			return nil, err
 		}
 		contaFonte(m, func(m *Metrics) *atomic.Int64 { return &m.IndexScans })
-		return &candidateSource{it: &unionIter{its: its, cur: make([]types.RowID, len(its)),
+		return &candidateSource{snap: snap, it: &unionIter{its: its, cur: make([]types.RowID, len(its)),
 			vivo: make([]bool, len(its))}, st: st}, nil
 
 	default:

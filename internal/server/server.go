@@ -348,6 +348,7 @@ func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*
 		DuracaoDeFundo:         spec.Materialization.DuracaoDeFundo,
 		CampoDeEscrita:         schema.CampoInstanteDeEscrita,
 		CampoDePrazo:           schema.CampoDePrazo,
+		SnapshotMaxBytes:       s.cfg.SnapshotMaxBytes(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("dataset %q: %w", spec.Name, err)

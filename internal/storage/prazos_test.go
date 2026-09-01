@@ -44,10 +44,10 @@ func TestPrazoVencidoUsaADuracaoDaLinha(t *testing.T) {
 	longo, _ := mustPut(t, s, "longo", 1, payloadComPrazo(t, s, "longo", rel.t, 7*24*time.Hour), nil)
 
 	rel.avanca(4 * time.Minute)
-	if !s.prazoVencido(curto) {
+	if !s.prazoVencido(curto, s.agora()) {
 		t.Error("a linha de 3m não venceu depois de 4m")
 	}
-	if s.prazoVencido(longo) {
+	if s.prazoVencido(longo, s.agora()) {
 		t.Error("a linha de 7d venceu depois de 4m")
 	}
 }
@@ -59,11 +59,11 @@ func TestLinhaSemExpiresInCaiNaDuracaoDeFundo(t *testing.T) {
 	id, _ := mustPut(t, s, "A", 1, payloadComEscrita(t, s, "A", "Start", rel.t), nil)
 
 	rel.avanca(30 * time.Minute)
-	if s.prazoVencido(id) {
+	if s.prazoVencido(id, s.agora()) {
 		t.Error("venceu antes da duração de fundo")
 	}
 	rel.avanca(31 * time.Minute)
-	if !s.prazoVencido(id) {
+	if !s.prazoVencido(id, s.agora()) {
 		t.Error("a linha sem prazo gravado não caiu na duração de fundo")
 	}
 }
@@ -73,7 +73,7 @@ func TestLinhaSemExpiresInESemFundoEhImortal(t *testing.T) {
 	id, _ := mustPut(t, s, "A", 1, payloadComEscrita(t, s, "A", "Start", rel.t), nil)
 
 	rel.avanca(365 * 24 * time.Hour)
-	if s.prazoVencido(id) {
+	if s.prazoVencido(id, s.agora()) {
 		t.Error("sem regra de fundo, a linha sem prazo gravado não pode vencer")
 	}
 }
@@ -86,10 +86,10 @@ func TestLinhaImortalNaoHerdaADuracaoDeFundo(t *testing.T) {
 	id, _ := mustPut(t, s, "A", 1, payloadComPrazo(t, s, "A", rel.t, 0), nil)
 
 	rel.avanca(48 * time.Hour)
-	if s.prazoVencido(id) {
+	if s.prazoVencido(id, s.agora()) {
 		t.Error("a linha imortal caiu na duração de fundo: o sentinela não está sendo distinguido")
 	}
-	if _, _, ok, err := s.GetByRowID(id, nil); err != nil || !ok {
+	if _, _, ok, err := s.GetByRowID(s.presente(), id, nil); err != nil || !ok {
 		t.Errorf("a linha imortal sumiu da leitura: ok=%v err=%v", ok, err)
 	}
 }
@@ -125,7 +125,7 @@ func TestReplayDoTailReconstroiOsPrazos(t *testing.T) {
 	t.Cleanup(func() { _ = s2.Close() })
 	rel2 := &relogioDeTeste{t: rel.t.Add(4 * time.Minute)}
 	s2.UsaRelogio(rel2.agora)
-	if !s2.prazoVencido(id) {
+	if !s2.prazoVencido(id, s2.agora()) {
 		t.Error("o replay não repôs a duração de 3m: a linha ganhou o prazo de fundo")
 	}
 }
@@ -136,14 +136,14 @@ func TestPrazoVencidoEscondeALinhaComOColetorParado(t *testing.T) {
 	s, rel := storeComRegras(t, t.TempDir(), 7*24*time.Hour)
 	id, _ := mustPut(t, s, "A", 1, payloadComPrazo(t, s, "A", rel.t, 3*time.Minute), nil)
 
-	if _, _, ok, _ := s.GetByRowID(id, nil); !ok {
+	if _, _, ok, _ := s.GetByRowID(s.presente(), id, nil); !ok {
 		t.Fatal("a linha nem apareceu")
 	}
 	rel.avanca(4 * time.Minute)
-	if _, _, ok, err := s.GetByRowID(id, nil); err != nil || ok {
+	if _, _, ok, err := s.GetByRowID(s.presente(), id, nil); err != nil || ok {
 		t.Errorf("a linha vencida continua visível: ok=%v err=%v", ok, err)
 	}
-	if rows := collectRows(t, s.ScanLive()); len(rows) != 0 {
+	if rows := collectRows(t, s.ScanLive(s.presente())); len(rows) != 0 {
 		t.Errorf("ScanLive devolveu a linha vencida: %v", rows)
 	}
 }
@@ -164,7 +164,7 @@ func TestEscritaComOutroPrazoCancelaAExpiracaoCurta(t *testing.T) {
 	}
 
 	rel.avanca(4 * time.Minute) // muito além dos 3m originais
-	if s.prazoVencido(id) {
+	if s.prazoVencido(id, s.agora()) {
 		t.Error("a entidade morreu pelo prazo antigo depois de a condição deixar de valer")
 	}
 }
@@ -184,7 +184,7 @@ func TestCompactionDescartaRecordVencidoPorRegraCondicional(t *testing.T) {
 	if r.Expiradas != 1 {
 		t.Fatalf("passada expirou %d, quero 1 (%+v)", r.Expiradas, r)
 	}
-	if _, _, ok, _ := s.GetByRowID(id, nil); ok {
+	if _, _, ok, _ := s.GetByRowID(s.presente(), id, nil); ok {
 		t.Error("a linha continua legível depois da lápide")
 	}
 }
