@@ -814,6 +814,10 @@ SELECT name, type, occurrences, typeMismatches, coercions FROM _meta.fields
 WHERE parent = 'persistent' AND typeMismatches > 0
 ```
 
+O mesmo namespace lista os contadores mantidos na escrita em
+`_meta.counters` (ver "Contadores mantidos na escrita"), e os totais de cada
+um saem em `_counters.<nome>`.
+
 **`occurrences` e `typeMismatches` existem porque o contador por DATASET é
 alarme sem endereço.** Ele diz "2.085.138 valores perdidos" e não diz qual das
 ~1.700 colunas respondeu por isso; a tabela que atribuía esse número só existiu
@@ -2153,7 +2157,16 @@ texto canônico do grupo — a key da v1 é uma coluna string única, e um
 **registrada no motor** sob o dataset e corre pelo pipeline inteiro — planner
 com métricas, top-N, orçamento —, porque `ORDER BY total ASC LIMIT 5` sobre
 milhares de grupos é exatamente a consulta do caso de uso. Os totais são lidos
-no presente; o que o snapshot congela é o conjunto de grupos.
+no presente; o que o snapshot congela é o conjunto de grupos. A lista dos
+contadores sai pelo mesmo caminho: `_meta.counters` é uma tabela virtual
+registrada sob o dataset — uma linha por contador, com a definição (`name`,
+`groupBy`, `condition`) e o retrato vivo de `EstatisticasDeContadores`
+(`groups`, `maxGroups`, `retired`, `refused`, `orphans`, `bytes`,
+`auditDivergent`, `auditAt`, os dois últimos NULL até a primeira auditoria).
+Ela mora em `internal/contadores`, não no pacote `meta`, porque o `meta`
+descreve o dataset pela definição estática e não conhece o storage; o motor
+manda `_meta.fields` para o `meta` e qualquer outra tabela do `_meta` para o
+registro. Existe em todo dataset, vazia quando não há `counters:`.
 
 **A auditoria.** `POST /v1/counters/audit` (ADMIN) congela os totais e abre o
 snapshot **no mesmo instante, sob o `wmu` por microssegundos**, e varre sem o

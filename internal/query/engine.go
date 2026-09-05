@@ -160,18 +160,23 @@ func (reg *registro) namespacesConhecidos() []string {
 // tabelaVirtual resolve `namespace.tabela` sob o dataset, com as duas recusas
 // nomeando o que existe — ninguém é mandado procurar um dataset que nunca quis.
 func (reg *registro) tabelaVirtual(dataset, namespace, tabela string) (*registro, error) {
+	// O `_meta` existe sempre, registrado ou não: a `fields` é fixa e mora
+	// no pacote meta, fora deste registro.
 	porTabela, ok := reg.virtuais[namespace]
-	if !ok {
+	if !ok && namespace != meta.Namespace {
 		return nil, fmt.Errorf("namespace %q não existe; existem %s", namespace, strings.Join(reg.namespacesConhecidos(), " e "))
 	}
 	v, ok := porTabela[tabela]
 	if !ok {
-		if len(porTabela) == 0 {
-			return nil, fmt.Errorf("o dataset %q não declara tabela nenhuma em %s", dataset, namespace)
-		}
-		nomes := make([]string, 0, len(porTabela))
+		nomes := make([]string, 0, len(porTabela)+1)
 		for n := range porTabela {
 			nomes = append(nomes, n)
+		}
+		if namespace == meta.Namespace {
+			nomes = append(nomes, meta.TabelaFields)
+		}
+		if len(nomes) == 0 {
+			return nil, fmt.Errorf("o dataset %q não declara tabela nenhuma em %s", dataset, namespace)
 		}
 		sort.Strings(nomes)
 		return nil, fmt.Errorf("%s não tem tabela %q no dataset %q; existem: %s", namespace, tabela, dataset, strings.Join(nomes, ", "))
@@ -227,12 +232,14 @@ func (e *Engine) Execute(ctx context.Context, dataset, sql string, params []type
 	// porque este é o ponto por onde o servidor e o CLI passam os dois — pô-lo
 	// numa camada acima faria a introspecção existir só para quem falasse HTTP.
 	if meta.Reconhece(stmt) {
-		if stmt.Namespace == meta.Namespace {
+		// `_meta.fields` é a tabela fixa do pacote meta, que descreve o
+		// dataset pela definição. As DEMAIS tabelas do `_meta` (`counters`) e
+		// os outros namespaces reservados são tabelas REGISTRADAS sob o
+		// dataset, e correm pelo mesmo pipeline que ele.
+		if stmt.Namespace == meta.Namespace && stmt.Dataset == meta.TabelaFields {
 			caps, _ := reg.store.(meta.Capacidades)
 			return meta.Abre(ctx, stmt, reg.sch, caps, params)
 		}
-		// Os outros namespaces reservados são tabelas REGISTRADAS sob o
-		// dataset, e correm pelo mesmo pipeline que ele.
 		e.mu.RLock()
 		v, err := reg.tabelaVirtual(dataset, stmt.Namespace, stmt.Dataset)
 		e.mu.RUnlock()
