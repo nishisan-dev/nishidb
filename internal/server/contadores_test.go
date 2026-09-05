@@ -2,10 +2,12 @@ package server_test
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/nishisan-dev/nishidb/internal/materializer"
+	"github.com/nishisan-dev/nishidb/internal/protocolo"
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/server"
 	"github.com/nishisan-dev/nishidb/internal/storage"
@@ -166,15 +168,58 @@ func TestMetaCountersListaPelaRotaDeQuery(t *testing.T) {
 	}
 }
 
+// TestCountersTabelaDesconhecidaNomeiaAsQueExistem cobre a mensagem E o
+// CÓDIGO. A asserção de código nasceu depois, com a issue #35: enquanto o teste
+// só exigia `status != 200`, ele passava verde com a resposta errada — 500 e
+// INTERNAL —, que foi o que o piloto viu em 05/09/2026.
 func TestCountersTabelaDesconhecidaNomeiaAsQueExistem(t *testing.T) {
 	srv := servidorComServicos(t, 4)
 	resp := consulta(t, srv, `{"dataset":"servicos","sql":"SELECT a FROM _counters.nao_existe"}`)
 	defer fecha(t, resp)
-	if resp.StatusCode == 200 {
-		t.Fatal("tabela desconhecida tem de ser recusada")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status %d, quero 400: tabela desconhecida é erro do cliente", resp.StatusCode)
 	}
 	f := falhaDe(t, resp)
+	if f.Code != protocolo.CodBind {
+		t.Fatalf("código %q, quero %q: a série de erro interno não pode subir por um nome digitado errado", f.Code, protocolo.CodBind)
+	}
 	if !strings.Contains(f.Message, "servicos_por_olt") {
 		t.Fatalf("a recusa tem de listar as tabelas que existem: %s", f.Message)
+	}
+}
+
+// TestTabelaVirtualDesconhecidaSaiComoErroDoCliente cobre os outros dois
+// caminhos de recusa de roteamento pela rota de consulta: o `_meta.nada` que o
+// piloto consultou e o namespace que não existe. Os três — com o
+// `_counters.nao_existe` do teste acima — são a mesma família.
+func TestTabelaVirtualDesconhecidaSaiComoErroDoCliente(t *testing.T) {
+	srv := servidorComServicos(t, 4)
+	casos := []struct {
+		nome  string
+		sql   string
+		naMsg string
+	}{
+		{"tabela do _meta", "SELECT a FROM _meta.nada", "existem: counters, fields"},
+		{"namespace", "SELECT a FROM _outro.coisa", "_counters"},
+	}
+	for _, c := range casos {
+		t.Run(c.nome, func(t *testing.T) {
+			resp := consulta(t, srv, `{"dataset":"servicos","sql":"`+c.sql+`"}`)
+			defer fecha(t, resp)
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status %d, quero 400", resp.StatusCode)
+			}
+			f := falhaDe(t, resp)
+			if f.Code != protocolo.CodBind {
+				t.Fatalf("código %q, quero %q", f.Code, protocolo.CodBind)
+			}
+			if !strings.Contains(f.Message, c.naMsg) {
+				t.Fatalf("a recusa tem de nomear o que existe (%q): %s", c.naMsg, f.Message)
+			}
+			// A posição vem do DatasetPos e é o que o cliente destaca.
+			if f.Line != 1 || f.Column <= 0 {
+				t.Fatalf("a recusa tem de trazer linha e coluna do trecho ofensor: linha %d, coluna %d", f.Line, f.Column)
+			}
+		})
 	}
 }

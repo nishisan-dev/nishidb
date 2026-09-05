@@ -818,6 +818,20 @@ O mesmo namespace lista os contadores mantidos na escrita em
 `_meta.counters` (ver "Contadores mantidos na escrita"), e os totais de cada
 um saem em `_counters.<nome>`.
 
+**Recusa de roteamento é erro do cliente, e por isso é tipada.** Namespace
+inexistente, namespace sem tabela nenhuma e tabela inexistente saem por
+`binder.ErroEm` com a posição do nome depois do ponto, o que as põe na família
+`binder.ErrBind` — o servidor as classifica como `BIND`/400 pelo `case` que já
+existia, o driver JDBC as traduz para o SQLState 42000 e o cliente Python para
+`ProgrammingError`, sem código novo no wire. Enquanto eram `fmt.Errorf` cru
+caíam no `default` da classificação: um `SELECT a FROM _meta.nada` respondia
+**500 / `INTERNAL`** e subia `nishidb_query_errors{categoria="INTERNAL"}`, que
+foi o que o piloto viu em 05/09/2026. O teste que cobria o caso só exigia
+`status != 200`, e por isso passou verde com a resposta errada — hoje ele
+afirma o código (`TestCountersTabelaDesconhecidaNomeiaAsQueExistem`), ao lado
+de `TestTabelaVirtualDesconhecidaSaiComoErroDoCliente` e
+`TestRecusaDeRoteamentoVirtualEhErroDeBind`.
+
 **`occurrences` e `typeMismatches` existem porque o contador por DATASET é
 alarme sem endereço.** Ele diz "2.085.138 valores perdidos" e não diz qual das
 ~1.700 colunas respondeu por isso; a tabela que atribuía esse número só existiu
