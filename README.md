@@ -1361,7 +1361,10 @@ parado, saem a identidade do fluxo e o offset durável, e o `state` é NULL —
 aquele processo não observa ingestão nenhuma.
 
 Um `FROM _outro.x` é recusado nomeando os namespaces que existem, e um
-`FROM _meta.x` nomeia as tabelas.
+`FROM _meta.x` nomeia as tabelas. As duas recusas são erro **do cliente** —
+código `BIND`, HTTP 400, com a posição do nome ofensor —, da mesma família de
+"coluna desconhecida": o FROM aponta para o que não existe, e o servidor não
+tem por que reportar falha interna a quem digitou um nome errado.
 
 `occurrences` é quantas vezes a chave apareceu no documento; `typeMismatches`,
 quantas dessas não couberam no tipo da coluna; `coercions`, quantas chegaram

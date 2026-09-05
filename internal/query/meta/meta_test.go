@@ -2,11 +2,13 @@ package meta_test
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/nishisan-dev/nishidb/internal/materializer"
+	"github.com/nishisan-dev/nishidb/internal/query/binder"
 	"github.com/nishisan-dev/nishidb/internal/query/executor"
 	"github.com/nishisan-dev/nishidb/internal/query/meta"
 	"github.com/nishisan-dev/nishidb/internal/query/parser"
@@ -180,7 +182,12 @@ func TestColunaInexistenteNomeiaATabelaVirtual(t *testing.T) {
 }
 
 // Namespace desconhecido não vira 404 de dataset nem passa batido: a recusa
-// nomeia o que existe.
+// nomeia o que existe — e é da família do bind, porque é erro de quem escreveu
+// a query. Sem o tipo, o servidor responderia INTERNAL/500 (issue #35).
+//
+// Este ponto é defesa: quem roteia os outros namespaces reservados é o motor,
+// e por ele nada além de `_meta.fields` chega aqui. Defesa que mente sobre a
+// categoria do erro é pior que defesa nenhuma.
 func TestNamespaceDesconhecidoERecusado(t *testing.T) {
 	st, err := parser.Parse("SELECT a FROM _outro.coisa")
 	if err != nil {
@@ -189,8 +196,31 @@ func TestNamespaceDesconhecidoERecusado(t *testing.T) {
 	if !meta.Reconhece(st) {
 		t.Fatal("Reconhece devia aceitar qualquer namespace reservado para poder recusá-lo com nome")
 	}
-	if _, err := meta.Abre(context.Background(), st, alvo(t), nil, nil); err == nil {
+	_, err = meta.Abre(context.Background(), st, alvo(t), nil, nil)
+	if err == nil {
 		t.Fatal("esperava recusa de namespace desconhecido")
+	}
+	if !errors.Is(err, binder.ErrBind) {
+		t.Errorf("a recusa tem de ser da família do bind: %v", err)
+	}
+}
+
+// TestTabelaDesconhecidaNoMetaERecusadaComoErroDeBind: a irmã da recusa acima,
+// pelo outro ramo — namespace certo, tabela que não existe.
+func TestTabelaDesconhecidaNoMetaERecusadaComoErroDeBind(t *testing.T) {
+	st, err := parser.Parse("SELECT a FROM _meta.nada")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = meta.Abre(context.Background(), st, alvo(t), nil, nil)
+	if err == nil {
+		t.Fatal("esperava recusa de tabela desconhecida")
+	}
+	if !errors.Is(err, binder.ErrBind) {
+		t.Errorf("a recusa tem de ser da família do bind: %v", err)
+	}
+	if !strings.Contains(err.Error(), "_meta.fields") {
+		t.Errorf("a recusa tem de nomear a tabela que existe: %v", err)
 	}
 }
 

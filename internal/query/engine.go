@@ -157,14 +157,24 @@ func (reg *registro) namespacesConhecidos() []string {
 	return out
 }
 
-// tabelaVirtual resolve `namespace.tabela` sob o dataset, com as duas recusas
+// tabelaVirtual resolve `namespace.tabela` sob o dataset, com as três recusas
 // nomeando o que existe — ninguém é mandado procurar um dataset que nunca quis.
-func (reg *registro) tabelaVirtual(dataset, namespace, tabela string) (*registro, error) {
+//
+// As três são erro DE QUEM ESCREVEU A QUERY, e por isso saem tipadas por
+// binder.ErroEm: o FROM aponta para algo que não existe, que é a mesma família
+// de "coluna desconhecida" — esta, na MESMA tabela virtual, já sai como BIND
+// pelo renomeiaTabelaVirtual. Com fmt.Errorf cru o servidor não tinha como
+// distingui-las de um bug e respondia INTERNAL/500, subindo a série de erro
+// interno por conta de um nome digitado errado (issue #35).
+//
+// pos é a posição do nome DEPOIS do ponto (parser.SelectStmt.DatasetPos), que
+// é o token ofensor: o cliente destaca a tabela, não o qualificador.
+func (reg *registro) tabelaVirtual(dataset, namespace, tabela string, pos int) (*registro, error) {
 	// O `_meta` existe sempre, registrado ou não: a `fields` é fixa e mora
 	// no pacote meta, fora deste registro.
 	porTabela, ok := reg.virtuais[namespace]
 	if !ok && namespace != meta.Namespace {
-		return nil, fmt.Errorf("namespace %q não existe; existem %s", namespace, strings.Join(reg.namespacesConhecidos(), " e "))
+		return nil, binder.ErroEm(pos, "namespace %q não existe; existem %s", namespace, strings.Join(reg.namespacesConhecidos(), " e "))
 	}
 	v, ok := porTabela[tabela]
 	if !ok {
@@ -176,10 +186,10 @@ func (reg *registro) tabelaVirtual(dataset, namespace, tabela string) (*registro
 			nomes = append(nomes, meta.TabelaFields)
 		}
 		if len(nomes) == 0 {
-			return nil, fmt.Errorf("o dataset %q não declara tabela nenhuma em %s", dataset, namespace)
+			return nil, binder.ErroEm(pos, "o dataset %q não declara tabela nenhuma em %s", dataset, namespace)
 		}
 		sort.Strings(nomes)
-		return nil, fmt.Errorf("%s não tem tabela %q no dataset %q; existem: %s", namespace, tabela, dataset, strings.Join(nomes, ", "))
+		return nil, binder.ErroEm(pos, "%s não tem tabela %q no dataset %q; existem: %s", namespace, tabela, dataset, strings.Join(nomes, ", "))
 	}
 	return v, nil
 }
@@ -241,7 +251,7 @@ func (e *Engine) Execute(ctx context.Context, dataset, sql string, params []type
 			return meta.Abre(ctx, stmt, reg.sch, caps, params)
 		}
 		e.mu.RLock()
-		v, err := reg.tabelaVirtual(dataset, stmt.Namespace, stmt.Dataset)
+		v, err := reg.tabelaVirtual(dataset, stmt.Namespace, stmt.Dataset, stmt.DatasetPos)
 		e.mu.RUnlock()
 		if err != nil {
 			return nil, err

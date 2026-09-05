@@ -67,14 +67,20 @@ func Abre(ctx context.Context, st *parser.SelectStmt, alvo *schema.Compiled, cap
 	if alvo == nil {
 		return nil, fmt.Errorf("%s: dataset alvo não informado", Namespace)
 	}
+	// As duas recusas abaixo são erro de quem escreveu a query — o FROM aponta
+	// para o que não existe —, e por isso saem tipadas por binder.ErroEm, como
+	// as do roteamento no motor (internal/query/engine.go). Erro sem tipo aqui
+	// chegaria ao servidor como INTERNAL/500 (issue #35). O `alvo == nil`
+	// acima NÃO é tipado de propósito: aquilo é chamador que não passou o
+	// dataset, e 500 é a resposta honesta.
 	if st.Namespace != Namespace {
 		// Quem roteia os OUTROS namespaces reservados (`_counters`) é o motor,
 		// pelo registro de tabelas virtuais; chegar aqui com outro namespace
 		// é chamador que não passou pelo motor.
-		return nil, fmt.Errorf("namespace %q não existe; este ponto serve só %q (os demais namespaces são registrados no motor)", st.Namespace, Namespace)
+		return nil, binder.ErroEm(st.DatasetPos, "namespace %q não existe; este ponto serve só %q (os demais namespaces são registrados no motor)", st.Namespace, Namespace)
 	}
 	if st.Dataset != TabelaFields {
-		return nil, fmt.Errorf("%s não tem tabela %q; existe %s.%s", Namespace, st.Dataset, Namespace, TabelaFields)
+		return nil, binder.ErroEm(st.DatasetPos, "%s não tem tabela %q; existe %s.%s", Namespace, st.Dataset, Namespace, TabelaFields)
 	}
 
 	sch, err := schemaDaTabela()
