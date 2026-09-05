@@ -28,7 +28,8 @@ naquela raspagem — ausência é ausência de medida, e nunca zero.
 - **⚠️** marca a série que **não estava exposta** no processo de referência
   (piloto, `v0.7.0-40-g3c57cce`, 05/09/2026). Ou depende de uma feature que
   aquele dataset não declara, ou só nasce no primeiro evento, ou não é
-  emitida. As três classes estão separadas ao fim.
+  emitida. As três classes estão separadas ao fim. Duas séries perderam a
+  marca depois daquela leitura, pela correção da issue #47.
 
 Os textos da coluna "o que responde" são os `# HELP` reais, lidos da saída do
 processo — não uma paráfrase escrita à mão que possa divergir dela.
@@ -93,12 +94,12 @@ O protocolo remoto: o que ele admite, recusa e quanto demora.
 | `nishidb_query_full_scans` | counter | — | planos de full scan escolhidos (§64); é do processo, não do dataset |
 | `nishidb_query_latency_seconds` | histogram | `dataset` | duração da consulta, do request ao último byte |
 | `nishidb_query_longest_running_seconds` | gauge | — | idade da consulta em voo há mais tempo; 0 quando não há nenhuma |
-| `nishidb_query_long_rejected_total` ⚠️ | counter | — | consultas longas recusadas por falta de vaga no sub-pool (runtime.query.maxLongRunning) |
+| `nishidb_query_long_rejected_total` | counter | — | consultas longas recusadas por falta de vaga no sub-pool (runtime.query.maxLongRunning) |
 | `nishidb_query_snapshot_bytes` | gauge | `dataset` | heap retido pelo journal de versões do isolamento de leitura |
 | `nishidb_query_snapshot_oldest_seconds` | gauge | `dataset` | há quanto tempo a consulta mais antiga segura o passado; 0 quando não há nenhuma |
 | `nishidb_query_snapshot_expired_total` | counter | `dataset` | consultas invalidadas por o journal de versões estourar runtime.query.snapshotMaxBytes |
 | `nishidb_query_buffer_bytes` | gauge | — | bytes de buffer de consulta reservados neste instante (runtime.memoryTarget) |
-| `nishidb_query_budget_rejected_total` ⚠️ | counter | — | linhas recusadas por não caberem no orçamento de buffer (runtime.query.maxBufferPerQuery) |
+| `nishidb_query_budget_rejected_total` | counter | — | linhas recusadas por não caberem no orçamento de buffer (runtime.query.maxBufferPerQuery) |
 
 ### Schema do dataset
 
@@ -239,14 +240,17 @@ label só emite série quando um valor existe — a primeira falha de
 autenticação a cria. É o desenho: publicar `reason="senha"` com zero antes de
 qualquer falha inventaria uma categoria que ninguém exercitou.
 
-**Duas séries caem aqui sem que isso seja o desenho**, e valem correção
+**Duas séries caíam aqui sem que isso fosse o desenho, e foram corrigidas**
 (issue [#47](https://github.com/nishisan-dev/nishidb/issues/47)):
 `nishidb_query_long_rejected_total` e `nishidb_query_budget_rejected_total`
-são declaradas SEM label, mas a série só é criada dentro de `recusaLonga()` e
-`recusaPorOrcamento()` — isto é, na primeira recusa. As duas são exatamente
-as que alarmam, e enquanto não existem, `absent()` não distingue "nunca
-recusou" de "o alvo caiu". O contraste está no mesmo repositório: o watchdog
-faz `desistiu.Set(0)` na subida, com o comentário que explica por quê.
+são declaradas SEM label, mas a série só era criada dentro de `recusaLonga()`
+e `recusaPorOrcamento()` — isto é, na primeira recusa. As duas são exatamente
+as que alarmam, e enquanto não existiam, `absent()` não distinguia "nunca
+recusou" de "o alvo caiu". Hoje nascem com zero na construção de
+`metricasDeQuery`, como o `desistiu.Set(0)` do watchdog sempre fez, e
+`TestSeriesDeRecusaDeQueryNascemComZero` trava isso raspando o `/metrics` de
+um servidor recém-subido — perguntar ao registry não serviria, porque lá a
+família existe desde sempre; quem não existia era a série.
 
 ### 3. Não é emitida por ninguém
 
