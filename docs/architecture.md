@@ -2165,10 +2165,19 @@ ainda não lapidou (contada por desenho até ele chegar). Snapshot estourado é
 **inconclusiva**, nunca relatório. A reconstrução (`/v1/counters/rebuild`)
 segura o writer pela varredura, e o custo é dito.
 
-**O que custa, medido.** Os números estão em
-[`aceite-contadores.md`](aceite-contadores.md): o gate `TestPutNaoAlocaMaisComContadores`
-trava que o `Put` real não aloca mais com dois contadores do que sem, e a
-bancada `BenchmarkApplyIngestReal` registra o custo por evento.
+**O que custa, medido** (bancada de 04/09/2026,
+[`aceite-contadores.md`](aceite-contadores.md), saída crua em
+[`contadores-20260904.txt`](../benchmark/baselines/contadores-20260904.txt)).
+Em regime — grupos internados, linha no overlay — dois contadores custam
+**+0,5 µs por evento** (3,99 → 4,51 µs, +13 %, n = 6), com **zero alocação**
+nos dois lados; o gate `TestPutNaoAlocaMaisComContadores` trava que o `Put`
+real não aloca mais com contadores do que sem (1,0 nos dois). A carga fria é
+outro número: cada grupo novo paga o fsync do dicionário, ≈ 0,6 ms — 600
+grupos em 366 ms na bancada. A dobra de um milhão de linhas custa **38–52 ms**
+e fica no caminho do `Open`; a reconstrução em operação varre um milhão de
+linhas vivas em **0,8 s por contador** com o writer parado, e a reconstrução
+por mudança de parâmetro recria o dicionário e paga o fsync por grupo de novo
+(265 grupos em 299 ms no ponta a ponta).
 
 **Limites conhecidos.** O fsync por grupo novo é bounded pelo inventário, mas
 no nível de PON ou splitter (10⁵ a 10⁶ grupos) o custo da carga inicial não

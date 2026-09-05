@@ -1,0 +1,132 @@
+Contadores mantidos na escrita — bancada de aceite
+==================================================
+
+Data:    2026-09-04
+Máquina: Intel(R) Core(TM) 7 150U, 12 vCPU, Linux 6.8.0-138-generic, NVMe/ext4
+Go:      go1.26.7 (o CI pina 1.26.5)
+Commit:  021603e + a tarefa G2 (os quatro benchmarks de ingestão e o de
+         reconstrução nascem no mesmo commit que este arquivo)
+Leitura: docs/aceite-contadores.md
+
+O QUE ESTE ARQUIVO É
+
+A saída crua das quatro bancadas que o aceite cita, sem edição. As duas
+perguntas da ingestão são medidas por pares distintos, porque são números
+diferentes: em REGIME (grupos internados, linha no overlay) o contador custa
+uma passada pelo payload e dois atômicos; na carga FRIA cada grupo novo paga um
+fsync do dicionário, e o aquecimento de 512 eventos do BenchmarkApplyIngestReal
+não cobre os 300 NAS do corpus.
+
+A primeira rodada da variante com contadores (não reproduzida aqui) saiu com
+36 µs numa única amostra: o INFO de subida dos contadores quebrou cinco das
+seis linhas de resultado, e a que sobrou media a carga fria. O logger da
+bancada passou a ser silenciado.
+
+--------------------------------------------------------------------------
+1. Ingestão real, sem e com dois contadores por NAS-Identifier
+--------------------------------------------------------------------------
+
+Comando: NISHIDB_BENCH_DIR=<ext4> go test ./benchmark/micro/ -run='^$' \
+             -bench='BenchmarkApplyIngestReal(Regime|Frio)' -benchmem \
+             -benchtime=20000x -count=6
+
+goos: linux
+goarch: amd64
+pkg: github.com/nishisan-dev/nishidb/benchmark/micro
+cpu: Intel(R) Core(TM) 7 150U
+BenchmarkApplyIngestRealRegime-12                 	   20000	      5103 ns/op	  54.09 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyIngestRealRegime-12                 	   20000	      3982 ns/op	  69.32 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyIngestRealRegime-12                 	   20000	      4000 ns/op	  68.99 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyIngestRealRegime-12                 	   20000	      3962 ns/op	  69.66 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyIngestRealRegime-12                 	   20000	      3978 ns/op	  69.39 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyIngestRealRegime-12                 	   20000	      4089 ns/op	  67.50 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyIngestRealRegimeComContadores-12    	   20000	      4418 ns/op	  62.48 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyIngestRealRegimeComContadores-12    	   20000	      5326 ns/op	  51.82 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyIngestRealRegimeComContadores-12    	   20000	      4603 ns/op	  59.96 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyIngestRealRegimeComContadores-12    	   20000	      5105 ns/op	  54.06 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyIngestRealRegimeComContadores-12    	   20000	      4195 ns/op	  65.79 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyIngestRealRegimeComContadores-12    	   20000	      4051 ns/op	  68.14 MB/s	       0 B/op	       0 allocs/op
+BenchmarkApplyIngestRealFrio-12                   	   20000	     15244 ns/op	  18.11 MB/s	      14 B/op	       0 allocs/op
+BenchmarkApplyIngestRealFrio-12                   	   20000	     16646 ns/op	  16.58 MB/s	      14 B/op	       0 allocs/op
+BenchmarkApplyIngestRealFrio-12                   	   20000	     11528 ns/op	  23.94 MB/s	      16 B/op	       0 allocs/op
+BenchmarkApplyIngestRealFrio-12                   	   20000	     13118 ns/op	  21.04 MB/s	      14 B/op	       0 allocs/op
+BenchmarkApplyIngestRealFrio-12                   	   20000	     10690 ns/op	  25.82 MB/s	      14 B/op	       0 allocs/op
+BenchmarkApplyIngestRealFrio-12                   	   20000	     13122 ns/op	  21.03 MB/s	      16 B/op	       0 allocs/op
+BenchmarkApplyIngestRealFrioComContadores-12      	   20000	     31757 ns/op	   8.69 MB/s	      27 B/op	       0 allocs/op
+BenchmarkApplyIngestRealFrioComContadores-12      	   20000	     32064 ns/op	   8.61 MB/s	      27 B/op	       0 allocs/op
+BenchmarkApplyIngestRealFrioComContadores-12      	   20000	     33479 ns/op	   8.24 MB/s	      29 B/op	       0 allocs/op
+BenchmarkApplyIngestRealFrioComContadores-12      	   20000	     31049 ns/op	   8.89 MB/s	      29 B/op	       0 allocs/op
+BenchmarkApplyIngestRealFrioComContadores-12      	   20000	     29846 ns/op	   9.25 MB/s	      27 B/op	       0 allocs/op
+BenchmarkApplyIngestRealFrioComContadores-12      	   20000	     29668 ns/op	   9.30 MB/s	      27 B/op	       0 allocs/op
+PASS
+ok  	github.com/nishisan-dev/nishidb/benchmark/micro	16.464s
+
+benchstat (regime: sem → com)
+
+                   │    sec/op    │    sec/op     vs base               │
+ApplyIngestReal-12   3.991µ ± 28%   4.511µ ± 18%  +13.02% (p=0.041 n=6)
+                   │   B/op       │   B/op        vs base               │
+ApplyIngestReal-12   0.000 ± 0%     0.000 ± 0%    ~ (p=1.000 n=6)
+                   │ allocs/op    │ allocs/op     vs base               │
+ApplyIngestReal-12   0.000 ± 0%     0.000 ± 0%    ~ (p=1.000 n=6)
+
+benchstat (frio: sem → com)
+
+                   │    sec/op    │    sec/op     vs base               │
+ApplyIngestReal-12   13.12µ ± 27%   31.40µ ± 7%   +139.35% (p=0.002 n=6)
+                   │   B/op       │   B/op        vs base               │
+ApplyIngestReal-12   14.00 ± 14%    27.00 ± 7%    +92.86% (p=0.002 n=6)
+                   │ allocs/op    │ allocs/op     vs base               │
+ApplyIngestReal-12   0.000 ± 0%     0.000 ± 0%    ~ (p=1.000 n=6)
+
+Leitura: (31,40 − 13,12) µs × 20 000 eventos ≈ 366 ms a mais na rodada fria,
+que é a internação de 300 NAS × 2 contadores = 600 grupos com fsync,
+≈ 0,6 ms por grupo. Em regime, +0,52 µs por evento para dois contadores.
+
+--------------------------------------------------------------------------
+2. Dobra de um milhão de linhas (2 048 grupos)
+--------------------------------------------------------------------------
+
+Comando: go test ./internal/storage/contador/ -run='^$' -bench=BenchmarkDobra1M \
+             -benchmem -count=3
+
+goos: linux
+goarch: amd64
+pkg: github.com/nishisan-dev/nishidb/internal/storage/contador
+cpu: Intel(R) Core(TM) 7 150U
+BenchmarkDobra1M-12    	      24	  51699694 ns/op	      64 B/op	       1 allocs/op
+BenchmarkDobra1M-12    	      28	  38230048 ns/op	      64 B/op	       1 allocs/op
+BenchmarkDobra1M-12    	      31	  37883658 ns/op	      64 B/op	       1 allocs/op
+PASS
+ok  	github.com/nishisan-dev/nishidb/internal/storage/contador	10.412s
+
+(Uma rodada anterior, no mesmo dia: 37,86 / 37,52 / 37,63 ms.)
+
+--------------------------------------------------------------------------
+3. Reconstrução em operação: um milhão de linhas vivas, dois contadores
+--------------------------------------------------------------------------
+
+Comando: go test ./internal/storage/ -run='^$' -bench=BenchmarkReconstroiContadores1M \
+             -benchmem -benchtime=3x -count=1
+
+(As linhas de log são do próprio Store — uma por contador por rebuild; o
+dicionário é mantido, não há fsync por grupo.)
+
+event=contador.reconstruido contador=serv linhas=1048576 grupos=2048 duracao=789.989464ms
+event=contador.reconstruido contador=aut  linhas=1048576 grupos=2048 duracao=866.469003ms
+event=contador.reconstruido contador=serv linhas=1048576 grupos=2048 duracao=872.678316ms
+event=contador.reconstruido contador=aut  linhas=1048576 grupos=2048 duracao=854.445527ms
+event=contador.reconstruido contador=serv linhas=1048576 grupos=2048 duracao=803.256613ms
+BenchmarkReconstroiContadores1M-12    	       3	1675223039 ns/op	   12056 B/op	      31 allocs/op
+PASS
+ok  	github.com/nishisan-dev/nishidb/internal/storage	22.729s
+
+--------------------------------------------------------------------------
+4. Ponta a ponta com o binário (samples/, 1 045 eventos, 265 OLTs)
+--------------------------------------------------------------------------
+
+Reconstrução por mudança de where (recria o dicionário, fsync por grupo):
+event=contador.construido contador=autenticados_por_olt motivo="os parâmetros mudaram (groupBy [4] → [4], where \"authenticated = true\" → \"authenticated = false\")" linhas=1010 grupos=265 duracao=298.964999ms
+
+Auditoria (local e pela rota): 1010/1010 e 461/461, 0 divergentes, 2–3 ms.
+Rebuild pela rota: 1010 linhas, 265 grupos, 3 ms.
