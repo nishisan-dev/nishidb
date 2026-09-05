@@ -1073,6 +1073,10 @@ func (c *Compiled) FieldByID(id types.FieldID) (*CompiledField, bool) {
 // Excluded reporta se o nome (ou o alias) está na lista de exclusão. Não é
 // consultado no hot path do parse: campo excluído simplesmente não existe em
 // byName, e o ResolveUnknown se encarrega de não o recriar.
+//
+// Ele NÃO é acessório de teste: é o único ponto que torna observável o alias
+// dentro do conjunto de exclusão. Sem ele, apagar a linha que interna o alias
+// (compile.go, `c.exclude[spec.Alias]`) passa VERDE na suíte inteira — medido.
 func (c *Compiled) Excluded(name []byte) bool {
 	_, ok := c.exclude[string(name)]
 	return ok

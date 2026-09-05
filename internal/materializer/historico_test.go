@@ -206,9 +206,6 @@ func TestFalhaNoHistoricoEhSticky(t *testing.T) {
 	if h.chamado != 1 {
 		t.Fatalf("o histórico foi chamado %d vezes depois de falhar, quer 1", h.chamado)
 	}
-	if m.HistoricoDegradado() == nil {
-		t.Fatal("HistoricoDegradado = nil depois da falha")
-	}
 	snap := m.Metrics()
 	if !snap.HistoricoDegradado {
 		t.Error("o snapshot não marca a degradação")

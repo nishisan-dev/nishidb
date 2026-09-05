@@ -39,9 +39,6 @@ type Global struct {
 // recusa valor não positivo.
 func NovoGlobal(teto int64) *Global { return &Global{teto: teto} }
 
-// Teto é o limite configurado; 0 ou negativo significa ilimitado.
-func (g *Global) Teto() int64 { return g.teto }
-
 // Usado é quanto do orçamento está reservado NESTE instante. É a fonte de
 // nishidb_query_buffer_bytes.
 func (g *Global) Usado() int64 { return g.usado.Load() }

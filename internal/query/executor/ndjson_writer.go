@@ -164,9 +164,6 @@ func (s *StreamWriter) flush() error {
 	return nil
 }
 
-// Err devolve o erro sticky (nil se saudável).
-func (s *StreamWriter) Err() error { return s.err }
-
 // erroDeOrcamento carrega os DOIS números que tornam a recusa acionável: o
 // tamanho da linha e o teto que ela furou.
 //

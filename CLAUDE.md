@@ -70,10 +70,13 @@ Pacotes que estruturam o todo:
   Os agregados do contador inteiro (`linhas`, `total`) andam COLADOS aos
   vetores por grupo, dentro das mesmas guardas — nunca são somados na leitura,
   e a auditoria é o que os reconcilia.
-- `internal/index` — `primary` (open addressing sobre mmap), `bitmap` (baixa
-  cardinalidade), `hash` (alta cardinalidade, remoção por lápide), `valuekey`
-  (dono ÚNICO da chave canônica `[tipo][payload]` — é formato de disco, com
-  golden test de bytes).
+- `internal/index` — `primary` (open addressing sobre mmap), `segindex` (índice
+  secundário POR SEGMENTO, motor ÚNICO que substituiu os dois globais: por
+  segmento a diferença entre hash e bitmap some, porque os dois são "valor →
+  conjunto ordenado de rowIds" e densidade vira decisão de codificação, não de
+  motor; duas formas, WIP mutável para o segmento corrente e selada imutável
+  para os rotacionados), `valuekey` (dono ÚNICO da chave canônica
+  `[tipo][payload]` — é formato de disco, com golden test de bytes).
 - `internal/query` — lexer → parser → binder → planner → executor, mais
   `orcamento` (admissão de memória), `spill` (transbordo do ORDER BY) e `meta`
   (namespace `_meta` como Store virtual atrás do mesmo pipeline). Tabelas
@@ -131,8 +134,10 @@ Pacotes que estruturam o todo:
   para o contador é linha com location e sem lápide — não a visibilidade da
   consulta. `nishidb counters --config` exige o servidor parado; `--server`
   usa as rotas ADMIN.
-- **Planner nunca falha**: prioridade fixa primary → hash → bitmap →
-  interseção/união → full scan; toda dúvida degrada para FullScan.
+- **Planner nunca falha**: prioridade fixa primary → índice → união de OR na
+  raiz → full scan; toda dúvida degrada para FullScan. Não há desempate entre
+  motores — com um motor de índice só, não existe "qual dos dois" a decidir, e
+  a elegibilidade sai de um único `Indexado(field)`.
 - **Zero alocação por linha** no scan/NDJSON é propriedade gateada
   (`testing.AllocsPerRun`); não existe buffer de rows (§66) e o encoder NDJSON é
   proibido de importar `fmt` e `encoding/json` (há teste).

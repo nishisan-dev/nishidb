@@ -2417,14 +2417,6 @@ func (it *hashIterator) Err() error {
 
 func (it *hashIterator) Close() error { return it.it.Close() }
 
-// emptyIterator é um types.RowIDIterator sem elementos.
-type emptyIterator struct{}
-
-func (emptyIterator) Next() bool         { return false }
-func (emptyIterator) RowID() types.RowID { return 0 }
-func (emptyIterator) Err() error         { return nil }
-func (emptyIterator) Close() error       { return nil }
-
 // ScanLive devolve um iterador lazy das rows vivas (rowIds crescentes,
 // location válida — overlay incluso — e sem tombstone). Rows criadas após a
 // chamada não aparecem (snapshot do limite superior).

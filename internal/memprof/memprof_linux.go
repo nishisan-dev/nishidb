@@ -96,7 +96,7 @@ func readFrom(statusPath, rollupPath string) (Sample, error) {
 		// Kernel anterior ao 4.5 não expõe RssAnon/RssFile no status. O
 		// smaps_rollup dá o mesmo por subtração — é mais caro (percorre as
 		// VMAs), então só entra quando a fonte barata não serve.
-		anon, file = rollupSeparation(rollupPath, st.vmRSS)
+		anon, file = rollupSeparation(rollupPath)
 	}
 
 	var ms runtime.MemStats
@@ -119,7 +119,7 @@ func readFrom(statusPath, rollupPath string) (Sample, error) {
 // NÃO invalida a amostra: perder a decomposição degrada o relatório, enquanto
 // o RSS total — que é o critério de aceite — continua válido. Devolve (0,0)
 // quando não dá para separar, em vez de inventar um número.
-func rollupSeparation(path string, vmRSS uint64) (anon, file uint64) {
+func rollupSeparation(path string) (anon, file uint64) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return 0, 0
