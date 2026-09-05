@@ -178,7 +178,19 @@ func TestOrcamentoVoltaAoFimDeCadaConsulta(t *testing.T) {
 
 	// E o medidor volta a zero: um número que só sobe é a mesma falha vista do
 	// lado do painel.
-	if v := valorDaMetrica(t, srv, "nishidb_query_buffer_bytes"); v != 0 {
-		t.Errorf("nishidb_query_buffer_bytes = %v sem consulta em voo, quer 0", v)
+	//
+	// ESPERA, em vez de fotografar uma vez: a devolução acontece no defer do
+	// handler, DEPOIS do último byte do stream, e o cliente pode ler o fecho
+	// antes de ela rodar. Uma leitura única viu 64 KiB em voo no CI sob -race
+	// (05/09/2026) num servidor que devolvia tudo — falso vermelho numa
+	// corrida do próprio teste, não do produto. O que o teste afirma é que o
+	// medidor VOLTA a zero, não que volta antes de o cliente enxergar o fecho.
+	var ultimo float64
+	esperaAte(t, func() bool {
+		ultimo = valorDaMetrica(t, srv, "nishidb_query_buffer_bytes")
+		return ultimo == 0
+	}, "nishidb_query_buffer_bytes não voltou a zero sem consulta em voo")
+	if ultimo != 0 {
+		t.Errorf("nishidb_query_buffer_bytes = %v sem consulta em voo, quer 0", ultimo)
 	}
 }
