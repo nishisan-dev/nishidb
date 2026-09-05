@@ -9,6 +9,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/metrics"
 	"github.com/nishisan-dev/nishidb/internal/protocolo"
 	"github.com/nishisan-dev/nishidb/internal/schema"
+	"github.com/nishisan-dev/nishidb/internal/storage/contador"
 )
 
 // handleMetadata serve o GET /v1/metadata do §67.
@@ -102,6 +103,27 @@ func colunaMeta(f *schema.CompiledField) protocolo.ColunaMeta {
 		c.Alias = &alias
 	}
 	return c
+}
+
+// contadorStats traduz o retrato dos contadores para o wire. Lista vazia, e
+// não nil, no dataset sem contador: o JSON sai como `[]`, e bloco presente é o
+// que separa "sem contadores" de "servidor antigo".
+func contadorStats(ests []contador.Estatisticas) []protocolo.ContadorStats {
+	out := make([]protocolo.ContadorStats, 0, len(ests))
+	for _, e := range ests {
+		out = append(out, protocolo.ContadorStats{
+			Name:                 e.Nome,
+			Groups:               e.Grupos,
+			MaxGroups:            e.Teto,
+			Retired:              e.Aposentados,
+			Refused:              e.Recusados,
+			OrphanEntries:        e.Orfas,
+			Bytes:                e.Bytes,
+			AuditDivergentGroups: e.AuditoriaDivergentes,
+			AuditLastSuccessUnix: e.AuditoriaUltimaUnix,
+		})
+	}
+	return out
 }
 
 // handleStats serve o GET /v1/stats do §67.
@@ -202,6 +224,8 @@ func (s *Servidor) handleStats(w http.ResponseWriter, r *http.Request) {
 				PinnedSegments: d.st.SegmentosPinados(),
 				ExpiredTotal:   d.st.SnapshotsExpirados(),
 			},
+			// Da MESMA leitura que alimenta as séries nishidb_counter_*.
+			Counters: contadorStats(d.st.EstatisticasDeContadores()),
 		}
 		// A tabela irmã não tem materializer: quem escreve nela é o do
 		// dataset base, no mesmo evento. Publicar um bloco zerado ali seria
