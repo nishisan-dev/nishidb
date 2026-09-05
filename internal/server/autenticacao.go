@@ -144,6 +144,12 @@ func (s *Servidor) montaMux() *roteador {
 	rt.registra("/v1/stats", config.RoleRead, s.handleStats)
 	rt.registra("/v1/compact", config.RoleAdmin, s.handleCompact)
 	rt.registra("/v1/checkpoint", config.RoleAdmin, s.handleCheckpoint)
+	// As duas rotas dos contadores mantidos na escrita são ADMIN pela mesma
+	// razão das duas acima: a auditoria segura um snapshot pela varredura do
+	// dataset, e a reconstrução segura o writer. A LEITURA dos contadores
+	// continua sendo SQL (`_counters.<nome>`), pela rota de consulta.
+	rt.registra("/v1/counters/audit", config.RoleAdmin, s.handleAuditoriaDeContadores)
+	rt.registra("/v1/counters/rebuild", config.RoleAdmin, s.handleReconstrucaoDeContadores)
 	return rt
 }
 
