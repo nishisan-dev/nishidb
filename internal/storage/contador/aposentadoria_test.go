@@ -215,3 +215,44 @@ func TestAposentadoriaSobreviveAReabertura(t *testing.T) {
 		t.Fatal("o aposentado tem de ser contado depois da reabertura")
 	}
 }
+
+// TestAposentadoriaNaoMexeNosAgregados trava o raciocínio que faz a
+// aposentadoria não precisar tocar nos agregados: ela só aposenta com
+// refs == 0, e totais[g] <= refs[g] por construção, então o grupo que sai
+// contribuía ZERO para os dois.
+//
+// Existe porque o "conserto" intuitivo — descontar refs[g] e totais[g] do
+// agregado ao aposentar — é plausível de escrever e derruba o agregado abaixo
+// da soma dos grupos, em silêncio, meses depois da linha ter saído.
+func TestAposentadoriaNaoMexeNosAgregados(t *testing.T) {
+	c, rel := abreComRelogio(t, t.TempDir(), defComRetencao("aut", 7*24*time.Hour))
+	// Um grupo que vai esvaziar, e outro que fica.
+	for r := types.RowID(0); r < 3; r++ {
+		if err := c.Transiciona(r, payload(t, "X", 1, 1, true), false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.Transiciona(9, payload(t, "Y", 1, 1, true), false); err != nil {
+		t.Fatal(err)
+	}
+	for r := types.RowID(0); r < 3; r++ {
+		if err := c.Transiciona(r, nil, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cobre(c)
+	antes := c.Estatisticas()
+	if antes.Linhas != 1 || antes.Total != 1 {
+		t.Fatalf("com X vazio e Y com uma linha: linhas %d total %d, quer 1 e 1", antes.Linhas, antes.Total)
+	}
+	rel.avanca(8 * 24 * time.Hour)
+	if n, err := c.AposentaVazios(rel.agora()); err != nil || n != 1 {
+		t.Fatalf("aposentadoria: %d, %v", n, err)
+	}
+	depois := c.Estatisticas()
+	if depois.Linhas != antes.Linhas || depois.Total != antes.Total {
+		t.Fatalf("a aposentadoria mexeu nos agregados: linhas %d total %d, quer %d e %d",
+			depois.Linhas, depois.Total, antes.Linhas, antes.Total)
+	}
+	exigeAgregadosCoerentes(t, c)
+}

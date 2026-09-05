@@ -67,6 +67,9 @@ Pacotes que estruturam o todo:
   teto de 65.535 campos. `storage/contador` é o contador mantido na escrita:
   vetor denso de 4 bytes por linha (`rowindex.Denso32`) + dicionário de grupos
   append-only + totais em heap, transicionado no passo 7c do `applyRecord`.
+  Os agregados do contador inteiro (`linhas`, `total`) andam COLADOS aos
+  vetores por grupo, dentro das mesmas guardas — nunca são somados na leitura,
+  e a auditoria é o que os reconcilia.
 - `internal/index` — `primary` (open addressing sobre mmap), `bitmap` (baixa
   cardinalidade), `hash` (alta cardinalidade, remoção por lápide), `valuekey`
   (dono ÚNICO da chave canônica `[tipo][payload]` — é formato de disco, com

@@ -1242,15 +1242,24 @@ Quais contadores um dataset tem, e como estão, também sai por SQL — a tabela
 `_meta.counters` existe em todo dataset, vazia quando não há `counters:`:
 
 ```bash
-nishidb query --server 127.0.0.1:9142 --dataset servicos "SELECT name, groupBy, condition, groups, maxGroups, refused, auditDivergent, auditAt FROM _meta.counters"
+nishidb query --server 127.0.0.1:9142 --dataset servicos "SELECT name, rows, total, groups, maxGroups, refused, auditDivergent, auditAt FROM _meta.counters"
 ```
+
+`rows` é quantas linhas vivas apontam para algum grupo do contador e `total`
+quantas satisfazem a condição, no dataset inteiro — o denominador e o
+numerador do alarme, em tempo constante, sem somar os grupos no cliente e sem
+varrer. `rows` **menor** que o `rows` do dataset (`/v1/stats`) é diagnóstico
+direto: são as linhas sem alguma coluna do `groupBy` (o serviço sem `olt`),
+que o contador não conta por desenho e que antes ninguém enxergava sem uma
+varredura. Sem `where`, `total` é igual a `rows`.
 
 `groupBy` usa o mesmo separador do `groupKey` (`olt|slot|port`); `condition`
 é o `where` do YAML (NULL no denominador, que não tem condição); `retired`,
 `refused` e `orphans` são os mesmos números do `nishidb counters`;
 `auditDivergent` e `auditAt` são NULL até a primeira auditoria conclusiva
 desde a subida — zero divergências e "nunca auditado" são afirmações
-diferentes.
+diferentes. `rows` e `total`, ao contrário desses dois, nunca são NULL: zero
+linhas é um fato medido.
 
 ```bash
 nishidb counters --server 127.0.0.1:9142 --dataset servicos --audit
@@ -1336,7 +1345,7 @@ suporte em cliente nenhum:
 ```sql
 SELECT name, type, auto, index, indexed, parent, occurrences, typeMismatches, coercions FROM _meta.fields
 SELECT name FROM _meta.fields WHERE parent = 'persistent'
-SELECT name, groupBy, condition, groups, refused FROM _meta.counters
+SELECT name, rows, total, groupBy, condition, groups, refused FROM _meta.counters
 SELECT partition, appliedOffset, highWatermark, lag, state FROM _meta.kafka ORDER BY partition
 ```
 

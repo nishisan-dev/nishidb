@@ -37,6 +37,14 @@ type Contado interface {
 // especDaTabelaMeta é a spec da tabela, no MESMO YAML de um dataset de
 // verdade, como o `_meta.fields` e o `_counters.<nome>`.
 //
+// `rows` e `total` são os agregados do contador — quantas linhas apontam para
+// algum grupo e quantas satisfazem a condição, no dataset inteiro. Ao
+// contrário das duas da auditoria, NUNCA são NULL: zero linhas é um fato
+// medido, e o contador sabe dizê-lo desde a abertura. `total` repete de
+// propósito o nome da coluna do `_counters.<nome>`: é a soma dela. E `rows`
+// menor que o rows do dataset é diagnóstico direto — são as linhas sem alguma
+// coluna do groupBy, que o contador não conta por desenho.
+//
 // `condition`, e não `where`: WHERE é palavra reservada do SQL, e uma coluna
 // com esse nome seria impossível de projetar. `groupBy` sai com o mesmo
 // separador do `groupKey` (`olt|slot|port`), para que quem lê a lista saiba
@@ -50,7 +58,7 @@ materialization:
   key:
     field: name
 schema:
-  include: [name, groupBy, condition, groups, maxGroups, retired, refused, orphans, bytes, auditDivergent, auditAt]
+  include: [name, groupBy, condition, rows, total, groups, maxGroups, retired, refused, orphans, bytes, auditDivergent, auditAt]
   fields:
     name:
       type: string
@@ -58,6 +66,10 @@ schema:
       type: string
     condition:
       type: string
+    rows:
+      type: int64
+    total:
+      type: int64
     groups:
       type: int64
     maxGroups:
@@ -84,6 +96,8 @@ const (
 	cmNome colunaMeta = iota
 	cmGroupBy
 	cmCondicao
+	cmLinhas
+	cmTotal
 	cmGrupos
 	cmTeto
 	cmAposentados
@@ -96,8 +110,8 @@ const (
 
 // nomesDasColunasMeta casa, posição a posição, com as constantes acima.
 var nomesDasColunasMeta = [...]string{
-	"name", "groupBy", "condition", "groups", "maxGroups", "retired", "refused",
-	"orphans", "bytes", "auditDivergent", "auditAt",
+	"name", "groupBy", "condition", "rows", "total", "groups", "maxGroups",
+	"retired", "refused", "orphans", "bytes", "auditDivergent", "auditAt",
 }
 
 // SeparadorDoGroupBy é o que separa as colunas no `groupBy` da tabela — o
@@ -231,6 +245,10 @@ func (f *fonteMeta) record(row types.RowID, buf []byte) (types.Record, []byte, b
 				continue
 			}
 			v = types.Value{Type: types.TypeString, Bytes: l.cond}
+		case cmLinhas:
+			v = types.Value{Type: types.TypeInt64, I64: est.Linhas}
+		case cmTotal:
+			v = types.Value{Type: types.TypeInt64, I64: est.Total}
 		case cmGrupos:
 			v = types.Value{Type: types.TypeInt64, I64: int64(est.Grupos)}
 		case cmTeto:

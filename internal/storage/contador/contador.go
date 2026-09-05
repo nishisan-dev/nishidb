@@ -76,6 +76,12 @@ const (
 // e o replay reaplicando uma transição já refletida no vetor vê antiga == nova
 // e não mexe em nada.
 //
+// Os agregados do contador inteiro (linhas e total) herdam essa propriedade
+// inteira: são a MESMA dobra, acumulada no mesmo laço, e por isso nada de novo
+// vai a disco — nem no vetor de 32 bits, nem no dicionário, nem na seção dos
+// contadores do manifest, que só carrega os parâmetros que decidem o CONTEÚDO
+// do vetor.
+//
 // O vetor em disco nunca fica à frente do log durável: a transição vai para um
 // OVERLAY em heap, e só o ApplyOverlay — que o checkpoint chama depois do
 // fdatasync dos segmentos — a leva ao mmap. É a mesma invariante das locations
@@ -106,6 +112,26 @@ type Contador struct {
 	vazioDesde   []int64 // unix ms em que refs chegou a 0; 0 = não está vazio
 	textos       [][]byte
 	porTexto     map[string]uint32
+
+	// linhas e total são os agregados do contador INTEIRO: linhas é a soma
+	// dos refs de todos os grupos, total a soma dos totais.
+	//
+	// Mantidos AQUI, e nunca somados na leitura, porque o delta já é conhecido
+	// dentro do Transiciona (sempre ±1) e somar os grupos custaria O(grupos)
+	// por linha de _meta.counters — num contador por PON são milhares.
+	//
+	// Grupo aposentado não entra na conta e não precisa sair dela: a
+	// aposentadoria exige refs == 0 (aposentadoria.go), e totais[g] <= refs[g]
+	// por construção — cada linha contribui 1 para refs e 0 ou 1 para totais,
+	// decidido pelo MESMO bit da MESMA entrada. Logo a soma sobre todos os ids
+	// é igual à soma sobre os vivos, em qualquer instante.
+	//
+	// São atomic.Int64 (método, nunca indexação) para que `c.total` não se
+	// confunda com `c.totais[g]` na leitura de quem mexer neste arquivo. O
+	// preço de mantê-los é uma SEGUNDA fonte para o mesmo fato, e o que a
+	// reconcilia é a auditoria, que os confere contra o recalculado.
+	linhas atomic.Int64
+	total  atomic.Int64
 
 	transicoes      uint64
 	mexidasCobertas uint64
@@ -378,10 +404,18 @@ func (c *Contador) Transiciona(rowID types.RowID, payload []byte, lapide bool) e
 		return nil
 	}
 	c.transicoes++
+	// O agregado anda COLADO ao grupo, nas duas pontas: cada Add do agregado
+	// fica ao lado do AddInt64 do vetor que ele soma, e DENTRO das mesmas
+	// guardas. O do decremento, em especial, mora dentro do
+	// `int(g) < len(c.totais)`: quando essa guarda é falsa não existe slot e
+	// nenhum grupo desce, então um agregado que descesse ali derivaria da soma
+	// dos grupos em silêncio.
 	if g := nova &^ bitCondicao; g != SemGrupo {
 		atomic.AddInt64(&c.refs[g], 1)
+		c.linhas.Add(1)
 		if nova&bitCondicao != 0 {
 			atomic.AddInt64(&c.totais[g], 1)
+			c.total.Add(1)
 		}
 		c.ultimaMexida[g] = c.transicoes
 		c.vazioDesde[g] = 0
@@ -389,7 +423,9 @@ func (c *Contador) Transiciona(rowID types.RowID, payload []byte, lapide bool) e
 	if g := antiga &^ bitCondicao; g != SemGrupo && int(g) < len(c.totais) {
 		if antiga&bitCondicao != 0 {
 			atomic.AddInt64(&c.totais[g], -1)
+			c.total.Add(-1)
 		}
+		c.linhas.Add(-1)
 		if atomic.AddInt64(&c.refs[g], -1) == 0 {
 			c.vazioDesde[g] = c.agora().UnixMilli()
 		}
@@ -421,6 +457,15 @@ func (c *Contador) Dobra() error {
 		atomic.StoreInt64(&c.totais[i], 0)
 		atomic.StoreInt64(&c.refs[i], 0)
 	}
+	// Zerar ANTES do laço é o que torna a Dobra idempotente; sem isto uma
+	// segunda chamada acumularia sobre a primeira.
+	c.linhas.Store(0)
+	c.total.Store(0)
+	// Os agregados acumulam em LOCAIS e são gravados uma vez ao fim: dois
+	// atômicos por linha entrariam no orçamento de 36-49 ns/linha da dobra de
+	// 1M. Um leitor no meio veria zero, e não um número parcial — mas a Dobra
+	// roda no Open, sem leitores.
+	var linhas, total int64
 	n := c.vetor.Entradas()
 	for i := uint64(0); i < n; i++ {
 		v, _ := c.vetor.Get(types.RowID(i))
@@ -435,11 +480,17 @@ func (c *Contador) Dobra() error {
 			}
 			continue
 		}
+		// Depois do continue da órfã, de propósito: a entrada que grupo
+		// nenhum recebe também não pode ser creditada ao agregado.
 		atomic.AddInt64(&c.refs[g], 1)
+		linhas++
 		if v&bitCondicao != 0 {
 			atomic.AddInt64(&c.totais[g], 1)
+			total++
 		}
 	}
+	c.linhas.Store(linhas)
+	c.total.Store(total)
 	agora := c.agora().UnixMilli()
 	for g := 1; g < len(c.refs); g++ {
 		if vivo[g-1] && atomic.LoadInt64(&c.refs[g]) == 0 {
@@ -465,6 +516,11 @@ func (c *Contador) Zera() error {
 		atomic.StoreInt64(&c.refs[i], 0)
 		c.vazioDesde[i] = 0
 	}
+	// Os agregados zeram junto: a reconstrução transiciona de novo cada linha
+	// viva, e um agregado que sobrevivesse ao Zera sairia com o dobro do valor
+	// ao lado de grupos corretos.
+	c.linhas.Store(0)
+	c.total.Store(0)
 	return nil
 }
 
@@ -502,18 +558,40 @@ func (c *Contador) CobreMexidas(n uint64) {
 // MexidasCobertas devolve o último valor registrado por CobreMexidas.
 func (c *Contador) MexidasCobertas() uint64 { return c.mexidasCobertas }
 
-// Congela devolve cópias dos totais e dos refs, indexadas por id, e o limite
-// de ids — o retrato T0 da auditoria, tirado sob o wmu.
-func (c *Contador) Congela() (totais, refs []int64, limite uint32) {
+// Congelado é o retrato T0 de um contador para a auditoria: os vetores por
+// grupo, o limite de ids e os DOIS agregados, todos do MESMO instante.
+//
+// Viajam numa estrutura, e não em valores de retorno soltos, porque é a
+// coincidência de instante que a auditoria compara: ler o agregado depois de
+// soltar o writer inventaria divergência onde só houve escrita concorrente.
+type Congelado struct {
+	Totais []int64
+	Refs   []int64
+	// Limite é o maior id emitido mais um, no instante do retrato.
+	Limite uint32
+	// Linhas e Total são Estatisticas.Linhas e .Total no mesmo instante — a
+	// segunda fonte para o mesmo fato, e a auditoria é a única coisa que a
+	// confere.
+	Linhas int64
+	Total  int64
+}
+
+// Congela devolve o retrato T0 da auditoria, tirado sob o wmu.
+func (c *Contador) Congela() Congelado {
 	c.dict.mu.RLock()
 	defer c.dict.mu.RUnlock()
-	totais = make([]int64, len(c.totais))
-	refs = make([]int64, len(c.refs))
-	for i := range c.totais {
-		totais[i] = atomic.LoadInt64(&c.totais[i])
-		refs[i] = atomic.LoadInt64(&c.refs[i])
+	cg := Congelado{
+		Totais: make([]int64, len(c.totais)),
+		Refs:   make([]int64, len(c.refs)),
+		Limite: uint32(len(c.dict.chaves)) + 1,
+		Linhas: c.linhas.Load(),
+		Total:  c.total.Load(),
 	}
-	return totais, refs, uint32(len(c.dict.chaves)) + 1
+	for i := range c.totais {
+		cg.Totais[i] = atomic.LoadInt64(&c.totais[i])
+		cg.Refs[i] = atomic.LoadInt64(&c.refs[i])
+	}
+	return cg
 }
 
 // Limite é o maior id de grupo emitido mais um.
@@ -552,6 +630,13 @@ type Estatisticas struct {
 	Recusados   uint64 // grupos novos recusados pelo teto nesta abertura
 	Orfas       uint64 // entradas órfãs vistas na dobra desta abertura
 	Bytes       int64  // vetor + dicionário
+	// Linhas é quantas linhas vivas apontam para algum grupo — a soma dos refs.
+	// Menor que o rows do dataset é diagnóstico direto: são as linhas SEM
+	// alguma coluna do groupBy, que o contador não conta por desenho.
+	Linhas int64
+	// Total é quantas linhas satisfazem a condição no dataset inteiro — a soma
+	// dos totais dos grupos. Sem `where`, é igual a Linhas.
+	Total int64
 	// AuditoriaDivergentes e AuditoriaUltimaUnix são o resultado da última
 	// auditoria conclusiva desta abertura: zero e zero até a primeira.
 	AuditoriaDivergentes int64
@@ -568,13 +653,17 @@ func (c *Contador) Estatisticas() Estatisticas {
 		Recusados:            c.recusados.Load(),
 		Orfas:                c.orfas.Load(),
 		Bytes:                c.vetor.SizeBytes() + c.dict.SizeBytes(),
+		Linhas:               c.linhas.Load(),
+		Total:                c.total.Load(),
 		AuditoriaDivergentes: c.audDivergentes.Load(),
 		AuditoriaUltimaUnix:  c.audUltima.Load(),
 	}
 }
 
 // RegistraAuditoria guarda o resultado de uma auditoria CONCLUSIVA para as
-// métricas: quantos grupos divergiram e quando. Uma auditoria inconclusiva
+// métricas: quantas DIVERGÊNCIAS ela achou e quando. Não são só grupos — o
+// número soma os grupos divergentes, as linhas cujo grupo não está internado e
+// os agregados que discordam do recalculado. Uma auditoria inconclusiva
 // (snapshot estourado, contexto cancelado) não passa por aqui — ela não
 // mediu nada.
 func (c *Contador) RegistraAuditoria(divergentes int, quando time.Time) {

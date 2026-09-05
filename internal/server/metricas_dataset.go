@@ -234,14 +234,14 @@ func umSeVerdadeiro(v bool) float64 {
 	return 0
 }
 
-// amostrasDeContadores publica as oito séries de cada contador mantido na
+// amostrasDeContadores publica as dez séries de cada contador mantido na
 // escrita, da MESMA leitura (EstatisticasDeContadores) que o /v1/stats faz.
 //
 // Nascem com zero na subida, como todas as que podem alarmar: um dataset com
-// contador e nenhuma linha emite as oito, zeradas — lacuna não se distingue de
+// contador e nenhuma linha emite as dez, zeradas — lacuna não se distingue de
 // alvo fora do ar. O rótulo `counter` vem do YAML, conjunto fechado.
 func amostrasDeContadores(dataset string, ests []contador.Estatisticas) []metrics.Amostra {
-	out := make([]metrics.Amostra, 0, len(ests)*8)
+	out := make([]metrics.Amostra, 0, len(ests)*10)
 	for _, e := range ests {
 		rotulo := []metrics.Label{
 			{Nome: metrics.LabelDataset, Valor: dataset},
@@ -297,9 +297,25 @@ func amostrasDeContadores(dataset string, ests []contador.Estatisticas) []metric
 				Valor:   float64(e.Bytes),
 			},
 			metrics.Amostra{
+				Familia: metrics.MetCounterRows,
+				Nome:    metrics.MetCounterRows,
+				Ajuda:   "linhas vivas que apontam para algum grupo deste contador; abaixo do rows do dataset são as linhas sem alguma coluna do groupBy, que o contador não conta por desenho",
+				Tipo:    metrics.TipoMedidor,
+				Labels:  rotulo,
+				Valor:   float64(e.Linhas),
+			},
+			metrics.Amostra{
+				Familia: metrics.MetCounterCountedRows,
+				Nome:    metrics.MetCounterCountedRows,
+				Ajuda:   "linhas que satisfazem a condição deste contador no dataset inteiro; sem `where`, igual ao rows do contador",
+				Tipo:    metrics.TipoMedidor,
+				Labels:  rotulo,
+				Valor:   float64(e.Total),
+			},
+			metrics.Amostra{
 				Familia: metrics.MetCounterAuditDivergentGroups,
 				Nome:    metrics.MetCounterAuditDivergentGroups,
-				Ajuda:   "grupos divergentes na última auditoria conclusiva; 0 até a primeira (ver o timestamp ao lado)",
+				Ajuda:   "divergências na última auditoria conclusiva — grupos, linhas sem grupo internado e os dois agregados; 0 até a primeira (ver o timestamp ao lado)",
 				Tipo:    metrics.TipoMedidor,
 				Labels:  rotulo,
 				Valor:   float64(e.AuditoriaDivergentes),

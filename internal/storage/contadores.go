@@ -282,12 +282,6 @@ func (s *Store) EstatisticasDeContadores() []contador.Estatisticas {
 // a própria leitura.
 const passoDoContexto = 1023
 
-// congeladoDeContador é o retrato T0 de um contador para a auditoria.
-type congeladoDeContador struct {
-	totais, refs []int64
-	limite       uint32
-}
-
 // recalculoDeContador é o que a varredura da auditoria acumula por contador.
 type recalculoDeContador struct {
 	totais, refs  []int64
@@ -344,11 +338,9 @@ func (s *Store) AuditaContadores(ctx context.Context) ([]contador.Relatorio, err
 	if s.audAntesDaCopia != nil {
 		s.audAntesDaCopia()
 	}
-	congelados := make([]congeladoDeContador, len(s.contadores))
+	congelados := make([]contador.Congelado, len(s.contadores))
 	for i, c := range s.contadores {
-		var cg congeladoDeContador
-		cg.totais, cg.refs, cg.limite = c.Congela()
-		congelados[i] = cg
+		congelados[i] = c.Congela()
 	}
 	s.wmu.Unlock()
 	defer s.FechaSnapshot(snap)
@@ -356,8 +348,8 @@ func (s *Store) AuditaContadores(ctx context.Context) ([]contador.Relatorio, err
 	recalc := make([]recalculoDeContador, len(s.contadores))
 	for i, c := range s.contadores {
 		recalc[i] = recalculoDeContador{
-			totais: make([]int64, congelados[i].limite),
-			refs:   make([]int64, congelados[i].limite),
+			totais: make([]int64, congelados[i].Limite),
+			refs:   make([]int64, congelados[i].Limite),
 			deriv:  c.NovoDerivador(),
 		}
 	}
@@ -410,7 +402,7 @@ func (s *Store) AuditaContadores(ctx context.Context) ([]contador.Relatorio, err
 				continue
 			}
 			g, ok := c.PorChave(chave)
-			if !ok || g >= congelados[i].limite {
+			if !ok || g >= congelados[i].Limite {
 				// Grupo internado DEPOIS de T0 (a linha era de outro grupo em
 				// T0 e o journal já devolveu a versão T0, então isto só
 				// acontece por deriva) ou nunca internado.
@@ -441,11 +433,13 @@ func (s *Store) AuditaContadores(ctx context.Context) ([]contador.Relatorio, err
 			LinhasVarridas: linhas,
 			Duracao:        duracao,
 		}
-		for g := uint32(1); g < cg.limite; g++ {
-			m, mr := cg.totais[g], cg.refs[g]
+		for g := uint32(1); g < cg.Limite; g++ {
+			m, mr := cg.Totais[g], cg.Refs[g]
 			q, qr := rc.totais[g], rc.refs[g]
 			r.Mantido += m
 			r.Recalculado += q
+			r.LinhasMantidas += mr
+			r.LinhasRecalculadas += qr
 			if m == q && mr == qr {
 				continue
 			}
@@ -459,7 +453,23 @@ func (s *Store) AuditaContadores(ctx context.Context) ([]contador.Relatorio, err
 				})
 			}
 		}
-		c.RegistraAuditoria(r.Divergentes+int(r.NaoInternadas), s.agora())
+		// Os agregados do contador são a SEGUNDA fonte para o mesmo fato que
+		// os vetores por grupo, e esta é a única coisa que os reconcilia. A
+		// comparação é contra o RECALCULADO, não contra a soma mantida: é a
+		// realidade que a auditoria mede, e comparar as duas fontes mantidas
+		// entre si deixaria passar a deriva que atinge as duas.
+		//
+		// Contados à parte de Divergentes porque a pergunta é outra: uma linha
+		// que trocou de grupo por deriva deixa os grupos errados e o agregado
+		// CERTO, e somar as duas contagens esconderia essa distinção.
+		r.AgregadoLinhas, r.AgregadoTotal = cg.Linhas, cg.Total
+		if r.AgregadoLinhas != r.LinhasRecalculadas {
+			r.AgregadosDivergentes++
+		}
+		if r.AgregadoTotal != r.Recalculado {
+			r.AgregadosDivergentes++
+		}
+		c.RegistraAuditoria(r.Divergentes+int(r.NaoInternadas)+r.AgregadosDivergentes, s.agora())
 		out = append(out, r)
 	}
 	return out, nil
