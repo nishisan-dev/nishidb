@@ -16,9 +16,14 @@ linters:
 # antes, N depois" segue verde com código sujo. Pior, a seleção truncada nem é
 # estável: duas rodadas no mesmo commit devolvem conjuntos diferentes, então o
 # que ela produz não serve nem de linha de base. Com os tetos em 0 o número é o
-# real — 390 nesta branch, não os 114 truncados que a documentação do M2 e da
-# Fase 6 citam — e a comparação volta a significar alguma coisa. Ver os débitos
-# 53 e 59 em docs/debitos.md.
+# real — o que `.golangci-baseline` guarda, e não os 114 truncados que a
+# documentação do M2 e da Fase 6 citam — e a comparação volta a significar
+# alguma coisa. Ver os débitos 53 e 59 em docs/debitos.md.
+#
+# A contagem NÃO se escreve aqui: `.golangci-baseline` é a fonte única, o
+# ratchet a move nos dois sentidos, e número repetido em comentário diverge do
+# arquivo no primeiro PR que fecha apontamento — que é a mesma classe de defeito
+# que este bloco existe para descrever.
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0

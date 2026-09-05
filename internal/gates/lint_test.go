@@ -115,7 +115,7 @@ func TestAlvoLintRecusaQuandoOGolangciLintNaoEstaNoPATH(t *testing.T) {
 	}
 
 	// O fallback não pode voltar por nenhum caminho. `go vet` cobre um
-	// subconjunto de `govet`, e `govet` não responde por NENHUM dos 390
+	// subconjunto de `govet`, e `govet` não responde por NENHUM dos
 	// apontamentos da linha de base: trocá-lo pelo lint é trocar o gate por
 	// uma checagem que hoje não acusa nada.
 	if strings.Contains(stdout+stderr, "go vet") {
@@ -126,8 +126,9 @@ func TestAlvoLintRecusaQuandoOGolangciLintNaoEstaNoPATH(t *testing.T) {
 // O alvo tem de RODAR o linter quando ele existe, e rodar com os DOIS tetos
 // desligados. A duplicação dos flags com o `issues:` do .golangci.yml é
 // deliberada e comprovadamente load-bearing: repondo os tetos no arquivo de
-// configuração, `golangci-lint run` cru cai de 390 para 114 e `make lint`
-// continua devolvendo 390 — quem defende são os flags da linha de comando.
+// configuração, `golangci-lint run` cru cai para os 114 truncados e `make lint`
+// continua devolvendo a linha de base inteira — quem defende são os flags da
+// linha de comando.
 // Sem este teste, apagar os dois flags também passaria verde.
 func TestAlvoLintChamaOLinterComOsDoisTetosDesligados(t *testing.T) {
 	dir := t.TempDir()
@@ -163,8 +164,8 @@ var reInstalacao = regexp.MustCompile(`golangci-lint@([^\s"']+)`)
 // A linha do `go install` do Makefile é a ÚNICA instrução de instalação do
 // linter no repositório, e por isso é ela que decide qual binário mede a linha
 // de base. Com `@latest` a versão fica solta: o próximo desenvolvedor instala
-// outra, mede outro número, e a comparação "390 antes, 390 depois" volta a
-// mentir — o defeito dos débitos 53 e 59 reaberto por outra dimensão.
+// outra, mede outro número, e a comparação "mesmo número antes e depois" volta
+// a mentir — o defeito dos débitos 53 e 59 reaberto por outra dimensão.
 //
 // O teste afirma só o que é CONFIGURAÇÃO: a versão instruída é fixa. Não
 // afirma nada sobre o texto da documentação — número citado em prosa não é
@@ -186,7 +187,7 @@ func TestAInstrucaoDeInstalacaoFixaAVersaoDoLinter(t *testing.T) {
 
 // O alvo tem de PROPAGAR o veredito do linter, e não só chamá-lo. É o mesmo
 // defeito da recusa ausente, um ramo do `if` ao lado: um `|| true` na linha do
-// golangci-lint faz `make lint` sair 0 com os 390 apontamentos na tela, e a
+// golangci-lint faz `make lint` sair 0 com a linha de base inteira na tela, e a
 // tese da doutrina ("gate que passa não é gate, é carimbo") volta a valer
 // contra o próprio alvo que a corrigiu.
 func TestAlvoLintPropagaOVeredictoDoLinter(t *testing.T) {
@@ -223,8 +224,9 @@ type configDoLinter struct {
 // 59 restaurado em silêncio, com a suíte inteira verde.
 //
 // O conjunto de linters entra pela mesma razão: sem `errcheck` e `revive` a
-// linha de base cai de 390 para cerca de 15, e a comparação "mesmo número
-// antes e depois" passaria a comparar outro instrumento.
+// linha de base desaba para uma fração do que é — os dois respondem pela quase
+// totalidade dela —, e a comparação "mesmo número antes e depois" passaria a
+// comparar outro instrumento.
 func TestConfiguracaoDoLinterMantemOsTetosEmZeroEOsLintersQueMedemALinhaDeBase(t *testing.T) {
 	bruto, err := os.ReadFile(filepath.Join(raizDoRepo, ".golangci.yml"))
 	if err != nil {
@@ -251,7 +253,7 @@ func TestConfiguracaoDoLinterMantemOsTetosEmZeroEOsLintersQueMedemALinhaDeBase(t
 	}
 	for _, linter := range []string{"errcheck", "revive", "staticcheck", "govet"} {
 		if !contém(cfg.Linters.Enable, linter) {
-			t.Errorf("%s não está em linters.enable: a linha de base de 390 foi medida com ele, e sem ele o número passa a descrever outro instrumento", linter)
+			t.Errorf("%s não está em linters.enable: a linha de base foi medida com ele, e sem ele o número passa a descrever outro instrumento", linter)
 		}
 	}
 }
