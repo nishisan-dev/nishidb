@@ -24,8 +24,21 @@ type Relatorio struct {
 	Grupos uint32
 	// Mantido e Recalculado são as SOMAS dos totais, para a linha da tabela.
 	Mantido, Recalculado int64
-	Divergentes          int
-	NaoInternadas        uint64
+	// LinhasMantidas e LinhasRecalculadas são o mesmo par para os REFS:
+	// quantas linhas apontam para algum grupo.
+	LinhasMantidas, LinhasRecalculadas int64
+	Divergentes                        int
+	NaoInternadas                      uint64
+	// AgregadoLinhas e AgregadoTotal são os agregados do PRÓPRIO contador
+	// (Estatisticas.Linhas e .Total) em T0 — a segunda fonte para o mesmo
+	// fato que os vetores por grupo.
+	AgregadoLinhas, AgregadoTotal int64
+	// AgregadosDivergentes é 0, 1 ou 2: quantos dos dois discordam do
+	// RECALCULADO. Separado de Divergentes porque a pergunta é outra —
+	// Divergentes diz "algum grupo derivou", este diz "o agregado derivou".
+	// Uma linha que trocou de grupo por deriva dá Divergentes > 0 e este
+	// ZERO: os grupos estão errados e o agregado, certo.
+	AgregadosDivergentes int
 	// Amostra são as primeiras divergências, por id de grupo; o teto evita um
 	// relatório do tamanho do inventário num contador inteiramente errado.
 	Amostra        []Divergencia
