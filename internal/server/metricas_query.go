@@ -59,6 +59,19 @@ func registraMetricasDeQuery(
 			"linhas recusadas por não caberem no orçamento de buffer (runtime.query.maxBufferPerQuery)"),
 	}
 
+	// As duas séries de recusa NASCEM AQUI, com zero, e não no ramo que as
+	// incrementa.
+	//
+	// reg.Contador cria a FAMÍLIA; a série só passa a existir no primeiro
+	// Sozinha(), e enquanto ele não acontece o /metrics não a publica. Como as
+	// duas só eram tocadas dentro de recusaLonga() e recusaPorOrcamento(), um
+	// servidor que nunca recusou nada não as expunha — e aí
+	// `absent(nishidb_query_long_rejected_total)` não distingue "nunca
+	// recusou" de "o alvo caiu". Série que ALARMA não pode nascer no primeiro
+	// alarme; é a mesma regra que o desistiu.Set(0) do watchdog segue.
+	m.longasRecusadas.Sozinha()
+	m.orcamentoRecusado.Sozinha()
+
 	// A idade da consulta mais antiga entra como coletor PULL, lido na hora do
 	// scrape. É o único jeito de ela estar certa: o valor cresce sozinho com o
 	// tempo, e um medidor escrito na admissão ficaria congelado no instante em

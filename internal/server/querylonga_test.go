@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -473,15 +472,25 @@ func TestMetricasDeQueryLongaAparecemNoScrapeECrescem(t *testing.T) {
 			primeiro, segundo)
 	}
 
-	// A recusa do sub-pool alimenta o contador do PROCESSO.
+	// A recusa do sub-pool alimenta o contador do PROCESSO, que já existe com
+	// ZERO antes da primeira recusa.
 	//
-	// Antes da primeira recusa a série NÃO aparece no scrape, e isso é
-	// contrato, não acidente: as famílias deste registry são lazy, e um
-	// contador zerado publicado em todo servidor saudável seria uma série a
-	// mais em cada scrape do parque para dizer que nada aconteceu.
+	// Este teste afirmava o contrário até 05/09/2026 — "as famílias deste
+	// registry são lazy, e um contador zerado publicado em todo servidor
+	// saudável seria uma série a mais em cada scrape do parque". O argumento
+	// vale para família COM label, onde o custo é uma série por VALOR e
+	// publicar `reason="senha"` com zero inventaria uma categoria que ninguém
+	// exercitou; é por isso que a nishidb_auth_failures_total continua lazy.
+	//
+	// Aqui ele não se sustenta: as duas séries de recusa são declaradas SEM
+	// label, então o custo é de duas séries por PROCESSO — e o que se comprava
+	// com elas era um alarme que não dispara, porque
+	// `absent(nishidb_query_long_rejected_total)` significava ao mesmo tempo
+	// "nunca recusou" e "o alvo caiu". Série que alarma não pode nascer no
+	// primeiro alarme (issue #47).
 	const nome = "nishidb_query_long_rejected_total"
-	if strings.Contains(scrapeDe(t, srv), nome) {
-		t.Errorf("%s aparece no scrape sem nenhuma recusa ter acontecido", nome)
+	if v := valorDaMetrica(t, srv, nome); v != 0 {
+		t.Errorf("%s = %v antes de qualquer recusa, quer 0 — a série tem de existir zerada", nome, v)
 	}
 
 	resp := consulta(t, srv, `{"dataset":"d","sql":"SELECT id FROM d","timeoutMs":30000}`)
@@ -492,24 +501,4 @@ func TestMetricasDeQueryLongaAparecemNoScrapeECrescem(t *testing.T) {
 	if v := valorDaMetrica(t, srv, nome); v != 1 {
 		t.Errorf("%s = %v, quer 1", nome, v)
 	}
-}
-
-// scrapeDe devolve o corpo cru do /metrics.
-//
-// Existe ao lado de valorDaMetrica porque as duas perguntas são diferentes:
-// aquela lê o VALOR de uma série e falha quando ela não existe, e esta precisa
-// justamente poder afirmar a AUSÊNCIA — que é o contrato de uma família lazy
-// antes do primeiro evento.
-func scrapeDe(t *testing.T, srv *server.Servidor) string {
-	t.Helper()
-	resp, err := http.Get("http://" + srv.Endereco() + "/metrics")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer fecha(t, resp)
-	corpo, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(corpo)
 }
