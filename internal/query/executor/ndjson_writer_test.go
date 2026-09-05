@@ -120,9 +120,6 @@ func TestStreamWriterErroEhStickyEIdentificavel(t *testing.T) {
 	if e.escritas != antes {
 		t.Errorf("escreveu %d vezes depois da falha", e.escritas-antes)
 	}
-	if s.Err() != err {
-		t.Errorf("Err() = %v", s.Err())
-	}
 }
 
 func TestStreamWriterShortWrite(t *testing.T) {

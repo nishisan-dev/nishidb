@@ -1,7 +1,7 @@
 package storage
 
 // Itens de contrato da SC: a interface de iteração compartilhada (C2), o
-// sentinela do modo falho (C4) e o capability check de bitmap (G1).
+// sentinela do modo falho (C4) e o capability check de índice (G1).
 
 import (
 	"errors"
@@ -14,10 +14,7 @@ import (
 // C2: os dois provedores (Store real e o fake do ramo query) precisam
 // satisfazer a MESMA interface, declarada em internal/types. Estas asserções
 // de compilação são o lado do storage.
-var (
-	_ types.RowIDIterator = (*liveIterator)(nil)
-	_ types.RowIDIterator = emptyIterator{}
-)
+var _ types.RowIDIterator = (*liveIterator)(nil)
 
 func TestScanLiveELookupDevolvemAInterfaceCompartilhada(t *testing.T) {
 	s := openStore(t, Options{CamposIndexados: []types.FieldID{fldStatus}})
@@ -111,10 +108,10 @@ func TestIndexadoEhCapabilityCheck(t *testing.T) {
 	// runtime em vez de degradar para full scan.
 	s := openStore(t, Options{CamposIndexados: []types.FieldID{fldStatus}})
 	if !s.Indexado(fldStatus) {
-		t.Fatal("campo declarado deveria ter bitmap")
+		t.Fatal("campo declarado deveria ser indexado")
 	}
 	if s.Indexado(fldCounter) {
-		t.Fatal("campo não declarado não pode reportar bitmap")
+		t.Fatal("campo não declarado não pode reportar índice")
 	}
 	if got := s.CamposIndexados(); len(got) != 1 || got[0] != fldStatus {
 		t.Fatalf("CamposIndexados: %v", got)
@@ -127,11 +124,11 @@ func TestIndexadoEhCapabilityCheck(t *testing.T) {
 		t.Fatalf("Lookup de campo indexado: %v", err)
 	}
 
-	semBitmap := openStore(t, Options{})
-	if semBitmap.Indexado(fldStatus) {
-		t.Fatal("store sem bitmaps não pode reportar capability")
+	semIndice := openStore(t, Options{})
+	if semIndice.Indexado(fldStatus) {
+		t.Fatal("store sem campos indexados não pode reportar capability")
 	}
-	if got := semBitmap.CamposIndexados(); len(got) != 0 {
+	if got := semIndice.CamposIndexados(); len(got) != 0 {
 		t.Fatalf("CamposIndexados sem índices: %v", got)
 	}
 }

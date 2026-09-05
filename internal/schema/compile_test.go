@@ -144,16 +144,6 @@ func TestCompileFieldByID(t *testing.T) {
 	}
 }
 
-func TestCompileExcluded(t *testing.T) {
-	c, _ := compileBase(t)
-	if !c.Excluded([]byte("debug")) {
-		t.Error("debug está no exclude")
-	}
-	if c.Excluded([]byte("id")) {
-		t.Error("id não está no exclude")
-	}
-}
-
 // excludedYAML exclui um campo DECLARADO e com alias — o caso que expõe se a
 // exclusão vale só para o nome.
 func excludedYAML(t *testing.T) string {

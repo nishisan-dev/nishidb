@@ -28,9 +28,6 @@ func (m *Materializer) LigaHistorico(h EscritorDeHistorico, campoRaw *schema.Com
 	m.histRaw = campoRaw
 }
 
-// HistoricoDegradado devolve a causa da degradação, ou nil.
-func (m *Materializer) HistoricoDegradado() error { return m.histCausa }
-
 // apendaNoHistorico grava a linha do evento e NUNCA propaga erro.
 //
 // O histórico é ferramenta; o produto é o dataset base. Uma falha aqui conta,

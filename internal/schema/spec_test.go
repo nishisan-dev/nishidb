@@ -188,7 +188,7 @@ func TestParseValidationErrors(t *testing.T) {
 		{"index na key", repl("      alias: service_id", "      alias: service_id\n      index: true"), "key"},
 		{"alias duplicado", repl("      alias: nas", "      alias: status"), "status"},
 		{"alias colide com nome", repl("      alias: nas", "      alias: _SEQ"), "_SEQ"},
-		{"exclude sem wildcard", strings.Replace(repl("    - \"*\"", "    - id"), "  exclude:\n    - debug\n", "  exclude:\n    - debug\n", 1), "exclude"},
+		{"exclude sem wildcard", repl("    - \"*\"", "    - id"), "exclude"},
 		{"wildcard com outros", repl("    - \"*\"", "    - \"*\"\n    - id"), "*"},
 		// Excluir key/sequence/ttl compila mas quebra todo evento em runtime;
 		// excluir por alias seria um no-op silencioso.
