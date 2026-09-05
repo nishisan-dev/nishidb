@@ -308,6 +308,31 @@ class TestOLagEhDoDatasetENaoDaInstancia(unittest.TestCase):
         self.assertIn("SUBINDO", events)
         self.assertNotIn("SUBINDO", service_view)
 
+    def test_checkpoint_parado_e_do_dataset_que_consome_nao_do_desligado(self):
+        """O events (desligado) checkpointou uma vez, na abertura, há uma hora;
+        o service_view checkpointa a cada 30 s. A seção do processo lia a
+        primeira série que encontrava e acusava "parado" — um alarme sobre um
+        dataset que não tem o que checkpointar."""
+        import time as _t
+        agora = _t.time()
+        at = self._amostra(30.0, 105_000)
+        at.series[("nishidb_checkpoint_last_success_timestamp", (("dataset", "events"),))] = agora - 3600
+        at.series[("nishidb_checkpoint_last_success_timestamp", (("dataset", "service_view"),))] = agora - 10
+        saida = _desenha_com_amostras(self._stats(), at, self._amostra(0.0, 150_000))
+        # A linha do processo é a ÚLTIMA "último checkpoint" da saída, e tem
+        # de mostrar o mais recente (10 s), não o do events (1 h).
+        linha_do_processo = saida.split("último checkpoint")[-1].split("\n")[0]
+        self.assertIn("há 10s", linha_do_processo)
+        self.assertNotIn("← parado", saida)
+        events, service_view = self._blocos(saida)
+        self.assertIn("último checkpoint", service_view)
+        self.assertIn("último checkpoint", events)
+        # E o inverso: o dataset que CONSOME sem checkpointar é alertado.
+        at.series[("nishidb_checkpoint_last_success_timestamp", (("dataset", "service_view"),))] = agora - 3600
+        saida = _desenha_com_amostras(self._stats(), at, self._amostra(0.0, 150_000))
+        _, service_view = self._blocos(saida)
+        self.assertIn("← parado", service_view)
+
 
 class TestPainelMostraOCrescimentoDoDicionario(unittest.TestCase):
     """O dicionário de campos e o que se perdeu no caminho.

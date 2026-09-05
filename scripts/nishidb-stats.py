@@ -104,6 +104,13 @@ class Amostra:
                 out += v
         return out
 
+    def maximo(self, nome: str) -> float | None:
+        """O maior valor entre as séries de `nome` — o checkpoint mais
+        recente do processo, entre datasets que checkpointam em ritmos
+        diferentes. None quando a série não existe."""
+        vals = [v for (n, _), v in self.series.items() if n == nome]
+        return max(vals) if vals else None
+
     def tem(self, nome: str) -> bool:
         """Distingue "somei e deu zero" de "a série não existe".
 
@@ -356,6 +363,17 @@ def desenha(base: str, saude: dict, stats: dict, m: Amostra, ant: Amostra | None
             alerta = ("  " + c("31", "← investigar")) if v and v > 0 and rotulo != "stale" else ""
             print(f"  {'  ' + rotulo:<22} {milhar(v):>16}{alerta}")
 
+        # Checkpoint DESTE dataset, com o alerta só para quem consome: um
+        # dataset com a ingestão desligada checkpointa uma vez, na abertura,
+        # e nunca mais — e era isso que fazia a seção do processo acusar
+        # "parado" com o writer do service_view checkpointando a cada 30 s
+        # (`valor` sem rótulo devolvia a primeira série, a do events).
+        ult_ds = m.valor("nishidb_checkpoint_last_success_timestamp", dataset=nome)
+        if ult_ds:
+            idade_ds = time.time() - ult_ds
+            alerta = ("  " + c("31", "← parado")) if estado_ing == "UP" and idade_ds > 300 else ""
+            print(f"  {'último checkpoint':<22} {'há ' + duracao(idade_ds):>16}{alerta}")
+
         # Dicionário de campos. Nenhum destes números aparecia no painel: o
         # `descartados` acima conta EVENTOS, e nem campo recusado pelo teto nem
         # valor fora do tipo derrubam evento — os dois ficavam invisíveis aqui
@@ -445,11 +463,13 @@ def desenha(base: str, saude: dict, stats: dict, m: Amostra, ant: Amostra | None
     rss = m.valor("nishidb_process_rss_bytes")
     heap = m.valor("nishidb_go_heap_bytes")
     print(f"  {'RSS':<22} {bytes_legiveis(rss):>16}   heap Go {bytes_legiveis(heap)}")
-    ult = m.valor("nishidb_checkpoint_last_success_timestamp")
+    # O mais recente entre os datasets: a pergunta aqui é "o processo ainda
+    # checkpointa?". O alerta de checkpoint parado mora no bloco de cada
+    # dataset, onde dá para saber se ele consome.
+    ult = m.maximo("nishidb_checkpoint_last_success_timestamp")
     if ult:
         idade = time.time() - ult
-        alerta = ("  " + c("31", "← parado")) if idade > 300 else ""
-        print(f"  {'último checkpoint':<22} {'há ' + duracao(idade):>16}{alerta}")
+        print(f"  {'último checkpoint':<22} {'há ' + duracao(idade):>16}")
     n = m.soma("nishidb_checkpoint_duration_seconds_count")
     s = m.soma("nishidb_checkpoint_duration_seconds_sum")
     if n:
