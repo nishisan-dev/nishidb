@@ -80,8 +80,11 @@ Formato dos TSV (cabeçalho na primeira linha, tab como separador, sem aspas):
 
 `especie` ∈ `type func method field const var param local label ifacemethod`.
 `endereco` é o endereço `rf`: `Name`, `T.M`, `T.F`, `F.x`, `T.M.x`, `T.M.r`
-(receptor). `posicao` é `arquivo:linha` relativo à raiz. `grupo` é `G<n>` ou
-vazio.
+(receptor). `posicao` é `arquivo:linha:coluna` relativo à raiz (a coluna é o
+que o `gopls rename -w` recebe). `grupo` é `G<n>` ou vazio. `especie` pode
+carregar o sufixo `#ambiguo` (endereço declarado mais de uma vez na função)
+ou `#gopls` (campo de struct local): os dois significam "não vai ao rf; o
+aplicador usa gopls por posição".
 
 ---
 

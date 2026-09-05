@@ -23,3 +23,15 @@ func Abre() *Arquivo {
 	_ = tamanho
 	return &Arquivo{}
 }
+
+// Rotula declara um tipo struct DENTRO da função: rotulo não é endereço de
+// pacote, então o campo nome não tem sintaxe `T.campo` que o rf resolva — o
+// inventário marca esse campo para o aplicador renomear por gopls (Ruling
+// R6, achado na varredura real em internal/storage/indices_test.go:36).
+func Rotula() string {
+	type rotulo struct {
+		nome string
+	}
+	r := rotulo{nome: "x"}
+	return r.nome
+}

@@ -39,23 +39,23 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if *out == "" || *groups == "" {
-		fmt.Fprintln(stderr, "renameinv: -out e -groups são obrigatórios")
+		_, _ = fmt.Fprintln(stderr, "renameinv: -out e -groups são obrigatórios")
 		return 2
 	}
 	inv, err := renametools.Inventory(*dir, *pattern)
 	if err != nil {
-		fmt.Fprintf(stderr, "renameinv: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "renameinv: %v\n", err)
 		return 1
 	}
 	if err := writeTSV(*out, inv.Rows); err != nil {
-		fmt.Fprintf(stderr, "renameinv: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "renameinv: %v\n", err)
 		return 1
 	}
 	if err := writeTSV(*groups, inv.GroupRows); err != nil {
-		fmt.Fprintf(stderr, "renameinv: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "renameinv: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "%d declarações, %d grupos de interface\n", len(inv.Rows)-1, inv.Groups)
+	_, _ = fmt.Fprintf(stdout, "%d declarações, %d grupos de interface\n", len(inv.Rows)-1, inv.Groups)
 	return 0
 }
 
@@ -64,7 +64,7 @@ func writeTSV(path string, rows [][]string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	for _, r := range rows {
 		for i, c := range r {
 			if i > 0 {

@@ -69,18 +69,52 @@ func TestInventorySkipsShortReceiverAndEmbeddedField(t *testing.T) {
 }
 
 func TestInventoryMarksAmbiguousLocal(t *testing.T) {
-	// Roda declara `chave` uma vez (no for). Abre declara `tamanho` uma vez.
-	// Nenhum é ambíguo; o teste é o inverso: um endereço declarado duas vezes
-	// na mesma função ganha o sufixo #ambiguo na especie, e o rf não o aceita
-	// — cai para gopls por posição (spec §4.1).
+	// TestRodaConta declara `t` duas vezes no MESMO endereço rf
+	// TestRodaConta.t: o parâmetro da função de teste e o parâmetro homônimo
+	// do closure passado a t.Run — enclosingFunc atribui identificadores de
+	// função literal à FuncDecl externa (spec §4.1), então as duas contam
+	// para o mesmo endereço. Endereço declarado mais de uma vez na mesma
+	// função é o que o rf recusa: cada ocorrência ganha o sufixo #ambiguo na
+	// espécie (a primeira como param, a segunda como local — nenhuma das
+	// duas achatada na outra), e o aplicador cai para gopls por posição.
+	// Nenhuma outra declaração do fixture repete endereço.
 	inv, err := Inventory("testdata/modulo", "./...")
 	if err != nil {
 		t.Fatal(err)
 	}
+	var ambiguous [][]string
 	for _, r := range inv.Rows[1:] {
 		if strings.HasSuffix(r[1], "#ambiguo") {
-			t.Errorf("o módulo de teste não tem local repetido, mas %v saiu ambíguo", r)
+			ambiguous = append(ambiguous, r)
 		}
+	}
+	if len(ambiguous) != 2 {
+		t.Fatalf("linhas ambíguas: %v, esperadas 2 (TestRodaConta.t duas vezes)", ambiguous)
+	}
+	kinds := map[string]bool{}
+	for _, r := range ambiguous {
+		if r[2] != "TestRodaConta.t" {
+			t.Errorf("linha ambígua fora de TestRodaConta.t: %v", r)
+		}
+		kinds[r[1]] = true
+	}
+	if !kinds["param#ambiguo"] || !kinds["local#ambiguo"] {
+		t.Errorf("espécies ambíguas de TestRodaConta.t: %v, esperado param#ambiguo e local#ambiguo", kinds)
+	}
+}
+
+func TestInventoryMarksFieldsOfFunctionLocalStructForGopls(t *testing.T) {
+	// Rotula (b/b.go) declara `type rotulo struct{...}` DENTRO da função:
+	// rotulo não é endereço de pacote, então rotulo.nome não é sintaxe que o
+	// rf resolve (Ruling R6) — a espécie leva #gopls e o endereço é
+	// F.T.campo (Rotula.rotulo.nome), para o aplicador renomear por posição.
+	inv, err := Inventory("testdata/modulo", "./...")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := findRow(t, inv.Rows, "field#gopls", "Rotula.rotulo.nome")
+	if r[0] != "b" || r[5] != "nao" {
+		t.Errorf("pacote=%q exportado=%q, esperado b nao", r[0], r[5])
 	}
 }
 
