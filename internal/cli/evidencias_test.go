@@ -54,6 +54,7 @@ func TestEvidenciasCitadasNosDocumentosExistem(t *testing.T) {
 		"../../docs/aceite-m4.md", "../../docs/aceite-m5.md", "../../docs/aceite-client-python.md",
 		"../../docs/aceite-indice-por-segmento.md", "../../docs/aceite-contadores.md",
 		"../../docs/architecture.md", "../../docs/debitos.md", "../../docs/operacao-kafka.md",
+		"../../docs/metricas.md",
 		"../../docs/mutacoes-indice-por-segmento.md",
 		"../../docs/doutrina-de-verificacao.md", "../../README.md", "../../CLAUDE.md"}
 
