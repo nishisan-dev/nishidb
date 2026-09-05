@@ -1,0 +1,288 @@
+package storage
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/nishisan-dev/nishidb/internal/storage/checkpoint"
+	"github.com/nishisan-dev/nishidb/internal/storage/contador"
+	"github.com/nishisan-dev/nishidb/internal/storage/rowindex"
+	"github.com/nishisan-dev/nishidb/internal/types"
+)
+
+// diretorioDosContadores é o subdiretório de indexes/ onde cada contador tem
+// o seu, pelo nome declarado.
+const diretorioDosContadores = "contadores"
+
+// pendenciaDeContador é um contador que a abertura decidiu RECONSTRUIR: a
+// varredura roda depois do ramo de recovery, e o motivo vai para o log.
+type pendenciaDeContador struct {
+	c      *contador.Contador
+	motivo string
+}
+
+// abreContadores compila as definições pelo callback, abre os arquivos de cada
+// contador e decide, contador a contador, entre adotar e reconstruir.
+//
+// Roda DEPOIS de _writtenAt, _expiresIn e os campos indexados estarem no
+// dicionário — a ordem de LookupOrCreate é contrato — e ANTES do ramo de
+// recovery, porque o replay do tail passa pelo applyRecord e o applyRecord
+// transiciona os contadores: eles têm de existir, dobrados, quando a primeira
+// linha do tail for reaplicada.
+//
+// # Adotar ou reconstruir
+//
+// A decisão vem do manifest, que grava por contador os parâmetros que decidem
+// o conteúdo do vetor (nome, colunas, where). Divergiu, ou não estava lá, ou o
+// vetor não descreve as linhas do dataset: reconstrói — recriando os DOIS
+// arquivos, porque chaves de outras colunas não podem poluir um dicionário
+// cujos ids nunca são reemitidos. Mudar o teto não reconstrói: ele não muda o
+// que já foi contado, e só é recusado quando menor que os grupos em uso.
+//
+// Um contador que o manifest declara e o YAML já não tem é APAGADO, com log:
+// deixar os arquivos seria disco ocupado que nada no produto explica.
+//
+// # A recusa sem callback
+//
+// Um dataset cujo manifest declara contadores e cuja abertura não forneceu o
+// callback é RECUSADO. Abrir sem as definições deixaria o vetor parado
+// enquanto o Put anda, e a divergência só apareceria na auditoria — é a guarda
+// que pega o chamador de storage.Open que esqueceu de ligar os contadores.
+func (s *Store) abreContadores(opts Options, m *checkpoint.Manifest, idxDir string, minRows uint64) error {
+	var declarados []checkpoint.ContadorInfo
+	if m != nil {
+		declarados = m.Contadores
+	}
+	if opts.CompilaContadores == nil {
+		if len(declarados) > 0 {
+			nomes := make([]string, 0, len(declarados))
+			for _, d := range declarados {
+				nomes = append(nomes, d.Nome)
+			}
+			return fmt.Errorf("%w: o dataset %s declara os contadores %v no manifest e esta abertura não forneceu CompilaContadores; "+
+				"abrir sem as definições deixaria o contador parado enquanto o Put anda",
+				ErrInvalidArgument, opts.Dir, nomes)
+		}
+		return nil
+	}
+	defs, err := opts.CompilaContadores(s.dict)
+	if err != nil {
+		return fmt.Errorf("storage: compilar os contadores de %s: %w", opts.Dir, err)
+	}
+	if len(defs) == 0 && len(declarados) == 0 {
+		return nil
+	}
+	if len(defs) > 0 && opts.Modo == ModoHistorico {
+		// A retenção do histórico purga linhas por marca-d'água, sem passar
+		// pelo applyRecord: o contador nunca decrementaria. E não há estado
+		// corrente a contar num log append-only.
+		return fmt.Errorf("%w: ModoHistorico não aceita counters: a tabela histórica não tem estado corrente a contar", ErrInvalidArgument)
+	}
+	dir := filepath.Join(idxDir, diretorioDosContadores)
+	porNome := make(map[string]checkpoint.ContadorInfo, len(declarados))
+	for _, info := range declarados {
+		porNome[info.Nome] = info
+	}
+	vistos := make(map[string]struct{}, len(defs))
+	for _, def := range defs {
+		if _, dup := vistos[def.Nome]; dup {
+			return fmt.Errorf("%w: contador %q declarado duas vezes", ErrInvalidArgument, def.Nome)
+		}
+		vistos[def.Nome] = struct{}{}
+		info, tinha := porNome[def.Nome]
+		delete(porNome, def.Nome)
+
+		recria, motivo := false, ""
+		switch {
+		case m == nil:
+			// Dataset novo: não há o que reconstruir, o vetor nasce vazio.
+		case !tinha:
+			recria, motivo = true, "o dataset não tinha este contador"
+		case !mesmaDefinicao(info, def):
+			recria, motivo = true, fmt.Sprintf("os parâmetros mudaram (groupBy %v → %v, where %q → %q)",
+				info.Colunas, colunasDe(def), info.Where, def.Where)
+		}
+		c, err := contador.Abre(filepath.Join(dir, def.Nome), def, minRows, recria)
+		if err != nil {
+			return fmt.Errorf("storage: abrir o contador %q de %s: %w", def.Nome, opts.Dir, err)
+		}
+		s.contadores = append(s.contadores, c)
+		if !recria && m != nil && ((c.Nasceu() && m.NextRowID > 0) || !c.Cobre(types.RowID(m.NextRowID))) {
+			// O manifest declara os parâmetros, não a existência dos arquivos —
+			// a mesma pergunta que a agenda faz com PrecisaConstruir.
+			recria, motivo = true, "os arquivos do contador não descrevem as linhas do dataset"
+			if err := c.Zera(); err != nil {
+				return err
+			}
+		}
+		if est := c.Estatisticas(); est.Grupos > def.MaxGroups {
+			return fmt.Errorf("%w: contador %q tem %d grupos em uso e maxGroups %d; o teto só pode diminuir até os grupos em uso (ou reconstrua o contador)",
+				ErrInvalidArgument, def.Nome, est.Grupos, def.MaxGroups)
+		}
+		nome := def.Nome
+		c.AoRecusar(func() {
+			s.opts.Log.Warn("contador.teto",
+				"um grupo novo foi recusado pelo teto de maxGroups; a linha entrou, mas não é contada até o contador ser reconstruído com teto maior",
+				"contador", nome, "maxGroups", def.MaxGroups)
+		})
+		if recria {
+			s.contadoresARecriar = append(s.contadoresARecriar, pendenciaDeContador{c: c, motivo: motivo})
+			continue
+		}
+		if err := c.Dobra(); err != nil {
+			return fmt.Errorf("storage: dobrar o contador %q de %s: %w", def.Nome, opts.Dir, err)
+		}
+		if orfas := c.Estatisticas().Orfas; orfas > 0 {
+			s.opts.Log.Warn("contador.orfas",
+				"entradas do vetor apontavam para grupos aposentados ou inexistentes e foram zeradas; não é esperado fora de uma janela de crash",
+				"contador", nome, "orfas", orfas)
+		}
+	}
+	// Sobras do manifest: contadores que o YAML já não declara.
+	sobras := make([]string, 0, len(porNome))
+	for nome := range porNome {
+		sobras = append(sobras, nome)
+	}
+	slices.Sort(sobras)
+	for _, nome := range sobras {
+		if err := os.RemoveAll(filepath.Join(dir, nome)); err != nil {
+			return fmt.Errorf("storage: apagar o contador %q removido da configuração: %w", nome, err)
+		}
+		s.opts.Log.Info("contador.removido",
+			"o contador saiu da configuração do dataset e os arquivos dele foram apagados",
+			"contador", nome)
+	}
+	return nil
+}
+
+// mesmaDefinicao compara os parâmetros que decidem o conteúdo: nome, colunas
+// (na ordem) e where.
+func mesmaDefinicao(info checkpoint.ContadorInfo, def contador.Definicao) bool {
+	return info.Nome == def.Nome && info.Where == def.Where && slices.Equal(info.Colunas, colunasDe(def))
+}
+
+func colunasDe(def contador.Definicao) []uint16 {
+	out := make([]uint16, len(def.Colunas))
+	for i, c := range def.Colunas {
+		out[i] = uint16(c)
+	}
+	return out
+}
+
+// infoDosContadores é a seção do manifest, na ordem em que os contadores
+// foram declarados.
+func (s *Store) infoDosContadores() []checkpoint.ContadorInfo {
+	if len(s.contadores) == 0 {
+		return nil
+	}
+	out := make([]checkpoint.ContadorInfo, 0, len(s.contadores))
+	for _, c := range s.contadores {
+		def := c.Def()
+		out = append(out, checkpoint.ContadorInfo{Nome: def.Nome, Colunas: colunasDe(def), Where: def.Where})
+	}
+	return out
+}
+
+// reconstroiContadoresPendentes varre as linhas vivas para cada contador que
+// a abertura decidiu reconstruir. Roda DEPOIS do ramo de recovery: as
+// locations já estão publicadas, e o que o replay já transicionou no contador
+// recém-nascido é idempotente com a varredura (o delta é contra a entrada
+// corrente do vetor).
+func (s *Store) reconstroiContadoresPendentes() error {
+	for _, p := range s.contadoresARecriar {
+		inicio := time.Now()
+		linhas, err := s.varreLinhasVivasNoContador(p.c, false)
+		if err != nil {
+			return fmt.Errorf("storage: construir o contador %q de %s: %w", p.c.Def().Nome, s.opts.Dir, err)
+		}
+		if err := p.c.ApagaAntigos(); err != nil {
+			return err
+		}
+		s.contadoresConstruidos++
+		// O log nomeia o custo pela mesma razão do da agenda: é a única coisa
+		// que o operador precisa decidir — segundos numa subida são aceitáveis,
+		// minutos num dataset grande mudam a janela de manutenção.
+		s.opts.Log.Info("contador.construido",
+			"o contador foi construído varrendo as linhas vivas do dataset",
+			"contador", p.c.Def().Nome, "motivo", p.motivo, "linhas", linhas,
+			"grupos", p.c.Estatisticas().Grupos, "duracao", time.Since(inicio).String())
+	}
+	s.contadoresARecriar = nil
+	return nil
+}
+
+// varreLinhasVivasNoContador transiciona, no contador, toda linha com
+// location e sem lápide, lendo o record de cada uma. sobAposMu diz se a
+// leitura precisa da proteção contra a aposentadoria de segmento — na
+// abertura não há concorrência; em operação (ReconstroiContadores) o writer
+// já segura o wmu e a leitura do par (location, bytes) entra no aposMu, que é
+// o lock mais interno.
+func (s *Store) varreLinhasVivasNoContador(c *contador.Contador, sobAposMu bool) (uint64, error) {
+	limite := types.RowID(s.nextRowID.Load())
+	var buf []byte
+	var linhas uint64
+	for id := types.RowID(0); id < limite; id++ {
+		packed, ok := s.locs.Get(id)
+		if !ok {
+			continue
+		}
+		seg, off, flags := rowindex.Unpack(packed)
+		if flags&types.FlagTombstone != 0 {
+			continue
+		}
+		if sobAposMu {
+			s.aposMu.RLock()
+		}
+		rec, b, err := s.segR.ReadRecord(seg, off, buf)
+		if sobAposMu {
+			s.aposMu.RUnlock()
+		}
+		buf = b
+		if err != nil {
+			return linhas, fmt.Errorf("ler a linha %d em (%d, %d): %w", id, seg, off, err)
+		}
+		if rec.RowID != id {
+			return linhas, fmt.Errorf("%w: a location da linha %d aponta para o record da linha %d", ErrDatasetCorrupt, id, rec.RowID)
+		}
+		if err := c.Transiciona(id, rec.Payload, false); err != nil {
+			return linhas, err
+		}
+		linhas++
+	}
+	return linhas, nil
+}
+
+// Contadores devolve os contadores abertos, na ordem declarada. A slice é do
+// Store: quem chama não a altera.
+func (s *Store) Contadores() []*contador.Contador { return s.contadores }
+
+// EstatisticasDeContadores é o retrato de todos os contadores, para as
+// métricas e o /v1/stats — a MESMA chamada nos dois.
+func (s *Store) EstatisticasDeContadores() []contador.Estatisticas {
+	out := make([]contador.Estatisticas, 0, len(s.contadores))
+	for _, c := range s.contadores {
+		out = append(out, c.Estatisticas())
+	}
+	return out
+}
+
+// descreveContadores rende as definições numa linha, para o log de subida.
+func descreveContadores(cs []*contador.Contador) string {
+	var sb strings.Builder
+	for i, c := range cs {
+		if i > 0 {
+			sb.WriteString("; ")
+		}
+		def := c.Def()
+		fmt.Fprintf(&sb, "%s groupBy=%v", def.Nome, def.Nomes)
+		if def.Where != "" {
+			fmt.Fprintf(&sb, " where=%q", def.Where)
+		}
+		fmt.Fprintf(&sb, " maxGroups=%d", def.MaxGroups)
+	}
+	return sb.String()
+}

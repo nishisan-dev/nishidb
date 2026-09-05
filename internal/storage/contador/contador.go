@@ -59,9 +59,9 @@ type Definicao struct {
 var vetorMagic = [4]byte{'N', 'D', 'B', 'K'}
 
 const (
-	arquivoDoDicionario_ = "grupos.dict"
-	arquivoDoVetor       = "grupos.idx"
-	sufixoAntigo         = ".old"
+	nomeDoDicionario = "grupos.dict"
+	arquivoDoVetor   = "grupos.idx"
+	sufixoAntigo     = ".old"
 )
 
 // Contador é o estado de um contador declarado: o vetor rowId → entrada, o
@@ -135,14 +135,14 @@ func Abre(dir string, def Definicao, minRows uint64, recria bool) (*Contador, er
 		return nil, fmt.Errorf("contador %s: criar %s: %w", def.Nome, dir, err)
 	}
 	if recria {
-		for _, nome := range []string{arquivoDoDicionario_, arquivoDoVetor} {
+		for _, nome := range []string{nomeDoDicionario, arquivoDoVetor} {
 			de := filepath.Join(dir, nome)
 			if err := os.Rename(de, de+sufixoAntigo); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return nil, fmt.Errorf("contador %s: pôr %s de lado: %w", def.Nome, de, err)
 			}
 		}
 	}
-	dict, err := AbreDicionario(filepath.Join(dir, arquivoDoDicionario_), def.MaxGroups)
+	dict, err := AbreDicionario(filepath.Join(dir, nomeDoDicionario), def.MaxGroups)
 	if err != nil {
 		return nil, fmt.Errorf("contador %s: %w", def.Nome, err)
 	}
@@ -570,7 +570,7 @@ func (c *Contador) Msync() error { return c.vetor.Msync() }
 // ApagaAntigos remove os arquivos postos de lado por uma abertura com recria.
 func (c *Contador) ApagaAntigos() error {
 	var errs []error
-	for _, nome := range []string{arquivoDoDicionario_, arquivoDoVetor} {
+	for _, nome := range []string{nomeDoDicionario, arquivoDoVetor} {
 		if err := os.Remove(filepath.Join(c.dir, nome+sufixoAntigo)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			errs = append(errs, err)
 		}

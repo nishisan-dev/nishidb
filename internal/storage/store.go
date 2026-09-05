@@ -23,6 +23,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/metrics"
 	"github.com/nishisan-dev/nishidb/internal/query/spill"
 	"github.com/nishisan-dev/nishidb/internal/storage/checkpoint"
+	"github.com/nishisan-dev/nishidb/internal/storage/contador"
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 	"github.com/nishisan-dev/nishidb/internal/storage/fielddict"
 	"github.com/nishisan-dev/nishidb/internal/storage/rowindex"
@@ -192,6 +193,22 @@ type Options struct {
 	// ociosidade da entidade, em millis. Obrigatório quando TTLAtivo, e pela
 	// mesma razão do CampoDeEscrita: os dois são lidos do payload.
 	CampoDePrazo string
+	// CompilaContadores devolve as definições dos contadores mantidos na
+	// escrita (o bloco `counters:` do YAML) compiladas contra o dicionário.
+	//
+	// É callback, e não lista, por uma dependência circular que nenhuma ordem
+	// de chamadas desfaz: as definições precisam do schema compilado, o schema
+	// precisa do dicionário que o Open cria, e o replay da recovery — que
+	// roda DENTRO do Open — precisa das definições, porque o applyRecord
+	// transiciona os contadores. O Open o chama com o dicionário já com os
+	// campos de sistema e indexados registrados, ANTES do ramo de recovery; é
+	// dentro dele que o chamador compila o schema (e o guarda para o motor de
+	// consulta).
+	//
+	// Nil é "sem contadores" — e um dataset cujo manifest declara contadores
+	// é RECUSADO nesse caso: abrir sem as definições deixaria o vetor parado
+	// enquanto o Put anda.
+	CompilaContadores func(dict *fielddict.Dict) ([]contador.Definicao, error)
 	// Log é o logger estruturado do §95. Quando nil, o Store escreve em
 	// stderr no formato texto — que é o comportamento que os log.Printf
 	// tinham antes, e perder a divergência de recovery só porque o chamador
@@ -343,6 +360,19 @@ type Store struct {
 	// afirmar a NÃO reconstrução — sem isso, "adotou" e "reconstruiu e
 	// chegou ao mesmo resultado" seriam indistinguíveis.
 	agendaReconstruida bool
+
+	// contadores são os contadores mantidos na escrita, na ordem declarada;
+	// vazio no dataset sem `counters:`. Transicionados no passo 7c do
+	// applyRecord, sob o wmu; lidos pela tabela virtual e pela auditoria sem
+	// lock do Store.
+	contadores []*contador.Contador
+	// contadoresARecriar são os que a abertura decidiu reconstruir; a
+	// varredura roda depois do ramo de recovery e a lista é esvaziada.
+	contadoresARecriar []pendenciaDeContador
+	// contadoresConstruidos conta as reconstruções desta abertura — o
+	// observável que separa "adotou" de "reconstruiu e chegou ao mesmo
+	// resultado", como agendaReconstruida.
+	contadoresConstruidos int
 
 	// Ciclo de vida do coletor, no molde do da compaction: expMu guarda o
 	// par cancela/emVoo, expAtiva é o medidor observável e expEmVoo é o que
@@ -1192,6 +1222,20 @@ func Open(opts Options) (*Store, error) {
 		return nil, err
 	}
 
+	// Os contadores abrem AQUI — depois de todo LookupOrCreate contratual e
+	// antes do ramo de recovery —, dobrados a partir do vetor em disco. O
+	// replay do tail passa pelo applyRecord, que os transiciona: eles têm de
+	// existir, com os totais do ponto S, quando a primeira linha do tail for
+	// reaplicada. Um manifest ilegível cai nos ramos abaixo; aqui ele só é
+	// consultado quando existe.
+	var manifestParaContadores *checkpoint.Manifest
+	if mErr == nil {
+		manifestParaContadores = m
+	}
+	if err := s.abreContadores(opts, manifestParaContadores, idxDir, minRows); err != nil {
+		return nil, err
+	}
+
 	switch {
 	case errors.Is(mErr, checkpoint.ErrNoManifest) && semRecords(refs):
 		// Dataset novo. Entram aqui tanto o diretório virgem quanto o
@@ -1237,6 +1281,18 @@ func Open(opts Options) (*Store, error) {
 				"storage: recovery de %s falhou ao aplicar o tail: %w (se a causa for um índice, reabra sem declarar o campo — o dado não se perde)",
 				opts.Dir, err)
 		}
+	}
+	// A reconstrução dos contadores vem DEPOIS do ramo de recovery, porque
+	// varre as locations e elas ainda estavam sendo publicadas pelo replay; e
+	// antes do índice por segmento e da agenda, porque não depende de nenhum
+	// dos dois.
+	if err := s.reconstroiContadoresPendentes(); err != nil {
+		return nil, err
+	}
+	if len(s.contadores) > 0 {
+		s.opts.Log.Info("contadores.abertos",
+			"contadores mantidos na escrita abertos com o dataset",
+			"contadores", descreveContadores(s.contadores))
 	}
 	// O índice por segmento cobre TODO campo indexado, sem distinção de motor:
 	// com um motor só, `hash` e `bitmap` deixam de nomear coisas diferentes
@@ -1921,6 +1977,23 @@ func (s *Store) applyRecord(a recordApply) error {
 			return err
 		}
 	}
+	// 7c. contadores mantidos na escrita, DEPOIS do commit, pelo mesmo
+	// argumento da agenda: derivados, fora da durabilidade do §6.1, sob o
+	// mesmo wmu. O delta sai do PRÓPRIO vetor do contador (entrada antiga →
+	// nova), nunca de prevPayload — no replay ele não existe
+	// (store_recovery.go), e é exatamente o replay que este passo tem de
+	// atravessar igual ao Put. A lápide entra como "sem grupo": a entrada
+	// antiga é quem lembra de onde a linha saiu.
+	//
+	// Erro aqui deixa o record durável e publicado e o contador uma
+	// transição atrás — a próxima abertura dobra o vetor e reaplica a ponta,
+	// como um erro na agenda. Não é sticky.
+	lapide := a.flags&types.FlagTombstone != 0
+	for _, c := range s.contadores {
+		if err := c.Transiciona(a.rowID, a.payload, lapide); err != nil {
+			return err
+		}
+	}
 	// NÃO HÁ passo 8. A fase de CLEAR saiu junto com os motores globais, e a
 	// ausência é o desenho (spec §5.2): a posting do valor antigo mora no índice
 	// do segmento ANTIGO, vira falso positivo — que a revalidação do §44
@@ -2547,6 +2620,12 @@ func (s *Store) Close() error {
 	errs = append(errs, s.fechaIndices())
 	if s.agenda != nil {
 		errs = append(errs, s.agenda.Close())
+	}
+	// Sem msync no Close, como nos outros derivados: o que não foi
+	// checkpointado volta pelo replay, e o overlay dos contadores é
+	// exatamente o que a dobra + replay repõem.
+	for _, c := range s.contadores {
+		errs = append(errs, c.Close())
 	}
 	if s.prazos != nil {
 		errs = append(errs, s.prazos.Close())

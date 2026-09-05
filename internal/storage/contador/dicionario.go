@@ -65,7 +65,7 @@ type arquivoDoDicionario interface {
 	Close() error
 }
 
-// Dicionário é o interning dos grupos de um contador: chave composta → id.
+// Dicionario é o interning dos grupos de um contador: chave composta → id.
 //
 // Interna e Aposenta são exclusivos do writer; Chave, PorChave e os contadores
 // são seguros para leitores concorrentes. O mutex é FOLHA na ordem de locks do
