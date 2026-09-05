@@ -143,6 +143,29 @@ func TestCountersRespondePelaRotaDeQuery(t *testing.T) {
 	}
 }
 
+// TestMetaCountersListaPelaRotaDeQuery: a lista dos contadores sai por SQL,
+// pela mesma rota, com a definição e os números vivos.
+func TestMetaCountersListaPelaRotaDeQuery(t *testing.T) {
+	srv := servidorComServicos(t, 24)
+	resp := consulta(t, srv, `{"dataset":"servicos","sql":"SELECT name, groupBy, condition, groups, auditAt FROM _meta.counters ORDER BY name"}`)
+	linhas, fim := resultado(t, resp)
+	if fim.Fim() == nil {
+		t.Fatal("o stream não trouxe a linha de fecho")
+	}
+	if len(linhas) != 3 {
+		t.Fatalf("%d linhas, quero 3: %v", len(linhas), linhas)
+	}
+	for _, quer := range []string{
+		`"name":"autenticados_por_olt","groupBy":"olt","condition":"authenticated = true","groups":2,"auditAt":null`,
+		`"name":"autenticados_por_pon","groupBy":"olt|slot|port"`,
+		`"name":"servicos_por_olt","groupBy":"olt","condition":null`,
+	} {
+		if !strings.Contains(strings.Join(linhas, "\n"), quer) {
+			t.Fatalf("faltou %s em %v", quer, linhas)
+		}
+	}
+}
+
 func TestCountersTabelaDesconhecidaNomeiaAsQueExistem(t *testing.T) {
 	srv := servidorComServicos(t, 4)
 	resp := consulta(t, srv, `{"dataset":"servicos","sql":"SELECT a FROM _counters.nao_existe"}`)

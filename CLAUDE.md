@@ -76,8 +76,10 @@ Pacotes que estruturam o todo:
   (namespace `_meta` como Store virtual atrás do mesmo pipeline). Tabelas
   virtuais registradas por namespace (`Engine.RegistraVirtual`) correm pelo
   mesmo pipeline; `internal/contadores` compila o bloco `counters:` contra o
-  schema e serve `_counters.<nome>` — é a cola entre schema/predicado e o
-  storage, e por isso mora fora dos dois.
+  schema e serve `_counters.<nome>` e `_meta.counters` — é a cola entre
+  schema/predicado e o storage, e por isso mora fora dos dois (o motor manda
+  `_meta.fields` para o pacote `meta` e qualquer outra tabela do `_meta` para
+  o registro de virtuais).
   `internal/predicado` é o avaliador compartilhado entre o WHERE e o `when:` das
   regras de TTL — os dois têm de ser o MESMO código. `internal/typeparse` é
   pacote folha usado pela ingestão E pelo binder: é o que impede as duas coerções

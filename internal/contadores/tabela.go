@@ -8,6 +8,7 @@ import (
 
 	"github.com/nishisan-dev/nishidb/internal/index/valuekey"
 	"github.com/nishisan-dev/nishidb/internal/query"
+	"github.com/nishisan-dev/nishidb/internal/query/meta"
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/storage"
 	"github.com/nishisan-dev/nishidb/internal/storage/contador"
@@ -120,15 +121,19 @@ func idDaColuna(sc *schema.Compiled, nome string) (types.FieldID, error) {
 	return f.ID, nil
 }
 
-// Registra declara o namespace `_counters` sob o dataset e registra a tabela
-// de cada contador aberto no Store. Chamado por todo caminho que registra um
-// dataset no motor — servidor e CLI — para que `FROM _counters.<nome>`
-// funcione da mesma forma nos dois.
+// Registra declara o namespace `_counters` sob o dataset, registra a tabela
+// de cada contador aberto no Store e a `_meta.counters` que os lista — esta
+// SEMPRE, mesmo sem contador nenhum: "quais existem" tem resposta quando é
+// nenhum. Chamado por todo caminho que registra um dataset no motor —
+// servidor e CLI — para que `FROM _counters.<nome>` e `FROM _meta.counters`
+// funcionem da mesma forma nos dois.
 func Registra(eng *query.Engine, dataset string, st *storage.Store) error {
 	if err := eng.DeclaraNamespace(dataset, schema.NamespaceContadores); err != nil {
 		return err
 	}
-	for _, c := range st.Contadores() {
+	cs := st.Contadores()
+	contados := make([]Contado, 0, len(cs))
+	for _, c := range cs {
 		sc, fonte, err := Tabela(c.Def(), c)
 		if err != nil {
 			return err
@@ -136,8 +141,13 @@ func Registra(eng *query.Engine, dataset string, st *storage.Store) error {
 		if err := eng.RegistraVirtual(dataset, schema.NamespaceContadores, c.Def().Nome, sc, fonte); err != nil {
 			return err
 		}
+		contados = append(contados, c)
 	}
-	return nil
+	msc, mfonte, err := TabelaMeta(contados)
+	if err != nil {
+		return err
+	}
+	return eng.RegistraVirtual(dataset, meta.Namespace, TabelaMetaCounters, msc, mfonte)
 }
 
 // dicionario é o FieldDictionary da tabela virtual: em memória, sem disco —

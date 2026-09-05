@@ -1238,6 +1238,20 @@ novo acima do teto é recusado em runtime: a linha entra, **não é contada**, e
 nishidb counters --server 127.0.0.1:9142 --dataset servicos
 ```
 
+Quais contadores um dataset tem, e como estão, também sai por SQL — a tabela
+`_meta.counters` existe em todo dataset, vazia quando não há `counters:`:
+
+```bash
+nishidb query --server 127.0.0.1:9142 --dataset servicos "SELECT name, groupBy, condition, groups, maxGroups, refused, auditDivergent, auditAt FROM _meta.counters"
+```
+
+`groupBy` usa o mesmo separador do `groupKey` (`olt|slot|port`); `condition`
+é o `where` do YAML (NULL no denominador, que não tem condição); `retired`,
+`refused` e `orphans` são os mesmos números do `nishidb counters`;
+`auditDivergent` e `auditAt` são NULL até a primeira auditoria conclusiva
+desde a subida — zero divergências e "nunca auditado" são afirmações
+diferentes.
+
 ```bash
 nishidb counters --server 127.0.0.1:9142 --dataset servicos --audit
 ```
@@ -1322,11 +1336,14 @@ suporte em cliente nenhum:
 ```sql
 SELECT name, type, auto, index, indexed, parent, occurrences, typeMismatches, coercions FROM _meta.fields
 SELECT name FROM _meta.fields WHERE parent = 'persistent'
+SELECT name, groupBy, condition, groups, refused FROM _meta.counters
 ```
 
-E `_counters.<nome>`, uma tabela por contador declarado no YAML, lê os
-contadores mantidos na escrita (ver "Contadores mantidos na escrita" acima).
-Um `FROM _outro.x` é recusado nomeando os namespaces que existem.
+`_meta.counters` lista os contadores mantidos na escrita do dataset, com a
+definição e os números vivos; `_counters.<nome>`, uma tabela por contador
+declarado no YAML, lê os totais (ver "Contadores mantidos na escrita" acima).
+Um `FROM _outro.x` é recusado nomeando os namespaces que existem, e um
+`FROM _meta.x` nomeia as tabelas.
 
 `occurrences` é quantas vezes a chave apareceu no documento; `typeMismatches`,
 quantas dessas não couberam no tipo da coluna; `coercions`, quantas chegaram
