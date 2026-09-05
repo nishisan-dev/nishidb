@@ -171,6 +171,7 @@ func countersRemoto(servidor, dataset string, audita, reconstroi bool, cred cred
 
 type linhaDeContador struct {
 	nome                        string
+	linhas, total               int64
 	grupos, teto, aposentados   uint32
 	recusados, orfas            uint64
 	bytes                       int64
@@ -178,13 +179,15 @@ type linhaDeContador struct {
 }
 
 func contadorDoStorage(e contador.Estatisticas) linhaDeContador {
-	return linhaDeContador{nome: e.Nome, grupos: e.Grupos, teto: e.Teto, aposentados: e.Aposentados,
+	return linhaDeContador{nome: e.Nome, linhas: e.Linhas, total: e.Total,
+		grupos: e.Grupos, teto: e.Teto, aposentados: e.Aposentados,
 		recusados: e.Recusados, orfas: e.Orfas, bytes: e.Bytes,
 		auditDivergentes: e.AuditoriaDivergentes, auditUnix: e.AuditoriaUltimaUnix}
 }
 
 func contadorDoWire(c protocolo.ContadorStats) linhaDeContador {
-	return linhaDeContador{nome: c.Name, grupos: c.Groups, teto: c.MaxGroups, aposentados: c.Retired,
+	return linhaDeContador{nome: c.Name, linhas: c.Rows, total: c.Total,
+		grupos: c.Groups, teto: c.MaxGroups, aposentados: c.Retired,
 		recusados: c.Refused, orfas: c.OrphanEntries, bytes: c.Bytes,
 		auditDivergentes: c.AuditDivergentGroups, auditUnix: c.AuditLastSuccessUnix}
 }
@@ -196,13 +199,17 @@ func escreveContadores(w io.Writer, dataset string, linhas []linhaDeContador) {
 		titulo(w, "  (o dataset não declara counters)")
 		return
 	}
-	linha(w, "CONTADOR", "GRUPOS", "TETO", "APOSENTADOS", "RECUSADOS", "ÓRFÃS", "BYTES", "ÚLTIMA AUDITORIA")
+	// LINHAS e TOTAL vêm logo depois do nome porque são a pergunta do
+	// operador — quantas linhas o contador cobre, e quantas ele conta —; os
+	// números de inventário (grupos, teto) e de saúde vêm depois.
+	linha(w, "CONTADOR", "LINHAS", "TOTAL", "GRUPOS", "TETO", "APOSENTADOS", "RECUSADOS", "ÓRFÃS", "BYTES", "ÚLTIMA AUDITORIA")
 	for _, l := range linhas {
 		auditoria := "nunca"
 		if l.auditUnix != 0 {
 			auditoria = strconv.FormatInt(l.auditDivergentes, 10) + " divergente(s)"
 		}
-		linha(w, l.nome, u32(l.grupos), u32(l.teto), u32(l.aposentados),
+		linha(w, l.nome, strconv.FormatInt(l.linhas, 10), strconv.FormatInt(l.total, 10),
+			u32(l.grupos), u32(l.teto), u32(l.aposentados),
 			strconv.FormatUint(l.recusados, 10), strconv.FormatUint(l.orfas, 10),
 			bytesLegiveis(l.bytes), auditoria)
 	}
@@ -219,6 +226,11 @@ type linhaDeAuditoria struct {
 	mantido, recalculado int64
 	divergentes          int
 	naoInternadas        uint64
+	// agregadosDivergentes é 0, 1 ou 2 e sai ao lado da divergência de grupo,
+	// no mesmo padrão das linhas sem grupo internado: a coluna LINHAS desta
+	// tabela já significa linhas VARRIDAS, e uma coluna nova com outro
+	// sentido para a mesma palavra confundiria quem lê.
+	agregadosDivergentes int
 	linhasVarridas       uint64
 	duracaoMs            int64
 	amostra              []amostraDeDivergencia
@@ -226,7 +238,8 @@ type linhaDeAuditoria struct {
 
 func auditoriaDoStorage(r contador.Relatorio) linhaDeAuditoria {
 	l := linhaDeAuditoria{nome: r.Nome, grupos: r.Grupos, mantido: r.Mantido, recalculado: r.Recalculado,
-		divergentes: r.Divergentes, naoInternadas: r.NaoInternadas, linhasVarridas: r.LinhasVarridas,
+		divergentes: r.Divergentes, naoInternadas: r.NaoInternadas,
+		agregadosDivergentes: r.AgregadosDivergentes, linhasVarridas: r.LinhasVarridas,
 		duracaoMs: r.Duracao.Milliseconds()}
 	for _, d := range r.Amostra {
 		l.amostra = append(l.amostra, amostraDeDivergencia{d.Texto, d.Mantido, d.Recalculado, d.RefsMantido, d.RefsRecalculado})
@@ -236,7 +249,8 @@ func auditoriaDoStorage(r contador.Relatorio) linhaDeAuditoria {
 
 func auditoriaDoWire(c protocolo.AuditoriaContador) linhaDeAuditoria {
 	l := linhaDeAuditoria{nome: c.Name, grupos: c.Groups, mantido: c.Maintained, recalculado: c.Recomputed,
-		divergentes: c.DivergentGroups, naoInternadas: c.NotInterned, linhasVarridas: c.RowsScanned,
+		divergentes: c.DivergentGroups, naoInternadas: c.NotInterned,
+		agregadosDivergentes: c.DivergentAggregates, linhasVarridas: c.RowsScanned,
 		duracaoMs: c.DurationMs}
 	for _, d := range c.Sample {
 		l.amostra = append(l.amostra, amostraDeDivergencia{d.GroupKey, d.Maintained, d.Recomputed, d.RefsMaintained, d.RefsRecomputed})
@@ -256,6 +270,9 @@ func escreveAuditoria(w io.Writer, dataset string, linhas []linhaDeAuditoria) {
 		divergencia := strconv.Itoa(l.divergentes)
 		if l.naoInternadas > 0 {
 			divergencia += " (+" + strconv.FormatUint(l.naoInternadas, 10) + " linha(s) sem grupo internado)"
+		}
+		if l.agregadosDivergentes > 0 {
+			divergencia += " (+" + strconv.Itoa(l.agregadosDivergentes) + " agregado(s) divergente(s))"
 		}
 		linha(w, l.nome, u32(l.grupos), strconv.FormatInt(l.mantido, 10), strconv.FormatInt(l.recalculado, 10),
 			divergencia, strconv.FormatUint(l.linhasVarridas, 10), duracao(l.duracaoMs))
@@ -283,7 +300,7 @@ func desfechoDaAuditoria(linhas []linhaDeAuditoria, code int, amb Ambiente) int 
 	}
 	divergentes := 0
 	for _, l := range linhas {
-		if l.divergentes > 0 || l.naoInternadas > 0 {
+		if l.divergentes > 0 || l.naoInternadas > 0 || l.agregadosDivergentes > 0 {
 			divergentes++
 		}
 	}

@@ -30,7 +30,9 @@ partition "Escrita (applyRecord, sob wmu)" {
     stop
   endif
   :inc(nova) e depois dec(antiga)
-  em totais e refs (atômicos);
+  em totais e refs por grupo
+  e nos agregados linhas e total
+  (atômicos, colados uns aos outros);
   :overlay[rowId] = nova;
   stop
 }
@@ -61,7 +63,8 @@ partition "Abertura" {
     :recria os dois arquivos
     (reconstrução pendente);
   else (não)
-    :DOBRA: totais e refs
+    :DOBRA: totais e refs por grupo
+    e os agregados linhas e total,
     a partir do vetor em disco;
   endif
   :replay da recovery

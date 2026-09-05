@@ -58,10 +58,16 @@ func TestCountersLocalListaAuditaEReconstroi(t *testing.T) {
 		t.Fatalf("counters = %d\n%s", code, a.stderr.String())
 	}
 	saida := a.stdout.String()
-	for _, trecho := range []string{"CONTADOR", "GRUPOS", "TETO", "autenticados_por_olt", "nunca"} {
+	for _, trecho := range []string{"CONTADOR", "LINHAS", "TOTAL", "GRUPOS", "TETO", "autenticados_por_olt", "nunca"} {
 		if !strings.Contains(saida, trecho) {
 			t.Errorf("listagem sem %q:\n%s", trecho, saida)
 		}
+	}
+	// 24 serviços, todos com `olt`; autenticados são os i%3 != 0, que são 16.
+	// Os dois números serem DIFERENTES é o que faz a asserção discriminar a
+	// troca das colunas.
+	if got := colunasDoContador(t, saida, "autenticados_por_olt"); got[0] != "24" || got[1] != "16" {
+		t.Errorf("autenticados_por_olt: linhas %q total %q, quero 24 e 16:\n%s", got[0], got[1], saida)
 	}
 
 	if code := a.roda("counters", "--config", a.config, "--dataset", "servicos", "--audit"); code != cli.ExitOK {
@@ -127,6 +133,11 @@ func TestCountersRemotoChamaAsRotas(t *testing.T) {
 	if !strings.Contains(a.stdout.String(), "autenticados_por_olt") {
 		t.Errorf("listagem remota sem o contador:\n%s", a.stdout.String())
 	}
+	// O caminho remoto lê o /v1/stats, e é aqui que a troca de Rows por Total
+	// no mapeamento do wire aparece.
+	if got := colunasDoContador(t, a.stdout.String(), "autenticados_por_olt"); got[0] != "24" || got[1] != "16" {
+		t.Errorf("listagem remota: linhas %q total %q, quero 24 e 16:\n%s", got[0], got[1], a.stdout.String())
+	}
 	if code := a.roda("counters", "--server", a.endereco(), "--dataset", "servicos", "--audit"); code != cli.ExitOK {
 		t.Fatalf("counters --server --audit = %d\n%s", code, a.stderr.String())
 	}
@@ -157,4 +168,20 @@ func TestCountersRemotoChamaAsRotas(t *testing.T) {
 	if !strings.Contains(a.stderr.String(), "--server") {
 		t.Errorf("a recusa tinha de apontar o --server:\n%s", a.stderr.String())
 	}
+}
+
+// colunasDoContador devolve LINHAS e TOTAL da linha do contador nomeado na
+// tabela do `counters`. A tabela sai alinhada por um tabwriter, então as
+// colunas se separam por espaços e nenhum dos três primeiros campos os contém.
+func colunasDoContador(t *testing.T, saida, nome string) [2]string {
+	t.Helper()
+	for _, l := range strings.Split(saida, "\n") {
+		campos := strings.Fields(l)
+		if len(campos) < 3 || campos[0] != nome {
+			continue
+		}
+		return [2]string{campos[1], campos[2]}
+	}
+	t.Fatalf("o contador %q não está na tabela:\n%s", nome, saida)
+	return [2]string{}
 }

@@ -2161,16 +2161,38 @@ no presente; o que o snapshot congela é o conjunto de grupos. A lista dos
 contadores sai pelo mesmo caminho: `_meta.counters` é uma tabela virtual
 registrada sob o dataset — uma linha por contador, com a definição (`name`,
 `groupBy`, `condition`) e o retrato vivo de `EstatisticasDeContadores`
-(`groups`, `maxGroups`, `retired`, `refused`, `orphans`, `bytes`,
-`auditDivergent`, `auditAt`, os dois últimos NULL até a primeira auditoria).
+(`rows`, `total`, `groups`, `maxGroups`, `retired`, `refused`, `orphans`,
+`bytes`, `auditDivergent`, `auditAt`, os dois últimos NULL até a primeira
+auditoria).
 Ela mora em `internal/contadores`, não no pacote `meta`, porque o `meta`
 descreve o dataset pela definição estática e não conhece o storage; o motor
 manda `_meta.fields` para o `meta` e qualquer outra tabela do `_meta` para o
 registro. Existe em todo dataset, vazia quando não há `counters:`.
 
+**Os agregados do contador.** `rows` e `total` são a soma dos `refs` e a soma
+dos `totais` de todos os grupos, mantidas no próprio contador como dois
+atômicos ajustados dentro do `Transiciona` — o delta já é conhecido ali e é
+sempre ±1. Somá-los na leitura custaria O(grupos) por linha de `_meta.counters`
+e criaria uma segunda maneira de calcular o mesmo fato. Eles são a MESMA dobra
+do vetor que os totais por grupo, acumulada no mesmo laço, então nada de novo
+vai a disco e a consistência através de crash vale para eles inteira. A
+aposentadoria não os toca: ela só aposenta com `refs == 0`, e
+`totais[g] <= refs[g]` por construção, logo o grupo que sai contribuía zero
+para os dois — o que um teste trava, porque descontar ao aposentar é o
+"conserto" que qualquer um escreveria. Os mesmos dois números saem em
+`/v1/stats`, no `nishidb counters` e nas séries `nishidb_counter_rows` e
+`nishidb_counter_counted_rows` (medidores: descem quando uma linha é lapidada
+ou vence, e por isso não levam o sufixo `_total`, que é de contador
+monotônico).
+
 **A auditoria.** `POST /v1/counters/audit` (ADMIN) congela os totais e abre o
-snapshot **no mesmo instante, sob o `wmu` por microssegundos**, e varre sem o
-writer. A varredura tem enumerador próprio, com a definição do contador —
+snapshot **no mesmo instante, sob o `wmu` por microssegundos** — os dois
+agregados vêm nesse mesmo retrato, porque é a coincidência de instante que ela
+compara —, e varre sem o writer. Ela também é o que reconcilia os agregados
+com os vetores por grupo, conferindo-os contra o RECALCULADO e contando essas
+divergências à parte (`TestAuditoriaAcusaOAgregadoContraORecalculado`): uma
+linha que trocou de grupo por deriva deixa os grupos errados e o agregado
+certo, e somar as duas contagens esconderia a distinção. A varredura tem enumerador próprio, com a definição do contador —
 linha com location e sem lápide na versão T0, pelo journal de versões —, e
 não a visibilidade da consulta: `ScanLive` lê a location corrente e filtra por
 prazo vencido, e reportaria como divergência a linha vencida que o coletor

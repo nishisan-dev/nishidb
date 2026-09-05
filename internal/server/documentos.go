@@ -113,6 +113,8 @@ func contadorStats(ests []contador.Estatisticas) []protocolo.ContadorStats {
 	for _, e := range ests {
 		out = append(out, protocolo.ContadorStats{
 			Name:                 e.Nome,
+			Rows:                 e.Linhas,
+			Total:                e.Total,
 			Groups:               e.Grupos,
 			MaxGroups:            e.Teto,
 			Retired:              e.Aposentados,
