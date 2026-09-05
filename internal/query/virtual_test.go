@@ -2,10 +2,12 @@ package query_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/nishisan-dev/nishidb/internal/query"
+	"github.com/nishisan-dev/nishidb/internal/query/binder"
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 	"github.com/nishisan-dev/nishidb/internal/testutil/fakestorage"
@@ -149,5 +151,52 @@ func TestMetaContinuaRespondendoComORegistroVirtual(t *testing.T) {
 	rows := h.consultaOK("SELECT name FROM _meta.fields WHERE name = 'Acct-Status-Type'")
 	if len(rows) != 1 {
 		t.Fatalf("_meta.fields = %v", rows)
+	}
+}
+
+// TestRecusaDeRoteamentoVirtualEhErroDeBind: as três recusas de roteamento
+// — namespace inexistente, namespace sem tabela nenhuma e tabela inexistente —
+// são erro de QUEM ESCREVEU A QUERY, e têm de sair tipadas como tal.
+//
+// Sem o tipo, o servidor não as distingue de um bug e responde INTERNAL/500 a
+// quem só digitou o nome de uma tabela que não existe: foi o que o piloto viu
+// em 05/09/2026 com `SELECT a FROM _meta.nada` (issue #35). A posição aponta o
+// nome DEPOIS do ponto, que é o token ofensor.
+func TestRecusaDeRoteamentoVirtualEhErroDeBind(t *testing.T) {
+	h := novoHarness(t)
+	if err := h.engine.DeclaraNamespace(dataset, "_counters"); err != nil {
+		t.Fatal(err)
+	}
+
+	casos := []struct {
+		nome    string
+		sql     string
+		ofensor string // o texto que a posição tem de apontar
+		naMsg   string
+	}{
+		{"namespace inexistente", "SELECT a FROM _outro.coisa", "coisa", "_outro"},
+		{"namespace sem tabela nenhuma", "SELECT a FROM _counters.nao_existe", "nao_existe", "não declara tabela nenhuma"},
+		{"tabela inexistente no _meta", "SELECT a FROM _meta.nada", "nada", `_meta não tem tabela "nada"`},
+	}
+	for _, c := range casos {
+		t.Run(c.nome, func(t *testing.T) {
+			_, err := h.consulta(c.sql)
+			if err == nil {
+				t.Fatal("a recusa tem de acontecer")
+			}
+			if !errors.Is(err, binder.ErrBind) {
+				t.Fatalf("a recusa tem de ser da família do bind (senão o servidor responde INTERNAL): %v", err)
+			}
+			var be *binder.Error
+			if !errors.As(err, &be) {
+				t.Fatalf("a recusa tem de carregar a posição para o cliente destacar o trecho: %v", err)
+			}
+			if be.Pos < 0 || be.Pos > len(c.sql) || !strings.HasPrefix(c.sql[be.Pos:], c.ofensor) {
+				t.Fatalf("a posição %d tem de apontar %q em %q", be.Pos, c.ofensor, c.sql)
+			}
+			if !strings.Contains(err.Error(), c.naMsg) {
+				t.Fatalf("a recusa tem de continuar nomeando o que existe (%q): %v", c.naMsg, err)
+			}
+		})
 	}
 }

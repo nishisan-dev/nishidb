@@ -1352,7 +1352,10 @@ SELECT name, rows, total, groupBy, condition, groups, refused FROM _meta.counter
 definição e os números vivos; `_counters.<nome>`, uma tabela por contador
 declarado no YAML, lê os totais (ver "Contadores mantidos na escrita" acima).
 Um `FROM _outro.x` é recusado nomeando os namespaces que existem, e um
-`FROM _meta.x` nomeia as tabelas.
+`FROM _meta.x` nomeia as tabelas. As duas recusas são erro **do cliente** —
+código `BIND`, HTTP 400, com a posição do nome ofensor —, da mesma família de
+"coluna desconhecida": o FROM aponta para o que não existe, e o servidor não
+tem por que reportar falha interna a quem digitou um nome errado.
 
 `occurrences` é quantas vezes a chave apareceu no documento; `typeMismatches`,
 quantas dessas não couberam no tipo da coluna; `coercions`, quantas chegaram
