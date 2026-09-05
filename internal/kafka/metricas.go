@@ -85,6 +85,12 @@ type metricas struct {
 	// novasPart serializa a criação do mapa; fora do caminho quente.
 	novasPart sync.Mutex
 
+	// ultimoLote é o instante, em nanossegundos de Unix, do último lote NÃO
+	// VAZIO que o poller entregou. Zero enquanto nenhum chegou. Não vira
+	// série: é uma coluna de `_meta.kafka`, e o /metrics já responde a mesma
+	// pergunta pela taxa de nishidb_ingest_events_total.
+	ultimoLote atomic.Int64
+
 	// marca é o fim do log por partição, como o broker respondeu, com o
 	// instante da resposta. Só o scrape a escreve.
 	marca atomic.Pointer[marcaDagua]
@@ -338,9 +344,69 @@ func (m *metricas) publicaMarca(fim map[int32]int64, em time.Time) {
 // ausência é ausência de medição, e `absent(nishidb_kafka_lag)` é um alerta
 // que o operador consegue escrever. É a mesma doutrina do coletor da fila.
 func (m *metricas) amostrasDaPosicao() []metrics.Amostra {
+	ps, _ := m.posicoesDoInstante()
+	if len(ps) == 0 {
+		return nil
+	}
+	out := make([]metrics.Amostra, 0, len(ps)*3)
+	for _, p := range ps {
+		rot := []metrics.Label{
+			{Nome: metrics.LabelDataset, Valor: m.dataset},
+			{Nome: metrics.LabelPartition, Valor: strconv.Itoa(int(p.Particao))},
+		}
+		out = append(out, metrics.Amostra{
+			Familia: metrics.MetKafkaOffset, Nome: metrics.MetKafkaOffset, Tipo: metrics.TipoMedidor, Valor: float64(p.Aplicado),
+			Ajuda:  "Próximo offset a consumir, por partição: a posição APLICADA pelo writer.",
+			Labels: rot,
+		})
+		if !p.TemFim {
+			continue
+		}
+		out = append(out,
+			metrics.Amostra{
+				Familia: metrics.MetKafkaHighWatermark, Nome: metrics.MetKafkaHighWatermark, Tipo: metrics.TipoMedidor, Valor: float64(p.FimDoLog),
+				Ajuda:  "Fim do log por partição, como o broker respondeu no instante desta raspagem.",
+				Labels: rot,
+			},
+			metrics.Amostra{
+				Familia: metrics.MetKafkaLag, Nome: metrics.MetKafkaLag, Tipo: metrics.TipoMedidor, Valor: float64(p.Atraso),
+				Ajuda:  "Mensagens entre a posição aplicada e o fim do log. Não depende do commit no group.",
+				Labels: rot,
+			},
+		)
+	}
+	return out
+}
+
+// PosicaoDaParticao é a posição de UMA partição num instante: a APLICADA e —
+// quando a marca d'água do broker ainda vale — o fim do log e o atraso.
+//
+// TemFim separa "o broker não respondeu por esta partição" de "o fim do log é
+// zero". Sem ele, HWM e lag sairiam ZERADOS numa marca vencida, e zero é o
+// lado que ESCONDE incidente — é a mesma distinção que a validade da marca
+// existe para manter.
+type PosicaoDaParticao struct {
+	Particao int32
+	Aplicado int64
+	FimDoLog int64
+	Atraso   int64
+	TemFim   bool
+}
+
+// posicoesDoInstante colhe TODAS as partições de UMA leitura da marca d'água.
+//
+// É a fonte única do amostrasDaPosicao acima e do Instantaneo que a
+// `_meta.kafka` consome: a ordem estável, a validade da marca, a omissão da
+// partição que o broker não respondeu e o piso do lag em zero moram AQUI, e
+// não em dois lugares que divergem no dia em que um deles mudar. O godoc do
+// amostrasDaPosicao explica POR QUE cada uma dessas regras é o que é.
+//
+// marcaEm é o instante da leitura do broker, ou o zero quando não há marca
+// válida — é ele que carimba a idade das colunas que dependem do broker.
+func (m *metricas) posicoesDoInstante() (ps []PosicaoDaParticao, marcaEm time.Time) {
 	mp := m.posicoes.Load()
 	if mp == nil || len(*mp) == 0 {
-		return nil
+		return nil, time.Time{}
 	}
 	// Ordem estável: a iteração de mapa em Go é aleatória, e um /metrics que
 	// muda a ordem das linhas a cada raspagem é ruído em qualquer diff.
@@ -352,48 +418,50 @@ func (m *metricas) amostrasDaPosicao() []metrics.Amostra {
 
 	md := m.marca.Load()
 	valida := md != nil && time.Since(md.em) <= validadeDaMarcaDagua
-
-	out := make([]metrics.Amostra, 0, len(parts)*3)
-	for _, p := range parts {
-		rot := []metrics.Label{
-			{Nome: metrics.LabelDataset, Valor: m.dataset},
-			{Nome: metrics.LabelPartition, Valor: strconv.Itoa(int(p))},
-		}
-		aplicado := (*mp)[p].Load()
-		out = append(out, metrics.Amostra{
-			Familia: metrics.MetKafkaOffset, Nome: metrics.MetKafkaOffset, Tipo: metrics.TipoMedidor, Valor: float64(aplicado),
-			Ajuda:  "Próximo offset a consumir, por partição: a posição APLICADA pelo writer.",
-			Labels: rot,
-		})
-		if !valida {
-			continue
-		}
-		fim, ok := md.fim[p]
-		if !ok {
-			// Partição que o broker não respondeu nesta leitura: omite as duas
-			// que dependem dela, e não a partição inteira.
-			continue
-		}
-		atraso := fim - aplicado
-		if atraso < 0 {
-			// O fim do log é anterior à posição aplicada: leitura do broker
-			// mais velha que o consumo. Não é lag negativo, é zero.
-			atraso = 0
-		}
-		out = append(out,
-			metrics.Amostra{
-				Familia: metrics.MetKafkaHighWatermark, Nome: metrics.MetKafkaHighWatermark, Tipo: metrics.TipoMedidor, Valor: float64(fim),
-				Ajuda:  "Fim do log por partição, como o broker respondeu no instante desta raspagem.",
-				Labels: rot,
-			},
-			metrics.Amostra{
-				Familia: metrics.MetKafkaLag, Nome: metrics.MetKafkaLag, Tipo: metrics.TipoMedidor, Valor: float64(atraso),
-				Ajuda:  "Mensagens entre a posição aplicada e o fim do log. Não depende do commit no group.",
-				Labels: rot,
-			},
-		)
+	if valida {
+		marcaEm = md.em
 	}
-	return out
+
+	ps = make([]PosicaoDaParticao, 0, len(parts))
+	for _, p := range parts {
+		pos := PosicaoDaParticao{Particao: p, Aplicado: (*mp)[p].Load()}
+		if valida {
+			if fim, ok := md.fim[p]; ok {
+				pos.FimDoLog, pos.TemFim = fim, true
+				if pos.Atraso = fim - pos.Aplicado; pos.Atraso < 0 {
+					// O fim do log é anterior à posição aplicada: leitura do
+					// broker mais velha que o consumo. Não é lag negativo, é
+					// zero.
+					pos.Atraso = 0
+				}
+			}
+		}
+		ps = append(ps, pos)
+	}
+	return ps, marcaEm
+}
+
+// marcaVencida diz se a última resposta do broker já não descreve o presente.
+// Usa a MESMA validadeDaMarcaDagua do coletor: um segundo prazo faria o
+// /metrics e a `_meta.kafka` discordarem sobre quando o número morre.
+func (m *metricas) marcaVencida() bool {
+	md := m.marca.Load()
+	return md == nil || time.Since(md.em) > validadeDaMarcaDagua
+}
+
+// marcaLote registra o instante de um lote NÃO VAZIO entregue pelo poller, e
+// ultimoLoteEm o devolve (zero = nenhum lote desde a subida deste consumidor).
+//
+// Mora no poller e é escrito uma vez por LOTE: quem responde "o Kafka ainda
+// entrega?" é ele, e o custo é um relógio por PollRecords em vez de um por
+// registro. O que o writer fez com o lote já sai no Desfecho.
+func (m *metricas) marcaLote(t time.Time) { m.ultimoLote.Store(t.UnixNano()) }
+
+func (m *metricas) ultimoLoteEm() time.Time {
+	if n := m.ultimoLote.Load(); n != 0 {
+		return time.Unix(0, n)
+	}
+	return time.Time{}
 }
 
 // invalido devolve a série do motivo dado — o nome da categoria §101
