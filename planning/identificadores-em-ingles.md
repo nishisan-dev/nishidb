@@ -50,8 +50,13 @@ descartáveis).
    (`nishidb_compaction_segmentos_pinados`, `nishidb_index_segmentos`,
    `nishidb_index_reconstrucoes_total`, `nishidb_index_reconstrucao_ativa`,
    `nishidb_index_crc_falhas_total`,
-   `nishidb_index_segmentos_consultados_total`), `--log-format texto`, e os
-   quatro nomes em disco (`grupos.dict`, `grupos.idx`, `prazos.idx`,
+   `nishidb_index_segmentos_consultados_total`), os VALORES de rótulo dessas
+   séries (`estado` ∈ `selado|corrente|pendente|fora`, `modo` ∈
+   `indice|enumeracao`, em `internal/metrics/nomes.go:430-439`), valores
+   enumerados que saem pelo wire ou pela CLI em PT-BR (`"ausente"` em
+   `types.Presenca.String`, `"nenhum"` em `server/mutacoes.go:146`,
+   `"corrente"` em `cli/operacao.go:269`), `--log-format texto`, e os quatro
+   nomes em disco (`grupos.dict`, `grupos.idx`, `prazos.idx`,
    `vencimentos.idx`).
 6. Clients: classes internas do JDBC (`LeitorNdjson`, `Molduras`,
    `Temporais`, `TiposJdbc`, `Transporte`, `Codigos`, `JsonTipo`) e do Python
@@ -318,11 +323,13 @@ não nascem durante o ciclo.
 - CLAUDE.md: o parágrafo "Todo o repositório é em PT-BR" dá lugar à tabela
   do §1; os exemplos de teste citados nele são atualizados na Fase 4 pelo
   mapeamento.
-- `scripts/ifacerename` e `scripts/renamecite` com testes e mutações
-  relatadas.
-- Inventário: `go/packages` lista toda declaração, todo grupo de interface
-  e todo identificador local do módulo, por pacote, em TSV; é a entrada dos
-  agentes das fases seguintes e a base de cálculo dos números do aceite.
+- `scripts/renameinv`, `scripts/ifacerename` e `scripts/renamecite` com
+  testes e mutações relatadas, mais `scripts/rename-apply.sh` (o aplicador,
+  que exige `rf` e `gopls` e falha alto sem eles) com o gate correspondente.
+- Inventário: `scripts/renameinv` lista, por `go/packages`, toda declaração
+  (com o endereço que o `rf` entende), todo identificador local e todo grupo
+  de interface do módulo, em TSV; é a entrada dos agentes das fases
+  seguintes e a base de cálculo dos números do aceite.
 
 ### Fase 1 — Pacotes e arquivos
 
