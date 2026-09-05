@@ -1,5 +1,7 @@
 package storage
 
+import "github.com/nishisan-dev/nishidb/internal/types"
+
 // ContadoresConstruidosForTest expõe quantos contadores esta abertura teve de
 // construir em vez de adotar — o observável que separa "adotou" de
 // "reconstruiu e chegou ao mesmo resultado", como o da agenda.
@@ -25,3 +27,15 @@ func (s *Store) PartialCheckpointComContadoresForTest() error {
 	}
 	return nil
 }
+
+// SetAuditoriaTraceForTest instala o observador chamado depois de cada linha
+// que a auditoria dos contadores varre (seam de teste; nil em produção). É por
+// ele que o teste escreve NO MEIO da varredura — o único jeito determinístico
+// de estourar o snapshot que a auditoria segura.
+func (s *Store) SetAuditoriaTraceForTest(fn func(linha types.RowID)) { s.audTrace = fn }
+
+// SetAuditoriaAntesDaCopiaForTest instala o observador chamado entre abrir o
+// snapshot e copiar os totais (seam de teste; nil em produção). No código
+// certo ele roda SOB o wmu — e é isso que o teste prova: um Put disparado
+// dali só entra depois da cópia.
+func (s *Store) SetAuditoriaAntesDaCopiaForTest(fn func()) { s.audAntesDaCopia = fn }

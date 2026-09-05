@@ -373,6 +373,14 @@ type Store struct {
 	// observável que separa "adotou" de "reconstruiu e chegou ao mesmo
 	// resultado", como agendaReconstruida.
 	contadoresConstruidos int
+	// audTrace é o seam de teste da auditoria dos contadores: chamado depois
+	// de cada linha varrida. Nil em produção.
+	audTrace func(linha types.RowID)
+	// audAntesDaCopia é o seam entre abrir o snapshot e copiar os totais —
+	// dentro do wmu, no código certo. Existe porque a janela que ele expõe é
+	// de microssegundos e nenhuma ingestão concorrente a acerta por sorte: é
+	// por ele que o teste prova que a cópia e o snapshot são do MESMO instante.
+	audAntesDaCopia func()
 
 	// Ciclo de vida do coletor, no molde do da compaction: expMu guarda o
 	// par cancela/emVoo, expAtiva é o medidor observável e expEmVoo é o que

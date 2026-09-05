@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -195,7 +196,7 @@ func (s *Store) infoDosContadores() []checkpoint.ContadorInfo {
 func (s *Store) reconstroiContadoresPendentes() error {
 	for _, p := range s.contadoresARecriar {
 		inicio := time.Now()
-		linhas, err := s.varreLinhasVivasNoContador(p.c, false)
+		linhas, err := s.varreLinhasVivasNoContador(context.Background(), p.c, false)
 		if err != nil {
 			return fmt.Errorf("storage: construir o contador %q de %s: %w", p.c.Def().Nome, s.opts.Dir, err)
 		}
@@ -221,11 +222,16 @@ func (s *Store) reconstroiContadoresPendentes() error {
 // abertura não há concorrência; em operação (ReconstroiContadores) o writer
 // já segura o wmu e a leitura do par (location, bytes) entra no aposMu, que é
 // o lock mais interno.
-func (s *Store) varreLinhasVivasNoContador(c *contador.Contador, sobAposMu bool) (uint64, error) {
+func (s *Store) varreLinhasVivasNoContador(ctx context.Context, c *contador.Contador, sobAposMu bool) (uint64, error) {
 	limite := types.RowID(s.nextRowID.Load())
 	var buf []byte
 	var linhas uint64
 	for id := types.RowID(0); id < limite; id++ {
+		if id&passoDoContexto == 0 {
+			if err := ctx.Err(); err != nil {
+				return linhas, err
+			}
+		}
 		packed, ok := s.locs.Get(id)
 		if !ok {
 			continue
@@ -268,6 +274,235 @@ func (s *Store) EstatisticasDeContadores() []contador.Estatisticas {
 		out = append(out, c.Estatisticas())
 	}
 	return out
+}
+
+// passoDoContexto é a cadência (em linhas, potência de dois menos um usada
+// como máscara) com que as varreduras longas olham o contexto e a validade do
+// snapshot. Mil linhas são microssegundos; olhar por linha custaria mais que
+// a própria leitura.
+const passoDoContexto = 1023
+
+// congeladoDeContador é o retrato T0 de um contador para a auditoria.
+type congeladoDeContador struct {
+	totais, refs []int64
+	limite       uint32
+}
+
+// recalculoDeContador é o que a varredura da auditoria acumula por contador.
+type recalculoDeContador struct {
+	totais, refs  []int64
+	naoInternadas uint64
+	deriv         *contador.Derivador
+}
+
+// AuditaContadores recalcula cada contador por varredura e compara com o
+// mantido, SEM segurar o writer pela varredura.
+//
+// # A definição
+//
+// "Viva" para o contador é a linha COM location e SEM lápide — o vetor
+// representa exatamente isso, e o applyRecord só desconta quando a lápide é
+// gravada. A visibilidade da consulta é outra coisa: ela filtra também por
+// prazo vencido, decidido em tempo de leitura, e uma linha vencida que o
+// coletor ainda não lapidou está invisível à consulta e CONTADA no contador
+// (a proposta já assume isso: "o total cai quando o coletor chega"). Por isso
+// a auditoria não usa ScanLive/GetByRowID: ela tem enumerador próprio, com a
+// definição do contador, senão reportaria como divergência o que é desenho.
+//
+// # O instante
+//
+// Sob o wmu, por microssegundos: abre o snapshot e copia os totais de cada
+// contador. Os dois no mesmo instante, com o writer parado, é o que torna a
+// comparação exata — o snapshot dá a versão T0 de cada linha (o journal de
+// versões), e a cópia dá os totais T0. Abrir o snapshot DENTRO do wmu também
+// fecha a corrida entre ler a época e registrar o leitor (snapshot.go). Depois
+// disso o writer segue; a varredura lê sob o aposMu por linha, como toda
+// leitura do par (location, bytes).
+//
+// # Inconclusiva
+//
+// O journal tem teto (runtime.query.snapshotMaxBytes), e a varredura de um
+// dataset grande segura o snapshot por segundos. Estourado, o snapshot mais
+// antigo é invalidado — pode ser este — e a resposta é ErrSnapshotExpirado,
+// nunca um relatório: uma divergência inventada por versão perdida mandaria o
+// operador reconstruir um contador certo.
+func (s *Store) AuditaContadores(ctx context.Context) ([]contador.Relatorio, error) {
+	if err := s.entra(); err != nil {
+		return nil, err
+	}
+	defer s.sai()
+	if len(s.contadores) == 0 {
+		return nil, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	inicio := time.Now()
+
+	s.wmu.Lock()
+	snap := s.AbreSnapshot()
+	if s.audAntesDaCopia != nil {
+		s.audAntesDaCopia()
+	}
+	congelados := make([]congeladoDeContador, len(s.contadores))
+	for i, c := range s.contadores {
+		var cg congeladoDeContador
+		cg.totais, cg.refs, cg.limite = c.Congela()
+		congelados[i] = cg
+	}
+	s.wmu.Unlock()
+	defer s.FechaSnapshot(snap)
+
+	recalc := make([]recalculoDeContador, len(s.contadores))
+	for i, c := range s.contadores {
+		recalc[i] = recalculoDeContador{
+			totais: make([]int64, congelados[i].limite),
+			refs:   make([]int64, congelados[i].limite),
+			deriv:  c.NovoDerivador(),
+		}
+	}
+
+	var buf []byte
+	var linhas uint64
+	for id := snap.BaseRowID; id < snap.LimiteRowID; id++ {
+		if id&passoDoContexto == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
+		// A validade vem ANTES de consultar o journal: um snapshot invalidado
+		// já pode ter tido as versões dele podadas, e o journal responderia
+		// "location corrente" para uma linha que mudou depois de T0.
+		if !s.snaps.valido(snap.Epoca) {
+			return nil, ErrSnapshotExpirado
+		}
+		var packed uint64
+		var ok bool
+		if !s.vers.Vazio() {
+			packed, ok = s.vers.Em(id, snap.Epoca)
+		}
+		if !ok {
+			if packed, ok = s.locs.Get(id); !ok {
+				continue
+			}
+		}
+		seg, off, flags := rowindex.Unpack(packed)
+		if flags&types.FlagTombstone != 0 {
+			continue
+		}
+		s.aposMu.RLock()
+		rec, b, err := s.segR.ReadRecord(seg, off, buf)
+		s.aposMu.RUnlock()
+		buf = b
+		if err != nil {
+			return nil, fmt.Errorf("storage: auditoria dos contadores: ler a linha %d em (%d, %d): %w", id, seg, off, err)
+		}
+		if rec.RowID != id {
+			return nil, fmt.Errorf("%w: a location da linha %d aponta para o record da linha %d", ErrDatasetCorrupt, id, rec.RowID)
+		}
+		linhas++
+		for i, c := range s.contadores {
+			chave, cond, tem, err := recalc[i].deriv.Deriva(rec.Payload)
+			if err != nil {
+				return nil, fmt.Errorf("storage: auditoria do contador %q na linha %d: %w", c.Def().Nome, id, err)
+			}
+			if !tem {
+				continue
+			}
+			g, ok := c.PorChave(chave)
+			if !ok || g >= congelados[i].limite {
+				// Grupo internado DEPOIS de T0 (a linha era de outro grupo em
+				// T0 e o journal já devolveu a versão T0, então isto só
+				// acontece por deriva) ou nunca internado.
+				recalc[i].naoInternadas++
+				continue
+			}
+			recalc[i].refs[g]++
+			if cond {
+				recalc[i].totais[g]++
+			}
+		}
+		if s.audTrace != nil {
+			s.audTrace(id)
+		}
+	}
+	if !s.snaps.valido(snap.Epoca) {
+		return nil, ErrSnapshotExpirado
+	}
+
+	duracao := time.Since(inicio)
+	out := make([]contador.Relatorio, 0, len(s.contadores))
+	for i, c := range s.contadores {
+		cg, rc := congelados[i], recalc[i]
+		r := contador.Relatorio{
+			Nome:           c.Def().Nome,
+			Grupos:         c.Estatisticas().Grupos,
+			NaoInternadas:  rc.naoInternadas,
+			LinhasVarridas: linhas,
+			Duracao:        duracao,
+		}
+		for g := uint32(1); g < cg.limite; g++ {
+			m, mr := cg.totais[g], cg.refs[g]
+			q, qr := rc.totais[g], rc.refs[g]
+			r.Mantido += m
+			r.Recalculado += q
+			if m == q && mr == qr {
+				continue
+			}
+			r.Divergentes++
+			if len(r.Amostra) < contador.TetoDaAmostra {
+				_, texto, _, _, _ := c.Grupo(g)
+				r.Amostra = append(r.Amostra, contador.Divergencia{
+					ID: g, Texto: string(texto),
+					Mantido: m, Recalculado: q,
+					RefsMantido: mr, RefsRecalculado: qr,
+				})
+			}
+		}
+		out = append(out, r)
+	}
+	return out, nil
+}
+
+// ReconstroiContadores zera cada contador e o refaz varrendo as linhas vivas,
+// SOB o wmu: a ingestão para pela varredura inteira. É o remédio para uma
+// deriva que a auditoria apontou — explícito, caro e raro —, e o custo é
+// dito no godoc e na documentação em vez de escondido atrás de um caminho
+// "sem lock" que deixaria o contador inconsistente enquanto o Put anda.
+func (s *Store) ReconstroiContadores(ctx context.Context) ([]contador.Reconstrucao, error) {
+	if err := s.entra(); err != nil {
+		return nil, err
+	}
+	defer s.sai()
+	if len(s.contadores) == 0 {
+		return nil, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	if s.stickyErr != nil {
+		return nil, fmt.Errorf("%w: %w", ErrWriterFailed, s.stickyErr)
+	}
+	out := make([]contador.Reconstrucao, 0, len(s.contadores))
+	for _, c := range s.contadores {
+		inicio := time.Now()
+		if err := c.Zera(); err != nil {
+			return nil, fmt.Errorf("storage: reconstruir o contador %q: %w", c.Def().Nome, err)
+		}
+		linhas, err := s.varreLinhasVivasNoContador(ctx, c, true)
+		if err != nil {
+			return nil, fmt.Errorf("storage: reconstruir o contador %q: %w", c.Def().Nome, err)
+		}
+		out = append(out, contador.Reconstrucao{
+			Nome: c.Def().Nome, Linhas: linhas, Grupos: c.Estatisticas().Grupos, Duracao: time.Since(inicio),
+		})
+		s.opts.Log.Info("contador.reconstruido",
+			"o contador foi reconstruído em operação, varrendo as linhas vivas sob o lock do writer",
+			"contador", c.Def().Nome, "linhas", linhas, "grupos", c.Estatisticas().Grupos, "duracao", time.Since(inicio).String())
+	}
+	return out, nil
 }
 
 // descreveContadores rende as definições numa linha, para o log de subida.
