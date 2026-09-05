@@ -35,3 +35,12 @@ func Rotula() string {
 	r := rotulo{nome: "x"}
 	return r.nome
 }
+
+// Conta tem um parâmetro com o MESMO nome da função: Conta.Conta não é um
+// endereço declarado duas vezes (Conta.Conta refere-se sempre ao parâmetro;
+// o nome da própria função é endereçado por `Conta`, sem sufixo), e por isso
+// não pode sair marcado #ambiguo (achado na varredura real ao contar Defs
+// sobre a FuncDecl inteira, que passa pelo Ident do próprio nome).
+func Conta(Conta int) int {
+	return Conta
+}

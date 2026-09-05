@@ -118,6 +118,28 @@ func TestInventoryMarksFieldsOfFunctionLocalStructForGopls(t *testing.T) {
 	}
 }
 
+func TestInventoryDoesNotCountTheFunctionNameAsAmbiguity(t *testing.T) {
+	// Conta(Conta int) int: o parâmetro tem o MESMO nome da função. O Ident
+	// de fn.Name não é uma segunda declaração no endereço Conta.Conta — é o
+	// PRÓPRIO endereço `Conta` da função, que não colide por posição (nome
+	// duplicado no mesmo escopo de pacote é erro de compilação) — e não pode
+	// contar para a detecção de ambiguidade; senão qualquer parâmetro,
+	// receptor, local, type/const ou label homônimo da função que o declara
+	// sairia #ambiguo por engano.
+	inv, err := Inventory("testdata/modulo", "./...")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := findRow(t, inv.Rows, "param", "Conta.Conta")
+	// exportado é "sim" aqui: Exported() é puramente sobre a primeira letra
+	// do nome (types.Object.Exported()), não sobre o escopo — um parâmetro
+	// com inicial maiúscula é "sim" mesmo sendo local, igual a qualquer
+	// outro `local`/`param` maiúsculo do inventário.
+	if r[0] != "b" || r[5] != "sim" {
+		t.Errorf("pacote=%q exportado=%q, esperado b sim", r[0], r[5])
+	}
+}
+
 func TestInventoryDeduplicatesTestVariants(t *testing.T) {
 	// Com Tests: true, go/packages carrega `a`, `a [a.test]` e `a.test`; a
 	// mesma declaração aparece nas três com a mesma posição. Uma linha só.

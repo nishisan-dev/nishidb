@@ -59,6 +59,18 @@ func Inventory(dir, pattern string) (*Result, error) {
 					if !ok {
 						return true
 					}
+					if id == fn.Name {
+						// O nome da própria função/método não é uma segunda
+						// declaração no endereço `F.F`: é o mesmo endereço
+						// `F`, e func/method não colide por posição (nome
+						// duplicado no mesmo escopo de pacote é erro de
+						// compilação). Contar aqui mancharia de #ambiguo
+						// qualquer parâmetro, receptor, local, type/const ou
+						// label que por coincidência tenha o MESMO nome da
+						// função que os declara (`func Roda(Roda string)
+						// string`).
+						return true
+					}
 					if obj := p.TypesInfo.Defs[id]; obj != nil {
 						counts[funcAddress(fn)+"."+id.Name]++
 					}
