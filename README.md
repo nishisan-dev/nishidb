@@ -940,7 +940,9 @@ O servidor abre os datasets no **mesmo processo** em que consome, porque o
 flock do dataset é exclusivo por processo. Expõe o protocolo remoto do §67 —
 `POST /v1/query`, `GET /v1/metadata`, `GET /v1/stats` e `GET /v1/health` —
 mais `GET /metrics` (§92/§93), e aceita `--pprof <addr>` para os endpoints de
-debug num listener próprio.
+debug num listener próprio. O inventário das séries — as 91, por subsistema,
+com tipo, labels e o que cada uma responde — está em
+[`docs/metricas.md`](docs/metricas.md).
 
 O bind default é **`127.0.0.1`**. Fora do loopback, o servidor agora EXIGE
 uma decisão sobre autenticação — ver a próxima seção — em vez de só avisar.

@@ -1986,6 +1986,15 @@ contador com o mesmo nome de spec, que é bug de observabilidade. Os nomes do
 nome digitado à mão em dois lugares diverge no dia em que um deles é
 corrigido.
 
+**O inventário das 91 séries está em [`metricas.md`](metricas.md)** — por
+subsistema, com tipo, labels e o `# HELP` real de cada uma, mais as três
+classes de ausência: a série que depende de uma feature não declarada, a que
+só nasce no primeiro evento e a que não é emitida por ninguém. Duas cobranças
+o mantêm honesto: `TestTodaMetricaDeclaradaEstaDocumentada` exige que toda
+constante de `nomes.go` apareça lá, e `TestODocDeMetricasNaoInventaSerie` o
+lado inverso — série citada no documento que não existe no código é nome
+renomeado que o operador levaria para um alerta que nunca dispara.
+
 **As cinco séries de consulta do §92 nasceram com o protocolo.** Até a Fase 6
 elas eram nome em `nomes.go` sem alimentador nenhum, e não por esquecimento: o
 motor não sabe quantas consultas chegaram, quantas estão em voo nem quanto
