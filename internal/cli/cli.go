@@ -9,6 +9,7 @@ import (
 
 	"github.com/nishisan-dev/nishidb/internal/buildinfo"
 	nishiconfig "github.com/nishisan-dev/nishidb/internal/config"
+	"github.com/nishisan-dev/nishidb/internal/contadores"
 	"github.com/nishisan-dev/nishidb/internal/query/binder"
 	"github.com/nishisan-dev/nishidb/internal/query/executor"
 	"github.com/nishisan-dev/nishidb/internal/query/parser"
@@ -256,6 +257,11 @@ func abreDataset(cfg *nishiconfig.Config, nome string) (*storage.Store, *schema.
 
 	indexados := schema.CamposComIndice(spec)
 
+	// O schema compila DENTRO do Open, pelo callback dos contadores — o mesmo
+	// caminho do servidor: um dataset com `counters:` aberto pelo CLI tem de
+	// manter os contadores igual ao servidor, senão o `nishidb ingest` deixaria
+	// o vetor parado enquanto o Put anda.
+	comp := contadores.NovoCompilador(spec)
 	st, err := storage.Open(storage.Options{
 		Dir:                    cfg.DirDoDataset(nome),
 		SegmentSize:            cfg.SegmentSize(),
@@ -266,14 +272,15 @@ func abreDataset(cfg *nishiconfig.Config, nome string) (*storage.Store, *schema.
 		CampoDeEscrita:         schema.CampoInstanteDeEscrita,
 		CampoDePrazo:           schema.CampoDePrazo,
 		SnapshotMaxBytes:       cfg.SnapshotMaxBytes(),
+		CompilaContadores:      comp.Callback(),
 	})
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("abrindo o dataset %q: %w", nome, err)
 	}
-	compilado, err := spec.Compile(st.FieldDict())
-	if err != nil {
+	compilado := comp.Compilado()
+	if compilado == nil {
 		st.Close()
-		return nil, nil, nil, fmt.Errorf("dataset %q: %w", nome, err)
+		return nil, nil, nil, fmt.Errorf("dataset %q: o Open não compilou o schema", nome)
 	}
 	return st, compilado, spec, nil
 }

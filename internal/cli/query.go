@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	nishiconfig "github.com/nishisan-dev/nishidb/internal/config"
+	"github.com/nishisan-dev/nishidb/internal/contadores"
 	"github.com/nishisan-dev/nishidb/internal/protocolo"
 	"github.com/nishisan-dev/nishidb/internal/query"
 	"github.com/nishisan-dev/nishidb/internal/query/binder"
@@ -106,6 +107,10 @@ func runQuery(args []string, amb Ambiente) int {
 	eng := query.NewEngine()
 	if err := eng.Register(*dataset, compilado, st); err != nil {
 		fmt.Fprintln(amb.Stderr, "query:", err)
+		return ExitUso
+	}
+	if err := contadores.Registra(eng, *dataset, st); err != nil {
+		avisa(amb, "query: %v\n", err)
 		return ExitUso
 	}
 
