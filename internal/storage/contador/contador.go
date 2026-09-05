@@ -111,6 +111,8 @@ type Contador struct {
 	mexidasCobertas uint64
 	recusados       atomic.Uint64
 	orfas           atomic.Uint64
+	audDivergentes  atomic.Int64
+	audUltima       atomic.Int64
 	avisouTeto      bool
 	aoRecusar       func()
 
@@ -540,7 +542,8 @@ func (c *Contador) PorTexto(texto []byte) (uint32, bool) {
 	return id, ok
 }
 
-// Estatisticas é o retrato do contador para métricas e /v1/stats.
+// Estatisticas é o retrato do contador para métricas e /v1/stats — a MESMA
+// estrutura nos dois.
 type Estatisticas struct {
 	Nome        string
 	Grupos      uint32 // vivos
@@ -549,19 +552,34 @@ type Estatisticas struct {
 	Recusados   uint64 // grupos novos recusados pelo teto nesta abertura
 	Orfas       uint64 // entradas órfãs vistas na dobra desta abertura
 	Bytes       int64  // vetor + dicionário
+	// AuditoriaDivergentes e AuditoriaUltimaUnix são o resultado da última
+	// auditoria conclusiva desta abertura: zero e zero até a primeira.
+	AuditoriaDivergentes int64
+	AuditoriaUltimaUnix  int64
 }
 
 // Estatisticas devolve o retrato corrente. Seguro para leitores concorrentes.
 func (c *Contador) Estatisticas() Estatisticas {
 	return Estatisticas{
-		Nome:        c.def.Nome,
-		Grupos:      c.dict.Vivos(),
-		Aposentados: c.dict.Aposentados(),
-		Teto:        c.def.MaxGroups,
-		Recusados:   c.recusados.Load(),
-		Orfas:       c.orfas.Load(),
-		Bytes:       c.vetor.SizeBytes() + c.dict.SizeBytes(),
+		Nome:                 c.def.Nome,
+		Grupos:               c.dict.Vivos(),
+		Aposentados:          c.dict.Aposentados(),
+		Teto:                 c.def.MaxGroups,
+		Recusados:            c.recusados.Load(),
+		Orfas:                c.orfas.Load(),
+		Bytes:                c.vetor.SizeBytes() + c.dict.SizeBytes(),
+		AuditoriaDivergentes: c.audDivergentes.Load(),
+		AuditoriaUltimaUnix:  c.audUltima.Load(),
 	}
+}
+
+// RegistraAuditoria guarda o resultado de uma auditoria CONCLUSIVA para as
+// métricas: quantos grupos divergiram e quando. Uma auditoria inconclusiva
+// (snapshot estourado, contexto cancelado) não passa por aqui — ela não
+// mediu nada.
+func (c *Contador) RegistraAuditoria(divergentes int, quando time.Time) {
+	c.audDivergentes.Store(int64(divergentes))
+	c.audUltima.Store(quando.Unix())
 }
 
 // Msync força as páginas sujas do vetor para disco.

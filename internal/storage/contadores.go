@@ -459,6 +459,7 @@ func (s *Store) AuditaContadores(ctx context.Context) ([]contador.Relatorio, err
 				})
 			}
 		}
+		c.RegistraAuditoria(r.Divergentes+int(r.NaoInternadas), s.agora())
 		out = append(out, r)
 	}
 	return out, nil
@@ -503,6 +504,111 @@ func (s *Store) ReconstroiContadores(ctx context.Context) ([]contador.Reconstruc
 			"contador", c.Def().Nome, "linhas", linhas, "grupos", c.Estatisticas().Grupos, "duracao", time.Since(inicio).String())
 	}
 	return out, nil
+}
+
+// CadenciaDaAposentadoria é o intervalo entre passadas do laço de
+// aposentadoria de grupos. Um minuto, como o teto de espera do coletor de
+// expiração: o prazo de visibilidade é de dias, e a passada é uma varredura
+// linear de milhares de grupos — não de milhões de linhas. Exportada para o
+// log de subida do servidor nomear a cadência.
+const CadenciaDaAposentadoria = time.Minute
+
+// AposentadoriaDeGruposAtiva reporta se o laço está de pé.
+func (s *Store) AposentadoriaDeGruposAtiva() bool { return s.apGrupAtiva.Load() }
+
+// temContadorComRetencao diz se algum contador declara retainEmptyGroups.
+func (s *Store) temContadorComRetencao() bool {
+	for _, c := range s.contadores {
+		if c.Def().RetainEmptyGroups > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// AposentaGruposVazios roda UMA passada de aposentadoria em todos os
+// contadores, sob o wmu. Devolve quantos grupos saíram.
+func (s *Store) AposentaGruposVazios() (int, error) {
+	if err := s.entra(); err != nil {
+		return 0, err
+	}
+	defer s.sai()
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	if s.stickyErr != nil {
+		return 0, fmt.Errorf("%w: %w", ErrWriterFailed, s.stickyErr)
+	}
+	total := 0
+	for _, c := range s.contadores {
+		n, err := c.AposentaVazios(s.agora())
+		total += n
+		if err != nil {
+			return total, fmt.Errorf("storage: aposentar grupos do contador %q: %w", c.Def().Nome, err)
+		}
+	}
+	return total, nil
+}
+
+// IniciaAposentadoriaDeGrupos sobe o laço que aposenta grupos vazios. Sem
+// contador com retainEmptyGroups não há goroutine: o dataset não paga uma
+// thread para não fazer nada.
+func (s *Store) IniciaAposentadoriaDeGrupos(ctx context.Context) {
+	if !s.temContadorComRetencao() {
+		return
+	}
+	s.apGrupMu.Lock()
+	defer s.apGrupMu.Unlock()
+	if s.apGrupCancela != nil {
+		return
+	}
+	ctx, cancela := context.WithCancel(ctx)
+	s.apGrupCancela = cancela
+	s.apGrupAtiva.Store(true)
+	s.apGrupEmVoo.Add(1)
+	go func() {
+		defer s.apGrupEmVoo.Done()
+		defer s.apGrupAtiva.Store(false)
+		s.rodaAposentadoria(ctx)
+	}()
+}
+
+// ParaAposentadoriaDeGrupos cancela e AGUARDA a passada em voo, pela mesma
+// razão do ParaExpiracao: a passada escreve no dicionário do contador, que o
+// Close fecha.
+func (s *Store) ParaAposentadoriaDeGrupos() {
+	s.apGrupMu.Lock()
+	defer s.apGrupMu.Unlock()
+	if s.apGrupCancela != nil {
+		s.apGrupCancela()
+		s.apGrupCancela = nil
+	}
+	s.apGrupEmVoo.Wait()
+}
+
+func (s *Store) rodaAposentadoria(ctx context.Context) {
+	t := time.NewTicker(CadenciaDaAposentadoria)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		n, err := s.AposentaGruposVazios()
+		if err != nil {
+			// Erro aqui é do writer (sticky) ou do store fechando; insistir
+			// só produz log em laço.
+			s.opts.Log.Warn("contador.aposentadoria_parou",
+				"o laço de aposentadoria de grupos vazios encerrou; grupos vazios deixam de sair da tabela",
+				"erro", err)
+			return
+		}
+		if n > 0 {
+			s.opts.Log.Info("contador.aposentadoria",
+				"grupos vazios há mais que retainEmptyGroups saíram das tabelas de contadores",
+				"aposentados", n)
+		}
+	}
 }
 
 // descreveContadores rende as definições numa linha, para o log de subida.

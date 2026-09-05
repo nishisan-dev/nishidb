@@ -470,6 +470,7 @@ func (s *Servidor) Roda(ctx context.Context, pprofAddr string) error {
 		"datasets", len(s.datasets), "endereco", s.cfg.Endereco(), "versao", buildinfo.String())
 	s.ligaCompaction(ctx)
 	s.ligaExpiracao(ctx)
+	s.ligaAposentadoriaDeGrupos(ctx)
 	s.ligaRetencao(ctx)
 	s.ligaReconstrucao(ctx)
 
@@ -677,6 +678,26 @@ func (s *Servidor) ligaCompaction(ctx context.Context) {
 // paga goroutine. O log nomeia quais subiram, porque "o disco não está sendo
 // devolvido" é indistinguível de "não há nada para devolver" quando ninguém
 // conta qual dos dois é.
+// ligaAposentadoriaDeGrupos sobe, nos datasets com contador que declara
+// retainEmptyGroups, o laço que aposenta grupos vazios — só neles, pela mesma
+// economia do coletor de expiração.
+func (s *Servidor) ligaAposentadoriaDeGrupos(ctx context.Context) {
+	var comRetencao []string
+	for _, d := range s.datasets {
+		d.st.IniciaAposentadoriaDeGrupos(ctx)
+		if d.st.AposentadoriaDeGruposAtiva() {
+			comRetencao = append(comRetencao, d.nome)
+		}
+	}
+	if len(comRetencao) == 0 {
+		return
+	}
+	sort.Strings(comRetencao)
+	s.log.Info("contadores.aposentadoria_ligada",
+		"o laço de aposentadoria de grupos vazios está de pé",
+		"datasets", comRetencao, "cadencia", storage.CadenciaDaAposentadoria.String())
+}
+
 func (s *Servidor) ligaExpiracao(ctx context.Context) {
 	maxPorPassada, tempoPorPassada := s.cfg.Expiracao()
 	var comExpiracao []string

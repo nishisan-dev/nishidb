@@ -39,3 +39,7 @@ func (s *Store) SetAuditoriaTraceForTest(fn func(linha types.RowID)) { s.audTrac
 // certo ele roda SOB o wmu — e é isso que o teste prova: um Put disparado
 // dali só entra depois da cópia.
 func (s *Store) SetAuditoriaAntesDaCopiaForTest(fn func()) { s.audAntesDaCopia = fn }
+
+// AposentadoriaAtivaForTest expõe se o laço de aposentadoria de grupos está
+// de pé — o mesmo observável que o servidor consulta na subida.
+func (s *Store) AposentadoriaAtivaForTest() bool { return s.AposentadoriaDeGruposAtiva() }

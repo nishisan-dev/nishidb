@@ -381,6 +381,13 @@ type Store struct {
 	// de microssegundos e nenhuma ingestão concorrente a acerta por sorte: é
 	// por ele que o teste prova que a cópia e o snapshot são do MESMO instante.
 	audAntesDaCopia func()
+	// Ciclo de vida do laço de aposentadoria de grupos vazios, no molde do
+	// coletor de expiração: apGrupMu guarda o par cancela/emVoo, apGrupAtiva é
+	// o medidor observável.
+	apGrupMu      sync.Mutex
+	apGrupCancela context.CancelFunc
+	apGrupEmVoo   sync.WaitGroup
+	apGrupAtiva   atomic.Bool
 
 	// Ciclo de vida do coletor, no molde do da compaction: expMu guarda o
 	// par cancela/emVoo, expAtiva é o medidor observável e expEmVoo é o que
@@ -2613,6 +2620,9 @@ func (s *Store) Close() error {
 	// colheria os.ErrClosed no meio de até 512 MiB de leitura — e o laço
 	// anunciaria como falha o que é o encerramento normal do processo.
 	s.ParaReconstrucao()
+	// E a aposentadoria de grupos, a quinta: a passada toma o wmu e escreve no
+	// dicionário do contador, que o Close fecha logo abaixo.
+	s.ParaAposentadoriaDeGrupos()
 
 	s.vida.Lock()
 	defer s.vida.Unlock()
