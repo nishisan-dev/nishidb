@@ -53,20 +53,20 @@ func AppendComposta(dst []byte, vs []types.Value) ([]byte, error) {
 	return dst, nil
 }
 
-// DecodeComposta desfaz o AppendComposta. dst é o scratch do chamador (reusado
-// com dst[:0]); os Bytes dos componentes de largura variável apontam para
-// DENTRO de chave, sem cópia — quem retiver o valor além da vida da chave copia.
-func DecodeComposta(chave []byte, dst []types.Value) ([]types.Value, error) {
-	dst = dst[:0]
-	pos := 0
+// PercorreComposta visita os componentes da chave, em ordem, sem alocar. Os
+// Bytes de um componente de largura variável apontam para DENTRO de chave e só
+// valem durante a visita. É a forma que a tabela virtual usa para montar uma
+// linha por grupo sem um scratch por consulta.
+func PercorreComposta(chave []byte, visita func(i int, v types.Value) error) error {
+	pos, i := 0, 0
 	for pos < len(chave) {
 		if len(chave)-pos < 2 {
-			return dst, fmt.Errorf("%w: prefixo de tamanho truncado no byte %d", ErrChaveCompostaInvalida, pos)
+			return fmt.Errorf("%w: prefixo de tamanho truncado no byte %d", ErrChaveCompostaInvalida, pos)
 		}
 		n := int(binary.LittleEndian.Uint16(chave[pos:]))
 		pos += 2
 		if n < 1 || pos+n > len(chave) {
-			return dst, fmt.Errorf("%w: componente de %d bytes no byte %d, chave tem %d", ErrChaveCompostaInvalida, n, pos, len(chave))
+			return fmt.Errorf("%w: componente de %d bytes no byte %d, chave tem %d", ErrChaveCompostaInvalida, n, pos, len(chave))
 		}
 		comp := chave[pos : pos+n : pos+n]
 		pos += n
@@ -74,19 +74,34 @@ func DecodeComposta(chave []byte, dst []types.Value) ([]types.Value, error) {
 		switch v.Type {
 		case types.TypeInt64, types.TypeDouble, types.TypeBool, types.TypeTimestamp:
 			if len(comp) != 1+larguraFixa {
-				return dst, fmt.Errorf("%w: componente de tipo %#x com %d bytes, esperado %d", ErrChaveCompostaInvalida, v.Type, len(comp), 1+larguraFixa)
+				return fmt.Errorf("%w: componente de tipo %#x com %d bytes, esperado %d", ErrChaveCompostaInvalida, v.Type, len(comp), 1+larguraFixa)
 			}
 			v.I64 = int64(binary.LittleEndian.Uint64(comp[1:]))
 		case types.TypeString, types.TypeBytes, types.TypeJSON,
 			types.TypeIPv4, types.TypeIPv6, types.TypeIPv4Prefix, types.TypeIPv6Prefix:
 			v.Bytes = comp[1:]
 		default:
-			return dst, fmt.Errorf("%w: tipo %#x não indexável", ErrChaveCompostaInvalida, v.Type)
+			return fmt.Errorf("%w: tipo %#x não indexável", ErrChaveCompostaInvalida, v.Type)
 		}
+		if err := visita(i, v); err != nil {
+			return err
+		}
+		i++
+	}
+	if i == 0 {
+		return fmt.Errorf("%w: chave sem componente", ErrChaveCompostaInvalida)
+	}
+	return nil
+}
+
+// DecodeComposta desfaz o AppendComposta. dst é o scratch do chamador (reusado
+// com dst[:0]); os Bytes dos componentes de largura variável apontam para
+// DENTRO de chave, sem cópia — quem retiver o valor além da vida da chave copia.
+func DecodeComposta(chave []byte, dst []types.Value) ([]types.Value, error) {
+	dst = dst[:0]
+	err := PercorreComposta(chave, func(_ int, v types.Value) error {
 		dst = append(dst, v)
-	}
-	if len(dst) == 0 {
-		return dst, fmt.Errorf("%w: chave sem componente", ErrChaveCompostaInvalida)
-	}
-	return dst, nil
+		return nil
+	})
+	return dst, err
 }
