@@ -88,6 +88,9 @@ Pacotes que estruturam o todo:
   writer único; uma goroutine de ponta a ponta preserva ordem por partição.
   Watchdog recria o consumidor só com a conjunção de três fatos (eventos parados
   + lag no broker + fila vazia), pelo MESMO `kafka.Abre` da subida.
+- `internal/metakafka` — a tabela virtual `_meta.kafka`. Mora fora de
+  `internal/kafka` e de `internal/query` porque precisa dos dois, e nenhum dos
+  dois pode importar o outro (mesmo argumento de `internal/contadores`).
 - `internal/server` + `internal/protocolo` — protocolo remoto `/v1/*`.
   `protocolo` é pacote próprio porque tem quatro falantes (servidor, CLI remoto,
   JDBC, Python) que não podem redeclarar o formato.

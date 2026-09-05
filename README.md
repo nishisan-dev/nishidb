@@ -1337,11 +1337,29 @@ suporte em cliente nenhum:
 SELECT name, type, auto, index, indexed, parent, occurrences, typeMismatches, coercions FROM _meta.fields
 SELECT name FROM _meta.fields WHERE parent = 'persistent'
 SELECT name, groupBy, condition, groups, refused FROM _meta.counters
+SELECT partition, appliedOffset, highWatermark, lag, state FROM _meta.kafka ORDER BY partition
 ```
 
 `_meta.counters` lista os contadores mantidos na escrita do dataset, com a
 definição e os números vivos; `_counters.<nome>`, uma tabela por contador
 declarado no YAML, lê os totais (ver "Contadores mantidos na escrita" acima).
+
+`_meta.kafka` responde o estado da fonte Kafka do dataset, **uma linha por
+partição** — offset aplicado, offset durável do checkpoint, fim do log, lag,
+mais tópico, grupo, bootstrap, estado da ingestão, profundidade da fila, os
+contadores desde a subida e o watchdog. É a resposta a "a ingestão está em
+dia?" sem HTTP e sem painel, lida das mesmas estruturas que alimentam o
+`/metrics` e o `/v1/stats`.
+
+Num dataset sem Kafka, com `enabled: false` ou com o consumidor ainda sem
+partição atribuída, ela responde **uma linha de resumo** (`id = 'source'`) com
+as colunas de partição NULL — nunca erro. Coluna NULL ali é ausência de medida,
+e não zero: sem consumidor, fila e contadores são NULL; `highWatermark` e `lag`
+são NULL quando a marca d'água do broker venceu, porque um zero diria "está em
+dia" a quem perdeu o broker. No `nishidb query --config`, com o servidor
+parado, saem a identidade do fluxo e o offset durável, e o `state` é NULL —
+aquele processo não observa ingestão nenhuma.
+
 Um `FROM _outro.x` é recusado nomeando os namespaces que existem, e um
 `FROM _meta.x` nomeia as tabelas.
 
