@@ -181,6 +181,12 @@ func codigoDoProtocolo(codigo string) int {
 		return ExitQuery
 	case protocolo.CodMaxRows:
 		return ExitTruncado
+	case protocolo.CodSnapshotExpirado:
+		// O caminho LOCAL já mapeia storage.ErrSnapshotExpirado para 5
+		// (codigoDoErro): a consulta — ou a auditoria dos contadores — não
+		// chegou ao fim porque o journal de versões estourou o teto. O
+		// resultado é desconhecido, não errado; a mesma classe do truncado.
+		return ExitTruncado
 	case protocolo.CodTimeout:
 		return ExitInterromp
 	case protocolo.CodDatasetCorrompido:

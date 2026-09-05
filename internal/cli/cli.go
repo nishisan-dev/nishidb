@@ -71,6 +71,7 @@ USO
   nishidb inspect  --server <host:porta> <dataset>
   nishidb compact    --server <host:porta> [dataset]
   nishidb checkpoint --server <host:porta> [dataset]
+  nishidb counters   (--config <nishidb.yaml> | --server <host:porta>) --dataset <nome> [--audit | --rebuild]
   nishidb --version | version
 
 INGEST
@@ -127,7 +128,23 @@ COMPACT E CHECKPOINT
                          sobre estado inalterado custa o stall real da
                          ingestão e não muda nada — não rode em loop apertado.
 
-CREDENCIAL E TLS (query --server, status, datasets, inspect, compact, checkpoint)
+COUNTERS
+  Os contadores mantidos na escrita (bloco counters: do YAML do dataset). A
+  LEITURA dos números é SQL: SELECT olt, total FROM _counters.<nome>. Este
+  comando responde "posso confiar neles?".
+  (sem ação)             lista os contadores: grupos vivos, teto, aposentados,
+                         recusados pelo teto, órfãs e a última auditoria.
+  --audit                recalcula por varredura e compara com o mantido.
+                         Com --server, corre sob um snapshot de leitura SEM
+                         parar a ingestão. Divergência sai com exit 3;
+                         auditoria inconclusiva (snapshot estourado) sai com 5.
+  --rebuild              reconstrói os contadores varrendo as linhas vivas.
+                         Segura o writer pela varredura inteira: a ingestão
+                         para até acabar.
+  --config exige o servidor PARADO (toma o flock do dataset, como offsets);
+  --server usa as rotas ADMIN do servidor no ar.
+
+CREDENCIAL E TLS (query --server, status, datasets, inspect, compact, checkpoint, counters --server)
   --user <nome>          usuário HTTP Basic (§74-77). A senha NUNCA é uma
                          flag — apareceria em "ps" para qualquer usuário da
                          máquina — e vem de exatamente UMA das duas fontes
@@ -178,6 +195,8 @@ func Run(args []string, amb Ambiente) int {
 		return runCompact(args[1:], amb)
 	case "checkpoint":
 		return runCheckpoint(args[1:], amb)
+	case "counters":
+		return runCounters(args[1:], amb)
 	case "--version", "version":
 		_, _ = fmt.Fprintln(amb.Stdout, buildinfo.String())
 		return ExitOK
