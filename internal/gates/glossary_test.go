@@ -16,39 +16,39 @@ import (
 // é o que este gate existe para impedir. Ele lê a tabela como dado, linha a
 // linha, e não por grep em prosa.
 func TestGlossaryHasBothColumnsAndNoDuplicateTerm(t *testing.T) {
-	caminho := filepath.Join(raizDoRepo, "docs", "glossario.md")
-	f, err := os.Open(caminho)
+	path := filepath.Join(raizDoRepo, "docs", "glossario.md")
+	f, err := os.Open(path)
 	if err != nil {
 		t.Fatalf("o glossário não existe: %v", err)
 	}
 	defer f.Close()
 
-	vistos := map[string]int{}
-	linhas, tabela := 0, 0
+	seen := map[string]int{}
+	lineNum, rowCount := 0, 0
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
-		linhas++
+		lineNum++
 		l := strings.TrimSpace(sc.Text())
 		if !strings.HasPrefix(l, "|") || strings.HasPrefix(l, "|---") || strings.HasPrefix(l, "| PT-BR") {
 			continue
 		}
-		celulas := strings.Split(strings.Trim(l, "|"), "|")
-		if len(celulas) < 2 {
-			t.Errorf("linha %d: tabela com menos de duas colunas: %q", linhas, l)
+		cells := strings.Split(strings.Trim(l, "|"), "|")
+		if len(cells) < 2 {
+			t.Errorf("linha %d: tabela com menos de duas colunas: %q", lineNum, l)
 			continue
 		}
-		ptbr := strings.TrimSpace(celulas[0])
-		en := strings.TrimSpace(celulas[1])
-		if ptbr == "" || en == "" {
-			t.Errorf("linha %d: célula vazia: %q", linhas, l)
+		termPT := strings.TrimSpace(cells[0])
+		termEN := strings.TrimSpace(cells[1])
+		if termPT == "" || termEN == "" {
+			t.Errorf("linha %d: célula vazia: %q", lineNum, l)
 		}
-		if antes, ok := vistos[ptbr]; ok {
-			t.Errorf("linha %d: termo %q repetido (já na linha %d)", linhas, ptbr, antes)
+		if firstAt, ok := seen[termPT]; ok {
+			t.Errorf("linha %d: termo %q repetido (já na linha %d)", lineNum, termPT, firstAt)
 		}
-		vistos[ptbr] = linhas
-		tabela++
+		seen[termPT] = lineNum
+		rowCount++
 	}
-	if tabela < 40 {
-		t.Fatalf("o glossário tem %d termos; o spec semeia mais de 40 — ou a tabela não foi lida, ou foi esvaziada", tabela)
+	if rowCount < 40 {
+		t.Fatalf("o glossário tem %d termos; o spec semeia mais de 40 — ou a tabela não foi lida, ou foi esvaziada", rowCount)
 	}
 }
