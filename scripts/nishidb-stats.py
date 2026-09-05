@@ -85,6 +85,25 @@ class Amostra:
     def soma(self, nome: str) -> float:
         return sum(v for (n, _), v in self.series.items() if n == nome)
 
+    def soma_de(self, nome: str, **rotulos: str) -> float:
+        """Soma só as séries cujos rótulos casam — o lag de UM dataset, somado
+        sobre as partições dele.
+
+        `soma` cobre a instância inteira, e por dentro do bloco de um dataset
+        isso mente: com três datasets no ar, o painel imprimia o lag do
+        `service_view` (10,9 M) no bloco do `events`, que tinha a ingestão
+        DESLIGADA e não publica série nenhuma de lag. O leitor viu um backlog
+        num dataset que não consome nada.
+        """
+        out = 0.0
+        for (n, rs), v in self.series.items():
+            if n != nome:
+                continue
+            d = dict(rs)
+            if all(d.get(k) == val for k, val in rotulos.items()):
+                out += v
+        return out
+
     def tem(self, nome: str) -> bool:
         """Distingue "somei e deu zero" de "a série não existe".
 
@@ -94,12 +113,14 @@ class Amostra:
         """
         return any(n == nome for (n, _) in self.series)
 
-    def por_rotulo(self, nome: str, rotulo: str) -> dict[str, float]:
+    def por_rotulo(self, nome: str, rotulo: str, **filtro: str) -> dict[str, float]:
+        """Quebra a série por um rótulo, somando o resto — restrita às séries
+        cujos outros rótulos casam com `filtro` (o dataset, no bloco dele)."""
         out: dict[str, float] = {}
         for (n, rs), v in self.series.items():
             if n == nome:
                 d = dict(rs)
-                if rotulo in d:
+                if rotulo in d and all(d.get(k) == val for k, val in filtro.items()):
                     out[d[rotulo]] = out.get(d[rotulo], 0.0) + v
         return out
 
@@ -281,7 +302,7 @@ def desenha(base: str, saude: dict, stats: dict, m: Amostra, ant: Amostra | None
         # Ingestão
         ev = m.valor("nishidb_ingest_events_total", dataset=nome)
         ev_ant = ant.valor("nishidb_ingest_events_total", dataset=nome) if ant else None
-        lag = m.soma("nishidb_kafka_lag")
+        lag = m.soma_de("nishidb_kafka_lag", dataset=nome)
         estado_ing = ing.get("state", "?")
         marca_ing = "" if estado_ing == "UP" else "   " + c("31", f"ingestão {estado_ing}")
         print(f"  {'eventos ingeridos':<22} {milhar(ev):>16}{taxa(ev, ev_ant, dt)}{marca_ing}")
@@ -303,19 +324,18 @@ def desenha(base: str, saude: dict, stats: dict, m: Amostra, ant: Amostra | None
         descartados = ing.get("discarded")
         if descartados is None:
             descartados = m.valor("nishidb_ingest_invalid_total", dataset=nome)
-        por_motivo = m.por_rotulo("nishidb_ingest_invalid_total", "motivo")
+        por_motivo = m.por_rotulo("nishidb_ingest_invalid_total", "motivo", dataset=nome)
 
         # O sinal forte é a TAXA, não o total: um piloto com a cauda do item 4
         # de docs/piloto-events.md já sobe com descartados > 0 no primeiro
         # segundo de vida, e reagir a isso a cada leitura seria alarme
         # permanente por uma história já conhecida. Subindo ENTRE DUAS
         # amostras do --watch é descarte NOVO acontecendo agora — só ele
-        # justifica o alerta vermelho. A soma cobre todo motivo e todo
-        # dataset (mesmo padrão de nishidb_kafka_lag/nishidb_query_errors
-        # acima); um único dataset por instância, como o piloto de hoje, não
-        # sente a diferença.
-        total_atual = m.soma("nishidb_ingest_invalid_total")
-        total_anterior = ant.soma("nishidb_ingest_invalid_total") if ant else None
+        # justifica o alerta vermelho. A soma cobre todo motivo, mas SÓ deste
+        # dataset: a versão que somava a instância inteira acendia o vermelho
+        # no bloco errado assim que o piloto passou a servir mais de um.
+        total_atual = m.soma_de("nishidb_ingest_invalid_total", dataset=nome)
+        total_anterior = ant.soma_de("nishidb_ingest_invalid_total", dataset=nome) if ant else None
         subindo = dt > 0 and total_anterior is not None and total_atual > total_anterior
         if subindo:
             alerta = "  " + c("31", "← SUBINDO agora, investigar")
@@ -366,7 +386,7 @@ def desenha(base: str, saude: dict, stats: dict, m: Amostra, ant: Amostra | None
 
         if lag:
             eta = ""
-            lag_ant = ant.soma("nishidb_kafka_lag") if ant else None
+            lag_ant = ant.soma_de("nishidb_kafka_lag", dataset=nome) if ant else None
             if ev is not None and ev_ant is not None and dt > 0:
                 drenagem = (ev - ev_ant) / dt
                 eta = f"   consome {milhar(round(drenagem))}/s"
@@ -389,8 +409,8 @@ def desenha(base: str, saude: dict, stats: dict, m: Amostra, ant: Amostra | None
                 # a pergunta é `tem`, e não o valor: sem a série, a produção
                 # simplesmente não é impressa, em vez de sair como zero.
                 if m.tem("nishidb_kafka_high_watermark") and ant and ant.tem("nishidb_kafka_high_watermark"):
-                    producao = (m.soma("nishidb_kafka_high_watermark")
-                                - ant.soma("nishidb_kafka_high_watermark")) / dt
+                    producao = (m.soma_de("nishidb_kafka_high_watermark", dataset=nome)
+                                - ant.soma_de("nishidb_kafka_high_watermark", dataset=nome)) / dt
                     eta += f", produz {milhar(round(producao))}/s"
                 if lag_ant is not None:
                     variacao = (lag - lag_ant) / dt

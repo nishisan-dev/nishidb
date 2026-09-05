@@ -262,6 +262,53 @@ class TestPainelDizSeOConsumoDaConta(unittest.TestCase):
         self.assertNotIn("-", saida.split("lag do kafka")[1].split("\n")[0])
 
 
+class TestOLagEhDoDatasetENaoDaInstancia(unittest.TestCase):
+    """Com mais de um dataset no ar, o painel imprimia o lag do `service_view`
+    (10,9 M) no bloco do `events`, que tinha a ingestão DESLIGADA e não
+    publica lag nenhum — visto no piloto em 04/09/2026, minutos depois de a
+    coleta do `events` ser desligada. O mesmo defeito acendia o vermelho de
+    "descartados SUBINDO" em todos os blocos quando UM dataset descartava.
+    """
+
+    def _stats(self):
+        return {
+            "process": {},
+            "datasets": [
+                {"name": "events", "storage": {}, "ingestion": {"state": "DISABLED"}, "query": {}},
+                {"name": "service_view", "storage": {}, "ingestion": {"state": "UP"}, "query": {}},
+            ],
+        }
+
+    def _amostra(self, instante, lag, invalidos_events=0.0):
+        a = nishidb_stats.Amostra(instante=instante)
+        # Só o service_view consome: só ele publica lag (por partição).
+        a.series[("nishidb_kafka_lag", (("dataset", "service_view"), ("partition", "0")))] = lag
+        a.series[("nishidb_ingest_events_total", (("dataset", "service_view"),))] = 1000.0 + instante * 2000
+        a.series[("nishidb_ingest_invalid_total", (("dataset", "events"), ("motivo", "TYPE_CONVERSION")))] = invalidos_events
+        a.series[("nishidb_ingest_invalid_total", (("dataset", "service_view"), ("motivo", "TYPE_CONVERSION")))] = 0.0
+        return a
+
+    def _blocos(self, saida):
+        events = saida.split("dataset events")[1].split("dataset service_view")[0]
+        service_view = saida.split("dataset service_view")[1].split("processo")[0]
+        return events, service_view
+
+    def test_o_lag_so_aparece_no_dataset_que_o_publica(self):
+        saida = _desenha_com_amostras(self._stats(), self._amostra(30.0, 105_000), self._amostra(0.0, 150_000))
+        events, service_view = self._blocos(saida)
+        self.assertNotIn("lag do kafka", events)
+        self.assertIn("lag do kafka", service_view)
+        self.assertIn("105.000", service_view)
+        self.assertIn("caindo 1.500/s", service_view)
+
+    def test_descarte_subindo_acende_so_no_dataset_que_descarta(self):
+        saida = _desenha_com_amostras(self._stats(), self._amostra(30.0, 0, invalidos_events=7),
+                                      self._amostra(0.0, 0, invalidos_events=0))
+        events, service_view = self._blocos(saida)
+        self.assertIn("SUBINDO", events)
+        self.assertNotIn("SUBINDO", service_view)
+
+
 class TestPainelMostraOCrescimentoDoDicionario(unittest.TestCase):
     """O dicionário de campos e o que se perdeu no caminho.
 
