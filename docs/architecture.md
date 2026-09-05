@@ -2056,6 +2056,135 @@ num listener PRÓPRIO. Separado de propósito: o §112 os autoriza apenas em mod
 administrativo, e expô-los na porta das métricas os tornaria alcançáveis por
 quem só deveria raspar `/metrics`.
 
+## Contadores mantidos na escrita
+
+![Contador mantido na escrita: os quatro momentos, o checkpoint, a abertura e a auditoria](https://uml.nishisan.dev/proxy?src=https://git-raw.nishisan.dev/nishisan-dev/nishidb/main/docs/diagrams/contadores_flow.puml)
+
+**O que é.** Um contador declarado no YAML (`counters:`) responde "quantas
+entidades vivas satisfazem uma condição, agrupadas por uma chave" sem varrer o
+dataset — a leitura é `SELECT … FROM _counters.<nome>`. É um índice derivado no
+sentido exato da agenda de vencimentos: alimentado no `applyRecord`,
+reconstruível dos records, fora da durabilidade do §6.1. A proposta que o
+originou está em
+[`planning/contadores-mantidos-na-escrita.md`](../planning/contadores-mantidos-na-escrita.md);
+o que a leitura do código mudou nela está no plano ao lado
+([`planning/contadores-mantidos-na-escrita-plano.md`](../planning/contadores-mantidos-na-escrita-plano.md)),
+e o aceite em [`aceite-contadores.md`](aceite-contadores.md).
+
+**Conta estados, não mensagens.** Somar por mensagem exige que cada mensagem
+chegue exatamente uma vez, e o Kafka promete pelo menos uma — é o defeito que
+o `merge: sum` carrega por contrato. O contador é alimentado pela
+**transição** do estado da linha: do que ela era para o que passou a ser.
+Reprocessar o mesmo evento é uma transição de X para X, ajuste zero; mudar de
+OLT desconta da antiga e soma na nova na mesma operação, sem ninguém avisar
+que houve mudança.
+
+**Três peças por contador**, em `indexes/contadores/<nome>/`. O vetor denso
+`grupos.idx` guarda por rowId `bit31 = condição valia | bits 0..30 = id do
+grupo` — quatro bytes por linha (`rowindex.Denso32`, o primeiro vetor de 32
+bits do produto: 32 MB por 8M linhas, e o contador pode existir várias vezes
+sobre o mesmo dataset). O dicionário `grupos.dict` interna a chave composta do
+grupo → id, append-only com CRC por registro e **fsync antes de devolver o id**
+(cópia do `fielddict`, pela mesma invariante: nenhuma entrada do vetor pode
+apontar para um id que a reabertura não resolva); aposentar um grupo é um
+registro nele. Os totais e os `refs` (quantas linhas apontam para o grupo,
+independente da condição) vivem em heap, atômicos, e **não são persistidos**.
+A chave composta nasce no `valuekey`, dono único da chave canônica: `u16
+tamanho | chave simples` por componente, com golden de bytes.
+
+**Por que os totais são dobra, e o delta vem do vetor.** No replay da
+recovery o estado anterior da linha em geral **não existe** (`prevPayload` é
+nil quando a location já está à frente do cursor, o caso típico de crash).
+Um contador mantido por delta sobre o payload antigo convergiria para um
+número errado — permanentemente, como o resíduo de liveness do débito 38. A
+saída: na abertura os totais são **dobra** do vetor em disco, antes do replay;
+e cada transição aplica `delta = f(nova) − f(vetor[rowId])`, com a entrada
+antiga lida do próprio vetor. Assim `totais == fold(vetor)` vale em qualquer
+instante, e o replay reaplicando uma transição já refletida no vetor vê
+`antiga == nova` e não mexe em nada.
+
+**Por que o vetor tem overlay.** Escrito em place no mmap, o vetor ficaria à
+frente do log durável numa cauda rasgada — a página descarregada pelo kernel
+descreveria um record que o crash levou. `escritas`, `prazos` e a agenda
+aceitam essa classe de resíduo porque ela é benigna na leitura; no contador
+seria número publicado errado. Então a transição vai para um overlay em heap,
+e só o `ApplyOverlay` do checkpoint, **depois do fdatasync dos segmentos**, a
+leva ao mmap — a mesma invariante das locations.
+
+**Os quatro momentos.** Um evento chega: passo 7c do `applyRecord`, depois do
+commit da location e ao lado da agenda, nos dois modos (write e replay). Uma
+linha expira: a lápide é um record e passa pelo mesmo 7c com "sem grupo" — a
+entrada antiga é quem lembra de onde a linha saiu; a expiração oportunista da
+compaction entra pela mesma porta. A retenção remove a lápide: no dataset
+materializado ela nunca some (o copy-forward a leva adiante), então não há
+terceiro decremento a esquecer; a tabela histórica purga por marca-d'água sem
+`applyRecord`, e por isso **recusa `counters:`** na subida. O processo sobe de
+novo: dobra, replay, e o contador está no ponto certo.
+
+**Adotar ou reconstruir.** O manifest grava por contador, numa seção
+**ignorável** (`0x0001`), o que decide o conteúdo do vetor: nome, colunas e o
+texto do `where`. Seção ausente, colunas ou `where` diferentes, ou vetor que
+não cobre as linhas: reconstrói, recriando os **dois** arquivos — chaves de
+outras colunas não podem poluir um dicionário cujos ids nunca são reemitidos.
+A reconstrução é uma varredura das linhas vivas, logada com motivo e duração,
+e é o que faz "declarar um contador num dataset povoado" ser um reinício e não
+uma recriação. Mudar `maxGroups` não reconstrói; só é recusado quando menor
+que os grupos em uso. A tag é ignorável de propósito: "seção ausente ⇒
+reconstruir" já é a resposta certa, e uma tag crítica só bloquearia o rollback
+do piloto.
+
+**O ciclo de vida de um grupo.** Um grupo com `total == 0` **não** está vazio:
+500 serviços não autenticados numa OLT dão total zero e 500 entradas apontando
+para ela. Apagá-lo e reemitir o id faria o próximo incremento daquelas linhas
+cair no equipamento errado, sem sintoma. A regra tem três cláusulas:
+`refs == 0`, vazio há mais que `retainEmptyGroups` (é a visibilidade do
+colapso — o equipamento que apagou por inteiro continua com total zero na
+tabela até alguém ter olhado), e **a última mexida do grupo coberta por um
+checkpoint** — a transição que o esvaziou pode estar numa cauda rasgada, e
+nesse caso o estado durável ainda diz "a linha está aqui". Aposentar é registro
+durável, o id nunca é reemitido, e o reinício só estende a visibilidade (o
+instante em que o grupo esvaziou não é persistido).
+
+**A tabela virtual.** `_counters.<nome>` é um schema sintético compilado do
+mesmo YAML de um dataset de verdade, como o `_meta`, com a key `groupKey` (o
+texto canônico do grupo — a key da v1 é uma coluna string única, e um
+`groupBy` composto não tem coluna que identifique a linha), as colunas do
+`groupBy` abertas e tipadas, e `total`. Diferente do `_meta`, ela é
+**registrada no motor** sob o dataset e corre pelo pipeline inteiro — planner
+com métricas, top-N, orçamento —, porque `ORDER BY total ASC LIMIT 5` sobre
+milhares de grupos é exatamente a consulta do caso de uso. Os totais são lidos
+no presente; o que o snapshot congela é o conjunto de grupos.
+
+**A auditoria.** `POST /v1/counters/audit` (ADMIN) congela os totais e abre o
+snapshot **no mesmo instante, sob o `wmu` por microssegundos**, e varre sem o
+writer. A varredura tem enumerador próprio, com a definição do contador —
+linha com location e sem lápide na versão T0, pelo journal de versões —, e
+não a visibilidade da consulta: `ScanLive` lê a location corrente e filtra por
+prazo vencido, e reportaria como divergência a linha vencida que o coletor
+ainda não lapidou (contada por desenho até ele chegar). Snapshot estourado é
+**inconclusiva**, nunca relatório. A reconstrução (`/v1/counters/rebuild`)
+segura o writer pela varredura, e o custo é dito.
+
+**O que custa, medido** (bancada de 04/09/2026,
+[`aceite-contadores.md`](aceite-contadores.md), saída crua em
+[`contadores-20260904.txt`](../benchmark/baselines/contadores-20260904.txt)).
+Em regime — grupos internados, linha no overlay — dois contadores custam
+**+0,5 µs por evento** (3,99 → 4,51 µs, +13 %, n = 6), com **zero alocação**
+nos dois lados; o gate `TestPutNaoAlocaMaisComContadores` trava que o `Put`
+real não aloca mais com contadores do que sem (1,0 nos dois). A carga fria é
+outro número: cada grupo novo paga o fsync do dicionário, ≈ 0,6 ms — 600
+grupos em 366 ms na bancada. A dobra de um milhão de linhas custa **38–52 ms**
+e fica no caminho do `Open`; a reconstrução em operação varre um milhão de
+linhas vivas em **0,8 s por contador** com o writer parado, e a reconstrução
+por mudança de parâmetro recria o dicionário e paga o fsync por grupo de novo
+(265 grupos em 299 ms no ponta a ponta).
+
+**Limites conhecidos.** O fsync por grupo novo é bounded pelo inventário, mas
+no nível de PON ou splitter (10⁵ a 10⁶ grupos) o custo da carga inicial não
+foi medido (débito 108). `_counters` fica fora do isolamento de snapshot
+(débito 109), e `WHERE olt = …` num contador composto varre os grupos em vez
+de usar índice (débito 110).
+
 ## O que ainda não existe
 
 **Tombstones por retenção** — a expiração por inatividade existe e está

@@ -27,6 +27,7 @@ import (
 
 	"github.com/nishisan-dev/nishidb/internal/buildinfo"
 	"github.com/nishisan-dev/nishidb/internal/config"
+	"github.com/nishisan-dev/nishidb/internal/contadores"
 	"github.com/nishisan-dev/nishidb/internal/kafka"
 	"github.com/nishisan-dev/nishidb/internal/logging"
 	"github.com/nishisan-dev/nishidb/internal/materializer"
@@ -336,6 +337,11 @@ func Novo(cfg *config.Config, o Opcoes) (*Servidor, error) {
 func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*dataset, error) {
 	dir := s.cfg.CaminhoDoDataset(spec.Name)
 	indexados := schema.CamposComIndice(spec)
+	// O schema é compilado DENTRO do Open, pelo callback dos contadores: as
+	// definições precisam do schema, e o replay da recovery precisa das
+	// definições. É o mesmo Compile de sempre, no mesmo dicionário — só que
+	// antes do replay.
+	comp := contadores.NovoCompilador(spec)
 	st, err := storage.Open(storage.Options{
 		Dir:                    dir,
 		Dataset:                spec.Name,
@@ -349,13 +355,14 @@ func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*
 		CampoDeEscrita:         schema.CampoInstanteDeEscrita,
 		CampoDePrazo:           schema.CampoDePrazo,
 		SnapshotMaxBytes:       s.cfg.SnapshotMaxBytes(),
+		CompilaContadores:      comp.Callback(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("dataset %q: %w", spec.Name, err)
 	}
-	compilado, err := spec.Compile(st.FieldDict())
-	if err != nil {
-		return nil, fechandoStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
+	compilado := comp.Compilado()
+	if compilado == nil {
+		return nil, fechandoStore(st, fmt.Errorf("dataset %q: o Open não compilou o schema", spec.Name))
 	}
 	// O contador de descarte diz QUANTO; o log diz por ONDE começar. Uma vez
 	// por dataset: sob a política `ignore` o descarte é o estado normal, e uma
@@ -405,6 +412,12 @@ func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*
 			"maxCols", compilado.MaxCols, "politica", compilado.OnMaxCols)
 	})
 	if err := s.eng.Register(spec.Name, compilado, st); err != nil {
+		return nil, fechandoStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
+	}
+	// As tabelas `_counters.<nome>` entram no motor sob o dataset — e o
+	// namespace é declarado mesmo sem contador, para que a recusa nomeie o
+	// que existe.
+	if err := contadores.Registra(s.eng, spec.Name, st); err != nil {
 		return nil, fechandoStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}
 	d := &dataset{
@@ -457,6 +470,7 @@ func (s *Servidor) Roda(ctx context.Context, pprofAddr string) error {
 		"datasets", len(s.datasets), "endereco", s.cfg.Endereco(), "versao", buildinfo.String())
 	s.ligaCompaction(ctx)
 	s.ligaExpiracao(ctx)
+	s.ligaAposentadoriaDeGrupos(ctx)
 	s.ligaRetencao(ctx)
 	s.ligaReconstrucao(ctx)
 
@@ -664,6 +678,26 @@ func (s *Servidor) ligaCompaction(ctx context.Context) {
 // paga goroutine. O log nomeia quais subiram, porque "o disco não está sendo
 // devolvido" é indistinguível de "não há nada para devolver" quando ninguém
 // conta qual dos dois é.
+// ligaAposentadoriaDeGrupos sobe, nos datasets com contador que declara
+// retainEmptyGroups, o laço que aposenta grupos vazios — só neles, pela mesma
+// economia do coletor de expiração.
+func (s *Servidor) ligaAposentadoriaDeGrupos(ctx context.Context) {
+	var comRetencao []string
+	for _, d := range s.datasets {
+		d.st.IniciaAposentadoriaDeGrupos(ctx)
+		if d.st.AposentadoriaDeGruposAtiva() {
+			comRetencao = append(comRetencao, d.nome)
+		}
+	}
+	if len(comRetencao) == 0 {
+		return
+	}
+	sort.Strings(comRetencao)
+	s.log.Info("contadores.aposentadoria_ligada",
+		"o laço de aposentadoria de grupos vazios está de pé",
+		"datasets", comRetencao, "cadencia", storage.CadenciaDaAposentadoria.String())
+}
+
 func (s *Servidor) ligaExpiracao(ctx context.Context) {
 	maxPorPassada, tempoPorPassada := s.cfg.Expiracao()
 	var comExpiracao []string

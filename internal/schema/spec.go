@@ -37,6 +37,8 @@ type DatasetSpec struct {
 	// vem de arquivo nenhum: nasce de DerivaHistorico e existe só em memória,
 	// e é por isso que ListaDatasets nunca a enxerga.
 	EhHistorico bool
+	// Contadores é o bloco `counters` validado; nil no dataset sem contador.
+	Contadores []ContadorSpec
 }
 
 type MaterializationSpec struct {
@@ -230,6 +232,10 @@ type rawSpec struct {
 	Materialization rawMat    `yaml:"materialization"`
 	Schema          rawSchema `yaml:"schema"`
 	Query           rawQuery  `yaml:"query"`
+	// Counters é nó cru pela razão de history: bloco novo, sem legado, e a
+	// recusa de chave desconhecida por item é o que separa `wher:` (typo) de
+	// um contador que conta tudo sem que ninguém tenha pedido.
+	Counters yaml.Node `yaml:"counters"`
 }
 
 type rawMat struct {
@@ -658,7 +664,7 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 		return nil, specErrf("name %q inválido (esperado [a-z0-9_]+)", raw.Name)
 	}
 	// O prefixo "_" em nome de DATASET fica reservado aos espaços de nome do
-	// produto — `_meta` é o primeiro. A recusa vale a pena AGORA porque o custo
+	// produto — `_meta` foi o primeiro, `_counters` o segundo. A recusa vale a pena AGORA porque o custo
 	// é assimétrico: uma linha hoje, e "recrie o dataset" depois, para quem já
 	// tiver subido um nome assim.
 	//
@@ -668,8 +674,8 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 	// sequence em uso, e reservá-lo recusaria datasets que hoje sobem.
 	if strings.HasPrefix(raw.Name, "_") {
 		return nil, specErrf(
-			"name %q: o prefixo \"_\" é reservado aos espaços de nome do produto (o primeiro é _meta); escolha outro nome",
-			raw.Name)
+			"name %q: o prefixo \"_\" é reservado aos espaços de nome do produto (_meta, %s); escolha outro nome",
+			raw.Name, NamespaceContadores)
 	}
 	s.Name = raw.Name
 
@@ -858,6 +864,18 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 		if sf.Type != "int64" {
 			return nil, specErrf("campo sequence %q deve ser int64, é %q", seq.Field, sf.Type)
 		}
+	}
+
+	// Os contadores vêm DEPOIS de key e sequence estarem resolvidos: metade
+	// das recusas do groupBy é sobre o PAPEL da coluna, não sobre ela.
+	if raws, err := contadoresDoNo(&raw.Counters); err != nil {
+		return nil, err
+	} else if raws != nil {
+		validados, err := validaContadores(raws, fields, key.Field, seqDeclarada)
+		if err != nil {
+			return nil, err
+		}
+		s.Contadores = validados
 	}
 
 	// include / exclude / unknownFields

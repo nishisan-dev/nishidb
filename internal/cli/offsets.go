@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	nishiconfig "github.com/nishisan-dev/nishidb/internal/config"
+	"github.com/nishisan-dev/nishidb/internal/contadores"
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/storage"
 	"github.com/nishisan-dev/nishidb/internal/storage/checkpoint"
@@ -92,6 +93,10 @@ func runOffsets(args []string, amb Ambiente) int {
 		DuracaoDeFundo:         spec.Materialization.DuracaoDeFundo,
 		CampoDeEscrita:         schema.CampoInstanteDeEscrita,
 		CampoDePrazo:           schema.CampoDePrazo,
+		// Os contadores também: um dataset que os declara recusa abrir sem
+		// eles, e este comando não escreve linha nenhuma — mas o Open faz
+		// um checkpoint, e o checkpoint grava a seção deles no manifest.
+		CompilaContadores: contadores.NovoCompilador(spec).Callback(),
 	})
 	if err != nil {
 		fmt.Fprintf(amb.Stderr, "offsets: %v\n", err)

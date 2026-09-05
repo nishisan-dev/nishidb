@@ -250,6 +250,30 @@ type DatasetStats struct {
 	// tem os quatro campos em zero, e isso é informação. Bloco omitido seria
 	// indistinguível de versão antiga do servidor.
 	Snapshot SnapshotStats `json:"snapshot"`
+	// Counters são os contadores mantidos na escrita, na ordem declarada, da
+	// MESMA leitura que alimenta as séries nishidb_counter_*. Lista vazia — e
+	// não omitida — no dataset sem `counters:`, pela razão do Index.
+	Counters []ContadorStats `json:"counters"`
+}
+
+// ContadorStats é o retrato de UM contador mantido na escrita
+// (planning/contadores-mantidos-na-escrita.md §11.5).
+//
+// Refused é o número que alarma: um grupo novo recusado pelo teto é uma linha
+// que entrou e não é contada. OrphanEntries é o que a dobra da abertura achou
+// apontando para grupo que já saiu. AuditDivergentGroups e
+// AuditLastSuccessUnix são a última auditoria conclusiva — zero e zero até a
+// primeira, e é o timestamp que separa "nunca auditado" de "auditado e certo".
+type ContadorStats struct {
+	Name                 string `json:"name"`
+	Groups               uint32 `json:"groups"`
+	MaxGroups            uint32 `json:"maxGroups"`
+	Retired              uint32 `json:"retired"`
+	Refused              uint64 `json:"refused"`
+	OrphanEntries        uint64 `json:"orphanEntries"`
+	Bytes                int64  `json:"bytes"`
+	AuditDivergentGroups int64  `json:"auditDivergentGroups"`
+	AuditLastSuccessUnix int64  `json:"auditLastSuccessUnix"`
 }
 
 // SnapshotStats é o retrato do isolamento de leitura: o que as consultas

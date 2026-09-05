@@ -1,0 +1,95 @@
+@startuml contadores_flow
+title Contador mantido na escrita: os quatro momentos e a auditoria
+
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+
+partition "Escrita (applyRecord, sob wmu)" {
+  start
+  :record durável no segmento;
+  :passos 3-7: offset accounting,
+  primary, SET do índice por segmento,
+  sequence, PUBLICA a location;
+  :7b agenda de vencimentos;
+  :7c contadores;
+  if (lápide?) then (sim)
+    :nova = SemGrupo;
+  else (não)
+    :Deriva(payload):
+    chave composta (valuekey) + where;
+    if (grupo novo?) then (sim)
+      :Interna no dicionário
+      (fsync ANTES de devolver o id);
+    endif
+    :nova = id | bitCondicao;
+  endif
+  :antiga = overlay[rowId] ou mmap[rowId];
+  if (antiga == nova) then (sim)
+    :nada a fazer
+    (reprocessamento);
+    stop
+  endif
+  :inc(nova) e depois dec(antiga)
+  em totais e refs (atômicos);
+  :overlay[rowId] = nova;
+  stop
+}
+
+partition "Checkpoint" {
+  start
+  :segSync (records duráveis);
+  :ApplyOverlay das locations;
+  :ApplyOverlay dos contadores
+  (o mmap nunca fica à frente do log);
+  :msync ... msync dos contadores;
+  :CobreMexidas(transições)
+  (autoriza a aposentadoria);
+  :manifest com a seção 0x0001
+  (nome, colunas, where);
+  stop
+}
+
+partition "Abertura" {
+  start
+  :campos de sistema e indexados
+  no dicionário (ordem contratual);
+  :callback CompilaContadores(dict):
+  compila o schema e as definições;
+  if (manifest sem a seção,
+  colunas/where diferentes,
+  ou vetor não cobre as linhas?) then (sim)
+    :recria os dois arquivos
+    (reconstrução pendente);
+  else (não)
+    :DOBRA: totais e refs
+    a partir do vetor em disco;
+  endif
+  :replay da recovery
+  (cada record passa pelo 7c);
+  if (reconstrução pendente?) then (sim)
+    :varre as linhas vivas
+    e transiciona cada uma;
+  endif
+  stop
+}
+
+partition "Auditoria (rota ADMIN)" {
+  start
+  :sob wmu por microssegundos:
+  AbreSnapshot + Congela(totais, refs);
+  :solta o wmu;
+  :enumerador próprio:
+  linha com location e sem lápide
+  na versão T0 (journal), rederiva
+  com um Derivador próprio;
+  if (snapshot expirou?) then (sim)
+    :SNAPSHOT_TOO_OLD
+    (inconclusiva);
+    stop
+  endif
+  :compara com a cópia T0:
+  divergentes por grupo;
+  stop
+}
+
+@enduml

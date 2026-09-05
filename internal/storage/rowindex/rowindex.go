@@ -14,7 +14,11 @@ import (
 
 const (
 	headerSize = 64
-	entrySize  = 8
+	// entrySize é a entrada dos vetores de 64 bits — todos os deste arquivo e
+	// a agenda. entrySize32 é a do Denso32 (denso32.go). O byte 5 do header
+	// grava qual das duas o arquivo usa, e a abertura recusa a outra.
+	entrySize   = 8
+	entrySize32 = 4
 
 	fileVersion = 1
 
@@ -47,10 +51,16 @@ func Unpack(p uint64) (segmentID, offset uint32, flags uint8) {
 	return uint32(p >> offsetBits), uint32(p & maxOffset), uint8(p >> (segmentBits + offsetBits))
 }
 
-// denseFile é um array denso de u64 indexado por rowId sobre mmap, com
-// header de 64 bytes. Base comum de Locations e Sequences.
+// denseFile é um array denso indexado por rowId sobre mmap, com header de 64
+// bytes. Base comum de Locations, Sequences, Escritas, Prazos, da agenda (entrada
+// de 8 bytes) e do Denso32 (entrada de 4).
 type denseFile struct {
 	region *mmap.Region
+	// entry é o tamanho da entrada, gravado no byte 5 do header. É campo, e
+	// não a constante de sempre, desde o Denso32: os métodos de 64 e de 32
+	// endereçam pelo mesmo off(), e é este campo que faz o off de um vetor de 4
+	// bytes cair na entrada certa.
+	entry int64
 	// nasceu registra que ESTA abertura criou o arquivo, e não que ela o
 	// reencontrou. É o único sinal que distingue "índice ainda não existia"
 	// de "índice existe e está vazio" — os dois têm o mesmo conteúdo, e para
@@ -58,9 +68,20 @@ type denseFile struct {
 	nasceu bool
 }
 
+// openDense abre um vetor de entradas de 64 bits — a forma de todos os
+// vetores anteriores ao Denso32, mantida como está para que nenhum chamador
+// mude.
 func openDense(path string, magic [4]byte, minRows uint64) (*denseFile, error) {
+	return openDenseCom(path, magic, minRows, entrySize)
+}
+
+// openDenseCom abre um vetor com o tamanho de entrada dado. O tamanho vai para
+// o byte 5 do header na criação e é CONFERIDO na reabertura: um vetor gravado
+// com um tamanho e lido com outro endereçaria a entrada errada em toda linha
+// sem que nada falhasse.
+func openDenseCom(path string, magic [4]byte, minRows uint64, entry int64) (*denseFile, error) {
 	minRows = max(minRows, 512)
-	r, err := mmap.Open(path, headerSize+int64(minRows)*entrySize)
+	r, err := mmap.Open(path, headerSize+int64(minRows)*entry)
 	if err != nil {
 		return nil, err
 	}
@@ -72,7 +93,7 @@ func openDense(path string, magic [4]byte, minRows uint64) (*denseFile, error) {
 			nasceu = true
 			copy(h[0:4], magic[:])
 			h[4] = fileVersion
-			h[5] = entrySize
+			h[5] = byte(entry)
 			binary.LittleEndian.PutUint64(h[8:16], 0) // seed/reserved
 			return
 		}
@@ -80,22 +101,39 @@ func openDense(path string, magic [4]byte, minRows uint64) (*denseFile, error) {
 			hdrErr = fmt.Errorf("rowindex: magic inválida em %s: %q (esperado %q)", path, h[0:4], magic[:])
 			return
 		}
-		if h[4] != fileVersion || h[5] != entrySize {
-			hdrErr = fmt.Errorf("rowindex: version/entrySize incompatível em %s: %d/%d", path, h[4], h[5])
+		if h[4] != fileVersion || int64(h[5]) != entry {
+			hdrErr = fmt.Errorf("rowindex: version/entrySize incompatível em %s: %d/%d (esperado %d/%d)",
+				path, h[4], h[5], fileVersion, entry)
 		}
 	})
 	if hdrErr != nil {
 		r.Close()
 		return nil, hdrErr
 	}
-	return &denseFile{region: r, nasceu: nasceu}, nil
+	return &denseFile{region: r, entry: entry, nasceu: nasceu}, nil
 }
 
+// entryOff é o offset de uma entrada de 64 bits. Continua função de pacote —
+// e não método — porque a agenda e o LiberaAte o usam sobre vetores que são
+// sempre de 64.
 func entryOff(rowID types.RowID) int64 { return headerSize + int64(rowID)*entrySize }
+
+// off é o offset da entrada deste arquivo, no tamanho que ele gravou.
+func (d *denseFile) off(rowID types.RowID) int64 { return headerSize + int64(rowID)*d.entry }
+
+// cresce estende o arquivo (doubling, arredondado a página) até caber needed.
+func (d *denseFile) cresce(needed int64) error {
+	if needed <= d.region.Size() {
+		return nil
+	}
+	newSize := max(d.region.Size()*2, needed)
+	newSize = (newSize + 4095) &^ 4095
+	return d.region.Grow(newSize)
+}
 
 // load devolve (0, false) para rowId além do arquivo — nunca cresce na leitura.
 func (d *denseFile) load(rowID types.RowID) (uint64, bool) {
-	off := entryOff(rowID)
+	off := d.off(rowID)
 	if off+entrySize > d.region.Size() {
 		return 0, false
 	}
@@ -105,15 +143,29 @@ func (d *denseFile) load(rowID types.RowID) (uint64, bool) {
 // store grava a entry, crescendo o arquivo (doubling) se necessário.
 // Exclusivo do writer.
 func (d *denseFile) store(rowID types.RowID, v uint64) error {
-	off := entryOff(rowID)
-	if needed := off + entrySize; needed > d.region.Size() {
-		newSize := max(d.region.Size()*2, needed)
-		newSize = (newSize + 4095) &^ 4095
-		if err := d.region.Grow(newSize); err != nil {
-			return err
-		}
+	off := d.off(rowID)
+	if err := d.cresce(off + entrySize); err != nil {
+		return err
 	}
 	d.region.AtomicStore64(off, v)
+	return nil
+}
+
+// load32 e store32 são os irmãos de 4 bytes de load e store, para o Denso32.
+func (d *denseFile) load32(rowID types.RowID) (uint32, bool) {
+	off := d.off(rowID)
+	if off+entrySize32 > d.region.Size() {
+		return 0, false
+	}
+	return d.region.AtomicLoad32(off), true
+}
+
+func (d *denseFile) store32(rowID types.RowID, v uint32) error {
+	off := d.off(rowID)
+	if err := d.cresce(off + entrySize32); err != nil {
+		return err
+	}
+	d.region.AtomicStore32(off, v)
 	return nil
 }
 

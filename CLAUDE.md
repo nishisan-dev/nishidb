@@ -64,14 +64,20 @@ Pacotes que estruturam o todo:
 - `internal/storage` — `Store` é a fachada única: segmentos, fielddict,
   checkpoint/manifest, recovery, compaction, expiração, retenção. `storage/mmap`
   é o ÚNICO pacote autorizado a usar mmap/unsafe; `fielddict` é append-only com
-  teto de 65.535 campos.
+  teto de 65.535 campos. `storage/contador` é o contador mantido na escrita:
+  vetor denso de 4 bytes por linha (`rowindex.Denso32`) + dicionário de grupos
+  append-only + totais em heap, transicionado no passo 7c do `applyRecord`.
 - `internal/index` — `primary` (open addressing sobre mmap), `bitmap` (baixa
   cardinalidade), `hash` (alta cardinalidade, remoção por lápide), `valuekey`
   (dono ÚNICO da chave canônica `[tipo][payload]` — é formato de disco, com
   golden test de bytes).
 - `internal/query` — lexer → parser → binder → planner → executor, mais
   `orcamento` (admissão de memória), `spill` (transbordo do ORDER BY) e `meta`
-  (namespace `_meta` como Store virtual atrás do mesmo pipeline).
+  (namespace `_meta` como Store virtual atrás do mesmo pipeline). Tabelas
+  virtuais registradas por namespace (`Engine.RegistraVirtual`) correm pelo
+  mesmo pipeline; `internal/contadores` compila o bloco `counters:` contra o
+  schema e serve `_counters.<nome>` — é a cola entre schema/predicado e o
+  storage, e por isso mora fora dos dois.
   `internal/predicado` é o avaliador compartilhado entre o WHERE e o `when:` das
   regras de TTL — os dois têm de ser o MESMO código. `internal/typeparse` é
   pacote folha usado pela ingestão E pelo binder: é o que impede as duas coerções
@@ -104,10 +110,19 @@ Pacotes que estruturam o todo:
 - **`applyRecord` é o único code path de aplicação de estado** — Put e replay da
   recovery passam por ele. Índice/estado novo tem de ser alimentado ali e ser
   reconstruível a partir do payload do record (nunca do relógio).
-- **Publicar a location é o commit de visibilidade** e vem por último; índices
-  secundários fazem SET antes e CLEAR depois do commit. Falso positivo é
-  tolerado (o executor SEMPRE reavalia o WHERE completo, §44); falso negativo
-  nunca.
+- **Publicar a location é o commit de visibilidade** e vem por último; o
+  índice por segmento faz SET antes do commit e NÃO há fase de CLEAR (a
+  posting antiga vira falso positivo no segmento antigo e morre com ele, spec
+  §5.2 do subsistema 1). Falso positivo é tolerado (o executor SEMPRE reavalia
+  o WHERE completo, §44); falso negativo nunca.
+- **Contador mantido na escrita é delta do PRÓPRIO vetor, nunca de
+  `prevPayload`** (no replay ele não existe): os totais são dobra do vetor
+  ANTES do replay, o vetor só vai ao mmap no `ApplyOverlay` do checkpoint
+  (depois do `segSync`), e aposentar um grupo exige `refs == 0` (nunca
+  `total == 0`) mais a cobertura da última mexida por um checkpoint. "Viva"
+  para o contador é linha com location e sem lápide — não a visibilidade da
+  consulta. `nishidb counters --config` exige o servidor parado; `--server`
+  usa as rotas ADMIN.
 - **Planner nunca falha**: prioridade fixa primary → hash → bitmap →
   interseção/união → full scan; toda dúvida degrada para FullScan.
 - **Zero alocação por linha** no scan/NDJSON é propriedade gateada

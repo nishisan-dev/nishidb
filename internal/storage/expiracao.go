@@ -15,6 +15,11 @@ import (
 // que leva minutos ou que só prova a expiração com prazos irrealistas.
 func (s *Store) UsaRelogio(f func() time.Time) {
 	s.agora = f
+	// Os contadores marcam o instante em que um grupo esvazia com o MESMO
+	// relógio: um teste de aposentadoria avança o tempo por aqui.
+	for _, c := range s.contadores {
+		c.UsaRelogio(f)
+	}
 }
 
 // TemExpiracao reporta se este dataset expira por escrita.

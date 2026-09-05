@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/query/binder"
-	"github.com/nishisan-dev/nishidb/internal/query/parser"
 	"github.com/nishisan-dev/nishidb/internal/schema"
 )
 
@@ -29,27 +28,11 @@ func CompilaRegras(regras []schema.RegraTTL, sc *schema.Compiled) ([]RegraCompil
 			out = append(out, RegraCompilada{Duracao: r.Duracao})
 			continue
 		}
-		e, err := parser.ParseCondicao(r.When)
+		prog, slots, err := CompilaCondicao(fmt.Sprintf("ttl[%d]", i), r.When, sc)
 		if err != nil {
-			return nil, fmt.Errorf("ttl[%d]: condição %q: %w", i, r.When, err)
+			return nil, err
 		}
-		bc, err := binder.BindCondicao(e, sc)
-		if err != nil {
-			return nil, fmt.Errorf("ttl[%d]: condição %q: %w", i, r.When, err)
-		}
-		for _, id := range bc.Slots.IDs {
-			// A duração não pode depender de si mesma, nem do instante que ela
-			// própria ajuda a interpretar.
-			if f, ok := sc.FieldByID(id); ok && f.IsSystem {
-				return nil, fmt.Errorf("ttl[%d]: condição %q referencia o campo de sistema %q",
-					i, r.When, f.Name)
-			}
-		}
-		prog, err := Compila(bc.Expr, bc.Slots.Len())
-		if err != nil {
-			return nil, fmt.Errorf("ttl[%d]: condição %q: %w", i, r.When, err)
-		}
-		out = append(out, RegraCompilada{Prog: prog, Slots: bc.Slots, Duracao: r.Duracao})
+		out = append(out, RegraCompilada{Prog: prog, Slots: slots, Duracao: r.Duracao})
 	}
 	return out, nil
 }

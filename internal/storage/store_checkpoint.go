@@ -91,6 +91,15 @@ func (s *Store) checkpoint() error {
 	if err := s.traceStep("applyOverlay", s.locs.ApplyOverlay); err != nil {
 		return err // erro lógico: retentável, manifest antigo governa
 	}
+	// O overlay dos contadores vai ao mmap DEPOIS do segSync, pela mesma
+	// invariante das locations: nenhuma página do vetor de grupos descreve
+	// transição de record que não ficou durável. Erro é lógico e retentável —
+	// o que não foi aplicado fica no overlay para o próximo checkpoint.
+	for _, c := range s.contadores {
+		if err := s.traceStep("applyOverlayContadores", c.ApplyOverlay); err != nil {
+			return err
+		}
+	}
 	// Primary e sequences não existem no histórico; os traceSteps deles somem
 	// junto, e é isso que os testes de ordem de durabilidade observam.
 	if s.prim != nil {
@@ -126,6 +135,16 @@ func (s *Store) checkpoint() error {
 			return err
 		}
 	}
+	// Os contadores seguem a agenda: derivados, reconstruíveis, erro não
+	// sticky. Depois do msync, cada contador registra que toda transição até
+	// aqui está durável em record E em página — é essa cobertura que autoriza
+	// a aposentadoria de um grupo vazio (contador.AposentaVazios).
+	for _, c := range s.contadores {
+		if err := s.traceStep("msyncContadores", c.Msync); err != nil {
+			return err
+		}
+		c.CobreMexidas(c.Transicoes())
+	}
 	if s.seqs != nil {
 		if err := s.traceStep("msyncSequences", s.seqs.Msync); err != nil {
 			return s.failWriter(err)
@@ -155,6 +174,7 @@ func (s *Store) checkpoint() error {
 		Modo:                uint8(s.opts.Modo),
 		RowIDBase:           s.rowIDBase.Load(),
 		Agenda:              s.infoDaAgenda(),
+		Contadores:          s.infoDosContadores(),
 	}
 	if s.prim != nil {
 		m.PrimarySlotCount = s.prim.SlotCount()

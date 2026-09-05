@@ -130,6 +130,18 @@ const (
 	// saberia manter — nem ler — o índice que o dataset tem.
 	formatoDoIndiceAtual = 1
 
+	// tagContadores é a seção dos contadores mantidos na escrita: por
+	// contador, o nome, as colunas do groupBy e o texto do where — os
+	// parâmetros que DECIDEM o conteúdo do vetor de grupos. É IGNORÁVEL, e a
+	// política é deliberada: a seção existe para o binário novo decidir entre
+	// adotar e reconstruir, e "seção ausente ⇒ reconstruir" já é a resposta
+	// certa. Torná-la crítica só bloquearia o rollback (nishidb-update.sh)
+	// sem proteger nada — o binário anterior pula a seção, grava o manifest
+	// sem ela, e o binário novo reconstrói ao voltar. É a primeira tag
+	// ignorável do formato, e por isso a menor: sai antes de todas as críticas
+	// na cauda em ordem crescente.
+	tagContadores = 0x0001
+
 	// tlvHeaderSize é `tag u16 | len u32`.
 	tlvHeaderSize = 6
 	// hashInfoSize é `fieldID u16 | slotCount u64`, o tamanho de uma entrada da
@@ -218,6 +230,21 @@ type AgendaInfo struct {
 	Niveis           uint8
 }
 
+// ContadorInfo descreve um contador mantido na escrita gravado no dataset.
+//
+// Os três campos são os que decidem o CONTEÚDO do vetor de grupos: outras
+// colunas ou outro where dão outro contador, e a abertura que encontrar
+// divergência reconstrói em vez de adotar. O teto (maxGroups) NÃO viaja:
+// mudá-lo não muda o que já foi contado — só é recusado quando menor que os
+// grupos em uso.
+type ContadorInfo struct {
+	Nome string
+	// Colunas são os FieldIDs do groupBy, na ordem declarada.
+	Colunas []uint16
+	// Where é o texto normalizado da condição; vazio é "sem condição".
+	Where string
+}
+
 // Manifest é o estado amarrado por um checkpoint.
 type Manifest struct {
 	Epoch               uint64
@@ -233,6 +260,10 @@ type Manifest struct {
 
 	// Agenda é a seção 0x8003, e é nil no dataset sem expiração declarada.
 	Agenda *AgendaInfo
+
+	// Contadores é a seção 0x0001; vazia (ou nil) no dataset sem contador
+	// declarado, e nesse caso a seção não é emitida.
+	Contadores []ContadorInfo
 
 	// Modo é a engine do dataset: 0 materializado, 1 histórico. O tipo é
 	// uint8 cru e não um enum do storage porque este pacote descreve um
@@ -262,6 +293,19 @@ func TamanhoDaCaudaTLV(m *Manifest) int {
 	}
 	if m.Agenda != nil {
 		n += tlvHeaderSize + agendaInfoSize
+	}
+	if len(m.Contadores) > 0 {
+		n += tlvHeaderSize + tamanhoDaSecaoDeContadores(m.Contadores)
+	}
+	return n
+}
+
+// tamanhoDaSecaoDeContadores é o payload da seção 0x0001:
+// `n u16 | por contador: lenNome u16 | nome | nCols u16 | nCols×u16 | lenWhere u32 | where`.
+func tamanhoDaSecaoDeContadores(cs []ContadorInfo) int {
+	n := 2
+	for _, c := range cs {
+		n += 2 + len(c.Nome) + 2 + 2*len(c.Colunas) + 4 + len(c.Where)
 	}
 	return n
 }
@@ -316,6 +360,21 @@ func (m *Manifest) appendCauda(b []byte) []byte {
 	// o manifest é comparado byte a byte pelos testes de formato, e uma ordem
 	// que dependesse do histórico do produto mudaria o arquivo sem que o
 	// conteúdo mudasse.
+	if len(m.Contadores) > 0 {
+		b = binary.LittleEndian.AppendUint16(b, tagContadores)
+		b = binary.LittleEndian.AppendUint32(b, uint32(tamanhoDaSecaoDeContadores(m.Contadores)))
+		b = binary.LittleEndian.AppendUint16(b, uint16(len(m.Contadores)))
+		for _, c := range m.Contadores {
+			b = binary.LittleEndian.AppendUint16(b, uint16(len(c.Nome)))
+			b = append(b, c.Nome...)
+			b = binary.LittleEndian.AppendUint16(b, uint16(len(c.Colunas)))
+			for _, col := range c.Colunas {
+				b = binary.LittleEndian.AppendUint16(b, col)
+			}
+			b = binary.LittleEndian.AppendUint32(b, uint32(len(c.Where)))
+			b = append(b, c.Where...)
+		}
+	}
 	if m.temHistorico() {
 		b = binary.LittleEndian.AppendUint16(b, tagHistorico)
 		b = binary.LittleEndian.AppendUint32(b, historicoInfoSize)
@@ -461,6 +520,10 @@ func decodeCauda(r *reader, m *Manifest) error {
 			if err := decodeAgenda(payload, m); err != nil {
 				return err
 			}
+		case tag == tagContadores:
+			if err := decodeContadores(payload, m); err != nil {
+				return err
+			}
 		case tag&tagCritica != 0:
 			// Ignorar uma seção crítica desconhecida é o modo de falha que
 			// esta política existe para impedir: o dataset teria um índice
@@ -470,6 +533,38 @@ func decodeCauda(r *reader, m *Manifest) error {
 		}
 		// Tag ignorável desconhecida: os bytes já foram pulados acima.
 	}
+	return nil
+}
+
+// decodeContadores lê a seção 0x0001.
+//
+// Tamanho EXATO, contado entrada por entrada: uma seção que declara mais
+// contadores do que os bytes contêm é manifest corrompido, e não "menos
+// contadores" — ler pela metade adotaria um contador com as colunas de outro,
+// e o vetor de grupos passaria a ser interpretado com parâmetros que não são
+// os dele.
+func decodeContadores(payload []byte, m *Manifest) error {
+	cr := &reader{b: payload}
+	n := int(cr.u16())
+	if cr.bad {
+		return fmt.Errorf("%w: seção dos contadores truncada", ErrCorruptManifest)
+	}
+	cs := make([]ContadorInfo, 0, n)
+	for i := 0; i < n && !cr.bad; i++ {
+		var c ContadorInfo
+		c.Nome = string(cr.take(int(cr.u16())))
+		nCols := int(cr.u16())
+		c.Colunas = make([]uint16, 0, nCols)
+		for j := 0; j < nCols && !cr.bad; j++ {
+			c.Colunas = append(c.Colunas, cr.u16())
+		}
+		c.Where = string(cr.take(int(cr.u32())))
+		cs = append(cs, c)
+	}
+	if cr.bad || cr.pos != len(payload) {
+		return fmt.Errorf("%w: seção dos contadores declara %d entradas em %d bytes", ErrCorruptManifest, n, len(payload))
+	}
+	m.Contadores = cs
 	return nil
 }
 

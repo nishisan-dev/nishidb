@@ -547,6 +547,37 @@ const (
 	MetKafkaPartitionsTotal    = "nishidb_kafka_partitions_total"
 )
 
+// Contadores mantidos na escrita (planning/contadores-mantidos-na-escrita.md,
+// §11.5). Nenhuma está no §92: o contador nasceu depois da spec. As oito saem
+// por contador, com o rótulo `counter`, e nascem com zero na subida.
+//
+// Três delas podem alarmar, e é por elas que a família existe:
+//
+//   - GroupsRefusedTotal: um grupo novo foi recusado pelo teto de maxGroups. A
+//     linha entrou, mas não é contada — o total daquele equipamento está
+//     ERRADO para baixo até o contador ser reconstruído com teto maior. Zero
+//     é o único valor aceitável em regime.
+//   - OrphanEntries: entradas do vetor que apontavam para grupo aposentado ou
+//     inexistente na dobra da abertura. Não é esperado fora de uma janela de
+//     crash que a aposentadoria coberta por checkpoint fecha; diferente de
+//     zero é sinal para auditar.
+//   - AuditDivergentGroups: o que a última auditoria achou. Fica em zero até a
+//     primeira, e o LastSuccessTimestamp ao lado é o que separa "nunca
+//     auditado" de "auditado e certo".
+//
+// Groups contra GroupsMax é o inventário contra o teto (§11.2). Bytes é o que
+// o contador ocupa em disco (vetor mais dicionário).
+const (
+	MetCounterGroups                    = "nishidb_counter_groups"
+	MetCounterGroupsMax                 = "nishidb_counter_groups_max"
+	MetCounterGroupsRefusedTotal        = "nishidb_counter_groups_refused_total"
+	MetCounterGroupsRetiredTotal        = "nishidb_counter_groups_retired_total"
+	MetCounterOrphanEntries             = "nishidb_counter_orphan_entries"
+	MetCounterBytes                     = "nishidb_counter_bytes"
+	MetCounterAuditDivergentGroups      = "nishidb_counter_audit_divergent_groups"
+	MetCounterAuditLastSuccessTimestamp = "nishidb_counter_audit_last_success_timestamp"
+)
+
 // Nomes de label do produto. Um label a mais multiplica séries por
 // cardinalidade, e cada um aqui existe por uma razão registrada: LabelCategoria
 // separa nishidb_query_errors por categoria de falha de consulta;
@@ -559,6 +590,11 @@ const (
 	LabelPartition = "partition"
 	LabelCategoria = "categoria"
 	LabelMotivo    = "motivo"
+	// LabelCounter é o nome do contador mantido na escrita, e o valor vem do
+	// YAML do dataset — conjunto fechado, declarado na subida —, nunca de
+	// entrada do cliente. Cardinalidade: o número de contadores declarados,
+	// que é o número de linhas do bloco `counters:`.
+	LabelCounter = "counter"
 
 	// LabelReason é o motivo de UMA falha de autenticação HTTP Basic
 	// (Task B3) — enum FECHADO {header, usuario, senha}, nunca o username:

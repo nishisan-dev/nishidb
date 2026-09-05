@@ -3,6 +3,7 @@ package server
 import (
 	"github.com/nishisan-dev/nishidb/internal/metrics"
 	"github.com/nishisan-dev/nishidb/internal/storage"
+	"github.com/nishisan-dev/nishidb/internal/storage/contador"
 )
 
 // lixoDeDisco é a conta de nishidb_storage_garbage_bytes: o que está em disco
@@ -96,6 +97,7 @@ func registraMetricasDeDataset(reg *metrics.Registry, s *Servidor) {
 			// EstatisticasDeRetencao não vale fora do histórico.
 			out = append(out, amostrasDeIndice(d.nome, d.st.EstatisticasDeIndice())...)
 			out = append(out, amostrasDeIsolamento(d.nome, d.st)...)
+			out = append(out, amostrasDeContadores(d.nome, d.st.EstatisticasDeContadores())...)
 			rotulo := []metrics.Label{{Nome: metrics.LabelDataset, Valor: d.nome}}
 			// O formato de exposição só tem número, e Go não converte bool
 			// para float: o 0/1 do medidor se escreve aqui, uma vez, em vez de
@@ -230,6 +232,89 @@ func umSeVerdadeiro(v bool) float64 {
 		return 1
 	}
 	return 0
+}
+
+// amostrasDeContadores publica as oito séries de cada contador mantido na
+// escrita, da MESMA leitura (EstatisticasDeContadores) que o /v1/stats faz.
+//
+// Nascem com zero na subida, como todas as que podem alarmar: um dataset com
+// contador e nenhuma linha emite as oito, zeradas — lacuna não se distingue de
+// alvo fora do ar. O rótulo `counter` vem do YAML, conjunto fechado.
+func amostrasDeContadores(dataset string, ests []contador.Estatisticas) []metrics.Amostra {
+	out := make([]metrics.Amostra, 0, len(ests)*8)
+	for _, e := range ests {
+		rotulo := []metrics.Label{
+			{Nome: metrics.LabelDataset, Valor: dataset},
+			{Nome: metrics.LabelCounter, Valor: e.Nome},
+		}
+		out = append(out,
+			metrics.Amostra{
+				Familia: metrics.MetCounterGroups,
+				Nome:    metrics.MetCounterGroups,
+				Ajuda:   "grupos vivos do contador (inclui os com total zero; exclui os aposentados)",
+				Tipo:    metrics.TipoMedidor,
+				Labels:  rotulo,
+				Valor:   float64(e.Grupos),
+			},
+			metrics.Amostra{
+				Familia: metrics.MetCounterGroupsMax,
+				Nome:    metrics.MetCounterGroupsMax,
+				Ajuda:   "teto de grupos vivos (maxGroups) do contador",
+				Tipo:    metrics.TipoMedidor,
+				Labels:  rotulo,
+				Valor:   float64(e.Teto),
+			},
+			metrics.Amostra{
+				Familia: metrics.MetCounterGroupsRefusedTotal,
+				Nome:    metrics.MetCounterGroupsRefusedTotal,
+				Ajuda:   "grupos novos recusados pelo teto nesta abertura; a linha entrou e NÃO é contada — diferente de zero é total errado para baixo",
+				Tipo:    metrics.TipoContador,
+				Labels:  rotulo,
+				Valor:   float64(e.Recusados),
+			},
+			metrics.Amostra{
+				Familia: metrics.MetCounterGroupsRetiredTotal,
+				Nome:    metrics.MetCounterGroupsRetiredTotal,
+				Ajuda:   "grupos aposentados por ficarem sem linha há mais que retainEmptyGroups, desde a criação do contador",
+				Tipo:    metrics.TipoContador,
+				Labels:  rotulo,
+				Valor:   float64(e.Aposentados),
+			},
+			metrics.Amostra{
+				Familia: metrics.MetCounterOrphanEntries,
+				Nome:    metrics.MetCounterOrphanEntries,
+				Ajuda:   "entradas do vetor apontando para grupo aposentado ou inexistente, zeradas na dobra da abertura; não é esperado fora de uma janela de crash",
+				Tipo:    metrics.TipoMedidor,
+				Labels:  rotulo,
+				Valor:   float64(e.Orfas),
+			},
+			metrics.Amostra{
+				Familia: metrics.MetCounterBytes,
+				Nome:    metrics.MetCounterBytes,
+				Ajuda:   "bytes em disco do contador: vetor de grupos mais dicionário",
+				Tipo:    metrics.TipoMedidor,
+				Labels:  rotulo,
+				Valor:   float64(e.Bytes),
+			},
+			metrics.Amostra{
+				Familia: metrics.MetCounterAuditDivergentGroups,
+				Nome:    metrics.MetCounterAuditDivergentGroups,
+				Ajuda:   "grupos divergentes na última auditoria conclusiva; 0 até a primeira (ver o timestamp ao lado)",
+				Tipo:    metrics.TipoMedidor,
+				Labels:  rotulo,
+				Valor:   float64(e.AuditoriaDivergentes),
+			},
+			metrics.Amostra{
+				Familia: metrics.MetCounterAuditLastSuccessTimestamp,
+				Nome:    metrics.MetCounterAuditLastSuccessTimestamp,
+				Ajuda:   "Unix timestamp da última auditoria conclusiva do contador; 0 até a primeira",
+				Tipo:    metrics.TipoMedidor,
+				Labels:  rotulo,
+				Valor:   float64(e.AuditoriaUltimaUnix),
+			},
+		)
+	}
+	return out
 }
 
 // amostrasDeIsolamento publica o que o snapshot de leitura está segurando
