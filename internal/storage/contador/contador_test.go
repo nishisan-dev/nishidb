@@ -117,6 +117,30 @@ func totalDe(t *testing.T, c *Contador, olt string) (total, refs int64) {
 	return total, refs
 }
 
+// exigeAgregadosCoerentes é o oráculo dos agregados: eles são a SEGUNDA fonte
+// para o mesmo fato que os vetores por grupo, e o que os prova é a comparação
+// com a primeira. Todo teste de agregado passa por aqui — sem isso um teste
+// que só olhasse os dois números aceitaria qualquer aritmética consistente
+// consigo mesma.
+//
+// A soma é sobre TODOS os ids, vivos ou não: grupo aposentado tem refs 0 e,
+// por totais[g] <= refs[g], total 0 — logo não muda a soma, que é exatamente
+// a razão de a aposentadoria não precisar mexer nos agregados.
+func exigeAgregadosCoerentes(t *testing.T, c *Contador) {
+	t.Helper()
+	var linhas, total int64
+	for id := uint32(1); id < c.Limite(); id++ {
+		_, _, tg, rg, _ := c.Grupo(id)
+		linhas += rg
+		total += tg
+	}
+	est := c.Estatisticas()
+	if est.Linhas != linhas || est.Total != total {
+		t.Fatalf("agregados = linhas %d total %d; a soma dos grupos dá %d e %d",
+			est.Linhas, est.Total, linhas, total)
+	}
+}
+
 func TestTransicaoNovaLinhaContaNoGrupo(t *testing.T) {
 	c := abreContador(t, t.TempDir(), defPorOLT("aut", true, 100), false)
 	if err := c.Transiciona(0, payload(t, "A", 1, 1, true), false); err != nil {
@@ -131,6 +155,114 @@ func TestTransicaoNovaLinhaContaNoGrupo(t *testing.T) {
 	if c.Transicoes() != 2 {
 		t.Fatalf("transições = %d, quer 2", c.Transicoes())
 	}
+}
+
+// TestTransicaoNovaLinhaContaNosAgregados: a mesma bancada do teste acima,
+// medida no contador inteiro. Duas linhas na OLT A, uma satisfazendo o where.
+func TestTransicaoNovaLinhaContaNosAgregados(t *testing.T) {
+	c := abreContador(t, t.TempDir(), defPorOLT("aut", true, 100), false)
+	if err := c.Transiciona(0, payload(t, "A", 1, 1, true), false); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Transiciona(1, payload(t, "A", 1, 2, false), false); err != nil {
+		t.Fatal(err)
+	}
+	// Uma terceira linha em OUTRO grupo: o agregado é do contador, não do grupo.
+	if err := c.Transiciona(2, payload(t, "B", 1, 1, true), false); err != nil {
+		t.Fatal(err)
+	}
+	if est := c.Estatisticas(); est.Linhas != 3 || est.Total != 2 {
+		t.Fatalf("agregados = linhas %d total %d, quer 3 e 2", est.Linhas, est.Total)
+	}
+	exigeAgregadosCoerentes(t, c)
+}
+
+// TestAgregadosAcompanhamAsDuasPontasDaTransicao: mudar de grupo tira de um e
+// põe no outro, e o agregado não pode mexer — a linha continua UMA. Mudar a
+// condição no MESMO grupo mexe só no total.
+func TestAgregadosAcompanhamAsDuasPontasDaTransicao(t *testing.T) {
+	c := abreContador(t, t.TempDir(), defPorOLT("aut", true, 100), false)
+	if err := c.Transiciona(0, payload(t, "A", 1, 1, true), false); err != nil {
+		t.Fatal(err)
+	}
+	if est := c.Estatisticas(); est.Linhas != 1 || est.Total != 1 {
+		t.Fatalf("depois da entrada: linhas %d total %d, quer 1 e 1", est.Linhas, est.Total)
+	}
+	// Troca de grupo, mesma condição: os dois agregados ficam parados.
+	if err := c.Transiciona(0, payload(t, "B", 1, 1, true), false); err != nil {
+		t.Fatal(err)
+	}
+	if est := c.Estatisticas(); est.Linhas != 1 || est.Total != 1 {
+		t.Fatalf("depois da troca de grupo: linhas %d total %d, quer 1 e 1", est.Linhas, est.Total)
+	}
+	exigeAgregadosCoerentes(t, c)
+	// Mesma linha, mesmo grupo, condição deixa de valer: só o total desce.
+	if err := c.Transiciona(0, payload(t, "B", 1, 1, false), false); err != nil {
+		t.Fatal(err)
+	}
+	if est := c.Estatisticas(); est.Linhas != 1 || est.Total != 0 {
+		t.Fatalf("depois de perder a condição: linhas %d total %d, quer 1 e 0", est.Linhas, est.Total)
+	}
+	exigeAgregadosCoerentes(t, c)
+}
+
+// TestLapideDescontaOsAgregados: a lápide entra como "sem grupo", e é a
+// entrada ANTIGA que lembra de onde a linha saiu.
+func TestLapideDescontaOsAgregados(t *testing.T) {
+	c := abreContador(t, t.TempDir(), defPorOLT("aut", true, 100), false)
+	for i, cond := range []bool{true, false} {
+		if err := c.Transiciona(types.RowID(i), payload(t, "A", 1, int64(i), cond), false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.Transiciona(0, nil, true); err != nil {
+		t.Fatal(err)
+	}
+	if est := c.Estatisticas(); est.Linhas != 1 || est.Total != 0 {
+		t.Fatalf("depois da lápide: linhas %d total %d, quer 1 e 0", est.Linhas, est.Total)
+	}
+	if err := c.Transiciona(1, nil, true); err != nil {
+		t.Fatal(err)
+	}
+	if est := c.Estatisticas(); est.Linhas != 0 || est.Total != 0 {
+		t.Fatalf("com tudo lapidado: linhas %d total %d, quer 0 e 0", est.Linhas, est.Total)
+	}
+	exigeAgregadosCoerentes(t, c)
+}
+
+// TestAgregadoNaoDescontaEntradaAlemDoDicionario: entrada apontando para um id
+// que o dicionário não tem — janela de crash — não decrementa grupo nenhum,
+// porque não existe slot. O agregado tem de ficar parado JUNTO.
+//
+// O número que sai daqui é 3 linhas para 2 rows, e é o comportamento correto:
+// a rowID 1 é contada duas vezes no grupo A porque a entrada que a tirava de
+// lá aponta para o nada. O agregado não existe para consertar isso — existe
+// para dizer a MESMA coisa que os grupos dizem. Quem conserta é a Dobra, que
+// trata a entrada como órfã, e a auditoria, que a acusa. Um agregado que
+// descesse aqui ficaria em 2 contra grupos somando 3, e a divergência não
+// teria como aparecer.
+func TestAgregadoNaoDescontaEntradaAlemDoDicionario(t *testing.T) {
+	c := abreContador(t, t.TempDir(), defPorOLT("aut", true, 100), false)
+	if err := c.Transiciona(0, payload(t, "A", 1, 1, true), false); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Transiciona(1, payload(t, "A", 1, 2, true), false); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ApplyOverlay(); err != nil {
+		t.Fatal(err)
+	}
+	// Um id que o dicionário nunca emitiu, escrito por baixo do contador.
+	if err := c.vetor.Set(1, bitCondicao|99); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Transiciona(1, payload(t, "A", 1, 2, true), false); err != nil {
+		t.Fatal(err)
+	}
+	if est := c.Estatisticas(); est.Linhas != 3 || est.Total != 3 {
+		t.Fatalf("agregados = linhas %d total %d, quer 3 e 3 (a rowID 1 conta duas vezes no grupo A)", est.Linhas, est.Total)
+	}
+	exigeAgregadosCoerentes(t, c)
 }
 
 // TestReprocessarOMesmoEventoNaoMexe é a segunda linha da tabela da proposta
@@ -316,7 +448,7 @@ func TestDobraReproduzOsTotais(t *testing.T) {
 	if err := c.Msync(); err != nil {
 		t.Fatal(err)
 	}
-	quero, refsQ, limite := c.Congela()
+	cg := c.Congela()
 	if err := c.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -325,17 +457,78 @@ func TestDobraReproduzOsTotais(t *testing.T) {
 	if err := c2.Dobra(); err != nil {
 		t.Fatal(err)
 	}
-	if c2.Limite() != limite {
-		t.Fatalf("limite %d, quer %d", c2.Limite(), limite)
+	if c2.Limite() != cg.Limite {
+		t.Fatalf("limite %d, quer %d", c2.Limite(), cg.Limite)
 	}
-	for id := uint32(1); id < limite; id++ {
+	for id := uint32(1); id < cg.Limite; id++ {
 		_, _, total, refs, _ := c2.Grupo(id)
-		if total != quero[id] || refs != refsQ[id] {
-			t.Fatalf("grupo %d: dobra deu total %d refs %d, quer %d e %d", id, total, refs, quero[id], refsQ[id])
+		if total != cg.Totais[id] || refs != cg.Refs[id] {
+			t.Fatalf("grupo %d: dobra deu total %d refs %d, quer %d e %d", id, total, refs, cg.Totais[id], cg.Refs[id])
 		}
 	}
 	if c2.Estatisticas().Orfas != 0 {
 		t.Fatal("nenhuma entrada órfã era esperada")
+	}
+}
+
+// TestDobraReproduzOsAgregados é a irmã do teste acima para os agregados do
+// contador inteiro: eles também são dobra do vetor, e uma segunda instância
+// aberta sobre os mesmos arquivos tem de chegar aos mesmos dois números.
+//
+// O corpo repete a sequência aleatória de propósito — é a mesma propriedade,
+// medida noutro nível: se o agregado deixasse de ser dobra, os grupos ainda
+// bateriam e só estes dois números divergiriam.
+func TestDobraReproduzOsAgregados(t *testing.T) {
+	dir := t.TempDir()
+	def := defPorPON("pon", 1000)
+	c := abreContador(t, dir, def, false)
+	rnd := rand.New(rand.NewSource(11))
+	olts := []string{"A", "B", "C", "D"}
+	for i := 0; i < 1000; i++ {
+		row := types.RowID(rnd.Intn(200))
+		if rnd.Intn(10) == 0 {
+			if err := c.Transiciona(row, nil, true); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		p := payload(t, olts[rnd.Intn(len(olts))], int64(rnd.Intn(3)), int64(rnd.Intn(4)), rnd.Intn(2) == 1)
+		if err := c.Transiciona(row, p, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.ApplyOverlay(); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Msync(); err != nil {
+		t.Fatal(err)
+	}
+	exigeAgregadosCoerentes(t, c)
+	cg := c.Congela()
+	if cg.Linhas == 0 || cg.Total == 0 || cg.Linhas == cg.Total {
+		// Linhas == Total passaria com os dois trocados; a fixture tem where.
+		t.Fatalf("a bancada não discrimina: linhas %d, total %d", cg.Linhas, cg.Total)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	c2 := abreContador(t, dir, def, false)
+	if err := c2.Dobra(); err != nil {
+		t.Fatal(err)
+	}
+	est := c2.Estatisticas()
+	if est.Linhas != cg.Linhas || est.Total != cg.Total {
+		t.Fatalf("dobra deu linhas %d total %d, quer %d e %d", est.Linhas, est.Total, cg.Linhas, cg.Total)
+	}
+	exigeAgregadosCoerentes(t, c2)
+
+	// A dobra é idempotente: zerar antes de acumular é o que a torna assim.
+	if err := c2.Dobra(); err != nil {
+		t.Fatal(err)
+	}
+	if est2 := c2.Estatisticas(); est2.Linhas != cg.Linhas || est2.Total != cg.Total {
+		t.Fatalf("a segunda dobra acumulou sobre a primeira: linhas %d total %d", est2.Linhas, est2.Total)
 	}
 }
 
@@ -437,6 +630,14 @@ func TestDobraTrataIdAposentadoComoOrfa(t *testing.T) {
 	if v, _ := c2.vetor.Get(2); v != SemGrupo {
 		t.Fatalf("a entrada inexistente tinha de ser reescrita para SemGrupo, é %#x", v)
 	}
+	// A entrada que grupo nenhum recebeu também não pode ser creditada ao
+	// agregado: sobra UMA linha viva, a do grupo B. Sem esta asserção, uma
+	// dobra que acumulasse antes do continue da órfã passaria verde com os
+	// grupos certos e o agregado inflado pelas duas órfãs.
+	if est := c2.Estatisticas(); est.Linhas != 1 || est.Total != 1 {
+		t.Fatalf("agregados = linhas %d total %d, quer 1 e 1 (as duas órfãs não contam)", est.Linhas, est.Total)
+	}
+	exigeAgregadosCoerentes(t, c2)
 }
 
 func TestCobreMexidasAcompanhaAsTransicoes(t *testing.T) {
@@ -504,6 +705,38 @@ func TestZeraLimpaTotaisEVetorMasMantemODicionario(t *testing.T) {
 	}
 }
 
+// TestZeraLimpaOsAgregados: os agregados zeram junto com os vetores. Sem isto,
+// a reconstrução — que transiciona de novo cada linha viva — os deixaria com o
+// DOBRO do valor ao lado de grupos corretos, e o número errado seria o que sai
+// por SQL e por /v1/stats.
+func TestZeraLimpaOsAgregados(t *testing.T) {
+	c := abreContador(t, t.TempDir(), defPorOLT("aut", true, 100), false)
+	for i, cond := range []bool{true, true, false} {
+		if err := c.Transiciona(types.RowID(i), payload(t, "A", 1, int64(i), cond), false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if est := c.Estatisticas(); est.Linhas != 3 || est.Total != 2 {
+		t.Fatalf("antes do Zera: linhas %d total %d, quer 3 e 2", est.Linhas, est.Total)
+	}
+	if err := c.Zera(); err != nil {
+		t.Fatal(err)
+	}
+	if est := c.Estatisticas(); est.Linhas != 0 || est.Total != 0 {
+		t.Fatalf("depois do Zera: linhas %d total %d, quer 0 e 0", est.Linhas, est.Total)
+	}
+	// Reconstruir tem de chegar aos MESMOS números, não ao dobro.
+	for i, cond := range []bool{true, true, false} {
+		if err := c.Transiciona(types.RowID(i), payload(t, "A", 1, int64(i), cond), false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if est := c.Estatisticas(); est.Linhas != 3 || est.Total != 2 {
+		t.Fatalf("depois de reconstruir: linhas %d total %d, quer 3 e 2", est.Linhas, est.Total)
+	}
+	exigeAgregadosCoerentes(t, c)
+}
+
 func TestAbrirComRecriaComecaDoZero(t *testing.T) {
 	dir := t.TempDir()
 	def := defPorOLT("aut", true, 100)
@@ -538,14 +771,19 @@ func TestCongelaCopiaOsTotais(t *testing.T) {
 	if err := c.Transiciona(0, payload(t, "A", 1, 1, true), false); err != nil {
 		t.Fatal(err)
 	}
-	totais, refs, limite := c.Congela()
-	if limite != 2 || totais[1] != 1 || refs[1] != 1 {
-		t.Fatalf("congelado = %v %v %d", totais, refs, limite)
+	cg := c.Congela()
+	if cg.Limite != 2 || cg.Totais[1] != 1 || cg.Refs[1] != 1 {
+		t.Fatalf("congelado = %v %v %d", cg.Totais, cg.Refs, cg.Limite)
+	}
+	// Os agregados viajam no MESMO retrato: é a coincidência de instante que
+	// a auditoria compara.
+	if cg.Linhas != 1 || cg.Total != 1 {
+		t.Fatalf("congelado: linhas %d total %d, quer 1 e 1", cg.Linhas, cg.Total)
 	}
 	if err := c.Transiciona(0, nil, true); err != nil {
 		t.Fatal(err)
 	}
-	if totais[1] != 1 {
+	if cg.Totais[1] != 1 || cg.Linhas != 1 || cg.Total != 1 {
 		t.Fatal("a cópia não pode acompanhar o writer")
 	}
 }

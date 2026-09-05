@@ -259,13 +259,22 @@ type DatasetStats struct {
 // ContadorStats é o retrato de UM contador mantido na escrita
 // (planning/contadores-mantidos-na-escrita.md §11.5).
 //
+// AuditDivergentGroups conta as divergências que a última auditoria achou:
+// grupos, linhas cujo grupo não está internado e os dois agregados.
+//
 // Refused é o número que alarma: um grupo novo recusado pelo teto é uma linha
 // que entrou e não é contada. OrphanEntries é o que a dobra da abertura achou
 // apontando para grupo que já saiu. AuditDivergentGroups e
 // AuditLastSuccessUnix são a última auditoria conclusiva — zero e zero até a
 // primeira, e é o timestamp que separa "nunca auditado" de "auditado e certo".
 type ContadorStats struct {
-	Name                 string `json:"name"`
+	Name string `json:"name"`
+	// Rows e Total são os agregados do contador inteiro: quantas linhas vivas
+	// apontam para algum grupo, e quantas satisfazem a condição no dataset
+	// inteiro. Rows abaixo do rows do dataset são as linhas SEM alguma coluna
+	// do groupBy, que o contador não conta por desenho.
+	Rows                 int64  `json:"rows"`
+	Total                int64  `json:"total"`
 	Groups               uint32 `json:"groups"`
 	MaxGroups            uint32 `json:"maxGroups"`
 	Retired              uint32 `json:"retired"`

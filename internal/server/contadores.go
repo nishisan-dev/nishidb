@@ -149,8 +149,13 @@ func auditoriaContador(rel contador.Relatorio) protocolo.AuditoriaContador {
 		Recomputed:      rel.Recalculado,
 		DivergentGroups: rel.Divergentes,
 		NotInterned:     rel.NaoInternadas,
-		RowsScanned:     rel.LinhasVarridas,
-		DurationMs:      rel.Duracao.Milliseconds(),
+
+		AggregateRows:       rel.AgregadoLinhas,
+		AggregateTotal:      rel.AgregadoTotal,
+		DivergentAggregates: rel.AgregadosDivergentes,
+		RowsRecomputed:      rel.LinhasRecalculadas,
+		RowsScanned:         rel.LinhasVarridas,
+		DurationMs:          rel.Duracao.Milliseconds(),
 	}
 	for _, d := range rel.Amostra {
 		out.Sample = append(out.Sample, protocolo.DivergenciaDeGrupo{

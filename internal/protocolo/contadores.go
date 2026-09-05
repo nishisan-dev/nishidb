@@ -29,15 +29,25 @@ type AuditoriaDataset struct {
 // groupKey, com teto — um contador inteiramente errado não vira um relatório
 // do tamanho do inventário.
 type AuditoriaContador struct {
-	Name            string               `json:"name"`
-	Groups          uint32               `json:"groups"`
-	Maintained      int64                `json:"maintained"`
-	Recomputed      int64                `json:"recomputed"`
-	DivergentGroups int                  `json:"divergentGroups"`
-	NotInterned     uint64               `json:"notInterned"`
-	Sample          []DivergenciaDeGrupo `json:"sample,omitempty"`
-	RowsScanned     uint64               `json:"rowsScanned"`
-	DurationMs      int64                `json:"durationMs"`
+	Name            string `json:"name"`
+	Groups          uint32 `json:"groups"`
+	Maintained      int64  `json:"maintained"`
+	Recomputed      int64  `json:"recomputed"`
+	DivergentGroups int    `json:"divergentGroups"`
+	NotInterned     uint64 `json:"notInterned"`
+	// AggregateRows e AggregateTotal são os agregados MANTIDOS pelo contador
+	// em T0; comparados com rows/total recomputados, dizem se a segunda fonte
+	// do mesmo fato derivou. DivergentAggregates é 0, 1 ou 2 — separado de
+	// DivergentGroups porque a pergunta é outra: uma linha que trocou de grupo
+	// deixa os grupos errados e o agregado certo.
+	AggregateRows       int64 `json:"aggregateRows"`
+	AggregateTotal      int64 `json:"aggregateTotal"`
+	DivergentAggregates int   `json:"divergentAggregates"`
+	// RowsRecomputed é a soma dos refs recalculados — o par de AggregateRows.
+	RowsRecomputed int64                `json:"rowsRecomputed"`
+	Sample         []DivergenciaDeGrupo `json:"sample,omitempty"`
+	RowsScanned    uint64               `json:"rowsScanned"`
+	DurationMs     int64                `json:"durationMs"`
 }
 
 // DivergenciaDeGrupo é um grupo que divergiu, pelo groupKey.

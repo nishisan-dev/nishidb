@@ -80,6 +80,38 @@ func TestMetaCountersListaOsContadores(t *testing.T) {
 	}
 }
 
+// TestMetaCountersPublicaLinhasETotal: os dois agregados do contador saem por
+// SQL em tempo constante — antes o mesmo número exigia o `counters --audit`,
+// que varre o dataset sob snapshot.
+//
+// A bancada dá 113 linhas e 110 na condição, e os dois números serem
+// DIFERENTES é o que faz o teste discriminar: com rows == total ele passaria
+// verde com as duas colunas trocadas.
+func TestMetaCountersPublicaLinhasETotal(t *testing.T) {
+	porOLT := abreContador(t, defPorOLT("autenticados_por_olt"))
+	porPON := abreContador(t, defPorPON("autenticados_por_pon"))
+	populaPON(t, porOLT)
+	populaPON(t, porPON)
+	eng := motorComMeta(t, porOLT, porPON)
+
+	rows := consulta(t, eng, "SELECT name, rows, total FROM _meta.counters ORDER BY name")
+	if got := coluna(rows, "rows"); got != "113,113" {
+		t.Fatalf("rows = %s, quero 113,113 (toda linha tem as colunas do groupBy)", got)
+	}
+	if got := coluna(rows, "total"); got != "110,110" {
+		t.Fatalf("total = %s, quero 110,110 (três linhas não estão autenticadas)", got)
+	}
+
+	// Nunca NULL, ao contrário das duas da auditoria: zero linhas é um fato
+	// medido, e a diferença entre as duas ausências é justamente o que a
+	// tabela existe para mostrar.
+	vazio := abreContador(t, defPorOLT("sem_linha"))
+	rows = consulta(t, motorComMeta(t, vazio), "SELECT name, rows, total FROM _meta.counters WHERE rows = 0 AND total = 0")
+	if len(rows) != 1 {
+		t.Fatalf("contador sem linha tem de sair com zero, não com NULL: %v", rows)
+	}
+}
+
 // TestMetaCountersSemContadorEhTabelaVazia: a tabela existe em todo dataset,
 // e "nenhum" é uma resposta — não um erro de tabela desconhecida.
 func TestMetaCountersSemContadorEhTabelaVazia(t *testing.T) {

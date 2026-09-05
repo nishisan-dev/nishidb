@@ -548,7 +548,7 @@ const (
 )
 
 // Contadores mantidos na escrita (planning/contadores-mantidos-na-escrita.md,
-// §11.5). Nenhuma está no §92: o contador nasceu depois da spec. As oito saem
+// §11.5). Nenhuma está no §92: o contador nasceu depois da spec. As dez saem
 // por contador, com o rótulo `counter`, e nascem com zero na subida.
 //
 // Três delas podem alarmar, e é por elas que a família existe:
@@ -567,6 +567,20 @@ const (
 //
 // Groups contra GroupsMax é o inventário contra o teto (§11.2). Bytes é o que
 // o contador ocupa em disco (vetor mais dicionário).
+//
+// Rows e CountedRows são os agregados do contador inteiro, e existem para que
+// o denominador e o numerador do alarme saiam do scrape sem uma consulta e sem
+// somar os grupos: Rows é quantas linhas apontam para algum grupo,
+// CountedRows quantas satisfazem a condição. Rows abaixo do
+// nishidb_rows do dataset é a diferença que ninguém enxergava sem varrer — as
+// linhas sem alguma coluna do groupBy, que o contador não conta por desenho.
+//
+// CountedRows, e não `nishidb_counter_total`: os dois são MEDIDORES — descem
+// quando uma linha é lapidada ou vence — e o sufixo _total é reservado a
+// contador monotônico, que é o que as duas séries `_refused_total` e
+// `_retired_total` desta mesma família são. As COLUNAS de _meta.counters e os
+// campos do /v1/stats continuam `rows` e `total`, que é o vocabulário do
+// produto; quem muda de nome é só a série.
 const (
 	MetCounterGroups                    = "nishidb_counter_groups"
 	MetCounterGroupsMax                 = "nishidb_counter_groups_max"
@@ -574,6 +588,8 @@ const (
 	MetCounterGroupsRetiredTotal        = "nishidb_counter_groups_retired_total"
 	MetCounterOrphanEntries             = "nishidb_counter_orphan_entries"
 	MetCounterBytes                     = "nishidb_counter_bytes"
+	MetCounterRows                      = "nishidb_counter_rows"
+	MetCounterCountedRows               = "nishidb_counter_counted_rows"
 	MetCounterAuditDivergentGroups      = "nishidb_counter_audit_divergent_groups"
 	MetCounterAuditLastSuccessTimestamp = "nishidb_counter_audit_last_success_timestamp"
 )

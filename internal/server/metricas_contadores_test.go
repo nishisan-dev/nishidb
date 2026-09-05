@@ -15,6 +15,8 @@ var seriesDeContador = []string{
 	metrics.MetCounterGroupsRetiredTotal,
 	metrics.MetCounterOrphanEntries,
 	metrics.MetCounterBytes,
+	metrics.MetCounterRows,
+	metrics.MetCounterCountedRows,
 	metrics.MetCounterAuditDivergentGroups,
 	metrics.MetCounterAuditLastSuccessTimestamp,
 }
@@ -32,7 +34,7 @@ func amostrasDoContador(t *testing.T, amostras []amostraExposta, contador string
 }
 
 // TestMetricasDeContadorNascemComZero: um dataset com contadores e nenhuma
-// linha emite as oito séries por contador, zeradas (o teto é o único valor
+// linha emite as dez séries por contador, zeradas (o teto é o único valor
 // diferente de zero) — lacuna não se distingue de alvo fora do ar.
 func TestMetricasDeContadorNascemComZero(t *testing.T) {
 	srv := servidorComServicos(t, 0)
@@ -62,6 +64,14 @@ func TestMetricasDeContadorNascemComZero(t *testing.T) {
 		}
 		if porSerie[metrics.MetCounterGroups].Tipo != metrics.TipoMedidor {
 			t.Fatalf("groups tem de ser medidor")
+		}
+		// Os dois agregados DESCEM quando uma linha é lapidada ou vence, então
+		// são medidores. Publicá-los como contador diria ao Prometheus que a
+		// queda é um reinício do processo, e o rate() sairia errado.
+		for _, serie := range []string{metrics.MetCounterRows, metrics.MetCounterCountedRows} {
+			if porSerie[serie].Tipo != metrics.TipoMedidor {
+				t.Fatalf("%s tem de ser medidor, é %v", serie, porSerie[serie].Tipo)
+			}
 		}
 	}
 }
@@ -95,8 +105,27 @@ func TestStatsEMetricsLeemOMesmoContador(t *testing.T) {
 		if got := porSerie[metrics.MetCounterGroupsMax].Valor; got != float64(c.MaxGroups) {
 			t.Fatalf("%s: maxGroups no scrape %v, no /v1/stats %d", c.Name, got, c.MaxGroups)
 		}
+		if got := porSerie[metrics.MetCounterRows].Valor; got != float64(c.Rows) {
+			t.Fatalf("%s: rows no scrape %v, no /v1/stats %d", c.Name, got, c.Rows)
+		}
+		if got := porSerie[metrics.MetCounterCountedRows].Valor; got != float64(c.Total) {
+			t.Fatalf("%s: total no scrape %v, no /v1/stats %d", c.Name, got, c.Total)
+		}
 		if c.Groups == 0 {
 			t.Fatalf("%s: 24 serviços em duas OLTs tinham de dar grupos", c.Name)
+		}
+		// Toda linha tem `olt`, então todas apontam para algum grupo. Os
+		// autenticados são os i%3 != 0, que são 16 — e é `rows != total` que
+		// impede a troca dos dois de passar verde nos dois lados de uma vez.
+		if c.Rows != 24 {
+			t.Fatalf("%s: rows = %d, quero 24", c.Name, c.Rows)
+		}
+		querTotal := int64(16)
+		if c.Name == "servicos_por_olt" {
+			querTotal = 24 // sem `where`: todo mundo conta
+		}
+		if c.Total != querTotal {
+			t.Fatalf("%s: total = %d, quero %d", c.Name, c.Total, querTotal)
 		}
 	}
 }
