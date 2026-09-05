@@ -362,6 +362,29 @@ Um campo **não declarado** aqui continua sendo aceito (`unknownFields:
 include`) e vira coluna `auto`, mas só é consultável pelo **nome original** —
 o alias existe apenas para campo declarado.
 
+Um dataset pode declarar **contadores mantidos na escrita** — quantas
+entidades estão num certo estado, agrupadas por uma chave que você escolhe:
+
+```yaml
+counters:
+  # Quantos serviços existem em cada OLT. Sem `where`: conta todo mundo.
+  - name: servicos_por_olt
+    groupBy: [olt]
+
+  # Destes, quantos estão autenticados.
+  - name: autenticados_por_olt
+    groupBy: [olt]
+    where: authenticated = true
+    maxGroups: 65536          # opcional; teto de grupos vivos (default 65536, até 2^31-1)
+    retainEmptyGroups: 7d     # opcional; `never` mantém o grupo vazio para sempre
+```
+
+`groupBy` aceita colunas declaradas de tipo `string`, `int64` ou `boolean`
+(de topo ou extraídas), nunca a key nem a sequence; `where` tem a gramática do
+WHERE e não pode tocar campo com `merge: sum` nem campo de sistema. Como se
+lê, o que custa e como se audita está em "Contadores mantidos na escrita",
+mais abaixo.
+
 #### Chaves de dentro de um campo `json`
 
 Um campo `json` guarda o documento inteiro como **um** valor. Isso preserva o
@@ -1165,6 +1188,87 @@ chegaram na Fase 11, atrás do papel ADMIN — ver "Compaction" acima e
 para todos, na ordem determinística da subida, e para no primeiro que falhar
 nomeando quem já tinha sido processado com sucesso antes dele.
 
+### Contadores mantidos na escrita
+
+Um contador declarado no YAML (bloco `counters:`, ver "Definição do dataset")
+é um **índice derivado**: mantido enquanto se escreve, lido em tempo
+constante, sem varrer o dataset. Ele conta **estados, não mensagens** — cada
+evento é uma transição do que a entidade era para o que ela passou a ser, e o
+contador ajusta as duas pontas na mesma operação. Reprocessar o mesmo evento
+é uma transição de X para X: ajuste zero. É o que torna o número correto sob
+a entrega "pelo menos uma vez" do Kafka — que o `merge: sum` não é, por
+contrato.
+
+A leitura é SQL, numa tabela por contador no namespace `_counters`:
+
+```bash
+nishidb query --server 127.0.0.1:9142 --dataset servicos "SELECT olt, total FROM _counters.autenticados_por_olt ORDER BY total ASC LIMIT 5"
+```
+
+```bash
+nishidb query --server 127.0.0.1:9142 --dataset servicos "SELECT groupKey, total FROM _counters.autenticados_por_olt WHERE groupKey = 'PRCTA_G1M10'"
+```
+
+```bash
+nishidb query --server 127.0.0.1:9142 --dataset servicos "SELECT olt, slot, port, total FROM _counters.autenticados_por_pon WHERE olt = 'PRCTA_G1M10' ORDER BY total ASC LIMIT 3"
+```
+
+Cada tabela tem `groupKey` (o texto canônico do grupo — a própria OLT num
+`groupBy` de uma coluna; `olt|slot|port` num composto, com `|` e `\` escapados
+por `\`), as colunas do `groupBy` **abertas e tipadas**, e `total`. `groupKey`
+é a key da tabela: `WHERE groupKey = '…'` é busca direta; as outras colunas
+varrem os grupos (milhares, não milhões de linhas). **Um grupo que chega a
+zero permanece na tabela com `total: 0`** — o equipamento que apagou por
+inteiro é justamente o caso que interessa — e só sai quando nenhuma linha
+aponta mais para ele há mais que `retainEmptyGroups` (nunca por `total == 0`:
+um grupo com 500 linhas não autenticadas tem total zero e 500 linhas). Linha
+sem alguma coluna do `groupBy` (ausente ou nula) não é contada. Os totais são
+lidos no **presente**: eles não entram no snapshot de leitura da consulta — o
+que a consulta congela é o conjunto de grupos.
+
+Mudar `groupBy` ou `where` de um contador, ou declarar um contador novo num
+dataset que já tem linhas, **reconstrói o contador na abertura** varrendo as
+linhas vivas (o log `contador.construido` diz o motivo e quanto custou — a
+ordem de grandeza de uma varredura completa). Mudar `maxGroups` não
+reconstrói; um teto abaixo dos grupos em uso é recusado na subida. Um grupo
+novo acima do teto é recusado em runtime: a linha entra, **não é contada**, e
+`nishidb_counter_groups_refused_total` sobe — é o alarme.
+
+```bash
+nishidb counters --server 127.0.0.1:9142 --dataset servicos
+```
+
+```bash
+nishidb counters --server 127.0.0.1:9142 --dataset servicos --audit
+```
+
+```bash
+nishidb counters --config nishidb.yaml --dataset servicos --rebuild
+```
+
+Sem ação, `counters` lista cada contador: grupos vivos, teto, aposentados,
+recusados pelo teto, órfãs e a última auditoria. `--audit` recalcula por
+varredura e compara com o mantido — exit 3 se algum grupo divergir, é
+corrupção de índice derivado. `--rebuild` reconstrói: **segura o writer pela
+varredura inteira**, a ingestão para até acabar. `--server` usa as rotas ADMIN
+`POST /v1/counters/audit` e `POST /v1/counters/rebuild` no servidor no ar;
+`--config` faz o mesmo com o servidor **parado** (toma o flock, como
+`offsets`).
+
+A auditoria com `--server` corre sob um snapshot de leitura **sem parar a
+ingestão**: congela os totais e abre o snapshot no mesmo instante, depois
+varre. "Viva" para o contador é linha com location e sem lápide — a linha cujo
+prazo venceu e que o coletor ainda não lapidou continua contada até o coletor
+chegar, e a auditoria a conta também. Se o journal do snapshot estourar o teto
+no meio, a auditoria é **inconclusiva** (exit 5), nunca um relatório
+inventado.
+
+Pré-requisitos do caso de uso que motivou o desenho, fora deste repositório: o
+produtor precisa publicar **com chave** (senão eventos da mesma entidade caem
+em partições diferentes e chegam fora de ordem) e com um **número de sequência
+inteiro no primeiro nível** do documento, para que o stale check descarte o
+evento atrasado. Sem isso o contador está certo sobre um estado errado.
+
 ### SQL suportado (v1)
 
 ```sql
@@ -1219,6 +1323,10 @@ suporte em cliente nenhum:
 SELECT name, type, auto, index, indexed, parent, occurrences, typeMismatches, coercions FROM _meta.fields
 SELECT name FROM _meta.fields WHERE parent = 'persistent'
 ```
+
+E `_counters.<nome>`, uma tabela por contador declarado no YAML, lê os
+contadores mantidos na escrita (ver "Contadores mantidos na escrita" acima).
+Um `FROM _outro.x` é recusado nomeando os namespaces que existem.
 
 `occurrences` é quantas vezes a chave apareceu no documento; `typeMismatches`,
 quantas dessas não couberam no tipo da coluna; `coercions`, quantas chegaram

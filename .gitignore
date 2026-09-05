@@ -20,3 +20,7 @@ clients/python/dist/
 clients/python/**/__pycache__/
 clients/python/.mypy_cache/
 clients/python/.ruff_cache/
+
+# Amostras de tópico usadas para medir propostas (ver planning/contadores-mantidos-na-escrita.md §12).
+# Não são versionadas: são dados de produção de terceiros, e a proposta registra o que foi medido.
+samples/
