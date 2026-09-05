@@ -9,6 +9,7 @@ import (
 
 	nishiconfig "github.com/nishisan-dev/nishidb/internal/config"
 	"github.com/nishisan-dev/nishidb/internal/contadores"
+	"github.com/nishisan-dev/nishidb/internal/metakafka"
 	"github.com/nishisan-dev/nishidb/internal/protocolo"
 	"github.com/nishisan-dev/nishidb/internal/query"
 	"github.com/nishisan-dev/nishidb/internal/query/binder"
@@ -96,7 +97,7 @@ func runQuery(args []string, amb Ambiente) int {
 		return ExitUso
 	}
 
-	st, compilado, fecha, err := abreParaConsulta(cfg, *dataset)
+	st, compilado, spec, fecha, err := abreParaConsulta(cfg, *dataset)
 	if err != nil {
 		fmt.Fprintln(amb.Stderr, "query:", err)
 		dicaDeServidor(err, *argConfig, *dataset, amb)
@@ -112,6 +113,23 @@ func runQuery(args []string, amb Ambiente) int {
 	if err := contadores.Registra(eng, *dataset, st); err != nil {
 		avisa(amb, "query: %v\n", err)
 		return ExitUso
+	}
+	// `_meta.kafka` responde aqui com o que EXISTE fora do servidor: a spec
+	// (tópico, grupo, bootstrap, enabled) e a posição durável do checkpoint.
+	// Sem consumidor, as colunas vivas — fila, desfecho, marca d'água,
+	// watchdog — são NULL, e o `state` também: este processo não observa
+	// ingestão nenhuma, e DEGRADED ("ainda subindo") seria mentira. Com
+	// `enabled: false`, o estado é DISABLED, que o YAML prova sozinho.
+	//
+	// Só no dataset DECLARADO, como no servidor: a irmã não tem fonte própria.
+	if spec != nil {
+		if err := metakafka.Registra(eng, *dataset, metakafka.Fonte{
+			Declarada: metakafka.DoYAML(spec.Source.Kafka),
+			Duraveis:  st.SourceOffsets,
+		}); err != nil {
+			avisa(amb, "query: %v\n", err)
+			return ExitUso
+		}
 	}
 
 	// O caminho local recebe os MESMOS valores. Ignorá-los aqui faria a flag

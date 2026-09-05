@@ -1,0 +1,67 @@
+@startuml
+title _meta.kafka: uma consulta, um instante
+
+skinparam defaultTextAlignment left
+
+participant "executor" as EX
+participant "fonte\n(_meta.kafka)" as F
+participant "dataset\n(servidor)" as D
+participant "Consumidor" as C
+participant "broker" as B
+
+== abertura da consulta ==
+EX -> F: AbreSnapshot()
+F -> D: Consumidor() sob d.mu
+note right of D
+  resolvido NA HORA:
+  o ponteiro troca a cada
+  recriação do watchdog
+end note
+D --> F: consumidor corrente (ou nil)
+
+alt há consumidor
+  F -> C: Instantaneo(ctx de 2s)
+  alt marca d'água vencida
+    C -> B: ListEndOffsets
+    B --> C: fim do log por partição
+  else dentro da validade
+    note right of C
+      reusa a última leitura:
+      consulta em laço não
+      vira carga no broker
+    end note
+  end
+  C --> F: posições, fila, desfecho, partições
+else sem consumidor
+  note right of F
+    colunas vivas = NULL
+    ("não há o que medir")
+  end note
+end
+
+F -> D: SourceOffsets() (offset durável)
+F -> F: monta o RETRATO (imutável)
+note right of F
+  uma linha por partição;
+  ou UMA de resumo, quando
+  não há partição nenhuma
+end note
+F --> EX: Snapshot{Epoca, LimiteRowID}
+
+== leitura das linhas ==
+loop por linha
+  EX -> F: GetByRowID(snap, id)
+  F -> F: lê do retrato da época
+  note right of F
+    nenhuma ida ao broker aqui:
+    todas as linhas carregam o
+    MESMO markAt, e
+    lag == hwm - aplicado
+  end note
+  F --> EX: record
+end
+
+== fecho ==
+EX -> F: FechaSnapshot(snap)
+F -> F: descarta o retrato
+@enduml

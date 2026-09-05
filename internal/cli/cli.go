@@ -381,31 +381,34 @@ func fechandoStore(st *storage.Store, causa error) error {
 //
 // O fechamento devolve os DOIS Stores, na ordem certa: a irmã usa o dicionário
 // do base, então ela fecha primeiro.
-func abreParaConsulta(cfg *nishiconfig.Config, nome string) (*storage.Store, *schema.Compiled, func(), error) {
+// A spec devolvida é a do dataset DECLARADO, e é nil quando o que se abriu é a
+// tabela IRMÃ: ela não tem YAML próprio nem fonte própria, e é isso que faz o
+// `_meta.kafka` não ser registrado sobre ela — a ingestão dela é a do base.
+func abreParaConsulta(cfg *nishiconfig.Config, nome string) (*storage.Store, *schema.Compiled, *schema.DatasetSpec, func(), error) {
 	if arquivoExiste(cfg.SpecDoDataset(nome)) {
-		st, compilado, _, err := abreDataset(cfg, nome)
+		st, compilado, spec, err := abreDataset(cfg, nome)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
-		return st, compilado, func() { _ = st.Close() }, nil
+		return st, compilado, spec, func() { _ = st.Close() }, nil
 	}
 	base, err := datasetQueDerivaAIrma(cfg, nome)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	stBase, compiladoBase, spec, err := abreDataset(cfg, base)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	stIrma, _, err := abreHistorico(cfg, spec, compiladoBase, stBase.FieldDict())
 	if err != nil {
-		return nil, nil, nil, fechandoStore(stBase, err)
+		return nil, nil, nil, nil, fechandoStore(stBase, err)
 	}
 	compiladoIrma, err := spec.DerivaHistorico().Compile(stBase.FieldDict())
 	if err != nil {
-		return nil, nil, nil, errors.Join(fechandoStore(stIrma, err), stBase.Close())
+		return nil, nil, nil, nil, errors.Join(fechandoStore(stIrma, err), stBase.Close())
 	}
-	return stIrma, compiladoIrma, func() {
+	return stIrma, compiladoIrma, nil, func() {
 		_ = stIrma.Close()
 		_ = stBase.Close()
 	}, nil

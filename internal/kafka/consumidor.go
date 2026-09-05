@@ -596,6 +596,21 @@ func (c *Consumidor) poll(ctx context.Context) error {
 			return err
 		}
 
+		// O instante do último lote é marcado AQUI, uma vez por LOTE e só
+		// quando ele traz alguma coisa: é o poller que responde "o Kafka
+		// ainda entrega?", e é este o ponto em que o lote existe. No writer
+		// custaria um relógio por evento, e "aplicado" já é o que o Desfecho
+		// conta.
+		//
+		// A guarda existe porque o fetch PODE voltar vazio — rebalance, erro
+		// por partição — e ali ela separa "o Kafka entregou" de "o cliente
+		// acordou". Ela NÃO é observável pela bancada de unidade, onde o
+		// PollRecords bloqueia enquanto não há registros e nenhum poll vazio
+		// acontece; o teste que a acompanha diz isso em vez de fingir o
+		// contrário (TestUltimoLoteNaoAndaSemProducao).
+		if fetches.NumRecords() > 0 {
+			c.met.marcaLote(time.Now())
+		}
 		fetches.EachRecord(func(r *kgo.Record) {
 			if ctx.Err() != nil {
 				return

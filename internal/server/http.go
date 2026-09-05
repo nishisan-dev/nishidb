@@ -61,7 +61,7 @@ func (s *Servidor) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		espera.Add(1)
 		go func(c *kafka.Consumidor) {
 			defer espera.Done()
-			ctxD, cancelaD := context.WithTimeout(ctx, prazoDaMarcaDagua)
+			ctxD, cancelaD := context.WithTimeout(ctx, kafka.PrazoDaMarcaDagua)
 			defer cancelaD()
 			c.AtualizaMarcaDagua(ctxD)
 		}(cons)
@@ -76,13 +76,6 @@ func (s *Servidor) handleMetrics(w http.ResponseWriter, r *http.Request) {
 func timeoutDoScrape(r *http.Request) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(r.Context(), 5*time.Second)
 }
-
-// prazoDaMarcaDagua é o teto de UMA consulta de fim de log, por dataset.
-//
-// Folgado dentro dos 5 s do scrape: mesmo com vários datasets em paralelo, o
-// pior caso de cada um é este, e não a soma. Estourá-lo omite as séries
-// daquele dataset naquela raspagem, que é a resposta honesta.
-const prazoDaMarcaDagua = 2 * time.Second
 
 // handleHealth serve o §94.
 //

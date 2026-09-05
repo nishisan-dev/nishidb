@@ -155,6 +155,21 @@ curl -s localhost:9142/v1/health
 curl -s localhost:9142/metrics | grep nishidb_ingest_events_total
 ```
 
+Ou por SQL, sem HTTP nem painel — os mesmos números, lidos das mesmas
+estruturas, uma linha por partição:
+
+```bash
+nishidb query --server 127.0.0.1:9142 --dataset eventos "SELECT partition, appliedOffset, highWatermark, lag, lastBatchAt, queueRecords, state FROM _meta.kafka ORDER BY partition"
+```
+
+`highWatermark` e `lag` saem **NULL** quando a marca d'água do broker venceu ou
+a partição não foi respondida — a consulta busca no broker só quando a marca
+está vencida, com o mesmo prazo do scrape. Um zero ali diria "está em dia" a
+quem perdeu o broker, e é por isso que a ausência é ausência. Com o servidor
+PARADO, o `nishidb query --config` responde a mesma tabela com o que existe
+fora dele: tópico, grupo, bootstrap e o offset durável do checkpoint, com as
+colunas vivas e o `state` em NULL.
+
 O health responde **503** quando `status` não é `UP`, para um balanceador
 tirar a instância de rotação sem interpretar o corpo. A chave `kafka` AGREGA:
 basta um dataset parado para ela sair de `UP`, e `detalhes` nomeia qual.

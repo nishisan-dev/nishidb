@@ -818,6 +818,53 @@ O mesmo namespace lista os contadores mantidos na escrita em
 `_meta.counters` (ver "Contadores mantidos na escrita"), e os totais de cada
 um saem em `_counters.<nome>`.
 
+![_meta.kafka: uma consulta, um instante — o retrato colhido na abertura, a marca d'água buscada só quando vencida, e as linhas lidas do retrato](https://uml.nishisan.dev/proxy?src=https://git-raw.nishisan.dev/nishisan-dev/nishidb/main/docs/diagrams/meta_kafka.puml)
+
+**`_meta.kafka` responde o estado da fonte, uma linha por partição** — offset
+aplicado, offset durável, fim do log, lag, mais tópico, grupo, bootstrap,
+estado da ingestão, profundidade da fila, os contadores desde a subida e o
+watchdog:
+
+```sql
+SELECT partition, appliedOffset, highWatermark, lag, state FROM _meta.kafka ORDER BY partition
+```
+
+Três decisões a sustentam.
+
+**Duas classes de coluna, uma tabela.** As de PARTIÇÃO — `partition`,
+`appliedOffset`, `committedOffset`, `highWatermark`, `lag`, `markAt` — são o
+que só existe por partição; as de DATASET — identidade, estado, fila,
+desfecho, watchdog — repetem em toda linha, porque uma linha por partição que
+não trouxesse o estado do dataset obrigaria uma segunda consulta para
+responder "e a fila, está cheia?". Quando não há partição nenhuma — dataset
+sem Kafka, `enabled: false`, consumidor ainda sem atribuição — a tabela
+responde UMA linha de resumo, com `id = 'source'` e as colunas de partição
+NULL. `SELECT *` nunca é erro: "não consome" é uma resposta.
+
+**NULL é ausência, e ausência não é zero.** Sem consumidor, fila e desfecho
+são NULL — "não há o que medir" e "medi e deu zero" são afirmações diferentes,
+e é a mesma doutrina do coletor da fila. `highWatermark` e `lag` são NULL
+quando a marca d'água do broker venceu ou a partição não foi respondida: um
+zero ali diria "está em dia" a quem perdeu o broker. `watchdogTrips` é NULL
+onde não há goroutine de ingestão, porque "não há watchdog" não é "nunca
+recriou".
+
+**Um instante só por consulta.** Aqui a tabela diverge do `_counters`, que
+congela o conjunto e lê os totais no presente. As colunas desta são uma
+medição com carimbo — `markAt` diz quando o broker respondeu, e
+`lag == highWatermark - appliedOffset` é invariante dentro de uma leitura —,
+então o retrato inteiro é colhido na abertura da consulta. Lendo no presente
+linha a linha, um resultado de três partições carregaria três `markAt` e um lag
+que não fecha com o HWM da mesma linha, que é o painel discordando de si mesmo
+(`TestMetaKafkaMostraUmInstanteSo`).
+
+Os números saem das MESMAS estruturas que alimentam o `/metrics` e o
+`/v1/stats` — `TestOInstantaneoEAsSeriesDaPosicaoConcordam` compara os três
+por partição —, e a marca d'água só é buscada no broker quando venceu, com o
+mesmo prazo do scrape. O ponteiro do consumidor troca a cada recriação do
+watchdog, então a tabela o resolve por closure a cada consulta: capturá-lo no
+registro descreveria para sempre um consumidor morto.
+
 **Recusa de roteamento é erro do cliente, e por isso é tipada.** Namespace
 inexistente, namespace sem tabela nenhuma e tabela inexistente saem por
 `binder.ErroEm` com a posição do nome depois do ponto, o que as põe na família
