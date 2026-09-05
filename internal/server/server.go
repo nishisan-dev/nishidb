@@ -31,6 +31,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/kafka"
 	"github.com/nishisan-dev/nishidb/internal/logging"
 	"github.com/nishisan-dev/nishidb/internal/materializer"
+	"github.com/nishisan-dev/nishidb/internal/metakafka"
 	"github.com/nishisan-dev/nishidb/internal/metrics"
 	"github.com/nishisan-dev/nishidb/internal/query"
 	"github.com/nishisan-dev/nishidb/internal/query/orcamento"
@@ -62,7 +63,46 @@ type dataset struct {
 	// erroIngestao é a falha que impediu a ingestão de subir ou a parou. O
 	// dataset continua consultável; é o health que reporta.
 	erroIngestao error
-	mu           sync.Mutex
+	// trips e desistiu são as DUAS séries do watchdog, criadas em rodaIngestao
+	// e guardadas aqui para que a `_meta.kafka` as leia. São os MESMOS handles
+	// que alimentam nishidb_kafka_watchdog_{trips,desistiu} — a série É o
+	// armazenamento, e um contador ao lado seria a segunda fonte que este
+	// projeto trata como defeito.
+	//
+	// Nil enquanto rodaIngestao não começou, e nil para sempre num dataset sem
+	// ingestão. É a resposta certa: série de watchdog num dataset que não
+	// consome afirmaria "existe um watchdog e ele nunca disparou".
+	trips    *metrics.SerieContador
+	desistiu *metrics.SerieMedidor
+	mu       sync.Mutex
+}
+
+// consumidorCorrente devolve o consumidor de AGORA, sob o MESMO lock que o
+// /v1/stats e o /metrics usam.
+//
+// O nil é EXPLÍCITO: um `return d.cons` direto entregaria um
+// (*kafka.Consumidor)(nil) embrulhado numa interface NÃO-nil, e quem a
+// recebesse chamaria Instantaneo sobre ele — panic num caminho de consulta,
+// escondendo "a ingestão ainda não subiu".
+func (d *dataset) consumidorCorrente() metakafka.Consumido {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.cons == nil {
+		return nil
+	}
+	return d.cons
+}
+
+// vigiaCorrente lê as duas séries do watchdog. ok=false enquanto não há
+// goroutine de ingestão — e aí as colunas saem NULL, porque "não há watchdog"
+// e "nunca recriou" são afirmações diferentes.
+func (d *dataset) vigiaCorrente() (trips uint64, desistiu, ok bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.trips == nil {
+		return 0, false, false
+	}
+	return d.trips.Valor(), d.desistiu.Valor() == 1, true
 }
 
 func (d *dataset) falha(err error) {
@@ -427,6 +467,24 @@ func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*
 		st:   st,
 		mat:  mat,
 	}
+	// `_meta.kafka` entra no motor DEPOIS de d existir: a tabela resolve o
+	// consumidor por closure sobre ele, e o consumidor só nasce em
+	// rodaIngestao — capturá-lo aqui guardaria nil para sempre. A tabela é
+	// registrada mesmo num dataset sem Kafka: "não consome" é uma resposta, e
+	// `SELECT * FROM _meta.kafka` nunca pode ser erro.
+	//
+	// A tabela irmã não a recebe, como não recebe a `_meta.counters`: a
+	// ingestão dela é a do dataset base.
+	if err := metakafka.Registra(s.eng, spec.Name, metakafka.Fonte{
+		Declarada:  metakafka.DoYAML(spec.Source.Kafka),
+		Consumidor: d.consumidorCorrente,
+		Duraveis:   st.SourceOffsets,
+		Estado:     func() (string, string) { return estadoDaIngestao(d) },
+		Vigia:      d.vigiaCorrente,
+	}); err != nil {
+		return nil, fechandoStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
+	}
+
 	// A irmã abre por ÚLTIMO, depois de o base estar inteiro: ela recebe o
 	// dicionário dele e espelha o Compiled dele, e as duas coisas exigem que
 	// ele já exista.
@@ -564,6 +622,11 @@ func (s *Servidor) rodaIngestao(ctx context.Context, d *dataset) {
 		"1 quando o watchdog esgotou as tentativas e a ingestão do dataset ficou parada.",
 		metrics.LabelDataset).Com(d.nome)
 	desistiu.Set(0)
+	// Publicadas no dataset ANTES do laço, e é o que permite a `_meta.kafka`
+	// ler um zero LEGÍTIMO desde a primeira tentativa em vez de NULL.
+	d.mu.Lock()
+	d.trips, d.desistiu = trips, desistiu
+	d.mu.Unlock()
 
 	tentativas := cfg.WatchdogTentativas
 	for tentativa := 0; ; tentativa++ {
