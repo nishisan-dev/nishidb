@@ -117,7 +117,7 @@ func TabelaMeta(cs []Contado) (*schema.Compiled, query.Store, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("contadores: spec da tabela %s.%s inválida: %w", meta.Namespace, TabelaMetaCounters, err)
 	}
-	sc, err := spec.Compile(novoDicionario())
+	sc, err := spec.Compile(schema.NovoDicionarioEmMemoria())
 	if err != nil {
 		return nil, nil, fmt.Errorf("contadores: compilando a tabela %s.%s: %w", meta.Namespace, TabelaMetaCounters, err)
 	}

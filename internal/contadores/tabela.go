@@ -1,10 +1,8 @@
 package contadores
 
 import (
-	"errors"
 	"fmt"
 	"strings"
-	"sync"
 
 	"github.com/nishisan-dev/nishidb/internal/index/valuekey"
 	"github.com/nishisan-dev/nishidb/internal/query"
@@ -81,7 +79,7 @@ func Tabela(def contador.Definicao, l Leitor) (*schema.Compiled, query.Store, er
 	if err != nil {
 		return nil, nil, fmt.Errorf("contadores: spec da tabela %s.%s inválida: %w", schema.NamespaceContadores, def.Nome, err)
 	}
-	sc, err := spec.Compile(novoDicionario())
+	sc, err := spec.Compile(schema.NovoDicionarioEmMemoria())
 	if err != nil {
 		return nil, nil, fmt.Errorf("contadores: compilando a tabela %s.%s: %w", schema.NamespaceContadores, def.Nome, err)
 	}
@@ -148,48 +146,6 @@ func Registra(eng *query.Engine, dataset string, st *storage.Store) error {
 		return err
 	}
 	return eng.RegistraVirtual(dataset, meta.Namespace, TabelaMetaCounters, msc, mfonte)
-}
-
-// dicionario é o FieldDictionary da tabela virtual: em memória, sem disco —
-// a tabela não persiste nada.
-type dicionario struct {
-	mu    sync.Mutex
-	ids   map[string]types.FieldID
-	nomes []string
-}
-
-func novoDicionario() *dicionario { return &dicionario{ids: map[string]types.FieldID{}} }
-
-func (d *dicionario) LookupOrCreate(name []byte) (types.FieldID, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if id, ok := d.ids[string(name)]; ok {
-		return id, nil
-	}
-	d.nomes = append(d.nomes, string(name))
-	id := types.FieldID(len(d.nomes))
-	d.ids[string(name)] = id
-	return id, nil
-}
-
-func (d *dicionario) TypeHint(types.FieldID) (types.FieldType, bool) { return types.TypeNull, false }
-func (d *dicionario) SetTypeHint(types.FieldID, types.FieldType) error {
-	return errors.New("contadores: a tabela virtual não fixa tipo")
-}
-
-func (d *dicionario) Len() int {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return len(d.nomes)
-}
-
-func (d *dicionario) Name(id types.FieldID) (string, bool) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if id < 1 || int(id) > len(d.nomes) {
-		return "", false
-	}
-	return d.nomes[id-1], true
 }
 
 // fonte é o Store virtual: cada rowID é um id de grupo, e o record é
