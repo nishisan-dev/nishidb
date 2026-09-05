@@ -14,7 +14,8 @@ import (
 )
 
 // Region é um arquivo mapeado em memória (MAP_SHARED), com acesso atômico a
-// words de 64 bits alinhadas. Vem em duas variedades, e a diferença é de
+// words de 64 bits e meias-words de 32 bits alinhadas. Vem em duas
+// variedades, e a diferença é de
 // CAPACIDADE, não de conveniência:
 //
 //   - crescível (Open): PROT_READ|PROT_WRITE, mantém o descritor aberto porque
@@ -305,6 +306,38 @@ func (r *Region) AtomicAnd64(off int64, v uint64) {
 	defer r.mu.RUnlock()
 	r.exigeMutavel("AtomicAnd64", off)
 	atomic.AndUint64(r.word(off), v)
+}
+
+// meiaWord devolve o ponteiro para a meia-word de 32 bits alinhada em off.
+// Chamar com RLock.
+//
+// Existe para o vetor de grupos do contador, que guarda 4 bytes por linha:
+// metade do custo residente do índice de 64. O alinhamento exigido é de 4, e
+// não de 8, porque a entrada ímpar de um vetor de meias-words começa no meio
+// de uma word — exigir 8 recusaria metade das linhas.
+func (r *Region) meiaWord(off int64) *uint32 {
+	if off%4 != 0 {
+		panic(fmt.Sprintf("mmap: offset %d desalinhado (exige múltiplo de 4)", off))
+	}
+	if off < 0 || off+4 > r.size {
+		panic(fmt.Sprintf("mmap: offset %d fora dos limites (size=%d)", off, r.size))
+	}
+	return (*uint32)(unsafe.Pointer(&r.data[off]))
+}
+
+// AtomicLoad32 lê uma meia-word de 32 bits com semântica acquire.
+func (r *Region) AtomicLoad32(off int64) uint32 {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return atomic.LoadUint32(r.meiaWord(off))
+}
+
+// AtomicStore32 grava uma meia-word de 32 bits com semântica release.
+func (r *Region) AtomicStore32(off int64, v uint32) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	r.exigeMutavel("AtomicStore32", off)
+	atomic.StoreUint32(r.meiaWord(off), v)
 }
 
 // Msync força a escrita das páginas sujas para o arquivo (MS_SYNC).
