@@ -6,7 +6,10 @@ package query
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 
 	"github.com/nishisan-dev/nishidb/internal/query/binder"
@@ -34,6 +37,11 @@ type registro struct {
 	sch     *schema.Compiled
 	store   Store
 	planner *planner.Planner
+	// virtuais são as tabelas virtuais registradas sob este dataset, por
+	// namespace e por tabela — hoje as `_counters.<nome>`. Cada uma é um
+	// registro completo (schema sintético, store virtual, planner), e passa
+	// pelo MESMO pipeline que um dataset de verdade.
+	virtuais map[string]map[string]*registro
 }
 
 // Engine mantém os datasets registrados. Register é de configuração; Execute é
@@ -70,6 +78,132 @@ func (e *Engine) Register(name string, sch *schema.Compiled, st Store) error {
 	return nil
 }
 
+// RegistraVirtual associa `namespace.tabela`, sob o dataset já registrado, a
+// um schema sintético e um store virtual.
+//
+// A tabela entra no MESMO pipeline de um dataset de verdade — binder, planner
+// com métricas, executor com top-N e orçamento —, o que é uma diferença
+// deliberada em relação ao `_meta`: as consultas do caso de uso dos contadores
+// (`ORDER BY total ASC LIMIT 5` sobre milhares de grupos) são exatamente as que
+// o caminho de top-N e as métricas de plano existem para servir. O `_meta`
+// continua fora do registro: ele descreve o dataset alvo por consulta e não
+// tem store fixo.
+//
+// O namespace tem de começar com "_", que é o prefixo que a compilação da spec
+// reserva; o nome da tabela tem de ser o Name do schema sintético, porque é
+// contra ele que o binder confere o FROM.
+func (e *Engine) RegistraVirtual(dataset, namespace, tabela string, sch *schema.Compiled, st Store) error {
+	switch {
+	case !strings.HasPrefix(namespace, "_"):
+		return fmt.Errorf("query: namespace virtual %q sem o prefixo reservado \"_\"", namespace)
+	case tabela == "":
+		return fmt.Errorf("query: tabela virtual sem nome em %s", namespace)
+	case sch == nil:
+		return fmt.Errorf("query: tabela virtual %s.%s sem schema compilado", namespace, tabela)
+	case sch.Name != tabela:
+		return fmt.Errorf("query: tabela virtual %s.%s com schema chamado %q; o binder confere o FROM contra o Name", namespace, tabela, sch.Name)
+	case st == nil:
+		return fmt.Errorf("query: tabela virtual %s.%s sem store", namespace, tabela)
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	reg, ok := e.datasets[dataset]
+	if !ok {
+		return fmt.Errorf("query: dataset %q não registrado; a tabela virtual %s.%s não tem sob o que viver", dataset, namespace, tabela)
+	}
+	reg.declaraNamespace(namespace)
+	if _, existe := reg.virtuais[namespace][tabela]; existe {
+		return fmt.Errorf("query: tabela virtual %s.%s já registrada em %q", namespace, tabela, dataset)
+	}
+	reg.virtuais[namespace][tabela] = &registro{sch: sch, store: st, planner: planner.New(st, &e.planStats)}
+	return nil
+}
+
+// DeclaraNamespace registra que o namespace existe sob o dataset, mesmo sem
+// tabela nenhuma. É o que separa "o dataset não declara contador" de "esse
+// namespace não existe": um `FROM _counters.x` num dataset sem `counters:`
+// tem de responder o primeiro, e um `FROM _outro.x` o segundo.
+func (e *Engine) DeclaraNamespace(dataset, namespace string) error {
+	if !strings.HasPrefix(namespace, "_") {
+		return fmt.Errorf("query: namespace virtual %q sem o prefixo reservado \"_\"", namespace)
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	reg, ok := e.datasets[dataset]
+	if !ok {
+		return fmt.Errorf("query: dataset %q não registrado", dataset)
+	}
+	reg.declaraNamespace(namespace)
+	return nil
+}
+
+func (reg *registro) declaraNamespace(namespace string) {
+	if reg.virtuais == nil {
+		reg.virtuais = make(map[string]map[string]*registro)
+	}
+	if reg.virtuais[namespace] == nil {
+		reg.virtuais[namespace] = make(map[string]*registro)
+	}
+}
+
+// namespacesConhecidos lista o que um `FROM _x.y` pode endereçar, para a
+// mensagem de recusa: o `_meta` fixo mais os registrados neste dataset.
+func (reg *registro) namespacesConhecidos() []string {
+	out := []string{meta.Namespace}
+	for ns := range reg.virtuais {
+		out = append(out, ns)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// tabelaVirtual resolve `namespace.tabela` sob o dataset, com as duas recusas
+// nomeando o que existe — ninguém é mandado procurar um dataset que nunca quis.
+func (reg *registro) tabelaVirtual(dataset, namespace, tabela string) (*registro, error) {
+	porTabela, ok := reg.virtuais[namespace]
+	if !ok {
+		return nil, fmt.Errorf("namespace %q não existe; existem %s", namespace, strings.Join(reg.namespacesConhecidos(), " e "))
+	}
+	v, ok := porTabela[tabela]
+	if !ok {
+		if len(porTabela) == 0 {
+			return nil, fmt.Errorf("o dataset %q não declara tabela nenhuma em %s", dataset, namespace)
+		}
+		nomes := make([]string, 0, len(porTabela))
+		for n := range porTabela {
+			nomes = append(nomes, n)
+		}
+		sort.Strings(nomes)
+		return nil, fmt.Errorf("%s não tem tabela %q no dataset %q; existem: %s", namespace, tabela, dataset, strings.Join(nomes, ", "))
+	}
+	return v, nil
+}
+
+// renomeiaTabelaVirtual troca o nome interno do schema sintético pelo nome
+// qualificado que o usuário escreveu nas mensagens do binder — o mesmo
+// remédio do `_meta`: "coluna desconhecida em x" mandaria procurar uma tabela
+// chamada x, que não existe em lugar nenhum.
+func renomeiaTabelaVirtual(err error, namespace, tabela string) error {
+	var be *binder.Error
+	if !errors.As(err, &be) {
+		return err
+	}
+	qualificado := namespace + "." + tabela
+	msg := strings.ReplaceAll(be.Error(), `"`+tabela+`"`, `"`+qualificado+`"`)
+	if !strings.Contains(msg, qualificado) {
+		msg += " (em " + qualificado + ")"
+	}
+	return &erroDeTabelaVirtual{msg: msg, err: err}
+}
+
+type erroDeTabelaVirtual struct {
+	msg string
+	err error
+}
+
+func (e *erroDeTabelaVirtual) Error() string { return e.msg }
+func (e *erroDeTabelaVirtual) Unwrap() error { return e.err }
+
 // Execute compila e abre a query. Erros de sintaxe e de bind saem AQUI, antes
 // de qualquer leitura de dado.
 //
@@ -93,8 +227,24 @@ func (e *Engine) Execute(ctx context.Context, dataset, sql string, params []type
 	// porque este é o ponto por onde o servidor e o CLI passam os dois — pô-lo
 	// numa camada acima faria a introspecção existir só para quem falasse HTTP.
 	if meta.Reconhece(stmt) {
-		caps, _ := reg.store.(meta.Capacidades)
-		return meta.Abre(ctx, stmt, reg.sch, caps, params)
+		if stmt.Namespace == meta.Namespace {
+			caps, _ := reg.store.(meta.Capacidades)
+			return meta.Abre(ctx, stmt, reg.sch, caps, params)
+		}
+		// Os outros namespaces reservados são tabelas REGISTRADAS sob o
+		// dataset, e correm pelo mesmo pipeline que ele.
+		e.mu.RLock()
+		v, err := reg.tabelaVirtual(dataset, stmt.Namespace, stmt.Dataset)
+		e.mu.RUnlock()
+		if err != nil {
+			return nil, err
+		}
+		bq, err := binder.Bind(stmt, v.sch, params)
+		if err != nil {
+			return nil, renomeiaTabelaVirtual(err, stmt.Namespace, stmt.Dataset)
+		}
+		plan := v.planner.Plan(bq)
+		return executor.Open(ctx, bq, plan, executor.Options{Store: v.store, Metrics: &e.metrics})
 	}
 	bq, err := binder.Bind(stmt, reg.sch, params)
 	if err != nil {

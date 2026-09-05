@@ -68,7 +68,10 @@ func Abre(ctx context.Context, st *parser.SelectStmt, alvo *schema.Compiled, cap
 		return nil, fmt.Errorf("%s: dataset alvo não informado", Namespace)
 	}
 	if st.Namespace != Namespace {
-		return nil, fmt.Errorf("namespace %q não existe; o único reservado é %q", st.Namespace, Namespace)
+		// Quem roteia os OUTROS namespaces reservados (`_counters`) é o motor,
+		// pelo registro de tabelas virtuais; chegar aqui com outro namespace
+		// é chamador que não passou pelo motor.
+		return nil, fmt.Errorf("namespace %q não existe; este ponto serve só %q (os demais namespaces são registrados no motor)", st.Namespace, Namespace)
 	}
 	if st.Dataset != TabelaFields {
 		return nil, fmt.Errorf("%s não tem tabela %q; existe %s.%s", Namespace, st.Dataset, Namespace, TabelaFields)
