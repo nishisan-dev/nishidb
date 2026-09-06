@@ -286,10 +286,10 @@ O passo 6 entrega **de graça**, pelo código que já existe: baixa de liveness 
 ```go
 // internal/types — mora aqui porque dois provedores implementam a interface:
 // o Store real e o fakestorage.
-type Presenca uint8
+type Presence uint8
 const (
-    PresenceAbsent Presenca = iota // key nunca existiu
-    PresenceLive                    // estado corrente legível
+    PresenceAbsent Presence = iota // key nunca existiu
+    PresenceLive                   // estado corrente legível
     PresenceExpired                // rowId e sequence válidos; payload é lápide
 )
 GetByKey(key, buf []byte) (types.Record, []byte, types.Presence, error)

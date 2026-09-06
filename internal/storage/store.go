@@ -2108,7 +2108,7 @@ func (s *Store) duracaoDoPayload(payload []byte) time.Duration {
 // por falta de informação. Ela ganha carência na primeira varredura.
 //
 // O instante entra por PARÂMETRO, e não por s.agora(), porque quem pergunta
-// decide o relógio. O leitor passa o Instante do seu Snapshot — congelado na
+// decide o relógio. O leitor passa o Instant do seu Snapshot — congelado na
 // abertura da consulta —, e é isso que impede uma linha viva em T0 de sumir do
 // meio do resultado. O writer passa s.agora(): a expiração oportunista é dele,
 // e ela decide sobre o presente.

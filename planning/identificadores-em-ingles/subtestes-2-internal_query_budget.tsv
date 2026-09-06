@@ -1,0 +1,6 @@
+arquivo	velho	novo
+internal/query/budget/budget_test.go	Global.Reserva/Devolve	Global.Reserve/Return
+internal/query/budget/budget_test.go	PorQuery.Admite/Libera	PerQuery.Admit/Release
+internal/query/budget/budget_test.go	PorQuery.Teto	PerQuery.Ceiling
+internal/query/budget/budget_test.go	PorQuery.Usado	PerQuery.Used
+internal/query/budget/budget_test.go	Global.Usado	Global.Used

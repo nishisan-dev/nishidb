@@ -86,11 +86,11 @@ normalmente e o snapshot lê a location nova.
 ```go
 // internal/storage/snapshot.go
 type Snapshot struct {
-    Epoca       uint64      // versão: o que estava publicado em T0
-    Instante    time.Time   // relógio congelado da expiração
+    Epoch      uint64      // versão: o que estava publicado em T0
+    Instant    time.Time   // relógio congelado da expiração
     LimitRowID types.RowID // teto: rows nascidas depois não aparecem
-    BaseRowID   types.RowID // piso: a purga não abre buraco por baixo
-    id          uint64      // handle do registro de snapshots vivos
+    BaseRowID  types.RowID // piso: a purga não abre buraco por baixo
+    id         uint64      // handle do registro de snapshots vivos
 }
 
 func (s *Store) AbreSnapshot() Snapshot

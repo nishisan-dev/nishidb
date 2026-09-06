@@ -1,38 +1,44 @@
-# Tokens que a passada de prosa NUNCA substitui, e que o gate de citação
-# pendurada NUNCA cobra. Cada linha entrou porque uma rodada de verdade a
-# aplicou onde não era citação de identificador, e a linha foi revertida à mão.
+# Tokens que a passada de prosa NUNCA substitui e que o gate de citação
+# pendurada NUNCA cobra. A proteção é TOTAL e corta antes de qualquer oráculo:
+# cega as duas ferramentas ao mesmo tempo. Por isso só entra aqui token que NÃO
+# É CITAÇÃO DE IDENTIFICADOR renomeado — nome de coluna, chave de exemplo,
+# placeholder de sintaxe, campo de corpus, palavra de prosa.
 #
-# São de três tipos:
-#   - placeholder e chave de exemplo (`campo`, `valor`, `tipo`, `chave`);
-#   - VERBO PT-BR que começa frase e é homônimo de um método: `Existe`, de
-#     `Presenca.Existe`, aparece em três godoc de internal/types abrindo
-#     oração ("Existe como sentinela próprio porque..."), e ali é verbo, não
-#     citação. A forma qualificada (`presenca.Existe()`) continua sendo
-#     reescrita: o protegido vale para o token nu;
-#   - nome de campo do CORPUS e da tabela virtual, que é dado em disco
-#     (`campos`, `texto`, `hora`);
-#   - identificador vivo de pacote que este ciclo ainda não mapeou e que é
-#     homônimo de um que ele mapeou (`Nome` de metrics.Amostra, `Colunas` e
-#     `Duracao` de internal/storage, `BytesRetidos` de Store e de
-#     materializer.Decodificado, `escreveAtomico` de index/segindex, `emite` do
-#     executor, `seg` e `erro` de variáveis locais, `campo` dos helpers de
-#     teste).
+# O que era o grosso desta lista SAIU quando o renamecite ganhou o oráculo da
+# declaração viva (collectDeclarations): `Nome`, `Colunas`, `Duracao`,
+# `BytesRetidos` e `escreveAtomico` são identificadores VIVOS de pacotes que o
+# ciclo ainda não mapeou, e agora quem os segura é a árvore — a ferramenta os
+# reporta como `pulado ... ainda declarado <pacote>.<nome>` e o gate os aceita
+# como declaração viva. Proteger identificador vivo era esconder do gate as
+# citações penduradas do MESMO nome dentro do pacote que o perdeu.
 #
-# O quarto tipo é o que a ferramenta não tem como decidir sozinha: ela sabe o
-# que o LOTE renomeou, não o que o resto do módulo ainda declara. O gate de
-# citação pendurada sabe (lê as declarações do AST), e por isso nenhum destes
-# nomes aparece na lista dele — protegê-los aqui não esconde citação nenhuma.
-BytesRetidos
-Colunas
-Duracao
+# Cada linha abaixo entrou porque uma rodada de verdade a aplicou onde não era
+# citação, e a linha foi revertida à mão.
+#
+#   - placeholder e chave de exemplo: `campo`, `valor`, `tipo`, `chave`
+#     (`--param <tipo>:<valor>`, `[tipo][payload]`, `"campo": null`);
+#   - nome de campo do CORPUS e da tabela virtual, que é dado em disco:
+#     `campos`, `texto`, `hora`;
+#   - nome de campo de EXEMPLO em bloco ```go de documento: `Data`, de
+#     `RecordBuffer{Data []byte}` na spec (§21), que não é `buildinfo.Data`;
+#   - identificador de pacote que o ciclo não mapeou e que o oráculo não
+#     alcança: `emite` (do executor) e `seg` (variável local) são minúsculos, e
+#     o gate nem os procura;
+#   - VERBO PT-BR que abre frase de godoc e é homônimo de método renomeado:
+#     `Existe`. É o único caso que o oráculo NÃO resolve, porque
+#     `Presenca.Existe` virou `Presence.Exists` e o nome não existe mais em
+#     lugar nenhum — sem a proteção, "Existe como sentinela próprio porque…"
+#     (internal/types/types.go:66,84,144) e os dois blocos ```go de
+#     planning/colunas-congeladas-e-ttl-condicional-plano.md:793,1419 viram
+#     `Exists`. O idioma "Existe porque…" abre godoc em mais de vinte arquivos
+#     deste repositório.
+Data
 Existe
-Nome
 campo
 campos
 chave
 emite
 erro
-escreveAtomico
 hora
 seg
 texto
