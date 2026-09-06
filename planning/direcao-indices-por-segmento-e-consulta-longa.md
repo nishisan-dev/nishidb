@@ -141,7 +141,7 @@ history:
 
 Decisão deliberada, e ela contraria a formulação inicial da ideia. O produto já
 decidiu isso para a consulta, com razão escrita em
-[orcamento.go](../internal/query/orcamento/orcamento.go):
+[orcamento.go](../internal/query/budget/orcamento.go):
 
 > *"É por processo, e não por dataset, pela mesma razão que o §82 dá ao
 > `maxConcurrent`: todos os datasets de uma instância dividem o mesmo orçamento

@@ -22,7 +22,7 @@ var nomeDeTeste = regexp.MustCompile(`\bTest[A-Z][A-Za-z0-9_]*`)
 // propósito. Ver o godoc abaixo.
 var arquivosDoIndicePorSegmento = []string{
 	"internal/metrics/nomes.go",
-	"internal/protocolo/documentos.go",
+	"internal/protocol/documentos.go",
 	"internal/server/historico.go",
 	"internal/server/metricas_indice.go",
 	"internal/server/metricas_indice_test.go",

@@ -113,7 +113,7 @@ usa.
 
 ### O journal de versões
 
-Pacote novo `internal/storage/versoes`, dono único da estrutura, com testes
+Pacote novo `internal/storage/versions`, dono único da estrutura, com testes
 próprios. Heap, não mmap (é estado de sessão, morre com o processo).
 
 ```go
@@ -202,7 +202,7 @@ Testes: `TestOsDoisPlanosEnxergamOMesmoConjuntoDeRows`,
 
 ### E2 — Isolamento: journal de versões e pin
 
-Pacote `internal/storage/versoes`. `recordApply` ganha o discriminador de
+Pacote `internal/storage/versions`. `recordApply` ganha o discriminador de
 versionamento; Put e Expira versionam, copy-forward não. Leitura versionada no
 `GetByRowID` e no `lookup` por key. Pin por refcount consultado por
 `candidatos(ratio)` ([compaction.go:689](internal/storage/compaction.go:689)).

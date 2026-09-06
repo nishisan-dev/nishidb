@@ -10,7 +10,7 @@ import java.util.Map;
  * <p>A linha de schema traz o nome ({@code "BIGINT"}, {@code "TIMESTAMP"}), e
  * quem precisa do inteiro é o {@code ResultSetMetaData}. A tabela mora aqui, e
  * não espalhada pelo ResultSet, pela mesma razão que a de SQLState: um gate do
- * lado Go lê as constantes de internal/protocolo/jdbc.go e cobra que cada nome
+ * lado Go lê as constantes de internal/protocol/jdbc.go e cobra que cada nome
  * apareça NESTE arquivo, antes de qualquer JVM subir.
  *
  * <p><b>Nome desconhecido vira OTHER, e nunca exceção.</b> Um servidor mais

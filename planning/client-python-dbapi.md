@@ -61,7 +61,7 @@ with nishidb.connect("nishidb://db01:9142/radius_sessions", user="leitor") as cx
 Verificado no código, não suposto:
 
 - **`Cursor.description` sai pronto da linha de schema.** `protocolo.Coluna`
-  ([protocolo.go:126](internal/protocolo/protocolo.go:126)) tem `name`, `type`, `jdbc`,
+  ([protocolo.go:126](internal/protocol/protocolo.go:126)) tem `name`, `type`, `jdbc`,
   `nullable`, `precision`, `scale`, `displaySize` — os sete campos da tupla do DB-API, sem
   faltar nem sobrar. Nenhuma tabela de tipos nova no client, e um tipo novo no servidor
   **não exige release do pacote**.
@@ -71,7 +71,7 @@ Verificado no código, não suposto:
   posicional/ordenado, **nunca por dict de nome** — um `json.loads` ingênuo perde a coluna
   repetida em silêncio.
 - **Os três desfechos do stream já estão separados** em `protocolo.Leitor`
-  ([stream.go:45](internal/protocolo/stream.go:45)): schema, fecho de sucesso, fecho de erro,
+  ([stream.go:45](internal/protocol/stream.go:45)): schema, fecho de sucesso, fecho de erro,
   e **stream que acaba sem fecho é falha**. É o contrato a portar, linha a linha.
 - **A tabela código→exceção tem oráculo do lado Go.** `internal/gates/jdbc_test.go` já parseia
   `protocolo.go` com `go/ast` e cobra que toda constante `Cod*` tenha SQLState. O gate Python
@@ -189,7 +189,7 @@ soltos. E acrescentar os diretórios à lista que `testesDoRepositorio`
    `TestOPomDoDriverNaoTemDependenciaDeRuntime`);
 2. a versão do `pyproject.toml` bate com `nishidb.__version__` (gêmeo de
    `TestAVersaoAnunciadaPeloDriverEhADoArtefato`);
-3. **paridade Go↔Python dos códigos**: parseia `internal/protocolo/protocolo.go` com `go/ast`,
+3. **paridade Go↔Python dos códigos**: parseia `internal/protocol/protocolo.go` com `go/ast`,
    coleta toda constante `Cod*` de valor string, e reprova se algum literal não aparecer em
    `erros.py`. **Código novo em Go sem exceção Python reprova no CI Go, antes de qualquer
    intérprete Python.**
@@ -457,10 +457,10 @@ rodam os alvos do Makefile, e a `python-version` do workflow **bate com o `requi
 ## Arquivos críticos
 
 **A ler (contrato, não mexer):**
-- [internal/protocolo/protocolo.go](internal/protocolo/protocolo.go) — `Coluna` (126), molduras, códigos de erro (180-256)
-- [internal/protocolo/documentos.go](internal/protocolo/documentos.go) — `/v1/metadata` e `/v1/stats`, `Saude`
-- [internal/protocolo/stream.go](internal/protocolo/stream.go) — **o contrato a portar**, linha a linha
-- [internal/protocolo/jdbc.go](internal/protocolo/jdbc.go) — a tabela única de tipos
+- [internal/protocol/protocolo.go](internal/protocol/protocolo.go) — `Coluna` (126), molduras, códigos de erro (180-256)
+- [internal/protocol/documentos.go](internal/protocol/documentos.go) — `/v1/metadata` e `/v1/stats`, `Saude`
+- [internal/protocol/stream.go](internal/protocol/stream.go) — **o contrato a portar**, linha a linha
+- [internal/protocol/jdbc.go](internal/protocol/jdbc.go) — a tabela única de tipos
 - [internal/cli/query_remota.go](internal/cli/query_remota.go) — o cliente Go de referência
 - [internal/cli/credencial.go](internal/cli/credencial.go) — as doutrinas de cliente a herdar
 - [scripts/nishidb-stats.py](scripts/nishidb-stats.py) — o precedente de Python neste repo

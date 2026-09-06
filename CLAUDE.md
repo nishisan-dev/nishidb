@@ -86,12 +86,12 @@ Pacotes que estruturam o todo:
   `orcamento` (admissão de memória), `spill` (transbordo do ORDER BY) e `meta`
   (namespace `_meta` como Store virtual atrás do mesmo pipeline). Tabelas
   virtuais registradas por namespace (`Engine.RegistraVirtual`) correm pelo
-  mesmo pipeline; `internal/contadores` compila o bloco `counters:` contra o
+  mesmo pipeline; `internal/counters` compila o bloco `counters:` contra o
   schema e serve `_counters.<nome>` e `_meta.counters` — é a cola entre
   schema/predicado e o storage, e por isso mora fora dos dois (o motor manda
   `_meta.fields` para o pacote `meta` e qualquer outra tabela do `_meta` para
   o registro de virtuais).
-  `internal/predicado` é o avaliador compartilhado entre o WHERE e o `when:` das
+  `internal/predicate` é o avaliador compartilhado entre o WHERE e o `when:` das
   regras de TTL — os dois têm de ser o MESMO código. `internal/typeparse` é
   pacote folha usado pela ingestão E pelo binder: é o que impede as duas coerções
   de divergir.
@@ -101,8 +101,8 @@ Pacotes que estruturam o todo:
   + lag no broker + fila vazia), pelo MESMO `kafka.Abre` da subida.
 - `internal/metakafka` — a tabela virtual `_meta.kafka`. Mora fora de
   `internal/kafka` e de `internal/query` porque precisa dos dois, e nenhum dos
-  dois pode importar o outro (mesmo argumento de `internal/contadores`).
-- `internal/server` + `internal/protocolo` — protocolo remoto `/v1/*`.
+  dois pode importar o outro (mesmo argumento de `internal/counters`).
+- `internal/server` + `internal/protocol` — protocolo remoto `/v1/*`.
   `protocolo` é pacote próprio porque tem quatro falantes (servidor, CLI remoto,
   JDBC, Python) que não podem redeclarar o formato.
 - `internal/cli` — `cli.Run(args, Ambiente)` devolve exit code sem `os.Exit`.

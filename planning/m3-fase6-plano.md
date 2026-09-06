@@ -159,7 +159,7 @@ Fontes, na ordem: `Store.Stats()` (`store.go:1233`), `Engine.Metrics()`/`PlanMet
 
 | Arquivo | Mudança |
 |---|---|
-| **`internal/protocolo/protocolo.go`** *(novo pacote)* | Tipos do request/resposta/moldura, códigos de erro e a tabela §73 (`JDBCName(types.FieldType) string`). Mora fora do `server` porque o **CLI cliente também decodifica a moldura** (D8) — duas definições divergiriam no primeiro campo novo |
+| **`internal/protocol/protocolo.go`** *(novo pacote)* | Tipos do request/resposta/moldura, códigos de erro e a tabela §73 (`JDBCName(types.FieldType) string`). Mora fora do `server` porque o **CLI cliente também decodifica a moldura** (D8) — duas definições divergiriam no primeiro campo novo |
 | `internal/query/executor/executor.go` | `RowIterator` ganha `Columns() []ColMeta`; o `iterador` já tem `it.cols` populado no `Open`. Tipo próprio (`ColMeta{Name, Type}`) em vez de expor `ColView`, que carrega `Val`/`Null` válidos só durante uma row |
 | `internal/query/engine.go` | Sem mudança de assinatura — `Execute` já devolve `RowIterator` |
 | `internal/config/config.go` | `serverBindPadrao` → `127.0.0.1` (D1); bloco `runtime.query.maxConcurrent` (default 16, `units.InteiroPositivo`); `ResultBatchSize()` ganha seu primeiro leitor |
@@ -176,7 +176,7 @@ Fontes, na ordem: `Store.Stats()` (`store.go:1233`), `Engine.Metrics()`/`PlanMet
 
 > **Commits por bloco** (é a convenção deste repositório, não os atômicos do CLAUDE.md global): um commit por tarefa abaixo.
 
-- [ ] **T1 — Contrato do wire.** Pacote `internal/protocolo` com request, moldura, códigos de erro e a tabela §73. `RowIterator.Columns()` no executor. Testes de round-trip do formato e de recusa dos tipos fora dos quatro (D9).
+- [ ] **T1 — Contrato do wire.** Pacote `internal/protocol` com request, moldura, códigos de erro e a tabela §73. `RowIterator.Columns()` no executor. Testes de round-trip do formato e de recusa dos tipos fora dos quatro (D9).
 - [ ] **T2 — Configuração.** Bind default loopback + WARN de exposição; `runtime.query.maxConcurrent`; leitor de `resultBatchSize`. Testes: default novo, chave inválida recusada com nome e valor, WARN emitido só no bind aberto.
 - [ ] **T3 — `POST /v1/query`.** Handler completo: validação, semáforo (503 + `Retry-After`), execução, moldura, flush por lote (D4: `StreamWriter.Flush()` **e depois** `http.Flusher.Flush()` — sem os dois, os bytes ficam no buffer de 64 KiB e o "streaming" não sai do processo), tradução de erro em status (§4.3), logs do §95.
 - [ ] **T4 — Métricas do §92.** As quatro séries de query + `full_scans`. Teste que raspa `/metrics` depois de uma query e confere nome, tipo e valor.

@@ -76,7 +76,7 @@ O trabalho é **ciclo de vida de arquivo e coordenação com o writer**, não mo
 | `internal/config/config.go` | `storage.compaction.{enabled,minimumLiveRatio}` |
 | `internal/server/metricas_dataset.go` | `storage_bytes`, `garbage_bytes`, séries de compaction |
 | `internal/kafka/writer.go` | Débito 56 — checkpoint por tempo |
-| `internal/cli/`, `internal/server/`, `internal/protocolo/` | §96 leitura: `status`, `datasets`, `inspect` |
+| `internal/cli/`, `internal/server/`, `internal/protocol/` | §96 leitura: `status`, `datasets`, `inspect` |
 
 ---
 
@@ -1426,7 +1426,7 @@ git commit -m "Destrava o lag congelado: checkpoint também por tempo, não só 
 ### Task 10: §96 — `status`, `datasets` e `inspect`, remotos
 
 **Files:**
-- Modify: `internal/cli/cli.go` (dispatch ~linha 113), `internal/server/documentos.go`, `internal/protocolo/documentos.go`
+- Modify: `internal/cli/cli.go` (dispatch ~linha 113), `internal/server/documentos.go`, `internal/protocol/documentos.go`
 - Create: `internal/cli/operacao.go`, `internal/cli/operacao_test.go`
 
 Nascem **remotos** (`--server`), pelo argumento do flock exclusivo: se forem só locais, repetem o débito 54 — o operador teria que derrubar o servidor para perguntar o status dele. `/v1/stats` e `/v1/metadata` já são a base, e `internal/cli/query_remota.go` é o molde do cliente. **Só leitura** (D3): `checkpoint` e `compact` são do M5, atrás de ADMIN.
@@ -1459,7 +1459,7 @@ func TestStatusRemotoFuncionaComOServidorNoAr(t *testing.T) {
 - [ ] **Step 5: Commit**
 
 ```bash
-git add internal/cli/ internal/server/ internal/protocolo/
+git add internal/cli/ internal/server/ internal/protocol/
 git commit -m "Entrega os comandos de leitura do §96 pelo caminho que o flock não barra"
 ```
 

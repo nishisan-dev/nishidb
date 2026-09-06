@@ -127,7 +127,7 @@ type Config struct {
 	// quase todo ele tem leitor: query.maxConcurrent é o teto de consultas
 	// simultâneas do §80, query.maxLongRunning é o sub-pool da consulta longa,
 	// e memoryTarget/query.maxBufferPerQuery são o orçamento de memória de
-	// consulta (internal/query/orcamento), cujo primeiro consumidor real é o
+	// consulta (internal/query/budget), cujo primeiro consumidor real é o
 	// StreamWriter.
 	//
 	// managedMemoryTarget continua aceita e sem efeito, e não em silêncio:
@@ -559,7 +559,7 @@ func (c *Config) MaxLongRunning() int { return c.maxLongRunning }
 //
 // Os dois eram parseados e nunca lidos (metade do débito 15). A chave não era
 // só inócua: quem escreve `memoryTarget: 1GiB` dimensiona a máquina por ela, e
-// não havia teto nenhum. Hoje alimentam internal/query/orcamento, cujo primeiro
+// não havia teto nenhum. Hoje alimentam internal/query/budget, cujo primeiro
 // consumidor real é o StreamWriter — que também nunca encolhia (débito 28), e
 // cujo texto já dizia que o remédio era esta chave.
 //

@@ -30,8 +30,8 @@
 
 | Arquivo | Responsabilidade |
 |---|---|
-| `internal/predicado/predicado.go` | `Slot`, `Coleta`, `Programa`, `Compila`, `Avalia` — o avaliador, movido do executor |
-| `internal/predicado/predicado_test.go` | Testes do avaliador, movidos de `predicate_prova_test.go` |
+| `internal/predicate/predicado.go` | `Slot`, `Coleta`, `Programa`, `Compila`, `Avalia` — o avaliador, movido do executor |
+| `internal/predicate/predicado_test.go` | Testes do avaliador, movidos de `predicate_prova_test.go` |
 | `internal/schema/congelada.go` | Validação e compilação de `frozenFrom` |
 | `internal/schema/congelada_test.go` | Testes de validação de `frozenFrom` |
 | `internal/schema/regrattl.go` | Validação e compilação da lista `ttl:` |
@@ -66,10 +66,10 @@
 
 Refatoração pura. Critério de aceite: nenhuma asserção de teste existente muda.
 
-### Task 1: Pacote `internal/predicado`
+### Task 1: Pacote `internal/predicate`
 
 **Files:**
-- Create: `internal/predicado/predicado.go`, `internal/predicado/predicado_test.go`
+- Create: `internal/predicate/predicado.go`, `internal/predicate/predicado_test.go`
 - Modify: `internal/query/executor/collect.go` (arquivo inteiro), `internal/query/executor/predicate.go` (arquivo inteiro), `internal/query/executor/executor.go`, `internal/query/executor/sort.go`, `internal/query/executor/topn.go`, `internal/query/executor/row.go`
 
 **Interfaces:**
@@ -99,9 +99,9 @@ Refatoração pura. Critério de aceite: nenhuma asserção de teste existente m
 - [ ] **Passo 1: mover os arquivos preservando o histórico**
 
 ```bash
-git mv internal/query/executor/collect.go internal/predicado/predicado.go
-git mv internal/query/executor/predicate.go internal/predicado/programa.go
-git mv internal/query/executor/predicate_prova_test.go internal/predicado/predicado_test.go
+git mv internal/query/executor/collect.go internal/predicate/predicado.go
+git mv internal/query/executor/predicate.go internal/predicate/programa.go
+git mv internal/query/executor/predicate_prova_test.go internal/predicate/predicado_test.go
 ```
 
 Ajuste `package executor` → `package predicado` no topo dos três arquivos.
@@ -157,9 +157,9 @@ No `executor`, crie os apelidos locais para não reescrever os laços de `sort.g
 // collect.go, agora com 4 linhas
 package executor
 
-import "github.com/nishisan-dev/nishidb/internal/predicado"
+import "github.com/nishisan-dev/nishidb/internal/predicate"
 
-// O avaliador mora em internal/predicado desde a extração: `type = 2` numa
+// O avaliador mora em internal/predicate desde a extração: `type = 2` numa
 // regra de TTL e `type = 2` num WHERE têm de ser o MESMO código, senão as
 // duas divergem em silêncio nos casos de coerção.
 type slot = predicado.Slot
@@ -1067,7 +1067,7 @@ git commit -m "Troca o bloco ttl por uma lista de regras condicionais"
   RegrasTTL []RegraTTL
   Prazo     *CompiledField // o _expiresIn; nil sem regras
 
-  // internal/predicado — a forma COMPILADA
+  // internal/predicate — a forma COMPILADA
   type RegraCompilada struct {
       Prog    *Programa // nil na regra de fundo (casa com tudo)
       Slots   binder.Slots
@@ -1077,7 +1077,7 @@ git commit -m "Troca o bloco ttl por uma lista de regras condicionais"
   ```
 
 **Por que a regra compilada NÃO mora em `schema`:** compilar exige o `binder`, e o
-`binder` importa `schema` — o ciclo seria imediato. `internal/predicado` é o único ponto
+`binder` importa `schema` — o ciclo seria imediato. `internal/predicate` é o único ponto
 da árvore que pode importar os dois. O `Compiled` fica com a forma validada em texto, e
 quem chama `CompilaRegras` é o **materializer**, no construtor, que importa os três sem
 problema.
@@ -1095,7 +1095,7 @@ func TestCompilaRegrasRecusaWhenSobreCampoDeSistema(t *testing.T) { /* em predic
 
 - [ ] **Passo 2: rodar e ver falhar**
 
-Run: `go test ./internal/schema/ ./internal/predicado/ -run Prazo -v`
+Run: `go test ./internal/schema/ ./internal/predicate/ -run Prazo -v`
 Expected: FAIL
 
 - [ ] **Passo 3: registrar o nome no conjunto a compilar**
@@ -1176,14 +1176,14 @@ func CompilaRegras(regras []schema.RegraTTL, sc *schema.Compiled) ([]RegraCompil
 
 - [ ] **Passo 6: rodar**
 
-Run: `go test ./internal/schema/ ./internal/predicado/ -v`
+Run: `go test ./internal/schema/ ./internal/predicate/ -v`
 Expected: PASS
 
 - [ ] **Passo 7: lint e commit**
 
 ```bash
 make lint
-git add internal/schema/ internal/predicado/
+git add internal/schema/ internal/predicate/
 git commit -m "Compila as regras de ttl e registra o campo de prazo"
 ```
 

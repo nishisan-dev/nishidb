@@ -694,7 +694,7 @@ leitores concorrentes têm universos diferentes, e um campo os fundiria num só.
 anterior de uma linha continua fisicamente onde estava até a compaction
 aposentá-la — o que falta para alcançá-la é só o endereço, e o writer já o tem
 na mão no passo do `applyRecord` que desconta a liveness do segmento antigo.
-`internal/storage/versoes` guarda `(rowId, location anterior, época)`: 24 bytes
+`internal/storage/versions` guarda `(rowId, location anterior, época)`: 24 bytes
 por atualização, e **zero enquanto nenhuma consulta está aberta**. Sem leitor
 vivo o journal não recebe uma entrada sequer, e a ingestão paga apenas a
 comparação de um atômico.
@@ -959,7 +959,7 @@ linha vira duas e o cliente dessincroniza.
 ## Os clients
 
 O protocolo tem TRÊS falantes do lado de fora, e é por isso que
-`internal/protocolo` existe como pacote próprio em vez de morar dentro do
+`internal/protocol` existe como pacote próprio em vez de morar dentro do
 servidor: o `nishidb query --server`, o driver JDBC (`clients/jdbc`) e o client
 Python (`clients/python`). Com os tipos dentro do servidor, cada cliente
 redeclararia o formato e as definições divergiriam no primeiro campo
@@ -1072,7 +1072,7 @@ de cair num default próprio.
 
 **A memória de consulta virou orçamento, e não mais uma chave sem leitor.**
 `runtime.memoryTarget` e `runtime.query.maxBufferPerQuery` eram parseados e nunca
-lidos (metade do débito 15). `internal/query/orcamento` é o teto: dois
+lidos (metade do débito 15). `internal/query/budget` é o teto: dois
 `atomic.Int64`, sem mutex e sem alocação — o consumidor é chamado uma vez por
 row, e o gate de alocação do executor exige igualdade exata entre 1.000 e 8.000
 linhas. O `Global` recusa na ADMISSÃO (503 + `Retry-After`, ao lado do semáforo)
@@ -2234,7 +2234,7 @@ registrada sob o dataset — uma linha por contador, com a definição (`name`,
 (`rows`, `total`, `groups`, `maxGroups`, `retired`, `refused`, `orphans`,
 `bytes`, `auditDivergent`, `auditAt`, os dois últimos NULL até a primeira
 auditoria).
-Ela mora em `internal/contadores`, não no pacote `meta`, porque o `meta`
+Ela mora em `internal/counters`, não no pacote `meta`, porque o `meta`
 descreve o dataset pela definição estática e não conhece o storage; o motor
 manda `_meta.fields` para o `meta` e qualquer outra tabela do `_meta` para o
 registro. Existe em todo dataset, vazia quando não há `counters:`.

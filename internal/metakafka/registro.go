@@ -3,7 +3,7 @@
 //
 // Mora fora de `internal/kafka` e fora de `internal/query` porque precisa dos
 // dois lados, e nenhum dos dois pode passar a importar o outro — é o mesmo
-// argumento do `internal/contadores`, e a mesma prova: `go list -deps` mostra
+// argumento do `internal/counters`, e a mesma prova: `go list -deps` mostra
 // que a ingestão não conhece o motor de consulta e o motor não conhece a
 // ingestão. Um pacote separado é o que mantém isso verdadeiro.
 package metakafka
@@ -59,7 +59,7 @@ func DoYAML(k *schema.KafkaSpec) Declarada {
 
 // Consumido é o que a tabela precisa do consumidor CORRENTE. Interface, e não
 // o *kafka.Consumidor, pela mesma razão do Leitor e do Contado em
-// internal/contadores: o teste da tabela não precisa de broker, e
+// internal/counters: o teste da tabela não precisa de broker, e
 // *kafka.Consumidor a satisfaz.
 type Consumido interface {
 	Instantaneo(ctx context.Context) kafka.Instantaneo

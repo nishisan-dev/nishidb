@@ -170,7 +170,7 @@ func TestOTargetDoDriverEstaNoGitignore(t *testing.T) {
 // acusaria. O CI Go reprova antes de qualquer JVM subir.
 //
 // A lista não é escrita à mão em lugar nenhum: sai do go/ast sobre
-// internal/protocolo/protocolo.go de um lado, e do texto de Codigos.java do
+// internal/protocol/protocolo.go de um lado, e do texto de Codigos.java do
 // outro. É a mesma técnica de
 // TestVersaoDoGolangciLintNoWorkflowBateComAInstrucaoDoMakefile — comparar
 // duas EXTRAÇÕES, nunca uma extração contra um valor decorado, que envelhece
@@ -220,7 +220,7 @@ func leArquivo(t *testing.T, relativo string) string {
 // código.
 func codigosDoProtocolo(t *testing.T) map[string]string {
 	t.Helper()
-	caminho := filepath.Join(raizDoRepo, "internal/protocolo/protocolo.go")
+	caminho := filepath.Join(raizDoRepo, "internal/protocol/protocolo.go")
 	fset := token.NewFileSet()
 	arquivo, err := parser.ParseFile(fset, caminho, nil, 0)
 	if err != nil {
@@ -299,10 +299,10 @@ func TestOsTiposNaoPesquisaveisDoDriverSaoOsNomesQueOGoProduz(t *testing.T) {
 	}
 }
 
-// nomesJDBCDoProtocolo extrai as constantes JDBC* de internal/protocolo/jdbc.go.
+// nomesJDBCDoProtocolo extrai as constantes JDBC* de internal/protocol/jdbc.go.
 func nomesJDBCDoProtocolo(t *testing.T) map[string]string {
 	t.Helper()
-	caminho := filepath.Join(raizDoRepo, "internal/protocolo/jdbc.go")
+	caminho := filepath.Join(raizDoRepo, "internal/protocol/jdbc.go")
 	fset := token.NewFileSet()
 	arquivo, err := parser.ParseFile(fset, caminho, nil, 0)
 	if err != nil {

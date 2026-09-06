@@ -313,7 +313,7 @@ dataset abre pelo CLI e pelo servidor. **Corta aqui e não antes** porque a fia�
   ponto em `as` na compilação (F3) fecha a categoria inteira.
 - **`maxNestedCols`:** molde completo do `maxRows` nas quatro pontas — YAML
   ponteiro, validação `> 0`, `Compiled`, `/v1/metadata`, campo na `Requisicao`
-  ([protocolo.go:44-50](internal/protocolo/protocolo.go:44)), função de teto no
+  ([protocolo.go:44-50](internal/protocol/protocolo.go:44)), função de teto no
   servidor que **recusa acima e nunca clampa** ([query.go:189-208](internal/server/query.go:189)),
   e `setMaxNestedCols` no `Statement` omitindo quando o pedido excede
   ([NishiStatement.java:121-127](clients/jdbc/src/main/java/dev/nishisan/nishidb/jdbc/NishiStatement.java:121)).

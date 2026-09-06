@@ -2,7 +2,7 @@ package executor
 
 import "github.com/nishisan-dev/nishidb/internal/predicate"
 
-// O avaliador mora em internal/predicado desde a extração: `type = 2` numa
+// O avaliador mora em internal/predicate desde a extração: `type = 2` numa
 // regra de TTL e `type = 2` num WHERE têm de ser o MESMO código, senão as
 // duas divergem em silêncio nos casos de coerção.
 //

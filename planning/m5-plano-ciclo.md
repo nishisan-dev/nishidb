@@ -73,7 +73,7 @@ issues arrumadas; distribuição do identifier medida e registrada.
   fallback `runtime/debug.ReadBuildInfo()` (`vcs.revision`/`vcs.time`).
 - Superfícies (teste primeiro em cada): `nishidb --version`/`version` no dispatch de
   [cli.go](internal/cli/cli.go); log de subida em `runServer`; campo em
-  `protocolo.Estatisticas` ([documentos.go:63](internal/protocolo/documentos.go:63))
+  `protocolo.Estatisticas` ([documentos.go:63](internal/protocol/documentos.go:63))
   alimentado por `handleStats` — **isto adianta o
   `DatabaseMetaData.getDatabaseProductVersion()` da Fase 7**; cabeçalho do painel
   ([nishidb-stats.py](scripts/nishidb-stats.py)); campo `nishidb_version` no `Report`
@@ -165,7 +165,7 @@ errada. **Sem lockout** (auto-DoS contra usernames conhecidos); em vez disso atr
 fixo ~100 ms em toda falha, **antes** da vaga do §80. Papéis: READ nas rotas de
 leitura; **ADMIN ⊇ READ** (travado por teste). Ordem do middleware testada: 401 antes
 de ler corpo, antes de tomar vaga, antes de revelar 404. Códigos novos em
-[protocolo.go:162](internal/protocolo/protocolo.go:162): `UNAUTHENTICATED` (401 +
+[protocolo.go:162](internal/protocol/protocolo.go:162): `UNAUTHENTICATED` (401 +
 `WWW-Authenticate`), `FORBIDDEN` (403), `WRITER_FAILED`, `COMPACTION_BUSY`; mapeados
 em `codigoDoProtocolo` ([query_remota.go:124](internal/cli/query_remota.go:124)).
 Observabilidade: `nishidb_auth_failures_total{reason: header|usuario|senha}` (nunca
@@ -263,7 +263,7 @@ Pode começar após o merge da Fase B, em paralelo com a janela de observação 
    `executor.ColMeta` (semântica v1: toda coluna nullable; precision/displaySize por
    tipo da tabela §73). Campos JSON aditivos.
 2. Versão do produto: **já entregue no A3** — aqui só o driver consome.
-3. Mover `Saude` de [http.go:38](internal/server/http.go:38) para `internal/protocolo`.
+3. Mover `Saude` de [http.go:38](internal/server/http.go:38) para `internal/protocol`.
 4. Uniformizar o 405: `/metrics` e `/v1/health` registrados sem método no padrão,
    conferindo por dentro — todo erro sai `protocolo.CorpoErro`.
 5. **Débito 58**: `query --server` ganha `--param <tipo>:<valor>` repetível, 1:1 com os
@@ -275,7 +275,7 @@ Pode começar após o merge da Fase B, em paralelo com a janela de observação 
    inesperado que casa case-insensitive com {ORDER, GROUP, OFFSET, JOIN, HAVING,
    DISTINCT, UNION} emite o código novo nomeando a cláusula. Oráculos: `ORDER BY`
    produz o código; `SELECT "order"` e `WHERE order = 1` seguem funcionando.
-7. `setNull`: sem wire por decisão ([parametros.go:52](internal/protocolo/parametros.go:52))
+7. `setNull`: sem wire por decisão ([parametros.go:52](internal/protocol/parametros.go:52))
    — driver lança `SQLFeatureNotSupportedException`, limite documentado.
 
 ### D1 — O driver (`clients/jdbc/`, decisão D4: mesmo repositório)
@@ -285,7 +285,7 @@ Pode começar após o merge da Fase B, em paralelo com a janela de observação 
 - Connection string `jdbc:nishidb://host:9142/<dataset>` + `Properties` `user`,
   `password`, `tls`, `tlsCaFile`/trustStore (herda o contrato Basic da Fase 11).
 - `ResultSet` **streaming** portando `protocolo.Leitor`
-  ([stream.go:45](internal/protocolo/stream.go:45)): linha de schema, dados linha a
+  ([stream.go:45](internal/protocol/stream.go:45)): linha de schema, dados linha a
   linha, fecho obrigatório — stream sem fecho = `SQLException` de transporte (§128
   vale para o cliente também). Tabela código→`SQLState` derivada de
   `codigoDoProtocolo`, testada dos dois lados.

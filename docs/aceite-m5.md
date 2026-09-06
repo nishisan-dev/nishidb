@@ -123,6 +123,6 @@ certificado real (os testes geram o próprio par autoassinado):
 ```bash
 go test ./... -count=1
 go test ./internal/server/... ./internal/config/... ./internal/storage/... \
-    ./internal/cli/... ./internal/protocolo/... -race -count=1
+    ./internal/cli/... ./internal/protocol/... -race -count=1
 make lint
 ```

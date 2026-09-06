@@ -193,23 +193,23 @@ por mensagem) foi refutada na proposta porque Kafka entrega pelo menos uma vez e
 | `internal/storage/mmap/region.go` | `AtomicLoad32`/`AtomicStore32` (único pacote com unsafe) |
 | `internal/storage/rowindex/rowindex.go` | `denseFile` com tamanho de entrada parametrizado; `Denso32` exportado |
 | `internal/index/valuekey/valuekey.go` | `AppendComposta`/`DecodeComposta` + golden |
-| `internal/predicado/avaliador.go` (novo) | `AvaliadorDePayload`: programa + slots + reader, `Avalia(payload)` |
-| `internal/predicado/regra.go` | `CompilaCondicao` extraída de `CompilaRegras` |
-| `internal/storage/contador/` (novo) | `dicionario.go`, `contador.go`, `chavetexto.go`, `auditoria.go`, `aposentadoria.go` + testes |
+| `internal/predicate/avaliador.go` (novo) | `AvaliadorDePayload`: programa + slots + reader, `Avalia(payload)` |
+| `internal/predicate/regra.go` | `CompilaCondicao` extraída de `CompilaRegras` |
+| `internal/storage/counter/` (novo) | `dicionario.go`, `contador.go`, `chavetexto.go`, `auditoria.go`, `aposentadoria.go` + testes |
 | `internal/storage/checkpoint/manifest.go` | tag 0x8005, `ContadorInfo`, `Manifest.Contadores` |
 | `internal/storage/store.go` | `Options.CompilaContadores`, abertura, passo 7c do `applyRecord`, Close |
 | `internal/storage/contadores.go` (novo) | `adotaOuConstroiContadores`, reconstrução, auditoria sob snapshot, laço de aposentadoria, estatísticas |
 | `internal/storage/store_checkpoint.go` | `traceStep("msyncContadores")` |
 | `internal/schema/contador.go` (novo) | `ContadorSpec`, parse do bloco `counters:`, validação |
 | `internal/schema/spec.go` | `rawSpec.Counters`, `DatasetSpec.Contadores`, mensagem do prefixo `_` |
-| `internal/contadores/` (novo) | `compila.go` (spec → `contador.Definicao`), `tabela.go` (schema sintético + fonte virtual), `abertura.go` (callback) |
+| `internal/counters/` (novo) | `compila.go` (spec → `contador.Definicao`), `tabela.go` (schema sintético + fonte virtual), `abertura.go` (callback) |
 | `internal/query/engine.go` | `RegistraVirtual` + roteamento por namespace |
 | `internal/query/meta/meta.go` | mensagem de namespace desconhecido lista os existentes |
 | `internal/server/server.go`, `historico.go` | wiring do callback e do registro das tabelas |
 | `internal/server/contadores.go` (novo) | rotas `/v1/counters/audit` e `/v1/counters/rebuild` |
 | `internal/server/metricas_dataset.go`, `documentos.go` | séries e `/v1/stats` da mesma estrutura |
 | `internal/metrics/nomes.go` | constantes novas + `LabelCounter` |
-| `internal/protocolo/contadores.go` (novo), `documentos.go` | tipos de wire |
+| `internal/protocol/contadores.go` (novo), `documentos.go` | tipos de wire |
 | `internal/cli/counters.go` (novo), `cli.go` | subcomando, uso, exit codes |
 | `README.md`, `docs/architecture.md`, `docs/diagrams/contadores_flow.puml`, `docs/debitos.md`, `docs/aceite-contadores.md`, `CLAUDE.md`, `.gitignore` | documentação e aceite |
 
@@ -334,8 +334,8 @@ func DecodeComposta(chave []byte, dst []types.Value) ([]types.Value, error)
 ### Tarefa A3: `AvaliadorDePayload` no `predicado`
 
 **Arquivos:**
-- Criar: `internal/predicado/avaliador.go`, `avaliador_test.go`
-- Modificar: `internal/predicado/regra.go:77-120` (extrair `CompilaCondicao`)
+- Criar: `internal/predicate/avaliador.go`, `avaliador_test.go`
+- Modificar: `internal/predicate/regra.go:77-120` (extrair `CompilaCondicao`)
 
 **Interfaces produzidas:**
 ```go
@@ -361,12 +361,12 @@ func (a *AvaliadorDePayload) Avalia(payload []byte) (bool, error)
 
 ---
 
-## Bloco B — O motor do contador (`internal/storage/contador`)
+## Bloco B — O motor do contador (`internal/storage/counter`)
 
 ### Tarefa B1: dicionário de grupos
 
 **Arquivos:**
-- Criar: `internal/storage/contador/dicionario.go`, `dicionario_test.go`
+- Criar: `internal/storage/counter/dicionario.go`, `dicionario_test.go`
 
 **Formato de `grupos.dict`** (cópia deliberada do `fielddict` v2): header 8 bytes
 (`magic "NDBG"`, version 1); entradas `[u16 len][len bytes chave composta][crc32c]`
@@ -414,7 +414,7 @@ por grupo na internação e guardado ao lado da chave (tarefa B2 define
 ### Tarefa B2: o `Contador` — vetor, dobra, transição, texto da chave
 
 **Arquivos:**
-- Criar: `internal/storage/contador/contador.go`, `chavetexto.go`, `contador_test.go`, `chavetexto_test.go`, `alloc_gate_test.go` (+ `_race`)
+- Criar: `internal/storage/counter/contador.go`, `chavetexto.go`, `contador_test.go`, `chavetexto_test.go`, `alloc_gate_test.go` (+ `_race`)
 
 **Interfaces produzidas:**
 ```go
@@ -659,7 +659,7 @@ func (s *Store) EstatisticasDeContadores() []contador.Estatisticas
 ### Tarefa C3: auditoria sob snapshot e reconstrução em operação
 
 **Arquivos:**
-- Criar: `internal/storage/contador/auditoria.go` (tipos + comparação), `internal/storage/contadores.go` (`AuditaContadores`, `ReconstroiContadores`), testes
+- Criar: `internal/storage/counter/auditoria.go` (tipos + comparação), `internal/storage/contadores.go` (`AuditaContadores`, `ReconstroiContadores`), testes
 
 **Interfaces produzidas:**
 ```go
@@ -708,7 +708,7 @@ pela varredura inteira.
 ### Tarefa C4: ciclo de vida — aposentadoria de grupos vazios
 
 **Arquivos:**
-- Criar: `internal/storage/contador/aposentadoria.go`, testes; laço em `internal/storage/contadores.go`
+- Criar: `internal/storage/counter/aposentadoria.go`, testes; laço em `internal/storage/contadores.go`
 
 **Interfaces produzidas:**
 ```go
@@ -782,10 +782,10 @@ do schema compilado — D2), mesma nota de `validaRegrasTTL`.
 
 - [ ] **Passo 2: vermelho → implementar → verde → commit** — `schema: bloco counters com validação na subida`.
 
-### Tarefa D2: compilação das definições (`internal/contadores/compila.go`)
+### Tarefa D2: compilação das definições (`internal/counters/compila.go`)
 
 **Arquivos:**
-- Criar: `internal/contadores/compila.go`, `compila_test.go`, `abertura.go`
+- Criar: `internal/counters/compila.go`, `compila_test.go`, `abertura.go`
 
 **Interfaces produzidas:**
 ```go
@@ -839,10 +839,10 @@ schema sintético tem `name: <tabela>`. Erro do binder é renomeado para
 
 - [ ] **Passo 2: vermelho → implementar → verde → commit** — `query: registro de tabelas virtuais por namespace; _counters entra pelo mesmo pipeline`.
 
-### Tarefa E2: a tabela virtual (`internal/contadores/tabela.go`)
+### Tarefa E2: a tabela virtual (`internal/counters/tabela.go`)
 
 **Arquivos:**
-- Criar: `internal/contadores/tabela.go`, `tabela_test.go`, `alloc_gate_test.go`
+- Criar: `internal/counters/tabela.go`, `tabela_test.go`, `alloc_gate_test.go`
 
 **Interfaces produzidas:**
 ```go
@@ -902,7 +902,7 @@ montado em `buf[:0]` com `encoding.AppendField` em ordem de FieldID;
 ### Tarefa F1: métricas e `/v1/stats`
 
 **Arquivos:**
-- Modificar: `internal/metrics/nomes.go` (bloco "Contadores mantidos na escrita", com a razão de cada série; `LabelCounter = "counter"` com a nota "valor vem do YAML, conjunto fechado — nunca do cliente"), `internal/server/metricas_dataset.go` (`amostrasDeContadores(d) []metrics.Amostra` lendo `d.st.EstatisticasDeContadores()` UMA vez), `internal/protocolo/documentos.go` (`DatasetStats.Counters []ContadorStats`), `internal/server/documentos.go` (mesma chamada)
+- Modificar: `internal/metrics/nomes.go` (bloco "Contadores mantidos na escrita", com a razão de cada série; `LabelCounter = "counter"` com a nota "valor vem do YAML, conjunto fechado — nunca do cliente"), `internal/server/metricas_dataset.go` (`amostrasDeContadores(d) []metrics.Amostra` lendo `d.st.EstatisticasDeContadores()` UMA vez), `internal/protocol/documentos.go` (`DatasetStats.Counters []ContadorStats`), `internal/server/documentos.go` (mesma chamada)
 - Testar: `internal/server/metricas_dataset_test.go`, `internal/gates` continua verde
 
 Séries (todas por `dataset`,`counter`, nascem com zero na subida via coletor que
@@ -920,7 +920,7 @@ emite sempre): `nishidb_counter_groups` (medidor, vivos), `nishidb_counter_group
 ### Tarefa F2: rotas ADMIN
 
 **Arquivos:**
-- Criar: `internal/server/contadores.go`, `contadores_test.go`; `internal/protocolo/contadores.go`
+- Criar: `internal/server/contadores.go`, `contadores_test.go`; `internal/protocol/contadores.go`
 - Modificar: `internal/server/autenticacao.go:138-148` (`rt.registra("/v1/counters/audit", config.RoleAdmin, s.handleAuditoriaDeContadores)`, idem `rebuild`)
 
 **Wire (sem código de erro novo):**
@@ -978,7 +978,7 @@ tabela `contador grupos duração`. `--config` com servidor no ar ⇒ exit 3 + d
 - `README.md`: em `### 2. Definição do dataset`, DEPOIS do bloco YAML existente da linha 319, um bloco ```` ```yaml ```` com `counters:` (proposta §5.1) — posição segura para `TestQuickstartDoREADMEExecuta` (só `yamls[0..1]` são posicionais; conferir com o gate antes de commitar); nova seção `### Contadores mantidos na escrita` depois de `### Ver o estado do servidor no ar` (linha ~1137) com os exemplos de consulta em ```` ```bash ```` (não `console`), a tabela `_counters`, `groupKey`, a nota "lê o presente, não é versionado pelo snapshot", o `nishidb counters` e as rotas; na tabela de SQL suportado, a linha de namespaces virtuais lista `_meta` e `_counters`.
 - `docs/architecture.md`: seção "Contadores mantidos na escrita" (o quê, os quatro momentos, por que a dobra vem antes do replay, o resíduo da cauda rasgada, o ciclo de vida por `refs`, a auditoria sob snapshot, a tabela virtual), com números só depois de medidos (G2); incorporar `docs/diagrams/contadores_flow.puml` pelo padrão `uml.nishisan.dev/proxy?src=…/main/docs/diagrams/contadores_flow.puml` (validar pelo servidor, ver memória `plantuml-ausente-validar-pelo-servidor`); a lista "O que ainda não existe" perde o item se houver.
 - `docs/debitos.md`: itens 107+ no fim da seção "Sem milestone": (a) `AbreSnapshot` fora do `wmu` nas CONSULTAS lê a época e registra o leitor em dois passos (`snapshot.go:176-181`) — a auditoria fecha a corrida tomando o `wmu`; as consultas não (pré-existente, achado na validação deste ciclo); (b) fsync por grupo novo no nível PON/splitter (custo não medido); (c) `_counters` fora do isolamento de snapshot; (d) `Lookup` indexado na tabela virtual (hoje `WHERE olt = …` em contador composto é varredura dos grupos); (e) `ScanLive(snap)` não é versionado para lápides — a consulta longa pode perder uma linha lapidada durante a varredura (pré-existente; a auditoria não depende dele).
-- `CLAUDE.md`: corrigir "índices secundários fazem SET antes e CLEAR depois do commit" para "SET antes do commit; não há CLEAR (spec §5.2 do subsistema 1)"; acrescentar o contador à lista de pacotes (`internal/storage/contador`, `internal/contadores`) e a invariante "contador é delta do próprio vetor, nunca de `prevPayload`; dobra antes do replay".
+- `CLAUDE.md`: corrigir "índices secundários fazem SET antes e CLEAR depois do commit" para "SET antes do commit; não há CLEAR (spec §5.2 do subsistema 1)"; acrescentar o contador à lista de pacotes (`internal/storage/counter`, `internal/counters`) e a invariante "contador é delta do próprio vetor, nunca de `prevPayload`; dobra antes do replay".
 - `.gitignore`: `samples/` (a amostra não é versionada, proposta §12).
 - `internal/cli/evidencias_test.go:53-58`: acrescentar `docs/aceite-contadores.md` (G2 cria).
 

@@ -240,12 +240,12 @@ Fecha os débitos **57** e **14**.
 
 ### Fase 7 — driver JDBC
 
-O wire está pronto: `internal/protocolo` é declaradamente o ponto de encontro do
+O wire está pronto: `internal/protocol` é declaradamente o ponto de encontro do
 servidor, do CLI remoto e do futuro driver
-([protocolo.go:6](internal/protocolo/protocolo.go:6)). O consumidor de referência a
+([protocolo.go:6](internal/protocol/protocolo.go:6)). O consumidor de referência a
 portar para Java é `protocolo.Leitor`
-([stream.go:45](internal/protocolo/stream.go:45)); a tabela §73 já é única no produto
-([jdbc.go:7](internal/protocolo/jdbc.go:7)); e a tradução código→exit code
+([stream.go:45](internal/protocol/stream.go:45)); a tabela §73 já é única no produto
+([jdbc.go:7](internal/protocol/jdbc.go:7)); e a tradução código→exit code
 ([query_remota.go:124](internal/cli/query_remota.go:124)) vira código→`SQLState`.
 
 **Ajustes no lado Go, antes do Java** (senão o driver nasce com buracos):
@@ -273,7 +273,7 @@ portar para Java é `protocolo.Leitor`
 Testes do §107.
 
 **`setNull` não tem representação de wire** — o protocolo recusa `null` em `parameters[]`
-por decisão explícita ([parametros.go:52](internal/protocolo/parametros.go:52)), e a
+por decisão explícita ([parametros.go:52](internal/protocol/parametros.go:52)), e a
 única forma de testar ausência é `IS NULL` na query. O driver lança
 `SQLFeatureNotSupportedException` e o limite fica registrado.
 

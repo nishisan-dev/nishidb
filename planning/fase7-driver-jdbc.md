@@ -8,11 +8,11 @@ segurava (publicar um driver antes da autenticação multiplicaria os pontos de 
 autenticado) deixou de valer quando a Fase 11 entregou Basic + TLS + papéis.
 
 **Resposta à pergunta que abriu a sessão: o projeto está pronto para começar, mas não para
-começar pelo Java.** O contrato de wire está maduro — `internal/protocolo` foi escrito
+começar pelo Java.** O contrato de wire está maduro — `internal/protocol` foi escrito
 declaradamente como ponto de encontro de três falantes (servidor, CLI remoto e "o driver
 JDBC da Fase 7"), a tabela de tipos §73 já é única no produto
-([jdbc.go:35](internal/protocolo/jdbc.go:35)), o `protocolo.Leitor`
-([stream.go:45](internal/protocolo/stream.go:45)) é o consumidor de referência a portar, e
+([jdbc.go:35](internal/protocol/jdbc.go:35)), o `protocolo.Leitor`
+([stream.go:45](internal/protocol/stream.go:45)) é o consumidor de referência a portar, e
 `TestNullExplicito` ([ndjson_test.go:253](internal/query/executor/ndjson_test.go:253)) já
 protege a invariante de NULL *citando o driver JDBC na justificativa*. O que falta são
 **seis buracos no lado Go** que, se não forem fechados antes, viram constante hard-coded num
@@ -56,7 +56,7 @@ foram verificadas no código e **mudam o escopo**:
    um segundo campo aditivo num contrato que o driver já congelou. **Incluído.**
 3. **"Toda coluna nullable" é falso hoje** — ver D4.
 4. **O item 2 (versão do produto) está entregue**: `protocolo.ProcessoStats.Version`
-   ([documentos.go:75](internal/protocolo/documentos.go:75)) alimentado por
+   ([documentos.go:75](internal/protocol/documentos.go:75)) alimentado por
    `buildinfo.String()`. Resta só o driver consumir.
 
 E três notas de fato que reescrevem requisitos do driver, todas verificadas:
@@ -119,18 +119,18 @@ que a decisão D2 do roadmap prometeu e nunca foi escrita.
 que o código contradiz.
 
 ### A2 — `DescritorJDBC`: a tabela única
-`internal/protocolo/jdbc.go`. `JDBCDeTipo` vira casca fina sobre `DescritorDeTipo(t)
+`internal/protocol/jdbc.go`. `JDBCDeTipo` vira casca fina sobre `DescritorDeTipo(t)
 DescritorJDBC{JDBC, Precision, Scale, DisplaySize}` — os três testes atuais de `jdbc_test.go`
 passam **sem edição**.
 *Testes:* `TestODescritorDeCadaTipoTemPrecisionScaleEDisplaySize` (a tabela caso a caso);
 **`TestDisplaySizeDeCadaTipoCasaComALarguraQueOEncoderEmite`** — o oráculo que importa:
 renderiza o valor de largura máxima por `executor.AppendValue` e afirma
 `len(saída) - 2 == DisplaySize` (não há ciclo de import: `internal/query/**` não importa
-`internal/protocolo`); `TestTipoSemNomeTemDescritorZerado`.
+`internal/protocol`); `TestTipoSemNomeTemDescritorZerado`.
 
 ### A3 — Os campos no wire (`Coluna`, `ColunaMeta`)
-[protocolo.go:112](internal/protocolo/protocolo.go:112),
-[documentos.go:41](internal/protocolo/documentos.go:41), `ColunaDe`,
+[protocolo.go:112](internal/protocol/protocolo.go:112),
+[documentos.go:41](internal/protocol/documentos.go:41), `ColunaDe`,
 [server/documentos.go:69](internal/server/documentos.go:69). **Sem `omitempty`** —
 `precision:0` e `nullable:false` são justamente os casos que carregam informação.
 *Testes:* `TestALinhaDeSchemaPublicaPrecisionScaleEDisplaySize`;
@@ -156,8 +156,8 @@ explícita. Se resolver, ele também é NOT NULL (sempre gravado,
 [patch.go:159](internal/materializer/patch.go:159)); se não, não há caso. **Ler o binder, não
 deduzir.**
 
-### A5 — `Saude` migra para `internal/protocolo`
-[http.go:41-51](internal/server/http.go:41) → `internal/protocolo/documentos.go`. As
+### A5 — `Saude` migra para `internal/protocol`
+[http.go:41-51](internal/server/http.go:41) → `internal/protocol/documentos.go`. As
 constantes `EstadoUP`/`Down`/`Degraded`/`Desligado` **vão junto** — deixá-las para trás faria
 o driver casar `"DEGRADED"` contra uma constante que o pacote de contrato não declara.
 *Teste:* `TestOCorpoDoHealthNaoMudouComAMudancaDePacote`, comparando bytes (o
@@ -219,7 +219,7 @@ inalterado.
 `--param <tipo>:<valor>` repetível, split no **primeiro** `:` (`--param string:a:b` é a string
 `a:b`), 1:1 com os 4 tipos de wire. `string` → `json.Marshal`; `int64`/`double` → texto
 **verbatim** como `json.RawMessage` (é o que faz `--param int64:9223372036854775808` receber
-a mensagem de overflow de [parametros.go:106](internal/protocolo/parametros.go:106) em vez de
+a mensagem de overflow de [parametros.go:106](internal/protocol/parametros.go:106) em vez de
 virar float64 e perder precisão — a mesma razão de `Parametro.Value` ser `RawMessage` e não
 `any`). Validação chama `protocolo.Valores`, **a mesma função do servidor**, nunca uma segunda
 gramática.
@@ -388,7 +388,7 @@ Fora do wire: conexão/DNS/TLS → 08001; stream sem fecho / linha ilegível →
 (`SQLRecoverableException`); método JDBC não suportado → 0A000; **código desconhecido → HY000
 com o código cru na mensagem** (jamais degradar para `INTERNAL`, que apagaria a novidade).
 
-**Gate dos dois lados** — `internal/gates/jdbc_test.go` parseia `internal/protocolo/protocolo.go`
+**Gate dos dois lados** — `internal/gates/jdbc_test.go` parseia `internal/protocol/protocolo.go`
 com `go/ast`, coleta **toda** constante `Cod*` de valor string e falha se algum literal não
 aparecer em `SqlStates.java`. Sem duplicar a lista em lugar nenhum — a mesma técnica de
 `TestVersaoDoGolangciLintNoWorkflowBateComAInstrucaoDoMakefile`: comparar duas *extrações*,
@@ -634,9 +634,9 @@ ignorado em `getTimestamp`). Errata da spec: §71 (D3) e §98 (coordenadas do m�
 
 ## Arquivos críticos
 
-- [internal/protocolo/jdbc.go](internal/protocolo/jdbc.go) — a tabela única; a A2 inteira
-- [internal/protocolo/protocolo.go](internal/protocolo/protocolo.go) — `Coluna` (112), códigos de erro (162-203), tipos de wire de parâmetro
-- [internal/protocolo/stream.go](internal/protocolo/stream.go) — o contrato a portar para Java
+- [internal/protocol/jdbc.go](internal/protocol/jdbc.go) — a tabela única; a A2 inteira
+- [internal/protocol/protocolo.go](internal/protocol/protocolo.go) — `Coluna` (112), códigos de erro (162-203), tipos de wire de parâmetro
+- [internal/protocol/stream.go](internal/protocol/stream.go) — o contrato a portar para Java
 - [internal/query/executor/ndjson.go](internal/query/executor/ndjson.go) — o **produtor** de tudo que o parser Java vai ler
 - [internal/query/parser/parser.go](internal/query/parser/parser.go) — os dois sítios da A7
 - [internal/server/query.go](internal/server/query.go) — linha de schema (254-266), tradução de erro (385-410), flush da A9

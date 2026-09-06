@@ -1,6 +1,6 @@
 """Os corpos de `/v1/metadata`, `/v1/stats` e `/v1/health`.
 
-Espelham `internal/protocolo/documentos.go`. Todo campo é lido com `.get` e um
+Espelham `internal/protocol/documentos.go`. Todo campo é lido com `.get` e um
 default: um servidor MAIS VELHO que ainda não publique um campo aditivo tem de
 continuar utilizável, e um MAIS NOVO que publique campos que este client não
 conhece não pode quebrá-lo. É a mesma tolerância que o Go pratica ao decodificar

@@ -26,7 +26,7 @@ from . import erros
 
 # ------------------------------------------------------------ nomes JDBC do §73
 #
-# Os literais de internal/protocolo/jdbc.go. O client NÃO redeclara larguras
+# Os literais de internal/protocol/jdbc.go. O client NÃO redeclara larguras
 # nem precisão: elas vêm prontas na linha de schema, e é por isso que um tipo
 # novo no servidor não exige release deste pacote.
 

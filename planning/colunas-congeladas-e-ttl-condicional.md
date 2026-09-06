@@ -422,7 +422,7 @@ implementação de comparação divergiria nos casos que importam — coluna de 
 comparada com literal numérico, coluna `auto` ainda sem tipo resolvido, ordem de bytes
 versus ordem numérica — e divergiria em silêncio.
 
-Pacote novo `internal/predicado`, recebendo:
+Pacote novo `internal/predicate`, recebendo:
 
 - `slot` e `coleta` de [collect.go](../internal/query/executor/collect.go);
 - `programa`, `instr`, `compila`, `emite`, `eval`, `testa` e os comparadores de
