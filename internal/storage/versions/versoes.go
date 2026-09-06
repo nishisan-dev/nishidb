@@ -1,4 +1,4 @@
-// Package versoes guarda, enquanto uma consulta está aberta, as locations que
+// Package versions guarda, enquanto uma consulta está aberta, as locations que
 // as linhas TINHAM quando ela começou.
 //
 // É o que dá isolamento de leitura ao NishiDB, e ele custa menos do que o

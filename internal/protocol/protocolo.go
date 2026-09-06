@@ -1,4 +1,4 @@
-// Package protocolo é o contrato do protocolo remoto do §67-69: o corpo da
+// Package protocol é o contrato do protocolo remoto do §67-69: o corpo da
 // requisição de consulta, a moldura da resposta NDJSON, os corpos de
 // /v1/metadata e /v1/stats e a tabela de tipos do §73.
 //

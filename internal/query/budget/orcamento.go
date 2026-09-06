@@ -1,4 +1,4 @@
-// Package orcamento é o teto de memória de consulta do §80: o `memoryTarget`
+// Package budget é o teto de memória de consulta do §80: o `memoryTarget`
 // do processo e o `query.maxBufferPerQuery` de cada consulta.
 //
 // As duas chaves eram parseadas e nunca lidas — metade do débito 15 —, e a

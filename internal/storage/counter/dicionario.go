@@ -1,4 +1,4 @@
-// Package contador implementa o contador mantido na escrita: por dataset e
+// Package counter implementa o contador mantido na escrita: por dataset e
 // por contador declarado, um vetor denso rowId → (condição | grupo), um
 // dicionário de grupos e os totais por grupo, alimentados pela TRANSIÇÃO de
 // estado de cada linha dentro do applyRecord.

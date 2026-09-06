@@ -1,4 +1,4 @@
-// Package contadores é a cola do contador mantido na escrita com o resto do
+// Package counters é a cola do contador mantido na escrita com o resto do
 // produto: compila o bloco `counters:` do YAML contra o schema (nomes →
 // FieldID, `where` pelo mesmo caminho do WHERE), entrega ao storage o callback
 // de abertura, e serve as tabelas virtuais `_counters.<name>` ao motor de

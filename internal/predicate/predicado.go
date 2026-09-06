@@ -1,4 +1,4 @@
-// Package predicado é o avaliador de expressões booleanas do NishiDB: coleta
+// Package predicate é o avaliador de expressões booleanas do NishiDB: coleta
 // de campos do payload em slots e execução do predicado compilado.
 //
 // Mora fora do executor porque tem DOIS consumidores: o WHERE de uma consulta
