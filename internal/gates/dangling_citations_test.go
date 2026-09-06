@@ -259,6 +259,9 @@ type citationChunk struct {
 	line int
 	kind chunkKind
 	text string
+	// goFences são as faixas de bloco cercado ```go, calculadas UMA vez por
+	// arquivo `.md`. Ver isIdentifierContext.
+	goFences [][2]int
 }
 
 // chunkKind separa os pedaços cujo delimitador MUDA de sentido. A crase marca
@@ -336,8 +339,9 @@ func shortPkg(dir string) string {
 }
 
 // isIdentifierContext diz se a ocorrência tem, ao redor, alguma marca que
-// prosa não põe: crase, ponto de qualificação, doc link, parêntese de chamada
-// ou chave de caixa de diagrama.
+// prosa não põe: crase, ponto de qualificação, doc link, parêntese de chamada,
+// chave de caixa de diagrama, RÓTULO de printf num literal ou bloco cercado
+// ```go num `.md`.
 func isIdentifierContext(c citationChunk, off int, tok string) bool {
 	if isDotQualified(c.text, off) {
 		return true
@@ -349,14 +353,72 @@ func isIdentifierContext(c citationChunk, off int, tok string) bool {
 	if end < len(c.text) && c.text[end] == '(' {
 		return true
 	}
+	// `t.Errorf("Clausula = %q, quer %q", …)`: o rótulo antes do `=` é o IDIOMA
+	// de mensagem de falha deste repositório, e é ali que sobrevive a citação
+	// que nenhuma outra marca alcança — token de uma só maiúscula, dentro de
+	// literal, em pacote diferente do que declarava o nome. Três delas
+	// (parser/clauses_test.go:56,107,149) passaram pela primeira redação deste
+	// gate com ele verde.
+	if c.kind == chunkGoLiteral && strings.HasPrefix(c.text[end:], " = ") {
+		return true
+	}
 	line := lineAround(c.text, off)
 	if c.kind != chunkGoLiteral && strings.Count(c.text[line:off], "`")%2 == 1 {
+		return true
+	}
+	// Bloco cercado ```go num `.md` é CÓDIGO, e a linha de campo de um
+	// `type ... struct` cita identificador como qualquer arquivo Go. É a mesma
+	// licença que a caixa do diagrama tem, e fecha os blocos de plano que a
+	// limpeza do G1 deixou metade em inglês e metade em PT-BR.
+	if insideRanges(c.goFences, off) {
 		return true
 	}
 	// `Snapshot{Epoca, Instante}`: a caixa de um diagrama lista os campos entre
 	// chaves, e é assim que os dois .puml do repositório citam o tipo.
 	return strings.HasSuffix(c.file, ".puml") &&
 		strings.Count(c.text[line:off], "{") > strings.Count(c.text[line:off], "}")
+}
+
+// goFenceRanges devolve as faixas de bloco cercado ```go de um `.md`. A
+// varredura é UMA por arquivo, e não uma por token: contar crases desde o
+// começo a cada palavra faria do gate um algoritmo quadrático sobre planos de
+// dois mil linhas.
+//
+// Só ```go: um bloco ```yaml ou ```sql é dado e sintaxe de outra língua, e a
+// mesma palavra ali é chave de configuração.
+func goFenceRanges(s string) [][2]int {
+	var faixas [][2]int
+	abertura := -1
+	for i := 0; i < len(s); {
+		fim := strings.IndexByte(s[i:], '\n')
+		if fim < 0 {
+			fim = len(s) - i
+		}
+		linha := strings.TrimSpace(s[i : i+fim])
+		if strings.HasPrefix(linha, "```") {
+			if abertura >= 0 {
+				faixas = append(faixas, [2]int{abertura, i})
+				abertura = -1
+			} else if strings.TrimSpace(strings.TrimPrefix(linha, "```")) == "go" {
+				abertura = i + fim + 1
+			}
+		}
+		i += fim + 1
+	}
+	if abertura >= 0 {
+		faixas = append(faixas, [2]int{abertura, len(s)})
+	}
+	return faixas
+}
+
+// insideRanges diz se off cai em alguma das faixas.
+func insideRanges(faixas [][2]int, off int) bool {
+	for _, f := range faixas {
+		if off >= f[0] && off < f[1] {
+			return true
+		}
+	}
+	return false
 }
 
 // lineAround devolve o offset do começo da linha que contém off. As marcas de
@@ -380,9 +442,6 @@ var danglingCitationSkipDirs = map[string]bool{
 	"node_modules": true, "target": true, ".venv": true, "__pycache__": true,
 }
 
-// danglingCitationSkipPaths são os caminhos relativos fora do escopo, pela
-// mesma razão do diretório de mapeamentos: neles a coluna da esquerda é o nome
-// velho por construção.
 // danglingCitationSkipPaths são os arquivos e diretórios fora do escopo, pela
 // mesma razão do diretório de mapeamentos: neles o nome velho é o DADO.
 // O próprio arquivo deste gate entra na lista pelo motivo que já tirou
@@ -441,7 +500,11 @@ func danglingCitationChunks(t *testing.T) ([]citationChunk, declarations) {
 			if err != nil {
 				return err
 			}
-			chunks = append(chunks, citationChunk{file: rel, line: 1, kind: chunkMarkup, text: string(content)})
+			chunk := citationChunk{file: rel, line: 1, kind: chunkMarkup, text: string(content)}
+			if strings.HasSuffix(rel, ".md") {
+				chunk.goFences = goFenceRanges(chunk.text)
+			}
+			chunks = append(chunks, chunk)
 		}
 		return nil
 	})
