@@ -19,7 +19,7 @@
 // 503 com Retry-After. O PorQuery impede que UMA consulta patológica consuma
 // sozinha o que era de todas, e recusa POR LINHA, dentro do StreamWriter, contra
 // um teto que já está reservado.
-package orcamento
+package budget
 
 import "sync/atomic"
 

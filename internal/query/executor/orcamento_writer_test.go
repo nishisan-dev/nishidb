@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nishisan-dev/nishidb/internal/query/orcamento"
+	"github.com/nishisan-dev/nishidb/internal/query/budget"
 )
 
 // rowDeBytes é uma linha de tamanho controlado, para exercer o orçamento.
@@ -29,7 +29,7 @@ func rowDeBytes(n int) Row {
 func TestStreamWriterRecusaCrescerAlemDoOrcamento(t *testing.T) {
 	const buf, teto = 1 << 10, 4 << 10
 	var saida bytes.Buffer
-	s := NewStreamWriter(&saida, buf, admitido(t, orcamento.NovoGlobal(1<<20).Query(teto)))
+	s := NewStreamWriter(&saida, buf, admitido(t, budget.NovoGlobal(1<<20).Query(teto)))
 
 	// Uma linha que cabe no orçamento (mas não no buffer inicial) é ACEITA: o
 	// orçamento é teto, não proibição de crescer.
@@ -73,7 +73,7 @@ func TestStreamWriterRecusaCrescerAlemDoOrcamento(t *testing.T) {
 // bug no motor, que é o que INTERNAL fazia antes de este código existir.
 func TestLinhaAcimaDoOrcamentoNomeiaOLimiteEmVezDeCrescer(t *testing.T) {
 	const teto = 4 << 10
-	s := NewStreamWriter(io.Discard, 1<<10, admitido(t, orcamento.NovoGlobal(1<<20).Query(teto)))
+	s := NewStreamWriter(io.Discard, 1<<10, admitido(t, budget.NovoGlobal(1<<20).Query(teto)))
 
 	err := s.WriteRow(rowDeBytes(64 << 10))
 	if err == nil {
@@ -104,7 +104,7 @@ func TestLinhaAcimaDoOrcamentoNomeiaOLimiteEmVezDeCrescer(t *testing.T) {
 // impedir.
 func TestLinhaRecusadaNaoDescartaAsLinhasJaEscritas(t *testing.T) {
 	var saida bytes.Buffer
-	s := NewStreamWriter(&saida, 1<<10, admitido(t, orcamento.NovoGlobal(1<<20).Query(4<<10)))
+	s := NewStreamWriter(&saida, 1<<10, admitido(t, budget.NovoGlobal(1<<20).Query(4<<10)))
 
 	const antes = 5
 	for i := 0; i < antes; i++ {
@@ -138,7 +138,7 @@ func TestBufferInicialNaoNasceMaiorQueOOrcamento(t *testing.T) {
 		{teto: 8 << 10, querCap: 4 << 10},        // apertado: metade
 	}
 	for _, c := range casos {
-		g := orcamento.NovoGlobal(1 << 30)
+		g := budget.NovoGlobal(1 << 30)
 		s := NewStreamWriter(io.Discard, DefaultBufSize, admitido(t, g.Query(c.teto)))
 		if cap(s.buf) != c.querCap {
 			t.Errorf("teto %d: cap(buf) = %d, quer %d", c.teto, cap(s.buf), c.querCap)
@@ -157,7 +157,7 @@ func TestBufferInicialNaoNasceMaiorQueOOrcamento(t *testing.T) {
 // teste que constrói um writer com orçamento tem de passar pela mesma porta que
 // o servidor passa. Sem isto, os testes exercitariam um caminho que produção não
 // tem.
-func admitido(t *testing.T, p *orcamento.PorQuery) *orcamento.PorQuery {
+func admitido(t *testing.T, p *budget.PorQuery) *budget.PorQuery {
 	t.Helper()
 	if !p.Admite() {
 		t.Fatalf("o orçamento de %d bytes não coube no processo do teste", p.Teto())

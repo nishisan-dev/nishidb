@@ -1,10 +1,10 @@
-package orcamento_test
+package budget_test
 
 import (
 	"sync"
 	"testing"
 
-	"github.com/nishisan-dev/nishidb/internal/query/orcamento"
+	"github.com/nishisan-dev/nishidb/internal/query/budget"
 )
 
 // O caminho quente NÃO aloca.
@@ -19,7 +19,7 @@ import (
 // Reserva e Devolve são medidas JUNTAS e em par: medir só a Reserva deixaria
 // passar uma Devolve que alocasse, e ela roda com a mesma frequência.
 func TestOrcamentoNaoAlocaNoCaminhoQuente(t *testing.T) {
-	g := orcamento.NovoGlobal(1 << 30)
+	g := budget.NovoGlobal(1 << 30)
 	p := g.Query(1 << 20)
 
 	casos := []struct {
@@ -34,7 +34,7 @@ func TestOrcamentoNaoAlocaNoCaminhoQuente(t *testing.T) {
 			// O ramo do teto <= 0 é OUTRO caminho de código (Add direto, sem
 			// CAS) e precisa da mesma prova: é por ele que passam o CLI e os
 			// benchmarks.
-			il := orcamento.NovoGlobal(0)
+			il := budget.NovoGlobal(0)
 			il.Reserva(64)
 			il.Devolve(64)
 		}},
@@ -64,7 +64,7 @@ func TestOrcamentoNaoAlocaNoCaminhoQuente(t *testing.T) {
 // dimensionou o orçamento pelo tamanho da linha veria a linha ser recusada pelo
 // número que ele mesmo escreveu.
 func TestReservaRecusaExatamenteNoLimite(t *testing.T) {
-	g := orcamento.NovoGlobal(100)
+	g := budget.NovoGlobal(100)
 	if !g.Reserva(100) {
 		t.Fatal("100 não coube num teto de 100: o limite é inclusive")
 	}
@@ -88,7 +88,7 @@ func TestReservaRecusaExatamenteNoLimite(t *testing.T) {
 // de outra consulta. O número reservado é o teto, não o uso corrente, e é isso
 // que o nishidb_query_buffer_bytes publica.
 func TestAdmiteReservaOTetoInteiroDeUmaVez(t *testing.T) {
-	g := orcamento.NovoGlobal(1 << 20)
+	g := budget.NovoGlobal(1 << 20)
 	p := g.Query(64 << 10)
 
 	if !p.Admite() {
@@ -109,7 +109,7 @@ func TestAdmiteReservaOTetoInteiroDeUmaVez(t *testing.T) {
 // só que agora com um número no /metrics.
 func TestAdmiteRecusaQuandoOProcessoNaoComporta(t *testing.T) {
 	// Comporta UM teto de 64 KiB, não dois.
-	g := orcamento.NovoGlobal(80 << 10)
+	g := budget.NovoGlobal(80 << 10)
 
 	primeira := g.Query(64 << 10)
 	if !primeira.Admite() {
@@ -139,7 +139,7 @@ func TestAdmiteRecusaQuandoOProcessoNaoComporta(t *testing.T) {
 // partir dali o teto deixaria de valer para todo mundo — em silêncio, que é o
 // pior modo de um limite falhar.
 func TestLiberaEhIdempotente(t *testing.T) {
-	g := orcamento.NovoGlobal(1 << 20)
+	g := budget.NovoGlobal(1 << 20)
 	p := g.Query(1 << 10)
 	if !p.Admite() {
 		t.Fatal("1 KiB não coube")
@@ -159,7 +159,7 @@ func TestLiberaEhIdempotente(t *testing.T) {
 // admite sem reservar, porque não há número a reservar: inventar um faria o
 // nishidb_query_buffer_bytes publicar uma grandeza que não descreve nada.
 func TestTetoNaoPositivoEhIlimitado(t *testing.T) {
-	g := orcamento.NovoGlobal(0)
+	g := budget.NovoGlobal(0)
 	if !g.Reserva(1 << 40) {
 		t.Fatal("um terabyte foi recusado por um Global ilimitado")
 	}
@@ -167,7 +167,7 @@ func TestTetoNaoPositivoEhIlimitado(t *testing.T) {
 		t.Fatalf("Usado() = %d, quer 1TiB: ilimitado não é o mesmo que não contar", g.Usado())
 	}
 
-	p := orcamento.NovoGlobal(1 << 10).Query(0)
+	p := budget.NovoGlobal(1 << 10).Query(0)
 	if !p.Admite() {
 		t.Fatal("uma consulta sem teto foi recusada")
 	}
@@ -187,7 +187,7 @@ func TestOTetoValeSobConcorrencia(t *testing.T) {
 	const goroutines = 200
 	const teto = goroutines / 2
 
-	g := orcamento.NovoGlobal(teto)
+	g := budget.NovoGlobal(teto)
 	var wg sync.WaitGroup
 	aceitas := make([]bool, goroutines)
 	partida := make(chan struct{})

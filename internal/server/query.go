@@ -13,9 +13,9 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/logging"
 	"github.com/nishisan-dev/nishidb/internal/protocol"
 	"github.com/nishisan-dev/nishidb/internal/query/binder"
+	"github.com/nishisan-dev/nishidb/internal/query/budget"
 	"github.com/nishisan-dev/nishidb/internal/query/executor"
 	"github.com/nishisan-dev/nishidb/internal/query/lexer"
-	"github.com/nishisan-dev/nishidb/internal/query/orcamento"
 	"github.com/nishisan-dev/nishidb/internal/query/parser"
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/storage"
@@ -337,7 +337,7 @@ func colunaReservada(cols []executor.ColMeta) (string, bool) {
 func (s *Servidor) transmite(
 	w http.ResponseWriter, r *http.Request, d *dataset, req protocol.Requisicao,
 	it executor.RowIterator, colunas []executor.ColMeta, tetoDoRequest int, inicio time.Time,
-	orc *orcamento.PorQuery,
+	orc *budget.PorQuery,
 ) {
 	log := s.log.Dataset(d.nome)
 

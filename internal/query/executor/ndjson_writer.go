@@ -5,7 +5,7 @@ import (
 	"io"
 	"strconv"
 
-	"github.com/nishisan-dev/nishidb/internal/query/orcamento"
+	"github.com/nishisan-dev/nishidb/internal/query/budget"
 )
 
 // ErrWrite é a categoria de falha de escrita do StreamWriter.
@@ -69,7 +69,7 @@ type StreamWriter struct {
 // PROCESSO ser um 503 com Retry-After, em vez de um stream que morre na linha
 // quarenta mil por causa da memória de outra consulta — e deixa WriteRow sem
 // nenhuma chamada ao orçamento, portanto sem CAS nem contenção por linha.
-func NewStreamWriter(w io.Writer, bufSize int, orc *orcamento.PorQuery) *StreamWriter {
+func NewStreamWriter(w io.Writer, bufSize int, orc *budget.PorQuery) *StreamWriter {
 	if bufSize <= 0 {
 		bufSize = DefaultBufSize
 	}

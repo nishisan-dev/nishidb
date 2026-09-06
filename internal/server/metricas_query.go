@@ -5,7 +5,7 @@ import (
 
 	"github.com/nishisan-dev/nishidb/internal/metrics"
 	"github.com/nishisan-dev/nishidb/internal/query"
-	"github.com/nishisan-dev/nishidb/internal/query/orcamento"
+	"github.com/nishisan-dev/nishidb/internal/query/budget"
 )
 
 // metricasDeQuery são as séries de consulta do §92.
@@ -42,7 +42,7 @@ type metricasDeQuery struct {
 const datasetDesconhecido = "?"
 
 func registraMetricasDeQuery(
-	reg *metrics.Registry, eng *query.Engine, voo *emVoo, orc *orcamento.Global,
+	reg *metrics.Registry, eng *query.Engine, voo *emVoo, orc *budget.Global,
 ) *metricasDeQuery {
 	m := &metricasDeQuery{
 		total: reg.Contador(metrics.MetQueryTotal,

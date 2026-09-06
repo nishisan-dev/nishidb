@@ -13,9 +13,9 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/protocol"
 	"github.com/nishisan-dev/nishidb/internal/query"
 	"github.com/nishisan-dev/nishidb/internal/query/binder"
+	"github.com/nishisan-dev/nishidb/internal/query/budget"
 	"github.com/nishisan-dev/nishidb/internal/query/executor"
 	"github.com/nishisan-dev/nishidb/internal/query/lexer"
-	"github.com/nishisan-dev/nishidb/internal/query/orcamento"
 	"github.com/nishisan-dev/nishidb/internal/query/parser"
 )
 
@@ -153,7 +153,7 @@ func runQuery(args []string, amb Ambiente) int {
 	// e não vale pelo CLI é a chave mentindo em metade dos caminhos, que é o
 	// defeito de que este orçamento nasceu (débito 15). O processo do CLI serve
 	// UMA consulta, então o Global é dele sozinho.
-	orc := orcamento.NovoGlobal(cfg.MemoryTarget()).Query(cfg.MaxBufferPerQuery())
+	orc := budget.NovoGlobal(cfg.MemoryTarget()).Query(cfg.MaxBufferPerQuery())
 	if !orc.Admite() {
 		// Só acontece com `maxBufferPerQuery` acima do `memoryTarget`, que o
 		// CarregaConfig já recusa — mas o retorno é conferido do mesmo jeito:

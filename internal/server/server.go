@@ -34,7 +34,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/metakafka"
 	"github.com/nishisan-dev/nishidb/internal/metrics"
 	"github.com/nishisan-dev/nishidb/internal/query"
-	"github.com/nishisan-dev/nishidb/internal/query/orcamento"
+	"github.com/nishisan-dev/nishidb/internal/query/budget"
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/storage"
 )
@@ -145,7 +145,7 @@ type Servidor struct {
 	// por runtime.query.maxBufferPerQuery. É do PROCESSO pela mesma razão do
 	// semáforo: o §82 diz que todos os datasets dividem o mesmo orçamento, e um
 	// por dataset multiplicaria o pior caso pelo número deles.
-	orcamento *orcamento.Global
+	orcamento *budget.Global
 	http      *http.Server
 	ln        net.Listener
 	pprofSrv  *http.Server
@@ -308,7 +308,7 @@ func Novo(cfg *config.Config, o Opcoes) (*Servidor, error) {
 		vagas:       make(chan struct{}, cfg.MaxConcurrent()),
 		vagasLongas: make(chan struct{}, cfg.MaxLongRunning()),
 		emVoo:       novoEmVoo(),
-		orcamento:   orcamento.NovoGlobal(cfg.MemoryTarget()),
+		orcamento:   budget.NovoGlobal(cfg.MemoryTarget()),
 		credenciais: credenciais,
 		tlsCert:     certificado,
 	}
