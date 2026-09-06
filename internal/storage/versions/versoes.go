@@ -10,7 +10,7 @@
 //
 // O preço que sobra é de tempo, não de espaço: enquanto a versão está retida,
 // o segmento onde ela mora não pode ser aposentado. É o que o pin registra.
-package versoes
+package versions
 
 import (
 	"math"

@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/nishisan-dev/nishidb/internal/storage/versoes"
+	"github.com/nishisan-dev/nishidb/internal/storage/versions"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
@@ -68,7 +68,7 @@ type epocaViva struct {
 
 func novoRegistroDeSnapshots() *registroDeSnapshots {
 	r := &registroDeSnapshots{porEpoca: make(map[uint64]epocaViva)}
-	r.menor.Store(versoes.SemLeitor)
+	r.menor.Store(versions.SemLeitor)
 	r.menorBase.Store(SemPiso)
 	return r
 }
@@ -105,7 +105,7 @@ func (r *registroDeSnapshots) fecha(epoca uint64) {
 }
 
 func (r *registroDeSnapshots) recalculaLocked() {
-	menor := versoes.SemLeitor
+	menor := versions.SemLeitor
 	menorBase := SemPiso
 	var menorMs int64
 	for e, v := range r.porEpoca {
@@ -282,11 +282,11 @@ func (s *Store) invalidaOMaisAntigoSeEstourou() {
 	}
 	for s.vers.Bytes() > teto {
 		menor := s.snaps.menorEpocaViva()
-		if menor == versoes.SemLeitor {
+		if menor == versions.SemLeitor {
 			// Journal acima do teto sem leitor nenhum: não há consulta a
 			// invalidar, e a poda comum resolve. Acontece na janela entre o
 			// último Fecha e a poda dele.
-			s.vers.Poda(versoes.SemLeitor)
+			s.vers.Poda(versions.SemLeitor)
 			return
 		}
 		// A fronteira sobe para DEPOIS da vítima: tudo que ela via, e só ela,

@@ -28,7 +28,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/storage/fielddict"
 	"github.com/nishisan-dev/nishidb/internal/storage/rowindex"
 	"github.com/nishisan-dev/nishidb/internal/storage/segment"
-	"github.com/nishisan-dev/nishidb/internal/storage/versoes"
+	"github.com/nishisan-dev/nishidb/internal/storage/versions"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
@@ -494,7 +494,7 @@ type Store struct {
 	// a poda e a expiração oportunista da compaction.
 	snaps *registroDeSnapshots
 	// vers guarda as locations anteriores enquanto algum leitor as alcança.
-	vers *versoes.Cadeias
+	vers *versions.Cadeias
 	// snapsExpirados conta as consultas invalidadas pelo teto do journal. É
 	// contador, e não medidor, porque a pergunta é "isto ACONTECEU?" — um
 	// medidor que voltasse a zero esconderia a recusa entre dois scrapes.
@@ -1047,7 +1047,7 @@ func Open(opts Options) (*Store, error) {
 		segSize:  make(map[uint32]int64),
 		agora:    time.Now,
 		snaps:    novoRegistroDeSnapshots(),
-		vers:     versoes.Novas(),
+		vers:     versions.Novas(),
 	}
 	if opts.Metrics != nil {
 		s.cpDuracao = opts.Metrics.Histograma(metrics.MetCheckpointDurationSeconds,
@@ -1951,7 +1951,7 @@ func (s *Store) applyRecord(a recordApply) error {
 	// aberta o journal não recebe uma entrada sequer, e a ingestão não paga
 	// nada além da comparação de um atômico.
 	if a.versiona && a.mode == applyWrite {
-		if s.snaps.menorEpocaViva() != versoes.SemLeitor {
+		if s.snaps.menorEpocaViva() != versions.SemLeitor {
 			if anterior, tinha := s.locs.Get(a.rowID); tinha {
 				s.vers.Registra(a.rowID, anterior, s.epocaPub.Load()+1)
 				s.invalidaOMaisAntigoSeEstourou()
