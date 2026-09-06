@@ -3238,17 +3238,17 @@ export const meta = {
     { title: 'Propor', detail: 'um tradutor por pacote, a partir do inventário e do glossário' },
     { title: 'Julgar', detail: 'consolida contra o glossário, resolve colisões, separa grupos de interface' },
     { title: 'Refutar', detail: 'três lentes por pacote: sentido, convenção Go, colisão/grupo' },
-    { title: 'Aplicar', detail: 'um aplicador só: ifacerename, rf por pacote, renamecite, commits' },
+    { title: 'Aplicar', detail: 'um aplicador só: ifacerename, gopls por posição, rf por pacote, renamecite, commits' },
     { title: 'Verificar', detail: 'make test, test-race, lint, gates; crítico de completude' },
   ],
 }
 
 const { fase, grupo, pacotes, scratch } = args
-const RAIZ = '.'
-const INV = 'planning/identificadores-em-ingles/inventario-inicial.tsv'
-const GRUPOS = 'planning/identificadores-em-ingles/grupos-inicial.tsv'
+const INV = 'planning/identificadores-em-ingles/inventario-pos-fase1.tsv'
+const GRUPOS = 'planning/identificadores-em-ingles/grupos-pos-fase1.tsv'
 const GLOSSARIO = 'docs/glossario.md'
 const SPEC = 'planning/identificadores-em-ingles.md'
+const PROTEGIDOS = 'planning/identificadores-em-ingles/protegidos.txt'
 const tsvDe = (p) => `planning/identificadores-em-ingles/mapeamento-${fase}-${p.replaceAll('/', '_')}.tsv`
 const tsvGrupos = `planning/identificadores-em-ingles/grupos-de-interface-${fase}-${grupo}.tsv`
 
@@ -3272,13 +3272,20 @@ const VEREDICTO = {
 }
 const RELATORIO = { type: 'object', required: ['ok', 'saida'], properties: { ok: { type: 'boolean' }, saida: { type: 'string' } } }
 
+const ambiente = `Ambiente: worktree /home/lucas/Projects/nishisan/nishidb/.claude/worktrees/identificadores-em-ingles, branch
+refactor/identificadores-em-ingles; nunca toque em /home/lucas/Projects/nishisan/nishidb. O guarda do worktree recusa comandos bash
+compostos com git: UM comando git por chamada; laços vão para um arquivo .sh rodado com "bash arquivo.sh". Prosa em PT-BR,
+identificadores em inglês, mensagens de commit em PT-BR na voz do time, sem menção a agente.`
+
 const regras = `Regras (spec ${SPEC} §6, glossário ${GLOSSARIO}): identificadores em inglês idiomático Go
 (MixedCaps; iniciais ID, URL, HTTP, JSON, TLS, CRC, TTL, SQL, NDJSON, CLI, RSS; sem Get; nada de sufixo numérico);
 o que já está em inglês NÃO muda (entra em "mantidos" com motivo "já em inglês"); nome híbrido traduz só a
 metade PT-BR (ErrOrcamentoExcedido → ErrBudgetExceeded); termos de domínio SÓ do glossário — termo ausente
 vira proposta de linha nova no glossário, no campo motivo, prefixada por "GLOSSARIO:"; receptores de até
 três letras não mudam; método que aparece na coluna grupo do inventário NÃO entra em "entradas": entra em
-"grupos" com o nome novo, e o mesmo grupo recebe o mesmo nome em todos os pacotes.`
+"grupos" com o nome novo, e o mesmo grupo recebe o mesmo nome em todos os pacotes. Espécies com sufixo
+"#ambiguo" ou "#gopls" são renomeadas por posição (gopls), não pelo rf: proponha o nome novo do mesmo jeito,
+mantendo a especie com o sufixo. Nomes de teste (func Test*/Benchmark*/Fuzz*) são da Fase 4: ignore-os.`
 
 // ---------- Propor ----------
 phase('Propor')
@@ -3289,8 +3296,10 @@ as de especie "func" cujo nome começa por Test, Benchmark ou Fuzz — são da F
 o fecho de cada grupo G<n> citado. Leia ${GLOSSARIO} inteiro. Abra os arquivos do pacote para entender o que
 cada nome significa antes de traduzir: o nome novo tem de preservar o SENTIDO, não a forma.
 ${regras}
-Devolva a proposta completa: uma entrada por linha do inventário que muda, um "mantido" por linha que fica.
-Nenhuma linha do inventário do pacote pode ficar sem decisão.`,
+${ambiente}
+Devolva a proposta completa: uma entrada por linha do inventário que muda, um "mantido" por linha que fica
+(o inventário tem MUITAS linhas de locais já em inglês — err, ok, i, n, buf —, que entram em "mantidos" com
+motivo "já em inglês"). Nenhuma linha do inventário do pacote pode ficar sem decisão.`,
   { label: `traduz:${p}`, phase: 'Propor', schema: PROPOSTA })))).filter(Boolean)
 log(`${propostas.length}/${pacotes.length} propostas`)
 
@@ -3299,20 +3308,26 @@ phase('Julgar')
 const juizo = await agent(`Você é o juiz do grupo ${grupo} (fase ${fase}). Recebe as propostas abaixo, uma por pacote, e produz os TSV finais.
 Propostas: ${JSON.stringify(propostas)}
 ${regras}
+${ambiente}
 Tarefas, nesta ordem:
 1. Consistência: o mesmo termo PT-BR vira o mesmo termo inglês em todos os pacotes; conflito resolve pelo glossário e, se
    o glossário não decide, pelo nome mais específico. Registre no motivo.
 2. Colisão: dentro de um pacote, dois endereços não podem receber o mesmo nome novo no mesmo escopo (tipo, função,
    pacote). Para conferir, rode "rf -diff" no diretório do pacote com o script montado (uma linha "mv <endereco> <novo>"
-   por entrada) e leia a saída: "already have" é colisão. Resolva pelo nome mais específico.
-3. Grupos de interface: toda entrada com grupo vai para ${tsvGrupos} (colunas pacote, interface, metodo, novo), UMA linha
+   por entrada sem sufixo #ambiguo/#gopls; rf está no PATH) e leia a saída: "already have" é colisão. Resolva pelo nome
+   mais específico. Não aplique nada: -diff só mostra.
+3. Grupos de interface: toda entrada com grupo vai para ${tsvGrupos} (cabeçalho "pacote\\tinterface\\tmetodo\\tnovo"), UMA linha
    por grupo, com o mesmo novo em todos os pacotes; conferir em ${GRUPOS} que o fecho está coberto. Rode
-   "go run ./scripts/ifacerename -dir . -groups ${tsvGrupos} -dry-run" e cole a saída no seu relatório.
-4. Glossário: toda proposta "GLOSSARIO:" vira linha nova em ${GLOSSARIO} (mesmo formato de tabela), no mesmo commit
-   dos TSV.
+   "go run ./scripts/ifacerename -dir . -groups ${tsvGrupos} -dry-run" e cole a saída no seu relatório. Se não houver grupo,
+   crie o arquivo só com o cabeçalho.
+4. Glossário: toda proposta "GLOSSARIO:" vira linha nova em ${GLOSSARIO} (mesmo formato de tabela, três colunas).
 5. Escreva, por pacote, ${tsvDe('<pacote>')} com cabeçalho "pacote\\tespecie\\tendereco\\tnovo\\tmotivo", uma linha por
-   entrada, e linhas de "mantidos" com novo igual ao nome atual e motivo "mantido: <motivo>".
-Devolva um resumo: número de entradas por pacote, colisões resolvidas, termos novos no glossário, e a saída do dry-run.`,
+   entrada (novo = nome novo; especie com o sufixo #ambiguo/#gopls preservado quando houver), e linhas de "mantidos" com
+   novo igual ao nome atual e motivo "mantido: <motivo>". Para as linhas #ambiguo/#gopls acrescente ao motivo a posição
+   "arquivo:linha:coluna" copiada do inventário, que o aplicador usa.
+6. Garanta que ${PROTEGIDOS} existe (crie vazio se não existir).
+Não faça commit: o aplicador commita. Devolva um resumo: número de entradas por pacote, colisões resolvidas, termos novos
+no glossário, e a saída do dry-run.`,
   { label: `juiz:${grupo}`, phase: 'Julgar' })
 log(`juiz: ${String(juizo).slice(0, 300)}`)
 
@@ -3320,14 +3335,14 @@ log(`juiz: ${String(juizo).slice(0, 300)}`)
 phase('Refutar')
 const LENTES = [
   ['sentido', 'o nome novo muda o SIGNIFICADO do velho, ou perde uma distinção que o código faz (ex.: dois conceitos PT-BR distintos colapsados no mesmo inglês)'],
-  ['convencao', 'viola convenção Go: Id/Url/Http em vez de ID/URL/HTTP, prefixo Get, sufixo numérico, receptor renomeado para mais de três letras sem motivo, nome de erro fora de ErrXxx/XxxError, ou termo fora do glossário'],
-  ['colisao', 'colide no escopo (rode rf -diff no pacote e procure "already have"), ou um método de interface entrou em entradas em vez de grupos, ou o grupo não cobre o fecho de ' + GRUPOS],
+  ['convencao', 'viola convenção Go: Id/Url/Http em vez de ID/URL/HTTP, prefixo Get, sufixo numérico, receptor renomeado para mais de três letras sem motivo, nome de erro fora de ErrXxx/XxxError, ou termo fora do glossário; ou um identificador já em inglês foi alterado sem motivo'],
+  ['colisao', 'colide no escopo (rode rf -diff no pacote e procure "already have"), ou um método de interface entrou em entradas em vez de grupos, ou o grupo não cobre o fecho de ' + GRUPOS + ', ou uma linha do inventário do pacote ficou sem decisão'],
 ]
 for (let rodada = 1; rodada <= 3; rodada++) {
   const vereditos = (await parallel(pacotes.flatMap(p => LENTES.map(([lente, criterio]) => () =>
     agent(`Você é o refutador "${lente}" do pacote ${p}. Leia ${tsvDe(p)}, ${tsvGrupos}, ${GLOSSARIO} e o código do pacote.
 Tente DERRUBAR entradas com este critério: ${criterio}. Para cada uma que cair, dê o motivo e uma sugestão concreta.
-Só refute com evidência (cite arquivo e linha); dúvida não é refutação. Devolva a lista, vazia se nada cair.`,
+Só refute com evidência (cite arquivo e linha); dúvida não é refutação. Não edite nada. Devolva a lista, vazia se nada cair.`,
       { label: `refuta:${lente}:${p}`, phase: 'Refutar', schema: VEREDICTO }))))).filter(Boolean)
   const caidas = vereditos.flatMap(v => v.refutadas)
   log(`rodada ${rodada}: ${caidas.length} refutações`)
@@ -3335,27 +3350,41 @@ Só refute com evidência (cite arquivo e linha); dúvida não é refutação. D
   await agent(`Você é o corretor do grupo ${grupo}. Estas entradas foram refutadas: ${JSON.stringify(caidas)}.
 Para cada uma, corrija o TSV correspondente (${pacotes.map(tsvDe).join(', ')} ou ${tsvGrupos}) aplicando a sugestão
 ou uma alternativa melhor, mantendo a consistência entre pacotes e o glossário (${GLOSSARIO}). ${regras}
-Devolva o que mudou.`, { label: `corrige:${grupo}:${rodada}`, phase: 'Refutar' })
+Não faça commit. Devolva o que mudou.`, { label: `corrige:${grupo}:${rodada}`, phase: 'Refutar' })
 }
 
 // ---------- Aplicar (um só) ----------
 phase('Aplicar')
 const aplicacao = await agent(`Você é o ÚNICO aplicador do grupo ${grupo} (fase ${fase}). Ninguém mais edita código enquanto você roda.
-Ordem obrigatória (spec §4.6):
-1. Se ${tsvGrupos} tem linhas: "go run ./scripts/ifacerename -dir . -groups ${tsvGrupos}", depois "go build ./... && go vet ./...".
-   Vermelho → "git checkout -- ." e PARE devolvendo ok=false com a saída.
-   Verde → "git add -A" e "git commit -m '<grupo>: métodos de interface em inglês'".
-2. Para cada pacote, na ordem ${JSON.stringify(pacotes)}: monte ${scratch}/<pacote>.rf com uma linha "mv <endereco> <novo>"
-   por entrada de ${tsvDe('<pacote>')} cuja novo ≠ nome atual (pule as "mantido"); endereços com especie terminada em
-   "#ambiguo" NÃO entram no rf: renomeie-os com "gopls rename -w <arquivo>:<linha>:<coluna> <novo>" depois do rf.
-   Rode "scripts/rename-apply.sh <pacote> ${scratch}/<pacote>.rf ${scratch}/<pacote>.diff". Leia o diff.
-   Exit ≠ 0 → nada foi escrito; devolva ok=false com o stderr (o mapeamento volta ao juiz).
-   Exit 0 → "git add -A" e "git commit -m '<pacote>: identificadores em inglês'".
-3. Passada de prosa: "go run ./scripts/renamecite -dir . ${pacotes.map(p => '-idents ' + tsvDe(p)).join(' ')} -protect planning/identificadores-em-ingles/protegidos.txt -report ${scratch}/renamecite-${grupo}.txt".
-   O relatório tem linhas "aplicado" (toda substituição, com a regra) e "pulado" (ambiguidade, protegido). Leia as DUAS: toda linha "pulado ... ambíguo" é resolvida qualificando a citação no texto à mão (é prosa, não código);
-   toda linha "aplicado" cujo token não era citação de identificador (nome de coluna, chave YAML, arquivo em disco) é revertida à mão e o token entra em planning/identificadores-em-ingles/protegidos.txt (um por linha) no mesmo commit. O glossário, o spec, o plano e os TSV são excluídos por padrão.
-   "gofmt -l ." tem de sair vazio. "git add -A" e "git commit -m '${grupo}: citações em docs e comentários'".
-Nunca edite código Go à mão fora do passo 3. Devolva ok e a saída resumida de cada passo.`,
+${ambiente}
+Ordem obrigatória (spec §4.6), com commit ao fim de cada passo:
+0. Commit do mapeamento: "git add planning/identificadores-em-ingles docs/glossario.md" e
+   "git commit -m '${grupo}: mapeamento de identificadores'".
+1. Se ${tsvGrupos} tem linhas além do cabeçalho: "go run ./scripts/ifacerename -dir . -groups ${tsvGrupos}", depois
+   "go build ./..." e "go vet ./...". Vermelho → "git checkout -- ." e PARE devolvendo ok=false com a saída.
+   Verde → "git add -A" e "git commit -m '${grupo}: métodos de interface em inglês'".
+2. Para cada pacote, na ordem ${JSON.stringify(pacotes)}:
+   a) Renames por posição PRIMEIRO (antes de o rf mexer nos arquivos, quando as posições do inventário ainda valem): para
+      cada linha de ${tsvDe('<pacote>')} com especie terminada em "#ambiguo" ou "#gopls" e novo ≠ nome atual, rode
+      "gopls rename -w <arquivo>:<linha>:<coluna> <novo>" (a posição está no motivo). Processe em ordem DECRESCENTE de
+      linha e, na mesma linha, decrescente de coluna, para um rename não deslocar a coluna do seguinte. Use um daemon:
+      antes do primeiro, 'gopls -listen="unix;/run/user/1000/gopls-ciclo.sock" >/dev/null 2>&1 &' e depois
+      'gopls -remote="unix;/run/user/1000/gopls-ciclo.sock" rename -w ...' (~2 s por rename); mate o daemon ao fim do
+      grupo. Se o gopls recusar um rename (conflito), pule-o, anote no relatório com o motivo e siga.
+   b) Monte ${scratch}/<pacote com / trocado por _>.rf com uma linha "mv <endereco> <novo>" por entrada SEM sufixo cuja
+      novo ≠ nome atual (pule as "mantido"). Rode "scripts/rename-apply.sh <pacote> <script.rf> <script.diff>". Leia o diff.
+      Exit ≠ 0 → nada foi escrito por ele; leia o stderr: se for "already have" ou tipo, tire a(s) linha(s) ofensiva(s)
+      para um arquivo <pacote>.recusadas.txt no scratch, anote, e rode de novo sem elas; se falhar de novo, devolva ok=false.
+   c) "go build ./..." e "go vet ./..." verdes → "git add -A" e "git commit -m '<pacote>: identificadores em inglês'".
+3. Passada de prosa: "go run ./scripts/renamecite -dir . ${pacotes.map(p => '-idents ' + tsvDe(p)).join(' ')} -protect ${PROTEGIDOS} -report ${scratch}/renamecite-${grupo}.txt".
+   O relatório tem linhas "aplicado" (toda substituição, com a regra) e "pulado" (ambiguidade, protegido). Leia as DUAS:
+   toda linha "pulado ... ambíguo" é resolvida qualificando a citação no texto à mão (é prosa, não código); toda linha
+   "aplicado" cujo token não era citação de identificador (nome de coluna, chave YAML, arquivo em disco, palavra de
+   prosa) é revertida à mão e o token entra em ${PROTEGIDOS} (um por linha) no mesmo commit.
+   "gofmt -l ." tem de sair vazio; "go build ./..." e "go vet ./..." verdes. "git add -A" e
+   "git commit -m '${grupo}: citações em docs e comentários'".
+Nunca edite código Go à mão fora do passo 3. Devolva ok e a saída resumida de cada passo, inclusive quantos renames por
+posição e quantas linhas recusadas.`,
   { label: `aplica:${grupo}`, phase: 'Aplicar', schema: RELATORIO })
 if (!aplicacao || !aplicacao.ok) {
   log(`aplicação falhou: ${aplicacao ? aplicacao.saida.slice(0, 500) : 'sem retorno'}`)
@@ -3365,21 +3394,41 @@ if (!aplicacao || !aplicacao.ok) {
 // ---------- Verificar ----------
 phase('Verificar')
 const [verificacao, completude] = await parallel([
-  () => agent(`Você é o verificador do grupo ${grupo}. Rode, nesta ordem, e cole a saída resumida de cada um:
-"make build", "make test", "make test-race", "go test ./internal/gates/ -count=1", "make lint".
+  () => agent(`Você é o verificador do grupo ${grupo}. ${ambiente}
+Rode, nesta ordem, e cole a saída resumida de cada um:
+"make build", "make test", "make test-race", "go test ./internal/gates/ -count=1", "make lint" (a contagem impressa
+tem de ser igual ao conteúdo de .golangci-baseline; se for maior, liste os apontamentos novos com arquivo:linha).
 Qualquer vermelho: ok=false, com a saída COMPLETA do que falhou e o seu diagnóstico (mapeamento errado? citação morta?
 godoc que não começa pelo nome novo?). Não corrija nada.`, { label: `verifica:${grupo}`, phase: 'Verificar', schema: RELATORIO }),
-  () => agent(`Você é o crítico de completude do grupo ${grupo}. Rode
-"go run ./scripts/renameinv -dir . -out ${scratch}/inv-${grupo}.tsv -groups ${scratch}/grp-${grupo}.tsv" e, para cada pacote em
-${JSON.stringify(pacotes)}, compare as linhas do pacote no inventário novo com ${tsvDe('<pacote>')}: todo nome que ainda
-é o velho e não está marcado "mantido" no TSV é uma falta; todo "mantido" cujo motivo não é "já em inglês" nem
-"receptor curto" é suspeito. Liste as faltas com endereço. ok=true só com zero faltas.`,
+  () => agent(`Você é o crítico de completude do grupo ${grupo}. ${ambiente}
+Rode "go run ./scripts/renameinv -dir . -out ${scratch}/inv-${grupo}.tsv -groups ${scratch}/grp-${grupo}.tsv" e, para cada
+pacote em ${JSON.stringify(pacotes)}, compare as linhas do pacote no inventário novo com ${tsvDe('<pacote>')}: todo nome
+que ainda é o velho (coluna endereco do TSV) e não está marcado "mantido" no TSV é uma falta; todo "mantido" cujo
+motivo não é "já em inglês" nem "receptor curto" é suspeito e entra na lista; toda linha do inventário novo com nome em
+PT-BR (acento, ou palavra que o glossário lista como termo PT-BR) fora de Test*/Benchmark*/Fuzz* é falta. Liste as
+faltas com endereço. ok=true só com zero faltas. Não corrija nada.`,
     { label: `completude:${grupo}`, phase: 'Verificar', schema: RELATORIO }),
 ])
 return { ok: !!(verificacao && verificacao.ok && completude && completude.ok), verificacao, completude }
 ```
 
-- [ ] **Passo 2: Ensaio no grupo menor**
+- [ ] **Passo 2: Inventário pós-Fase 1 e lista de protegidos**
+
+O `inventario-inicial.tsv` foi gerado antes da Fase 1 e traz pacotes e
+arquivos com os nomes velhos nas colunas `pacote` e `posicao`. O workflow lê
+um inventário regenerado sobre a árvore já renomeada:
+
+```bash
+go run ./scripts/renameinv -dir . -out planning/identificadores-em-ingles/inventario-pos-fase1.tsv -groups planning/identificadores-em-ingles/grupos-pos-fase1.tsv
+touch planning/identificadores-em-ingles/protegidos.txt
+git add planning/identificadores-em-ingles planning/identificadores-em-ingles-plano.md
+git commit -m "planning: inventário pós-Fase 1 e lista de protegidos para o workflow da Fase 2"
+```
+
+O inicial continua sendo a base de completude do fechamento (os nomes das
+declarações não mudaram na Fase 1; só o lugar onde moram).
+
+- [ ] **Passo 3: Ensaio no grupo menor**
 
 Rodar o workflow com `args = {fase: 2, grupo: "G0", pacotes: ["internal/units", "internal/unsafex"], scratch: "$SCRATCH"}`.
 Os dois pacotes têm poucas declarações (`units` tem quatro funções
