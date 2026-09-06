@@ -1,0 +1,37 @@
+pacote	especie	endereco	novo	motivo
+internal/buildinfo	var	Versao	Version	tradução direta; é alvo do -ldflags -X em Makefile:11 e do godoc, que mudam no MESMO commit (o linker ignora -X para símbolo inexistente e o binário responderia 'dev')
+internal/buildinfo	var	Commit	Commit	mantido: já em inglês (internal/buildinfo/buildinfo.go:23:2)
+internal/buildinfo	var	Data	Date	é a data de calendário do build (date -u no Makefile:13, vcs.time no fallback), não 'dados'; Makefile e godoc acompanham no mesmo commit; glossário: data (de calendário) → date
+internal/buildinfo	const	semInformacao	noVersionInfo	ocupa o slot de VERSÃO quando os ldflags não vieram: a guarda de buildinfo.go:49-51 é INDEPENDENTE do triplo-vazio de :46-48, e doVCS (:72-85) só escreve commit e data, nunca a versão; noInfo colidiria com o outro sentido de Info neste pacote (debug.BuildInfo, que vira readBuildInfo, e o local info em :73). ATENÇÃO: o godoc de :27-29 é reescrito À MÃO no MESMO commit — o rf troca só a primeira palavra e deixaria a prosa afirmando 'NEM os ldflags NEM o carimbo do VCS', condição que o código não implementa e que buildinfo_internal_test.go:37-57 refuta (a constante responde COM o carimbo presente); redação nova: 'noVersionInfo ocupa o slot de VERSÃO quando os ldflags não vieram — o carimbo do VCS informa commit e data, nunca a versão, então é ele que responde por `go install` direto. Quando nem o carimbo existe, vira a resposta inteira: o caso do binário de teste, que em geral não carrega vcs.revision.'
+internal/buildinfo	var	leInfo	readBuildInfo	indireção sobre debug.ReadBuildInfo que existe só como costura de teste; a variável leva o nome da função envolvida (idioma var osExit = os.Exit)
+internal/buildinfo	func	String	String	mantido: já em inglês; é a FUNÇÃO de apresentação do pacote (internal/buildinfo/buildinfo.go:44, SEM receptor — o pacote não declara nenhum tipo, então não há fmt.Stringer aqui), chamada qualificada como buildinfo.String() por internal/cli/cli.go:201, internal/server/documents.go:147 e benchmark/ingest-bench/harness.go:469; o godoc do pacote (:3-6) já a nomeia como a única superfície de apresentação (internal/buildinfo/buildinfo.go:44:6)
+internal/buildinfo	local	String.commit	commit	mantido: já em inglês (internal/buildinfo/buildinfo.go:45:10)
+internal/buildinfo	local	String.data	date	cópia local de Date (data de calendário do build); glossário: data (de calendário) → date; destino QUALIFICADO porque para local e param o rf exige o escopo — com `mv String.data date` ele recusa com "unimplemented replacement" e derruba o script inteiro do pacote, sem escrever nada; rf: mv String.data String.date
+internal/buildinfo	local	String.versao	version	cópia local de Version; mesmo motivo de String.data quanto ao destino qualificado; rf: mv String.versao String.version
+internal/buildinfo	local	String.texto	text	acumulador do texto de apresentação que String devolve; mesmo motivo de String.data quanto ao destino qualificado; rf: mv String.texto String.text
+internal/buildinfo	param	doVCS.commit	commit	mantido: já em inglês (internal/buildinfo/buildinfo.go:72:15)
+internal/buildinfo	param	doVCS.data	date	retorno nomeado: a data de calendário lida de vcs.time; esta linha vai obrigatoriamente ANTES da de doVCS → fromVCS (a ordem das linhas do TSV é a ordem do script rf, e depois do rename da função o endereço doVCS.data não resolve mais); rf: mv doVCS.data doVCS.date
+internal/buildinfo	func	doVCS	fromVCS	vindo do carimbo VCS que o toolchain grava; fromX é o idioma Go para 'obtido de'
+internal/buildinfo	local	doVCS.info	info	mantido: já em inglês (internal/buildinfo/buildinfo.go:73:2)
+internal/buildinfo	local	doVCS.ok	ok	mantido: já em inglês (internal/buildinfo/buildinfo.go:73:8)
+internal/buildinfo	local	doVCS.s	s	mantido: já em inglês (internal/buildinfo/buildinfo.go:77:9)
+internal/buildinfo	param	curto.rev	rev	mantido: já em inglês (abreviação de revision) (internal/buildinfo/buildinfo.go:92:12)
+internal/buildinfo	func	curto	short	abrevia o SHA de 40 para 12 caracteres; ecoa o git rev-parse --short que o godoc cita
+internal/buildinfo	local	curto.n	n	mantido: já em inglês (internal/buildinfo/buildinfo.go:93:8)
+internal/buildinfo	param	restauraVars.t	t	mantido: já em inglês (internal/buildinfo/buildinfo_internal_test.go:12:19)
+internal/buildinfo	func	restauraVars	restoreVars	helper de teste que restaura as três variáveis globais via t.Cleanup
+internal/buildinfo	local	restauraVars.v	v	mantido: já em inglês (uma letra; segue sendo a inicial de Version) (internal/buildinfo/buildinfo_internal_test.go:14:2)
+internal/buildinfo	local	restauraVars.c	c	mantido: já em inglês (uma letra; inicial de Commit) (internal/buildinfo/buildinfo_internal_test.go:14:5)
+internal/buildinfo	local	restauraVars.d	d	mantido: já em inglês (uma letra; segue sendo a inicial de Date) (internal/buildinfo/buildinfo_internal_test.go:14:8)
+internal/buildinfo	param	TestVersionRespondeComSHAEData.t	t	mantido: já em inglês (internal/buildinfo/buildinfo_internal_test.go:21:37)
+internal/buildinfo	func	TestVersionRespondeComSHAEData	TestVersionRespondeComSHAEData	mantido: nome de teste, Fase 4 (internal/buildinfo/buildinfo_internal_test.go:21:6)
+internal/buildinfo	local	TestVersionRespondeComSHAEData.got	got	mantido: já em inglês (internal/buildinfo/buildinfo_internal_test.go:25:2)
+internal/buildinfo	local	TestVersionRespondeComSHAEData.want	want	mantido: já em inglês (internal/buildinfo/buildinfo_internal_test.go:26:9)
+internal/buildinfo	param	TestFallbackUsaOCarimboDoVCSQuandoOsLdflagsNaoVieram.t	t	mantido: já em inglês (internal/buildinfo/buildinfo_internal_test.go:37:59)
+internal/buildinfo	func	TestFallbackUsaOCarimboDoVCSQuandoOsLdflagsNaoVieram	TestFallbackUsaOCarimboDoVCSQuandoOsLdflagsNaoVieram	mantido: nome de teste, Fase 4 (internal/buildinfo/buildinfo_internal_test.go:37:6)
+internal/buildinfo	local	TestFallbackUsaOCarimboDoVCSQuandoOsLdflagsNaoVieram.antiga	prev	guarda a readBuildInfo ANTERIOR para restaurar no defer; glossário: anterior (o valor anterior) → prev — old não está na tabela e o §4 já fechou que 'o anterior' é prev mesmo quando a prosa diz 'antes'; o nome da função de teste é Fase 4, o local é desta fase; rf: mv TestFallbackUsaOCarimboDoVCSQuandoOsLdflagsNaoVieram.antiga TestFallbackUsaOCarimboDoVCSQuandoOsLdflagsNaoVieram.prev
+internal/buildinfo	local	TestFallbackUsaOCarimboDoVCSQuandoOsLdflagsNaoVieram.got	got	mantido: já em inglês (internal/buildinfo/buildinfo_internal_test.go:50:2)
+internal/buildinfo	param	TestSemLdflagsESemCarimboRespondeDev.t	t	mantido: já em inglês (internal/buildinfo/buildinfo_internal_test.go:62:43)
+internal/buildinfo	func	TestSemLdflagsESemCarimboRespondeDev	TestSemLdflagsESemCarimboRespondeDev	mantido: nome de teste, Fase 4 (internal/buildinfo/buildinfo_internal_test.go:62:6)
+internal/buildinfo	local	TestSemLdflagsESemCarimboRespondeDev.antiga	prev	mesmo motivo de TestFallbackUsaOCarimboDoVCSQuandoOsLdflagsNaoVieram.antiga; rf: mv TestSemLdflagsESemCarimboRespondeDev.antiga TestSemLdflagsESemCarimboRespondeDev.prev
+internal/buildinfo	local	TestSemLdflagsESemCarimboRespondeDev.got	got	mantido: já em inglês (internal/buildinfo/buildinfo_internal_test.go:70:5)

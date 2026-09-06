@@ -18,7 +18,7 @@ Valem para **todas** as tarefas.
 
 1. **§54 — compaction não carrega segmento em memória.** Streaming record a record, buffer reutilizado. Nenhum `[]types.Record` acumulado, nenhuma leitura de segmento inteiro.
 2. **§128 `NO multi-writer v1`.** Toda mutação de índice continua passando pelo writer único, sob `s.wmu`. `Publish`, `ApplyOverlay` e `segTally` permanecem writer-only.
-3. **Durabilidade por um caminho só.** `checkpoint.escreveAtomico` ([manifest.go:250](../internal/storage/checkpoint/manifest.go:250)) é o único caminho de durabilidade provado do projeto, e o comentário lá proíbe duplicá-lo. A compaction não escreve manifest por conta própria: ela chama `Checkpoint()`.
+3. **Durabilidade por um caminho só.** `checkpoint.writeAtomic` ([manifest.go:250](../internal/storage/checkpoint/manifest.go:250)) é o único caminho de durabilidade provado do projeto, e o comentário lá proíbe duplicá-lo. A compaction não escreve manifest por conta própria: ela chama `Checkpoint()`.
 4. **Nenhuma dependência nova** (§97: binário único).
 5. **Idioma e estilo:** comentários, erros e nomes de teste em PT-BR, no estilo argumentativo existente — o comentário explica **por quê**, cita `§NN` e o débito que fecha. Sentinela por pacote + `errors.Is` na fronteira. Stdlib `testing`, zero testify.
 6. **`go test ./...`, `go test ./... -race` e o lint limpos** antes de cada commit. A regra continua: **0 apontamentos no código novo**.

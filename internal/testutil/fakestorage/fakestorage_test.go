@@ -30,11 +30,11 @@ type consumerStore interface {
 	AbreSnapshot() types.Snapshot
 	Lookup(field types.FieldID, v types.Value) (types.RowIDIterator, error)
 	Indexado(field types.FieldID) bool
-	Sequence(id types.RowID) (int64, types.Presenca)
+	Sequence(id types.RowID) (int64, types.Presence)
 	// Estado é o que a ingestão usa, e entra aqui pelo mesmo motivo dos
 	// outros: é assinatura que dublê e real precisam compartilhar, e o
 	// materializer só é intercambiável entre os dois enquanto ela bater.
-	Estado(key, buf []byte) (types.Record, []byte, types.Presenca, error)
+	Estado(key, buf []byte) (types.Record, []byte, types.Presence, error)
 }
 
 var (
@@ -474,10 +474,10 @@ func TestPutFlagsDriveLiveness(t *testing.T) {
 func TestSequence(t *testing.T) {
 	s := New(Indexes{})
 	rowID, _, _ := s.Put([]byte("ABC"), 42, 0, payload(t, fv(1, strVal("ABC"))), nil)
-	if seq, pres := s.Sequence(rowID); pres != types.PresencaViva || seq != 42 {
+	if seq, pres := s.Sequence(rowID); pres != types.PresenceLive || seq != 42 {
 		t.Errorf("Sequence = %d, %v", seq, pres)
 	}
-	if _, pres := s.Sequence(999); pres != types.PresencaAusente {
+	if _, pres := s.Sequence(999); pres != types.PresenceAbsent {
 		t.Error("row inexistente não tem sequence")
 	}
 	// Row tombstoned mantém a sequence VISÍVEL e se declara expirada — é o
@@ -486,7 +486,7 @@ func TestSequence(t *testing.T) {
 	// tentaria reabrir a entidade; devolvê-la escondida atrás de um "não sei"
 	// era o que permitia a ressurreição.
 	s.SetTombstone(rowID)
-	if seq, pres := s.Sequence(rowID); pres != types.PresencaExpirada || seq != 42 {
+	if seq, pres := s.Sequence(rowID); pres != types.PresenceExpired || seq != 42 {
 		t.Errorf("Sequence pós-tombstone = %d, %v; quer 42, expirada", seq, pres)
 	}
 }

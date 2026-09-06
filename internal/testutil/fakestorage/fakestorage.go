@@ -127,11 +127,11 @@ func New(idx Indexes) *Store {
 func valKey(v types.Value) string {
 	var scratch [40]byte // cobre ipv6_prefix (17B) e a maioria das strings
 	b := append(scratch[:0], byte(v.Type))
-	// CarregaI64 e não um switch local: um tipo de largura fixa esquecido no
+	// CarriesI64 e não um switch local: um tipo de largura fixa esquecido no
 	// ramo de bytes faria TODOS os seus valores colapsarem na chave [tag] no
 	// dublê — teste verde aqui e explosão na integração, que é exatamente a
 	// divergência que este dublê existe para expor.
-	if v.Type.CarregaI64() {
+	if v.Type.CarriesI64() {
 		b = binary.LittleEndian.AppendUint64(b, uint64(v.I64))
 	} else {
 		b = append(b, v.Bytes...)
@@ -297,20 +297,20 @@ func (s *Store) GetByKey(_ types.Snapshot, key, buf []byte) (types.Record, []byt
 // Estado espelha o Store real: três estados, e o record de uma entidade
 // expirada volta com RowID e Sequence VÁLIDOS — é deles que o stale check
 // depende para não deixar um evento antigo ressuscitar a row.
-func (s *Store) Estado(key, buf []byte) (types.Record, []byte, types.Presenca, error) {
+func (s *Store) Estado(key, buf []byte) (types.Record, []byte, types.Presence, error) {
 	rowID, ok := s.byKey[string(key)]
 	if !ok {
-		return types.Record{}, buf, types.PresencaAusente, nil
+		return types.Record{}, buf, types.PresenceAbsent, nil
 	}
 	r := s.rows[rowID]
 	rec, out, lido, err := s.readRow(r, buf)
 	if err != nil || !lido {
-		return types.Record{}, out, types.PresencaAusente, err
+		return types.Record{}, out, types.PresenceAbsent, err
 	}
 	if !r.live() {
-		return rec, out, types.PresencaExpirada, nil
+		return rec, out, types.PresenceExpired, nil
 	}
-	return rec, out, types.PresencaViva, nil
+	return rec, out, types.PresenceLive, nil
 }
 
 // GetByRowID idem, por rowId; ok=false para row inexistente ou tombstoned
@@ -326,17 +326,17 @@ func (s *Store) GetByRowID(_ types.Snapshot, id types.RowID, buf []byte) (types.
 // Sequence devolve a última sequence aplicada à row. ok=false apenas para
 // row sem estado publicado: row tombstoned MANTÉM a sequence visível (no
 // real a location existe, só carrega o bit de tombstone).
-func (s *Store) Sequence(id types.RowID) (int64, types.Presenca) {
+func (s *Store) Sequence(id types.RowID) (int64, types.Presence) {
 	r, ok := s.rows[id]
 	if !ok {
-		return 0, types.PresencaAusente
+		return 0, types.PresenceAbsent
 	}
 	// A sequence de uma row expirada volta, como no Store real: é o
 	// lastSequence do §58, e escondê-la reabriria o débito 25 no dublê.
 	if !r.live() {
-		return r.seq, types.PresencaExpirada
+		return r.seq, types.PresenceExpired
 	}
-	return r.seq, types.PresencaViva
+	return r.seq, types.PresenceLive
 }
 
 func (s *Store) readRow(r *row, buf []byte) (types.Record, []byte, bool, error) {

@@ -18,33 +18,33 @@ import (
 // reprova quem lembra de rodá-la. Um pyproject alterado sem rodar o Python
 // chegaria ao main sem nada acusar.
 
-const caminhoDoPyproject = "clients/python/pyproject.toml"
-const caminhoDoInitPython = "clients/python/src/nishidb/__init__.py"
-const caminhoDosErrosPython = "clients/python/src/nishidb/erros.py"
+const pyprojectPath = "clients/python/pyproject.toml"
+const pythonInitPath = "clients/python/src/nishidb/__init__.py"
+const pythonErrorsPath = "clients/python/src/nishidb/erros.py"
 
-// blocoProject recorta o bloco `[project]` do pyproject.
+// projectBlock recorta o bloco `[project]` do pyproject.
 //
 // Por recorte de texto, e não por parser: o Go não tem TOML na stdlib, e
 // acrescentar uma dependência ao ENGINE para ler o manifesto do client seria
 // pagar em dependência exatamente o que o client existe para não custar. O
 // recorte é suficiente porque o que se afirma são linhas de forma fixa, e a
 // falha do recorte é detectada pelos próprios testes (bloco vazio reprova).
-func blocoProject(t *testing.T) string {
+func projectBlock(t *testing.T) string {
 	t.Helper()
-	texto := leArquivo(t, caminhoDoPyproject)
-	ini := strings.Index(texto, "\n[project]\n")
-	if ini < 0 {
-		t.Fatalf("%s não tem a seção [project]", caminhoDoPyproject)
+	text := readFile(t, pyprojectPath)
+	start := strings.Index(text, "\n[project]\n")
+	if start < 0 {
+		t.Fatalf("%s não tem a seção [project]", pyprojectPath)
 	}
-	resto := texto[ini+len("\n[project]\n"):]
-	if fim := strings.Index(resto, "\n["); fim >= 0 {
-		resto = resto[:fim]
+	rest := text[start+len("\n[project]\n"):]
+	if end := strings.Index(rest, "\n["); end >= 0 {
+		rest = rest[:end]
 	}
-	if strings.TrimSpace(resto) == "" {
+	if strings.TrimSpace(rest) == "" {
 		t.Fatalf("a seção [project] de %s saiu vazia: o recorte quebrou, e um gate "+
-			"que não acha nada passa sempre", caminhoDoPyproject)
+			"que não acha nada passa sempre", pyprojectPath)
 	}
-	return resto
+	return rest
 }
 
 // "Zero dependência de runtime" é a doutrina do binário único traduzida para um
@@ -56,15 +56,15 @@ func blocoProject(t *testing.T) string {
 // precisa entrar. `[project.optional-dependencies].dev` não conta: um extra
 // nunca é instalado por `pip install nishidb`.
 func TestOPyprojectDoClientPythonNaoTemDependenciaDeRuntime(t *testing.T) {
-	bloco := blocoProject(t)
+	block := projectBlock(t)
 	re := regexp.MustCompile(`(?m)^dependencies\s*=\s*(.*)$`)
-	casou := re.FindStringSubmatch(bloco)
-	if casou == nil {
+	matched := re.FindStringSubmatch(block)
+	if matched == nil {
 		t.Fatalf("%s não declara `dependencies` em [project]: declare-o VAZIO, "+
-			"para que a ausência seja uma afirmação e não um esquecimento", caminhoDoPyproject)
+			"para que a ausência seja uma afirmação e não um esquecimento", pyprojectPath)
 	}
-	if got := strings.TrimSpace(casou[1]); got != "[]" {
-		t.Errorf("dependencies = %s em %s: o client Python é stdlib-only", got, caminhoDoPyproject)
+	if got := strings.TrimSpace(matched[1]); got != "[]" {
+		t.Errorf("dependencies = %s em %s: o client Python é stdlib-only", got, pyprojectPath)
 	}
 }
 
@@ -73,22 +73,22 @@ func TestOPyprojectDoClientPythonNaoTemDependenciaDeRuntime(t *testing.T) {
 // instalado reporta uma versão que nunca existiu — sem nada acusar, porque as
 // duas continuam válidas. É o irmão de TestAVersaoAnunciadaPeloDriverEhADoArtefato.
 func TestAVersaoDoClientPythonEhADoPyproject(t *testing.T) {
-	bloco := blocoProject(t)
+	block := projectBlock(t)
 	reProj := regexp.MustCompile(`(?m)^version\s*=\s*"([^"]+)"`)
-	casou := reProj.FindStringSubmatch(bloco)
-	if casou == nil {
-		t.Fatalf("%s não declara version em [project]", caminhoDoPyproject)
+	matched := reProj.FindStringSubmatch(block)
+	if matched == nil {
+		t.Fatalf("%s não declara version em [project]", pyprojectPath)
 	}
-	versao := casou[1]
+	version := matched[1]
 
-	init := leArquivo(t, caminhoDoInitPython)
+	init := readFile(t, pythonInitPath)
 	reInit := regexp.MustCompile(`(?m)^__version__\s*=\s*"([^"]+)"`)
-	casouInit := reInit.FindStringSubmatch(init)
-	if casouInit == nil {
-		t.Fatalf("%s não declara __version__", caminhoDoInitPython)
+	matchedInit := reInit.FindStringSubmatch(init)
+	if matchedInit == nil {
+		t.Fatalf("%s não declara __version__", pythonInitPath)
 	}
-	if casouInit[1] != versao {
-		t.Errorf("__version__ = %q mas o pyproject diz %q", casouInit[1], versao)
+	if matchedInit[1] != version {
+		t.Errorf("__version__ = %q mas o pyproject diz %q", matchedInit[1], version)
 	}
 }
 
@@ -103,26 +103,26 @@ func TestAVersaoDoClientPythonEhADoPyproject(t *testing.T) {
 // A lista não é escrita à mão em lugar nenhum: sai do go/ast sobre
 // protocol.go de um lado e do texto de erros.py do outro.
 func TestTodoCodigoDoProtocoloTemExcecaoNoClientPython(t *testing.T) {
-	codigos := codigosDoProtocolo(t)
-	if len(codigos) < 15 {
+	codes := protocolCodes(t)
+	if len(codes) < 15 {
 		t.Fatalf("só %d códigos extraídos de protocol.go: a extração quebrou, e um gate que "+
-			"não acha nada passa sempre", len(codigos))
+			"não acha nada passa sempre", len(codes))
 	}
 
-	python := leArquivo(t, caminhoDosErrosPython)
-	for nomeGo, valor := range codigos {
+	python := readFile(t, pythonErrorsPath)
+	for goName, value := range codes {
 		// A constante de módulo, para que o usuário possa comparar
 		// `err.code == nishidb.BAD_PARAMETER` sem digitar a string.
-		decl := valor + ` = "` + valor + `"`
+		decl := value + ` = "` + value + `"`
 		if !strings.Contains(python, decl) {
-			t.Errorf("%s (%s) não é constante em erros.py: acrescente `%s`", nomeGo, valor, decl)
+			t.Errorf("%s (%s) não é constante em erros.py: acrescente `%s`", goName, value, decl)
 			continue
 		}
 		// A constante existir não basta: ela precisa estar NA TABELA, senão o
 		// código continua caindo no DatabaseError genérico.
-		if !regexp.MustCompile(`(?m)^\s+` + valor + `:\s`).MatchString(python) {
+		if !regexp.MustCompile(`(?m)^\s+` + value + `:\s`).MatchString(python) {
 			t.Errorf("%s (%s) tem constante mas não está na tabela CODIGOS de erros.py",
-				nomeGo, valor)
+				goName, value)
 		}
 	}
 }
@@ -134,16 +134,16 @@ func TestTodoCodigoDoProtocoloTemExcecaoNoClientPython(t *testing.T) {
 // falhar no bind — e o sintoma aparece longe daqui, como "o SQLAlchemy não
 // funciona com este banco".
 func TestOClientPythonAnunciaOParamstyleDoServidor(t *testing.T) {
-	init := leArquivo(t, caminhoDoInitPython)
+	init := readFile(t, pythonInitPath)
 	if !strings.Contains(init, `paramstyle = "qmark"`) {
 		t.Errorf("%s não anuncia paramstyle qmark: o NishiDB usa `?` posicional",
-			caminhoDoInitPython)
+			pythonInitPath)
 	}
 	// threadsafety 1 é a verdade: por baixo de cada Connection há UMA conexão
 	// HTTP, que executa uma requisição por vez. Anunciar 2 ou 3 convidaria a um
 	// compartilhamento que corromperia o stream no meio de uma leitura.
 	if !strings.Contains(init, "threadsafety = 1") {
-		t.Errorf("%s não anuncia threadsafety = 1", caminhoDoInitPython)
+		t.Errorf("%s não anuncia threadsafety = 1", pythonInitPath)
 	}
 }
 
@@ -160,7 +160,7 @@ func TestOClientPythonAnunciaOParamstyleDoServidor(t *testing.T) {
 // comentário mencionando "test-python-it" não pode satisfazer o teste com o
 // passo de fato removido.
 func TestWorkflowDeCIRodaOTesteDeIntegracaoDoClientPython(t *testing.T) {
-	script := scriptDoJob(t, "python")
+	script := jobScript(t, "python")
 	if !strings.Contains(script, "test-python-it") {
 		t.Error("o job `python` não roda `make test-python-it` — o client fica sem prova " +
 			"contra o servidor real em CI")
@@ -173,7 +173,7 @@ func TestWorkflowDeCIRodaOTesteDeIntegracaoDoClientPython(t *testing.T) {
 // `make test-python` tem de continuar rodando com zero `pip install` — é essa
 // promessa que o torna executável em qualquer máquina com python3.
 func TestWorkflowDeCIRodaOLintDoClientPython(t *testing.T) {
-	if !strings.Contains(scriptDoJob(t, "python-lint"), "lint-python") {
+	if !strings.Contains(jobScript(t, "python-lint"), "lint-python") {
 		t.Error("o job `python-lint` não roda `make lint-python`")
 	}
 }
@@ -191,30 +191,30 @@ var rePythonVersion = regexp.MustCompile(`python-version:\s*['"]?([^\s'"\n]+)['"
 // O CI roda no PISO de propósito: é a versão em que uma sintaxe nova demais
 // quebra, e validar só na mais recente deixaria o `requires-python` mentir.
 func TestWorkflowDeCIPinaPythonNoPisoDoPyproject(t *testing.T) {
-	achados := rePythonVersion.FindAllStringSubmatch(leWorkflowDeCI(t), -1)
-	if len(achados) == 0 {
+	matches := rePythonVersion.FindAllStringSubmatch(readCIWorkflow(t), -1)
+	if len(matches) == 0 {
 		t.Fatal("o workflow não fixa python-version em nenhum step de actions/setup-python")
 	}
 
-	bloco := blocoProject(t)
-	rePiso := regexp.MustCompile(`(?m)^requires-python\s*=\s*">=\s*([0-9]+\.[0-9]+)"`)
-	casou := rePiso.FindStringSubmatch(bloco)
-	if casou == nil {
-		t.Fatalf("%s não declara requires-python na forma \">=X.Y\"", caminhoDoPyproject)
+	block := projectBlock(t)
+	reFloor := regexp.MustCompile(`(?m)^requires-python\s*=\s*">=\s*([0-9]+\.[0-9]+)"`)
+	matched := reFloor.FindStringSubmatch(block)
+	if matched == nil {
+		t.Fatalf("%s não declara requires-python na forma \">=X.Y\"", pyprojectPath)
 	}
-	piso := casou[1]
+	floor := matched[1]
 
-	for _, achado := range achados {
+	for _, match := range matches {
 		// Faixa solta é recusada pelo mesmo motivo que a versão de Go é fixa:
 		// versão de instrumento é configuração que muda o resultado, e deixar o
 		// runner escolher o patch faz o CI validar num interpretador que
 		// ninguém mediu.
-		if strings.ContainsAny(achado[1], "+*") || strings.Count(achado[1], ".") > 1 {
-			t.Errorf("python-version = %q não é o piso major.minor exato", achado[1])
+		if strings.ContainsAny(match[1], "+*") || strings.Count(match[1], ".") > 1 {
+			t.Errorf("python-version = %q não é o piso major.minor exato", match[1])
 		}
-		if achado[1] != piso {
+		if match[1] != floor {
 			t.Errorf("python-version = %q no workflow e requires-python >= %q no pyproject: "+
-				"o CI validaria o client num Python que não é o piso declarado", achado[1], piso)
+				"o CI validaria o client num Python que não é o piso declarado", match[1], floor)
 		}
 	}
 }
@@ -229,13 +229,13 @@ func TestWorkflowDeCIPinaPythonNoPisoDoPyproject(t *testing.T) {
 // Não é hipótese: o arquivo nasceu ausente neste próprio pacote (um `touch` que
 // não chegou a rodar), e o defeito só apareceu ao inspecionar o wheel montado.
 func TestOClientPythonPublicaOMarcadorDeTipagem(t *testing.T) {
-	bloco := blocoProject(t)
-	if !strings.Contains(bloco, "Typing :: Typed") {
+	block := projectBlock(t)
+	if !strings.Contains(block, "Typing :: Typed") {
 		// Sem o classifier não há o que sustentar, e o gate não se aplica.
 		return
 	}
-	caminho := filepath.Join(raizDoRepo, "clients/python/src/nishidb/py.typed")
-	if _, err := os.Stat(caminho); err != nil {
+	path := filepath.Join(repoRoot, "clients/python/src/nishidb/py.typed")
+	if _, err := os.Stat(path); err != nil {
 		t.Errorf("o pyproject declara `Typing :: Typed` mas src/nishidb/py.typed não existe: "+
 			"o mypy de quem instala o pacote não veria anotação nenhuma (%v)", err)
 	}
@@ -247,14 +247,14 @@ func TestOClientPythonPublicaOMarcadorDeTipagem(t *testing.T) {
 // `dist/` na raiz por outra razão, e um padrão largo esconderia um diretório
 // chamado dist que fosse código.
 func TestOsArtefatosDoClientPythonEstaoNoGitignore(t *testing.T) {
-	ignore := leArquivo(t, ".gitignore")
-	for _, padrao := range []string{
+	ignore := readFile(t, ".gitignore")
+	for _, pattern := range []string{
 		"clients/python/dist/",
 		"clients/python/**/__pycache__/",
 		"clients/python/.mypy_cache/",
 	} {
-		if !strings.Contains(ignore, padrao) {
-			t.Errorf(".gitignore não ignora %q", padrao)
+		if !strings.Contains(ignore, pattern) {
+			t.Errorf(".gitignore não ignora %q", pattern)
 		}
 	}
 }

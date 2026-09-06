@@ -1015,7 +1015,7 @@ func TestASerieDaReconstrucaoDesceQuandoOLacoMorre(t *testing.T) {
 	dirIrma := semeiaHistorico(t, a, "eventos", 0, 600)
 
 	registro := &registroDoServidor{}
-	srv, err := server.Novo(a.carrega(), server.Opcoes{Log: logging.New(registro, logging.FormatoTexto, slog.LevelInfo)})
+	srv, err := server.Novo(a.carrega(), server.Opcoes{Log: logging.New(registro, logging.FormatText, slog.LevelInfo)})
 	if err != nil {
 		t.Fatalf("subida: %v", err)
 	}

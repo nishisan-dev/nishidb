@@ -109,10 +109,10 @@ func TestRowVencidaSomeDaLeituraSemNenhumColetorTerRodado(t *testing.T) {
 	}
 	// Mas a ingestão continua vendo a entidade, e é isso que impede a
 	// ressurreição por evento antigo.
-	if _, _, pres, err := s.Estado([]byte("A"), nil); err != nil || pres != types.PresencaExpirada {
+	if _, _, pres, err := s.Estado([]byte("A"), nil); err != nil || pres != types.PresenceExpired {
 		t.Fatalf("Estado: %v, err=%v; quer expirada", pres, err)
 	}
-	if _, pres := s.Sequence(id); pres != types.PresencaExpirada {
+	if _, pres := s.Sequence(id); pres != types.PresenceExpired {
 		t.Fatalf("Sequence: %v; quer expirada", pres)
 	}
 }
@@ -124,7 +124,7 @@ func TestEscritaNovaRenovaOPrazo(t *testing.T) {
 
 	rel.avanca(50 * time.Minute)
 	rec, _, pres, err := s.Estado([]byte("A"), nil)
-	if err != nil || pres != types.PresencaViva {
+	if err != nil || pres != types.PresenceLive {
 		t.Fatalf("pres=%v err=%v", pres, err)
 	}
 	if _, _, err := s.Put([]byte("A"), 2, 0, payloadComEscrita(t, s, "A", "Alive", rel.t), &rec); err != nil {
@@ -173,7 +173,7 @@ func TestExpiraPublicaLapideDuravelEBaixaALiveness(t *testing.T) {
 	}
 
 	// A lápide preserva o lastSequence do §58.
-	if seq, pres := s.Sequence(id); pres != types.PresencaExpirada || seq != 7 {
+	if seq, pres := s.Sequence(id); pres != types.PresenceExpired || seq != 7 {
 		t.Fatalf("lastSequence = %d, %v; quer 7, expirada", seq, pres)
 	}
 	if err := s.Checkpoint(); err != nil {
@@ -189,7 +189,7 @@ func TestExpiraPublicaLapideDuravelEBaixaALiveness(t *testing.T) {
 	if _, _, ok, err := s2.GetByRowID(s2.presente(), id, nil); err != nil || ok {
 		t.Fatalf("a row voltou a ser visível depois de reabrir: ok=%v err=%v", ok, err)
 	}
-	if _, _, pres, err := s2.Estado([]byte("A"), nil); err != nil || pres != types.PresencaExpirada {
+	if _, _, pres, err := s2.Estado([]byte("A"), nil); err != nil || pres != types.PresenceExpired {
 		t.Fatalf("Estado após reabrir: %v, err=%v", pres, err)
 	}
 }
@@ -202,7 +202,7 @@ func TestExpiraAbortaSemEscreverQuandoARowFoiRenovada(t *testing.T) {
 
 	rel.avanca(2 * time.Hour)
 	rec, _, pres, err := s.Estado([]byte("A"), nil)
-	if err != nil || pres != types.PresencaExpirada {
+	if err != nil || pres != types.PresenceExpired {
 		t.Fatalf("pres=%v err=%v", pres, err)
 	}
 	// Renova ANTES de o coletor chamar Expira.

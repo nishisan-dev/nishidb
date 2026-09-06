@@ -54,15 +54,15 @@ type pendenciaDeContador struct {
 // enquanto o Put anda, e a divergência só apareceria na auditoria — é a guarda
 // que pega o chamador de storage.Open que esqueceu de ligar os contadores.
 func (s *Store) abreContadores(opts Options, m *checkpoint.Manifest, idxDir string, minRows uint64) error {
-	var declarados []checkpoint.ContadorInfo
+	var declarados []checkpoint.CounterInfo
 	if m != nil {
-		declarados = m.Contadores
+		declarados = m.Counters
 	}
 	if opts.CompilaContadores == nil {
 		if len(declarados) > 0 {
 			nomes := make([]string, 0, len(declarados))
 			for _, d := range declarados {
-				nomes = append(nomes, d.Nome)
+				nomes = append(nomes, d.Name)
 			}
 			return fmt.Errorf("%w: o dataset %s declara os contadores %v no manifest e esta abertura não forneceu CompilaContadores; "+
 				"abrir sem as definições deixaria o contador parado enquanto o Put anda",
@@ -84,9 +84,9 @@ func (s *Store) abreContadores(opts Options, m *checkpoint.Manifest, idxDir stri
 		return fmt.Errorf("%w: ModoHistorico não aceita counters: a tabela histórica não tem estado corrente a contar", ErrInvalidArgument)
 	}
 	dir := filepath.Join(idxDir, diretorioDosContadores)
-	porNome := make(map[string]checkpoint.ContadorInfo, len(declarados))
+	porNome := make(map[string]checkpoint.CounterInfo, len(declarados))
 	for _, info := range declarados {
-		porNome[info.Nome] = info
+		porNome[info.Name] = info
 	}
 	vistos := make(map[string]struct{}, len(defs))
 	for _, def := range defs {
@@ -105,7 +105,7 @@ func (s *Store) abreContadores(opts Options, m *checkpoint.Manifest, idxDir stri
 			recria, motivo = true, "o dataset não tinha este contador"
 		case !mesmaDefinicao(info, def):
 			recria, motivo = true, fmt.Sprintf("os parâmetros mudaram (groupBy %v → %v, where %q → %q)",
-				info.Colunas, colunasDe(def), info.Where, def.Where)
+				info.Columns, colunasDe(def), info.Where, def.Where)
 		}
 		c, err := counter.Abre(filepath.Join(dir, def.Nome), def, minRows, recria)
 		if err != nil {
@@ -162,8 +162,8 @@ func (s *Store) abreContadores(opts Options, m *checkpoint.Manifest, idxDir stri
 
 // mesmaDefinicao compara os parâmetros que decidem o conteúdo: nome, colunas
 // (na ordem) e where.
-func mesmaDefinicao(info checkpoint.ContadorInfo, def counter.Definicao) bool {
-	return info.Nome == def.Nome && info.Where == def.Where && slices.Equal(info.Colunas, colunasDe(def))
+func mesmaDefinicao(info checkpoint.CounterInfo, def counter.Definicao) bool {
+	return info.Name == def.Nome && info.Where == def.Where && slices.Equal(info.Columns, colunasDe(def))
 }
 
 func colunasDe(def counter.Definicao) []uint16 {
@@ -176,14 +176,14 @@ func colunasDe(def counter.Definicao) []uint16 {
 
 // infoDosContadores é a seção do manifest, na ordem em que os contadores
 // foram declarados.
-func (s *Store) infoDosContadores() []checkpoint.ContadorInfo {
+func (s *Store) infoDosContadores() []checkpoint.CounterInfo {
 	if len(s.contadores) == 0 {
 		return nil
 	}
-	out := make([]checkpoint.ContadorInfo, 0, len(s.contadores))
+	out := make([]checkpoint.CounterInfo, 0, len(s.contadores))
 	for _, c := range s.contadores {
 		def := c.Def()
-		out = append(out, checkpoint.ContadorInfo{Nome: def.Nome, Colunas: colunasDe(def), Where: def.Where})
+		out = append(out, checkpoint.CounterInfo{Name: def.Nome, Columns: colunasDe(def), Where: def.Where})
 	}
 	return out
 }
@@ -356,7 +356,7 @@ func (s *Store) AuditaContadores(ctx context.Context) ([]counter.Relatorio, erro
 
 	var buf []byte
 	var linhas uint64
-	for id := snap.BaseRowID; id < snap.LimiteRowID; id++ {
+	for id := snap.BaseRowID; id < snap.LimitRowID; id++ {
 		if id&passoDoContexto == 0 {
 			if err := ctx.Err(); err != nil {
 				return nil, err
@@ -365,13 +365,13 @@ func (s *Store) AuditaContadores(ctx context.Context) ([]counter.Relatorio, erro
 		// A validade vem ANTES de consultar o journal: um snapshot invalidado
 		// já pode ter tido as versões dele podadas, e o journal responderia
 		// "location corrente" para uma linha que mudou depois de T0.
-		if !s.snaps.valido(snap.Epoca) {
+		if !s.snaps.valido(snap.Epoch) {
 			return nil, ErrSnapshotExpirado
 		}
 		var packed uint64
 		var ok bool
 		if !s.vers.Vazio() {
-			packed, ok = s.vers.Em(id, snap.Epoca)
+			packed, ok = s.vers.Em(id, snap.Epoch)
 		}
 		if !ok {
 			if packed, ok = s.locs.Get(id); !ok {
@@ -418,7 +418,7 @@ func (s *Store) AuditaContadores(ctx context.Context) ([]counter.Relatorio, erro
 			s.audTrace(id)
 		}
 	}
-	if !s.snaps.valido(snap.Epoca) {
+	if !s.snaps.valido(snap.Epoch) {
 		return nil, ErrSnapshotExpirado
 	}
 

@@ -14,7 +14,7 @@ import (
 // aceitar isso deixaria o log fora da spec por descuido de biblioteca.
 func TestJSONUsaOsNomesDeCampoDoSpec95(t *testing.T) {
 	var buf bytes.Buffer
-	log := logging.New(&buf, logging.FormatoJSON, slog.LevelInfo).
+	log := logging.New(&buf, logging.FormatJSON, slog.LevelInfo).
 		Component("kafka").Dataset("radius_sessions")
 
 	log.Info("consumer.subiu", "consumer no ar")
@@ -23,14 +23,14 @@ func TestJSONUsaOsNomesDeCampoDoSpec95(t *testing.T) {
 	if err := json.Unmarshal(buf.Bytes(), &m); err != nil {
 		t.Fatalf("linha não é JSON: %v (%q)", err, buf.String())
 	}
-	for _, campo := range []string{"timestamp", "level", "component", "dataset", "event", "message"} {
-		if _, ok := m[campo]; !ok {
-			t.Errorf("campo %q ausente; tem %v", campo, chaves(m))
+	for _, field := range []string{"timestamp", "level", "component", "dataset", "event", "message"} {
+		if _, ok := m[field]; !ok {
+			t.Errorf("campo %q ausente; tem %v", field, keys(m))
 		}
 	}
-	for _, proibido := range []string{"time", "msg"} {
-		if _, ok := m[proibido]; ok {
-			t.Errorf("campo %q presente; o §95 nomeia timestamp/message", proibido)
+	for _, banned := range []string{"time", "msg"} {
+		if _, ok := m[banned]; ok {
+			t.Errorf("campo %q presente; o §95 nomeia timestamp/message", banned)
 		}
 	}
 	if m["component"] != "kafka" || m["dataset"] != "radius_sessions" {
@@ -45,7 +45,7 @@ func TestJSONUsaOsNomesDeCampoDoSpec95(t *testing.T) {
 // em toda linha de log de escopo global é ruído que atrapalha o grep.
 func TestSemDatasetOCampoNaoAparece(t *testing.T) {
 	var buf bytes.Buffer
-	logging.New(&buf, logging.FormatoJSON, slog.LevelInfo).
+	logging.New(&buf, logging.FormatJSON, slog.LevelInfo).
 		Component("server").Info("server.subiu", "ok")
 
 	var m map[string]any
@@ -59,13 +59,13 @@ func TestSemDatasetOCampoNaoAparece(t *testing.T) {
 
 func TestFormatoTextoTambemNomeiaOsCamposDoSpec95(t *testing.T) {
 	var buf bytes.Buffer
-	logging.New(&buf, logging.FormatoTexto, slog.LevelInfo).
+	logging.New(&buf, logging.FormatText, slog.LevelInfo).
 		Component("storage").Info("recovery.divergencia", "header prevalece")
 
 	s := buf.String()
-	for _, campo := range []string{"timestamp=", "level=", "component=", "event=", "message="} {
-		if !strings.Contains(s, campo) {
-			t.Errorf("saída não traz %q: %s", campo, s)
+	for _, field := range []string{"timestamp=", "level=", "component=", "event=", "message="} {
+		if !strings.Contains(s, field) {
+			t.Errorf("saída não traz %q: %s", field, s)
 		}
 	}
 	if strings.Contains(s, "time=") && !strings.Contains(s, "timestamp=") {
@@ -75,41 +75,41 @@ func TestFormatoTextoTambemNomeiaOsCamposDoSpec95(t *testing.T) {
 
 // §95: "Não registrar payload completo por default. Não registrar senha."
 // Este é o gate: o material sensível não pode chegar ao writer, venha ele por
-// chave de atributo reconhecidamente sensível ou por valor marcado Segredo.
+// chave de atributo reconhecidamente sensível ou por valor marcado Secret.
 func TestSenhaEPayloadNaoChegamAoWriter(t *testing.T) {
-	const senha = "trocar-esta-senha-agora"
-	const corpo = `{"id":"A","Framed-IP-Address":"10.0.0.1"}`
+	const password = "trocar-esta-senha-agora"
+	const body = `{"id":"A","Framed-IP-Address":"10.0.0.1"}`
 
-	casos := []struct {
-		nome  string
+	cases := []struct {
+		name  string
 		attrs []any
 	}{
-		{"chave password", []any{"password", senha}},
-		{"chave senha", []any{"senha", senha}},
-		{"chave passwd", []any{"passwd", senha}},
-		{"chave secret", []any{"secret", senha}},
-		{"chave token", []any{"token", senha}},
-		{"chave payload", []any{"payload", corpo}},
-		{"chave evento", []any{"evento", corpo}},
-		{"chave body", []any{"body", corpo}},
-		{"valor Segredo", []any{"qualquer_coisa", logging.Segredo(senha)}},
-		{"Segredo aninhado em grupo", []any{"kafka", slog.GroupValue(slog.Any("password", logging.Segredo(senha)))}},
+		{"chave password", []any{"password", password}},
+		{"chave senha", []any{"senha", password}},
+		{"chave passwd", []any{"passwd", password}},
+		{"chave secret", []any{"secret", password}},
+		{"chave token", []any{"token", password}},
+		{"chave payload", []any{"payload", body}},
+		{"chave evento", []any{"evento", body}},
+		{"chave body", []any{"body", body}},
+		{"valor Secret", []any{"qualquer_coisa", logging.Secret(password)}},
+		{"Secret aninhado em grupo", []any{"kafka", slog.GroupValue(slog.Any("password", logging.Secret(password)))}},
 	}
 
-	for _, c := range casos {
-		t.Run(c.nome, func(t *testing.T) {
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			logging.New(&buf, logging.FormatoJSON, slog.LevelInfo).
+			logging.New(&buf, logging.FormatJSON, slog.LevelInfo).
 				Component("kafka").Info("teste", "mensagem", c.attrs...)
 
 			s := buf.String()
-			if strings.Contains(s, senha) {
+			if strings.Contains(s, password) {
 				t.Errorf("SENHA vazou para o log: %s", s)
 			}
 			if strings.Contains(s, "Framed-IP-Address") {
 				t.Errorf("PAYLOAD vazou para o log: %s", s)
 			}
-			if !strings.Contains(s, logging.Redactado) {
+			if !strings.Contains(s, logging.Redacted) {
 				t.Errorf("valor não foi substituído pela marca de redação: %s", s)
 			}
 		})
@@ -120,22 +120,22 @@ func TestSenhaEPayloadNaoChegamAoWriter(t *testing.T) {
 // operar: partição, offset e nome de env var têm de sobreviver.
 func TestRedacaoNaoEngoleOsCamposDeOperacao(t *testing.T) {
 	var buf bytes.Buffer
-	logging.New(&buf, logging.FormatoJSON, slog.LevelInfo).
+	logging.New(&buf, logging.FormatJSON, slog.LevelInfo).
 		Component("kafka").Dataset("radius_sessions").
 		Info("offset.commit", "commit no broker",
 			"partition", 3, "offset", int64(918273), "usernameEnv", "KAFKA_USERNAME")
 
 	s := buf.String()
-	for _, quer := range []string{`"partition":3`, `"offset":918273`, "KAFKA_USERNAME"} {
-		if !strings.Contains(s, quer) {
-			t.Errorf("saída não traz %s: %s", quer, s)
+	for _, want := range []string{`"partition":3`, `"offset":918273`, "KAFKA_USERNAME"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("saída não traz %s: %s", want, s)
 		}
 	}
 }
 
 func TestNivelFiltra(t *testing.T) {
 	var buf bytes.Buffer
-	log := logging.New(&buf, logging.FormatoJSON, slog.LevelWarn).Component("kafka")
+	log := logging.New(&buf, logging.FormatJSON, slog.LevelWarn).Component("kafka")
 	log.Info("ignorado", "não deve sair")
 	if buf.Len() != 0 {
 		t.Errorf("Info passou por um logger em nível Warn: %s", buf.String())
@@ -150,10 +150,10 @@ func TestNivelFiltra(t *testing.T) {
 // datasets compartilham o mesmo logger raiz e não podem contaminar um ao outro.
 func TestDerivacaoNaoMutaOLoggerDeOrigem(t *testing.T) {
 	var buf bytes.Buffer
-	raiz := logging.New(&buf, logging.FormatoJSON, slog.LevelInfo).Component("server")
-	_ = raiz.Dataset("radius_sessions")
+	source := logging.New(&buf, logging.FormatJSON, slog.LevelInfo).Component("server")
+	_ = source.Dataset("radius_sessions")
 
-	raiz.Info("evento", "sem dataset")
+	source.Info("evento", "sem dataset")
 
 	var m map[string]any
 	if err := json.Unmarshal(buf.Bytes(), &m); err != nil {
@@ -164,7 +164,7 @@ func TestDerivacaoNaoMutaOLoggerDeOrigem(t *testing.T) {
 	}
 }
 
-func chaves(m map[string]any) []string {
+func keys(m map[string]any) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
 		out = append(out, k)
@@ -182,11 +182,11 @@ func chaves(m map[string]any) []string {
 // critérios diferentes, então o mesmo log lido por duas ferramentas discorda
 // sobre quem emitiu a linha.
 func TestComponentEDatasetSubstituemEmVezDeAcumular(t *testing.T) {
-	casos := []struct {
-		nome   string
-		deriva func(*logging.Logger) *logging.Logger
-		campo  string
-		quer   string
+	cases := []struct {
+		name   string
+		derive func(*logging.Logger) *logging.Logger
+		field  string
+		want   string
 	}{
 		{"component duas vezes", func(l *logging.Logger) *logging.Logger {
 			return l.Component("server").Component("kafka")
@@ -195,23 +195,23 @@ func TestComponentEDatasetSubstituemEmVezDeAcumular(t *testing.T) {
 			return l.Component("kafka").Dataset("a").Dataset("b")
 		}, "dataset", "b"},
 	}
-	for _, c := range casos {
-		t.Run(c.nome, func(t *testing.T) {
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			c.deriva(logging.New(&buf, logging.FormatoJSON, slog.LevelInfo)).
+			c.derive(logging.New(&buf, logging.FormatJSON, slog.LevelInfo)).
 				Info("evento", "mensagem")
 
-			linha := buf.String()
-			if n := strings.Count(linha, `"`+c.campo+`":`); n != 1 {
+			line := buf.String()
+			if n := strings.Count(line, `"`+c.field+`":`); n != 1 {
 				t.Errorf("campo %q apareceu %d vezes; chave repetida em JSON tem comportamento indefinido:\n%s",
-					c.campo, n, linha)
+					c.field, n, line)
 			}
 			var m map[string]any
-			if err := json.Unmarshal([]byte(linha), &m); err != nil {
+			if err := json.Unmarshal([]byte(line), &m); err != nil {
 				t.Fatal(err)
 			}
-			if m[c.campo] != c.quer {
-				t.Errorf("%s = %v, quer %q (a derivação mais recente vence)", c.campo, m[c.campo], c.quer)
+			if m[c.field] != c.want {
+				t.Errorf("%s = %v, quer %q (a derivação mais recente vence)", c.field, m[c.field], c.want)
 			}
 		})
 	}
@@ -221,7 +221,7 @@ func TestComponentEDatasetSubstituemEmVezDeAcumular(t *testing.T) {
 // amarra partição e offset a um laço inteiro por ali.
 func TestWithSobreviveANovaDerivacao(t *testing.T) {
 	var buf bytes.Buffer
-	logging.New(&buf, logging.FormatoJSON, slog.LevelInfo).
+	logging.New(&buf, logging.FormatJSON, slog.LevelInfo).
 		Component("kafka").With("partition", 3).Dataset("d").
 		Info("evento", "mensagem")
 

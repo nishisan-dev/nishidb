@@ -190,18 +190,18 @@ type fonteMeta struct {
 // AbreSnapshot devolve o limite de linhas; o conjunto é fixo, então não há o
 // que congelar além dele. Época e instante ficam zerados e são ignorados.
 func (f *fonteMeta) AbreSnapshot() types.Snapshot {
-	return types.Snapshot{LimiteRowID: types.RowID(len(f.linhas) + 1)}
+	return types.Snapshot{LimitRowID: types.RowID(len(f.linhas) + 1)}
 }
 
 // FechaSnapshot é no-op: a fonte não retém nada.
 func (f *fonteMeta) FechaSnapshot(types.Snapshot) {}
 
 func (f *fonteMeta) ScanLive(snap types.Snapshot) types.RowIDIterator {
-	return &iteradorMeta{limite: snap.LimiteRowID}
+	return &iteradorMeta{limite: snap.LimitRowID}
 }
 
 func (f *fonteMeta) GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (types.Record, []byte, bool, error) {
-	if id == 0 || id >= snap.LimiteRowID || int(id) > len(f.linhas) {
+	if id == 0 || id >= snap.LimitRowID || int(id) > len(f.linhas) {
 		return types.Record{}, buf, false, nil
 	}
 	return f.record(id, buf)

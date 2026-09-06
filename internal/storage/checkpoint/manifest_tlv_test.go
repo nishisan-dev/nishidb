@@ -94,17 +94,17 @@ func TestManifestV1ContinuaSendoLido(t *testing.T) {
 // TODO dataset que este binário abre, inclusive no que hoje não indexa campo
 // nenhum, porque é a abertura seguinte que pode declarar um.
 func TestTodoManifestSaiNaV3(t *testing.T) {
-	casos := map[string]func(*Manifest){
+	cases := map[string]func(*Manifest){
 		"sem seção nenhuma": func(*Manifest) {},
-		"com histórico":     func(m *Manifest) { m.Modo, m.RowIDBase = 1, 500 },
+		"com histórico":     func(m *Manifest) { m.Mode, m.RowIDBase = 1, 500 },
 		"com agenda": func(m *Manifest) {
-			m.Agenda = &AgendaInfo{DuracaoDeFundoMs: 60_000, BlockShift: 6, Niveis: 4}
+			m.Schedule = &ScheduleInfo{FallbackDurationMs: 60_000, BlockShift: 6, Levels: 4}
 		},
 	}
-	for nome, ajusta := range casos {
-		t.Run(nome, func(t *testing.T) {
+	for name, adjust := range cases {
+		t.Run(name, func(t *testing.T) {
 			m := sampleManifest()
-			ajusta(&m)
+			adjust(&m)
 			if v := m.encode()[4]; v != manifestV3 {
 				t.Fatalf("manifest saiu na versão %d, esperado %d", v, manifestV3)
 			}
@@ -122,25 +122,25 @@ func TestTodoManifestSaiNaV3(t *testing.T) {
 func TestASecaoDoIndicePorSegmentoEhSempreEmitida(t *testing.T) {
 	m := sampleManifest()
 	raw := m.encode()
-	var marca [2]byte
-	binary.LittleEndian.PutUint16(marca[:], tagIndicePorSegmento)
-	i := bytes.Index(raw, marca[:])
+	var marker [2]byte
+	binary.LittleEndian.PutUint16(marker[:], tagPerSegmentIndex)
+	i := bytes.Index(raw, marker[:])
 	if i < 0 {
 		t.Fatal("a seção do índice por segmento não foi emitida")
 	}
-	if n := binary.LittleEndian.Uint32(raw[i+2:]); n != indiceInfoSize {
-		t.Fatalf("a seção declara %d bytes, esperado %d", n, indiceInfoSize)
+	if n := binary.LittleEndian.Uint32(raw[i+2:]); n != indexInfoSize {
+		t.Fatalf("a seção declara %d bytes, esperado %d", n, indexInfoSize)
 	}
-	if f := raw[i+tlvHeaderSize]; f != formatoDoIndiceAtual {
-		t.Fatalf("formato gravado %d, esperado %d", f, formatoDoIndiceAtual)
+	if f := raw[i+tlvHeaderSize]; f != currentIndexFormat {
+		t.Fatalf("formato gravado %d, esperado %d", f, currentIndexFormat)
 	}
-	if tagIndicePorSegmento&tagCritica == 0 {
-		t.Fatalf("a tag do índice é %#04x, sem o bit crítico", tagIndicePorSegmento)
+	if tagPerSegmentIndex&tagCritical == 0 {
+		t.Fatalf("a tag do índice é %#04x, sem o bit crítico", tagPerSegmentIndex)
 	}
 
 	// Formato desconhecido: é o que um binário mais novo gravaria, e a leitura
 	// tem de RECUSAR em vez de abrir o dataset sem saber manter o índice dele.
-	raw[i+tlvHeaderSize] = formatoDoIndiceAtual + 1
+	raw[i+tlvHeaderSize] = currentIndexFormat + 1
 	recrc(raw)
 	if _, err := decode(raw); !errors.Is(err, ErrCorruptManifest) {
 		t.Fatalf("formato de índice desconhecido foi aceito: %v", err)
@@ -190,7 +190,7 @@ func TestSecaoDeHashesLegadaEhDescartadaSemRecusarODataset(t *testing.T) {
 // primeira query indexada depois disso responderia menos linhas do que existem
 // — sem erro, sem log, sem métrica.
 func TestCaudaIgnoravelEhPuladaECriticaRecusa(t *testing.T) {
-	corpo := func(tag uint16) []byte {
+	bodyWith := func(tag uint16) []byte {
 		raw := manifestV1Golden()
 		body := raw[:len(raw)-4] // fora o CRC
 		body[4] = 2              // tem cauda, logo é v2
@@ -202,7 +202,7 @@ func TestCaudaIgnoravelEhPuladaECriticaRecusa(t *testing.T) {
 	dir := t.TempDir()
 
 	ign := filepath.Join(dir, "ignoravel.bin")
-	if err := os.WriteFile(ign, corpo(0x0042), 0o644); err != nil {
+	if err := os.WriteFile(ign, bodyWith(0x0042), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	m, err := Load(ign)
@@ -214,7 +214,7 @@ func TestCaudaIgnoravelEhPuladaECriticaRecusa(t *testing.T) {
 	}
 
 	crit := filepath.Join(dir, "critica.bin")
-	if err := os.WriteFile(crit, corpo(0x8042), 0o644); err != nil {
+	if err := os.WriteFile(crit, bodyWith(0x8042), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Load(crit); !errors.Is(err, ErrCorruptManifest) {
@@ -277,7 +277,7 @@ func TestSecaoDeHashesInconsistenteEhRecusada(t *testing.T) {
 func TestManifestComAgendaRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "manifest.bin")
 	want := sampleManifest()
-	want.Agenda = &AgendaInfo{DuracaoDeFundoMs: 2_592_000_000, BlockShift: 6, Niveis: 4}
+	want.Schedule = &ScheduleInfo{FallbackDurationMs: 2_592_000_000, BlockShift: 6, Levels: 4}
 	if err := Write(path, &want); err != nil {
 		t.Fatal(err)
 	}
@@ -285,11 +285,11 @@ func TestManifestComAgendaRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Agenda == nil {
+	if got.Schedule == nil {
 		t.Fatal("a seção da agenda sumiu no round-trip")
 	}
-	if *got.Agenda != *want.Agenda {
-		t.Fatalf("agenda voltou %+v, quer %+v", *got.Agenda, *want.Agenda)
+	if *got.Schedule != *want.Schedule {
+		t.Fatalf("agenda voltou %+v, quer %+v", *got.Schedule, *want.Schedule)
 	}
 	// O corpo tem de sobreviver intacto ao lado da cauda.
 	if len(got.Segments) != 3 || got.Segments[2] != want.Segments[2] {
@@ -302,14 +302,14 @@ func TestManifestComAgendaRoundTrip(t *testing.T) {
 // layout mudou.
 func TestACaudaNuncaEhVaziaEAReservaAcompanha(t *testing.T) {
 	m := sampleManifest()
-	if n := TamanhoDaCaudaTLV(&m); n != tlvHeaderSize+indiceInfoSize {
+	if n := TLVTailSize(&m); n != tlvHeaderSize+indexInfoSize {
 		t.Fatalf("cauda de %d bytes num manifest sem histórico e sem agenda; a seção do índice é incondicional", n)
 	}
-	comAgenda := sampleManifest()
-	comAgenda.Agenda = &AgendaInfo{DuracaoDeFundoMs: 1, BlockShift: 6, Niveis: 4}
-	crescimento := len(comAgenda.encode()) - len(m.encode())
-	if declarado := TamanhoDaCaudaTLV(&comAgenda) - TamanhoDaCaudaTLV(&m); crescimento != declarado {
-		t.Fatalf("a seção ocupou %d bytes; TamanhoDaCaudaTLV declara %d", crescimento, declarado)
+	withSchedule := sampleManifest()
+	withSchedule.Schedule = &ScheduleInfo{FallbackDurationMs: 1, BlockShift: 6, Levels: 4}
+	growth := len(withSchedule.encode()) - len(m.encode())
+	if declared := TLVTailSize(&withSchedule) - TLVTailSize(&m); growth != declared {
+		t.Fatalf("a seção ocupou %d bytes; TLVTailSize declara %d", growth, declared)
 	}
 }
 
@@ -319,15 +319,15 @@ func TestACaudaNuncaEhVaziaEAReservaAcompanha(t *testing.T) {
 // arquivo sem que o conteúdo mudasse.
 func TestCaudaSaiEmOrdemCrescenteDeTagComAgenda(t *testing.T) {
 	m := sampleManifest()
-	m.Modo, m.RowIDBase = 1, 500
-	m.Agenda = &AgendaInfo{DuracaoDeFundoMs: 60_000, BlockShift: 6, Niveis: 4}
+	m.Mode, m.RowIDBase = 1, 500
+	m.Schedule = &ScheduleInfo{FallbackDurationMs: 60_000, BlockShift: 6, Levels: 4}
 	raw := m.encode()
-	cauda := raw[len(raw)-4-TamanhoDaCaudaTLV(&m) : len(raw)-4]
+	tlvTail := raw[len(raw)-4-TLVTailSize(&m) : len(raw)-4]
 
 	var tags []uint16
-	for pos := 0; pos+tlvHeaderSize <= len(cauda); {
-		tag := binary.LittleEndian.Uint16(cauda[pos:])
-		n := binary.LittleEndian.Uint32(cauda[pos+2:])
+	for pos := 0; pos+tlvHeaderSize <= len(tlvTail); {
+		tag := binary.LittleEndian.Uint16(tlvTail[pos:])
+		n := binary.LittleEndian.Uint32(tlvTail[pos+2:])
 		tags = append(tags, tag)
 		pos += tlvHeaderSize + int(n)
 	}
@@ -348,17 +348,17 @@ func TestCaudaSaiEmOrdemCrescenteDeTagComAgenda(t *testing.T) {
 // batendo, sem erro, sem log e sem métrica. Por isso a tag carrega o bit
 // crítico, que obriga a recusa.
 func TestSecaoDaAgendaEhCritica(t *testing.T) {
-	if tagAgenda&tagCritica == 0 {
-		t.Fatalf("a tag da agenda é %#04x, sem o bit crítico: um binário antigo a ignoraria em silêncio", tagAgenda)
+	if tagSchedule&tagCritical == 0 {
+		t.Fatalf("a tag da agenda é %#04x, sem o bit crítico: um binário antigo a ignoraria em silêncio", tagSchedule)
 	}
 	m := sampleManifest()
-	m.Agenda = &AgendaInfo{DuracaoDeFundoMs: 60_000, BlockShift: 6, Niveis: 4}
+	m.Schedule = &ScheduleInfo{FallbackDurationMs: 60_000, BlockShift: 6, Levels: 4}
 	raw := m.encode()
 	// Troca a tag por outra crítica que ninguém conhece: é o que um binário
 	// mais novo produziria, e a decodificação tem de RECUSAR.
-	var marca [2]byte
-	binary.LittleEndian.PutUint16(marca[:], tagAgenda)
-	i := bytes.Index(raw, marca[:])
+	var marker [2]byte
+	binary.LittleEndian.PutUint16(marker[:], tagSchedule)
+	i := bytes.Index(raw, marker[:])
 	if i < 0 {
 		t.Fatal("registro da agenda não encontrado")
 	}
@@ -374,15 +374,15 @@ func TestSecaoDaAgendaEhCritica(t *testing.T) {
 // mesmo bloco.
 func TestSecaoDaAgendaTruncadaEhRecusada(t *testing.T) {
 	m := sampleManifest()
-	m.Agenda = &AgendaInfo{DuracaoDeFundoMs: 60_000, BlockShift: 6, Niveis: 4}
+	m.Schedule = &ScheduleInfo{FallbackDurationMs: 60_000, BlockShift: 6, Levels: 4}
 	raw := m.encode()
-	var marca [2]byte
-	binary.LittleEndian.PutUint16(marca[:], tagAgenda)
-	i := bytes.Index(raw, marca[:])
+	var marker [2]byte
+	binary.LittleEndian.PutUint16(marker[:], tagSchedule)
+	i := bytes.Index(raw, marker[:])
 	if i < 0 {
 		t.Fatal("registro da agenda não encontrado")
 	}
-	binary.LittleEndian.PutUint32(raw[i+2:], agendaInfoSize-1)
+	binary.LittleEndian.PutUint32(raw[i+2:], scheduleInfoSize-1)
 	recrc(raw)
 	if _, err := decode(raw); err == nil {
 		t.Fatal("manifest com seção de agenda truncada foi aceito")
@@ -392,6 +392,6 @@ func TestSecaoDaAgendaTruncadaEhRecusada(t *testing.T) {
 // recrc reescreve o checksum depois de uma adulteração, para que a recusa
 // venha da checagem que o teste quer exercitar e não do CRC.
 func recrc(raw []byte) {
-	corpo := raw[:len(raw)-4]
-	binary.LittleEndian.PutUint32(raw[len(raw)-4:], crc32.Checksum(corpo, castagnoli))
+	body := raw[:len(raw)-4]
+	binary.LittleEndian.PutUint32(raw[len(raw)-4:], crc32.Checksum(body, castagnoli))
 }

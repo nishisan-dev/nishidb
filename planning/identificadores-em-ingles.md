@@ -54,7 +54,7 @@ descartáveis).
    séries (`estado` ∈ `selado|corrente|pendente|fora`, `modo` ∈
    `indice|enumeracao`, em `internal/metrics/nomes.go:430-439`), valores
    enumerados que saem pelo wire ou pela CLI em PT-BR (`"ausente"` em
-   `types.Presenca.String`, `"nenhum"` em `server/mutacoes.go:146`,
+   `types.Presence.String`, `"nenhum"` em `server/mutacoes.go:146`,
    `"corrente"` em `cli/operacao.go:269`), `--log-format texto`, e os quatro
    nomes em disco (`grupos.dict`, `grupos.idx`, `prazos.idx`,
    `vencimentos.idx`).

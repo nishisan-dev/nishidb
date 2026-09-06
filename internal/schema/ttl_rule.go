@@ -76,7 +76,7 @@ func validaRegrasTTL(regras []RegraTTLSpec) ([]RegraTTL, error) {
 					i, r.ExpireAfterWrite, DuracaoNunca)
 			}
 			var err error
-			if d, err = units.DuracaoComDias(r.ExpireAfterWrite, 0); err != nil {
+			if d, err = units.DurationWithDays(r.ExpireAfterWrite, 0); err != nil {
 				return nil, specErrf("materialization.ttl[%d]: expireAfterWrite: %s", i, semPrefixoDeSpec(err))
 			}
 			if d < ResolucaoDaExpiracao {

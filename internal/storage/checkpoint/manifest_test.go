@@ -107,44 +107,44 @@ func TestManifestVazioRoundTrip(t *testing.T) {
 // faltou da primeira vez.
 func TestManifestReservaACapacidadeDoLayoutQueGrava(t *testing.T) {
 	base := Manifest{Epoch: 1, CurrentSegment: 1}
-	semSegmento := len(base.encode())
-	comUm := base
-	comUm.Segments = []SegmentInfo{
+	withoutSegment := len(base.encode())
+	withOne := base
+	withOne.Segments = []SegmentInfo{
 		{ID: 1, SizeBytes: 4096, TotalRecords: 9, LiveRecords: 8, LiveBytes: 3000},
 	}
-	if passo := len(comUm.encode()) - semSegmento; passo != 36 {
-		t.Errorf("o encode grava %d bytes por segmento; o layout declara 36", passo)
+	if bytesPerSegment := len(withOne.encode()) - withoutSegment; bytesPerSegment != 36 {
+		t.Errorf("o encode grava %d bytes por segmento; o layout declara 36", bytesPerSegment)
 	}
 
 	m := sampleManifest()
 	b := m.encode()
-	reservado := 96 + len(m.Segments)*36 + TamanhoDaCaudaTLV(&m)
-	if len(b) > reservado {
-		t.Fatalf("o encode produziu %d bytes com reserva de %d: a fórmula não cobre o layout", len(b), reservado)
+	reserved := 96 + len(m.Segments)*36 + TLVTailSize(&m)
+	if len(b) > reserved {
+		t.Fatalf("o encode produziu %d bytes com reserva de %d: a fórmula não cobre o layout", len(b), reserved)
 	}
-	if cap(b) != reservado {
-		t.Errorf("cap = %d com reserva de %d: o append realocou no caminho do checkpoint", cap(b), reservado)
+	if cap(b) != reserved {
+		t.Errorf("cap = %d com reserva de %d: o append realocou no caminho do checkpoint", cap(b), reserved)
 	}
 
 	// A cauda TLV entrou na fórmula pela MESMA razão que os 36 bytes por
 	// segmento: ela é conteúdo novo no encode, e uma reserva que a ignorasse
-	// faria o append realocar em todo checkpoint. O termo é TamanhoDaCaudaTLV,
+	// faria o append realocar em todo checkpoint. O termo é TLVTailSize,
 	// e não um literal, porque duplicar a conta foi exatamente o que deixou a
 	// capacidade em 12 quando o layout já gravava 36.
-	comSecoes := sampleManifest()
-	comSecoes.Modo, comSecoes.RowIDBase = 1, 500
-	comSecoes.Agenda = &AgendaInfo{DuracaoDeFundoMs: 60_000, BlockShift: 6, Niveis: 4}
-	bs := comSecoes.encode()
-	reservadoComSecoes := 96 + len(comSecoes.Segments)*36 + TamanhoDaCaudaTLV(&comSecoes)
-	if len(bs) > reservadoComSecoes {
-		t.Fatalf("com cauda o encode produziu %d bytes com reserva de %d", len(bs), reservadoComSecoes)
+	withSections := sampleManifest()
+	withSections.Mode, withSections.RowIDBase = 1, 500
+	withSections.Schedule = &ScheduleInfo{FallbackDurationMs: 60_000, BlockShift: 6, Levels: 4}
+	bs := withSections.encode()
+	reservedWithSections := 96 + len(withSections.Segments)*36 + TLVTailSize(&withSections)
+	if len(bs) > reservedWithSections {
+		t.Fatalf("com cauda o encode produziu %d bytes com reserva de %d", len(bs), reservedWithSections)
 	}
-	if cap(bs) != reservadoComSecoes {
-		t.Errorf("cap = %d com reserva de %d: o append realocou com a cauda TLV", cap(bs), reservadoComSecoes)
+	if cap(bs) != reservedWithSections {
+		t.Errorf("cap = %d com reserva de %d: o append realocou com a cauda TLV", cap(bs), reservedWithSections)
 	}
-	if passo := len(bs) - len(b); passo != TamanhoDaCaudaTLV(&comSecoes)-TamanhoDaCaudaTLV(&m) {
-		t.Errorf("as seções a mais ocuparam %d bytes; TamanhoDaCaudaTLV declara %d",
-			passo, TamanhoDaCaudaTLV(&comSecoes)-TamanhoDaCaudaTLV(&m))
+	if growth := len(bs) - len(b); growth != TLVTailSize(&withSections)-TLVTailSize(&m) {
+		t.Errorf("as seções a mais ocuparam %d bytes; TLVTailSize declara %d",
+			growth, TLVTailSize(&withSections)-TLVTailSize(&m))
 	}
 }
 

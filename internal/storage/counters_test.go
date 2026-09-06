@@ -383,8 +383,8 @@ func TestContadorComWhereDiferenteEhReconstruido(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(m.Contadores) != 1 || m.Contadores[0].Where != "" {
-		t.Fatalf("o manifest tinha de gravar a definição nova: %+v", m.Contadores)
+	if len(m.Counters) != 1 || m.Counters[0].Where != "" {
+		t.Fatalf("o manifest tinha de gravar a definição nova: %+v", m.Counters)
 	}
 }
 
@@ -406,8 +406,8 @@ func TestContadorRemovidoDoYamlEhApagado(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(m.Contadores) != 0 {
-		t.Fatalf("o manifest não pode continuar declarando o contador: %+v", m.Contadores)
+	if len(m.Counters) != 0 {
+		t.Fatalf("o manifest não pode continuar declarando o contador: %+v", m.Counters)
 	}
 }
 

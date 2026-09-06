@@ -92,11 +92,11 @@ type slot struct {
 	barreira *barreira
 	pronto   bool
 
-	// retidos espelha dec.BytesRetidos() para quem raspa a métrica.
+	// retidos espelha dec.RetainedBytes() para quem raspa a métrica.
 	//
 	// ESPELHO, e não leitura direta, porque o gauge é lido pela goroutine do
 	// exportador enquanto um decodificador escreve no arena do slot: somar
-	// dec.BytesRetidos() ali seria corrida de dado sobre os cabeçalhos dos
+	// dec.RetainedBytes() ali seria corrida de dado sobre os cabeçalhos dos
 	// slices, e o -race a pegaria — depois de a série já existir em produção.
 	// Quem escreve é sempre o dono corrente do slot, no instante em que ele
 	// termina.

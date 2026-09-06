@@ -69,7 +69,7 @@ issues arrumadas; distribuição do identifier medida e registrada.
   `v0.5.0`; sem tags retroativas de M1/M2).
 
 ### A3 — `--version` (#11, parte 1)
-- Pacote novo `internal/buildinfo`: `Versao`, `Commit`, `Data` via `-ldflags -X`, com
+- Pacote novo `internal/buildinfo`: `Version`, `Commit`, `Date` via `-ldflags -X`, com
   fallback `runtime/debug.ReadBuildInfo()` (`vcs.revision`/`vcs.time`).
 - Superfícies (teste primeiro em cada): `nishidb --version`/`version` no dispatch de
   [cli.go](internal/cli/cli.go); log de subida em `runServer`; campo em

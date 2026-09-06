@@ -14,9 +14,9 @@ import (
 // EXATAMENTE o mesmo texto que buildinfo.String() produz: é a garantia de que
 // não existem duas fontes narrando a mesma versão de jeitos diferentes.
 func TestVersionRespondeComSHAEData(t *testing.T) {
-	vAntiga, cAntiga, dAntiga := buildinfo.Versao, buildinfo.Commit, buildinfo.Data
-	buildinfo.Versao, buildinfo.Commit, buildinfo.Data = "v9.9.9", "cafefeed1234", "2026-01-02T03:04:05Z"
-	t.Cleanup(func() { buildinfo.Versao, buildinfo.Commit, buildinfo.Data = vAntiga, cAntiga, dAntiga })
+	vAntiga, cAntiga, dAntiga := buildinfo.Version, buildinfo.Commit, buildinfo.Date
+	buildinfo.Version, buildinfo.Commit, buildinfo.Date = "v9.9.9", "cafefeed1234", "2026-01-02T03:04:05Z"
+	t.Cleanup(func() { buildinfo.Version, buildinfo.Commit, buildinfo.Date = vAntiga, cAntiga, dAntiga })
 
 	for _, args := range [][]string{{"--version"}, {"version"}} {
 		a := &ambiente{}

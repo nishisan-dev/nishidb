@@ -13,22 +13,22 @@ import (
 	_ "time/tzdata"
 )
 
-const padraoPiloto = "MMM d, yyyy hh:mm:ss a"
+const pilotPattern = "MMM d, yyyy hh:mm:ss a"
 
-func mustCompila(t *testing.T, padrao string, d Dominio) *Layout {
+func mustCompile(t *testing.T, pattern string, d Domain) *Layout {
 	t.Helper()
-	l, err := CompilaLayout(padrao, d)
+	l, err := CompileLayout(pattern, d)
 	if err != nil {
-		t.Fatalf("CompilaLayout(%q): %v", padrao, err)
+		t.Fatalf("CompileLayout(%q): %v", pattern, err)
 	}
 	return l
 }
 
-func mustLoc(t *testing.T, nome string) *time.Location {
+func mustLoc(t *testing.T, name string) *time.Location {
 	t.Helper()
-	loc, err := time.LoadLocation(nome)
+	loc, err := time.LoadLocation(name)
 	if err != nil {
-		t.Fatalf("LoadLocation(%q): %v", nome, err)
+		t.Fatalf("LoadLocation(%q): %v", name, err)
 	}
 	return loc
 }
@@ -36,9 +36,9 @@ func mustLoc(t *testing.T, nome string) *time.Location {
 // ---------- compilação ----------
 
 func TestCompilaLayoutRecusaTokenDesconhecido(t *testing.T) {
-	for _, padrao := range []string{"yyyy-MM-dd EEE", "yyyy-QQ-dd", "yyyy-MM-dd HH:mm:ss zzz"} {
-		if _, err := CompilaLayout(padrao, DominioDateTime); err == nil {
-			t.Errorf("%q: esperava recusa", padrao)
+	for _, pattern := range []string{"yyyy-MM-dd EEE", "yyyy-QQ-dd", "yyyy-MM-dd HH:mm:ss zzz"} {
+		if _, err := CompileLayout(pattern, DomainDateTime); err == nil {
+			t.Errorf("%q: esperava recusa", pattern)
 		}
 	}
 }
@@ -47,57 +47,57 @@ func TestCompilaLayoutRecusaTokenDesconhecido(t *testing.T) {
 // token digitado errado virar literal em silêncio, e o dataset recusaria
 // 100%% dos eventos com uma mensagem que não aponta para o padrão.
 func TestCompilaLayoutRecusaLetraNuaEAceitaAEscapada(t *testing.T) {
-	if _, err := CompilaLayout("yyyy-MM-ddTHH:mm:ss", DominioDateTime); err == nil {
+	if _, err := CompileLayout("yyyy-MM-ddTHH:mm:ss", DomainDateTime); err == nil {
 		t.Fatal("esperava recusa do T sem aspas")
 	} else if !strings.Contains(err.Error(), "'") {
 		t.Errorf("a mensagem precisa ensinar o escape por aspas: %v", err)
 	}
-	mustCompila(t, "yyyy-MM-dd'T'HH:mm:ss", DominioDateTime)
+	mustCompile(t, "yyyy-MM-dd'T'HH:mm:ss", DomainDateTime)
 }
 
 func TestCompilaLayoutRecusaTokensNumericosDeLarguraVariavelAdjacentes(t *testing.T) {
-	if _, err := CompilaLayout("d MMM yyyy h:mm:ss a", DominioDateTime); err != nil {
+	if _, err := CompileLayout("d MMM yyyy h:mm:ss a", DomainDateTime); err != nil {
 		t.Fatalf("padrão sem ambiguidade foi recusado: %v", err)
 	}
-	if _, err := CompilaLayout("d MMM yyyy H:mm:ss", DominioDateTime); err != nil {
+	if _, err := CompileLayout("d MMM yyyy H:mm:ss", DomainDateTime); err != nil {
 		t.Fatalf("padrão sem ambiguidade foi recusado: %v", err)
 	}
-	for _, padrao := range []string{"yyyyMd HH:mm", "yyyy-MM-dd Hmm:ss"} {
-		if _, err := CompilaLayout(padrao, DominioDateTime); err == nil {
-			t.Errorf("%q: esperava recusa por ambiguidade", padrao)
+	for _, pattern := range []string{"yyyyMd HH:mm", "yyyy-MM-dd Hmm:ss"} {
+		if _, err := CompileLayout(pattern, DomainDateTime); err == nil {
+			t.Errorf("%q: esperava recusa por ambiguidade", pattern)
 		}
 	}
 }
 
 func TestCompilaLayoutRecusaCampoRepetido(t *testing.T) {
-	if _, err := CompilaLayout("yyyy-MM-dd HH:mm:ss yyyy", DominioDateTime); err == nil {
+	if _, err := CompileLayout("yyyy-MM-dd HH:mm:ss yyyy", DomainDateTime); err == nil {
 		t.Error("esperava recusa de ano repetido")
 	}
 }
 
 func TestCompilaLayoutAmarraMeridianoAoRelogioDe12h(t *testing.T) {
-	if _, err := CompilaLayout("yyyy-MM-dd hh:mm:ss", DominioDateTime); err == nil {
+	if _, err := CompileLayout("yyyy-MM-dd hh:mm:ss", DomainDateTime); err == nil {
 		t.Error("hh sem meridiano precisa ser recusado: 08:54 seria ambíguo entre manhã e noite")
 	}
-	if _, err := CompilaLayout("yyyy-MM-dd HH:mm:ss a", DominioDateTime); err == nil {
+	if _, err := CompileLayout("yyyy-MM-dd HH:mm:ss a", DomainDateTime); err == nil {
 		t.Error("HH com meridiano precisa ser recusado: o relógio de 24h não tem AM/PM")
 	}
 }
 
 func TestCompilaLayoutDominioTimeRecusaTokensDeData(t *testing.T) {
-	for _, padrao := range []string{"yyyy hh:mm a", "MMM dd hh:mm a", "dd HH:mm"} {
-		if _, err := CompilaLayout(padrao, DominioTime); err == nil {
-			t.Errorf("%q: time não tem data", padrao)
+	for _, pattern := range []string{"yyyy hh:mm a", "MMM dd hh:mm a", "dd HH:mm"} {
+		if _, err := CompileLayout(pattern, DomainTime); err == nil {
+			t.Errorf("%q: time não tem data", pattern)
 		}
 	}
-	mustCompila(t, "hh:mm:ss a", DominioTime)
-	mustCompila(t, "HH:mm:ss.SSS", DominioTime)
+	mustCompile(t, "hh:mm:ss a", DomainTime)
+	mustCompile(t, "HH:mm:ss.SSS", DomainTime)
 }
 
 func TestCompilaLayoutDominioDateTimeExigeDataEHoraCompletas(t *testing.T) {
-	for _, padrao := range []string{"yyyy-MM-dd", "HH:mm:ss", "yyyy-MM HH:mm", "yyyy-MM-dd HH"} {
-		if _, err := CompilaLayout(padrao, DominioDateTime); err == nil {
-			t.Errorf("%q: esperava recusa por componente ausente", padrao)
+	for _, pattern := range []string{"yyyy-MM-dd", "HH:mm:ss", "yyyy-MM HH:mm", "yyyy-MM-dd HH"} {
+		if _, err := CompileLayout(pattern, DomainDateTime); err == nil {
+			t.Errorf("%q: esperava recusa por componente ausente", pattern)
 		}
 	}
 }
@@ -105,7 +105,7 @@ func TestCompilaLayoutDominioDateTimeExigeDataEHoraCompletas(t *testing.T) {
 // ---------- parse: a amostra real ----------
 
 func TestLayoutAceitaAAmostraRealDoPiloto(t *testing.T) {
-	l := mustCompila(t, padraoPiloto, DominioDateTime)
+	l := mustCompile(t, pilotPattern, DomainDateTime)
 	loc := mustLoc(t, "America/Sao_Paulo")
 
 	got, err := l.DateTime([]byte("Aug 22, 2026 08:54:02 PM"), loc)
@@ -121,8 +121,8 @@ func TestLayoutAceitaAAmostraRealDoPiloto(t *testing.T) {
 // 12 AM é meia-noite e 12 PM é meio-dia. É a única regra deste formato que
 // não sai certa por acidente: h%%12 zera o 12 e o PM soma 12 por cima.
 func TestMeridianoConverteMeiaNoiteEMeioDia(t *testing.T) {
-	l := mustCompila(t, "hh:mm:ss a", DominioTime)
-	casos := map[string]int64{
+	l := mustCompile(t, "hh:mm:ss a", DomainTime)
+	cases := map[string]int64{
 		"12:00:00 AM": 0,
 		"12:30:00 AM": 30 * 60 * 1000,
 		"01:00:00 AM": 3600 * 1000,
@@ -132,7 +132,7 @@ func TestMeridianoConverteMeiaNoiteEMeioDia(t *testing.T) {
 		"01:00:00 PM": 13 * 3600 * 1000,
 		"11:59:59 PM": (23*3600 + 59*60 + 59) * 1000,
 	}
-	for in, want := range casos {
+	for in, want := range cases {
 		got, err := l.TimeOfDay([]byte(in))
 		if err != nil {
 			t.Errorf("%q: %v", in, err)
@@ -148,7 +148,7 @@ func TestMeridianoConverteMeiaNoiteEMeioDia(t *testing.T) {
 // locale diferente na JVM do produtor emitiria um dígito só, e sob
 // log-and-skip isso seria descarte silencioso por evento.
 func TestFormaVariavelAceitaUmOuDoisDigitos(t *testing.T) {
-	l := mustCompila(t, "MMM d, yyyy h:mm:ss a", DominioDateTime)
+	l := mustCompile(t, "MMM d, yyyy h:mm:ss a", DomainDateTime)
 	loc := time.UTC
 	a, err := l.DateTime([]byte("Aug 2, 2026 8:54:02 PM"), loc)
 	if err != nil {
@@ -168,7 +168,7 @@ func TestFormaVariavelAceitaUmOuDoisDigitos(t *testing.T) {
 // aceitá-la — e é por isso que a recomendação para uma origem cuja grafia foi
 // vista numa amostra só é declarar as formas variáveis.
 func TestFormaDeLarguraFixaEhEstrita(t *testing.T) {
-	l := mustCompila(t, padraoPiloto, DominioDateTime) // MMM d, yyyy hh:mm:ss a
+	l := mustCompile(t, pilotPattern, DomainDateTime) // MMM d, yyyy hh:mm:ss a
 	if _, err := l.DateTime([]byte("Aug 22, 2026 8:54:02 PM"), time.UTC); err == nil {
 		t.Error("hh declarado precisa recusar hora de um dígito")
 	}
@@ -178,7 +178,7 @@ func TestFormaDeLarguraFixaEhEstrita(t *testing.T) {
 }
 
 func TestAceitaMesEMeridianoEmQualquerCaixa(t *testing.T) {
-	l := mustCompila(t, padraoPiloto, DominioDateTime)
+	l := mustCompile(t, pilotPattern, DomainDateTime)
 	ref, err := l.DateTime([]byte("Aug 22, 2026 08:54:02 PM"), time.UTC)
 	if err != nil {
 		t.Fatal(err)
@@ -196,7 +196,7 @@ func TestAceitaMesEMeridianoEmQualquerCaixa(t *testing.T) {
 }
 
 func TestRecusaMesEmOutroIdioma(t *testing.T) {
-	l := mustCompila(t, padraoPiloto, DominioDateTime)
+	l := mustCompile(t, pilotPattern, DomainDateTime)
 	for _, in := range []string{"Ago 22, 2026 08:54:02 PM", "Set 1, 2026 08:54:02 PM"} {
 		if _, err := l.DateTime([]byte(in), time.UTC); err == nil {
 			t.Errorf("%q: esperava recusa", in)
@@ -209,7 +209,7 @@ func TestRecusaMesEmOutroIdioma(t *testing.T) {
 // Este padrão não tem fuso. Aceitar um offset colado no fim e ignorá-lo daria
 // o instante errado sem nenhum sinal.
 func TestRecusaConteudoAposOFimDoPadrao(t *testing.T) {
-	l := mustCompila(t, padraoPiloto, DominioDateTime)
+	l := mustCompile(t, pilotPattern, DomainDateTime)
 	for _, in := range []string{"Aug 22, 2026 08:54:02 PM -03:00", "Aug 22, 2026 08:54:02 PMX", "Aug 22, 2026 08:54:02 PM "} {
 		if _, err := l.DateTime([]byte(in), time.UTC); err == nil {
 			t.Errorf("%q: esperava recusa", in)
@@ -218,7 +218,7 @@ func TestRecusaConteudoAposOFimDoPadrao(t *testing.T) {
 }
 
 func TestRecusaDataInexistente(t *testing.T) {
-	l := mustCompila(t, padraoPiloto, DominioDateTime)
+	l := mustCompile(t, pilotPattern, DomainDateTime)
 	for _, in := range []string{"Feb 30, 2026 01:00:00 AM", "Feb 29, 2026 01:00:00 AM", "Apr 31, 2026 01:00:00 AM"} {
 		if _, err := l.DateTime([]byte(in), time.UTC); err == nil {
 			t.Errorf("%q: esperava recusa", in)
@@ -230,7 +230,7 @@ func TestRecusaDataInexistente(t *testing.T) {
 }
 
 func TestRecusaHoraForaDoRelogioDe12h(t *testing.T) {
-	l := mustCompila(t, padraoPiloto, DominioDateTime)
+	l := mustCompile(t, pilotPattern, DomainDateTime)
 	for _, in := range []string{"Aug 22, 2026 00:54:02 PM", "Aug 22, 2026 13:00:00 AM"} {
 		if _, err := l.DateTime([]byte(in), time.UTC); err == nil {
 			t.Errorf("%q: esperava recusa", in)
@@ -241,13 +241,13 @@ func TestRecusaHoraForaDoRelogioDe12h(t *testing.T) {
 // ---------- fuso ----------
 
 func TestDateTimeResolveNoFusoRecebido(t *testing.T) {
-	l := mustCompila(t, padraoPiloto, DominioDateTime)
-	const texto = "Aug 22, 2026 08:54:02 PM"
-	sp, err := l.DateTime([]byte(texto), mustLoc(t, "America/Sao_Paulo"))
+	l := mustCompile(t, pilotPattern, DomainDateTime)
+	const text = "Aug 22, 2026 08:54:02 PM"
+	sp, err := l.DateTime([]byte(text), mustLoc(t, "America/Sao_Paulo"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	utc, err := l.DateTime([]byte(texto), time.UTC)
+	utc, err := l.DateTime([]byte(text), time.UTC)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,25 +260,25 @@ func TestDateTimeResolveNoFusoRecebido(t *testing.T) {
 // Não há como acertar — a informação que desempataria não está no dado — e o
 // que importa é ser DETERMINÍSTICO, para que ingestão e query concordem.
 func TestHoraAmbiguaDeDSTEhResolvidaDeFormaDeterministica(t *testing.T) {
-	l := mustCompila(t, "yyyy-MM-dd HH:mm:ss", DominioDateTime)
+	l := mustCompile(t, "yyyy-MM-dd HH:mm:ss", DomainDateTime)
 	loc := mustLoc(t, "America/Sao_Paulo")
-	const texto = "2018-02-17 23:30:00" // fim do horário de verão de 2018
+	const text = "2018-02-17 23:30:00" // fim do horário de verão de 2018
 
-	primeiro, err := l.DateTime([]byte(texto), loc)
+	first, err := l.DateTime([]byte(text), loc)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 5; i++ {
-		again, err := l.DateTime([]byte(texto), loc)
+		again, err := l.DateTime([]byte(text), loc)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if again != primeiro {
-			t.Fatalf("mesma entrada deu instantes diferentes: %d vs %d", primeiro, again)
+		if again != first {
+			t.Fatalf("mesma entrada deu instantes diferentes: %d vs %d", first, again)
 		}
 	}
-	if want := time.Date(2018, 2, 17, 23, 30, 0, 0, loc).UnixMilli(); primeiro != want {
-		t.Fatalf("obtido %d, esperado o mesmo que time.Date: %d", primeiro, want)
+	if want := time.Date(2018, 2, 17, 23, 30, 0, 0, loc).UnixMilli(); first != want {
+		t.Fatalf("obtido %d, esperado o mesmo que time.Date: %d", first, want)
 	}
 }
 
@@ -287,7 +287,7 @@ func TestHoraAmbiguaDeDSTEhResolvidaDeFormaDeterministica(t *testing.T) {
 // 1990-09-15 23:30. Validar a data comparando o round-trip EM LOC recusaria
 // 16/09/1990 como "data inexistente" — e ela existe.
 func TestDataValidaNaViradaDeDSTNaoEhRecusada(t *testing.T) {
-	l := mustCompila(t, "yyyy-MM-dd HH:mm:ss", DominioDateTime)
+	l := mustCompile(t, "yyyy-MM-dd HH:mm:ss", DomainDateTime)
 	loc := mustLoc(t, "America/Santiago")
 
 	got, err := l.DateTime([]byte("1990-09-16 00:30:00"), loc)
@@ -302,7 +302,7 @@ func TestDataValidaNaViradaDeDSTNaoEhRecusada(t *testing.T) {
 // ---------- hora do dia ----------
 
 func TestTimeOfDayNaoDependeDeFusoNemDeData(t *testing.T) {
-	l := mustCompila(t, "hh:mm:ss a", DominioTime)
+	l := mustCompile(t, "hh:mm:ss a", DomainTime)
 	got, err := l.TimeOfDay([]byte("08:54:02 PM"))
 	if err != nil {
 		t.Fatal(err)
@@ -319,13 +319,13 @@ func TestTimeOfDayNaoDependeDeFusoNemDeData(t *testing.T) {
 }
 
 func TestTimeOfDayCobreOsExtremosDoDia(t *testing.T) {
-	l := mustCompila(t, "HH:mm:ss.SSS", DominioTime)
-	casos := map[string]int64{
+	l := mustCompile(t, "HH:mm:ss.SSS", DomainTime)
+	cases := map[string]int64{
 		"00:00:00.000": 0,
 		"23:59:59.999": 86_399_999,
 		"12:00:00.500": 12*3600*1000 + 500,
 	}
-	for in, want := range casos {
+	for in, want := range cases {
 		got, err := l.TimeOfDay([]byte(in))
 		if err != nil {
 			t.Errorf("%q: %v", in, err)
@@ -340,7 +340,7 @@ func TestTimeOfDayCobreOsExtremosDoDia(t *testing.T) {
 // ---------- ISO local ----------
 
 func TestISOLocalComMillis(t *testing.T) {
-	l := mustCompila(t, "yyyy-MM-dd'T'HH:mm:ss.SSS", DominioDateTime)
+	l := mustCompile(t, "yyyy-MM-dd'T'HH:mm:ss.SSS", DomainDateTime)
 	got, err := l.DateTime([]byte("2026-08-22T20:54:02.123"), time.UTC)
 	if err != nil {
 		t.Fatal(err)
@@ -354,20 +354,20 @@ func TestISOLocalComMillis(t *testing.T) {
 // ---------- propriedades do hot path ----------
 
 func TestParsersDeDataNaoAlocam(t *testing.T) {
-	dt := mustCompila(t, padraoPiloto, DominioDateTime)
-	tod := mustCompila(t, "hh:mm:ss a", DominioTime)
-	entrada := []byte("Aug 22, 2026 08:54:02 PM")
-	hora := []byte("08:54:02 PM")
+	dt := mustCompile(t, pilotPattern, DomainDateTime)
+	tod := mustCompile(t, "hh:mm:ss a", DomainTime)
+	input := []byte("Aug 22, 2026 08:54:02 PM")
+	timeInput := []byte("08:54:02 PM")
 
 	if n := testing.AllocsPerRun(200, func() {
-		if _, err := dt.DateTime(entrada, time.UTC); err != nil {
+		if _, err := dt.DateTime(input, time.UTC); err != nil {
 			t.Fatal(err)
 		}
 	}); n != 0 {
 		t.Errorf("DateTime alocou %v vezes por chamada", n)
 	}
 	if n := testing.AllocsPerRun(200, func() {
-		if _, err := tod.TimeOfDay(hora); err != nil {
+		if _, err := tod.TimeOfDay(timeInput); err != nil {
 			t.Fatal(err)
 		}
 	}); n != 0 {
@@ -378,7 +378,7 @@ func TestParsersDeDataNaoAlocam(t *testing.T) {
 // O buffer do tokenizer JSON morre no próximo Next: reter a entrada faria o
 // valor gravado ser outro, e só às vezes.
 func TestParsersDeDataNaoRetemEntrada(t *testing.T) {
-	l := mustCompila(t, padraoPiloto, DominioDateTime)
+	l := mustCompile(t, pilotPattern, DomainDateTime)
 	buf := []byte("Aug 22, 2026 08:54:02 PM")
 	got, err := l.DateTime(buf, time.UTC)
 	if err != nil {
@@ -398,7 +398,7 @@ func TestParsersDeDataNaoRetemEntrada(t *testing.T) {
 
 // Nenhuma entrada arbitrária pode causar panic ou índice fora de faixa.
 func TestParseNuncaEntraEmPanicComEntradaArbitraria(t *testing.T) {
-	l := mustCompila(t, padraoPiloto, DominioDateTime)
+	l := mustCompile(t, pilotPattern, DomainDateTime)
 	f := func(s string) bool {
 		_, _ = l.DateTime([]byte(s), time.UTC)
 		return true

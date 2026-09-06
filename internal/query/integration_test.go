@@ -395,7 +395,7 @@ func TestIntegracaoFimAFim(t *testing.T) {
 		defer it.Close()
 
 		var buf bytes.Buffer
-		w := executor.NewStreamWriter(&buf, 512, budget.NovoGlobal(0).Query(0)) // pequeno de propósito: força flushes
+		w := executor.NewStreamWriter(&buf, 512, budget.NewGlobal(0).Query(0)) // pequeno de propósito: força flushes
 		linhas := 0
 		for it.Next() {
 			if err := w.WriteRow(it.Row()); err != nil {

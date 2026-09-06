@@ -57,7 +57,7 @@ type Consumidor struct {
 	w      *Writer
 	log    *logging.Logger
 	met    *metricas
-	origem checkpoint.Origem
+	origem checkpoint.Source
 
 	// erroAssign carrega a falha detectada dentro do callback de assignment,
 	// que não tem por onde devolver erro.
@@ -178,7 +178,7 @@ type Opcoes struct {
 func Abre(ctx context.Context, cfg *Config, o Opcoes) (*Consumidor, error) {
 	log := o.Log
 	if log == nil {
-		log = logging.Descartado()
+		log = logging.Discard()
 	}
 	log = log.Component("kafka").Dataset(cfg.Dataset)
 	met := registraMetricas(o.Metrics, cfg.Dataset)
@@ -266,11 +266,11 @@ func (c *Consumidor) resolveOrigemEPosicao(ctx context.Context, st Store) error 
 		return fmt.Errorf("%w: %w", ErrPosicaoDesconhecida, err)
 
 	case existe:
-		if campo := persistidos.Origem.Divergencia(c.origem); campo != "" {
+		if campo := persistidos.Source.Divergence(c.origem); campo != "" {
 			return fmt.Errorf("%w: %s mudou (persistido %q, configurado %q); "+
 				"use `nishidb offsets` para reposicionar deliberadamente",
 				ErrOrigemDivergente, campo,
-				valorDoCampo(persistidos.Origem, campo), valorDoCampo(c.origem, campo))
+				valorDoCampo(persistidos.Source, campo), valorDoCampo(c.origem, campo))
 		}
 		c.offsetsIniciais = persistidos.Offsets
 
@@ -316,7 +316,7 @@ func (c *Consumidor) resolveOrigemEPosicao(ctx context.Context, st Store) error 
 	return nil
 }
 
-func valorDoCampo(o checkpoint.Origem, campo string) string {
+func valorDoCampo(o checkpoint.Source, campo string) string {
 	switch campo {
 	case "topic":
 		return o.Topic

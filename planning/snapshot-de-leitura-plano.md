@@ -86,11 +86,11 @@ normalmente e o snapshot lê a location nova.
 ```go
 // internal/storage/snapshot.go
 type Snapshot struct {
-    Epoca       uint64      // versão: o que estava publicado em T0
-    Instante    time.Time   // relógio congelado da expiração
-    LimiteRowID types.RowID // teto: rows nascidas depois não aparecem
-    BaseRowID   types.RowID // piso: a purga não abre buraco por baixo
-    id          uint64      // handle do registro de snapshots vivos
+    Epoch      uint64      // versão: o que estava publicado em T0
+    Instant    time.Time   // relógio congelado da expiração
+    LimitRowID types.RowID // teto: rows nascidas depois não aparecem
+    BaseRowID  types.RowID // piso: a purga não abre buraco por baixo
+    id         uint64      // handle do registro de snapshots vivos
 }
 
 func (s *Store) AbreSnapshot() Snapshot
@@ -161,7 +161,7 @@ em `Lookup`.
   iterador o fecha, em todos os caminhos de saída.
 - `ScanLive` perde o cálculo do teto — quem o fixa passa a ser o snapshot, para
   os quatro planos.
-- `candidateSource.advance` filtra `id >= LimiteRowID` e `id < BaseRowID`
+- `candidateSource.advance` filtra `id >= LimitRowID` e `id < BaseRowID`
   **antes** do fetch, o que dá teto e piso uniformes a bitmap, hash, interseção
   e união de graça.
 - Acompanham a assinatura: `fakestorage` (senão os gates de alocação passam a

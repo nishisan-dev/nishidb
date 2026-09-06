@@ -150,7 +150,7 @@ func TestCompactionMarcaOVencidoQueEncontra(t *testing.T) {
 			t.Fatal(err)
 		}
 		var prev *types.Record
-		if pres.Existe() {
+		if pres.Exists() {
 			prev = &rec
 		}
 		id, _, err := s.Put([]byte(k), seq, 0, p, prev)
@@ -211,7 +211,7 @@ func TestCompactionMarcaOVencidoQueEncontra(t *testing.T) {
 	// E as ativas, renovadas, sobrevivem: a compaction não pode marcar quem
 	// está no prazo.
 	for _, k := range ativas {
-		if _, _, pres, _ := s.Estado([]byte(k), nil); pres != types.PresencaViva {
+		if _, _, pres, _ := s.Estado([]byte(k), nil); pres != types.PresenceLive {
 			t.Errorf("row ativa %q foi marcada: %v", k, pres)
 		}
 	}

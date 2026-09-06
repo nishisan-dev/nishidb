@@ -306,7 +306,7 @@ func TestConstruirComCampoNaoIndexadoEhRecusado(t *testing.T) {
 
 // TestSidxDeZeroBytesEhPendenteEmVezDeDerrubarAFila fecha a terceira porta da
 // classificação de "índice ilegível". Um arquivo de zero bytes não chega ao
-// parser: o mmap o recusa antes, com mmap.ErrArquivoVazio, e sem o sentinela na
+// parser: o mmap o recusa antes, com mmap.ErrEmptyFile, e sem o sentinela na
 // mesma lista ele cairia no ramo genérico de erro e derrubaria a passada INTEIRA
 // da fila por uma falha de infra que não é falha de infra.
 //

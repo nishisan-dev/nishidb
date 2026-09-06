@@ -287,7 +287,7 @@ func (f *fonte) AbreSnapshot() types.Snapshot {
 	f.proxEpoca++
 	epoca := f.proxEpoca
 	f.abertos[epoca] = r
-	return types.Snapshot{Epoca: epoca, LimiteRowID: r.limite}
+	return types.Snapshot{Epoch: epoca, LimitRowID: r.limite}
 }
 
 // contextoDaMarca dá à ida ao broker um prazo PRÓPRIO, derivado do
@@ -364,13 +364,13 @@ func (f *fonte) colheComum(temConsumidor bool, inst kafka.Instantaneo) comum {
 func (f *fonte) FechaSnapshot(snap types.Snapshot) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	delete(f.abertos, snap.Epoca)
+	delete(f.abertos, snap.Epoch)
 }
 
 func (f *fonte) retratoDe(snap types.Snapshot) (*retrato, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	r, ok := f.abertos[snap.Epoca]
+	r, ok := f.abertos[snap.Epoch]
 	return r, ok
 }
 
@@ -392,7 +392,7 @@ func (f *fonte) GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (typ
 	if !ok {
 		// Época desconhecida é DEFEITO de pareamento, não linha ausente:
 		// devolver ok=false faria a linha sumir do resultado sem nada acusar.
-		return types.Record{}, buf, false, fmt.Errorf("metakafka: snapshot %d não está aberto", snap.Epoca)
+		return types.Record{}, buf, false, fmt.Errorf("metakafka: snapshot %d não está aberto", snap.Epoch)
 	}
 	l, ok := r.linhas[id]
 	if !ok {
@@ -404,7 +404,7 @@ func (f *fonte) GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (typ
 func (f *fonte) GetByKey(snap types.Snapshot, key, buf []byte) (types.Record, []byte, bool, error) {
 	r, ok := f.retratoDe(snap)
 	if !ok {
-		return types.Record{}, buf, false, fmt.Errorf("metakafka: snapshot %d não está aberto", snap.Epoca)
+		return types.Record{}, buf, false, fmt.Errorf("metakafka: snapshot %d não está aberto", snap.Epoch)
 	}
 	// A busca é sobre as linhas DO RETRATO, e não sobre o registro de
 	// partições: o point lookup tem de enxergar exatamente o que o scan

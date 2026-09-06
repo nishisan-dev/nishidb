@@ -31,7 +31,7 @@ func TestFieldTypeString(t *testing.T) {
 	}
 }
 
-// CarregaI64 é a fonte única da distinção "valor mora em I64 ou em Bytes".
+// CarriesI64 é a fonte única da distinção "valor mora em I64 ou em Bytes".
 // Este teste existe para que uma tag nova apareça aqui como falha em vez de
 // silenciosamente cair no ramo dos bytes, onde nil == nil aprova valores
 // diferentes.
@@ -49,8 +49,8 @@ func TestCarregaI64CobreTodasAsTagsNomeadas(t *testing.T) {
 		if ft == TypeNull || tag >= len(fieldTypeNames) || fieldTypeNames[tag] == "" {
 			continue // reservada ou sem nome: não é tipo de campo
 		}
-		if got := ft.CarregaI64(); got != i64[ft] {
-			t.Errorf("%v.CarregaI64() = %v, want %v", ft, got, i64[ft])
+		if got := ft.CarriesI64(); got != i64[ft] {
+			t.Errorf("%v.CarriesI64() = %v, want %v", ft, got, i64[ft])
 		}
 	}
 }

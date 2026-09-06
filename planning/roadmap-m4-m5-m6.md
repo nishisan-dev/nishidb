@@ -117,10 +117,10 @@ arquivo e coordenação com o writer.
 | `SizeBytes`/`TotalRecords`/`LiveRecords`/`LiveBytes` por segmento, persistidos | `checkpoint.SegmentInfo` — [manifest.go:79](internal/storage/checkpoint/manifest.go:79); tally em [store.go:788](internal/storage/store.go:788) |
 | Publicação **atômica** de location (seg+offset+flags num u64) | `Pack` + `AtomicStore64` + `Publish` — [rowindex.go:32](internal/storage/rowindex/rowindex.go:32), [:171](internal/storage/rowindex/rowindex.go:171) |
 | Quiesce e ciclo de vida | `vida` RWMutex + `entra/sai` + `Close` — [store.go:153](internal/storage/store.go:153), [:1268](internal/storage/store.go:1268) |
-| Troca atômica de arquivo (construir novo → msync → rename → swap sob Lock) | `primary.Index.grow()` — [index.go:245](internal/index/primary/index.go:245); `escreveAtomico` — [manifest.go:250](internal/storage/checkpoint/manifest.go:250) |
+| Troca atômica de arquivo (construir novo → msync → rename → swap sob Lock) | `primary.Index.grow()` — [index.go:245](internal/index/primary/index.go:245); `writeAtomic` — [manifest.go:250](internal/storage/checkpoint/manifest.go:250) |
 
 O comentário de [manifest.go:250](internal/storage/checkpoint/manifest.go:250) declara
-`escreveAtomico` como **o único caminho de durabilidade provado do projeto**, com
+`writeAtomic` como **o único caminho de durabilidade provado do projeto**, com
 instrução explícita de não duplicá-lo. A compaction deve passar por ele.
 
 ### Tarefa 1 — tornar a curva visível (antes de tudo)

@@ -82,10 +82,10 @@ Arquivo novo `internal/typeparse/datetime.go`, no estilo artesanal de `RFC3339Mi
 ```go
 // Layout é o padrão compilado. Construído UMA vez no load; o parse é uma
 // interpretação sobre []byte que não aloca.
-type Layout struct { /* toks []tok; literais []byte; temMeridiano, temData bool */ }
+type Layout struct { /* toks []tok; literais []byte; hasMeridiem, hasDate bool */ }
 
-func CompilaLayout(padrao string, t types.FieldType) (*Layout, error)
-func TokensSuportados() []string // para a mensagem de recusa
+func CompileLayout(padrao string, t types.FieldType) (*Layout, error)
+func SupportedTokens() []string // para a mensagem de recusa
 
 // DateTime resolve o instante em loc. loc é PARÂMETRO, não time.Local
 // capturado dentro: um teste precisa fixar o fuso sem mexer num global do
@@ -97,10 +97,10 @@ func (l *Layout) DateTime(raw []byte, loc *time.Location) (int64, error)
 // não é instante, não há DST e não há nada a resolver.
 func (l *Layout) TimeOfDay(raw []byte) (int64, error)
 
-const MillisPorDia = 86_400_000
+const MillisPerDay = 86_400_000
 ```
 
-Helpers novos ao lado de `Digits2`/`Digits4` ([typeparse.go:333-348](internal/typeparse/typeparse.go:333)): `digitos1a2`, `digitos3`, `mesAbreviadoEnUS` (array `[12][3]byte` em minúsculas, folda a caixa — 12 comparações de 3 bytes custam menos que um hash e um map alocaria na init).
+Helpers novos ao lado de `Digits2`/`Digits4` ([typeparse.go:333-348](internal/typeparse/typeparse.go:333)): `digitos1a2`, `digitos3`, `monthAbbrEnUS` (array `[12][3]byte` em minúsculas, folda a caixa — 12 comparações de 3 bytes custam menos que um hash e um map alocaria na init).
 
 **12h→24h:** `h24 := h12 % 12; if pm { h24 += 12 }`. Zera o 12 AM e preserva 1..11. É a única regra deste formato que não sai certa por acidente.
 
@@ -286,19 +286,19 @@ O passo 6 entrega **de graça**, pelo código que já existe: baixa de liveness 
 ```go
 // internal/types — mora aqui porque dois provedores implementam a interface:
 // o Store real e o fakestorage.
-type Presenca uint8
+type Presence uint8
 const (
-    PresencaAusente Presenca = iota // key nunca existiu
-    PresencaViva                    // estado corrente legível
-    PresencaExpirada                // rowId e sequence válidos; payload é lápide
+    PresenceAbsent Presence = iota // key nunca existiu
+    PresenceLive                   // estado corrente legível
+    PresenceExpired                // rowId e sequence válidos; payload é lápide
 )
-GetByKey(key, buf []byte) (types.Record, []byte, types.Presenca, error)
-Sequence(id types.RowID) (int64, types.Presenca)
+GetByKey(key, buf []byte) (types.Record, []byte, types.Presence, error)
+Sequence(id types.RowID) (int64, types.Presence)
 ```
 
-`PresencaExpirada` cobre **os dois** casos — bit gravado **ou** prazo vencido sem tombstone publicado. Sem unificar, o materializer teria duas noções de "morta" e a que vale dependeria de o scheduler ter passado.
+`PresenceExpired` cobre **os dois** casos — bit gravado **ou** prazo vencido sem tombstone publicado. Sem unificar, o materializer teria duas noções de "morta" e a que vale dependeria de o scheduler ter passado.
 
-Em [materializer.go:276-314](internal/materializer/materializer.go:276): `found` vira `presenca != PresencaAusente` (**é a correção do débito 24, e é uma linha** — o stale check de [:285](internal/materializer/materializer.go:285) passa a rodar); o merge de [:294](internal/materializer/materializer.go:294) exige `PresencaViva`, porque merge sobre a lápide arrastaria campos do alarme anterior para o alarme reaberto; desfecho novo `ActionRessuscitada` + contador, senão "alarme reabriu" sai como `updated` e fica invisível no painel.
+Em [materializer.go:276-314](internal/materializer/materializer.go:276): `found` vira `presenca != PresenceAbsent` (**é a correção do débito 24, e é uma linha** — o stale check de [:285](internal/materializer/materializer.go:285) passa a rodar); o merge de [:294](internal/materializer/materializer.go:294) exige `PresenceLive`, porque merge sobre a lápide arrastaria campos do alarme anterior para o alarme reaberto; desfecho novo `ActionRessuscitada` + contador, senão "alarme reabriu" sai como `updated` e fica invisível no painel.
 
 > **O piloto cai num limite que precisa estar escrito.** Sem `materialization.sequence` — e o piloto não a declara —, [materializer.go:285](internal/materializer/materializer.go:285) já exige `Seq != nil`, então **não há stale check nenhum** e um evento reentregue pelo Kafka reabre a entidade. Não é regressão (sem sequence não existe informação de ordem), mas com TTL ligado o sintoma passa de "update redundante" para "alarme fechado reabre sozinho". **Não recusar** a combinação (bloquearia o piloto); WARN nomeado na subida, no estilo de [server.go:465](internal/server/server.go:465).
 
@@ -316,7 +316,7 @@ materialization:
     type: timestamp
 ```
 
-Precisam de **schedulers diferentes**: toda a otimização de §2.3 depende de duração uniforme; com `ttl.field` o prazo vem do payload (pode vir no passado ou daqui a três anos), a deque vira heap e a semeadura `O(n)` vira `O(n log n)`. Aninhar dentro de `ttl` torna a exclusão estrutural e local, validada onde [spec.go:293-303](internal/schema/spec.go:293) já valida o bloco. `expireAfterWrite` por `units.Duracao` ([units.go:80](internal/units/units.go:80)), com **piso de 1 minuto** — abaixo da resolução do §57 a chave mentiria; recusa, não arredondamento, mesma doutrina de `razaoDeLiveness` ([config.go:266](internal/config/config.go:266)).
+Precisam de **schedulers diferentes**: toda a otimização de §2.3 depende de duração uniforme; com `ttl.field` o prazo vem do payload (pode vir no passado ou daqui a três anos), a deque vira heap e a semeadura `O(n)` vira `O(n log n)`. Aninhar dentro de `ttl` torna a exclusão estrutural e local, validada onde [spec.go:293-303](internal/schema/spec.go:293) já valida o bloco. `expireAfterWrite` por `units.Duration` ([units.go:80](internal/units/units.go:80)), com **piso de 1 minuto** — abaixo da resolução do §57 a chave mentiria; recusa, não arredondamento, mesma doutrina de `razaoDeLiveness` ([config.go:266](internal/config/config.go:266)).
 
 `tombstoneRetention` (hoje parseado e descartado, [spec.go:272](internal/schema/spec.go:272)): **parsear, validar e emitir WARN de que não tem motor**. Implementá-lo é fase separada — é o que exige `slotDeleted` e purga da primary. Custo permanente enquanto não existir, a registrar como débito novo: uma key vista uma vez custa para sempre ~47 B (primary 23 + location 8 + sequence 8 + expiry 8); com 100M identificadores distintos ao longo da vida, **~4,7 GB de índice** que nada devolve.
 
@@ -336,7 +336,7 @@ Novas: `nishidb_expiry_running`, `_expired_total`, `_resurrected_total`, `_expir
 |---|---|---|---|
 | **1 — Schema** | `ttl.expireAfterWrite` validado, exclusão mútua, piso de 1 min, prefixo `_` reservado, WARN do `tombstoneRetention` | Sim, nada muda em runtime | 1× |
 | **2 — `_writtenAt`** | Campo de sistema injetado no merge e no replace, oculto no `*`, recusado se vier do evento | **Sim, e é o beachhead**: o dataset registra o instante **sem expirar nada**; quando a Fase 4 subir, as rows já têm prazo real | 3× |
-| **3 — `expiry.idx` + débitos 24/25 + `Store.Expira`** | Índice no `applyRecord` (write **e** replay), predicado de leitura nos 3 pontos, `Presenca`, `Expira(rowID)` sem scheduler | Sim — ao fim, o tombstone é produzível e tudo a jusante está correto | 4× |
+| **3 — `expiry.idx` + débitos 24/25 + `Store.Expira`** | Índice no `applyRecord` (write **e** replay), predicado de leitura nos 3 pontos, `Presence`, `Expira(rowID)` sem scheduler | Sim — ao fim, o tombstone é produzível e tudo a jusante está correto | 4× |
 | **4 — Scheduler** | Deque de baldes, semeadura na abertura, wiring no server, passada única no `ingest` | Milestone | 5× |
 | **5 — Observabilidade** | 6 séries, bloco `expiry`, correção do `MetMaterializedRows` | Sim | 1,5× |
 | **6 — `tombstoneRetention`** | Purga da primary (`slotDeleted`), compaction descartando tombstone vencido | **Fora deste escopo** | 6× |

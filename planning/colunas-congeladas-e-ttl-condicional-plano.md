@@ -1014,7 +1014,7 @@ func validaRegrasTTL(regras []RegraTTLSpec) ([]RegraTTL, error) {
 		var d time.Duration
 		if r.ExpireAfterWrite != DuracaoNunca {
 			var err error
-			if d, err = units.Duracao(r.ExpireAfterWrite, 0); err != nil {
+			if d, err = units.Duration(r.ExpireAfterWrite, 0); err != nil {
 				return nil, specErrf("materialization.ttl[%d]: expireAfterWrite: %v", i, err)
 			}
 			if d < ResolucaoDaExpiracao {
@@ -1030,7 +1030,7 @@ func validaRegrasTTL(regras []RegraTTLSpec) ([]RegraTTL, error) {
 }
 ```
 
-`units.Duracao("0", 0)` devolve zero sem erro, e zero é menor que a resolução — então a recusa do `0` numérico cai da checagem que já existe, com a mensagem apontando para `never`.
+`units.Duration("0", 0)` devolve zero sem erro, e zero é menor que a resolução — então a recusa do `0` numérico cai da checagem que já existe, com a mensagem apontando para `never`.
 
 A validação do `when` (compilação e recusa dos campos de sistema) **não cabe aqui**: ela precisa do schema compilado, que só existe depois do dicionário. Vai na Task 9.
 

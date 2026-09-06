@@ -156,7 +156,7 @@ func TestMaxBufferPerQueryTemLeitorEValidacao(t *testing.T) {
 	}
 
 	// Valor inválido é recusado NOMEANDO a chave — e a unidade DECIMAL é
-	// recusada junto, porque units.Tamanho não aceita as duas grafias: "4MB" e
+	// recusada junto, porque units.Size não aceita as duas grafias: "4MB" e
 	// "4MiB" pareceriam a mesma coisa e diferiam em 5%.
 	for _, v := range []string{"quatro", "0", "-1", "4MB"} {
 		t.Run("maxBufferPerQuery "+v, func(t *testing.T) {

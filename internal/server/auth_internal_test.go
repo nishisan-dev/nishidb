@@ -45,7 +45,7 @@ const (
 // Servidor é tocado pelo middleware.
 func servidorDeTeste(log *logging.Logger) *Servidor {
 	if log == nil {
-		log = logging.Descartado()
+		log = logging.Discard()
 	}
 	return &Servidor{
 		log: log,
@@ -80,7 +80,7 @@ func roteadorDeTeste() *roteador {
 // a mais no caminho do request além do que sobeHTTP já registrava antes desta
 // task.
 func TestComAutenticacaoDesligadaDevolveOMuxCruSemEmbrulho(t *testing.T) {
-	s := &Servidor{log: logging.Descartado()} // credenciais == nil: autenticação desligada
+	s := &Servidor{log: logging.Discard()} // credenciais == nil: autenticação desligada
 	rt := roteadorDeTeste()
 
 	got := s.comAutenticacao(rt)
@@ -157,7 +157,7 @@ func TestRotaRegistradaPorForaDeRegistraEhRecusadaFailClosed(t *testing.T) {
 // só que SÓ no log estruturado, que é quem o operador lê.
 func TestRecusaRegistroSemPapelLogaODetalheQueNaoVaiAoCliente(t *testing.T) {
 	var buf bytes.Buffer
-	s := servidorDeTeste(logging.New(&buf, logging.FormatoJSON, slog.LevelInfo))
+	s := servidorDeTeste(logging.New(&buf, logging.FormatJSON, slog.LevelInfo))
 	rt := roteadorDeTeste()
 	rt.mux.HandleFunc("/rota-esquecida", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -373,7 +373,7 @@ func TestSenhaVaziaComUsuarioConfiguradoEhRecusada(t *testing.T) {
 func TestSenhaContendoDoisPontosAutenticaCorretamente(t *testing.T) {
 	const senhaComDoisPontos = "segredo:com:dois:pontos"
 	s := &Servidor{
-		log: logging.Descartado(),
+		log: logging.Discard(),
 		credenciais: map[string]credencial{
 			"leitor": {digestSenha: sha256.Sum256([]byte(senhaComDoisPontos)), role: config.RoleRead},
 		},
@@ -397,7 +397,7 @@ func TestSenhaContendoDoisPontosAutenticaCorretamente(t *testing.T) {
 func TestRazaoDeFalhaFechaOEnumHeaderUsuarioSenha(t *testing.T) {
 	reg := metrics.NewRegistry()
 	s := &Servidor{
-		log: logging.Descartado(),
+		log: logging.Discard(),
 		credenciais: map[string]credencial{
 			"leitor": {digestSenha: sha256.Sum256([]byte(senhaLeitorDeTeste)), role: config.RoleRead},
 		},
@@ -433,7 +433,7 @@ func TestRazaoDeFalhaFechaOEnumHeaderUsuarioSenha(t *testing.T) {
 // nenhum dos três caminhos de recusa.
 func TestLogAuthRecusadaSoNomeiaUsuarioConfiguradoENuncaASenha(t *testing.T) {
 	var buf bytes.Buffer
-	log := logging.New(&buf, logging.FormatoJSON, slog.LevelInfo)
+	log := logging.New(&buf, logging.FormatJSON, slog.LevelInfo)
 	s := &Servidor{
 		log: log,
 		credenciais: map[string]credencial{

@@ -16,43 +16,43 @@ import (
 // interface — apareceria lá como alocação POR ROW, e o orçamento teria custado
 // exatamente aquilo que ele existe para proteger.
 //
-// Reserva e Devolve são medidas JUNTAS e em par: medir só a Reserva deixaria
-// passar uma Devolve que alocasse, e ela roda com a mesma frequência.
+// Reserve e Return são medidas JUNTAS e em par: medir só a Reserve deixaria
+// passar uma Return que alocasse, e ela roda com a mesma frequência.
 func TestOrcamentoNaoAlocaNoCaminhoQuente(t *testing.T) {
-	g := budget.NovoGlobal(1 << 30)
+	g := budget.NewGlobal(1 << 30)
 	p := g.Query(1 << 20)
 
-	casos := []struct {
-		nome string
+	cases := []struct {
+		name string
 		f    func()
 	}{
-		{"Global.Reserva/Devolve", func() {
-			g.Reserva(64)
-			g.Devolve(64)
+		{"Global.Reserve/Return", func() {
+			g.Reserve(64)
+			g.Return(64)
 		}},
 		{"Global ilimitado", func() {
 			// O ramo do teto <= 0 é OUTRO caminho de código (Add direto, sem
 			// CAS) e precisa da mesma prova: é por ele que passam o CLI e os
 			// benchmarks.
-			il := budget.NovoGlobal(0)
-			il.Reserva(64)
-			il.Devolve(64)
+			unlimited := budget.NewGlobal(0)
+			unlimited.Reserve(64)
+			unlimited.Return(64)
 		}},
-		{"PorQuery.Admite/Libera", func() {
+		{"PerQuery.Admit/Release", func() {
 			// Não é caminho por LINHA — é uma vez por consulta —, mas está no
 			// caminho de ADMISSÃO, que roda antes de qualquer trabalho útil: uma
 			// alocação aqui apareceria como custo fixo em toda requisição.
-			p.Admite()
-			p.Libera()
+			p.Admit()
+			p.Release()
 		}},
-		{"PorQuery.Teto", func() { _ = p.Teto() }},
-		{"PorQuery.Usado", func() { _ = p.Usado() }},
-		{"Global.Usado", func() { _ = g.Usado() }},
+		{"PerQuery.Ceiling", func() { _ = p.Ceiling() }},
+		{"PerQuery.Used", func() { _ = p.Used() }},
+		{"Global.Used", func() { _ = g.Used() }},
 	}
-	for _, c := range casos {
-		t.Run(c.nome, func(t *testing.T) {
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
 			if n := testing.AllocsPerRun(200, c.f); n != 0 {
-				t.Errorf("%s alocou %.0f vezes por chamada; o caminho quente tem de ser zero", c.nome, n)
+				t.Errorf("%s alocou %.0f vezes por chamada; o caminho quente tem de ser zero", c.name, n)
 			}
 		})
 	}
@@ -64,23 +64,23 @@ func TestOrcamentoNaoAlocaNoCaminhoQuente(t *testing.T) {
 // dimensionou o orçamento pelo tamanho da linha veria a linha ser recusada pelo
 // número que ele mesmo escreveu.
 func TestReservaRecusaExatamenteNoLimite(t *testing.T) {
-	g := budget.NovoGlobal(100)
-	if !g.Reserva(100) {
+	g := budget.NewGlobal(100)
+	if !g.Reserve(100) {
 		t.Fatal("100 não coube num teto de 100: o limite é inclusive")
 	}
-	if g.Reserva(1) {
+	if g.Reserve(1) {
 		t.Fatal("101 coube num teto de 100")
 	}
-	if g.Usado() != 100 {
-		t.Fatalf("Usado() = %d depois de uma recusa, quer 100: a recusa não pode contabilizar", g.Usado())
+	if g.Used() != 100 {
+		t.Fatalf("Used() = %d depois de uma recusa, quer 100: a recusa não pode contabilizar", g.Used())
 	}
-	g.Devolve(100)
-	if g.Usado() != 0 {
-		t.Fatalf("Usado() = %d, quer 0", g.Usado())
+	g.Return(100)
+	if g.Used() != 0 {
+		t.Fatalf("Used() = %d, quer 0", g.Used())
 	}
 }
 
-// Admite reserva o TETO INTEIRO, de uma vez.
+// Admit reserva o TETO INTEIRO, de uma vez.
 //
 // É a decisão de admissão: reservar conforme o buffer cresce deixaria o
 // orçamento do processo acabar no MEIO de um stream, e a consulta morreria
@@ -88,17 +88,17 @@ func TestReservaRecusaExatamenteNoLimite(t *testing.T) {
 // de outra consulta. O número reservado é o teto, não o uso corrente, e é isso
 // que o nishidb_query_buffer_bytes publica.
 func TestAdmiteReservaOTetoInteiroDeUmaVez(t *testing.T) {
-	g := budget.NovoGlobal(1 << 20)
+	g := budget.NewGlobal(1 << 20)
 	p := g.Query(64 << 10)
 
-	if !p.Admite() {
+	if !p.Admit() {
 		t.Fatal("64 KiB não coube num processo de 1 MiB")
 	}
-	if g.Usado() != 64<<10 {
-		t.Errorf("Usado() = %d, quer 64KiB: a reserva é do teto inteiro", g.Usado())
+	if g.Used() != 64<<10 {
+		t.Errorf("Used() = %d, quer 64KiB: a reserva é do teto inteiro", g.Used())
 	}
-	if p.Usado() != 64<<10 {
-		t.Errorf("PorQuery.Usado() = %d, quer 64KiB", p.Usado())
+	if p.Used() != 64<<10 {
+		t.Errorf("PerQuery.Used() = %d, quer 64KiB", p.Used())
 	}
 }
 
@@ -109,70 +109,70 @@ func TestAdmiteReservaOTetoInteiroDeUmaVez(t *testing.T) {
 // só que agora com um número no /metrics.
 func TestAdmiteRecusaQuandoOProcessoNaoComporta(t *testing.T) {
 	// Comporta UM teto de 64 KiB, não dois.
-	g := budget.NovoGlobal(80 << 10)
+	g := budget.NewGlobal(80 << 10)
 
-	primeira := g.Query(64 << 10)
-	if !primeira.Admite() {
+	first := g.Query(64 << 10)
+	if !first.Admit() {
 		t.Fatal("a primeira consulta não coube num processo que a comporta")
 	}
-	segunda := g.Query(64 << 10)
-	if segunda.Admite() {
+	second := g.Query(64 << 10)
+	if second.Admit() {
 		t.Fatal("a segunda consulta passou: o Global não recusou")
 	}
-	if g.Usado() != 64<<10 {
-		t.Errorf("Usado() = %d depois da recusa, quer 64KiB: a recusa não pode contabilizar", g.Usado())
+	if g.Used() != 64<<10 {
+		t.Errorf("Used() = %d depois da recusa, quer 64KiB: a recusa não pode contabilizar", g.Used())
 	}
 
 	// E a vaga de memória VOLTA quando a primeira termina — sem isso o
 	// memoryTarget se esgotaria monotonicamente e o processo pararia de aceitar
 	// consulta sem estar usando memória nenhuma.
-	primeira.Libera()
-	if !segunda.Admite() {
-		t.Fatal("depois do Libera a segunda continuou recusada: o orçamento não foi devolvido")
+	first.Release()
+	if !second.Admit() {
+		t.Fatal("depois do Release a segunda continuou recusada: o orçamento não foi devolvido")
 	}
 }
 
-// Libera é idempotente.
+// Release é idempotente.
 //
 // O chamador a põe num defer e pode tê-la chamado no caminho de erro também.
-// Uma devolução dupla faria o `usado` do processo andar para BAIXO do real, e a
+// Uma devolução dupla faria o `used` do processo andar para BAIXO do real, e a
 // partir dali o teto deixaria de valer para todo mundo — em silêncio, que é o
 // pior modo de um limite falhar.
 func TestLiberaEhIdempotente(t *testing.T) {
-	g := budget.NovoGlobal(1 << 20)
+	g := budget.NewGlobal(1 << 20)
 	p := g.Query(1 << 10)
-	if !p.Admite() {
+	if !p.Admit() {
 		t.Fatal("1 KiB não coube")
 	}
-	p.Libera()
-	p.Libera()
-	p.Libera()
-	if g.Usado() != 0 {
-		t.Fatalf("Usado() = %d depois de três Libera, quer 0", g.Usado())
+	p.Release()
+	p.Release()
+	p.Release()
+	if g.Used() != 0 {
+		t.Fatalf("Used() = %d depois de três Release, quer 0", g.Used())
 	}
 }
 
-// Teto <= 0 é ILIMITADO nos dois níveis.
+// Ceiling <= 0 é ILIMITADO nos dois níveis.
 //
 // O Global ilimitado continua CONTANDO — é o que permite a um processo sem
-// configuração ainda publicar quanto está usando —, e o PorQuery ilimitado
+// configuração ainda publicar quanto está usando —, e o PerQuery ilimitado
 // admite sem reservar, porque não há número a reservar: inventar um faria o
 // nishidb_query_buffer_bytes publicar uma grandeza que não descreve nada.
 func TestTetoNaoPositivoEhIlimitado(t *testing.T) {
-	g := budget.NovoGlobal(0)
-	if !g.Reserva(1 << 40) {
+	g := budget.NewGlobal(0)
+	if !g.Reserve(1 << 40) {
 		t.Fatal("um terabyte foi recusado por um Global ilimitado")
 	}
-	if g.Usado() != 1<<40 {
-		t.Fatalf("Usado() = %d, quer 1TiB: ilimitado não é o mesmo que não contar", g.Usado())
+	if g.Used() != 1<<40 {
+		t.Fatalf("Used() = %d, quer 1TiB: ilimitado não é o mesmo que não contar", g.Used())
 	}
 
-	p := budget.NovoGlobal(1 << 10).Query(0)
-	if !p.Admite() {
+	p := budget.NewGlobal(1 << 10).Query(0)
+	if !p.Admit() {
 		t.Fatal("uma consulta sem teto foi recusada")
 	}
-	if p.Usado() != 0 {
-		t.Errorf("PorQuery.Usado() = %d sem teto declarado, quer 0", p.Usado())
+	if p.Used() != 0 {
+		t.Errorf("PerQuery.Used() = %d sem teto declarado, quer 0", p.Used())
 	}
 }
 
@@ -185,33 +185,33 @@ func TestTetoNaoPositivoEhIlimitado(t *testing.T) {
 // teto de N/2, exatamente N/2 têm de passar.
 func TestOTetoValeSobConcorrencia(t *testing.T) {
 	const goroutines = 200
-	const teto = goroutines / 2
+	const ceiling = goroutines / 2
 
-	g := budget.NovoGlobal(teto)
+	g := budget.NewGlobal(ceiling)
 	var wg sync.WaitGroup
-	aceitas := make([]bool, goroutines)
-	partida := make(chan struct{})
+	accepted := make([]bool, goroutines)
+	start := make(chan struct{})
 	for i := 0; i < goroutines; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			<-partida
-			aceitas[i] = g.Reserva(1)
+			<-start
+			accepted[i] = g.Reserve(1)
 		}(i)
 	}
-	close(partida)
+	close(start)
 	wg.Wait()
 
 	n := 0
-	for _, ok := range aceitas {
+	for _, ok := range accepted {
 		if ok {
 			n++
 		}
 	}
-	if n != teto {
-		t.Errorf("%d reservas aceitas num teto de %d: o CAS não está segurando", n, teto)
+	if n != ceiling {
+		t.Errorf("%d reservas aceitas num teto de %d: o CAS não está segurando", n, ceiling)
 	}
-	if g.Usado() != teto {
-		t.Errorf("Usado() = %d, quer %d", g.Usado(), teto)
+	if g.Used() != ceiling {
+		t.Errorf("Used() = %d, quer %d", g.Used(), ceiling)
 	}
 }

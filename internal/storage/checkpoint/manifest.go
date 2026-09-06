@@ -88,8 +88,8 @@ const (
 	// e é ela que bloqueia o binário anterior.
 	manifestV3 = 3
 
-	// tagCritica é o bit que separa as duas políticas acima.
-	tagCritica = 0x8000
+	// tagCritical é o bit que separa as duas políticas acima.
+	tagCritical = 0x8000
 	// tagHashes ERA a seção do conjunto de índices hash globais. Ela não é mais
 	// emitida, e continua nomeada aqui porque a LEITURA precisa reconhecê-la
 	// para descartá-la: sem este nome ela cairia no ramo de seção crítica
@@ -98,7 +98,7 @@ const (
 	// binário mais VELHO, e a recusa mandaria o operador procurar o problema no
 	// lugar errado.
 	tagHashes = 0x8001
-	// tagAgenda é a seção da agenda de vencimentos. Ela é crítica pelo mesmo
+	// tagSchedule é a seção da agenda de vencimentos. Ela é crítica pelo mesmo
 	// motivo das outras duas, com um modo de falha próprio: a agenda é
 	// DERIVADA da duração de fundo, do fanout e do número de níveis, e um
 	// binário que a ignorasse continuaria adotando uma árvore construída a
@@ -106,17 +106,17 @@ const (
 	// incompleto nem resposta errada — seria linha que NUNCA vence, com o CRC
 	// batendo, sem erro, sem log e sem métrica. É a única das três seções em
 	// que a falha é puramente silenciosa.
-	tagAgenda = 0x8003
+	tagSchedule = 0x8003
 
-	// tagHistorico é a seção do MODO do dataset e da marca-d'água de
+	// tagHistory é a seção do MODO do dataset e da marca-d'água de
 	// retenção. Ela é crítica pelo pior modo de falha que este formato tem:
 	// um binário que a ignorasse abriria um log append-only de eventos como
 	// se fosse estado corrente materializado, e leria uma tabela em que cada
 	// entidade aparece dezenas de vezes como se cada linha fosse uma entidade.
 	// Não é índice incompleto — é a resposta errada, com o CRC batendo.
-	tagHistorico = 0x8002
+	tagHistory = 0x8002
 
-	// tagIndicePorSegmento declara o FORMATO do índice que mora dentro de cada
+	// tagPerSegmentIndex declara o FORMATO do índice que mora dentro de cada
 	// segmento. Ela é crítica pela mesma razão das outras.
 	//
 	// Ela NÃO é o que bloqueia o binário anterior — a versão já faz isso, e
@@ -124,13 +124,13 @@ const (
 	// que ele não conhece. Ela existe para que a PRÓXIMA mudança de formato do
 	// índice tenha onde ser declarada sem outro bump de versão do manifest, que
 	// é exatamente o que a cauda TLV foi criada para evitar.
-	tagIndicePorSegmento = 0x8004
-	// formatoDoIndiceAtual é o valor gravado hoje. Um binário que ler um formato
+	tagPerSegmentIndex = 0x8004
+	// currentIndexFormat é o valor gravado hoje. Um binário que ler um formato
 	// que não conhece recusa o dataset, e a recusa é a resposta certa: ele não
 	// saberia manter — nem ler — o índice que o dataset tem.
-	formatoDoIndiceAtual = 1
+	currentIndexFormat = 1
 
-	// tagContadores é a seção dos contadores mantidos na escrita: por
+	// tagCounters é a seção dos contadores mantidos na escrita: por
 	// contador, o nome, as colunas do groupBy e o texto do where — os
 	// parâmetros que DECIDEM o conteúdo do vetor de grupos. É IGNORÁVEL, e a
 	// política é deliberada: a seção existe para o binário novo decidir entre
@@ -140,7 +140,7 @@ const (
 	// sem ela, e o binário novo reconstrói ao voltar. É a primeira tag
 	// ignorável do formato, e por isso a menor: sai antes de todas as críticas
 	// na cauda em ordem crescente.
-	tagContadores = 0x0001
+	tagCounters = 0x0001
 
 	// tlvHeaderSize é `tag u16 | len u32`.
 	tlvHeaderSize = 6
@@ -149,14 +149,14 @@ const (
 	// seção legada antes de descartá-la.
 	hashInfoSize = 10
 
-	// historicoInfoSize é `modo u8 | rowIDBase u64`.
-	historicoInfoSize = 9
+	// historyInfoSize é `mode u8 | rowIDBase u64`.
+	historyInfoSize = 9
 
-	// agendaInfoSize é `duracaoDeFundoMs u64 | blockShift u8 | niveis u8`.
-	agendaInfoSize = 10
+	// scheduleInfoSize é `fallbackDurationMs u64 | blockShift u8 | levels u8`.
+	scheduleInfoSize = 10
 
-	// indiceInfoSize é `formatoDoIndice u8`.
-	indiceInfoSize = 1
+	// indexInfoSize é `indexFormat u8`.
+	indexInfoSize = 1
 
 	// bitmapInfoSize é `fieldID u16 | valuesDictValidBytes i64`, a entrada do
 	// array de bitmaps do CORPO. Nada a escreve mais — bitmapCount é reservado e
@@ -210,37 +210,37 @@ type SegmentInfo struct {
 	LiveBytes    uint64
 }
 
-// AgendaInfo descreve a agenda de vencimentos gravada no dataset.
+// ScheduleInfo descreve a agenda de vencimentos gravada no dataset.
 //
 // Os três campos são os que DECIDEM o conteúdo da árvore, e é por isso que
 // eles moram no manifest em vez de serem inferidos dos arquivos: divergir em
 // qualquer um deles obriga a reconstruir.
 //
-// DuracaoDeFundoMs é o mais importante dos três, e o menos óbvio. A linha sem
+// FallbackDurationMs é o mais importante dos três, e o menos óbvio. A linha sem
 // prazo próprio herda a duração de fundo, então o vencimento agendado dela é
 // função dela — mudar a duração no YAML move, em silêncio, o vencimento de
 // toda linha com prazo desconhecido. Hoje esse efeito é invisível; com a
 // agenda ele vira um rebuild explícito, logado e com custo medido.
 //
-// BlockShift e Niveis são a geometria: uma árvore lida com o fanout errado
+// BlockShift e Levels são a geometria: uma árvore lida com o fanout errado
 // endereça o bloco errado em cada nível.
-type AgendaInfo struct {
-	DuracaoDeFundoMs uint64
-	BlockShift       uint8
-	Niveis           uint8
+type ScheduleInfo struct {
+	FallbackDurationMs uint64
+	BlockShift         uint8
+	Levels             uint8
 }
 
-// ContadorInfo descreve um contador mantido na escrita gravado no dataset.
+// CounterInfo descreve um contador mantido na escrita gravado no dataset.
 //
 // Os três campos são os que decidem o CONTEÚDO do vetor de grupos: outras
 // colunas ou outro where dão outro contador, e a abertura que encontrar
 // divergência reconstrói em vez de adotar. O teto (maxGroups) NÃO viaja:
 // mudá-lo não muda o que já foi contado — só é recusado quando menor que os
 // grupos em uso.
-type ContadorInfo struct {
-	Nome string
-	// Colunas são os FieldIDs do groupBy, na ordem declarada.
-	Colunas []uint16
+type CounterInfo struct {
+	Name string
+	// Columns são os FieldIDs do groupBy, na ordem declarada.
+	Columns []uint16
 	// Where é o texto normalizado da condição; vazio é "sem condição".
 	Where string
 }
@@ -258,59 +258,59 @@ type Manifest struct {
 	PrimaryUsed         uint64
 	FieldDictValidBytes int64
 
-	// Agenda é a seção 0x8003, e é nil no dataset sem expiração declarada.
-	Agenda *AgendaInfo
+	// Schedule é a seção 0x8003, e é nil no dataset sem expiração declarada.
+	Schedule *ScheduleInfo
 
-	// Contadores é a seção 0x0001; vazia (ou nil) no dataset sem contador
+	// Counters é a seção 0x0001; vazia (ou nil) no dataset sem contador
 	// declarado, e nesse caso a seção não é emitida.
-	Contadores []ContadorInfo
+	Counters []CounterInfo
 
-	// Modo é a engine do dataset: 0 materializado, 1 histórico. O tipo é
+	// Mode é a engine do dataset: 0 materializado, 1 histórico. O tipo é
 	// uint8 cru e não um enum do storage porque este pacote descreve um
 	// FORMATO — importar o vocabulário de quem o consome inverteria a
 	// dependência para ganhar um nome.
-	Modo uint8
+	Mode uint8
 	// RowIDBase é a marca-d'água de retenção do dataset histórico: rowId
 	// abaixo dela foi purgado e não é mais visível. Zero no dataset
 	// materializado, e é isso que o mantém na v1.
 	RowIDBase uint64
 }
 
-// temHistorico diz se a seção 0x8002 precisa ser emitida.
-func (m *Manifest) temHistorico() bool { return m.Modo != 0 || m.RowIDBase != 0 }
+// hasHistory diz se a seção 0x8002 precisa ser emitida.
+func (m *Manifest) hasHistory() bool { return m.Mode != 0 || m.RowIDBase != 0 }
 
-// TamanhoDaCaudaTLV devolve quantos bytes a cauda ocupa neste manifest. Ela
+// TLVTailSize devolve quantos bytes a cauda ocupa neste manifest. Ela
 // nunca é vazia: a seção do índice por segmento é emitida SEMPRE.
 //
 // É exportado porque é metade da fórmula de reserva do encode, e a outra
 // metade vive no teste que trava a reserva. Deixar a conta duplicada foi
 // exatamente o defeito que deixou a capacidade em 12 quando o layout já
 // gravava 36 por segmento.
-func TamanhoDaCaudaTLV(m *Manifest) int {
-	n := tlvHeaderSize + indiceInfoSize
-	if m.temHistorico() {
-		n += tlvHeaderSize + historicoInfoSize
+func TLVTailSize(m *Manifest) int {
+	n := tlvHeaderSize + indexInfoSize
+	if m.hasHistory() {
+		n += tlvHeaderSize + historyInfoSize
 	}
-	if m.Agenda != nil {
-		n += tlvHeaderSize + agendaInfoSize
+	if m.Schedule != nil {
+		n += tlvHeaderSize + scheduleInfoSize
 	}
-	if len(m.Contadores) > 0 {
-		n += tlvHeaderSize + tamanhoDaSecaoDeContadores(m.Contadores)
+	if len(m.Counters) > 0 {
+		n += tlvHeaderSize + countersSectionSize(m.Counters)
 	}
 	return n
 }
 
-// tamanhoDaSecaoDeContadores é o payload da seção 0x0001:
+// countersSectionSize é o payload da seção 0x0001:
 // `n u16 | por contador: lenNome u16 | nome | nCols u16 | nCols×u16 | lenWhere u32 | where`.
-func tamanhoDaSecaoDeContadores(cs []ContadorInfo) int {
+func countersSectionSize(cs []CounterInfo) int {
 	n := 2
 	for _, c := range cs {
-		n += 2 + len(c.Nome) + 2 + 2*len(c.Colunas) + 4 + len(c.Where)
+		n += 2 + len(c.Name) + 2 + 2*len(c.Columns) + 4 + len(c.Where)
 	}
 	return n
 }
 
-// versao decide o byte 4, e a resposta é SEMPRE v3.
+// version decide o byte 4, e a resposta é SEMPRE v3.
 //
 // Era condicional enquanto valia a pena preservar o rollback: um dataset que
 // não declarasse índice hash nem histórico saía como v1, byte a byte igual ao
@@ -320,16 +320,16 @@ func tamanhoDaSecaoDeContadores(cs []ContadorInfo) int {
 // incompletos na volta; recusá-lo pela versão é o que torna o dano impossível em
 // vez de improvável. É a única propriedade deste formato que se paga com uma
 // migração de mão única, e ela está registrada na §5.4 da spec do subsistema.
-func (m *Manifest) versao() uint8 { return manifestV3 }
+func (m *Manifest) version() uint8 { return manifestV3 }
 
 func (m *Manifest) encode() []byte {
 	// 36 por segmento, que é o que o laço abaixo grava desde os stats de
 	// liveness da S14. A capacidade estava em 12 e ficou para trás: não
 	// corrompia nada, mas fazia o append realocar em todo manifest com
 	// segmento — desperdício silencioso no caminho do checkpoint.
-	b := make([]byte, 0, 96+len(m.Segments)*36+TamanhoDaCaudaTLV(m))
+	b := make([]byte, 0, 96+len(m.Segments)*36+TLVTailSize(m))
 	b = append(b, manifestMagic[:]...)
-	b = append(b, m.versao(), 0, 0, 0)
+	b = append(b, m.version(), 0, 0, 0)
 	b = binary.LittleEndian.AppendUint64(b, m.Epoch)
 	b = binary.LittleEndian.AppendUint64(b, uint64(m.CreatedAtUnixMs))
 	b = binary.LittleEndian.AppendUint64(b, m.NextRowID)
@@ -350,42 +350,42 @@ func (m *Manifest) encode() []byte {
 	b = binary.LittleEndian.AppendUint64(b, uint64(m.FieldDictValidBytes))
 	b = binary.LittleEndian.AppendUint16(b, 0) // bitmapCount: reservado (ver o layout)
 	b = binary.LittleEndian.AppendUint32(b, 0) // kafkaCount (M3)
-	b = m.appendCauda(b)
+	b = m.appendTLVTail(b)
 	return binary.LittleEndian.AppendUint32(b, crc32.Checksum(b, castagnoli))
 }
 
-// appendCauda grava os registros TLV.
-func (m *Manifest) appendCauda(b []byte) []byte {
+// appendTLVTail grava os registros TLV.
+func (m *Manifest) appendTLVTail(b []byte) []byte {
 	// Ordem CRESCENTE de tag, e não a ordem em que as seções foram inventadas:
 	// o manifest é comparado byte a byte pelos testes de formato, e uma ordem
 	// que dependesse do histórico do produto mudaria o arquivo sem que o
 	// conteúdo mudasse.
-	if len(m.Contadores) > 0 {
-		b = binary.LittleEndian.AppendUint16(b, tagContadores)
-		b = binary.LittleEndian.AppendUint32(b, uint32(tamanhoDaSecaoDeContadores(m.Contadores)))
-		b = binary.LittleEndian.AppendUint16(b, uint16(len(m.Contadores)))
-		for _, c := range m.Contadores {
-			b = binary.LittleEndian.AppendUint16(b, uint16(len(c.Nome)))
-			b = append(b, c.Nome...)
-			b = binary.LittleEndian.AppendUint16(b, uint16(len(c.Colunas)))
-			for _, col := range c.Colunas {
+	if len(m.Counters) > 0 {
+		b = binary.LittleEndian.AppendUint16(b, tagCounters)
+		b = binary.LittleEndian.AppendUint32(b, uint32(countersSectionSize(m.Counters)))
+		b = binary.LittleEndian.AppendUint16(b, uint16(len(m.Counters)))
+		for _, c := range m.Counters {
+			b = binary.LittleEndian.AppendUint16(b, uint16(len(c.Name)))
+			b = append(b, c.Name...)
+			b = binary.LittleEndian.AppendUint16(b, uint16(len(c.Columns)))
+			for _, col := range c.Columns {
 				b = binary.LittleEndian.AppendUint16(b, col)
 			}
 			b = binary.LittleEndian.AppendUint32(b, uint32(len(c.Where)))
 			b = append(b, c.Where...)
 		}
 	}
-	if m.temHistorico() {
-		b = binary.LittleEndian.AppendUint16(b, tagHistorico)
-		b = binary.LittleEndian.AppendUint32(b, historicoInfoSize)
-		b = append(b, m.Modo)
+	if m.hasHistory() {
+		b = binary.LittleEndian.AppendUint16(b, tagHistory)
+		b = binary.LittleEndian.AppendUint32(b, historyInfoSize)
+		b = append(b, m.Mode)
 		b = binary.LittleEndian.AppendUint64(b, m.RowIDBase)
 	}
-	if m.Agenda != nil {
-		b = binary.LittleEndian.AppendUint16(b, tagAgenda)
-		b = binary.LittleEndian.AppendUint32(b, agendaInfoSize)
-		b = binary.LittleEndian.AppendUint64(b, m.Agenda.DuracaoDeFundoMs)
-		b = append(b, m.Agenda.BlockShift, m.Agenda.Niveis)
+	if m.Schedule != nil {
+		b = binary.LittleEndian.AppendUint16(b, tagSchedule)
+		b = binary.LittleEndian.AppendUint32(b, scheduleInfoSize)
+		b = binary.LittleEndian.AppendUint64(b, m.Schedule.FallbackDurationMs)
+		b = append(b, m.Schedule.BlockShift, m.Schedule.Levels)
 	}
 	// A seção do índice por segmento é INCONDICIONAL, inclusive no dataset que
 	// não declara campo indexado nenhum. Ela descreve o formato que este binário
@@ -393,9 +393,9 @@ func (m *Manifest) appendCauda(b []byte) []byte {
 	// índice faria um dataset ganhar a declaração — e a versão que ela acompanha
 	// — no dia em que alguém acrescentasse um campo, mudando o formato do
 	// arquivo por uma alteração de configuração.
-	b = binary.LittleEndian.AppendUint16(b, tagIndicePorSegmento)
-	b = binary.LittleEndian.AppendUint32(b, indiceInfoSize)
-	return append(b, formatoDoIndiceAtual)
+	b = binary.LittleEndian.AppendUint16(b, tagPerSegmentIndex)
+	b = binary.LittleEndian.AppendUint32(b, indexInfoSize)
+	return append(b, currentIndexFormat)
 }
 
 // reader é um cursor de decodificação com detecção de truncamento.
@@ -477,7 +477,7 @@ func decode(raw []byte) (*Manifest, error) {
 	if kafka := r.u32(); kafka != 0 {
 		return nil, fmt.Errorf("%w: seção kafka inesperada (%d)", ErrCorruptManifest, kafka)
 	}
-	if err := decodeCauda(r, m); err != nil {
+	if err := decodeTLVTail(r, m); err != nil {
 		return nil, err
 	}
 	if r.bad || r.pos != len(body) {
@@ -486,7 +486,7 @@ func decode(raw []byte) (*Manifest, error) {
 	return m, nil
 }
 
-// decodeCauda percorre os registros TLV até o fim do corpo. Um manifest v1
+// decodeTLVTail percorre os registros TLV até o fim do corpo. Um manifest v1
 // simplesmente não entra no laço: o corpo acaba no kafkaCount.
 //
 // A checagem de comprimento é feita ANTES de consumir o payload de propósito.
@@ -495,7 +495,7 @@ func decode(raw []byte) (*Manifest, error) {
 // 4 GiB o laço só descobriria isso depois de tentar avançar o cursor por
 // aquele tanto, e um manifest corrompido não pode custar mais que a leitura
 // dos bytes que ele de fato tem.
-func decodeCauda(r *reader, m *Manifest) error {
+func decodeTLVTail(r *reader, m *Manifest) error {
 	for r.pos < len(r.b) && !r.bad {
 		tag := r.u16()
 		n := r.u32()
@@ -505,26 +505,26 @@ func decodeCauda(r *reader, m *Manifest) error {
 		payload := r.take(int(n))
 		switch {
 		case tag == tagHashes:
-			if err := confereHashesLegados(payload); err != nil {
+			if err := checkLegacyHashes(payload); err != nil {
 				return err
 			}
-		case tag == tagIndicePorSegmento:
-			if err := decodeIndicePorSegmento(payload); err != nil {
+		case tag == tagPerSegmentIndex:
+			if err := decodePerSegmentIndex(payload); err != nil {
 				return err
 			}
-		case tag == tagHistorico:
-			if err := decodeHistorico(payload, m); err != nil {
+		case tag == tagHistory:
+			if err := decodeHistory(payload, m); err != nil {
 				return err
 			}
-		case tag == tagAgenda:
-			if err := decodeAgenda(payload, m); err != nil {
+		case tag == tagSchedule:
+			if err := decodeSchedule(payload, m); err != nil {
 				return err
 			}
-		case tag == tagContadores:
-			if err := decodeContadores(payload, m); err != nil {
+		case tag == tagCounters:
+			if err := decodeCounters(payload, m); err != nil {
 				return err
 			}
-		case tag&tagCritica != 0:
+		case tag&tagCritical != 0:
 			// Ignorar uma seção crítica desconhecida é o modo de falha que
 			// esta política existe para impedir: o dataset teria um índice
 			// que esta abertura não mantém, e ele reapareceria INCOMPLETO.
@@ -536,27 +536,27 @@ func decodeCauda(r *reader, m *Manifest) error {
 	return nil
 }
 
-// decodeContadores lê a seção 0x0001.
+// decodeCounters lê a seção 0x0001.
 //
 // Tamanho EXATO, contado entrada por entrada: uma seção que declara mais
 // contadores do que os bytes contêm é manifest corrompido, e não "menos
 // contadores" — ler pela metade adotaria um contador com as colunas de outro,
 // e o vetor de grupos passaria a ser interpretado com parâmetros que não são
 // os dele.
-func decodeContadores(payload []byte, m *Manifest) error {
+func decodeCounters(payload []byte, m *Manifest) error {
 	cr := &reader{b: payload}
 	n := int(cr.u16())
 	if cr.bad {
 		return fmt.Errorf("%w: seção dos contadores truncada", ErrCorruptManifest)
 	}
-	cs := make([]ContadorInfo, 0, n)
+	cs := make([]CounterInfo, 0, n)
 	for i := 0; i < n && !cr.bad; i++ {
-		var c ContadorInfo
-		c.Nome = string(cr.take(int(cr.u16())))
+		var c CounterInfo
+		c.Name = string(cr.take(int(cr.u16())))
 		nCols := int(cr.u16())
-		c.Colunas = make([]uint16, 0, nCols)
+		c.Columns = make([]uint16, 0, nCols)
 		for j := 0; j < nCols && !cr.bad; j++ {
-			c.Colunas = append(c.Colunas, cr.u16())
+			c.Columns = append(c.Columns, cr.u16())
 		}
 		c.Where = string(cr.take(int(cr.u32())))
 		cs = append(cs, c)
@@ -564,11 +564,11 @@ func decodeContadores(payload []byte, m *Manifest) error {
 	if cr.bad || cr.pos != len(payload) {
 		return fmt.Errorf("%w: seção dos contadores declara %d entradas em %d bytes", ErrCorruptManifest, n, len(payload))
 	}
-	m.Contadores = cs
+	m.Counters = cs
 	return nil
 }
 
-// confereHashesLegados lê a seção 0x8001 de um manifest escrito por um binário
+// checkLegacyHashes lê a seção 0x8001 de um manifest escrito por um binário
 // anterior, confere o comprimento e DESCARTA o conteúdo.
 //
 // Descartar é o certo: a seção nomeava os campos com índice hash GLOBAL, e esse
@@ -582,7 +582,7 @@ func decodeContadores(payload []byte, m *Manifest) error {
 // vazio: uma seção incoerente é sinal de manifest corrompido, e um manifest
 // corrompido não pode passar por causa de uma seção que por acaso ficou sem
 // leitor.
-func confereHashesLegados(payload []byte) error {
+func checkLegacyHashes(payload []byte) error {
 	hr := &reader{b: payload}
 	n := int(hr.u16())
 	if hr.bad || 2+n*hashInfoSize != len(payload) {
@@ -591,33 +591,33 @@ func confereHashesLegados(payload []byte) error {
 	return nil
 }
 
-// decodeIndicePorSegmento lê a seção 0x8004 e RECUSA um formato desconhecido.
+// decodePerSegmentIndex lê a seção 0x8004 e RECUSA um formato desconhecido.
 //
 // Recusar é a resposta certa, e é a razão de a seção existir: um binário que não
 // conhece o formato do índice não sabe lê-lo nem mantê-lo, e abrir assim
 // deixaria o índice parar de ser atualizado — falso negativo silencioso, que a
 // revalidação do §44 não conserta. É este ramo que a PRÓXIMA mudança de formato
 // vai usar, em vez de mais um bump de versão do manifest.
-func decodeIndicePorSegmento(payload []byte) error {
-	if len(payload) != indiceInfoSize {
+func decodePerSegmentIndex(payload []byte) error {
+	if len(payload) != indexInfoSize {
 		return fmt.Errorf("%w: seção do índice por segmento tem %d bytes, esperado %d",
-			ErrCorruptManifest, len(payload), indiceInfoSize)
+			ErrCorruptManifest, len(payload), indexInfoSize)
 	}
-	if formato := payload[0]; formato != formatoDoIndiceAtual {
+	if format := payload[0]; format != currentIndexFormat {
 		return fmt.Errorf("%w: o índice por segmento deste dataset está no formato %d, e esta versão só sabe o %d; o dataset foi escrito por um binário mais novo",
-			ErrCorruptManifest, formato, formatoDoIndiceAtual)
+			ErrCorruptManifest, format, currentIndexFormat)
 	}
 	return nil
 }
 
-// decodeHistorico lê a seção 0x8002.
-func decodeHistorico(payload []byte, m *Manifest) error {
-	if len(payload) != historicoInfoSize {
+// decodeHistory lê a seção 0x8002.
+func decodeHistory(payload []byte, m *Manifest) error {
+	if len(payload) != historyInfoSize {
 		return fmt.Errorf("%w: seção de histórico tem %d bytes, esperado %d",
-			ErrCorruptManifest, len(payload), historicoInfoSize)
+			ErrCorruptManifest, len(payload), historyInfoSize)
 	}
 	hr := &reader{b: payload}
-	m.Modo = hr.take(1)[0]
+	m.Mode = hr.take(1)[0]
 	m.RowIDBase = hr.u64()
 	if hr.bad {
 		return fmt.Errorf("%w: seção de histórico truncada", ErrCorruptManifest)
@@ -625,25 +625,25 @@ func decodeHistorico(payload []byte, m *Manifest) error {
 	return nil
 }
 
-// decodeAgenda lê a seção 0x8003.
+// decodeSchedule lê a seção 0x8003.
 //
 // Tamanho exato, e não "pelo menos": uma seção curta lida pela metade daria
-// blockShift zero, que endereça o dataset inteiro num bloco só, e niveis zero,
+// blockShift zero, que endereça o dataset inteiro num bloco só, e levels zero,
 // que é uma árvore sem folhas. Nenhum dos dois falha na leitura — os dois
 // falham depois, agendando errado.
-func decodeAgenda(payload []byte, m *Manifest) error {
-	if len(payload) != agendaInfoSize {
+func decodeSchedule(payload []byte, m *Manifest) error {
+	if len(payload) != scheduleInfoSize {
 		return fmt.Errorf("%w: seção da agenda tem %d bytes, esperado %d",
-			ErrCorruptManifest, len(payload), agendaInfoSize)
+			ErrCorruptManifest, len(payload), scheduleInfoSize)
 	}
-	ar := &reader{b: payload}
-	info := AgendaInfo{DuracaoDeFundoMs: ar.u64()}
-	info.BlockShift = ar.u8()
-	info.Niveis = ar.u8()
-	if ar.bad {
+	sr := &reader{b: payload}
+	info := ScheduleInfo{FallbackDurationMs: sr.u64()}
+	info.BlockShift = sr.u8()
+	info.Levels = sr.u8()
+	if sr.bad {
 		return fmt.Errorf("%w: seção da agenda truncada", ErrCorruptManifest)
 	}
-	m.Agenda = &info
+	m.Schedule = &info
 	return nil
 }
 
@@ -666,17 +666,17 @@ func step(name string, op func() error) error {
 
 // Write grava o manifest atomicamente.
 func Write(path string, m *Manifest) error {
-	return escreveAtomico(path, m.encode())
+	return writeAtomic(path, m.encode())
 }
 
-// escreveAtomico grava tmp → fsync → rename → fsync do diretório (a política
+// writeAtomic grava tmp → fsync → rename → fsync do diretório (a política
 // de rename durável do design §9/M18).
 //
 // É compartilhado pelo manifest.bin e pelo kafka.offsets de propósito: este é
 // o único caminho de durabilidade PROVADO do projeto (a ordem está travada
 // por TestWriteOrdemDeDurabilidade), e um segundo arquivo com uma segunda
 // cópia da sequência seria uma cópia que diverge na primeira correção.
-func escreveAtomico(path string, data []byte) error {
+func writeAtomic(path string, data []byte) error {
 	tmp := path + ".tmp"
 	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {

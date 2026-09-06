@@ -864,11 +864,11 @@ func (s *Store) segmentoPendente(dir string, seg uint32) (bool, error) {
 //     dois escritores no `<sidx>.tmp` de nome FIXO — foi fechado pelo nome único
 //     por escritor da §2.4. A tolerância fica: ela vale para o arquivo que um
 //     binário anterior deixou em disco, e é o próprio godoc do
-//     mmap.ErrArquivoVazio que manda tratá-lo como "sem índice".
+//     mmap.ErrEmptyFile que manda tratá-lo como "sem índice".
 func indiceIlegivel(err error) bool {
 	return errors.Is(err, os.ErrNotExist) ||
 		errors.Is(err, segindex.ErrFormato) ||
-		errors.Is(err, mmap.ErrArquivoVazio)
+		errors.Is(err, mmap.ErrEmptyFile)
 }
 
 // reconstroiOIndiceDoCorrente realimenta os WIPs recém-abertos lendo o próprio

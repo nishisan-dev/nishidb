@@ -128,7 +128,7 @@ por mensagem) foi refutada na proposta porque Kafka entrega pelo menos uma vez e
   ([store.go:2259-2275](internal/storage/store.go:2259)), não o journal; e a
   visibilidade filtra por prazo vencido, que o contador (por definição) só
   desconta quando a LÁPIDE é gravada. A auditoria ganha enumerador próprio no
-  pacote `storage`: `vers.Em(id, snap.Epoca)` senão `locs.Get(id)`, pula só
+  pacote `storage`: `vers.Em(id, snap.Epoch)` senão `locs.Get(id)`, pula só
   ausente/lápide, lê o record sob `aposMu.RLock`. "Viva" para o contador é "com
   location e sem lápide", e isso fica escrito.
 - **Refutado: aposentar por `refs == 0` + prazo basta.** Se a transição que
@@ -158,10 +158,10 @@ por mensagem) foi refutada na proposta porque Kafka entrega pelo menos uma vez e
 | durabilidade do vetor | Overlay em heap por contador (`Publish` no `applyRecord`, `ApplyOverlay` no checkpoint depois do `segSync`): a página do vetor nunca fica à frente do log durável, e `totals == fold(vetor)` vale em qualquer janela de crash. Custo: um mapa bounded pelo intervalo de checkpoint, como o das locations. |
 | "viva" para o contador | Linha com location e SEM lápide. Linha com prazo vencido e ainda sem lápide continua contada até o coletor chegar (a proposta §5.5 já assume isso: "o total cai quando o coletor chega"). A auditoria usa essa definição, não a de visibilidade da consulta. |
 | reconstrução | Decidida ANTES da recovery a partir do manifest (seção ausente, colunas ou `where` diferentes, vetor nascido com linhas, vetor que não cobre `NextRowID`). Reconstruir recria os DOIS arquivos (dicionário e vetor): chaves de outras colunas não podem poluir um dicionário cujos ids nunca são reemitidos. Mudança de `maxGroups` NÃO reconstrói — só é recusada se menor que os grupos em uso. |
-| manifest | Seção IGNORÁVEL (`tagContadores = 0x0001`): nome, colunas, `where` por contador. |
+| manifest | Seção IGNORÁVEL (`tagCounters = 0x0001`): nome, colunas, `where` por contador. |
 | aposentadoria segura | Aposentar exige `refs == 0`, prazo vencido E `ultimaMexida[g] <= mexidasCobertas` (contador monotônico de transições; `mexidasCobertas` é gravado no checkpoint, sob `wmu`, depois do `Msync` do vetor). |
 | histórico | Dataset em `ModoHistorico` recusa `counters:` na subida (a retenção purga por marca-d'água sem `applyRecord`; o contador nunca decrementaria). |
-| sem § novo | Como o `_meta`, o contador nasce sem seção na spec da raiz; `specsDoMarcador` não muda. |
+| sem § novo | Como o `_meta`, o contador nasce sem seção na spec da raiz; `markerSpecs` não muda. |
 
 ## Restrições globais
 
@@ -196,7 +196,7 @@ por mensagem) foi refutada na proposta porque Kafka entrega pelo menos uma vez e
 | `internal/predicate/evaluator.go` (novo) | `AvaliadorDePayload`: programa + slots + reader, `Avalia(payload)` |
 | `internal/predicate/rule.go` | `CompilaCondicao` extraída de `CompilaRegras` |
 | `internal/storage/counter/` (novo) | `dict.go`, `counter.go`, `textkey.go`, `audit.go`, `retirement.go` + testes |
-| `internal/storage/checkpoint/manifest.go` | tag 0x8005, `ContadorInfo`, `Manifest.Contadores` |
+| `internal/storage/checkpoint/manifest.go` | tag 0x8005, `CounterInfo`, `Manifest.Counters` |
 | `internal/storage/store.go` | `Options.CompilaContadores`, abertura, passo 7c do `applyRecord`, Close |
 | `internal/storage/counters.go` (novo) | `adotaOuConstroiContadores`, reconstrução, auditoria sob snapshot, laço de aposentadoria, estatísticas |
 | `internal/storage/store_checkpoint.go` | `traceStep("msyncContadores")` |
@@ -259,7 +259,7 @@ func TestAtomicos32EnderecamMeiaWord(t *testing.T) {
 
 - [ ] **Passo 2: rodar e ver falhar** — `go test ./internal/storage/mmap/ -run TestAtomicos32 -count=1` → falha de compilação (`AtomicStore32` indefinido).
 
-- [ ] **Passo 3: implementar em `region.go`** (mesmo padrão de `word`/`AtomicLoad64`: `RLock`, bounds check exigindo múltiplo de 4, `exigeMutavel`, `atomic.LoadUint32((*uint32)(unsafe.Pointer(&r.data[off])))`). Godoc: "existe para o vetor de grupos do contador (4 bytes por linha); a agenda e os demais continuam em 64".
+- [ ] **Passo 3: implementar em `region.go`** (mesmo padrão de `word`/`AtomicLoad64`: `RLock`, bounds check exigindo múltiplo de 4, `requireMutable`, `atomic.LoadUint32((*uint32)(unsafe.Pointer(&r.data[off])))`). Godoc: "existe para o vetor de grupos do contador (4 bytes por linha); a agenda e os demais continuam em 64".
 
 - [ ] **Passo 4: verde** — `go test ./internal/storage/mmap/ -count=1`.
 
@@ -548,31 +548,31 @@ return nil
 ### Tarefa B3: seção do manifest
 
 **Arquivos:**
-- Modificar: `internal/storage/checkpoint/manifest.go` (consts 91-157, structs 201-246, `TamanhoDaCaudaTLV` 258-267, `appendCauda` 314-335, `decodeCauda` 439-470, novo `decodeContadores`), `manifest_tlv_test.go`, `manifest_test.go`
+- Modificar: `internal/storage/checkpoint/manifest.go` (consts 91-157, structs 201-246, `TLVTailSize` 258-267, `appendTLVTail` 314-335, `decodeTLVTail` 439-470, novo `decodeCounters`), `manifest_tlv_test.go`, `manifest_test.go`
 
 **Interfaces produzidas:**
 ```go
-// tagContadores é IGNORÁVEL (< 0x8000), e a política é deliberada: a seção
+// tagCounters é IGNORÁVEL (< 0x8000), e a política é deliberada: a seção
 // existe para o binário NOVO decidir entre adotar e reconstruir, e "seção
 // ausente ⇒ reconstruir" já é a resposta certa. Torná-la crítica só bloquearia
 // o rollback (nishidb-update.sh) sem proteger nada: o binário anterior ignora a
 // seção, grava manifest sem ela, e o binário novo reconstrói ao voltar.
-const tagContadores = 0x0001
-type ContadorInfo struct {
+const tagCounters = 0x0001
+type CounterInfo struct {
 	Nome    string
 	Colunas []uint16 // FieldIDs na ordem declarada
 	Where   string   // texto normalizado; "" = sem condição
 }
-// Manifest.Contadores []ContadorInfo — nil no dataset sem contadores (seção omitida)
+// Manifest.Counters []CounterInfo — nil no dataset sem contadores (seção omitida)
 ```
 Layout da seção: `u16 n | por contador: u16 lenNome | nome | u16 nCols | nCols×u16 |
 u32 lenWhere | where`. `maxGroups` NÃO viaja: mudá-lo não muda o conteúdo do
 contador (só é recusado quando menor que os grupos em uso). O decode de tag
-ignorável desconhecida continua pulando bytes (`decodeCauda`); a seção nova
-entra em `appendCauda` em ordem crescente de tag (ela é a menor: vem antes de
+ignorável desconhecida continua pulando bytes (`decodeTLVTail`); a seção nova
+entra em `appendTLVTail` em ordem crescente de tag (ela é a menor: vem antes de
 todas as críticas).
 
-- [ ] **Passo 1: testes** — round-trip encode/decode com dois contadores (um sem `where`); `TestManifestSemContadoresNaoEmiteASecao` (bytes idênticos ao de antes — o golden existente continua verde); `TestSecaoDeContadoresTruncadaEhRecusada`; ajustar o teste de reserva de `TamanhoDaCaudaTLV`.
+- [ ] **Passo 1: testes** — round-trip encode/decode com dois contadores (um sem `where`); `TestManifestSemContadoresNaoEmiteASecao` (bytes idênticos ao de antes — o golden existente continua verde); `TestSecaoDeContadoresTruncadaEhRecusada`; ajustar o teste de reserva de `TLVTailSize`.
 
 - [ ] **Passo 2: vermelho → implementar → verde → commit** — `checkpoint: seção crítica dos contadores no manifest`.
 
@@ -618,8 +618,8 @@ func (s *Store) EstatisticasDeContadores() []contador.Estatisticas
   - **Mutações obrigatórias (as três de proposta §10)**: (1) `Expira` deixa de chamar `applyRecord` para o contador (comentar o passo 7c no ramo de lápide) → `TestContadorAcompanhaPutLapideECopyForward` vermelho; (2) a expiração oportunista da compaction grava a lápide sem `applyRecord` → teste próprio `TestExpiracaoOportunistaDescontaDoContador` vermelho; (3) `Dobra` chamada DEPOIS do replay → `TestContadorRecuperaDoTailSemCheckpoint` (variante msyncada) vermelho.
 
 - [ ] **Passo 2: implementar `Open`** na ordem (validada contra `store_recovery.go` e `store_checkpoint.go`):
-  1. depois de `resolveCamposIndexados` (linha 1190) e antes do `switch` (1195): `defs, err := s.compilaContadores(opts, m)` — chama o callback (se `opts.CompilaContadores == nil` e `m != nil && len(m.Contadores) > 0` ⇒ `ErrDatasetCorrupt` nomeando os contadores); recusa `ModoHistorico` com defs (molde `validaOpcoesDoModo`, store.go:2629).
-  2. **Decidir a reconstrução ANTES da recovery**, por contador: `recria = m == nil || seção ausente || colunas/where diferem de m.Contadores[nome]`; `contador.Abre(dir, def, minRows, recria)`. Se `!recria` e (`Nasceu()` com `m.NextRowID > 0` ou `!Cobre(m.NextRowID)`) ⇒ marcar `recria` também (o vetor não descreve as linhas) — nesse caso o `Abre` já aconteceu; chamar `Zera()`. Guardar `s.contadores` e `s.contadoresARecriar`. Contadores no manifest que não estão nas defs ⇒ `os.RemoveAll` do diretório + log `contador.removido`.
+  1. depois de `resolveCamposIndexados` (linha 1190) e antes do `switch` (1195): `defs, err := s.compilaContadores(opts, m)` — chama o callback (se `opts.CompilaContadores == nil` e `m != nil && len(m.Counters) > 0` ⇒ `ErrDatasetCorrupt` nomeando os contadores); recusa `ModoHistorico` com defs (molde `validaOpcoesDoModo`, store.go:2629).
+  2. **Decidir a reconstrução ANTES da recovery**, por contador: `recria = m == nil || seção ausente || colunas/where diferem de m.Counters[nome]`; `contador.Abre(dir, def, minRows, recria)`. Se `!recria` e (`Nasceu()` com `m.NextRowID > 0` ou `!Cobre(m.NextRowID)`) ⇒ marcar `recria` também (o vetor não descreve as linhas) — nesse caso o `Abre` já aconteceu; chamar `Zera()`. Guardar `s.contadores` e `s.contadoresARecriar`. Contadores no manifest que não estão nas defs ⇒ `os.RemoveAll` do diretório + log `contador.removido`.
   3. **Dobra** (`c.Dobra()`, pelo tamanho do arquivo) para cada contador SEM reconstrução pendente.
   4. o ramo de recovery roda como hoje — o replay passa pelo passo 7c (os dois modos).
   5. logo depois do ramo e ANTES de `abreIndicesDeSegmento`: para cada contador em `contadoresARecriar`, `s.reconstroiContador(c)` — varredura de `[0, nextRowID)` por `locs.Get`, pula ausente e lápide, `segR.ReadRecord`, `Transiciona` (idempotente com o que o replay já aplicou: o delta é contra a entrada corrente); log `contador.construido` (motivo, linhas, grupos, duração), molde de `schedule.go:62-87`.
@@ -639,7 +639,7 @@ func (s *Store) EstatisticasDeContadores() []contador.Estatisticas
 	}
 ```
 
-- [ ] **Passo 4: checkpoint** — dois passos novos: `traceStep("applyOverlayContadores", …)` logo DEPOIS de `applyOverlay` das locations (isto é, depois do `segSync`: é o que garante que o mmap do vetor só recebe transições de records duráveis), e `traceStep("msyncContadores", …)` entre `msyncVencimentos` e `msyncSequences`, erro NÃO sticky (godoc igual ao da agenda). Depois do msync, ainda sob `wmu`: `c.CobreMexidas(c.Transicoes())`. `Manifest.Contadores` montado de `c.Def()` a cada checkpoint. **Close**: parar o laço de aposentadoria (C4) ao lado de `ParaExpiracao`; `Close()` dos contadores ao lado da agenda; sem msync no Close (o que não foi checkpointado volta pelo replay, como hoje).
+- [ ] **Passo 4: checkpoint** — dois passos novos: `traceStep("applyOverlayContadores", …)` logo DEPOIS de `applyOverlay` das locations (isto é, depois do `segSync`: é o que garante que o mmap do vetor só recebe transições de records duráveis), e `traceStep("msyncContadores", …)` entre `msyncVencimentos` e `msyncSequences`, erro NÃO sticky (godoc igual ao da agenda). Depois do msync, ainda sob `wmu`: `c.CobreMexidas(c.Transicoes())`. `Manifest.Counters` montado de `c.Def()` a cada checkpoint. **Close**: parar o laço de aposentadoria (C4) ao lado de `ParaExpiracao`; `Close()` dos contadores ao lado da agenda; sem msync no Close (o que não foi checkpointado volta pelo replay, como hoje).
 
 - [ ] **Passo 5: verde na suíte do storage** (`go test ./internal/storage/... -count=1`), depois `make test` e `make test-race`.
 
@@ -682,7 +682,7 @@ Mecânica de `AuditaContadores`: `entra()`; `wmu.Lock()`; `snap := s.AbreSnapsho
 leitor, `snapshot.go:176-181`); `c.Congela()` de cada contador; `wmu.Unlock()`.
 Depois, sem `wmu`, **enumerador próprio** — NÃO `ScanLive`/`GetByRowID`, que
 leem a location corrente e filtram por prazo vencido: para `id` em
-`[snap.BaseRowID, snap.LimiteRowID)`: `packed := s.vers.Em(id, snap.Epoca)`,
+`[snap.BaseRowID, snap.LimitRowID)`: `packed := s.vers.Em(id, snap.Epoch)`,
 senão `s.locs.Get(id)`; pula só ausente ou bit de lápide; sob `aposMu.RLock`,
 `segR.ReadRecord(seg, off, buf)` e confere `rec.RowID == id`; rederiva com
 `c.Deriva(payload, avaliadorDaAuditoria, scratch, chaveBuf)`; acumula em slices
@@ -861,10 +861,10 @@ Schema sintético (string YAML como `especDaTabela` do meta): `name: <nome>`,
 colunas de `def.Tipos` (`boolean` para `TypeBool`). Cache: um `*schema.Compiled`
 por contador, construído em `Tabela` (não há `sync.Once` global).
 
-Fonte (`query.Store`): `AbreSnapshot()` devolve `types.Snapshot{LimiteRowID: l.Limite()}`
-(congela o conjunto de grupos por consulta; `Epoca`/`Instante`/`BaseRowID`
+Fonte (`query.Store`): `AbreSnapshot()` devolve `types.Snapshot{LimitRowID: l.Limite()}`
+(congela o conjunto de grupos por consulta; `Epoch`/`Instant`/`BaseRowID`
 ficam zero e são ignorados pela fonte — godoc no molde do `meta.fonte.AbreSnapshot`);
-`ScanLive(snap)` itera `1..LimiteRowID-1`, pulando `vivo == false`;
+`ScanLive(snap)` itera `1..LimitRowID-1`, pulando `vivo == false`;
 `GetByRowID(snap, id, buf)` codifica: `groupKey` (texto), as colunas (por
 `valuekey.DecodeComposta` da chave, zero-copy), `total`. **Zero alocação por
 linha**: o texto e a chave vêm do dicionário (memória estável), o payload é
@@ -1032,7 +1032,7 @@ contadores gera bytes idênticos), toda a suíte de `internal/storage`
 
 **Gates que mudam, e como:** `TestNamespaceDesconhecidoERecusado` (mensagem lista
 os dois namespaces); `TestOUsoAnuncia…` ganha `Counters`; o teste de reserva de
-`TamanhoDaCaudaTLV`; `evidence_test.go` ganha o aceite novo. Nada afrouxa.
+`TLVTailSize`; `evidence_test.go` ganha o aceite novo. Nada afrouxa.
 
 **Diferenciais (os testes que decidem se o plano está certo):**
 `TestDobraReproduzOsTotais`, `TestContadorRecuperaDoTailSemCheckpoint` (duas

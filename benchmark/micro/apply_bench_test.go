@@ -18,12 +18,12 @@ type voidStore struct {
 	found   bool
 }
 
-func (s *voidStore) Estado(key, buf []byte) (types.Record, []byte, types.Presenca, error) {
+func (s *voidStore) Estado(key, buf []byte) (types.Record, []byte, types.Presence, error) {
 	rec, out, ok, err := s.GetByKey(key, buf)
 	if err != nil || !ok {
-		return types.Record{}, out, types.PresencaAusente, err
+		return types.Record{}, out, types.PresenceAbsent, err
 	}
-	return rec, out, types.PresencaViva, nil
+	return rec, out, types.PresenceLive, nil
 }
 
 func (s *voidStore) GetByKey(key, buf []byte) (types.Record, []byte, bool, error) {

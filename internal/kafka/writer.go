@@ -80,7 +80,7 @@ type Writer struct {
 	limiarDeEncolhimento int
 	log                  *logging.Logger
 	met                  *metricas
-	origem               checkpoint.Origem
+	origem               checkpoint.Source
 	cad                  Cadencia
 
 	// commit publica o offset no broker DEPOIS do checkpoint durável (§48).
@@ -167,7 +167,7 @@ func NovoWriter(cfg *Config, mat *materializer.Materializer, st Store, fila *Fil
 	commit func(context.Context, map[int32]int64) error,
 ) *Writer {
 	if log == nil {
-		log = logging.Descartado()
+		log = logging.Discard()
 	}
 	o := make(map[int32]int64, len(offsets))
 	for p, v := range offsets {
@@ -487,7 +487,7 @@ func (w *Writer) checkpoint(ctx context.Context) error {
 	for p, v := range w.offsets {
 		snap[p] = v
 	}
-	o := checkpoint.SourceOffsets{Origem: w.origem, Offsets: snap}
+	o := checkpoint.SourceOffsets{Source: w.origem, Offsets: snap}
 	if err := w.store.SetSourceOffsets(o); err != nil {
 		return err
 	}

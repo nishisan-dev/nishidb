@@ -11,7 +11,7 @@ import (
 func TestKeywordsCaseInsensitive(t *testing.T) {
 	keywords := []struct {
 		lower string
-		tipo  lexer.TokenType
+		typ   lexer.TokenType
 	}{
 		{"select", lexer.TokenSelect},
 		{"from", lexer.TokenFrom},
@@ -29,7 +29,7 @@ func TestKeywordsCaseInsensitive(t *testing.T) {
 		t.Fatalf("%d keywords, o contrato fixa 11", len(keywords))
 	}
 
-	grafias := func(s string) []string {
+	casings := func(s string) []string {
 		upper := []byte(s)
 		mixed := []byte(s)
 		for i := range upper {
@@ -42,14 +42,14 @@ func TestKeywordsCaseInsensitive(t *testing.T) {
 	}
 
 	for _, kw := range keywords {
-		for _, grafia := range grafias(kw.lower) {
-			t.Run(grafia, func(t *testing.T) {
-				got := lexAll(t, grafia)
-				if got[0].Type != kw.tipo {
-					t.Errorf("%q = %v, want %v", grafia, got[0].Type, kw.tipo)
+		for _, casing := range casings(kw.lower) {
+			t.Run(casing, func(t *testing.T) {
+				got := lexAll(t, casing)
+				if got[0].Type != kw.typ {
+					t.Errorf("%q = %v, want %v", casing, got[0].Type, kw.typ)
 				}
-				if got[0].Text != grafia {
-					t.Errorf("Text = %q, want a grafia do fonte %q", got[0].Text, grafia)
+				if got[0].Text != casing {
+					t.Errorf("Text = %q, want a grafia do fonte %q", got[0].Text, casing)
 				}
 			})
 		}
@@ -59,11 +59,11 @@ func TestKeywordsCaseInsensitive(t *testing.T) {
 // Palavras que colidem por prefixo ou sufixo com keywords são
 // identificadores: o switch por comprimento tem de casar a palavra INTEIRA.
 func TestQuaseKeywordsSaoIdent(t *testing.T) {
-	casos := []string{
+	cases := []string{
 		"nulls", "null_", "selected", "is_active", "_from", "and2", "ORs",
 		"tru", "falses", "wher", "limits", "ands", "nots", "iss",
 	}
-	for _, sql := range casos {
+	for _, sql := range cases {
 		t.Run(sql, func(t *testing.T) {
 			wantStream(t, sql, []tok{{lexer.TokenIdent, sql, 0}})
 		})

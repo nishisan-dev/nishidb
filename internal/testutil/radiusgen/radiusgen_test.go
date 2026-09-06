@@ -88,14 +88,14 @@ func TestSeedsDiferentesGeramCorpusDiferente(t *testing.T) {
 	a := collect(t, gen(t, radiusgen.Config{Seed: 1, Entities: 500}), 200)
 	b := collect(t, gen(t, radiusgen.Config{Seed: 2, Entities: 500}), 200)
 
-	iguais := 0
+	identicalCount := 0
 	for i := range a {
 		if bytes.Equal(a[i], b[i]) {
-			iguais++
+			identicalCount++
 		}
 	}
-	if iguais > len(a)/10 {
-		t.Errorf("%d/%d eventos idênticos entre seeds diferentes — o rng não está sendo consumido", iguais, len(a))
+	if identicalCount > len(a)/10 {
+		t.Errorf("%d/%d eventos idênticos entre seeds diferentes — o rng não está sendo consumido", identicalCount, len(a))
 	}
 }
 
@@ -118,7 +118,7 @@ func TestTodoEventoParseiaNosDoisParsers(t *testing.T) {
 
 		var p jsonp.Parser
 		p.Reset(buf)
-		campos := 0
+		fields := 0
 		for {
 			_, ok, err := p.Next()
 			if err != nil {
@@ -127,11 +127,11 @@ func TestTodoEventoParseiaNosDoisParsers(t *testing.T) {
 			if !ok {
 				break
 			}
-			campos++
+			fields++
 		}
 		// O jsonp enxerga os mesmos campos de topo que a stdlib.
-		if campos != len(m) {
-			t.Fatalf("evento %d: jsonp viu %d campos, encoding/json viu %d\n%s", i, campos, len(m), buf)
+		if fields != len(m) {
+			t.Fatalf("evento %d: jsonp viu %d campos, encoding/json viu %d\n%s", i, fields, len(m), buf)
 		}
 	}
 }
@@ -140,7 +140,7 @@ func TestTodoEventoParseiaNosDoisParsers(t *testing.T) {
 // controlam.
 type shape struct {
 	patch, extended, unknown, null bool
-	campos                         int
+	fields                         int
 }
 
 func classify(t *testing.T, event []byte) shape {
@@ -149,7 +149,7 @@ func classify(t *testing.T, event []byte) shape {
 	if err := json.Unmarshal(event, &m); err != nil {
 		t.Fatalf("evento inválido: %v", err)
 	}
-	s := shape{campos: len(m), patch: len(m) <= 12}
+	s := shape{fields: len(m), patch: len(m) <= 12}
 	for name, raw := range m {
 		v := string(raw)
 		switch {
@@ -178,10 +178,10 @@ func TestProporcoesRespeitadas(t *testing.T) {
 		UnknownFieldRatio: 0.01,
 		NullFieldRatio:    0.05,
 	}
-	eventos := collect(t, gen(t, cfg), n)
+	events := collect(t, gen(t, cfg), n)
 
 	var patches, extended, unknown, nulls int
-	for _, e := range eventos {
+	for _, e := range events {
 		s := classify(t, e)
 		if s.patch {
 			patches++
@@ -198,11 +198,11 @@ func TestProporcoesRespeitadas(t *testing.T) {
 	}
 
 	// Tolerância de 2 pontos percentuais: é amostragem, não cota.
-	check := func(nome string, got, total int, want float64) {
+	check := func(name string, got, total int, want float64) {
 		t.Helper()
 		frac := float64(got) / float64(total)
 		if diff := frac - want; diff > 0.02 || diff < -0.02 {
-			t.Errorf("%s = %.3f (%d/%d), want ~%.3f", nome, frac, got, total, want)
+			t.Errorf("%s = %.3f (%d/%d), want ~%.3f", name, frac, got, total, want)
 		}
 	}
 	check("PatchRatio", patches, n, 0.85)
@@ -230,7 +230,7 @@ func TestPatchRatioZeroSoGeraEventoCheio(t *testing.T) {
 	cfg := radiusgen.Config{Seed: 4, Entities: 100, PatchRatio: 0}
 	for i, e := range collect(t, gen(t, cfg), 500) {
 		if s := classify(t, e); s.patch {
-			t.Fatalf("evento %d é patch com PatchRatio=0 (%d campos)\n%s", i, s.campos, e)
+			t.Fatalf("evento %d é patch com PatchRatio=0 (%d campos)\n%s", i, s.fields, e)
 		}
 	}
 }
@@ -240,7 +240,7 @@ func TestPatchRatioZeroSoGeraEventoCheio(t *testing.T) {
 // descartar eventos legítimos e a medição viraria ruído.
 func TestSequenceMonotonicaPorEntidade(t *testing.T) {
 	g := gen(t, radiusgen.Config{Seed: 11, Entities: 50})
-	ultima := map[string]int64{}
+	last := map[string]int64{}
 	var buf []byte
 	for i := 0; i < 5000; i++ {
 		buf = g.Next(buf[:0])
@@ -250,13 +250,13 @@ func TestSequenceMonotonicaPorEntidade(t *testing.T) {
 		}
 		id := string(bytes.Trim(m["id"], `"`))
 		seq := extractSeq(t, m["_SEQ"])
-		if prev, seen := ultima[id]; seen && seq <= prev {
+		if prev, seen := last[id]; seen && seq <= prev {
 			t.Fatalf("entidade %s: _SEQ %d após %d (evento %d)", id, seq, prev, i)
 		}
-		ultima[id] = seq
+		last[id] = seq
 	}
-	if len(ultima) < 2 {
-		t.Fatalf("corpus tocou %d entidades; o teste não prova nada", len(ultima))
+	if len(last) < 2 {
+		t.Fatalf("corpus tocou %d entidades; o teste não prova nada", len(last))
 	}
 }
 
@@ -287,9 +287,9 @@ func TestKeyEstavelEUnicaPorEntidade(t *testing.T) {
 	// Acima de 256 de propósito: com poucas entidades, um ip derivado só do
 	// último octeto passaria despercebido — e a colisão de ip entre entidades
 	// distintas é exatamente o que estraga um índice hash no harness.
-	const entidades = 1000
-	g := gen(t, radiusgen.Config{Seed: 5, Entities: entidades, PatchRatio: 0})
-	ipPorID := map[string]string{}
+	const entities = 1000
+	g := gen(t, radiusgen.Config{Seed: 5, Entities: entities, PatchRatio: 0})
+	ipByID := map[string]string{}
 	var buf []byte
 	for i := 0; i < 4000; i++ {
 		buf = g.Next(buf[:0])
@@ -298,25 +298,25 @@ func TestKeyEstavelEUnicaPorEntidade(t *testing.T) {
 			t.Fatal(err)
 		}
 		id := string(bytes.Trim(m["id"], `"`))
-		ip, temIP := m["Framed-IP-Address"]
-		if !temIP {
+		ip, hasIP := m["Framed-IP-Address"]
+		if !hasIP {
 			continue // patch não carrega o ip
 		}
-		valor := string(bytes.Trim(ip, `"`))
-		if antes, visto := ipPorID[id]; visto && antes != valor {
-			t.Fatalf("entidade %s mudou de ip: %s → %s", id, antes, valor)
+		value := string(bytes.Trim(ip, `"`))
+		if prev, seen := ipByID[id]; seen && prev != value {
+			t.Fatalf("entidade %s mudou de ip: %s → %s", id, prev, value)
 		}
-		ipPorID[id] = valor
+		ipByID[id] = value
 	}
-	vistos := map[string]string{}
-	for id, ip := range ipPorID {
-		if outro, dup := vistos[ip]; dup {
-			t.Fatalf("ip %s pertence a duas entidades: %s e %s", ip, outro, id)
+	idByIP := map[string]string{}
+	for id, ip := range ipByID {
+		if other, dup := idByIP[ip]; dup {
+			t.Fatalf("ip %s pertence a duas entidades: %s e %s", ip, other, id)
 		}
-		vistos[ip] = id
+		idByIP[ip] = id
 	}
-	if len(ipPorID) > entidades {
-		t.Fatalf("%d ids distintos para %d entidades", len(ipPorID), entidades)
+	if len(ipByID) > entities {
+		t.Fatalf("%d ids distintos para %d entidades", len(ipByID), entities)
 	}
 }
 
@@ -324,21 +324,21 @@ func TestKeyEstavelEUnicaPorEntidade(t *testing.T) {
 // entidades. Com sorteio uniforme seriam necessários ~1,6N eventos, e na
 // rodada de 8M isso é uma hora de disco a mais.
 func TestSequentialCobreTodasAsEntidades(t *testing.T) {
-	const entidades = 500
-	g := gen(t, radiusgen.Config{Seed: 31, Entities: entidades, Sequential: true, PatchRatio: 0})
+	const entities = 500
+	g := gen(t, radiusgen.Config{Seed: 31, Entities: entities, Sequential: true, PatchRatio: 0})
 
-	vistas := map[string]int{}
-	for _, e := range collect(t, g, entidades) {
+	appearances := map[string]int{}
+	for _, e := range collect(t, g, entities) {
 		var m map[string]json.RawMessage
 		if err := json.Unmarshal(e, &m); err != nil {
 			t.Fatal(err)
 		}
-		vistas[string(bytes.Trim(m["id"], `"`))]++
+		appearances[string(bytes.Trim(m["id"], `"`))]++
 	}
-	if len(vistas) != entidades {
-		t.Fatalf("%d entidades distintas em %d eventos, want %d", len(vistas), entidades, entidades)
+	if len(appearances) != entities {
+		t.Fatalf("%d entidades distintas em %d eventos, want %d", len(appearances), entities, entities)
 	}
-	for id, n := range vistas {
+	for id, n := range appearances {
 		if n != 1 {
 			t.Fatalf("entidade %s apareceu %d vezes na primeira passada", id, n)
 		}
@@ -346,13 +346,13 @@ func TestSequentialCobreTodasAsEntidades(t *testing.T) {
 
 	// A segunda passada reencontra as MESMAS entidades (é o que faz o
 	// harness poder alternar LOAD e STEADY sobre o mesmo conjunto).
-	for _, e := range collect(t, g, entidades) {
+	for _, e := range collect(t, g, entities) {
 		var m map[string]json.RawMessage
 		if err := json.Unmarshal(e, &m); err != nil {
 			t.Fatal(err)
 		}
 		id := string(bytes.Trim(m["id"], `"`))
-		if vistas[id] == 0 {
+		if appearances[id] == 0 {
 			t.Fatalf("entidade %s só apareceu na segunda passada", id)
 		}
 	}
@@ -361,17 +361,17 @@ func TestSequentialCobreTodasAsEntidades(t *testing.T) {
 // Sem Sequential, o sorteio uniforme deixa entidades de fora — é justamente o
 // que justifica o modo.
 func TestSorteioUniformeNaoCobreTodasAsEntidades(t *testing.T) {
-	const entidades = 500
-	g := gen(t, radiusgen.Config{Seed: 31, Entities: entidades, PatchRatio: 0})
-	vistas := map[string]bool{}
-	for _, e := range collect(t, g, entidades) {
+	const entities = 500
+	g := gen(t, radiusgen.Config{Seed: 31, Entities: entities, PatchRatio: 0})
+	seen := map[string]bool{}
+	for _, e := range collect(t, g, entities) {
 		var m map[string]json.RawMessage
 		if err := json.Unmarshal(e, &m); err != nil {
 			t.Fatal(err)
 		}
-		vistas[string(bytes.Trim(m["id"], `"`))] = true
+		seen[string(bytes.Trim(m["id"], `"`))] = true
 	}
-	if len(vistas) == entidades {
+	if len(seen) == entities {
 		t.Fatal("sorteio uniforme cobriu todas as entidades: o modo Sequential perdeu a razão de existir")
 	}
 }
@@ -382,7 +382,7 @@ func TestSorteioUniformeNaoCobreTodasAsEntidades(t *testing.T) {
 func TestNASCardinalidadeEConcentracao(t *testing.T) {
 	const nas = 300
 	g := gen(t, radiusgen.Config{Seed: 8, Entities: 5000, NASCount: nas, PatchRatio: 0})
-	contagem := map[string]int{}
+	counts := map[string]int{}
 	total := 0
 	var buf []byte
 	for i := 0; i < 5000; i++ {
@@ -391,23 +391,23 @@ func TestNASCardinalidadeEConcentracao(t *testing.T) {
 		if err := json.Unmarshal(buf, &m); err != nil {
 			t.Fatal(err)
 		}
-		contagem[string(m["NAS-Identifier"])]++
+		counts[string(m["NAS-Identifier"])]++
 		total++
 	}
-	if len(contagem) < 2 || len(contagem) > nas {
-		t.Fatalf("%d NAS distintos, want entre 2 e %d", len(contagem), nas)
+	if len(counts) < 2 || len(counts) > nas {
+		t.Fatalf("%d NAS distintos, want entre 2 e %d", len(counts), nas)
 	}
 	// Concentração: o NAS mais popular precisa levar bem mais que a fatia
 	// uniforme (1/n).
-	maior := 0
-	for _, c := range contagem {
-		if c > maior {
-			maior = c
+	largest := 0
+	for _, c := range counts {
+		if c > largest {
+			largest = c
 		}
 	}
-	if float64(maior)/float64(total) <= 2.0/float64(len(contagem)) {
+	if float64(largest)/float64(total) <= 2.0/float64(len(counts)) {
 		t.Errorf("NAS mais popular leva %.4f do tráfego com %d NAS: distribuição uniforme demais",
-			float64(maior)/float64(total), len(contagem))
+			float64(largest)/float64(total), len(counts))
 	}
 }
 
@@ -468,10 +468,10 @@ func TestGenerateCorpus(t *testing.T) {
 	// Cada evento tem backing array PRÓPRIO: um corpus onde os eventos
 	// compartilham buffer seria sobrescrito pelo próximo Next e o benchmark
 	// mediria lixo.
-	esperado := collect(t, gen(t, cfg), 500)
+	want := collect(t, gen(t, cfg), 500)
 	for i := range corpus {
-		if !bytes.Equal(corpus[i], esperado[i]) {
-			t.Fatalf("evento %d do corpus diverge do Next direto:\n c=%s\n n=%s", i, corpus[i], esperado[i])
+		if !bytes.Equal(corpus[i], want[i]) {
+			t.Fatalf("evento %d do corpus diverge do Next direto:\n c=%s\n n=%s", i, corpus[i], want[i])
 		}
 		if i > 0 && &corpus[i][0] == &corpus[i-1][0] {
 			t.Fatalf("eventos %d e %d compartilham backing array", i-1, i)
@@ -480,8 +480,8 @@ func TestGenerateCorpus(t *testing.T) {
 }
 
 func TestConfigInvalida(t *testing.T) {
-	casos := []struct {
-		nome string
+	cases := []struct {
+		name string
 		cfg  radiusgen.Config
 		msg  string
 	}{
@@ -494,8 +494,8 @@ func TestConfigInvalida(t *testing.T) {
 		{"nas count negativo", radiusgen.Config{NASCount: -2}, "NASCount"},
 		{"terminate causes negativo", radiusgen.Config{TerminateCauses: -5}, "TerminateCauses"},
 	}
-	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			g, err := radiusgen.New(tc.cfg)
 			if err == nil {
 				t.Fatalf("Config inválida aceita: %+v", tc.cfg)
@@ -518,8 +518,8 @@ func TestDefaultConfigEhOWorkloadDeReferencia(t *testing.T) {
 	cfg.Entities = 2000
 
 	var patches, extended int
-	eventos := collect(t, gen(t, cfg), 5000)
-	for _, e := range eventos {
+	events := collect(t, gen(t, cfg), 5000)
+	for _, e := range events {
 		s := classify(t, e)
 		if s.patch {
 			patches++
@@ -528,10 +528,10 @@ func TestDefaultConfigEhOWorkloadDeReferencia(t *testing.T) {
 			extended++
 		}
 	}
-	if frac := float64(patches) / float64(len(eventos)); frac < 0.83 || frac > 0.87 {
+	if frac := float64(patches) / float64(len(events)); frac < 0.83 || frac > 0.87 {
 		t.Errorf("PatchRatio = %.3f, want ~0.85", frac)
 	}
-	if frac := float64(extended) / float64(len(eventos)); frac < 0.08 || frac > 0.12 {
+	if frac := float64(extended) / float64(len(events)); frac < 0.08 || frac > 0.12 {
 		t.Errorf("ExtendedJSONRatio = %.3f, want ~0.10", frac)
 	}
 }
@@ -557,12 +557,12 @@ func TestConfigZeradaTemRatiosZerados(t *testing.T) {
 // já estava lá.
 func TestNextAppendaEmDst(t *testing.T) {
 	g := gen(t, radiusgen.Config{Seed: 17, Entities: 10})
-	prefixo := []byte("PREFIXO:")
-	got := g.Next(append([]byte(nil), prefixo...))
-	if !bytes.HasPrefix(got, prefixo) {
+	prefix := []byte("PREFIXO:")
+	got := g.Next(append([]byte(nil), prefix...))
+	if !bytes.HasPrefix(got, prefix) {
 		t.Fatalf("Next sobrescreveu o conteúdo de dst: %s", got)
 	}
-	if err := json.Unmarshal(got[len(prefixo):], &map[string]any{}); err != nil {
+	if err := json.Unmarshal(got[len(prefix):], &map[string]any{}); err != nil {
 		t.Fatalf("evento após o prefixo é inválido: %v", err)
 	}
 }

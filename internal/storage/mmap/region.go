@@ -19,8 +19,8 @@ import (
 // CAPACIDADE, não de conveniência:
 //
 //   - crescível (Open): PROT_READ|PROT_WRITE, mantém o descritor aberto porque
-//     Grow, Msync e LiberaBlocos precisam dele;
-//   - somente-leitura (AbreSomenteLeitura): PROT_READ, FECHA o descritor logo
+//     Grow, Msync e ReleaseBlocks precisam dele;
+//   - somente-leitura (OpenReadOnly): PROT_READ, FECHA o descritor logo
 //     após o mmap e deixa f == nil.
 //
 // Concorrência: leitores e o writer único podem usar os métodos Atomic*
@@ -33,17 +33,17 @@ type Region struct {
 	mu sync.RWMutex
 	// f é nil na região somente-leitura: o descritor é fechado logo após o
 	// mmap. Nenhum caminho pode derreferenciá-lo sem antes olhar
-	// somenteLeitura.
+	// readOnly.
 	f *os.File
-	// nome guarda o caminho para as mensagens de erro. Ele existe porque
+	// path guarda o caminho para as mensagens de erro. Ele existe porque
 	// f.Name() morreria com nil pointer dereference na região somente-leitura
 	// — e o lugar onde isso apareceria seria dentro do fmt.Errorf de um
 	// caminho de falha, ou seja, um pânico obscuro escondido atrás do erro
 	// que ele deveria estar reportando.
-	nome           string
-	data           []byte
-	size           int64
-	somenteLeitura bool
+	path     string
+	data     []byte
+	size     int64
+	readOnly bool
 }
 
 // ErrFallocateUnsupported indica filesystem sem suporte a fallocate real.
@@ -53,13 +53,13 @@ type Region struct {
 var ErrFallocateUnsupported = errors.New(
 	"mmap: filesystem não suporta fallocate; NishiDB exige alocação real de blocos")
 
-// ErrSomenteLeitura marca a tentativa de mutar uma região aberta por
-// AbreSomenteLeitura. É erro, e não degradação: o mapeamento é PROT_READ e o
+// ErrReadOnly marca a tentativa de mutar uma região aberta por
+// OpenReadOnly. É erro, e não degradação: o mapeamento é PROT_READ e o
 // descritor já foi fechado, então não existe caminho pelo qual a escrita
 // pudesse dar certo mais adiante.
-var ErrSomenteLeitura = errors.New("mmap: região somente-leitura não aceita mutação")
+var ErrReadOnly = errors.New("mmap: região somente-leitura não aceita mutação")
 
-// ErrArquivoVazio marca o mapeamento de um arquivo de zero bytes.
+// ErrEmptyFile marca o mapeamento de um arquivo de zero bytes.
 //
 // unix.Mmap com length 0 falha com EINVAL, e propagar esse errno cru diria ao
 // operador "argumento inválido" sobre um argumento que ele não escolheu. Um
@@ -67,7 +67,7 @@ var ErrSomenteLeitura = errors.New("mmap: região somente-leitura não aceita mu
 // escritor selado se recusa a emitir índice vazio —, e o chamador trata a
 // recusa nomeada como "sem índice", que é um estado que ele já sabe resolver
 // por enumeração e reconstrução.
-var ErrArquivoVazio = errors.New("mmap: arquivo vazio não pode ser mapeado")
+var ErrEmptyFile = errors.New("mmap: arquivo vazio não pode ser mapeado")
 
 // fallocateUnsupported classifica errnos de "sem suporte". EINVAL entra
 // porque alguns filesystems o devolvem no lugar de EOPNOTSUPP para o modo 0
@@ -116,10 +116,10 @@ func Open(path string, minSize int64) (*Region, error) {
 		f.Close()
 		return nil, fmt.Errorf("mmap: mapear %s (%d bytes): %w", path, size, err)
 	}
-	return &Region{f: f, nome: path, data: data, size: size}, nil
+	return &Region{f: f, path: path, data: data, size: size}, nil
 }
 
-// AbreSomenteLeitura mapeia um arquivo EXISTENTE em PROT_READ e FECHA o
+// OpenReadOnly mapeia um arquivo EXISTENTE em PROT_READ e FECHA o
 // descritor logo depois, devolvendo uma região que não cresce, não sincroniza
 // e não libera blocos.
 //
@@ -133,7 +133,7 @@ func Open(path string, minSize int64) (*Region, error) {
 // O mapeamento é preguiçoso: um segmento nunca consultado não custa nada, e a
 // residência é decidida pelo kernel página a página. São 500 VMAs contra um
 // teto padrão de 65.530.
-func AbreSomenteLeitura(path string) (*Region, error) {
+func OpenReadOnly(path string) (*Region, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("mmap: abrir %s somente-leitura: %w", path, err)
@@ -149,7 +149,7 @@ func AbreSomenteLeitura(path string) (*Region, error) {
 	size := st.Size()
 	if size <= 0 {
 		_ = f.Close()
-		return nil, fmt.Errorf("%w (%s)", ErrArquivoVazio, path)
+		return nil, fmt.Errorf("%w (%s)", ErrEmptyFile, path)
 	}
 	data, err := unix.Mmap(int(f.Fd()), 0, int(size), unix.PROT_READ, unix.MAP_SHARED)
 	if err != nil {
@@ -164,7 +164,7 @@ func AbreSomenteLeitura(path string) (*Region, error) {
 		_ = unix.Munmap(data)
 		return nil, fmt.Errorf("mmap: fechar descritor de %s após o mapeamento: %w", path, err)
 	}
-	return &Region{nome: path, data: data, size: size, somenteLeitura: true}, nil
+	return &Region{path: path, data: data, size: size, readOnly: true}, nil
 }
 
 // Bytes devolve o mapeamento cru, sem cópia. Existe SÓ na região
@@ -189,7 +189,7 @@ func AbreSomenteLeitura(path string) (*Region, error) {
 // de fechar — a mesma disciplina do resto do storage. O chamador guarda o
 // resultado UMA vez, na abertura, e não volta a este método por leitura.
 func (r *Region) Bytes() []byte {
-	if !r.somenteLeitura {
+	if !r.readOnly {
 		panic("mmap: Bytes() só existe em região somente-leitura; " +
 			"numa região crescível o Grow remapearia e a slice viraria memória liberada — use WithBytes")
 	}
@@ -209,8 +209,8 @@ func (r *Region) Size() int64 {
 func (r *Region) Grow(newSize int64) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.somenteLeitura {
-		return fmt.Errorf("%w: Grow(%d) em %s", ErrSomenteLeitura, newSize, r.nome)
+	if r.readOnly {
+		return fmt.Errorf("%w: Grow(%d) em %s", ErrReadOnly, newSize, r.path)
 	}
 	if newSize <= r.size {
 		return fmt.Errorf("mmap: Grow(%d) não excede tamanho atual %d", newSize, r.size)
@@ -220,13 +220,13 @@ func (r *Region) Grow(newSize int64) error {
 	}
 	data, err := unix.Mmap(int(r.f.Fd()), 0, int(newSize), unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
 	if err != nil {
-		return fmt.Errorf("mmap: remapear %s (%d bytes): %w", r.nome, newSize, err)
+		return fmt.Errorf("mmap: remapear %s (%d bytes): %w", r.path, newSize, err)
 	}
 	old := r.data
 	r.data = data
 	r.size = newSize
 	if err := unix.Munmap(old); err != nil {
-		return fmt.Errorf("mmap: munmap antigo de %s: %w", r.nome, err)
+		return fmt.Errorf("mmap: munmap antigo de %s: %w", r.path, err)
 	}
 	return nil
 }
@@ -246,8 +246,8 @@ func (r *Region) WithBytes(off, n int, fn func(b []byte)) {
 	// nela seria SIGSEGV incapturável dentro do callback do chamador. O pânico
 	// nomeado troca isso por uma falha de teste que aponta para o método
 	// certo — quem só quer ler uma região selada usa Bytes().
-	if r.somenteLeitura {
-		panic(fmt.Sprintf("mmap: WithBytes em região somente-leitura (%s) entrega view mutável sobre PROT_READ — use Bytes()", r.nome))
+	if r.readOnly {
+		panic(fmt.Sprintf("mmap: WithBytes em região somente-leitura (%s) entrega view mutável sobre PROT_READ — use Bytes()", r.path))
 	}
 	if off < 0 || n < 0 || int64(off)+int64(n) > r.size {
 		panic(fmt.Sprintf("mmap: WithBytes(%d, %d) fora dos limites (size=%d)", off, n, r.size))
@@ -273,14 +273,14 @@ func (r *Region) AtomicLoad64(off int64) uint64 {
 	return atomic.LoadUint64(r.word(off))
 }
 
-// exigeMutavel entra em pânico se a região for somente-leitura. Chamar com
+// requireMutable entra em pânico se a região for somente-leitura. Chamar com
 // RLock, ao lado do bounds check de word: os mutadores atômicos não têm por
 // onde devolver erro, e escrever num mapeamento PROT_READ é SIGSEGV — um sinal
 // que o processo não captura e que não nomeia nem o offset nem o arquivo. O
 // pânico é a única forma de a violação chegar ao autor do chamador.
-func (r *Region) exigeMutavel(op string, off int64) {
-	if r.somenteLeitura {
-		panic(fmt.Sprintf("mmap: %s(%d) em região somente-leitura (%s)", op, off, r.nome))
+func (r *Region) requireMutable(op string, off int64) {
+	if r.readOnly {
+		panic(fmt.Sprintf("mmap: %s(%d) em região somente-leitura (%s)", op, off, r.path))
 	}
 }
 
@@ -288,7 +288,7 @@ func (r *Region) exigeMutavel(op string, off int64) {
 func (r *Region) AtomicStore64(off int64, v uint64) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	r.exigeMutavel("AtomicStore64", off)
+	r.requireMutable("AtomicStore64", off)
 	atomic.StoreUint64(r.word(off), v)
 }
 
@@ -296,7 +296,7 @@ func (r *Region) AtomicStore64(off int64, v uint64) {
 func (r *Region) AtomicOr64(off int64, v uint64) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	r.exigeMutavel("AtomicOr64", off)
+	r.requireMutable("AtomicOr64", off)
 	atomic.OrUint64(r.word(off), v)
 }
 
@@ -304,18 +304,18 @@ func (r *Region) AtomicOr64(off int64, v uint64) {
 func (r *Region) AtomicAnd64(off int64, v uint64) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	r.exigeMutavel("AtomicAnd64", off)
+	r.requireMutable("AtomicAnd64", off)
 	atomic.AndUint64(r.word(off), v)
 }
 
-// meiaWord devolve o ponteiro para a meia-word de 32 bits alinhada em off.
+// halfWord devolve o ponteiro para a meia-word de 32 bits alinhada em off.
 // Chamar com RLock.
 //
 // Existe para o vetor de grupos do contador, que guarda 4 bytes por linha:
 // metade do custo residente do índice de 64. O alinhamento exigido é de 4, e
 // não de 8, porque a entrada ímpar de um vetor de meias-words começa no meio
 // de uma word — exigir 8 recusaria metade das linhas.
-func (r *Region) meiaWord(off int64) *uint32 {
+func (r *Region) halfWord(off int64) *uint32 {
 	if off%4 != 0 {
 		panic(fmt.Sprintf("mmap: offset %d desalinhado (exige múltiplo de 4)", off))
 	}
@@ -329,15 +329,15 @@ func (r *Region) meiaWord(off int64) *uint32 {
 func (r *Region) AtomicLoad32(off int64) uint32 {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return atomic.LoadUint32(r.meiaWord(off))
+	return atomic.LoadUint32(r.halfWord(off))
 }
 
 // AtomicStore32 grava uma meia-word de 32 bits com semântica release.
 func (r *Region) AtomicStore32(off int64, v uint32) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	r.exigeMutavel("AtomicStore32", off)
-	atomic.StoreUint32(r.meiaWord(off), v)
+	r.requireMutable("AtomicStore32", off)
+	atomic.StoreUint32(r.halfWord(off), v)
 }
 
 // Msync força a escrita das páginas sujas para o arquivo (MS_SYNC).
@@ -348,11 +348,11 @@ func (r *Region) Msync() error {
 	// já foi fechado. Recusar em vez de virar no-op mantém a chamada visível:
 	// um caminho que acredita estar durabilizando algo tem de descobrir que
 	// não está.
-	if r.somenteLeitura {
-		return fmt.Errorf("%w: Msync em %s", ErrSomenteLeitura, r.nome)
+	if r.readOnly {
+		return fmt.Errorf("%w: Msync em %s", ErrReadOnly, r.path)
 	}
 	if err := unix.Msync(r.data, unix.MS_SYNC); err != nil {
-		return fmt.Errorf("mmap: msync %s: %w", r.nome, err)
+		return fmt.Errorf("mmap: msync %s: %w", r.path, err)
 	}
 	return nil
 }
@@ -374,12 +374,12 @@ func (r *Region) Close() error {
 	var errs []error
 	if r.data != nil {
 		if err := unix.Munmap(r.data); err != nil {
-			errs = append(errs, fmt.Errorf("mmap: munmap %s: %w", r.nome, err))
+			errs = append(errs, fmt.Errorf("mmap: munmap %s: %w", r.path, err))
 		}
 		r.data = nil
 		r.size = 0
 	}
-	// A região somente-leitura já fechou o descritor no AbreSomenteLeitura, e
+	// A região somente-leitura já fechou o descritor no OpenReadOnly, e
 	// f é nil: aqui só resta o munmap.
 	if r.f != nil {
 		if err := r.f.Close(); err != nil {
@@ -389,7 +389,7 @@ func (r *Region) Close() error {
 	return errors.Join(errs...)
 }
 
-// LiberaBlocos devolve ao filesystem os blocos de [off, off+length),
+// ReleaseBlocks devolve ao filesystem os blocos de [off, off+length),
 // mantendo o TAMANHO do arquivo e o mapeamento válidos. Leitura da faixa
 // passa a devolver zeros sem alocar nada.
 //
@@ -404,33 +404,33 @@ func (r *Region) Close() error {
 // Filesystem sem suporte devolve ErrFallocateUnsupported, e o chamador trata
 // como degradação de ESPAÇO: os segmentos voltam ao disco de qualquer jeito, e
 // o que fica para trás é o prefixo morto de um índice denso.
-func (r *Region) LiberaBlocos(off, length int64) error {
+func (r *Region) ReleaseBlocks(off, length int64) error {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	// Punch-hole exige o descritor, e a região somente-leitura não tem um. É a
 	// terceira das três operações que a imutabilidade elimina, e a razão de
-	// AbreSomenteLeitura poder fechar o fd (spec §1.4).
+	// OpenReadOnly poder fechar o fd (spec §1.4).
 	//
 	// A guarda vem ANTES do curto-circuito de length <= 0 de propósito: recusar
 	// é a resposta, e deixar o comprimento zero escapar como no-op faria a
 	// mesma chamada errada devolver nil ou erro conforme o argumento. Um
 	// chamador que acredita estar liberando blocos numa região que não pode
 	// tem de descobrir isso sempre, não só quando pede um punch não vazio.
-	if r.somenteLeitura {
-		return fmt.Errorf("%w: LiberaBlocos em %s", ErrSomenteLeitura, r.nome)
+	if r.readOnly {
+		return fmt.Errorf("%w: ReleaseBlocks em %s", ErrReadOnly, r.path)
 	}
 	if length <= 0 {
 		return nil
 	}
 	if off < 0 || off+length > r.size {
-		return fmt.Errorf("mmap: LiberaBlocos [%d,%d) fora do mapeamento de %d bytes", off, off+length, r.size)
+		return fmt.Errorf("mmap: ReleaseBlocks [%d,%d) fora do mapeamento de %d bytes", off, off+length, r.size)
 	}
 	const punch = unix.FALLOC_FL_PUNCH_HOLE | unix.FALLOC_FL_KEEP_SIZE
 	if err := unix.Fallocate(int(r.f.Fd()), punch, off, length); err != nil {
 		if fallocateUnsupported(err) {
-			return fmt.Errorf("%w (%s: %v)", ErrFallocateUnsupported, r.nome, err)
+			return fmt.Errorf("%w (%s: %v)", ErrFallocateUnsupported, r.path, err)
 		}
-		return fmt.Errorf("fallocate punch %s: %w", r.nome, err)
+		return fmt.Errorf("fallocate punch %s: %w", r.path, err)
 	}
 	return nil
 }

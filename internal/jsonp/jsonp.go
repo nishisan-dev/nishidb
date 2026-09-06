@@ -97,37 +97,37 @@ type Parser struct {
 	err     error
 }
 
-// BytesRetidos é a capacidade do scratch que este parser segura entre eventos.
+// RetainedBytes é a capacidade do scratch que este parser segura entre eventos.
 //
 // Existe para a contabilidade de memória da ingestão paralela: com N slots de
 // decodificação vivos ao mesmo tempo, o scratch de cada um sobrevive entre
 // eventos e cresce até a marca d'água do maior valor com escape que passou por
 // ele. Sem esta leitura o gauge de memória dos slots mentiria por omissão.
-func (p *Parser) BytesRetidos() int { return cap(p.scratch) }
+func (p *Parser) RetainedBytes() int { return cap(p.scratch) }
 
-// BytesDeEntradaRetidos é o tamanho do documento que este parser ainda aponta.
+// RetainedInputBytes é o tamanho do documento que este parser ainda aponta.
 //
 // Não é memória DELE: é a janela sobre o evento que o Reset guardou. Existe
 // para que um teste possa afirmar que a referência foi solta — sem ela, "o slot
 // não segura mais o lote de fetch" é uma afirmação que ninguém consegue checar.
-func (p *Parser) BytesDeEntradaRetidos() int { return len(p.data) }
+func (p *Parser) RetainedInputBytes() int { return len(p.data) }
 
-// Encolhe solta o scratch, devolvendo a memória ao coletor.
+// Shrink solta o scratch, devolvendo a memória ao coletor.
 //
 // O que ocupa memória é o ARRAY, não o comprimento — é a lição do débito 28 —,
 // então `p.scratch[:0]` não devolveria nada. O próximo evento realoca.
-func (p *Parser) Encolhe() { p.scratch = nil }
+func (p *Parser) Shrink() { p.scratch = nil }
 
-// SoltaEntrada esquece o documento que este parser percorreu.
+// ReleaseInput esquece o documento que este parser percorreu.
 //
 // `data` é uma JANELA sobre o evento, e o parser a guarda entre um Reset e o
 // seguinte. Num pipeline em que N parsers vivem em N slots ociosos, essa janela
 // impede o buffer de fetch inteiro de ser coletado — o evento tem alguns KiB, o
 // lote que o trouxe tem megabytes. Quem terminou de usar o documento chama isto.
 //
-// Não é o Encolhe: aquele solta o buffer que é NOSSO e será realocado; este
+// Não é o Shrink: aquele solta o buffer que é NOSSO e será realocado; este
 // solta a referência a memória de outro dono.
-func (p *Parser) SoltaEntrada() {
+func (p *Parser) ReleaseInput() {
 	p.data = nil
 	p.pos = 0
 	p.state = stateDone

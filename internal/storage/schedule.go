@@ -49,9 +49,9 @@ func (s *Store) adotaOuConstroiAgenda(m *checkpoint.Manifest) error {
 		return nil
 	}
 	querido := s.infoDaAgenda()
-	var atual *checkpoint.AgendaInfo
+	var atual *checkpoint.ScheduleInfo
 	if m != nil {
-		atual = m.Agenda
+		atual = m.Schedule
 	}
 	limite := types.RowID(s.nextRowID.Load())
 	semArquivos := s.agenda.PrecisaConstruir(limite)
@@ -67,9 +67,9 @@ func (s *Store) adotaOuConstroiAgenda(m *checkpoint.Manifest) error {
 		motivo = "os arquivos da agenda não descrevem as linhas do dataset"
 	default:
 		motivo = fmt.Sprintf("os parâmetros mudaram (duração de fundo %s → %s, geometria %d/%d → %d/%d)",
-			time.Duration(atual.DuracaoDeFundoMs)*time.Millisecond,
-			time.Duration(querido.DuracaoDeFundoMs)*time.Millisecond,
-			atual.BlockShift, atual.Niveis, querido.BlockShift, querido.Niveis)
+			time.Duration(atual.FallbackDurationMs)*time.Millisecond,
+			time.Duration(querido.FallbackDurationMs)*time.Millisecond,
+			atual.BlockShift, atual.Levels, querido.BlockShift, querido.Levels)
 	}
 
 	inicio := time.Now()

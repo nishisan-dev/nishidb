@@ -256,12 +256,12 @@ func (d *Decodificado) BytesRetidos() int {
 	n += cap(d.entries)*bytesPorEntry + cap(d.contagens)*bytesPorContagem
 	n += cap(d.pais)*bytesPorPai + cap(d.paisFeitos)*bytesPorFieldID
 	n += cap(d.filhosBuf) * bytesPorPonteiro
-	n += d.parser.BytesRetidos()
+	n += d.parser.RetainedBytes()
 	for _, p := range d.aninhados {
-		n += p.BytesRetidos()
+		n += p.RetainedBytes()
 	}
 	if d.descobridor != nil {
-		n += d.descobridor.BytesRetidos()
+		n += d.descobridor.RetainedBytes()
 	}
 	return n
 }
@@ -295,12 +295,12 @@ func (d *Decodificado) Encolhe(limiar int) bool {
 	// passa a AFIRMAR que a memória foi devolvida. Métrica mentindo é pior que
 	// memória presa, porque tira a chance de alguém descobrir.
 	d.key = nil
-	d.parser.Encolhe()
+	d.parser.Shrink()
 	for _, p := range d.aninhados {
-		p.Encolhe()
+		p.Shrink()
 	}
 	if d.descobridor != nil {
-		d.descobridor.Encolhe()
+		d.descobridor.Shrink()
 	}
 	return true
 }
@@ -326,11 +326,11 @@ func (d *Decodificado) Libera() {
 	d.evento = nil
 	clear(d.pais)
 	d.pais = d.pais[:0]
-	d.parser.SoltaEntrada()
+	d.parser.ReleaseInput()
 	for _, p := range d.aninhados {
-		p.SoltaEntrada()
+		p.ReleaseInput()
 	}
 	if d.descobridor != nil {
-		d.descobridor.SoltaEntrada()
+		d.descobridor.ReleaseInput()
 	}
 }

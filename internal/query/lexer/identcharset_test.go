@@ -18,7 +18,7 @@ import (
 // A invariante existe no fuzz do IDENT; aqui ela fica determinística e com
 // diagnóstico direto.
 func TestIdentBareNaoAceitaHifen(t *testing.T) {
-	casos := []struct {
+	cases := []struct {
 		sql    string
 		posErr int
 	}{
@@ -26,7 +26,7 @@ func TestIdentBareNaoAceitaHifen(t *testing.T) {
 		{"SELECT a FROM x WHERE Acct-Status-Type = 'Stop'", len("SELECT a FROM x WHERE Acct")},
 		{"SELECT nas-ip FROM x", len("SELECT nas")},
 	}
-	for _, tc := range casos {
+	for _, tc := range cases {
 		t.Run(tc.sql, func(t *testing.T) {
 			_, err := lexAllErr(t, tc.sql)
 			if err == nil {
@@ -48,7 +48,7 @@ func TestIdentBareNaoAceitaHifen(t *testing.T) {
 	// O MESMO nome entre aspas é aceito, e é a forma que o usuário deve usar.
 	// Sem esta metade, "recusar hífen" poderia ser cumprido recusando o nome
 	// hifenizado em qualquer forma — o que tornaria o dataset inconsultável.
-	tk := primeiroIdentQuoted(t, `SELECT "Acct-Status-Type" FROM x`)
+	tk := firstQuotedIdent(t, `SELECT "Acct-Status-Type" FROM x`)
 	if tk.Text != "Acct-Status-Type" {
 		t.Errorf("quoted = %q, want Acct-Status-Type", tk.Text)
 	}
@@ -74,7 +74,7 @@ func lexAllErr(t *testing.T, sql string) ([]lexer.Token, error) {
 	return nil, nil
 }
 
-func primeiroIdentQuoted(t *testing.T, sql string) lexer.Token {
+func firstQuotedIdent(t *testing.T, sql string) lexer.Token {
 	t.Helper()
 	toks, err := lexAllErr(t, sql)
 	if err != nil {

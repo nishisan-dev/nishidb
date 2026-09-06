@@ -1,0 +1,85 @@
+pacote	especie	endereco	novo	motivo
+internal/units	param	InteiroPositivo.padrao	defaultValue	valor devolvido quando a chave está ausente (o ponteiro separa ausente de zero); GLOSSARIO: padrão (valor herdado quando a chave está ausente) → default, e defaultValue em parâmetro ou local solto porque 'default' é palavra reservada em Go (linha do glossário corrigida nesta rodada; a outra acepção, padrão (formato de data, de rota ou de LIKE) → pattern, ganhou linha própria para typeparse.Layout.Padrao, server.roteador.registra e o padrao do LIKE no parser não caírem em Default); 'def' foi descartado: no repositório 'def' já é a abreviação de counter.Definicao (internal/storage/counters.go:92, internal/storage/counter/counter.go:202, internal/counters/table.go:52 — mais de cem ocorrências em 12 arquivos, mantidas por já serem inglês), e um token com dois sentidos é a colisão que o glossário §4 proíbe; 'fallback' também não: o godoc de units.go:10-12 exclui essa semântica (ausente herda o padrão; presente e inválido é erro, nunca cai no padrão); mesmo nome nas quatro funções do pacote; rf: mv InteiroPositivo.padrao InteiroPositivo.defaultValue
+internal/units	param	Tamanho.padrao	defaultValue	mesmo papel e mesmo nome de InteiroPositivo.padrao: o valor devolvido quando a chave está ausente (glossário: padrão (valor herdado quando a chave está ausente) → default; defaultValue em parâmetro ou local solto porque 'default' é palavra reservada em Go; 'def' descartado por já ser a abreviação de counter.Definicao no repositório, e 'fallback' porque units.go:10-12 exclui essa semântica); rf: mv Tamanho.padrao Tamanho.defaultValue
+internal/units	local	Tamanho.unidades	byteUnits	tabela de unidades de bytes percorrida por strings.HasSuffix; cada elemento é uma UNIDADE (par sufixo + multiplicador), não um sufixo: units.go:55 compara u.sufixo, a grafia, e units.go:65 devolve n * u.mult, a magnitude — e é a magnitude que faz a entrada ser unidade; o godoc (units.go:39, 'unidades binárias') e a mensagem de erro (units.go:69, 'sufixo KiB/MiB/GiB') mantêm os dois termos com sentidos distintos, e a tabela recebe o do conjunto; a homonímia com o nome do pacote resolve por QUALIFICAÇÃO ('byte': toda entrada, inclusive B, é unidade de bytes), não trocando o conceito; `for _, u := range byteUnits { u.suffix; u.mult }` lê unidade com sufixo e multiplicador e o 'u' volta a ser inicial de unit; o campo sufixo → suffix (linha field#gopls) fica como está; glossário: unidade (de tamanho) → unit (linha adicionada); rf: mv Tamanho.unidades Tamanho.byteUnits
+internal/units	param	DuracaoComDias.padrao	defaultValue	mesmo papel e mesmo nome de InteiroPositivo.padrao: o valor devolvido quando a chave está ausente (glossário: padrão (valor herdado quando a chave está ausente) → default; defaultValue em parâmetro ou local solto porque 'default' é palavra reservada em Go; 'def' descartado por já ser a abreviação de counter.Definicao no repositório, e 'fallback' porque units.go:10-12 exclui essa semântica); rf: mv DuracaoComDias.padrao DuracaoComDias.defaultValue
+internal/units	local	DuracaoComDias.dias	days	contagem de dias extraída antes do sufixo 'd'; tradução direta; rf: mv DuracaoComDias.dias DuracaoComDias.days
+internal/units	local	DuracaoComDias.resto	rest	o que sobra da string depois do trecho de dias, entregue ao time.ParseDuration; 'rest' é o idiomático para resto de string; rf: mv DuracaoComDias.resto DuracaoComDias.rest
+internal/units	param	Duracao.padrao	defaultValue	mesmo papel e mesmo nome de InteiroPositivo.padrao: o valor devolvido quando a chave está ausente (glossário: padrão (valor herdado quando a chave está ausente) → default; defaultValue em parâmetro ou local solto porque 'default' é palavra reservada em Go; 'def' descartado por já ser a abreviação de counter.Definicao no repositório, e 'fallback' porque units.go:10-12 exclui essa semântica); rf: mv Duracao.padrao Duracao.defaultValue
+internal/units	local	TestTamanhoAceitaAsUnidadesBinariasDaSpec.casos	cases	tabela de casos do teste tabular; convenção Go e a mesma que internal/unsafex já usa (glossário: casos → cases); os campos 'entrada' e 'quer' da struct anônima acompanham (linhas field#gopls); rf: mv TestTamanhoAceitaAsUnidadesBinariasDaSpec.casos TestTamanhoAceitaAsUnidadesBinariasDaSpec.cases
+internal/units	local#gopls	TestTamanhoAusenteHerdaOPadrao.entrada	input	posicao internal/units/units_test.go:36:9; variável do range sobre as strings de entrada do parser, declarada no bloco do for e por isso fora do alcance do rf (que só resolve Func.local no escopo de topo da função: 'not found' medido com rf -diff); rename por posição com gopls, conferido em dry-run; glossário: entrada → input
+internal/units	local#gopls	TestTamanhoRecusaUnidadeDecimal.entrada	input	posicao internal/units/units_test.go:51:9; variável do range sobre as strings de entrada do parser, declarada no bloco do for e por isso fora do alcance do rf (que só resolve Func.local no escopo de topo da função: 'not found' medido com rf -diff); rename por posição com gopls, conferido em dry-run; glossário: entrada → input
+internal/units	local#gopls	TestTamanhoRecusaNaoPositivoELixo.entrada	input	posicao internal/units/units_test.go:59:9; variável do range sobre as strings de entrada do parser, declarada no bloco do for e por isso fora do alcance do rf (que só resolve Func.local no escopo de topo da função: 'not found' medido com rf -diff); rename por posição com gopls, conferido em dry-run; glossário: entrada → input
+internal/units	local#gopls	TestDuracaoRecusaNaoPositivaELixo.entrada	input	posicao internal/units/units_test.go:96:9; variável do range sobre as strings de entrada do parser, declarada no bloco do for e por isso fora do alcance do rf (que só resolve Func.local no escopo de topo da função: 'not found' medido com rf -diff); rename por posição com gopls, conferido em dry-run; glossário: entrada → input
+internal/units	local	TestDuracaoComDias.ruins	bad	lista das entradas que têm de ser recusadas, em contraste com o mapa 'ok' logo acima; 'bad' é o par idiomático de 'ok'; rf: mv TestDuracaoComDias.ruins TestDuracaoComDias.bad
+internal/units	field#gopls	Tamanho.unidades.sufixo	suffix	posicao internal/units/units.go:49:3; campo da struct anônima da tabela de sufixos, FORA do inventário (que não lista campo de struct local); rename por posição com gopls, conferido em dry-run; acompanha o local byteUnits (a unidade tem sufixo e multiplicador; o campo é só a grafia); glossário: sufixo → suffix (linha adicionada)
+internal/units	field#gopls	TestTamanhoAceitaAsUnidadesBinariasDaSpec.casos.entrada	input	posicao internal/units/units_test.go:11:3; campo da struct anônima da tabela de casos, FORA do inventário; rename por posição com gopls; glossário: entrada → input, o mesmo termo dos locais do pacote
+internal/units	field#gopls	TestTamanhoAceitaAsUnidadesBinariasDaSpec.casos.quer	want	posicao internal/units/units_test.go:12:3; campo da struct anônima da tabela de casos, FORA do inventário; rename por posição com gopls; glossário: quer → want, a convenção got/want que TestDuracaoComDias já usa no mesmo arquivo
+internal/units	func	InteiroPositivo	PositiveInt	parser de inteiro positivo com padrão para chave ausente; 'PositiveInt' preserva o sentido em MixedCaps; chamadores em internal/config e internal/schema seguem pelo rf
+internal/units	func	Tamanho	Size	parser de tamanho em bytes com unidades binárias (KiB/MiB/GiB/TiB/B); no namespace do pacote, units.Size lê exatamente o que a godoc descreve; 'ByteSize' seria redundante com o nome do pacote
+internal/units	func	DuracaoComDias	DurationWithDays	duração na gramática do time.ParseDuration MAIS o sufixo 'd' de dias; 'WithDays' preserva que é a gramática padrão mais dias, não outra gramática; renomeada antes de Duracao para o rf não confundir os endereços
+internal/units	func	Duracao	Duration	parser da gramática do time.ParseDuration recusando duração não positiva; tradução direta, sem colisão dentro do pacote (time.Duration é qualificado)
+internal/units	local	DuracaoComDias.total	total	mantido: já em inglês (internal/units/units.go:107:2)
+internal/units	local	DuracaoComDias.d	d	mantido: já em inglês: letra única para time.Duration (internal/units/units.go:109:3)
+internal/units	local#ambiguo	DuracaoComDias.err	err	mantido: já em inglês (local#ambiguo em internal/units/units.go:109:6)
+internal/units	param	Duracao.s	s	mantido: já em inglês (internal/units/units.go:127:14)
+internal/units	local	Duracao.d	d	mantido: já em inglês (internal/units/units.go:132:2)
+internal/units	local	Duracao.err	err	mantido: já em inglês (internal/units/units.go:132:5)
+internal/units	param	InteiroPositivo.v	v	mantido: já em inglês: valor de uma letra (internal/units/units.go:29:22)
+internal/units	param	Tamanho.s	s	mantido: já em inglês (internal/units/units.go:43:14)
+internal/units	local	Tamanho.u	u	mantido: já em inglês: letra única para a unidade corrente de byteUnits, inicial de unit (internal/units/units.go:54:9)
+internal/units	local#ambiguo	Tamanho.n	n	mantido: já em inglês (local#ambiguo em internal/units/units.go:58:3)
+internal/units	local#ambiguo	Tamanho.err	err	mantido: já em inglês (local#ambiguo em internal/units/units.go:58:6)
+internal/units	local#ambiguo	Tamanho.n	n	mantido: já em inglês (local#ambiguo em internal/units/units.go:67:2)
+internal/units	local#ambiguo	Tamanho.err	err	mantido: já em inglês (local#ambiguo em internal/units/units.go:67:5)
+internal/units	param	DuracaoComDias.s	s	mantido: já em inglês: parâmetro string de uma letra (internal/units/units.go:91:21)
+internal/units	local	DuracaoComDias.i	i	mantido: já em inglês: índice de byte (internal/units/units.go:97:5)
+internal/units	local	DuracaoComDias.n	n	mantido: já em inglês (internal/units/units.go:98:3)
+internal/units	local#ambiguo	DuracaoComDias.err	err	mantido: já em inglês (local#ambiguo em internal/units/units.go:98:6)
+internal/units	param	TestInteiroPositivoSeparaAusenteDeZero.t	t	mantido: já em inglês (internal/units/units_test.go:105:45)
+internal/units	func	TestInteiroPositivoSeparaAusenteDeZero	TestInteiroPositivoSeparaAusenteDeZero	mantido: nome de teste, Fase 4 (internal/units/units_test.go:105:6)
+internal/units	local	TestInteiroPositivoSeparaAusenteDeZero.got	got	mantido: já em inglês (internal/units/units_test.go:106:2)
+internal/units	local#ambiguo	TestInteiroPositivoSeparaAusenteDeZero.err	err	mantido: já em inglês (local#ambiguo em internal/units/units_test.go:106:7)
+internal/units	local#ambiguo	TestInteiroPositivoSeparaAusenteDeZero.v	v	mantido: já em inglês (local#ambiguo em internal/units/units_test.go:114:9)
+internal/units	local#ambiguo	TestInteiroPositivoSeparaAusenteDeZero.err	err	mantido: já em inglês (local#ambiguo em internal/units/units_test.go:115:9)
+internal/units	local#ambiguo	TestInteiroPositivoSeparaAusenteDeZero.v	v	mantido: já em inglês (local#ambiguo em internal/units/units_test.go:120:2)
+internal/units	param	TestDuracaoComDias.t	t	mantido: já em inglês (internal/units/units_test.go:130:25)
+internal/units	func	TestDuracaoComDias	TestDuracaoComDias	mantido: nome de teste, Fase 4 (internal/units/units_test.go:130:6)
+internal/units	local	TestDuracaoComDias.ok	ok	mantido: já em inglês: mapa das entradas aceitas (internal/units/units_test.go:131:2)
+internal/units	local	TestDuracaoComDias.want	want	mantido: já em inglês (internal/units/units_test.go:139:10)
+internal/units	local#ambiguo	TestDuracaoComDias.in	in	mantido: já em inglês (local#ambiguo em internal/units/units_test.go:139:6)
+internal/units	local#ambiguo	TestDuracaoComDias.got	got	mantido: já em inglês (local#ambiguo em internal/units/units_test.go:140:3)
+internal/units	local#ambiguo	TestDuracaoComDias.err	err	mantido: já em inglês (local#ambiguo em internal/units/units_test.go:140:8)
+internal/units	local#ambiguo	TestDuracaoComDias.in	in	mantido: já em inglês (local#ambiguo em internal/units/units_test.go:152:9)
+internal/units	local#ambiguo	TestDuracaoComDias.err	err	mantido: já em inglês (local#ambiguo em internal/units/units_test.go:153:11)
+internal/units	local#ambiguo	TestDuracaoComDias.got	got	mantido: já em inglês (local#ambiguo em internal/units/units_test.go:153:6)
+internal/units	local#ambiguo	TestDuracaoComDias.err	err	mantido: já em inglês (local#ambiguo em internal/units/units_test.go:159:10)
+internal/units	local#ambiguo	TestDuracaoComDias.got	got	mantido: já em inglês (local#ambiguo em internal/units/units_test.go:159:5)
+internal/units	param	TestGramaticaAceitaAJanelaDoSpec12.t	t	mantido: já em inglês (internal/units/units_test.go:166:41)
+internal/units	func	TestGramaticaAceitaAJanelaDoSpec12	TestGramaticaAceitaAJanelaDoSpec12	mantido: nome de teste, Fase 4 (internal/units/units_test.go:166:6)
+internal/units	local	TestGramaticaAceitaAJanelaDoSpec12.err	err	mantido: já em inglês (internal/units/units_test.go:167:8)
+internal/units	local	TestTamanhoAceitaAsUnidadesBinariasDaSpec.c	c	mantido: já em inglês: letra única para o caso corrente (internal/units/units_test.go:23:9)
+internal/units	local	TestTamanhoAceitaAsUnidadesBinariasDaSpec.got	got	mantido: já em inglês (internal/units/units_test.go:24:3)
+internal/units	local	TestTamanhoAceitaAsUnidadesBinariasDaSpec.err	err	mantido: já em inglês (internal/units/units_test.go:24:8)
+internal/units	param	TestTamanhoAusenteHerdaOPadrao.t	t	mantido: já em inglês (internal/units/units_test.go:35:37)
+internal/units	func	TestTamanhoAusenteHerdaOPadrao	TestTamanhoAusenteHerdaOPadrao	mantido: nome de teste, Fase 4 (internal/units/units_test.go:35:6)
+internal/units	local	TestTamanhoAusenteHerdaOPadrao.got	got	mantido: já em inglês (internal/units/units_test.go:37:3)
+internal/units	local	TestTamanhoAusenteHerdaOPadrao.err	err	mantido: já em inglês (internal/units/units_test.go:37:8)
+internal/units	param	TestTamanhoRecusaUnidadeDecimal.t	t	mantido: já em inglês (internal/units/units_test.go:50:38)
+internal/units	func	TestTamanhoRecusaUnidadeDecimal	TestTamanhoRecusaUnidadeDecimal	mantido: nome de teste, Fase 4 (internal/units/units_test.go:50:6)
+internal/units	local	TestTamanhoRecusaUnidadeDecimal.err	err	mantido: já em inglês (internal/units/units_test.go:52:9)
+internal/units	param	TestTamanhoRecusaNaoPositivoELixo.t	t	mantido: já em inglês (internal/units/units_test.go:58:40)
+internal/units	func	TestTamanhoRecusaNaoPositivoELixo	TestTamanhoRecusaNaoPositivoELixo	mantido: nome de teste, Fase 4 (internal/units/units_test.go:58:6)
+internal/units	local	TestTamanhoRecusaNaoPositivoELixo.err	err	mantido: já em inglês (internal/units/units_test.go:60:9)
+internal/units	param	TestTamanhoNomeiaOValorRecebido.t	t	mantido: já em inglês (internal/units/units_test.go:68:38)
+internal/units	func	TestTamanhoNomeiaOValorRecebido	TestTamanhoNomeiaOValorRecebido	mantido: nome de teste, Fase 4 (internal/units/units_test.go:68:6)
+internal/units	local	TestTamanhoNomeiaOValorRecebido.err	err	mantido: já em inglês (internal/units/units_test.go:69:5)
+internal/units	param	TestDuracaoAceitaEHerdaOPadrao.t	t	mantido: já em inglês (internal/units/units_test.go:78:37)
+internal/units	func	TestDuracaoAceitaEHerdaOPadrao	TestDuracaoAceitaEHerdaOPadrao	mantido: nome de teste, Fase 4 (internal/units/units_test.go:78:6)
+internal/units	local	TestDuracaoAceitaEHerdaOPadrao.got	got	mantido: já em inglês (internal/units/units_test.go:79:2)
+internal/units	local	TestDuracaoAceitaEHerdaOPadrao.err	err	mantido: já em inglês (internal/units/units_test.go:79:7)
+internal/units	param	TestDuracaoRecusaNaoPositivaELixo.t	t	mantido: já em inglês (internal/units/units_test.go:95:40)
+internal/units	func	TestDuracaoRecusaNaoPositivaELixo	TestDuracaoRecusaNaoPositivaELixo	mantido: nome de teste, Fase 4 (internal/units/units_test.go:95:6)
+internal/units	local	TestDuracaoRecusaNaoPositivaELixo.err	err	mantido: já em inglês (internal/units/units_test.go:97:9)
+internal/units	param	TestTamanhoAceitaAsUnidadesBinariasDaSpec.t	t	mantido: já em inglês (internal/units/units_test.go:9:48)
+internal/units	func	TestTamanhoAceitaAsUnidadesBinariasDaSpec	TestTamanhoAceitaAsUnidadesBinariasDaSpec	mantido: nome de teste, Fase 4 (internal/units/units_test.go:9:6)

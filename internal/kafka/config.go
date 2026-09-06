@@ -85,11 +85,11 @@ type Config struct {
 
 // Origem é a identidade do fluxo, para amarrar os offsets persistidos à fonte
 // de onde vieram (o ClusterID só é conhecido depois de falar com o broker).
-func (c *Config) Origem() checkpoint.Origem {
-	return checkpoint.Origem{
+func (c *Config) Origem() checkpoint.Source {
+	return checkpoint.Source{
 		Topic:     c.Topic,
 		GroupID:   c.GroupID,
-		Bootstrap: checkpoint.CanonizaBootstrap(c.Brokers),
+		Bootstrap: checkpoint.CanonicalBootstrap(c.Brokers),
 	}
 }
 

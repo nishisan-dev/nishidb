@@ -31,16 +31,16 @@ import (
 // (o SIGKILL da ingestão em internal/cli) e já executa documentação (o
 // quickstart do README). Este é o mesmo padrão aplicado ao alvo de lint.
 
-const raizDoRepo = "../.."
+const repoRoot = "../.."
 
-// ondeEstaOMake resolve o binário antes de mexer no PATH do filho — o PATH que
+// locateMake resolve o binário antes de mexer no PATH do filho — o PATH que
 // os testes montam existe para controlar o que a RECEITA enxerga, não para
 // esconder o `make` do próprio teste.
 //
 // Ausência de `make` é FALHA, não SKIP: pular aqui repetiria, no teste, o
 // defeito que ele fecha no alvo — sumir junto com a ferramenta e ainda assim
 // devolver verde. `make` é o ponto de entrada documentado do projeto.
-func ondeEstaOMake(t *testing.T) string {
+func locateMake(t *testing.T) string {
 	t.Helper()
 	mk, err := exec.LookPath("make")
 	if err != nil {
@@ -49,42 +49,42 @@ func ondeEstaOMake(t *testing.T) string {
 	return mk
 }
 
-// ambienteComPATH devolve o ambiente atual com o PATH SUBSTITUÍDO (não
+// envWithPATH devolve o ambiente atual com o PATH SUBSTITUÍDO (não
 // acrescentado): o teste precisa do controle total sobre o que `command -v`
 // acha, senão o golangci-lint da máquina de quem roda decide o resultado.
-func ambienteComPATH(caminho string, extras ...string) []string {
-	atual := os.Environ()
-	env := make([]string, 0, len(atual)+1+len(extras))
-	for _, kv := range atual {
+func envWithPATH(path string, extras ...string) []string {
+	current := os.Environ()
+	env := make([]string, 0, len(current)+1+len(extras))
+	for _, kv := range current {
 		if strings.HasPrefix(kv, "PATH=") {
 			continue
 		}
 		env = append(env, kv)
 	}
-	env = append(env, "PATH="+caminho)
+	env = append(env, "PATH="+path)
 	return append(env, extras...)
 }
 
-// rodaMakeLint executa o alvo na raiz do repositório e devolve stdout, stderr e
+// runMakeLint executa o alvo na raiz do repositório e devolve stdout, stderr e
 // o código de saída. O código do `make` é 2 quando a receita falha (ele reporta
 // "Error 1" do shell e sai 2, que é a convenção do GNU make): o que o gate
 // promete é NÃO-ZERO, e é isso que os testes afirmam.
-func rodaMakeLint(t *testing.T, path string, extras ...string) (stdout, stderr string, codigo int) {
+func runMakeLint(t *testing.T, path string, extras ...string) (stdout, stderr string, code int) {
 	t.Helper()
-	cmd := exec.Command(ondeEstaOMake(t), "lint")
-	cmd.Dir = raizDoRepo
-	cmd.Env = ambienteComPATH(path, extras...)
+	cmd := exec.Command(locateMake(t), "lint")
+	cmd.Dir = repoRoot
+	cmd.Env = envWithPATH(path, extras...)
 	var out, errBuf strings.Builder
 	cmd.Stdout = &out
 	cmd.Stderr = &errBuf
 	if err := cmd.Run(); err != nil {
-		var saiu *exec.ExitError
-		if !errors.As(err, &saiu) {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
 			t.Fatalf("make lint não chegou a executar: %v", err)
 		}
-		codigo = saiu.ExitCode()
+		code = exitErr.ExitCode()
 	}
-	return out.String(), errBuf.String(), codigo
+	return out.String(), errBuf.String(), code
 }
 
 // Este é o teste do defeito: com o golangci-lint fora do PATH, o alvo tem de
@@ -92,18 +92,18 @@ func rodaMakeLint(t *testing.T, path string, extras ...string) (stdout, stderr s
 // forte que "tirar um diretório da lista", porque não depende de onde a
 // ferramenta está instalada nesta máquina.
 func TestAlvoLintRecusaQuandoOGolangciLintNaoEstaNoPATH(t *testing.T) {
-	stdout, stderr, codigo := rodaMakeLint(t, t.TempDir())
+	stdout, stderr, code := runMakeLint(t, t.TempDir())
 
-	if codigo == 0 {
+	if code == 0 {
 		t.Fatalf("o alvo saiu 0 com o golangci-lint AUSENTE — é o carimbo do débito 53 de volta\nstdout: %q\nstderr: %q", stdout, stderr)
 	}
 
 	// A mensagem tem de bastar para o operador se desbloquear sozinho: o que
 	// falta, como instalar e onde o binário cai. Sem isso o exit não-zero vira
 	// um enigma, que é a outra forma de o gate não ser gate.
-	for _, trecho := range []string{"golangci-lint", "NÃO rodou", "go install", "PATH"} {
-		if !strings.Contains(stderr, trecho) {
-			t.Errorf("o stderr do alvo não menciona %q — a recusa precisa nomear o que falta\nstderr: %q", trecho, stderr)
+	for _, snippet := range []string{"golangci-lint", "NÃO rodou", "go install", "PATH"} {
+		if !strings.Contains(stderr, snippet) {
+			t.Errorf("o stderr do alvo não menciona %q — a recusa precisa nomear o que falta\nstderr: %q", snippet, stderr)
 		}
 	}
 
@@ -137,29 +137,29 @@ func TestAlvoLintChamaOLinterComOsDoisTetosDesligados(t *testing.T) {
 	// Dublê no lugar do binário real: o que se afirma aqui é COMO o alvo chama
 	// o linter, não o que o linter acha. Rodar o golangci-lint de verdade
 	// tornaria o teste dependente da máquina e caro por rodada.
-	dublê := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$NISHIDB_ARGV\"\n"
-	if err := os.WriteFile(filepath.Join(dir, "golangci-lint"), []byte(dublê), 0o755); err != nil {
+	fake := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$NISHIDB_ARGV\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "golangci-lint"), []byte(fake), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	stdout, stderr, codigo := rodaMakeLint(t, dir, "NISHIDB_ARGV="+argv)
-	if codigo != 0 {
-		t.Fatalf("o alvo recusou com o linter PRESENTE (exit %d)\nstdout: %q\nstderr: %q", codigo, stdout, stderr)
+	stdout, stderr, code := runMakeLint(t, dir, "NISHIDB_ARGV="+argv)
+	if code != 0 {
+		t.Fatalf("o alvo recusou com o linter PRESENTE (exit %d)\nstdout: %q\nstderr: %q", code, stdout, stderr)
 	}
 
-	bruto, err := os.ReadFile(argv)
+	raw, err := os.ReadFile(argv)
 	if err != nil {
 		t.Fatalf("o alvo não chegou a chamar o golangci-lint: %v", err)
 	}
-	chamada := strings.Fields(string(bruto))
-	for _, esperado := range []string{"run", "--max-issues-per-linter=0", "--max-same-issues=0"} {
-		if !contém(chamada, esperado) {
-			t.Errorf("a chamada ao linter não passou %q — com o teto ligado, apontamento NOVO entra no lugar de um truncado e o total não muda\nchamada: %v", esperado, chamada)
+	call := strings.Fields(string(raw))
+	for _, want := range []string{"run", "--max-issues-per-linter=0", "--max-same-issues=0"} {
+		if !contains(call, want) {
+			t.Errorf("a chamada ao linter não passou %q — com o teto ligado, apontamento NOVO entra no lugar de um truncado e o total não muda\nchamada: %v", want, call)
 		}
 	}
 }
 
-var reInstalacao = regexp.MustCompile(`golangci-lint@([^\s"']+)`)
+var reInstallation = regexp.MustCompile(`golangci-lint@([^\s"']+)`)
 
 // A linha do `go install` do Makefile é a ÚNICA instrução de instalação do
 // linter no repositório, e por isso é ela que decide qual binário mede a linha
@@ -172,16 +172,16 @@ var reInstalacao = regexp.MustCompile(`golangci-lint@([^\s"']+)`)
 // gate, e amarrar teste a substring de markdown quebra em toda edição legítima
 // sem pegar defeito nenhum.
 func TestAInstrucaoDeInstalacaoFixaAVersaoDoLinter(t *testing.T) {
-	mk, err := os.ReadFile(filepath.Join(raizDoRepo, "Makefile"))
+	mk, err := os.ReadFile(filepath.Join(repoRoot, "Makefile"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	achado := reInstalacao.FindStringSubmatch(string(mk))
-	if achado == nil {
+	match := reInstallation.FindStringSubmatch(string(mk))
+	if match == nil {
 		t.Fatal("o Makefile não instrui mais como instalar o golangci-lint; a recusa do alvo perde a saída")
 	}
-	if versão := achado[1]; !strings.HasPrefix(versão, "v") {
-		t.Fatalf("a instrução manda buscar %q: versão solta mede outra linha de base (débitos 53 e 59)", versão)
+	if version := match[1]; !strings.HasPrefix(version, "v") {
+		t.Fatalf("a instrução manda buscar %q: versão solta mede outra linha de base (débitos 53 e 59)", version)
 	}
 }
 
@@ -194,21 +194,21 @@ func TestAlvoLintPropagaOVeredictoDoLinter(t *testing.T) {
 	dir := t.TempDir()
 	// Dublê que REPROVA: é o veredito do linter que precisa atravessar o
 	// alvo, e o conteúdo do apontamento não interessa aqui.
-	dublê := "#!/bin/sh\necho 'algum.go:1:1: apontamento' >&2\nexit 1\n"
-	if err := os.WriteFile(filepath.Join(dir, "golangci-lint"), []byte(dublê), 0o755); err != nil {
+	fake := "#!/bin/sh\necho 'algum.go:1:1: apontamento' >&2\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(dir, "golangci-lint"), []byte(fake), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	stdout, stderr, codigo := rodaMakeLint(t, dir)
-	if codigo == 0 {
+	stdout, stderr, code := runMakeLint(t, dir)
+	if code == 0 {
 		t.Fatalf("o linter reprovou e `make lint` saiu 0: o alvo engole o veredito\nstdout: %q\nstderr: %q", stdout, stderr)
 	}
 }
 
-// configDoLinter lê o .golangci.yml como DADO, não como texto. A distinção é o
+// linterConfig lê o .golangci.yml como DADO, não como texto. A distinção é o
 // que separa este teste dos que foram removidos daqui: configuração é lida por
 // máquina e tem consumidor real (o próprio golangci-lint), enquanto número
 // citado em prosa não tem.
-type configDoLinter struct {
+type linterConfig struct {
 	Linters struct {
 		Enable []string `yaml:"enable"`
 	} `yaml:"linters"`
@@ -228,39 +228,39 @@ type configDoLinter struct {
 // totalidade dela —, e a comparação "mesmo número antes e depois" passaria a
 // comparar outro instrumento.
 func TestConfiguracaoDoLinterMantemOsTetosEmZeroEOsLintersQueMedemALinhaDeBase(t *testing.T) {
-	bruto, err := os.ReadFile(filepath.Join(raizDoRepo, ".golangci.yml"))
+	raw, err := os.ReadFile(filepath.Join(repoRoot, ".golangci.yml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var cfg configDoLinter
-	if err := yaml.Unmarshal(bruto, &cfg); err != nil {
+	var cfg linterConfig
+	if err := yaml.Unmarshal(raw, &cfg); err != nil {
 		t.Fatalf(".golangci.yml não é YAML válido: %v", err)
 	}
-	for _, teto := range []struct {
-		chave string
-		valor *int
+	for _, ceiling := range []struct {
+		key   string
+		value *int
 	}{
 		{"issues.max-issues-per-linter", cfg.Issues.MaxIssuesPerLinter},
 		{"issues.max-same-issues", cfg.Issues.MaxSameIssues},
 	} {
-		if teto.valor == nil {
-			t.Errorf("%s ausente: sem ela o golangci-lint trunca no default e o apontamento novo entra no lugar de um descartado", teto.chave)
+		if ceiling.value == nil {
+			t.Errorf("%s ausente: sem ela o golangci-lint trunca no default e o apontamento novo entra no lugar de um descartado", ceiling.key)
 			continue
 		}
-		if *teto.valor != 0 {
-			t.Errorf("%s = %d, queria 0: teto ligado é o gate cego dos débitos 53 e 59", teto.chave, *teto.valor)
+		if *ceiling.value != 0 {
+			t.Errorf("%s = %d, queria 0: teto ligado é o gate cego dos débitos 53 e 59", ceiling.key, *ceiling.value)
 		}
 	}
 	for _, linter := range []string{"errcheck", "revive", "staticcheck", "govet"} {
-		if !contém(cfg.Linters.Enable, linter) {
+		if !contains(cfg.Linters.Enable, linter) {
 			t.Errorf("%s não está em linters.enable: a linha de base foi medida com ele, e sem ele o número passa a descrever outro instrumento", linter)
 		}
 	}
 }
 
-func contém(lista []string, alvo string) bool {
-	for _, s := range lista {
-		if s == alvo {
+func contains(list []string, item string) bool {
+	for _, s := range list {
+		if s == item {
 			return true
 		}
 	}

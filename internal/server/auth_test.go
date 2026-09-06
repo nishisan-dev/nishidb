@@ -283,7 +283,7 @@ func TestAuthRecusadaLogaSemVazarAuthorizationHeader(t *testing.T) {
 	a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))
 
 	registro := &registroDoServidor{}
-	srv, err := server.Novo(a.carrega(), server.Opcoes{Log: logging.New(registro, logging.FormatoJSON, slog.LevelInfo)})
+	srv, err := server.Novo(a.carrega(), server.Opcoes{Log: logging.New(registro, logging.FormatJSON, slog.LevelInfo)})
 	if err != nil {
 		t.Fatalf("subida: %v", err)
 	}

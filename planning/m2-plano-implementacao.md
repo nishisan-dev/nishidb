@@ -150,7 +150,7 @@ feature/m2-observabilidade   feature/m2-kafka
 
 - [ ] **G0** Merge `feature/m1-query` em `main` (fast-forward; `main` é ancestral). Confirmar `go test ./...` e `go test -race ./...` verdes em `main` antes de ramificar
 - [ ] **G1** `go get github.com/twmb/franz-go@v1.21.6`, `.../pkg/kadm@v1.18.0`, `.../pkg/kfake` (test-only). Confirmar build `CGO_ENABLED=0`
-- [ ] **G2** Extrair `internal/units` com `Tamanho()` e `Duracao()` a partir de `internal/cli/config.go:126-173`, e apontar `config.go` e `schema` para lá (o schema precisa de `ingestionQueueBytes`; duplicar o parser seria a segunda fonte da verdade)
+- [ ] **G2** Extrair `internal/units` com `Size()` e `Duration()` a partir de `internal/cli/config.go:126-173`, e apontar `config.go` e `schema` para lá (o schema precisa de `ingestionQueueBytes`; duplicar o parser seria a segunda fonte da verdade)
 
 ### O — Observabilidade (débitos M2 #4 e #5; §92, §93, §94, §95, §112)
 

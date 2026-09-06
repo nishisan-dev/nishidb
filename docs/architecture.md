@@ -682,9 +682,9 @@ O snapshot congela quatro coisas, e nenhuma substitui as outras:
 
 | | O que congela | O que quebra sem ele |
 |---|---|---|
-| `Epoca` | a versão de cada linha | o resultado mistura estados: as linhas alcançadas antes de uma atualização saem velhas, as de depois saem novas |
-| `Instante` | o relógio da expiração | uma linha viva quando a consulta abriu some do MEIO do resultado |
-| `LimiteRowID` | o teto de rowId | nada hoje: as fontes do índice por segmento já fixam o seu na construção. O campo torna o teto explícito e comum aos quatro planos |
+| `Epoch` | a versão de cada linha | o resultado mistura estados: as linhas alcançadas antes de uma atualização saem velhas, as de depois saem novas |
+| `Instant` | o relógio da expiração | uma linha viva quando a consulta abriu some do MEIO do resultado |
+| `LimitRowID` | o teto de rowId | nada hoje: as fontes do índice por segmento já fixam o seu na construção. O campo torna o teto explícito e comum aos quatro planos |
 | `BaseRowID` | o piso | a purga do histórico abre buraco por baixo da varredura em curso |
 
 Ele é **tipo de valor e viaja em parâmetro**, nunca em campo do `Store`: dois
@@ -1076,7 +1076,7 @@ lidos (metade do débito 15). `internal/query/budget` é o teto: dois
 `atomic.Int64`, sem mutex e sem alocação — o consumidor é chamado uma vez por
 row, e o gate de alocação do executor exige igualdade exata entre 1.000 e 8.000
 linhas. O `Global` recusa na ADMISSÃO (503 + `Retry-After`, ao lado do semáforo)
-e o `PorQuery` recusa POR LINHA, dentro do writer. A reserva é do teto inteiro na
+e o `PerQuery` recusa POR LINHA, dentro do writer. A reserva é do teto inteiro na
 entrada: com reserva incremental o orçamento do processo pode acabar na linha
 quarenta mil, e o cliente perde o resultado por causa da memória de outra
 consulta.
@@ -1971,7 +1971,7 @@ tratamento é na origem.
 batiza `time`/`msg` e deixaria o log fora da spec por descuido de biblioteca.
 A proibição de registrar senha e payload vive no HANDLER, e não na disciplina
 de quem escreve a chamada: chave sensível tem o valor suprimido em qualquer
-profundidade de grupo, e o tipo `Segredo` cobre o caso oposto — chave inocente
+profundidade de grupo, e o tipo `Secret` cobre o caso oposto — chave inocente
 com valor que não é. `event` é o identificador estável que alerta casa;
 `message` é a prosa para humanos, e separá-los é o que permite mudar o texto
 sem quebrar alerta.

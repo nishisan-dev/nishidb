@@ -11,7 +11,7 @@ participant "compaction /\nretenção" as c
 == abertura ==
 q -> st : AbreSnapshot()
 st -> reg : abre(época, instante, piso)
-st --> q : Snapshot{Epoca, Instante,\nLimiteRowID, BaseRowID}
+st --> q : Snapshot{Epoch, Instant,\nLimitRowID, BaseRowID}
 note right of q
   Tipo de VALOR, em parâmetro.
   Em campo do Store, dois leitores
@@ -35,13 +35,13 @@ end
 
 == a leitura ==
 q -> st : GetByRowID(snap, rowId)
-st -> jr : Em(rowId, snap.Epoca)
+st -> jr : Em(rowId, snap.Epoch)
 alt há versão retida para esta época
   jr --> st : location de T0
 else
   st -> st : location CORRENTE
 end
-st -> st : liveness pelo snap.Instante\n(relógio congelado)
+st -> st : liveness pelo snap.Instant\n(relógio congelado)
 st --> q : record da versão de T0
 
 == quem tem de esperar ==

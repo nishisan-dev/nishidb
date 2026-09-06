@@ -35,7 +35,7 @@ type Declarada struct {
 	Habilitado bool
 	Topic      string
 	GroupID    string
-	// Bootstrap já vem canonizado por checkpoint.CanonizaBootstrap: é a MESMA
+	// Bootstrap já vem canonizado por checkpoint.CanonicalBootstrap: é a MESMA
 	// forma que a origem grava no kafka.offsets e compara na divergência. Duas
 	// grafias do mesmo endereço fariam a coluna discordar do arquivo sem nada
 	// estar quebrado.
@@ -53,7 +53,7 @@ func DoYAML(k *schema.KafkaSpec) Declarada {
 		Habilitado: k.Enabled,
 		Topic:      k.Topic,
 		GroupID:    k.Consumer.GroupID,
-		Bootstrap:  checkpoint.CanonizaBootstrap(k.BootstrapServers),
+		Bootstrap:  checkpoint.CanonicalBootstrap(k.BootstrapServers),
 	}
 }
 

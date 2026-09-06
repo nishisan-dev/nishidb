@@ -1,0 +1,131 @@
+pacote	especie	endereco	novo	motivo
+internal/memprof	local	readFrom.ms	ms	mantido: já em inglês (abreviação de MemStats) (internal/memprof/memprof_linux.go:102:6)
+internal/memprof	param	rollupSeparation.path	path	mantido: já em inglês (internal/memprof/memprof_linux.go:122:23)
+internal/memprof	param	rollupSeparation.anon	anon	mantido: já em inglês (internal/memprof/memprof_linux.go:122:37)
+internal/memprof	param	rollupSeparation.file	file	mantido: já em inglês (internal/memprof/memprof_linux.go:122:43)
+internal/memprof	func	rollupSeparation	rollupSeparation	mantido: já em inglês (internal/memprof/memprof_linux.go:122:6)
+internal/memprof	local	rollupSeparation.raw	raw	mantido: já em inglês (internal/memprof/memprof_linux.go:123:2)
+internal/memprof	local	rollupSeparation.err	err	mantido: já em inglês (internal/memprof/memprof_linux.go:123:7)
+internal/memprof	local	rollupSeparation.rss	rss	mantido: já em inglês (espelha a linha Rss do smaps_rollup) (internal/memprof/memprof_linux.go:127:2)
+internal/memprof	local	rollupSeparation.temRSS	hasRSS	booleano de presença da linha Rss no smaps_rollup; prefixo tem → has, inicial RSS preservada; glossário: tem (prefixo de booleano de presença) → has; rf: mv rollupSeparation.temRSS rollupSeparation.hasRSS
+internal/memprof	local	rollupSeparation.temAnon	hasAnon	presença da linha Anonymous; mesmo motivo de rollupSeparation.temRSS; rf: mv rollupSeparation.temAnon rollupSeparation.hasAnon
+internal/memprof	local	rollupSeparation.anonimo	anonRSS	valor da linha Anonymous do smaps_rollup; a grafia do pacote para o conceito é anon (retorno nomeado anon em memprof_linux.go:122, statusInfo.rssAnon em :141, Sample.AnonRSSBytes em :62, hasAnon na mesma linha do local) e anonymous seria uma TERCEIRA grafia dentro da mesma função; anonRSS concorda com hasAnon e não colide com o retorno nomeado; glossário: anônimo (a parte do RSS não respaldada por arquivo) → anon; rf: mv rollupSeparation.anonimo rollupSeparation.anonRSS
+internal/memprof	type	statusInfo	statusInfo	mantido: já em inglês (internal/memprof/memprof_linux.go:139:6)
+internal/memprof	field	statusInfo.vmRSS	vmRSS	mantido: já em inglês (espelha VmRSS do /proc) (internal/memprof/memprof_linux.go:140:2)
+internal/memprof	field	statusInfo.vmHWM	vmHWM	mantido: já em inglês (espelha VmHWM do /proc) (internal/memprof/memprof_linux.go:140:9)
+internal/memprof	field	statusInfo.rssFile	rssFile	mantido: já em inglês (espelha RssFile do /proc) (internal/memprof/memprof_linux.go:141:11)
+internal/memprof	field	statusInfo.rssAnon	rssAnon	mantido: já em inglês (espelha RssAnon do /proc) (internal/memprof/memprof_linux.go:141:2)
+internal/memprof	field	statusInfo.temSeparacao	hasSeparation	diz se o status trouxe RssAnon/RssFile, a separação do RSS em anônimo e file-backed; acompanha rollupSeparation; glossário: separação (do RSS em anônimo e file-backed) → separation; rf: mv statusInfo.temSeparacao statusInfo.hasSeparation
+internal/memprof	param	parseStatus.content	content	mantido: já em inglês (internal/memprof/memprof_linux.go:145:18)
+internal/memprof	func	parseStatus	parseStatus	mantido: já em inglês (internal/memprof/memprof_linux.go:145:6)
+internal/memprof	local	parseStatus.st	st	mantido: já em inglês (abreviação de status) (internal/memprof/memprof_linux.go:146:6)
+internal/memprof	local#ambiguo	parseStatus.err	err	mantido: já em inglês (internal/memprof/memprof_linux.go:147:17)
+internal/memprof	local	parseStatus.vmRSS	vmRSS	mantido: já em inglês (internal/memprof/memprof_linux.go:147:2)
+internal/memprof	local	parseStatus.temRSS	hasRSS	presença de VmRSS no status; mesmo motivo de rollupSeparation.temRSS; rf: mv parseStatus.temRSS parseStatus.hasRSS
+internal/memprof	local	parseStatus.ok	ok	mantido: já em inglês (internal/memprof/memprof_linux.go:158:10)
+internal/memprof	local#ambiguo	parseStatus.err	err	mantido: já em inglês (internal/memprof/memprof_linux.go:158:14)
+internal/memprof	local	parseStatus.hwm	hwm	mantido: já em inglês (high water mark) (internal/memprof/memprof_linux.go:158:5)
+internal/memprof	local	parseStatus.errA	errA	mantido: já em inglês (err da leitura de RssAnon; o sufixo é letra, não número) (internal/memprof/memprof_linux.go:164:17)
+internal/memprof	local	parseStatus.anon	anon	mantido: já em inglês (internal/memprof/memprof_linux.go:164:2)
+internal/memprof	local	parseStatus.temAnon	hasAnon	presença de RssAnon no status; mesmo motivo de rollupSeparation.temRSS; rf: mv parseStatus.temAnon parseStatus.hasAnon
+internal/memprof	local	parseStatus.errF	errF	mantido: já em inglês (err da leitura de RssFile; o sufixo é letra, não número) (internal/memprof/memprof_linux.go:165:17)
+internal/memprof	local	parseStatus.file	file	mantido: já em inglês (internal/memprof/memprof_linux.go:165:2)
+internal/memprof	local	parseStatus.temFile	hasFile	presença de RssFile no status; mesmo motivo de rollupSeparation.temRSS; rf: mv parseStatus.temFile parseStatus.hasFile
+internal/memprof	param	findKiB.content	content	mantido: já em inglês (internal/memprof/memprof_linux.go:176:14)
+internal/memprof	param	findKiB.campo	field	nome do campo do /proc procurado (VmRSS, Rss, Anonymous); glossário: campo → field; rf: mv findKiB.campo findKiB.field
+internal/memprof	func	findKiB	findKiB	mantido: já em inglês (internal/memprof/memprof_linux.go:176:6)
+internal/memprof	local#gopls	findKiB.linha	line	posicao internal/memprof/memprof_linux.go:177:6; linha de TEXTO do /proc iterada por strings.Lines, não linha de tabela; glossário: linha (de texto) → line, distinta de linha → row; declarado em bloco aninhado, fora do alcance do rf
+internal/memprof	local	findKiB.ok	ok	mantido: já em inglês (internal/memprof/memprof_linux.go:178:16)
+internal/memprof	local#gopls	findKiB.nome	name	posicao internal/memprof/memprof_linux.go:178:3; lado esquerdo do strings.Cut na ':', o nome do campo na linha; declarado em bloco aninhado, fora do alcance do rf
+internal/memprof	local#gopls	findKiB.valor	value	posicao internal/memprof/memprof_linux.go:178:9; lado direito do Cut, o texto '<n> kB' entregue a parseKiBValue; GLOSSARIO: valor (o dado de um par nome/valor de texto) → value; declarado em bloco aninhado, fora do alcance do rf
+internal/memprof	local	findKiB.v	v	mantido: já em inglês (internal/memprof/memprof_linux.go:182:3)
+internal/memprof	local	findKiB.err	err	mantido: já em inglês (internal/memprof/memprof_linux.go:182:6)
+internal/memprof	param	parseKiBValue.campo	field	nome do campo, usado só nas mensagens de erro; glossário: campo → field; rf: mv parseKiBValue.campo parseKiBValue.field
+internal/memprof	param	parseKiBValue.valor	value	texto '<n> kB' a converter em bytes; mesmo termo do irmão de assinatura parseKiBValue.campo → field; glossário: valor (o dado de um par nome/valor de texto) → value; rf: mv parseKiBValue.valor parseKiBValue.value
+internal/memprof	func	parseKiBValue	parseKiBValue	mantido: já em inglês (internal/memprof/memprof_linux.go:197:6)
+internal/memprof	local	parseKiBValue.campos	parts	os DOIS TOKENS do lado direito da linha do /proc (parts[0] é o número, parts[1] a unidade) — não é o plural do param `campo` → `field`, que é o NOME do campo procurado, e `fields` ao lado de `field` na mesma assinatura leria como coleção dele; glossário: partes (tokens de uma linha de texto) → parts; rf: mv parseKiBValue.campos parseKiBValue.parts
+internal/memprof	local	parseKiBValue.n	n	mantido: já em inglês (internal/memprof/memprof_linux.go:202:2)
+internal/memprof	local	parseKiBValue.err	err	mantido: já em inglês (internal/memprof/memprof_linux.go:202:5)
+internal/memprof	local	parseKiBValue.u	u	mantido: já em inglês (abreviação de unit) (internal/memprof/memprof_linux.go:206:5)
+internal/memprof	var	ErrProcRead	ErrProcRead	mantido: já em inglês (sentinela; a mensagem em PT-BR é da Fase 3) (internal/memprof/memprof_linux.go:38:5)
+internal/memprof	const	procStatus	procStatus	mantido: já em inglês (internal/memprof/memprof_linux.go:41:2)
+internal/memprof	const	procRollup	procRollup	mantido: já em inglês (internal/memprof/memprof_linux.go:42:2)
+internal/memprof	type	Sample	Sample	mantido: já em inglês (internal/memprof/memprof_linux.go:48:6)
+internal/memprof	field	Sample.VmRSSBytes	VmRSSBytes	mantido: já em inglês (internal/memprof/memprof_linux.go:51:2)
+internal/memprof	field	Sample.VmHWMBytes	VmHWMBytes	mantido: já em inglês (internal/memprof/memprof_linux.go:55:2)
+internal/memprof	field	Sample.FileRSSBytes	FileRSSBytes	mantido: já em inglês (internal/memprof/memprof_linux.go:58:2)
+internal/memprof	field	Sample.AnonRSSBytes	AnonRSSBytes	mantido: já em inglês (internal/memprof/memprof_linux.go:62:2)
+internal/memprof	field	Sample.HeapAlloc	HeapAlloc	mantido: já em inglês (internal/memprof/memprof_linux.go:64:2)
+internal/memprof	field	Sample.HeapObjects	HeapObjects	mantido: já em inglês (internal/memprof/memprof_linux.go:65:2)
+internal/memprof	field	Sample.Mallocs	Mallocs	mantido: já em inglês (internal/memprof/memprof_linux.go:66:2)
+internal/memprof	field	Sample.NumGC	NumGC	mantido: já em inglês (internal/memprof/memprof_linux.go:67:2)
+internal/memprof	field	Sample.Timestamp	Timestamp	mantido: já em inglês (internal/memprof/memprof_linux.go:69:2)
+internal/memprof	func	Read	Read	mantido: já em inglês (internal/memprof/memprof_linux.go:80:6)
+internal/memprof	param	readFrom.statusPath	statusPath	mantido: já em inglês (internal/memprof/memprof_linux.go:84:15)
+internal/memprof	param	readFrom.rollupPath	rollupPath	mantido: já em inglês (internal/memprof/memprof_linux.go:84:27)
+internal/memprof	func	readFrom	readFrom	mantido: já em inglês (internal/memprof/memprof_linux.go:84:6)
+internal/memprof	local	readFrom.raw	raw	mantido: já em inglês (internal/memprof/memprof_linux.go:85:2)
+internal/memprof	local	readFrom.err	err	mantido: já em inglês (internal/memprof/memprof_linux.go:85:7)
+internal/memprof	local	readFrom.st	st	mantido: já em inglês (abreviação de status) (internal/memprof/memprof_linux.go:89:2)
+internal/memprof	local	readFrom.anon	anon	mantido: já em inglês (internal/memprof/memprof_linux.go:94:2)
+internal/memprof	local	readFrom.file	file	mantido: já em inglês (internal/memprof/memprof_linux.go:94:8)
+internal/memprof	param#ambiguo	TestErrosDeLeitura.t	t	mantido: já em inglês (internal/memprof/memprof_test.go:101:25)
+internal/memprof	func	TestErrosDeLeitura	TestErrosDeLeitura	mantido: nome de teste, Fase 4 (internal/memprof/memprof_test.go:101:6)
+internal/memprof	local	TestErrosDeLeitura.casos	cases	tabela de casos do teste; glossário: casos (de teste) → cases; rf: mv TestErrosDeLeitura.casos TestErrosDeLeitura.cases
+internal/memprof	local	TestErrosDeLeitura.tc	tc	mantido: já em inglês (test case) (internal/memprof/memprof_test.go:112:9)
+internal/memprof	local#ambiguo	TestErrosDeLeitura.t	t	mantido: já em inglês (internal/memprof/memprof_test.go:113:23)
+internal/memprof	local	TestErrosDeLeitura.err	err	mantido: já em inglês (internal/memprof/memprof_test.go:114:7)
+internal/memprof	param	TestReadProcessoReal.t	t	mantido: já em inglês (internal/memprof/memprof_test.go:131:27)
+internal/memprof	func	TestReadProcessoReal	TestReadProcessoReal	mantido: nome de teste, Fase 4 (internal/memprof/memprof_test.go:131:6)
+internal/memprof	local	TestReadProcessoReal.s	s	mantido: já em inglês (internal/memprof/memprof_test.go:132:2)
+internal/memprof	local	TestReadProcessoReal.err	err	mantido: já em inglês (internal/memprof/memprof_test.go:132:5)
+internal/memprof	local#gopls	TestReadProcessoReal.soma	sum	posicao internal/memprof/memprof_test.go:143:5; anon+file, comparada ao VmRSS — adição aritmética de verdade, distinta da 'soma' que em internal/gates é concatenação de strings no AST e vira concat; GLOSSARIO: soma (adição aritmética) → sum; declarado em bloco aninhado, fora do alcance do rf
+internal/memprof	local	TestReadProcessoReal.got	got	mantido: já em inglês (internal/memprof/memprof_test.go:149:5)
+internal/memprof	const	kiB	kiB	mantido: já em inglês (unidade KiB) (internal/memprof/memprof_test.go:14:2)
+internal/memprof	param	TestContadoresSaoMonotonicos.t	t	mantido: já em inglês (internal/memprof/memprof_test.go:157:35)
+internal/memprof	func	TestContadoresSaoMonotonicos	TestContadoresSaoMonotonicos	mantido: nome de teste, Fase 4 (internal/memprof/memprof_test.go:157:6)
+internal/memprof	local	TestContadoresSaoMonotonicos.antes	before	amostra colhida antes das alocações; par before/after; glossário: antes / depois (medição de teste) → before / after; rf: mv TestContadoresSaoMonotonicos.antes TestContadoresSaoMonotonicos.before
+internal/memprof	local	TestContadoresSaoMonotonicos.err	err	mantido: já em inglês (internal/memprof/memprof_test.go:158:9)
+internal/memprof	const	miB	miB	mantido: já em inglês (unidade MiB) (internal/memprof/memprof_test.go:15:2)
+internal/memprof	local	TestContadoresSaoMonotonicos.lixo	junk	alocações descartáveis mantidas vivas só para fazer Mallocs avançar; junk é o idioma Go para alocação de sacrifício (garbage sugeriria memória já coletada); glossário: lixo (alocação descartável em teste) → junk; rf: mv TestContadoresSaoMonotonicos.lixo TestContadoresSaoMonotonicos.junk
+internal/memprof	local	TestContadoresSaoMonotonicos.i	i	mantido: já em inglês (internal/memprof/memprof_test.go:163:6)
+internal/memprof	local	TestContadoresSaoMonotonicos.depois	after	amostra colhida depois das alocações; mesmo motivo de TestContadoresSaoMonotonicos.antes; rf: mv TestContadoresSaoMonotonicos.depois TestContadoresSaoMonotonicos.after
+internal/memprof	param	runtimeKeepAlive.v	v	mantido: já em inglês (internal/memprof/memprof_test.go:184:23)
+internal/memprof	func	runtimeKeepAlive	runtimeKeepAlive	mantido: já em inglês (internal/memprof/memprof_test.go:184:6)
+internal/memprof	param	fixture.nome	name	nome do arquivo dentro de testdata; rf: mv fixture.nome fixture.name
+internal/memprof	func	fixture	fixture	mantido: já em inglês (internal/memprof/memprof_test.go:18:6)
+internal/memprof	param	TestParseKiBValue.t	t	mantido: já em inglês (internal/memprof/memprof_test.go:190:24)
+internal/memprof	func	TestParseKiBValue	TestParseKiBValue	mantido: nome de teste, Fase 4 (internal/memprof/memprof_test.go:190:6)
+internal/memprof	local	TestParseKiBValue.casos	cases	tabela de casos do teste; glossário: casos (de teste) → cases; rf: mv TestParseKiBValue.casos TestParseKiBValue.cases
+internal/memprof	local	TestParseKiBValue.tc	tc	mantido: já em inglês (test case) (internal/memprof/memprof_test.go:205:9)
+internal/memprof	local	TestParseKiBValue.ok	ok	mantido: já em inglês (internal/memprof/memprof_test.go:206:13)
+internal/memprof	local#gopls	TestParseKiBValue.valor	value	posicao internal/memprof/memprof_test.go:206:6; lado direito do Cut na linha do caso; glossário: valor (o dado de um par nome/valor de texto) → value; declarado em bloco aninhado, fora do alcance do rf
+internal/memprof	local	TestParseKiBValue.got	got	mantido: já em inglês (internal/memprof/memprof_test.go:210:3)
+internal/memprof	local	TestParseKiBValue.err	err	mantido: já em inglês (internal/memprof/memprof_test.go:210:8)
+internal/memprof	param	TestReadFromStatusModerno.t	t	mantido: já em inglês (internal/memprof/memprof_test.go:22:32)
+internal/memprof	func	TestReadFromStatusModerno	TestReadFromStatusModerno	mantido: nome de teste, Fase 4 (internal/memprof/memprof_test.go:22:6)
+internal/memprof	local	TestReadFromStatusModerno.s	s	mantido: já em inglês (internal/memprof/memprof_test.go:23:2)
+internal/memprof	local	TestReadFromStatusModerno.err	err	mantido: já em inglês (internal/memprof/memprof_test.go:23:5)
+internal/memprof	local#ambiguo	TestReadFromStatusModerno.want	want	mantido: já em inglês (internal/memprof/memprof_test.go:30:5)
+internal/memprof	local#ambiguo	TestReadFromStatusModerno.want	want	mantido: já em inglês (internal/memprof/memprof_test.go:33:5)
+internal/memprof	local#ambiguo	TestReadFromStatusModerno.want	want	mantido: já em inglês (internal/memprof/memprof_test.go:36:5)
+internal/memprof	local#ambiguo	TestReadFromStatusModerno.want	want	mantido: já em inglês (internal/memprof/memprof_test.go:39:5)
+internal/memprof	param	TestReadCaiParaSmapsRollup.t	t	mantido: já em inglês (internal/memprof/memprof_test.go:58:33)
+internal/memprof	func	TestReadCaiParaSmapsRollup	TestReadCaiParaSmapsRollup	mantido: nome de teste, Fase 4 (internal/memprof/memprof_test.go:58:6)
+internal/memprof	local	TestReadCaiParaSmapsRollup.s	s	mantido: já em inglês (internal/memprof/memprof_test.go:59:2)
+internal/memprof	local	TestReadCaiParaSmapsRollup.err	err	mantido: já em inglês (internal/memprof/memprof_test.go:59:5)
+internal/memprof	local#ambiguo	TestReadCaiParaSmapsRollup.want	want	mantido: já em inglês (internal/memprof/memprof_test.go:63:5)
+internal/memprof	local#ambiguo	TestReadCaiParaSmapsRollup.want	want	mantido: já em inglês (internal/memprof/memprof_test.go:66:5)
+internal/memprof	local#ambiguo	TestReadCaiParaSmapsRollup.want	want	mantido: já em inglês (internal/memprof/memprof_test.go:69:5)
+internal/memprof	param	TestSemSeparacaoAindaDevolveRSS.t	t	mantido: já em inglês (internal/memprof/memprof_test.go:77:38)
+internal/memprof	func	TestSemSeparacaoAindaDevolveRSS	TestSemSeparacaoAindaDevolveRSS	mantido: nome de teste, Fase 4 (internal/memprof/memprof_test.go:77:6)
+internal/memprof	local	TestSemSeparacaoAindaDevolveRSS.s	s	mantido: já em inglês (internal/memprof/memprof_test.go:78:2)
+internal/memprof	local	TestSemSeparacaoAindaDevolveRSS.err	err	mantido: já em inglês (internal/memprof/memprof_test.go:78:5)
+internal/memprof	local	TestSemSeparacaoAindaDevolveRSS.want	want	mantido: já em inglês (internal/memprof/memprof_test.go:82:5)
+internal/memprof	param	TestSmapsRollupSemAnonymous.t	t	mantido: já em inglês (internal/memprof/memprof_test.go:91:34)
+internal/memprof	func	TestSmapsRollupSemAnonymous	TestSmapsRollupSemAnonymous	mantido: nome de teste, Fase 4 (internal/memprof/memprof_test.go:91:6)
+internal/memprof	local	TestSmapsRollupSemAnonymous.s	s	mantido: já em inglês (internal/memprof/memprof_test.go:92:2)
+internal/memprof	local	TestSmapsRollupSemAnonymous.err	err	mantido: já em inglês (internal/memprof/memprof_test.go:92:5)
+internal/memprof	field#gopls	TestErrosDeLeitura.casos.nome	name	posicao internal/memprof/memprof_test.go:103:3; campo da struct anônima da tabela de casos, fora do inventário; rename por posição
+internal/memprof	field#gopls	TestParseKiBValue.casos.linha	line	posicao internal/memprof/memprof_test.go:192:3; campo da struct anônima da tabela de casos, fora do inventário; a linha de texto do /proc do caso; rename por posição
+internal/memprof	field#gopls	TestParseKiBValue.casos.erro	wantErr	posicao internal/memprof/memprof_test.go:194:3; campo da struct anônima da tabela de casos, fora do inventário; bool 'espera erro', convenção wantErr das tabelas Go; rename por posição

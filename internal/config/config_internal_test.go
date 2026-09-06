@@ -595,7 +595,7 @@ func TestLoopbackMesmaPortaComBindEmIPEspecificoEhPermitido(t *testing.T) {
 
 // TestLoopbackPortForaDaFaixaEhRecusado é o Minor 7 da revisão final:
 // server.loopback.port não tinha a MESMA validação de faixa que
-// server.port (units.InteiroPositivo + teto de 65535) — `port: 0` hoje
+// server.port (units.PositiveInt + teto de 65535) — `port: 0` hoje
 // vira porta EFÊMERA escolhida pelo kernel em silêncio (net.Listen aceita
 // ":0"), o oposto do endereço determinístico que o operador declarou.
 func TestLoopbackPortForaDaFaixaEhRecusado(t *testing.T) {

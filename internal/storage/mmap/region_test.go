@@ -216,26 +216,26 @@ func TestOffsetForaDosLimitesPanica(t *testing.T) {
 // close do fd, e um arquivo selado nunca precisa do fd de volta — não cresce,
 // não faz msync e não faz punch-hole.
 func TestAbreSomenteLeituraNaoRetemDescritor(t *testing.T) {
-	caminho := filepath.Join(t.TempDir(), "r.bin")
-	if err := os.WriteFile(caminho, []byte("abcdefgh"), 0o644); err != nil {
+	path := filepath.Join(t.TempDir(), "r.bin")
+	if err := os.WriteFile(path, []byte("abcdefgh"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	antes := descritoresAbertos(t)
-	r, err := AbreSomenteLeitura(caminho)
+	before := countOpenDescriptors(t)
+	r, err := OpenReadOnly(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = r.Close() }()
-	if depois := descritoresAbertos(t); depois != antes {
-		t.Errorf("descritores abertos: %d antes, %d depois — quero iguais", antes, depois)
+	if after := countOpenDescriptors(t); after != before {
+		t.Errorf("descritores abertos: %d antes, %d depois — quero iguais", before, after)
 	}
 	if got := string(r.Bytes()); got != "abcdefgh" {
 		t.Errorf("Bytes() = %q, quero %q — o mapeamento tem de sobreviver ao close", got, "abcdefgh")
 	}
 }
 
-// descritoresAbertos conta as entradas de /proc/self/fd.
-func descritoresAbertos(t *testing.T) int {
+// countOpenDescriptors conta as entradas de /proc/self/fd.
+func countOpenDescriptors(t *testing.T) int {
 	t.Helper()
 	e, err := os.ReadDir("/proc/self/fd")
 	if err != nil {
@@ -269,53 +269,53 @@ func TestRegiaoDeEscritaRecusaBytes(t *testing.T) {
 // incapturável. Os que devolvem erro recusam com erro; os que não têm por onde
 // devolver, entram em pânico.
 func TestRegiaoSomenteLeituraRecusaMutacao(t *testing.T) {
-	caminho := filepath.Join(t.TempDir(), "ro.bin")
-	if err := os.WriteFile(caminho, make([]byte, 4096), 0o644); err != nil {
+	path := filepath.Join(t.TempDir(), "ro.bin")
+	if err := os.WriteFile(path, make([]byte, 4096), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	r, err := AbreSomenteLeitura(caminho)
+	r, err := OpenReadOnly(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = r.Close() }()
 
-	comErro := map[string]func() error{
-		"Grow":         func() error { return r.Grow(8192) },
-		"Msync":        func() error { return r.Msync() },
-		"LiberaBlocos": func() error { return r.LiberaBlocos(0, 4096) },
+	refusesWithError := map[string]func() error{
+		"Grow":          func() error { return r.Grow(8192) },
+		"Msync":         func() error { return r.Msync() },
+		"ReleaseBlocks": func() error { return r.ReleaseBlocks(0, 4096) },
 	}
-	for nome, fn := range comErro {
+	for name, fn := range refusesWithError {
 		// A asserção é pela SENTINELA, não por "err != nil": os três já tinham
-		// caminhos de erro antes (Grow que não excede, LiberaBlocos fora dos
+		// caminhos de erro antes (Grow que não excede, ReleaseBlocks fora dos
 		// limites), então um erro qualquer não prova que a recusa veio da
 		// guarda de somente-leitura. É o errors.Is que o chamador vai usar.
 		err := fn()
 		if err == nil {
-			t.Errorf("%s numa região somente-leitura devolveu nil — quero erro", nome)
+			t.Errorf("%s numa região somente-leitura devolveu nil — quero erro", name)
 			continue
 		}
-		if !errors.Is(err, ErrSomenteLeitura) {
-			t.Errorf("%s devolveu %v, quero ErrSomenteLeitura", nome, err)
+		if !errors.Is(err, ErrReadOnly) {
+			t.Errorf("%s devolveu %v, quero ErrReadOnly", name, err)
 		}
 	}
 	// Comprimento zero também recusa: deixar o curto-circuito de length <= 0
 	// preceder a guarda faria a mesma chamada errada devolver nil ou erro
 	// conforme o argumento.
-	if err := r.LiberaBlocos(0, 0); !errors.Is(err, ErrSomenteLeitura) {
-		t.Errorf("LiberaBlocos(0, 0) devolveu %v, quero ErrSomenteLeitura", err)
+	if err := r.ReleaseBlocks(0, 0); !errors.Is(err, ErrReadOnly) {
+		t.Errorf("ReleaseBlocks(0, 0) devolveu %v, quero ErrReadOnly", err)
 	}
 
-	comPanico := map[string]func(){
+	refusesWithPanic := map[string]func(){
 		"AtomicStore64": func() { r.AtomicStore64(0, 1) },
 		"AtomicOr64":    func() { r.AtomicOr64(0, 1) },
 		"AtomicAnd64":   func() { r.AtomicAnd64(0, 1) },
 		"WithBytes":     func() { r.WithBytes(0, 8, func([]byte) {}) },
 	}
-	for nome, fn := range comPanico {
-		t.Run(nome, func(t *testing.T) {
+	for name, fn := range refusesWithPanic {
+		t.Run(name, func(t *testing.T) {
 			defer func() {
 				if recover() == nil {
-					t.Errorf("%s numa região somente-leitura deveria entrar em pânico", nome)
+					t.Errorf("%s numa região somente-leitura deveria entrar em pânico", name)
 				}
 			}()
 			fn()
@@ -334,17 +334,17 @@ func TestRegiaoSomenteLeituraRecusaMutacao(t *testing.T) {
 // vazio —, então a recusa nomeada é a resposta certa, e o chamador a trata
 // como "sem índice" e reconstrói.
 func TestAbreSomenteLeituraRecusaArquivoVazio(t *testing.T) {
-	caminho := filepath.Join(t.TempDir(), "vazio.bin")
-	if err := os.WriteFile(caminho, nil, 0o644); err != nil {
+	path := filepath.Join(t.TempDir(), "vazio.bin")
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	r, err := AbreSomenteLeitura(caminho)
+	r, err := OpenReadOnly(path)
 	if err == nil {
 		_ = r.Close()
-		t.Fatal("AbreSomenteLeitura de arquivo vazio deveria falhar")
+		t.Fatal("OpenReadOnly de arquivo vazio deveria falhar")
 	}
-	if !errors.Is(err, ErrArquivoVazio) {
-		t.Errorf("erro = %v, quero ErrArquivoVazio", err)
+	if !errors.Is(err, ErrEmptyFile) {
+		t.Errorf("erro = %v, quero ErrEmptyFile", err)
 	}
 }
 

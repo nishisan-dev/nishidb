@@ -256,7 +256,7 @@ func duracaoDeVisibilidade(caminho, bruto string) (time.Duration, error) {
 		return 0, specErrf("%s.retainEmptyGroups %q não declara prazo — use %q para manter o grupo vazio para sempre",
 			caminho, bruto, DuracaoNunca)
 	}
-	d, err := units.DuracaoComDias(bruto, 0)
+	d, err := units.DurationWithDays(bruto, 0)
 	if err != nil {
 		return 0, specErrf("%s.retainEmptyGroups: %s", caminho, semPrefixoDeSpec(err))
 	}

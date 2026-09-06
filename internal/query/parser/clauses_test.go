@@ -17,7 +17,7 @@ func clausulaDe(t *testing.T, err error) string {
 	if !errors.As(err, &se) {
 		t.Fatalf("erro %v não é *lexer.SyntaxError", err)
 	}
-	return se.Clausula
+	return se.Clause
 }
 
 // As cinco cláusulas que a v1 não tem são NOMEADAS, uma a uma.
@@ -53,7 +53,7 @@ func TestAsCincoClausulasNaoSuportadasSaoNomeadasUmaAUma(t *testing.T) {
 				t.Fatalf("Parse(%q) não falhou", c.sql)
 			}
 			if got := clausulaDe(t, err); got != c.clausula {
-				t.Errorf("Clausula = %q, quer %q (erro: %v)", got, c.clausula, err)
+				t.Errorf("Clause = %q, quer %q (erro: %v)", got, c.clausula, err)
 			}
 			if !strings.Contains(err.Error(), c.clausula) {
 				t.Errorf("a mensagem não nomeia a cláusula: %v", err)
@@ -104,7 +104,7 @@ func TestColunaChamadaDistinctEntreAspasNaoDisparaAClausula(t *testing.T) {
 		t.Fatal("quer erro: dois nomes de coluna sem vírgula")
 	}
 	if c := clausulaDe(t, err); c != "" {
-		t.Errorf("Clausula = %q, quer vazio: o nome estava entre aspas", c)
+		t.Errorf("Clause = %q, quer vazio: o nome estava entre aspas", c)
 	}
 }
 
@@ -146,7 +146,7 @@ func TestErroSintaticoComumNaoTemClausula(t *testing.T) {
 			t.Fatalf("Parse(%q) não falhou", sql)
 		}
 		if c := clausulaDe(t, err); c != "" {
-			t.Errorf("Parse(%q): Clausula = %q, quer vazio", sql, c)
+			t.Errorf("Parse(%q): Clause = %q, quer vazio", sql, c)
 		}
 	}
 }

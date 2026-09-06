@@ -58,10 +58,10 @@ func assertValueEqual(t *testing.T, want, got types.Value) {
 	if got.Type != want.Type {
 		t.Fatalf("tipo: esperado %#x, obtido %#x", want.Type, got.Type)
 	}
-	// CarregaI64 e não um switch local: um tipo de largura fixa esquecido no
+	// CarriesI64 e não um switch local: um tipo de largura fixa esquecido no
 	// ramo de bytes compararia nil com nil e este helper aprovaria QUALQUER
 	// valor — o round-trip passaria sem testar nada.
-	if want.Type.CarregaI64() {
+	if want.Type.CarriesI64() {
 		if got.I64 != want.I64 {
 			t.Fatalf("I64: esperado %d, obtido %d", want.I64, got.I64)
 		}

@@ -173,12 +173,12 @@ func (r *registroDeSnapshots) menorEpocaViva() uint64 { return r.menor.Load() }
 // journal crescer pela vida do processo.
 func (s *Store) AbreSnapshot() types.Snapshot {
 	snap := types.Snapshot{
-		Epoca:       s.epocaPub.Load(),
-		Instante:    s.agora(),
-		LimiteRowID: types.RowID(s.nextRowID.Load()),
-		BaseRowID:   types.RowID(s.rowIDBase.Load()),
+		Epoch:      s.epocaPub.Load(),
+		Instant:    s.agora(),
+		LimitRowID: types.RowID(s.nextRowID.Load()),
+		BaseRowID:  types.RowID(s.rowIDBase.Load()),
 	}
-	s.snaps.abre(snap.Epoca, snap.Instante, snap.BaseRowID)
+	s.snaps.abre(snap.Epoch, snap.Instant, snap.BaseRowID)
 	return snap
 }
 
@@ -190,7 +190,7 @@ func (s *Store) AbreSnapshot() types.Snapshot {
 // viva. Um coletor periódico só acrescentaria latência entre a última consulta
 // fechar e a memória voltar.
 func (s *Store) FechaSnapshot(snap types.Snapshot) {
-	s.snaps.fecha(snap.Epoca)
+	s.snaps.fecha(snap.Epoch)
 	s.podaVersoes()
 }
 
@@ -208,10 +208,10 @@ func (s *Store) podaVersoes() {
 // porque não há o que reter: ele não vai voltar para ler o passado.
 func (s *Store) presente() types.Snapshot {
 	return types.Snapshot{
-		Epoca:       s.epocaPub.Load(),
-		Instante:    s.agora(),
-		LimiteRowID: types.RowID(s.nextRowID.Load()),
-		BaseRowID:   types.RowID(s.rowIDBase.Load()),
+		Epoch:      s.epocaPub.Load(),
+		Instant:    s.agora(),
+		LimitRowID: types.RowID(s.nextRowID.Load()),
+		BaseRowID:  types.RowID(s.rowIDBase.Load()),
 	}
 }
 

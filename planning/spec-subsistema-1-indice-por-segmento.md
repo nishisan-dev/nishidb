@@ -770,7 +770,7 @@ desconhecida.
   na leitura. Os bytes ficam para não reescrever o parser do corpo, e isso fica
   dito no comentário — campo reservado que ninguém sabe por que existe é como
   nasce a próxima leitura errada.
-- Entra `tagIndicePorSegmento` (0x8004), **crítica**, carregando
+- Entra `tagPerSegmentIndex` (0x8004), **crítica**, carregando
   `formatoDoIndice u8`. Ela não é o que bloqueia o binário antigo (a versão já
   faz isso); ela existe para que a PRÓXIMA mudança de formato do índice tenha
   onde ser declarada sem outro bump de versão do manifest.

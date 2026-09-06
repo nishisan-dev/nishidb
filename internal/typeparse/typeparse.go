@@ -25,29 +25,29 @@ import (
 // ErrParse é a categoria comum de todos os erros deste pacote.
 var ErrParse = errors.New("valor não parseável")
 
-type parseErr string
+type parseError string
 
-func (e parseErr) Error() string { return string(e) }
-func (e parseErr) Unwrap() error { return ErrParse }
+func (e parseError) Error() string { return string(e) }
+func (e parseError) Unwrap() error { return ErrParse }
 
 var (
-	errIntFrac     = parseErr("número com fração/expoente")
-	errIntEmpty    = parseErr("número vazio")
-	errIntDigit    = parseErr("dígito inválido")
-	errIntOverflow = parseErr("overflow de int64")
+	errIntFrac     = parseError("número com fração/expoente")
+	errIntEmpty    = parseError("número vazio")
+	errIntDigit    = parseError("dígito inválido")
+	errIntOverflow = parseError("overflow de int64")
 
-	errFloatSyntax = parseErr("número inválido")
+	errFloatSyntax = parseError("número inválido")
 
-	errTsShort       = parseErr("timestamp curto demais")
-	errTsFormat      = parseErr("formato RFC3339 inválido")
-	errTsRange       = parseErr("componente fora de range")
-	errTsFrac        = parseErr("fração inválida")
-	errTsNoTZ        = parseErr("timezone ausente")
-	errTsOffset      = parseErr("offset inválido")
-	errTsOffsetRange = parseErr("offset fora de range")
-	errTsTZ          = parseErr("timezone inválido")
-	errTsTrailing    = parseErr("conteúdo após timezone")
-	errTsDate        = parseErr("data inexistente")
+	errTsShort       = parseError("timestamp curto demais")
+	errTsFormat      = parseError("formato RFC3339 inválido")
+	errTsRange       = parseError("componente fora de range")
+	errTsFrac        = parseError("fração inválida")
+	errTsNoTZ        = parseError("timezone ausente")
+	errTsOffset      = parseError("offset inválido")
+	errTsOffsetRange = parseError("offset fora de range")
+	errTsTZ          = parseError("timezone inválido")
+	errTsTrailing    = parseError("conteúdo após timezone")
+	errTsDate        = parseError("data inexistente")
 )
 
 // IntegralNumber reporta se um número JSON já validado é inteiro (sem
@@ -172,16 +172,16 @@ func RFC3339Millis(raw []byte) (int64, error) {
 	if len(raw) < 20 {
 		return 0, errTsShort
 	}
-	year, ok1 := Digits4(raw[0:4])
-	month, ok2 := Digits2(raw[5:7])
-	day, ok3 := Digits2(raw[8:10])
-	hour, ok4 := Digits2(raw[11:13])
-	minute, ok5 := Digits2(raw[14:16])
-	sec, ok6 := Digits2(raw[17:19])
+	year, okYear := Digits4(raw[0:4])
+	month, okMonth := Digits2(raw[5:7])
+	day, okDay := Digits2(raw[8:10])
+	hour, okHour := Digits2(raw[11:13])
+	minute, okMinute := Digits2(raw[14:16])
+	sec, okSec := Digits2(raw[17:19])
 	sepsOK := raw[4] == '-' && raw[7] == '-' &&
 		(raw[10] == 'T' || raw[10] == 't') &&
 		raw[13] == ':' && raw[16] == ':'
-	if !(ok1 && ok2 && ok3 && ok4 && ok5 && ok6 && sepsOK) {
+	if !(okYear && okMonth && okDay && okHour && okMinute && okSec && sepsOK) {
 		return 0, errTsFormat
 	}
 	if month < 1 || month > 12 || hour > 23 || minute > 59 || sec > 59 {
@@ -339,9 +339,9 @@ func Digits2(b []byte) (int, bool) {
 
 // Digits4 lê exatamente 4 dígitos decimais; b deve ter len ≥ 4.
 func Digits4(b []byte) (int, bool) {
-	hi, ok1 := Digits2(b[0:2])
-	lo, ok2 := Digits2(b[2:4])
-	if !ok1 || !ok2 {
+	hi, okHi := Digits2(b[0:2])
+	lo, okLo := Digits2(b[2:4])
+	if !okHi || !okLo {
 		return 0, false
 	}
 	return hi*100 + lo, true

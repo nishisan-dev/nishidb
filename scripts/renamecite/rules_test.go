@@ -217,3 +217,280 @@ func TestSkippedInGoCommentExtrasCarriesItsLine(t *testing.T) {
 		t.Fatalf("linha: %d, esperada 4", sk[0].Line)
 	}
 }
+
+// citationMapping é o mapeamento de bancada das regras de citação de folha,
+// token nu, receptor qualificado, crase composta e literal. As entradas são as
+// do repositório de verdade — `Snapshot.Epoca`, `Region.LiberaBlocos`,
+// `specsDoMarcador` —, porque cada uma delas é uma citação que passou por duas
+// ferramentas e por uma revisão sem ser alcançada.
+func citationMapping() *Mapping {
+	m := NewMapping()
+	m.addIdentRow("internal/types", "field", "Snapshot.Epoca", "Epoch")
+	m.addIdentRow("internal/types", "field", "Snapshot.LimiteRowID", "LimitRowID")
+	m.addIdentRow("internal/types", "type", "Presenca", "Presence")
+	m.addIdentRow("internal/types", "const", "PresencaAusente", "PresenceAbsent")
+	m.addIdentRow("internal/storage/mmap", "method", "Region.LiberaBlocos", "ReleaseBlocks")
+	m.addIdentRow("internal/gates", "var", "specsDoMarcador", "markerSpecs")
+	m.addIdentRow("internal/query/budget", "field", "PorQuery.Teto", "Ceiling")
+	m.addIdentRow("internal/kafka", "type", "Fila", "Queue")
+	m.addIdentRow("internal/kafka", "method", "Fila.Empurra", "Push")
+	m.addIdentRow("internal/kafka", "field", "Fila.tamanho", "size")
+	return m
+}
+
+// TestBareLeafOfFieldResolvesByItsAddress cobre o índice por FOLHA: a prosa
+// cita campo e método pelo nome nu, e antes disto só o endereço inteiro
+// (`Snapshot.Epoca`) era alcançado — foi por essa lacuna que
+// docs/architecture.md e os dois .puml ficaram descrevendo
+// `Snapshot{Epoca, Instante, LimiteRowID}`.
+func TestBareLeafOfFieldResolvesByItsAddress(t *testing.T) {
+	out, rep := RewriteText([]byte("o campo `Epoca` e o método `Fila.Empurra`"), ".md", citationMapping())
+	if got, want := string(out), "o campo `Epoch` e o método `Queue.Push`"; got != want {
+		t.Fatalf("saída: %q\nquer:  %q", got, want)
+	}
+	if len(rep.Skipped) != 0 {
+		t.Fatalf("pulou: %v", rep.Skipped)
+	}
+}
+
+// TestAmbiguousLeafIsSkippedAndReported é a contraparte: folha que dois
+// pacotes traduzem DIFERENTE não resolve, e sai no relatório em vez de virar
+// um chute.
+func TestAmbiguousLeafIsSkippedAndReported(t *testing.T) {
+	m := citationMapping()
+	m.addIdentRow("internal/storage", "field", "Segmento.Epoca", "Generation")
+	out, rep := RewriteText([]byte("o campo `Epoca`"), ".md", m)
+	if got, want := string(out), "o campo `Epoca`"; got != want {
+		t.Fatalf("substituiu folha ambígua: %q", got)
+	}
+	if sk := rep.Skipped; len(sk) != 1 || sk[0].Token != "Epoca" || !strings.Contains(sk[0].Reason, "ambíguo") {
+		t.Fatalf("relatório: %v", sk)
+	}
+}
+
+// TestBareTokenWithInnerUpperIsReplacedAnywhere: `LimiteRowID` e
+// `specsDoMarcador` não são palavra de prosa em nenhuma das duas línguas do
+// repositório, e por isso são substituídos fora de crase também.
+func TestBareTokenWithInnerUpperIsReplacedAnywhere(t *testing.T) {
+	src := "o LimiteRowID da consulta e o specsDoMarcador do gate; LiberaBlocos falha."
+	want := "o LimitRowID da consulta e o markerSpecs do gate; ReleaseBlocks falha."
+	out, _ := RewriteText([]byte(src), ".md", citationMapping())
+	if string(out) != want {
+		t.Fatalf("saída: %q\nquer:  %q", out, want)
+	}
+}
+
+// TestSingleCapBareTokenIsProseInMarkdown é a contraparte negativa da regra
+// acima, e é a que impede a passada de transformar prosa PT-BR em citação:
+// `Epoca`, `Teto` e `Presenca` começando frase são palavra, e fora de crase
+// ficam onde estão. Token todo minúsculo, idem.
+func TestSingleCapBareTokenIsProseInMarkdown(t *testing.T) {
+	src := "Epoca é o relógio lógico. Teto e Presenca aparecem na frase; tamanho também."
+	out, rep := RewriteText([]byte(src), ".md", citationMapping())
+	if string(out) != src {
+		t.Fatalf("tocou prosa: %q", out)
+	}
+	if len(rep.Applied) != 0 {
+		t.Fatalf("aplicou: %v", rep.Applied)
+	}
+}
+
+// TestSingleCapBareTokenOnlyInTheOwnPackageComment: em comentário Go o mesmo
+// token é citação no pacote que declarava o nome e palavra em qualquer outro.
+func TestSingleCapBareTokenOnlyInTheOwnPackageComment(t *testing.T) {
+	src := "package x\n\n// Epoca é a época de publicação.\nfunc F() {}\n"
+	own, _ := RewriteGoFile("internal/types/types.go", []byte(src), citationMapping())
+	if got, want := string(own), "package x\n\n// Epoch é a época de publicação.\nfunc F() {}\n"; got != want {
+		t.Errorf("no próprio pacote: %q\nquer: %q", got, want)
+	}
+	other, _ := RewriteGoFile("internal/storage/store.go", []byte(src), citationMapping())
+	if string(other) != src {
+		t.Errorf("em outro pacote a palavra foi tocada: %q", other)
+	}
+}
+
+// TestPUMLReplacesSingleCapOnlyInsideTheBox: num diagrama a caixa lista os
+// campos entre chaves, e é ali — e só ali — que `Epoca` é identificador.
+func TestPUMLReplacesSingleCapOnlyInsideTheBox(t *testing.T) {
+	src := "st --> q : Snapshot{Epoca, LimiteRowID}\nnote right of q\n  Epoca é o relógio lógico.\nend note\n"
+	want := "st --> q : Snapshot{Epoch, LimitRowID}\nnote right of q\n  Epoca é o relógio lógico.\nend note\n"
+	out, _ := RewriteText([]byte(src), ".puml", citationMapping())
+	if string(out) != want {
+		t.Fatalf("saída:\n%s\nquer:\n%s", out, want)
+	}
+}
+
+// TestReceiverQualifiedLeafIsReplaced: `snap.Epoca` é a forma com que a prosa
+// cita campo — o receptor é variável de quem escreveu a frase, e só a folha
+// muda.
+func TestReceiverQualifiedLeafIsReplaced(t *testing.T) {
+	m := citationMapping()
+	puml, _ := RewriteText([]byte("st -> jr : Em(rowId, snap.Epoca)\n"), ".puml", m)
+	if got, want := string(puml), "st -> jr : Em(rowId, snap.Epoch)\n"; got != want {
+		t.Errorf(".puml: %q, quer %q", got, want)
+	}
+	md, _ := RewriteText([]byte("a liveness usa snap.Epoca e o orc.Teto\n"), ".md", m)
+	if got, want := string(md), "a liveness usa snap.Epoch e o orc.Ceiling\n"; got != want {
+		t.Errorf(".md: %q, quer %q", got, want)
+	}
+	src := "package x\n\n// Em(rowId, snap.Epoca) devolve a versão retida.\nfunc F() {}\n"
+	gof, _ := RewriteGoFile("internal/storage/versions.go", []byte(src), m)
+	if got, want := string(gof), "package x\n\n// Em(rowId, snap.Epoch) devolve a versão retida.\nfunc F() {}\n"; got != want {
+		t.Errorf("comentário Go: %q, quer %q", got, want)
+	}
+}
+
+// TestKnownPackageQualifierIsNotAReceiver é a contraparte: com um nome de
+// PACOTE conhecido à esquerda do ponto, a forma é `pkg.Ident` e a folha de
+// membro não tem nada a dizer — `kafka.Empurra` não é `Fila.Empurra`.
+func TestKnownPackageQualifierIsNotAReceiver(t *testing.T) {
+	out, _ := RewriteText([]byte("ver kafka.Empurra na prosa\n"), ".md", citationMapping())
+	if got, want := string(out), "ver kafka.Empurra na prosa\n"; got != want {
+		t.Fatalf("saída: %q, quer %q", got, want)
+	}
+}
+
+// TestReceiverWithLowercaseLeafIsNotACitation é a segunda contraparte, e vem
+// de uma rodada de verdade: `c.entrada`, `b.campo`, `d.erro` e `pai.chave` são
+// campo de struct de tabela de teste e chave de exemplo, e a folha minúscula
+// casa com qualquer campo homônimo de qualquer pacote do lote. A forma de
+// receptor só vale com folha EXPORTADA.
+func TestReceiverWithLowercaseLeafIsNotACitation(t *testing.T) {
+	m := citationMapping()
+	m.addIdentRow("internal/typeparse", "field", "Layout.campo", "field")
+	src := "o caso c.campo e o pai.campo ficam\n"
+	out, rep := RewriteText([]byte(src), ".md", m)
+	if string(out) != src {
+		t.Fatalf("tocou o campo minúsculo: %q", out)
+	}
+	if len(rep.Applied) != 0 {
+		t.Fatalf("aplicou: %v", rep.Applied)
+	}
+}
+
+// TestCompoundBacktickRewritesEachToken: a regra da crase tentava o conteúdo
+// INTEIRO como endereço, não achava nada e devolvia a crase intacta — e o
+// repositório tem dezenas de `Snapshot{Epoca, Instante}` e
+// `presenca != PresencaAusente`.
+// O token minúsculo de dentro (`tamanho`, `presenca`) NÃO é tocado: numa crase
+// composta ele é palavra do exemplo, e é assim que `--param <tipo>:<valor>` e
+// `"campo": null` sobrevivem à passada.
+func TestCompoundBacktickRewritesEachToken(t *testing.T) {
+	src := "`Fila{Empurra, tamanho}` e `presenca != PresencaAusente` e `[snap.Epoca, snap.LimiteRowID)`"
+	want := "`Queue{Push, tamanho}` e `presenca != PresenceAbsent` e `[snap.Epoch, snap.LimitRowID)`"
+	out, _ := RewriteText([]byte(src), ".md", citationMapping())
+	if string(out) != want {
+		t.Fatalf("saída: %q\nquer:  %q", out, want)
+	}
+}
+
+// TestCompoundBacktickKeepsTheSyntaxOfAnExample é a contraparte com as formas
+// que a rodada de verdade destruiu antes da exceção do token minúsculo:
+// sintaxe de CLI, exemplo de JSON e chamada de biblioteca do cliente.
+func TestCompoundBacktickKeepsTheSyntaxOfAnExample(t *testing.T) {
+	m := citationMapping()
+	m.addIdentRow("internal/typeparse", "field", "Layout.tipo", "typ")
+	m.addIdentRow("internal/typeparse", "field", "Layout.valor", "value")
+	m.addIdentRow("internal/typeparse", "field", "Layout.campo", "field")
+	src := "`--param <tipo>:<valor>` e `\"campo\": null` e `Arrays.fill(tipo, null)`"
+	out, rep := RewriteText([]byte(src), ".md", m)
+	if string(out) != src {
+		t.Fatalf("tocou o exemplo: %q", out)
+	}
+	if len(rep.Applied) != 0 {
+		t.Fatalf("aplicou: %v", rep.Applied)
+	}
+}
+
+// TestCompoundBacktickLeavesWhatIsNotACitation: comando e trecho de código
+// entre crases passam pelo tokenizador e saem inteiros.
+func TestCompoundBacktickLeavesWhatIsNotACitation(t *testing.T) {
+	src := "rode `go test ./... -run X` e `make lint`"
+	out, rep := RewriteText([]byte(src), ".md", citationMapping())
+	if string(out) != src {
+		t.Fatalf("tocou o comando: %q", out)
+	}
+	if len(rep.Applied) != 0 {
+		t.Fatalf("aplicou: %v", rep.Applied)
+	}
+}
+
+// TestStringLiteralCitingIdentifierIsRewritten: mensagem de produção, rótulo
+// de tabela de casos e texto de falha citam método e tipo, e depois do rename
+// mandam o leitor procurar o que não existe.
+func TestStringLiteralCitingIdentifierIsRewritten(t *testing.T) {
+	src := "package x\n\nvar a = \"%w: LiberaBlocos em %s\"\nvar b = \"PorQuery.Teto\"\nvar c = \"Presenca(\"\n"
+	want := "package x\n\nvar a = \"%w: ReleaseBlocks em %s\"\nvar b = \"PorQuery.Ceiling\"\nvar c = \"Presence(\"\n"
+	out, rep := RewriteGoFile("internal/storage/mmap/region.go", []byte(src), citationMapping())
+	if string(out) != want {
+		t.Fatalf("saída:\n%s\nquer:\n%s", out, want)
+	}
+	for _, a := range rep.Applied {
+		if a.Rule != "literal" {
+			t.Errorf("regra %q, esperada literal: %+v", a.Rule, a)
+		}
+	}
+}
+
+// TestStringLiteralWithoutCitationIsUntouched é a contraparte, e cobre as três
+// exclusões que protegem DADO e MENSAGEM: literal só com palavra minúscula
+// (fixture, chave de YAML, nome de subteste), literal que tem uma palavra
+// PT-BR começando maiúscula sem nenhuma forma de citação em volta (`Teto do
+// processo` é mensagem, e mensagem é da Fase 3) e TAG de campo, que é nome de
+// chave no disco e no wire.
+func TestStringLiteralWithoutCitationIsUntouched(t *testing.T) {
+	src := "package x\n\nvar a = \"fila cheia\"\nvar b = \"Teto do processo\"\n\ntype T struct {\n\tE int64 `json:\"LimiteRowID\"`\n}\n"
+	out, rep := RewriteGoFile("internal/types/types.go", []byte(src), citationMapping())
+	if string(out) != src {
+		t.Fatalf("saída:\n%s\nquer o original:\n%s", out, src)
+	}
+	if len(rep.Applied) != 0 {
+		t.Fatalf("aplicou: %v", rep.Applied)
+	}
+}
+
+// TestGoFenceInMarkdownIsIdentifierContext: dentro de um bloco cercado ```go
+// o texto é CÓDIGO, e `Epoca` numa linha de campo é identificador pelo mesmo
+// motivo por que `Snapshot{Epoca}` é numa caixa de diagrama. Fora do bloco, a
+// mesma palavra começando frase é prosa PT-BR e não é tocada.
+//
+// O caso veio da limpeza do G1, que deixou dois blocos ```go se contradizendo:
+// `type Presenca uint8` ao lado de `PresenceAbsent Presenca`, e `Epoca` ao
+// lado de `LimitRowID` dentro de `type Snapshot struct`.
+func TestGoFenceInMarkdownIsIdentifierContext(t *testing.T) {
+	src := "Epoca é o relógio lógico.\n\n" +
+		"```go\n" +
+		"type Snapshot struct {\n" +
+		"\tEpoca int64\n" +
+		"}\n" +
+		"```\n\n" +
+		"E Epoca de novo na prosa.\n"
+	want := "Epoca é o relógio lógico.\n\n" +
+		"```go\n" +
+		"type Snapshot struct {\n" +
+		"\tEpoch int64\n" +
+		"}\n" +
+		"```\n\n" +
+		"E Epoca de novo na prosa.\n"
+	out, _ := RewriteText([]byte(src), ".md", citationMapping())
+	if string(out) != want {
+		t.Fatalf("saída:\n%s\nquer:\n%s", out, want)
+	}
+}
+
+// TestFenceOfAnotherLanguageIsNotIdentifierContext é a contraparte: um bloco
+// ```yaml é DADO — chave de configuração, corpus —, e a mesma palavra ali não
+// é citação de identificador.
+func TestFenceOfAnotherLanguageIsNotIdentifierContext(t *testing.T) {
+	src := "```yaml\n" +
+		"materialization:\n" +
+		"  Epoca: 3\n" +
+		"```\n"
+	out, rep := RewriteText([]byte(src), ".md", citationMapping())
+	if string(out) != src {
+		t.Fatalf("tocou o bloco yaml: %q", out)
+	}
+	if len(rep.Applied) != 0 {
+		t.Fatalf("aplicou: %v", rep.Applied)
+	}
+}

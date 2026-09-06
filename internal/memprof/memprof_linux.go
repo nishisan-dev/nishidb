@@ -92,7 +92,7 @@ func readFrom(statusPath, rollupPath string) (Sample, error) {
 	}
 
 	anon, file := st.rssAnon, st.rssFile
-	if !st.temSeparacao {
+	if !st.hasSeparation {
 		// Kernel anterior ao 4.5 não expõe RssAnon/RssFile no status. O
 		// smaps_rollup dá o mesmo por subtração — é mais caro (percorre as
 		// VMAs), então só entra quando a fonte barata não serve.
@@ -124,31 +124,31 @@ func rollupSeparation(path string) (anon, file uint64) {
 	if err != nil {
 		return 0, 0
 	}
-	rss, temRSS, err := findKiB(string(raw), "Rss")
-	if err != nil || !temRSS {
+	rss, hasRSS, err := findKiB(string(raw), "Rss")
+	if err != nil || !hasRSS {
 		return 0, 0
 	}
-	anonimo, temAnon, err := findKiB(string(raw), "Anonymous")
-	if err != nil || !temAnon || anonimo > rss {
+	anonRSS, hasAnon, err := findKiB(string(raw), "Anonymous")
+	if err != nil || !hasAnon || anonRSS > rss {
 		return 0, 0
 	}
-	return anonimo, rss - anonimo
+	return anonRSS, rss - anonRSS
 }
 
 // statusInfo é o subconjunto de /proc/self/status que interessa.
 type statusInfo struct {
 	vmRSS, vmHWM     uint64
 	rssAnon, rssFile uint64
-	temSeparacao     bool
+	hasSeparation    bool
 }
 
 func parseStatus(content string) (statusInfo, error) {
 	var st statusInfo
-	vmRSS, temRSS, err := findKiB(content, "VmRSS")
+	vmRSS, hasRSS, err := findKiB(content, "VmRSS")
 	if err != nil {
 		return st, err
 	}
-	if !temRSS {
+	if !hasRSS {
 		return st, fmt.Errorf("campo VmRSS ausente")
 	}
 	st.vmRSS = vmRSS
@@ -161,25 +161,25 @@ func parseStatus(content string) (statusInfo, error) {
 		st.vmHWM = vmRSS
 	}
 
-	anon, temAnon, errA := findKiB(content, "RssAnon")
-	file, temFile, errF := findKiB(content, "RssFile")
-	if errA == nil && errF == nil && temAnon && temFile {
-		st.rssAnon, st.rssFile, st.temSeparacao = anon, file, true
+	anon, hasAnon, errA := findKiB(content, "RssAnon")
+	file, hasFile, errF := findKiB(content, "RssFile")
+	if errA == nil && errF == nil && hasAnon && hasFile {
+		st.rssAnon, st.rssFile, st.hasSeparation = anon, file, true
 	}
 	return st, nil
 }
 
-// findKiB procura a linha "<campo>:\t<n> kB" e devolve o valor em bytes.
+// findKiB procura a linha "<field>:\t<n> kB" e devolve o valor em bytes.
 // ok=false quando o campo não existe (situação legítima); erro quando existe
 // mas está malformado — o que indica formato de /proc diferente do esperado, e
 // aí adivinhar seria pior que parar.
-func findKiB(content, campo string) (uint64, bool, error) {
-	for linha := range strings.Lines(content) {
-		nome, valor, ok := strings.Cut(linha, ":")
-		if !ok || nome != campo {
+func findKiB(content, field string) (uint64, bool, error) {
+	for line := range strings.Lines(content) {
+		name, value, ok := strings.Cut(line, ":")
+		if !ok || name != field {
 			continue
 		}
-		v, err := parseKiBValue(campo, valor)
+		v, err := parseKiBValue(field, value)
 		if err != nil {
 			return 0, true, err
 		}
@@ -194,17 +194,17 @@ func findKiB(content, campo string) (uint64, bool, error) {
 // KiB), e um dia em que dissesse outra coisa, ignorar o sufixo produziria um
 // número calmamente errado por um fator de 1024 — exatamente o tipo de erro
 // que faz um orçamento de 1 GiB parecer cumprido.
-func parseKiBValue(campo, valor string) (uint64, error) {
-	campos := strings.Fields(valor)
-	if len(campos) != 2 {
-		return 0, fmt.Errorf("campo %s com formato inesperado: %q", campo, strings.TrimSpace(valor))
+func parseKiBValue(field, value string) (uint64, error) {
+	parts := strings.Fields(value)
+	if len(parts) != 2 {
+		return 0, fmt.Errorf("campo %s com formato inesperado: %q", field, strings.TrimSpace(value))
 	}
-	n, err := strconv.ParseUint(campos[0], 10, 64)
+	n, err := strconv.ParseUint(parts[0], 10, 64)
 	if err != nil {
-		return 0, fmt.Errorf("campo %s com valor não numérico %q", campo, campos[0])
+		return 0, fmt.Errorf("campo %s com valor não numérico %q", field, parts[0])
 	}
-	if u := strings.ToLower(campos[1]); u != "kb" {
-		return 0, fmt.Errorf("campo %s em unidade inesperada %q (esperado kB)", campo, campos[1])
+	if u := strings.ToLower(parts[1]); u != "kb" {
+		return 0, fmt.Errorf("campo %s em unidade inesperada %q (esperado kB)", field, parts[1])
 	}
 	return n * 1024, nil
 }

@@ -15,7 +15,7 @@ const (
 	miB = 1024 * kiB
 )
 
-func fixture(nome string) string { return filepath.Join("testdata", nome) }
+func fixture(name string) string { return filepath.Join("testdata", name) }
 
 // O caminho comum: o kernel moderno já separa RssAnon de RssFile no status, e
 // é de lá que os quatro números saem — sem tocar no smaps_rollup.
@@ -99,8 +99,8 @@ func TestSmapsRollupSemAnonymous(t *testing.T) {
 }
 
 func TestErrosDeLeitura(t *testing.T) {
-	casos := []struct {
-		nome   string
+	cases := []struct {
+		name   string
 		status string
 		msg    string
 	}{
@@ -109,8 +109,8 @@ func TestErrosDeLeitura(t *testing.T) {
 		{"valor não numérico", "status_valor_nao_numerico.txt", "VmRSS"},
 		{"unidade desconhecida", "status_unidade_desconhecida.txt", "MB"},
 	}
-	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			_, err := readFrom(fixture(tc.status), fixture("smaps_rollup_normal.txt"))
 			if err == nil {
 				t.Fatal("erro esperado")
@@ -140,8 +140,8 @@ func TestReadProcessoReal(t *testing.T) {
 		t.Errorf("VmHWM (%d) < VmRSS (%d): o pico não pode ser menor que o atual", s.VmHWMBytes, s.VmRSSBytes)
 	}
 	// Anon + file podem ficar abaixo do total (o resto é shmem), nunca acima.
-	if soma := s.AnonRSSBytes + s.FileRSSBytes; soma > s.VmRSSBytes {
-		t.Errorf("anon+file (%d) > VmRSS (%d)", soma, s.VmRSSBytes)
+	if sum := s.AnonRSSBytes + s.FileRSSBytes; sum > s.VmRSSBytes {
+		t.Errorf("anon+file (%d) > VmRSS (%d)", sum, s.VmRSSBytes)
 	}
 	if s.HeapAlloc == 0 || s.NumGC > 1<<40 {
 		t.Errorf("MemStats implausíveis: %+v", s)
@@ -155,28 +155,28 @@ func TestReadProcessoReal(t *testing.T) {
 // acumulados do Go só andam para a frente. É a propriedade de que o harness
 // depende para derivar allocs/evento por diferença.
 func TestContadoresSaoMonotonicos(t *testing.T) {
-	antes, err := Read()
+	before, err := Read()
 	if err != nil {
 		t.Fatal(err)
 	}
-	lixo := make([][]byte, 0, 1024)
+	junk := make([][]byte, 0, 1024)
 	for i := 0; i < 1024; i++ {
-		lixo = append(lixo, make([]byte, 1024))
+		junk = append(junk, make([]byte, 1024))
 	}
-	depois, err := Read()
+	after, err := Read()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if depois.Mallocs <= antes.Mallocs {
-		t.Errorf("Mallocs não avançou: %d → %d", antes.Mallocs, depois.Mallocs)
+	if after.Mallocs <= before.Mallocs {
+		t.Errorf("Mallocs não avançou: %d → %d", before.Mallocs, after.Mallocs)
 	}
-	if depois.NumGC < antes.NumGC {
-		t.Errorf("NumGC retrocedeu: %d → %d", antes.NumGC, depois.NumGC)
+	if after.NumGC < before.NumGC {
+		t.Errorf("NumGC retrocedeu: %d → %d", before.NumGC, after.NumGC)
 	}
-	if !depois.Timestamp.After(antes.Timestamp) && depois.Timestamp != antes.Timestamp {
-		t.Errorf("Timestamp retrocedeu: %v → %v", antes.Timestamp, depois.Timestamp)
+	if !after.Timestamp.After(before.Timestamp) && after.Timestamp != before.Timestamp {
+		t.Errorf("Timestamp retrocedeu: %v → %v", before.Timestamp, after.Timestamp)
 	}
-	runtimeKeepAlive(lixo)
+	runtimeKeepAlive(junk)
 }
 
 // runtimeKeepAlive impede o compilador de descartar as alocações do teste
@@ -188,10 +188,10 @@ func runtimeKeepAlive(v [][]byte) {
 }
 
 func TestParseKiBValue(t *testing.T) {
-	casos := []struct {
-		linha string
-		want  uint64
-		erro  bool
+	cases := []struct {
+		line    string
+		want    uint64
+		wantErr bool
 	}{
 		{"VmRSS:\t  983040 kB", 983040 * kiB, false},
 		{"VmRSS:\t0 kB", 0, false},
@@ -202,24 +202,24 @@ func TestParseKiBValue(t *testing.T) {
 		{"VmRSS:\tmuitos kB", 0, true},
 		{"VmRSS:", 0, true},
 	}
-	for _, tc := range casos {
-		_, valor, ok := strings.Cut(tc.linha, ":")
+	for _, tc := range cases {
+		_, value, ok := strings.Cut(tc.line, ":")
 		if !ok {
-			valor = ""
+			value = ""
 		}
-		got, err := parseKiBValue("VmRSS", valor)
-		if tc.erro {
+		got, err := parseKiBValue("VmRSS", value)
+		if tc.wantErr {
 			if err == nil {
-				t.Errorf("parseKiBValue(%q) = %d, want erro", tc.linha, got)
+				t.Errorf("parseKiBValue(%q) = %d, want erro", tc.line, got)
 			}
 			continue
 		}
 		if err != nil {
-			t.Errorf("parseKiBValue(%q): %v", tc.linha, err)
+			t.Errorf("parseKiBValue(%q): %v", tc.line, err)
 			continue
 		}
 		if got != tc.want {
-			t.Errorf("parseKiBValue(%q) = %d, want %d", tc.linha, got, tc.want)
+			t.Errorf("parseKiBValue(%q) = %d, want %d", tc.line, got, tc.want)
 		}
 	}
 }

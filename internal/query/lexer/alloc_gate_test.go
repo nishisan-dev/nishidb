@@ -15,7 +15,7 @@ import (
 func TestZeroAllocs(t *testing.T) {
 	queries := []string{
 		querySpec68,
-		queryComplexa,
+		complexQuery,
 		"SELECT * FROM t;",
 		`SELECT "Acct-Status-Type" FROM s WHERE a IS NOT NULL AND b >= -1.5e3`,
 	}
@@ -47,7 +47,7 @@ func TestZeroAllocs(t *testing.T) {
 // poucos tokens e um escape só.
 func TestAllocsCrescemComEscapesNaoComTokens(t *testing.T) {
 	var l lexer.Lexer
-	medir := func(sql string) float64 {
+	measure := func(sql string) float64 {
 		return testing.AllocsPerRun(100, func() {
 			l.Init(sql)
 			for {
@@ -63,21 +63,21 @@ func TestAllocsCrescemComEscapesNaoComTokens(t *testing.T) {
 		})
 	}
 
-	umEscape := medir(`SELECT a FROM t WHERE x = 'it''s'`)
-	if umEscape > 2 {
-		t.Errorf("1 escape alocou %.1f, want <= 2", umEscape)
+	oneEscape := measure(`SELECT a FROM t WHERE x = 'it''s'`)
+	if oneEscape > 2 {
+		t.Errorf("1 escape alocou %.1f, want <= 2", oneEscape)
 	}
 
 	// Mesmo escape, MUITO mais tokens: a alocação não pode acompanhar.
-	umEscapeMuitosTokens := medir(
+	oneEscapeManyTokens := measure(
 		`SELECT a, b, c, d, e, f, g, h FROM t WHERE x = 'it''s' AND a > 1 AND b < 2 AND c >= 3 AND d <= 4 AND e != 5`)
-	if umEscapeMuitosTokens > umEscape {
+	if oneEscapeManyTokens > oneEscape {
 		t.Errorf("mesma quantidade de escapes com mais tokens alocou %.1f (antes %.1f): "+
-			"o custo está acompanhando o número de tokens", umEscapeMuitosTokens, umEscape)
+			"o custo está acompanhando o número de tokens", oneEscapeManyTokens, oneEscape)
 	}
 
-	tresEscapes := medir(queryComEscapes)
-	if tresEscapes > 4 {
-		t.Errorf("3 escapes alocaram %.1f, want <= 4", tresEscapes)
+	threeEscapes := measure(queryWithEscapes)
+	if threeEscapes > 4 {
+		t.Errorf("3 escapes alocaram %.1f, want <= 4", threeEscapes)
 	}
 }

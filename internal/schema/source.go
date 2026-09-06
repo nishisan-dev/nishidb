@@ -426,7 +426,7 @@ func validaConsumer(n *yaml.Node) (ConsumerSpec, error) {
 	}
 	if bytesTxt, err := texto(m, "source.kafka.consumer", "ingestionQueueBytes"); err != nil {
 		return c, err
-	} else if c.IngestionQueueBytes, err = units.Tamanho(bytesTxt, IngestionQueueBytesPadrao); err != nil {
+	} else if c.IngestionQueueBytes, err = units.Size(bytesTxt, IngestionQueueBytesPadrao); err != nil {
 		return c, specErrf("source.kafka.consumer.ingestionQueueBytes: %v", err)
 	}
 
@@ -435,7 +435,7 @@ func validaConsumer(n *yaml.Node) (ConsumerSpec, error) {
 	} else if v == WatchdogDesligado {
 		c.WatchdogTimeout = 0
 	} else if v != "" {
-		if c.WatchdogTimeout, err = units.Duracao(v, 0); err != nil {
+		if c.WatchdogTimeout, err = units.Duration(v, 0); err != nil {
 			return c, specErrf("source.kafka.consumer.watchdogTimeout: %v", err)
 		}
 		if c.WatchdogTimeout < WatchdogTimeoutMinimo {
@@ -469,7 +469,7 @@ func validaConsumer(n *yaml.Node) (ConsumerSpec, error) {
 	return c, nil
 }
 
-// inteiro aplica a mesma regra de units.InteiroPositivo: ausente herda o
+// inteiro aplica a mesma regra de units.PositiveInt: ausente herda o
 // padrão, zero e negativo são recusados. Uma fila de capacidade 0 não é "sem
 // fila", é uma fila que nada atravessa.
 func inteiro(m map[string]*yaml.Node, caminho, chave string, padrao int) (int, error) {
@@ -481,7 +481,7 @@ func inteiro(m map[string]*yaml.Node, caminho, chave string, padrao int) (int, e
 	if err := decodeEm(n, caminho+"."+chave, &v); err != nil {
 		return 0, err
 	}
-	out, err := units.InteiroPositivo(&v, padrao)
+	out, err := units.PositiveInt(&v, padrao)
 	if err != nil {
 		return 0, specErrf("%s.%s: %v", caminho, chave, err)
 	}

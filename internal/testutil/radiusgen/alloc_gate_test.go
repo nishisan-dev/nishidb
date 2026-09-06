@@ -14,8 +14,8 @@ import (
 //
 // Fora do build com -race: a instrumentação do detector altera a contagem.
 func TestNextNaoAloca(t *testing.T) {
-	casos := []struct {
-		nome string
+	cases := []struct {
+		name string
 		cfg  radiusgen.Config
 	}{
 		{"referência", func() radiusgen.Config {
@@ -28,8 +28,8 @@ func TestNextNaoAloca(t *testing.T) {
 		{"patch puro", radiusgen.Config{Seed: 7, Entities: 50_000, PatchRatio: 1}},
 		{"extended json", radiusgen.Config{Seed: 8, Entities: 50_000, PatchRatio: 1, ExtendedJSONRatio: 1}},
 	}
-	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			g := radiusgen.MustNew(tc.cfg)
 			buf := make([]byte, 0, 8192)
 			g.Next(buf[:0]) // warm-up

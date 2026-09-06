@@ -220,7 +220,7 @@ func validaHistorico(n *yaml.Node, nomeBase string, fields map[string]FieldSpec)
 		if err := decodeEm(tn, "history.maxBytes", &bruto); err != nil {
 			return nil, err
 		}
-		if h.MaxBytes, err = units.Tamanho(bruto, 0); err != nil {
+		if h.MaxBytes, err = units.Size(bruto, 0); err != nil {
 			return nil, specErrf("history.maxBytes: %s", semPrefixoDeSpec(err))
 		}
 	}
@@ -229,7 +229,7 @@ func validaHistorico(n *yaml.Node, nomeBase string, fields map[string]FieldSpec)
 		if err := decodeEm(sn, "history.segmentSize", &bruto); err != nil {
 			return nil, err
 		}
-		if h.SegmentSize, err = units.Tamanho(bruto, 0); err != nil {
+		if h.SegmentSize, err = units.Size(bruto, 0); err != nil {
 			return nil, specErrf("history.segmentSize: %s", semPrefixoDeSpec(err))
 		}
 		if h.SegmentSize > tetoDeSegmento {
@@ -309,7 +309,7 @@ func validaJanela(n *yaml.Node) (*JanelaDeIndiceSpec, error) {
 		// à documentação; dizê-la só no caso do zero exigiria distinguir os
 		// modos de falha do units pela mensagem dele, que é acoplamento pior
 		// que a oração a mais.
-		d, err := units.DuracaoComDias(bruto, 0)
+		d, err := units.DurationWithDays(bruto, 0)
 		if err != nil {
 			return nil, errJanelaf("history.index.window: %s — a janela não tem grafia para \"nada\": "+
 				"omita o bloco index: para indexar tudo que a retenção mantém", semPrefixoDeSpec(err))
@@ -323,7 +323,7 @@ func validaJanela(n *yaml.Node) (*JanelaDeIndiceSpec, error) {
 		}
 		// Mesma ambiguidade do window, e a mesma saída: um teto de zero bytes
 		// tanto pode significar "nenhum índice" quanto "sem teto".
-		b, err := units.Tamanho(bruto, 0)
+		b, err := units.Size(bruto, 0)
 		if err != nil {
 			return nil, errJanelaf("history.index.maxBytes: %s — omita a chave para não limitar o índice por bytes",
 				semPrefixoDeSpec(err))
@@ -372,7 +372,7 @@ func prazoDoHistorico(m map[string]*yaml.Node, h *HistoricoSpec) error {
 		return specErrf("history.expireAfterWrite %q não existe no histórico: "+
 			"omita a chave para não expirar por tempo", DuracaoNunca)
 	}
-	d, err := units.DuracaoComDias(bruto, 0)
+	d, err := units.DurationWithDays(bruto, 0)
 	if err != nil {
 		return specErrf("history.expireAfterWrite: %s", semPrefixoDeSpec(err))
 	}

@@ -363,12 +363,12 @@ var fieldTypeNames = map[string]types.FieldType{
 
 // dominioDeFormato mapeia o tipo YAML para o domínio do compilador de padrão.
 // Só estes dois tipos aceitam (e exigem) `format:`.
-func dominioDeFormato(tipo string) (typeparse.Dominio, bool) {
+func dominioDeFormato(tipo string) (typeparse.Domain, bool) {
 	switch tipo {
 	case "datetime":
-		return typeparse.DominioDateTime, true
+		return typeparse.DomainDateTime, true
 	case "time":
-		return typeparse.DominioTime, true
+		return typeparse.DomainTime, true
 	}
 	return 0, false
 }
@@ -389,9 +389,9 @@ func CompilaFormato(tipo, format string) (*typeparse.Layout, error) {
 		// Sem default de propósito: um format esquecido escolheria um padrão
 		// que recusa 100% dos eventos, e sob log-and-skip isso é um dataset
 		// que não ingere nada — só WARNs, sem nada apontando para a causa.
-		return nil, specErrf("tipo %q exige format (tokens: %s)", tipo, typeparse.TokensSuportados())
+		return nil, specErrf("tipo %q exige format (tokens: %s)", tipo, typeparse.SupportedTokens())
 	}
-	l, err := typeparse.CompilaLayout(format, d)
+	l, err := typeparse.CompileLayout(format, d)
 	if err != nil {
 		return nil, specErrf("%s", err)
 	}
@@ -715,7 +715,7 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 	}
 	s.Materialization.Mode = mode
 	if bruto := raw.Materialization.TombstoneRetention; bruto != "" {
-		d, err := units.DuracaoComDias(bruto, 0)
+		d, err := units.DurationWithDays(bruto, 0)
 		if err != nil {
 			return nil, specErrf("materialization.tombstoneRetention: %s", err)
 		}

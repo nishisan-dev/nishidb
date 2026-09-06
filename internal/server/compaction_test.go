@@ -147,7 +147,7 @@ func bancadaDeCompaction(t *testing.T, chave string) (srv *server.Servidor, dir 
 		t.Fatal("nenhum segmento em disco depois da semeadura: não há o que compactar e as duas metades do teste passariam por vacuidade")
 	}
 	registro = &registroDoServidor{}
-	srv, err := server.Novo(cfg, server.Opcoes{Log: logging.New(registro, logging.FormatoTexto, slog.LevelInfo)})
+	srv, err := server.Novo(cfg, server.Opcoes{Log: logging.New(registro, logging.FormatText, slog.LevelInfo)})
 	if err != nil {
 		t.Fatalf("subida: %v", err)
 	}

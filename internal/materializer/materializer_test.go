@@ -693,9 +693,9 @@ func (s storeErro) Put(key []byte, seq int64, flags uint8, payload []byte, prev 
 	return s.Store.Put(key, seq, flags, payload, prev)
 }
 
-func (s storeErro) Estado(key, buf []byte) (types.Record, []byte, types.Presenca, error) {
+func (s storeErro) Estado(key, buf []byte) (types.Record, []byte, types.Presence, error) {
 	if s.get != nil {
-		return types.Record{}, buf, types.PresencaAusente, s.get
+		return types.Record{}, buf, types.PresenceAbsent, s.get
 	}
 	return s.Store.Estado(key, buf)
 }
@@ -784,7 +784,7 @@ type storePayloadTruncado struct {
 	rec types.Record
 }
 
-func (s storePayloadTruncado) Estado(key, buf []byte) (types.Record, []byte, types.Presenca, error) {
+func (s storePayloadTruncado) Estado(key, buf []byte) (types.Record, []byte, types.Presence, error) {
 	buf = buf[:0]
 	buf = append(buf, key...)
 	keyEnd := len(buf)
@@ -794,7 +794,7 @@ func (s storePayloadTruncado) Estado(key, buf []byte) (types.Record, []byte, typ
 		Sequence: s.rec.Sequence,
 		Key:      buf[:keyEnd:keyEnd],
 		Payload:  buf[keyEnd:len(buf):len(buf)],
-	}, buf, types.PresencaViva, nil
+	}, buf, types.PresenceLive, nil
 }
 
 func (s storePayloadTruncado) GetByKey(_ types.Snapshot, key, buf []byte) (types.Record, []byte, bool, error) {

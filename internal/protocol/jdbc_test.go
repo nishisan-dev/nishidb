@@ -168,7 +168,7 @@ func TestDisplaySizeDeCadaTipoCasaComALarguraQueOEncoderEmite(t *testing.T) {
 		{"boolean", types.Value{Type: types.TypeBool, I64: 0}}, // "false" é mais largo que "true"
 		{"timestamp", types.Value{Type: types.TypeTimestamp, I64: 1755990784123}},
 		{"datetime", types.Value{Type: types.TypeDateTime, I64: 1755990784123}},
-		{"time", types.Value{Type: types.TypeTime, I64: types.MillisPorDia - 1}},
+		{"time", types.Value{Type: types.TypeTime, I64: types.MillisPerDay - 1}},
 		{"ipv4", types.Value{Type: types.TypeIPv4, Bytes: []byte{255, 255, 255, 255}}},
 		{"ipv6", types.Value{Type: types.TypeIPv6, Bytes: ipv6Cheio}},
 		{"ipv4_prefix", types.Value{Type: types.TypeIPv4Prefix, Bytes: []byte{255, 255, 255, 255, 32}}},

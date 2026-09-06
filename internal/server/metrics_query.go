@@ -107,7 +107,7 @@ func registraMetricasDeQuery(
 			Nome:    metrics.MetQueryBufferBytes,
 			Ajuda:   "bytes de buffer de consulta reservados neste instante (runtime.memoryTarget)",
 			Tipo:    metrics.TipoMedidor,
-			Valor:   float64(orc.Usado()),
+			Valor:   float64(orc.Used()),
 		}}
 	}))
 

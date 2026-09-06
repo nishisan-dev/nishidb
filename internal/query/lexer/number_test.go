@@ -8,7 +8,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/typeparse"
 )
 
-var numerosValidos = []string{
+var validNumbers = []string{
 	"0", "-0", "7", "123", "-1", "1.5", "-1.5e10", "1E-3", "2e+9",
 	"0.0001", "9223372036854775807",
 	// Overflow é problema do conversor (Q12/typeparse.Int64), não do lexer:
@@ -16,12 +16,12 @@ var numerosValidos = []string{
 	"99999999999999999999",
 }
 
-var numerosInvalidos = []string{
+var invalidNumbers = []string{
 	"007", "-007", "1.", "1e", "1E+", "1.2.3", "123abc", "1_000", "0x1f",
 }
 
 func TestNumerosValidos(t *testing.T) {
-	for _, sql := range numerosValidos {
+	for _, sql := range validNumbers {
 		t.Run(sql, func(t *testing.T) {
 			// Text é o lexema VERBATIM: nada de normalizar sinal ou expoente.
 			wantStream(t, sql, []tok{{lexer.TokenNumber, sql, 0}})
@@ -30,7 +30,7 @@ func TestNumerosValidos(t *testing.T) {
 }
 
 func TestNumerosInvalidos(t *testing.T) {
-	for _, sql := range numerosInvalidos {
+	for _, sql := range invalidNumbers {
 		t.Run(sql, func(t *testing.T) {
 			err := lexUntilErr(t, sql)
 			if !strings.Contains(err.Error(), "literal numérico inválido") {
@@ -48,7 +48,7 @@ func TestNumerosInvalidos(t *testing.T) {
 // Estes não são erro de NÚMERO e sim de dispatch: a distinção importa porque
 // a mensagem muda o que o usuário procura.
 func TestNaoSaoErroDeNumero(t *testing.T) {
-	casos := []struct {
+	cases := []struct {
 		sql string
 		msg string
 	}{
@@ -57,7 +57,7 @@ func TestNaoSaoErroDeNumero(t *testing.T) {
 		{"- 1", "caractere inesperado '-'"},
 		{"--1", "caractere inesperado '-'"},
 	}
-	for _, tc := range casos {
+	for _, tc := range cases {
 		t.Run(tc.sql, func(t *testing.T) {
 			err := lexUntilErr(t, tc.sql)
 			if !strings.Contains(err.Error(), tc.msg) {
@@ -75,7 +75,7 @@ func TestNaoSaoErroDeNumero(t *testing.T) {
 // diferente) do valor gravado. O lexer não importa typeparse no código de
 // produção — a ausência de drift é pinada AQUI, no teste.
 func TestNumeroCompativelComTypeparse(t *testing.T) {
-	for _, sql := range numerosValidos {
+	for _, sql := range validNumbers {
 		t.Run("aceito/"+sql, func(t *testing.T) {
 			got := lexAll(t, sql)
 			if got[0].Type != lexer.TokenNumber {

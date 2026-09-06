@@ -235,8 +235,8 @@ func TestOSlotNaoSeguraOBufferDoEventoDepoisDeAplicar(t *testing.T) {
 		if p == nil {
 			continue
 		}
-		if p.BytesDeEntradaRetidos() != 0 {
-			t.Errorf("um parser continua com %d bytes do evento", p.BytesDeEntradaRetidos())
+		if p.RetainedInputBytes() != 0 {
+			t.Errorf("um parser continua com %d bytes do evento", p.RetainedInputBytes())
 		}
 	}
 }

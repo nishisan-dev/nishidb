@@ -35,7 +35,7 @@ O ambiente local está pronto: JDK 21 e 25 instalados, Maven 3.6.3 (o wrapper ba
 | **D4** | `nullable` publica **`false` para as colunas chave e sequence**, `true` para o resto | É o que é verdade e é provável: [patch.go:138-152](internal/materializer/patch.go:138) recusa evento com chave nula (`ErrInvalidKey`), chave vazia ou sequence nula (`ErrInvalidSequence`). Publicar `true` para a chave seria publicar o falso |
 | **D5** | `precision`/`scale`/`displaySize` são **função pura do tipo**, no MESMO `switch` de `JDBCDeTipo`, promovido a devolver um `DescritorJDBC` | Duas tabelas divergem no primeiro tipo novo. O switch único já é cobrado por `TestTodaTagComNomeTemJDBCEspecifico` |
 | **D6** | `executor.ColMeta` ganha **só** `Nullable bool`; precision/scale/displaySize são derivados na serialização | Os três são função de `Type`, que `ColMeta` já carrega, e derivá-los em `ColunaDe` custa zero alocação (roda uma vez por query, fora do laço de rows). `Nullable` é função do *campo* (`IsKey`/`IsSequence`) e só o executor tem o `*schema.CompiledField` na mão |
-| **D7** | `UNSUPPORTED_CLAUSE` **não acrescenta keyword ao lexer**; `lexer.SyntaxError` ganha um campo `Clausula string`, vazio no erro comum | Keyword nova quebraria `SELECT order FROM t`, hoje válido. Campo (em vez de tipo com `Unwrap`) torna impossível o bug de ordem de `switch` em `traduzErroDeAbertura`, que degradaria em silêncio para `SYNTAX` |
+| **D7** | `UNSUPPORTED_CLAUSE` **não acrescenta keyword ao lexer**; `lexer.SyntaxError` ganha um campo `Clause string`, vazio no erro comum | Keyword nova quebraria `SELECT order FROM t`, hoje válido. Campo (em vez de tipo com `Unwrap`) torna impossível o bug de ordem de `switch` em `traduzErroDeAbertura`, que degradaria em silêncio para `SYNTAX` |
 | **D8** | `--param` vale para os **dois** caminhos, `--config` e `--server` | O caminho local já aceita `[]types.Value` em `eng.Execute`. Preserva a promessa de [query_remote.go:26](internal/cli/query_remote.go:26): "um script que troca `--config` por `--server` não muda mais nada" |
 | **D9** | JUnit 5 em `scope=test` é aceitável sob "zero dependência de runtime", com **dois gates** provando | `scope=test` nunca entra no `Class-Path` do consumidor. Harness próprio custaria semanas e não fecharia risco real |
 | **D10** | Maven Wrapper `distributionType=only-script` — **nenhum `.jar` versionado**, `distributionUrl` com versão exata + `distributionSha256Sum` | Commitar um blob opaco é o oposto da doutrina do binário único. Versão de instrumento é configuração, como o `golangci-lint@v2.12.2` |
@@ -182,7 +182,7 @@ para o comentário e para o aceite, não para a descoberta de alguém olhando um
 piloto.
 
 ### A7 — `UNSUPPORTED_CLAUSE` (D7)
-`lexer.SyntaxError` ganha `Clausula string`; novo `internal/query/parser/clauses.go`;
+`lexer.SyntaxError` ganha `Clause string`; novo `internal/query/parser/clauses.go`;
 `protocolo.CodClausulaNaoSuportada`; `traduzErroDeAbertura`
 ([server/query.go:387](internal/server/query.go:387)); `codigoDoProtocolo`
 ([query_remote.go:175](internal/cli/query_remote.go:175)) → `ExitQuery`, **não** o vala-comum

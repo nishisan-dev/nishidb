@@ -103,7 +103,7 @@ func AppendValue(dst []byte, v types.Value) []byte {
 		// arquivo é null — nunca texto de erro, que chegaria ao cliente como
 		// um dado plausível. Inalcançável pelo caminho normal: a ingestão e o
 		// binder recusam antes.
-		if v.I64 < 0 || v.I64 >= types.MillisPorDia {
+		if v.I64 < 0 || v.I64 >= types.MillisPerDay {
 			return append(dst, "null"...)
 		}
 		return appendHoraDoDia(dst, v.I64)

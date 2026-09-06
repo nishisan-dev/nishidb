@@ -14,13 +14,13 @@ import (
 	"testing"
 )
 
-// nomeDeTeste casa uma citação de teste em prosa — o identificador começando por
+// reTestName casa uma citação de teste em prosa — o identificador começando por
 // Test com maiúscula em seguida.
-var nomeDeTeste = regexp.MustCompile(`\bTest[A-Z][A-Za-z0-9_]*`)
+var reTestName = regexp.MustCompile(`\bTest[A-Z][A-Za-z0-9_]*`)
 
-// arquivosDoIndicePorSegmento é o ESCOPO deste gate, e a lista é explícita de
+// segmentIndexFiles é o ESCOPO deste gate, e a lista é explícita de
 // propósito. Ver o godoc abaixo.
-var arquivosDoIndicePorSegmento = []string{
+var segmentIndexFiles = []string{
 	"internal/metrics/names.go",
 	"internal/protocol/documents.go",
 	"internal/server/history.go",
@@ -56,45 +56,45 @@ var arquivosDoIndicePorSegmento = []string{
 // exigiria carregar o repositório inteiro. É suficiente para o modo de falha que
 // importa, que é o rename.
 func TestAsCitacoesDeTesteNosComentariosExistem(t *testing.T) {
-	raiz := filepath.Join("..", "..")
-	noEscopo := map[string]bool{}
-	for _, f := range arquivosDoIndicePorSegmento {
-		noEscopo[filepath.Join(raiz, filepath.FromSlash(f))] = true
+	root := filepath.Join("..", "..")
+	inScope := map[string]bool{}
+	for _, f := range segmentIndexFiles {
+		inScope[filepath.Join(root, filepath.FromSlash(f))] = true
 	}
-	existentes := map[string]bool{}
-	type citacao struct{ arquivo, nome string }
-	var citadas []citacao
+	existing := map[string]bool{}
+	type citation struct{ file, name string }
+	var cited []citation
 
-	err := filepath.WalkDir(raiz, func(caminho string, d os.DirEntry, err error) error {
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
 			// worktrees são cópias da árvore; varrê-las duplicaria tudo.
-			if nome := d.Name(); nome == ".git" || nome == ".claude" || nome == "clients" {
+			if name := d.Name(); name == ".git" || name == ".claude" || name == "clients" {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if !strings.HasSuffix(caminho, ".go") {
+		if !strings.HasSuffix(path, ".go") {
 			return nil
 		}
 		fset := token.NewFileSet()
-		f, err := parser.ParseFile(fset, caminho, nil, parser.ParseComments|parser.SkipObjectResolution)
+		f, err := parser.ParseFile(fset, path, nil, parser.ParseComments|parser.SkipObjectResolution)
 		if err != nil {
 			return nil // arquivo que não parseia é problema de outro gate
 		}
 		for _, decl := range f.Decls {
 			if fn, ok := decl.(*ast.FuncDecl); ok && strings.HasPrefix(fn.Name.Name, "Test") {
-				existentes[fn.Name.Name] = true
+				existing[fn.Name.Name] = true
 			}
 		}
-		if !noEscopo[caminho] {
+		if !inScope[path] {
 			return nil
 		}
-		for _, grupo := range f.Comments {
-			for _, nome := range nomeDeTeste.FindAllString(grupo.Text(), -1) {
-				citadas = append(citadas, citacao{caminho, nome})
+		for _, group := range f.Comments {
+			for _, name := range reTestName.FindAllString(group.Text(), -1) {
+				cited = append(cited, citation{path, name})
 			}
 		}
 		return nil
@@ -102,34 +102,34 @@ func TestAsCitacoesDeTesteNosComentariosExistem(t *testing.T) {
 	if err != nil {
 		t.Fatalf("varredura: %v", err)
 	}
-	if len(citadas) == 0 {
+	if len(cited) == 0 {
 		t.Fatalf("nenhuma citação de teste nos %d arquivos do escopo: ou a lista ficou obsoleta, ou o gate passaria "+
-			"por vacuidade", len(arquivosDoIndicePorSegmento))
+			"por vacuidade", len(segmentIndexFiles))
 	}
-	for f := range noEscopo {
+	for f := range inScope {
 		if _, err := os.Stat(f); err != nil {
 			t.Errorf("o escopo lista %s, que não existe: um arquivo renomeado tira o gate de cima dele em silêncio", f)
 		}
 	}
 
-	mortas := map[string][]string{}
-	for _, c := range citadas {
-		if !existentes[c.nome] {
-			mortas[c.arquivo] = append(mortas[c.arquivo], c.nome)
+	dead := map[string][]string{}
+	for _, c := range cited {
+		if !existing[c.name] {
+			dead[c.file] = append(dead[c.file], c.name)
 		}
 	}
-	if len(mortas) == 0 {
+	if len(dead) == 0 {
 		return
 	}
-	arquivos := make([]string, 0, len(mortas))
-	for a := range mortas {
-		arquivos = append(arquivos, a)
+	files := make([]string, 0, len(dead))
+	for a := range dead {
+		files = append(files, a)
 	}
-	sort.Strings(arquivos)
-	for _, a := range arquivos {
-		nomes := mortas[a]
-		sort.Strings(nomes)
+	sort.Strings(files)
+	for _, a := range files {
+		names := dead[a]
+		sort.Strings(names)
 		t.Errorf("%s cita teste(s) que não existem: %s — um rename deixou o ponteiro para trás, e um comentário que "+
-			"afirma cobertura inexistente é pior que comentário nenhum", a, strings.Join(nomes, ", "))
+			"afirma cobertura inexistente é pior que comentário nenhum", a, strings.Join(names, ", "))
 	}
 }
