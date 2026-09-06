@@ -3249,6 +3249,13 @@ const GRUPOS = 'planning/identificadores-em-ingles/grupos-pos-fase1.tsv'
 const GLOSSARIO = 'docs/glossario.md'
 const SPEC = 'planning/identificadores-em-ingles.md'
 const PROTEGIDOS = 'planning/identificadores-em-ingles/protegidos.txt'
+// Os dois mapas de caminho entram em TODA passada de prosa, e não só nas
+// passadas de caminho da Fase 1: o pacote foi renomeado lá e os símbolos dele
+// aqui, então a citação `orcamento.NovoGlobal` tem as duas metades velhas e o
+// qualificador só resolve com o mapa de pacotes carregado. É idempotente —
+// caminho já reescrito não casa de novo.
+const CAMINHOS = '-paths planning/identificadores-em-ingles/mapeamento-pacotes.tsv ' +
+  '-paths planning/identificadores-em-ingles/mapeamento-arquivos.tsv'
 const tsvDe = (p) => `planning/identificadores-em-ingles/mapeamento-${fase}-${p.replaceAll('/', '_')}.tsv`
 const tsvGrupos = `planning/identificadores-em-ingles/grupos-de-interface-${fase}-${grupo}.tsv`
 
@@ -3379,13 +3386,14 @@ Ordem obrigatória (spec §4.6), com commit ao fim de cada passo:
       Exit ≠ 0 → nada foi escrito por ele; leia o stderr: se for "already have" ou tipo, tire a(s) linha(s) ofensiva(s)
       para um arquivo <pacote>.recusadas.txt no scratch, anote, e rode de novo sem elas; se falhar de novo, devolva ok=false.
    c) "go build ./..." e "go vet ./..." verdes → "git add -A" e "git commit -m '<pacote>: identificadores em inglês'".
-3. Passada de prosa: "go run ./scripts/renamecite -dir . ${pacotes.map(p => '-idents ' + tsvDe(p)).join(' ')} -protect ${PROTEGIDOS} -report ${scratch}/renamecite-${grupo}.txt".
+3. Passada de prosa: "go run ./scripts/renamecite -dir . ${pacotes.map(p => '-idents ' + tsvDe(p)).join(' ')} ${CAMINHOS} -protect ${PROTEGIDOS} -report ${scratch}/renamecite-${grupo}.txt".
    O relatório tem linhas "aplicado" (toda substituição, com a regra) e "pulado" (ambiguidade, protegido). Leia as DUAS:
    toda linha "pulado ... ambíguo" é resolvida qualificando a citação no texto à mão (é prosa, não código); toda linha
    "aplicado" cujo token não era citação de identificador (nome de coluna, chave YAML, arquivo em disco, palavra de
    prosa) é revertida à mão e o token entra em ${PROTEGIDOS} (um por linha) no mesmo commit.
-   "gofmt -l ." tem de sair vazio; "go build ./..." e "go vet ./..." verdes. "git add -A" e
-   "git commit -m '${grupo}: citações em docs e comentários'".
+   "gofmt -l ." tem de sair vazio; "go build ./..." e "go vet ./..." verdes; "go test ./internal/gates/ -run
+   TestRenamedIdentifiersAreNotCitedByTheirOldNames" verde — o que o gate ainda acusar é citação que nenhuma regra
+   alcança, e é edição à mão. "git add -A" e "git commit -m '${grupo}: citações em docs e comentários'".
 Nunca edite código Go à mão fora do passo 3. Devolva ok e a saída resumida de cada passo, inclusive quantos renames por
 posição e quantas linhas recusadas.`,
   { label: `aplica:${grupo}`, phase: 'Aplicar', schema: RELATORIO })

@@ -213,3 +213,87 @@ func TestDottedTokenOnlyFallsBackWhenTheFirstSegmentIsAType(t *testing.T) {
 		t.Errorf("com `grupos` como type: %q, quer %q", got, want)
 	}
 }
+
+// TestPackageMapCompletesTheQualifiedCitation é a razão de o workflow passar
+// `-paths` em TODA passada de identificadores, e não só na passada de
+// caminhos: o pacote foi renomeado na Fase 1 e os símbolos dele na Fase 2, de
+// modo que a citação `orcamento.NovoGlobal` tem as DUAS metades velhas. Sem o
+// mapa de pacotes carregado, o qualificador não resolve e a citação inteira
+// fica para trás — foi assim que o godoc de NewStreamWriter continuou mandando
+// o chamador escrever `orcamento.NovoGlobal(0).Query(0)`.
+//
+// A segunda metade do teste é a contraparte, e existe para o motivo ficar
+// verificável em vez de escrito: com o MESMO documento e o MESMO mapa de
+// identificadores, sem `-paths`, nada muda.
+func TestPackageMapCompletesTheQualifiedCitation(t *testing.T) {
+	const doc = "package x\n\n// Ver orcamento.NovoGlobal(0).\nfunc F() {}\n"
+	const idents = "pacote\tespecie\tendereco\tnovo\tmotivo\n" +
+		"internal/query/budget\tfunc\tNovoGlobal\tNewGlobal\t\n"
+	const paths = "velho\tnovo\ninternal/query/orcamento\tinternal/query/budget\n"
+
+	comMapa := t.TempDir()
+	alvo := write(t, comMapa, "doc.go", doc)
+	var out, errb bytes.Buffer
+	code := run([]string{
+		"-dir", comMapa,
+		"-idents", write(t, comMapa, "mapa/idents.tsv", idents),
+		"-paths", write(t, comMapa, "mapa/pacotes.tsv", paths),
+		"-exclude", "mapa",
+		"-report", filepath.Join(comMapa, "relatorio.txt"),
+	}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, errb.String())
+	}
+	if got, want := read(t, alvo), "package x\n\n// Ver budget.NewGlobal(0).\nfunc F() {}\n"; got != want {
+		t.Errorf("com -paths: %q\nquer:       %q", got, want)
+	}
+
+	semMapa := t.TempDir()
+	alvo = write(t, semMapa, "doc.go", doc)
+	out.Reset()
+	errb.Reset()
+	code = run([]string{
+		"-dir", semMapa,
+		"-idents", write(t, semMapa, "mapa/idents.tsv", idents),
+		"-exclude", "mapa",
+		"-report", filepath.Join(semMapa, "relatorio.txt"),
+	}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, errb.String())
+	}
+	if got := read(t, alvo); got != doc {
+		t.Errorf("sem -paths a citação foi tocada pela metade: %q", got)
+	}
+}
+
+// TestDirectoryNameIsAPackageNotAReceiver: `storage.Modo` é `pkg.Ident` de um
+// pacote que o lote nem está tocando, e sem saber que `storage` é pacote a
+// regra do receptor lia o `Modo` como folha de `Manifest.Modo` — de OUTRO
+// pacote — e reescrevia. Foi o que uma rodada de verdade fez com
+// planning/historico-append-only-plano.md, onde `storage.Modo` continua sendo
+// o nome do tipo em internal/storage.
+//
+// O oráculo é a árvore: todo diretório com arquivo Go é um pacote. O
+// mapeamento sozinho não daria a resposta — ele só conhece os pacotes do lote.
+func TestDirectoryNameIsAPackageNotAReceiver(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "internal/storage/store.go", "package storage\n\ntype Modo uint8\n")
+	doc := write(t, dir, "docs/plano.md", "as Options ganham um campo do tipo `storage.Modo`\n")
+	idents := write(t, dir, "mapa/idents.tsv",
+		"pacote\tespecie\tendereco\tnovo\tmotivo\n"+
+			"internal/storage/checkpoint\tfield\tManifest.Modo\tMode\t\n")
+
+	var out, errb bytes.Buffer
+	code := run([]string{
+		"-dir", dir,
+		"-idents", idents,
+		"-exclude", "mapa",
+		"-report", filepath.Join(dir, "relatorio.txt"),
+	}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, errb.String())
+	}
+	if got, want := read(t, doc), "as Options ganham um campo do tipo `storage.Modo`\n"; got != want {
+		t.Fatalf("saída: %q, quer %q", got, want)
+	}
+}

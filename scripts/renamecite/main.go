@@ -1,12 +1,19 @@
 // Command renamecite é a passada de prosa do ciclo de identificadores em
-// inglês (spec §4.4): reescreve citações — token entre crases, doc link,
-// `pkg.Ident` em comentário Go, `TestXxx`/`test_xxx`, caminho de arquivo ou
-// pacote, chave de log entre crases ou aspas, nome de subteste em t.Run —
-// a partir dos TSV de mapeamento. Palavra solta na prosa nunca é tocada.
+// inglês (spec §4.4): reescreve citações — token entre crases (simples ou
+// composta), doc link, `pkg.Ident`/`snap.Epoca` em prosa, token nu
+// CamelCase, citação dentro de literal de string, `TestXxx`/`test_xxx`,
+// caminho de arquivo ou pacote, chave de log entre crases ou aspas, nome de
+// subteste em t.Run — a partir dos TSV de mapeamento. Palavra solta de prosa
+// nunca é tocada.
+//
+// O `-paths` entra em TODA passada, inclusive nas de identificador: o pacote
+// foi renomeado numa fase e os símbolos dele em outra, e sem o mapa de pacotes
+// carregado a citação `orcamento.NovoGlobal` não resolve o qualificador.
 //
 //	go run ./scripts/renamecite -dir . \
-//	    -idents planning/identificadores-em-ingles/mapeamento-2-G1-types.tsv \
+//	    -idents planning/identificadores-em-ingles/mapeamento-2-internal_types.tsv \
 //	    -paths planning/identificadores-em-ingles/mapeamento-pacotes.tsv \
+//	    -paths planning/identificadores-em-ingles/mapeamento-arquivos.tsv \
 //	    -protect planning/identificadores-em-ingles/protegidos.txt \
 //	    -report /tmp/renamecite.txt
 //
@@ -18,9 +25,10 @@
 //	pulado	<arquivo>:<linha>	<token>	<motivo>
 //
 // As regras são `crase`, `aspas`, `teste`, `caminho`, `doclink`,
-// `qualificado`, `literal` e `subteste`. Listar SÓ as pulas não serve: o modo
-// de falha real desta ferramenta é substituir o que não devia, em silêncio, e
-// quem revisa o lote precisa ler o que ela fez sem depender do diff.
+// `qualificado`, `nu`, `literal` e `subteste`. Listar SÓ as pulas não serve: o
+// modo de falha real desta ferramenta é substituir o que não devia, em
+// silêncio, e quem revisa o lote precisa ler o que ela fez sem depender do
+// diff.
 //
 // # O QUE ELA NUNCA VARRE
 //
@@ -73,12 +81,18 @@ var textExtensions = map[string]bool{".md": true, ".puml": true, ".sh": true, ".
 // internal/predicado colapsou TestImportPathIsNotRewritten (src e want
 // ficaram iguais, o teste parou de provar que import Go não é tocado) e
 // mais dois casos de mesa.
+// internal/gates/dangling_citations_test.go entra pelo mesmo motivo de
+// scripts/renamecite, um nível acima: é o gate que cobra as citações
+// penduradas, e o godoc dele EXPLICA a regra com os nomes velhos de verdade
+// (`Epoca`, `LimiteRowID`, `specsDoMarcador`). Varrido, o gate passa a
+// explicar a regra com os nomes novos — e some com a razão de existir dele.
 var defaultExcludes = []string{
 	"docs/glossario.md",
 	"planning/identificadores-em-ingles.md",
 	"planning/identificadores-em-ingles-plano.md",
 	"planning/identificadores-em-ingles",
 	"scripts/renamecite",
+	"internal/gates/dangling_citations_test.go",
 }
 
 // excluded diz se o caminho relativo cai em algum padrão — o próprio caminho
@@ -137,6 +151,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "renamecite: %v\n", err)
 		return 2
+	}
+	if err := collectPackageDirs(*dir, m); err != nil {
+		_, _ = fmt.Fprintf(stderr, "renamecite: %v\n", err)
+		return 1
 	}
 	reportFile, err := os.Create(*report)
 	if err != nil {
@@ -276,6 +294,34 @@ func loadMapping(idents, paths, tests, logkeys, subtests, protect []string) (*Ma
 		}
 	}
 	return m, nil
+}
+
+// collectPackageDirs varre a árvore antes da reescrita e guarda o nome curto
+// de todo diretório que tem arquivo Go — isto é, de todo PACOTE do módulo.
+//
+// É o que dá à regra do receptor qualificado a informação que o mapeamento não
+// tem: `storage.Modo` é `pkg.Ident` de um pacote que o lote não está tocando, e
+// sem esta lista a regra o lia como RECEPTOR e trocava a folha por um `Modo`
+// homônimo de outro pacote — uma citação que passou a mentir por causa da
+// ferramenta que existe para impedir isso. Vale a varredura extra: ela custa um
+// stat por arquivo e fecha uma classe inteira de troca errada.
+func collectPackageDirs(dir string, m *Mapping) error {
+	return filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", ".claude", ".superpowers", "target", ".venv", "__pycache__", "node_modules":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(p) == ".go" {
+			m.PackageDirs[filepath.Base(filepath.Dir(p))] = true
+		}
+		return nil
+	})
 }
 
 // eachToken lê a lista do -protect: um token por linha, SEM cabeçalho (não é
