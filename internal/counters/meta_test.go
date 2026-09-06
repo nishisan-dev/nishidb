@@ -9,13 +9,13 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/query"
 	"github.com/nishisan-dev/nishidb/internal/query/meta"
 	"github.com/nishisan-dev/nishidb/internal/schema"
-	"github.com/nishisan-dev/nishidb/internal/storage/contador"
+	"github.com/nishisan-dev/nishidb/internal/storage/counter"
 	"github.com/nishisan-dev/nishidb/internal/testutil/fakestorage"
 )
 
 // motorComMeta registra o dataset de mentira e a `_meta.counters` sobre os
 // contadores dados — a mesma costura do Registra, sem o Store real.
-func motorComMeta(t *testing.T, cs ...*contador.Contador) *query.Engine {
+func motorComMeta(t *testing.T, cs ...*counter.Contador) *query.Engine {
 	t.Helper()
 	spec, err := schema.Parse([]byte("version: 1\nname: servicos\nmaterialization:\n  key:\n    field: id\nschema:\n  fields:\n    id:\n      type: string\n"), schema.DefaultsPadrao)
 	if err != nil {

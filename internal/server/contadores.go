@@ -18,7 +18,7 @@ import (
 
 	"github.com/nishisan-dev/nishidb/internal/protocol"
 	"github.com/nishisan-dev/nishidb/internal/storage"
-	"github.com/nishisan-dev/nishidb/internal/storage/contador"
+	"github.com/nishisan-dev/nishidb/internal/storage/counter"
 )
 
 // handleAuditoriaDeContadores serve o POST /v1/counters/audit (ADMIN).
@@ -141,7 +141,7 @@ func erroDeContadores(err error) (int, protocol.Falha) {
 	return erroDeMutacao(err)
 }
 
-func auditoriaContador(rel contador.Relatorio) protocol.AuditoriaContador {
+func auditoriaContador(rel counter.Relatorio) protocol.AuditoriaContador {
 	out := protocol.AuditoriaContador{
 		Name:            rel.Nome,
 		Groups:          rel.Grupos,

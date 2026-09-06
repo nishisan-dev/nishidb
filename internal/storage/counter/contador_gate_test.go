@@ -1,6 +1,6 @@
 //go:build !race
 
-package contador
+package counter
 
 import (
 	"testing"

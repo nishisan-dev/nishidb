@@ -3,7 +3,7 @@ package server
 import (
 	"github.com/nishisan-dev/nishidb/internal/metrics"
 	"github.com/nishisan-dev/nishidb/internal/storage"
-	"github.com/nishisan-dev/nishidb/internal/storage/contador"
+	"github.com/nishisan-dev/nishidb/internal/storage/counter"
 )
 
 // lixoDeDisco é a conta de nishidb_storage_garbage_bytes: o que está em disco
@@ -240,7 +240,7 @@ func umSeVerdadeiro(v bool) float64 {
 // Nascem com zero na subida, como todas as que podem alarmar: um dataset com
 // contador e nenhuma linha emite as dez, zeradas — lacuna não se distingue de
 // alvo fora do ar. O rótulo `counter` vem do YAML, conjunto fechado.
-func amostrasDeContadores(dataset string, ests []contador.Estatisticas) []metrics.Amostra {
+func amostrasDeContadores(dataset string, ests []counter.Estatisticas) []metrics.Amostra {
 	out := make([]metrics.Amostra, 0, len(ests)*10)
 	for _, e := range ests {
 		rotulo := []metrics.Label{

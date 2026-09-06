@@ -7,7 +7,7 @@
 // escrita.md §3): reprocessar o mesmo evento é uma transição de X para X, que
 // não mexe em nada, e mudar de grupo ajusta as duas pontas na mesma operação.
 // É o que dispensa qualquer contabilidade de "quais mensagens já contei".
-package contador
+package counter
 
 import (
 	"encoding/binary"

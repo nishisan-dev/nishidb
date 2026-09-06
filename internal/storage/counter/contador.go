@@ -1,4 +1,4 @@
-package contador
+package counter
 
 import (
 	"errors"

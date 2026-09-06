@@ -14,7 +14,7 @@ import (
 
 	"github.com/nishisan-dev/nishidb/internal/predicate"
 	"github.com/nishisan-dev/nishidb/internal/schema"
-	"github.com/nishisan-dev/nishidb/internal/storage/contador"
+	"github.com/nishisan-dev/nishidb/internal/storage/counter"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
@@ -25,14 +25,14 @@ import (
 // `where` ou groupBy sobre coluna com `merge: sum` — com a soma, o estado deixa
 // de ser função pura do último evento e a idempotência do contador evapora
 // (planning §10). É recusa na subida, não documentação.
-func Compila(spec *schema.DatasetSpec, sc *schema.Compiled) ([]contador.Definicao, error) {
+func Compila(spec *schema.DatasetSpec, sc *schema.Compiled) ([]counter.Definicao, error) {
 	if spec == nil || sc == nil {
 		return nil, fmt.Errorf("contadores: spec ou schema ausentes")
 	}
-	out := make([]contador.Definicao, 0, len(spec.Contadores))
+	out := make([]counter.Definicao, 0, len(spec.Contadores))
 	for i, cs := range spec.Contadores {
 		rotulo := fmt.Sprintf("counters[%d]", i)
-		def := contador.Definicao{
+		def := counter.Definicao{
 			Nome:              cs.Name,
 			Colunas:           make([]types.FieldID, 0, len(cs.GroupBy)),
 			Nomes:             cs.GroupBy,
@@ -63,7 +63,7 @@ func Compila(spec *schema.DatasetSpec, sc *schema.Compiled) ([]contador.Definica
 				}
 			}
 			ids := slots.IDs
-			def.NovoAvaliador = func() contador.Avaliador {
+			def.NovoAvaliador = func() counter.Avaliador {
 				return predicate.NovoAvaliadorDePayload(prog, ids)
 			}
 		}

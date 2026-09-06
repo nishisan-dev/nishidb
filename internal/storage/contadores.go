@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/storage/checkpoint"
-	"github.com/nishisan-dev/nishidb/internal/storage/contador"
+	"github.com/nishisan-dev/nishidb/internal/storage/counter"
 	"github.com/nishisan-dev/nishidb/internal/storage/rowindex"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
@@ -22,7 +22,7 @@ const diretorioDosContadores = "contadores"
 // pendenciaDeContador é um contador que a abertura decidiu RECONSTRUIR: a
 // varredura roda depois do ramo de recovery, e o motivo vai para o log.
 type pendenciaDeContador struct {
-	c      *contador.Contador
+	c      *counter.Contador
 	motivo string
 }
 
@@ -107,7 +107,7 @@ func (s *Store) abreContadores(opts Options, m *checkpoint.Manifest, idxDir stri
 			recria, motivo = true, fmt.Sprintf("os parâmetros mudaram (groupBy %v → %v, where %q → %q)",
 				info.Colunas, colunasDe(def), info.Where, def.Where)
 		}
-		c, err := contador.Abre(filepath.Join(dir, def.Nome), def, minRows, recria)
+		c, err := counter.Abre(filepath.Join(dir, def.Nome), def, minRows, recria)
 		if err != nil {
 			return fmt.Errorf("storage: abrir o contador %q de %s: %w", def.Nome, opts.Dir, err)
 		}
@@ -162,11 +162,11 @@ func (s *Store) abreContadores(opts Options, m *checkpoint.Manifest, idxDir stri
 
 // mesmaDefinicao compara os parâmetros que decidem o conteúdo: nome, colunas
 // (na ordem) e where.
-func mesmaDefinicao(info checkpoint.ContadorInfo, def contador.Definicao) bool {
+func mesmaDefinicao(info checkpoint.ContadorInfo, def counter.Definicao) bool {
 	return info.Nome == def.Nome && info.Where == def.Where && slices.Equal(info.Colunas, colunasDe(def))
 }
 
-func colunasDe(def contador.Definicao) []uint16 {
+func colunasDe(def counter.Definicao) []uint16 {
 	out := make([]uint16, len(def.Colunas))
 	for i, c := range def.Colunas {
 		out[i] = uint16(c)
@@ -222,7 +222,7 @@ func (s *Store) reconstroiContadoresPendentes() error {
 // abertura não há concorrência; em operação (ReconstroiContadores) o writer
 // já segura o wmu e a leitura do par (location, bytes) entra no aposMu, que é
 // o lock mais interno.
-func (s *Store) varreLinhasVivasNoContador(ctx context.Context, c *contador.Contador, sobAposMu bool) (uint64, error) {
+func (s *Store) varreLinhasVivasNoContador(ctx context.Context, c *counter.Contador, sobAposMu bool) (uint64, error) {
 	limite := types.RowID(s.nextRowID.Load())
 	var buf []byte
 	var linhas uint64
@@ -264,12 +264,12 @@ func (s *Store) varreLinhasVivasNoContador(ctx context.Context, c *contador.Cont
 
 // Contadores devolve os contadores abertos, na ordem declarada. A slice é do
 // Store: quem chama não a altera.
-func (s *Store) Contadores() []*contador.Contador { return s.contadores }
+func (s *Store) Contadores() []*counter.Contador { return s.contadores }
 
 // EstatisticasDeContadores é o retrato de todos os contadores, para as
 // métricas e o /v1/stats — a MESMA chamada nos dois.
-func (s *Store) EstatisticasDeContadores() []contador.Estatisticas {
-	out := make([]contador.Estatisticas, 0, len(s.contadores))
+func (s *Store) EstatisticasDeContadores() []counter.Estatisticas {
+	out := make([]counter.Estatisticas, 0, len(s.contadores))
 	for _, c := range s.contadores {
 		out = append(out, c.Estatisticas())
 	}
@@ -286,7 +286,7 @@ const passoDoContexto = 1023
 type recalculoDeContador struct {
 	totais, refs  []int64
 	naoInternadas uint64
-	deriv         *contador.Derivador
+	deriv         *counter.Derivador
 }
 
 // AuditaContadores recalcula cada contador por varredura e compara com o
@@ -320,7 +320,7 @@ type recalculoDeContador struct {
 // antigo é invalidado — pode ser este — e a resposta é ErrSnapshotExpirado,
 // nunca um relatório: uma divergência inventada por versão perdida mandaria o
 // operador reconstruir um contador certo.
-func (s *Store) AuditaContadores(ctx context.Context) ([]contador.Relatorio, error) {
+func (s *Store) AuditaContadores(ctx context.Context) ([]counter.Relatorio, error) {
 	if err := s.entra(); err != nil {
 		return nil, err
 	}
@@ -338,7 +338,7 @@ func (s *Store) AuditaContadores(ctx context.Context) ([]contador.Relatorio, err
 	if s.audAntesDaCopia != nil {
 		s.audAntesDaCopia()
 	}
-	congelados := make([]contador.Congelado, len(s.contadores))
+	congelados := make([]counter.Congelado, len(s.contadores))
 	for i, c := range s.contadores {
 		congelados[i] = c.Congela()
 	}
@@ -423,10 +423,10 @@ func (s *Store) AuditaContadores(ctx context.Context) ([]contador.Relatorio, err
 	}
 
 	duracao := time.Since(inicio)
-	out := make([]contador.Relatorio, 0, len(s.contadores))
+	out := make([]counter.Relatorio, 0, len(s.contadores))
 	for i, c := range s.contadores {
 		cg, rc := congelados[i], recalc[i]
-		r := contador.Relatorio{
+		r := counter.Relatorio{
 			Nome:           c.Def().Nome,
 			Grupos:         c.Estatisticas().Grupos,
 			NaoInternadas:  rc.naoInternadas,
@@ -444,9 +444,9 @@ func (s *Store) AuditaContadores(ctx context.Context) ([]contador.Relatorio, err
 				continue
 			}
 			r.Divergentes++
-			if len(r.Amostra) < contador.TetoDaAmostra {
+			if len(r.Amostra) < counter.TetoDaAmostra {
 				_, texto, _, _, _ := c.Grupo(g)
-				r.Amostra = append(r.Amostra, contador.Divergencia{
+				r.Amostra = append(r.Amostra, counter.Divergencia{
 					ID: g, Texto: string(texto),
 					Mantido: m, Recalculado: q,
 					RefsMantido: mr, RefsRecalculado: qr,
@@ -480,7 +480,7 @@ func (s *Store) AuditaContadores(ctx context.Context) ([]contador.Relatorio, err
 // deriva que a auditoria apontou — explícito, caro e raro —, e o custo é
 // dito no godoc e na documentação em vez de escondido atrás de um caminho
 // "sem lock" que deixaria o contador inconsistente enquanto o Put anda.
-func (s *Store) ReconstroiContadores(ctx context.Context) ([]contador.Reconstrucao, error) {
+func (s *Store) ReconstroiContadores(ctx context.Context) ([]counter.Reconstrucao, error) {
 	if err := s.entra(); err != nil {
 		return nil, err
 	}
@@ -496,7 +496,7 @@ func (s *Store) ReconstroiContadores(ctx context.Context) ([]contador.Reconstruc
 	if s.stickyErr != nil {
 		return nil, fmt.Errorf("%w: %w", ErrWriterFailed, s.stickyErr)
 	}
-	out := make([]contador.Reconstrucao, 0, len(s.contadores))
+	out := make([]counter.Reconstrucao, 0, len(s.contadores))
 	for _, c := range s.contadores {
 		inicio := time.Now()
 		if err := c.Zera(); err != nil {
@@ -506,7 +506,7 @@ func (s *Store) ReconstroiContadores(ctx context.Context) ([]contador.Reconstruc
 		if err != nil {
 			return nil, fmt.Errorf("storage: reconstruir o contador %q: %w", c.Def().Nome, err)
 		}
-		out = append(out, contador.Reconstrucao{
+		out = append(out, counter.Reconstrucao{
 			Nome: c.Def().Nome, Linhas: linhas, Grupos: c.Estatisticas().Grupos, Duracao: time.Since(inicio),
 		})
 		s.opts.Log.Info("contador.reconstruido",
@@ -622,7 +622,7 @@ func (s *Store) rodaAposentadoria(ctx context.Context) {
 }
 
 // descreveContadores rende as definições numa linha, para o log de subida.
-func descreveContadores(cs []*contador.Contador) string {
+func descreveContadores(cs []*counter.Contador) string {
 	var sb strings.Builder
 	for i, c := range cs {
 		if i > 0 {

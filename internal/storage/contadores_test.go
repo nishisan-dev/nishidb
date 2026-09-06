@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/storage/checkpoint"
-	"github.com/nishisan-dev/nishidb/internal/storage/contador"
+	"github.com/nishisan-dev/nishidb/internal/storage/counter"
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 	"github.com/nishisan-dev/nishidb/internal/storage/fielddict"
 	"github.com/nishisan-dev/nishidb/internal/types"
@@ -47,11 +47,11 @@ type contadorDeTeste struct {
 // callbackDeContadores é o CompilaContadores dos testes: resolve os nomes pelo
 // dicionário que o Open entrega — como o compilador de verdade faz — e devolve
 // as definições.
-func callbackDeContadores(cs ...contadorDeTeste) func(*fielddict.Dict) ([]contador.Definicao, error) {
-	return func(dict *fielddict.Dict) ([]contador.Definicao, error) {
-		out := make([]contador.Definicao, 0, len(cs))
+func callbackDeContadores(cs ...contadorDeTeste) func(*fielddict.Dict) ([]counter.Definicao, error) {
+	return func(dict *fielddict.Dict) ([]counter.Definicao, error) {
+		out := make([]counter.Definicao, 0, len(cs))
 		for _, c := range cs {
-			def := contador.Definicao{Nome: c.nome, MaxGroups: c.teto, RetainEmptyGroups: c.retencao}
+			def := counter.Definicao{Nome: c.nome, MaxGroups: c.teto, RetainEmptyGroups: c.retencao}
 			if def.MaxGroups == 0 {
 				def.MaxGroups = 100
 			}
@@ -74,7 +74,7 @@ func callbackDeContadores(cs ...contadorDeTeste) func(*fielddict.Dict) ([]contad
 					return nil, err
 				}
 				def.Where = "authenticated = true"
-				def.NovoAvaliador = func() contador.Avaliador { return &avaliadorPorID{campo: auth} }
+				def.NovoAvaliador = func() counter.Avaliador { return &avaliadorPorID{campo: auth} }
 			}
 			out = append(out, def)
 		}
@@ -106,7 +106,7 @@ func payloadServico(t *testing.T, s *Store, key, olt string, auth bool, escrita 
 	return payloadOrdenado(t, s, campos)
 }
 
-func contadorChamado(t *testing.T, s *Store, nome string) *contador.Contador {
+func contadorChamado(t *testing.T, s *Store, nome string) *counter.Contador {
 	t.Helper()
 	for _, c := range s.Contadores() {
 		if c.Def().Nome == nome {

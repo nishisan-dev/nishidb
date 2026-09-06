@@ -8,14 +8,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nishisan-dev/nishidb/internal/storage/contador"
+	"github.com/nishisan-dev/nishidb/internal/storage/counter"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
 func chaveDeServico(i int) string { return fmt.Sprintf("c-%04d", i) }
 
 // relatorioDe devolve o relatório do contador nomeado.
-func relatorioDe(t *testing.T, rs []contador.Relatorio, nome string) contador.Relatorio {
+func relatorioDe(t *testing.T, rs []counter.Relatorio, nome string) counter.Relatorio {
 	t.Helper()
 	for _, r := range rs {
 		if r.Nome == nome {
@@ -23,7 +23,7 @@ func relatorioDe(t *testing.T, rs []contador.Relatorio, nome string) contador.Re
 		}
 	}
 	t.Fatalf("relatório de %q não veio: %+v", nome, rs)
-	return contador.Relatorio{}
+	return counter.Relatorio{}
 }
 
 // TestAuditoriaSemDivergenciaComIngestaoConcorrente prova que o par (snapshot,
@@ -248,7 +248,7 @@ func TestAuditoriaDetectaDeriva(t *testing.T) {
 	if r.AgregadoLinhas != 10 || r.AgregadoTotal != 10 {
 		t.Fatalf("agregados = linhas %d total %d, quer 10 e 10", r.AgregadoLinhas, r.AgregadoTotal)
 	}
-	nomes := map[string]contador.Divergencia{}
+	nomes := map[string]counter.Divergencia{}
 	for _, d := range r.Amostra {
 		nomes[d.Texto] = d
 	}

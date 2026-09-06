@@ -2,7 +2,7 @@ package counters
 
 import (
 	"github.com/nishisan-dev/nishidb/internal/schema"
-	"github.com/nishisan-dev/nishidb/internal/storage/contador"
+	"github.com/nishisan-dev/nishidb/internal/storage/counter"
 	"github.com/nishisan-dev/nishidb/internal/storage/fielddict"
 )
 
@@ -31,8 +31,8 @@ func NovoCompilador(spec *schema.DatasetSpec) *Compilador {
 }
 
 // Callback devolve o CompilaContadores para as Options do storage.
-func (c *Compilador) Callback() func(*fielddict.Dict) ([]contador.Definicao, error) {
-	return func(dict *fielddict.Dict) ([]contador.Definicao, error) {
+func (c *Compilador) Callback() func(*fielddict.Dict) ([]counter.Definicao, error) {
+	return func(dict *fielddict.Dict) ([]counter.Definicao, error) {
 		compilado, err := c.spec.Compile(dict)
 		if err != nil {
 			return nil, err

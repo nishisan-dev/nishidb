@@ -9,7 +9,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/metrics"
 	"github.com/nishisan-dev/nishidb/internal/protocol"
 	"github.com/nishisan-dev/nishidb/internal/schema"
-	"github.com/nishisan-dev/nishidb/internal/storage/contador"
+	"github.com/nishisan-dev/nishidb/internal/storage/counter"
 )
 
 // handleMetadata serve o GET /v1/metadata do §67.
@@ -108,7 +108,7 @@ func colunaMeta(f *schema.CompiledField) protocol.ColunaMeta {
 // contadorStats traduz o retrato dos contadores para o wire. Lista vazia, e
 // não nil, no dataset sem contador: o JSON sai como `[]`, e bloco presente é o
 // que separa "sem contadores" de "servidor antigo".
-func contadorStats(ests []contador.Estatisticas) []protocol.ContadorStats {
+func contadorStats(ests []counter.Estatisticas) []protocol.ContadorStats {
 	out := make([]protocol.ContadorStats, 0, len(ests))
 	for _, e := range ests {
 		out = append(out, protocol.ContadorStats{

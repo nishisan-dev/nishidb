@@ -7,7 +7,7 @@ import (
 
 	nishiconfig "github.com/nishisan-dev/nishidb/internal/config"
 	"github.com/nishisan-dev/nishidb/internal/protocol"
-	"github.com/nishisan-dev/nishidb/internal/storage/contador"
+	"github.com/nishisan-dev/nishidb/internal/storage/counter"
 )
 
 // `nishidb counters` é a superfície operacional dos contadores mantidos na
@@ -178,7 +178,7 @@ type linhaDeContador struct {
 	auditDivergentes, auditUnix int64
 }
 
-func contadorDoStorage(e contador.Estatisticas) linhaDeContador {
+func contadorDoStorage(e counter.Estatisticas) linhaDeContador {
 	return linhaDeContador{nome: e.Nome, linhas: e.Linhas, total: e.Total,
 		grupos: e.Grupos, teto: e.Teto, aposentados: e.Aposentados,
 		recusados: e.Recusados, orfas: e.Orfas, bytes: e.Bytes,
@@ -236,7 +236,7 @@ type linhaDeAuditoria struct {
 	amostra              []amostraDeDivergencia
 }
 
-func auditoriaDoStorage(r contador.Relatorio) linhaDeAuditoria {
+func auditoriaDoStorage(r counter.Relatorio) linhaDeAuditoria {
 	l := linhaDeAuditoria{nome: r.Nome, grupos: r.Grupos, mantido: r.Mantido, recalculado: r.Recalculado,
 		divergentes: r.Divergentes, naoInternadas: r.NaoInternadas,
 		agregadosDivergentes: r.AgregadosDivergentes, linhasVarridas: r.LinhasVarridas,
@@ -282,7 +282,7 @@ func escreveAuditoria(w io.Writer, dataset string, linhas []linhaDeAuditoria) {
 			continue
 		}
 		titulo(w, "")
-		titulo(w, "divergências de %s (até %d):", l.nome, contador.TetoDaAmostra)
+		titulo(w, "divergências de %s (até %d):", l.nome, counter.TetoDaAmostra)
 		linha(w, "  GRUPO", "MANTIDO", "RECALCULADO", "REFS MANTIDO", "REFS RECALCULADO")
 		for _, d := range l.amostra {
 			linha(w, "  "+d.groupKey, strconv.FormatInt(d.mantido, 10), strconv.FormatInt(d.recalculado, 10),

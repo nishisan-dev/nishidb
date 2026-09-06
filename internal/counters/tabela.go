@@ -9,7 +9,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/query/meta"
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/storage"
-	"github.com/nishisan-dev/nishidb/internal/storage/contador"
+	"github.com/nishisan-dev/nishidb/internal/storage/counter"
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
@@ -49,7 +49,7 @@ type Leitor interface {
 // A tabela lê o PRESENTE: os totais não são versionados pelo journal do
 // snapshot. O que o snapshot congela é o CONJUNTO de grupos — um grupo que
 // nasce no meio da varredura não entra no universo dela.
-func Tabela(def contador.Definicao, l Leitor) (*schema.Compiled, query.Store, error) {
+func Tabela(def counter.Definicao, l Leitor) (*schema.Compiled, query.Store, error) {
 	if len(def.Colunas) == 0 || len(def.Colunas) > maxColunasDeAgrupamento {
 		return nil, nil, fmt.Errorf("contadores: %q tem %d colunas de agrupamento; a tabela aceita de 1 a %d", def.Nome, len(def.Colunas), maxColunasDeAgrupamento)
 	}

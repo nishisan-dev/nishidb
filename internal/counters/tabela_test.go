@@ -10,7 +10,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/query"
 	"github.com/nishisan-dev/nishidb/internal/query/executor"
 	"github.com/nishisan-dev/nishidb/internal/schema"
-	"github.com/nishisan-dev/nishidb/internal/storage/contador"
+	"github.com/nishisan-dev/nishidb/internal/storage/counter"
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 	"github.com/nishisan-dev/nishidb/internal/testutil/fakestorage"
 	"github.com/nishisan-dev/nishidb/internal/types"
@@ -39,26 +39,26 @@ func (a *avaliadorDeTeste) Avalia(payload []byte) (bool, error) {
 	}
 }
 
-func defPorPON(nome string) contador.Definicao {
-	return contador.Definicao{
+func defPorPON(nome string) counter.Definicao {
+	return counter.Definicao{
 		Nome:          nome,
 		Colunas:       []types.FieldID{fOlt, fSlot, fPort},
 		Nomes:         []string{"olt", "slot", "port"},
 		Tipos:         []types.FieldType{types.TypeString, types.TypeInt64, types.TypeInt64},
 		Where:         "authenticated = true",
-		NovoAvaliador: func() contador.Avaliador { return &avaliadorDeTeste{} },
+		NovoAvaliador: func() counter.Avaliador { return &avaliadorDeTeste{} },
 		MaxGroups:     1000,
 	}
 }
 
-func defPorOLT(nome string) contador.Definicao {
-	return contador.Definicao{
+func defPorOLT(nome string) counter.Definicao {
+	return counter.Definicao{
 		Nome:          nome,
 		Colunas:       []types.FieldID{fOlt},
 		Nomes:         []string{"olt"},
 		Tipos:         []types.FieldType{types.TypeString},
 		Where:         "authenticated = true",
-		NovoAvaliador: func() contador.Avaliador { return &avaliadorDeTeste{} },
+		NovoAvaliador: func() counter.Avaliador { return &avaliadorDeTeste{} },
 		MaxGroups:     1000,
 	}
 }
@@ -86,9 +86,9 @@ func payloadDeServico(t *testing.T, olt string, slot, port int64, auth bool) []b
 	return buf
 }
 
-func abreContador(t *testing.T, def contador.Definicao) *contador.Contador {
+func abreContador(t *testing.T, def counter.Definicao) *counter.Contador {
 	t.Helper()
-	c, err := contador.Abre(t.TempDir(), def, 1024, false)
+	c, err := counter.Abre(t.TempDir(), def, 1024, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func abreContador(t *testing.T, def contador.Definicao) *contador.Contador {
 
 // motorComContador registra um dataset de mentira (o alvo) e a tabela virtual
 // do contador sob ele.
-func motorComContador(t *testing.T, c *contador.Contador) *query.Engine {
+func motorComContador(t *testing.T, c *counter.Contador) *query.Engine {
 	t.Helper()
 	spec, err := schema.Parse([]byte("version: 1\nname: servicos\nmaterialization:\n  key:\n    field: id\nschema:\n  fields:\n    id:\n      type: string\n"), schema.DefaultsPadrao)
 	if err != nil {
@@ -174,7 +174,7 @@ func coluna(rows []linha, col string) string {
 
 // populaPON monta o cenário da proposta §5.3: PRCTA_G1M10 com três PONs (uma
 // zerada) e outra OLT.
-func populaPON(t *testing.T, c *contador.Contador) {
+func populaPON(t *testing.T, c *counter.Contador) {
 	t.Helper()
 	row := types.RowID(0)
 	put := func(olt string, slot, port int64, auth bool, n int) {

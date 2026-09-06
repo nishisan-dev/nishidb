@@ -8,7 +8,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/query"
 	"github.com/nishisan-dev/nishidb/internal/query/meta"
 	"github.com/nishisan-dev/nishidb/internal/schema"
-	"github.com/nishisan-dev/nishidb/internal/storage/contador"
+	"github.com/nishisan-dev/nishidb/internal/storage/counter"
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
@@ -30,8 +30,8 @@ const TabelaMetaCounters = "counters"
 // *contador.Contador, pelo mesmo motivo do Leitor — *contador.Contador a
 // satisfaz.
 type Contado interface {
-	Def() contador.Definicao
-	Estatisticas() contador.Estatisticas
+	Def() counter.Definicao
+	Estatisticas() counter.Estatisticas
 }
 
 // especDaTabelaMeta é a spec da tabela, no MESMO YAML de um dataset de
