@@ -33,6 +33,10 @@ type Mapping struct {
 	// ele só conhece os pacotes que estão sendo renomeados.
 	PackageDirs map[string]bool
 
+	// Declared é o ORÁCULO DA DECLARAÇÃO VIVA: nome → `<pacote>.<nome>` de
+	// onde ele ainda é declarado no módulo. Ver oracleBlocks.
+	Declared map[string]string
+
 	// types é pacote → tipo velho → tipo novo, e existe para o endereço novo
 	// de método e campo poder ser sintetizado com o receptor certo. Por isso
 	// o carregamento é em DUAS passadas: os tipos primeiro.
@@ -104,6 +108,7 @@ func NewMapping() *Mapping {
 		Subtests:    map[string]map[string]string{},
 		Protected:   map[string]bool{},
 		PackageDirs: map[string]bool{},
+		Declared:    map[string]string{},
 		types:       map[string]map[string]string{},
 	}
 }
@@ -222,6 +227,24 @@ func (m *Mapping) resolveLeaf(leaf string) (string, string, bool) {
 // entradas de endereço `T.M`/`T.F` contam. É o que a forma qualificada por
 // receptor usa — `snap.Epoca` fala de um campo, e uma função de topo homônima
 // não tem nada a dizer sobre ela.
+//
+// # O ORÁCULO DA DECLARAÇÃO VIVA VEM PRIMEIRO
+//
+// Antes de qualquer resolução por folha, o nome é confrontado com o que o
+// MÓDULO ainda declara (Mapping.Declared, lido da árvore por
+// collectDeclarations). Folha que ainda é declaração de alguém não é citação
+// pendurada: `Nome` segue sendo campo de `metrics.Amostra`, `BytesRetidos` de
+// `Store` e de `materializer.Decodificado`, `escreveAtomico` de
+// `index/segindex`. Reescrevê-las pelo nome novo de um homônimo de outro
+// pacote é criar a citação pendurada que esta passada existe para não deixar
+// para trás, e foi o que uma rodada de verdade fez seis vezes.
+//
+// A recusa sai no relatório como `pulado ... ainda declarado <pacote>.<nome>`,
+// nunca em silêncio: o oráculo é uma decisão, e decisão que não aparece no
+// relatório não pode ser revista.
+//
+// A forma QUALIFICADA não passa por aqui: `Manifest.Contadores` diz de quem
+// está falando, e o tipo do endereço é o desempate que a folha nua não tem.
 func (m *Mapping) resolveLeafIn(leaf string, membersOnly bool) (string, string, bool) {
 	var candidates []IdentEntry
 	for _, e := range m.index().byLeaf[leaf] {
@@ -232,6 +255,14 @@ func (m *Mapping) resolveLeafIn(leaf string, membersOnly bool) (string, string, 
 	}
 	if len(candidates) == 0 {
 		return "", "", false
+	}
+	// O oráculo vem DEPOIS de haver candidato, e não antes: a pergunta é "esta
+	// folha, que o lote renomeou, ainda é declaração de alguém?". Perguntando
+	// antes, toda palavra entre crases que por acaso é declaração do módulo
+	// (`build`, `jdbc`, `Store`, nome de teste) virava linha de relatório —
+	// 6570 delas numa rodada, afogando as decisões que importam.
+	if onde, vivo := m.Declared[leaf]; vivo {
+		return "", "ainda declarado " + onde, false
 	}
 	newLeaf := leafOf(candidates[0].New)
 	for _, c := range candidates[1:] {
@@ -678,6 +709,10 @@ func (m *Mapping) applyProseTokens(s string, rep *Report, base int, kind proseKi
 	if kind == proseOther {
 		return s
 	}
+	var fences [][2]int
+	if kind == proseMarkdown {
+		fences = goFenceRanges(s)
+	}
 	return replaceAll(reDottedToken, s, func(tok string, off int) string {
 		if strings.Contains(tok, ".") {
 			out, skipped := m.rewriteToken(tok)
@@ -693,7 +728,7 @@ func (m *Mapping) applyProseTokens(s string, rep *Report, base int, kind proseKi
 		if len(m.index().byLeaf[tok]) == 0 {
 			return tok
 		}
-		if !hasInnerUpper(tok) && !m.bareSingleCapAllowed(tok, s, off, kind, pkg) {
+		if !hasInnerUpper(tok) && !m.bareSingleCapAllowed(tok, s, off, kind, pkg, fences) {
 			return tok
 		}
 		if m.Protected[tok] {
@@ -713,15 +748,71 @@ func (m *Mapping) applyProseTokens(s string, rep *Report, base int, kind proseKi
 }
 
 // bareSingleCapAllowed é a licença do token com só a primeira maiúscula.
-func (m *Mapping) bareSingleCapAllowed(tok, s string, off int, kind proseKind, pkg string) bool {
+func (m *Mapping) bareSingleCapAllowed(tok, s string, off int, kind proseKind, pkg string, fences [][2]int) bool {
 	switch kind {
 	case proseGoComment:
 		return m.leafInPackage(tok, pkg)
 	case prosePUML:
 		return insideBox(s, off)
+	case proseMarkdown:
+		return insideRanges(fences, off)
 	default:
 		return false
 	}
+}
+
+// goFenceRanges devolve as faixas de bloco cercado ```go de um `.md`. Ali
+// dentro o texto é CÓDIGO Go — declaração de struct, assinatura,
+// trecho de plano —, e `Epoca` numa linha de campo é identificador pelo mesmo
+// motivo por que `Snapshot{Epoca}` é numa caixa de diagrama.
+//
+// O achado que fecha a regra: a limpeza do G1 deixou dois blocos ```go se
+// contradizendo — `type Presenca uint8` ao lado de `PresenceAbsent Presenca`
+// em planning/tipos-temporais-e-expire-after-write.md, e `Epoca`/`Instante` ao
+// lado de `LimitRowID` dentro de `type Snapshot struct` em
+// planning/snapshot-de-leitura-plano.md. Metade de cada bloco tinha sido
+// alcançada pela crase e pela maiúscula interna, e a outra metade não.
+//
+// Só ```go: um bloco ```yaml ou ```sql é dado e sintaxe de outra língua, e a
+// mesma palavra ali é chave de configuração.
+//
+// A varredura é UMA por arquivo, e não uma por token: quem pergunta compara
+// offsets contra as faixas. Contar crases desde o começo do arquivo a cada
+// palavra transformaria a passada num algoritmo quadrático sobre planos de
+// dois mil linhas.
+func goFenceRanges(s string) [][2]int {
+	var faixas [][2]int
+	abertura := -1
+	for i := 0; i < len(s); {
+		fim := strings.IndexByte(s[i:], '\n')
+		if fim < 0 {
+			fim = len(s) - i
+		}
+		linha := strings.TrimSpace(s[i : i+fim])
+		if strings.HasPrefix(linha, "```") {
+			if abertura >= 0 {
+				faixas = append(faixas, [2]int{abertura, i})
+				abertura = -1
+			} else if strings.TrimSpace(strings.TrimPrefix(linha, "```")) == "go" {
+				abertura = i + fim + 1
+			}
+		}
+		i += fim + 1
+	}
+	if abertura >= 0 {
+		faixas = append(faixas, [2]int{abertura, len(s)})
+	}
+	return faixas
+}
+
+// insideRanges diz se off cai em alguma das faixas.
+func insideRanges(faixas [][2]int, off int) bool {
+	for _, f := range faixas {
+		if off >= f[0] && off < f[1] {
+			return true
+		}
+	}
+	return false
 }
 
 // insideBox diz se a posição está dentro de `{...}` ou `(...)` na mesma linha,

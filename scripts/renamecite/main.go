@@ -42,6 +42,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"io/fs"
 	"os"
@@ -152,7 +155,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintf(stderr, "renamecite: %v\n", err)
 		return 2
 	}
-	if err := collectPackageDirs(*dir, m); err != nil {
+	if err := collectDeclarations(*dir, m); err != nil {
 		_, _ = fmt.Fprintf(stderr, "renamecite: %v\n", err)
 		return 1
 	}
@@ -296,30 +299,85 @@ func loadMapping(idents, paths, tests, logkeys, subtests, protect []string) (*Ma
 	return m, nil
 }
 
-// collectPackageDirs varre a árvore antes da reescrita e guarda o nome curto
-// de todo diretório que tem arquivo Go — isto é, de todo PACOTE do módulo.
+// collectDeclarations varre a árvore ANTES da reescrita e lê dela duas coisas
+// que o mapeamento não sabe dizer: o nome curto de todo PACOTE do módulo e o
+// nome de toda DECLARAÇÃO viva (topo, campo de struct e método).
 //
-// É o que dá à regra do receptor qualificado a informação que o mapeamento não
-// tem: `storage.Modo` é `pkg.Ident` de um pacote que o lote não está tocando, e
-// sem esta lista a regra o lia como RECEPTOR e trocava a folha por um `Modo`
-// homônimo de outro pacote — uma citação que passou a mentir por causa da
-// ferramenta que existe para impedir isso. Vale a varredura extra: ela custa um
-// stat por arquivo e fecha uma classe inteira de troca errada.
-func collectPackageDirs(dir string, m *Mapping) error {
+// # POR QUE A ÁRVORE, E NÃO O MAPEAMENTO
+//
+// O mapeamento sabe o que o LOTE renomeou; não sabe o que o resto do módulo
+// ainda declara. As duas leituras fecham classes distintas de troca errada, e
+// as duas foram achadas em rodada de verdade:
+//
+//   - o nome de pacote separa `pkg.Ident` de receptor: `storage.Modo` é o tipo
+//     de um pacote que o lote nem toca, e sem esta lista a regra lia `storage`
+//     como receptor e trocava a folha por um `Modo` homônimo de OUTRO pacote;
+//   - a declaração viva é o oráculo do "ainda existe": `Nome` continua sendo
+//     campo de `metrics.Amostra`, `BytesRetidos` de `Store` e de
+//     `materializer.Decodificado`, `escreveAtomico` de `index/segindex`.
+//     Trocar essas citações pelo nome novo de um HOMÔNIMO renomeado em outro
+//     pacote cria exatamente a citação pendurada que esta ferramenta existe
+//     para não deixar para trás — e antes deste oráculo a única defesa era
+//     despejar o token na lista de protegidos, que cega a ferramenta E o gate.
+//
+// `testdata` fica de fora: o go tool ignora essas árvores, então o que está
+// declarado lá não é declaração do módulo — contá-las bloquearia o rename de
+// um nome que só sobrevive num fixture.
+//
+// Arquivo que não parseia é pulado em silêncio, o mesmo tratamento da passada
+// Go: sintaxe é problema do compilador.
+func collectDeclarations(dir string, m *Mapping) error {
 	return filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			case ".git", ".claude", ".superpowers", "target", ".venv", "__pycache__", "node_modules":
+			case ".git", ".claude", ".superpowers", "target", ".venv", "__pycache__", "node_modules", "testdata":
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if filepath.Ext(p) == ".go" {
-			m.PackageDirs[filepath.Base(filepath.Dir(p))] = true
+		if filepath.Ext(p) != ".go" {
+			return nil
 		}
+		dirDoArquivo := filepath.Dir(p)
+		m.PackageDirs[filepath.Base(dirDoArquivo)] = true
+		fset := token.NewFileSet()
+		f, parseErr := parser.ParseFile(fset, p, nil, parser.SkipObjectResolution)
+		if parseErr != nil {
+			return nil
+		}
+		pkg := filepath.Base(dirDoArquivo)
+		if rel, relErr := filepath.Rel(dir, dirDoArquivo); relErr == nil {
+			pkg = filepath.ToSlash(rel)
+		}
+		declara := func(name string) {
+			if _, ja := m.Declared[name]; !ja {
+				m.Declared[name] = pkg + "." + name
+			}
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			switch x := n.(type) {
+			case *ast.FuncDecl:
+				declara(x.Name.Name)
+			case *ast.TypeSpec:
+				declara(x.Name.Name)
+			case *ast.ValueSpec:
+				for _, id := range x.Names {
+					declara(id.Name)
+				}
+			case *ast.Field:
+				// Campo de struct, método de interface e parâmetro nomeado: a
+				// pergunta é se o NOME ainda é declarado em algum lugar, e é um
+				// CAMPO vivo (`metrics.Amostra.Nome`) que faz a citação de
+				// `Nome` não ser pendurada.
+				for _, id := range x.Names {
+					declara(id.Name)
+				}
+			}
+			return true
+		})
 		return nil
 	})
 }

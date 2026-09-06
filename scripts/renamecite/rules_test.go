@@ -448,3 +448,49 @@ func TestStringLiteralWithoutCitationIsUntouched(t *testing.T) {
 		t.Fatalf("aplicou: %v", rep.Applied)
 	}
 }
+
+// TestGoFenceInMarkdownIsIdentifierContext: dentro de um bloco cercado ```go
+// o texto é CÓDIGO, e `Epoca` numa linha de campo é identificador pelo mesmo
+// motivo por que `Snapshot{Epoca}` é numa caixa de diagrama. Fora do bloco, a
+// mesma palavra começando frase é prosa PT-BR e não é tocada.
+//
+// O caso veio da limpeza do G1, que deixou dois blocos ```go se contradizendo:
+// `type Presenca uint8` ao lado de `PresenceAbsent Presenca`, e `Epoca` ao
+// lado de `LimitRowID` dentro de `type Snapshot struct`.
+func TestGoFenceInMarkdownIsIdentifierContext(t *testing.T) {
+	src := "Epoca é o relógio lógico.\n\n" +
+		"```go\n" +
+		"type Snapshot struct {\n" +
+		"\tEpoca int64\n" +
+		"}\n" +
+		"```\n\n" +
+		"E Epoca de novo na prosa.\n"
+	want := "Epoca é o relógio lógico.\n\n" +
+		"```go\n" +
+		"type Snapshot struct {\n" +
+		"\tEpoch int64\n" +
+		"}\n" +
+		"```\n\n" +
+		"E Epoca de novo na prosa.\n"
+	out, _ := RewriteText([]byte(src), ".md", citationMapping())
+	if string(out) != want {
+		t.Fatalf("saída:\n%s\nquer:\n%s", out, want)
+	}
+}
+
+// TestFenceOfAnotherLanguageIsNotIdentifierContext é a contraparte: um bloco
+// ```yaml é DADO — chave de configuração, corpus —, e a mesma palavra ali não
+// é citação de identificador.
+func TestFenceOfAnotherLanguageIsNotIdentifierContext(t *testing.T) {
+	src := "```yaml\n" +
+		"materialization:\n" +
+		"  Epoca: 3\n" +
+		"```\n"
+	out, rep := RewriteText([]byte(src), ".md", citationMapping())
+	if string(out) != src {
+		t.Fatalf("tocou o bloco yaml: %q", out)
+	}
+	if len(rep.Applied) != 0 {
+		t.Fatalf("aplicou: %v", rep.Applied)
+	}
+}

@@ -277,7 +277,10 @@ func TestPackageMapCompletesTheQualifiedCitation(t *testing.T) {
 // mapeamento sozinho não daria a resposta — ele só conhece os pacotes do lote.
 func TestDirectoryNameIsAPackageNotAReceiver(t *testing.T) {
 	dir := t.TempDir()
-	write(t, dir, "internal/storage/store.go", "package storage\n\ntype Modo uint8\n")
+	// O arquivo NÃO declara `Modo`: quem tem de segurar a troca aqui é a lista
+	// de pacotes, e não o oráculo da declaração viva. Com `type Modo uint8` no
+	// fixture os dois seguravam, e a mutação da lista de pacotes passava.
+	write(t, dir, "internal/storage/store.go", "package storage\n\ntype Options struct{}\n")
 	doc := write(t, dir, "docs/plano.md", "as Options ganham um campo do tipo `storage.Modo`\n")
 	idents := write(t, dir, "mapa/idents.tsv",
 		"pacote\tespecie\tendereco\tnovo\tmotivo\n"+
@@ -295,5 +298,88 @@ func TestDirectoryNameIsAPackageNotAReceiver(t *testing.T) {
 	}
 	if got, want := read(t, doc), "as Options ganham um campo do tipo `storage.Modo`\n"; got != want {
 		t.Fatalf("saída: %q, quer %q", got, want)
+	}
+}
+
+// TestLiveDeclarationBlocksTheLeafRewriteAndIsReported é o oráculo da
+// DECLARAÇÃO VIVA (R28): folha que ainda é declaração de alguém no módulo não
+// é citação pendurada, e trocá-la pelo nome novo de um homônimo renomeado em
+// OUTRO pacote cria a citação pendurada que esta ferramenta existe para não
+// deixar para trás.
+//
+// O par positivo/negativo é a mesma citação, a mesma linha de mapeamento e o
+// mesmo documento — muda só se a declaração existe na árvore. Antes deste
+// oráculo, a única defesa era despejar o token na lista de protegidos, que
+// cega a ferramenta E o gate.
+func TestLiveDeclarationBlocksTheLeafRewriteAndIsReported(t *testing.T) {
+	const doc = "o campo `Nome` do coletor\n"
+	const idents = "pacote\tespecie\tendereco\tnovo\tmotivo\n" +
+		"internal/storage/checkpoint\tfield\tContadorInfo.Nome\tName\t\n"
+
+	comDeclaracao := t.TempDir()
+	write(t, comDeclaracao, "internal/metrics/metrics.go", "package metrics\n\ntype Amostra struct {\n\tNome string\n}\n")
+	alvo := write(t, comDeclaracao, "docs/doc.md", doc)
+	relatorio := filepath.Join(comDeclaracao, "relatorio.txt")
+	var out, errb bytes.Buffer
+	code := run([]string{
+		"-dir", comDeclaracao,
+		"-idents", write(t, comDeclaracao, "mapa/idents.tsv", idents),
+		"-exclude", "mapa",
+		"-report", relatorio,
+	}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, errb.String())
+	}
+	if got := read(t, alvo); got != doc {
+		t.Errorf("com a declaração viva: %q, quer %q", got, doc)
+	}
+	if rel := read(t, relatorio); !strings.Contains(rel, "pulado\tdocs/doc.md:1\tNome\tainda declarado internal/metrics.Nome\n") {
+		t.Errorf("relatório sem a pula do oráculo:\n%s", rel)
+	}
+
+	// A árvore sem a declaração tem um fixture de testdata que declara o MESMO
+	// nome: o go tool ignora essas árvores, então o que está lá não é
+	// declaração do módulo e não pode bloquear o rename.
+	semDeclaracao := t.TempDir()
+	write(t, semDeclaracao, "scripts/ferramenta/testdata/modulo/a.go", "package a\n\ntype Amostra struct {\n\tNome string\n}\n")
+	alvo = write(t, semDeclaracao, "docs/doc.md", doc)
+	out.Reset()
+	errb.Reset()
+	code = run([]string{
+		"-dir", semDeclaracao,
+		"-idents", write(t, semDeclaracao, "mapa/idents.tsv", idents),
+		"-exclude", "mapa",
+		"-report", filepath.Join(semDeclaracao, "relatorio.txt"),
+	}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, errb.String())
+	}
+	if got, want := read(t, alvo), "o campo `Name` do coletor\n"; got != want {
+		t.Errorf("sem a declaração: %q, quer %q", got, want)
+	}
+}
+
+// TestQualifiedAddressRewritesDespiteALiveHomonym: o oráculo vale para a folha
+// NUA. `Manifest.Contadores` diz de quem está falando, e o tipo do endereço é o
+// desempate que a folha não tem — a citação qualificada continua sendo
+// reescrita mesmo com `Store.Contadores` vivo em outro pacote.
+func TestQualifiedAddressRewritesDespiteALiveHomonym(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "internal/storage/store.go", "package storage\n\ntype Store struct{}\n\nfunc (s *Store) Contadores() int { return 0 }\n")
+	alvo := write(t, dir, "docs/doc.md", "o `Manifest.Contadores` e o `Contadores` solto\n")
+	var out, errb bytes.Buffer
+	code := run([]string{
+		"-dir", dir,
+		"-idents", write(t, dir, "mapa/idents.tsv",
+			"pacote\tespecie\tendereco\tnovo\tmotivo\n"+
+				"internal/storage/checkpoint\tfield\tManifest.Contadores\tCounters\t\n"),
+		"-exclude", "mapa",
+		"-report", filepath.Join(dir, "relatorio.txt"),
+	}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, errb.String())
+	}
+	if got, want := read(t, alvo), "o `Manifest.Counters` e o `Contadores` solto\n"; got != want {
+		t.Fatalf("saída: %q\nquer:  %q", got, want)
 	}
 }
