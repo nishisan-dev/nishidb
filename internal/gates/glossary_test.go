@@ -1,4 +1,4 @@
-// Package gates — este arquivo confere o glossário PT-BR ↔ inglês.
+// Este arquivo confere o glossário PT-BR ↔ inglês.
 package gates_test
 
 import (
@@ -21,7 +21,7 @@ func TestGlossaryHasBothColumnsAndNoDuplicateTerm(t *testing.T) {
 	if err != nil {
 		t.Fatalf("o glossário não existe: %v", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	seen := map[string]int{}
 	lineNum, rowCount := 0, 0
