@@ -4,7 +4,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/nishisan-dev/nishidb/internal/predicado"
+	"github.com/nishisan-dev/nishidb/internal/predicate"
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
@@ -49,7 +49,7 @@ func (m *Materializer) duracaoDe(prevPayload []byte, entries []patchEntry) (time
 
 // preencheSlots resolve o valor pós-merge de cada slot: o patch tem prioridade
 // e o null explícito apaga, senão vale o estado anterior.
-func (m *Materializer) preencheSlots(slots []predicado.Slot, prevPayload []byte, entries []patchEntry) error {
+func (m *Materializer) preencheSlots(slots []predicate.Slot, prevPayload []byte, entries []patchEntry) error {
 	for i := range slots {
 		slots[i].Present = false
 	}
@@ -91,7 +91,7 @@ func (m *Materializer) preencheSlots(slots []predicado.Slot, prevPayload []byte,
 
 // slotDe acha o slot de um FieldID por busca binária. Os ids vêm ordenados do
 // binder, e a lista é curta — uma regra cita dois ou três campos.
-func slotDe(slots []predicado.Slot, id types.FieldID) (int, bool) {
+func slotDe(slots []predicate.Slot, id types.FieldID) (int, bool) {
 	i := sort.Search(len(slots), func(i int) bool { return slots[i].ID >= id })
 	if i < len(slots) && slots[i].ID == id {
 		return i, true

@@ -1,11 +1,11 @@
-package predicado_test
+package predicate_test
 
 import (
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/nishisan-dev/nishidb/internal/predicado"
+	"github.com/nishisan-dev/nishidb/internal/predicate"
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/testutil/fakestorage"
 	"github.com/nishisan-dev/nishidb/internal/types"
@@ -46,7 +46,7 @@ func compila(t *testing.T, yaml string) *schema.Compiled {
 
 func TestCompilaRegrasProduzProgramaEFundo(t *testing.T) {
 	c := compila(t, dsYAML)
-	regras, err := predicado.CompilaRegras(c.RegrasTTL, c)
+	regras, err := predicate.CompilaRegras(c.RegrasTTL, c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestCompilaRegrasProduzProgramaEFundo(t *testing.T) {
 	}
 
 	// A regra compilada avalia pelo MESMO código do WHERE.
-	slots := predicado.NovosSlots(regras[0].Slots.IDs)
+	slots := predicate.NovosSlots(regras[0].Slots.IDs)
 	slots[0].Val, slots[0].Present = types.Value{Type: types.TypeInt64, I64: 2}, true
 	if !regras[0].Prog.Avalia(slots, nil) {
 		t.Error("tipo = 2 não casou com a regra `tipo = 2`")
@@ -81,7 +81,7 @@ func TestCompilaRegrasRecusaWhenSobreCampoDeSistema(t *testing.T) {
 	for _, campo := range []string{schema.CampoInstanteDeEscrita, schema.CampoDePrazo} {
 		yaml := strings.Replace(dsYAML, `"tipo = 2"`, `"`+campo+` = 2"`, 1)
 		c := compila(t, yaml)
-		_, err := predicado.CompilaRegras(c.RegrasTTL, c)
+		_, err := predicate.CompilaRegras(c.RegrasTTL, c)
 		if err == nil {
 			t.Fatalf("condição sobre %q foi aceita", campo)
 		}
@@ -93,21 +93,21 @@ func TestCompilaRegrasRecusaWhenSobreCampoDeSistema(t *testing.T) {
 
 func TestCompilaRegrasRecusaWhenQueNaoCompila(t *testing.T) {
 	c := compila(t, strings.Replace(dsYAML, `"tipo = 2"`, `"tipo ==== 2"`, 1))
-	if _, err := predicado.CompilaRegras(c.RegrasTTL, c); err == nil {
+	if _, err := predicate.CompilaRegras(c.RegrasTTL, c); err == nil {
 		t.Fatal("condição com sintaxe inválida foi aceita")
 	}
 }
 
 func TestCompilaRegrasRecusaWhenSobreColunaInexistente(t *testing.T) {
 	c := compila(t, strings.Replace(dsYAML, `"tipo = 2"`, `"naoExiste = 2"`, 1))
-	if _, err := predicado.CompilaRegras(c.RegrasTTL, c); err == nil {
+	if _, err := predicate.CompilaRegras(c.RegrasTTL, c); err == nil {
 		t.Fatal("condição sobre coluna inexistente foi aceita")
 	}
 }
 
 func TestCompilaRegrasRecusaWhenComParametro(t *testing.T) {
 	c := compila(t, strings.Replace(dsYAML, `"tipo = 2"`, `"tipo = ?"`, 1))
-	_, err := predicado.CompilaRegras(c.RegrasTTL, c)
+	_, err := predicate.CompilaRegras(c.RegrasTTL, c)
 	if err == nil {
 		t.Fatal("parâmetro posicional foi aceito numa regra")
 	}

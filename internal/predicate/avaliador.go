@@ -1,4 +1,4 @@
-package predicado
+package predicate
 
 import (
 	"fmt"

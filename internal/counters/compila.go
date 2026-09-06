@@ -12,7 +12,7 @@ package counters
 import (
 	"fmt"
 
-	"github.com/nishisan-dev/nishidb/internal/predicado"
+	"github.com/nishisan-dev/nishidb/internal/predicate"
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/storage/contador"
 	"github.com/nishisan-dev/nishidb/internal/types"
@@ -53,7 +53,7 @@ func Compila(spec *schema.DatasetSpec, sc *schema.Compiled) ([]contador.Definica
 			def.Tipos = append(def.Tipos, f.Type)
 		}
 		if cs.Where != "" {
-			prog, slots, err := predicado.CompilaCondicao(rotulo+".where", cs.Where, sc)
+			prog, slots, err := predicate.CompilaCondicao(rotulo+".where", cs.Where, sc)
 			if err != nil {
 				return nil, err
 			}
@@ -64,7 +64,7 @@ func Compila(spec *schema.DatasetSpec, sc *schema.Compiled) ([]contador.Definica
 			}
 			ids := slots.IDs
 			def.NovoAvaliador = func() contador.Avaliador {
-				return predicado.NovoAvaliadorDePayload(prog, ids)
+				return predicate.NovoAvaliadorDePayload(prog, ids)
 			}
 		}
 		out = append(out, def)

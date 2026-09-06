@@ -1,11 +1,11 @@
 //go:build !race
 
-package predicado_test
+package predicate_test
 
 import (
 	"testing"
 
-	"github.com/nishisan-dev/nishidb/internal/predicado"
+	"github.com/nishisan-dev/nishidb/internal/predicate"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
@@ -15,11 +15,11 @@ import (
 // aparece com profile na mão, porque nenhum teste de valor a vê.
 func TestAvaliadorDePayloadNaoAloca(t *testing.T) {
 	c := compila(t, dsContadorYAML)
-	prog, slots, err := predicado.CompilaCondicao("x", "authenticated = true AND slot > 0", c)
+	prog, slots, err := predicate.CompilaCondicao("x", "authenticated = true AND slot > 0", c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	av := predicado.NovoAvaliadorDePayload(prog, slots.IDs)
+	av := predicate.NovoAvaliadorDePayload(prog, slots.IDs)
 	payload := payloadDe(t, c, map[string]types.Value{
 		"customerId":    {Type: types.TypeString, Bytes: []byte("A")},
 		"authenticated": {Type: types.TypeBool, I64: 1},

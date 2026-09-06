@@ -1,6 +1,6 @@
 //go:build race
 
-package predicado_test
+package predicate_test
 
 import "testing"
 

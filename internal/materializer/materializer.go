@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/jsonp"
-	"github.com/nishisan-dev/nishidb/internal/predicado"
+	"github.com/nishisan-dev/nishidb/internal/predicate"
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 	"github.com/nishisan-dev/nishidb/internal/types"
@@ -312,8 +312,8 @@ type Materializer struct {
 	// de cada uma — um por regra, alocados UMA vez aqui: a avaliação roda por
 	// evento e não pode alocar. fr é o leitor reusado da coleta do estado
 	// anterior, como todo buffer deste pacote.
-	regras []predicado.RegraCompilada
-	slots  [][]predicado.Slot
+	regras []predicate.RegraCompilada
+	slots  [][]predicate.Slot
 	fr     encoding.FieldReader
 
 	// reprocessosInuteis conta os reprocessos SEGUIDOS que não fizeram o
@@ -337,15 +337,15 @@ type Materializer struct {
 func New(c *schema.Compiled, s Store) (*Materializer, error) {
 	m := &Materializer{schema: c, store: s, agora: time.Now}
 	if len(c.RegrasTTL) > 0 {
-		regras, err := predicado.CompilaRegras(c.RegrasTTL, c)
+		regras, err := predicate.CompilaRegras(c.RegrasTTL, c)
 		if err != nil {
 			return nil, err
 		}
 		m.regras = regras
 		m.metrics.porRegra = make([]atomic.Int64, len(regras))
-		m.slots = make([][]predicado.Slot, len(regras))
+		m.slots = make([][]predicate.Slot, len(regras))
 		for i := range regras {
-			m.slots[i] = predicado.NovosSlots(regras[i].Slots.IDs)
+			m.slots[i] = predicate.NovosSlots(regras[i].Slots.IDs)
 		}
 	}
 	return m, nil

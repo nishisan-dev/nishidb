@@ -6,7 +6,7 @@
 // query têm de ser o MESMO código — duas implementações divergiriam em
 // silêncio nos casos de coerção, e a divergência apareceria como entidade
 // expirando por uma regra que a consulta diz não casar.
-package predicado
+package predicate
 
 import (
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"

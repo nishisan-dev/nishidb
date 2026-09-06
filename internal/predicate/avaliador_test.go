@@ -1,11 +1,11 @@
-package predicado_test
+package predicate_test
 
 import (
 	"errors"
 	"strings"
 	"testing"
 
-	"github.com/nishisan-dev/nishidb/internal/predicado"
+	"github.com/nishisan-dev/nishidb/internal/predicate"
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 	"github.com/nishisan-dev/nishidb/internal/types"
@@ -62,11 +62,11 @@ func payloadDe(t *testing.T, c *schema.Compiled, campos map[string]types.Value) 
 
 func TestAvaliadorDePayloadAvaliaOEstadoInteiro(t *testing.T) {
 	c := compila(t, dsContadorYAML)
-	prog, slots, err := predicado.CompilaCondicao("counters[0].where", "authenticated = true AND slot > 0", c)
+	prog, slots, err := predicate.CompilaCondicao("counters[0].where", "authenticated = true AND slot > 0", c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	av := predicado.NovoAvaliadorDePayload(prog, slots.IDs)
+	av := predicate.NovoAvaliadorDePayload(prog, slots.IDs)
 
 	autenticado := payloadDe(t, c, map[string]types.Value{
 		"customerId":    {Type: types.TypeString, Bytes: []byte("A")},
@@ -101,11 +101,11 @@ func TestAvaliadorDePayloadAvaliaOEstadoInteiro(t *testing.T) {
 
 func TestAvaliadorDePayloadPropagaCorrupcao(t *testing.T) {
 	c := compila(t, dsContadorYAML)
-	prog, slots, err := predicado.CompilaCondicao("x", "authenticated = true", c)
+	prog, slots, err := predicate.CompilaCondicao("x", "authenticated = true", c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	av := predicado.NovoAvaliadorDePayload(prog, slots.IDs)
+	av := predicate.NovoAvaliadorDePayload(prog, slots.IDs)
 	if _, err := av.Avalia([]byte{0x01}); !errors.Is(err, encoding.ErrCorrupt) {
 		t.Fatalf("payload rasgado tem de subir como corrupção, veio %v", err)
 	}
@@ -116,7 +116,7 @@ func TestCompilaCondicaoRecusaCampoDeSistema(t *testing.T) {
 	// campo de sistema; num dataset sem TTL a recusa seria "coluna não
 	// existe", que é outra classe.
 	c := compila(t, dsYAML)
-	_, _, err := predicado.CompilaCondicao("counters[0].where", "_writtenAt > 0", c)
+	_, _, err := predicate.CompilaCondicao("counters[0].where", "_writtenAt > 0", c)
 	if err == nil || !strings.Contains(err.Error(), "campo de sistema") {
 		t.Fatalf("condição sobre campo de sistema tem de ser recusada, veio %v", err)
 	}
@@ -127,10 +127,10 @@ func TestCompilaCondicaoRecusaCampoDeSistema(t *testing.T) {
 
 func TestCompilaCondicaoRecusaColunaInexistenteEParametro(t *testing.T) {
 	c := compila(t, dsContadorYAML)
-	if _, _, err := predicado.CompilaCondicao("x", "naoExiste = 1", c); err == nil {
+	if _, _, err := predicate.CompilaCondicao("x", "naoExiste = 1", c); err == nil {
 		t.Fatal("coluna inexistente tem de ser recusada")
 	}
-	if _, _, err := predicado.CompilaCondicao("x", "slot = ?", c); err == nil {
+	if _, _, err := predicate.CompilaCondicao("x", "slot = ?", c); err == nil {
 		t.Fatal("parâmetro posicional não faz sentido numa condição declarada")
 	}
 }
