@@ -162,7 +162,7 @@ func New(cfg Config) (*Generator, error) {
 		return nil, fmt.Errorf("radiusgen: Entities = %d, deve ser >= 0", cfg.Entities)
 	}
 	for _, r := range []struct {
-		nome string
+		name string
 		v    float64
 	}{
 		{"PatchRatio", cfg.PatchRatio},
@@ -171,11 +171,11 @@ func New(cfg Config) (*Generator, error) {
 		{"NullFieldRatio", cfg.NullFieldRatio},
 	} {
 		if r.v < 0 || r.v > 1 {
-			return nil, fmt.Errorf("radiusgen: %s = %g, deve estar em [0,1]", r.nome, r.v)
+			return nil, fmt.Errorf("radiusgen: %s = %g, deve estar em [0,1]", r.name, r.v)
 		}
 	}
 	for _, n := range []struct {
-		nome string
+		name string
 		v    int
 	}{
 		{"StatusValues", cfg.StatusValues},
@@ -183,7 +183,7 @@ func New(cfg Config) (*Generator, error) {
 		{"TerminateCauses", cfg.TerminateCauses},
 	} {
 		if n.v < 0 {
-			return nil, fmt.Errorf("radiusgen: %s = %d, deve ser >= 0", n.nome, n.v)
+			return nil, fmt.Errorf("radiusgen: %s = %d, deve ser >= 0", n.name, n.v)
 		}
 	}
 	if cfg.StatusValues > len(statusValues) {
@@ -201,11 +201,11 @@ func New(cfg Config) (*Generator, error) {
 		// O segundo stream do PCG deriva da seed por golden ratio: seeds
 		// vizinhas (1, 2, 3…) produzem sequências descorrelacionadas.
 		rng:  rand.New(rand.NewPCG(cfg.Seed, cfg.Seed^0x9e3779b97f4a7c15)),
-		seqs: sequenciasIniciais(cfg),
+		seqs: initialSequences(cfg),
 	}, nil
 }
 
-func sequenciasIniciais(cfg Config) []uint32 {
+func initialSequences(cfg Config) []uint32 {
 	s := make([]uint32, cfg.Entities)
 	if cfg.SeqOffset == 0 {
 		return s
@@ -304,10 +304,10 @@ func (g *Generator) Next(dst []byte) []byte {
 // subconjunto pedido).
 func (g *Generator) pickStatus(r int) string {
 	n := g.cfg.StatusValues
-	teto := statusWeights[n-1]
-	alvo := r * teto / 1000
+	ceiling := statusWeights[n-1]
+	target := r * ceiling / 1000
 	for i := 0; i < n; i++ {
-		if alvo < statusWeights[i] {
+		if target < statusWeights[i] {
 			return statusValues[i]
 		}
 	}
@@ -533,11 +533,11 @@ func appendIPv4(dst []byte, addr uint32) []byte {
 // acima do width saem inteiros, sem truncar — id truncado colidiria entre
 // entidades).
 func appendPadded(dst []byte, v int64, width int) []byte {
-	digitos := 1
+	digits := 1
 	for n := v; n >= 10; n /= 10 {
-		digitos++
+		digits++
 	}
-	for i := digitos; i < width; i++ {
+	for i := digits; i < width; i++ {
 		dst = append(dst, '0')
 	}
 	return strconv.AppendInt(dst, v, 10)
