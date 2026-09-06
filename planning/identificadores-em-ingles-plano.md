@@ -3168,6 +3168,15 @@ código).
 go run ./scripts/renamecite -dir . -paths planning/identificadores-em-ingles/mapeamento-arquivos.tsv -report $SCRATCH/renamecite-arquivos.txt
 ```
 
+Essa passada cobre citação por caminho completo, mas deixa para trás citação
+solta por nome-base em prosa e comentário ("ver `escritor.go`"). Uma segunda
+passada de `renamecite -paths`, agora com
+`planning/identificadores-em-ingles/mapeamento-arquivos-base.tsv` (nome-base
+velho → nome-base novo, injetiva nas duas colunas — verificado por
+`cut -f1 | sort | uniq -d` e `cut -f2 | sort | uniq -d` vazios), pega essas
+citações remanescentes. As renomeações de arquivo da Fase 5 (classes JDBC,
+módulos Python) precisam das mesmas duas passadas.
+
 Conferir em `git diff` que `internal/gates/citations_test.go` teve a lista
 `arquivosDoIndicePorSegmento` reescrita (`indices_window.go`,
 `indices_metrics.go`, `indices_rebuild.go`, `metrics_index.go`,
