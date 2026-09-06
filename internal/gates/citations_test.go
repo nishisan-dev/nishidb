@@ -21,16 +21,16 @@ var nomeDeTeste = regexp.MustCompile(`\bTest[A-Z][A-Za-z0-9_]*`)
 // arquivosDoIndicePorSegmento é o ESCOPO deste gate, e a lista é explícita de
 // propósito. Ver o godoc abaixo.
 var arquivosDoIndicePorSegmento = []string{
-	"internal/metrics/nomes.go",
-	"internal/protocol/documentos.go",
-	"internal/server/historico.go",
-	"internal/server/metricas_indice.go",
-	"internal/server/metricas_indice_test.go",
+	"internal/metrics/names.go",
+	"internal/protocol/documents.go",
+	"internal/server/history.go",
+	"internal/server/metrics_index.go",
+	"internal/server/metrics_index_test.go",
 	"internal/storage/indices_enum.go",
-	"internal/storage/indices_janela.go",
-	"internal/storage/indices_metricas.go",
-	"internal/storage/indices_metricas_test.go",
-	"internal/storage/indices_reconstroi.go",
+	"internal/storage/indices_window.go",
+	"internal/storage/indices_metrics.go",
+	"internal/storage/indices_metrics_test.go",
+	"internal/storage/indices_rebuild.go",
 	"internal/storage/store.go",
 }
 

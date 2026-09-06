@@ -32,7 +32,7 @@ const (
 	// é a mesma pergunta com a janela declarada no alerta, que é onde ela deve
 	// ser declarada. Mesma doutrina que já recusa timer em favor do scrape.
 	//
-	// A omissão é travada por teste; ver internal/server/metricas_dataset_test.go.
+	// A omissão é travada por teste; ver internal/server/metrics_dataset_test.go.
 	MetIngestEventsRate   = "nishidb_ingest_events_rate"
 	MetIngestStaleTotal   = "nishidb_ingest_stale_total"
 	MetIngestInvalidTotal = "nishidb_ingest_invalid_total"
@@ -227,7 +227,7 @@ const (
 	// de server.tls, publicado sempre que TLS está ligado; o operador deriva
 	// "quanto falta" no painel/alerta a partir dela, em vez de esta métrica
 	// tentar decidir o que é "pouco tempo" (isso já é o WARN estruturado
-	// tls.certificado_expirando, em internal/server/seguranca.go).
+	// tls.certificado_expirando, em internal/server/security.go).
 	MetTLSCertExpiryTimestamp = "nishidb_tls_cert_expiry_timestamp"
 
 	// MetQueryLongestRunningSeconds e MetQueryLongRejectedTotal são do sub-pool
@@ -615,7 +615,7 @@ const (
 	// LabelReason é o motivo de UMA falha de autenticação HTTP Basic
 	// (Task B3) — enum FECHADO {header, usuario, senha}, nunca o username:
 	// mesma doutrina de datasetDesconhecido
-	// (internal/server/metricas_query.go), que já recusa alimentar um label
+	// (internal/server/metrics_query.go), que já recusa alimentar um label
 	// com texto de entrada do cliente por ser cardinalidade sem teto. Chamado
 	// "reason" e não "motivo" (o nome que LabelMotivo já ocupa, com outro
 	// propósito) porque é a grafia que o plano da Fase 11 fixa para

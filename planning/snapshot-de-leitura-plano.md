@@ -165,7 +165,7 @@ em `Lookup`.
   **antes** do fetch, o que dá teto e piso uniformes a bitmap, hash, interseção
   e união de graça.
 - Acompanham a assinatura: `fakestorage` (senão os gates de alocação passam a
-  medir outra coisa) e `query/meta/fonte.go`, que ignora o snapshot com a razão
+  medir outra coisa) e `query/meta/source.go`, que ignora o snapshot com a razão
   no godoc — o `_meta` já é um retrato por construção.
 
 ## Etapas
@@ -241,9 +241,9 @@ paridade dos clients.
 
 ### E5 — Observabilidade e documentação
 
-`consultaEmVoo` ([emvoo.go:31](internal/server/emvoo.go:31)) ganha a época e o
+`consultaEmVoo` ([inflight.go:31](internal/server/inflight.go:31)) ganha a época e o
 instante do snapshot, alimentando `/v1/stats` e o `nishidb status`. Métricas
-novas, todas por constante em `internal/metrics/nomes.go`, nascendo com zero na
+novas, todas por constante em `internal/metrics/names.go`, nascendo com zero na
 subida: `nishidb_query_snapshot_oldest_seconds` (prevista no M6 e nunca criada),
 `nishidb_query_snapshot_bytes`, `nishidb_query_snapshot_expired_total`,
 `nishidb_compaction_segmentos_pinados`. Atualização de `docs/architecture.md`,

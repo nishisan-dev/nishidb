@@ -121,7 +121,7 @@ type Contador struct {
 	// por linha de _meta.counters — num contador por PON são milhares.
 	//
 	// Grupo aposentado não entra na conta e não precisa sair dela: a
-	// aposentadoria exige refs == 0 (aposentadoria.go), e totais[g] <= refs[g]
+	// aposentadoria exige refs == 0 (retirement.go), e totais[g] <= refs[g]
 	// por construção — cada linha contribui 1 para refs e 0 ou 1 para totais,
 	// decidido pelo MESMO bit da MESMA entrada. Logo a soma sobre todos os ids
 	// é igual à soma sobre os vivos, em qualquer instante.

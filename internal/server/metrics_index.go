@@ -14,7 +14,7 @@ import (
 // família não pertence ao bloco `history`. A janela efetiva, que é política do
 // histórico e não mecânica de índice, continua sendo publicada por
 // nishidb_history_index_window_seconds, no rótulo do dataset BASE; ver o
-// comentário da família em internal/metrics/nomes.go.
+// comentário da família em internal/metrics/names.go.
 //
 // TODAS AS COMBINAÇÕES DE RÓTULO SAEM SEMPRE, inclusive as zeradas, e isso é a
 // regra que a função existe para cumprir. Uma série que só aparece quando o

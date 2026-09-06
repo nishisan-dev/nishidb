@@ -17,7 +17,7 @@ import (
 
 // mustNew monta o materializer exigindo sucesso. O New falha quando uma regra
 // de TTL não compila, e nesses testes a regra é sempre válida — o caso de
-// recusa vive em prazo_test.go.
+// recusa vive em deadline_test.go.
 func mustNew(t *testing.T, c *schema.Compiled, st Store) *Materializer {
 	t.Helper()
 	m, err := New(c, st)

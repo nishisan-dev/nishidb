@@ -12,7 +12,7 @@ package storage
 // o replay convergirem para o mesmo estado, que é o que este teste passou a
 // afirmar.
 //
-// Este arquivo existe pela mesma razão do store_liveness_residuo_test.go: o
+// Este arquivo existe pela mesma razão do store_liveness_residue_test.go: o
 // fato precisa estar em TESTE, e não só em prosa, porque quem vai fechar a
 // conta é a compaction/rebuild do M4 e precisa encontrar a medida.
 //

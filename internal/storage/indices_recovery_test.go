@@ -99,7 +99,7 @@ func TestConstruirDoSegmentoDaOMesmoArquivoQueSelarOWIP(t *testing.T) {
 		t.Fatalf("o segmento %d rotacionou sem selar o índice: %v", alvo, err)
 	}
 	// Sem esta guarda o golden passaria comparando dois arquivos triviais. O
-	// secCount vem do offset 6 do header (formato.go), lido cru de propósito:
+	// secCount vem do offset 6 do header (format.go), lido cru de propósito:
 	// derivá-lo do pacote faria o teste medir o lugar errado no dia em que o
 	// layout mudasse, e continuar verde.
 	if sec := binary.LittleEndian.Uint16(porSelagem[6:8]); sec != 2 {

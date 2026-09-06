@@ -68,7 +68,7 @@ func (s *storeLento) leTudo() {
 // aoRevogar e a goroutine do writer.
 //
 // aoRevogar chama w.checkpoint DA GOROUTINE DO GROUP do franz-go
-// (consumidor.go), e ao mesmo tempo o writer pode estar em avanca ou em
+// (consumer.go), e ao mesmo tempo o writer pode estar em avanca ou em
 // talvezCheckpoint pelo despertador. Os três tocam offsets, desdeCP e
 // ultimoCP. O comentário do campo dizia "só a goroutine do writer o toca", e
 // isso nunca foi verdade: a barreira de fim de lote esvazia a FILA, não para

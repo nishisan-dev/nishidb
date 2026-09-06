@@ -31,7 +31,7 @@ import (
 // (internal/server/tls_test.go) — não dá para importar um helper de outro
 // pacote de teste (_test.go não gera símbolo exportável entre pacotes), e o
 // próprio internal/server já duplica esse gerador entre tls_test.go e
-// seguranca_test.go pela mesma razão.
+// security_test.go pela mesma razão.
 
 const (
 	varLeitorCLI = "NISHIDB_TESTE_CLI_LEITOR"
@@ -44,7 +44,7 @@ const (
 // configComTLSEAuth combina server.tls e server.authentication no MESMO
 // bloco — bind em 127.0.0.1 (loopback, então avaliaExposicaoEAutenticacao
 // sobe de qualquer jeito), com um usuário READ e um ADMIN, no molde de
-// blocoAutenticacao (internal/server/autenticacao_test.go).
+// blocoAutenticacao (internal/server/auth_test.go).
 const configComTLSEAuth = `version: 1
 storage:
   path: %s
@@ -168,7 +168,7 @@ func TestQueryRemotaComTLSEAuthFuncionaDePontaAPonta(t *testing.T) {
 
 // status/datasets/inspect também falam TLS+auth pelo MESMO ponto de costura
 // (buscaDocumento) — um representante basta para confirmar que a costura
-// vale para os três, já que a suíte de operacao_test.go trava o resto do
+// vale para os três, já que a suíte de operation_test.go trava o resto do
 // contrato deles sem credencial.
 func TestStatusRemotoComTLSEAuthFuncionaComPasswordFile(t *testing.T) {
 	a, certPath := novoAmbienteRemotoComTLSEAuth(t)
@@ -194,7 +194,7 @@ func TestStatusRemotoComTLSEAuthFuncionaComPasswordFile(t *testing.T) {
 
 // ADMIN via compact — o laço automático de compaction (default: ligado)
 // pode estar em voo, exatamente como TestCompactRemotoNaConfigDefaultEventualmenteSai0
-// (mutacao_test.go, Task B5) já documenta: tentativas imediatas até 200,
+// (mutation_test.go, Task B5) já documenta: tentativas imediatas até 200,
 // sem sleep de corrida.
 func TestCompactRemotoComUsuarioAdminFuncionaDePontaAPonta(t *testing.T) {
 	a, certPath := novoAmbienteRemotoComTLSEAuth(t)
@@ -235,7 +235,7 @@ func TestQueryRemotaComTLSSemCredencialSaiComExit1EMensagemDoServidor(t *testing
 
 // compact exige ADMIN; um usuário READ válido é AUTENTICADO mas não
 // AUTORIZADO — 403, exit 1, mensagem nomeando o papel (internal/server/
-// autenticacao.go:recusaAutorizacao).
+// auth.go:recusaAutorizacao).
 func TestCompactRemotoComUsuarioReadSaiComExit1EMencionaOPapel(t *testing.T) {
 	a, certPath := novoAmbienteRemotoComTLSEAuth(t)
 	sobeComEntrada(t, a, corpus(t, 5))
@@ -315,7 +315,7 @@ func TestComandoRemotoNaoSegueRedirectENuncaReenviaCredencial(t *testing.T) {
 // ---------------------------------------------------------------- proxy
 //
 // A prova estrutural — TestClienteRemotoTransportTemProxyNil, em
-// credencial_internal_test.go — confirma que o Transport do client
+// credential_internal_test.go — confirma que o Transport do client
 // compartilhado nasce com Proxy: nil, e uma mutação manual (comentar a
 // linha) confirmou que o teste CAPTURA a regressão.
 //

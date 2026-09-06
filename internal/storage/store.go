@@ -829,7 +829,7 @@ type Store struct {
 
 	// compAtiva, compBytesLidos e compBytesEscritos são os alimentadores das
 	// três séries de compaction do §92, que até o M4 eram nome sem número
-	// (nomes.go). São atômicos e não campos sob o wmu pelo motivo dos
+	// (names.go). São atômicos e não campos sob o wmu pelo motivo dos
 	// espelhos logo acima: quem os lê é o /metrics, no instante do scrape, e
 	// um scrape atrás do lock do writer apaga o painel exatamente sob a
 	// pressão que ele existe para mostrar.
@@ -1423,7 +1423,7 @@ func (s *Store) resolveCamposIndexados(ids []types.FieldID, nomesDeclarados []st
 // este binário não tem mais: indexes/bitmap/ e indexes/hash/.
 //
 // Eles não têm leitor nenhum a partir daqui, e por isso não podem ficar. O
-// IndexBytes soma o diretório indexes/ inteiro (retencao.go), então deixá-los
+// IndexBytes soma o diretório indexes/ inteiro (retention.go), então deixá-los
 // seria publicar disco ocupado que nada no produto explica — e num dataset
 // grande a soma dos dois é da ordem do próprio dado. É o mesmo modo de falha
 // que o .widx órfão de segmento aposentado já obrigou a fechar: métrica de

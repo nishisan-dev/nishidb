@@ -20,7 +20,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/protocol"
 )
 
-// Testes de caixa branca do middleware (autenticacao.go): tudo aqui exercita
+// Testes de caixa branca do middleware (auth.go): tudo aqui exercita
 // comAutenticacao/autentica diretamente, contra um *Servidor mínimo e um
 // *roteador com handlers de teste — sem passar por server.Novo, config.Config
 // nem por um listener de verdade. É deliberado: a lógica de autenticação e
@@ -30,7 +30,7 @@ import (
 //
 // Os testes que dependem do servidor de VERDADE (ordem contra a vaga do §80,
 // contra a leitura do corpo, scrape de métrica pela porta, log durante o Roda)
-// estão em autenticacao_test.go (package server_test).
+// estão em auth_test.go (package server_test).
 
 // senhaLeitorDeTeste e senhaChefeDeTeste são as senhas em texto claro por trás
 // dos dois digests de servidorDeTeste — nomeadas para os testes que precisam

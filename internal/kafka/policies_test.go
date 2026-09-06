@@ -72,7 +72,7 @@ func TestEventoAcimaDoTetoSegueAPolitica(t *testing.T) {
 }
 
 // Issue #15 / Task A5 — nishidb_ingest_invalid_total quebra por `motivo`
-// desde esta task (internal/kafka/metricas.go): antes dela, EVENT_TOO_LARGE
+// desde esta task (internal/kafka/metrics.go): antes dela, EVENT_TOO_LARGE
 // (a cauda de chave que estoura MaxKeySize, medida no piloto em 1099 e 1074
 // bytes — docs/piloto-events.md) ficava indistinguível de INVALID_JSON dentro
 // do mesmo total, e nem o painel nem um alerta tinham como nomear a causa.

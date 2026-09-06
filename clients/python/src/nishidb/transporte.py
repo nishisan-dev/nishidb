@@ -1,6 +1,6 @@
 """O ÚNICO ponto que monta uma requisição HTTP.
 
-As doutrinas abaixo são portadas literalmente de `internal/cli/credencial.go` e
+As doutrinas abaixo são portadas literalmente de `internal/cli/credential.go` e
 de `wire/Transporte.java`. Nenhuma delas é configurável, e isso é a decisão:
 uma opção "só para depurar" vira o modo permanente de operação em três semanas.
 
@@ -113,7 +113,7 @@ class Transporte:
         if self._autorizacao is not None:
             # PREEMPTIVO, sem desafio-resposta. Não é micro-otimização: toda
             # falha de autenticação paga 100 ms FIXOS no servidor
-            # (`internal/server/autenticacao.go:253`), e o ciclo 401→repete
+            # (`internal/server/auth.go:253`), e o ciclo 401→repete
             # pagaria esse atraso em TODA requisição.
             cabecalhos["Authorization"] = self._autorizacao
         if content_type is not None:
@@ -248,7 +248,7 @@ def _retry_after(resp: http.client.HTTPResponse) -> float | None:
 def _dica(status: int, corpo: bytes) -> str:
     """Troca "400 sem corpo legível" — mensagem sem pista nenhuma — pela causa
     mais provável: a porta fala TLS e faltou `tls=true` na string de conexão.
-    Espelha `dicaDeEsquema` de `internal/cli/query_remota.go:110`."""
+    Espelha `dicaDeEsquema` de `internal/cli/query_remote.go:110`."""
     if status == 400 and _HTTP_ONDE_ESPERAVA_HTTPS in corpo:
         return "\n  a porta parece falar TLS: tente nishidb://host:porta/dataset?tls=true"
     return ""

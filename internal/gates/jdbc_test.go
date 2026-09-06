@@ -170,7 +170,7 @@ func TestOTargetDoDriverEstaNoGitignore(t *testing.T) {
 // acusaria. O CI Go reprova antes de qualquer JVM subir.
 //
 // A lista não é escrita à mão em lugar nenhum: sai do go/ast sobre
-// internal/protocol/protocolo.go de um lado, e do texto de Codigos.java do
+// internal/protocol/protocol.go de um lado, e do texto de Codigos.java do
 // outro. É a mesma técnica de
 // TestVersaoDoGolangciLintNoWorkflowBateComAInstrucaoDoMakefile — comparar
 // duas EXTRAÇÕES, nunca uma extração contra um valor decorado, que envelhece
@@ -178,7 +178,7 @@ func TestOTargetDoDriverEstaNoGitignore(t *testing.T) {
 func TestTodoCodigoDoProtocoloTemSqlStateNoDriver(t *testing.T) {
 	codigos := codigosDoProtocolo(t)
 	if len(codigos) < 15 {
-		t.Fatalf("só %d códigos extraídos de protocolo.go: a extração quebrou, e um gate que "+
+		t.Fatalf("só %d códigos extraídos de protocol.go: a extração quebrou, e um gate que "+
 			"não acha nada passa sempre", len(codigos))
 	}
 
@@ -220,7 +220,7 @@ func leArquivo(t *testing.T, relativo string) string {
 // código.
 func codigosDoProtocolo(t *testing.T) map[string]string {
 	t.Helper()
-	caminho := filepath.Join(raizDoRepo, "internal/protocol/protocolo.go")
+	caminho := filepath.Join(raizDoRepo, "internal/protocol/protocol.go")
 	fset := token.NewFileSet()
 	arquivo, err := parser.ParseFile(fset, caminho, nil, 0)
 	if err != nil {

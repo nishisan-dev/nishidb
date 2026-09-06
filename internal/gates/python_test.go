@@ -101,11 +101,11 @@ func TestAVersaoDoClientPythonEhADoPyproject(t *testing.T) {
 // específica que diria o que fazer, e ninguém liga uma coisa à outra.
 //
 // A lista não é escrita à mão em lugar nenhum: sai do go/ast sobre
-// protocolo.go de um lado e do texto de erros.py do outro.
+// protocol.go de um lado e do texto de erros.py do outro.
 func TestTodoCodigoDoProtocoloTemExcecaoNoClientPython(t *testing.T) {
 	codigos := codigosDoProtocolo(t)
 	if len(codigos) < 15 {
-		t.Fatalf("só %d códigos extraídos de protocolo.go: a extração quebrou, e um gate que "+
+		t.Fatalf("só %d códigos extraídos de protocol.go: a extração quebrou, e um gate que "+
 			"não acha nada passa sempre", len(codigos))
 	}
 

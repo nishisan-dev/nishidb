@@ -34,7 +34,7 @@
 //     e a rota real (materializer sobre schema.Compile) nunca produz um ID
 //     que não venha do dicionário. Registrado na I1; a paridade de
 //     comportamento do que o executor observa está coberta por
-//     comportamento_test.go.
+//     behavior_test.go.
 //
 // Escala pequena por design (maps): é infraestrutura de teste, não engine.
 package fakestorage

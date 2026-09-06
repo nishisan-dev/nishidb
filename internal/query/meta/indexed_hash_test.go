@@ -36,7 +36,7 @@ schema:
 // TestIndexedRefleteACapacidadeDoMotor: a coluna `indexed` fala do MOTOR, e a
 // coluna `index` ao lado fala do que o YAML declara. Antes da D5, um campo
 // `index: hash` sobre um Store que só respondia HasBitmap saía com index=hash e
-// indexed=false — correto na época, mentira a partir do motor físico (fonte.go
+// indexed=false — correto na época, mentira a partir do motor físico (source.go
 // documenta o histórico).
 //
 // Chamava-se TestIndexedSomaAsDuasCapacidadesDeMotor e montava um cenário

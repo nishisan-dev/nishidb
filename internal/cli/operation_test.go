@@ -1213,7 +1213,7 @@ func TestOsComandosDeLeituraExigemOServidor(t *testing.T) {
 // Revisão da B6, Important 2: a paridade byte a byte "sem --user, sem
 // Authorization" era só argumento estrutural (credencialRemota{} vazio) e
 // unit de caixa branca (TestAplicaCredencialSoDefineBasicComUsuario,
-// credencial_internal_test.go). Aqui o oráculo é o HEADER que chega pela
+// credential_internal_test.go). Aqui o oráculo é o HEADER que chega pela
 // rede de verdade: um servidor de mentira captura o request de um `status
 // --server` SEM nenhuma credencial e afirma Authorization == "".
 func TestStatusSemUserNuncaEnviaHeaderAuthorization(t *testing.T) {

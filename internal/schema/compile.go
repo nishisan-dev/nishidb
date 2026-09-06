@@ -756,7 +756,7 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 }
 
 // indexadoNoYAML traduz o vocabulário do YAML já validado (validaIndice, em
-// congelada.go, só deixa passar "" ou "true" — chamar isto sobre um valor cru
+// frozen.go, só deixa passar "" ou "true" — chamar isto sobre um valor cru
 // não validado seria bug de quem compila sem ter passado pelo validate).
 // Vive numa função só porque o campo de topo e a coluna derivada leem a MESMA
 // chave, e duas traduções divergiriam.

@@ -194,7 +194,7 @@ func TestStatsConcordaComOMetrics(t *testing.T) {
 }
 
 // As cinco séries de consulta do §92 existem, com o tipo certo e alimentadas.
-// Antes desta fase elas eram nome em nomes.go e nada mais.
+// Antes desta fase elas eram nome em names.go e nada mais.
 func TestAsCincoSeriesDeQueryDoSpec92SaoAlimentadas(t *testing.T) {
 	srv := servidorComDados(t, 5, blocoPadrao)
 

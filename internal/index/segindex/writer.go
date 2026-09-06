@@ -76,7 +76,7 @@ func (e *Escritor) Escreve(caminho string, seg uint32) error {
 	// que diz ao leitor quantas entradas de 24 bytes da tabela de seções
 	// existem, e uma segunda contagem independente — por mais que hoje dê o
 	// mesmo número — seria uma segunda fonte de verdade para exatamente o
-	// dado que não pode divergir (a mesma razão de formato.go não ter
+	// dado que não pode divergir (a mesma razão de format.go não ter
 	// minRowID: aqui a consequência de divergir é o leitor caminhar para
 	// dentro dos bytes do diretório, não só uma inconsistência cosmética).
 	corpo, secCount := e.montaCorpo(base, largura)

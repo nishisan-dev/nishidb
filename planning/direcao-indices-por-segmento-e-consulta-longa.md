@@ -53,7 +53,7 @@ Isso não estabiliza: **piora a cada linha inserida**.
    `Set` já segura `ix.mu.RLock()` — o lock interno é desperdício puro em
    qualquer sondagem.
 2. **A purga de segmento não toca o índice.** Verificado em
-   `internal/storage/retencao.go`: nada remove as postings de um segmento
+   `internal/storage/retention.go`: nada remove as postings de um segmento
    aposentado, e o histórico não tem compaction (é append-only). **O índice
    cresce para sempre**, mesmo com a retenção funcionando e o dataset estável
    em 250 GiB. Em regime estacionário ele é o único componente que não para de
@@ -141,7 +141,7 @@ history:
 
 Decisão deliberada, e ela contraria a formulação inicial da ideia. O produto já
 decidiu isso para a consulta, com razão escrita em
-[orcamento.go](../internal/query/budget/orcamento.go):
+[budget.go](../internal/query/budget/budget.go):
 
 > *"É por processo, e não por dataset, pela mesma razão que o §82 dá ao
 > `maxConcurrent`: todos os datasets de uma instância dividem o mesmo orçamento

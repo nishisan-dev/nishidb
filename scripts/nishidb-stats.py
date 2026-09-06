@@ -321,7 +321,7 @@ def desenha(base: str, saude: dict, stats: dict, m: Amostra, ant: Amostra | None
             print(f"  {'  aplicados':<22} {milhar(aplicados):>16}"
                   f"   " + c("33", f"({milhar(ev - aplicados)} não viraram estado)"))
         # `nishidb_ingest_invalid_total` quebra por `motivo` desde a Task A5
-        # (internal/kafka/metricas.go): cada categoria §101 de evento ruim
+        # (internal/kafka/metrics.go): cada categoria §101 de evento ruim
         # tem série própria, e EVENT_TOO_LARGE — a cauda de chave que estoura
         # MaxKeySize, a própria razão da issue #15 — passa a aparecer NOMEADA
         # em vez de escondida dentro de um total misturado com INVALID_JSON e

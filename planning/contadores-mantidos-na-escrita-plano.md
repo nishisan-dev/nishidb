@@ -92,7 +92,7 @@ por mensagem) foi refutada na proposta porque Kafka entrega pelo menos uma vez e
   contador entra ao lado da agenda (7b), depois do commit, e o CLAUDE.md é
   corrigido na tarefa G1.
 - **Confirmado: a lápide passa pelo `applyRecord` com payload reduzido** (só
-  `_writtenAt`, [expiracao.go:171-182](internal/storage/expiracao.go:171)); o
+  `_writtenAt`, [expiry.go:171-182](internal/storage/expiry.go:171)); o
   copy-forward da compaction e a expiração oportunista também passam por ele
   ([compaction.go:217-231](internal/storage/compaction.go:217)). Os três caminhos
   de saída de cena (sobrescrita, expiração, compaction) convergem no mesmo ponto.
@@ -171,7 +171,7 @@ por mensagem) foi refutada na proposta porque Kafka entrega pelo menos uma vez e
 - Ordem de locks `recPassadaMu → retPassadaMu → vida → wmu → aposMu`; `snapMu`,
   `selMu` e o lock do dicionário de grupos são FOLHA. Nada tomado sob folha toma
   `wmu`.
-- Métricas: nomes só por constantes de `internal/metrics/nomes.go`; `Familia` e
+- Métricas: nomes só por constantes de `internal/metrics/names.go`; `Familia` e
   `Nome` por constante; label nunca vem de entrada do cliente; série que alarma
   nasce com zero.
 - Gates que continuam verdes sem edição: `TestCitacoesDeSecaoResolvem`,
@@ -193,23 +193,23 @@ por mensagem) foi refutada na proposta porque Kafka entrega pelo menos uma vez e
 | `internal/storage/mmap/region.go` | `AtomicLoad32`/`AtomicStore32` (único pacote com unsafe) |
 | `internal/storage/rowindex/rowindex.go` | `denseFile` com tamanho de entrada parametrizado; `Denso32` exportado |
 | `internal/index/valuekey/valuekey.go` | `AppendComposta`/`DecodeComposta` + golden |
-| `internal/predicate/avaliador.go` (novo) | `AvaliadorDePayload`: programa + slots + reader, `Avalia(payload)` |
-| `internal/predicate/regra.go` | `CompilaCondicao` extraída de `CompilaRegras` |
-| `internal/storage/counter/` (novo) | `dicionario.go`, `contador.go`, `chavetexto.go`, `auditoria.go`, `aposentadoria.go` + testes |
+| `internal/predicate/evaluator.go` (novo) | `AvaliadorDePayload`: programa + slots + reader, `Avalia(payload)` |
+| `internal/predicate/rule.go` | `CompilaCondicao` extraída de `CompilaRegras` |
+| `internal/storage/counter/` (novo) | `dict.go`, `counter.go`, `textkey.go`, `audit.go`, `retirement.go` + testes |
 | `internal/storage/checkpoint/manifest.go` | tag 0x8005, `ContadorInfo`, `Manifest.Contadores` |
 | `internal/storage/store.go` | `Options.CompilaContadores`, abertura, passo 7c do `applyRecord`, Close |
-| `internal/storage/contadores.go` (novo) | `adotaOuConstroiContadores`, reconstrução, auditoria sob snapshot, laço de aposentadoria, estatísticas |
+| `internal/storage/counters.go` (novo) | `adotaOuConstroiContadores`, reconstrução, auditoria sob snapshot, laço de aposentadoria, estatísticas |
 | `internal/storage/store_checkpoint.go` | `traceStep("msyncContadores")` |
-| `internal/schema/contador.go` (novo) | `ContadorSpec`, parse do bloco `counters:`, validação |
+| `internal/schema/counter.go` (novo) | `ContadorSpec`, parse do bloco `counters:`, validação |
 | `internal/schema/spec.go` | `rawSpec.Counters`, `DatasetSpec.Contadores`, mensagem do prefixo `_` |
-| `internal/counters/` (novo) | `compila.go` (spec → `contador.Definicao`), `tabela.go` (schema sintético + fonte virtual), `abertura.go` (callback) |
+| `internal/counters/` (novo) | `compile.go` (spec → `contador.Definicao`), `table.go` (schema sintético + fonte virtual), `open.go` (callback) |
 | `internal/query/engine.go` | `RegistraVirtual` + roteamento por namespace |
 | `internal/query/meta/meta.go` | mensagem de namespace desconhecido lista os existentes |
-| `internal/server/server.go`, `historico.go` | wiring do callback e do registro das tabelas |
-| `internal/server/contadores.go` (novo) | rotas `/v1/counters/audit` e `/v1/counters/rebuild` |
-| `internal/server/metricas_dataset.go`, `documentos.go` | séries e `/v1/stats` da mesma estrutura |
-| `internal/metrics/nomes.go` | constantes novas + `LabelCounter` |
-| `internal/protocol/contadores.go` (novo), `documentos.go` | tipos de wire |
+| `internal/server/server.go`, `history.go` | wiring do callback e do registro das tabelas |
+| `internal/server/counters.go` (novo) | rotas `/v1/counters/audit` e `/v1/counters/rebuild` |
+| `internal/server/metrics_dataset.go`, `documents.go` | séries e `/v1/stats` da mesma estrutura |
+| `internal/metrics/names.go` | constantes novas + `LabelCounter` |
+| `internal/protocol/counters.go` (novo), `documents.go` | tipos de wire |
 | `internal/cli/counters.go` (novo), `cli.go` | subcomando, uso, exit codes |
 | `README.md`, `docs/architecture.md`, `docs/diagrams/contadores_flow.puml`, `docs/debitos.md`, `docs/aceite-contadores.md`, `CLAUDE.md`, `.gitignore` | documentação e aceite |
 
@@ -222,8 +222,8 @@ por mensagem) foi refutada na proposta porque Kafka entrega pelo menos uma vez e
 **Arquivos:**
 - Modificar: `internal/storage/mmap/region.go` (ao lado de `AtomicLoad64`, linha 269)
 - Modificar: `internal/storage/rowindex/rowindex.go:15-118`
-- Criar: `internal/storage/rowindex/denso32.go`
-- Testar: `internal/storage/mmap/region_test.go`, `internal/storage/rowindex/denso32_test.go`
+- Criar: `internal/storage/rowindex/dense32.go`
+- Testar: `internal/storage/mmap/region_test.go`, `internal/storage/rowindex/dense32_test.go`
 
 **Interfaces produzidas:**
 ```go
@@ -291,7 +291,7 @@ func TestDenso32RecusaArquivoDeOitoBytes(t *testing.T) {
 }
 ```
 
-- [ ] **Passo 7: vermelho → implementar `denso32.go` → verde.** `Zera` usa `WithBytes` em blocos, sem alocar o arquivo inteiro.
+- [ ] **Passo 7: vermelho → implementar `dense32.go` → verde.** `Zera` usa `WithBytes` em blocos, sem alocar o arquivo inteiro.
 
 - [ ] **Passo 8: gate de alocação**: `TestDenso32NaoAlocaNoCaminhoQuente` (`//go:build !race`, `testing.AllocsPerRun(1000, …)` sobre `Get`+`Set` em entrada já coberta; teto 0). Contraparte `_race.go` com `t.Skip` explícito.
 
@@ -334,8 +334,8 @@ func DecodeComposta(chave []byte, dst []types.Value) ([]types.Value, error)
 ### Tarefa A3: `AvaliadorDePayload` no `predicado`
 
 **Arquivos:**
-- Criar: `internal/predicate/avaliador.go`, `avaliador_test.go`
-- Modificar: `internal/predicate/regra.go:77-120` (extrair `CompilaCondicao`)
+- Criar: `internal/predicate/evaluator.go`, `evaluator_test.go`
+- Modificar: `internal/predicate/rule.go:77-120` (extrair `CompilaCondicao`)
 
 **Interfaces produzidas:**
 ```go
@@ -366,7 +366,7 @@ func (a *AvaliadorDePayload) Avalia(payload []byte) (bool, error)
 ### Tarefa B1: dicionário de grupos
 
 **Arquivos:**
-- Criar: `internal/storage/counter/dicionario.go`, `dicionario_test.go`
+- Criar: `internal/storage/counter/dict.go`, `dict_test.go`
 
 **Formato de `grupos.dict`** (cópia deliberada do `fielddict` v2): header 8 bytes
 (`magic "NDBG"`, version 1); entradas `[u16 len][len bytes chave composta][crc32c]`
@@ -414,7 +414,7 @@ por grupo na internação e guardado ao lado da chave (tarefa B2 define
 ### Tarefa B2: o `Contador` — vetor, dobra, transição, texto da chave
 
 **Arquivos:**
-- Criar: `internal/storage/counter/contador.go`, `chavetexto.go`, `contador_test.go`, `chavetexto_test.go`, `alloc_gate_test.go` (+ `_race`)
+- Criar: `internal/storage/counter/counter.go`, `textkey.go`, `counter_test.go`, `textkey_test.go`, `alloc_gate_test.go` (+ `_race`)
 
 **Interfaces produzidas:**
 ```go
@@ -523,7 +523,7 @@ c.over[rowID] = nova // Publish no overlay; o mmap só muda no ApplyOverlay
 return nil
 ```
 
-**`chavetexto.go`:** `func TextoDaChave(dst []byte, chave []byte, scratch []types.Value) ([]byte, []types.Value, error)` — renderiza `groupKey` como decidido acima. Golden: `TestTextoDaChaveEhGolden` com `A|1|9`, `a\|b|true`, `x\\y`.
+**`textkey.go`:** `func TextoDaChave(dst []byte, chave []byte, scratch []types.Value) ([]byte, []types.Value, error)` — renderiza `groupKey` como decidido acima. Golden: `TestTextoDaChaveEhGolden` com `A|1|9`, `a\|b|true`, `x\\y`.
 
 - [ ] **Passo 1: testes de transição** (payloads montados com `encoding.AppendField`; o "schema" é só a lista de FieldIDs, sem YAML):
   - `TestTransicaoNovaLinhaContaNoGrupo`: refs 1, total 1 (cond true) / total 0 (cond false).
@@ -585,7 +585,7 @@ todas as críticas).
 **Arquivos:**
 - Modificar: `internal/storage/store.go` (`Options` ~113-195; `Store` struct; `Open` 1094-1281; `applyRecord` 1907-1931; `Close` ~2510-2560)
 - Modificar: `internal/storage/store_checkpoint.go:125-135` e a montagem do `Manifest` (~231)
-- Criar: `internal/storage/contadores.go`, `contadores_test.go`
+- Criar: `internal/storage/counters.go`, `counters_test.go`
 
 **Interfaces produzidas:**
 ```go
@@ -604,7 +604,7 @@ func (s *Store) Contadores() []*contador.Contador
 func (s *Store) EstatisticasDeContadores() []contador.Estatisticas
 ```
 
-- [ ] **Passo 1: testes de integração no Store** (`contadores_test.go`, usando o helper de abertura de dataset de teste do pacote e um `Definicao` montado à mão com FieldIDs do dicionário):
+- [ ] **Passo 1: testes de integração no Store** (`counters_test.go`, usando o helper de abertura de dataset de teste do pacote e um `Definicao` montado à mão com FieldIDs do dicionário):
   - `TestContadorAcompanhaPutLapideECopyForward`: Put A(cond) → total 1; Put A(¬cond) → 0; Put A(cond) → 1; `Expira` → 0 e refs 0; `Compact` (copy-forward) → inalterado.
   - `TestContadorSobreviveAoCheckpointEReabertura`: 100 linhas, Checkpoint, Close, Open → totais iguais (adoção, sem log de construção).
   - `TestContadorRecuperaDoTailSemCheckpoint`: 100 linhas, Checkpoint, +50 escritas (algumas mudando de grupo, algumas lápides), fecha SEM checkpoint (simula crash via o seam que o pacote já usa nos testes de recovery), reabre → totais iguais aos de uma instância de referência que nunca caiu. **Duas variantes, e as duas têm de convergir**: (a) crash sem nenhum checkpoint depois das 50 escritas — o mmap do vetor está em S, o replay aplica tudo; (b) checkpoint INTERROMPIDO depois de `applyOverlayContadores`+`msyncContadores` e antes do manifest (seam `writeTrace`/`traceStep`) — o mmap está à frente de S com records duráveis, o replay reaplica e vê `antiga == nova`. É a prova do argumento "dobra antes do replay".
@@ -622,7 +622,7 @@ func (s *Store) EstatisticasDeContadores() []contador.Estatisticas
   2. **Decidir a reconstrução ANTES da recovery**, por contador: `recria = m == nil || seção ausente || colunas/where diferem de m.Contadores[nome]`; `contador.Abre(dir, def, minRows, recria)`. Se `!recria` e (`Nasceu()` com `m.NextRowID > 0` ou `!Cobre(m.NextRowID)`) ⇒ marcar `recria` também (o vetor não descreve as linhas) — nesse caso o `Abre` já aconteceu; chamar `Zera()`. Guardar `s.contadores` e `s.contadoresARecriar`. Contadores no manifest que não estão nas defs ⇒ `os.RemoveAll` do diretório + log `contador.removido`.
   3. **Dobra** (`c.Dobra()`, pelo tamanho do arquivo) para cada contador SEM reconstrução pendente.
   4. o ramo de recovery roda como hoje — o replay passa pelo passo 7c (os dois modos).
-  5. logo depois do ramo e ANTES de `abreIndicesDeSegmento`: para cada contador em `contadoresARecriar`, `s.reconstroiContador(c)` — varredura de `[0, nextRowID)` por `locs.Get`, pula ausente e lápide, `segR.ReadRecord`, `Transiciona` (idempotente com o que o replay já aplicou: o delta é contra a entrada corrente); log `contador.construido` (motivo, linhas, grupos, duração), molde de `agenda.go:62-87`.
+  5. logo depois do ramo e ANTES de `abreIndicesDeSegmento`: para cada contador em `contadoresARecriar`, `s.reconstroiContador(c)` — varredura de `[0, nextRowID)` por `locs.Get`, pula ausente e lápide, `segR.ReadRecord`, `Transiciona` (idempotente com o que o replay já aplicou: o delta é contra a entrada corrente); log `contador.construido` (motivo, linhas, grupos, duração), molde de `schedule.go:62-87`.
   6. `abreIndicesDeSegmento`, `adotaOuConstroiAgenda`, `carregaOffsets`, `Checkpoint()` — como hoje; o checkpoint grava a seção nova e aplica o overlay.
 
 - [ ] **Passo 3: `applyRecord` passo 7c** — logo depois do bloco da agenda (1919-1923):
@@ -659,7 +659,7 @@ func (s *Store) EstatisticasDeContadores() []contador.Estatisticas
 ### Tarefa C3: auditoria sob snapshot e reconstrução em operação
 
 **Arquivos:**
-- Criar: `internal/storage/counter/auditoria.go` (tipos + comparação), `internal/storage/contadores.go` (`AuditaContadores`, `ReconstroiContadores`), testes
+- Criar: `internal/storage/counter/audit.go` (tipos + comparação), `internal/storage/counters.go` (`AuditaContadores`, `ReconstroiContadores`), testes
 
 **Interfaces produzidas:**
 ```go
@@ -708,7 +708,7 @@ pela varredura inteira.
 ### Tarefa C4: ciclo de vida — aposentadoria de grupos vazios
 
 **Arquivos:**
-- Criar: `internal/storage/counter/aposentadoria.go`, testes; laço em `internal/storage/contadores.go`
+- Criar: `internal/storage/counter/retirement.go`, testes; laço em `internal/storage/counters.go`
 
 **Interfaces produzidas:**
 ```go
@@ -744,7 +744,7 @@ aposentado, e a dobra da reabertura a contaria como órfã. Aposentar =
 ### Tarefa D1: parse e validação no `schema`
 
 **Arquivos:**
-- Criar: `internal/schema/contador.go`, `contador_test.go`
+- Criar: `internal/schema/counter.go`, `counter_test.go`
 - Modificar: `internal/schema/spec.go` (`rawSpec` +`Counters yaml.Node`; `DatasetSpec` +`Contadores []ContadorSpec`; chamada em `validate` depois do bloco de `schema.fields` e da key; mensagem do prefixo `_` em 669-673 passa a "os espaços de nome do produto (`_meta`, `_counters`)")
 
 **Interfaces produzidas:**
@@ -782,10 +782,10 @@ do schema compilado — D2), mesma nota de `validaRegrasTTL`.
 
 - [ ] **Passo 2: vermelho → implementar → verde → commit** — `schema: bloco counters com validação na subida`.
 
-### Tarefa D2: compilação das definições (`internal/counters/compila.go`)
+### Tarefa D2: compilação das definições (`internal/counters/compile.go`)
 
 **Arquivos:**
-- Criar: `internal/counters/compila.go`, `compila_test.go`, `abertura.go`
+- Criar: `internal/counters/compile.go`, `compile_test.go`, `open.go`
 
 **Interfaces produzidas:**
 ```go
@@ -839,10 +839,10 @@ schema sintético tem `name: <tabela>`. Erro do binder é renomeado para
 
 - [ ] **Passo 2: vermelho → implementar → verde → commit** — `query: registro de tabelas virtuais por namespace; _counters entra pelo mesmo pipeline`.
 
-### Tarefa E2: a tabela virtual (`internal/counters/tabela.go`)
+### Tarefa E2: a tabela virtual (`internal/counters/table.go`)
 
 **Arquivos:**
-- Criar: `internal/counters/tabela.go`, `tabela_test.go`, `alloc_gate_test.go`
+- Criar: `internal/counters/table.go`, `table_test.go`, `alloc_gate_test.go`
 
 **Interfaces produzidas:**
 ```go
@@ -886,7 +886,7 @@ montado em `buf[:0]` com `encoding.AppendField` em ordem de FieldID;
 
 **Arquivos:**
 - Modificar: `internal/server/server.go:336-426` (`abreDataset`: `NovoCompilador` → `Options.CompilaContadores` → `compilado := comp.Compilado()` no lugar de `spec.Compile(st.FieldDict())`; depois de `eng.Register`: `contadores.Registra(s.eng, spec.Name, st)`; log `contadores.declarados` com nome/groupBy/where/teto por contador, como `ttl.regras`)
-- Modificar: `internal/cli/cli.go:248-279` (`abreDataset` idem) e `cli.go:302` (segunda abertura), `internal/cli/query.go:107` (`contadores.Registra` depois do `Register`), `internal/cli/offsets.go:85` (callback nas `Options`), `benchmark/ingest-bench/harness.go:1592` (idem). **Todo chamador de `storage.Open` de um dataset base passa o callback** — a guarda do C1 ("manifest com contadores sem callback ⇒ recusa") é o que pega o chamador esquecido; `historico.go:84` (irmã) NÃO passa, e a irmã nunca tem a seção.
+- Modificar: `internal/cli/cli.go:248-279` (`abreDataset` idem) e `cli.go:302` (segunda abertura), `internal/cli/query.go:107` (`contadores.Registra` depois do `Register`), `internal/cli/offsets.go:85` (callback nas `Options`), `benchmark/ingest-bench/harness.go:1592` (idem). **Todo chamador de `storage.Open` de um dataset base passa o callback** — a guarda do C1 ("manifest com contadores sem callback ⇒ recusa") é o que pega o chamador esquecido; `history.go:84` (irmã) NÃO passa, e a irmã nunca tem a seção.
 - Testar: `internal/server/query_test.go` (`TestCountersRespondePelaRotaDeQuery`, no molde de `TestMetaFieldsRespondePelaRotaDeQuery:916`), `internal/cli/query_test.go` (consulta local a `_counters`)
 
 - [ ] **Passo 1: testes** — HTTP: sobe servidor de teste com YAML contendo `counters`, ingere via o caminho de teste existente, consulta `_counters.x` e afirma linhas + moldura de fim; JDBC/Python NÃO mudam (é SQL). CLI: `nishidb query --config … "SELECT … FROM _counters.x"` devolve NDJSON.
@@ -902,8 +902,8 @@ montado em `buf[:0]` com `encoding.AppendField` em ordem de FieldID;
 ### Tarefa F1: métricas e `/v1/stats`
 
 **Arquivos:**
-- Modificar: `internal/metrics/nomes.go` (bloco "Contadores mantidos na escrita", com a razão de cada série; `LabelCounter = "counter"` com a nota "valor vem do YAML, conjunto fechado — nunca do cliente"), `internal/server/metricas_dataset.go` (`amostrasDeContadores(d) []metrics.Amostra` lendo `d.st.EstatisticasDeContadores()` UMA vez), `internal/protocol/documentos.go` (`DatasetStats.Counters []ContadorStats`), `internal/server/documentos.go` (mesma chamada)
-- Testar: `internal/server/metricas_dataset_test.go`, `internal/gates` continua verde
+- Modificar: `internal/metrics/names.go` (bloco "Contadores mantidos na escrita", com a razão de cada série; `LabelCounter = "counter"` com a nota "valor vem do YAML, conjunto fechado — nunca do cliente"), `internal/server/metrics_dataset.go` (`amostrasDeContadores(d) []metrics.Amostra` lendo `d.st.EstatisticasDeContadores()` UMA vez), `internal/protocol/documents.go` (`DatasetStats.Counters []ContadorStats`), `internal/server/documents.go` (mesma chamada)
+- Testar: `internal/server/metrics_dataset_test.go`, `internal/gates` continua verde
 
 Séries (todas por `dataset`,`counter`, nascem com zero na subida via coletor que
 emite sempre): `nishidb_counter_groups` (medidor, vivos), `nishidb_counter_groups_max`
@@ -920,8 +920,8 @@ emite sempre): `nishidb_counter_groups` (medidor, vivos), `nishidb_counter_group
 ### Tarefa F2: rotas ADMIN
 
 **Arquivos:**
-- Criar: `internal/server/contadores.go`, `contadores_test.go`; `internal/protocol/contadores.go`
-- Modificar: `internal/server/autenticacao.go:138-148` (`rt.registra("/v1/counters/audit", config.RoleAdmin, s.handleAuditoriaDeContadores)`, idem `rebuild`)
+- Criar: `internal/server/counters.go`, `counters_test.go`; `internal/protocol/counters.go`
+- Modificar: `internal/server/auth.go:138-148` (`rt.registra("/v1/counters/audit", config.RoleAdmin, s.handleAuditoriaDeContadores)`, idem `rebuild`)
 
 **Wire (sem código de erro novo):**
 ```go
@@ -939,7 +939,7 @@ type RebuildContador struct{ Name string; Groups uint32; DurationMs int64 }
 type RebuildDataset struct{ Name string; Counters []RebuildContador }
 type RespostaRebuildDeContadores struct{ Datasets []RebuildDataset }
 ```
-Handlers no molde de `handleCheckpoint` (`mutacoes.go:161-198`): método POST,
+Handlers no molde de `handleCheckpoint` (`mutations.go:161-198`): método POST,
 `leRequisicaoDataset`, `datasetsAlvo`, `processaDatasets`, `ctxDeMutacao(r)` (a
 varredura é longa e tem de honrar SIGTERM), `erroDeMutacao` (+ `ErrSnapshotExpirado`
 ⇒ 409 `SNAPSHOT_TOO_OLD`, código já existente). Dataset sem contadores ⇒ lista
@@ -980,7 +980,7 @@ tabela `contador grupos duração`. `--config` com servidor no ar ⇒ exit 3 + d
 - `docs/debitos.md`: itens 107+ no fim da seção "Sem milestone": (a) `AbreSnapshot` fora do `wmu` nas CONSULTAS lê a época e registra o leitor em dois passos (`snapshot.go:176-181`) — a auditoria fecha a corrida tomando o `wmu`; as consultas não (pré-existente, achado na validação deste ciclo); (b) fsync por grupo novo no nível PON/splitter (custo não medido); (c) `_counters` fora do isolamento de snapshot; (d) `Lookup` indexado na tabela virtual (hoje `WHERE olt = …` em contador composto é varredura dos grupos); (e) `ScanLive(snap)` não é versionado para lápides — a consulta longa pode perder uma linha lapidada durante a varredura (pré-existente; a auditoria não depende dele).
 - `CLAUDE.md`: corrigir "índices secundários fazem SET antes e CLEAR depois do commit" para "SET antes do commit; não há CLEAR (spec §5.2 do subsistema 1)"; acrescentar o contador à lista de pacotes (`internal/storage/counter`, `internal/counters`) e a invariante "contador é delta do próprio vetor, nunca de `prevPayload`; dobra antes do replay".
 - `.gitignore`: `samples/` (a amostra não é versionada, proposta §12).
-- `internal/cli/evidencias_test.go:53-58`: acrescentar `docs/aceite-contadores.md` (G2 cria).
+- `internal/cli/evidence_test.go:53-58`: acrescentar `docs/aceite-contadores.md` (G2 cria).
 
 - [ ] **Passo 1: escrever; rodar `go test ./internal/gates/ ./internal/cli/ -count=1` (citações, evidências, quickstart).**
 - [ ] **Passo 2: commit** — `docs: contadores mantidos na escrita — README, arquitetura, diagrama, débitos, CLAUDE.md`.
@@ -1032,7 +1032,7 @@ contadores gera bytes idênticos), toda a suíte de `internal/storage`
 
 **Gates que mudam, e como:** `TestNamespaceDesconhecidoERecusado` (mensagem lista
 os dois namespaces); `TestOUsoAnuncia…` ganha `Counters`; o teste de reserva de
-`TamanhoDaCaudaTLV`; `evidencias_test.go` ganha o aceite novo. Nada afrouxa.
+`TamanhoDaCaudaTLV`; `evidence_test.go` ganha o aceite novo. Nada afrouxa.
 
 **Diferenciais (os testes que decidem se o plano está certo):**
 `TestDobraReproduzOsTotais`, `TestContadorRecuperaDoTailSemCheckpoint` (duas

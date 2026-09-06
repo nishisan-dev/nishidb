@@ -13,7 +13,7 @@
 // encadeado para trás. Inserir é uma sondagem amortizada e duas escritas —
 // O(1), que é o defeito que este pacote existe para corrigir.
 //
-// A forma selada (este arquivo, escritor.go e selado.go) é IMUTÁVEL e cobre
+// A forma selada (este arquivo, writer.go e sealed.go) é IMUTÁVEL e cobre
 // todo segmento já rotacionado: diretório ordenado com busca binária e postings
 // contíguas por valor. Imutável compra três coisas que a WIP não tem: não há
 // load factor a respeitar (o diretório tem exatamente D entradas), o Lookup

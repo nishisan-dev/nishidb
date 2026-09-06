@@ -167,7 +167,7 @@ func quiescente(t *testing.T, b *bancada, eventos int64) bool {
 //
 // Colapsada a distinção, o despertar cai no ramo de fila fechada e o writer
 // devolve nil pelo finaliza(). O consumidor só cancela o poll quando o writer
-// devolve ERRO (consumidor.go, no `if err != nil`), então nada acontece: sem
+// devolve ERRO (consumer.go, no `if err != nil`), então nada acontece: sem
 // pausa, sem log, sem métrica. O poller segue buscando, a fila enche até o
 // gate do §128 e o Envia bloqueia para sempre. Em produção o intervalo é o
 // storage.checkpoint.interval (§78, 30s por padrão) — a ingestão morreria em

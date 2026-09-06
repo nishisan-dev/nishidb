@@ -251,7 +251,7 @@ func leTabelaDeSecoes(dados []byte, caminho string, secCount, fimTabela, fimCorp
 	// termina onde o diretório da i+1 começa, e a última termina no crc. Ele
 	// não é gravado no arquivo de propósito — seria a mesma informação duas
 	// vezes e uma chance de divergirem, pela mesma razão de não existir campo
-	// minRowID (formato.go).
+	// minRowID (format.go).
 	for i := range secoes {
 		fim := fimCorpo
 		if i+1 < len(secoes) {

@@ -77,7 +77,7 @@ func TestMutantesExigemAutenticacao(t *testing.T) {
 }
 
 // A primeira rota ADMIN de verdade em produção: o teste que a B3 deixou
-// pronto com um handler FAKE (autenticacao_internal_test.go,
+// pronto com um handler FAKE (auth_internal_test.go,
 // TestMecanismoDeRotaExigePapelComHandlerDeTeste) agora tem par com handler
 // de produção. papel READ não alcança rota ADMIN — 403, nunca 200 nem 401
 // (a credencial É válida, só o papel não basta).
@@ -100,7 +100,7 @@ func TestMutantesRecusamPapelREAD(t *testing.T) {
 
 // GET nas duas rotas mutantes é 405 com o CONTRATO CorpoErro — registradas
 // SEM método no padrão, exatamente como as rotas de leitura do §67
-// (TestRotasDeLeituraRecusamMetodoErrado, documentos_test.go), conferindo o
+// (TestRotasDeLeituraRecusamMetodoErrado, documents_test.go), conferindo o
 // método por dentro do handler em vez de deixar o mux gerar o 405 cru em
 // texto puro.
 func TestMutantesRecusamMetodoErrado(t *testing.T) {
@@ -228,7 +228,7 @@ func servidorComDoisDatasets(t *testing.T, blocoServer string) *server.Servidor 
 // Important 3 da revisão da B5: "todos os datasets" (corpo ausente) com MAIS
 // DE UM dataset de verdade, provando a ordem determinística (alfabética,
 // config.ListaDatasets) e que os DOIS aparecem na resposta feliz — não só
-// um teste de unidade com dublê (mutacoes_internal_test.go), que prova a
+// um teste de unidade com dublê (mutations_internal_test.go), que prova a
 // LÓGICA de parar-no-primeiro-erro mas não a fiação real com s.datasets.
 func TestCheckpointComTodosOsDatasetsRespeitaAOrdemDeterministicaDaSubida(t *testing.T) {
 	srv := servidorComDoisDatasets(t, blocoPadrao)
@@ -295,7 +295,7 @@ func TestCompactComAdminNaConfigDefaultFuncionaSemPassadaEmVoo(t *testing.T) {
 //
 // storage.compaction.enabled: false isola o teste do laço automático: o que
 // se prova aqui é exclusão entre DUAS CHAMADAS MANUAIS — a suíte do storage
-// (compact_uma_vez_test.go) já prova essa exclusão de forma exaustiva com
+// (compact_once_test.go) já prova essa exclusão de forma exaustiva com
 // gate determinístico; o que falta provar aqui é que ela sobrevive à
 // viagem pela porta HTTP, com o servidor de verdade decidindo a resposta.
 func TestCompactDuasChamadasSimultaneasPeloHTTPUmaGanhaUmaRecebe409(t *testing.T) {

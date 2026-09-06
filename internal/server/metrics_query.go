@@ -14,7 +14,7 @@ import (
 // elas medem: o motor não sabe quantas consultas chegaram, quantas estão em
 // voo nem quanto tempo cada uma levou de ponta a ponta — ele conhece
 // iteradores, não requisições. Enquanto não havia protocolo, as cinco séries
-// existiam só como nome em internal/metrics/nomes.go, sem alimentador nenhum.
+// existiam só como nome em internal/metrics/names.go, sem alimentador nenhum.
 type metricasDeQuery struct {
 	total    *metrics.FamiliaContador
 	ativas   *metrics.FamiliaMedidor

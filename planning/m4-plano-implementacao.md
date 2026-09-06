@@ -74,7 +74,7 @@ O trabalho é **ciclo de vida de arquivo e coordenação com o writer**, não mo
 | `internal/storage/store.go` | `Stats` ganha campos de disco; ciclo de vida da goroutine; `Close` cancela e aguarda |
 | `internal/storage/store_recovery.go` | Regras de reparo do `.retired` (restaurar e varrer órfão) |
 | `internal/config/config.go` | `storage.compaction.{enabled,minimumLiveRatio}` |
-| `internal/server/metricas_dataset.go` | `storage_bytes`, `garbage_bytes`, séries de compaction |
+| `internal/server/metrics_dataset.go` | `storage_bytes`, `garbage_bytes`, séries de compaction |
 | `internal/kafka/writer.go` | Débito 56 — checkpoint por tempo |
 | `internal/cli/`, `internal/server/`, `internal/protocol/` | §96 leitura: `status`, `datasets`, `inspect` |
 
@@ -259,7 +259,7 @@ git commit -m "Põe o alvo de lint sob teste e tira o fallback dos textos que ai
 
 ### Task 1c: pinar o detector de espelhos — **Task 1b continua reprovada**
 
-**Files:** Modify `internal/storage/store_liveness_espelho_test.go`, `internal/storage/export_test.go`; possivelmente `internal/storage/store_recovery.go`
+**Files:** Modify `internal/storage/store_liveness_mirror_test.go`, `internal/storage/export_test.go`; possivelmente `internal/storage/store_recovery.go`
 
 O núcleo da Task 1b está certo: `Stats()` lê atômicos e não toma mais `wmu`. O que a rodada de reparo acrescentou — `conferaEspelhos()` em `store_checkpoint.go`, mais a semeadura de `segCount`/`liveBytesAll` em `recoverFrom` — **não é fixado por teste nenhum**. A revisão adversarial derrubou quatro mutantes:
 
@@ -353,7 +353,7 @@ Aplicar M7, M8, M14 e M16 numa cópia descartável (`git archive` para fora do r
 
 - [ ] **Step 6: Decidir sobre `espelhosDivergentes`**
 
-O contador só tem `Log.Warn` e acessor de teste — nenhuma exposição ao operador. Num milestone cujo objetivo é o §92, ou ele ganha série em `metricas_dataset.go`, ou uma linha em `docs/debitos.md` dizendo quando ganha. **Escolher uma e executar**, não deixar as duas em aberto.
+O contador só tem `Log.Warn` e acessor de teste — nenhuma exposição ao operador. Num milestone cujo objetivo é o §92, ou ele ganha série em `metrics_dataset.go`, ou uma linha em `docs/debitos.md` dizendo quando ganha. **Escolher uma e executar**, não deixar as duas em aberto.
 
 - [ ] **Step 7: Commit**
 
@@ -366,7 +366,7 @@ git commit -m "Prova que a conferência de espelhos dispara, em vez de supô-lo"
 
 ### Task 2b: fixar `storage_bytes` contra o disco real — **Task 2 continua reprovada**
 
-**Files:** Modify `internal/server/metricas_dataset_test.go`, `internal/server/query_test.go` (helper `servidorComDados`)
+**Files:** Modify `internal/server/metrics_dataset_test.go`, `internal/server/query_test.go` (helper `servidorComDados`)
 
 A revisão adversarial provou por mutação: trocar o valor publicado de `st.StorageBytes` para `st.LiveBytesUpperBound` — ou para `st.RowCount` — deixa **a suíte inteira verde**. A única asserção é `bytes.Valor > 0`, que qualquer número positivo satisfaz. É o defeito do débito 6 outra vez: medir sem oráculo.
 
@@ -410,7 +410,7 @@ func TestStorageBytesBateComOsArquivosEmDisco(t *testing.T) {
 
 - [ ] **Step 2: Provar que o teste mata o mutante**
 
-Trocar `Valor: float64(st.StorageBytes)` por `float64(st.LiveBytesUpperBound)` em [metricas_dataset.go:95](../internal/server/metricas_dataset.go:95), rodar o teste, **confirmar FAIL**, e reverter. Um teste que não mata este mutante não fecha a Task 2.
+Trocar `Valor: float64(st.StorageBytes)` por `float64(st.LiveBytesUpperBound)` em [metrics_dataset.go:95](../internal/server/metrics_dataset.go:95), rodar o teste, **confirmar FAIL**, e reverter. Um teste que não mata este mutante não fecha a Task 2.
 
 - [ ] **Step 3: Implementar**
 
@@ -536,10 +536,10 @@ git commit -m "Dá ao Stats a conta de disco que a compaction vai precisar"
 ### Task 2: publicar `nishidb_storage_bytes` e `nishidb_storage_garbage_bytes`
 
 **Files:**
-- Modify: `internal/server/metricas_dataset.go`
-- Test: `internal/server/metricas_dataset_test.go`
+- Modify: `internal/server/metrics_dataset.go`
+- Test: `internal/server/metrics_dataset_test.go`
 
-O comentário atual ([metricas_dataset.go:16](../internal/server/metricas_dataset.go:16)) deixa os **três** de fora com um argumento correto — tally impreciso publicado como exato é métrica que mente. **O argumento não alcança `storage_bytes`**, que é tamanho de arquivo, e alcança `garbage_bytes` só pela metade: como `live` é limite superior, `total - live` é limite **inferior** do garbage.
+O comentário atual ([metrics_dataset.go:16](../internal/server/metrics_dataset.go:16)) deixa os **três** de fora com um argumento correto — tally impreciso publicado como exato é métrica que mente. **O argumento não alcança `storage_bytes`**, que é tamanho de arquivo, e alcança `garbage_bytes` só pela metade: como `live` é limite superior, `total - live` é limite **inferior** do garbage.
 
 - [ ] **Step 1: Escrever o teste que falha**
 
@@ -603,7 +603,7 @@ Run: `go test ./... && go test ./... -race && golangci-lint run`
 - [ ] **Step 5: Commit**
 
 ```bash
-git add internal/server/metricas_dataset.go internal/server/metricas_dataset_test.go
+git add internal/server/metrics_dataset.go internal/server/metrics_dataset_test.go
 git commit -m "Publica a curva de disco, que é o alarme que antecede o ENOSPC"
 ```
 
@@ -1180,7 +1180,7 @@ git commit -m "Aposenta o segmento por rename, e ensina o Open a reparar as duas
 >    **Errata do orquestrador.** A primeira versão deste item exigia também
 >    `nishidb_compaction_bytes_written` subindo. Era **trabalho da Task 8**:
 >    as três séries de compaction do §92 estão em
->    [nomes.go:48](../internal/metrics/nomes.go:48) sob o comentário "sem
+>    [names.go:48](../internal/metrics/names.go:48) sob o comentário "sem
 >    alimentador até o M4", e dar-lhes alimentador é literalmente o escopo
 >    dela. Exigi-la aqui era pedir que a Task 7 fizesse o trabalho da seguinte.
 >    **A metade que faltava vira critério de aceite da Task 8**, com o e2e
@@ -1319,10 +1319,10 @@ git commit -m "Elege candidato pelo §53 e dá à compaction um ciclo de vida qu
 
 
 **Files:**
-- Modify: `internal/storage/compaction.go`, `internal/server/metricas_dataset.go`
-- Test: `internal/server/metricas_dataset_test.go`
+- Modify: `internal/storage/compaction.go`, `internal/server/metrics_dataset.go`
+- Test: `internal/server/metrics_dataset_test.go`
 
-`MetCompactionRunning`, `MetCompactionBytesRead` e `MetCompactionBytesWritten` já existem como nome sem alimentador ([nomes.go:48](../internal/metrics/nomes.go:48)), com o comentário `// sem alimentador até o M4` — que sai nesta tarefa.
+`MetCompactionRunning`, `MetCompactionBytesRead` e `MetCompactionBytesWritten` já existem como nome sem alimentador ([names.go:48](../internal/metrics/names.go:48)), com o comentário `// sem alimentador até o M4` — que sai nesta tarefa.
 
 - [ ] **Step 1: Escrever o teste que falha**
 
@@ -1358,7 +1358,7 @@ Run: `go test ./internal/server/ -run TestSeriesDeCompaction -v` → FAIL.
 
 - [ ] **Step 3: Implementar**
 
-`running` é medidor 0/1; `bytes_read`/`bytes_written` são contadores monotônicos alimentados pelos retornos de `compactaSegmento`. Remover o comentário `// sem alimentador até o M4` de `nomes.go`.
+`running` é medidor 0/1; `bytes_read`/`bytes_written` são contadores monotônicos alimentados pelos retornos de `compactaSegmento`. Remover o comentário `// sem alimentador até o M4` de `names.go`.
 
 - [ ] **Step 4: Rodar e confirmar que passa**
 
@@ -1367,7 +1367,7 @@ Run: `go test ./... && go test ./... -race && golangci-lint run`
 - [ ] **Step 5: Commit**
 
 ```bash
-git add internal/storage/compaction.go internal/server/metricas_dataset.go internal/metrics/nomes.go internal/server/metricas_dataset_test.go
+git add internal/storage/compaction.go internal/server/metrics_dataset.go internal/metrics/names.go internal/server/metrics_dataset_test.go
 git commit -m "Dá alimentador às três séries de compaction do §92"
 ```
 
@@ -1426,10 +1426,10 @@ git commit -m "Destrava o lag congelado: checkpoint também por tempo, não só 
 ### Task 10: §96 — `status`, `datasets` e `inspect`, remotos
 
 **Files:**
-- Modify: `internal/cli/cli.go` (dispatch ~linha 113), `internal/server/documentos.go`, `internal/protocol/documentos.go`
-- Create: `internal/cli/operacao.go`, `internal/cli/operacao_test.go`
+- Modify: `internal/cli/cli.go` (dispatch ~linha 113), `internal/server/documents.go`, `internal/protocol/documents.go`
+- Create: `internal/cli/operation.go`, `internal/cli/operation_test.go`
 
-Nascem **remotos** (`--server`), pelo argumento do flock exclusivo: se forem só locais, repetem o débito 54 — o operador teria que derrubar o servidor para perguntar o status dele. `/v1/stats` e `/v1/metadata` já são a base, e `internal/cli/query_remota.go` é o molde do cliente. **Só leitura** (D3): `checkpoint` e `compact` são do M5, atrás de ADMIN.
+Nascem **remotos** (`--server`), pelo argumento do flock exclusivo: se forem só locais, repetem o débito 54 — o operador teria que derrubar o servidor para perguntar o status dele. `/v1/stats` e `/v1/metadata` já são a base, e `internal/cli/query_remote.go` é o molde do cliente. **Só leitura** (D3): `checkpoint` e `compact` são do M5, atrás de ADMIN.
 
 - [ ] **Step 1: Escrever o teste que falha**
 
@@ -1452,7 +1452,7 @@ func TestStatusRemotoFuncionaComOServidorNoAr(t *testing.T) {
 
 - [ ] **Step 2: Rodar e confirmar a falha** → FAIL: comando não registrado.
 
-- [ ] **Step 3: Implementar.** `status` resume storage, rows, segmentos e ingestão; `datasets` lista; `inspect <dataset>` detalha colunas e índices a partir do `/v1/metadata`. Reusar `normalizaEndereco` e a tradução código→exit code de `query_remota.go:124`. Atualizar o texto de uso em `cli.go:58`.
+- [ ] **Step 3: Implementar.** `status` resume storage, rows, segmentos e ingestão; `datasets` lista; `inspect <dataset>` detalha colunas e índices a partir do `/v1/metadata`. Reusar `normalizaEndereco` e a tradução código→exit code de `query_remote.go:124`. Atualizar o texto de uso em `cli.go:58`.
 
 - [ ] **Step 4: Rodar** `go test ./... && go test ./... -race && golangci-lint run`
 

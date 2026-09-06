@@ -250,7 +250,7 @@ const (
 	// o header WWW-Authenticate (RFC 7617); CodForbidden sai com 403. Nenhum
 	// dos dois nomeia CREDENTIAL nem ROLE na mensagem de forma a distinguir
 	// "usuário não existe" de "senha errada" — essa distinção é dado que o
-	// protocolo deliberadamente NÃO expõe (ver internal/server/autenticacao.go).
+	// protocolo deliberadamente NÃO expõe (ver internal/server/auth.go).
 	CodUnauthenticated = "UNAUTHENTICATED"
 	CodForbidden       = "FORBIDDEN"
 

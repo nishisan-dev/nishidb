@@ -284,7 +284,7 @@ func historicoStats(base *dataset) *protocol.HistoricoStats {
 // amostrasDeHistorico publica as mesmas contagens no /metrics.
 //
 // Saem da MESMA leitura de snapshot que alimenta o /v1/stats, pela razão que
-// o metricas_dataset.go já registra: dois contadores para o mesmo fato
+// o metrics_dataset.go já registra: dois contadores para o mesmo fato
 // divergem no dia em que um caminho de erro esquece de somar, e em produção
 // alguém lê o errado.
 //

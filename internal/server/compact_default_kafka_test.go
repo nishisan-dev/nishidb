@@ -18,7 +18,7 @@ import (
 
 // TestCompactComAdminNaConfigDefaultELacoOciosoFazTrabalhoReal é o gap de
 // cobertura 1 da re-revisão da B5: os outros testes de "config default"
-// (mutacoes_test.go) provam que a rota não fica morta, mas com um dataset
+// (mutations_test.go) provam que a rota não fica morta, mas com um dataset
 // SEM garbage nenhum — nunca provam TRABALHO de verdade no corpo da
 // resposta. Aqui há garbage real, a config é DEFAULT (o laço automático
 // sobe), e a asserção central é sobre os NÚMEROS decodificados do JSON
@@ -109,7 +109,7 @@ func TestCompactComAdminNaConfigDefaultELacoOciosoFazTrabalhoReal(t *testing.T) 
 
 	// Retry curto, sem sleep entre tentativas — o mesmo padrão de
 	// TestCompactComAdminNaConfigDefaultFuncionaSemPassadaEmVoo
-	// (mutacoes_test.go) e de TestCompactRemotoNaConfigDefaultEventualmenteSai0
+	// (mutations_test.go) e de TestCompactRemotoNaConfigDefaultEventualmenteSai0
 	// (internal/cli). A folga estrutural (o laço automático só volta a olhar
 	// candidatos daqui a intervaloEntrePassadas, 5s) já torna uma tentativa
 	// seca correta na prática, mas sob pressão de CPU real (suíte inteira em

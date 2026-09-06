@@ -27,7 +27,7 @@ import (
 // São SEIS e não sete: a janela efetiva não pertence a esta família e continua em
 // nishidb_history_index_window_seconds, rotulada pelo dataset BASE, onde o
 // operador declarou a política. A razão está escrita junto das constantes, em
-// internal/metrics/nomes.go, e repetir a lista aqui à mão é de propósito — se
+// internal/metrics/names.go, e repetir a lista aqui à mão é de propósito — se
 // alguém acrescentar uma sétima série sem decidir o que ela responde, este teste
 // é onde a decisão volta a ser cobrada.
 var familiasDeIndice = []string{
@@ -240,7 +240,7 @@ func confereConjuntoFechado(t *testing.T, amostras []amostraExposta, familia, ro
 	}
 }
 
-// confereOrigemFechadaDosLabels lê metricas_indice.go pelo go/ast e exige que o
+// confereOrigemFechadaDosLabels lê metrics_index.go pelo go/ast e exige que o
 // valor de `estado` e de `modo` venha SÓ da enumeração exportada.
 //
 // Config e código são lidos como DADO neste repositório, nunca por grep em prosa:
@@ -252,7 +252,7 @@ func confereConjuntoFechado(t *testing.T, amostras []amostraExposta, familia, ro
 // checagem, e por isso ele também é recusado abaixo.
 func confereOrigemFechadaDosLabels(t *testing.T) {
 	t.Helper()
-	const arquivo = "metricas_indice.go"
+	const arquivo = "metrics_index.go"
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, arquivo, nil, parser.SkipObjectResolution)
 	if err != nil {
@@ -897,7 +897,7 @@ func somaBlocos(t *testing.T, dir string, aceita func(string) bool) int64 {
 //
 // O LIMITE DESTE TESTE, escrito em vez de presumido: a bancada não sobe consumidor
 // Kafka, e o mesmo defeito continua de pé nas nove amostras de
-// internal/kafka/metricas.go — inclusive na nishidb_kafka_poll_blocked_seconds_total,
+// internal/kafka/metrics.go — inclusive na nishidb_kafka_poll_blocked_seconds_total,
 // que é a série sobre a qual a medição pré-ciclo do piloto foi construída. Aquilo
 // é de outro pacote e de outra tarefa; aqui fica o registro de que este oráculo
 // NÃO o alcança.
@@ -946,12 +946,12 @@ func nomesDasFamiliasDeIndice() string {
 }
 
 // TestAsSeriesDeIndiceSaemSoPelasConstantes fecha a primeira das três invariantes
-// de métrica do projeto: nome só pelas constantes de nomes.go.
+// de métrica do projeto: nome só pelas constantes de names.go.
 //
 // A conferência é do LADO DO SCRAPE — toda linha `nishidb_index_*` que sai na
 // porta tem de pertencer à lista de constantes. Um nome digitado à mão no coletor
 // produziria uma série que o dashboard nunca casa, e o sintoma é um painel vazio
-// sem ninguém perceber, que é exatamente o que o cabeçalho de nomes.go descreve.
+// sem ninguém perceber, que é exatamente o que o cabeçalho de names.go descreve.
 func TestAsSeriesDeIndiceSaemSoPelasConstantes(t *testing.T) {
 	srv := servidorComHistorico(t, specComHistorico)
 	conhecidas := map[string]bool{}
@@ -965,7 +965,7 @@ func TestAsSeriesDeIndiceSaemSoPelasConstantes(t *testing.T) {
 		}
 		vistas++
 		if !conhecidas[a.Nome] {
-			t.Errorf("o scrape trouxe %q, que não é nenhuma das constantes de nomes.go (%s): "+
+			t.Errorf("o scrape trouxe %q, que não é nenhuma das constantes de names.go (%s): "+
 				"nome digitado à mão diverge no dia em que um dos dois lugares for corrigido",
 				a.Nome, nomesDasFamiliasDeIndice())
 		}

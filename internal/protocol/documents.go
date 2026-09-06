@@ -306,7 +306,7 @@ type SnapshotStats struct {
 //
 // A janela efetiva NÃO está aqui: ela é política do histórico e continua no
 // bloco History, como EffectiveIndexWindow. Ver o comentário da família em
-// internal/metrics/nomes.go.
+// internal/metrics/names.go.
 type IndiceStats struct {
 	// Os quatro estados PARTICIONAM os segmentos do dataset. Pending e
 	// OutOfWindow são duas ausências de significado OPOSTO, e é por isso que são

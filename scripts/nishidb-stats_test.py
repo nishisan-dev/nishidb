@@ -102,7 +102,7 @@ class TestCabecalhoAnunciaAVersao(unittest.TestCase):
 
 class TestDescartadosQuebramPorMotivo(unittest.TestCase):
     """Task A5 / issue #15: nishidb_ingest_invalid_total passa a carregar o
-    rótulo `motivo` (internal/kafka/metricas.go) desde esta task. O painel
+    rótulo `motivo` (internal/kafka/metrics.go) desde esta task. O painel
     tem de mostrar EVENT_TOO_LARGE NOMEADO — é a categoria que a issue #15
     investiga — e continuar funcionando, sem o detalhe, contra um binário
     anterior que publica o contador sem o rótulo."""

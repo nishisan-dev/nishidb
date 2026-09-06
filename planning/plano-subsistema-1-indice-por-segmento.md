@@ -76,12 +76,12 @@ a superfície de configuração que a C estabelece.
 
 | Arquivo | Responsabilidade |
 |---|---|
-| `formato.go` | magics, versões, offsets de header, largura de posting. O ÚNICO lugar que conhece bytes |
-| `escritor.go` | `Escritor`: acumula postings e emite o `.sidx`. O ÚNICO lugar que decide o layout selado |
-| `selado.go` | `Selado`: abre, valida CRC preguiçosamente, busca binária, devolve fatia |
+| `format.go` | magics, versões, offsets de header, largura de posting. O ÚNICO lugar que conhece bytes |
+| `writer.go` | `Escritor`: acumula postings e emite o `.sidx`. O ÚNICO lugar que decide o layout selado |
+| `sealed.go` | `Selado`: abre, valida CRC preguiçosamente, busca binária, devolve fatia |
 | `wip.go` | `WIP`: diretório + array encadeado, `Set` O(1), crescimento |
-| `sela.go` | WIP → `Escritor` → selado, com re-base |
-| `uniao.go` | `Une`: concatenação sobre faixas disjuntas, merge k-way com dedup sobre sobrepostas |
+| `seal.go` | WIP → `Escritor` → selado, com re-base |
+| `union.go` | `Une`: concatenação sobre faixas disjuntas, merge k-way com dedup sobre sobrepostas |
 
 **Criar — `internal/storage/`:**
 
@@ -89,17 +89,17 @@ a superfície de configuração que a C estabelece.
 |---|---|
 | `indices.go` | posse dos índices pelo `Store`: abrir, manter no `applyRecord`, selar, apagar, `Lookup` |
 | `indices_enum.go` | as duas fontes de enumeração (faixa do histórico, filtro do `locations.idx`) |
-| `indices_reconstroi.go` | a goroutine de reconstrução e a construção a partir dos records |
-| `indices_janela.go` | a janela: expulsão na passada de retenção e a janela efetiva |
+| `indices_rebuild.go` | a goroutine de reconstrução e a construção a partir dos records |
+| `indices_window.go` | a janela: expulsão na passada de retenção e a janela efetiva |
 
 **Remover integralmente:** `internal/index/hash/`, `internal/index/bitmap/`.
 
 **Modificar:** `internal/storage/store.go` (posse, `applyRecord`, `Lookup`),
-`internal/storage/compaction.go` (aposentadoria), `internal/storage/retencao.go`
+`internal/storage/compaction.go` (aposentadoria), `internal/storage/retention.go`
 (janela), `internal/storage/checkpoint/manifest.go` (v3),
 `internal/query/planner/planner.go` e `plan.go`,
 `internal/query/executor/candidate.go` e `store.go`, `internal/schema/`,
-`internal/config/`, `internal/metrics/nomes.go`,
+`internal/config/`, `internal/metrics/names.go`,
 `internal/testutil/fakestorage/`.
 
 ---
@@ -109,9 +109,9 @@ a superfície de configuração que a C estabelece.
 ## Tarefa 1: formato e escritor da forma selada
 
 **Arquivos:**
-- Criar: `internal/index/segindex/formato.go`
-- Criar: `internal/index/segindex/escritor.go`
-- Testar: `internal/index/segindex/escritor_test.go`
+- Criar: `internal/index/segindex/format.go`
+- Criar: `internal/index/segindex/writer.go`
+- Testar: `internal/index/segindex/writer_test.go`
 - Testar: `internal/index/segindex/golden_test.go`
 - Criar: `internal/index/segindex/testdata/golden.sidx`
 
@@ -139,7 +139,7 @@ diferentes, e é por isso que "incremental idêntico a reconstruído" é verdade
 construção — sobra para o golden provar que a ALIMENTAÇÃO é equivalente, que é
 o risco real.
 
-- [ ] **Passo 1: escrever `formato.go` com o layout e o porquê**
+- [ ] **Passo 1: escrever `format.go` com o layout e o porquê**
 
 ```go
 // Package segindex implementa o índice secundário POR SEGMENTO do NishiDB:
@@ -157,7 +157,7 @@ o risco real.
 // encadeado para trás. Inserir é uma sondagem amortizada e duas escritas —
 // O(1), que é o defeito que este pacote existe para corrigir.
 //
-// A forma selada (este arquivo, escritor.go e selado.go) é IMUTÁVEL e cobre
+// A forma selada (este arquivo, writer.go e sealed.go) é IMUTÁVEL e cobre
 // todo segmento já rotacionado: diretório ordenado com busca binária e postings
 // contíguas por valor. Imutável compra três coisas que a WIP não tem: não há
 // load factor a respeitar (o diretório tem exatamente D entradas), o Lookup
@@ -240,7 +240,7 @@ func larguraPara(span uint64) uint8 {
 
 - [ ] **Passo 2: escrever o teste que falha — agrupamento, ordenação e dedup**
 
-Crie `internal/index/segindex/escritor_test.go`:
+Crie `internal/index/segindex/writer_test.go`:
 
 ```go
 package segindex_test
@@ -373,7 +373,7 @@ go test ./internal/index/segindex/ -run 'TestOEscritor' -count=1
 Esperado: falha de build — `undefined: segindex.NovoEscritor`. É a falha
 correta: o teste nomeia a API antes de ela existir.
 
-- [ ] **Passo 4: implementar `escritor.go`**
+- [ ] **Passo 4: implementar `writer.go`**
 
 ```go
 package segindex
@@ -508,8 +508,8 @@ ser necessária na selagem."
 **Arquivos:**
 - Modificar: `internal/storage/mmap/region.go`
 - Testar: `internal/storage/mmap/region_test.go`
-- Criar: `internal/index/segindex/selado.go`
-- Testar: `internal/index/segindex/selado_test.go`
+- Criar: `internal/index/segindex/sealed.go`
+- Testar: `internal/index/segindex/sealed_test.go`
 - Testar: `internal/index/segindex/alloc_gate_test.go`
 
 **Interfaces:**
@@ -627,7 +627,7 @@ go test ./internal/storage/mmap/ -count=1
 go test -race ./internal/storage/mmap/ -count=1
 ```
 
-- [ ] **Passo 5: escrever `selado.go` e ligar o primeiro teste da Tarefa 1**
+- [ ] **Passo 5: escrever `sealed.go` e ligar o primeiro teste da Tarefa 1**
 
 `AbreSelado` faz `AbreSomenteLeitura`, valida magic e versão, lê o header e a
 tabela de seções para um slice em heap (`secCount` entradas — dezenas, não
@@ -733,7 +733,7 @@ func TestIterarSeladoNaoAlocaPorLinha(t *testing.T) {
 `Rebobina()` é método só do `iterSelado`, e existe para o gate poder repetir a
 varredura sem reabrir. A contraparte sob `-race` vive em
 `alloc_gate_race_test.go` com `//go:build race` e um `t.Skip` explícito, no
-molde de `internal/storage/rowindex/agenda_gate_race_test.go` — gate que some
+molde de `internal/storage/rowindex/schedule_gate_race_test.go` — gate que some
 em silêncio sob `-race` é carimbo (débito 53).
 
 - [ ] **Passo 8: rodar tudo e commitar**
@@ -767,7 +767,7 @@ reconstrução o refaz."
 **Arquivos:**
 - Criar: `internal/index/segindex/wip.go`
 - Testar: `internal/index/segindex/wip_test.go`
-- Testar: `internal/index/segindex/custo_gate_test.go`
+- Testar: `internal/index/segindex/cost_gate_test.go`
 - Testar: `internal/index/segindex/custo_gate_race_test.go`
 - Criar: `internal/index/segindex/export_test.go`
 
@@ -1059,8 +1059,8 @@ de um orçamento a recalibrar por máquina."
 ## Tarefa 4: selagem — WIP para selado
 
 **Arquivos:**
-- Criar: `internal/index/segindex/sela.go`
-- Testar: `internal/index/segindex/sela_test.go`
+- Criar: `internal/index/segindex/seal.go`
+- Testar: `internal/index/segindex/seal_test.go`
 
 **Interfaces:**
 - Consome: `WIP.Lookup`, `ListaWIP`, `AbreWIP` (Tarefa 3); `Escritor` (Tarefa 1);
@@ -1199,7 +1199,7 @@ go test ./internal/index/segindex/ -run TestSelar -count=1
 ```
 Esperado: `undefined: segindex.Sela`.
 
-- [ ] **Passo 3: implementar `sela.go`**
+- [ ] **Passo 3: implementar `seal.go`**
 
 ```go
 // Sela converte a forma WIP do segmento na forma selada, e desliga os .widx.
@@ -1276,8 +1276,8 @@ atravessável sem intervenção."
 ## Tarefa 5: a união das fontes
 
 **Arquivos:**
-- Criar: `internal/index/segindex/uniao.go`
-- Testar: `internal/index/segindex/uniao_test.go`
+- Criar: `internal/index/segindex/union.go`
+- Testar: `internal/index/segindex/union_test.go`
 
 **Interfaces:**
 - Consome: `Fonte` (Tarefa 2).
@@ -1381,7 +1381,7 @@ go test ./internal/index/segindex/ -run TestUne -count=1
 ```
 Esperado: `undefined: segindex.Une`.
 
-- [ ] **Passo 3: implementar `uniao.go`**
+- [ ] **Passo 3: implementar `union.go`**
 
 ```go
 // Une combina as fontes de vários segmentos num iterador ascendente único.
@@ -1508,7 +1508,7 @@ linha de `internal/storage` tenha mudado.
 - Criar: `internal/storage/indices.go`
 - Modificar: `internal/storage/store.go` (campos do `Store`, `Open`, `applyRecord`,
   os três `curSegID.Store`), `internal/storage/compaction.go`
-  (`aposentaSegmento`), `internal/storage/expiracao.go`
+  (`aposentaSegmento`), `internal/storage/expiry.go`
 - Testar: `internal/storage/indices_test.go`
 
 **Interfaces:**
@@ -1616,7 +1616,7 @@ ordem de `LookupOrCreate` continua contratual — ver o comentário de
 - [ ] **Passo 4: um único ponto de rotação**
 
 Os três `s.curSegID.Store(novoSeg)` (`store.go:1475`, `compaction.go:206`,
-`expiracao.go:117`) passam a chamar:
+`expiry.go:117`) passam a chamar:
 
 ```go
 // aposAppend registra o segmento devolvido pelo Append e, quando ele mudou,
@@ -1719,7 +1719,7 @@ da migração e sai na tarefa que remove os dois pacotes."
 ## Tarefa 7: recovery e construção a partir dos records
 
 **Arquivos:**
-- Criar: `internal/storage/indices_reconstroi.go`
+- Criar: `internal/storage/indices_rebuild.go`
 - Modificar: `internal/storage/store.go` (`Open`), `internal/storage/store_recovery.go`
 - Testar: `internal/storage/indices_recovery_test.go`
 
@@ -1918,7 +1918,7 @@ func TestOResultadoNaoMudaComOSegmentoIndexadoOuNao(t *testing.T) {
 // uma propriedade que só a tabela histórica tem: os appends são serializados
 // pelo mutex do writer e o rowId é monotônico, então os segmentos particionam
 // o espaço de rowId em faixas contíguas e ordenadas. É a mesma propriedade que
-// primeiroRowIDDoSeguinte (retencao.go:380) já explora, com o mesmo pread.
+// primeiroRowIDDoSeguinte (retention.go:380) já explora, com o mesmo pread.
 type fonteFaixa struct{ prox, fim types.RowID }
 
 // fonteLocations enumera os rowIds cuja location aponta para um segmento, no
@@ -2036,8 +2036,8 @@ por isso que nenhum dataset precisa ser recriado."
   `validaBitmapsContraManifest`, `validaHashesContraManifest`),
   `internal/storage/checkpoint/manifest.go`
 - Remover os testes que atacam os arquivos antigos:
-  `store_hash_test.go`, `store_bitmapset_test.go`, `bitmap_ordem_test.go`,
-  `close_bitmap_test.go`, `store_bitmap_orfa_residuo_test.go`,
+  `store_hash_test.go`, `store_bitmapset_test.go`, `bitmap_order_test.go`,
+  `close_bitmap_test.go`, `store_bitmap_orphan_residue_test.go`,
   `store_recovery_bitmap_test.go` — **um a um, conferindo se a propriedade
   testada já é coberta em `internal/index/segindex` ou em `indices_test.go`.
   Propriedade que não estiver, MIGRE antes de apagar o arquivo.**
@@ -2046,8 +2046,8 @@ por isso que nenhum dataset precisa ser recriado."
 
 ```bash
 grep -rn "func Test" internal/storage/store_hash_test.go internal/storage/store_bitmapset_test.go \
-  internal/storage/bitmap_ordem_test.go internal/storage/close_bitmap_test.go \
-  internal/storage/store_bitmap_orfa_residuo_test.go internal/storage/store_recovery_bitmap_test.go
+  internal/storage/bitmap_order_test.go internal/storage/close_bitmap_test.go \
+  internal/storage/store_bitmap_orphan_residue_test.go internal/storage/store_recovery_bitmap_test.go
 ```
 
 Escreva a lista num rascunho e marque, para cada teste, onde a propriedade
@@ -2284,7 +2284,7 @@ A prioridade continua fixa e o planner continua nunca falhando."
 
 **Arquivos:**
 - Modificar: `internal/storage/store.go` (as duas validações contra o manifest e
-  os dois `Allow*Drop`), `internal/storage/indices_reconstroi.go`
+  os dois `Allow*Drop`), `internal/storage/indices_rebuild.go`
 - Testar: `internal/storage/indices_backfill_test.go`
 - Modificar: `docs/debitos.md`
 
@@ -2352,11 +2352,11 @@ junto com as validações que eles destravavam."
 ## Tarefa 13: a janela
 
 **Arquivos:**
-- Criar: `internal/storage/indices_janela.go`
-- Modificar: `internal/schema/historico.go`, `internal/config/config.go`,
-  `internal/storage/retencao.go`
-- Testar: `internal/storage/indices_janela_test.go`,
-  `internal/schema/historico_test.go`
+- Criar: `internal/storage/indices_window.go`
+- Modificar: `internal/schema/history.go`, `internal/config/config.go`,
+  `internal/storage/retention.go`
+- Testar: `internal/storage/indices_window_test.go`,
+  `internal/schema/history_test.go`
 
 **Interfaces:**
 - Produz:
@@ -2433,8 +2433,8 @@ A expulsão roda na passada de retenção em vez de num laço próprio — ela j
 ## Tarefa 14: a goroutine de reconstrução
 
 **Arquivos:**
-- Modificar: `internal/storage/indices_reconstroi.go`
-- Testar: `internal/storage/indices_reconstroi_test.go`
+- Modificar: `internal/storage/indices_rebuild.go`
+- Testar: `internal/storage/indices_rebuild_test.go`
 
 **Interfaces:**
 - Produz:
@@ -2511,7 +2511,7 @@ Deve reprovar: `TestOCustoDoSetNaoAcompanhaOTamanhoDoSegmento`.
 teste de CORRETUDE reprovar aqui, a suíte não sabe separar as duas coisas, e é
 o teste de corretude que está errado, não a mutação.
 
-- [ ] **M2 — remover o dedup do merge k-way** (`uniao.go`)
+- [ ] **M2 — remover o dedup do merge k-way** (`union.go`)
 
 Deve reprovar: `TestUneMergeiaFaixasSobrepostasEDeduplica` e
 `TestUneEhEquivalenteAUniaoOrdenada`. Se só o primeiro reprovar, o teste de
@@ -2567,11 +2567,11 @@ fique escrito em vez de presumido."
 ## Tarefa 16: métricas
 
 **Arquivos:**
-- Modificar: `internal/metrics/nomes.go`, `internal/metrics/metrics.go`,
+- Modificar: `internal/metrics/names.go`, `internal/metrics/metrics.go`,
   `internal/storage/indices*.go`, `internal/query/meta/`
-- Testar: `internal/metrics/*_test.go`, `internal/storage/indices_metricas_test.go`
+- Testar: `internal/metrics/*_test.go`, `internal/storage/indices_metrics_test.go`
 
-- [ ] **Passo 1: as séries, só pelas constantes de `nomes.go`**
+- [ ] **Passo 1: as séries, só pelas constantes de `names.go`**
 
 | Série | Tipo | Labels |
 |---|---|---|

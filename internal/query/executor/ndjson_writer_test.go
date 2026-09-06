@@ -18,7 +18,7 @@ import (
 // Passar um teto real neles acoplaria cada asserção a um número que não tem
 // nada a ver com o que ela afirma, e a primeira mudança de default quebraria a
 // suíte inteira por um motivo que não é o dela. Os testes que EXERCEM o
-// orçamento declaram o teto deles, explicitamente — ver orcamento_writer_test.go.
+// orçamento declaram o teto deles, explicitamente — ver budget_writer_test.go.
 func semTeto() *budget.PorQuery { return budget.NovoGlobal(0).Query(0) }
 
 func rowDeTeste(i int) Row {

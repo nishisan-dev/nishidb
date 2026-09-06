@@ -87,7 +87,7 @@ declarado num dataset com `RowCount > 0`. A guarda está certa; o backfill a
 7. **`_meta` é nome válido hoje** — `isIdentName` aceita `[a-z0-9_]+`
    ([spec.go:336](internal/schema/spec.go:336)); nenhum fixture usa `_` inicial.
 8. **`ErrorCategory` nunca é serializada** — métricas usam o nome
-   ([kafka/metricas.go:65](internal/kafka/metricas.go:65)). Inserir categoria é
+   ([kafka/metrics.go:65](internal/kafka/metrics.go:65)). Inserir categoria é
    seguro. O precedente é `CategoryEventTooLarge`, acrescentada um ciclo antes
    pelo mesmo motivo.
 9. **`ScanLive()`** ([store.go:1609](internal/storage/store.go:1609)) é a
@@ -148,7 +148,7 @@ colunas são guardados os dois.
 **Mitigação de D4.** Sem recusa de chave desconhecida, `maxColls` com typo vira
 no-op silencioso. A compensação é a mesma forma do `maxRows`: **publicar o valor
 efetivo** de `maxCols`/`onMaxCols` em `/v1/metadata`
-([documentos.go:56](internal/server/documentos.go:56) é o molde) e no log de
+([documents.go:56](internal/server/documents.go:56) é o molde) e no log de
 subida, para que o typo apareça como "continua no default" num lugar conferível.
 
 ---
@@ -189,9 +189,9 @@ Ordem interna:
 5. Sentinela `ErrDictFull` em [fielddict.go:206](internal/storage/fielddict/fielddict.go:206)
    como rede de segurança nos caminhos de abertura.
 6. Contador em `Compiled` + `nishidb_dataset_fields{,_dropped_total}` no coletor
-   pull de [metricas_dataset.go:76-181](internal/server/metricas_dataset.go:76);
+   pull de [metrics_dataset.go:76-181](internal/server/metrics_dataset.go:76);
    os números vão para `DatasetStats`/`StorageStats`, **fora** do `if cons != nil`
-   de [documentos.go:156](internal/server/documentos.go:156). Log uma vez por dataset.
+   de [documents.go:156](internal/server/documents.go:156). Log uma vez por dataset.
 7. `maxCols`/`onMaxCols` efetivos publicados em `/v1/metadata` (mitigação de D4).
 
 **Entrega:** o dataset que chega ao teto **deixa de parar a ingestão para
@@ -212,7 +212,7 @@ campo depois chega tarde. Dois testes: `maxCols` no YAML com dict real
   **antes** do token, senão a regressão de diagnóstico do `.` passa despercebida.
 - **Parser:** `Namespace` aditivo em [ast.go:18](internal/query/parser/ast.go:18).
   Continua LL(1): o `.` **é** o lookahead — ao contrário do `BY` recusado em
-  [clausulas.go:5-9](internal/query/parser/clausulas.go:5).
+  [clauses.go:5-9](internal/query/parser/clauses.go:5).
 - **Motor:** pacote `internal/query/meta` com Store virtual codificando row sob
   demanda; um desvio em [engine.go:82-94](internal/query/engine.go:82) serve
   servidor e CLI de uma vez. O `*binder.Error` é interceptado e tem o nome
@@ -256,7 +256,7 @@ fields:
 - **`SELECT *` não expande:** segundo predicado em `camposOrdenados`
   ([compile.go:436-438](internal/schema/compile.go:436) já filtra `IsSystem`),
   mais `FieldsParaMetadata()` — o gate de paridade de
-  `documentos_test.go:464-476` é unidirecional, então metadata como superset é
+  `documents_test.go:464-476` é unidirecional, então metadata como superset é
   legal, e a coluna derivada aparece no DBeaver mesmo fora do `*`.
 - **Materialização:** segunda passada em [patch.go](internal/materializer/patch.go)
   entre `:156` e `:162`, com jsonp sobre o `f.Value` do pai. Regras duras:
@@ -313,7 +313,7 @@ dataset abre pelo CLI e pelo servidor. **Corta aqui e não antes** porque a fia�
   ponto em `as` na compilação (F3) fecha a categoria inteira.
 - **`maxNestedCols`:** molde completo do `maxRows` nas quatro pontas — YAML
   ponteiro, validação `> 0`, `Compiled`, `/v1/metadata`, campo na `Requisicao`
-  ([protocolo.go:44-50](internal/protocol/protocolo.go:44)), função de teto no
+  ([protocol.go:44-50](internal/protocol/protocol.go:44)), função de teto no
   servidor que **recusa acima e nunca clampa** ([query.go:189-208](internal/server/query.go:189)),
   e `setMaxNestedCols` no `Statement` omitindo quando o pedido excede
   ([NishiStatement.java:121-127](clients/jdbc/src/main/java/dev/nishisan/nishidb/jdbc/NishiStatement.java:121)).
@@ -335,12 +335,12 @@ saiba os nomes, com teto que o cliente encurta e o servidor recusa acima.
 - **Guarda transformada**, não removida: `Options.BackfillBitmaps` autoriza a
   divergência (2) de [store.go:858-872](internal/storage/store.go:858),
   preservando a assimetria com `AllowBitmapDrop`
-  ([store_sc_lacunas_test.go:167](internal/storage/store_sc_lacunas_test.go:167)).
+  ([store_sc_gaps_test.go:167](internal/storage/store_sc_gaps_test.go:167)).
 - **O estado nasce depois do `switch` de recovery** e antes de
   [store.go:752](internal/storage/store.go:752) — `nextRowID` é zero no laço dos
   bitmaps, e `(0,0)` não pode significar "completo".
 - **`internal/storage/backfill.go`** no molde do coletor de expiração
-  ([expiracao.go:283-365](internal/storage/expiracao.go:283)): cursor persistente,
+  ([expiry.go:283-365](internal/storage/expiry.go:283)): cursor persistente,
   `MaxPorPassada`/`TempoPorPassada`, reagendamento imediato ao bater o teto.
   Roda **como trabalho do writer, sob o `wmu`** — `Set/Clear` são exclusivos do
   writer e compartilham `ix.scratch` ([bitmap.go:115](internal/index/bitmap/bitmap.go:115)),
@@ -371,7 +371,7 @@ saiba os nomes, com teto que o cliente encurta e o servidor recusa acima.
   removido antes do `bitmap.Open`, senão redeclarar depois de dropar adota o
   `values.dict` antigo.
 - **Observabilidade:** quatro séries + `/v1/stats`, na forma da compaction e da
-  expiração ([metricas_dataset.go:123-178](internal/server/metricas_dataset.go:123)).
+  expiração ([metrics_dataset.go:123-178](internal/server/metrics_dataset.go:123)).
 
 **Nota:** a compaction tombstona oportunisticamente
 ([compaction.go:186-193](internal/storage/compaction.go:186)), então a asserção
@@ -441,7 +441,7 @@ ratchet **recusa nas duas direções**.
 **Documentação (DoD):** `architecture.md`, os `.puml` afetados
 (`recovery_flow.puml:40` cita o débito 22), `debitos.md` (fecha o **22**, abre o
 **76**) e `README.md`. Regra de sequência: documento que cita `TestXxx` entra
-**depois** do teste existir, no mesmo commit — [evidencias_test.go:26-33](internal/cli/evidencias_test.go:26)
+**depois** do teste existir, no mesmo commit — [evidence_test.go:26-33](internal/cli/evidence_test.go:26)
 verifica isso.
 
 **Ao aprovar:** copiar este plano para `planning/` e substituir o rascunho v2,

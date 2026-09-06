@@ -26,7 +26,7 @@ import (
 //
 // Eles são SÓ leitura, por decisão D3 do roadmap: o `compact` e o `checkpoint`
 // que o §96 também lista são rotas MUTANTES, atrás do papel ADMIN — vivem em
-// mutacao.go (Task B5), não aqui. Um comando que muda o dataset não vai para
+// mutation.go (Task B5), não aqui. Um comando que muda o dataset não vai para
 // o mesmo arquivo de um que só imprime números.
 //
 // O que sai daqui é uma VISTA do /v1/stats e do /v1/metadata, não uma segunda

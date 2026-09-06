@@ -15,7 +15,7 @@ import (
 const (
 	headerSize = 64
 	// entrySize é a entrada dos vetores de 64 bits — todos os deste arquivo e
-	// a agenda. entrySize32 é a do Denso32 (denso32.go). O byte 5 do header
+	// a agenda. entrySize32 é a do Denso32 (dense32.go). O byte 5 do header
 	// grava qual das duas o arquivo usa, e a abertura recusa a outra.
 	entrySize   = 8
 	entrySize32 = 4

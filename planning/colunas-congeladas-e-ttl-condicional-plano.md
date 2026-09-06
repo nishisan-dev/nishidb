@@ -30,17 +30,17 @@
 
 | Arquivo | Responsabilidade |
 |---|---|
-| `internal/predicate/predicado.go` | `Slot`, `Coleta`, `Programa`, `Compila`, `Avalia` — o avaliador, movido do executor |
-| `internal/predicate/predicado_test.go` | Testes do avaliador, movidos de `predicate_prova_test.go` |
-| `internal/schema/congelada.go` | Validação e compilação de `frozenFrom` |
-| `internal/schema/congelada_test.go` | Testes de validação de `frozenFrom` |
-| `internal/schema/regrattl.go` | Validação e compilação da lista `ttl:` |
-| `internal/schema/regrattl_test.go` | Testes das regras |
-| `internal/materializer/congelada.go` | Terceira passada do patch: captura das congeladas |
-| `internal/materializer/congelada_test.go` | Testes da captura e do congelamento |
-| `internal/materializer/prazo.go` | Avaliação das regras na ingestão e emissão de `_expiresIn` |
-| `internal/materializer/prazo_test.go` | Testes da avaliação |
-| `internal/storage/prazos_test.go` | Testes do índice de prazos e da conta |
+| `internal/predicate/predicate.go` | `Slot`, `Coleta`, `Programa`, `Compila`, `Avalia` — o avaliador, movido do executor |
+| `internal/predicate/predicate_test.go` | Testes do avaliador, movidos de `predicate_prova_test.go` |
+| `internal/schema/frozen.go` | Validação e compilação de `frozenFrom` |
+| `internal/schema/frozen_test.go` | Testes de validação de `frozenFrom` |
+| `internal/schema/ttl_rule.go` | Validação e compilação da lista `ttl:` |
+| `internal/schema/ttl_rule_test.go` | Testes das regras |
+| `internal/materializer/frozen.go` | Terceira passada do patch: captura das congeladas |
+| `internal/materializer/frozen_test.go` | Testes da captura e do congelamento |
+| `internal/materializer/deadline.go` | Avaliação das regras na ingestão e emissão de `_expiresIn` |
+| `internal/materializer/deadline_test.go` | Testes da avaliação |
+| `internal/storage/deadlines_test.go` | Testes do índice de prazos e da conta |
 
 **Modificados**
 
@@ -57,7 +57,7 @@
 | `internal/materializer/materializer.go` | Passa `prevPayload` para a avaliação de prazo |
 | `internal/storage/rowindex/rowindex.go` | `Prazos` + `PrazoImortal` |
 | `internal/storage/store.go` | Options, abertura do índice, `applyRecord`, `prazoVencido` |
-| `internal/storage/expiracao.go` | Conta do prazo, pré-filtro de tombstone |
+| `internal/storage/expiry.go` | Conta do prazo, pré-filtro de tombstone |
 | `internal/cli/cli.go`, `internal/cli/offsets.go`, `internal/server/server.go` | Montagem das Options |
 
 ---
@@ -69,7 +69,7 @@ Refatoração pura. Critério de aceite: nenhuma asserção de teste existente m
 ### Task 1: Pacote `internal/predicate`
 
 **Files:**
-- Create: `internal/predicate/predicado.go`, `internal/predicate/predicado_test.go`
+- Create: `internal/predicate/predicate.go`, `internal/predicate/predicate_test.go`
 - Modify: `internal/query/executor/collect.go` (arquivo inteiro), `internal/query/executor/predicate.go` (arquivo inteiro), `internal/query/executor/executor.go`, `internal/query/executor/sort.go`, `internal/query/executor/topn.go`, `internal/query/executor/row.go`
 
 **Interfaces:**
@@ -99,9 +99,9 @@ Refatoração pura. Critério de aceite: nenhuma asserção de teste existente m
 - [ ] **Passo 1: mover os arquivos preservando o histórico**
 
 ```bash
-git mv internal/query/executor/collect.go internal/predicate/predicado.go
-git mv internal/query/executor/predicate.go internal/predicate/programa.go
-git mv internal/query/executor/predicate_prova_test.go internal/predicate/predicado_test.go
+git mv internal/query/executor/collect.go internal/predicate/predicate.go
+git mv internal/query/executor/predicate.go internal/predicate/program.go
+git mv internal/query/executor/predicate_prova_test.go internal/predicate/predicate_test.go
 ```
 
 Ajuste `package executor` → `package predicado` no topo dos três arquivos.
@@ -195,7 +195,7 @@ git commit -m "Extrai o avaliador de predicado para um pacote próprio"
 ### Task 2: `frozenFrom` no spec e suas validações
 
 **Files:**
-- Create: `internal/schema/congelada.go`, `internal/schema/congelada_test.go`
+- Create: `internal/schema/frozen.go`, `internal/schema/frozen_test.go`
 - Modify: `internal/schema/spec.go` (`FieldSpec`, laço de validação em `spec.go:761`)
 
 **Interfaces:**
@@ -204,7 +204,7 @@ git commit -m "Extrai o avaliador de predicado para um pacote próprio"
 - [ ] **Passo 1: escrever os testes de recusa**
 
 ```go
-// internal/schema/congelada_test.go
+// internal/schema/frozen_test.go
 package schema_test
 
 func TestFrozenFromComTypeEhRecusado(t *testing.T) {
@@ -231,7 +231,7 @@ func TestFrozenFromParaASequenceEhAceito(t *testing.T)            { /* não deve
 func TestFrozenFromRelogioEhAceito(t *testing.T)                  { /* frozenFrom: "@writeTime" */ }
 ```
 
-Reaproveite os helpers já usados em `internal/schema/expiracao_test.go` para carregar YAML de string e conferir a mensagem; se os helpers forem privados àquele arquivo, extraia-os para um `helpers_test.go` no mesmo pacote de teste como parte desta tarefa.
+Reaproveite os helpers já usados em `internal/schema/expiry_test.go` para carregar YAML de string e conferir a mensagem; se os helpers forem privados àquele arquivo, extraia-os para um `helpers_test.go` no mesmo pacote de teste como parte desta tarefa.
 
 - [ ] **Passo 2: rodar e ver falhar**
 
@@ -256,7 +256,7 @@ Em `internal/schema/spec.go`, no struct `FieldSpec` (junto de `Format`):
 - [ ] **Passo 4: escrever as validações**
 
 ```go
-// internal/schema/congelada.go
+// internal/schema/frozen.go
 package schema
 
 // OrigemRelogio é a origem especial que entrega o instante da escrita em vez
@@ -346,7 +346,7 @@ git commit -m "Valida frozenFrom na carga da spec"
 
 **Files:**
 - Modify: `internal/schema/compile.go` (`CompiledField`, `Compiled`, laço de compilação em `compile.go:490`)
-- Test: `internal/schema/congelada_test.go`
+- Test: `internal/schema/frozen_test.go`
 
 **Interfaces:**
 - Consumes: `FieldSpec.FrozenFrom`, `OrigemRelogio` (Task 2)
@@ -457,7 +457,7 @@ git commit -m "Compila a coluna congelada herdando o tipo da origem"
 ### Task 4: Captura na ingestão
 
 **Files:**
-- Create: `internal/materializer/congelada.go`, `internal/materializer/congelada_test.go`
+- Create: `internal/materializer/frozen.go`, `internal/materializer/frozen_test.go`
 - Modify: `internal/materializer/patch.go` (struct em `:25`, guarda em `:101`, chamada em `:208`)
 
 **Interfaces:**
@@ -467,7 +467,7 @@ git commit -m "Compila a coluna congelada herdando o tipo da origem"
 - [ ] **Passo 1: escrever os testes**
 
 ```go
-// internal/materializer/congelada_test.go
+// internal/materializer/frozen_test.go
 func TestCongeladaCapturaDoEvento(t *testing.T) {
 	// evento {id:"a", sev:5} → payload tem origSev=5
 }
@@ -509,7 +509,7 @@ type patchEntry struct {
 - [ ] **Passo 4: escrever a captura**
 
 ```go
-// internal/materializer/congelada.go
+// internal/materializer/frozen.go
 package materializer
 
 import (
@@ -694,7 +694,7 @@ git commit -m "Preserva o valor da coluna congelada no merge"
 ### Task 6: Colunas congeladas de ponta a ponta
 
 **Files:**
-- Test: `internal/materializer/congelada_test.go` (acrescenta), `internal/cli/` (teste e2e no estilo dos existentes)
+- Test: `internal/materializer/frozen_test.go` (acrescenta), `internal/cli/` (teste e2e no estilo dos existentes)
 
 - [ ] **Passo 1: escrever os testes de ciclo**
 
@@ -888,8 +888,8 @@ git commit -m "Compila uma condição solta pela mesma gramática do WHERE"
 ### Task 8: `ttl:` vira lista de regras
 
 **Files:**
-- Create: `internal/schema/regrattl.go`, `internal/schema/regrattl_test.go`
-- Modify: `internal/schema/spec.go` (`TTLSpec` → `[]RegraTTLSpec`, `nomesDeSistema`), `internal/schema/expiracao_test.go` (adaptar ao formato novo)
+- Create: `internal/schema/ttl_rule.go`, `internal/schema/ttl_rule_test.go`
+- Modify: `internal/schema/spec.go` (`TTLSpec` → `[]RegraTTLSpec`, `nomesDeSistema`), `internal/schema/expiry_test.go` (adaptar ao formato novo)
 
 **Interfaces:**
 - Produces:
@@ -982,7 +982,7 @@ var nomesDeSistema = map[string]string{
 - [ ] **Passo 4: escrever a validação**
 
 ```go
-// internal/schema/regrattl.go
+// internal/schema/ttl_rule.go
 package schema
 
 // RegraTTL é uma regra validada. Duracao zero significa IMORTAL — a regra
@@ -1036,7 +1036,7 @@ A validação do `when` (compilação e recusa dos campos de sistema) **não cab
 
 - [ ] **Passo 5: adaptar os testes de expiração existentes**
 
-`internal/schema/expiracao_test.go` está escrito contra a forma escalar. Reescreva cada caso para a lista. `TestExpireAfterWriteEFieldNoMesmoBlocoSaoRecusados` perde o motivo de existir (o `field` não existe mais) — troque-o por `TestFormaFieldTypeAntigaEhRecusada`.
+`internal/schema/expiry_test.go` está escrito contra a forma escalar. Reescreva cada caso para a lista. `TestExpireAfterWriteEFieldNoMesmoBlocoSaoRecusados` perde o motivo de existir (o `field` não existe mais) — troque-o por `TestFormaFieldTypeAntigaEhRecusada`.
 
 - [ ] **Passo 6: rodar**
 
@@ -1057,7 +1057,7 @@ git commit -m "Troca o bloco ttl por uma lista de regras condicionais"
 
 **Files:**
 - Modify: `internal/schema/compile.go` (`Compiled`, `compile.go:453`, `compile.go:490`, remoção de `IsTTL`)
-- Test: `internal/schema/regrattl_test.go`
+- Test: `internal/schema/ttl_rule_test.go`
 
 **Interfaces:**
 - Consumes: `RegraTTL` (Task 8), `binder.BindCondicao` (Task 7), `predicado.Compila` (Task 1)
@@ -1192,7 +1192,7 @@ git commit -m "Compila as regras de ttl e registra o campo de prazo"
 ### Task 10: Avaliar na ingestão e emitir `_expiresIn`
 
 **Files:**
-- Create: `internal/materializer/prazo.go`, `internal/materializer/prazo_test.go`
+- Create: `internal/materializer/deadline.go`, `internal/materializer/deadline_test.go`
 - Modify: `internal/materializer/patch.go`, `internal/materializer/materializer.go`
 
 **Interfaces:**
@@ -1230,7 +1230,7 @@ Expected: FAIL
 - [ ] **Passo 3: escrever a avaliação**
 
 ```go
-// internal/materializer/prazo.go
+// internal/materializer/deadline.go
 package materializer
 
 // duracaoDe devolve a duração de ociosidade que vale para o estado que ESTA
@@ -1491,8 +1491,8 @@ git commit -m "Acrescenta o índice de prazos com sentinela para o imortal"
 ### Task 12: O storage passa a usar a duração por linha
 
 **Files:**
-- Create: `internal/storage/prazos_test.go`
-- Modify: `internal/storage/store.go` (Options `:115`, abertura `:721`, dicionário `:749`, applyRecord `:1467`, `prazoVencido` `:1528`), `internal/storage/store_checkpoint.go:102`, `internal/storage/expiracao.go:256`
+- Create: `internal/storage/deadlines_test.go`
+- Modify: `internal/storage/store.go` (Options `:115`, abertura `:721`, dicionário `:749`, applyRecord `:1467`, `prazoVencido` `:1528`), `internal/storage/store_checkpoint.go:102`, `internal/storage/expiry.go:256`
 
 **Interfaces:**
 - Consumes: `rowindex.Prazos`, `rowindex.PrazoImortal` (Task 11); `schema.CampoDePrazo` (Task 8)
@@ -1527,7 +1527,7 @@ entrada em `prazos.idx` fica com o valor antigo, o que é inofensivo — a linha
 tombstonada e `Expira` é idempotente. Se você sentir vontade de acrescentá-lo ali, a
 resposta é o pré-filtro da Task 13, não um campo a mais na lápide.
 
-Use `UsaRelogio` (`expiracao.go:16`) para avançar o tempo sem dormir.
+Use `UsaRelogio` (`expiry.go:16`) para avançar o tempo sem dormir.
 
 - [ ] **Passo 2: rodar e ver falhar**
 
@@ -1656,7 +1656,7 @@ Remova o campo `s.expireAfterWrite`.
 
 - [ ] **Passo 7: o coletor usa a mesma conta**
 
-Em `expiracao.go:256`, troque a comparação inline por `s.prazoVencido(id)` — os dois lugares faziam a mesma conta duplicada, e agora ela tem um dono:
+Em `expiry.go:256`, troque a comparação inline por `s.prazoVencido(id)` — os dois lugares faziam a mesma conta duplicada, e agora ela tem um dono:
 
 ```go
 		case s.prazoVencido(id):
@@ -1698,8 +1698,8 @@ git commit -m "Faz o prazo da linha vir da duração gravada no documento"
 ### Task 13: Pré-filtro de tombstone no coletor
 
 **Files:**
-- Modify: `internal/storage/expiracao.go` (`ExpiraUmaPassada`)
-- Test: `internal/storage/expiracao_test.go`
+- Modify: `internal/storage/expiry.go` (`ExpiraUmaPassada`)
+- Test: `internal/storage/expiry_test.go`
 
 - [ ] **Passo 1: escrever o teste**
 
@@ -1764,7 +1764,7 @@ git commit -m "Poupa o lock de escrita pulando linha já tombstonada na varredur
 ### Task 14: Contadores e log de subida
 
 **Files:**
-- Modify: `internal/materializer/materializer.go`, `internal/materializer/prazo.go`, `internal/schema/compile.go` ou o ponto de subida do dataset
+- Modify: `internal/materializer/materializer.go`, `internal/materializer/deadline.go`, `internal/schema/compile.go` ou o ponto de subida do dataset
 
 - [ ] **Passo 1: escrever o teste**
 

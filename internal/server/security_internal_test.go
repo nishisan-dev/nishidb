@@ -312,7 +312,7 @@ func TestResolveCredenciaisMapeiaUsernameParaDigestEPapel(t *testing.T) {
 // P-256) EM MEMÓRIA, com o NotBefore/NotAfter que o teste pedir — é
 // exatamente o que avisaValidadeDoCertificado parseia para decidir entre
 // silêncio, WARN e ERRO. Ao contrário de geraCertificadoDeTeste
-// (seguranca_test.go, que escreve em disco para exercitar
+// (security_test.go, que escreve em disco para exercitar
 // tls.LoadX509KeyPair via arquivo), este helper devolve o tls.Certificate
 // pronto: os testes abaixo chamam avisaValidadeDoCertificado diretamente,
 // sem passar pela subida inteira do servidor.

@@ -5,7 +5,7 @@ import "github.com/nishisan-dev/nishidb/internal/types"
 // Sela converte a forma WIP do segmento na forma selada, e desliga os .widx.
 //
 // A ORDEM é a garantia: o Escritor grava o .sidx por .tmp + fsync + rename +
-// fsync do diretório (escritor.go), e SÓ ENTÃO os .widx são removidos. Na
+// fsync do diretório (writer.go), e SÓ ENTÃO os .widx são removidos. Na
 // ordem inversa, um crash no meio deixaria o segmento sem índice nenhum, e
 // ele responderia por enumeração até a reconstrução alcançá-lo — correto, mas
 // trabalho que não precisava existir.

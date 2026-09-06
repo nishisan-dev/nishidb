@@ -171,7 +171,7 @@ Pacotes que estruturam o todo:
   três modos — completo, top-N ≤ 4.096, transbordo para `<dataset>/spill/`)/
   LIMIT/OFFSET. `GROUP BY`, `JOIN`, `HAVING`, `DISTINCT`, `UNION` são recusados
   com `UNSUPPORTED_CLAUSE` — premissa de produto, não bug.
-- **Métricas**: nomes só pelas constantes de `internal/metrics/nomes.go`;
+- **Métricas**: nomes só pelas constantes de `internal/metrics/names.go`;
   `/v1/stats` e `/metrics` leem a MESMA estrutura (nunca duplicar contador);
   séries que podem alarmar nascem com zero na subida; label nunca vem de entrada
   do cliente.
@@ -223,7 +223,7 @@ NA FORMA DOMINANTE do repositório, não só na que você escreveu no teste.
   `planning/` e a spec do subsistema 1 numeram as suas seções cada um por si —
   `store.go` cita §92 da raiz, §10.2 do design de storage e §2.4 do subsistema.
   O conjunto é FECHADO e declarado em `specsDoMarcador`
-  (`internal/gates/verificacao_test.go`), com o preço do achatamento nomeado no
+  (`internal/gates/verification_test.go`), com o preço do achatamento nomeado no
   godoc; documento novo que passe a ser citado entra na lista. **"débito NN"**
   cita `docs/debitos.md`, cuja numeração é ESTÁVEL: item novo entra no fim, nada
   é renumerado. Os comentários longos explicando o porquê são normativos — siga

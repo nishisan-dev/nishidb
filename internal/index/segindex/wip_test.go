@@ -534,7 +534,7 @@ func TestApagaRemoveOArquivoDoWIP(t *testing.T) {
 }
 
 // Offsets do header do WIP — escritos aqui, e não emprestados do pacote, pela
-// mesma razão do bloco equivalente de selado_test.go: quem mutila um formato de
+// mesma razão do bloco equivalente de sealed_test.go: quem mutila um formato de
 // disco tem de saber onde está pondo a mão. Um teste que derivasse os offsets
 // das constantes do pacote passaria a mutilar o lugar errado no dia em que o
 // layout mudasse, e continuaria verde.

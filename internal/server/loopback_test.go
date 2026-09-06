@@ -35,7 +35,7 @@ func TestLoopbackDesligadoNaoAbrePorta(t *testing.T) {
 // A lacuna que a B1 deixou nomeada para a ativação decidir: habilitar o
 // loopback sem declarar a porta não tem endereço determinístico para
 // bindar. Aqui pelo caminho de subida REAL (server.Novo com YAML de
-// verdade), não só a função pura (enderecoLoopback, seguranca_internal_test.go).
+// verdade), não só a função pura (enderecoLoopback, security_internal_test.go).
 func TestLoopbackHabilitadoSemPortaRecusaASubidaDoServidor(t *testing.T) {
 	a := novoAmbienteCom(t, "\nserver:\n  bind: 127.0.0.1\n  port: %d\n  loopback:\n    enabled: true\n")
 	a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))

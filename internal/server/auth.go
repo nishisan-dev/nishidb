@@ -6,7 +6,7 @@
 // listener EXPOSTO. A B5 registra as duas rotas ADMIN-only do §96 (POST
 // /v1/compact e POST /v1/checkpoint) chamando roteador.registra com
 // config.RoleAdmin — o mecanismo já saiu da B3 testado com um handler de
-// teste (autenticacao_internal_test.go), e agora tem produção de verdade
+// teste (auth_internal_test.go), e agora tem produção de verdade
 // para exercitá-lo.
 //
 // Quando a autenticação está DESLIGADA (s.credenciais == nil, resolvido pela
@@ -259,7 +259,7 @@ func papelAutorizado(papelUsuario, papelExigido string) bool {
 const atrasoDeFalha = 100 * time.Millisecond
 
 // O enum FECHADO do label `reason` de nishidb_auth_failures_total. Fechado
-// pela mesma razão de datasetDesconhecido (metricas_query.go): um label
+// pela mesma razão de datasetDesconhecido (metrics_query.go): um label
 // alimentado pelo texto que o cliente digitou seria uma série nova a cada
 // tentativa, sem teto contra qualquer varredura de credencial.
 const (
@@ -437,7 +437,7 @@ func (s *Servidor) recusaRegistroSemPapel(w http.ResponseWriter, r *http.Request
 }
 
 // registraMetricasDeAuth instala a série de falha de autenticação. Fica fora
-// de metricasDeQuery (metricas_query.go) de propósito: uma falha de auth
+// de metricasDeQuery (metrics_query.go) de propósito: uma falha de auth
 // acontece ANTES de qualquer dataset ser resolvido, então não existe label de
 // dataset para carregar — misturar as duas famílias forçaria um valor de
 // dataset artificial só para preencher a assinatura.

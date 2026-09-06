@@ -14,7 +14,7 @@ import (
 )
 
 // Testes de caixa preta do middleware: aqui é o servidor de VERDADE, subido
-// via server.Novo + Roda e alcançado pela porta — o que autenticacao_internal_test.go
+// via server.Novo + Roda e alcançado pela porta — o que auth_internal_test.go
 // (package server) não cobre porque exige o pipeline real (handleQuery lendo
 // o corpo, a vaga do §80, o registry de métricas de produção, o log durante o
 // Roda). O que já é caixa branca — byte-identidade do 401, enum de razão,
@@ -30,7 +30,7 @@ const (
 
 // blocoAutenticacao é o bloco `server:` com dois usuários — "leitor" (READ) e
 // "chefe" (ADMIN) — no loopback (auth ligada sem TLS é aviso, não recusa,
-// célula 1 da matriz do §77 — seguranca_test.go).
+// célula 1 da matriz do §77 — security_test.go).
 func blocoAutenticacao(maisConfig string) string {
 	return "\nserver:\n  bind: 127.0.0.1\n  port: %d\n" +
 		"  authentication:\n    enabled: true\n    users:\n" +
@@ -126,7 +126,7 @@ func TestOrdem401AntesDeLerOCorpo(t *testing.T) {
 // — se a ordem estivesse invertida, o select não-bloqueante do §80
 // encontraria a vaga ocupada e devolveria 503 em vez de 401. A prova vem
 // dobrada: o status da resposta E a métrica nishidb_query_total, que só
-// nishidb_query_total incrementa em s.met.admite (metricas_query.go),
+// nishidb_query_total incrementa em s.met.admite (metrics_query.go),
 // continuando em 1 depois da tentativa anônima.
 func TestOrdem401AntesDaVagaDoSetenta(t *testing.T) {
 	srv := servidorComAutenticacao(t, 30000, "runtime:\n  query:\n    maxConcurrent: 1\n")
@@ -216,7 +216,7 @@ func TestSemCredencialEmQualquerRotaProtegidaEh401(t *testing.T) {
 
 // ADMIN ⊇ READ ponta a ponta, nas cinco rotas de verdade — o mecanismo em si
 // já está travado em tabela e com handler de teste em
-// autenticacao_internal_test.go; isto confirma que a fiação em montaMux
+// auth_internal_test.go; isto confirma que a fiação em montaMux
 // registrou as cinco com RoleRead, como o brief pede.
 func TestPapelReadEAdminAlcancamTodasAsRotasDeLeitura(t *testing.T) {
 	srv := servidorComAutenticacao(t, 3, "")
@@ -245,7 +245,7 @@ func TestPapelReadEAdminAlcancamTodasAsRotasDeLeitura(t *testing.T) {
 }
 
 // O enum fechado do label `reason` chegando de verdade ao /metrics do
-// processo (autenticacao_internal_test.go já prova o mesmo isolado, sem
+// processo (auth_internal_test.go já prova o mesmo isolado, sem
 // listener; isto prova que registraMetricasDeAuth está de fato ligado ao
 // registry que o servidor expõe).
 func TestAuthFailuresTotalApareceNoScrapePorRazao(t *testing.T) {

@@ -6,9 +6,9 @@ JDBC, cujas interfaces java.sql são inglesas e cujo `wire` é português).
 
 A tabela CODIGOS é o espelho de SqlStates.java, e existe pela mesma razão: o
 cliente casa por CÓDIGO, nunca pelo texto da mensagem, que é prosa para humanos
-e pode ser reescrita (ver o comentário de internal/protocol/protocolo.go).
+e pode ser reescrita (ver o comentário de internal/protocol/protocol.go).
 
-`internal/gates/python_test.go` parseia `internal/protocol/protocolo.go` com
+`internal/gates/python_test.go` parseia `internal/protocol/protocol.go` com
 go/ast, colhe toda constante `Cod*` de valor string e reprova se algum literal
 não aparecer AQUI. Código novo em Go sem exceção Python reprova no CI Go, antes
 de qualquer intérprete Python rodar.
@@ -20,7 +20,7 @@ import builtins
 
 # --------------------------------------------------------------- os códigos do wire
 #
-# Um por constante Cod* de internal/protocol/protocolo.go. Ficam como
+# Um por constante Cod* de internal/protocol/protocol.go. Ficam como
 # constantes de módulo, e não soltos na tabela, para que o usuário possa
 # comparar `err.code == nishidb.BAD_PARAMETER` sem digitar a string.
 

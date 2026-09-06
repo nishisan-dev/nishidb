@@ -13,12 +13,12 @@ import (
 // caminhoDoDocDeMetricas é a referência que esta suíte cobra.
 const caminhoDoDocDeMetricas = "docs/metricas.md"
 
-// seriesDeclaradas extrai as constantes Met* de internal/metrics/nomes.go pela
+// seriesDeclaradas extrai as constantes Met* de internal/metrics/names.go pela
 // AST, e não por grep: o nome da série é DADO no código, e ler prosa para
 // descobri-lo é a classe de defeito que a doutrina de verificação nomeia.
 func seriesDeclaradas(t *testing.T) map[string]string {
 	t.Helper()
-	caminho := filepath.Join(raizDoRepo, "internal/metrics/nomes.go")
+	caminho := filepath.Join(raizDoRepo, "internal/metrics/names.go")
 	fset := token.NewFileSet()
 	arquivo, err := parser.ParseFile(fset, caminho, nil, 0)
 	if err != nil {
@@ -53,14 +53,14 @@ func seriesDeclaradas(t *testing.T) map[string]string {
 // TestTodaMetricaDeclaradaEstaDocumentada: o inventário de docs/metricas.md
 // cobre TODA série que o código declara.
 //
-// Sem ele o documento envelhece calado: a série nova entra em nomes.go, sai no
+// Sem ele o documento envelhece calado: a série nova entra em names.go, sai no
 // /metrics, e a página que promete ser o inventário deixa de sê-lo sem que
 // nada acuse. É a mesma cobrança que os gates dos clients fazem sobre os
 // códigos do protocolo.
 func TestTodaMetricaDeclaradaEstaDocumentada(t *testing.T) {
 	series := seriesDeclaradas(t)
 	if len(series) < 50 {
-		t.Fatalf("só %d séries extraídas de nomes.go: a extração quebrou, e um gate "+
+		t.Fatalf("só %d séries extraídas de names.go: a extração quebrou, e um gate "+
 			"que não acha nada passa sempre", len(series))
 	}
 	doc := leArquivo(t, caminhoDoDocDeMetricas)
@@ -76,7 +76,7 @@ func TestTodaMetricaDeclaradaEstaDocumentada(t *testing.T) {
 }
 
 // TestODocDeMetricasNaoInventaSerie é o lado inverso, e o que impede a página
-// de mentir: toda `nishidb_*` citada nela tem de existir em nomes.go.
+// de mentir: toda `nishidb_*` citada nela tem de existir em names.go.
 //
 // Uma série renomeada no código deixaria o nome velho no documento, e o
 // operador escreveria o alerta contra algo que não existe mais — a falha
@@ -125,7 +125,7 @@ func TestODocDeMetricasNaoInventaSerie(t *testing.T) {
 			continue
 		}
 		vistas[c] = true
-		t.Errorf("%s é citada em %s e NÃO existe em internal/metrics/nomes.go: "+
+		t.Errorf("%s é citada em %s e NÃO existe em internal/metrics/names.go: "+
 			"a série foi renomeada ou o nome está errado", c, caminhoDoDocDeMetricas)
 	}
 }

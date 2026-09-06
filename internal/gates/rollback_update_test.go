@@ -184,7 +184,7 @@ func servidorFakeComInvalido(t *testing.T, estadoDir string, invalidoPorRaspagem
 }
 
 // servidorFakeComInvalidoPorMotivo prova o Important 2 da revisão final: a
-// Task A5 (internal/kafka/metricas.go) fez o binário passar a emitir
+// Task A5 (internal/kafka/metrics.go) fez o binário passar a emitir
 // nishidb_ingest_invalid_total SEMPRE com o label `motivo`, e possivelmente
 // em VÁRIAS séries — uma por categoria §101 —, nunca mais a série única e
 // sem label que servidorFakeComInvalido simula. Antes desta função, o

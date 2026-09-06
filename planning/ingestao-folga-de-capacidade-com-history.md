@@ -11,7 +11,7 @@ problema em dois pontos, e confirma um terceiro.
 ### 1. Boa parte do "lag que cresce" é a métrica, não a ingestão
 
 `nishidb_kafka_lag` é atualizada no scrape por `AtualizaLag`
-([consumidor.go:623](internal/kafka/consumidor.go:623)), que pergunta ao broker o lag do
+([consumer.go:623](internal/kafka/consumer.go:623)), que pergunta ao broker o lag do
 **offset commitado no consumer group**. O commit só acontece **depois do checkpoint
 durável** ([writer.go:300-324](internal/kafka/writer.go:300)) — a cada 30 s no piloto.
 Entre um checkpoint e outro o offset fica congelado e a série sobe exatamente à taxa de
@@ -110,7 +110,7 @@ verdade custa 1,76%, e dois terços do bloco são a mesma varredura repetida.
 ### Sintomas secundários confirmados
 
 - **A barreira de fim de lote elimina o overlap.** O poller bloqueia a cada lote até o
-  writer drenar tudo ([consumidor.go:566-579](internal/kafka/consumidor.go:566)).
+  writer drenar tudo ([consumer.go:566-579](internal/kafka/consumer.go:566)).
   Amostragem de 60 dumps de goroutine: o poller passa 28% do tempo parado nessa barreira,
   e o writer passa 72% ocioso em `Fila.recebeOuAcorda`. A fila entre os dois
   (`nishidb_kafka_queue_depth`) fica quase sempre em 0.
@@ -154,7 +154,7 @@ sem lock. E `checkpoint` é chamado de **duas goroutines**:
 - a do writer, via `talvezCheckpoint` — inclusive acordado pelo ticker do despertador
   ([writer.go:150-158](internal/kafka/writer.go:150));
 - a do group manager do franz-go, via `aoRevogar` →
-  [consumidor.go:424](internal/kafka/consumidor.go:424).
+  [consumer.go:424](internal/kafka/consumer.go:424).
 
 A barreira de fim de lote esvazia a **fila**, não para a **goroutine** do writer — o
 comentário de `aoRevogar` descreve corretamente a fila e conclui erradamente sobre a
@@ -195,11 +195,11 @@ Três decisões que evitam repetir defeitos já conhecidos:
   `scripts/nishidb-stats.py` chegou a imprimir `produz -310/s` no piloto por somar parcelas
   de instantes diferentes.
 - **Sob falha do broker, omitir a série — nunca congelar, nunca zerar.** É a doutrina já
-  escrita em `internal/kafka/metricas.go:44-58` e travada por teste. `absent()` é um alerta
+  escrita em `internal/kafka/metrics.go:44-58` e travada por teste. `absent()` é um alerta
   que o operador consegue escrever; zero é uma medição falsa.
 
 **O watchdog tem a mesma mentira dentro dele.** `lagPendente`
-([vigia.go:172-194](internal/kafka/vigia.go:172)) usa o mesmo lag commitado. Com
+([watchdog.go:172-194](internal/kafka/watchdog.go:172)) usa o mesmo lag commitado. Com
 `watchdogTimeout` no piso de 10 s e checkpoint de 30 s, existe janela real em que o tópico
 silencia, os eventos param, o commit ainda não saiu e o broker reporta lag > 0 sobre um
 consumidor em dia — com fila vazia, que é exatamente o veredito `vereditoRecria`. Isso é
@@ -465,7 +465,7 @@ os dois arrays que ela substitui no predicado.
 ## Fase 3 — Pipelining: mover a barreira do fim de lote para a revogação
 
 Hoje o poller bloqueia a cada lote até o writer drenar tudo
-([consumidor.go:566-579](internal/kafka/consumidor.go:566)), o que elimina o overlap: o
+([consumer.go:566-579](internal/kafka/consumer.go:566)), o que elimina o overlap: o
 writer fica 72% ocioso.
 
 **A garantia que a barreira protege é sobre o commit, e ela é forma forte demais.** O
@@ -526,7 +526,7 @@ central. Deixar N workers descobrirem campos quebra **correção**, não só des
 posição da coluna no `SELECT *` é contrato do driver JDBC — com workers, a ordem vira a de
 quem ganha o mutex. E "o tipo é fixado na primeira observação" viraria "na primeira a
 chegar no lock", não "no menor offset". Existe teste irmão que fixa exatamente essa
-propriedade (`internal/cli/determinismo_test.go:19`), cujo comentário registra que a
+propriedade (`internal/cli/determinism_test.go:19`), cujo comentário registra que a
 violação já foi vista.
 
 Desenho: leitores puros que devolvem `precisa=true` quando teriam de criar coluna; o worker

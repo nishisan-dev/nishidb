@@ -474,7 +474,7 @@ func (s *Store) removeSidxDoDisco(seg uint32) (bool, error) {
 //
 // O que ela usa é o mecanismo que já existe, e não um segundo: o Fecha do Selado
 // impede leitores NOVOS e adia o munmap até a última Fonte em voo sair (contagem
-// de vidas, segindex/selado.go). Sem essa espera o desfecho não seria resultado
+// de vidas, segindex/sealed.go). Sem essa espera o desfecho não seria resultado
 // degradado, seria SIGSEGV — sinal incapturável, longe da linha que errou. O
 // selMu é o que impede um Lookup de entrar no Selado depois do Fecha; ele é lock
 // FOLHA, e nada sob ele toma o wmu.

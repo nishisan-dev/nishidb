@@ -35,7 +35,7 @@ Ambos de largura 8 com valor em `Value.I64` — [fields.go:60](internal/storage/
 
 **Por que `time` obriga tag própria:** millis-do-dia não é instante. Reusando `0x04`, a `celula` já casaria `timestamp × string` e `WHERE hora = '2026-08-13T12:00:00Z'` compararia `1786…` contra `68042000` — false sempre, **sem erro de bind**. Pior, [ndjson.go:88](internal/query/executor/ndjson.go:88) mandaria `68042000` para `appendTimestamp` e emitiria `"1970-01-01T18:54:02.000Z"`: uma mentira plausível, exatamente o que o comentário de [ndjson.go:50](internal/query/executor/ndjson.go:50) proíbe.
 
-**Por que `datetime` também ganha tag**, ainda que fisicamente idêntico a `timestamp` depois de resolvido o fuso: com tag distinta, `fieldTypeNames` e `NomeDeTipo` ([protocolo.go:210](internal/protocol/protocolo.go:210)) publicam o nome declarado **de graça** em `/v1/metadata` e na linha de schema do `/v1/query`. Um tipo lógico sobre `0x04` exigiria um sistema de tipos sombra (`CompiledField.LogicalType` + `ColView` + `ColunaDe` + dois call sites) e faria `coerceLiteral` ramificar no tipo lógico *dentro* de um case chaveado pelo físico — "duas tabelas que só funcionam lidas juntas", o oposto do dono único que [coerce.go:66](internal/query/binder/coerce.go:66) declara.
+**Por que `datetime` também ganha tag**, ainda que fisicamente idêntico a `timestamp` depois de resolvido o fuso: com tag distinta, `fieldTypeNames` e `NomeDeTipo` ([protocol.go:210](internal/protocol/protocol.go:210)) publicam o nome declarado **de graça** em `/v1/metadata` e na linha de schema do `/v1/query`. Um tipo lógico sobre `0x04` exigiria um sistema de tipos sombra (`CompiledField.LogicalType` + `ColView` + `ColunaDe` + dois call sites) e faria `coerceLiteral` ramificar no tipo lógico *dentro* de um case chaveado pelo físico — "duas tabelas que só funcionam lidas juntas", o oposto do dono único que [coerce.go:66](internal/query/binder/coerce.go:66) declara.
 
 A rigidez de `s.val.Type == in.want` ([predicate.go:100](internal/query/executor/predicate.go:100)) **não** é exercida entre colunas: `parser.Operand` ([ast.go:68](internal/query/parser/ast.go:68)) só carrega literal ou placeholder, e a v1 não compara coluna com coluna.
 
@@ -77,7 +77,7 @@ O compilador de padrão e a lista de tokens têm **um dono**: `internal/typepars
 
 ## 1.3 O parser
 
-Arquivo novo `internal/typeparse/datahora.go`, no estilo artesanal de `RFC3339Millis` — cursor sobre `[]byte`, zero alocação, erros estáticos pré-alocados.
+Arquivo novo `internal/typeparse/datetime.go`, no estilo artesanal de `RFC3339Millis` — cursor sobre `[]byte`, zero alocação, erros estáticos pré-alocados.
 
 ```go
 // Layout é o padrão compilado. Construído UMA vez no load; o parse é uma
@@ -138,7 +138,7 @@ func montaInstanteLocal(ano, mes, dia, h, min, seg, millis int, loc *time.Locati
 | `datetime` | parse pelo `format:` do campo, em `time.Local` → millis UTC | epoch millis | todos |
 | `time` | parse pelo `format:` do campo → millis do dia | millis do dia, `[0, 86400000)` | todos |
 
-**O literal SQL usa o `format:` do campo — não RFC3339, e não os dois.** É a razão de existir do `internal/typeparse` compartilhado: a propriedade que `TestIngestaoEQueryConcordamPorTipo` ([tipos_test.go:82](internal/query/tipos_test.go:82)) prova é *o texto que o produtor mandou, escrito como literal SQL, acha a row*. Aceitar RFC3339 **também** cria um texto que a query aceita e a ingestão recusa — a divergência exata que o R3 nomeia. A saída independente de formato já existe e é o inteiro (`momento >= 1787000000000`), simétrico ao `timestamp` que já aceita epoch millis ([coerce.go:213](internal/query/binder/coerce.go:213)).
+**O literal SQL usa o `format:` do campo — não RFC3339, e não os dois.** É a razão de existir do `internal/typeparse` compartilhado: a propriedade que `TestIngestaoEQueryConcordamPorTipo` ([types_test.go:82](internal/query/types_test.go:82)) prova é *o texto que o produtor mandou, escrito como literal SQL, acha a row*. Aceitar RFC3339 **também** cria um texto que a query aceita e a ingestão recusa — a divergência exata que o R3 nomeia. A saída independente de formato já existe e é o inteiro (`momento >= 1787000000000`), simétrico ao `timestamp` que já aceita epoch millis ([coerce.go:213](internal/query/binder/coerce.go:213)).
 
 `coerceLiteral` ([:178-263](internal/query/binder/coerce.go:178)) já recebe `f *schema.CompiledField` — zero fiação nova. `coerceParam` ([:275](internal/query/binder/coerce.go:275)) não muda: delega ao `coerceLiteral`.
 
@@ -159,7 +159,7 @@ func montaInstanteLocal(ano, mes, dia, h, min, seg, millis int, loc *time.Locati
 | T1 | Tags + `fieldTypeNames` | [types.go:81-113](internal/types/types.go:81) |
 | T2 | Higiene preventiva: fechar o `default:` de largura fixa | [store.go:1249-1258](internal/storage/store.go:1249), [fakestorage.go:132-142](internal/testutil/fakestorage/fakestorage.go:132) |
 | T3 | `fieldWidth` → 8 nas duas tags | [fields.go:28-47](internal/storage/encoding/fields.go:28) |
-| T4 | Compilador de layout + parsers (independente, pode ir em paralelo) | `internal/typeparse/datahora.go` (novo) |
+| T4 | Compilador de layout + parsers (independente, pode ir em paralelo) | `internal/typeparse/datetime.go` (novo) |
 | T5 | `FieldSpec.Format`, nomes YAML, as 7 regras de validação | [spec.go:63-67](internal/schema/spec.go:63), [:160-179](internal/schema/spec.go:160), [:311-347](internal/schema/spec.go:311) |
 | T6 | `CompiledField.Format`/`Layout` + resolução no laço + guard de `auto` temporal | [compile.go:89-103](internal/schema/compile.go:89), [:229-280](internal/schema/compile.go:229) |
 | T7 | `Convert` com layouts + call site do `PatchBuffer` | [typeconv.go:39](internal/materializer/typeconv.go:39), [patch.go:117](internal/materializer/patch.go:117) |
@@ -186,7 +186,7 @@ Nomes em português descrevendo o fenômeno, como manda a convenção do projeto
 
 **`internal/protocol`** — estender `TestATabelaDeTiposDoSpec73` ([jdbc_test.go:13](internal/protocol/jdbc_test.go:13)) e criar **`TestTodaTagComNomeTemJDBCEspecifico`**: varrer `0x00..0x1F` e exigir `JDBCDeTipo != OTHER` para toda tag nomeada. Hoje a promessa de [jdbc.go:28-30](internal/protocol/jdbc.go:28) — *"acrescentar um FieldType sem passar por aqui tem de ser decisão, não esquecimento"* — **não é cobrada por nada**.
 
-**O cruzado** — [`testdata/todos_os_tipos.yaml`](testdata/todos_os_tipos.yaml) ganha 4 campos (`datetime`/`time` × dois padrões) e `TestIngestaoEQueryConcordamPorTipo` os casos correspondentes. **Atenção de implementação:** a tabela de casos hoje é de strings constantes ([tipos_test.go:85-89](internal/query/tipos_test.go:85)); o caso `datetime = <epoch millis>` **não pode ser constante** (depende do `time.Local` do host) e precisa montar o `where` em runtime — é mudança de forma na tabela, não uma linha nova. Mais **`TestLiteralNoFormatoErradoNaoAchaEmSilencio`** (RFC3339 num campo `MMM…` tem de ser **erro de bind**, nunca resultado vazio).
+**O cruzado** — [`testdata/todos_os_tipos.yaml`](testdata/todos_os_tipos.yaml) ganha 4 campos (`datetime`/`time` × dois padrões) e `TestIngestaoEQueryConcordamPorTipo` os casos correspondentes. **Atenção de implementação:** a tabela de casos hoje é de strings constantes ([types_test.go:85-89](internal/query/types_test.go:85)); o caso `datetime = <epoch millis>` **não pode ser constante** (depende do `time.Local` do host) e precisa montar o `where` em runtime — é mudança de forma na tabela, não uma linha nova. Mais **`TestLiteralNoFormatoErradoNaoAchaEmSilencio`** (RFC3339 num campo `MMM…` tem de ser **erro de bind**, nunca resultado vazio).
 
 **Subprocesso** — **`TestOFusoDoHostVemDaVariavelTZ`**: `time.Local` é resolvido uma vez por processo, então `t.Setenv("TZ", …)` depois disso não muda nada. Exige subprocesso com `TZ=` no env; padrão já existe em `internal/gates/`.
 
@@ -322,13 +322,13 @@ Precisam de **schedulers diferentes**: toda a otimização de §2.3 depende de d
 
 ## 2.7 Observabilidade
 
-Novas: `nishidb_expiry_running`, `_expired_total`, `_resurrected_total`, `_expiry_queue_depth`, `_expiry_lag_seconds`, `_expiry_sweep_seconds`. `MetMaterializedTombstones` ([nomes.go:37](internal/metrics/nomes.go:37)), hoje declarada e sem alimentador, passa a ser alimentada.
+Novas: `nishidb_expiry_running`, `_expired_total`, `_resurrected_total`, `_expiry_queue_depth`, `_expiry_lag_seconds`, `_expiry_sweep_seconds`. `MetMaterializedTombstones` ([names.go:37](internal/metrics/names.go:37)), hoje declarada e sem alimentador, passa a ser alimentada.
 
 **`nishidb_expiry_lag_seconds`** = `agora − prazo do balde mais antigo não drenado`. É a única série que separa *"a expiração não roda"* de *"não dá conta"* — a lacuna exata que o débito 65 deixou aberta para a compaction, e que aqui nasce fechada por um `int64`.
 
-**Correção que a feature torna urgente:** `MetMaterializedRows` é publicada como *"linhas vivas"* ([metricas_dataset.go:94](internal/server/metricas_dataset.go:94)) mas alimentada por `st.RowCount`, que é *rows criadas* ([store.go:1522](internal/storage/store.go:1522)). Hoje é imprecisão; com expiração vira mentira que cresce sem teto (17,8M "vivas" com 200 mil de fato). Entra `LiveRows` de verdade em `storage.Stats` — é o número que a feature existe para controlar.
+**Correção que a feature torna urgente:** `MetMaterializedRows` é publicada como *"linhas vivas"* ([metrics_dataset.go:94](internal/server/metrics_dataset.go:94)) mas alimentada por `st.RowCount`, que é *rows criadas* ([store.go:1522](internal/storage/store.go:1522)). Hoje é imprecisão; com expiração vira mentira que cresce sem teto (17,8M "vivas" com 200 mil de fato). Entra `LiveRows` de verdade em `storage.Stats` — é o número que a feature existe para controlar.
 
-`/v1/stats` ganha bloco `expiry` irmão de `compaction`, lido de `Store.Stats()` e nunca de contador próprio ([documentos.go:90-93](internal/server/documentos.go:90)). `/v1/metadata` ganha `expireAfterWrite` em `DatasetMeta`.
+`/v1/stats` ganha bloco `expiry` irmão de `compaction`, lido de `Store.Stats()` e nunca de contador próprio ([documents.go:90-93](internal/server/documents.go:90)). `/v1/metadata` ganha `expireAfterWrite` em `DatasetMeta`.
 
 ## 2.8 Fases
 

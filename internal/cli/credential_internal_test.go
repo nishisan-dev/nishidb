@@ -21,7 +21,7 @@ import (
 
 // Testes de caixa branca das regras de precedência de fonte de senha
 // (flagsRemotas.resolve) e da montagem do client HTTP compartilhado
-// (clienteRemoto/aplicaCredencial) — os dois mecanismos que credencial_test.go
+// (clienteRemoto/aplicaCredencial) — os dois mecanismos que credential_test.go
 // (package cli_test) exercita ponta a ponta contra um servidor de verdade.
 // Aqui o oráculo é a REGRA em si, sem precisar subir nada.
 
@@ -154,7 +154,7 @@ func TestFlagsRemotasResolveMensagensNaoEcoamSenha(t *testing.T) {
 // && !temArquivo, com o VALOR vazio) e caía no caminho feliz com senha ==
 // "": o Basic saía com senha vazia, e o servidor respondia 401 sem nenhuma
 // pista, porque para o operador a variável "está setada". Espelha
-// resolveSenha (internal/server/seguranca.go), que já distingue "ausente"
+// resolveSenha (internal/server/security.go), que já distingue "ausente"
 // de "definida e vazia" para o MESMO cenário do lado do servidor.
 func TestUserComNISHIDBPASSWORDDefinidaEVaziaEhRecusado(t *testing.T) {
 	t.Setenv(envSenha, "")
@@ -173,7 +173,7 @@ func TestUserComNISHIDBPASSWORDDefinidaEVaziaEhRecusado(t *testing.T) {
 
 // certPEMDeTeste gera um certificado autoassinado mínimo, só para exercitar
 // clienteRemoto lendo e parseando um PEM de verdade — o handshake TLS de
-// ponta a ponta (SAN, validade) é responsabilidade do e2e em credencial_test.go
+// ponta a ponta (SAN, validade) é responsabilidade do e2e em credential_test.go
 // (package cli_test, que não pode enxergar este arquivo _internal_test.go).
 func certPEMDeTeste(t *testing.T) string {
 	t.Helper()
@@ -212,7 +212,7 @@ func certPEMDeTeste(t *testing.T) string {
 // qualquer jeito" — httpproxy.(*config).useProxy (vendorizado em
 // net/http/transport.go) exclui QUALQUER endereço loopback do proxy do
 // ambiente, incondicionalmente, antes mesmo de olhar Transport.Proxy.
-// Confirmado na prática em credencial_test.go (cli_test): com esta mesma
+// Confirmado na prática em credential_test.go (cli_test): com esta mesma
 // linha (transport.Proxy = nil) comentada, um e2e com proxy fake continuou
 // verde. Este teste É a prova que resta — leitura direta do campo.
 func TestClienteRemotoTransportTemProxyNil(t *testing.T) {
@@ -232,7 +232,7 @@ func TestClienteRemotoTransportTemProxyNil(t *testing.T) {
 // Revisão da B6, Important 1: clienteRemoto tem de instalar CheckRedirect —
 // sem ele, o *http.Client usa a política default do stdlib, que segue
 // redirect same-host reenviando Authorization. A prova ponta a ponta (302
-// de verdade, credencial nunca chega ao alvo) mora em credencial_test.go;
+// de verdade, credencial nunca chega ao alvo) mora em credential_test.go;
 // aqui é só a fiação.
 func TestClienteRemotoInstalaCheckRedirect(t *testing.T) {
 	client, err := clienteRemoto(credencialRemota{})

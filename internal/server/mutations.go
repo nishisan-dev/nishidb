@@ -2,7 +2,7 @@
 // POST /v1/compact e POST /v1/checkpoint. São as PRIMEIRAS rotas do
 // protocolo remoto que mudam estado; até aqui tudo era leitura.
 //
-// As duas são ADMIN-only (registradas em montaMux, autenticacao.go),
+// As duas são ADMIN-only (registradas em montaMux, auth.go),
 // síncronas (a resposta só sai depois do trabalho feito — nenhuma das duas
 // enfileira nem devolve 202) e aceitam o MESMO corpo opcional
 // {"dataset":"..."}: ausente significa TODOS os datasets, na ordem

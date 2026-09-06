@@ -13,7 +13,7 @@ import (
 
 // Os dois comandos MUTANTES do §96 — `compact` e `checkpoint` — que a Task B5
 // (Fase 11, decisão D3 do roadmap) liga por trás do papel ADMIN. Nascem
-// remotos como os três comandos de leitura de operacao.go, pela MESMA razão
+// remotos como os três comandos de leitura de operation.go, pela MESMA razão
 // (flock exclusivo por processo), e falam POST em vez de GET: o corpo é
 // {"dataset":"..."} opcional (ausente = todos os datasets do servidor, na
 // ordem determinística da subida) e o padrão de erro é o do query_remota —
@@ -22,7 +22,7 @@ import (
 //
 // Credencial e TLS (Task B6): os dois comandos aceitam --user, --tls-ca e
 // senha por NISHIDB_PASSWORD/--password-file, no MESMO ponto de costura que
-// consultaRemota (query_remota.go) e buscaDocumento (operacao.go) usam —
+// consultaRemota (query_remote.go) e buscaDocumento (operation.go) usam —
 // postaMutacao, abaixo, chama clienteRemoto/aplicaCredencial, nunca monta
 // Authorization ou Transport por conta própria. Contra um servidor com
 // server.authentication DESLIGADA, rodar sem --user continua byte a byte
@@ -97,10 +97,10 @@ func runCheckpoint(args []string, amb Ambiente) int {
 // postaMutacao faz o POST de uma rota mutante (compact/checkpoint) e
 // decodifica o corpo de SUCESSO no destino. dataset == "" omite o corpo por
 // completo — não manda "{}" — para exercitar o mesmo caminho "todos os
-// datasets" que um corpo ausente já cobre no servidor (mutacoes.go,
+// datasets" que um corpo ausente já cobre no servidor (mutations.go,
 // leRequisicaoDataset).
 //
-// O tratamento de erro é o do query_remota (recusaRemota, que operacao.go
+// O tratamento de erro é o do query_remota (recusaRemota, que operation.go
 // já generaliza com um parâmetro `cmd`): CorpoErro decodificado,
 // mensagem no stderr, código traduzido por codigoDoProtocolo — a MESMA
 // tabela que WRITER_FAILED (→ ExitWriter) e COMPACTION_BUSY (→ ExitUso, com

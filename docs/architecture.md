@@ -974,7 +974,7 @@ acrescentado, sem nada em camada nenhuma reclamar.
 | Destrava | DBeaver, IntelliJ | pandas, SQLAlchemy, BI |
 
 **As mesmas quatro doutrinas de cliente nos dois**, herdadas de
-`internal/cli/credencial.go`: proxy do ambiente ignorado (o incidente do piloto
+`internal/cli/credential.go`: proxy do ambiente ignorado (o incidente do piloto
 em que o proxy corporativo respondia 403 e o operador culpava o servidor),
 **todo 3xx é erro** (a política padrão das bibliotecas preserva o
 `Authorization` em redirect same-host, e o NishiDB não redireciona), nenhum
@@ -1114,9 +1114,9 @@ abaixo).
 ## Segurança: autenticação e TLS (Fase 11)
 
 O débito 57 (`/v1/query` sem autenticação — porta exposta equivale a um banco
-sem senha) fechou nesta fase com `internal/config/config_seguranca.go`
-(forma no parse), `internal/server/seguranca.go` (ativação e a matriz de
-recusa) e `internal/server/autenticacao.go` (o middleware e os papéis).
+sem senha) fechou nesta fase com `internal/config/config_security.go`
+(forma no parse), `internal/server/security.go` (ativação e a matriz de
+recusa) e `internal/server/auth.go` (o middleware e os papéis).
 
 **O plano é duplo, e a razão é o piloto.** O listener EXPOSTO passa a exigir
 TLS **e** autenticação em TODAS as rotas — `/v1/health` e `/metrics`
@@ -1127,12 +1127,12 @@ rotas sem TLS nem autenticação, só em `127.0.0.1`: é o que mantém painel,
 script de atualização e cron locais funcionando sem credencial mesmo com o
 listener principal fechado a cadeado. Os dois listeners compartilham a
 mesma FUNÇÃO de definição de rota (`Servidor.montaMux`,
-`internal/server/autenticacao.go`), chamada uma vez por listener — nunca
+`internal/server/auth.go`), chamada uma vez por listener — nunca
 duas listas que poderiam divergir.
 
 **A matriz de recusa do §77** decide se o servidor sobe, olhando bind, TLS e
 autenticação juntos (`avaliaExposicaoEAutenticacao`,
-`internal/server/seguranca.go`):
+`internal/server/security.go`):
 
 | bind | `authentication` | TLS | resultado |
 |---|---|---|---|
@@ -1153,7 +1153,7 @@ anônimas também no plano PRINCIPAL, não só no loopback.** Isso vale na
 célula 3 da matriz (bind exposto, `enabled: false` explícito) e, do mesmo
 jeito, na config DEFAULT (bind loopback, `server.authentication` nem
 declarado): `AutenticacaoHabilitada()` falsa faz `comAutenticacao`
-(`internal/server/autenticacao.go`) devolver o mux CRU como passthrough
+(`internal/server/auth.go`) devolver o mux CRU como passthrough
 puro, sem checar papel nenhum — `POST /v1/compact` e `POST /v1/checkpoint`
 respondem sem credencial no MESMO listener que serve `/v1/query`. É
 comportamento testado, não descuido: o caso de uso central do §96 é o
@@ -1183,7 +1183,7 @@ para trancar a conta de outra pessoa. O rate-limit por IP fica registrado
 como débito (ver `debitos.md`).
 
 **Papéis: READ e ADMIN, com ADMIN ⊇ READ** (`papelAutorizado`,
-`internal/server/autenticacao.go`) — um usuário ADMIN alcança toda rota READ;
+`internal/server/auth.go`) — um usuário ADMIN alcança toda rota READ;
 um usuário READ nunca alcança rota ADMIN. O enum é fechado desde o parse
 (`config.RoleRead`/`config.RoleAdmin`) e comparado por string EXATA: `role:
 read` ou `role: Read` no YAML são recusados na subida, não normalizados.
@@ -1222,7 +1222,7 @@ credencial no caso de uso central do §96 (modo manual).
 a senha mora — `passwordEnv` (nome da variável) ou `passwordFile` (caminho),
 nunca o valor — e a B1 garante XOR entre os dois; ler o valor de verdade é
 ativação (`resolveCredenciais`/`resolveSenha`,
-`internal/server/seguranca.go`), fail-fast ANTES de qualquer listener abrir.
+`internal/server/security.go`), fail-fast ANTES de qualquer listener abrir.
 Uma env var ausente ou definida-e-vazia recusa a subida nomeando a variável
 (nunca o valor); um `passwordFile` group- ou world-readable (`modo&0o077 !=
 0`) recusa nomeando caminho e modo — uma senha não é uma CA pública, o
@@ -1264,7 +1264,7 @@ enfileirar, porque as duas disputam o MESMO single-flight do `Store`
 O corpo de ambas aceita `{"dataset": "..."}` opcional; ausente significa
 TODOS os datasets, na ordem determinística da subida. **O contrato de falha
 parcial** (`processaDatasets`/`ErroParcial`,
-`internal/server/mutacoes.go`) é stop-no-primeiro-erro, mas a resposta de
+`internal/server/mutations.go`) é stop-no-primeiro-erro, mas a resposta de
 erro nomeia o dataset que falhou E os nomes dos que já tinham sido
 processados com sucesso ANTES dele — o efeito colateral (checkpoint gravado,
 disco já devolvido) aconteceu de verdade para eles, e escondê-lo do operador
@@ -1991,12 +1991,12 @@ subsistema, com tipo, labels e o `# HELP` real de cada uma, mais as três
 classes de ausência: a série que depende de uma feature não declarada, a que
 só nasce no primeiro evento e a que não é emitida por ninguém. Duas cobranças
 o mantêm honesto: `TestTodaMetricaDeclaradaEstaDocumentada` exige que toda
-constante de `nomes.go` apareça lá, e `TestODocDeMetricasNaoInventaSerie` o
+constante de `names.go` apareça lá, e `TestODocDeMetricasNaoInventaSerie` o
 lado inverso — série citada no documento que não existe no código é nome
 renomeado que o operador levaria para um alerta que nunca dispara.
 
 **As cinco séries de consulta do §92 nasceram com o protocolo.** Até a Fase 6
-elas eram nome em `nomes.go` sem alimentador nenhum, e não por esquecimento: o
+elas eram nome em `names.go` sem alimentador nenhum, e não por esquecimento: o
 motor não sabe quantas consultas chegaram, quantas estão em voo nem quanto
 tempo cada uma levou de ponta a ponta — ele conhece iteradores, não requisições.
 `nishidb_query_full_scans` é a exceção que já tinha fonte (o contador normativo
@@ -2090,7 +2090,7 @@ O nome de dataset vindo do request **nunca** vira label: label alimentado por
 entrada do cliente é uma série nova por requisição, e um cliente em loop
 consumiria a memória do processo. Erro antes de o dataset ser resolvido é
 contado sob o valor fixo `?`. Nas séries de índice a garantia é mais forte que
-uma convenção: `estado` e `modo` são enumerações exportadas de `nomes.go`, o
+uma convenção: `estado` e `modo` são enumerações exportadas de `names.go`, o
 coletor só pode alimentá-las percorrendo essas listas, e
 `TestOsLabelsDeIndiceSaoConjuntosFechados` confere as duas coisas — o conjunto
 que sai na porta e, pelo `go/ast`, a origem do valor no código.

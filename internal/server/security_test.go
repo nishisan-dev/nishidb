@@ -238,9 +238,9 @@ func TestCertificadoOuChaveInvalidosRecusamASubidaNomeandoOCaminho(t *testing.T)
 	})
 }
 
-// Prova de que a resolução de segredos (seguranca.go) está de fato ligada ao
+// Prova de que a resolução de segredos (security.go) está de fato ligada ao
 // caminho de subida de server.Novo, e não só correta em isolamento
-// (seguranca_internal_test.go já cobre resolveSenha em detalhe).
+// (security_internal_test.go já cobre resolveSenha em detalhe).
 func TestPasswordEnvAusenteRecusaASubidaDoServidor(t *testing.T) {
 	const variavel = "NISHIDB_TESTE_SUBIDA_SENHA_AUSENTE"
 	os.Unsetenv(variavel) //nolint:errcheck // ausência é o próprio setup do teste

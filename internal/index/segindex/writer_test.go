@@ -19,10 +19,10 @@ import (
 // pode receber dois records com o mesmo valor dentro de um segmento.
 //
 // O oráculo é um decodificador LOCAL deste teste, escrito a partir do layout
-// documentado em formato.go — não a partir de montaCorpo, e sobretudo não do
+// documentado em format.go — não a partir de montaCorpo, e sobretudo não do
 // leitor da Tarefa 2 (AbreSelado, que ainda não existe). Um teste do
 // escritor que abrisse o próprio arquivo com o leitor não provaria nada: os
-// dois lados são alimentados pela mesma leitura do mesmo formato.go, e um
+// dois lados são alimentados pela mesma leitura do mesmo format.go, e um
 // agrupamento errado em montaCorpo que o leitor decodificasse do mesmo jeito
 // errado passaria batido — "os dois estão certos" e "os dois erram do mesmo
 // jeito" ficam indistinguíveis. Ler os bytes aqui, direto do []byte que

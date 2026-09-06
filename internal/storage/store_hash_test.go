@@ -345,7 +345,7 @@ func TestDatasetLegadoAbreEOsIndicesGlobaisSaemDoDisco(t *testing.T) {
 	}
 	rebaixaManifestParaLegado(t, audManifestPath(dir))
 
-	// A MESMA função que o IndexBytes usa (retencao.go), e não uma segunda
+	// A MESMA função que o IndexBytes usa (retention.go), e não uma segunda
 	// contagem: uma cópia da convenção divergiria da série que o operador vê.
 	antes := blocosDoDiretorio(idxDir)
 

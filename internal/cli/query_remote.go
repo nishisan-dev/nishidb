@@ -35,7 +35,7 @@ func consultaRemota(endereco, dataset, sql string, params []protocol.Parametro, 
 	client, err := clienteRemoto(cred)
 	if err != nil {
 		// `_, _ =`: código NOVO desta task segue a disciplina de avisa
-		// (operacao.go) — 0 apontamentos de lint novos; as chamadas bare a
+		// (operation.go) — 0 apontamentos de lint novos; as chamadas bare a
 		// fmt.Fprintln já existentes neste arquivo são débito anterior.
 		_, _ = fmt.Fprintln(amb.Stderr, "query:", err)
 		return ExitUso

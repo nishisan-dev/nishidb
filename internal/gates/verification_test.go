@@ -96,7 +96,7 @@ var specsDoMarcador = []string{
 //
 // Como DADO, nunca por grep em prosa — a mesma doutrina do resto do pacote.
 // Arquivo `.go` é parseado com `parser.ParseComments` e só os COMENTÁRIOS são
-// varridos (a técnica de `citacoes_test.go`): um `§` dentro de string literal,
+// varridos (a técnica de `citations_test.go`): um `§` dentro de string literal,
 // de exemplo de SQL ou de mensagem de erro não é citação. Arquivo `.md` tem os
 // blocos cercados por ``` pulados, pela mesma razão — citação dentro de exemplo
 // não é citação.
@@ -388,7 +388,7 @@ var sufixosDeHistograma = []string{"_bucket", "_sum", "_count"}
 // exposição só é exercitado com amostras bem-formadas.
 //
 // A regra "não pode ser string literal" é a mesma doutrina de
-// internal/metrics/nomes.go: nome de métrica digitado à mão em dois lugares
+// internal/metrics/names.go: nome de métrica digitado à mão em dois lugares
 // diverge no dia em que um deles é corrigido, e o sintoma é um painel vazio.
 //
 // # AS DUAS FORMAS DO LITERAL, E POR QUE ISSO É O CENTRO DO GATE
@@ -480,7 +480,7 @@ func confereAmostra(t *testing.T, fset *token.FileSet, caminho string, cl *ast.C
 			continue
 		}
 		if ehStringLiteral(valor) {
-			t.Errorf("%s:%d: Amostra com %s como string literal — use a constante de internal/metrics/nomes.go",
+			t.Errorf("%s:%d: Amostra com %s como string literal — use a constante de internal/metrics/names.go",
 				caminho, linha, nome)
 			continue
 		}

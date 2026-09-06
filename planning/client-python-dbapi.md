@@ -47,7 +47,7 @@ with nishidb.connect("nishidb://db01:9142/radius_sessions", user="leitor") as cx
 | **D6** | `timestamp`/`datetime` viram **`datetime` AWARE em UTC**; `time` vira **`datetime.time` naive** | O primeiro **é um instante** — `tzinfo=timezone.utc` preserva-o exatamente e deixa o usuário renderizar no fuso que quiser. O segundo **não é** instante: é hora do dia, e carimbar fuso nele seria inventar dado. É a mesma divisão que o JDBC pagou caro para descobrir (risco R9 do plano da Fase 7) |
 | **D7** | `ipv4`/`ipv6`/prefixos viram **`str`**, não `ipaddress.*` | O §73 os mapeia para VARCHAR e o JDBC entrega String. Enriquecer o tipo em UM client faz os dois clients discordarem sobre a mesma coluna. `ipaddress.ip_address(v)` é uma chamada de distância, e fica documentado |
 | **D8** | Coluna `json` vira **objeto Python** (`dict`/`list`), com o texto cru alcançável pela camada baixa | É o que um usuário de Python espera, e o DB-API não tem conceito de "JSON verbatim". A perda (double dentro do json passa por `float`) é a mesma de qualquer `json.loads` e fica no docstring; quem precisa dos bytes exatos usa o passthrough NDJSON da camada pythônica |
-| **D9** | Doutrinas de cliente **portadas literalmente** de [credencial.go](internal/cli/credencial.go): sem proxy, **todo 3xx é erro**, **nunca** `InsecureSkipVerify`/`verify=False` — nem por parâmetro | O redirect same-host preserva o `Authorization` nas bibliotecas padrão, e o NishiDB não redireciona: um 3xx só pode ser configuração errada no meio do caminho. Um parâmetro `insecure` opcional vira o modo permanente de operação em três semanas |
+| **D9** | Doutrinas de cliente **portadas literalmente** de [credential.go](internal/cli/credential.go): sem proxy, **todo 3xx é erro**, **nunca** `InsecureSkipVerify`/`verify=False` — nem por parâmetro | O redirect same-host preserva o `Authorization` nas bibliotecas padrão, e o NishiDB não redireciona: um 3xx só pode ser configuração errada no meio do caminho. Um parâmetro `insecure` opcional vira o modo permanente de operação em três semanas |
 | **D10** | Senha **nunca** é argumento de linha de comando; entra por `NISHIDB_PASSWORD` ou arquivo | §95, e o mesmo desenho do CLI: flag aparece em `ps aux` para qualquer usuário da máquina. Como parâmetro de `connect()` em código Python é legítimo (não vaza no `ps`), e é isso que o DB-API espera |
 | **D11** | Testes em **`unittest` da stdlib**; `ruff` e `mypy` pinados, rodando só no CI | `make test-python` continua rodando com zero `pip install` em qualquer máquina com `python3` — que é a mesma promessa do painel e do binário único, e é o que o job `test` do CI já faz hoje sem etapa de instalação. Lint e tipagem ganham job próprio, com versão fixada na disciplina do `golangci-lint@v2.12.2` |
 | **D12** | API pública em **inglês** (a PEP 249 manda), módulos internos em **português** | É exatamente o que o JDBC faz: interfaces `java.sql` em inglês, e `Transporte`, `LeitorNdjson`, `Molduras`, `Codigos` em português por dentro |
@@ -61,7 +61,7 @@ with nishidb.connect("nishidb://db01:9142/radius_sessions", user="leitor") as cx
 Verificado no código, não suposto:
 
 - **`Cursor.description` sai pronto da linha de schema.** `protocolo.Coluna`
-  ([protocolo.go:126](internal/protocol/protocolo.go:126)) tem `name`, `type`, `jdbc`,
+  ([protocol.go:126](internal/protocol/protocol.go:126)) tem `name`, `type`, `jdbc`,
   `nullable`, `precision`, `scale`, `displaySize` — os sete campos da tupla do DB-API, sem
   faltar nem sobrar. Nenhuma tabela de tipos nova no client, e um tipo novo no servidor
   **não exige release do pacote**.
@@ -74,7 +74,7 @@ Verificado no código, não suposto:
   ([stream.go:45](internal/protocol/stream.go:45)): schema, fecho de sucesso, fecho de erro,
   e **stream que acaba sem fecho é falha**. É o contrato a portar, linha a linha.
 - **A tabela código→exceção tem oráculo do lado Go.** `internal/gates/jdbc_test.go` já parseia
-  `protocolo.go` com `go/ast` e cobra que toda constante `Cod*` tenha SQLState. O gate Python
+  `protocol.go` com `go/ast` e cobra que toda constante `Cod*` tenha SQLState. O gate Python
   é o mesmo teste com outro arquivo de destino.
 - **O harness de integração já existe e é reusável**: `scripts/certgen` (par EC P-256 efêmero),
   o modelo de `scripts/jdbc-it.sh` (porta sorteada, prontidão pela linha de log `query.pronta`,
@@ -89,7 +89,7 @@ E cinco fatos do servidor que o client **tem de respeitar**, todos verificados:
 - **`maxRows <= 0` é 400**, e `maxRows` acima do teto do dataset é 400 `MAX_ROWS_ABOVE_LIMIT`:
   o servidor **nunca apara em silêncio**. É por isso que a regra é omitir o campo, não mandar 0.
 - **Toda falha de autenticação paga 100 ms fixos** de atraso
-  ([autenticacao.go:253](internal/server/autenticacao.go:253)). O Basic tem de ser
+  ([auth.go:253](internal/server/auth.go:253)). O Basic tem de ser
   **preemptivo** — desafio-resposta pagaria esse atraso em toda requisição.
 - **`/v1/health` responde 503 quando `status != "UP"`**, com corpo válido. O client **não pode**
   tratar isso como erro de transporte: é a resposta, e o estado está no corpo.
@@ -181,7 +181,7 @@ instalar nada); novo `test-python-it` chama `scripts/python-it.sh`. Ausência de
 
 **`.gitignore`:** `clients/python/dist/`, `.mypy_cache/`, `__pycache__/` escopados — nunca
 soltos. E acrescentar os diretórios à lista que `testesDoRepositorio`
-([evidencias_test.go:55](internal/cli/evidencias_test.go:55)) pula.
+([evidence_test.go:55](internal/cli/evidence_test.go:55)) pula.
 
 **`internal/gates/python_test.go`** — novo, no molde exato de
 [jdbc_test.go](internal/gates/jdbc_test.go), lendo os arquivos **como dado**:
@@ -189,7 +189,7 @@ soltos. E acrescentar os diretórios à lista que `testesDoRepositorio`
    `TestOPomDoDriverNaoTemDependenciaDeRuntime`);
 2. a versão do `pyproject.toml` bate com `nishidb.__version__` (gêmeo de
    `TestAVersaoAnunciadaPeloDriverEhADoArtefato`);
-3. **paridade Go↔Python dos códigos**: parseia `internal/protocol/protocolo.go` com `go/ast`,
+3. **paridade Go↔Python dos códigos**: parseia `internal/protocol/protocol.go` com `go/ast`,
    coleta toda constante `Cod*` de valor string, e reprova se algum literal não aparecer em
    `erros.py`. **Código novo em Go sem exceção Python reprova no CI Go, antes de qualquer
    intérprete Python.**
@@ -201,7 +201,7 @@ soltos. E acrescentar os diretórios à lista que `testesDoRepositorio`
 ## Fase B — Transporte
 
 `transporte.py` é o **único** ponto que monta uma requisição HTTP. Doutrinas literais de
-[credencial.go](internal/cli/credencial.go):
+[credential.go](internal/cli/credential.go):
 
 - `http.client.HTTPConnection`/`HTTPSConnection`, **uma por `Connection` DB-API**, keep-alive.
   Sem proxy por construção (D3).
@@ -213,7 +213,7 @@ soltos. E acrescentar os diretórios à lista que `testesDoRepositorio`
   falha de autenticação custa 100 ms fixos no servidor**, e desafio-resposta pagaria isso em
   toda requisição.
 - Corpo de erro: decodifica `protocolo.CorpoErro`; quando não é JSON, **espelhar
-  `dicaDeEsquema`** ([query_remota.go:110](internal/cli/query_remota.go:110)) — porta TLS
+  `dicaDeEsquema`** ([query_remote.go:110](internal/cli/query_remote.go:110)) — porta TLS
   respondendo a texto puro devolve `Client sent an HTTP request to an HTTPS server`, e a
   mensagem tem de sugerir o `nishidbs://`/`tls=true`. Sem isso o usuário vê "400 sem corpo
   legível" e culpa o servidor.
@@ -392,7 +392,7 @@ rodam os alvos do Makefile, e a `python-version` do workflow **bate com o `requi
   e ```` ```yaml ```` **por índice**. A seção Python tem de vir **depois** do quickstart e usar
   ```` ```python ````/```` ```toml ```` — um ```` ```console ```` novo antes dele quebra o gate.
 - `docs/aceite-client-python.md`, **acrescentado à lista de
-  [evidencias_test.go:30](internal/cli/evidencias_test.go:30) no mesmo commit** — senão o
+  [evidence_test.go:30](internal/cli/evidence_test.go:30) no mesmo commit** — senão o
   documento nasce fora do único verificador que o projeto tem, com liberdade de citar teste
   inexistente. E **estender `testesDoRepositorio` para indexar `def test_*` de arquivos Python**,
   como já foi feito para os métodos Java, para que o aceite possa citar evidência Python com
@@ -424,7 +424,7 @@ rodam os alvos do Makefile, e a `python-version` do workflow **bate com o `requi
 3. `make test-python` verde numa máquina com `python3` e **zero `pip install`**.
 4. `make test-python-it` verde do zero em máquina limpa e no runner.
 5. `ruff check`, `ruff format --check` e `mypy --strict` sem apontamento.
-6. **Gate de paridade**: nenhuma constante `Cod*` de `protocolo.go` sem exceção em `erros.py`.
+6. **Gate de paridade**: nenhuma constante `Cod*` de `protocol.go` sem exceção em `erros.py`.
 7. **Gate de zero dependência**: `pyproject.toml` sem `[project].dependencies`.
 8. **Gate de memória**: pico de `tracemalloc` sobre >100 k linhas independente do número de linhas.
 9. Matriz de conversão passa em **UTC e em `Asia/Tokyo`**.
@@ -450,19 +450,19 @@ rodam os alvos do Makefile, e a `python-version` do workflow **bate com o `requi
 | R7 | O client reimplementa a tabela de tipos em vez de ler `jdbc`/`precision`/`scale` da linha de schema, e diverge do servidor no primeiro tipo novo | Média | `description` é construída **só** da linha de schema; teste que afirma que um `jdbc` desconhecido não quebra o cursor |
 | R8 | `int` grande parseado via `float` e chegando errado sem erro nenhum | Média | Parse dos dígitos do span; teste com `9223372036854775807` exato |
 | R9 | A falha do cursor não é sticky e um resultado cortado é apresentado como completo | Média — foi bug real no JDBC | Teste que engole a exceção, chama `fetchone()` de novo e exige que ela volte |
-| R10 | `docs/aceite-client-python.md` nasce fora de `evidencias_test.go` | Média | Item explícito no "pronto quando" da Fase I |
+| R10 | `docs/aceite-client-python.md` nasce fora de `evidence_test.go` | Média | Item explícito no "pronto quando" da Fase I |
 
 ---
 
 ## Arquivos críticos
 
 **A ler (contrato, não mexer):**
-- [internal/protocol/protocolo.go](internal/protocol/protocolo.go) — `Coluna` (126), molduras, códigos de erro (180-256)
-- [internal/protocol/documentos.go](internal/protocol/documentos.go) — `/v1/metadata` e `/v1/stats`, `Saude`
+- [internal/protocol/protocol.go](internal/protocol/protocol.go) — `Coluna` (126), molduras, códigos de erro (180-256)
+- [internal/protocol/documents.go](internal/protocol/documents.go) — `/v1/metadata` e `/v1/stats`, `Saude`
 - [internal/protocol/stream.go](internal/protocol/stream.go) — **o contrato a portar**, linha a linha
 - [internal/protocol/jdbc.go](internal/protocol/jdbc.go) — a tabela única de tipos
-- [internal/cli/query_remota.go](internal/cli/query_remota.go) — o cliente Go de referência
-- [internal/cli/credencial.go](internal/cli/credencial.go) — as doutrinas de cliente a herdar
+- [internal/cli/query_remote.go](internal/cli/query_remote.go) — o cliente Go de referência
+- [internal/cli/credential.go](internal/cli/credential.go) — as doutrinas de cliente a herdar
 - [scripts/nishidb-stats.py](scripts/nishidb-stats.py) — o precedente de Python neste repo
 - `clients/jdbc/src/main/java/dev/nishisan/nishidb/jdbc/wire/` — `LeitorNdjson`, `Transporte`, `Codigos`, `SqlScanner`: o mesmo trabalho, já feito uma vez
 
@@ -471,4 +471,4 @@ rodam os alvos do Makefile, e a `python-version` do workflow **bate com o `requi
 
 **A editar:** `Makefile`, `.github/workflows/ci.yml`, `internal/gates/ci_test.go`, `README.md`,
 `docs/architecture.md`, `docs/debitos.md`, `docs/diagrams/c4_container.puml`, `.gitignore`,
-`internal/cli/evidencias_test.go`, `.golangci-baseline`
+`internal/cli/evidence_test.go`, `.golangci-baseline`

@@ -79,7 +79,7 @@ import (
 // medições nesta máquina ficaram entre ~3,7x e ~5x conforme a condição. O
 // número não é estável o bastante para virar afirmação; a sobreposição das
 // duas populações é, e foi reproduzida.) O gate roda em `make test`, se
-// anuncia como SKIP em `make test-race` (vazao_race_test.go), e o que ele NÃO
+// anuncia como SKIP em `make test-race` (throughput_race_test.go), e o que ele NÃO
 // cobre continua sendo regressão no storage — que derruba os dois lados na
 // mesma proporção e mantém a razão. Essa é a jurisdição de benchmark/micro e
 // dos baselines em benchmark/baselines.

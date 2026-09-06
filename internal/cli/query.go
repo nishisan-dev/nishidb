@@ -41,7 +41,7 @@ func runQuery(args []string, amb Ambiente) int {
 	// compact/checkpoint dão para o mesmo engano.
 	cred, err := credFlags.resolve()
 	if err != nil {
-		// `_, _ =`: mesma disciplina de avisa (operacao.go) para código NOVO
+		// `_, _ =`: mesma disciplina de avisa (operation.go) para código NOVO
 		// desta task — o gate de lint deste projeto cobra 0 apontamentos
 		// novos, e as chamadas bare a fmt.Fprintln já existentes neste
 		// arquivo são débito anterior a esta task, não um precedente a repetir.

@@ -19,15 +19,15 @@ import (
 // após o Parse, flagsRemotas.resolve() — o ÚNICO lugar em que as fontes de
 // senha são lidas e validadas. Dali em diante o comando carrega só um
 // credencialRemota, que os TRÊS pontos de costura do protocolo remoto
-// (consultaRemota em query_remota.go, buscaDocumento em operacao.go,
-// postaMutacao em mutacao.go — a B5 já apontava o último deles) consomem via
+// (consultaRemota em query_remote.go, buscaDocumento em operation.go,
+// postaMutacao em mutation.go — a B5 já apontava o último deles) consomem via
 // clienteRemoto (monta o *http.Client, com Proxy: nil e o CertPool de
 // --tls-ca) e aplicaCredencial (o req.SetBasicAuth, quando --user foi dado).
 //
 // NUNCA existe uma flag de senha: apareceria em `ps aux` para qualquer
 // usuário da máquina (§95). A senha entra SOMENTE por NISHIDB_PASSWORD (env,
 // que não sobrevive a um `ps`) ou --password-file — o mesmo desenho do
-// servidor (internal/server/seguranca.go:resolveSenha — trailing newline
+// servidor (internal/server/security.go:resolveSenha — trailing newline
 // aparado), mas SEM a checagem de modo 0600 de lá: aquele arquivo é lido por
 // um PROCESSO SERVIDOR que pode compartilhar host com outros usuários e
 // datasets sensíveis; este é lido pelo comando do PRÓPRIO operador, na
@@ -94,7 +94,7 @@ func (f *flagsRemotas) resolve() (credencialRemota, error) {
 		return credencialRemota{}, fmt.Errorf(
 			"--user exige uma senha por %s ou --password-file", envSenha)
 	case temUsuario && temEnv && !temArquivo && senhaEnv == "":
-		// Mesma distinção do servidor (seguranca.go:resolveSenha): "ausente"
+		// Mesma distinção do servidor (security.go:resolveSenha): "ausente"
 		// e "definida e vazia" NÃO são a mesma coisa — o caso do container
 		// cujo orquestrador injeta a chave sem valor, e sem esta recusa o
 		// Basic sairia com senha vazia e o 401 do servidor não daria pista
@@ -115,7 +115,7 @@ func (f *flagsRemotas) resolve() (credencialRemota, error) {
 		if err != nil {
 			return credencialRemota{}, fmt.Errorf("--password-file: %w", err)
 		}
-		// Mesma aparagem do servidor (seguranca.go:resolveSenha): todo
+		// Mesma aparagem do servidor (security.go:resolveSenha): todo
 		// `echo senha > arquivo` termina em LF ou CRLF.
 		senha = strings.TrimRight(string(b), "\r\n")
 		if senha == "" {

@@ -12,7 +12,7 @@ import (
 )
 
 // metricas são as séries do §92 que só o consumer pode alimentar, mais as
-// cinco que o M2 precisou inventar (ver internal/metrics/nomes.go).
+// cinco que o M2 precisou inventar (ver internal/metrics/names.go).
 //
 // Todas carregam o label `dataset`: o §82 permite vários datasets por
 // instância, e uma série sem esse label somaria consumos independentes num
@@ -38,7 +38,7 @@ type metricas struct {
 	// filaViva é lida no instante do SCRAPE, e não gravada pelo laço de poll.
 	//
 	// Ela era um par de medidores que o poller atualizava depois de enfileirar
-	// o lote (consumidor.go). O defeito disso não aparece em regime: aparece
+	// o lote (consumer.go). O defeito disso não aparece em regime: aparece
 	// exatamente quando alguém precisa dela. Com o poller travado dentro do
 	// PollRecords, os dois medidores CONGELAM no último valor amostrado — e o
 	// writer, que segue drenando, esvazia a fila sem que ninguém reescreva o

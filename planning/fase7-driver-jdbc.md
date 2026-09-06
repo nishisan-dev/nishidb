@@ -36,7 +36,7 @@ O ambiente local está pronto: JDK 21 e 25 instalados, Maven 3.6.3 (o wrapper ba
 | **D5** | `precision`/`scale`/`displaySize` são **função pura do tipo**, no MESMO `switch` de `JDBCDeTipo`, promovido a devolver um `DescritorJDBC` | Duas tabelas divergem no primeiro tipo novo. O switch único já é cobrado por `TestTodaTagComNomeTemJDBCEspecifico` |
 | **D6** | `executor.ColMeta` ganha **só** `Nullable bool`; precision/scale/displaySize são derivados na serialização | Os três são função de `Type`, que `ColMeta` já carrega, e derivá-los em `ColunaDe` custa zero alocação (roda uma vez por query, fora do laço de rows). `Nullable` é função do *campo* (`IsKey`/`IsSequence`) e só o executor tem o `*schema.CompiledField` na mão |
 | **D7** | `UNSUPPORTED_CLAUSE` **não acrescenta keyword ao lexer**; `lexer.SyntaxError` ganha um campo `Clausula string`, vazio no erro comum | Keyword nova quebraria `SELECT order FROM t`, hoje válido. Campo (em vez de tipo com `Unwrap`) torna impossível o bug de ordem de `switch` em `traduzErroDeAbertura`, que degradaria em silêncio para `SYNTAX` |
-| **D8** | `--param` vale para os **dois** caminhos, `--config` e `--server` | O caminho local já aceita `[]types.Value` em `eng.Execute`. Preserva a promessa de [query_remota.go:26](internal/cli/query_remota.go:26): "um script que troca `--config` por `--server` não muda mais nada" |
+| **D8** | `--param` vale para os **dois** caminhos, `--config` e `--server` | O caminho local já aceita `[]types.Value` em `eng.Execute`. Preserva a promessa de [query_remote.go:26](internal/cli/query_remote.go:26): "um script que troca `--config` por `--server` não muda mais nada" |
 | **D9** | JUnit 5 em `scope=test` é aceitável sob "zero dependência de runtime", com **dois gates** provando | `scope=test` nunca entra no `Class-Path` do consumidor. Harness próprio custaria semanas e não fecharia risco real |
 | **D10** | Maven Wrapper `distributionType=only-script` — **nenhum `.jar` versionado**, `distributionUrl` com versão exata + `distributionSha256Sum` | Commitar um blob opaco é o oposto da doutrina do binário único. Versão de instrumento é configuração, como o `golangci-lint@v2.12.2` |
 
@@ -56,7 +56,7 @@ foram verificadas no código e **mudam o escopo**:
    um segundo campo aditivo num contrato que o driver já congelou. **Incluído.**
 3. **"Toda coluna nullable" é falso hoje** — ver D4.
 4. **O item 2 (versão do produto) está entregue**: `protocolo.ProcessoStats.Version`
-   ([documentos.go:75](internal/protocol/documentos.go:75)) alimentado por
+   ([documents.go:75](internal/protocol/documents.go:75)) alimentado por
    `buildinfo.String()`. Resta só o driver consumir.
 
 E três notas de fato que reescrevem requisitos do driver, todas verificadas:
@@ -129,9 +129,9 @@ renderiza o valor de largura máxima por `executor.AppendValue` e afirma
 `internal/protocol`); `TestTipoSemNomeTemDescritorZerado`.
 
 ### A3 — Os campos no wire (`Coluna`, `ColunaMeta`)
-[protocolo.go:112](internal/protocol/protocolo.go:112),
-[documentos.go:41](internal/protocol/documentos.go:41), `ColunaDe`,
-[server/documentos.go:69](internal/server/documentos.go:69). **Sem `omitempty`** —
+[protocol.go:112](internal/protocol/protocol.go:112),
+[documents.go:41](internal/protocol/documents.go:41), `ColunaDe`,
+[server/documents.go:69](internal/server/documents.go:69). **Sem `omitempty`** —
 `precision:0` e `nullable:false` são justamente os casos que carregam informação.
 *Testes:* `TestALinhaDeSchemaPublicaPrecisionScaleEDisplaySize`;
 **`TestMetadataPublicaOsMesmosNumerosQueALinhaDeSchema`** (a não-divergência entre as duas
@@ -157,7 +157,7 @@ explícita. Se resolver, ele também é NOT NULL (sempre gravado,
 deduzir.**
 
 ### A5 — `Saude` migra para `internal/protocol`
-[http.go:41-51](internal/server/http.go:41) → `internal/protocol/documentos.go`. As
+[http.go:41-51](internal/server/http.go:41) → `internal/protocol/documents.go`. As
 constantes `EstadoUP`/`Down`/`Degraded`/`Desligado` **vão junto** — deixá-las para trás faria
 o driver casar `"DEGRADED"` contra uma constante que o pacote de contrato não declara.
 *Teste:* `TestOCorpoDoHealthNaoMudouComAMudancaDePacote`, comparando bytes (o
@@ -167,25 +167,25 @@ alguém "aproveitar" para consertar um `errcheck` vizinho, a contagem **cai** e 
 reprova. Não consertar nada de passagem.
 
 ### A6 — Uniformizar o 405
-[autenticacao.go:136-137](internal/server/autenticacao.go:136): `"GET /metrics"` → `"/metrics"`,
+[auth.go:136-137](internal/server/auth.go:136): `"GET /metrics"` → `"/metrics"`,
 `"GET /v1/health"` → `"/v1/health"`, com a conferência de método **dentro** do handler.
 *Testes:* estender `TestRotasDeLeituraRecusamMetodoErrado`
-([documentos_test.go:100](internal/server/documentos_test.go:100)) de 2 para 4 rotas;
+([documents_test.go:100](internal/server/documents_test.go:100)) de 2 para 4 rotas;
 `TestMetricsComMetodoErradoNaoConsultaOBroker`;
 `TestMetricsComMetodoErradoNoPlanoLoopbackTambemSaiComCorpoErro`.
 *Armadilhas:* (1) a checagem de método é a **primeira** linha de `handleMetrics`, antes do
 laço de `AtualizaLag` — senão cada POST inválido dispara chamada ao broker com 5 s de
 timeout; (2) `papelDaRota` passa a devolver `existe=true` para esses padrões — ler
-`autenticacao_internal_test.go` antes; (3) mudança observável: método errado em `/metrics`
+`auth_internal_test.go` antes; (3) mudança observável: método errado em `/metrics`
 passa a incrementar o contador de erro exposto pelo próprio `/metrics`. Não é bug, mas vai
 para o comentário e para o aceite, não para a descoberta de alguém olhando um gráfico do
 piloto.
 
 ### A7 — `UNSUPPORTED_CLAUSE` (D7)
-`lexer.SyntaxError` ganha `Clausula string`; novo `internal/query/parser/clausulas.go`;
+`lexer.SyntaxError` ganha `Clausula string`; novo `internal/query/parser/clauses.go`;
 `protocolo.CodClausulaNaoSuportada`; `traduzErroDeAbertura`
 ([server/query.go:387](internal/server/query.go:387)); `codigoDoProtocolo`
-([query_remota.go:175](internal/cli/query_remota.go:175)) → `ExitQuery`, **não** o vala-comum
+([query_remote.go:175](internal/cli/query_remote.go:175)) → `ExitQuery`, **não** o vala-comum
 `ExitUso` do `default`.
 
 **Dois sítios de interceptação:**
@@ -219,7 +219,7 @@ inalterado.
 `--param <tipo>:<valor>` repetível, split no **primeiro** `:` (`--param string:a:b` é a string
 `a:b`), 1:1 com os 4 tipos de wire. `string` → `json.Marshal`; `int64`/`double` → texto
 **verbatim** como `json.RawMessage` (é o que faz `--param int64:9223372036854775808` receber
-a mensagem de overflow de [parametros.go:106](internal/protocol/parametros.go:106) em vez de
+a mensagem de overflow de [params.go:106](internal/protocol/params.go:106) em vez de
 virar float64 e perder precisão — a mesma razão de `Parametro.Value` ser `RawMessage` e não
 `any`). Validação chama `protocolo.Valores`, **a mesma função do servidor**, nunca uma segunda
 gramática.
@@ -273,7 +273,7 @@ instalar**, nunca vira SKIP (doutrina do [Makefile:61-71](Makefile:61)).
 
 `.gitignore`: `clients/jdbc/target/` (escopado, nunca `target/` solto), e acrescentar `target`
 à lista de diretórios que `testesDoRepositorio`
-([evidencias_test.go:55](internal/cli/evidencias_test.go:55)) pula junto de `.git` e `.claude`.
+([evidence_test.go:55](internal/cli/evidence_test.go:55)) pula junto de `.git` e `.claude`.
 
 **Gate D9** — `internal/gates/jdbc_test.go` lê `clients/jdbc/pom.xml` **como dado** (mesma
 doutrina de `ci_test.go` lendo os workflows) e falha se qualquer `<dependency>` não tiver
@@ -334,7 +334,7 @@ violado, não linha vazia). Teto de linha de 64 MiB para falhar em vez de OOM.
 ## Fase D — Transporte e porta do `protocolo.Leitor`
 
 `Transporte` é o **único** ponto que monta `HttpRequest`. Doutrinas herdadas de
-[credencial.go](internal/cli/credencial.go), todas literais:
+[credential.go](internal/cli/credential.go), todas literais:
 
 - **`.proxy(HttpClient.Builder.NO_PROXY)` sempre, sem opção.** O `HttpClient` default honra
   `http.proxyHost`/`nonProxyHosts`, e o DBeaver seta essas propriedades globalmente. No piloto
@@ -358,7 +358,7 @@ violado, não linha vazia). Teto de linha de 64 MiB para falhar em vez de OOM.
 mensagem. Um fecho de erro depois de N rows lança a exceção mapeada **citando as N rows já
 entregues** — jamais devolve `false`, que apresentaria resultado parcial como completo.
 
-**Espelhar `dicaDeEsquema`** ([query_remota.go:66](internal/cli/query_remota.go:66)): porta TLS
+**Espelhar `dicaDeEsquema`** ([query_remote.go:66](internal/cli/query_remote.go:66)): porta TLS
 respondendo a texto puro devolve `Client sent an HTTP request to an HTTPS server`, e a mensagem
 deve sugerir `tls=true` — senão o usuário de DBeaver vê "400 sem corpo legível" e culpa o
 servidor.
@@ -388,7 +388,7 @@ Fora do wire: conexão/DNS/TLS → 08001; stream sem fecho / linha ilegível →
 (`SQLRecoverableException`); método JDBC não suportado → 0A000; **código desconhecido → HY000
 com o código cru na mensagem** (jamais degradar para `INTERNAL`, que apagaria a novidade).
 
-**Gate dos dois lados** — `internal/gates/jdbc_test.go` parseia `internal/protocol/protocolo.go`
+**Gate dos dois lados** — `internal/gates/jdbc_test.go` parseia `internal/protocol/protocol.go`
 com `go/ast`, coleta **toda** constante `Cod*` de valor string e falha se algum literal não
 aparecer em `SqlStates.java`. Sem duplicar a lista em lugar nenhum — a mesma técnica de
 `TestVersaoDoGolangciLintNoWorkflowBateComAInstrucaoDoMakefile`: comparar duas *extrações*,
@@ -555,7 +555,7 @@ Roteiro manual: conecta, lista datasets e colunas, `SELECT` com parâmetro, e a 
 `UNSUPPORTED_CLAUSE` para `ORDER BY`.
 
 `docs/aceite-fase7.md` (novo) — **e acrescentá-lo à lista de
-[evidencias_test.go:30](internal/cli/evidencias_test.go:30) no mesmo commit**, senão o documento
+[evidence_test.go:30](internal/cli/evidence_test.go:30) no mesmo commit**, senão o documento
 nasce fora do único verificador que o projeto tem, com liberdade de citar teste inexistente.
 
 **Duas armadilhas de gate existentes:**
@@ -591,7 +591,7 @@ ignorado em `getTimestamp`). Errata da spec: §71 (D3) e §98 (coordenadas do m�
 
 1. `make test`, `make test-race`, `gofmt -l .` vazio.
 2. **Contagem de lint bate `.golangci-baseline` exatamente** — ratchet bidirecional, e cada
-   `.go` novo (`certgen`, `clausulas.go`, `jdbc_test.go`) muda o número:
+   `.go` novo (`certgen`, `clauses.go`, `jdbc_test.go`) muda o número:
    ```bash
    golangci-lint run --max-issues-per-linter=0 --max-same-issues=0 --output.json.path=/tmp/l.json; jq '.Issues|length' /tmp/l.json
    ```
@@ -627,7 +627,7 @@ ignorado em `getTimestamp`). Errata da spec: §71 (D3) e §98 (coordenadas do m�
 | R7 | `nullable:false` para a chave se revela falso num caminho não lido (replace, compaction, campo de sistema projetável) | Baixa | O teste amarra a afirmação à recusa real; e a A4 obriga a **ler o binder** sobre `_writtenAt` antes de decidir |
 | R8 | `ofString`/`ofLines` entram no `Transporte` por conveniência e o §128 morre no cliente | Média | O teste `-Xmx64m` sobre 100k rows é o único jeito de provar; roda no CI |
 | R9 | `getTime` desloca o relógio pelo fuso da JVM, ou perde os millis | **Alta** — os dois construtores óbvios estão errados | Testes com `TimeZone.setDefault("Asia/Tokyo")` na matriz inteira |
-| R10 | `docs/aceite-fase7.md` nasce fora de `evidencias_test.go` | Média | Item explícito no "Pronto quando" da Fase I |
+| R10 | `docs/aceite-fase7.md` nasce fora de `evidence_test.go` | Média | Item explícito no "Pronto quando" da Fase I |
 | R11 | O RUNBOOK continua mandando configurar `http.nonProxyHosts` depois de o driver fixar `NO_PROXY` | Média | Correção do RUNBOOK é entregável da Fase I, não nota de rodapé |
 
 ---
@@ -635,13 +635,13 @@ ignorado em `getTimestamp`). Errata da spec: §71 (D3) e §98 (coordenadas do m�
 ## Arquivos críticos
 
 - [internal/protocol/jdbc.go](internal/protocol/jdbc.go) — a tabela única; a A2 inteira
-- [internal/protocol/protocolo.go](internal/protocol/protocolo.go) — `Coluna` (112), códigos de erro (162-203), tipos de wire de parâmetro
+- [internal/protocol/protocol.go](internal/protocol/protocol.go) — `Coluna` (112), códigos de erro (162-203), tipos de wire de parâmetro
 - [internal/protocol/stream.go](internal/protocol/stream.go) — o contrato a portar para Java
 - [internal/query/executor/ndjson.go](internal/query/executor/ndjson.go) — o **produtor** de tudo que o parser Java vai ler
 - [internal/query/parser/parser.go](internal/query/parser/parser.go) — os dois sítios da A7
 - [internal/server/query.go](internal/server/query.go) — linha de schema (254-266), tradução de erro (385-410), flush da A9
 - [internal/cli/query.go](internal/cli/query.go) — `--param` e a armadilha do ratchet
-- [internal/cli/credencial.go](internal/cli/credencial.go) — as doutrinas de cliente a herdar
+- [internal/cli/credential.go](internal/cli/credential.go) — as doutrinas de cliente a herdar
 - [internal/gates/ci_test.go](internal/gates/ci_test.go) — molde dos gates novos (arquivo lido como dado, versões comparadas por extração)
 
 ---

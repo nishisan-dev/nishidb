@@ -305,7 +305,7 @@ func TestMetricaDeDiscoEhPublicadaComSemanticaDeLimite(t *testing.T) {
 // `Valor > 0` não é oráculo, é sinal de vida. A revisão adversarial provou
 // por mutação: publicar st.LiveBytesUpperBound — ou st.RowCount — no lugar de
 // st.StorageBytes deixava a suíte inteira verde. Ou seja, exatamente a
-// "métrica que mente" que o comentário de metricas_dataset.go declara estar
+// "métrica que mente" que o comentário de metrics_dataset.go declara estar
 // evitando: o tally de liveness, que é limite SUPERIOR (débitos 38 e 45), sob
 // um nome que promete tamanho de arquivo. É o débito 6 de novo — medir sem
 // oráculo.
@@ -426,7 +426,7 @@ func somaDoLogDaAposentadoria(t *testing.T, saida, campo string) int64 {
 }
 
 // TestSeriesDeCompactionGanhamAlimentador prova que as três séries do §92
-// deixaram de ser nome sem número — o estado em que nomes.go as declarou desde
+// deixaram de ser nome sem número — o estado em que names.go as declarou desde
 // o M2, e que a Task 8 encerra. É o critério dela na camada em que se AFERE
 // número; o e2e pelo binário o cobra de novo, com o processo de verdade.
 //

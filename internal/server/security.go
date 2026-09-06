@@ -250,7 +250,7 @@ func enderecoLoopback(cfg *config.Config) (string, error) {
 //
 // As cinco células da matriz do plano (a ordem de checagem abaixo não é a
 // ordem da tabela, mas cobre as mesmas cinco, cada uma com teste em
-// seguranca_test.go):
+// security_test.go):
 //
 //  1. bind em loopback, qualquer autenticação/TLS -> sobe. Avisa
 //     "auth.sem_tls" se a autenticação estiver ligada sem TLS: HTTP Basic
@@ -319,7 +319,7 @@ func avaliaExposicaoEAutenticacao(cfg *config.Config, log *logging.Logger) error
 // sobre uma escolha que ele fez de propósito. E não pode citar só
 // /v1/query: desde a Fase 11 a mesma porta sem credencial também serve
 // POST /v1/compact e POST /v1/checkpoint (ADMIN) anônimos no plano
-// principal (godoc de montaMux/comAutenticacao, autenticacao.go) — quem
+// principal (godoc de montaMux/comAutenticacao, auth.go) — quem
 // alcança o bind lê E MUTA o dataset, não só lê.
 func avisaSobreAExposicao(cfg *config.Config, log *logging.Logger) {
 	log.Warn("bind.exposto",
