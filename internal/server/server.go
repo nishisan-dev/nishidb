@@ -27,7 +27,7 @@ import (
 
 	"github.com/nishisan-dev/nishidb/internal/buildinfo"
 	"github.com/nishisan-dev/nishidb/internal/config"
-	"github.com/nishisan-dev/nishidb/internal/contadores"
+	"github.com/nishisan-dev/nishidb/internal/counters"
 	"github.com/nishisan-dev/nishidb/internal/kafka"
 	"github.com/nishisan-dev/nishidb/internal/logging"
 	"github.com/nishisan-dev/nishidb/internal/materializer"
@@ -381,7 +381,7 @@ func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*
 	// definições precisam do schema, e o replay da recovery precisa das
 	// definições. É o mesmo Compile de sempre, no mesmo dicionário — só que
 	// antes do replay.
-	comp := contadores.NovoCompilador(spec)
+	comp := counters.NovoCompilador(spec)
 	st, err := storage.Open(storage.Options{
 		Dir:                    dir,
 		Dataset:                spec.Name,
@@ -457,7 +457,7 @@ func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*
 	// As tabelas `_counters.<nome>` entram no motor sob o dataset — e o
 	// namespace é declarado mesmo sem contador, para que a recusa nomeie o
 	// que existe.
-	if err := contadores.Registra(s.eng, spec.Name, st); err != nil {
+	if err := counters.Registra(s.eng, spec.Name, st); err != nil {
 		return nil, fechandoStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}
 	d := &dataset{

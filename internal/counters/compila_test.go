@@ -1,4 +1,4 @@
-package contadores_test
+package counters_test
 
 import (
 	"path/filepath"
@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nishisan-dev/nishidb/internal/contadores"
+	"github.com/nishisan-dev/nishidb/internal/counters"
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 	"github.com/nishisan-dev/nishidb/internal/storage/fielddict"
@@ -78,7 +78,7 @@ counters:
     maxGroups: 1000
     retainEmptyGroups: never
 `)
-	defs, err := contadores.Compila(spec, sc)
+	defs, err := counters.Compila(spec, sc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ counters:
   - name: por_pon
     groupBy: [pon]
 `)
-	defs, err := contadores.Compila(spec, sc)
+	defs, err := counters.Compila(spec, sc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ counters:
     groupBy: [olt]
     where: octets > 0
 `)
-	_, err := contadores.Compila(spec, sc)
+	_, err := counters.Compila(spec, sc)
 	if err == nil || !strings.Contains(err.Error(), "merge: sum") {
 		t.Fatalf("where sobre campo somado tem de ser recusado nomeando merge: sum, veio %v", err)
 	}
@@ -145,7 +145,7 @@ counters:
   - name: x
     groupBy: [octets]
 `)
-	_, err := contadores.Compila(spec, sc)
+	_, err := counters.Compila(spec, sc)
 	if err == nil || !strings.Contains(err.Error(), "merge: sum") {
 		t.Fatalf("groupBy sobre campo somado tem de ser recusado nomeando merge: sum, veio %v", err)
 	}
@@ -158,7 +158,7 @@ counters:
     groupBy: [olt]
     where: _writtenAt > 0
 `)
-	_, err := contadores.Compila(spec, sc)
+	_, err := counters.Compila(spec, sc)
 	if err == nil || !strings.Contains(err.Error(), "campo de sistema") || !strings.Contains(err.Error(), "counters[0].where") {
 		t.Fatalf("where sobre campo de sistema tem de ser recusado nomeando o contador, veio %v", err)
 	}
@@ -171,7 +171,7 @@ counters:
     groupBy: [olt]
     where: naoExiste = 1
 `)
-	if _, err := contadores.Compila(spec, sc); err == nil {
+	if _, err := counters.Compila(spec, sc); err == nil {
 		t.Fatal("coluna inexistente no where tem de ser recusada")
 	}
 }
@@ -191,7 +191,7 @@ counters:
 		t.Fatal(err)
 	}
 	defer func() { _ = dict.Close() }()
-	comp := contadores.NovoCompilador(spec)
+	comp := counters.NovoCompilador(spec)
 	if comp.Compilado() != nil {
 		t.Fatal("antes do callback não há schema compilado")
 	}
@@ -222,7 +222,7 @@ func TestCompiladorSemCountersDevolveNada(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = dict.Close() }()
-	comp := contadores.NovoCompilador(spec)
+	comp := counters.NovoCompilador(spec)
 	defs, err := comp.Callback()(dict)
 	if err != nil {
 		t.Fatal(err)

@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	nishiconfig "github.com/nishisan-dev/nishidb/internal/config"
-	"github.com/nishisan-dev/nishidb/internal/contadores"
+	"github.com/nishisan-dev/nishidb/internal/counters"
 	"github.com/nishisan-dev/nishidb/internal/metakafka"
 	"github.com/nishisan-dev/nishidb/internal/protocolo"
 	"github.com/nishisan-dev/nishidb/internal/query"
@@ -110,7 +110,7 @@ func runQuery(args []string, amb Ambiente) int {
 		fmt.Fprintln(amb.Stderr, "query:", err)
 		return ExitUso
 	}
-	if err := contadores.Registra(eng, *dataset, st); err != nil {
+	if err := counters.Registra(eng, *dataset, st); err != nil {
 		avisa(amb, "query: %v\n", err)
 		return ExitUso
 	}

@@ -1,11 +1,11 @@
 //go:build !race
 
-package contadores_test
+package counters_test
 
 import (
 	"testing"
 
-	"github.com/nishisan-dev/nishidb/internal/contadores"
+	"github.com/nishisan-dev/nishidb/internal/counters"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
@@ -17,7 +17,7 @@ func TestTabelaMetaCountersNaoAlocaPorLinha(t *testing.T) {
 	b := abreContador(t, defPorPON("b"))
 	populaPON(t, a)
 	populaPON(t, b)
-	_, fonte, err := contadores.TabelaMeta([]contadores.Contado{a, b})
+	_, fonte, err := counters.TabelaMeta([]counters.Contado{a, b})
 	if err != nil {
 		t.Fatal(err)
 	}

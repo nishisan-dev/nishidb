@@ -1,4 +1,4 @@
-package contadores_test
+package counters_test
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nishisan-dev/nishidb/internal/contadores"
+	"github.com/nishisan-dev/nishidb/internal/counters"
 	"github.com/nishisan-dev/nishidb/internal/query"
 	"github.com/nishisan-dev/nishidb/internal/query/executor"
 	"github.com/nishisan-dev/nishidb/internal/schema"
@@ -112,7 +112,7 @@ func motorComContador(t *testing.T, c *contador.Contador) *query.Engine {
 	if err := eng.Register("servicos", sc, fakestorage.New(fakestorage.Indexes{})); err != nil {
 		t.Fatal(err)
 	}
-	tsc, fonte, err := contadores.Tabela(c.Def(), c)
+	tsc, fonte, err := counters.Tabela(c.Def(), c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,7 +283,7 @@ func TestTabelaRecusaColunaInexistenteNomeandoATabela(t *testing.T) {
 func TestTabelaRecusaDefinicaoQueColideComAsColunasFixas(t *testing.T) {
 	def := defPorOLT("x")
 	def.Nomes = []string{"total"}
-	if _, _, err := contadores.Tabela(def, nil); err == nil {
+	if _, _, err := counters.Tabela(def, nil); err == nil {
 		t.Fatal("coluna do groupBy chamada total tem de ser recusada")
 	}
 }

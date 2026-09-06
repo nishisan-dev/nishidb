@@ -9,7 +9,7 @@ import (
 
 	"github.com/nishisan-dev/nishidb/internal/buildinfo"
 	nishiconfig "github.com/nishisan-dev/nishidb/internal/config"
-	"github.com/nishisan-dev/nishidb/internal/contadores"
+	"github.com/nishisan-dev/nishidb/internal/counters"
 	"github.com/nishisan-dev/nishidb/internal/query/binder"
 	"github.com/nishisan-dev/nishidb/internal/query/executor"
 	"github.com/nishisan-dev/nishidb/internal/query/parser"
@@ -280,7 +280,7 @@ func abreDataset(cfg *nishiconfig.Config, nome string) (*storage.Store, *schema.
 	// caminho do servidor: um dataset com `counters:` aberto pelo CLI tem de
 	// manter os contadores igual ao servidor, senão o `nishidb ingest` deixaria
 	// o vetor parado enquanto o Put anda.
-	comp := contadores.NovoCompilador(spec)
+	comp := counters.NovoCompilador(spec)
 	st, err := storage.Open(storage.Options{
 		Dir:                    cfg.DirDoDataset(nome),
 		SegmentSize:            cfg.SegmentSize(),

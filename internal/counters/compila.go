@@ -7,7 +7,7 @@
 // Mora fora de storage e fora de query porque precisa dos dois lados —
 // schema, binder e predicado de um, contador e Store do outro — e nenhum dos
 // dois pode importar o outro.
-package contadores
+package counters
 
 import (
 	"fmt"

@@ -1,4 +1,4 @@
-package contadores
+package counters
 
 import (
 	"fmt"

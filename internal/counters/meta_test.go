@@ -1,11 +1,11 @@
-package contadores_test
+package counters_test
 
 import (
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/nishisan-dev/nishidb/internal/contadores"
+	"github.com/nishisan-dev/nishidb/internal/counters"
 	"github.com/nishisan-dev/nishidb/internal/query"
 	"github.com/nishisan-dev/nishidb/internal/query/meta"
 	"github.com/nishisan-dev/nishidb/internal/schema"
@@ -29,15 +29,15 @@ func motorComMeta(t *testing.T, cs ...*contador.Contador) *query.Engine {
 	if err := eng.Register("servicos", sc, fakestorage.New(fakestorage.Indexes{})); err != nil {
 		t.Fatal(err)
 	}
-	contados := make([]contadores.Contado, 0, len(cs))
+	contados := make([]counters.Contado, 0, len(cs))
 	for _, c := range cs {
 		contados = append(contados, c)
 	}
-	msc, fonte, err := contadores.TabelaMeta(contados)
+	msc, fonte, err := counters.TabelaMeta(contados)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.RegistraVirtual("servicos", meta.Namespace, contadores.TabelaMetaCounters, msc, fonte); err != nil {
+	if err := eng.RegistraVirtual("servicos", meta.Namespace, counters.TabelaMetaCounters, msc, fonte); err != nil {
 		t.Fatal(err)
 	}
 	return eng
@@ -197,7 +197,7 @@ func TestMetaFieldsContinuaRespondendoAoLadoDaCounters(t *testing.T) {
 func TestTabelaMetaRecusaNomeRepetido(t *testing.T) {
 	a := abreContador(t, defPorOLT("a"))
 	b := abreContador(t, defPorOLT("a"))
-	if _, _, err := contadores.TabelaMeta([]contadores.Contado{a, b}); err == nil {
+	if _, _, err := counters.TabelaMeta([]counters.Contado{a, b}); err == nil {
 		t.Fatal("nome repetido tem de ser recusado")
 	}
 }

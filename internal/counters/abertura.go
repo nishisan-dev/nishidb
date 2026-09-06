@@ -1,4 +1,4 @@
-package contadores
+package counters
 
 import (
 	"github.com/nishisan-dev/nishidb/internal/schema"

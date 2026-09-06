@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/nishisan-dev/nishidb/internal/contadores"
+	"github.com/nishisan-dev/nishidb/internal/counters"
 	"github.com/nishisan-dev/nishidb/internal/logging"
 	"github.com/nishisan-dev/nishidb/internal/materializer"
 	"github.com/nishisan-dev/nishidb/internal/schema"
@@ -42,7 +42,7 @@ func realSetupCom(tb testing.TB, dir string, estimatedRows uint64, comContadores
 	if err != nil {
 		tb.Fatalf("spec: %v", err)
 	}
-	comp := contadores.NovoCompilador(spec)
+	comp := counters.NovoCompilador(spec)
 	st, err := storage.Open(storage.Options{
 		Dir:                    dir,
 		SegmentSize:            64 << 20,

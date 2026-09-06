@@ -1,6 +1,6 @@
 //go:build race
 
-package contadores_test
+package counters_test
 
 import "testing"
 
