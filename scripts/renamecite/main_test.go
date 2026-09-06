@@ -54,6 +54,11 @@ func TestExcludedFilesAreUntouchedAndAppliedSubstitutionsAreReported(t *testing.
 	planoDoc := write(t, dir, "planning/identificadores-em-ingles.md", deParaTabela)
 	planoDir := write(t, dir, "planning/identificadores-em-ingles/mapeamento-1.md", deParaTabela)
 	porFlag := write(t, dir, "notas/rascunho.md", deParaTabela)
+	// ferramentaFixture reproduz o achado da Tarefa 1.1: os testes do próprio
+	// renamecite usam nomes reais de pacote como fixture de tabela De → Para
+	// (ver godoc de defaultExcludes), e uma rodada real contra esses mesmos
+	// nomes não pode colapsar o fixture em `X → X` como fez antes deste caso.
+	ferramentaFixture := write(t, dir, "scripts/renamecite/rules_test.go", deParaTabela)
 	alvo := write(t, dir, "docs/outro.md", deParaTabela)
 
 	logkeys := write(t, dir, "mapa/logkeys.tsv", "velho\tnovo\nconsumer.subiu\tconsumer.up\n")
@@ -74,10 +79,11 @@ func TestExcludedFilesAreUntouchedAndAppliedSubstitutionsAreReported(t *testing.
 	}
 
 	for nome, p := range map[string]string{
-		"docs/glossario.md":                          glossario,
-		"planning/identificadores-em-ingles.md":      planoDoc,
-		"planning/identificadores-em-ingles/…":       planoDir,
-		"notas/rascunho.md (excluído pela -exclude)": porFlag,
+		"docs/glossario.md":                                                glossario,
+		"planning/identificadores-em-ingles.md":                            planoDoc,
+		"planning/identificadores-em-ingles/…":                             planoDir,
+		"notas/rascunho.md (excluído pela -exclude)":                       porFlag,
+		"scripts/renamecite/rules_test.go (fixture da própria ferramenta)": ferramentaFixture,
 	} {
 		if got := read(t, p); got != deParaTabela {
 			t.Errorf("%s foi reescrito:\n%s", nome, got)
@@ -99,7 +105,7 @@ func TestExcludedFilesAreUntouchedAndAppliedSubstitutionsAreReported(t *testing.
 			t.Errorf("relatório sem %q:\n%s", linha, rel)
 		}
 	}
-	for _, excluido := range []string{"glossario", "identificadores-em-ingles", "rascunho"} {
+	for _, excluido := range []string{"glossario", "identificadores-em-ingles", "rascunho", "renamecite"} {
 		if strings.Contains(rel, excluido) {
 			t.Errorf("relatório cita arquivo excluído %q:\n%s", excluido, rel)
 		}
