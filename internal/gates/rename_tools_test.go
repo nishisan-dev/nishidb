@@ -31,32 +31,44 @@ func TestRenameApplierRefusesWithoutRfNamingTheGoInstall(t *testing.T) {
 	}
 }
 
-// requireRealToolchain falha alto, nomeando o go install exato, quando rf ou
-// gopls faltam no PATH deste teste — a mesma doutrina que o próprio script
-// aplica sobre quem o chama (débito 53). Um teste que pulasse em silêncio sem
-// rf/gopls não provaria nada sobre o ramo de script ilegível.
-func requireRealToolchain(t *testing.T) {
+// writeFakeTool cria, dentro de dir, um executável chamado name que só sai
+// com status 0. É o suficiente para `command -v` do rename-apply.sh achar a
+// ferramenta — este pacote não precisa do rf/gopls REAIS para testar a
+// checagem de script ilegível, que roda antes de qualquer invocação real.
+func writeFakeTool(t *testing.T, dir, name string) string {
 	t.Helper()
-	if _, err := exec.LookPath("rf"); err != nil {
-		t.Fatalf("rf não está no PATH deste teste. Instale com: go install rsc.io/rf@v0.0.0-20260710193434-85dbf8d53aee")
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("não consegui criar o executável falso %s: %v", path, err)
 	}
-	if _, err := exec.LookPath("gopls"); err != nil {
-		t.Fatalf("gopls não está no PATH deste teste. Instale com: go install golang.org/x/tools/gopls@v0.23.0")
-	}
+	return path
 }
 
-// Sem esta checagem, um `.rf` inexistente ou vazio vira `conteudo=""` sob
-// `set -u` (sem `-e`, o `cat` que falha não para o script) e a execução cai
-// para `rf -diff ""` — um no-op que mentiria sucesso em vez da recusa alta e
-// nomeada que a doutrina dos gates exige. Este teste roda com rf e gopls
-// reais no PATH (para alcançar o ramo novo) e afirma exit 2 e o caminho do
-// script na mensagem.
+// A propriedade sob teste (recusa de um .rf ausente/ilegível/vazio) é
+// decidida pelas checagens -f/-r/-s do script, que rodam ANTES de qualquer
+// invocação real de rf — então rf e gopls REAIS são irrelevantes aqui, e usar
+// executáveis FALSOS (`#!/bin/sh; exit 0`) é suficiente para passar pelo
+// `command -v` e alcançar o ramo novo. Isso importa porque o CI deste
+// repositório (.github/workflows/ci.yml, jobs test e race) só roda
+// `actions/setup-go` + `go test ./...` — não instala rf nem gopls — e exigir
+// o toolchain real aqui quebraria os dois jobs, e qualquer máquina sem as
+// duas ferramentas (o exato "gate que passa com a ferramenta ausente" que a
+// doutrina do débito 53 proíbe, desta vez no próprio teste).
+//
+// Sem a checagem que este teste cobre, um `.rf` inexistente ou vazio vira
+// `conteudo=""` sob `set -u` (sem `-e`, o `cat` que falha não para o script)
+// e a execução cai para `rf -diff ""` — um no-op que mentiria sucesso em vez
+// da recusa alta e nomeada que a doutrina dos gates exige.
 func TestRenameApplierRefusesAnUnreadableScriptNamingIt(t *testing.T) {
-	requireRealToolchain(t)
+	fakeToolsDir := t.TempDir()
+	writeFakeTool(t, fakeToolsDir, "rf")
+	writeFakeTool(t, fakeToolsDir, "gopls")
+
 	script := filepath.Join("scripts", "rename-apply.sh")
 	missing := filepath.Join(t.TempDir(), "nao-existe.rf")
 	cmd := exec.Command("bash", script, "internal/types", missing, filepath.Join(t.TempDir(), "d.diff"))
 	cmd.Dir = raizDoRepo
+	cmd.Env = []string{"PATH=" + fakeToolsDir + ":/usr/bin:/bin"}
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		t.Fatalf("passou com script .rf inexistente:\n%s", out)
@@ -66,5 +78,8 @@ func TestRenameApplierRefusesAnUnreadableScriptNamingIt(t *testing.T) {
 	}
 	if !strings.Contains(string(out), missing) {
 		t.Fatalf("o stderr não nomeia o caminho do script:\n%s", out)
+	}
+	if !strings.Contains(string(out), "não existe") {
+		t.Fatalf("o stderr não diz que o script não existe:\n%s", out)
 	}
 }
