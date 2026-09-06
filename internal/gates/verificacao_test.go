@@ -75,13 +75,17 @@ var reItemMarcador = regexp.MustCompile(`^\s*[*\-]\s`)
 // fechada, alargar o namespace é um ato deliberado, visível no diff.
 //
 // Documento que sai da lista sem sair do disco não é permitido: o gate confere
-// que os quatro existem, porque um rename silencioso ENCOLHE o oráculo e
+// que os cinco existem, porque um rename silencioso ENCOLHE o oráculo e
 // transforma citação viva em órfã (ou, pior, some com o alvo sem ninguém ver).
 var specsDoMarcador = []string{
 	"nishidb-spec-proposal.md",
 	"planning/m1-design-storage.md",
 	"planning/m1-design-materializer-query.md",
 	"planning/spec-subsistema-1-indice-por-segmento.md",
+	// planning/identificadores-em-ingles.md: citada por scripts/ifacerename,
+	// scripts/renameinv, scripts/renametools e scripts/renamecite (§4.1, §4.2,
+	// §4.4, §5, §8).
+	"planning/identificadores-em-ingles.md",
 }
 
 // TestCitacoesDeSecaoResolvem confere que toda citação §NN/§NN.M em docs,

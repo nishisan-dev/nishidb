@@ -12,9 +12,14 @@ menos de 1 GiB de RSS** — heap ~constante, com o peso morando em mmap. Binári
 único, sem runtime externo (§97). Linux-only: o storage usa `mmap` e `fallocate`
 reais (dataset só em ext4/xfs/btrfs; nunca NFS). Go 1.25+; o CI pina 1.26.5.
 
-**Todo o repositório é em PT-BR** — código, identificadores, nomes de teste
-(`TestTopNReaproveitaOBufferDaEntradaDespejada`), comentários, logs, docs e
-mensagens de commit. Commits na voz do time, por bloco lógico.
+**Idioma é decidido por quem lê** (`docs/glossario.md` é normativo): prosa em
+PT-BR — docs, godoc e comentários, mensagens de commit, mensagens de falha de
+teste (`t.Errorf`); tudo que o compilador, o operador ou um cliente lê em
+inglês — identificadores, pacotes e arquivos `.go`, nomes de teste
+(`TestTopNReaproveitaOBufferDaEntradaDespejada` é o formato: sujeito, ação,
+condição), mensagens de erro e de log, chaves de log, config, wire, métricas.
+O glossário liga o termo PT-BR da prosa ao identificador inglês. Commits na
+voz do time, por bloco lógico.
 
 ## Comandos
 
