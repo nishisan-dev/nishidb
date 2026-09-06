@@ -8,9 +8,9 @@
 # buildinfo carimbados na hora do build. É a MESMA linha que o `release.yml`
 # (Task A2) herda ao chamar `make build`; não crie um segundo comando de
 # build fora daqui, ou os dois divergem em silêncio.
-LDFLAGS := -X github.com/nishisan-dev/nishidb/internal/buildinfo.Versao=$(shell git describe --tags --always --dirty) \
+LDFLAGS := -X github.com/nishisan-dev/nishidb/internal/buildinfo.Version=$(shell git describe --tags --always --dirty) \
            -X github.com/nishisan-dev/nishidb/internal/buildinfo.Commit=$(shell git rev-parse --short HEAD) \
-           -X github.com/nishisan-dev/nishidb/internal/buildinfo.Data=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+           -X github.com/nishisan-dev/nishidb/internal/buildinfo.Date=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
 build:
 	go build ./...

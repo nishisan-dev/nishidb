@@ -18,9 +18,9 @@ import (
 // /v1/stats) são as que a issue #11 cobra primeiro.
 func comVersaoDeTeste(t *testing.T) {
 	t.Helper()
-	v, c, d := buildinfo.Versao, buildinfo.Commit, buildinfo.Data
-	buildinfo.Versao, buildinfo.Commit, buildinfo.Data = "v9.9.9", "cafefeed1234", "2026-01-02T03:04:05Z"
-	t.Cleanup(func() { buildinfo.Versao, buildinfo.Commit, buildinfo.Data = v, c, d })
+	v, c, d := buildinfo.Version, buildinfo.Commit, buildinfo.Date
+	buildinfo.Version, buildinfo.Commit, buildinfo.Date = "v9.9.9", "cafefeed1234", "2026-01-02T03:04:05Z"
+	t.Cleanup(func() { buildinfo.Version, buildinfo.Commit, buildinfo.Date = v, c, d })
 }
 
 // TestSubidaLogaAVersaoDoBinario cobre o evento de subida do §51: as
