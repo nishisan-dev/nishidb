@@ -158,7 +158,7 @@ func (s *Servidor) handleQuery(w http.ResponseWriter, r *http.Request) {
 	// do cliente é idêntica à do semáforo cheio — esperar e repetir. O que muda
 	// é a CAUSA, e ela vai na mensagem, nomeando a chave.
 	orc := s.orcamento.Query(s.cfg.MaxBufferPerQuery())
-	if !orc.Admite() {
+	if !orc.Admit() {
 		w.Header().Set("Retry-After", "1")
 		s.recusa(w, r, http.StatusServiceUnavailable, d.nome, protocol.Falha{
 			Code: protocol.CodMuitasQueries,
@@ -169,7 +169,7 @@ func (s *Servidor) handleQuery(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	defer orc.Libera()
+	defer orc.Release()
 
 	encerra := s.met.admite(d.nome)
 	defer encerra()
@@ -337,7 +337,7 @@ func colunaReservada(cols []executor.ColMeta) (string, bool) {
 func (s *Servidor) transmite(
 	w http.ResponseWriter, r *http.Request, d *dataset, req protocol.Requisicao,
 	it executor.RowIterator, colunas []executor.ColMeta, tetoDoRequest int, inicio time.Time,
-	orc *budget.PorQuery,
+	orc *budget.PerQuery,
 ) {
 	log := s.log.Dataset(d.nome)
 

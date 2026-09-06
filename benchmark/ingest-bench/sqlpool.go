@@ -89,12 +89,12 @@ func (p *sqlPool) MedeVarreduraCompleta() (time.Duration, int64, error) {
 // LATÊNCIA DE ROTA: com um Global só, a contenção do CAS entre os leitores
 // entraria na medição e seria lida como custo da consulta. O que importa aqui é
 // que o writer pague o mesmo caminho de código que paga em produção.
-func orcamentoDoBench() *budget.PorQuery {
-	p := budget.NovoGlobal(512 << 20).Query(4 << 20)
+func orcamentoDoBench() *budget.PerQuery {
+	p := budget.NewGlobal(512 << 20).Query(4 << 20)
 	// O retorno é IGNORADO de propósito, e o `_ =` diz isso: um Global de
 	// 512 MiB comporta o primeiro Admite de 4 MiB por construção, e o benchmark
 	// não tem a quem reportar recusa — ele mede vazão, não admissão.
-	_ = p.Admite()
+	_ = p.Admit()
 	return p
 }
 

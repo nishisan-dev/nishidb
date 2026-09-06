@@ -29,49 +29,49 @@ import "sync/atomic"
 // maxConcurrent: todos os datasets de uma instância dividem o mesmo orçamento de
 // memória, e um teto por dataset multiplicaria o pior caso pelo número deles.
 type Global struct {
-	teto  int64
-	usado atomic.Int64
+	ceiling int64
+	used    atomic.Int64
 }
 
-// NovoGlobal cria o orçamento do processo. teto <= 0 é tratado como ILIMITADO,
+// NewGlobal cria o orçamento do processo. teto <= 0 é tratado como ILIMITADO,
 // e o caso existe para o chamador que não tem configuração — ferramenta, teste,
 // benchmark. Não é fallback do servidor: lá o teto vem do units.Size, que já
 // recusa valor não positivo.
-func NovoGlobal(teto int64) *Global { return &Global{teto: teto} }
+func NewGlobal(ceiling int64) *Global { return &Global{ceiling: ceiling} }
 
-// Usado é quanto do orçamento está reservado NESTE instante. É a fonte de
+// Used é quanto do orçamento está reservado NESTE instante. É a fonte de
 // nishidb_query_buffer_bytes.
-func (g *Global) Usado() int64 { return g.usado.Load() }
+func (g *Global) Used() int64 { return g.used.Load() }
 
-// Reserva tenta tomar n bytes e devolve false quando eles não cabem.
+// Reserve tenta tomar n bytes e devolve false quando eles não cabem.
 //
 // O laço de CAS é o que torna a decisão atômica: um `Load` seguido de `Add`
 // deixaria duas consultas lerem o mesmo "cabe" e passarem juntas do teto, e o
 // orçamento seria excedido justamente sob a concorrência que ele existe para
 // conter. O `Add` sozinho tampouco serve — ele não sabe recusar, e desfazê-lo
 // depois já teria publicado um valor acima do teto para quem lesse a métrica.
-func (g *Global) Reserva(n int64) bool {
-	if g.teto <= 0 {
-		g.usado.Add(n)
+func (g *Global) Reserve(n int64) bool {
+	if g.ceiling <= 0 {
+		g.used.Add(n)
 		return true
 	}
 	for {
-		usado := g.usado.Load()
-		novo := usado + n
-		if novo > g.teto {
+		used := g.used.Load()
+		next := used + n
+		if next > g.ceiling {
 			return false
 		}
-		if g.usado.CompareAndSwap(usado, novo) {
+		if g.used.CompareAndSwap(used, next) {
 			return true
 		}
 	}
 }
 
-// Devolve libera n bytes. Só pode ser chamada com o que foi reservado: devolver
+// Return libera n bytes. Só pode ser chamada com o que foi reservado: devolver
 // a mais faria o `usado` andar para baixo do real e o teto deixaria de valer.
-func (g *Global) Devolve(n int64) { g.usado.Add(-n) }
+func (g *Global) Return(n int64) { g.used.Add(-n) }
 
-// PorQuery é o orçamento de UMA consulta (runtime.query.maxBufferPerQuery).
+// PerQuery é o orçamento de UMA consulta (runtime.query.maxBufferPerQuery).
 //
 // Existe além do Global porque os dois recusam coisas diferentes. O Global
 // impede que N consultas somadas estourem a máquina; este impede que UMA
@@ -79,25 +79,25 @@ func (g *Global) Devolve(n int64) { g.usado.Add(-n) }
 // sozinha o orçamento que era de todas. Sem o teto por consulta, a primeira a
 // chegar levaria o processo inteiro e as demais receberiam recusa por culpa
 // dela.
-type PorQuery struct {
-	global *Global
-	teto   int64
-	usado  atomic.Int64
+type PerQuery struct {
+	global  *Global
+	ceiling int64
+	used    atomic.Int64
 }
 
 // Query abre um orçamento para uma consulta, com o teto por consulta dado.
 // teto <= 0 é ilimitado, pela mesma razão do NovoGlobal.
-func (g *Global) Query(teto int64) *PorQuery {
-	return &PorQuery{global: g, teto: teto}
+func (g *Global) Query(ceiling int64) *PerQuery {
+	return &PerQuery{global: g, ceiling: ceiling}
 }
 
-// Teto é o limite desta consulta; 0 ou negativo significa ilimitado.
-func (p *PorQuery) Teto() int64 { return p.teto }
+// Ceiling é o limite desta consulta; 0 ou negativo significa ilimitado.
+func (p *PerQuery) Ceiling() int64 { return p.ceiling }
 
-// Usado é quanto esta consulta tem reservado.
-func (p *PorQuery) Usado() int64 { return p.usado.Load() }
+// Used é quanto esta consulta tem reservado.
+func (p *PerQuery) Used() int64 { return p.used.Load() }
 
-// Admite reserva o orçamento INTEIRO desta consulta, de UMA VEZ, e diz se ele
+// Admit reserva o orçamento INTEIRO desta consulta, de UMA VEZ, e diz se ele
 // coube no processo.
 //
 // De uma vez, e não conforme o buffer cresce, porque a decisão de memória tem de
@@ -115,26 +115,26 @@ func (p *PorQuery) Usado() int64 { return p.usado.Load() }
 // Teto <= 0 é ilimitado e sempre admite, sem contabilizar: não há número a
 // reservar, e inventar um faria o nishidb_query_buffer_bytes de um processo sem
 // configuração publicar uma grandeza que não descreve nada.
-func (p *PorQuery) Admite() bool {
-	if p.teto <= 0 {
+func (p *PerQuery) Admit() bool {
+	if p.ceiling <= 0 {
 		return true
 	}
-	if !p.global.Reserva(p.teto) {
+	if !p.global.Reserve(p.ceiling) {
 		return false
 	}
-	p.usado.Store(p.teto)
+	p.used.Store(p.ceiling)
 	return true
 }
 
-// Libera devolve TUDO o que esta consulta tinha reservado, e é idempotente: uma
+// Release devolve TUDO o que esta consulta tinha reservado, e é idempotente: uma
 // segunda chamada devolve zero.
 //
 // Idempotente de propósito — o chamador a põe num `defer` e pode tê-la chamado
 // no caminho de erro também. Uma devolução dupla faria o `usado` do processo
 // andar para baixo do real, e o teto deixaria de valer para todo mundo a partir
 // dali, em silêncio.
-func (p *PorQuery) Libera() {
-	if n := p.usado.Swap(0); n != 0 {
-		p.global.Devolve(n)
+func (p *PerQuery) Release() {
+	if n := p.used.Swap(0); n != 0 {
+		p.global.Return(n)
 	}
 }

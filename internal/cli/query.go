@@ -153,8 +153,8 @@ func runQuery(args []string, amb Ambiente) int {
 	// e não vale pelo CLI é a chave mentindo em metade dos caminhos, que é o
 	// defeito de que este orçamento nasceu (débito 15). O processo do CLI serve
 	// UMA consulta, então o Global é dele sozinho.
-	orc := budget.NovoGlobal(cfg.MemoryTarget()).Query(cfg.MaxBufferPerQuery())
-	if !orc.Admite() {
+	orc := budget.NewGlobal(cfg.MemoryTarget()).Query(cfg.MaxBufferPerQuery())
+	if !orc.Admit() {
 		// Só acontece com `maxBufferPerQuery` acima do `memoryTarget`, que o
 		// CarregaConfig já recusa — mas o retorno é conferido do mesmo jeito:
 		// ignorá-lo por "não pode acontecer" é como o writer ficaria sem
@@ -167,7 +167,7 @@ func runQuery(args []string, amb Ambiente) int {
 				"(runtime.memoryTarget contra runtime.query.maxBufferPerQuery)")
 		return ExitUso
 	}
-	defer orc.Libera()
+	defer orc.Release()
 	w := executor.NewStreamWriter(amb.Stdout, executor.DefaultBufSize, orc)
 	for it.Next() {
 		if err := w.WriteRow(it.Row()); err != nil {

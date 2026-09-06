@@ -19,7 +19,7 @@ import (
 // nada a ver com o que ela afirma, e a primeira mudança de default quebraria a
 // suíte inteira por um motivo que não é o dela. Os testes que EXERCEM o
 // orçamento declaram o teto deles, explicitamente — ver budget_writer_test.go.
-func semTeto() *budget.PorQuery { return budget.NovoGlobal(0).Query(0) }
+func semTeto() *budget.PerQuery { return budget.NewGlobal(0).Query(0) }
 
 func rowDeTeste(i int) Row {
 	return Row{cols: []ColView{
@@ -405,8 +405,8 @@ de linha`)
 // Medir só aquele e concluir "não custou nada" seria medir o ramo que não
 // existe em produção. Os dois juntos é que respondem quanto o teto cobra.
 func BenchmarkStreamWriterComOrcamento(b *testing.B) {
-	orc := budget.NovoGlobal(512 << 20).Query(4 << 20)
-	if !orc.Admite() {
+	orc := budget.NewGlobal(512 << 20).Query(4 << 20)
+	if !orc.Admit() {
 		b.Fatal("o orçamento do benchmark não coube")
 	}
 	s := NewStreamWriter(io.Discard, DefaultBufSize, orc)

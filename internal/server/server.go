@@ -308,7 +308,7 @@ func Novo(cfg *config.Config, o Opcoes) (*Servidor, error) {
 		vagas:       make(chan struct{}, cfg.MaxConcurrent()),
 		vagasLongas: make(chan struct{}, cfg.MaxLongRunning()),
 		emVoo:       novoEmVoo(),
-		orcamento:   budget.NovoGlobal(cfg.MemoryTarget()),
+		orcamento:   budget.NewGlobal(cfg.MemoryTarget()),
 		credenciais: credenciais,
 		tlsCert:     certificado,
 	}

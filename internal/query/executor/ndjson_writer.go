@@ -69,11 +69,11 @@ type StreamWriter struct {
 // PROCESSO ser um 503 com Retry-After, em vez de um stream que morre na linha
 // quarenta mil por causa da memória de outra consulta — e deixa WriteRow sem
 // nenhuma chamada ao orçamento, portanto sem CAS nem contenção por linha.
-func NewStreamWriter(w io.Writer, bufSize int, orc *budget.PorQuery) *StreamWriter {
+func NewStreamWriter(w io.Writer, bufSize int, orc *budget.PerQuery) *StreamWriter {
 	if bufSize <= 0 {
 		bufSize = DefaultBufSize
 	}
-	teto := orc.Teto()
+	teto := orc.Ceiling()
 	if teto > 0 && int64(bufSize) > teto/2 {
 		// METADE do orçamento vira buffer de trabalho; a outra metade é FOLGA.
 		//
