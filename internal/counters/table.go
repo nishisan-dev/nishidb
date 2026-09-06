@@ -161,18 +161,18 @@ type fonte struct {
 // depois da consulta. Época e instante ficam zerados e são ignorados — os
 // totais são lidos no presente.
 func (f *fonte) AbreSnapshot() types.Snapshot {
-	return types.Snapshot{LimiteRowID: types.RowID(f.l.Limite())}
+	return types.Snapshot{LimitRowID: types.RowID(f.l.Limite())}
 }
 
 // FechaSnapshot é no-op: a fonte não retém nada.
 func (f *fonte) FechaSnapshot(types.Snapshot) {}
 
 func (f *fonte) ScanLive(snap types.Snapshot) types.RowIDIterator {
-	return &iterador{l: f.l, limite: uint32(snap.LimiteRowID)}
+	return &iterador{l: f.l, limite: uint32(snap.LimitRowID)}
 }
 
 func (f *fonte) GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (types.Record, []byte, bool, error) {
-	if id == 0 || id >= snap.LimiteRowID {
+	if id == 0 || id >= snap.LimitRowID {
 		return types.Record{}, buf, false, nil
 	}
 	chave, texto, total, _, vivo := f.l.Grupo(uint32(id))

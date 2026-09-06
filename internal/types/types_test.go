@@ -49,7 +49,7 @@ func TestCarregaI64CobreTodasAsTagsNomeadas(t *testing.T) {
 		if ft == TypeNull || tag >= len(fieldTypeNames) || fieldTypeNames[tag] == "" {
 			continue // reservada ou sem nome: não é tipo de campo
 		}
-		if got := ft.CarregaI64(); got != i64[ft] {
+		if got := ft.CarriesI64(); got != i64[ft] {
 			t.Errorf("%v.CarregaI64() = %v, want %v", ft, got, i64[ft])
 		}
 	}

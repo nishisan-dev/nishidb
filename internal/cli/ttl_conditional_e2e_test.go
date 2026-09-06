@@ -150,7 +150,7 @@ func TestCicloExpiracaoQuandoACondicaoPersiste(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pres != types.PresencaExpirada {
+	if pres != types.PresenceExpired {
 		t.Errorf("presença = %v, quero expirada", pres)
 	}
 }

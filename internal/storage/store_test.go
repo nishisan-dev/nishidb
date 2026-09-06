@@ -319,10 +319,10 @@ func TestGetTombstonedNaoEhLive(t *testing.T) {
 func TestSequence(t *testing.T) {
 	s := openStore(t, Options{})
 	id, _ := mustPut(t, s, "seq", 42, statusPayload(t, s, "seq", "Start", 0), nil)
-	if got, pres := s.Sequence(id); pres != types.PresencaViva || got != 42 {
+	if got, pres := s.Sequence(id); pres != types.PresenceLive || got != 42 {
 		t.Fatalf("Sequence: (%d,%v)", got, pres)
 	}
-	if _, pres := s.Sequence(777); pres != types.PresencaAusente {
+	if _, pres := s.Sequence(777); pres != types.PresenceAbsent {
 		t.Fatal("rowId inexistente não tem sequence")
 	}
 }

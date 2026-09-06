@@ -25,7 +25,7 @@ func valueEqual(a, b types.Value) bool {
 	// CarregaI64 e não um switch local: tipo de largura fixa esquecido no
 	// ramo de bytes compara nil com nil e devolve true para valores
 	// diferentes, e a comparação conclui em silêncio que o campo não mudou.
-	if a.Type.CarregaI64() {
+	if a.Type.CarriesI64() {
 		return a.I64 == b.I64
 	}
 	return bytes.Equal(a.Bytes, b.Bytes)

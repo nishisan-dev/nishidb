@@ -330,7 +330,7 @@ func TestCompactionNaoLapidaLinhaVisivelAoSnapshotMaisAntigo(t *testing.T) {
 			t.Fatal(err)
 		}
 		var prev *types.Record
-		if pres.Existe() {
+		if pres.Exists() {
 			prev = &rec
 		}
 		if _, _, err := s.Put([]byte(k), seq, 0, p, prev); err != nil {

@@ -1530,7 +1530,7 @@ func (s *Store) lookup(key, buf []byte, snap types.Snapshot) (rec types.Record, 
 		var packed uint64
 		var ok bool
 		if !s.vers.Vazio() {
-			packed, ok = s.vers.Em(rid, snap.Epoca)
+			packed, ok = s.vers.Em(rid, snap.Epoch)
 		}
 		if !ok {
 			if packed, ok = s.locs.Get(rid); !ok {
@@ -1552,7 +1552,7 @@ func (s *Store) lookup(key, buf []byte, snap types.Snapshot) (rec types.Record, 
 		// A liveness tem DUAS causas de morte: a lápide já publicada e o
 		// prazo vencido que o coletor ainda não recolheu. Contá-las juntas
 		// aqui é o que faz a visibilidade não depender do agendador.
-		live = locFlags&types.FlagTombstone == 0 && !s.venceuNaVersao(r, snap.Instante)
+		live = locFlags&types.FlagTombstone == 0 && !s.venceuNaVersao(r, snap.Instant)
 		return true, nil
 	}
 	_, exists, err = s.prim.Find(key, validate)
@@ -1570,7 +1570,7 @@ func (s *Store) GetByKey(snap types.Snapshot, key, buf []byte) (types.Record, []
 		return types.Record{}, buf, false, err
 	}
 	defer s.sai()
-	if !s.snaps.valido(snap.Epoca) {
+	if !s.snaps.valido(snap.Epoch) {
 		return types.Record{}, buf, false, ErrSnapshotExpirado
 	}
 	rec, out, exists, live, err := s.lookup(key, buf, snap)
@@ -1589,23 +1589,23 @@ func (s *Store) GetByKey(snap types.Snapshot, key, buf []byte) (types.Record, []
 // O GetByKey continua existindo com bool para o caminho de LEITURA, onde a
 // pergunta é outra: "esta row aparece na query?". Duas perguntas diferentes,
 // duas assinaturas.
-func (s *Store) Estado(key, buf []byte) (types.Record, []byte, types.Presenca, error) {
+func (s *Store) Estado(key, buf []byte) (types.Record, []byte, types.Presence, error) {
 	if err := s.entra(); err != nil {
-		return types.Record{}, buf, types.PresencaAusente, err
+		return types.Record{}, buf, types.PresenceAbsent, err
 	}
 	defer s.sai()
 	rec, out, exists, live, err := s.lookup(key, buf, s.presente())
 	switch {
 	case err != nil:
-		return types.Record{}, out, types.PresencaAusente, err
+		return types.Record{}, out, types.PresenceAbsent, err
 	case !exists:
-		return types.Record{}, out, types.PresencaAusente, nil
+		return types.Record{}, out, types.PresenceAbsent, nil
 	case !live:
 		// O record VOLTA, e não zerado: RowID e Sequence são o que o stale
 		// check e a ressurreição precisam.
-		return rec, out, types.PresencaExpirada, nil
+		return rec, out, types.PresenceExpired, nil
 	}
-	return rec, out, types.PresencaViva, nil
+	return rec, out, types.PresenceLive, nil
 }
 
 // GetByRowID devolve o record corrente da row. ok=false para row sem
@@ -1615,7 +1615,7 @@ func (s *Store) GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (typ
 		return types.Record{}, buf, false, err
 	}
 	defer s.sai()
-	if !s.snaps.valido(snap.Epoca) {
+	if !s.snaps.valido(snap.Epoch) {
 		return types.Record{}, buf, false, ErrSnapshotExpirado
 	}
 	// Par (Get, Read) sob a barreira de aposentadoria: ver o godoc de aposMu.
@@ -1631,7 +1631,7 @@ func (s *Store) GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (typ
 	// O Vazio() na frente evita a chamada de Em no caso dominante — journal
 	// sem nada retido —, e é por linha varrida que isso conta.
 	if !s.vers.Vazio() {
-		packed, ok = s.vers.Em(id, snap.Epoca)
+		packed, ok = s.vers.Em(id, snap.Epoch)
 	}
 	if !ok {
 		if packed, ok = s.locs.Get(id); !ok {
@@ -1656,7 +1656,7 @@ func (s *Store) GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (typ
 	// o payload que manda: ele é a fonte da verdade de que os índices são
 	// derivados (ver o godoc de rowindex.Escritas), então derivar daqui é a
 	// MESMA conta que o applyRecord faz, sobre a versão certa.
-	if s.escritas != nil && s.venceuNaVersao(rec, snap.Instante) {
+	if s.escritas != nil && s.venceuNaVersao(rec, snap.Instant) {
 		return types.Record{}, out, false, nil
 	}
 	return rec, out, true, nil
@@ -2354,7 +2354,7 @@ func (it *liveIterator) Next() bool {
 		if _, _, locFlags := rowindex.Unpack(packed); locFlags&types.FlagTombstone != 0 {
 			continue
 		}
-		if it.s.prazoVencido(id, it.snap.Instante) || it.s.purgada(id) {
+		if it.s.prazoVencido(id, it.snap.Instant) || it.s.purgada(id) {
 			continue
 		}
 		it.cur = id
@@ -2428,7 +2428,7 @@ func (s *Store) ScanLive(snap types.Snapshot) types.RowIDIterator {
 	// A varredura começa na marca-d'água, e não em zero: no histórico o
 	// prefixo purgado pode ser de dezenas de milhões de rowIds, e percorrê-los
 	// para descartar cada um seria pagar pela retenção em toda consulta.
-	return &liveIterator{s: s, snap: snap, next: snap.BaseRowID, limit: snap.LimiteRowID}
+	return &liveIterator{s: s, snap: snap, next: snap.BaseRowID, limit: snap.LimitRowID}
 }
 
 // DiretorioDeSpill é onde o motor de consulta pode transbordar o que não cabe
@@ -2473,14 +2473,14 @@ func (s *Store) Lookup(field types.FieldID, v types.Value) (types.RowIDIterator,
 // location publicada — a sequence só tem significado com estado visível).
 // Pode estar momentaneamente À FRENTE do record visível: ela é gravada no
 // passo 6 do Put, antes do publish (passo 7).
-func (s *Store) Sequence(id types.RowID) (int64, types.Presenca) {
+func (s *Store) Sequence(id types.RowID) (int64, types.Presence) {
 	if err := s.entra(); err != nil {
-		return 0, types.PresencaAusente
+		return 0, types.PresenceAbsent
 	}
 	defer s.sai()
 	packed, ok := s.locs.Get(id)
 	if !ok {
-		return 0, types.PresencaAusente
+		return 0, types.PresenceAbsent
 	}
 	// A sequence de uma row expirada VOLTA, e isso é o débito 25. Escondê-la
 	// atrás de um ok=false repetiria na outra porta o defeito do GetByKey:
@@ -2489,9 +2489,9 @@ func (s *Store) Sequence(id types.RowID) (int64, types.Presenca) {
 	// entidade. Quem pergunta a sequence de uma row está decidindo sobre
 	// ordem, e "não sei" é a pior resposta possível.
 	if _, _, flags := rowindex.Unpack(packed); flags&types.FlagTombstone != 0 || s.prazoVencido(id, s.agora()) {
-		return s.sequenceDe(id), types.PresencaExpirada
+		return s.sequenceDe(id), types.PresenceExpired
 	}
-	return s.sequenceDe(id), types.PresencaViva
+	return s.sequenceDe(id), types.PresenceLive
 }
 
 // Sync força fdatasync do segmento corrente (loop de durability batch).

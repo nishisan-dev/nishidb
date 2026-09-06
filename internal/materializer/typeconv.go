@@ -226,8 +226,8 @@ func Convert(f jsonp.Field, target types.FieldType, layout *typeparse.Layout, ar
 			// campo time seria gravado como uma hora do dia absurda, e a
 			// saída NDJSON o renderiza como null — dado perdido em silêncio.
 			ms, err := typeparse.Int64(f.Raw)
-			if err != nil || ms < 0 || ms >= types.MillisPorDia {
-				return types.Value{}, arena, convErrf(target, "millis do dia fora de [0,%d): %s", types.MillisPorDia, truncVal(f.Raw))
+			if err != nil || ms < 0 || ms >= types.MillisPerDay {
+				return types.Value{}, arena, convErrf(target, "millis do dia fora de [0,%d): %s", types.MillisPerDay, truncVal(f.Raw))
 			}
 			return types.Value{Type: target, I64: ms}, arena, nil
 		}

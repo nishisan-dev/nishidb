@@ -172,5 +172,5 @@ func contem(s, sub string) bool { return strings.Contains(s, sub) }
 
 // snapshotDeEpoca monta um types.Snapshot com uma época que a fonte não abriu.
 func snapshotDeEpoca(epoca uint64, limite types.RowID) types.Snapshot {
-	return types.Snapshot{Epoca: epoca, LimiteRowID: limite}
+	return types.Snapshot{Epoch: epoca, LimitRowID: limite}
 }

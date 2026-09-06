@@ -107,8 +107,8 @@ const (
 	TypeTime FieldType = 0x0D // 8 bytes LE, millis desde a meia-noite
 )
 
-// MillisPorDia é o teto exclusivo de TypeTime.
-const MillisPorDia int64 = 86_400_000
+// MillisPerDay é o teto exclusivo de TypeTime.
+const MillisPerDay int64 = 86_400_000
 
 // fieldTypeNames mapeia a tag para o nome do tipo no vocabulário do YAML.
 var fieldTypeNames = [...]string{
@@ -138,7 +138,7 @@ func (t FieldType) String() string {
 	return "FieldType(0x" + strconv.FormatUint(uint64(t), 16) + ")"
 }
 
-// CarregaI64 diz se o valor do tipo mora em Value.I64 (largura fixa) em vez
+// CarriesI64 diz se o valor do tipo mora em Value.I64 (largura fixa) em vez
 // de Value.Bytes. É a fonte ÚNICA dessa distinção.
 //
 // Existe porque quem a enumerava à mão a escrevia como um switch com
@@ -146,7 +146,7 @@ func (t FieldType) String() string {
 // esquecida ali não erra alto: os dois lados têm Bytes nil, bytes.Equal
 // devolve true para valores DIFERENTES, e o diff conclui que o campo não
 // mudou. Sem erro, sem log, sem métrica. Acrescentar tag agora é mexer aqui.
-func (t FieldType) CarregaI64() bool {
+func (t FieldType) CarriesI64() bool {
 	switch t {
 	case TypeInt64, TypeDouble, TypeBool, TypeTimestamp, TypeDateTime, TypeTime:
 		return true
@@ -154,7 +154,7 @@ func (t FieldType) CarregaI64() bool {
 	return false
 }
 
-// Presenca é o que o materializer precisa saber sobre uma key, e são TRÊS
+// Presence é o que o materializer precisa saber sobre uma key, e são TRÊS
 // estados, não dois.
 //
 // Enquanto "ausente" e "expirada" chegavam colapsados num único ok=false, o
@@ -165,30 +165,30 @@ func (t FieldType) CarregaI64() bool {
 //
 // Mora em types porque dois provedores precisam concordar sobre ela: o Store
 // real e o dublê de storage.
-type Presenca uint8
+type Presence uint8
 
 const (
-	// PresencaAusente marca a key que nunca existiu neste dataset.
-	PresencaAusente Presenca = iota
-	// PresencaViva marca a key cujo estado corrente é legível.
-	PresencaViva
-	// PresencaExpirada marca a entidade que existiu e não está mais visível —
+	// PresenceAbsent marca a key que nunca existiu neste dataset.
+	PresenceAbsent Presence = iota
+	// PresenceLive marca a key cujo estado corrente é legível.
+	PresenceLive
+	// PresenceExpired marca a entidade que existiu e não está mais visível —
 	// lápide publicada ou prazo vencido. RowID e Sequence do record devolvido
 	// são VÁLIDOS, e é isso que faz o stale check funcionar; só o Payload
 	// deixou de descrever um estado vivo.
-	PresencaExpirada
+	PresenceExpired
 )
 
-// Existe reporta se a key já foi vista, viva ou não.
-func (p Presenca) Existe() bool { return p != PresencaAusente }
+// Exists reporta se a key já foi vista, viva ou não.
+func (p Presence) Exists() bool { return p != PresenceAbsent }
 
-func (p Presenca) String() string {
+func (p Presence) String() string {
 	switch p {
-	case PresencaAusente:
+	case PresenceAbsent:
 		return "ausente"
-	case PresencaViva:
+	case PresenceLive:
 		return "viva"
-	case PresencaExpirada:
+	case PresenceExpired:
 		return "expirada"
 	}
 	return "Presenca(" + strconv.FormatUint(uint64(p), 10) + ")"
@@ -279,16 +279,16 @@ type Record struct {
 //   - BaseRowID congela o piso. Sem ele, a purga do histórico avança a
 //     marca-d'água durante a varredura e abre buraco por baixo.
 type Snapshot struct {
-	// Epoca é a versão do dataset em T0: a consulta enxerga tudo que foi
+	// Epoch é a versão do dataset em T0: a consulta enxerga tudo que foi
 	// publicado ATÉ ela, e nada do que veio depois. É o que dá isolamento —
 	// uma linha atualizada com a consulta em voo é entregue na versão desta
 	// época, não na corrente.
-	Epoca uint64
-	// Instante é o relógio da expiração para esta consulta.
-	Instante time.Time
-	// LimiteRowID é EXCLUSIVO: rowIds a partir dele nasceram depois da
+	Epoch uint64
+	// Instant é o relógio da expiração para esta consulta.
+	Instant time.Time
+	// LimitRowID é EXCLUSIVO: rowIds a partir dele nasceram depois da
 	// consulta e não pertencem ao universo dela.
-	LimiteRowID RowID
+	LimitRowID RowID
 	// BaseRowID é INCLUSIVO: rowIds abaixo dele já tinham sido purgados
 	// quando a consulta abriu.
 	BaseRowID RowID

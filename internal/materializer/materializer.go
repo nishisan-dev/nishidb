@@ -39,7 +39,7 @@ type Store interface {
 	// porque o stale check precisa rodar também sobre a entidade EXPIRADA:
 	// tratá-la como ausente a faria ser recriada por um evento antigo, que é
 	// a ressurreição que o tombstone existe para impedir.
-	Estado(key, buf []byte) (types.Record, []byte, types.Presenca, error)
+	Estado(key, buf []byte) (types.Record, []byte, types.Presence, error)
 
 	// Put publica o estado novo. prev != nil evita o re-lookup e entrega o
 	// payload anterior para o diff dos índices; deve ser o record corrente
@@ -465,7 +465,7 @@ func (m *Materializer) Aplica(d *Decodificado) ApplyResult {
 	m.apendaNoHistorico(d)
 
 	var (
-		presenca types.Presenca
+		presenca types.Presence
 		err      error
 	)
 	// O buf devolvido é reatribuído SEMPRE (pode ter crescido), inclusive no
@@ -483,7 +483,7 @@ func (m *Materializer) Aplica(d *Decodificado) ApplyResult {
 	// A entidade expirada mantém RowID e Sequence, então o stale check tem
 	// contra o que comparar — e um evento antigo é descartado em vez de
 	// recriar a entidade que acabou de expirar.
-	if presenca.Existe() && m.schema.Seq != nil && d.seq <= m.prevRec.Sequence {
+	if presenca.Exists() && m.schema.Seq != nil && d.seq <= m.prevRec.Sequence {
 		m.metrics.stale.Add(1)
 		return ApplyResult{Action: ActionStale, RowID: m.prevRec.RowID}
 	}
@@ -512,7 +512,7 @@ func (m *Materializer) Aplica(d *Decodificado) ApplyResult {
 	// O merge exige estado VIVO. Sobre uma lápide ele arrastaria os campos da
 	// encarnação anterior para a entidade que está reabrindo — um alarme novo
 	// herdaria a severidade do que foi fechado.
-	if presenca == types.PresencaViva && !replace {
+	if presenca == types.PresenceLive && !replace {
 		payload, err = mergeRecords(m.prevRec.Payload, d.entries, m.outBuf[:0], &m.metrics.efeitos)
 	} else {
 		// Create (não há estado anterior) e replace (§23, o estado anterior é
@@ -532,7 +532,7 @@ func (m *Materializer) Aplica(d *Decodificado) ApplyResult {
 	// mesmo rowId (a primary ainda nomeia a key) e dá ao diff de índices a
 	// base certa para limpar as postings da encarnação anterior.
 	var prev *types.Record
-	if presenca.Existe() {
+	if presenca.Exists() {
 		prev = &m.prevRec
 	}
 	rowID, created, err := m.store.Put(d.key, d.seq, 0, payload, prev)

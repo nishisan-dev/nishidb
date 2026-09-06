@@ -408,7 +408,7 @@ func poeLinhasVariadasAteRotacionar(t *testing.T, s *Store, rel *relogioDeTeste,
 			if err != nil {
 				t.Fatalf("Estado(%s): %v", anterior, err)
 			}
-			if pres == types.PresencaViva {
+			if pres == types.PresenceLive {
 				if _, _, err := s.Put([]byte(anterior), 2, 0,
 					payloadIndexadoComPrazo(t, s, anterior, "atualizado", int64(i%3), rel.t), &rec); err != nil {
 					t.Fatalf("Put(update %s): %v", anterior, err)

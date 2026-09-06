@@ -356,7 +356,7 @@ func (s *Store) AuditaContadores(ctx context.Context) ([]counter.Relatorio, erro
 
 	var buf []byte
 	var linhas uint64
-	for id := snap.BaseRowID; id < snap.LimiteRowID; id++ {
+	for id := snap.BaseRowID; id < snap.LimitRowID; id++ {
 		if id&passoDoContexto == 0 {
 			if err := ctx.Err(); err != nil {
 				return nil, err
@@ -365,13 +365,13 @@ func (s *Store) AuditaContadores(ctx context.Context) ([]counter.Relatorio, erro
 		// A validade vem ANTES de consultar o journal: um snapshot invalidado
 		// já pode ter tido as versões dele podadas, e o journal responderia
 		// "location corrente" para uma linha que mudou depois de T0.
-		if !s.snaps.valido(snap.Epoca) {
+		if !s.snaps.valido(snap.Epoch) {
 			return nil, ErrSnapshotExpirado
 		}
 		var packed uint64
 		var ok bool
 		if !s.vers.Vazio() {
-			packed, ok = s.vers.Em(id, snap.Epoca)
+			packed, ok = s.vers.Em(id, snap.Epoch)
 		}
 		if !ok {
 			if packed, ok = s.locs.Get(id); !ok {
@@ -418,7 +418,7 @@ func (s *Store) AuditaContadores(ctx context.Context) ([]counter.Relatorio, erro
 			s.audTrace(id)
 		}
 	}
-	if !s.snaps.valido(snap.Epoca) {
+	if !s.snaps.valido(snap.Epoch) {
 		return nil, ErrSnapshotExpirado
 	}
 

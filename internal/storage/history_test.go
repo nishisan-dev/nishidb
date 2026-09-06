@@ -243,7 +243,7 @@ func TestSequenceDoHistoricoEhZero(t *testing.T) {
 	if seq != 0 {
 		t.Errorf("Sequence = %d, quer 0", seq)
 	}
-	if presenca != types.PresencaViva {
+	if presenca != types.PresenceLive {
 		t.Errorf("presença = %v, quer viva", presenca)
 	}
 }

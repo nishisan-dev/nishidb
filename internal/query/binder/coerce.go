@@ -295,7 +295,7 @@ func coerceLiteral(f *schema.CompiledField, op parser.CmpOp, lit parser.Operand,
 			// Millis do dia, não epoch. Fora da faixa é literal inválido e
 			// não zero linhas: `hora = 1786568400000` é engano de quem
 			// escreveu, e devolver vazio o faria parecer resposta.
-			if lit.I < 0 || lit.I >= types.MillisPorDia {
+			if lit.I < 0 || lit.I >= types.MillisPerDay {
 				return types.Value{}, CompareUnset, arena, errLiteralInvalido
 			}
 			return types.Value{Type: types.TypeTime, I64: lit.I}, kind, arena, nil
