@@ -172,6 +172,13 @@ inglês correspondente.
 | derivadas | derived | internal/materializer/history.go |
 | vencimentos | expiries | internal/storage/schedule.go |
 | prazos | deadlines | internal/storage/schedule.go |
+| padrão (valor herdado quando a chave está ausente) | default — `Default` e `default` em nome composto (`DefaultMaxRows`, `defaultTimeout`); `defaultValue` em parâmetro ou local solto, porque `default` é palavra reservada em Go | internal/units |
+| padrão (formato de data, de rota ou de LIKE) | pattern | internal/typeparse/datetime.go, internal/server/auth.go, internal/query/parser/parser.go |
+| entrada (de teste) | input | internal/units/units_test.go |
+| casos (de teste) | cases | internal/units/units_test.go |
+| quer (esperado em teste) | want | internal/units/units_test.go |
+| unidade (de tamanho) | unit | internal/units/units.go |
+| sufixo | suffix | internal/units/units.go |
 
 ## 4. Como usar
 
