@@ -500,7 +500,7 @@ func traduzErroDeAbertura(err error, sql string) (int, protocol.Falha) {
 			// vir antes do de ErrSyntax para disparar, e trocar a ordem dos
 			// dois faria o código novo nunca sair — degradando em silêncio
 			// para SYNTAX, que é exatamente o estado que ele veio corrigir.
-			if se.Clausula != "" {
+			if se.Clause != "" {
 				f.Code = protocol.CodClausulaNaoSuportada
 			}
 		}

@@ -10,13 +10,13 @@ import (
 // 12 casos da §106 é do Q15 (fim a fim, via query.Engine) — aqui o objetivo é
 // só garantir que o front-end aceita a forma que o cliente vai enviar.
 func TestLex106Queries(t *testing.T) {
-	casos := []struct {
-		nome string
+	cases := []struct {
+		name string
 		sql  string
 		want []tok
 	}{
 		{
-			nome: "spec68_parametro",
+			name: "spec68_parametro",
 			sql:  "SELECT id, ip FROM radius_sessions WHERE status = ? LIMIT 100",
 			want: []tok{
 				{lexer.TokenSelect, "SELECT", 0},
@@ -34,7 +34,7 @@ func TestLex106Queries(t *testing.T) {
 			},
 		},
 		{
-			nome: "projecao_estrela",
+			name: "projecao_estrela",
 			sql:  "SELECT * FROM radius_sessions;",
 			want: []tok{
 				{lexer.TokenSelect, "SELECT", 0},
@@ -45,7 +45,7 @@ func TestLex106Queries(t *testing.T) {
 			},
 		},
 		{
-			nome: "and",
+			name: "and",
 			sql:  "SELECT id FROM s WHERE status = 'Stop' AND nas = 'x'",
 			want: []tok{
 				{lexer.TokenSelect, "SELECT", 0},
@@ -63,7 +63,7 @@ func TestLex106Queries(t *testing.T) {
 			},
 		},
 		{
-			nome: "or_parenteses",
+			name: "or_parenteses",
 			sql:  "SELECT id FROM s WHERE (a = 1 OR b = 2) AND c = 3",
 			want: []tok{
 				{lexer.TokenSelect, "SELECT", 0},
@@ -87,7 +87,7 @@ func TestLex106Queries(t *testing.T) {
 			},
 		},
 		{
-			nome: "null",
+			name: "null",
 			sql:  "SELECT * FROM s WHERE a IS NULL OR b IS NOT NULL",
 			want: []tok{
 				{lexer.TokenSelect, "SELECT", 0},
@@ -106,7 +106,7 @@ func TestLex106Queries(t *testing.T) {
 			},
 		},
 		{
-			nome: "quoted_fields",
+			name: "quoted_fields",
 			sql:  `SELECT "Acct-Status-Type" FROM s WHERE "Framed-IP-Address" = '10.0.0.1'`,
 			want: []tok{
 				{lexer.TokenSelect, "SELECT", 0},
@@ -120,7 +120,7 @@ func TestLex106Queries(t *testing.T) {
 			},
 		},
 		{
-			nome: "booleanos",
+			name: "booleanos",
 			sql:  "SELECT * FROM s WHERE flag = TRUE AND other = false",
 			want: []tok{
 				{lexer.TokenSelect, "SELECT", 0},
@@ -138,7 +138,7 @@ func TestLex106Queries(t *testing.T) {
 			},
 		},
 		{
-			nome: "case_mista",
+			name: "case_mista",
 			sql:  "select Id from S where Status = 'Stop' limit 10;",
 			want: []tok{
 				{lexer.TokenSelect, "select", 0},
@@ -157,7 +157,7 @@ func TestLex106Queries(t *testing.T) {
 		{
 			// Pos é offset de BYTE: depois de uma quebra de linha ele continua
 			// contando do começo do fonte, não da linha.
-			nome: "multilinha",
+			name: "multilinha",
 			sql:  "SELECT id\n\tFROM s\nWHERE a = 1",
 			want: []tok{
 				{lexer.TokenSelect, "SELECT", 0},
@@ -171,8 +171,8 @@ func TestLex106Queries(t *testing.T) {
 			},
 		},
 	}
-	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) { wantStream(t, tc.sql, tc.want) })
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { wantStream(t, tc.sql, tc.want) })
 	}
 }
 

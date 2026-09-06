@@ -7,8 +7,8 @@ import (
 )
 
 func TestLiteraisString(t *testing.T) {
-	casos := []struct {
-		nome string
+	cases := []struct {
+		name string
 		sql  string
 		text string
 	}{
@@ -23,16 +23,16 @@ func TestLiteraisString(t *testing.T) {
 		{"aspas duplas dentro", `'a"b'`, `a"b`},
 		{"varios escapes", `'a''b''c'`, "a'b'c"},
 	}
-	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			wantStream(t, tc.sql, []tok{{lexer.TokenString, tc.text, 0}})
 		})
 	}
 }
 
 func TestIdentQuoted(t *testing.T) {
-	casos := []struct {
-		nome string
+	cases := []struct {
+		name string
 		sql  string
 		text string
 	}{
@@ -43,8 +43,8 @@ func TestIdentQuoted(t *testing.T) {
 		// Quoted NUNCA é keyword: "select" é uma coluna chamada select.
 		{"keyword entre aspas", `"select"`, "select"},
 	}
-	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			wantStream(t, tc.sql, []tok{{lexer.TokenQuotedIdent, tc.text, 0}})
 		})
 	}
@@ -59,7 +59,7 @@ func TestTextSobreviveAosProximosTokens(t *testing.T) {
 	var l lexer.Lexer
 	l.Init(sql)
 
-	var textos []string
+	var texts []string
 	for {
 		tk, err := l.Next()
 		if err != nil {
@@ -69,17 +69,17 @@ func TestTextSobreviveAosProximosTokens(t *testing.T) {
 			break
 		}
 		if tk.Type == lexer.TokenString {
-			textos = append(textos, tk.Text)
+			texts = append(texts, tk.Text)
 		}
 	}
 
 	want := []string{"a'b", "c'd", "e'f"}
-	if len(textos) != len(want) {
-		t.Fatalf("%d strings, want %d", len(textos), len(want))
+	if len(texts) != len(want) {
+		t.Fatalf("%d strings, want %d", len(texts), len(want))
 	}
 	for i := range want {
-		if textos[i] != want[i] {
-			t.Errorf("texto %d = %q, want %q (Text aliasando o scratch?)", i, textos[i], want[i])
+		if texts[i] != want[i] {
+			t.Errorf("texto %d = %q, want %q (Text aliasando o scratch?)", i, texts[i], want[i])
 		}
 	}
 }
@@ -92,13 +92,13 @@ func TestTextSobreviveAoInit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	guardado := tk.Text
+	saved := tk.Text
 
 	l.Init(`'outro''texto'`)
 	if _, err := l.Next(); err != nil {
 		t.Fatal(err)
 	}
-	if guardado != "primeiro'valor" {
-		t.Errorf("texto da query anterior = %q, want %q", guardado, "primeiro'valor")
+	if saved != "primeiro'valor" {
+		t.Errorf("texto da query anterior = %q, want %q", saved, "primeiro'valor")
 	}
 }

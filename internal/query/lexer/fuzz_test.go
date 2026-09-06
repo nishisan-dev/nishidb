@@ -34,7 +34,7 @@ func FuzzLexer(f *testing.F) {
 		var l lexer.Lexer
 		l.Init(sql)
 
-		anterior := -1
+		prev := -1
 		// Limite de segurança: cada token consome ao menos 1 byte, então
 		// len+2 iterações bastam. Estourar significa que o lexer não avançou.
 		for i := 0; i <= len(sql)+2; i++ {
@@ -55,10 +55,10 @@ func FuzzLexer(f *testing.F) {
 			if tk.Pos < 0 || tk.Pos > len(sql) {
 				t.Fatalf("token %v com Pos fora de [0,%d]", tk, len(sql))
 			}
-			if tk.Pos < anterior {
-				t.Fatalf("Pos retrocedeu: %d após %d (token %v)", tk.Pos, anterior, tk)
+			if tk.Pos < prev {
+				t.Fatalf("Pos retrocedeu: %d após %d (token %v)", tk.Pos, prev, tk)
 			}
-			anterior = tk.Pos
+			prev = tk.Pos
 
 			switch tk.Type {
 			case lexer.TokenEOF:

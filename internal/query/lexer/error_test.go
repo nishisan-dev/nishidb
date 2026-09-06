@@ -32,8 +32,8 @@ func lexUntilErr(t *testing.T, sql string) error {
 // contrato de teste) E a posição — que é o que o usuário usa para achar o
 // erro numa query de uma linha só.
 func TestMensagensDeErro(t *testing.T) {
-	casos := []struct {
-		nome string
+	cases := []struct {
+		name string
 		sql  string
 		msg  string
 		pos  int
@@ -54,8 +54,8 @@ func TestMensagensDeErro(t *testing.T) {
 		{"ident vazio", `""`, "identificador entre aspas vazio", 0},
 		{"numero invalido", "007", "literal numérico inválido", 0},
 	}
-	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			err := lexUntilErr(t, tc.sql)
 			if !errors.Is(err, lexer.ErrSyntax) {
 				t.Fatalf("erro = %v, want errors.Is ErrSyntax", err)
@@ -91,13 +91,13 @@ func TestErroSticky(t *testing.T) {
 	if _, err := l.Next(); err != nil {
 		t.Fatalf("primeiro token: %v", err)
 	}
-	_, primeiro := l.Next()
-	if primeiro == nil {
+	_, firstErr := l.Next()
+	if firstErr == nil {
 		t.Fatal("esperava erro no '#'")
 	}
 	for i := 0; i < 3; i++ {
 		tk, err := l.Next()
-		if err != primeiro {
+		if err != firstErr {
 			t.Fatalf("chamada %d devolveu erro diferente: %v (want o mesmo ponteiro)", i, err)
 		}
 		if tk != (lexer.Token{}) {
@@ -107,8 +107,8 @@ func TestErroSticky(t *testing.T) {
 }
 
 func TestEOFIdempotente(t *testing.T) {
-	casos := []string{"SELECT * FROM t", "", "   \n\t "}
-	for _, sql := range casos {
+	cases := []string{"SELECT * FROM t", "", "   \n\t "}
+	for _, sql := range cases {
 		t.Run(fmt.Sprintf("%q", sql), func(t *testing.T) {
 			var l lexer.Lexer
 			l.Init(sql)
@@ -155,24 +155,24 @@ func TestReuseViaInit(t *testing.T) {
 	}
 
 	l.Init("SELECT id FROM t")
-	var tipos []lexer.TokenType
+	var types []lexer.TokenType
 	for {
 		tk, err := l.Next()
 		if err != nil {
 			t.Fatalf("query B após reuso: %v", err)
 		}
-		tipos = append(tipos, tk.Type)
+		types = append(types, tk.Type)
 		if tk.Type == lexer.TokenEOF {
 			break
 		}
 	}
 	want := []lexer.TokenType{lexer.TokenSelect, lexer.TokenIdent, lexer.TokenFrom, lexer.TokenIdent, lexer.TokenEOF}
-	if len(tipos) != len(want) {
-		t.Fatalf("query B: %v", tipos)
+	if len(types) != len(want) {
+		t.Fatalf("query B: %v", types)
 	}
 	for i := range want {
-		if tipos[i] != want[i] {
-			t.Errorf("query B token %d = %v, want %v", i, tipos[i], want[i])
+		if types[i] != want[i] {
+			t.Errorf("query B token %d = %v, want %v", i, types[i], want[i])
 		}
 	}
 }

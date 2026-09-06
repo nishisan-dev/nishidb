@@ -17,7 +17,7 @@ func clausulaDe(t *testing.T, err error) string {
 	if !errors.As(err, &se) {
 		t.Fatalf("erro %v não é *lexer.SyntaxError", err)
 	}
-	return se.Clausula
+	return se.Clause
 }
 
 // As cinco cláusulas que a v1 não tem são NOMEADAS, uma a uma.

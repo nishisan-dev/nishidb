@@ -54,13 +54,13 @@ func wantStream(t *testing.T, sql string, want []tok) {
 // Os 28 tipos precisam aparecer com Pos conferido: é o contrato que o parser
 // consome.
 func TestTodosOsTokens(t *testing.T) {
-	casos := []struct {
-		nome string
+	cases := []struct {
+		name string
 		sql  string
 		want []tok
 	}{
 		{
-			nome: "keywords",
+			name: "keywords",
 			sql:  "SELECT FROM WHERE LIMIT AND OR IS NOT NULL TRUE FALSE",
 			want: []tok{
 				{lexer.TokenSelect, "SELECT", 0},
@@ -77,7 +77,7 @@ func TestTodosOsTokens(t *testing.T) {
 			},
 		},
 		{
-			nome: "identificadores e literais",
+			name: "identificadores e literais",
 			sql:  `id "Acct-Status-Type" 'Stop' -1.5e3 ?`,
 			want: []tok{
 				{lexer.TokenIdent, "id", 0},
@@ -88,7 +88,7 @@ func TestTodosOsTokens(t *testing.T) {
 			},
 		},
 		{
-			nome: "pontuacao e comparadores",
+			name: "pontuacao e comparadores",
 			sql:  ", * ( ) ; = != > >= < <=",
 			want: []tok{
 				{lexer.TokenComma, ",", 0},
@@ -105,15 +105,15 @@ func TestTodosOsTokens(t *testing.T) {
 			},
 		},
 	}
-	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) { wantStream(t, tc.sql, tc.want) })
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { wantStream(t, tc.sql, tc.want) })
 	}
 }
 
 // TokenType.String alimenta mensagens de erro do parser: um tipo sem nome
 // vira "TokenType(7)" no rosto do usuário.
 func TestTokenTypeString(t *testing.T) {
-	todos := []lexer.TokenType{
+	all := []lexer.TokenType{
 		lexer.TokenEOF, lexer.TokenSelect, lexer.TokenFrom, lexer.TokenWhere, lexer.TokenLimit,
 		lexer.TokenAnd, lexer.TokenOr, lexer.TokenIs, lexer.TokenNot, lexer.TokenNull,
 		lexer.TokenTrue, lexer.TokenFalse, lexer.TokenIdent, lexer.TokenQuotedIdent,
@@ -122,19 +122,19 @@ func TestTokenTypeString(t *testing.T) {
 		lexer.TokenEq, lexer.TokenNeq, lexer.TokenGt, lexer.TokenGte, lexer.TokenLt, lexer.TokenLte,
 		lexer.TokenDot,
 	}
-	if len(todos) != 29 {
-		t.Fatalf("a lista tem %d tipos, o contrato do parser fixa 29", len(todos))
+	if len(all) != 29 {
+		t.Fatalf("a lista tem %d tipos, o contrato do parser fixa 29", len(all))
 	}
-	vistos := map[string]lexer.TokenType{}
-	for _, tt := range todos {
+	seen := map[string]lexer.TokenType{}
+	for _, tt := range all {
 		s := tt.String()
 		if s == "" || strings.HasPrefix(s, "TokenType(") {
 			t.Errorf("TokenType(%d).String() = %q: constante válida sem nome", tt, s)
 		}
-		if antes, dup := vistos[s]; dup {
-			t.Errorf("nome %q usado por TokenType(%d) e TokenType(%d)", s, antes, tt)
+		if prev, dup := seen[s]; dup {
+			t.Errorf("nome %q usado por TokenType(%d) e TokenType(%d)", s, prev, tt)
 		}
-		vistos[s] = tt
+		seen[s] = tt
 	}
 	if got := lexer.TokenType(200).String(); !strings.HasPrefix(got, "TokenType(") {
 		t.Errorf("tipo fora de faixa = %q, want fallback TokenType(N)", got)
@@ -142,7 +142,7 @@ func TestTokenTypeString(t *testing.T) {
 }
 
 func TestTokenString(t *testing.T) {
-	casos := []struct {
+	cases := []struct {
 		tk   lexer.Token
 		want string
 	}{
@@ -151,7 +151,7 @@ func TestTokenString(t *testing.T) {
 		{lexer.Token{Type: lexer.TokenString, Text: "it's", Pos: 21}, `STRING("it's")@21`},
 		{lexer.Token{Type: lexer.TokenEOF, Pos: 42}, "EOF@42"},
 	}
-	for _, tc := range casos {
+	for _, tc := range cases {
 		if got := tc.tk.String(); got != tc.want {
 			t.Errorf("Token.String() = %q, want %q", got, tc.want)
 		}

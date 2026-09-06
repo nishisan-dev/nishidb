@@ -7,10 +7,10 @@ import (
 )
 
 const (
-	querySpec68   = "SELECT id, ip FROM radius_sessions WHERE status = ? LIMIT 100"
-	queryComplexa = `SELECT "Acct-Status-Type", id FROM radius_sessions ` +
+	querySpec68  = "SELECT id, ip FROM radius_sessions WHERE status = ? LIMIT 100"
+	complexQuery = `SELECT "Acct-Status-Type", id FROM radius_sessions ` +
 		`WHERE ("Framed-IP-Address" = '10.0.0.1' OR nas >= 10) AND status IS NOT NULL LIMIT 500;`
-	queryComEscapes = `SELECT id FROM s WHERE a = 'it''s' AND b = 'd''oh' AND c = 'y''all'`
+	queryWithEscapes = `SELECT id FROM s WHERE a = 'it''s' AND b = 'd''oh' AND c = 'y''all'`
 )
 
 // sink impede que o compilador elimine o laço do benchmark.
@@ -40,9 +40,9 @@ func lexBench(b *testing.B, sql string) {
 // fonte, Token é valor e o Lexer é reutilizado.
 func BenchmarkLexSpec68(b *testing.B) { lexBench(b, querySpec68) }
 
-func BenchmarkLexQueryComplexa(b *testing.B) { lexBench(b, queryComplexa) }
+func BenchmarkLexQueryComplexa(b *testing.B) { lexBench(b, complexQuery) }
 
 // Baseline documentado: cada literal COM escape custa uma cópia (é o que dá
 // ao Token o contrato "Text válido para sempre"). Cresce com o número de
 // literais escapados, nunca com o número de tokens.
-func BenchmarkLexComEscapes(b *testing.B) { lexBench(b, queryComEscapes) }
+func BenchmarkLexComEscapes(b *testing.B) { lexBench(b, queryWithEscapes) }

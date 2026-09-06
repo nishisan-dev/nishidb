@@ -60,7 +60,7 @@ func Parse(sql string) (*SelectStmt, error) {
 		// mensagem é "conteúdo inesperado após o fim da query", que manda o
 		// usuário procurar um erro de digitação que não existe.
 		if nome, ok := clausulaNaoSuportada(p.cur); ok {
-			return nil, lexer.NewClausulaNaoSuportada(p.cur.Pos, nome)
+			return nil, lexer.NewUnsupportedClauseSyntaxError(p.cur.Pos, nome)
 		}
 		return nil, p.errAt(p.cur.Pos, "conteúdo inesperado após o fim da query")
 	}
@@ -391,7 +391,7 @@ func (p *parser) parseProjection(st *SelectStmt) error {
 			// seleciona uma coluna chamada distinct e continua válido).
 			if primeira && p.cur.Type != lexer.TokenFrom {
 				if nome, ok := clausulaNaoSuportada(tokDaColuna); ok && nome == "DISTINCT" {
-					return lexer.NewClausulaNaoSuportada(tokDaColuna.Pos, nome)
+					return lexer.NewUnsupportedClauseSyntaxError(tokDaColuna.Pos, nome)
 				}
 			}
 			return nil
