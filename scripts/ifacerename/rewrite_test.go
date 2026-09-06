@@ -115,6 +115,95 @@ func TestRefusesCollisionInTheMethodSet(t *testing.T) {
 	}
 }
 
+// moduleSnapshot lê o módulo inteiro. A barreira que os testes de recusa
+// cobram é "nada é escrito", e conferir um arquivo só deixaria passar uma
+// escrita parcial em qualquer outro — que é exatamente o estado em que uma
+// recusa tardia deixa a árvore.
+func moduleSnapshot(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	err := filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return err
+		}
+		b, readErr := os.ReadFile(p)
+		if readErr != nil {
+			return readErr
+		}
+		rel, _ := filepath.Rel(dir, p)
+		out[filepath.ToSlash(rel)] = string(b)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func assertUnchanged(t *testing.T, dir string, before map[string]string) {
+	t.Helper()
+	for rel, body := range moduleSnapshot(t, dir) {
+		if before[rel] != body {
+			t.Errorf("%s mudou apesar da recusa", rel)
+		}
+	}
+}
+
+// Duas entradas, dois grupos DIFERENTES, o mesmo nome novo, e um receptor que
+// está nos dois: b.Arquivo declara Apenda e Fecha. A checagem de colisão contra
+// o estado ANTES do rename aprova as duas (ninguém tem Close ainda) e o método
+// sairia declarado duas vezes em b.Arquivo — só o build de quem chama pegaria,
+// depois de a árvore inteira já ter sido reescrita.
+func TestRefusesTwoGroupsConvergingOnTheSameNameOnOneReceiver(t *testing.T) {
+	dir := copyModule(t)
+	before := moduleSnapshot(t, dir)
+	_, err := Apply(dir, []Entry{
+		{Pkg: "a", Iface: "Escritor", Method: "Apenda", New: "Close"},
+		{Pkg: "a", Iface: "Escritor", Method: "Fecha", New: "Close"},
+	}, false)
+	if err == nil || !strings.Contains(err.Error(), "duas vezes no mesmo lote") {
+		t.Fatalf("esperava recusa por convergência dentro do lote, veio %v", err)
+	}
+	if !strings.Contains(err.Error(), "Close") {
+		t.Errorf("a recusa não nomeia o nome novo: %v", err)
+	}
+	if !strings.Contains(err.Error(), "a.Escritor") {
+		t.Errorf("a recusa não nomeia o receptor: %v", err)
+	}
+	assertUnchanged(t, dir, before)
+}
+
+// O caso espelho — Apenda→Fecha enquanto Fecha→Close no mesmo lote — é LEGAL
+// (o Fecha velho sai de cena antes de o novo entrar), e mesmo assim é recusado
+// pela checagem contra o estado anterior. É conservadorismo aceito: recusar o
+// que daria certo custa uma segunda rodada; escrever o que não compila custa a
+// árvore. O teste existe para que a troca seja uma decisão, não um acidente.
+func TestRefusesTheLegalButChainedRename(t *testing.T) {
+	dir := copyModule(t)
+	before := moduleSnapshot(t, dir)
+	_, err := Apply(dir, []Entry{
+		{Pkg: "a", Iface: "Escritor", Method: "Apenda", New: "Fecha"},
+		{Pkg: "a", Iface: "Escritor", Method: "Fecha", New: "Close"},
+	}, false)
+	if err == nil || !strings.Contains(err.Error(), "já tem Fecha") {
+		t.Fatalf("esperava a recusa conservadora da checagem contra o estado anterior, veio %v", err)
+	}
+	assertUnchanged(t, dir, before)
+}
+
+// Nome novo que não é identificador Go: sem esta barreira o lote começa a
+// escrever, o gofmt do primeiro arquivo falha e o Apply volta com a árvore já
+// meio reescrita e sem formatar.
+func TestRefusesAnInvalidNewName(t *testing.T) {
+	dir := copyModule(t)
+	before := moduleSnapshot(t, dir)
+	_, err := Apply(dir, []Entry{{Pkg: "a", Iface: "Escritor", Method: "Apenda", New: "Put Record"}}, false)
+	if err == nil || !strings.Contains(err.Error(), "não é um identificador Go válido") {
+		t.Fatalf("esperava recusa por nome inválido, veio %v", err)
+	}
+	assertUnchanged(t, dir, before)
+}
+
 // writeModule escreve um módulo mínimo num diretório descartável. O módulo de
 // `renametools/testdata` não serve para o caso abaixo e é fixture de outro
 // pacote: mexer nele quebraria os testes da Tarefa 0.3.

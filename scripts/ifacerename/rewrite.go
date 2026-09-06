@@ -45,6 +45,14 @@ func Apply(dir string, entries []Entry, dryRun bool) (*Report, error) {
 	// grupo → nome novo, com a checagem de divergência.
 	newByGroup := map[int]string{}
 	for _, e := range entries {
+		// Antes de qualquer outra coisa: o nome novo tem de ser um
+		// identificador. Sem isto o lote começa a escrever, o gofmt do
+		// primeiro arquivo falha no que virou sintaxe inválida e o Apply volta
+		// com a árvore meio reescrita — a barreira "recusa antes de escrever"
+		// vazando pelo canto mais barato de fechar.
+		if !token.IsIdentifier(e.New) {
+			return nil, fmt.Errorf("%s.%s.%s: %q não é um identificador Go válido", e.Pkg, e.Iface, e.Method, e.New)
+		}
 		gid, ok := findGroup(groups, e)
 		if !ok {
 			return nil, fmt.Errorf("%s.%s.%s: método de interface não encontrado no módulo", e.Pkg, e.Iface, e.Method)
@@ -66,7 +74,15 @@ func Apply(dir string, entries []Entry, dryRun bool) (*Report, error) {
 
 	// Colisão: cada membro do grupo é um método de um tipo; o tipo não pode
 	// já ter membro com o nome novo.
+	//
+	// checkCollision só enxerga o estado ANTES do rename, e isso não basta: um
+	// tipo pode estar em DOIS grupos (b.Arquivo declara Apenda e Fecha), e se
+	// os dois grupos pedirem o mesmo nome novo as duas checagens passam — nada
+	// tem Close ainda — e o método sai declarado duas vezes, com a árvore
+	// inteira já reescrita e só o build de quem chama para descobrir. Por isso
+	// as reivindicações do PRÓPRIO lote também são acumuladas por receptor.
 	newByKey := map[string]string{}
+	claimed := map[string]map[string]renametools.Member{} // receptor → nome novo → quem pediu
 	var renamed []renametools.Member
 	for _, gid := range gids {
 		newName := newByGroup[gid]
@@ -74,6 +90,14 @@ func Apply(dir string, entries []Entry, dryRun bool) (*Report, error) {
 			if err := checkCollision(m, newName); err != nil {
 				return nil, err
 			}
+			rk := receiverKey(fset, m)
+			if prev, ok := claimed[rk][newName]; ok {
+				return nil, fmt.Errorf("%s.%s receberia %s duas vezes no mesmo lote: %s e %s pedem o mesmo nome", m.Pkg, m.Type, newName, prev.Method, m.Method)
+			}
+			if claimed[rk] == nil {
+				claimed[rk] = map[string]renametools.Member{}
+			}
+			claimed[rk][newName] = m
 			newByKey[renametools.PosKey(fset, m.Obj.Pos())] = newName
 			renamed = append(renamed, m)
 		}
@@ -174,10 +198,7 @@ func Apply(dir string, entries []Entry, dryRun bool) (*Report, error) {
 // contrário: é `*T` com addressable que traz também os métodos de receptor
 // ponteiro, que são a maioria dos implementadores.
 func checkCollision(m renametools.Member, newName string) error {
-	recv := m.Obj.Type().(*types.Signature).Recv().Type()
-	if ptr, ok := recv.(*types.Pointer); ok {
-		recv = ptr.Elem()
-	}
+	recv := receiverType(m)
 	lookIn, addressable := recv, false
 	if _, isIface := recv.Underlying().(*types.Interface); !isIface {
 		lookIn, addressable = types.NewPointer(recv), true
@@ -186,6 +207,29 @@ func checkCollision(m renametools.Member, newName string) error {
 		return fmt.Errorf("%s.%s já tem %s: renomear %s colidiria", m.Pkg, m.Type, newName, m.Method)
 	}
 	return nil
+}
+
+// receiverType devolve o tipo do receptor do método, já sem o ponteiro. Vale
+// para método de interface (o receptor é a própria interface) e de concreto.
+func receiverType(m renametools.Member) types.Type {
+	recv := m.Obj.Type().(*types.Signature).Recv().Type()
+	if ptr, ok := recv.(*types.Pointer); ok {
+		recv = ptr.Elem()
+	}
+	return recv
+}
+
+// receiverKey identifica o tipo receptor entre grupos.
+//
+// A identidade é a POSIÇÃO da declaração do tipo, não `pacote.Tipo`: `Pkg` em
+// Member é o DIRETÓRIO do pacote, e o pacote externo de teste divide diretório
+// com o seu (`c` e `c_test` saem os dois como "c"). Dois tipos homônimos, um em
+// cada, teriam a mesma chave textual e a recusa dispararia por engano.
+func receiverKey(fset *token.FileSet, m renametools.Member) string {
+	if named, ok := receiverType(m).(*types.Named); ok {
+		return renametools.PosKey(fset, named.Obj().Pos())
+	}
+	return m.Pkg + "." + m.Type
 }
 
 // docEdit troca a PRIMEIRA palavra do godoc quando ela é o nome velho —
