@@ -11,17 +11,17 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/storage/checkpoint"
 )
 
-func origemDeTeste() checkpoint.Origem {
-	return checkpoint.Origem{
+func origemDeTeste() checkpoint.Source {
+	return checkpoint.Source{
 		Topic:     "radius-accounting",
 		GroupID:   "nishidb-radius",
-		Bootstrap: checkpoint.CanonizaBootstrap([]string{"kafka01:9092"}),
+		Bootstrap: checkpoint.CanonicalBootstrap([]string{"kafka01:9092"}),
 	}
 }
 
 func offsetsDeTeste(o0, o1 int64) checkpoint.SourceOffsets {
 	return checkpoint.SourceOffsets{
-		Origem:  origemDeTeste(),
+		Source:  origemDeTeste(),
 		Offsets: map[int32]int64{0: o0, 1: o1},
 	}
 }

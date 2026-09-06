@@ -2191,14 +2191,14 @@ func (s *Store) vencimentoDe(rowID types.RowID) uint64 {
 // infoDaAgenda descreve, para o manifest, os parâmetros de que a agenda em
 // disco deriva. Devolve nil no dataset sem expiração — e é isso que mantém o
 // manifest dele na v1.
-func (s *Store) infoDaAgenda() *checkpoint.AgendaInfo {
+func (s *Store) infoDaAgenda() *checkpoint.ScheduleInfo {
 	if s.agenda == nil {
 		return nil
 	}
-	return &checkpoint.AgendaInfo{
-		DuracaoDeFundoMs: uint64(s.duracaoDeFundo.Milliseconds()),
-		BlockShift:       rowindex.AgendaBlockShift,
-		Niveis:           rowindex.AgendaNiveis,
+	return &checkpoint.ScheduleInfo{
+		FallbackDurationMs: uint64(s.duracaoDeFundo.Milliseconds()),
+		BlockShift:         rowindex.AgendaBlockShift,
+		Levels:             rowindex.AgendaNiveis,
 	}
 }
 
@@ -2770,7 +2770,7 @@ func (s *Store) adotaModoDoManifest(m *checkpoint.Manifest) error {
 	if m == nil {
 		return nil
 	}
-	gravado := Modo(m.Modo)
+	gravado := Modo(m.Mode)
 	if gravado != s.opts.Modo {
 		return fmt.Errorf("%w: o dataset %s está gravado como %s e a configuração pede %s; "+
 			"o modo é imutável — recrie o dataset ou corrija o YAML",

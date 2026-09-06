@@ -33,7 +33,7 @@ var offsetsMagic = [4]byte{'N', 'D', 'B', 'K'}
 
 const offsetsVersion = 1
 
-// Origem identifica o FLUXO de onde os offsets vieram.
+// Source identifica o FLUXO de onde os offsets vieram.
 //
 // Existe porque um offset é um número sem significado fora do seu tópico. Com
 // topic, groupId e bootstrapServers mutáveis no YAML e sem conferência contra
@@ -42,7 +42,7 @@ const offsetsVersion = 1
 // teste→produção — faria o consumer dar seek num offset de outro fluxo:
 // começaria no meio, pulando ou reprocessando uma janela arbitrária, sem erro
 // em camada nenhuma.
-type Origem struct {
+type Source struct {
 	Topic     string
 	GroupID   string
 	ClusterID string
@@ -51,49 +51,49 @@ type Origem struct {
 
 // SourceOffsets é o conteúdo do checkpoint/kafka.offsets.
 type SourceOffsets struct {
-	Origem Origem
+	Source Source
 	// Offsets mapeia partição → PRÓXIMO offset a consumir (a mesma convenção
 	// do offset commitado no Kafka: o que já foi processado é offset-1).
 	Offsets map[int32]int64
 }
 
-// CanonizaBootstrap devolve a forma comparável de uma lista de brokers:
+// CanonicalBootstrap devolve a forma comparável de uma lista de brokers:
 // ordenada e sem espaços. Sem canonizar, reordenar a lista no YAML pareceria
 // troca de cluster e recusaria a subida sem motivo.
-func CanonizaBootstrap(brokers []string) string {
-	limpos := make([]string, 0, len(brokers))
+func CanonicalBootstrap(brokers []string) string {
+	cleaned := make([]string, 0, len(brokers))
 	for _, b := range brokers {
 		if b = strings.TrimSpace(b); b != "" {
-			limpos = append(limpos, b)
+			cleaned = append(cleaned, b)
 		}
 	}
-	slices.Sort(limpos)
-	return strings.Join(slices.Compact(limpos), ",")
+	slices.Sort(cleaned)
+	return strings.Join(slices.Compact(cleaned), ",")
 }
 
-// Divergencia nomeia o PRIMEIRO campo em que as duas origens diferem, ou ""
+// Divergence nomeia o PRIMEIRO campo em que as duas origens diferem, ou ""
 // se são a mesma. O nome do campo é o que o operador precisa: "recusei subir"
 // sem dizer o que mudou obriga a comparar YAML com binário na mão.
 //
 // ClusterID vazio de um dos lados NÃO conta como divergência: nem todo broker
 // expõe o id do cluster, e recusar a subida por um dado que o próprio Kafka
 // não deu seria transformar limitação de ambiente em falha de configuração.
-func (o Origem) Divergencia(outra Origem) string {
+func (o Source) Divergence(other Source) string {
 	switch {
-	case o.Topic != outra.Topic:
+	case o.Topic != other.Topic:
 		return "topic"
-	case o.GroupID != outra.GroupID:
+	case o.GroupID != other.GroupID:
 		return "consumer.groupId"
-	case o.Bootstrap != outra.Bootstrap:
+	case o.Bootstrap != other.Bootstrap:
 		return "bootstrapServers"
-	case o.ClusterID != "" && outra.ClusterID != "" && o.ClusterID != outra.ClusterID:
+	case o.ClusterID != "" && other.ClusterID != "" && o.ClusterID != other.ClusterID:
 		return "cluster"
 	}
 	return ""
 }
 
-// Particoes devolve as partições em ordem crescente.
-func (s SourceOffsets) Particoes() []int32 {
+// Partitions devolve as partições em ordem crescente.
+func (s SourceOffsets) Partitions() []int32 {
 	out := slices.Collect(maps.Keys(s.Offsets))
 	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out
@@ -101,7 +101,7 @@ func (s SourceOffsets) Particoes() []int32 {
 
 // Clone copia o mapa, para que o estado do writer não vaze por referência.
 func (s SourceOffsets) Clone() SourceOffsets {
-	out := SourceOffsets{Origem: s.Origem, Offsets: make(map[int32]int64, len(s.Offsets))}
+	out := SourceOffsets{Source: s.Source, Offsets: make(map[int32]int64, len(s.Offsets))}
 	maps.Copy(out.Offsets, s.Offsets)
 	return out
 }
@@ -119,15 +119,15 @@ func (s SourceOffsets) Clone() SourceOffsets {
 //	       por partição: partition i32 | offset i64
 //	    4  crc32c sobre tudo acima
 func (s SourceOffsets) encode() []byte {
-	parts := s.Particoes()
-	b := make([]byte, 0, 24+len(s.Origem.Topic)+len(s.Origem.GroupID)+
-		len(s.Origem.ClusterID)+len(s.Origem.Bootstrap)+12*len(parts)+4)
+	parts := s.Partitions()
+	b := make([]byte, 0, 24+len(s.Source.Topic)+len(s.Source.GroupID)+
+		len(s.Source.ClusterID)+len(s.Source.Bootstrap)+12*len(parts)+4)
 	b = append(b, offsetsMagic[:]...)
 	b = append(b, offsetsVersion, 0, 0, 0)
-	b = appendTexto(b, s.Origem.Topic)
-	b = appendTexto(b, s.Origem.GroupID)
-	b = appendTexto(b, s.Origem.ClusterID)
-	b = appendTexto(b, s.Origem.Bootstrap)
+	b = appendText(b, s.Source.Topic)
+	b = appendText(b, s.Source.GroupID)
+	b = appendText(b, s.Source.ClusterID)
+	b = appendText(b, s.Source.Bootstrap)
 	b = binary.LittleEndian.AppendUint32(b, uint32(len(parts)))
 	// Ordem crescente de partição: dois checkpoints do mesmo estado produzem
 	// arquivos idênticos byte a byte, e um diff de dois arquivos é
@@ -139,12 +139,12 @@ func (s SourceOffsets) encode() []byte {
 	return binary.LittleEndian.AppendUint32(b, crc32.Checksum(b, castagnoli))
 }
 
-func appendTexto(b []byte, s string) []byte {
+func appendText(b []byte, s string) []byte {
 	b = binary.LittleEndian.AppendUint16(b, uint16(len(s)))
 	return append(b, s...)
 }
 
-func (r *reader) texto() string {
+func (r *reader) text() string {
 	n := int(r.u16())
 	return string(r.take(n))
 }
@@ -166,10 +166,10 @@ func decodeOffsets(raw []byte) (SourceOffsets, error) {
 	}
 
 	r := &reader{b: body, pos: 8}
-	s.Origem.Topic = r.texto()
-	s.Origem.GroupID = r.texto()
-	s.Origem.ClusterID = r.texto()
-	s.Origem.Bootstrap = r.texto()
+	s.Source.Topic = r.text()
+	s.Source.GroupID = r.text()
+	s.Source.ClusterID = r.text()
+	s.Source.Bootstrap = r.text()
 	n := r.u32()
 	// Sanidade antes de alocar: 12 bytes por partição.
 	if int(n) > len(body)/12 {
@@ -202,7 +202,7 @@ func decodeOffsets(raw []byte) (SourceOffsets, error) {
 // dos dados (reprocessa, inócuo) contra offset ADIANTE dos dados (perda
 // definitiva). O §48 já exige exatamente essa direção.
 func WriteOffsets(path string, s SourceOffsets) error {
-	return escreveAtomico(path, s.encode())
+	return writeAtomic(path, s.encode())
 }
 
 // LoadOffsets lê o kafka.offsets. Ausência devolve ErrNoOffsets.

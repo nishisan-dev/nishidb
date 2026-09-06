@@ -723,7 +723,7 @@ func ValidaUnicidadeDeGroup(specs map[string]*schema.DatasetSpec) error {
 			continue
 		}
 		o := origem{
-			bootstrap: checkpoint.CanonizaBootstrap(k.BootstrapServers),
+			bootstrap: checkpoint.CanonicalBootstrap(k.BootstrapServers),
 			topico:    k.Topic,
 			group:     k.Consumer.GroupID,
 		}

@@ -171,10 +171,10 @@ func (s *Store) checkpoint() error {
 		CurrentSegment:      segID,
 		DurableOffset:       uint64(off),
 		FieldDictValidBytes: s.dict.SizeBytes(),
-		Modo:                uint8(s.opts.Modo),
+		Mode:                uint8(s.opts.Modo),
 		RowIDBase:           s.rowIDBase.Load(),
-		Agenda:              s.infoDaAgenda(),
-		Contadores:          s.infoDosContadores(),
+		Schedule:            s.infoDaAgenda(),
+		Counters:            s.infoDosContadores(),
 	}
 	if s.prim != nil {
 		m.PrimarySlotCount = s.prim.SlotCount()

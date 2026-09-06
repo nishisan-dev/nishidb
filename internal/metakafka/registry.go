@@ -53,7 +53,7 @@ func DoYAML(k *schema.KafkaSpec) Declarada {
 		Habilitado: k.Enabled,
 		Topic:      k.Topic,
 		GroupID:    k.Consumer.GroupID,
-		Bootstrap:  checkpoint.CanonizaBootstrap(k.BootstrapServers),
+		Bootstrap:  checkpoint.CanonicalBootstrap(k.BootstrapServers),
 	}
 }
 

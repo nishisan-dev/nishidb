@@ -245,7 +245,7 @@ func simulaDatasetAnteriorAAgenda(t *testing.T, dir string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.Agenda = nil
+	m.Schedule = nil
 	if err := checkpoint.Write(manifest, m); err != nil {
 		t.Fatal(err)
 	}

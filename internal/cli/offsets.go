@@ -127,7 +127,7 @@ func runOffsets(args []string, amb Ambiente) int {
 		// RowCount deixa de bloquear porque a decisão foi tomada aqui, de
 		// forma explícita e registrada.
 		nova := checkpoint.SourceOffsets{
-			Origem:  origemDaSpec(spec),
+			Source:  origemDaSpec(spec),
 			Offsets: map[int32]int64{},
 		}
 		if err := grava(st, nova); err != nil {
@@ -150,7 +150,7 @@ func runOffsets(args []string, amb Ambiente) int {
 				*dataset, formataOffsets(offsets))
 			return ExitUso
 		}
-		nova := checkpoint.SourceOffsets{Origem: origemDaSpec(spec), Offsets: offsets}
+		nova := checkpoint.SourceOffsets{Source: origemDaSpec(spec), Offsets: offsets}
 		if err := grava(st, nova); err != nil {
 			fmt.Fprintf(amb.Stderr, "offsets: %v\n", err)
 			return codigoDoErro(err)
@@ -163,12 +163,12 @@ func runOffsets(args []string, amb Ambiente) int {
 // origemDaSpec reconstrói a identidade a partir do YAML. O cluster id fica
 // vazio: quem o preenche é a primeira subida, que fala com o broker — e a
 // Divergencia trata o vazio como "não confere", não como "divergiu".
-func origemDaSpec(spec *schema.DatasetSpec) checkpoint.Origem {
+func origemDaSpec(spec *schema.DatasetSpec) checkpoint.Source {
 	k := spec.Source.Kafka
-	return checkpoint.Origem{
+	return checkpoint.Source{
 		Topic:     k.Topic,
 		GroupID:   k.Consumer.GroupID,
-		Bootstrap: checkpoint.CanonizaBootstrap(k.BootstrapServers),
+		Bootstrap: checkpoint.CanonicalBootstrap(k.BootstrapServers),
 	}
 }
 
@@ -200,15 +200,15 @@ func imprimeOffsets(amb Ambiente, dataset string, rows uint64,
 		return ExitOK
 	}
 	fmt.Fprintf(amb.Stdout, "topic: %s\ngroupId: %s\nbootstrap: %s\n",
-		o.Origem.Topic, o.Origem.GroupID, o.Origem.Bootstrap)
-	if o.Origem.ClusterID != "" {
-		fmt.Fprintf(amb.Stdout, "cluster: %s\n", o.Origem.ClusterID)
+		o.Source.Topic, o.Source.GroupID, o.Source.Bootstrap)
+	if o.Source.ClusterID != "" {
+		fmt.Fprintf(amb.Stdout, "cluster: %s\n", o.Source.ClusterID)
 	}
 	if len(o.Offsets) == 0 {
 		fmt.Fprintln(amb.Stdout, "offsets: nenhum (a próxima subida usa autoOffsetReset)")
 		return ExitOK
 	}
-	for _, p := range o.Particoes() {
+	for _, p := range o.Partitions() {
 		fmt.Fprintf(amb.Stdout, "offset: %d=%d\n", p, o.Offsets[p])
 	}
 	return ExitOK
