@@ -51,7 +51,7 @@ history:
     severity:   { index: bitmap }
 ```
 
-Regras de validação (em `internal/schema/historico.go`, novo):
+Regras de validação (em `internal/schema/history.go`, novo):
 
 - Pelo menos um entre `expireAfterWrite` e `maxBytes` é **obrigatório**. Um
   histórico sem retenção é disco que cresce para sempre, e aceitar isso em
@@ -98,7 +98,7 @@ tabelas". A regra: **um dicionário, dois `Compiled`.**
   construção, e o payload escrito pelo patch do base decodifica no histórico
   sem tradução.
 - O `Compiled` do histórico é derivado do spec base por
-  `spec.DerivaHistorico()` (novo, em `internal/schema/historico.go`) e
+  `spec.DerivaHistorico()` (novo, em `internal/schema/history.go`) e
   compilado contra **esse mesmo dicionário**. Ele difere do base em quatro
   pontos, e só neles: `Name`, ausência de `Key`/`Sequence`, ausência das
   colunas congeladas e de `_expiresIn`, e os `index:` de `history.fields`.
@@ -111,7 +111,7 @@ tabelas". A regra: **um dicionário, dois `Compiled`.**
   feature existe para não ter. O mesmo callback propaga `FixAutoType`.
 
 Por que as congeladas ficam de fora: `capturaCongeladas`
-(`internal/materializer/congelada.go:31`) roda dentro do `Parse` e emite a
+(`internal/materializer/frozen.go:31`) roda dentro do `Parse` e emite a
 entry com o valor **corrente** da origem. No histórico isso seria
 `originalSeverity == severity` em toda linha — duplicação com cara de
 informação. Preservar o primeiro valor é trabalho do merge, e o histórico não
@@ -197,7 +197,7 @@ vazia e sequence 0, `segW.Append`, `applyRecord` com `hadPrevious = false`, sem
 Goroutine por dataset histórico, no molde de `IniciaCompaction` /
 `IniciaExpiracao`: `Inicia`/`Para` com `WaitGroup`, medidor atômico observável,
 cancelamento por contexto, e `Close` que cancela e **aguarda antes** do quiesce.
-Arquivo novo: `internal/storage/retencao.go`.
+Arquivo novo: `internal/storage/retention.go`.
 
 **A invariante que torna tudo barato:** no modo histórico os appends são
 serializados pelo `wmu` e `_writtenAt` é o relógio da ingestão, então
@@ -289,7 +289,7 @@ com a marca de que truncou.
 `/v1/stats` do dataset base ganha o bloco `history`, e `/metrics` as séries
 correspondentes — as duas saídas da **mesma** leitura de snapshot, como
 `materializacaoStats` e `amostrasDeMaterializacao` já fazem
-(`internal/server/materializacao.go`):
+(`internal/server/materialization.go`):
 
 | Série | Responde |
 |---|---|
@@ -316,11 +316,11 @@ e não tem coletor.
 Cada fase fecha com a suíte verde. TDD: o teste que trava o contrato vem antes.
 
 **Fase A — schema e configuração**
-`internal/schema/historico.go` (novo): `HistoricoSpec`, `validaHistorico` com
+`internal/schema/history.go` (novo): `HistoricoSpec`, `validaHistorico` com
 `bloco()`, `DerivaHistorico()`. Campo `Historico *HistoricoSpec` em
 `DatasetSpec` e `yaml.Node` por valor em `rawSpec` (`spec.go:199-214`). Recusa
-de colisão de nome na subida. Testes no molde de `regrattl_test.go` e
-`congelada_test.go`.
+de colisão de nome na subida. Testes no molde de `ttl_rule_test.go` e
+`frozen_test.go`.
 
 **Fase B — dicionário compartilhado e espelho de descoberta**
 `storage.Options.DictCompartilhado`; `Open` deixa de criar `fields.dict` no
@@ -341,7 +341,7 @@ para o writer Kafka e para o `ingest`. Teste que prova que um `Apenda` que
 falha **não** muda o `ApplyResult`.
 
 **Fase E — retenção**
-`internal/storage/retencao.go`: `rowIDBase` persistido, busca binária da
+`internal/storage/retention.go`: `rowIDBase` persistido, busca binária da
 marca-d'água, purga por tempo, purga por tamanho, `PUNCH_HOLE`, reuso de
 `aposentaSegmento`. Testes de janela de crash usando o seam `apTrace`, no molde
 de `compaction_crash_test.go`; teste com relógio injetado (`UsaRelogio`).

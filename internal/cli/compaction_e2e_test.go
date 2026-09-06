@@ -631,7 +631,7 @@ func extremos(v []int64) (piso, pico int64) {
 //   - e ele vê PELA SÉRIE DA COMPACTION, que é o critério da Task 8 cobrado
 //     aqui: nishidb_compaction_bytes_written SOBE no /metrics enquanto a carga
 //     corre, e nishidb_compaction_running vale 1 com o laço de pé. Até a Task 8
-//     estas três eram nome declarado em nomes.go sem número atrás dele, e os
+//     estas três eram nome declarado em names.go sem número atrás dele, e os
 //     únicos números da compaction viviam no compaction.segmento_aposentado,
 //     ou seja no log — que responde a pergunta do §86 para quem está lendo o
 //     log àquela hora, e não para um painel. A distinção entre as duas séries

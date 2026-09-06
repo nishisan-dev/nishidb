@@ -147,7 +147,7 @@ type WIP struct {
 	// postCap é derivado do tamanho do mapeamento, e não gravado no header: uma
 	// segunda fonte de verdade para a capacidade daria, ao divergir, um Set
 	// escrevendo fora do arquivo. Mesma razão de o formato selado não ter
-	// minRowID (formato.go).
+	// minRowID (format.go).
 	postCap uint32
 	// distintos é recontado na abertura varrendo o diretório, pela mesma razão:
 	// ele é DERIVÁVEL dos slots ocupados, e gravá-lo seria a chance de o

@@ -22,8 +22,8 @@ alarme reabre e o `type` volta para 1.
 |---|---|---|
 | Campo de sistema injetado pelo writer | `_writtenAt`, [spec.go:403](../internal/schema/spec.go:403) | Precedente completo: FieldID pelo dicionário durável, gravado no payload, recusado se vier no evento |
 | Índice denso rowId→valor | [`rowindex.Escritas`](../internal/storage/rowindex/rowindex.go:303) | 8 bytes por linha em mmap, derivado do payload, reconstruído pelo replay |
-| Coletor de expiração | [expiracao.go](../internal/storage/expiracao.go) | Varredura circular, lápide durável, freio duplo (quantidade e tempo) |
-| Releitura do prazo sob o lock | [`Expira`](../internal/storage/expiracao.go:37) | **O cancelamento**: decisão do agendador é revalidada dentro do `wmu` |
+| Coletor de expiração | [expiry.go](../internal/storage/expiry.go) | Varredura circular, lápide durável, freio duplo (quantidade e tempo) |
+| Releitura do prazo sob o lock | [`Expira`](../internal/storage/expiry.go:37) | **O cancelamento**: decisão do agendador é revalidada dentro do `wmu` |
 | Predicado compilado | [predicate.go](../internal/query/executor/predicate.go), [collect.go](../internal/query/executor/collect.go) | Programa linear com saltos, sem recursão e sem alocação por linha |
 
 ### Decisões tomadas com o usuário
@@ -361,7 +361,7 @@ tocar em nada:
 | Consumidor | Onde | O que herda |
 |---|---|---|
 | Visibilidade | `prazoVencido` na leitura | A linha some da consulta no instante em que vence, com o coletor parado, atrasado ou nunca ligado |
-| Coletor | [expiracao.go:256](../internal/storage/expiracao.go:256) | Marca pela duração da própria linha |
+| Coletor | [expiry.go:256](../internal/storage/expiry.go:256) | Marca pela duração da própria linha |
 | Compaction | [compaction.go:189](../internal/storage/compaction.go:189) | Descarta record de linha vencida na reescrita |
 
 `Store.Options` troca `ExpireAfterWrite time.Duration` por: `TTLAtivo bool`,
@@ -371,14 +371,14 @@ acompanham: [cli.go:243](../internal/cli/cli.go:243),
 [offsets.go:93](../internal/cli/offsets.go:93),
 [server.go:332](../internal/server/server.go:332).
 
-`montaLapide` ([expiracao.go:161](../internal/storage/expiracao.go:161)) **não** preserva
+`montaLapide` ([expiry.go:161](../internal/storage/expiry.go:161)) **não** preserva
 o `_expiresIn`. A lápide não precisa de prazo, e não preservá-lo devolve os bytes. A
 entrada em `prazos.idx` permanece com o valor antigo, o que é inofensivo: a linha já
 está tombstonada e `Expira` é idempotente. Ver §2.9 para a consequência operacional.
 
 ## 2.8 O cancelamento sai de graça
 
-[`Expira`](../internal/storage/expiracao.go:37) já relê o prazo **dentro** do `wmu`,
+[`Expira`](../internal/storage/expiry.go:37) já relê o prazo **dentro** do `wmu`,
 exatamente para não marcar uma linha renovada entre a decisão do agendador e a marca.
 Com a duração dentro dessa releitura, o cancelamento não custa uma linha nova:
 
@@ -422,7 +422,7 @@ implementação de comparação divergiria nos casos que importam — coluna de 
 comparada com literal numérico, coluna `auto` ainda sem tipo resolvido, ordem de bytes
 versus ordem numérica — e divergiria em silêncio.
 
-Pacote novo `internal/predicado`, recebendo:
+Pacote novo `internal/predicate`, recebendo:
 
 - `slot` e `coleta` de [collect.go](../internal/query/executor/collect.go);
 - `programa`, `instr`, `compila`, `emite`, `eval`, `testa` e os comparadores de
@@ -505,7 +505,7 @@ o que o processo entendeu — inclusive a ordem, que é semântica.
 10. `type=2` → expira no prazo curto; `type=1` → não expira.
 11. **Cancelamento:** entidade com prazo curto recebe evento que quebra a condição antes
     do vencimento e não é marcada. Com relógio de teste
-    ([`UsaRelogio`](../internal/storage/expiracao.go:16)), sem dormir.
+    ([`UsaRelogio`](../internal/storage/expiry.go:16)), sem dormir.
 12. **Corrida:** `Expira` chamado com a decisão tomada antes de uma renovação que zera a
     duração devolve `expirou=false` sem escrever. Com seam, como o teste de renovação
     existente.

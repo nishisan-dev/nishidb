@@ -23,12 +23,12 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/metrics"
 	"github.com/nishisan-dev/nishidb/internal/query/spill"
 	"github.com/nishisan-dev/nishidb/internal/storage/checkpoint"
-	"github.com/nishisan-dev/nishidb/internal/storage/contador"
+	"github.com/nishisan-dev/nishidb/internal/storage/counter"
 	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
 	"github.com/nishisan-dev/nishidb/internal/storage/fielddict"
 	"github.com/nishisan-dev/nishidb/internal/storage/rowindex"
 	"github.com/nishisan-dev/nishidb/internal/storage/segment"
-	"github.com/nishisan-dev/nishidb/internal/storage/versoes"
+	"github.com/nishisan-dev/nishidb/internal/storage/versions"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
@@ -208,7 +208,7 @@ type Options struct {
 	// Nil é "sem contadores" — e um dataset cujo manifest declara contadores
 	// é RECUSADO nesse caso: abrir sem as definições deixaria o vetor parado
 	// enquanto o Put anda.
-	CompilaContadores func(dict *fielddict.Dict) ([]contador.Definicao, error)
+	CompilaContadores func(dict *fielddict.Dict) ([]counter.Definicao, error)
 	// Log é o logger estruturado do §95. Quando nil, o Store escreve em
 	// stderr no formato texto — que é o comportamento que os log.Printf
 	// tinham antes, e perder a divergência de recovery só porque o chamador
@@ -365,7 +365,7 @@ type Store struct {
 	// vazio no dataset sem `counters:`. Transicionados no passo 7c do
 	// applyRecord, sob o wmu; lidos pela tabela virtual e pela auditoria sem
 	// lock do Store.
-	contadores []*contador.Contador
+	contadores []*counter.Contador
 	// contadoresARecriar são os que a abertura decidiu reconstruir; a
 	// varredura roda depois do ramo de recovery e a lista é esvaziada.
 	contadoresARecriar []pendenciaDeContador
@@ -494,7 +494,7 @@ type Store struct {
 	// a poda e a expiração oportunista da compaction.
 	snaps *registroDeSnapshots
 	// vers guarda as locations anteriores enquanto algum leitor as alcança.
-	vers *versoes.Cadeias
+	vers *versions.Cadeias
 	// snapsExpirados conta as consultas invalidadas pelo teto do journal. É
 	// contador, e não medidor, porque a pergunta é "isto ACONTECEU?" — um
 	// medidor que voltasse a zero esconderia a recusa entre dois scrapes.
@@ -829,7 +829,7 @@ type Store struct {
 
 	// compAtiva, compBytesLidos e compBytesEscritos são os alimentadores das
 	// três séries de compaction do §92, que até o M4 eram nome sem número
-	// (nomes.go). São atômicos e não campos sob o wmu pelo motivo dos
+	// (names.go). São atômicos e não campos sob o wmu pelo motivo dos
 	// espelhos logo acima: quem os lê é o /metrics, no instante do scrape, e
 	// um scrape atrás do lock do writer apaga o painel exatamente sob a
 	// pressão que ele existe para mostrar.
@@ -1047,7 +1047,7 @@ func Open(opts Options) (*Store, error) {
 		segSize:  make(map[uint32]int64),
 		agora:    time.Now,
 		snaps:    novoRegistroDeSnapshots(),
-		vers:     versoes.Novas(),
+		vers:     versions.Novas(),
 	}
 	if opts.Metrics != nil {
 		s.cpDuracao = opts.Metrics.Histograma(metrics.MetCheckpointDurationSeconds,
@@ -1423,7 +1423,7 @@ func (s *Store) resolveCamposIndexados(ids []types.FieldID, nomesDeclarados []st
 // este binário não tem mais: indexes/bitmap/ e indexes/hash/.
 //
 // Eles não têm leitor nenhum a partir daqui, e por isso não podem ficar. O
-// IndexBytes soma o diretório indexes/ inteiro (retencao.go), então deixá-los
+// IndexBytes soma o diretório indexes/ inteiro (retention.go), então deixá-los
 // seria publicar disco ocupado que nada no produto explica — e num dataset
 // grande a soma dos dois é da ordem do próprio dado. É o mesmo modo de falha
 // que o .widx órfão de segmento aposentado já obrigou a fechar: métrica de
@@ -1951,7 +1951,7 @@ func (s *Store) applyRecord(a recordApply) error {
 	// aberta o journal não recebe uma entrada sequer, e a ingestão não paga
 	// nada além da comparação de um atômico.
 	if a.versiona && a.mode == applyWrite {
-		if s.snaps.menorEpocaViva() != versoes.SemLeitor {
+		if s.snaps.menorEpocaViva() != versions.SemLeitor {
 			if anterior, tinha := s.locs.Get(a.rowID); tinha {
 				s.vers.Registra(a.rowID, anterior, s.epocaPub.Load()+1)
 				s.invalidaOMaisAntigoSeEstourou()

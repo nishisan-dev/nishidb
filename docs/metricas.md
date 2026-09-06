@@ -1,6 +1,6 @@
 # Métricas expostas
 
-As **91 séries** declaradas em [`internal/metrics/nomes.go`](../internal/metrics/nomes.go),
+As **91 séries** declaradas em [`internal/metrics/names.go`](../internal/metrics/names.go),
 que é a fonte ÚNICA dos nomes — nenhum literal de nome de série existe fora
 dali, e `TestTodaMetricaDeclaradaEstaDocumentada` confere que esta página
 descreve todas elas.
@@ -260,7 +260,7 @@ família existe desde sempre; quem não existia era a série.
 | `nishidb_materialized_tombstones` | Promessa não cumprida do ciclo de tipos temporais: exigiria manter o número de lápides vivas, decrementado na ressurreição e ajustado pela compaction. Já é débito com número em [`debitos.md`](debitos.md). |
 | `nishidb_storage_live_bytes` | Declarada com o bloco do §92 e nunca alimentada. `nishidb_storage_bytes` (tamanho dos arquivos) e a razão de liveness da compaction respondem o que ela responderia. |
 
-Constante declarada e não emitida é dívida silenciosa: quem lê `nomes.go`
+Constante declarada e não emitida é dívida silenciosa: quem lê `names.go`
 acha que a série existe, e quem escreve o alerta descobre que não. As três
 estão aqui para que a próxima leitura já saiba.
 

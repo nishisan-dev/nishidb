@@ -89,7 +89,7 @@ class StringDeConexao(unittest.TestCase):
 
 
 class ResolucaoDeSenha(unittest.TestCase):
-    """As mesmas quatro recusas de `internal/cli/credencial.go`."""
+    """As mesmas quatro recusas de `internal/cli/credential.go`."""
 
     def setUp(self):
         self.srv = ServidorFalso().__enter__()

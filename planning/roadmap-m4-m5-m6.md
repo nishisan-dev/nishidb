@@ -127,7 +127,7 @@ instrução explícita de não duplicá-lo. A compaction deve passar por ele.
 
 `nishidb_storage_bytes` é **exato hoje**: soma de `SegmentInfo.SizeBytes`, que é o
 tamanho do arquivo. Só `live_bytes` e `garbage_bytes` dependem do tally que superestima.
-Hoje [metricas_dataset.go:16](internal/server/metricas_dataset.go:16) deixa os **três**
+Hoje [metrics_dataset.go:16](internal/server/metrics_dataset.go:16) deixa os **três**
 sem publicar de propósito — o comentário argumenta, corretamente, que publicar tally
 impreciso "seria uma métrica que mente".
 
@@ -187,7 +187,7 @@ impreciso serve só para *eleger candidato* (§53), e superestimar liveness apen
   ([config.go:29](internal/config/config.go:29)). Seguir a doutrina do débito 49: forma
   validada no parse, comportamento na ativação.
 - Métricas `nishidb_compaction_running`, `_bytes_read`, `_bytes_written` — nomes já
-  existem sem alimentador em [nomes.go:48](internal/metrics/nomes.go:48).
+  existem sem alimentador em [names.go:48](internal/metrics/names.go:48).
 - `Store.Stats()` precisa expor liveness e contagem real de segmentos: `SegmentsTotal`
   hoje é derivado do ID corrente e assume "sem remoção"
   ([store.go:1245](internal/storage/store.go:1245)), premissa que a compaction quebra.
@@ -198,7 +198,7 @@ impreciso serve só para *eleger candidato* (§53), e superestimar liveness apen
   e só `server` é do §96 ([cli.go:113](internal/cli/cli.go:113)). Nascem **remotos**
   (`--server`), pelo argumento do flock exclusivo — se forem só locais, repetem o débito
   54: o operador teria que derrubar o servidor para perguntar o status dele. `/v1/stats`
-  é a base, e `internal/cli/query_remota.go` é o molde do cliente.
+  é a base, e `internal/cli/query_remote.go` é o molde do cliente.
 
 ---
 
@@ -234,19 +234,19 @@ auth entra envolvendo o mux num ponto só. O listener também é criado num pont
   `POST /v1/compact` e `POST /v1/checkpoint`, fechando o resto do §96 (D3).
 - **CLI:** `nishidb query --server` ganha credencial — por **variável de ambiente ou
   arquivo**, nunca flag de senha, que apareceria em `ps`. `normalizaEndereco` já aceita
-  `https://` ([query_remota.go:64](internal/cli/query_remota.go:64)).
+  `https://` ([query_remote.go:64](internal/cli/query_remote.go:64)).
 
 Fecha os débitos **57** e **14**.
 
 ### Fase 7 — driver JDBC
 
-O wire está pronto: `internal/protocolo` é declaradamente o ponto de encontro do
+O wire está pronto: `internal/protocol` é declaradamente o ponto de encontro do
 servidor, do CLI remoto e do futuro driver
-([protocolo.go:6](internal/protocolo/protocolo.go:6)). O consumidor de referência a
+([protocol.go:6](internal/protocol/protocol.go:6)). O consumidor de referência a
 portar para Java é `protocolo.Leitor`
-([stream.go:45](internal/protocolo/stream.go:45)); a tabela §73 já é única no produto
-([jdbc.go:7](internal/protocolo/jdbc.go:7)); e a tradução código→exit code
-([query_remota.go:124](internal/cli/query_remota.go:124)) vira código→`SQLState`.
+([stream.go:45](internal/protocol/stream.go:45)); a tabela §73 já é única no produto
+([jdbc.go:7](internal/protocol/jdbc.go:7)); e a tradução código→exit code
+([query_remote.go:124](internal/cli/query_remote.go:124)) vira código→`SQLState`.
 
 **Ajustes no lado Go, antes do Java** (senão o driver nasce com buracos):
 
@@ -273,7 +273,7 @@ portar para Java é `protocolo.Leitor`
 Testes do §107.
 
 **`setNull` não tem representação de wire** — o protocolo recusa `null` em `parameters[]`
-por decisão explícita ([parametros.go:52](internal/protocolo/parametros.go:52)), e a
+por decisão explícita ([params.go:52](internal/protocol/params.go:52)), e a
 única forma de testar ausência é `IS NULL` na query. O driver lança
 `SQLFeatureNotSupportedException` e o limite fica registrado.
 

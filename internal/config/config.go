@@ -32,7 +32,7 @@ import (
 // para o binário do M1, senão o operador mantém dois arquivos e eles
 // divergem. server.tls e server.authentication SAIRAM dessa lista na Fase
 // 11: continuam opcionais, mas quando presentes têm forma validada — ver
-// TLSSpec/AuthenticationSpec/LoopbackSpec, em config_seguranca.go.
+// TLSSpec/AuthenticationSpec/LoopbackSpec, em config_security.go.
 type Config struct {
 	// Version é a versão do PRÓPRIO arquivo (§78). Era aceita e nunca lida:
 	// no dia em que existisse um `version: 2` global, este binário leria o
@@ -113,7 +113,7 @@ type Config struct {
 
 		// TLS, Authentication e Loopback são os blocos de segurança da Fase 11
 		// (§74-78). A FORMA de cada um é validada em validaServerSeguranca
-		// (config_seguranca.go): whitelist manual de chave dentro do bloco (o
+		// (config_security.go): whitelist manual de chave dentro do bloco (o
 		// KnownFields GLOBAL continua desligado, ver comentário em
 		// CarregaConfig) e as recusas cruzadas do §75/§77 que dependem só do
 		// arquivo. A resolução de segredos e a matriz de recusa "auth sem TLS
@@ -127,7 +127,7 @@ type Config struct {
 	// quase todo ele tem leitor: query.maxConcurrent é o teto de consultas
 	// simultâneas do §80, query.maxLongRunning é o sub-pool da consulta longa,
 	// e memoryTarget/query.maxBufferPerQuery são o orçamento de memória de
-	// consulta (internal/query/orcamento), cujo primeiro consumidor real é o
+	// consulta (internal/query/budget), cujo primeiro consumidor real é o
 	// StreamWriter.
 	//
 	// managedMemoryTarget continua aceita e sem efeito, e não em silêncio:
@@ -559,7 +559,7 @@ func (c *Config) MaxLongRunning() int { return c.maxLongRunning }
 //
 // Os dois eram parseados e nunca lidos (metade do débito 15). A chave não era
 // só inócua: quem escreve `memoryTarget: 1GiB` dimensiona a máquina por ela, e
-// não havia teto nenhum. Hoje alimentam internal/query/orcamento, cujo primeiro
+// não havia teto nenhum. Hoje alimentam internal/query/budget, cujo primeiro
 // consumidor real é o StreamWriter — que também nunca encolhia (débito 28), e
 // cujo texto já dizia que o remédio era esta chave.
 //

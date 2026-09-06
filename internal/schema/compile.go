@@ -340,7 +340,7 @@ type Compiled struct {
 	// RegrasTTL são as regras de expiração validadas, na ordem do arquivo —
 	// que é semântica: a primeira que casa vence. O `when` continua em TEXTO
 	// aqui de propósito: compilá-lo exige o binder, e o binder importa este
-	// pacote. Quem compila é internal/predicado, o único ponto da árvore que
+	// pacote. Quem compila é internal/predicate, o único ponto da árvore que
 	// pode importar os dois.
 	RegrasTTL []RegraTTL
 	// DuracaoDeFundo é a duração da regra sem `when`, ou zero quando não há.
@@ -756,7 +756,7 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 }
 
 // indexadoNoYAML traduz o vocabulário do YAML já validado (validaIndice, em
-// congelada.go, só deixa passar "" ou "true" — chamar isto sobre um valor cru
+// frozen.go, só deixa passar "" ou "true" — chamar isto sobre um valor cru
 // não validado seria bug de quem compila sem ter passado pelo validate).
 // Vive numa função só porque o campo de topo e a coluna derivada leem a MESMA
 // chave, e duas traduções divergiriam.

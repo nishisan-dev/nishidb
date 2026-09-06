@@ -8,14 +8,14 @@ import (
 	"strings"
 
 	nishiconfig "github.com/nishisan-dev/nishidb/internal/config"
-	"github.com/nishisan-dev/nishidb/internal/contadores"
+	"github.com/nishisan-dev/nishidb/internal/counters"
 	"github.com/nishisan-dev/nishidb/internal/metakafka"
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 	"github.com/nishisan-dev/nishidb/internal/query"
 	"github.com/nishisan-dev/nishidb/internal/query/binder"
+	"github.com/nishisan-dev/nishidb/internal/query/budget"
 	"github.com/nishisan-dev/nishidb/internal/query/executor"
 	"github.com/nishisan-dev/nishidb/internal/query/lexer"
-	"github.com/nishisan-dev/nishidb/internal/query/orcamento"
 	"github.com/nishisan-dev/nishidb/internal/query/parser"
 )
 
@@ -41,7 +41,7 @@ func runQuery(args []string, amb Ambiente) int {
 	// compact/checkpoint dão para o mesmo engano.
 	cred, err := credFlags.resolve()
 	if err != nil {
-		// `_, _ =`: mesma disciplina de avisa (operacao.go) para código NOVO
+		// `_, _ =`: mesma disciplina de avisa (operation.go) para código NOVO
 		// desta task — o gate de lint deste projeto cobra 0 apontamentos
 		// novos, e as chamadas bare a fmt.Fprintln já existentes neste
 		// arquivo são débito anterior a esta task, não um precedente a repetir.
@@ -77,7 +77,7 @@ func runQuery(args []string, amb Ambiente) int {
 	// gramática. É o que faz `--param int64:9223372036854775808` receber a
 	// mensagem de overflow do protocolo na linha de comando, em vez de depois
 	// de um round-trip.
-	valores, err := protocolo.Valores(params)
+	valores, err := protocol.Valores(params)
 	if err != nil {
 		_, _ = fmt.Fprintln(amb.Stderr, "query:", err)
 		return ExitUso
@@ -110,7 +110,7 @@ func runQuery(args []string, amb Ambiente) int {
 		fmt.Fprintln(amb.Stderr, "query:", err)
 		return ExitUso
 	}
-	if err := contadores.Registra(eng, *dataset, st); err != nil {
+	if err := counters.Registra(eng, *dataset, st); err != nil {
 		avisa(amb, "query: %v\n", err)
 		return ExitUso
 	}
@@ -153,7 +153,7 @@ func runQuery(args []string, amb Ambiente) int {
 	// e não vale pelo CLI é a chave mentindo em metade dos caminhos, que é o
 	// defeito de que este orçamento nasceu (débito 15). O processo do CLI serve
 	// UMA consulta, então o Global é dele sozinho.
-	orc := orcamento.NovoGlobal(cfg.MemoryTarget()).Query(cfg.MaxBufferPerQuery())
+	orc := budget.NovoGlobal(cfg.MemoryTarget()).Query(cfg.MaxBufferPerQuery())
 	if !orc.Admite() {
 		// Só acontece com `maxBufferPerQuery` acima do `memoryTarget`, que o
 		// CarregaConfig já recusa — mas o retorno é conferido do mesmo jeito:

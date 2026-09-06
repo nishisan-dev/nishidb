@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 	"github.com/nishisan-dev/nishidb/internal/server"
 )
 
@@ -35,7 +35,7 @@ func TestLoopbackDesligadoNaoAbrePorta(t *testing.T) {
 // A lacuna que a B1 deixou nomeada para a ativação decidir: habilitar o
 // loopback sem declarar a porta não tem endereço determinístico para
 // bindar. Aqui pelo caminho de subida REAL (server.Novo com YAML de
-// verdade), não só a função pura (enderecoLoopback, seguranca_internal_test.go).
+// verdade), não só a função pura (enderecoLoopback, security_internal_test.go).
 func TestLoopbackHabilitadoSemPortaRecusaASubidaDoServidor(t *testing.T) {
 	a := novoAmbienteCom(t, "\nserver:\n  bind: 127.0.0.1\n  port: %d\n  loopback:\n    enabled: true\n")
 	a.escreveDataset("d", strings.ReplaceAll(specSemKafka, "%s", "d"))
@@ -255,14 +255,14 @@ func TestMetricsComMetodoErradoNoPlanoLoopbackTambemSaiComCorpoErro(t *testing.T
 			fecha(t, resp)
 			t.Fatalf("POST %s no loopback = %d, quer 405", caminho, resp.StatusCode)
 		}
-		var corpo protocolo.CorpoErro
+		var corpo protocol.CorpoErro
 		if err := json.NewDecoder(resp.Body).Decode(&corpo); err != nil {
 			fecha(t, resp)
 			t.Fatalf("POST %s no loopback: corpo não é CorpoErro (o 405 de texto puro do mux?): %v", caminho, err)
 		}
 		fecha(t, resp)
-		if corpo.Error.Code != protocolo.CodMetodo {
-			t.Errorf("POST %s no loopback: código = %q, quer %q", caminho, corpo.Error.Code, protocolo.CodMetodo)
+		if corpo.Error.Code != protocol.CodMetodo {
+			t.Errorf("POST %s no loopback: código = %q, quer %q", caminho, corpo.Error.Code, protocol.CodMetodo)
 		}
 	}
 }

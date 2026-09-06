@@ -12,13 +12,13 @@ import (
 	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
 
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 	"github.com/nishisan-dev/nishidb/internal/server"
 )
 
 // TestCompactComAdminNaConfigDefaultELacoOciosoFazTrabalhoReal é o gap de
 // cobertura 1 da re-revisão da B5: os outros testes de "config default"
-// (mutacoes_test.go) provam que a rota não fica morta, mas com um dataset
+// (mutations_test.go) provam que a rota não fica morta, mas com um dataset
 // SEM garbage nenhum — nunca provam TRABALHO de verdade no corpo da
 // resposta. Aqui há garbage real, a config é DEFAULT (o laço automático
 // sobe), e a asserção central é sobre os NÚMEROS decodificados do JSON
@@ -109,7 +109,7 @@ func TestCompactComAdminNaConfigDefaultELacoOciosoFazTrabalhoReal(t *testing.T) 
 
 	// Retry curto, sem sleep entre tentativas — o mesmo padrão de
 	// TestCompactComAdminNaConfigDefaultFuncionaSemPassadaEmVoo
-	// (mutacoes_test.go) e de TestCompactRemotoNaConfigDefaultEventualmenteSai0
+	// (mutations_test.go) e de TestCompactRemotoNaConfigDefaultEventualmenteSai0
 	// (internal/cli). A folga estrutural (o laço automático só volta a olhar
 	// candidatos daqui a intervaloEntrePassadas, 5s) já torna uma tentativa
 	// seca correta na prática, mas sob pressão de CPU real (suíte inteira em
@@ -132,7 +132,7 @@ func TestCompactComAdminNaConfigDefaultELacoOciosoFazTrabalhoReal(t *testing.T) 
 		t.Fatalf("compact: status = %d após %d tentativas imediatas, quer 200 (o laço automático só volta a olhar "+
 			"daqui a 5s — folga de sobra para este POST)", resp.StatusCode, tentativas)
 	}
-	var out protocolo.RespostaCompact
+	var out protocol.RespostaCompact
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatalf("corpo ilegível: %v", err)
 	}
@@ -204,7 +204,7 @@ func esperaIngestaoAplicarPeloMenos(t *testing.T, srv *server.Servidor, dataset 
 	for {
 		resp, err := http.Get("http://" + srv.Endereco() + "/v1/stats")
 		if err == nil {
-			var e protocolo.Estatisticas
+			var e protocol.Estatisticas
 			decErr := json.NewDecoder(resp.Body).Decode(&e)
 			_ = resp.Body.Close()
 			if decErr == nil {

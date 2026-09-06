@@ -81,7 +81,7 @@ type PatchBuffer struct {
 	// JDBC. Com workers, essa ordem viraria a de quem ganha o mutex — e "o tipo
 	// é fixado na primeira observação" viraria "na primeira a chegar no lock",
 	// não "no menor offset". A violação já foi vista em produção; ver
-	// internal/cli/determinismo_test.go.
+	// internal/cli/determinism_test.go.
 	soLeitura bool
 }
 

@@ -1,4 +1,4 @@
-"""Percorre uma resposta de `/v1/query`. Porte de `internal/protocolo/stream.go`.
+"""Percorre uma resposta de `/v1/query`. Porte de `internal/protocol/stream.go`.
 
 O contrato que ele impõe é o mesmo do Go: a primeira linha é o schema, as do
 meio são dados, e a última é SEMPRE um fecho. **Um stream que acaba sem fecho é

@@ -35,12 +35,12 @@ func blocoComTLS(certPath, keyPath string) string {
 // (ECDSA P-256), em ARQUIVO, com SAN IPAddress 127.0.0.1 — necessário para um
 // handshake TLS DE VERDADE contra "https://127.0.0.1:porta" (o cliente Go
 // verifica o SAN contra o host da URL). Diferente de geraCertificadoDeTeste
-// (seguranca_test.go): aquele só precisa decodificar como PEM para exercitar
+// (security_test.go): aquele só precisa decodificar como PEM para exercitar
 // tls.LoadX509KeyPair na subida (B2/B3 nunca abrem handshake real); os
 // testes aqui abrem.
 //
 // validade permite simular certificado saudável, expirando em breve ou já
-// expirado — os três ramos que avisaValidadeDoCertificado (seguranca.go)
+// expirado — os três ramos que avisaValidadeDoCertificado (security.go)
 // decide.
 func geraCertificadoTLSComValidade(t *testing.T, notBefore, notAfter time.Time) (certPath, keyPath string) {
 	t.Helper()
@@ -281,7 +281,7 @@ func TestHTTPClaroNaPortaTLSNaoAtravessaAutenticacaoNemRoteamento(t *testing.T) 
 }
 
 // Integração de ponta a ponta do aviso de validade (unidade em
-// seguranca_internal_test.go): um certificado JÁ EXPIRADO sobe pelo caminho
+// security_internal_test.go): um certificado JÁ EXPIRADO sobe pelo caminho
 // de subida REAL (server.Novo, com LoadX509KeyPair de verdade) sem recusar,
 // e o log de subida carrega o evento de ERRO — nunca a subida falha por
 // causa da validade.

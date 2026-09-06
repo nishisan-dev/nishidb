@@ -1,0 +1,7 @@
+velho	novo
+internal/contadores	internal/counters
+internal/predicado	internal/predicate
+internal/protocolo	internal/protocol
+internal/query/orcamento	internal/query/budget
+internal/storage/versoes	internal/storage/versions
+internal/storage/contador	internal/storage/counter

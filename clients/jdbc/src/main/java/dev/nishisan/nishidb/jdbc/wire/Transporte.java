@@ -21,7 +21,7 @@ import java.util.Base64;
  *
  * <p>Único de propósito: as doutrinas abaixo não são opcionais, e espalhá-las
  * por vários chamadores garantiria que uma delas fosse esquecida em algum.
- * Todas vêm do cliente de referência do CLI (internal/cli/credencial.go), e
+ * Todas vêm do cliente de referência do CLI (internal/cli/credential.go), e
  * cada uma existe por causa de um incidente concreto:
  *
  * <ul>

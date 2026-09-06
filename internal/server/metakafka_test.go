@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 	"github.com/nishisan-dev/nishidb/internal/server"
 )
 
@@ -40,8 +40,8 @@ func TestMetaKafkaRespondeNoDatasetSemIngestao(t *testing.T) {
 	if l["enabled"] != false {
 		t.Fatalf("enabled = %v; sem bloco Kafka o dataset não consome", l["enabled"])
 	}
-	if l["state"] != protocolo.EstadoDesligado {
-		t.Fatalf("state = %v, quero %q", l["state"], protocolo.EstadoDesligado)
+	if l["state"] != protocol.EstadoDesligado {
+		t.Fatalf("state = %v, quero %q", l["state"], protocol.EstadoDesligado)
 	}
 	// Ausência, e não zero: não há partição, não há fila para medir e não há
 	// watchdog. As três respostas são diferentes de "medi e deu zero".
@@ -59,7 +59,7 @@ func TestMetaKafkaRespondeNoDatasetSemIngestao(t *testing.T) {
 func TestEstadoDaTabelaEhOMesmoDoHealth(t *testing.T) {
 	srv := servidorComDados(t, 4, blocoPadrao)
 
-	var stats protocolo.Estatisticas
+	var stats protocol.Estatisticas
 	if err := json.Unmarshal([]byte(pega(t, srv, "/v1/stats")), &stats); err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestMetaKafkaTrazAIdentidadeDoYAML(t *testing.T) {
 	if l["bootstrap"] != "kafka01:9092,kafka02:9092" {
 		t.Fatalf("bootstrap = %v, quero a forma canônica", l["bootstrap"])
 	}
-	if l["enabled"] != false || l["state"] != protocolo.EstadoDesligado {
+	if l["enabled"] != false || l["state"] != protocol.EstadoDesligado {
 		t.Fatalf("enabled=%v state=%v", l["enabled"], l["state"])
 	}
 }

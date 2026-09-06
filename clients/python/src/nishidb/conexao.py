@@ -1,6 +1,6 @@
 """A `Connection` da PEP 249 e a função `connect()`.
 
-A resolução de credencial é portada de `internal/cli/credencial.go`, com as
+A resolução de credencial é portada de `internal/cli/credential.go`, com as
 mesmas quatro recusas — inclusive a distinção entre "variável ausente" e
 "variável definida e VAZIA", que é o caso do container cujo orquestrador injeta
 a chave sem valor. Sem essa recusa, o Basic sairia com senha vazia e o 401 do

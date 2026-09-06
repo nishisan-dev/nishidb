@@ -202,7 +202,7 @@ razão, não.
    ([internal/materializer/extract.go](internal/materializer/extract.go)).
 4. **Exposição** em `_meta.fields`: duas colunas `int64` na `especDaTabela` e
    dois `vals` em `record()`
-   ([internal/query/meta/fonte.go](internal/query/meta/fonte.go)). Os valores
+   ([internal/query/meta/source.go](internal/query/meta/source.go)). Os valores
    são ordenados por FieldID antes do `AppendField` — a ordem já é resolvida lá.
 5. **Painel**: o total já aparece. As N piores colunas são trabalho do SQL, não
    do painel — ele é panorama, e isto é diagnóstico.

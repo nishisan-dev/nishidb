@@ -960,7 +960,7 @@ duplicar a máquina que ele existe para substituir; e a rota real (materializer 
 
 **Paridade de comportamento, e não só de assinatura.** As asserções de compilação garantem que os
 dois satisfazem a mesma interface; elas não dizem nada sobre o que acontece em runtime. Um roteiro
-ÚNICO roda nos dois (`fakestorage/comportamento_test.go`) e cobre o que o executor observa: rowId
+ÚNICO roda nos dois (`fakestorage/behavior_test.go`) e cobre o que o executor observa: rowId
 0-based, update preservando o id, diff de postings (o valor antigo deixa de apontar a row), valor
 nunca visto devolvendo iterador vazio em vez de erro, campo sem índice devolvendo
 `ErrInvalidArgument`, ausência devolvendo `ok=false` sem erro, tombstone sumindo das três rotas de

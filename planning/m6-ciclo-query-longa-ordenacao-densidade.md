@@ -47,7 +47,7 @@ Três frentes chegaram juntas nesta sessão, e a investigação mostrou que elas
 **uma coisa só**, não três:
 
 1. **`ORDER BY`, `OFFSET` e `LIKE`** — pedido direto do usuário. Hoje as três são
-   recusadas com `UNSUPPORTED_CLAUSE` ([clausulas.go:16](internal/query/parser/clausulas.go:16)),
+   recusadas com `UNSUPPORTED_CLAUSE` ([clauses.go:16](internal/query/parser/clauses.go:16)),
    e o driver JDBC tem teste que **afirma** a recusa
    ([DriverIT.java:268](clients/jdbc/src/test/java/dev/nishisan/nishidb/jdbc/DriverIT.java:268)).
 2. **Query longa com spill em disco** — decisão de produto do usuário: *"pensar
@@ -104,7 +104,7 @@ melhorias — não sobreviveram à leitura:
 - **`_meta.fields` absorve colunas novas sem lista paralela**: `colunasIDs` sai de
   `FieldsByID()` ([meta.go:160](internal/query/meta/meta.go:160)) e a ordenação por
   FieldID já está resolvida no `sort.Slice` de
-  [fonte.go:158](internal/query/meta/fonte.go:158).
+  [source.go:158](internal/query/meta/source.go:158).
 
 ### Achados que mudaram o desenho
 
@@ -161,7 +161,7 @@ melhorias — não sobreviveram à leitura:
 
 6. **`SELECT order FROM x` é query válida hoje**, travada por
    `TestColunaChamadaOrderContinuaValida`
-   ([clausulas_test.go:77](internal/query/parser/clausulas_test.go:77)) e
+   ([clauses_test.go:77](internal/query/parser/clauses_test.go:77)) e
    documentada em `README.md:641-643` (*"as palavras não viraram keywords do
    lexer"*). Tornar `ORDER` keyword do lexer quebra contrato publicado e
    possivelmente queries do piloto.
@@ -227,7 +227,7 @@ melhorias — não sobreviveram à leitura:
    todo mundo. A política de vaga deixa de ser detalhe.
 
 11. **Métrica nova exige justificativa registrada.** Os nomes vivem em
-   [metrics/nomes.go](internal/metrics/nomes.go) e a doutrina é que cada um
+   [metrics/names.go](internal/metrics/names.go) e a doutrina é que cada um
    *"existe por uma razão registrada"*; o débito 61 mostra o custo de publicar
    nome fora do §92. As séries de snapshot e spill precisam dessa justificativa
    por escrito, não só do código.
@@ -268,7 +268,7 @@ melhorias — não sobreviveram à leitura:
 | D13 | `_` do `LIKE` | **Um CARACTERE (rune), não um byte.** JSON é UTF-8 por definição, e `_` casando meio `ç` seria indefensável |
 | D14 | Backfill de índice hash | **Recusado, como no bitmap.** O débito 22 **não fecha** — passa a ter dois motores |
 | D15 | Default de `query.scanWorkers` | **1 (serial) no primeiro corte.** A funcionalidade entra completa; virar o default é decisão separada, com o número da medição na mão — ligar por default mudaria o perfil de alocação do gate sem número que o justifique |
-| D7 | `occurrences` para campo de TOPO | **NULL, não zero.** Segue o precedente de `parent` ([fonte.go:139-144](internal/query/meta/fonte.go:139)): *"NULL é ausência"*. Zero mentiria, dizendo "nunca apareceu" |
+| D7 | `occurrences` para campo de TOPO | **NULL, não zero.** Segue o precedente de `parent` ([source.go:139-144](internal/query/meta/source.go:139)): *"NULL é ausência"*. Zero mentiria, dizendo "nunca apareceu" |
 
 ---
 
@@ -299,7 +299,7 @@ pela porta que ficou aberta.
 **Testes:** `TestPaiArrayNaoCongelaOAnterior`,
 `TestPaiNuloNaoCongelaOAnterior` — no molde de
 `TestValorDivergenteNaoCongelaOAnterior`
-([descoberta_test.go:216](internal/materializer/descoberta_test.go:216)), com duas
+([discovery_test.go:216](internal/materializer/discovery_test.go:216)), com duas
 `apply` na MESMA key.
 **Risco:** baixo. Mesmo mecanismo já provado no commit anterior.
 
@@ -342,7 +342,7 @@ null.
 
 `Ordem interna:`
 1. YAML de bench com um campo `type: json` e `unknownFields: include`, no molde
-   de `descobreYAML` ([descoberta_test.go:9](internal/materializer/descoberta_test.go:9)).
+   de `descobreYAML` ([discovery_test.go:9](internal/materializer/discovery_test.go:9)).
 2. `BenchmarkParseComDescoberta` sobre um evento de ~11 chaves, no molde de
    `BenchmarkPatchParseRadiusEvent`
    ([patch_bench_test.go:26](internal/materializer/patch_bench_test.go:26)).
@@ -373,7 +373,7 @@ tem como ser cumprido.
 
 **Entrega:** os contadores existem e sobem. Nada os expõe ainda.
 **Testes:** no molde de `TestValorIncompativelEContado`
-([descoberta_test.go:162](internal/materializer/descoberta_test.go:162)).
+([discovery_test.go:162](internal/materializer/discovery_test.go:162)).
 **Gate obrigatório:** `TestExtracaoNaoAloca` e `TestDescobertaNaoAlocaEmRegime`
 exigem **zero** alocação, não "poucas". Um `atomic.Add` não aloca — mas o gate
 mede alocação e **não CPU**: rodar o A4 antes e depois é o que fecha a promessa.
@@ -390,10 +390,10 @@ mede alocação e **não CPU**: rodar o A4 antes e depois é o que fecha a prome
 2. Bloco `fields:` com os dois `type: int64`, após
    [meta.go:137](internal/query/meta/meta.go:137).
 3. Dois pares no `vals` de `record()`, **dentro do `if c.Parent != nil`**
-   ([fonte.go:139-144](internal/query/meta/fonte.go:139)), conforme D7.
+   ([source.go:139-144](internal/query/meta/source.go:139)), conforme D7.
 4. Helper `inteiro(n uint64) types.Value` após
-   [fonte.go:183](internal/query/meta/fonte.go:183).
-5. Nada mais muda: o `sort.Slice` de [fonte.go:158](internal/query/meta/fonte.go:158)
+   [source.go:183](internal/query/meta/source.go:183).
+5. Nada mais muda: o `sort.Slice` de [source.go:158](internal/query/meta/source.go:158)
    e o `AppendField` absorvem as colunas novas, e `colunasIDs` também.
 
 **Entrega:** a consulta do documento de melhorias passa a responder:
@@ -450,7 +450,7 @@ medição:
 2. `RLock` nos quatro pares (Get, Read): `lookup`
    ([store.go:937](internal/storage/store.go:937)), `GetByRowID`
    ([:1016](internal/storage/store.go:1016)), `Expira`
-   ([expiracao.go:60](internal/storage/expiracao.go:60)) e `reapendaSeVivo`
+   ([expiry.go:60](internal/storage/expiry.go:60)) e `reapendaSeVivo`
    ([compaction.go:130](internal/storage/compaction.go:130)).
 3. `Reader.FechaSegmento(seg)` novo em
    [segment.go](internal/storage/segment/segment.go): `delete(r.fds, seg)` +
@@ -559,7 +559,7 @@ de liveness que o débito 25 fechou.
    decisão D1b criou.
 5. Registro de queries em voo (`{dataset, início, snapshot, hash do SQL}`),
    alimentando `/v1/stats` e o `nishidb status`, que hoje só imprime
-   `consultas: N` ([operacao.go:276](internal/cli/operacao.go:276)).
+   `consultas: N` ([operation.go:276](internal/cli/operation.go:276)).
 6. Três métricas novas, declaradas como exceções ao §92 com a razão junto da
    constante: `nishidb_query_longest_running_seconds`,
    `nishidb_query_snapshot_oldest_seconds`, `nishidb_query_long_rejected_total`.
@@ -671,7 +671,7 @@ caminho que passa a fazer trabalho condicional.
 > lexer.** `ORDER`, `BY`, `ASC`, `DESC`, `NULLS`, `FIRST`, `LAST`, `OFFSET` e
 > `LIKE` são `TokenIdent` reconhecidos **por posição**, via `ASCIIEqualFold` —
 > exatamente a máquina que `clausulaNaoSuportada`
-> ([clausulas.go:41](internal/query/parser/clausulas.go:41)) já usa. Elas só
+> ([clauses.go:41](internal/query/parser/clauses.go:41)) já usa. Elas só
 > aparecem onde hoje **só cabe erro** (`parser.go:45-55` e `:372-375`), então o
 > parser **se compromete** ao ver a palavra e depois **exige** o resto — consumo,
 > não lookahead. Continuam **11 keywords e 29 tipos de token**; os gates duros
@@ -778,7 +778,7 @@ OFFSET**. Isso paga a metade local do **débito 46**.
    ([predicate.go:57-80](internal/query/executor/predicate.go:57)) e portanto
    compartilhável sem cópia. Primeiro passo, sozinho, sem mudança de
    comportamento: é a espinha de D2 e de D5.
-2. **`compara(kind, a, b) int`** em `executor/ordem.go` — **código novo e
+2. **`compara(kind, a, b) int`** em `executor/order.go` — **código novo e
    exclusivo do sort**. Os três `ordem*` do predicado **ficam intactos**, e a
    razão é técnica: IEEE-754 tem um quarto desfecho, *unordered*, que um `int` de
    três vias não representa — `NaN != 1` é **true** e `NaN < 1`, `NaN > 1`,
@@ -1029,12 +1029,12 @@ atualizado no mesmo PR — o ratchet reprova nas **duas** direções.
 **Gates que precisam continuar verdes SEM edição** — é a prova de que D8 está
 certo: `lexer/keyword_test.go:28` (11 keywords), `lexer/token_test.go:126` (29
 tokens), `lexer/alloc_gate_test.go:15` (exatamente 0),
-`parser/clausulas_test.go:77-91` (`TestColunaChamadaOrderContinuaValida`).
+`parser/clauses_test.go:77-91` (`TestColunaChamadaOrderContinuaValida`).
 
 **Suítes que este ciclo tem obrigação de NÃO perturbar** — se alguma precisar
 mudar, a mudança saiu do escopo:
 [compaction_crash_test.go](internal/storage/compaction_crash_test.go) (as janelas
-de crash da aposentadoria), [expiracao_test.go](internal/storage/expiracao_test.go)
+de crash da aposentadoria), [expiry_test.go](internal/storage/expiry_test.go)
 (a doutrina *"visibilidade não depende do agendador"* do débito 25) e
 [close_quiesce_test.go](internal/storage/close_quiesce_test.go).
 
@@ -1093,4 +1093,4 @@ vazamento de inode já fechado pela `fix/`), e os `.puml` afetados —
 buffer de rows"* é **literalmente invalidada** por este ciclo, e
 `recovery_flow.puml`, que ganha o hash. Regra de sequência do projeto: documento
 que cita `TestXxx` entra **depois** do teste existir, no mesmo commit —
-`internal/cli/evidencias_test.go:26-33` verifica.
+`internal/cli/evidence_test.go:26-33` verifica.

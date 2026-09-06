@@ -729,9 +729,9 @@ Leituras de código que sustentam afirmações do texto:
 |---|---|
 | `merge: sum` não é idempotente, por contrato | `internal/schema/merge.go` |
 | chave e sequência exigem campo de primeiro nível declarado | `internal/schema/spec.go` |
-| lápide é registro durável e passa pelo `applyRecord` | `internal/storage/expiracao.go` |
-| coletor tem freio por quantidade e por tempo | `internal/storage/expiracao.go` |
-| agenda é min-tree densa, atualização em tempo constante | `internal/storage/rowindex/agenda.go` |
+| lápide é registro durável e passa pelo `applyRecord` | `internal/storage/expiry.go` |
+| coletor tem freio por quantidade e por tempo | `internal/storage/expiry.go` |
+| agenda é min-tree densa, atualização em tempo constante | `internal/storage/rowindex/schedule.go` |
 | instante de escrita é injetado pelo writer | `internal/schema/spec.go` |
 | prefixo `_` inteiro é reservado para namespace virtual | `internal/query/meta/meta.go` |
 | publicação sem chave | `service-view`, `ServiceProducer.java:35` |

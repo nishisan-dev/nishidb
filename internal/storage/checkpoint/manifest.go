@@ -200,7 +200,7 @@ var (
 // tally.
 //
 // O resíduo está medido e travado em TestResiduoDeLivenessDoReplayNaoConverge
-// (internal/storage/store_liveness_residuo_test.go), que também prova que ele
+// (internal/storage/store_liveness_residue_test.go), que também prova que ele
 // não converge com checkpoints posteriores. Débito 38 em docs/debitos.md.
 type SegmentInfo struct {
 	ID           uint32

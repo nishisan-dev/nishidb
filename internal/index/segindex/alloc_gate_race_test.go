@@ -31,7 +31,7 @@ func TestLookupNoWIPAlocaExatamenteUmaVez(t *testing.T) {
 	t.Skip("gate de alocação não roda sob -race: a instrumentação altera a contagem")
 }
 
-// O gate de CUSTO do Set (custo_gate_test.go) NÃO aparece aqui de propósito:
+// O gate de CUSTO do Set (cost_gate_test.go) NÃO aparece aqui de propósito:
 // ele conta sondas, que a instrumentação não altera, e roda nas duas rodadas.
 // Uma entrada de SKIP para ele seria a mentira oposta à do débito 53 — anunciar
 // como pulado um gate que está rodando.

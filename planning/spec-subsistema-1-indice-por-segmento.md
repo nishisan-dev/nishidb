@@ -20,7 +20,7 @@ Três defeitos medidos, um deles fatal:
    por valor e **1,5 ms por `Set`** — 82% do CPU do processo. Não estabiliza:
    piora a cada linha.
 2. **A purga de segmento não toca o índice**
-   ([storage/retencao.go](../internal/storage/retencao.go)). O histórico não
+   ([storage/retention.go](../internal/storage/retention.go)). O histórico não
    tem compaction, então o índice cresce para sempre mesmo com a retenção
    funcionando e o dataset estável em 250 GiB. Cada posting órfã alonga a
    cadeia de quem ainda está vivo.
@@ -66,7 +66,7 @@ history:
 
 Não é mecanismo novo: é a forma que a retenção já tem (`expireAfterWrite` +
 `maxBytes`, com o teto de bytes engolindo o prazo declarado —
-[retencao.go:262](../internal/storage/retencao.go:261)). O operador escreve a
+[retention.go:262](../internal/storage/retention.go:261)). O operador escreve a
 intenção em tempo e o limite em bytes, e a métrica diz qual dos dois está
 mandando.
 
@@ -148,7 +148,7 @@ A enumeração é exata e não lê record nenhum:
 
 - **Histórico**: a faixa de rowIds do segmento. O rowId é monotônico e a
   retenção já lê a fronteira com um único `pread`
-  ([retencao.go:380](../internal/storage/retencao.go:380)).
+  ([retention.go:380](../internal/storage/retention.go:380)).
 - **Materializado**: os rowIds cuja location aponta para aquele segmento,
   obtidos por uma passada sequencial sobre o `locations.idx` — array denso, 8M
   linhas são 64 MB, ~50 ms.
@@ -640,7 +640,7 @@ history:
 A simetria é deliberada: `history.maxBytes` limita o **dado**,
 `history.index.maxBytes` limita o **índice**, e nos dois casos o teto de bytes é
 a política forte, que engole o prazo declarado. É a mesma forma de
-[retencao.go:262](../internal/storage/retencao.go:261), e o operador que já
+[retention.go:262](../internal/storage/retention.go:261), e o operador que já
 entendeu uma entende a outra sem ler documentação nova.
 
 O teto governa bytes de **índice**, e não bytes de dado indexado, pela razão que
@@ -677,11 +677,11 @@ Pelo tempo: o segmento está fora quando o record **mais novo** dele é anterior
 O mais novo, e não o mais antigo, porque a janela promete *"consigo consultar
 rápido as últimas 6 horas"* — um segmento que atravessa a fronteira precisa
 manter o índice. É a assimetria espelhada da retenção, que aposenta só quando o
-segmento está **inteiramente** coberto ([retencao.go:341](../internal/storage/retencao.go:341)).
+segmento está **inteiramente** coberto ([retention.go:341](../internal/storage/retention.go:341)).
 
 E não custa metadado novo: o record mais novo do segmento N é imediatamente
 anterior ao primeiro do segmento N+1, que `primeiroRowIDDoSeguinte` já lê com um
-`pread` ([retencao.go:380](../internal/storage/retencao.go:380)).
+`pread` ([retention.go:380](../internal/storage/retention.go:380)).
 
 Pelos bytes: soma os `.sidx` do mais novo para o mais antigo e expulsa a partir
 de onde a soma passa de `index.maxBytes`.
@@ -860,7 +860,7 @@ Foi assim que a agenda de vencimentos foi validada.
 
 ### 6.6 Métricas
 
-Só pelas constantes de `internal/metrics/nomes.go`; `/v1/stats` e `/metrics`
+Só pelas constantes de `internal/metrics/names.go`; `/v1/stats` e `/metrics`
 lendo a MESMA estrutura; nascendo com zero na subida, porque todas podem alarmar.
 
 | Série | Tipo |

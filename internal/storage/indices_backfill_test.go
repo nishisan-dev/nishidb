@@ -28,7 +28,7 @@ func abreStoreIndexadoEm(t *testing.T, dir string, campos []string, segSize int6
 }
 
 // rodaReconstrucaoAteEsvaziar drena a fila NA MÃO, e é assim de propósito: o
-// laço de fundo (§2.4) existe e é testado em indices_reconstroi_test.go, mas os
+// laço de fundo (§2.4) existe e é testado em indices_rebuild_test.go, mas os
 // testes deste arquivo afirmam sobre a FILA e a RECONSTRUÇÃO — quem agenda o quê,
 // e o que o arquivo publicado cobre. Acoplá-los à goroutine trocaria um oráculo
 // direto por uma espera, e a falha viraria "o teste travou".

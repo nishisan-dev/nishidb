@@ -7,7 +7,7 @@ package dev.nishisan.nishidb.jdbc.wire;
  * mensagem, que é prosa para humanos e pode ser reescrita.
  *
  * <p>As strings estão escritas à mão aqui de propósito, e é isso que torna o
- * gate do lado Go possível: ele lê as constantes do internal/protocolo e
+ * gate do lado Go possível: ele lê as constantes do internal/protocol e
  * procura cada literal NESTE arquivo. Um código novo no servidor sem tradução
  * aqui reprova a suíte Go, antes de qualquer JVM subir.
  */

@@ -24,13 +24,13 @@ Linha de base: `make test` verde, 43 pacotes `ok`, exit 0.
 | # | Mutação | Onde | Reprovou | Mensagem literal |
 |---|---|---|---|---|
 | M1 | o `Set` volta a varrer a cadeia antes de inserir | `segindex/wip.go` | `TestOCustoDoSetNaoAcompanhaOTamanhoDoSegmento` — **e nenhum teste de corretude** | `pior caso de 20000 acessos com n=10000, teto 4 — a cadeia voltou a crescer com o segmento` |
-| M2 | o merge k-way não descarta as cabeças empatadas | `segindex/uniao.go` | `TestUneMergeiaFaixasSobrepostasEDeduplica`, `TestUneNaoConcatenaQuandoAsFaixasSeTocam`, `TestUneEhEquivalenteAUniaoOrdenada`, `TestMergeIterCloseFechaTodasAsFontesInclusiveAsNaoConsumidas`, mais 3 em `internal/storage` | `drena = [10 20 30 30 40 50], quero sem repetir o 30` |
-| M3 | `disjuntas` devolve sempre `true` | `segindex/uniao.go` | os quatro acima mais `TestUneMergePropagaOPrimeiroErro`, mais 3 em `internal/storage` | `estratégia = "concatenacao", quero "merge"` |
+| M2 | o merge k-way não descarta as cabeças empatadas | `segindex/union.go` | `TestUneMergeiaFaixasSobrepostasEDeduplica`, `TestUneNaoConcatenaQuandoAsFaixasSeTocam`, `TestUneEhEquivalenteAUniaoOrdenada`, `TestMergeIterCloseFechaTodasAsFontesInclusiveAsNaoConsumidas`, mais 3 em `internal/storage` | `drena = [10 20 30 30 40 50], quero sem repetir o 30` |
+| M3 | `disjuntas` devolve sempre `true` | `segindex/union.go` | os quatro acima mais `TestUneMergePropagaOPrimeiroErro`, mais 3 em `internal/storage` | `estratégia = "concatenacao", quero "merge"` |
 | M4 | o `Open` adota o `.widx` em vez de descartá-lo | `storage/indices.go` | `TestOWIPNaoEhAdotadoAtravesDeUmRestart`, `TestOsWIPsQueNaoSaoDoCorrenteSaemNaAberturaESoQuemTemDadoEntraNaFila`, `TestOWIPOrfaoDeUmSegmentoJaSeladoSaiSemMexerNoSelado`, `TestNomeIlegivelNoEspacoDoWIPSaiComoDatasetIlegivel`, `TestOWIPDeUmaExecucaoAnteriorEhDescartadoNaAbertura`, `TestKill9NoMeioDaIngestaoPreservaOEstadoConfirmado` | `Open: segindex: formato inválido: […]/segment-00000001-00001.widx não começa com "NDBW"` |
 | M4' | o `Open` adota o `.widx` **de segmento não corrente** | `storage/indices.go` | `TestOsWIPsQueNaoSaoDoCorrenteSaemNaAberturaESoQuemTemDadoEntraNaFila`, `TestOWIPOrfaoDeUmSegmentoJaSeladoSaiSemMexerNoSelado` | `Stat(segment-00009999-00001.widx) = <nil>, quero IsNotExist: o .widx de um segmento que não é o corrente tem de sair na abertura` |
 | M5 | a aposentadoria não remove o `.sidx` | `storage/indices.go` | `TestAAposentadoriaLevaOIndiceJunto`, `TestAJanelaNaoDeixaIndiceDeSegmentoAposentado`, `TestAAposentadoriaNaoDesmapeiaOIndiceSobUmaVarreduraEmVoo` | `Stat(segment-00000001.sidx) = <nil>, quero IsNotExist — o índice tem de sair com o .dat` |
-| M6 | a reconstrução emite as postings na ordem de leitura, sem ordenar | `segindex/escritor.go` | `TestOEscritorAgrupaOrdenaEDeduplicaAsPostings`, `TestGoldenDoSelado`, `TestSelarPreservaExatamenteOQueOWIPRespondia`, `TestOSeladoDevolveOQueOEscritorRecebeu`, mais 8 em `internal/storage` incluindo `TestConstruirDoSegmentoDaOMesmoArquivoQueSelarOWIP` | `secoes[0].fieldID = 7, quero 3 (campo 3 antes do 7)` |
-| M7 | crc divergente devolve erro em vez de degradar | `segindex/selado.go` | `TestCRCDivergenteNaoDerrubaAConsulta`, `TestOCrcDivergenteContaUmDegrauEEnumeraSempre`, `TestOGaugeDeEstadosEhCegoAIndicePodre`, `TestStatsEMetricsLeemAMesmaEstrutura` | `AbreSelado não deve falhar por crc: segindex: crc divergente: […] (calculado c11ea0ba, gravado 3e1ea0ba)` |
+| M6 | a reconstrução emite as postings na ordem de leitura, sem ordenar | `segindex/writer.go` | `TestOEscritorAgrupaOrdenaEDeduplicaAsPostings`, `TestGoldenDoSelado`, `TestSelarPreservaExatamenteOQueOWIPRespondia`, `TestOSeladoDevolveOQueOEscritorRecebeu`, mais 8 em `internal/storage` incluindo `TestConstruirDoSegmentoDaOMesmoArquivoQueSelarOWIP` | `secoes[0].fieldID = 7, quero 3 (campo 3 antes do 7)` |
+| M7 | crc divergente devolve erro em vez de degradar | `segindex/sealed.go` | `TestCRCDivergenteNaoDerrubaAConsulta`, `TestOCrcDivergenteContaUmDegrauEEnumeraSempre`, `TestOGaugeDeEstadosEhCegoAIndicePodre`, `TestStatsEMetricsLeemAMesmaEstrutura` | `AbreSelado não deve falhar por crc: segindex: crc divergente: […] (calculado c11ea0ba, gravado 3e1ea0ba)` |
 
 **Nenhuma das sete escapou.** Uma reprovou **de mais**, e está corrigida
 (seção 2). A M5 — que o plano marcava como a mais provável de escapar, porque a
@@ -213,7 +213,7 @@ que espalhadas pelos relatórios.
 | `reconstrucao_ativa` **e** `RebuildRunning` ecoam `Estados.Corrente` (os dois lados) | `TestASerieDaReconstrucaoDesceQuandoOLacoMorre` | `nishidb_index_reconstrucao_ativa = 1 com o laço MORTO e corrente = 1` |
 | a `Ajuda` volta a prometer taxa | `TestAAjudaDoContadorDeCrcNaoApontaSerieQueNaoDiscrimina` | `ainda afirma que a falha não é memorizada` |
 | `Familia` vazia de volta | `TestOsCabecalhosSaemNomeadosParaCadaFamilia` | `cabeçalho com nome de métrica VAZIO: "# HELP  Linhas gravadas…"` |
-| citação morta plantada em `indices_metricas.go` | `TestAsCitacoesDeTesteNosComentariosExistem` | nomeia arquivo e nome |
+| citação morta plantada em `indices_metrics.go` | `TestAsCitacoesDeTesteNosComentariosExistem` | nomeia arquivo e nome |
 
 ---
 

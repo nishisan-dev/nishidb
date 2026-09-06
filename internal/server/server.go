@@ -27,14 +27,14 @@ import (
 
 	"github.com/nishisan-dev/nishidb/internal/buildinfo"
 	"github.com/nishisan-dev/nishidb/internal/config"
-	"github.com/nishisan-dev/nishidb/internal/contadores"
+	"github.com/nishisan-dev/nishidb/internal/counters"
 	"github.com/nishisan-dev/nishidb/internal/kafka"
 	"github.com/nishisan-dev/nishidb/internal/logging"
 	"github.com/nishisan-dev/nishidb/internal/materializer"
 	"github.com/nishisan-dev/nishidb/internal/metakafka"
 	"github.com/nishisan-dev/nishidb/internal/metrics"
 	"github.com/nishisan-dev/nishidb/internal/query"
-	"github.com/nishisan-dev/nishidb/internal/query/orcamento"
+	"github.com/nishisan-dev/nishidb/internal/query/budget"
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/storage"
 )
@@ -138,23 +138,23 @@ type Servidor struct {
 	// receber 503 pelo tempo que eles durassem.
 	vagasLongas chan struct{}
 	// emVoo é o registro de QUAIS consultas estão correndo, ao lado do medidor
-	// que diz quantas. Ver emvoo.go.
+	// que diz quantas. Ver inflight.go.
 	emVoo *emVoo
 	// orcamento é o teto de memória de consulta do §80
 	// (runtime.memoryTarget), do qual cada requisição toma uma fatia limitada
 	// por runtime.query.maxBufferPerQuery. É do PROCESSO pela mesma razão do
 	// semáforo: o §82 diz que todos os datasets dividem o mesmo orçamento, e um
 	// por dataset multiplicaria o pior caso pelo número deles.
-	orcamento *orcamento.Global
+	orcamento *budget.Global
 	http      *http.Server
 	ln        net.Listener
 	pprofSrv  *http.Server
 
 	// credenciais é o cache imutável de server.authentication.users já
 	// resolvido contra o ambiente (§74-77, resolveCredenciais em
-	// seguranca.go): username -> digest SHA-256 da senha + papel. Nil quando
+	// security.go): username -> digest SHA-256 da senha + papel. Nil quando
 	// AutenticacaoHabilitada() é false — é o que comAutenticacao
-	// (autenticacao.go) lê para decidir entre o middleware de verdade e o
+	// (auth.go) lê para decidir entre o middleware de verdade e o
 	// passthrough puro.
 	credenciais map[string]credencial
 	// authFalhas conta nishidb_auth_failures_total por razão (Task B3). Só é
@@ -165,7 +165,7 @@ type Servidor struct {
 	authFalhas *metrics.FamiliaContador
 
 	// tlsCert é o par certificado/chave já CARREGADO por
-	// validaCertificadoNaSubida (seguranca.go), nil quando server.tls está
+	// validaCertificadoNaSubida (security.go), nil quando server.tls está
 	// desligado. sobeHTTP o REUSA no ServeTLS — nunca relido do disco depois
 	// da subida; rotação de certificado é reiniciar o processo.
 	tlsCert *tls.Certificate
@@ -183,7 +183,7 @@ type Servidor struct {
 	loopbackSrv *http.Server
 
 	// vidaCtx é o MESMO ctx que Roda recebe — o que signal.NotifyContext
-	// cancela no SIGTERM (cmd/nishidb/main.go). handleCompact (mutacoes.go)
+	// cancela no SIGTERM (cmd/nishidb/main.go). handleCompact (mutations.go)
 	// o compõe com r.Context() via ctxDeMutacao, porque http.Server.Shutdown
 	// NÃO cancela o contexto de uma requisição em voo — só espera o handler
 	// devolver, e por um tempo limitado (o ctx de 15s de encerra()). Sem
@@ -279,7 +279,7 @@ func Novo(cfg *config.Config, o Opcoes) (*Servidor, error) {
 	if certificado != nil {
 		// Aviso de validade do leaf (Task B4): nunca recusa a subida, só
 		// registra WARN/ERRO estruturado e publica a gauge de expiração —
-		// ver o comentário de avisaValidadeDoCertificado (seguranca.go).
+		// ver o comentário de avisaValidadeDoCertificado (security.go).
 		if err := avisaValidadeDoCertificado(*certificado, log, reg); err != nil {
 			return nil, err
 		}
@@ -308,7 +308,7 @@ func Novo(cfg *config.Config, o Opcoes) (*Servidor, error) {
 		vagas:       make(chan struct{}, cfg.MaxConcurrent()),
 		vagasLongas: make(chan struct{}, cfg.MaxLongRunning()),
 		emVoo:       novoEmVoo(),
-		orcamento:   orcamento.NovoGlobal(cfg.MemoryTarget()),
+		orcamento:   budget.NovoGlobal(cfg.MemoryTarget()),
 		credenciais: credenciais,
 		tlsCert:     certificado,
 	}
@@ -381,7 +381,7 @@ func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*
 	// definições precisam do schema, e o replay da recovery precisa das
 	// definições. É o mesmo Compile de sempre, no mesmo dicionário — só que
 	// antes do replay.
-	comp := contadores.NovoCompilador(spec)
+	comp := counters.NovoCompilador(spec)
 	st, err := storage.Open(storage.Options{
 		Dir:                    dir,
 		Dataset:                spec.Name,
@@ -457,7 +457,7 @@ func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*
 	// As tabelas `_counters.<nome>` entram no motor sob o dataset — e o
 	// namespace é declarado mesmo sem contador, para que a recusa nomeie o
 	// que existe.
-	if err := contadores.Registra(s.eng, spec.Name, st); err != nil {
+	if err := counters.Registra(s.eng, spec.Name, st); err != nil {
 		return nil, fechandoStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}
 	d := &dataset{
@@ -790,7 +790,7 @@ const checkpointEventosPadrao = 500_000
 
 // sobeHTTP é o ÚNICO ponto de entrada do listener principal — a costura do
 // §77: montaMux constrói o mux CRU (sem autenticação nenhuma), e
-// comAutenticacao é o wrapper único em torno dele (autenticacao.go). O
+// comAutenticacao é o wrapper único em torno dele (auth.go). O
 // listener loopback (sobeLoopback, em http.go — decisão 4 do plano do ciclo)
 // serve o MESMO mux via muxLoopback(rt), não rt.Cru() puro: o wrapper é
 // DIFERENTE (rota READ passa direto, rota ADMIN responde 403 —
@@ -846,7 +846,7 @@ func (s *Servidor) sobeHTTP() error {
 
 // ctxDeMutacao devolve um ctx cancelado por QUALQUER um dos dois: o cliente
 // HTTP desistindo (r.Context()) OU o servidor encerrando (vidaCtx, o
-// cancelado no SIGTERM — godoc do campo). É o que handleCompact (mutacoes.go)
+// cancelado no SIGTERM — godoc do campo). É o que handleCompact (mutations.go)
 // usa para chamar Store.CompactaUmaVez, cuja passada pode levar minutos.
 //
 // A composição existe porque http.Server.Shutdown não cancela r.Context() —

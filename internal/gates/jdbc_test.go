@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
@@ -170,7 +170,7 @@ func TestOTargetDoDriverEstaNoGitignore(t *testing.T) {
 // acusaria. O CI Go reprova antes de qualquer JVM subir.
 //
 // A lista não é escrita à mão em lugar nenhum: sai do go/ast sobre
-// internal/protocolo/protocolo.go de um lado, e do texto de Codigos.java do
+// internal/protocol/protocol.go de um lado, e do texto de Codigos.java do
 // outro. É a mesma técnica de
 // TestVersaoDoGolangciLintNoWorkflowBateComAInstrucaoDoMakefile — comparar
 // duas EXTRAÇÕES, nunca uma extração contra um valor decorado, que envelhece
@@ -178,7 +178,7 @@ func TestOTargetDoDriverEstaNoGitignore(t *testing.T) {
 func TestTodoCodigoDoProtocoloTemSqlStateNoDriver(t *testing.T) {
 	codigos := codigosDoProtocolo(t)
 	if len(codigos) < 15 {
-		t.Fatalf("só %d códigos extraídos de protocolo.go: a extração quebrou, e um gate que "+
+		t.Fatalf("só %d códigos extraídos de protocol.go: a extração quebrou, e um gate que "+
 			"não acha nada passa sempre", len(codigos))
 	}
 
@@ -220,7 +220,7 @@ func leArquivo(t *testing.T, relativo string) string {
 // código.
 func codigosDoProtocolo(t *testing.T) map[string]string {
 	t.Helper()
-	caminho := filepath.Join(raizDoRepo, "internal/protocolo/protocolo.go")
+	caminho := filepath.Join(raizDoRepo, "internal/protocol/protocol.go")
 	fset := token.NewFileSet()
 	arquivo, err := parser.ParseFile(fset, caminho, nil, 0)
 	if err != nil {
@@ -291,7 +291,7 @@ func TestTodoNomeJDBCDoProtocoloTemCodigoNoDriver(t *testing.T) {
 func TestOsTiposNaoPesquisaveisDoDriverSaoOsNomesQueOGoProduz(t *testing.T) {
 	java := leArquivo(t, "clients/jdbc/src/main/java/dev/nishisan/nishidb/jdbc/wire/TiposJdbc.java")
 	for _, ft := range []types.FieldType{types.TypeBytes, types.TypeJSON} {
-		nome := protocolo.NomeDeTipo(ft)
+		nome := protocol.NomeDeTipo(ft)
 		if !strings.Contains(java, `"`+nome+`"`) {
 			t.Errorf("o tipo %q não aparece em TiposJdbc.java: o driver anunciaria como "+
 				"pesquisável uma coluna sobre a qual o binder recusa comparação", nome)
@@ -299,10 +299,10 @@ func TestOsTiposNaoPesquisaveisDoDriverSaoOsNomesQueOGoProduz(t *testing.T) {
 	}
 }
 
-// nomesJDBCDoProtocolo extrai as constantes JDBC* de internal/protocolo/jdbc.go.
+// nomesJDBCDoProtocolo extrai as constantes JDBC* de internal/protocol/jdbc.go.
 func nomesJDBCDoProtocolo(t *testing.T) map[string]string {
 	t.Helper()
-	caminho := filepath.Join(raizDoRepo, "internal/protocolo/jdbc.go")
+	caminho := filepath.Join(raizDoRepo, "internal/protocol/jdbc.go")
 	fset := token.NewFileSet()
 	arquivo, err := parser.ParseFile(fset, caminho, nil, 0)
 	if err != nil {

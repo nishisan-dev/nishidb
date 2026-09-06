@@ -175,7 +175,7 @@ para lápides (111, pré-existente).
 
 Bancadas: `NISHIDB_BENCH_DIR=<ext4> go test ./benchmark/micro/ -run='^$'
 -bench='BenchmarkApplyIngestReal(Regime|Frio)' -benchmem -benchtime=20000x
--count=6`, pares comparados com `benchstat`; `go test ./internal/storage/contador/
+-count=6`, pares comparados com `benchstat`; `go test ./internal/storage/counter/
 -bench=BenchmarkDobra1M -count=3`; `go test ./internal/storage/
 -bench=BenchmarkReconstroiContadores1M -benchtime=3x`. As saídas cruas estão em
 [`contadores-20260904.txt`](../benchmark/baselines/contadores-20260904.txt).

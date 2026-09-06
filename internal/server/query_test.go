@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/materializer"
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/server"
 	"github.com/nishisan-dev/nishidb/internal/storage"
@@ -182,10 +182,10 @@ func fecha(t *testing.T, resp *http.Response) {
 }
 
 // resultado percorre a moldura inteira e devolve as rows cruas e o leitor.
-func resultado(t *testing.T, resp *http.Response) ([]string, *protocolo.Leitor) {
+func resultado(t *testing.T, resp *http.Response) ([]string, *protocol.Leitor) {
 	t.Helper()
 	defer fecha(t, resp)
-	l := protocolo.NovoLeitor(resp.Body)
+	l := protocol.NovoLeitor(resp.Body)
 	var rows []string
 	for l.Next() {
 		rows = append(rows, string(l.Linha()))
@@ -196,10 +196,10 @@ func resultado(t *testing.T, resp *http.Response) ([]string, *protocolo.Leitor) 
 	return rows, l
 }
 
-func falhaDe(t *testing.T, resp *http.Response) protocolo.Falha {
+func falhaDe(t *testing.T, resp *http.Response) protocol.Falha {
 	t.Helper()
 	defer fecha(t, resp)
-	var corpo protocolo.CorpoErro
+	var corpo protocol.CorpoErro
 	if err := json.NewDecoder(resp.Body).Decode(&corpo); err != nil {
 		t.Fatalf("corpo de erro ilegível: %v", err)
 	}
@@ -214,8 +214,8 @@ func TestQueryRespondeAMolduraCompleta(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
-	if ct := resp.Header.Get("Content-Type"); ct != protocolo.ContentTypeNDJSON {
-		t.Fatalf("Content-Type = %q, quer %q", ct, protocolo.ContentTypeNDJSON)
+	if ct := resp.Header.Get("Content-Type"); ct != protocol.ContentTypeNDJSON {
+		t.Fatalf("Content-Type = %q, quer %q", ct, protocol.ContentTypeNDJSON)
 	}
 	rows, l := resultado(t, resp)
 
@@ -224,9 +224,9 @@ func TestQueryRespondeAMolduraCompleta(t *testing.T) {
 	}
 	// A comparação é da struct INTEIRA, de propósito: campo novo na Coluna
 	// que ninguém preencha quebra aqui, em vez de sair como zero no fio.
-	quer := []protocolo.Coluna{
-		{Name: "id", Type: "string", JDBC: protocolo.JDBCVarchar, Nullable: false, DisplaySize: 0},
-		{Name: "ip", Type: "ipv4", JDBC: protocolo.JDBCVarchar, Nullable: true, Precision: 15, DisplaySize: 15},
+	quer := []protocol.Coluna{
+		{Name: "id", Type: "string", JDBC: protocol.JDBCVarchar, Nullable: false, DisplaySize: 0},
+		{Name: "ip", Type: "ipv4", JDBC: protocol.JDBCVarchar, Nullable: true, Precision: 15, DisplaySize: 15},
 	}
 	for i, c := range quer {
 		if l.Schema().Columns[i] != c {
@@ -295,7 +295,7 @@ func TestAPrimeiraLinhaChegaAntesDaUltimaSerProduzida(t *testing.T) {
 	}
 	defer fecha(t, resp)
 
-	l := protocolo.NovoLeitor(resp.Body)
+	l := protocol.NovoLeitor(resp.Body)
 	if !l.Next() {
 		t.Fatalf("nenhuma row chegou: %v", l.Err())
 	}
@@ -337,8 +337,8 @@ func TestTetoDoDatasetSaiComoFechoDeErro(t *testing.T) {
 	if l.Fim() != nil {
 		t.Fatalf("fecho de sucesso num resultado truncado: %+v", l.Fim())
 	}
-	if l.Erro() == nil || l.Erro().Code != protocolo.CodMaxRows || l.Erro().Rows != 5 {
-		t.Fatalf("fecho = %+v, quer %s com 5 rows", l.Erro(), protocolo.CodMaxRows)
+	if l.Erro() == nil || l.Erro().Code != protocol.CodMaxRows || l.Erro().Rows != 5 {
+		t.Fatalf("fecho = %+v, quer %s com 5 rows", l.Erro(), protocol.CodMaxRows)
 	}
 }
 
@@ -371,7 +371,7 @@ func TestMaxRowsAcimaDoTetoEhRecusado(t *testing.T) {
 		t.Fatalf("status = %d, quer 400", resp.StatusCode)
 	}
 	f := falhaDe(t, resp)
-	if f.Code != protocolo.CodMaxRowsAcimaDoTeto {
+	if f.Code != protocol.CodMaxRowsAcimaDoTeto {
 		t.Fatalf("código = %q", f.Code)
 	}
 	if !strings.Contains(f.Message, "10") {
@@ -397,7 +397,7 @@ func TestErrosAntesDaPrimeiraLinha(t *testing.T) {
 		if resp.Header.Get("Allow") != http.MethodPost {
 			t.Fatalf("Allow = %q", resp.Header.Get("Allow"))
 		}
-		if f := falhaDe(t, resp); f.Code != protocolo.CodMetodo {
+		if f := falhaDe(t, resp); f.Code != protocol.CodMetodo {
 			t.Fatalf("código = %q", f.Code)
 		}
 	})
@@ -410,7 +410,7 @@ func TestErrosAntesDaPrimeiraLinha(t *testing.T) {
 		if resp.StatusCode != http.StatusUnsupportedMediaType {
 			t.Fatalf("status = %d", resp.StatusCode)
 		}
-		if f := falhaDe(t, resp); f.Code != protocolo.CodMediaType {
+		if f := falhaDe(t, resp); f.Code != protocol.CodMediaType {
 			t.Fatalf("código = %q", f.Code)
 		}
 	})
@@ -420,7 +420,7 @@ func TestErrosAntesDaPrimeiraLinha(t *testing.T) {
 		if resp.StatusCode != http.StatusBadRequest {
 			t.Fatalf("status = %d", resp.StatusCode)
 		}
-		if f := falhaDe(t, resp); f.Code != protocolo.CodBadRequest {
+		if f := falhaDe(t, resp); f.Code != protocol.CodBadRequest {
 			t.Fatalf("código = %q", f.Code)
 		}
 	})
@@ -436,12 +436,12 @@ func TestErrosAntesDaPrimeiraLinha(t *testing.T) {
 
 	t.Run("corpo grande demais", func(t *testing.T) {
 		gordo := `{"dataset":"d","sql":"SELECT id FROM d WHERE id = '` +
-			strings.Repeat("x", protocolo.MaxCorpoRequisicao) + `'"}`
+			strings.Repeat("x", protocol.MaxCorpoRequisicao) + `'"}`
 		resp := consulta(t, srv, gordo)
 		if resp.StatusCode != http.StatusRequestEntityTooLarge {
 			t.Fatalf("status = %d, quer 413", resp.StatusCode)
 		}
-		if f := falhaDe(t, resp); f.Code != protocolo.CodCorpoGrande {
+		if f := falhaDe(t, resp); f.Code != protocol.CodCorpoGrande {
 			t.Fatalf("código = %q", f.Code)
 		}
 	})
@@ -451,7 +451,7 @@ func TestErrosAntesDaPrimeiraLinha(t *testing.T) {
 		if resp.StatusCode != http.StatusNotFound {
 			t.Fatalf("status = %d", resp.StatusCode)
 		}
-		if f := falhaDe(t, resp); f.Code != protocolo.CodDatasetDesconhecido {
+		if f := falhaDe(t, resp); f.Code != protocol.CodDatasetDesconhecido {
 			t.Fatalf("código = %q", f.Code)
 		}
 	})
@@ -462,7 +462,7 @@ func TestErrosAntesDaPrimeiraLinha(t *testing.T) {
 			t.Fatalf("status = %d", resp.StatusCode)
 		}
 		f := falhaDe(t, resp)
-		if f.Code != protocolo.CodSintaxe {
+		if f.Code != protocol.CodSintaxe {
 			t.Fatalf("código = %q", f.Code)
 		}
 		if f.Line != 1 || f.Column < 1 {
@@ -475,7 +475,7 @@ func TestErrosAntesDaPrimeiraLinha(t *testing.T) {
 		if resp.StatusCode != http.StatusBadRequest {
 			t.Fatalf("status = %d", resp.StatusCode)
 		}
-		if f := falhaDe(t, resp); f.Code != protocolo.CodBind {
+		if f := falhaDe(t, resp); f.Code != protocol.CodBind {
 			t.Fatalf("código = %q", f.Code)
 		}
 	})
@@ -487,7 +487,7 @@ func TestErrosAntesDaPrimeiraLinha(t *testing.T) {
 			t.Fatalf("status = %d", resp.StatusCode)
 		}
 		f := falhaDe(t, resp)
-		if f.Code != protocolo.CodBadParameter {
+		if f.Code != protocol.CodBadParameter {
 			t.Fatalf("código = %q", f.Code)
 		}
 		if !strings.Contains(f.Message, "string") {
@@ -515,7 +515,7 @@ func TestConcorrenciaAcimaDoTetoEhRejeitada(t *testing.T) {
 	}
 	defer fecha(t, primeira)
 
-	l := protocolo.NovoLeitor(primeira.Body)
+	l := protocol.NovoLeitor(primeira.Body)
 	if !l.Next() {
 		t.Fatalf("a primeira consulta não produziu row: %v", l.Err())
 	}
@@ -528,7 +528,7 @@ func TestConcorrenciaAcimaDoTetoEhRejeitada(t *testing.T) {
 		t.Fatal("503 sem Retry-After: o cliente não sabe quando voltar")
 	}
 	f := falhaDe(t, resp)
-	if f.Code != protocolo.CodMuitasQueries {
+	if f.Code != protocol.CodMuitasQueries {
 		t.Fatalf("código = %q", f.Code)
 	}
 	if !strings.Contains(f.Message, "maxConcurrent") {
@@ -575,7 +575,7 @@ func TestConsultasSimultaneasDentroDoTeto(t *testing.T) {
 				erros <- fmt.Errorf("status = %d", resp.StatusCode)
 				return
 			}
-			l := protocolo.NovoLeitor(resp.Body)
+			l := protocol.NovoLeitor(resp.Body)
 			n := 0
 			for l.Next() {
 				n++
@@ -624,7 +624,7 @@ schema:
 		t.Fatalf("status = %d, quer 400", resp.StatusCode)
 	}
 	f := falhaDe(t, resp)
-	if f.Code != protocolo.CodColunaReservada {
+	if f.Code != protocol.CodColunaReservada {
 		t.Fatalf("código = %q", f.Code)
 	}
 	if !strings.Contains(f.Message, "alias") {
@@ -757,7 +757,7 @@ func custoEmVoo(t *testing.T, linhas int) uint64 {
 	}
 	defer fecha(t, resp)
 
-	l := protocolo.NovoLeitor(resp.Body)
+	l := protocol.NovoLeitor(resp.Body)
 	if !l.Next() {
 		t.Fatalf("nenhuma row chegou: %v", l.Err())
 	}
@@ -851,7 +851,7 @@ func TestALinhaDeSchemaSaiNoSeuProprioChunk(t *testing.T) {
 	}
 
 	primeiro := string(dados)
-	if !strings.HasPrefix(primeiro, `{"`+protocolo.ChaveMoldura+`":"`+protocolo.MolduraSchema+`"`) {
+	if !strings.HasPrefix(primeiro, `{"`+protocol.ChaveMoldura+`":"`+protocol.MolduraSchema+`"`) {
 		t.Fatalf("o primeiro chunk não começa pela linha de schema: %q", primeiro)
 	}
 	if strings.Count(primeiro, "\n") != 1 {
@@ -878,8 +878,8 @@ func TestUnsupportedClauseSaiCom400EPosicaoNoProtocolo(t *testing.T) {
 		t.Fatalf("status = %d, quer 400", resp.StatusCode)
 	}
 	f := falhaDe(t, resp)
-	if f.Code != protocolo.CodClausulaNaoSuportada {
-		t.Errorf("código = %q, quer %q", f.Code, protocolo.CodClausulaNaoSuportada)
+	if f.Code != protocol.CodClausulaNaoSuportada {
+		t.Errorf("código = %q, quer %q", f.Code, protocol.CodClausulaNaoSuportada)
 	}
 	if !strings.Contains(f.Message, "GROUP BY") {
 		t.Errorf("a mensagem não nomeia a cláusula: %q", f.Message)
@@ -906,8 +906,8 @@ func TestColunaChamadaOrderContinuaConsultavelPeloProtocolo(t *testing.T) {
 		fecha(t, resp)
 		t.Fatalf("status = %d, quer 400", resp.StatusCode)
 	}
-	if f := falhaDe(t, resp); f.Code != protocolo.CodBind {
-		t.Errorf("código = %q, quer %q: `order` tem de chegar ao binder como nome de coluna", f.Code, protocolo.CodBind)
+	if f := falhaDe(t, resp); f.Code != protocol.CodBind {
+		t.Errorf("código = %q, quer %q: `order` tem de chegar ao binder como nome de coluna", f.Code, protocol.CodBind)
 	}
 }
 

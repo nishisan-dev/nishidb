@@ -51,7 +51,7 @@ lembre de tê-los criado. **Leia-o antes de decidir qualquer coisa.**
 - `internal/storage/indices*.go` — `aposAppend` (ponto único de rotação sobre
   **quatro** sítios de `Append`), `aplicaIndiceSets`, `ConstroiIndiceDoSegmento`,
   `SegmentosPendentesDeReconstrucao`, `AplicaJanela`, `JanelaEfetiva`.
-- `internal/server/historico.go` — `ligaRetencao`, `ligaReconstrucao`, métricas.
+- `internal/server/history.go` — `ligaRetencao`, `ligaReconstrucao`, métricas.
 
 ## Tarefas: 16 de 17 feitas
 
@@ -247,7 +247,7 @@ convergência que passa com o defeito presente não prova nada.
   fila lê a tabela de seções sem conferir crc, então o arquivo corrompido parece
   completo. Consequência limitada e correta (enumeração), nunca falso negativo.
 - **102** — a selagem sob `wmu` a cada rotação ainda toca a ingestão.
-- ~~`internal/kafka/metricas.go` sem `Familia`~~ — **resolvido** no commit
+- ~~`internal/kafka/metrics.go` sem `Familia`~~ — **resolvido** no commit
   `dfb36b2` (autoria do usuário), com gate `TestAmostrasDeMetricaTemFamiliaENome`
   que alcança 58 de 58 literais. Registre que a afirmação "o Prometheus recusa o
   scrape inteiro" é **verdadeira**: medida contra o `textparse.PromParser` (o do
@@ -255,7 +255,7 @@ convergência que passa com o defeito presente não prova nada.
   ciclo refutou isso por engano usando o parser errado.
 - **Achatamento de namespace `§NN`** entre as quatro specs declaradas: uma citação
   pode resolver contra o documento errado. Nomeado no godoc de
-  `internal/gates/verificacao_test.go`; fechar exigiria marcador qualificado em
+  `internal/gates/verification_test.go`; fechar exigiria marcador qualificado em
   milhares de ocorrências.
 
 ## Em aberto, sem decisão

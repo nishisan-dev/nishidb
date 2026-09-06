@@ -52,19 +52,33 @@ func (m *multi) Set(v string) error { *m = append(*m, v); return nil }
 // `CLAUDE.md` entram por nome, e `.go` tem passada própria.
 var textExtensions = map[string]bool{".md": true, ".puml": true, ".sh": true, ".py": true, ".yml": true, ".yaml": true, ".java": true}
 
-// defaultExcludes são os documentos que a passada NUNCA pode varrer, e a
-// razão é a mesma para os quatro: eles são o registro DE → PARA do próprio
-// ciclo, então a coluna da esquerda é, por construção, o nome velho entre
-// crases. Varridos, cada linha colapsa em `X → X` e o mapeamento some — sem
-// erro, sem relatório, e com o dado que permitiria desfazer já perdido.
+// defaultExcludes são os caminhos que a passada NUNCA pode varrer. Os
+// quatro primeiros são o registro DE → PARA do próprio ciclo, e a razão é a
+// mesma para os quatro: a coluna da esquerda é, por construção, o nome
+// velho entre crases. Varridos, cada linha colapsa em `X → X` e o
+// mapeamento some — sem erro, sem relatório, e com o dado que permitiria
+// desfazer já perdido. O padrão de diretório vale para a subárvore inteira:
+// os mapeamentos TSV versionados moram em planning/identificadores-em-ingles/.
 //
-// O padrão de diretório vale para a subárvore inteira: os mapeamentos TSV
-// versionados moram em planning/identificadores-em-ingles/.
+// scripts/renamecite entra por um motivo diferente: os testes da PRÓPRIA
+// ferramenta (rules_test.go, main_test.go) usam nomes reais de pacote do
+// repositório como fixture de tabela De → Para da lógica de reescrita — por
+// exemplo `m.Paths["internal/contadores"] = "internal/counters"` — para
+// ilustrar o caso com um exemplo verdadeiro em vez de um `Foo`/`Bar`
+// qualquer. Quando um ciclo de rename de verdade usa esses mesmos nomes, a
+// varredura encontra o mesmo `X → X` do parágrafo acima, só que aqui o
+// "documento" é código Go: o fixture não fica em silêncio, vira um caso de
+// teste que passa testando uma identidade sem sentido. Achado da Tarefa 1.1
+// do ciclo de identificadores em inglês: uma rodada real contra
+// internal/predicado colapsou TestImportPathIsNotRewritten (src e want
+// ficaram iguais, o teste parou de provar que import Go não é tocado) e
+// mais dois casos de mesa.
 var defaultExcludes = []string{
 	"docs/glossario.md",
 	"planning/identificadores-em-ingles.md",
 	"planning/identificadores-em-ingles-plano.md",
 	"planning/identificadores-em-ingles",
+	"scripts/renamecite",
 }
 
 // excluded diz se o caminho relativo cai em algum padrão — o próprio caminho

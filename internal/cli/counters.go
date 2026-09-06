@@ -6,8 +6,8 @@ import (
 	"strconv"
 
 	nishiconfig "github.com/nishisan-dev/nishidb/internal/config"
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
-	"github.com/nishisan-dev/nishidb/internal/storage/contador"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
+	"github.com/nishisan-dev/nishidb/internal/storage/counter"
 )
 
 // `nishidb counters` é a superfície operacional dos contadores mantidos na
@@ -120,7 +120,7 @@ func countersLocal(argConfig, dataset string, audita, reconstroi bool, amb Ambie
 func countersRemoto(servidor, dataset string, audita, reconstroi bool, cred credencialRemota, amb Ambiente) int {
 	switch {
 	case audita:
-		var resp protocolo.RespostaAuditoriaDeContadores
+		var resp protocol.RespostaAuditoriaDeContadores
 		if code := postaMutacao("counters", servidor, "/v1/counters/audit", dataset, cred, &resp, amb); code != ExitOK {
 			return code
 		}
@@ -133,7 +133,7 @@ func countersRemoto(servidor, dataset string, audita, reconstroi bool, cred cred
 		code := escreveSaida("counters", amb, func(w io.Writer) { escreveAuditoria(w, dataset, linhas) })
 		return desfechoDaAuditoria(linhas, code, amb)
 	case reconstroi:
-		var resp protocolo.RespostaReconstrucaoDeContadores
+		var resp protocol.RespostaReconstrucaoDeContadores
 		if code := postaMutacao("counters", servidor, "/v1/counters/rebuild", dataset, cred, &resp, amb); code != ExitOK {
 			return code
 		}
@@ -147,7 +147,7 @@ func countersRemoto(servidor, dataset string, audita, reconstroi bool, cred cred
 	default:
 		// A listagem é leitura, e sai do /v1/stats — a MESMA estrutura que
 		// alimenta as séries nishidb_counter_*.
-		var e protocolo.Estatisticas
+		var e protocol.Estatisticas
 		if code := buscaDocumento("counters", servidor, "/v1/stats", cred, &e, amb); code != ExitOK {
 			return code
 		}
@@ -178,14 +178,14 @@ type linhaDeContador struct {
 	auditDivergentes, auditUnix int64
 }
 
-func contadorDoStorage(e contador.Estatisticas) linhaDeContador {
+func contadorDoStorage(e counter.Estatisticas) linhaDeContador {
 	return linhaDeContador{nome: e.Nome, linhas: e.Linhas, total: e.Total,
 		grupos: e.Grupos, teto: e.Teto, aposentados: e.Aposentados,
 		recusados: e.Recusados, orfas: e.Orfas, bytes: e.Bytes,
 		auditDivergentes: e.AuditoriaDivergentes, auditUnix: e.AuditoriaUltimaUnix}
 }
 
-func contadorDoWire(c protocolo.ContadorStats) linhaDeContador {
+func contadorDoWire(c protocol.ContadorStats) linhaDeContador {
 	return linhaDeContador{nome: c.Name, linhas: c.Rows, total: c.Total,
 		grupos: c.Groups, teto: c.MaxGroups, aposentados: c.Retired,
 		recusados: c.Refused, orfas: c.OrphanEntries, bytes: c.Bytes,
@@ -236,7 +236,7 @@ type linhaDeAuditoria struct {
 	amostra              []amostraDeDivergencia
 }
 
-func auditoriaDoStorage(r contador.Relatorio) linhaDeAuditoria {
+func auditoriaDoStorage(r counter.Relatorio) linhaDeAuditoria {
 	l := linhaDeAuditoria{nome: r.Nome, grupos: r.Grupos, mantido: r.Mantido, recalculado: r.Recalculado,
 		divergentes: r.Divergentes, naoInternadas: r.NaoInternadas,
 		agregadosDivergentes: r.AgregadosDivergentes, linhasVarridas: r.LinhasVarridas,
@@ -247,7 +247,7 @@ func auditoriaDoStorage(r contador.Relatorio) linhaDeAuditoria {
 	return l
 }
 
-func auditoriaDoWire(c protocolo.AuditoriaContador) linhaDeAuditoria {
+func auditoriaDoWire(c protocol.AuditoriaContador) linhaDeAuditoria {
 	l := linhaDeAuditoria{nome: c.Name, grupos: c.Groups, mantido: c.Maintained, recalculado: c.Recomputed,
 		divergentes: c.DivergentGroups, naoInternadas: c.NotInterned,
 		agregadosDivergentes: c.DivergentAggregates, linhasVarridas: c.RowsScanned,
@@ -282,7 +282,7 @@ func escreveAuditoria(w io.Writer, dataset string, linhas []linhaDeAuditoria) {
 			continue
 		}
 		titulo(w, "")
-		titulo(w, "divergências de %s (até %d):", l.nome, contador.TetoDaAmostra)
+		titulo(w, "divergências de %s (até %d):", l.nome, counter.TetoDaAmostra)
 		linha(w, "  GRUPO", "MANTIDO", "RECALCULADO", "REFS MANTIDO", "REFS RECALCULADO")
 		for _, d := range l.amostra {
 			linha(w, "  "+d.groupKey, strconv.FormatInt(d.mantido, 10), strconv.FormatInt(d.recalculado, 10),
