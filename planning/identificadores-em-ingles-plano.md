@@ -3320,11 +3320,14 @@ Tarefas, nesta ordem:
    por grupo, com o mesmo novo em todos os pacotes; conferir em ${GRUPOS} que o fecho está coberto. Rode
    "go run ./scripts/ifacerename -dir . -groups ${tsvGrupos} -dry-run" e cole a saída no seu relatório. Se não houver grupo,
    crie o arquivo só com o cabeçalho.
-4. Glossário: toda proposta "GLOSSARIO:" vira linha nova em ${GLOSSARIO} (mesmo formato de tabela, três colunas).
+4. Glossário: toda proposta "GLOSSARIO:" vira linha nova em ${GLOSSARIO} (mesmo formato de tabela, três colunas). A
+   célula "inglês" leva SÓ o termo (ou os termos separados por " / "), nunca uma frase: a razão de uma escolha difícil
+   vai para a seção §4 do glossário em prosa, uma vez.
 5. Escreva, por pacote, ${tsvDe('<pacote>')} com cabeçalho "pacote\\tespecie\\tendereco\\tnovo\\tmotivo", uma linha por
    entrada (novo = nome novo; especie com o sufixo #ambiguo/#gopls preservado quando houver), e linhas de "mantidos" com
-   novo igual ao nome atual e motivo "mantido: <motivo>". Para as linhas #ambiguo/#gopls acrescente ao motivo a posição
-   "arquivo:linha:coluna" copiada do inventário, que o aplicador usa.
+   novo igual ao nome atual e motivo "mantido: <motivo>". Motivo TERSO (uma frase); uma razão compartilhada por várias
+   linhas é escrita uma vez e as outras citam "mesmo motivo de <endereco>". Para as linhas #ambiguo/#gopls acrescente ao
+   motivo a posição "arquivo:linha:coluna" copiada do inventário, que o aplicador usa.
 6. Garanta que ${PROTEGIDOS} existe (crie vazio se não existir).
 Não faça commit: o aplicador commita. Devolva um resumo: número de entradas por pacote, colisões resolvidas, termos novos
 no glossário, e a saída do dry-run.`,
