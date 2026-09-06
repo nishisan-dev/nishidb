@@ -1,0 +1,138 @@
+pacote	especie	endereco	novo	motivo
+internal/logging	field	Logger.component	component	mantido: já em inglês (internal/logging/logging.go:100:2)
+internal/logging	field	Logger.dataset	dataset	mantido: já em inglês (internal/logging/logging.go:101:2)
+internal/logging	field	Logger.extras	extras	mantido: já em inglês (internal/logging/logging.go:102:2)
+internal/logging	field	Logger.sl	sl	mantido: já em inglês (abreviação de slog.Logger, duas letras) (internal/logging/logging.go:103:2)
+internal/logging	param	New.w	w	mantido: já em inglês (internal/logging/logging.go:107:10)
+internal/logging	param	New.f	f	mantido: já em inglês (internal/logging/logging.go:107:23)
+internal/logging	param	New.nivel	level	slog.Level mínimo emitido; glossário: nível (de log) → level; rf: mv New.nivel New.level
+internal/logging	func	New	New	mantido: já em inglês (construtor New, estilo Go) (internal/logging/logging.go:107:6)
+internal/logging	local	New.opts	opts	mantido: já em inglês (internal/logging/logging.go:108:2)
+internal/logging	local	New.h	h	mantido: já em inglês (internal/logging/logging.go:109:6)
+internal/logging	local	New.raiz	root	o slog.Logger de origem que vira raiz e sl do Logger recém-construído; mesmo motivo de Logger.raiz; rf: mv New.raiz New.root
+internal/logging	method	Logger.deriva	derive	reconstrói o logger a partir da RAIZ em vez de mutar o de origem (invariante do pacote: logging.go:14-16 e :119-120, provada em logging_test.go:151 e :222); não é verbo comum, é o nome da invariante — glossário: derivar / derivação (reconstruir o logger a partir da raiz) → derive / derivation, distinto de derivadas (colunas do histórico) → derived; não está em nenhum grupo G<n>; rf: mv Logger.deriva Logger.derive (destino qualificado; com o destino nu o rf rebaixa o método a função)
+internal/logging	param	Logger.deriva.component	component	mantido: já em inglês (internal/logging/logging.go:121:25)
+internal/logging	param	Logger.deriva.dataset	dataset	mantido: já em inglês (internal/logging/logging.go:121:36)
+internal/logging	param	Logger.deriva.extras	extras	mantido: já em inglês (internal/logging/logging.go:121:52)
+internal/logging	local	Logger.deriva.sl	sl	mantido: já em inglês (duas letras) (internal/logging/logging.go:122:2)
+internal/logging	param	traduzERedige.grupos	groups	coincide com a assinatura de slog.HandlerOptions.ReplaceAttr (func(groups []string, a slog.Attr)); glossário: grupo → group; rf: mv traduzERedige.grupos traduzERedige.groups
+internal/logging	param	traduzERedige.a	a	mantido: já em inglês (slog.Attr, uma letra; a mesma letra da assinatura do ReplaceAttr) (internal/logging/logging.go:138:37)
+internal/logging	func	traduzERedige	translateAndRedact	guarda os dois verbos do §95 que a função executa no único ponto por onde todo atributo passa: traduz os campos embutidos do slog (time→timestamp, msg→message) e redige o valor das chaves sensíveis; glossário: redigir (suprimir o valor de chave sensível no log) → redact
+internal/logging	method	Logger.Component	Component	mantido: já em inglês (internal/logging/logging.go:157:18)
+internal/logging	param	Logger.Component.nome	name	nome do subsistema (kafka, storage, query, server); rf: mv Logger.Component.nome Logger.Component.name
+internal/logging	method	Logger.Dataset	Dataset	mantido: já em inglês (internal/logging/logging.go:164:18)
+internal/logging	param	Logger.Dataset.nome	name	nome do dataset ao qual o logger derivado fica amarrado; rf: mv Logger.Dataset.nome Logger.Dataset.name
+internal/logging	method	Logger.With	With	mantido: já em inglês (internal/logging/logging.go:170:18)
+internal/logging	param	Logger.With.args	args	mantido: já em inglês (internal/logging/logging.go:170:23)
+internal/logging	local	Logger.With.novos	newExtras	os NOVOS extras (herdados + args) que alimentam a derivação; new sozinho sombrearia o builtin; rf: mv Logger.With.novos Logger.With.newExtras
+internal/logging	method	Logger.Enabled	Enabled	mantido: já em inglês (internal/logging/logging.go:179:18)
+internal/logging	param	Logger.Enabled.nivel	level	slog.Level consultado; mesmo motivo de New.nivel; rf: mv Logger.Enabled.nivel Logger.Enabled.level
+internal/logging	method	Logger.Debug	Debug	mantido: já em inglês (internal/logging/logging.go:189:18)
+internal/logging	param	Logger.Debug.event	event	mantido: já em inglês (internal/logging/logging.go:189:24)
+internal/logging	param	Logger.Debug.msg	msg	mantido: já em inglês (internal/logging/logging.go:189:31)
+internal/logging	param	Logger.Debug.args	args	mantido: já em inglês (internal/logging/logging.go:189:43)
+internal/logging	method	Logger.Info	Info	mantido: já em inglês (internal/logging/logging.go:192:18)
+internal/logging	param	Logger.Info.event	event	mantido: já em inglês (internal/logging/logging.go:192:23)
+internal/logging	param	Logger.Info.msg	msg	mantido: já em inglês (internal/logging/logging.go:192:30)
+internal/logging	param	Logger.Info.args	args	mantido: já em inglês (internal/logging/logging.go:192:42)
+internal/logging	method	Logger.Warn	Warn	mantido: já em inglês (internal/logging/logging.go:195:18)
+internal/logging	param	Logger.Warn.event	event	mantido: já em inglês (internal/logging/logging.go:195:23)
+internal/logging	param	Logger.Warn.msg	msg	mantido: já em inglês (internal/logging/logging.go:195:30)
+internal/logging	param	Logger.Warn.args	args	mantido: já em inglês (internal/logging/logging.go:195:42)
+internal/logging	method	Logger.Error	Error	mantido: já em inglês (internal/logging/logging.go:198:18)
+internal/logging	param	Logger.Error.event	event	mantido: já em inglês (internal/logging/logging.go:198:24)
+internal/logging	param	Logger.Error.msg	msg	mantido: já em inglês (internal/logging/logging.go:198:31)
+internal/logging	param	Logger.Error.args	args	mantido: já em inglês (internal/logging/logging.go:198:43)
+internal/logging	param	Logger.emite.nivel	level	slog.Level da linha emitida; mesmo motivo de New.nivel; rf: mv Logger.emite.nivel Logger.emite.level
+internal/logging	param	Logger.emite.event	event	mantido: já em inglês (internal/logging/logging.go:200:42)
+internal/logging	param	Logger.emite.msg	msg	mantido: já em inglês (internal/logging/logging.go:200:49)
+internal/logging	param	Logger.emite.args	args	mantido: já em inglês (internal/logging/logging.go:200:61)
+internal/logging	local	Logger.emite.todos	logArgs	os args entregues ao sl.Log NESTA chamada: um slog.Attr na frente (logging.go:205) e depois os args ...any SOLTOS do chamador (:206), num []any (:204) — é por isso que o código chama Log e não LogAttrs, e é por isso que 'attrs' está errado: attrs é o nome que o slog reserva para o variádico TIPADO de LogAttrs (log/slog/logger.go:193), enquanto o variádico de Log se chama args (:188); os testes exercitam pares soltos (logging_test.go:126 e :87); 'args' puro colidiria com o parâmetro args de logging.go:200, e 'all' carimbaria uma totalidade falsa que TestWithSobreviveANovaDerivacao (logging_test.go:222-237) desmente; rf: mv Logger.emite.todos Logger.emite.logArgs
+internal/logging	method	Logger.emite	emit	emite a linha de log no nível dado prefixando o atributo event; não está em nenhum grupo G<n>; rf: mv Logger.emite Logger.emit
+internal/logging	func	Descartado	Discard	o logger DESCARTA, não é descartado: sentido distinto de descartado → discarded (evento descartado pelo materializer), que o glossário §4 manda qualificar; segue io.Discard e slog.DiscardHandler; glossário: descartado (logger que não escreve nada) → discard
+internal/logging	const	Redactado	Redacted	marca que ocupa o lugar do valor sensível suprimido no log; o VALOR '[REDACTADO]' é saída de log e muda na Fase 3 (o teste casa por logging.Redacted, não pelo literal); glossário: redactado → redacted
+internal/logging	type	Formato	Format	formato de saída do handler (JSON ou texto); GLOSSARIO: formato (de saída do log) → format, QUALIFICADO porque 'formato' tem outros sentidos vivos e o glossário já decidiu um deles — 'padrão (formato de data, de rota ou de LIKE) → pattern' —, enquanto o formato do printf (internal/cli/operation.go:427 e :451) ganha linha própria quando o pacote cli for mapeado; é tipo EXPORTADO, consumido por internal/cli/server.go:80-85, internal/storage/store.go:1018 e benchmark/micro/counters_bench_test.go:52, então a linha não pode faltar
+internal/logging	const	FormatoJSON	FormatJSON	híbrido: só a metade PT-BR muda; JSON é inicial; prefixo casa com o tipo Format
+internal/logging	const	FormatoTexto	FormatText	alinhado ao contrato --log-format texto → text: o valor de CLI e a constante dizem a mesma palavra; cli/server.go (formatoDeLog) é quem mapeia e é traduzido no pacote cli
+internal/logging	const	campoTimestamp	fieldTimestamp	nome de campo do §95, não chave de índice — field, não key; híbrido, só a metade PT-BR muda; glossário: campo → field
+internal/logging	const	campoComponent	fieldComponent	mesmo motivo de campoTimestamp
+internal/logging	const	campoDataset	fieldDataset	mesmo motivo de campoTimestamp
+internal/logging	const	campoEvent	fieldEvent	mesmo motivo de campoTimestamp
+internal/logging	const	campoMessage	fieldMessage	mesmo motivo de campoTimestamp
+internal/logging	var	chavesSensiveis	sensitiveKeys	conjunto de chaves de atributo cujo valor o handler suprime (§95); glossário: sensível (chave ou valor que nunca vai ao log) → sensitive, chave → key. ATENÇÃO para a Fase 3, que mexe nos VALORES: "evento" (logging.go:72) aqui é o PAYLOAD BRUTO e é DESCARTADA, não traduzida — "event_payload" (logging.go:73) já cobre o sentido em inglês, e aplicar a linha crua 'evento → event' faria o handler redigir o campo event de TODA linha de log (logging.go:205), que é o identificador estável do §95, colapsando dois conceitos PT-BR no mesmo inglês (glossário §4); "senha" e "segredo" também saem, por redundância com "password" (:64) e "secret" (:67); o gate que fica vermelho se "event" entrar é logging_test.go:39
+internal/logging	type	Segredo	Secret	tipo marcador que implementa slog.LogValuer; 'secret' é a palavra que a própria lista de chaves sensíveis usa; glossário: segredo (valor que nunca vai ao log) → secret
+internal/logging	method	Segredo.LogValue	LogValue	mantido: já em inglês (nome fixado pela interface slog.LogValuer; o receptor muda com Segredo → Secret) (internal/logging/logging.go:87:16)
+internal/logging	type	Logger	Logger	mantido: já em inglês (internal/logging/logging.go:98:6)
+internal/logging	field	Logger.raiz	root	logger de origem, sem component/dataset, do qual os derivados são reconstruídos; o mesmo termo em gates, cli, parser e storage no sentido de origem/base; glossário: raiz → root; rf: mv Logger.raiz Logger.root
+internal/logging	local#ambiguo	TestSenhaEPayloadNaoChegamAoWriter.t	t	mantido: já em inglês (internal/logging/logging_test.go:100:22)
+internal/logging	local	TestSenhaEPayloadNaoChegamAoWriter.buf	buf	mantido: já em inglês (internal/logging/logging_test.go:101:8)
+internal/logging	local	TestSenhaEPayloadNaoChegamAoWriter.s	s	mantido: já em inglês (internal/logging/logging_test.go:105:4)
+internal/logging	param	TestRedacaoNaoEngoleOsCamposDeOperacao.t	t	mantido: já em inglês (internal/logging/logging_test.go:121:45)
+internal/logging	func	TestRedacaoNaoEngoleOsCamposDeOperacao	TestRedacaoNaoEngoleOsCamposDeOperacao	mantido: nome de teste, Fase 4 (internal/logging/logging_test.go:121:6)
+internal/logging	local	TestRedacaoNaoEngoleOsCamposDeOperacao.buf	buf	mantido: já em inglês (internal/logging/logging_test.go:122:6)
+internal/logging	local	TestRedacaoNaoEngoleOsCamposDeOperacao.s	s	mantido: já em inglês (internal/logging/logging_test.go:128:2)
+internal/logging	local#gopls	TestRedacaoNaoEngoleOsCamposDeOperacao.quer	want	posicao internal/logging/logging_test.go:129:9; cada string que a saída tem de conter; glossário: quer (esperado em teste) → want; pacote de teste externo (_test), fora do alcance do rf
+internal/logging	param	TestNivelFiltra.t	t	mantido: já em inglês (internal/logging/logging_test.go:136:22)
+internal/logging	func	TestNivelFiltra	TestNivelFiltra	mantido: nome de teste, Fase 4 (internal/logging/logging_test.go:136:6)
+internal/logging	local	TestNivelFiltra.buf	buf	mantido: já em inglês (internal/logging/logging_test.go:137:6)
+internal/logging	local	TestNivelFiltra.log	log	mantido: já em inglês (internal/logging/logging_test.go:138:2)
+internal/logging	param	TestDerivacaoNaoMutaOLoggerDeOrigem.t	t	mantido: já em inglês (internal/logging/logging_test.go:151:42)
+internal/logging	func	TestDerivacaoNaoMutaOLoggerDeOrigem	TestDerivacaoNaoMutaOLoggerDeOrigem	mantido: nome de teste, Fase 4 (internal/logging/logging_test.go:151:6)
+internal/logging	local	TestDerivacaoNaoMutaOLoggerDeOrigem.buf	buf	mantido: já em inglês (internal/logging/logging_test.go:152:6)
+internal/logging	local#gopls	TestDerivacaoNaoMutaOLoggerDeOrigem.raiz	source	posicao internal/logging/logging_test.go:153:2; NÃO é a raiz: o local é logging.New(...).Component("server"), um logger JÁ DERIVADO cuja própria raiz é outro objeto — é o logger DE ORIGEM, como dizem o nome do teste e a mensagem de falha ("o logger de origem foi contaminado", logging_test.go:163); root fica reservado para a raiz de fato (Logger.raiz e New.raiz); GLOSSARIO: origem (logger do qual se deriva) → source; ATENÇÃO: no mesmo commit o comentário de logging_test.go:150 ("dois datasets compartilham o mesmo logger raiz") passa a "o mesmo logger de origem", que é o que o teste prova; pacote de teste externo (_test), fora do alcance do rf
+internal/logging	local	TestDerivacaoNaoMutaOLoggerDeOrigem.m	m	mantido: já em inglês (internal/logging/logging_test.go:158:6)
+internal/logging	local	TestDerivacaoNaoMutaOLoggerDeOrigem.err	err	mantido: já em inglês (internal/logging/logging_test.go:159:5)
+internal/logging	param	TestJSONUsaOsNomesDeCampoDoSpec95.t	t	mantido: já em inglês (internal/logging/logging_test.go:15:40)
+internal/logging	func	TestJSONUsaOsNomesDeCampoDoSpec95	TestJSONUsaOsNomesDeCampoDoSpec95	mantido: nome de teste, Fase 4 (internal/logging/logging_test.go:15:6)
+internal/logging	local	TestDerivacaoNaoMutaOLoggerDeOrigem.ok	ok	mantido: já em inglês (internal/logging/logging_test.go:162:8)
+internal/logging	param	chaves.m	m	mantido: já em inglês (uma letra); a função chaves vira keys pela linha correspondente (internal/logging/logging_test.go:167:13)
+internal/logging	func#gopls	chaves	keys	posicao internal/logging/logging_test.go:167:6; helper de teste que lista as chaves do mapa decodificado para a mensagem de falha; glossário: chave → key; pacote de teste externo (_test), fora do alcance do rf
+internal/logging	local	chaves.out	out	mantido: já em inglês (internal/logging/logging_test.go:168:2)
+internal/logging	local	chaves.k	k	mantido: já em inglês (internal/logging/logging_test.go:169:6)
+internal/logging	local	TestJSONUsaOsNomesDeCampoDoSpec95.buf	buf	mantido: já em inglês (internal/logging/logging_test.go:16:6)
+internal/logging	local	TestJSONUsaOsNomesDeCampoDoSpec95.log	log	mantido: já em inglês (internal/logging/logging_test.go:17:2)
+internal/logging	param#ambiguo	TestComponentEDatasetSubstituemEmVezDeAcumular.t	t	mantido: já em inglês (internal/logging/logging_test.go:184:53)
+internal/logging	func	TestComponentEDatasetSubstituemEmVezDeAcumular	TestComponentEDatasetSubstituemEmVezDeAcumular	mantido: nome de teste, Fase 4 (internal/logging/logging_test.go:184:6)
+internal/logging	local#gopls	TestComponentEDatasetSubstituemEmVezDeAcumular.casos	cases	posicao internal/logging/logging_test.go:185:2; tabela de casos; glossário: casos (de teste) → cases; os campos da struct anônima entram como field#gopls; pacote de teste externo (_test), fora do alcance do rf
+internal/logging	local#ambiguo	TestComponentEDatasetSubstituemEmVezDeAcumular.l	l	mantido: já em inglês (internal/logging/logging_test.go:191:33)
+internal/logging	local#ambiguo	TestComponentEDatasetSubstituemEmVezDeAcumular.l	l	mantido: já em inglês (internal/logging/logging_test.go:194:31)
+internal/logging	local	TestComponentEDatasetSubstituemEmVezDeAcumular.c	c	mantido: já em inglês (internal/logging/logging_test.go:198:9)
+internal/logging	local#ambiguo	TestComponentEDatasetSubstituemEmVezDeAcumular.t	t	mantido: já em inglês (internal/logging/logging_test.go:199:22)
+internal/logging	local	TestComponentEDatasetSubstituemEmVezDeAcumular.buf	buf	mantido: já em inglês (internal/logging/logging_test.go:200:8)
+internal/logging	local#gopls	TestComponentEDatasetSubstituemEmVezDeAcumular.linha	line	posicao internal/logging/logging_test.go:204:4; linha de saída do handler contada com strings.Count, não a row do storage; glossário: linha (de texto ou de log) → line; pacote de teste externo (_test), fora do alcance do rf
+internal/logging	local	TestComponentEDatasetSubstituemEmVezDeAcumular.n	n	mantido: já em inglês (internal/logging/logging_test.go:205:7)
+internal/logging	local	TestComponentEDatasetSubstituemEmVezDeAcumular.m	m	mantido: já em inglês (internal/logging/logging_test.go:209:8)
+internal/logging	local	TestComponentEDatasetSubstituemEmVezDeAcumular.err	err	mantido: já em inglês (internal/logging/logging_test.go:210:7)
+internal/logging	param	TestWithSobreviveANovaDerivacao.t	t	mantido: já em inglês (internal/logging/logging_test.go:222:38)
+internal/logging	func	TestWithSobreviveANovaDerivacao	TestWithSobreviveANovaDerivacao	mantido: nome de teste, Fase 4 (internal/logging/logging_test.go:222:6)
+internal/logging	local	TestWithSobreviveANovaDerivacao.buf	buf	mantido: já em inglês (internal/logging/logging_test.go:223:6)
+internal/logging	local	TestWithSobreviveANovaDerivacao.m	m	mantido: já em inglês (internal/logging/logging_test.go:228:6)
+internal/logging	local	TestWithSobreviveANovaDerivacao.err	err	mantido: já em inglês (internal/logging/logging_test.go:229:5)
+internal/logging	local	TestJSONUsaOsNomesDeCampoDoSpec95.m	m	mantido: já em inglês (internal/logging/logging_test.go:22:6)
+internal/logging	local	TestJSONUsaOsNomesDeCampoDoSpec95.err	err	mantido: já em inglês (internal/logging/logging_test.go:23:5)
+internal/logging	local#gopls	TestJSONUsaOsNomesDeCampoDoSpec95.campo	field	posicao internal/logging/logging_test.go:26:9; nome de campo do §95 exigido na linha JSON; glossário: campo → field; pacote de teste externo (_test), fora do alcance do rf
+internal/logging	local#ambiguo	TestJSONUsaOsNomesDeCampoDoSpec95.ok	ok	mantido: já em inglês (internal/logging/logging_test.go:27:9)
+internal/logging	local#gopls	TestJSONUsaOsNomesDeCampoDoSpec95.proibido	banned	posicao internal/logging/logging_test.go:31:9; nome de campo que NÃO pode aparecer (time, msg — os defaults do slog); GLOSSARIO: proibido (nome vetado por spec ou por gate) → banned, e não forbidden, que já é o 403 do wire (protocol.CodForbidden em internal/protocol/protocol.go:255, emitido em internal/server/auth.go:379-381); o mesmo PT-BR recebe o mesmo inglês em internal/gates/jdbc_test.go:104 e, quando for mapeado, em internal/query/executor/ndjson_test.go:369; pacote de teste externo (_test), fora do alcance do rf
+internal/logging	local#ambiguo	TestJSONUsaOsNomesDeCampoDoSpec95.ok	ok	mantido: já em inglês (internal/logging/logging_test.go:32:9)
+internal/logging	param	TestSemDatasetOCampoNaoAparece.t	t	mantido: já em inglês (internal/logging/logging_test.go:46:37)
+internal/logging	func	TestSemDatasetOCampoNaoAparece	TestSemDatasetOCampoNaoAparece	mantido: nome de teste, Fase 4 (internal/logging/logging_test.go:46:6)
+internal/logging	local	TestSemDatasetOCampoNaoAparece.buf	buf	mantido: já em inglês (internal/logging/logging_test.go:47:6)
+internal/logging	local	TestSemDatasetOCampoNaoAparece.m	m	mantido: já em inglês (internal/logging/logging_test.go:51:6)
+internal/logging	local	TestSemDatasetOCampoNaoAparece.err	err	mantido: já em inglês (internal/logging/logging_test.go:52:5)
+internal/logging	local	TestSemDatasetOCampoNaoAparece.ok	ok	mantido: já em inglês (internal/logging/logging_test.go:55:8)
+internal/logging	param	TestFormatoTextoTambemNomeiaOsCamposDoSpec95.t	t	mantido: já em inglês (internal/logging/logging_test.go:60:51)
+internal/logging	func	TestFormatoTextoTambemNomeiaOsCamposDoSpec95	TestFormatoTextoTambemNomeiaOsCamposDoSpec95	mantido: nome de teste, Fase 4 (internal/logging/logging_test.go:60:6)
+internal/logging	local	TestFormatoTextoTambemNomeiaOsCamposDoSpec95.buf	buf	mantido: já em inglês (internal/logging/logging_test.go:61:6)
+internal/logging	local	TestFormatoTextoTambemNomeiaOsCamposDoSpec95.s	s	mantido: já em inglês (internal/logging/logging_test.go:65:2)
+internal/logging	local#gopls	TestFormatoTextoTambemNomeiaOsCamposDoSpec95.campo	field	posicao internal/logging/logging_test.go:66:9; prefixo campo= do §95 exigido na saída em texto; glossário: campo → field; pacote de teste externo (_test), fora do alcance do rf
+internal/logging	param#ambiguo	TestSenhaEPayloadNaoChegamAoWriter.t	t	mantido: já em inglês (internal/logging/logging_test.go:79:41)
+internal/logging	func	TestSenhaEPayloadNaoChegamAoWriter	TestSenhaEPayloadNaoChegamAoWriter	mantido: nome de teste, Fase 4 (internal/logging/logging_test.go:79:6)
+internal/logging	local#gopls	TestSenhaEPayloadNaoChegamAoWriter.senha	password	posicao internal/logging/logging_test.go:80:8; a senha que o teste prova não chegar ao writer; já implícito em ENV_SENHA → ENV_PASSWORD; glossário: senha → password; pacote de teste externo (_test), fora do alcance do rf
+internal/logging	local#gopls	TestSenhaEPayloadNaoChegamAoWriter.corpo	body	posicao internal/logging/logging_test.go:81:8; o payload JSON que não pode vazar; mesmo termo em server, config, cli e checkpoint; glossário: corpo (de payload, requisição ou arquivo) → body; pacote de teste externo (_test), fora do alcance do rf
+internal/logging	local#gopls	TestSenhaEPayloadNaoChegamAoWriter.casos	cases	posicao internal/logging/logging_test.go:83:2; tabela de casos; glossário: casos (de teste) → cases; o campo nome da struct anônima entra como field#gopls; pacote de teste externo (_test), fora do alcance do rf
+internal/logging	local	TestSenhaEPayloadNaoChegamAoWriter.c	c	mantido: já em inglês (internal/logging/logging_test.go:99:9)
+internal/logging	field#gopls	TestSenhaEPayloadNaoChegamAoWriter.casos.nome	name	posicao internal/logging/logging_test.go:84:3; campo da struct anônima da tabela de casos, fora do inventário; rename por posição
+internal/logging	field#gopls	TestComponentEDatasetSubstituemEmVezDeAcumular.casos.nome	name	posicao internal/logging/logging_test.go:186:3; campo da struct anônima da tabela de casos, fora do inventário; rename por posição
+internal/logging	field#gopls	TestComponentEDatasetSubstituemEmVezDeAcumular.casos.deriva	derive	posicao internal/logging/logging_test.go:187:3; campo da struct anônima da tabela de casos, fora do inventário; a closure que deriva o logger do caso, mesmo verbo de Logger.deriva; glossário: derivar / derivação → derive / derivation; rename por posição
+internal/logging	field#gopls	TestComponentEDatasetSubstituemEmVezDeAcumular.casos.campo	field	posicao internal/logging/logging_test.go:188:3; campo da struct anônima da tabela de casos, fora do inventário; glossário: campo → field; rename por posição
+internal/logging	field#gopls	TestComponentEDatasetSubstituemEmVezDeAcumular.casos.quer	want	posicao internal/logging/logging_test.go:189:3; campo da struct anônima da tabela de casos, fora do inventário; glossário: quer → want; rename por posição
