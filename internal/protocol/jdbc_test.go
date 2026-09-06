@@ -1,4 +1,4 @@
-package protocolo_test
+package protocol_test
 
 import (
 	"bytes"
@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 	"github.com/nishisan-dev/nishidb/internal/query/executor"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
@@ -20,23 +20,23 @@ func TestATabelaDeTiposDoSpec73(t *testing.T) {
 		tipo string
 		jdbc string
 	}{
-		{types.TypeString, "string", protocolo.JDBCVarchar},
-		{types.TypeInt64, "int64", protocolo.JDBCBigint},
-		{types.TypeDouble, "double", protocolo.JDBCDouble},
-		{types.TypeBool, "boolean", protocolo.JDBCBoolean},
-		{types.TypeTimestamp, "timestamp", protocolo.JDBCTimestamp},
-		{types.TypeIPv4, "ipv4", protocolo.JDBCVarchar},
-		{types.TypeIPv6, "ipv6", protocolo.JDBCVarchar},
-		{types.TypeIPv4Prefix, "ipv4_prefix", protocolo.JDBCVarchar},
-		{types.TypeIPv6Prefix, "ipv6_prefix", protocolo.JDBCVarchar},
-		{types.TypeBytes, "bytes", protocolo.JDBCVarbinary},
-		{types.TypeJSON, "json", protocolo.JDBCVarchar},
-		{types.TypeDateTime, "datetime", protocolo.JDBCTimestamp},
-		{types.TypeTime, "time", protocolo.JDBCTime},
+		{types.TypeString, "string", protocol.JDBCVarchar},
+		{types.TypeInt64, "int64", protocol.JDBCBigint},
+		{types.TypeDouble, "double", protocol.JDBCDouble},
+		{types.TypeBool, "boolean", protocol.JDBCBoolean},
+		{types.TypeTimestamp, "timestamp", protocol.JDBCTimestamp},
+		{types.TypeIPv4, "ipv4", protocol.JDBCVarchar},
+		{types.TypeIPv6, "ipv6", protocol.JDBCVarchar},
+		{types.TypeIPv4Prefix, "ipv4_prefix", protocol.JDBCVarchar},
+		{types.TypeIPv6Prefix, "ipv6_prefix", protocol.JDBCVarchar},
+		{types.TypeBytes, "bytes", protocol.JDBCVarbinary},
+		{types.TypeJSON, "json", protocol.JDBCVarchar},
+		{types.TypeDateTime, "datetime", protocol.JDBCTimestamp},
+		{types.TypeTime, "time", protocol.JDBCTime},
 	}
 	for _, c := range casos {
 		t.Run(c.tipo, func(t *testing.T) {
-			col := protocolo.ColunaDe("x", c.ft, true)
+			col := protocol.ColunaDe("x", c.ft, true)
 			if col.Type != c.tipo {
 				t.Fatalf("Type = %q, quer %q", col.Type, c.tipo)
 			}
@@ -50,18 +50,18 @@ func TestATabelaDeTiposDoSpec73(t *testing.T) {
 // Campo auto que o dataset nunca observou não tem tipo. Chamá-lo de VARCHAR
 // seria mentir para o driver: o próximo evento pode fixá-lo como int64.
 func TestCampoAutoNaoObservadoSaiComoUnknown(t *testing.T) {
-	col := protocolo.ColunaDe("attr", types.TypeNull, true)
-	if col.Type != protocolo.TipoDesconhecido {
-		t.Fatalf("Type = %q, quer %q", col.Type, protocolo.TipoDesconhecido)
+	col := protocol.ColunaDe("attr", types.TypeNull, true)
+	if col.Type != protocol.TipoDesconhecido {
+		t.Fatalf("Type = %q, quer %q", col.Type, protocol.TipoDesconhecido)
 	}
-	if col.JDBC != protocolo.JDBCOther {
-		t.Fatalf("JDBC = %q, quer %q", col.JDBC, protocolo.JDBCOther)
+	if col.JDBC != protocol.JDBCOther {
+		t.Fatalf("JDBC = %q, quer %q", col.JDBC, protocol.JDBCOther)
 	}
 }
 
 func TestTagDesconhecidaNaoViraTipoPlausivel(t *testing.T) {
-	col := protocolo.ColunaDe("x", types.FieldType(0xEE), true)
-	if col.Type != protocolo.TipoDesconhecido || col.JDBC != protocolo.JDBCOther {
+	col := protocol.ColunaDe("x", types.FieldType(0xEE), true)
+	if col.Type != protocol.TipoDesconhecido || col.JDBC != protocol.JDBCOther {
 		t.Fatalf("coluna = %+v, quer unknown/OTHER", col)
 	}
 }
@@ -84,7 +84,7 @@ func TestTodaTagComNomeTemJDBCEspecifico(t *testing.T) {
 		if ft == types.TypeNull {
 			continue // campo auto sem observação: OTHER é a resposta certa
 		}
-		if got := protocolo.JDBCDeTipo(ft); got == protocolo.JDBCOther {
+		if got := protocol.JDBCDeTipo(ft); got == protocol.JDBCOther {
 			t.Errorf("tipo %q (0x%02x) sai como OTHER: acrescente a linha em JDBCDeTipo", nome, tag)
 		}
 	}
@@ -110,24 +110,24 @@ func TestODescritorDeCadaTipoTemPrecisionScaleEDisplaySize(t *testing.T) {
 		jdbc                          string
 		precision, scale, displaySize int
 	}{
-		{types.TypeInt64, protocolo.JDBCBigint, 19, 0, 20},
-		{types.TypeDouble, protocolo.JDBCDouble, 15, 0, 24},
-		{types.TypeBool, protocolo.JDBCBoolean, 1, 0, 5},
-		{types.TypeTimestamp, protocolo.JDBCTimestamp, 24, 3, 24},
-		{types.TypeDateTime, protocolo.JDBCTimestamp, 24, 3, 24},
-		{types.TypeTime, protocolo.JDBCTime, 12, 3, 12},
-		{types.TypeString, protocolo.JDBCVarchar, 0, 0, 0},
-		{types.TypeJSON, protocolo.JDBCVarchar, 0, 0, 0},
-		{types.TypeBytes, protocolo.JDBCVarbinary, 0, 0, 0},
-		{types.TypeIPv4, protocolo.JDBCVarchar, 15, 0, 15},
-		{types.TypeIPv6, protocolo.JDBCVarchar, 39, 0, 39},
-		{types.TypeIPv4Prefix, protocolo.JDBCVarchar, 18, 0, 18},
-		{types.TypeIPv6Prefix, protocolo.JDBCVarchar, 43, 0, 43},
-		{types.TypeNull, protocolo.JDBCOther, 0, 0, 0},
+		{types.TypeInt64, protocol.JDBCBigint, 19, 0, 20},
+		{types.TypeDouble, protocol.JDBCDouble, 15, 0, 24},
+		{types.TypeBool, protocol.JDBCBoolean, 1, 0, 5},
+		{types.TypeTimestamp, protocol.JDBCTimestamp, 24, 3, 24},
+		{types.TypeDateTime, protocol.JDBCTimestamp, 24, 3, 24},
+		{types.TypeTime, protocol.JDBCTime, 12, 3, 12},
+		{types.TypeString, protocol.JDBCVarchar, 0, 0, 0},
+		{types.TypeJSON, protocol.JDBCVarchar, 0, 0, 0},
+		{types.TypeBytes, protocol.JDBCVarbinary, 0, 0, 0},
+		{types.TypeIPv4, protocol.JDBCVarchar, 15, 0, 15},
+		{types.TypeIPv6, protocol.JDBCVarchar, 39, 0, 39},
+		{types.TypeIPv4Prefix, protocol.JDBCVarchar, 18, 0, 18},
+		{types.TypeIPv6Prefix, protocol.JDBCVarchar, 43, 0, 43},
+		{types.TypeNull, protocol.JDBCOther, 0, 0, 0},
 	}
 	for _, c := range casos {
-		t.Run(protocolo.NomeDeTipo(c.ft), func(t *testing.T) {
-			d := protocolo.DescritorDeTipo(c.ft)
+		t.Run(protocol.NomeDeTipo(c.ft), func(t *testing.T) {
+			d := protocol.DescritorDeTipo(c.ft)
 			if d.JDBC != c.jdbc {
 				t.Errorf("JDBC = %q, quer %q", d.JDBC, c.jdbc)
 			}
@@ -181,7 +181,7 @@ func TestDisplaySizeDeCadaTipoCasaComALarguraQueOEncoderEmite(t *testing.T) {
 			if len(out) >= 2 && out[0] == '"' && out[len(out)-1] == '"' {
 				largura -= 2 // displaySize é do VALOR, não da grafia JSON
 			}
-			if got := protocolo.DescritorDeTipo(c.v.Type).DisplaySize; got != largura {
+			if got := protocol.DescritorDeTipo(c.v.Type).DisplaySize; got != largura {
 				t.Errorf("DisplaySize = %d, mas o encoder emitiu %d caracteres: %s", got, largura, out)
 			}
 		})
@@ -192,8 +192,8 @@ func TestDisplaySizeDeCadaTipoCasaComALarguraQueOEncoderEmite(t *testing.T) {
 // inventado para um tipo que não conhecemos seria pior que zero: o driver
 // dimensionaria a coluna por ele.
 func TestTipoSemNomeTemDescritorZerado(t *testing.T) {
-	d := protocolo.DescritorDeTipo(types.FieldType(0xEE))
-	if d.JDBC != protocolo.JDBCOther || d.Precision != 0 || d.Scale != 0 || d.DisplaySize != 0 {
+	d := protocol.DescritorDeTipo(types.FieldType(0xEE))
+	if d.JDBC != protocol.JDBCOther || d.Precision != 0 || d.Scale != 0 || d.DisplaySize != 0 {
 		t.Fatalf("descritor = %+v, quer OTHER com 0/0/0", d)
 	}
 }

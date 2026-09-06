@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/nishisan-dev/nishidb/internal/logging"
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 	"github.com/nishisan-dev/nishidb/internal/server"
 )
 
@@ -112,7 +112,7 @@ func assertStatusFechando(t *testing.T, resp *http.Response, quer int, rota stri
 func TestOrdem401AntesDeLerOCorpo(t *testing.T) {
 	srv := servidorComAutenticacao(t, 3, "")
 
-	corpoEnorme := strings.Repeat("x", protocolo.MaxCorpoRequisicao+1)
+	corpoEnorme := strings.Repeat("x", protocol.MaxCorpoRequisicao+1)
 	resp := consultaComAuth(t, srv, corpoEnorme, "", "")
 	defer fecha(t, resp)
 
@@ -146,7 +146,7 @@ func TestOrdem401AntesDaVagaDoSetenta(t *testing.T) {
 	}
 	defer fecha(t, primeira)
 
-	l := protocolo.NovoLeitor(primeira.Body)
+	l := protocol.NovoLeitor(primeira.Body)
 	if !l.Next() {
 		t.Fatalf("a primeira consulta não produziu row: %v", l.Err())
 	}

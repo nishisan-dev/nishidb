@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/nishisan-dev/nishidb/internal/materializer"
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/server"
 	"github.com/nishisan-dev/nishidb/internal/storage"
@@ -59,8 +59,8 @@ func TestLinhaAcimaDoOrcamentoSaiComoRowTooLargeNoFecho(t *testing.T) {
 		t.Fatalf("status = %d, quer 200: o schema sai antes de a linha grande aparecer", resp.StatusCode)
 	}
 	n, codigo := desfechoDoStream(t, resp)
-	if codigo != protocolo.CodLinhaGrande {
-		t.Fatalf("fecho = %q com %d rows, quer %q", codigo, n, protocolo.CodLinhaGrande)
+	if codigo != protocol.CodLinhaGrande {
+		t.Fatalf("fecho = %q com %d rows, quer %q", codigo, n, protocol.CodLinhaGrande)
 	}
 	if n == 0 {
 		t.Error("nenhuma linha saiu antes da recusa: o teste não distingue a recusa de uma consulta vazia")

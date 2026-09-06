@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 	"github.com/nishisan-dev/nishidb/internal/storage"
 )
 
@@ -25,8 +25,8 @@ import (
 // O contrato de saída é o MESMO do caminho local: NDJSON cru no stdout, uma
 // linha por row, e o exit code dizendo o que aconteceu. Um script que troca
 // `--config` por `--server` não muda mais nada.
-func consultaRemota(endereco, dataset, sql string, params []protocolo.Parametro, cred credencialRemota, amb Ambiente) int {
-	corpo, err := json.Marshal(protocolo.Requisicao{Dataset: dataset, SQL: sql, Parameters: params})
+func consultaRemota(endereco, dataset, sql string, params []protocol.Parametro, cred credencialRemota, amb Ambiente) int {
+	corpo, err := json.Marshal(protocol.Requisicao{Dataset: dataset, SQL: sql, Parameters: params})
 	if err != nil {
 		fmt.Fprintln(amb.Stderr, "query:", err)
 		return ExitUso
@@ -47,7 +47,7 @@ func consultaRemota(endereco, dataset, sql string, params []protocolo.Parametro,
 		fmt.Fprintln(amb.Stderr, "query:", err)
 		return ExitUso
 	}
-	req.Header.Set("Content-Type", protocolo.ContentTypeJSON)
+	req.Header.Set("Content-Type", protocol.ContentTypeJSON)
 	aplicaCredencial(req, cred)
 
 	// Sem timeout no cliente: o teto de uma consulta é o query.timeout do
@@ -91,7 +91,7 @@ const corpoHTTPQuandoEsperavaHTTPS = "Client sent an HTTP request to an HTTPS se
 // corpo que não é JSON — só o segundo caso preserva os BYTES originais para
 // dicaDeEsquema examinar; uma falha de leitura não tem corpo nenhum a
 // examinar.
-func leCorpoErro(resp *http.Response) (corpo protocolo.CorpoErro, dica string, ok bool) {
+func leCorpoErro(resp *http.Response) (corpo protocol.CorpoErro, dica string, ok bool) {
 	bruto, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return corpo, "", false
@@ -142,7 +142,7 @@ func recusaDoServidor(resp *http.Response, amb Ambiente) int {
 // As linhas vão CRUAS: decodificá-las para recodificá-las mudaria a grafia dos
 // doubles e não acrescentaria nada — o servidor já emitiu o formato final.
 func leStream(corpo io.Reader, amb Ambiente) int {
-	l := protocolo.NovoLeitor(corpo)
+	l := protocol.NovoLeitor(corpo)
 	for l.Next() {
 		if _, err := amb.Stdout.Write(append(l.Linha(), '\n')); err != nil {
 			fmt.Fprintln(amb.Stderr, "query: escrevendo o resultado:", err)
@@ -172,26 +172,26 @@ func leStream(corpo io.Reader, amb Ambiente) int {
 // por `--server` num script sem reescrever o tratamento de $?.
 func codigoDoProtocolo(codigo string) int {
 	switch codigo {
-	case protocolo.CodSintaxe, protocolo.CodBind, protocolo.CodBadParameter,
-		protocolo.CodClausulaNaoSuportada:
+	case protocol.CodSintaxe, protocol.CodBind, protocol.CodBadParameter,
+		protocol.CodClausulaNaoSuportada:
 		// UNSUPPORTED_CLAUSE fica junto dos outros erros de QUERY, e não no
 		// default: o que o operador faz diante dele é reescrever o SQL, que é
 		// o significado deste código. Cair no vala-comum o classificaria como
 		// "olhe o comando ou o servidor", que é conselho errado.
 		return ExitQuery
-	case protocolo.CodMaxRows:
+	case protocol.CodMaxRows:
 		return ExitTruncado
-	case protocolo.CodSnapshotExpirado:
+	case protocol.CodSnapshotExpirado:
 		// O caminho LOCAL já mapeia storage.ErrSnapshotExpirado para 5
 		// (codigoDoErro): a consulta — ou a auditoria dos contadores — não
 		// chegou ao fim porque o journal de versões estourou o teto. O
 		// resultado é desconhecido, não errado; a mesma classe do truncado.
 		return ExitTruncado
-	case protocolo.CodTimeout:
+	case protocol.CodTimeout:
 		return ExitInterromp
-	case protocolo.CodDatasetCorrompido:
+	case protocol.CodDatasetCorrompido:
 		return ExitDataset
-	case protocolo.CodWriterFailed:
+	case protocol.CodWriterFailed:
 		// Fase 11, Task B5 (POST /v1/compact e /v1/checkpoint): o MESMO
 		// sentinela types.ErrWriterFailed que o caminho LOCAL mapeia para 4
 		// em codigoDoErro (cli.go) — o writer está em modo falho sticky, e só

@@ -7,7 +7,7 @@ import (
 
 	"github.com/nishisan-dev/nishidb/internal/buildinfo"
 	"github.com/nishisan-dev/nishidb/internal/metrics"
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/storage/contador"
 )
@@ -31,29 +31,29 @@ func (s *Servidor) handleMetadata(w http.ResponseWriter, r *http.Request) {
 	if filtro != "" {
 		d, ok := s.porNome[filtro]
 		if !ok {
-			s.recusa(w, r, http.StatusNotFound, datasetDesconhecido, protocolo.Falha{
-				Code:    protocolo.CodDatasetDesconhecido,
+			s.recusa(w, r, http.StatusNotFound, datasetDesconhecido, protocol.Falha{
+				Code:    protocol.CodDatasetDesconhecido,
 				Message: "dataset " + filtro + " não está registrado neste servidor",
 			})
 			return
 		}
-		s.respondeJSON(w, protocolo.Metadados{Datasets: []protocolo.DatasetMeta{metaDoDataset(d)}})
+		s.respondeJSON(w, protocol.Metadados{Datasets: []protocol.DatasetMeta{metaDoDataset(d)}})
 		return
 	}
 
-	out := protocolo.Metadados{Datasets: make([]protocolo.DatasetMeta, 0, len(s.datasets))}
+	out := protocol.Metadados{Datasets: make([]protocol.DatasetMeta, 0, len(s.datasets))}
 	for _, d := range s.datasets {
 		out.Datasets = append(out.Datasets, metaDoDataset(d))
 	}
 	s.respondeJSON(w, out)
 }
 
-func metaDoDataset(d *dataset) protocolo.DatasetMeta {
+func metaDoDataset(d *dataset) protocol.DatasetMeta {
 	// FieldsParaMetadata, e não FieldsByID: a coluna derivada fica fora do
 	// SELECT * e este é o lugar onde ela é descoberta. Esconder aqui também
 	// deixaria o operador sem forma nenhuma de saber que ela existe.
 	campos := d.sch.FieldsParaMetadata()
-	m := protocolo.DatasetMeta{
+	m := protocol.DatasetMeta{
 		Name: d.nome,
 		// MaxRows e Timeout saem do COMPILADO, que é onde o default global já
 		// foi resolvido contra o que o YAML do dataset declara: quem consulta
@@ -68,7 +68,7 @@ func metaDoDataset(d *dataset) protocolo.DatasetMeta {
 		MaxCols:          d.sch.MaxCols,
 		OnMaxCols:        d.sch.OnMaxCols,
 		MaxNestedCols:    d.sch.MaxNestedCols,
-		Columns:          make([]protocolo.ColunaMeta, 0, len(campos)),
+		Columns:          make([]protocol.ColunaMeta, 0, len(campos)),
 	}
 	if d.sch.Key != nil {
 		m.Key = d.sch.Key.Name
@@ -79,15 +79,15 @@ func metaDoDataset(d *dataset) protocolo.DatasetMeta {
 	return m
 }
 
-func colunaMeta(f *schema.CompiledField) protocolo.ColunaMeta {
+func colunaMeta(f *schema.CompiledField) protocol.ColunaMeta {
 	// O tipo é o EFETIVO: para campo auto, o que a primeira observação fixou —
 	// e types.TypeNull quando nenhum evento o fixou ainda, que o protocolo
 	// traduz para "unknown"/"OTHER" em vez de escolher um tipo plausível.
 	t := f.EffectiveType()
-	d := protocolo.DescritorDeTipo(t)
-	c := protocolo.ColunaMeta{
+	d := protocol.DescritorDeTipo(t)
+	c := protocol.ColunaMeta{
 		Name: f.Name,
-		Type: protocolo.NomeDeTipo(t),
+		Type: protocol.NomeDeTipo(t),
 		JDBC: d.JDBC,
 		// Mesma regra do executor, e a única fonte possível aqui: /v1/metadata
 		// descreve o SCHEMA, então o papel do campo vem direto do compilado.
@@ -108,10 +108,10 @@ func colunaMeta(f *schema.CompiledField) protocolo.ColunaMeta {
 // contadorStats traduz o retrato dos contadores para o wire. Lista vazia, e
 // não nil, no dataset sem contador: o JSON sai como `[]`, e bloco presente é o
 // que separa "sem contadores" de "servidor antigo".
-func contadorStats(ests []contador.Estatisticas) []protocolo.ContadorStats {
-	out := make([]protocolo.ContadorStats, 0, len(ests))
+func contadorStats(ests []contador.Estatisticas) []protocol.ContadorStats {
+	out := make([]protocol.ContadorStats, 0, len(ests))
 	for _, e := range ests {
-		out = append(out, protocolo.ContadorStats{
+		out = append(out, protocol.ContadorStats{
 			Name:                 e.Nome,
 			Rows:                 e.Linhas,
 			Total:                e.Total,
@@ -142,10 +142,10 @@ func (s *Servidor) handleStats(w http.ResponseWriter, r *http.Request) {
 
 	em := s.eng.Metrics()
 	pm := s.eng.PlanMetrics()
-	out := protocolo.Estatisticas{
-		Process: protocolo.ProcessoStats{
+	out := protocol.Estatisticas{
+		Process: protocol.ProcessoStats{
 			Version: buildinfo.String(),
-			Query: protocolo.MotorStats{
+			Query: protocol.MotorStats{
 				FullScans:    pm.FullScan.Load(),
 				PointLookups: pm.PointLookup.Load(),
 				BitmapScans:  pm.IndexScan.Load(),
@@ -165,25 +165,25 @@ func (s *Servidor) handleStats(w http.ResponseWriter, r *http.Request) {
 			// JSON sem nada estar quebrado.
 			InFlight: s.emVoo.instantaneo(time.Now()),
 		},
-		Datasets: make([]protocolo.DatasetStats, 0, len(s.datasets)),
+		Datasets: make([]protocol.DatasetStats, 0, len(s.datasets)),
 	}
 
 	for _, d := range s.datasets {
 		st := d.st.Stats()
 		estado, detalhe := estadoDaIngestao(d)
-		ds := protocolo.DatasetStats{
+		ds := protocol.DatasetStats{
 			Name: d.nome,
 			// O bloco de schema sai do COMPILADO e é preenchido sempre, fora
 			// de qualquer condicional de consumidor: o dicionário cresce por
 			// toda rota de escrita, não só pela do Kafka.
-			Schema: protocolo.SchemaStats{
+			Schema: protocol.SchemaStats{
 				Fields:             d.sch.CamposConhecidos(),
 				FieldsDropped:      d.sch.CamposDescartados(),
 				NestedTypeMismatch: d.sch.ValoresIncompativeis(),
 				MaxCols:            d.sch.MaxCols,
 				OnMaxCols:          d.sch.OnMaxCols,
 			},
-			Storage: protocolo.StorageStats{
+			Storage: protocol.StorageStats{
 				Rows:              st.RowCount,
 				Segments:          st.SegmentsTotal,
 				CurrentSegment:    st.CurrentSegmentID,
@@ -196,18 +196,18 @@ func (s *Servidor) handleStats(w http.ResponseWriter, r *http.Request) {
 				// uint64, não por elegância — teria de ser lembrado nos dois
 				// lugares.
 				GarbageBytes: lixoDeDisco(st),
-				Compaction: protocolo.CompactionStats{
+				Compaction: protocol.CompactionStats{
 					Running:      st.CompactionRunning,
 					BytesRead:    st.CompactionBytesRead,
 					BytesWritten: st.CompactionBytesWritten,
 				},
 			},
-			Query: protocolo.RotaStats{
+			Query: protocol.RotaStats{
 				Total:  s.met.total.Com(d.nome).Valor(),
 				Active: int64(s.met.ativas.Com(d.nome).Valor()),
 			},
-			Ingestion: protocolo.IngestaoStats{
-				Enabled: estado != protocolo.EstadoDesligado,
+			Ingestion: protocol.IngestaoStats{
+				Enabled: estado != protocol.EstadoDesligado,
 				State:   estado,
 				Paused:  detalhe,
 			},
@@ -220,7 +220,7 @@ func (s *Servidor) handleStats(w http.ResponseWriter, r *http.Request) {
 			Index: indiceStats(d.st.EstatisticasDeIndice()),
 			// Do MESMO Store que alimenta as séries nishidb_query_snapshot_*,
 			// pela regra deste handler.
-			Snapshot: protocolo.SnapshotStats{
+			Snapshot: protocol.SnapshotStats{
 				Bytes:          d.st.BytesRetidos(),
 				OldestSeconds:  d.st.IdadeDoSnapshotMaisAntigo().Seconds(),
 				PinnedSegments: d.st.SegmentosPinados(),
@@ -274,7 +274,7 @@ func (s *Servidor) errosDoDataset(nome string) uint64 {
 }
 
 func (s *Servidor) respondeJSON(w http.ResponseWriter, v any) {
-	w.Header().Set("Content-Type", protocolo.ContentTypeJSON)
+	w.Header().Set("Content-Type", protocol.ContentTypeJSON)
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(v); err != nil {
@@ -285,8 +285,8 @@ func (s *Servidor) respondeJSON(w http.ResponseWriter, v any) {
 // recusaSimples responde método errado numa rota de leitura.
 func (s *Servidor) recusaSimples(w http.ResponseWriter, r *http.Request, permitido string) {
 	w.Header().Set("Allow", permitido)
-	s.recusa(w, r, http.StatusMethodNotAllowed, datasetDesconhecido, protocolo.Falha{
-		Code:    protocolo.CodMetodo,
+	s.recusa(w, r, http.StatusMethodNotAllowed, datasetDesconhecido, protocol.Falha{
+		Code:    protocol.CodMetodo,
 		Message: r.Method + " não é aceito nesta rota; use " + permitido,
 	})
 }

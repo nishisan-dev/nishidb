@@ -8,7 +8,7 @@ import (
 
 	"github.com/nishisan-dev/nishidb/internal/materializer"
 	"github.com/nishisan-dev/nishidb/internal/metrics"
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/storage"
 )
@@ -139,12 +139,12 @@ func TestSnapshotExpiradoSaiComCodigoProprioENaoComoInterno(t *testing.T) {
 	// pelo it.Err() depois de o storage o devolver na leitura de uma row.
 	err := fmt.Errorf("executor: leitura da row 42: %w", storage.ErrSnapshotExpirado)
 
-	if got := codigoDeErroDeQuery(err); got != protocolo.CodSnapshotExpirado {
-		t.Errorf("codigoDeErroDeQuery = %q, quero %q", got, protocolo.CodSnapshotExpirado)
+	if got := codigoDeErroDeQuery(err); got != protocol.CodSnapshotExpirado {
+		t.Errorf("codigoDeErroDeQuery = %q, quero %q", got, protocol.CodSnapshotExpirado)
 	}
 	// A contraprova: um erro qualquer continua caindo em INTERNAL. Sem ela, um
 	// mapeamento que devolvesse SNAPSHOT_TOO_OLD para tudo passaria acima.
-	if got := codigoDeErroDeQuery(errors.New("qualquer outra coisa")); got != protocolo.CodInterno {
-		t.Errorf("codigoDeErroDeQuery de um erro genérico = %q, quero %q", got, protocolo.CodInterno)
+	if got := codigoDeErroDeQuery(errors.New("qualquer outra coisa")); got != protocol.CodInterno {
+		t.Errorf("codigoDeErroDeQuery de um erro genérico = %q, quero %q", got, protocol.CodInterno)
 	}
 }

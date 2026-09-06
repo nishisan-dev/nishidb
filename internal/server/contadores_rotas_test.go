@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 	"github.com/nishisan-dev/nishidb/internal/server"
 )
 
@@ -34,7 +34,7 @@ func TestAuditoriaDeContadoresPelaRota(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, quer 200", resp.StatusCode)
 	}
-	var out protocolo.RespostaAuditoriaDeContadores
+	var out protocol.RespostaAuditoriaDeContadores
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +51,7 @@ func TestAuditoriaDeContadoresPelaRota(t *testing.T) {
 	}
 	// A auditoria conclusiva aparece no /v1/stats e no scrape pela mesma
 	// leitura: timestamp diferente de zero, divergentes em zero.
-	var e protocolo.Estatisticas
+	var e protocol.Estatisticas
 	if err := json.Unmarshal([]byte(pegaComAuthOK(t, srv, "/v1/stats")), &e); err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestReconstrucaoDeContadoresPelaRota(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, quer 200", resp.StatusCode)
 	}
-	var out protocolo.RespostaReconstrucaoDeContadores
+	var out protocol.RespostaReconstrucaoDeContadores
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func TestReconstrucaoDeContadoresPelaRota(t *testing.T) {
 	// Depois de reconstruir, a auditoria continua limpa.
 	resp2 := postComAuth(t, srv, "/v1/counters/audit", "", "chefe", senhaChefeAuth)
 	defer fecha(t, resp2)
-	var aud protocolo.RespostaAuditoriaDeContadores
+	var aud protocol.RespostaAuditoriaDeContadores
 	if err := json.NewDecoder(resp2.Body).Decode(&aud); err != nil {
 		t.Fatal(err)
 	}
@@ -114,8 +114,8 @@ func TestRotasDeContadoresExigemAutenticacaoEPapelADMIN(t *testing.T) {
 			}
 			leitor := postComAuth(t, srv, caminho, "", "leitor", senhaLeitorAuth)
 			status = leitor.StatusCode
-			if f := falhaDe(t, leitor); f.Code != protocolo.CodForbidden {
-				t.Errorf("leitor: código = %q, quer %q", f.Code, protocolo.CodForbidden)
+			if f := falhaDe(t, leitor); f.Code != protocol.CodForbidden {
+				t.Errorf("leitor: código = %q, quer %q", f.Code, protocol.CodForbidden)
 			}
 			if status != http.StatusForbidden {
 				t.Errorf("leitor: status = %d, quer 403", status)
@@ -130,8 +130,8 @@ func TestRotasDeContadoresRecusamMetodoErrado(t *testing.T) {
 		t.Run(caminho, func(t *testing.T) {
 			resp := pegaComAuth(t, srv, caminho, "chefe", senhaChefeAuth)
 			status := resp.StatusCode
-			if f := falhaDe(t, resp); f.Code != protocolo.CodMetodo {
-				t.Errorf("código = %q, quer %q", f.Code, protocolo.CodMetodo)
+			if f := falhaDe(t, resp); f.Code != protocol.CodMetodo {
+				t.Errorf("código = %q, quer %q", f.Code, protocol.CodMetodo)
 			}
 			if status != http.StatusMethodNotAllowed {
 				t.Errorf("status = %d, quer 405", status)
@@ -147,7 +147,7 @@ func TestAuditoriaDeDatasetSemContadoresEhListaVazia(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, quer 200", resp.StatusCode)
 	}
-	var out protocolo.RespostaAuditoriaDeContadores
+	var out protocol.RespostaAuditoriaDeContadores
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatal(err)
 	}
@@ -156,8 +156,8 @@ func TestAuditoriaDeDatasetSemContadoresEhListaVazia(t *testing.T) {
 	}
 	resp2 := postComAuth(t, srv, "/v1/counters/audit", `{"dataset":"nao_existe"}`, "chefe", senhaChefeAuth)
 	status := resp2.StatusCode
-	if f := falhaDe(t, resp2); f.Code != protocolo.CodDatasetDesconhecido {
-		t.Errorf("código = %q, quer %q", f.Code, protocolo.CodDatasetDesconhecido)
+	if f := falhaDe(t, resp2); f.Code != protocol.CodDatasetDesconhecido {
+		t.Errorf("código = %q, quer %q", f.Code, protocol.CodDatasetDesconhecido)
 	}
 	if status != http.StatusNotFound {
 		t.Errorf("status = %d, quer 404", status)

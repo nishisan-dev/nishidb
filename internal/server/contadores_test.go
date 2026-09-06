@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/nishisan-dev/nishidb/internal/materializer"
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/server"
 	"github.com/nishisan-dev/nishidb/internal/storage"
@@ -180,8 +180,8 @@ func TestCountersTabelaDesconhecidaNomeiaAsQueExistem(t *testing.T) {
 		t.Fatalf("status %d, quero 400: tabela desconhecida é erro do cliente", resp.StatusCode)
 	}
 	f := falhaDe(t, resp)
-	if f.Code != protocolo.CodBind {
-		t.Fatalf("código %q, quero %q: a série de erro interno não pode subir por um nome digitado errado", f.Code, protocolo.CodBind)
+	if f.Code != protocol.CodBind {
+		t.Fatalf("código %q, quero %q: a série de erro interno não pode subir por um nome digitado errado", f.Code, protocol.CodBind)
 	}
 	if !strings.Contains(f.Message, "servicos_por_olt") {
 		t.Fatalf("a recusa tem de listar as tabelas que existem: %s", f.Message)
@@ -210,8 +210,8 @@ func TestTabelaVirtualDesconhecidaSaiComoErroDoCliente(t *testing.T) {
 				t.Fatalf("status %d, quero 400", resp.StatusCode)
 			}
 			f := falhaDe(t, resp)
-			if f.Code != protocolo.CodBind {
-				t.Fatalf("código %q, quero %q", f.Code, protocolo.CodBind)
+			if f.Code != protocol.CodBind {
+				t.Fatalf("código %q, quero %q", f.Code, protocol.CodBind)
 			}
 			if !strings.Contains(f.Message, c.naMsg) {
 				t.Fatalf("a recusa tem de nomear o que existe (%q): %s", c.naMsg, f.Message)

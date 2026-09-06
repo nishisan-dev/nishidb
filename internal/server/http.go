@@ -14,7 +14,7 @@ import (
 
 	"github.com/nishisan-dev/nishidb/internal/kafka"
 	"github.com/nishisan-dev/nishidb/internal/logging"
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 )
 
 // permitidoEmLeitura é o valor do header Allow das duas rotas que aceitam HEAD.
@@ -87,10 +87,10 @@ func (s *Servidor) handleHealth(w http.ResponseWriter, r *http.Request) {
 		s.recusaSimples(w, r, permitidoEmLeitura)
 		return
 	}
-	h := protocolo.Saude{
-		Status:   protocolo.EstadoUP,
-		Kafka:    protocolo.EstadoUP,
-		Storage:  protocolo.EstadoUP,
+	h := protocol.Saude{
+		Status:   protocol.EstadoUP,
+		Kafka:    protocol.EstadoUP,
+		Storage:  protocol.EstadoUP,
 		Datasets: make(map[string]string, len(s.datasets)),
 		Detalhes: map[string]string{},
 	}
@@ -98,7 +98,7 @@ func (s *Servidor) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 	for _, d := range s.datasets {
 		estado, detalhe := estadoDaIngestao(d)
-		if estado != protocolo.EstadoDesligado {
+		if estado != protocol.EstadoDesligado {
 			comIngestao++
 		}
 		if detalhe != "" {
@@ -107,23 +107,23 @@ func (s *Servidor) handleHealth(w http.ResponseWriter, r *http.Request) {
 		h.Datasets[d.nome] = estado
 
 		switch estado {
-		case protocolo.EstadoDown:
-			h.Kafka = protocolo.EstadoDown
-			h.Status = protocolo.EstadoDegraded
-		case protocolo.EstadoDegraded:
-			if h.Kafka == protocolo.EstadoUP {
-				h.Kafka = protocolo.EstadoDegraded
+		case protocol.EstadoDown:
+			h.Kafka = protocol.EstadoDown
+			h.Status = protocol.EstadoDegraded
+		case protocol.EstadoDegraded:
+			if h.Kafka == protocol.EstadoUP {
+				h.Kafka = protocol.EstadoDegraded
 			}
 		}
 	}
 	if comIngestao == 0 {
 		// Nenhum dataset consome: dizer "kafka: UP" seria afirmar saúde de um
 		// subsistema que não está em uso.
-		h.Kafka = protocolo.EstadoDesligado
+		h.Kafka = protocol.EstadoDesligado
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	if h.Status != protocolo.EstadoUP {
+	if h.Status != protocol.EstadoUP {
 		// 503 para que um load balancer tire a instância de rotação sem
 		// precisar interpretar o corpo.
 		w.WriteHeader(http.StatusServiceUnavailable)
@@ -152,16 +152,16 @@ func estadoDaIngestao(d *dataset) (estado, detalhe string) {
 	case k == nil || !k.Enabled:
 		// Sem fonte declarada, ou pausado pelo `enabled: false`. Não é
 		// anomalia e não pode contaminar a chave agregada.
-		return protocolo.EstadoDesligado, ""
+		return protocol.EstadoDesligado, ""
 	case erro != nil:
-		return protocolo.EstadoDown, erro.Error()
+		return protocol.EstadoDown, erro.Error()
 	case cons == nil:
-		return protocolo.EstadoDegraded, "ingestão ainda subindo"
+		return protocol.EstadoDegraded, "ingestão ainda subindo"
 	}
 	if p := cons.Pausa(); p != nil {
-		return protocolo.EstadoDown, p.Error()
+		return protocol.EstadoDown, p.Error()
 	}
-	return protocolo.EstadoUP, ""
+	return protocol.EstadoUP, ""
 }
 
 // sobePprof liga os endpoints do §112 num listener PRÓPRIO.

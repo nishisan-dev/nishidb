@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 )
 
 // Os quatro tipos de wire viram o "value" certo, e o int64/double vão
@@ -16,12 +16,12 @@ import (
 // passasse por float64 chegaria ao servidor arredondado e ACEITO.
 func TestParamMontaOValueDeWireDeCadaTipo(t *testing.T) {
 	casos := []struct{ arg, tipo, value string }{
-		{"string:Stop", protocolo.TipoString, `"Stop"`},
-		{"int64:42", protocolo.TipoInt64, "42"},
-		{"double:1.5", protocolo.TipoDouble, "1.5"},
-		{"boolean:true", protocolo.TipoBoolean, "true"},
+		{"string:Stop", protocol.TipoString, `"Stop"`},
+		{"int64:42", protocol.TipoInt64, "42"},
+		{"double:1.5", protocol.TipoDouble, "1.5"},
+		{"boolean:true", protocol.TipoBoolean, "true"},
 		// json.Marshal e não aspas na mão: aqui é onde " e \ viram escapes.
-		{`string:a"b\c`, protocolo.TipoString, `"a\"b\\c"`},
+		{`string:a"b\c`, protocol.TipoString, `"a\"b\\c"`},
 	}
 	for _, c := range casos {
 		t.Run(c.arg, func(t *testing.T) {
@@ -76,7 +76,7 @@ func TestParamSemDoisPontosEhErroDeUsoQueNomeiaOsTipos(t *testing.T) {
 	if err == nil {
 		t.Fatal("quer erro: falta o <tipo>:")
 	}
-	for _, tipo := range []string{protocolo.TipoString, protocolo.TipoInt64, protocolo.TipoDouble, protocolo.TipoBoolean} {
+	for _, tipo := range []string{protocol.TipoString, protocol.TipoInt64, protocol.TipoDouble, protocol.TipoBoolean} {
 		if !strings.Contains(err.Error(), tipo) {
 			t.Errorf("a mensagem não nomeia %q: %v", tipo, err)
 		}
@@ -89,7 +89,7 @@ func TestParamComTipoForaDosQuatroNomeiaOsAceitos(t *testing.T) {
 	if err == nil {
 		t.Fatal("quer erro: timestamp não é tipo de WIRE")
 	}
-	if !strings.Contains(err.Error(), protocolo.TipoString) {
+	if !strings.Contains(err.Error(), protocol.TipoString) {
 		t.Errorf("a mensagem não ensina o caminho (string): %v", err)
 	}
 }

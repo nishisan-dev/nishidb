@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/nishisan-dev/nishidb/internal/metrics"
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 )
 
 var seriesDeContador = []string{
@@ -80,11 +80,11 @@ func TestMetricasDeContadorNascemComZero(t *testing.T) {
 // nenhum contador é mantido dos dois lados.
 func TestStatsEMetricsLeemOMesmoContador(t *testing.T) {
 	srv := servidorComServicos(t, 24)
-	var e protocolo.Estatisticas
+	var e protocol.Estatisticas
 	if err := json.Unmarshal([]byte(pega(t, srv, "/v1/stats")), &e); err != nil {
 		t.Fatal(err)
 	}
-	var ds *protocolo.DatasetStats
+	var ds *protocol.DatasetStats
 	for i := range e.Datasets {
 		if e.Datasets[i].Name == "servicos" {
 			ds = &e.Datasets[i]

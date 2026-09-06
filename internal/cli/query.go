@@ -10,7 +10,7 @@ import (
 	nishiconfig "github.com/nishisan-dev/nishidb/internal/config"
 	"github.com/nishisan-dev/nishidb/internal/counters"
 	"github.com/nishisan-dev/nishidb/internal/metakafka"
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 	"github.com/nishisan-dev/nishidb/internal/query"
 	"github.com/nishisan-dev/nishidb/internal/query/binder"
 	"github.com/nishisan-dev/nishidb/internal/query/executor"
@@ -77,7 +77,7 @@ func runQuery(args []string, amb Ambiente) int {
 	// gramática. É o que faz `--param int64:9223372036854775808` receber a
 	// mensagem de overflow do protocolo na linha de comando, em vez de depois
 	// de um round-trip.
-	valores, err := protocolo.Valores(params)
+	valores, err := protocol.Valores(params)
 	if err != nil {
 		_, _ = fmt.Fprintln(amb.Stderr, "query:", err)
 		return ExitUso

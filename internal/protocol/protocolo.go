@@ -13,7 +13,7 @@
 // — este último de propósito: um parâmetro que entra pelo protocolo e um
 // literal escrito na query devem ser interpretados byte a byte da mesma forma,
 // e a única maneira de garantir isso é os dois passarem pelos MESMOS parsers.
-package protocolo
+package protocol
 
 import (
 	"encoding/json"

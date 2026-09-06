@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/nishisan-dev/nishidb/internal/metrics"
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 	"github.com/nishisan-dev/nishidb/internal/server"
 )
 
@@ -88,8 +88,8 @@ func TestMutantesRecusamPapelREAD(t *testing.T) {
 		t.Run(caminho, func(t *testing.T) {
 			resp := postComAuth(t, srv, caminho, "", "leitor", senhaLeitorAuth)
 			status := resp.StatusCode // falhaDe fecha o corpo; lido antes
-			if f := falhaDe(t, resp); f.Code != protocolo.CodForbidden {
-				t.Errorf("código = %q, quer %q", f.Code, protocolo.CodForbidden)
+			if f := falhaDe(t, resp); f.Code != protocol.CodForbidden {
+				t.Errorf("código = %q, quer %q", f.Code, protocol.CodForbidden)
 			}
 			if status != http.StatusForbidden {
 				t.Errorf("status = %d, quer 403", status)
@@ -115,7 +115,7 @@ func TestMutantesRecusamMetodoErrado(t *testing.T) {
 			if resp.StatusCode != http.StatusMethodNotAllowed {
 				t.Fatalf("GET %s = %d, quer 405", caminho, resp.StatusCode)
 			}
-			if f := falhaDe(t, resp); f.Code != protocolo.CodMetodo {
+			if f := falhaDe(t, resp); f.Code != protocol.CodMetodo {
 				t.Fatalf("GET %s: código = %q", caminho, f.Code)
 			}
 		})
@@ -136,7 +136,7 @@ func TestCheckpointComAdminAvancaOContadorEDevolveODataset(t *testing.T) {
 		defer fecha(t, resp)
 		t.Fatalf("status = %d, quer 200", resp.StatusCode)
 	}
-	var out protocolo.RespostaCheckpoint
+	var out protocol.RespostaCheckpoint
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatalf("corpo ilegível: %v", err)
 	}
@@ -176,7 +176,7 @@ func TestCompactComAdminEEnabledFalseFunciona(t *testing.T) {
 		defer fecha(t, resp)
 		t.Fatalf("status = %d, quer 200", resp.StatusCode)
 	}
-	var out protocolo.RespostaCompact
+	var out protocol.RespostaCompact
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatalf("corpo ilegível: %v", err)
 	}
@@ -203,8 +203,8 @@ func TestCheckpointFiltraPorDatasetOuRecusaDesconhecido(t *testing.T) {
 	if status != http.StatusNotFound {
 		t.Fatalf("status = %d, quer 404", status)
 	}
-	if f.Code != protocolo.CodDatasetDesconhecido {
-		t.Fatalf("código = %q, quer %q", f.Code, protocolo.CodDatasetDesconhecido)
+	if f.Code != protocol.CodDatasetDesconhecido {
+		t.Fatalf("código = %q, quer %q", f.Code, protocol.CodDatasetDesconhecido)
 	}
 }
 
@@ -238,7 +238,7 @@ func TestCheckpointComTodosOsDatasetsRespeitaAOrdemDeterministicaDaSubida(t *tes
 		defer fecha(t, resp)
 		t.Fatalf("status = %d, quer 200", resp.StatusCode)
 	}
-	var out protocolo.RespostaCheckpoint
+	var out protocol.RespostaCheckpoint
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatalf("corpo ilegível: %v", err)
 	}

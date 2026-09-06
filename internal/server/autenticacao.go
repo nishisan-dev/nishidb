@@ -37,7 +37,7 @@ import (
 
 	"github.com/nishisan-dev/nishidb/internal/config"
 	"github.com/nishisan-dev/nishidb/internal/metrics"
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 )
 
 // roteador é o mux cru mais o papel exigido por rota.
@@ -349,14 +349,14 @@ func (s *Servidor) recusaAutenticacao(w http.ResponseWriter, r *http.Request, ra
 	time.Sleep(atrasoDeFalha)
 
 	w.Header().Set("WWW-Authenticate", `Basic realm="nishidb"`)
-	w.Header().Set("Content-Type", protocolo.ContentTypeJSON)
+	w.Header().Set("Content-Type", protocol.ContentTypeJSON)
 	w.WriteHeader(http.StatusUnauthorized)
 	// A mensagem é a MESMA para qualquer razão: variar o texto por razão
 	// devolveria pelo corpo a distinção que o digest fantasma existe para
 	// esconder. "Usuário não existe" e "senha errada" têm de produzir a
 	// resposta EXATA, byte a byte (§77).
-	if err := json.NewEncoder(w).Encode(protocolo.CorpoErro{Error: protocolo.Falha{
-		Code:    protocolo.CodUnauthenticated,
+	if err := json.NewEncoder(w).Encode(protocol.CorpoErro{Error: protocol.Falha{
+		Code:    protocol.CodUnauthenticated,
 		Message: "credenciais inválidas",
 	}}); err != nil {
 		s.log.Warn("query.escrita_falhou", "não foi possível entregar o corpo do 401 de autenticação", "erro", err.Error())
@@ -375,10 +375,10 @@ func (s *Servidor) recusaAutenticacao(w http.ResponseWriter, r *http.Request, ra
 // soubesse (o papel exigido pela rota não é segredo, e o papel dele é o dele
 // mesmo).
 func (s *Servidor) recusaAutorizacao(w http.ResponseWriter, r *http.Request, rota, papelUsuario, papelExigido string) {
-	w.Header().Set("Content-Type", protocolo.ContentTypeJSON)
+	w.Header().Set("Content-Type", protocol.ContentTypeJSON)
 	w.WriteHeader(http.StatusForbidden)
-	if err := json.NewEncoder(w).Encode(protocolo.CorpoErro{Error: protocolo.Falha{
-		Code:    protocolo.CodForbidden,
+	if err := json.NewEncoder(w).Encode(protocol.CorpoErro{Error: protocol.Falha{
+		Code:    protocol.CodForbidden,
 		Message: fmt.Sprintf("papel %s não alcança esta rota; requer %s", papelUsuario, papelExigido),
 	}}); err != nil {
 		s.log.Warn("query.escrita_falhou", "não foi possível entregar o corpo do 403 de autorização", "erro", err.Error())
@@ -393,10 +393,10 @@ func (s *Servidor) recusaAutorizacao(w http.ResponseWriter, r *http.Request, rot
 // sobre o LISTENER, não sobre o papel de um usuário, e a mensagem orienta
 // para o caminho que de fato alcança a rota: o listener exposto e autenticado.
 func (s *Servidor) recusaLoopbackAdmin(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", protocolo.ContentTypeJSON)
+	w.Header().Set("Content-Type", protocol.ContentTypeJSON)
 	w.WriteHeader(http.StatusForbidden)
-	if err := json.NewEncoder(w).Encode(protocolo.CorpoErro{Error: protocolo.Falha{
-		Code:    protocolo.CodForbidden,
+	if err := json.NewEncoder(w).Encode(protocol.CorpoErro{Error: protocol.Falha{
+		Code:    protocol.CodForbidden,
 		Message: "rotas administrativas não respondem no plano loopback (§77b); use o listener autenticado (server.authentication)",
 	}}); err != nil {
 		s.log.Warn("query.escrita_falhou", "não foi possível entregar o corpo do 403 do loopback", "erro", err.Error())
@@ -423,10 +423,10 @@ func (s *Servidor) recusaLoopbackAdmin(w http.ResponseWriter, r *http.Request) {
 // detalhe inteiro — rota e a dica de correção — vai SÓ para s.log.Error, que
 // é quem o operador lê.
 func (s *Servidor) recusaRegistroSemPapel(w http.ResponseWriter, r *http.Request, padrao string) {
-	w.Header().Set("Content-Type", protocolo.ContentTypeJSON)
+	w.Header().Set("Content-Type", protocol.ContentTypeJSON)
 	w.WriteHeader(http.StatusInternalServerError)
-	if err := json.NewEncoder(w).Encode(protocolo.CorpoErro{Error: protocolo.Falha{
-		Code:    protocolo.CodInterno,
+	if err := json.NewEncoder(w).Encode(protocol.CorpoErro{Error: protocol.Falha{
+		Code:    protocol.CodInterno,
 		Message: "erro interno do servidor",
 	}}); err != nil {
 		s.log.Warn("query.escrita_falhou", "não foi possível entregar o corpo do 500 de registro sem papel", "erro", err.Error())

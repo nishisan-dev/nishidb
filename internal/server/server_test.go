@@ -17,7 +17,7 @@ import (
 
 	"github.com/nishisan-dev/nishidb/internal/config"
 	"github.com/nishisan-dev/nishidb/internal/logging"
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 	"github.com/nishisan-dev/nishidb/internal/server"
 )
 
@@ -135,15 +135,15 @@ func TestIngestaoQueNaoSobeNaoDerrubaAsConsultas(t *testing.T) {
 	fim := make(chan error, 1)
 	go func() { fim <- srv.Roda(ctx, "") }()
 
-	esperaHealth(t, srv, func(h protocolo.Saude) bool {
-		return h.Datasets["quebrado"] == protocolo.EstadoDown
+	esperaHealth(t, srv, func(h protocol.Saude) bool {
+		return h.Datasets["quebrado"] == protocol.EstadoDown
 	})
 
 	h := leHealth(t, srv)
-	if h.Datasets["bom"] != protocolo.EstadoDesligado {
-		t.Errorf("dataset sem Kafka = %q, quer %q", h.Datasets["bom"], protocolo.EstadoDesligado)
+	if h.Datasets["bom"] != protocol.EstadoDesligado {
+		t.Errorf("dataset sem Kafka = %q, quer %q", h.Datasets["bom"], protocol.EstadoDesligado)
 	}
-	if h.Kafka != protocolo.EstadoDown {
+	if h.Kafka != protocol.EstadoDown {
 		t.Errorf("kafka = %q, quer DOWN: um dataset parado não pode sair como UP", h.Kafka)
 	}
 	if h.Detalhes["quebrado"] == "" {
@@ -171,10 +171,10 @@ func TestEnabledFalseNaoSobeConsumer(t *testing.T) {
 	// como DOWN em poucos segundos.
 	time.Sleep(2 * time.Second)
 	h := leHealth(t, srv)
-	if h.Datasets["inerte"] != protocolo.EstadoDesligado {
+	if h.Datasets["inerte"] != protocol.EstadoDesligado {
 		t.Errorf("dataset = %q, quer DISABLED: enabled:false não pode subir consumer", h.Datasets["inerte"])
 	}
-	if h.Status != protocolo.EstadoUP {
+	if h.Status != protocol.EstadoUP {
 		t.Errorf("status = %q, quer UP", h.Status)
 	}
 	cancela()
@@ -296,9 +296,9 @@ func pega(t *testing.T, srv *server.Servidor, caminho string) string {
 	return string(b)
 }
 
-func leHealth(t *testing.T, srv *server.Servidor) protocolo.Saude {
+func leHealth(t *testing.T, srv *server.Servidor) protocol.Saude {
 	t.Helper()
-	var h protocolo.Saude
+	var h protocol.Saude
 	if err := json.Unmarshal([]byte(pega(t, srv, "/v1/health")), &h); err != nil {
 		t.Fatalf("health: %v", err)
 	}
@@ -307,7 +307,7 @@ func leHealth(t *testing.T, srv *server.Servidor) protocolo.Saude {
 
 // esperaHealth espera por CONDIÇÃO, e não por sleep: dormir esconde tanto a
 // lentidão quanto a ausência de progresso.
-func esperaHealth(t *testing.T, srv *server.Servidor, ok func(protocolo.Saude) bool) {
+func esperaHealth(t *testing.T, srv *server.Servidor, ok func(protocol.Saude) bool) {
 	t.Helper()
 	prazo := time.Now().Add(15 * time.Second)
 	for time.Now().Before(prazo) {

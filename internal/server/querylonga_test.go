@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 	"github.com/nishisan-dev/nishidb/internal/server"
 )
 
@@ -50,7 +50,7 @@ const linhasQueNaoCabemNoSocket = 100000
 // segura a vaga do servidor até o corpo ser fechado.
 type streamAberto struct {
 	resp   *http.Response
-	leitor *protocolo.Leitor
+	leitor *protocol.Leitor
 }
 
 // abreStream faz o POST e devolve o leitor SEM consumir o stream. É o que
@@ -58,7 +58,7 @@ type streamAberto struct {
 func abreStream(t *testing.T, srv *server.Servidor, corpo string) *streamAberto {
 	t.Helper()
 	resp := consulta(t, srv, corpo)
-	return &streamAberto{resp: resp, leitor: protocolo.NovoLeitor(resp.Body)}
+	return &streamAberto{resp: resp, leitor: protocol.NovoLeitor(resp.Body)}
 }
 
 // desfechoDoStream percorre a moldura e devolve quantas rows saíram e o código
@@ -66,7 +66,7 @@ func abreStream(t *testing.T, srv *server.Servidor, corpo string) *streamAberto 
 func desfechoDoStream(t *testing.T, resp *http.Response) (int, string) {
 	t.Helper()
 	defer fecha(t, resp)
-	l := protocolo.NovoLeitor(resp.Body)
+	l := protocol.NovoLeitor(resp.Body)
 	n := 0
 	for l.Next() {
 		n++
@@ -102,15 +102,15 @@ func TestTimeoutDoRequestPodeAlongarAteOMaxTimeoutENuncaAlemDele(t *testing.T) {
 		// quem chamou; o que não pode acontecer é a consulta terminar bem.
 		if resp.StatusCode == http.StatusGatewayTimeout {
 			f := falhaDe(t, resp)
-			if f.Code != protocolo.CodTimeout {
-				t.Fatalf("código = %q, quer %q", f.Code, protocolo.CodTimeout)
+			if f.Code != protocol.CodTimeout {
+				t.Fatalf("código = %q, quer %q", f.Code, protocol.CodTimeout)
 			}
 			return
 		}
 		n, codigo := desfechoDoStream(t, resp)
-		if codigo != protocolo.CodTimeout {
+		if codigo != protocol.CodTimeout {
 			t.Fatalf("fecho = %q com %d rows, quer %q: o prazo padrão de 1ms não pode varrer %d linhas",
-				codigo, n, protocolo.CodTimeout, linhas)
+				codigo, n, protocol.CodTimeout, linhas)
 		}
 	})
 
@@ -182,7 +182,7 @@ func TestDatasetSemMaxTimeoutSeComportaExatamenteComoHoje(t *testing.T) {
 
 	// E o metadata publica o MESMO número dos dois lados, que é o que faz o
 	// clamp do driver JDBC continuar aparando no ponto de sempre.
-	m := leJSON[protocolo.Metadados](t, srv, "/v1/metadata").Datasets[0]
+	m := leJSON[protocol.Metadados](t, srv, "/v1/metadata").Datasets[0]
 	if m.TimeoutMs != 2000 {
 		t.Errorf("metadata timeoutMs = %d, quer 2000", m.TimeoutMs)
 	}
@@ -203,7 +203,7 @@ func TestDatasetSemMaxTimeoutSeComportaExatamenteComoHoje(t *testing.T) {
 func TestMetadataPublicaOTetoQueOClampDoDriverUsa(t *testing.T) {
 	srv := servidorComBlocoDeQuery(t, 1, blocoPadrao, "query:\n  timeout: 2s\n  maxTimeout: 10m\n")
 
-	m := leJSON[protocolo.Metadados](t, srv, "/v1/metadata").Datasets[0]
+	m := leJSON[protocol.Metadados](t, srv, "/v1/metadata").Datasets[0]
 	if m.TimeoutMs != (10 * time.Minute).Milliseconds() {
 		t.Errorf("timeoutMs = %d, quer o TETO (%d): é contra este campo que o driver clampa",
 			m.TimeoutMs, (10 * time.Minute).Milliseconds())
@@ -253,9 +253,9 @@ func TestQueryLongaNaoOcupaAUltimaVagaDaQueryCurta(t *testing.T) {
 		t.Error("503 sem Retry-After: o cliente não sabe quando voltar")
 	}
 	f := falhaDe(t, resp)
-	if f.Code != protocolo.CodMuitasQueriesLongas {
+	if f.Code != protocol.CodMuitasQueriesLongas {
 		t.Fatalf("código = %q, quer %q: a recusa do sub-pool tem código próprio porque a AÇÃO é outra",
-			f.Code, protocolo.CodMuitasQueriesLongas)
+			f.Code, protocol.CodMuitasQueriesLongas)
 	}
 	if !strings.Contains(f.Message, "maxLongRunning") {
 		t.Errorf("a mensagem não nomeia a chave: %q", f.Message)
@@ -328,7 +328,7 @@ func TestClienteQueDesisteLiberaAVaga(t *testing.T) {
 		desiste()
 		t.Fatal(err)
 	}
-	l := protocolo.NovoLeitor(resp.Body)
+	l := protocol.NovoLeitor(resp.Body)
 	if !l.Next() {
 		desiste()
 		t.Fatalf("a consulta não produziu row: %v", l.Err())
@@ -394,7 +394,7 @@ func TestStatsListaAConsultaEmVooComIdadeEMarcaDeLonga(t *testing.T) {
 		t.Fatalf("a consulta não produziu row: %v", aberta.leitor.Err())
 	}
 
-	e := leJSON[protocolo.Estatisticas](t, srv, "/v1/stats")
+	e := leJSON[protocol.Estatisticas](t, srv, "/v1/stats")
 	if len(e.Process.InFlight) != 1 {
 		t.Fatalf("inFlight = %d entradas, quer 1", len(e.Process.InFlight))
 	}
@@ -432,7 +432,7 @@ func esperaRegistroVazio(t *testing.T, srv *server.Servidor) {
 	t.Helper()
 	prazo := time.Now().Add(5 * time.Second)
 	for {
-		e := leJSON[protocolo.Estatisticas](t, srv, "/v1/stats")
+		e := leJSON[protocol.Estatisticas](t, srv, "/v1/stats")
 		if len(e.Process.InFlight) == 0 {
 			if v := valorDaMetrica(t, srv, "nishidb_query_longest_running_seconds"); v != 0 {
 				t.Errorf("nishidb_query_longest_running_seconds = %v sem consulta em voo, quer 0", v)

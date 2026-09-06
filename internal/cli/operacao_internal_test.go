@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 )
 
 // O ramo LIGADO do resumo da ingestão não é alcançável pela suíte de fora: o
@@ -21,7 +21,7 @@ import (
 // Os cinco valores são diferentes de propósito: com dois iguais, um contador
 // impresso no lugar do outro passaria despercebido.
 func TestResumoDaIngestaoTrazOsContadoresDoDatasetQueConsome(t *testing.T) {
-	ligada := protocolo.IngestaoStats{
+	ligada := protocol.IngestaoStats{
 		Enabled: true, State: "UP",
 		Events: 1, Applied: 2, Stale: 3, Discarded: 4, Failed: 5,
 	}

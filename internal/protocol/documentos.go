@@ -1,4 +1,4 @@
-package protocolo
+package protocol
 
 // Os corpos de GET /v1/metadata e GET /v1/stats.
 //

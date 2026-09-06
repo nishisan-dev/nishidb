@@ -12,7 +12,7 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 )
 
 // Os três comandos de LEITURA do §96 — `status`, `datasets` e `inspect`.
@@ -56,7 +56,7 @@ func runStatus(args []string, amb Ambiente) int {
 		return code
 	}
 
-	var e protocolo.Estatisticas
+	var e protocol.Estatisticas
 	if code := buscaDocumento("status", *servidor, "/v1/stats", cred, &e, amb); code != ExitOK {
 		return code
 	}
@@ -84,7 +84,7 @@ func runDatasets(args []string, amb Ambiente) int {
 		return code
 	}
 
-	var m protocolo.Metadados
+	var m protocol.Metadados
 	if code := buscaDocumento("datasets", *servidor, "/v1/metadata", cred, &m, amb); code != ExitOK {
 		return code
 	}
@@ -118,7 +118,7 @@ func runInspect(args []string, amb Ambiente) int {
 	}
 	nome := fs.Arg(0)
 
-	var m protocolo.Metadados
+	var m protocol.Metadados
 	caminho := "/v1/metadata?dataset=" + url.QueryEscape(nome)
 	if code := buscaDocumento("inspect", *servidor, caminho, cred, &m, amb); code != ExitOK {
 		return code
@@ -241,7 +241,7 @@ func escreveSaida(cmd string, amb Ambiente, corpo func(w io.Writer)) int {
 	return ExitOK
 }
 
-func escreveStatus(w io.Writer, endereco string, e protocolo.Estatisticas) {
+func escreveStatus(w io.Writer, endereco string, e protocol.Estatisticas) {
 	titulo(w, "servidor %s", endereco)
 	titulo(w, "")
 
@@ -288,7 +288,7 @@ func escreveStatus(w io.Writer, endereco string, e protocolo.Estatisticas) {
 	titulo(w, "     PELO MENOS isto de lixo em disco — nunca menos.")
 }
 
-func escreveDatasets(w io.Writer, endereco string, m protocolo.Metadados) {
+func escreveDatasets(w io.Writer, endereco string, m protocol.Metadados) {
 	titulo(w, "servidor %s", endereco)
 	titulo(w, "")
 	linha(w, "DATASET", "KEY", "COLUNAS", "MAXROWS", "TIMEOUT")
@@ -298,7 +298,7 @@ func escreveDatasets(w io.Writer, endereco string, m protocolo.Metadados) {
 	}
 }
 
-func escreveInspect(w io.Writer, d protocolo.DatasetMeta) {
+func escreveInspect(w io.Writer, d protocol.DatasetMeta) {
 	titulo(w, "dataset %s", d.Name)
 	campo(w, "key", d.Key)
 	// Os dois limites são os EFETIVOS — o do dataset, ou o default global que
@@ -338,7 +338,7 @@ func escreveInspect(w io.Writer, d protocolo.DatasetMeta) {
 // cochilo de segundos. O caso que importa é o inverso: "desligada" com a chave
 // ligada no YAML é a falha sticky do writer (§14.14), em que a goroutine parou
 // sozinha e o disco voltou a crescer com o processo de pé.
-func estadoDaCompaction(c protocolo.CompactionStats) string {
+func estadoDaCompaction(c protocol.CompactionStats) string {
 	if c.Running {
 		return "ligada"
 	}
@@ -348,7 +348,7 @@ func estadoDaCompaction(c protocolo.CompactionStats) string {
 // resumoDaIngestao usa o vocabulário do §94 — o mesmo do /v1/health —, para
 // que as duas leituras não descrevam a mesma realidade com palavras
 // diferentes.
-func resumoDaIngestao(i protocolo.IngestaoStats) string {
+func resumoDaIngestao(i protocol.IngestaoStats) string {
 	if !i.Enabled {
 		return i.State
 	}
@@ -398,7 +398,7 @@ func duracao(ms int64) string { return (time.Duration(ms) * time.Millisecond).St
 // Silêncio quando não há nenhuma: um bloco "em voo" vazio em toda chamada de
 // `nishidb status` seria ruído, e ruído treina o operador a pular a seção
 // justamente no dia em que ela tem conteúdo.
-func escreveEmVoo(w io.Writer, voos []protocolo.ConsultaEmVoo) {
+func escreveEmVoo(w io.Writer, voos []protocol.ConsultaEmVoo) {
 	if len(voos) == 0 {
 		return
 	}

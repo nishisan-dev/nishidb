@@ -7,7 +7,7 @@ import (
 
 	"github.com/nishisan-dev/nishidb/internal/logging"
 	"github.com/nishisan-dev/nishidb/internal/metrics"
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/storage"
 )
@@ -249,14 +249,14 @@ func janelaDaSpec(h *schema.HistoricoSpec) storage.JanelaDeIndice {
 // num YAML quer saber o que aquele bloco está fazendo, e a irmã já aparece na
 // lista com os próprios números de storage e query como qualquer outro
 // dataset.
-func historicoStats(base *dataset) *protocolo.HistoricoStats {
+func historicoStats(base *dataset) *protocol.HistoricoStats {
 	if base.irma == nil || base.spec.Historico == nil {
 		return nil
 	}
 	h := base.spec.Historico
 	snap := base.mat.Metrics()
 	e := base.irma.st.EstatisticasDeRetencao()
-	out := &protocolo.HistoricoStats{
+	out := &protocol.HistoricoStats{
 		Table:           base.irma.nome,
 		Rows:            snap.HistoricoLinhas,
 		Dropped:         snap.HistoricoDescartadas,

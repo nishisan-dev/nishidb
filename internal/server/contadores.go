@@ -16,7 +16,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 	"github.com/nishisan-dev/nishidb/internal/storage"
 	"github.com/nishisan-dev/nishidb/internal/storage/contador"
 )
@@ -32,8 +32,8 @@ import (
 func (s *Servidor) handleAuditoriaDeContadores(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
-		s.recusa(w, r, http.StatusMethodNotAllowed, datasetDesconhecido, protocolo.Falha{
-			Code:    protocolo.CodMetodo,
+		s.recusa(w, r, http.StatusMethodNotAllowed, datasetDesconhecido, protocol.Falha{
+			Code:    protocol.CodMetodo,
 			Message: fmt.Sprintf("%s não é aceito em /v1/counters/audit; use POST", r.Method),
 		})
 		return
@@ -51,12 +51,12 @@ func (s *Servidor) handleAuditoriaDeContadores(w http.ResponseWriter, r *http.Re
 	ctx, cancela := s.ctxDeMutacao(r)
 	defer cancela()
 
-	resultados, parcial := processaDatasets(alvos, func(d *dataset) (protocolo.AuditoriaDataset, error) {
+	resultados, parcial := processaDatasets(alvos, func(d *dataset) (protocol.AuditoriaDataset, error) {
 		relatorios, err := d.st.AuditaContadores(ctx)
 		if err != nil {
-			return protocolo.AuditoriaDataset{}, err
+			return protocol.AuditoriaDataset{}, err
 		}
-		out := protocolo.AuditoriaDataset{Name: d.nome, Counters: make([]protocolo.AuditoriaContador, 0, len(relatorios))}
+		out := protocol.AuditoriaDataset{Name: d.nome, Counters: make([]protocol.AuditoriaContador, 0, len(relatorios))}
 		for _, rel := range relatorios {
 			out.Counters = append(out.Counters, auditoriaContador(rel))
 			s.log.Dataset(d.nome).Info("contadores.auditoria",
@@ -72,7 +72,7 @@ func (s *Servidor) handleAuditoriaDeContadores(w http.ResponseWriter, r *http.Re
 		s.recusa(w, r, status, parcial.Dataset, f)
 		return
 	}
-	s.respondeJSON(w, protocolo.RespostaAuditoriaDeContadores{Datasets: resultados})
+	s.respondeJSON(w, protocol.RespostaAuditoriaDeContadores{Datasets: resultados})
 }
 
 // handleReconstrucaoDeContadores serve o POST /v1/counters/rebuild (ADMIN).
@@ -83,8 +83,8 @@ func (s *Servidor) handleAuditoriaDeContadores(w http.ResponseWriter, r *http.Re
 func (s *Servidor) handleReconstrucaoDeContadores(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
-		s.recusa(w, r, http.StatusMethodNotAllowed, datasetDesconhecido, protocolo.Falha{
-			Code:    protocolo.CodMetodo,
+		s.recusa(w, r, http.StatusMethodNotAllowed, datasetDesconhecido, protocol.Falha{
+			Code:    protocol.CodMetodo,
 			Message: fmt.Sprintf("%s não é aceito em /v1/counters/rebuild; use POST", r.Method),
 		})
 		return
@@ -102,14 +102,14 @@ func (s *Servidor) handleReconstrucaoDeContadores(w http.ResponseWriter, r *http
 	ctx, cancela := s.ctxDeMutacao(r)
 	defer cancela()
 
-	resultados, parcial := processaDatasets(alvos, func(d *dataset) (protocolo.ReconstrucaoDataset, error) {
+	resultados, parcial := processaDatasets(alvos, func(d *dataset) (protocol.ReconstrucaoDataset, error) {
 		recs, err := d.st.ReconstroiContadores(ctx)
 		if err != nil {
-			return protocolo.ReconstrucaoDataset{}, err
+			return protocol.ReconstrucaoDataset{}, err
 		}
-		out := protocolo.ReconstrucaoDataset{Name: d.nome, Counters: make([]protocolo.ReconstrucaoContador, 0, len(recs))}
+		out := protocol.ReconstrucaoDataset{Name: d.nome, Counters: make([]protocol.ReconstrucaoContador, 0, len(recs))}
 		for _, rec := range recs {
-			out.Counters = append(out.Counters, protocolo.ReconstrucaoContador{
+			out.Counters = append(out.Counters, protocol.ReconstrucaoContador{
 				Name: rec.Nome, Rows: rec.Linhas, Groups: rec.Grupos, DurationMs: rec.Duracao.Milliseconds(),
 			})
 		}
@@ -121,28 +121,28 @@ func (s *Servidor) handleReconstrucaoDeContadores(w http.ResponseWriter, r *http
 		s.recusa(w, r, status, parcial.Dataset, f)
 		return
 	}
-	s.respondeJSON(w, protocolo.RespostaReconstrucaoDeContadores{Datasets: resultados})
+	s.respondeJSON(w, protocol.RespostaReconstrucaoDeContadores{Datasets: resultados})
 }
 
 // erroDeContadores traduz o erro do storage para as duas rotas. Além dos casos
 // de erroDeMutacao, o snapshot estourado — a auditoria ficou inconclusiva — e
 // o contexto cancelado (o servidor encerrando, ou o cliente desistindo).
-func erroDeContadores(err error) (int, protocolo.Falha) {
+func erroDeContadores(err error) (int, protocol.Falha) {
 	switch {
 	case errors.Is(err, storage.ErrSnapshotExpirado):
-		return http.StatusConflict, protocolo.Falha{
-			Code: protocolo.CodSnapshotExpirado,
+		return http.StatusConflict, protocol.Falha{
+			Code: protocol.CodSnapshotExpirado,
 			Message: "a auditoria ficou inconclusiva: o journal de versões estourou runtime.query.snapshotMaxBytes durante a varredura; " +
 				"tente de novo, ou suba o teto",
 		}
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-		return http.StatusServiceUnavailable, protocolo.Falha{Code: protocolo.CodInterno, Message: "interrompida: " + err.Error()}
+		return http.StatusServiceUnavailable, protocol.Falha{Code: protocol.CodInterno, Message: "interrompida: " + err.Error()}
 	}
 	return erroDeMutacao(err)
 }
 
-func auditoriaContador(rel contador.Relatorio) protocolo.AuditoriaContador {
-	out := protocolo.AuditoriaContador{
+func auditoriaContador(rel contador.Relatorio) protocol.AuditoriaContador {
+	out := protocol.AuditoriaContador{
 		Name:            rel.Nome,
 		Groups:          rel.Grupos,
 		Maintained:      rel.Mantido,
@@ -158,7 +158,7 @@ func auditoriaContador(rel contador.Relatorio) protocolo.AuditoriaContador {
 		DurationMs:          rel.Duracao.Milliseconds(),
 	}
 	for _, d := range rel.Amostra {
-		out.Sample = append(out.Sample, protocolo.DivergenciaDeGrupo{
+		out.Sample = append(out.Sample, protocol.DivergenciaDeGrupo{
 			GroupKey: d.Texto, Maintained: d.Mantido, Recomputed: d.Recalculado,
 			RefsMaintained: d.RefsMantido, RefsRecomputed: d.RefsRecalculado,
 		})

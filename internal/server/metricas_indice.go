@@ -2,7 +2,7 @@ package server
 
 import (
 	"github.com/nishisan-dev/nishidb/internal/metrics"
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 	"github.com/nishisan-dev/nishidb/internal/storage"
 )
 
@@ -127,8 +127,8 @@ func comRotulo(base []metrics.Label, nome, valor string) []metrics.Label {
 // Nenhum número é recalculado aqui, pela regra do handleStats: duas fontes para
 // o mesmo fato divergem, e a divergência aparece como um painel que discorda do
 // JSON sem nada estar quebrado.
-func indiceStats(e storage.EstatisticasDeIndice) protocolo.IndiceStats {
-	return protocolo.IndiceStats{
+func indiceStats(e storage.EstatisticasDeIndice) protocol.IndiceStats {
+	return protocol.IndiceStats{
 		Sealed:          e.Estados.Selado,
 		Current:         e.Estados.Corrente,
 		Pending:         e.Estados.Pendente,

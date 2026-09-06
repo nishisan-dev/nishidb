@@ -13,7 +13,7 @@ import (
 
 	"github.com/nishisan-dev/nishidb/internal/logging"
 	"github.com/nishisan-dev/nishidb/internal/materializer"
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/server"
 	"github.com/nishisan-dev/nishidb/internal/storage"
@@ -55,7 +55,7 @@ func servidorComHistorico(t *testing.T, spec string) *server.Servidor {
 // que a faz aparecer na árvore do DBeaver sem nenhuma mudança no driver.
 func TestATabelaIrmaApareceNoMetadata(t *testing.T) {
 	srv := servidorComHistorico(t, specComHistorico)
-	meta := leJSON[protocolo.Metadados](t, srv, "/v1/metadata")
+	meta := leJSON[protocol.Metadados](t, srv, "/v1/metadata")
 	nomes := map[string]bool{}
 	for _, d := range meta.Datasets {
 		nomes[d.Name] = true
@@ -83,7 +83,7 @@ func TestConsultaNaTabelaIrmaFunciona(t *testing.T) {
 // garante isso, e é o requisito que a feature existe para cumprir.
 func TestAsDuasTabelasTemAsMesmasColunas(t *testing.T) {
 	srv := servidorComHistorico(t, specComHistorico)
-	meta := leJSON[protocolo.Metadados](t, srv, "/v1/metadata")
+	meta := leJSON[protocol.Metadados](t, srv, "/v1/metadata")
 	colunas := map[string][]string{}
 	for _, d := range meta.Datasets {
 		for _, c := range d.Columns {
@@ -104,7 +104,7 @@ func TestAsDuasTabelasTemAsMesmasColunas(t *testing.T) {
 // Store que não tem contra o que resolvê-lo.
 func TestATabelaIrmaNaoDeclaraKey(t *testing.T) {
 	srv := servidorComHistorico(t, specComHistorico)
-	meta := leJSON[protocolo.Metadados](t, srv, "/v1/metadata")
+	meta := leJSON[protocol.Metadados](t, srv, "/v1/metadata")
 	for _, d := range meta.Datasets {
 		if d.Name != "eventos_history" {
 			continue
@@ -133,7 +133,7 @@ func TestNomeDaIrmaQueColideComDatasetDeclaradoRecusaASubida(t *testing.T) {
 // Sem o bloco `history` nada muda: o dataset sobe sozinho, como sempre.
 func TestSemBlocoHistoryNaoHaTabelaIrma(t *testing.T) {
 	srv := servidorComHistorico(t, strings.ReplaceAll(specSemKafka, "%s", "eventos"))
-	meta := leJSON[protocolo.Metadados](t, srv, "/v1/metadata")
+	meta := leJSON[protocol.Metadados](t, srv, "/v1/metadata")
 	if len(meta.Datasets) != 1 {
 		t.Fatalf("%d datasets, quer 1: %+v", len(meta.Datasets), meta.Datasets)
 	}
@@ -144,8 +144,8 @@ func TestSemBlocoHistoryNaoHaTabelaIrma(t *testing.T) {
 // que percorre todos os datasets passa por ela.
 func TestStatsRespondeComATabelaIrma(t *testing.T) {
 	srv := servidorComHistorico(t, specComHistorico)
-	st := leJSON[protocolo.Estatisticas](t, srv, "/v1/stats")
-	var base, irma *protocolo.DatasetStats
+	st := leJSON[protocol.Estatisticas](t, srv, "/v1/stats")
+	var base, irma *protocol.DatasetStats
 	for i := range st.Datasets {
 		switch st.Datasets[i].Name {
 		case "eventos":
@@ -278,7 +278,7 @@ func TestOStatsPublicaAJanelaDeclaradaEAEfetiva(t *testing.T) {
 	srv := servidorComHistorico(t, strings.Replace(specComHistorico,
 		"  fields:\n    id:\n      index: true\n",
 		"  index:\n    window: 6h\n  fields:\n    id:\n      index: true\n", 1))
-	stats := leJSON[protocolo.Estatisticas](t, srv, "/v1/stats")
+	stats := leJSON[protocol.Estatisticas](t, srv, "/v1/stats")
 	var achou bool
 	for _, d := range stats.Datasets {
 		if d.History == nil {

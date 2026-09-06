@@ -1,4 +1,4 @@
-package protocolo
+package protocol
 
 // Os corpos de POST /v1/compact e POST /v1/checkpoint (§96, Fase 11, Task
 // B5, decisão D3 do roadmap): as duas primeiras rotas que MUDAM estado pelo

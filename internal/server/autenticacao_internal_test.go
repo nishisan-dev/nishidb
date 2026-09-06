@@ -17,7 +17,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/config"
 	"github.com/nishisan-dev/nishidb/internal/logging"
 	"github.com/nishisan-dev/nishidb/internal/metrics"
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 )
 
 // Testes de caixa branca do middleware (autenticacao.go): tudo aqui exercita
@@ -135,7 +135,7 @@ func TestRotaRegistradaPorForaDeRegistraEhRecusadaFailClosed(t *testing.T) {
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, quer 500 (bug de registro nomeado, não passagem livre)", rec.Code)
 	}
-	var corpo protocolo.CorpoErro
+	var corpo protocol.CorpoErro
 	if err := json.NewDecoder(rec.Body).Decode(&corpo); err != nil {
 		t.Fatal(err)
 	}
@@ -247,12 +247,12 @@ func TestMecanismoDeRotaExigePapelComHandlerDeTeste(t *testing.T) {
 		if rec.Code != http.StatusForbidden {
 			t.Fatalf("status = %d, quer 403", rec.Code)
 		}
-		var corpo protocolo.CorpoErro
+		var corpo protocol.CorpoErro
 		if err := json.NewDecoder(rec.Body).Decode(&corpo); err != nil {
 			t.Fatal(err)
 		}
-		if corpo.Error.Code != protocolo.CodForbidden {
-			t.Fatalf("code = %q, quer %q", corpo.Error.Code, protocolo.CodForbidden)
+		if corpo.Error.Code != protocol.CodForbidden {
+			t.Fatalf("code = %q, quer %q", corpo.Error.Code, protocol.CodForbidden)
 		}
 	})
 

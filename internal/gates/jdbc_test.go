@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
@@ -291,7 +291,7 @@ func TestTodoNomeJDBCDoProtocoloTemCodigoNoDriver(t *testing.T) {
 func TestOsTiposNaoPesquisaveisDoDriverSaoOsNomesQueOGoProduz(t *testing.T) {
 	java := leArquivo(t, "clients/jdbc/src/main/java/dev/nishisan/nishidb/jdbc/wire/TiposJdbc.java")
 	for _, ft := range []types.FieldType{types.TypeBytes, types.TypeJSON} {
-		nome := protocolo.NomeDeTipo(ft)
+		nome := protocol.NomeDeTipo(ft)
 		if !strings.Contains(java, `"`+nome+`"`) {
 			t.Errorf("o tipo %q não aparece em TiposJdbc.java: o driver anunciaria como "+
 				"pesquisável uma coluna sobre a qual o binder recusa comparação", nome)

@@ -5,7 +5,7 @@ import (
 
 	"github.com/nishisan-dev/nishidb/internal/materializer"
 	"github.com/nishisan-dev/nishidb/internal/metrics"
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 	"github.com/nishisan-dev/nishidb/internal/schema"
 )
 
@@ -15,8 +15,8 @@ import (
 // A spec entra junto porque o snapshot só tem contagens por ÍNDICE: publicar o
 // índice sem o `when` mandaria quem lê o painel abrir o YAML para saber o que
 // casou, e a ordem das regras é justamente o que decide qual vence.
-func materializacaoStats(spec *schema.DatasetSpec, snap materializer.MetricsSnapshot) protocolo.MaterializacaoStats {
-	out := protocolo.MaterializacaoStats{
+func materializacaoStats(spec *schema.DatasetSpec, snap materializer.MetricsSnapshot) protocol.MaterializacaoStats {
+	out := protocol.MaterializacaoStats{
 		FrozenCaptured:  snap.CongeladasCapturadas,
 		FrozenPreserved: snap.CongeladasPreservadas,
 		Summed:          snap.Acumuladas,
@@ -27,13 +27,13 @@ func materializacaoStats(spec *schema.DatasetSpec, snap materializer.MetricsSnap
 	if len(regras) == 0 {
 		return out
 	}
-	out.TTLRules = make([]protocolo.RegraTTLStats, 0, len(regras))
+	out.TTLRules = make([]protocol.RegraTTLStats, 0, len(regras))
 	for i, r := range regras {
 		var casou int64
 		if i < len(snap.RegrasCasadas) {
 			casou = snap.RegrasCasadas[i]
 		}
-		out.TTLRules = append(out.TTLRules, protocolo.RegraTTLStats{
+		out.TTLRules = append(out.TTLRules, protocol.RegraTTLStats{
 			Index:            i,
 			When:             r.When,
 			ExpireAfterWrite: duracaoDaRegra(r),

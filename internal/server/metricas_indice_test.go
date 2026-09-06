@@ -18,7 +18,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/index/segindex"
 	"github.com/nishisan-dev/nishidb/internal/logging"
 	"github.com/nishisan-dev/nishidb/internal/metrics"
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 	"github.com/nishisan-dev/nishidb/internal/server"
 )
 
@@ -435,7 +435,7 @@ func TestStatsEMetricsLeemAMesmaEstrutura(t *testing.T) {
 // Se a distinção quebrar por causa de uma mudança no empacotamento de segmentos,
 // a falha diz quais números colidiram: o conserto é retunar a bancada, nunca
 // afrouxar a asserção.
-func exigeDezNumerosDistintos(t *testing.T, idx protocolo.IndiceStats) {
+func exigeDezNumerosDistintos(t *testing.T, idx protocol.IndiceStats) {
 	t.Helper()
 	numeros := []struct {
 		nome string
@@ -610,7 +610,7 @@ func bancadaDeIndice(t *testing.T) (*server.Servidor, string, string) {
 func esperaOsEstadosAssentarem(t *testing.T, srv *server.Servidor) {
 	t.Helper()
 	var (
-		anterior protocolo.IndiceStats
+		anterior protocol.IndiceStats
 		desde    = time.Now()
 		prazo    = time.Now().Add(90 * time.Second)
 	)
@@ -628,15 +628,15 @@ func esperaOsEstadosAssentarem(t *testing.T, srv *server.Servidor) {
 }
 
 // indiceDoDataset lê o bloco `index` de um dataset no /v1/stats.
-func indiceDoDataset(t *testing.T, srv *server.Servidor, nome string) protocolo.IndiceStats {
+func indiceDoDataset(t *testing.T, srv *server.Servidor, nome string) protocol.IndiceStats {
 	t.Helper()
-	for _, ds := range leJSON[protocolo.Estatisticas](t, srv, "/v1/stats").Datasets {
+	for _, ds := range leJSON[protocol.Estatisticas](t, srv, "/v1/stats").Datasets {
 		if ds.Name == nome {
 			return ds.Index
 		}
 	}
 	t.Fatalf("o dataset %q não apareceu no /v1/stats", nome)
-	return protocolo.IndiceStats{}
+	return protocol.IndiceStats{}
 }
 
 // corrompeOFimDoIndice troca o último byte do arquivo, que é onde o crc32c mora.
@@ -821,9 +821,9 @@ func TestOsBytesDeIndiceVivemNoRotuloDaIrma(t *testing.T) {
 }
 
 // historicoDoDataset lê o bloco `history` de um dataset no /v1/stats.
-func historicoDoDataset(t *testing.T, srv *server.Servidor, nome string) protocolo.HistoricoStats {
+func historicoDoDataset(t *testing.T, srv *server.Servidor, nome string) protocol.HistoricoStats {
 	t.Helper()
-	for _, ds := range leJSON[protocolo.Estatisticas](t, srv, "/v1/stats").Datasets {
+	for _, ds := range leJSON[protocol.Estatisticas](t, srv, "/v1/stats").Datasets {
 		if ds.Name == nome {
 			if ds.History == nil {
 				t.Fatalf("o dataset %q não publicou o bloco history", nome)
@@ -832,7 +832,7 @@ func historicoDoDataset(t *testing.T, srv *server.Servidor, nome string) protoco
 		}
 	}
 	t.Fatalf("o dataset %q não apareceu no /v1/stats", nome)
-	return protocolo.HistoricoStats{}
+	return protocol.HistoricoStats{}
 }
 
 // blocosDeIndiceEm é o `du` do operador sobre tudo que conta como índice de um

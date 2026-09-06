@@ -8,7 +8,7 @@ import (
 
 	"github.com/nishisan-dev/nishidb/internal/buildinfo"
 	"github.com/nishisan-dev/nishidb/internal/logging"
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 	"github.com/nishisan-dev/nishidb/internal/server"
 )
 
@@ -67,7 +67,7 @@ func TestStatsPublicaAVersaoDoBinario(t *testing.T) {
 	comVersaoDeTeste(t)
 
 	srv := servidorComDados(t, 1, blocoPadrao)
-	e := leJSON[protocolo.Estatisticas](t, srv, "/v1/stats")
+	e := leJSON[protocol.Estatisticas](t, srv, "/v1/stats")
 	if e.Process.Version != buildinfo.String() {
 		t.Fatalf("process.version = %q, quer %q", e.Process.Version, buildinfo.String())
 	}
@@ -78,7 +78,7 @@ func TestStatsPublicaAVersaoDoBinario(t *testing.T) {
 // buildinfo, nunca string vazia.
 func TestStatsNuncaPublicaVersaoVazia(t *testing.T) {
 	srv := servidorComDados(t, 1, blocoPadrao)
-	e := leJSON[protocolo.Estatisticas](t, srv, "/v1/stats")
+	e := leJSON[protocol.Estatisticas](t, srv, "/v1/stats")
 	if e.Process.Version == "" {
 		t.Fatal("process.version veio vazio — buildinfo.String() nunca devolve string vazia")
 	}

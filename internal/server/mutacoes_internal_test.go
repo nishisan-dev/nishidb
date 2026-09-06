@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 	"github.com/nishisan-dev/nishidb/internal/storage"
 )
 
@@ -26,19 +26,19 @@ func TestErroDeMutacaoTraduzATabelaInteira(t *testing.T) {
 	}{
 		{
 			"compaction busy", storage.ErrCompactionBusy,
-			http.StatusConflict, protocolo.CodCompactionBusy,
+			http.StatusConflict, protocol.CodCompactionBusy,
 		},
 		{
 			"writer failed", fmt.Errorf("checkpoint: %w", storage.ErrWriterFailed),
-			http.StatusInternalServerError, protocolo.CodWriterFailed,
+			http.StatusInternalServerError, protocol.CodWriterFailed,
 		},
 		{
 			"dataset corrupt", fmt.Errorf("varredura: %w", storage.ErrDatasetCorrupt),
-			http.StatusInternalServerError, protocolo.CodDatasetCorrompido,
+			http.StatusInternalServerError, protocol.CodDatasetCorrompido,
 		},
 		{
 			"erro desconhecido cai no vala-comum", errors.New("falha qualquer de I/O"),
-			http.StatusInternalServerError, protocolo.CodInterno,
+			http.StatusInternalServerError, protocol.CodInterno,
 		},
 	}
 	for _, c := range casos {

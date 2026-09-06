@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 )
 
 // Os dois comandos MUTANTES do §96 — `compact` e `checkpoint` — que a Task B5
@@ -54,7 +54,7 @@ func runCompact(args []string, amb Ambiente) int {
 		dataset = fs.Arg(0)
 	}
 
-	var resp protocolo.RespostaCompact
+	var resp protocol.RespostaCompact
 	if code := postaMutacao("compact", *servidor, "/v1/compact", dataset, cred, &resp, amb); code != ExitOK {
 		return code
 	}
@@ -87,7 +87,7 @@ func runCheckpoint(args []string, amb Ambiente) int {
 		dataset = fs.Arg(0)
 	}
 
-	var resp protocolo.RespostaCheckpoint
+	var resp protocol.RespostaCheckpoint
 	if code := postaMutacao("checkpoint", *servidor, "/v1/checkpoint", dataset, cred, &resp, amb); code != ExitOK {
 		return code
 	}
@@ -112,7 +112,7 @@ func runCheckpoint(args []string, amb Ambiente) int {
 func postaMutacao(cmd, endereco, caminho, dataset string, cred credencialRemota, destino any, amb Ambiente) int {
 	var corpo io.Reader
 	if dataset != "" {
-		b, err := json.Marshal(protocolo.RequisicaoDataset{Dataset: dataset})
+		b, err := json.Marshal(protocol.RequisicaoDataset{Dataset: dataset})
 		if err != nil {
 			avisa(amb, "%s: %v\n", cmd, err)
 			return ExitUso
@@ -131,7 +131,7 @@ func postaMutacao(cmd, endereco, caminho, dataset string, cred credencialRemota,
 		return ExitUso
 	}
 	if corpo != nil {
-		req.Header.Set("Content-Type", protocolo.ContentTypeJSON)
+		req.Header.Set("Content-Type", protocol.ContentTypeJSON)
 	}
 	aplicaCredencial(req, cred)
 
@@ -156,7 +156,7 @@ func postaMutacao(cmd, endereco, caminho, dataset string, cred credencialRemota,
 	return ExitOK
 }
 
-func escreveCompact(w io.Writer, endereco string, resp protocolo.RespostaCompact) {
+func escreveCompact(w io.Writer, endereco string, resp protocol.RespostaCompact) {
 	titulo(w, "servidor %s", endereco)
 	titulo(w, "")
 	linha(w, "DATASET", "SEGMENTOS", "BYTES LIDOS", "BYTES ESCRITOS", "DURAÇÃO")
@@ -166,7 +166,7 @@ func escreveCompact(w io.Writer, endereco string, resp protocolo.RespostaCompact
 	}
 }
 
-func escreveCheckpoint(w io.Writer, endereco string, resp protocolo.RespostaCheckpoint) {
+func escreveCheckpoint(w io.Writer, endereco string, resp protocol.RespostaCheckpoint) {
 	titulo(w, "servidor %s", endereco)
 	titulo(w, "")
 	linha(w, "DATASET", "DURAÇÃO")

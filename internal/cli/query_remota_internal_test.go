@@ -3,7 +3,7 @@ package cli
 import (
 	"testing"
 
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 )
 
 // A tradução código→exit code é o CONTRATO que os três comandos de leitura do
@@ -28,21 +28,21 @@ func TestCodigoDoProtocoloTraduzATabelaInteira(t *testing.T) {
 		quer   int
 		porque string
 	}{
-		{protocolo.CodSintaxe, ExitQuery, "a query está errada e nenhuma releitura do servidor a conserta"},
-		{protocolo.CodBind, ExitQuery, "coluna ou dataset que não casa com o schema é erro da query"},
-		{protocolo.CodBadParameter, ExitQuery, "parâmetro fora do contrato é erro de quem escreveu a consulta"},
-		{protocolo.CodClausulaNaoSuportada, ExitQuery, "cláusula ausente da v1 se conserta reescrevendo o SQL, e não olhando o servidor: o default deste switch daria o conselho errado"},
-		{protocolo.CodMaxRows, ExitTruncado, "as linhas entregues são válidas; o que falta é o resto"},
-		{protocolo.CodTimeout, ExitInterromp, "a consulta foi cortada por prazo, e repetir mais tarde é a ação"},
-		{protocolo.CodDatasetCorrompido, ExitDataset, "o problema é o dataset, não o comando: reabrir antes de insistir"},
-		{protocolo.CodBadRequest, ExitUso, "o vala-comum manda olhar o comando ou o servidor"},
-		{protocolo.CodDatasetDesconhecido, ExitUso, "dataset que não existe neste servidor é erro de linha de comando"},
-		{protocolo.CodMuitasQueries, ExitUso, "o teto de concorrência é do servidor, e a ação é tentar de novo"},
-		{protocolo.CodInterno, ExitUso, "falha interna não tem código próprio no contrato do §96"},
-		{protocolo.CodUnauthenticated, ExitUso, "credencial recusada (§74-77) é erro de quem chamou o comando, não do servidor"},
-		{protocolo.CodForbidden, ExitUso, "papel insuficiente (§74-77) é erro de quem chamou o comando, não do servidor"},
-		{protocolo.CodWriterFailed, ExitWriter, "o writer está em modo falho sticky (Fase 11, B5): o MESMO 4 do caminho local"},
-		{protocolo.CodCompactionBusy, ExitUso, "passada em voo (Fase 11, B5) é retentável, mas cai no MESMO vala-comum de TOO_MANY_QUERIES"},
+		{protocol.CodSintaxe, ExitQuery, "a query está errada e nenhuma releitura do servidor a conserta"},
+		{protocol.CodBind, ExitQuery, "coluna ou dataset que não casa com o schema é erro da query"},
+		{protocol.CodBadParameter, ExitQuery, "parâmetro fora do contrato é erro de quem escreveu a consulta"},
+		{protocol.CodClausulaNaoSuportada, ExitQuery, "cláusula ausente da v1 se conserta reescrevendo o SQL, e não olhando o servidor: o default deste switch daria o conselho errado"},
+		{protocol.CodMaxRows, ExitTruncado, "as linhas entregues são válidas; o que falta é o resto"},
+		{protocol.CodTimeout, ExitInterromp, "a consulta foi cortada por prazo, e repetir mais tarde é a ação"},
+		{protocol.CodDatasetCorrompido, ExitDataset, "o problema é o dataset, não o comando: reabrir antes de insistir"},
+		{protocol.CodBadRequest, ExitUso, "o vala-comum manda olhar o comando ou o servidor"},
+		{protocol.CodDatasetDesconhecido, ExitUso, "dataset que não existe neste servidor é erro de linha de comando"},
+		{protocol.CodMuitasQueries, ExitUso, "o teto de concorrência é do servidor, e a ação é tentar de novo"},
+		{protocol.CodInterno, ExitUso, "falha interna não tem código próprio no contrato do §96"},
+		{protocol.CodUnauthenticated, ExitUso, "credencial recusada (§74-77) é erro de quem chamou o comando, não do servidor"},
+		{protocol.CodForbidden, ExitUso, "papel insuficiente (§74-77) é erro de quem chamou o comando, não do servidor"},
+		{protocol.CodWriterFailed, ExitWriter, "o writer está em modo falho sticky (Fase 11, B5): o MESMO 4 do caminho local"},
+		{protocol.CodCompactionBusy, ExitUso, "passada em voo (Fase 11, B5) é retentável, mas cai no MESMO vala-comum de TOO_MANY_QUERIES"},
 		{"CODIGO_QUE_NAO_EXISTE", ExitUso, "código desconhecido cai no vala-comum, nunca em zero"},
 	}
 	for _, c := range casos {

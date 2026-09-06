@@ -1,4 +1,4 @@
-package protocolo_test
+package protocol_test
 
 import (
 	"bytes"
@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
@@ -14,12 +14,12 @@ import (
 func escreveStream(t *testing.T, fecho any, rows ...string) string {
 	t.Helper()
 	var sb bytes.Buffer
-	err := protocolo.EscreveLinha(&sb, protocolo.LinhaSchema{
-		Nishidb: protocolo.MolduraSchema,
+	err := protocol.EscreveLinha(&sb, protocol.LinhaSchema{
+		Nishidb: protocol.MolduraSchema,
 		Dataset: "radius_sessions",
-		Columns: []protocolo.Coluna{
-			protocolo.ColunaDe("id", types.TypeString, false),
-			protocolo.ColunaDe("ip", types.TypeIPv4, true),
+		Columns: []protocol.Coluna{
+			protocol.ColunaDe("id", types.TypeString, false),
+			protocol.ColunaDe("ip", types.TypeIPv4, true),
 		},
 	})
 	if err != nil {
@@ -30,7 +30,7 @@ func escreveStream(t *testing.T, fecho any, rows ...string) string {
 		sb.WriteByte('\n')
 	}
 	if fecho != nil {
-		if err := protocolo.EscreveLinha(&sb, fecho); err != nil {
+		if err := protocol.EscreveLinha(&sb, fecho); err != nil {
 			t.Fatalf("fecho: %v", err)
 		}
 	}
@@ -39,12 +39,12 @@ func escreveStream(t *testing.T, fecho any, rows ...string) string {
 
 func TestLeitorPercorreSchemaRowsEFecho(t *testing.T) {
 	stream := escreveStream(t,
-		protocolo.LinhaFim{Nishidb: protocolo.MolduraFim, Rows: 2},
+		protocol.LinhaFim{Nishidb: protocol.MolduraFim, Rows: 2},
 		`{"id":"ABC","ip":"177.1.2.3"}`,
 		`{"id":"DEF","ip":"177.1.2.4"}`,
 	)
 
-	l := protocolo.NovoLeitor(strings.NewReader(stream))
+	l := protocol.NovoLeitor(strings.NewReader(stream))
 	var recebidas []string
 	for l.Next() {
 		// A linha é entregue CRUA: o cliente a repassa sem redecodificar.
@@ -59,7 +59,7 @@ func TestLeitorPercorreSchemaRowsEFecho(t *testing.T) {
 	if got := len(l.Schema().Columns); got != 2 {
 		t.Fatalf("colunas = %d, quer 2", got)
 	}
-	if l.Schema().Columns[1].JDBC != protocolo.JDBCVarchar {
+	if l.Schema().Columns[1].JDBC != protocol.JDBCVarchar {
 		t.Fatalf("ipv4 saiu como %q, quer VARCHAR (§73)", l.Schema().Columns[1].JDBC)
 	}
 	if len(recebidas) != 2 || recebidas[0] != `{"id":"ABC","ip":"177.1.2.3"}` {
@@ -77,16 +77,16 @@ func TestLeitorPercorreSchemaRowsEFecho(t *testing.T) {
 // Sem ele o cliente apresentaria um resultado parcial como completo.
 func TestFechoDeErroChegaDepoisDasRows(t *testing.T) {
 	stream := escreveStream(t,
-		protocolo.LinhaErro{
-			Nishidb: protocolo.MolduraErro,
-			Code:    protocolo.CodMaxRows,
+		protocol.LinhaErro{
+			Nishidb: protocol.MolduraErro,
+			Code:    protocol.CodMaxRows,
 			Rows:    1,
 			Message: "resultado truncado no teto de query.maxRows: 1",
 		},
 		`{"id":"ABC"}`,
 	)
 
-	l := protocolo.NovoLeitor(strings.NewReader(stream))
+	l := protocol.NovoLeitor(strings.NewReader(stream))
 	n := 0
 	for l.Next() {
 		n++
@@ -100,7 +100,7 @@ func TestFechoDeErroChegaDepoisDasRows(t *testing.T) {
 	if l.Fim() != nil {
 		t.Fatalf("Fim = %+v, quer nil", l.Fim())
 	}
-	if l.Erro() == nil || l.Erro().Code != protocolo.CodMaxRows || l.Erro().Rows != 1 {
+	if l.Erro() == nil || l.Erro().Code != protocol.CodMaxRows || l.Erro().Rows != 1 {
 		t.Fatalf("Erro = %+v", l.Erro())
 	}
 }
@@ -110,10 +110,10 @@ func TestFechoDeErroChegaDepoisDasRows(t *testing.T) {
 func TestStreamSemFechoEhFalha(t *testing.T) {
 	stream := escreveStream(t, nil, `{"id":"ABC"}`)
 
-	l := protocolo.NovoLeitor(strings.NewReader(stream))
+	l := protocol.NovoLeitor(strings.NewReader(stream))
 	for l.Next() {
 	}
-	if !errors.Is(l.Err(), protocolo.ErrStream) {
+	if !errors.Is(l.Err(), protocol.ErrStream) {
 		t.Fatalf("Err = %v, quer ErrStream", l.Err())
 	}
 	if !strings.Contains(l.Err().Error(), "sem a linha de fecho") {
@@ -125,11 +125,11 @@ func TestStreamSemFechoEhFalha(t *testing.T) {
 }
 
 func TestPrimeiraLinhaSemSchemaEhFalha(t *testing.T) {
-	l := protocolo.NovoLeitor(strings.NewReader("{\"id\":\"ABC\"}\n"))
+	l := protocol.NovoLeitor(strings.NewReader("{\"id\":\"ABC\"}\n"))
 	if l.Next() {
 		t.Fatal("Next devolveu true sem schema")
 	}
-	if !errors.Is(l.Err(), protocolo.ErrStream) {
+	if !errors.Is(l.Err(), protocol.ErrStream) {
 		t.Fatalf("Err = %v, quer ErrStream", l.Err())
 	}
 }
@@ -137,10 +137,10 @@ func TestPrimeiraLinhaSemSchemaEhFalha(t *testing.T) {
 func TestMolduraDesconhecidaEhFalha(t *testing.T) {
 	stream := "{\"nishidb\":\"schema\",\"dataset\":\"d\",\"columns\":[]}\n" +
 		"{\"nishidb\":\"comeco_do_futuro\"}\n"
-	l := protocolo.NovoLeitor(strings.NewReader(stream))
+	l := protocol.NovoLeitor(strings.NewReader(stream))
 	for l.Next() {
 	}
-	if !errors.Is(l.Err(), protocolo.ErrStream) {
+	if !errors.Is(l.Err(), protocol.ErrStream) {
 		t.Fatalf("Err = %v, quer ErrStream", l.Err())
 	}
 }
@@ -149,10 +149,10 @@ func TestMolduraDesconhecidaEhFalha(t *testing.T) {
 // no mesmo stream fariam o mesmo nome de coluna sair de dois jeitos.
 func TestMolduraNaoEscapaHTML(t *testing.T) {
 	var sb bytes.Buffer
-	err := protocolo.EscreveLinha(&sb, protocolo.LinhaSchema{
-		Nishidb: protocolo.MolduraSchema,
+	err := protocol.EscreveLinha(&sb, protocol.LinhaSchema{
+		Nishidb: protocol.MolduraSchema,
 		Dataset: "d",
-		Columns: []protocolo.Coluna{protocolo.ColunaDe("a<b>c&d", types.TypeString, true)},
+		Columns: []protocol.Coluna{protocol.ColunaDe("a<b>c&d", types.TypeString, true)},
 	})
 	if err != nil {
 		t.Fatalf("EscreveLinha: %v", err)
@@ -167,10 +167,10 @@ func TestMolduraNaoEscapaHTML(t *testing.T) {
 // chamada "nishidb".
 func TestPrefixoDeMolduraEhOQueOEncoderProduz(t *testing.T) {
 	var sb bytes.Buffer
-	if err := protocolo.EscreveLinha(&sb, protocolo.LinhaFim{Nishidb: protocolo.MolduraFim}); err != nil {
+	if err := protocol.EscreveLinha(&sb, protocol.LinhaFim{Nishidb: protocol.MolduraFim}); err != nil {
 		t.Fatalf("EscreveLinha: %v", err)
 	}
-	if !strings.HasPrefix(sb.String(), `{"`+protocolo.ChaveMoldura+`":`) {
+	if !strings.HasPrefix(sb.String(), `{"`+protocol.ChaveMoldura+`":`) {
 		t.Fatalf("fecho não começa pelo prefixo de moldura: %s", sb.String())
 	}
 }

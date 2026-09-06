@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/nishisan-dev/nishidb/internal/metrics"
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 	"github.com/nishisan-dev/nishidb/internal/server"
 )
 
@@ -30,7 +30,7 @@ func leJSON[T any](t *testing.T, srv *server.Servidor, caminho string) T {
 func TestMetadataDescreveOQueODriverPrecisa(t *testing.T) {
 	srv := servidorComDados(t, 3, blocoPadrao+"query:\n  defaultMaxRows: 777\n  defaultTimeout: 9s\n")
 
-	m := leJSON[protocolo.Metadados](t, srv, "/v1/metadata")
+	m := leJSON[protocol.Metadados](t, srv, "/v1/metadata")
 	if len(m.Datasets) != 1 {
 		t.Fatalf("datasets = %d, quer 1", len(m.Datasets))
 	}
@@ -44,7 +44,7 @@ func TestMetadataDescreveOQueODriverPrecisa(t *testing.T) {
 		t.Fatalf("limites = %d linhas, %d ms", d.MaxRows, d.TimeoutMs)
 	}
 
-	porNome := map[string]protocolo.ColunaMeta{}
+	porNome := map[string]protocol.ColunaMeta{}
 	for _, c := range d.Columns {
 		porNome[c.Name] = c
 	}
@@ -55,10 +55,10 @@ func TestMetadataDescreveOQueODriverPrecisa(t *testing.T) {
 		indice string
 		alias  string
 	}{
-		{"id", "string", protocolo.JDBCVarchar, "none", ""},
-		{"status", "string", protocolo.JDBCVarchar, "bitmap", "estado"},
-		{"porta", "int64", protocolo.JDBCBigint, "none", ""},
-		{"ip", "ipv4", protocolo.JDBCVarchar, "none", ""},
+		{"id", "string", protocol.JDBCVarchar, "none", ""},
+		{"status", "string", protocol.JDBCVarchar, "bitmap", "estado"},
+		{"porta", "int64", protocol.JDBCBigint, "none", ""},
+		{"ip", "ipv4", protocol.JDBCVarchar, "none", ""},
 	}
 	for _, c := range casos {
 		got, ok := porNome[c.nome]
@@ -82,7 +82,7 @@ func TestMetadataDescreveOQueODriverPrecisa(t *testing.T) {
 func TestMetadataFiltraPorDataset(t *testing.T) {
 	srv := servidorComDados(t, 1, blocoPadrao)
 
-	m := leJSON[protocolo.Metadados](t, srv, "/v1/metadata?dataset=d")
+	m := leJSON[protocol.Metadados](t, srv, "/v1/metadata?dataset=d")
 	if len(m.Datasets) != 1 || m.Datasets[0].Name != "d" {
 		t.Fatalf("metadata = %+v", m)
 	}
@@ -94,7 +94,7 @@ func TestMetadataFiltraPorDataset(t *testing.T) {
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status = %d, quer 404", resp.StatusCode)
 	}
-	if f := falhaDe(t, resp); f.Code != protocolo.CodDatasetDesconhecido {
+	if f := falhaDe(t, resp); f.Code != protocol.CodDatasetDesconhecido {
 		t.Fatalf("código = %q", f.Code)
 	}
 }
@@ -132,7 +132,7 @@ func TestRotasDeLeituraRecusamMetodoErrado(t *testing.T) {
 		if permitido := resp.Header.Get("Allow"); permitido != permitidoQuer {
 			t.Errorf("POST %s: Allow = %q, quer %q", caminho, permitido, permitidoQuer)
 		}
-		if f := falhaDe(t, resp); f.Code != protocolo.CodMetodo {
+		if f := falhaDe(t, resp); f.Code != protocol.CodMetodo {
 			t.Fatalf("POST %s: código = %q", caminho, f.Code)
 		}
 	}
@@ -151,7 +151,7 @@ func TestStatsConcordaComOMetrics(t *testing.T) {
 	}
 	consulta(t, srv, `{"dataset":"d","sql":"SELECT nao_existe FROM d"}`).Body.Close() //nolint:errcheck // corpo já lido; o erro do fecho não muda o teste
 
-	e := leJSON[protocolo.Estatisticas](t, srv, "/v1/stats")
+	e := leJSON[protocol.Estatisticas](t, srv, "/v1/stats")
 	if len(e.Datasets) != 1 {
 		t.Fatalf("datasets = %d", len(e.Datasets))
 	}
@@ -185,7 +185,7 @@ func TestStatsConcordaComOMetrics(t *testing.T) {
 	// Sem Kafka declarado, a ingestão é DISABLED — o mesmo vocabulário do §94,
 	// para as duas rotas não descreverem a mesma realidade com palavras
 	// diferentes.
-	if ds.Ingestion.State != protocolo.EstadoDesligado || ds.Ingestion.Enabled {
+	if ds.Ingestion.State != protocol.EstadoDesligado || ds.Ingestion.Enabled {
 		t.Fatalf("ingestão = %+v", ds.Ingestion)
 	}
 	if h := leHealth(t, srv); h.Datasets["d"] != ds.Ingestion.State {
@@ -274,7 +274,7 @@ func TestStatsPublicaODiscoEACompactionSemSegundaFonte(t *testing.T) {
 	// storage.compaction, tem de compactar.
 	esperaCompactionNoAr(t, srv)
 
-	e := leJSON[protocolo.Estatisticas](t, srv, "/v1/stats")
+	e := leJSON[protocol.Estatisticas](t, srv, "/v1/stats")
 	if len(e.Datasets) != 1 {
 		t.Fatalf("datasets = %d", len(e.Datasets))
 	}
@@ -329,7 +329,7 @@ func esperaCompactionNoAr(t *testing.T, srv *server.Servidor) {
 	t.Helper()
 	prazo := time.Now().Add(15 * time.Second)
 	for time.Now().Before(prazo) {
-		e := leJSON[protocolo.Estatisticas](t, srv, "/v1/stats")
+		e := leJSON[protocol.Estatisticas](t, srv, "/v1/stats")
 		if len(e.Datasets) > 0 && e.Datasets[0].Storage.Compaction.Running {
 			return
 		}
@@ -357,7 +357,7 @@ func esperaCompactionNoAr(t *testing.T, srv *server.Servidor) {
 func TestStatsReportaACompactionParadaComAChaveDesligada(t *testing.T) {
 	srv, _ := servidorComDadosDiretorioEStorage(t, 100, blocoPadrao, "  compaction:\n    enabled: false\n")
 
-	e := leJSON[protocolo.Estatisticas](t, srv, "/v1/stats")
+	e := leJSON[protocol.Estatisticas](t, srv, "/v1/stats")
 	if len(e.Datasets) != 1 {
 		t.Fatalf("datasets = %d", len(e.Datasets))
 	}
@@ -386,7 +386,7 @@ func TestStatsReportaACompactionParadaComAChaveDesligada(t *testing.T) {
 
 // colunasDoSchemaDaConsulta devolve a linha de schema de uma consulta, que é a
 // outra metade do contrato de metadados — a que descreve a PROJEÇÃO.
-func colunasDoSchemaDaConsulta(t *testing.T, srv *server.Servidor, sql string) []protocolo.Coluna {
+func colunasDoSchemaDaConsulta(t *testing.T, srv *server.Servidor, sql string) []protocol.Coluna {
 	t.Helper()
 	resp := consulta(t, srv, `{"dataset":"d","sql":`+strconv.Quote(sql)+`}`)
 	_, l := resultado(t, resp)
@@ -406,13 +406,13 @@ func TestALinhaDeSchemaPublicaPrecisionScaleEDisplaySize(t *testing.T) {
 	srv := servidorComDados(t, 2, blocoPadrao)
 
 	cols := colunasDoSchemaDaConsulta(t, srv, "SELECT id, porta, ip FROM d")
-	quer := []protocolo.Coluna{
+	quer := []protocol.Coluna{
 		// "id" é a CHAVE do dataset: nullable false. string não tem teto
 		// declarado, então os três números são 0 — a convenção do JDBC para
 		// desconhecido.
-		{Name: "id", Type: "string", JDBC: protocolo.JDBCVarchar, Nullable: false, Precision: 0, Scale: 0, DisplaySize: 0},
-		{Name: "porta", Type: "int64", JDBC: protocolo.JDBCBigint, Nullable: true, Precision: 19, Scale: 0, DisplaySize: 20},
-		{Name: "ip", Type: "ipv4", JDBC: protocolo.JDBCVarchar, Nullable: true, Precision: 15, Scale: 0, DisplaySize: 15},
+		{Name: "id", Type: "string", JDBC: protocol.JDBCVarchar, Nullable: false, Precision: 0, Scale: 0, DisplaySize: 0},
+		{Name: "porta", Type: "int64", JDBC: protocol.JDBCBigint, Nullable: true, Precision: 19, Scale: 0, DisplaySize: 20},
+		{Name: "ip", Type: "ipv4", JDBC: protocol.JDBCVarchar, Nullable: true, Precision: 15, Scale: 0, DisplaySize: 15},
 	}
 	if len(cols) != len(quer) {
 		t.Fatalf("colunas = %d, quer %d", len(cols), len(quer))
@@ -435,7 +435,7 @@ func TestALinhaDeSchemaPublicaPrecisionScaleEDisplaySize(t *testing.T) {
 func TestMetadataPublicaOsMesmosNumerosQueALinhaDeSchema(t *testing.T) {
 	srv := servidorComDados(t, 2, blocoPadrao)
 
-	meta := leJSON[protocolo.Metadados](t, srv, "/v1/metadata")
+	meta := leJSON[protocol.Metadados](t, srv, "/v1/metadata")
 	if len(meta.Datasets) != 1 {
 		t.Fatalf("datasets = %d, quer 1", len(meta.Datasets))
 	}
@@ -450,7 +450,7 @@ func TestMetadataPublicaOsMesmosNumerosQueALinhaDeSchema(t *testing.T) {
 	// publicar "status", e o ResultSetMetaData de SELECT * vai publicar
 	// "estado", para a mesma coluna. Casar os dois por igualdade de nome não
 	// funciona, e é assim que um findColumn ingênuo erra.
-	porSaida := map[string]protocolo.ColunaMeta{}
+	porSaida := map[string]protocol.ColunaMeta{}
 	for _, c := range meta.Datasets[0].Columns {
 		saida := c.Name
 		if c.Alias != nil {
@@ -514,7 +514,7 @@ func TestPrecisionZeroSaiNoJSONEmVezDeSerOmitida(t *testing.T) {
 func TestAChaveSaiNaoNulavelNasDuasRotas(t *testing.T) {
 	srv := servidorComDados(t, 2, blocoPadrao)
 
-	meta := leJSON[protocolo.Metadados](t, srv, "/v1/metadata")
+	meta := leJSON[protocol.Metadados](t, srv, "/v1/metadata")
 	achou := false
 	for _, c := range meta.Datasets[0].Columns {
 		if c.Name != meta.Datasets[0].Key {
@@ -568,7 +568,7 @@ func TestHeadContinuaServidoEmMetricsEHealth(t *testing.T) {
 func TestCamposDoDatasetSaemNoStatsENoMetrics(t *testing.T) {
 	srv := servidorComDados(t, 3, blocoPadrao)
 
-	e := leJSON[protocolo.Estatisticas](t, srv, "/v1/stats")
+	e := leJSON[protocol.Estatisticas](t, srv, "/v1/stats")
 	if len(e.Datasets) != 1 {
 		t.Fatalf("datasets = %d", len(e.Datasets))
 	}
@@ -597,7 +597,7 @@ func TestCamposDoDatasetSaemNoStatsENoMetrics(t *testing.T) {
 // razão pela qual o maxRows já é publicado assim.
 func TestMetadataPublicaOTetoDeCamposEfetivo(t *testing.T) {
 	srv := servidorComDados(t, 1, blocoPadrao)
-	m := leJSON[protocolo.Metadados](t, srv, "/v1/metadata")
+	m := leJSON[protocol.Metadados](t, srv, "/v1/metadata")
 	if len(m.Datasets) != 1 {
 		t.Fatalf("datasets = %d", len(m.Datasets))
 	}
@@ -615,7 +615,7 @@ func TestMetadataPublicaOTetoDeCamposEfetivo(t *testing.T) {
 // ninguém descobre que ela existe.
 func TestMetadataPublicaAColunaDerivada(t *testing.T) {
 	srv := servidorComExtract(t)
-	m := leJSON[protocolo.Metadados](t, srv, "/v1/metadata")
+	m := leJSON[protocol.Metadados](t, srv, "/v1/metadata")
 	var achou bool
 	for _, d := range m.Datasets {
 		for _, c := range d.Columns {

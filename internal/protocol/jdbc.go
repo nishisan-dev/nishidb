@@ -1,4 +1,4 @@
-package protocolo
+package protocol
 
 import "github.com/nishisan-dev/nishidb/internal/types"
 

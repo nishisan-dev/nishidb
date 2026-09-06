@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 )
 
 // listaDeParametros implementa flag.Value para --param <tipo>:<valor>,
@@ -14,7 +14,7 @@ import (
 // A ordem da linha de comando é a ordem posicional dos `?` na query, e flag
 // chama Set na ordem em que os argumentos aparecem — o append preserva. Nada
 // aqui pode virar map.
-type listaDeParametros []protocolo.Parametro
+type listaDeParametros []protocol.Parametro
 
 // String é chamada pelo pacote flag no valor ZERO para montar o texto do
 // --help, antes de qualquer Set. Receptor por valor e tolerante ao nil: um
@@ -44,7 +44,7 @@ func (l *listaDeParametros) Set(s string) error {
 	if err != nil {
 		return err
 	}
-	*l = append(*l, protocolo.Parametro{Type: tipo, Value: bruto})
+	*l = append(*l, protocol.Parametro{Type: tipo, Value: bruto})
 	return nil
 }
 
@@ -58,7 +58,7 @@ func (l *listaDeParametros) Set(s string) error {
 // original.
 func valorDeWire(tipo, valor string) (json.RawMessage, error) {
 	switch tipo {
-	case protocolo.TipoString:
+	case protocol.TipoString:
 		// json.Marshal e não aspas na mão: é aqui que ", \ e os controles
 		// viram escapes JSON válidos.
 		b, err := json.Marshal(valor)
@@ -66,7 +66,7 @@ func valorDeWire(tipo, valor string) (json.RawMessage, error) {
 			return nil, err
 		}
 		return b, nil
-	case protocolo.TipoInt64, protocolo.TipoDouble, protocolo.TipoBoolean:
+	case protocol.TipoInt64, protocol.TipoDouble, protocol.TipoBoolean:
 		return json.RawMessage(valor), nil
 	case "":
 		return nil, fmt.Errorf("tipo ausente (aceitos: %s)", tiposDeParametro)
@@ -77,5 +77,5 @@ func valorDeWire(tipo, valor string) (json.RawMessage, error) {
 
 // tiposDeParametro repete a lista do protocolo para a mensagem de USO, que
 // precisa dela antes de qualquer valor ser validado.
-const tiposDeParametro = protocolo.TipoString + ", " + protocolo.TipoInt64 + ", " +
-	protocolo.TipoDouble + ", " + protocolo.TipoBoolean
+const tiposDeParametro = protocol.TipoString + ", " + protocol.TipoInt64 + ", " +
+	protocol.TipoDouble + ", " + protocol.TipoBoolean

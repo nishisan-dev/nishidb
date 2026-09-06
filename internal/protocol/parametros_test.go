@@ -1,4 +1,4 @@
-package protocolo_test
+package protocol_test
 
 import (
 	"errors"
@@ -6,18 +6,18 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-func param(tipo, valor string) protocolo.Parametro {
-	return protocolo.Parametro{Type: tipo, Value: []byte(valor)}
+func param(tipo, valor string) protocol.Parametro {
+	return protocol.Parametro{Type: tipo, Value: []byte(valor)}
 }
 
 func TestOsQuatroTiposDeWireViramValor(t *testing.T) {
 	casos := []struct {
 		nome  string
-		p     protocolo.Parametro
+		p     protocol.Parametro
 		quer  types.FieldType
 		i64   int64
 		bytes string
@@ -31,7 +31,7 @@ func TestOsQuatroTiposDeWireViramValor(t *testing.T) {
 	}
 	for _, c := range casos {
 		t.Run(c.nome, func(t *testing.T) {
-			vs, err := protocolo.Valores([]protocolo.Parametro{c.p})
+			vs, err := protocol.Valores([]protocol.Parametro{c.p})
 			if err != nil {
 				t.Fatalf("Valores: %v", err)
 			}
@@ -55,7 +55,7 @@ func TestOsQuatroTiposDeWireViramValor(t *testing.T) {
 // inteiro é aceito: 3 e 3.0 são o mesmo double.
 func TestDoubleGuardaOsBitsEAceitaInteiro(t *testing.T) {
 	for _, texto := range []string{"3.5", "3", "-0.25", "1e3"} {
-		vs, err := protocolo.Valores([]protocolo.Parametro{param("double", texto)})
+		vs, err := protocol.Valores([]protocol.Parametro{param("double", texto)})
 		if err != nil {
 			t.Fatalf("Valores(%s): %v", texto, err)
 		}
@@ -85,7 +85,7 @@ func TestDoubleGuardaOsBitsEAceitaInteiro(t *testing.T) {
 // ERRADO ao motor, sem erro em camada nenhuma.
 func TestInt64GrandeNaoPerdePrecisao(t *testing.T) {
 	const grande = int64(9007199254740993) // 2^53 + 1
-	vs, err := protocolo.Valores([]protocolo.Parametro{param("int64", "9007199254740993")})
+	vs, err := protocol.Valores([]protocol.Parametro{param("int64", "9007199254740993")})
 	if err != nil {
 		t.Fatalf("Valores: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestInt64GrandeNaoPerdePrecisao(t *testing.T) {
 func TestOTipoDeclaradoManda(t *testing.T) {
 	casos := []struct {
 		nome   string
-		p      protocolo.Parametro
+		p      protocol.Parametro
 		trecho string
 	}{
 		{"int64 com fração", param("int64", `3.5`), "espera um inteiro"},
@@ -109,11 +109,11 @@ func TestOTipoDeclaradoManda(t *testing.T) {
 	}
 	for _, c := range casos {
 		t.Run(c.nome, func(t *testing.T) {
-			_, err := protocolo.Valores([]protocolo.Parametro{c.p})
+			_, err := protocol.Valores([]protocol.Parametro{c.p})
 			if err == nil {
 				t.Fatal("quer erro, veio nil")
 			}
-			if !errors.Is(err, protocolo.ErrParametro) {
+			if !errors.Is(err, protocol.ErrParametro) {
 				t.Fatalf("erro não é ErrParametro: %v", err)
 			}
 			if !strings.Contains(err.Error(), c.trecho) {
@@ -127,7 +127,7 @@ func TestOTipoDeclaradoManda(t *testing.T) {
 // certo sobre o dado e errado sobre o wire, e a mensagem tem de dizer por onde
 // ele passa.
 func TestTipoForaDosQuatroNomeiaAAlternativa(t *testing.T) {
-	_, err := protocolo.Valores([]protocolo.Parametro{param("ipv4", `"10.0.0.1"`)})
+	_, err := protocol.Valores([]protocol.Parametro{param("ipv4", `"10.0.0.1"`)})
 	if err == nil {
 		t.Fatal("quer erro, veio nil")
 	}
@@ -142,7 +142,7 @@ func TestTipoForaDosQuatroNomeiaAAlternativa(t *testing.T) {
 // Parâmetro nulo é recusado com a mesma razão do binder: `col = ?` com ? nulo
 // não tem semântica sem lógica trivalente, e o que o usuário quer é IS NULL.
 func TestParametroNuloEnsinaIsNull(t *testing.T) {
-	_, err := protocolo.Valores([]protocolo.Parametro{param("string", `null`)})
+	_, err := protocol.Valores([]protocol.Parametro{param("string", `null`)})
 	if err == nil {
 		t.Fatal("quer erro, veio nil")
 	}
@@ -154,7 +154,7 @@ func TestParametroNuloEnsinaIsNull(t *testing.T) {
 // As mensagens contam os parâmetros a partir de 1, como o binder e como quem
 // escreve os `?` na query.
 func TestOIndiceNaMensagemEh1Based(t *testing.T) {
-	_, err := protocolo.Valores([]protocolo.Parametro{
+	_, err := protocol.Valores([]protocol.Parametro{
 		param("string", `"ok"`),
 		param("int64", `"não é número"`),
 	})
@@ -170,7 +170,7 @@ func TestOIndiceNaMensagemEh1Based(t *testing.T) {
 // registrar payload. A FORMA é o que resolve o problema de quem enviou.
 func TestAMensagemNaoEcoaOValorDeString(t *testing.T) {
 	const segredo = "senha-do-cliente"
-	_, err := protocolo.Valores([]protocolo.Parametro{param("int64", `"`+segredo+`"`)})
+	_, err := protocol.Valores([]protocol.Parametro{param("int64", `"`+segredo+`"`)})
 	if err == nil {
 		t.Fatal("quer erro, veio nil")
 	}
@@ -180,16 +180,16 @@ func TestAMensagemNaoEcoaOValorDeString(t *testing.T) {
 }
 
 func TestValueAusenteOuTipoAusenteSaoRecusados(t *testing.T) {
-	if _, err := protocolo.Valores([]protocolo.Parametro{{Type: "string"}}); err == nil {
+	if _, err := protocol.Valores([]protocol.Parametro{{Type: "string"}}); err == nil {
 		t.Fatal(`"value" ausente: quer erro, veio nil`)
 	}
-	if _, err := protocolo.Valores([]protocolo.Parametro{{Value: []byte(`"x"`)}}); err == nil {
+	if _, err := protocol.Valores([]protocol.Parametro{{Value: []byte(`"x"`)}}); err == nil {
 		t.Fatal(`"type" ausente: quer erro, veio nil`)
 	}
 }
 
 func TestSemParametrosDevolveNil(t *testing.T) {
-	vs, err := protocolo.Valores(nil)
+	vs, err := protocol.Valores(nil)
 	if err != nil || vs != nil {
 		t.Fatalf("Valores(nil) = %v, %v; quer nil, nil", vs, err)
 	}

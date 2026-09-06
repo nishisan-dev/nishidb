@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 )
 
 // Os três comandos de leitura do §96 — `status`, `datasets` e `inspect` — nascem
@@ -242,9 +242,9 @@ func prazoDaSaida(t *testing.T, texto string) time.Duration {
 }
 
 // estatisticas lê o /v1/stats pela porta, para servir de oráculo ao comando.
-func estatisticas(t *testing.T, a *ambienteRemoto) protocolo.Estatisticas {
+func estatisticas(t *testing.T, a *ambienteRemoto) protocol.Estatisticas {
 	t.Helper()
-	var e protocolo.Estatisticas
+	var e protocol.Estatisticas
 	leJSONDaPorta(t, a, "/v1/stats", &e)
 	return e
 }
@@ -270,9 +270,9 @@ func esperaConsultasDrenarem(t *testing.T, a *ambienteRemoto) {
 	}
 }
 
-func metadados(t *testing.T, a *ambienteRemoto, consulta string) protocolo.Metadados {
+func metadados(t *testing.T, a *ambienteRemoto, consulta string) protocol.Metadados {
 	t.Helper()
-	var m protocolo.Metadados
+	var m protocol.Metadados
 	leJSONDaPorta(t, a, "/v1/metadata"+consulta, &m)
 	return m
 }
@@ -731,7 +731,7 @@ type campoDeDisco struct {
 // camposDeDiscoDoStatus é a lista que a espera e a conferência compartilham —
 // as duas precisam falar dos MESMOS quatro números, senão o teste espera por uma
 // condição e afirma outra.
-func camposDeDiscoDoStatus(st protocolo.StorageStats) []campoDeDisco {
+func camposDeDiscoDoStatus(st protocol.StorageStats) []campoDeDisco {
 	return []campoDeDisco{
 		{"segmentos", int64(st.Segments), false},
 		{"corrente", int64(st.CurrentSegment), false},
@@ -754,7 +754,7 @@ func camposDeDiscoDoStatus(st protocolo.StorageStats) []campoDeDisco {
 // Os dois contadores de bytes ainda são exigidos NÃO-ZERO à parte. Zero é o
 // estado em que a suíte anterior os lia, e zero não é só igual ao vizinho: é
 // igual a tudo o que ainda não aconteceu.
-func colisaoEntreOsCamposDeDisco(st protocolo.StorageStats) string {
+func colisaoEntreOsCamposDeDisco(st protocol.StorageStats) string {
 	campos := camposDeDiscoDoStatus(st)
 	for _, c := range campos {
 		if c.emBytes && c.valor == 0 {
@@ -787,7 +787,7 @@ func colisaoEntreOsCamposDeDisco(st protocolo.StorageStats) string {
 // dormir um prazo fixo esconderia tanto a lentidão quanto a ausência de
 // progresso. E o prazo que expira morre dizendo QUAL par ainda colide, porque a
 // resposta certa a ele é mexer no fixture, não no oráculo.
-func statusComOsCamposDeDiscoSeparados(t *testing.T, a *ambienteRemoto) (string, protocolo.StorageStats) {
+func statusComOsCamposDeDiscoSeparados(t *testing.T, a *ambienteRemoto) (string, protocol.StorageStats) {
 	t.Helper()
 	motivo := "o /v1/stats não chegou a ser lido"
 	prazo := time.Now().Add(30 * time.Second)
@@ -808,14 +808,14 @@ func statusComOsCamposDeDiscoSeparados(t *testing.T, a *ambienteRemoto) (string,
 		motivo = "a compaction moveu os números DURANTE o comando"
 	}
 	t.Fatalf("em 30s o fixture não pôs os quatro números do disco em valores distintos e estáveis: %s", motivo)
-	return "", protocolo.StorageStats{}
+	return "", protocol.StorageStats{}
 }
 
 // storageDoDataset é o bloco de storage do dataset único do ambiente, lido pela
 // porta. Morre quando o servidor traz outro número de datasets: um oráculo que
 // pegasse o primeiro de vários estaria conferindo a saída de um contra os
 // números de outro.
-func storageDoDataset(t *testing.T, a *ambienteRemoto) protocolo.StorageStats {
+func storageDoDataset(t *testing.T, a *ambienteRemoto) protocol.StorageStats {
 	t.Helper()
 	e := estatisticas(t, a)
 	if len(e.Datasets) != 1 {
@@ -1125,16 +1125,16 @@ func TestInspectDetalhaColunasEIndices(t *testing.T) {
 func TestInspectRecusaMetadataQueNaoTrazExatamenteUmDataset(t *testing.T) {
 	casos := []struct {
 		nome     string
-		datasets []protocolo.DatasetMeta
+		datasets []protocol.DatasetMeta
 	}{
 		{"nenhum", nil},
-		{"dois", []protocolo.DatasetMeta{{Name: "radius_sessions"}, {Name: "outro"}}},
+		{"dois", []protocol.DatasetMeta{{Name: "radius_sessions"}, {Name: "outro"}}},
 	}
 	for _, c := range casos {
 		t.Run(c.nome, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.Header().Set("Content-Type", protocolo.ContentTypeJSON)
-				if err := json.NewEncoder(w).Encode(protocolo.Metadados{Datasets: c.datasets}); err != nil {
+				w.Header().Set("Content-Type", protocol.ContentTypeJSON)
+				if err := json.NewEncoder(w).Encode(protocol.Metadados{Datasets: c.datasets}); err != nil {
 					t.Errorf("escrevendo a resposta de mentira: %v", err)
 				}
 			}))
@@ -1222,8 +1222,8 @@ func TestStatusSemUserNuncaEnviaHeaderAuthorization(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		recebida = true
 		authorization = r.Header.Get("Authorization")
-		w.Header().Set("Content-Type", protocolo.ContentTypeJSON)
-		if err := json.NewEncoder(w).Encode(protocolo.Estatisticas{}); err != nil {
+		w.Header().Set("Content-Type", protocol.ContentTypeJSON)
+		if err := json.NewEncoder(w).Encode(protocol.Estatisticas{}); err != nil {
 			t.Errorf("escrevendo a resposta de mentira: %v", err)
 		}
 	}))

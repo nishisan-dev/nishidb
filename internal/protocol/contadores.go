@@ -1,4 +1,4 @@
-package protocolo
+package protocol
 
 // Os corpos de POST /v1/counters/audit e POST /v1/counters/rebuild
 // (planning/contadores-mantidos-na-escrita.md §5.6 e §11.6): as rotas ADMIN

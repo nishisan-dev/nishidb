@@ -13,7 +13,7 @@ import (
 	"fmt"
 
 	"github.com/nishisan-dev/nishidb/internal/kafka"
-	"github.com/nishisan-dev/nishidb/internal/protocolo"
+	"github.com/nishisan-dev/nishidb/internal/protocol"
 	"github.com/nishisan-dev/nishidb/internal/query"
 	"github.com/nishisan-dev/nishidb/internal/query/meta"
 	"github.com/nishisan-dev/nishidb/internal/schema"
@@ -112,7 +112,7 @@ type Fonte struct {
 // dizer nem UP nem DOWN, e DEGRADED ("ainda subindo") seria mentira.
 func EstadoDeclarado(d Declarada) (estado, detalhe string) {
 	if !d.Declarado || !d.Habilitado {
-		return protocolo.EstadoDesligado, ""
+		return protocol.EstadoDesligado, ""
 	}
 	return "", ""
 }
