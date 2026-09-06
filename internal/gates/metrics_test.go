@@ -10,22 +10,22 @@ import (
 	"testing"
 )
 
-// caminhoDoDocDeMetricas é a referência que esta suíte cobra.
-const caminhoDoDocDeMetricas = "docs/metricas.md"
+// metricsDocPath é a referência que esta suíte cobra.
+const metricsDocPath = "docs/metricas.md"
 
-// seriesDeclaradas extrai as constantes Met* de internal/metrics/names.go pela
+// declaredSeries extrai as constantes Met* de internal/metrics/names.go pela
 // AST, e não por grep: o nome da série é DADO no código, e ler prosa para
 // descobri-lo é a classe de defeito que a doutrina de verificação nomeia.
-func seriesDeclaradas(t *testing.T) map[string]string {
+func declaredSeries(t *testing.T) map[string]string {
 	t.Helper()
-	caminho := filepath.Join(raizDoRepo, "internal/metrics/names.go")
+	path := filepath.Join(repoRoot, "internal/metrics/names.go")
 	fset := token.NewFileSet()
-	arquivo, err := parser.ParseFile(fset, caminho, nil, 0)
+	file, err := parser.ParseFile(fset, path, nil, 0)
 	if err != nil {
-		t.Fatalf("parseando %s: %v", caminho, err)
+		t.Fatalf("parseando %s: %v", path, err)
 	}
 	out := map[string]string{}
-	for _, decl := range arquivo.Decls {
+	for _, decl := range file.Decls {
 		gen, ok := decl.(*ast.GenDecl)
 		if !ok || gen.Tok != token.CONST {
 			continue
@@ -35,15 +35,15 @@ func seriesDeclaradas(t *testing.T) map[string]string {
 			if !ok {
 				continue
 			}
-			for i, nome := range vs.Names {
-				if !strings.HasPrefix(nome.Name, "Met") || i >= len(vs.Values) {
+			for i, name := range vs.Names {
+				if !strings.HasPrefix(name.Name, "Met") || i >= len(vs.Values) {
 					continue
 				}
 				lit, ok := vs.Values[i].(*ast.BasicLit)
 				if !ok || lit.Kind != token.STRING {
 					continue
 				}
-				out[nome.Name] = strings.Trim(lit.Value, `"`)
+				out[name.Name] = strings.Trim(lit.Value, `"`)
 			}
 		}
 	}
@@ -58,19 +58,19 @@ func seriesDeclaradas(t *testing.T) map[string]string {
 // nada acuse. É a mesma cobrança que os gates dos clients fazem sobre os
 // códigos do protocolo.
 func TestTodaMetricaDeclaradaEstaDocumentada(t *testing.T) {
-	series := seriesDeclaradas(t)
+	series := declaredSeries(t)
 	if len(series) < 50 {
 		t.Fatalf("só %d séries extraídas de names.go: a extração quebrou, e um gate "+
 			"que não acha nada passa sempre", len(series))
 	}
-	doc := leArquivo(t, caminhoDoDocDeMetricas)
-	for nomeGo, serie := range series {
+	doc := readFile(t, metricsDocPath)
+	for goName, seriesName := range series {
 		// Casa a série DELIMITADA: sem isso, `nishidb_query_total` seria dada
 		// por documentada pela linha de `nishidb_query_total_bucket`, e a
 		// família que faltasse passaria escondida atrás da vizinha.
-		if !regexp.MustCompile(`\b` + regexp.QuoteMeta(serie) + `\b`).MatchString(doc) {
+		if !regexp.MustCompile(`\b` + regexp.QuoteMeta(seriesName) + `\b`).MatchString(doc) {
 			t.Errorf("%s (%s) não está em %s: acrescente a linha na tabela do subsistema",
-				nomeGo, serie, caminhoDoDocDeMetricas)
+				goName, seriesName, metricsDocPath)
 		}
 	}
 }
@@ -82,50 +82,50 @@ func TestTodaMetricaDeclaradaEstaDocumentada(t *testing.T) {
 // operador escreveria o alerta contra algo que não existe mais — a falha
 // silenciosa que só aparece no dia do incidente.
 func TestODocDeMetricasNaoInventaSerie(t *testing.T) {
-	series := seriesDeclaradas(t)
-	existe := map[string]bool{}
+	series := declaredSeries(t)
+	exists := map[string]bool{}
 	for _, s := range series {
-		existe[s] = true
+		exists[s] = true
 		// Os três sufixos que o histograma expande no texto Prometheus.
-		for _, sufixo := range []string{"_bucket", "_sum", "_count"} {
-			existe[s+sufixo] = true
+		for _, suffix := range []string{"_bucket", "_sum", "_count"} {
+			exists[s+suffix] = true
 		}
 	}
-	doc := leArquivo(t, caminhoDoDocDeMetricas)
-	citadas := regexp.MustCompile(`nishidb_[a-z0-9_]+`).FindAllString(doc, -1)
-	if len(citadas) < 50 {
+	doc := readFile(t, metricsDocPath)
+	cited := regexp.MustCompile(`nishidb_[a-z0-9_]+`).FindAllString(doc, -1)
+	if len(cited) < 50 {
 		t.Fatalf("só %d citações de série em %s: a extração quebrou",
-			len(citadas), caminhoDoDocDeMetricas)
+			len(cited), metricsDocPath)
 	}
 	// `nishidb_history_*` é a forma legítima de citar uma FAMÍLIA inteira na
 	// prosa. O prefixo não é ignorado por isso: ele tem de casar com pelo
 	// menos uma série declarada, senão um `nishidb_inexistente_*` passaria
 	// escondido atrás da convenção.
-	comAsterisco := map[string]bool{}
+	withAsterisk := map[string]bool{}
 	for _, m := range regexp.MustCompile(`nishidb_[a-z0-9_]+\*`).FindAllString(doc, -1) {
-		comAsterisco[strings.TrimSuffix(m, "*")] = true
+		withAsterisk[strings.TrimSuffix(m, "*")] = true
 	}
-	for prefixo := range comAsterisco {
-		algum := false
-		for s := range existe {
-			if strings.HasPrefix(s, prefixo) {
-				algum = true
+	for prefix := range withAsterisk {
+		found := false
+		for s := range exists {
+			if strings.HasPrefix(s, prefix) {
+				found = true
 				break
 			}
 		}
-		if !algum {
+		if !found {
 			t.Errorf("%s* é citada em %s e nenhuma série declarada começa assim",
-				prefixo, caminhoDoDocDeMetricas)
+				prefix, metricsDocPath)
 		}
 	}
 
-	vistas := map[string]bool{}
-	for _, c := range citadas {
-		if vistas[c] || existe[c] || comAsterisco[c] {
+	seen := map[string]bool{}
+	for _, c := range cited {
+		if seen[c] || exists[c] || withAsterisk[c] {
 			continue
 		}
-		vistas[c] = true
+		seen[c] = true
 		t.Errorf("%s é citada em %s e NÃO existe em internal/metrics/names.go: "+
-			"a série foi renomeada ou o nome está errado", c, caminhoDoDocDeMetricas)
+			"a série foi renomeada ou o nome está errado", c, metricsDocPath)
 	}
 }

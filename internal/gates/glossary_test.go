@@ -16,7 +16,7 @@ import (
 // é o que este gate existe para impedir. Ele lê a tabela como dado, linha a
 // linha, e não por grep em prosa.
 func TestGlossaryHasBothColumnsAndNoDuplicateTerm(t *testing.T) {
-	path := filepath.Join(raizDoRepo, "docs", "glossario.md")
+	path := filepath.Join(repoRoot, "docs", "glossario.md")
 	f, err := os.Open(path)
 	if err != nil {
 		t.Fatalf("o glossário não existe: %v", err)

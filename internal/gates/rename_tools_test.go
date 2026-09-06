@@ -17,7 +17,7 @@ func TestRenameApplierRefusesWithoutRfNamingTheGoInstall(t *testing.T) {
 	script := filepath.Join("scripts", "rename-apply.sh")
 	emptyDir := t.TempDir()
 	cmd := exec.Command("bash", script, "internal/types", "/dev/null", filepath.Join(emptyDir, "d.diff"))
-	cmd.Dir = raizDoRepo
+	cmd.Dir = repoRoot
 	cmd.Env = append(os.Environ(), "PATH="+emptyDir)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
@@ -67,7 +67,7 @@ func TestRenameApplierRefusesAnUnreadableScriptNamingIt(t *testing.T) {
 	script := filepath.Join("scripts", "rename-apply.sh")
 	missing := filepath.Join(t.TempDir(), "nao-existe.rf")
 	cmd := exec.Command("bash", script, "internal/types", missing, filepath.Join(t.TempDir(), "d.diff"))
-	cmd.Dir = raizDoRepo
+	cmd.Dir = repoRoot
 	cmd.Env = []string{"PATH=" + fakeToolsDir + ":/usr/bin:/bin"}
 	out, err := cmd.CombinedOutput()
 	if err == nil {

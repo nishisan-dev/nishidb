@@ -47,106 +47,106 @@ import (
 // sobe mas nunca confirma a versão nova). O cenário (b) é o caminho feliz: o
 // dublê resolve a versão HONESTAMENTE, rodando `current/nishidb --version`.
 
-const caminhoDoScriptDeAtualizacao = raizDoRepo + "/scripts/nishidb-update.sh"
+const updateScriptPath = repoRoot + "/scripts/nishidb-update.sh"
 
-// ondeEstaOBash resolve o interpretador antes de montar o ambiente do
+// locateBash resolve o interpretador antes de montar o ambiente do
 // filho, no mesmo espírito de ondeEstaOMake (lint_test.go): ausência de bash
 // é FALHA, não SKIP — é o interpretador que a própria task exige ("bash",
 // texto do brief), não um acessório opcional do teste.
-func ondeEstaOBash(t *testing.T) string {
+func locateBash(t *testing.T) string {
 	t.Helper()
-	caminho, err := exec.LookPath("bash")
+	path, err := exec.LookPath("bash")
 	if err != nil {
 		t.Fatalf("bash não está no PATH e é o interpretador exigido por scripts/nishidb-update.sh: %v", err)
 	}
-	return caminho
+	return path
 }
 
-// stubBinario cria, em dir/nishidb, um binário de mentira cujo `--version`
+// stubBinary cria, em dir/nishidb, um binário de mentira cujo `--version`
 // imprime rotulo — o bastante para a pré-checagem do script ("responde a
 // --version") e para o dublê honesto do cenário (b) descobrir qual release
 // está linkada.
-func stubBinario(t *testing.T, dir, rotulo string) {
+func stubBinary(t *testing.T, dir, label string) {
 	t.Helper()
-	conteudo := fmt.Sprintf("#!/bin/sh\necho '%s (dublê)'\n", rotulo)
-	if err := os.WriteFile(filepath.Join(dir, "nishidb"), []byte(conteudo), 0o755); err != nil {
+	content := fmt.Sprintf("#!/bin/sh\necho '%s (dublê)'\n", label)
+	if err := os.WriteFile(filepath.Join(dir, "nishidb"), []byte(content), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "nishidb.yaml"), []byte("# config de teste, par da release "+rotulo+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "nishidb.yaml"), []byte("# config de teste, par da release "+label+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// montaRaiz prepara um $NISHIDB_ROOT temporário com o layout exigido pela
+// setupRoot prepara um $NISHIDB_ROOT temporário com o layout exigido pela
 // task: releases/velha e releases/nova, cada um com o PAR completo, e
 // `current` apontando para releases/velha — o estado de produção antes de
 // qualquer atualização.
-func montaRaiz(t *testing.T) (raiz, estadoDir string) {
+func setupRoot(t *testing.T) (root, stateDir string) {
 	t.Helper()
-	raiz = t.TempDir()
-	releases := filepath.Join(raiz, "releases")
-	for _, rotulo := range []string{"velha", "nova"} {
-		dir := filepath.Join(releases, rotulo)
+	root = t.TempDir()
+	releases := filepath.Join(root, "releases")
+	for _, label := range []string{"velha", "nova"} {
+		dir := filepath.Join(releases, label)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		stubBinario(t, dir, rotulo)
+		stubBinary(t, dir, label)
 	}
-	if err := os.Symlink(filepath.Join(releases, "velha"), filepath.Join(raiz, "current")); err != nil {
+	if err := os.Symlink(filepath.Join(releases, "velha"), filepath.Join(root, "current")); err != nil {
 		t.Fatal(err)
 	}
 
-	estadoDir = filepath.Join(raiz, "estado-fake")
-	if err := os.MkdirAll(estadoDir, 0o755); err != nil {
+	stateDir = filepath.Join(root, "estado-fake")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(estadoDir, "versao"), []byte("velha (dublê)"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(stateDir, "versao"), []byte("velha (dublê)"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(estadoDir, "saude"), []byte("UP"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(stateDir, "saude"), []byte("UP"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	return raiz, estadoDir
+	return root, stateDir
 }
 
-// servidorFake responde /v1/health, /v1/stats e /metrics lendo o estado que o
+// fakeServer responde /v1/health, /v1/stats e /metrics lendo o estado que o
 // dublê `systemctl` grava em disco a cada `start`/`stop`. /metrics simula
 // ingestão viva incrementando um contador a cada raspagem — eventos sempre
 // avançam entre duas amostras, sem depender de tempo real decorrido —, e
 // invalid_total fixo em 0 (o caso comum; ver servidorFakeComInvalido para os
 // testes de tolerância).
-func servidorFake(t *testing.T, estadoDir string) *httptest.Server {
+func fakeServer(t *testing.T, stateDir string) *httptest.Server {
 	t.Helper()
-	return servidorFakeComInvalido(t, estadoDir, func(int64) int64 { return 0 })
+	return fakeServerWithInvalid(t, stateDir, func(int64) int64 { return 0 })
 }
 
-// montaMuxFakeComEstado registra /v1/health e /v1/stats — comuns a TODOS os
+// newFakeMuxWithState registra /v1/health e /v1/stats — comuns a TODOS os
 // cenários, formato antigo ou novo de invalid_total — lendo o estado que o
 // dublê `systemctl` grava em disco a cada `start`/`stop`. Quem chama ainda
 // precisa registrar /metrics: é o único handler que difere entre
 // servidorFakeComInvalido (formato antigo, sem `motivo`) e
 // servidorFakeComInvalidoPorMotivo (formato novo, Task A5).
-func montaMuxFakeComEstado(estadoDir string) *http.ServeMux {
+func newFakeMuxWithState(stateDir string) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/health", func(w http.ResponseWriter, _ *http.Request) {
-		bruto, _ := os.ReadFile(filepath.Join(estadoDir, "saude"))
+		raw, _ := os.ReadFile(filepath.Join(stateDir, "saude"))
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprintf(w, `{"status": %q}`, strings.TrimSpace(string(bruto)))
+		_, _ = fmt.Fprintf(w, `{"status": %q}`, strings.TrimSpace(string(raw)))
 	})
 	mux.HandleFunc("/v1/stats", func(w http.ResponseWriter, _ *http.Request) {
-		bruto, _ := os.ReadFile(filepath.Join(estadoDir, "versao"))
+		raw, _ := os.ReadFile(filepath.Join(stateDir, "versao"))
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprintf(w, `{"process": {"version": %q}}`, strings.TrimSpace(string(bruto)))
+		_, _ = fmt.Fprintf(w, `{"process": {"version": %q}}`, strings.TrimSpace(string(raw)))
 	})
 	return mux
 }
 
-// escreveMetricasComuns escreve, em /metrics, as duas linhas que TODOS os
+// writeCommonMetrics escreve, em /metrics, as duas linhas que TODOS os
 // cenários compartilham — eventos processados e lag —, calculadas a partir
 // do número da raspagem atual (1-based). Devolve esse número: quem chama
 // decide, a partir dele, como escrever a(s) linha(s) de invalid_total.
-func escreveMetricasComuns(w http.ResponseWriter, raspagens *int64) int64 {
-	n := atomic.AddInt64(raspagens, 1)
+func writeCommonMetrics(w http.ResponseWriter, scrapes *int64) int64 {
+	n := atomic.AddInt64(scrapes, 1)
 	lag := 100 - n*10
 	if lag < 0 {
 		lag = 0
@@ -157,7 +157,7 @@ func escreveMetricasComuns(w http.ResponseWriter, raspagens *int64) int64 {
 	return n
 }
 
-// servidorFakeComInvalido é a base de servidorFake, com o crescimento de
+// fakeServerWithInvalid é a base de servidorFake, com o crescimento de
 // nishidb_ingest_invalid_total controlado por quem chama — invalidoPorRaspagem
 // recebe o número da raspagem atual (1-based) e devolve o valor ACUMULADO do
 // contador naquele instante. Existe por causa do Critical 1 da revisão: a
@@ -169,21 +169,21 @@ func escreveMetricasComuns(w http.ResponseWriter, raspagens *int64) int64 {
 // real do piloto (Minor 4: a primeira migração para releases/ é manual), e
 // soma_metrica (nishidb-update.sh) precisa continuar somando esse formato
 // certo — ver TestScriptDeAtualizacaoToleraUmInvalidoIsoladoNoFormatoAntigoSemMotivo.
-func servidorFakeComInvalido(t *testing.T, estadoDir string, invalidoPorRaspagem func(n int64) int64) *httptest.Server {
+func fakeServerWithInvalid(t *testing.T, stateDir string, invalidAtScrape func(n int64) int64) *httptest.Server {
 	t.Helper()
-	var raspagens int64
+	var scrapes int64
 
-	mux := montaMuxFakeComEstado(estadoDir)
+	mux := newFakeMuxWithState(stateDir)
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
-		n := escreveMetricasComuns(w, &raspagens)
-		_, _ = fmt.Fprintf(w, "nishidb_ingest_invalid_total{dataset=\"events\"} %d\n", invalidoPorRaspagem(n))
+		n := writeCommonMetrics(w, &scrapes)
+		_, _ = fmt.Fprintf(w, "nishidb_ingest_invalid_total{dataset=\"events\"} %d\n", invalidAtScrape(n))
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv
 }
 
-// servidorFakeComInvalidoPorMotivo prova o Important 2 da revisão final: a
+// fakeServerWithInvalidByReason prova o Important 2 da revisão final: a
 // Task A5 (internal/kafka/metrics.go) fez o binário passar a emitir
 // nishidb_ingest_invalid_total SEMPRE com o label `motivo`, e possivelmente
 // em VÁRIAS séries — uma por categoria §101 —, nunca mais a série única e
@@ -197,28 +197,28 @@ func servidorFakeComInvalido(t *testing.T, estadoDir string, invalidoPorRaspagem
 // duas corretamente. A repartição varia entre pares (metade em cada) e
 // ímpares (a sobra vai para INVALID_JSON), então o teste também cobre o caso
 // em que as duas séries não têm o mesmo valor.
-func servidorFakeComInvalidoPorMotivo(t *testing.T, estadoDir string, invalidoPorRaspagem func(n int64) int64) *httptest.Server {
+func fakeServerWithInvalidByReason(t *testing.T, stateDir string, invalidAtScrape func(n int64) int64) *httptest.Server {
 	t.Helper()
-	var raspagens int64
+	var scrapes int64
 
-	mux := montaMuxFakeComEstado(estadoDir)
+	mux := newFakeMuxWithState(stateDir)
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
-		n := escreveMetricasComuns(w, &raspagens)
-		total := invalidoPorRaspagem(n)
-		metade := total / 2
-		_, _ = fmt.Fprintf(w, "nishidb_ingest_invalid_total{dataset=\"events\",motivo=\"EVENT_TOO_LARGE\"} %d\n", metade)
-		_, _ = fmt.Fprintf(w, "nishidb_ingest_invalid_total{dataset=\"events\",motivo=\"INVALID_JSON\"} %d\n", total-metade)
+		n := writeCommonMetrics(w, &scrapes)
+		total := invalidAtScrape(n)
+		half := total / 2
+		_, _ = fmt.Fprintf(w, "nishidb_ingest_invalid_total{dataset=\"events\",motivo=\"EVENT_TOO_LARGE\"} %d\n", half)
+		_, _ = fmt.Fprintf(w, "nishidb_ingest_invalid_total{dataset=\"events\",motivo=\"INVALID_JSON\"} %d\n", total-half)
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv
 }
 
-// dubleSempreVelha é o systemctl de mentira do cenário (a): não importa qual
+// fakeAlwaysOld é o systemctl de mentira do cenário (a): não importa qual
 // release o script acabou de linkar, o `start` sempre reporta a versão
 // VELHA — é a simulação direta do defeito que o rollback existe para pegar
 // (binário novo sobe, mas o /v1/stats nunca confirma a versão nova).
-const dubleSempreVelha = `#!/bin/sh
+const fakeAlwaysOld = `#!/bin/sh
 set -e
 echo "$@" >> "$NISHIDB_TESTE_LOG"
 case "$1" in
@@ -233,11 +233,11 @@ esac
 exit 0
 `
 
-// dubleHonesto é o systemctl de mentira do cenário (b): resolve a versão de
+// fakeHonest é o systemctl de mentira do cenário (b): resolve a versão de
 // verdade rodando o binário que `current` aponta NO MOMENTO do start — o
 // mesmo efeito que um `systemctl start` real teria, só que sem subir
 // processo nenhum.
-const dubleHonesto = `#!/bin/sh
+const fakeHonest = `#!/bin/sh
 set -e
 echo "$@" >> "$NISHIDB_TESTE_LOG"
 case "$1" in
@@ -253,11 +253,11 @@ esac
 exit 0
 `
 
-// dubleVersaoVizinha prova o Critical 2 da revisão: escreve uma versão que
+// fakeNeighborVersion prova o Critical 2 da revisão: escreve uma versão que
 // COMEÇA com o mesmo prefixo do alvo ("nova"), mas é outra release inteira
 // ("nova2") — a comparação por prefixo solto aceitava isso; a comparação
 // por token exato não pode.
-const dubleVersaoVizinha = `#!/bin/sh
+const fakeNeighborVersion = `#!/bin/sh
 set -e
 echo "$@" >> "$NISHIDB_TESTE_LOG"
 case "$1" in
@@ -272,12 +272,12 @@ esac
 exit 0
 `
 
-// dubleVersaoComSufixoDeBuildinfo escreve o formato REAL de
+// fakeVersionWithBuildinfoSuffix escreve o formato REAL de
 // buildinfo.String() ("<versão> (commit <sha>, build <data>)"), com o
 // mesmo token de versão do alvo ("nova"). Prova que a correção do Critical 2
 // (comparar só o primeiro token) não passou a rejeitar o formato de
 // verdade que o servidor produz.
-const dubleVersaoComSufixoDeBuildinfo = `#!/bin/sh
+const fakeVersionWithBuildinfoSuffix = `#!/bin/sh
 set -e
 echo "$@" >> "$NISHIDB_TESTE_LOG"
 case "$1" in
@@ -292,13 +292,13 @@ esac
 exit 0
 `
 
-// dubleFalhaNoPrimeiroStart prova o Important 2 da revisão: o `systemctl
+// fakeFailsFirstStart prova o Important 2 da revisão: o `systemctl
 // start` da PRIMEIRA tentativa (a versão nova) falha de verdade — o dublê
 // sai 1 em vez de aplicar o start. Da segunda chamada em diante (a do
 // rollback) ele volta a se comportar como dubleHonesto, para o rollback
 // poder de fato se recuperar e o teste conseguir distinguir "o passo certo
 // falhou" de "o script trava".
-const dubleFalhaNoPrimeiroStart = `#!/bin/sh
+const fakeFailsFirstStart = `#!/bin/sh
 echo "$@" >> "$NISHIDB_TESTE_LOG"
 case "$1" in
   start)
@@ -318,13 +318,13 @@ esac
 exit 0
 `
 
-// dubleQueNuncaSobeEDerrubaOServidor prova o Important 3: o `start` não
+// fakeNeverUpSignalsServerClose prova o Important 3: o `start` não
 // escreve UP nem versão nenhuma (o processo "nunca sobe") e avisa o teste
 // (tocando um arquivo-sinal no próprio estadoDir) para derrubar o
 // httptest.Server de verdade, simulando a porta parando de responder — os
 // ramos de curl FALHANDO em verifica_pos_start, não só um JSON dizendo
 // DOWN.
-const dubleQueNuncaSobeEDerrubaOServidor = `#!/bin/sh
+const fakeNeverUpSignalsServerClose = `#!/bin/sh
 set -e
 echo "$@" >> "$NISHIDB_TESTE_LOG"
 case "$1" in
@@ -338,7 +338,7 @@ esac
 exit 0
 `
 
-// dubleMataOPaiAposStart prova o Important 1 (trap de INT/TERM): assim que
+// fakeKillsParentAfterStart prova o Important 1 (trap de INT/TERM): assim que
 // aplica o PRIMEIRO `start` (a versão nova), manda SIGTERM para o próprio
 // processo pai — que é o nishidb-update.sh em execução, já que o dublê é
 // filho direto dele. É determinístico (sem depender de acertar uma janela
@@ -347,7 +347,7 @@ exit 0
 // sai, ANTES de troca_para sequer conferir o exit code do start. O marcador
 // ja-matou evita mandar um SEGUNDO sinal quando o rollback chama `start` de
 // novo.
-const dubleMataOPaiAposStart = `#!/bin/sh
+const fakeKillsParentAfterStart = `#!/bin/sh
 set -e
 echo "$@" >> "$NISHIDB_TESTE_LOG"
 case "$1" in
@@ -367,39 +367,39 @@ esac
 exit 0
 `
 
-// escreveDuble grava o dublê `systemctl` num diretório próprio (fora de
+// writeFakeSystemctl grava o dublê `systemctl` num diretório próprio (fora de
 // $NISHIDB_ROOT, para não colidir com o layout releases/current que o script
 // varre) e devolve o caminho do executável e do arquivo de log de chamadas.
-func escreveDuble(t *testing.T, conteudo string) (caminho, log string) {
+func writeFakeSystemctl(t *testing.T, content string) (path, log string) {
 	t.Helper()
 	dir := t.TempDir()
-	caminho = filepath.Join(dir, "systemctl-fake")
-	if err := os.WriteFile(caminho, []byte(conteudo), 0o755); err != nil {
+	path = filepath.Join(dir, "systemctl-fake")
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	log = filepath.Join(dir, "chamadas.log")
-	return caminho, log
+	return path, log
 }
 
-// rodaScript executa nishidb-update.sh de verdade, com PATH e ambiente
+// runScript executa nishidb-update.sh de verdade, com PATH e ambiente
 // totalmente controlados, e devolve stdout+stderr combinados e o erro de
 // exec.Cmd.Run (nil quando o script sai 0). extras carrega variáveis de
 // ambiente adicionais no formato CHAVE=valor (ex.:
 // "NISHIDB_UPDATE_INVALID_TOLERANCE=1") — usadas pelos testes que precisam
 // de um parâmetro além dos cinco básicos.
-func rodaScript(t *testing.T, raiz, servidorURL, systemctlPath, logPath, versao, prazoSegundos string, extras ...string) (saida string, err error) {
+func runScript(t *testing.T, root, serverURL, systemctlPath, logPath, version, timeoutSeconds string, extras ...string) (output string, err error) {
 	t.Helper()
-	bash := ondeEstaOBash(t)
-	cmd := exec.Command(bash, caminhoDoScriptDeAtualizacao, versao)
+	bash := locateBash(t)
+	cmd := exec.Command(bash, updateScriptPath, version)
 	cmd.Env = append(os.Environ(),
-		"NISHIDB_ROOT="+raiz,
+		"NISHIDB_ROOT="+root,
 		"NISHIDB_UPDATE_SYSTEMCTL="+systemctlPath,
 		"NISHIDB_SERVICE=nishidb-teste.service",
-		"NISHIDB_SERVER="+servidorURL,
-		"NISHIDB_UPDATE_TIMEOUT="+prazoSegundos,
-		"NISHIDB_TESTE_ESTADO="+filepath.Join(raiz, "estado-fake"),
+		"NISHIDB_SERVER="+serverURL,
+		"NISHIDB_UPDATE_TIMEOUT="+timeoutSeconds,
+		"NISHIDB_TESTE_ESTADO="+filepath.Join(root, "estado-fake"),
 		"NISHIDB_TESTE_LOG="+logPath,
-		"NISHIDB_TESTE_CURRENT="+filepath.Join(raiz, "current"),
+		"NISHIDB_TESTE_CURRENT="+filepath.Join(root, "current"),
 	)
 	cmd.Env = append(cmd.Env, extras...)
 	var buf strings.Builder
@@ -409,17 +409,17 @@ func rodaScript(t *testing.T, raiz, servidorURL, systemctlPath, logPath, versao,
 	return buf.String(), err
 }
 
-// releaseLinkada resolve, sem seguir o link até o final do filesystem, o
+// linkedRelease resolve, sem seguir o link até o final do filesystem, o
 // nome da release (basename de releases/<nome>) para o qual `current`
 // aponta agora — é o que os dois testes usam para afirmar que o symlink
 // terminou no lugar certo.
-func releaseLinkada(t *testing.T, raiz string) string {
+func linkedRelease(t *testing.T, root string) string {
 	t.Helper()
-	destino, err := filepath.EvalSymlinks(filepath.Join(raiz, "current"))
+	target, err := filepath.EvalSymlinks(filepath.Join(root, "current"))
 	if err != nil {
 		t.Fatalf("current não é um symlink resolvível após o script rodar: %v", err)
 	}
-	return filepath.Base(destino)
+	return filepath.Base(target)
 }
 
 // exitCode extrai o código de saída de um erro de exec.Cmd.Run, ou 0 quando
@@ -428,9 +428,9 @@ func exitCode(err error) int {
 	if err == nil {
 		return 0
 	}
-	var saiu *exec.ExitError
-	if errors.As(err, &saiu) {
-		return saiu.ExitCode()
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.ExitCode()
 	}
 	return -1
 }
@@ -443,34 +443,34 @@ func exitCode(err error) int {
 // releases/velha e sair ≠ 0 NOMEANDO o passo que falhou — rollback mecânico
 // sem essa prova é só comentário no cabeçalho do script.
 func TestScriptDeAtualizacaoFazRollbackQuandoAVersaoNovaNuncaAparece(t *testing.T) {
-	raiz, estadoDir := montaRaiz(t)
-	servidor := servidorFake(t, estadoDir)
-	systemctlPath, logPath := escreveDuble(t, dubleSempreVelha)
+	root, stateDir := setupRoot(t)
+	server := fakeServer(t, stateDir)
+	systemctlPath, logPath := writeFakeSystemctl(t, fakeAlwaysOld)
 
-	saida, err := rodaScript(t, raiz, servidor.URL, systemctlPath, logPath, "nova", "3")
+	output, err := runScript(t, root, server.URL, systemctlPath, logPath, "nova", "3")
 
 	if err == nil {
-		t.Fatalf("o script saiu 0 com a versão nova NUNCA confirmada em /v1/stats — o rollback deveria ter disparado\nsaída completa:\n%s", saida)
+		t.Fatalf("o script saiu 0 com a versão nova NUNCA confirmada em /v1/stats — o rollback deveria ter disparado\nsaída completa:\n%s", output)
 	}
 	if exitCode(err) == 0 {
 		t.Errorf("exit code 0 (via outro caminho de erro que não exec.ExitError): %v", err)
 	}
 
-	if !strings.Contains(saida, "versão") && !strings.Contains(saida, "verificação") {
-		t.Errorf("a saída não nomeia o passo que falhou (esperava menção a 'versão' ou 'verificação')\nsaída completa:\n%s", saida)
+	if !strings.Contains(output, "versão") && !strings.Contains(output, "verificação") {
+		t.Errorf("a saída não nomeia o passo que falhou (esperava menção a 'versão' ou 'verificação')\nsaída completa:\n%s", output)
 	}
-	if !strings.Contains(strings.ToLower(saida), "rollback") {
-		t.Errorf("a saída não menciona o rollback disparado\nsaída completa:\n%s", saida)
+	if !strings.Contains(strings.ToLower(output), "rollback") {
+		t.Errorf("a saída não menciona o rollback disparado\nsaída completa:\n%s", output)
 	}
 
-	if linkada := releaseLinkada(t, raiz); linkada != "velha" {
-		t.Errorf("current aponta para releases/%s após o rollback — esperava releases/velha (o par binário+config velho tem de voltar)", linkada)
+	if linked := linkedRelease(t, root); linked != "velha" {
+		t.Errorf("current aponta para releases/%s após o rollback — esperava releases/velha (o par binário+config velho tem de voltar)", linked)
 	}
 
 	log, _ := os.ReadFile(logPath)
-	chamadas := string(log)
-	if strings.Count(chamadas, "start") < 2 {
-		t.Errorf("esperava pelo menos 2 chamadas de `start` ao systemctl dublê (a tentativa nova + o rollback), log:\n%s", chamadas)
+	calls := string(log)
+	if strings.Count(calls, "start") < 2 {
+		t.Errorf("esperava pelo menos 2 chamadas de `start` ao systemctl dublê (a tentativa nova + o rollback), log:\n%s", calls)
 	}
 }
 
@@ -481,30 +481,30 @@ func TestScriptDeAtualizacaoFazRollbackQuandoAVersaoNovaNuncaAparece(t *testing.
 // sem isso o teste (a) sozinho não prova nada, porque um script que SEMPRE
 // faz rollback (mesmo com tudo saudável) também passaria nele.
 func TestScriptDeAtualizacaoConcluiQuandoAVersaoNovaAparece(t *testing.T) {
-	raiz, estadoDir := montaRaiz(t)
-	servidor := servidorFake(t, estadoDir)
-	systemctlPath, logPath := escreveDuble(t, dubleHonesto)
+	root, stateDir := setupRoot(t)
+	server := fakeServer(t, stateDir)
+	systemctlPath, logPath := writeFakeSystemctl(t, fakeHonest)
 
-	saida, err := rodaScript(t, raiz, servidor.URL, systemctlPath, logPath, "nova", "10")
+	output, err := runScript(t, root, server.URL, systemctlPath, logPath, "nova", "10")
 
 	if err != nil {
-		t.Fatalf("o script saiu %d com o caminho feliz (versão nova confirmada, ingestão avançando): %v\nsaída completa:\n%s", exitCode(err), err, saida)
+		t.Fatalf("o script saiu %d com o caminho feliz (versão nova confirmada, ingestão avançando): %v\nsaída completa:\n%s", exitCode(err), err, output)
 	}
 
-	if linkada := releaseLinkada(t, raiz); linkada != "nova" {
-		t.Errorf("current aponta para releases/%s após o caminho feliz — esperava releases/nova", linkada)
+	if linked := linkedRelease(t, root); linked != "nova" {
+		t.Errorf("current aponta para releases/%s após o caminho feliz — esperava releases/nova", linked)
 	}
 
 	log, _ := os.ReadFile(logPath)
 	if n := strings.Count(string(log), "start"); n != 1 {
 		t.Errorf("esperava exatamente 1 chamada de `start` (sem rollback) — log:\n%s (start apareceu %d vez(es))", string(log), n)
 	}
-	if strings.Contains(strings.ToLower(saida), "rollback") {
-		t.Errorf("o caminho feliz não deveria mencionar rollback\nsaída completa:\n%s", saida)
+	if strings.Contains(strings.ToLower(output), "rollback") {
+		t.Errorf("o caminho feliz não deveria mencionar rollback\nsaída completa:\n%s", output)
 	}
 
-	versaoFinal, _ := os.ReadFile(filepath.Join(estadoDir, "versao"))
-	if got := strings.TrimSpace(string(versaoFinal)); !strings.HasPrefix(got, "nova") {
+	finalVersion, _ := os.ReadFile(filepath.Join(stateDir, "versao"))
+	if got := strings.TrimSpace(string(finalVersion)); !strings.HasPrefix(got, "nova") {
 		t.Errorf("estado-fake/versao = %q depois do caminho feliz — esperava prefixo 'nova'", got)
 	}
 }
@@ -516,36 +516,36 @@ func TestScriptDeAtualizacaoConcluiQuandoAVersaoNovaAparece(t *testing.T) {
 // versão só descobre o problema depois do `systemctl stop` já ter derrubado
 // o serviço em produção.
 func TestScriptDeAtualizacaoRecusaSemAVersaoDaReleaseNaPreChecagem(t *testing.T) {
-	raiz, estadoDir := montaRaiz(t)
-	servidor := servidorFake(t, estadoDir)
+	root, stateDir := setupRoot(t)
+	server := fakeServer(t, stateDir)
 	// dublê que FALHARIA o teste se fosse chamado: qualquer invocação sai
 	// com erro alto, provando que a pré-checagem não chegou a chamar
 	// systemctl.
-	const dubleNuncaDeveRodar = `#!/bin/sh
+	const fakeMustNeverRun = `#!/bin/sh
 echo "systemctl NAO deveria ter sido chamado (args: $*)" >&2
 exit 99
 `
-	systemctlPath, _ := escreveDuble(t, dubleNuncaDeveRodar)
+	systemctlPath, _ := writeFakeSystemctl(t, fakeMustNeverRun)
 
-	saida, err := rodaScript(t, raiz, servidor.URL, systemctlPath, filepath.Join(t.TempDir(), "log"), "inexistente", "3")
+	output, err := runScript(t, root, server.URL, systemctlPath, filepath.Join(t.TempDir(), "log"), "inexistente", "3")
 
 	if err == nil {
-		t.Fatalf("o script saiu 0 pedindo a versão 'inexistente', sem release correspondente\nsaída completa:\n%s", saida)
+		t.Fatalf("o script saiu 0 pedindo a versão 'inexistente', sem release correspondente\nsaída completa:\n%s", output)
 	}
 	if exitCode(err) == 99 {
-		t.Fatalf("o script chegou a invocar o systemctl dublê antes de recusar a pré-checagem\nsaída completa:\n%s", saida)
+		t.Fatalf("o script chegou a invocar o systemctl dublê antes de recusar a pré-checagem\nsaída completa:\n%s", output)
 	}
 	// A mensagem tem de nomear o que faltou, não só sair != 0 por algum
 	// outro motivo (ex.: erro de sintaxe do próprio script) — senão este
 	// teste passaria por acidente com qualquer script quebrado.
-	if !strings.Contains(saida, "inexistente") || !strings.Contains(strings.ToLower(saida), "release") {
-		t.Errorf("a recusa não nomeia a versão pedida nem menciona a release ausente\nsaída completa:\n%s", saida)
+	if !strings.Contains(output, "inexistente") || !strings.Contains(strings.ToLower(output), "release") {
+		t.Errorf("a recusa não nomeia a versão pedida nem menciona a release ausente\nsaída completa:\n%s", output)
 	}
-	if !strings.Contains(saida, "pré-checagem") {
-		t.Errorf("a recusa não identifica o passo (pré-checagem)\nsaída completa:\n%s", saida)
+	if !strings.Contains(output, "pré-checagem") {
+		t.Errorf("a recusa não identifica o passo (pré-checagem)\nsaída completa:\n%s", output)
 	}
-	if linkada := releaseLinkada(t, raiz); linkada != "velha" {
-		t.Errorf("current mudou de releases/velha para releases/%s numa pré-checagem que deveria ter recusado ANTES de tocar no serviço", linkada)
+	if linked := linkedRelease(t, root); linked != "velha" {
+		t.Errorf("current mudou de releases/velha para releases/%s numa pré-checagem que deveria ter recusado ANTES de tocar no serviço", linked)
 	}
 }
 
@@ -567,22 +567,22 @@ exit 99
 // revisão final): é o que o binário atual — o que esta atualização instala —
 // de fato emite.
 func TestScriptDeAtualizacaoToleraUmInvalidoIsoladoDentroDaJanela(t *testing.T) {
-	raiz, estadoDir := montaRaiz(t)
-	servidor := servidorFakeComInvalidoPorMotivo(t, estadoDir, func(n int64) int64 {
+	root, stateDir := setupRoot(t)
+	server := fakeServerWithInvalidByReason(t, stateDir, func(n int64) int64 {
 		if n >= 2 {
 			return 1
 		}
 		return 0
 	})
-	systemctlPath, logPath := escreveDuble(t, dubleHonesto)
+	systemctlPath, logPath := writeFakeSystemctl(t, fakeHonest)
 
-	saida, err := rodaScript(t, raiz, servidor.URL, systemctlPath, logPath, "nova", "10")
+	output, err := runScript(t, root, server.URL, systemctlPath, logPath, "nova", "10")
 
 	if err != nil {
-		t.Fatalf("o script saiu %d com invalid_total subindo só +1 na janela inteira (tolerância default 5): %v\nsaída completa:\n%s", exitCode(err), err, saida)
+		t.Fatalf("o script saiu %d com invalid_total subindo só +1 na janela inteira (tolerância default 5): %v\nsaída completa:\n%s", exitCode(err), err, output)
 	}
-	if linkada := releaseLinkada(t, raiz); linkada != "nova" {
-		t.Errorf("current aponta para releases/%s — esperava releases/nova (um invalid isolado não deveria disparar rollback)", linkada)
+	if linked := linkedRelease(t, root); linked != "nova" {
+		t.Errorf("current aponta para releases/%s — esperava releases/nova (um invalid isolado não deveria disparar rollback)", linked)
 	}
 }
 
@@ -594,22 +594,22 @@ func TestScriptDeAtualizacaoToleraUmInvalidoIsoladoDentroDaJanela(t *testing.T) 
 // Formato NOVO (servidorFakeComInvalidoPorMotivo, Important 2), pelo mesmo
 // motivo do teste acima.
 func TestScriptDeAtualizacaoFazRollbackQuandoInvalidoSobeAlemDaToleranciaConfigurada(t *testing.T) {
-	raiz, estadoDir := montaRaiz(t)
-	servidor := servidorFakeComInvalidoPorMotivo(t, estadoDir, func(n int64) int64 {
+	root, stateDir := setupRoot(t)
+	server := fakeServerWithInvalidByReason(t, stateDir, func(n int64) int64 {
 		return n * 10 // cresce rápido: delta já estoura a tolerância default (5) na 2ª amostra
 	})
-	systemctlPath, logPath := escreveDuble(t, dubleHonesto)
+	systemctlPath, logPath := writeFakeSystemctl(t, fakeHonest)
 
-	saida, err := rodaScript(t, raiz, servidor.URL, systemctlPath, logPath, "nova", "5")
+	output, err := runScript(t, root, server.URL, systemctlPath, logPath, "nova", "5")
 
 	if err == nil {
-		t.Fatalf("o script saiu 0 com invalid_total disparando bem acima da tolerância\nsaída completa:\n%s", saida)
+		t.Fatalf("o script saiu 0 com invalid_total disparando bem acima da tolerância\nsaída completa:\n%s", output)
 	}
-	if !strings.Contains(saida, "invalid_total") {
-		t.Errorf("a mensagem de falha não menciona invalid_total\nsaída completa:\n%s", saida)
+	if !strings.Contains(output, "invalid_total") {
+		t.Errorf("a mensagem de falha não menciona invalid_total\nsaída completa:\n%s", output)
 	}
-	if linkada := releaseLinkada(t, raiz); linkada != "velha" {
-		t.Errorf("current aponta para releases/%s — esperava rollback para releases/velha", linkada)
+	if linked := linkedRelease(t, root); linked != "velha" {
+		t.Errorf("current aponta para releases/%s — esperava rollback para releases/velha", linked)
 	}
 }
 
@@ -622,22 +622,22 @@ func TestScriptDeAtualizacaoFazRollbackQuandoInvalidoSobeAlemDaToleranciaConfigu
 // Formato NOVO (servidorFakeComInvalidoPorMotivo, Important 2), pelo mesmo
 // motivo dos dois testes acima.
 func TestScriptDeAtualizacaoRespeitaToleranciaCustomizadaDeInvalido(t *testing.T) {
-	raiz, estadoDir := montaRaiz(t)
-	servidor := servidorFakeComInvalidoPorMotivo(t, estadoDir, func(n int64) int64 {
+	root, stateDir := setupRoot(t)
+	server := fakeServerWithInvalidByReason(t, stateDir, func(n int64) int64 {
 		if n >= 2 {
 			return 2
 		}
 		return 0
 	})
-	systemctlPath, logPath := escreveDuble(t, dubleHonesto)
+	systemctlPath, logPath := writeFakeSystemctl(t, fakeHonest)
 
-	saida, err := rodaScript(t, raiz, servidor.URL, systemctlPath, logPath, "nova", "3", "NISHIDB_UPDATE_INVALID_TOLERANCE=1")
+	output, err := runScript(t, root, server.URL, systemctlPath, logPath, "nova", "3", "NISHIDB_UPDATE_INVALID_TOLERANCE=1")
 
 	if err == nil {
-		t.Fatalf("o script saiu 0 com invalid_total subindo +2 e NISHIDB_UPDATE_INVALID_TOLERANCE=1 — a variável não está sendo respeitada\nsaída completa:\n%s", saida)
+		t.Fatalf("o script saiu 0 com invalid_total subindo +2 e NISHIDB_UPDATE_INVALID_TOLERANCE=1 — a variável não está sendo respeitada\nsaída completa:\n%s", output)
 	}
-	if linkada := releaseLinkada(t, raiz); linkada != "velha" {
-		t.Errorf("current aponta para releases/%s — esperava rollback com a tolerância customizada estourada", linkada)
+	if linked := linkedRelease(t, root); linked != "velha" {
+		t.Errorf("current aponta para releases/%s — esperava rollback com a tolerância customizada estourada", linked)
 	}
 }
 
@@ -654,22 +654,22 @@ func TestScriptDeAtualizacaoRespeitaToleranciaCustomizadaDeInvalido(t *testing.T
 // inteiro passaria a testar só o formato novo, e uma regressão que quebrasse
 // especificamente a leitura da série SEM `motivo` passaria despercebida.
 func TestScriptDeAtualizacaoToleraUmInvalidoIsoladoNoFormatoAntigoSemMotivo(t *testing.T) {
-	raiz, estadoDir := montaRaiz(t)
-	servidor := servidorFakeComInvalido(t, estadoDir, func(n int64) int64 {
+	root, stateDir := setupRoot(t)
+	server := fakeServerWithInvalid(t, stateDir, func(n int64) int64 {
 		if n >= 2 {
 			return 1
 		}
 		return 0
 	})
-	systemctlPath, logPath := escreveDuble(t, dubleHonesto)
+	systemctlPath, logPath := writeFakeSystemctl(t, fakeHonest)
 
-	saida, err := rodaScript(t, raiz, servidor.URL, systemctlPath, logPath, "nova", "10")
+	output, err := runScript(t, root, server.URL, systemctlPath, logPath, "nova", "10")
 
 	if err != nil {
-		t.Fatalf("o script saiu %d com invalid_total (formato ANTIGO, sem motivo) subindo só +1 na janela inteira (tolerância default 5): %v\nsaída completa:\n%s", exitCode(err), err, saida)
+		t.Fatalf("o script saiu %d com invalid_total (formato ANTIGO, sem motivo) subindo só +1 na janela inteira (tolerância default 5): %v\nsaída completa:\n%s", exitCode(err), err, output)
 	}
-	if linkada := releaseLinkada(t, raiz); linkada != "nova" {
-		t.Errorf("current aponta para releases/%s — esperava releases/nova (um invalid isolado no formato antigo não deveria disparar rollback)", linkada)
+	if linked := linkedRelease(t, root); linked != "nova" {
+		t.Errorf("current aponta para releases/%s — esperava releases/nova (um invalid isolado no formato antigo não deveria disparar rollback)", linked)
 	}
 }
 
@@ -678,20 +678,20 @@ func TestScriptDeAtualizacaoToleraUmInvalidoIsoladoNoFormatoAntigoSemMotivo(t *t
 // o mesmo texto. Antes da correção, o `case "$versao" in "$alvo"*)` aceitava
 // isso — a "única defesa contra binário-velho-config-nova" ficava furada.
 func TestScriptDeAtualizacaoRecusaVersaoVizinhaPorPrefixo(t *testing.T) {
-	raiz, estadoDir := montaRaiz(t)
-	servidor := servidorFake(t, estadoDir)
-	systemctlPath, logPath := escreveDuble(t, dubleVersaoVizinha)
+	root, stateDir := setupRoot(t)
+	server := fakeServer(t, stateDir)
+	systemctlPath, logPath := writeFakeSystemctl(t, fakeNeighborVersion)
 
-	saida, err := rodaScript(t, raiz, servidor.URL, systemctlPath, logPath, "nova", "3")
+	output, err := runScript(t, root, server.URL, systemctlPath, logPath, "nova", "3")
 
 	if err == nil {
-		t.Fatalf("o script saiu 0 com 'nova2' no /v1/stats — a versão vizinha não deveria confirmar o alvo 'nova'\nsaída completa:\n%s", saida)
+		t.Fatalf("o script saiu 0 com 'nova2' no /v1/stats — a versão vizinha não deveria confirmar o alvo 'nova'\nsaída completa:\n%s", output)
 	}
-	if linkada := releaseLinkada(t, raiz); linkada != "velha" {
-		t.Errorf("current aponta para releases/%s — esperava rollback diante da versão vizinha 'nova2'", linkada)
+	if linked := linkedRelease(t, root); linked != "velha" {
+		t.Errorf("current aponta para releases/%s — esperava rollback diante da versão vizinha 'nova2'", linked)
 	}
-	if !strings.Contains(saida, "nova2") {
-		t.Errorf("a mensagem de falha não mostra a versão vizinha lida ('nova2 (dublê)')\nsaída completa:\n%s", saida)
+	if !strings.Contains(output, "nova2") {
+		t.Errorf("a mensagem de falha não mostra a versão vizinha lida ('nova2 (dublê)')\nsaída completa:\n%s", output)
 	}
 }
 
@@ -701,17 +701,17 @@ func TestScriptDeAtualizacaoRecusaVersaoVizinhaPorPrefixo(t *testing.T) {
 // teste, uma correção "por igualdade exata da string inteira" (em vez de
 // por token) passaria no teste da versão vizinha e quebraria em produção.
 func TestScriptDeAtualizacaoAceitaVersaoComSufixoDeBuildinfo(t *testing.T) {
-	raiz, estadoDir := montaRaiz(t)
-	servidor := servidorFake(t, estadoDir)
-	systemctlPath, logPath := escreveDuble(t, dubleVersaoComSufixoDeBuildinfo)
+	root, stateDir := setupRoot(t)
+	server := fakeServer(t, stateDir)
+	systemctlPath, logPath := writeFakeSystemctl(t, fakeVersionWithBuildinfoSuffix)
 
-	saida, err := rodaScript(t, raiz, servidor.URL, systemctlPath, logPath, "nova", "10")
+	output, err := runScript(t, root, server.URL, systemctlPath, logPath, "nova", "10")
 
 	if err != nil {
-		t.Fatalf("o script saiu %d com a versão 'nova (commit ..., build ...)' — formato real do buildinfo.String() deveria bater com o alvo 'nova': %v\nsaída completa:\n%s", exitCode(err), err, saida)
+		t.Fatalf("o script saiu %d com a versão 'nova (commit ..., build ...)' — formato real do buildinfo.String() deveria bater com o alvo 'nova': %v\nsaída completa:\n%s", exitCode(err), err, output)
 	}
-	if linkada := releaseLinkada(t, raiz); linkada != "nova" {
-		t.Errorf("current aponta para releases/%s — esperava releases/nova", linkada)
+	if linked := linkedRelease(t, root); linked != "nova" {
+		t.Errorf("current aponta para releases/%s — esperava releases/nova", linked)
 	}
 }
 
@@ -720,23 +720,23 @@ func TestScriptDeAtualizacaoAceitaVersaoComSufixoDeBuildinfo(t *testing.T) {
 // encontrada, dependência não satisfeita, etc.) — troca_para já tratava
 // isso, mas nenhum teste exercitava o ramo antes desta correção.
 func TestScriptDeAtualizacaoFazRollbackQuandoOSystemctlStartFalha(t *testing.T) {
-	raiz, estadoDir := montaRaiz(t)
-	servidor := servidorFake(t, estadoDir)
-	systemctlPath, logPath := escreveDuble(t, dubleFalhaNoPrimeiroStart)
+	root, stateDir := setupRoot(t)
+	server := fakeServer(t, stateDir)
+	systemctlPath, logPath := writeFakeSystemctl(t, fakeFailsFirstStart)
 
-	saida, err := rodaScript(t, raiz, servidor.URL, systemctlPath, logPath, "nova", "5")
+	output, err := runScript(t, root, server.URL, systemctlPath, logPath, "nova", "5")
 
 	if err == nil {
-		t.Fatalf("o script saiu 0 com o systemctl start falhando na tentativa de subir a versão nova\nsaída completa:\n%s", saida)
+		t.Fatalf("o script saiu 0 com o systemctl start falhando na tentativa de subir a versão nova\nsaída completa:\n%s", output)
 	}
-	if !strings.Contains(saida, "systemctl start") {
-		t.Errorf("a mensagem de falha não nomeia o passo 'systemctl start'\nsaída completa:\n%s", saida)
+	if !strings.Contains(output, "systemctl start") {
+		t.Errorf("a mensagem de falha não nomeia o passo 'systemctl start'\nsaída completa:\n%s", output)
 	}
-	if !strings.Contains(strings.ToLower(saida), "rollback") {
-		t.Errorf("a saída não menciona o rollback\nsaída completa:\n%s", saida)
+	if !strings.Contains(strings.ToLower(output), "rollback") {
+		t.Errorf("a saída não menciona o rollback\nsaída completa:\n%s", output)
 	}
-	if linkada := releaseLinkada(t, raiz); linkada != "velha" {
-		t.Errorf("current aponta para releases/%s — esperava rollback de volta para releases/velha", linkada)
+	if linked := linkedRelease(t, root); linked != "velha" {
+		t.Errorf("current aponta para releases/%s — esperava rollback de volta para releases/velha", linked)
 	}
 }
 
@@ -748,39 +748,39 @@ func TestScriptDeAtualizacaoFazRollbackQuandoOSystemctlStartFalha(t *testing.T) 
 // A goroutine derruba o httptest.Server assim que o dublê toca o arquivo-
 // sinal, dentro do próprio `systemctl start`.
 func TestScriptDeAtualizacaoFazRollbackQuandoOServidorNuncaResponde(t *testing.T) {
-	raiz, estadoDir := montaRaiz(t)
-	servidor := servidorFake(t, estadoDir)
-	systemctlPath, logPath := escreveDuble(t, dubleQueNuncaSobeEDerrubaOServidor)
+	root, stateDir := setupRoot(t)
+	server := fakeServer(t, stateDir)
+	systemctlPath, logPath := writeFakeSystemctl(t, fakeNeverUpSignalsServerClose)
 
-	sinal := filepath.Join(estadoDir, "derruba-servidor")
-	derrubado := make(chan struct{})
+	markerFile := filepath.Join(stateDir, "derruba-servidor")
+	serverClosed := make(chan struct{})
 	go func() {
 		for {
-			if _, err := os.Stat(sinal); err == nil {
-				servidor.Close()
-				close(derrubado)
+			if _, err := os.Stat(markerFile); err == nil {
+				server.Close()
+				close(serverClosed)
 				return
 			}
 			time.Sleep(20 * time.Millisecond)
 		}
 	}()
 
-	saida, err := rodaScript(t, raiz, servidor.URL, systemctlPath, logPath, "nova", "2")
+	output, err := runScript(t, root, server.URL, systemctlPath, logPath, "nova", "2")
 
 	select {
-	case <-derrubado:
+	case <-serverClosed:
 	case <-time.After(10 * time.Second):
 		t.Fatal("o sinal para derrubar o servidor fake nunca chegou — o dublê não tocou o marcador esperado")
 	}
 
 	if err == nil {
-		t.Fatalf("o script saiu 0 com o servidor fake parando de responder logo após o start\nsaída completa:\n%s", saida)
+		t.Fatalf("o script saiu 0 com o servidor fake parando de responder logo após o start\nsaída completa:\n%s", output)
 	}
-	if linkada := releaseLinkada(t, raiz); linkada != "velha" {
-		t.Errorf("current aponta para releases/%s — esperava o rollback devolver para releases/velha quando a porta para de responder", linkada)
+	if linked := linkedRelease(t, root); linked != "velha" {
+		t.Errorf("current aponta para releases/%s — esperava o rollback devolver para releases/velha quando a porta para de responder", linked)
 	}
-	if !strings.Contains(saida, "verificação") {
-		t.Errorf("a saída não nomeia o passo de verificação\nsaída completa:\n%s", saida)
+	if !strings.Contains(output, "verificação") {
+		t.Errorf("a saída não nomeia o passo de verificação\nsaída completa:\n%s", output)
 	}
 }
 
@@ -793,28 +793,28 @@ func TestScriptDeAtualizacaoFazRollbackQuandoOServidorNuncaResponde(t *testing.T
 // primeiro start) e nunca deveria depender do prazo de verificação para
 // disparar.
 func TestScriptDeAtualizacaoRespondeATerminacaoTentandoRollback(t *testing.T) {
-	raiz, estadoDir := montaRaiz(t)
-	servidor := servidorFake(t, estadoDir)
-	systemctlPath, logPath := escreveDuble(t, dubleMataOPaiAposStart)
+	root, stateDir := setupRoot(t)
+	server := fakeServer(t, stateDir)
+	systemctlPath, logPath := writeFakeSystemctl(t, fakeKillsParentAfterStart)
 
-	saida, err := rodaScript(t, raiz, servidor.URL, systemctlPath, logPath, "nova", "60")
+	output, err := runScript(t, root, server.URL, systemctlPath, logPath, "nova", "60")
 
 	if err == nil {
-		t.Fatalf("o script saiu 0 apesar de ter recebido SIGTERM no meio da mutação\nsaída completa:\n%s", saida)
+		t.Fatalf("o script saiu 0 apesar de ter recebido SIGTERM no meio da mutação\nsaída completa:\n%s", output)
 	}
 	if got := exitCode(err); got != 130 {
-		t.Errorf("exit code = %d, esperava 130 (convenção escolhida pelo próprio handler de interrupção)\nsaída completa:\n%s", got, saida)
+		t.Errorf("exit code = %d, esperava 130 (convenção escolhida pelo próprio handler de interrupção)\nsaída completa:\n%s", got, output)
 	}
-	if !strings.Contains(saida, "interrompido") {
-		t.Errorf("a saída não menciona a interrupção\nsaída completa:\n%s", saida)
+	if !strings.Contains(output, "interrompido") {
+		t.Errorf("a saída não menciona a interrupção\nsaída completa:\n%s", output)
 	}
-	if !strings.Contains(strings.ToLower(saida), "rollback") {
-		t.Errorf("a saída não menciona a tentativa de rollback de emergência\nsaída completa:\n%s", saida)
+	if !strings.Contains(strings.ToLower(output), "rollback") {
+		t.Errorf("a saída não menciona a tentativa de rollback de emergência\nsaída completa:\n%s", output)
 	}
-	if !strings.Contains(saida, "estado real") {
-		t.Errorf("a saída não reporta o estado real resultante (current/health) — Important 1 pede isso SEMPRE\nsaída completa:\n%s", saida)
+	if !strings.Contains(output, "estado real") {
+		t.Errorf("a saída não reporta o estado real resultante (current/health) — Important 1 pede isso SEMPRE\nsaída completa:\n%s", output)
 	}
-	if linkada := releaseLinkada(t, raiz); linkada != "velha" {
-		t.Errorf("current aponta para releases/%s — esperava o rollback de emergência devolver para releases/velha", linkada)
+	if linked := linkedRelease(t, root); linked != "velha" {
+		t.Errorf("current aponta para releases/%s — esperava o rollback de emergência devolver para releases/velha", linked)
 	}
 }
