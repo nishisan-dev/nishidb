@@ -14,7 +14,7 @@ import (
 // ele têm de ser os MESMOS bytes.
 
 func TestIPv6(t *testing.T) {
-	validos := []struct {
+	valid := []struct {
 		raw  string
 		want [16]byte
 	}{
@@ -31,7 +31,7 @@ func TestIPv6(t *testing.T) {
 		{"ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", [16]byte{255, 255, 255, 255, 255, 255, 255, 255,
 			255, 255, 255, 255, 255, 255, 255, 255}},
 	}
-	for _, tc := range validos {
+	for _, tc := range valid {
 		t.Run(tc.raw, func(t *testing.T) {
 			got, ok := typeparse.IPv6([]byte(tc.raw))
 			if !ok {
@@ -43,9 +43,9 @@ func TestIPv6(t *testing.T) {
 		})
 	}
 
-	invalidos := []struct {
+	invalid := []struct {
 		raw    string
-		porque string
+		reason string
 	}{
 		{"10.0.0.1", "v4 puro: netip aceita, mas gera 16 bytes que a ingestão nunca gravou"},
 		{"fe80::1%eth0", "zona não faz parte do valor armazenado"},
@@ -55,17 +55,17 @@ func TestIPv6(t *testing.T) {
 		{" 2001:db8::1", "espaço à esquerda"},
 		{"2001:db8::1/64", "prefixo não é endereço"},
 	}
-	for _, tc := range invalidos {
+	for _, tc := range invalid {
 		t.Run("invalido/"+tc.raw, func(t *testing.T) {
 			if _, ok := typeparse.IPv6([]byte(tc.raw)); ok {
-				t.Errorf("IPv6(%q) aceitou (%s)", tc.raw, tc.porque)
+				t.Errorf("IPv6(%q) aceitou (%s)", tc.raw, tc.reason)
 			}
 		})
 	}
 }
 
 func TestIPv4Prefix(t *testing.T) {
-	validos := []struct {
+	valid := []struct {
 		raw  string
 		want [4]byte
 		bits byte
@@ -78,7 +78,7 @@ func TestIPv4Prefix(t *testing.T) {
 		{"0.0.0.0/0", [4]byte{0, 0, 0, 0}, 0},
 		{"255.255.255.255/32", [4]byte{255, 255, 255, 255}, 32},
 	}
-	for _, tc := range validos {
+	for _, tc := range valid {
 		t.Run(tc.raw, func(t *testing.T) {
 			addr, bits, ok := typeparse.IPv4Prefix([]byte(tc.raw))
 			if !ok {
@@ -90,13 +90,13 @@ func TestIPv4Prefix(t *testing.T) {
 		})
 	}
 
-	invalidos := []string{
+	invalid := []string{
 		"2001:db8::/32", "10.0.0.0/33", "10.0.0.0", "10.0.0.0/", "", "10.0.0.0/8 ",
 		// Zona: mesma regra do IPv6 solto — não faz parte do valor armazenado,
 		// então um literal com zona não pode casar com nada gravado.
 		"10.0.0.0%eth0/8",
 	}
-	for _, raw := range invalidos {
+	for _, raw := range invalid {
 		t.Run("invalido/"+raw, func(t *testing.T) {
 			if _, _, ok := typeparse.IPv4Prefix([]byte(raw)); ok {
 				t.Errorf("IPv4Prefix(%q) aceitou", raw)
@@ -106,7 +106,7 @@ func TestIPv4Prefix(t *testing.T) {
 }
 
 func TestIPv6Prefix(t *testing.T) {
-	validos := []struct {
+	valid := []struct {
 		raw  string
 		want [16]byte
 		bits byte
@@ -117,7 +117,7 @@ func TestIPv6Prefix(t *testing.T) {
 		{"2804:1b2:d102:b1d::/64", [16]byte{40, 4, 1, 178, 209, 2, 11, 29}, 64},
 		{"2804:1b2:d080:4ea2::/64", [16]byte{40, 4, 1, 178, 208, 128, 78, 162}, 64},
 	}
-	for _, tc := range validos {
+	for _, tc := range valid {
 		t.Run(tc.raw, func(t *testing.T) {
 			addr, bits, ok := typeparse.IPv6Prefix([]byte(tc.raw))
 			if !ok {
@@ -129,7 +129,7 @@ func TestIPv6Prefix(t *testing.T) {
 		})
 	}
 
-	invalidos := []string{
+	invalid := []string{
 		"10.0.0.0/8", "2001:db8::/129", "2001:db8::", "", "2001:db8::/32 ",
 		// Zona é recusada nas DUAS grafias (literal e percent-encoded). Hoje
 		// quem recusa é netip.ParsePrefix, não uma checagem nossa: o teste
@@ -137,7 +137,7 @@ func TestIPv6Prefix(t *testing.T) {
 		// ParseAddr (que ACEITA zona) não passe despercebido.
 		"fe80::1%eth0/64", "fe80::1%25eth0/64",
 	}
-	for _, raw := range invalidos {
+	for _, raw := range invalid {
 		t.Run("invalido/"+raw, func(t *testing.T) {
 			if _, _, ok := typeparse.IPv6Prefix([]byte(raw)); ok {
 				t.Errorf("IPv6Prefix(%q) aceitou", raw)

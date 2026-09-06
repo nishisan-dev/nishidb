@@ -13,7 +13,7 @@ import (
 
 func layoutDT(t *testing.T, padrao string) *typeparse.Layout {
 	t.Helper()
-	l, err := typeparse.CompilaLayout(padrao, typeparse.DominioDateTime)
+	l, err := typeparse.CompileLayout(padrao, typeparse.DomainDateTime)
 	if err != nil {
 		t.Fatalf("CompilaLayout(%q): %v", padrao, err)
 	}
@@ -22,7 +22,7 @@ func layoutDT(t *testing.T, padrao string) *typeparse.Layout {
 
 func layoutTOD(t *testing.T, padrao string) *typeparse.Layout {
 	t.Helper()
-	l, err := typeparse.CompilaLayout(padrao, typeparse.DominioTime)
+	l, err := typeparse.CompileLayout(padrao, typeparse.DomainTime)
 	if err != nil {
 		t.Fatalf("CompilaLayout(%q): %v", padrao, err)
 	}
