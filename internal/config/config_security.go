@@ -187,7 +187,7 @@ func validaServerSeguranca(c *Config, raiz *yaml.Node, path string) error {
 	// só aparece na subida como net.Listen("127.0.0.1:0") — uma porta
 	// EFÊMERA escolhida pelo kernel, em silêncio, no lugar do endereço
 	// determinístico que server.loopback.port promete declarar.
-	if _, err := units.InteiroPositivo(c.Server.Loopback.Port, 0); err != nil {
+	if _, err := units.PositiveInt(c.Server.Loopback.Port, 0); err != nil {
 		return fmt.Errorf("configuração %s: server.loopback.port: %w", path, err)
 	}
 	if p := c.Server.Loopback.Port; p != nil && *p > 65535 {

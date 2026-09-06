@@ -7,9 +7,9 @@ import (
 )
 
 func TestTamanhoAceitaAsUnidadesBinariasDaSpec(t *testing.T) {
-	casos := []struct {
-		entrada string
-		quer    int64
+	cases := []struct {
+		input string
+		want  int64
 	}{
 		{"512MiB", 512 << 20},
 		{"1GiB", 1 << 30},
@@ -20,26 +20,26 @@ func TestTamanhoAceitaAsUnidadesBinariasDaSpec(t *testing.T) {
 		{"  1GiB  ", 1 << 30},
 		{"1 GiB", 1 << 30}, // espaço entre número e sufixo
 	}
-	for _, c := range casos {
-		got, err := Tamanho(c.entrada, 7)
+	for _, c := range cases {
+		got, err := Size(c.input, 7)
 		if err != nil {
-			t.Errorf("Tamanho(%q) devolveu erro: %v", c.entrada, err)
+			t.Errorf("Tamanho(%q) devolveu erro: %v", c.input, err)
 			continue
 		}
-		if got != c.quer {
-			t.Errorf("Tamanho(%q) = %d, quer %d", c.entrada, got, c.quer)
+		if got != c.want {
+			t.Errorf("Tamanho(%q) = %d, quer %d", c.input, got, c.want)
 		}
 	}
 }
 
 func TestTamanhoAusenteHerdaOPadrao(t *testing.T) {
-	for _, entrada := range []string{"", "   ", "\t"} {
-		got, err := Tamanho(entrada, 512<<20)
+	for _, input := range []string{"", "   ", "\t"} {
+		got, err := Size(input, 512<<20)
 		if err != nil {
-			t.Fatalf("Tamanho(%q) devolveu erro: %v", entrada, err)
+			t.Fatalf("Tamanho(%q) devolveu erro: %v", input, err)
 		}
 		if got != 512<<20 {
-			t.Errorf("Tamanho(%q) = %d, quer o padrão %d", entrada, got, int64(512<<20))
+			t.Errorf("Tamanho(%q) = %d, quer o padrão %d", input, got, int64(512<<20))
 		}
 	}
 }
@@ -48,17 +48,17 @@ func TestTamanhoAusenteHerdaOPadrao(t *testing.T) {
 // grafias faria "512MB" e "512MiB" parecerem a mesma coisa e diferirem em 7%
 // de disco.
 func TestTamanhoRecusaUnidadeDecimal(t *testing.T) {
-	for _, entrada := range []string{"512MB", "1GB", "1kB", "3TB"} {
-		if _, err := Tamanho(entrada, 1); err == nil {
-			t.Errorf("Tamanho(%q) foi aceito; unidade decimal tem de ser recusada", entrada)
+	for _, input := range []string{"512MB", "1GB", "1kB", "3TB"} {
+		if _, err := Size(input, 1); err == nil {
+			t.Errorf("Tamanho(%q) foi aceito; unidade decimal tem de ser recusada", input)
 		}
 	}
 }
 
 func TestTamanhoRecusaNaoPositivoELixo(t *testing.T) {
-	for _, entrada := range []string{"0", "0MiB", "-1", "-4GiB", "abc", "MiB", "1,5GiB", "1.5GiB"} {
-		if _, err := Tamanho(entrada, 1); err == nil {
-			t.Errorf("Tamanho(%q) foi aceito; deveria ser recusado", entrada)
+	for _, input := range []string{"0", "0MiB", "-1", "-4GiB", "abc", "MiB", "1,5GiB", "1.5GiB"} {
+		if _, err := Size(input, 1); err == nil {
+			t.Errorf("Tamanho(%q) foi aceito; deveria ser recusado", input)
 		}
 	}
 }
@@ -66,7 +66,7 @@ func TestTamanhoRecusaNaoPositivoELixo(t *testing.T) {
 // A mensagem tem de citar o valor recebido: quem lê o erro precisa saber o que
 // escreveu de errado sem reabrir o YAML.
 func TestTamanhoNomeiaOValorRecebido(t *testing.T) {
-	_, err := Tamanho("512MB", 1)
+	_, err := Size("512MB", 1)
 	if err == nil {
 		t.Fatal("quer erro")
 	}
@@ -76,14 +76,14 @@ func TestTamanhoNomeiaOValorRecebido(t *testing.T) {
 }
 
 func TestDuracaoAceitaEHerdaOPadrao(t *testing.T) {
-	got, err := Duracao("", 30*time.Second)
+	got, err := Duration("", 30*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got != 30*time.Second {
 		t.Errorf("Duracao(\"\") = %s, quer 30s", got)
 	}
-	got, err = Duracao(" 100ms ", time.Hour)
+	got, err = Duration(" 100ms ", time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,9 +93,9 @@ func TestDuracaoAceitaEHerdaOPadrao(t *testing.T) {
 }
 
 func TestDuracaoRecusaNaoPositivaELixo(t *testing.T) {
-	for _, entrada := range []string{"0s", "0", "-5s", "trinta", "30"} {
-		if _, err := Duracao(entrada, time.Second); err == nil {
-			t.Errorf("Duracao(%q) foi aceita; deveria ser recusada", entrada)
+	for _, input := range []string{"0s", "0", "-5s", "trinta", "30"} {
+		if _, err := Duration(input, time.Second); err == nil {
+			t.Errorf("Duracao(%q) foi aceita; deveria ser recusada", input)
 		}
 	}
 }
@@ -103,7 +103,7 @@ func TestDuracaoRecusaNaoPositivaELixo(t *testing.T) {
 // Zero e negativo não são "sem valor": são teto que nenhuma consulta poderia
 // satisfazer, e aceitá-los em silêncio faria a configuração mentir.
 func TestInteiroPositivoSeparaAusenteDeZero(t *testing.T) {
-	got, err := InteiroPositivo(nil, 100000)
+	got, err := PositiveInt(nil, 100000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,13 +112,13 @@ func TestInteiroPositivoSeparaAusenteDeZero(t *testing.T) {
 	}
 
 	for _, v := range []int{0, -1, -999} {
-		if _, err := InteiroPositivo(&v, 100000); err == nil {
+		if _, err := PositiveInt(&v, 100000); err == nil {
 			t.Errorf("InteiroPositivo(%d) foi aceito; deveria ser recusado", v)
 		}
 	}
 
 	v := 4242
-	got, err = InteiroPositivo(&v, 100000)
+	got, err = PositiveInt(&v, 100000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestDuracaoComDias(t *testing.T) {
 		"1d0h1m": 24*time.Hour + time.Minute,
 	}
 	for in, want := range ok {
-		got, err := DuracaoComDias(in, 0)
+		got, err := DurationWithDays(in, 0)
 		if err != nil {
 			t.Errorf("%q: %v", in, err)
 			continue
@@ -148,15 +148,15 @@ func TestDuracaoComDias(t *testing.T) {
 	}
 
 	// Recusa em vez de adivinhar: reordenar "12h1d" seria inventar intenção.
-	ruins := []string{"12h1d", "1d2d", "-1d", "0d", "d", "7dias", "7 d", "0s"}
-	for _, in := range ruins {
-		if got, err := DuracaoComDias(in, 0); err == nil {
+	bad := []string{"12h1d", "1d2d", "-1d", "0d", "d", "7dias", "7 d", "0s"}
+	for _, in := range bad {
+		if got, err := DurationWithDays(in, 0); err == nil {
 			t.Errorf("%q foi aceito como %v", in, got)
 		}
 	}
 
 	// Vazio devolve o padrão, como a Duracao.
-	if got, err := DuracaoComDias("", 5*time.Minute); err != nil || got != 5*time.Minute {
+	if got, err := DurationWithDays("", 5*time.Minute); err != nil || got != 5*time.Minute {
 		t.Errorf(`"" = %v, %v; quer o padrão`, got, err)
 	}
 }
@@ -164,7 +164,7 @@ func TestDuracaoComDias(t *testing.T) {
 // A fixture normativa do §12 declara 7d: se esta gramática deixar de aceitá-la,
 // o YAML que a própria spec documenta para de carregar.
 func TestGramaticaAceitaAJanelaDoSpec12(t *testing.T) {
-	if _, err := DuracaoComDias("7d", 0); err != nil {
+	if _, err := DurationWithDays("7d", 0); err != nil {
 		t.Fatalf("tombstoneRetention do §12 recusado: %v", err)
 	}
 }

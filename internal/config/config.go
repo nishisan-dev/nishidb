@@ -309,32 +309,32 @@ func CarregaConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("configuração %s: datasets.directory é obrigatório", path)
 	}
 
-	if c.segmentSize, err = units.Tamanho(c.Storage.SegmentSize, segmentSizePadrao); err != nil {
+	if c.segmentSize, err = units.Size(c.Storage.SegmentSize, segmentSizePadrao); err != nil {
 		return nil, fmt.Errorf("configuração %s: storage.segmentSize: %w", path, err)
 	}
-	if c.checkpointInterval, err = units.Duracao(c.Storage.Checkpoint.Interval, checkpointIntervalPadrao); err != nil {
+	if c.checkpointInterval, err = units.Duration(c.Storage.Checkpoint.Interval, checkpointIntervalPadrao); err != nil {
 		return nil, fmt.Errorf("configuração %s: storage.checkpoint.interval: %w", path, err)
 	}
 	if c.minimumLiveRatio, err = razaoDeLiveness(c.Storage.Compaction.MinimumLiveRatio); err != nil {
 		return nil, fmt.Errorf("configuração %s: storage.compaction.minimumLiveRatio: %w", path, err)
 	}
-	if c.expiracaoMax, err = units.InteiroPositivo(c.Storage.Expiracao.MaxPorPassada, expiracaoMaxPorPassadaPadrao); err != nil {
+	if c.expiracaoMax, err = units.PositiveInt(c.Storage.Expiracao.MaxPorPassada, expiracaoMaxPorPassadaPadrao); err != nil {
 		return nil, fmt.Errorf("configuração %s: storage.expiracao.maxPorPassada: %w", path, err)
 	}
-	if c.expiracaoTempo, err = units.Duracao(c.Storage.Expiracao.TempoPorPassada, expiracaoTempoPorPassadaPadrao); err != nil {
+	if c.expiracaoTempo, err = units.Duration(c.Storage.Expiracao.TempoPorPassada, expiracaoTempoPorPassadaPadrao); err != nil {
 		return nil, fmt.Errorf("configuração %s: storage.expiracao.tempoPorPassada: %w", path, err)
 	}
-	if c.defaultMaxRows, err = units.InteiroPositivo(c.Query.DefaultMaxRows, maxRowsPadrao); err != nil {
+	if c.defaultMaxRows, err = units.PositiveInt(c.Query.DefaultMaxRows, maxRowsPadrao); err != nil {
 		return nil, fmt.Errorf("configuração %s: query.defaultMaxRows: %w", path, err)
 	}
-	if c.defaultTimeout, err = units.Duracao(c.Query.DefaultTimeout, timeoutPadrao); err != nil {
+	if c.defaultTimeout, err = units.Duration(c.Query.DefaultTimeout, timeoutPadrao); err != nil {
 		return nil, fmt.Errorf("configuração %s: query.defaultTimeout: %w", path, err)
 	}
 	// O padrão é ZERO, e zero é o sinal de "ausente" que schema.validate lê
 	// como "cada dataset herda o próprio query.timeout". Passar timeoutPadrao
 	// aqui daria um teto global de 30s a datasets que hoje declaram
 	// `query.timeout: 5m` — e a spec deles passaria a ser recusada na abertura.
-	if c.defaultMaxTimeout, err = units.Duracao(c.Query.DefaultMaxTimeout, 0); err != nil {
+	if c.defaultMaxTimeout, err = units.Duration(c.Query.DefaultMaxTimeout, 0); err != nil {
 		return nil, fmt.Errorf("configuração %s: query.defaultMaxTimeout: %w", path, err)
 	}
 	if c.defaultMaxTimeout != 0 && c.defaultMaxTimeout < c.defaultTimeout {
@@ -348,13 +348,13 @@ func CarregaConfig(path string) (*Config, error) {
 				"o teto global recusaria o prazo que ele mesmo dá por padrão",
 			path, c.defaultMaxTimeout, c.defaultTimeout)
 	}
-	if c.resultBatchSize, err = units.InteiroPositivo(c.Query.ResultBatchSize, resultBatchPadrao); err != nil {
+	if c.resultBatchSize, err = units.PositiveInt(c.Query.ResultBatchSize, resultBatchPadrao); err != nil {
 		return nil, fmt.Errorf("configuração %s: query.resultBatchSize: %w", path, err)
 	}
-	if c.serverPort, err = units.InteiroPositivo(c.Server.Port, serverPortPadrao); err != nil {
+	if c.serverPort, err = units.PositiveInt(c.Server.Port, serverPortPadrao); err != nil {
 		return nil, fmt.Errorf("configuração %s: server.port: %w", path, err)
 	}
-	if c.maxConcurrent, err = units.InteiroPositivo(c.Runtime.Query.MaxConcurrent, maxConcurrentPadrao); err != nil {
+	if c.maxConcurrent, err = units.PositiveInt(c.Runtime.Query.MaxConcurrent, maxConcurrentPadrao); err != nil {
 		return nil, fmt.Errorf("configuração %s: runtime.query.maxConcurrent: %w", path, err)
 	}
 	// O DEFAULT do sub-pool é limitado pelo pool, e a chave EXPLÍCITA não é.
@@ -370,7 +370,7 @@ func CarregaConfig(path string) (*Config, error) {
 	if padraoLongo > c.maxConcurrent {
 		padraoLongo = c.maxConcurrent
 	}
-	if c.maxLongRunning, err = units.InteiroPositivo(c.Runtime.Query.MaxLongRunning, padraoLongo); err != nil {
+	if c.maxLongRunning, err = units.PositiveInt(c.Runtime.Query.MaxLongRunning, padraoLongo); err != nil {
 		return nil, fmt.Errorf("configuração %s: runtime.query.maxLongRunning: %w", path, err)
 	}
 	if c.maxLongRunning > c.maxConcurrent {
@@ -383,10 +383,10 @@ func CarregaConfig(path string) (*Config, error) {
 				"a consulta longa toma uma vaga de CADA pool, então o sub-pool não pode ser maior que o pool",
 			path, c.maxLongRunning, c.maxConcurrent)
 	}
-	if c.memoryTarget, err = units.Tamanho(c.Runtime.MemoryTarget, memoryTargetPadrao); err != nil {
+	if c.memoryTarget, err = units.Size(c.Runtime.MemoryTarget, memoryTargetPadrao); err != nil {
 		return nil, fmt.Errorf("configuração %s: runtime.memoryTarget: %w", path, err)
 	}
-	if c.maxBufferPerQuery, err = units.Tamanho(c.Runtime.Query.MaxBufferPerQuery, maxBufferPerQueryPadrao); err != nil {
+	if c.maxBufferPerQuery, err = units.Size(c.Runtime.Query.MaxBufferPerQuery, maxBufferPerQueryPadrao); err != nil {
 		return nil, fmt.Errorf("configuração %s: runtime.query.maxBufferPerQuery: %w", path, err)
 	}
 	// O DEFAULT escala com o orçamento do processo, e é isso que o separa de
@@ -401,7 +401,7 @@ func CarregaConfig(path string) (*Config, error) {
 	// recusa na subida, nunca ignora em silêncio" — não há nada que ele tenha
 	// declarado para recusar.
 	padrao := min(int64(snapshotMaxBytesPadrao), c.memoryTarget/8)
-	if c.snapshotMaxBytes, err = units.Tamanho(c.Runtime.Query.SnapshotMaxBytes, padrao); err != nil {
+	if c.snapshotMaxBytes, err = units.Size(c.Runtime.Query.SnapshotMaxBytes, padrao); err != nil {
 		return nil, fmt.Errorf("configuração %s: runtime.query.snapshotMaxBytes: %w", path, err)
 	}
 	// A recusa vale só para o valor DECLARADO, pela razão acima.

@@ -715,7 +715,7 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 	}
 	s.Materialization.Mode = mode
 	if bruto := raw.Materialization.TombstoneRetention; bruto != "" {
-		d, err := units.DuracaoComDias(bruto, 0)
+		d, err := units.DurationWithDays(bruto, 0)
 		if err != nil {
 			return nil, specErrf("materialization.tombstoneRetention: %s", err)
 		}
