@@ -2462,7 +2462,7 @@ func TestCompactionEmBackgroundParaNaPrimeiraFalhaDoWriter(t *testing.T) {
 		Dir:             t.TempDir(),
 		SegmentSize:     8 << 10,
 		CamposIndexados: []types.FieldID{fldStatus},
-		Log:             logging.New(&registro, logging.FormatoTexto, slog.LevelInfo),
+		Log:             logging.New(&registro, logging.FormatText, slog.LevelInfo),
 	})
 	corpusDeSegmentosSelados(t, s, 40, 30)
 	if eleitos := s.candidatos(0.5); len(eleitos) == 0 {
@@ -2677,7 +2677,7 @@ func TestAposentadoriaRegistraNoLogOsBytesQueODiscoDevolveu(t *testing.T) {
 	s := openStore(t, Options{
 		Dir:         dir,
 		SegmentSize: 8 << 10,
-		Log:         logging.New(&registro, logging.FormatoJSON, slog.LevelInfo),
+		Log:         logging.New(&registro, logging.FormatJSON, slog.LevelInfo),
 	})
 	const keys, rodadas = 40, 30
 	corpusDeSegmentosSelados(t, s, keys, rodadas)
@@ -3001,7 +3001,7 @@ func TestMedidorDaCompactionDesceQuandoOLacoParaSozinho(t *testing.T) {
 		Dir:             t.TempDir(),
 		SegmentSize:     8 << 10,
 		CamposIndexados: []types.FieldID{fldStatus},
-		Log:             logging.New(&registro, logging.FormatoTexto, slog.LevelInfo),
+		Log:             logging.New(&registro, logging.FormatText, slog.LevelInfo),
 	})
 	corpusDeSegmentosSelados(t, s, 40, 30)
 	if eleitos := s.candidatos(0.5); len(eleitos) == 0 {

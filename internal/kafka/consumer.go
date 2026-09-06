@@ -178,7 +178,7 @@ type Opcoes struct {
 func Abre(ctx context.Context, cfg *Config, o Opcoes) (*Consumidor, error) {
 	log := o.Log
 	if log == nil {
-		log = logging.Descartado()
+		log = logging.Discard()
 	}
 	log = log.Component("kafka").Dataset(cfg.Dataset)
 	met := registraMetricas(o.Metrics, cfg.Dataset)

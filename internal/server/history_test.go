@@ -254,7 +254,7 @@ func TestJanelaMaiorQueARetencaoSobeComWarn(t *testing.T) {
 	a.escreveDataset("eventos", specComJanelaInocua)
 	registro := &registroDoServidor{}
 	srv, err := server.Novo(a.carrega(), server.Opcoes{
-		Log: logging.New(registro, logging.FormatoTexto, slog.LevelInfo),
+		Log: logging.New(registro, logging.FormatText, slog.LevelInfo),
 	})
 	if err != nil {
 		t.Fatalf("subida: %v — a janela inócua não pode derrubar o servidor", err)
@@ -319,7 +319,7 @@ func TestAReconstrucaoSobeNosDoisModosComAJanelaCerta(t *testing.T) {
 	a.escreveDataset("eventos", spec)
 	registro := &registroDoServidor{}
 	srv, err := server.Novo(a.carrega(), server.Opcoes{
-		Log: logging.New(registro, logging.FormatoTexto, slog.LevelInfo),
+		Log: logging.New(registro, logging.FormatText, slog.LevelInfo),
 	})
 	if err != nil {
 		t.Fatalf("subida: %v", err)

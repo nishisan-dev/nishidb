@@ -49,7 +49,7 @@ func realSetupCom(tb testing.TB, dir string, estimatedRows uint64, comContadores
 		EstimatedRows:          estimatedRows,
 		CamposIndexadosPorNome: indexNames(spec),
 		CompilaContadores:      comp.Callback(),
-		Log:                    logging.New(io.Discard, logging.FormatoTexto, slog.LevelError),
+		Log:                    logging.New(io.Discard, logging.FormatText, slog.LevelError),
 	})
 	if err != nil {
 		tb.Fatalf("abrindo store em %s: %v", dir, err)

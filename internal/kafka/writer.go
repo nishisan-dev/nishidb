@@ -167,7 +167,7 @@ func NovoWriter(cfg *Config, mat *materializer.Materializer, st Store, fila *Fil
 	commit func(context.Context, map[int32]int64) error,
 ) *Writer {
 	if log == nil {
-		log = logging.Descartado()
+		log = logging.Discard()
 	}
 	o := make(map[int32]int64, len(offsets))
 	for p, v := range offsets {

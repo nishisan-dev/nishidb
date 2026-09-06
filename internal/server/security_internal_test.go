@@ -356,7 +356,7 @@ func TestAvisaValidadeDoCertificadoJaExpiradoLogaErroEPublicaGauge(t *testing.T)
 	cert := certificadoDeTesteComValidade(t, time.Now().Add(-48*time.Hour), notAfter)
 
 	var buf bytes.Buffer
-	log := logging.New(&buf, logging.FormatoJSON, slog.LevelInfo)
+	log := logging.New(&buf, logging.FormatJSON, slog.LevelInfo)
 	reg := metrics.NewRegistry()
 
 	if err := avisaValidadeDoCertificado(cert, log, reg); err != nil {
@@ -391,7 +391,7 @@ func TestAvisaValidadeDoCertificadoExpirandoEmBreveLogaWarnComNotAfter(t *testin
 	cert := certificadoDeTesteComValidade(t, time.Now().Add(-time.Hour), notAfter)
 
 	var buf bytes.Buffer
-	log := logging.New(&buf, logging.FormatoJSON, slog.LevelInfo)
+	log := logging.New(&buf, logging.FormatJSON, slog.LevelInfo)
 	reg := metrics.NewRegistry()
 
 	if err := avisaValidadeDoCertificado(cert, log, reg); err != nil {
@@ -417,7 +417,7 @@ func TestAvisaValidadeDoCertificadoSaudavelNaoLogaMasPublicaGauge(t *testing.T) 
 	cert := certificadoDeTesteComValidade(t, time.Now().Add(-time.Hour), time.Now().Add(365*24*time.Hour))
 
 	var buf bytes.Buffer
-	log := logging.New(&buf, logging.FormatoJSON, slog.LevelInfo)
+	log := logging.New(&buf, logging.FormatJSON, slog.LevelInfo)
 	reg := metrics.NewRegistry()
 
 	if err := avisaValidadeDoCertificado(cert, log, reg); err != nil {

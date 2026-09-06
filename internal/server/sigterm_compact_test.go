@@ -89,7 +89,7 @@ func TestSIGTERMDuranteCompactacaoManualCancelaAPassadaEEncerraRapido(t *testing
 
 	trava := novaTravaDeLinha("compaction.segmento_aposentado")
 	cfg := a.carrega()
-	srv, err := server.Novo(cfg, server.Opcoes{Log: logging.New(trava, logging.FormatoTexto, slog.LevelInfo)})
+	srv, err := server.Novo(cfg, server.Opcoes{Log: logging.New(trava, logging.FormatText, slog.LevelInfo)})
 	if err != nil {
 		t.Fatalf("subida: %v", err)
 	}

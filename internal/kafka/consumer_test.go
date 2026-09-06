@@ -46,7 +46,7 @@ func TestAoAtribuirEsperaAdmProntoAntesDeTocarAdm(t *testing.T) {
 
 	c := &Consumidor{
 		cfg:       &Config{Topic: "topico-teste", GroupID: "grupo-teste"},
-		log:       logging.Descartado().Component("kafka").Dataset("teste"),
+		log:       logging.Discard().Component("kafka").Dataset("teste"),
 		met:       registraMetricas(nil, "teste"),
 		admPronto: make(chan struct{}),
 	}
@@ -112,7 +112,7 @@ func TestAoAtribuirEsperaAdmProntoAntesDeTocarAdm(t *testing.T) {
 func TestAjustaOffsetsEsperaOffsetsProntoAntesDeLerOMapa(t *testing.T) {
 	c := &Consumidor{
 		cfg:           &Config{Topic: "topico-teste"},
-		log:           logging.Descartado().Component("kafka").Dataset("teste"),
+		log:           logging.Discard().Component("kafka").Dataset("teste"),
 		met:           registraMetricas(nil, "teste"),
 		offsetsPronto: make(chan struct{}),
 	}
@@ -189,7 +189,7 @@ func TestAjustaOffsetsEsperaOffsetsProntoAntesDeLerOMapa(t *testing.T) {
 func TestAoRevogarEsperaWProntoAntesDeLerW(t *testing.T) {
 	c := &Consumidor{
 		cfg:     &Config{Topic: "topico-teste"},
-		log:     logging.Descartado().Component("kafka").Dataset("teste"),
+		log:     logging.Discard().Component("kafka").Dataset("teste"),
 		met:     registraMetricas(nil, "teste"),
 		wPronto: make(chan struct{}),
 	}

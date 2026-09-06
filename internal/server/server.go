@@ -214,7 +214,7 @@ type Opcoes struct {
 func Novo(cfg *config.Config, o Opcoes) (*Servidor, error) {
 	log := o.Log
 	if log == nil {
-		log = logging.Descartado()
+		log = logging.Discard()
 	}
 	log = log.Component("server")
 

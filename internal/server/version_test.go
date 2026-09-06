@@ -41,7 +41,7 @@ func TestSubidaLogaAVersaoDoBinario(t *testing.T) {
 
 	registro := &registroDoServidor{}
 	srv, err := server.Novo(a.carrega(), server.Opcoes{
-		Log: logging.New(registro, logging.FormatoTexto, slog.LevelInfo),
+		Log: logging.New(registro, logging.FormatText, slog.LevelInfo),
 	})
 	if err != nil {
 		t.Fatalf("subida: %v", err)

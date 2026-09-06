@@ -77,12 +77,12 @@ func runServer(args []string, amb Ambiente) int {
 	return ExitOK
 }
 
-func formatoDeLog(v string) (logging.Formato, error) {
+func formatoDeLog(v string) (logging.Format, error) {
 	switch v {
 	case "json":
-		return logging.FormatoJSON, nil
+		return logging.FormatJSON, nil
 	case "texto":
-		return logging.FormatoTexto, nil
+		return logging.FormatText, nil
 	}
 	return 0, fmt.Errorf("--log-format %q inválido (json|texto)", v)
 }

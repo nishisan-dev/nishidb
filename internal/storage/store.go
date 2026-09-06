@@ -1015,7 +1015,7 @@ func Open(opts Options) (*Store, error) {
 		opts.Dataset = filepath.Base(filepath.Clean(opts.Dir))
 	}
 	if opts.Log == nil {
-		opts.Log = logging.New(os.Stderr, logging.FormatoTexto, slog.LevelInfo)
+		opts.Log = logging.New(os.Stderr, logging.FormatText, slog.LevelInfo)
 	}
 	opts.Log = opts.Log.Component("storage").Dataset(opts.Dataset)
 	spillDir := filepath.Join(opts.Dir, spill.NomeDoDiretorio)

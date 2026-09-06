@@ -370,7 +370,7 @@ func sobeCapturandoLog(t *testing.T, a *ambiente) string {
 	t.Helper()
 	var buf bytes.Buffer
 	srv, err := server.Novo(a.carrega(), server.Opcoes{
-		Log: logging.New(&buf, logging.FormatoJSON, slog.LevelInfo),
+		Log: logging.New(&buf, logging.FormatJSON, slog.LevelInfo),
 	})
 	if err != nil {
 		t.Fatalf("subida: %v", err)
