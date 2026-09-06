@@ -482,5 +482,5 @@ func (l *Locations) LiberaAte(rowID types.RowID) error {
 	if fim <= headerSize {
 		return nil
 	}
-	return l.dense.region.LiberaBlocos(headerSize, fim-headerSize)
+	return l.dense.region.ReleaseBlocks(headerSize, fim-headerSize)
 }

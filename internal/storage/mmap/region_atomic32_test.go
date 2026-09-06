@@ -43,7 +43,7 @@ func TestAtomico32DesalinhadoPanica(t *testing.T) {
 // nela seria SIGSEGV incapturável — o pânico nomeado é a rede, como no de 64.
 func TestAtomico32SomenteLeituraPanica(t *testing.T) {
 	_, path := openTemp(t, 4096)
-	ro, err := AbreSomenteLeitura(path)
+	ro, err := OpenReadOnly(path)
 	if err != nil {
 		t.Fatal(err)
 	}

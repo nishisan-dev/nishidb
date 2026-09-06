@@ -129,7 +129,7 @@ type Selado struct {
 // pânico que não nomeia o arquivo. Com eles, o arquivo é recusado com
 // ErrFormato e o segmento passa a responder por enumeração.
 func AbreSelado(caminho string) (*Selado, error) {
-	reg, err := mmap.AbreSomenteLeitura(caminho)
+	reg, err := mmap.OpenReadOnly(caminho)
 	if err != nil {
 		return nil, err
 	}
