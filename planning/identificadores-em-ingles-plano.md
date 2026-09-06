@@ -3337,8 +3337,9 @@ Ordem obrigatória (spec §4.6):
    Rode "scripts/rename-apply.sh <pacote> ${scratch}/<pacote>.rf ${scratch}/<pacote>.diff". Leia o diff.
    Exit ≠ 0 → nada foi escrito; devolva ok=false com o stderr (o mapeamento volta ao juiz).
    Exit 0 → "git add -A" e "git commit -m '<pacote>: identificadores em inglês'".
-3. Passada de prosa: "go run ./scripts/renamecite -dir . ${pacotes.map(p => '-idents ' + tsvDe(p)).join(' ')} -report ${scratch}/renamecite-${grupo}.txt".
-   Leia o relatório; se houver linha "ambíguo", resolva qualificando a citação no texto à mão (é prosa, não código) e anote.
+3. Passada de prosa: "go run ./scripts/renamecite -dir . ${pacotes.map(p => '-idents ' + tsvDe(p)).join(' ')} -protect planning/identificadores-em-ingles/protegidos.txt -report ${scratch}/renamecite-${grupo}.txt".
+   O relatório tem linhas "aplicado" (toda substituição, com a regra) e "pulado" (ambiguidade, protegido). Leia as DUAS: toda linha "pulado ... ambíguo" é resolvida qualificando a citação no texto à mão (é prosa, não código);
+   toda linha "aplicado" cujo token não era citação de identificador (nome de coluna, chave YAML, arquivo em disco) é revertida à mão e o token entra em planning/identificadores-em-ingles/protegidos.txt (um por linha) no mesmo commit. O glossário, o spec, o plano e os TSV são excluídos por padrão.
    "gofmt -l ." tem de sair vazio. "git add -A" e "git commit -m '${grupo}: citações em docs e comentários'".
 Nunca edite código Go à mão fora do passo 3. Devolva ok e a saída resumida de cada passo.`,
   { label: `aplica:${grupo}`, phase: 'Aplicar', schema: RELATORIO })
@@ -3458,7 +3459,12 @@ igual):
   novo." O TSV do pacote vira `mapeamento-3-<pacote>.tsv` com essas
   colunas, e as chaves de log vão TAMBÉM para
   `planning/identificadores-em-ingles/mapeamento-chaves-de-log.tsv`
-  (`velho`, `novo`), que o `renamecite -logkeys` consome nos docs.
+  (`velho`, `novo`), que o `renamecite -logkeys` consome nos docs. Antes da
+  primeira passada de prosa desta fase, os nomes de contrato que NÃO mudam
+  de nome (colunas das tabelas `_meta`, chaves YAML e JSON já em inglês,
+  códigos do wire, nomes de arquivo em disco que ficam) entram em
+  `planning/identificadores-em-ingles/protegidos.txt`, e todo `renamecite`
+  do ciclo recebe `-protect` com esse arquivo.
 - **Aplicador**: edita os arquivos à mão (é texto, não identificador), um
   pacote por commit "`<pacote>`: mensagens e chaves de log em inglês", e
   roda `go test ./<pacote>/ -count=1` após cada um: a asserção que ficou
