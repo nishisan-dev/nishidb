@@ -284,8 +284,8 @@ func extractSeq(t *testing.T, raw json.RawMessage) int64 {
 // primary. Entidades distintas não podem colidir, e a mesma entidade não pode
 // mudar de id entre eventos.
 func TestKeyEstavelEUnicaPorEntidade(t *testing.T) {
-	// Acima de 256 de propósito: com poucas entities, um ip derivado só do
-	// último octeto passaria despercebido — e a colisão de ip entre entities
+	// Acima de 256 de propósito: com poucas entidades, um ip derivado só do
+	// último octeto passaria despercebido — e a colisão de ip entre entidades
 	// distintas é exatamente o que estraga um índice hash no harness.
 	const entities = 1000
 	g := gen(t, radiusgen.Config{Seed: 5, Entities: entities, PatchRatio: 0})

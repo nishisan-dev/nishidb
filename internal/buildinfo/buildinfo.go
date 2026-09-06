@@ -10,9 +10,9 @@ import "runtime/debug"
 
 // Versao, Commit e Data são POPULADAS PELO LINKER, via:
 //
-//	-ldflags "-X .../internal/buildinfo.Versao=... \
+//	-ldflags "-X .../internal/buildinfo.Version=... \
 //	          -X .../internal/buildinfo.Commit=... \
-//	          -X .../internal/buildinfo.Data=..."
+//	          -X .../internal/buildinfo.Date=..."
 //
 // que é exatamente o que o alvo `build` do Makefile faz. Só o linker escreve
 // em variável de pacote por esse caminho — não há outro jeito de carimbar um
@@ -88,7 +88,7 @@ func fromVCS() (commit, date string) {
 // short abrevia o SHA completo do vcs.revision (40 caracteres) para um
 // tamanho fixo mais generoso que os 7 caracteres que `git rev-parse --short`
 // costuma produzir. Não precisa ser o abreviamento MÍNIMO e único do git —
-// só de short o bastante para o operador colar num grep.
+// só de curto o bastante para o operador colar num grep.
 func short(rev string) string {
 	const n = 12
 	if len(rev) > n {

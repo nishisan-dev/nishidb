@@ -241,7 +241,7 @@ var numeroDoTemporario atomic.Uint64
 // existe uma janela em que o segmento recém-rotacionado aparece na fila de
 // reconstrução: a selagem e a reconstrução escreviam no MESMO `<sidx>.tmp` e
 // produziam um arquivo rasgado — inclusive o .sidx de ZERO BYTES que o
-// mmap.ErrArquivoVazio existe para tolerar. Com nomes distintos as duas escritas
+// mmap.ErrEmptyFile existe para tolerar. Com nomes distintos as duas escritas
 // não se tocam, e a corrida que sobra é no nome FINAL, que é neutra: o rename é
 // atômico e os dois caminhos produzem arquivos byte a byte idênticos (golden da
 // §6.3), então quem renomeia por último grava os mesmos bytes.

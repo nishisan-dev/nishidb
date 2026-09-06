@@ -161,7 +161,7 @@ por mensagem) foi refutada na proposta porque Kafka entrega pelo menos uma vez e
 | manifest | Seção IGNORÁVEL (`tagContadores = 0x0001`): nome, colunas, `where` por contador. |
 | aposentadoria segura | Aposentar exige `refs == 0`, prazo vencido E `ultimaMexida[g] <= mexidasCobertas` (contador monotônico de transições; `mexidasCobertas` é gravado no checkpoint, sob `wmu`, depois do `Msync` do vetor). |
 | histórico | Dataset em `ModoHistorico` recusa `counters:` na subida (a retenção purga por marca-d'água sem `applyRecord`; o contador nunca decrementaria). |
-| sem § novo | Como o `_meta`, o contador nasce sem seção na spec da raiz; `specsDoMarcador` não muda. |
+| sem § novo | Como o `_meta`, o contador nasce sem seção na spec da raiz; `markerSpecs` não muda. |
 
 ## Restrições globais
 
@@ -196,7 +196,7 @@ por mensagem) foi refutada na proposta porque Kafka entrega pelo menos uma vez e
 | `internal/predicate/evaluator.go` (novo) | `AvaliadorDePayload`: programa + slots + reader, `Avalia(payload)` |
 | `internal/predicate/rule.go` | `CompilaCondicao` extraída de `CompilaRegras` |
 | `internal/storage/counter/` (novo) | `dict.go`, `counter.go`, `textkey.go`, `audit.go`, `retirement.go` + testes |
-| `internal/storage/checkpoint/manifest.go` | tag 0x8005, `ContadorInfo`, `Manifest.Contadores` |
+| `internal/storage/checkpoint/manifest.go` | tag 0x8005, `CounterInfo`, `Manifest.Counters` |
 | `internal/storage/store.go` | `Options.CompilaContadores`, abertura, passo 7c do `applyRecord`, Close |
 | `internal/storage/counters.go` (novo) | `adotaOuConstroiContadores`, reconstrução, auditoria sob snapshot, laço de aposentadoria, estatísticas |
 | `internal/storage/store_checkpoint.go` | `traceStep("msyncContadores")` |
@@ -548,7 +548,7 @@ return nil
 ### Tarefa B3: seção do manifest
 
 **Arquivos:**
-- Modificar: `internal/storage/checkpoint/manifest.go` (consts 91-157, structs 201-246, `TamanhoDaCaudaTLV` 258-267, `appendCauda` 314-335, `decodeCauda` 439-470, novo `decodeContadores`), `manifest_tlv_test.go`, `manifest_test.go`
+- Modificar: `internal/storage/checkpoint/manifest.go` (consts 91-157, structs 201-246, `TLVTailSize` 258-267, `appendCauda` 314-335, `decodeTLVTail` 439-470, novo `decodeCounters`), `manifest_tlv_test.go`, `manifest_test.go`
 
 **Interfaces produzidas:**
 ```go
@@ -568,11 +568,11 @@ type ContadorInfo struct {
 Layout da seção: `u16 n | por contador: u16 lenNome | nome | u16 nCols | nCols×u16 |
 u32 lenWhere | where`. `maxGroups` NÃO viaja: mudá-lo não muda o conteúdo do
 contador (só é recusado quando menor que os grupos em uso). O decode de tag
-ignorável desconhecida continua pulando bytes (`decodeCauda`); a seção nova
+ignorável desconhecida continua pulando bytes (`decodeTLVTail`); a seção nova
 entra em `appendCauda` em ordem crescente de tag (ela é a menor: vem antes de
 todas as críticas).
 
-- [ ] **Passo 1: testes** — round-trip encode/decode com dois contadores (um sem `where`); `TestManifestSemContadoresNaoEmiteASecao` (bytes idênticos ao de antes — o golden existente continua verde); `TestSecaoDeContadoresTruncadaEhRecusada`; ajustar o teste de reserva de `TamanhoDaCaudaTLV`.
+- [ ] **Passo 1: testes** — round-trip encode/decode com dois contadores (um sem `where`); `TestManifestSemContadoresNaoEmiteASecao` (bytes idênticos ao de antes — o golden existente continua verde); `TestSecaoDeContadoresTruncadaEhRecusada`; ajustar o teste de reserva de `TLVTailSize`.
 
 - [ ] **Passo 2: vermelho → implementar → verde → commit** — `checkpoint: seção crítica dos contadores no manifest`.
 
@@ -639,7 +639,7 @@ func (s *Store) EstatisticasDeContadores() []contador.Estatisticas
 	}
 ```
 
-- [ ] **Passo 4: checkpoint** — dois passos novos: `traceStep("applyOverlayContadores", …)` logo DEPOIS de `applyOverlay` das locations (isto é, depois do `segSync`: é o que garante que o mmap do vetor só recebe transições de records duráveis), e `traceStep("msyncContadores", …)` entre `msyncVencimentos` e `msyncSequences`, erro NÃO sticky (godoc igual ao da agenda). Depois do msync, ainda sob `wmu`: `c.CobreMexidas(c.Transicoes())`. `Manifest.Contadores` montado de `c.Def()` a cada checkpoint. **Close**: parar o laço de aposentadoria (C4) ao lado de `ParaExpiracao`; `Close()` dos contadores ao lado da agenda; sem msync no Close (o que não foi checkpointado volta pelo replay, como hoje).
+- [ ] **Passo 4: checkpoint** — dois passos novos: `traceStep("applyOverlayContadores", …)` logo DEPOIS de `applyOverlay` das locations (isto é, depois do `segSync`: é o que garante que o mmap do vetor só recebe transições de records duráveis), e `traceStep("msyncContadores", …)` entre `msyncVencimentos` e `msyncSequences`, erro NÃO sticky (godoc igual ao da agenda). Depois do msync, ainda sob `wmu`: `c.CobreMexidas(c.Transicoes())`. `Manifest.Counters` montado de `c.Def()` a cada checkpoint. **Close**: parar o laço de aposentadoria (C4) ao lado de `ParaExpiracao`; `Close()` dos contadores ao lado da agenda; sem msync no Close (o que não foi checkpointado volta pelo replay, como hoje).
 
 - [ ] **Passo 5: verde na suíte do storage** (`go test ./internal/storage/... -count=1`), depois `make test` e `make test-race`.
 
@@ -1032,7 +1032,7 @@ contadores gera bytes idênticos), toda a suíte de `internal/storage`
 
 **Gates que mudam, e como:** `TestNamespaceDesconhecidoERecusado` (mensagem lista
 os dois namespaces); `TestOUsoAnuncia…` ganha `Counters`; o teste de reserva de
-`TamanhoDaCaudaTLV`; `evidence_test.go` ganha o aceite novo. Nada afrouxa.
+`TLVTailSize`; `evidence_test.go` ganha o aceite novo. Nada afrouxa.
 
 **Diferenciais (os testes que decidem se o plano está certo):**
 `TestDobraReproduzOsTotais`, `TestContadorRecuperaDoTailSemCheckpoint` (duas

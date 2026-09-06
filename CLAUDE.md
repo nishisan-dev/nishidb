@@ -222,7 +222,7 @@ NA FORMA DOMINANTE do repositório, não só na que você escreveu no teste.
   normativa `nishidb-spec-proposal.md` (raiz), os dois designs de M1 em
   `planning/` e a spec do subsistema 1 numeram as suas seções cada um por si —
   `store.go` cita §92 da raiz, §10.2 do design de storage e §2.4 do subsistema.
-  O conjunto é FECHADO e declarado em `specsDoMarcador`
+  O conjunto é FECHADO e declarado em `markerSpecs`
   (`internal/gates/verification_test.go`), com o preço do achatamento nomeado no
   godoc; documento novo que passe a ser citado entra na lista. **"débito NN"**
   cita `docs/debitos.md`, cuja numeração é ESTÁVEL: item novo entra no fim, nada

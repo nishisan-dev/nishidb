@@ -198,7 +198,7 @@ func TestOEscritorVazioNaoCriaArquivo(t *testing.T) {
 // corrente ANTES de selar o anterior: existe uma janela em que o segmento
 // recém-rotacionado aparece na fila de reconstrução, e então a selagem e o laço
 // da §2.4 escreviam no MESMO arquivo intermediário. O que sai disso é um .sidx
-// rasgado — inclusive o de ZERO BYTES que o mmap.ErrArquivoVazio hoje tolera,
+// rasgado — inclusive o de ZERO BYTES que o mmap.ErrEmptyFile hoje tolera,
 // cujo único caminho conhecido de produção é exatamente esta corrida.
 //
 // As duas asserções são independentes e nenhuma cobre a outra: a primeira é a

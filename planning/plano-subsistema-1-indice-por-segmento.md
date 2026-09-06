@@ -456,7 +456,7 @@ func (e *Escritor) Escreve(caminho string, seg uint32) error {
 `montaCorpo` percorre `e.ents` (já ordenado) montando, em duas passadas: a
 primeira conta campos e valores distintos por campo para dimensionar a tabela
 de seções e os diretórios; a segunda escreve. `contaCampos` conta fieldIDs
-distintos. `escreveAtomico` faz `os.WriteFile(caminho+".tmp")`, `Sync`,
+distintos. `writeAtomic` faz `os.WriteFile(caminho+".tmp")`, `Sync`,
 `os.Rename`, e `fsync` do diretório — sem isto o índice pode sobreviver ao
 crash com o nome temporário e o `Open` o trataria como órfão.
 
@@ -611,7 +611,7 @@ Esperado: `undefined: mmap.AbreSomenteLeitura`.
 
 - [ ] **Passo 3: implementar em `region.go`**
 
-`AbreSomenteLeitura` abre com `O_RDONLY`, faz `unix.Mmap(fd, 0, tamanho,
+`OpenReadOnly` abre com `O_RDONLY`, faz `unix.Mmap(fd, 0, tamanho,
 unix.PROT_READ, unix.MAP_SHARED)`, **fecha o descritor** e devolve a `Region`
 com `somenteLeitura = true` e `f = nil`. `Grow`, `Msync`, `AtomicStore64`,
 `AtomicOr64`, `AtomicAnd64` e `LiberaAte` passam a devolver erro (ou entrar em
@@ -629,7 +629,7 @@ go test -race ./internal/storage/mmap/ -count=1
 
 - [ ] **Passo 5: escrever `sealed.go` e ligar o primeiro teste da Tarefa 1**
 
-`AbreSelado` faz `AbreSomenteLeitura`, valida magic e versão, lê o header e a
+`AbreSelado` faz `OpenReadOnly`, valida magic e versão, lê o header e a
 tabela de seções para um slice em heap (`secCount` entradas — dezenas, não
 milhares), e **não verifica o CRC**. A verificação é preguiçosa, na primeira
 consulta, por `sync.Once`: conferir 2,25 GB na subida custaria segundos por

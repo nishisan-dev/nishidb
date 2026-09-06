@@ -100,7 +100,7 @@ func (l *Layout) TimeOfDay(raw []byte) (int64, error)
 const MillisPorDia = 86_400_000
 ```
 
-Helpers novos ao lado de `Digits2`/`Digits4` ([typeparse.go:333-348](internal/typeparse/typeparse.go:333)): `digitos1a2`, `digitos3`, `mesAbreviadoEnUS` (array `[12][3]byte` em minúsculas, folda a caixa — 12 comparações de 3 bytes custam menos que um hash e um map alocaria na init).
+Helpers novos ao lado de `Digits2`/`Digits4` ([typeparse.go:333-348](internal/typeparse/typeparse.go:333)): `digitos1a2`, `digitos3`, `monthAbbrEnUS` (array `[12][3]byte` em minúsculas, folda a caixa — 12 comparações de 3 bytes custam menos que um hash e um map alocaria na init).
 
 **12h→24h:** `h24 := h12 % 12; if pm { h24 += 12 }`. Zera o 12 AM e preserva 1..11. É a única regra deste formato que não sai certa por acidente.
 
@@ -296,9 +296,9 @@ GetByKey(key, buf []byte) (types.Record, []byte, types.Presenca, error)
 Sequence(id types.RowID) (int64, types.Presenca)
 ```
 
-`PresencaExpirada` cobre **os dois** casos — bit gravado **ou** prazo vencido sem tombstone publicado. Sem unificar, o materializer teria duas noções de "morta" e a que vale dependeria de o scheduler ter passado.
+`PresenceExpired` cobre **os dois** casos — bit gravado **ou** prazo vencido sem tombstone publicado. Sem unificar, o materializer teria duas noções de "morta" e a que vale dependeria de o scheduler ter passado.
 
-Em [materializer.go:276-314](internal/materializer/materializer.go:276): `found` vira `presenca != PresencaAusente` (**é a correção do débito 24, e é uma linha** — o stale check de [:285](internal/materializer/materializer.go:285) passa a rodar); o merge de [:294](internal/materializer/materializer.go:294) exige `PresencaViva`, porque merge sobre a lápide arrastaria campos do alarme anterior para o alarme reaberto; desfecho novo `ActionRessuscitada` + contador, senão "alarme reabriu" sai como `updated` e fica invisível no painel.
+Em [materializer.go:276-314](internal/materializer/materializer.go:276): `found` vira `presenca != PresencaAusente` (**é a correção do débito 24, e é uma linha** — o stale check de [:285](internal/materializer/materializer.go:285) passa a rodar); o merge de [:294](internal/materializer/materializer.go:294) exige `PresenceLive`, porque merge sobre a lápide arrastaria campos do alarme anterior para o alarme reaberto; desfecho novo `ActionRessuscitada` + contador, senão "alarme reabriu" sai como `updated` e fica invisível no painel.
 
 > **O piloto cai num limite que precisa estar escrito.** Sem `materialization.sequence` — e o piloto não a declara —, [materializer.go:285](internal/materializer/materializer.go:285) já exige `Seq != nil`, então **não há stale check nenhum** e um evento reentregue pelo Kafka reabre a entidade. Não é regressão (sem sequence não existe informação de ordem), mas com TTL ligado o sintoma passa de "update redundante" para "alarme fechado reabre sozinho". **Não recusar** a combinação (bloquearia o piloto); WARN nomeado na subida, no estilo de [server.go:465](internal/server/server.go:465).
 
@@ -336,7 +336,7 @@ Novas: `nishidb_expiry_running`, `_expired_total`, `_resurrected_total`, `_expir
 |---|---|---|---|
 | **1 — Schema** | `ttl.expireAfterWrite` validado, exclusão mútua, piso de 1 min, prefixo `_` reservado, WARN do `tombstoneRetention` | Sim, nada muda em runtime | 1× |
 | **2 — `_writtenAt`** | Campo de sistema injetado no merge e no replace, oculto no `*`, recusado se vier do evento | **Sim, e é o beachhead**: o dataset registra o instante **sem expirar nada**; quando a Fase 4 subir, as rows já têm prazo real | 3× |
-| **3 — `expiry.idx` + débitos 24/25 + `Store.Expira`** | Índice no `applyRecord` (write **e** replay), predicado de leitura nos 3 pontos, `Presenca`, `Expira(rowID)` sem scheduler | Sim — ao fim, o tombstone é produzível e tudo a jusante está correto | 4× |
+| **3 — `expiry.idx` + débitos 24/25 + `Store.Expira`** | Índice no `applyRecord` (write **e** replay), predicado de leitura nos 3 pontos, `Presence`, `Expira(rowID)` sem scheduler | Sim — ao fim, o tombstone é produzível e tudo a jusante está correto | 4× |
 | **4 — Scheduler** | Deque de baldes, semeadura na abertura, wiring no server, passada única no `ingest` | Milestone | 5× |
 | **5 — Observabilidade** | 6 séries, bloco `expiry`, correção do `MetMaterializedRows` | Sim | 1,5× |
 | **6 — `tombstoneRetention`** | Purga da primary (`slotDeleted`), compaction descartando tombstone vencido | **Fora deste escopo** | 6× |
