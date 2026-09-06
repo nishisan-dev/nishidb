@@ -3116,7 +3116,7 @@ internal/storage/store_bitmap_orfa_residuo_test.go	internal/storage/store_bitmap
 internal/storage/store_contrato_test.go	internal/storage/store_contract_test.go
 internal/storage/store_liveness_espelho_test.go	internal/storage/store_liveness_mirror_test.go
 internal/storage/store_liveness_residuo_test.go	internal/storage/store_liveness_residue_test.go
-internal/storage/store_recovery_janelas_test.go	internal/storage/store_recovery_windows_test.go
+internal/storage/store_recovery_janelas_test.go	internal/storage/store_recovery_window_test.go
 internal/storage/store_recovery_segmento_test.go	internal/storage/store_recovery_segment_test.go
 internal/storage/store_sc_lacunas_test.go	internal/storage/store_sc_gaps_test.go
 internal/storage/versions/versoes.go	internal/storage/versions/versions.go
@@ -3134,9 +3134,14 @@ scripts/identifier-len/extracao_test.go	scripts/identifier-len/extract_test.go
 scripts/identifier-len/relatorio.go	scripts/identifier-len/report.go
 ```
 
-Nenhum nome novo termina em sufixo de GOOS/GOARCH (`_linux`, `_amd64`,
-`_386`) — conferir com `grep -E '_(linux|darwin|windows|amd64|arm64|386)(_test)?\.go$'`
-sobre a coluna `novo`: só `memprof_linux.go`, que não muda.
+Nenhum nome novo pode terminar em sufixo de GOOS/GOARCH antes do `_test.go`
+(`_linux`, `_windows`, `_darwin`, `_amd64`, `_arm64`, `_386`...): o Go leria o
+arquivo como restrito àquele sistema e ele sumiria da suíte em silêncio.
+Conferir com `grep -E '_(linux|darwin|windows|freebsd|amd64|arm64|386|arm)(_test)?\.go$'`
+sobre a coluna `novo`: só `memprof_linux.go`, que não muda. A primeira
+versão desta tabela dizia `store_recovery_windows_test.go` e caiu nessa
+armadilha — a checagem da Tarefa 1.2 pegou; o nome é `store_recovery_window_test.go`,
+no singular.
 
 - [ ] **Passo 2: Aplicar com um script no scratchpad**
 
