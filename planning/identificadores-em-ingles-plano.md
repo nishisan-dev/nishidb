@@ -3233,12 +3233,13 @@ estruturados de um papel ao seguinte.
 ```javascript
 export const meta = {
   name: 'ciclo-de-grupo',
-  description: 'Fase de identificadores em inglês: propor, julgar, refutar, aplicar e verificar um grupo de pacotes',
+  description: 'Fase de identificadores em inglês: propor, julgar, refutar, aplicar, prosa e verificar um grupo de pacotes',
   phases: [
     { title: 'Propor', detail: 'um tradutor por pacote, a partir do inventário e do glossário' },
     { title: 'Julgar', detail: 'consolida contra o glossário, resolve colisões, separa grupos de interface' },
     { title: 'Refutar', detail: 'três lentes por pacote: sentido, convenção Go, colisão/grupo' },
-    { title: 'Aplicar', detail: 'um aplicador só: ifacerename, gopls por posição, rf por pacote, renamecite, commits' },
+    { title: 'Aplicar', detail: 'um aplicador só: ifacerename, gopls por posição, rf e renamecite por pacote, commits' },
+    { title: 'Prosa', detail: 'um revisor de prosa por pacote (sem git); um agente commita' },
     { title: 'Verificar', detail: 'make test, test-race, lint, gates; crítico de completude' },
   ],
 }
@@ -3249,13 +3250,7 @@ const GRUPOS = 'planning/identificadores-em-ingles/grupos-pos-fase1.tsv'
 const GLOSSARIO = 'docs/glossario.md'
 const SPEC = 'planning/identificadores-em-ingles.md'
 const PROTEGIDOS = 'planning/identificadores-em-ingles/protegidos.txt'
-// Os dois mapas de caminho entram em TODA passada de prosa, e não só nas
-// passadas de caminho da Fase 1: o pacote foi renomeado lá e os símbolos dele
-// aqui, então a citação `orcamento.NovoGlobal` tem as duas metades velhas e o
-// qualificador só resolve com o mapa de pacotes carregado. É idempotente —
-// caminho já reescrito não casa de novo.
-const CAMINHOS = '-paths planning/identificadores-em-ingles/mapeamento-pacotes.tsv ' +
-  '-paths planning/identificadores-em-ingles/mapeamento-arquivos.tsv'
+const CAMINHOS = '-paths planning/identificadores-em-ingles/mapeamento-pacotes.tsv -paths planning/identificadores-em-ingles/mapeamento-arquivos.tsv'
 const tsvDe = (p) => `planning/identificadores-em-ingles/mapeamento-${fase}-${p.replaceAll('/', '_')}.tsv`
 const tsvGrupos = `planning/identificadores-em-ingles/grupos-de-interface-${fase}-${grupo}.tsv`
 
@@ -3292,7 +3287,9 @@ vira proposta de linha nova no glossário, no campo motivo, prefixada por "GLOSS
 três letras não mudam; método que aparece na coluna grupo do inventário NÃO entra em "entradas": entra em
 "grupos" com o nome novo, e o mesmo grupo recebe o mesmo nome em todos os pacotes. Espécies com sufixo
 "#ambiguo" ou "#gopls" são renomeadas por posição (gopls), não pelo rf: proponha o nome novo do mesmo jeito,
-mantendo a especie com o sufixo. Nomes de teste (func Test*/Benchmark*/Fuzz*) são da Fase 4: ignore-os.`
+mantendo a especie com o sufixo. Nomes de teste (func Test*/Benchmark*/Fuzz*) são da Fase 4: ignore-os.
+Um nome cujo godoc precisaria descrevê-lo com o verbo da operação irmã (Return explicado com "libera", verbo de
+Release) é sinal de nome errado: julgue contra a operação irmã, não só contra o glossário.`
 
 // ---------- Propor ----------
 phase('Propor')
@@ -3307,7 +3304,7 @@ ${ambiente}
 Devolva a proposta completa: uma entrada por linha do inventário que muda, um "mantido" por linha que fica
 (o inventário tem MUITAS linhas de locais já em inglês — err, ok, i, n, buf —, que entram em "mantidos" com
 motivo "já em inglês"). Nenhuma linha do inventário do pacote pode ficar sem decisão.`,
-  { label: `traduz:${p}`, phase: 'Propor', schema: PROPOSTA })))).filter(Boolean)
+  { label: `traduz:${p}`, phase: 'Propor', schema: PROPOSTA, model: 'opus' })))).filter(Boolean)
 log(`${propostas.length}/${pacotes.length} propostas`)
 
 // ---------- Julgar ----------
@@ -3329,38 +3326,42 @@ Tarefas, nesta ordem:
    crie o arquivo só com o cabeçalho.
 4. Glossário: toda proposta "GLOSSARIO:" vira linha nova em ${GLOSSARIO} (mesmo formato de tabela, três colunas). A
    célula "inglês" leva SÓ o termo (ou os termos separados por " / "), nunca uma frase: a razão de uma escolha difícil
-   vai para a seção §4 do glossário em prosa, uma vez.
+   vai para a seção §4 do glossário em prosa, uma vez. Dois sentidos qualificados do mesmo termo PT-BR não recebem o
+   mesmo termo inglês.
 5. Escreva, por pacote, ${tsvDe('<pacote>')} com cabeçalho "pacote\\tespecie\\tendereco\\tnovo\\tmotivo", uma linha por
    entrada (novo = nome novo; especie com o sufixo #ambiguo/#gopls preservado quando houver), e linhas de "mantidos" com
    novo igual ao nome atual e motivo "mantido: <motivo>". Motivo TERSO (uma frase); uma razão compartilhada por várias
    linhas é escrita uma vez e as outras citam "mesmo motivo de <endereco>". Para as linhas #ambiguo/#gopls acrescente ao
    motivo a posição "arquivo:linha:coluna" copiada do inventário, que o aplicador usa.
+   Edição manual que o rename exige (godoc cujo sentido vira errado com a troca da primeira palavra, literal de string
+   com o nome do tipo, valor de tabela de teste com o nome velho) entra no motivo NO FORMATO FIXO
+   "ATENÇÃO arquivo:linha: <texto que some> → <texto novo>" — o aplicador aplica e confere que o texto sumiu.
 6. Garanta que ${PROTEGIDOS} existe (crie vazio se não existir).
 Não faça commit: o aplicador commita. Devolva um resumo: número de entradas por pacote, colisões resolvidas, termos novos
 no glossário, e a saída do dry-run.`,
-  { label: `juiz:${grupo}`, phase: 'Julgar' })
+  { label: `juiz:${grupo}`, phase: 'Julgar', model: 'opus' })
 log(`juiz: ${String(juizo).slice(0, 300)}`)
 
 // ---------- Refutar (até 3 rodadas) ----------
 phase('Refutar')
 const LENTES = [
-  ['sentido', 'o nome novo muda o SIGNIFICADO do velho, ou perde uma distinção que o código faz (ex.: dois conceitos PT-BR distintos colapsados no mesmo inglês)'],
+  ['sentido', 'o nome novo muda o SIGNIFICADO do velho, perde uma distinção que o código faz (dois conceitos PT-BR distintos colapsados no mesmo inglês), ou só se explica com o verbo da operação irmã'],
   ['convencao', 'viola convenção Go: Id/Url/Http em vez de ID/URL/HTTP, prefixo Get, sufixo numérico, receptor renomeado para mais de três letras sem motivo, nome de erro fora de ErrXxx/XxxError, ou termo fora do glossário; ou um identificador já em inglês foi alterado sem motivo'],
-  ['colisao', 'colide no escopo (rode rf -diff no pacote e procure "already have"), ou um método de interface entrou em entradas em vez de grupos, ou o grupo não cobre o fecho de ' + GRUPOS + ', ou uma linha do inventário do pacote ficou sem decisão'],
+  ['colisao', 'colide no escopo (rode rf -diff no pacote e procure "already have"), ou um método de interface entrou em entradas em vez de grupos, ou o grupo não cobre o fecho de ' + GRUPOS + ', ou uma linha do inventário do pacote ficou sem decisão, ou uma linha ATENÇÃO não está no formato fixo "ATENÇÃO arquivo:linha: <some> → <novo>"'],
 ]
 for (let rodada = 1; rodada <= 3; rodada++) {
   const vereditos = (await parallel(pacotes.flatMap(p => LENTES.map(([lente, criterio]) => () =>
     agent(`Você é o refutador "${lente}" do pacote ${p}. Leia ${tsvDe(p)}, ${tsvGrupos}, ${GLOSSARIO} e o código do pacote.
 Tente DERRUBAR entradas com este critério: ${criterio}. Para cada uma que cair, dê o motivo e uma sugestão concreta.
 Só refute com evidência (cite arquivo e linha); dúvida não é refutação. Não edite nada. Devolva a lista, vazia se nada cair.`,
-      { label: `refuta:${lente}:${p}`, phase: 'Refutar', schema: VEREDICTO }))))).filter(Boolean)
+      { label: `refuta:${lente}:${p}`, phase: 'Refutar', schema: VEREDICTO, model: 'opus' }))))).filter(Boolean)
   const caidas = vereditos.flatMap(v => v.refutadas)
   log(`rodada ${rodada}: ${caidas.length} refutações`)
   if (caidas.length === 0) break
   await agent(`Você é o corretor do grupo ${grupo}. Estas entradas foram refutadas: ${JSON.stringify(caidas)}.
 Para cada uma, corrija o TSV correspondente (${pacotes.map(tsvDe).join(', ')} ou ${tsvGrupos}) aplicando a sugestão
 ou uma alternativa melhor, mantendo a consistência entre pacotes e o glossário (${GLOSSARIO}). ${regras}
-Não faça commit. Devolva o que mudou.`, { label: `corrige:${grupo}:${rodada}`, phase: 'Refutar' })
+Não faça commit. Devolva o que mudou.`, { label: `corrige:${grupo}:${rodada}`, phase: 'Refutar', model: 'opus' })
 }
 
 // ---------- Aplicar (um só) ----------
@@ -3385,21 +3386,48 @@ Ordem obrigatória (spec §4.6), com commit ao fim de cada passo:
       novo ≠ nome atual (pule as "mantido"). Rode "scripts/rename-apply.sh <pacote> <script.rf> <script.diff>". Leia o diff.
       Exit ≠ 0 → nada foi escrito por ele; leia o stderr: se for "already have" ou tipo, tire a(s) linha(s) ofensiva(s)
       para um arquivo <pacote>.recusadas.txt no scratch, anote, e rode de novo sem elas; se falhar de novo, devolva ok=false.
-   c) "go build ./..." e "go vet ./..." verdes → "git add -A" e "git commit -m '<pacote>: identificadores em inglês'".
-3. Passada de prosa: "go run ./scripts/renamecite -dir . ${pacotes.map(p => '-idents ' + tsvDe(p)).join(' ')} ${CAMINHOS} -protect ${PROTEGIDOS} -report ${scratch}/renamecite-${grupo}.txt".
-   O relatório tem linhas "aplicado" (toda substituição, com a regra) e "pulado" (ambiguidade, protegido). Leia as DUAS:
-   toda linha "pulado ... ambíguo" é resolvida qualificando a citação no texto à mão (é prosa, não código); toda linha
-   "aplicado" cujo token não era citação de identificador (nome de coluna, chave YAML, arquivo em disco, palavra de
-   prosa) é revertida à mão e o token entra em ${PROTEGIDOS} (um por linha) no mesmo commit.
-   "gofmt -l ." tem de sair vazio; "go build ./..." e "go vet ./..." verdes; "go test ./internal/gates/ -run
-   TestRenamedIdentifiersAreNotCitedByTheirOldNames" verde — o que o gate ainda acusar é citação que nenhuma regra
-   alcança, e é edição à mão. "git add -A" e "git commit -m '${grupo}: citações em docs e comentários'".
-Nunca edite código Go à mão fora do passo 3. Devolva ok e a saída resumida de cada passo, inclusive quantos renames por
-posição e quantas linhas recusadas.`,
-  { label: `aplica:${grupo}`, phase: 'Aplicar', schema: RELATORIO })
+   c) Edições ATENÇÃO: para cada motivo do TSV do pacote que começa por "ATENÇÃO arquivo:linha:", aplique a edição e
+      confira com grep que o "<texto que some>" não existe mais no arquivo; se ainda existir, corrija; registre cada uma.
+   d) Passada de prosa DO PACOTE: "go run ./scripts/renamecite -dir . -idents ${tsvDe('<pacote>')} ${CAMINHOS} -protect ${PROTEGIDOS} -report ${scratch}/renamecite-<pacote>.txt".
+      Leia as linhas "aplicado" e "pulado": toda "pulado ... ambíguo" é resolvida qualificando a citação à mão (é prosa);
+      toda "aplicado" cujo token não era citação de identificador (nome de coluna, chave YAML, arquivo em disco, palavra
+      de prosa) é revertida à mão e o token entra em ${PROTEGIDOS} (um por linha) no mesmo commit.
+   e) "go build ./...", "go vet ./...", "gofmt -l ." vazio → "git add -A" e "git commit -m '<pacote>: identificadores em inglês'".
+3. Gate: "go test ./internal/gates/ -run 'Renamed|Citacoes|Evidencias|Glossary' -count=1". Vermelho → conserte a citação
+   pendurada apontada (é prosa/literal, não código de lógica) e faça "git add -A" + "git commit -m '${grupo}: citações que
+   as regras não alcançaram'". Verde → siga.
+Nunca edite código Go de lógica à mão. Devolva ok e a saída resumida de cada passo, inclusive quantos renames por posição,
+quantas linhas recusadas e quantas edições ATENÇÃO.`,
+  { label: `aplica:${grupo}`, phase: 'Aplicar', schema: RELATORIO, model: 'opus' })
 if (!aplicacao || !aplicacao.ok) {
   log(`aplicação falhou: ${aplicacao ? aplicacao.saida.slice(0, 500) : 'sem retorno'}`)
   return { ok: false, etapa: 'aplicar', saida: aplicacao && aplicacao.saida }
+}
+
+// ---------- Prosa (paralelo, sem git; um commit ao fim) ----------
+phase('Prosa')
+const prosa = (await parallel(pacotes.map(p => () =>
+  agent(`Você é o revisor de prosa do pacote ${p} depois do rename (grupo ${grupo}). ${ambiente}
+NÃO rode nenhum comando git além de "git log" e "git show"/"git diff" (só leitura); outro agente commita depois.
+Ache o commit "<pacote>: identificadores em inglês" de ${p} com "git log --oneline -40" e leia "git show <sha> -- ${p}".
+Edite SÓ arquivos dentro de ${p}/ (nunca de outro pacote), consertando: (1) frases de godoc/comentário em que o
+identificador velho era o substantivo-cabeça e a troca da primeira palavra quebrou a frase ("// Format de saída." →
+"// Format é o formato de saída."; parâmetro renomeado citado pelo nome velho em prosa: "teto <= 0" → "ceiling <= 0");
+(2) menções ao nome velho que a ferramenta não alcançou (compare com ${tsvDe(p)}); (3) linhas de comentário que
+cresceram além de 80 colunas por causa do nome novo (re-wrap do parágrafo, sem mudar o texto); (4) godoc de
+declaração exportada que não começa pelo nome novo. Prosa continua em PT-BR; não traduza prosa; não toque em código.
+Devolva ok=true e a lista de arquivos e linhas editadas (ou "nada a fazer").`,
+    { label: `prosa:${p}`, phase: 'Prosa', schema: RELATORIO, model: 'opus' })))).filter(Boolean)
+log(`prosa: ${prosa.filter(r => r.ok).length}/${pacotes.length} pacotes revisados`)
+const commitProsa = await agent(`Você commita a revisão de prosa do grupo ${grupo}. ${ambiente}
+Rode "gofmt -l ." (tem de sair vazio; se não, rode gofmt -w nos arquivos listados), "go build ./...", "go vet ./...",
+"go test ./internal/gates/ -run 'Renamed|Citacoes|Evidencias|Glossary' -count=1". Se algum for vermelho, devolva ok=false
+com a saída (não conserte). Se "git status --short" estiver vazio, devolva ok=true "nada a commitar". Senão "git add -A" e
+"git commit -m '${grupo}: prosa ajustada após o rename'" e devolva ok=true com o sha.`,
+  { label: `commit-prosa:${grupo}`, phase: 'Prosa', schema: RELATORIO, model: 'sonnet' })
+if (!commitProsa || !commitProsa.ok) {
+  log(`commit da prosa falhou: ${commitProsa ? commitProsa.saida.slice(0, 500) : 'sem retorno'}`)
+  return { ok: false, etapa: 'prosa', saida: commitProsa && commitProsa.saida }
 }
 
 // ---------- Verificar ----------
@@ -3410,15 +3438,16 @@ Rode, nesta ordem, e cole a saída resumida de cada um:
 "make build", "make test", "make test-race", "go test ./internal/gates/ -count=1", "make lint" (a contagem impressa
 tem de ser igual ao conteúdo de .golangci-baseline; se for maior, liste os apontamentos novos com arquivo:linha).
 Qualquer vermelho: ok=false, com a saída COMPLETA do que falhou e o seu diagnóstico (mapeamento errado? citação morta?
-godoc que não começa pelo nome novo?). Não corrija nada.`, { label: `verifica:${grupo}`, phase: 'Verificar', schema: RELATORIO }),
+godoc que não começa pelo nome novo?). Não corrija nada.`, { label: `verifica:${grupo}`, phase: 'Verificar', schema: RELATORIO, model: 'opus' }),
   () => agent(`Você é o crítico de completude do grupo ${grupo}. ${ambiente}
 Rode "go run ./scripts/renameinv -dir . -out ${scratch}/inv-${grupo}.tsv -groups ${scratch}/grp-${grupo}.tsv" e, para cada
 pacote em ${JSON.stringify(pacotes)}, compare as linhas do pacote no inventário novo com ${tsvDe('<pacote>')}: todo nome
 que ainda é o velho (coluna endereco do TSV) e não está marcado "mantido" no TSV é uma falta; todo "mantido" cujo
-motivo não é "já em inglês" nem "receptor curto" é suspeito e entra na lista; toda linha do inventário novo com nome em
-PT-BR (acento, ou palavra que o glossário lista como termo PT-BR) fora de Test*/Benchmark*/Fuzz* é falta. Liste as
-faltas com endereço. ok=true só com zero faltas. Não corrija nada.`,
-    { label: `completude:${grupo}`, phase: 'Verificar', schema: RELATORIO }),
+motivo não é "já em inglês" nem "receptor curto" nem "nome de teste, Fase 4" é suspeito e entra na lista; toda linha
+do inventário novo com nome em PT-BR (acento, ou palavra que o glossário lista como termo PT-BR, ou morfologia
+-ção/-mento/-dade/-ncia/-ável/-ível) fora de Test*/Benchmark*/Fuzz* é falta; toda linha ATENÇÃO do TSV cujo "<texto que
+some>" ainda existe no arquivo é falta. Liste as faltas com endereço. ok=true só com zero faltas. Não corrija nada.`,
+    { label: `completude:${grupo}`, phase: 'Verificar', schema: RELATORIO, model: 'opus' }),
 ])
 return { ok: !!(verificacao && verificacao.ok && completude && completude.ok), verificacao, completude }
 ```
