@@ -479,7 +479,7 @@ func (m *Materializer) Aplica(d *Decodificado) ApplyResult {
 	// merge, sem append, sem índices. O record já veio do GetByKey (a
 	// validação de colisão da primary obriga a lê-lo de qualquer jeito), então
 	// o stale check não custa I/O algum.
-	// presenca.Existe(), e não "está viva": é AQUI que o débito 24 se fecha.
+	// presenca.Exists(), e não "está viva": é AQUI que o débito 24 se fecha.
 	// A entidade expirada mantém RowID e Sequence, então o stale check tem
 	// contra o que comparar — e um evento antigo é descartado em vez de
 	// recriar a entidade que acabou de expirar.

@@ -500,7 +500,7 @@ exige filesystem real, não `tmpfs`.
 #### C2 — Snapshot de leitura
 
 `Ordem interna:`
-1. `storage.Snapshot` — tipo de valor com `LimiteRowID` e `Instante`.
+1. `storage.Snapshot` — tipo de valor com `LimitRowID` e `Instant`.
    `Store.Snapshot()` o produz com dois loads, zero alocação.
 2. `prazoVencido` ([store.go:1333](internal/storage/store.go:1333)) ganha
    parâmetro `em time.Time` e deixa de chamar `s.agora()`. Os leitores passam o
@@ -512,7 +512,7 @@ exige filesystem real, não `tmpfs`.
    ([executor.go:125](internal/query/executor/executor.go:125)). `ScanLive` perde
    o cálculo do limite ([store.go:1632](internal/storage/store.go:1632)) — quem o
    fixa passa a ser o executor, para os quatro planos.
-5. `candidateSource.advance` filtra `id >= snap.LimiteRowID` **antes** do
+5. `candidateSource.advance` filtra `id >= snap.LimitRowID` **antes** do
    `GetByRowID`, o que dá limite uniforme a bitmap, hash, interseção e união de
    graça.
 6. O snapshot viaja em `Options`, nunca em campo do `Store`: dois leitores

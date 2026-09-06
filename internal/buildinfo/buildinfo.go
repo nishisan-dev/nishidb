@@ -8,7 +8,7 @@ package buildinfo
 
 import "runtime/debug"
 
-// Versao, Commit e Data são POPULADAS PELO LINKER, via:
+// Version, Commit e Date são POPULADAS PELO LINKER, via:
 //
 //	-ldflags "-X .../internal/buildinfo.Version=... \
 //	          -X .../internal/buildinfo.Commit=... \
@@ -24,8 +24,10 @@ var (
 	Date    string
 )
 
-// noVersionInfo é a resposta quando NEM os ldflags NEM o carimbo do VCS têm o
-// que informar — o caso do binário de teste, que em geral não carrega
+// noVersionInfo ocupa o slot de VERSÃO quando os ldflags não vieram — o
+// carimbo do VCS informa commit e data, nunca a versão, então é ele que
+// responde por `go install` direto. Quando nem o carimbo existe, vira a
+// resposta inteira: o caso do binário de teste, que em geral não carrega
 // vcs.revision.
 const noVersionInfo = "dev"
 
@@ -36,7 +38,7 @@ const noVersionInfo = "dev"
 var readBuildInfo = debug.ReadBuildInfo
 
 // String monta o texto que toda superfície mostra. Com os ldflags presentes,
-// é Versao seguido de commit e data entre parênteses. Sem eles, cai no
+// é Version seguido de commit e data entre parênteses. Sem eles, cai no
 // carimbo que o próprio toolchain do Go grava de graça em todo binário
 // compilado dentro de um repositório git (`go install` direto se beneficia
 // disso sem precisar do Makefile) — e só quando nem isso existe é que a

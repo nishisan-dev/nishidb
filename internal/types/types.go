@@ -191,7 +191,7 @@ func (p Presence) String() string {
 	case PresenceExpired:
 		return "expirada"
 	}
-	return "Presenca(" + strconv.FormatUint(uint64(p), 10) + ")"
+	return "Presence(" + strconv.FormatUint(uint64(p), 10) + ")"
 }
 
 // FieldID identifica um campo no field dictionary do dataset (spec §32).
@@ -260,14 +260,14 @@ type Record struct {
 // Os três limites respondem a três formas diferentes de o dataset mudar
 // debaixo de uma varredura em curso, e nenhum deles substitui os outros:
 //
-//   - Epoca congela a VERSÃO de cada linha. Sem ela a consulta vê o mesmo
+//   - Epoch congela a VERSÃO de cada linha. Sem ela a consulta vê o mesmo
 //     conjunto de linhas do começo ao fim, mas mistura estados: as que a
 //     varredura alcançou antes de uma atualização saem velhas e as de depois
 //     saem novas, e o resultado não corresponde a instante nenhum do banco.
-//   - Instante congela o relógio da expiração. Sem ele, prazoVencido consulta
+//   - Instant congela o relógio da expiração. Sem ele, prazoVencido consulta
 //     s.agora() a cada row testada e uma linha viva quando a consulta abriu
 //     desaparece do MEIO do resultado.
-//   - LimiteRowID torna o teto EXPLÍCITO e comum aos quatro planos. Ele não
+//   - LimitRowID torna o teto EXPLÍCITO e comum aos quatro planos. Ele não
 //     conserta um defeito ativo, e dizer que conserta seria repetir o que o
 //     débito 94 afirma sem que o código sustente: as fontes do índice por
 //     segmento já fixam o seu teto na CONSTRUÇÃO — o WIP do corrente

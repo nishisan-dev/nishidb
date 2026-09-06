@@ -161,7 +161,7 @@ func TestDivergenciaNomeiaOCampo(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			if got := base.Divergence(c.mutate(base)); got != c.want {
-				t.Errorf("Divergencia = %q, quer %q", got, c.want)
+				t.Errorf("Divergence = %q, quer %q", got, c.want)
 			}
 		})
 	}
@@ -175,10 +175,10 @@ func TestClusterIDVazioNaoEDivergencia(t *testing.T) {
 	withoutID := withID
 	withoutID.ClusterID = ""
 	if got := withID.Divergence(withoutID); got != "" {
-		t.Errorf("Divergencia = %q, quer vazio", got)
+		t.Errorf("Divergence = %q, quer vazio", got)
 	}
 	if got := withoutID.Divergence(withID); got != "" {
-		t.Errorf("Divergencia = %q, quer vazio", got)
+		t.Errorf("Divergence = %q, quer vazio", got)
 	}
 }
 
@@ -186,7 +186,7 @@ func TestParticoesSaemOrdenadas(t *testing.T) {
 	s := SourceOffsets{Offsets: map[int32]int64{7: 1, 0: 1, 3: 1, 12: 1}}
 	want := []int32{0, 3, 7, 12}
 	if got := s.Partitions(); !reflect.DeepEqual(got, want) {
-		t.Errorf("Particoes = %v, quer %v", got, want)
+		t.Errorf("Partitions = %v, quer %v", got, want)
 	}
 }
 

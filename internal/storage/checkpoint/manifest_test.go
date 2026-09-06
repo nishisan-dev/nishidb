@@ -128,7 +128,7 @@ func TestManifestReservaACapacidadeDoLayoutQueGrava(t *testing.T) {
 
 	// A cauda TLV entrou na fórmula pela MESMA razão que os 36 bytes por
 	// segmento: ela é conteúdo novo no encode, e uma reserva que a ignorasse
-	// faria o append realocar em todo checkpoint. O termo é TamanhoDaCaudaTLV,
+	// faria o append realocar em todo checkpoint. O termo é TLVTailSize,
 	// e não um literal, porque duplicar a conta foi exatamente o que deixou a
 	// capacidade em 12 quando o layout já gravava 36.
 	withSections := sampleManifest()
@@ -143,7 +143,7 @@ func TestManifestReservaACapacidadeDoLayoutQueGrava(t *testing.T) {
 		t.Errorf("cap = %d com reserva de %d: o append realocou com a cauda TLV", cap(bs), reservedWithSections)
 	}
 	if growth := len(bs) - len(b); growth != TLVTailSize(&withSections)-TLVTailSize(&m) {
-		t.Errorf("as seções a mais ocuparam %d bytes; TamanhoDaCaudaTLV declara %d",
+		t.Errorf("as seções a mais ocuparam %d bytes; TLVTailSize declara %d",
 			growth, TLVTailSize(&withSections)-TLVTailSize(&m))
 	}
 }

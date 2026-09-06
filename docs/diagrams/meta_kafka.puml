@@ -46,7 +46,7 @@ note right of F
   ou UMA de resumo, quando
   não há partição nenhuma
 end note
-F --> EX: Snapshot{Epoca, LimiteRowID}
+F --> EX: Snapshot{Epoch, LimitRowID}
 
 == leitura das linhas ==
 loop por linha

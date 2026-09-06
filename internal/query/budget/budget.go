@@ -16,7 +16,7 @@
 // A hierarquia é de dois níveis e cada um recusa uma coisa diferente. O Global
 // impede que N consultas SOMADAS estourem a máquina, e recusa na ADMISSÃO — ou a
 // consulta reserva o orçamento dela inteiro antes do primeiro byte, ou recebe um
-// 503 com Retry-After. O PorQuery impede que UMA consulta patológica consuma
+// 503 com Retry-After. O PerQuery impede que UMA consulta patológica consuma
 // sozinha o que era de todas, e recusa POR LINHA, dentro do StreamWriter, contra
 // um teto que já está reservado.
 package budget
@@ -33,7 +33,7 @@ type Global struct {
 	used    atomic.Int64
 }
 
-// NewGlobal cria o orçamento do processo. teto <= 0 é tratado como ILIMITADO,
+// NewGlobal cria o orçamento do processo. ceiling <= 0 é tratado como ILIMITADO,
 // e o caso existe para o chamador que não tem configuração — ferramenta, teste,
 // benchmark. Não é fallback do servidor: lá o teto vem do units.Size, que já
 // recusa valor não positivo.
@@ -67,8 +67,13 @@ func (g *Global) Reserve(n int64) bool {
 	}
 }
 
-// Return libera n bytes. Só pode ser chamada com o que foi reservado: devolver
-// a mais faria o `usado` andar para baixo do real e o teto deixaria de valer.
+// Return devolve n bytes ao orçamento. Só pode ser chamada com o que foi
+// reservado: devolver a mais faria o `used` andar para baixo do real e o teto
+// deixaria de valer.
+//
+// O verbo é "devolver", e não "liberar": Release é o método irmão de contrato
+// CONTRÁRIO — devolve TUDO o que a consulta tinha e é idempotente —, e um
+// godoc que diz "libera" aqui manda o leitor para o outro.
 func (g *Global) Return(n int64) { g.used.Add(-n) }
 
 // PerQuery é o orçamento de UMA consulta (runtime.query.maxBufferPerQuery).
@@ -86,7 +91,7 @@ type PerQuery struct {
 }
 
 // Query abre um orçamento para uma consulta, com o teto por consulta dado.
-// teto <= 0 é ilimitado, pela mesma razão do NovoGlobal.
+// ceiling <= 0 é ilimitado, pela mesma razão do NewGlobal.
 func (g *Global) Query(ceiling int64) *PerQuery {
 	return &PerQuery{global: g, ceiling: ceiling}
 }
@@ -109,10 +114,10 @@ func (p *PerQuery) Used() int64 { return p.used.Load() }
 // honesto para devolver, com Retry-After, antes do primeiro byte.
 //
 // O efeito colateral é que o caminho quente do StreamWriter não chama este
-// pacote NENHUMA vez: ele só compara a capacidade do buffer contra o Teto. Nada
+// pacote NENHUMA vez: ele só compara a capacidade do buffer contra o Ceiling. Nada
 // de CAS por linha, nada de contenção entre as N consultas simultâneas do §80.
 //
-// Teto <= 0 é ilimitado e sempre admite, sem contabilizar: não há número a
+// Ceiling <= 0 é ilimitado e sempre admite, sem contabilizar: não há número a
 // reservar, e inventar um faria o nishidb_query_buffer_bytes de um processo sem
 // configuração publicar uma grandeza que não descreve nada.
 func (p *PerQuery) Admit() bool {
@@ -130,7 +135,7 @@ func (p *PerQuery) Admit() bool {
 // segunda chamada devolve zero.
 //
 // Idempotente de propósito — o chamador a põe num `defer` e pode tê-la chamado
-// no caminho de erro também. Uma devolução dupla faria o `usado` do processo
+// no caminho de erro também. Uma devolução dupla faria o `used` do processo
 // andar para baixo do real, e o teto deixaria de valer para todo mundo a partir
 // dali, em silêncio.
 func (p *PerQuery) Release() {

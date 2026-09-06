@@ -82,10 +82,10 @@ Arquivo novo `internal/typeparse/datetime.go`, no estilo artesanal de `RFC3339Mi
 ```go
 // Layout é o padrão compilado. Construído UMA vez no load; o parse é uma
 // interpretação sobre []byte que não aloca.
-type Layout struct { /* toks []tok; literais []byte; temMeridiano, temData bool */ }
+type Layout struct { /* toks []tok; literais []byte; hasMeridiem, hasDate bool */ }
 
-func CompilaLayout(padrao string, t types.FieldType) (*Layout, error)
-func TokensSuportados() []string // para a mensagem de recusa
+func CompileLayout(padrao string, t types.FieldType) (*Layout, error)
+func SupportedTokens() []string // para a mensagem de recusa
 
 // DateTime resolve o instante em loc. loc é PARÂMETRO, não time.Local
 // capturado dentro: um teste precisa fixar o fuso sem mexer num global do
@@ -97,7 +97,7 @@ func (l *Layout) DateTime(raw []byte, loc *time.Location) (int64, error)
 // não é instante, não há DST e não há nada a resolver.
 func (l *Layout) TimeOfDay(raw []byte) (int64, error)
 
-const MillisPorDia = 86_400_000
+const MillisPerDay = 86_400_000
 ```
 
 Helpers novos ao lado de `Digits2`/`Digits4` ([typeparse.go:333-348](internal/typeparse/typeparse.go:333)): `digitos1a2`, `digitos3`, `monthAbbrEnUS` (array `[12][3]byte` em minúsculas, folda a caixa — 12 comparações de 3 bytes custam menos que um hash e um map alocaria na init).
@@ -288,17 +288,17 @@ O passo 6 entrega **de graça**, pelo código que já existe: baixa de liveness 
 // o Store real e o fakestorage.
 type Presenca uint8
 const (
-    PresencaAusente Presenca = iota // key nunca existiu
-    PresencaViva                    // estado corrente legível
-    PresencaExpirada                // rowId e sequence válidos; payload é lápide
+    PresenceAbsent Presenca = iota // key nunca existiu
+    PresenceLive                    // estado corrente legível
+    PresenceExpired                // rowId e sequence válidos; payload é lápide
 )
-GetByKey(key, buf []byte) (types.Record, []byte, types.Presenca, error)
-Sequence(id types.RowID) (int64, types.Presenca)
+GetByKey(key, buf []byte) (types.Record, []byte, types.Presence, error)
+Sequence(id types.RowID) (int64, types.Presence)
 ```
 
 `PresenceExpired` cobre **os dois** casos — bit gravado **ou** prazo vencido sem tombstone publicado. Sem unificar, o materializer teria duas noções de "morta" e a que vale dependeria de o scheduler ter passado.
 
-Em [materializer.go:276-314](internal/materializer/materializer.go:276): `found` vira `presenca != PresencaAusente` (**é a correção do débito 24, e é uma linha** — o stale check de [:285](internal/materializer/materializer.go:285) passa a rodar); o merge de [:294](internal/materializer/materializer.go:294) exige `PresenceLive`, porque merge sobre a lápide arrastaria campos do alarme anterior para o alarme reaberto; desfecho novo `ActionRessuscitada` + contador, senão "alarme reabriu" sai como `updated` e fica invisível no painel.
+Em [materializer.go:276-314](internal/materializer/materializer.go:276): `found` vira `presenca != PresenceAbsent` (**é a correção do débito 24, e é uma linha** — o stale check de [:285](internal/materializer/materializer.go:285) passa a rodar); o merge de [:294](internal/materializer/materializer.go:294) exige `PresenceLive`, porque merge sobre a lápide arrastaria campos do alarme anterior para o alarme reaberto; desfecho novo `ActionRessuscitada` + contador, senão "alarme reabriu" sai como `updated` e fica invisível no painel.
 
 > **O piloto cai num limite que precisa estar escrito.** Sem `materialization.sequence` — e o piloto não a declara —, [materializer.go:285](internal/materializer/materializer.go:285) já exige `Seq != nil`, então **não há stale check nenhum** e um evento reentregue pelo Kafka reabre a entidade. Não é regressão (sem sequence não existe informação de ordem), mas com TTL ligado o sintoma passa de "update redundante" para "alarme fechado reabre sozinho". **Não recusar** a combinação (bloquearia o piloto); WARN nomeado na subida, no estilo de [server.go:465](internal/server/server.go:465).
 

@@ -19,7 +19,7 @@ func mustCompile(t *testing.T, pattern string, d Domain) *Layout {
 	t.Helper()
 	l, err := CompileLayout(pattern, d)
 	if err != nil {
-		t.Fatalf("CompilaLayout(%q): %v", pattern, err)
+		t.Fatalf("CompileLayout(%q): %v", pattern, err)
 	}
 	return l
 }

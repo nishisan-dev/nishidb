@@ -59,7 +59,7 @@ func TestManifestSemContadoresNaoEmiteASecao(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.Counters != nil {
-		t.Fatalf("manifest sem a seção tem de voltar com Contadores nil, veio %+v", got.Counters)
+		t.Fatalf("manifest sem a seção tem de voltar com Counters nil, veio %+v", got.Counters)
 	}
 }
 
@@ -69,7 +69,7 @@ func TestAReservaDaCaudaContaOsContadores(t *testing.T) {
 	with.Counters = sampleCounters()
 	growth := len(with.encode()) - len(without.encode())
 	if declared := TLVTailSize(&with) - TLVTailSize(&without); growth != declared {
-		t.Fatalf("a seção ocupou %d bytes; TamanhoDaCaudaTLV declara %d", growth, declared)
+		t.Fatalf("a seção ocupou %d bytes; TLVTailSize declara %d", growth, declared)
 	}
 }
 
@@ -79,7 +79,7 @@ func TestAReservaDaCaudaContaOsContadores(t *testing.T) {
 // seção, grava o manifest sem ela, e o novo reconstrói ao voltar.
 func TestASecaoDosContadoresEhIgnoravel(t *testing.T) {
 	if tagCounters&tagCritical != 0 {
-		t.Fatalf("tagContadores %#04x carrega o bit crítico; ela tem de ser ignorável", tagCounters)
+		t.Fatalf("tagCounters %#04x carrega o bit crítico; ela tem de ser ignorável", tagCounters)
 	}
 }
 

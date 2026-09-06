@@ -26,7 +26,7 @@ import (
 // e a versão de Go do workflow é a exata que mede a base (1.26.5), não uma
 // faixa.
 
-// ciWorkflowPath usa raizDoRepo, já definido em lint_test.go: os dois
+// ciWorkflowPath usa repoRoot, já definido em lint_test.go: os dois
 // arquivos deste pacote enxergam a raiz do repositório do mesmo lugar.
 //
 // releaseWorkflowPath e benchWorkflowPath são os outros dois
@@ -65,7 +65,7 @@ func TestWorkflowDeCIExiste(t *testing.T) {
 }
 
 // A versão do golangci-lint no workflow tem de ser a MESMA da instrução de
-// instalação do Makefile, e a comparação reaproveita reInstalacao — o mesmo
+// instalação do Makefile, e a comparação reaproveita reInstallation — o mesmo
 // regexp que TestAInstrucaoDeInstalacaoFixaAVersaoDoLinter usa para extrair a
 // versão do Makefile, declarado em lint_test.go. Hardcodar "v2.12.2" aqui de
 // novo reabriria, no próprio teste, o defeito que ele existe para fechar:
@@ -119,7 +119,7 @@ func TestWorkflowDeCIRodaOsDoisAlvosDeTeste(t *testing.T) {
 // próxima alteração em nishidb-stats.py podia quebrar a exibição da versão
 // sem que NADA acusasse — o mesmo defeito do débito 53 (gate ausente que
 // ninguém percebe), agora numa porta em Python em vez de Go. A verificação
-// roda sobre o SCRIPT do job `test` (scriptDoJob), não sobre o arquivo
+// roda sobre o SCRIPT do job `test` (jobScript), não sobre o arquivo
 // bruto, pelo mesmo motivo do job `lint`: um comentário mencionando
 // "test-python" não pode satisfazer o teste com o passo de fato removido.
 func TestWorkflowDeCIRodaOTestePython(t *testing.T) {
@@ -149,7 +149,7 @@ func TestWorkflowDeCIPinaGoNaVersaoExata(t *testing.T) {
 }
 
 // goVersionsInWorkflow extrai todas as ocorrências de go-version de um
-// workflow qualquer, reaproveitando reVersaoDeGo — a mesma regexp que
+// workflow qualquer, reaproveitando reGoVersion — a mesma regexp que
 // TestWorkflowDeCIPinaGoNaVersaoExata já usa para ci.yml. Fatal se nenhuma
 // aparecer: um workflow sem go-version fixado não tem o que comparar.
 func goVersionsInWorkflow(t *testing.T, path string) []string {
@@ -208,7 +208,7 @@ func TestWorkflowDeBenchPinaGoNaMesmaVersaoDoCI(t *testing.T) {
 // o script dispara ROLLBACK ESPÚRIO no piloto mesmo com o binário certo no
 // ar.
 //
-// A verificação roda sobre o SCRIPT do job (scriptDoJobDoArquivo), não sobre
+// A verificação roda sobre o SCRIPT do job (jobScriptInFile), não sobre
 // o arquivo bruto: um comentário em prosa mencionando "make build" não pode
 // satisfazer o teste com o passo de fato trocado por outro comando.
 func TestWorkflowDeReleaseBuildaComOAlvoDoMakefile(t *testing.T) {
@@ -234,7 +234,7 @@ func TestArquivoDeBaselineExisteEContemUmInteiro(t *testing.T) {
 	}
 }
 
-// workflowStep e jobDeWorkflow decodificam só o campo que os testes
+// workflowStep e workflowJob decodificam só o campo que os testes
 // abaixo precisam do YAML de Actions — não o schema inteiro do formato.
 // Decodificar como DADO, via yaml.v3, e não varrer o arquivo bruto como
 // texto, é o que impede uma MENÇÃO em comentário de satisfazer o teste: o
@@ -254,7 +254,7 @@ type ciWorkflowFile struct {
 
 // jobScriptInFile devolve a concatenação dos `run:` de todos os steps
 // do job pedido, em QUALQUER arquivo de workflow — a generalização de
-// scriptDoJob (que só enxergava ci.yml) para cobrir release.yml e bench.yml
+// jobScript (que só enxergava ci.yml) para cobrir release.yml e bench.yml
 // sem duplicar o parser.
 func jobScriptInFile(t *testing.T, filePath, jobName string) string {
 	t.Helper()
@@ -281,7 +281,7 @@ func jobScript(t *testing.T, name string) string {
 }
 
 // lintJobScript é o atalho que os testes do job `lint` já usavam antes
-// de scriptDoJob virar genérico — mantido para não duplicar "lint" em cada
+// de jobScript virar genérico — mantido para não duplicar "lint" em cada
 // chamador.
 func lintJobScript(t *testing.T) string { return jobScript(t, "lint") }
 
@@ -299,7 +299,7 @@ var (
 // ratchet passaria despercebida — o mesmo defeito do débito 53, agora no
 // passo que sucedeu o exit code como veredito.
 //
-// A verificação roda sobre o SCRIPT do job (scriptDoJobDeLint), não sobre o
+// A verificação roda sobre o SCRIPT do job (lintJobScript), não sobre o
 // arquivo bruto: um comentário em prosa mencionando ".golangci-baseline"
 // não pode fazer este teste passar com a comparação de fato removida.
 func TestWorkflowDeCIComparaAContagemComABaseline(t *testing.T) {

@@ -682,9 +682,9 @@ O snapshot congela quatro coisas, e nenhuma substitui as outras:
 
 | | O que congela | O que quebra sem ele |
 |---|---|---|
-| `Epoca` | a versão de cada linha | o resultado mistura estados: as linhas alcançadas antes de uma atualização saem velhas, as de depois saem novas |
-| `Instante` | o relógio da expiração | uma linha viva quando a consulta abriu some do MEIO do resultado |
-| `LimiteRowID` | o teto de rowId | nada hoje: as fontes do índice por segmento já fixam o seu na construção. O campo torna o teto explícito e comum aos quatro planos |
+| `Epoch` | a versão de cada linha | o resultado mistura estados: as linhas alcançadas antes de uma atualização saem velhas, as de depois saem novas |
+| `Instant` | o relógio da expiração | uma linha viva quando a consulta abriu some do MEIO do resultado |
+| `LimitRowID` | o teto de rowId | nada hoje: as fontes do índice por segmento já fixam o seu na construção. O campo torna o teto explícito e comum aos quatro planos |
 | `BaseRowID` | o piso | a purga do histórico abre buraco por baixo da varredura em curso |
 
 Ele é **tipo de valor e viaja em parâmetro**, nunca em campo do `Store`: dois

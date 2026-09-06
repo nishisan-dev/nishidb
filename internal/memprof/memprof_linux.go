@@ -169,7 +169,7 @@ func parseStatus(content string) (statusInfo, error) {
 	return st, nil
 }
 
-// findKiB procura a linha "<campo>:\t<n> kB" e devolve o valor em bytes.
+// findKiB procura a linha "<field>:\t<n> kB" e devolve o valor em bytes.
 // ok=false quando o campo não existe (situação legítima); erro quando existe
 // mas está malformado — o que indica formato de /proc diferente do esperado, e
 // aí adivinhar seria pior que parar.

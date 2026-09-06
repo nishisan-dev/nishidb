@@ -309,7 +309,7 @@ func TestACaudaNuncaEhVaziaEAReservaAcompanha(t *testing.T) {
 	withSchedule.Schedule = &ScheduleInfo{FallbackDurationMs: 1, BlockShift: 6, Levels: 4}
 	growth := len(withSchedule.encode()) - len(m.encode())
 	if declared := TLVTailSize(&withSchedule) - TLVTailSize(&m); growth != declared {
-		t.Fatalf("a seção ocupou %d bytes; TamanhoDaCaudaTLV declara %d", growth, declared)
+		t.Fatalf("a seção ocupou %d bytes; TLVTailSize declara %d", growth, declared)
 	}
 }
 

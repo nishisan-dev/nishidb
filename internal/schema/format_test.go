@@ -112,7 +112,7 @@ func TestSpecValidaCompilaOLayoutDeCadaCampoTemporal(t *testing.T) {
 		t.Fatalf("Format = %q; a mensagem de literal inválido precisa dele", f.Format)
 	}
 	if got := f.Layout.Pattern(); got != f.Format {
-		t.Fatalf("Layout.Padrao() = %q, Format = %q", got, f.Format)
+		t.Fatalf("Layout.Pattern() = %q, Format = %q", got, f.Format)
 	}
 }
 

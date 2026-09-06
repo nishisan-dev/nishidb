@@ -75,7 +75,7 @@ func TestFormatoTextoTambemNomeiaOsCamposDoSpec95(t *testing.T) {
 
 // §95: "Não registrar payload completo por default. Não registrar senha."
 // Este é o gate: o material sensível não pode chegar ao writer, venha ele por
-// chave de atributo reconhecidamente sensível ou por valor marcado Segredo.
+// chave de atributo reconhecidamente sensível ou por valor marcado Secret.
 func TestSenhaEPayloadNaoChegamAoWriter(t *testing.T) {
 	const password = "trocar-esta-senha-agora"
 	const body = `{"id":"A","Framed-IP-Address":"10.0.0.1"}`
@@ -92,8 +92,8 @@ func TestSenhaEPayloadNaoChegamAoWriter(t *testing.T) {
 		{"chave payload", []any{"payload", body}},
 		{"chave evento", []any{"evento", body}},
 		{"chave body", []any{"body", body}},
-		{"valor Segredo", []any{"qualquer_coisa", logging.Secret(password)}},
-		{"Segredo aninhado em grupo", []any{"kafka", slog.GroupValue(slog.Any("password", logging.Secret(password)))}},
+		{"valor Secret", []any{"qualquer_coisa", logging.Secret(password)}},
+		{"Secret aninhado em grupo", []any{"kafka", slog.GroupValue(slog.Any("password", logging.Secret(password)))}},
 	}
 
 	for _, c := range cases {

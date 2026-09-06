@@ -517,7 +517,7 @@ ser necessária na selagem."
 - Produz:
   ```go
   // internal/storage/mmap
-  func AbreSomenteLeitura(caminho string) (*Region, error)
+  func OpenReadOnly(caminho string) (*Region, error)
   func (r *Region) Bytes() []byte   // pânico se a região não for somente-leitura
 
   // internal/index/segindex
@@ -559,13 +559,13 @@ func TestAbreSomenteLeituraNaoRetemDescritor(t *testing.T) {
 	if err := os.WriteFile(caminho, []byte("abcdefgh"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	antes := descritoresAbertos(t)
-	r, err := mmap.AbreSomenteLeitura(caminho)
+	antes := countOpenDescriptors(t)
+	r, err := mmap.OpenReadOnly(caminho)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	if depois := descritoresAbertos(t); depois != antes {
+	if depois := countOpenDescriptors(t); depois != antes {
 		t.Errorf("descritores abertos: %d antes, %d depois — quero iguais", antes, depois)
 	}
 	if got := string(r.Bytes()); got != "abcdefgh" {
@@ -573,8 +573,8 @@ func TestAbreSomenteLeituraNaoRetemDescritor(t *testing.T) {
 	}
 }
 
-// descritoresAbertos conta as entradas de /proc/self/fd.
-func descritoresAbertos(t *testing.T) int {
+// countOpenDescriptors conta as entradas de /proc/self/fd.
+func countOpenDescriptors(t *testing.T) int {
 	t.Helper()
 	e, err := os.ReadDir("/proc/self/fd")
 	if err != nil {
@@ -607,15 +607,15 @@ func TestRegiaoDeEscritaRecusaBytes(t *testing.T) {
 ```bash
 go test ./internal/storage/mmap/ -run 'TestAbreSomenteLeitura|TestRegiaoDeEscritaRecusaBytes' -count=1
 ```
-Esperado: `undefined: mmap.AbreSomenteLeitura`.
+Esperado: `undefined: mmap.OpenReadOnly`.
 
 - [ ] **Passo 3: implementar em `region.go`**
 
 `OpenReadOnly` abre com `O_RDONLY`, faz `unix.Mmap(fd, 0, tamanho,
 unix.PROT_READ, unix.MAP_SHARED)`, **fecha o descritor** e devolve a `Region`
-com `somenteLeitura = true` e `f = nil`. `Grow`, `Msync`, `AtomicStore64`,
+com `readOnly = true` e `f = nil`. `Grow`, `Msync`, `AtomicStore64`,
 `AtomicOr64`, `AtomicAnd64` e `LiberaAte` passam a devolver erro (ou entrar em
-pânico, nos que não devolvem erro) quando `somenteLeitura`. `Close` só faz
+pânico, nos que não devolvem erro) quando `readOnly`. `Close` só faz
 `munmap`. `Bytes()` devolve `r.data` e entra em pânico se não for
 somente-leitura — o comentário registra que devolver o slice cru de uma região
 crescível entregaria memória liberada depois do primeiro `Grow`.
@@ -2067,11 +2067,11 @@ passa a viver. **Nenhum nome sai da lista sem destino.** É o passo que separa
 	// falha que o AllowBitmapDrop existia para tornar deliberado.
 	manifestV3 = 3
 
-	// tagIndicePorSegmento declara o formato do índice de segmento. Ela é
+	// tagPerSegmentIndex declara o formato do índice de segmento. Ela é
 	// crítica pela mesma razão das outras, e existe para que a PRÓXIMA mudança
 	// de formato do índice tenha onde ser declarada sem outro bump de versão
 	// do manifest — que é exatamente o que a cauda TLV foi criada para evitar.
-	tagIndicePorSegmento = 0x8004
+	tagPerSegmentIndex = 0x8004
 ```
 
 `hashKind` e `bitmapCount` continuam ocupando os mesmos bytes, gravados como

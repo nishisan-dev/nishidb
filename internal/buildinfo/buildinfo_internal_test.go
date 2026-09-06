@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// restoreVars devolve Versao, Commit e Data ao estado anterior ao teste — as
+// restoreVars devolve Version, Commit e Date ao estado anterior ao teste — as
 // três são globais de propósito (é o único jeito de -ldflags -X escrever
 // nelas), e um teste que as muda sem devolver contamina o próximo.
 func restoreVars(t *testing.T) {

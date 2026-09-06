@@ -11,7 +11,7 @@ import (
 // de tokens que o hot path interpreta sobre []byte sem alocar.
 //
 // O vocabulário de tokens é FECHADO e mora só aqui. O pacote schema valida
-// um `format:` chamando CompilaLayout — nunca com uma segunda lista, que
+// um `format:` chamando CompileLayout — nunca com uma segunda lista, que
 // envelheceria em silêncio e recusaria na ingestão o que aceitou no load.
 //
 // O que NÃO existe, e é decisão: token de fuso. `datetime` é wall-clock sem

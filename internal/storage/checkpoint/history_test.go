@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// O dataset materializado tem Modo e RowIDBase zerados e não emite a seção
+// O dataset materializado tem Mode e RowIDBase zerados e não emite a seção
 // 0x8002. Ele já não fica na v1 por causa disso — a versão passou a ser sempre
 // v3 —, mas a seção continua CONDICIONAL, e é isso que este teste guarda:
 // emiti-la zerada gravaria "este dataset é histórico com marca-d'água em zero"
@@ -33,7 +33,7 @@ func TestModoHistoricoSobreviveAoIdaEVolta(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 	if decoded.Mode != 1 {
-		t.Errorf("Modo = %d, quer 1", decoded.Mode)
+		t.Errorf("Mode = %d, quer 1", decoded.Mode)
 	}
 	if decoded.RowIDBase != 128 {
 		t.Errorf("RowIDBase = %d, quer 128", decoded.RowIDBase)
@@ -69,7 +69,7 @@ func TestHistoricoEIndiceConvivemEmOrdemDeTag(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 	if decoded.Mode != 1 || decoded.RowIDBase != 64 {
-		t.Errorf("Modo = %d, RowIDBase = %d", decoded.Mode, decoded.RowIDBase)
+		t.Errorf("Mode = %d, RowIDBase = %d", decoded.Mode, decoded.RowIDBase)
 	}
 	hist := binary.LittleEndian.AppendUint16(nil, tagHistory)
 	indexMarker := binary.LittleEndian.AppendUint16(nil, tagPerSegmentIndex)
@@ -108,7 +108,7 @@ func TestSecaoDeHistoricoEscritaAMaoEhLida(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	if m.Mode != 1 || m.RowIDBase != 4096 {
-		t.Fatalf("Modo = %d, RowIDBase = %d", m.Mode, m.RowIDBase)
+		t.Fatalf("Mode = %d, RowIDBase = %d", m.Mode, m.RowIDBase)
 	}
 	if m.Epoch != 7 {
 		t.Fatalf("o corpo não sobreviveu à cauda: %+v", *m)

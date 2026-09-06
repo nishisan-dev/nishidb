@@ -149,13 +149,13 @@ const (
 	// seção legada antes de descartá-la.
 	hashInfoSize = 10
 
-	// historyInfoSize é `modo u8 | rowIDBase u64`.
+	// historyInfoSize é `mode u8 | rowIDBase u64`.
 	historyInfoSize = 9
 
-	// scheduleInfoSize é `duracaoDeFundoMs u64 | blockShift u8 | niveis u8`.
+	// scheduleInfoSize é `fallbackDurationMs u64 | blockShift u8 | levels u8`.
 	scheduleInfoSize = 10
 
-	// indexInfoSize é `formatoDoIndice u8`.
+	// indexInfoSize é `indexFormat u8`.
 	indexInfoSize = 1
 
 	// bitmapInfoSize é `fieldID u16 | valuesDictValidBytes i64`, a entrada do
@@ -216,13 +216,13 @@ type SegmentInfo struct {
 // eles moram no manifest em vez de serem inferidos dos arquivos: divergir em
 // qualquer um deles obriga a reconstruir.
 //
-// DuracaoDeFundoMs é o mais importante dos três, e o menos óbvio. A linha sem
+// FallbackDurationMs é o mais importante dos três, e o menos óbvio. A linha sem
 // prazo próprio herda a duração de fundo, então o vencimento agendado dela é
 // função dela — mudar a duração no YAML move, em silêncio, o vencimento de
 // toda linha com prazo desconhecido. Hoje esse efeito é invisível; com a
 // agenda ele vira um rebuild explícito, logado e com custo medido.
 //
-// BlockShift e Niveis são a geometria: uma árvore lida com o fanout errado
+// BlockShift e Levels são a geometria: uma árvore lida com o fanout errado
 // endereça o bloco errado em cada nível.
 type ScheduleInfo struct {
 	FallbackDurationMs uint64
@@ -628,7 +628,7 @@ func decodeHistory(payload []byte, m *Manifest) error {
 // decodeSchedule lê a seção 0x8003.
 //
 // Tamanho exato, e não "pelo menos": uma seção curta lida pela metade daria
-// blockShift zero, que endereça o dataset inteiro num bloco só, e niveis zero,
+// blockShift zero, que endereça o dataset inteiro num bloco só, e levels zero,
 // que é uma árvore sem folhas. Nenhum dos dois falha na leitura — os dois
 // falham depois, agendando errado.
 func decodeSchedule(payload []byte, m *Manifest) error {

@@ -280,13 +280,13 @@ func TestRegiaoSomenteLeituraRecusaMutacao(t *testing.T) {
 	defer func() { _ = r.Close() }()
 
 	refusesWithError := map[string]func() error{
-		"Grow":         func() error { return r.Grow(8192) },
-		"Msync":        func() error { return r.Msync() },
-		"LiberaBlocos": func() error { return r.ReleaseBlocks(0, 4096) },
+		"Grow":          func() error { return r.Grow(8192) },
+		"Msync":         func() error { return r.Msync() },
+		"ReleaseBlocks": func() error { return r.ReleaseBlocks(0, 4096) },
 	}
 	for name, fn := range refusesWithError {
 		// A asserção é pela SENTINELA, não por "err != nil": os três já tinham
-		// caminhos de erro antes (Grow que não excede, LiberaBlocos fora dos
+		// caminhos de erro antes (Grow que não excede, ReleaseBlocks fora dos
 		// limites), então um erro qualquer não prova que a recusa veio da
 		// guarda de somente-leitura. É o errors.Is que o chamador vai usar.
 		err := fn()
@@ -295,14 +295,14 @@ func TestRegiaoSomenteLeituraRecusaMutacao(t *testing.T) {
 			continue
 		}
 		if !errors.Is(err, ErrReadOnly) {
-			t.Errorf("%s devolveu %v, quero ErrSomenteLeitura", name, err)
+			t.Errorf("%s devolveu %v, quero ErrReadOnly", name, err)
 		}
 	}
 	// Comprimento zero também recusa: deixar o curto-circuito de length <= 0
 	// preceder a guarda faria a mesma chamada errada devolver nil ou erro
 	// conforme o argumento.
 	if err := r.ReleaseBlocks(0, 0); !errors.Is(err, ErrReadOnly) {
-		t.Errorf("LiberaBlocos(0, 0) devolveu %v, quero ErrSomenteLeitura", err)
+		t.Errorf("ReleaseBlocks(0, 0) devolveu %v, quero ErrReadOnly", err)
 	}
 
 	refusesWithPanic := map[string]func(){
@@ -341,10 +341,10 @@ func TestAbreSomenteLeituraRecusaArquivoVazio(t *testing.T) {
 	r, err := OpenReadOnly(path)
 	if err == nil {
 		_ = r.Close()
-		t.Fatal("AbreSomenteLeitura de arquivo vazio deveria falhar")
+		t.Fatal("OpenReadOnly de arquivo vazio deveria falhar")
 	}
 	if !errors.Is(err, ErrEmptyFile) {
-		t.Errorf("erro = %v, quero ErrArquivoVazio", err)
+		t.Errorf("erro = %v, quero ErrEmptyFile", err)
 	}
 }
 

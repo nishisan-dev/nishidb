@@ -1,1 +1,40 @@
+# Tokens que a passada de prosa NUNCA substitui, e que o gate de citação
+# pendurada NUNCA cobra. Cada linha entrou porque uma rodada de verdade a
+# aplicou onde não era citação de identificador, e a linha foi revertida à mão.
+#
+# São de três tipos:
+#   - placeholder e chave de exemplo (`campo`, `valor`, `tipo`, `chave`);
+#   - VERBO PT-BR que começa frase e é homônimo de um método: `Existe`, de
+#     `Presenca.Existe`, aparece em três godoc de internal/types abrindo
+#     oração ("Existe como sentinela próprio porque..."), e ali é verbo, não
+#     citação. A forma qualificada (`presenca.Existe()`) continua sendo
+#     reescrita: o protegido vale para o token nu;
+#   - nome de campo do CORPUS e da tabela virtual, que é dado em disco
+#     (`campos`, `texto`, `hora`);
+#   - identificador vivo de pacote que este ciclo ainda não mapeou e que é
+#     homônimo de um que ele mapeou (`Nome` de metrics.Amostra, `Colunas` e
+#     `Duracao` de internal/storage, `BytesRetidos` de Store e de
+#     materializer.Decodificado, `escreveAtomico` de index/segindex, `emite` do
+#     executor, `seg` e `erro` de variáveis locais, `campo` dos helpers de
+#     teste).
+#
+# O quarto tipo é o que a ferramenta não tem como decidir sozinha: ela sabe o
+# que o LOTE renomeou, não o que o resto do módulo ainda declara. O gate de
+# citação pendurada sabe (lê as declarações do AST), e por isso nenhum destes
+# nomes aparece na lista dele — protegê-los aqui não esconde citação nenhuma.
+BytesRetidos
+Colunas
+Duracao
+Existe
+Nome
+campo
 campos
+chave
+emite
+erro
+escreveAtomico
+hora
+seg
+texto
+tipo
+valor

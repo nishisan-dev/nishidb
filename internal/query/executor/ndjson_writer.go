@@ -58,13 +58,13 @@ type StreamWriter struct {
 // NewStreamWriter cria o writer. bufSize <= 0 usa DefaultBufSize.
 //
 // orc é o orçamento que este writer tem de respeitar e NUNCA é nil: quem não
-// tem orçamento configurado passa orcamento.NovoGlobal(0).Query(0), que diz
+// tem orçamento configurado passa budget.NewGlobal(0).Query(0), que diz
 // "sem teto" em voz alta. Um nil aceito como "sem teto" faria o writer do
 // servidor perder o orçamento por um esquecimento de fiação, sem nada acusar —
 // que é exatamente o modo de falha que esta mudança veio fechar.
 //
 // O writer NÃO reserva: quem reserva é o chamador, na admissão
-// (orcamento.PorQuery.Admite), antes de o primeiro byte ir para o fio. Aqui só
+// (budget.PerQuery.Admit), antes de o primeiro byte ir para o fio. Aqui só
 // se FAZ VALER o teto. A separação é o que permite à recusa por memória do
 // PROCESSO ser um 503 com Retry-After, em vez de um stream que morre na linha
 // quarenta mil por causa da memória de outra consulta — e deixa WriteRow sem
@@ -89,7 +89,7 @@ func NewStreamWriter(w io.Writer, bufSize int, orc *budget.PerQuery) *StreamWrit
 	}
 
 	// O orçamento NÃO é reservado aqui: quem reserva é o chamador, na ADMISSÃO
-	// (PorQuery.Admite), antes de qualquer byte ir para o fio. É o que permite
+	// (PerQuery.Admit), antes de qualquer byte ir para o fio. É o que permite
 	// à recusa por memória do processo ser um 503 honesto com Retry-After, em
 	// vez de um stream que morre na linha quarenta mil por culpa da memória de
 	// outra consulta. O writer só FAZ VALER o teto que já foi reservado.

@@ -50,7 +50,7 @@ import (
 const updateScriptPath = repoRoot + "/scripts/nishidb-update.sh"
 
 // locateBash resolve o interpretador antes de montar o ambiente do
-// filho, no mesmo espírito de ondeEstaOMake (lint_test.go): ausência de bash
+// filho, no mesmo espírito de locateMake (lint_test.go): ausência de bash
 // é FALHA, não SKIP — é o interpretador que a própria task exige ("bash",
 // texto do brief), não um acessório opcional do teste.
 func locateBash(t *testing.T) string {
@@ -113,7 +113,7 @@ func setupRoot(t *testing.T) (root, stateDir string) {
 // dublê `systemctl` grava em disco a cada `start`/`stop`. /metrics simula
 // ingestão viva incrementando um contador a cada raspagem — eventos sempre
 // avançam entre duas amostras, sem depender de tempo real decorrido —, e
-// invalid_total fixo em 0 (o caso comum; ver servidorFakeComInvalido para os
+// invalid_total fixo em 0 (o caso comum; ver fakeServerWithInvalid para os
 // testes de tolerância).
 func fakeServer(t *testing.T, stateDir string) *httptest.Server {
 	t.Helper()
@@ -124,8 +124,8 @@ func fakeServer(t *testing.T, stateDir string) *httptest.Server {
 // cenários, formato antigo ou novo de invalid_total — lendo o estado que o
 // dublê `systemctl` grava em disco a cada `start`/`stop`. Quem chama ainda
 // precisa registrar /metrics: é o único handler que difere entre
-// servidorFakeComInvalido (formato antigo, sem `motivo`) e
-// servidorFakeComInvalidoPorMotivo (formato novo, Task A5).
+// fakeServerWithInvalid (formato antigo, sem `motivo`) e
+// fakeServerWithInvalidByReason (formato novo, Task A5).
 func newFakeMuxWithState(stateDir string) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/health", func(w http.ResponseWriter, _ *http.Request) {
@@ -157,7 +157,7 @@ func writeCommonMetrics(w http.ResponseWriter, scrapes *int64) int64 {
 	return n
 }
 
-// fakeServerWithInvalid é a base de servidorFake, com o crescimento de
+// fakeServerWithInvalid é a base de fakeServer, com o crescimento de
 // nishidb_ingest_invalid_total controlado por quem chama — invalidoPorRaspagem
 // recebe o número da raspagem atual (1-based) e devolve o valor ACUMULADO do
 // contador naquele instante. Existe por causa do Critical 1 da revisão: a
@@ -187,7 +187,7 @@ func fakeServerWithInvalid(t *testing.T, stateDir string, invalidAtScrape func(n
 // Task A5 (internal/kafka/metrics.go) fez o binário passar a emitir
 // nishidb_ingest_invalid_total SEMPRE com o label `motivo`, e possivelmente
 // em VÁRIAS séries — uma por categoria §101 —, nunca mais a série única e
-// sem label que servidorFakeComInvalido simula. Antes desta função, o
+// sem label que fakeServerWithInvalid simula. Antes desta função, o
 // oráculo do A4 só exercitava o formato que o binário atual não emite mais.
 //
 // invalidoPorRaspagem continua devolvendo o total ACUMULADO na raspagem n; a
@@ -295,7 +295,7 @@ exit 0
 // fakeFailsFirstStart prova o Important 2 da revisão: o `systemctl
 // start` da PRIMEIRA tentativa (a versão nova) falha de verdade — o dublê
 // sai 1 em vez de aplicar o start. Da segunda chamada em diante (a do
-// rollback) ele volta a se comportar como dubleHonesto, para o rollback
+// rollback) ele volta a se comportar como fakeHonest, para o rollback
 // poder de fato se recuperar e o teste conseguir distinguir "o passo certo
 // falhou" de "o script trava".
 const fakeFailsFirstStart = `#!/bin/sh
@@ -563,7 +563,7 @@ exit 99
 // legítimos em produção, por política, e um único descarte não é o defeito
 // de binário-novo-classificando-tudo-errado que o check existe para pegar.
 //
-// Usa o formato NOVO (servidorFakeComInvalidoPorMotivo, Important 2 da
+// Usa o formato NOVO (fakeServerWithInvalidByReason, Important 2 da
 // revisão final): é o que o binário atual — o que esta atualização instala —
 // de fato emite.
 func TestScriptDeAtualizacaoToleraUmInvalidoIsoladoDentroDaJanela(t *testing.T) {
@@ -591,7 +591,7 @@ func TestScriptDeAtualizacaoToleraUmInvalidoIsoladoDentroDaJanela(t *testing.T) 
 // qualquer tolerância pequena (o sinal de classificação em massa, não de
 // descarte isolado) tem de continuar disparando o rollback.
 //
-// Formato NOVO (servidorFakeComInvalidoPorMotivo, Important 2), pelo mesmo
+// Formato NOVO (fakeServerWithInvalidByReason, Important 2), pelo mesmo
 // motivo do teste acima.
 func TestScriptDeAtualizacaoFazRollbackQuandoInvalidoSobeAlemDaToleranciaConfigurada(t *testing.T) {
 	root, stateDir := setupRoot(t)
@@ -619,7 +619,7 @@ func TestScriptDeAtualizacaoFazRollbackQuandoInvalidoSobeAlemDaToleranciaConfigu
 // reduzida para 1, um delta de +2 tem de reprovar — o mesmo delta que
 // passaria pela tolerância default (5).
 //
-// Formato NOVO (servidorFakeComInvalidoPorMotivo, Important 2), pelo mesmo
+// Formato NOVO (fakeServerWithInvalidByReason, Important 2), pelo mesmo
 // motivo dos dois testes acima.
 func TestScriptDeAtualizacaoRespeitaToleranciaCustomizadaDeInvalido(t *testing.T) {
 	root, stateDir := setupRoot(t)

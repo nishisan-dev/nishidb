@@ -90,7 +90,7 @@ var markerSpecs = []string{
 
 // TestCitacoesDeSecaoResolvem confere que toda citação §NN/§NN.M em docs,
 // README, CLAUDE.md, planning e comentários Go resolve em pelo menos uma seção
-// ou item numerado das specs declaradas em specsDoMarcador.
+// ou item numerado das specs declaradas em markerSpecs.
 //
 // # COMO A FONTE É LIDA
 //
@@ -159,7 +159,7 @@ func TestCitacoesDeSecaoResolvem(t *testing.T) {
 		sort.Strings(l)
 		t.Errorf("§%s não resolve em nenhuma das %d specs declaradas, e é citado em %d lugar(es): %s\n"+
 			"\tremédio: se a seção foi RENUMERADA, atualize as citações listadas; se foi REMOVIDA, a citação "+
-			"é que está morta; se ela vive numa spec fora de specsDoMarcador, acrescente o documento à lista",
+			"é que está morta; se ela vive numa spec fora de markerSpecs, acrescente o documento à lista",
 			num, len(markerSpecs), len(l), strings.Join(l, ", "))
 	}
 }
@@ -303,7 +303,7 @@ func relativePath(t *testing.T, path string) string {
 }
 
 // specSections indexa toda seção e item numerado das specs declaradas em
-// specsDoMarcador, e falha se alguma delas sumiu do disco.
+// markerSpecs, e falha se alguma delas sumiu do disco.
 func specSections(t *testing.T) map[string]bool {
 	t.Helper()
 	targets := map[string]bool{}
@@ -407,7 +407,7 @@ var histogramSuffixes = []string{"_bucket", "_sum", "_count"}
 // que publica uma série sob o cabeçalho de outra família. A regra não é
 // `Nome == Familia`: o histograma usa `Nome = Familia + sufixo` de propósito.
 // A regra é: Nome resolve para a MESMA expressão de Familia, ou para Familia
-// mais um dos sufixos de sufixosDeHistograma.
+// mais um dos sufixos de histogramSuffixes.
 func TestAmostrasDeMetricaTemFamiliaENome(t *testing.T) {
 	root := filepath.Join(repoRoot, "internal")
 	explicitCount, elidedCount := 0, 0
@@ -439,7 +439,7 @@ func TestAmostrasDeMetricaTemFamiliaENome(t *testing.T) {
 			cl, ok := n.(*ast.CompositeLit)
 			if !ok || cl.Type == nil {
 				// Literal sem tipo é elidido: quem sabe o tipo dele é o pai, e
-				// é o pai que o visita (percorreElididos). Visitá-lo aqui seria
+				// é o pai que o visita (walkElided). Visitá-lo aqui seria
 				// julgá-lo sem saber se é uma Amostra.
 				return true
 			}

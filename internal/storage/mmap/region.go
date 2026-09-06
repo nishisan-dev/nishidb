@@ -19,8 +19,8 @@ import (
 // CAPACIDADE, não de conveniência:
 //
 //   - crescível (Open): PROT_READ|PROT_WRITE, mantém o descritor aberto porque
-//     Grow, Msync e LiberaBlocos precisam dele;
-//   - somente-leitura (AbreSomenteLeitura): PROT_READ, FECHA o descritor logo
+//     Grow, Msync e ReleaseBlocks precisam dele;
+//   - somente-leitura (OpenReadOnly): PROT_READ, FECHA o descritor logo
 //     após o mmap e deixa f == nil.
 //
 // Concorrência: leitores e o writer único podem usar os métodos Atomic*
@@ -33,7 +33,7 @@ type Region struct {
 	mu sync.RWMutex
 	// f é nil na região somente-leitura: o descritor é fechado logo após o
 	// mmap. Nenhum caminho pode derreferenciá-lo sem antes olhar
-	// somenteLeitura.
+	// readOnly.
 	f *os.File
 	// path guarda o caminho para as mensagens de erro. Ele existe porque
 	// f.Name() morreria com nil pointer dereference na região somente-leitura
@@ -54,7 +54,7 @@ var ErrFallocateUnsupported = errors.New(
 	"mmap: filesystem não suporta fallocate; NishiDB exige alocação real de blocos")
 
 // ErrReadOnly marca a tentativa de mutar uma região aberta por
-// AbreSomenteLeitura. É erro, e não degradação: o mapeamento é PROT_READ e o
+// OpenReadOnly. É erro, e não degradação: o mapeamento é PROT_READ e o
 // descritor já foi fechado, então não existe caminho pelo qual a escrita
 // pudesse dar certo mais adiante.
 var ErrReadOnly = errors.New("mmap: região somente-leitura não aceita mutação")
@@ -379,7 +379,7 @@ func (r *Region) Close() error {
 		r.data = nil
 		r.size = 0
 	}
-	// A região somente-leitura já fechou o descritor no AbreSomenteLeitura, e
+	// A região somente-leitura já fechou o descritor no OpenReadOnly, e
 	// f é nil: aqui só resta o munmap.
 	if r.f != nil {
 		if err := r.f.Close(); err != nil {
@@ -409,7 +409,7 @@ func (r *Region) ReleaseBlocks(off, length int64) error {
 	defer r.mu.RUnlock()
 	// Punch-hole exige o descritor, e a região somente-leitura não tem um. É a
 	// terceira das três operações que a imutabilidade elimina, e a razão de
-	// AbreSomenteLeitura poder fechar o fd (spec §1.4).
+	// OpenReadOnly poder fechar o fd (spec §1.4).
 	//
 	// A guarda vem ANTES do curto-circuito de length <= 0 de propósito: recusar
 	// é a resposta, e deixar o comprimento zero escapar como no-op faria a
@@ -417,13 +417,13 @@ func (r *Region) ReleaseBlocks(off, length int64) error {
 	// chamador que acredita estar liberando blocos numa região que não pode
 	// tem de descobrir isso sempre, não só quando pede um punch não vazio.
 	if r.readOnly {
-		return fmt.Errorf("%w: LiberaBlocos em %s", ErrReadOnly, r.path)
+		return fmt.Errorf("%w: ReleaseBlocks em %s", ErrReadOnly, r.path)
 	}
 	if length <= 0 {
 		return nil
 	}
 	if off < 0 || off+length > r.size {
-		return fmt.Errorf("mmap: LiberaBlocos [%d,%d) fora do mapeamento de %d bytes", off, off+length, r.size)
+		return fmt.Errorf("mmap: ReleaseBlocks [%d,%d) fora do mapeamento de %d bytes", off, off+length, r.size)
 	}
 	const punch = unix.FALLOC_FL_PUNCH_HOLE | unix.FALLOC_FL_KEEP_SIZE
 	if err := unix.Fallocate(int(r.f.Fd()), punch, off, length); err != nil {

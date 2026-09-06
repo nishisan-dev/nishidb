@@ -8,7 +8,7 @@
 // O segundo é a proibição do mesmo §95: "não registrar payload completo por
 // default. Não registrar senha." Uma proibição que vive só na cabeça de quem
 // escreve a chamada é violada no primeiro debug às 3 da manhã, então ela vive
-// aqui, no handler, onde vale para todo chamador — ver Segredo e a lista de
+// aqui, no handler, onde vale para todo chamador — ver Secret e a lista de
 // chaves sensíveis.
 //
 // O logger é seguro para uso concorrente: Component e Dataset DERIVAM um
@@ -29,11 +29,11 @@ import (
 // preenchido e vai procurar o defeito no lugar errado.
 const Redacted = "[REDACTADO]"
 
-// Format de saída. JSON é o default de produção (o §95 pede log estruturado);
-// texto existe para quem lê no terminal.
+// Format é o formato de saída. JSON é o default de produção (o §95 pede log
+// estruturado); texto existe para quem lê no terminal.
 type Format int
 
-// FormatoJSON é o default de produção; FormatoTexto existe para quem lê no
+// FormatJSON é o default de produção; FormatText existe para quem lê no
 // terminal.
 const (
 	FormatJSON Format = iota

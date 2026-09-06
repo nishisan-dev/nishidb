@@ -22,7 +22,7 @@ func valueEqual(a, b types.Value) bool {
 	if a.Type != b.Type {
 		return false
 	}
-	// CarregaI64 e não um switch local: tipo de largura fixa esquecido no
+	// CarriesI64 e não um switch local: tipo de largura fixa esquecido no
 	// ramo de bytes compara nil com nil e devolve true para valores
 	// diferentes, e a comparação conclui em silêncio que o campo não mudou.
 	if a.Type.CarriesI64() {

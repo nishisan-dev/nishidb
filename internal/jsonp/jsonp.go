@@ -125,7 +125,7 @@ func (p *Parser) Shrink() { p.scratch = nil }
 // impede o buffer de fetch inteiro de ser coletado — o evento tem alguns KiB, o
 // lote que o trouxe tem megabytes. Quem terminou de usar o documento chama isto.
 //
-// Não é o Encolhe: aquele solta o buffer que é NOSSO e será realocado; este
+// Não é o Shrink: aquele solta o buffer que é NOSSO e será realocado; este
 // solta a referência a memória de outro dono.
 func (p *Parser) ReleaseInput() {
 	p.data = nil

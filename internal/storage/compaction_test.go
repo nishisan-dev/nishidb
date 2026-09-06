@@ -2521,7 +2521,7 @@ func linhasDoEvento(t *testing.T, saida, evento string) []map[string]any {
 }
 
 // campoEventoDoLog repete o nome que o §95 dá ao campo e que o pacote logging
-// escreve (logging.go, campoEvent). A repetição é o preço de o teste ler o log
+// escreve (logging.go, fieldEvent). A repetição é o preço de o teste ler o log
 // como o COLETOR o lê — um handler traduzido por ReplaceAttr não expõe o nome
 // final por nenhuma outra via, e assumir "event" sem dizer de onde ele vem é
 // que seria acoplamento silencioso.
