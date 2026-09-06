@@ -23,11 +23,11 @@ func TestTamanhoAceitaAsUnidadesBinariasDaSpec(t *testing.T) {
 	for _, c := range cases {
 		got, err := Size(c.input, 7)
 		if err != nil {
-			t.Errorf("Tamanho(%q) devolveu erro: %v", c.input, err)
+			t.Errorf("Size(%q) devolveu erro: %v", c.input, err)
 			continue
 		}
 		if got != c.want {
-			t.Errorf("Tamanho(%q) = %d, quer %d", c.input, got, c.want)
+			t.Errorf("Size(%q) = %d, quer %d", c.input, got, c.want)
 		}
 	}
 }
@@ -36,10 +36,10 @@ func TestTamanhoAusenteHerdaOPadrao(t *testing.T) {
 	for _, input := range []string{"", "   ", "\t"} {
 		got, err := Size(input, 512<<20)
 		if err != nil {
-			t.Fatalf("Tamanho(%q) devolveu erro: %v", input, err)
+			t.Fatalf("Size(%q) devolveu erro: %v", input, err)
 		}
 		if got != 512<<20 {
-			t.Errorf("Tamanho(%q) = %d, quer o padrão %d", input, got, int64(512<<20))
+			t.Errorf("Size(%q) = %d, quer o padrão %d", input, got, int64(512<<20))
 		}
 	}
 }
@@ -50,7 +50,7 @@ func TestTamanhoAusenteHerdaOPadrao(t *testing.T) {
 func TestTamanhoRecusaUnidadeDecimal(t *testing.T) {
 	for _, input := range []string{"512MB", "1GB", "1kB", "3TB"} {
 		if _, err := Size(input, 1); err == nil {
-			t.Errorf("Tamanho(%q) foi aceito; unidade decimal tem de ser recusada", input)
+			t.Errorf("Size(%q) foi aceito; unidade decimal tem de ser recusada", input)
 		}
 	}
 }
@@ -58,7 +58,7 @@ func TestTamanhoRecusaUnidadeDecimal(t *testing.T) {
 func TestTamanhoRecusaNaoPositivoELixo(t *testing.T) {
 	for _, input := range []string{"0", "0MiB", "-1", "-4GiB", "abc", "MiB", "1,5GiB", "1.5GiB"} {
 		if _, err := Size(input, 1); err == nil {
-			t.Errorf("Tamanho(%q) foi aceito; deveria ser recusado", input)
+			t.Errorf("Size(%q) foi aceito; deveria ser recusado", input)
 		}
 	}
 }
@@ -81,21 +81,21 @@ func TestDuracaoAceitaEHerdaOPadrao(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got != 30*time.Second {
-		t.Errorf("Duracao(\"\") = %s, quer 30s", got)
+		t.Errorf("Duration(\"\") = %s, quer 30s", got)
 	}
 	got, err = Duration(" 100ms ", time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got != 100*time.Millisecond {
-		t.Errorf("Duracao(\"100ms\") = %s, quer 100ms", got)
+		t.Errorf("Duration(\"100ms\") = %s, quer 100ms", got)
 	}
 }
 
 func TestDuracaoRecusaNaoPositivaELixo(t *testing.T) {
 	for _, input := range []string{"0s", "0", "-5s", "trinta", "30"} {
 		if _, err := Duration(input, time.Second); err == nil {
-			t.Errorf("Duracao(%q) foi aceita; deveria ser recusada", input)
+			t.Errorf("Duration(%q) foi aceita; deveria ser recusada", input)
 		}
 	}
 }
@@ -108,12 +108,12 @@ func TestInteiroPositivoSeparaAusenteDeZero(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got != 100000 {
-		t.Errorf("InteiroPositivo(nil) = %d, quer o padrão 100000", got)
+		t.Errorf("PositiveInt(nil) = %d, quer o padrão 100000", got)
 	}
 
 	for _, v := range []int{0, -1, -999} {
 		if _, err := PositiveInt(&v, 100000); err == nil {
-			t.Errorf("InteiroPositivo(%d) foi aceito; deveria ser recusado", v)
+			t.Errorf("PositiveInt(%d) foi aceito; deveria ser recusado", v)
 		}
 	}
 
@@ -123,7 +123,7 @@ func TestInteiroPositivoSeparaAusenteDeZero(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got != 4242 {
-		t.Errorf("InteiroPositivo(4242) = %d, quer 4242", got)
+		t.Errorf("PositiveInt(4242) = %d, quer 4242", got)
 	}
 }
 
@@ -155,7 +155,7 @@ func TestDuracaoComDias(t *testing.T) {
 		}
 	}
 
-	// Vazio devolve o padrão, como a Duracao.
+	// Vazio devolve o padrão, como a Duration.
 	if got, err := DurationWithDays("", 5*time.Minute); err != nil || got != 5*time.Minute {
 		t.Errorf(`"" = %v, %v; quer o padrão`, got, err)
 	}

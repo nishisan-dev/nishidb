@@ -122,7 +122,7 @@ func DurationWithDays(s string, defaultValue time.Duration) (time.Duration, erro
 }
 
 // Duration aceita a gramática do time.ParseDuration e recusa duração não
-// positiva pelo mesmo motivo de InteiroPositivo: um intervalo de zero não é
+// positiva pelo mesmo motivo de PositiveInt: um intervalo de zero não é
 // "sem intervalo", é um intervalo que nenhum agendador poderia honrar.
 func Duration(s string, defaultValue time.Duration) (time.Duration, error) {
 	s = strings.TrimSpace(s)

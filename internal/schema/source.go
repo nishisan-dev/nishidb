@@ -469,7 +469,7 @@ func validaConsumer(n *yaml.Node) (ConsumerSpec, error) {
 	return c, nil
 }
 
-// inteiro aplica a mesma regra de units.InteiroPositivo: ausente herda o
+// inteiro aplica a mesma regra de units.PositiveInt: ausente herda o
 // padrão, zero e negativo são recusados. Uma fila de capacidade 0 não é "sem
 // fila", é uma fila que nada atravessa.
 func inteiro(m map[string]*yaml.Node, caminho, chave string, padrao int) (int, error) {

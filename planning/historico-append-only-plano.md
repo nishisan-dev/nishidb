@@ -58,7 +58,7 @@ Regras de validação (em `internal/schema/history.go`, novo):
   silêncio é a "configuração que mente" que o débito 37 registra.
 - `maxBytes >= 4 × segmentSize`. Com menos, a purga nunca consegue ficar abaixo
   do teto sem tocar o segmento corrente, que a D6 proíbe.
-- `expireAfterWrite` reusa `units.DuracaoComDias` e o piso de
+- `expireAfterWrite` reusa `units.DurationWithDays` e o piso de
   `ResolucaoDaExpiracao` (1 min), como as regras de TTL.
 - `history.fields` só aceita `index:`, e só sobre campo que **existe** no
   schema base. Tipo, `format`, `merge` e `frozenFrom` são recusados ali — o

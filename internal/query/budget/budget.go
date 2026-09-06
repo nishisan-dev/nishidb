@@ -35,7 +35,7 @@ type Global struct {
 
 // NovoGlobal cria o orçamento do processo. teto <= 0 é tratado como ILIMITADO,
 // e o caso existe para o chamador que não tem configuração — ferramenta, teste,
-// benchmark. Não é fallback do servidor: lá o teto vem do units.Tamanho, que já
+// benchmark. Não é fallback do servidor: lá o teto vem do units.Size, que já
 // recusa valor não positivo.
 func NovoGlobal(teto int64) *Global { return &Global{teto: teto} }
 

@@ -162,7 +162,7 @@ Fontes, na ordem: `Store.Stats()` (`store.go:1233`), `Engine.Metrics()`/`PlanMet
 | **`internal/protocol/protocol.go`** *(novo pacote)* | Tipos do request/resposta/moldura, códigos de erro e a tabela §73 (`JDBCName(types.FieldType) string`). Mora fora do `server` porque o **CLI cliente também decodifica a moldura** (D8) — duas definições divergiriam no primeiro campo novo |
 | `internal/query/executor/executor.go` | `RowIterator` ganha `Columns() []ColMeta`; o `iterador` já tem `it.cols` populado no `Open`. Tipo próprio (`ColMeta{Name, Type}`) em vez de expor `ColView`, que carrega `Val`/`Null` válidos só durante uma row |
 | `internal/query/engine.go` | Sem mudança de assinatura — `Execute` já devolve `RowIterator` |
-| `internal/config/config.go` | `serverBindPadrao` → `127.0.0.1` (D1); bloco `runtime.query.maxConcurrent` (default 16, `units.InteiroPositivo`); `ResultBatchSize()` ganha seu primeiro leitor |
+| `internal/config/config.go` | `serverBindPadrao` → `127.0.0.1` (D1); bloco `runtime.query.maxConcurrent` (default 16, `units.PositiveInt`); `ResultBatchSize()` ganha seu primeiro leitor |
 | `internal/server/query.go` *(novo)* | `handleQuery`: decodifica, valida, adquire o semáforo, executa, emite a moldura, mede |
 | `internal/server/metadata.go` *(novo)* | `handleMetadata` e `handleStats` |
 | `internal/server/metrics_query.go` *(novo)* | Famílias `nishidb_query_total`/`_active`/`_errors`/`_latency_seconds` + ColetorFunc de `_full_scans` (D13). Nomes vêm de `internal/metrics/names.go`, nunca digitados à mão |
