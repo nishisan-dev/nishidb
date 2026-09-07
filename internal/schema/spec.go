@@ -35,7 +35,7 @@ type DatasetSpec struct {
 	History *HistorySpec
 	// IsHistory marca a spec DERIVADA — a da própria tabela irmã. Ela não
 	// vem de arquivo nenhum: nasce de DeriveHistory e existe só em memória,
-	// e é por isso que ListaDatasets nunca a enxerga.
+	// e é por isso que ListDatasets nunca a enxerga.
 	IsHistory bool
 	// Counters é o bloco `counters` validado; nil no dataset sem contador.
 	Counters []CounterSpec

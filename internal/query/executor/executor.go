@@ -112,7 +112,7 @@ func Open(ctx context.Context, bq *binder.BoundQuery, plan planner.Plan, opts Op
 	case bq.Timeout <= 0:
 		// Prazo ausente é BUG do binder, não caso a tratar: o binder o copia do
 		// schema compilado, e schema.validate já recusa `query.timeout` não
-		// positivo. Aqui existia um `timeoutPadrao = 30s` que cobria este
+		// positivo. Aqui existia um `defaultQueryTimeout = 30s` que cobria este
 		// buraco — uma SEGUNDA fonte da verdade para o prazo, invisível, que
 		// venceria em silêncio o teto configurado no dia em que o caminho de
 		// cima quebrasse. Errar alto é o que impede isso.

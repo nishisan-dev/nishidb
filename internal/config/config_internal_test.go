@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// DefaultsDeQuery é a costura entre o nishidb.yaml e o schema: é por ela que a
+// QueryDefaults é a costura entre o nishidb.yaml e o schema: é por ela que a
 // chave global chega ao dataset. O teto tem teste fim-a-fim pelo binário
 // (o truncamento é observável no exit code); o TIMEOUT é medido aqui, na
 // costura, e não pelo relógio.
@@ -21,37 +21,37 @@ import (
 // spec.Query.Timeout até o cancelamento da consulta é TestTimeoutDoDataset
 // (internal/query), que usa atraso injetado em vez de esperar relógio.
 
-func escreveConfig(t *testing.T, corpo string) string {
+func writeConfig(t *testing.T, body string) string {
 	t.Helper()
-	return escreveConfigComStorage(t, "", corpo)
+	return writeConfigWithStorage(t, "", body)
 }
 
-// escreveConfigComStorage acrescenta chaves DENTRO do bloco storage, que o
+// writeConfigWithStorage acrescenta chaves DENTRO do bloco storage, que o
 // cabeçalho já abre, e é por onde entram as de storage.compaction.
 //
 // Existe porque repetir `storage:` no corpo não funcionaria: o yaml.v3 recusa
 // chave de mapa duplicada ("mapping key already defined"), e o teste falharia
 // no parse em vez de falhar pela regra que ele afirma — o pior tipo de verde,
 // porque o vermelho viria pelo motivo errado.
-func escreveConfigComStorage(t *testing.T, storage, corpo string) string {
+func writeConfigWithStorage(t *testing.T, storage, body string) string {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "nishidb.yaml")
-	cabecalho := "version: 1\nstorage:\n  path: " + dir + "\n" + storage +
+	header := "version: 1\nstorage:\n  path: " + dir + "\n" + storage +
 		"datasets:\n  directory: " + dir + "\n"
-	if err := os.WriteFile(path, []byte(cabecalho+corpo), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(header+body), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return path
 }
 
 func TestDefaultsDeQueryCarregaAsChavesGlobais(t *testing.T) {
-	path := escreveConfig(t, "query:\n  defaultMaxRows: 4242\n  defaultTimeout: 7s\n")
-	c, err := CarregaConfig(path)
+	path := writeConfig(t, "query:\n  defaultMaxRows: 4242\n  defaultTimeout: 7s\n")
+	c, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := c.DefaultsDeQuery()
+	d := c.QueryDefaults()
 	if d.MaxRows != 4242 {
 		t.Errorf("MaxRows = %d, want 4242", d.MaxRows)
 	}
@@ -61,26 +61,26 @@ func TestDefaultsDeQueryCarregaAsChavesGlobais(t *testing.T) {
 }
 
 func TestDefaultsDeQuerySemBlocoUsaOsPadroes(t *testing.T) {
-	c, err := CarregaConfig(escreveConfig(t, ""))
+	c, err := Load(writeConfig(t, ""))
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := c.DefaultsDeQuery()
-	if d.MaxRows != maxRowsPadrao || d.Timeout != timeoutPadrao {
-		t.Errorf("DefaultsDeQuery() = %+v, want {%d %s}", d, maxRowsPadrao, timeoutPadrao)
+	d := c.QueryDefaults()
+	if d.MaxRows != defaultQueryMaxRows || d.Timeout != defaultQueryTimeout {
+		t.Errorf("QueryDefaults() = %+v, want {%d %s}", d, defaultQueryMaxRows, defaultQueryTimeout)
 	}
 }
 
 // Valor não positivo é recusado com a chave nomeada, em vez de virar "ausente".
 func TestDefaultMaxRowsNaoPositivoFalhaNoCarregamento(t *testing.T) {
-	for _, valor := range []string{"0", "-1", "-100000"} {
-		t.Run(valor, func(t *testing.T) {
-			_, err := CarregaConfig(escreveConfig(t, "query:\n  defaultMaxRows: "+valor+"\n"))
+	for _, value := range []string{"0", "-1", "-100000"} {
+		t.Run(value, func(t *testing.T) {
+			_, err := Load(writeConfig(t, "query:\n  defaultMaxRows: "+value+"\n"))
 			if err == nil {
-				t.Fatalf("defaultMaxRows: %s foi aceito", valor)
+				t.Fatalf("defaultMaxRows: %s foi aceito", value)
 			}
 			if !strings.Contains(err.Error(), "query.defaultMaxRows") ||
-				!strings.Contains(err.Error(), valor) {
+				!strings.Contains(err.Error(), value) {
 				t.Errorf("erro = %v, want nomear a chave e o valor", err)
 			}
 		})
@@ -91,25 +91,25 @@ func TestDefaultMaxRowsNaoPositivoFalhaNoCarregamento(t *testing.T) {
 // segurança, não de gosto: com POST /v1/query no ar e sem autenticação até a
 // Fase 11, um default aberto entregaria o dataset a quem alcançasse a porta.
 func TestOBindPadraoEhLoopback(t *testing.T) {
-	c, err := CarregaConfig(escreveConfig(t, ""))
+	c, err := Load(writeConfig(t, ""))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if c.Server.Bind != "127.0.0.1" {
 		t.Fatalf("bind padrão = %q, quer 127.0.0.1", c.Server.Bind)
 	}
-	if c.Endereco() != "127.0.0.1:9142" {
-		t.Fatalf("Endereco = %q", c.Endereco())
+	if c.Addr() != "127.0.0.1:9142" {
+		t.Fatalf("Endereco = %q", c.Addr())
 	}
-	if c.BindExposto() {
+	if c.BindExposed() {
 		t.Fatal("o bind padrão foi classificado como exposto")
 	}
 }
 
 func TestBindExpostoReconheceOsEnderecosQueAlcancamARede(t *testing.T) {
-	casos := []struct {
+	cases := []struct {
 		bind    string
-		exposto bool
+		exposed bool
 	}{
 		{"127.0.0.1", false},
 		{"::1", false},
@@ -122,14 +122,14 @@ func TestBindExpostoReconheceOsEnderecosQueAlcancamARede(t *testing.T) {
 		// errar para o lado errado.
 		{"db01.interno", true},
 	}
-	for _, c := range casos {
+	for _, c := range cases {
 		t.Run(c.bind, func(t *testing.T) {
-			cfg, err := CarregaConfig(escreveConfig(t, "server:\n  bind: \""+c.bind+"\"\n"))
+			cfg, err := Load(writeConfig(t, "server:\n  bind: \""+c.bind+"\"\n"))
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := cfg.BindExposto(); got != c.exposto {
-				t.Fatalf("BindExposto(%q) = %v, quer %v", c.bind, got, c.exposto)
+			if got := cfg.BindExposed(); got != c.exposed {
+				t.Fatalf("BindExposed(%q) = %v, quer %v", c.bind, got, c.exposed)
 			}
 		})
 	}
@@ -139,7 +139,7 @@ func TestBindExpostoReconheceOsEnderecosQueAlcancamARede(t *testing.T) {
 // regra de todo inteiro positivo do arquivo: ausente herda o padrão, zero e
 // negativo são recusados com a chave e o valor na mensagem.
 func TestMaxConcurrentTemLeitorEValidacao(t *testing.T) {
-	c, err := CarregaConfig(escreveConfig(t, ""))
+	c, err := Load(writeConfig(t, ""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +147,7 @@ func TestMaxConcurrentTemLeitorEValidacao(t *testing.T) {
 		t.Fatalf("MaxConcurrent padrão = %d, quer 16", c.MaxConcurrent())
 	}
 
-	c, err = CarregaConfig(escreveConfig(t, "runtime:\n  query:\n    maxConcurrent: 4\n"))
+	c, err = Load(writeConfig(t, "runtime:\n  query:\n    maxConcurrent: 4\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +155,7 @@ func TestMaxConcurrentTemLeitorEValidacao(t *testing.T) {
 		t.Fatalf("MaxConcurrent = %d, quer 4", c.MaxConcurrent())
 	}
 
-	_, err = CarregaConfig(escreveConfig(t, "runtime:\n  query:\n    maxConcurrent: 0\n"))
+	_, err = Load(writeConfig(t, "runtime:\n  query:\n    maxConcurrent: 0\n"))
 	if err == nil {
 		t.Fatal("maxConcurrent: 0 deveria ser recusado")
 	}
@@ -174,19 +174,19 @@ func TestMaxConcurrentTemLeitorEValidacao(t *testing.T) {
 // um limite que está de fato valendo, e sobe o valor para "compensar" um teto
 // que ele acha inexistente.
 func TestChavesDeRuntimeSemImplementacaoSaoNomeadas(t *testing.T) {
-	c, err := CarregaConfig(escreveConfig(t,
+	c, err := Load(writeConfig(t,
 		"runtime:\n  memoryTarget: 1GiB\n  managedMemoryTarget: 512MiB\n  query:\n    maxBufferPerQuery: 4MiB\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	quer := []string{"runtime.managedMemoryTarget"}
-	got := c.ChavesDeRuntimeIgnoradas()
-	if len(got) != len(quer) {
-		t.Fatalf("chaves = %v, quer %v", got, quer)
+	want := []string{"runtime.managedMemoryTarget"}
+	got := c.IgnoredRuntimeKeys()
+	if len(got) != len(want) {
+		t.Fatalf("chaves = %v, quer %v", got, want)
 	}
-	for i := range quer {
-		if got[i] != quer[i] {
-			t.Fatalf("chaves = %v, quer %v", got, quer)
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("chaves = %v, quer %v", got, want)
 		}
 	}
 
@@ -202,11 +202,11 @@ func TestChavesDeRuntimeSemImplementacaoSaoNomeadas(t *testing.T) {
 
 	// O bloco §78 sem as chaves não avisa nada — aviso que aparece sempre é
 	// ruído, e ruído treina o operador a ignorar.
-	c, err = CarregaConfig(escreveConfig(t, "runtime:\n  query:\n    maxConcurrent: 8\n"))
+	c, err = Load(writeConfig(t, "runtime:\n  query:\n    maxConcurrent: 8\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := c.ChavesDeRuntimeIgnoradas(); len(got) != 0 {
+	if got := c.IgnoredRuntimeKeys(); len(got) != 0 {
 		t.Fatalf("avisos = %v, quer nenhum", got)
 	}
 }
@@ -214,31 +214,31 @@ func TestChavesDeRuntimeSemImplementacaoSaoNomeadas(t *testing.T) {
 // storage.durability (§47) é aceita e ignorada (débito 50): só existe o
 // SyncEveryPut interno, que o CLI nunca liga. Quem escreve `interval: 100ms`
 // conclui uma janela de durabilidade que o binário não dá — a chave precisa
-// ser NOMEADA na subida, no mesmo molde do débito 15 em ChavesDeRuntimeIgnoradas.
+// ser NOMEADA na subida, no mesmo molde do débito 15 em IgnoredRuntimeKeys.
 func TestChaveDeStorageDurabilitySemImplementacaoENomeada(t *testing.T) {
-	c, err := CarregaConfig(escreveConfigComStorage(t,
+	c, err := Load(writeConfigWithStorage(t,
 		"  durability:\n    mode: sync\n    interval: 100ms\n", ""))
 	if err != nil {
 		t.Fatal(err)
 	}
-	quer := []string{"storage.durability"}
-	got := c.ChavesDeStorageIgnoradas()
-	if len(got) != len(quer) {
-		t.Fatalf("chaves = %v, quer %v", got, quer)
+	want := []string{"storage.durability"}
+	got := c.IgnoredStorageKeys()
+	if len(got) != len(want) {
+		t.Fatalf("chaves = %v, quer %v", got, want)
 	}
-	for i := range quer {
-		if got[i] != quer[i] {
-			t.Fatalf("chaves = %v, quer %v", got, quer)
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("chaves = %v, quer %v", got, want)
 		}
 	}
 
 	// O bloco §78 sem durability não avisa nada — aviso que aparece sempre é
 	// ruído, e ruído treina o operador a ignorar.
-	c, err = CarregaConfig(escreveConfig(t, ""))
+	c, err = Load(writeConfig(t, ""))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := c.ChavesDeStorageIgnoradas(); len(got) != 0 {
+	if got := c.IgnoredStorageKeys(); len(got) != 0 {
 		t.Fatalf("avisos = %v, quer nenhum", got)
 	}
 }
@@ -250,15 +250,15 @@ func TestChaveDeStorageDurabilitySemImplementacaoENomeada(t *testing.T) {
 // explícita para ter compaction inverteria o default seguro e deixaria o disco
 // crescer para sempre em toda instalação que herdou um YAML do M1.
 func TestCompactionHerdaODefaultDoParagrafo53(t *testing.T) {
-	c, err := CarregaConfig(escreveConfig(t, ""))
+	c, err := Load(writeConfig(t, ""))
 	if err != nil {
 		t.Fatal(err)
 	}
-	habilitada, ratio := c.Compaction()
-	if !habilitada {
+	enabled, ratio := c.Compaction()
+	if !enabled {
 		t.Error("compaction ausente veio desligada; ausente vale ligada (§78)")
 	}
-	// O 0.50 entra LITERAL, e não como compactionRatioPadrao: comparar a
+	// O 0.50 entra LITERAL, e não como defaultCompactionRatio: comparar a
 	// constante consigo mesma não prende número nenhum — trocar o padrão para
 	// 0.75 passaria por esta suíte inteira sem uma linha vermelha, e o único
 	// número que esta tarefa existe para fixar é justamente o que o §53 e o
@@ -279,13 +279,13 @@ func TestCompactionHerdaODefaultDoParagrafo53(t *testing.T) {
 // raciocínio de server.enabled: ponteiro separa "ausente" de "false", e os
 // dois têm significados opostos.
 func TestCompactionDeclaradaVenceODefault(t *testing.T) {
-	c, err := CarregaConfig(escreveConfigComStorage(t,
+	c, err := Load(writeConfigWithStorage(t,
 		"  compaction:\n    enabled: false\n    minimumLiveRatio: 0.25\n", ""))
 	if err != nil {
 		t.Fatal(err)
 	}
-	habilitada, ratio := c.Compaction()
-	if habilitada {
+	enabled, ratio := c.Compaction()
+	if enabled {
 		t.Error("enabled: false foi ignorado")
 	}
 	if ratio != 0.25 {
@@ -300,13 +300,13 @@ func TestCompactionDeclaradaVenceODefault(t *testing.T) {
 // que a spec publica. O bloco entra aqui como o §78 o escreve, as duas linhas
 // juntas, porque é esse arquivo que o operador copia.
 func TestCompactionDoExemploDoParagrafo78FicaLigada(t *testing.T) {
-	c, err := CarregaConfig(escreveConfigComStorage(t,
+	c, err := Load(writeConfigWithStorage(t,
 		"  compaction:\n    enabled: true\n    minimumLiveRatio: 0.50\n", ""))
 	if err != nil {
 		t.Fatal(err)
 	}
-	habilitada, ratio := c.Compaction()
-	if !habilitada {
+	enabled, ratio := c.Compaction()
+	if !enabled {
 		t.Error("enabled: true explícito veio desligada")
 	}
 	if ratio != 0.50 {
@@ -321,9 +321,9 @@ func TestCompactionDoExemploDoParagrafo78FicaLigada(t *testing.T) {
 // operador não ter de adivinhar qual das dezenas do arquivo está errada nem
 // conferir de cabeça o número que acha que escreveu.
 func TestMinimumLiveRatioForaDeZeroUmEhRecusado(t *testing.T) {
-	casos := []struct {
-		yaml    string
-		naFalha string
+	cases := []struct {
+		yaml         string
+		valueSnippet string
 	}{
 		{"0", "0"},
 		{"1", "1"},
@@ -333,7 +333,7 @@ func TestMinimumLiveRatioForaDeZeroUmEhRecusado(t *testing.T) {
 		// parse os aceita e entrega um float64 que NÃO está na faixa aberta e
 		// mesmo assim escapa de toda guarda escrita por comparação — `<= 0` e
 		// `>= 1` são as duas falsas quando um lado é NaN. Ele é o pior dos dois
-		// casos que o comentário de razaoDeLiveness descreve: com ratio=NaN o
+		// casos que o comentário de livenessRatio descreve: com ratio=NaN o
 		// predicado do §53 nunca é verdadeiro, nenhum segmento é eleito, e o
 		// operador fica com a chave configurada, o disco crescendo e nada
 		// compactado.
@@ -345,12 +345,12 @@ func TestMinimumLiveRatioForaDeZeroUmEhRecusado(t *testing.T) {
 		{"+.inf", "+Inf"},
 		{"-.inf", "-Inf"},
 	}
-	for _, caso := range casos {
-		t.Run(caso.yaml, func(t *testing.T) {
-			_, err := CarregaConfig(escreveConfigComStorage(t,
-				"  compaction:\n    minimumLiveRatio: "+caso.yaml+"\n", ""))
+	for _, tc := range cases {
+		t.Run(tc.yaml, func(t *testing.T) {
+			_, err := Load(writeConfigWithStorage(t,
+				"  compaction:\n    minimumLiveRatio: "+tc.yaml+"\n", ""))
 			if err == nil {
-				t.Fatalf("minimumLiveRatio: %s foi aceito; queria recusa nomeando a chave", caso.yaml)
+				t.Fatalf("minimumLiveRatio: %s foi aceito; queria recusa nomeando a chave", tc.yaml)
 			}
 			// A chave E o valor, como já faz o irmão deste arquivo para
 			// query.defaultMaxRows: sem o valor o operador confere a chave, vê
@@ -362,8 +362,8 @@ func TestMinimumLiveRatioForaDeZeroUmEhRecusado(t *testing.T) {
 			// "0" ou de "1" seria satisfeito pelo texto fixo e essas duas
 			// linhas da tabela não provariam nada.
 			if !strings.Contains(err.Error(), "storage.compaction.minimumLiveRatio") ||
-				!strings.Contains(err.Error(), "é "+caso.naFalha) {
-				t.Errorf("erro = %v, quer nomear a chave e o valor %s", err, caso.naFalha)
+				!strings.Contains(err.Error(), "é "+tc.valueSnippet) {
+				t.Errorf("erro = %v, quer nomear a chave e o valor %s", err, tc.valueSnippet)
 			}
 		})
 	}
@@ -381,12 +381,12 @@ func TestMinimumLiveRatioForaDeZeroUmEhRecusado(t *testing.T) {
 // torna certa — quem ligasse `enabled: true` meses depois descobriria o valor
 // inválido só ali, no pior momento possível.
 func TestFormaDoRatioEhValidadaMesmoComACompactionDesligada(t *testing.T) {
-	for _, valor := range []string{"5", "0", ".nan"} {
-		t.Run(valor, func(t *testing.T) {
-			_, err := CarregaConfig(escreveConfigComStorage(t,
-				"  compaction:\n    enabled: false\n    minimumLiveRatio: "+valor+"\n", ""))
+	for _, value := range []string{"5", "0", ".nan"} {
+		t.Run(value, func(t *testing.T) {
+			_, err := Load(writeConfigWithStorage(t,
+				"  compaction:\n    enabled: false\n    minimumLiveRatio: "+value+"\n", ""))
 			if err == nil {
-				t.Fatalf("minimumLiveRatio: %s foi aceito com enabled: false; a forma é validada no parse, não na ativação (débito 49)", valor)
+				t.Fatalf("minimumLiveRatio: %s foi aceito com enabled: false; a forma é validada no parse, não na ativação (débito 49)", value)
 			}
 		})
 	}
@@ -414,9 +414,9 @@ func TestFormaDoRatioEhValidadaMesmoComACompactionDesligada(t *testing.T) {
 // pelo motivo ERRADO. Com as outras chaves corretas, a única forma de haver
 // erro é a whitelist recusando a chave `password` em si.
 func TestSenhaLiteralNoYAMLEhRecusada(t *testing.T) {
-	corpo := "server:\n  authentication:\n    enabled: true\n    users:\n" +
+	body := "server:\n  authentication:\n    enabled: true\n    users:\n" +
 		"      - username: grafana\n        passwordEnv: NISHIDB_GRAFANA_PASSWORD\n        password: hunter2\n        role: READ\n"
-	_, err := CarregaConfig(escreveConfig(t, corpo))
+	_, err := Load(writeConfig(t, body))
 	if err == nil {
 		t.Fatal("password literal foi aceita")
 	}
@@ -426,9 +426,9 @@ func TestSenhaLiteralNoYAMLEhRecusada(t *testing.T) {
 }
 
 func TestRoleForaDoEnumEhRecusado(t *testing.T) {
-	corpo := "server:\n  authentication:\n    enabled: true\n    users:\n" +
+	body := "server:\n  authentication:\n    enabled: true\n    users:\n" +
 		"      - username: grafana\n        passwordEnv: NISHIDB_GRAFANA_PASSWORD\n        role: SUPERUSER\n"
-	_, err := CarregaConfig(escreveConfig(t, corpo))
+	_, err := Load(writeConfig(t, body))
 	if err == nil {
 		t.Fatal("role fora do enum {READ, ADMIN} foi aceita")
 	}
@@ -441,16 +441,16 @@ func TestRoleForaDoEnumEhRecusado(t *testing.T) {
 // fonte declarada e as duas ao mesmo tempo são igualmente inválidas — a
 // credencial precisa morar em EXATAMENTE um lugar.
 func TestUsuarioExigeExatamenteUmaFonteDeSenha(t *testing.T) {
-	casos := map[string]string{
+	cases := map[string]string{
 		"nenhuma": "      - username: grafana\n        role: READ\n",
 		"ambas":   "      - username: grafana\n        passwordEnv: NISHIDB_GRAFANA_PASSWORD\n        passwordFile: /run/secrets/grafana\n        role: READ\n",
 	}
-	for nome, user := range casos {
-		t.Run(nome, func(t *testing.T) {
-			corpo := "server:\n  authentication:\n    enabled: true\n    users:\n" + user
-			_, err := CarregaConfig(escreveConfig(t, corpo))
+	for name, user := range cases {
+		t.Run(name, func(t *testing.T) {
+			body := "server:\n  authentication:\n    enabled: true\n    users:\n" + user
+			_, err := Load(writeConfig(t, body))
 			if err == nil {
-				t.Fatalf("%s fontes de senha foi aceito", nome)
+				t.Fatalf("%s fontes de senha foi aceito", name)
 			}
 			if !strings.Contains(err.Error(), "passwordEnv") || !strings.Contains(err.Error(), "passwordFile") {
 				t.Errorf("erro = %v, quer nomear passwordEnv e passwordFile", err)
@@ -460,10 +460,10 @@ func TestUsuarioExigeExatamenteUmaFonteDeSenha(t *testing.T) {
 }
 
 func TestUsernameDuplicadoEntreUsersEhRecusado(t *testing.T) {
-	corpo := "server:\n  authentication:\n    enabled: true\n    users:\n" +
+	body := "server:\n  authentication:\n    enabled: true\n    users:\n" +
 		"      - username: grafana\n        passwordEnv: A\n        role: READ\n" +
 		"      - username: grafana\n        passwordEnv: B\n        role: ADMIN\n"
-	_, err := CarregaConfig(escreveConfig(t, corpo))
+	_, err := Load(writeConfig(t, body))
 	if err == nil {
 		t.Fatal("username duplicado entre users foi aceito")
 	}
@@ -473,16 +473,16 @@ func TestUsernameDuplicadoEntreUsersEhRecusado(t *testing.T) {
 }
 
 func TestTLSLigadoSemCertificadoOuChaveEhRecusado(t *testing.T) {
-	casos := map[string]string{
+	cases := map[string]string{
 		"sem certificateFile": "server:\n  tls:\n    enabled: true\n    privateKeyFile: /etc/nishidb/tls/server.key\n",
 		"sem privateKeyFile":  "server:\n  tls:\n    enabled: true\n    certificateFile: /etc/nishidb/tls/server.crt\n",
 		"sem os dois":         "server:\n  tls:\n    enabled: true\n",
 	}
-	for nome, corpo := range casos {
-		t.Run(nome, func(t *testing.T) {
-			_, err := CarregaConfig(escreveConfig(t, corpo))
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := Load(writeConfig(t, body))
 			if err == nil {
-				t.Fatalf("tls.enabled: true sem cert/key foi aceito (%s)", nome)
+				t.Fatalf("tls.enabled: true sem cert/key foi aceito (%s)", name)
 			}
 			if !strings.Contains(err.Error(), "server.tls") {
 				t.Errorf("erro = %v, quer nomear server.tls", err)
@@ -492,15 +492,15 @@ func TestTLSLigadoSemCertificadoOuChaveEhRecusado(t *testing.T) {
 }
 
 func TestAuthenticationLigadaSemUsersEhRecusada(t *testing.T) {
-	casos := map[string]string{
+	cases := map[string]string{
 		"ausente": "server:\n  authentication:\n    enabled: true\n",
 		"vazia":   "server:\n  authentication:\n    enabled: true\n    users: []\n",
 	}
-	for nome, corpo := range casos {
-		t.Run(nome, func(t *testing.T) {
-			_, err := CarregaConfig(escreveConfig(t, corpo))
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := Load(writeConfig(t, body))
 			if err == nil {
-				t.Fatalf("authentication.enabled: true sem users foi aceito (%s)", nome)
+				t.Fatalf("authentication.enabled: true sem users foi aceito (%s)", name)
 			}
 			if !strings.Contains(err.Error(), "server.authentication") {
 				t.Errorf("erro = %v, quer nomear server.authentication", err)
@@ -515,17 +515,17 @@ func TestAuthenticationLigadaSemUsersEhRecusada(t *testing.T) {
 // KnownFields global, que continua desligado de propósito para o resto do
 // documento.
 func TestChaveDesconhecidaNosBlocosDeSegurancaEhRecusada(t *testing.T) {
-	casos := map[string]string{
+	cases := map[string]string{
 		"tls":            "server:\n  tls:\n    enabld: true\n",
 		"authentication": "server:\n  authentication:\n    enbaled: true\n",
 		"users":          "server:\n  authentication:\n    enabled: true\n    users:\n      - usernme: grafana\n        passwordEnv: A\n        role: READ\n",
 		"loopback":       "server:\n  loopback:\n    enabld: true\n",
 	}
-	for nome, corpo := range casos {
-		t.Run(nome, func(t *testing.T) {
-			_, err := CarregaConfig(escreveConfig(t, corpo))
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := Load(writeConfig(t, body))
 			if err == nil {
-				t.Fatalf("chave desconhecida em server.%s foi aceita", nome)
+				t.Fatalf("chave desconhecida em server.%s foi aceita", name)
 			}
 			if !strings.Contains(err.Error(), "chave desconhecida") {
 				t.Errorf("erro = %v, quer \"chave desconhecida\"", err)
@@ -535,8 +535,8 @@ func TestChaveDesconhecidaNosBlocosDeSegurancaEhRecusada(t *testing.T) {
 }
 
 func TestLoopbackNaMesmaPortaDoServerPrincipalEhRecusado(t *testing.T) {
-	corpo := "server:\n  port: 9142\n  loopback:\n    enabled: true\n    port: 9142\n"
-	_, err := CarregaConfig(escreveConfig(t, corpo))
+	body := "server:\n  port: 9142\n  loopback:\n    enabled: true\n    port: 9142\n"
+	_, err := Load(writeConfig(t, body))
 	if err == nil {
 		t.Fatal("server.loopback.port igual a server.port foi aceito")
 	}
@@ -550,8 +550,8 @@ func TestLoopbackNaMesmaPortaDoServerPrincipalEhRecusado(t *testing.T) {
 // default implícito (127.0.0.1) — a colisão de fato é sobre o bind
 // alcançar 127.0.0.1, não sobre a chave estar ausente do arquivo.
 func TestLoopbackMesmaPortaComBindLoopbackExplicitoEhRecusado(t *testing.T) {
-	corpo := "server:\n  bind: 127.0.0.1\n  port: 9142\n  loopback:\n    enabled: true\n    port: 9142\n"
-	_, err := CarregaConfig(escreveConfig(t, corpo))
+	body := "server:\n  bind: 127.0.0.1\n  port: 9142\n  loopback:\n    enabled: true\n    port: 9142\n"
+	_, err := Load(writeConfig(t, body))
 	if err == nil {
 		t.Fatal("server.bind: 127.0.0.1 com server.loopback.port igual a server.port foi aceito")
 	}
@@ -566,8 +566,8 @@ func TestLoopbackMesmaPortaComBindLoopbackExplicitoEhRecusado(t *testing.T) {
 // listener loopback na mesma porta, do mesmo jeito que um bind loopback
 // explícito colide.
 func TestLoopbackMesmaPortaComBindWildcardEhRecusado(t *testing.T) {
-	corpo := "server:\n  bind: 0.0.0.0\n  port: 9142\n  loopback:\n    enabled: true\n    port: 9142\n"
-	_, err := CarregaConfig(escreveConfig(t, corpo))
+	body := "server:\n  bind: 0.0.0.0\n  port: 9142\n  loopback:\n    enabled: true\n    port: 9142\n"
+	_, err := Load(writeConfig(t, body))
 	if err == nil {
 		t.Fatal("server.bind: 0.0.0.0 com server.loopback.port igual a server.port foi aceito")
 	}
@@ -586,8 +586,8 @@ func TestLoopbackMesmaPortaComBindWildcardEhRecusado(t *testing.T) {
 // (expor 10.200.20.218:9142 mantendo o plano loopback intocado em
 // 127.0.0.1:9142, sem mexer em painel/script/cron).
 func TestLoopbackMesmaPortaComBindEmIPEspecificoEhPermitido(t *testing.T) {
-	corpo := "server:\n  bind: 10.200.20.218\n  port: 9142\n  loopback:\n    enabled: true\n    port: 9142\n"
-	_, err := CarregaConfig(escreveConfig(t, corpo))
+	body := "server:\n  bind: 10.200.20.218\n  port: 9142\n  loopback:\n    enabled: true\n    port: 9142\n"
+	_, err := Load(writeConfig(t, body))
 	if err != nil {
 		t.Fatalf("server.bind em IP específico não-loopback com a mesma porta do loopback foi recusado: %v", err)
 	}
@@ -599,18 +599,18 @@ func TestLoopbackMesmaPortaComBindEmIPEspecificoEhPermitido(t *testing.T) {
 // vira porta EFÊMERA escolhida pelo kernel em silêncio (net.Listen aceita
 // ":0"), o oposto do endereço determinístico que o operador declarou.
 func TestLoopbackPortForaDaFaixaEhRecusado(t *testing.T) {
-	casos := map[string]int{
+	cases := map[string]int{
 		"zero":            0,
 		"negativo":        -1,
 		"acima_do_teto":   70000,
 		"acima_do_teto_2": 65536,
 	}
-	for nome, porta := range casos {
-		t.Run(nome, func(t *testing.T) {
-			corpo := fmt.Sprintf("server:\n  loopback:\n    enabled: true\n    port: %d\n", porta)
-			_, err := CarregaConfig(escreveConfig(t, corpo))
+	for name, port := range cases {
+		t.Run(name, func(t *testing.T) {
+			body := fmt.Sprintf("server:\n  loopback:\n    enabled: true\n    port: %d\n", port)
+			_, err := Load(writeConfig(t, body))
 			if err == nil {
-				t.Fatalf("server.loopback.port: %d foi aceito", porta)
+				t.Fatalf("server.loopback.port: %d foi aceito", port)
 			}
 			if !strings.Contains(err.Error(), "server.loopback.port") {
 				t.Errorf("erro = %v, quer nomear server.loopback.port", err)
@@ -622,8 +622,8 @@ func TestLoopbackPortForaDaFaixaEhRecusado(t *testing.T) {
 // TestLoopbackPortNaFaixaContinuaAceito blinda o caminho feliz: uma porta
 // válida (1..65535) não pode ser pega pela recusa nova do Minor 7.
 func TestLoopbackPortNaFaixaContinuaAceito(t *testing.T) {
-	corpo := "server:\n  loopback:\n    enabled: true\n    port: 9143\n"
-	c, err := CarregaConfig(escreveConfig(t, corpo))
+	body := "server:\n  loopback:\n    enabled: true\n    port: 9143\n"
+	c, err := Load(writeConfig(t, body))
 	if err != nil {
 		t.Fatalf("server.loopback.port: 9143 foi recusado: %v", err)
 	}
@@ -634,12 +634,12 @@ func TestLoopbackPortNaFaixaContinuaAceito(t *testing.T) {
 
 // TestLoopbackNaMesmaPortaDoDefaultImplicitoEhRecusado é a mesma recusa 8,
 // mas com `server.port` OMITIDO: a colisão precisa ser detectada contra o
-// default implícito (9142, serverPortPadrao) tanto quanto contra um `port:`
+// default implícito (9142, defaultServerPort) tanto quanto contra um `port:`
 // explícito — um operador que confiasse no default e não repetisse a porta
 // no YAML não pode escapar da checagem só por isso.
 func TestLoopbackNaMesmaPortaDoDefaultImplicitoEhRecusado(t *testing.T) {
-	corpo := "server:\n  loopback:\n    enabled: true\n    port: 9142\n"
-	_, err := CarregaConfig(escreveConfig(t, corpo))
+	body := "server:\n  loopback:\n    enabled: true\n    port: 9142\n"
+	_, err := Load(writeConfig(t, body))
 	if err == nil {
 		t.Fatal("server.loopback.port igual ao default implícito de server.port (9142) foi aceito")
 	}
@@ -655,9 +655,9 @@ func TestLoopbackNaMesmaPortaDoDefaultImplicitoEhRecusado(t *testing.T) {
 // mesma recusa ("nenhuma fonte declarada") com a MESMA mensagem — nunca
 // serem tratadas como "fonte declarada, porém vazia".
 func TestPasswordEnvVazioExplicitoTemOMesmoTratamentoDeAusente(t *testing.T) {
-	corpo := "server:\n  authentication:\n    enabled: true\n    users:\n" +
+	body := "server:\n  authentication:\n    enabled: true\n    users:\n" +
 		"      - username: grafana\n        passwordEnv: \"\"\n        role: READ\n"
-	_, err := CarregaConfig(escreveConfig(t, corpo))
+	_, err := Load(writeConfig(t, body))
 	if err == nil {
 		t.Fatal("passwordEnv vazio explícito foi aceito")
 	}
@@ -668,22 +668,22 @@ func TestPasswordEnvVazioExplicitoTemOMesmoTratamentoDeAusente(t *testing.T) {
 
 // TestRoleEhCaseSensitive trava a escolha atual: o enum fechado {READ,
 // ADMIN} não normaliza case. Não é limitação a corrigir — ver o comentário
-// no switch de validaUsuarios — mas uma variação de case aceita em silêncio
+// no switch de validateUsers — mas uma variação de case aceita em silêncio
 // autorizaria um papel que o middleware da B3 nunca reconheceria como válido
 // (ele compara a string exata), então a recusa nomeando o valor recebido
 // importa tanto quanto a recusa de um valor fora do enum.
 func TestRoleEhCaseSensitive(t *testing.T) {
-	casos := []string{"read", "Read", "admin", "Admin"}
-	for _, valor := range casos {
-		t.Run(valor, func(t *testing.T) {
-			corpo := "server:\n  authentication:\n    enabled: true\n    users:\n" +
-				"      - username: grafana\n        passwordEnv: A\n        role: " + valor + "\n"
-			_, err := CarregaConfig(escreveConfig(t, corpo))
+	cases := []string{"read", "Read", "admin", "Admin"}
+	for _, value := range cases {
+		t.Run(value, func(t *testing.T) {
+			body := "server:\n  authentication:\n    enabled: true\n    users:\n" +
+				"      - username: grafana\n        passwordEnv: A\n        role: " + value + "\n"
+			_, err := Load(writeConfig(t, body))
 			if err == nil {
-				t.Fatalf("role %q (case diferente do enum) foi aceito", valor)
+				t.Fatalf("role %q (case diferente do enum) foi aceito", value)
 			}
-			if !strings.Contains(err.Error(), "role") || !strings.Contains(err.Error(), valor) {
-				t.Errorf("erro = %v, quer nomear role e o valor recebido %q", err, valor)
+			if !strings.Contains(err.Error(), "role") || !strings.Contains(err.Error(), value) {
+				t.Errorf("erro = %v, quer nomear role e o valor recebido %q", err, value)
 			}
 		})
 	}
@@ -693,18 +693,18 @@ func TestRoleEhCaseSensitive(t *testing.T) {
 // o YAML de hoje — inclusive o do piloto, que não conhece tls/authentication/
 // loopback — precisa continuar carregando exatamente como antes desta tarefa.
 func TestServerSemBlocosDeSegurancaContinuaValido(t *testing.T) {
-	c, err := CarregaConfig(escreveConfig(t, "server:\n  bind: 127.0.0.1\n  port: 9142\n"))
+	c, err := Load(writeConfig(t, "server:\n  bind: 127.0.0.1\n  port: 9142\n"))
 	if err != nil {
 		t.Fatalf("YAML sem os blocos novos passou a ser recusado: %v", err)
 	}
-	if c.TLSHabilitado() {
-		t.Error("TLSHabilitado() = true sem bloco tls no YAML")
+	if c.TLSEnabled() {
+		t.Error("TLSEnabled() = true sem bloco tls no YAML")
 	}
-	if c.AutenticacaoHabilitada() {
-		t.Error("AutenticacaoHabilitada() = true sem bloco authentication no YAML")
+	if c.AuthenticationEnabled() {
+		t.Error("AuthenticationEnabled() = true sem bloco authentication no YAML")
 	}
-	if c.LoopbackHabilitado() {
-		t.Error("LoopbackHabilitado() = true sem bloco loopback no YAML")
+	if c.LoopbackEnabled() {
+		t.Error("LoopbackEnabled() = true sem bloco loopback no YAML")
 	}
 }
 
@@ -712,7 +712,7 @@ func TestServerSemBlocosDeSegurancaContinuaValido(t *testing.T) {
 // consumir: os três predicados e os campos por trás deles, com um YAML no
 // molde do exemplo do §78.
 func TestBlocosDeSegurancaValidosSaoCarregados(t *testing.T) {
-	corpo := "server:\n" +
+	body := "server:\n" +
 		"  tls:\n" +
 		"    enabled: true\n" +
 		"    certificateFile: /etc/nishidb/tls/server.crt\n" +
@@ -729,19 +729,19 @@ func TestBlocosDeSegurancaValidosSaoCarregados(t *testing.T) {
 		"  loopback:\n" +
 		"    enabled: true\n" +
 		"    port: 9143\n"
-	c, err := CarregaConfig(escreveConfig(t, corpo))
+	c, err := Load(writeConfig(t, body))
 	if err != nil {
 		t.Fatalf("YAML do exemplo do §78 foi recusado: %v", err)
 	}
-	if !c.TLSHabilitado() {
-		t.Error("TLSHabilitado() = false com tls.enabled: true")
+	if !c.TLSEnabled() {
+		t.Error("TLSEnabled() = false com tls.enabled: true")
 	}
 	if c.Server.TLS.CertificateFile != "/etc/nishidb/tls/server.crt" ||
 		c.Server.TLS.PrivateKeyFile != "/etc/nishidb/tls/server.key" {
 		t.Errorf("TLS = %+v, cert/key não bateram", c.Server.TLS)
 	}
-	if !c.AutenticacaoHabilitada() {
-		t.Error("AutenticacaoHabilitada() = false com authentication.enabled: true")
+	if !c.AuthenticationEnabled() {
+		t.Error("AuthenticationEnabled() = false com authentication.enabled: true")
 	}
 	if len(c.Server.Authentication.Users) != 2 {
 		t.Fatalf("Users = %+v, quer 2 usuários", c.Server.Authentication.Users)
@@ -754,8 +754,8 @@ func TestBlocosDeSegurancaValidosSaoCarregados(t *testing.T) {
 	if admin.Username != "admin" || admin.PasswordFile != "/run/secrets/nishidb-admin" || admin.Role != "ADMIN" {
 		t.Errorf("users[1] = %+v", admin)
 	}
-	if !c.LoopbackHabilitado() {
-		t.Error("LoopbackHabilitado() = false com loopback.enabled: true")
+	if !c.LoopbackEnabled() {
+		t.Error("LoopbackEnabled() = false com loopback.enabled: true")
 	}
 	if c.Server.Loopback.Port == nil || *c.Server.Loopback.Port != 9143 {
 		t.Errorf("Loopback.Port = %v, quer 9143", c.Server.Loopback.Port)
@@ -765,55 +765,55 @@ func TestBlocosDeSegurancaValidosSaoCarregados(t *testing.T) {
 // A partir daqui: ajuste pós-B2 (ruling do controlador). A matriz de recusa
 // do §77 precisa distinguir "authentication AUSENTE do YAML" de
 // "authentication.enabled: false EXPLÍCITO" — os dois davam FALSE em
-// AutenticacaoHabilitada() e eram indistinguíveis. AuthenticationSpec.Enabled
+// AuthenticationEnabled() e eram indistinguíveis. AuthenticationSpec.Enabled
 // virou *bool (só ele; TLSSpec e LoopbackSpec continuam bool, nenhuma célula
-// da matriz depende de presença neles) e AuthenticationDeclarada() expõe a
+// da matriz depende de presença neles) e AuthenticationDeclared() expõe a
 // pergunta "a seção apareceu?" separada de "está ligada?".
 
 // TestAuthenticationDeclaradaDistingueOsTresEstados prova os três estados que
 // a matriz do §77 precisa: seção ausente, seção presente com `enabled: false`
 // explícito, e seção presente com `enabled: true`. Os dois primeiros dão
-// AutenticacaoHabilitada() == false, mas só o segundo dá
-// AuthenticationDeclarada() == true — é essa diferença que a matriz consulta
+// AuthenticationEnabled() == false, mas só o segundo dá
+// AuthenticationDeclared() == true — é essa diferença que a matriz consulta
 // para saber se o operador decidiu alguma coisa sobre auth ou não.
 func TestAuthenticationDeclaradaDistingueOsTresEstados(t *testing.T) {
-	casos := []struct {
-		nome       string
-		corpo      string
-		declarada  bool
-		habilitada bool
+	cases := []struct {
+		name     string
+		body     string
+		declared bool
+		enabled  bool
 	}{
 		{
-			nome:       "ausente",
-			corpo:      "",
-			declarada:  false,
-			habilitada: false,
+			name:     "ausente",
+			body:     "",
+			declared: false,
+			enabled:  false,
 		},
 		{
-			nome:       "presente com enabled false explícito",
-			corpo:      "server:\n  authentication:\n    enabled: false\n",
-			declarada:  true,
-			habilitada: false,
+			name:     "presente com enabled false explícito",
+			body:     "server:\n  authentication:\n    enabled: false\n",
+			declared: true,
+			enabled:  false,
 		},
 		{
-			nome: "presente com enabled true",
-			corpo: "server:\n  authentication:\n    enabled: true\n    users:\n" +
+			name: "presente com enabled true",
+			body: "server:\n  authentication:\n    enabled: true\n    users:\n" +
 				"      - username: grafana\n        passwordEnv: A\n        role: READ\n",
-			declarada:  true,
-			habilitada: true,
+			declared: true,
+			enabled:  true,
 		},
 	}
-	for _, caso := range casos {
-		t.Run(caso.nome, func(t *testing.T) {
-			c, err := CarregaConfig(escreveConfig(t, caso.corpo))
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c, err := Load(writeConfig(t, tc.body))
 			if err != nil {
 				t.Fatalf("carregamento falhou: %v", err)
 			}
-			if got := c.AuthenticationDeclarada(); got != caso.declarada {
-				t.Errorf("AuthenticationDeclarada() = %v, quer %v", got, caso.declarada)
+			if got := c.AuthenticationDeclared(); got != tc.declared {
+				t.Errorf("AuthenticationDeclared() = %v, quer %v", got, tc.declared)
 			}
-			if got := c.AutenticacaoHabilitada(); got != caso.habilitada {
-				t.Errorf("AutenticacaoHabilitada() = %v, quer %v", got, caso.habilitada)
+			if got := c.AuthenticationEnabled(); got != tc.enabled {
+				t.Errorf("AuthenticationEnabled() = %v, quer %v", got, tc.enabled)
 			}
 		})
 	}
@@ -828,9 +828,9 @@ func TestAuthenticationDeclaradaDistingueOsTresEstados(t *testing.T) {
 // `role` inválido não vira aceitável só porque authentication está desligada
 // por decisão explícita do operador.
 func TestFormaDosUsersEhValidadaMesmoComAuthenticationDesligadaExplicitamente(t *testing.T) {
-	corpo := "server:\n  authentication:\n    enabled: false\n    users:\n" +
+	body := "server:\n  authentication:\n    enabled: false\n    users:\n" +
 		"      - username: grafana\n        passwordEnv: A\n        role: SUPERUSER\n"
-	_, err := CarregaConfig(escreveConfig(t, corpo))
+	_, err := Load(writeConfig(t, body))
 	if err == nil {
 		t.Fatal("role inválido foi aceito com authentication.enabled: false")
 	}

@@ -66,7 +66,7 @@ type Config struct {
 			MinimumLiveRatio *float64 `yaml:"minimumLiveRatio"`
 		} `yaml:"compaction"`
 
-		// Expiracao é o freio da coleta do idle timeout. Os dois limites
+		// Expiry é o freio da coleta do idle timeout. Os dois limites
 		// valem JUNTOS e a passada termina no que bater primeiro: o de
 		// quantidade protege o disco e o lock de escrita (marcar uma
 		// entidade como expirada é um APPEND, então uma leva grande escreve
@@ -77,9 +77,9 @@ type Config struct {
 		// Ponteiros pelo mesmo motivo do MinimumLiveRatio: zero aqui não é
 		// omissão, é "não faça nada", e precisa ser recusado com clareza em
 		// vez de virar um coletor que nunca coleta.
-		Expiracao struct {
-			MaxPorPassada   *int   `yaml:"maxPorPassada"`
-			TempoPorPassada string `yaml:"tempoPorPassada"`
+		Expiry struct {
+			MaxPerSweep  *int   `yaml:"maxPorPassada"`
+			TimePerSweep string `yaml:"tempoPorPassada"`
 		} `yaml:"expiracao"`
 
 		// Durability é o bloco §47 (débito 50): `mode: sync|batch|async` com
@@ -112,10 +112,10 @@ type Config struct {
 		Port    *int   `yaml:"port"`
 
 		// TLS, Authentication e Loopback são os blocos de segurança da Fase 11
-		// (§74-78). A FORMA de cada um é validada em validaServerSeguranca
+		// (§74-78). A FORMA de cada um é validada em validateServerSecurity
 		// (config_security.go): whitelist manual de chave dentro do bloco (o
 		// KnownFields GLOBAL continua desligado, ver comentário em
-		// CarregaConfig) e as recusas cruzadas do §75/§77 que dependem só do
+		// Load) e as recusas cruzadas do §75/§77 que dependem só do
 		// arquivo. A resolução de segredos e a matriz de recusa "auth sem TLS
 		// com bind exposto" (§77) são ativação — B2, em server.Novo.
 		TLS            TLSSpec            `yaml:"tls"`
@@ -132,7 +132,7 @@ type Config struct {
 	//
 	// managedMemoryTarget continua aceita e sem efeito, e não em silêncio:
 	// quem a escreve conclui que há um teto que não há, e a subida avisa — no
-	// mesmo molde de storage.durability (débito 50, ChavesDeStorageIgnoradas).
+	// mesmo molde de storage.durability (débito 50, IgnoredStorageKeys).
 	Runtime struct {
 		MemoryTarget        string `yaml:"memoryTarget"`
 		ManagedMemoryTarget string `yaml:"managedMemoryTarget"`
@@ -160,8 +160,8 @@ type Config struct {
 	// query.defaultMaxRows e query.defaultTimeout são os DEFAULTS GLOBAIS do
 	// teto de linhas e do timeout de consulta: valem para o dataset que omite
 	// `query.maxRows`/`query.timeout` no YAML dele, e perdem para o dataset
-	// que os declara. Chegam ao motor por CarregaConfig →
-	// Config.DefaultsDeQuery → schema.Load.
+	// que os declara. Chegam ao motor por Load →
+	// Config.QueryDefaults → schema.Load.
 	//
 	// DefaultMaxRows é ponteiro para separar "ausente" de "zero": ausente
 	// herda o padrão da spec, zero é valor inválido e precisa ser recusado
@@ -194,26 +194,26 @@ type Config struct {
 	maxBufferPerQuery  int64
 	snapshotMaxBytes   int64
 	minimumLiveRatio   float64
-	expiracaoMax       int
-	expiracaoTempo     time.Duration
+	expiryMaxPerSweep  int
+	expiryTimePerSweep time.Duration
 
-	// authenticationDeclarada é fato do DOCUMENTO (a chave server.authentication
+	// authenticationDeclared é fato do DOCUMENTO (a chave server.authentication
 	// apareceu, com qualquer valor de enabled), e não do valor decodificado —
 	// por isso não cabe em AuthenticationSpec, que só enxerga o que foi
-	// decodificado. Ver AuthenticationDeclarada.
-	authenticationDeclarada bool
+	// decodificado. Ver AuthenticationDeclared.
+	authenticationDeclared bool
 }
 
 const (
-	segmentSizePadrao        = 512 << 20
-	checkpointIntervalPadrao = 30 * time.Second
-	maxRowsPadrao            = 100000
-	timeoutPadrao            = 30 * time.Second
-	resultBatchPadrao        = 256
-	serverPortPadrao         = 9142
-	maxConcurrentPadrao      = 16
+	defaultSegmentSize        = 512 << 20
+	defaultCheckpointInterval = 30 * time.Second
+	defaultQueryMaxRows       = 100000
+	defaultQueryTimeout       = 30 * time.Second
+	defaultResultBatch        = 256
+	defaultServerPort         = 9142
+	defaultMaxConcurrent      = 16
 
-	// maxLongRunningPadrao é DOIS, e não uma fração do maxConcurrent.
+	// defaultMaxLongRunning é DOIS, e não uma fração do maxConcurrent.
 	//
 	// Duas porque o sub-pool existe para garantir que a consulta interativa
 	// sempre tenha vaga, e uma fração faria o pior caso crescer junto com o
@@ -222,7 +222,7 @@ const (
 	// o sub-pool veio impedir. Duas cobrem o caso real (um relatório e um
 	// export em paralelo) e deixam 14 das 16 vagas do default sempre
 	// disponíveis para quem responde em milissegundos.
-	maxLongRunningPadrao = 2
+	defaultMaxLongRunning = 2
 
 	// Os dois defaults do §80, literais da spec: 512 MiB de orçamento de
 	// memória de consulta para o processo e 4 MiB de buffer por consulta.
@@ -232,26 +232,26 @@ const (
 	// orçamento por consulta seja o que de fato recusa a linha patológica, e
 	// não o global, que recusaria por culpa de uma consulta a consulta de
 	// outro cliente.
-	memoryTargetPadrao      = 512 << 20
-	maxBufferPerQueryPadrao = 4 << 20
-	// snapshotMaxBytesPadrao são ~2,7 milhões de versões retidas: folga larga
+	defaultMemoryTarget      = 512 << 20
+	defaultMaxBufferPerQuery = 4 << 20
+	// defaultSnapshotMaxBytes são ~2,7 milhões de versões retidas: folga larga
 	// para o relatório de minutos que a consulta longa serve, e pequeno o
 	// bastante para que uma consulta esquecida seja RECUSADA em vez de
 	// competir com o 1 GiB de RSS do §97.
-	snapshotMaxBytesPadrao = 64 << 20
+	defaultSnapshotMaxBytes = 64 << 20
 
 	// Defaults da coleta de expiração. Mil marcações por passada a 452 ev/s
 	// do piloto são ~136 KB escritos por passada — ruído perto da ingestão —,
 	// e cinco segundos é a mesma ordem do intervalo entre passadas da
 	// compaction, que já se provou uma cadência que não atrapalha o writer.
-	expiracaoMaxPorPassadaPadrao   = 1000
-	expiracaoTempoPorPassadaPadrao = 5 * time.Second
+	defaultExpiryMaxPerSweep  = 1000
+	defaultExpiryTimePerSweep = 5 * time.Second
 
-	// compactionRatioPadrao é o default do §53: um segmento vira candidato
+	// defaultCompactionRatio é o default do §53: um segmento vira candidato
 	// quando menos da metade dele ainda é dado vivo.
-	compactionRatioPadrao = 0.50
+	defaultCompactionRatio = 0.50
 
-	// serverBindPadrao é LOOPBACK, e não o 0.0.0.0 que o exemplo do §78
+	// defaultServerBind é LOOPBACK, e não o 0.0.0.0 que o exemplo do §78
 	// escreve.
 	//
 	// A razão é o que passou a existir na Fase 6: até o M2 o servidor só
@@ -265,24 +265,24 @@ const (
 	// bind aberto da spec pressupõe autenticação; enquanto ela não existe, o
 	// default seguro é o loopback e expor é ato explícito de quem opera — que
 	// a subida registra com um aviso.
-	serverBindPadrao = "127.0.0.1"
+	defaultServerBind = "127.0.0.1"
 )
 
-// CarregaConfig lê e valida o arquivo de configuração.
-func CarregaConfig(path string) (*Config, error) {
+// Load lê e valida o arquivo de configuração.
+func Load(path string) (*Config, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("configuração: %w", err)
 	}
 	// O documento é decodificado primeiro em ÁRVORE CRUA (yaml.Node), e só
-	// depois no Config tipado, via raiz.Decode — e não yaml.Unmarshal(b, &c)
-	// direto. A árvore é o que validaServerSeguranca usa para a whitelist
+	// depois no Config tipado, via root.Decode — e não yaml.Unmarshal(b, &c)
+	// direto. A árvore é o que validateServerSecurity usa para a whitelist
 	// manual de chave dentro de server.tls/authentication/loopback (recusa 7
 	// do §75/§77); yaml.Node.Decode não herda estritume nenhum do documento
 	// (mesma observação de internal/schema/source.go), então o resto do
 	// arquivo continua exatamente tão tolerante quanto antes.
-	var raiz yaml.Node
-	if err := yaml.Unmarshal(b, &raiz); err != nil {
+	var root yaml.Node
+	if err := yaml.Unmarshal(b, &root); err != nil {
 		return nil, fmt.Errorf("configuração %s: %w", path, err)
 	}
 	var c Config
@@ -290,8 +290,8 @@ func CarregaConfig(path string) (*Config, error) {
 	// que este binário não conhece, e recusá-las obrigaria o operador a mantê
 	// -las em dois arquivos. Isso vale para o documento INTEIRO — inclusive
 	// para dentro de server.tls/authentication/loopback, cuja whitelist é
-	// manual (validaServerSeguranca), e não pelo KnownFields do decoder.
-	if err := raiz.Decode(&c); err != nil {
+	// manual (validateServerSecurity), e não pelo KnownFields do decoder.
+	if err := root.Decode(&c); err != nil {
 		return nil, fmt.Errorf("configuração %s: %w", path, err)
 	}
 
@@ -309,29 +309,29 @@ func CarregaConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("configuração %s: datasets.directory é obrigatório", path)
 	}
 
-	if c.segmentSize, err = units.Size(c.Storage.SegmentSize, segmentSizePadrao); err != nil {
+	if c.segmentSize, err = units.Size(c.Storage.SegmentSize, defaultSegmentSize); err != nil {
 		return nil, fmt.Errorf("configuração %s: storage.segmentSize: %w", path, err)
 	}
-	if c.checkpointInterval, err = units.Duration(c.Storage.Checkpoint.Interval, checkpointIntervalPadrao); err != nil {
+	if c.checkpointInterval, err = units.Duration(c.Storage.Checkpoint.Interval, defaultCheckpointInterval); err != nil {
 		return nil, fmt.Errorf("configuração %s: storage.checkpoint.interval: %w", path, err)
 	}
-	if c.minimumLiveRatio, err = razaoDeLiveness(c.Storage.Compaction.MinimumLiveRatio); err != nil {
+	if c.minimumLiveRatio, err = livenessRatio(c.Storage.Compaction.MinimumLiveRatio); err != nil {
 		return nil, fmt.Errorf("configuração %s: storage.compaction.minimumLiveRatio: %w", path, err)
 	}
-	if c.expiracaoMax, err = units.PositiveInt(c.Storage.Expiracao.MaxPorPassada, expiracaoMaxPorPassadaPadrao); err != nil {
+	if c.expiryMaxPerSweep, err = units.PositiveInt(c.Storage.Expiry.MaxPerSweep, defaultExpiryMaxPerSweep); err != nil {
 		return nil, fmt.Errorf("configuração %s: storage.expiracao.maxPorPassada: %w", path, err)
 	}
-	if c.expiracaoTempo, err = units.Duration(c.Storage.Expiracao.TempoPorPassada, expiracaoTempoPorPassadaPadrao); err != nil {
+	if c.expiryTimePerSweep, err = units.Duration(c.Storage.Expiry.TimePerSweep, defaultExpiryTimePerSweep); err != nil {
 		return nil, fmt.Errorf("configuração %s: storage.expiracao.tempoPorPassada: %w", path, err)
 	}
-	if c.defaultMaxRows, err = units.PositiveInt(c.Query.DefaultMaxRows, maxRowsPadrao); err != nil {
+	if c.defaultMaxRows, err = units.PositiveInt(c.Query.DefaultMaxRows, defaultQueryMaxRows); err != nil {
 		return nil, fmt.Errorf("configuração %s: query.defaultMaxRows: %w", path, err)
 	}
-	if c.defaultTimeout, err = units.Duration(c.Query.DefaultTimeout, timeoutPadrao); err != nil {
+	if c.defaultTimeout, err = units.Duration(c.Query.DefaultTimeout, defaultQueryTimeout); err != nil {
 		return nil, fmt.Errorf("configuração %s: query.defaultTimeout: %w", path, err)
 	}
 	// O padrão é ZERO, e zero é o sinal de "ausente" que schema.validate lê
-	// como "cada dataset herda o próprio query.timeout". Passar timeoutPadrao
+	// como "cada dataset herda o próprio query.timeout". Passar defaultQueryTimeout
 	// aqui daria um teto global de 30s a datasets que hoje declaram
 	// `query.timeout: 5m` — e a spec deles passaria a ser recusada na abertura.
 	if c.defaultMaxTimeout, err = units.Duration(c.Query.DefaultMaxTimeout, 0); err != nil {
@@ -348,13 +348,13 @@ func CarregaConfig(path string) (*Config, error) {
 				"o teto global recusaria o prazo que ele mesmo dá por padrão",
 			path, c.defaultMaxTimeout, c.defaultTimeout)
 	}
-	if c.resultBatchSize, err = units.PositiveInt(c.Query.ResultBatchSize, resultBatchPadrao); err != nil {
+	if c.resultBatchSize, err = units.PositiveInt(c.Query.ResultBatchSize, defaultResultBatch); err != nil {
 		return nil, fmt.Errorf("configuração %s: query.resultBatchSize: %w", path, err)
 	}
-	if c.serverPort, err = units.PositiveInt(c.Server.Port, serverPortPadrao); err != nil {
+	if c.serverPort, err = units.PositiveInt(c.Server.Port, defaultServerPort); err != nil {
 		return nil, fmt.Errorf("configuração %s: server.port: %w", path, err)
 	}
-	if c.maxConcurrent, err = units.PositiveInt(c.Runtime.Query.MaxConcurrent, maxConcurrentPadrao); err != nil {
+	if c.maxConcurrent, err = units.PositiveInt(c.Runtime.Query.MaxConcurrent, defaultMaxConcurrent); err != nil {
 		return nil, fmt.Errorf("configuração %s: runtime.query.maxConcurrent: %w", path, err)
 	}
 	// O DEFAULT do sub-pool é limitado pelo pool, e a chave EXPLÍCITA não é.
@@ -366,11 +366,11 @@ func CarregaConfig(path string) (*Config, error) {
 	// reservar, e o sub-pool honesto é o pool inteiro. Já quem ESCREVE
 	// maxLongRunning acima do maxConcurrent está pedindo algo que o semáforo
 	// geral recusaria primeiro, e aí a recusa é o serviço.
-	padraoLongo := maxLongRunningPadrao
-	if padraoLongo > c.maxConcurrent {
-		padraoLongo = c.maxConcurrent
+	effectiveDefaultLongRunning := defaultMaxLongRunning
+	if effectiveDefaultLongRunning > c.maxConcurrent {
+		effectiveDefaultLongRunning = c.maxConcurrent
 	}
-	if c.maxLongRunning, err = units.PositiveInt(c.Runtime.Query.MaxLongRunning, padraoLongo); err != nil {
+	if c.maxLongRunning, err = units.PositiveInt(c.Runtime.Query.MaxLongRunning, effectiveDefaultLongRunning); err != nil {
 		return nil, fmt.Errorf("configuração %s: runtime.query.maxLongRunning: %w", path, err)
 	}
 	if c.maxLongRunning > c.maxConcurrent {
@@ -383,10 +383,10 @@ func CarregaConfig(path string) (*Config, error) {
 				"a consulta longa toma uma vaga de CADA pool, então o sub-pool não pode ser maior que o pool",
 			path, c.maxLongRunning, c.maxConcurrent)
 	}
-	if c.memoryTarget, err = units.Size(c.Runtime.MemoryTarget, memoryTargetPadrao); err != nil {
+	if c.memoryTarget, err = units.Size(c.Runtime.MemoryTarget, defaultMemoryTarget); err != nil {
 		return nil, fmt.Errorf("configuração %s: runtime.memoryTarget: %w", path, err)
 	}
-	if c.maxBufferPerQuery, err = units.Size(c.Runtime.Query.MaxBufferPerQuery, maxBufferPerQueryPadrao); err != nil {
+	if c.maxBufferPerQuery, err = units.Size(c.Runtime.Query.MaxBufferPerQuery, defaultMaxBufferPerQuery); err != nil {
 		return nil, fmt.Errorf("configuração %s: runtime.query.maxBufferPerQuery: %w", path, err)
 	}
 	// O DEFAULT escala com o orçamento do processo, e é isso que o separa de
@@ -400,8 +400,8 @@ func CarregaConfig(path string) (*Config, error) {
 	// causa de um valor que o operador nunca escreveu é o oposto de "config
 	// recusa na subida, nunca ignora em silêncio" — não há nada que ele tenha
 	// declarado para recusar.
-	padrao := min(int64(snapshotMaxBytesPadrao), c.memoryTarget/8)
-	if c.snapshotMaxBytes, err = units.Size(c.Runtime.Query.SnapshotMaxBytes, padrao); err != nil {
+	defaultValue := min(int64(defaultSnapshotMaxBytes), c.memoryTarget/8)
+	if c.snapshotMaxBytes, err = units.Size(c.Runtime.Query.SnapshotMaxBytes, defaultValue); err != nil {
 		return nil, fmt.Errorf("configuração %s: runtime.query.snapshotMaxBytes: %w", path, err)
 	}
 	// A recusa vale só para o valor DECLARADO, pela razão acima.
@@ -427,15 +427,15 @@ func CarregaConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("configuração %s: server.port %d fora de 1..65535", path, c.serverPort)
 	}
 	if c.Server.Bind == "" {
-		c.Server.Bind = serverBindPadrao
+		c.Server.Bind = defaultServerBind
 	}
-	if err := validaServerSeguranca(&c, &raiz, path); err != nil {
+	if err := validateServerSecurity(&c, &root, path); err != nil {
 		return nil, err
 	}
 	return &c, nil
 }
 
-// razaoDeLiveness aplica o default do §53 quando a chave está AUSENTE e recusa
+// livenessRatio aplica o default do §53 quando a chave está AUSENTE e recusa
 // qualquer valor fora da faixa ABERTA (0, 1).
 //
 // As duas pontas são exclusivas porque nenhuma delas descreve uma política. Com
@@ -456,9 +456,9 @@ func CarregaConfig(path string) (*Config, error) {
 //
 // Não mora em units porque o pacote de lá existe para os escalares que os DOIS
 // YAMLs do produto compartilham, e esta faixa é regra de uma chave só.
-func razaoDeLiveness(v *float64) (float64, error) {
+func livenessRatio(v *float64) (float64, error) {
 	if v == nil {
-		return compactionRatioPadrao, nil
+		return defaultCompactionRatio, nil
 	}
 	if math.IsNaN(*v) || *v <= 0 || *v >= 1 {
 		return 0, fmt.Errorf("deve ficar entre 0 e 1, exclusive, é %v", *v)
@@ -466,50 +466,50 @@ func razaoDeLiveness(v *float64) (float64, error) {
 	return *v, nil
 }
 
-// ServidorHabilitado diz se o bloco `server` autoriza a subida. Ausente é
+// ServerEnabled diz se o bloco `server` autoriza a subida. Ausente é
 // true; só `enabled: false` explícito recusa.
-func (c *Config) ServidorHabilitado() bool {
+func (c *Config) ServerEnabled() bool {
 	return c.Server.Enabled == nil || *c.Server.Enabled
 }
 
-// TLSHabilitado diz se server.tls está ligado (§77).
+// TLSEnabled diz se server.tls está ligado (§77).
 //
-// Ao contrário de ServidorHabilitado, aqui ausente é FALSE: TLS é recurso
+// Ao contrário de ServerEnabled, aqui ausente é FALSE: TLS é recurso
 // novo e opt-in, sem YAML herdado cujo comportamento dependa do oposto.
-func (c *Config) TLSHabilitado() bool { return c.Server.TLS.Enabled }
+func (c *Config) TLSEnabled() bool { return c.Server.TLS.Enabled }
 
-// AutenticacaoHabilitada diz se server.authentication está LIGADO (§74-76).
+// AuthenticationEnabled diz se server.authentication está LIGADO (§74-76).
 // Deriva do ponteiro Server.Authentication.Enabled: nil (seção ausente OU
 // `enabled` omitido dentro dela) vale FALSE, mesma regra prática de antes —
-// só que agora expressa via ponteiro, para que AuthenticationDeclarada possa
+// só que agora expressa via ponteiro, para que AuthenticationDeclared possa
 // perguntar "a seção apareceu?" com independência do valor de enabled.
-func (c *Config) AutenticacaoHabilitada() bool {
+func (c *Config) AuthenticationEnabled() bool {
 	return c.Server.Authentication.Enabled != nil && *c.Server.Authentication.Enabled
 }
 
-// AuthenticationDeclarada diz se o bloco server.authentication apareceu no
+// AuthenticationDeclared diz se o bloco server.authentication apareceu no
 // YAML, com QUALQUER valor de enabled — inclusive ausente ou `false`.
 //
 // Existe para a matriz de recusa do §77 (B2, ruling do controlador): bind
 // exposto + authentication AUSENTE pede decisão explícita do operador (typo
 // engolido não pode liberar um bind aberto sem auth por omissão); bind
 // exposto + `enabled: false` EXPLÍCITO é a decisão já tomada, e ela vale —
-// sobe com aviso. AutenticacaoHabilitada() sozinho não distingue os dois
+// sobe com aviso. AuthenticationEnabled() sozinho não distingue os dois
 // casos (os dois dão FALSE); este método é o que permite a B2 perguntar
 // "apareceu?" separado de "está ligada?".
-func (c *Config) AuthenticationDeclarada() bool { return c.authenticationDeclarada }
+func (c *Config) AuthenticationDeclared() bool { return c.authenticationDeclared }
 
-// LoopbackHabilitado diz se o listener secundário SEM TLS/auth
+// LoopbackEnabled diz se o listener secundário SEM TLS/auth
 // (server.loopback, plano duplo de observabilidade da Fase 11) está ligado.
 // Ausente é FALSE — nenhum YAML herdado ganha um listener novo sem o
 // operador pedir.
-func (c *Config) LoopbackHabilitado() bool { return c.Server.Loopback.Enabled }
+func (c *Config) LoopbackEnabled() bool { return c.Server.Loopback.Enabled }
 
-// Expiracao é o freio da coleta: quantas entidades uma passada pode marcar e
+// Expiry é o freio da coleta: quantas entidades uma passada pode marcar e
 // por quanto tempo ela pode rodar. Os dois valem juntos, e vence o primeiro a
 // ser atingido.
-func (c *Config) Expiracao() (maxPorPassada int, tempoPorPassada time.Duration) {
-	return c.expiracaoMax, c.expiracaoTempo
+func (c *Config) Expiry() (maxPerSweep int, timePerSweep time.Duration) {
+	return c.expiryMaxPerSweep, c.expiryTimePerSweep
 }
 
 // Compaction é a política de compaction do §53/§78: se ela roda, e a partir de
@@ -518,13 +518,13 @@ func (c *Config) Expiracao() (maxPorPassada int, tempoPorPassada time.Duration) 
 // Devolve os dois juntos porque quem consome decide UMA coisa — eleger ou não
 // um segmento —, e dois métodos separados convidariam a ler o ratio de um
 // processo com a compaction desligada.
-func (c *Config) Compaction() (habilitada bool, minimumLiveRatio float64) {
+func (c *Config) Compaction() (enabled bool, minimumLiveRatio float64) {
 	e := c.Storage.Compaction.Enabled
 	return e == nil || *e, c.minimumLiveRatio
 }
 
-// Endereco é o host:porta em que o servidor escuta (§78).
-func (c *Config) Endereco() string {
+// Addr é o host:porta em que o servidor escuta (§78).
+func (c *Config) Addr() string {
 	return net.JoinHostPort(c.Server.Bind, strconv.Itoa(c.serverPort))
 }
 
@@ -576,7 +576,7 @@ func (c *Config) MaxBufferPerQuery() int64 { return c.maxBufferPerQuery }
 // leitura. Chega ao Store por storage.Options.SnapshotMaxBytes.
 func (c *Config) SnapshotMaxBytes() int64 { return c.snapshotMaxBytes }
 
-// BindExposto diz se o servidor vai escutar fora do loopback.
+// BindExposed diz se o servidor vai escutar fora do loopback.
 //
 // Existe para a subida poder AVISAR ou RECUSAR (§77): a autenticação do
 // §74-77 já existe desde a Fase 11, mas o operador pode desligá-la
@@ -589,7 +589,7 @@ func (c *Config) SnapshotMaxBytes() int64 { return c.snapshotMaxBytes }
 // Nome que não resolve para IP conta como exposto: o servidor vai bindar
 // naquilo, e presumir inocência de um endereço que não se sabe qual é seria
 // errar para o lado errado.
-func (c *Config) BindExposto() bool {
+func (c *Config) BindExposed() bool {
 	if c.Server.Bind == "localhost" {
 		return false
 	}
@@ -602,13 +602,13 @@ func (c *Config) BindExposto() bool {
 	return !ip.IsLoopback()
 }
 
-// ChavesDeRuntimeIgnoradas nomeia as chaves de `runtime` que este binário
+// IgnoredRuntimeKeys nomeia as chaves de `runtime` que este binário
 // aceita e não implementa (resto do débito 15).
 //
 // A lista existe porque configuração que mente é pior que configuração
 // ausente: quem escreve uma chave de memória e não recebe aviso nenhum conclui
 // que há um teto, e vai dimensionar a máquina por ele. É a mesma doutrina que
-// ChavesDeStorageIgnoradas, logo abaixo, aplica a storage.durability (débito
+// IgnoredStorageKeys, logo abaixo, aplica a storage.durability (débito
 // 50).
 //
 // Sobrou UMA. `memoryTarget` e `query.maxBufferPerQuery` SAÍRAM daqui ao
@@ -620,7 +620,7 @@ func (c *Config) BindExposto() bool {
 // `managedMemoryTarget` fica: ela descreve o teto do runtime Go
 // (GOMEMLIMIT/soft limit), que é outra coisa do orçamento de buffers de
 // consulta, e não tem leitor.
-func (c *Config) ChavesDeRuntimeIgnoradas() []string {
+func (c *Config) IgnoredRuntimeKeys() []string {
 	var out []string
 	if c.Runtime.ManagedMemoryTarget != "" {
 		out = append(out, "runtime.managedMemoryTarget")
@@ -628,7 +628,7 @@ func (c *Config) ChavesDeRuntimeIgnoradas() []string {
 	return out
 }
 
-// ChavesDeStorageIgnoradas nomeia storage.durability quando presente no
+// IgnoredStorageKeys nomeia storage.durability quando presente no
 // arquivo: a seção é aceita e não tem implementação nesta versão (débito 50,
 // §47) — só existe o SyncEveryPut interno, que o CLI nunca liga.
 //
@@ -638,22 +638,22 @@ func (c *Config) ChavesDeRuntimeIgnoradas() []string {
 // bloco tem efeito — nomear a seção inteira já diz tudo que há para dizer, e
 // nomear `mode`/`interval` em separado sugeriria que um dos dois poderia, um
 // dia, valer sozinho.
-func (c *Config) ChavesDeStorageIgnoradas() []string {
+func (c *Config) IgnoredStorageKeys() []string {
 	if c.Storage.Durability.Mode == "" && c.Storage.Durability.Interval == "" {
 		return nil
 	}
 	return []string{"storage.durability"}
 }
 
-// IntervaloDeCheckpoint é a janela de reprocessamento em caso de crash.
-func (c *Config) IntervaloDeCheckpoint() time.Duration { return c.checkpointInterval }
+// CheckpointInterval é a janela de reprocessamento em caso de crash.
+func (c *Config) CheckpointInterval() time.Duration { return c.checkpointInterval }
 
 // SegmentSize é o tamanho de rotação de segmento.
 func (c *Config) SegmentSize() int64 { return c.segmentSize }
 
-// DefaultsDeQuery são os defaults globais que o dataset herda quando omite a
+// QueryDefaults são os defaults globais que o dataset herda quando omite a
 // chave equivalente.
-func (c *Config) DefaultsDeQuery() schema.Defaults {
+func (c *Config) QueryDefaults() schema.Defaults {
 	return schema.Defaults{
 		MaxRows: c.defaultMaxRows,
 		Timeout: c.defaultTimeout,
@@ -664,17 +664,17 @@ func (c *Config) DefaultsDeQuery() schema.Defaults {
 	}
 }
 
-// DirDoDataset é onde os arquivos do dataset vivem.
-func (c *Config) DirDoDataset(nome string) string {
-	return c.Storage.Path + string(os.PathSeparator) + nome
+// DatasetDir é onde os arquivos do dataset vivem.
+func (c *Config) DatasetDir(name string) string {
+	return c.Storage.Path + string(os.PathSeparator) + name
 }
 
-// SpecDoDataset é o caminho do YAML de materialização do dataset.
-func (c *Config) SpecDoDataset(nome string) string {
-	return c.Datasets.Directory + string(os.PathSeparator) + nome + ".yaml"
+// DatasetSpecPath é o caminho do YAML de materialização do dataset.
+func (c *Config) DatasetSpecPath(name string) string {
+	return c.Datasets.Directory + string(os.PathSeparator) + name + ".yaml"
 }
 
-// ListaDatasets enumera os datasets declarados em datasets.directory.
+// ListDatasets enumera os datasets declarados em datasets.directory.
 //
 // Não existia no M1: o CLI resolvia <directory>/<nome>.yaml sob demanda, um
 // arquivo por vez, porque cada comando recebia --dataset. O servidor precisa
@@ -683,23 +683,23 @@ func (c *Config) SpecDoDataset(nome string) string {
 //
 // A ordem é alfabética para que a subida seja determinística: dois processos
 // com a mesma configuração têm de reportar o mesmo primeiro erro.
-func (c *Config) ListaDatasets() ([]string, error) {
-	entradas, err := os.ReadDir(c.Datasets.Directory)
+func (c *Config) ListDatasets() ([]string, error) {
+	entries, err := os.ReadDir(c.Datasets.Directory)
 	if err != nil {
 		return nil, fmt.Errorf("datasets.directory %s: %w", c.Datasets.Directory, err)
 	}
-	var nomes []string
-	for _, e := range entradas {
+	var names []string
+	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
 			continue
 		}
-		nomes = append(nomes, strings.TrimSuffix(e.Name(), ".yaml"))
+		names = append(names, strings.TrimSuffix(e.Name(), ".yaml"))
 	}
-	sort.Strings(nomes)
-	return nomes, nil
+	sort.Strings(names)
+	return names, nil
 }
 
-// ValidaUnicidadeDeGroup recusa dois datasets que consumam o MESMO tópico com
+// ValidateGroupUniqueness recusa dois datasets que consumam o MESMO tópico com
 // o MESMO groupId no mesmo cluster.
 //
 // É validação de CONJUNTO e por isso não cabe em schema.validate, que vê um
@@ -707,39 +707,39 @@ func (c *Config) ListaDatasets() ([]string, error) {
 // copiar um YAML e trocar só o nome faz o Kafka dividir as partições entre os
 // dois consumers, cada dataset materializa estado parcial, e nenhuma métrica
 // do §92 acusa — o group consome tudo e o lag fica normal.
-func ValidaUnicidadeDeGroup(specs map[string]*schema.DatasetSpec) error {
-	type origem struct{ bootstrap, topico, group string }
-	visto := make(map[origem]string, len(specs))
+func ValidateGroupUniqueness(specs map[string]*schema.DatasetSpec) error {
+	type sourceKey struct{ bootstrap, topic, group string }
+	seen := make(map[sourceKey]string, len(specs))
 
-	nomes := make([]string, 0, len(specs))
+	names := make([]string, 0, len(specs))
 	for n := range specs {
-		nomes = append(nomes, n)
+		names = append(names, n)
 	}
-	sort.Strings(nomes)
+	sort.Strings(names)
 
-	for _, nome := range nomes {
-		k := specs[nome].Source.Kafka
+	for _, name := range names {
+		k := specs[name].Source.Kafka
 		if k == nil {
 			continue
 		}
-		o := origem{
+		key := sourceKey{
 			bootstrap: checkpoint.CanonicalBootstrap(k.BootstrapServers),
-			topico:    k.Topic,
+			topic:     k.Topic,
 			group:     k.Consumer.GroupID,
 		}
-		if outro, dup := visto[o]; dup {
+		if other, dup := seen[key]; dup {
 			return fmt.Errorf(
 				"datasets %q e %q consomem o tópico %q com o mesmo consumer.groupId %q no mesmo cluster: "+
 					"o Kafka dividiria as partições entre os dois e cada dataset materializaria estado parcial, "+
 					"sem nenhuma métrica acusar",
-				outro, nome, o.topico, o.group)
+				other, name, key.topic, key.group)
 		}
-		visto[o] = nome
+		seen[key] = name
 	}
 	return nil
 }
 
-// CaminhoDoDataset é o diretório de dados de um dataset.
-func (c *Config) CaminhoDoDataset(nome string) string {
-	return filepath.Join(c.Storage.Path, nome)
+// DatasetRootDir é o diretório de dados de um dataset.
+func (c *Config) DatasetRootDir(name string) string {
+	return filepath.Join(c.Storage.Path, name)
 }

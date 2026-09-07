@@ -59,7 +59,7 @@ const storageComCompaction = "  segmentSize: 8KiB\n  compaction:\n    enabled: %
 func semeiaGarbage(t *testing.T, a *ambiente, nome string, keys, rodadas int) {
 	t.Helper()
 	cfg := a.carrega()
-	spec, err := schema.Load(cfg.SpecDoDataset(nome), cfg.DefaultsDeQuery())
+	spec, err := schema.Load(cfg.DatasetSpecPath(nome), cfg.QueryDefaults())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func semeiaGarbage(t *testing.T, a *ambiente, nome string, keys, rodadas int) {
 	// função existe para impedir.
 	indexados := schema.IndexedFieldNames(spec)
 	st, err := storage.Open(storage.Options{
-		Dir:                    cfg.DirDoDataset(nome),
+		Dir:                    cfg.DatasetDir(nome),
 		Dataset:                nome,
 		SegmentSize:            cfg.SegmentSize(),
 		CamposIndexadosPorNome: indexados,
@@ -141,7 +141,7 @@ func bancadaDeCompaction(t *testing.T, chave string) (srv *server.Servidor, dir 
 	semeiaGarbage(t, a, "d", compKeys, compRodadas)
 
 	cfg := a.carrega()
-	dir = cfg.DirDoDataset("d")
+	dir = cfg.DatasetDir("d")
 	antes = discoDosSegmentosDoDataset(t, dir)
 	if antes == 0 {
 		t.Fatal("nenhum segmento em disco depois da semeadura: não há o que compactar e as duas metades do teste passariam por vacuidade")

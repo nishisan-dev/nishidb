@@ -421,12 +421,12 @@ schema:
 func semeiaHistorico(t *testing.T, a *ambiente, nome string, comCampo, semCampo int) string {
 	t.Helper()
 	cfg := a.carrega()
-	spec, err := schema.Load(cfg.SpecDoDataset(nome), cfg.DefaultsDeQuery())
+	spec, err := schema.Load(cfg.DatasetSpecPath(nome), cfg.QueryDefaults())
 	if err != nil {
 		t.Fatal(err)
 	}
 	base, err := storage.Open(storage.Options{
-		Dir:                    cfg.CaminhoDoDataset(nome),
+		Dir:                    cfg.DatasetRootDir(nome),
 		Dataset:                nome,
 		SegmentSize:            cfg.SegmentSize(),
 		CamposIndexadosPorNome: schema.IndexedFieldNames(spec),
@@ -444,7 +444,7 @@ func semeiaHistorico(t *testing.T, a *ambiente, nome string, comCampo, semCampo 
 	if spec.History != nil && spec.History.SegmentSize > 0 {
 		segmentoDaIrma = spec.History.SegmentSize
 	}
-	dirIrma := cfg.CaminhoDoDataset(specIrma.Name)
+	dirIrma := cfg.DatasetRootDir(specIrma.Name)
 	hist, err := storage.Open(storage.Options{
 		Dir:                    dirIrma,
 		Dataset:                specIrma.Name,
@@ -560,7 +560,7 @@ func TestOLacoDeReconstrucaoObedeceAMESMAJanelaDaExpulsao(t *testing.T) {
 	semeiaHistorico(t, a, "eventos", 0, 600)
 
 	cfg := a.carrega()
-	dirIrma := cfg.CaminhoDoDataset("eventos_history")
+	dirIrma := cfg.DatasetRootDir("eventos_history")
 	apagaOsIndicesSelados(t, dirIrma)
 	selados := seladosDoDataset(t, dirIrma)
 	if len(selados) < 3 {

@@ -70,7 +70,7 @@ func runCounters(args []string, amb Ambiente) int {
 }
 
 func countersLocal(argConfig, dataset string, audita, reconstroi bool, amb Ambiente) int {
-	cfg, err := nishiconfig.CarregaConfig(argConfig)
+	cfg, err := nishiconfig.Load(argConfig)
 	if err != nil {
 		avisa(amb, "counters: %v\n", err)
 		return ExitUso

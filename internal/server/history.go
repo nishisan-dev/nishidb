@@ -82,7 +82,7 @@ func (s *Servidor) abreHistorico(base *dataset, log *logging.Logger) (*dataset, 
 	}
 
 	st, err := storage.Open(storage.Options{
-		Dir:                    s.cfg.CaminhoDoDataset(specIrma.Name),
+		Dir:                    s.cfg.DatasetRootDir(specIrma.Name),
 		Dataset:                specIrma.Name,
 		SegmentSize:            segmento,
 		Modo:                   storage.ModoHistorico,

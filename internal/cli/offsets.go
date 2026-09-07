@@ -64,12 +64,12 @@ func runOffsets(args []string, amb Ambiente) int {
 		return ExitUso
 	}
 
-	cfg, err := nishiconfig.CarregaConfig(*argConfig)
+	cfg, err := nishiconfig.Load(*argConfig)
 	if err != nil {
 		fmt.Fprintf(amb.Stderr, "offsets: %v\n", err)
 		return ExitUso
 	}
-	spec, err := schema.Load(cfg.SpecDoDataset(*dataset), cfg.DefaultsDeQuery())
+	spec, err := schema.Load(cfg.DatasetSpecPath(*dataset), cfg.QueryDefaults())
 	if err != nil {
 		fmt.Fprintf(amb.Stderr, "offsets: %v\n", err)
 		return ExitUso
@@ -84,7 +84,7 @@ func runOffsets(args []string, amb Ambiente) int {
 	// porque o índice pararia de ser atualizado e reapareceria incompleto.
 	indexados := schema.IndexedFieldNames(spec)
 	st, err := storage.Open(storage.Options{
-		Dir:                    cfg.DirDoDataset(*dataset),
+		Dir:                    cfg.DatasetDir(*dataset),
 		Dataset:                *dataset,
 		SegmentSize:            cfg.SegmentSize(),
 		CamposIndexadosPorNome: indexados,

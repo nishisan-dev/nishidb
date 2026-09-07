@@ -51,7 +51,7 @@ schema:
 func semeia(t *testing.T, a *ambiente, nome string, n int) {
 	t.Helper()
 	cfg := a.carrega()
-	spec, err := schema.Load(cfg.SpecDoDataset(nome), cfg.DefaultsDeQuery())
+	spec, err := schema.Load(cfg.DatasetSpecPath(nome), cfg.QueryDefaults())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func semeia(t *testing.T, a *ambiente, nome string, n int) {
 	// função existe para impedir.
 	indexados := schema.IndexedFieldNames(spec)
 	st, err := storage.Open(storage.Options{
-		Dir:                    cfg.DirDoDataset(nome),
+		Dir:                    cfg.DatasetDir(nome),
 		Dataset:                nome,
 		SegmentSize:            cfg.SegmentSize(),
 		CamposIndexadosPorNome: indexados,
@@ -137,7 +137,7 @@ func servidorComDadosDiretorioEStorage(t *testing.T, n int, blocoServer, storage
 		t.Fatalf("subida: %v", err)
 	}
 	roda(t, srv)
-	return srv, cfg.DirDoDataset("d")
+	return srv, cfg.DatasetDir("d")
 }
 
 // roda sobe o servidor numa goroutine e garante o encerramento gracioso no fim

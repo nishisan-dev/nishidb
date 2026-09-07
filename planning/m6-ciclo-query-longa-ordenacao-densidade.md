@@ -580,7 +580,7 @@ de liveness que o débito 25 fechou.
 
 `runtime.memoryTarget` e `runtime.query.maxBufferPerQuery` são parseados e
 **nunca lidos** hoje ([config.go:135-139](internal/config/config.go:135)) — só
-nomeados na subida por `ChavesDeRuntimeIgnoradas`. Ganham leitor, com os
+nomeados na subida por `IgnoredRuntimeKeys`. Ganham leitor, com os
 literais do §80 como default.
 
 **O primeiro consumidor real é o caminho de SELECT**, e é aqui que a sua decisão

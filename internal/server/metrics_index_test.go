@@ -594,7 +594,7 @@ func bancadaDeIndice(t *testing.T) (*server.Servidor, string, string) {
 		t.Fatalf("a consulta indexada da bancada devolveu %d", resp.StatusCode)
 	}
 	fecha(t, resp)
-	return srv, a.carrega().DirDoDataset("eventos"), dirIrma
+	return srv, a.carrega().DatasetDir("eventos"), dirIrma
 }
 
 // esperaOsEstadosAssentarem bloqueia até o retrato parar de mudar.

@@ -1061,7 +1061,7 @@ sub-pool sai como `TOO_MANY_LONG_QUERIES`, separada de `TOO_MANY_QUERIES` porque
 a ação do cliente é outra: o pool geral esvazia em milissegundos, e este pode
 levar minutos.
 
-**O prazo tem UMA fonte.** O executor tinha um `timeoutPadrao` de 30s próprio, e
+**O prazo tem UMA fonte.** O executor tinha um `defaultQueryTimeout` de 30s próprio, e
 aplicava o `bq.Timeout` do dataset SEMPRE — inclusive por cima de um contexto que
 já trazia deadline. Como o menor deadline vence, um servidor que tivesse
 resolvido cinco minutos contra `query.maxTimeout` veria o prazo cortado de volta
@@ -1152,7 +1152,7 @@ denuncia, só que na chave mais cara do arquivo.
 anônimas também no plano PRINCIPAL, não só no loopback.** Isso vale na
 célula 3 da matriz (bind exposto, `enabled: false` explícito) e, do mesmo
 jeito, na config DEFAULT (bind loopback, `server.authentication` nem
-declarado): `AutenticacaoHabilitada()` falsa faz `comAutenticacao`
+declarado): `AuthenticationEnabled()` falsa faz `comAutenticacao`
 (`internal/server/auth.go`) devolver o mux CRU como passthrough
 puro, sem checar papel nenhum — `POST /v1/compact` e `POST /v1/checkpoint`
 respondem sem credencial no MESMO listener que serve `/v1/query`. É

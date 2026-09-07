@@ -126,7 +126,7 @@ func TestPlanoInvalido(t *testing.T) {
 			return bq
 		}, planner.FullScan(), st, "campo nulo"},
 		// Prazo ausente é BUG do binder, e tem de sair aqui: o executor deixou
-		// de ter um timeoutPadrao próprio, que era uma segunda fonte da verdade
+		// de ter um defaultQueryTimeout próprio, que era uma segunda fonte da verdade
 		// capaz de vencer em silêncio o `query.maxTimeout` configurado.
 		{"query ligada sem prazo", func() *binder.BoundQuery {
 			bq := bqBase(t, c)

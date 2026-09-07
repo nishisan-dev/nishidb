@@ -61,7 +61,7 @@ func TestServidorAbreODatasetComOsCamposDeHashDeclarados(t *testing.T) {
 		t.Fatalf("Fecha: %v", err)
 	}
 
-	dir := cfg.CaminhoDoDataset("d")
+	dir := cfg.DatasetRootDir("d")
 	dataDir := filepath.Join(dir, "data")
 
 	// O que o SERVIDOR deixou em disco, lido ANTES de qualquer reabertura: a

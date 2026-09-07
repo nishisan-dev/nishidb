@@ -114,7 +114,7 @@ func runIngest(args []string, amb Ambiente) int {
 				"O consumo de memória vai acompanhar o tamanho do dataset.")
 	}
 
-	cfg, err := nishiconfig.CarregaConfig(*argConfig)
+	cfg, err := nishiconfig.Load(*argConfig)
 	if err != nil {
 		fmt.Fprintln(amb.Stderr, "ingest:", err)
 		return ExitUso
@@ -250,7 +250,7 @@ func runIngest(args []string, amb Ambiente) int {
 			}
 		}
 
-		if precisaCheckpoint(*everyN, resumo.lidos, ultimoCP, cfg.IntervaloDeCheckpoint()) {
+		if precisaCheckpoint(*everyN, resumo.lidos, ultimoCP, cfg.CheckpointInterval()) {
 			if err := checkpointDoPar(st, hist); err != nil {
 				fmt.Fprintln(amb.Stderr, "ingest: checkpoint:", err)
 				return encerra(codigoDoErro(err))

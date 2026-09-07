@@ -146,7 +146,7 @@ func TestLoopbackComAutenticacaoETLSSobeSemAviso(t *testing.T) {
 
 // A escolha atual para `authentication: {}` (seção PRESENTE, mas `enabled`
 // omitido dentro dela): trata como "declarada" (a seção apareceu) e
-// "desligada" (Enabled fica nil, que AutenticacaoHabilitada() lê como
+// "desligada" (Enabled fica nil, que AuthenticationEnabled() lê como
 // false) — a mesma célula de `enabled: false` EXPLÍCITO, não a de seção
 // ausente. Este teste existe para TRAVAR essa decisão: se algum dia alguém
 // decidir que `authentication: {}` deveria pedir decisão explícita como a

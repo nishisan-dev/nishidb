@@ -266,7 +266,7 @@ func codigoDoErro(err error) int {
 // FieldIDs nascem do dicionário, que vive dentro do Store — exigir IDs aqui
 // obrigaria a abrir sem índice, compilar, fechar e reabrir.
 func abreDataset(cfg *nishiconfig.Config, nome string) (*storage.Store, *schema.Compiled, *schema.DatasetSpec, error) {
-	spec, err := schema.Load(cfg.SpecDoDataset(nome), cfg.DefaultsDeQuery())
+	spec, err := schema.Load(cfg.DatasetSpecPath(nome), cfg.QueryDefaults())
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("dataset %q: %w", nome, err)
 	}
@@ -282,7 +282,7 @@ func abreDataset(cfg *nishiconfig.Config, nome string) (*storage.Store, *schema.
 	// o vetor parado enquanto o Put anda.
 	comp := counters.NovoCompilador(spec)
 	st, err := storage.Open(storage.Options{
-		Dir:                    cfg.DirDoDataset(nome),
+		Dir:                    cfg.DatasetDir(nome),
 		SegmentSize:            cfg.SegmentSize(),
 		CamposIndexadosPorNome: indexados,
 		ColunasDerivadas:       spec.DerivedColumnNames(),
@@ -326,7 +326,7 @@ func abreHistorico(cfg *nishiconfig.Config, spec *schema.DatasetSpec, base *sche
 		return nil, nil, fmt.Errorf("dataset %q: %w", spec.Name, err)
 	}
 	st, err := storage.Open(storage.Options{
-		Dir:                    cfg.DirDoDataset(irma.Name),
+		Dir:                    cfg.DatasetDir(irma.Name),
 		Dataset:                irma.Name,
 		SegmentSize:            segmento,
 		Modo:                   storage.ModoHistorico,
@@ -385,7 +385,7 @@ func fechandoStore(st *storage.Store, causa error) error {
 // tabela IRMÃ: ela não tem YAML próprio nem fonte própria, e é isso que faz o
 // `_meta.kafka` não ser registrado sobre ela — a ingestão dela é a do base.
 func abreParaConsulta(cfg *nishiconfig.Config, nome string) (*storage.Store, *schema.Compiled, *schema.DatasetSpec, func(), error) {
-	if arquivoExiste(cfg.SpecDoDataset(nome)) {
+	if arquivoExiste(cfg.DatasetSpecPath(nome)) {
 		st, compilado, spec, err := abreDataset(cfg, nome)
 		if err != nil {
 			return nil, nil, nil, nil, err
@@ -420,12 +420,12 @@ func abreParaConsulta(cfg *nishiconfig.Config, nome string) (*storage.Store, *sc
 // para inverter o nome sem saber qual sufixo cada dataset escolheu. São alguns
 // arquivos YAML lidos uma vez, no caminho de um comando interativo.
 func datasetQueDerivaAIrma(cfg *nishiconfig.Config, nome string) (string, error) {
-	nomes, err := cfg.ListaDatasets()
+	nomes, err := cfg.ListDatasets()
 	if err != nil {
 		return "", err
 	}
 	for _, candidato := range nomes {
-		spec, err := schema.Load(cfg.SpecDoDataset(candidato), cfg.DefaultsDeQuery())
+		spec, err := schema.Load(cfg.DatasetSpecPath(candidato), cfg.QueryDefaults())
 		if err != nil {
 			// Um YAML quebrado no diretório não pode impedir a consulta a
 			// OUTRO dataset: ele já será recusado quando alguém o pedir.
@@ -436,7 +436,7 @@ func datasetQueDerivaAIrma(cfg *nishiconfig.Config, nome string) (string, error)
 		}
 	}
 	return "", fmt.Errorf("dataset %q: não há %s nem nenhum dataset cujo bloco `history` derive esse nome",
-		nome, cfg.SpecDoDataset(nome))
+		nome, cfg.DatasetSpecPath(nome))
 }
 
 func arquivoExiste(caminho string) bool {

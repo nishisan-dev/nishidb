@@ -109,7 +109,7 @@ func (a *ambiente) escreveDataset(nome, yml string) {
 
 func (a *ambiente) carrega() *config.Config {
 	a.t.Helper()
-	c, err := config.CarregaConfig(a.cfgPath)
+	c, err := config.Load(a.cfgPath)
 	if err != nil {
 		a.t.Fatal(err)
 	}

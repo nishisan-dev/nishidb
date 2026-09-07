@@ -78,7 +78,7 @@ type Config struct {
 	// aprovasse a rodada sem compaction não estaria medindo compaction.
 	//
 	// Fora da faixa aberta (0, 1) o Store não teria política nenhuma para
-	// aplicar — é a mesma faixa que o config.razaoDeLiveness impõe ao YAML, e
+	// aplicar — é a mesma faixa que o config.livenessRatio impõe ao YAML, e
 	// aqui ela é validada pelo mesmo motivo: ratio >= 1 elege todo segmento e
 	// reescreve o dataset em laço.
 	CompactionRatio float64

@@ -64,7 +64,7 @@ Regras de validação (em `internal/schema/history.go`, novo):
   schema base. Tipo, `format`, `merge` e `frozenFrom` são recusados ali — o
   histórico espelha, não redefine.
 - O nome derivado não pode colidir com um dataset declarado em
-  `datasets.directory`. Conferido na subida, junto de `ValidaUnicidadeDeGroup`
+  `datasets.directory`. Conferido na subida, junto de `ValidateGroupUniqueness`
   (`internal/config/config.go:669`).
 - Se `rawPayload: true`, o schema base não pode ter campo chamado `_raw`.
 

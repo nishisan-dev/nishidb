@@ -153,7 +153,7 @@ type Servidor struct {
 	// credenciais é o cache imutável de server.authentication.users já
 	// resolvido contra o ambiente (§74-77, resolveCredenciais em
 	// security.go): username -> digest SHA-256 da senha + papel. Nil quando
-	// AutenticacaoHabilitada() é false — é o que comAutenticacao
+	// AuthenticationEnabled() é false — é o que comAutenticacao
 	// (auth.go) lê para decidir entre o middleware de verdade e o
 	// passthrough puro.
 	credenciais map[string]credencial
@@ -225,11 +225,11 @@ func Novo(cfg *config.Config, o Opcoes) (*Servidor, error) {
 	// dentro do próprio conserto, o defeito que a issue #1 denuncia: o
 	// operador escreve `enabled: false`, o servidor sobe assim mesmo, e a
 	// configuração mente.
-	if !cfg.ServidorHabilitado() {
+	if !cfg.ServerEnabled() {
 		return nil, fmt.Errorf("server.enabled é false em %s: o servidor não sobe com a chave desligada", cfg.Datasets.Directory)
 	}
 
-	nomes, err := cfg.ListaDatasets()
+	nomes, err := cfg.ListDatasets()
 	if err != nil {
 		return nil, err
 	}
@@ -242,7 +242,7 @@ func Novo(cfg *config.Config, o Opcoes) (*Servidor, error) {
 	// descoberta depois de meio processo já estar de pé.
 	specs := make(map[string]*schema.DatasetSpec, len(nomes))
 	for _, nome := range nomes {
-		spec, err := schema.Load(cfg.SpecDoDataset(nome), cfg.DefaultsDeQuery())
+		spec, err := schema.Load(cfg.DatasetSpecPath(nome), cfg.QueryDefaults())
 		if err != nil {
 			return nil, err
 		}
@@ -251,7 +251,7 @@ func Novo(cfg *config.Config, o Opcoes) (*Servidor, error) {
 		}
 		specs[nome] = spec
 	}
-	if err := config.ValidaUnicidadeDeGroup(specs); err != nil {
+	if err := config.ValidateGroupUniqueness(specs); err != nil {
 		return nil, err
 	}
 	if err := validaNomesDeHistorico(specs); err != nil {
@@ -288,12 +288,12 @@ func Novo(cfg *config.Config, o Opcoes) (*Servidor, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, chave := range cfg.ChavesDeRuntimeIgnoradas() {
+	for _, chave := range cfg.IgnoredRuntimeKeys() {
 		log.Warn("config.sem_efeito",
 			"a chave é aceita e NÃO tem implementação nesta versão; não dimensione a máquina por ela",
 			"chave", chave)
 	}
-	for _, chave := range cfg.ChavesDeStorageIgnoradas() {
+	for _, chave := range cfg.IgnoredStorageKeys() {
 		log.Warn("config.sem_efeito",
 			"a chave é aceita e NÃO tem implementação nesta versão; a janela real de durabilidade é storage.checkpoint.interval",
 			"chave", chave)
@@ -321,8 +321,8 @@ func Novo(cfg *config.Config, o Opcoes) (*Servidor, error) {
 	// Os DOIS listeners (principal e loopback, quando ligado) bindam aqui,
 	// pela mesma razão — a falha do segundo não pode deixar o primeiro
 	// vazado, por isso o defer de limpeza abaixo cobre os dois.
-	if s.ln, err = net.Listen("tcp", cfg.Endereco()); err != nil {
-		return nil, fmt.Errorf("server: escutar em %s: %w", cfg.Endereco(), err)
+	if s.ln, err = net.Listen("tcp", cfg.Addr()); err != nil {
+		return nil, fmt.Errorf("server: escutar em %s: %w", cfg.Addr(), err)
 	}
 	ok := false
 	defer func() {
@@ -375,7 +375,7 @@ func Novo(cfg *config.Config, o Opcoes) (*Servidor, error) {
 }
 
 func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*dataset, error) {
-	dir := s.cfg.CaminhoDoDataset(spec.Name)
+	dir := s.cfg.DatasetRootDir(spec.Name)
 	indexados := schema.IndexedFieldNames(spec)
 	// O schema é compilado DENTRO do Open, pelo callback dos contadores: as
 	// definições precisam do schema, e o replay da recovery precisa das
@@ -525,7 +525,7 @@ func (s *Servidor) Roda(ctx context.Context, pprofAddr string) error {
 		s.sobePprof(pprofAddr)
 	}
 	s.log.Info("query.pronta", "consultas disponíveis",
-		"datasets", len(s.datasets), "endereco", s.cfg.Endereco(), "versao", buildinfo.String())
+		"datasets", len(s.datasets), "endereco", s.cfg.Addr(), "versao", buildinfo.String())
 	s.ligaCompaction(ctx)
 	s.ligaExpiracao(ctx)
 	s.ligaAposentadoriaDeGrupos(ctx)
@@ -600,7 +600,7 @@ func (s *Servidor) rodaIngestao(ctx context.Context, d *dataset) {
 		Metrics: s.reg,
 		Cadencia: kafka.Cadencia{
 			Eventos:   checkpointEventosPadrao,
-			Intervalo: s.cfg.IntervaloDeCheckpoint(),
+			Intervalo: s.cfg.CheckpointInterval(),
 		},
 	}
 
@@ -762,7 +762,7 @@ func (s *Servidor) ligaAposentadoriaDeGrupos(ctx context.Context) {
 }
 
 func (s *Servidor) ligaExpiracao(ctx context.Context) {
-	maxPorPassada, tempoPorPassada := s.cfg.Expiracao()
+	maxPorPassada, tempoPorPassada := s.cfg.Expiry()
 	var comExpiracao []string
 	for _, d := range s.datasets {
 		if !d.st.TemExpiracao() {
