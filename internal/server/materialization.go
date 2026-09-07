@@ -58,44 +58,44 @@ func duracaoDaRegra(r schema.RegraTTL) string {
 // Saem pela MESMA leitura do snapshot que alimenta o /v1/stats, e não de uma
 // cópia própria: dois contadores para o mesmo fato divergem no dia em que um
 // caminho de erro esquece de somar, e em produção alguém lê o errado.
-func amostrasDeMaterializacao(dataset string, spec *schema.DatasetSpec, snap materializer.MetricsSnapshot) []metrics.Amostra {
-	rotulo := []metrics.Label{{Nome: metrics.LabelDataset, Valor: dataset}}
-	out := []metrics.Amostra{
+func amostrasDeMaterializacao(dataset string, spec *schema.DatasetSpec, snap materializer.MetricsSnapshot) []metrics.Sample {
+	rotulo := []metrics.Label{{Name: metrics.LabelDataset, Value: dataset}}
+	out := []metrics.Sample{
 		{
-			Familia: metrics.MetFrozenCaptured, Nome: metrics.MetFrozenCaptured,
-			Ajuda:  "valores capturados por coluna congelada na ingestão; sem preservação correspondente, a coluna nunca chegou a congelar",
-			Tipo:   metrics.TipoContador,
-			Labels: rotulo, Valor: float64(snap.CongeladasCapturadas),
+			Family: metrics.MetFrozenCaptured, Name: metrics.MetFrozenCaptured,
+			Help:   "valores capturados por coluna congelada na ingestão; sem preservação correspondente, a coluna nunca chegou a congelar",
+			Type:   metrics.TypeCounter,
+			Labels: rotulo, Value: float64(snap.CongeladasCapturadas),
 		},
 		{
-			Familia: metrics.MetFrozenPreserved, Nome: metrics.MetFrozenPreserved,
-			Ajuda:  "valores que o merge preservou por serem de coluna congelada",
-			Tipo:   metrics.TipoContador,
-			Labels: rotulo, Valor: float64(snap.CongeladasPreservadas),
+			Family: metrics.MetFrozenPreserved, Name: metrics.MetFrozenPreserved,
+			Help:   "valores que o merge preservou por serem de coluna congelada",
+			Type:   metrics.TypeCounter,
+			Labels: rotulo, Value: float64(snap.CongeladasPreservadas),
 		},
 		{
-			Familia: metrics.MetMergeSum, Nome: metrics.MetMergeSum,
-			Ajuda:  "somas feitas pelo merge em coluna com merge: sum",
-			Tipo:   metrics.TipoContador,
-			Labels: rotulo, Valor: float64(snap.Acumuladas),
+			Family: metrics.MetMergeSum, Name: metrics.MetMergeSum,
+			Help:   "somas feitas pelo merge em coluna com merge: sum",
+			Type:   metrics.TypeCounter,
+			Labels: rotulo, Value: float64(snap.Acumuladas),
 		},
 		{
-			Familia: metrics.MetMergeSumSaturated, Nome: metrics.MetMergeSumSaturated,
-			Ajuda:  "somas que bateram no teto do int64 e pararam ali; a partir da primeira, o valor da coluna deixa de crescer",
-			Tipo:   metrics.TipoContador,
-			Labels: rotulo, Valor: float64(snap.Saturadas),
+			Family: metrics.MetMergeSumSaturated, Name: metrics.MetMergeSumSaturated,
+			Help:   "somas que bateram no teto do int64 e pararam ali; a partir da primeira, o valor da coluna deixa de crescer",
+			Type:   metrics.TypeCounter,
+			Labels: rotulo, Value: float64(snap.Saturadas),
 		},
 		{
-			Familia: metrics.MetIngestDecodeSerial, Nome: metrics.MetIngestDecodeSerial,
-			Ajuda:  "eventos que o writer decodificou de novo, sozinho, porque o decode paralelo é somente-leitura e encontrou coluna a criar ou tipo a fixar; em regime é plana",
-			Tipo:   metrics.TipoContador,
-			Labels: rotulo, Valor: float64(snap.DecodeSerialTotal),
+			Family: metrics.MetIngestDecodeSerial, Name: metrics.MetIngestDecodeSerial,
+			Help:   "eventos que o writer decodificou de novo, sozinho, porque o decode paralelo é somente-leitura e encontrou coluna a criar ou tipo a fixar; em regime é plana",
+			Type:   metrics.TypeCounter,
+			Labels: rotulo, Value: float64(snap.DecodeSerialTotal),
 		},
 		{
-			Familia: metrics.MetTTLUnmatched, Nome: metrics.MetTTLUnmatched,
-			Ajuda:  "escritas que não casaram com regra de ttl nenhuma; só acontece em dataset sem regra de fundo",
-			Tipo:   metrics.TipoContador,
-			Labels: rotulo, Valor: float64(snap.SemRegra),
+			Family: metrics.MetTTLUnmatched, Name: metrics.MetTTLUnmatched,
+			Help:   "escritas que não casaram com regra de ttl nenhuma; só acontece em dataset sem regra de fundo",
+			Type:   metrics.TypeCounter,
+			Labels: rotulo, Value: float64(snap.SemRegra),
 		},
 	}
 	for i := range spec.Materialization.RegrasTTL {
@@ -103,12 +103,12 @@ func amostrasDeMaterializacao(dataset string, spec *schema.DatasetSpec, snap mat
 		if i < len(snap.RegrasCasadas) {
 			casou = snap.RegrasCasadas[i]
 		}
-		out = append(out, metrics.Amostra{
-			Familia: metrics.MetTTLRuleMatched, Nome: metrics.MetTTLRuleMatched,
-			Ajuda:  "escritas decididas por cada regra de ttl; o rótulo é o ÍNDICE no YAML, porque é a ordem que decide qual vence",
-			Tipo:   metrics.TipoContador,
-			Labels: append([]metrics.Label{{Nome: "rule", Valor: strconv.Itoa(i)}}, rotulo...),
-			Valor:  float64(casou),
+		out = append(out, metrics.Sample{
+			Family: metrics.MetTTLRuleMatched, Name: metrics.MetTTLRuleMatched,
+			Help:   "escritas decididas por cada regra de ttl; o rótulo é o ÍNDICE no YAML, porque é a ordem que decide qual vence",
+			Type:   metrics.TypeCounter,
+			Labels: append([]metrics.Label{{Name: "rule", Value: strconv.Itoa(i)}}, rotulo...),
+			Value:  float64(casou),
 		})
 	}
 	return out

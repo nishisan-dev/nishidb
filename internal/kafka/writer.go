@@ -303,7 +303,7 @@ func (w *Writer) aplica(ctx context.Context, s *slot) error {
 	// número responde é "o writer é o gargalo?", e o writer é o Aplica.
 	inicio := time.Now()
 	r := w.mat.Aplica(&s.dec)
-	w.met.aplicaSeg.Observa(time.Since(inicio).Seconds())
+	w.met.aplicaSeg.Observe(time.Since(inicio).Seconds())
 	w.conta(r)
 
 	switch {

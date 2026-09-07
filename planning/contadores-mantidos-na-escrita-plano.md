@@ -171,7 +171,7 @@ por mensagem) foi refutada na proposta porque Kafka entrega pelo menos uma vez e
 - Ordem de locks `recPassadaMu → retPassadaMu → vida → wmu → aposMu`; `snapMu`,
   `selMu` e o lock do dicionário de grupos são FOLHA. Nada tomado sob folha toma
   `wmu`.
-- Métricas: nomes só por constantes de `internal/metrics/names.go`; `Familia` e
+- Métricas: nomes só por constantes de `internal/metrics/names.go`; `Family` e
   `Nome` por constante; label nunca vem de entrada do cliente; série que alarma
   nasce com zero.
 - Gates que continuam verdes sem edição: `TestCitacoesDeSecaoResolvem`,
@@ -902,7 +902,7 @@ montado em `buf[:0]` com `encoding.AppendField` em ordem de FieldID;
 ### Tarefa F1: métricas e `/v1/stats`
 
 **Arquivos:**
-- Modificar: `internal/metrics/names.go` (bloco "Contadores mantidos na escrita", com a razão de cada série; `LabelCounter = "counter"` com a nota "valor vem do YAML, conjunto fechado — nunca do cliente"), `internal/server/metrics_dataset.go` (`amostrasDeContadores(d) []metrics.Amostra` lendo `d.st.EstatisticasDeContadores()` UMA vez), `internal/protocol/documents.go` (`DatasetStats.Counters []ContadorStats`), `internal/server/documents.go` (mesma chamada)
+- Modificar: `internal/metrics/names.go` (bloco "Contadores mantidos na escrita", com a razão de cada série; `LabelCounter = "counter"` com a nota "valor vem do YAML, conjunto fechado — nunca do cliente"), `internal/server/metrics_dataset.go` (`amostrasDeContadores(d) []metrics.Sample` lendo `d.st.EstatisticasDeContadores()` UMA vez), `internal/protocol/documents.go` (`DatasetStats.Counters []ContadorStats`), `internal/server/documents.go` (mesma chamada)
 - Testar: `internal/server/metrics_dataset_test.go`, `internal/gates` continua verde
 
 Séries (todas por `dataset`,`counter`, nascem com zero na subida via coletor que

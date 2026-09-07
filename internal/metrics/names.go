@@ -241,7 +241,7 @@ const (
 	// admissão: o número que interessa CRESCE SOZINHO enquanto nada acontece, e
 	// um medidor escrito só quando uma consulta começa ou termina ficaria
 	// congelado exatamente no estado que ele existe para denunciar — o servidor
-	// parado numa varredura que não acaba. Com o §92 sozinho, esse estado é
+	// parado numa varredura que não acaba. With o §92 sozinho, esse estado é
 	// indistinguível de "3 consultas ativas, tudo bem".
 	//
 	// MetQueryLongRejectedTotal conta as recusas do SUB-POOL, separado de
@@ -279,7 +279,7 @@ const (
 	MetQuerySnapshotBytes         = "nishidb_query_snapshot_bytes"
 	MetQuerySnapshotOldestSeconds = "nishidb_query_snapshot_oldest_seconds"
 	MetQuerySnapshotExpiredTotal  = "nishidb_query_snapshot_expired_total"
-	MetCompactionSegmentosPinados = "nishidb_compaction_segmentos_pinados"
+	MetCompactionPinnedSegments   = "nishidb_compaction_segmentos_pinados"
 
 	// MetQueryBufferBytes e MetQueryBudgetRejectedTotal são do orçamento de
 	// memória de consulta (§80: runtime.memoryTarget e
@@ -329,16 +329,16 @@ const (
 // diferentes. Este parágrafo é o ponteiro que impede a decisão de virar
 // armadilha para quem procurar a janela nesta família.
 const (
-	// MetIndexSegmentos classifica os segmentos do dataset pelo rótulo
-	// LabelEstado, e os quatro valores PARTICIONAM o dataset.
+	// MetIndexSegments classifica os segmentos do dataset pelo rótulo
+	// LabelState, e os quatro valores PARTICIONAM o dataset.
 	//
 	// Os quatro, e não três, por causa de duas ausências de significado oposto:
-	// EstadoFora é o segmento que a janela deixou de cobrir — deliberadamente sem
-	// índice, e num dataset grande a maioria esmagadora —, enquanto EstadoPendente
+	// StateOutside é o segmento que a janela deixou de cobrir — deliberadamente sem
+	// índice, e num dataset grande a maioria esmagadora —, enquanto StatePending
 	// é o segmento dentro da janela ainda na fila. Conflá-los num "ausente" daria
 	// um número enorme, normal e mudo, e o gauge deixaria de responder "o laço
 	// está avançando?", que é a única pergunta que uma migração faz.
-	MetIndexSegmentos = "nishidb_index_segmentos"
+	MetIndexSegments = "nishidb_index_segmentos"
 	// MetIndexBytes são os BLOCOS do índice por segmento: os .sidx selados, os
 	// temporários e os .widx do corrente.
 	//
@@ -359,11 +359,11 @@ const (
 	// o base não indexa nada, e um número sem relação nenhuma com o total quando
 	// indexa. A comparação certa é entre rótulos diferentes.
 	MetIndexBytes = "nishidb_index_bytes"
-	// MetIndexReconstrucoesTotal conta os segmentos cujo índice a reconstrução
+	// MetIndexRebuildsTotal conta os segmentos cujo índice a reconstrução
 	// publicou desde a abertura do dataset. É a taxa que diz se a fila está
-	// drenando; a fila em si é MetIndexSegmentos{estado="pendente"}.
-	MetIndexReconstrucoesTotal = "nishidb_index_reconstrucoes_total"
-	// MetIndexReconstrucaoAtiva é o 0/1 do laço da §2.4, no molde de
+	// drenando; a fila em si é MetIndexSegments{estado="pendente"}.
+	MetIndexRebuildsTotal = "nishidb_index_reconstrucoes_total"
+	// MetIndexRebuildActive é o 0/1 do laço da §2.4, no molde de
 	// MetCompactionRunning e MetHistoryRetentionRunning — e pelo mesmo motivo: ele
 	// para de vez na primeira falha, e sem esta série isso é indistinguível de
 	// "não há o que reconstruir".
@@ -373,8 +373,8 @@ const (
 	// chamada e o primeiro escalonamento não pode responder que nada subiu. Por
 	// isso ela NASCE EM 1 num dataset com campo indexado — o valor verdadeiro na
 	// subida — e não em zero como os contadores ao lado.
-	MetIndexReconstrucaoAtiva = "nishidb_index_reconstrucao_ativa"
-	// MetIndexCrcFalhasTotal conta os .sidx reprovados no crc32c, e é DEGRAU — não
+	MetIndexRebuildActive = "nishidb_index_reconstrucao_ativa"
+	// MetIndexCRCFailuresTotal conta os .sidx reprovados no crc32c, e é DEGRAU — não
 	// taxa.
 	//
 	// Ela sobe uma vez por ABERTURA do arquivo, e o garanteSelado publica no cache
@@ -388,20 +388,20 @@ const (
 	// descuido. São dois fatos, os dois medidos em
 	// TestOGaugeDeEstadosEhCegoAIndicePodre:
 	//
-	//   - MetIndexSegmentos é CEGO à corrupção. Os quatro estados saem idênticos
+	//   - MetIndexSegments é CEGO à corrupção. Os quatro estados saem idênticos
 	//     entre um dataset saudável e um com dois .sidx podres, porque o arquivo
 	//     reprovado continua contado como `selado`: a fila é derivada da tabela de
 	//     seções e ela não confere crc (débito 103). É justamente o gauge que a
 	//     migração acompanha;
-	//   - MetIndexSegmentosConsultadosTotal{modo="enumeracao"} SOBE, mas sem
+	//   - MetIndexSegmentsLookedUpTotal{modo="enumeracao"} SOBE, mas sem
 	//     atribuir causa: o incremento é o mesmo que um segmento fora da janela ou
 	//     na fila produz, no mesmo balde e sem rótulo que os separe.
 	//
 	// O sinal disponível é o WARN indice.selado_corrompido no log. Esta série
 	// responde "quantos arquivos já foram pegos desde a subida", que é gatilho de
 	// investigar, não de acompanhar.
-	MetIndexCrcFalhasTotal = "nishidb_index_crc_falhas_total"
-	// MetIndexSegmentosConsultadosTotal conta, pelo rótulo LabelModo, quantos
+	MetIndexCRCFailuresTotal = "nishidb_index_crc_falhas_total"
+	// MetIndexSegmentsLookedUpTotal conta, pelo rótulo LabelMode, quantos
 	// segmentos cada Lookup resolveu por índice e quantos por enumeração (§3.4).
 	//
 	// É o ÚNICO observável da degradação: a fonte de enumeração é apenas mais um
@@ -409,7 +409,7 @@ const (
 	// têm como distingui-la. Sem esta série, um dataset inteiro respondendo por
 	// enumeração é indistinguível de um dataset inteiro indexado — a mesma
 	// resposta, com outro custo.
-	MetIndexSegmentosConsultadosTotal = "nishidb_index_segmentos_consultados_total"
+	MetIndexSegmentsLookedUpTotal = "nishidb_index_segmentos_consultados_total"
 )
 
 // Os rótulos das séries de índice, e os CONJUNTOS FECHADOS de valores que cada
@@ -421,25 +421,25 @@ const (
 // escrita uma vez e é o teste que a compara com o que sai na porta — um valor
 // novo que aparecesse no scrape sem passar por aqui reprova.
 const (
-	LabelEstado = "estado"
-	LabelModo   = "modo"
+	LabelState = "estado"
+	LabelMode  = "modo"
 )
 
-// Os quatro estados de MetIndexSegmentos. Ver o godoc da série.
+// Os quatro estados de MetIndexSegments. Ver o godoc da série.
 const (
-	EstadoSelado   = "selado"
-	EstadoCorrente = "corrente"
-	EstadoPendente = "pendente"
-	EstadoFora     = "fora"
+	StateSealed  = "selado"
+	StateCurrent = "corrente"
+	StatePending = "pendente"
+	StateOutside = "fora"
 )
 
-// Os dois modos de MetIndexSegmentosConsultadosTotal.
+// Os dois modos de MetIndexSegmentsLookedUpTotal.
 const (
-	ModoIndice     = "indice"
-	ModoEnumeracao = "enumeracao"
+	ModeIndex       = "indice"
+	ModeEnumeration = "enumeracao"
 )
 
-// EstadosDeIndice é a enumeração fechada de LabelEstado, na ordem em que as
+// IndexStates é a enumeração fechada de LabelState, na ordem em que as
 // séries são emitidas.
 //
 // Ela existe como FATIA, e não só como quatro constantes, porque tem dois
@@ -447,10 +447,10 @@ const (
 // sempre — inclusive as zeradas, senão `rate()` mente até o primeiro segmento
 // mudar de estado —, e o teste, que confere que o scrape não traz um quinto
 // valor. Duas listas escritas à mão divergiriam na primeira adição.
-var EstadosDeIndice = []string{EstadoSelado, EstadoCorrente, EstadoPendente, EstadoFora}
+var IndexStates = []string{StateSealed, StateCurrent, StatePending, StateOutside}
 
-// ModosDeConsultaDeIndice é a enumeração fechada de LabelModo, pela mesma razão.
-var ModosDeConsultaDeIndice = []string{ModoIndice, ModoEnumeracao}
+// IndexLookupModes é a enumeração fechada de LabelMode, pela mesma razão.
+var IndexLookupModes = []string{ModeIndex, ModeEnumeration}
 
 // Séries INVENTADAS no M2, com o defeito que cada uma corrige.
 const (
@@ -472,15 +472,15 @@ const (
 	MetKafkaErrorsTotal = "nishidb_kafka_errors_total"
 
 	// MetKafkaWatchdogTrips conta as vezes que o watchdog recriou o
-	// consumidor por falta de progresso, e MetKafkaWatchdogDesistiu marca 1
+	// consumidor por falta de progresso, e MetKafkaWatchdogGaveUp marca 1
 	// quando ele esgotou as tentativas.
 	//
 	// Duas séries e não uma: recriar é recuperação — o produto se consertou e
 	// seguiu —, enquanto desistir é ingestão morta com consultas de pé. Somar
 	// as duas faria um alarme disparar igual nos dois casos, e só um deles
 	// pede alguém acordado.
-	MetKafkaWatchdogTrips    = "nishidb_kafka_watchdog_trips_total"
-	MetKafkaWatchdogDesistiu = "nishidb_kafka_watchdog_desistiu"
+	MetKafkaWatchdogTrips  = "nishidb_kafka_watchdog_trips_total"
+	MetKafkaWatchdogGaveUp = "nishidb_kafka_watchdog_desistiu"
 
 	// MetKafkaQueueDepth e MetKafkaQueueBytes expõem os dois gates da fila
 	// limitada. O §79 exige "Kafka buffers" entre os itens de memória, e
@@ -529,7 +529,7 @@ const (
 	// MetKafkaDecodeIdleSeconds é a espera SOMADA dos decodificadores pela
 	// fila, e ela existe porque a ociosidade do WRITER mudou de dono.
 	//
-	// Até a Fase 4 o writer consumia a fila, e a espera dele era a da fila. Com
+	// Até a Fase 4 o writer consumia a fila, e a espera dele era a da fila. With
 	// os decodificadores no meio, quem espera ali são eles — e são K. Publicar
 	// aquele número como `writer_idle` mentiria por um FATOR: com oito
 	// decodificadores parados o acumulado sobe oito segundos por segundo, e a
@@ -595,17 +595,17 @@ const (
 )
 
 // Nomes de label do produto. Um label a mais multiplica séries por
-// cardinalidade, e cada um aqui existe por uma razão registrada: LabelCategoria
+// cardinalidade, e cada um aqui existe por uma razão registrada: LabelCategory
 // separa nishidb_query_errors por categoria de falha de consulta;
-// LabelMotivo (Task A5, issue #15) separa nishidb_ingest_invalid_total pela
+// LabelInvalidReason (Task A5, issue #15) separa nishidb_ingest_invalid_total pela
 // categoria §101 do evento ruim — sem ele, EVENT_TOO_LARGE (a cauda de chave
 // que estoura MaxKeySize) ficava indistinguível das outras cinco categorias
 // dentro do mesmo total.
 const (
-	LabelDataset   = "dataset"
-	LabelPartition = "partition"
-	LabelCategoria = "categoria"
-	LabelMotivo    = "motivo"
+	LabelDataset       = "dataset"
+	LabelPartition     = "partition"
+	LabelCategory      = "categoria"
+	LabelInvalidReason = "motivo"
 	// LabelCounter é o nome do contador mantido na escrita, e o valor vem do
 	// YAML do dataset — conjunto fechado, declarado na subida —, nunca de
 	// entrada do cliente. Cardinalidade: o número de contadores declarados,
@@ -617,7 +617,7 @@ const (
 	// mesma doutrina de datasetDesconhecido
 	// (internal/server/metrics_query.go), que já recusa alimentar um label
 	// com texto de entrada do cliente por ser cardinalidade sem teto. Chamado
-	// "reason" e não "motivo" (o nome que LabelMotivo já ocupa, com outro
+	// "reason" e não "motivo" (o nome que LabelInvalidReason já ocupa, com outro
 	// propósito) porque é a grafia que o plano da Fase 11 fixa para
 	// nishidb_auth_failures_total.
 	LabelReason = "reason"

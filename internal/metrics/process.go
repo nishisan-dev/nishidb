@@ -6,7 +6,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/memprof"
 )
 
-// RegistraProcesso instala o coletor de memória do processo (§79, §92).
+// RegisterProcess instala o coletor de memória do processo (§79, §92).
 //
 // É PULL: nada é amostrado em background. Ler /proc/self/status e
 // smaps_rollup custa uma dezena de microssegundos, e fazê-lo num timer
@@ -18,22 +18,22 @@ import (
 // uma medição, ausência é a ausência de medição, e um alerta de "RSS caiu para
 // zero" é pior que nenhum dado. O heap Go continua saindo, porque esse vem do
 // runtime e é portável.
-func RegistraProcesso(r *Registry) {
-	r.Coletor(ColetorFunc(func() []Amostra {
-		out := make([]Amostra, 0, 3)
+func RegisterProcess(r *Registry) {
+	r.Register(CollectorFunc(func() []Sample {
+		out := make([]Sample, 0, 3)
 
 		var ms runtime.MemStats
 		runtime.ReadMemStats(&ms)
 		out = append(out,
-			Amostra{
-				Familia: MetGoHeapBytes, Nome: MetGoHeapBytes, Tipo: TipoMedidor,
-				Ajuda: "Bytes alocados no heap Go. NÃO inclui os índices mmap, que são a maior parte do estado.",
-				Valor: float64(ms.HeapAlloc),
+			Sample{
+				Family: MetGoHeapBytes, Name: MetGoHeapBytes, Type: TypeGauge,
+				Help:  "Bytes alocados no heap Go. NÃO inclui os índices mmap, que são a maior parte do estado.",
+				Value: float64(ms.HeapAlloc),
 			},
-			Amostra{
-				Familia: MetGoHeapObjects, Nome: MetGoHeapObjects, Tipo: TipoMedidor,
-				Ajuda: "Objetos vivos no heap Go.",
-				Valor: float64(ms.HeapObjects),
+			Sample{
+				Family: MetGoHeapObjects, Name: MetGoHeapObjects, Type: TypeGauge,
+				Help:  "Objetos vivos no heap Go.",
+				Value: float64(ms.HeapObjects),
 			},
 		)
 
@@ -41,10 +41,10 @@ func RegistraProcesso(r *Registry) {
 		if err != nil {
 			return out
 		}
-		out = append(out, Amostra{
-			Familia: MetProcessRSSBytes, Nome: MetProcessRSSBytes, Tipo: TipoMedidor,
-			Ajuda: "RSS do processo em bytes. É o número do critério de aceite do §109 — o que o sistema operacional cobra.",
-			Valor: float64(s.VmRSSBytes),
+		out = append(out, Sample{
+			Family: MetProcessRSSBytes, Name: MetProcessRSSBytes, Type: TypeGauge,
+			Help:  "RSS do processo em bytes. É o número do critério de aceite do §109 — o que o sistema operacional cobra.",
+			Value: float64(s.VmRSSBytes),
 		})
 		return out
 	}))

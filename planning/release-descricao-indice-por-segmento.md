@@ -88,7 +88,7 @@ zero e `nishidb_index_reconstrucoes_total` estabilizando.
   consulta agora colapsa numa caminhada única do `locations.idx` quando algum
   segmento está sem índice); e a reconstrução podia publicar um índice parcial
   sobre corrupção no meio de um segmento selado.
-- Métricas com `Familia` obrigatória em toda amostra (o scrape do Prometheus
+- Métricas com `Family` obrigatória em toda amostra (o scrape do Prometheus
   recusa o payload inteiro quando o cabeçalho sai vazio), com gates de
   doutrina novos: citações de spec resolvem, amostras têm família.
 - Débito 102 (RLock por carga de 64 bits) muda de dono: sai da rota do índice

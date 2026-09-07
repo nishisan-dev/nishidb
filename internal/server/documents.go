@@ -203,8 +203,8 @@ func (s *Servidor) handleStats(w http.ResponseWriter, r *http.Request) {
 				},
 			},
 			Query: protocol.RotaStats{
-				Total:  s.met.total.Com(d.nome).Valor(),
-				Active: int64(s.met.ativas.Com(d.nome).Valor()),
+				Total:  s.met.total.With(d.nome).Value(),
+				Active: int64(s.met.ativas.With(d.nome).Value()),
 			},
 			Ingestion: protocol.IngestaoStats{
 				Enabled: estado != protocol.EstadoDesligado,
@@ -265,8 +265,8 @@ func (s *Servidor) errosDoDataset(nome string) uint64 {
 	var total uint64
 	for _, a := range s.met.erros.Collect() {
 		for _, l := range a.Labels {
-			if l.Nome == metrics.LabelDataset && l.Valor == nome {
-				total += uint64(a.Valor)
+			if l.Name == metrics.LabelDataset && l.Value == nome {
+				total += uint64(a.Value)
 			}
 		}
 	}

@@ -932,8 +932,8 @@ type Store struct {
 	// Séries do §92 sobre o checkpoint. São nil quando o chamador não passou
 	// registry (CLI, testes), e todo uso é guardado — a instrumentação não
 	// pode ser condição de funcionamento do storage.
-	cpDuracao *metrics.SerieHistograma
-	cpUltimo  *metrics.SerieMedidor
+	cpDuracao *metrics.HistogramSeries
+	cpUltimo  *metrics.GaugeSeries
 
 	// srcOffsets é a posição no tópico Kafka amarrada a este checkpoint
 	// (§48, §50). WRITER-ONLY, sob wmu — mesmo regime de epoch e segTally.
@@ -1050,12 +1050,12 @@ func Open(opts Options) (*Store, error) {
 		vers:     versions.Novas(),
 	}
 	if opts.Metrics != nil {
-		s.cpDuracao = opts.Metrics.Histograma(metrics.MetCheckpointDurationSeconds,
+		s.cpDuracao = opts.Metrics.Histogram(metrics.MetCheckpointDurationSeconds,
 			"Duração do checkpoint em segundos, da chamada ao manifest durável (inclui a espera pelo mutex do writer, que é stall real).",
-			limitesDeCheckpoint, metrics.LabelDataset).Com(opts.Dataset)
-		s.cpUltimo = opts.Metrics.Medidor(metrics.MetCheckpointLastSuccessTimestmp,
+			limitesDeCheckpoint, metrics.LabelDataset).With(opts.Dataset)
+		s.cpUltimo = opts.Metrics.Gauge(metrics.MetCheckpointLastSuccessTimestmp,
 			"Unix timestamp do último checkpoint bem-sucedido. Fica em 0 até o primeiro.",
-			metrics.LabelDataset).Com(opts.Dataset)
+			metrics.LabelDataset).With(opts.Dataset)
 	}
 	ok := false
 	defer func() {

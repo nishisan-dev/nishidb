@@ -247,7 +247,7 @@ convergência que passa com o defeito presente não prova nada.
   fila lê a tabela de seções sem conferir crc, então o arquivo corrompido parece
   completo. Consequência limitada e correta (enumeração), nunca falso negativo.
 - **102** — a selagem sob `wmu` a cada rotação ainda toca a ingestão.
-- ~~`internal/kafka/metrics.go` sem `Familia`~~ — **resolvido** no commit
+- ~~`internal/kafka/metrics.go` sem `Family`~~ — **resolvido** no commit
   `dfb36b2` (autoria do usuário), com gate `TestAmostrasDeMetricaTemFamiliaENome`
   que alcança 58 de 58 literais. Registre que a afirmação "o Prometheus recusa o
   scrape inteiro" é **verdadeira**: medida contra o `textparse.PromParser` (o do

@@ -532,7 +532,7 @@ import (
 // a semântica de "primeiro valor visto", e é o que torna a feature tolerante a
 // fonte que manda evento parcial.
 //
-// A busca da origem é linear sobre as entries já montadas. Com uma ou duas
+// A busca da origem é linear sobre as entries já montadas. With uma ou duas
 // congeladas sobre algumas dezenas de entries é ruído; um dataset que declare
 // muitas e cujo bench acuse deve guardar o índice da entry durante o parsing,
 // não trocar isto por um mapa alocado por evento.
@@ -1725,7 +1725,7 @@ No laço de `ExpiraUmaPassada`, antes do `switch`:
 		// a cada passada, chamando Expira — que TOMA O wmu só para ver a flag e
 		// devolver false.
 		//
-		// Com prazo de dias isso é ruído. Com prazo de MINUTOS, que é o que as
+		// With prazo de dias isso é ruído. With prazo de MINUTOS, que é o que as
 		// regras condicionais trouxeram, é disputa contínua pelo lock de
 		// escrita com a ingestão — e o freio de MaxPorPassada não protege,
 		// porque ele conta expirações efetivas, não chamadas.

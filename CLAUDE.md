@@ -199,7 +199,7 @@ Quatro classes de defeito que nenhum compilador pega, e como este repo as fecha:
   código não estabelece. **Abra a fonte antes de afirmar.**
 - **Citação que não resolve** — `§NN` para seção inexistente. Gate:
   `TestCitacoesDeSecaoResolvem`.
-- **Amostra de métrica sem `Familia`** — `# HELP`/`# TYPE` sai com nome vazio e
+- **Amostra de métrica sem `Family`** — `# HELP`/`# TYPE` sai com nome vazio e
   o Prometheus recusa o scrape inteiro. Gate:
   `TestAmostrasDeMetricaTemFamiliaENome`, que também recusa `Nome` de outra
   família (a exceção é o sufixo de histograma).

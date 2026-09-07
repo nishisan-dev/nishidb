@@ -102,13 +102,13 @@ func TestAmostrasDeMaterializacaoPublicamAsSeries(t *testing.T) {
 
 	valores := map[string]float64{}
 	for _, a := range amostras {
-		chave := a.Nome
+		chave := a.Name
 		for _, l := range a.Labels {
-			if l.Nome == "rule" {
-				chave += "{rule=" + l.Valor + "}"
+			if l.Name == "rule" {
+				chave += "{rule=" + l.Value + "}"
 			}
 		}
-		valores[chave] = a.Valor
+		valores[chave] = a.Value
 	}
 	quer := map[string]float64{
 		metrics.MetFrozenCaptured:              7,

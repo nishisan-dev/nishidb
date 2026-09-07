@@ -11,7 +11,7 @@ import (
 // O caminho quente do writer não aloca ao publicar a posição.
 //
 // avanca roda uma vez POR EVENTO DECIDIDO — ~500/s no piloto, 24/7 — e antes
-// chamava famOffset.Com(dataset, strconv.Itoa(p)). O Com monta a chave da
+// chamava famOffset.With(dataset, strconv.Itoa(p)). O Com monta a chave da
 // série com strings.Join(valores, "\xff"), que é uma string nova a cada
 // chamada, mais o slice variádico do variádico. Era alocação permanente no hot
 // path de um projeto cuja doutrina é zero alocação ali, e nenhum gate a

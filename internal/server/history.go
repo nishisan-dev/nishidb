@@ -300,13 +300,13 @@ func historicoStats(base *dataset) *protocol.HistoricoStats {
 // nishidb_history_index_bytes viaja no TEXTO — é ali que se diz que a purga
 // devolve estes bytes desde que o índice passou a ser por segmento —, e uma
 // ajuda que nunca é emitida é prosa que ninguém lê.
-func amostrasDeHistorico(base *dataset) []metrics.Amostra {
+func amostrasDeHistorico(base *dataset) []metrics.Sample {
 	if base.irma == nil || base.spec.Historico == nil {
 		return nil
 	}
 	snap := base.mat.Metrics()
 	e := base.irma.st.EstatisticasDeRetencao()
-	rotulo := []metrics.Label{{Nome: metrics.LabelDataset, Valor: base.nome}}
+	rotulo := []metrics.Label{{Name: metrics.LabelDataset, Value: base.nome}}
 	// O formato de exposição só tem número, e Go não converte bool para
 	// float: os 0/1 se escrevem aqui, uma vez, em vez de dentro do literal.
 	var degradado, rodando float64
@@ -316,27 +316,27 @@ func amostrasDeHistorico(base *dataset) []metrics.Amostra {
 	if base.irma.st.RetencaoAtiva() {
 		rodando = 1
 	}
-	return []metrics.Amostra{
-		{Familia: metrics.MetHistoryRows, Nome: metrics.MetHistoryRows, Tipo: metrics.TipoContador, Valor: float64(snap.HistoricoLinhas),
-			Ajuda: "Linhas gravadas na tabela histórica.", Labels: rotulo},
-		{Familia: metrics.MetHistoryDropped, Nome: metrics.MetHistoryDropped, Tipo: metrics.TipoContador, Valor: float64(snap.HistoricoDescartadas),
-			Ajuda: "Eventos que não viraram linha na tabela histórica.", Labels: rotulo},
-		{Familia: metrics.MetHistoryDegraded, Nome: metrics.MetHistoryDegraded, Tipo: metrics.TipoMedidor, Valor: degradado,
-			Ajuda: "1 quando a tabela histórica parou de receber (modo falho sticky).", Labels: rotulo},
-		{Familia: metrics.MetHistoryDataBytes, Nome: metrics.MetHistoryDataBytes, Tipo: metrics.TipoMedidor, Valor: float64(e.DataBytes),
-			Ajuda: "Bytes dos segmentos da tabela histórica — o que o maxBytes governa.", Labels: rotulo},
-		{Familia: metrics.MetHistoryIndexBytes, Nome: metrics.MetHistoryIndexBytes, Tipo: metrics.TipoMedidor, Valor: float64(e.IndexBytes),
-			Ajuda: "Blocos alocados pelos índices da tabela histórica; a purga também os devolve, porque o .sidx sai no mesmo passo que remove o .dat. O número é da tabela IRMÃ, publicado no rótulo do dataset BASE; a parcela por segmento dele é nishidb_index_bytes{dataset=\"X_history\"}, que sai em OUTRO rótulo. Em {dataset=\"X\"} aquela série descreve o índice do PRÓPRIO base, que não é parcela deste número: subtrair as duas no mesmo rótulo não cancela nada.", Labels: rotulo},
-		{Familia: metrics.MetHistoryOldestWrittenAt, Nome: metrics.MetHistoryOldestWrittenAt, Tipo: metrics.TipoMedidor, Valor: float64(e.InstanteMaisAntigo),
-			Ajuda: "Instante da linha mais antiga ainda visível, em millis. Mostra o maxBytes engolindo o prazo declarado.", Labels: rotulo},
-		{Familia: metrics.MetHistoryIndexWindow, Nome: metrics.MetHistoryIndexWindow, Tipo: metrics.TipoMedidor, Valor: e.JanelaEfetiva.Seconds(),
-			Ajuda: "Intervalo realmente coberto pelos segmentos indexados. Compare com history.index.window: menor significa que o teto do índice assumiu o comando.", Labels: rotulo},
-		{Familia: metrics.MetHistoryPurged, Nome: metrics.MetHistoryPurged, Tipo: metrics.TipoContador, Valor: float64(e.PurgadosPorTTL),
-			Ajuda:  "Segmentos aposentados pela retenção da tabela histórica.",
-			Labels: append(append([]metrics.Label{}, rotulo...), metrics.Label{Nome: "reason", Valor: "ttl"})},
-		{Familia: metrics.MetHistoryPurged, Nome: metrics.MetHistoryPurged, Tipo: metrics.TipoContador, Valor: float64(e.PurgadosPorTamanho),
-			Labels: append(append([]metrics.Label{}, rotulo...), metrics.Label{Nome: "reason", Valor: "size"})},
-		{Familia: metrics.MetHistoryRetentionRunning, Nome: metrics.MetHistoryRetentionRunning, Tipo: metrics.TipoMedidor, Valor: rodando,
-			Ajuda: "1 quando o motor de retenção está de pé. Ele para de vez na primeira falha.", Labels: rotulo},
+	return []metrics.Sample{
+		{Family: metrics.MetHistoryRows, Name: metrics.MetHistoryRows, Type: metrics.TypeCounter, Value: float64(snap.HistoricoLinhas),
+			Help: "Linhas gravadas na tabela histórica.", Labels: rotulo},
+		{Family: metrics.MetHistoryDropped, Name: metrics.MetHistoryDropped, Type: metrics.TypeCounter, Value: float64(snap.HistoricoDescartadas),
+			Help: "Eventos que não viraram linha na tabela histórica.", Labels: rotulo},
+		{Family: metrics.MetHistoryDegraded, Name: metrics.MetHistoryDegraded, Type: metrics.TypeGauge, Value: degradado,
+			Help: "1 quando a tabela histórica parou de receber (modo falho sticky).", Labels: rotulo},
+		{Family: metrics.MetHistoryDataBytes, Name: metrics.MetHistoryDataBytes, Type: metrics.TypeGauge, Value: float64(e.DataBytes),
+			Help: "Bytes dos segmentos da tabela histórica — o que o maxBytes governa.", Labels: rotulo},
+		{Family: metrics.MetHistoryIndexBytes, Name: metrics.MetHistoryIndexBytes, Type: metrics.TypeGauge, Value: float64(e.IndexBytes),
+			Help: "Blocos alocados pelos índices da tabela histórica; a purga também os devolve, porque o .sidx sai no mesmo passo que remove o .dat. O número é da tabela IRMÃ, publicado no rótulo do dataset BASE; a parcela por segmento dele é nishidb_index_bytes{dataset=\"X_history\"}, que sai em OUTRO rótulo. Em {dataset=\"X\"} aquela série descreve o índice do PRÓPRIO base, que não é parcela deste número: subtrair as duas no mesmo rótulo não cancela nada.", Labels: rotulo},
+		{Family: metrics.MetHistoryOldestWrittenAt, Name: metrics.MetHistoryOldestWrittenAt, Type: metrics.TypeGauge, Value: float64(e.InstanteMaisAntigo),
+			Help: "Instante da linha mais antiga ainda visível, em millis. Mostra o maxBytes engolindo o prazo declarado.", Labels: rotulo},
+		{Family: metrics.MetHistoryIndexWindow, Name: metrics.MetHistoryIndexWindow, Type: metrics.TypeGauge, Value: e.JanelaEfetiva.Seconds(),
+			Help: "Intervalo realmente coberto pelos segmentos indexados. Compare com history.index.window: menor significa que o teto do índice assumiu o comando.", Labels: rotulo},
+		{Family: metrics.MetHistoryPurged, Name: metrics.MetHistoryPurged, Type: metrics.TypeCounter, Value: float64(e.PurgadosPorTTL),
+			Help:   "Segmentos aposentados pela retenção da tabela histórica.",
+			Labels: append(append([]metrics.Label{}, rotulo...), metrics.Label{Name: "reason", Value: "ttl"})},
+		{Family: metrics.MetHistoryPurged, Name: metrics.MetHistoryPurged, Type: metrics.TypeCounter, Value: float64(e.PurgadosPorTamanho),
+			Labels: append(append([]metrics.Label{}, rotulo...), metrics.Label{Name: "reason", Value: "size"})},
+		{Family: metrics.MetHistoryRetentionRunning, Name: metrics.MetHistoryRetentionRunning, Type: metrics.TypeGauge, Value: rodando,
+			Help: "1 quando o motor de retenção está de pé. Ele para de vez na primeira falha.", Labels: rotulo},
 	}
 }

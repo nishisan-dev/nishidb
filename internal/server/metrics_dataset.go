@@ -75,8 +75,8 @@ func lixoDeDisco(st storage.Stats) uint64 {
 // mostrar vira lacuna no gráfico, e lacuna não se distingue de alvo fora do ar
 // — zero é uma resposta, ausência não é.
 func registraMetricasDeDataset(reg *metrics.Registry, s *Servidor) {
-	reg.Coletor(metrics.ColetorFunc(func() []metrics.Amostra {
-		out := make([]metrics.Amostra, 0, len(s.datasets)*16)
+	reg.Register(metrics.CollectorFunc(func() []metrics.Sample {
+		out := make([]metrics.Sample, 0, len(s.datasets)*16)
 		for _, d := range s.datasets {
 			st := d.st.Stats()
 			// As políticas de escrita e as regras de ttl saem da MESMA leitura
@@ -98,7 +98,7 @@ func registraMetricasDeDataset(reg *metrics.Registry, s *Servidor) {
 			out = append(out, amostrasDeIndice(d.nome, d.st.EstatisticasDeIndice())...)
 			out = append(out, amostrasDeIsolamento(d.nome, d.st)...)
 			out = append(out, amostrasDeContadores(d.nome, d.st.EstatisticasDeContadores())...)
-			rotulo := []metrics.Label{{Nome: metrics.LabelDataset, Valor: d.nome}}
+			rotulo := []metrics.Label{{Name: metrics.LabelDataset, Value: d.nome}}
 			// O formato de exposição só tem número, e Go não converte bool
 			// para float: o 0/1 do medidor se escreve aqui, uma vez, em vez de
 			// dentro do literal da amostra.
@@ -108,117 +108,117 @@ func registraMetricasDeDataset(reg *metrics.Registry, s *Servidor) {
 			}
 
 			out = append(out,
-				metrics.Amostra{
-					Familia: metrics.MetDatasetFields,
-					Nome:    metrics.MetDatasetFields,
-					Ajuda:   "campos registrados no dicionário do dataset; o denominador é schema.maxCols, publicado em /v1/metadata",
-					Tipo:    metrics.TipoMedidor,
-					Labels:  rotulo,
-					Valor:   float64(d.sch.CamposConhecidos()),
+				metrics.Sample{
+					Family: metrics.MetDatasetFields,
+					Name:   metrics.MetDatasetFields,
+					Help:   "campos registrados no dicionário do dataset; o denominador é schema.maxCols, publicado em /v1/metadata",
+					Type:   metrics.TypeGauge,
+					Labels: rotulo,
+					Value:  float64(d.sch.CamposConhecidos()),
 				},
-				metrics.Amostra{
-					Familia: metrics.MetDatasetFieldsDropped,
-					Nome:    metrics.MetDatasetFieldsDropped,
-					Ajuda:   "campos que o teto recusou; só sobe sob onMaxCols ignore, e é o que torna a perda contável em vez de silenciosa",
-					Tipo:    metrics.TipoContador,
-					Labels:  rotulo,
-					Valor:   float64(d.sch.CamposDescartados()),
+				metrics.Sample{
+					Family: metrics.MetDatasetFieldsDropped,
+					Name:   metrics.MetDatasetFieldsDropped,
+					Help:   "campos que o teto recusou; só sobe sob onMaxCols ignore, e é o que torna a perda contável em vez de silenciosa",
+					Type:   metrics.TypeCounter,
+					Labels: rotulo,
+					Value:  float64(d.sch.CamposDescartados()),
 				},
-				metrics.Amostra{
-					Familia: metrics.MetNestedTypeMismatch,
-					Nome:    metrics.MetNestedTypeMismatch,
-					Ajuda:   "valores de coluna aninhada que não couberam no tipo fixado; o evento entrou e o documento guarda o valor, e a coluna foi REMOVIDA naquela linha — sem a remoção ela ficaria com o valor do evento anterior, no modo merge",
-					Tipo:    metrics.TipoContador,
-					Labels:  rotulo,
-					Valor:   float64(d.sch.ValoresIncompativeis()),
+				metrics.Sample{
+					Family: metrics.MetNestedTypeMismatch,
+					Name:   metrics.MetNestedTypeMismatch,
+					Help:   "valores de coluna aninhada que não couberam no tipo fixado; o evento entrou e o documento guarda o valor, e a coluna foi REMOVIDA naquela linha — sem a remoção ela ficaria com o valor do evento anterior, no modo merge",
+					Type:   metrics.TypeCounter,
+					Labels: rotulo,
+					Value:  float64(d.sch.ValoresIncompativeis()),
 				},
-				metrics.Amostra{
-					Familia: metrics.MetMaterializedRows,
-					Nome:    metrics.MetMaterializedRows,
-					Ajuda:   "linhas vivas materializadas no dataset",
-					Tipo:    metrics.TipoMedidor,
-					Labels:  rotulo,
-					Valor:   float64(st.RowCount),
+				metrics.Sample{
+					Family: metrics.MetMaterializedRows,
+					Name:   metrics.MetMaterializedRows,
+					Help:   "linhas vivas materializadas no dataset",
+					Type:   metrics.TypeGauge,
+					Labels: rotulo,
+					Value:  float64(st.RowCount),
 				},
-				metrics.Amostra{
-					Familia: metrics.MetSegmentsTotal,
-					Nome:    metrics.MetSegmentsTotal,
-					Ajuda:   "segmentos do dataset",
-					Tipo:    metrics.TipoMedidor,
-					Labels:  rotulo,
-					Valor:   float64(st.SegmentsTotal),
+				metrics.Sample{
+					Family: metrics.MetSegmentsTotal,
+					Name:   metrics.MetSegmentsTotal,
+					Help:   "segmentos do dataset",
+					Type:   metrics.TypeGauge,
+					Labels: rotulo,
+					Value:  float64(st.SegmentsTotal),
 				},
-				metrics.Amostra{
-					Familia: metrics.MetStorageBytes,
-					Nome:    metrics.MetStorageBytes,
-					Ajuda:   "bytes ocupados pelos segmentos do dataset em disco, medidos no último checkpoint",
-					Tipo:    metrics.TipoMedidor,
-					Labels:  rotulo,
-					Valor:   float64(st.StorageBytes),
+				metrics.Sample{
+					Family: metrics.MetStorageBytes,
+					Name:   metrics.MetStorageBytes,
+					Help:   "bytes ocupados pelos segmentos do dataset em disco, medidos no último checkpoint",
+					Type:   metrics.TypeGauge,
+					Labels: rotulo,
+					Value:  float64(st.StorageBytes),
 				},
-				metrics.Amostra{
-					Familia: metrics.MetStorageGarbageBytes,
-					Nome:    metrics.MetStorageGarbageBytes,
-					Ajuda:   "bytes de garbage nos segmentos: há pelo menos isto de lixo (limite INFERIOR, porque a liveness é limite superior — débitos 38 e 45)",
-					Tipo:    metrics.TipoMedidor,
-					Labels:  rotulo,
-					Valor:   float64(lixoDeDisco(st)),
+				metrics.Sample{
+					Family: metrics.MetStorageGarbageBytes,
+					Name:   metrics.MetStorageGarbageBytes,
+					Help:   "bytes de garbage nos segmentos: há pelo menos isto de lixo (limite INFERIOR, porque a liveness é limite superior — débitos 38 e 45)",
+					Type:   metrics.TypeGauge,
+					Labels: rotulo,
+					Value:  float64(lixoDeDisco(st)),
 				},
-				metrics.Amostra{
-					Familia: metrics.MetCompactionRunning,
-					Nome:    metrics.MetCompactionRunning,
-					Ajuda:   "1 enquanto o laço de compaction do §53-55 está de pé para o dataset; 0 com a chave desligada ou depois de ele parar",
-					Tipo:    metrics.TipoMedidor,
-					Labels:  rotulo,
-					Valor:   rodando,
+				metrics.Sample{
+					Family: metrics.MetCompactionRunning,
+					Name:   metrics.MetCompactionRunning,
+					Help:   "1 enquanto o laço de compaction do §53-55 está de pé para o dataset; 0 com a chave desligada ou depois de ele parar",
+					Type:   metrics.TypeGauge,
+					Labels: rotulo,
+					Value:  rodando,
 				},
-				metrics.Amostra{
-					Familia: metrics.MetCompactionBytesRead,
-					Nome:    metrics.MetCompactionBytesRead,
-					Ajuda:   "bytes de record que as varreduras de compaction leram desde a abertura do dataset",
-					Tipo:    metrics.TipoContador,
-					Labels:  rotulo,
-					Valor:   float64(st.CompactionBytesRead),
+				metrics.Sample{
+					Family: metrics.MetCompactionBytesRead,
+					Name:   metrics.MetCompactionBytesRead,
+					Help:   "bytes de record que as varreduras de compaction leram desde a abertura do dataset",
+					Type:   metrics.TypeCounter,
+					Labels: rotulo,
+					Value:  float64(st.CompactionBytesRead),
 				},
-				metrics.Amostra{
-					Familia: metrics.MetCompactionBytesWritten,
-					Nome:    metrics.MetCompactionBytesWritten,
-					Ajuda:   "bytes que o copy-forward da compaction reescreveu; a distância para bytes_read é o disco devolvido (§86)",
-					Tipo:    metrics.TipoContador,
-					Labels:  rotulo,
-					Valor:   float64(st.CompactionBytesWritten),
+				metrics.Sample{
+					Family: metrics.MetCompactionBytesWritten,
+					Name:   metrics.MetCompactionBytesWritten,
+					Help:   "bytes que o copy-forward da compaction reescreveu; a distância para bytes_read é o disco devolvido (§86)",
+					Type:   metrics.TypeCounter,
+					Labels: rotulo,
+					Value:  float64(st.CompactionBytesWritten),
 				},
-				metrics.Amostra{
-					Familia: metrics.MetExpiryRunning,
-					Nome:    metrics.MetExpiryRunning,
-					Ajuda:   "1 enquanto o coletor do idle timeout está de pé para o dataset; 0 sem expireAfterWrite declarado ou depois de ele parar",
-					Tipo:    metrics.TipoMedidor,
-					Labels:  rotulo,
-					Valor:   umSeVerdadeiro(st.ExpiryRunning),
+				metrics.Sample{
+					Family: metrics.MetExpiryRunning,
+					Name:   metrics.MetExpiryRunning,
+					Help:   "1 enquanto o coletor do idle timeout está de pé para o dataset; 0 sem expireAfterWrite declarado ou depois de ele parar",
+					Type:   metrics.TypeGauge,
+					Labels: rotulo,
+					Value:  umSeVerdadeiro(st.ExpiryRunning),
 				},
-				metrics.Amostra{
-					Familia: metrics.MetExpiredTotal,
-					Nome:    metrics.MetExpiredTotal,
-					Ajuda:   "entidades que ganharam lápide por inatividade, pelas duas rotas: o coletor e a descoberta oportunista da compaction",
-					Tipo:    metrics.TipoContador,
-					Labels:  rotulo,
-					Valor:   float64(st.Expiradas),
+				metrics.Sample{
+					Family: metrics.MetExpiredTotal,
+					Name:   metrics.MetExpiredTotal,
+					Help:   "entidades que ganharam lápide por inatividade, pelas duas rotas: o coletor e a descoberta oportunista da compaction",
+					Type:   metrics.TypeCounter,
+					Labels: rotulo,
+					Value:  float64(st.Expiradas),
 				},
-				metrics.Amostra{
-					Familia: metrics.MetExpiryGraceTotal,
-					Nome:    metrics.MetExpiryGraceTotal,
-					Ajuda:   "carências dadas a entidades sem instante de escrita; é o que sobe nos primeiros minutos depois de ligar a expiração num dataset já materializado, quando ainda não há nada a expirar",
-					Tipo:    metrics.TipoContador,
-					Labels:  rotulo,
-					Valor:   float64(st.Carencias),
+				metrics.Sample{
+					Family: metrics.MetExpiryGraceTotal,
+					Name:   metrics.MetExpiryGraceTotal,
+					Help:   "carências dadas a entidades sem instante de escrita; é o que sobe nos primeiros minutos depois de ligar a expiração num dataset já materializado, quando ainda não há nada a expirar",
+					Type:   metrics.TypeCounter,
+					Labels: rotulo,
+					Value:  float64(st.Carencias),
 				},
-				metrics.Amostra{
-					Familia: metrics.MetExpiryScannedTotal,
-					Nome:    metrics.MetExpiryScannedTotal,
-					Ajuda:   "entradas do índice de escritas examinadas pelo coletor; comparada com o total de rows, diz se o cursor dá a volta ou empaca",
-					Tipo:    metrics.TipoContador,
-					Labels:  rotulo,
-					Valor:   float64(st.ExpiryExaminadas),
+				metrics.Sample{
+					Family: metrics.MetExpiryScannedTotal,
+					Name:   metrics.MetExpiryScannedTotal,
+					Help:   "entradas do índice de escritas examinadas pelo coletor; comparada com o total de rows, diz se o cursor dá a volta ou empaca",
+					Type:   metrics.TypeCounter,
+					Labels: rotulo,
+					Value:  float64(st.ExpiryExaminadas),
 				})
 		}
 		return out
@@ -240,93 +240,93 @@ func umSeVerdadeiro(v bool) float64 {
 // Nascem com zero na subida, como todas as que podem alarmar: um dataset com
 // contador e nenhuma linha emite as dez, zeradas — lacuna não se distingue de
 // alvo fora do ar. O rótulo `counter` vem do YAML, conjunto fechado.
-func amostrasDeContadores(dataset string, ests []counter.Estatisticas) []metrics.Amostra {
-	out := make([]metrics.Amostra, 0, len(ests)*10)
+func amostrasDeContadores(dataset string, ests []counter.Estatisticas) []metrics.Sample {
+	out := make([]metrics.Sample, 0, len(ests)*10)
 	for _, e := range ests {
 		rotulo := []metrics.Label{
-			{Nome: metrics.LabelDataset, Valor: dataset},
-			{Nome: metrics.LabelCounter, Valor: e.Nome},
+			{Name: metrics.LabelDataset, Value: dataset},
+			{Name: metrics.LabelCounter, Value: e.Nome},
 		}
 		out = append(out,
-			metrics.Amostra{
-				Familia: metrics.MetCounterGroups,
-				Nome:    metrics.MetCounterGroups,
-				Ajuda:   "grupos vivos do contador (inclui os com total zero; exclui os aposentados)",
-				Tipo:    metrics.TipoMedidor,
-				Labels:  rotulo,
-				Valor:   float64(e.Grupos),
+			metrics.Sample{
+				Family: metrics.MetCounterGroups,
+				Name:   metrics.MetCounterGroups,
+				Help:   "grupos vivos do contador (inclui os com total zero; exclui os aposentados)",
+				Type:   metrics.TypeGauge,
+				Labels: rotulo,
+				Value:  float64(e.Grupos),
 			},
-			metrics.Amostra{
-				Familia: metrics.MetCounterGroupsMax,
-				Nome:    metrics.MetCounterGroupsMax,
-				Ajuda:   "teto de grupos vivos (maxGroups) do contador",
-				Tipo:    metrics.TipoMedidor,
-				Labels:  rotulo,
-				Valor:   float64(e.Teto),
+			metrics.Sample{
+				Family: metrics.MetCounterGroupsMax,
+				Name:   metrics.MetCounterGroupsMax,
+				Help:   "teto de grupos vivos (maxGroups) do contador",
+				Type:   metrics.TypeGauge,
+				Labels: rotulo,
+				Value:  float64(e.Teto),
 			},
-			metrics.Amostra{
-				Familia: metrics.MetCounterGroupsRefusedTotal,
-				Nome:    metrics.MetCounterGroupsRefusedTotal,
-				Ajuda:   "grupos novos recusados pelo teto nesta abertura; a linha entrou e NÃO é contada — diferente de zero é total errado para baixo",
-				Tipo:    metrics.TipoContador,
-				Labels:  rotulo,
-				Valor:   float64(e.Recusados),
+			metrics.Sample{
+				Family: metrics.MetCounterGroupsRefusedTotal,
+				Name:   metrics.MetCounterGroupsRefusedTotal,
+				Help:   "grupos novos recusados pelo teto nesta abertura; a linha entrou e NÃO é contada — diferente de zero é total errado para baixo",
+				Type:   metrics.TypeCounter,
+				Labels: rotulo,
+				Value:  float64(e.Recusados),
 			},
-			metrics.Amostra{
-				Familia: metrics.MetCounterGroupsRetiredTotal,
-				Nome:    metrics.MetCounterGroupsRetiredTotal,
-				Ajuda:   "grupos aposentados por ficarem sem linha há mais que retainEmptyGroups, desde a criação do contador",
-				Tipo:    metrics.TipoContador,
-				Labels:  rotulo,
-				Valor:   float64(e.Aposentados),
+			metrics.Sample{
+				Family: metrics.MetCounterGroupsRetiredTotal,
+				Name:   metrics.MetCounterGroupsRetiredTotal,
+				Help:   "grupos aposentados por ficarem sem linha há mais que retainEmptyGroups, desde a criação do contador",
+				Type:   metrics.TypeCounter,
+				Labels: rotulo,
+				Value:  float64(e.Aposentados),
 			},
-			metrics.Amostra{
-				Familia: metrics.MetCounterOrphanEntries,
-				Nome:    metrics.MetCounterOrphanEntries,
-				Ajuda:   "entradas do vetor apontando para grupo aposentado ou inexistente, zeradas na dobra da abertura; não é esperado fora de uma janela de crash",
-				Tipo:    metrics.TipoMedidor,
-				Labels:  rotulo,
-				Valor:   float64(e.Orfas),
+			metrics.Sample{
+				Family: metrics.MetCounterOrphanEntries,
+				Name:   metrics.MetCounterOrphanEntries,
+				Help:   "entradas do vetor apontando para grupo aposentado ou inexistente, zeradas na dobra da abertura; não é esperado fora de uma janela de crash",
+				Type:   metrics.TypeGauge,
+				Labels: rotulo,
+				Value:  float64(e.Orfas),
 			},
-			metrics.Amostra{
-				Familia: metrics.MetCounterBytes,
-				Nome:    metrics.MetCounterBytes,
-				Ajuda:   "bytes em disco do contador: vetor de grupos mais dicionário",
-				Tipo:    metrics.TipoMedidor,
-				Labels:  rotulo,
-				Valor:   float64(e.Bytes),
+			metrics.Sample{
+				Family: metrics.MetCounterBytes,
+				Name:   metrics.MetCounterBytes,
+				Help:   "bytes em disco do contador: vetor de grupos mais dicionário",
+				Type:   metrics.TypeGauge,
+				Labels: rotulo,
+				Value:  float64(e.Bytes),
 			},
-			metrics.Amostra{
-				Familia: metrics.MetCounterRows,
-				Nome:    metrics.MetCounterRows,
-				Ajuda:   "linhas vivas que apontam para algum grupo deste contador; abaixo do rows do dataset são as linhas sem alguma coluna do groupBy, que o contador não conta por desenho",
-				Tipo:    metrics.TipoMedidor,
-				Labels:  rotulo,
-				Valor:   float64(e.Linhas),
+			metrics.Sample{
+				Family: metrics.MetCounterRows,
+				Name:   metrics.MetCounterRows,
+				Help:   "linhas vivas que apontam para algum grupo deste contador; abaixo do rows do dataset são as linhas sem alguma coluna do groupBy, que o contador não conta por desenho",
+				Type:   metrics.TypeGauge,
+				Labels: rotulo,
+				Value:  float64(e.Linhas),
 			},
-			metrics.Amostra{
-				Familia: metrics.MetCounterCountedRows,
-				Nome:    metrics.MetCounterCountedRows,
-				Ajuda:   "linhas que satisfazem a condição deste contador no dataset inteiro; sem `where`, igual ao rows do contador",
-				Tipo:    metrics.TipoMedidor,
-				Labels:  rotulo,
-				Valor:   float64(e.Total),
+			metrics.Sample{
+				Family: metrics.MetCounterCountedRows,
+				Name:   metrics.MetCounterCountedRows,
+				Help:   "linhas que satisfazem a condição deste contador no dataset inteiro; sem `where`, igual ao rows do contador",
+				Type:   metrics.TypeGauge,
+				Labels: rotulo,
+				Value:  float64(e.Total),
 			},
-			metrics.Amostra{
-				Familia: metrics.MetCounterAuditDivergentGroups,
-				Nome:    metrics.MetCounterAuditDivergentGroups,
-				Ajuda:   "divergências na última auditoria conclusiva — grupos, linhas sem grupo internado e os dois agregados; 0 até a primeira (ver o timestamp ao lado)",
-				Tipo:    metrics.TipoMedidor,
-				Labels:  rotulo,
-				Valor:   float64(e.AuditoriaDivergentes),
+			metrics.Sample{
+				Family: metrics.MetCounterAuditDivergentGroups,
+				Name:   metrics.MetCounterAuditDivergentGroups,
+				Help:   "divergências na última auditoria conclusiva — grupos, linhas sem grupo internado e os dois agregados; 0 até a primeira (ver o timestamp ao lado)",
+				Type:   metrics.TypeGauge,
+				Labels: rotulo,
+				Value:  float64(e.AuditoriaDivergentes),
 			},
-			metrics.Amostra{
-				Familia: metrics.MetCounterAuditLastSuccessTimestamp,
-				Nome:    metrics.MetCounterAuditLastSuccessTimestamp,
-				Ajuda:   "Unix timestamp da última auditoria conclusiva do contador; 0 até a primeira",
-				Tipo:    metrics.TipoMedidor,
-				Labels:  rotulo,
-				Valor:   float64(e.AuditoriaUltimaUnix),
+			metrics.Sample{
+				Family: metrics.MetCounterAuditLastSuccessTimestamp,
+				Name:   metrics.MetCounterAuditLastSuccessTimestamp,
+				Help:   "Unix timestamp da última auditoria conclusiva do contador; 0 até a primeira",
+				Type:   metrics.TypeGauge,
+				Labels: rotulo,
+				Value:  float64(e.AuditoriaUltimaUnix),
 			},
 		)
 	}
@@ -344,40 +344,40 @@ func amostrasDeContadores(dataset string, ests []counter.Estatisticas) []metrics
 // longest_running: a idade cresce sozinha com o tempo, e um medidor escrito
 // quando a consulta abriu ficaria congelado mostrando a idade que ela tinha ao
 // nascer — que é sempre zero.
-func amostrasDeIsolamento(dataset string, st *storage.Store) []metrics.Amostra {
-	rotulo := []metrics.Label{{Nome: metrics.LabelDataset, Valor: dataset}}
-	return []metrics.Amostra{
+func amostrasDeIsolamento(dataset string, st *storage.Store) []metrics.Sample {
+	rotulo := []metrics.Label{{Name: metrics.LabelDataset, Value: dataset}}
+	return []metrics.Sample{
 		{
-			Familia: metrics.MetQuerySnapshotBytes,
-			Nome:    metrics.MetQuerySnapshotBytes,
-			Ajuda:   "heap retido pelo journal de versões do isolamento de leitura",
-			Tipo:    metrics.TipoMedidor,
-			Valor:   float64(st.BytesRetidos()),
-			Labels:  rotulo,
+			Family: metrics.MetQuerySnapshotBytes,
+			Name:   metrics.MetQuerySnapshotBytes,
+			Help:   "heap retido pelo journal de versões do isolamento de leitura",
+			Type:   metrics.TypeGauge,
+			Value:  float64(st.BytesRetidos()),
+			Labels: rotulo,
 		},
 		{
-			Familia: metrics.MetQuerySnapshotOldestSeconds,
-			Nome:    metrics.MetQuerySnapshotOldestSeconds,
-			Ajuda:   "há quanto tempo a consulta mais antiga segura o passado; 0 quando não há nenhuma",
-			Tipo:    metrics.TipoMedidor,
-			Valor:   st.IdadeDoSnapshotMaisAntigo().Seconds(),
-			Labels:  rotulo,
+			Family: metrics.MetQuerySnapshotOldestSeconds,
+			Name:   metrics.MetQuerySnapshotOldestSeconds,
+			Help:   "há quanto tempo a consulta mais antiga segura o passado; 0 quando não há nenhuma",
+			Type:   metrics.TypeGauge,
+			Value:  st.IdadeDoSnapshotMaisAntigo().Seconds(),
+			Labels: rotulo,
 		},
 		{
-			Familia: metrics.MetQuerySnapshotExpiredTotal,
-			Nome:    metrics.MetQuerySnapshotExpiredTotal,
-			Ajuda:   "consultas invalidadas por o journal de versões estourar runtime.query.snapshotMaxBytes",
-			Tipo:    metrics.TipoContador,
-			Valor:   float64(st.SnapshotsExpirados()),
-			Labels:  rotulo,
+			Family: metrics.MetQuerySnapshotExpiredTotal,
+			Name:   metrics.MetQuerySnapshotExpiredTotal,
+			Help:   "consultas invalidadas por o journal de versões estourar runtime.query.snapshotMaxBytes",
+			Type:   metrics.TypeCounter,
+			Value:  float64(st.SnapshotsExpirados()),
+			Labels: rotulo,
 		},
 		{
-			Familia: metrics.MetCompactionSegmentosPinados,
-			Nome:    metrics.MetCompactionSegmentosPinados,
-			Ajuda:   "segmentos que a compaction não pode aposentar por guardarem versões de consultas em voo",
-			Tipo:    metrics.TipoMedidor,
-			Valor:   float64(st.SegmentosPinados()),
-			Labels:  rotulo,
+			Family: metrics.MetCompactionPinnedSegments,
+			Name:   metrics.MetCompactionPinnedSegments,
+			Help:   "segmentos que a compaction não pode aposentar por guardarem versões de consultas em voo",
+			Type:   metrics.TypeGauge,
+			Value:  float64(st.SegmentosPinados()),
+			Labels: rotulo,
 		},
 	}
 }

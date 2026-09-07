@@ -27,7 +27,7 @@ import (
 //
 // Os dois gates já foram, eles próprios, o defeito que dizem fechar. A primeira
 // versão do reconhecedor de amostra só enxergava o literal com o tipo escrito
-// (`metrics.Amostra{...}`) e era CEGA à forma elidida (`[]metrics.Amostra{{...}}`),
+// (`metrics.Sample{...}`) e era CEGA à forma elidida (`[]metrics.Sample{{...}}`),
 // que é a dominante no repositório: 23 dos 58 literais passavam por baixo, e
 // entre eles estavam justamente as quatro do coletor Kafka que aquele mesmo
 // commit tinha acabado de consertar. A primeira versão do gate de citação lia
@@ -378,7 +378,7 @@ func specSections(t *testing.T) map[string]bool {
 var histogramSuffixes = []string{"_bucket", "_sum", "_count"}
 
 // TestAmostrasDeMetricaTemFamiliaENome confere que todo literal
-// metrics.Amostra{...} em código de produção declara Familia e Nome por
+// metrics.Sample{...} em código de produção declara Familia e Nome por
 // CONSTANTE (nunca string literal, nunca vazio) e que o Nome pertence à
 // Familia.
 //
@@ -394,7 +394,7 @@ var histogramSuffixes = []string{"_bucket", "_sum", "_count"}
 // # AS DUAS FORMAS DO LITERAL, E POR QUE ISSO É O CENTRO DO GATE
 //
 // O reconhecedor precisa enxergar a forma ELIDIDA — os elementos de
-// `[]metrics.Amostra{{...}, {...}}` são `CompositeLit` com `Type == nil`, e o
+// `[]metrics.Sample{{...}, {...}}` são `CompositeLit` com `Type == nil`, e o
 // tipo mora no ARRAY, não no elemento. Ela é a forma dominante do repositório
 // (quase 40% dos literais), e a primeira versão deste gate era cega a ela: as
 // quatro amostras do Kafka que o commit da doutrina acabara de consertar
@@ -405,7 +405,7 @@ var histogramSuffixes = []string{"_bucket", "_sum", "_count"}
 //
 // Conferir só a presença deixa passar duas constantes válidas mas TROCADAS, o
 // que publica uma série sob o cabeçalho de outra família. A regra não é
-// `Nome == Familia`: o histograma usa `Nome = Familia + sufixo` de propósito.
+// `Nome == Family`: o histograma usa `Nome = Family + sufixo` de propósito.
 // A regra é: Nome resolve para a MESMA expressão de Familia, ou para Familia
 // mais um dos sufixos de histogramSuffixes.
 func TestAmostrasDeMetricaTemFamiliaENome(t *testing.T) {
@@ -455,7 +455,7 @@ func TestAmostrasDeMetricaTemFamiliaENome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("literais metrics.Amostra alcançados: %d explícitos + %d elididos = %d",
+	t.Logf("literais metrics.Sample alcançados: %d explícitos + %d elididos = %d",
 		explicitCount, elidedCount, explicitCount+elidedCount)
 	if explicitCount == 0 || elidedCount == 0 {
 		t.Fatalf("o gate alcançou %d literais explícitos e %d elididos: com zero de qualquer das duas formas "+
@@ -472,7 +472,7 @@ func checkSample(t *testing.T, fset *token.FileSet, path string, cl *ast.Composi
 	t.Helper()
 	line := fset.Position(cl.Pos()).Line
 	values := map[string]ast.Expr{}
-	for _, name := range []string{"Familia", "Nome"} {
+	for _, name := range []string{"Family", "Name"} {
 		value, present := literalField(cl, name)
 		if !present {
 			t.Errorf("%s:%d: Amostra sem o campo %s — o # HELP/# TYPE sai vazio",
@@ -486,7 +486,7 @@ func checkSample(t *testing.T, fset *token.FileSet, path string, cl *ast.Composi
 		}
 		values[name] = value
 	}
-	family, name := values["Familia"], values["Nome"]
+	family, name := values["Family"], values["Name"]
 	if family == nil || name == nil {
 		return
 	}
@@ -545,9 +545,9 @@ func expression(fset *token.FileSet, e ast.Expr) string {
 // walkElided entrega ao chamador todo literal de Amostra ELIDIDO dentro
 // de um literal de slice, array ou mapa.
 //
-// Os elementos de `[]metrics.Amostra{{...}}` são CompositeLit com `Type == nil`:
+// Os elementos de `[]metrics.Sample{{...}}` são CompositeLit com `Type == nil`:
 // o tipo mora no `Elt` do ArrayType (ou no `Key`/`Value` do MapType). O
-// aninhamento é seguido até o fim porque `map[string][]metrics.Amostra{...}`
+// aninhamento é seguido até o fim porque `map[string][]metrics.Sample{...}`
 // elide DUAS vezes.
 func walkElided(cl *ast.CompositeLit, typ ast.Expr, pkg string, onFound func(*ast.CompositeLit)) {
 	var keyType, elemType ast.Expr
@@ -582,24 +582,24 @@ func walkElided(cl *ast.CompositeLit, typ ast.Expr, pkg string, onFound func(*as
 	}
 }
 
-// isSampleType reconhece a EXPRESSÃO DE TIPO metrics.Amostra, qualificada
-// (metrics.Amostra) ou não (Amostra, dentro do pacote metrics), atravessando o
-// ponteiro de `[]*metrics.Amostra`.
+// isSampleType reconhece a EXPRESSÃO DE TIPO metrics.Sample, qualificada
+// (metrics.Sample) ou não (Amostra, dentro do pacote metrics), atravessando o
+// ponteiro de `[]*metrics.Sample`.
 //
-// `&metrics.Amostra{...}` não precisa de caso próprio: o `&` é um UnaryExpr em
+// `&metrics.Sample{...}` não precisa de caso próprio: o `&` é um UnaryExpr em
 // volta do CompositeLit, e o literal interno já traz o tipo escrito.
 func isSampleType(e ast.Expr, pkg string) bool {
 	switch t := e.(type) {
 	case *ast.StarExpr:
 		return isSampleType(t.X, pkg)
 	case *ast.SelectorExpr:
-		if t.Sel.Name != "Amostra" {
+		if t.Sel.Name != "Sample" {
 			return false
 		}
 		id, ok := t.X.(*ast.Ident)
 		return ok && id.Name == "metrics"
 	case *ast.Ident:
-		return t.Name == "Amostra" && pkg == "metrics"
+		return t.Name == "Sample" && pkg == "metrics"
 	}
 	return false
 }

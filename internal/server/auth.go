@@ -339,7 +339,7 @@ func (s *Servidor) autentica(w http.ResponseWriter, r *http.Request) (papel stri
 // corpo — é o que faz "usuário não existe" e "senha errada" serem
 // indistinguíveis para quem só vê a resposta HTTP.
 func (s *Servidor) recusaAutenticacao(w http.ResponseWriter, r *http.Request, razao, usuarioNoLog string) {
-	s.authFalhas.Com(razao).Inc()
+	s.authFalhas.With(razao).Inc()
 
 	// ANTES de responder, cobrindo TODA falha — inclusive header ausente, que
 	// nem chega a comparar senha nenhuma. Sem isso, essas falhas sairiam mais
@@ -441,7 +441,7 @@ func (s *Servidor) recusaRegistroSemPapel(w http.ResponseWriter, r *http.Request
 // acontece ANTES de qualquer dataset ser resolvido, então não existe label de
 // dataset para carregar — misturar as duas famílias forçaria um valor de
 // dataset artificial só para preencher a assinatura.
-func registraMetricasDeAuth(reg *metrics.Registry) *metrics.FamiliaContador {
-	return reg.Contador(metrics.MetAuthFailuresTotal,
+func registraMetricasDeAuth(reg *metrics.Registry) *metrics.CounterFamily {
+	return reg.Counter(metrics.MetAuthFailuresTotal,
 		"falhas de autenticação HTTP Basic no protocolo remoto, por motivo", metrics.LabelReason)
 }

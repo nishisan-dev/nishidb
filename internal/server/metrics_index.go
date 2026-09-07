@@ -26,85 +26,85 @@ import (
 // certo: o §92 manda o medidor subir antes da goroutine, então num dataset com
 // campo indexado o valor verdadeiro na subida é 1. Um medidor que reportasse zero
 // para caber numa regra sobre contadores estaria mentindo sobre o estado.
-func amostrasDeIndice(nome string, e storage.EstatisticasDeIndice) []metrics.Amostra {
-	rotulo := []metrics.Label{{Nome: metrics.LabelDataset, Valor: nome}}
-	// A ordem é a de metrics.EstadosDeIndice, e a contagem é indexada por ela:
+func amostrasDeIndice(nome string, e storage.EstatisticasDeIndice) []metrics.Sample {
+	rotulo := []metrics.Label{{Name: metrics.LabelDataset, Value: nome}}
+	// A ordem é a de metrics.IndexStates, e a contagem é indexada por ela:
 	// escrever os quatro pares à mão aqui seria uma segunda lista de estados ao
 	// lado da do pacote de nomes, e a segunda lista é a que esquece o valor novo.
 	porEstado := map[string]int64{
-		metrics.EstadoSelado:   e.Estados.Selado,
-		metrics.EstadoCorrente: e.Estados.Corrente,
-		metrics.EstadoPendente: e.Estados.Pendente,
-		metrics.EstadoFora:     e.Estados.Fora,
+		metrics.StateSealed:  e.Estados.Selado,
+		metrics.StateCurrent: e.Estados.Corrente,
+		metrics.StatePending: e.Estados.Pendente,
+		metrics.StateOutside: e.Estados.Fora,
 	}
-	out := make([]metrics.Amostra, 0, len(metrics.EstadosDeIndice)+len(metrics.ModosDeConsultaDeIndice)+4)
-	for _, estado := range metrics.EstadosDeIndice {
-		out = append(out, metrics.Amostra{
-			Familia: metrics.MetIndexSegmentos,
-			Nome:    metrics.MetIndexSegmentos,
-			Ajuda: "segmentos por estado de índice: selado (o .sidx cobre o conjunto indexado), corrente (o índice é o WIP), " +
+	out := make([]metrics.Sample, 0, len(metrics.IndexStates)+len(metrics.IndexLookupModes)+4)
+	for _, estado := range metrics.IndexStates {
+		out = append(out, metrics.Sample{
+			Family: metrics.MetIndexSegments,
+			Name:   metrics.MetIndexSegments,
+			Help: "segmentos por estado de índice: selado (o .sidx cobre o conjunto indexado), corrente (o índice é o WIP), " +
 				"pendente (dentro da janela e na fila de reconstrução) e fora (a janela não o cobre, e ele responde por enumeração de propósito)",
-			Tipo:   metrics.TipoMedidor,
-			Labels: comRotulo(rotulo, metrics.LabelEstado, estado),
-			Valor:  float64(porEstado[estado]),
+			Type:   metrics.TypeGauge,
+			Labels: comRotulo(rotulo, metrics.LabelState, estado),
+			Value:  float64(porEstado[estado]),
 		})
 	}
 	porModo := map[string]int64{
-		metrics.ModoIndice:     e.PorIndice,
-		metrics.ModoEnumeracao: e.PorEnumeracao,
+		metrics.ModeIndex:       e.PorIndice,
+		metrics.ModeEnumeration: e.PorEnumeracao,
 	}
-	for _, modo := range metrics.ModosDeConsultaDeIndice {
-		out = append(out, metrics.Amostra{
-			Familia: metrics.MetIndexSegmentosConsultadosTotal,
-			Nome:    metrics.MetIndexSegmentosConsultadosTotal,
-			Ajuda: "segmentos que os Lookups resolveram por cada caminho; é o único observável da degradação, " +
+	for _, modo := range metrics.IndexLookupModes {
+		out = append(out, metrics.Sample{
+			Family: metrics.MetIndexSegmentsLookedUpTotal,
+			Name:   metrics.MetIndexSegmentsLookedUpTotal,
+			Help: "segmentos que os Lookups resolveram por cada caminho; é o único observável da degradação, " +
 				"porque para o planner e o executor os dois são o mesmo iterador ascendente",
-			Tipo:   metrics.TipoContador,
-			Labels: comRotulo(rotulo, metrics.LabelModo, modo),
-			Valor:  float64(porModo[modo]),
+			Type:   metrics.TypeCounter,
+			Labels: comRotulo(rotulo, metrics.LabelMode, modo),
+			Value:  float64(porModo[modo]),
 		})
 	}
 	return append(out,
-		metrics.Amostra{
-			Familia: metrics.MetIndexBytes,
-			Nome:    metrics.MetIndexBytes,
-			Ajuda: "blocos ocupados pelo índice por segmento (.sidx, temporários e .widx do corrente) DESTE dataset. " +
+		metrics.Sample{
+			Family: metrics.MetIndexBytes,
+			Name:   metrics.MetIndexBytes,
+			Help: "blocos ocupados pelo índice por segmento (.sidx, temporários e .widx do corrente) DESTE dataset. " +
 				"Num histórico ele é a parcela por segmento de nishidb_history_index_bytes — que soma também indexes/ e " +
 				"checkpoint/ e sai no rótulo do dataset BASE. As duas vivem em rótulos DIFERENTES: a comparação é entre " +
 				"{dataset=\"X_history\"} aqui e {dataset=\"X\"} lá, nunca no mesmo rótulo",
-			Tipo:   metrics.TipoMedidor,
+			Type:   metrics.TypeGauge,
 			Labels: rotulo,
-			Valor:  float64(e.Bytes),
+			Value:  float64(e.Bytes),
 		},
-		metrics.Amostra{
-			Familia: metrics.MetIndexReconstrucoesTotal,
-			Nome:    metrics.MetIndexReconstrucoesTotal,
-			Ajuda:   "segmentos cujo índice a reconstrução publicou desde a abertura do dataset; a taxa diz se a fila está drenando",
-			Tipo:    metrics.TipoContador,
-			Labels:  rotulo,
-			Valor:   float64(e.Reconstrucoes),
+		metrics.Sample{
+			Family: metrics.MetIndexRebuildsTotal,
+			Name:   metrics.MetIndexRebuildsTotal,
+			Help:   "segmentos cujo índice a reconstrução publicou desde a abertura do dataset; a taxa diz se a fila está drenando",
+			Type:   metrics.TypeCounter,
+			Labels: rotulo,
+			Value:  float64(e.Reconstrucoes),
 		},
-		metrics.Amostra{
-			Familia: metrics.MetIndexReconstrucaoAtiva,
-			Nome:    metrics.MetIndexReconstrucaoAtiva,
-			Ajuda: "1 enquanto o laço de reconstrução do índice por segmento está de pé; " +
+		metrics.Sample{
+			Family: metrics.MetIndexRebuildActive,
+			Name:   metrics.MetIndexRebuildActive,
+			Help: "1 enquanto o laço de reconstrução do índice por segmento está de pé; " +
 				"0 sem campo indexado ou depois de ele parar, e ele para de vez na primeira falha",
-			Tipo:   metrics.TipoMedidor,
+			Type:   metrics.TypeGauge,
 			Labels: rotulo,
-			Valor:  umSeVerdadeiro(e.ReconstrucaoAtiva),
+			Value:  umSeVerdadeiro(e.ReconstrucaoAtiva),
 		},
-		metrics.Amostra{
-			Familia: metrics.MetIndexCrcFalhasTotal,
-			Nome:    metrics.MetIndexCrcFalhasTotal,
-			Ajuda: "índices selados reprovados no crc32c desde a subida. É DEGRAU e não taxa: o mapeamento reprovado " +
+		metrics.Sample{
+			Family: metrics.MetIndexCRCFailuresTotal,
+			Name:   metrics.MetIndexCRCFailuresTotal,
+			Help: "índices selados reprovados no crc32c desde a subida. É DEGRAU e não taxa: o mapeamento reprovado " +
 				"fica em cache, então cada arquivo podre soma UMA vez por processo e um rate() sobre isto se auto-resolve " +
 				"enquanto o segmento segue enumerando. Nenhuma série responde \"há corrupção AGORA\": o gauge de estados é " +
 				"cego a ela (o arquivo reprovado conta como selado, porque a fila não confere crc) e a enumeração sobe " +
 				"sem atribuir causa, no mesmo balde de um segmento fora da janela. O sinal é o WARN " +
 				"indice.selado_corrompido no log. É o débito 103",
-			Tipo:   metrics.TipoContador,
+			Type:   metrics.TypeCounter,
 			Labels: rotulo,
-			Valor:  float64(e.CRCFalhas),
+			Value:  float64(e.CRCFalhas),
 		})
 }
 
@@ -118,7 +118,7 @@ func amostrasDeIndice(nome string, e storage.EstatisticasDeIndice) []metrics.Amo
 func comRotulo(base []metrics.Label, nome, valor string) []metrics.Label {
 	out := make([]metrics.Label, len(base), len(base)+1)
 	copy(out, base)
-	return append(out, metrics.Label{Nome: nome, Valor: valor})
+	return append(out, metrics.Label{Name: nome, Value: valor})
 }
 
 // indiceStats monta o bloco `index` do /v1/stats a partir da MESMA estrutura que

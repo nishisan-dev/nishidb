@@ -43,7 +43,7 @@ func TestSeriesDeRecusaDeQueryNascemComZero(t *testing.T) {
 		if achada.Valor != 0 {
 			t.Errorf("%s = %v num servidor que não recusou nada, quer 0", serie, achada.Valor)
 		}
-		if achada.Tipo != metrics.TipoContador {
+		if achada.Tipo != metrics.TypeCounter {
 			t.Errorf("%s tem de ser contador (só sobe), é %v", serie, achada.Tipo)
 		}
 		// Sem label: o sub-pool e o orçamento são do PROCESSO, não do dataset.

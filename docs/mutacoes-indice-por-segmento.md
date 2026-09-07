@@ -212,7 +212,7 @@ que espalhadas pelos relatórios.
 | `reconstrucao_ativa` ecoa `segCorrentes` | `TestOMedidorDaReconstrucaoNaoEhOContadorDeCorrentes` | `= true num Store cujo laço nunca subiu, com corrente = 1` |
 | `reconstrucao_ativa` **e** `RebuildRunning` ecoam `Estados.Corrente` (os dois lados) | `TestASerieDaReconstrucaoDesceQuandoOLacoMorre` | `nishidb_index_reconstrucao_ativa = 1 com o laço MORTO e corrente = 1` |
 | a `Ajuda` volta a prometer taxa | `TestAAjudaDoContadorDeCrcNaoApontaSerieQueNaoDiscrimina` | `ainda afirma que a falha não é memorizada` |
-| `Familia` vazia de volta | `TestOsCabecalhosSaemNomeadosParaCadaFamilia` | `cabeçalho com nome de métrica VAZIO: "# HELP  Linhas gravadas…"` |
+| `Family` vazia de volta | `TestOsCabecalhosSaemNomeadosParaCadaFamilia` | `cabeçalho com nome de métrica VAZIO: "# HELP  Linhas gravadas…"` |
 | citação morta plantada em `indices_metrics.go` | `TestAsCitacoesDeTesteNosComentariosExistem` | nomeia arquivo e nome |
 
 ---

@@ -2095,9 +2095,9 @@ coletor só pode alimentá-las percorrendo essas listas, e
 `TestOsLabelsDeIndiceSaoConjuntosFechados` confere as duas coisas — o conjunto
 que sai na porta e, pelo `go/ast`, a origem do valor no código.
 
-**Cabeçalho por família.** Toda `metrics.Amostra` precisa preencher `Familia`,
+**Cabeçalho por família.** Toda `metrics.Sample` precisa preencher `Family`,
 e não só `Nome`. O `WriteTo` agrupa `# HELP`/`# TYPE` por aquele campo, então
-amostras com `Familia` vazia caem num grupo só: o par sai uma vez, **com o nome
+amostras com `Family` vazia caem num grupo só: o par sai uma vez, **com o nome
 do metric vazio**, e as demais famílias chegam ao operador sem tipo e sem ajuda.
 Nada disso muda um número — foi por isso que o bloco `nishidb_history_*`
 conviveu com a omissão —, mas sem `# TYPE` o `rate()` não se aplica, e metade do

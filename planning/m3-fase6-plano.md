@@ -52,7 +52,7 @@ O trabalho é majoritariamente **contrato e fiação**, não motor novo.
 | **D10** | Discriminador da moldura | Chave reservada **`nishidb`** na raiz do objeto. Coluna de saída chamada `nishidb` faz a query sair **400 antes do primeiro byte** (os nomes são conhecidos no `Open`), sugerindo alias | Prefixo `$` colide com identificador citado; envelope por linha foi rejeitado no D5. A recusa é determinística e nunca acontece depois do primeiro byte |
 | **D11** | Timeout do `http.Server` | **Sem `WriteTimeout`.** O teto real é o `query.timeout` do dataset, aplicado pelo executor via ctx | `WriteTimeout` mataria stream longo legítimo — é teto de conexão, não de consulta |
 | **D12** | Corpo do request | `Content-Type: application/json` obrigatório (415), corpo limitado por `http.MaxBytesReader` a **1 MiB** (413) | `NO unbounded queues` (§128) vale para o request também: sem teto, um POST de 2 GiB é um DoS de heap |
-| **D13** | `nishidb_query_full_scans` | Entra junto, como **ColetorFunc** sobre `Engine.PlanMetrics().FullScan` (§64), **sem label `dataset`** | É a 5ª série de query do §92 sem alimentador e custa 6 linhas. Sai sem label porque `planner.Metrics` é **um por Engine**, compartilhado entre datasets (`engine.go:68`) — inventar um label que o dado não sustenta seria pior que não ter |
+| **D13** | `nishidb_query_full_scans` | Entra junto, como **CollectorFunc** sobre `Engine.PlanMetrics().FullScan` (§64), **sem label `dataset`** | É a 5ª série de query do §92 sem alimentador e custa 6 linhas. Sai sem label porque `planner.Metrics` é **um por Engine**, compartilhado entre datasets (`engine.go:68`) — inventar um label que o dado não sustenta seria pior que não ter |
 
 ---
 
@@ -165,7 +165,7 @@ Fontes, na ordem: `Store.Stats()` (`store.go:1233`), `Engine.Metrics()`/`PlanMet
 | `internal/config/config.go` | `serverBindPadrao` → `127.0.0.1` (D1); bloco `runtime.query.maxConcurrent` (default 16, `units.PositiveInt`); `ResultBatchSize()` ganha seu primeiro leitor |
 | `internal/server/query.go` *(novo)* | `handleQuery`: decodifica, valida, adquire o semáforo, executa, emite a moldura, mede |
 | `internal/server/metadata.go` *(novo)* | `handleMetadata` e `handleStats` |
-| `internal/server/metrics_query.go` *(novo)* | Famílias `nishidb_query_total`/`_active`/`_errors`/`_latency_seconds` + ColetorFunc de `_full_scans` (D13). Nomes vêm de `internal/metrics/names.go`, nunca digitados à mão |
+| `internal/server/metrics_query.go` *(novo)* | Famílias `nishidb_query_total`/`_active`/`_errors`/`_latency_seconds` + CollectorFunc de `_full_scans` (D13). Nomes vêm de `internal/metrics/names.go`, nunca digitados à mão |
 | `internal/server/server.go` | `sobeHTTP` registra as três rotas; `Novo` avisa (WARN) se o bind não é loopback |
 | `internal/cli/query.go` | Flag `--server`; caminho remoto; tradução do fecho em exit code; dica de `--server` na mensagem do `ErrDatasetLocked` |
 | `internal/cli/cli.go` | Texto de uso |

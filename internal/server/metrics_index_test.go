@@ -31,12 +31,12 @@ import (
 // alguém acrescentar uma sétima série sem decidir o que ela responde, este teste
 // é onde a decisão volta a ser cobrada.
 var familiasDeIndice = []string{
-	metrics.MetIndexSegmentos,
+	metrics.MetIndexSegments,
 	metrics.MetIndexBytes,
-	metrics.MetIndexReconstrucoesTotal,
-	metrics.MetIndexReconstrucaoAtiva,
-	metrics.MetIndexCrcFalhasTotal,
-	metrics.MetIndexSegmentosConsultadosTotal,
+	metrics.MetIndexRebuildsTotal,
+	metrics.MetIndexRebuildActive,
+	metrics.MetIndexCRCFailuresTotal,
+	metrics.MetIndexSegmentsLookedUpTotal,
 }
 
 // TestAsSeriesDeIndiceExistemAntesDoPrimeiroEvento é o oráculo do NASCIMENTO das
@@ -93,43 +93,43 @@ func TestAsSeriesDeIndiceExistemAntesDoPrimeiroEvento(t *testing.T) {
 		// `estado="corrente"` e mais nada, e o painel do operador nasceria sem a
 		// série `pendente` — que é justamente a que ele vai olhar durante a
 		// migração para saber se o laço está avançando.
-		for _, estado := range metrics.EstadosDeIndice {
-			a, ok := achaSerie(amostras, metrics.MetIndexSegmentos,
-				map[string]string{metrics.LabelDataset: ds, metrics.LabelEstado: estado})
+		for _, estado := range metrics.IndexStates {
+			a, ok := achaSerie(amostras, metrics.MetIndexSegments,
+				map[string]string{metrics.LabelDataset: ds, metrics.LabelState: estado})
 			if !ok {
 				t.Errorf("%s{dataset=%q,estado=%q} não saiu: a fila que nasce vazia é indistinguível da fila que nunca foi publicada",
-					metrics.MetIndexSegmentos, ds, estado)
+					metrics.MetIndexSegments, ds, estado)
 				continue
 			}
-			if a.Tipo != metrics.TipoMedidor {
+			if a.Tipo != metrics.TypeGauge {
 				t.Errorf("%s{estado=%q} saiu como %v, queria medidor: é contagem corrente, não acumulado",
-					metrics.MetIndexSegmentos, estado, a.Tipo)
+					metrics.MetIndexSegments, estado, a.Tipo)
 			}
 		}
-		for _, modo := range metrics.ModosDeConsultaDeIndice {
-			a, ok := achaSerie(amostras, metrics.MetIndexSegmentosConsultadosTotal,
-				map[string]string{metrics.LabelDataset: ds, metrics.LabelModo: modo})
+		for _, modo := range metrics.IndexLookupModes {
+			a, ok := achaSerie(amostras, metrics.MetIndexSegmentsLookedUpTotal,
+				map[string]string{metrics.LabelDataset: ds, metrics.LabelMode: modo})
 			if !ok {
 				t.Errorf("%s{dataset=%q,modo=%q} não saiu antes da primeira consulta",
-					metrics.MetIndexSegmentosConsultadosTotal, ds, modo)
+					metrics.MetIndexSegmentsLookedUpTotal, ds, modo)
 				continue
 			}
-			if a.Tipo != metrics.TipoContador {
+			if a.Tipo != metrics.TypeCounter {
 				t.Errorf("%s{modo=%q} saiu como %v, queria contador: o painel lê a TAXA de segmentos enumerados, "+
-					"e taxa não se calcula sobre medidor", metrics.MetIndexSegmentosConsultadosTotal, modo, a.Tipo)
+					"e taxa não se calcula sobre medidor", metrics.MetIndexSegmentsLookedUpTotal, modo, a.Tipo)
 			}
 			if a.Valor != 0 {
 				t.Errorf("%s{dataset=%q,modo=%q} = %v antes da primeira consulta, queria 0: "+
 					"contador que já nasce andado faz o primeiro rate() inventar tráfego",
-					metrics.MetIndexSegmentosConsultadosTotal, ds, modo, a.Valor)
+					metrics.MetIndexSegmentsLookedUpTotal, ds, modo, a.Valor)
 			}
 		}
-		for _, familia := range []string{metrics.MetIndexReconstrucoesTotal, metrics.MetIndexCrcFalhasTotal} {
+		for _, familia := range []string{metrics.MetIndexRebuildsTotal, metrics.MetIndexCRCFailuresTotal} {
 			a, ok := achaSerie(amostras, familia, rotulo)
 			if !ok {
 				continue // já reportado acima
 			}
-			if a.Tipo != metrics.TipoContador {
+			if a.Tipo != metrics.TypeCounter {
 				t.Errorf("%s saiu como %v, queria contador", familia, a.Tipo)
 			}
 			if a.Valor != 0 {
@@ -143,24 +143,24 @@ func TestAsSeriesDeIndiceExistemAntesDoPrimeiroEvento(t *testing.T) {
 	// metades deste par são o que separa "sobe antes da goroutine" de "constante
 	// disfarçada de medidor": a irmã declara `index: true` e o laço subiu; o base
 	// não declara campo indexado nenhum e não tem o que reconstruir.
-	ativa, ok := achaSerie(amostras, metrics.MetIndexReconstrucaoAtiva,
+	ativa, ok := achaSerie(amostras, metrics.MetIndexRebuildActive,
 		map[string]string{metrics.LabelDataset: "eventos_history"})
 	if !ok {
-		t.Fatalf("%s não saiu para a tabela irmã", metrics.MetIndexReconstrucaoAtiva)
+		t.Fatalf("%s não saiu para a tabela irmã", metrics.MetIndexRebuildActive)
 	}
 	if ativa.Valor != 1 {
 		t.Errorf("%s{dataset=\"eventos_history\"} = %v logo depois da subida, queria 1: o §92 manda o medidor subir ANTES "+
 			"da goroutine, e uma leitura entre a chamada e o primeiro escalonamento não pode dizer que nada subiu",
-			metrics.MetIndexReconstrucaoAtiva, ativa.Valor)
+			metrics.MetIndexRebuildActive, ativa.Valor)
 	}
-	base, ok := achaSerie(amostras, metrics.MetIndexReconstrucaoAtiva,
+	base, ok := achaSerie(amostras, metrics.MetIndexRebuildActive,
 		map[string]string{metrics.LabelDataset: "eventos"})
 	if !ok {
-		t.Fatalf("%s não saiu para o dataset base", metrics.MetIndexReconstrucaoAtiva)
+		t.Fatalf("%s não saiu para o dataset base", metrics.MetIndexRebuildActive)
 	}
 	if base.Valor != 0 {
 		t.Errorf("%s{dataset=\"eventos\"} = %v num dataset sem campo indexado, queria 0: um medidor que responde 1 sempre "+
-			"não distingue laço vivo de laço morto", metrics.MetIndexReconstrucaoAtiva, base.Valor)
+			"não distingue laço vivo de laço morto", metrics.MetIndexRebuildActive, base.Valor)
 	}
 }
 
@@ -195,8 +195,8 @@ func TestOsLabelsDeIndiceSaoConjuntosFechados(t *testing.T) {
 	}
 
 	amostras := coletaAmostras(t, srv)
-	confereConjuntoFechado(t, amostras, metrics.MetIndexSegmentos, metrics.LabelEstado, metrics.EstadosDeIndice)
-	confereConjuntoFechado(t, amostras, metrics.MetIndexSegmentosConsultadosTotal, metrics.LabelModo, metrics.ModosDeConsultaDeIndice)
+	confereConjuntoFechado(t, amostras, metrics.MetIndexSegments, metrics.LabelState, metrics.IndexStates)
+	confereConjuntoFechado(t, amostras, metrics.MetIndexSegmentsLookedUpTotal, metrics.LabelMode, metrics.IndexLookupModes)
 
 	confereOrigemFechadaDosLabels(t)
 }
@@ -248,7 +248,7 @@ func confereConjuntoFechado(t *testing.T, amostras []amostraExposta, familia, ro
 // e reprovaria um comentário que menciona a palavra.
 //
 // A conferência tem uma porta só de propósito — o comRotulo. Um segundo caminho
-// (um metrics.Label{} montado à mão com LabelEstado) passaria por baixo desta
+// (um metrics.Label{} montado à mão com LabelState) passaria por baixo desta
 // checagem, e por isso ele também é recusado abaixo.
 func confereOrigemFechadaDosLabels(t *testing.T) {
 	t.Helper()
@@ -275,7 +275,7 @@ func confereOrigemFechadaDosLabels(t *testing.T) {
 		if !ok || pkg.Name != "metrics" {
 			return true
 		}
-		if sel.Sel.Name != "EstadosDeIndice" && sel.Sel.Name != "ModosDeConsultaDeIndice" {
+		if sel.Sel.Name != "IndexStates" && sel.Sel.Name != "IndexLookupModes" {
 			return true
 		}
 		if id, ok := r.Value.(*ast.Ident); ok {
@@ -294,7 +294,7 @@ func confereOrigemFechadaDosLabels(t *testing.T) {
 		// rótulos de enumeração, senão haveria um caminho que este teste não vê.
 		if sel, ok := n.(*ast.SelectorExpr); ok {
 			if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "metrics" &&
-				(sel.Sel.Name == "LabelEstado" || sel.Sel.Name == "LabelModo") {
+				(sel.Sel.Name == "LabelState" || sel.Sel.Name == "LabelMode") {
 				if !dentroDeComRotulo(f, sel) {
 					t.Errorf("%s usa metrics.%s fora de uma chamada a comRotulo: uma segunda porta para o rótulo "+
 						"é uma porta que esta conferência não enxerga", arquivo, sel.Sel.Name)
@@ -311,7 +311,7 @@ func confereOrigemFechadaDosLabels(t *testing.T) {
 		}
 		conferidas++
 		nome, ok := chamada.Args[1].(*ast.SelectorExpr)
-		if !ok || nome.Sel.Name != "LabelEstado" && nome.Sel.Name != "LabelModo" {
+		if !ok || nome.Sel.Name != "LabelState" && nome.Sel.Name != "LabelMode" {
 			t.Errorf("%s: comRotulo recebeu um nome de rótulo que não é constante do pacote de métricas", arquivo)
 			return true
 		}
@@ -323,8 +323,8 @@ func confereOrigemFechadaDosLabels(t *testing.T) {
 			return true
 		}
 		if _, fechado := fechadas[valor.Name]; !fechado {
-			t.Errorf("%s: o valor de %s vem de %q, que não é a variável de um range sobre metrics.EstadosDeIndice "+
-				"nem sobre metrics.ModosDeConsultaDeIndice; label nunca vem de entrada do cliente",
+			t.Errorf("%s: o valor de %s vem de %q, que não é a variável de um range sobre metrics.IndexStates "+
+				"nem sobre metrics.IndexLookupModes; label nunca vem de entrada do cliente",
 				arquivo, nome.Sel.Name, valor.Name)
 		}
 		return true
@@ -393,31 +393,31 @@ func TestStatsEMetricsLeemAMesmaEstrutura(t *testing.T) {
 	amostras := coletaAmostras(t, srv)
 	rotulo := map[string]string{metrics.LabelDataset: tabelaDaBancada}
 	porEstado := map[string]int64{
-		metrics.EstadoSelado:   idx.Sealed,
-		metrics.EstadoCorrente: idx.Current,
-		metrics.EstadoPendente: idx.Pending,
-		metrics.EstadoFora:     idx.OutOfWindow,
+		metrics.StateSealed:  idx.Sealed,
+		metrics.StateCurrent: idx.Current,
+		metrics.StatePending: idx.Pending,
+		metrics.StateOutside: idx.OutOfWindow,
 	}
-	for _, estado := range metrics.EstadosDeIndice {
-		confereIgual(t, amostras, metrics.MetIndexSegmentos,
-			map[string]string{metrics.LabelDataset: tabelaDaBancada, metrics.LabelEstado: estado}, porEstado[estado])
+	for _, estado := range metrics.IndexStates {
+		confereIgual(t, amostras, metrics.MetIndexSegments,
+			map[string]string{metrics.LabelDataset: tabelaDaBancada, metrics.LabelState: estado}, porEstado[estado])
 	}
 	porModo := map[string]int64{
-		metrics.ModoIndice:     idx.SegmentsByIndex,
-		metrics.ModoEnumeracao: idx.SegmentsByScan,
+		metrics.ModeIndex:       idx.SegmentsByIndex,
+		metrics.ModeEnumeration: idx.SegmentsByScan,
 	}
-	for _, modo := range metrics.ModosDeConsultaDeIndice {
-		confereIgual(t, amostras, metrics.MetIndexSegmentosConsultadosTotal,
-			map[string]string{metrics.LabelDataset: tabelaDaBancada, metrics.LabelModo: modo}, porModo[modo])
+	for _, modo := range metrics.IndexLookupModes {
+		confereIgual(t, amostras, metrics.MetIndexSegmentsLookedUpTotal,
+			map[string]string{metrics.LabelDataset: tabelaDaBancada, metrics.LabelMode: modo}, porModo[modo])
 	}
 	confereIgual(t, amostras, metrics.MetIndexBytes, rotulo, idx.Bytes)
-	confereIgual(t, amostras, metrics.MetIndexReconstrucoesTotal, rotulo, idx.Rebuilds)
-	confereIgual(t, amostras, metrics.MetIndexCrcFalhasTotal, rotulo, idx.CRCFailures)
+	confereIgual(t, amostras, metrics.MetIndexRebuildsTotal, rotulo, idx.Rebuilds)
+	confereIgual(t, amostras, metrics.MetIndexCRCFailuresTotal, rotulo, idx.CRCFailures)
 	var ativa int64
 	if idx.RebuildRunning {
 		ativa = 1
 	}
-	confereIgual(t, amostras, metrics.MetIndexReconstrucaoAtiva, rotulo, ativa)
+	confereIgual(t, amostras, metrics.MetIndexRebuildActive, rotulo, ativa)
 }
 
 // exigeDezNumerosDistintos é a guarda de não-trivialidade, e ela cobre os DEZ
@@ -674,19 +674,19 @@ func corrompeOFimDoIndice(t *testing.T, caminho string) {
 // as duas passariam por um oráculo de substring.
 func TestAAjudaDoContadorDeCrcNaoApontaSerieQueNaoDiscrimina(t *testing.T) {
 	srv := servidorComHistorico(t, specComHistorico)
-	a, ok := achaSerie(coletaAmostras(t, srv), metrics.MetIndexCrcFalhasTotal,
+	a, ok := achaSerie(coletaAmostras(t, srv), metrics.MetIndexCRCFailuresTotal,
 		map[string]string{metrics.LabelDataset: "eventos_history"})
 	if !ok {
-		t.Fatalf("%s não saiu no scrape", metrics.MetIndexCrcFalhasTotal)
+		t.Fatalf("%s não saiu no scrape", metrics.MetIndexCRCFailuresTotal)
 	}
 	for _, familia := range familiasDeIndice {
-		if familia == metrics.MetIndexCrcFalhasTotal {
+		if familia == metrics.MetIndexCRCFailuresTotal {
 			continue // ela pode falar de si mesma
 		}
 		if strings.Contains(a.Ajuda, familia) {
 			t.Errorf("a ajuda de %s aponta para %s, e nenhuma série da família discrimina índice podre de segmento "+
 				"legitimamente sem índice (TestOGaugeDeEstadosEhCegoAIndicePodre): o gauge de estados é cego e a "+
-				"enumeração não atribui causa. Ajuda = %q", metrics.MetIndexCrcFalhasTotal, familia, a.Ajuda)
+				"enumeração não atribui causa. Ajuda = %q", metrics.MetIndexCRCFailuresTotal, familia, a.Ajuda)
 		}
 	}
 	// E o outro lado da propriedade: remover o conselho errado não basta, porque
@@ -695,12 +695,12 @@ func TestAAjudaDoContadorDeCrcNaoApontaSerieQueNaoDiscrimina(t *testing.T) {
 	for _, exigido := range []string{"indice.selado_corrompido", "103"} {
 		if !strings.Contains(a.Ajuda, exigido) {
 			t.Errorf("a ajuda de %s não menciona %q: sem o sinal que de fato existe e sem o número do débito, ela "+
-				"deixa o operador sem saída. Ajuda = %q", metrics.MetIndexCrcFalhasTotal, exigido, a.Ajuda)
+				"deixa o operador sem saída. Ajuda = %q", metrics.MetIndexCRCFailuresTotal, exigido, a.Ajuda)
 		}
 	}
 	if strings.Contains(a.Ajuda, "não é memorizada") {
 		t.Errorf("a ajuda de %s voltou a afirmar que a falha não é memorizada: o garanteSelado publica o mapeamento "+
-			"reprovado no cache, então o contador é DEGRAU. Ajuda = %q", metrics.MetIndexCrcFalhasTotal, a.Ajuda)
+			"reprovado no cache, então o contador é DEGRAU. Ajuda = %q", metrics.MetIndexCRCFailuresTotal, a.Ajuda)
 	}
 }
 
@@ -1061,14 +1061,14 @@ func TestASerieDaReconstrucaoDesceQuandoOLacoMorre(t *testing.T) {
 			"senão os dois fios voltam a ser iguais e este oráculo não discrimina", e.Current, e)
 	}
 	rotulo := map[string]string{metrics.LabelDataset: tabelaDaBancada}
-	ativa, ok := achaSerie(coletaAmostras(t, srv), metrics.MetIndexReconstrucaoAtiva, rotulo)
+	ativa, ok := achaSerie(coletaAmostras(t, srv), metrics.MetIndexRebuildActive, rotulo)
 	if !ok {
-		t.Fatalf("%s não saiu para %q", metrics.MetIndexReconstrucaoAtiva, tabelaDaBancada)
+		t.Fatalf("%s não saiu para %q", metrics.MetIndexRebuildActive, tabelaDaBancada)
 	}
 	if ativa.Valor != 0 {
 		t.Errorf("%s = %v com o laço MORTO e corrente = %d: zero é o alarme que a própria Ajuda desta série "+
 			"promete, e um fio que ecoe a contagem de correntes responde 1 para todo dataset com dado — o laço "+
 			"morto nunca aparece e o dataset degrada para enumeração em silêncio",
-			metrics.MetIndexReconstrucaoAtiva, ativa.Valor, e.Current)
+			metrics.MetIndexRebuildActive, ativa.Valor, e.Current)
 	}
 }

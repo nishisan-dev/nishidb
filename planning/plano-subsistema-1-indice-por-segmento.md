@@ -1670,7 +1670,7 @@ próxima revisão de "consertar" a ausência:
 	// desenho. Quando uma linha troca de valor, a posting antiga mora no
 	// índice do segmento ANTIGO: ela vira falso positivo, que a revalidação do
 	// §44 já descarta, e morre quando a compaction ou a retenção aposenta
-	// aquele segmento. Com o Clear somem a lápide e o falso negativo que ela
+	// aquele segmento. With o Clear somem a lápide e o falso negativo que ela
 	// existia para evitar. O preço é uma taxa de falso positivo governada por
 	// liveRecords/totalRecords — o mesmo número que a compaction já persegue.
 ```
@@ -2148,7 +2148,7 @@ func TestIndexTrueEhAceito(t *testing.T) {
 	}
 }
 
-// TestAsGrafiasAntigasSaoRecusadas. Com um motor só, `hash` e `bitmap`
+// TestAsGrafiasAntigasSaoRecusadas. With um motor só, `hash` e `bitmap`
 // construiriam a mesma coisa — e config que declara uma escolha que o motor
 // ignora é o expireAfterWrite decorativo que o projeto já carrega como débito.
 // Aceitá-las como sinônimo seria pior: o operador continuaria escrevendo uma
@@ -2229,7 +2229,7 @@ nova, porque quem a lê está com o servidor fora do ar."
 ```go
 // TestDoisCamposIndexadosAgoraIntersectam. Antes a regra R2 devolvia UM plano
 // de hash e parava, então `node='x' AND type=2` indexava node e revalidava type
-// linha a linha. Com um motor só a assimetria some, e ela some para MELHOR: os
+// linha a linha. With um motor só a assimetria some, e ela some para MELHOR: os
 // dois termos entram na interseção.
 func TestDoisCamposIndexadosAgoraIntersectam(t *testing.T) {
 	p := planejaOK(t, "SELECT * FROM d WHERE node = 'x' AND type = 2") // ambos indexados

@@ -47,7 +47,7 @@ func (s *Store) Checkpoint() error {
 	// opera, o custo do checkpoint É o stall total da ingestão, não só o
 	// tempo de fsync.
 	if s.cpDuracao != nil {
-		s.cpDuracao.Observa(time.Since(inicio).Seconds())
+		s.cpDuracao.Observe(time.Since(inicio).Seconds())
 		s.cpUltimo.Set(float64(time.Now().Unix()))
 	}
 	return nil

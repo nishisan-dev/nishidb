@@ -577,19 +577,19 @@ Run: `go test ./internal/server/ -run TestMetricaDeDisco -v` → FAIL: métrica 
 No coletor existente, acrescentar as duas amostras e **reescrever o comentário do topo** para dizer o que ficou de fora e por quê (só `live_bytes`, até a compaction reconstruir o tally):
 
 ```go
-			metrics.Amostra{
-				Familia: metrics.MetStorageBytes,
+			metrics.Sample{
+				Family: metrics.MetStorageBytes,
 				Nome:    metrics.MetStorageBytes,
 				Ajuda:   "bytes ocupados pelos segmentos do dataset em disco",
-				Tipo:    metrics.TipoMedidor,
+				Tipo:    metrics.TypeGauge,
 				Labels:  rotulo,
 				Valor:   float64(st.StorageBytes),
 			},
-			metrics.Amostra{
-				Familia: metrics.MetStorageGarbageBytes,
+			metrics.Sample{
+				Family: metrics.MetStorageGarbageBytes,
 				Nome:    metrics.MetStorageGarbageBytes,
 				Ajuda:   "bytes de garbage nos segmentos: há PELO MENOS isto de lixo (limite inferior, porque a liveness é limite superior — débitos 38 e 45)",
-				Tipo:    metrics.TipoMedidor,
+				Tipo:    metrics.TypeGauge,
 				Labels:  rotulo,
 				Valor:   float64(uint64(st.StorageBytes) - min(uint64(st.StorageBytes), st.LiveBytesUpperBound)),
 			},
@@ -1345,7 +1345,7 @@ func TestSeriesDeCompactionGanhamAlimentador(t *testing.T) {
 			t.Errorf("%s não foi publicada", nome)
 			continue
 		}
-		if nome != metrics.MetCompactionRunning && a.Tipo != metrics.TipoContador {
+		if nome != metrics.MetCompactionRunning && a.Tipo != metrics.TypeCounter {
 			t.Errorf("%s = %v, queria contador", nome, a.Tipo)
 		}
 	}

@@ -29,11 +29,11 @@ func TestRegistraMetricasPreRegistraAsSeisCategoriasDeEventoRuimEmZero(t *testin
 	for _, a := range amostras {
 		var motivo string
 		for _, l := range a.Labels {
-			if l.Nome == metrics.LabelMotivo {
-				motivo = l.Valor
+			if l.Name == metrics.LabelInvalidReason {
+				motivo = l.Value
 			}
 		}
-		vistas[motivo] = a.Valor
+		vistas[motivo] = a.Value
 	}
 
 	// As seis categorias são lidas do próprio enum (BadEvent), não
@@ -89,7 +89,7 @@ func TestCadaEsperaSaiDaSuaFonteEUmaVezSo(t *testing.T) {
 
 	valores := map[string][]float64{}
 	for _, a := range append(m.amostrasDaFila(), m.amostrasDaEsteira()...) {
-		valores[a.Nome] = append(valores[a.Nome], a.Valor)
+		valores[a.Name] = append(valores[a.Name], a.Value)
 	}
 
 	for nome, quero := range map[string]float64{
