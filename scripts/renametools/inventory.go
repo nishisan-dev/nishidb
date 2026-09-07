@@ -226,23 +226,33 @@ func classify(p *packages.Package, id *ast.Ident, obj types.Object, counts map[s
 		return r, true
 	case *types.Var:
 		if o.IsField() {
-			owner, pkgScope := fieldOwner(p, id)
-			if owner == "" || o.Embedded() {
+			if o.Embedded() {
 				return r, false
 			}
-			if !pkgScope {
-				// Struct declarada dentro de função (Ruling R6): owner não
-				// é endereço de pacote, então F.T.x (ou T.M.T.x quando a
-				// função é método) não é sintaxe que o rf resolve — o
-				// aplicador cai para gopls por posição.
-				fn := enclosingFunc(p, id.Pos())
-				if fn == nil {
-					return r, false
-				}
-				r.kind, r.address = "field#gopls", funcAddress(fn)+"."+owner+"."+id.Name
+			owner, pkgScope := fieldOwner(p, id)
+			if owner != "" && pkgScope {
+				r.kind, r.address = "field", owner+"."+id.Name
 				return r, true
 			}
-			r.kind, r.address = "field", owner+"."+id.Name
+			// Struct declarada dentro de função (Rulings R6 e R29): owner não
+			// é endereço de pacote, então F.T.x (ou T.M.T.x quando a função é
+			// método) não é sintaxe que o rf resolve — o aplicador cai para
+			// gopls por posição. Struct ANÔNIMA local entra por aqui também:
+			// a tabela de casos (`casos := []struct{...}{...}`) é a forma
+			// dominante das tabelas de teste, e enquanto ela ficou de fora
+			// nenhum tradutor via os campos dela.
+			fn := enclosingFunc(p, id.Pos())
+			if fn == nil {
+				// Fora de função e sem dono de escopo de pacote: campo de
+				// struct anônima aninhada num tipo ou numa var de topo, que
+				// nenhuma das duas ferramentas alcança por endereço.
+				return r, false
+			}
+			addr := funcAddress(fn)
+			if owner != "" {
+				addr += "." + owner
+			}
+			r.kind, r.address = "field#gopls", addr+"."+id.Name
 			return r, true
 		}
 		if o.Parent() == p.Types.Scope() {
@@ -319,45 +329,112 @@ func isParamOrResult(fn *ast.FuncDecl, id *ast.Ident) bool {
 	return false
 }
 
-// fieldOwner devolve o endereço do dono de um campo — o nome do tipo para
-// struct nomeada, ou `V` para `var V struct{...}` — e se esse dono é de
-// escopo de PACOTE. `owner.campo` só é sintaxe que o rf resolve quando
-// pkgScope é true; uma struct declarada dentro de função (`type T struct{}`
-// ou `var v struct{}` local) devolve owner preenchido e pkgScope falso, e
-// quem chama decide o fallback por posição (Ruling R6). Struct anônima em
-// outro lugar (campo de campo, parâmetro) não tem dono e devolve owner="".
+// fieldOwner devolve o nome de quem batiza a struct que declara o campo — o
+// tipo em `type T struct{...}`, a variável em `var V struct{...}` e em
+// `casos := []struct{...}{...}`, o parâmetro em `func f(p struct{...})` — e
+// se esse dono é de escopo de PACOTE. `owner.campo` só é sintaxe que o rf
+// resolve quando pkgScope é true, o que exige as duas coisas: o dono ser o
+// tipo/var de topo E a struct ser diretamente o tipo dele. Struct declarada
+// dentro de função (Ruling R6), struct anônima em qualquer posição de tipo
+// (Ruling R29) e tipo que apenas CONTÉM a struct (`type T []struct{...}`)
+// devolvem pkgScope falso, e quem chama cai para o rename por posição.
+// Struct anônima que nenhum nome batiza — o literal passado direto numa
+// chamada, o resultado de uma assinatura sem nome, a struct sob um `a, b :=`
+// — devolve owner="" com pkgScope falso: o endereço fica `F.campo`, sem
+// componente de dono no meio.
 func fieldOwner(p *packages.Package, id *ast.Ident) (owner string, pkgScope bool) {
+	path := pathTo(p, id)
+	// O dono sai do struct MAIS INTERNO que declara o campo: numa struct
+	// aninhada a de fora contém o identificador só por posição, e quem o
+	// declara é a de dentro.
+	inner := -1
+	for i, n := range path {
+		if st, ok := n.(*ast.StructType); ok && contains(st, id) {
+			inner = i
+		}
+	}
+	if inner < 0 {
+		return "", false
+	}
+	for i := inner - 1; i >= 0; i-- {
+		switch d := path[i].(type) {
+		case *ast.TypeSpec:
+			owner = d.Name.Name
+			if obj := p.TypesInfo.Defs[d.Name]; obj != nil && d.Type == path[inner] {
+				pkgScope = obj.Parent() == p.Types.Scope()
+			}
+			return owner, pkgScope
+		case *ast.ValueSpec:
+			if len(d.Names) != 1 {
+				return "", false
+			}
+			owner = d.Names[0].Name
+			if obj := p.TypesInfo.Defs[d.Names[0]]; obj != nil && d.Type == path[inner] {
+				pkgScope = obj.Parent() == p.Types.Scope()
+			}
+			return owner, pkgScope
+		case *ast.AssignStmt:
+			// `casos := []struct{...}{...}`. Com mais de um destino não há um
+			// dono só, e `_` não é nome que se possa citar no endereço.
+			lhs, ok := singleIdent(d.Lhs)
+			if !ok {
+				return "", false
+			}
+			return lhs, false
+		case *ast.Field:
+			// A struct anônima é o tipo de um parâmetro, de um resultado ou
+			// de um campo de outra struct; quem a batiza é esse nome. Quando
+			// isso acontece FORA de função (struct aninhada num tipo de topo)
+			// pkgScope segue falso e quem chama descarta a linha.
+			if len(d.Names) != 1 {
+				return "", false
+			}
+			return d.Names[0].Name, false
+		}
+	}
+	return "", false
+}
+
+// singleIdent devolve o nome quando a lista tem exatamente um identificador
+// citável (nem `_`, nem expressão composta como `m[k]` ou `x.f`).
+func singleIdent(exprs []ast.Expr) (string, bool) {
+	if len(exprs) != 1 {
+		return "", false
+	}
+	id, ok := exprs[0].(*ast.Ident)
+	if !ok || id.Name == "_" {
+		return "", false
+	}
+	return id.Name, true
+}
+
+// pathTo devolve a cadeia de nós do arquivo até id, do mais externo ao
+// próprio identificador. É o que permite achar o dono da struct anônima: o
+// tipo do campo não diz quem o declara, só a posição dele na árvore diz.
+func pathTo(p *packages.Package, id *ast.Ident) []ast.Node {
 	for _, f := range p.Syntax {
 		if id.Pos() < f.Pos() || id.Pos() > f.End() {
 			continue
 		}
+		var stack, path []ast.Node
 		ast.Inspect(f, func(n ast.Node) bool {
-			if owner != "" {
+			if path != nil {
 				return false
 			}
-			switch d := n.(type) {
-			case *ast.TypeSpec:
-				if st, ok := d.Type.(*ast.StructType); ok && contains(st, id) {
-					owner = d.Name.Name
-					if obj := p.TypesInfo.Defs[d.Name]; obj != nil {
-						pkgScope = obj.Parent() == p.Types.Scope()
-					}
-					return false
-				}
-			case *ast.ValueSpec:
-				if st, ok := d.Type.(*ast.StructType); ok && contains(st, id) && len(d.Names) == 1 {
-					owner = d.Names[0].Name
-					if obj := p.TypesInfo.Defs[d.Names[0]]; obj != nil {
-						pkgScope = obj.Parent() == p.Types.Scope()
-					}
-					return false
-				}
+			if n == nil {
+				stack = stack[:len(stack)-1]
+				return true
+			}
+			stack = append(stack, n)
+			if n == id {
+				path = append([]ast.Node(nil), stack...)
+				return false
 			}
 			return true
 		})
-		return owner, pkgScope
+		return path
 	}
-	return "", false
+	return nil
 }
 
 func contains(st *ast.StructType, id *ast.Ident) bool {
