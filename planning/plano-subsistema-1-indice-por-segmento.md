@@ -129,7 +129,7 @@ a superfície de configuração que a C estabelece.
   type Writer struct{ ... }
   func NewWriter() *Writer
   func (e *Writer) Add(campo types.FieldID, h uint64, row types.RowID)
-  func (e *Writer) Vazio() bool
+  func (e *Writer) IsEmpty() bool
   func (e *Writer) WriteSealed(caminho string, seg uint32) error
   ```
 
@@ -351,8 +351,8 @@ func TestOEscritorRebaseiaParaAMenorLarguraQueCabe(t *testing.T) {
 func TestOEscritorVazioNaoCriaArquivo(t *testing.T) {
 	dir := t.TempDir()
 	e := segindex.NewWriter()
-	if !e.Vazio() {
-		t.Fatal("escritor recém-criado deveria ser Vazio()")
+	if !e.IsEmpty() {
+		t.Fatal("escritor recém-criado deveria ser IsEmpty()")
 	}
 	caminho := segindex.SealedPath(dir, 1)
 	if err := e.WriteSealed(caminho, 1); err != nil {
@@ -406,15 +406,15 @@ func (e *Writer) Add(campo types.FieldID, h uint64, row types.RowID) {
 	e.ents = append(e.ents, entrada{hash: h, row: row, campo: campo})
 }
 
-// Vazio reporta que nada foi adicionado.
-func (e *Writer) Vazio() bool { return len(e.ents) == 0 }
+// IsEmpty reporta que nada foi adicionado.
+func (e *Writer) IsEmpty() bool { return len(e.ents) == 0 }
 
 // WriteSealed emite o arquivo em caminho, por .tmp + fsync + rename + fsync do
 // diretório. Writer vazio NÃO cria arquivo: "sem índice" é um estado que o
 // Lookup trata por enumeração, e um arquivo vazio faria a reconstrução
 // considerar o segmento pronto.
 func (e *Writer) WriteSealed(caminho string, seg uint32) error {
-	if e.Vazio() {
+	if e.IsEmpty() {
 		return nil
 	}
 	slices.SortFunc(e.ents, func(a, b entrada) int {

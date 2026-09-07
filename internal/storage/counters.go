@@ -370,8 +370,8 @@ func (s *Store) AuditaContadores(ctx context.Context) ([]counter.Relatorio, erro
 		}
 		var packed uint64
 		var ok bool
-		if !s.vers.Vazio() {
-			packed, ok = s.vers.Em(id, snap.Epoch)
+		if !s.vers.IsEmpty() {
+			packed, ok = s.vers.At(id, snap.Epoch)
 		}
 		if !ok {
 			if packed, ok = s.locs.Get(id); !ok {

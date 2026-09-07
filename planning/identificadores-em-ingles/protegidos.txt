@@ -38,7 +38,12 @@
 #     planos) não é citação nenhuma. As citações verdadeiras da constante já
 #     estão em inglês — o godoc de schedule.go:140,186 e as formas
 #     qualificadas `rowindex.Nunca` —, e o que a proteção segura daqui para a
-#     frente é só o advérbio.
+#     frente é só o advérbio. `Vazio` é o terceiro: `Cadeias.Vazio` e
+#     `Escritor.Vazio` viraram `IsEmpty`, mas em
+#     planning/colunas-congeladas-e-ttl-condicional-plano.md:955 o `Vazio` que
+#     abre frase é o ADJETIVO que descreve o campo `When` sem conteúdo
+#     ("Vazio marca a regra de FUNDO"), e não método nenhum. As oito citações
+#     verdadeiras deste ciclo já saíram como `IsEmpty`.
 #   - NOME DE ARQUIVO EM DISCO cuja base é homônima de identificador
 #     renomeado: `vazio.bin`, o tempdir de
 #     internal/storage/mmap/region_test.go:337. O ponto o faz passar por
@@ -69,6 +74,7 @@ Data
 Escritor.Apenda
 Fonte.Estado
 Nunca
+Vazio
 selado
 Existe
 campo

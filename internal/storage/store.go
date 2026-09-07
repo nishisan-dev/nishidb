@@ -494,7 +494,7 @@ type Store struct {
 	// a poda e a expiração oportunista da compaction.
 	snaps *registroDeSnapshots
 	// vers guarda as locations anteriores enquanto algum leitor as alcança.
-	vers *versions.Cadeias
+	vers *versions.Journal
 	// snapsExpirados conta as consultas invalidadas pelo teto do journal. É
 	// contador, e não medidor, porque a pergunta é "isto ACONTECEU?" — um
 	// medidor que voltasse a zero esconderia a recusa entre dois scrapes.
@@ -1047,7 +1047,7 @@ func Open(opts Options) (*Store, error) {
 		segSize:  make(map[uint32]int64),
 		agora:    time.Now,
 		snaps:    novoRegistroDeSnapshots(),
-		vers:     versions.Novas(),
+		vers:     versions.New(),
 	}
 	if opts.Metrics != nil {
 		s.cpDuracao = opts.Metrics.Histogram(metrics.MetCheckpointDurationSeconds,
@@ -1529,8 +1529,8 @@ func (s *Store) lookup(key, buf []byte, snap types.Snapshot) (rec types.Record, 
 		// validação de colisão logo abaixo continua valendo sobre a antiga.
 		var packed uint64
 		var ok bool
-		if !s.vers.Vazio() {
-			packed, ok = s.vers.Em(rid, snap.Epoch)
+		if !s.vers.IsEmpty() {
+			packed, ok = s.vers.At(rid, snap.Epoch)
 		}
 		if !ok {
 			if packed, ok = s.locs.Get(rid); !ok {
@@ -1630,8 +1630,8 @@ func (s *Store) GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (typ
 	var ok bool
 	// O Vazio() na frente evita a chamada de Em no caso dominante — journal
 	// sem nada retido —, e é por linha varrida que isso conta.
-	if !s.vers.Vazio() {
-		packed, ok = s.vers.Em(id, snap.Epoch)
+	if !s.vers.IsEmpty() {
+		packed, ok = s.vers.At(id, snap.Epoch)
 	}
 	if !ok {
 		if packed, ok = s.locs.Get(id); !ok {
@@ -1951,9 +1951,9 @@ func (s *Store) applyRecord(a recordApply) error {
 	// aberta o journal não recebe uma entrada sequer, e a ingestão não paga
 	// nada além da comparação de um atômico.
 	if a.versiona && a.mode == applyWrite {
-		if s.snaps.menorEpocaViva() != versions.SemLeitor {
+		if s.snaps.menorEpocaViva() != versions.NoReader {
 			if anterior, tinha := s.locs.Get(a.rowID); tinha {
-				s.vers.Registra(a.rowID, anterior, s.epocaPub.Load()+1)
+				s.vers.Retain(a.rowID, anterior, s.epocaPub.Load()+1)
 				s.invalidaOMaisAntigoSeEstourou()
 			}
 		}

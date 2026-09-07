@@ -708,7 +708,7 @@ func (s *Store) candidatos(ratio float64) []uint32 {
 		// O pin sai sozinho quando a última consulta que o segurava fecha, e é
 		// por isso que ele não precisa de prazo nem de desempate: o teto de
 		// memória do journal é que limita quanto tempo isso pode durar.
-		if s.vers.Pinado(id) {
+		if s.vers.Pinned(id) {
 			continue
 		}
 		if float64(t.liveBytes)/float64(tam) < ratio {

@@ -117,13 +117,13 @@ Pacote novo `internal/storage/versions`, dono único da estrutura, com testes
 próprios. Heap, não mmap (é estado de sessão, morre com o processo).
 
 ```go
-type Cadeias struct { ... }
+type Journal struct { ... }
 
-func (c *Cadeias) Registra(row types.RowID, packedAnterior uint64, epoca uint64)
-func (c *Cadeias) Em(row types.RowID, epoca uint64) (packed uint64, achou bool)
-func (c *Cadeias) Poda(menorEpocaViva uint64) (entradas int, bytes int64)
-func (c *Cadeias) Pinado(seg uint32) bool
-func (c *Cadeias) Bytes() int64
+func (c *Journal) Registra(row types.RowID, packedAnterior uint64, epoca uint64)
+func (c *Journal) At(row types.RowID, epoca uint64) (packed uint64, achou bool)
+func (c *Journal) Prune(menorEpocaViva uint64) (entradas int, bytes int64)
+func (c *Journal) Pinned(seg uint32) bool
+func (c *Journal) Bytes() int64
 ```
 
 **A regra de busca, que é onde um erro passaria despercebido:** ao publicar a
@@ -133,7 +133,7 @@ versão nova de `R` na época `P`, registra-se `{P, packedAnterior}`. O leitor c
 nenhuma entrada com época maior que `E`, a location corrente é a certa.
 
 O pin é **por segmento, por refcount**: `Registra` incrementa o contador do
-segmento do `packedAnterior`, `Poda` decrementa. A compaction pula segmento com
+segmento do `packedAnterior`, `Prune` decrementa. A compaction pula segmento com
 contador acima de zero. Refcount preciso, e não um piso conservador de segmento,
 porque com `maxTimeout` de minutos um piso pararia a compaction pela duração
 inteira de cada relatório.
@@ -150,7 +150,7 @@ existe, o segmento não pode ser aposentado. A ordem publicada passa a ser
 
 Os únicos consumidores fora de `internal/storage` são
 [candidate.go](internal/query/executor/candidate.go:40) e o harness de bench.
-Por isso **muda-se a assinatura, sem criar métodos `*Em` paralelos** — duas
+Por isso **muda-se a assinatura, sem criar métodos `*At` paralelos** — duas
 portas para a mesma pergunta é o que o repositório condena em toda parte. E
 `LookupBitmapEm`, do plano M6, não existe mais: o D5 colapsou os dois lookups
 em `Lookup`.

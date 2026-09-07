@@ -128,7 +128,7 @@ por mensagem) foi refutada na proposta porque Kafka entrega pelo menos uma vez e
   ([store.go:2259-2275](internal/storage/store.go:2259)), não o journal; e a
   visibilidade filtra por prazo vencido, que o contador (por definição) só
   desconta quando a LÁPIDE é gravada. A auditoria ganha enumerador próprio no
-  pacote `storage`: `vers.Em(id, snap.Epoch)` senão `locs.Get(id)`, pula só
+  pacote `storage`: `vers.At(id, snap.Epoch)` senão `locs.Get(id)`, pula só
   ausente/lápide, lê o record sob `aposMu.RLock`. "Viva" para o contador é "com
   location e sem lápide", e isso fica escrito.
 - **Refutado: aposentar por `refs == 0` + prazo basta.** Se a transição que
