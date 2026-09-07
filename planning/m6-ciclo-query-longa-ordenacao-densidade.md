@@ -600,7 +600,7 @@ vira erro nomeado (`ROW_TOO_LARGE`) em vez de crescimento silencioso.
 #### C5 — `internal/query/spill`: a primitiva
 
 - **API**, com o contrato de cópia no próprio nome do método:
-  `AcrescentaCopiando(row)`, `Rebobina()`, `Proximo()`, `Close()`. É
+  `AcrescentaCopiando(row)`, `Rewind()`, `Proximo()`, `Close()`. É
   `AcrescentaCopiando` e não `Acrescenta` porque `ColView.Val.Bytes` vale só até
   o próximo `Next()` ([row.go:7-8](internal/query/executor/row.go:7)) — é a
   armadilha número um do componente, e um nome neutro convidaria a reter a slice.

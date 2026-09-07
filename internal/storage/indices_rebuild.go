@@ -360,7 +360,7 @@ func (s *Store) podaOsPontosFixos(pendentes []uint32) {
 // secoesDoSelado devolve os campos com seção no .sidx do segmento, com os três
 // estados não-anômalos colapsados em "nenhuma seção".
 func (s *Store) secoesDoSelado(seg uint32) ([]types.FieldID, error) {
-	campos, err := segindex.CamposSelados(segindex.CaminhoSelado(s.dirDeDados(), seg))
+	campos, err := segindex.SealedFields(segindex.SealedPath(s.dirDeDados(), seg))
 	switch {
 	case indiceIlegivel(err):
 		return nil, nil
@@ -387,7 +387,7 @@ func (s *Store) secoesDoSelado(seg uint32) ([]types.FieldID, error) {
 // negativo, e o §44 só sabe descartar candidato a mais.
 //
 // O arquivo sai igual ao da selagem por CONSTRUÇÃO, porque os dois caminhos
-// alimentam o mesmo segindex.Escritor — é ele quem ordena, deduplica, re-baseia
+// alimentam o mesmo segindex.Writer — é ele quem ordena, deduplica, re-baseia
 // e escolhe a largura da posting. O que o golden
 // (TestConstruirDoSegmentoDaOMesmoArquivoQueSelarOWIP) prova é a outra metade: que
 // a ALIMENTAÇÃO é equivalente, que é onde o erro moraria. A igualdade vale para a
@@ -395,7 +395,7 @@ func (s *Store) secoesDoSelado(seg uint32) ([]types.FieldID, error) {
 // mesmo arquivo que reconstruir tudo — a cobertura é a mesma nos dois casos
 // (TestReconstruirSoOsCamposQueFaltamPreservaOsQueJaEstavam).
 //
-// Segmento sem posting nenhuma não gera arquivo (contrato de Escritor.Escreve):
+// Segmento sem posting nenhuma não gera arquivo (contrato de Writer.WriteSealed):
 // "sem índice" é um estado que o Lookup resolve por enumeração, e um .sidx vazio
 // faria o segmento passar por indexado. Um .sidx ANTERIOR nesse caso é removido,
 // porque ele só pode conter seções de campos que deixaram de ser indexados.
@@ -409,10 +409,10 @@ func (s *Store) secoesDoSelado(seg uint32) ([]types.FieldID, error) {
 //
 // A PUBLICAÇÃO NÃO TOMA O wmu, e a §2.4 emendada é explícita quanto a isso: a
 // exigência anterior — tomá-lo "só no rename" — era inexequível, porque
-// Escritor.Escreve faz escrita-tmp, fsync, rename e fsync do diretório numa
+// Writer.WriteSealed faz escrita-tmp, fsync, rename e fsync do diretório numa
 // chamada só, e segurar o lock pela escrita inteira é o que a mesma seção
 // proíbe. O que substitui o lock são três fatos: o rename já é atômico, o
-// temporário tem nome único por escritor (caminhoTemporario, desde a Tarefa 14),
+// temporário tem nome único por escritor (tempPath, desde a Tarefa 14),
 // e a selagem e a reconstrução produzem arquivos BYTE A BYTE IDÊNTICOS, o que o
 // golden prova. Com a igualdade provada, uma corrida no nome final é neutra em
 // conteúdo: quem renomear por último grava os mesmos bytes.
@@ -501,15 +501,15 @@ func (s *Store) constroiIndiceDoSegmento(ctx context.Context, seg uint32, campos
 		return false, err
 	}
 	tamanho := info.Size()
-	caminho := segindex.CaminhoSelado(s.dirDeDados(), seg)
+	caminho := segindex.SealedPath(s.dirDeDados(), seg)
 	cobertura, err := s.coberturaDaReconstrucao(caminho, campos)
 	if err != nil {
 		return false, err
 	}
-	e := segindex.NovoEscritor()
+	e := segindex.NewWriter()
 	fimValido, err := s.varreOsRecordsDoSegmento(ctx, seg, cobertura,
 		func(campo types.FieldID, h uint64, row types.RowID) error {
-			e.Adiciona(campo, h, row)
+			e.Add(campo, h, row)
 			return nil
 		})
 	if err != nil {
@@ -531,7 +531,7 @@ func (s *Store) constroiIndiceDoSegmento(ctx context.Context, seg uint32, campos
 				"um .sidx desta varredura declararia completo um índice sem as rows posteriores à corrupção",
 			ErrDatasetCorrupt, seg, fimValido, tamanho)
 	}
-	if e.Vazio() {
+	if e.IsEmpty() {
 		// Nenhuma posting sob a cobertura inteira: o índice CORRETO deste
 		// segmento é arquivo AUSENTE, e é isso que o Escritor vazio já diz ao
 		// não criar nada. O que ele não faz — porque não conhece o que estava lá
@@ -543,7 +543,7 @@ func (s *Store) constroiIndiceDoSegmento(ctx context.Context, seg uint32, campos
 		// órfão obrigou a fechar.
 		return false, s.removeSeladoObsoleto(seg, caminho)
 	}
-	if err := e.Escreve(caminho, seg); err != nil {
+	if err := e.WriteSealed(caminho, seg); err != nil {
 		return false, err
 	}
 	// A evição vem DEPOIS do rename, e sem ela a reconstrução seria trabalho
@@ -592,7 +592,7 @@ func (s *Store) constroiIndiceDoSegmento(ctx context.Context, seg uint32, campos
 // ninguém conseguiu ler (§101).
 func (s *Store) coberturaDaReconstrucao(caminho string, campos []types.FieldID) ([]types.FieldID, error) {
 	cobertura := slices.Clone(campos)
-	existentes, err := segindex.CamposSelados(caminho)
+	existentes, err := segindex.SealedFields(caminho)
 	switch {
 	case indiceIlegivel(err):
 		existentes = nil
@@ -650,7 +650,7 @@ func (s *Store) removeSeladoObsoleto(seg uint32, caminho string) error {
 // único jeito de tirá-la de um arquivo imutável.
 //
 // O PREÇO DA PERGUNTA NOVA é um open + mmap + munmap por segmento, no lugar de
-// um stat: só o header e a tabela de seções são tocados (segindex.CamposSelados),
+// um stat: só o header e a tabela de seções são tocados (segindex.SealedFields),
 // e nem o crc nem uma página de diretório entram na conta. São dezenas de
 // microssegundos por arquivo contra a varredura de até 512 MiB que a resposta
 // agenda — e é o mínimo que responde a pergunta certa, porque "existe o arquivo?"
@@ -699,7 +699,7 @@ func (s *Store) removeSeladoObsoleto(seg uint32, caminho string) error {
 //     (indices.go), então entre as duas coisas o anterior tem dado e ainda não
 //     tem .sidx. A corrida no nome FINAL é neutra — a igualdade byte a byte é
 //     provada pelo golden —, e a do temporário deixou de existir porque ele passou
-//     a ter nome único por escritor (segindex.caminhoTemporario), e não por
+//     a ter nome único por escritor (segindex.tempPath), e não por
 //     exclusão mútua. Com nome fixo, os dois caminhos escreviam no mesmo arquivo
 //     e o .sidx saía rasgado.
 //   - Um leitor que abra o .sidx ANTES da reescrita e o publique no cache DEPOIS
@@ -824,7 +824,7 @@ func (s *Store) SegmentosPendentesDeReconstrucao(j JanelaDeIndice) ([]uint32, er
 //
 // Os dois conjuntos são comparados com slices.Equal porque os DOIS são
 // crescentes por contrato: a tabela de seções é validada como ordenada na
-// abertura (segindex.leTabelaDeSecoes) e o s.camposIndexados sai ordenado do
+// abertura (segindex.readSectionTable) e o s.camposIndexados sai ordenado do
 // resolveCamposIndexados. Ordenar aqui de novo seria esconder uma quebra dessas
 // duas garantias em vez de deixá-la aparecer.
 //
@@ -835,7 +835,7 @@ func (s *Store) SegmentosPendentesDeReconstrucao(j JanelaDeIndice) ([]uint32, er
 // "reconstrua" mandaria o laço varrer 512 MiB por um disco doente (§101, três
 // baldes).
 func (s *Store) segmentoPendente(dir string, seg uint32) (bool, error) {
-	campos, err := segindex.CamposSelados(segindex.CaminhoSelado(dir, seg))
+	campos, err := segindex.SealedFields(segindex.SealedPath(dir, seg))
 	switch {
 	case indiceIlegivel(err):
 		return true, nil
@@ -858,7 +858,7 @@ func (s *Store) segmentoPendente(dir string, seg uint32) (bool, error) {
 //     binário anterior);
 //   - FORMATO inválido: bytes que este binário não decodifica;
 //   - VAZIO: zero bytes, que o mmap recusa ANTES do parser — por isso ele não
-//     chega como ErrFormato e precisa do sentinela próprio. Um .sidx de zero
+//     chega como ErrFormat e precisa do sentinela próprio. Um .sidx de zero
 //     bytes só existe como escrita truncada (o Escritor se recusa a emitir
 //     índice vazio), e o único caminho conhecido para produzi-lo — a corrida de
 //     dois escritores no `<sidx>.tmp` de nome FIXO — foi fechado pelo nome único
@@ -867,7 +867,7 @@ func (s *Store) segmentoPendente(dir string, seg uint32) (bool, error) {
 //     mmap.ErrEmptyFile que manda tratá-lo como "sem índice".
 func indiceIlegivel(err error) bool {
 	return errors.Is(err, os.ErrNotExist) ||
-		errors.Is(err, segindex.ErrFormato) ||
+		errors.Is(err, segindex.ErrFormat) ||
 		errors.Is(err, mmap.ErrEmptyFile)
 }
 

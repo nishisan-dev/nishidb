@@ -428,7 +428,7 @@ type Store struct {
 	// mapeados. Não há LRU: o mapeamento somente-leitura não retém descritor
 	// (open → mmap → close), e 500 VMAs num teto padrão de 65.530 não é
 	// pressão.
-	selados map[uint32]*segindex.Selado
+	selados map[uint32]*segindex.Sealed
 	// selGeracao conta as EVIÇÕES do mapa de selados, e existe por causa de uma
 	// janela que só passou a ser alcançável quando o laço da §2.4 subiu: o
 	// garanteSelado abre o arquivo FORA de lock nenhum (o crc32c de um índice

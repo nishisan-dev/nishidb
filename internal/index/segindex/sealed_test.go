@@ -11,10 +11,10 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// coleta esgota a fonte e devolve os rowIds emitidos, conferindo de passagem
+// collect esgota a fonte e devolve os rowIds emitidos, conferindo de passagem
 // que Err() ficou nil — uma fonte que parasse cedo por erro e fosse comparada
 // só pelo conteúdo passaria como "acertou os primeiros dois".
-func coleta(t *testing.T, f segindex.Fonte) []types.RowID {
+func collect(t *testing.T, f segindex.Source) []types.RowID {
 	t.Helper()
 	var rows []types.RowID
 	for f.Next() {
@@ -26,33 +26,33 @@ func coleta(t *testing.T, f segindex.Fonte) []types.RowID {
 	return rows
 }
 
-// exigeRows compara o que a fonte emitiu com o esperado.
-func exigeRows(t *testing.T, got, want []types.RowID, contexto string) {
+// requireRows compara o que a fonte emitiu com o esperado.
+func requireRows(t *testing.T, got, want []types.RowID, label string) {
 	t.Helper()
 	if len(got) != len(want) {
-		t.Fatalf("%s: rows = %v, quero %v", contexto, got, want)
+		t.Fatalf("%s: rows = %v, quero %v", label, got, want)
 	}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Fatalf("%s: rows = %v, quero %v", contexto, got, want)
+			t.Fatalf("%s: rows = %v, quero %v", label, got, want)
 		}
 	}
 }
 
-// escreveSeladoDeTeste emite um selado mínimo — um campo, um valor, três rows
+// writeTestSealed emite um selado mínimo — um campo, um valor, três rows
 // — e devolve o caminho. É o corpus dos testes que só precisam de um arquivo
 // bem-formado para depois estragá-lo.
-func escreveSeladoDeTeste(t *testing.T) string {
+func writeTestSealed(t *testing.T) string {
 	t.Helper()
-	e := segindex.NovoEscritor()
-	e.Adiciona(7, 100, 10)
-	e.Adiciona(7, 100, 20)
-	e.Adiciona(7, 100, 30)
-	caminho := segindex.CaminhoSelado(t.TempDir(), 1)
-	if err := e.Escreve(caminho, 1); err != nil {
-		t.Fatalf("Escreve: %v", err)
+	e := segindex.NewWriter()
+	e.Add(7, 100, 10)
+	e.Add(7, 100, 20)
+	e.Add(7, 100, 30)
+	path := segindex.SealedPath(t.TempDir(), 1)
+	if err := e.WriteSealed(path, 1); err != nil {
+		t.Fatalf("WriteSealed: %v", err)
 	}
-	return caminho
+	return path
 }
 
 // TestOSeladoDevolveOQueOEscritorRecebeu é o round-trip do formato, e usa de
@@ -64,28 +64,28 @@ func escreveSeladoDeTeste(t *testing.T) string {
 // erram igual" de passar por "os dois estão certos".
 func TestOSeladoDevolveOQueOEscritorRecebeu(t *testing.T) {
 	dir := t.TempDir()
-	e := segindex.NovoEscritor()
+	e := segindex.NewWriter()
 	// campo 7, valor A (hash 100): rows 30, 10, 30 (duplicata), 20
-	e.Adiciona(7, 100, 30)
-	e.Adiciona(7, 100, 10)
-	e.Adiciona(7, 100, 30)
-	e.Adiciona(7, 100, 20)
+	e.Add(7, 100, 30)
+	e.Add(7, 100, 10)
+	e.Add(7, 100, 30)
+	e.Add(7, 100, 20)
 	// campo 7, valor B (hash 50): row 15  -- hash MENOR, adicionado depois
-	e.Adiciona(7, 50, 15)
+	e.Add(7, 50, 15)
 	// campo 3 (fieldID MENOR, adicionado por último)
-	e.Adiciona(3, 999, 12)
+	e.Add(3, 999, 12)
 
-	caminho := segindex.CaminhoSelado(dir, 42)
-	if err := e.Escreve(caminho, 42); err != nil {
-		t.Fatalf("Escreve: %v", err)
+	path := segindex.SealedPath(dir, 42)
+	if err := e.WriteSealed(path, 42); err != nil {
+		t.Fatalf("WriteSealed: %v", err)
 	}
-	s, err := segindex.AbreSelado(caminho)
+	s, err := segindex.OpenSealed(path)
 	if err != nil {
-		t.Fatalf("AbreSelado: %v", err)
+		t.Fatalf("OpenSealed: %v", err)
 	}
 	defer func() {
-		if err := s.Fecha(); err != nil {
-			t.Errorf("Fecha: %v", err)
+		if err := s.Close(); err != nil {
+			t.Errorf("Close: %v", err)
 		}
 	}()
 
@@ -99,17 +99,17 @@ func TestOSeladoDevolveOQueOEscritorRecebeu(t *testing.T) {
 		t.Errorf("MaxRowID() = %d, quero %d", got, want)
 	}
 
-	campos := s.Campos()
-	if len(campos) != 2 || campos[0] != 3 || campos[1] != 7 {
-		t.Fatalf("Campos() = %v, quero [3 7] (ordenado por fieldID)", campos)
+	fields := s.Fields()
+	if len(fields) != 2 || fields[0] != 3 || fields[1] != 7 {
+		t.Fatalf("Fields() = %v, quero [3 7] (ordenado por fieldID)", fields)
 	}
 	for _, c := range []types.FieldID{3, 7} {
-		if !s.TemCampo(c) {
-			t.Errorf("TemCampo(%d) = false, quero true", c)
+		if !s.HasField(c) {
+			t.Errorf("HasField(%d) = false, quero true", c)
 		}
 	}
-	if s.TemCampo(5) {
-		t.Error("TemCampo(5) = true, quero false — o campo 5 não tem seção neste segmento")
+	if s.HasField(5) {
+		t.Error("HasField(5) = true, quero false — o campo 5 não tem seção neste segmento")
 	}
 
 	// O valor com muitas postings: agrupado, ascendente e sem a duplicata.
@@ -129,7 +129,7 @@ func TestOSeladoDevolveOQueOEscritorRecebeu(t *testing.T) {
 	if got, want := f.MaxRowID(), types.RowID(30); got != want {
 		t.Errorf("fonte(7,100).MaxRowID() = %d, quero %d", got, want)
 	}
-	exigeRows(t, coleta(t, f), []types.RowID{10, 20, 30}, "campo 7, hash 100")
+	requireRows(t, collect(t, f), []types.RowID{10, 20, 30}, "campo 7, hash 100")
 	if err := f.Close(); err != nil {
 		t.Errorf("Close da fonte: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestOSeladoDevolveOQueOEscritorRecebeu(t *testing.T) {
 	if !ok {
 		t.Fatal("Lookup(7, 50) devolveu ok=false")
 	}
-	exigeRows(t, coleta(t, f), []types.RowID{15}, "campo 7, hash 50")
+	requireRows(t, collect(t, f), []types.RowID{15}, "campo 7, hash 50")
 
 	// O outro campo, para provar que a busca binária na tabela de seções acha
 	// o fieldID menor que foi adicionado por último.
@@ -148,7 +148,7 @@ func TestOSeladoDevolveOQueOEscritorRecebeu(t *testing.T) {
 	if !ok {
 		t.Fatal("Lookup(3, 999) devolveu ok=false")
 	}
-	exigeRows(t, coleta(t, f), []types.RowID{12}, "campo 3, hash 999")
+	requireRows(t, collect(t, f), []types.RowID{12}, "campo 3, hash 999")
 }
 
 // TestOSeladoLeAsPostingsDeOitoBytes fecha a outra metade do formato. Todos os
@@ -163,34 +163,34 @@ func TestOSeladoDevolveOQueOEscritorRecebeu(t *testing.T) {
 // novas ao mesmo tempo, e o span entre elas cresce com a vida do dataset.
 //
 // A asserção sobre o byte 32 é parte do teste, não conferência decorativa: sem
-// ela, uma mudança em larguraPara faria este teste passar a exercitar o mesmo
+// ela, uma mudança em widthFor faria este teste passar a exercitar o mesmo
 // ramo de 4 bytes que todos os outros já cobrem, e a perda de cobertura seria
 // invisível.
 func TestOSeladoLeAsPostingsDeOitoBytes(t *testing.T) {
-	const longe = types.RowID(1) << 33 // span >= 2³² a partir de 0
+	const far = types.RowID(1) << 33 // span >= 2³² a partir de 0
 
-	e := segindex.NovoEscritor()
-	e.Adiciona(7, 100, 0)
-	e.Adiciona(7, 100, longe)
-	caminho := segindex.CaminhoSelado(t.TempDir(), 1)
-	if err := e.Escreve(caminho, 1); err != nil {
-		t.Fatalf("Escreve: %v", err)
+	e := segindex.NewWriter()
+	e.Add(7, 100, 0)
+	e.Add(7, 100, far)
+	path := segindex.SealedPath(t.TempDir(), 1)
+	if err := e.WriteSealed(path, 1); err != nil {
+		t.Fatalf("WriteSealed: %v", err)
 	}
-	b, err := os.ReadFile(caminho)
+	b, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := b[offLargura]; got != 8 {
+	if got := b[offWidth]; got != 8 {
 		t.Fatalf("postingWidth = %d, quero 8 — o corpus deixou de exercitar o ramo de 8 bytes", got)
 	}
 
-	s, err := segindex.AbreSelado(caminho)
+	s, err := segindex.OpenSealed(path)
 	if err != nil {
-		t.Fatalf("AbreSelado: %v", err)
+		t.Fatalf("OpenSealed: %v", err)
 	}
 	defer func() {
-		if err := s.Fecha(); err != nil {
-			t.Errorf("Fecha: %v", err)
+		if err := s.Close(); err != nil {
+			t.Errorf("Close: %v", err)
 		}
 	}()
 	f, ok := s.Lookup(7, 100)
@@ -200,10 +200,10 @@ func TestOSeladoLeAsPostingsDeOitoBytes(t *testing.T) {
 	if got, want := f.MinRowID(), types.RowID(0); got != want {
 		t.Errorf("MinRowID() = %d, quero %d", got, want)
 	}
-	if got, want := f.MaxRowID(), longe; got != want {
+	if got, want := f.MaxRowID(), far; got != want {
 		t.Errorf("MaxRowID() = %d, quero %d", got, want)
 	}
-	exigeRows(t, coleta(t, f), []types.RowID{0, longe}, "postings de 8 bytes")
+	requireRows(t, collect(t, f), []types.RowID{0, far}, "postings de 8 bytes")
 }
 
 // TestValorAusenteEhFonteVaziaCampoAusenteEhOkFalso trava a distinção que
@@ -213,13 +213,13 @@ func TestOSeladoLeAsPostingsDeOitoBytes(t *testing.T) {
 // zero linhas". Confundir os dois nas duas direções é grave: um faz enumerar
 // 224 mil linhas por nada, o outro faz PERDER linhas que existem.
 func TestValorAusenteEhFonteVaziaCampoAusenteEhOkFalso(t *testing.T) {
-	s, err := segindex.AbreSelado(escreveSeladoDeTeste(t))
+	s, err := segindex.OpenSealed(writeTestSealed(t))
 	if err != nil {
-		t.Fatalf("AbreSelado: %v", err)
+		t.Fatalf("OpenSealed: %v", err)
 	}
 	defer func() {
-		if err := s.Fecha(); err != nil {
-			t.Errorf("Fecha: %v", err)
+		if err := s.Close(); err != nil {
+			t.Errorf("Close: %v", err)
 		}
 	}()
 
@@ -230,10 +230,10 @@ func TestValorAusenteEhFonteVaziaCampoAusenteEhOkFalso(t *testing.T) {
 	if !ok {
 		t.Fatal("Lookup de valor ausente em campo indexado devolveu ok=false — o chamador enumeraria o segmento por nada")
 	}
-	if rows := coleta(t, f); len(rows) != 0 {
+	if rows := collect(t, f); len(rows) != 0 {
 		t.Errorf("fonte de valor ausente emitiu %v, quero nada", rows)
 	}
-	// O contrato do Une (Tarefa 5): fonte que não vai emitir nada reporta
+	// O contrato do Union (Tarefa 5): fonte que não vai emitir nada reporta
 	// Min > Max, e é isso que permite descartá-la antes de decidir sobre
 	// disjunção, sem consumir nenhuma.
 	if f.MinRowID() <= f.MaxRowID() {
@@ -250,71 +250,71 @@ func TestValorAusenteEhFonteVaziaCampoAusenteEhOkFalso(t *testing.T) {
 // enumeração — resposta correta, só lenta. Derrubar a consulta trocaria
 // corrupção de um arquivo reconstruível por indisponibilidade.
 func TestCRCDivergenteNaoDerrubaAConsulta(t *testing.T) {
-	caminho := escreveSeladoDeTeste(t) // helper: 1 campo, 1 valor, 3 rows
-	b, err := os.ReadFile(caminho)
+	path := writeTestSealed(t) // helper: 1 campo, 1 valor, 3 rows
+	b, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	b[len(b)-1] ^= 0xFF // corrompe o crc
-	if err := os.WriteFile(caminho, b, 0o644); err != nil {
+	if err := os.WriteFile(path, b, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	s, err := segindex.AbreSelado(caminho)
+	s, err := segindex.OpenSealed(path)
 	if err != nil {
-		t.Fatalf("AbreSelado não deve falhar por crc: %v", err)
+		t.Fatalf("OpenSealed não deve falhar por crc: %v", err)
 	}
 	defer func() {
-		if err := s.Fecha(); err != nil {
-			t.Errorf("Fecha: %v", err)
+		if err := s.Close(); err != nil {
+			t.Errorf("Close: %v", err)
 		}
 	}()
 	if _, ok := s.Lookup(7, 100); ok {
 		t.Error("Lookup sobre arquivo com crc divergente devolveu ok=true")
 	}
-	if !errors.Is(s.ErroDeIntegridade(), segindex.ErrCRC) {
-		t.Errorf("ErroDeIntegridade() = %v, quero ErrCRC — o chamador precisa saber que é corrupção, e não campo ausente", s.ErroDeIntegridade())
+	if !errors.Is(s.IntegrityErr(), segindex.ErrCRC) {
+		t.Errorf("IntegrityErr() = %v, quero ErrCRC — o chamador precisa saber que é corrupção, e não campo ausente", s.IntegrityErr())
 	}
 }
 
 // TestCRCIntegroNaoReportaErroDeIntegridade é a contraparte do teste de
-// corrupção: sem ela, um ErroDeIntegridade que devolvesse ErrCRC SEMPRE
+// corrupção: sem ela, um IntegrityErr que devolvesse ErrCRC SEMPRE
 // passaria naquele teste, e a reconstrução seria disparada em cima de todo
 // índice são do dataset.
 func TestCRCIntegroNaoReportaErroDeIntegridade(t *testing.T) {
-	s, err := segindex.AbreSelado(escreveSeladoDeTeste(t))
+	s, err := segindex.OpenSealed(writeTestSealed(t))
 	if err != nil {
-		t.Fatalf("AbreSelado: %v", err)
+		t.Fatalf("OpenSealed: %v", err)
 	}
 	defer func() {
-		if err := s.Fecha(); err != nil {
-			t.Errorf("Fecha: %v", err)
+		if err := s.Close(); err != nil {
+			t.Errorf("Close: %v", err)
 		}
 	}()
-	if err := s.ErroDeIntegridade(); err != nil {
-		t.Fatalf("ErroDeIntegridade() = %v, quero nil", err)
+	if err := s.IntegrityErr(); err != nil {
+		t.Fatalf("IntegrityErr() = %v, quero nil", err)
 	}
 }
 
-// Offsets do corpus de escreveSeladoDeTeste — um campo, um valor, três rows.
+// Offsets do corpus de writeTestSealed — um campo, um valor, três rows.
 // Estão escritos aqui, e não derivados do pacote, porque quem mutila um formato
 // de disco tem de saber onde está pondo a mão: o arquivo tem 120 bytes, a
 // tabela de seções vai de 64 a 88, o diretório de 88 a 104, as postings de 104
 // a 116 e o crc de 116 a 120.
 const (
-	offSecCount     = 6                          // u16
-	offBaseRowID    = 16                         // u64
-	offLargura      = 32                         // u8
-	offDistintos    = segindex.HeaderSelado + 4  // u32 da seção 0
-	offDirOff       = segindex.HeaderSelado + 8  // u64 da seção 0
-	offPostOff      = segindex.HeaderSelado + 16 // u64 da seção 0
-	offPostIdx      = 96                         // u32 do slot 0 do diretório
-	offCount        = 100                        // u32 do slot 0 do diretório
-	fimTabelaCorpus = 88
-	fimCorpoCorpus  = 116
+	offSecCount       = 6                              // u16
+	offBaseRowID      = 16                             // u64
+	offWidth          = 32                             // u8
+	offDistinctValues = segindex.SealedHeaderSize + 4  // u32 da seção 0
+	offDirOff         = segindex.SealedHeaderSize + 8  // u64 da seção 0
+	offPostOff        = segindex.SealedHeaderSize + 16 // u64 da seção 0
+	offPostIdx        = 96                             // u32 do slot 0 do diretório
+	offCount          = 100                            // u32 do slot 0 do diretório
+	corpusTableEnd    = 88
+	corpusBodyEnd     = 116
 )
 
-func poeU64(b []byte, off int, v uint64) { binary.LittleEndian.PutUint64(b[off:off+8], v) }
-func poeU32(b []byte, off int, v uint32) { binary.LittleEndian.PutUint32(b[off:off+4], v) }
+func putU64(b []byte, off int, v uint64) { binary.LittleEndian.PutUint64(b[off:off+8], v) }
+func putU32(b []byte, off int, v uint32) { binary.LittleEndian.PutUint32(b[off:off+4], v) }
 
 // TestSeladoRecusaHeaderInvalido cobre as recusas de FORMATO, que são
 // separadas do crc de propósito: formato inválido é bug ou versão de arquivo
@@ -328,11 +328,11 @@ func poeU32(b []byte, off int, v uint32) { binary.LittleEndian.PutUint32(b[off:o
 // mutilações CIRÚRGICAS, um guarda por caso: escrever 0xFF em tudo provaria só
 // que o guarda mais externo funciona.
 func TestSeladoRecusaHeaderInvalido(t *testing.T) {
-	casos := map[string]func(b []byte) []byte{
+	cases := map[string]func(b []byte) []byte{
 		"magic trocado":       func(b []byte) []byte { copy(b[0:4], "XXXX"); return b },
-		"versão desconhecida": func(b []byte) []byte { b[4] = segindex.VersaoSelado + 1; return b },
+		"versão desconhecida": func(b []byte) []byte { b[4] = segindex.SealedVersion + 1; return b },
 		"largura de posting inválida": func(b []byte) []byte {
-			b[offLargura] = 5
+			b[offWidth] = 5
 			return b
 		},
 		"truncado antes do header": func(b []byte) []byte { return b[:16] },
@@ -352,59 +352,59 @@ func TestSeladoRecusaHeaderInvalido(t *testing.T) {
 			// base é a origem dos deltas: acima do máximo, todo delta seria
 			// negativo, e em u32 isso vira um rowId gigante — falso negativo
 			// silencioso.
-			poeU64(b, offBaseRowID, 100)
+			putU64(b, offBaseRowID, 100)
 			return b
 		},
 
 		// --- tabela de seções ---
 		"dirOff dentro da tabela de seções": func(b []byte) []byte {
-			poeU64(b, offDirOff, fimTabelaCorpus-8)
+			putU64(b, offDirOff, corpusTableEnd-8)
 			return b
 		},
 		"dirOff com wrap na aritmética": func(b []byte) []byte {
 			// dirOff + distintos*16 estoura o u64 e dá a volta: sem o guarda de
 			// wrap, dirFim ficaria PEQUENO e passaria pelo teste do fim.
-			poeU64(b, offDirOff, ^uint64(0))
+			putU64(b, offDirOff, ^uint64(0))
 			return b
 		},
 		"diretório passando do fim do corpo": func(b []byte) []byte {
-			poeU32(b, offDistintos, 100) // 88 + 100*16 = 1688 > 116
+			putU32(b, offDistinctValues, 100) // 88 + 100*16 = 1688 > 116
 			return b
 		},
 		"postOff dentro do diretório": func(b []byte) []byte {
-			poeU64(b, offPostOff, fimTabelaCorpus) // 88 < dirFim (104)
+			putU64(b, offPostOff, corpusTableEnd) // 88 < dirFim (104)
 			return b
 		},
 		"postOff além do fim do corpo": func(b []byte) []byte {
-			poeU64(b, offPostOff, fimCorpoCorpus+8)
+			putU64(b, offPostOff, corpusBodyEnd+8)
 			return b
 		},
 		"postings não múltiplas da largura": func(b []byte) []byte {
 			// 116 - 105 = 11 bytes de postings, que não é múltiplo de 4. O
 			// número de postings é DERIVADO da contiguidade das seções, e uma
 			// derivação fracionária significa que a contiguidade quebrou.
-			poeU64(b, offPostOff, fimCorpoCorpus-11)
+			putU64(b, offPostOff, corpusBodyEnd-11)
 			return b
 		},
 	}
-	original, err := os.ReadFile(escreveSeladoDeTeste(t))
+	original, err := os.ReadFile(writeTestSealed(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for nome, estraga := range casos {
-		t.Run(nome, func(t *testing.T) {
-			b := estraga(append([]byte(nil), original...))
-			caminho := segindex.CaminhoSelado(t.TempDir(), 1)
-			if err := os.WriteFile(caminho, b, 0o644); err != nil {
+	for name, corrupt := range cases {
+		t.Run(name, func(t *testing.T) {
+			b := corrupt(append([]byte(nil), original...))
+			path := segindex.SealedPath(t.TempDir(), 1)
+			if err := os.WriteFile(path, b, 0o644); err != nil {
 				t.Fatal(err)
 			}
-			s, err := segindex.AbreSelado(caminho)
+			s, err := segindex.OpenSealed(path)
 			if err == nil {
-				_ = s.Fecha()
-				t.Fatal("AbreSelado aceitou o header mutilado")
+				_ = s.Close()
+				t.Fatal("OpenSealed aceitou o header mutilado")
 			}
-			if !errors.Is(err, segindex.ErrFormato) {
-				t.Errorf("erro = %v, quero ErrFormato", err)
+			if !errors.Is(err, segindex.ErrFormat) {
+				t.Errorf("erro = %v, quero ErrFormat", err)
 			}
 		})
 	}
@@ -423,57 +423,57 @@ func TestSeladoRecusaHeaderInvalido(t *testing.T) {
 //
 // Precisa de duas seções, o que o corpus de um campo não dá.
 func TestSeladoRecusaTabelaDeSecoesForaDeOrdem(t *testing.T) {
-	e := segindex.NovoEscritor()
-	e.Adiciona(3, 999, 12)
-	e.Adiciona(7, 100, 10)
-	origem := segindex.CaminhoSelado(t.TempDir(), 1)
-	if err := e.Escreve(origem, 1); err != nil {
-		t.Fatalf("Escreve: %v", err)
+	e := segindex.NewWriter()
+	e.Add(3, 999, 12)
+	e.Add(7, 100, 10)
+	sourcePath := segindex.SealedPath(t.TempDir(), 1)
+	if err := e.WriteSealed(sourcePath, 1); err != nil {
+		t.Fatalf("WriteSealed: %v", err)
 	}
-	original, err := os.ReadFile(origem)
+	original, err := os.ReadFile(sourcePath)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Só os fieldIDs são trocados: os offsets das duas seções continuam
 	// válidos, então a recusa só pode vir do guarda de ordenação.
-	const offCampo0 = segindex.HeaderSelado
-	const offCampo1 = segindex.HeaderSelado + segindex.TamSecao
-	casos := map[string][2]uint16{
+	const offField0 = segindex.SealedHeaderSize
+	const offField1 = segindex.SealedHeaderSize + segindex.SectionEntrySize
+	cases := map[string][2]uint16{
 		"decrescente": {7, 3},
 		"repetido":    {7, 7},
 	}
-	for nome, campos := range casos {
-		t.Run(nome, func(t *testing.T) {
+	for name, fields := range cases {
+		t.Run(name, func(t *testing.T) {
 			b := append([]byte(nil), original...)
-			binary.LittleEndian.PutUint16(b[offCampo0:offCampo0+2], campos[0])
-			binary.LittleEndian.PutUint16(b[offCampo1:offCampo1+2], campos[1])
-			caminho := segindex.CaminhoSelado(t.TempDir(), 1)
-			if err := os.WriteFile(caminho, b, 0o644); err != nil {
+			binary.LittleEndian.PutUint16(b[offField0:offField0+2], fields[0])
+			binary.LittleEndian.PutUint16(b[offField1:offField1+2], fields[1])
+			path := segindex.SealedPath(t.TempDir(), 1)
+			if err := os.WriteFile(path, b, 0o644); err != nil {
 				t.Fatal(err)
 			}
-			s, err := segindex.AbreSelado(caminho)
+			s, err := segindex.OpenSealed(path)
 			if err == nil {
-				_ = s.Fecha()
-				t.Fatal("AbreSelado aceitou a tabela de seções fora de ordem")
+				_ = s.Close()
+				t.Fatal("OpenSealed aceitou a tabela de seções fora de ordem")
 			}
-			if !errors.Is(err, segindex.ErrFormato) {
-				t.Errorf("erro = %v, quero ErrFormato", err)
+			if !errors.Is(err, segindex.ErrFormat) {
+				t.Errorf("erro = %v, quero ErrFormat", err)
 			}
 		})
 	}
 }
 
-// regravaCRC recalcula o crc32c sobre [0, EOF-4) e o grava nos últimos quatro
+// rewriteCRC recalcula o crc32c sobre [0, EOF-4) e o grava nos últimos quatro
 // bytes.
 //
 // A tabela é montada AQUI, e não emprestada do pacote, porque um teste que
 // reutilizasse a variável de produção não estaria conferindo o algoritmo — só
 // que o arquivo é consistente consigo mesmo.
-func regravaCRC(b []byte) []byte {
-	corpo := b[:len(b)-segindex.TamCRC]
-	soma := crc32.Checksum(corpo, crc32.MakeTable(crc32.Castagnoli))
-	binary.LittleEndian.PutUint32(b[len(b)-segindex.TamCRC:], soma)
+func rewriteCRC(b []byte) []byte {
+	body := b[:len(b)-segindex.CRCSize]
+	sum := crc32.Checksum(body, crc32.MakeTable(crc32.Castagnoli))
+	binary.LittleEndian.PutUint32(b[len(b)-segindex.CRCSize:], sum)
 	return b
 }
 
@@ -484,45 +484,45 @@ func regravaCRC(b []byte) []byte {
 // O caso que sobra para ele é o ESCRITOR COM BUG: um postIdx ou um count
 // inválido gravado sobre bytes que o crc cobre corretamente. Por isso cada
 // mutilação vem com o crc REGRAVADO — sem isso o Lookup sairia antes, no
-// confereCRC, e o teste estaria medindo o guarda errado. A asserção de que
-// ErroDeIntegridade() continua nil é o que prova que foi este guarda, e não o
+// checkCRC, e o teste estaria medindo o guarda errado. A asserção de que
+// IntegrityErr() continua nil é o que prova que foi este guarda, e não o
 // checksum, que pegou.
 func TestPostingsForaDaFaixaDegradamEmVezDePanicar(t *testing.T) {
-	casos := map[string]func(b []byte){
-		"count zero":            func(b []byte) { poeU32(b, offCount, 0) },
-		"count além das 3 rows": func(b []byte) { poeU32(b, offCount, 999) },
-		"postIdx além do fim":   func(b []byte) { poeU32(b, offPostIdx, 5) },
+	cases := map[string]func(b []byte){
+		"count zero":            func(b []byte) { putU32(b, offCount, 0) },
+		"count além das 3 rows": func(b []byte) { putU32(b, offCount, 999) },
+		"postIdx além do fim":   func(b []byte) { putU32(b, offPostIdx, 5) },
 		"postIdx e count estourando juntos": func(b []byte) {
-			poeU32(b, offPostIdx, 2)
-			poeU32(b, offCount, 3) // 2+3 = 5 > 3 postings
+			putU32(b, offPostIdx, 2)
+			putU32(b, offCount, 3) // 2+3 = 5 > 3 postings
 		},
 	}
-	original, err := os.ReadFile(escreveSeladoDeTeste(t))
+	original, err := os.ReadFile(writeTestSealed(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for nome, estraga := range casos {
-		t.Run(nome, func(t *testing.T) {
+	for name, corrupt := range cases {
+		t.Run(name, func(t *testing.T) {
 			b := append([]byte(nil), original...)
-			estraga(b)
-			caminho := segindex.CaminhoSelado(t.TempDir(), 1)
-			if err := os.WriteFile(caminho, regravaCRC(b), 0o644); err != nil {
+			corrupt(b)
+			path := segindex.SealedPath(t.TempDir(), 1)
+			if err := os.WriteFile(path, rewriteCRC(b), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			s, err := segindex.AbreSelado(caminho)
+			s, err := segindex.OpenSealed(path)
 			if err != nil {
-				t.Fatalf("AbreSelado: %v — o diretório só é lido na consulta, não na abertura", err)
+				t.Fatalf("OpenSealed: %v — o diretório só é lido na consulta, não na abertura", err)
 			}
 			defer func() {
-				if err := s.Fecha(); err != nil {
-					t.Errorf("Fecha: %v", err)
+				if err := s.Close(); err != nil {
+					t.Errorf("Close: %v", err)
 				}
 			}()
 			if _, ok := s.Lookup(7, 100); ok {
 				t.Error("Lookup sobre postings fora da faixa devolveu ok=true")
 			}
-			if err := s.ErroDeIntegridade(); err != nil {
-				t.Errorf("ErroDeIntegridade() = %v, quero nil — o crc está correto, quem recusou tem de ser o guarda de faixa", err)
+			if err := s.IntegrityErr(); err != nil {
+				t.Errorf("IntegrityErr() = %v, quero nil — o crc está correto, quem recusou tem de ser o guarda de faixa", err)
 			}
 		})
 	}
@@ -539,37 +539,37 @@ func TestPostingsForaDaFaixaDegradamEmVezDePanicar(t *testing.T) {
 // quiesce antes de fechar. Isto é o que sobra para o dia em que um caminho
 // novo escapar.
 func TestLookupAposFechaPanicaEmVezDeLerMemoriaDesmontada(t *testing.T) {
-	s, err := segindex.AbreSelado(escreveSeladoDeTeste(t))
+	s, err := segindex.OpenSealed(writeTestSealed(t))
 	if err != nil {
-		t.Fatalf("AbreSelado: %v", err)
+		t.Fatalf("OpenSealed: %v", err)
 	}
-	if err := s.Fecha(); err != nil {
-		t.Fatalf("Fecha: %v", err)
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
 	}
 	defer func() {
 		if recover() == nil {
-			t.Error("Lookup após Fecha deveria entrar em pânico")
+			t.Error("Lookup após Close deveria entrar em pânico")
 		}
 	}()
 	s.Lookup(7, 100)
 }
 
-// abreSeladoComNPostings monta um selado com um campo, um valor e n postings
+// openSealedWithNPostings monta um selado com um campo, um valor e n postings
 // consecutivas. É o corpus do gate de alocação, onde o que importa é ter
 // linhas suficientes para que uma cópia por linha apareça na média.
-func abreSeladoComNPostings(t *testing.T, n int) *segindex.Selado {
+func openSealedWithNPostings(t *testing.T, n int) *segindex.Sealed {
 	t.Helper()
-	e := segindex.NovoEscritor()
+	e := segindex.NewWriter()
 	for i := range n {
-		e.Adiciona(7, 100, types.RowID(i))
+		e.Add(7, 100, types.RowID(i))
 	}
-	caminho := segindex.CaminhoSelado(t.TempDir(), 1)
-	if err := e.Escreve(caminho, 1); err != nil {
-		t.Fatalf("Escreve: %v", err)
+	path := segindex.SealedPath(t.TempDir(), 1)
+	if err := e.WriteSealed(path, 1); err != nil {
+		t.Fatalf("WriteSealed: %v", err)
 	}
-	s, err := segindex.AbreSelado(caminho)
+	s, err := segindex.OpenSealed(path)
 	if err != nil {
-		t.Fatalf("AbreSelado: %v", err)
+		t.Fatalf("OpenSealed: %v", err)
 	}
 	return s
 }

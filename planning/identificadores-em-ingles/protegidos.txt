@@ -32,7 +32,25 @@
 #     planning/colunas-congeladas-e-ttl-condicional-plano.md:793,1419 viram
 #     `Exists`. O idioma "Existe porque…" abre godoc em mais de vinte arquivos
 #     deste repositório.
+#   - NOME DE ARQUIVO EM DISCO cuja base é homônima de identificador
+#     renomeado: `vazio.bin`, o tempdir de
+#     internal/storage/mmap/region_test.go:337. O ponto o faz passar por
+#     endereço qualificado, e o tipo `vazio` do segindex (union.go) virou
+#     `emptyIter` — sem a proteção o arquivo de teste passa a se chamar
+#     `emptyIter.bin`, que não é nome de arquivo que ninguém escreveria.
+#   - endereço QUALIFICADO homônimo cujo dono é OUTRO tipo, vivo e não
+#     mapeado, que o oráculo da declaração viva não alcança porque só olha o
+#     token nu: `Fonte.Estado` é o campo de internal/metakafka.Fonte
+#     (registry.go:80), e o `Fonte` → `Source` do segindex é outro tipo, sem
+#     campo `Estado` (sealed.go:28); `Escritor.Apenda` é a INTERFACE FICTÍCIA
+#     do fixture do próprio ferramental — dado de teste em
+#     scripts/renametools/inventory_test.go:30 e o exemplo dos comentários de
+#     scripts/ifacerename/rewrite.go:196 e scripts/renametools/groups.go:108,
+#     onde o `Escritor` nu da linha vizinha fica e trocar só a metade
+#     qualificada quebraria o teste e a frase.
 Data
+Escritor.Apenda
+Fonte.Estado
 Existe
 campo
 campos
@@ -44,3 +62,4 @@ seg
 texto
 tipo
 valor
+vazio.bin

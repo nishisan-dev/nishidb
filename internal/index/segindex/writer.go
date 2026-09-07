@@ -15,47 +15,47 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// entrada é uma posting ainda não ordenada. 24 bytes, e a ordem dos campos é
+// entry é uma posting ainda não ordenada. 24 bytes, e a ordem dos campos é
 // para o alinhamento — 224 mil linhas por segmento vezes o número de campos
 // indexados vivem aqui durante a selagem.
-type entrada struct {
+type entry struct {
 	hash  uint64
 	row   types.RowID
-	campo types.FieldID
+	field types.FieldID
 }
 
-// Escritor acumula postings e emite o arquivo selado. É o ÚNICO lugar que
+// Writer acumula postings e emite o arquivo selado. É o ÚNICO lugar que
 // decide o layout selado: a selagem do WIP e a reconstrução a partir dos
 // records alimentam ESTE tipo, e é isso que torna "incremental idêntico a
 // reconstruído" verdade por construção em vez de por vigilância.
 //
 // Não é seguro para uso concorrente. Cada selagem ou reconstrução usa o seu.
-type Escritor struct {
-	ents []entrada
+type Writer struct {
+	ents []entry
 }
 
-// NovoEscritor devolve um escritor vazio.
-func NovoEscritor() *Escritor { return &Escritor{} }
+// NewWriter devolve um escritor vazio.
+func NewWriter() *Writer { return &Writer{} }
 
-// Adiciona registra a posting. Duplicatas e desordem são aceitas: o Escreve
+// Add registra a posting. Duplicatas e desordem são aceitas: o Escreve
 // ordena e deduplica.
-func (e *Escritor) Adiciona(campo types.FieldID, h uint64, row types.RowID) {
-	e.ents = append(e.ents, entrada{hash: h, row: row, campo: campo})
+func (e *Writer) Add(field types.FieldID, h uint64, row types.RowID) {
+	e.ents = append(e.ents, entry{hash: h, row: row, field: field})
 }
 
-// Vazio reporta que nada foi adicionado.
-func (e *Escritor) Vazio() bool { return len(e.ents) == 0 }
+// IsEmpty reporta que nada foi adicionado.
+func (e *Writer) IsEmpty() bool { return len(e.ents) == 0 }
 
-// Escreve emite o arquivo em caminho, por .tmp + fsync + rename + fsync do
-// diretório. Escritor vazio NÃO cria arquivo: "sem índice" é um estado que o
+// WriteSealed emite o arquivo em caminho, por .tmp + fsync + rename + fsync do
+// diretório. Writer vazio NÃO cria arquivo: "sem índice" é um estado que o
 // Lookup trata por enumeração, e um arquivo vazio faria a reconstrução
 // considerar o segmento pronto.
-func (e *Escritor) Escreve(caminho string, seg uint32) error {
-	if e.Vazio() {
+func (e *Writer) WriteSealed(path string, seg uint32) error {
+	if e.IsEmpty() {
 		return nil
 	}
-	slices.SortFunc(e.ents, func(a, b entrada) int {
-		if c := cmp.Compare(a.campo, b.campo); c != 0 {
+	slices.SortFunc(e.ents, func(a, b entry) int {
+		if c := cmp.Compare(a.field, b.field); c != 0 {
 			return c
 		}
 		if c := cmp.Compare(a.hash, b.hash); c != 0 {
@@ -70,20 +70,20 @@ func (e *Escritor) Escreve(caminho string, seg uint32) error {
 		base = min(base, en.row)
 		maxRow = max(maxRow, en.row)
 	}
-	largura := larguraPara(uint64(maxRow - base))
+	width := widthFor(uint64(maxRow - base))
 
-	// corpo e secCount vêm da MESMA travessia de e.ents: secCount é o campo
+	// body e secCount vêm da MESMA travessia de e.ents: secCount é o campo
 	// que diz ao leitor quantas entradas de 24 bytes da tabela de seções
 	// existem, e uma segunda contagem independente — por mais que hoje dê o
 	// mesmo número — seria uma segunda fonte de verdade para exatamente o
 	// dado que não pode divergir (a mesma razão de format.go não ter
 	// minRowID: aqui a consequência de divergir é o leitor caminhar para
 	// dentro dos bytes do diretório, não só uma inconsistência cosmética).
-	corpo, secCount := e.montaCorpo(base, largura)
+	body, secCount := e.buildBody(base, width)
 
-	buf := make([]byte, 0, HeaderSelado+len(corpo)+TamCRC)
-	buf = append(buf, MagicSelado...)
-	buf = append(buf, VersaoSelado, 0)
+	buf := make([]byte, 0, SealedHeaderSize+len(body)+CRCSize)
+	buf = append(buf, SealedMagic...)
+	buf = append(buf, SealedVersion, 0)
 	// O truncamento do uint16 é inalcançável: secCount é o número de campos
 	// com posting, e o fielddict tem teto de 65.535 campos — o formato herda o
 	// teto da fonte dos FieldIDs.
@@ -91,24 +91,24 @@ func (e *Escritor) Escreve(caminho string, seg uint32) error {
 	buf = binary.LittleEndian.AppendUint64(buf, uint64(seg))
 	buf = binary.LittleEndian.AppendUint64(buf, uint64(base))
 	buf = binary.LittleEndian.AppendUint64(buf, uint64(maxRow))
-	buf = append(buf, largura)
-	buf = append(buf, make([]byte, HeaderSelado-len(buf))...)
-	buf = append(buf, corpo...)
+	buf = append(buf, width)
+	buf = append(buf, make([]byte, SealedHeaderSize-len(buf))...)
+	buf = append(buf, body...)
 	buf = binary.LittleEndian.AppendUint32(buf, crc32.Checksum(buf, castagnoli))
 
-	return escreveAtomico(caminho, buf)
+	return writeAtomic(path, buf)
 }
 
-// secaoInfo é o resultado da primeira passada de montaCorpo: quanto uma
+// sectionInfo é o resultado da primeira passada de buildBody: quanto uma
 // seção (um fieldID) vai ocupar, sem ainda saber ONDE — a segunda passada
 // resolve os offsets absolutos a partir destes tamanhos.
-type secaoInfo struct {
-	campo     types.FieldID
-	distintos uint32
-	postings  uint32
+type sectionInfo struct {
+	field          types.FieldID
+	distinctValues uint32
+	postings       uint32
 }
 
-// montaCorpo escreve a tabela de seções, os diretórios e as postings a partir
+// buildBody escreve a tabela de seções, os diretórios e as postings a partir
 // de e.ents — já ordenado por (campo, hash, row) e deduplicado por Escreve —
 // em DUAS passadas.
 //
@@ -134,93 +134,93 @@ type secaoInfo struct {
 // fonte de verdade para o mesmo número, e se um dia as duas contagens
 // discordassem o leitor caminharia para dentro dos bytes do diretório sem
 // erro nenhum no meio. É a mesma razão de não existir minRowID.
-func (e *Escritor) montaCorpo(base types.RowID, largura uint8) ([]byte, int) {
+func (e *Writer) buildBody(base types.RowID, width uint8) ([]byte, int) {
 	// --- primeira passada: dimensiona ---
-	var secoes []secaoInfo
+	var sections []sectionInfo
 	for i := 0; i < len(e.ents); {
-		campo := e.ents[i].campo
-		inicioSecao := i
-		var distintos uint32
-		for i < len(e.ents) && e.ents[i].campo == campo {
-			hashAtual := e.ents[i].hash
-			distintos++
-			for i < len(e.ents) && e.ents[i].campo == campo && e.ents[i].hash == hashAtual {
+		field := e.ents[i].field
+		sectionStart := i
+		var distinctValues uint32
+		for i < len(e.ents) && e.ents[i].field == field {
+			currentHash := e.ents[i].hash
+			distinctValues++
+			for i < len(e.ents) && e.ents[i].field == field && e.ents[i].hash == currentHash {
 				i++
 			}
 		}
-		secoes = append(secoes, secaoInfo{
-			campo:     campo,
-			distintos: distintos,
-			postings:  uint32(i - inicioSecao),
+		sections = append(sections, sectionInfo{
+			field:          field,
+			distinctValues: distinctValues,
+			postings:       uint32(i - sectionStart),
 		})
 	}
 
-	tamTabela := len(secoes) * TamSecao
-	tamCorpo := tamTabela
-	for _, s := range secoes {
-		tamCorpo += int(s.distintos)*TamSlotDir + int(s.postings)*int(largura)
+	tableSize := len(sections) * SectionEntrySize
+	bodySize := tableSize
+	for _, s := range sections {
+		bodySize += int(s.distinctValues)*DirSlotSize + int(s.postings)*int(width)
 	}
 
 	// Offsets absolutos: o corpo começa logo após o header fixo.
-	dirOffs := make([]uint64, len(secoes))
-	postOffs := make([]uint64, len(secoes))
-	off := uint64(HeaderSelado) + uint64(tamTabela)
-	for i, s := range secoes {
+	dirOffs := make([]uint64, len(sections))
+	postOffs := make([]uint64, len(sections))
+	off := uint64(SealedHeaderSize) + uint64(tableSize)
+	for i, s := range sections {
 		dirOffs[i] = off
-		off += uint64(s.distintos) * TamSlotDir
+		off += uint64(s.distinctValues) * DirSlotSize
 		postOffs[i] = off
-		off += uint64(s.postings) * uint64(largura)
+		off += uint64(s.postings) * uint64(width)
 	}
 
 	// --- segunda passada: escreve ---
-	corpo := make([]byte, 0, tamCorpo)
-	for i, s := range secoes {
-		corpo = binary.LittleEndian.AppendUint16(corpo, uint16(s.campo))
-		corpo = binary.LittleEndian.AppendUint16(corpo, 0) // pad
-		corpo = binary.LittleEndian.AppendUint32(corpo, s.distintos)
-		corpo = binary.LittleEndian.AppendUint64(corpo, dirOffs[i])
-		corpo = binary.LittleEndian.AppendUint64(corpo, postOffs[i])
+	body := make([]byte, 0, bodySize)
+	for i, s := range sections {
+		body = binary.LittleEndian.AppendUint16(body, uint16(s.field))
+		body = binary.LittleEndian.AppendUint16(body, 0) // pad
+		body = binary.LittleEndian.AppendUint32(body, s.distinctValues)
+		body = binary.LittleEndian.AppendUint64(body, dirOffs[i])
+		body = binary.LittleEndian.AppendUint64(body, postOffs[i])
 	}
 
 	i := 0
-	for _, s := range secoes {
-		fimSecao := i + int(s.postings)
+	for _, s := range sections {
+		sectionEnd := i + int(s.postings)
 
 		// diretório: um slot por valor distinto, ordenado por hash porque
 		// e.ents já está.
 		var postIdx uint32
 		j := i
-		for j < fimSecao {
-			hashAtual := e.ents[j].hash
-			inicioValor := j
-			for j < fimSecao && e.ents[j].hash == hashAtual {
+		for j < sectionEnd {
+			currentHash := e.ents[j].hash
+			valueStart := j
+			for j < sectionEnd && e.ents[j].hash == currentHash {
 				j++
 			}
-			count := uint32(j - inicioValor)
-			corpo = binary.LittleEndian.AppendUint64(corpo, hashAtual)
-			corpo = binary.LittleEndian.AppendUint32(corpo, postIdx)
-			corpo = binary.LittleEndian.AppendUint32(corpo, count)
+			count := uint32(j - valueStart)
+			body = binary.LittleEndian.AppendUint64(body, currentHash)
+			body = binary.LittleEndian.AppendUint32(body, postIdx)
+			body = binary.LittleEndian.AppendUint32(body, count)
 			postIdx += count
 		}
 
 		// postings: deltas de largura bytes, contíguos por valor e
 		// ascendentes dentro do grupo (e.ents já está ordenado por row ali).
-		for k := i; k < fimSecao; k++ {
+		for k := i; k < sectionEnd; k++ {
 			delta := uint64(e.ents[k].row - base)
-			if largura == 4 {
-				corpo = binary.LittleEndian.AppendUint32(corpo, uint32(delta))
+			if width == 4 {
+				body = binary.LittleEndian.AppendUint32(body, uint32(delta))
 			} else {
-				corpo = binary.LittleEndian.AppendUint64(corpo, delta)
+				body = binary.LittleEndian.AppendUint64(body, delta)
 			}
 		}
 
-		i = fimSecao
+		i = sectionEnd
 	}
 
-	return corpo, len(secoes)
+	return body, len(sections)
 }
 
-// numeroDoTemporario numera as escritas de índice selado DESTE processo. Um
+// tempFileNumber numera as escritas de índice selado DESTE processo. Um
 // atômico, e não um nome sorteado, porque o que se precisa aqui é apenas que
 // dois escritores VIVOS ao mesmo tempo não colidam: o dataset tem flock
 // exclusivo por processo, então não há um terceiro escritor para desempatar.
@@ -228,11 +228,11 @@ func (e *Escritor) montaCorpo(base types.RowID, largura uint8) ([]byte, int) {
 // Reiniciar em zero a cada subida é PROPRIEDADE, e não descuido: um temporário
 // que sobreviva a um crash volta a ser um nome alcançável pela próxima execução,
 // em vez de virar lixo de nome único que só cresce. A limpeza da abertura
-// (ApagaTemporarios) é quem o remove de fato; isto é só o que impede o resíduo
+// (RemoveTempFiles) é quem o remove de fato; isto é só o que impede o resíduo
 // de ser ilimitado se aquela limpeza um dia falhar.
-var numeroDoTemporario atomic.Uint64
+var tempFileNumber atomic.Uint64
 
-// caminhoTemporario devolve o arquivo intermediário de UMA escrita, com nome
+// tempPath devolve o arquivo intermediário de UMA escrita, com nome
 // único por escritor.
 //
 // O NOME FIXO ANTERIOR ERA UM DEFEITO, e ele é o segundo dos três fatos que a
@@ -247,13 +247,13 @@ var numeroDoTemporario atomic.Uint64
 // §6.3), então quem renomeia por último grava os mesmos bytes.
 //
 // O número vai no MEIO do nome, e não no fim, para que ele continue terminando
-// em ".sidx.tmp": é assim que EhArquivoDeIndice segue contando estes bytes no
+// em ".sidx.tmp": é assim que IsIndexFile segue contando estes bytes no
 // IndexBytes e que a limpeza da abertura segue os encontrando.
-func caminhoTemporario(caminho string) string {
-	return fmt.Sprintf("%s.%d%s.tmp", strings.TrimSuffix(caminho, sufixoSelado), numeroDoTemporario.Add(1), sufixoSelado)
+func tempPath(path string) string {
+	return fmt.Sprintf("%s.%d%s.tmp", strings.TrimSuffix(path, sealedSuffix), tempFileNumber.Add(1), sealedSuffix)
 }
 
-// escreveAtomico grava tmp -> fsync -> rename -> fsync do diretório: a mesma
+// writeAtomic grava tmp -> fsync -> rename -> fsync do diretório: a mesma
 // política de rename durável do design §9/M18 que checkpoint/manifest.go já
 // usa, replicada aqui — e não importada de lá — porque segindex vive sob
 // internal/index e não tem por que depender de internal/storage/checkpoint;
@@ -268,16 +268,16 @@ func caminhoTemporario(caminho string) string {
 // seguinte truncava o resíduo por cima e o disco voltava sozinho; com um nome
 // por escritor, cada falha entre o WriteFile e o rename deixaria um arquivo que
 // nada mais alcança. O que a remoção não cobre é o processo MORTO no meio — esse
-// é da ApagaTemporarios, na abertura.
-func escreveAtomico(caminho string, dados []byte) error {
-	tmp := caminhoTemporario(caminho)
-	renomeou := false
+// é da RemoveTempFiles, na abertura.
+func writeAtomic(path string, data []byte) error {
+	tmp := tempPath(path)
+	renamed := false
 	defer func() {
-		if !renomeou {
+		if !renamed {
 			_ = os.Remove(tmp)
 		}
 	}()
-	if err := os.WriteFile(tmp, dados, 0o644); err != nil {
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return fmt.Errorf("segindex: escrever %s: %w", tmp, err)
 	}
 	f, err := os.OpenFile(tmp, os.O_WRONLY, 0)
@@ -291,14 +291,14 @@ func escreveAtomico(caminho string, dados []byte) error {
 	if err != nil {
 		return fmt.Errorf("segindex: fsync de %s: %w", tmp, err)
 	}
-	if err := os.Rename(tmp, caminho); err != nil {
-		return fmt.Errorf("segindex: rename de %s: %w", filepath.Base(caminho), err)
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("segindex: rename de %s: %w", filepath.Base(path), err)
 	}
-	renomeou = true
-	return syncDir(filepath.Dir(caminho))
+	renamed = true
+	return syncDir(filepath.Dir(path))
 }
 
-// ApagaTemporarios remove os temporários de índice selado que sobraram de uma
+// RemoveTempFiles remove os temporários de índice selado que sobraram de uma
 // execução anterior. Roda na ABERTURA do dataset, junto do descarte dos .widx, e
 // é a contrapartida do nome único: um processo morto entre o WriteFile e o
 // rename deixa em disco um arquivo que nenhuma escrita futura vai reaproveitar.
@@ -310,18 +310,18 @@ func escreveAtomico(caminho string, dados []byte) error {
 //
 // Arquivo que some entre a listagem e o unlink não é anomalia: é o mesmo estado
 // que a remoção pretendia produzir.
-func ApagaTemporarios(dir string) error {
-	entradas, err := os.ReadDir(dir)
+func RemoveTempFiles(dir string) error {
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return fmt.Errorf("segindex: listar os temporários de %s: %w", dir, err)
 	}
-	for _, e := range entradas {
-		if e.IsDir() || !EhTemporarioDeIndice(e.Name()) {
+	for _, e := range entries {
+		if e.IsDir() || !IsIndexTempFile(e.Name()) {
 			continue
 		}
-		caminho := filepath.Join(dir, e.Name())
-		if err := os.Remove(caminho); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("segindex: remover o temporário %s: %w", caminho, err)
+		path := filepath.Join(dir, e.Name())
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("segindex: remover o temporário %s: %w", path, err)
 		}
 	}
 	return nil

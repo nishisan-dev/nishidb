@@ -408,7 +408,7 @@ leitura sequencial dos records. Ler o segmento duas vezes para dois campos
 seria pagar o dobro pelo I/O que é o custo inteiro da operação.
 
 **A publicação NÃO toma o `wmu`, e a exigência anterior era inexequível.** A §2.4
-mandava tomá-lo "só no `rename`", mas `Escritor.Escreve` faz escrita-tmp, `fsync`,
+mandava tomá-lo "só no `rename`", mas `Writer.WriteSealed` faz escrita-tmp, `fsync`,
 `rename` e `fsync` do diretório numa chamada só — não há como tomar o lock apenas
 no terceiro passo sem partir a API, e segurá-lo pela escrita inteira é o que esta
 mesma seção proíbe. O requisito não era difícil: era impossível para qualquer
@@ -478,8 +478,8 @@ esse segmento for aposentado depois, o `.dat` e o `.sidx` saem enquanto o
 viraria disco visível que nada explica, que é exatamente o modo de falha que a
 contagem existe para eliminar.
 
-A remoção é por **nome**, com `ListaWIP` mais `os.Remove` — nunca por
-`ApagaWIPs`, que abre e valida o arquivo. Um `.widx` rasgado por crash é
+A remoção é por **nome**, com `ListWIP` mais `os.Remove` — nunca por
+`RemoveWIPs`, que abre e valida o arquivo. Um `.widx` rasgado por crash é
 justamente o que não se deixa abrir, e a limpeza não pode depender de o lixo
 estar íntegro.
 

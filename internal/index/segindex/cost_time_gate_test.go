@@ -44,35 +44,35 @@ import (
 // pelo bench-micro contra a baseline, não por aqui.
 func TestARazaoDeTempoDoSetEntreEscalasEhConstante(t *testing.T) {
 	const (
-		nPequeno = 10_000
-		nGrande  = 1_000_000
-		teto     = 8.0
-		rodadas  = 3
+		nSmall  = 10_000
+		nLarge  = 1_000_000
+		ceiling = 8.0
+		rounds  = 3
 	)
-	mede := func(n int) float64 {
-		melhor := time.Duration(1<<63 - 1)
-		for range rodadas {
-			w := abreWIPDeTeste(t)
-			inicio := time.Now()
+	measure := func(n int) float64 {
+		best := time.Duration(1<<63 - 1)
+		for range rounds {
+			w := openTestWIP(t)
+			start := time.Now()
 			for i := range n {
 				if err := w.Set(100, types.RowID(i)); err != nil {
 					t.Fatalf("Set #%d: %v", i, err)
 				}
 			}
-			decorrido := time.Since(inicio)
-			fechaWIP(t, w)
-			melhor = min(melhor, decorrido)
+			elapsed := time.Since(start)
+			closeWIP(t, w)
+			best = min(best, elapsed)
 		}
-		return float64(melhor.Nanoseconds()) / float64(n)
+		return float64(best.Nanoseconds()) / float64(n)
 	}
-	pequeno := mede(nPequeno)
-	grande := mede(nGrande)
-	if pequeno <= 0 {
-		t.Fatalf("medição do n pequeno deu %v ns/op: relógio sem resolução para o gate", pequeno)
+	small := measure(nSmall)
+	large := measure(nLarge)
+	if small <= 0 {
+		t.Fatalf("medição do n pequeno deu %v ns/op: relógio sem resolução para o gate", small)
 	}
-	razao := grande / pequeno
-	if razao > teto {
+	ratio := large / small
+	if ratio > ceiling {
 		t.Errorf("ns/op(1M)/ns/op(10k) = %.2f (%.0f/%.0f ns), teto %.0f — o custo por Set cresceu com o segmento "+
-			"por um caminho que o contador de acessos não vê", razao, grande, pequeno, teto)
+			"por um caminho que o contador de acessos não vê", ratio, large, small, ceiling)
 	}
 }

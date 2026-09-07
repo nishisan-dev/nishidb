@@ -138,7 +138,7 @@ func TestSegmentoSemIndiceRespondePorEnumeracao(t *testing.T) {
 	}
 
 	// Simula o dataset antigo: o segmento existe, o índice não.
-	if err := os.Remove(segindex.CaminhoSelado(filepath.Join(dir, "data"), alvo)); err != nil {
+	if err := os.Remove(segindex.SealedPath(filepath.Join(dir, "data"), alvo)); err != nil {
 		t.Fatal(err)
 	}
 	s2 := abreHistoricoIndexadoEm(t, base, dir, []string{"node"}, 8<<10)
@@ -154,7 +154,7 @@ func TestSegmentoSemIndiceRespondePorEnumeracao(t *testing.T) {
 }
 
 // TestSecaoAusenteNoSeladoEnumeraOSegmento cobre a distinção que decide a
-// correção da tarefa: o ok=false do Selado.Lookup NÃO é "valor ausente", é
+// correção da tarefa: o ok=false do Sealed.Lookup NÃO é "valor ausente", é
 // "este segmento não responde por este campo". Aqui o .sidx existe, está
 // íntegro e tem seção para OUTRO campo — o estado em que fica um segmento
 // entre acrescentar um campo ao schema e a reconstrução alcançá-lo (§2.6).
@@ -176,13 +176,13 @@ func TestSecaoAusenteNoSeladoEnumeraOSegmento(t *testing.T) {
 
 	// Troca o .sidx do segmento por um que só tem seção de `type`: é o arquivo
 	// que a reconstrução teria produzido antes de `node` entrar no schema.
-	caminho := segindex.CaminhoSelado(filepath.Join(dir, "data"), alvo)
+	caminho := segindex.SealedPath(filepath.Join(dir, "data"), alvo)
 	if err := os.Remove(caminho); err != nil {
 		t.Fatal(err)
 	}
-	e := segindex.NovoEscritor()
-	e.Adiciona(campoType, hashIndexado(t, types.Value{Type: types.TypeInt64, I64: 0}), 0)
-	if err := e.Escreve(caminho, alvo); err != nil {
+	e := segindex.NewWriter()
+	e.Add(campoType, hashIndexado(t, types.Value{Type: types.TypeInt64, I64: 0}), 0)
+	if err := e.WriteSealed(caminho, alvo); err != nil {
 		t.Fatal(err)
 	}
 
@@ -211,7 +211,7 @@ func TestValorAusenteNaSecaoNaoEnumeraOSegmento(t *testing.T) {
 	alvo := s.curSegID.Load()
 	poeLinhasAteRotacionar(t, s, alvo)
 	campo := campoDoDicionario(t, s, "node")
-	if _, err := os.Stat(segindex.CaminhoSelado(filepath.Join(dir, "data"), alvo)); err != nil {
+	if _, err := os.Stat(segindex.SealedPath(filepath.Join(dir, "data"), alvo)); err != nil {
 		t.Fatalf("pré-condição: o segmento %d deveria estar selado: %v", alvo, err)
 	}
 
@@ -242,7 +242,7 @@ func TestAEnumeracaoDoHistoricoUsaAFaixaDeRowIds(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	if err := os.Remove(segindex.CaminhoSelado(filepath.Join(dir, "data"), alvo)); err != nil {
+	if err := os.Remove(segindex.SealedPath(filepath.Join(dir, "data"), alvo)); err != nil {
 		t.Fatal(err)
 	}
 	s2 := abreHistoricoIndexadoEm(t, base, dir, []string{"node"}, 8<<10)
@@ -300,7 +300,7 @@ func TestAEnumeracaoDoMaterializadoColapsaNumaCaminhadaUnicaDoLocations(t *testi
 		t.Fatalf("Close: %v", err)
 	}
 
-	if err := os.Remove(segindex.CaminhoSelado(filepath.Join(dir, "data"), alvo)); err != nil {
+	if err := os.Remove(segindex.SealedPath(filepath.Join(dir, "data"), alvo)); err != nil {
 		t.Fatal(err)
 	}
 	s2 := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, CamposIndexadosPorNome: []string{"node"}})
@@ -529,14 +529,14 @@ func TestAPostingDoCampoInalteradoSobreviveASelagemEAoRestart(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	sel, err := segindex.AbreSelado(segindex.CaminhoSelado(filepath.Join(dir, "data"), destino))
+	sel, err := segindex.OpenSealed(segindex.SealedPath(filepath.Join(dir, "data"), destino))
 	if err != nil {
 		t.Fatalf("o segmento de destino %d não ficou selado: %v", destino, err)
 	}
-	defer func() { _ = sel.Fecha() }()
+	defer func() { _ = sel.Close() }()
 	fonte, respondeu := sel.Lookup(campoNode, hashIndexado(t, strVal("estavel")))
 	if !respondeu {
-		t.Fatalf("o .sidx do segmento %d não responde por node: %v", destino, sel.ErroDeIntegridade())
+		t.Fatalf("o .sidx do segmento %d não responde por node: %v", destino, sel.IntegrityErr())
 	}
 	var achou bool
 	for fonte.Next() {
@@ -581,7 +581,7 @@ func TestAAposentadoriaNaoDesmapeiaOIndiceSobUmaVarreduraEmVoo(t *testing.T) {
 	poeLinhasAteRotacionar(t, s, alvo)
 	poeLinhasAteRotacionar(t, s, s.curSegID.Load())
 	campo := campoDoDicionario(t, s, "node")
-	if _, err := os.Stat(segindex.CaminhoSelado(filepath.Join(dir, "data"), alvo)); err != nil {
+	if _, err := os.Stat(segindex.SealedPath(filepath.Join(dir, "data"), alvo)); err != nil {
 		t.Fatalf("pré-condição: o segmento %d deveria estar selado: %v", alvo, err)
 	}
 
@@ -603,7 +603,7 @@ func TestAAposentadoriaNaoDesmapeiaOIndiceSobUmaVarreduraEmVoo(t *testing.T) {
 	if _, err := s.RetencaoUmaPassada(context.Background(), LimitesDeRetencao{MaxBytes: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(segindex.CaminhoSelado(filepath.Join(dir, "data"), alvo)); !os.IsNotExist(err) {
+	if _, err := os.Stat(segindex.SealedPath(filepath.Join(dir, "data"), alvo)); !os.IsNotExist(err) {
 		t.Fatalf("pré-condição: o índice do segmento %d deveria ter saído: %v", alvo, err)
 	}
 
@@ -711,7 +711,7 @@ func TestOCrcEhConferidoAntesDeOSeladoEntrarNoCache(t *testing.T) {
 
 	// Corrompe o corpo do .sidx em disco. MAP_SHARED: o Selado já aberto passa
 	// a ver estes bytes.
-	caminho := segindex.CaminhoSelado(filepath.Join(dir, "data"), alvo)
+	caminho := segindex.SealedPath(filepath.Join(dir, "data"), alvo)
 	f, err := os.OpenFile(caminho, os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatal(err)
@@ -723,7 +723,7 @@ func TestOCrcEhConferidoAntesDeOSeladoEntrarNoCache(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := sel.ErroDeIntegridade(); err != nil {
+	if err := sel.IntegrityErr(); err != nil {
 		t.Fatalf("o crc reprovou DEPOIS da corrupção (%v): ele não foi conferido no garanteSelado, "+
 			"e portanto seria pago no Lookup — que roda sob o selMu, o mesmo lock da rotação", err)
 	}
@@ -806,7 +806,7 @@ func TestUpdateDuranteAConsultaNaoSomeDaEnumeracaoColapsada(t *testing.T) {
 	}
 	// O seg1 perde o .sidx: é o segmento na janela de migração/crash — o estado
 	// que obriga a enumeração.
-	if err := os.Remove(segindex.CaminhoSelado(filepath.Join(dir, "data"), seg1)); err != nil {
+	if err := os.Remove(segindex.SealedPath(filepath.Join(dir, "data"), seg1)); err != nil {
 		t.Fatal(err)
 	}
 	s2 := openStore(t, Options{Dir: dir, SegmentSize: 16 << 10, CamposIndexadosPorNome: []string{"node"}})
@@ -856,7 +856,7 @@ func TestAConsultaNaJanelaDaExpulsaoNaoPublicaMapeamentoDeArquivoRemovido(t *tes
 		s.selMu.RLock()
 		geracao := s.selGeracao
 		s.selMu.RUnlock()
-		sel, err := segindex.AbreSelado(segindex.CaminhoSelado(s.dirDeDados(), alvo))
+		sel, err := segindex.OpenSealed(segindex.SealedPath(s.dirDeDados(), alvo))
 		if err != nil {
 			return // ordem corrigida: o arquivo já não existe, não há o que publicar
 		}

@@ -569,12 +569,12 @@ func bancadaDeIndice(t *testing.T) (*server.Servidor, string, string) {
 	dir := filepath.Join(dirIrma, "data")
 
 	for _, seg := range segmentosSemIndice {
-		if err := os.Remove(segindex.CaminhoSelado(dir, seg)); err != nil {
+		if err := os.Remove(segindex.SealedPath(dir, seg)); err != nil {
 			t.Fatalf("montagem: apagar o índice do segmento %d: %v", seg, err)
 		}
 	}
 	for _, seg := range segmentosCorrompidos {
-		corrompeOFimDoIndice(t, segindex.CaminhoSelado(dir, seg))
+		corrompeOFimDoIndice(t, segindex.SealedPath(dir, seg))
 	}
 
 	srv, err := server.Novo(a.carrega(), server.Opcoes{})

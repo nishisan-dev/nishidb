@@ -45,7 +45,7 @@ func segmentosComIndice(t *testing.T, s *Store) []uint32 {
 	}
 	var out []uint32
 	for _, ref := range refs {
-		if _, err := os.Stat(segindex.CaminhoSelado(s.dirDeDados(), ref.ID)); err == nil {
+		if _, err := os.Stat(segindex.SealedPath(s.dirDeDados(), ref.ID)); err == nil {
 			out = append(out, ref.ID)
 		}
 	}
@@ -380,7 +380,7 @@ func maiorIndiceEmDisco(t *testing.T, s *Store) int64 {
 	t.Helper()
 	var maior int64
 	for _, seg := range segmentosComIndice(t, s) {
-		info, err := os.Stat(segindex.CaminhoSelado(s.dirDeDados(), seg))
+		info, err := os.Stat(segindex.SealedPath(s.dirDeDados(), seg))
 		if err != nil {
 			t.Fatalf("Stat(%d): %v", seg, err)
 		}
@@ -645,7 +645,7 @@ func TestNoBootstrapOTetoAdmiteSoOMaisNovo(t *testing.T) {
 	sel := selados(t, hist)
 	// O dataset migrado: nenhum .sidx em disco, e nada lembrado em memória.
 	for _, seg := range sel {
-		if err := os.Remove(segindex.CaminhoSelado(hist.dirDeDados(), seg)); err != nil {
+		if err := os.Remove(segindex.SealedPath(hist.dirDeDados(), seg)); err != nil {
 			t.Fatalf("Remove(%d): %v", seg, err)
 		}
 		hist.esqueceSelado(seg)
