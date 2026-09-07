@@ -28,8 +28,8 @@ import (
 // muitas e cujo bench acuse deve guardar o índice da entry durante o parsing,
 // não trocar isto por um mapa alocado por evento.
 func (b *PatchBuffer) capturaCongeladas(c *schema.Compiled, agora time.Time) error {
-	for _, cf := range c.Congeladas {
-		if cf.DoRelogio {
+	for _, cf := range c.FrozenColumns {
+		if cf.FromClock {
 			b.entries = append(b.entries, patchEntry{
 				field:     cf,
 				val:       types.Value{Type: types.TypeTimestamp, I64: agora.UnixMilli()},

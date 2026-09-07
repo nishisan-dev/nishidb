@@ -62,7 +62,7 @@ query:
 
 func compilar(t *testing.T) *schema.Compiled {
 	t.Helper()
-	spec, err := schema.Parse([]byte(dsYAML), schema.DefaultsPadrao)
+	spec, err := schema.Parse([]byte(dsYAML), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}

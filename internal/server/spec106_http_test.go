@@ -62,7 +62,7 @@ func servidorSpec106(t *testing.T) *server.Servidor {
 		Dir:                    cfg.DirDoDataset("d"),
 		Dataset:                "d",
 		SegmentSize:            cfg.SegmentSize(),
-		CamposIndexadosPorNome: schema.CamposComIndice(spec),
+		CamposIndexadosPorNome: schema.IndexedFieldNames(spec),
 	})
 	if err != nil {
 		t.Fatal(err)

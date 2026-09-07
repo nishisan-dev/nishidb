@@ -53,7 +53,7 @@ schema:
 
 func compilaSchema(t *testing.T) *schema.Compiled {
 	t.Helper()
-	spec, err := schema.Parse([]byte(yamlTeste), schema.DefaultsPadrao)
+	spec, err := schema.Parse([]byte(yamlTeste), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}

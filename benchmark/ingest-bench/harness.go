@@ -426,15 +426,15 @@ func Run(cfg Config) (*Report, error) {
 		cfg.Out = io.Discard
 	}
 
-	spec, err := schema.Load(cfg.SpecPath, schema.DefaultsPadrao)
+	spec, err := schema.Load(cfg.SpecPath, schema.BuiltinDefaults)
 	if err != nil {
 		return nil, fmt.Errorf("ingest-bench: carregando spec: %w", err)
 	}
 	// A lista sai do schema, e NÃO de um laço local: este arquivo era a quarta
-	// cópia do laço que o godoc de schema.CamposComIndice descreve, e a cópia
+	// cópia do laço que o godoc de schema.IndexedFieldNames descreve, e a cópia
 	// não conhecia coluna derivada. Um benchmark que abrisse o dataset com um
 	// conjunto de índices diferente do que o servidor usa mediria outro produto.
-	camposIndexados := schema.CamposComIndice(spec)
+	camposIndexados := schema.IndexedFieldNames(spec)
 
 	st, err := abreStore(cfg, camposIndexados)
 	if err != nil {

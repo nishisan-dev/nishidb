@@ -142,7 +142,7 @@ Pacotes que estruturam o todo:
 - **Planner nunca falha**: prioridade fixa primary → índice → união de OR na
   raiz → full scan; toda dúvida degrada para FullScan. Não há desempate entre
   motores — com um motor de índice só, não existe "qual dos dois" a decidir, e
-  a elegibilidade sai de um único `Indexado(field)`.
+  a elegibilidade sai de um único `Indexed(field)`.
 - **Zero alocação por linha** no scan/NDJSON é propriedade gateada
   (`testing.AllocsPerRun`); não existe buffer de rows (§66) e o encoder NDJSON é
   proibido de importar `fmt` e `encoding/json` (há teste).

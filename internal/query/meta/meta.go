@@ -182,7 +182,7 @@ var (
 
 func schemaDaTabela() (*schema.Compiled, error) {
 	umaVez.Do(func() {
-		s, err := schema.Parse([]byte(especDaTabela), schema.DefaultsPadrao)
+		s, err := schema.Parse([]byte(especDaTabela), schema.BuiltinDefaults)
 		if err != nil {
 			schErr = fmt.Errorf("%s: spec da tabela virtual inválida: %w", Namespace, err)
 			return

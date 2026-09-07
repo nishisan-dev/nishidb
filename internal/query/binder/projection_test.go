@@ -105,7 +105,7 @@ func TestEstrelaNaoEAfetadaPelaChecagemDeRepeticao(t *testing.T) {
 // bastante para cruzar o limiar em que a checagem troca varredura por mapa.
 func compilarComCamposExtra(t *testing.T, n int) *schema.Compiled {
 	t.Helper()
-	spec, err := schema.Parse([]byte(dsYAML), schema.DefaultsPadrao)
+	spec, err := schema.Parse([]byte(dsYAML), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}

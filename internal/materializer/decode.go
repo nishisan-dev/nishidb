@@ -122,7 +122,7 @@ func (m *Materializer) Decodifica(d *Decodificado, event []byte) {
 // nishidb_ingest_decode_serial_total.
 func (m *Materializer) reprocessa(evento []byte) *Decodificado {
 	m.metrics.decodeSerial.Add(1)
-	antes := m.schema.CamposConhecidos()
+	antes := m.schema.KnownFieldCount()
 
 	d := &m.patch
 	d.evento = evento
@@ -130,7 +130,7 @@ func (m *Materializer) reprocessa(evento []byte) *Decodificado {
 	d.precisaDoWriter = false
 	d.erro = d.Parse(evento, m.schema, instanteDoAplica)
 
-	m.avaliaReprocessoInutil(m.schema.CamposConhecidos() > antes)
+	m.avaliaReprocessoInutil(m.schema.KnownFieldCount() > antes)
 	return d
 }
 
@@ -174,7 +174,7 @@ func (m *Materializer) avaliaReprocessoInutil(criouColuna bool) {
 	if m.aoReprocessar == nil || !m.avisouReprocesso.CompareAndSwap(false, true) {
 		return
 	}
-	m.aoReprocessar(m.reprocessosInuteis, m.schema.CamposConhecidos())
+	m.aoReprocessar(m.reprocessosInuteis, m.schema.KnownFieldCount())
 }
 
 // AoReprocessar registra o aviso de reprocesso improdutivo. Chamado na fiação
@@ -194,11 +194,11 @@ func (m *Materializer) AoReprocessar(fn func(seguidos int64, colunas int)) { m.a
 // passada inteira por evento no caminho quente. É a mesma escolha que o
 // `slotDe` do prazo já faz, e pela mesma razão.
 func (d *Decodificado) carimbaRelogio(c *schema.Compiled, agoraMs int64) {
-	if c.Escrita != nil {
-		d.carimba(c.Escrita.ID, agoraMs)
+	if c.WriteInstantField != nil {
+		d.carimba(c.WriteInstantField.ID, agoraMs)
 	}
-	for _, cf := range c.Congeladas {
-		if cf.DoRelogio {
+	for _, cf := range c.FrozenColumns {
+		if cf.FromClock {
 			d.carimba(cf.ID, agoraMs)
 		}
 	}

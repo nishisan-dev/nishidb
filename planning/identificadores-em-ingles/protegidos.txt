@@ -76,6 +76,14 @@
 #     `Run.sealed`, e sem a proteção o valor do rótulo mudaria em crase pela
 #     metade — `corrente`, `pendente` e `fora` ficariam —, que é contrato de
 #     wire, e ele muda na Fase 3, não aqui.
+#     `ausente` entra pela MESMA porta de `selado`: é VALOR de dado, não
+#     identificador. A spec do subsistema 1 conta que "uma versão anterior
+#     desta tabela dizia `ausente`" sobre o rótulo `estado` da métrica
+#     (planning/spec-subsistema-1-indice-por-segmento.md:878), e o valor
+#     `"ausente"` de `types.Presence.String` é contrato de wire que muda na
+#     Fase 3, não aqui. O local `ausente` do schema virou `absent`, e o gate
+#     nem o procura: token minúsculo sem maiúscula interna não entra no
+#     índice de nomes velhos.
 Arquivo.Apenda
 Com
 Data
@@ -85,6 +93,7 @@ Nunca
 Vazio
 selado
 Existe
+ausente
 campo
 campos
 chave

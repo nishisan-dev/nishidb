@@ -98,7 +98,7 @@ type patchEntry struct {
 ```
 
 `Compiled` ganha a lista das congeladas em ordem de FieldID, pré-computada no
-`Compile` — a mesma disciplina que `Derivadas` já segue, porque o materializer a
+`Compile` — a mesma disciplina que `DerivedColumns` já segue, porque o materializer a
 consulta por evento e não pode varrer o mapa.
 
 Em `PatchBuffer.Parse`, uma **terceira passada**, depois de `extraiDerivadas()` e antes
@@ -210,7 +210,7 @@ mesmo binder — inclusive `AND`/`OR`, `IN`, `LIKE`, `IS NULL`, comparações de
 1. `ttl:` presente e vazio → recusa.
 2. Regra sem `when` que não seja a última, ou mais de uma → recusa.
 3. `expireAfterWrite` ausente em qualquer regra → recusa.
-4. Duração menor que `ResolucaoDaExpiracao` (1 minuto,
+4. Duração menor que `ExpiryResolution` (1 minuto,
    [spec.go:85](../internal/schema/spec.go:85)) → recusa. O motivo de hoje continua
    valendo: o coletor varre a cada minuto, e uma chave que promete 30 segundos mente.
    O literal **`never`** é aceito e significa imortal — é o que permite escrever "alarme
@@ -264,7 +264,7 @@ clareza vale mais que a passada.
 ## 2.4 O que fica gravado
 
 A avaliação produz uma **duração**, e ela vira uma coluna de sistema no documento:
-`_expiresIn`, entrando em `nomesDeSistema`
+`_expiresIn`, entrando em `systemNames`
 ([spec.go:395](../internal/schema/spec.go:395)) ao lado do `_writtenAt`.
 
 O tipo físico é **`int64`**, e não `timestamp`. Ela carrega uma DURAÇÃO em millis, e

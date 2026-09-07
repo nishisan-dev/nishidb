@@ -429,7 +429,7 @@ func semeiaHistorico(t *testing.T, a *ambiente, nome string, comCampo, semCampo 
 		Dir:                    cfg.CaminhoDoDataset(nome),
 		Dataset:                nome,
 		SegmentSize:            cfg.SegmentSize(),
-		CamposIndexadosPorNome: schema.CamposComIndice(spec),
+		CamposIndexadosPorNome: schema.IndexedFieldNames(spec),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -439,10 +439,10 @@ func semeiaHistorico(t *testing.T, a *ambiente, nome string, comCampo, semCampo 
 			t.Errorf("Close do base: %v", err)
 		}
 	}()
-	specIrma := spec.DerivaHistorico()
+	specIrma := spec.DeriveHistory()
 	segmentoDaIrma := cfg.SegmentSize()
-	if spec.Historico != nil && spec.Historico.SegmentSize > 0 {
-		segmentoDaIrma = spec.Historico.SegmentSize
+	if spec.History != nil && spec.History.SegmentSize > 0 {
+		segmentoDaIrma = spec.History.SegmentSize
 	}
 	dirIrma := cfg.CaminhoDoDataset(specIrma.Name)
 	hist, err := storage.Open(storage.Options{
@@ -451,8 +451,8 @@ func semeiaHistorico(t *testing.T, a *ambiente, nome string, comCampo, semCampo 
 		SegmentSize:            segmentoDaIrma,
 		Modo:                   storage.ModoHistorico,
 		DictCompartilhado:      base.FieldDict(),
-		CamposIndexadosPorNome: schema.CamposComIndice(specIrma),
-		CampoDeEscrita:         schema.CampoInstanteDeEscrita,
+		CamposIndexadosPorNome: schema.IndexedFieldNames(specIrma),
+		CampoDeEscrita:         schema.WriteInstantFieldName,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -470,7 +470,7 @@ func semeiaHistorico(t *testing.T, a *ambiente, nome string, comCampo, semCampo 
 	if err != nil {
 		t.Fatal(err)
 	}
-	compilado.Espelha(compiladoIrma)
+	compilado.AddMirror(compiladoIrma)
 	mat, err := materializer.New(compilado, base)
 	if err != nil {
 		t.Fatal(err)

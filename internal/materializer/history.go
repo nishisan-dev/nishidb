@@ -82,7 +82,7 @@ func (m *Materializer) apendaEventoRuimNoHistorico(evento []byte) {
 		m.metrics.histDescartadas.Add(1)
 		return
 	}
-	payload, err := encodeEventoRuim(m.schema.Escrita, m.histRaw, m.agora().UnixMilli(), evento, m.histBuf[:0])
+	payload, err := encodeEventoRuim(m.schema.WriteInstantField, m.histRaw, m.agora().UnixMilli(), evento, m.histBuf[:0])
 	m.histBuf = payload
 	if err == nil {
 		_, err = m.hist.Apenda(payload)

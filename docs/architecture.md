@@ -1635,8 +1635,8 @@ da sequence e das colunas congeladas.
 O dicionário resolve o restart; ele não resolve a sessão. Num dataset de
 universo aberto, a chave promovida a coluna **depois** da subida só existiria no
 `Compiled` do base — a mesma consulta responderia numa tabela e diria "coluna
-não existe" na outra até o processo reiniciar. `Compiled.Espelha` registra o
-par, e `ResolveUnknown`, `ResolveAninhado` e `FixAutoType` propagam.
+não existe" na outra até o processo reiniciar. `Compiled.AddMirror` registra o
+par, e `ResolveUnknown`, `ResolveNested` e `FixAutoType` propagam.
 
 ### O que entra na linha, e o que não entra
 

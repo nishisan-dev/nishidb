@@ -33,7 +33,7 @@ schema:
       type: string
     total:
       type: int64
-`), schema.DefaultsPadrao)
+`), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestTabelaVirtualDesconhecidaListaAsDoDataset(t *testing.T) {
 func TestRegistraVirtualRecusaDuplicataEDatasetDesconhecido(t *testing.T) {
 	h := novoHarness(t)
 	tabelaVirtualDeTeste(t, h.engine, "_counters", "x")
-	spec, _ := schema.Parse([]byte("version: 1\nname: x\nmaterialization:\n  key:\n    field: k\nschema:\n  fields:\n    k:\n      type: string\n"), schema.DefaultsPadrao)
+	spec, _ := schema.Parse([]byte("version: 1\nname: x\nmaterialization:\n  key:\n    field: k\nschema:\n  fields:\n    k:\n      type: string\n"), schema.BuiltinDefaults)
 	sc, _ := spec.Compile(fakestorage.NewDict())
 	if err := h.engine.RegistraVirtual(dataset, "_counters", "x", sc, fakestorage.New(fakestorage.Indexes{})); err == nil {
 		t.Fatal("tabela virtual repetida tem de ser recusada")

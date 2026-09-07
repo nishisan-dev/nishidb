@@ -153,11 +153,11 @@ type colunaComID struct {
 
 // Tabela monta o schema sintético e o Store virtual de `_meta.kafka`.
 func Tabela(f Fonte) (*schema.Compiled, query.Store, error) {
-	spec, err := schema.Parse([]byte(especDaTabela), schema.DefaultsPadrao)
+	spec, err := schema.Parse([]byte(especDaTabela), schema.BuiltinDefaults)
 	if err != nil {
 		return nil, nil, fmt.Errorf("metakafka: spec da tabela %s.%s inválida: %w", meta.Namespace, TabelaMetaKafka, err)
 	}
-	sc, err := spec.Compile(schema.NovoDicionarioEmMemoria())
+	sc, err := spec.Compile(schema.NewInMemoryDict())
 	if err != nil {
 		return nil, nil, fmt.Errorf("metakafka: compilando a tabela %s.%s: %w", meta.Namespace, TabelaMetaKafka, err)
 	}

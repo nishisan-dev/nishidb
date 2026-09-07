@@ -42,7 +42,7 @@ schema:
 
 func compilaSchemaTopN(tb testing.TB) *schema.Compiled {
 	tb.Helper()
-	spec, err := schema.Parse([]byte(yamlTopN), schema.DefaultsPadrao)
+	spec, err := schema.Parse([]byte(yamlTopN), schema.BuiltinDefaults)
 	if err != nil {
 		tb.Fatal(err)
 	}

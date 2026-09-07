@@ -201,7 +201,7 @@ func eqTermOf(e binder.BoundExpr) (eqTerm, bool) {
 // check, o executor chamaria Lookup num campo sem índice, receberia
 // ErrInvalidArgument e a query FALHARIA em vez de degradar.
 func (p *Planner) indexavel(f *schema.CompiledField) bool {
-	return f != nil && f.Indexado && p.store != nil && p.store.Indexed(f.ID)
+	return f != nil && f.Indexed && p.store != nil && p.store.Indexed(f.ID)
 }
 
 // flattenAnd colhe as folhas do spine de AND no topo da árvore. Um nó OR (ou

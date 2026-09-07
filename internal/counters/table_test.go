@@ -100,7 +100,7 @@ func abreContador(t *testing.T, def counter.Definicao) *counter.Contador {
 // do contador sob ele.
 func motorComContador(t *testing.T, c *counter.Contador) *query.Engine {
 	t.Helper()
-	spec, err := schema.Parse([]byte("version: 1\nname: servicos\nmaterialization:\n  key:\n    field: id\nschema:\n  fields:\n    id:\n      type: string\n"), schema.DefaultsPadrao)
+	spec, err := schema.Parse([]byte("version: 1\nname: servicos\nmaterialization:\n  key:\n    field: id\nschema:\n  fields:\n    id:\n      type: string\n"), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func motorComContador(t *testing.T, c *counter.Contador) *query.Engine {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.RegistraVirtual("servicos", schema.NamespaceContadores, c.Def().Nome, tsc, fonte); err != nil {
+	if err := eng.RegistraVirtual("servicos", schema.CountersNamespace, c.Def().Nome, tsc, fonte); err != nil {
 		t.Fatal(err)
 	}
 	return eng

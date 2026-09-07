@@ -78,7 +78,7 @@ melhorias — não sobreviveram à leitura:
 |---|---|
 | "Spill em disco resolve o `57014`" | **Não resolve.** O erro é *timeout*, não memória. O executor já é streaming puro, memória O(batch) e nunca O(resultado) ([executor.go:176](internal/query/executor/executor.go:176)); no caminho de filtro **não existe buffer para transbordar**. Escrever em disco o que já não cabe no tempo só acrescenta I/O ao gargalo |
 | "Strings são dicionarizadas, então `LIKE` pode ser avaliado por valor distinto" | **Não são.** Existem três coisas chamadas "dicionário": `fields.dict` mapeia *nome de campo* → FieldID; `values.dict` existe **só** para campos com `index: bitmap` declarado, é chaveado por valor exato e não é ordenado; e o payload real grava os bytes UTF-8 **inline** em cada linha ([encoding/fields.go:26-46](internal/storage/encoding/fields.go:26)). Não há atalho de índice para `LIKE`, nem para `'prefixo%'` |
-| "A Melhoria A precisa de suporte a `type:` no `extract`" | **Já existe, e é obrigatório.** `validaExtracoes` recusa `type:` ausente ([spec.go:440](internal/schema/spec.go:440)) e recusa `type: auto` de propósito ([spec.go:443](internal/schema/spec.go:443)) — *"a coluna derivada existe para ter tipo"*. `datetime`/`time` já exigem `format:`. **A Melhoria A é YAML mais recriação de dataset: zero linha de Go** |
+| "A Melhoria A precisa de suporte a `type:` no `extract`" | **Já existe, e é obrigatório.** `validateExtracts` recusa `type:` ausente ([spec.go:440](internal/schema/spec.go:440)) e recusa `type: auto` de propósito ([spec.go:443](internal/schema/spec.go:443)) — *"a coluna derivada existe para ter tipo"*. `datetime`/`time` já exigem `format:`. **A Melhoria A é YAML mais recriação de dataset: zero linha de Go** |
 | "Os 2.085.138 valores perdidos são um piso" (documento de melhorias, Pergunta 1) | **Não são piso nem teto — são um número com viés nos DOIS sentidos.** Ver "Achados" abaixo |
 
 ### Confirmado
@@ -98,7 +98,7 @@ melhorias — não sobreviveram à leitura:
   decode por linha. 1.175.015 candidatos em 30s ≈ **39 mil linhas/s**; sobre
   ~17,8M linhas a query precisaria de **~450s**, e o timeout a mata com 6,6%
   varridos.
-- **`ContaValorIncompativel` já recebe o `*CompiledField`**
+- **`CountIncompatibleValue` já recebe o `*CompiledField`**
   ([compile.go:270-280](internal/schema/compile.go:270)), então o segundo contador
   da Melhoria B entra sem mudança de assinatura, como o documento previu.
 - **`_meta.fields` absorve colunas novas sem lista paralela**: `colunasIDs` sai de
@@ -127,7 +127,7 @@ melhorias — não sobreviveram à leitura:
    |---|---|---|---|
    | **E3** | [extract.go:47-51](internal/materializer/extract.go:47) | Pai chega como **array, null ou escalar** → `continue` seco para TODAS as derivadas daquele pai, **sem entry de remoção**. No modo merge isso preserva o valor do evento ANTERIOR — coluna e documento se contradizem dentro do mesmo record | 🔴 **Mesma família da errata de 25/08**, corrigida para tipo divergente e não para forma divergente |
    | **D6** | [extract.go:193-195](internal/materializer/extract.go:193) | `FixAutoType` falhou → `continue` seco. As causas são conflito de dicionário **ou falha de I/O ao persistir o hint** (disco cheio, EIO). Uma falha de disco vira coluna ausente, sem erro, sem log, sem métrica | 🔴 Viola a doutrina do projeto: *"Bug e infra nunca entram no balde de dado ruim"* — que o caminho de topo respeita em [patch.go:132-149](internal/materializer/patch.go:132) |
-   | **D4-`stop`** | [extract.go:181-186](internal/materializer/extract.go:181) | `ResolveAninhado` devolve `ErrTetoDeCampos` sob política `stop`, e o `continue` **engole o erro**. A política `stop` é silenciosamente rebaixada a `ignore` no caminho aninhado | 🔴 `ResolveUnknown` propaga corretamente ([compile.go:862](internal/schema/compile.go:862)); o aninhado não |
+   | **D4-`stop`** | [extract.go:181-186](internal/materializer/extract.go:181) | `ResolveNested` devolve `ErrFieldCeiling` sob política `stop`, e o `continue` **engole o erro**. A política `stop` é silenciosamente rebaixada a `ignore` no caminho aninhado | 🔴 `ResolveUnknown` propaga corretamente ([compile.go:862](internal/schema/compile.go:862)); o aninhado não |
    | **D2** | [extract.go:170-174](internal/materializer/extract.go:170) | Documento malformado no nível 0 aborta a descoberta de **todas** as chaves restantes | 🔴 Perda em bloco, silenciosa |
    | **B2** | [extract.go:111-116](internal/materializer/extract.go:111) | Erro de `jsonp` num nível interno é indistinguível de "chave ausente" | 🟡 |
    | **B3** | [extract.go:138-140](internal/materializer/extract.go:138) | Nó intermediário não é objeto | 🟡 Mesma família do E3 |
@@ -286,7 +286,7 @@ Este bloco não depende de nenhuma das outras frentes e é commitável sozinho.
 1. Em [extract.go:47-51](internal/materializer/extract.go:47), trocar o `continue`
    seco por emissão de **entry de remoção** para cada derivada daquele pai —
    exatamente o que o commit `f966649` fez para o valor de tipo divergente.
-2. Decidir se conta em `ContaValorIncompativel`: **sim**, com o `veio` sendo o
+2. Decidir se conta em `CountIncompatibleValue`: **sim**, com o `veio` sendo o
    kind do pai — é divergência de forma, mesma família.
 3. Estender `TestPaiArrayNaoDerrubaOEvento`
    ([extract_test.go:73](internal/materializer/extract_test.go:73)) e
@@ -312,7 +312,7 @@ pela porta que ficou aberta.
 2. Infra propaga como `STORAGE_ERROR`, no molde de
    [patch.go:132-149](internal/materializer/patch.go:132).
 3. Em [extract.go:181-186](internal/materializer/extract.go:181), deixar de engolir
-   `ErrTetoDeCampos` sob política `stop` — propagar, como `ResolveUnknown` já faz
+   `ErrFieldCeiling` sob política `stop` — propagar, como `ResolveUnknown` já faz
    em [compile.go:862](internal/schema/compile.go:862).
 
 **Entrega:** disco cheio deixa de virar coluna silenciosamente ausente, e a
@@ -328,7 +328,7 @@ já escrita e já aplicada no caminho de topo.
 1. Em [extract.go:61-77](internal/materializer/extract.go:61) e
    [:198-216](internal/materializer/extract.go:198), distinguir
    `InferType(f) == TypeNull` de divergência real antes de chamar
-   `ContaValorIncompativel`.
+   `CountIncompatibleValue`.
 2. A remoção explícita **continua** sendo emitida (null no documento deve limpar
    a coluna); o que muda é só a contagem.
 
@@ -364,7 +364,7 @@ tem como ser cumprido.
    `autoType atomic.Uint32` ([compile.go:152](internal/schema/compile.go:152)). O
    godoc já exige uso por ponteiro, então **não há regra nova**. ~1.700 campos ×
    16 bytes é irrelevante.
-2. `ContaValorIncompativel` incrementa o segundo em
+2. `CountIncompatibleValue` incrementa o segundo em
    [compile.go:275](internal/schema/compile.go:275) — **sem mudança de
    assinatura**, ela já recebe o `*CompiledField`.
 3. Acessores exportados (o pacote `meta` não vê campos não-exportados).
@@ -723,7 +723,7 @@ A palavra mais barata primeiro: prova a máquina de reconhecimento contextual em
 5. Binder: `admiteLike(col) = (col == TypeString)` ao lado de `admitsOp`; padrão
    **compilado no bind** com os bytes copiados no arena. `LIKE ?` compila do
    parâmetro — o `Bind` já os recebe ([binder.go:152](internal/query/binder/binder.go:152)).
-6. Compilação classifica em `Igual`/`Prefixo`/`Sufixo`/`Contem`/`Geral`, com
+6. Compilação classifica em `PadraoIgual`/`PadraoPrefixo`/`PadraoSufixo`/`PadraoContem`/`PadraoGeral`, com
    `minBytes` para rejeição O(1). Os quatro casos fechados viram
    `bytes.Equal`/`HasPrefix`/`HasSuffix`/`Contains`; o geral é glob de dois
    ponteiros com **um** ponto de backtrack — sem recursão, sem regexp, sem

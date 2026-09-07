@@ -28,7 +28,7 @@ const corpusEntities = 20_000
 
 func loadSpec(tb testing.TB) *schema.DatasetSpec {
 	tb.Helper()
-	spec, err := schema.Load(specPath, schema.DefaultsPadrao)
+	spec, err := schema.Load(specPath, schema.BuiltinDefaults)
 	if err != nil {
 		tb.Fatalf("carregando %s: %v", specPath, err)
 	}
@@ -37,10 +37,10 @@ func loadSpec(tb testing.TB) *schema.DatasetSpec {
 
 // indexNames sai do SPEC e não do Compiled porque o Store precisa dos nomes
 // ANTES de existir dicionário para compilar contra — é o Open que cria as
-// entradas. O laço local virou chamada a schema.CamposComIndice: ele era mais
+// entradas. O laço local virou chamada a schema.IndexedFieldNames: ele era mais
 // uma cópia do laço que aquela função existe para centralizar, e não conhecia
 // coluna derivada.
-func indexNames(spec *schema.DatasetSpec) []string { return schema.CamposComIndice(spec) }
+func indexNames(spec *schema.DatasetSpec) []string { return schema.IndexedFieldNames(spec) }
 
 // compiledSetup compila o YAML de produção contra um dicionário isolado.
 func compiledSetup(tb testing.TB) *schema.Compiled {

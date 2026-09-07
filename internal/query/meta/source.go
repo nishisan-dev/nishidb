@@ -72,7 +72,7 @@ type fonte struct {
 }
 
 func novaFonte(alvo *schema.Compiled, caps Capacidades, _ *schema.Compiled) *fonte {
-	return &fonte{campos: alvo.FieldsParaMetadata(), caps: caps, ids: colunasIDs}
+	return &fonte{campos: alvo.FieldsForMetadata(), caps: caps, ids: colunasIDs}
 }
 
 func (f *fonte) GetByRowID(_ types.Snapshot, id types.RowID, buf []byte) (types.Record, []byte, bool, error) {
@@ -146,7 +146,7 @@ func (f *fonte) record(row types.RowID, c *schema.CompiledField, buf []byte) (ty
 		{"name", texto(c.Name)},
 		{"type", texto(tipo)},
 		{"auto", booleano(c.IsAuto)},
-		{"index", texto(c.NomeDoIndice())},
+		{"index", texto(c.IndexName())},
 		{"indexed", booleano(indexado)},
 		{"id", types.Value{Type: types.TypeInt64, I64: int64(c.ID)}},
 	}
@@ -167,15 +167,15 @@ func (f *fonte) record(row types.RowID, c *schema.CompiledField, buf []byte) (ty
 			struct {
 				nome string
 				v    types.Value
-			}{"occurrences", inteiro(c.Ocorrencias())},
+			}{"occurrences", inteiro(c.OccurrenceCount())},
 			struct {
 				nome string
 				v    types.Value
-			}{"typeMismatches", inteiro(c.Divergencias())},
+			}{"typeMismatches", inteiro(c.DivergenceCount())},
 			struct {
 				nome string
 				v    types.Value
-			}{"coercions", inteiro(c.Coercoes())})
+			}{"coercions", inteiro(c.CoercionCount())})
 	}
 
 	type par struct {

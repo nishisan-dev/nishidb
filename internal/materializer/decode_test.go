@@ -76,7 +76,7 @@ func TestOCarimboDeEscritaEhODaAplicacaoNaoODoDecode(t *testing.T) {
 	// As duas colunas de relógio: o campo de sistema e a congelada @writeTime.
 	// A segunda importa tanto quanto a primeira e é mais fácil de esquecer —
 	// ela sai do mesmo `agora` e por outro caminho (capturaCongeladas).
-	for _, campo := range []string{schema.CampoInstanteDeEscrita, "criadoEm"} {
+	for _, campo := range []string{schema.WriteInstantFieldName, "criadoEm"} {
 		v, ok := leCampo(t, c, st, "a", campo)
 		if !ok {
 			t.Fatalf("%s não foi materializada", campo)

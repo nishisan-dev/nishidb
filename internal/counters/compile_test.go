@@ -47,7 +47,7 @@ schema:
 
 func carrega(t *testing.T, yaml string) (*schema.DatasetSpec, *schema.Compiled) {
 	t.Helper()
-	spec, err := schema.Parse([]byte(yaml), schema.DefaultsPadrao)
+	spec, err := schema.Parse([]byte(yaml), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ counters:
 	a := defs[0]
 	if a.Nome != "servicos_por_olt" || len(a.Colunas) != 1 || a.Colunas[0] != idDe(t, sc, "olt") ||
 		a.Tipos[0] != types.TypeString || a.Nomes[0] != "olt" || a.Where != "" || a.NovoAvaliador != nil ||
-		a.MaxGroups != schema.MaxGroupsPadrao || a.RetainEmptyGroups != schema.RetainEmptyGroupsPadrao {
+		a.MaxGroups != schema.DefaultMaxGroups || a.RetainEmptyGroups != schema.DefaultRetainEmptyGroups {
 		t.Fatalf("servicos_por_olt = %+v", a)
 	}
 	b := defs[1]
@@ -182,7 +182,7 @@ counters:
   - name: x
     groupBy: [olt]
     where: authenticated = true
-`), schema.DefaultsPadrao)
+`), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +213,7 @@ counters:
 }
 
 func TestCompiladorSemCountersDevolveNada(t *testing.T) {
-	spec, err := schema.Parse([]byte(yamlBase), schema.DefaultsPadrao)
+	spec, err := schema.Parse([]byte(yamlBase), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}

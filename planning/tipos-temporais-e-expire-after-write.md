@@ -214,7 +214,7 @@ O pacote `internal/query` não muda uma linha.
 
 **`_writtenAt` e não `_expiresAt`:** o campo registra um **fato** (quando o writer escreveu), não uma **política**. Mudar `expireAfterWrite: 2h` → `4h` no YAML passa a valer imediatamente para as 17,8M rows existentes; com `_expiresAt` cada row carregaria a política congelada e o operador reescreveria o dataset inteiro por uma mudança de config.
 
-- **`SELECT *`:** não aparece. Filtra-se dentro de `FieldsByID` ([compile.go:360](internal/schema/compile.go:360)), cujos dois únicos consumidores são exatamente os que devem filtrar (`binder.projecao()`, `metaDoDataset`), com um `FieldsByIDIncluindoSistema()` para quem precisa do conjunto todo. `SELECT _writtenAt` **funciona** — convenção `ROWID`/`xmin`.
+- **`SELECT *`:** não aparece. Filtra-se dentro de `FieldsByID` ([compile.go:360](internal/schema/compile.go:360)), cujos dois únicos consumidores são exatamente os que devem filtrar (`binder.projecao()`, `metaDoDataset`), com um `FieldsByIDIncludingSystem()` para quem precisa do conjunto todo. `SELECT _writtenAt` **funciona** — convenção `ROWID`/`xmin`.
 - **Evento que traga `_writtenAt`:** recusa explícita em `PatchBuffer.Parse` ([patch.go:73](internal/materializer/patch.go:73)) — sobrescreveria o relógio do writer. E `schema.fields` com nome iniciado por `_` é recusado no `validate`: prefixo reservado.
 
 **`expiry.idx`**, magic `NDBE`, `int64` de millis por rowId, no molde exato de `Sequences` ([rowindex.go:258-289](internal/storage/rowindex/rowindex.go:258)) — mesmo `openDense` ([:56](internal/storage/rowindex/rowindex.go:56)), mesmo header de 64B.

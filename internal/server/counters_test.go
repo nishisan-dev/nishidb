@@ -57,7 +57,7 @@ func semeiaServicos(t *testing.T, a *ambiente, nome string, n int) {
 		Dir:                    cfg.DirDoDataset(nome),
 		Dataset:                nome,
 		SegmentSize:            cfg.SegmentSize(),
-		CamposIndexadosPorNome: schema.CamposComIndice(spec),
+		CamposIndexadosPorNome: schema.IndexedFieldNames(spec),
 	})
 	if err != nil {
 		t.Fatal(err)

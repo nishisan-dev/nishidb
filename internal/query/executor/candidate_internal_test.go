@@ -177,7 +177,7 @@ func (s *storeFalhaNoSegundo) Lookup(types.FieldID, types.Value) (types.RowIDIte
 // descritor esgotado depois de horas.
 func TestAbreTermosFechaOsJaAbertosNoErro(t *testing.T) {
 	st := &storeFalhaNoSegundo{}
-	campo := &schema.CompiledField{ID: 1, Name: "x", Indexado: true}
+	campo := &schema.CompiledField{ID: 1, Name: "x", Indexed: true}
 	termos := []planner.IndexTerm{{Field: campo}, {Field: campo}}
 
 	if _, err := abreTermos(termos, st); err == nil {

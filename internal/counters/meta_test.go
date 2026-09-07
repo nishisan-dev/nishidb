@@ -17,7 +17,7 @@ import (
 // contadores dados — a mesma costura do Registra, sem o Store real.
 func motorComMeta(t *testing.T, cs ...*counter.Contador) *query.Engine {
 	t.Helper()
-	spec, err := schema.Parse([]byte("version: 1\nname: servicos\nmaterialization:\n  key:\n    field: id\nschema:\n  fields:\n    id:\n      type: string\n"), schema.DefaultsPadrao)
+	spec, err := schema.Parse([]byte("version: 1\nname: servicos\nmaterialization:\n  key:\n    field: id\nschema:\n  fields:\n    id:\n      type: string\n"), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}

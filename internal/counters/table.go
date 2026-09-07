@@ -58,14 +58,14 @@ func Tabela(def counter.Definicao, l Leitor) (*schema.Compiled, query.Store, err
 	}
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "version: 1\nname: %s\nmaterialization:\n  key:\n    field: %s\nschema:\n  include: [%s",
-		def.Nome, schema.ColunaChaveDoContador, schema.ColunaChaveDoContador)
+		def.Nome, schema.CounterKeyColumn, schema.CounterKeyColumn)
 	for _, n := range def.Nomes {
-		if n == schema.ColunaChaveDoContador || n == schema.ColunaTotalDoContador {
+		if n == schema.CounterKeyColumn || n == schema.CounterTotalColumn {
 			return nil, nil, fmt.Errorf("contadores: %q agrupa por %q, que colide com a coluna fixa da tabela", def.Nome, n)
 		}
 		fmt.Fprintf(&sb, ", %s", n)
 	}
-	fmt.Fprintf(&sb, ", %s]\n  fields:\n    %s:\n      type: string\n", schema.ColunaTotalDoContador, schema.ColunaChaveDoContador)
+	fmt.Fprintf(&sb, ", %s]\n  fields:\n    %s:\n      type: string\n", schema.CounterTotalColumn, schema.CounterKeyColumn)
 	for i, n := range def.Nomes {
 		tipo, err := nomeDoTipo(def.Tipos[i])
 		if err != nil {
@@ -73,21 +73,21 @@ func Tabela(def counter.Definicao, l Leitor) (*schema.Compiled, query.Store, err
 		}
 		fmt.Fprintf(&sb, "    %s:\n      type: %s\n", n, tipo)
 	}
-	fmt.Fprintf(&sb, "    %s:\n      type: int64\n", schema.ColunaTotalDoContador)
+	fmt.Fprintf(&sb, "    %s:\n      type: int64\n", schema.CounterTotalColumn)
 
-	spec, err := schema.Parse([]byte(sb.String()), schema.DefaultsPadrao)
+	spec, err := schema.Parse([]byte(sb.String()), schema.BuiltinDefaults)
 	if err != nil {
-		return nil, nil, fmt.Errorf("contadores: spec da tabela %s.%s inválida: %w", schema.NamespaceContadores, def.Nome, err)
+		return nil, nil, fmt.Errorf("contadores: spec da tabela %s.%s inválida: %w", schema.CountersNamespace, def.Nome, err)
 	}
-	sc, err := spec.Compile(schema.NovoDicionarioEmMemoria())
+	sc, err := spec.Compile(schema.NewInMemoryDict())
 	if err != nil {
-		return nil, nil, fmt.Errorf("contadores: compilando a tabela %s.%s: %w", schema.NamespaceContadores, def.Nome, err)
+		return nil, nil, fmt.Errorf("contadores: compilando a tabela %s.%s: %w", schema.CountersNamespace, def.Nome, err)
 	}
 	f := &fonte{l: l, colunas: make([]types.FieldID, len(def.Nomes))}
-	if f.idChave, err = idDaColuna(sc, schema.ColunaChaveDoContador); err != nil {
+	if f.idChave, err = idDaColuna(sc, schema.CounterKeyColumn); err != nil {
 		return nil, nil, err
 	}
-	if f.idTotal, err = idDaColuna(sc, schema.ColunaTotalDoContador); err != nil {
+	if f.idTotal, err = idDaColuna(sc, schema.CounterTotalColumn); err != nil {
 		return nil, nil, err
 	}
 	for i, n := range def.Nomes {
@@ -126,7 +126,7 @@ func idDaColuna(sc *schema.Compiled, nome string) (types.FieldID, error) {
 // servidor e CLI — para que `FROM _counters.<nome>` e `FROM _meta.counters`
 // funcionem da mesma forma nos dois.
 func Registra(eng *query.Engine, dataset string, st *storage.Store) error {
-	if err := eng.DeclaraNamespace(dataset, schema.NamespaceContadores); err != nil {
+	if err := eng.DeclaraNamespace(dataset, schema.CountersNamespace); err != nil {
 		return err
 	}
 	cs := st.Contadores()
@@ -136,7 +136,7 @@ func Registra(eng *query.Engine, dataset string, st *storage.Store) error {
 		if err != nil {
 			return err
 		}
-		if err := eng.RegistraVirtual(dataset, schema.NamespaceContadores, c.Def().Nome, sc, fonte); err != nil {
+		if err := eng.RegistraVirtual(dataset, schema.CountersNamespace, c.Def().Nome, sc, fonte); err != nil {
 			return err
 		}
 		contados = append(contados, c)

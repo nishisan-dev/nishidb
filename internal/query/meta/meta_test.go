@@ -39,7 +39,7 @@ schema:
 
 func alvo(t *testing.T) *schema.Compiled {
 	t.Helper()
-	s, err := schema.Parse([]byte(alvoYAML), schema.DefaultsPadrao)
+	s, err := schema.Parse([]byte(alvoYAML), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +258,7 @@ schema:
 
 func alvoExtract(t *testing.T) *schema.Compiled {
 	t.Helper()
-	s, err := schema.Parse([]byte(alvoComExtract), schema.DefaultsPadrao)
+	s, err := schema.Parse([]byte(alvoComExtract), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -319,7 +319,7 @@ schema:
 
 func alvoComDerivadas(t *testing.T) *schema.Compiled {
 	t.Helper()
-	s, err := schema.Parse([]byte(alvoComDerivadasYAML), schema.DefaultsPadrao)
+	s, err := schema.Parse([]byte(alvoComDerivadasYAML), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}

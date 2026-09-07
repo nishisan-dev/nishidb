@@ -32,7 +32,7 @@ schema:
 
 func compiladoComExpire(t *testing.T, yaml string) (*schema.Compiled, *fakestorage.Store) {
 	t.Helper()
-	spec, err := schema.Parse([]byte(yaml), schema.DefaultsPadrao)
+	spec, err := schema.Parse([]byte(yaml), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func leInstanteDeEscrita(t *testing.T, c *schema.Compiled, st *fakestorage.Store
 		if !ok {
 			break
 		}
-		if id == c.Escrita.ID {
+		if id == c.WriteInstantField.ID {
 			if v.Type != types.TypeTimestamp {
 				t.Fatalf("campo de sistema com tipo %v", v.Type)
 			}
@@ -111,7 +111,7 @@ func TestCadaEscritaRenovaOInstante(t *testing.T) {
 func TestSemExpireAfterWriteNaoHaCampoDeSistema(t *testing.T) {
 	yaml := strings.Replace(yamlComExpire, "  ttl:\n    - expireAfterWrite: 2h\n", "", 1)
 	c, st := compiladoComExpire(t, yaml)
-	if c.Escrita != nil {
+	if c.WriteInstantField != nil {
 		t.Fatal("campo de sistema compilado sem expiração declarada")
 	}
 	m := mustNew(t, c, st)
@@ -140,14 +140,14 @@ func TestSemExpireAfterWriteNaoHaCampoDeSistema(t *testing.T) {
 func TestEventoQueTrazOCampoDeSistemaEhRecusado(t *testing.T) {
 	c, st := compiladoComExpire(t, yamlComExpire)
 	m := mustNew(t, c, st)
-	r := m.Apply([]byte(`{"id":"A","` + schema.CampoInstanteDeEscrita + `":253402300799000}`))
+	r := m.Apply([]byte(`{"id":"A","` + schema.WriteInstantFieldName + `":253402300799000}`))
 	if r.Err == nil {
 		t.Fatal("evento com o campo de sistema foi aceito")
 	}
 	if r.Action != ActionSkipped && r.Action != ActionFailed {
 		t.Fatalf("Action = %v, quer Skipped ou Failed", r.Action)
 	}
-	if !strings.Contains(r.Err.Error(), schema.CampoInstanteDeEscrita) {
+	if !strings.Contains(r.Err.Error(), schema.WriteInstantFieldName) {
 		t.Errorf("a mensagem não nomeia o campo: %v", r.Err)
 	}
 }

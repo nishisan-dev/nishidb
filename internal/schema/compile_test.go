@@ -59,7 +59,7 @@ func (d *fakeDict) SetTypeHint(id types.FieldID, t types.FieldType) error {
 	if t == types.TypeNull {
 		return errors.New("tipo nulo não pode ser fixado")
 	}
-	switch atual := d.hints[id]; atual {
+	switch current := d.hints[id]; current {
 	case t:
 		return nil
 	case types.TypeNull:
@@ -102,7 +102,7 @@ func TestCompileFieldLookupByNameAndAlias(t *testing.T) {
 	if !ok1 || !ok2 || byName != byAlias {
 		t.Fatalf("nome e alias devem resolver para o mesmo campo: %p vs %p", byName, byAlias)
 	}
-	if !byName.Indexado || byName.Type != types.TypeString {
+	if !byName.Indexed || byName.Type != types.TypeString {
 		t.Errorf("campo = %+v", byName)
 	}
 	if _, ok := c.FieldByName([]byte("inexistente")); ok {
@@ -353,10 +353,10 @@ schema:
 `, "unknownFields")
 }
 
-// tetoYAML monta um dataset de universo aberto com teto de campos declarado.
+// ceilingYAML monta um dataset de universo aberto com teto de campos declarado.
 // Depois do Compile o dicionário tem exatamente um campo (`id`), então
 // maxCols: 2 deixa espaço para UM autodescoberto e recusa o seguinte.
-func tetoYAML(maxCols int, onMax string) string {
+func ceilingYAML(maxCols int, onMax string) string {
 	return fmt.Sprintf(`version: 1
 name: t
 materialization:
@@ -378,7 +378,7 @@ schema:
 // campo excedente é descartado e o EVENTO continua sendo gravado — é o mesmo
 // desfecho que o campo excluído já tem, e por isso reusa a rota (nil, nil).
 func TestResolveUnknownDescartaCampoAcimaDoTetoSobIgnore(t *testing.T) {
-	s := parseOK(t, tetoYAML(2, "ignore"))
+	s := parseOK(t, ceilingYAML(2, "ignore"))
 	dict := newFakeDict()
 	c, err := s.Compile(dict)
 	if err != nil {
@@ -387,16 +387,16 @@ func TestResolveUnknownDescartaCampoAcimaDoTetoSobIgnore(t *testing.T) {
 	if f, err := c.ResolveUnknown([]byte("cabe")); err != nil || f == nil {
 		t.Fatalf("primeiro autodescoberto = %v, %v; devia caber", f, err)
 	}
-	antes := len(dict.order)
+	before := len(dict.order)
 	f, err := c.ResolveUnknown([]byte("naoCabe"))
 	if err != nil || f != nil {
 		t.Errorf("campo acima do teto = %v, %v; quer nil, nil", f, err)
 	}
-	if len(dict.order) != antes {
-		t.Errorf("campo acima do teto foi registrado no dicionário: %v", dict.order[antes:])
+	if len(dict.order) != before {
+		t.Errorf("campo acima do teto foi registrado no dicionário: %v", dict.order[before:])
 	}
-	if got := c.CamposDescartados(); got != 1 {
-		t.Errorf("CamposDescartados = %d, quer 1 — a perda precisa ser contável", got)
+	if got := c.DiscardedFieldCount(); got != 1 {
+		t.Errorf("DiscardedFieldCount = %d, quer 1 — a perda precisa ser contável", got)
 	}
 }
 
@@ -404,7 +404,7 @@ func TestResolveUnknownDescartaCampoAcimaDoTetoSobIgnore(t *testing.T) {
 // a classificação o separe do balde de "bug nosso" e a parada seja declarada,
 // e não um efeito colateral de erro sem dono.
 func TestResolveUnknownRecusaAcimaDoTetoSobStop(t *testing.T) {
-	s := parseOK(t, tetoYAML(2, "stop"))
+	s := parseOK(t, ceilingYAML(2, "stop"))
 	c, err := s.Compile(newFakeDict())
 	if err != nil {
 		t.Fatal(err)
@@ -412,8 +412,8 @@ func TestResolveUnknownRecusaAcimaDoTetoSobStop(t *testing.T) {
 	if _, err := c.ResolveUnknown([]byte("cabe")); err != nil {
 		t.Fatalf("primeiro autodescoberto: %v", err)
 	}
-	if _, err := c.ResolveUnknown([]byte("naoCabe")); !errors.Is(err, ErrTetoDeCampos) {
-		t.Errorf("campo acima do teto = %v, quer ErrTetoDeCampos", err)
+	if _, err := c.ResolveUnknown([]byte("naoCabe")); !errors.Is(err, ErrFieldCeiling) {
+		t.Errorf("campo acima do teto = %v, quer ErrFieldCeiling", err)
 	}
 }
 
@@ -422,7 +422,7 @@ func TestResolveUnknownRecusaAcimaDoTetoSobStop(t *testing.T) {
 // campo excedente derrubaria todo evento seguinte, que é o defeito que o teto
 // deveria evitar.
 func TestTetoDeCamposNaoAfetaCampoJaConhecido(t *testing.T) {
-	s := parseOK(t, tetoYAML(2, "stop"))
+	s := parseOK(t, ceilingYAML(2, "stop"))
 	c, err := s.Compile(newFakeDict())
 	if err != nil {
 		t.Fatal(err)
@@ -430,8 +430,8 @@ func TestTetoDeCamposNaoAfetaCampoJaConhecido(t *testing.T) {
 	if _, err := c.ResolveUnknown([]byte("cabe")); err != nil {
 		t.Fatalf("primeiro autodescoberto: %v", err)
 	}
-	if _, err := c.ResolveUnknown([]byte("naoCabe")); !errors.Is(err, ErrTetoDeCampos) {
-		t.Fatalf("preparo: quer ErrTetoDeCampos, veio %v", err)
+	if _, err := c.ResolveUnknown([]byte("naoCabe")); !errors.Is(err, ErrFieldCeiling) {
+		t.Fatalf("preparo: quer ErrFieldCeiling, veio %v", err)
 	}
 	if f, err := c.ResolveUnknown([]byte("cabe")); err != nil || f == nil {
 		t.Errorf("campo já conhecido no teto = %v, %v; devia continuar resolvendo", f, err)
@@ -442,22 +442,22 @@ func TestTetoDeCamposNaoAfetaCampoJaConhecido(t *testing.T) {
 // compilação: deixar passar produziria um dataset que nasce acima do limite
 // que ele mesmo declarou.
 func TestCompileRecusaCamposDeclaradosAcimaDoTeto(t *testing.T) {
-	s := parseOK(t, strings.Replace(tetoYAML(1, "ignore"),
+	s := parseOK(t, strings.Replace(ceilingYAML(1, "ignore"),
 		"    id:\n      type: string\n",
 		"    id:\n      type: string\n    outro:\n      type: string\n", 1))
-	if _, err := s.Compile(newFakeDict()); !errors.Is(err, ErrTetoDeCampos) {
-		t.Errorf("Compile = %v, quer ErrTetoDeCampos", err)
+	if _, err := s.Compile(newFakeDict()); !errors.Is(err, ErrFieldCeiling) {
+		t.Errorf("Compile = %v, quer ErrFieldCeiling", err)
 	}
 }
 
-// yamlComIndiceDeclarado monta uma spec mínima com um campo `node` que
+// yamlWithDeclaredIndex monta uma spec mínima com um campo `node` que
 // declara `index: <grafia>` — usado pelos dois testes de D5 abaixo, que
 // precisam de um YAML isolado do baseYAML porque o baseYAML está migrando
 // para a grafia nova junto com o resto da suíte.
-func yamlComIndiceDeclarado(grafia string) string {
+func yamlWithDeclaredIndex(spelling string) string {
 	return "version: 1\nname: t\nmaterialization:\n  key:\n    field: id\n" +
 		"schema:\n  fields:\n    id:\n      type: string\n" +
-		"    node:\n      type: string\n      index: " + grafia + "\n"
+		"    node:\n      type: string\n      index: " + spelling + "\n"
 }
 
 // TestIndexTrueEhAceito prova que `index: true` marca o campo como indexado.
@@ -465,7 +465,7 @@ func yamlComIndiceDeclarado(grafia string) string {
 // campo compilado carrega um bool, e a regra do planner que o lê é uma — a que
 // intersecta todos os termos elegíveis.
 func TestIndexTrueEhAceito(t *testing.T) {
-	s := parseOK(t, yamlComIndiceDeclarado("true"))
+	s := parseOK(t, yamlWithDeclaredIndex("true"))
 	c, err := s.Compile(newFakeDict())
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
@@ -474,7 +474,7 @@ func TestIndexTrueEhAceito(t *testing.T) {
 	if !ok {
 		t.Fatal("campo node não compilou")
 	}
-	if !f.Indexado {
+	if !f.Indexed {
 		t.Error("index: true não marcou o campo como indexado")
 	}
 }
@@ -485,11 +485,11 @@ func TestIndexTrueEhAceito(t *testing.T) {
 // Aceitá-las como sinônimo seria pior: o operador continuaria escrevendo uma
 // distinção que não existe, e o WARN vira ruído que ninguém lê.
 func TestAsGrafiasAntigasSaoRecusadas(t *testing.T) {
-	for _, grafia := range []string{"hash", "bitmap"} {
-		t.Run(grafia, func(t *testing.T) {
-			_, err := Parse([]byte(yamlComIndiceDeclarado(grafia)), DefaultsPadrao)
+	for _, spelling := range []string{"hash", "bitmap"} {
+		t.Run(spelling, func(t *testing.T) {
+			_, err := Parse([]byte(yamlWithDeclaredIndex(spelling)), BuiltinDefaults)
 			if err == nil {
-				t.Fatalf("index: %s foi aceito", grafia)
+				t.Fatalf("index: %s foi aceito", spelling)
 			}
 			// A mensagem tem de dizer o que ESCREVER, e não só o que está
 			// errado: quem lê isso está com o servidor fora do ar.

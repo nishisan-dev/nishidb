@@ -59,7 +59,7 @@ func TestBind106IndexLookup(t *testing.T) {
 	bq := bindOK(t, "SELECT id FROM radius_sessions WHERE status = 'Stop'")
 	c := comparacaoDe(t, bq)
 	// O planner escolhe o caminho indexado por Indexado + CmpEq.
-	if !c.Field.Indexado {
+	if !c.Field.Indexed {
 		t.Error("Indexado = false, want true")
 	}
 	if c.Op != parser.CmpEq {

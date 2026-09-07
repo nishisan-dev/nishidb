@@ -25,7 +25,7 @@ var benchRadiusEvent = []byte(`{"id":"CMP-V0001PPCLP-013","_id":"68992d1a77b6f26
 // Gate da Q8: 0 allocs/op no Parse de evento RADIUS em steady state
 // (todos os campos já resolvidos no schema/cache).
 func BenchmarkPatchParseRadiusEvent(b *testing.B) {
-	s, err := schema.Parse([]byte(patchYAML), schema.DefaultsPadrao)
+	s, err := schema.Parse([]byte(patchYAML), schema.BuiltinDefaults)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -94,7 +94,7 @@ var benchEventoComDocumento = []byte(`{"id":"CMP-V0001PPCLP-013","severity":3,"n
 // O gate de alocação do pacote cobre alocação e NÃO cobre CPU; esta cobre CPU e
 // reporta alocação junto, para que uma regressão em qualquer das duas apareça.
 func BenchmarkParseComDescoberta(b *testing.B) {
-	s, err := schema.Parse([]byte(benchDescobertaYAML), schema.DefaultsPadrao)
+	s, err := schema.Parse([]byte(benchDescobertaYAML), schema.BuiltinDefaults)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func BenchmarkParseSemDescoberta(b *testing.B) {
 	yaml := strings.Replace(benchDescobertaYAML,
 		"    persistent:\n      type: json\n      unknownFields: include\n",
 		"    persistent:\n      type: json\n", 1)
-	s, err := schema.Parse([]byte(yaml), schema.DefaultsPadrao)
+	s, err := schema.Parse([]byte(yaml), schema.BuiltinDefaults)
 	if err != nil {
 		b.Fatal(err)
 	}

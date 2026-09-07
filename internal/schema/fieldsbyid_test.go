@@ -35,38 +35,38 @@ func TestFieldsByIDOrdenadoEUnico(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	campos := c.FieldsByID()
-	if len(campos) != 3 {
-		t.Fatalf("%d campos, want 3 (id, zeta, alpha)", len(campos))
+	fields := c.FieldsByID()
+	if len(fields) != 3 {
+		t.Fatalf("%d campos, want 3 (id, zeta, alpha)", len(fields))
 	}
-	for i := 1; i < len(campos); i++ {
-		if campos[i].ID <= campos[i-1].ID {
-			t.Errorf("fora de ordem na posição %d: %d após %d", i, campos[i].ID, campos[i-1].ID)
+	for i := 1; i < len(fields); i++ {
+		if fields[i].ID <= fields[i-1].ID {
+			t.Errorf("fora de ordem na posição %d: %d após %d", i, fields[i].ID, fields[i-1].ID)
 		}
 	}
 	// Campo com alias aparece UMA vez: byName teria duas entradas, byID tem
 	// uma — deduplicar de novo aqui seria erro.
-	vistos := map[types.FieldID]int{}
-	for _, f := range campos {
-		vistos[f.ID]++
+	seen := map[types.FieldID]int{}
+	for _, f := range fields {
+		seen[f.ID]++
 	}
-	for id, n := range vistos {
+	for id, n := range seen {
 		if n != 1 {
 			t.Errorf("campo %d aparece %d vezes", id, n)
 		}
 	}
 	// E o alias continua resolvendo para o mesmo ponteiro.
-	porAlias, ok := c.FieldByName([]byte("apelido"))
+	byAlias, ok := c.FieldByName([]byte("apelido"))
 	if !ok {
 		t.Fatal("alias não resolve")
 	}
-	achou := false
-	for _, f := range campos {
-		if f == porAlias {
-			achou = true
+	found := false
+	for _, f := range fields {
+		if f == byAlias {
+			found = true
 		}
 	}
-	if !achou {
+	if !found {
 		t.Error("o campo do alias não está na lista")
 	}
 }
@@ -80,26 +80,26 @@ func TestFieldsByIDEhSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	antes := c.FieldsByID()
+	before := c.FieldsByID()
 	if _, err := c.ResolveUnknown([]byte("X-Vendor-Attr")); err != nil {
 		t.Fatal(err)
 	}
-	depois := c.FieldsByID()
+	after := c.FieldsByID()
 
-	if len(antes) != 3 {
-		t.Errorf("a lista antiga mudou: %d campos", len(antes))
+	if len(before) != 3 {
+		t.Errorf("a lista antiga mudou: %d campos", len(before))
 	}
-	if len(depois) != 4 {
-		t.Fatalf("%d campos após ResolveUnknown, want 4", len(depois))
+	if len(after) != 4 {
+		t.Fatalf("%d campos após ResolveUnknown, want 4", len(after))
 	}
 	// O campo novo entra no fim, porque o ID é crescente.
-	if depois[3].Name != "X-Vendor-Attr" || !depois[3].IsAuto {
-		t.Errorf("último campo = %+v, want X-Vendor-Attr auto", depois[3])
+	if after[3].Name != "X-Vendor-Attr" || !after[3].IsAuto {
+		t.Errorf("último campo = %+v, want X-Vendor-Attr auto", after[3])
 	}
 }
 
 func TestFieldsByIDDatasetSemCamposExtras(t *testing.T) {
-	const soKey = `
+	const keyOnly = `
 version: 1
 name: min
 materialization:
@@ -112,12 +112,12 @@ schema:
     id:
       type: string
 `
-	c, err := parseOK(t, soKey).Compile(newFakeDict())
+	c, err := parseOK(t, keyOnly).Compile(newFakeDict())
 	if err != nil {
 		t.Fatal(err)
 	}
-	campos := c.FieldsByID()
-	if len(campos) != 1 || campos[0].Name != "id" {
-		t.Errorf("campos = %+v, want só id", campos)
+	fields := c.FieldsByID()
+	if len(fields) != 1 || fields[0].Name != "id" {
+		t.Errorf("campos = %+v, want só id", fields)
 	}
 }

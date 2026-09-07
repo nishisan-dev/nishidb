@@ -12,18 +12,18 @@ import (
 // que segura o lock.
 func abreDireto(t *testing.T, a *ambiente) (*storage.Store, *schema.Compiled) {
 	t.Helper()
-	spec, err := schema.Load(filepath.Join(a.dir, "datasets", "radius_sessions.yaml"), schema.DefaultsPadrao)
+	spec, err := schema.Load(filepath.Join(a.dir, "datasets", "radius_sessions.yaml"), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// O conjunto sai do schema, e não de um laço local: abrir o dataset com um
 	// conjunto de índices diferente do que o CLI usa faria este helper
 	// reproduzir, dentro da suíte, o modo de falha cruzado que
-	// schema.CamposComIndice existe para impedir — e que o par
+	// schema.IndexedFieldNames existe para impedir — e que o par
 	// CamposComBitmap/CamposComHash existia para impedir antes dela.
 	st, err := storage.Open(storage.Options{
 		Dir:                    filepath.Join(a.dir, "dados", "radius_sessions"),
-		CamposIndexadosPorNome: schema.CamposComIndice(spec),
+		CamposIndexadosPorNome: schema.IndexedFieldNames(spec),
 	})
 	if err != nil {
 		t.Fatal(err)

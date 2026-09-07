@@ -107,7 +107,7 @@ func (b *bancada) carregaSpec() {
 	b.t.Helper()
 	yml := replaceUm(specYAML, "PLACEHOLDER:9092", b.endereco)
 
-	spec, err := schema.Parse([]byte(yml), schema.DefaultsPadrao)
+	spec, err := schema.Parse([]byte(yml), schema.BuiltinDefaults)
 	if err != nil {
 		b.t.Fatalf("spec: %v", err)
 	}

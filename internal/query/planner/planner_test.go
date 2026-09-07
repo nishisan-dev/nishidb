@@ -19,7 +19,7 @@ const fixtureYAML = "../../../testdata/radius.materialization.yaml"
 
 func compilar(tb testing.TB) *schema.Compiled {
 	tb.Helper()
-	spec, err := schema.Load(fixtureYAML, schema.DefaultsPadrao)
+	spec, err := schema.Load(fixtureYAML, schema.BuiltinDefaults)
 	if err != nil {
 		tb.Fatal(err)
 	}
@@ -502,7 +502,7 @@ func TestPlanIsNullFullScan(t *testing.T) {
 // TypeInt64 — o lookup devolveria vazio e a query MENTIRIA. Por isso o termo
 // só é indexável quando Val.Type == Field.Type.
 func TestPlanTipoPromovidoNaoUsaIndice(t *testing.T) {
-	spec, err := schema.Parse([]byte(vlanYAML), schema.DefaultsPadrao)
+	spec, err := schema.Parse([]byte(vlanYAML), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -569,7 +569,7 @@ func TestPlanCampoAutoNaoUsaIndice(t *testing.T) {
 	// vez de autoType. Sem esta asserção, a guarda seria decoração.
 	sintetico := &schema.CompiledField{
 		ID: 999, Name: "sintetico", Type: types.TypeString,
-		IsAuto: true, Indexado: true,
+		IsAuto: true, Indexed: true,
 	}
 	comIndice := planner.New(fakestorage.New(fakestorage.Indexes{
 		Campos: []types.FieldID{sintetico.ID},

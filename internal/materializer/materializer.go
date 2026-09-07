@@ -336,8 +336,8 @@ type Materializer struct {
 // evento, com a ingestão já rodando.
 func New(c *schema.Compiled, s Store) (*Materializer, error) {
 	m := &Materializer{schema: c, store: s, agora: time.Now}
-	if len(c.RegrasTTL) > 0 {
-		regras, err := predicate.CompilaRegras(c.RegrasTTL, c)
+	if len(c.TTLRules) > 0 {
+		regras, err := predicate.CompilaRegras(c.TTLRules, c)
 		if err != nil {
 			return nil, err
 		}
@@ -491,7 +491,7 @@ func (m *Materializer) Aplica(d *Decodificado) ApplyResult {
 	// O prazo é decidido DEPOIS do Parse e ANTES do merge: ele depende do
 	// estado anterior, que o Parse não tem, e a entry precisa entrar no patch
 	// antes de o payload novo ser montado.
-	if m.schema.Prazo != nil {
+	if m.schema.TTLField != nil {
 		dur, err := m.duracaoDe(m.prevRec.Payload, d.entries)
 		if err != nil {
 			return m.failure(err)
@@ -502,7 +502,7 @@ func (m *Materializer) Aplica(d *Decodificado) ApplyResult {
 		// sobreviver ao evento que a quebra — e a entidade morreria logo
 		// depois de o alarme reabrir. São 8 bytes por versão de record para
 		// tornar impossível a única falha que arruinaria a feature.
-		d.emitePrazo(m.schema.Prazo, dur)
+		d.emitePrazo(m.schema.TTLField, dur)
 	}
 
 	// prevRec.Payload aponta para prevBuf e outBuf é um buffer DISTINTO: o
@@ -602,7 +602,7 @@ func classify(err error) ErrorCategory {
 	// limite declarado sendo atingido. Sem este ramo ele caía no default e o
 	// operador o lia como STORAGE_ERROR — "bug nosso" — enquanto o writer
 	// parava para sempre sem explicação acionável.
-	case errors.Is(err, schema.ErrTetoDeCampos):
+	case errors.Is(err, schema.ErrFieldCeiling):
 		return CategoryFieldsExhausted
 	default:
 		return CategoryStorage

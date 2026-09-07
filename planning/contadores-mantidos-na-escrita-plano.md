@@ -200,8 +200,8 @@ por mensagem) foi refutada na proposta porque Kafka entrega pelo menos uma vez e
 | `internal/storage/store.go` | `Options.CompilaContadores`, abertura, passo 7c do `applyRecord`, Close |
 | `internal/storage/counters.go` (novo) | `adotaOuConstroiContadores`, reconstrução, auditoria sob snapshot, laço de aposentadoria, estatísticas |
 | `internal/storage/store_checkpoint.go` | `traceStep("msyncContadores")` |
-| `internal/schema/counter.go` (novo) | `ContadorSpec`, parse do bloco `counters:`, validação |
-| `internal/schema/spec.go` | `rawSpec.Counters`, `DatasetSpec.Contadores`, mensagem do prefixo `_` |
+| `internal/schema/counter.go` (novo) | `CounterSpec`, parse do bloco `counters:`, validação |
+| `internal/schema/spec.go` | `rawSpec.Counters`, `DatasetSpec.Counters`, mensagem do prefixo `_` |
 | `internal/counters/` (novo) | `compile.go` (spec → `contador.Definicao`), `table.go` (schema sintético + fonte virtual), `open.go` (callback) |
 | `internal/query/engine.go` | `RegistraVirtual` + roteamento por namespace |
 | `internal/query/meta/meta.go` | mensagem de namespace desconhecido lista os existentes |
@@ -745,27 +745,27 @@ aposentado, e a dobra da reabertura a contaria como órfã. Aposentar =
 
 **Arquivos:**
 - Criar: `internal/schema/counter.go`, `counter_test.go`
-- Modificar: `internal/schema/spec.go` (`rawSpec` +`Counters yaml.Node`; `DatasetSpec` +`Contadores []ContadorSpec`; chamada em `validate` depois do bloco de `schema.fields` e da key; mensagem do prefixo `_` em 669-673 passa a "os espaços de nome do produto (`_meta`, `_counters`)")
+- Modificar: `internal/schema/spec.go` (`rawSpec` +`Counters yaml.Node`; `DatasetSpec` +`Contadores []CounterSpec`; chamada em `validate` depois do bloco de `schema.fields` e da key; mensagem do prefixo `_` em 669-673 passa a "os espaços de nome do produto (`_meta`, `_counters`)")
 
 **Interfaces produzidas:**
 ```go
 const (
-	MaxGroupsPadrao         = 65_536
-	MaxGroupsTetoFisico     = 1<<31 - 1           // bit 31 do vetor é a condição
-	RetainEmptyGroupsPadrao = 7 * 24 * time.Hour
-	NamespaceContadores     = "_counters"
-	ColunaChaveDoContador   = "groupKey"
-	ColunaTotalDoContador   = "total"
+	DefaultMaxGroups         = 65_536
+	MaxGroupsPhysicalCeiling     = 1<<31 - 1           // bit 31 do vetor é a condição
+	DefaultRetainEmptyGroups = 7 * 24 * time.Hour
+	CountersNamespace     = "_counters"
+	CounterKeyColumn   = "groupKey"
+	CounterTotalColumn   = "total"
 )
-type ContadorSpec struct {
+type CounterSpec struct {
 	Name              string
 	GroupBy           []string
 	Where             string        // "" = sem condição
 	MaxGroups         uint32
 	RetainEmptyGroups time.Duration // 0 = never
 }
-func contadoresDoNo(n *yaml.Node) ([]rawContador, error)                       // bloco() por item: name, groupBy, where, maxGroups, retainEmptyGroups
-func validaContadores(raw []rawContador, fields map[string]FieldSpec, key, seq string) ([]ContadorSpec, error)
+func countersFromNode(n *yaml.Node) ([]rawCounter, error)                       // bloco() por item: name, groupBy, where, maxGroups, retainEmptyGroups
+func validateCounters(raw []rawCounter, fields map[string]FieldSpec, key, seq string) ([]CounterSpec, error)
 ```
 Recusas (todas `specErrf`, fail-fast, itens em ordem de arquivo; nomes de colunas
 ordenados antes de qualquer mensagem que liste vários):
@@ -776,7 +776,7 @@ repetição/coluna não declarada em `schema.fields`/coluna `auto`/tipo fora de
 ou `total` (colide com a tabela); `where` vazio quando presente; `maxGroups` zero,
 negativo ou acima do teto físico; `retainEmptyGroups` zero explícito (apontar para
 `never`, como o TTL faz), abaixo de 1 min. `where` NÃO é validado aqui (precisa
-do schema compilado — D2), mesma nota de `validaRegrasTTL`.
+do schema compilado — D2), mesma nota de `validateTTLRules`.
 
 - [ ] **Passo 1: testes** — um caso por recusa acima (tabela), mais `TestCountersAceitaAFormaDaProposta` (o YAML da proposta §5.1 com dois contadores) e `TestCountersAplicaOsDefaults`.
 
@@ -791,7 +791,7 @@ do schema compilado — D2), mesma nota de `validaRegrasTTL`.
 ```go
 // Compila resolve as specs contra o schema compilado: nomes → FieldID, tipos
 // efetivos, `where` pelo CompilaCondicao (recusa campo de sistema), e recusa
-// `where` ou groupBy sobre coluna com merge: sum (Acumula) — a idempotência do
+// `where` ou groupBy sobre coluna com merge: sum (Accumulates) — a idempotência do
 // contador depende de o estado ser função do último evento.
 func Compila(spec *schema.DatasetSpec, sc *schema.Compiled) ([]contador.Definicao, error)
 
@@ -869,7 +869,7 @@ ficam zero e são ignorados pela fonte — godoc no molde do `meta.fonte.AbreSna
 `valuekey.DecodeComposite` da chave, zero-copy), `total`. **Zero alocação por
 linha**: o texto e a chave vêm do dicionário (memória estável), o payload é
 montado em `buf[:0]` com `encoding.AppendField` em ordem de FieldID;
-`GetByKey(snap, key, buf)` ⇒ `PorTexto(key)` ⇒ mesmo `record`. `Indexado` false;
+`GetByKey(snap, key, buf)` ⇒ `PorTexto(key)` ⇒ mesmo `record`. `Indexed` false;
 `Lookup` erro de rede de segurança (como o meta). RowID = id do grupo (crescente).
 
 - [ ] **Passo 1: testes ponta a ponta no pacote** (harness igual ao `meta_test.linhas`, mas via `query.Engine` com `RegistraVirtual`): as consultas da proposta §5.2/§5.3:

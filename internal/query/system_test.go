@@ -32,7 +32,7 @@ schema:
 
 func harnessComExpiracao(t *testing.T) *query.Engine {
 	t.Helper()
-	spec, err := schema.Parse([]byte(yamlComExpiracao), schema.DefaultsPadrao)
+	spec, err := schema.Parse([]byte(yamlComExpiracao), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestSelectEstrelaNaoProjetaOCampoDeSistema(t *testing.T) {
 	eng := harnessComExpiracao(t)
 	cols := colunasDe(t, eng, "SELECT * FROM alarmes")
 	for _, c := range cols {
-		if c == schema.CampoInstanteDeEscrita {
+		if c == schema.WriteInstantFieldName {
 			t.Fatalf("SELECT * projetou o campo de sistema: %v", cols)
 		}
 	}
@@ -87,7 +87,7 @@ func TestSelectEstrelaNaoProjetaOCampoDeSistema(t *testing.T) {
 // Oculto no *, não inacessível: pedir pelo nome funciona, como ROWID/xmin.
 func TestSelectNominalDoCampoDeSistemaFunciona(t *testing.T) {
 	eng := harnessComExpiracao(t)
-	sql := "SELECT id, " + schema.CampoInstanteDeEscrita + " FROM alarmes"
+	sql := "SELECT id, " + schema.WriteInstantFieldName + " FROM alarmes"
 	it, err := eng.Execute(context.Background(), "alarmes", sql, nil)
 	if err != nil {
 		t.Fatalf("%s: %v", sql, err)
@@ -100,7 +100,7 @@ func TestSelectNominalDoCampoDeSistemaFunciona(t *testing.T) {
 	if v.I64 <= 0 {
 		t.Fatalf("o campo de sistema veio vazio: %+v", v)
 	}
-	if cols := it.Columns(); len(cols) != 2 || cols[1].Name != schema.CampoInstanteDeEscrita {
+	if cols := it.Columns(); len(cols) != 2 || cols[1].Name != schema.WriteInstantFieldName {
 		t.Fatalf("colunas = %+v", cols)
 	}
 }
@@ -109,7 +109,7 @@ func TestSelectNominalDoCampoDeSistemaFunciona(t *testing.T) {
 // inexistente — não uma coluna sempre nula.
 func TestSemExpiracaoOCampoDeSistemaNaoExiste(t *testing.T) {
 	yaml := strings.Replace(yamlComExpiracao, "  ttl:\n    - expireAfterWrite: 2h\n", "", 1)
-	spec, err := schema.Parse([]byte(yaml), schema.DefaultsPadrao)
+	spec, err := schema.Parse([]byte(yaml), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func TestSemExpiracaoOCampoDeSistemaNaoExiste(t *testing.T) {
 	if err := eng.Register("alarmes", sch, fakestorage.New(fakestorage.Indexes{})); err != nil {
 		t.Fatal(err)
 	}
-	sql := "SELECT " + schema.CampoInstanteDeEscrita + " FROM alarmes"
+	sql := "SELECT " + schema.WriteInstantFieldName + " FROM alarmes"
 	if _, err := eng.Execute(context.Background(), "alarmes", sql, nil); err == nil {
 		t.Fatal("a coluna de sistema existe num dataset sem expiração")
 	}

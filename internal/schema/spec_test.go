@@ -62,7 +62,7 @@ query:
 
 func parseOK(t *testing.T, yml string) *DatasetSpec {
 	t.Helper()
-	s, err := Parse([]byte(yml), DefaultsPadrao)
+	s, err := Parse([]byte(yml), BuiltinDefaults)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -71,7 +71,7 @@ func parseOK(t *testing.T, yml string) *DatasetSpec {
 
 func parseErr(t *testing.T, yml, wantSubstr string) {
 	t.Helper()
-	_, err := Parse([]byte(yml), DefaultsPadrao)
+	_, err := Parse([]byte(yml), BuiltinDefaults)
 	if err == nil {
 		t.Fatalf("esperava erro contendo %q", wantSubstr)
 	}
@@ -173,7 +173,7 @@ func TestParseValidationErrors(t *testing.T) {
 		{"index invalido", repl("index: true", "index: btree"), "btree"},
 		// D5: index: hash e index: bitmap foram as duas grafias GLOBAIS que o
 		// motor único aposentou. A rejeição tem sentinela própria
-		// (ErrGrafiaDeIndiceObsoleta, testada em cli.TestDatasetComGrafiaDe...
+		// (ErrObsoleteIndexSpelling, testada em cli.TestDatasetComGrafiaDe...
 		// e em schema.TestAsGrafiasAntigasSaoRecusadas); aqui só se confere que
 		// ela também sai pelo caminho comum de validação de campo, com a
 		// mensagem ensinando a grafia nova.
@@ -214,15 +214,15 @@ func TestParseValidationErrors(t *testing.T) {
 // entra ANTES de existir dataset que o ocupe: é uma linha hoje, e depois seria
 // "recrie o dataset", o custo mais alto do produto.
 func TestNomeDeDatasetNaoPodeComecarComUnderscore(t *testing.T) {
-	for _, nome := range []string{"_meta", "_", "_x"} {
-		t.Run(nome, func(t *testing.T) {
-			parseErr(t, strings.Replace(baseYAML, "name: radius_sessions", "name: "+nome, 1), "reservado")
+	for _, name := range []string{"_meta", "_", "_x"} {
+		t.Run(name, func(t *testing.T) {
+			parseErr(t, strings.Replace(baseYAML, "name: radius_sessions", "name: "+name, 1), "reservado")
 		})
 	}
 }
 
 // A regra acima vale para o nome do DATASET e para mais nada. Campo e alias
-// com "_" continuam válidos, e é deliberado: o comentário de nomesDeSistema
+// com "_" continuam válidos, e é deliberado: o comentário de systemNames
 // (spec.go) registra que reservar o prefixo para CAMPOS recusaria datasets que
 // hoje sobem, porque `_SEQ` é nome de sequence legítimo e já está em uso.
 // Sem esta metade, a recusa nova poderia crescer para os campos sem que nada

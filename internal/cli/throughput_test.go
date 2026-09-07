@@ -199,15 +199,15 @@ func umaRodadaPeloCLI(t *testing.T, entrada string) (float64, float64) {
 // ficam fora dos dois lados.
 func umaRodadaDireta(t *testing.T, entrada string) float64 {
 	t.Helper()
-	spec, err := schema.Load("../../testdata/radius.materialization.yaml", schema.DefaultsPadrao)
+	spec, err := schema.Load("../../testdata/radius.materialization.yaml", schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A lista sai de schema.CamposComIndice, e não de um laço local: um helper de
+	// A lista sai de schema.IndexedFieldNames, e não de um laço local: um helper de
 	// teste que abre o dataset com um conjunto de índices diferente do que o
 	// servidor usa reproduz, dentro da suíte, o modo de falha cruzado que aquela
 	// função existe para impedir.
-	indexados := schema.CamposComIndice(spec)
+	indexados := schema.IndexedFieldNames(spec)
 	st, err := storage.Open(storage.Options{
 		Dir:                    t.TempDir(),
 		SegmentSize:            8 << 20,

@@ -195,7 +195,7 @@ func novoStubHarnessB(b *testing.B, rows int) *stubHarness {
 
 func montaStubHarness(tb testing.TB, rows, maxRows int, timeout string) *stubHarness {
 	tb.Helper()
-	spec, err := schema.Parse([]byte(fmt.Sprintf(stubYAML, maxRows, timeout)), schema.DefaultsPadrao)
+	spec, err := schema.Parse([]byte(fmt.Sprintf(stubYAML, maxRows, timeout)), schema.BuiltinDefaults)
 	if err != nil {
 		tb.Fatal(err)
 	}

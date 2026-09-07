@@ -199,7 +199,7 @@ func TestAutoNaoFixaComNull(t *testing.T) {
 // default do classify, vira CategoryStorage e **para a ingestão inteira** por
 // causa de um campo que mudou de formato na origem.
 func TestConflitoDeTipoNoDicionarioEhEventoRuim(t *testing.T) {
-	spec, err := schema.Parse([]byte(autoFixYAML), schema.DefaultsPadrao)
+	spec, err := schema.Parse([]byte(autoFixYAML), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,7 +302,7 @@ func (d dictFalhaAoFixar) Name(id types.FieldID) (string, bool) { return d.inner
 // Failed=0 no painel, que é a leitura oposta da realidade. A política de três
 // baldes existe exatamente para impedir que bug/infra vire "dado ruim".
 func TestFalhaDeIODoDicionarioAoFixarTipoEhFailed(t *testing.T) {
-	s, err := schema.Parse([]byte(autoFixYAML), schema.DefaultsPadrao)
+	s, err := schema.Parse([]byte(autoFixYAML), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -30,29 +30,29 @@ type DatasetSpec struct {
 	Materialization MaterializationSpec
 	Schema          SchemaSpec
 	Query           QuerySpec
-	// Historico é o bloco `history` validado, ou nil no dataset sem tabela
-	// irmã. Ver DerivaHistorico para a spec que ele gera.
-	Historico *HistoricoSpec
-	// EhHistorico marca a spec DERIVADA — a da própria tabela irmã. Ela não
-	// vem de arquivo nenhum: nasce de DerivaHistorico e existe só em memória,
+	// History é o bloco `history` validado, ou nil no dataset sem tabela
+	// irmã. Ver DeriveHistory para a spec que ele gera.
+	History *HistorySpec
+	// IsHistory marca a spec DERIVADA — a da própria tabela irmã. Ela não
+	// vem de arquivo nenhum: nasce de DeriveHistory e existe só em memória,
 	// e é por isso que ListaDatasets nunca a enxerga.
-	EhHistorico bool
-	// Contadores é o bloco `counters` validado; nil no dataset sem contador.
-	Contadores []ContadorSpec
+	IsHistory bool
+	// Counters é o bloco `counters` validado; nil no dataset sem contador.
+	Counters []CounterSpec
 }
 
 type MaterializationSpec struct {
 	Key      KeySpec
 	Mode     string // merge | replace
 	Sequence *SequenceSpec
-	// RegrasTTL são as regras de expiração VALIDADAS, na ordem do arquivo —
+	// TTLRules são as regras de expiração VALIDADAS, na ordem do arquivo —
 	// que é semântica: a primeira que casa vence. Vazia significa dataset sem
 	// expiração.
-	RegrasTTL []RegraTTL
-	// DuracaoDeFundo é a duração da regra sem `when`, ou zero quando não há.
+	TTLRules []TTLRule
+	// FallbackDuration é a duração da regra sem `when`, ou zero quando não há.
 	// Sai pré-computada porque quem a consome — os montadores de Options do
 	// storage — não deve reimplementar a busca pela última regra.
-	DuracaoDeFundo time.Duration
+	FallbackDuration time.Duration
 	// TombstoneRetention é por quanto tempo a lápide de uma entidade expirada
 	// precisa sobreviver antes de a key poder ser esquecida. VALIDADO aqui e
 	// ainda SEM MOTOR: implementá-lo exige purgar a primary (remoção em
@@ -77,10 +77,10 @@ type SequenceSpec struct {
 	Strategy string // greater (único no v1)
 }
 
-// ResolucaoDaExpiracao é o passo do agendador (§57). Duração menor que isto é
+// ExpiryResolution é o passo do agendador (§57). Duração menor que isto é
 // recusada em vez de arredondada: o operador leria "30s" e teria até 90s, e
 // uma chave que mente é pior que uma chave recusada.
-const ResolucaoDaExpiracao = time.Minute
+const ExpiryResolution = time.Minute
 
 type SchemaSpec struct {
 	Include       []string // ["*"] ou lista explícita; default = campos declarados
@@ -111,16 +111,16 @@ const (
 	OnMaxColsIgnore = "ignore"
 	OnMaxColsStop   = "stop"
 
-	// MaxNestedColsPadrao é o teto default de colunas derivadas por consulta.
+	// DefaultMaxNestedCols é o teto default de colunas derivadas por consulta.
 	// O número é folgado de propósito: quem controla o caso real é a lista de
 	// extrações que o operador escreveu, e este é backstop contra uma
 	// expansão `pai.*` sobre um pai com centenas de chaves declaradas.
-	MaxNestedColsPadrao = 256
+	DefaultMaxNestedCols = 256
 
-	// MaxColsTetoFisico é o teto que o dicionário impõe por construção: o
+	// MaxColsPhysicalCeiling é o teto que o dicionário impõe por construção: o
 	// types.FieldID é uint16. Declarar acima disto seria uma promessa que o
 	// fielddict recusa primeiro, então a spec recusa antes.
-	MaxColsTetoFisico = 65535
+	MaxColsPhysicalCeiling = 65535
 )
 
 // As tags de YAML são EXPLÍCITAS mesmo quando redundantes. O default do
@@ -151,12 +151,12 @@ type FieldSpec struct {
 	Extract []ExtractSpec `yaml:"extract"`
 
 	// Merge é a política de escrita do campo quando o merge roda: vazio
-	// sobrescreve (o default), MergeSoma acumula. Ver o godoc da constante
+	// sobrescreve (o default), MergeSum acumula. Ver o godoc da constante
 	// para o que a soma custa em idempotência.
 	Merge string `yaml:"merge"`
 
 	// FrozenFrom nomeia a ORIGEM de uma coluna congelada: outra coluna
-	// declarada, ou OrigemRelogio. A coluna recebe o primeiro valor que a
+	// declarada, ou FrozenFromClock. A coluna recebe o primeiro valor que a
 	// origem tiver e nunca mais muda.
 	//
 	// A tag é explícita como todas as outras: sem ela o yaml.v3 procuraria
@@ -242,7 +242,7 @@ type rawMat struct {
 	Key      rawKey        `yaml:"key"`
 	Mode     string        `yaml:"mode"`
 	Sequence *SequenceSpec `yaml:"sequence"`
-	// TTL é yaml.Node, e não []RegraTTLSpec direto, para que a forma ANTIGA —
+	// TTL é yaml.Node, e não []TTLRuleSpec direto, para que a forma ANTIGA —
 	// o mapa único — seja recusada com uma mensagem que nomeia a lista, em vez
 	// da mensagem do yaml.v3 sobre tipos que o operador nunca escreveu.
 	//
@@ -300,13 +300,13 @@ type Defaults struct {
 	MaxTimeout time.Duration
 }
 
-// DefaultsPadrao são os valores da spec §78 para quem carrega uma spec sem
+// BuiltinDefaults são os valores da spec §78 para quem carrega uma spec sem
 // nishidb.yaml nenhum por perto — testes, benchmarks e ferramentas.
 //
 // MaxTimeout fica ZERO de propósito: escrever 30s aqui seria um segundo lugar
 // de onde o teto poderia sair, e ele divergiria do Timeout no dia em que um
 // dataset declarasse `query.timeout` maior.
-var DefaultsPadrao = Defaults{MaxRows: 100000, Timeout: 30 * time.Second}
+var BuiltinDefaults = Defaults{MaxRows: 100000, Timeout: 30 * time.Second}
 
 // Load lê e valida uma spec de um arquivo YAML.
 func Load(path string, d Defaults) (*DatasetSpec, error) {
@@ -334,10 +334,10 @@ func specErrf(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrInvalidSpec, fmt.Sprintf(format, args...))
 }
 
-// semPrefixoDeSpec desembrulha a mensagem de um erro já marcado com
+// withoutSpecPrefix desembrulha a mensagem de um erro já marcado com
 // ErrInvalidSpec, para que aninhá-lo em outro specErrf não produza
 // "spec inválida: spec inválida: ..." na cara do operador.
-func semPrefixoDeSpec(err error) string {
+func withoutSpecPrefix(err error) string {
 	s := err.Error()
 	if p := ErrInvalidSpec.Error() + ": "; strings.HasPrefix(s, p) {
 		return s[len(p):]
@@ -361,10 +361,10 @@ var fieldTypeNames = map[string]types.FieldType{
 	"time":        types.TypeTime,
 }
 
-// dominioDeFormato mapeia o tipo YAML para o domínio do compilador de padrão.
+// formatDomain mapeia o tipo YAML para o domínio do compilador de padrão.
 // Só estes dois tipos aceitam (e exigem) `format:`.
-func dominioDeFormato(tipo string) (typeparse.Domain, bool) {
-	switch tipo {
+func formatDomain(typ string) (typeparse.Domain, bool) {
+	switch typ {
 	case "datetime":
 		return typeparse.DomainDateTime, true
 	case "time":
@@ -373,15 +373,15 @@ func dominioDeFormato(tipo string) (typeparse.Domain, bool) {
 	return 0, false
 }
 
-// CompilaFormato resolve o `format:` de um campo para o layout de parsing.
+// CompileFormat resolve o `format:` de um campo para o layout de parsing.
 // Dono único da regra: quem valida a spec e quem compila o schema chamam
 // AQUI, nunca uma segunda lista de formatos — duas listas divergiriam e o
 // dataset aceitaria no load o que recusa por evento na ingestão.
-func CompilaFormato(tipo, format string) (*typeparse.Layout, error) {
-	d, usa := dominioDeFormato(tipo)
-	if !usa {
+func CompileFormat(typ, format string) (*typeparse.Layout, error) {
+	d, usesFormat := formatDomain(typ)
+	if !usesFormat {
 		if format != "" {
-			return nil, specErrf("format só se aplica a datetime e time; o tipo %q não o usa", tipo)
+			return nil, specErrf("format só se aplica a datetime e time; o tipo %q não o usa", typ)
 		}
 		return nil, nil
 	}
@@ -389,7 +389,7 @@ func CompilaFormato(tipo, format string) (*typeparse.Layout, error) {
 		// Sem default de propósito: um format esquecido escolheria um padrão
 		// que recusa 100% dos eventos, e sob log-and-skip isso é um dataset
 		// que não ingere nada — só WARNs, sem nada apontando para a causa.
-		return nil, specErrf("tipo %q exige format (tokens: %s)", tipo, typeparse.SupportedTokens())
+		return nil, specErrf("tipo %q exige format (tokens: %s)", typ, typeparse.SupportedTokens())
 	}
 	l, err := typeparse.CompileLayout(format, d)
 	if err != nil {
@@ -413,21 +413,21 @@ func isValidTypeName(name string) bool {
 	return ok
 }
 
-// nomesDeSistema são os campos que o WRITER injeta e o operador não declara.
+// systemNames são os campos que o WRITER injeta e o operador não declara.
 //
 // Lista fechada, e não o prefixo "_" inteiro: campos com underscore são
 // legítimos e já estão em uso — `_SEQ` é o nome de sequence da spec §12 e da
 // fixture de tipos. Reservar o prefixo recusaria datasets que hoje sobem.
-var nomesDeSistema = map[string]string{
-	CampoInstanteDeEscrita: "é injetado pelo writer a cada escrita",
-	CampoDePrazo:           "é calculado pelo writer a partir das regras de ttl",
+var systemNames = map[string]string{
+	WriteInstantFieldName: "é injetado pelo writer a cada escrita",
+	TTLFieldName:          "é calculado pelo writer a partir das regras de ttl",
 }
 
-// CampoInstanteDeEscrita registra QUANDO o writer gravou a entidade. É um
+// WriteInstantFieldName registra QUANDO o writer gravou a entidade. É um
 // fato, não uma política: guardar o instante da escrita (e não o prazo já
 // somado) é o que faz uma mudança de expireAfterWrite valer imediatamente
 // para as linhas existentes, em vez de exigir reescrever o dataset.
-const CampoInstanteDeEscrita = "_writtenAt"
+const WriteInstantFieldName = "_writtenAt"
 
 func isIdentName(s string) bool {
 	if s == "" {
@@ -455,83 +455,83 @@ func hashIndexable(t string) bool {
 	return t == "string" || t == "int64" || t == "ipv4" || t == "ipv6"
 }
 
-// indexavel é o conjunto que `index: true` aceita: a UNIÃO dos dois motores
+// isIndexableType é o conjunto que `index: true` aceita: a UNIÃO dos dois motores
 // antigos, e não a interseção. Com um motor só, a distinção de cardinalidade
 // que os separava morreu — mas nenhuma coluna pode PERDER a indexabilidade que
 // já tinha só porque as duas grafias viraram uma: um campo `ipv4` que só
 // bitmapIndexable recusava (e só hashIndexable aceitava) continua indexável
 // com `index: true`, exatamente como continuava indexável com `index: hash`.
-func indexavel(t string) bool {
+func isIndexableType(t string) bool {
 	return bitmapIndexable(t) || hashIndexable(t)
 }
 
-// validaExtracoes confere o bloco `extract` de todos os campos.
+// validateExtracts confere o bloco `extract` de todos os campos.
 //
 // Roda numa passada PRÓPRIA, depois de include/exclude estarem resolvidos, e
 // percorre os campos em ordem alfabética. As duas coisas importam: a primeira
 // porque a validade de uma extração depende de o PAI estar visível, e a
 // segunda porque o laço de schema.fields itera um mapa — sem ordenar, a
 // mensagem de erro de um YAML com dois defeitos mudaria entre execuções.
-func validaExtracoes(s *DatasetSpec, fields map[string]FieldSpec, aliases map[string]string, include []string, includeAll bool) error {
-	nomesDePais := make([]string, 0, len(fields))
-	for nome := range fields {
-		if len(fields[nome].Extract) > 0 {
-			nomesDePais = append(nomesDePais, nome)
+func validateExtracts(s *DatasetSpec, fields map[string]FieldSpec, aliases map[string]string, include []string, includeAll bool) error {
+	parentNames := make([]string, 0, len(fields))
+	for name := range fields {
+		if len(fields[name].Extract) > 0 {
+			parentNames = append(parentNames, name)
 		}
 	}
-	sort.Strings(nomesDePais)
+	sort.Strings(parentNames)
 
-	noInclude := make(map[string]struct{}, len(include))
+	included := make(map[string]struct{}, len(include))
 	for _, n := range include {
-		noInclude[n] = struct{}{}
+		included[n] = struct{}{}
 	}
-	excluido := make(map[string]struct{}, len(s.Schema.Exclude))
+	excluded := make(map[string]struct{}, len(s.Schema.Exclude))
 	for _, n := range s.Schema.Exclude {
-		excluido[n] = struct{}{}
+		excluded[n] = struct{}{}
 	}
 
-	vistos := map[string]string{} // as → pai que o declarou
-	for _, pai := range nomesDePais {
-		f := fields[pai]
+	seen := map[string]string{} // as → pai que o declarou
+	for _, parent := range parentNames {
+		f := fields[parent]
 		if f.Type != "json" {
-			return specErrf("campo %q: extract só vale sobre type: json, e ele é %q — nos outros tipos não há documento a percorrer", pai, f.Type)
+			return specErrf("campo %q: extract só vale sobre type: json, e ele é %q — nos outros tipos não há documento a percorrer", parent, f.Type)
 		}
-		if _, fora := excluido[pai]; fora {
-			return specErrf("campo %q está no exclude e declara extract; o campo excluído nem é materializado, então a extração nunca rodaria", pai)
+		if _, isExcluded := excluded[parent]; isExcluded {
+			return specErrf("campo %q está no exclude e declara extract; o campo excluído nem é materializado, então a extração nunca rodaria", parent)
 		}
 		if !includeAll {
-			if _, dentro := noInclude[pai]; !dentro {
-				return specErrf("campo %q declara extract e não está no include; a extração nunca rodaria", pai)
+			if _, isIncluded := included[parent]; !isIncluded {
+				return specErrf("campo %q declara extract e não está no include; a extração nunca rodaria", parent)
 			}
 		}
 		for i, e := range f.Extract {
-			nome, err := nomeDaExtracao(pai, i, e)
+			nome, err := derivedColumnName(parent, i, e)
 			if err != nil {
 				return err
 			}
 			if !isValidTypeName(e.Type) {
-				return specErrf("campo %q: extract %q: tipo %q inválido", pai, nome, e.Type)
+				return specErrf("campo %q: extract %q: tipo %q inválido", parent, nome, e.Type)
 			}
 			if e.Type == "auto" {
-				return specErrf("campo %q: extract %q não pode ser auto; a coluna derivada existe para ter tipo", pai, nome)
+				return specErrf("campo %q: extract %q não pode ser auto; a coluna derivada existe para ter tipo", parent, nome)
 			}
-			if _, err := CompilaFormato(e.Type, e.Format); err != nil {
-				return specErrf("campo %q: extract %q: %s", pai, nome, semPrefixoDeSpec(err))
+			if _, err := CompileFormat(e.Type, e.Format); err != nil {
+				return specErrf("campo %q: extract %q: %s", parent, nome, withoutSpecPrefix(err))
 			}
 			if _, clash := fields[nome]; clash {
 				return specErrf("extract %q colide com o campo de topo de mesmo nome; escolha outro `as`", nome)
 			}
-			if dono, clash := aliases[nome]; clash {
-				return specErrf("extract %q colide com o alias do campo %q; escolha outro `as`", nome, dono)
+			if owner, clash := aliases[nome]; clash {
+				return specErrf("extract %q colide com o alias do campo %q; escolha outro `as`", nome, owner)
 			}
-			if antes, dup := vistos[nome]; dup {
-				return specErrf("extract %q declarado duas vezes (campos %q e %q)", nome, antes, pai)
+			if prev, dup := seen[nome]; dup {
+				return specErrf("extract %q declarado duas vezes (campos %q e %q)", nome, prev, parent)
 			}
-			vistos[nome] = pai
-			// A mesma validaIndice do campo de topo, e não uma segunda cópia: as
+			seen[nome] = parent
+			// A mesma validateIndex do campo de topo, e não uma segunda cópia: as
 			// duas fazem a MESMA pergunta (grafia aceita? tipo indexável?), e
 			// divergiriam no dia em que uma das duas mudasse sozinha.
-			if err := validaIndice(nome, e.Index, e.Type); err != nil {
+			if err := validateIndex(nome, e.Index, e.Type); err != nil {
 				return err
 			}
 		}
@@ -539,36 +539,36 @@ func validaExtracoes(s *DatasetSpec, fields map[string]FieldSpec, aliases map[st
 	return nil
 }
 
-// nomeDaExtracao resolve o `as`, com o default e as recusas de forma.
-func nomeDaExtracao(pai string, i int, e ExtractSpec) (string, error) {
+// derivedColumnName resolve o `as`, com o default e as recusas de forma.
+func derivedColumnName(parent string, i int, e ExtractSpec) (string, error) {
 	if e.Path == "" {
-		return "", specErrf("campo %q: extract[%d] sem path", pai, i)
+		return "", specErrf("campo %q: extract[%d] sem path", parent, i)
 	}
-	nome := e.As
-	if nome == "" {
+	name := e.As
+	if name == "" {
 		// O default só serve ao caminho de um nível: derivar de "a.b" daria
 		// um nome com ponto, e nome de coluna com ponto colidiria com a
 		// sintaxe de caminho da projeção. Nesse caso o `as` é obrigatório.
 		if strings.Contains(e.Path, ".") {
-			return "", specErrf("campo %q: extract com path %q precisa de `as` — o nome não pode ser derivado de um caminho com ponto", pai, e.Path)
+			return "", specErrf("campo %q: extract com path %q precisa de `as` — o nome não pode ser derivado de um caminho com ponto", parent, e.Path)
 		}
-		nome = e.Path
+		name = e.Path
 	}
-	if strings.Contains(nome, ".") {
-		return "", specErrf("campo %q: extract `as` %q não pode conter ponto; ele separaria o pai da coluna na projeção", pai, nome)
+	if strings.Contains(name, ".") {
+		return "", specErrf("campo %q: extract `as` %q não pode conter ponto; ele separaria o pai da coluna na projeção", parent, name)
 	}
 	// A regra é a de NOME DE CAMPO, e não a de alias: nome de campo no NishiDB
 	// nunca foi restrito a minúsculas — a fixture da spec tem
 	// `Acct-Status-Type` —, e chave de documento json é tipicamente camelCase.
 	// Aplicar aqui o isIdentName do alias tornaria o `as` obrigatório em
 	// praticamente toda extração real, sem nada ganhar.
-	if motivo, reservado := nomesDeSistema[nome]; reservado {
-		return "", specErrf("campo %q: extract `as` %q é reservado: %s", pai, nome, motivo)
+	if reason, reserved := systemNames[name]; reserved {
+		return "", specErrf("campo %q: extract `as` %q é reservado: %s", parent, name, reason)
 	}
-	return nome, nil
+	return name, nil
 }
 
-// CamposComIndice devolve, em ordem determinística, os campos que o Store
+// IndexedFieldNames devolve, em ordem determinística, os campos que o Store
 // precisa abrir com índice — os de topo E as colunas derivadas.
 //
 // É o ÚNICO lugar que decide isso. O laço vivia copiado em quatro sítios —
@@ -585,41 +585,41 @@ func nomeDaExtracao(pai string, i int, e ExtractSpec) (string, error) {
 // storage.Options ainda tinha um par de campos por motor. Com o par unificado
 // não resta chamador para a segunda — e duas funções idênticas são a primeira
 // cópia a divergir.
-func CamposComIndice(s *DatasetSpec) []string {
+func IndexedFieldNames(s *DatasetSpec) []string {
 	var out []string
-	for nome, f := range s.Schema.Fields {
+	for name, f := range s.Schema.Fields {
 		if f.Index == "true" {
-			out = append(out, nome)
+			out = append(out, name)
 		}
 		for i, e := range f.Extract {
 			if e.Index != "true" {
 				continue
 			}
-			derivada, err := nomeDaExtracao(nome, i, e)
+			derived, err := derivedColumnName(name, i, e)
 			if err != nil {
 				continue // a validação da spec já recusou isto
 			}
-			out = append(out, derivada)
+			out = append(out, derived)
 		}
 	}
 	sort.Strings(out)
 	return out
 }
 
-// NomesDasExtracoes devolve, em ordem determinística, o nome de todas as
+// DerivedColumnNames devolve, em ordem determinística, o nome de todas as
 // colunas derivadas declaradas.
-func (s *DatasetSpec) NomesDasExtracoes() []string {
-	pais := make([]string, 0, len(s.Schema.Fields))
-	for nome := range s.Schema.Fields {
-		if len(s.Schema.Fields[nome].Extract) > 0 {
-			pais = append(pais, nome)
+func (s *DatasetSpec) DerivedColumnNames() []string {
+	parents := make([]string, 0, len(s.Schema.Fields))
+	for name := range s.Schema.Fields {
+		if len(s.Schema.Fields[name].Extract) > 0 {
+			parents = append(parents, name)
 		}
 	}
-	sort.Strings(pais)
+	sort.Strings(parents)
 	var out []string
-	for _, pai := range pais {
-		for i, e := range s.Schema.Fields[pai].Extract {
-			nome, err := nomeDaExtracao(pai, i, e)
+	for _, parent := range parents {
+		for i, e := range s.Schema.Fields[parent].Extract {
+			nome, err := derivedColumnName(parent, i, e)
 			if err != nil {
 				continue // a validação da spec já recusou isto
 			}
@@ -629,26 +629,26 @@ func (s *DatasetSpec) NomesDasExtracoes() []string {
 	return out
 }
 
-// NomeDaExtracao expõe a resolução do `as` para o compilador.
-func NomeDaExtracao(pai string, i int, e ExtractSpec) (string, error) {
-	return nomeDaExtracao(pai, i, e)
+// DerivedColumnName expõe a resolução do `as` para o compilador.
+func DerivedColumnName(parent string, i int, e ExtractSpec) (string, error) {
+	return derivedColumnName(parent, i, e)
 }
 
-func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
+func validate(raw *rawSpec, defaults Defaults) (*DatasetSpec, error) {
 	// Default inválido é erro do CHAMADOR, e sai aqui em vez de virar um
 	// padrão implícito: cair no 100000 quando o global veio zerado esconderia
 	// exatamente o defeito que se está corrigindo.
-	if padroes.MaxRows <= 0 {
-		return nil, specErrf("query.defaultMaxRows global deve ser > 0, é %d", padroes.MaxRows)
+	if defaults.MaxRows <= 0 {
+		return nil, specErrf("query.defaultMaxRows global deve ser > 0, é %d", defaults.MaxRows)
 	}
-	if padroes.Timeout <= 0 {
-		return nil, specErrf("query.defaultTimeout global deve ser > 0, é %s", padroes.Timeout)
+	if defaults.Timeout <= 0 {
+		return nil, specErrf("query.defaultTimeout global deve ser > 0, é %s", defaults.Timeout)
 	}
 	// Zero é AUSENTE aqui (o dataset herda o próprio Timeout), e por isso a
 	// faixa recusada é só a negativa — que nenhum parser produz, mas que um
 	// chamador que monte Defaults à mão produziria, e daria um teto no passado.
-	if padroes.MaxTimeout < 0 {
-		return nil, specErrf("query.defaultMaxTimeout global não pode ser negativo, é %s", padroes.MaxTimeout)
+	if defaults.MaxTimeout < 0 {
+		return nil, specErrf("query.defaultMaxTimeout global não pode ser negativo, é %s", defaults.MaxTimeout)
 	}
 	s := &DatasetSpec{}
 
@@ -670,20 +670,20 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 	//
 	// Ela mora aqui, e não dentro de isIdentName, porque aquela função também
 	// valida ALIAS logo abaixo — e para CAMPO o prefixo continua legítimo, pela
-	// razão que o comentário de nomesDeSistema registra: `_SEQ` é nome de
+	// razão que o comentário de systemNames registra: `_SEQ` é nome de
 	// sequence em uso, e reservá-lo recusaria datasets que hoje sobem.
 	if strings.HasPrefix(raw.Name, "_") {
 		return nil, specErrf(
 			"name %q: o prefixo \"_\" é reservado aos espaços de nome do produto (_meta, %s); escolha outro nome",
-			raw.Name, NamespaceContadores)
+			raw.Name, CountersNamespace)
 	}
 	s.Name = raw.Name
 
 	var err error
-	if s.Source, err = validaSource(&raw.Source); err != nil {
+	if s.Source, err = validateSource(&raw.Source); err != nil {
 		return nil, err
 	}
-	if s.Errors, err = validaErrors(&raw.Errors); err != nil {
+	if s.Errors, err = validateErrors(&raw.Errors); err != nil {
 		return nil, err
 	}
 
@@ -714,8 +714,8 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 		return nil, specErrf("materialization.mode %q inválido (merge|replace)", mode)
 	}
 	s.Materialization.Mode = mode
-	if bruto := raw.Materialization.TombstoneRetention; bruto != "" {
-		d, err := units.DurationWithDays(bruto, 0)
+	if rawText := raw.Materialization.TombstoneRetention; rawText != "" {
+		d, err := units.DurationWithDays(rawText, 0)
 		if err != nil {
 			return nil, specErrf("materialization.tombstoneRetention: %s", err)
 		}
@@ -741,15 +741,15 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 		s.Materialization.Sequence = seq
 	}
 
-	if regras, err := regrasDoNo(&raw.Materialization.TTL); err != nil {
+	if rules, err := rulesFromNode(&raw.Materialization.TTL); err != nil {
 		return nil, err
-	} else if regras != nil {
-		validadas, err := validaRegrasTTL(regras)
+	} else if rules != nil {
+		validated, err := validateTTLRules(rules)
 		if err != nil {
 			return nil, err
 		}
-		s.Materialization.RegrasTTL = validadas
-		s.Materialization.DuracaoDeFundo = duracaoDeFundo(validadas)
+		s.Materialization.TTLRules = validated
+		s.Materialization.FallbackDuration = fallbackDuration(validated)
 	}
 
 	// schema.fields
@@ -762,13 +762,13 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 		if name == "" {
 			return nil, specErrf("schema.fields contém nome vazio")
 		}
-		if motivo, reservado := nomesDeSistema[name]; reservado {
-			return nil, specErrf("campo %q é reservado: %s", name, motivo)
+		if reason, reserved := systemNames[name]; reserved {
+			return nil, specErrf("campo %q é reservado: %s", name, reason)
 		}
 		// A coluna congelada NÃO declara tipo: ele é herdado da origem na
 		// compilação, e o isValidTypeName recusa vazio. A validação própria
 		// dela — inclusive a recusa de `type` junto — mora em
-		// validaCongeladas, que precisa do mapa inteiro na mão.
+		// validateFrozen, que precisa do mapa inteiro na mão.
 		if f.FrozenFrom == "" && !isValidTypeName(f.Type) {
 			return nil, specErrf("campo %q: tipo %q inválido", name, f.Type)
 		}
@@ -783,12 +783,12 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 		// registra.
 		//
 		// A congelada fica de fora: ela não declara tipo, então não há o que
-		// compilar, e a recusa de `format` sobre ela mora em validaCongeladas
+		// compilar, e a recusa de `format` sobre ela mora em validateFrozen
 		// — com a mensagem que nomeia frozenFrom, que é a que o operador
 		// precisa ler.
 		if f.FrozenFrom == "" {
-			if _, err := CompilaFormato(f.Type, f.Format); err != nil {
-				return nil, specErrf("campo %q: %s", name, semPrefixoDeSpec(err))
+			if _, err := CompileFormat(f.Type, f.Format); err != nil {
+				return nil, specErrf("campo %q: %s", name, withoutSpecPrefix(err))
 			}
 		}
 		if f.Alias != "" {
@@ -805,9 +805,9 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 		}
 		// A congelada é indexável como qualquer coluna, mas o tipo contra o
 		// qual a indexabilidade se decide é o da ORIGEM — que este laço não
-		// tem resolvido. A checagem dela mora em validaCongeladas.
+		// tem resolvido. A checagem dela mora em validateFrozen.
 		if f.FrozenFrom == "" {
-			if err := validaIndice(name, f.Index, f.Type); err != nil {
+			if err := validateIndex(name, f.Index, f.Type); err != nil {
 				return nil, err
 			}
 		}
@@ -834,14 +834,14 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 	// mode estarem resolvidos: as três regras que dependem de outro campo —
 	// cadeia, autorreferência e origem inexistente — não são decidíveis dentro
 	// do laço por campo.
-	if err := validaCongeladas(fields, key.Field, mode); err != nil {
+	if err := validateFrozen(fields, key.Field, mode); err != nil {
 		return nil, err
 	}
-	seqDeclarada := ""
+	declaredSeq := ""
 	if seq := s.Materialization.Sequence; seq != nil {
-		seqDeclarada = seq.Field
+		declaredSeq = seq.Field
 	}
-	if err := validaPoliticasDeMerge(fields, key.Field, seqDeclarada, mode); err != nil {
+	if err := validateMergePolicies(fields, key.Field, declaredSeq, mode); err != nil {
 		return nil, err
 	}
 
@@ -868,14 +868,14 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 
 	// Os contadores vêm DEPOIS de key e sequence estarem resolvidos: metade
 	// das recusas do groupBy é sobre o PAPEL da coluna, não sobre ela.
-	if raws, err := contadoresDoNo(&raw.Counters); err != nil {
+	if raws, err := countersFromNode(&raw.Counters); err != nil {
 		return nil, err
 	} else if raws != nil {
-		validados, err := validaContadores(raws, fields, key.Field, seqDeclarada)
+		validated, err := validateCounters(raws, fields, key.Field, declaredSeq)
 		if err != nil {
 			return nil, err
 		}
-		s.Contadores = validados
+		s.Counters = validated
 	}
 
 	// include / exclude / unknownFields
@@ -937,18 +937,18 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 	// um teto menor aplicaria política a quem nunca a escolheu. Ele funciona
 	// como backstop contra forma patológica de dado (chave derivada de
 	// identificador); quem controla o caso real é a declaração.
-	maxCols := MaxColsTetoFisico
+	maxCols := MaxColsPhysicalCeiling
 	if raw.Schema.MaxCols != nil {
 		maxCols = *raw.Schema.MaxCols
 	}
 	if maxCols <= 0 {
 		return nil, specErrf("schema.maxCols deve ser > 0, é %d", maxCols)
 	}
-	if maxCols > MaxColsTetoFisico {
+	if maxCols > MaxColsPhysicalCeiling {
 		return nil, specErrf(
 			"schema.maxCols %d acima do teto físico do dicionário (%d, porque o FieldID é uint16); "+
 				"declarar acima disso prometeria o que o fielddict recusa primeiro",
-			maxCols, MaxColsTetoFisico)
+			maxCols, MaxColsPhysicalCeiling)
 	}
 	s.Schema.MaxCols = maxCols
 
@@ -965,7 +965,7 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 	// RECUSA — nunca trunca. Truncar entregaria um resultado com colunas
 	// faltando e cara de completo, que é o defeito que o produto fecha em
 	// toda parte. O erro é acionável: pedem-se as colunas pelo nome.
-	maxNested := MaxNestedColsPadrao
+	maxNested := DefaultMaxNestedCols
 	if raw.Schema.MaxNestedCols != nil {
 		maxNested = *raw.Schema.MaxNestedCols
 	}
@@ -974,22 +974,22 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 	}
 	s.Schema.MaxNestedCols = maxNested
 
-	if err := validaExtracoes(s, fields, aliases, include, includeAll); err != nil {
+	if err := validateExtracts(s, fields, aliases, include, includeAll); err != nil {
 		return nil, err
 	}
 
-	if err := recusaJanelaForaDoHistorico(&raw.Index); err != nil {
+	if err := refuseWindowOutsideHistory(&raw.Index); err != nil {
 		return nil, err
 	}
 	// O histórico vem por último entre as validações de schema porque toda a
 	// checagem de `history.fields` é cruzada: a coluna precisa existir, o tipo
 	// dela decide a indexabilidade, e a congelada precisa ser reconhecida.
-	if s.Historico, err = validaHistorico(&raw.History, s.Name, fields); err != nil {
+	if s.History, err = validateHistory(&raw.History, s.Name, fields); err != nil {
 		return nil, err
 	}
 
 	// query: o dataset que declara a chave vence; quem omite herda o global.
-	maxRows := padroes.MaxRows
+	maxRows := defaults.MaxRows
 	if raw.Query.MaxRows != nil {
 		maxRows = *raw.Query.MaxRows
 	}
@@ -997,7 +997,7 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 		return nil, specErrf("query.maxRows deve ser > 0, é %d", maxRows)
 	}
 	s.Query.MaxRows = maxRows
-	timeout := padroes.Timeout
+	timeout := defaults.Timeout
 	if raw.Query.Timeout != "" {
 		d, err := time.ParseDuration(raw.Query.Timeout)
 		if err != nil || d <= 0 {
@@ -1012,7 +1012,7 @@ func validate(raw *rawSpec, padroes Defaults) (*DatasetSpec, error) {
 	// porque é isso que faz o dataset que declara `query.timeout: 5m` continuar
 	// com teto de 5m em vez de ganhar o global de 30s e passar a recusar a
 	// consulta que ele atende hoje.
-	maxTimeout := padroes.MaxTimeout
+	maxTimeout := defaults.MaxTimeout
 	if raw.Query.MaxTimeout != "" {
 		d, err := time.ParseDuration(raw.Query.MaxTimeout)
 		if err != nil || d <= 0 {

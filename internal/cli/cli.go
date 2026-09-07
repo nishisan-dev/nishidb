@@ -235,22 +235,22 @@ func codigoDoErro(err error) int {
 		return ExitWriter
 	case errors.Is(err, storage.ErrDatasetLocked), errors.Is(err, storage.ErrDatasetCorrupt),
 		errors.Is(err, storage.ErrDatasetClosed), errors.Is(err, encoding.ErrCorrupt),
-		errors.Is(err, schema.ErrGrafiaDeIndiceObsoleta),
-		errors.Is(err, schema.ErrJanelaDeIndiceInvalida):
+		errors.Is(err, schema.ErrObsoleteIndexSpelling),
+		errors.Is(err, schema.ErrInvalidIndexWindow):
 		// encoding.ErrCorrupt é o sentinela que chega de VERDADE quando um byte
 		// da região durável está adulterado: a detecção é lazy, no read, e o
 		// erro sobe pelo executor. Sem ele aqui, corrupção de dataset caía no
 		// default e saía como "erro de uso" — o único código que manda o
 		// operador olhar a linha de comando em vez do dataset.
 		//
-		// schema.ErrGrafiaDeIndiceObsoleta (D5: `index: hash`/`index: bitmap`
+		// schema.ErrObsoleteIndexSpelling (D5: `index: hash`/`index: bitmap`
 		// recusados) entra na MESMA categoria por razão idêntica: é config do
 		// DATASET recusada na subida, não erro de uso da linha de comando — e
 		// sem o errors.Is aqui ela cairia no default (ExitUso, 1) igual a
 		// qualquer flag digitada errado, escondendo que o problema está no
 		// YAML do dataset.
 		//
-		// schema.ErrJanelaDeIndiceInvalida (§4.1: `history.index` com janela
+		// schema.ErrInvalidIndexWindow (§4.1: `history.index` com janela
 		// ambígua, bloco vazio ou escrito fora do `history:`) entra pela mesma
 		// porta e pelo mesmo motivo.
 		return ExitDataset
@@ -274,7 +274,7 @@ func abreDataset(cfg *nishiconfig.Config, nome string) (*storage.Store, *schema.
 		return nil, nil, nil, fmt.Errorf("dataset %q: o arquivo declara name: %q", nome, spec.Name)
 	}
 
-	indexados := schema.CamposComIndice(spec)
+	indexados := schema.IndexedFieldNames(spec)
 
 	// O schema compila DENTRO do Open, pelo callback dos contadores — o mesmo
 	// caminho do servidor: um dataset com `counters:` aberto pelo CLI tem de
@@ -285,11 +285,11 @@ func abreDataset(cfg *nishiconfig.Config, nome string) (*storage.Store, *schema.
 		Dir:                    cfg.DirDoDataset(nome),
 		SegmentSize:            cfg.SegmentSize(),
 		CamposIndexadosPorNome: indexados,
-		ColunasDerivadas:       spec.NomesDasExtracoes(),
-		TTLAtivo:               len(spec.Materialization.RegrasTTL) > 0,
-		DuracaoDeFundo:         spec.Materialization.DuracaoDeFundo,
-		CampoDeEscrita:         schema.CampoInstanteDeEscrita,
-		CampoDePrazo:           schema.CampoDePrazo,
+		ColunasDerivadas:       spec.DerivedColumnNames(),
+		TTLAtivo:               len(spec.Materialization.TTLRules) > 0,
+		DuracaoDeFundo:         spec.Materialization.FallbackDuration,
+		CampoDeEscrita:         schema.WriteInstantFieldName,
+		CampoDePrazo:           schema.TTLFieldName,
 		SnapshotMaxBytes:       cfg.SnapshotMaxBytes(),
 		CompilaContadores:      comp.Callback(),
 	})
@@ -313,16 +313,16 @@ func abreDataset(cfg *nishiconfig.Config, nome string) (*storage.Store, *schema.
 // o dataset base e a tabela declarada no YAML ficaria vazia — a configuração
 // aceita e sem efeito que o débito 37 nomeia.
 func abreHistorico(cfg *nishiconfig.Config, spec *schema.DatasetSpec, base *schema.Compiled, dict *fielddict.Dict) (*storage.Store, *schema.CompiledField, error) {
-	h := spec.Historico
+	h := spec.History
 	if h == nil {
 		return nil, nil, nil
 	}
-	irma := spec.DerivaHistorico()
+	irma := spec.DeriveHistory()
 	segmento := cfg.SegmentSize()
 	if h.SegmentSize > 0 {
 		segmento = h.SegmentSize
 	}
-	if err := h.ValidaContraSegmento(segmento); err != nil {
+	if err := h.ValidateAgainstSegment(segmento); err != nil {
 		return nil, nil, fmt.Errorf("dataset %q: %w", spec.Name, err)
 	}
 	st, err := storage.Open(storage.Options{
@@ -331,9 +331,9 @@ func abreHistorico(cfg *nishiconfig.Config, spec *schema.DatasetSpec, base *sche
 		SegmentSize:            segmento,
 		Modo:                   storage.ModoHistorico,
 		DictCompartilhado:      dict,
-		CamposIndexadosPorNome: schema.CamposComIndice(irma),
-		ColunasDerivadas:       irma.NomesDasExtracoes(),
-		CampoDeEscrita:         schema.CampoInstanteDeEscrita,
+		CamposIndexadosPorNome: schema.IndexedFieldNames(irma),
+		ColunasDerivadas:       irma.DerivedColumnNames(),
+		CampoDeEscrita:         schema.WriteInstantFieldName,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("tabela histórica de %q: %w", spec.Name, err)
@@ -342,14 +342,14 @@ func abreHistorico(cfg *nishiconfig.Config, spec *schema.DatasetSpec, base *sche
 	if err != nil {
 		return nil, nil, fechandoStore(st, fmt.Errorf("tabela histórica de %q: %w", spec.Name, err))
 	}
-	base.Espelha(compilado)
+	base.AddMirror(compilado)
 
 	var raw *schema.CompiledField
 	if h.RawPayload {
-		f, ok := compilado.FieldByName([]byte(schema.CampoRaw))
+		f, ok := compilado.FieldByName([]byte(schema.RawFieldName))
 		if !ok {
 			return nil, nil, fechandoStore(st,
-				fmt.Errorf("tabela histórica de %q: a coluna %q não compilou", spec.Name, schema.CampoRaw))
+				fmt.Errorf("tabela histórica de %q: a coluna %q não compilou", spec.Name, schema.RawFieldName))
 		}
 		raw = f
 	}
@@ -404,7 +404,7 @@ func abreParaConsulta(cfg *nishiconfig.Config, nome string) (*storage.Store, *sc
 	if err != nil {
 		return nil, nil, nil, nil, fechandoStore(stBase, err)
 	}
-	compiladoIrma, err := spec.DerivaHistorico().Compile(stBase.FieldDict())
+	compiladoIrma, err := spec.DeriveHistory().Compile(stBase.FieldDict())
 	if err != nil {
 		return nil, nil, nil, nil, errors.Join(fechandoStore(stIrma, err), stBase.Close())
 	}
@@ -431,7 +431,7 @@ func datasetQueDerivaAIrma(cfg *nishiconfig.Config, nome string) (string, error)
 			// OUTRO dataset: ele já será recusado quando alguém o pedir.
 			continue
 		}
-		if spec.Historico != nil && spec.Historico.NomeDaTabela(candidato) == nome {
+		if spec.History != nil && spec.History.TableName(candidato) == nome {
 			return candidato, nil
 		}
 	}

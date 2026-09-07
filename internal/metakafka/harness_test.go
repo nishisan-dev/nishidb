@@ -46,7 +46,7 @@ func declarada() metakafka.Declarada {
 // dada — a mesma costura do Registra, sem servidor.
 func motorComKafka(t *testing.T, f metakafka.Fonte) *query.Engine {
 	t.Helper()
-	spec, err := schema.Parse([]byte("version: 1\nname: "+dataset+"\nmaterialization:\n  key:\n    field: id\nschema:\n  fields:\n    id:\n      type: string\n"), schema.DefaultsPadrao)
+	spec, err := schema.Parse([]byte("version: 1\nname: "+dataset+"\nmaterialization:\n  key:\n    field: id\nschema:\n  fields:\n    id:\n      type: string\n"), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}

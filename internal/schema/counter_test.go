@@ -6,10 +6,10 @@ import (
 	"time"
 )
 
-// yamlComContadores monta uma spec com o bloco counters dado (já como texto
+// yamlWithCounters monta uma spec com o bloco counters dado (já como texto
 // YAML de topo), sobre um schema que tem um campo de cada caso que a validação
 // precisa distinguir.
-func yamlComContadores(bloco string) string {
+func yamlWithCounters(countersBlock string) string {
 	return `
 version: 1
 name: servicos
@@ -37,11 +37,11 @@ schema:
       type: timestamp
     extra:
       type: auto
-` + bloco
+` + countersBlock
 }
 
 func TestCountersAceitaAFormaDaProposta(t *testing.T) {
-	spec, err := Parse([]byte(yamlComContadores(`
+	spec, err := Parse([]byte(yamlWithCounters(`
 counters:
   - name: servicos_por_olt
     groupBy: [olt]
@@ -50,18 +50,18 @@ counters:
     where: authenticated = true
     maxGroups: 262144
     retainEmptyGroups: 30d
-`)), DefaultsPadrao)
+`)), BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(spec.Contadores) != 2 {
-		t.Fatalf("%d contadores, quero 2", len(spec.Contadores))
+	if len(spec.Counters) != 2 {
+		t.Fatalf("%d contadores, quero 2", len(spec.Counters))
 	}
-	a, b := spec.Contadores[0], spec.Contadores[1]
+	a, b := spec.Counters[0], spec.Counters[1]
 	if a.Name != "servicos_por_olt" || len(a.GroupBy) != 1 || a.GroupBy[0] != "olt" || a.Where != "" {
 		t.Fatalf("primeiro = %+v", a)
 	}
-	if a.MaxGroups != MaxGroupsPadrao || a.RetainEmptyGroups != RetainEmptyGroupsPadrao {
+	if a.MaxGroups != DefaultMaxGroups || a.RetainEmptyGroups != DefaultRetainEmptyGroups {
 		t.Fatalf("defaults não aplicados: %+v", a)
 	}
 	if b.Name != "autenticados_por_pon" || strings.Join(b.GroupBy, ",") != "olt,slot,port" ||
@@ -71,50 +71,50 @@ counters:
 }
 
 func TestCountersAusenteEhDatasetSemContador(t *testing.T) {
-	spec, err := Parse([]byte(yamlComContadores("")), DefaultsPadrao)
+	spec, err := Parse([]byte(yamlWithCounters("")), BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if spec.Contadores != nil {
-		t.Fatalf("sem bloco, Contadores tem de ser nil; veio %+v", spec.Contadores)
+	if spec.Counters != nil {
+		t.Fatalf("sem bloco, Contadores tem de ser nil; veio %+v", spec.Counters)
 	}
 }
 
 func TestCountersRetainNeverEhZero(t *testing.T) {
-	spec, err := Parse([]byte(yamlComContadores(`
+	spec, err := Parse([]byte(yamlWithCounters(`
 counters:
   - name: x
     groupBy: [olt]
     retainEmptyGroups: never
-`)), DefaultsPadrao)
+`)), BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if spec.Contadores[0].RetainEmptyGroups != 0 {
-		t.Fatalf("never tem de virar zero, veio %s", spec.Contadores[0].RetainEmptyGroups)
+	if spec.Counters[0].RetainEmptyGroups != 0 {
+		t.Fatalf("never tem de virar zero, veio %s", spec.Counters[0].RetainEmptyGroups)
 	}
 }
 
 // TestCountersNormalizaOWhere: o texto vai ao manifest e decide reconstrução;
 // espaço a mais não pode ser "outro contador".
 func TestCountersNormalizaOWhere(t *testing.T) {
-	spec, err := Parse([]byte(yamlComContadores(`
+	spec, err := Parse([]byte(yamlWithCounters(`
 counters:
   - name: x
     groupBy: [olt]
     where: "  authenticated   =  true "
-`)), DefaultsPadrao)
+`)), BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if spec.Contadores[0].Where != "authenticated = true" {
-		t.Fatalf("where não normalizado: %q", spec.Contadores[0].Where)
+	if spec.Counters[0].Where != "authenticated = true" {
+		t.Fatalf("where não normalizado: %q", spec.Counters[0].Where)
 	}
 }
 
 func TestCountersRecusas(t *testing.T) {
-	casos := []struct {
-		nome, bloco, quero string
+	cases := []struct {
+		name, block, want string
 	}{
 		{"lista vazia", "counters: []\n", "counters: lista vazia"},
 		{"não é lista", "counters:\n  name: x\n", "deve ser uma lista"},
@@ -139,14 +139,14 @@ func TestCountersRecusas(t *testing.T) {
 		{"retain zero explícito", "counters:\n  - name: x\n    groupBy: [olt]\n    retainEmptyGroups: 0\n", "never"},
 		{"retain abaixo da resolução", "counters:\n  - name: x\n    groupBy: [olt]\n    retainEmptyGroups: 10s\n", "resolução"},
 	}
-	for _, c := range casos {
-		t.Run(c.nome, func(t *testing.T) {
-			_, err := Parse([]byte(yamlComContadores(c.bloco)), DefaultsPadrao)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := Parse([]byte(yamlWithCounters(c.block)), BuiltinDefaults)
 			if err == nil {
-				t.Fatalf("aceitou:\n%s", c.bloco)
+				t.Fatalf("aceitou:\n%s", c.block)
 			}
-			if !strings.Contains(err.Error(), c.quero) {
-				t.Fatalf("erro %q não menciona %q", err, c.quero)
+			if !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("erro %q não menciona %q", err, c.want)
 			}
 		})
 	}
@@ -174,17 +174,17 @@ schema:
 counters:
   - name: x
     groupBy: [olt]
-`), DefaultsPadrao)
+`), BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if spec.Contadores[0].GroupBy[0] != "olt" {
-		t.Fatalf("%+v", spec.Contadores)
+	if spec.Counters[0].GroupBy[0] != "olt" {
+		t.Fatalf("%+v", spec.Counters)
 	}
 }
 
 func TestOPrefixoReservadoNomeiaOsDoisNamespaces(t *testing.T) {
-	_, err := Parse([]byte(strings.Replace(yamlComContadores(""), "name: servicos", "name: _counters", 1)), DefaultsPadrao)
+	_, err := Parse([]byte(strings.Replace(yamlWithCounters(""), "name: servicos", "name: _counters", 1)), BuiltinDefaults)
 	if err == nil || !strings.Contains(err.Error(), "_counters") || !strings.Contains(err.Error(), "_meta") {
 		t.Fatalf("a recusa tem de nomear os namespaces reservados: %v", err)
 	}

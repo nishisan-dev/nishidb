@@ -117,7 +117,7 @@ func TestCongeladaDoRelogioUsaOMesmoInstanteQueOWrittenAt(t *testing.T) {
 	if !ok {
 		t.Fatal("a congelada do relógio não foi emitida")
 	}
-	escrita, ok := entryDe(&b, schema.CampoInstanteDeEscrita)
+	escrita, ok := entryDe(&b, schema.WriteInstantFieldName)
 	if !ok {
 		t.Fatal("o campo de sistema não foi emitido")
 	}

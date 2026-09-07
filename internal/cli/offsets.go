@@ -82,17 +82,17 @@ func runOffsets(args []string, amb Ambiente) int {
 	// Os campos indexados PRECISAM ser declarados: o Store recusa abrir um
 	// dataset cujo manifest declara índices que a abertura não conhece,
 	// porque o índice pararia de ser atualizado e reapareceria incompleto.
-	indexados := schema.CamposComIndice(spec)
+	indexados := schema.IndexedFieldNames(spec)
 	st, err := storage.Open(storage.Options{
 		Dir:                    cfg.DirDoDataset(*dataset),
 		Dataset:                *dataset,
 		SegmentSize:            cfg.SegmentSize(),
 		CamposIndexadosPorNome: indexados,
-		ColunasDerivadas:       spec.NomesDasExtracoes(),
-		TTLAtivo:               len(spec.Materialization.RegrasTTL) > 0,
-		DuracaoDeFundo:         spec.Materialization.DuracaoDeFundo,
-		CampoDeEscrita:         schema.CampoInstanteDeEscrita,
-		CampoDePrazo:           schema.CampoDePrazo,
+		ColunasDerivadas:       spec.DerivedColumnNames(),
+		TTLAtivo:               len(spec.Materialization.TTLRules) > 0,
+		DuracaoDeFundo:         spec.Materialization.FallbackDuration,
+		CampoDeEscrita:         schema.WriteInstantFieldName,
+		CampoDePrazo:           schema.TTLFieldName,
 		// Os contadores também: um dataset que os declara recusa abrir sem
 		// eles, e este comando não escreve linha nenhuma — mas o Open faz
 		// um checkpoint, e o checkpoint grava a seção deles no manifest.

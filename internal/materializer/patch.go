@@ -99,7 +99,7 @@ func (b *PatchBuffer) resolveDesconhecido(c *schema.Compiled, nome []byte) (*sch
 	if !b.soLeitura {
 		return c.ResolveUnknown(nome)
 	}
-	cf, precisa, err := c.ResolveUnknownSoLeitura(nome)
+	cf, precisa, err := c.ResolveUnknownReadOnly(nome)
 	if err != nil {
 		return nil, err
 	}
@@ -113,9 +113,9 @@ func (b *PatchBuffer) resolveDesconhecido(c *schema.Compiled, nome []byte) (*sch
 // documento, honrando o modo somente-leitura.
 func (b *PatchBuffer) resolveAninhado(pai *schema.CompiledField, nomeQualificado, caminho []byte) (*schema.CompiledField, error) {
 	if !b.soLeitura {
-		return b.compilado.ResolveAninhado(pai, nomeQualificado, caminho)
+		return b.compilado.ResolveNested(pai, nomeQualificado, caminho)
 	}
-	cf, precisa := b.compilado.ResolveAninhadoSoLeitura(pai, nomeQualificado)
+	cf, precisa := b.compilado.ResolveNestedReadOnly(pai, nomeQualificado)
 	if precisa {
 		return nil, errPrecisaDoWriter
 	}
@@ -176,7 +176,7 @@ func (b *PatchBuffer) Parse(event []byte, c *schema.Compiled, agora time.Time) e
 			break
 		}
 		cf, found := c.FieldByName(f.Key)
-		if found && (cf.IsSystem || cf.FrozenFrom != nil || cf.DoRelogio) {
+		if found && (cf.IsSystem || cf.FrozenFrom != nil || cf.FromClock) {
 			// O evento não pode escrever nem o relógio do writer nem uma
 			// coluna congelada. No primeiro caso o produtor controlaria quando
 			// a entidade expira; no segundo, decidiria qual é o valor
@@ -277,7 +277,7 @@ func (b *PatchBuffer) Parse(event []byte, c *schema.Compiled, agora time.Time) e
 		// O pai entra na segunda passada se tem extração DECLARADA ou se
 		// descobre. Testar só as declaradas fazia a descoberta pura — sem
 		// nenhum `extract` no YAML, que é o caso do piloto — nunca rodar.
-		if len(cf.Derivadas) > 0 || cf.DescobreAninhados {
+		if len(cf.DerivedColumns) > 0 || cf.DiscoverNested {
 			// Guarda a ocorrência para a segunda passada. Para objeto, o Raw é
 			// janela sobre o EVENTO (skipComposite devolve p.data[start:pos]),
 			// que é estável durante todo o Parse — ao contrário do arena, que
@@ -290,7 +290,7 @@ func (b *PatchBuffer) Parse(event []byte, c *schema.Compiled, agora time.Time) e
 			b.pais = append(b.pais, pv)
 		}
 		b.entries = append(b.entries, patchEntry{
-			field: cf, isNull: isNull, acumula: cf.Acumula, val: val,
+			field: cf, isNull: isNull, acumula: cf.Accumulates, val: val,
 		})
 	}
 
@@ -304,7 +304,7 @@ func (b *PatchBuffer) Parse(event []byte, c *schema.Compiled, agora time.Time) e
 	// As congeladas entram depois das derivadas e antes da ordenação: podem
 	// ter origem numa coluna extraída, e precisam participar do sort e do
 	// dedup como qualquer outra entry.
-	if len(c.Congeladas) > 0 {
+	if len(c.FrozenColumns) > 0 {
 		if err := b.capturaCongeladas(c, agora); err != nil {
 			return err
 		}
@@ -314,9 +314,9 @@ func (b *PatchBuffer) Parse(event []byte, c *schema.Compiled, agora time.Time) e
 	// assim o merge e o replace o incluem pelo mesmo caminho, sem que nenhum
 	// dos dois precise saber que ele existe. É também o que garante que toda
 	// escrita o renove — é disso que o idle timeout depende.
-	if c.Escrita != nil {
+	if c.WriteInstantField != nil {
 		b.entries = append(b.entries, patchEntry{
-			field: c.Escrita,
+			field: c.WriteInstantField,
 			val:   types.Value{Type: types.TypeTimestamp, I64: agora.UnixMilli()},
 		})
 	}

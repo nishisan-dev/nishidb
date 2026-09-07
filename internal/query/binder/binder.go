@@ -401,7 +401,7 @@ func (b *binder) qualificada(cols []BoundColumn, ref parser.ColumnRef, derivadas
 		// A recusa precisa dizer o que FALTA, e isso depende do que o campo
 		// declarou. Um pai que descobre não precisa de extract nenhum: o que
 		// falta a ele é evento que traga a chave.
-		if pai.DescobreAninhados {
+		if pai.DiscoverNested {
 			return nil, 0, errAt(ref.Pos,
 				"campo %q ainda não descobriu nenhuma coluna; elas aparecem conforme os eventos trazem as chaves", ref.Qualifier)
 		}

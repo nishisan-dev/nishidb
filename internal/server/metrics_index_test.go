@@ -560,7 +560,7 @@ var (
 // dicionário compartilhado, spec derivada compilada contra ele, espelho, e só
 // então o materializer com o histórico ligado. Reproduzir em vez de importar é o
 // preço de não haver rota HTTP de ingestão; o que não pode é DIVERGIR, e por isso
-// os campos indexados saem de schema.CamposComIndice, como no servidor.
+// os campos indexados saem de schema.IndexedFieldNames, como no servidor.
 func bancadaDeIndice(t *testing.T) (*server.Servidor, string, string) {
 	t.Helper()
 	a := novoAmbienteCom(t, blocoPadrao)

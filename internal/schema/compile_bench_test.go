@@ -5,7 +5,7 @@ import "testing"
 // Gate: FieldByName com []byte não pode alocar (elisão de map[string(b)]
 // preservada mesmo com RLock).
 func BenchmarkFieldByName(b *testing.B) {
-	s, err := Parse([]byte(baseYAML), DefaultsPadrao)
+	s, err := Parse([]byte(baseYAML), BuiltinDefaults)
 	if err != nil {
 		b.Fatal(err)
 	}

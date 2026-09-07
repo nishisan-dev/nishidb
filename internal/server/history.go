@@ -30,15 +30,15 @@ func validaNomesDeHistorico(specs map[string]*schema.DatasetSpec) error {
 	// seja sempre a mesma — o laço de um mapa não tem ordem.
 	sort.Strings(nomes)
 	for _, nome := range nomes {
-		h := specs[nome].Historico
+		h := specs[nome].History
 		if h == nil {
 			continue
 		}
-		derivado := h.NomeDaTabela(nome)
+		derivado := h.TableName(nome)
 		if _, declarado := specs[derivado]; declarado {
 			return fmt.Errorf("o dataset %q declara history com sufixo %q, e a tabela irmã %q colide com um dataset declarado em datasets.directory: "+
 				"os dois disputariam o mesmo diretório; mude o sufixo ou renomeie o dataset",
-				nome, h.Sufixo, derivado)
+				nome, h.Suffix, derivado)
 		}
 		if dono, repetido := derivados[derivado]; repetido {
 			return fmt.Errorf("os datasets %q e %q derivam a mesma tabela irmã %q; mude o sufixo de um deles",
@@ -66,18 +66,18 @@ func validaNomesDeHistorico(specs map[string]*schema.DatasetSpec) error {
 //  5. o materializer do base ganha o escritor, e só então o primeiro evento
 //     pode chegar.
 func (s *Servidor) abreHistorico(base *dataset, log *logging.Logger) (*dataset, error) {
-	h := base.spec.Historico
+	h := base.spec.History
 	if h == nil {
 		return nil, nil
 	}
-	specIrma := base.spec.DerivaHistorico()
+	specIrma := base.spec.DeriveHistory()
 	segmento := s.cfg.SegmentSize()
 	if h.SegmentSize > 0 {
 		segmento = h.SegmentSize
 	}
 	// A conferência do teto contra o segmento EFETIVO: quem omitiu
 	// `history.segmentSize` herdou o global, que a spec não conhecia no load.
-	if err := h.ValidaContraSegmento(segmento); err != nil {
+	if err := h.ValidateAgainstSegment(segmento); err != nil {
 		return nil, fmt.Errorf("dataset %q: %w", base.nome, err)
 	}
 
@@ -87,9 +87,9 @@ func (s *Servidor) abreHistorico(base *dataset, log *logging.Logger) (*dataset, 
 		SegmentSize:            segmento,
 		Modo:                   storage.ModoHistorico,
 		DictCompartilhado:      base.st.FieldDict(),
-		CamposIndexadosPorNome: schema.CamposComIndice(specIrma),
-		ColunasDerivadas:       specIrma.NomesDasExtracoes(),
-		CampoDeEscrita:         schema.CampoInstanteDeEscrita,
+		CamposIndexadosPorNome: schema.IndexedFieldNames(specIrma),
+		ColunasDerivadas:       specIrma.DerivedColumnNames(),
+		CampoDeEscrita:         schema.WriteInstantFieldName,
 		Log:                    log,
 		Metrics:                s.reg,
 	})
@@ -100,17 +100,17 @@ func (s *Servidor) abreHistorico(base *dataset, log *logging.Logger) (*dataset, 
 	if err != nil {
 		return nil, fechandoStore(st, fmt.Errorf("tabela histórica de %q: %w", base.nome, err))
 	}
-	base.sch.Espelha(compilado)
+	base.sch.AddMirror(compilado)
 	if err := s.eng.Register(specIrma.Name, compilado, st); err != nil {
 		return nil, fechandoStore(st, fmt.Errorf("tabela histórica de %q: %w", base.nome, err))
 	}
 
 	var raw *schema.CompiledField
 	if h.RawPayload {
-		f, ok := compilado.FieldByName([]byte(schema.CampoRaw))
+		f, ok := compilado.FieldByName([]byte(schema.RawFieldName))
 		if !ok {
 			return nil, fechandoStore(st, fmt.Errorf("tabela histórica de %q: a coluna %q não compilou",
-				base.nome, schema.CampoRaw))
+				base.nome, schema.RawFieldName))
 		}
 		raw = f
 	}
@@ -119,7 +119,7 @@ func (s *Servidor) abreHistorico(base *dataset, log *logging.Logger) (*dataset, 
 	log.Info("historico.aberto",
 		"a tabela histórica está de pé",
 		"dataset", base.nome, "tabela", specIrma.Name,
-		"config", schema.DescreveHistorico(specIrma.Name, h))
+		"config", schema.DescribeHistory(specIrma.Name, h))
 	// Janela maior que a retenção não é erro, é INÓCUA: a retenção aposenta o
 	// segmento antes de a janela o alcançar. O WARN é o meio-termo que a
 	// doutrina pede — a configuração nunca é ignorada em silêncio, mas só é
@@ -129,12 +129,12 @@ func (s *Servidor) abreHistorico(base *dataset, log *logging.Logger) (*dataset, 
 	// Sai daqui, e não do ligaRetencao, porque é aqui que os DOIS nomes existem:
 	// quem lê o aviso precisa do dataset BASE para achar o YAML em que a chave
 	// foi escrita, e lá só há a tabela irmã.
-	if h.JanelaExcedeARetencao() {
+	if h.WindowExceedsRetention() {
 		log.Warn("janela.maior_que_retencao",
 			"history.index.window é maior que history.expireAfterWrite e não indexa nada a mais: "+
 				"a retenção aposenta o segmento antes de a janela o alcançar",
 			"dataset", base.nome, "tabela", specIrma.Name,
-			"window", h.Janela.Duracao.String(),
+			"window", h.Window.Duration.String(),
 			"expireAfterWrite", h.ExpireAfterWrite.String())
 	}
 
@@ -156,10 +156,10 @@ func (s *Servidor) abreHistorico(base *dataset, log *logging.Logger) (*dataset, 
 func (s *Servidor) ligaRetencao(ctx context.Context) {
 	var comRetencao []string
 	for _, d := range s.datasets {
-		if !d.ehHistorico || d.spec.Historico == nil {
+		if !d.ehHistorico || d.spec.History == nil {
 			continue
 		}
-		h := d.spec.Historico
+		h := d.spec.History
 		d.st.IniciaRetencao(ctx, storage.LimitesDeRetencao{
 			ExpireAfterWrite: h.ExpireAfterWrite,
 			MaxBytes:         h.MaxBytes,
@@ -223,7 +223,7 @@ func janelaDoDataset(d *dataset) storage.JanelaDeIndice {
 	if !d.ehHistorico {
 		return storage.JanelaDeIndice{}
 	}
-	return janelaDaSpec(d.spec.Historico)
+	return janelaDaSpec(d.spec.History)
 }
 
 // janelaDaSpec traduz o bloco `history.index` na política que o storage
@@ -233,13 +233,13 @@ func janelaDoDataset(d *dataset) storage.JanelaDeIndice {
 // A tradução mora aqui, e não no schema, porque o schema não pode importar o
 // storage: quem lê o YAML é a camada de cima. É a mesma fronteira que faz os
 // campos indexados viajarem por NOME até o Open.
-func janelaDaSpec(h *schema.HistoricoSpec) storage.JanelaDeIndice {
-	if h == nil || h.Janela == nil {
+func janelaDaSpec(h *schema.HistorySpec) storage.JanelaDeIndice {
+	if h == nil || h.Window == nil {
 		return storage.JanelaDeIndice{}
 	}
 	return storage.JanelaDeIndice{
-		Duracao:  h.Janela.Duracao,
-		MaxBytes: h.Janela.MaxBytes,
+		Duracao:  h.Window.Duration,
+		MaxBytes: h.Window.MaxBytes,
 	}
 }
 
@@ -250,10 +250,10 @@ func janelaDaSpec(h *schema.HistoricoSpec) storage.JanelaDeIndice {
 // lista com os próprios números de storage e query como qualquer outro
 // dataset.
 func historicoStats(base *dataset) *protocol.HistoryStats {
-	if base.irma == nil || base.spec.Historico == nil {
+	if base.irma == nil || base.spec.History == nil {
 		return nil
 	}
-	h := base.spec.Historico
+	h := base.spec.History
 	snap := base.mat.Metrics()
 	e := base.irma.st.EstatisticasDeRetencao()
 	out := &protocol.HistoryStats{
@@ -275,8 +275,8 @@ func historicoStats(base *dataset) *protocol.HistoryStats {
 	// quando existe: sem a janela declarada a comparação é contra o infinito, e
 	// ecoar um "0" ali faria o painel parecer dizer que a janela é nula.
 	out.EffectiveIndexWindow = e.JanelaEfetiva.Seconds()
-	if h.Janela != nil && h.Janela.Duracao > 0 {
-		out.IndexWindow = h.Janela.Duracao.String()
+	if h.Window != nil && h.Window.Duration > 0 {
+		out.IndexWindow = h.Window.Duration.String()
 	}
 	return out
 }
@@ -301,7 +301,7 @@ func historicoStats(base *dataset) *protocol.HistoryStats {
 // devolve estes bytes desde que o índice passou a ser por segmento —, e uma
 // ajuda que nunca é emitida é prosa que ninguém lê.
 func amostrasDeHistorico(base *dataset) []metrics.Sample {
-	if base.irma == nil || base.spec.Historico == nil {
+	if base.irma == nil || base.spec.History == nil {
 		return nil
 	}
 	snap := base.mat.Metrics()

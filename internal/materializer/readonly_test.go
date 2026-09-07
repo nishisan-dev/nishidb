@@ -18,12 +18,12 @@ import (
 // cresceu, e o evento voltou marcado como pendente do writer.
 func TestODecodeNaoCriaColuna(t *testing.T) {
 	h := newHarness(t, descobreYAML)
-	antes := h.c.CamposConhecidos()
+	antes := h.c.KnownFieldCount()
 
 	var d Decodificado
 	h.m.Decodifica(&d, []byte(`{"id":"A","doc":{"chaveNova":1}}`))
 
-	if got := h.c.CamposConhecidos(); got != antes {
+	if got := h.c.KnownFieldCount(); got != antes {
 		t.Errorf("o decode criou coluna: %d → %d", antes, got)
 	}
 	if !d.precisaDoWriter {
@@ -104,7 +104,7 @@ func TestOEventoReprocessadoNaoContaDuasVezes(t *testing.T) {
 	if !ok {
 		t.Fatal("doc.x não foi criada")
 	}
-	if got := f.Ocorrencias(); got != 2 {
+	if got := f.OccurrenceCount(); got != 2 {
 		t.Errorf("ocorrências de doc.x = %d, quero 2 (uma por evento); "+
 			"3 significa que o decode abortado contou junto com o reprocesso", got)
 	}
@@ -112,7 +112,7 @@ func TestOEventoReprocessadoNaoContaDuasVezes(t *testing.T) {
 	if !ok {
 		t.Fatal("doc.y não foi criada")
 	}
-	if got := g.Ocorrencias(); got != 1 {
+	if got := g.OccurrenceCount(); got != 1 {
 		t.Errorf("ocorrências de doc.y = %d, quero 1", got)
 	}
 }
@@ -136,13 +136,13 @@ func TestEventoRuimContaOQueOParseAlcancou(t *testing.T) {
 	if !ok {
 		t.Fatal("doc.x não foi criada")
 	}
-	antes := f.Ocorrencias()
+	antes := f.OccurrenceCount()
 
 	r := h.m.Apply([]byte(`{"doc":{"x":2}}`)) // sem `id`: INVALID_KEY no fim do Parse
 	if r.Category != CategoryInvalidKey {
 		t.Fatalf("categoria = %v, quero INVALID_KEY", r.Category)
 	}
-	if got := f.Ocorrencias() - antes; got != 1 {
+	if got := f.OccurrenceCount() - antes; got != 1 {
 		t.Errorf("ocorrências de doc.x no evento ruim = %d, quero 1: a chave "+
 			"APARECEU no documento, e o contador sempre contou a aparição", got)
 	}

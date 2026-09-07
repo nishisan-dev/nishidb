@@ -49,10 +49,10 @@ func (s *Servidor) handleMetadata(w http.ResponseWriter, r *http.Request) {
 }
 
 func metaDoDataset(d *dataset) protocol.DatasetMeta {
-	// FieldsParaMetadata, e não FieldsByID: a coluna derivada fica fora do
+	// FieldsForMetadata, e não FieldsByID: a coluna derivada fica fora do
 	// SELECT * e este é o lugar onde ela é descoberta. Esconder aqui também
 	// deixaria o operador sem forma nenhuma de saber que ela existe.
-	campos := d.sch.FieldsParaMetadata()
+	campos := d.sch.FieldsForMetadata()
 	m := protocol.DatasetMeta{
 		Name: d.nome,
 		// MaxRows e Timeout saem do COMPILADO, que é onde o default global já
@@ -95,7 +95,7 @@ func colunaMeta(f *schema.CompiledField) protocol.ColumnMeta {
 		Precision:   d.Precision,
 		Scale:       d.Scale,
 		DisplaySize: d.DisplaySize,
-		Index:       f.NomeDoIndice(),
+		Index:       f.IndexName(),
 		Auto:        f.IsAuto,
 	}
 	if f.Alias != "" {
@@ -177,9 +177,9 @@ func (s *Servidor) handleStats(w http.ResponseWriter, r *http.Request) {
 			// de qualquer condicional de consumidor: o dicionário cresce por
 			// toda rota de escrita, não só pela do Kafka.
 			Schema: protocol.SchemaStats{
-				Fields:             d.sch.CamposConhecidos(),
-				FieldsDropped:      d.sch.CamposDescartados(),
-				NestedTypeMismatch: d.sch.ValoresIncompativeis(),
+				Fields:             d.sch.KnownFieldCount(),
+				FieldsDropped:      d.sch.DiscardedFieldCount(),
+				NestedTypeMismatch: d.sch.IncompatibleValueCount(),
 				MaxCols:            d.sch.MaxCols,
 				OnMaxCols:          d.sch.OnMaxCols,
 			},

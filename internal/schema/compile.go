@@ -17,18 +17,18 @@ import (
 // (spec §101: SCHEMA_VALIDATION).
 var ErrUnknownField = errors.New("campo desconhecido rejeitado pela policy")
 
-// ErrTetoDeCampos é devolvido quando o dataset alcançou schema.maxCols.
+// ErrFieldCeiling é devolvido quando o dataset alcançou schema.maxCols.
 //
 // Tem sentinela PRÓPRIA de propósito. Sem ela o erro chegava à classificação
 // sem dono, caía no balde de "bug nosso ou dataset avariado" e PARAVA o writer
 // para sempre — o offset não avança, então o restart reproduz o mesmo evento e
 // o mesmo estouro. Sobre uma grandeza que cresce sem teto, alcançar o limite
 // não é anomalia: é questão de tempo, e precisa de desfecho declarado.
-var ErrTetoDeCampos = errors.New("teto de campos do dataset alcançado")
+var ErrFieldCeiling = errors.New("teto de campos do dataset alcançado")
 
-// ErrColunaDerivada é devolvido quando uma coluna extraída não pode ser criada
+// ErrDerivedColumn é devolvido quando uma coluna extraída não pode ser criada
 // com segurança contra o dicionário existente.
-var ErrColunaDerivada = errors.New("coluna derivada inválida")
+var ErrDerivedColumn = errors.New("coluna derivada inválida")
 
 type Mode uint8
 
@@ -75,7 +75,7 @@ type CompiledField struct {
 	Alias             string          // "" se ausente
 	Type              types.FieldType // tipo DECLARADO; TypeNull quando IsAuto
 	IsAuto            bool            // tipo resolvido na primeira observação
-	Indexado          bool            // `index: true` no YAML — a única grafia desde a D5
+	Indexed           bool            // `index: true` no YAML — a única grafia desde a D5
 	IsKey, IsSequence bool
 
 	// IsSystem marca campo que o WRITER injeta e o operador não declara.
@@ -96,30 +96,30 @@ type CompiledField struct {
 	// espera o dataset multiplicar de largura.
 	Parent *CompiledField
 	Path   string
-	// DescobreAninhados liga a promoção automática das chaves de dentro deste
+	// DiscoverNested liga a promoção automática das chaves de dentro deste
 	// documento a colunas. Só faz sentido em campo json.
-	DescobreAninhados bool
+	DiscoverNested bool
 
-	// Derivadas são as colunas extraídas DESTE campo, em ordem de FieldID.
+	// DerivedColumns são as colunas extraídas DESTE campo, em ordem de FieldID.
 	// Pré-computada no Compile porque o materializer a consulta por campo por
 	// evento: procurar as filhas varrendo o mapa no hot path custaria o preço
 	// de um SELECT * por evento.
-	Derivadas []*CompiledField
+	DerivedColumns []*CompiledField
 
 	// FrozenFrom é a coluna de onde o valor congelado vem; nil quando esta
-	// não é congelada. DoRelogio marca a congelada cuja origem é o relógio do
+	// não é congelada. FromClock marca a congelada cuja origem é o relógio do
 	// writer, que não tem CompiledField para apontar.
 	//
 	// A congelada é uma coluna NORMAL em tudo o que importa ao binder, ao
 	// planner e ao encoder — tem FieldID, tipo e índice, aparece no SELECT *
 	// e no /v1/metadata. O par governa uma coisa só: quem escreve o valor.
 	FrozenFrom *CompiledField
-	DoRelogio  bool
+	FromClock  bool
 
-	// Acumula faz o merge SOMAR o valor do evento ao que já está no estado,
-	// em vez de sobrescrevê-lo. Ver schema.MergeSoma para o que a soma custa
+	// Accumulates faz o merge SOMAR o valor do evento ao que já está no estado,
+	// em vez de sobrescrevê-lo. Ver schema.MergeSum para o que a soma custa
 	// em idempotência.
-	Acumula bool
+	Accumulates bool
 
 	// Format é o padrão declarado no YAML e Layout é ele compilado. Não-nil
 	// exatamente quando Type é datetime ou time; o Format é guardado ao lado
@@ -134,7 +134,7 @@ type CompiledField struct {
 	// o -race pega no CI e nem sempre em dev.
 	autoType atomic.Uint32
 
-	// ocorrencias e divergencias são a densidade e a confiabilidade DESTA
+	// occurrenceCount e divergencias são a densidade e a confiabilidade DESTA
 	// coluna, e existem porque o contador por DATASET é alarme sem endereço:
 	// ele diz "2.085.138 valores perdidos" e não diz qual das ~1.700 colunas
 	// respondeu por isso.
@@ -144,9 +144,9 @@ type CompiledField struct {
 	// 2.383 em que ela apareceu, e `93 de 3.334` é problema de outra ordem. A
 	// divisão fica com quem consulta.
 	//
-	// ocorrencias conta a chave APARECER no documento — antes da conversão —,
+	// occurrenceCount conta a chave APARECER no documento — antes da conversão —,
 	// e não a materialização bem-sucedida. É o que faz divergencias ser um
-	// SUBCONJUNTO de ocorrencias e a leitura "2.315 de 2.383" sair direta do
+	// SUBCONJUNTO de occurrenceCount e a leitura "2.315 de 2.383" sair direta do
 	// SQL; contando o sucesso, o denominador viraria uma soma na cabeça de
 	// quem consulta.
 	//
@@ -159,10 +159,10 @@ type CompiledField struct {
 	// aceitável para a pergunta que respondem — "esta coluna é confiável?" —,
 	// desde que esteja dito na documentação da tabela, senão alguém lê 0 e
 	// conclui "estável".
-	ocorrencias  atomic.Uint64
-	divergencias atomic.Uint64
+	occurrenceCount atomic.Uint64
+	divergenceCount atomic.Uint64
 
-	// coercoes conta as ocorrências que chegaram noutra forma JSON e ainda
+	// coercionCount conta as ocorrências que chegaram noutra forma JSON e ainda
 	// assim entraram na coluna — número numa coluna de texto, string numérica
 	// numa coluna int64.
 	//
@@ -183,35 +183,35 @@ type CompiledField struct {
 	//
 	// É subconjunto de ocorrencias, como divergencias, e disjunto dela: uma
 	// ocorrência ou converteu ou não converteu.
-	coercoes atomic.Uint64
+	coercionCount atomic.Uint64
 }
 
-// ContaOcorrencia registra que a chave desta coluna apareceu no documento.
+// CountOccurrence registra que a chave desta coluna apareceu no documento.
 //
 // Roda no caminho mais quente do produto: uma vez por coluna derivada por
 // evento. Um atomic.Add não aloca — o que o gate do materializer cobra — e o
 // custo de CPU está medido em benchmark/baselines/segunda-passada-20260825.txt.
-func (f *CompiledField) ContaOcorrencia() { f.ocorrencias.Add(1) }
+func (f *CompiledField) CountOccurrence() { f.occurrenceCount.Add(1) }
 
-// Ocorrencias é quantas vezes a chave desta coluna apareceu no documento desde
+// OccurrenceCount é quantas vezes a chave desta coluna apareceu no documento desde
 // a abertura do dataset. Zero para coluna que não é derivada.
-func (f *CompiledField) Ocorrencias() uint64 { return f.ocorrencias.Load() }
+func (f *CompiledField) OccurrenceCount() uint64 { return f.occurrenceCount.Load() }
 
-// Divergencias é quantas dessas ocorrências não couberam no tipo da coluna.
-// É sempre <= Ocorrencias.
-func (f *CompiledField) Divergencias() uint64 { return f.divergencias.Load() }
+// DivergenceCount é quantas dessas ocorrências não couberam no tipo da coluna.
+// É sempre <= OccurrenceCount.
+func (f *CompiledField) DivergenceCount() uint64 { return f.divergenceCount.Load() }
 
-// ContaCoercao registra que o valor chegou noutra forma JSON e foi convertido
+// CountCoercion registra que o valor chegou noutra forma JSON e foi convertido
 // para o tipo da coluna sem perda.
 //
-// Roda no mesmo caminho quente do ContaOcorrencia acima — uma vez por coluna
+// Roda no mesmo caminho quente do CountOccurrence acima — uma vez por coluna
 // derivada por evento, e só nas que de fato coergiram —, e pela mesma razão é um
 // atomic.Add: não aloca, que é o que o gate do materializer cobra.
-func (f *CompiledField) ContaCoercao() { f.coercoes.Add(1) }
+func (f *CompiledField) CountCoercion() { f.coercionCount.Add(1) }
 
-// Coercoes é quantas dessas ocorrências vieram noutra forma JSON e ainda assim
-// entraram na coluna. É sempre <= Ocorrencias, e disjunto de Divergencias.
-func (f *CompiledField) Coercoes() uint64 { return f.coercoes.Load() }
+// CoercionCount é quantas dessas ocorrências vieram noutra forma JSON e ainda assim
+// entraram na coluna. É sempre <= OccurrenceCount, e disjunto de DivergenceCount.
+func (f *CompiledField) CoercionCount() uint64 { return f.coercionCount.Load() }
 
 // EffectiveType devolve o tipo contra o qual os valores deste campo devem ser
 // interpretados: o declarado no YAML ou, para campo auto, o FIXADO na
@@ -227,7 +227,7 @@ func (f *CompiledField) EffectiveType() types.FieldType {
 	return types.FieldType(f.autoType.Load())
 }
 
-// NomeDoIndice devolve o índice em texto, para a coluna `index` do
+// IndexName devolve o índice em texto, para a coluna `index` do
 // /v1/metadata e da homônima de `_meta.fields`. Substitui o IndexKind.String()
 // que morreu com o enum dos dois motores, e devolve as MESMAS duas palavras que
 // ele devolvia.
@@ -242,8 +242,8 @@ func (f *CompiledField) EffectiveType() types.FieldType {
 // O que a unificação de fato tirou do wire foi o terceiro valor: "hash" não é
 // mais alcançável por config nenhuma desde a D5, e desde esta tarefa não existe
 // sequer o tipo que o representava.
-func (f *CompiledField) NomeDoIndice() string {
-	if f.Indexado {
+func (f *CompiledField) IndexName() string {
+	if f.Indexed {
 		return "bitmap"
 	}
 	return "none"
@@ -275,8 +275,8 @@ func (c *Compiled) FixAutoType(f *CompiledField, t types.FieldType) error {
 	// coluna tem tipo no dataset base e "sem tipo conhecido" na tabela irmã —
 	// janela em que o binder recusaria, na irmã, a comparação que aceita no
 	// base.
-	for _, m := range c.listaDeEspelhos() {
-		m.fixaTipoEspelhado(f.ID, t)
+	for _, m := range c.mirrorList() {
+		m.fixMirroredType(f.ID, t)
 	}
 	return nil
 }
@@ -312,7 +312,7 @@ type Compiled struct {
 
 	Key, Seq *CompiledField
 
-	// espelhos são os Compiled que recebem, em RUNTIME, toda coluna que este
+	// mirrors são os Compiled que recebem, em RUNTIME, toda coluna que este
 	// aqui descobrir. O único caso hoje é a tabela histórica: ela tem Compiled
 	// próprio (o nome, os índices e a ausência das congeladas diferem), mas
 	// compartilha o dicionário — e sem o espelho uma chave promovida a coluna
@@ -323,38 +323,38 @@ type Compiled struct {
 	//
 	// atomic.Pointer, e não um campo sob c.mu, porque os dois pontos de
 	// propagação estão em regimes de lock diferentes: ResolveUnknown e
-	// ResolveAninhado já seguram c.mu na escrita, e FixAutoType não segura
+	// ResolveNested já seguram c.mu na escrita, e FixAutoType não segura
 	// nada. Ler um slice imutável por ponteiro atômico serve aos dois sem
 	// inventar uma segunda ordem de travamento.
 	//
 	// Espelho NÃO se encadeia: quem recebe a propagação não a repassa. Um
 	// espelho de espelho tomaria dois locks em cadeia a partir do writer, e o
 	// produto não tem caso que peça isso.
-	espelhos atomic.Pointer[[]*Compiled]
+	mirrors atomic.Pointer[[]*Compiled]
 
-	// Congeladas são as colunas com frozenFrom, em ordem de FieldID.
-	// Pré-computada e ordenada pela mesma razão das Derivadas: o materializer
+	// FrozenColumns são as colunas com frozenFrom, em ordem de FieldID.
+	// Pré-computada e ordenada pela mesma razão das DerivedColumns: o materializer
 	// a percorre por evento, e varrer o mapa no caminho quente custaria caro.
-	Congeladas []*CompiledField
+	FrozenColumns []*CompiledField
 
-	// RegrasTTL são as regras de expiração validadas, na ordem do arquivo —
+	// TTLRules são as regras de expiração validadas, na ordem do arquivo —
 	// que é semântica: a primeira que casa vence. O `when` continua em TEXTO
 	// aqui de propósito: compilá-lo exige o binder, e o binder importa este
 	// pacote. Quem compila é internal/predicate, o único ponto da árvore que
 	// pode importar os dois.
-	RegrasTTL []RegraTTL
-	// DuracaoDeFundo é a duração da regra sem `when`, ou zero quando não há.
-	DuracaoDeFundo time.Duration
+	TTLRules []TTLRule
+	// FallbackDuration é a duração da regra sem `when`, ou zero quando não há.
+	FallbackDuration time.Duration
 
-	// Escrita é o campo de sistema que registra o instante da escrita.
+	// WriteInstantField é o campo de sistema que registra o instante da escrita.
 	// Não-nil exatamente quando há regras de TTL — sem expiração não há para
 	// que pagar 11 bytes por record.
-	Escrita *CompiledField
-	// Prazo é o campo de sistema que carrega a DURAÇÃO de ociosidade que vale
-	// para a entidade, em millis. Não-nil junto com o Escrita: os dois só
+	WriteInstantField *CompiledField
+	// TTLField é o campo de sistema que carrega a DURAÇÃO de ociosidade que vale
+	// para a entidade, em millis. Não-nil junto com o WriteInstantField: os dois só
 	// fazem sentido em par — um diz quando foi a última escrita, o outro por
 	// quanto tempo ela vale.
-	Prazo *CompiledField
+	TTLField *CompiledField
 
 	mu      sync.RWMutex
 	byName  map[string]*CompiledField
@@ -362,22 +362,22 @@ type Compiled struct {
 	exclude map[string]struct{}
 	dict    FieldDictionary
 
-	// camposDescartados conta os campos recusados pelo teto. Atômico porque o
+	// discardedFieldCount conta os campos recusados pelo teto. Atômico porque o
 	// writer o incrementa enquanto o coletor de métricas o lê. É o que torna a
 	// perda CONTÁVEL em vez de descoberta por acaso — o modo de falha
 	// inaceitável aqui é o silêncio, não a perda.
-	camposDescartados atomic.Uint64
-	// aoDescartar é avisado UMA vez, com o nome do primeiro campo que não
+	discardedFieldCount atomic.Uint64
+	// onDiscard é avisado UMA vez, com o nome do primeiro campo que não
 	// coube. Uma vez, e não por evento: sob a política `ignore` o descarte
 	// passa a ser o estado normal, e uma linha por evento afogaria o log num
 	// dataset que ingere a centenas de eventos por segundo. O contador conta
 	// tudo; o log diz por onde começar a investigar.
 	//
 	// Escrito na fiação, antes de a ingestão começar, e lido pelo writer.
-	aoDescartar  func(campo string)
-	avisouDeTeto atomic.Bool
+	onDiscard       func(campo string)
+	warnedOfCeiling atomic.Bool
 
-	// valoresIncompativeis conta os valores de coluna ANINHADA que não
+	// incompatibleValueCount conta os valores de coluna ANINHADA que não
 	// couberam no tipo fixado. É um contador SEPARADO do de descarte por teto
 	// de propósito: as causas são diferentes e os remédios também — o teto se
 	// resolve subindo o número ou aceitando a perda, e a incompatibilidade de
@@ -387,50 +387,50 @@ type Compiled struct {
 	// naquela linha, e o documento preserva o valor. Sem este contador isso
 	// era invisível: o `descartados` do painel conta EVENTOS, e o de campos
 	// conta o que o teto recusou.
-	valoresIncompativeis atomic.Uint64
-	aoIncompativel       func(coluna, fixado, veio string)
-	avisouIncompativel   atomic.Bool
+	incompatibleValueCount atomic.Uint64
+	onIncompatible         func(coluna, fixado, veio string)
+	warnedIncompatible     atomic.Bool
 }
 
-// ValoresIncompativeis é quantos valores de coluna aninhada não couberam no
+// IncompatibleValueCount é quantos valores de coluna aninhada não couberam no
 // tipo fixado desde a abertura.
-func (c *Compiled) ValoresIncompativeis() uint64 { return c.valoresIncompativeis.Load() }
+func (c *Compiled) IncompatibleValueCount() uint64 { return c.incompatibleValueCount.Load() }
 
-// AoValorIncompativel registra o aviso da primeira divergência de tipo numa
+// OnIncompatibleValue registra o aviso da primeira divergência de tipo numa
 // coluna aninhada. Chamado na fiação, antes de a ingestão começar.
-func (c *Compiled) AoValorIncompativel(fn func(coluna, fixado, veio string)) { c.aoIncompativel = fn }
+func (c *Compiled) OnIncompatibleValue(fn func(column, fixed, arrived string)) { c.onIncompatible = fn }
 
-// ContaValorIncompativel registra que um valor não coube no tipo da coluna.
+// CountIncompatibleValue registra que um valor não coube no tipo da coluna.
 //
 // O aviso sai UMA vez, com o tipo fixado E o que chegou: só com os dois o
 // operador sabe o que mudou na origem. O contador conta todas.
-func (c *Compiled) ContaValorIncompativel(coluna *CompiledField, veio types.FieldType) {
-	c.valoresIncompativeis.Add(1)
-	coluna.divergencias.Add(1)
-	if c.aoIncompativel == nil || !c.avisouIncompativel.CompareAndSwap(false, true) {
+func (c *Compiled) CountIncompatibleValue(column *CompiledField, arrived types.FieldType) {
+	c.incompatibleValueCount.Add(1)
+	column.divergenceCount.Add(1)
+	if c.onIncompatible == nil || !c.warnedIncompatible.CompareAndSwap(false, true) {
 		return
 	}
-	c.aoIncompativel(coluna.Name, coluna.EffectiveType().String(), veio.String())
+	c.onIncompatible(column.Name, column.EffectiveType().String(), arrived.String())
 }
 
-// AoDescartarCampo registra o aviso de que o teto recusou um campo. Chamado na
+// OnFieldDiscarded registra o aviso de que o teto recusou um campo. Chamado na
 // fiação do dataset, antes de a ingestão começar.
-func (c *Compiled) AoDescartarCampo(fn func(campo string)) { c.aoDescartar = fn }
+func (c *Compiled) OnFieldDiscarded(fn func(field string)) { c.onDiscard = fn }
 
-// avisaDescarte dispara o aviso na primeira vez, e só nela.
-func (c *Compiled) avisaDescarte(campo string) {
-	if c.aoDescartar == nil || !c.avisouDeTeto.CompareAndSwap(false, true) {
+// warnDiscard dispara o aviso na primeira vez, e só nela.
+func (c *Compiled) warnDiscard(field string) {
+	if c.onDiscard == nil || !c.warnedOfCeiling.CompareAndSwap(false, true) {
 		return
 	}
-	c.aoDescartar(campo)
+	c.onDiscard(field)
 }
 
-// CamposDescartados é quantos campos o teto recusou desde a abertura.
-func (c *Compiled) CamposDescartados() uint64 { return c.camposDescartados.Load() }
+// DiscardedFieldCount é quantos campos o teto recusou desde a abertura.
+func (c *Compiled) DiscardedFieldCount() uint64 { return c.discardedFieldCount.Load() }
 
-// CamposConhecidos é o tamanho corrente do dicionário — o numerador de que
+// KnownFieldCount é o tamanho corrente do dicionário — o numerador de que
 // MaxCols é o denominador.
-func (c *Compiled) CamposConhecidos() int { return c.dict.Len() }
+func (c *Compiled) KnownFieldCount() int { return c.dict.Len() }
 
 // Compile resolve a spec contra o field dictionary. IDs são atribuídos em
 // ordem determinística (nomes ordenados) — o mesmo spec + dict vazio produz
@@ -450,8 +450,8 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 		exclude:       make(map[string]struct{}, len(s.Schema.Exclude)),
 		dict:          dict,
 	}
-	c.RegrasTTL = s.Materialization.RegrasTTL
-	c.DuracaoDeFundo = s.Materialization.DuracaoDeFundo
+	c.TTLRules = s.Materialization.TTLRules
+	c.FallbackDuration = s.Materialization.FallbackDuration
 	if s.Materialization.Mode == "replace" {
 		c.Mode = ModeReplace
 	}
@@ -503,11 +503,11 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 	// só, ligar `history.expireAfterWrite` num dataset sem regras de TTL
 	// produzia um histórico sem `_writtenAt` — e um motor de retenção sem nada
 	// contra o que comparar, que não expiraria coisa alguma sem erro e sem log.
-	if s.ExigeInstanteDeEscrita() {
-		names = append(names, CampoInstanteDeEscrita)
+	if s.RequiresWriteInstant() {
+		names = append(names, WriteInstantFieldName)
 	}
-	if len(c.RegrasTTL) > 0 {
-		names = append(names, CampoDePrazo)
+	if len(c.TTLRules) > 0 {
+		names = append(names, TTLFieldName)
 	}
 	sort.Strings(names)
 
@@ -521,15 +521,15 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 	// existem e são legíveis, e o que o teto governa é o crescimento daqui
 	// para a frente.
 	if c.MaxCols > 0 {
-		declarados := 0
+		declaredCount := 0
 		for _, name := range names {
 			if _, excluded := c.exclude[name]; !excluded {
-				declarados++
+				declaredCount++
 			}
 		}
-		if declarados > c.MaxCols {
+		if declaredCount > c.MaxCols {
 			return nil, fmt.Errorf("%w: o schema declara %d campos, acima de schema.maxCols (%d)",
-				ErrTetoDeCampos, declarados, c.MaxCols)
+				ErrFieldCeiling, declaredCount, c.MaxCols)
 		}
 	}
 
@@ -551,40 +551,40 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 			IsKey:      name == s.Materialization.Key.Field,
 			IsSequence: name == seqField,
 		}
-		if name == CampoInstanteDeEscrita {
+		if name == WriteInstantFieldName {
 			// Tipo fixo, não declarável: é o writer que o preenche, com o
 			// relógio do processo, e não há format nem inferência envolvidos.
 			cf.Type, cf.IsSystem = types.TypeTimestamp, true
-			c.Escrita = cf
+			c.WriteInstantField = cf
 			c.byName[cf.Name] = cf
 			c.byID[cf.ID] = cf
 			continue
 		}
-		if name == CampoDePrazo {
+		if name == TTLFieldName {
 			// int64, e NÃO timestamp: ela carrega uma DURAÇÃO em millis, e
 			// timestamp faria `SELECT _expiresIn` renderizar 3 minutos como
 			// 1970-01-01T00:03:00Z — uma data que não é uma data.
 			cf.Type, cf.IsSystem = types.TypeInt64, true
-			c.Prazo = cf
+			c.TTLField = cf
 			c.byName[cf.Name] = cf
 			c.byID[cf.ID] = cf
 			continue
 		}
 		if spec, declared := s.Schema.Fields[name]; declared {
 			cf.Alias = spec.Alias
-			cf.DescobreAninhados = spec.UnknownFields == "include"
+			cf.DiscoverNested = spec.UnknownFields == "include"
 			if spec.Type == "auto" {
 				cf.IsAuto = true
 			} else {
 				cf.Type, _ = FieldTypeByName(spec.Type)
-				l, err := CompilaFormato(spec.Type, spec.Format)
+				l, err := CompileFormat(spec.Type, spec.Format)
 				if err != nil {
 					return nil, fmt.Errorf("campo %q: %w", name, err)
 				}
 				cf.Format, cf.Layout = spec.Format, l
 			}
-			cf.Indexado = indexadoNoYAML(spec.Index)
-			cf.Acumula = spec.Merge == MergeSoma
+			cf.Indexed = indexedInYAML(spec.Index)
+			cf.Accumulates = spec.Merge == MergeSum
 		} else {
 			cf.IsAuto = true
 		}
@@ -631,21 +631,21 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 		if !ok {
 			continue // excluída do dataset
 		}
-		if spec.FrozenFrom == OrigemRelogio {
-			cf.Type, cf.DoRelogio = types.TypeTimestamp, true
+		if spec.FrozenFrom == FrozenFromClock {
+			cf.Type, cf.FromClock = types.TypeTimestamp, true
 		} else {
-			origem, ok := c.byName[spec.FrozenFrom]
+			source, ok := c.byName[spec.FrozenFrom]
 			if !ok {
 				return nil, specErrf("campo %q: origem %q não compilou (excluída?)", name, spec.FrozenFrom)
 			}
-			cf.FrozenFrom = origem
-			cf.Type, cf.IsAuto = origem.Type, origem.IsAuto
+			cf.FrozenFrom = source
+			cf.Type, cf.IsAuto = source.Type, source.IsAuto
 			// O Format/Layout vem junto com o tipo, e não é acessório: em
 			// datetime e time é ele que o binder usa para converter o literal
 			// de texto do WHERE. Sem herdá-lo, a coluna guardaria o valor e
 			// recusaria como "literal inválido" exatamente a grafia que a
 			// origem aceita — a coluna existiria e não seria consultável.
-			cf.Format, cf.Layout = origem.Format, origem.Layout
+			cf.Format, cf.Layout = source.Format, source.Layout
 			if cf.IsAuto {
 				// O hint é carregado aqui pela mesma razão do laço acima, e
 				// não de graça: a congelada tem FieldID PRÓPRIO, então o tipo
@@ -657,9 +657,9 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 				}
 			}
 		}
-		c.Congeladas = append(c.Congeladas, cf)
+		c.FrozenColumns = append(c.FrozenColumns, cf)
 	}
-	sort.Slice(c.Congeladas, func(i, j int) bool { return c.Congeladas[i].ID < c.Congeladas[j].ID })
+	sort.Slice(c.FrozenColumns, func(i, j int) bool { return c.FrozenColumns[i].ID < c.FrozenColumns[j].ID })
 
 	// Campos que o DICIONÁRIO conhece e o YAML não: campos auto que uma
 	// execução anterior materializou via ResolveUnknown. Sem carregá-los aqui,
@@ -668,7 +668,7 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 	// do carregamento do dicionário abaixo — que é o que impede a derivada de
 	// ressuscitar como campo de topo autodescoberto no reopen, levando junto o
 	// SELECT * de que ela precisa ficar fora.
-	if err := c.registraDerivadas(s, dict); err != nil {
+	if err := c.registerDerived(s, dict); err != nil {
 		return nil, err
 	}
 
@@ -693,8 +693,8 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 	// e o `_expiresIn` voltariam ao da irmã depois de a derivação os ter
 	// tirado — os três com `IS NULL` eterno e recusa de comparação por "sem
 	// tipo conhecido", que é pior do que a coluna não existir.
-	for _, nome := range nomesForaDoUniverso(s) {
-		c.exclude[nome] = struct{}{}
+	for _, name := range namesOutsideUniverse(s) {
+		c.exclude[name] = struct{}{}
 	}
 	if c.IncludeAll && c.Unknown == UnknownInclude {
 		for i := 1; i <= dict.Len(); i++ {
@@ -703,16 +703,16 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 			if !ok || name == "" {
 				continue
 			}
-			// Nome já tomado (inclusive por ALIAS de campo declarado): uma
+			// Nome já taken (inclusive por ALIAS de campo declarado): uma
 			// segunda entrada sob o mesmo nome faria o resultado da query
 			// depender da ordem de inserção no mapa.
-			if _, tomado := c.byName[name]; tomado {
+			if _, taken := c.byName[name]; taken {
 				continue
 			}
 			if _, tomado := c.byID[id]; tomado {
 				continue
 			}
-			if _, excluído := c.exclude[name]; excluído {
+			if _, excluded := c.exclude[name]; excluded {
 				continue
 			}
 			cf := &CompiledField{ID: id, Name: name, IsAuto: true}
@@ -726,8 +726,8 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 			// DESCOBRIR — num dataset sem descoberta, um campo de topo cujo
 			// nome tenha ponto continua sendo de topo.
 			if i := strings.IndexByte(name, '.'); i > 0 {
-				if pai, ok := c.byName[name[:i]]; ok && pai.DescobreAninhados {
-					cf.Parent, cf.Path = pai, name[i+1:]
+				if parent, ok := c.byName[name[:i]]; ok && parent.DiscoverNested {
+					cf.Parent, cf.Path = parent, name[i+1:]
 				}
 			}
 			// Sem typeHint o campo entra SEM tipo: existe, é projetável, e o
@@ -755,7 +755,7 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 	return c, nil
 }
 
-// indexadoNoYAML traduz o vocabulário do YAML já validado (validaIndice, em
+// indexedInYAML traduz o vocabulário do YAML já validado (validateIndex, em
 // frozen.go, só deixa passar "" ou "true" — chamar isto sobre um valor cru
 // não validado seria bug de quem compila sem ter passado pelo validate).
 // Vive numa função só porque o campo de topo e a coluna derivada leem a MESMA
@@ -764,38 +764,38 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 // O resultado é um bool, e não mais um enum de três valores, porque existe um
 // motor de índice só (D5): "qual dos dois" deixou de ser uma pergunta, e o que
 // resta é "tem ou não tem".
-func indexadoNoYAML(yaml string) bool { return yaml == "true" }
+func indexedInYAML(yaml string) bool { return yaml == "true" }
 
-// registraDerivadas compila as colunas declaradas em `extract`.
+// registerDerived compila as colunas declaradas em `extract`.
 //
 // A ordem é determinística — pais em ordem alfabética, extrações na ordem
 // escrita — pela mesma razão que o laço de topo ordena os nomes: o mesmo spec
 // contra o mesmo dicionário tem de produzir sempre o mesmo mapeamento.
-func (c *Compiled) registraDerivadas(s *DatasetSpec, dict FieldDictionary) error {
-	pais := make([]string, 0, len(s.Schema.Fields))
-	for nome := range s.Schema.Fields {
-		if len(s.Schema.Fields[nome].Extract) > 0 {
-			pais = append(pais, nome)
+func (c *Compiled) registerDerived(s *DatasetSpec, dict FieldDictionary) error {
+	parents := make([]string, 0, len(s.Schema.Fields))
+	for name := range s.Schema.Fields {
+		if len(s.Schema.Fields[name].Extract) > 0 {
+			parents = append(parents, name)
 		}
 	}
-	sort.Strings(pais)
+	sort.Strings(parents)
 
-	for _, nomeDoPai := range pais {
-		pai, ok := c.byName[nomeDoPai]
+	for _, parentName := range parents {
+		parent, ok := c.byName[parentName]
 		if !ok {
 			// Pai excluído ou fora do include: a spec já recusou isso na
 			// validação, então chegar aqui seria bug de compilação.
-			return fmt.Errorf("%w: campo %q declara extract e não foi compilado", ErrColunaDerivada, nomeDoPai)
+			return fmt.Errorf("%w: campo %q declara extract e não foi compilado", ErrDerivedColumn, parentName)
 		}
-		for i, e := range s.Schema.Fields[nomeDoPai].Extract {
-			nome, err := NomeDaExtracao(nomeDoPai, i, e)
+		for i, e := range s.Schema.Fields[parentName].Extract {
+			nome, err := DerivedColumnName(parentName, i, e)
 			if err != nil {
 				return err
 			}
-			tipo, _ := FieldTypeByName(e.Type)
-			layout, err := CompilaFormato(e.Type, e.Format)
+			typ, _ := FieldTypeByName(e.Type)
+			layout, err := CompileFormat(e.Type, e.Format)
 			if err != nil {
-				return fmt.Errorf("%w: extract %q: %w", ErrColunaDerivada, nome, err)
+				return fmt.Errorf("%w: extract %q: %w", ErrDerivedColumn, nome, err)
 			}
 			id, err := dict.LookupOrCreate([]byte(nome))
 			if err != nil {
@@ -809,30 +809,30 @@ func (c *Compiled) registraDerivadas(s *DatasetSpec, dict FieldDictionary) error
 			// Hint ausente não é conflito: sem tipo fixado também não há valor
 			// materializado, e adotar o ID é inofensivo. É o que permite o
 			// reopen normal de um dataset criado com extract.
-			if t, temHint := dict.TypeHint(id); temHint && t != tipo {
+			if t, hasHint := dict.TypeHint(id); hasHint && t != typ {
 				return fmt.Errorf("%w: %q declara tipo %s, mas o dataset já fixou %s para esse nome; "+
 					"escolha outro `as` ou recrie o dataset",
-					ErrColunaDerivada, nome, tipo, t)
+					ErrDerivedColumn, nome, typ, t)
 			}
 			cf := &CompiledField{
-				ID:       id,
-				Name:     nome,
-				Type:     tipo,
-				Indexado: indexadoNoYAML(e.Index),
-				Format:   e.Format,
-				Layout:   layout,
-				Parent:   pai,
-				Path:     e.Path,
+				ID:      id,
+				Name:    nome,
+				Type:    typ,
+				Indexed: indexedInYAML(e.Index),
+				Format:  e.Format,
+				Layout:  layout,
+				Parent:  parent,
+				Path:    e.Path,
 			}
 			c.byName[cf.Name] = cf
 			c.byID[cf.ID] = cf
-			pai.Derivadas = append(pai.Derivadas, cf)
+			parent.DerivedColumns = append(parent.DerivedColumns, cf)
 		}
 	}
 	return nil
 }
 
-// ResolveAninhado resolve — criando na primeira vez — a coluna de uma chave
+// ResolveNested resolve — criando na primeira vez — a coluna de uma chave
 // DESCOBERTA dentro de um documento json.
 //
 // É o irmão de ResolveUnknown um nível abaixo, e obedece às mesmas regras: o
@@ -848,28 +848,28 @@ func (c *Compiled) registraDerivadas(s *DatasetSpec, dict FieldDictionary) error
 // contrato de ResolveUnknown, e o caller trata como "não virou coluna".
 //
 // Chamado apenas pela goroutine do writer.
-func (c *Compiled) ResolveAninhado(pai *CompiledField, nomeQualificado, caminho []byte) (*CompiledField, error) {
-	if f, precisa := c.ResolveAninhadoSoLeitura(pai, nomeQualificado); !precisa {
+func (c *Compiled) ResolveNested(parent *CompiledField, qualifiedName, path []byte) (*CompiledField, error) {
+	if f, needsWriter := c.ResolveNestedReadOnly(parent, qualifiedName); !needsWriter {
 		return f, nil
 	}
-	return c.criaAninhado(pai, nomeQualificado, caminho)
+	return c.createNested(parent, qualifiedName, path)
 }
 
-// ResolveAninhadoSoLeitura é o ResolveAninhado SEM NENHUM EFEITO.
+// ResolveNestedReadOnly é o ResolveNested SEM NENHUM EFEITO.
 //
 // `precisa=true` marca o exato ponto em que a coluna seria criada. O caso
 // `f.Parent != pai` — nome tomado por uma coluna de topo com ponto no nome —
 // continua sendo um NÃO legítimo, e não um "precisaria criar": ele nunca vira
 // coluna, em decodificador nenhum, e devolvê-lo como pendência faria o writer
 // reprocessar o mesmo evento para sempre.
-func (c *Compiled) ResolveAninhadoSoLeitura(pai *CompiledField, nomeQualificado []byte) (*CompiledField, bool) {
+func (c *Compiled) ResolveNestedReadOnly(parent *CompiledField, qualifiedName []byte) (*CompiledField, bool) {
 	c.mu.RLock()
-	f, ok := c.byName[string(nomeQualificado)]
+	f, ok := c.byName[string(qualifiedName)]
 	c.mu.RUnlock()
 	if !ok {
 		return nil, true
 	}
-	if f.Parent != pai {
+	if f.Parent != parent {
 		// Nome já tomado por outra coluna: não adota. Só acontece se alguém
 		// declarar um campo de topo com ponto no nome.
 		return nil, false
@@ -877,18 +877,18 @@ func (c *Compiled) ResolveAninhadoSoLeitura(pai *CompiledField, nomeQualificado 
 	return f, false
 }
 
-// criaAninhado é a metade que ESCREVE. Exclusivo da goroutine do writer.
-func (c *Compiled) criaAninhado(pai *CompiledField, nomeQualificado, caminho []byte) (*CompiledField, error) {
+// createNested é a metade que ESCREVE. Exclusivo da goroutine do writer.
+func (c *Compiled) createNested(parent *CompiledField, qualifiedName, path []byte) (*CompiledField, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if f, ok := c.byName[string(nomeQualificado)]; ok {
-		if f.Parent != pai {
+	if f, ok := c.byName[string(qualifiedName)]; ok {
+		if f.Parent != parent {
 			return nil, nil
 		}
 		return f, nil
 	}
-	if recusa := c.tetoAlcancado(string(nomeQualificado)); recusa != nil {
-		if TetoIgnorou(recusa) {
+	if refusal := c.ceilingReached(string(qualifiedName)); refusal != nil {
+		if IgnoredByCeiling(refusal) {
 			// ignore: a coluna não existe, o evento é gravado com todo o resto,
 			// e a perda fica no contador. Mesmo desfecho do ResolveUnknown.
 			return nil, nil
@@ -897,50 +897,50 @@ func (c *Compiled) criaAninhado(pai *CompiledField, nomeQualificado, caminho []b
 		// o chamador tratá-los igual — que era o que esta função fazia — fazia a
 		// política `stop` ser silenciosamente rebaixada a `ignore` no caminho
 		// aninhado, enquanto o caminho de topo a honrava.
-		return nil, fmt.Errorf("%w: %s", recusa, nomeQualificado)
+		return nil, fmt.Errorf("%w: %s", refusal, qualifiedName)
 	}
-	id, err := c.dict.LookupOrCreate(nomeQualificado)
+	id, err := c.dict.LookupOrCreate(qualifiedName)
 	if err != nil {
-		return nil, fmt.Errorf("registrando coluna aninhada %q: %w", nomeQualificado, err)
+		return nil, fmt.Errorf("registrando coluna aninhada %q: %w", qualifiedName, err)
 	}
 	cf := &CompiledField{
 		ID:     id,
-		Name:   string(nomeQualificado),
+		Name:   string(qualifiedName),
 		IsAuto: true,
-		Parent: pai,
-		Path:   string(caminho),
+		Parent: parent,
+		Path:   string(path),
 	}
 	if t, ok := c.dict.TypeHint(id); ok {
 		cf.autoType.Store(uint32(t))
 	}
 	c.byName[cf.Name] = cf
 	c.byID[cf.ID] = cf
-	c.propagaAosEspelhos(cf)
+	c.propagateToMirrors(cf)
 	return cf, nil
 }
 
-// tetoAlcancado aplica a política de estouro do dicionário. Chamado com c.mu
+// ceilingReached aplica a política de estouro do dicionário. Chamado com c.mu
 // já travado. nil = há espaço; erro = a política é `stop`; e (nil, nil) do
 // caller quando ela é `ignore` — por isso ele devolve um erro sentinela só no
 // caso que precisa parar.
-func (c *Compiled) tetoAlcancado(campo string) error {
+func (c *Compiled) ceilingReached(field string) error {
 	if c.MaxCols <= 0 || c.dict.Len() < c.MaxCols {
 		return nil
 	}
-	c.camposDescartados.Add(1)
-	c.avisaDescarte(campo)
+	c.discardedFieldCount.Add(1)
+	c.warnDiscard(field)
 	if c.OnMaxCols == OnMaxColsStop {
-		return fmt.Errorf("%w (maxCols=%d)", ErrTetoDeCampos, c.MaxCols)
+		return fmt.Errorf("%w (maxCols=%d)", ErrFieldCeiling, c.MaxCols)
 	}
-	return errTetoIgnorado
+	return errIgnoredByCeiling
 }
 
-// errTetoIgnorado é interno: sinaliza ao caller que a coluna não foi criada
+// errIgnoredByCeiling é interno: sinaliza ao caller que a coluna não foi criada
 // por política `ignore`, sem que isso vire erro de evento.
-var errTetoIgnorado = errors.New("teto de campos alcançado; coluna ignorada")
+var errIgnoredByCeiling = errors.New("teto de campos alcançado; coluna ignorada")
 
-// TetoIgnorou informa se o erro é a recusa silenciosa do teto.
-func TetoIgnorou(err error) bool { return errors.Is(err, errTetoIgnorado) }
+// IgnoredByCeiling informa se o erro é a recusa silenciosa do teto.
+func IgnoredByCeiling(err error) bool { return errors.Is(err, errIgnoredByCeiling) }
 
 // FieldByName resolve nome original OU alias. Lookup com []byte não aloca
 // (elisão de map[string(b)]).
@@ -963,26 +963,26 @@ func (c *Compiled) FieldByName(name []byte) (*CompiledField, bool) {
 // CompiledField é imutável após a criação, exceto pelo tipo fixado de campo
 // auto, que é publicado atomicamente.
 func (c *Compiled) FieldsByID() []*CompiledField {
-	return c.camposOrdenados(false, false)
+	return c.sortedFields(false, false)
 }
 
-// FieldsByIDIncluindoSistema devolve TODOS os campos, inclusive os que o
+// FieldsByIDIncludingSystem devolve TODOS os campos, inclusive os que o
 // writer injeta. É para quem precisa do conjunto físico do payload — não para
 // quem monta a lista de colunas que o usuário vê.
-func (c *Compiled) FieldsByIDIncluindoSistema() []*CompiledField {
-	return c.camposOrdenados(true, true)
+func (c *Compiled) FieldsByIDIncludingSystem() []*CompiledField {
+	return c.sortedFields(true, true)
 }
 
-func (c *Compiled) camposOrdenados(comSistema, comDerivadas bool) []*CompiledField {
+func (c *Compiled) sortedFields(withSystem, withDerived bool) []*CompiledField {
 	c.mu.RLock()
 	// byID tem UMA entrada por campo (byName tem duas para campo com alias):
 	// não há duplicata a remover aqui.
 	out := make([]*CompiledField, 0, len(c.byID))
 	for _, f := range c.byID {
-		if f.IsSystem && !comSistema {
+		if f.IsSystem && !withSystem {
 			continue
 		}
-		if f.Parent != nil && !comDerivadas {
+		if f.Parent != nil && !withDerived {
 			continue
 		}
 		out = append(out, f)
@@ -993,24 +993,24 @@ func (c *Compiled) camposOrdenados(comSistema, comDerivadas bool) []*CompiledFie
 	return out
 }
 
-// FieldsParaMetadata é o conjunto que o /v1/metadata publica: as colunas de
+// FieldsForMetadata é o conjunto que o /v1/metadata publica: as colunas de
 // topo MAIS as derivadas, sem os campos de sistema.
 //
 // É deliberadamente um SUPERSET do SELECT *. Esconder a derivada aqui faria o
 // DBeaver não a listar, e ninguém descobriria que ela existe — o operador a
 // declarou justamente para consultá-la pelo nome.
-func (c *Compiled) FieldsParaMetadata() []*CompiledField {
-	return c.camposOrdenados(false, true)
+func (c *Compiled) FieldsForMetadata() []*CompiledField {
+	return c.sortedFields(false, true)
 }
 
 // FieldByPath resolve a coluna derivada pelo CAMINHO dentro do documento do
 // pai — que é como ela aparece no `pai.caminho` da projeção, e não
 // necessariamente como ela se chama (o `as` pode renomeá-la).
-func (c *Compiled) FieldByPath(pai, path string) (*CompiledField, bool) {
+func (c *Compiled) FieldByPath(parent, path string) (*CompiledField, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	for _, f := range c.byID {
-		if f.Parent != nil && f.Parent.Name == pai && f.Path == path {
+		if f.Parent != nil && f.Parent.Name == parent && f.Path == path {
 			return f, true
 		}
 	}
@@ -1020,11 +1020,11 @@ func (c *Compiled) FieldByPath(pai, path string) (*CompiledField, bool) {
 // FieldsByParent devolve as colunas extraídas de um campo json, em ordem
 // crescente de FieldID — a mesma ordem do SELECT *, pela mesma razão: a
 // projeção precisa ser estável entre execuções.
-func (c *Compiled) FieldsByParent(pai string) []*CompiledField {
+func (c *Compiled) FieldsByParent(parent string) []*CompiledField {
 	c.mu.RLock()
 	var out []*CompiledField
 	for _, f := range c.byID {
-		if f.Parent != nil && f.Parent.Name == pai {
+		if f.Parent != nil && f.Parent.Name == parent {
 			out = append(out, f)
 		}
 	}
@@ -1033,7 +1033,7 @@ func (c *Compiled) FieldsByParent(pai string) []*CompiledField {
 	return out
 }
 
-// AnexaFilhos acrescenta a dst todas as colunas derivadas de pai — as
+// AppendChildren acrescenta a dst todas as colunas derivadas de pai — as
 // DECLARADAS por `extract` e as DESCOBERTAS por `unknownFields: include` —, e
 // devolve o slice possivelmente crescido.
 //
@@ -1043,19 +1043,19 @@ func (c *Compiled) FieldsByParent(pai string) []*CompiledField {
 // ingestão. Esta anexa num buffer do chamador e não ordena — quem consome as
 // entries já as ordena por FieldID depois.
 //
-// O segundo é o conjunto. `pai.Derivadas` tem só as DECLARADAS: ResolveAninhado
+// O segundo é o conjunto. `pai.DerivedColumns` tem só as DECLARADAS: ResolveNested
 // registra a coluna descoberta em byName/byID com o Parent apontado, e nunca a
 // anexa à lista do pai. Quem precisar tratar "todas as colunas deste
-// documento" e olhar só as Derivadas trata um dataset de descoberta pura — o
+// documento" e olhar só as DerivedColumns trata um dataset de descoberta pura — o
 // caso do piloto — como se ele não tivesse coluna nenhuma.
 //
 // A ordem NÃO é estável entre chamadas (varre um map). Quem precisar de ordem
 // estável usa FieldsByParent.
-func (c *Compiled) AnexaFilhos(pai *CompiledField, dst []*CompiledField) []*CompiledField {
+func (c *Compiled) AppendChildren(parent *CompiledField, dst []*CompiledField) []*CompiledField {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	for _, f := range c.byID {
-		if f.Parent == pai {
+		if f.Parent == parent {
 			dst = append(dst, f)
 		}
 	}
@@ -1093,7 +1093,7 @@ func (c *Compiled) Excluded(name []byte) bool {
 //     cacheia (idempotente);
 //   - teto de campos alcançado, onMaxCols ignore → (nil, nil): o campo é
 //     descartado e o EVENTO é gravado com todos os outros;
-//   - teto de campos alcançado, onMaxCols stop → ErrTetoDeCampos.
+//   - teto de campos alcançado, onMaxCols stop → ErrFieldCeiling.
 //
 // Nos dois últimos o contador de descartados sobe: o teto pode custar dado, e
 // custá-lo em silêncio é o que não pode acontecer.
@@ -1101,14 +1101,14 @@ func (c *Compiled) Excluded(name []byte) bool {
 // Chamado apenas pela goroutine do writer; leitores concorrentes de
 // FieldByName/FieldByID são protegidos pelo RWMutex.
 func (c *Compiled) ResolveUnknown(name []byte) (*CompiledField, error) {
-	f, precisa, err := c.resolveDesconhecido(name)
-	if err != nil || !precisa {
+	f, needsWriter, err := c.lookupUnknown(name)
+	if err != nil || !needsWriter {
 		return f, err
 	}
-	return c.criaDesconhecido(name)
+	return c.createUnknown(name)
 }
 
-// ResolveUnknownSoLeitura é o ResolveUnknown SEM NENHUM EFEITO.
+// ResolveUnknownReadOnly é o ResolveUnknown SEM NENHUM EFEITO.
 //
 // Devolve `precisa=true` no exato ponto em que o ResolveUnknown criaria a
 // coluna — e nem um passo além. É o que permite decodificar um evento fora da
@@ -1124,20 +1124,20 @@ func (c *Compiled) ResolveUnknown(name []byte) (*CompiledField, error) {
 //
 // O TETO FICA DE FORA de propósito, e é a única assimetria. Ele podia ser
 // consultado puramente (`dict.Len() >= MaxCols`), mas o ResolveUnknown
-// CONTABILIZA a recusa — camposDescartados e o aviso de uma vez só — antes de
+// CONTABILIZA a recusa — discardedFieldCount e o aviso de uma vez só — antes de
 // decidir entre parar e ignorar. Antecipar essa contabilidade aqui a duplicaria
 // no evento reprocessado; adiá-la exigiria uma terceira via. A escolha é
 // devolver `precisa=true` e deixar o writer decidir, ao custo de um parse
 // dobrado por evento enquanto o dicionário estiver cheio sob `ignore` — a
 // degradação nomeada no plano da Fase 4: nunca pior que a vazão de antes, e
 // visível em nishidb_ingest_decode_serial_total.
-func (c *Compiled) ResolveUnknownSoLeitura(name []byte) (*CompiledField, bool, error) {
-	return c.resolveDesconhecido(name)
+func (c *Compiled) ResolveUnknownReadOnly(name []byte) (*CompiledField, bool, error) {
+	return c.lookupUnknown(name)
 }
 
-// resolveDesconhecido é a parte PURA do ResolveUnknown: a política e o cache.
+// lookupUnknown é a parte PURA do ResolveUnknown: a política e o cache.
 // precisa=true significa "daqui em diante só o writer pode seguir".
-func (c *Compiled) resolveDesconhecido(name []byte) (*CompiledField, bool, error) {
+func (c *Compiled) lookupUnknown(name []byte) (*CompiledField, bool, error) {
 	if _, excluded := c.exclude[string(name)]; excluded {
 		return nil, false, nil
 	}
@@ -1148,7 +1148,7 @@ func (c *Compiled) resolveDesconhecido(name []byte) (*CompiledField, bool, error
 		return nil, false, fmt.Errorf("%w: %s", ErrUnknownField, name)
 	}
 	// RLock, e não Lock: esta metade é consulta, e ela roda em N
-	// decodificadores ao mesmo tempo. A escrita mora no criaDesconhecido, que
+	// decodificadores ao mesmo tempo. A escrita mora no createUnknown, que
 	// retoma o lock exclusivo e reconfere o cache.
 	c.mu.RLock()
 	f, ok := c.byName[string(name)]
@@ -1159,9 +1159,9 @@ func (c *Compiled) resolveDesconhecido(name []byte) (*CompiledField, bool, error
 	return nil, true, nil
 }
 
-// criaDesconhecido é a metade que ESCREVE: teto, dicionário, cache e espelhos.
+// createUnknown é a metade que ESCREVE: teto, dicionário, cache e espelhos.
 // Exclusivo da goroutine do writer.
-func (c *Compiled) criaDesconhecido(name []byte) (*CompiledField, error) {
+func (c *Compiled) createUnknown(name []byte) (*CompiledField, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	// Reconfere sob o lock exclusivo: entre o RLock do resolveDesconhecido e
@@ -1178,13 +1178,13 @@ func (c *Compiled) criaDesconhecido(name []byte) (*CompiledField, error) {
 	// Ela também vem ANTES do LookupOrCreate, e é isso que torna o erro de
 	// teto do próprio fielddict inalcançável por esta rota: os dois usam o
 	// mesmo limiar, e este dispara primeiro, com política.
-	if recusa := c.tetoAlcancado(string(name)); recusa != nil {
-		if TetoIgnorou(recusa) {
+	if refusal := c.ceilingReached(string(name)); refusal != nil {
+		if IgnoredByCeiling(refusal) {
 			// ignore: mesmo desfecho do campo excluído — o evento é gravado
 			// com todos os outros campos, e a perda fica no contador.
 			return nil, nil
 		}
-		return nil, fmt.Errorf("%w: %s", recusa, name)
+		return nil, fmt.Errorf("%w: %s", refusal, name)
 	}
 	id, err := c.dict.LookupOrCreate(name)
 	if err != nil {
@@ -1198,6 +1198,6 @@ func (c *Compiled) criaDesconhecido(name []byte) (*CompiledField, error) {
 	}
 	c.byName[cf.Name] = cf
 	c.byID[cf.ID] = cf
-	c.propagaAosEspelhos(cf)
+	c.propagateToMirrors(cf)
 	return cf, nil
 }

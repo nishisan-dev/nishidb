@@ -376,7 +376,7 @@ func Novo(cfg *config.Config, o Opcoes) (*Servidor, error) {
 
 func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*dataset, error) {
 	dir := s.cfg.CaminhoDoDataset(spec.Name)
-	indexados := schema.CamposComIndice(spec)
+	indexados := schema.IndexedFieldNames(spec)
 	// O schema é compilado DENTRO do Open, pelo callback dos contadores: as
 	// definições precisam do schema, e o replay da recovery precisa das
 	// definições. É o mesmo Compile de sempre, no mesmo dicionário — só que
@@ -387,13 +387,13 @@ func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*
 		Dataset:                spec.Name,
 		SegmentSize:            s.cfg.SegmentSize(),
 		CamposIndexadosPorNome: indexados,
-		ColunasDerivadas:       spec.NomesDasExtracoes(),
+		ColunasDerivadas:       spec.DerivedColumnNames(),
 		Log:                    log,
 		Metrics:                s.reg,
-		TTLAtivo:               len(spec.Materialization.RegrasTTL) > 0,
-		DuracaoDeFundo:         spec.Materialization.DuracaoDeFundo,
-		CampoDeEscrita:         schema.CampoInstanteDeEscrita,
-		CampoDePrazo:           schema.CampoDePrazo,
+		TTLAtivo:               len(spec.Materialization.TTLRules) > 0,
+		DuracaoDeFundo:         spec.Materialization.FallbackDuration,
+		CampoDeEscrita:         schema.WriteInstantFieldName,
+		CampoDePrazo:           schema.TTLFieldName,
 		SnapshotMaxBytes:       s.cfg.SnapshotMaxBytes(),
 		CompilaContadores:      comp.Callback(),
 	})
@@ -407,7 +407,7 @@ func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*
 	// O contador de descarte diz QUANTO; o log diz por ONDE começar. Uma vez
 	// por dataset: sob a política `ignore` o descarte é o estado normal, e uma
 	// linha por evento afogaria o log.
-	compilado.AoDescartarCampo(func(campo string) {
+	compilado.OnFieldDiscarded(func(campo string) {
 		log.Warn("schema.teto_de_campos",
 			"o dataset alcançou schema.maxCols; campos novos deixaram de virar coluna",
 			"campo", campo, "maxCols", compilado.MaxCols, "politica", compilado.OnMaxCols)
@@ -415,19 +415,19 @@ func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*
 	// Divergência de tipo em coluna aninhada não descarta o evento, então ela
 	// não aparece em lugar nenhum da contabilidade de ingestão. Uma vez por
 	// dataset, com os DOIS tipos: só com eles o operador sabe o que mudou.
-	compilado.AoValorIncompativel(func(coluna, fixado, veio string) {
+	compilado.OnIncompatibleValue(func(coluna, fixado, veio string) {
 		log.Warn("schema.tipo_aninhado_divergente",
 			"valor não coube no tipo fixado da coluna aninhada; a coluna é removida nessa linha e o documento guarda o valor",
 			"coluna", coluna, "tipoFixado", fixado, "tipoQueVeio", veio)
 	})
-	if regras := spec.Materialization.RegrasTTL; len(regras) > 0 {
+	if regras := spec.Materialization.TTLRules; len(regras) > 0 {
 		// O operador precisa poder conferir que o YAML que escreveu é o que o
 		// processo entendeu — inclusive a ORDEM, que aqui é semântica.
 		log.Info("ttl.regras",
 			"regras de expiração carregadas",
 			"dataset", spec.Name, "total", len(regras),
-			"temFundo", spec.Materialization.DuracaoDeFundo > 0,
-			"regras", schema.DescreveRegras(regras))
+			"temFundo", spec.Materialization.FallbackDuration > 0,
+			"regras", schema.DescribeRules(regras))
 	}
 	mat, err := materializer.New(compilado, st)
 	if err != nil {

@@ -127,11 +127,11 @@ const SeparadorDoGroupBy = "|"
 // (o nome) resolve por mapa. O que muda entre duas consultas são os números,
 // lidos no presente a cada linha, como o `_counters` lê os totais.
 func TabelaMeta(cs []Contado) (*schema.Compiled, query.Store, error) {
-	spec, err := schema.Parse([]byte(especDaTabelaMeta), schema.DefaultsPadrao)
+	spec, err := schema.Parse([]byte(especDaTabelaMeta), schema.BuiltinDefaults)
 	if err != nil {
 		return nil, nil, fmt.Errorf("contadores: spec da tabela %s.%s inválida: %w", meta.Namespace, TabelaMetaCounters, err)
 	}
-	sc, err := spec.Compile(schema.NovoDicionarioEmMemoria())
+	sc, err := spec.Compile(schema.NewInMemoryDict())
 	if err != nil {
 		return nil, nil, fmt.Errorf("contadores: compilando a tabela %s.%s: %w", meta.Namespace, TabelaMetaCounters, err)
 	}

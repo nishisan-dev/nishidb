@@ -114,7 +114,7 @@ func registraMetricasDeDataset(reg *metrics.Registry, s *Servidor) {
 					Help:   "campos registrados no dicionário do dataset; o denominador é schema.maxCols, publicado em /v1/metadata",
 					Type:   metrics.TypeGauge,
 					Labels: rotulo,
-					Value:  float64(d.sch.CamposConhecidos()),
+					Value:  float64(d.sch.KnownFieldCount()),
 				},
 				metrics.Sample{
 					Family: metrics.MetDatasetFieldsDropped,
@@ -122,7 +122,7 @@ func registraMetricasDeDataset(reg *metrics.Registry, s *Servidor) {
 					Help:   "campos que o teto recusou; só sobe sob onMaxCols ignore, e é o que torna a perda contável em vez de silenciosa",
 					Type:   metrics.TypeCounter,
 					Labels: rotulo,
-					Value:  float64(d.sch.CamposDescartados()),
+					Value:  float64(d.sch.DiscardedFieldCount()),
 				},
 				metrics.Sample{
 					Family: metrics.MetNestedTypeMismatch,
@@ -130,7 +130,7 @@ func registraMetricasDeDataset(reg *metrics.Registry, s *Servidor) {
 					Help:   "valores de coluna aninhada que não couberam no tipo fixado; o evento entrou e o documento guarda o valor, e a coluna foi REMOVIDA naquela linha — sem a remoção ela ficaria com o valor do evento anterior, no modo merge",
 					Type:   metrics.TypeCounter,
 					Labels: rotulo,
-					Value:  float64(d.sch.ValoresIncompativeis()),
+					Value:  float64(d.sch.IncompatibleValueCount()),
 				},
 				metrics.Sample{
 					Family: metrics.MetMaterializedRows,

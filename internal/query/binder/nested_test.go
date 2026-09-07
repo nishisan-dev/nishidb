@@ -14,7 +14,7 @@ import (
 // pacote usam a spec compartilhada, que não declara extract.
 func compilaYAML(t *testing.T, yml string) *schema.Compiled {
 	t.Helper()
-	spec, err := schema.Parse([]byte(yml), schema.DefaultsPadrao)
+	spec, err := schema.Parse([]byte(yml), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -63,11 +63,11 @@ func semeiaGarbage(t *testing.T, a *ambiente, nome string, keys, rodadas int) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A lista sai de schema.CamposComIndice, e não de um laço local: um helper de
+	// A lista sai de schema.IndexedFieldNames, e não de um laço local: um helper de
 	// teste que abre o dataset com um conjunto de índices diferente do que o
 	// servidor usa reproduz, dentro da suíte, o modo de falha cruzado que aquela
 	// função existe para impedir.
-	indexados := schema.CamposComIndice(spec)
+	indexados := schema.IndexedFieldNames(spec)
 	st, err := storage.Open(storage.Options{
 		Dir:                    cfg.DirDoDataset(nome),
 		Dataset:                nome,

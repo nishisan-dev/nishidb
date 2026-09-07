@@ -26,7 +26,7 @@ func reinicia(t *testing.T, campo string, tipo types.FieldType) *schema.Compiled
 			t.Fatal(err)
 		}
 	}
-	spec, err := schema.Parse([]byte(dsYAML), schema.DefaultsPadrao)
+	spec, err := schema.Parse([]byte(dsYAML), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}

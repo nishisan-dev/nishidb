@@ -21,18 +21,18 @@ type RegraCompilada struct {
 // Mora AQUI, e não em schema, porque compilar exige o binder — e o binder
 // importa schema. Este pacote é o único lugar da árvore que pode importar os
 // dois sem fechar ciclo.
-func CompilaRegras(regras []schema.RegraTTL, sc *schema.Compiled) ([]RegraCompilada, error) {
+func CompilaRegras(regras []schema.TTLRule, sc *schema.Compiled) ([]RegraCompilada, error) {
 	out := make([]RegraCompilada, 0, len(regras))
 	for i, r := range regras {
 		if r.When == "" {
-			out = append(out, RegraCompilada{Duracao: r.Duracao})
+			out = append(out, RegraCompilada{Duracao: r.Duration})
 			continue
 		}
 		prog, slots, err := CompilaCondicao(fmt.Sprintf("ttl[%d]", i), r.When, sc)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, RegraCompilada{Prog: prog, Slots: slots, Duracao: r.Duracao})
+		out = append(out, RegraCompilada{Prog: prog, Slots: slots, Duracao: r.Duration})
 	}
 	return out, nil
 }

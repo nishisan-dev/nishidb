@@ -7,46 +7,46 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// yamlComCampo monta uma spec mínima com um campo extra declarado.
-func yamlComCampo(decl string) string {
+// yamlWithField monta uma spec mínima com um campo extra declarado.
+func yamlWithField(decl string) string {
 	return "version: 1\nname: t\nmaterialization:\n  key:\n    field: id\n" +
 		"schema:\n  include: [id, alvo]\n  fields:\n    id:\n      type: string\n" +
 		"    alvo:\n" + decl
 }
 
-// parseFalha exige que a spec seja recusada com uma mensagem que contenha o
+// parseFails exige que a spec seja recusada com uma mensagem que contenha o
 // trecho. Devolve o erro para quem quiser conferir mais da mensagem.
-func parseFalha(t *testing.T, yaml, trecho string) error {
+func parseFails(t *testing.T, yaml, snippet string) error {
 	t.Helper()
-	_, err := Parse([]byte(yaml), DefaultsPadrao)
+	_, err := Parse([]byte(yaml), BuiltinDefaults)
 	if err == nil {
-		t.Fatalf("esperava recusa contendo %q, a spec foi aceita", trecho)
+		t.Fatalf("esperava recusa contendo %q, a spec foi aceita", snippet)
 	}
-	if !strings.Contains(err.Error(), trecho) {
-		t.Fatalf("mensagem %q não contém %q", err, trecho)
+	if !strings.Contains(err.Error(), snippet) {
+		t.Fatalf("mensagem %q não contém %q", err, snippet)
 	}
 	return err
 }
 
-// exigeRecusa é a forma sem retorno, para os casos que só precisam do fato.
-func exigeRecusa(t *testing.T, yaml, trecho string) {
+// requireRefusal é a forma sem retorno, para os casos que só precisam do fato.
+func requireRefusal(t *testing.T, yaml, snippet string) {
 	t.Helper()
-	_ = parseFalha(t, yaml, trecho)
+	_ = parseFails(t, yaml, snippet)
 }
 
 // Sem default de format: um format esquecido escolheria um padrão que recusa
 // todo evento, e sob log-and-skip isso é um dataset que não ingere nada.
 func TestDatetimeETimeSemFormatSaoRecusados(t *testing.T) {
-	for _, tipo := range []string{"datetime", "time"} {
-		err := parseFalha(t, yamlComCampo("      type: "+tipo+"\n"), "exige format")
+	for _, typ := range []string{"datetime", "time"} {
+		err := parseFails(t, yamlWithField("      type: "+typ+"\n"), "exige format")
 		if !strings.Contains(err.Error(), "yyyy") {
-			t.Errorf("%s: a mensagem precisa listar os tokens suportados: %v", tipo, err)
+			t.Errorf("%s: a mensagem precisa listar os tokens suportados: %v", typ, err)
 		}
 	}
 }
 
 func TestFormatInvalidoEhRecusadoNoLoad(t *testing.T) {
-	casos := map[string]string{
+	cases := map[string]string{
 		"token desconhecido":  "      type: datetime\n      format: \"yyyy-MM-dd EEE HH:mm\"\n",
 		"letra nua":           "      type: datetime\n      format: \"yyyy-MM-ddTHH:mm:ss\"\n",
 		"ambiguidade":         "      type: datetime\n      format: \"yyyyMd HH:mm\"\n",
@@ -55,8 +55,8 @@ func TestFormatInvalidoEhRecusadoNoLoad(t *testing.T) {
 		"time com data":       "      type: time\n      format: \"yyyy-MM-dd HH:mm\"\n",
 		"datetime incompleto": "      type: datetime\n      format: \"yyyy-MM-dd\"\n",
 	}
-	for nome, decl := range casos {
-		t.Run(nome, func(t *testing.T) { exigeRecusa(t, yamlComCampo(decl), "alvo") })
+	for name, decl := range cases {
+		t.Run(name, func(t *testing.T) { requireRefusal(t, yamlWithField(decl), "alvo") })
 	}
 }
 
@@ -64,9 +64,9 @@ func TestFormatInvalidoEhRecusadoNoLoad(t *testing.T) {
 // usa decodifica com sucesso e não faz nada — configuração sem leitor, que é
 // o defeito que o débito 37 registra. Tem de recusar.
 func TestFormatEmTipoQueNaoOUsaEhRecusado(t *testing.T) {
-	for _, tipo := range []string{"string", "timestamp", "int64", "auto"} {
-		decl := "      type: " + tipo + "\n      format: \"yyyy-MM-dd HH:mm\"\n"
-		exigeRecusa(t, yamlComCampo(decl), "format só se aplica")
+	for _, typ := range []string{"string", "timestamp", "int64", "auto"} {
+		decl := "      type: " + typ + "\n      format: \"yyyy-MM-dd HH:mm\"\n"
+		requireRefusal(t, yamlWithField(decl), "format só se aplica")
 	}
 }
 
@@ -75,22 +75,22 @@ func TestFormatEmTipoQueNaoOUsaEhRecusado(t *testing.T) {
 // continuam fora do conjunto indexável (indexavel, em spec.go) que qualquer
 // um dos dois motores antigos já recusava.
 func TestDatetimeETimeNaoSaoIndexaveis(t *testing.T) {
-	for _, tipo := range []string{"datetime", "time"} {
-		decl := "      type: " + tipo + "\n      format: \"" + formatDe(tipo) + "\"\n      index: true\n"
-		exigeRecusa(t, yamlComCampo(decl), "não suporta índice")
+	for _, typ := range []string{"datetime", "time"} {
+		decl := "      type: " + typ + "\n      format: \"" + formatOf(typ) + "\"\n      index: true\n"
+		requireRefusal(t, yamlWithField(decl), "não suporta índice")
 	}
 }
 
-func formatDe(tipo string) string {
-	if tipo == "time" {
+func formatOf(typ string) string {
+	if typ == "time" {
 		return "HH:mm:ss"
 	}
 	return "yyyy-MM-dd HH:mm:ss"
 }
 
 func TestSpecValidaCompilaOLayoutDeCadaCampoTemporal(t *testing.T) {
-	yaml := yamlComCampo("      type: datetime\n      format: \"MMM d, yyyy hh:mm:ss a\"\n")
-	spec, err := Parse([]byte(yaml), DefaultsPadrao)
+	yaml := yamlWithField("      type: datetime\n      format: \"MMM d, yyyy hh:mm:ss a\"\n")
+	spec, err := Parse([]byte(yaml), BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestSpecValidaCompilaOLayoutDeCadaCampoTemporal(t *testing.T) {
 }
 
 func TestCampoNaoTemporalNaoGanhaLayout(t *testing.T) {
-	spec, err := Parse([]byte(baseYAML), DefaultsPadrao)
+	spec, err := Parse([]byte(baseYAML), BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,13 +125,13 @@ func TestCampoNaoTemporalNaoGanhaLayout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, nome := range []string{"id", "Event-Timestamp", "ratio", "extra"} {
-		f, ok := c.FieldByName([]byte(nome))
+	for _, name := range []string{"id", "Event-Timestamp", "ratio", "extra"} {
+		f, ok := c.FieldByName([]byte(name))
 		if !ok {
-			t.Fatalf("campo %q não compilou", nome)
+			t.Fatalf("campo %q não compilou", name)
 		}
 		if f.Layout != nil {
-			t.Errorf("campo %q (%v) ganhou Layout", nome, f.Type)
+			t.Errorf("campo %q (%v) ganhou Layout", name, f.Type)
 		}
 	}
 }
@@ -144,8 +144,8 @@ func TestCampoNaoTemporalNaoGanhaLayout(t *testing.T) {
 // alta na subida, com a causa nomeada.
 func TestCampoAutoComHintTemporalEhRecusadoNoCompile(t *testing.T) {
 	for _, tag := range []types.FieldType{types.TypeDateTime, types.TypeTime} {
-		yaml := yamlComCampo("      type: auto\n")
-		spec, err := Parse([]byte(yaml), DefaultsPadrao)
+		yaml := yamlWithField("      type: auto\n")
+		spec, err := Parse([]byte(yaml), BuiltinDefaults)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -167,8 +167,8 @@ func TestCampoAutoComHintTemporalEhRecusadoNoCompile(t *testing.T) {
 // Contraprova: hint NÃO temporal continua carregando normalmente, senão o
 // guard acima teria quebrado a fixação de tipo que sobrevive a restart.
 func TestCampoAutoComHintComumContinuaCarregando(t *testing.T) {
-	yaml := yamlComCampo("      type: auto\n")
-	spec, err := Parse([]byte(yaml), DefaultsPadrao)
+	yaml := yamlWithField("      type: auto\n")
+	spec, err := Parse([]byte(yaml), BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}

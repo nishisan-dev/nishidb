@@ -81,7 +81,7 @@ func parComHistorico(t *testing.T, comRaw bool) (*Materializer, *schema.Compiled
 	if comRaw {
 		yaml = specComRaw
 	}
-	spec, err := schema.Parse([]byte(yaml), schema.DefaultsPadrao)
+	spec, err := schema.Parse([]byte(yaml), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -90,17 +90,17 @@ func parComHistorico(t *testing.T, comRaw bool) (*Materializer, *schema.Compiled
 	if err != nil {
 		t.Fatalf("Compile do base: %v", err)
 	}
-	ch, err := spec.DerivaHistorico().Compile(dict)
+	ch, err := spec.DeriveHistory().Compile(dict)
 	if err != nil {
 		t.Fatalf("Compile do histórico: %v", err)
 	}
-	c.Espelha(ch)
+	c.AddMirror(ch)
 
 	m := mustNew(t, c, fakestorage.New(fakestorage.Indexes{}))
 	h := &histFake{}
 	var raw *schema.CompiledField
 	if comRaw {
-		f, ok := ch.FieldByName([]byte(schema.CampoRaw))
+		f, ok := ch.FieldByName([]byte(schema.RawFieldName))
 		if !ok {
 			t.Fatal("a spec derivada não tem _raw")
 		}
@@ -259,13 +259,13 @@ func TestRawEntraNaPosicaoDoFieldID(t *testing.T) {
 		t.Fatalf("payload do histórico fora de ordem: %v", err)
 	}
 	nomes := colunasDaLinha(t, ch, h.linhas[0])
-	if !temColuna(nomes, schema.CampoRaw) || !temColuna(nomes, "zzz") {
+	if !temColuna(nomes, schema.RawFieldName) || !temColuna(nomes, "zzz") {
 		t.Fatalf("colunas = %v", nomes)
 	}
 }
 
 func TestSemHistoricoNadaEhGravado(t *testing.T) {
-	spec, err := schema.Parse([]byte(specComHistorico), schema.DefaultsPadrao)
+	spec, err := schema.Parse([]byte(specComHistorico), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +306,7 @@ schema:
 // descarte por stale: ele vai para o histórico, e é por isso que o enxerto
 // fica ANTES da checagem, e não depois.
 func TestOEventoStaleVaiParaOHistorico(t *testing.T) {
-	spec, err := schema.Parse([]byte(specComSequence), schema.DefaultsPadrao)
+	spec, err := schema.Parse([]byte(specComSequence), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,7 +315,7 @@ func TestOEventoStaleVaiParaOHistorico(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := spec.DerivaHistorico().Compile(dict); err != nil {
+	if _, err := spec.DeriveHistory().Compile(dict); err != nil {
 		t.Fatal(err)
 	}
 	m := mustNew(t, c, fakestorage.New(fakestorage.Indexes{}))

@@ -11,9 +11,9 @@ import (
 // morava numa constante dentro do validate, editar a chave global não mudava
 // nada e não avisava nada — era o débito 37.
 
-// specSemQuery é o YAML mínimo sem a seção `query`: é exatamente o caso em que
+// specWithoutQuery é o YAML mínimo sem a seção `query`: é exatamente o caso em que
 // o global tem de valer.
-const specSemQuery = `
+const specWithoutQuery = `
 version: 1
 name: sem_query
 materialization:
@@ -25,8 +25,8 @@ schema:
       type: string
 `
 
-// specComQuery declara as duas chaves: o dataset vence o global.
-const specComQuery = specSemQuery + `
+// specWithQuery declara as duas chaves: o dataset vence o global.
+const specWithQuery = specWithoutQuery + `
 query:
   maxRows: 7
   timeout: 3s
@@ -34,7 +34,7 @@ query:
 
 func TestDatasetSemQueryHerdaOsDefaultsGlobais(t *testing.T) {
 	d := Defaults{MaxRows: 42, Timeout: 5 * time.Second}
-	s, err := Parse([]byte(specSemQuery), d)
+	s, err := Parse([]byte(specWithoutQuery), d)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestDatasetSemQueryHerdaOsDefaultsGlobais(t *testing.T) {
 
 func TestDatasetQueDeclaraVenceODefaultGlobal(t *testing.T) {
 	d := Defaults{MaxRows: 42, Timeout: 5 * time.Second}
-	s, err := Parse([]byte(specComQuery), d)
+	s, err := Parse([]byte(specWithQuery), d)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -64,41 +64,41 @@ func TestDatasetQueDeclaraVenceODefaultGlobal(t *testing.T) {
 // da spec quando o global veio zerado esconderia o defeito de quem passou o
 // zero — e é assim que uma chave volta a mentir em silêncio.
 func TestDefaultsGlobaisInvalidosSaoRecusados(t *testing.T) {
-	casos := []struct {
-		nome    string
+	cases := []struct {
+		name    string
 		d       Defaults
-		trecho  string
+		snippet string
 		yamlSrc string
 	}{
-		{"maxRows zero", Defaults{MaxRows: 0, Timeout: time.Second}, "defaultMaxRows", specSemQuery},
-		{"maxRows negativo", Defaults{MaxRows: -1, Timeout: time.Second}, "defaultMaxRows", specSemQuery},
-		{"timeout zero", Defaults{MaxRows: 1, Timeout: 0}, "defaultTimeout", specSemQuery},
-		{"timeout negativo", Defaults{MaxRows: 1, Timeout: -time.Second}, "defaultTimeout", specSemQuery},
+		{"maxRows zero", Defaults{MaxRows: 0, Timeout: time.Second}, "defaultMaxRows", specWithoutQuery},
+		{"maxRows negativo", Defaults{MaxRows: -1, Timeout: time.Second}, "defaultMaxRows", specWithoutQuery},
+		{"timeout zero", Defaults{MaxRows: 1, Timeout: 0}, "defaultTimeout", specWithoutQuery},
+		{"timeout negativo", Defaults{MaxRows: 1, Timeout: -time.Second}, "defaultTimeout", specWithoutQuery},
 		// Recusa mesmo quando o dataset declara as duas chaves: o default
 		// inválido não fica escondido pelo dataset que não precisaria dele.
-		{"inválido com dataset que declara", Defaults{}, "defaultMaxRows", specComQuery},
+		{"inválido com dataset que declara", Defaults{}, "defaultMaxRows", specWithQuery},
 	}
-	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			_, err := Parse([]byte(tc.yamlSrc), tc.d)
 			if err == nil {
-				t.Fatalf("esperava erro contendo %q", tc.trecho)
+				t.Fatalf("esperava erro contendo %q", tc.snippet)
 			}
-			if !strings.Contains(err.Error(), tc.trecho) {
-				t.Errorf("erro = %v, want conter %q", err, tc.trecho)
+			if !strings.Contains(err.Error(), tc.snippet) {
+				t.Errorf("erro = %v, want conter %q", err, tc.snippet)
 			}
 		})
 	}
 }
 
-// DefaultsPadrao é o que a spec §78 documenta, e é o que vale para quem carrega
+// BuiltinDefaults é o que a spec §78 documenta, e é o que vale para quem carrega
 // uma spec sem nishidb.yaml nenhum (testes, benchmarks). Se mudar, o YAML de
 // exemplo do README e da spec mudam junto.
 func TestDefaultsPadraoSaoOsDaSpec(t *testing.T) {
-	if DefaultsPadrao.MaxRows != 100000 {
-		t.Errorf("DefaultsPadrao.MaxRows = %d, want 100000", DefaultsPadrao.MaxRows)
+	if BuiltinDefaults.MaxRows != 100000 {
+		t.Errorf("DefaultsPadrao.MaxRows = %d, want 100000", BuiltinDefaults.MaxRows)
 	}
-	if DefaultsPadrao.Timeout != 30*time.Second {
-		t.Errorf("DefaultsPadrao.Timeout = %s, want 30s", DefaultsPadrao.Timeout)
+	if BuiltinDefaults.Timeout != 30*time.Second {
+		t.Errorf("DefaultsPadrao.Timeout = %s, want 30s", BuiltinDefaults.Timeout)
 	}
 }

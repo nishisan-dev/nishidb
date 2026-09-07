@@ -74,7 +74,7 @@ func TestSpec106BitmapLookup(t *testing.T) {
 // era `index: hash` e o fixture o mantinha DELIBERADAMENTE fora do conjunto
 // bitmap, para provar que o plano de hash respondia sozinho. Com `index: true`
 // como grafia única, `nas` compila para o mesmo estado que qualquer outro campo
-// indexado (era IndexKind, hoje CompiledField.Indexado) e entra no MESMO
+// indexado (era IndexKind, hoje CompiledField.Indexed) e entra no MESMO
 // conjunto — novoHarness não distingue mais os dois. O nome do teste ficou porque o
 // item numerado do §106 é este; o que ele prova — a consulta por `nas`
 // resolve sem varredura — não mudou.
