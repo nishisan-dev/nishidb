@@ -505,33 +505,33 @@ func validateExtracts(s *DatasetSpec, fields map[string]FieldSpec, aliases map[s
 			}
 		}
 		for i, e := range f.Extract {
-			nome, err := derivedColumnName(parent, i, e)
+			name, err := derivedColumnName(parent, i, e)
 			if err != nil {
 				return err
 			}
 			if !isValidTypeName(e.Type) {
-				return specErrf("campo %q: extract %q: tipo %q inválido", parent, nome, e.Type)
+				return specErrf("campo %q: extract %q: tipo %q inválido", parent, name, e.Type)
 			}
 			if e.Type == "auto" {
-				return specErrf("campo %q: extract %q não pode ser auto; a coluna derivada existe para ter tipo", parent, nome)
+				return specErrf("campo %q: extract %q não pode ser auto; a coluna derivada existe para ter tipo", parent, name)
 			}
 			if _, err := CompileFormat(e.Type, e.Format); err != nil {
-				return specErrf("campo %q: extract %q: %s", parent, nome, withoutSpecPrefix(err))
+				return specErrf("campo %q: extract %q: %s", parent, name, withoutSpecPrefix(err))
 			}
-			if _, clash := fields[nome]; clash {
-				return specErrf("extract %q colide com o campo de topo de mesmo nome; escolha outro `as`", nome)
+			if _, clash := fields[name]; clash {
+				return specErrf("extract %q colide com o campo de topo de mesmo nome; escolha outro `as`", name)
 			}
-			if owner, clash := aliases[nome]; clash {
-				return specErrf("extract %q colide com o alias do campo %q; escolha outro `as`", nome, owner)
+			if owner, clash := aliases[name]; clash {
+				return specErrf("extract %q colide com o alias do campo %q; escolha outro `as`", name, owner)
 			}
-			if prev, dup := seen[nome]; dup {
-				return specErrf("extract %q declarado duas vezes (campos %q e %q)", nome, prev, parent)
+			if prev, dup := seen[name]; dup {
+				return specErrf("extract %q declarado duas vezes (campos %q e %q)", name, prev, parent)
 			}
-			seen[nome] = parent
+			seen[name] = parent
 			// A mesma validateIndex do campo de topo, e não uma segunda cópia: as
 			// duas fazem a MESMA pergunta (grafia aceita? tipo indexável?), e
 			// divergiriam no dia em que uma das duas mudasse sozinha.
-			if err := validateIndex(nome, e.Index, e.Type); err != nil {
+			if err := validateIndex(name, e.Index, e.Type); err != nil {
 				return err
 			}
 		}
@@ -619,11 +619,11 @@ func (s *DatasetSpec) DerivedColumnNames() []string {
 	var out []string
 	for _, parent := range parents {
 		for i, e := range s.Schema.Fields[parent].Extract {
-			nome, err := derivedColumnName(parent, i, e)
+			name, err := derivedColumnName(parent, i, e)
 			if err != nil {
 				continue // a validação da spec já recusou isto
 			}
-			out = append(out, nome)
+			out = append(out, name)
 		}
 	}
 	return out

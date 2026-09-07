@@ -709,7 +709,7 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 			if _, taken := c.byName[name]; taken {
 				continue
 			}
-			if _, tomado := c.byID[id]; tomado {
+			if _, taken := c.byID[id]; taken {
 				continue
 			}
 			if _, excluded := c.exclude[name]; excluded {
@@ -788,18 +788,18 @@ func (c *Compiled) registerDerived(s *DatasetSpec, dict FieldDictionary) error {
 			return fmt.Errorf("%w: campo %q declara extract e não foi compilado", ErrDerivedColumn, parentName)
 		}
 		for i, e := range s.Schema.Fields[parentName].Extract {
-			nome, err := DerivedColumnName(parentName, i, e)
+			name, err := DerivedColumnName(parentName, i, e)
 			if err != nil {
 				return err
 			}
 			typ, _ := FieldTypeByName(e.Type)
 			layout, err := CompileFormat(e.Type, e.Format)
 			if err != nil {
-				return fmt.Errorf("%w: extract %q: %w", ErrDerivedColumn, nome, err)
+				return fmt.Errorf("%w: extract %q: %w", ErrDerivedColumn, name, err)
 			}
-			id, err := dict.LookupOrCreate([]byte(nome))
+			id, err := dict.LookupOrCreate([]byte(name))
 			if err != nil {
-				return fmt.Errorf("registrando coluna derivada %q no dicionário: %w", nome, err)
+				return fmt.Errorf("registrando coluna derivada %q no dicionário: %w", name, err)
 			}
 			// Tipo já fixado no dicionário e DIVERGENTE do declarado: o ID
 			// devolvido é de outra coluna — um campo de topo autodescoberto
@@ -812,11 +812,11 @@ func (c *Compiled) registerDerived(s *DatasetSpec, dict FieldDictionary) error {
 			if t, hasHint := dict.TypeHint(id); hasHint && t != typ {
 				return fmt.Errorf("%w: %q declara tipo %s, mas o dataset já fixou %s para esse nome; "+
 					"escolha outro `as` ou recrie o dataset",
-					ErrDerivedColumn, nome, typ, t)
+					ErrDerivedColumn, name, typ, t)
 			}
 			cf := &CompiledField{
 				ID:      id,
-				Name:    nome,
+				Name:    name,
 				Type:    typ,
 				Indexed: indexedInYAML(e.Index),
 				Format:  e.Format,

@@ -227,23 +227,23 @@ func validateUsers(users []UserSpec, usersNode *yaml.Node, path string) error {
 
 	seen := make(map[string]bool, len(users))
 	for i, u := range users {
-		caminho := fmt.Sprintf("server.authentication.users[%d]", i)
+		keyPath := fmt.Sprintf("server.authentication.users[%d]", i)
 
 		if u.Username == "" {
-			return fmt.Errorf("configuração %s: %s.username é obrigatório", path, caminho)
+			return fmt.Errorf("configuração %s: %s.username é obrigatório", path, keyPath)
 		}
 		if seen[u.Username] {
-			return fmt.Errorf("configuração %s: %s.username %q duplicado entre users", path, caminho, u.Username)
+			return fmt.Errorf("configuração %s: %s.username %q duplicado entre users", path, keyPath, u.Username)
 		}
 		seen[u.Username] = true
 
 		switch {
 		case u.PasswordEnv == "" && u.PasswordFile == "":
 			return fmt.Errorf("configuração %s: %s exige exatamente um entre passwordEnv e passwordFile (nenhum declarado)",
-				path, caminho)
+				path, keyPath)
 		case u.PasswordEnv != "" && u.PasswordFile != "":
 			return fmt.Errorf("configuração %s: %s exige exatamente um entre passwordEnv e passwordFile (os dois declarados)",
-				path, caminho)
+				path, keyPath)
 		}
 
 		// Comparação de string exata, de propósito: o enum é fechado e
@@ -256,9 +256,9 @@ func validateUsers(users []UserSpec, usersNode *yaml.Node, path string) error {
 		switch u.Role {
 		case RoleRead, RoleAdmin:
 		case "":
-			return fmt.Errorf("configuração %s: %s.role é obrigatório (%s|%s)", path, caminho, RoleRead, RoleAdmin)
+			return fmt.Errorf("configuração %s: %s.role é obrigatório (%s|%s)", path, keyPath, RoleRead, RoleAdmin)
 		default:
-			return fmt.Errorf("configuração %s: %s.role %q inválido (%s|%s)", path, caminho, u.Role, RoleRead, RoleAdmin)
+			return fmt.Errorf("configuração %s: %s.role %q inválido (%s|%s)", path, keyPath, u.Role, RoleRead, RoleAdmin)
 		}
 	}
 	return nil

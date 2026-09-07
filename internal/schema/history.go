@@ -225,11 +225,11 @@ func validateHistory(n *yaml.Node, baseName string, fields map[string]FieldSpec)
 		}
 	}
 	if sn, ok := m["segmentSize"]; ok {
-		var bruto string
-		if err := decodeInto(sn, "history.segmentSize", &bruto); err != nil {
+		var raw string
+		if err := decodeInto(sn, "history.segmentSize", &raw); err != nil {
 			return nil, err
 		}
-		if h.SegmentSize, err = units.Size(bruto, 0); err != nil {
+		if h.SegmentSize, err = units.Size(raw, 0); err != nil {
 			return nil, specErrf("history.segmentSize: %s", withoutSpecPrefix(err))
 		}
 		if h.SegmentSize > segmentCeiling {
@@ -317,13 +317,13 @@ func validateWindow(n *yaml.Node) (*IndexWindowSpec, error) {
 		j.Duration = d
 	}
 	if tn, ok := m["maxBytes"]; ok {
-		var bruto string
-		if err := decodeInto(tn, "history.index.maxBytes", &bruto); err != nil {
+		var raw string
+		if err := decodeInto(tn, "history.index.maxBytes", &raw); err != nil {
 			return nil, err
 		}
 		// Mesma ambiguidade do window, e a mesma saída: um teto de zero bytes
 		// tanto pode significar "nenhum índice" quanto "sem teto".
-		b, err := units.Size(bruto, 0)
+		b, err := units.Size(raw, 0)
 		if err != nil {
 			return nil, windowErrf("history.index.maxBytes: %s — omita a chave para não limitar o índice por bytes",
 				withoutSpecPrefix(err))
@@ -404,9 +404,9 @@ func historyIndices(n *yaml.Node, fields map[string]FieldSpec) (map[string]strin
 	sort.Strings(names)
 
 	out := make(map[string]string, len(names))
-	for _, nome := range names {
-		keyPath := "history.fields." + nome
-		keys, err := block(columns[nome], keyPath, "index")
+	for _, name := range names {
+		keyPath := "history.fields." + name
+		keys, err := block(columns[name], keyPath, "index")
 		if err != nil {
 			return nil, err
 		}
@@ -418,14 +418,14 @@ func historyIndices(n *yaml.Node, fields map[string]FieldSpec) (map[string]strin
 			return nil, specErrf("%s: index é a única chave declarável aqui, e é obrigatória — "+
 				"o histórico espelha o schema base, não o redefine", keyPath)
 		}
-		typ, err := historyIndexableType(nome, fields)
+		typ, err := historyIndexableType(name, fields)
 		if err != nil {
 			return nil, err
 		}
 		if err := validateIndex(keyPath, idx, typ); err != nil {
 			return nil, err
 		}
-		out[nome] = idx
+		out[name] = idx
 	}
 	return out, nil
 }
@@ -694,7 +694,7 @@ func (c *Compiled) adoptDiscovered(orig *CompiledField) {
 	if _, taken := c.byName[orig.Name]; taken {
 		return
 	}
-	if _, tomado := c.byID[orig.ID]; tomado {
+	if _, taken := c.byID[orig.ID]; taken {
 		return
 	}
 	cf := &CompiledField{

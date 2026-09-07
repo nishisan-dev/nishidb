@@ -205,11 +205,11 @@ func declaredColumns(fields map[string]FieldSpec) (map[string]string, error) {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	for _, nome := range names {
-		f := fields[nome]
-		out[nome] = f.Type
+	for _, name := range names {
+		f := fields[name]
+		out[name] = f.Type
 		for i, e := range f.Extract {
-			column, err := derivedColumnName(nome, i, e)
+			column, err := derivedColumnName(name, i, e)
 			if err != nil {
 				return nil, err
 			}

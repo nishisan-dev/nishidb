@@ -220,7 +220,7 @@ func TestDerivaHistoricoNaoTemColunasCongeladas(t *testing.T) {
 	if _, has := h.Schema.Fields["originalSeverity"]; has {
 		t.Fatal("a congelada sobreviveu à derivação")
 	}
-	if _, tem := h.Schema.Fields["severity"]; !tem {
+	if _, has := h.Schema.Fields["severity"]; !has {
 		t.Fatal("a ORIGEM da congelada foi removida junto")
 	}
 }
@@ -251,8 +251,8 @@ func TestDerivaHistoricoAcrescentaRawQuandoPedido(t *testing.T) {
 		t.Errorf("%s apareceu sem rawPayload", RawFieldName)
 	}
 	withRaw := specWithHistory(t, "history:\n  expireAfterWrite: 7d\n  rawPayload: true\n").DeriveHistory()
-	f, tem := withRaw.Schema.Fields[RawFieldName]
-	if !tem {
+	f, has := withRaw.Schema.Fields[RawFieldName]
+	if !has {
 		t.Fatalf("%s não foi acrescentado", RawFieldName)
 	}
 	if f.Type != "json" {
@@ -595,18 +595,18 @@ func TestNenhumLadoDoParAdotaAsColunasDoOutro(t *testing.T) {
 		t.Errorf("o dataset base adotou %s do dicionário", RawFieldName)
 	}
 	// O prazo por linha e a congelada são do base.
-	if _, tem := hist.FieldByName([]byte(TTLFieldName)); tem {
+	if _, has := hist.FieldByName([]byte(TTLFieldName)); has {
 		t.Errorf("o histórico adotou %s do dicionário", TTLFieldName)
 	}
-	if _, tem := hist.FieldByName([]byte("originalSeverity")); tem {
+	if _, has := hist.FieldByName([]byte("originalSeverity")); has {
 		t.Error("o histórico adotou a congelada do dicionário")
 	}
 	// E o que é dos dois continua nos dois.
 	for _, name := range []string{"identifier", "severity", WriteInstantFieldName} {
-		if _, tem := base.FieldByName([]byte(name)); !tem {
+		if _, has := base.FieldByName([]byte(name)); !has {
 			t.Errorf("o base perdeu %q", name)
 		}
-		if _, tem := hist.FieldByName([]byte(name)); !tem {
+		if _, has := hist.FieldByName([]byte(name)); !has {
 			t.Errorf("o histórico perdeu %q", name)
 		}
 	}
