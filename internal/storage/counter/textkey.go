@@ -24,7 +24,7 @@ import (
 // dst e scratch são do chamador e os retornos têm de ser reatribuídos: a
 // função roda a cada grupo NOVO no writer e a cada linha na tabela virtual.
 func TextoDaChave(dst []byte, chave []byte, scratch []types.Value) ([]byte, []types.Value, error) {
-	vals, err := valuekey.DecodeComposta(chave, scratch[:0])
+	vals, err := valuekey.DecodeComposite(chave, scratch[:0])
 	if err != nil {
 		return dst, vals, err
 	}

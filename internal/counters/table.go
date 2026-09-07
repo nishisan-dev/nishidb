@@ -216,7 +216,7 @@ func (f *fonte) record(row types.RowID, chave, texto []byte, total int64, buf []
 	n++
 	pares[n] = par{f.idTotal, types.Value{Type: types.TypeInt64, I64: total}}
 	n++
-	err := valuekey.PercorreComposta(chave, func(i int, v types.Value) error {
+	err := valuekey.WalkComposite(chave, func(i int, v types.Value) error {
 		if i >= len(f.colunas) {
 			return fmt.Errorf("contadores: a chave do grupo %d tem mais componentes que o groupBy", row)
 		}

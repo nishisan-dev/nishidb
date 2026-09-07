@@ -331,7 +331,7 @@ func (d *Derivador) Deriva(payload []byte) (chave []byte, cond, temGrupo bool, e
 	if d.achados != len(d.ids) {
 		return nil, false, false, nil
 	}
-	d.chaveBuf, err = valuekey.AppendComposta(d.chaveBuf[:0], d.vals)
+	d.chaveBuf, err = valuekey.AppendComposite(d.chaveBuf[:0], d.vals)
 	if err != nil {
 		return nil, false, false, err
 	}

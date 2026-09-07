@@ -192,7 +192,7 @@ por mensagem) foi refutada na proposta porque Kafka entrega pelo menos uma vez e
 |---|---|
 | `internal/storage/mmap/region.go` | `AtomicLoad32`/`AtomicStore32` (único pacote com unsafe) |
 | `internal/storage/rowindex/rowindex.go` | `denseFile` com tamanho de entrada parametrizado; `Denso32` exportado |
-| `internal/index/valuekey/valuekey.go` | `AppendComposta`/`DecodeComposta` + golden |
+| `internal/index/valuekey/valuekey.go` | `AppendComposite`/`DecodeComposite` + golden |
 | `internal/predicate/evaluator.go` (novo) | `AvaliadorDePayload`: programa + slots + reader, `Avalia(payload)` |
 | `internal/predicate/rule.go` | `CompilaCondicao` extraída de `CompilaRegras` |
 | `internal/storage/counter/` (novo) | `dict.go`, `counter.go`, `textkey.go`, `audit.go`, `retirement.go` + testes |
@@ -310,12 +310,12 @@ git commit -m "rowindex: vetor denso de 4 bytes por linha (Denso32) e atômicos 
 
 **Interfaces produzidas:**
 ```go
-// AppendComposta grava, para cada componente, `u16 LE tamanho | chave simples`.
+// AppendComposite grava, para cada componente, `u16 LE tamanho | chave simples`.
 // dst é do chamador e o retorno tem de ser reatribuído (mesmo contrato do Append).
-func AppendComposta(dst []byte, vs []types.Value) ([]byte, error)
-// DecodeComposta decodifica em dst (reusado) os componentes; os Bytes das strings
+func AppendComposite(dst []byte, vs []types.Value) ([]byte, error)
+// DecodeComposite decodifica em dst (reusado) os componentes; os Bytes das strings
 // apontam para dentro de chave (zero-copy).
-func DecodeComposta(chave []byte, dst []types.Value) ([]types.Value, error)
+func DecodeComposite(chave []byte, dst []types.Value) ([]types.Value, error)
 ```
 
 - [ ] **Passo 1: golden de bytes** — em `TestChaveCanonicaEhGoldenDeDisco` adicionar uma tabela irmã `TestChaveCompostaEhGoldenDeDisco` com hex literal:
@@ -327,7 +327,7 @@ func DecodeComposta(chave []byte, dst []types.Value) ([]types.Value, error)
 ```
 (sem espaços no literal; `str`/`i64` são helpers do teste). Mais `TestDecodeCompostaDesfazOAppend` (round-trip para string/int64/bool) e `TestAppendCompostaRespeitaOBufferDoChamador` (ponteiro e cap iguais, como o existente).
 
-- [ ] **Passo 2: vermelho → implementar → verde.** `AppendComposta` chama `Append` por componente num scratch interno? NÃO: para não alocar, grava o prefixo de 2 bytes como placeholder, chama `Append(dst, v)`, e volta para preencher o tamanho. `DecodeComposta` lê `[tipo]` e decide: int64/bool → 8 bytes LE em `I64`; string → resto do componente em `Bytes`.
+- [ ] **Passo 2: vermelho → implementar → verde.** `AppendComposite` chama `Append` por componente num scratch interno? NÃO: para não alocar, grava o prefixo de 2 bytes como placeholder, chama `Append(dst, v)`, e volta para preencher o tamanho. `DecodeComposite` lê `[tipo]` e decide: int64/bool → 8 bytes LE em `I64`; string → resto do componente em `Bytes`.
 
 - [ ] **Passo 3: commit** — `valuekey: chave composta com prefixo de tamanho por componente, golden de disco`.
 
@@ -498,7 +498,7 @@ UMA vez, por merge linear contra `colunasOrdenadas` (cópia ordenada de
 `Colunas` com o índice de volta à ordem declarada), preenchendo
 `c.valores []types.Value` (scratch do writer) e marcando presença; qualquer
 coluna ausente ⇒ `SemGrupo` (a proposta §6.3: entidade sem a coluna não é
-contada). Presentes todas: `valuekey.AppendComposta(c.chaveBuf[:0], c.valores)`,
+contada). Presentes todas: `valuekey.AppendComposite(c.chaveBuf[:0], c.valores)`,
 `c.chaveBuf = chave`, `id, err := c.dict.Interna(chave)`; `ErrTetoDeGrupos` ⇒
 `SemGrupo` + `recusados.Add(1)` + WARN uma vez. Condição: `c.avaliador.Avalia(payload)`
 (nil ⇒ true). Delta:
@@ -866,7 +866,7 @@ Fonte (`query.Store`): `AbreSnapshot()` devolve `types.Snapshot{LimitRowID: l.Li
 ficam zero e são ignorados pela fonte — godoc no molde do `meta.fonte.AbreSnapshot`);
 `ScanLive(snap)` itera `1..LimitRowID-1`, pulando `vivo == false`;
 `GetByRowID(snap, id, buf)` codifica: `groupKey` (texto), as colunas (por
-`valuekey.DecodeComposta` da chave, zero-copy), `total`. **Zero alocação por
+`valuekey.DecodeComposite` da chave, zero-copy), `total`. **Zero alocação por
 linha**: o texto e a chave vêm do dicionário (memória estável), o payload é
 montado em `buf[:0]` com `encoding.AppendField` em ordem de FieldID;
 `GetByKey(snap, key, buf)` ⇒ `PorTexto(key)` ⇒ mesmo `record`. `Indexado` false;
