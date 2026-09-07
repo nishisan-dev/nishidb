@@ -12,17 +12,17 @@ import (
 // Ela precisa ser determinística e independente de COMO o usuário escreveu a
 // query: o nome impresso é sempre o original, nunca o alias.
 func TestPlanString(t *testing.T) {
-	c := compilar(t)
-	status := campo(t, c, "Acct-Status-Type")
-	protocol := campo(t, c, "Framed-Protocol")
-	nasIP := campo(t, c, "NAS-IP-Address")
-	id := campo(t, c, "id")
-	octets := campo(t, c, "Acct-Input-Octets")
-	quando := campo(t, c, "Event-Timestamp")
-	prefixo := campo(t, c, "Framed-IPv6-Prefix")
+	c := compile(t)
+	status := field(t, c, "Acct-Status-Type")
+	protocol := field(t, c, "Framed-Protocol")
+	nasIP := field(t, c, "NAS-IP-Address")
+	id := field(t, c, "id")
+	octets := field(t, c, "Acct-Input-Octets")
+	when := field(t, c, "Event-Timestamp")
+	prefix := field(t, c, "Framed-IPv6-Prefix")
 
-	casos := []struct {
-		nome string
+	cases := []struct {
+		name string
 		plan planner.Plan
 		want string
 	}{
@@ -37,7 +37,7 @@ func TestPlanString(t *testing.T) {
 			`IndexScan(Acct-Status-Type="Stop")`},
 		{"int64", &planner.IndexScanPlan{Field: octets, Val: i64(4096)},
 			"IndexScan(Acct-Input-Octets=4096)"},
-		{"timestamp", &planner.IndexScanPlan{Field: quando, Val: types.Value{Type: types.TypeTimestamp, I64: 1723500000000}},
+		{"timestamp", &planner.IndexScanPlan{Field: when, Val: types.Value{Type: types.TypeTimestamp, I64: 1723500000000}},
 			"IndexScan(Event-Timestamp=1723500000000)"},
 		{"double", &planner.IndexScanPlan{Field: octets,
 			Val: types.Value{Type: types.TypeDouble, I64: int64(math.Float64bits(10.5))}},
@@ -46,7 +46,7 @@ func TestPlanString(t *testing.T) {
 			"IndexScan(Acct-Input-Octets=true)"},
 		{"bool falso", &planner.IndexScanPlan{Field: octets, Val: types.Value{Type: types.TypeBool}},
 			"IndexScan(Acct-Input-Octets=false)"},
-		{"prefixo em hex", &planner.IndexScanPlan{Field: prefixo,
+		{"prefixo em hex", &planner.IndexScanPlan{Field: prefix,
 			Val: types.Value{Type: types.TypeIPv6Prefix, Bytes: []byte{0x40, 0x20, 0x01, 0x0d, 0xb8}}},
 			"IndexScan(Framed-IPv6-Prefix=0x4020010db8)"},
 		{"interseção preserva a ordem dos termos", &planner.IndexIntersectPlan{Terms: []planner.IndexTerm{
@@ -60,8 +60,8 @@ func TestPlanString(t *testing.T) {
 			{Field: nasIP, Val: ipv4(t, "10.0.0.1")},
 		}}, `IndexUnion(Acct-Status-Type="Stop", NAS-IP-Address=0x0a000001)`},
 	}
-	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			if got := tc.plan.String(); got != tc.want {
 				t.Errorf("String() = %s, want %s", got, tc.want)
 			}
@@ -72,15 +72,15 @@ func TestPlanString(t *testing.T) {
 // A query escrita com ALIAS produz a MESMA string da escrita com o nome
 // original: o plano fala em campos, não em como o usuário os chamou.
 func TestPlanStringUsaNomeOriginalENaoAlias(t *testing.T) {
-	p, c, _ := novo(t)
-	porAlias := planeja(t, p, eq(campo(t, c, "status"), str("Stop")))
-	porNome := planeja(t, p, eq(campo(t, c, "Acct-Status-Type"), str("Stop")))
+	p, c, _ := newPlannerAndMetrics(t)
+	byAlias := mustPlan(t, p, eq(field(t, c, "status"), str("Stop")))
+	byName := mustPlan(t, p, eq(field(t, c, "Acct-Status-Type"), str("Stop")))
 
-	if porAlias.String() != porNome.String() {
-		t.Errorf("alias = %s, nome = %s: deveriam ser iguais", porAlias, porNome)
+	if byAlias.String() != byName.String() {
+		t.Errorf("alias = %s, nome = %s: deveriam ser iguais", byAlias, byName)
 	}
-	if porAlias.String() != `IndexScan(Acct-Status-Type="Stop")` {
-		t.Errorf("String() = %s, want o nome original", porAlias)
+	if byAlias.String() != `IndexScan(Acct-Status-Type="Stop")` {
+		t.Errorf("String() = %s, want o nome original", byAlias)
 	}
 }
 
@@ -90,12 +90,12 @@ func TestPlanStringUsaNomeOriginalENaoAlias(t *testing.T) {
 func TestPlanStringNaoQuebraComCampoNil(t *testing.T) {
 	// Eram quatro entradas: o BitmapScanPlan e o HashIndexPlan viraram a MESMA
 	// forma de plano, e listar IndexScanPlan duas vezes não acrescenta caso.
-	planos := []planner.Plan{
+	plans := []planner.Plan{
 		&planner.IndexScanPlan{Val: str("Stop")},
 		&planner.PointLookupPlan{Key: str("A")},
 		&planner.IndexUnionPlan{Terms: []planner.IndexTerm{{Val: str("a")}, {Val: str("b")}}},
 	}
-	for _, pl := range planos {
+	for _, pl := range plans {
 		if s := pl.String(); s == "" {
 			t.Errorf("%T devolveu string vazia", pl)
 		}
@@ -108,10 +108,10 @@ func TestFullScanEhSingleton(t *testing.T) {
 	if planner.FullScan() != planner.FullScan() {
 		t.Error("FullScan() devolveu instâncias diferentes")
 	}
-	p, c, _ := novo(t)
-	semWhere := p.Plan(consulta(nil))
-	degradado := planeja(t, p, eq(campo(t, c, "username"), str("ze")))
-	if semWhere != planner.FullScan() || degradado != planner.FullScan() {
+	p, c, _ := newPlannerAndMetrics(t)
+	withoutWhere := p.Plan(query(nil))
+	degraded := mustPlan(t, p, eq(field(t, c, "username"), str("ze")))
+	if withoutWhere != planner.FullScan() || degraded != planner.FullScan() {
 		t.Error("Plan não devolveu o singleton nos caminhos de FullScan")
 	}
 }
