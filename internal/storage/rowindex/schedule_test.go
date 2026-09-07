@@ -339,7 +339,8 @@ func TestSubidaMantemAInvarianteAPOSCADAEscrita(t *testing.T) {
 // nível, lendo scheduleB filhos em cada um.
 //
 // MUTAÇÃO QUE ESTE TESTE PEGA: remover a condição de parada do recompute
-// (`ordem(atual) < ordem(anterior)`) ou o corte por `novo == atual`.
+// (`orderKey(current) < orderKey(prev)`) ou o corte por
+// `recomputed == current`.
 func TestRenovacaoNaoRecomputaAArvoreInteira(t *testing.T) {
 	a := openSchedule(t, 1<<13)
 	r := rand.New(rand.NewPCG(3, 5))

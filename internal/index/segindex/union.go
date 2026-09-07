@@ -53,7 +53,7 @@ func Union(sources []Source) types.RowIDIterator {
 }
 
 // disjoint exige separação ESTRITA entre faixas CONSECUTIVAS (já ordenadas
-// por MinRowID). Faixas que se TOCAM num rowId comum não são disjoint:
+// por MinRowID). Faixas que se TOCAM num rowId comum não são disjuntas:
 // concatená-las emitiria esse rowId duas vezes, e o contrato do iterador é
 // ESTRITAMENTE crescente — é o que o unionIter do executor conta como
 // premissa para um OR sobre índices.
@@ -75,7 +75,7 @@ func (emptyIter) RowID() types.RowID { return 0 }
 func (emptyIter) Err() error         { return nil }
 func (emptyIter) Close() error       { return nil }
 
-// concatIter percorre as fontes em sequência, aproveitando que disjuntas() já
+// concatIter percorre as fontes em sequência, aproveitando que disjoint() já
 // provou que suas faixas não se sobrepõem: não há necessidade de comparar
 // RowIDs entre fontes, e a ordem ascendente cai de graça da ordenação por
 // MinRowID feita em Union. Zero comparações por linha é a razão de existir
@@ -188,7 +188,7 @@ func (m *mergeIter) Err() error         { return m.err }
 
 // Close fecha TODAS as fontes de entrada, tanto as que ainda estavam no heap
 // quanto as já removidas dele por esgotamento — o heap só guarda o que resta
-// avançar, m.fontes é quem sabe a lista completa.
+// avançar, m.sources é quem sabe a lista completa.
 func (m *mergeIter) Close() error {
 	var first error
 	for _, f := range m.sources {

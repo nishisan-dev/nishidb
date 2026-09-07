@@ -106,21 +106,22 @@ const (
 // lugar nenhum; nenhuma palavra publicada salva um leitor disso. O lock existe
 // pela MESMA razão que existia no motor global que este pacote substituiu —
 // proteger a região mapeada e a contagem de slots contra o swap da
-// reconstrução —, e o lugar dele é aqui: o Union da união é combinador puro sobre
-// Fontes já abertas e não tem referência ao writer, e a fonte que lê o WIP numa
-// consulta só poderia se serializar pelo wmu — o que serializaria consulta
-// contra ingestão, que é exatamente o que este ciclo existe para evitar, além
-// de violar a ordem de locks vida → wmu → aposMu.
+// reconstrução —, e o lugar dele é aqui: o Union da união é combinador puro
+// sobre Sources já abertas e não tem referência ao writer, e a fonte que lê o
+// WIP numa consulta só poderia se serializar pelo wmu — o que serializaria
+// consulta contra ingestão, que é exatamente o que este ciclo existe para
+// evitar, além de violar a ordem de locks vida → wmu → aposMu.
 //
 // O custo DESTE lock é um par RLock/RUnlock por Set e por Lookup, e ele é
 // ruído. O que ele NÃO elimina — e o texto anterior afirmava que sim — é o par
-// interno do mmap.Region, que cada acesso ao mapeamento (w.le, AtomicStore64)
-// continua pagando: a alternativa (a) do débito 102 NÃO está aplicada aqui. O
-// que matou o custo medido no piloto foi outra coisa: o NÚMERO de acessos por
-// operação caiu por desenho — a sondagem é sobre valores DISTINTOS (1-2
-// acessos) e a caminhada é só sobre as postings do valor —, então o par por
-// acesso, que antes era pago centenas de milhares de vezes por Set, é pago um
-// punhado de vezes. O débito 102 segue aberto para o custo por acesso.
+// interno do mmap.Region, que cada acesso ao mapeamento (w.countedRead,
+// AtomicStore64) continua pagando: a alternativa (a) do débito 102 NÃO está
+// aplicada aqui. O que matou o custo medido no piloto foi outra coisa: o
+// NÚMERO de acessos por operação caiu por desenho — a sondagem é sobre valores
+// DISTINTOS (1-2 acessos) e a caminhada é só sobre as postings do valor —,
+// então o par por acesso, que antes era pago centenas de milhares de vezes por
+// Set, é pago um punhado de vezes. O débito 102 segue aberto para o custo por
+// acesso.
 //
 // O que este lock NÃO promete é atomicidade entre operações: dois Set
 // concorrentes continuam proibidos (o writer é único), e um Lookup que corra
@@ -132,10 +133,10 @@ type WIP struct {
 	mu   sync.RWMutex
 	reg  *mmap.Region
 	path string
-	// postBase é o offset da primeira posting: WIPHeaderSize + dirSlots*WIPSlotSize.
-	// Ele MUDA quando o diretório dobra, e é por isso que o rehash tem de
-	// deslocar o array de postings — o que ele nunca faz é renumerá-las, porque
-	// o que a cadeia guarda é o índice, não o endereço.
+	// postBase é o offset da primeira posting: WIPHeaderSize +
+	// dirSlots*WIPSlotSize. Ele MUDA quando o diretório dobra, e é por isso que
+	// o rehash tem de deslocar o array de postings — o que ele nunca faz é
+	// renumerá-las, porque o que a cadeia guarda é o índice, não o endereço.
 	postBase int64
 	field    types.FieldID
 	dirSlots uint32
@@ -149,17 +150,17 @@ type WIP struct {
 	// escrevendo fora do arquivo. Mesma razão de o formato selado não ter
 	// minRowID (format.go).
 	postCap uint32
-	// distinctValues é recontado na abertura varrendo o diretório, pela mesma razão:
-	// ele é DERIVÁVEL dos slots ocupados, e gravá-lo seria a chance de o
+	// distinctValues é recontado na abertura varrendo o diretório, pela mesma
+	// razão: ele é DERIVÁVEL dos slots ocupados, e gravá-lo seria a chance de o
 	// arquivo dizer uma coisa e o diretório outra.
 	distinctValues uint32
-	// accesses conta os ACESSOS AO MAPEAMENTO do último Set — não só as accesses
+	// accesses conta os ACESSOS AO MAPEAMENTO do último Set — não só as sondas
 	// de diretório. Existe para o gate de custo (export_test.go) e é escrito só
 	// pelo writer: o caminho de leitura não pode tocá-lo, senão o contador
 	// vira corrida de dados.
 	accesses int
 	// closed marca que o mapeamento já foi desmontado. É o mesmo papel do
-	// `dados == nil` de Sealed, num campo atômico porque aqui há leitores
+	// `data == nil` de Sealed, num campo atômico porque aqui há leitores
 	// concorrentes de verdade.
 	closed atomic.Bool
 }
@@ -433,8 +434,9 @@ func (w *WIP) Field() types.FieldID { return w.field }
 // o Lookup (e o Writer, na selagem) quem compacta.
 func (w *WIP) Postings() uint32 { return w.postCount.Load() }
 
-// DistinctValues devolve quantos valores distintos ocupam o diretório. É a carga
-// que dimensiona a sondagem — e, portanto, o número que explica o custo do Set.
+// DistinctValues devolve quantos valores distintos ocupam o diretório. É a
+// carga que dimensiona a sondagem — e, portanto, o número que explica o custo
+// do Set.
 //
 // Acessor do lado do WRITER, ao contrário de Postings: o contador de distintos
 // é um uint32 comum, escrito pelo Set sob lock compartilhado, então lê-lo de
@@ -480,7 +482,7 @@ func (w *WIP) Set(h uint64, row types.RowID) error {
 	}
 	// O RLock entra DEPOIS do crescimento, e não pode entrar antes: o
 	// crescimento toma o mesmo mu em modo exclusivo, e o RWMutex do Go não é
-	// reentrante. postCount e sondas são escritos aqui sob lock COMPARTILHADO,
+	// reentrante. postCount e accesses são escritos aqui sob lock COMPARTILHADO,
 	// e isso é correto porque o writer é único — o que o mu serializa é o
 	// layout (dirSlots, postBase e os bytes que o rehash desloca), não o
 	// contador de quem já é dono exclusivo da escrita.
@@ -488,7 +490,7 @@ func (w *WIP) Set(h uint64, row types.RowID) error {
 	defer w.mu.RUnlock()
 
 	w.accesses = 0             // o contador do gate de custo cobre o Set INTEIRO
-	slot := w.probeOrCreate(h) // conta os acessos em w.sondas
+	slot := w.probeOrCreate(h) // conta os acessos em w.accesses
 	idx := w.postCount.Load()  // 0-based; publicado como idx+1
 	off := w.postOff(idx)
 	state := w.countedRead(w.slotOff(slot) + 8)
@@ -530,8 +532,8 @@ func (w *WIP) Set(h uint64, row types.RowID) error {
 // acréscimo aparece aqui obrigatoriamente. Um contador que só soubesse de slots
 // veria 1 sonda e aprovaria a regressão.
 //
-// Só o CAMINHO DE ESCRITA pode usar este método: w.sondas é um int comum, e um
-// leitor concorrente que o incrementasse criaria a corrida de dados que o mu
+// Só o CAMINHO DE ESCRITA pode usar este método: w.accesses é um int comum, e
+// um leitor concorrente que o incrementasse criaria a corrida de dados que o mu
 // existe para não ter. O Lookup e o ForEach leem o mapeamento direto, de
 // propósito — e TestOCaminhoDeEscritaLeOMapeamentoSoPeloContador confere que a
 // recíproca também vale, para que o contador seja completo por construção.
@@ -595,7 +597,7 @@ func (w *WIP) Lookup(h uint64) []types.RowID {
 // ForEach varre TODAS as postings do WIP, uma vez cada.
 //
 // É o que a selagem consome para alimentar o Writer, e ela NÃO entrega nada
-// ordenado de propósito: o Writer já ordena por (campo, hash, row) e
+// ordenado de propósito: o Writer já ordena por (field, hash, row) e
 // deduplica na construção do arquivo selado. Ordenar aqui seria a MESMA
 // ordenação em dois lugares, e duas implementações do mesmo critério divergem
 // na primeira vez que o critério muda.
@@ -654,8 +656,9 @@ func (w *WIP) find(h uint64) (uint32, bool) {
 }
 
 // probeOrCreate devolve o slot do hash, ocupando um vazio se ele ainda não
-// estiver no diretório. O que sobe em w.sondas são os ACESSOS AO MAPEAMENTO
-// (via w.le), não os slots examinados — é a unidade que o gate de custo mede.
+// estiver no diretório. O que sobe em w.accesses são os ACESSOS AO MAPEAMENTO
+// (via w.countedRead), não os slots examinados — é a unidade que o gate de
+// custo mede.
 //
 // O hash é publicado ANTES de qualquer estado, e o slot recém-ocupado tem
 // estado zero — um leitor que enxergue o hash novo lê contagem 0 e devolve
@@ -911,8 +914,8 @@ func (w *WIP) requireOpen(op string) {
 // Close. A assimetria é deliberada e tem um consumidor concreto: a selagem
 // fecha o .widx e o apaga em seguida, e um Remove que recusasse região já
 // fechada devolveria a ela o erro de "descritor já fechado" — que ela leria
-// como falha de uma selagem que deu certo. Close depois de Remove, ao contrário,
-// é uso após o fim e entra em pânico nomeado como qualquer outro.
+// como falha de uma selagem que deu certo. Close depois de Remove, ao
+// contrário, é uso após o fim e entra em pânico nomeado como qualquer outro.
 //
 // Arquivo já ausente não é erro: a selagem e a limpeza de órfãos do Open podem
 // correr sobre um resto de uma execução anterior, e o estado desejado — não

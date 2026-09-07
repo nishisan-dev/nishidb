@@ -79,7 +79,7 @@ type Area struct {
 	openRuns     []*Run
 }
 
-// NewArea prepara o espaço. orcamento <= 0 significa SEM TETO de disco.
+// NewArea prepara o espaço. ceiling <= 0 significa SEM TETO de disco.
 func NewArea(datasetDir string, ceiling int64) (*Area, error) {
 	dir := filepath.Join(datasetDir, DirName)
 	if err := os.MkdirAll(dir, 0o755); err != nil {

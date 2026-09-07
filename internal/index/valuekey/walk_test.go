@@ -23,7 +23,7 @@ func TestPercorreCompostaVisitaEmOrdemSemAlocar(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(visited) != 3 || string(visited[0].Bytes) != "A" || visited[1].I64 != 1 || visited[2].Type != types.TypeBool {
-		t.Fatalf("vistos = %+v", visited)
+		t.Fatalf("visited = %+v", visited)
 	}
 	// Erro do visitante interrompe e sobe.
 	sentinel := errors.New("pare")

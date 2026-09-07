@@ -26,7 +26,7 @@ func TestCadeiaLongaDeAndEhLegal(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%d termos: %v", n, err)
 		}
-		// A árvore é left-leaning: height n-1, espinha à esquerda. É o formato
+		// A árvore é left-leaning: altura n-1, espinha à esquerda. É o formato
 		// que o flatten do planner assume.
 		height, e := 0, st.Where
 		for {

@@ -52,7 +52,7 @@ func testHash(buf []byte, i int) uint64 {
 // percorresse a cadeia de postings antes de inserir, para não duplicar. Essa
 // caminhada não tem como acontecer sem ler o mapeamento, e por isso aparece
 // aqui. TestOCaminhoDeEscritaLeOMapeamentoSoPeloContador é o que garante que
-// ela não possa se esconder de w.le.
+// ela não possa se esconder de w.countedRead.
 //
 // O teto é sobre o PIOR caso, e não sobre a média, porque aqui o custo tem de
 // ser constante: são duas leituras — o slot e o estado dele — em qualquer n.
@@ -147,20 +147,22 @@ func TestOCustoDaSondagemNaoAcompanhaONumeroDeValoresDistintos(t *testing.T) {
 // TestOCaminhoDeEscritaLeOMapeamentoSoPeloContador é o que torna os dois gates
 // acima verdadeiros em vez de aspiracionais.
 //
-// Eles medem w.sondas, que só sobe dentro de w.le. Um Set que lesse o
-// mapeamento por outro caminho — e a regressão que interessa, a caminhada da
-// cadeia de postings para deduplicar, é exatamente isso — não apareceria em
-// contador nenhum, e os dois gates passariam verdes sobre o O(n²) de volta.
+// Eles medem w.accesses, que só sobe dentro de w.countedRead. Um Set que
+// lesse o mapeamento por outro caminho — e a regressão que interessa, a
+// caminhada da cadeia de postings para deduplicar, é exatamente isso — não
+// apareceria em contador nenhum, e os dois gates passariam verdes sobre o
+// O(n²) de volta.
 //
 // A conferência é sobre o CÓDIGO, e não sobre o comportamento, porque não há
 // como observar "leu o mapeamento sem contar" de fora. É o mesmo idioma dos
 // gates que leem o Makefile e os manifestos como dado: config e código são
 // lidos como estrutura, nunca por grep em prosa — daí o parser em vez de uma
-// busca textual, que casaria com comentários e com o próprio corpo de le.
+// busca textual, que casaria com comentários e com o próprio corpo de
+// countedRead.
 //
 // O caminho de LEITURA faz o contrário de propósito: Lookup e ForEach leem o
-// mapeamento direto porque w.sondas é um int comum, e um leitor concorrente que
-// o incrementasse criaria a corrida de dados que o mu existe para não ter.
+// mapeamento direto porque w.accesses é um int comum, e um leitor concorrente
+// que o incrementasse criaria a corrida de dados que o mu existe para não ter.
 func TestOCaminhoDeEscritaLeOMapeamentoSoPeloContador(t *testing.T) {
 	const file = "wip.go"
 	fset := token.NewFileSet()

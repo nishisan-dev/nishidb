@@ -9,8 +9,8 @@
 //
 // O registry é PULL. Os contadores que já existem no projeto (materializer,
 // executor, planner, Store.Stats) NÃO são copiados para cá: são lidos na hora
-// do scrape, por um Collector. Copiar o estado criaria um segundo contador com o
-// mesmo nome de spec, e o próprio código já registra que isso é bug de
+// do scrape, por um Collector. Copiar o estado criaria um segundo contador
+// com o mesmo nome de spec, e o próprio código já registra que isso é bug de
 // observabilidade — em produção alguém lê o errado.
 //
 // Registry é seguro para uso concorrente. A ordem de emissão é estável entre
@@ -152,9 +152,9 @@ func (r *Registry) Gauge(name, help string, labels ...string) *GaugeFamily {
 	})
 }
 
-// Histogram registra (ou recupera) uma família de histogramas. limites são
-// os limites superiores dos buckets, em ordem crescente; o bucket +Inf é
-// acrescentado sozinho.
+// Histogram registra (ou recupera) uma família de histogramas. buckets são
+// os limites superiores, em ordem crescente; o bucket +Inf é acrescentado
+// sozinho.
 func (r *Registry) Histogram(name, help string, buckets []float64, labels ...string) *HistogramFamily {
 	return register(r, name, func() *HistogramFamily {
 		bucketsCopy := make([]float64, len(buckets))
@@ -403,7 +403,8 @@ func (s *HistogramSeries) Observe(v float64) {
 	s.total++
 }
 
-// Collect implementa Collector. Os buckets são CUMULATIVOS, como o formato exige.
+// Collect implementa Collector. Os buckets são CUMULATIVOS, como o formato
+// exige.
 func (f *HistogramFamily) Collect() []Sample {
 	f.mu.RLock()
 	defer f.mu.RUnlock()

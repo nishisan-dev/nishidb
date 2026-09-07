@@ -82,7 +82,7 @@ func TestAgendaNaoAlocaNoCaminhoQuente(t *testing.T) {
 	})
 
 	t.Run("varredura dos vencidos", func(t *testing.T) {
-		// `ate` fica logo acima do minExpiry vencimento: a descida encontra
+		// `cutoff` fica logo acima do menor vencimento: a descida encontra
 		// poucas linhas, que é o formato da passada real do coletor.
 		minExpiry, ok := a.NextExpiry()
 		if !ok {

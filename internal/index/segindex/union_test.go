@@ -296,7 +296,7 @@ func TestConcatIterCloseFechaTodasAsFontesInclusiveAsNaoConsumidas(t *testing.T)
 	// linha) — o suficiente para o cursor da concatenação já ter avançado
 	// PARA ALÉM de f1, que esgotou sozinha mas nunca foi fechada
 	// individualmente. f3 fica sem ser tocada. Se Close fechasse só
-	// `fontes[idx:]` (o que sobrou À FRENTE do cursor), f1 escaparia — ela já
+	// `sources[idx:]` (o que sobrou À FRENTE do cursor), f1 escaparia — ela já
 	// não está mais "à frente" depois de esgotar, mas também não foi fechada
 	// por ninguém até aqui.
 	for i, want := range []types.RowID{10, 20, 30} {

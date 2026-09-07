@@ -87,7 +87,7 @@ func TestPayloadValeSoAteAChamadaSeguinte(t *testing.T) {
 	_, p1, _, _ := l.Next()
 	retained := p1
 	_, _, _, _ = l.Next()
-	// Não afirma QUAL valor `retido` tem — afirma que reter é errado, e o
+	// Não afirma QUAL valor `retained` tem — afirma que reter é errado, e o
 	// oráculo é o valor ter mudado sob os pés de quem reteve.
 	if string(retained[len(retained)-8:]) == "primeiro" {
 		t.Skip("o buffer não foi reusado nesta execução; a armadilha continua real")

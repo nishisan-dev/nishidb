@@ -68,8 +68,8 @@ type sealedSection struct {
 // Ela cobre a Source DEPOIS que o Lookup retornou: o Close espera a última sair
 // antes do munmap, e por isso uma varredura em voo nunca lê memória desmapeada.
 //
-// Ela NÃO torna o Lookup seguro contra um Close CONCORRENTE. Com vidas == 0 o
-// Close desmonta na hora e zera `dados`; um Lookup que entrasse depois disso
+// Ela NÃO torna o Lookup seguro contra um Close CONCORRENTE. Com refs == 0 o
+// Close desmonta na hora e zera `data`; um Lookup que entrasse depois disso
 // tomaria o pânico do requireOpen, e não um ok=false. Quem chama o Lookup tem de
 // garantir, por conta própria, que ele não corre com o Close — no Store isso é o
 // selMu, que a aposentadoria toma para fechar. Esta é a fronteira que um segundo
@@ -95,7 +95,7 @@ type Sealed struct {
 	once         sync.Once
 	integrityErr error
 
-	// vidas conta as Fontes que ainda podem ler o mapeamento, e existe para que
+	// refs conta as Sources que ainda podem ler o mapeamento, e existe para que
 	// o munmap nunca aconteça sob os pés de uma varredura.
 	//
 	// NÃO É PROTEÇÃO CONTRA DESCUIDO: é o único desfecho seguro de uma corrida
@@ -220,7 +220,7 @@ func readSectionTable(data []byte, path string, secCount, tableEnd, bodyEnd, wid
 		dirOff := binary.LittleEndian.Uint64(data[off+8 : off+16])
 		postOff := binary.LittleEndian.Uint64(data[off+16 : off+24])
 
-		// A tabela é ORDENADA por fieldID, e a busca binária de secao() depende
+		// A tabela é ORDENADA por fieldID, e a busca binária de section() depende
 		// disso. Conferir aqui é O(secCount) uma vez; não conferir trocaria uma
 		// recusa nomeada por um Lookup que não acha um campo que está no
 		// arquivo — falso negativo, o único desfecho que este produto não
@@ -473,9 +473,10 @@ func (s *Sealed) unmap() {
 // findInDirectory acha o valor no diretório ORDENADO por hash da seção.
 //
 // Busca binária, e não sondagem: o arquivo é imutável, então não há load
-// factor a respeitar — o diretório tem exatamente `distinctValues` entradas, e não
-// `distintos/0,7` arredondado para cima. É a diferença entre log2(D) leituras
-// e a cadeia de probe que fez o Set do motor antigo custar 1,5 ms.
+// factor a respeitar — o diretório tem exatamente `distinctValues` entradas,
+// e não `distinctValues/0,7` arredondado para cima. É a diferença entre
+// log2(D) leituras e a cadeia de probe que fez o Set do motor antigo custar
+// 1,5 ms.
 func (s *Sealed) findInDirectory(sec *sealedSection, h uint64) (postIdx, count uint32, found bool) {
 	lo, hi := 0, sec.slots
 	for lo < hi {
@@ -536,7 +537,7 @@ func (s *Sealed) checkCRC() error {
 // atuais sair — o que pode ser aqui mesmo, se não houver nenhum.
 //
 // A espera é o ponto, e ela substitui uma exigência que o dono não tinha como
-// cumprir: as Fontes leem o mapeamento direto, sem cópia, e sobrevivem à
+// cumprir: as Sources leem o mapeamento direto, sem cópia, e sobrevivem à
 // chamada que as criou. O Store desmonta índice em DOIS momentos, e só um deles
 // passa pelo quiesce — o Close do dataset. A aposentadoria de segmento não
 // passa, porque roda na goroutine de retenção enquanto uma consulta longa
@@ -605,7 +606,7 @@ type sealedIter struct {
 	width int
 }
 
-// newSealedIter monta o iterador sobre [ini, fim) e resolve os limites da
+// newSealedIter monta o iterador sobre [start, end) e resolve os limites da
 // faixa lendo o primeiro e o último delta.
 //
 // Os limites saem daqui, e não da iteração, porque o contrato da Source exige
@@ -628,7 +629,7 @@ func newSealedIter(sel *Sealed, data []byte, base types.RowID, width, start, end
 	return it
 }
 
-// readDelta lê um delta de largura bytes em off.
+// readDelta lê um delta de width bytes em off.
 func readDelta(data []byte, off, width int) uint64 {
 	if width == 4 {
 		return uint64(binary.LittleEndian.Uint32(data[off : off+4]))

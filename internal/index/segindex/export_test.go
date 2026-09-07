@@ -30,10 +30,10 @@ func TempPathForTest(path string) string { return tempPath(path) }
 // mas ainda produzisse a resposta certa por acidente de dados pequenos
 // passaria batido sem isto.
 //
-// "direta" é o ramo de fonte única: Union devolve a própria Source sem embrulhar
-// quando só uma sobrevive ao descarte de vazias. Não é caso de borda — é o
-// caminho quente em produção para colunas de alta cardinalidade (ex.:
-// identifier), onde um valor mora em praticamente um segmento só. Como
+// "direta" é o ramo de fonte única: Union devolve a própria Source sem
+// embrulhar quando só uma sobrevive ao descarte de vazias. Não é caso de
+// borda — é o caminho quente em produção para colunas de alta cardinalidade
+// (ex.: identifier), onde um valor mora em praticamente um segmento só. Como
 // nenhum tipo de Union é exposto para esse ramo (a Source devolvida é do
 // chamador, não um combinador deste pacote), ele é o único jeito de o switch
 // cair no default sem ambiguidade — "vazia" e os dois combinadores já têm

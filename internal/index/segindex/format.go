@@ -45,9 +45,9 @@ import (
 //	32  1  postingWidth u8 — 4 ou 8
 //	33  31 reservado
 //	64  .. tabela de seções: secCount x 24 bytes, ORDENADA por fieldID
-//	          fieldID u16 | pad u16 | distintos u32 | dirOff u64 | postOff u64
+//	          fieldID u16 | pad u16 | distinctValues u32 | dirOff u64 | postOff u64
 //	    .. por seção, na ordem da tabela:
-//	          diretório: distintos x 16 bytes, ORDENADO por hash
+//	          diretório: distinctValues x 16 bytes, ORDENADO por hash
 //	              hash u64 | postIdx u32 | count u32
 //	          postings: array de deltas de postingWidth bytes, contíguo por
 //	              valor e ascendente dentro do grupo

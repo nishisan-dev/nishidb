@@ -101,7 +101,7 @@ func (l *Reader) Next() bool {
 	}
 }
 
-// readFrame consome uma linha de readFrame. Devolve true quando a leitura deve
+// readFrame consome uma linha de moldura. Devolve true quando a leitura deve
 // continuar (era o schema), false quando o stream acabou.
 func (l *Reader) readFrame(line []byte) bool {
 	var which struct {

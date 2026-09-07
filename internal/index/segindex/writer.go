@@ -46,7 +46,7 @@ func (e *Writer) Add(field types.FieldID, h uint64, row types.RowID) {
 // IsEmpty reporta que nada foi adicionado.
 func (e *Writer) IsEmpty() bool { return len(e.ents) == 0 }
 
-// WriteSealed emite o arquivo em caminho, por .tmp + fsync + rename + fsync do
+// WriteSealed emite o arquivo em path, por .tmp + fsync + rename + fsync do
 // diretório. Writer vazio NÃO cria arquivo: "sem índice" é um estado que o
 // Lookup trata por enumeração, e um arquivo vazio faria a reconstrução
 // considerar o segmento pronto.
@@ -109,8 +109,8 @@ type sectionInfo struct {
 }
 
 // buildBody escreve a tabela de seções, os diretórios e as postings a partir
-// de e.ents — já ordenado por (campo, hash, row) e deduplicado por WriteSealed —
-// em DUAS passadas.
+// de e.ents — já ordenado por (field, hash, row) e deduplicado por
+// WriteSealed — em DUAS passadas.
 //
 // A primeira passada só CONTA: quantas seções (fieldIDs distintos), quantos
 // valores distintos (grupos de hash) e quantas postings cada seção tem. É o
@@ -126,10 +126,10 @@ type sectionInfo struct {
 // ABSOLUTOS a partir do início do arquivo selado — o leitor (Tarefa 2) fatia
 // o mmap direto por eles, sem recompor uma base a cada Lookup.
 //
-// O segundo retorno é len(secoes): o número de seções que WriteSealed grava como
-// secCount no header. Ele sai desta MESMA travessia de e.ents em vez de uma
-// contagem própria em WriteSealed porque secCount é o campo que diz ao leitor
-// quantas entradas de 24 bytes da tabela de seções existem — um segundo
+// O segundo retorno é len(sections): o número de seções que WriteSealed grava
+// como secCount no header. Ele sai desta MESMA travessia de e.ents em vez de
+// uma contagem própria em WriteSealed porque secCount é o campo que diz ao
+// leitor quantas entradas de 24 bytes da tabela de seções existem — um segundo
 // código contando "fieldIDs distintos" por conta própria seria uma segunda
 // fonte de verdade para o mesmo número, e se um dia as duas contagens
 // discordassem o leitor caminharia para dentro dos bytes do diretório sem
@@ -203,7 +203,7 @@ func (e *Writer) buildBody(base types.RowID, width uint8) ([]byte, int) {
 			postIdx += count
 		}
 
-		// postings: deltas de largura bytes, contíguos por valor e
+		// postings: deltas de width bytes, contíguos por valor e
 		// ascendentes dentro do grupo (e.ents já está ordenado por row ali).
 		for k := i; k < sectionEnd; k++ {
 			delta := uint64(e.ents[k].row - base)

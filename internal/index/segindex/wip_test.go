@@ -508,7 +508,8 @@ func TestSegmentosComWIPRecusaNomeForaDoCanonico(t *testing.T) {
 
 // TestApagaRemoveOArquivoDoWIP: a selagem desliga os .widx depois de emitir o
 // .sidx, e o Open descarta os órfãos (spec §2.5). Os dois passam por aqui, e um
-// Remove que fechasse sem remover deixaria o segmento com índice em duas formas.
+// Remove que fechasse sem remover deixaria o segmento com índice em duas
+// formas.
 func TestApagaRemoveOArquivoDoWIP(t *testing.T) {
 	dir := t.TempDir()
 	w, err := segindex.OpenWIP(dir, testSegment, testField, 16)

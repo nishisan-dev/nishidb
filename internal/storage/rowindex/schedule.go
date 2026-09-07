@@ -73,9 +73,9 @@ type Schedule struct {
 	// afterRecompute é chamado a cada mínimo recomputado, e existe porque o
 	// custo desta estrutura NÃO está nas escritas: está nas leituras. Remover
 	// a parada da subida deixa o número de escritas idêntico — o corte por
-	// `novo == atual` ainda evita gravar — e multiplica por scheduleLevels o
-	// número de blocos varridos. Um gate que só contasse escritas aprovaria
-	// essa mutação. Seam de teste; nil em produção.
+	// `recomputed == current` ainda evita gravar — e multiplica por
+	// scheduleLevels o número de blocos varridos. Um gate que só contasse
+	// escritas aprovaria essa mutação. Seam de teste; nil em produção.
 	afterRecompute func()
 }
 
@@ -233,7 +233,7 @@ func (a *Schedule) Update(rowID types.RowID, expiry uint64) error {
 	}
 	// prev é o valor que o nó do nível de BAIXO tinha antes desta
 	// atualização. No primeiro giro é a própria folha; depois é o valor que o
-	// nó do nível prev tinha, e é contra ele que se decide se o pai ainda
+	// nó do nível anterior tinha, e é contra ele que se decide se o pai ainda
 	// dependia deste ramo.
 	prev := old
 	for level := 1; level < len(a.levels); level++ {
@@ -287,7 +287,7 @@ func (a *Schedule) minOfChildren(level int, idx uint64) uint64 {
 	return childMin
 }
 
-// entries devolve quantas entries cabem no arquivo do nível.
+// entries devolve quantas entradas cabem no arquivo do nível.
 func (a *Schedule) entries(level int) uint64 {
 	n := a.levels[level].region.Size() - headerSize
 	if n <= 0 {
@@ -318,7 +318,7 @@ func (a *Schedule) NextExpiry() (uint64, bool) {
 }
 
 // VisitExpired visita, em ordem de rowId, cada linha cujo vencimento agendado é
-// menor ou igual a `ate`. A visita que devolve false interrompe a descida.
+// menor ou igual a `cutoff`. A visita que devolve false interrompe a descida.
 //
 // Devolve quantas ENTRADAS a descida tocou — os nós de sumário em que ela
 // entrou mais as folhas entregues. É a medida do esforço, e ela existe para
@@ -327,7 +327,7 @@ func (a *Schedule) NextExpiry() (uint64, bool) {
 // foi entregue não distinguiria as duas.
 //
 // A entrega é COMPLETA pela invariante: se uma linha vence, todo ancestral
-// dela tem valor <= o vencimento dela <= `ate`, então nenhum ramo que a
+// dela tem valor <= o vencimento dela <= `cutoff`, então nenhum ramo que a
 // contenha é pulado. Pode entregar linhas a mais — um nó frouxo faz descer
 // num ramo sem nada vencido —, e é o chamador que revalida.
 func (a *Schedule) VisitExpired(cutoff uint64, visit func(types.RowID) bool) int {
@@ -347,7 +347,7 @@ func (a *Schedule) VisitExpired(cutoff uint64, visit func(types.RowID) bool) int
 }
 
 // descend percorre os filhos de um nó, e devolve false quando a visita pediu
-// para parar. `tocadas` acumula as entradas em que a descida ENTROU.
+// para parar. `touched` acumula as entradas em que a descida ENTROU.
 func (a *Schedule) descend(level int, idx, cutoff uint64, visit func(types.RowID) bool, touched *int) bool {
 	base := idx << scheduleShift
 	for i := uint64(0); i < scheduleB; i++ {
@@ -371,7 +371,7 @@ func (a *Schedule) descend(level int, idx, cutoff uint64, visit func(types.RowID
 }
 
 // NeedsRebuild reporta se a árvore em disco não serve para o dataset que
-// tem `limite` linhas, e tem de ser reconstruída antes de qualquer uso.
+// tem `limit` linhas, e tem de ser reconstruída antes de qualquer uso.
 //
 // Existe porque o manifest declara os PARÂMETROS da agenda, não a existência
 // dela. Um dataset cujos arquivos de vencimento sumiram — apagados por engano,
@@ -407,7 +407,7 @@ func (a *Schedule) NeedsRebuild(limit types.RowID) bool {
 	return false
 }
 
-// Rebuild reescreve a árvore inteira a partir de venc, que devolve o
+// Rebuild reescreve a árvore inteira a partir de expiry, que devolve o
 // vencimento de cada linha. Exclusivo do writer, e sem leitores — é o caminho
 // do Open.
 //
@@ -420,7 +420,7 @@ func (a *Schedule) NeedsRebuild(limit types.RowID) bool {
 // preferível a "exigir recriação do dataset".
 //
 // Todo o arquivo de cada nível é reescrito, e não só a parte derivada de
-// limite: quando a reconstrução acontece por divergência de parâmetros, o que
+// limit: quando a reconstrução acontece por divergência de parâmetros, o que
 // está em disco é uma árvore VÁLIDA de outro mundo, e deixar qualquer entrada
 // dela para trás misturaria as duas.
 func (a *Schedule) Rebuild(limit types.RowID, expiry func(types.RowID) uint64) error {

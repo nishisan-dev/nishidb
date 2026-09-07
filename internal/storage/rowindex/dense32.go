@@ -30,7 +30,7 @@ func OpenDense32(path string, magic [4]byte, minRows uint64) (*Dense32, error) {
 	return &Dense32{dense: d}, nil
 }
 
-// Get devolve a entrada do rowId, e gravado=false quando o rowId está além do
+// Get devolve a entrada do rowId, e covered=false quando o rowId está além do
 // arquivo. Nunca cresce na leitura.
 func (d *Dense32) Get(rowID types.RowID) (v uint32, covered bool) {
 	return d.dense.load32(rowID)
@@ -46,7 +46,7 @@ func (d *Dense32) Set(rowID types.RowID, v uint32) error {
 // ainda não existia" de "vetor existe e está zerado".
 func (d *Dense32) Born() bool { return d.dense.born }
 
-// Covers diz se o arquivo tem entrada para toda linha abaixo de limite. É a
+// Covers diz se o arquivo tem entrada para toda linha abaixo de limit. É a
 // pergunta que o manifest não responde: ele declara os parâmetros do vetor,
 // não a existência dele.
 func (d *Dense32) Covers(limit types.RowID) bool {

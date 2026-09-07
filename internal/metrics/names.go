@@ -241,7 +241,7 @@ const (
 	// admissão: o número que interessa CRESCE SOZINHO enquanto nada acontece, e
 	// um medidor escrito só quando uma consulta começa ou termina ficaria
 	// congelado exatamente no estado que ele existe para denunciar — o servidor
-	// parado numa varredura que não acaba. With o §92 sozinho, esse estado é
+	// parado numa varredura que não acaba. Com o §92 sozinho, esse estado é
 	// indistinguível de "3 consultas ativas, tudo bem".
 	//
 	// MetQueryLongRejectedTotal conta as recusas do SUB-POOL, separado de
@@ -333,11 +333,12 @@ const (
 	// LabelState, e os quatro valores PARTICIONAM o dataset.
 	//
 	// Os quatro, e não três, por causa de duas ausências de significado oposto:
-	// StateOutside é o segmento que a janela deixou de cobrir — deliberadamente sem
-	// índice, e num dataset grande a maioria esmagadora —, enquanto StatePending
-	// é o segmento dentro da janela ainda na fila. Conflá-los num "ausente" daria
-	// um número enorme, normal e mudo, e o gauge deixaria de responder "o laço
-	// está avançando?", que é a única pergunta que uma migração faz.
+	// StateOutside é o segmento que a janela deixou de cobrir — deliberadamente
+	// sem índice, e num dataset grande a maioria esmagadora —, enquanto
+	// StatePending é o segmento dentro da janela ainda na fila. Conflá-los num
+	// "ausente" daria um número enorme, normal e mudo, e o gauge deixaria de
+	// responder "o laço está avançando?", que é a única pergunta que uma
+	// migração faz.
 	MetIndexSegments = "nishidb_index_segmentos"
 	// MetIndexBytes são os BLOCOS do índice por segmento: os .sidx selados, os
 	// temporários e os .widx do corrente.
@@ -374,8 +375,8 @@ const (
 	// isso ela NASCE EM 1 num dataset com campo indexado — o valor verdadeiro na
 	// subida — e não em zero como os contadores ao lado.
 	MetIndexRebuildActive = "nishidb_index_reconstrucao_ativa"
-	// MetIndexCRCFailuresTotal conta os .sidx reprovados no crc32c, e é DEGRAU — não
-	// taxa.
+	// MetIndexCRCFailuresTotal conta os .sidx reprovados no crc32c, e é DEGRAU —
+	// não taxa.
 	//
 	// Ela sobe uma vez por ABERTURA do arquivo, e o garanteSelado publica no cache
 	// o mapeamento reprovado, de modo que a abertura acontece uma vez por segmento
@@ -529,7 +530,7 @@ const (
 	// MetKafkaDecodeIdleSeconds é a espera SOMADA dos decodificadores pela
 	// fila, e ela existe porque a ociosidade do WRITER mudou de dono.
 	//
-	// Até a Fase 4 o writer consumia a fila, e a espera dele era a da fila. With
+	// Até a Fase 4 o writer consumia a fila, e a espera dele era a da fila. Com
 	// os decodificadores no meio, quem espera ali são eles — e são K. Publicar
 	// aquele número como `writer_idle` mentiria por um FATOR: com oito
 	// decodificadores parados o acumulado sobe oito segundos por segundo, e a
@@ -597,10 +598,10 @@ const (
 // Nomes de label do produto. Um label a mais multiplica séries por
 // cardinalidade, e cada um aqui existe por uma razão registrada: LabelCategory
 // separa nishidb_query_errors por categoria de falha de consulta;
-// LabelInvalidReason (Task A5, issue #15) separa nishidb_ingest_invalid_total pela
-// categoria §101 do evento ruim — sem ele, EVENT_TOO_LARGE (a cauda de chave
-// que estoura MaxKeySize) ficava indistinguível das outras cinco categorias
-// dentro do mesmo total.
+// LabelInvalidReason (Task A5, issue #15) separa nishidb_ingest_invalid_total
+// pela categoria §101 do evento ruim — sem ele, EVENT_TOO_LARGE (a cauda de
+// chave que estoura MaxKeySize) ficava indistinguível das outras cinco
+// categorias dentro do mesmo total.
 const (
 	LabelDataset       = "dataset"
 	LabelPartition     = "partition"

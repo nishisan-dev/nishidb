@@ -207,8 +207,8 @@ func TestOSeladoLeAsPostingsDeOitoBytes(t *testing.T) {
 }
 
 // TestValorAusenteEhFonteVaziaCampoAusenteEhOkFalso trava a distinção que
-// decide o plano do chamador. Field sem seção significa "este segmento não
-// responde por este campo" e obriga a enumerar o segmento inteiro (§3.2 da
+// decide o plano do chamador. Um campo sem seção significa "este segmento
+// não responde por este campo" e obriga a enumerar o segmento inteiro (§3.2 da
 // spec); valor sem entrada no diretório significa "respondo, e a resposta é
 // zero linhas". Confundir os dois nas duas direções é grave: um faz enumerar
 // 224 mil linhas por nada, o outro faz PERDER linhas que existem.
@@ -362,8 +362,9 @@ func TestSeladoRecusaHeaderInvalido(t *testing.T) {
 			return b
 		},
 		"dirOff com wrap na aritmética": func(b []byte) []byte {
-			// dirOff + distintos*16 estoura o u64 e dá a volta: sem o guarda de
-			// wrap, dirFim ficaria PEQUENO e passaria pelo teste do fim.
+			// dirOff + distinctValues*16 estoura o u64 e dá a volta: sem o
+			// guarda de wrap, dirEnd ficaria PEQUENO e passaria pelo teste do
+			// fim.
 			putU64(b, offDirOff, ^uint64(0))
 			return b
 		},
@@ -372,7 +373,7 @@ func TestSeladoRecusaHeaderInvalido(t *testing.T) {
 			return b
 		},
 		"postOff dentro do diretório": func(b []byte) []byte {
-			putU64(b, offPostOff, corpusTableEnd) // 88 < dirFim (104)
+			putU64(b, offPostOff, corpusTableEnd) // 88 < dirEnd (104)
 			return b
 		},
 		"postOff além do fim do corpo": func(b []byte) []byte {
@@ -414,7 +415,7 @@ func TestSeladoRecusaHeaderInvalido(t *testing.T) {
 // FALSO NEGATIVO, e por isso ganha teste próprio em vez de virar mais uma
 // linha do mapa acima.
 //
-// A busca binária de secao() tem a ordenação por fieldID como pré-condição.
+// A busca binária de section() tem a ordenação por fieldID como pré-condição.
 // Sem o guarda, uma tabela desordenada não derrubaria nada e não corromperia
 // memória nenhuma: ela simplesmente faria o Lookup NÃO ACHAR um campo que está
 // no arquivo, o segmento responderia "zero linhas" onde tem linhas, e a

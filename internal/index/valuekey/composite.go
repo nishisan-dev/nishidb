@@ -54,7 +54,7 @@ func AppendComposite(dst []byte, vs []types.Value) ([]byte, error) {
 }
 
 // WalkComposite visita os componentes da chave, em ordem, sem alocar. Os
-// Bytes de um componente de largura variável apontam para DENTRO de chave e só
+// Bytes de um componente de largura variável apontam para DENTRO de key e só
 // valem durante a visita. É a forma que a tabela virtual usa para montar uma
 // linha por grupo sem um scratch por consulta.
 func WalkComposite(key []byte, visit func(i int, v types.Value) error) error {
@@ -94,9 +94,10 @@ func WalkComposite(key []byte, visit func(i int, v types.Value) error) error {
 	return nil
 }
 
-// DecodeComposite desfaz o AppendComposite. dst é o scratch do chamador (reusado
-// com dst[:0]); os Bytes dos componentes de largura variável apontam para
-// DENTRO de chave, sem cópia — quem retiver o valor além da vida da chave copia.
+// DecodeComposite desfaz o AppendComposite. dst é o scratch do chamador
+// (reusado com dst[:0]); os Bytes dos componentes de largura variável
+// apontam para DENTRO de key, sem cópia — quem retiver o valor além da
+// vida da chave copia.
 func DecodeComposite(key []byte, dst []types.Value) ([]types.Value, error) {
 	dst = dst[:0]
 	err := WalkComposite(key, func(_ int, v types.Value) error {

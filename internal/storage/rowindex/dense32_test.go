@@ -24,14 +24,14 @@ func TestDenso32GravaLeECresce(t *testing.T) {
 	if !d.Born() {
 		t.Fatal("arquivo novo tem de nascer")
 	}
-	// Dentro do arquivo, entrada nunca gravada é zero e gravado=true (é o
-	// que o fallocate deixa); gravado=false é SÓ para rowId além do arquivo —
+	// Dentro do arquivo, entrada nunca gravada é zero e covered=true (é o
+	// que o fallocate deixa); covered=false é SÓ para rowId além do arquivo —
 	// a mesma semântica de load nos vetores de 64.
 	if v, ok := d.Get(10); !ok || v != 0 {
 		t.Fatalf("Get(10) = %d, %v; quer 0, true", v, ok)
 	}
 	if _, ok := d.Get(1 << 30); ok {
-		t.Fatal("rowId além do arquivo tem de sair gravado=false")
+		t.Fatal("rowId além do arquivo tem de sair covered=false")
 	}
 	// Além do piso: cresce por doubling, como os vetores de 64.
 	const high = types.RowID(100_000)

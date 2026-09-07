@@ -13,9 +13,9 @@ import (
 type parser struct {
 	lx  lexer.Lexer // por VALOR: é o que dá 0 alloc ao lexer
 	cur lexer.Token
-	// lookahead/hasLookahead são UM token de lookahead, e existem por um motivo só:
-	// distinguir `NOT LIKE` de um NOT em posição de comparador. Sem ele, `x NOT
-	// LIKE 'a%'` obrigaria a recusar o NOT antes de saber o que ele abre.
+	// lookahead/hasLookahead são UM token de lookahead, e existem por um motivo
+	// só: distinguir `NOT LIKE` de um NOT em posição de comparador. Sem ele,
+	// `x NOT LIKE 'a%'` obrigaria a recusar o NOT antes de saber o que ele abre.
 	//
 	// A gramática continua LL(1) em toda decisão de CLÁUSULA — o comentário do
 	// `.` de nome qualificado, mais abaixo, contrasta justamente com o BY de

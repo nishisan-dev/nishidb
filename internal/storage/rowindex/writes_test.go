@@ -23,7 +23,7 @@ func TestEntradaNuncaGravadaEhDesconhecidaENaoVencida(t *testing.T) {
 	e := openLastWrites(t, t.TempDir(), 16)
 	for _, id := range []uint64{0, 1, 15} {
 		if ms, known := e.Get(types.RowID(id)); known || ms != 0 {
-			t.Errorf("rowID %d: ms=%d conhecido=%v; quer 0,false", id, ms, known)
+			t.Errorf("rowID %d: ms=%d known=%v; quer 0,false", id, ms, known)
 		}
 	}
 }
@@ -36,7 +36,7 @@ func TestSetEGetPreservamOInstante(t *testing.T) {
 	}
 	got, known := e.Get(types.RowID(2))
 	if !known || got != ms {
-		t.Fatalf("ms=%d conhecido=%v; quer %d,true", got, known, ms)
+		t.Fatalf("ms=%d known=%v; quer %d,true", got, known, ms)
 	}
 	// Vizinhos não são afetados.
 	if _, known := e.Get(types.RowID(1)); known {
@@ -51,7 +51,7 @@ func TestEscritasCresceAlemDaCapacidadeInicial(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got, known := e.Get(types.RowID(5000)); !known || got != ms {
-		t.Fatalf("ms=%d conhecido=%v", got, known)
+		t.Fatalf("ms=%d known=%v", got, known)
 	}
 }
 
@@ -70,7 +70,7 @@ func TestEscritasSobrevivemAReabertura(t *testing.T) {
 	}
 	e2 := openLastWrites(t, dir, 4)
 	if got, known := e2.Get(types.RowID(3)); !known || got != ms {
-		t.Fatalf("depois de reabrir: ms=%d conhecido=%v", got, known)
+		t.Fatalf("depois de reabrir: ms=%d known=%v", got, known)
 	}
 }
 

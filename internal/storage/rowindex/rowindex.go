@@ -75,10 +75,10 @@ func openDense(path string, magic [4]byte, minRows uint64) (*denseFile, error) {
 	return openDenseWithEntrySize(path, magic, minRows, entrySize)
 }
 
-// openDenseWithEntrySize abre um vetor com o tamanho de entrada dado. O tamanho vai para
-// o byte 5 do header na criação e é CONFERIDO na reabertura: um vetor gravado
-// com um tamanho e lido com outro endereçaria a entrada errada em toda linha
-// sem que nada falhasse.
+// openDenseWithEntrySize abre um vetor com o tamanho de entrada dado. O
+// tamanho vai para o byte 5 do header na criação e é CONFERIDO na reabertura:
+// um vetor gravado com um tamanho e lido com outro endereçaria a entrada
+// errada em toda linha sem que nada falhasse.
 func openDenseWithEntrySize(path string, magic [4]byte, minRows uint64, entry int64) (*denseFile, error) {
 	minRows = max(minRows, 512)
 	r, err := mmap.Open(path, headerSize+int64(minRows)*entry)
@@ -375,7 +375,7 @@ func OpenLastWrites(path string, minRows uint64) (*LastWrites, error) {
 }
 
 // Get devolve o instante da última escrita do rowId em epoch millis, e
-// conhecido=false quando a entrada nunca foi gravada.
+// known=false quando a entrada nunca foi gravada.
 func (e *LastWrites) Get(rowID types.RowID) (millis int64, known bool) {
 	v, ok := e.dense.load(rowID)
 	if !ok || v == 0 {
@@ -431,8 +431,8 @@ func OpenTTLs(path string, minRows uint64) (*TTLs, error) {
 	return &TTLs{dense: d}, nil
 }
 
-// Get devolve a duração em millis, e conhecido=false quando a entrada nunca
-// foi gravada. Duração zero COM conhecido=true é a entidade imortal.
+// Get devolve a duração em millis, e known=false quando a entrada nunca foi
+// gravada. Duração zero COM known=true é a entidade imortal.
 func (p *TTLs) Get(rowID types.RowID) (millis int64, known bool) {
 	v, ok := p.dense.load(rowID)
 	if !ok || v == 0 {

@@ -34,10 +34,11 @@ const NoReader = uint64(math.MaxUint64)
 // número estável e ligeiramente pessimista.
 const bytesPerVersion = 24
 
-// version é uma location anterior e a época em que ela deixou de ser a corrente.
+// version é uma location anterior e a época em que ela deixou de ser a
+// corrente.
 type version struct {
-	// epoch é a da PUBLICAÇÃO que a aposentou. Um leitor de época E precisa
-	// desta entrada quando E < epoch.
+	// epoch é a época da PUBLICAÇÃO que a aposentou. Um leitor de época E
+	// precisa desta entrada quando E < epoch.
 	epoch  uint64
 	packed uint64
 }
@@ -57,9 +58,9 @@ type Journal struct {
 	// passado de alguém.
 	pin map[uint32]int
 	n   int
-	// liveEntries espelha n para leitura SEM LOCK, e existe por causa do caminho
-	// quente: At é chamado a CADA linha varrida, e o caso dominante é o
-	// journal vazio — nenhuma consulta concorrente com escrita. Sem o
+	// liveEntries espelha n para leitura SEM LOCK, e existe por causa do
+	// caminho quente: At é chamado a CADA linha varrida, e o caso dominante
+	// é o journal vazio — nenhuma consulta concorrente com escrita. Sem o
 	// atômico, toda linha de todo full scan pagaria um RLock e um lookup de
 	// mapa para descobrir que não há nada a descobrir.
 	//
@@ -112,7 +113,8 @@ func (c *Journal) IsEmpty() bool { return c.liveEntries.Load() == 0 }
 // que é o caso que nenhum teste de uma atualização só distingue.
 func (c *Journal) At(row types.RowID, epoch uint64) (uint64, bool) {
 	// Saída sem lock para o caso dominante: journal vazio, que é o estado de
-	// todo dataset sem consulta concorrente com escrita. Ver o campo `liveEntries`.
+	// todo dataset sem consulta concorrente com escrita. Ver o campo
+	// `liveEntries`.
 	if c.liveEntries.Load() == 0 {
 		return 0, false
 	}

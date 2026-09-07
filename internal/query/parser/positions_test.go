@@ -16,7 +16,7 @@ import (
 // PRÓPRIO SQL: um valor constante (0, ou o de outro token) não passa em mais
 // de um caso.
 
-// positionOf devolve o offset da n-ésima ocorrência (1-based) de sub positionOf sql.
+// positionOf devolve o offset da n-ésima ocorrência (1-based) de sub em sql.
 func positionOf(t *testing.T, sql, sub string, n int) int {
 	t.Helper()
 	pos, rest := 0, sql

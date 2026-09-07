@@ -165,9 +165,9 @@ type ErrorBody struct {
 	Error ErrorDetail `json:"error"`
 }
 
-// ErrorDetail é o erro em si. Line e Column são 1-based e só aparecem para erro de
-// sintaxe ou de bind, que são os que têm posição no texto da query — é a mesma
-// informação que o CLI já imprime com o cursor sob o trecho ofensor.
+// ErrorDetail é o erro em si. Line e Column são 1-based e só aparecem para
+// erro de sintaxe ou de bind, que são os que têm posição no texto da query — é
+// a mesma informação que o CLI já imprime com o cursor sob o trecho ofensor.
 type ErrorDetail struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
