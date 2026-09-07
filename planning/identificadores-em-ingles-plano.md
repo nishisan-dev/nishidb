@@ -3245,8 +3245,8 @@ export const meta = {
 }
 
 const { fase, grupo, pacotes, scratch } = args
-const INV = 'planning/identificadores-em-ingles/inventario-pos-fase1.tsv'
-const GRUPOS = 'planning/identificadores-em-ingles/grupos-pos-fase1.tsv'
+const INV = `planning/identificadores-em-ingles/inventario-antes-${grupo}.tsv`
+const GRUPOS = `planning/identificadores-em-ingles/grupos-antes-${grupo}.tsv`
 const GLOSSARIO = 'docs/glossario.md'
 const SPEC = 'planning/identificadores-em-ingles.md'
 const PROTEGIDOS = 'planning/identificadores-em-ingles/protegidos.txt'
@@ -3291,14 +3291,25 @@ mantendo a especie com o sufixo. Nomes de teste (func Test*/Benchmark*/Fuzz*) s�
 Um nome cujo godoc precisaria descrevê-lo com o verbo da operação irmã (Return explicado com "libera", verbo de
 Release) é sinal de nome errado: julgue contra a operação irmã, não só contra o glossário.`
 
-// ---------- Propor ----------
+// ---------- Inventário ----------
 phase('Propor')
+const inventario = await agent(`Você gera o inventário do grupo ${grupo} sobre a árvore ATUAL (os grupos anteriores mudaram
+nomes e deslocaram colunas nos chamadores; posições velhas não valem). ${ambiente}
+Rode "go run ./scripts/renameinv -dir . -out ${INV} -groups ${GRUPOS}" (2 a 3 minutos), confira que os dois arquivos
+existem e têm cabeçalho, e devolva a linha de stdout ("N declarações, M grupos de interface"). Não faça commit.`,
+  { label: `inventario:${grupo}`, phase: 'Propor', model: 'sonnet' })
+log(`inventário: ${String(inventario).slice(0, 120)}`)
+
+// ---------- Propor ----------
 const propostas = (await parallel(pacotes.map(p => () =>
   agent(`Você é o tradutor do pacote ${p} na fase ${fase} (grupo ${grupo}) do ciclo de identificadores em inglês.
 Leia ${INV} e filtre as linhas cujo pacote é exatamente "${p}" (todas as espécies, exportadas ou não; ignore
 as de especie "func" cujo nome começa por Test, Benchmark ou Fuzz — são da Fase 4). Leia ${GRUPOS} para saber
 o fecho de cada grupo G<n> citado. Leia ${GLOSSARIO} inteiro. Abra os arquivos do pacote para entender o que
-cada nome significa antes de traduzir: o nome novo tem de preservar o SENTIDO, não a forma.
+cada nome significa antes de traduzir: o nome novo tem de preservar o SENTIDO, não a forma. Campos de struct
+anônima (tabelas de casos de teste: "casos := []struct{ campo string; quer int }") aparecem no inventário como
+"field#gopls" com posição — traduza-os como qualquer campo; se algum não estiver no inventário, procure no código
+e inclua-o com especie "field#gopls" e a posição real.
 ${regras}
 ${ambiente}
 Devolva a proposta completa: uma entrada por linha do inventário que muda, um "mantido" por linha que fica
