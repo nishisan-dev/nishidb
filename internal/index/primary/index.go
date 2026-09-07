@@ -36,7 +36,7 @@ const (
 	slotSize   = 16
 
 	idxVersion = 1
-	// hashKindFnv é o ÚNICO kind que existe, e o header o recusa quando difere
+	// hashKindFNV é o ÚNICO kind que existe, e o header o recusa quando difere
 	// (ver Open). Enquanto ele for único, "o header aceita" e "é o kind que este
 	// dataset sempre usou" são a mesma frase.
 	//
@@ -49,7 +49,7 @@ const (
 	// conhecido, que o header aceitaria e cujas buscas errariam em silêncio.
 	// Quem acrescentar o segundo kind decide se essa informação precisa voltar
 	// ao manifest.
-	hashKindFnv = 1
+	hashKindFNV = 1
 
 	slotEmpty   = 0
 	slotDeleted = 1
@@ -87,7 +87,7 @@ func writeIdxHeader(r *mmap.Region, slots uint64) {
 	r.WithBytes(0, headerSize, func(h []byte) {
 		copy(h[0:4], idxMagic[:])
 		h[4] = idxVersion
-		h[5] = hashKindFnv
+		h[5] = hashKindFNV
 		binary.LittleEndian.PutUint64(h[8:16], slots)
 		binary.LittleEndian.PutUint64(h[16:24], 0) // seed
 	})
@@ -104,7 +104,7 @@ func readIdxHeader(r *mmap.Region) (uint64, error) {
 			err = fmt.Errorf("primary: magic inválida %q", h[0:4])
 		case h[4] != idxVersion:
 			err = fmt.Errorf("primary: version desconhecida %d", h[4])
-		case h[5] != hashKindFnv:
+		case h[5] != hashKindFNV:
 			err = fmt.Errorf("primary: hashKind desconhecido %d (rebuild necessário)", h[5])
 		default:
 			slots = binary.LittleEndian.Uint64(h[8:16])
@@ -319,7 +319,7 @@ func (ix *Index) grow() error {
 
 // HashKind devolve o identificador do algoritmo de hash do índice (gravado
 // no header e no manifest).
-func (ix *Index) HashKind() uint8 { return hashKindFnv }
+func (ix *Index) HashKind() uint8 { return hashKindFNV }
 
 // syncDirFn é indirecionada para permitir injeção de falha nos testes do
 // caminho de erro do rehash.
