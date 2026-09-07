@@ -50,7 +50,7 @@ func openTestWIP(t *testing.T) *segindex.WIP {
 
 // closeWIP fecha o WIP reportando a falha.
 //
-// Existe porque `defer w.Fecha()` descartaria o erro em silêncio, e o gate de
+// Existe porque `defer w.Close()` descartaria o erro em silêncio, e o gate de
 // lint deste projeto conta esse descarte. Fechar é também onde o header ganha o
 // postCount definitivo, então um erro aqui significa um arquivo que a Tarefa 4
 // não conseguiria reabrir.
@@ -608,7 +608,7 @@ func TestWIPRecusaHeaderInvalido(t *testing.T) {
 		},
 		"cabeça de cadeia além do postCount": func(b []byte) {
 			// O caso do .widx sobrevivente de crash: o header só ganha o
-			// postCount definitivo no Fecha, então a contagem fica atrasada e
+			// postCount definitivo no Close, então a contagem fica atrasada e
 			// as cadeias apontam além dela. Adotado assim, o próximo Set
 			// sobrescreveria postings vivas em silêncio.
 			binary.LittleEndian.PutUint32(b[offPostCountInWIP:offPostCountInWIP+4], 1)
@@ -652,7 +652,7 @@ func TestListaWIPRecusaFieldIDIlegivel(t *testing.T) {
 
 // TestUsarOWIPAposFecharPanicaEmVezDeFalharMudo trava a rede do nível de baixo.
 //
-// Region.Close zera data e size, então o writeHeader de um segundo Fecha não
+// Region.Close zera data e size, então o writeHeader de um segundo Close não
 // daria erro: daria um pânico de bounds vindo de DENTRO do mmap, sem nome de
 // método e sem nome de arquivo — e o Lookup leria um mapeamento desmontado. O
 // pânico nomeado troca isso por uma falha que aponta para a linha certa, como
@@ -684,7 +684,7 @@ func TestUsarOWIPAposFecharPanicaEmVezDeFalharMudo(t *testing.T) {
 // emite o .sidx, fecha o .widx e o apaga.
 //
 // Remove é a operação TERMINAL, e é a única que aceita ser chamada depois do
-// Fecha. Um Remove que recusasse região já fechada devolveria à selagem o erro
+// Close. Um Remove que recusasse região já fechada devolveria à selagem o erro
 // de "descritor já fechado" — que ela leria como falha de uma selagem que deu
 // certo. Chamar Remove duas vezes também não é erro: o estado desejado é o
 // mesmo.

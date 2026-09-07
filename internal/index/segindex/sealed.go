@@ -13,7 +13,7 @@ import (
 
 // Source é o conjunto de rowIds que UM segmento oferece para um predicado.
 //
-// Mora aqui porque o Selado é o primeiro a produzi-la, e as outras três
+// Mora aqui porque o Sealed é o primeiro a produzi-la, e as outras três
 // fontes da §3.2 da spec (WIP, enumeração do histórico, enumeração do
 // materializado) precisam satisfazer a MESMA interface para que a união da
 // Tarefa 5 não saiba de qual estado cada segmento veio.
@@ -65,13 +65,13 @@ type sealedSection struct {
 //
 // # O que a contagem de vidas cobre, e o que ela NÃO cobre
 //
-// Ela cobre a Fonte DEPOIS que o Lookup retornou: o Fecha espera a última sair
+// Ela cobre a Source DEPOIS que o Lookup retornou: o Close espera a última sair
 // antes do munmap, e por isso uma varredura em voo nunca lê memória desmapeada.
 //
-// Ela NÃO torna o Lookup seguro contra um Fecha CONCORRENTE. Com vidas == 0 o
-// Fecha desmonta na hora e zera `dados`; um Lookup que entrasse depois disso
+// Ela NÃO torna o Lookup seguro contra um Close CONCORRENTE. Com vidas == 0 o
+// Close desmonta na hora e zera `dados`; um Lookup que entrasse depois disso
 // tomaria o pânico do requireOpen, e não um ok=false. Quem chama o Lookup tem de
-// garantir, por conta própria, que ele não corre com o Fecha — no Store isso é o
+// garantir, por conta própria, que ele não corre com o Close — no Store isso é o
 // selMu, que a aposentadoria toma para fechar. Esta é a fronteira que um segundo
 // chamador (o laço de reconstrução da §2.4) precisa respeitar.
 type Sealed struct {
@@ -101,7 +101,7 @@ type Sealed struct {
 	// NÃO É PROTEÇÃO CONTRA DESCUIDO: é o único desfecho seguro de uma corrida
 	// que o produto TEM. A aposentadoria de segmento (retenção e compaction)
 	// roda em goroutine de fundo e fecha o índice do segmento que acabou de
-	// sair; uma consulta longa iniciada antes dela continua com a Fonte na mão.
+	// sair; uma consulta longa iniciada antes dela continua com a Source na mão.
 	// O Close do dataset está coberto pelo quiesce do Store, mas a
 	// aposentadoria não passa por ele — e o desfecho de ler memória desmapeada
 	// não é resultado degradado, é SIGSEGV: sinal incapturável, sem nome de
@@ -309,7 +309,7 @@ func (s *Sealed) Fields() []types.FieldID {
 // layout mudasse — e divergiria em SILÊNCIO, porque as duas continuariam
 // produzindo listas de fieldIDs plausíveis.
 //
-// NÃO confere o crc, pela mesma razão que Campos e HasField não conferem: um
+// NÃO confere o crc, pela mesma razão que Fields e HasField não conferem: um
 // segmento com coluna quase-única chega a 2,25 GB, e pagar essa varredura por
 // arquivo a cada passada da fila custaria mais que a reconstrução que ela
 // agenda. Arquivo corrompido continua sendo assunto do gatilho 3 da §2.4 — quem
@@ -335,7 +335,7 @@ func SealedFields(path string) ([]types.FieldID, error) {
 //
 // # Não use isto para decidir indexar-ou-enumerar
 //
-// HasField e Campos respondem sobre a EXISTÊNCIA da seção; só o Lookup responde
+// HasField e Fields respondem sobre a EXISTÊNCIA da seção; só o Lookup responde
 // sobre a capacidade de SERVI-LA. Os dois primeiros leem a tabela de seções, já
 // validada e em heap, e de propósito não conferem o crc: planejar uma consulta
 // não pode custar a leitura de 2,25 GB de índice, e o custo teria de ser pago
@@ -386,8 +386,8 @@ func (s *Sealed) section(field types.FieldID) (*sealedSection, bool) {
 // Quem precisa saber que foi corrupção — para apagar o arquivo, logar ERROR e
 // contar a métrica — pergunta a IntegrityErr.
 //
-// NÃO é seguro chamar isto concorrentemente com o Fecha: a exclusão entre os
-// dois é do chamador (ver o godoc do Selado). E convém que a conferência do crc
+// NÃO é seguro chamar isto concorrentemente com o Close: a exclusão entre os
+// dois é do chamador (ver o godoc do Sealed). E convém que a conferência do crc
 // já tenha acontecido antes — ela é preguiçosa e a primeira chamada varre o
 // arquivo inteiro, o que num chamador que segure lock para invocar o Lookup põe
 // centenas de MB de varredura debaixo desse lock.
@@ -416,17 +416,17 @@ func (s *Sealed) Lookup(field types.FieldID, h uint64) (Source, bool) {
 		return nil, false
 	}
 	// A vida é adquirida AQUI, e não no Source.Close do chamador, porque é este
-	// o único ponto em que se sabe que a Fonte devolvida vai ler o mapeamento.
+	// o único ponto em que se sabe que a Source devolvida vai ler o mapeamento.
 	// A emptySource não lê nada e por isso não conta: fazê-la contar seria adiar
 	// um munmap por uma leitura que nunca acontece.
 	//
-	// Um Selado que já começou a fechar responde ok=false, e o chamador ENUMERA
+	// Um Sealed que já começou a fechar responde ok=false, e o chamador ENUMERA
 	// o segmento — a mesma degradação de um índice ausente, e ela é correta.
 	//
-	// ISSO NÃO TORNA O Lookup SEGURO CONTRA UM Fecha CONCORRENTE, e a ressalva é
-	// a mesma dos godocs do Selado e do Fecha. O ramo abaixo só é alcançado
+	// ISSO NÃO TORNA O Lookup SEGURO CONTRA UM Close CONCORRENTE, e a ressalva é
+	// a mesma dos godocs do Sealed e do Close. O ramo abaixo só é alcançado
 	// quando o fecho começou com LEITOR VIVO, e por isso o mapeamento ainda está
-	// de pé. Com zero leitores o Fecha desmonta dentro de si mesmo, e um Lookup
+	// de pé. Com zero leitores o Close desmonta dentro de si mesmo, e um Lookup
 	// concorrente teria entrado em pânico no requireOpen lá em cima — nunca
 	// chega a esta linha para receber a degradação que ela promete. Quem exclui
 	// um do outro é o chamador; no Store, o selMu.
@@ -450,7 +450,7 @@ func (s *Sealed) acquire() bool {
 }
 
 // release tira um leitor e desmonta o mapeamento se ele era o último de um
-// Selado já fechado.
+// Sealed já fechado.
 func (s *Sealed) release() {
 	s.refsMu.Lock()
 	defer s.refsMu.Unlock()
@@ -540,16 +540,16 @@ func (s *Sealed) checkCRC() error {
 // chamada que as criou. O Store desmonta índice em DOIS momentos, e só um deles
 // passa pelo quiesce — o Close do dataset. A aposentadoria de segmento não
 // passa, porque roda na goroutine de retenção enquanto uma consulta longa
-// varre. Ali, exigir que "nenhuma Fonte viva sobrou" seria exigir do dono uma
+// varre. Ali, exigir que "nenhuma Source viva sobrou" seria exigir do dono uma
 // garantia que ele não tem; sem a espera, o desfecho é SIGSEGV.
 //
-// Depois desta chamada, um Lookup que AINDA ALCANCE este Selado responde
+// Depois desta chamada, um Lookup que AINDA ALCANCE este Sealed responde
 // ok=false, e o chamador degrada para enumeração — correto por construção, e é
 // o mesmo que ele já faz com índice ausente. "Ainda alcance" é a ressalva
 // inteira: isso vale no ramo em que havia leitor e o mapeamento continua de pé.
 // Sem leitor nenhum o desmonte é imediato e o Lookup seguinte PANICA no
 // requireOpen — por isso a exclusão entre Lookup e Close é do chamador, e não
-// desta contagem (ver o godoc do Selado).
+// desta contagem (ver o godoc do Sealed).
 //
 // O ERRO DO munmap ADIADO NÃO SOBE por aqui: quando há leitor, o desmonte
 // acontece depois, no Close do último deles, e já não há chamada a que
@@ -579,7 +579,7 @@ func (emptySource) Close() error          { return nil }
 func (emptySource) MaxRowID() types.RowID { return 0 }
 
 // MinRowID devolve o maior rowId representável, de modo que Min > Max sempre.
-// É o contrato da Fonte para "não vou emitir nada", e é também o elemento
+// É o contrato da Source para "não vou emitir nada", e é também o elemento
 // neutro de um min-fold — quem dobrar as fontes para achar o limite inferior
 // da união acerta sem tratar a vazia como caso especial.
 func (emptySource) MinRowID() types.RowID { return math.MaxUint64 }
@@ -590,7 +590,7 @@ func (emptySource) MinRowID() types.RowID { return math.MaxUint64 }
 // resolvê-los ali poupa uma indireção por linha. Não tem lock nem atômico — o
 // arquivo é imutável, e é essa a metade do ganho desta forma (débito 102).
 //
-// O ponteiro para o Selado existe só para o Close devolver a vida adquirida no
+// O ponteiro para o Sealed existe só para o Close devolver a vida adquirida no
 // Lookup, e por isso não custa nada por linha: Next e RowID não o tocam.
 type sealedIter struct {
 	sel   *Sealed
@@ -608,9 +608,9 @@ type sealedIter struct {
 // newSealedIter monta o iterador sobre [ini, fim) e resolve os limites da
 // faixa lendo o primeiro e o último delta.
 //
-// Os limites saem daqui, e não da iteração, porque o contrato da Fonte exige
+// Os limites saem daqui, e não da iteração, porque o contrato da Source exige
 // que eles valham ANTES de consumir: são duas leituras, e a faixa já está
-// ascendente por construção do escritor. A chamada devolve Fonte — o boxing da
+// ascendente por construção do escritor. A chamada devolve Source — o boxing da
 // interface é uma alocação por SEGMENTO, e é por isso que o gate mede a
 // varredura e não o Lookup.
 func newSealedIter(sel *Sealed, data []byte, base types.RowID, width, start, end int) *sealedIter {
@@ -655,7 +655,7 @@ func (it *sealedIter) RowID() types.RowID { return it.row }
 func (it *sealedIter) Err() error { return nil }
 
 // Close devolve a vida adquirida no Lookup, e é ele que autoriza o munmap de um
-// Selado já fechado. Idempotente: fechar duas vezes não derruba a contagem
+// Sealed já fechado. Idempotente: fechar duas vezes não derruba a contagem
 // duas vezes, e a união chega a fechar a mesma fonte por mais de um caminho.
 //
 // Iterador que NUNCA é fechado adia o munmap até o fim do processo. É a troca
@@ -681,7 +681,7 @@ func (it *sealedIter) MaxRowID() types.RowID { return it.max }
 //
 // Existe para o gate de alocação, que precisa repetir a MESMA varredura cem
 // vezes sem reabrir o arquivo — reabrir mediria a abertura junto. Não faz
-// parte da interface Fonte de propósito: nenhum consumidor de produção
+// parte da interface Source de propósito: nenhum consumidor de produção
 // reitera uma fonte, e prometer isso na interface obrigaria as outras três
 // fontes da §3.2 a implementá-lo sem ter para quê.
 func (it *sealedIter) Rewind() { it.off = it.start }

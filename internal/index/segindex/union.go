@@ -199,7 +199,7 @@ func (m *mergeIter) Close() error {
 	return first
 }
 
-// sourceHeap é um heap binário mínimo de Fonte por RowID() corrente. É o que
+// sourceHeap é um heap binário mínimo de Source por RowID() corrente. É o que
 // mantém o merge em O(log k) por linha em vez do O(k) de uma varredura
 // linear — a diferença que compensa quando k chega às centenas de segmentos
 // que o materializado acumula.

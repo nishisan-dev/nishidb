@@ -60,7 +60,7 @@ type Label struct {
 
 // Sample é uma linha de exposição já resolvida.
 //
-// Family e Nome são separados por causa do histograma: as linhas se chamam
+// Family e Name são separados por causa do histograma: as linhas se chamam
 // `x_bucket`, `x_sum` e `x_count`, mas o `# HELP`/`# TYPE` sai UMA vez sob o
 // nome-base `x`. Emitir cabeçalho por sufixo faz o Prometheus recusar o
 // scrape inteiro, não só a linha.
@@ -114,7 +114,7 @@ func (r *Registry) Register(c Collector) {
 }
 
 // register devolve a família já existente com esse nome, ou instala a nova.
-// Nome repetido com tipo diferente é bug de programação e entra em pânico:
+// Name repetido com tipo diferente é bug de programação e entra em pânico:
 // duas famílias com o mesmo nome produzem um scrape que o Prometheus recusa.
 func register[F any](r *Registry, name string, create func() *F) *F {
 	r.mu.Lock()

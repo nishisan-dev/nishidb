@@ -52,7 +52,7 @@ func TestInterfaceGroupsCloseTransitively(t *testing.T) {
 }
 
 func TestInterfaceGroupsDoNotAttributeInheritedMethodToEmbeddingInterface(t *testing.T) {
-	// a.Gauge e c.Regua têm a MESMA forma (Mede(n int) bool) sem uma
+	// a.Medidor e c.Regua têm a MESMA forma (Mede(n int) bool) sem uma
 	// implementar a outra — ligam-se pelo nome do método, como
 	// query.Store/executor.Store/planner.Store no NishiDB real. c.Anel só
 	// embute Regua (zero método explícito) e entra ANTES de Regua na
@@ -83,8 +83,8 @@ func TestInterfaceGroupsDoNotAttributeInheritedMethodToEmbeddingInterface(t *tes
 	for _, m := range members {
 		roles[m.Pkg+"."+m.Type] = m.Role
 	}
-	if len(roles) != 2 || roles["a.Gauge"] != "interface" || roles["c.Regua"] != "interface" {
-		t.Errorf("grupo de Mede: %v, esperado só a.Gauge e c.Regua", roles)
+	if len(roles) != 2 || roles["a.Medidor"] != "interface" || roles["c.Regua"] != "interface" {
+		t.Errorf("grupo de Mede: %v, esperado só a.Medidor e c.Regua", roles)
 	}
 	if _, ok := roles["c.Anel"]; ok {
 		t.Errorf("interface que só embute outra (sem método explícito) roubou a atribuição de quem declara: %v", roles)

@@ -63,7 +63,7 @@ func registraMetricasDeQuery(
 	// incrementa.
 	//
 	// reg.Contador cria a FAMÍLIA; a série só passa a existir no primeiro
-	// Sozinha(), e enquanto ele não acontece o /metrics não a publica. Como as
+	// Unlabeled(), e enquanto ele não acontece o /metrics não a publica. Como as
 	// duas só eram tocadas dentro de recusaLonga() e recusaPorOrcamento(), um
 	// servidor que nunca recusou nada não as expunha — e aí
 	// `absent(nishidb_query_long_rejected_total)` não distingue "nunca

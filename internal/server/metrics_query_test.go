@@ -16,7 +16,7 @@ import (
 // segunda calada.
 //
 // A armadilha está em reg.Contador criar a FAMÍLIA e não a série: enquanto
-// ninguém chama Sozinha(), o /metrics não publica linha nenhuma — nem sequer
+// ninguém chama Unlabeled(), o /metrics não publica linha nenhuma — nem sequer
 // o # HELP. Por isso o teste raspa a saída de verdade em vez de perguntar ao
 // registry, que responderia que a família existe.
 func TestSeriesDeRecusaDeQueryNascemComZero(t *testing.T) {

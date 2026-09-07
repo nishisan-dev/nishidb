@@ -207,7 +207,7 @@ func TestOSeladoLeAsPostingsDeOitoBytes(t *testing.T) {
 }
 
 // TestValorAusenteEhFonteVaziaCampoAusenteEhOkFalso trava a distinção que
-// decide o plano do chamador. Campo sem seção significa "este segmento não
+// decide o plano do chamador. Field sem seção significa "este segmento não
 // responde por este campo" e obriga a enumerar o segmento inteiro (§3.2 da
 // spec); valor sem entrada no diretório significa "respondo, e a resposta é
 // zero linhas". Confundir os dois nas duas direções é grave: um faz enumerar
@@ -530,7 +530,7 @@ func TestPostingsForaDaFaixaDegradamEmVezDePanicar(t *testing.T) {
 
 // TestLookupAposFechaPanicaEmVezDeLerMemoriaDesmontada trava a rede do nível
 // de baixo. As fontes leem o mmap direto, sem cópia — é o que as torna
-// gratuitas —, então consultar depois do Fecha leria memória já desmontada, e
+// gratuitas —, então consultar depois do Close leria memória já desmontada, e
 // o desfecho seria SIGSEGV: sinal incapturável, sem nome de arquivo, longe da
 // linha que errou. O pânico nomeia o método e o arquivo, e ainda é conversível
 // em erro na fronteira da requisição.

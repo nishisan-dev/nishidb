@@ -435,7 +435,7 @@ func (e *Writer) WriteSealed(caminho string, seg uint32) error {
 	}
 	largura := widthFor(uint64(maxRow - base))
 
-	corpo := e.montaCorpo(base, largura)
+	corpo := e.buildBody(base, largura)
 
 	buf := make([]byte, 0, SealedHeaderSize+len(corpo)+CRCSize)
 	buf = append(buf, SealedMagic...)
@@ -644,14 +644,14 @@ nada.
 // devolve ok=true com uma fonte vazia. A distinção decide se o chamador
 // enumera o segmento (§3.2 da spec) ou aceita zero linhas dele.
 func (s *Selado) Lookup(campo types.FieldID, h uint64) (Fonte, bool) {
-	if err := s.confereCRC(); err != nil {
+	if err := s.checkCRC(); err != nil {
 		return nil, false
 	}
 	sec, ok := s.secao(campo)   // busca binária na tabela de seções
 	if !ok {
 		return nil, false
 	}
-	idx, count, achou := s.buscaNoDiretorio(sec, h)
+	idx, count, achou := s.findInDirectory(sec, h)
 	if !achou {
 		return emptySource{}, true
 	}
@@ -962,10 +962,10 @@ Esperado: `undefined: segindex.OpenWIP`.
 //
 // Exclusivo do writer único.
 func (w *WIP) Set(h uint64, row types.RowID) error {
-	if err := w.talvezCresce(); err != nil {
+	if err := w.maybeGrow(); err != nil {
 		return err
 	}
-	slot := w.sondaOuCria(h) // conta as sondas em w.sondas
+	slot := w.probeOrCreate(h) // conta as sondas em w.sondas
 	idx := w.postCount       // 0-based; publicado como idx+1
 	off := w.postOff(idx)
 	estado := w.reg.AtomicLoad64(w.slotOff(slot) + 8)
@@ -1670,7 +1670,7 @@ próxima revisão de "consertar" a ausência:
 	// desenho. Quando uma linha troca de valor, a posting antiga mora no
 	// índice do segmento ANTIGO: ela vira falso positivo, que a revalidação do
 	// §44 já descarta, e morre quando a compaction ou a retenção aposenta
-	// aquele segmento. With o Clear somem a lápide e o falso negativo que ela
+	// aquele segmento. Com o Clear somem a lápide e o falso negativo que ela
 	// existia para evitar. O preço é uma taxa de falso positivo governada por
 	// liveRecords/totalRecords — o mesmo número que a compaction já persegue.
 ```
@@ -2148,7 +2148,7 @@ func TestIndexTrueEhAceito(t *testing.T) {
 	}
 }
 
-// TestAsGrafiasAntigasSaoRecusadas. With um motor só, `hash` e `bitmap`
+// TestAsGrafiasAntigasSaoRecusadas. Com um motor só, `hash` e `bitmap`
 // construiriam a mesma coisa — e config que declara uma escolha que o motor
 // ignora é o expireAfterWrite decorativo que o projeto já carrega como débito.
 // Aceitá-las como sinônimo seria pior: o operador continuaria escrevendo uma
@@ -2229,7 +2229,7 @@ nova, porque quem a lê está com o servidor fora do ar."
 ```go
 // TestDoisCamposIndexadosAgoraIntersectam. Antes a regra R2 devolvia UM plano
 // de hash e parava, então `node='x' AND type=2` indexava node e revalidava type
-// linha a linha. With um motor só a assimetria some, e ela some para MELHOR: os
+// linha a linha. Com um motor só a assimetria some, e ela some para MELHOR: os
 // dois termos entram na interseção.
 func TestDoisCamposIndexadosAgoraIntersectam(t *testing.T) {
 	p := planejaOK(t, "SELECT * FROM d WHERE node = 'x' AND type = 2") // ambos indexados
@@ -2773,7 +2773,7 @@ provar, e a montagem do fixture segue os helpers já nomeados nas tarefas
 anteriores.
 
 **3. Consistência de tipos.** `Fonte` é declarada na Tarefa 2 e consumida nas 5
-e 8 com a mesma assinatura. `Writer.Adiciona(campo, h, row)` é a mesma nas 1,
+e 8 com a mesma assinatura. `Writer.Add(campo, h, row)` é a mesma nas 1,
 4 e 7. `SealedPath`/`WIPPath`/`ListWIP` são usados nas 4, 6, 7 e 8 com a
 forma declarada na 1 e na 3. `CamposIndexados()` é produzida na 6 e consumida na
 7 e na 12.

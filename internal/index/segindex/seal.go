@@ -57,7 +57,7 @@ func Seal(dir string, seg uint32) error {
 }
 
 // RemoveWIPs remove os .widx do segmento, depois que o .sidx já está gravado e
-// durável. É o segundo tempo da selagem, separado de Sela para que a Tarefa 5
+// durável. É o segundo tempo da selagem, separado de Seal para que a Tarefa 5
 // (rotação) possa reagir ao meio-termo — .sidx presente, .widx ainda de pé —
 // sem precisar reabrir o Writer.
 func RemoveWIPs(dir string, seg uint32) error {
@@ -66,12 +66,12 @@ func RemoveWIPs(dir string, seg uint32) error {
 		return err
 	}
 	for _, field := range fields {
-		// slotsMin == 0: mesmo motivo de Sela — só abre o que já está lá.
+		// slotsMin == 0: mesmo motivo de Seal — só abre o que já está lá.
 		w, err := OpenWIP(dir, seg, field, 0)
 		if err != nil {
 			return err
 		}
-		// Remove direto, sem Fecha antes: o arquivo está indo embora, e Remove
+		// Remove direto, sem Close antes: o arquivo está indo embora, e Remove
 		// já desmonta o mapeamento sem gravar o header (wip.go) — gravá-lo
 		// aqui sujaria uma página que o arquivo removido em seguida nunca
 		// precisou ter.

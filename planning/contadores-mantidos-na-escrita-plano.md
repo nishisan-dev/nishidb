@@ -407,7 +407,7 @@ por grupo na internação e guardado ao lado da chave (tarefa B2 define
   - `TestDicionarioAposentaENuncaReemite`: aposenta o id 2, reabre, `Chave(2)` vivo=false, `Interna(mesma chave)` devolve id 4.
   - `TestDicionarioRecusaOTeto`: teto 2, terceira chave → `ErrTetoDeGrupos`; aposentar uma libera uma vaga.
   - `TestDicionarioNaoAlocaNoLookup` (`!race`, teto 0 sobre `Interna` de chave existente e `PorChave`).
-  - **Mutação obrigatória**: remover o `f.Sync()` de `Interna` e provar que um teste fica vermelho — `TestDicionarioFsyncaAntesDeDevolverOId` usa um seam `afterWrite func()` (como `agenda.aposEscrita`) que injeta pânico entre o write e o sync, e confere na reabertura que a entrada NÃO está lá (com o sync, o pânico só pode acontecer depois dela durável).
+  - **Mutação obrigatória**: remover o `f.Sync()` de `Interna` e provar que um teste fica vermelho — `TestDicionarioFsyncaAntesDeDevolverOId` usa um seam `afterWrite func()` (como `agenda.afterWrite`) que injeta pânico entre o write e o sync, e confere na reabertura que a entrada NÃO está lá (com o sync, o pânico só pode acontecer depois dela durável).
 
 - [ ] **Passo 2: vermelho → implementar → verde → commit** — `contador: dicionário de grupos append-only com fsync por entrada e aposentadoria`.
 
@@ -682,7 +682,7 @@ Mecânica de `AuditaContadores`: `entra()`; `wmu.Lock()`; `snap := s.AbreSnapsho
 leitor, `snapshot.go:176-181`); `c.Congela()` de cada contador; `wmu.Unlock()`.
 Depois, sem `wmu`, **enumerador próprio** — NÃO `ScanLive`/`GetByRowID`, que
 leem a location corrente e filtram por prazo vencido: para `id` em
-`[snap.BaseRowID, snap.LimitRowID)`: `packed := s.vers.Em(id, snap.Epoch)`,
+`[snap.BaseRowID, snap.LimitRowID)`: `packed := s.vers.At(id, snap.Epoch)`,
 senão `s.locs.Get(id)`; pula só ausente ou bit de lápide; sob `aposMu.RLock`,
 `segR.ReadRecord(seg, off, buf)` e confere `rec.RowID == id`; rederiva com
 `c.Deriva(payload, avaliadorDaAuditoria, scratch, chaveBuf)`; acumula em slices

@@ -21,12 +21,12 @@ import (
 // valor não pode manter um campo de posição comum: a mutação vale só para a
 // cópia local do método e se perde ao retornar. O que SOBREVIVE entre
 // chamadas por essa mesma via é a mutação de um ELEMENTO do slice — todas as
-// cópias do header, inclusive a guardada dentro da interface Fonte, apontam
+// cópias do header, inclusive a guardada dentro da interface Source, apontam
 // para o MESMO array de apoio. O bit 63 nunca colide com um rowId de teste (o
 // maior usado aqui é a centena do gerador aleatório).
 const marker = types.RowID(1) << 63
 
-// fakeSource é o dublê de Fonte sobre um slice já ORDENADO ascendente:
+// fakeSource é o dublê de Source sobre um slice já ORDENADO ascendente:
 // MinRowID/MaxRowID são o primeiro e o último elemento, sem marca.
 type fakeSource []types.RowID
 
@@ -63,7 +63,7 @@ func (f fakeSource) Err() error   { return nil }
 func (f fakeSource) Close() error { return nil }
 
 // MinRowID devolve math.MaxUint64 quando o slice é vazio — o elemento neutro
-// que o contrato da Fonte reserva para "não vou emitir nada" (o gerador
+// que o contrato da Source reserva para "não vou emitir nada" (o gerador
 // aleatório do teste de propriedade produz slices vazios de vez em quando).
 func (f fakeSource) MinRowID() types.RowID {
 	if len(f) == 0 {
@@ -79,7 +79,7 @@ func (f fakeSource) MaxRowID() types.RowID {
 	return f[len(f)-1] &^ marker
 }
 
-// emptyTestSource é uma Fonte que já nasce vazia por declaração: Min(1) >
+// emptyTestSource é uma Source que já nasce vazia por declaração: Min(1) >
 // Max(0). É o caso central de TestUneDescartaFontesVazias — provar que Union a
 // descarta ANTES de decidir entre concatenação e merge, sem consumi-la.
 type emptyTestSource struct{}
@@ -260,7 +260,7 @@ func TestUneMergePropagaOPrimeiroErro(t *testing.T) {
 	}
 }
 
-// closeTrackingSource embrulha uma Fonte e registra se Close() foi chamado.
+// closeTrackingSource embrulha uma Source e registra se Close() foi chamado.
 //
 // Prova a exigência do dispatch da Tarefa 5: "Close de qualquer combinador
 // fecha TODAS as fontes restantes" — inclusive as que a varredura nunca

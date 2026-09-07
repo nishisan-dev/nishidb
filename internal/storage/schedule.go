@@ -93,7 +93,7 @@ func (s *Store) adotaOuConstroiAgenda(m *checkpoint.Manifest) error {
 // São duas checagens porque são dois modos de falha diferentes, e nenhuma
 // cobre a outra. A das FOLHAS pega a agenda que ficou para trás do estado —
 // uma linha que venceu e cujo vencimento não foi atualizado. A dos SUMÁRIOS
-// (rowindex.Confere) pega a árvore cujas folhas estão certas mas cujo caminho
+// (rowindex.Check) pega a árvore cujas folhas estão certas mas cujo caminho
 // até elas foi quebrado, que é o que a descida percorre.
 //
 // O plano previa comparar contra uma árvore reconstruída numa região de

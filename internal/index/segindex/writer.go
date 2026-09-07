@@ -37,7 +37,7 @@ type Writer struct {
 // NewWriter devolve um escritor vazio.
 func NewWriter() *Writer { return &Writer{} }
 
-// Add registra a posting. Duplicatas e desordem são aceitas: o Escreve
+// Add registra a posting. Duplicatas e desordem são aceitas: o WriteSealed
 // ordena e deduplica.
 func (e *Writer) Add(field types.FieldID, h uint64, row types.RowID) {
 	e.ents = append(e.ents, entry{hash: h, row: row, field: field})
@@ -109,7 +109,7 @@ type sectionInfo struct {
 }
 
 // buildBody escreve a tabela de seções, os diretórios e as postings a partir
-// de e.ents — já ordenado por (campo, hash, row) e deduplicado por Escreve —
+// de e.ents — já ordenado por (campo, hash, row) e deduplicado por WriteSealed —
 // em DUAS passadas.
 //
 // A primeira passada só CONTA: quantas seções (fieldIDs distintos), quantos
@@ -126,9 +126,9 @@ type sectionInfo struct {
 // ABSOLUTOS a partir do início do arquivo selado — o leitor (Tarefa 2) fatia
 // o mmap direto por eles, sem recompor uma base a cada Lookup.
 //
-// O segundo retorno é len(secoes): o número de seções que Escreve grava como
+// O segundo retorno é len(secoes): o número de seções que WriteSealed grava como
 // secCount no header. Ele sai desta MESMA travessia de e.ents em vez de uma
-// contagem própria em Escreve porque secCount é o campo que diz ao leitor
+// contagem própria em WriteSealed porque secCount é o campo que diz ao leitor
 // quantas entradas de 24 bytes da tabela de seções existem — um segundo
 // código contando "fieldIDs distintos" por conta própria seria uma segunda
 // fonte de verdade para o mesmo número, e se um dia as duas contagens

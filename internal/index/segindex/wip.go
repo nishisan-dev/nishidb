@@ -159,7 +159,7 @@ type WIP struct {
 	// vira corrida de dados.
 	accesses int
 	// closed marca que o mapeamento já foi desmontado. É o mesmo papel do
-	// `dados == nil` de Selado, num campo atômico porque aqui há leitores
+	// `dados == nil` de Sealed, num campo atômico porque aqui há leitores
 	// concorrentes de verdade.
 	closed atomic.Bool
 }
@@ -472,8 +472,8 @@ func (w *WIP) Set(h uint64, row types.RowID) error {
 	// crescimento, que com o array cheio tocaria o mapeamento desmontado e
 	// devolveria um erro de mmap no lugar do pânico nomeado que o godoc
 	// promete. Fora do lock de propósito, e é seguro: o flag é atômico, e Set e
-	// Fecha são serializados pelo mesmo dono (o writer único, sob o wmu) — não
-	// existe Fecha concorrente com um Set em voo.
+	// Close são serializados pelo mesmo dono (o writer único, sob o wmu) — não
+	// existe Close concorrente com um Set em voo.
 	w.requireOpen("Set")
 	if err := w.maybeGrow(); err != nil {
 		return err
@@ -824,7 +824,7 @@ func (w *WIP) updateCapacity() {
 // conferindo cada cabeça de cadeia contra o número de postings declarado.
 //
 // A conferência é o que impede o pior desfecho de um .widx incoerente. O header
-// só ganha o postCount definitivo no Fecha (writeHeader não roda por Set), então
+// só ganha o postCount definitivo no Close (writeHeader não roda por Set), então
 // um arquivo que sobreviva a um crash tem a contagem ATRASADA e cadeias
 // apontando além dela. Adotado assim, o próximo Set começaria a escrever em
 // idx = postCount e sobrescreveria postings vivas — resultado silenciosamente
@@ -856,11 +856,11 @@ func (w *WIP) checkDirectory() error {
 
 // writeHeader escreve os campos de dimensão no header.
 //
-// Ele é chamado na criação, no rehash e no Fecha — não a cada Set. Entre um e
+// Ele é chamado na criação, no rehash e no Close — não a cada Set. Entre um e
 // outro, o postCount do ARQUIVO fica atrás do postCount em memória, e isso não
 // custa nada porque não existe leitor para quem a diferença importe: um .widx
 // que sobreviva a um crash é APAGADO no Open, nunca adotado (spec §2.5). Quem
-// lê o arquivo é a selagem, depois do Fecha.
+// lê o arquivo é a selagem, depois do Close.
 func (w *WIP) writeHeader() {
 	w.reg.WithBytes(0, WIPHeaderSize, func(b []byte) {
 		copy(b[0:4], WIPMagic)
@@ -908,10 +908,10 @@ func (w *WIP) requireOpen(op string) {
 // de pé.
 //
 // É a operação TERMINAL do WIP, e é a única que aceita ser chamada depois do
-// Fecha. A assimetria é deliberada e tem um consumidor concreto: a selagem
+// Close. A assimetria é deliberada e tem um consumidor concreto: a selagem
 // fecha o .widx e o apaga em seguida, e um Remove que recusasse região já
 // fechada devolveria a ela o erro de "descritor já fechado" — que ela leria
-// como falha de uma selagem que deu certo. Fecha depois de Remove, ao contrário,
+// como falha de uma selagem que deu certo. Close depois de Remove, ao contrário,
 // é uso após o fim e entra em pânico nomeado como qualquer outro.
 //
 // Arquivo já ausente não é erro: a selagem e a limpeza de órfãos do Open podem

@@ -69,7 +69,7 @@ func TestLeitorPercorreSchemaRowsEFecho(t *testing.T) {
 		t.Fatalf("fecho = %+v", l.End())
 	}
 	if l.Failure() != nil {
-		t.Fatalf("Erro = %+v, quer nil", l.Failure())
+		t.Fatalf("Failure = %+v, quer nil", l.Failure())
 	}
 }
 
@@ -98,10 +98,10 @@ func TestFechoDeErroChegaDepoisDasRows(t *testing.T) {
 		t.Fatalf("rows = %d, quer 1", n)
 	}
 	if l.End() != nil {
-		t.Fatalf("Fim = %+v, quer nil", l.End())
+		t.Fatalf("End = %+v, quer nil", l.End())
 	}
 	if l.Failure() == nil || l.Failure().Code != protocol.CodeMaxRows || l.Failure().Rows != 1 {
-		t.Fatalf("Erro = %+v", l.Failure())
+		t.Fatalf("Failure = %+v", l.Failure())
 	}
 }
 

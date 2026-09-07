@@ -146,7 +146,7 @@ type ProcessStats struct {
 	// Version é o texto de internal/buildinfo.String() — a MESMA função que
 	// o `nishidb --version`, o log de subida, o painel e o benchmark usam.
 	// Campo ADITIVO: um cliente que ainda não o conhece continua lendo o
-	// resto de Estatisticas sem quebrar. É esta a versão que a Task A4 lê
+	// resto de Stats sem quebrar. É esta a versão que a Task A4 lê
 	// depois de um rollout, para confirmar que o binário no ar é o novo.
 	Version string      `json:"version"`
 	Query   EngineStats `json:"query"`

@@ -1,6 +1,6 @@
 package c
 
-// Regua tem a MESMA forma de a.Gauge (mesmo nome e assinatura de método),
+// Regua tem a MESMA forma de a.Medidor (mesmo nome e assinatura de método),
 // sem uma implementar a outra — ligam-se pelo nome do método.
 //
 // Anel só embute Regua, sem método explícito próprio: é o tipo-ponte que a

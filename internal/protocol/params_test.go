@@ -33,7 +33,7 @@ func TestOsQuatroTiposDeWireViramValor(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			vs, err := protocol.Values([]protocol.Param{c.p})
 			if err != nil {
-				t.Fatalf("Valores: %v", err)
+				t.Fatalf("Values: %v", err)
 			}
 			if len(vs) != 1 {
 				t.Fatalf("len(valores) = %d, quer 1", len(vs))
@@ -57,7 +57,7 @@ func TestDoubleGuardaOsBitsEAceitaInteiro(t *testing.T) {
 	for _, text := range []string{"3.5", "3", "-0.25", "1e3"} {
 		vs, err := protocol.Values([]protocol.Param{param("double", text)})
 		if err != nil {
-			t.Fatalf("Valores(%s): %v", text, err)
+			t.Fatalf("Values(%s): %v", text, err)
 		}
 		if vs[0].Type != types.TypeDouble {
 			t.Fatalf("Type = %v, quer double", vs[0].Type)
@@ -87,7 +87,7 @@ func TestInt64GrandeNaoPerdePrecisao(t *testing.T) {
 	const large = int64(9007199254740993) // 2^53 + 1
 	vs, err := protocol.Values([]protocol.Param{param("int64", "9007199254740993")})
 	if err != nil {
-		t.Fatalf("Valores: %v", err)
+		t.Fatalf("Values: %v", err)
 	}
 	if vs[0].I64 != large {
 		t.Fatalf("I64 = %d, quer %d", vs[0].I64, large)
@@ -191,6 +191,6 @@ func TestValueAusenteOuTipoAusenteSaoRecusados(t *testing.T) {
 func TestSemParametrosDevolveNil(t *testing.T) {
 	vs, err := protocol.Values(nil)
 	if err != nil || vs != nil {
-		t.Fatalf("Valores(nil) = %v, %v; quer nil, nil", vs, err)
+		t.Fatalf("Values(nil) = %v, %v; quer nil, nil", vs, err)
 	}
 }

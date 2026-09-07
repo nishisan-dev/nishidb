@@ -41,12 +41,12 @@ func TestBuscaDevolveAVersaoVigenteNaEpocaENaoAIntermediaria(t *testing.T) {
 		got, found := c.At(7, k.epoca)
 		if k.quero == 0 {
 			if found {
-				t.Errorf("Em(7, %d) = %#x, quero achou=false: %s", k.epoca, got, k.porque)
+				t.Errorf("At(7, %d) = %#x, quero achou=false: %s", k.epoca, got, k.porque)
 			}
 			continue
 		}
 		if !found || got != k.quero {
-			t.Errorf("Em(7, %d) = (%#x, %v), quero %#x: %s", k.epoca, got, found, k.quero, k.porque)
+			t.Errorf("At(7, %d) = (%#x, %v), quero %#x: %s", k.epoca, got, found, k.quero, k.porque)
 		}
 	}
 }
@@ -67,12 +67,12 @@ func TestPodaRemoveSoOQueNenhumLeitorAlcanca(t *testing.T) {
 	// que ninguém faz — e ela devolveria a entrada da 20, que continua certa
 	// para quem quer que ainda esteja atrás dela.
 	if got := c.Entries(); got != 1 {
-		t.Errorf("Entradas() = %d, quero 1: a entrada da época 10 sobreviveu a uma poda que nenhum leitor alcança", got)
+		t.Errorf("Entries() = %d, quero 1: a entrada da época 10 sobreviveu a uma poda que nenhum leitor alcança", got)
 	}
 
 	c.Prune(NoReader)
 	if got := c.Entries(); got != 0 {
-		t.Errorf("Entradas() = %d, quero 0: sem leitor nenhum o journal tem de esvaziar", got)
+		t.Errorf("Entries() = %d, quero 0: sem leitor nenhum o journal tem de esvaziar", got)
 	}
 }
 

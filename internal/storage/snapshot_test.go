@@ -184,12 +184,12 @@ func TestSnapshotFechadoDevolveOJournalAoWriter(t *testing.T) {
 	snap := s.AbreSnapshot()
 	mustPut(t, s, "A", 2, statusPayload(t, s, "A", "Stop", 2), nil)
 	if got := s.vers.Entries(); got != 1 {
-		t.Fatalf("Entradas() = %d, quero 1: a atualização sob leitor vivo não guardou a versão anterior", got)
+		t.Fatalf("Entries() = %d, quero 1: a atualização sob leitor vivo não guardou a versão anterior", got)
 	}
 
 	s.FechaSnapshot(snap)
 	if got := s.vers.Entries(); got != 0 {
-		t.Errorf("Entradas() = %d, quero 0: o journal não voltou quando o último leitor fechou", got)
+		t.Errorf("Entries() = %d, quero 0: o journal não voltou quando o último leitor fechou", got)
 	}
 }
 
@@ -202,7 +202,7 @@ func TestSemConsultaAbertaAIngestaoNaoGuardaVersaoNenhuma(t *testing.T) {
 	mustPut(t, s, "A", 2, statusPayload(t, s, "A", "Stop", 2), nil)
 
 	if got := s.vers.Entries(); got != 0 {
-		t.Errorf("Entradas() = %d, quero 0: o writer guardou versão sem ninguém para lê-la", got)
+		t.Errorf("Entries() = %d, quero 0: o writer guardou versão sem ninguém para lê-la", got)
 	}
 }
 
@@ -291,7 +291,7 @@ func TestCopyForwardNaoCriaVersaoENaoTravaAPropriaPassada(t *testing.T) {
 		t.Fatal("nenhum segmento aposentado: sem passada de verdade o teste não exercita o copy-forward")
 	}
 	if got := s.vers.Entries(); got != antes {
-		t.Errorf("Entradas() = %d, quero %d: o copy-forward criou versão e vai pinar o segmento que ele mesmo aposenta", got, antes)
+		t.Errorf("Entries() = %d, quero %d: o copy-forward criou versão e vai pinar o segmento que ele mesmo aposenta", got, antes)
 	}
 }
 

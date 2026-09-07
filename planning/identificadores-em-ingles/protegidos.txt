@@ -43,7 +43,14 @@
 #     planning/colunas-congeladas-e-ttl-condicional-plano.md:955 o `Vazio` que
 #     abre frase é o ADJETIVO que descreve o campo `When` sem conteúdo
 #     ("Vazio marca a regra de FUNDO"), e não método nenhum. As oito citações
-#     verdadeiras deste ciclo já saíram como `IsEmpty`.
+#     verdadeiras deste ciclo já saíram como `IsEmpty`. `Com` é o quarto, e o
+#     único em que o CONTEXTO é que engana: `FamiliaContador.Com` virou
+#     `With`, e em planning/fase7-driver-jdbc.md:102 o `Com` que abre frase é
+#     a PREPOSIÇÃO ("Com o descritor eles deixam de ser iguais"). O gate a lê
+#     como citação porque conta as crases a partir do início da LINHA, e a
+#     crase que fecha ali abriu na linha anterior — a contagem dá ímpar e ele
+#     conclui "dentro de crase". As citações reais de `Com` já saíram como
+#     `With` na passada de internal/metrics.
 #   - NOME DE ARQUIVO EM DISCO cuja base é homônima de identificador
 #     renomeado: `vazio.bin`, o tempdir de
 #     internal/storage/mmap/region_test.go:337. O ponto o faz passar por
@@ -70,6 +77,7 @@
 #     metade — `corrente`, `pendente` e `fora` ficariam —, que é contrato de
 #     wire, e ele muda na Fase 3, não aqui.
 Arquivo.Apenda
+Com
 Data
 Escritor.Apenda
 Fonte.Estado

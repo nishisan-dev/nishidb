@@ -58,7 +58,7 @@ func NewReader(r io.Reader) *Reader {
 }
 
 // Next avança para a próxima linha de DADOS. false = fecho, erro de transporte
-// ou resposta malformada — End(), Erro() e Err() distinguem.
+// ou resposta malformada — End(), Failure() e Err() distinguem.
 func (l *Reader) Next() bool {
 	for {
 		if l.done {
@@ -166,6 +166,6 @@ func (l *Reader) End() *EndLine { return l.end }
 func (l *Reader) Failure() *ErrorLine { return l.failure }
 
 // Err é a falha de TRANSPORTE ou de formato — não a falha da consulta, que sai
-// por Erro(). Separá-las é o que permite ao cliente distinguir "o servidor
+// por Failure(). Separá-las é o que permite ao cliente distinguir "o servidor
 // disse que a query quebrou" de "o servidor sumiu no meio da frase".
 func (l *Reader) Err() error { return l.err }

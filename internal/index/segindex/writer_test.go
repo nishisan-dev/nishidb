@@ -26,7 +26,7 @@ import (
 // agrupamento errado em buildBody que o leitor decodificasse do mesmo jeito
 // errado passaria batido — "os dois estão certos" e "os dois erram do mesmo
 // jeito" ficam indistinguíveis. Ler os bytes aqui, direto do []byte que
-// Escreve produziu, é o que trava o ESCRITOR sozinho.
+// WriteSealed produziu, é o que trava o ESCRITOR sozinho.
 func TestOEscritorAgrupaOrdenaEDeduplicaAsPostings(t *testing.T) {
 	dir := t.TempDir()
 	e := segindex.NewWriter()
