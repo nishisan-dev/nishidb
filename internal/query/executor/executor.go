@@ -147,7 +147,7 @@ func Open(ctx context.Context, bq *binder.BoundQuery, plan planner.Plan, opts Op
 		var area *spill.Area
 		if d, ok := opts.Store.(DiretorioDeSpill); ok {
 			if dir := d.DiretorioDeSpill(); dir != "" {
-				a, err := spill.NovaArea(dir, opts.SpillBytes)
+				a, err := spill.NewArea(dir, opts.SpillBytes)
 				if err != nil {
 					return nil, err
 				}

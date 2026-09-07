@@ -130,7 +130,7 @@ a superfície de configuração que a C estabelece.
   func NewWriter() *Writer
   func (e *Writer) Add(campo types.FieldID, h uint64, row types.RowID)
   func (e *Writer) Vazio() bool
-  func (e *Writer) Escreve(caminho string, seg uint32) error
+  func (e *Writer) WriteSealed(caminho string, seg uint32) error
   ```
 
 O `Writer` é o **único lugar do repositório que decide o layout selado**. A
@@ -274,8 +274,8 @@ func TestOEscritorAgrupaOrdenaEDeduplicaAsPostings(t *testing.T) {
 	e.Add(3, 999, 12)
 
 	caminho := segindex.SealedPath(dir, 42)
-	if err := e.Escreve(caminho, 42); err != nil {
-		t.Fatalf("Escreve: %v", err)
+	if err := e.WriteSealed(caminho, 42); err != nil {
+		t.Fatalf("WriteSealed: %v", err)
 	}
 
 	s, err := segindex.OpenSealed(caminho)
@@ -332,8 +332,8 @@ func TestOEscritorRebaseiaParaAMenorLarguraQueCabe(t *testing.T) {
 	e.Add(7, 100, base+1000)
 
 	caminho := segindex.SealedPath(dir, 1)
-	if err := e.Escreve(caminho, 1); err != nil {
-		t.Fatalf("Escreve: %v", err)
+	if err := e.WriteSealed(caminho, 1); err != nil {
+		t.Fatalf("WriteSealed: %v", err)
 	}
 	b, err := os.ReadFile(caminho)
 	if err != nil {
@@ -355,8 +355,8 @@ func TestOEscritorVazioNaoCriaArquivo(t *testing.T) {
 		t.Fatal("escritor recém-criado deveria ser Vazio()")
 	}
 	caminho := segindex.SealedPath(dir, 1)
-	if err := e.Escreve(caminho, 1); err != nil {
-		t.Fatalf("Escreve: %v", err)
+	if err := e.WriteSealed(caminho, 1); err != nil {
+		t.Fatalf("WriteSealed: %v", err)
 	}
 	if _, err := os.Stat(caminho); !os.IsNotExist(err) {
 		t.Fatalf("Stat(%s) = %v, quero IsNotExist", filepath.Base(caminho), err)
@@ -400,7 +400,7 @@ type Writer struct {
 // NewWriter devolve um escritor vazio.
 func NewWriter() *Writer { return &Writer{} }
 
-// Add registra a posting. Duplicatas e desordem são aceitas: o Escreve
+// Add registra a posting. Duplicatas e desordem são aceitas: o WriteSealed
 // ordena e deduplica.
 func (e *Writer) Add(campo types.FieldID, h uint64, row types.RowID) {
 	e.ents = append(e.ents, entrada{hash: h, row: row, campo: campo})
@@ -409,11 +409,11 @@ func (e *Writer) Add(campo types.FieldID, h uint64, row types.RowID) {
 // Vazio reporta que nada foi adicionado.
 func (e *Writer) Vazio() bool { return len(e.ents) == 0 }
 
-// Escreve emite o arquivo em caminho, por .tmp + fsync + rename + fsync do
+// WriteSealed emite o arquivo em caminho, por .tmp + fsync + rename + fsync do
 // diretório. Writer vazio NÃO cria arquivo: "sem índice" é um estado que o
 // Lookup trata por enumeração, e um arquivo vazio faria a reconstrução
 // considerar o segmento pronto.
-func (e *Writer) Escreve(caminho string, seg uint32) error {
+func (e *Writer) WriteSealed(caminho string, seg uint32) error {
 	if e.Vazio() {
 		return nil
 	}
@@ -1067,11 +1067,11 @@ de um orçamento a recalibrar por máquina."
   `OpenSealed` (Tarefa 2).
 - Produz:
   ```go
-  func Sela(dir string, seg uint32) error
+  func Seal(dir string, seg uint32) error
   func RemoveWIPs(dir string, seg uint32) error
   ```
 
-`Sela` lê **todos** os `.widx` do segmento, alimenta um `Writer` e emite o
+`Seal` lê **todos** os `.widx` do segmento, alimenta um `Writer` e emite o
 `.sidx`. É idempotente: chamada sobre um segmento que já tem `.sidx` e não tem
 `.widx` é no-op, o que importa porque um crash entre o `rename` e o `unlink` dos
 `.widx` deixa exatamente esse estado.
@@ -1111,7 +1111,7 @@ func TestSelarPreservaExatamenteOQueOWIPRespondia(t *testing.T) {
 	}
 
 	if err := segindex.Seal(dir, 42); err != nil {
-		t.Fatalf("Sela: %v", err)
+		t.Fatalf("Seal: %v", err)
 	}
 
 	s, err := segindex.OpenSealed(segindex.SealedPath(dir, 42))
@@ -1202,7 +1202,7 @@ Esperado: `undefined: segindex.Seal`.
 - [ ] **Passo 3: implementar `seal.go`**
 
 ```go
-// Sela converte a forma WIP do segmento na forma selada, e desliga os .widx.
+// Seal converte a forma WIP do segmento na forma selada, e desliga os .widx.
 //
 // A ORDEM é a garantia: escreve o .sidx.tmp, fsync, rename, fsync do
 // diretório, e SÓ ENTÃO remove os .widx. Na ordem inversa um crash no meio
@@ -1212,7 +1212,7 @@ Esperado: `undefined: segindex.Seal`.
 //
 // Idempotente: sem .widx e com .sidx presente, no-op. É o estado que um crash
 // entre o rename e o unlink deixa.
-func Sela(dir string, seg uint32) error {
+func Seal(dir string, seg uint32) error {
 	campos, err := ListWIP(dir, seg)
 	if err != nil {
 		return err
@@ -1234,7 +1234,7 @@ func Sela(dir string, seg uint32) error {
 			return err
 		}
 	}
-	if err := e.Escreve(SealedPath(dir, seg), seg); err != nil {
+	if err := e.WriteSealed(SealedPath(dir, seg), seg); err != nil {
 		return err
 	}
 	return RemoveWIPs(dir, seg)
@@ -1798,7 +1798,7 @@ func TestConstruirDoSegmentoDaOMesmoArquivoQueSelarOWIP(t *testing.T) {
 
 `ConstroiIndiceDoSegmento` varre o segmento com o mesmo iterador de records que
 o replay do tail usa (`store_recovery.go`), alimenta um `segindex.Writer` com
-`(campo, hash, rowID)` de cada record e chama `Escreve`. Ele **não** consulta
+`(campo, hash, rowID)` de cada record e chama `WriteSealed`. Ele **não** consulta
 `locations.idx`, **não** filtra tombstone e **não** decide liveness: o índice é
 superconjunto por contrato, e filtrar aqui introduziria uma segunda definição de
 "vivo" que divergiria da do executor.

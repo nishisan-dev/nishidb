@@ -65,7 +65,7 @@ type ordenador struct {
 	// orçamento estourado RECUSA a query. Não-nil, ele degrada: o lote
 	// corrente vira um run ordenado em disco e a acumulação recomeça.
 	area *spill.Area
-	runs []*spill.Arquivo
+	runs []*spill.Run
 	// cabecas é o estado do merge k-way, montado no ordena() e nil enquanto a
 	// ordenação couber em memória.
 	cabecas  []*cabeca
@@ -99,7 +99,7 @@ type ordenador struct {
 // comparar k runs ao mesmo tempo: os payloads de todas as cabeças estão vivos
 // simultaneamente, cada um no buffer do seu leitor.
 type cabeca struct {
-	leitor *spill.Leitor
+	leitor *spill.Reader
 	slots  []slot
 	fr     encoding.FieldReader
 	rowID  types.RowID
@@ -204,18 +204,18 @@ func (o *ordenador) acrescenta(slots []slot, rowID types.RowID) error {
 // mínimo, a cada linha emitida.
 func (o *ordenador) transborda() error {
 	o.ordenaEmMemoria()
-	arq, err := o.area.Novo()
+	arq, err := o.area.NewRun()
 	if err != nil {
 		return err
 	}
 	o.runs = append(o.runs, arq)
 	for i := range o.tuplas {
 		t := &o.tuplas[i]
-		if err := arq.Escreve(t.rowID, o.arena[t.payIni:t.payFim]); err != nil {
+		if err := arq.Write(t.rowID, o.arena[t.payIni:t.payFim]); err != nil {
 			return err
 		}
 	}
-	if err := arq.Sela(); err != nil {
+	if err := arq.Seal(); err != nil {
 		return err
 	}
 	// Zera SEM devolver a capacidade: os buffers voltam a ser preenchidos
@@ -281,7 +281,7 @@ func (o *ordenador) ordenaEmMemoria() {
 func (o *ordenador) montaMerge() error {
 	o.cabecas = make([]*cabeca, 0, len(o.runs))
 	for _, r := range o.runs {
-		l, err := r.Le()
+		l, err := r.NewReader()
 		if err != nil {
 			return err
 		}
@@ -296,7 +296,7 @@ func (o *ordenador) montaMerge() error {
 
 // avanca lê o registro seguinte do run e decodifica os slots.
 func (c *cabeca) avanca() error {
-	id, payload, ok, err := c.leitor.Proximo()
+	id, payload, ok, err := c.leitor.Next()
 	if err != nil {
 		return err
 	}

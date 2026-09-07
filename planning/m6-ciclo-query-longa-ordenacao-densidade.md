@@ -600,7 +600,7 @@ vira erro nomeado (`ROW_TOO_LARGE`) em vez de crescimento silencioso.
 #### C5 — `internal/query/spill`: a primitiva
 
 - **API**, com o contrato de cópia no próprio nome do método:
-  `AcrescentaCopiando(row)`, `Rewind()`, `Proximo()`, `Close()`. É
+  `AcrescentaCopiando(row)`, `Rewind()`, `Next()`, `Close()`. É
   `AcrescentaCopiando` e não `Acrescenta` porque `ColView.Val.Bytes` vale só até
   o próximo `Next()` ([row.go:7-8](internal/query/executor/row.go:7)) — é a
   armadilha número um do componente, e um nome neutro convidaria a reter a slice.
@@ -832,10 +832,10 @@ vez** ao virar cabeça do seu run.
 
 **O contrato que peço à primitiva do Bloco C:** bytes **opacos** (o enquadramento
 é do spill, não meu — dois framings divergem no primeiro registro patológico);
-`Proximo()` sem alocação por registro; estouro devolve sentinela e **nunca trunca
+`Next()` sem alocação por registro; estouro devolve sentinela e **nunca trunca
 em silêncio**; **sem fsync** (spill não é durável, e crash perder a query é o
 desfecho certo); lixo de crash limpo pela primitiva na subida; K leitores
-concorrentes em K runs distintos; `Le()` só depois de `Sela()`.
+concorrentes em K runs distintos; `NewReader()` só depois de `Seal()`.
 
 #### D5 — Índice hash físico (fecha o **débito 19**) — *independente de D0..D4*
 

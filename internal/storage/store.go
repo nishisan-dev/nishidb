@@ -1018,7 +1018,7 @@ func Open(opts Options) (*Store, error) {
 		opts.Log = logging.New(os.Stderr, logging.FormatText, slog.LevelInfo)
 	}
 	opts.Log = opts.Log.Component("storage").Dataset(opts.Dataset)
-	spillDir := filepath.Join(opts.Dir, spill.NomeDoDiretorio)
+	spillDir := filepath.Join(opts.Dir, spill.DirName)
 	metaDir := filepath.Join(opts.Dir, "metadata")
 	dataDir := filepath.Join(opts.Dir, "data")
 	idxDir := filepath.Join(opts.Dir, "indexes")
@@ -1080,7 +1080,7 @@ func Open(opts Options) (*Store, error) {
 	// dataset, então todo arquivo em spill/ é de alguém que não existe mais.
 	// Não é "melhor esforço" — não poder limpar significa não poder confiar no
 	// que será escrito ali em seguida.
-	if err := spill.Limpa(opts.Dir); err != nil {
+	if err := spill.Cleanup(opts.Dir); err != nil {
 		return nil, fmt.Errorf("storage: abrir o dataset %s: %w", opts.Dir, err)
 	}
 	if opts.DictCompartilhado != nil {
@@ -2440,7 +2440,7 @@ func (s *Store) ScanLive(snap types.Snapshot) types.RowIDIterator {
 // operador que dimensionou o disco pelo §85 não precisa dimensionar um segundo
 // lugar.
 func (s *Store) DiretorioDeSpill() string {
-	return filepath.Join(s.opts.Dir, spill.NomeDoDiretorio)
+	return filepath.Join(s.opts.Dir, spill.DirName)
 }
 
 // Lookup consulta o índice do campo; valor nunca visto devolve iterador vazio;

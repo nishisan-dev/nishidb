@@ -47,10 +47,21 @@
 #     scripts/renametools/inventory_test.go:30 e o exemplo dos comentários de
 #     scripts/ifacerename/rewrite.go:196 e scripts/renametools/groups.go:108,
 #     onde o `Escritor` nu da linha vizinha fica e trocar só a metade
-#     qualificada quebraria o teste e a frase.
+#     qualificada quebraria o teste e a frase. `Arquivo.Apenda` é o mesmo
+#     fixture (inventory_test.go:39), e a linha seguinte cita
+#     `Arquivo.Apenda.chave`, que o mapeamento não alcança;
+#   - VALOR DE RÓTULO de métrica homônimo de campo privado: `selado`, do
+#     `estado` de `nishidb_index_segmentos` (internal/metrics/names.go:393,
+#     internal/storage/store.go:576,609 e mais treze citações em README,
+#     docs e planning). O campo `Arquivo.selado` do spill virou
+#     `Run.sealed`, e sem a proteção o valor do rótulo mudaria em crase pela
+#     metade — `corrente`, `pendente` e `fora` ficariam —, que é contrato de
+#     wire, e ele muda na Fase 3, não aqui.
+Arquivo.Apenda
 Data
 Escritor.Apenda
 Fonte.Estado
+selado
 Existe
 campo
 campos
