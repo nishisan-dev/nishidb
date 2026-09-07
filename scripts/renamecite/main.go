@@ -313,8 +313,8 @@ func loadMapping(idents, paths, tests, logkeys, subtests, protect []string) (*Ma
 //     de um pacote que o lote nem toca, e sem esta lista a regra lia `storage`
 //     como receptor e trocava a folha por um `Modo` homônimo de OUTRO pacote;
 //   - a declaração viva é o oráculo do "ainda existe": `Nome` continua sendo
-//     campo de `metrics.Amostra`, `BytesRetidos` de `Store` e de
-//     `materializer.Decodificado`, `escreveAtomico` de `index/segindex`.
+//     campo de `counter.Definicao`, `BytesRetidos` de `Store` e de
+//     `materializer.Decodificado`, `Fecha` de `kafka.Fila`.
 //     Trocar essas citações pelo nome novo de um HOMÔNIMO renomeado em outro
 //     pacote cria exatamente a citação pendurada que esta ferramenta existe
 //     para não deixar para trás — e antes deste oráculo a única defesa era
@@ -370,7 +370,7 @@ func collectDeclarations(dir string, m *Mapping) error {
 			case *ast.Field:
 				// Campo de struct, método de interface e parâmetro nomeado: a
 				// pergunta é se o NOME ainda é declarado em algum lugar, e é um
-				// CAMPO vivo (`metrics.Amostra.Nome`) que faz a citação de
+				// CAMPO vivo (`counter.Definicao.Nome`) que faz a citação de
 				// `Nome` não ser pendurada.
 				for _, id := range x.Names {
 					declara(id.Name)

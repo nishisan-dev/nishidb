@@ -494,3 +494,48 @@ func TestFenceOfAnotherLanguageIsNotIdentifierContext(t *testing.T) {
 		t.Fatalf("aplicou: %v", rep.Applied)
 	}
 }
+
+// TestCallParenthesesDoNotSplitTheQualifiedCitation cobre a forma `T.M()`, que
+// a passada do G2 deixou pela metade nas duas docstrings do client Python:
+// `Leitor.Linha()` saiu como `Reader.Linha()` porque a folha entrava no switch
+// como `Linha()` — endereço de nada —, nenhuma regra de membro casava, e
+// sobrava o atalho do TIPO, que troca só o receptor. Meia citação afirma que
+// `Reader` tem um método `Linha`.
+//
+// O que vem ENTRE os parênteses não muda a decisão: `Leitor.Linha(x)` é um
+// exemplo de chamada, e o método ali é citação igual.
+func TestCallParenthesesDoNotSplitTheQualifiedCitation(t *testing.T) {
+	m := citationMapping()
+	m.addIdentRow("internal/protocol", "type", "Leitor", "Reader")
+	m.addIdentRow("internal/protocol", "method", "Leitor.Linha", "Line")
+	casos := []struct{ nome, src, want string }{
+		{"metodo com o tipo renomeado", "o `Leitor.Linha()` do Go", "o `Reader.Line()` do Go"},
+		{"chamada com argumento", "como `Leitor.Linha(x)` entrega", "como `Reader.Line(x)` entrega"},
+		{"receptor minusculo", "`l.Linha()` devolve", "`l.Line()` devolve"},
+		{"qualificado fora de crase", "chame Leitor.Linha() antes", "chame Reader.Line() antes"},
+	}
+	for _, c := range casos {
+		t.Run(c.nome, func(t *testing.T) {
+			out, _ := RewriteText([]byte(c.src), ".md", m)
+			if string(out) != c.want {
+				t.Fatalf("saída: %q\nquer:  %q", out, c.want)
+			}
+		})
+	}
+}
+
+// TestCallParenthesesWithoutAQualifierAreNotACitation é a contraparte, e é ela
+// que impede a regra de virar estrago: sem ponto antes dos parênteses o que
+// está ali é um EXEMPLO — `dict(linha)`, `tamanho(v)` —, e palavra minúscula
+// dentro de crase composta é do exemplo, não do mapeamento. Foi a rodada que
+// transformou `dict(linha)` em `dict(line)` que fechou essa fronteira.
+func TestCallParenthesesWithoutAQualifierAreNotACitation(t *testing.T) {
+	src := "o exemplo `tamanho(v)` e `dict(tamanho)`"
+	out, rep := RewriteText([]byte(src), ".md", citationMapping())
+	if string(out) != src {
+		t.Fatalf("tocou o exemplo: %q", out)
+	}
+	if len(rep.Applied) != 0 {
+		t.Fatalf("aplicou: %v", rep.Applied)
+	}
+}

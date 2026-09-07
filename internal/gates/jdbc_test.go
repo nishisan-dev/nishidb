@@ -213,7 +213,7 @@ func readFile(t *testing.T, relative string) string {
 	return string(b)
 }
 
-// protocolCodes extrai as constantes Cod* de valor string, por AST.
+// protocolCodes extrai as constantes Code* de valor string, por AST.
 //
 // Por AST e não por regexp: o valor de uma constante é o que o compilador vê,
 // e um grep casaria também comentários e strings de mensagem que mencionem o
