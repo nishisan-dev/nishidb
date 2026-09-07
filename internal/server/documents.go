@@ -263,7 +263,7 @@ func (s *Servidor) handleStats(w http.ResponseWriter, r *http.Request) {
 // categoria nova esquecesse de somar nele, os dois discordariam.
 func (s *Servidor) errosDoDataset(nome string) uint64 {
 	var total uint64
-	for _, a := range s.met.erros.Coleta() {
+	for _, a := range s.met.erros.Collect() {
 		for _, l := range a.Labels {
 			if l.Nome == metrics.LabelDataset && l.Valor == nome {
 				total += uint64(a.Valor)

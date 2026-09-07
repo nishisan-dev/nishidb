@@ -24,7 +24,7 @@ import (
 func TestRegistraMetricasPreRegistraAsSeisCategoriasDeEventoRuimEmZero(t *testing.T) {
 	m := registraMetricas(nil, "events")
 
-	amostras := m.famInvalidos.Coleta()
+	amostras := m.famInvalidos.Collect()
 	vistas := make(map[string]float64, len(amostras))
 	for _, a := range amostras {
 		var motivo string

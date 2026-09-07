@@ -75,14 +75,14 @@ type Amostra struct {
 
 // Coletor produz amostras no instante do scrape.
 type Coletor interface {
-	Coleta() []Amostra
+	Collect() []Amostra
 }
 
 // ColetorFunc adapta uma função a Coletor.
 type ColetorFunc func() []Amostra
 
-// Coleta implementa Coletor.
-func (f ColetorFunc) Coleta() []Amostra { return f() }
+// Collect implementa Coletor.
+func (f ColetorFunc) Collect() []Amostra { return f() }
 
 // Registry guarda as famílias e os coletores de um processo.
 type Registry struct {
@@ -245,8 +245,8 @@ func (s *SerieContador) Add(n uint64) { s.v.Add(n) }
 // Valor lê o acumulado.
 func (s *SerieContador) Valor() uint64 { return s.v.Load() }
 
-// Coleta implementa Coletor.
-func (f *FamiliaContador) Coleta() []Amostra {
+// Collect implementa Coletor.
+func (f *FamiliaContador) Collect() []Amostra {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	out := make([]Amostra, 0, len(f.ordem))
@@ -324,8 +324,8 @@ func (s *SerieMedidor) Add(delta float64) {
 // Valor lê o valor corrente.
 func (s *SerieMedidor) Valor() float64 { return math.Float64frombits(s.bits.Load()) }
 
-// Coleta implementa Coletor.
-func (f *FamiliaMedidor) Coleta() []Amostra {
+// Collect implementa Coletor.
+func (f *FamiliaMedidor) Collect() []Amostra {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	out := make([]Amostra, 0, len(f.ordem))
@@ -403,8 +403,8 @@ func (s *SerieHistograma) Observa(v float64) {
 	s.total++
 }
 
-// Coleta implementa Coletor. Os buckets são CUMULATIVOS, como o formato exige.
-func (f *FamiliaHistograma) Coleta() []Amostra {
+// Collect implementa Coletor. Os buckets são CUMULATIVOS, como o formato exige.
+func (f *FamiliaHistograma) Collect() []Amostra {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	out := make([]Amostra, 0, len(f.ordem)*(len(f.limites)+3))
@@ -457,7 +457,7 @@ func (r *Registry) WriteTo(w io.Writer) (int64, error) {
 	var sb strings.Builder
 	vistas := make(map[string]bool)
 	for _, c := range coletores {
-		for _, a := range c.Coleta() {
+		for _, a := range c.Collect() {
 			if !vistas[a.Familia] {
 				vistas[a.Familia] = true
 				if a.Ajuda != "" {
