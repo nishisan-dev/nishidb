@@ -155,7 +155,7 @@ func TestEscritaComOutroPrazoCancelaAExpiracaoCurta(t *testing.T) {
 	id, _ := mustPut(t, s, "A", 1, payloadComPrazo(t, s, "A", rel.t, 3*time.Minute), nil)
 
 	rel.avanca(90 * time.Second)
-	rec, _, pres, err := s.Estado([]byte("A"), nil)
+	rec, _, pres, err := s.State([]byte("A"), nil)
 	if err != nil || pres != types.PresenceLive {
 		t.Fatalf("pres=%v err=%v", pres, err)
 	}

@@ -93,7 +93,7 @@ func TestServidorAbreODatasetComOsCamposDeHashDeclarados(t *testing.T) {
 	if !ok {
 		t.Fatal("o campo node não foi registrado no dicionário do dataset")
 	}
-	if !st.Indexado(f) {
+	if !st.Indexed(f) {
 		t.Fatal("o Store reabriu sem a capability de índice no campo declarado")
 	}
 	if !slices.Contains(deixados, f) {

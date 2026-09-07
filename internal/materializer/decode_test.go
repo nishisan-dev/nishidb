@@ -23,7 +23,7 @@ func leCampo(t *testing.T, c *schema.Compiled, st *fakestorage.Store, key, campo
 	if !ok {
 		t.Fatalf("coluna %q não existe no schema compilado", campo)
 	}
-	rec, _, presente, err := st.GetByKey(st.AbreSnapshot(), []byte(key), nil)
+	rec, _, presente, err := st.GetByKey(st.OpenSnapshot(), []byte(key), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

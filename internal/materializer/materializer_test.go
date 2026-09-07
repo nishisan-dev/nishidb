@@ -76,7 +76,7 @@ func (h *harness) apply(event string) ApplyResult {
 // a visão que o executor terá.
 func (h *harness) state(key string) map[string]types.Value {
 	h.t.Helper()
-	rec, _, ok, err := h.st.GetByKey(h.st.AbreSnapshot(), []byte(key), nil)
+	rec, _, ok, err := h.st.GetByKey(h.st.OpenSnapshot(), []byte(key), nil)
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -693,11 +693,11 @@ func (s storeErro) Put(key []byte, seq int64, flags uint8, payload []byte, prev 
 	return s.Store.Put(key, seq, flags, payload, prev)
 }
 
-func (s storeErro) Estado(key, buf []byte) (types.Record, []byte, types.Presence, error) {
+func (s storeErro) State(key, buf []byte) (types.Record, []byte, types.Presence, error) {
 	if s.get != nil {
 		return types.Record{}, buf, types.PresenceAbsent, s.get
 	}
-	return s.Store.Estado(key, buf)
+	return s.Store.State(key, buf)
 }
 
 func (s storeErro) GetByKey(snap types.Snapshot, key, buf []byte) (types.Record, []byte, bool, error) {
@@ -784,7 +784,7 @@ type storePayloadTruncado struct {
 	rec types.Record
 }
 
-func (s storePayloadTruncado) Estado(key, buf []byte) (types.Record, []byte, types.Presence, error) {
+func (s storePayloadTruncado) State(key, buf []byte) (types.Record, []byte, types.Presence, error) {
 	buf = buf[:0]
 	buf = append(buf, key...)
 	keyEnd := len(buf)

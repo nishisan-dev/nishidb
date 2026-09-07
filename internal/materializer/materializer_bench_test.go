@@ -23,7 +23,7 @@ type nullStore struct {
 	found   bool
 }
 
-func (s *nullStore) Estado(key, buf []byte) (types.Record, []byte, types.Presence, error) {
+func (s *nullStore) State(key, buf []byte) (types.Record, []byte, types.Presence, error) {
 	rec, out, ok, err := s.GetByKey(key, buf)
 	if err != nil || !ok {
 		return types.Record{}, out, types.PresenceAbsent, err

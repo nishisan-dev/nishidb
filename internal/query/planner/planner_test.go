@@ -116,7 +116,7 @@ type espiao struct {
 	inner *fakestorage.Store
 }
 
-func (s *espiao) Indexado(f types.FieldID) bool { return s.inner.Indexado(f) }
+func (s *espiao) Indexed(f types.FieldID) bool { return s.inner.Indexed(f) }
 
 func (s *espiao) Lookup(f types.FieldID, v types.Value) (types.RowIDIterator, error) {
 	s.t.Fatalf("o planner consultou DADOS no plan-time: Lookup(%d)", f)

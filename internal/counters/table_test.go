@@ -26,7 +26,7 @@ const (
 
 type avaliadorDeTeste struct{ fr encoding.FieldReader }
 
-func (a *avaliadorDeTeste) Avalia(payload []byte) (bool, error) {
+func (a *avaliadorDeTeste) Evaluate(payload []byte) (bool, error) {
 	a.fr.Reset(payload)
 	for {
 		id, v, ok := a.fr.Next()

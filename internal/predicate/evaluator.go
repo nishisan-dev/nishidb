@@ -66,13 +66,13 @@ func NovoAvaliadorDePayload(prog *Programa, ids []types.FieldID) *AvaliadorDePay
 	return &AvaliadorDePayload{prog: prog, slots: NovosSlots(ids)}
 }
 
-// Avalia diz se o payload satisfaz a condição. Erro de leitura sobe como
+// Evaluate diz se o payload satisfaz a condição. Erro de leitura sobe como
 // corrupção, pela mesma razão do Coleta: tratar payload corrompido como
 // "não casa" transformaria corrupção em contagem silenciosamente errada.
 //
 // O contador de mismatch é nil, como na ingestão: uma avaliação por evento
 // não tem onde pendurar um contador por avaliação.
-func (a *AvaliadorDePayload) Avalia(payload []byte) (bool, error) {
+func (a *AvaliadorDePayload) Evaluate(payload []byte) (bool, error) {
 	if err := Coleta(a.slots, &a.fr, payload); err != nil {
 		return false, err
 	}

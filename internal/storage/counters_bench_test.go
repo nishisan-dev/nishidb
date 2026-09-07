@@ -91,11 +91,11 @@ func BenchmarkReconstroiContadores1M(b *testing.B) {
 	// A reconstrução tem de reproduzir os totais — senão o número medido é o
 	// de uma varredura que não fez o trabalho.
 	for _, c := range s.Contadores() {
-		id, ok := c.PorTexto([]byte("OLT0"))
+		id, ok := c.ByText([]byte("OLT0"))
 		if !ok {
 			b.Fatalf("%s: OLT0 não está no dicionário depois da reconstrução", c.Def().Nome)
 		}
-		_, _, total, refs, _ := c.Grupo(id)
+		_, _, total, refs, _ := c.Group(id)
 		quer := int64(linhas / 2048)
 		if c.Def().Nome == "aut" {
 			quer = autenticadosNaOLT0

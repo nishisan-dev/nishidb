@@ -158,9 +158,9 @@ func (s *storeFalhaNoSegundo) GetByKey(types.Snapshot, []byte, []byte) (types.Re
 
 func (s *storeFalhaNoSegundo) ScanLive(types.Snapshot) types.RowIDIterator { return lista() }
 
-func (s *storeFalhaNoSegundo) AbreSnapshot() types.Snapshot { return types.Snapshot{} }
+func (s *storeFalhaNoSegundo) OpenSnapshot() types.Snapshot { return types.Snapshot{} }
 
-func (s *storeFalhaNoSegundo) FechaSnapshot(types.Snapshot) {}
+func (s *storeFalhaNoSegundo) CloseSnapshot(types.Snapshot) {}
 
 func (s *storeFalhaNoSegundo) Lookup(types.FieldID, types.Value) (types.RowIDIterator, error) {
 	s.n++

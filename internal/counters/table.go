@@ -23,13 +23,13 @@ const maxColunasDeAgrupamento = 16
 // *contador.Contador, para que o teste da tabela e o do contador não se
 // conheçam além do contrato — *contador.Contador a satisfaz.
 type Leitor interface {
-	// Limite é o maior id de grupo emitido mais um.
-	Limite() uint32
-	// Grupo devolve a chave composta, o texto (groupKey), o total e os refs do
+	// Limit é o maior id de grupo emitido mais um.
+	Limit() uint32
+	// Group devolve a chave composta, o texto (groupKey), o total e os refs do
 	// grupo, e se ele está vivo. Chave e texto são estáveis.
-	Grupo(id uint32) (chave, texto []byte, total, refs int64, vivo bool)
-	// PorTexto resolve o groupKey de um grupo vivo para o id.
-	PorTexto(texto []byte) (uint32, bool)
+	Group(id uint32) (chave, texto []byte, total, refs int64, vivo bool)
+	// ByText resolve o groupKey de um grupo vivo para o id.
+	ByText(texto []byte) (uint32, bool)
 }
 
 // Tabela monta o schema sintético e o Store virtual de `_counters.<nome>`.
@@ -157,15 +157,15 @@ type fonte struct {
 	colunas []types.FieldID // FieldID de cada coluna do groupBy, na ordem declarada
 }
 
-// AbreSnapshot congela o conjunto de grupos: ids a partir do limite nasceram
+// OpenSnapshot congela o conjunto de grupos: ids a partir do limite nasceram
 // depois da consulta. Época e instante ficam zerados e são ignorados — os
 // totais são lidos no presente.
-func (f *fonte) AbreSnapshot() types.Snapshot {
-	return types.Snapshot{LimitRowID: types.RowID(f.l.Limite())}
+func (f *fonte) OpenSnapshot() types.Snapshot {
+	return types.Snapshot{LimitRowID: types.RowID(f.l.Limit())}
 }
 
-// FechaSnapshot é no-op: a fonte não retém nada.
-func (f *fonte) FechaSnapshot(types.Snapshot) {}
+// CloseSnapshot é no-op: a fonte não retém nada.
+func (f *fonte) CloseSnapshot(types.Snapshot) {}
 
 func (f *fonte) ScanLive(snap types.Snapshot) types.RowIDIterator {
 	return &iterador{l: f.l, limite: uint32(snap.LimitRowID)}
@@ -175,7 +175,7 @@ func (f *fonte) GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (typ
 	if id == 0 || id >= snap.LimitRowID {
 		return types.Record{}, buf, false, nil
 	}
-	chave, texto, total, _, vivo := f.l.Grupo(uint32(id))
+	chave, texto, total, _, vivo := f.l.Group(uint32(id))
 	if !vivo {
 		return types.Record{}, buf, false, nil
 	}
@@ -183,17 +183,17 @@ func (f *fonte) GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (typ
 }
 
 func (f *fonte) GetByKey(snap types.Snapshot, key, buf []byte) (types.Record, []byte, bool, error) {
-	id, ok := f.l.PorTexto(key)
+	id, ok := f.l.ByText(key)
 	if !ok {
 		return types.Record{}, buf, false, nil
 	}
 	return f.GetByRowID(snap, types.RowID(id), buf)
 }
 
-// Indexado responde SEMPRE false: a tabela não declara índice, e o planner
+// Indexed responde SEMPRE false: a tabela não declara índice, e o planner
 // degrada para a varredura dos grupos — que sobre milhares de linhas é o
 // plano certo. A key (groupKey) dá o point lookup por conta própria.
-func (f *fonte) Indexado(types.FieldID) bool { return false }
+func (f *fonte) Indexed(types.FieldID) bool { return false }
 
 // Lookup nunca é chamado: sem índice declarado o planner não escolhe plano
 // indexado. Rede de segurança, como no _meta.
@@ -254,7 +254,7 @@ type iterador struct {
 func (it *iterador) Next() bool {
 	for it.id+1 < it.limite {
 		it.id++
-		if _, _, _, _, vivo := it.l.Grupo(it.id); vivo {
+		if _, _, _, _, vivo := it.l.Group(it.id); vivo {
 			return true
 		}
 	}

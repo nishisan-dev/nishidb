@@ -106,7 +106,7 @@ counters:
 	}
 	var p []byte
 	p, _ = encoding.AppendField(p, idDe(t, sc, "authenticated"), types.Value{Type: types.TypeBool, I64: 1})
-	if ok, err := av1.Avalia(p); err != nil || !ok {
+	if ok, err := av1.Evaluate(p); err != nil || !ok {
 		t.Fatalf("avaliador: %v, %v", ok, err)
 	}
 }

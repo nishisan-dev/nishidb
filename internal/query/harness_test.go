@@ -90,7 +90,7 @@ func (h *harness) ingere(eventos ...string) {
 // dublê só para teste.
 func (h *harness) rowID(key string) types.RowID {
 	h.t.Helper()
-	rec, _, ok, err := h.store.GetByKey(h.store.AbreSnapshot(), []byte(key), nil)
+	rec, _, ok, err := h.store.GetByKey(h.store.OpenSnapshot(), []byte(key), nil)
 	if err != nil || !ok {
 		h.t.Fatalf("key %q não materializada (ok=%v err=%v)", key, ok, err)
 	}

@@ -20,9 +20,9 @@ type storeSobTeste interface {
 	GetByKey(snap types.Snapshot, key, buf []byte) (types.Record, []byte, bool, error)
 	GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (types.Record, []byte, bool, error)
 	ScanLive(snap types.Snapshot) types.RowIDIterator
-	AbreSnapshot() types.Snapshot
+	OpenSnapshot() types.Snapshot
 	Lookup(field types.FieldID, v types.Value) (types.RowIDIterator, error)
-	Indexado(field types.FieldID) bool
+	Indexed(field types.FieldID) bool
 }
 
 var (
@@ -101,7 +101,7 @@ func TestComportamentoDoDubleEDoRealCoincidem(t *testing.T) {
 			}
 
 			// 3. O estado corrente é o do último Put.
-			rec, _, ok, err := st.GetByKey(st.AbreSnapshot(), []byte("A"), nil)
+			rec, _, ok, err := st.GetByKey(st.OpenSnapshot(), []byte("A"), nil)
 			if err != nil || !ok {
 				t.Fatalf("GetByKey: ok=%v err=%v", ok, err)
 			}
@@ -140,19 +140,19 @@ func TestComportamentoDoDubleEDoRealCoincidem(t *testing.T) {
 			if _, err := st.Lookup(nomeID, str("ze")); !errors.Is(err, types.ErrInvalidArgument) {
 				t.Errorf("Lookup em campo sem índice: %v", err)
 			}
-			if st.Indexado(nomeID) || st.Indexado(semIndex) {
+			if st.Indexed(nomeID) || st.Indexed(semIndex) {
 				t.Error("Indexado true para campo sem índice")
 			}
-			if !st.Indexado(statusID) {
+			if !st.Indexed(statusID) {
 				t.Error("Indexado false para o campo indexado")
 			}
 
 			// 7. rowId inexistente: ok=false SEM erro (não é falha, é ausência).
-			if _, _, ok, err := st.GetByRowID(st.AbreSnapshot(), types.RowID(9999), nil); ok || err != nil {
+			if _, _, ok, err := st.GetByRowID(st.OpenSnapshot(), types.RowID(9999), nil); ok || err != nil {
 				t.Errorf("GetByRowID inexistente: ok=%v err=%v", ok, err)
 			}
 			// Key inexistente idem.
-			if _, _, ok, err := st.GetByKey(st.AbreSnapshot(), []byte("NAO-EXISTE"), nil); ok || err != nil {
+			if _, _, ok, err := st.GetByKey(st.OpenSnapshot(), []byte("NAO-EXISTE"), nil); ok || err != nil {
 				t.Errorf("GetByKey inexistente: ok=%v err=%v", ok, err)
 			}
 
@@ -161,10 +161,10 @@ func TestComportamentoDoDubleEDoRealCoincidem(t *testing.T) {
 			if _, _, err := st.Put([]byte("A"), 3, types.FlagTombstone, payload("Stop", "ze"), nil); err != nil {
 				t.Fatal(err)
 			}
-			if _, _, ok, _ := st.GetByKey(st.AbreSnapshot(), []byte("A"), nil); ok {
+			if _, _, ok, _ := st.GetByKey(st.OpenSnapshot(), []byte("A"), nil); ok {
 				t.Error("row tombstoned continuou visível no GetByKey")
 			}
-			if _, _, ok, _ := st.GetByRowID(st.AbreSnapshot(), id, nil); ok {
+			if _, _, ok, _ := st.GetByRowID(st.OpenSnapshot(), id, nil); ok {
 				t.Error("row tombstoned continuou visível no GetByRowID")
 			}
 			if ids := scanLive(t, st); len(ids) != 0 {
@@ -239,7 +239,7 @@ func colhe(t *testing.T, st storeSobTeste, f types.FieldID, v types.Value) []typ
 
 func scanLive(t *testing.T, st storeSobTeste) []types.RowID {
 	t.Helper()
-	it := st.ScanLive(st.AbreSnapshot())
+	it := st.ScanLive(st.OpenSnapshot())
 	defer it.Close()
 	var out []types.RowID
 	for it.Next() {

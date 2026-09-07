@@ -26,7 +26,7 @@ const (
 // schema compilado para exercitá-la.
 type avaliadorDeTeste struct{ fr encoding.FieldReader }
 
-func (a *avaliadorDeTeste) Avalia(payload []byte) (bool, error) {
+func (a *avaliadorDeTeste) Evaluate(payload []byte) (bool, error) {
 	a.fr.Reset(payload)
 	for {
 		id, v, ok := a.fr.Next()
@@ -113,7 +113,7 @@ func totalDe(t *testing.T, c *Contador, olt string) (total, refs int64) {
 	if !ok {
 		return 0, 0
 	}
-	_, _, total, refs, _ = c.Grupo(id)
+	_, _, total, refs, _ = c.Group(id)
 	return total, refs
 }
 
@@ -129,12 +129,12 @@ func totalDe(t *testing.T, c *Contador, olt string) (total, refs int64) {
 func exigeAgregadosCoerentes(t *testing.T, c *Contador) {
 	t.Helper()
 	var linhas, total int64
-	for id := uint32(1); id < c.Limite(); id++ {
-		_, _, tg, rg, _ := c.Grupo(id)
+	for id := uint32(1); id < c.Limit(); id++ {
+		_, _, tg, rg, _ := c.Group(id)
 		linhas += rg
 		total += tg
 	}
-	est := c.Estatisticas()
+	est := c.Stats()
 	if est.Linhas != linhas || est.Total != total {
 		t.Fatalf("agregados = linhas %d total %d; a soma dos grupos dá %d e %d",
 			est.Linhas, est.Total, linhas, total)
@@ -171,7 +171,7 @@ func TestTransicaoNovaLinhaContaNosAgregados(t *testing.T) {
 	if err := c.Transiciona(2, payload(t, "B", 1, 1, true), false); err != nil {
 		t.Fatal(err)
 	}
-	if est := c.Estatisticas(); est.Linhas != 3 || est.Total != 2 {
+	if est := c.Stats(); est.Linhas != 3 || est.Total != 2 {
 		t.Fatalf("agregados = linhas %d total %d, quer 3 e 2", est.Linhas, est.Total)
 	}
 	exigeAgregadosCoerentes(t, c)
@@ -185,14 +185,14 @@ func TestAgregadosAcompanhamAsDuasPontasDaTransicao(t *testing.T) {
 	if err := c.Transiciona(0, payload(t, "A", 1, 1, true), false); err != nil {
 		t.Fatal(err)
 	}
-	if est := c.Estatisticas(); est.Linhas != 1 || est.Total != 1 {
+	if est := c.Stats(); est.Linhas != 1 || est.Total != 1 {
 		t.Fatalf("depois da entrada: linhas %d total %d, quer 1 e 1", est.Linhas, est.Total)
 	}
 	// Troca de grupo, mesma condição: os dois agregados ficam parados.
 	if err := c.Transiciona(0, payload(t, "B", 1, 1, true), false); err != nil {
 		t.Fatal(err)
 	}
-	if est := c.Estatisticas(); est.Linhas != 1 || est.Total != 1 {
+	if est := c.Stats(); est.Linhas != 1 || est.Total != 1 {
 		t.Fatalf("depois da troca de grupo: linhas %d total %d, quer 1 e 1", est.Linhas, est.Total)
 	}
 	exigeAgregadosCoerentes(t, c)
@@ -200,7 +200,7 @@ func TestAgregadosAcompanhamAsDuasPontasDaTransicao(t *testing.T) {
 	if err := c.Transiciona(0, payload(t, "B", 1, 1, false), false); err != nil {
 		t.Fatal(err)
 	}
-	if est := c.Estatisticas(); est.Linhas != 1 || est.Total != 0 {
+	if est := c.Stats(); est.Linhas != 1 || est.Total != 0 {
 		t.Fatalf("depois de perder a condição: linhas %d total %d, quer 1 e 0", est.Linhas, est.Total)
 	}
 	exigeAgregadosCoerentes(t, c)
@@ -218,13 +218,13 @@ func TestLapideDescontaOsAgregados(t *testing.T) {
 	if err := c.Transiciona(0, nil, true); err != nil {
 		t.Fatal(err)
 	}
-	if est := c.Estatisticas(); est.Linhas != 1 || est.Total != 0 {
+	if est := c.Stats(); est.Linhas != 1 || est.Total != 0 {
 		t.Fatalf("depois da lápide: linhas %d total %d, quer 1 e 0", est.Linhas, est.Total)
 	}
 	if err := c.Transiciona(1, nil, true); err != nil {
 		t.Fatal(err)
 	}
-	if est := c.Estatisticas(); est.Linhas != 0 || est.Total != 0 {
+	if est := c.Stats(); est.Linhas != 0 || est.Total != 0 {
 		t.Fatalf("com tudo lapidado: linhas %d total %d, quer 0 e 0", est.Linhas, est.Total)
 	}
 	exigeAgregadosCoerentes(t, c)
@@ -259,7 +259,7 @@ func TestAgregadoNaoDescontaEntradaAlemDoDicionario(t *testing.T) {
 	if err := c.Transiciona(1, payload(t, "A", 1, 2, true), false); err != nil {
 		t.Fatal(err)
 	}
-	if est := c.Estatisticas(); est.Linhas != 3 || est.Total != 3 {
+	if est := c.Stats(); est.Linhas != 3 || est.Total != 3 {
 		t.Fatalf("agregados = linhas %d total %d, quer 3 e 3 (a rowID 1 conta duas vezes no grupo A)", est.Linhas, est.Total)
 	}
 	exigeAgregadosCoerentes(t, c)
@@ -299,7 +299,7 @@ func TestMudarDeGrupoAjustaAsDuasPontas(t *testing.T) {
 		t.Fatalf("B depois da migração: total %d refs %d, quer 1 e 1", total, refs)
 	}
 	// A OLT antiga NÃO some: o grupo sobrevive ao próprio total (proposta §5.4).
-	if _, _, _, _, vivo := c.Grupo(1); !vivo {
+	if _, _, _, _, vivo := c.Group(1); !vivo {
 		t.Fatal("o grupo que esvaziou continua vivo, com total 0")
 	}
 	// Só a condição mudando também é transição, e só mexe no total.
@@ -324,7 +324,7 @@ func TestLapideDescontaEPreservaOGrupo(t *testing.T) {
 	if total, refs := totalDe(t, c, "A"); total != 0 || refs != 0 {
 		t.Fatalf("A depois da lápide: total %d refs %d, quer 0 e 0", total, refs)
 	}
-	if _, _, total, _, vivo := c.Grupo(1); !vivo || total != 0 {
+	if _, _, total, _, vivo := c.Group(1); !vivo || total != 0 {
 		t.Fatalf("o grupo permanece na tabela com total 0 (vivo=%v total=%d)", vivo, total)
 	}
 	// Lápide sobre lápide (replay) não mexe.
@@ -359,8 +359,8 @@ func TestLinhaSemColunaDeAgrupamentoNaoConta(t *testing.T) {
 	if err := c.Transiciona(0, payload(t, "", 1, 1, true), false); err != nil {
 		t.Fatal(err)
 	}
-	if c.Limite() != 1 {
-		t.Fatalf("nenhum grupo devia ter sido internado, limite = %d", c.Limite())
+	if c.Limit() != 1 {
+		t.Fatalf("nenhum grupo devia ter sido internado, limite = %d", c.Limit())
 	}
 	if c.Transicoes() != 0 {
 		t.Fatal("sem grupo antes e depois não é transição")
@@ -403,7 +403,7 @@ func TestTetoDeGruposRecusaEConta(t *testing.T) {
 	if err := c.Transiciona(1, payload(t, "B", 1, 1, true), false); err != nil {
 		t.Fatalf("o teto não pode virar erro de escrita: %v", err)
 	}
-	est := c.Estatisticas()
+	est := c.Stats()
 	if est.Recusados != 1 || est.Grupos != 1 {
 		t.Fatalf("estatísticas = %+v, quer Recusados 1 e Grupos 1", est)
 	}
@@ -457,16 +457,16 @@ func TestDobraReproduzOsTotais(t *testing.T) {
 	if err := c2.Dobra(); err != nil {
 		t.Fatal(err)
 	}
-	if c2.Limite() != cg.Limite {
-		t.Fatalf("limite %d, quer %d", c2.Limite(), cg.Limite)
+	if c2.Limit() != cg.Limite {
+		t.Fatalf("limite %d, quer %d", c2.Limit(), cg.Limite)
 	}
 	for id := uint32(1); id < cg.Limite; id++ {
-		_, _, total, refs, _ := c2.Grupo(id)
+		_, _, total, refs, _ := c2.Group(id)
 		if total != cg.Totais[id] || refs != cg.Refs[id] {
 			t.Fatalf("grupo %d: dobra deu total %d refs %d, quer %d e %d", id, total, refs, cg.Totais[id], cg.Refs[id])
 		}
 	}
-	if c2.Estatisticas().Orfas != 0 {
+	if c2.Stats().Orfas != 0 {
 		t.Fatal("nenhuma entrada órfã era esperada")
 	}
 }
@@ -517,7 +517,7 @@ func TestDobraReproduzOsAgregados(t *testing.T) {
 	if err := c2.Dobra(); err != nil {
 		t.Fatal(err)
 	}
-	est := c2.Estatisticas()
+	est := c2.Stats()
 	if est.Linhas != cg.Linhas || est.Total != cg.Total {
 		t.Fatalf("dobra deu linhas %d total %d, quer %d e %d", est.Linhas, est.Total, cg.Linhas, cg.Total)
 	}
@@ -527,7 +527,7 @@ func TestDobraReproduzOsAgregados(t *testing.T) {
 	if err := c2.Dobra(); err != nil {
 		t.Fatal(err)
 	}
-	if est2 := c2.Estatisticas(); est2.Linhas != cg.Linhas || est2.Total != cg.Total {
+	if est2 := c2.Stats(); est2.Linhas != cg.Linhas || est2.Total != cg.Total {
 		t.Fatalf("a segunda dobra acumulou sobre a primeira: linhas %d total %d", est2.Linhas, est2.Total)
 	}
 }
@@ -615,10 +615,10 @@ func TestDobraTrataIdAposentadoComoOrfa(t *testing.T) {
 	if err := c2.Dobra(); err != nil {
 		t.Fatal(err)
 	}
-	if est := c2.Estatisticas(); est.Orfas != 2 {
+	if est := c2.Stats(); est.Orfas != 2 {
 		t.Fatalf("órfãs = %d, quer 2 (uma aposentada, uma inexistente)", est.Orfas)
 	}
-	if _, _, total, refs, vivo := c2.Grupo(1); vivo || total != 0 || refs != 0 {
+	if _, _, total, refs, vivo := c2.Group(1); vivo || total != 0 || refs != 0 {
 		t.Fatalf("grupo aposentado não pode contar: vivo=%v total=%d refs=%d", vivo, total, refs)
 	}
 	if total, refs := totalDe(t, c2, "B"); total != 1 || refs != 1 {
@@ -634,7 +634,7 @@ func TestDobraTrataIdAposentadoComoOrfa(t *testing.T) {
 	// agregado: sobra UMA linha viva, a do grupo B. Sem esta asserção, uma
 	// dobra que acumulasse antes do continue da órfã passaria verde com os
 	// grupos certos e o agregado inflado pelas duas órfãs.
-	if est := c2.Estatisticas(); est.Linhas != 1 || est.Total != 1 {
+	if est := c2.Stats(); est.Linhas != 1 || est.Total != 1 {
 		t.Fatalf("agregados = linhas %d total %d, quer 1 e 1 (as duas órfãs não contam)", est.Linhas, est.Total)
 	}
 	exigeAgregadosCoerentes(t, c2)
@@ -663,7 +663,7 @@ func TestGrupoCompostoTemColunasTipadas(t *testing.T) {
 	if err := c.Transiciona(0, payload(t, "PRCTA_G1M10", 1, 9, true), false); err != nil {
 		t.Fatal(err)
 	}
-	chave, texto, total, refs, vivo := c.Grupo(1)
+	chave, texto, total, refs, vivo := c.Group(1)
 	if !vivo || total != 1 || refs != 1 {
 		t.Fatalf("grupo 1: vivo=%v total=%d refs=%d", vivo, total, refs)
 	}
@@ -677,7 +677,7 @@ func TestGrupoCompostoTemColunasTipadas(t *testing.T) {
 	if string(texto) != "PRCTA_G1M10|1|9" {
 		t.Fatalf("texto = %q", texto)
 	}
-	if id, ok := c.PorTexto([]byte("PRCTA_G1M10|1|9")); !ok || id != 1 {
+	if id, ok := c.ByText([]byte("PRCTA_G1M10|1|9")); !ok || id != 1 {
 		t.Fatalf("PorTexto = %d, %v", id, ok)
 	}
 }
@@ -693,7 +693,7 @@ func TestZeraLimpaTotaisEVetorMasMantemODicionario(t *testing.T) {
 	if total, refs := totalDe(t, c, "A"); total != 0 || refs != 0 {
 		t.Fatalf("depois do Zera: %d %d", total, refs)
 	}
-	if c.Limite() != 2 {
+	if c.Limit() != 2 {
 		t.Fatal("o dicionário fica: os ids são estáveis")
 	}
 	// Reconstruir é transicionar de novo, do zero.
@@ -716,13 +716,13 @@ func TestZeraLimpaOsAgregados(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if est := c.Estatisticas(); est.Linhas != 3 || est.Total != 2 {
+	if est := c.Stats(); est.Linhas != 3 || est.Total != 2 {
 		t.Fatalf("antes do Zera: linhas %d total %d, quer 3 e 2", est.Linhas, est.Total)
 	}
 	if err := c.Zera(); err != nil {
 		t.Fatal(err)
 	}
-	if est := c.Estatisticas(); est.Linhas != 0 || est.Total != 0 {
+	if est := c.Stats(); est.Linhas != 0 || est.Total != 0 {
 		t.Fatalf("depois do Zera: linhas %d total %d, quer 0 e 0", est.Linhas, est.Total)
 	}
 	// Reconstruir tem de chegar aos MESMOS números, não ao dobro.
@@ -731,7 +731,7 @@ func TestZeraLimpaOsAgregados(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if est := c.Estatisticas(); est.Linhas != 3 || est.Total != 2 {
+	if est := c.Stats(); est.Linhas != 3 || est.Total != 2 {
 		t.Fatalf("depois de reconstruir: linhas %d total %d, quer 3 e 2", est.Linhas, est.Total)
 	}
 	exigeAgregadosCoerentes(t, c)
@@ -751,8 +751,8 @@ func TestAbrirComRecriaComecaDoZero(t *testing.T) {
 		t.Fatal(err)
 	}
 	c2 := abreContador(t, dir, def, true)
-	if !c2.Nasceu() || c2.Limite() != 1 {
-		t.Fatalf("recria tinha de nascer vazio: nasceu=%v limite=%d", c2.Nasceu(), c2.Limite())
+	if !c2.Nasceu() || c2.Limit() != 1 {
+		t.Fatalf("recria tinha de nascer vazio: nasceu=%v limite=%d", c2.Nasceu(), c2.Limit())
 	}
 	// Os arquivos antigos ficam de lado até o dono os apagar.
 	if _, err := os.Stat(filepath.Join(dir, "grupos.dict.old")); err != nil {

@@ -222,9 +222,9 @@ func (s *storeQueExplode) GetByKey(types.Snapshot, []byte, []byte) (types.Record
 	return types.Record{}, nil, false, nil
 }
 
-func (s *storeQueExplode) AbreSnapshot() types.Snapshot { return types.Snapshot{} }
+func (s *storeQueExplode) OpenSnapshot() types.Snapshot { return types.Snapshot{} }
 
-func (s *storeQueExplode) FechaSnapshot(types.Snapshot) {}
+func (s *storeQueExplode) CloseSnapshot(types.Snapshot) {}
 
 func (s *storeQueExplode) ScanLive(types.Snapshot) types.RowIDIterator { return vazio{} }
 

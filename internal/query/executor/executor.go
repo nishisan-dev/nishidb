@@ -229,7 +229,7 @@ func Open(ctx context.Context, bq *binder.BoundQuery, plan planner.Plan, opts Op
 	// O snapshot é fixado ANTES da fonte, e uma vez só para a consulta
 	// inteira: é ele que dá ao plano indexado e ao full scan o MESMO universo,
 	// e é a ordem que importa — aberta a fonte, o teto já teria escapado.
-	snap := opts.Store.AbreSnapshot()
+	snap := opts.Store.OpenSnapshot()
 	it.snap = snap
 
 	// A fonte é aberta POR ÚLTIMO: qualquer erro acima não pode deixar
@@ -242,7 +242,7 @@ func Open(ctx context.Context, bq *binder.BoundQuery, plan planner.Plan, opts Op
 		// esta linha, toda consulta recusada na abertura da fonte deixaria um
 		// leitor fantasma na contagem.
 		it.snapFechado = true
-		opts.Store.FechaSnapshot(snap)
+		opts.Store.CloseSnapshot(snap)
 		return nil, err
 	}
 	it.src = src
@@ -610,7 +610,7 @@ func (it *iterador) Close() error {
 	// contagem um leitor que nunca existiu.
 	if !it.snapFechado {
 		it.snapFechado = true
-		it.st.FechaSnapshot(it.snap)
+		it.st.CloseSnapshot(it.snap)
 	}
 	return it.errClose
 }

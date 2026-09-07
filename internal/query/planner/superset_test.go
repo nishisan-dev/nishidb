@@ -155,10 +155,10 @@ func candidatos(t *testing.T, s *fakestorage.Store, plan planner.Plan) map[types
 	out := map[types.RowID]bool{}
 	switch pl := plan.(type) {
 	case *planner.FullScanPlan:
-		coleta(t, s.ScanLive(s.AbreSnapshot()), out)
+		coleta(t, s.ScanLive(s.OpenSnapshot()), out)
 
 	case *planner.PointLookupPlan:
-		rec, _, ok, err := s.GetByKey(s.AbreSnapshot(), pl.Key.Bytes, nil)
+		rec, _, ok, err := s.GetByKey(s.OpenSnapshot(), pl.Key.Bytes, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

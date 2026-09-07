@@ -39,10 +39,10 @@ func TestAposentadoriaDeGruposNoStore(t *testing.T) {
 		t.Fatalf("depois do checkpoint: %d, %v", n, err)
 	}
 	ct := contadorChamado(t, s, "aut")
-	if _, ok := ct.PorTexto([]byte("X")); ok {
+	if _, ok := ct.ByText([]byte("X")); ok {
 		t.Fatal("o grupo aposentado não pode resolver por texto")
 	}
-	if est := ct.Estatisticas(); est.Aposentados != 1 || est.Grupos != 0 {
+	if est := ct.Stats(); est.Aposentados != 1 || est.Grupos != 0 {
 		t.Fatalf("estatísticas = %+v", est)
 	}
 }

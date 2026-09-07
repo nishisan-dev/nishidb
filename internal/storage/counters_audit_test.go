@@ -389,7 +389,7 @@ func TestAuditoriaAcusaOAgregadoContraORecalculado(t *testing.T) {
 	// A divergência do agregado alarma pela MESMA série que a dos grupos: uma
 	// conferência que achasse e não registrasse não teria efeito nenhum.
 	// Aqui são duas — o grupo A e o agregado.
-	if est := c.Estatisticas(); est.AuditoriaDivergentes != 2 {
+	if est := c.Stats(); est.AuditoriaDivergentes != 2 {
 		t.Fatalf("a auditoria registrou %d divergências, quer 2 (o grupo A e o agregado)", est.AuditoriaDivergentes)
 	}
 }

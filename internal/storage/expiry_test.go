@@ -109,7 +109,7 @@ func TestRowVencidaSomeDaLeituraSemNenhumColetorTerRodado(t *testing.T) {
 	}
 	// Mas a ingestão continua vendo a entidade, e é isso que impede a
 	// ressurreição por evento antigo.
-	if _, _, pres, err := s.Estado([]byte("A"), nil); err != nil || pres != types.PresenceExpired {
+	if _, _, pres, err := s.State([]byte("A"), nil); err != nil || pres != types.PresenceExpired {
 		t.Fatalf("Estado: %v, err=%v; quer expirada", pres, err)
 	}
 	if _, pres := s.Sequence(id); pres != types.PresenceExpired {
@@ -123,7 +123,7 @@ func TestEscritaNovaRenovaOPrazo(t *testing.T) {
 	id, _ := mustPut(t, s, "A", 1, payloadComEscrita(t, s, "A", "Start", rel.t), nil)
 
 	rel.avanca(50 * time.Minute)
-	rec, _, pres, err := s.Estado([]byte("A"), nil)
+	rec, _, pres, err := s.State([]byte("A"), nil)
 	if err != nil || pres != types.PresenceLive {
 		t.Fatalf("pres=%v err=%v", pres, err)
 	}
@@ -189,7 +189,7 @@ func TestExpiraPublicaLapideDuravelEBaixaALiveness(t *testing.T) {
 	if _, _, ok, err := s2.GetByRowID(s2.presente(), id, nil); err != nil || ok {
 		t.Fatalf("a row voltou a ser visível depois de reabrir: ok=%v err=%v", ok, err)
 	}
-	if _, _, pres, err := s2.Estado([]byte("A"), nil); err != nil || pres != types.PresenceExpired {
+	if _, _, pres, err := s2.State([]byte("A"), nil); err != nil || pres != types.PresenceExpired {
 		t.Fatalf("Estado após reabrir: %v, err=%v", pres, err)
 	}
 }
@@ -201,7 +201,7 @@ func TestExpiraAbortaSemEscreverQuandoARowFoiRenovada(t *testing.T) {
 	id, _ := mustPut(t, s, "A", 1, payloadComEscrita(t, s, "A", "Start", rel.t), nil)
 
 	rel.avanca(2 * time.Hour)
-	rec, _, pres, err := s.Estado([]byte("A"), nil)
+	rec, _, pres, err := s.State([]byte("A"), nil)
 	if err != nil || pres != types.PresenceExpired {
 		t.Fatalf("pres=%v err=%v", pres, err)
 	}

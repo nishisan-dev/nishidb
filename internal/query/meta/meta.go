@@ -49,7 +49,7 @@ const TabelaFields = "fields"
 // uma coluna com `index: hash` saía com indexed=false, o que era verdade (não
 // havia motor) e virou mentira no instante em que o motor entrou.
 type Capacidades interface {
-	Indexado(types.FieldID) bool
+	Indexed(types.FieldID) bool
 }
 
 // Reconhece informa se o statement endereça o namespace reservado.

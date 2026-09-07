@@ -51,7 +51,7 @@ func TestGrupoZeradoComRefsNaoEhAposentado(t *testing.T) {
 	if n != 0 {
 		t.Fatalf("aposentou %d grupos com refs > 0", n)
 	}
-	if _, _, _, _, vivo := c.Grupo(1); !vivo {
+	if _, _, _, _, vivo := c.Group(1); !vivo {
 		t.Fatal("o grupo com 500 linhas apontando para ele tem de continuar vivo")
 	}
 }
@@ -77,7 +77,7 @@ func TestGrupoSemRefsEhAposentadoDepoisDoPrazo(t *testing.T) {
 	if n, err := c.AposentaVazios(rel.agora()); err != nil || n != 0 {
 		t.Fatalf("antes do prazo: %d, %v", n, err)
 	}
-	if _, _, _, _, vivo := c.Grupo(1); !vivo {
+	if _, _, _, _, vivo := c.Group(1); !vivo {
 		t.Fatal("dentro do prazo o grupo vazio continua visível")
 	}
 	// Depois do prazo: sai.
@@ -85,20 +85,20 @@ func TestGrupoSemRefsEhAposentadoDepoisDoPrazo(t *testing.T) {
 	if n, err := c.AposentaVazios(rel.agora()); err != nil || n != 1 {
 		t.Fatalf("depois do prazo: %d, %v", n, err)
 	}
-	if _, _, _, _, vivo := c.Grupo(1); vivo {
+	if _, _, _, _, vivo := c.Group(1); vivo {
 		t.Fatal("grupo aposentado não é vivo")
 	}
-	if _, ok := c.PorTexto([]byte("X")); ok {
+	if _, ok := c.ByText([]byte("X")); ok {
 		t.Fatal("grupo aposentado não resolve por texto")
 	}
-	if est := c.Estatisticas(); est.Aposentados != 1 || est.Grupos != 0 {
+	if est := c.Stats(); est.Aposentados != 1 || est.Grupos != 0 {
 		t.Fatalf("estatísticas = %+v", est)
 	}
 	// A OLT reaparece: id NOVO, nunca o 1.
 	if err := c.Transiciona(0, payload(t, "X", 1, 1, true), false); err != nil {
 		t.Fatal(err)
 	}
-	if id, ok := c.PorTexto([]byte("X")); !ok || id != 2 {
+	if id, ok := c.ByText([]byte("X")); !ok || id != 2 {
 		t.Fatalf("a OLT que reapareceu ganhou id %d, %v; quer 2", id, ok)
 	}
 	if total, refs := totalDe(t, c, "X"); total != 1 || refs != 1 {
@@ -208,10 +208,10 @@ func TestAposentadoriaSobreviveAReabertura(t *testing.T) {
 	if err := c2.Dobra(); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, _, vivo := c2.Grupo(1); vivo {
+	if _, _, _, _, vivo := c2.Group(1); vivo {
 		t.Fatal("a aposentadoria é durável")
 	}
-	if c2.Estatisticas().Aposentados != 1 {
+	if c2.Stats().Aposentados != 1 {
 		t.Fatal("o aposentado tem de ser contado depois da reabertura")
 	}
 }
@@ -241,7 +241,7 @@ func TestAposentadoriaNaoMexeNosAgregados(t *testing.T) {
 		}
 	}
 	cobre(c)
-	antes := c.Estatisticas()
+	antes := c.Stats()
 	if antes.Linhas != 1 || antes.Total != 1 {
 		t.Fatalf("com X vazio e Y com uma linha: linhas %d total %d, quer 1 e 1", antes.Linhas, antes.Total)
 	}
@@ -249,7 +249,7 @@ func TestAposentadoriaNaoMexeNosAgregados(t *testing.T) {
 	if n, err := c.AposentaVazios(rel.agora()); err != nil || n != 1 {
 		t.Fatalf("aposentadoria: %d, %v", n, err)
 	}
-	depois := c.Estatisticas()
+	depois := c.Stats()
 	if depois.Linhas != antes.Linhas || depois.Total != antes.Total {
 		t.Fatalf("a aposentadoria mexeu nos agregados: linhas %d total %d, quer %d e %d",
 			depois.Linhas, depois.Total, antes.Linhas, antes.Total)

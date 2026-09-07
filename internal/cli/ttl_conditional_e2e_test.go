@@ -95,7 +95,7 @@ func (b *bancadaTTL) avanca(d time.Duration) { b.agora = b.agora.Add(d) }
 // visivel responde a pergunta da CONSULTA: a entidade aparece?
 func (b *bancadaTTL) visivel(key string) bool {
 	b.t.Helper()
-	_, _, ok, err := b.st.GetByKey(b.st.AbreSnapshot(), []byte(key), nil)
+	_, _, ok, err := b.st.GetByKey(b.st.OpenSnapshot(), []byte(key), nil)
 	if err != nil {
 		b.t.Fatal(err)
 	}
@@ -146,7 +146,7 @@ func TestCicloExpiracaoQuandoACondicaoPersiste(t *testing.T) {
 	}
 	// A lápide é durável, e o estado da ingestão vê a entidade como EXPIRADA —
 	// é o que impede um evento antigo de ressuscitá-la.
-	_, _, pres, err := b.st.Estado([]byte("a"), nil)
+	_, _, pres, err := b.st.State([]byte("a"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -95,8 +95,8 @@ func TestCloseConcorrenteComPutNaoEntraEmPanic(t *testing.T) {
 	if _, _, err := st.Put([]byte("Z"), 1, 0, p, nil); !errors.Is(err, storage.ErrDatasetClosed) {
 		t.Errorf("Put após Close = %v, want ErrDatasetClosed", err)
 	}
-	snapPos := st.AbreSnapshot()
-	defer st.FechaSnapshot(snapPos)
+	snapPos := st.OpenSnapshot()
+	defer st.CloseSnapshot(snapPos)
 	if _, _, _, err := st.GetByKey(snapPos, []byte("K"), nil); !errors.Is(err, storage.ErrDatasetClosed) {
 		t.Errorf("GetByKey após Close = %v, want ErrDatasetClosed", err)
 	}
@@ -138,8 +138,8 @@ func TestCloseConcorrenteComLeiturasNaoEntraEmPanic(t *testing.T) {
 				// leitores por goroutine, e o pin da compaction ficaria preso
 				// por um leitor que já foi embora.
 				if !func() bool {
-					snap := st.AbreSnapshot()
-					defer st.FechaSnapshot(snap)
+					snap := st.OpenSnapshot()
+					defer st.CloseSnapshot(snap)
 					it := st.ScanLive(snap)
 					defer it.Close()
 					for it.Next() {
@@ -175,8 +175,8 @@ func TestCloseConcorrenteComLeiturasNaoEntraEmPanic(t *testing.T) {
 	wg.Wait()
 
 	// O iterador criado DEPOIS do Close não itera e reporta o motivo.
-	snapPosClose := st.AbreSnapshot()
-	defer st.FechaSnapshot(snapPosClose)
+	snapPosClose := st.OpenSnapshot()
+	defer st.CloseSnapshot(snapPosClose)
 	it := st.ScanLive(snapPosClose)
 	if it.Next() {
 		t.Error("ScanLive após Close devolveu row")

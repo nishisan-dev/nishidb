@@ -107,10 +107,10 @@ func TestIndexadoEhCapabilityCheck(t *testing.T) {
 	// G1: sem isto o planner escolhe caminho indexado e a query falha em
 	// runtime em vez de degradar para full scan.
 	s := openStore(t, Options{CamposIndexados: []types.FieldID{fldStatus}})
-	if !s.Indexado(fldStatus) {
+	if !s.Indexed(fldStatus) {
 		t.Fatal("campo declarado deveria ser indexado")
 	}
-	if s.Indexado(fldCounter) {
+	if s.Indexed(fldCounter) {
 		t.Fatal("campo não declarado não pode reportar índice")
 	}
 	if got := s.CamposIndexados(); len(got) != 1 || got[0] != fldStatus {
@@ -125,7 +125,7 @@ func TestIndexadoEhCapabilityCheck(t *testing.T) {
 	}
 
 	semIndice := openStore(t, Options{})
-	if semIndice.Indexado(fldStatus) {
+	if semIndice.Indexed(fldStatus) {
 		t.Fatal("store sem campos indexados não pode reportar capability")
 	}
 	if got := semIndice.CamposIndexados(); len(got) != 0 {

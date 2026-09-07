@@ -20,8 +20,8 @@ func TestTabelaDoContadorNaoAlocaPorLinha(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snap := fonte.AbreSnapshot()
-	defer fonte.FechaSnapshot(snap)
+	snap := fonte.OpenSnapshot()
+	defer fonte.CloseSnapshot(snap)
 	var buf []byte
 	// Aquecimento: o buffer cresce na primeira linha.
 	if _, b, ok, err := fonte.GetByRowID(snap, 1, buf); err != nil || !ok {

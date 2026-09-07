@@ -43,11 +43,11 @@ func valorDoCampo(payload []byte, campo types.FieldID) (types.Value, bool) {
 func TestIndexadoEhACapabilityQueOPlannerEsperava(t *testing.T) {
 	s := openStore(t, Options{CamposIndexadosPorNome: []string{"id", "status", "counter"}})
 	for _, campo := range []types.FieldID{fldID, fldStatus, fldCounter} {
-		if !s.Indexado(campo) {
+		if !s.Indexed(campo) {
 			t.Fatalf("Indexado(%d) = false num campo declarado", campo)
 		}
 	}
-	if s.Indexado(999) {
+	if s.Indexed(999) {
 		t.Fatal("Indexado de campo não declarado devia ser false")
 	}
 	if got := s.CamposIndexados(); !slices.Equal(got, []types.FieldID{fldID, fldStatus, fldCounter}) {

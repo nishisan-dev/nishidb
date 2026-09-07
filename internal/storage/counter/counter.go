@@ -30,7 +30,7 @@ const bitCondicao uint32 = 1 << 31
 // linha, pós-merge) satisfaz a condição. Quem o implementa é o predicado; este
 // pacote só conhece a interface, para que o storage não importe o binder.
 type Avaliador interface {
-	Avalia(payload []byte) (bool, error)
+	Evaluate(payload []byte) (bool, error)
 }
 
 // Definicao é um contador como declarado no YAML e compilado contra o schema.
@@ -337,7 +337,7 @@ func (d *Derivador) Deriva(payload []byte) (chave []byte, cond, temGrupo bool, e
 	}
 	cond = true
 	if d.av != nil {
-		if cond, err = d.av.Avalia(payload); err != nil {
+		if cond, err = d.av.Evaluate(payload); err != nil {
 			return nil, false, false, err
 		}
 	}
@@ -594,15 +594,15 @@ func (c *Contador) Congela() Congelado {
 	return cg
 }
 
-// Limite é o maior id de grupo emitido mais um.
-func (c *Contador) Limite() uint32 { return c.dict.Limite() }
+// Limit é o maior id de grupo emitido mais um.
+func (c *Contador) Limit() uint32 { return c.dict.Limite() }
 
-// Grupo devolve a chave composta, o texto (groupKey), o total e os refs do
+// Group devolve a chave composta, o texto (groupKey), o total e os refs do
 // grupo id, e se ele está vivo. Seguro para leitores concorrentes; chave e
 // texto são estáveis. Um id que o dicionário já emitiu mas cujos totais ainda
 // não cresceram sai como não vivo — janela de microssegundos entre a internação
 // e o crescimento, e o leitor a vê como "ainda não existe".
-func (c *Contador) Grupo(id uint32) (chave, texto []byte, total, refs int64, vivo bool) {
+func (c *Contador) Group(id uint32) (chave, texto []byte, total, refs int64, vivo bool) {
 	c.dict.mu.RLock()
 	defer c.dict.mu.RUnlock()
 	if id < 1 || int(id) > len(c.dict.chaves) || int(id) >= len(c.totais) {
@@ -612,8 +612,8 @@ func (c *Contador) Grupo(id uint32) (chave, texto []byte, total, refs int64, viv
 		atomic.LoadInt64(&c.totais[id]), atomic.LoadInt64(&c.refs[id]), c.dict.vivo[id-1]
 }
 
-// PorTexto resolve o groupKey de um grupo VIVO para o id. Não aloca.
-func (c *Contador) PorTexto(texto []byte) (uint32, bool) {
+// ByText resolve o groupKey de um grupo VIVO para o id. Não aloca.
+func (c *Contador) ByText(texto []byte) (uint32, bool) {
 	c.dict.mu.RLock()
 	defer c.dict.mu.RUnlock()
 	id, ok := c.porTexto[string(texto)]
@@ -643,8 +643,8 @@ type Estatisticas struct {
 	AuditoriaUltimaUnix  int64
 }
 
-// Estatisticas devolve o retrato corrente. Seguro para leitores concorrentes.
-func (c *Contador) Estatisticas() Estatisticas {
+// Stats devolve o retrato corrente. Seguro para leitores concorrentes.
+func (c *Contador) Stats() Estatisticas {
 	return Estatisticas{
 		Nome:                 c.def.Nome,
 		Grupos:               c.dict.Vivos(),

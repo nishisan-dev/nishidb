@@ -120,7 +120,7 @@ func (s *Store) abreContadores(opts Options, m *checkpoint.Manifest, idxDir stri
 				return err
 			}
 		}
-		if est := c.Estatisticas(); est.Grupos > def.MaxGroups {
+		if est := c.Stats(); est.Grupos > def.MaxGroups {
 			return fmt.Errorf("%w: contador %q tem %d grupos em uso e maxGroups %d; o teto só pode diminuir até os grupos em uso (ou reconstrua o contador)",
 				ErrInvalidArgument, def.Nome, est.Grupos, def.MaxGroups)
 		}
@@ -137,7 +137,7 @@ func (s *Store) abreContadores(opts Options, m *checkpoint.Manifest, idxDir stri
 		if err := c.Dobra(); err != nil {
 			return fmt.Errorf("storage: dobrar o contador %q de %s: %w", def.Nome, opts.Dir, err)
 		}
-		if orfas := c.Estatisticas().Orfas; orfas > 0 {
+		if orfas := c.Stats().Orfas; orfas > 0 {
 			s.opts.Log.Warn("contador.orfas",
 				"entradas do vetor apontavam para grupos aposentados ou inexistentes e foram zeradas; não é esperado fora de uma janela de crash",
 				"contador", nome, "orfas", orfas)
@@ -210,7 +210,7 @@ func (s *Store) reconstroiContadoresPendentes() error {
 		s.opts.Log.Info("contador.construido",
 			"o contador foi construído varrendo as linhas vivas do dataset",
 			"contador", p.c.Def().Nome, "motivo", p.motivo, "linhas", linhas,
-			"grupos", p.c.Estatisticas().Grupos, "duracao", time.Since(inicio).String())
+			"grupos", p.c.Stats().Grupos, "duracao", time.Since(inicio).String())
 	}
 	s.contadoresARecriar = nil
 	return nil
@@ -271,7 +271,7 @@ func (s *Store) Contadores() []*counter.Contador { return s.contadores }
 func (s *Store) EstatisticasDeContadores() []counter.Estatisticas {
 	out := make([]counter.Estatisticas, 0, len(s.contadores))
 	for _, c := range s.contadores {
-		out = append(out, c.Estatisticas())
+		out = append(out, c.Stats())
 	}
 	return out
 }
@@ -334,7 +334,7 @@ func (s *Store) AuditaContadores(ctx context.Context) ([]counter.Relatorio, erro
 	inicio := time.Now()
 
 	s.wmu.Lock()
-	snap := s.AbreSnapshot()
+	snap := s.OpenSnapshot()
 	if s.audAntesDaCopia != nil {
 		s.audAntesDaCopia()
 	}
@@ -343,7 +343,7 @@ func (s *Store) AuditaContadores(ctx context.Context) ([]counter.Relatorio, erro
 		congelados[i] = c.Congela()
 	}
 	s.wmu.Unlock()
-	defer s.FechaSnapshot(snap)
+	defer s.CloseSnapshot(snap)
 
 	recalc := make([]recalculoDeContador, len(s.contadores))
 	for i, c := range s.contadores {
@@ -428,7 +428,7 @@ func (s *Store) AuditaContadores(ctx context.Context) ([]counter.Relatorio, erro
 		cg, rc := congelados[i], recalc[i]
 		r := counter.Relatorio{
 			Nome:           c.Def().Nome,
-			Grupos:         c.Estatisticas().Grupos,
+			Grupos:         c.Stats().Grupos,
 			NaoInternadas:  rc.naoInternadas,
 			LinhasVarridas: linhas,
 			Duracao:        duracao,
@@ -445,7 +445,7 @@ func (s *Store) AuditaContadores(ctx context.Context) ([]counter.Relatorio, erro
 			}
 			r.Divergentes++
 			if len(r.Amostra) < counter.TetoDaAmostra {
-				_, texto, _, _, _ := c.Grupo(g)
+				_, texto, _, _, _ := c.Group(g)
 				r.Amostra = append(r.Amostra, counter.Divergencia{
 					ID: g, Texto: string(texto),
 					Mantido: m, Recalculado: q,
@@ -507,11 +507,11 @@ func (s *Store) ReconstroiContadores(ctx context.Context) ([]counter.Reconstruca
 			return nil, fmt.Errorf("storage: reconstruir o contador %q: %w", c.Def().Nome, err)
 		}
 		out = append(out, counter.Reconstrucao{
-			Nome: c.Def().Nome, Linhas: linhas, Grupos: c.Estatisticas().Grupos, Duracao: time.Since(inicio),
+			Nome: c.Def().Nome, Linhas: linhas, Grupos: c.Stats().Grupos, Duracao: time.Since(inicio),
 		})
 		s.opts.Log.Info("contador.reconstruido",
 			"o contador foi reconstruído em operação, varrendo as linhas vivas sob o lock do writer",
-			"contador", c.Def().Nome, "linhas", linhas, "grupos", c.Estatisticas().Grupos, "duracao", time.Since(inicio).String())
+			"contador", c.Def().Nome, "linhas", linhas, "grupos", c.Stats().Grupos, "duracao", time.Since(inicio).String())
 	}
 	return out, nil
 }

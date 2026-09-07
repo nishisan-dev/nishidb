@@ -22,7 +22,7 @@ type avaliadorPorID struct {
 	fr    encoding.FieldReader
 }
 
-func (a *avaliadorPorID) Avalia(payload []byte) (bool, error) {
+func (a *avaliadorPorID) Evaluate(payload []byte) (bool, error) {
 	a.fr.Reset(payload)
 	for {
 		id, v, ok := a.fr.Next()
@@ -121,11 +121,11 @@ func contadorChamado(t *testing.T, s *Store, nome string) *counter.Contador {
 func totalDoContador(t *testing.T, s *Store, nome, olt string) (total, refs int64) {
 	t.Helper()
 	c := contadorChamado(t, s, nome)
-	id, ok := c.PorTexto([]byte(olt))
+	id, ok := c.ByText([]byte(olt))
 	if !ok {
 		return 0, 0
 	}
-	_, _, total, refs, _ = c.Grupo(id)
+	_, _, total, refs, _ = c.Group(id)
 	return total, refs
 }
 
@@ -183,9 +183,9 @@ func TestContadorAcompanhaPutLapideECopyForward(t *testing.T) {
 	exigeTotal(t, s, "aut", "A", 0, 0)
 	exigeTotal(t, s, "serv", "A", 0, 0)
 	c := contadorChamado(t, s, "aut")
-	if id, ok := c.PorTexto([]byte("A")); !ok {
+	if id, ok := c.ByText([]byte("A")); !ok {
 		t.Fatal("o grupo que esvaziou continua vivo")
-	} else if _, _, _, _, vivo := c.Grupo(id); !vivo {
+	} else if _, _, _, _, vivo := c.Group(id); !vivo {
 		t.Fatal("o grupo que esvaziou continua vivo")
 	}
 
@@ -456,7 +456,7 @@ func TestMudarMaxGroupsNaoReconstroi(t *testing.T) {
 	if s2.ContadoresConstruidosForTest() != 0 {
 		t.Fatal("mudar o teto não muda o conteúdo: não reconstrói")
 	}
-	if contadorChamado(t, s2, "aut").Estatisticas().Teto != 20 {
+	if contadorChamado(t, s2, "aut").Stats().Teto != 20 {
 		t.Fatal("o teto novo tem de valer")
 	}
 	exigeTotal(t, s2, "aut", "A", 1, 1)

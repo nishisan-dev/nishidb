@@ -19,7 +19,7 @@ import (
 // era tratado como "atende tudo", e a diferença entre "não sei responder" e
 // "sim" só aparecia como erro em runtime no executor.
 type Store interface {
-	Indexado(field types.FieldID) bool
+	Indexed(field types.FieldID) bool
 }
 
 // maxFlattenDepth limita a recursão do achatamento. Estourá-lo não é erro: a
@@ -201,7 +201,7 @@ func eqTermOf(e binder.BoundExpr) (eqTerm, bool) {
 // check, o executor chamaria Lookup num campo sem índice, receberia
 // ErrInvalidArgument e a query FALHARIA em vez de degradar.
 func (p *Planner) indexavel(f *schema.CompiledField) bool {
-	return f != nil && f.Indexado && p.store != nil && p.store.Indexado(f.ID)
+	return f != nil && f.Indexado && p.store != nil && p.store.Indexed(f.ID)
 }
 
 // flattenAnd colhe as folhas do spine de AND no topo da árvore. Um nó OR (ou

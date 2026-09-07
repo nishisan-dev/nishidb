@@ -43,7 +43,7 @@ func TestGateDiscoCaiQuandoOKeySetEhAbandonado(t *testing.T) {
 			"status":     {Type: types.TypeString, Bytes: recheio},
 			"_writtenAt": {Type: types.TypeTimestamp, I64: rel.t.UnixMilli()},
 		})
-		rec, _, pres, err := s.Estado([]byte(k), nil)
+		rec, _, pres, err := s.State([]byte(k), nil)
 		if err != nil {
 			t.Fatal(err)
 		}

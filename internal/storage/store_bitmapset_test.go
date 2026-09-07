@@ -35,7 +35,7 @@ func TestCamposIndexadosPorNomeResolvemPeloDicionario(t *testing.T) {
 
 	// A ordem de criação no dicionário fixa os IDs 1..3.
 	for _, want := range []types.FieldID{fldID, fldStatus, fldCounter} {
-		if !s.Indexado(want) {
+		if !s.Indexed(want) {
 			t.Fatalf("campo %d declarado por nome deveria ser indexado; conjunto=%v", want, s.CamposIndexados())
 		}
 	}
@@ -140,7 +140,7 @@ func TestAbrirSemUmCampoAntesIndexadoEhAceito(t *testing.T) {
 		t.Fatalf("abrir sem o campo antes indexado deveria ser aceito: %v", err)
 	}
 	defer s2.Close()
-	if s2.Indexado(fldStatus) {
+	if s2.Indexed(fldStatus) {
 		t.Fatal("o campo não foi declarado nesta abertura")
 	}
 }

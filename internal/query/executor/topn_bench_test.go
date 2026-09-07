@@ -39,9 +39,9 @@ func (f *fonteDeBancada) GetByKey(_ types.Snapshot, _, buf []byte) (types.Record
 // ScanLive REUSA o iterador: a bancada roda serialmente, e devolver um novo a
 // cada query poria uma alocação por query na medida do lado que abre mais
 // queries — que são os dois, igualmente, mas o ponto é medir o operador.
-func (f *fonteDeBancada) AbreSnapshot() types.Snapshot { return types.Snapshot{} }
+func (f *fonteDeBancada) OpenSnapshot() types.Snapshot { return types.Snapshot{} }
 
-func (f *fonteDeBancada) FechaSnapshot(types.Snapshot) {}
+func (f *fonteDeBancada) CloseSnapshot(types.Snapshot) {}
 
 func (f *fonteDeBancada) ScanLive(types.Snapshot) types.RowIDIterator {
 	f.it.f, f.it.pos = f, 0
@@ -52,7 +52,7 @@ func (f *fonteDeBancada) Lookup(types.FieldID, types.Value) (types.RowIDIterator
 	return nil, fmt.Errorf("%w: bancada sem bitmap", types.ErrInvalidArgument)
 }
 
-func (f *fonteDeBancada) Indexado(types.FieldID) bool { return false }
+func (f *fonteDeBancada) Indexed(types.FieldID) bool { return false }
 
 type iteradorDeBancada struct {
 	f   *fonteDeBancada

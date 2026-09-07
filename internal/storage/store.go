@@ -1481,7 +1481,7 @@ func fsyncDir(dir string) error {
 // FieldDict expõe o dicionário de campos do dataset.
 func (s *Store) FieldDict() *fielddict.Dict { return s.dict }
 
-// Indexado informa se o campo tem índice.
+// Indexed informa se o campo tem índice.
 //
 // É o capability check do planner: sem ele o plano escolhe o caminho
 // indexado e a query falha em RUNTIME, em vez de degradar para full scan
@@ -1495,7 +1495,7 @@ func (s *Store) FieldDict() *fielddict.Dict { return s.dict }
 //
 // A enumeração do conjunto é o CamposIndexados (indices.go), que já era a
 // terceira grafia da mesma coisa quando BitmapFields e HashFields existiam.
-func (s *Store) Indexado(field types.FieldID) bool {
+func (s *Store) Indexed(field types.FieldID) bool {
 	return slices.Contains(s.camposIndexados, field)
 }
 
@@ -1580,7 +1580,7 @@ func (s *Store) GetByKey(snap types.Snapshot, key, buf []byte) (types.Record, []
 	return rec, out, true, nil
 }
 
-// Estado resolve a key e devolve os TRÊS estados possíveis (§58). É o que o
+// State resolve a key e devolve os TRÊS estados possíveis (§58). É o que o
 // materializer usa: ele precisa distinguir "key nova" de "entidade que
 // existiu", porque só no segundo caso o stale check tem uma sequence anterior
 // contra a qual comparar — e sem essa comparação um evento antigo ressuscita
@@ -1589,7 +1589,7 @@ func (s *Store) GetByKey(snap types.Snapshot, key, buf []byte) (types.Record, []
 // O GetByKey continua existindo com bool para o caminho de LEITURA, onde a
 // pergunta é outra: "esta row aparece na query?". Duas perguntas diferentes,
 // duas assinaturas.
-func (s *Store) Estado(key, buf []byte) (types.Record, []byte, types.Presence, error) {
+func (s *Store) State(key, buf []byte) (types.Record, []byte, types.Presence, error) {
 	if err := s.entra(); err != nil {
 		return types.Record{}, buf, types.PresenceAbsent, err
 	}

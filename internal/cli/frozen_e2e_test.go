@@ -174,7 +174,7 @@ func TestCongeladaSobreviveAoReplayDoTail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec, _, ok, err := st2.GetByKey(st2.AbreSnapshot(), []byte("a"), nil)
+	rec, _, ok, err := st2.GetByKey(st2.OpenSnapshot(), []byte("a"), nil)
 	if err != nil || !ok {
 		t.Fatalf("entidade perdida no replay (ok=%v err=%v)", ok, err)
 	}

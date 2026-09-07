@@ -385,8 +385,8 @@ func TestMetaKafkaNaoRetemRetratoDepoisDoClose(t *testing.T) {
 	}
 	_ = sc
 	for i := 0; i < 5; i++ {
-		snap := store.AbreSnapshot()
-		store.FechaSnapshot(snap)
+		snap := store.OpenSnapshot()
+		store.CloseSnapshot(snap)
 	}
 	if n := metakafka.RetratosAbertosForTest(store); n != 0 {
 		t.Fatalf("%d retratos retidos depois de fechar todos", n)

@@ -145,7 +145,7 @@ func TestCompactionMarcaOVencidoQueEncontra(t *testing.T) {
 			"status":     {Type: types.TypeString, Bytes: []byte(k + "-payload-de-tamanho-razoavel-para-encher-segmento")},
 			"_writtenAt": {Type: types.TypeTimestamp, I64: rel.t.UnixMilli()},
 		})
-		rec, _, pres, err := s.Estado([]byte(k), nil)
+		rec, _, pres, err := s.State([]byte(k), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -211,7 +211,7 @@ func TestCompactionMarcaOVencidoQueEncontra(t *testing.T) {
 	// E as ativas, renovadas, sobrevivem: a compaction não pode marcar quem
 	// está no prazo.
 	for _, k := range ativas {
-		if _, _, pres, _ := s.Estado([]byte(k), nil); pres != types.PresenceLive {
+		if _, _, pres, _ := s.State([]byte(k), nil); pres != types.PresenceLive {
 			t.Errorf("row ativa %q foi marcada: %v", k, pres)
 		}
 	}

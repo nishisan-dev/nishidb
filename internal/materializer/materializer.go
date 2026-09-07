@@ -39,7 +39,7 @@ type Store interface {
 	// porque o stale check precisa rodar também sobre a entidade EXPIRADA:
 	// tratá-la como ausente a faria ser recriada por um evento antigo, que é
 	// a ressurreição que o tombstone existe para impedir.
-	Estado(key, buf []byte) (types.Record, []byte, types.Presence, error)
+	State(key, buf []byte) (types.Record, []byte, types.Presence, error)
 
 	// Put publica o estado novo. prev != nil evita o re-lookup e entrega o
 	// payload anterior para o diff dos índices; deve ser o record corrente
@@ -470,7 +470,7 @@ func (m *Materializer) Aplica(d *Decodificado) ApplyResult {
 	)
 	// O buf devolvido é reatribuído SEMPRE (pode ter crescido), inclusive no
 	// erro — descartá-lo faria o próximo evento realocar do zero.
-	m.prevRec, m.prevBuf, presenca, err = m.store.Estado(d.key, m.prevBuf[:0])
+	m.prevRec, m.prevBuf, presenca, err = m.store.State(d.key, m.prevBuf[:0])
 	if err != nil {
 		return m.failure(err)
 	}

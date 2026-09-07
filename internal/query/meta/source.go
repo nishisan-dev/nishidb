@@ -95,22 +95,22 @@ func (f *fonte) ScanLive(types.Snapshot) types.RowIDIterator {
 	return &iterador{n: len(f.campos), i: -1}
 }
 
-// AbreSnapshot devolve o snapshot ZERO, e o ignora na leitura: a fonte já é um
+// OpenSnapshot devolve o snapshot ZERO, e o ignora na leitura: a fonte já é um
 // retrato, tirado uma vez no Abre (ver o godoc do tipo). Não há relógio que
 // ande nem rowId que nasça no meio da varredura — o que o snapshot congela no
 // Store de verdade, aqui já está congelado por construção.
-func (f *fonte) AbreSnapshot() types.Snapshot { return types.Snapshot{} }
+func (f *fonte) OpenSnapshot() types.Snapshot { return types.Snapshot{} }
 
-// FechaSnapshot é no-op porque o Abre não retém nada: não há journal de
+// CloseSnapshot é no-op porque o Abre não retém nada: não há journal de
 // versões sobre uma fonte que não é escrita.
-func (f *fonte) FechaSnapshot(types.Snapshot) {}
+func (f *fonte) CloseSnapshot(types.Snapshot) {}
 
-// Indexado responde SEMPRE false: a tabela virtual não declara índice no seu
+// Indexed responde SEMPRE false: a tabela virtual não declara índice no seu
 // YAML, então o planner degrada para varredura completa — que sobre sete
 // colunas e algumas dezenas de linhas é o plano certo de qualquer forma.
 // Confundir esta resposta com a do dataset ALVO seria o defeito: a coluna
 // `indexed` fala do alvo, este método fala da tabela.
-func (f *fonte) Indexado(types.FieldID) bool { return false }
+func (f *fonte) Indexed(types.FieldID) bool { return false }
 
 // Lookup nunca é chamado: a tabela virtual não declara índice nenhum no
 // YAML, então o planner jamais escolhe um plano indexado sobre ela. O erro
@@ -136,7 +136,7 @@ func (f *fonte) record(row types.RowID, c *schema.CompiledField, buf []byte) (ty
 	// mentira a partir do motor físico.
 	indexado := false
 	if f.caps != nil {
-		indexado = f.caps.Indexado(c.ID)
+		indexado = f.caps.Indexed(c.ID)
 	}
 
 	vals := []struct {

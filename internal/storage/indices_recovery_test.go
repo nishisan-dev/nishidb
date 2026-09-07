@@ -404,7 +404,7 @@ func poeLinhasVariadasAteRotacionar(t *testing.T, s *Store, rel *relogioDeTeste,
 		// segmento, e as postings dele também.
 		if i%5 == 0 && i > 0 {
 			anterior := "v" + strconv.Itoa(i-1)
-			rec, _, pres, err := s.Estado([]byte(anterior), nil)
+			rec, _, pres, err := s.State([]byte(anterior), nil)
 			if err != nil {
 				t.Fatalf("Estado(%s): %v", anterior, err)
 			}

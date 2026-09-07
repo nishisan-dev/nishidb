@@ -52,10 +52,10 @@ func TestContadorNaoAlocaNoCaminhoQuente(t *testing.T) {
 	})
 	t.Run("leitura", func(t *testing.T) {
 		if n := testing.AllocsPerRun(1000, func() {
-			if _, _, _, _, vivo := c.Grupo(1); !vivo {
+			if _, _, _, _, vivo := c.Group(1); !vivo {
 				t.Fatal("grupo 1 tem de estar vivo")
 			}
-			if _, ok := c.PorTexto([]byte("A|1|1")); !ok {
+			if _, ok := c.ByText([]byte("A|1|1")); !ok {
 				t.Fatal("texto tem de resolver")
 			}
 		}); n != 0 {

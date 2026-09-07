@@ -31,7 +31,7 @@ const TabelaMetaCounters = "counters"
 // satisfaz.
 type Contado interface {
 	Def() counter.Definicao
-	Estatisticas() counter.Estatisticas
+	Stats() counter.Estatisticas
 }
 
 // especDaTabelaMeta é a spec da tabela, no MESMO YAML de um dataset de
@@ -187,14 +187,14 @@ type fonteMeta struct {
 	colunas []colunaComID // em ordem crescente de FieldID
 }
 
-// AbreSnapshot devolve o limite de linhas; o conjunto é fixo, então não há o
+// OpenSnapshot devolve o limite de linhas; o conjunto é fixo, então não há o
 // que congelar além dele. Época e instante ficam zerados e são ignorados.
-func (f *fonteMeta) AbreSnapshot() types.Snapshot {
+func (f *fonteMeta) OpenSnapshot() types.Snapshot {
 	return types.Snapshot{LimitRowID: types.RowID(len(f.linhas) + 1)}
 }
 
-// FechaSnapshot é no-op: a fonte não retém nada.
-func (f *fonteMeta) FechaSnapshot(types.Snapshot) {}
+// CloseSnapshot é no-op: a fonte não retém nada.
+func (f *fonteMeta) CloseSnapshot(types.Snapshot) {}
 
 func (f *fonteMeta) ScanLive(snap types.Snapshot) types.RowIDIterator {
 	return &iteradorMeta{limite: snap.LimitRowID}
@@ -215,10 +215,10 @@ func (f *fonteMeta) GetByKey(snap types.Snapshot, key, buf []byte) (types.Record
 	return f.GetByRowID(snap, types.RowID(i+1), buf)
 }
 
-// Indexado responde SEMPRE false, como nas outras tabelas virtuais: sem
+// Indexed responde SEMPRE false, como nas outras tabelas virtuais: sem
 // índice declarado o planner varre as linhas — uma por contador — e a key
 // (o nome) dá o point lookup por conta própria.
-func (f *fonteMeta) Indexado(types.FieldID) bool { return false }
+func (f *fonteMeta) Indexed(types.FieldID) bool { return false }
 
 // Lookup nunca é chamado: rede de segurança, como no _meta e no _counters.
 func (f *fonteMeta) Lookup(field types.FieldID, _ types.Value) (types.RowIDIterator, error) {
@@ -230,7 +230,7 @@ func (f *fonteMeta) Lookup(field types.FieldID, _ types.Value) (types.RowIDItera
 // `where`, e as duas da auditoria enquanto nenhuma auditoria concluiu.
 func (f *fonteMeta) record(row types.RowID, buf []byte) (types.Record, []byte, bool, error) {
 	l := f.linhas[row-1]
-	est := l.c.Estatisticas()
+	est := l.c.Stats()
 	buf = buf[:0]
 	var err error
 	for _, col := range f.colunas {

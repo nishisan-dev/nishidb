@@ -294,10 +294,10 @@ func (s *Store) GetByKey(_ types.Snapshot, key, buf []byte) (types.Record, []byt
 	return s.readRow(r, buf)
 }
 
-// Estado espelha o Store real: três estados, e o record de uma entidade
+// State espelha o Store real: três estados, e o record de uma entidade
 // expirada volta com RowID e Sequence VÁLIDOS — é deles que o stale check
 // depende para não deixar um evento antigo ressuscitar a row.
-func (s *Store) Estado(key, buf []byte) (types.Record, []byte, types.Presence, error) {
+func (s *Store) State(key, buf []byte) (types.Record, []byte, types.Presence, error) {
 	rowID, ok := s.byKey[string(key)]
 	if !ok {
 		return types.Record{}, buf, types.PresenceAbsent, nil
@@ -392,10 +392,10 @@ func (s *Store) ScanLive(types.Snapshot) types.RowIDIterator {
 	return &rowIDIter{ids: ids}
 }
 
-// Indexado informa se o campo tem índice — o capability check do planner. Sem
+// Indexed informa se o campo tem índice — o capability check do planner. Sem
 // ele o plano escolhe o caminho indexado e a query falha em runtime, em vez de
 // degradar para full scan como o design promete.
-func (s *Store) Indexado(field types.FieldID) bool { return s.indexado[field] }
+func (s *Store) Indexed(field types.FieldID) bool { return s.indexado[field] }
 
 // InjectPosting insere um posting no índice do campo SEM alterar o estado da
 // row. Existe para reproduzir o falso positivo que o Store real tolera por
@@ -545,13 +545,13 @@ func (d *Dict) SetTypeHint(id types.FieldID, t types.FieldType) error {
 	}
 }
 
-// AbreSnapshot devolve o snapshot ZERO. O dublê não tem relógio de expiração
+// OpenSnapshot devolve o snapshot ZERO. O dublê não tem relógio de expiração
 // nem rowId nascendo por baixo — o que ele precisa dublar é a ASSINATURA, para
 // que o executor sob teste percorra o mesmo caminho que percorre em produção.
-func (s *Store) AbreSnapshot() types.Snapshot { return types.Snapshot{} }
+func (s *Store) OpenSnapshot() types.Snapshot { return types.Snapshot{} }
 
-// FechaSnapshot é no-op: o dublê não retém versão nenhuma. Ele existe para que
+// CloseSnapshot é no-op: o dublê não retém versão nenhuma. Ele existe para que
 // o executor sob teste percorra o MESMO caminho de abertura e fechamento que
 // percorre em produção — inclusive o Close duplo, que é onde um contador de
 // leitores quebra.
-func (s *Store) FechaSnapshot(types.Snapshot) {}
+func (s *Store) CloseSnapshot(types.Snapshot) {}
