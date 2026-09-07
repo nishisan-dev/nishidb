@@ -5,30 +5,30 @@ import (
 	"unicode/utf8"
 )
 
-// TipoDePadrao classifica o padrão de LIKE no BIND, para que o caminho por
+// PatternType classifica o padrão de LIKE no BIND, para que o caminho por
 // linha seja o mais barato possível.
 //
 // A grande maioria dos padrões reais é 'prefixo%' ou '%trecho%', e nenhum dos
 // dois precisa do glob geral: viram bytes.HasPrefix e bytes.Contains, que são
 // otimizados na stdlib. O glob de dois ponteiros existe para o resto.
-type TipoDePadrao uint8
+type PatternType uint8
 
 const (
-	// PadraoInvalido é o zero value, de propósito: padrão mal construído
+	// PatternInvalid é o zero value, de propósito: padrão mal construído
 	// aparece como falha em vez de casar tudo por omissão.
-	PadraoInvalido TipoDePadrao = iota
-	// PadraoTudo é '%' ou '%%': casa qualquer valor, inclusive o vazio.
-	PadraoTudo
-	// PadraoIgual é o padrão sem curinga nenhum.
-	PadraoIgual
-	// PadraoPrefixo é 'abc%'.
-	PadraoPrefixo
-	// PadraoSufixo é '%abc'.
-	PadraoSufixo
-	// PadraoContem é '%abc%'.
-	PadraoContem
-	// PadraoGeral é qualquer outra combinação, e o único que usa o glob.
-	PadraoGeral
+	PatternInvalid PatternType = iota
+	// PatternAll é '%' ou '%%': casa qualquer valor, inclusive o vazio.
+	PatternAll
+	// PatternEqual é o padrão sem curinga nenhum.
+	PatternEqual
+	// PatternPrefix é 'abc%'.
+	PatternPrefix
+	// PatternSuffix é '%abc'.
+	PatternSuffix
+	// PatternContains é '%abc%'.
+	PatternContains
+	// PatternGeneral é qualquer outra combinação, e o único que usa o glob.
+	PatternGeneral
 )
 
 // LikePattern é um padrão de LIKE já compilado.
@@ -42,10 +42,11 @@ const (
 // pertence a quem chamou; reter aquela janela seria a mesma armadilha de
 // lifetime que o ColView.Val.Bytes tem no executor.
 type LikePattern struct {
-	Tipo TipoDePadrao
-	// Lit é o trecho literal de PadraoIgual, Prefixo, Sufixo e Contem.
+	Type PatternType
+	// Lit é o trecho literal de PatternEqual, PatternPrefix, PatternSuffix e
+	// PatternContains.
 	Lit []byte
-	// Raw é o padrão inteiro, só para PadraoGeral.
+	// Raw é o padrão inteiro, só para PatternGeneral.
 	Raw []byte
 	// MinBytes é um piso do tamanho que um valor precisa ter para ter chance
 	// de casar: a soma dos bytes literais do padrão, contando cada `_` como 1.
@@ -58,37 +59,37 @@ type LikePattern struct {
 	MinBytes int
 }
 
-// CompilaLike classifica o padrão. Não devolve erro: todo padrão é válido —
+// CompileLike classifica o padrão. Não devolve erro: todo padrão é válido —
 // sem ESCAPE não há sintaxe a violar, e `%` e `_` literais são inatingíveis
 // (limitação conhecida e documentada).
-func CompilaLike(pat []byte) LikePattern {
-	p := LikePattern{MinBytes: minBytesDe(pat)}
-	primeiro := bytes.IndexByte(pat, '%')
-	ultimo := bytes.LastIndexByte(pat, '%')
-	temSublinhado := bytes.IndexByte(pat, '_') >= 0
+func CompileLike(pat []byte) LikePattern {
+	p := LikePattern{MinBytes: minBytesOf(pat)}
+	first := bytes.IndexByte(pat, '%')
+	last := bytes.LastIndexByte(pat, '%')
+	hasUnderscore := bytes.IndexByte(pat, '_') >= 0
 
 	switch {
-	case primeiro < 0 && !temSublinhado:
-		p.Tipo, p.Lit = PadraoIgual, copia(pat)
-	case temSublinhado:
-		p.Tipo, p.Raw = PadraoGeral, copia(pat)
-	case ehSoPorcento(pat):
-		p.Tipo = PadraoTudo
-	case primeiro == ultimo && primeiro == len(pat)-1:
-		p.Tipo, p.Lit = PadraoPrefixo, copia(pat[:len(pat)-1])
-	case primeiro == ultimo && primeiro == 0:
-		p.Tipo, p.Lit = PadraoSufixo, copia(pat[1:])
-	case primeiro == 0 && ultimo == len(pat)-1 && bytes.Count(pat, []byte{'%'}) == 2:
-		p.Tipo, p.Lit = PadraoContem, copia(pat[1:len(pat)-1])
+	case first < 0 && !hasUnderscore:
+		p.Type, p.Lit = PatternEqual, clone(pat)
+	case hasUnderscore:
+		p.Type, p.Raw = PatternGeneral, clone(pat)
+	case isAllStars(pat):
+		p.Type = PatternAll
+	case first == last && first == len(pat)-1:
+		p.Type, p.Lit = PatternPrefix, clone(pat[:len(pat)-1])
+	case first == last && first == 0:
+		p.Type, p.Lit = PatternSuffix, clone(pat[1:])
+	case first == 0 && last == len(pat)-1 && bytes.Count(pat, []byte{'%'}) == 2:
+		p.Type, p.Lit = PatternContains, clone(pat[1:len(pat)-1])
 	default:
-		p.Tipo, p.Raw = PadraoGeral, copia(pat)
+		p.Type, p.Raw = PatternGeneral, clone(pat)
 	}
 	return p
 }
 
-func copia(b []byte) []byte { return append([]byte(nil), b...) }
+func clone(b []byte) []byte { return append([]byte(nil), b...) }
 
-func ehSoPorcento(pat []byte) bool {
+func isAllStars(pat []byte) bool {
 	for _, c := range pat {
 		if c != '%' {
 			return false
@@ -97,9 +98,9 @@ func ehSoPorcento(pat []byte) bool {
 	return len(pat) > 0
 }
 
-// minBytesDe soma os bytes que o valor precisa ter no mínimo: tudo que não é
+// minBytesOf soma os bytes que o valor precisa ter no mínimo: tudo que não é
 // `%`, com cada `_` valendo 1 (o menor tamanho de um caractere).
-func minBytesDe(pat []byte) int {
+func minBytesOf(pat []byte) int {
 	n := 0
 	for _, c := range pat {
 		switch c {
@@ -113,30 +114,30 @@ func minBytesDe(pat []byte) int {
 	return n
 }
 
-// Casa reporta se v satisfaz o padrão.
+// Match reporta se v satisfaz o padrão.
 //
 // ZERO ALOCAÇÃO por chamada, e é requisito e não estilo: roda uma vez por linha
 // varrida. Sem regexp — que aloca e é ordens de grandeza mais lenta — e sem
 // converter v para string.
-func (p *LikePattern) Casa(v []byte) bool {
+func (p *LikePattern) Match(v []byte) bool {
 	if len(v) < p.MinBytes {
 		return false // rejeição O(1), o caso mais comum numa varredura
 	}
-	switch p.Tipo {
-	case PadraoTudo:
+	switch p.Type {
+	case PatternAll:
 		return true
-	case PadraoIgual:
+	case PatternEqual:
 		return bytes.Equal(v, p.Lit)
-	case PadraoPrefixo:
+	case PatternPrefix:
 		return bytes.HasPrefix(v, p.Lit)
-	case PadraoSufixo:
+	case PatternSuffix:
 		return bytes.HasSuffix(v, p.Lit)
-	case PadraoContem:
+	case PatternContains:
 		return bytes.Contains(v, p.Lit)
-	case PadraoGeral:
+	case PatternGeneral:
 		return glob(p.Raw, v)
 	default:
-		// PadraoInvalido: padrão que não passou pelo CompilaLike. Casar nada é
+		// PatternInvalid: padrão que não passou pelo CompileLike. Casar nada é
 		// a resposta segura — casar tudo transformaria um bug de construção em
 		// resultado silenciosamente errado.
 		return false
@@ -158,9 +159,9 @@ func (p *LikePattern) Casa(v []byte) bool {
 // decodificar.
 func glob(pat, s []byte) bool {
 	var (
-		p, i     int
-		estrelaP = -1
-		estrelaI int
+		p, i  int
+		starP = -1
+		starI int
 	)
 	for i < len(s) {
 		switch {
@@ -171,16 +172,16 @@ func glob(pat, s []byte) bool {
 		case p < len(pat) && pat[p] == '%':
 			// Guarda o ponto de retomada e tenta casar o resto com zero
 			// caracteres consumidos.
-			estrelaP, estrelaI = p, i
+			starP, starI = p, i
 			p++
 		case p < len(pat) && pat[p] == s[i]:
 			p++
 			i++
-		case estrelaP >= 0:
+		case starP >= 0:
 			// Não casou: o `%` mais recente engole mais um caractere.
-			_, w := utf8.DecodeRune(s[estrelaI:])
-			estrelaI += w
-			i, p = estrelaI, estrelaP+1
+			_, w := utf8.DecodeRune(s[starI:])
+			starI += w
+			i, p = starI, starP+1
 		default:
 			return false
 		}

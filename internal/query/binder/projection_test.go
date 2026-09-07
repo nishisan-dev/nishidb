@@ -17,8 +17,8 @@ import (
 // silêncio, o usuário pede duas colunas e recebe uma, sem aviso nenhum. Recusar
 // no bind troca resultado errado silencioso por erro visível.
 func TestProjecaoComNomeRepetidoERecusada(t *testing.T) {
-	const prefixo = "SELECT id, status, "
-	err := bindErr(t, prefixo+"id FROM radius_sessions")
+	const prefix = "SELECT id, status, "
+	err := bindErr(t, prefix+"id FROM radius_sessions")
 
 	if !strings.Contains(err.Error(), `coluna "id" aparece mais de uma vez na projeção`) {
 		t.Errorf("mensagem = %q", err)
@@ -29,8 +29,8 @@ func TestProjecaoComNomeRepetidoERecusada(t *testing.T) {
 	if !errors.As(err, &be) {
 		t.Fatalf("erro é %T, want *binder.Error", err)
 	}
-	if be.Pos != len(prefixo) {
-		t.Errorf("posição = %d, want %d (a segunda ocorrência)", be.Pos, len(prefixo))
+	if be.Pos != len(prefix) {
+		t.Errorf("posição = %d, want %d (a segunda ocorrência)", be.Pos, len(prefix))
 	}
 }
 
@@ -88,22 +88,22 @@ func TestColunaInexistenteVenceARepeticao(t *testing.T) {
 func TestEstrelaNaoEAfetadaPelaChecagemDeRepeticao(t *testing.T) {
 	bq := bindOK(t, "SELECT * FROM radius_sessions")
 
-	vistos := make(map[string]struct{}, len(bq.Columns))
+	seen := make(map[string]struct{}, len(bq.Columns))
 	for _, c := range bq.Columns {
-		if _, repetido := vistos[c.Name]; repetido {
+		if _, duplicate := seen[c.Name]; duplicate {
 			t.Errorf("'*' emitiu %q duas vezes", c.Name)
 		}
-		vistos[c.Name] = struct{}{}
+		seen[c.Name] = struct{}{}
 	}
 	if len(bq.Columns) < 2 {
 		t.Fatalf("%d colunas em '*'", len(bq.Columns))
 	}
 }
 
-// compilarComCamposExtra devolve o schema do fixture acrescido de n campos que
+// compileWithExtraFields devolve o schema do fixture acrescido de n campos que
 // só existem no dicionário (a rota auto), para montar projeção grande o
 // bastante para cruzar o limiar em que a checagem troca varredura por mapa.
-func compilarComCamposExtra(t *testing.T, n int) *schema.Compiled {
+func compileWithExtraFields(t *testing.T, n int) *schema.Compiled {
 	t.Helper()
 	spec, err := schema.Parse([]byte(dsYAML), schema.BuiltinDefaults)
 	if err != nil {
@@ -111,7 +111,7 @@ func compilarComCamposExtra(t *testing.T, n int) *schema.Compiled {
 	}
 	d := fakestorage.NewDict()
 	for i := range n {
-		if _, err := d.LookupOrCreate([]byte(nomeExtra(i))); err != nil {
+		if _, err := d.LookupOrCreate([]byte(extraName(i))); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -122,7 +122,7 @@ func compilarComCamposExtra(t *testing.T, n int) *schema.Compiled {
 	return c
 }
 
-func nomeExtra(i int) string { return fmt.Sprintf("c%03d", i) }
+func extraName(i int) string { return fmt.Sprintf("c%03d", i) }
 
 // Projeção grande troca a varredura linear por mapa, e a troca tem duas
 // maneiras de vazar uma repetição: esquecer de semear o mapa com o que a
@@ -130,24 +130,24 @@ func nomeExtra(i int) string { return fmt.Sprintf("c%03d", i) }
 // alimentá-lo dali em diante (repetição DEPOIS do limiar). Cada subteste cobre
 // uma delas.
 func TestRepeticaoEmProjecaoGrande(t *testing.T) {
-	const colunas = 200
-	sc := compilarComCamposExtra(t, colunas)
+	const columnCount = 200
+	sc := compileWithExtraFields(t, columnCount)
 
-	casos := []struct {
-		nome     string
-		repetida string // coluna reapresentada no fim da projeção
+	cases := []struct {
+		name            string
+		duplicateColumn string // coluna reapresentada no fim da projeção
 	}{
-		{"antes do limiar", nomeExtra(0)},
-		{"depois do limiar", nomeExtra(colunas - 1)},
+		{"antes do limiar", extraName(0)},
+		{"depois do limiar", extraName(columnCount - 1)},
 	}
-	for _, caso := range casos {
-		t.Run(caso.nome, func(t *testing.T) {
-			nomes := make([]string, 0, colunas+1)
-			for i := range colunas {
-				nomes = append(nomes, nomeExtra(i))
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			names := make([]string, 0, columnCount+1)
+			for i := range columnCount {
+				names = append(names, extraName(i))
 			}
-			nomes = append(nomes, caso.repetida)
-			sql := "SELECT " + strings.Join(nomes, ", ") + " FROM radius_sessions"
+			names = append(names, tc.duplicateColumn)
+			sql := "SELECT " + strings.Join(names, ", ") + " FROM radius_sessions"
 
 			st, err := parser.Parse(sql)
 			if err != nil {
@@ -160,7 +160,7 @@ func TestRepeticaoEmProjecaoGrande(t *testing.T) {
 			if !errors.Is(err, binder.ErrBind) {
 				t.Errorf("erro = %v, want errors.Is ErrBind", err)
 			}
-			want := fmt.Sprintf("coluna %q aparece mais de uma vez na projeção", caso.repetida)
+			want := fmt.Sprintf("coluna %q aparece mais de uma vez na projeção", tc.duplicateColumn)
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("mensagem = %q, want conter %q", err, want)
 			}
@@ -170,8 +170,8 @@ func TestRepeticaoEmProjecaoGrande(t *testing.T) {
 			if !errors.As(err, &be) {
 				t.Fatalf("erro é %T, want *binder.Error", err)
 			}
-			if quero := strings.LastIndex(sql, caso.repetida); be.Pos != quero {
-				t.Errorf("posição = %d, want %d", be.Pos, quero)
+			if wantPos := strings.LastIndex(sql, tc.duplicateColumn); be.Pos != wantPos {
+				t.Errorf("posição = %d, want %d", be.Pos, wantPos)
 			}
 		})
 	}
@@ -180,14 +180,14 @@ func TestRepeticaoEmProjecaoGrande(t *testing.T) {
 // A projeção grande SEM repetição continua bindando: o limiar é detalhe de
 // custo, não regra de gramática.
 func TestProjecaoGrandeSemRepeticaoBinda(t *testing.T) {
-	const colunas = 200
-	sc := compilarComCamposExtra(t, colunas)
+	const columnCount = 200
+	sc := compileWithExtraFields(t, columnCount)
 
-	nomes := make([]string, 0, colunas)
-	for i := range colunas {
-		nomes = append(nomes, nomeExtra(i))
+	names := make([]string, 0, columnCount)
+	for i := range columnCount {
+		names = append(names, extraName(i))
 	}
-	st, err := parser.Parse("SELECT " + strings.Join(nomes, ", ") + " FROM radius_sessions")
+	st, err := parser.Parse("SELECT " + strings.Join(names, ", ") + " FROM radius_sessions")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +195,7 @@ func TestProjecaoGrandeSemRepeticaoBinda(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
-	if len(bq.Columns) != colunas {
-		t.Errorf("%d colunas, want %d", len(bq.Columns), colunas)
+	if len(bq.Columns) != columnCount {
+		t.Errorf("%d colunas, want %d", len(bq.Columns), columnCount)
 	}
 }

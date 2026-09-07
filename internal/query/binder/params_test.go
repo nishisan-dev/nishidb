@@ -30,15 +30,15 @@ func wireFloat(f float64) types.Value {
 // que permite ao planner ver `key = ?` como point lookup no plan-time, em vez
 // de descobrir o valor só na execução.
 func TestParametroCoeridoNoBind(t *testing.T) {
-	casos := []struct {
-		nome  string
+	cases := []struct {
+		name  string
 		sql   string
 		param types.Value
 		kind  binder.CompareKind
 		check func(t *testing.T, v types.Value)
 	}{
 		{
-			nome: "string", sql: "SELECT id FROM radius_sessions WHERE status = ?",
+			name: "string", sql: "SELECT id FROM radius_sessions WHERE status = ?",
 			param: wireString("Stop"), kind: binder.CompareBytes,
 			check: func(t *testing.T, v types.Value) {
 				if v.Type != types.TypeString || string(v.Bytes) != "Stop" {
@@ -47,7 +47,7 @@ func TestParametroCoeridoNoBind(t *testing.T) {
 			},
 		},
 		{
-			nome: "int64", sql: "SELECT id FROM radius_sessions WHERE octets >= ?",
+			name: "int64", sql: "SELECT id FROM radius_sessions WHERE octets >= ?",
 			param: wireInt(1000), kind: binder.CompareInt,
 			check: func(t *testing.T, v types.Value) {
 				if v.Type != types.TypeInt64 || v.I64 != 1000 {
@@ -56,7 +56,7 @@ func TestParametroCoeridoNoBind(t *testing.T) {
 			},
 		},
 		{
-			nome: "double", sql: "SELECT id FROM radius_sessions WHERE ratio < ?",
+			name: "double", sql: "SELECT id FROM radius_sessions WHERE ratio < ?",
 			param: wireFloat(0.25), kind: binder.CompareFloatBits,
 			check: func(t *testing.T, v types.Value) {
 				if got := math.Float64frombits(uint64(v.I64)); got != 0.25 {
@@ -65,7 +65,7 @@ func TestParametroCoeridoNoBind(t *testing.T) {
 			},
 		},
 		{
-			nome: "boolean", sql: "SELECT id FROM radius_sessions WHERE ativo = ?",
+			name: "boolean", sql: "SELECT id FROM radius_sessions WHERE ativo = ?",
 			param: wireBool(true), kind: binder.CompareInt,
 			check: func(t *testing.T, v types.Value) {
 				if v.Type != types.TypeBool || v.I64 != 1 {
@@ -76,7 +76,7 @@ func TestParametroCoeridoNoBind(t *testing.T) {
 		{
 			// Parâmetro string num campo ipv4 passa pelos MESMOS parsers da
 			// ingestão: a query encontra o que foi gravado.
-			nome: "ipv4 por string", sql: "SELECT id FROM radius_sessions WHERE nas_ip = ?",
+			name: "ipv4 por string", sql: "SELECT id FROM radius_sessions WHERE nas_ip = ?",
 			param: wireString("192.168.0.7"), kind: binder.CompareBytes,
 			check: func(t *testing.T, v types.Value) {
 				if !bytes.Equal(v.Bytes, []byte{192, 168, 0, 7}) {
@@ -85,7 +85,7 @@ func TestParametroCoeridoNoBind(t *testing.T) {
 			},
 		},
 		{
-			nome: "timestamp por string", sql: "SELECT id FROM radius_sessions WHERE quando > ?",
+			name: "timestamp por string", sql: "SELECT id FROM radius_sessions WHERE quando > ?",
 			param: wireString("2026-08-12T21:00:00.000Z"), kind: binder.CompareInt,
 			check: func(t *testing.T, v types.Value) {
 				if v.I64 != 1786568400000 {
@@ -94,7 +94,7 @@ func TestParametroCoeridoNoBind(t *testing.T) {
 			},
 		},
 		{
-			nome: "int64 com param float", sql: "SELECT id FROM radius_sessions WHERE octets > ?",
+			name: "int64 com param float", sql: "SELECT id FROM radius_sessions WHERE octets > ?",
 			param: wireFloat(1.5), kind: binder.CompareIntAsFloat,
 			check: func(t *testing.T, v types.Value) {
 				if got := math.Float64frombits(uint64(v.I64)); got != 1.5 {
@@ -103,8 +103,8 @@ func TestParametroCoeridoNoBind(t *testing.T) {
 			},
 		},
 	}
-	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			bq := bindOK(t, tc.sql, tc.param)
 			cmp, ok := bq.Where.(*binder.BoundComparison)
 			if !ok {
@@ -175,55 +175,55 @@ func TestParametroStringEhCopiado(t *testing.T) {
 }
 
 func TestErrosDeParametro(t *testing.T) {
-	casos := []struct {
-		nome   string
+	cases := []struct {
+		name   string
 		sql    string
 		params []types.Value
 		msg    string
 	}{
 		{
-			nome: "faltando", sql: "SELECT id FROM radius_sessions WHERE status = ? AND octets = ?",
+			name: "faltando", sql: "SELECT id FROM radius_sessions WHERE status = ? AND octets = ?",
 			params: []types.Value{wireString("a")}, msg: "foram fornecidos 1",
 		},
 		{
-			nome: "sobrando", sql: "SELECT id FROM radius_sessions WHERE status = ?",
+			name: "sobrando", sql: "SELECT id FROM radius_sessions WHERE status = ?",
 			params: []types.Value{wireString("a"), wireInt(1)}, msg: "foram fornecidos 2",
 		},
 		{
-			nome: "nenhum fornecido", sql: "SELECT id FROM radius_sessions WHERE status = ?",
+			name: "nenhum fornecido", sql: "SELECT id FROM radius_sessions WHERE status = ?",
 			params: nil, msg: "a query tem 1 parâmetros",
 		},
 		{
 			// NULL não tem semântica definida sem lógica trivalente: a
 			// mensagem manda usar IS NULL, que é o que o usuário quer.
-			nome: "null", sql: "SELECT id FROM radius_sessions WHERE status = ?",
+			name: "null", sql: "SELECT id FROM radius_sessions WHERE status = ?",
 			params: []types.Value{{Type: types.TypeNull}}, msg: "use IS NULL",
 		},
 		{
 			// Um caminho de coerção só: representação já binária é recusada.
-			nome: "tipo binario", sql: "SELECT id FROM radius_sessions WHERE nas_ip = ?",
+			name: "tipo binario", sql: "SELECT id FROM radius_sessions WHERE nas_ip = ?",
 			params: []types.Value{{Type: types.TypeIPv4, Bytes: []byte{10, 0, 0, 1}}},
 			msg:    "não suportado (use string",
 		},
 		{
-			nome: "tipo incompativel com a coluna", sql: "SELECT id FROM radius_sessions WHERE octets = ?",
+			name: "tipo incompativel com a coluna", sql: "SELECT id FROM radius_sessions WHERE octets = ?",
 			params: []types.Value{wireString("1000")}, msg: "não é comparável com literal do tipo",
 		},
 		{
-			nome: "valor invalido para a coluna", sql: "SELECT id FROM radius_sessions WHERE nas_ip = ?",
+			name: "valor invalido para a coluna", sql: "SELECT id FROM radius_sessions WHERE nas_ip = ?",
 			params: []types.Value{wireString("10.0.0.256")}, msg: "valor inválido para a coluna",
 		},
 		{
-			nome: "operador restrito", sql: "SELECT id FROM radius_sessions WHERE ativo > ?",
+			name: "operador restrito", sql: "SELECT id FROM radius_sessions WHERE ativo > ?",
 			params: []types.Value{wireBool(true)}, msg: "não é permitido para a coluna",
 		},
 		{
-			nome: "coluna nao comparavel", sql: "SELECT id FROM radius_sessions WHERE raw = ?",
+			name: "coluna nao comparavel", sql: "SELECT id FROM radius_sessions WHERE raw = ?",
 			params: []types.Value{wireString("x")}, msg: "só admite IS NULL / IS NOT NULL",
 		},
 	}
-	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			err := bindErr(t, tc.sql, tc.params...)
 			if !strings.Contains(err.Error(), tc.msg) {
 				t.Errorf("erro = %q, want conter %q", err, tc.msg)
@@ -261,7 +261,7 @@ func TestLimitNegativoEmASTConstruidaAMao(t *testing.T) {
 		Limit:      -1,
 		LimitPos:   30,
 	}
-	_, err := binder.Bind(st, compilar(t), nil)
+	_, err := binder.Bind(st, compile(t), nil)
 	if err == nil {
 		t.Fatal("LIMIT negativo deveria falhar")
 	}
@@ -282,7 +282,7 @@ func TestParamCountInconsistenteEhDetectado(t *testing.T) {
 		},
 		ParamCount: 1, // mente: não há '?' na árvore
 	}
-	_, err := binder.Bind(st, compilar(t), []types.Value{wireString("x")})
+	_, err := binder.Bind(st, compile(t), []types.Value{wireString("x")})
 	if err == nil {
 		t.Fatal("inconsistência de ParamCount deveria falhar")
 	}

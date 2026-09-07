@@ -90,6 +90,12 @@
 #     DO PAYLOAD, não do `Indexes.Campos` que virou `Fields`. O substantivo
 #     PT-BR abre frase em vinte documentos e comentários; a citação
 #     qualificada daquele campo não sobrou em lugar nenhum.
+#   - CHAVE DE LOG cujo domínio é homônimo de identificador: a WARN
+#     `janela.maior_que_retencao` (internal/server/history.go:133,
+#     internal/server/history_test.go:265 e a tabela do README:723) é chave
+#     de log estruturado, e chave de log é contrato que muda INTEIRO na
+#     Fase 3. Sem a proteção o `janela` do binder a traduz pela metade e
+#     sobra `window.maior_que_retencao`, que não é nem uma coisa nem outra.
 Arquivo.Apenda
 Campos
 Com
@@ -107,6 +113,7 @@ chave
 emite
 erro
 hora
+janela.maior_que_retencao
 seg
 texto
 tipo

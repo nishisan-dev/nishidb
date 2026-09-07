@@ -723,7 +723,7 @@ A palavra mais barata primeiro: prova a máquina de reconhecimento contextual em
 5. Binder: `admiteLike(col) = (col == TypeString)` ao lado de `admitsOp`; padrão
    **compilado no bind** com os bytes copiados no arena. `LIKE ?` compila do
    parâmetro — o `Bind` já os recebe ([binder.go:152](internal/query/binder/binder.go:152)).
-6. Compilação classifica em `PadraoIgual`/`PadraoPrefixo`/`PadraoSufixo`/`PadraoContem`/`PadraoGeral`, com
+6. Compilação classifica em `PatternEqual`/`PatternPrefix`/`PatternSuffix`/`PatternContains`/`PatternGeneral`, com
    `minBytes` para rejeição O(1). Os quatro casos fechados viram
    `bytes.Equal`/`HasPrefix`/`HasSuffix`/`Contains`; o geral é glob de dois
    ponteiros com **um** ponto de backtrack — sem recursão, sem regexp, sem
@@ -785,7 +785,7 @@ OFFSET**. Isso paga a metade local do **débito 46**.
    `NaN = 1` são todos **false**. Qualquer `ordemFloat` derivada de `compara`
    erraria pelo menos um dos quatro. Um teste diferencial prova a concordância
    nos casos não-NaN.
-3. Binder: `admiteOrdenacao(col)` no **mesmo arquivo** de `admitsOp`, com o
+3. Binder: `admitsOrdering(col)` no **mesmo arquivo** de `admitsOp`, com o
    contraste comentado; `BoundOrderKey`; **`b.usa(f.ID)` para toda chave**
    ([binder.go:431](internal/query/binder/binder.go:431)) — sem isso a coluna de
    ordenação não entra em `Slots` e o executor não a lê.

@@ -13,7 +13,7 @@ import (
 // cada forma liga corretamente e produz o que o planner precisa para decidir
 // o plano.
 
-func comparacaoDe(t *testing.T, bq *binder.BoundQuery) *binder.BoundComparison {
+func comparisonOf(t *testing.T, bq *binder.BoundQuery) *binder.BoundComparison {
 	t.Helper()
 	c, ok := bq.Where.(*binder.BoundComparison)
 	if !ok {
@@ -24,7 +24,7 @@ func comparacaoDe(t *testing.T, bq *binder.BoundQuery) *binder.BoundComparison {
 
 func TestBind106PrimaryLookup(t *testing.T) {
 	bq := bindOK(t, "SELECT * FROM radius_sessions WHERE id = 'CMP-V0001PPCLP-013'")
-	c := comparacaoDe(t, bq)
+	c := comparisonOf(t, bq)
 	// O planner decide point lookup por IsKey + CmpEq: os dois precisam
 	// chegar prontos.
 	if !c.Field.IsKey {
@@ -43,7 +43,7 @@ func TestBind106PrimaryLookup(t *testing.T) {
 // execução.
 func TestBind106PrimaryLookupComParametro(t *testing.T) {
 	bq := bindOK(t, "SELECT * FROM radius_sessions WHERE id = ?", wireString("CMP-1"))
-	c := comparacaoDe(t, bq)
+	c := comparisonOf(t, bq)
 	if !c.Field.IsKey || c.Op != parser.CmpEq {
 		t.Errorf("comparação = %+v", c)
 	}
@@ -57,7 +57,7 @@ func TestBind106PrimaryLookupComParametro(t *testing.T) {
 
 func TestBind106IndexLookup(t *testing.T) {
 	bq := bindOK(t, "SELECT id FROM radius_sessions WHERE status = 'Stop'")
-	c := comparacaoDe(t, bq)
+	c := comparisonOf(t, bq)
 	// O planner escolhe o caminho indexado por Indexado + CmpEq.
 	if !c.Field.Indexed {
 		t.Error("Indexado = false, want true")
@@ -96,7 +96,7 @@ func TestBind106Comparison(t *testing.T) {
 	} {
 		t.Run(op.sql, func(t *testing.T) {
 			bq := bindOK(t, "SELECT id FROM radius_sessions WHERE octets "+op.sql+" 100")
-			if c := comparacaoDe(t, bq); c.Op != op.want {
+			if c := comparisonOf(t, bq); c.Op != op.want {
 				t.Errorf("Op = %v, want %v", c.Op, op.want)
 			}
 		})
@@ -150,7 +150,7 @@ func TestBind106QuotedFields(t *testing.T) {
 	if bq.Columns[0].Field.Name != "status" {
 		t.Errorf("coluna = %+v", bq.Columns[0])
 	}
-	if c := comparacaoDe(t, bq); c.Field.Name != "octets" {
+	if c := comparisonOf(t, bq); c.Field.Name != "octets" {
 		t.Errorf("predicado = %+v", c)
 	}
 }
@@ -159,16 +159,16 @@ func TestBind106Parameters(t *testing.T) {
 	bq := bindOK(t, "SELECT id FROM radius_sessions WHERE status = ? AND octets >= ?",
 		wireString("Stop"), wireInt(500))
 	l := bq.Where.(*binder.BoundLogical)
-	esq := l.Left.(*binder.BoundComparison)
-	dir := l.Right.(*binder.BoundComparison)
-	if !esq.IsParam || !dir.IsParam {
+	left := l.Left.(*binder.BoundComparison)
+	right := l.Right.(*binder.BoundComparison)
+	if !left.IsParam || !right.IsParam {
 		t.Error("parâmetros não marcados")
 	}
-	if esq.ParamIdx != 0 || dir.ParamIdx != 1 {
-		t.Errorf("índices = %d, %d", esq.ParamIdx, dir.ParamIdx)
+	if left.ParamIdx != 0 || right.ParamIdx != 1 {
+		t.Errorf("índices = %d, %d", left.ParamIdx, right.ParamIdx)
 	}
-	if string(esq.Val.Bytes) != "Stop" || dir.Val.I64 != 500 {
-		t.Errorf("valores = %+v / %+v", esq.Val, dir.Val)
+	if string(left.Val.Bytes) != "Stop" || right.Val.I64 != 500 {
+		t.Errorf("valores = %+v / %+v", left.Val, right.Val)
 	}
 }
 
@@ -177,7 +177,7 @@ func TestBind106Parameters(t *testing.T) {
 // timestamp coerido da query bate com o millis que a ingestão grava.
 func TestBind106TimestampCasaComIngestao(t *testing.T) {
 	bq := bindOK(t, "SELECT id FROM radius_sessions WHERE quando = '2026-08-12T21:00:00.000+00:00'")
-	c := comparacaoDe(t, bq)
+	c := comparisonOf(t, bq)
 	if c.Val.Type != types.TypeTimestamp || c.Val.I64 != 1786568400000 {
 		t.Errorf("valor = %+v", c.Val)
 	}

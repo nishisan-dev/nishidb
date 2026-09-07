@@ -49,7 +49,7 @@
 | `internal/query/executor/collect.go` | Esvaziado; `slot`/`coleta` viram alias do pacote novo |
 | `internal/query/executor/predicate.go` | Esvaziado; `programa`/`compila` viram alias do pacote novo |
 | `internal/query/parser/parser.go` | `ParseCondition` |
-| `internal/query/binder/binder.go` | `BindCondicao` + `BoundCondicao` |
+| `internal/query/binder/binder.go` | `BindCondition` + `BoundCondition` |
 | `internal/schema/spec.go` | `FieldSpec.FrozenFrom`; `TTLSpec` vira `[]TTLRuleSpec`; `_expiresIn` em `systemNames` |
 | `internal/schema/compile.go` | `CompiledField.FrozenFrom`; `Compiled.FrozenColumns`, `Compiled.TTLRules`, `Compiled.TTLField`; remoção de `IsTTL` |
 | `internal/materializer/patch.go` | `patchEntry.congelada`; chamadas das duas passadas novas |
@@ -753,11 +753,11 @@ git commit -m "Prova a coluna congelada de ponta a ponta e documenta a chave"
   func ParseCondition(sql string) (Expr, error)
 
   // binder
-  type BoundCondicao struct {
+  type BoundCondition struct {
       Expr  BoundExpr
       Slots Slots
   }
-  func BindCondicao(e parser.Expr, sc *schema.Compiled) (*BoundCondicao, error)
+  func BindCondition(e parser.Expr, sc *schema.Compiled) (*BoundCondition, error)
   ```
 
 - [ ] **Passo 1: escrever os testes**
@@ -773,7 +773,7 @@ func TestParseCondicaoRecusaTextoDepoisDaExpressao(t *testing.T) {
 }
 func TestBindCondicaoRecusaParametro(t *testing.T) {
 	e, _ := parser.ParseCondition("type = ?")
-	_, err := binder.BindCondicao(e, sc)
+	_, err := binder.BindCondition(e, sc)
 	// erro: não há quem forneça parâmetro
 }
 func TestBindCondicaoRecusaColunaInexistente(t *testing.T) { /* propaga o erro do binder */ }
@@ -813,26 +813,26 @@ func ParseCondition(sql string) (Expr, error) {
 
 Se o parser não tiver `errAtCur`, use o mesmo construtor de erro posicional que `parseSelect` já usa para token inesperado.
 
-- [ ] **Passo 4: `BindCondicao`**
+- [ ] **Passo 4: `BindCondition`**
 
 ```go
-// BoundCondicao é uma condição resolvida contra o schema, com seus próprios
+// BoundCondition é uma condição resolvida contra o schema, com seus próprios
 // slots. É o que o TTL condicional consome.
-type BoundCondicao struct {
+type BoundCondition struct {
 	Expr  BoundExpr
 	Slots Slots
 
 	arena []byte // bytes dos literais; as janelas em Val.Bytes apontam para cá
 }
 
-// BindCondicao resolve uma condição solta contra o schema, pelo MESMO caminho
+// BindCondition resolve uma condição solta contra o schema, pelo MESMO caminho
 // do WHERE: mesma coerção, mesma tabela de comparabilidade, mesmo tratamento
 // de coluna auto. É essa identidade que garante que `type = 2` numa regra e
 // `type = 2` numa consulta signifiquem a mesma coisa.
 //
 // Parâmetro posicional é recusado: a condição vem do YAML e não há quem o
 // forneça.
-func BindCondicao(e parser.Expr, sc *schema.Compiled) (*BoundCondicao, error) {
+func BindCondition(e parser.Expr, sc *schema.Compiled) (*BoundCondition, error) {
 	if e == nil || sc == nil {
 		return nil, errNoPos("bind de condição sem expressão ou schema")
 	}
@@ -844,7 +844,7 @@ func BindCondicao(e parser.Expr, sc *schema.Compiled) (*BoundCondicao, error) {
 	if b.nParams > 0 {
 		return nil, errNoPos("condição não aceita parâmetro posicional")
 	}
-	bc := &BoundCondicao{Expr: expr, Slots: b.slots()}
+	bc := &BoundCondition{Expr: expr, Slots: b.slots()}
 	b.preencheSlotsDaExpr(bc.Expr, bc.Slots)
 	for _, j := range b.pendente {
 		j.cmp.Val.Bytes = b.arena[j.start:j.end:j.end]
@@ -854,10 +854,10 @@ func BindCondicao(e parser.Expr, sc *schema.Compiled) (*BoundCondicao, error) {
 }
 ```
 
-`preencheSlotsDaExpr` é o percurso com pilha explícita que hoje vive dentro de `preencheSlots` (`binder.go:794`). **Extraia-o** para que os dois chamadores usem o mesmo código:
+`fillExprSlots` é o percurso com pilha explícita que hoje vive dentro de `preencheSlots` (`binder.go:794`). **Extraia-o** para que os dois chamadores usem o mesmo código:
 
 ```go
-func (b *binder) preencheSlotsDaExpr(e BoundExpr, s Slots) {
+func (b *binder) fillExprSlots(e BoundExpr, s Slots) {
 	if e == nil {
 		return
 	}
@@ -868,7 +868,7 @@ func (b *binder) preencheSlotsDaExpr(e BoundExpr, s Slots) {
 
 e `preencheSlots` passa a chamá-lo depois de resolver `Columns` e `OrderBy`.
 
-Atenção: `b.stmt` fica nil em `BindCondicao`. Confira que `b.expr` e `b.folha` não o tocam — se tocarem (para posição de erro), passe um `stmt` vazio não-nil em vez de nil.
+Atenção: `b.stmt` fica nil em `BindCondition`. Confira que `b.expr` e `b.folha` não o tocam — se tocarem (para posição de erro), passe um `stmt` vazio não-nil em vez de nil.
 
 - [ ] **Passo 5: rodar**
 
@@ -1060,7 +1060,7 @@ git commit -m "Troca o bloco ttl por uma lista de regras condicionais"
 - Test: `internal/schema/ttl_rule_test.go`
 
 **Interfaces:**
-- Consumes: `TTLRule` (Task 8), `binder.BindCondicao` (Task 7), `predicado.Compila` (Task 1)
+- Consumes: `TTLRule` (Task 8), `binder.BindCondition` (Task 7), `predicado.Compila` (Task 1)
 - Produces:
   ```go
   // schema.Compiled — guarda a forma VALIDADA, com o `when` ainda em texto
@@ -1152,7 +1152,7 @@ func CompilaRegras(regras []schema.TTLRule, sc *schema.Compiled) ([]RegraCompila
 		if err != nil {
 			return nil, fmt.Errorf("ttl[%d]: condição %q: %w", i, r.When, err)
 		}
-		bc, err := binder.BindCondicao(e, sc)
+		bc, err := binder.BindCondition(e, sc)
 		if err != nil {
 			return nil, fmt.Errorf("ttl[%d]: condição %q: %w", i, r.When, err)
 		}
@@ -1882,7 +1882,7 @@ Dentro da Fase C a ordem é estrita: 7 → 8 → 9 → 10 → 11 → 12 → 13 �
 | Risco | Sinal | O que fazer |
 |---|---|---|
 | A extração da Fase A muda comportamento | Um teste do executor precisa de asserção nova | **Pare.** A extração é para ser invisível. Investigue o que mudou |
-| `binder.BindCondicao` estoura com `b.stmt` nil | Panic em `b.folha` ou `b.expr` | Passe um `&parser.SelectStmt{}` vazio em vez de nil |
+| `binder.BindCondition` estoura com `b.stmt` nil | Panic em `b.folha` ou `b.expr` | Passe um `&parser.SelectStmt{}` vazio em vez de nil |
 | Alocação por evento sobe na Task 10 | Bench de ingestão com `allocs/op` maior | `m.slots` ou `m.fr` não estão sendo reusados entre eventos |
 | O pré-filtro da Task 13 trava a passada | Teste do coletor não termina | O `continue` pulou o incremento do cursor |
 | A ordem do `LookupOrCreate` muda ids de dataset existente | Teste de reabertura falha | Dataset existente não é afetado (dict é append-only). Se falhou, o nome novo está sendo registrado ANTES do `_writtenAt` |

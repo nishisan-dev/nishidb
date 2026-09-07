@@ -81,19 +81,19 @@ func Comparable(col types.FieldType, isAuto bool, lit parser.OperandKind, op par
 	switch col {
 	case types.TypeNull:
 		if isAuto {
-			return CompareUnset, errAutoSemTipo
+			return CompareUnset, errAutoWithoutType
 		}
-		return CompareUnset, errColunaSemTipo
+		return CompareUnset, errColumnWithoutType
 	case types.TypeBytes, types.TypeJSON:
-		return CompareUnset, errNaoComparavel
+		return CompareUnset, errNotComparable
 	}
 
-	kind, ok := celula(col, lit)
+	kind, ok := cell(col, lit)
 	if !ok {
-		return CompareUnset, errLiteralIncompativel
+		return CompareUnset, errIncompatibleLiteral
 	}
 	if !admitsOp(col, op) {
-		return CompareUnset, errOperadorNaoAdmitido
+		return CompareUnset, errOperatorNotAdmitted
 	}
 	return kind, nil
 }
@@ -101,18 +101,18 @@ func Comparable(col types.FieldType, isAuto bool, lit parser.OperandKind, op par
 // Sentinelas internos: o Bind os traduz para a mensagem final, que precisa do
 // nome da coluna e do tipo — informação que a tabela não tem.
 var (
-	errAutoSemTipo         = &tabelaErr{"auto-sem-tipo"}
-	errColunaSemTipo       = &tabelaErr{"coluna-sem-tipo"}
-	errNaoComparavel       = &tabelaErr{"nao-comparavel"}
-	errLiteralIncompativel = &tabelaErr{"literal-incompativel"}
-	errOperadorNaoAdmitido = &tabelaErr{"operador-nao-admitido"}
+	errAutoWithoutType     = &tableError{"auto-sem-tipo"}
+	errColumnWithoutType   = &tableError{"coluna-sem-tipo"}
+	errNotComparable       = &tableError{"nao-comparavel"}
+	errIncompatibleLiteral = &tableError{"literal-incompativel"}
+	errOperatorNotAdmitted = &tableError{"operador-nao-admitido"}
 )
 
-type tabelaErr struct{ code string }
+type tableError struct{ code string }
 
-func (e *tabelaErr) Error() string { return e.code }
+func (e *tableError) Error() string { return e.code }
 
-// celula devolve o modo de comparação de (coluna × tipo de literal), ou
+// cell devolve o modo de comparação de (coluna × tipo de literal), ou
 // ok=false para célula vazia da tabela.
 //
 // Não existe coerção implícita entre string e número aqui, ao contrário da
@@ -120,7 +120,7 @@ func (e *tabelaErr) Error() string { return e.code }
 // amostra real). A divergência é deliberada: na ingestão a string vem do
 // produtor e não há alternativa; na query o usuário escolhe como escrever o
 // literal, e aceitar as duas formas cria ambiguidade sem ganho.
-func celula(col types.FieldType, lit parser.OperandKind) (CompareKind, bool) {
+func cell(col types.FieldType, lit parser.OperandKind) (CompareKind, bool) {
 	switch col {
 	case types.TypeString:
 		if lit == parser.OperandString {
@@ -186,7 +186,7 @@ func admitsOp(col types.FieldType, op parser.CmpOp) bool {
 	}
 }
 
-// admiteOrdenacao reporta se uma coluna pode ser CHAVE DE ORDENAÇÃO, e devolve
+// admitsOrdering reporta se uma coluna pode ser CHAVE DE ORDENAÇÃO, e devolve
 // o CompareKind a usar.
 //
 // DIVERGE do admitsOp acima de propósito, nos dois sentidos, e o contraste é o
@@ -202,7 +202,7 @@ func admitsOp(col types.FieldType, op parser.CmpOp) bool {
 //
 // `bytes` e `json` ficam de fora pela mesma razão que já os mantém fora da
 // comparação: não há ordem definida sobre eles neste produto.
-func admiteOrdenacao(col types.FieldType) (CompareKind, bool) {
+func admitsOrdering(col types.FieldType) (CompareKind, bool) {
 	switch col {
 	case types.TypeInt64, types.TypeBool, types.TypeTimestamp,
 		types.TypeDateTime, types.TypeTime:
@@ -264,7 +264,7 @@ func coerceLiteral(f *schema.CompiledField, op parser.CmpOp, lit parser.Operand,
 		}
 		ms, perr := typeparse.RFC3339Millis([]byte(lit.S))
 		if perr != nil {
-			return types.Value{}, CompareUnset, arena, errLiteralInvalido
+			return types.Value{}, CompareUnset, arena, errInvalidLiteral
 		}
 		return types.Value{Type: types.TypeTimestamp, I64: ms}, kind, arena, nil
 
@@ -282,11 +282,11 @@ func coerceLiteral(f *schema.CompiledField, op parser.CmpOp, lit parser.Operand,
 		// time.Local pelo mesmo motivo da ingestão: os dois lados resolvem o
 		// wall-clock com o fuso do host, ou não concordariam sobre o texto.
 		if f.Layout == nil {
-			return types.Value{}, CompareUnset, arena, errLiteralInvalido
+			return types.Value{}, CompareUnset, arena, errInvalidLiteral
 		}
 		ms, perr := f.Layout.DateTime([]byte(lit.S), time.Local)
 		if perr != nil {
-			return types.Value{}, CompareUnset, arena, errLiteralInvalido
+			return types.Value{}, CompareUnset, arena, errInvalidLiteral
 		}
 		return types.Value{Type: types.TypeDateTime, I64: ms}, kind, arena, nil
 
@@ -296,23 +296,23 @@ func coerceLiteral(f *schema.CompiledField, op parser.CmpOp, lit parser.Operand,
 			// não zero linhas: `hora = 1786568400000` é engano de quem
 			// escreveu, e devolver vazio o faria parecer resposta.
 			if lit.I < 0 || lit.I >= types.MillisPerDay {
-				return types.Value{}, CompareUnset, arena, errLiteralInvalido
+				return types.Value{}, CompareUnset, arena, errInvalidLiteral
 			}
 			return types.Value{Type: types.TypeTime, I64: lit.I}, kind, arena, nil
 		}
 		if f.Layout == nil {
-			return types.Value{}, CompareUnset, arena, errLiteralInvalido
+			return types.Value{}, CompareUnset, arena, errInvalidLiteral
 		}
 		ms, perr := f.Layout.TimeOfDay([]byte(lit.S))
 		if perr != nil {
-			return types.Value{}, CompareUnset, arena, errLiteralInvalido
+			return types.Value{}, CompareUnset, arena, errInvalidLiteral
 		}
 		return types.Value{Type: types.TypeTime, I64: ms}, kind, arena, nil
 
 	case types.TypeIPv4:
 		a, b, c, d, ok := typeparse.IPv4([]byte(lit.S))
 		if !ok {
-			return types.Value{}, CompareUnset, arena, errLiteralInvalido
+			return types.Value{}, CompareUnset, arena, errInvalidLiteral
 		}
 		start := len(arena)
 		arena = append(arena, a, b, c, d)
@@ -321,7 +321,7 @@ func coerceLiteral(f *schema.CompiledField, op parser.CmpOp, lit parser.Operand,
 	case types.TypeIPv6:
 		addr, ok := typeparse.IPv6([]byte(lit.S))
 		if !ok {
-			return types.Value{}, CompareUnset, arena, errLiteralInvalido
+			return types.Value{}, CompareUnset, arena, errInvalidLiteral
 		}
 		start := len(arena)
 		arena = append(arena, addr[:]...)
@@ -330,7 +330,7 @@ func coerceLiteral(f *schema.CompiledField, op parser.CmpOp, lit parser.Operand,
 	case types.TypeIPv4Prefix:
 		addr, bits, ok := typeparse.IPv4Prefix([]byte(lit.S))
 		if !ok {
-			return types.Value{}, CompareUnset, arena, errLiteralInvalido
+			return types.Value{}, CompareUnset, arena, errInvalidLiteral
 		}
 		start := len(arena)
 		arena = append(arena, addr[:]...)
@@ -340,7 +340,7 @@ func coerceLiteral(f *schema.CompiledField, op parser.CmpOp, lit parser.Operand,
 	case types.TypeIPv6Prefix:
 		addr, bits, ok := typeparse.IPv6Prefix([]byte(lit.S))
 		if !ok {
-			return types.Value{}, CompareUnset, arena, errLiteralInvalido
+			return types.Value{}, CompareUnset, arena, errInvalidLiteral
 		}
 		start := len(arena)
 		arena = append(arena, addr[:]...)
@@ -348,10 +348,10 @@ func coerceLiteral(f *schema.CompiledField, op parser.CmpOp, lit parser.Operand,
 		return types.Value{Type: types.TypeIPv6Prefix, Bytes: arena[start:len(arena):len(arena)]}, kind, arena, nil
 	}
 	// Comparable já recusou todo tipo que não está acima.
-	return types.Value{}, CompareUnset, arena, errLiteralIncompativel
+	return types.Value{}, CompareUnset, arena, errIncompatibleLiteral
 }
 
-var errLiteralInvalido = &tabelaErr{"literal-invalido"}
+var errInvalidLiteral = &tableError{"literal-invalido"}
 
 // coerceParam converte um parâmetro de wire para a representação binária da
 // COLUNA, pela MESMA tabela dos literais.
@@ -377,14 +377,14 @@ func coerceParam(f *schema.CompiledField, op parser.CmpOp, wire types.Value, are
 		lit.Kind = parser.OperandBool
 		lit.B = wire.I64 != 0
 	case types.TypeNull:
-		return types.Value{}, CompareUnset, arena, errParamNulo
+		return types.Value{}, CompareUnset, arena, errParamNull
 	default:
-		return types.Value{}, CompareUnset, arena, errParamTipo
+		return types.Value{}, CompareUnset, arena, errParamType
 	}
 	return coerceLiteral(f, op, lit, arena)
 }
 
 var (
-	errParamNulo = &tabelaErr{"param-nulo"}
-	errParamTipo = &tabelaErr{"param-tipo"}
+	errParamNull = &tableError{"param-nulo"}
+	errParamType = &tableError{"param-tipo"}
 )

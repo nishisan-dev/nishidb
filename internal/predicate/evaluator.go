@@ -30,7 +30,7 @@ func CompilaCondicao(rotulo, condicao string, sc *schema.Compiled) (*Programa, b
 	if err != nil {
 		return nil, binder.Slots{}, fmt.Errorf("%s: condição %q: %w", rotulo, condicao, err)
 	}
-	bc, err := binder.BindCondicao(e, sc)
+	bc, err := binder.BindCondition(e, sc)
 	if err != nil {
 		return nil, binder.Slots{}, fmt.Errorf("%s: condição %q: %w", rotulo, condicao, err)
 	}

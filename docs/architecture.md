@@ -867,7 +867,7 @@ registro descreveria para sempre um consumidor morto.
 
 **Recusa de roteamento é erro do cliente, e por isso é tipada.** Namespace
 inexistente, namespace sem tabela nenhuma e tabela inexistente saem por
-`binder.ErroEm` com a posição do nome depois do ponto, o que as põe na família
+`binder.ErrorAt` com a posição do nome depois do ponto, o que as põe na família
 `binder.ErrBind` — o servidor as classifica como `BIND`/400 pelo `case` que já
 existia, o driver JDBC as traduz para o SQLState 42000 e o cliente Python para
 `ProgrammingError`, sem código novo no wire. Enquanto eram `fmt.Errorf` cru

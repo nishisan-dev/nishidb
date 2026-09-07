@@ -60,7 +60,7 @@ query:
   timeout: 15s
 `
 
-func compilar(t *testing.T) *schema.Compiled {
+func compile(t *testing.T) *schema.Compiled {
 	t.Helper()
 	spec, err := schema.Parse([]byte(dsYAML), schema.BuiltinDefaults)
 	if err != nil {
@@ -79,7 +79,7 @@ func bindOK(t *testing.T, sql string, params ...types.Value) *binder.BoundQuery 
 	if err != nil {
 		t.Fatalf("Parse(%q): %v", sql, err)
 	}
-	bq, err := binder.Bind(st, compilar(t), params)
+	bq, err := binder.Bind(st, compile(t), params)
 	if err != nil {
 		t.Fatalf("Bind(%q): %v", sql, err)
 	}
@@ -92,7 +92,7 @@ func bindErr(t *testing.T, sql string, params ...types.Value) error {
 	if err != nil {
 		t.Fatalf("Parse(%q): %v", sql, err)
 	}
-	bq, err := binder.Bind(st, compilar(t), params)
+	bq, err := binder.Bind(st, compile(t), params)
 	if err == nil {
 		t.Fatalf("Bind(%q) não falhou: %#v", sql, bq)
 	}
@@ -138,9 +138,9 @@ func TestProjecaoEstrelaUsaAlias(t *testing.T) {
 	if !bq.Star {
 		t.Fatal("Star = false")
 	}
-	campos := compilar(t).FieldsByID()
-	if len(bq.Columns) != len(campos) {
-		t.Fatalf("%d colunas, want %d", len(bq.Columns), len(campos))
+	fields := compile(t).FieldsByID()
+	if len(bq.Columns) != len(fields) {
+		t.Fatalf("%d colunas, want %d", len(bq.Columns), len(fields))
 	}
 	// Ordem de FieldID e alias no rótulo.
 	for i := 1; i < len(bq.Columns); i++ {
@@ -148,16 +148,16 @@ func TestProjecaoEstrelaUsaAlias(t *testing.T) {
 			t.Fatalf("colunas fora de ordem de FieldID na posição %d", i)
 		}
 	}
-	var achou bool
+	var found bool
 	for _, c := range bq.Columns {
 		if c.Field.Name == "id" {
-			achou = true
+			found = true
 			if c.Name != "service_id" {
 				t.Errorf("rótulo do campo id = %q, want o alias service_id", c.Name)
 			}
 		}
 	}
-	if !achou {
+	if !found {
 		t.Error("campo id ausente do *")
 	}
 }
@@ -204,28 +204,28 @@ func TestSlotsOrdenadosECobremProjecaoEWhere(t *testing.T) {
 // espinha à esquerda, e reescrever aqui o quebraria em silêncio.
 func TestFormaDaArvorePreservada(t *testing.T) {
 	bq := bindOK(t, "SELECT id FROM radius_sessions WHERE id = 'a' AND status = 'b' AND octets = 1")
-	raiz, ok := bq.Where.(*binder.BoundLogical)
-	if !ok || raiz.Op != parser.LogicalAnd {
+	root, ok := bq.Where.(*binder.BoundLogical)
+	if !ok || root.Op != parser.LogicalAnd {
 		t.Fatalf("raiz = %#v", bq.Where)
 	}
-	if _, ok := raiz.Left.(*binder.BoundLogical); !ok {
-		t.Errorf("esquerda = %#v, want conectivo (árvore à esquerda)", raiz.Left)
+	if _, ok := root.Left.(*binder.BoundLogical); !ok {
+		t.Errorf("esquerda = %#v, want conectivo (árvore à esquerda)", root.Left)
 	}
-	if _, ok := raiz.Right.(*binder.BoundComparison); !ok {
-		t.Errorf("direita = %#v, want comparação", raiz.Right)
+	if _, ok := root.Right.(*binder.BoundComparison); !ok {
+		t.Errorf("direita = %#v, want comparação", root.Right)
 	}
 }
 
 // Os valores coeridos: cada tipo com o binário que a INGESTÃO gravaria.
 func TestCoercaoDeLiterais(t *testing.T) {
-	casos := []struct {
-		nome  string
+	cases := []struct {
+		name  string
 		sql   string
 		kind  binder.CompareKind
 		check func(t *testing.T, v types.Value)
 	}{
 		{
-			nome: "string", sql: "SELECT id FROM radius_sessions WHERE status = 'Stop'",
+			name: "string", sql: "SELECT id FROM radius_sessions WHERE status = 'Stop'",
 			kind: binder.CompareBytes,
 			check: func(t *testing.T, v types.Value) {
 				if v.Type != types.TypeString || string(v.Bytes) != "Stop" {
@@ -234,7 +234,7 @@ func TestCoercaoDeLiterais(t *testing.T) {
 			},
 		},
 		{
-			nome: "int64", sql: "SELECT id FROM radius_sessions WHERE octets = 42",
+			name: "int64", sql: "SELECT id FROM radius_sessions WHERE octets = 42",
 			kind: binder.CompareInt,
 			check: func(t *testing.T, v types.Value) {
 				if v.Type != types.TypeInt64 || v.I64 != 42 {
@@ -245,7 +245,7 @@ func TestCoercaoDeLiterais(t *testing.T) {
 		{
 			// A promoção que o executor precisa saber tratar: o literal vira
 			// bits de float, mas o payload da coluna é inteiro cru.
-			nome: "int64 com literal float", sql: "SELECT id FROM radius_sessions WHERE octets > 1.5",
+			name: "int64 com literal float", sql: "SELECT id FROM radius_sessions WHERE octets > 1.5",
 			kind: binder.CompareIntAsFloat,
 			check: func(t *testing.T, v types.Value) {
 				if v.Type != types.TypeDouble {
@@ -257,7 +257,7 @@ func TestCoercaoDeLiterais(t *testing.T) {
 			},
 		},
 		{
-			nome: "double com literal int", sql: "SELECT id FROM radius_sessions WHERE ratio = 3",
+			name: "double com literal int", sql: "SELECT id FROM radius_sessions WHERE ratio = 3",
 			kind: binder.CompareFloatBits,
 			check: func(t *testing.T, v types.Value) {
 				if got := math.Float64frombits(uint64(v.I64)); got != 3.0 {
@@ -266,7 +266,7 @@ func TestCoercaoDeLiterais(t *testing.T) {
 			},
 		},
 		{
-			nome: "boolean", sql: "SELECT id FROM radius_sessions WHERE ativo = TRUE",
+			name: "boolean", sql: "SELECT id FROM radius_sessions WHERE ativo = TRUE",
 			kind: binder.CompareInt,
 			check: func(t *testing.T, v types.Value) {
 				if v.Type != types.TypeBool || v.I64 != 1 {
@@ -275,7 +275,7 @@ func TestCoercaoDeLiterais(t *testing.T) {
 			},
 		},
 		{
-			nome: "timestamp string", sql: "SELECT id FROM radius_sessions WHERE quando >= '2026-08-12T21:00:00.000Z'",
+			name: "timestamp string", sql: "SELECT id FROM radius_sessions WHERE quando >= '2026-08-12T21:00:00.000Z'",
 			kind: binder.CompareInt,
 			check: func(t *testing.T, v types.Value) {
 				if v.Type != types.TypeTimestamp || v.I64 != 1786568400000 {
@@ -285,7 +285,7 @@ func TestCoercaoDeLiterais(t *testing.T) {
 		},
 		{
 			// Número é epoch MILLIS, sem heurística de segundos.
-			nome: "timestamp int", sql: "SELECT id FROM radius_sessions WHERE quando = 1786568400000",
+			name: "timestamp int", sql: "SELECT id FROM radius_sessions WHERE quando = 1786568400000",
 			kind: binder.CompareInt,
 			check: func(t *testing.T, v types.Value) {
 				if v.I64 != 1786568400000 {
@@ -294,7 +294,7 @@ func TestCoercaoDeLiterais(t *testing.T) {
 			},
 		},
 		{
-			nome: "ipv4", sql: "SELECT id FROM radius_sessions WHERE nas_ip = '10.0.0.1'",
+			name: "ipv4", sql: "SELECT id FROM radius_sessions WHERE nas_ip = '10.0.0.1'",
 			kind: binder.CompareBytes,
 			check: func(t *testing.T, v types.Value) {
 				if !bytes.Equal(v.Bytes, []byte{10, 0, 0, 1}) {
@@ -303,7 +303,7 @@ func TestCoercaoDeLiterais(t *testing.T) {
 			},
 		},
 		{
-			nome: "ipv6", sql: "SELECT id FROM radius_sessions WHERE v6 = '2001:db8::1'",
+			name: "ipv6", sql: "SELECT id FROM radius_sessions WHERE v6 = '2001:db8::1'",
 			kind: binder.CompareBytes,
 			check: func(t *testing.T, v types.Value) {
 				want := []byte{32, 1, 13, 184, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}
@@ -314,7 +314,7 @@ func TestCoercaoDeLiterais(t *testing.T) {
 		},
 		{
 			// Host bits preservados, igual à ingestão.
-			nome: "ipv4_prefix", sql: "SELECT id FROM radius_sessions WHERE rede4 = '10.0.0.1/24'",
+			name: "ipv4_prefix", sql: "SELECT id FROM radius_sessions WHERE rede4 = '10.0.0.1/24'",
 			kind: binder.CompareBytes,
 			check: func(t *testing.T, v types.Value) {
 				if !bytes.Equal(v.Bytes, []byte{10, 0, 0, 1, 24}) {
@@ -323,7 +323,7 @@ func TestCoercaoDeLiterais(t *testing.T) {
 			},
 		},
 		{
-			nome: "ipv6_prefix", sql: "SELECT id FROM radius_sessions WHERE rede6 = '2001:db8::/32'",
+			name: "ipv6_prefix", sql: "SELECT id FROM radius_sessions WHERE rede6 = '2001:db8::/32'",
 			kind: binder.CompareBytes,
 			check: func(t *testing.T, v types.Value) {
 				if len(v.Bytes) != 17 || v.Bytes[16] != 32 {
@@ -332,8 +332,8 @@ func TestCoercaoDeLiterais(t *testing.T) {
 			},
 		},
 	}
-	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			bq := bindOK(t, tc.sql)
 			cmp, ok := bq.Where.(*binder.BoundComparison)
 			if !ok {
@@ -356,7 +356,7 @@ func TestArenaComVariosValoresParseados(t *testing.T) {
 	bq := bindOK(t, "SELECT id FROM radius_sessions WHERE nas_ip = '10.0.0.1' "+
 		"AND v6 = '2001:db8::1' AND rede4 = '192.168.1.0/24' AND nas_ip != '172.16.0.9'")
 
-	var vistos [][]byte
+	var seen [][]byte
 	var walk func(binder.BoundExpr)
 	walk = func(e binder.BoundExpr) {
 		switch n := e.(type) {
@@ -364,29 +364,29 @@ func TestArenaComVariosValoresParseados(t *testing.T) {
 			walk(n.Left)
 			walk(n.Right)
 		case *binder.BoundComparison:
-			vistos = append(vistos, n.Val.Bytes)
+			seen = append(seen, n.Val.Bytes)
 		}
 	}
 	walk(bq.Where)
 
-	if len(vistos) != 4 {
-		t.Fatalf("%d comparações", len(vistos))
+	if len(seen) != 4 {
+		t.Fatalf("%d comparações", len(seen))
 	}
-	esperado := [][]byte{
+	want := [][]byte{
 		{10, 0, 0, 1},
 		{32, 1, 13, 184, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
 		{192, 168, 1, 0, 24},
 		{172, 16, 0, 9},
 	}
-	for i := range esperado {
-		if !bytes.Equal(vistos[i], esperado[i]) {
+	for i := range want {
+		if !bytes.Equal(seen[i], want[i]) {
 			t.Errorf("valor %d = %v, want %v (janela do arena corrompida por realocação?)",
-				i, vistos[i], esperado[i])
+				i, seen[i], want[i])
 		}
 	}
 	// As janelas têm cap limitado: um append posterior no arena não pode
 	// sobrescrever o valor de ninguém.
-	for i, v := range vistos {
+	for i, v := range seen {
 		if cap(v) != len(v) {
 			t.Errorf("valor %d com cap %d > len %d: append futuro corromperia o vizinho", i, cap(v), len(v))
 		}
@@ -394,12 +394,12 @@ func TestArenaComVariosValoresParseados(t *testing.T) {
 }
 
 func TestLimitEEfetivo(t *testing.T) {
-	casos := []struct {
-		nome    string
-		sql     string
-		has     bool
-		limit   int64
-		efetivo int64
+	cases := []struct {
+		name      string
+		sql       string
+		has       bool
+		limit     int64
+		effective int64
 	}{
 		{"sem limit", "SELECT id FROM radius_sessions", false, 0, 1000},
 		{"limit menor que maxRows", "SELECT id FROM radius_sessions LIMIT 10", true, 10, 10},
@@ -407,12 +407,12 @@ func TestLimitEEfetivo(t *testing.T) {
 		{"limit zero", "SELECT id FROM radius_sessions LIMIT 0", true, 0, 0},
 		{"limit igual a maxRows", "SELECT id FROM radius_sessions LIMIT 1000", true, 1000, 1000},
 	}
-	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			bq := bindOK(t, tc.sql)
-			if bq.HasLimit != tc.has || bq.Limit != tc.limit || bq.EffectiveLimit != tc.efetivo {
+			if bq.HasLimit != tc.has || bq.Limit != tc.limit || bq.EffectiveLimit != tc.effective {
 				t.Errorf("HasLimit=%v Limit=%d Effective=%d, want %v/%d/%d",
-					bq.HasLimit, bq.Limit, bq.EffectiveLimit, tc.has, tc.limit, tc.efetivo)
+					bq.HasLimit, bq.Limit, bq.EffectiveLimit, tc.has, tc.limit, tc.effective)
 			}
 			// O trio viaja separado para o executor saber QUAL teto cortou.
 			if bq.MaxRows != 1000 {
@@ -453,8 +453,8 @@ func TestNullCheckEmQualquerTipo(t *testing.T) {
 }
 
 func TestErrosDeBind(t *testing.T) {
-	casos := []struct {
-		nome string
+	cases := []struct {
+		name string
 		sql  string
 		msg  string
 	}{
@@ -472,8 +472,8 @@ func TestErrosDeBind(t *testing.T) {
 		{"timestamp invalido", "SELECT id FROM radius_sessions WHERE quando = 'ontem'", "inválido para a coluna"},
 		{"auto sem tipo", "SELECT id FROM radius_sessions WHERE livre = 'x'", "nunca foi observada"},
 	}
-	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			err := bindErr(t, tc.sql)
 			if !strings.Contains(err.Error(), tc.msg) {
 				t.Errorf("erro = %q, want conter %q", err, tc.msg)
@@ -491,7 +491,7 @@ func TestErrosDeBind(t *testing.T) {
 // que torna filtrável o dataset real, que usa wildcard com unknownFields
 // include.
 func TestAutoComTipoFixadoEhComparavel(t *testing.T) {
-	sc := compilar(t)
+	sc := compile(t)
 	f, ok := sc.FieldByName([]byte("livre"))
 	if !ok {
 		t.Fatal("campo livre não compilado")
@@ -515,7 +515,7 @@ func TestAutoComTipoFixadoEhComparavel(t *testing.T) {
 
 	// E a célula escolhida é a do tipo FIXADO: um campo fixado como double
 	// coage o literal int para bits de float.
-	sc2 := compilar(t)
+	sc2 := compile(t)
 	f2, _ := sc2.FieldByName([]byte("livre"))
 	if err := sc2.FixAutoType(f2, types.TypeDouble); err != nil {
 		t.Fatal(err)
@@ -546,14 +546,14 @@ func TestAutoSemTipoAceitaIsNull(t *testing.T) {
 // O binder não pode registrar coluna: uma query com erro de digitação não
 // cria campo no dicionário.
 func TestBindNaoRegistraColunaNova(t *testing.T) {
-	sc := compilar(t)
-	antes := len(sc.FieldsByID())
+	sc := compile(t)
+	before := len(sc.FieldsByID())
 
 	st, _ := parser.Parse("SELECT naoexiste FROM radius_sessions")
 	if _, err := binder.Bind(st, sc, nil); err == nil {
 		t.Fatal("coluna inexistente deveria falhar")
 	}
-	if depois := len(sc.FieldsByID()); depois != antes {
-		t.Errorf("o bind registrou campo novo: %d → %d", antes, depois)
+	if after := len(sc.FieldsByID()); after != before {
+		t.Errorf("o bind registrou campo novo: %d → %d", before, after)
 	}
 }

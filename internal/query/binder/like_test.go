@@ -3,9 +3,9 @@ package binder
 import "testing"
 
 func TestCasaPadroes(t *testing.T) {
-	casos := []struct {
+	cases := []struct {
 		pat, v string
-		quer   bool
+		want   bool
 	}{
 		// Sem curinga.
 		{"abc", "abc", true},
@@ -58,10 +58,10 @@ func TestCasaPadroes(t *testing.T) {
 		{"_", "😀", true},
 		{"a_b", "a😀b", true},
 	}
-	for _, tc := range casos {
-		p := CompilaLike([]byte(tc.pat))
-		if got := p.Casa([]byte(tc.v)); got != tc.quer {
-			t.Errorf("CompilaLike(%q).Casa(%q) = %v, quer %v (tipo=%d)", tc.pat, tc.v, got, tc.quer, p.Tipo)
+	for _, tc := range cases {
+		p := CompileLike([]byte(tc.pat))
+		if got := p.Match([]byte(tc.v)); got != tc.want {
+			t.Errorf("CompileLike(%q).Match(%q) = %v, quer %v (tipo=%d)", tc.pat, tc.v, got, tc.want, p.Type)
 		}
 	}
 }
@@ -70,23 +70,23 @@ func TestCasaPadroes(t *testing.T) {
 // errar, o resultado continua certo (o glob geral casa tudo o que os atalhos
 // casam) e o custo sobe em silêncio. Por isso é aferida à parte.
 func TestClassificacaoDoPadrao(t *testing.T) {
-	casos := []struct {
+	cases := []struct {
 		pat  string
-		quer TipoDePadrao
+		want PatternType
 	}{
-		{"abc", PadraoIgual},
-		{"abc%", PadraoPrefixo},
-		{"%abc", PadraoSufixo},
-		{"%abc%", PadraoContem},
-		{"%", PadraoTudo},
-		{"%%", PadraoTudo},
-		{"a%b%c", PadraoGeral},
-		{"a_c", PadraoGeral},
-		{"_%", PadraoGeral},
+		{"abc", PatternEqual},
+		{"abc%", PatternPrefix},
+		{"%abc", PatternSuffix},
+		{"%abc%", PatternContains},
+		{"%", PatternAll},
+		{"%%", PatternAll},
+		{"a%b%c", PatternGeneral},
+		{"a_c", PatternGeneral},
+		{"_%", PatternGeneral},
 	}
-	for _, tc := range casos {
-		if got := CompilaLike([]byte(tc.pat)).Tipo; got != tc.quer {
-			t.Errorf("CompilaLike(%q).Tipo = %d, quer %d", tc.pat, got, tc.quer)
+	for _, tc := range cases {
+		if got := CompileLike([]byte(tc.pat)).Type; got != tc.want {
+			t.Errorf("CompileLike(%q).Tipo = %d, quer %d", tc.pat, got, tc.want)
 		}
 	}
 }
@@ -96,20 +96,20 @@ func TestClassificacaoDoPadrao(t *testing.T) {
 // que este motor não tolera. `_` conta 1 byte porque é o menor tamanho de um
 // caractere — e um valor de 2 bytes ainda pode casar `__`... não, casa `_`.
 func TestPisoDeTamanhoNuncaProduzFalsoNegativo(t *testing.T) {
-	casos := []struct{ pat, v string }{
+	cases := []struct{ pat, v string }{
 		{"___", "ção"}, // 3 caracteres, 5 bytes
 		{"_", "😀"},     // 1 caractere, 4 bytes
 		{"a_c", "açc"}, // 3 caracteres, 4 bytes
 		{"%_%", "ç"},   // 1 caractere, 2 bytes
 	}
-	for _, tc := range casos {
-		p := CompilaLike([]byte(tc.pat))
+	for _, tc := range cases {
+		p := CompileLike([]byte(tc.pat))
 		if len(tc.v) < p.MinBytes {
 			t.Errorf("MinBytes de %q = %d rejeitaria %q (%d bytes), que CASA",
 				tc.pat, p.MinBytes, tc.v, len(tc.v))
 		}
-		if !p.Casa([]byte(tc.v)) {
-			t.Errorf("CompilaLike(%q).Casa(%q) = false, quer true", tc.pat, tc.v)
+		if !p.Match([]byte(tc.v)) {
+			t.Errorf("CompileLike(%q).Match(%q) = false, quer true", tc.pat, tc.v)
 		}
 	}
 }
@@ -118,38 +118,38 @@ func TestPisoDeTamanhoNuncaProduzFalsoNegativo(t *testing.T) {
 // matcher precisa ser TOTAL sobre qualquer entrada, porque o valor vem do
 // payload e o payload vem da origem.
 func TestValorNaoUtf8NaoTravaOMatcher(t *testing.T) {
-	invalido := []byte{'a', 0xff, 0xfe, 'c'}
+	invalid := []byte{'a', 0xff, 0xfe, 'c'}
 	for _, pat := range []string{"a_c", "a__c", "%", "a%c", "___", "a_%_c"} {
-		p := CompilaLike([]byte(pat))
+		p := CompileLike([]byte(pat))
 		// Qual das duas respostas sai não importa — o valor não é texto, e
 		// nenhuma delas é "certa". O que importa é a função TERMINAR e ser
 		// DETERMINÍSTICA: duas chamadas sobre a mesma entrada não podem
 		// divergir, o que pegaria estado retido entre chamadas no matcher.
-		primeira := p.Casa(invalido)
-		segunda := p.Casa(invalido)
-		if primeira != segunda {
-			t.Errorf("CompilaLike(%q).Casa divergiu entre duas chamadas sobre a mesma entrada", pat)
+		first := p.Match(invalid)
+		second := p.Match(invalid)
+		if first != second {
+			t.Errorf("CompileLike(%q).Match divergiu entre duas chamadas sobre a mesma entrada", pat)
 		}
 	}
 }
 
 func BenchmarkCasaPrefixo(b *testing.B) {
-	p := CompilaLike([]byte("i-br-sp-%"))
+	p := CompileLike([]byte("i-br-sp-%"))
 	v := []byte("i-br-sp-cmp-cmp-hl4-01")
 	b.ReportAllocs()
 	for b.Loop() {
-		if !p.Casa(v) {
+		if !p.Match(v) {
 			b.Fatal("não casou")
 		}
 	}
 }
 
 func BenchmarkCasaGeral(b *testing.B) {
-	p := CompilaLike([]byte("i-%-cmp-%-hl_-01"))
+	p := CompileLike([]byte("i-%-cmp-%-hl_-01"))
 	v := []byte("i-br-sp-cmp-cmp-hl4-01")
 	b.ReportAllocs()
 	for b.Loop() {
-		if !p.Casa(v) {
+		if !p.Match(v) {
 			b.Fatal("não casou")
 		}
 	}

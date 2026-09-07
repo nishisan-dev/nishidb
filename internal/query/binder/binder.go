@@ -206,10 +206,10 @@ func Bind(stmt *parser.SelectStmt, sc *schema.Compiled, params []types.Value) (*
 	}
 
 	b := &binder{
-		stmt:   stmt,
-		sc:     sc,
-		params: params,
-		usados: map[types.FieldID]struct{}{},
+		stmt:       stmt,
+		sc:         sc,
+		params:     params,
+		referenced: map[types.FieldID]struct{}{},
 	}
 	bq, err := b.run()
 	if err != nil {
@@ -225,22 +225,22 @@ type binder struct {
 	sc     *schema.Compiled
 	params []types.Value
 
-	// semParams marca o bind de uma CONDIÇÃO solta, que não tem quem forneça
+	// refusesParams marca o bind de uma CONDIÇÃO solta, que não tem quem forneça
 	// parâmetro posicional. A recusa precisa acontecer no ponto em que o `?`
 	// aparece: mais tarde, a mensagem sairia como "parser inconsistente" e
 	// mandaria o operador procurar um bug que não existe.
-	semParams bool
+	refusesParams bool
 
-	usados   map[types.FieldID]struct{}
-	arena    []byte
-	nParams  int      // comparações com parâmetro (invariante contra ParamCount)
-	pendente []janela // offsets de Val.Bytes a materializar depois dos appends
+	referenced map[types.FieldID]struct{}
+	arena      []byte
+	nParams    int      // comparações com parâmetro (invariante contra ParamCount)
+	pending    []window // offsets de Val.Bytes a materializar depois dos appends
 }
 
-// janela é um (start,end) no arena, guardado até o fim dos appends. Emitir
+// window é um (start,end) no arena, guardado até o fim dos appends. Emitir
 // Val.Bytes durante a construção deixaria janelas apontando para um array que
 // o append seguinte pode realocar.
-type janela struct {
+type window struct {
 	cmp        *BoundComparison
 	start, end int
 }
@@ -257,7 +257,7 @@ func (b *binder) run() (*BoundQuery, error) {
 		Timeout:  b.sc.Timeout,
 	}
 
-	cols, err := b.projecao()
+	cols, err := b.projection()
 	if err != nil {
 		return nil, err
 	}
@@ -275,11 +275,11 @@ func (b *binder) run() (*BoundQuery, error) {
 	// b.usa(f.ID) que a resolução faz, a coluna não teria slot e o executor
 	// ordenaria por um valor que nunca leu.
 	if len(b.stmt.OrderBy) > 0 {
-		chaves, err := b.ordenacao()
+		keys, err := b.ordering()
 		if err != nil {
 			return nil, err
 		}
-		bq.OrderBy = chaves
+		bq.OrderBy = keys
 	}
 	// Defesa contra bug do PARSER, não contra o usuário: cada '?' aparece em
 	// exatamente uma comparação, então as contagens têm de bater.
@@ -290,10 +290,10 @@ func (b *binder) run() (*BoundQuery, error) {
 
 	// Fecha o conjunto de slots e só então materializa os índices.
 	bq.Slots = b.slots()
-	b.preencheSlots(bq)
+	b.fillSlots(bq)
 
 	// Agora que o arena parou de crescer, as janelas são estáveis.
-	for _, j := range b.pendente {
+	for _, j := range b.pending {
 		j.cmp.Val.Bytes = b.arena[j.start:j.end:j.end]
 	}
 	bq.arena = b.arena
@@ -305,103 +305,103 @@ func (b *binder) run() (*BoundQuery, error) {
 	return bq, nil
 }
 
-func (b *binder) projecao() ([]BoundColumn, error) {
+func (b *binder) projection() ([]BoundColumn, error) {
 	if b.stmt.Star {
-		campos := b.sc.FieldsByID()
-		cols := make([]BoundColumn, 0, len(campos))
-		for _, f := range campos {
-			// No '*' o usuário não escreveu nome nenhum, então o rótulo é o
+		fields := b.sc.FieldsByID()
+		cols := make([]BoundColumn, 0, len(fields))
+		for _, f := range fields {
+			// No '*' o usuário não escreveu name nenhum, então o rótulo é o
 			// alias quando existe.
-			nome := f.Name
+			name := f.Name
 			if f.Alias != "" {
-				nome = f.Alias
+				name = f.Alias
 			}
-			b.usa(f.ID)
-			cols = append(cols, BoundColumn{Field: f, Name: nome})
+			b.markReferenced(f.ID)
+			cols = append(cols, BoundColumn{Field: f, Name: name})
 		}
 		return cols, nil
 	}
 
 	cols := make([]BoundColumn, 0, len(b.stmt.Projection))
-	// vistos só materializa em projeção grande; até o limiar a varredura linear
+	// seen só materializa em projeção grande; até o limiar a varredura linear
 	// sobre cols resolve sem alocar nada.
-	var vistos map[string]struct{}
-	derivadas := 0
+	var seen map[string]struct{}
+	derivedCount := 0
 	for _, ref := range b.stmt.Projection {
 		if ref.Qualifier != "" {
 			var err error
-			cols, derivadas, err = b.qualificada(cols, ref, derivadas)
+			cols, derivedCount, err = b.qualifiedProjection(cols, ref, derivedCount)
 			if err != nil {
 				return nil, err
 			}
-			vistos = nil // o conjunto cresceu por fora; recalcula no limiar
+			seen = nil // o conjunto cresceu por fora; recalcula no limiar
 			continue
 		}
-		f, err := b.coluna(ref.Name, ref.Pos)
+		f, err := b.column(ref.Name, ref.Pos)
 		if err != nil {
 			return nil, err
 		}
-		if repetido(cols, vistos, ref.Name) {
+		if isDuplicate(cols, seen, ref.Name) {
 			// `SELECT id, id` vira objeto JSON com chave repetida: válido para
 			// o formato, e o consumidor COLAPSA em silêncio — o usuário pede
 			// duas colunas e recebe uma. A posição é a da segunda ocorrência,
 			// que é a que ele apaga para corrigir.
 			return nil, errAt(ref.Pos, "coluna %q aparece mais de uma vez na projeção", ref.Name)
 		}
-		b.usa(f.ID)
+		b.markReferenced(f.ID)
 		// Nome de saída é o que o usuário ESCREVEU: `SELECT status` rotula
 		// "status" mesmo que o campo se chame Acct-Status-Type.
 		cols = append(cols, BoundColumn{Field: f, Name: ref.Name})
 		switch {
-		case vistos != nil:
-			vistos[ref.Name] = struct{}{}
-		case len(cols) == limiarMapaProjecao:
-			vistos = make(map[string]struct{}, len(b.stmt.Projection))
+		case seen != nil:
+			seen[ref.Name] = struct{}{}
+		case len(cols) == projectionMapThreshold:
+			seen = make(map[string]struct{}, len(b.stmt.Projection))
 			for i := range cols {
-				vistos[cols[i].Name] = struct{}{}
+				seen[cols[i].Name] = struct{}{}
 			}
 		}
 	}
 	return cols, nil
 }
 
-// colunaTalvezQualificada resolve o nome do filtro, com ou sem qualificador.
+// maybeQualifiedColumn resolve o nome do filtro, com ou sem qualificador.
 //
 // Com qualificador, o nome é o CAMINHO dentro do documento — a mesma regra da
 // projeção, e é o que faz `WHERE doc.x` valer para a coluna que
 // `SELECT doc.x` projeta, tenha ela sido declarada com outro `as` ou
 // descoberta com o nome qualificado.
-func (b *binder) colunaTalvezQualificada(qualificador, nome string, pos int) (*schema.CompiledField, error) {
-	if qualificador == "" {
-		return b.coluna(nome, pos)
+func (b *binder) maybeQualifiedColumn(qualifier, name string, pos int) (*schema.CompiledField, error) {
+	if qualifier == "" {
+		return b.column(name, pos)
 	}
-	pai, ok := b.sc.FieldByName([]byte(qualificador))
+	parent, ok := b.sc.FieldByName([]byte(qualifier))
 	if !ok {
-		return nil, errAt(pos, "campo %q não existe no dataset %q", qualificador, b.sc.Name)
+		return nil, errAt(pos, "campo %q não existe no dataset %q", qualifier, b.sc.Name)
 	}
-	f, ok := b.sc.FieldByPath(pai.Name, nome)
+	f, ok := b.sc.FieldByPath(parent.Name, name)
 	if !ok {
-		return nil, errAt(pos, "o campo %q não tem a coluna aninhada %q", qualificador, nome)
+		return nil, errAt(pos, "o campo %q não tem a coluna aninhada %q", qualifier, name)
 	}
 	return f, nil
 }
 
-// qualificada resolve `pai.*` e `pai.caminho`.
+// qualifiedProjection resolve `pai.*` e `pai.caminho`.
 //
 // A expansão existe porque a coluna derivada fica FORA do SELECT * — sem ela,
 // pedir as colunas de um documento exigiria saber de cor os nomes que o YAML
 // declarou.
-func (b *binder) qualificada(cols []BoundColumn, ref parser.ColumnRef, derivadas int) ([]BoundColumn, int, error) {
-	pai, ok := b.sc.FieldByName([]byte(ref.Qualifier))
+func (b *binder) qualifiedProjection(cols []BoundColumn, ref parser.ColumnRef, derivedCount int) ([]BoundColumn, int, error) {
+	parent, ok := b.sc.FieldByName([]byte(ref.Qualifier))
 	if !ok {
 		return nil, 0, errAt(ref.Pos, "campo %q não existe no dataset %q", ref.Qualifier, b.sc.Name)
 	}
-	filhas := b.sc.FieldsByParent(pai.Name)
-	if len(filhas) == 0 {
+	children := b.sc.FieldsByParent(parent.Name)
+	if len(children) == 0 {
 		// A recusa precisa dizer o que FALTA, e isso depende do que o campo
 		// declarou. Um pai que descobre não precisa de extract nenhum: o que
 		// falta a ele é evento que traga a chave.
-		if pai.DiscoverNested {
+		if parent.DiscoverNested {
 			return nil, 0, errAt(ref.Pos,
 				"campo %q ainda não descobriu nenhuma coluna; elas aparecem conforme os eventos trazem as chaves", ref.Qualifier)
 		}
@@ -409,83 +409,83 @@ func (b *binder) qualificada(cols []BoundColumn, ref parser.ColumnRef, derivadas
 			"campo %q não declara extract nem descoberta de campos aninhados; não há coluna a projetar", ref.Qualifier)
 	}
 
-	// Quantas colunas aninhadas este item acrescenta. O teto é conferido para
+	// Quantas colunas aninhadas este item addedCols. O teto é conferido para
 	// os DOIS caminhos: contá-lo só na expansão deixava `pai.*, pai.caminho`
 	// passar acima do limite, porque cada metade cabia sozinha.
-	acrescenta := 1
+	addedCols := 1
 	if ref.Star {
-		acrescenta = len(filhas)
+		addedCols = len(children)
 	}
 	// Ao estourar, RECUSA nomeando o limite — nunca trunca. Truncar entregaria
 	// colunas faltando com cara de resultado completo, e o erro aqui é
 	// acionável: pedem-se as colunas pelo nome.
-	if n := derivadas + acrescenta; n > b.sc.MaxNestedCols {
+	if n := derivedCount + addedCols; n > b.sc.MaxNestedCols {
 		return nil, 0, errAt(ref.Pos,
 			"a projeção pede %d colunas aninhadas, acima de schema.maxNestedCols (%d); "+
 				"peça as colunas pelo nome ou ajuste o teto do dataset", n, b.sc.MaxNestedCols)
 	}
 
 	if !ref.Star {
-		f, ok := b.sc.FieldByPath(pai.Name, ref.Name)
+		f, ok := b.sc.FieldByPath(parent.Name, ref.Name)
 		if !ok {
 			return nil, 0, errAt(ref.Pos, "o campo %q não extrai o caminho %q", ref.Qualifier, ref.Name)
 		}
-		nome := ref.Qualifier + "." + ref.Name
-		if repetido(cols, nil, nome) {
-			return nil, 0, errAt(ref.Pos, "coluna %q aparece mais de uma vez na projeção", nome)
+		name := ref.Qualifier + "." + ref.Name
+		if isDuplicate(cols, nil, name) {
+			return nil, 0, errAt(ref.Pos, "coluna %q aparece mais de uma vez na projeção", name)
 		}
-		b.usa(f.ID)
-		return append(cols, BoundColumn{Field: f, Name: nome}), derivadas + 1, nil
+		b.markReferenced(f.ID)
+		return append(cols, BoundColumn{Field: f, Name: name}), derivedCount + 1, nil
 	}
 
-	for _, f := range filhas {
-		if repetido(cols, nil, f.Name) {
+	for _, f := range children {
+		if isDuplicate(cols, nil, f.Name) {
 			return nil, 0, errAt(ref.Pos, "coluna %q aparece mais de uma vez na projeção", f.Name)
 		}
-		b.usa(f.ID)
+		b.markReferenced(f.ID)
 		cols = append(cols, BoundColumn{Field: f, Name: f.Name})
 	}
-	return cols, derivadas + len(filhas), nil
+	return cols, derivedCount + len(children), nil
 }
 
-// limiarMapaProjecao é onde a checagem de nome repetido troca varredura linear
+// projectionMapThreshold é onde a checagem de nome repetido troca varredura linear
 // por mapa. A projeção real tem unidades de colunas, e aí a varredura é mais
 // barata e não aloca; o mapa existe porque o número de nomes DISTINTOS que
 // bindam com sucesso não é pequeno (FieldID é uint16, e cada campo responde por
 // nome e alias), e o custo quadrático transformaria uma query de algumas
 // centenas de KB em segundos de CPU.
-const limiarMapaProjecao = 32
+const projectionMapThreshold = 32
 
-// repetido usa o mapa quando ele existe e a varredura enquanto não existe. As
+// isDuplicate usa o mapa quando ele existe e a varredura enquanto não existe. As
 // duas responderiam igual em qualquer ponto: o mapa é semeado com o que a
 // varredura já tinha visto.
-func repetido(cols []BoundColumn, vistos map[string]struct{}, nome string) bool {
-	if vistos != nil {
-		_, ok := vistos[nome]
+func isDuplicate(cols []BoundColumn, seen map[string]struct{}, name string) bool {
+	if seen != nil {
+		_, ok := seen[name]
 		return ok
 	}
 	for i := range cols {
-		if cols[i].Name == nome {
+		if cols[i].Name == name {
 			return true
 		}
 	}
 	return false
 }
 
-// coluna resolve nome original OU alias. Nunca chama ResolveUnknown: aquilo é
+// column resolve nome original OU alias. Nunca chama ResolveUnknown: aquilo é
 // do writer e registraria um campo novo no dicionário a cada erro de
 // digitação numa query.
-func (b *binder) coluna(nome string, pos int) (*schema.CompiledField, error) {
-	f, ok := b.sc.FieldByName([]byte(nome))
+func (b *binder) column(name string, pos int) (*schema.CompiledField, error) {
+	f, ok := b.sc.FieldByName([]byte(name))
 	if !ok {
 		// Campo excluído do schema também cai aqui, e é o certo: para o
 		// runtime ele não existe.
-		return nil, errAt(pos, "coluna %q não existe no dataset %q", nome, b.sc.Name)
+		return nil, errAt(pos, "coluna %q não existe no dataset %q", name, b.sc.Name)
 	}
 	return f, nil
 }
 
-func (b *binder) usa(id types.FieldID) { b.usados[id] = struct{}{} }
+func (b *binder) markReferenced(id types.FieldID) { b.referenced[id] = struct{}{} }
 
 // expr percorre a ESPINHA ESQUERDA iterativamente, pelo mesmo motivo que o
 // parser é iterativo em parseAnd/parseOr: `a=1 AND a=1 AND …` é left-leaning e
@@ -503,51 +503,51 @@ func (b *binder) usa(id types.FieldID) { b.usados[id] = struct{}{} }
 // recursão anterior. Ela decide qual erro é reportado primeiro e o layout do
 // arena.
 func (b *binder) expr(e parser.Expr) (BoundExpr, error) {
-	return b.exprProf(e, 0)
+	return b.exprAtDepth(e, 0)
 }
 
-func (b *binder) exprProf(e parser.Expr, prof int) (BoundExpr, error) {
-	if prof > MaxBindDepth {
+func (b *binder) exprAtDepth(e parser.Expr, depth int) (BoundExpr, error) {
+	if depth > MaxBindDepth {
 		return nil, errNoPos("expressão aninhada demais no WHERE (máximo %d níveis à direita)", MaxBindDepth)
 	}
 
-	var espinha []*parser.LogicalExpr
+	var spine []*parser.LogicalExpr
 	for {
 		l, ok := e.(*parser.LogicalExpr)
 		if !ok {
 			break
 		}
-		espinha = append(espinha, l)
+		spine = append(spine, l)
 		e = l.Left
 	}
 
-	atual, err := b.folha(e)
+	current, err := b.leaf(e)
 	if err != nil {
 		return nil, err
 	}
-	for i := len(espinha) - 1; i >= 0; i-- {
-		direita, err := b.exprProf(espinha[i].Right, prof+1)
+	for i := len(spine) - 1; i >= 0; i-- {
+		right, err := b.exprAtDepth(spine[i].Right, depth+1)
 		if err != nil {
 			return nil, err
 		}
-		atual = &BoundLogical{Op: espinha[i].Op, Left: atual, Right: direita}
+		current = &BoundLogical{Op: spine[i].Op, Left: current, Right: right}
 	}
-	return atual, nil
+	return current, nil
 }
 
-// folha liga os nós terminais. Um *parser.LogicalExpr nunca chega aqui: a
+// leaf liga os nós terminais. Um *parser.LogicalExpr nunca chega aqui: a
 // espinha já o consumiu.
-func (b *binder) folha(e parser.Expr) (BoundExpr, error) {
+func (b *binder) leaf(e parser.Expr) (BoundExpr, error) {
 	switch n := e.(type) {
 	case *parser.Comparison:
-		return b.comparacao(n)
+		return b.comparison(n)
 
 	case *parser.NullCheck:
-		f, err := b.colunaTalvezQualificada(n.Qualifier, n.Column, n.ColumnPos)
+		f, err := b.maybeQualifiedColumn(n.Qualifier, n.Column, n.ColumnPos)
 		if err != nil {
 			return nil, err
 		}
-		b.usa(f.ID)
+		b.markReferenced(f.ID)
 		// Sem coerção e sem restrição de tipo: presença vale para bytes, json
 		// e campo auto nunca observado.
 		return &BoundNullCheck{Field: f, Not: n.Not}, nil
@@ -561,34 +561,34 @@ func (b *binder) folha(e parser.Expr) (BoundExpr, error) {
 	}
 }
 
-// ordenacao resolve as chaves do ORDER BY contra o schema.
+// ordering resolve as chaves do ORDER BY contra o schema.
 //
 // Chave REPETIDA é recusada, e não colapsada: `ORDER BY a, a DESC` é
 // contraditório e aceitar em silêncio uma das duas leituras seria escolher pelo
 // usuário. É a mesma doutrina que já recusa coluna repetida na projeção.
-func (b *binder) ordenacao() ([]BoundOrderKey, error) {
+func (b *binder) ordering() ([]BoundOrderKey, error) {
 	out := make([]BoundOrderKey, 0, len(b.stmt.OrderBy))
-	vistos := make(map[types.FieldID]struct{}, len(b.stmt.OrderBy))
+	seen := make(map[types.FieldID]struct{}, len(b.stmt.OrderBy))
 	for _, k := range b.stmt.OrderBy {
-		f, err := b.colunaTalvezQualificada(k.Qualifier, k.Column, k.ColumnPos)
+		f, err := b.maybeQualifiedColumn(k.Qualifier, k.Column, k.ColumnPos)
 		if err != nil {
 			return nil, err
 		}
-		if _, repetida := vistos[f.ID]; repetida {
+		if _, duplicate := seen[f.ID]; duplicate {
 			return nil, errAt(k.ColumnPos, "coluna %q aparece duas vezes no ORDER BY", f.Name)
 		}
-		vistos[f.ID] = struct{}{}
+		seen[f.ID] = struct{}{}
 
 		t := f.EffectiveType()
 		if t == types.TypeNull {
 			return nil, errAt(k.ColumnPos, "coluna %q é auto e nunca foi observada neste dataset, "+
 				"então ainda não tem tipo e não pode ordenar", f.Name)
 		}
-		kind, ok := admiteOrdenacao(t)
+		kind, ok := admitsOrdering(t)
 		if !ok {
 			return nil, errAt(k.ColumnPos, "coluna %q é %s e não tem ordem definida neste produto", f.Name, t)
 		}
-		b.usa(f.ID)
+		b.markReferenced(f.ID)
 		out = append(out, BoundOrderKey{
 			Field: f, Desc: k.Desc, NullsFirst: k.NullsFirst, Kind: kind, Want: t})
 	}
@@ -601,11 +601,11 @@ func (b *binder) ordenacao() ([]BoundOrderKey, error) {
 // erro clássico deste operador — e é também o que permite `LIKE ?` funcionar
 // sem caminho separado, porque o bind já recebe os parâmetros.
 func (b *binder) like(n *parser.LikeExpr) (BoundExpr, error) {
-	f, err := b.colunaTalvezQualificada(n.Qualifier, n.Column, n.ColumnPos)
+	f, err := b.maybeQualifiedColumn(n.Qualifier, n.Column, n.ColumnPos)
 	if err != nil {
 		return nil, err
 	}
-	b.usa(f.ID)
+	b.markReferenced(f.ID)
 
 	t := f.EffectiveType()
 	if t == types.TypeNull {
@@ -621,7 +621,7 @@ func (b *binder) like(n *parser.LikeExpr) (BoundExpr, error) {
 	case parser.OperandString:
 		pat = []byte(n.Pattern.S)
 	case parser.OperandParam:
-		if b.semParams {
+		if b.refusesParams {
 			return nil, errAt(n.Pattern.Pos, "condição não aceita parâmetro posicional")
 		}
 		idx := n.Pattern.ParamIdx
@@ -640,27 +640,27 @@ func (b *binder) like(n *parser.LikeExpr) (BoundExpr, error) {
 	if len(pat) > parser.MaxLikePatternBytes {
 		return nil, errAt(n.Pattern.Pos, "padrão de LIKE acima de %d bytes", parser.MaxLikePatternBytes)
 	}
-	// CompilaLike copia os bytes, então o padrão sobrevive ao arena e ao
+	// CompileLike copia os bytes, então o padrão sobrevive ao arena e ao
 	// buffer do chamador dos parâmetros.
-	return &BoundLike{Field: f, Not: n.Not, Pat: CompilaLike(pat)}, nil
+	return &BoundLike{Field: f, Not: n.Not, Pat: CompileLike(pat)}, nil
 }
 
-func (b *binder) comparacao(n *parser.Comparison) (BoundExpr, error) {
-	f, err := b.colunaTalvezQualificada(n.Qualifier, n.Column, n.ColumnPos)
+func (b *binder) comparison(n *parser.Comparison) (BoundExpr, error) {
+	f, err := b.maybeQualifiedColumn(n.Qualifier, n.Column, n.ColumnPos)
 	if err != nil {
 		return nil, err
 	}
-	b.usa(f.ID)
+	b.markReferenced(f.ID)
 
 	cmp := &BoundComparison{Field: f, Op: n.Op}
 	var (
-		val   types.Value
-		kind  CompareKind
-		cerr  error
-		antes = len(b.arena)
+		val         types.Value
+		kind        CompareKind
+		cerr        error
+		arenaBefore = len(b.arena)
 	)
 	if n.Operand.Kind == parser.OperandParam {
-		if b.semParams {
+		if b.refusesParams {
 			return nil, errAt(n.Operand.Pos, "condição não aceita parâmetro posicional")
 		}
 		idx := n.Operand.ParamIdx
@@ -672,91 +672,91 @@ func (b *binder) comparacao(n *parser.Comparison) (BoundExpr, error) {
 		cmp.ParamIdx = idx
 		val, kind, b.arena, cerr = coerceParam(f, n.Op, b.params[idx], b.arena)
 		if cerr != nil {
-			return nil, b.erroParam(idx, f, n, cerr)
+			return nil, b.paramError(idx, f, n, cerr)
 		}
 	} else {
 		val, kind, b.arena, cerr = coerceLiteral(f, n.Op, n.Operand, b.arena)
 		if cerr != nil {
-			return nil, b.erroLiteral(f, n, cerr)
+			return nil, b.literalError(f, n, cerr)
 		}
 	}
 
 	cmp.Val = val
 	cmp.Kind = kind
-	if len(b.arena) > antes {
+	if len(b.arena) > arenaBefore {
 		// O valor foi para o arena: guarda os offsets e materializa a janela
 		// só quando o arena parar de crescer.
 		cmp.Val.Bytes = nil
-		b.pendente = append(b.pendente, janela{cmp: cmp, start: antes, end: len(b.arena)})
+		b.pending = append(b.pending, window{cmp: cmp, start: arenaBefore, end: len(b.arena)})
 	}
 	return cmp, nil
 }
 
-// erroLiteral traduz o sentinela da tabela para a mensagem final, que precisa
+// literalError traduz o sentinela da tabela para a mensagem final, que precisa
 // do nome da coluna e do tipo.
-func (b *binder) erroLiteral(f *schema.CompiledField, n *parser.Comparison, cerr error) error {
+func (b *binder) literalError(f *schema.CompiledField, n *parser.Comparison, cerr error) error {
 	t := f.EffectiveType()
 	pos := n.Operand.Pos
 	switch cerr {
-	case errAutoSemTipo:
+	case errAutoWithoutType:
 		return errAt(n.ColumnPos, "coluna %q é auto e nunca foi observada neste dataset, "+
 			"então ainda não tem tipo; só admite IS NULL / IS NOT NULL", f.Name)
-	case errColunaSemTipo:
+	case errColumnWithoutType:
 		return errAt(n.ColumnPos, "coluna %q não tem tipo utilizável", f.Name)
-	case errNaoComparavel:
+	case errNotComparable:
 		return errAt(n.ColumnPos, "coluna %q (%s) só admite IS NULL / IS NOT NULL", f.Name, t)
-	case errLiteralIncompativel:
+	case errIncompatibleLiteral:
 		return errAt(pos, "coluna %q (%s) não é comparável com literal do tipo %s",
-			f.Name, t, nomeLiteral(n.Operand.Kind))
-	case errOperadorNaoAdmitido:
+			f.Name, t, literalName(n.Operand.Kind))
+	case errOperatorNotAdmitted:
 		return errAt(pos, "operador %q não é permitido para a coluna %q (%s); use = ou !=",
 			n.Op.String(), f.Name, t)
-	case errLiteralInvalido:
-		return errAt(pos, "literal %q inválido para a coluna %q (%s)", valorLiteral(n.Operand), f.Name, descreveTipo(f, t))
+	case errInvalidLiteral:
+		return errAt(pos, "literal %q inválido para a coluna %q (%s)", literalValue(n.Operand), f.Name, describeType(f, t))
 	default:
 		return errAt(pos, "coluna %q (%s): %v", f.Name, t, cerr)
 	}
 }
 
-func (b *binder) erroParam(idx int, f *schema.CompiledField, n *parser.Comparison, cerr error) error {
+func (b *binder) paramError(idx int, f *schema.CompiledField, n *parser.Comparison, cerr error) error {
 	// Nas mensagens o parâmetro é 1-based, porque é como o usuário o conta.
 	num := idx + 1
 	t := f.EffectiveType()
 	switch cerr {
-	case errParamNulo:
+	case errParamNull:
 		return errNoPos("parâmetro %d: NULL não é suportado; use IS NULL", num)
-	case errParamTipo:
+	case errParamType:
 		return errNoPos("parâmetro %d: tipo %s não suportado (use string, int64, double ou boolean)",
 			num, b.params[idx].Type)
-	case errAutoSemTipo:
+	case errAutoWithoutType:
 		return errNoPos("parâmetro %d: coluna %q é auto e nunca foi observada neste dataset, "+
 			"então ainda não tem tipo; só admite IS NULL / IS NOT NULL", num, f.Name)
-	case errNaoComparavel:
+	case errNotComparable:
 		return errNoPos("parâmetro %d: coluna %q (%s) só admite IS NULL / IS NOT NULL", num, f.Name, t)
-	case errLiteralIncompativel:
+	case errIncompatibleLiteral:
 		return errNoPos("parâmetro %d: coluna %q (%s) não é comparável com literal do tipo %s",
 			num, f.Name, t, b.params[idx].Type)
-	case errOperadorNaoAdmitido:
+	case errOperatorNotAdmitted:
 		return errNoPos("parâmetro %d: operador %q não é permitido para a coluna %q (%s); use = ou !=",
 			num, n.Op.String(), f.Name, t)
-	case errLiteralInvalido:
-		return errNoPos("parâmetro %d: valor inválido para a coluna %q (%s)", num, f.Name, descreveTipo(f, t))
+	case errInvalidLiteral:
+		return errNoPos("parâmetro %d: valor inválido para a coluna %q (%s)", num, f.Name, describeType(f, t))
 	default:
 		return errNoPos("parâmetro %d: %v", num, cerr)
 	}
 }
 
-// descreveTipo acrescenta o format declarado quando o tipo o tem. Sem ele,
+// describeType acrescenta o format declarado quando o tipo o tem. Sem ele,
 // "literal 'x' inválido para a coluna momento (datetime)" não diz ao usuário
 // em que grafia escrever o literal, e a mensagem fica inacionável.
-func descreveTipo(f *schema.CompiledField, t types.FieldType) string {
+func describeType(f *schema.CompiledField, t types.FieldType) string {
 	if f.Format == "" {
 		return t.String()
 	}
 	return t.String() + ", format: " + f.Format
 }
 
-func nomeLiteral(k parser.OperandKind) string {
+func literalName(k parser.OperandKind) string {
 	switch k {
 	case parser.OperandBool:
 		return "boolean"
@@ -765,7 +765,7 @@ func nomeLiteral(k parser.OperandKind) string {
 	}
 }
 
-func valorLiteral(op parser.Operand) string {
+func literalValue(op parser.Operand) string {
 	if op.Kind == parser.OperandString {
 		return op.S
 	}
@@ -773,17 +773,17 @@ func valorLiteral(op parser.Operand) string {
 }
 
 func (b *binder) slots() Slots {
-	ids := make([]types.FieldID, 0, len(b.usados))
-	for id := range b.usados {
+	ids := make([]types.FieldID, 0, len(b.referenced))
+	for id := range b.referenced {
 		ids = append(ids, id)
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 	return Slots{IDs: ids}
 }
 
-// preencheSlots é a segunda passada: os índices só existem depois que o
+// fillSlots é a segunda passada: os índices só existem depois que o
 // conjunto de campos usados está fechado.
-func (b *binder) preencheSlots(bq *BoundQuery) {
+func (b *binder) fillSlots(bq *BoundQuery) {
 	for i := range bq.Columns {
 		slot, _ := bq.Slots.Index(bq.Columns[i].Field.ID)
 		bq.Columns[i].Slot = slot
@@ -792,14 +792,14 @@ func (b *binder) preencheSlots(bq *BoundQuery) {
 		slot, _ := bq.Slots.Index(bq.OrderBy[i].Field.ID)
 		bq.OrderBy[i].Slot = slot
 	}
-	b.preencheSlotsDaExpr(bq.Where, bq.Slots)
+	b.fillExprSlots(bq.Where, bq.Slots)
 }
 
-// preencheSlotsDaExpr numera os slots de uma expressão contra um conjunto já
+// fillExprSlots numera os slots de uma expressão contra um conjunto já
 // fechado. Vive separada porque tem DOIS chamadores — o WHERE de uma query e
 // a condição solta de uma regra de TTL —, e duas cópias divergiriam no dia em
 // que um nó novo entrasse no bound-AST.
-func (b *binder) preencheSlotsDaExpr(e BoundExpr, s Slots) {
+func (b *binder) fillExprSlots(e BoundExpr, s Slots) {
 	// Percurso com PILHA EXPLÍCITA, pela mesma razão que o expr percorre a
 	// espinha iterativamente: uma cadeia de 50 mil termos é uma árvore de 50
 	// mil níveis, e um walk recursivo aqui gastaria um frame por termo —
@@ -811,13 +811,13 @@ func (b *binder) preencheSlotsDaExpr(e BoundExpr, s Slots) {
 	if e == nil {
 		return
 	}
-	pilha := []BoundExpr{e}
-	for len(pilha) > 0 {
-		e := pilha[len(pilha)-1]
-		pilha = pilha[:len(pilha)-1]
+	stack := []BoundExpr{e}
+	for len(stack) > 0 {
+		e := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
 		switch n := e.(type) {
 		case *BoundLogical:
-			pilha = append(pilha, n.Left, n.Right)
+			stack = append(stack, n.Left, n.Right)
 		case *BoundComparison:
 			n.Slot, _ = s.Index(n.Field.ID)
 		case *BoundNullCheck:

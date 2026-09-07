@@ -11,18 +11,18 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// reinicia simula um RESTART: o dicionário do dataset já tem o campo auto que
+// restart simula um RESTART: o dicionário do dataset já tem o campo auto que
 // uma execução anterior materializou (com ou sem tipo fixado) e o Compiled é
 // construído do zero a partir do YAML.
-func reinicia(t *testing.T, campo string, tipo types.FieldType) *schema.Compiled {
+func restart(t *testing.T, field string, typ types.FieldType) *schema.Compiled {
 	t.Helper()
 	dict := fakestorage.NewDict()
-	id, err := dict.LookupOrCreate([]byte(campo))
+	id, err := dict.LookupOrCreate([]byte(field))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tipo != types.TypeNull {
-		if err := dict.SetTypeHint(id, tipo); err != nil {
+	if typ != types.TypeNull {
+		if err := dict.SetTypeHint(id, typ); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -37,7 +37,7 @@ func reinicia(t *testing.T, campo string, tipo types.FieldType) *schema.Compiled
 	return c
 }
 
-func bindCom(t *testing.T, sc *schema.Compiled, sql string) (*binder.BoundQuery, error) {
+func bindWith(t *testing.T, sc *schema.Compiled, sql string) (*binder.BoundQuery, error) {
 	t.Helper()
 	st, err := parser.Parse(sql)
 	if err != nil {
@@ -50,9 +50,9 @@ func bindCom(t *testing.T, sc *schema.Compiled, sql string) (*binder.BoundQuery,
 // dicionário. Antes disso o binder respondia "coluna não existe" para uma
 // coluna que tem dados — e o operador concluiria que perdeu os eventos.
 func TestBindCampoSoNoDicionarioAposRestart(t *testing.T) {
-	sc := reinicia(t, "X-Vendor-Attr", types.TypeString)
+	sc := restart(t, "X-Vendor-Attr", types.TypeString)
 
-	bq, err := bindCom(t, sc, `SELECT id FROM radius_sessions WHERE "X-Vendor-Attr" = 'abc'`)
+	bq, err := bindWith(t, sc, `SELECT id FROM radius_sessions WHERE "X-Vendor-Attr" = 'abc'`)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
@@ -71,9 +71,9 @@ func TestBindCampoSoNoDicionarioAposRestart(t *testing.T) {
 
 // SELECT * enxerga a coluna materializada antes do restart.
 func TestBindStarIncluiCampoDoDicionario(t *testing.T) {
-	sc := reinicia(t, "X-Vendor-Attr", types.TypeString)
+	sc := restart(t, "X-Vendor-Attr", types.TypeString)
 
-	bq, err := bindCom(t, sc, "SELECT * FROM radius_sessions")
+	bq, err := bindWith(t, sc, "SELECT * FROM radius_sessions")
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestBindStarIncluiCampoDoDicionario(t *testing.T) {
 			return
 		}
 	}
-	t.Errorf("SELECT * = %v, want incluir X-Vendor-Attr", nomes(bq.Columns))
+	t.Errorf("SELECT * = %v, want incluir X-Vendor-Attr", columnNames(bq.Columns))
 }
 
 // Campo no dicionário SEM tipo fixado (criado por um evento que trouxe null):
@@ -90,9 +90,9 @@ func TestBindStarIncluiCampoDoDicionario(t *testing.T) {
 // seria mentira e mandaria o operador procurar erro de digitação; "sem tipo"
 // diz a verdade — o dataset ainda não viu valor nenhum neste campo.
 func TestBindCampoDoDicionarioSemTipoRecusaComMensagemCerta(t *testing.T) {
-	sc := reinicia(t, "X-Sem-Tipo", types.TypeNull)
+	sc := restart(t, "X-Sem-Tipo", types.TypeNull)
 
-	_, err := bindCom(t, sc, `SELECT id FROM radius_sessions WHERE "X-Sem-Tipo" = 'abc'`)
+	_, err := bindWith(t, sc, `SELECT id FROM radius_sessions WHERE "X-Sem-Tipo" = 'abc'`)
 	if err == nil {
 		t.Fatal("comparação sobre campo sem tipo deveria falhar")
 	}
@@ -104,12 +104,12 @@ func TestBindCampoDoDicionarioSemTipoRecusaComMensagemCerta(t *testing.T) {
 	}
 
 	// E o IS NULL sobre ele continua válido: presença não depende de tipo.
-	if _, err := bindCom(t, sc, `SELECT id FROM radius_sessions WHERE "X-Sem-Tipo" IS NULL`); err != nil {
+	if _, err := bindWith(t, sc, `SELECT id FROM radius_sessions WHERE "X-Sem-Tipo" IS NULL`); err != nil {
 		t.Errorf("IS NULL sobre campo sem tipo: %v", err)
 	}
 }
 
-func nomes(cols []binder.BoundColumn) []string {
+func columnNames(cols []binder.BoundColumn) []string {
 	out := make([]string, len(cols))
 	for i, c := range cols {
 		out[i] = c.Name

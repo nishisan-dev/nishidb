@@ -67,9 +67,9 @@ func TestJanelasVivemNoArenaDoBoundQuery(t *testing.T) {
 	}
 
 	base := uintptr(unsafe.Pointer(unsafe.SliceData(bq.arena)))
-	fim := base + uintptr(cap(bq.arena))
+	end := base + uintptr(cap(bq.arena))
 
-	var fora int
+	var outside int
 	var walk func(BoundExpr)
 	walk = func(e BoundExpr) {
 		switch n := e.(type) {
@@ -81,8 +81,8 @@ func TestJanelasVivemNoArenaDoBoundQuery(t *testing.T) {
 				return // string é cópia própria, não vive no arena
 			}
 			p := uintptr(unsafe.Pointer(unsafe.SliceData(n.Val.Bytes)))
-			if p < base || p >= fim {
-				fora++
+			if p < base || p >= end {
+				outside++
 				t.Errorf("valor de %q vive fora do arena do BoundQuery: cada realocação "+
 					"intermediária ficaria retida por uma janela", n.Field.Name)
 			}
@@ -94,7 +94,7 @@ func TestJanelasVivemNoArenaDoBoundQuery(t *testing.T) {
 		}
 	}
 	walk(bq.Where)
-	if fora > 0 {
-		t.Errorf("%d valores fora do arena", fora)
+	if outside > 0 {
+		t.Errorf("%d valores fora do arena", outside)
 	}
 }
