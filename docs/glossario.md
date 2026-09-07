@@ -64,7 +64,7 @@ exit e códigos do wire não mudam de valor.
 | JSON | `detalhes` | `details` |
 | métricas | `..._segmentos_pinados`, `..._index_segmentos`, `..._reconstrucoes_total`, `..._reconstrucao_ativa`, `..._crc_falhas_total`, `..._segmentos_consultados_total` | `..._pinned_segments`, `..._index_segments`, `..._rebuilds_total`, `..._rebuild_active`, `..._crc_failures_total`, `..._segments_scanned_total` |
 | CLI | `--log-format texto` | `--log-format text` |
-| disco | `grupos.dict`, `grupos.idx`, `prazos.idx`, `vencimentos.idx` | `groups.dict`, `groups.idx`, `deadlines.idx`, `expiries.idx` |
+| disco | `grupos.dict`, `grupos.idx`, `prazos.idx`, `expiry.idx`, `vencimentos.idx` | `groups.dict`, `groups.idx`, `ttls.idx`, `last_writes.idx`, `expiries.idx` |
 | Python público | `ColunaMeta`, `Estatisticas`, `ConsultaEmVoo`, `Saude`, `ENV_SENHA` | `ColumnMeta`, `Stats`, `InFlightQuery`, `Health`, `ENV_PASSWORD` |
 
 **Colisão** resolve por nome mais específico (`Fila` da kafka e `Fila` do
@@ -96,7 +96,6 @@ inglês correspondente.
 | congelada | frozen | internal/materializer/frozen.go |
 | congelar | freeze | internal/materializer/frozen.go |
 | passada | sweep | internal/config/config.go |
-| prazo | deadline | internal/storage/rowindex/schedule.go |
 | vencimento | expiry | internal/storage/rowindex/schedule.go |
 | agenda | schedule | internal/storage/schedule.go |
 | moldura | frame | internal/protocol |
@@ -109,7 +108,7 @@ inglês correspondente.
 | chave | key | internal/index/valuekey |
 | dicionário | dict | internal/storage/counter/dict.go |
 | segmento | segment | internal/storage/segment |
-| reconstrução | rebuild | internal/storage/indices_rebuild.go |
+| reconstrução / reconstruído | rebuild / rebuilt | internal/storage/indices_rebuild.go, internal/storage/encoding/fields_test.go |
 | descartado | discarded | internal/materializer/materializer.go |
 | recusa | refuse | internal/config/config.go |
 | recusar | refuse | internal/config/config.go |
@@ -173,7 +172,7 @@ inglês correspondente.
 | derivadas (colunas do histórico) | derived | internal/materializer/history.go |
 | derivar / derivação (reconstruir o logger a partir da raiz) | derive / derivation | internal/logging/logging.go |
 | vencimentos | expiries | internal/storage/schedule.go |
-| prazos | deadlines | internal/storage/schedule.go |
+| prazo / prazos (a DURAÇÃO de ociosidade da linha, em millis: por quanto tempo ela pode ficar sem escrita — o TTL) | TTL / TTLs | internal/storage/rowindex |
 | padrão (valor herdado quando a chave está ausente) | default — `Default` e `default` em nome composto (`DefaultMaxRows`, `defaultTimeout`); `defaultValue` em parâmetro ou local solto, porque `default` é palavra reservada em Go | internal/units |
 | padrão (formato de data, de rota ou de LIKE) | pattern | internal/typeparse/datetime.go, internal/server/auth.go, internal/query/parser/parser.go |
 | entrada (de teste) | input | internal/units/units_test.go |
@@ -195,13 +194,13 @@ inglês correspondente.
 | escapado (texto fixo entre aspas simples no padrão de data) | quoted | internal/typeparse/datetime.go |
 | prova (o round-trip em UTC que confere se a data de calendário existe) | round-trip | internal/typeparse/datetime.go |
 | piloto | pilot | internal/typeparse/datetime_test.go |
-| retido | retained | internal/jsonp/jsonp.go, internal/storage/snapshot.go, internal/kafka/pipeline.go |
+| reter / retido | retain / retained | internal/jsonp/jsonp.go, internal/storage/snapshot.go, internal/kafka/pipeline.go, internal/storage/versions |
 | entrada (documento que o parser percorre) | input | internal/jsonp/jsonp.go |
-| entrada (de diretório) | entry | internal/gates/verification_test.go |
+| entrada (de diretório, de tabela, de vetor denso ou do journal de versões) | entry | internal/gates/verification_test.go, internal/index/segindex, internal/storage/rowindex, internal/storage/versions |
 | encolher / encolhimento | shrink | internal/jsonp/jsonp.go, internal/kafka/pipeline.go |
 | soltar (referência ou recurso) | release | internal/jsonp/jsonp.go |
 | liberar | release | internal/storage/mmap/region.go, internal/query/budget/budget.go |
-| formato (de saída do log) | format | internal/logging/logging.go |
+| formato (de saída do log; e a string de formatação printf) | format | internal/logging/logging.go, internal/index/segindex/wip_test.go |
 | redactado | redacted | internal/logging/logging.go |
 | sensível (chave ou valor que nunca vai ao log) | sensitive | internal/logging/logging.go |
 | evento (o payload bruto do evento, chave sensível de log) | event_payload | internal/logging/logging.go |
@@ -221,7 +220,7 @@ inglês correspondente.
 | anônimo (a parte do RSS não respaldada por arquivo) | anon | internal/memprof/memprof_linux.go |
 | partes (tokens de uma linha de texto) | parts | internal/memprof/memprof_linux.go |
 | lixo (alocação descartável em teste) | junk | internal/memprof/memprof_test.go |
-| valor (o dado de um par nome/valor de texto) | value | internal/memprof/memprof_linux.go, internal/gates, internal/testutil/radiusgen |
+| valor (o dado de um par nome/valor de texto, de um label, de um parâmetro ou de uma entrada de índice) | value | internal/memprof/memprof_linux.go, internal/gates, internal/testutil/radiusgen, internal/metrics, internal/protocol, internal/storage/rowindex |
 | soma (adição aritmética) | sum | internal/memprof/memprof_test.go |
 | soma (concatenação de strings no AST) | concat | internal/gates/verification_test.go |
 | data (de calendário) | date | internal/buildinfo/buildinfo.go, internal/typeparse/datetime.go |
@@ -233,8 +232,10 @@ inglês correspondente.
 | imutável | immutable | internal/storage/indices.go, internal/storage/indices_rebuild.go, internal/index/segindex |
 | bloco (de filesystem) | block | internal/storage/mmap/region.go, docs/architecture.md |
 | meia-word | half-word | internal/storage/mmap/region.go |
-| descritor (de arquivo) | descriptor | internal/storage/mmap/region_test.go |
+| descritor (de arquivo; e o de tipo que o ResultSetMetaData publica) | descriptor | internal/storage/mmap/region_test.go, internal/protocol/jdbc.go |
 | caminho | path | internal/gates, internal/storage/mmap/region.go, internal/storage/mmap/region_test.go |
+| diretório (do filesystem) | dir | internal/query/spill, internal/storage |
+| diretório (a tabela hash do WIP do índice por segmento) | directory | internal/index/segindex |
 | antes / depois (medição de teste) | before / after | internal/memprof/memprof_test.go, internal/storage/mmap/region_test.go |
 | anterior (o valor anterior) | prev | internal/query/lexer, internal/testutil/radiusgen, internal/buildinfo/buildinfo_internal_test.go |
 | fundo (regra ou duração de fundo: a regra de TTL sem `when`) | fallback | internal/schema/ttl_rule.go, internal/storage/checkpoint/manifest.go |
@@ -285,6 +286,137 @@ inglês correspondente.
 | derrubar (o servidor, no meio da corrida) | close | internal/gates/rollback_update_test.go |
 | menor (predicado de ordenação) | less | internal/gates/verification_test.go |
 | proibido (nome vetado por spec ou por gate) | banned | internal/logging/logging_test.go, internal/gates/jdbc_test.go, internal/query/executor/ndjson_test.go |
+| composta / composto (chave de mais de um componente) | composite | internal/index/valuekey/composite.go |
+| percorrer / percurso | walk | internal/index/valuekey/composite.go |
+| visita / visitante (callback de varredura) | visit / visitor | internal/index/valuekey/composite.go, internal/storage/rowindex/schedule.go |
+| fronteira (ponto de encontro entre dois componentes da chave) | boundary | internal/index/valuekey/composite_test.go |
+| corte (ponto em que um buffer é truncado) | cut | internal/index/valuekey/composite_test.go, internal/storage/versions |
+| corte (instante-limite de uma varredura) | cutoff | internal/storage/rowindex/schedule_test.go |
+| sentinela (erro comparado por errors.Is) | sentinel | internal/index/valuekey/walk_test.go |
+| booleano (o helper que monta o valor de TypeBool) | boolean | internal/index/valuekey/composite_test.go, internal/query/meta, internal/metakafka |
+| largura (de payload, de posting ou de valor renderizado) | width | internal/index/valuekey, internal/index/segindex, internal/protocol |
+| tamanho (contagem de bytes) | size | internal/index/valuekey, internal/index/segindex, internal/storage/fielddict |
+| início | start | internal/index/valuekey, internal/index/segindex |
+| fim (limite superior de faixa; a moldura que fecha o stream; e o fim de um run de spill) | end | internal/index/segindex, internal/protocol, internal/storage/rowindex, internal/query/spill |
+| fim / pronto (o canal que avisa a goroutine que pode sair) | done | internal/metrics, internal/index/segindex |
+| pronto (o canal fechado para soltar as goroutines juntas) | ready | internal/metrics |
+| limite (o instante em que uma espera desiste) | deadline | internal/index/segindex/wip_test.go |
+| registrar (instalar no registry: família de métrica, coletor ou tabela virtual) | register | internal/metrics, internal/query/engine.go |
+| primeiro | first | internal/index/segindex, internal/metrics, internal/query/spill |
+| dados | data | internal/index/segindex |
+| arquivo | file | internal/index/segindex |
+| versão | version | internal/index/segindex, internal/storage/versions |
+| média | average / avg | internal/index/segindex, internal/storage/rowindex |
+| achados / achou (o que uma busca ou varredura entregou) | found | internal/index/segindex, internal/storage/rowindex, internal/storage/versions |
+| mínimo / menor (o mínimo de um conjunto) | min | internal/index/segindex, internal/storage/rowindex, internal/storage/versions |
+| maior (o máximo de um conjunto; `max` está descartado por ser builtin, que o revive acusa quando sombreado) | largest | internal/index/segindex, internal/testutil/radiusgen |
+| corrente / atual | current | internal/metrics/names.go, internal/index/segindex, internal/storage/fielddict |
+| estado (do segmento no índice, do subsistema no /v1/health, ou a palavra do slot do WIP) | state | internal/metrics/names.go, internal/protocol, internal/index/segindex |
+| gravado (valor escrito no arquivo) | stored | internal/index/segindex |
+| calculado | computed | internal/index/segindex |
+| cabeçalho (de registro em disco) | header | internal/storage/encoding, internal/query/spill |
+| folha (nó terminal da AST; e o nível 0 da árvore da agenda) | leaf | internal/query/parser, internal/storage/rowindex/schedule.go |
+| corrompido / estragar (mutilar o arquivo no teste) | corrupt | internal/index/segindex, internal/protocol |
+| apagar / apaga | remove | internal/index/segindex |
+| montar (construir bytes ou estrutura) | build | internal/index/segindex/writer.go |
+| intacto (buffer que nenhuma escrita alcançou) | unchanged | internal/storage/encoding/fields_test.go |
+| não tocado / intocado (campo que o patch não mexeu e o merge copia sem decodificar) | untouched | internal/storage/encoding/fields.go, internal/materializer |
+| ajuda (o texto do `# HELP` da métrica) | help | internal/metrics |
+| medidor (de métrica) | gauge | internal/metrics |
+| limites (do histograma: os limites superiores dos buckets, e a borda solta) | buckets / bound | internal/metrics |
+| sozinha (a série única da família sem labels) | unlabeled | internal/metrics |
+| filhos (as séries de uma família, indexadas pela chave de labels; e os nós filhos de um bloco da agenda) | children | internal/metrics, internal/storage/rowindex/schedule.go |
+| ordem (de emissão: a fatia que fixa a ordem estável) | order | internal/metrics |
+| ordem (chave de comparação da agenda, com ∞ no lugar do sentinela) | order key | internal/storage/rowindex/schedule.go |
+| exposição (o texto do formato de exposição do Prometheus) | exposition | internal/metrics/metrics_test.go |
+| saída (o texto produzido, em teste) | output | internal/metrics/metrics_test.go |
+| modo (de resolução do Lookup: índice ou enumeração) | mode | internal/metrics/names.go |
+| fora (o segmento que a janela de indexação deixou de cobrir) | outside | internal/metrics/names.go |
+| enumeração (resolver o segmento varrendo, sem índice) | enumeration | internal/metrics/names.go |
+| consulta (do índice: o Lookup) | lookup | internal/metrics/names.go |
+| desistiu (o watchdog esgotou as tentativas) | gave up | internal/metrics/names.go |
+| pendente (o segmento dentro da janela ainda na fila de reconstrução) | pending | internal/metrics/names.go |
+| categoria (de falha de consulta) | category | internal/metrics/names.go |
+| motivo (a categoria §101 do evento ruim que a ingestão recusou) | invalid reason | internal/metrics/names.go |
+| motivo (da falha de autenticação HTTP Basic) | reason | internal/metrics/names.go |
+| motor | engine | internal/metrics, internal/protocol, internal/query/engine.go |
+| processo | process | internal/metrics, internal/protocol |
+| metadados | metadata | internal/protocol |
+| rota | route | internal/protocol, internal/server |
+| desligado | disabled | internal/protocol |
+| auditoria | audit | internal/protocol/counters.go |
+| resposta | response | internal/protocol |
+| requisição | request | internal/protocol |
+| código (de erro do protocolo) | code | internal/protocol |
+| tipo | type | internal/protocol, internal/types |
+| tipo de wire (o nome de tipo que o cliente DECLARA em `Param.Type`, distinto do FieldType da coluna) | wire type | internal/protocol/params.go |
+| forma (a espécie JSON do valor: string, objeto, lista, booleano, null, número) | shape | internal/protocol/params.go |
+| qual (o discriminador que diz de que moldura se trata) | which | internal/protocol/stream.go |
+| fecho (a linha que fecha o stream: fim ou erro) | closing | internal/protocol/stream.go |
+| trecho (o pedaço que a saída ou a mensagem TEM de conter) | snippet | internal/gates, internal/protocol, internal/storage/fielddict |
+| texto | text | internal/protocol, internal/query/spill |
+| aceito | accepted | internal/protocol/params.go |
+| recebido | received | internal/protocol/stream_test.go |
+| falha (o fecho de erro do stream, que Reader.Failure expõe) | failure | internal/protocol/stream.go |
+| falha (o objeto de erro que sai ANTES da primeira linha, valor da chave `error` de ErrorBody) | error detail | internal/protocol/protocol.go |
+| desconhecido | unknown | internal/protocol |
+| não suportado | unsupported | internal/protocol, internal/query/parser |
+| reservado | reserved | internal/protocol |
+| sintaxe | syntax | internal/protocol, internal/query/lexer |
+| cheio (o endereço IPv6 com todos os bits em 1) | all ones | internal/protocol/jdbc_test.go |
+| grande | large | internal/protocol |
+| condição (expressão booleana solta declarada em configuração) | condition | internal/query/parser, internal/predicate, internal/counters |
+| termo (cada comparação ou IS NULL contado no teto do WHERE) | term | internal/query/parser |
+| altura (da árvore da AST) | height | internal/query/parser |
+| palavra (de cláusula) | word | internal/query/parser |
+| run (sequência de registros que o operador acumulador despeja em disco e relê em ordem) | run | internal/query/spill |
+| limpeza (remoção de resíduo de disco na subida do dataset) | cleanup | internal/query/spill |
+| conhecido (a entrada do índice já foi gravada; zero é desconhecido, nunca vencido) | known | internal/storage/rowindex |
+| nascer / nasceu (esta abertura criou o arquivo, em vez de reencontrá-lo) | born | internal/storage/rowindex |
+| zerar (apagar todas as entradas mantendo header e tamanho) | clear | internal/storage/rowindex/dense32.go |
+| imortal (entidade que uma regra `never` declarou que não expira) | immortal | internal/storage/rowindex |
+| nunca (o vencimento da linha que não expira: o ∞ codificado como zero na agenda) | never | internal/storage/rowindex/schedule.go |
+| sumário (nó interno da agenda: limite inferior do mínimo dos filhos) | summary | internal/storage/rowindex/schedule.go |
+| nó (entrada de um nível da agenda: folha ou sumário) | node | internal/storage/rowindex/schedule.go |
+| topo (o nível mais alto da agenda, varrido por inteiro) | top | internal/storage/rowindex/schedule.go |
+| antigo (o valor da folha ANTES desta atualização, oposto a "anterior" → prev) | old | internal/storage/rowindex/schedule.go |
+| vencido (linha cujo vencimento agendado já passou) | expired | internal/storage/rowindex/schedule.go |
+| tocadas (as entradas em que a descida entrou) | touched | internal/storage/rowindex/schedule.go |
+| descer / descida (a caminhada do topo às folhas da agenda) | descend / descent | internal/storage/rowindex/schedule.go |
+| renovação (empurrar o vencimento da linha para a frente) | renewal | internal/storage/rowindex/schedule_test.go |
+| cadeia (a sequência de segmentos que a recovery percorre; e a cadeia de erros embrulhados) | chain | internal/storage |
+| journal (o registro das locations anteriores que dá isolamento de leitura) | journal | internal/storage/versions |
+| poda / podar (descartar do journal as versões que nenhum leitor alcança) | prune | internal/storage/versions |
+| pinado / pin (segmento que guarda versão retida e por isso não pode ser aposentado) | pinned / pin | internal/storage/versions |
+| escala (do gate de custo) | scale | internal/index/segindex |
+| acesso (leitura do mapeamento contada pelo gate de custo, via w.countedRead — não o slot examinado) | access | internal/index/segindex |
+| distintos (o número de valores distintos que ocupam o diretório) | distinct values | internal/index/segindex |
+| razão (entre duas medidas) | ratio | internal/index/segindex |
+| estratégia | strategy | internal/index/segindex/union.go |
+| miolo (parte central do nome do arquivo) | middle | internal/index/segindex |
+| vida (contagem de leitores que seguram o mapeamento) | ref | internal/index/segindex/sealed.go |
+| desmontar (o mapeamento) | unmap | internal/index/segindex/sealed.go |
+| longe (rowId distante que força a largura 8) | far | internal/index/segindex |
+| meio (da busca binária) | mid | internal/index/segindex/sealed.go |
+| contexto (rótulo do caso na mensagem de falha) | label | internal/index/segindex |
+| potência de dois | power of two | internal/index/segindex/wip.go |
+| carga (do diretório) | load factor | internal/index/segindex/wip.go |
+| deslocamento (do array de postings no rehash) | shift | internal/index/segindex/wip.go |
+| último | last | internal/index/segindex/wip.go |
+| queixa | complaint | internal/index/segindex/wip_test.go |
+| parcial | partial | internal/index/segindex/wip_test.go |
+| pior (caso) | worst | internal/index/segindex |
+| melhor (a menor das medidas cronometradas) | best | internal/index/segindex |
+| melhor (o mínimo de um conjunto de vencimentos, não uma medida cronometrada) | min | internal/storage/rowindex/schedule.go |
+| decorrido | elapsed | internal/index/segindex |
+| rodada | round | internal/index/segindex |
+| par | pair | internal/index/segindex/wip_test.go |
+| intruso (arquivo alheio no espaço de nomes) | intruder | internal/index/segindex/wip_test.go |
+| vistas / visitas (quantas vezes a varredura visitou) | visits | internal/index/segindex/wip_test.go, internal/storage/rowindex |
+| visitado | visited | internal/index/segindex, internal/index/valuekey |
+| disjunta / disjunção | disjoint | internal/index/segindex/union.go |
+| quebrada (fonte que falha) | broken | internal/index/segindex/union_test.go |
+| rebobinar | rewind | internal/index/segindex/sealed.go |
 
 ## 4. Como usar
 
@@ -356,3 +488,47 @@ Escolhas que o juiz do G1 fechou e que valem para os grupos seguintes:
   run, monta → setup ou new conforme seja preparação de ambiente ou
   construtor, confere → check, contém → contains, eh → is): o motivo de cada
   linha do mapeamento é que registra a escolha.
+
+Escolhas que o juiz do G2 fechou e que valem para os grupos seguintes:
+
+- **entrada, um inglês só.** Três pacotes chegaram com sentidos novos de
+  "entrada" — o item de uma tabela de seções (`internal/index/segindex`), a
+  célula do vetor denso endereçada por rowId (`internal/storage/rowindex`) e a
+  linha do journal de versões (`internal/storage/versions`) —, e todos querem
+  `entry`. Em vez de três linhas com o mesmo inglês, que a regra de colisão
+  proíbe, a linha de "entrada (de diretório)" foi AMPLIADA para cobrir os
+  quatro sentidos. "entrada (de teste) → input" continua separada, porque ali
+  o inglês é outro.
+- **gravado: stored ≠ covered.** Em `internal/index/segindex`, "gravado" é o
+  valor que ESTÁ no arquivo, confrontado com o recalculado, e vira `stored`. O
+  `gravado` de `rowindex.Dense32.Get` é outra coisa e o teste denuncia: o bool
+  é `false` só quando o rowId cai ALÉM do arquivo, e entrada nunca gravada sai
+  com `true`. Ele vira `covered`, pela operação irmã `Cobre` → `Covers`;
+  traduzi-lo por `stored` carimbaria a mentira que o teste existe para expor.
+- **trecho → snippet, nunca want.** `internal/storage/fielddict` e
+  `internal/protocol` têm o mesmo laço que `internal/gates`: cada pedaço que a
+  saída ou a mensagem TEM de conter, conferido por `strings.Contains`. `want`
+  é o esperado por IGUALDADE (`got != want`), e usá-lo aqui apagaria a
+  diferença entre "é isto" e "contém isto"; entre `snippet` e `fragment` vence
+  o que o G0/G1 já tinha fixado em `internal/gates`, porque o critério é um
+  termo PT-BR, um termo inglês.
+- **nome errado é corrigido, não traduzido.** Dois casos do G2 só se
+  explicavam com o verbo da operação irmã. `metrics.Registry.Coletor` é
+  substantivo, mas faz o que a função `register` faz para as famílias —
+  instalar no registry —, e `Collector` daria a um MÉTODO o nome do TIPO que
+  ele recebe: vira `Register`. `protocol.Leitor.Erro` é o fecho de FALHA da
+  consulta, e existe só para não ser confundido com `Err()`, a falha de
+  TRANSPORTE; o campo que ele expõe já se chama `falha`, então o acessor vira
+  `Failure` — `Error` poria os dois a uma letra um do outro e anunciaria uma
+  interface que o tipo não implementa.
+- **teto → ceiling vence o valor de wire.** `CodMaxRowsAcimaDoTeto` vira
+  `CodeMaxRowsAboveCeiling` mesmo com o valor `MAX_ROWS_ABOVE_LIMIT` do wire
+  intacto: a linha `teto → ceiling` está fechada desde o G1 e o juiz não a
+  contradiz. Identificador e valor já divergiam em `CodMetodo`
+  (`METHOD_NOT_ALLOWED`) e `CodCorpoGrande` (`REQUEST_TOO_LARGE`).
+- **run fica run.** O `Arquivo` de `internal/query/spill` é definido pelo
+  godoc como "UM run", e todo o pacote fala assim (o `runs` do executor, a
+  mensagem `spill: criar run %s`, o nome do teste). `File` traduziria o
+  SUPORTE e obrigaria o godoc a explicar o tipo com uma palavra que não é o
+  nome dele; a tabela já tem precedente de linha com os dois lados iguais
+  (`gate`).
