@@ -2864,6 +2864,14 @@ git commit -m "docs, gates: caminhos dos seis pacotes renomeados"
 `planning/identificadores-em-ingles/mapeamento-arquivos.tsv` (cabeçalho
 `velho	novo`; caminhos já com os pacotes da Tarefa 1.1):
 
+A lista abaixo é o que a Fase 1 aplicou, e uma linha dela foi SUPERADA: o juiz
+do G2 fechou `prazo → TTL` (Ruling R30), e por isso `internal/storage/
+deadlines_test.go` e `internal/storage/rowindex/deadlines_test.go` foram
+renomeados de novo, para `ttls_test.go`. O TSV ganhou as duas linhas do segundo
+salto (`deadlines_test.go → ttls_test.go`) em vez de reescrever as do primeiro:
+é o segundo salto que a passada de caminhos precisa enxergar para alcançar as
+citações que já estavam em `deadlines_test.go`.
+
 ```
 benchmark/ingest-bench/gate_pulado_test.go	benchmark/ingest-bench/gate_skipped_test.go
 benchmark/ingest-bench/serie_do_aceite_test.go	benchmark/ingest-bench/acceptance_series_test.go
@@ -3504,7 +3512,7 @@ carregam os nomes da Fase 1.
 | 2.6 | G6 | `internal/server`, `internal/cli`, `cmd/nishidb`, `benchmark/ingest-bench`, `benchmark/micro`, `scripts/certgen`, `scripts/identifier-len`, `scripts/renameinv`, `scripts/ifacerename`, `scripts/renamecite` |
 
 Grupos de interface conhecidos por grupo (de `grupos-inicial.tsv`; o juiz
-confere a lista completa): G1 nenhum; G2 `metrics.Coletor`,
+confere a lista completa): G1 nenhum; G2 `metrics.Collector`,
 `fielddict.dictFile`, `segindex.Fonte`, `types.RowIDIterator` (25
 implementadores, em nove pacotes — o `ifacerename` renomeia todos de uma
 vez mesmo os pacotes estando em grupos posteriores, e é isso que o spec
@@ -3597,7 +3605,7 @@ Rodar por grupo na mesma ordem G1→G6 da Fase 2, com merge por grupo.
 
 **Arquivos:**
 - Criar: `planning/identificadores-em-ingles/mapeamento-contratos.tsv`
-- Modificar: `internal/config/config.go:81-82,322,325,511` (YAML `expiracao`, `maxPorPassada`, `tempoPorPassada` e `Config.Expiracao`), `internal/server/server.go:765-784`, `README.md:156-158`, `docs/architecture.md:1470`, `docs/diagrams/expiracao_agenda.puml:129`; `internal/protocol/*.go` (tag `json:"detalhes,omitempty"`), `clients/python/src/nishidb/documentos.py:134,149`, `clients/python/tests/conexao_test.py:238,248`, `scripts/nishidb-stats.py:265-266`; `internal/metrics/names.go:282,341,365,376,403,412,430-439`, `docs/metricas.md:144-149,169`, `README.md:126-127,763-783`, `docs/architecture.md:426,2032-2065`, `internal/server/metrics_index.go`, `internal/storage/indices_rebuild.go`, `internal/storage/indices_enum.go` (comentários que citam as séries: passada de prosa); `internal/cli/server.go:84` (`texto` → `text`) e o README onde documenta `--log-format`; `internal/storage/rowindex/schedule.go:158` (`vencimentos.idx` → `expiries.idx`), `internal/storage/store.go:1131` (`prazos.idx` → `deadlines.idx`), `internal/storage/counter/counter.go:62-63` (`grupos.dict` → `groups.dict`, `grupos.idx` → `groups.idx`), `docs/architecture.md` (mapa de arquivos do dataset); `internal/types/types.go:188` (`"ausente"` → `"absent"`), `internal/server/mutations.go:146` (`"nenhum"` → `"none"`), `internal/cli/operation.go:269` (`"corrente"` → `"current"`); `scripts/it-comum.sh:118`
+- Modificar: `internal/config/config.go:81-82,322,325,511` (YAML `expiracao`, `maxPorPassada`, `tempoPorPassada` e `Config.Expiracao`), `internal/server/server.go:765-784`, `README.md:156-158`, `docs/architecture.md:1470`, `docs/diagrams/expiracao_agenda.puml:129`; `internal/protocol/*.go` (tag `json:"detalhes,omitempty"`), `clients/python/src/nishidb/documentos.py:134,149`, `clients/python/tests/conexao_test.py:238,248`, `scripts/nishidb-stats.py:265-266`; `internal/metrics/names.go:282,341,365,376,403,412,430-439`, `docs/metricas.md:144-149,169`, `README.md:126-127,763-783`, `docs/architecture.md:426,2032-2065`, `internal/server/metrics_index.go`, `internal/storage/indices_rebuild.go`, `internal/storage/indices_enum.go` (comentários que citam as séries: passada de prosa); `internal/cli/server.go:84` (`texto` → `text`) e o README onde documenta `--log-format`; `internal/storage/rowindex/schedule.go:158` (`vencimentos.idx` → `expiries.idx`), `internal/storage/store.go:1131` (`prazos.idx` → `ttls.idx`), `internal/storage/counter/counter.go:62-63` (`grupos.dict` → `groups.dict`, `grupos.idx` → `groups.idx`), `docs/architecture.md` (mapa de arquivos do dataset); `internal/types/types.go:188` (`"ausente"` → `"absent"`), `internal/server/mutations.go:146` (`"nenhum"` → `"none"`), `internal/cli/operation.go:269` (`"corrente"` → `"current"`); `scripts/it-comum.sh:118`
 - Modificar: `docs/debitos.md` (item novo no fim)
 
 - [ ] **Passo 1: TSV**
@@ -3623,7 +3631,7 @@ label	modo=enumeracao	mode=enumeration
 cli	--log-format texto	--log-format text
 disk	grupos.dict	groups.dict
 disk	grupos.idx	groups.idx
-disk	prazos.idx	deadlines.idx
+disk	prazos.idx	ttls.idx
 disk	vencimentos.idx	expiries.idx
 wire	ausente	absent
 wire	nenhum	none

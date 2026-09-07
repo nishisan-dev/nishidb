@@ -336,7 +336,7 @@ desconhecido, `1` significa "avaliado, e nenhuma regra dá prazo", e qualquer ou
 
 ```
 prazos.Get(linha) = 0            → DESCONHECIDA  (linha anterior à adoção das regras)
-                  = ImmortalTTL → 0             (avaliada; nenhuma regra dá prazo)
+                  = ImmortalTTL  → 0             (avaliada; nenhuma regra dá prazo)
                   = v            → v             (duração em millis)
 
 duração efetiva(linha) = a duração acima, se a entrada for conhecida

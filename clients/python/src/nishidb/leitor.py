@@ -6,7 +6,7 @@ falha** — é assim que uma conexão cortada no meio deixa de ser indistinguív
 de um resultado que terminou.
 
 As linhas de dados são entregues CRUAS, sem decodificar, exatamente como o
-`Reader.Linha()` do Go: quem quer o passthrough NDJSON não paga decodificação,
+`Reader.Line()` do Go: quem quer o passthrough NDJSON não paga decodificação,
 e quem quer valores decodifica uma vez só.
 
 E os três desfechos ficam SEPARADOS: `fim` (a consulta terminou bem), `erro`

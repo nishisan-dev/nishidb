@@ -67,6 +67,7 @@ custo_gate_test.go	cost_gate_test.go
 custo_tempo_gate_test.go	cost_time_gate_test.go
 datahora.go	datetime.go
 datahora_test.go	datetime_test.go
+deadlines_test.go	ttls_test.go
 decodificadores.go	decoders.go
 decodifica.go	decode.go
 decodifica_test.go	decode_test.go

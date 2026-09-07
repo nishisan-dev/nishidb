@@ -40,7 +40,7 @@
 | `internal/materializer/frozen_test.go` | Testes da captura e do congelamento |
 | `internal/materializer/deadline.go` | Avaliação das regras na ingestão e emissão de `_expiresIn` |
 | `internal/materializer/deadline_test.go` | Testes da avaliação |
-| `internal/storage/deadlines_test.go` | Testes do índice de prazos e da conta |
+| `internal/storage/ttls_test.go` | Testes do índice de prazos e da conta |
 
 **Modificados**
 
@@ -1407,7 +1407,7 @@ func TestPrazosMagicaPropriaRecusaArquivoDeEscritas(t *testing.T) { /* abrir exp
 
 - [ ] **Passo 2: rodar e ver falhar**
 
-Run: `go test ./internal/storage/rowindex/ -run TTLs -v`
+Run: `go test ./internal/storage/rowindex/ -run TestPrazos -v`
 Expected: FAIL
 
 - [ ] **Passo 3: implementar**
@@ -1491,7 +1491,7 @@ git commit -m "Acrescenta o índice de prazos com sentinela para o imortal"
 ### Task 12: O storage passa a usar a duração por linha
 
 **Files:**
-- Create: `internal/storage/deadlines_test.go`
+- Create: `internal/storage/ttls_test.go`
 - Modify: `internal/storage/store.go` (Options `:115`, abertura `:721`, dicionário `:749`, applyRecord `:1467`, `prazoVencido` `:1528`), `internal/storage/store_checkpoint.go:102`, `internal/storage/expiry.go:256`
 
 **Interfaces:**

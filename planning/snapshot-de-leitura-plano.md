@@ -119,7 +119,7 @@ próprios. Heap, não mmap (é estado de sessão, morre com o processo).
 ```go
 type Journal struct { ... }
 
-func (c *Journal) Registra(row types.RowID, packedAnterior uint64, epoca uint64)
+func (c *Journal) Retain(row types.RowID, packedAnterior uint64, epoca uint64)
 func (c *Journal) At(row types.RowID, epoca uint64) (packed uint64, achou bool)
 func (c *Journal) Prune(menorEpocaViva uint64) (entradas int, bytes int64)
 func (c *Journal) Pinned(seg uint32) bool
@@ -132,7 +132,7 @@ versão nova de `R` na época `P`, registra-se `{P, packedAnterior}`. O leitor c
 `E`, e usa o `packedAnterior` dela — essa é a versão vigente em `E`. Sem
 nenhuma entrada com época maior que `E`, a location corrente é a certa.
 
-O pin é **por segmento, por refcount**: `Registra` incrementa o contador do
+O pin é **por segmento, por refcount**: `Retain` incrementa o contador do
 segmento do `packedAnterior`, `Prune` decrementa. A compaction pula segmento com
 contador acima de zero. Refcount preciso, e não um piso conservador de segmento,
 porque com `maxTimeout` de minutos um piso pararia a compaction pela duração
@@ -150,7 +150,8 @@ existe, o segmento não pode ser aposentado. A ordem publicada passa a ser
 
 Os únicos consumidores fora de `internal/storage` são
 [candidate.go](internal/query/executor/candidate.go:40) e o harness de bench.
-Por isso **muda-se a assinatura, sem criar métodos `*At` paralelos** — duas
+Por isso **muda-se a assinatura, sem criar métodos paralelos no molde de
+`LookupBitmapEm`** — duas
 portas para a mesma pergunta é o que o repositório condena em toda parte. E
 `LookupBitmapEm`, do plano M6, não existe mais: o D5 colapsou os dois lookups
 em `Lookup`.

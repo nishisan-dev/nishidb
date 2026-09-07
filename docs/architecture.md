@@ -2096,7 +2096,7 @@ coletor só pode alimentá-las percorrendo essas listas, e
 que sai na porta e, pelo `go/ast`, a origem do valor no código.
 
 **Cabeçalho por família.** Toda `metrics.Sample` precisa preencher `Family`,
-e não só `Nome`. O `WriteTo` agrupa `# HELP`/`# TYPE` por aquele campo, então
+e não só `Name`. O `WriteTo` agrupa `# HELP`/`# TYPE` por aquele campo, então
 amostras com `Family` vazia caem num grupo só: o par sai uma vez, **com o nome
 do metric vazio**, e as demais famílias chegam ao operador sem tipo e sem ajuda.
 Nada disso muda um número — foi por isso que o bloco `nishidb_history_*`

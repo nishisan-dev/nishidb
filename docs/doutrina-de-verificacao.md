@@ -59,8 +59,8 @@ comparando duas extrações — a mesma doutrina dos outros gates de
   declaradas. O `.go` é lido por AST (só comentários) e o `.md` pula os blocos
   cercados: `§` dentro de string literal ou de exemplo não é citação.
 - `TestAmostrasDeMetricaTemFamiliaENome` — todo literal `metrics.Sample{...}`
-  em código de produção declara `Family` e `Nome` por constante, nunca string
-  literal, e o `Nome` pertence à `Family` (a mesma constante, ou ela mais um
+  em código de produção declara `Family` e `Name` por constante, nunca string
+  literal, e o `Name` pertence à `Family` (a mesma constante, ou ela mais um
   sufixo de histograma). "Todo" inclui a forma elidida `[]metrics.Sample{{…}}`,
   que é quase 40% dos literais.
 

@@ -464,7 +464,7 @@ func (w *Writer) talvezCheckpoint(ctx context.Context) error {
 //
 // SetSourceOffsets antes do Checkpoint porque é o Checkpoint que grava o
 // arquivo; o commit no broker por ÚLTIMO porque o §48 é explícito sobre isso
-// e o bloco `Never:` proíbe a inversão. Falha de commit NÃO é fatal: o
+// e o bloco `Nunca:` proíbe a inversão. Falha de commit NÃO é fatal: o
 // checkpoint local é autoritativo (§49) e o commit existe para lag e para
 // terceiros.
 func (w *Writer) checkpoint(ctx context.Context) error {

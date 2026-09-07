@@ -232,12 +232,14 @@ inglês correspondente.
 | mutável | mutable | internal/storage/mmap/region.go, internal/storage/indices_rebuild.go |
 | imutável | immutable | internal/storage/indices.go, internal/storage/indices_rebuild.go, internal/index/segindex |
 | bloco (de filesystem) | block | internal/storage/mmap/region.go, docs/architecture.md |
+| bloco (o pedaço varrido por vez numa passada sobre a região) | chunk | internal/storage/rowindex/dense32.go |
 | meia-word | half-word | internal/storage/mmap/region.go |
 | descritor (de arquivo; e o de tipo que o ResultSetMetaData publica) | descriptor | internal/storage/mmap/region_test.go, internal/protocol/jdbc.go |
 | caminho | path | internal/gates, internal/storage/mmap/region.go, internal/storage/mmap/region_test.go |
 | diretório (do filesystem) | dir | internal/query/spill, internal/storage |
 | diretório (a tabela hash do WIP do índice por segmento) | directory | internal/index/segindex |
-| antes / depois (medição de teste) | before / after | internal/memprof/memprof_test.go, internal/storage/mmap/region_test.go |
+| antes / depois (medição de teste) | before / after | internal/memprof/memprof_test.go, internal/storage/mmap/region_test.go, internal/storage/fielddict/typehint_test.go |
+| antes (o gancho que o dublê roda no instante do fsync, antes de delegar) | before sync | internal/storage/fielddict/typehint_test.go |
 | anterior (o valor anterior) | prev | internal/query/lexer, internal/testutil/radiusgen, internal/buildinfo/buildinfo_internal_test.go |
 | fundo (regra ou duração de fundo: a regra de TTL sem `when`) | fallback | internal/schema/ttl_rule.go, internal/storage/checkpoint/manifest.go |
 | coluna | column | internal/counters, internal/storage/checkpoint/manifest.go |
@@ -385,6 +387,8 @@ inglês correspondente.
 | vencido (linha cujo vencimento agendado já passou) | expired | internal/storage/rowindex/schedule.go |
 | tocadas (as entradas em que a descida entrou) | touched | internal/storage/rowindex/schedule.go |
 | descer / descida (a caminhada do topo às folhas da agenda) | descend / descent | internal/storage/rowindex/schedule.go |
+| recomputado (o mínimo do nó recalculado na subida, comparado com o corrente) | recomputed | internal/storage/rowindex/schedule.go |
+| alto (rowId muito além da capacidade inicial) | high | internal/storage/rowindex |
 | renovação (empurrar o vencimento da linha para a frente) | renewal | internal/storage/rowindex/schedule_test.go |
 | cadeia (a sequência de segmentos que a recovery percorre; e a cadeia de erros embrulhados) | chain | internal/storage |
 | journal (o registro das locations anteriores que dá isolamento de leitura) | journal | internal/storage/versions |
@@ -398,6 +402,7 @@ inglês correspondente.
 | miolo (parte central do nome do arquivo) | middle | internal/index/segindex |
 | vida (contagem de leitores que seguram o mapeamento) | ref | internal/index/segindex/sealed.go |
 | desmontar (o mapeamento) | unmap | internal/index/segindex/sealed.go |
+| fechar / fecha | close | internal/index/segindex, internal/query/spill |
 | longe (rowId distante que força a largura 8) | far | internal/index/segindex |
 | meio (da busca binária) | mid | internal/index/segindex/sealed.go |
 | contexto (rótulo do caso na mensagem de falha) | label | internal/index/segindex |
@@ -543,3 +548,12 @@ Escolhas que o juiz do G2 fechou e que valem para os grupos seguintes:
   SUPORTE e obrigaria o godoc a explicar o tipo com uma palavra que não é o
   nome dele; a tabela já tem precedente de linha com os dois lados iguais
   (`gate`).
+- **mensagem de falha: o que NOMEIA muda, o que DESCREVE fica.** Dentro de um
+  `t.Errorf`, a palavra que nomeia um retorno nomeado ou uma variável do teste
+  é CITAÇÃO de identificador e acompanha o rename — se `achou` vira `found`, a
+  mensagem que diz `achou = true` também vira. A palavra que descreve um
+  retorno ANÔNIMO não nomeia nada que exista no código: é prosa, e prosa fica
+  em PT-BR. A distinção é operacional, não estética: a mensagem que nomeia é
+  conferível contra a assinatura, e mantê-la em PT-BR mandaria o leitor
+  procurar um identificador que não existe; traduzir a que descreve inventa um
+  nome que a assinatura não tem.

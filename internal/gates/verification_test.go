@@ -378,12 +378,12 @@ func specSections(t *testing.T) map[string]bool {
 var histogramSuffixes = []string{"_bucket", "_sum", "_count"}
 
 // TestAmostrasDeMetricaTemFamiliaENome confere que todo literal
-// metrics.Sample{...} em código de produção declara Familia e Nome por
-// CONSTANTE (nunca string literal, nunca vazio) e que o Nome pertence à
-// Familia.
+// metrics.Sample{...} em código de produção declara Family e Name por
+// CONSTANTE (nunca string literal, nunca vazio) e que o Name pertence à
+// Family.
 //
 // O defeito que ele fecha é concreto: as amostras do coletor Kafka nasciam sem
-// Familia, e o `# HELP`/`# TYPE` saía com nome vazio — o Prometheus recusa o
+// Family, e o `# HELP`/`# TYPE` saía com nome vazio — o Prometheus recusa o
 // scrape inteiro, não só a linha. Nenhum teste acusava, porque o formato de
 // exposição só é exercitado com amostras bem-formadas.
 //
@@ -401,12 +401,12 @@ var histogramSuffixes = []string{"_bucket", "_sum", "_count"}
 // podiam regredir com o gate verde. Daí a guarda de vacuidade exigir as DUAS
 // formas: um reconhecedor que só vê uma delas volta a ser carimbo.
 //
-// # FAMILIA E NOME TÊM DE COMBINAR
+// # FAMILY E NAME TÊM DE COMBINAR
 //
 // Conferir só a presença deixa passar duas constantes válidas mas TROCADAS, o
 // que publica uma série sob o cabeçalho de outra família. A regra não é
-// `Nome == Family`: o histograma usa `Nome = Family + sufixo` de propósito.
-// A regra é: Nome resolve para a MESMA expressão de Familia, ou para Familia
+// `Name == Family`: o histograma usa `Name = Family + sufixo` de propósito.
+// A regra é: Name resolve para a MESMA expressão de Family, ou para Family
 // mais um dos sufixos de histogramSuffixes.
 func TestAmostrasDeMetricaTemFamiliaENome(t *testing.T) {
 	root := filepath.Join(repoRoot, "internal")
@@ -440,7 +440,7 @@ func TestAmostrasDeMetricaTemFamiliaENome(t *testing.T) {
 			if !ok || cl.Type == nil {
 				// Literal sem tipo é elidido: quem sabe o tipo dele é o pai, e
 				// é o pai que o visita (walkElided). Visitá-lo aqui seria
-				// julgá-lo sem saber se é uma Amostra.
+				// julgá-lo sem saber se é uma Sample.
 				return true
 			}
 			if isSampleType(cl.Type, pkg) {
@@ -466,8 +466,8 @@ func TestAmostrasDeMetricaTemFamiliaENome(t *testing.T) {
 }
 
 // checkSample aplica as três regras a um literal já reconhecido como
-// Amostra: Familia e Nome presentes, nenhum dos dois string literal, e Nome
-// pertencendo à Familia.
+// Sample: Family e Name presentes, nenhum dos dois string literal, e Name
+// pertencendo à Family.
 func checkSample(t *testing.T, fset *token.FileSet, path string, cl *ast.CompositeLit) {
 	t.Helper()
 	line := fset.Position(cl.Pos()).Line
@@ -475,12 +475,12 @@ func checkSample(t *testing.T, fset *token.FileSet, path string, cl *ast.Composi
 	for _, name := range []string{"Family", "Name"} {
 		value, present := literalField(cl, name)
 		if !present {
-			t.Errorf("%s:%d: Amostra sem o campo %s — o # HELP/# TYPE sai vazio",
+			t.Errorf("%s:%d: Sample sem o campo %s — o # HELP/# TYPE sai vazio",
 				path, line, name)
 			continue
 		}
 		if isStringLiteral(value) {
-			t.Errorf("%s:%d: Amostra com %s como string literal — use a constante de internal/metrics/names.go",
+			t.Errorf("%s:%d: Sample com %s como string literal — use a constante de internal/metrics/names.go",
 				path, line, name)
 			continue
 		}
@@ -493,13 +493,13 @@ func checkSample(t *testing.T, fset *token.FileSet, path string, cl *ast.Composi
 	if nameFollowsFamily(fset, family, name) {
 		return
 	}
-	t.Errorf("%s:%d: Amostra com Nome (%s) que não pertence à Familia (%s) — duas constantes válidas mas "+
-		"TROCADAS publicam a série sob o cabeçalho de outra família; o Nome só pode ser a própria Familia "+
+	t.Errorf("%s:%d: Sample com Name (%s) que não pertence à Family (%s) — duas constantes válidas mas "+
+		"TROCADAS publicam a série sob o cabeçalho de outra família; o Name só pode ser a própria Family "+
 		"ou ela mais %s",
 		path, line, expression(fset, name), expression(fset, family), strings.Join(histogramSuffixes, "/"))
 }
 
-// nameFollowsFamily decide se o Nome pertence à Familia: ou é a MESMA
+// nameFollowsFamily decide se o Name pertence à Family: ou é a MESMA
 // expressão, ou é ela somada a um sufixo de histograma.
 //
 // A comparação é feita sobre a expressão IMPRESSA, e não sobre a constante
@@ -542,7 +542,7 @@ func expression(fset *token.FileSet, e ast.Expr) string {
 	return b.String()
 }
 
-// walkElided entrega ao chamador todo literal de Amostra ELIDIDO dentro
+// walkElided entrega ao chamador todo literal de Sample ELIDIDO dentro
 // de um literal de slice, array ou mapa.
 //
 // Os elementos de `[]metrics.Sample{{...}}` são CompositeLit com `Type == nil`:
@@ -583,7 +583,7 @@ func walkElided(cl *ast.CompositeLit, typ ast.Expr, pkg string, onFound func(*as
 }
 
 // isSampleType reconhece a EXPRESSÃO DE TIPO metrics.Sample, qualificada
-// (metrics.Sample) ou não (Amostra, dentro do pacote metrics), atravessando o
+// (metrics.Sample) ou não (Sample, dentro do pacote metrics), atravessando o
 // ponteiro de `[]*metrics.Sample`.
 //
 // `&metrics.Sample{...}` não precisa de caso próprio: o `&` é um UnaryExpr em

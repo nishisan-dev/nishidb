@@ -78,7 +78,7 @@ a superfície de configuração que a C estabelece.
 |---|---|
 | `format.go` | magics, versões, offsets de header, largura de posting. O ÚNICO lugar que conhece bytes |
 | `writer.go` | `Writer`: acumula postings e emite o `.sidx`. O ÚNICO lugar que decide o layout selado |
-| `sealed.go` | `Selado`: abre, valida CRC preguiçosamente, busca binária, devolve fatia |
+| `sealed.go` | `Sealed`: abre, valida CRC preguiçosamente, busca binária, devolve fatia |
 | `wip.go` | `WIP`: diretório + array encadeado, `Set` O(1), crescimento |
 | `seal.go` | WIP → `Writer` → selado, com re-base |
 | `union.go` | `Union`: concatenação sobre faixas disjuntas, merge k-way com dedup sobre sobrepostas |
@@ -282,10 +282,10 @@ func TestOEscritorAgrupaOrdenaEDeduplicaAsPostings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenSealed: %v", err)
 	}
-	defer s.Fecha()
+	defer s.Close()
 
-	if got, want := s.Campos(), []types.FieldID{3, 7}; len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
-		t.Fatalf("Campos() = %v, quero %v (ordenados por fieldID)", got, want)
+	if got, want := s.Fields(), []types.FieldID{3, 7}; len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("Fields() = %v, quero %v (ordenados por fieldID)", got, want)
 	}
 	if got, want := s.MinRowID(), types.RowID(10); got != want {
 		t.Errorf("MinRowID() = %d, quero %d", got, want)
@@ -521,24 +521,24 @@ ser necessária na selagem."
   func (r *Region) Bytes() []byte   // pânico se a região não for somente-leitura
 
   // internal/index/segindex
-  type Selado struct{ ... }
-  func OpenSealed(caminho string) (*Selado, error)
-  func (s *Selado) Campos() []types.FieldID
-  func (s *Selado) HasField(campo types.FieldID) bool
-  func (s *Selado) Lookup(campo types.FieldID, h uint64) (Fonte, bool)
-  func (s *Selado) MinRowID() types.RowID
-  func (s *Selado) MaxRowID() types.RowID
-  func (s *Selado) SegmentID() uint32
-  func (s *Selado) Fecha() error
+  type Sealed struct{ ... }
+  func OpenSealed(caminho string) (*Sealed, error)
+  func (s *Sealed) Fields() []types.FieldID
+  func (s *Sealed) HasField(campo types.FieldID) bool
+  func (s *Sealed) Lookup(campo types.FieldID, h uint64) (Source, bool)
+  func (s *Sealed) MinRowID() types.RowID
+  func (s *Sealed) MaxRowID() types.RowID
+  func (s *Sealed) SegmentID() uint32
+  func (s *Sealed) Close() error
 
-  type Fonte interface {
+  type Source interface {
       types.RowIDIterator
       MinRowID() types.RowID
       MaxRowID() types.RowID
   }
   ```
 
-`Fonte` é declarada aqui porque o `Selado` é o primeiro a produzi-la. Contrato:
+`Source` é declarada aqui porque o `Sealed` é o primeiro a produzi-la. Contrato:
 **`MinRowID`/`MaxRowID` limitam os rowIds que a fonte VAI emitir, e uma fonte
 que não vai emitir nada reporta `Min > Max`.** É o que permite ao `Union`
 (Tarefa 5) descartar as vazias antes de decidir sobre disjunção, sem consumir
@@ -614,7 +614,7 @@ Esperado: `undefined: mmap.OpenReadOnly`.
 `OpenReadOnly` abre com `O_RDONLY`, faz `unix.Mmap(fd, 0, tamanho,
 unix.PROT_READ, unix.MAP_SHARED)`, **fecha o descritor** e devolve a `Region`
 com `readOnly = true` e `f = nil`. `Grow`, `Msync`, `AtomicStore64`,
-`AtomicOr64`, `AtomicAnd64` e `ReleaseBelow` passam a devolver erro (ou entrar em
+`AtomicOr64`, `AtomicAnd64` e `ReleaseBlocks` passam a devolver erro (ou entrar em
 pânico, nos que não devolvem erro) quando `readOnly`. `Close` só faz
 `munmap`. `Bytes()` devolve `r.data` e entra em pânico se não for
 somente-leitura — o comentário registra que devolver o slice cru de uma região
@@ -643,7 +643,7 @@ nada.
 // acrescentado ao schema depois. NÃO significa "valor ausente": valor ausente
 // devolve ok=true com uma fonte vazia. A distinção decide se o chamador
 // enumera o segmento (§3.2 da spec) ou aceita zero linhas dele.
-func (s *Selado) Lookup(campo types.FieldID, h uint64) (Fonte, bool) {
+func (s *Sealed) Lookup(campo types.FieldID, h uint64) (Source, bool) {
 	if err := s.checkCRC(); err != nil {
 		return nil, false
 	}
@@ -687,7 +687,7 @@ func TestCRCDivergenteNaoDerrubaAConsulta(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenSealed não deve falhar por crc: %v", err)
 	}
-	defer s.Fecha()
+	defer s.Close()
 	if _, ok := s.Lookup(7, 100); ok {
 		t.Error("Lookup sobre arquivo com crc divergente devolveu ok=true")
 	}
@@ -713,7 +713,7 @@ métrica.
 // a regressão que este gate existe para pegar.
 func TestIterarSeladoNaoAlocaPorLinha(t *testing.T) {
 	s := openSealedWithNPostings(t, 1000)
-	defer s.Fecha()
+	defer s.Close()
 	it, ok := s.Lookup(7, 100)
 	if !ok {
 		t.Fatal("Lookup não encontrou")
@@ -779,10 +779,10 @@ reconstrução o refaz."
   func OpenWIP(dir string, seg uint32, campo types.FieldID, slotsMin uint32) (*WIP, error)
   func (w *WIP) Set(h uint64, row types.RowID) error
   func (w *WIP) Lookup(h uint64) []types.RowID
-  func (w *WIP) Campo() types.FieldID
+  func (w *WIP) Field() types.FieldID
   func (w *WIP) Postings() uint32
   func (w *WIP) DistinctValues() uint32
-  func (w *WIP) Fecha() error
+  func (w *WIP) Close() error
   func (w *WIP) Remove() error
   func WIPPath(dir string, seg uint32, campo types.FieldID) string
   func ListWIP(dir string, seg uint32) ([]types.FieldID, error)
@@ -812,7 +812,7 @@ func TestOCustoDoSetNaoAcompanhaOTamanhoDoSegmento(t *testing.T) {
 	for _, n := range []int{10_000, 100_000, 1_000_000} {
 		t.Run(fmt.Sprintf("n=%d", n), func(t *testing.T) {
 			w := openTestWIP(t)
-			defer w.Fecha()
+			defer w.Close()
 			var pior int
 			for i := range n {
 				if err := w.Set(100, types.RowID(i)); err != nil {
@@ -839,7 +839,7 @@ func TestOCustoDoSetNaoAcompanhaOTamanhoDoSegmento(t *testing.T) {
 // alocação até aqui; este é o primeiro da família.
 func TestSetNoWIPNaoAloca(t *testing.T) {
 	w := openTestWIP(t)
-	defer w.Fecha()
+	defer w.Close()
 	var i int
 	media := testing.AllocsPerRun(1000, func() {
 		i++
@@ -857,7 +857,7 @@ func TestSetNoWIPNaoAloca(t *testing.T) {
 // esconderia o primeiro.
 func TestLookupNoWIPAlocaExatamenteUmaVez(t *testing.T) {
 	w := openTestWIP(t)
-	defer w.Fecha()
+	defer w.Close()
 	for i := range 100 {
 		if err := w.Set(100, types.RowID(i)); err != nil {
 			t.Fatal(err)
@@ -882,7 +882,7 @@ func TestLookupNoWIPAlocaExatamenteUmaVez(t *testing.T) {
 // linha duas vezes num OR.
 func TestOWIPDevolveOrdemEstritamenteCrescenteComRowIdsForaDeOrdem(t *testing.T) {
 	w := openTestWIP(t)
-	defer w.Fecha()
+	defer w.Close()
 	for _, r := range []types.RowID{50, 10, 30, 10, 40} {
 		if err := w.Set(100, r); err != nil {
 			t.Fatal(err)
@@ -901,7 +901,7 @@ func TestOWIPDevolveOrdemEstritamenteCrescenteComRowIdsForaDeOrdem(t *testing.T)
 // a cadeia guarda.
 func TestOWIPCresceSemPerderPosting(t *testing.T) {
 	w := openTestWIPWithSlots(t, 16) // força vários rehashes
-	defer w.Fecha()
+	defer w.Close()
 	const n = 5000
 	for i := range n {
 		if err := w.Set(uint64(i)+2, types.RowID(i)); err != nil { // n valores DISTINTOS
@@ -1105,7 +1105,7 @@ func TestSelarPreservaExatamenteOQueOWIPRespondia(t *testing.T) {
 		for h := range valores {
 			antes[[2]uint64{uint64(campo), h}] = slices.Clone(w.Lookup(h))
 		}
-		if err := w.Fecha(); err != nil {
+		if err := w.Close(); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1118,7 +1118,7 @@ func TestSelarPreservaExatamenteOQueOWIPRespondia(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Fecha()
+	defer s.Close()
 	for chave, want := range antes {
 		campo, h := types.FieldID(chave[0]), chave[1]
 		it, ok := s.Lookup(campo, h)
@@ -1147,7 +1147,7 @@ func TestSelarDesligaOsWIPs(t *testing.T) {
 	if err := w.Set(100, 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.Fecha(); err != nil {
+	if err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if err := segindex.Seal(dir, 42); err != nil {
@@ -1171,7 +1171,7 @@ func TestSelarEIdempotente(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = w.Set(100, 1)
-	_ = w.Fecha()
+	_ = w.Close()
 	if err := segindex.Seal(dir, 42); err != nil {
 		t.Fatal(err)
 	}
@@ -1229,7 +1229,7 @@ func Seal(dir string, seg uint32) error {
 		err = w.ForEach(func(h uint64, row types.RowID) {
 			e.Add(campo, h, row)
 		})
-		w.Fecha()
+		w.Close()
 		if err != nil {
 			return err
 		}
@@ -1280,10 +1280,10 @@ atravessável sem intervenção."
 - Testar: `internal/index/segindex/union_test.go`
 
 **Interfaces:**
-- Consome: `Fonte` (Tarefa 2).
+- Consome: `Source` (Tarefa 2).
 - Produz:
   ```go
-  func Union(fontes []Fonte) types.RowIDIterator
+  func Union(fontes []Source) types.RowIDIterator
   ```
   E, em `export_test.go`: `func StrategyOf(it types.RowIDIterator) string`
   devolvendo `"concatenacao"` ou `"merge"`.
@@ -1399,8 +1399,8 @@ Esperado: `undefined: segindex.Union`.
 // É o materializado, sempre: a mesma linha pode ter posting em dois segmentos,
 // porque um update a regrava com o mesmo valor num segmento novo sem que nada
 // remova a posting antiga (é a fase de Clear que deixou de existir).
-func Union(fontes []Fonte) types.RowIDIterator {
-	vivas := make([]Fonte, 0, len(fontes))
+func Union(fontes []Source) types.RowIDIterator {
+	vivas := make([]Source, 0, len(fontes))
 	for _, f := range fontes {
 		if f.MinRowID() > f.MaxRowID() {
 			f.Close() // vazia por declaração: não participa da disjunção
@@ -1414,7 +1414,7 @@ func Union(fontes []Fonte) types.RowIDIterator {
 	case 1:
 		return vivas[0]
 	}
-	slices.SortFunc(vivas, func(a, b Fonte) int { return cmp.Compare(a.MinRowID(), b.MinRowID()) })
+	slices.SortFunc(vivas, func(a, b Source) int { return cmp.Compare(a.MinRowID(), b.MinRowID()) })
 	if disjuntas(vivas) {
 		return &concatIter{fontes: vivas}
 	}
@@ -1424,7 +1424,7 @@ func Union(fontes []Fonte) types.RowIDIterator {
 // disjuntas exige separação ESTRITA. Faixas que se tocam num rowId comum não
 // são disjuntas: concatená-las emitiria esse rowId duas vezes, e o contrato do
 // iterador é estritamente crescente.
-func disjuntas(f []Fonte) bool {
+func disjuntas(f []Source) bool {
 	for i := 1; i < len(f); i++ {
 		if f[i-1].MaxRowID() >= f[i].MinRowID() {
 			return false
@@ -1678,7 +1678,7 @@ próxima revisão de "consertar" a ausência:
 - [ ] **Passo 6: a aposentadoria leva o índice**
 
 Em `aposentaSegmento` (`compaction.go:492`), no passo 4, junto de
-`fechaODescritorEApaga`: fechar o `Selado` daquele segmento (se mapeado),
+`fechaODescritorEApaga`: fechar o `Sealed` daquele segmento (se mapeado),
 removê-lo de `s.selados` e `os.Remove(segindex.SealedPath(...))`. Erro de
 remoção do índice **não** falha a aposentadoria: o `.dat` já saiu e o disco já
 voltou; fica WARN nomeado e o `Open` limpa o órfão.
@@ -2772,7 +2772,7 @@ propriedade exata a afirmar e do porquê ela existe — o executor sabe o que
 provar, e a montagem do fixture segue os helpers já nomeados nas tarefas
 anteriores.
 
-**3. Consistência de tipos.** `Fonte` é declarada na Tarefa 2 e consumida nas 5
+**3. Consistência de tipos.** `Source` é declarada na Tarefa 2 e consumida nas 5
 e 8 com a mesma assinatura. `Writer.Add(campo, h, row)` é a mesma nas 1,
 4 e 7. `SealedPath`/`WIPPath`/`ListWIP` são usados nas 4, 6, 7 e 8 com a
 forma declarada na 1 e na 3. `CamposIndexados()` é produzida na 6 e consumida na

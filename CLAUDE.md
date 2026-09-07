@@ -201,7 +201,7 @@ Quatro classes de defeito que nenhum compilador pega, e como este repo as fecha:
   `TestCitacoesDeSecaoResolvem`.
 - **Amostra de métrica sem `Family`** — `# HELP`/`# TYPE` sai com nome vazio e
   o Prometheus recusa o scrape inteiro. Gate:
-  `TestAmostrasDeMetricaTemFamiliaENome`, que também recusa `Nome` de outra
+  `TestAmostrasDeMetricaTemFamiliaENome`, que também recusa `Name` de outra
   família (a exceção é o sufixo de histograma).
 - **Resíduo de mutação** — constante hardcoded ou lock deixado por agente de
   revisão. Confira `git status` antes de commitar.

@@ -284,7 +284,7 @@ class Cursor:
         return self._converte(bruto)
 
     def _proxima_crua(self) -> bytes | None:
-        """A próxima linha de dados SEM decodificar, como o `Reader.Linha()` do
+        """A próxima linha de dados SEM decodificar, como o `Reader.Line()` do
         Go a entrega."""
         if self._falha is not None:
             raise self._falha

@@ -161,7 +161,7 @@ que espalhadas pelos relatórios.
 | desligar a guarda do segmento corrente | `TestConstruirOIndiceDoSegmentoCorrenteEhRecusado` | `ConstroiIndiceDoSegmento(corrente) = <nil>, quero ErrInvalidArgument` |
 | aceitar subconjunto de campos na reconstrução | à época, o teste de recusa; hoje `TestConstruirComCampoNaoIndexadoEhRecusado` e `TestReconstruirSoOsCamposQueFaltamPreservaOsQueJaEstavam` | `= <nil>, quero ErrInvalidArgument` |
 | `aplicaIndiceSets` pula o campo não alterado | `TestUpdateQueCruzaSegmentoLevaAPostingDoCampoInalterado`, `TestAPostingDoCampoInalteradoSobreviveASelagemEAoRestart` | `a posting do campo inalterado não migrou com o record` |
-| `Fecha` desmonta o mapeamento incondicionalmente | `TestAAposentadoriaNaoDesmapeiaOIndiceSobUmaVarreduraEmVoo` | `fatal error: fault [signal SIGSEGV]` em `sealedIter.Next → readDelta` |
+| `Close` desmonta o mapeamento incondicionalmente | `TestAAposentadoriaNaoDesmapeiaOIndiceSobUmaVarreduraEmVoo` | `fatal error: fault [signal SIGSEGV]` em `sealedIter.Next → readDelta` |
 | o pread não trata `ErrNotExist` do segmento aposentado | `TestSegmentoAposentadoEntreAListagemEOPreadViraFonteVazia` | consulta abortada |
 | `limparIndicesGlobaisLegados` inerte | `TestDatasetLegadoAbreEOsIndicesGlobaisSaemDoDisco` | `IndexBytes 21.037.056 ≥ 20.996.096`, os dois diretórios sobrevivem |
 | `decode` do manifest só aceita v3 | idem | `o manifest legado montado à mão não é legível: version desconhecida 1` |

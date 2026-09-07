@@ -159,13 +159,13 @@ internal/query/parser	local#ambiguo	TestRotulosDasConstantes.op	op	mantido: já 
 internal/query/parser	local#ambiguo	TestRotulosDasConstantes.got	got	mantido: já em inglês (internal/query/parser/ast_test.go:20:7)
 internal/query/parser	local#ambiguo	TestRotulosDasConstantes.got	got	mantido: já em inglês (internal/query/parser/ast_test.go:25:6)
 internal/query/parser	local#ambiguo	TestRotulosDasConstantes.t	t	mantido: já em inglês (internal/query/parser/ast_test.go:30:22)
-internal/query/parser	local#ambiguo	TestRotulosDasConstantes.casos	cases	posicao internal/query/parser/ast_test.go:31:3; mesmo motivo de TestAST106Comparison.casos; o casos do t.Run de CompareOp
+internal/query/parser	local#ambiguo	TestRotulosDasConstantes.casos	cases	posicao internal/query/parser/ast_test.go:31:3; mesmo motivo de TestAST106Comparison.casos; o casos do t.Run de CmpOp
 internal/query/parser	local#ambiguo	TestRotulosDasConstantes.want	want	mantido: já em inglês (internal/query/parser/ast_test.go:39:11)
 internal/query/parser	local#ambiguo	TestRotulosDasConstantes.op	op	mantido: já em inglês (internal/query/parser/ast_test.go:39:7)
 internal/query/parser	local#ambiguo	TestRotulosDasConstantes.got	got	mantido: já em inglês (internal/query/parser/ast_test.go:40:7)
 internal/query/parser	local#ambiguo	TestRotulosDasConstantes.got	got	mantido: já em inglês (internal/query/parser/ast_test.go:44:6)
 internal/query/parser	local#ambiguo	TestRotulosDasConstantes.t	t	mantido: já em inglês (internal/query/parser/ast_test.go:49:28)
-internal/query/parser	local#ambiguo	TestRotulosDasConstantes.casos	cases	posicao internal/query/parser/ast_test.go:52:3; mesmo motivo de TestAST106Comparison.casos; o casos do t.Run de OrderDir
+internal/query/parser	local#ambiguo	TestRotulosDasConstantes.casos	cases	posicao internal/query/parser/ast_test.go:52:3; mesmo motivo de TestAST106Comparison.casos; o casos do t.Run de OperandKind
 internal/query/parser	local#ambiguo	TestRotulosDasConstantes.want	want	mantido: já em inglês (internal/query/parser/ast_test.go:59:10)
 internal/query/parser	local	TestRotulosDasConstantes.k	k	mantido: já em inglês (internal/query/parser/ast_test.go:59:7)
 internal/query/parser	local#ambiguo	TestRotulosDasConstantes.got	got	mantido: já em inglês (internal/query/parser/ast_test.go:60:7)
