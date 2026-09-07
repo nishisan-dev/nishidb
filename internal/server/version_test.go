@@ -67,18 +67,18 @@ func TestStatsPublicaAVersaoDoBinario(t *testing.T) {
 	comVersaoDeTeste(t)
 
 	srv := servidorComDados(t, 1, blocoPadrao)
-	e := leJSON[protocol.Estatisticas](t, srv, "/v1/stats")
+	e := leJSON[protocol.Stats](t, srv, "/v1/stats")
 	if e.Process.Version != buildinfo.String() {
 		t.Fatalf("process.version = %q, quer %q", e.Process.Version, buildinfo.String())
 	}
 }
 
 // Servidor antigo ou binário sem ldflags não pode publicar campo vazio: o
-// contrato aditivo do protocolo.Estatisticas prevê o valor de fallback do
+// contrato aditivo do protocol.Stats prevê o valor de fallback do
 // buildinfo, nunca string vazia.
 func TestStatsNuncaPublicaVersaoVazia(t *testing.T) {
 	srv := servidorComDados(t, 1, blocoPadrao)
-	e := leJSON[protocol.Estatisticas](t, srv, "/v1/stats")
+	e := leJSON[protocol.Stats](t, srv, "/v1/stats")
 	if e.Process.Version == "" {
 		t.Fatal("process.version veio vazio — buildinfo.String() nunca devolve string vazia")
 	}

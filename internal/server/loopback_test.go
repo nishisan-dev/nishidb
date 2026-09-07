@@ -255,14 +255,14 @@ func TestMetricsComMetodoErradoNoPlanoLoopbackTambemSaiComCorpoErro(t *testing.T
 			fecha(t, resp)
 			t.Fatalf("POST %s no loopback = %d, quer 405", caminho, resp.StatusCode)
 		}
-		var corpo protocol.CorpoErro
+		var corpo protocol.ErrorBody
 		if err := json.NewDecoder(resp.Body).Decode(&corpo); err != nil {
 			fecha(t, resp)
-			t.Fatalf("POST %s no loopback: corpo não é CorpoErro (o 405 de texto puro do mux?): %v", caminho, err)
+			t.Fatalf("POST %s no loopback: corpo não é ErrorBody (o 405 de texto puro do mux?): %v", caminho, err)
 		}
 		fecha(t, resp)
-		if corpo.Error.Code != protocol.CodMetodo {
-			t.Errorf("POST %s no loopback: código = %q, quer %q", caminho, corpo.Error.Code, protocol.CodMetodo)
+		if corpo.Error.Code != protocol.CodeMethod {
+			t.Errorf("POST %s no loopback: código = %q, quer %q", caminho, corpo.Error.Code, protocol.CodeMethod)
 		}
 	}
 }

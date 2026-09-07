@@ -80,7 +80,7 @@ func TestMetricasDeContadorNascemComZero(t *testing.T) {
 // nenhum contador é mantido dos dois lados.
 func TestStatsEMetricsLeemOMesmoContador(t *testing.T) {
 	srv := servidorComServicos(t, 24)
-	var e protocol.Estatisticas
+	var e protocol.Stats
 	if err := json.Unmarshal([]byte(pega(t, srv, "/v1/stats")), &e); err != nil {
 		t.Fatal(err)
 	}

@@ -291,7 +291,7 @@ func TestTodoNomeJDBCDoProtocoloTemCodigoNoDriver(t *testing.T) {
 func TestOsTiposNaoPesquisaveisDoDriverSaoOsNomesQueOGoProduz(t *testing.T) {
 	java := readFile(t, "clients/jdbc/src/main/java/dev/nishisan/nishidb/jdbc/wire/TiposJdbc.java")
 	for _, ft := range []types.FieldType{types.TypeBytes, types.TypeJSON} {
-		name := protocol.NomeDeTipo(ft)
+		name := protocol.TypeName(ft)
 		if !strings.Contains(java, `"`+name+`"`) {
 			t.Errorf("o tipo %q não aparece em TiposJdbc.java: o driver anunciaria como "+
 				"pesquisável uma coluna sobre a qual o binder recusa comparação", name)

@@ -135,18 +135,18 @@ func TestIngestaoQueNaoSobeNaoDerrubaAsConsultas(t *testing.T) {
 	fim := make(chan error, 1)
 	go func() { fim <- srv.Roda(ctx, "") }()
 
-	esperaHealth(t, srv, func(h protocol.Saude) bool {
-		return h.Datasets["quebrado"] == protocol.EstadoDown
+	esperaHealth(t, srv, func(h protocol.Health) bool {
+		return h.Datasets["quebrado"] == protocol.StateDown
 	})
 
 	h := leHealth(t, srv)
-	if h.Datasets["bom"] != protocol.EstadoDesligado {
-		t.Errorf("dataset sem Kafka = %q, quer %q", h.Datasets["bom"], protocol.EstadoDesligado)
+	if h.Datasets["bom"] != protocol.StateDisabled {
+		t.Errorf("dataset sem Kafka = %q, quer %q", h.Datasets["bom"], protocol.StateDisabled)
 	}
-	if h.Kafka != protocol.EstadoDown {
+	if h.Kafka != protocol.StateDown {
 		t.Errorf("kafka = %q, quer DOWN: um dataset parado não pode sair como UP", h.Kafka)
 	}
-	if h.Detalhes["quebrado"] == "" {
+	if h.Details["quebrado"] == "" {
 		t.Error("o health não nomeia o motivo; num processo com vários datasets, DOWN sozinho não ajuda")
 	}
 	cancela()
@@ -171,10 +171,10 @@ func TestEnabledFalseNaoSobeConsumer(t *testing.T) {
 	// como DOWN em poucos segundos.
 	time.Sleep(2 * time.Second)
 	h := leHealth(t, srv)
-	if h.Datasets["inerte"] != protocol.EstadoDesligado {
+	if h.Datasets["inerte"] != protocol.StateDisabled {
 		t.Errorf("dataset = %q, quer DISABLED: enabled:false não pode subir consumer", h.Datasets["inerte"])
 	}
-	if h.Status != protocol.EstadoUP {
+	if h.Status != protocol.StateUp {
 		t.Errorf("status = %q, quer UP", h.Status)
 	}
 	cancela()
@@ -296,9 +296,9 @@ func pega(t *testing.T, srv *server.Servidor, caminho string) string {
 	return string(b)
 }
 
-func leHealth(t *testing.T, srv *server.Servidor) protocol.Saude {
+func leHealth(t *testing.T, srv *server.Servidor) protocol.Health {
 	t.Helper()
-	var h protocol.Saude
+	var h protocol.Health
 	if err := json.Unmarshal([]byte(pega(t, srv, "/v1/health")), &h); err != nil {
 		t.Fatalf("health: %v", err)
 	}
@@ -307,7 +307,7 @@ func leHealth(t *testing.T, srv *server.Servidor) protocol.Saude {
 
 // esperaHealth espera por CONDIÇÃO, e não por sleep: dormir esconde tanto a
 // lentidão quanto a ausência de progresso.
-func esperaHealth(t *testing.T, srv *server.Servidor, ok func(protocol.Saude) bool) {
+func esperaHealth(t *testing.T, srv *server.Servidor, ok func(protocol.Health) bool) {
 	t.Helper()
 	prazo := time.Now().Add(15 * time.Second)
 	for time.Now().Before(prazo) {

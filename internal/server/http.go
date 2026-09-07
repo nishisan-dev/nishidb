@@ -87,43 +87,43 @@ func (s *Servidor) handleHealth(w http.ResponseWriter, r *http.Request) {
 		s.recusaSimples(w, r, permitidoEmLeitura)
 		return
 	}
-	h := protocol.Saude{
-		Status:   protocol.EstadoUP,
-		Kafka:    protocol.EstadoUP,
-		Storage:  protocol.EstadoUP,
+	h := protocol.Health{
+		Status:   protocol.StateUp,
+		Kafka:    protocol.StateUp,
+		Storage:  protocol.StateUp,
 		Datasets: make(map[string]string, len(s.datasets)),
-		Detalhes: map[string]string{},
+		Details:  map[string]string{},
 	}
 	comIngestao := 0
 
 	for _, d := range s.datasets {
 		estado, detalhe := estadoDaIngestao(d)
-		if estado != protocol.EstadoDesligado {
+		if estado != protocol.StateDisabled {
 			comIngestao++
 		}
 		if detalhe != "" {
-			h.Detalhes[d.nome] = detalhe
+			h.Details[d.nome] = detalhe
 		}
 		h.Datasets[d.nome] = estado
 
 		switch estado {
-		case protocol.EstadoDown:
-			h.Kafka = protocol.EstadoDown
-			h.Status = protocol.EstadoDegraded
-		case protocol.EstadoDegraded:
-			if h.Kafka == protocol.EstadoUP {
-				h.Kafka = protocol.EstadoDegraded
+		case protocol.StateDown:
+			h.Kafka = protocol.StateDown
+			h.Status = protocol.StateDegraded
+		case protocol.StateDegraded:
+			if h.Kafka == protocol.StateUp {
+				h.Kafka = protocol.StateDegraded
 			}
 		}
 	}
 	if comIngestao == 0 {
 		// Nenhum dataset consome: dizer "kafka: UP" seria afirmar saúde de um
 		// subsistema que não está em uso.
-		h.Kafka = protocol.EstadoDesligado
+		h.Kafka = protocol.StateDisabled
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	if h.Status != protocol.EstadoUP {
+	if h.Status != protocol.StateUp {
 		// 503 para que um load balancer tire a instância de rotação sem
 		// precisar interpretar o corpo.
 		w.WriteHeader(http.StatusServiceUnavailable)
@@ -152,16 +152,16 @@ func estadoDaIngestao(d *dataset) (estado, detalhe string) {
 	case k == nil || !k.Enabled:
 		// Sem fonte declarada, ou pausado pelo `enabled: false`. Não é
 		// anomalia e não pode contaminar a chave agregada.
-		return protocol.EstadoDesligado, ""
+		return protocol.StateDisabled, ""
 	case erro != nil:
-		return protocol.EstadoDown, erro.Error()
+		return protocol.StateDown, erro.Error()
 	case cons == nil:
-		return protocol.EstadoDegraded, "ingestão ainda subindo"
+		return protocol.StateDegraded, "ingestão ainda subindo"
 	}
 	if p := cons.Pausa(); p != nil {
-		return protocol.EstadoDown, p.Error()
+		return protocol.StateDown, p.Error()
 	}
-	return protocol.EstadoUP, ""
+	return protocol.StateUp, ""
 }
 
 // sobePprof liga os endpoints do §112 num listener PRÓPRIO.

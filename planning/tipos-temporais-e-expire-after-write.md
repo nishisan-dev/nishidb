@@ -35,7 +35,7 @@ Ambos de largura 8 com valor em `Value.I64` — [fields.go:60](internal/storage/
 
 **Por que `time` obriga tag própria:** millis-do-dia não é instante. Reusando `0x04`, a `celula` já casaria `timestamp × string` e `WHERE hora = '2026-08-13T12:00:00Z'` compararia `1786…` contra `68042000` — false sempre, **sem erro de bind**. Pior, [ndjson.go:88](internal/query/executor/ndjson.go:88) mandaria `68042000` para `appendTimestamp` e emitiria `"1970-01-01T18:54:02.000Z"`: uma mentira plausível, exatamente o que o comentário de [ndjson.go:50](internal/query/executor/ndjson.go:50) proíbe.
 
-**Por que `datetime` também ganha tag**, ainda que fisicamente idêntico a `timestamp` depois de resolvido o fuso: com tag distinta, `fieldTypeNames` e `NomeDeTipo` ([protocol.go:210](internal/protocol/protocol.go:210)) publicam o nome declarado **de graça** em `/v1/metadata` e na linha de schema do `/v1/query`. Um tipo lógico sobre `0x04` exigiria um sistema de tipos sombra (`CompiledField.LogicalType` + `ColView` + `ColunaDe` + dois call sites) e faria `coerceLiteral` ramificar no tipo lógico *dentro* de um case chaveado pelo físico — "duas tabelas que só funcionam lidas juntas", o oposto do dono único que [coerce.go:66](internal/query/binder/coerce.go:66) declara.
+**Por que `datetime` também ganha tag**, ainda que fisicamente idêntico a `timestamp` depois de resolvido o fuso: com tag distinta, `fieldTypeNames` e `TypeName` ([protocol.go:210](internal/protocol/protocol.go:210)) publicam o nome declarado **de graça** em `/v1/metadata` e na linha de schema do `/v1/query`. Um tipo lógico sobre `0x04` exigiria um sistema de tipos sombra (`CompiledField.LogicalType` + `ColView` + `NewColumn` + dois call sites) e faria `coerceLiteral` ramificar no tipo lógico *dentro* de um case chaveado pelo físico — "duas tabelas que só funcionam lidas juntas", o oposto do dono único que [coerce.go:66](internal/query/binder/coerce.go:66) declara.
 
 A rigidez de `s.val.Type == in.want` ([predicate.go:100](internal/query/executor/predicate.go:100)) **não** é exercida entre colunas: `parser.Operand` ([ast.go:68](internal/query/parser/ast.go:68)) só carrega literal ou placeholder, e a v1 não compara coluna com coluna.
 
@@ -165,7 +165,7 @@ func montaInstanteLocal(ano, mes, dia, h, min, seg, millis int, loc *time.Locati
 | T7 | `Convert` com layouts + call site do `PatchBuffer` | [typeconv.go:39](internal/materializer/typeconv.go:39), [patch.go:117](internal/materializer/patch.go:117) |
 | T8 | `celula` + `coerceLiteral` + mensagem de erro | [coerce.go:122-263](internal/query/binder/coerce.go:122), [binder.go:474](internal/query/binder/binder.go:474) |
 | T9 | `AppendValue` + `appendHoraDoDia`; `formatValue` | [ndjson.go:62-142](internal/query/executor/ndjson.go:62), [plan.go:168](internal/query/planner/plan.go:168) |
-| T10 | `JDBCTime` + `JDBCDeTipo` | [jdbc.go:31-53](internal/protocol/jdbc.go:31) |
+| T10 | `JDBCTime` + `JDBCName` | [jdbc.go:31-53](internal/protocol/jdbc.go:31) |
 | T11 | Suíte de testes (§1.7) | vários |
 | T12 | Docs: `architecture.md:680-700`, spec §17/§18/§73, §3.6 do design | vários |
 | T13 | **Separável:** `typeHint` durável para campo **declarado** + recusa de retipo na subida | [compile.go](internal/schema/compile.go), [fielddict.go](internal/storage/fielddict/fielddict.go) |
@@ -184,7 +184,7 @@ Nomes em português descrevendo o fenômeno, como manda a convenção do projeto
 
 **`internal/materializer`** — `TestConvertDatetimeUsaOLayoutDoCampo`, `TestConvertDatetimeRecusaTextoEmOutroFormato` (RFC3339 num campo `MMM…` é TYPE_CONVERSION), `TestConvertTimeRecusaMillisForaDoDia`.
 
-**`internal/protocol`** — estender `TestATabelaDeTiposDoSpec73` ([jdbc_test.go:13](internal/protocol/jdbc_test.go:13)) e criar **`TestTodaTagComNomeTemJDBCEspecifico`**: varrer `0x00..0x1F` e exigir `JDBCDeTipo != OTHER` para toda tag nomeada. Hoje a promessa de [jdbc.go:28-30](internal/protocol/jdbc.go:28) — *"acrescentar um FieldType sem passar por aqui tem de ser decisão, não esquecimento"* — **não é cobrada por nada**.
+**`internal/protocol`** — estender `TestATabelaDeTiposDoSpec73` ([jdbc_test.go:13](internal/protocol/jdbc_test.go:13)) e criar **`TestTodaTagComNomeTemJDBCEspecifico`**: varrer `0x00..0x1F` e exigir `JDBCName != OTHER` para toda tag nomeada. Hoje a promessa de [jdbc.go:28-30](internal/protocol/jdbc.go:28) — *"acrescentar um FieldType sem passar por aqui tem de ser decisão, não esquecimento"* — **não é cobrada por nada**.
 
 **O cruzado** — [`testdata/todos_os_tipos.yaml`](testdata/todos_os_tipos.yaml) ganha 4 campos (`datetime`/`time` × dois padrões) e `TestIngestaoEQueryConcordamPorTipo` os casos correspondentes. **Atenção de implementação:** a tabela de casos hoje é de strings constantes ([types_test.go:85-89](internal/query/types_test.go:85)); o caso `datetime = <epoch millis>` **não pode ser constante** (depende do `time.Local` do host) e precisa montar o `where` em runtime — é mudança de forma na tabela, não uma linha nova. Mais **`TestLiteralNoFormatoErradoNaoAchaEmSilencio`** (RFC3339 num campo `MMM…` tem de ser **erro de bind**, nunca resultado vazio).
 

@@ -32,8 +32,8 @@ import (
 func (s *Servidor) handleAuditoriaDeContadores(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
-		s.recusa(w, r, http.StatusMethodNotAllowed, datasetDesconhecido, protocol.Falha{
-			Code:    protocol.CodMetodo,
+		s.recusa(w, r, http.StatusMethodNotAllowed, datasetDesconhecido, protocol.ErrorDetail{
+			Code:    protocol.CodeMethod,
 			Message: fmt.Sprintf("%s não é aceito em /v1/counters/audit; use POST", r.Method),
 		})
 		return
@@ -51,12 +51,12 @@ func (s *Servidor) handleAuditoriaDeContadores(w http.ResponseWriter, r *http.Re
 	ctx, cancela := s.ctxDeMutacao(r)
 	defer cancela()
 
-	resultados, parcial := processaDatasets(alvos, func(d *dataset) (protocol.AuditoriaDataset, error) {
+	resultados, parcial := processaDatasets(alvos, func(d *dataset) (protocol.DatasetAudit, error) {
 		relatorios, err := d.st.AuditaContadores(ctx)
 		if err != nil {
-			return protocol.AuditoriaDataset{}, err
+			return protocol.DatasetAudit{}, err
 		}
-		out := protocol.AuditoriaDataset{Name: d.nome, Counters: make([]protocol.AuditoriaContador, 0, len(relatorios))}
+		out := protocol.DatasetAudit{Name: d.nome, Counters: make([]protocol.CounterAudit, 0, len(relatorios))}
 		for _, rel := range relatorios {
 			out.Counters = append(out.Counters, auditoriaContador(rel))
 			s.log.Dataset(d.nome).Info("contadores.auditoria",
@@ -72,7 +72,7 @@ func (s *Servidor) handleAuditoriaDeContadores(w http.ResponseWriter, r *http.Re
 		s.recusa(w, r, status, parcial.Dataset, f)
 		return
 	}
-	s.respondeJSON(w, protocol.RespostaAuditoriaDeContadores{Datasets: resultados})
+	s.respondeJSON(w, protocol.CountersAuditResponse{Datasets: resultados})
 }
 
 // handleReconstrucaoDeContadores serve o POST /v1/counters/rebuild (ADMIN).
@@ -83,8 +83,8 @@ func (s *Servidor) handleAuditoriaDeContadores(w http.ResponseWriter, r *http.Re
 func (s *Servidor) handleReconstrucaoDeContadores(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
-		s.recusa(w, r, http.StatusMethodNotAllowed, datasetDesconhecido, protocol.Falha{
-			Code:    protocol.CodMetodo,
+		s.recusa(w, r, http.StatusMethodNotAllowed, datasetDesconhecido, protocol.ErrorDetail{
+			Code:    protocol.CodeMethod,
 			Message: fmt.Sprintf("%s não é aceito em /v1/counters/rebuild; use POST", r.Method),
 		})
 		return
@@ -102,14 +102,14 @@ func (s *Servidor) handleReconstrucaoDeContadores(w http.ResponseWriter, r *http
 	ctx, cancela := s.ctxDeMutacao(r)
 	defer cancela()
 
-	resultados, parcial := processaDatasets(alvos, func(d *dataset) (protocol.ReconstrucaoDataset, error) {
+	resultados, parcial := processaDatasets(alvos, func(d *dataset) (protocol.DatasetRebuild, error) {
 		recs, err := d.st.ReconstroiContadores(ctx)
 		if err != nil {
-			return protocol.ReconstrucaoDataset{}, err
+			return protocol.DatasetRebuild{}, err
 		}
-		out := protocol.ReconstrucaoDataset{Name: d.nome, Counters: make([]protocol.ReconstrucaoContador, 0, len(recs))}
+		out := protocol.DatasetRebuild{Name: d.nome, Counters: make([]protocol.CounterRebuild, 0, len(recs))}
 		for _, rec := range recs {
-			out.Counters = append(out.Counters, protocol.ReconstrucaoContador{
+			out.Counters = append(out.Counters, protocol.CounterRebuild{
 				Name: rec.Nome, Rows: rec.Linhas, Groups: rec.Grupos, DurationMs: rec.Duracao.Milliseconds(),
 			})
 		}
@@ -121,28 +121,28 @@ func (s *Servidor) handleReconstrucaoDeContadores(w http.ResponseWriter, r *http
 		s.recusa(w, r, status, parcial.Dataset, f)
 		return
 	}
-	s.respondeJSON(w, protocol.RespostaReconstrucaoDeContadores{Datasets: resultados})
+	s.respondeJSON(w, protocol.CountersRebuildResponse{Datasets: resultados})
 }
 
 // erroDeContadores traduz o erro do storage para as duas rotas. Além dos casos
 // de erroDeMutacao, o snapshot estourado — a auditoria ficou inconclusiva — e
 // o contexto cancelado (o servidor encerrando, ou o cliente desistindo).
-func erroDeContadores(err error) (int, protocol.Falha) {
+func erroDeContadores(err error) (int, protocol.ErrorDetail) {
 	switch {
 	case errors.Is(err, storage.ErrSnapshotExpirado):
-		return http.StatusConflict, protocol.Falha{
-			Code: protocol.CodSnapshotExpirado,
+		return http.StatusConflict, protocol.ErrorDetail{
+			Code: protocol.CodeSnapshotExpired,
 			Message: "a auditoria ficou inconclusiva: o journal de versões estourou runtime.query.snapshotMaxBytes durante a varredura; " +
 				"tente de novo, ou suba o teto",
 		}
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-		return http.StatusServiceUnavailable, protocol.Falha{Code: protocol.CodInterno, Message: "interrompida: " + err.Error()}
+		return http.StatusServiceUnavailable, protocol.ErrorDetail{Code: protocol.CodeInternal, Message: "interrompida: " + err.Error()}
 	}
 	return erroDeMutacao(err)
 }
 
-func auditoriaContador(rel counter.Relatorio) protocol.AuditoriaContador {
-	out := protocol.AuditoriaContador{
+func auditoriaContador(rel counter.Relatorio) protocol.CounterAudit {
+	out := protocol.CounterAudit{
 		Name:            rel.Nome,
 		Groups:          rel.Grupos,
 		Maintained:      rel.Mantido,
@@ -158,7 +158,7 @@ func auditoriaContador(rel counter.Relatorio) protocol.AuditoriaContador {
 		DurationMs:          rel.Duracao.Milliseconds(),
 	}
 	for _, d := range rel.Amostra {
-		out.Sample = append(out.Sample, protocol.DivergenciaDeGrupo{
+		out.Sample = append(out.Sample, protocol.GroupDivergence{
 			GroupKey: d.Texto, Maintained: d.Mantido, Recomputed: d.Recalculado,
 			RefsMaintained: d.RefsMantido, RefsRecomputed: d.RefsRecalculado,
 		})

@@ -114,7 +114,7 @@ func TestCountersRespondePelaRotaDeQuery(t *testing.T) {
 	// i%3 != 0 — 16 no total: OLT14 tem i ∈ {4, 8, 16, 20} = 4, G1M10 tem 12.
 	resp := consulta(t, srv, `{"dataset":"servicos","sql":"SELECT olt, total FROM _counters.autenticados_por_olt ORDER BY total ASC"}`)
 	linhas, fim := resultado(t, resp)
-	if fim.Fim() == nil {
+	if fim.End() == nil {
 		t.Fatal("o stream não trouxe a linha de fecho")
 	}
 	if len(linhas) != 2 {
@@ -151,7 +151,7 @@ func TestMetaCountersListaPelaRotaDeQuery(t *testing.T) {
 	srv := servidorComServicos(t, 24)
 	resp := consulta(t, srv, `{"dataset":"servicos","sql":"SELECT name, groupBy, condition, groups, auditAt FROM _meta.counters ORDER BY name"}`)
 	linhas, fim := resultado(t, resp)
-	if fim.Fim() == nil {
+	if fim.End() == nil {
 		t.Fatal("o stream não trouxe a linha de fecho")
 	}
 	if len(linhas) != 3 {
@@ -180,8 +180,8 @@ func TestCountersTabelaDesconhecidaNomeiaAsQueExistem(t *testing.T) {
 		t.Fatalf("status %d, quero 400: tabela desconhecida é erro do cliente", resp.StatusCode)
 	}
 	f := falhaDe(t, resp)
-	if f.Code != protocol.CodBind {
-		t.Fatalf("código %q, quero %q: a série de erro interno não pode subir por um nome digitado errado", f.Code, protocol.CodBind)
+	if f.Code != protocol.CodeBind {
+		t.Fatalf("código %q, quero %q: a série de erro interno não pode subir por um nome digitado errado", f.Code, protocol.CodeBind)
 	}
 	if !strings.Contains(f.Message, "servicos_por_olt") {
 		t.Fatalf("a recusa tem de listar as tabelas que existem: %s", f.Message)
@@ -210,8 +210,8 @@ func TestTabelaVirtualDesconhecidaSaiComoErroDoCliente(t *testing.T) {
 				t.Fatalf("status %d, quero 400", resp.StatusCode)
 			}
 			f := falhaDe(t, resp)
-			if f.Code != protocol.CodBind {
-				t.Fatalf("código %q, quero %q", f.Code, protocol.CodBind)
+			if f.Code != protocol.CodeBind {
+				t.Fatalf("código %q, quero %q", f.Code, protocol.CodeBind)
 			}
 			if !strings.Contains(f.Message, c.naMsg) {
 				t.Fatalf("a recusa tem de nomear o que existe (%q): %s", c.naMsg, f.Message)

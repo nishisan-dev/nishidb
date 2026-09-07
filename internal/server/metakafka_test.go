@@ -14,7 +14,7 @@ func umaLinhaDaKafka(t *testing.T, srv *server.Servidor, dataset, sql string) ma
 	t.Helper()
 	resp := consulta(t, srv, `{"dataset":"`+dataset+`","sql":"`+sql+`"}`)
 	linhas, fim := resultado(t, resp)
-	if fim.Fim() == nil {
+	if fim.End() == nil {
 		t.Fatal("o stream não trouxe a linha de fecho")
 	}
 	if len(linhas) != 1 {
@@ -40,8 +40,8 @@ func TestMetaKafkaRespondeNoDatasetSemIngestao(t *testing.T) {
 	if l["enabled"] != false {
 		t.Fatalf("enabled = %v; sem bloco Kafka o dataset não consome", l["enabled"])
 	}
-	if l["state"] != protocol.EstadoDesligado {
-		t.Fatalf("state = %v, quero %q", l["state"], protocol.EstadoDesligado)
+	if l["state"] != protocol.StateDisabled {
+		t.Fatalf("state = %v, quero %q", l["state"], protocol.StateDisabled)
 	}
 	// Ausência, e não zero: não há partição, não há fila para medir e não há
 	// watchdog. As três respostas são diferentes de "medi e deu zero".
@@ -59,7 +59,7 @@ func TestMetaKafkaRespondeNoDatasetSemIngestao(t *testing.T) {
 func TestEstadoDaTabelaEhOMesmoDoHealth(t *testing.T) {
 	srv := servidorComDados(t, 4, blocoPadrao)
 
-	var stats protocol.Estatisticas
+	var stats protocol.Stats
 	if err := json.Unmarshal([]byte(pega(t, srv, "/v1/stats")), &stats); err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestMetaKafkaTrazAIdentidadeDoYAML(t *testing.T) {
 	if l["bootstrap"] != "kafka01:9092,kafka02:9092" {
 		t.Fatalf("bootstrap = %v, quero a forma canônica", l["bootstrap"])
 	}
-	if l["enabled"] != false || l["state"] != protocol.EstadoDesligado {
+	if l["enabled"] != false || l["state"] != protocol.StateDisabled {
 		t.Fatalf("enabled=%v state=%v", l["enabled"], l["state"])
 	}
 }

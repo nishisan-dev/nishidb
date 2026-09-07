@@ -249,14 +249,14 @@ func janelaDaSpec(h *schema.HistoricoSpec) storage.JanelaDeIndice {
 // num YAML quer saber o que aquele bloco está fazendo, e a irmã já aparece na
 // lista com os próprios números de storage e query como qualquer outro
 // dataset.
-func historicoStats(base *dataset) *protocol.HistoricoStats {
+func historicoStats(base *dataset) *protocol.HistoryStats {
 	if base.irma == nil || base.spec.Historico == nil {
 		return nil
 	}
 	h := base.spec.Historico
 	snap := base.mat.Metrics()
 	e := base.irma.st.EstatisticasDeRetencao()
-	out := &protocol.HistoricoStats{
+	out := &protocol.HistoryStats{
 		Table:           base.irma.nome,
 		Rows:            snap.HistoricoLinhas,
 		Dropped:         snap.HistoricoDescartadas,

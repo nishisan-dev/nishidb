@@ -9,37 +9,37 @@ package protocol
 
 // Estado de um subsistema no /v1/health (§94).
 //
-// As constantes vivem AQUI, e não no servidor, pelo mesmo motivo que a Saude:
+// As constantes vivem AQUI, e não no servidor, pelo mesmo motivo que a Health:
 // são o vocabulário que o corpo da rota usa, e um cliente que precise
 // distinguir DEGRADED de DOWN teria de redeclará-las. É o vocabulário que
-// IngestaoStats.State também usa — as duas rotas descrevem a mesma realidade.
+// IngestionStats.State também usa — as duas rotas descrevem a mesma realidade.
 const (
-	EstadoUP        = "UP"
-	EstadoDown      = "DOWN"
-	EstadoDegraded  = "DEGRADED"
-	EstadoDesligado = "DISABLED"
+	StateUp       = "UP"
+	StateDown     = "DOWN"
+	StateDegraded = "DEGRADED"
+	StateDisabled = "DISABLED"
 )
 
-// Saude é o corpo de GET /v1/health (§94).
+// Health é o corpo de GET /v1/health (§94).
 //
 // É o único corpo de rota do §67 que vivia dentro do servidor, e por isso o
 // único que um cliente teria de redeclarar para consumir. O CLI remoto e o
 // driver JDBC falam o mesmo protocolo: o contrato inteiro mora neste pacote.
-type Saude struct {
+type Health struct {
 	Status   string            `json:"status"`
 	Kafka    string            `json:"kafka"`
 	Storage  string            `json:"storage"`
 	Datasets map[string]string `json:"datasets"`
-	// Detalhes nomeia o problema por dataset. Não está no §94 e existe
+	// Details nomeia o problema por dataset. Não está no §94 e existe
 	// porque "DOWN" sozinho manda o operador procurar no log de qual dos
 	// datasets, num processo que pode hospedar vários (§82).
-	Detalhes map[string]string `json:"detalhes,omitempty"`
+	Details map[string]string `json:"detalhes,omitempty"`
 }
 
-// Metadados é o corpo de GET /v1/metadata. Sem filtro traz todos os datasets;
+// Metadata é o corpo de GET /v1/metadata. Sem filtro traz todos os datasets;
 // com ?dataset=<nome> traz só um, na mesma forma — o cliente não precisa
 // aprender dois formatos para as duas perguntas.
-type Metadados struct {
+type Metadata struct {
 	Datasets []DatasetMeta `json:"datasets"`
 }
 
@@ -81,15 +81,15 @@ type DatasetMeta struct {
 	// Governa a expansão `pai.*`; ao estourar, o servidor RECUSA nomeando o
 	// limite, nunca trunca.
 	//
-	// Não há campo equivalente na Requisicao, ao contrário do maxRows: pedir
+	// Não há campo equivalente na Request, ao contrário do maxRows: pedir
 	// MENOS colunas não é uma pergunta que o cliente precise fazer, porque
 	// ele já escolhe as colunas escrevendo-as. Um teto de cliente aqui só
 	// poderia transformar uma consulta que funciona em erro.
 	MaxNestedCols int          `json:"maxNestedCols"`
-	Columns       []ColunaMeta `json:"columns"`
+	Columns       []ColumnMeta `json:"columns"`
 }
 
-// ColunaMeta descreve uma coluna do dataset.
+// ColumnMeta descreve uma coluna do dataset.
 //
 // Index diz se a coluna tem índice: "bitmap" quando o YAML declara
 // `index: true`, "none" quando não. Não é promessa de plano — é metadado de
@@ -105,12 +105,12 @@ type DatasetMeta struct {
 // próximo evento pode fixá-lo como qualquer coisa.
 //
 // Os quatro campos de tipo (Type, JDBC, Precision, Scale, DisplaySize) saem do
-// MESMO DescritorDeTipo que a linha de schema de /v1/query usa, e
+// MESMO DescriptorOf que a linha de schema de /v1/query usa, e
 // TestMetadataPublicaOsMesmosNumerosQueALinhaDeSchema cobra que as duas rotas
 // descrevam a mesma coluna do mesmo jeito. Os dois pontos de serialização
 // ficam em arquivos diferentes: sem esse teste, acrescentar um campo em um e
 // esquecer o outro passaria.
-type ColunaMeta struct {
+type ColumnMeta struct {
 	Name        string  `json:"name"`
 	Alias       *string `json:"alias"`
 	Type        string  `json:"type"`
@@ -123,7 +123,7 @@ type ColunaMeta struct {
 	Auto        bool    `json:"auto"`
 }
 
-// Estatisticas é o corpo de GET /v1/stats.
+// Stats é o corpo de GET /v1/stats.
 //
 // A divisão entre Process e Datasets não é estética: o executor e o planner
 // mantêm UM conjunto de contadores por Engine, compartilhado por todos os
@@ -136,20 +136,20 @@ type ColunaMeta struct {
 // instante da chamada. Nenhum contador novo, nenhuma cópia de estado: duas
 // fontes para o mesmo número divergem, e a divergência aparece como um painel
 // que discorda do JSON sem que nada esteja quebrado.
-type Estatisticas struct {
-	Process  ProcessoStats  `json:"process"`
+type Stats struct {
+	Process  ProcessStats   `json:"process"`
 	Datasets []DatasetStats `json:"datasets"`
 }
 
-// ProcessoStats agrupa o que é do processo, não de um dataset.
-type ProcessoStats struct {
+// ProcessStats agrupa o que é do processo, não de um dataset.
+type ProcessStats struct {
 	// Version é o texto de internal/buildinfo.String() — a MESMA função que
 	// o `nishidb --version`, o log de subida, o painel e o benchmark usam.
 	// Campo ADITIVO: um cliente que ainda não o conhece continua lendo o
 	// resto de Estatisticas sem quebrar. É esta a versão que a Task A4 lê
 	// depois de um rollout, para confirmar que o binário no ar é o novo.
-	Version string     `json:"version"`
-	Query   MotorStats `json:"query"`
+	Version string      `json:"version"`
+	Query   EngineStats `json:"query"`
 	// InFlight são as consultas correndo NESTE instante, da mais antiga para a
 	// mais nova. Campo ADITIVO.
 	//
@@ -158,10 +158,10 @@ type ProcessoStats struct {
 	// Cada entrada nomeia o dataset dela, então quem quiser filtrar filtra —
 	// mas quebrar a lista por dataset esconderia o que interessa, que é a
 	// consulta mais antiga do processo INTEIRO.
-	InFlight []ConsultaEmVoo `json:"inFlight"`
+	InFlight []InFlightQuery `json:"inFlight"`
 }
 
-// ConsultaEmVoo é uma consulta em andamento.
+// InFlightQuery é uma consulta em andamento.
 //
 // SQLHash, e não o SQL: o texto pode carregar literais com dado do cliente, e o
 // §95 proíbe publicar payload por default — mesma razão de o SQL só aparecer no
@@ -176,14 +176,14 @@ type ProcessoStats struct {
 // Long diz se ela ocupa uma vaga do sub-pool — isto é, se pediu prazo acima do
 // `query.timeout` do dataset. É o que separa "está demorando" de "foi
 // autorizada a demorar".
-type ConsultaEmVoo struct {
+type InFlightQuery struct {
 	Dataset   string `json:"dataset"`
 	SQLHash   string `json:"sqlHash"`
 	RunningMs int64  `json:"runningMs"`
 	Long      bool   `json:"long"`
 }
 
-// MotorStats são os contadores do motor de consulta (executor e planner).
+// EngineStats são os contadores do motor de consulta (executor e planner).
 //
 // FullScans é a métrica NORMATIVA do §64, contada no plan-time; os demais são
 // diagnóstico. Rejected > 0 é a prova de que a revalidação do §44 está fazendo
@@ -196,7 +196,7 @@ type ConsultaEmVoo struct {
 // segunda parcela a somar —, e é o número que o `nishidb status` e qualquer
 // coletor do operador leem. Renomear a chave JSON quebraria os dois sem
 // entregar informação nova.
-type MotorStats struct {
+type EngineStats struct {
 	FullScans    int64 `json:"fullScans"`
 	PointLookups int64 `json:"pointLookups"`
 	BitmapScans  int64 `json:"bitmapScans"`
@@ -212,22 +212,22 @@ type MotorStats struct {
 
 // DatasetStats é o que TEM granularidade por dataset.
 type DatasetStats struct {
-	Name      string        `json:"name"`
-	Storage   StorageStats  `json:"storage"`
-	Schema    SchemaStats   `json:"schema"`
-	Query     RotaStats     `json:"query"`
-	Ingestion IngestaoStats `json:"ingestion"`
+	Name      string         `json:"name"`
+	Storage   StorageStats   `json:"storage"`
+	Schema    SchemaStats    `json:"schema"`
+	Query     RouteStats     `json:"query"`
+	Ingestion IngestionStats `json:"ingestion"`
 	// Materialization são os efeitos das políticas de escrita e das regras de
 	// TTL. Fica FORA de Ingestion pela mesma razão do SchemaStats: aquele
 	// bloco só é preenchido quando há consumidor Kafka, e estes números valem
 	// para qualquer rota de escrita.
-	Materialization MaterializacaoStats `json:"materialization"`
+	Materialization MaterializationStats `json:"materialization"`
 	// History descreve a tabela irmã append-only, e é preenchido no DATASET
 	// BASE — não na irmã. É lá que o operador procura: quem declarou
 	// `history:` num YAML quer saber o que aquele bloco está fazendo, e a
 	// irmã aparece na lista com os próprios números de storage e query como
 	// qualquer outro dataset.
-	History *HistoricoStats `json:"history,omitempty"`
+	History *HistoryStats `json:"history,omitempty"`
 	// Index é a mecânica do índice por segmento DESTE dataset, e sai em todos
 	// eles — inclusive na irmã, ao contrário do bloco History acima.
 	//
@@ -240,7 +240,7 @@ type DatasetStats struct {
 	// tem os quatro estados em zero e a reconstrução desligada, e isso é
 	// informação — bloco omitido seria indistinguível de versão antiga do
 	// servidor.
-	Index IndiceStats `json:"index"`
+	Index IndexStats `json:"index"`
 	// Snapshot é o que o isolamento de leitura está segurando neste dataset,
 	// e sai da MESMA estrutura que alimenta as séries nishidb_query_snapshot_*
 	// — dois contadores para o mesmo fato divergem no dia em que um caminho de
@@ -253,10 +253,10 @@ type DatasetStats struct {
 	// Counters são os contadores mantidos na escrita, na ordem declarada, da
 	// MESMA leitura que alimenta as séries nishidb_counter_*. Lista vazia — e
 	// não omitida — no dataset sem `counters:`, pela razão do Index.
-	Counters []ContadorStats `json:"counters"`
+	Counters []CounterStats `json:"counters"`
 }
 
-// ContadorStats é o retrato de UM contador mantido na escrita
+// CounterStats é o retrato de UM contador mantido na escrita
 // (planning/contadores-mantidos-na-escrita.md §11.5).
 //
 // AuditDivergentGroups conta as divergências que a última auditoria achou:
@@ -267,7 +267,7 @@ type DatasetStats struct {
 // apontando para grupo que já saiu. AuditDivergentGroups e
 // AuditLastSuccessUnix são a última auditoria conclusiva — zero e zero até a
 // primeira, e é o timestamp que separa "nunca auditado" de "auditado e certo".
-type ContadorStats struct {
+type CounterStats struct {
 	Name string `json:"name"`
 	// Rows e Total são os agregados do contador inteiro: quantas linhas vivas
 	// apontam para algum grupo, e quantas satisfazem a condição no dataset
@@ -301,13 +301,13 @@ type SnapshotStats struct {
 	ExpiredTotal   uint64  `json:"expiredTotal"`
 }
 
-// IndiceStats é o retrato do índice por segmento, e é a MESMA estrutura que
+// IndexStats é o retrato do índice por segmento, e é a MESMA estrutura que
 // alimenta as séries nishidb_index_*.
 //
 // A janela efetiva NÃO está aqui: ela é política do histórico e continua no
 // bloco History, como EffectiveIndexWindow. Ver o comentário da família em
 // internal/metrics/names.go.
-type IndiceStats struct {
+type IndexStats struct {
 	// Os quatro estados PARTICIONAM os segmentos do dataset. Pending e
 	// OutOfWindow são duas ausências de significado OPOSTO, e é por isso que são
 	// dois campos: OutOfWindow é o segmento que a janela deliberadamente não
@@ -348,13 +348,13 @@ type IndiceStats struct {
 	SegmentsByScan  int64 `json:"segmentsByScan"`
 }
 
-// HistoricoStats é o que o bloco `history` está fazendo.
+// HistoryStats é o que o bloco `history` está fazendo.
 //
 // Os três primeiros campos respondem a única pergunta que importa numa tabela
 // cuja razão de existir é servir de evidência: ela está COMPLETA? Linhas e
 // descartadas somam os eventos que passaram; Degraded diz se ela parou de
 // receber.
-type HistoricoStats struct {
+type HistoryStats struct {
 	// Table é o nome da tabela irmã — o mesmo que vai no FROM.
 	Table string `json:"table"`
 	// Rows são as linhas gravadas e Dropped os eventos que não viraram linha
@@ -406,13 +406,13 @@ type HistoricoStats struct {
 	EffectiveIndexWindow float64 `json:"effectiveIndexWindowSeconds,omitempty"`
 }
 
-// MaterializacaoStats conta o que o dado gravado NÃO diz.
+// MaterializationStats conta o que o dado gravado NÃO diz.
 //
 // Um valor congelado é indistinguível de um que nunca mudou; um total somado é
 // indistinguível de um total que a origem mandou pronto; e uma regra de TTL
 // que nunca casa parece igual a uma que casa sempre. Estes contadores são a
 // única forma de o operador ver as políticas trabalhando.
-type MaterializacaoStats struct {
+type MaterializationStats struct {
 	// FrozenCaptured é a entry emitida na ingestão e FrozenPreserved o valor
 	// anterior segurado pelo merge. Captura sem preservação é coluna que nunca
 	// chegou a congelar.
@@ -424,17 +424,17 @@ type MaterializacaoStats struct {
 	SummedSaturated int64 `json:"summedSaturated"`
 	// TTLRules sai na ORDEM do YAML, que é semântica: a primeira que casa
 	// vence. Vazia num dataset sem regras.
-	TTLRules []RegraTTLStats `json:"ttlRules,omitempty"`
+	TTLRules []TTLRuleStats `json:"ttlRules,omitempty"`
 	// TTLUnmatched são as escritas que não casaram com regra nenhuma — só
 	// possível num dataset sem regra de fundo.
 	TTLUnmatched int64 `json:"ttlUnmatched"`
 }
 
-// RegraTTLStats é uma regra de expiração e quantas escritas ela decidiu.
+// TTLRuleStats é uma regra de expiração e quantas escritas ela decidiu.
 //
 // O `when` viaja junto da contagem porque o índice sozinho obrigaria quem lê o
 // painel a abrir o YAML para saber o que casou.
-type RegraTTLStats struct {
+type TTLRuleStats struct {
 	Index            int    `json:"index"`
 	When             string `json:"when,omitempty"`
 	ExpireAfterWrite string `json:"expireAfterWrite"`
@@ -443,7 +443,7 @@ type RegraTTLStats struct {
 
 // SchemaStats é o crescimento do dicionário de campos contra o teto.
 //
-// Fica FORA de IngestaoStats de propósito: aquele bloco só é preenchido quando
+// Fica FORA de IngestionStats de propósito: aquele bloco só é preenchido quando
 // o dataset tem consumidor Kafka, e o dicionário cresce por qualquer rota de
 // escrita — inclusive o `nishidb ingest` de arquivo. Um dataset ingerido por
 // arquivo reportaria zero campos, que é pior do que não reportar.
@@ -520,27 +520,27 @@ type CompactionStats struct {
 	BytesWritten int64 `json:"bytesWritten"`
 }
 
-// RotaStats são os contadores do §92 que o protocolo alimenta, por dataset.
+// RouteStats são os contadores do §92 que o protocolo alimenta, por dataset.
 //
 // A latência NÃO aparece aqui de propósito: ela é um histograma, e um
 // histograma serializado em JSON é pior que inútil — o formato certo para ele é
 // o /metrics, onde os buckets cumulativos têm quem os leia.
-type RotaStats struct {
+type RouteStats struct {
 	Total  uint64 `json:"total"`
 	Active int64  `json:"active"`
 	Errors uint64 `json:"errors"`
 }
 
-// IngestaoStats é o estado da ingestão Kafka do dataset.
+// IngestionStats é o estado da ingestão Kafka do dataset.
 //
-// State usa o vocabulário do §94 — as constantes EstadoUP, EstadoDown,
-// EstadoDegraded e EstadoDesligado deste mesmo pacote, que são as que a Saude
-// do /v1/health preenche. Enquanto a Saude vivia dentro do servidor, este
+// State usa o vocabulário do §94 — as constantes StateUp, StateDown,
+// StateDegraded e StateDisabled deste mesmo pacote, que são as que a Health
+// do /v1/health preenche. Enquanto a Health vivia dentro do servidor, este
 // godoc só podia CITAR as palavras; agora as duas rotas apontam para as mesmas
 // constantes, e um cliente que precise distinguir DEGRADED de DOWN não
 // redeclara nada. Paused traz o motivo quando a ingestão está parada por
 // política de erro (§101) e fica vazio quando tudo corre bem.
-type IngestaoStats struct {
+type IngestionStats struct {
 	Enabled   bool   `json:"enabled"`
 	State     string `json:"state"`
 	Events    int64  `json:"events"`

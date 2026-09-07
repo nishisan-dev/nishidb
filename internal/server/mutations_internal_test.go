@@ -26,19 +26,19 @@ func TestErroDeMutacaoTraduzATabelaInteira(t *testing.T) {
 	}{
 		{
 			"compaction busy", storage.ErrCompactionBusy,
-			http.StatusConflict, protocol.CodCompactionBusy,
+			http.StatusConflict, protocol.CodeCompactionBusy,
 		},
 		{
 			"writer failed", fmt.Errorf("checkpoint: %w", storage.ErrWriterFailed),
-			http.StatusInternalServerError, protocol.CodWriterFailed,
+			http.StatusInternalServerError, protocol.CodeWriterFailed,
 		},
 		{
 			"dataset corrupt", fmt.Errorf("varredura: %w", storage.ErrDatasetCorrupt),
-			http.StatusInternalServerError, protocol.CodDatasetCorrompido,
+			http.StatusInternalServerError, protocol.CodeDatasetCorrupt,
 		},
 		{
 			"erro desconhecido cai no vala-comum", errors.New("falha qualquer de I/O"),
-			http.StatusInternalServerError, protocol.CodInterno,
+			http.StatusInternalServerError, protocol.CodeInternal,
 		},
 	}
 	for _, c := range casos {

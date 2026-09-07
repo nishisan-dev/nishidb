@@ -16,12 +16,12 @@ import (
 // passasse por float64 chegaria ao servidor arredondado e ACEITO.
 func TestParamMontaOValueDeWireDeCadaTipo(t *testing.T) {
 	casos := []struct{ arg, tipo, value string }{
-		{"string:Stop", protocol.TipoString, `"Stop"`},
-		{"int64:42", protocol.TipoInt64, "42"},
-		{"double:1.5", protocol.TipoDouble, "1.5"},
-		{"boolean:true", protocol.TipoBoolean, "true"},
+		{"string:Stop", protocol.WireTypeString, `"Stop"`},
+		{"int64:42", protocol.WireTypeInt64, "42"},
+		{"double:1.5", protocol.WireTypeDouble, "1.5"},
+		{"boolean:true", protocol.WireTypeBoolean, "true"},
 		// json.Marshal e não aspas na mão: aqui é onde " e \ viram escapes.
-		{`string:a"b\c`, protocol.TipoString, `"a\"b\\c"`},
+		{`string:a"b\c`, protocol.WireTypeString, `"a\"b\\c"`},
 	}
 	for _, c := range casos {
 		t.Run(c.arg, func(t *testing.T) {
@@ -76,7 +76,7 @@ func TestParamSemDoisPontosEhErroDeUsoQueNomeiaOsTipos(t *testing.T) {
 	if err == nil {
 		t.Fatal("quer erro: falta o <tipo>:")
 	}
-	for _, tipo := range []string{protocol.TipoString, protocol.TipoInt64, protocol.TipoDouble, protocol.TipoBoolean} {
+	for _, tipo := range []string{protocol.WireTypeString, protocol.WireTypeInt64, protocol.WireTypeDouble, protocol.WireTypeBoolean} {
 		if !strings.Contains(err.Error(), tipo) {
 			t.Errorf("a mensagem não nomeia %q: %v", tipo, err)
 		}
@@ -89,7 +89,7 @@ func TestParamComTipoForaDosQuatroNomeiaOsAceitos(t *testing.T) {
 	if err == nil {
 		t.Fatal("quer erro: timestamp não é tipo de WIRE")
 	}
-	if !strings.Contains(err.Error(), protocol.TipoString) {
+	if !strings.Contains(err.Error(), protocol.WireTypeString) {
 		t.Errorf("a mensagem não ensina o caminho (string): %v", err)
 	}
 }

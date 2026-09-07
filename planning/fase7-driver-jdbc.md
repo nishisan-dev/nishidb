@@ -11,7 +11,7 @@ autenticado) deixou de valer quando a Fase 11 entregou Basic + TLS + papéis.
 começar pelo Java.** O contrato de wire está maduro — `internal/protocol` foi escrito
 declaradamente como ponto de encontro de três falantes (servidor, CLI remoto e "o driver
 JDBC da Fase 7"), a tabela de tipos §73 já é única no produto
-([jdbc.go:35](internal/protocol/jdbc.go:35)), o `protocolo.Leitor`
+([jdbc.go:35](internal/protocol/jdbc.go:35)), o `protocol.Reader`
 ([stream.go:45](internal/protocol/stream.go:45)) é o consumidor de referência a portar, e
 `TestNullExplicito` ([ndjson_test.go:253](internal/query/executor/ndjson_test.go:253)) já
 protege a invariante de NULL *citando o driver JDBC na justificativa*. O que falta são
@@ -33,8 +33,8 @@ O ambiente local está pronto: JDK 21 e 25 instalados, Maven 3.6.3 (o wrapper ba
 | **D2** | O driver **extrai o dataset do `FROM`**, com o da URL como fallback | [binder.go:157](internal/query/binder/binder.go:157) recusa `dataset` ≠ `FROM`. Sem o extrator, o DBeaver lista todos os datasets e só consegue consultar um. **O palpite errado nunca devolve dado de outra tabela** — o servidor recusa no bind. O mesmo scanner conta os `?` |
 | **D3** | **Errata do §71**: `SQLFeatureNotSupportedException` vale para capacidades de *execução* (updates, batch, transações, cursor rolável, `setNull`). **Introspecção responde "não" no vocabulário do JDBC** — `supportsX()` devolve `false`, getters devolvem `ResultSet` vazio com as colunas certas | O DBeaver chama dezenas de métodos de `DatabaseMetaData` ao abrir a conexão; exceção onde o contrato JDBC já prevê um "não" faz a ferramenta parecer quebrada, contrariando a decisão D2 do roadmap (DBeaver/IntelliJ são o cliente-alvo) |
 | **D4** | `nullable` publica **`false` para as colunas chave e sequence**, `true` para o resto | É o que é verdade e é provável: [patch.go:138-152](internal/materializer/patch.go:138) recusa evento com chave nula (`ErrInvalidKey`), chave vazia ou sequence nula (`ErrInvalidSequence`). Publicar `true` para a chave seria publicar o falso |
-| **D5** | `precision`/`scale`/`displaySize` são **função pura do tipo**, no MESMO `switch` de `JDBCDeTipo`, promovido a devolver um `DescritorJDBC` | Duas tabelas divergem no primeiro tipo novo. O switch único já é cobrado por `TestTodaTagComNomeTemJDBCEspecifico` |
-| **D6** | `executor.ColMeta` ganha **só** `Nullable bool`; precision/scale/displaySize são derivados na serialização | Os três são função de `Type`, que `ColMeta` já carrega, e derivá-los em `ColunaDe` custa zero alocação (roda uma vez por query, fora do laço de rows). `Nullable` é função do *campo* (`IsKey`/`IsSequence`) e só o executor tem o `*schema.CompiledField` na mão |
+| **D5** | `precision`/`scale`/`displaySize` são **função pura do tipo**, no MESMO `switch` de `JDBCName`, promovido a devolver um `JDBCDescriptor` | Duas tabelas divergem no primeiro tipo novo. O switch único já é cobrado por `TestTodaTagComNomeTemJDBCEspecifico` |
+| **D6** | `executor.ColMeta` ganha **só** `Nullable bool`; precision/scale/displaySize são derivados na serialização | Os três são função de `Type`, que `ColMeta` já carrega, e derivá-los em `NewColumn` custa zero alocação (roda uma vez por query, fora do laço de rows). `Nullable` é função do *campo* (`IsKey`/`IsSequence`) e só o executor tem o `*schema.CompiledField` na mão |
 | **D7** | `UNSUPPORTED_CLAUSE` **não acrescenta keyword ao lexer**; `lexer.SyntaxError` ganha um campo `Clause string`, vazio no erro comum | Keyword nova quebraria `SELECT order FROM t`, hoje válido. Campo (em vez de tipo com `Unwrap`) torna impossível o bug de ordem de `switch` em `traduzErroDeAbertura`, que degradaria em silêncio para `SYNTAX` |
 | **D8** | `--param` vale para os **dois** caminhos, `--config` e `--server` | O caminho local já aceita `[]types.Value` em `eng.Execute`. Preserva a promessa de [query_remote.go:26](internal/cli/query_remote.go:26): "um script que troca `--config` por `--server` não muda mais nada" |
 | **D9** | JUnit 5 em `scope=test` é aceitável sob "zero dependência de runtime", com **dois gates** provando | `scope=test` nunca entra no `Class-Path` do consumidor. Harness próprio custaria semanas e não fecharia risco real |
@@ -55,7 +55,7 @@ foram verificadas no código e **mudam o escopo**:
    escrever `TIMESTAMP(3)`. Sai da mesma tabela e dos mesmos testes; deixá-lo para depois é
    um segundo campo aditivo num contrato que o driver já congelou. **Incluído.**
 3. **"Toda coluna nullable" é falso hoje** — ver D4.
-4. **O item 2 (versão do produto) está entregue**: `protocolo.ProcessoStats.Version`
+4. **O item 2 (versão do produto) está entregue**: `protocol.ProcessStats.Version`
    ([documents.go:75](internal/protocol/documents.go:75)) alimentado por
    `buildinfo.String()`. Resta só o driver consumir.
 
@@ -118,9 +118,9 @@ que a decisão D2 do roadmap prometeu e nunca foi escrita.
 *Pronto quando:* `TestEvidenciasCitadasNosDocumentosExistem` verde e nenhuma entrada afirma o
 que o código contradiz.
 
-### A2 — `DescritorJDBC`: a tabela única
-`internal/protocol/jdbc.go`. `JDBCDeTipo` vira casca fina sobre `DescritorDeTipo(t)
-DescritorJDBC{JDBC, Precision, Scale, DisplaySize}` — os três testes atuais de `jdbc_test.go`
+### A2 — `JDBCDescriptor`: a tabela única
+`internal/protocol/jdbc.go`. `JDBCName` vira casca fina sobre `DescriptorOf(t)
+JDBCDescriptor{JDBC, Precision, Scale, DisplaySize}` — os três testes atuais de `jdbc_test.go`
 passam **sem edição**.
 *Testes:* `TestODescritorDeCadaTipoTemPrecisionScaleEDisplaySize` (a tabela caso a caso);
 **`TestDisplaySizeDeCadaTipoCasaComALarguraQueOEncoderEmite`** — o oráculo que importa:
@@ -128,14 +128,14 @@ renderiza o valor de largura máxima por `executor.AppendValue` e afirma
 `len(saída) - 2 == DisplaySize` (não há ciclo de import: `internal/query/**` não importa
 `internal/protocol`); `TestTipoSemNomeTemDescritorZerado`.
 
-### A3 — Os campos no wire (`Coluna`, `ColunaMeta`)
+### A3 — Os campos no wire (`Column`, `ColumnMeta`)
 [protocol.go:112](internal/protocol/protocol.go:112),
-[documents.go:41](internal/protocol/documents.go:41), `ColunaDe`,
+[documents.go:41](internal/protocol/documents.go:41), `NewColumn`,
 [server/documents.go:69](internal/server/documents.go:69). **Sem `omitempty`** —
 `precision:0` e `nullable:false` são justamente os casos que carregam informação.
 *Testes:* `TestALinhaDeSchemaPublicaPrecisionScaleEDisplaySize`;
 **`TestMetadataPublicaOsMesmosNumerosQueALinhaDeSchema`** (a não-divergência entre as duas
-rotas, que o godoc de `JDBCDeTipo` promete e ninguém cobra);
+rotas, que o godoc de `JDBCName` promete e ninguém cobra);
 `TestPrecisionZeroSaiNoJSONEmVezDeSerOmitida`, afirmando sobre **bytes**, não sobre a struct.
 *Compatibilidade:* os clientes atuais decodificam sem `DisallowUnknownFields` — campo aditivo
 é seguro para CLI velho contra servidor novo.
@@ -156,9 +156,9 @@ explícita. Se resolver, ele também é NOT NULL (sempre gravado,
 [patch.go:159](internal/materializer/patch.go:159)); se não, não há caso. **Ler o binder, não
 deduzir.**
 
-### A5 — `Saude` migra para `internal/protocol`
+### A5 — `Health` migra para `internal/protocol`
 [http.go:41-51](internal/server/http.go:41) → `internal/protocol/documents.go`. As
-constantes `EstadoUP`/`Down`/`Degraded`/`Desligado` **vão junto** — deixá-las para trás faria
+constantes `StateUp`/`Down`/`Degraded`/`Desligado` **vão junto** — deixá-las para trás faria
 o driver casar `"DEGRADED"` contra uma constante que o pacote de contrato não declara.
 *Teste:* `TestOCorpoDoHealthNaoMudouComAMudancaDePacote`, comparando bytes (o
 `SetIndent("","  ")` torna isso estável). O corpo não pode mudar um byte.
@@ -183,7 +183,7 @@ piloto.
 
 ### A7 — `UNSUPPORTED_CLAUSE` (D7)
 `lexer.SyntaxError` ganha `Clause string`; novo `internal/query/parser/clauses.go`;
-`protocolo.CodClausulaNaoSuportada`; `traduzErroDeAbertura`
+`protocol.CodeUnsupportedClause`; `traduzErroDeAbertura`
 ([server/query.go:387](internal/server/query.go:387)); `codigoDoProtocolo`
 ([query_remote.go:175](internal/cli/query_remote.go:175)) → `ExitQuery`, **não** o vala-comum
 `ExitUso` do `default`.
@@ -220,8 +220,8 @@ inalterado.
 `a:b`), 1:1 com os 4 tipos de wire. `string` → `json.Marshal`; `int64`/`double` → texto
 **verbatim** como `json.RawMessage` (é o que faz `--param int64:9223372036854775808` receber
 a mensagem de overflow de [params.go:106](internal/protocol/params.go:106) em vez de
-virar float64 e perder precisão — a mesma razão de `Parametro.Value` ser `RawMessage` e não
-`any`). Validação chama `protocolo.Valores`, **a mesma função do servidor**, nunca uma segunda
+virar float64 e perder precisão — a mesma razão de `Param.Value` ser `RawMessage` e não
+`any`). Validação chama `protocol.Values`, **a mesma função do servidor**, nunca uma segunda
 gramática.
 *Testes:* os quatro tipos ponta a ponta; `TestParamRepetidoPreservaAOrdemPosicional`;
 `TestParamStringComDoisPontosNoValorNaoEhCortada`;
@@ -237,7 +237,7 @@ linha 37 já registra que código novo usa `_, _ =`. "Limpar" as vizinhas derrub
 ratchet reprova.
 
 ### A9 — Flush após a linha de schema
-Um `flusher.Flush()` logo depois do `EscreveLinha(LinhaSchema)` em `server/query.go`. Custa um
+Um `flusher.Flush()` logo depois do `WriteLine(SchemaLine)` em `server/query.go`. Custa um
 chunk por consulta e paga: `executeQuery()` devolve `ResultSetMetaData` sem esperar o primeiro
 lote de `resultBatchSize`, e o erro precoce é detectado antes.
 
@@ -285,7 +285,7 @@ doutrina de `ci_test.go` lendo os workflows) e falha se qualquer `<dependency>` 
 
 **Escopo.** Duas gramáticas de consumo: (a) documentos pequenos — linha de schema,
 `/v1/metadata`, `/v1/stats`, `/v1/health`, `{"error":{…}}` — em DOM completo, com aninhamento,
-`null` explícito (`ColunaMeta.Alias` é `*string`) e mapas `string→string`; (b) linhas de dados
+`null` explícito (`ColumnMeta.Alias` é `*string`) e mapas `string→string`; (b) linhas de dados
 — objeto no topo cujos valores podem ser **objeto/array aninhado arbitrário** (coluna `json`
 inline). Mais escrita: escaping de string e números.
 
@@ -299,7 +299,7 @@ hostil vire `SQLException`, nunca `StackOverflowError`.
 **Números — onde parsers ingênuos erram.** O scanner grava o *span* e um bit `integral`, e
 **nunca converte para `double`**. `getLong` parseia os dígitos ASCII com detecção de overflow:
 `9223372036854775807` sai exato, `…808` vira `SQLDataException` (22003), nunca um double
-arredondado em silêncio — o espelho exato de por que `Parametro.Value` é `json.RawMessage`.
+arredondado em silêncio — o espelho exato de por que `Param.Value` é `json.RawMessage`.
 Para doubles em grafia `'g'` do Go (`1e-07`, `1.5e+21`): **nós validamos a gramática RFC 8259
 sobre o span, o JDK arredonda** (`Double.parseDouble` do ASCII já validado — ele sozinho
 aceitaria `NaN`, `0x1p3` e sufixos `d/f`). O débito 30 não é risco de corretude: as duas
@@ -331,7 +331,7 @@ violado, não linha vazia). Teto de linha de 64 MiB para falhar em vez de OOM.
 
 ---
 
-## Fase D — Transporte e porta do `protocolo.Leitor`
+## Fase D — Transporte e porta do `protocol.Reader`
 
 `Transporte` é o **único** ponto que monta `HttpRequest`. Doutrinas herdadas de
 [credential.go](internal/cli/credential.go), todas literais:
@@ -353,7 +353,7 @@ violado, não linha vazia). Teto de linha de 64 MiB para falhar em vez de OOM.
 - **Nenhum `trustAll`/`insecure`, nem por `Properties`.** Uma propriedade opcional vira o modo
   permanente de operação em três semanas.
 
-`LeitorNdjson` porta `protocolo.Leitor` com os mesmos três desfechos separados: `schema()`,
+`LeitorNdjson` porta `protocol.Reader` com os mesmos três desfechos separados: `schema()`,
 `fim()`, `erro()` e falha de transporte. **Stream que acaba sem fecho é falha**, com a mesma
 mensagem. Um fecho de erro depois de N rows lança a exceção mapeada **citando as N rows já
 entregues** — jamais devolve `false`, que apresentaria resultado parcial como completo.
@@ -479,7 +479,7 @@ O exemplo do §130 tem de rodar literalmente.
 canônicas, `TABLE_TYPE="TABLE"`); `getColumns` (24 colunas; `REMARKS` carrega o que o wire tem
 e o JDBC não modela: `alias=…; index=bitmap; auto=true`; `NULLABLE` de D4);
 `getPrimaryKeys` de `DatasetMeta.Key` — ganho real, o DBeaver desenha a chave; `getIndexInfo`
-de `ColunaMeta.Index != "none"`, com a ressalva do godoc (índice **declarado**, não plano
+de `ColumnMeta.Index != "none"`, com a ressalva do godoc (índice **declarado**, não plano
 escolhido) no `REMARKS`; `getTypeInfo` com `SEARCHABLE` honesto (`bytes` e `json` →
 `typePredNone`, porque o binder recusa comparação); `getCatalogs`/`getSchemas` **vazios com a
 forma certa**.
@@ -607,7 +607,7 @@ ignorado em `getTimestamp`). Errata da spec: §71 (D3) e §98 (coordenadas do m�
 7. `-Xmx64m` sobre >100k rows não estoura heap.
 8. Matriz de conversão passa em UTC **e** em `Asia/Tokyo`.
 9. Gate Go de cobertura código→SQLState: nenhuma constante `Cod*` sem SQLState.
-10. Contra o piloto (loopback, `curl --noproxy '*'`): `POST /metrics` devolve `CorpoErro`;
+10. Contra o piloto (loopback, `curl --noproxy '*'`): `POST /metrics` devolve `ErrorBody`;
     `ORDER BY` devolve `UNSUPPORTED_CLAUSE`;
     `nishidb query --server … --param string:Stop 'SELECT … WHERE status = ?'` devolve linhas.
 11. DBeaver: conecta, navega, consulta com parâmetro, e a mensagem de `ORDER BY` é acionável.
@@ -635,7 +635,7 @@ ignorado em `getTimestamp`). Errata da spec: §71 (D3) e §98 (coordenadas do m�
 ## Arquivos críticos
 
 - [internal/protocol/jdbc.go](internal/protocol/jdbc.go) — a tabela única; a A2 inteira
-- [internal/protocol/protocol.go](internal/protocol/protocol.go) — `Coluna` (112), códigos de erro (162-203), tipos de wire de parâmetro
+- [internal/protocol/protocol.go](internal/protocol/protocol.go) — `Column` (112), códigos de erro (162-203), tipos de wire de parâmetro
 - [internal/protocol/stream.go](internal/protocol/stream.go) — o contrato a portar para Java
 - [internal/query/executor/ndjson.go](internal/query/executor/ndjson.go) — o **produtor** de tudo que o parser Java vai ler
 - [internal/query/parser/parser.go](internal/query/parser/parser.go) — os dois sítios da A7

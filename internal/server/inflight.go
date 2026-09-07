@@ -72,11 +72,11 @@ func (e *emVoo) registra(dataset, sql string, longa bool, inicio time.Time) func
 // A cópia é feita sob lock e a formatação fora dele — segurar o mutex do
 // registro enquanto se serializa JSON faria o /v1/stats atrasar a admissão de
 // TODA consulta nova.
-func (e *emVoo) instantaneo(agora time.Time) []protocol.ConsultaEmVoo {
+func (e *emVoo) instantaneo(agora time.Time) []protocol.InFlightQuery {
 	e.mu.Lock()
-	out := make([]protocol.ConsultaEmVoo, 0, len(e.consulta))
+	out := make([]protocol.InFlightQuery, 0, len(e.consulta))
 	for _, c := range e.consulta {
-		out = append(out, protocol.ConsultaEmVoo{
+		out = append(out, protocol.InFlightQuery{
 			Dataset:   c.dataset,
 			SQLHash:   c.hash,
 			Long:      c.longa,

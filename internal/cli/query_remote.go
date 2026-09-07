@@ -25,8 +25,8 @@ import (
 // O contrato de saída é o MESMO do caminho local: NDJSON cru no stdout, uma
 // linha por row, e o exit code dizendo o que aconteceu. Um script que troca
 // `--config` por `--server` não muda mais nada.
-func consultaRemota(endereco, dataset, sql string, params []protocol.Parametro, cred credencialRemota, amb Ambiente) int {
-	corpo, err := json.Marshal(protocol.Requisicao{Dataset: dataset, SQL: sql, Parameters: params})
+func consultaRemota(endereco, dataset, sql string, params []protocol.Param, cred credencialRemota, amb Ambiente) int {
+	corpo, err := json.Marshal(protocol.Request{Dataset: dataset, SQL: sql, Parameters: params})
 	if err != nil {
 		fmt.Fprintln(amb.Stderr, "query:", err)
 		return ExitUso
@@ -87,11 +87,11 @@ func normalizaEndereco(e string) string {
 const corpoHTTPQuandoEsperavaHTTPS = "Client sent an HTTP request to an HTTPS server"
 
 // leCorpoErro lê o corpo bruto de uma resposta de erro e tenta decodificá-lo
-// como protocolo.CorpoErro. ok=false cobre tanto falha de leitura quanto
+// como protocol.ErrorBody. ok=false cobre tanto falha de leitura quanto
 // corpo que não é JSON — só o segundo caso preserva os BYTES originais para
 // dicaDeEsquema examinar; uma falha de leitura não tem corpo nenhum a
 // examinar.
-func leCorpoErro(resp *http.Response) (corpo protocol.CorpoErro, dica string, ok bool) {
+func leCorpoErro(resp *http.Response) (corpo protocol.ErrorBody, dica string, ok bool) {
 	bruto, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return corpo, "", false
@@ -142,9 +142,9 @@ func recusaDoServidor(resp *http.Response, amb Ambiente) int {
 // As linhas vão CRUAS: decodificá-las para recodificá-las mudaria a grafia dos
 // doubles e não acrescentaria nada — o servidor já emitiu o formato final.
 func leStream(corpo io.Reader, amb Ambiente) int {
-	l := protocol.NovoLeitor(corpo)
+	l := protocol.NewReader(corpo)
 	for l.Next() {
-		if _, err := amb.Stdout.Write(append(l.Linha(), '\n')); err != nil {
+		if _, err := amb.Stdout.Write(append(l.Line(), '\n')); err != nil {
 			fmt.Fprintln(amb.Stderr, "query: escrevendo o resultado:", err)
 			return ExitUso
 		}
@@ -157,7 +157,7 @@ func leStream(corpo io.Reader, amb Ambiente) int {
 		fmt.Fprintln(amb.Stderr, "query:", err)
 		return ExitDataset
 	}
-	if e := l.Erro(); e != nil {
+	if e := l.Failure(); e != nil {
 		fmt.Fprintf(amb.Stderr, "query: %s (%d linhas entregues)\n", e.Message, e.Rows)
 		return codigoDoProtocolo(e.Code)
 	}
@@ -172,26 +172,26 @@ func leStream(corpo io.Reader, amb Ambiente) int {
 // por `--server` num script sem reescrever o tratamento de $?.
 func codigoDoProtocolo(codigo string) int {
 	switch codigo {
-	case protocol.CodSintaxe, protocol.CodBind, protocol.CodBadParameter,
-		protocol.CodClausulaNaoSuportada:
+	case protocol.CodeSyntax, protocol.CodeBind, protocol.CodeBadParameter,
+		protocol.CodeUnsupportedClause:
 		// UNSUPPORTED_CLAUSE fica junto dos outros erros de QUERY, e não no
 		// default: o que o operador faz diante dele é reescrever o SQL, que é
 		// o significado deste código. Cair no vala-comum o classificaria como
 		// "olhe o comando ou o servidor", que é conselho errado.
 		return ExitQuery
-	case protocol.CodMaxRows:
+	case protocol.CodeMaxRows:
 		return ExitTruncado
-	case protocol.CodSnapshotExpirado:
+	case protocol.CodeSnapshotExpired:
 		// O caminho LOCAL já mapeia storage.ErrSnapshotExpirado para 5
 		// (codigoDoErro): a consulta — ou a auditoria dos contadores — não
 		// chegou ao fim porque o journal de versões estourou o teto. O
 		// resultado é desconhecido, não errado; a mesma classe do truncado.
 		return ExitTruncado
-	case protocol.CodTimeout:
+	case protocol.CodeTimeout:
 		return ExitInterromp
-	case protocol.CodDatasetCorrompido:
+	case protocol.CodeDatasetCorrupt:
 		return ExitDataset
-	case protocol.CodWriterFailed:
+	case protocol.CodeWriterFailed:
 		// Fase 11, Task B5 (POST /v1/compact e /v1/checkpoint): o MESMO
 		// sentinela types.ErrWriterFailed que o caminho LOCAL mapeia para 4
 		// em codigoDoErro (cli.go) — o writer está em modo falho sticky, e só

@@ -242,9 +242,9 @@ func prazoDaSaida(t *testing.T, texto string) time.Duration {
 }
 
 // estatisticas lê o /v1/stats pela porta, para servir de oráculo ao comando.
-func estatisticas(t *testing.T, a *ambienteRemoto) protocol.Estatisticas {
+func estatisticas(t *testing.T, a *ambienteRemoto) protocol.Stats {
 	t.Helper()
-	var e protocol.Estatisticas
+	var e protocol.Stats
 	leJSONDaPorta(t, a, "/v1/stats", &e)
 	return e
 }
@@ -270,9 +270,9 @@ func esperaConsultasDrenarem(t *testing.T, a *ambienteRemoto) {
 	}
 }
 
-func metadados(t *testing.T, a *ambienteRemoto, consulta string) protocol.Metadados {
+func metadados(t *testing.T, a *ambienteRemoto, consulta string) protocol.Metadata {
 	t.Helper()
-	var m protocol.Metadados
+	var m protocol.Metadata
 	leJSONDaPorta(t, a, "/v1/metadata"+consulta, &m)
 	return m
 }
@@ -836,7 +836,7 @@ func storageDoDataset(t *testing.T, a *ambienteRemoto) protocol.StorageStats {
 // diferente de vezes — 2 full scans, 3 point lookups, 4 index scans, 6
 // uniões, 5 linhas emitidas e 1 truncamento. O rótulo publicado continua sendo
 // "bitmap scans": é nome de WIRE, e ele não acompanhou a unificação dos motores
-// (ver o godoc de protocolo.MotorStats).
+// (ver o godoc de protocol.EngineStats).
 //
 // Os planos são os do §63: chave no WHERE dá point lookup, campo indexado dá
 // index scan, OR de dois termos indexados dá união, e campo sem índice cai em
@@ -1134,7 +1134,7 @@ func TestInspectRecusaMetadataQueNaoTrazExatamenteUmDataset(t *testing.T) {
 		t.Run(c.nome, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", protocol.ContentTypeJSON)
-				if err := json.NewEncoder(w).Encode(protocol.Metadados{Datasets: c.datasets}); err != nil {
+				if err := json.NewEncoder(w).Encode(protocol.Metadata{Datasets: c.datasets}); err != nil {
 					t.Errorf("escrevendo a resposta de mentira: %v", err)
 				}
 			}))
@@ -1223,7 +1223,7 @@ func TestStatusSemUserNuncaEnviaHeaderAuthorization(t *testing.T) {
 		recebida = true
 		authorization = r.Header.Get("Authorization")
 		w.Header().Set("Content-Type", protocol.ContentTypeJSON)
-		if err := json.NewEncoder(w).Encode(protocol.Estatisticas{}); err != nil {
+		if err := json.NewEncoder(w).Encode(protocol.Stats{}); err != nil {
 			t.Errorf("escrevendo a resposta de mentira: %v", err)
 		}
 	}))

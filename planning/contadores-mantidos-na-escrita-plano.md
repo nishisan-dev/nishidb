@@ -902,7 +902,7 @@ montado em `buf[:0]` com `encoding.AppendField` em ordem de FieldID;
 ### Tarefa F1: métricas e `/v1/stats`
 
 **Arquivos:**
-- Modificar: `internal/metrics/names.go` (bloco "Contadores mantidos na escrita", com a razão de cada série; `LabelCounter = "counter"` com a nota "valor vem do YAML, conjunto fechado — nunca do cliente"), `internal/server/metrics_dataset.go` (`amostrasDeContadores(d) []metrics.Sample` lendo `d.st.EstatisticasDeContadores()` UMA vez), `internal/protocol/documents.go` (`DatasetStats.Counters []ContadorStats`), `internal/server/documents.go` (mesma chamada)
+- Modificar: `internal/metrics/names.go` (bloco "Contadores mantidos na escrita", com a razão de cada série; `LabelCounter = "counter"` com a nota "valor vem do YAML, conjunto fechado — nunca do cliente"), `internal/server/metrics_dataset.go` (`amostrasDeContadores(d) []metrics.Sample` lendo `d.st.EstatisticasDeContadores()` UMA vez), `internal/protocol/documents.go` (`DatasetStats.Counters []CounterStats`), `internal/server/documents.go` (mesma chamada)
 - Testar: `internal/server/metrics_dataset_test.go`, `internal/gates` continua verde
 
 Séries (todas por `dataset`,`counter`, nascem com zero na subida via coletor que
@@ -925,16 +925,16 @@ emite sempre): `nishidb_counter_groups` (medidor, vivos), `nishidb_counter_group
 
 **Wire (sem código de erro novo):**
 ```go
-type AuditoriaContador struct {
+type CounterAudit struct {
 	Name string `json:"name"`; Groups uint32 `json:"groups"`
 	Maintained, Recomputed int64 `json:"maintained","recomputed"`
 	DivergentGroups int `json:"divergentGroups"`
-	Sample []DivergenciaDeGrupo `json:"sample,omitempty"`
+	Sample []GroupDivergence `json:"sample,omitempty"`
 	RowsScanned uint64 `json:"rowsScanned"`; DurationMs int64 `json:"durationMs"`
 }
-type DivergenciaDeGrupo struct{ GroupKey string; Maintained, Recomputed, RefsMaintained, RefsRecomputed int64 }
-type AuditoriaDataset struct{ Name string; Counters []AuditoriaContador }
-type RespostaAuditoriaDeContadores struct{ Datasets []AuditoriaDataset }
+type GroupDivergence struct{ GroupKey string; Maintained, Recomputed, RefsMaintained, RefsRecomputed int64 }
+type DatasetAudit struct{ Name string; Counters []CounterAudit }
+type CountersAuditResponse struct{ Datasets []DatasetAudit }
 type RebuildContador struct{ Name string; Groups uint32; DurationMs int64 }
 type RebuildDataset struct{ Name string; Counters []RebuildContador }
 type RespostaRebuildDeContadores struct{ Datasets []RebuildDataset }

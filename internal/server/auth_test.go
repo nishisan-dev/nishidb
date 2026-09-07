@@ -105,14 +105,14 @@ func assertStatusFechando(t *testing.T, resp *http.Response, quer int, rota stri
 }
 
 // Regra 1 do §77: 401 antes de LER o corpo — nem o teto do
-// MaxCorpoRequisicao de anônimo é gasto. Se a ordem estivesse invertida
+// MaxRequestBody de anônimo é gasto. Se a ordem estivesse invertida
 // (leRequisicao antes da autenticação), este corpo sairia 413, não 401: o
 // mesmo tamanho que TestCorpoAcimaDoTetoRecebe413 (query_test.go) já prova
 // que o servidor de fato rejeitaria se chegasse a ler.
 func TestOrdem401AntesDeLerOCorpo(t *testing.T) {
 	srv := servidorComAutenticacao(t, 3, "")
 
-	corpoEnorme := strings.Repeat("x", protocol.MaxCorpoRequisicao+1)
+	corpoEnorme := strings.Repeat("x", protocol.MaxRequestBody+1)
 	resp := consultaComAuth(t, srv, corpoEnorme, "", "")
 	defer fecha(t, resp)
 
@@ -146,7 +146,7 @@ func TestOrdem401AntesDaVagaDoSetenta(t *testing.T) {
 	}
 	defer fecha(t, primeira)
 
-	l := protocol.NovoLeitor(primeira.Body)
+	l := protocol.NewReader(primeira.Body)
 	if !l.Next() {
 		t.Fatalf("a primeira consulta não produziu row: %v", l.Err())
 	}

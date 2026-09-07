@@ -19,7 +19,7 @@ import (
 // servidor de verdade obrigaria o teste a segurar um stream aberto enquanto roda
 // um subcomando — um acoplamento temporal que só produziria intermitência. O que
 // se afere aqui é a VISTA: dado este corpo, o comando mostra estes campos.
-func statusContra(t *testing.T, e protocol.Estatisticas) string {
+func statusContra(t *testing.T, e protocol.Stats) string {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", protocol.ContentTypeJSON)
@@ -46,9 +46,9 @@ func statusContra(t *testing.T, e protocol.Estatisticas) string {
 // vê "3 ativas" num servidor que não responde precisa saber se são três
 // consultas rápidas passando ou uma varredura presa há oito minutos.
 func TestStatusMostraAConsultaEmVooComIdadeEMarcaDeLonga(t *testing.T) {
-	saida := statusContra(t, protocol.Estatisticas{
-		Process: protocol.ProcessoStats{
-			InFlight: []protocol.ConsultaEmVoo{
+	saida := statusContra(t, protocol.Stats{
+		Process: protocol.ProcessStats{
+			InFlight: []protocol.InFlightQuery{
 				{Dataset: "radius_sessions", SQLHash: "aaaaaaaaaaaa", RunningMs: 483000, Long: true},
 				{Dataset: "cdr", SQLHash: "bbbbbbbbbbbb", RunningMs: 12, Long: false},
 			},
@@ -91,7 +91,7 @@ func TestStatusMostraAConsultaEmVooComIdadeEMarcaDeLonga(t *testing.T) {
 // justamente no dia em que ela tivesse conteúdo. É a mesma doutrina do aviso de
 // chave sem implementação, que só sai quando a chave está no arquivo.
 func TestStatusNaoImprimeBlocoDeConsultaEmVooQuandoNaoHaNenhuma(t *testing.T) {
-	saida := statusContra(t, protocol.Estatisticas{})
+	saida := statusContra(t, protocol.Stats{})
 
 	for _, marca := range []string{"consultas em voo", "LONGA"} {
 		if strings.Contains(saida, marca) {

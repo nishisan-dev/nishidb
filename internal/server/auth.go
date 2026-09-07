@@ -355,8 +355,8 @@ func (s *Servidor) recusaAutenticacao(w http.ResponseWriter, r *http.Request, ra
 	// devolveria pelo corpo a distinção que o digest fantasma existe para
 	// esconder. "Usuário não existe" e "senha errada" têm de produzir a
 	// resposta EXATA, byte a byte (§77).
-	if err := json.NewEncoder(w).Encode(protocol.CorpoErro{Error: protocol.Falha{
-		Code:    protocol.CodUnauthenticated,
+	if err := json.NewEncoder(w).Encode(protocol.ErrorBody{Error: protocol.ErrorDetail{
+		Code:    protocol.CodeUnauthenticated,
 		Message: "credenciais inválidas",
 	}}); err != nil {
 		s.log.Warn("query.escrita_falhou", "não foi possível entregar o corpo do 401 de autenticação", "erro", err.Error())
@@ -377,8 +377,8 @@ func (s *Servidor) recusaAutenticacao(w http.ResponseWriter, r *http.Request, ra
 func (s *Servidor) recusaAutorizacao(w http.ResponseWriter, r *http.Request, rota, papelUsuario, papelExigido string) {
 	w.Header().Set("Content-Type", protocol.ContentTypeJSON)
 	w.WriteHeader(http.StatusForbidden)
-	if err := json.NewEncoder(w).Encode(protocol.CorpoErro{Error: protocol.Falha{
-		Code:    protocol.CodForbidden,
+	if err := json.NewEncoder(w).Encode(protocol.ErrorBody{Error: protocol.ErrorDetail{
+		Code:    protocol.CodeForbidden,
 		Message: fmt.Sprintf("papel %s não alcança esta rota; requer %s", papelUsuario, papelExigido),
 	}}); err != nil {
 		s.log.Warn("query.escrita_falhou", "não foi possível entregar o corpo do 403 de autorização", "erro", err.Error())
@@ -395,8 +395,8 @@ func (s *Servidor) recusaAutorizacao(w http.ResponseWriter, r *http.Request, rot
 func (s *Servidor) recusaLoopbackAdmin(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", protocol.ContentTypeJSON)
 	w.WriteHeader(http.StatusForbidden)
-	if err := json.NewEncoder(w).Encode(protocol.CorpoErro{Error: protocol.Falha{
-		Code:    protocol.CodForbidden,
+	if err := json.NewEncoder(w).Encode(protocol.ErrorBody{Error: protocol.ErrorDetail{
+		Code:    protocol.CodeForbidden,
 		Message: "rotas administrativas não respondem no plano loopback (§77b); use o listener autenticado (server.authentication)",
 	}}); err != nil {
 		s.log.Warn("query.escrita_falhou", "não foi possível entregar o corpo do 403 do loopback", "erro", err.Error())
@@ -425,8 +425,8 @@ func (s *Servidor) recusaLoopbackAdmin(w http.ResponseWriter, r *http.Request) {
 func (s *Servidor) recusaRegistroSemPapel(w http.ResponseWriter, r *http.Request, padrao string) {
 	w.Header().Set("Content-Type", protocol.ContentTypeJSON)
 	w.WriteHeader(http.StatusInternalServerError)
-	if err := json.NewEncoder(w).Encode(protocol.CorpoErro{Error: protocol.Falha{
-		Code:    protocol.CodInterno,
+	if err := json.NewEncoder(w).Encode(protocol.ErrorBody{Error: protocol.ErrorDetail{
+		Code:    protocol.CodeInternal,
 		Message: "erro interno do servidor",
 	}}); err != nil {
 		s.log.Warn("query.escrita_falhou", "não foi possível entregar o corpo do 500 de registro sem papel", "erro", err.Error())

@@ -569,7 +569,7 @@ type Congelado struct {
 	Refs   []int64
 	// Limite é o maior id emitido mais um, no instante do retrato.
 	Limite uint32
-	// Linhas e Total são Estatisticas.Linhas e .Total no mesmo instante — a
+	// Linhas e Total são Stats.Linhas e .Total no mesmo instante — a
 	// segunda fonte para o mesmo fato, e a auditoria é a única coisa que a
 	// confere.
 	Linhas int64

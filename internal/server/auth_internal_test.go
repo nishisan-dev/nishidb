@@ -135,7 +135,7 @@ func TestRotaRegistradaPorForaDeRegistraEhRecusadaFailClosed(t *testing.T) {
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, quer 500 (bug de registro nomeado, não passagem livre)", rec.Code)
 	}
-	var corpo protocol.CorpoErro
+	var corpo protocol.ErrorBody
 	if err := json.NewDecoder(rec.Body).Decode(&corpo); err != nil {
 		t.Fatal(err)
 	}
@@ -247,12 +247,12 @@ func TestMecanismoDeRotaExigePapelComHandlerDeTeste(t *testing.T) {
 		if rec.Code != http.StatusForbidden {
 			t.Fatalf("status = %d, quer 403", rec.Code)
 		}
-		var corpo protocol.CorpoErro
+		var corpo protocol.ErrorBody
 		if err := json.NewDecoder(rec.Body).Decode(&corpo); err != nil {
 			t.Fatal(err)
 		}
-		if corpo.Error.Code != protocol.CodForbidden {
-			t.Fatalf("code = %q, quer %q", corpo.Error.Code, protocol.CodForbidden)
+		if corpo.Error.Code != protocol.CodeForbidden {
+			t.Fatalf("code = %q, quer %q", corpo.Error.Code, protocol.CodeForbidden)
 		}
 	})
 

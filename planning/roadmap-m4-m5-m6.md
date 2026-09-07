@@ -243,7 +243,7 @@ Fecha os débitos **57** e **14**.
 O wire está pronto: `internal/protocol` é declaradamente o ponto de encontro do
 servidor, do CLI remoto e do futuro driver
 ([protocol.go:6](internal/protocol/protocol.go:6)). O consumidor de referência a
-portar para Java é `protocolo.Leitor`
+portar para Java é `protocol.Reader`
 ([stream.go:45](internal/protocol/stream.go:45)); a tabela §73 já é única no produto
 ([jdbc.go:7](internal/protocol/jdbc.go:7)); e a tradução código→exit code
 ([query_remote.go:124](internal/cli/query_remote.go:124)) vira código→`SQLState`.
@@ -251,13 +251,13 @@ portar para Java é `protocolo.Leitor`
 **Ajustes no lado Go, antes do Java** (senão o driver nasce com buracos):
 
 - `nullable`, `precision` e `displaySize` para o `ResultSetMetaData` — nem
-  `protocolo.Coluna`, nem `ColunaMeta`, nem `executor.ColMeta` carregam isso.
+  `protocol.Column`, nem `ColumnMeta`, nem `executor.ColMeta` carregam isso.
 - Versão do produto, para `DatabaseMetaData.getDatabaseProductVersion()` — não existe
   rota nem campo.
-- Mover `Saude` de [http.go:38](internal/server/http.go:38) para o pacote `protocolo`:
+- Mover `Health` de [http.go:38](internal/server/http.go:38) para o pacote `protocolo`:
   é o único corpo de rota do §67 que um cliente teria de redeclarar.
 - Uniformizar o 405: `/v1/health` e `/metrics` caem no 405 do mux com `text/plain`, fora
-  do contrato `protocolo.CorpoErro` ([server.go:361](internal/server/server.go:361)).
+  do contrato `protocol.ErrorBody` ([server.go:361](internal/server/server.go:361)).
 - **Débito 58** — `query --server` passa a mandar `parameters`. Além de fechar o débito,
   é o que dá teste ponta a ponta do caminho de parâmetros **pelo próprio produto**.
 - **Mensagem de cláusula não suportada.** Hoje `ORDER BY` sai como *"conteúdo inesperado

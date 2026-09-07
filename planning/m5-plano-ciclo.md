@@ -73,7 +73,7 @@ issues arrumadas; distribuição do identifier medida e registrada.
   fallback `runtime/debug.ReadBuildInfo()` (`vcs.revision`/`vcs.time`).
 - Superfícies (teste primeiro em cada): `nishidb --version`/`version` no dispatch de
   [cli.go](internal/cli/cli.go); log de subida em `runServer`; campo em
-  `protocolo.Estatisticas` ([documents.go:63](internal/protocol/documents.go:63))
+  `protocol.Stats` ([documents.go:63](internal/protocol/documents.go:63))
   alimentado por `handleStats` — **isto adianta o
   `DatabaseMetaData.getDatabaseProductVersion()` da Fase 7**; cabeçalho do painel
   ([nishidb-stats.py](scripts/nishidb-stats.py)); campo `nishidb_version` no `Report`
@@ -259,15 +259,15 @@ origem restrita às subnets consumidoras (nunca "any").
 Pode começar após o merge da Fase B, em paralelo com a janela de observação da C.
 
 ### D0 — Ajustes no lado Go antes do Java (cada um com teste primeiro)
-1. `nullable`/`precision`/`displaySize` em `protocolo.Coluna`, `ColunaMeta` e
+1. `nullable`/`precision`/`displaySize` em `protocol.Column`, `ColumnMeta` e
    `executor.ColMeta` (semântica v1: toda coluna nullable; precision/displaySize por
    tipo da tabela §73). Campos JSON aditivos.
 2. Versão do produto: **já entregue no A3** — aqui só o driver consome.
-3. Mover `Saude` de [http.go:38](internal/server/http.go:38) para `internal/protocol`.
+3. Mover `Health` de [http.go:38](internal/server/http.go:38) para `internal/protocol`.
 4. Uniformizar o 405: `/metrics` e `/v1/health` registrados sem método no padrão,
-   conferindo por dentro — todo erro sai `protocolo.CorpoErro`.
+   conferindo por dentro — todo erro sai `protocol.ErrorBody`.
 5. **Débito 58**: `query --server` ganha `--param <tipo>:<valor>` repetível, 1:1 com os
-   4 tipos de wire de `protocolo.Parametro` — prova ponta a ponta do caminho de
+   4 tipos de wire de `protocol.Param` — prova ponta a ponta do caminho de
    parâmetros pelo produto.
 6. **`UNSUPPORTED_CLAUSE` — desvio deliberado do roadmap**: NÃO acrescentar keywords ao
    lexer (quebraria `SELECT order FROM t`, hoje ident válido). Detectar no sítio do
@@ -284,7 +284,7 @@ Pode começar após o merge da Fase B, em paralelo com a janela de observação 
   Maven wrapper. Artefato `nishidb-jdbc.jar`, `META-INF/services/java.sql.Driver`.
 - Connection string `jdbc:nishidb://host:9142/<dataset>` + `Properties` `user`,
   `password`, `tls`, `tlsCaFile`/trustStore (herda o contrato Basic da Fase 11).
-- `ResultSet` **streaming** portando `protocolo.Leitor`
+- `ResultSet` **streaming** portando `protocol.Reader`
   ([stream.go:45](internal/protocol/stream.go:45)): linha de schema, dados linha a
   linha, fecho obrigatório — stream sem fecho = `SQLException` de transporte (§128
   vale para o cliente também). Tabela código→`SQLState` derivada de
