@@ -19,32 +19,32 @@ import (
 // pode receber dois records com o mesmo valor dentro de um segmento.
 //
 // O oráculo é um decodificador LOCAL deste teste, escrito a partir do layout
-// documentado em format.go — não a partir de montaCorpo, e sobretudo não do
-// leitor da Tarefa 2 (AbreSelado, que ainda não existe). Um teste do
+// documentado em format.go — não a partir de buildBody, e sobretudo não do
+// leitor da Tarefa 2 (OpenSealed, que ainda não existe). Um teste do
 // escritor que abrisse o próprio arquivo com o leitor não provaria nada: os
 // dois lados são alimentados pela mesma leitura do mesmo format.go, e um
-// agrupamento errado em montaCorpo que o leitor decodificasse do mesmo jeito
+// agrupamento errado em buildBody que o leitor decodificasse do mesmo jeito
 // errado passaria batido — "os dois estão certos" e "os dois erram do mesmo
 // jeito" ficam indistinguíveis. Ler os bytes aqui, direto do []byte que
-// Escreve produziu, é o que trava o ESCRITOR sozinho.
+// WriteSealed produziu, é o que trava o ESCRITOR sozinho.
 func TestOEscritorAgrupaOrdenaEDeduplicaAsPostings(t *testing.T) {
 	dir := t.TempDir()
-	e := segindex.NovoEscritor()
+	e := segindex.NewWriter()
 	// campo 7, valor A (hash 100): rows 30, 10, 30 (duplicata), 20
-	e.Adiciona(7, 100, 30)
-	e.Adiciona(7, 100, 10)
-	e.Adiciona(7, 100, 30)
-	e.Adiciona(7, 100, 20)
+	e.Add(7, 100, 30)
+	e.Add(7, 100, 10)
+	e.Add(7, 100, 30)
+	e.Add(7, 100, 20)
 	// campo 7, valor B (hash 50): row 15  -- hash MENOR, adicionado depois
-	e.Adiciona(7, 50, 15)
+	e.Add(7, 50, 15)
 	// campo 3 (fieldID MENOR, adicionado por último)
-	e.Adiciona(3, 999, 12)
+	e.Add(3, 999, 12)
 
-	caminho := segindex.CaminhoSelado(dir, 42)
-	if err := e.Escreve(caminho, 42); err != nil {
-		t.Fatalf("Escreve: %v", err)
+	path := segindex.SealedPath(dir, 42)
+	if err := e.WriteSealed(path, 42); err != nil {
+		t.Fatalf("WriteSealed: %v", err)
 	}
-	b, err := os.ReadFile(caminho)
+	b, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("ler arquivo gerado: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestOEscritorAgrupaOrdenaEDeduplicaAsPostings(t *testing.T) {
 	secCount := binary.LittleEndian.Uint16(b[6:8])
 	baseRowID := types.RowID(binary.LittleEndian.Uint64(b[16:24]))
 	maxRowID := types.RowID(binary.LittleEndian.Uint64(b[24:32]))
-	largura := b[32]
+	width := b[32]
 
 	if got, want := baseRowID, types.RowID(10); got != want {
 		t.Errorf("baseRowID = %d, quero %d", got, want)
@@ -66,31 +66,31 @@ func TestOEscritorAgrupaOrdenaEDeduplicaAsPostings(t *testing.T) {
 	}
 
 	// --- tabela de seções: ORDENADA por fieldID (campo 3 antes do 7) ---
-	type secao struct {
-		fieldID   types.FieldID
-		distintos uint32
-		dirOff    uint64
-		postOff   uint64
+	type section struct {
+		fieldID        types.FieldID
+		distinctValues uint32
+		dirOff         uint64
+		postOff        uint64
 	}
-	secoes := make([]secao, secCount)
-	for i := range secoes {
-		off := segindex.HeaderSelado + i*segindex.TamSecao
-		secoes[i] = secao{
-			fieldID:   types.FieldID(binary.LittleEndian.Uint16(b[off : off+2])),
-			distintos: binary.LittleEndian.Uint32(b[off+4 : off+8]),
-			dirOff:    binary.LittleEndian.Uint64(b[off+8 : off+16]),
-			postOff:   binary.LittleEndian.Uint64(b[off+16 : off+24]),
+	sections := make([]section, secCount)
+	for i := range sections {
+		off := segindex.SealedHeaderSize + i*segindex.SectionEntrySize
+		sections[i] = section{
+			fieldID:        types.FieldID(binary.LittleEndian.Uint16(b[off : off+2])),
+			distinctValues: binary.LittleEndian.Uint32(b[off+4 : off+8]),
+			dirOff:         binary.LittleEndian.Uint64(b[off+8 : off+16]),
+			postOff:        binary.LittleEndian.Uint64(b[off+16 : off+24]),
 		}
 	}
-	if got, want := secoes[0].fieldID, types.FieldID(3); got != want {
+	if got, want := sections[0].fieldID, types.FieldID(3); got != want {
 		t.Fatalf("secoes[0].fieldID = %d, quero %d (campo 3 antes do 7)", got, want)
 	}
-	if got, want := secoes[1].fieldID, types.FieldID(7); got != want {
+	if got, want := sections[1].fieldID, types.FieldID(7); got != want {
 		t.Fatalf("secoes[1].fieldID = %d, quero %d", got, want)
 	}
 
-	sec7 := secoes[1]
-	if got, want := sec7.distintos, uint32(2); got != want {
+	sec7 := sections[1]
+	if got, want := sec7.distinctValues, uint32(2); got != want {
 		t.Fatalf("campo 7: distintos = %d, quero %d (hash 50 e hash 100)", got, want)
 	}
 
@@ -100,9 +100,9 @@ func TestOEscritorAgrupaOrdenaEDeduplicaAsPostings(t *testing.T) {
 		postIdx uint32
 		count   uint32
 	}
-	dirs := make([]dirEntry, sec7.distintos)
+	dirs := make([]dirEntry, sec7.distinctValues)
 	for i := range dirs {
-		off := int(sec7.dirOff) + i*segindex.TamSlotDir
+		off := int(sec7.dirOff) + i*segindex.DirSlotSize
 		dirs[i] = dirEntry{
 			hash:    binary.LittleEndian.Uint64(b[off : off+8]),
 			postIdx: binary.LittleEndian.Uint32(b[off+8 : off+12]),
@@ -117,15 +117,15 @@ func TestOEscritorAgrupaOrdenaEDeduplicaAsPostings(t *testing.T) {
 	}
 
 	// --- postings do valor 100: {10, 20, 30}, ascendente, SEM a duplicata ---
-	valor100 := dirs[1]
-	if got, want := valor100.count, uint32(3); got != want {
+	value100 := dirs[1]
+	if got, want := value100.count, uint32(3); got != want {
 		t.Fatalf("valor 100: count = %d, quero %d (a duplicata de 30 tem de sumir)", got, want)
 	}
 	var rows []types.RowID
-	for i := uint32(0); i < valor100.count; i++ {
-		off := int(sec7.postOff) + int(valor100.postIdx+i)*int(largura)
+	for i := uint32(0); i < value100.count; i++ {
+		off := int(sec7.postOff) + int(value100.postIdx+i)*int(width)
 		var delta uint64
-		if largura == 4 {
+		if width == 4 {
 			delta = uint64(binary.LittleEndian.Uint32(b[off : off+4]))
 		} else {
 			delta = binary.LittleEndian.Uint64(b[off : off+8])
@@ -149,20 +149,20 @@ func TestOEscritorAgrupaOrdenaEDeduplicaAsPostings(t *testing.T) {
 // "16 x distintos + 4 x linhas" seria mentira.
 func TestOEscritorRebaseiaParaAMenorLarguraQueCabe(t *testing.T) {
 	dir := t.TempDir()
-	e := segindex.NovoEscritor()
+	e := segindex.NewWriter()
 	// rowIds ALTOS, mas com intervalo pequeno: o delta cabe em u32 mesmo com
 	// o rowId absoluto passando de 2^32. É exatamente o caso do histórico com
 	// meses no ar, e é o caso em que uma implementação que ignorasse o base
 	// escolheria 8 bytes sem precisar.
 	base := types.RowID(1) << 35
-	e.Adiciona(7, 100, base)
-	e.Adiciona(7, 100, base+1000)
+	e.Add(7, 100, base)
+	e.Add(7, 100, base+1000)
 
-	caminho := segindex.CaminhoSelado(dir, 1)
-	if err := e.Escreve(caminho, 1); err != nil {
-		t.Fatalf("Escreve: %v", err)
+	path := segindex.SealedPath(dir, 1)
+	if err := e.WriteSealed(path, 1); err != nil {
+		t.Fatalf("WriteSealed: %v", err)
 	}
-	b, err := os.ReadFile(caminho)
+	b, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,16 +177,16 @@ func TestOEscritorRebaseiaParaAMenorLarguraQueCabe(t *testing.T) {
 // pronto e o segmento nunca ganharia índice de verdade.
 func TestOEscritorVazioNaoCriaArquivo(t *testing.T) {
 	dir := t.TempDir()
-	e := segindex.NovoEscritor()
-	if !e.Vazio() {
-		t.Fatal("escritor recém-criado deveria ser Vazio()")
+	e := segindex.NewWriter()
+	if !e.IsEmpty() {
+		t.Fatal("escritor recém-criado deveria ser IsEmpty()")
 	}
-	caminho := segindex.CaminhoSelado(dir, 1)
-	if err := e.Escreve(caminho, 1); err != nil {
-		t.Fatalf("Escreve: %v", err)
+	path := segindex.SealedPath(dir, 1)
+	if err := e.WriteSealed(path, 1); err != nil {
+		t.Fatalf("WriteSealed: %v", err)
 	}
-	if _, err := os.Stat(caminho); !os.IsNotExist(err) {
-		t.Fatalf("Stat(%s) = %v, quero IsNotExist", filepath.Base(caminho), err)
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("Stat(%s) = %v, quero IsNotExist", filepath.Base(path), err)
 	}
 }
 
@@ -206,17 +206,17 @@ func TestOEscritorVazioNaoCriaArquivo(t *testing.T) {
 // temporário sai da conta do IndexBytes e da limpeza da abertura, e vira disco
 // que nada explica).
 func TestCadaEscritaUsaUmTemporarioProprio(t *testing.T) {
-	caminho := segindex.CaminhoSelado(t.TempDir(), 7)
-	a := segindex.CaminhoTemporarioParaTeste(caminho)
-	b := segindex.CaminhoTemporarioParaTeste(caminho)
+	path := segindex.SealedPath(t.TempDir(), 7)
+	a := segindex.TempPathForTest(path)
+	b := segindex.TempPathForTest(path)
 	if a == b {
 		t.Fatalf("dois escritores do segmento 7 receberam o MESMO temporário (%s): a selagem da rotação e a "+
 			"reconstrução da fila escreveriam no mesmo arquivo, e o .sidx publicado sairia rasgado", a)
 	}
-	for _, nome := range []string{a, b} {
-		if !segindex.EhTemporarioDeIndice(filepath.Base(nome)) {
-			t.Errorf("o temporário %s não casa com EhTemporarioDeIndice: ele sairia da conta do IndexBytes e "+
-				"a limpeza da abertura deixaria de encontrá-lo", filepath.Base(nome))
+	for _, name := range []string{a, b} {
+		if !segindex.IsIndexTempFile(filepath.Base(name)) {
+			t.Errorf("o temporário %s não casa com IsIndexTempFile: ele sairia da conta do IndexBytes e "+
+				"a limpeza da abertura deixaria de encontrá-lo", filepath.Base(name))
 		}
 	}
 }
@@ -232,35 +232,35 @@ func TestCadaEscritaUsaUmTemporarioProprio(t *testing.T) {
 // sairia certo mesmo com as duas escritas embaralhadas. Aqui a diferença é o que
 // torna a mistura VISÍVEL — um crc que não fecha, ou um arquivo de zero bytes.
 func TestDoisEscritoresConcorrentesNaoPublicamArquivoRasgado(t *testing.T) {
-	for rodada := range 50 {
+	for round := range 50 {
 		dir := t.TempDir()
-		caminho := segindex.CaminhoSelado(dir, 1)
+		path := segindex.SealedPath(dir, 1)
 		var wg sync.WaitGroup
 		for i, postings := range [][]types.RowID{{1, 2, 3}, {10, 20, 30, 40, 50, 60, 70, 80}} {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				e := segindex.NovoEscritor()
+				e := segindex.NewWriter()
 				for _, row := range postings {
-					e.Adiciona(types.FieldID(1+i), uint64(100+i), row)
+					e.Add(types.FieldID(1+i), uint64(100+i), row)
 				}
-				if err := e.Escreve(caminho, 1); err != nil {
-					t.Errorf("Escreve concorrente: %v", err)
+				if err := e.WriteSealed(path, 1); err != nil {
+					t.Errorf("WriteSealed concorrente: %v", err)
 				}
 			}()
 		}
 		wg.Wait()
 
-		sel, err := segindex.AbreSelado(caminho)
+		sel, err := segindex.OpenSealed(path)
 		if err != nil {
-			t.Fatalf("rodada %d: o .sidx publicado por duas escritas concorrentes não abre: %v", rodada, err)
+			t.Fatalf("rodada %d: o .sidx publicado por duas escritas concorrentes não abre: %v", round, err)
 		}
-		err = sel.ErroDeIntegridade()
-		if cerr := sel.Fecha(); err == nil {
+		err = sel.IntegrityErr()
+		if cerr := sel.Close(); err == nil {
 			err = cerr
 		}
 		if err != nil {
-			t.Fatalf("rodada %d: o .sidx publicado por duas escritas concorrentes saiu rasgado: %v", rodada, err)
+			t.Fatalf("rodada %d: o .sidx publicado por duas escritas concorrentes saiu rasgado: %v", round, err)
 		}
 	}
 }
@@ -268,31 +268,31 @@ func TestDoisEscritoresConcorrentesNaoPublicamArquivoRasgado(t *testing.T) {
 // TestApagaTemporariosRemoveOResiduoDeUmProcessoMorto é a contrapartida do nome
 // único. Com o nome fixo, o temporário de um processo morto era truncado pela
 // escrita seguinte e o disco voltava sozinho; com um nome por escritor, ninguém
-// mais o alcança — e o IndexBytes o conta, porque ele casa com EhArquivoDeIndice.
+// mais o alcança — e o IndexBytes o conta, porque ele casa com IsIndexFile.
 //
 // Os arquivos que NÃO são temporário ficam, e a asserção é tão importante quanto
 // a outra: uma limpeza que levasse junto o .sidx ou o .widx apagaria índice bom
 // em toda abertura.
 func TestApagaTemporariosRemoveOResiduoDeUmProcessoMorto(t *testing.T) {
 	dir := t.TempDir()
-	residuo := segindex.CaminhoTemporarioParaTeste(segindex.CaminhoSelado(dir, 3))
-	selado := segindex.CaminhoSelado(dir, 3)
-	dados := filepath.Join(dir, "segment-00000003.dat")
-	for _, nome := range []string{residuo, selado, dados} {
-		if err := os.WriteFile(nome, []byte("x"), 0o644); err != nil {
+	residue := segindex.TempPathForTest(segindex.SealedPath(dir, 3))
+	sealed := segindex.SealedPath(dir, 3)
+	data := filepath.Join(dir, "segment-00000003.dat")
+	for _, name := range []string{residue, sealed, data} {
+		if err := os.WriteFile(name, []byte("x"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := segindex.ApagaTemporarios(dir); err != nil {
-		t.Fatalf("ApagaTemporarios: %v", err)
+	if err := segindex.RemoveTempFiles(dir); err != nil {
+		t.Fatalf("RemoveTempFiles: %v", err)
 	}
-	if _, err := os.Stat(residuo); !os.IsNotExist(err) {
+	if _, err := os.Stat(residue); !os.IsNotExist(err) {
 		t.Errorf("Stat(%s) = %v, quero IsNotExist: o temporário de um processo morto ficaria em disco para sempre, "+
-			"contado pelo IndexBytes e sem ninguém para reaproveitá-lo", filepath.Base(residuo), err)
+			"contado pelo IndexBytes e sem ninguém para reaproveitá-lo", filepath.Base(residue), err)
 	}
-	for _, nome := range []string{selado, dados} {
-		if _, err := os.Stat(nome); err != nil {
-			t.Errorf("a limpeza levou %s junto: %v", filepath.Base(nome), err)
+	for _, name := range []string{sealed, data} {
+		if _, err := os.Stat(name); err != nil {
+			t.Errorf("a limpeza levou %s junto: %v", filepath.Base(name), err)
 		}
 	}
 }

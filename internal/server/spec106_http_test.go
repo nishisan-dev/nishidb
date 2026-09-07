@@ -181,17 +181,17 @@ func TestSpec106PeloProtocoloHTTP(t *testing.T) {
 		t.Run(c.caso, func(t *testing.T) {
 			resp := consulta(t, srv, c.corpo)
 			rows, l := resultado(t, resp)
-			if l.Erro() != nil {
-				t.Fatalf("fecho de erro: %+v", l.Erro())
+			if l.Failure() != nil {
+				t.Fatalf("fecho de erro: %+v", l.Failure())
 			}
-			if l.Fim() == nil {
+			if l.End() == nil {
 				t.Fatal("a resposta não trouxe fecho de sucesso")
 			}
 			if got := idsDe(t, rows); !mesmosIDs(got, c.querID) {
 				t.Fatalf("ids = %v, quer %v", got, c.querID)
 			}
-			if l.Fim().Rows != int64(len(c.querID)) {
-				t.Fatalf("fecho diz %d rows, saíram %d", l.Fim().Rows, len(c.querID))
+			if l.End().Rows != int64(len(c.querID)) {
+				t.Fatalf("fecho diz %d rows, saíram %d", l.End().Rows, len(c.querID))
 			}
 		})
 	}

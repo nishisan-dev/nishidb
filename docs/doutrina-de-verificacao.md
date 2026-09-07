@@ -30,7 +30,7 @@ impressão de cobertura.
    commitar, e desconfie de constante ou lock que não estava no diff.
 
 4. **Citação que não resolve**. `§NN` apontando para seção que não existe, e
-   amostra de métrica sem `Familia` — o `# HELP`/`# TYPE` sai com nome vazio e
+   amostra de métrica sem `Family` — o `# HELP`/`# TYPE` sai com nome vazio e
    o Prometheus recusa o scrape inteiro, não só a linha.
 
 ## O método
@@ -58,10 +58,10 @@ comparando duas extrações — a mesma doutrina dos outros gates de
   CLAUDE.md, planning e comentários Go resolve em uma seção ou item das specs
   declaradas. O `.go` é lido por AST (só comentários) e o `.md` pula os blocos
   cercados: `§` dentro de string literal ou de exemplo não é citação.
-- `TestAmostrasDeMetricaTemFamiliaENome` — todo literal `metrics.Amostra{...}`
-  em código de produção declara `Familia` e `Nome` por constante, nunca string
-  literal, e o `Nome` pertence à `Familia` (a mesma constante, ou ela mais um
-  sufixo de histograma). "Todo" inclui a forma elidida `[]metrics.Amostra{{…}}`,
+- `TestAmostrasDeMetricaTemFamiliaENome` — todo literal `metrics.Sample{...}`
+  em código de produção declara `Family` e `Name` por constante, nunca string
+  literal, e o `Name` pertence à `Family` (a mesma constante, ou ela mais um
+  sufixo de histograma). "Todo" inclui a forma elidida `[]metrics.Sample{{…}}`,
   que é quase 40% dos literais.
 
 Eles não julgam se a citação aponta para o lugar certo — isso é revisão. Eles

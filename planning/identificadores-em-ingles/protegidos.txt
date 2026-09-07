@@ -31,8 +31,59 @@
 #     (internal/types/types.go:66,84,144) e os dois blocos ```go de
 #     planning/colunas-congeladas-e-ttl-condicional-plano.md:793,1419 viram
 #     `Exists`. O idioma "Existe porque…" abre godoc em mais de vinte arquivos
-#     deste repositório.
+#     deste repositório. `Nunca` é o segundo caso, e pela mesma mecânica: a
+#     constante `rowindex.Nunca` virou `Never`, e o ADVÉRBIO que abre frase
+#     ("Nunca cresce na leitura", internal/storage/rowindex/dense32.go:34;
+#     "Nunca reordene", "Nunca aloca quando a chave já existe", nos dois
+#     planos) não é citação nenhuma. As citações verdadeiras da constante já
+#     estão em inglês — o godoc de schedule.go:140,186 e as formas
+#     qualificadas `rowindex.Nunca` —, e o que a proteção segura daqui para a
+#     frente é só o advérbio. `Vazio` é o terceiro: `Cadeias.Vazio` e
+#     `Escritor.Vazio` viraram `IsEmpty`, mas em
+#     planning/colunas-congeladas-e-ttl-condicional-plano.md:955 o `Vazio` que
+#     abre frase é o ADJETIVO que descreve o campo `When` sem conteúdo
+#     ("Vazio marca a regra de FUNDO"), e não método nenhum. As oito citações
+#     verdadeiras deste ciclo já saíram como `IsEmpty`. `Com` é o quarto, e o
+#     único em que o CONTEXTO é que engana: `FamiliaContador.Com` virou
+#     `With`, e em planning/fase7-driver-jdbc.md:102 o `Com` que abre frase é
+#     a PREPOSIÇÃO ("Com o descritor eles deixam de ser iguais"). O gate a lê
+#     como citação porque conta as crases a partir do início da LINHA, e a
+#     crase que fecha ali abriu na linha anterior — a contagem dá ímpar e ele
+#     conclui "dentro de crase". As citações reais de `Com` já saíram como
+#     `With` na passada de internal/metrics.
+#   - NOME DE ARQUIVO EM DISCO cuja base é homônima de identificador
+#     renomeado: `vazio.bin`, o tempdir de
+#     internal/storage/mmap/region_test.go:337. O ponto o faz passar por
+#     endereço qualificado, e o tipo `vazio` do segindex (union.go) virou
+#     `emptyIter` — sem a proteção o arquivo de teste passa a se chamar
+#     `emptyIter.bin`, que não é nome de arquivo que ninguém escreveria.
+#   - endereço QUALIFICADO homônimo cujo dono é OUTRO tipo, vivo e não
+#     mapeado, que o oráculo da declaração viva não alcança porque só olha o
+#     token nu: `Fonte.Estado` é o campo de internal/metakafka.Fonte
+#     (registry.go:80), e o `Fonte` → `Source` do segindex é outro tipo, sem
+#     campo `Estado` (sealed.go:28); `Escritor.Apenda` é a INTERFACE FICTÍCIA
+#     do fixture do próprio ferramental — dado de teste em
+#     scripts/renametools/inventory_test.go:30 e o exemplo dos comentários de
+#     scripts/ifacerename/rewrite.go:196 e scripts/renametools/groups.go:108,
+#     onde o `Escritor` nu da linha vizinha fica e trocar só a metade
+#     qualificada quebraria o teste e a frase. `Arquivo.Apenda` é o mesmo
+#     fixture (inventory_test.go:39), e a linha seguinte cita
+#     `Arquivo.Apenda.chave`, que o mapeamento não alcança;
+#   - VALOR DE RÓTULO de métrica homônimo de campo privado: `selado`, do
+#     `estado` de `nishidb_index_segmentos` (internal/metrics/names.go:393,
+#     internal/storage/store.go:576,609 e mais treze citações em README,
+#     docs e planning). O campo `Arquivo.selado` do spill virou
+#     `Run.sealed`, e sem a proteção o valor do rótulo mudaria em crase pela
+#     metade — `corrente`, `pendente` e `fora` ficariam —, que é contrato de
+#     wire, e ele muda na Fase 3, não aqui.
+Arquivo.Apenda
+Com
 Data
+Escritor.Apenda
+Fonte.Estado
+Nunca
+Vazio
+selado
 Existe
 campo
 campos
@@ -44,3 +95,4 @@ seg
 texto
 tipo
 valor
+vazio.bin

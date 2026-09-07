@@ -85,7 +85,7 @@ type renamedIdent struct {
 // citação diz de quem está falando: qualificada pelo dono do endereço
 // (`Manifest.Contadores`, `checkpoint.Contadores`) ou dentro do próprio pacote
 // que perdeu o nome. `Store.Contadores()` continua existindo em
-// internal/storage, e `Nome` continua sendo campo de `metrics.Amostra` — um
+// internal/storage, e `Nome` continua sendo campo de `counter.Definicao` — um
 // gate que trocasse esses dois criaria a citação pendurada que diz combater.
 //
 // Sobreviver é decidido por DUAS extrações, nenhuma delas um inventário
@@ -448,11 +448,22 @@ var danglingCitationSkipDirs = map[string]bool{
 // `scripts/renamecite` dela: o godoc explica a regra com os nomes velhos de
 // verdade (`Epoca`, `LimiteRowID`, `specsDoMarcador`), e sem a exceção ele
 // acusaria as próprias explicações — 22 ocorrências na primeira rodada.
+//
+// `scripts/ifacerename` e `scripts/renametools` entram pelo MESMO motivo do
+// `scripts/renamecite`, e a razão só ficou visível quando o oráculo parou de
+// contar `testdata` (ver underTestdata): as duas ferramentas são escritas em
+// cima do módulo de fixture `scripts/renametools/testdata/modulo`, que copia de
+// propósito os nomes do repositório real (`a.Escritor`, `b.Arquivo`,
+// `a.Medidor`) para reproduzir os achados da varredura. A prosa que explica os
+// testes fala DESSES tipos, não dos homônimos de internal/index/segindex ou
+// internal/metrics — 22 ocorrências, todas citação correta do fixture.
 var danglingCitationSkipPaths = map[string]bool{
 	"planning/identificadores-em-ingles":          true,
 	"planning/identificadores-em-ingles.md":       true,
 	"planning/identificadores-em-ingles-plano.md": true,
 	"scripts/renamecite":                          true,
+	"scripts/ifacerename":                         true,
+	"scripts/renametools":                         true,
 	"benchmark/baselines":                         true,
 	"docs/glossario.md":                           true,
 	"internal/gates/dangling_citations_test.go":   true,
@@ -491,7 +502,7 @@ func danglingCitationChunks(t *testing.T) ([]citationChunk, declarations) {
 		}
 		switch {
 		case strings.HasSuffix(rel, ".go"):
-			chunks = append(chunks, goCitationChunks(rel, p, declared)...)
+			chunks = append(chunks, goCitationChunks(rel, p, declared, !underTestdata(rel))...)
 		case strings.HasSuffix(rel, ".md"), strings.HasSuffix(rel, ".puml"),
 			filepath.Base(rel) == "Makefile",
 			strings.HasPrefix(rel, ".github/workflows/") && strings.HasSuffix(rel, ".yml"),
@@ -514,12 +525,35 @@ func danglingCitationChunks(t *testing.T) ([]citationChunk, declarations) {
 	return chunks, declared
 }
 
+// underTestdata diz se o caminho está sob um diretório `testdata`.
+//
+// O go tool ignora essas árvores, então o que está declarado lá não é
+// declaração do MÓDULO — é dado de fixture. É a mesma exclusão que o
+// `scripts/renamecite` faz em collectDeclarations, e ela não é simetria por
+// simetria: `scripts/renametools/testdata/modulo` declara `Escritor`, `Fecha`
+// e `Apenda`, e enquanto essas três contaram como declaração viva o gate
+// tratou como sobrevivente todo nome que só o fixture ainda tinha — cegando-se
+// justamente para as citações penduradas que o ciclo deixou.
+func underTestdata(rel string) bool {
+	for _, seg := range strings.Split(rel, "/") {
+		if seg == "testdata" {
+			return true
+		}
+	}
+	return false
+}
+
 // goCitationChunks extrai de um arquivo Go os comentários e os literais de
 // string, e acrescenta a `declared` os nomes que o arquivo DECLARA. Arquivo que
 // não parseia devolve nada: sintaxe é problema do compilador, e cair para uma
 // leitura por bytes seria trocar o dado estruturado por grep — o defeito que
 // este pacote já pagou uma vez.
-func goCitationChunks(rel, path string, declared declarations) []citationChunk {
+//
+// `oracle` diz se o arquivo alimenta o oráculo de declaração viva. Ele é falso
+// sob `testdata` (ver underTestdata): o texto de lá continua sendo VARRIDO —
+// comentário de fixture cita identificador como qualquer outro —, mas o que
+// ele declara não conta como declaração do módulo.
+func goCitationChunks(rel, path string, declared declarations, oracle bool) []citationChunk {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, path, nil, parser.ParseComments|parser.SkipObjectResolution)
 	if err != nil {
@@ -530,6 +564,9 @@ func goCitationChunks(rel, path string, declared declarations) []citationChunk {
 		declared.byPkg[pkg] = map[string]bool{}
 	}
 	declare := func(name string) {
+		if !oracle {
+			return
+		}
 		declared.module[name] = true
 		declared.byPkg[pkg][name] = true
 	}
@@ -555,7 +592,8 @@ func goCitationChunks(rel, path string, declared declarations) []citationChunk {
 			// Campo de struct, método de interface e parâmetro nomeado. Os três
 			// entram: o que interessa é se o NOME ainda é declarado em algum
 			// lugar, e um campo ainda vivo é exatamente o que faz `Nome` de
-			// `metrics.Amostra` não ser citação pendurada de `ContadorInfo.Nome`.
+			// `counter.Definicao` não ser citação pendurada de
+			// `ContadorInfo.Nome`, que o ciclo renomeou para `CounterInfo.Name`.
 			for _, id := range x.Names {
 				declare(id.Name)
 			}
@@ -618,4 +656,41 @@ func addressLeaf(address string) string {
 		return address[i+1:]
 	}
 	return address
+}
+
+// TestTheLiveDeclarationOracleIgnoresTestdata exercita a regra de underTestdata
+// no arquivo REAL que a motivou, e não num fixture escrito para ela: o módulo
+// de `scripts/renametools/testdata` declara `Escritor`, `Fecha` e `Apenda`, e
+// enquanto essas declarações contaram como declaração do módulo o gate tratou
+// como VIVO todo nome que só o fixture ainda tinha — calando-se justamente
+// sobre as citações penduradas que o ciclo deixou.
+//
+// O controle é a metade que prova que o teste não passa por vacuidade: o MESMO
+// arquivo, apresentado por um caminho fora de `testdata`, tem de alimentar o
+// oráculo. Sem ele, uma regressão que parasse de colher declaração em qualquer
+// lugar passaria verde aqui.
+func TestTheLiveDeclarationOracleIgnoresTestdata(t *testing.T) {
+	const rel = "scripts/renametools/testdata/modulo/a/a.go"
+	path := filepath.Join(repoRoot, filepath.FromSlash(rel))
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("a fixture que este teste usa como caso real não está em %s (%v): o teste passaria sem "+
+			"exercitar nada", rel, err)
+	}
+	dentro := declarations{module: map[string]bool{}, byPkg: map[string]map[string]bool{}}
+	if chunks := goCitationChunks(rel, path, dentro, !underTestdata(rel)); len(chunks) == 0 {
+		t.Fatalf("%s não rendeu pedaço nenhum: o arquivo não foi lido, e o resto do teste seria vácuo", rel)
+	}
+	for _, nome := range []string{"Escritor", "Fecha", "Apenda"} {
+		if dentro.module[nome] {
+			t.Errorf("%s: a declaração de %s sob testdata entrou no oráculo de declaração viva — o go tool "+
+				"ignora essa árvore, e com ela o gate dá por vivo um nome que o ciclo matou", rel, nome)
+		}
+	}
+	fora := declarations{module: map[string]bool{}, byPkg: map[string]map[string]bool{}}
+	const relFora = "internal/exemplo/a.go"
+	goCitationChunks(relFora, path, fora, !underTestdata(relFora))
+	if !fora.module["Escritor"] {
+		t.Errorf("%s: o mesmo arquivo, fora de testdata, não alimentou o oráculo — a colheita de declaração "+
+			"parou de funcionar, e o teste de cima passaria por vacuidade", relFora)
+	}
 }

@@ -70,7 +70,7 @@ Pacotes que estruturam o todo:
   checkpoint/manifest, recovery, compaction, expiração, retenção. `storage/mmap`
   é o ÚNICO pacote autorizado a usar mmap/unsafe; `fielddict` é append-only com
   teto de 65.535 campos. `storage/contador` é o contador mantido na escrita:
-  vetor denso de 4 bytes por linha (`rowindex.Denso32`) + dicionário de grupos
+  vetor denso de 4 bytes por linha (`rowindex.Dense32`) + dicionário de grupos
   append-only + totais em heap, transicionado no passo 7c do `applyRecord`.
   Os agregados do contador inteiro (`linhas`, `total`) andam COLADOS aos
   vetores por grupo, dentro das mesmas guardas — nunca são somados na leitura,
@@ -199,9 +199,9 @@ Quatro classes de defeito que nenhum compilador pega, e como este repo as fecha:
   código não estabelece. **Abra a fonte antes de afirmar.**
 - **Citação que não resolve** — `§NN` para seção inexistente. Gate:
   `TestCitacoesDeSecaoResolvem`.
-- **Amostra de métrica sem `Familia`** — `# HELP`/`# TYPE` sai com nome vazio e
+- **Amostra de métrica sem `Family`** — `# HELP`/`# TYPE` sai com nome vazio e
   o Prometheus recusa o scrape inteiro. Gate:
-  `TestAmostrasDeMetricaTemFamiliaENome`, que também recusa `Nome` de outra
+  `TestAmostrasDeMetricaTemFamiliaENome`, que também recusa `Name` de outra
   família (a exceção é o sufixo de histograma).
 - **Resíduo de mutação** — constante hardcoded ou lock deixado por agente de
   revisão. Confira `git status` antes de commitar.

@@ -20,7 +20,7 @@ import (
 // fato altera, são os que têm contraparte nominal, em alloc_gate_race_test.go
 // (débito 53).
 
-// hashDeTeste devolve o hash do i-ésimo valor distinto pela MESMA função que a
+// testHash devolve o hash do i-ésimo valor distinto pela MESMA função que a
 // ingestão usa.
 //
 // Usar primary.HashKey, e não uma sequência tipo `i+2`, é o que dá sentido ao
@@ -29,7 +29,7 @@ import (
 // mediria o melhor caso possível da sondagem linear e aprovaria qualquer coisa.
 // É também a função de quem o formato depende para o sentinela de slot vazio:
 // ela nunca devolve 0 nem 1.
-func hashDeTeste(buf []byte, i int) uint64 {
+func testHash(buf []byte, i int) uint64 {
 	return primary.HashKey(binary.LittleEndian.AppendUint64(buf[:0], uint64(i)))
 }
 
@@ -52,26 +52,26 @@ func hashDeTeste(buf []byte, i int) uint64 {
 // percorresse a cadeia de postings antes de inserir, para não duplicar. Essa
 // caminhada não tem como acontecer sem ler o mapeamento, e por isso aparece
 // aqui. TestOCaminhoDeEscritaLeOMapeamentoSoPeloContador é o que garante que
-// ela não possa se esconder de w.le.
+// ela não possa se esconder de w.countedRead.
 //
 // O teto é sobre o PIOR caso, e não sobre a média, porque aqui o custo tem de
 // ser constante: são duas leituras — o slot e o estado dele — em qualquer n.
 func TestOCustoDoSetNaoAcompanhaOTamanhoDoSegmento(t *testing.T) {
-	const tetoDeSondas = 4 // amortizado; o diretório é dimensionado por DISTINTOS
+	const accessCeiling = 4 // amortizado; o diretório é dimensionado por DISTINTOS
 	for _, n := range []int{10_000, 100_000, 1_000_000} {
 		t.Run(fmt.Sprintf("n=%d", n), func(t *testing.T) {
-			w := abreWIPDeTeste(t)
-			defer fechaWIP(t, w)
-			var pior int
+			w := openTestWIP(t)
+			defer closeWIP(t, w)
+			var worst int
 			for i := range n {
 				if err := w.Set(100, types.RowID(i)); err != nil {
 					t.Fatalf("Set #%d: %v", i, err)
 				}
-				pior = max(pior, w.SondasDoUltimoSet())
+				worst = max(worst, w.LastSetAccesses())
 			}
-			if pior > tetoDeSondas {
+			if worst > accessCeiling {
 				t.Errorf("pior caso de %d acessos com n=%d, teto %d — a cadeia voltou a crescer com o segmento",
-					pior, n, tetoDeSondas)
+					worst, n, accessCeiling)
 			}
 		})
 	}
@@ -104,93 +104,95 @@ func TestOCustoDaSondagemNaoAcompanhaONumeroDeValoresDistintos(t *testing.T) {
 	// escalas. O teto tem folga de ~50% sobre o pior dos três; a série é
 	// determinística (primary.HashKey não varia entre máquinas), então a folga
 	// é para mudança de load factor, não para ruído de runner.
-	const tetoDaMedia = 6.0
+	const avgCeiling = 6.0
 	// A média pode oscilar entre escalas sem que nada tenha piorado — o que ela
 	// não pode é CRESCER com n. 1,5x é folga larga o bastante para a oscilação
 	// medida (3,85 -> 3,78, ou seja 0,98x de 10 mil para 1 milhão) e estreita o
 	// bastante para reprovar qualquer termo que acompanhe o tamanho do segmento.
-	const tetoDoCrescimento = 1.5
+	const growthCeiling = 1.5
 
-	escalas := []int{10_000, 100_000, 1_000_000}
-	medias := make([]float64, len(escalas))
-	for k, n := range escalas {
+	scales := []int{10_000, 100_000, 1_000_000}
+	avgs := make([]float64, len(scales))
+	for k, n := range scales {
 		t.Run(fmt.Sprintf("n=%d", n), func(t *testing.T) {
-			w := abreWIPDeTesteComSlots(t, 16) // começa apertado: o diretório rehasheia dezenas de vezes
-			defer fechaWIP(t, w)
+			w := openTestWIPWithSlots(t, 16) // começa apertado: o diretório rehasheia dezenas de vezes
+			defer closeWIP(t, w)
 			var buf [8]byte
-			soma := 0
+			sum := 0
 			for i := range n {
-				if err := w.Set(hashDeTeste(buf[:], i), types.RowID(i)); err != nil {
+				if err := w.Set(testHash(buf[:], i), types.RowID(i)); err != nil {
 					t.Fatalf("Set #%d: %v", i, err)
 				}
-				soma += w.SondasDoUltimoSet()
+				sum += w.LastSetAccesses()
 			}
-			if got := w.Distintos(); got != uint32(n) {
-				t.Fatalf("Distintos() = %d, quero %d — o corpus deixou de ser de valores distintos e o gate não mede mais a sondagem", got, n)
+			if got := w.DistinctValues(); got != uint32(n) {
+				t.Fatalf("DistinctValues() = %d, quero %d — o corpus deixou de ser de valores distintos e o gate não mede mais a sondagem", got, n)
 			}
-			medias[k] = float64(soma) / float64(n)
-			t.Logf("média de %.3f acessos por Set com %d valores distintos", medias[k], n)
-			if medias[k] > tetoDaMedia {
-				t.Errorf("média de %.3f acessos por Set com n=%d, teto %.1f", medias[k], n, tetoDaMedia)
+			avgs[k] = float64(sum) / float64(n)
+			t.Logf("média de %.3f acessos por Set com %d valores distintos", avgs[k], n)
+			if avgs[k] > avgCeiling {
+				t.Errorf("média de %.3f acessos por Set com n=%d, teto %.1f", avgs[k], n, avgCeiling)
 			}
 		})
 	}
-	if medias[0] == 0 {
+	if avgs[0] == 0 {
 		t.Fatal("a menor escala não mediu nada — sem ela a comparação entre escalas não significa nada")
 	}
-	if razao := medias[len(medias)-1] / medias[0]; razao > tetoDoCrescimento {
+	if ratio := avgs[len(avgs)-1] / avgs[0]; ratio > growthCeiling {
 		t.Errorf("a média por Set cresceu %.2fx de n=%d para n=%d (%.3f -> %.3f), teto %.1fx — o custo voltou a acompanhar o tamanho do segmento",
-			razao, escalas[0], escalas[len(escalas)-1], medias[0], medias[len(medias)-1], tetoDoCrescimento)
+			ratio, scales[0], scales[len(scales)-1], avgs[0], avgs[len(avgs)-1], growthCeiling)
 	}
 }
 
 // TestOCaminhoDeEscritaLeOMapeamentoSoPeloContador é o que torna os dois gates
 // acima verdadeiros em vez de aspiracionais.
 //
-// Eles medem w.sondas, que só sobe dentro de w.le. Um Set que lesse o
-// mapeamento por outro caminho — e a regressão que interessa, a caminhada da
-// cadeia de postings para deduplicar, é exatamente isso — não apareceria em
-// contador nenhum, e os dois gates passariam verdes sobre o O(n²) de volta.
+// Eles medem w.accesses, que só sobe dentro de w.countedRead. Um Set que
+// lesse o mapeamento por outro caminho — e a regressão que interessa, a
+// caminhada da cadeia de postings para deduplicar, é exatamente isso — não
+// apareceria em contador nenhum, e os dois gates passariam verdes sobre o
+// O(n²) de volta.
 //
 // A conferência é sobre o CÓDIGO, e não sobre o comportamento, porque não há
 // como observar "leu o mapeamento sem contar" de fora. É o mesmo idioma dos
 // gates que leem o Makefile e os manifestos como dado: config e código são
 // lidos como estrutura, nunca por grep em prosa — daí o parser em vez de uma
-// busca textual, que casaria com comentários e com o próprio corpo de le.
+// busca textual, que casaria com comentários e com o próprio corpo de
+// countedRead.
 //
-// O caminho de LEITURA faz o contrário de propósito: Lookup e ParaCada leem o
-// mapeamento direto porque w.sondas é um int comum, e um leitor concorrente que
-// o incrementasse criaria a corrida de dados que o mu existe para não ter.
+// O caminho de LEITURA faz o contrário de propósito: Lookup e ForEach leem o
+// mapeamento direto porque w.accesses é um int comum, e um leitor concorrente
+// que o incrementasse criaria a corrida de dados que o mu existe para não ter.
 func TestOCaminhoDeEscritaLeOMapeamentoSoPeloContador(t *testing.T) {
-	const arquivo = "wip.go"
+	const file = "wip.go"
 	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, arquivo, nil, 0)
+	f, err := parser.ParseFile(fset, file, nil, 0)
 	if err != nil {
-		t.Fatalf("parse de %s: %v", arquivo, err)
+		t.Fatalf("parse de %s: %v", file, err)
 	}
-	daEscrita := map[string]bool{"Set": true, "sondaOuCria": true}
-	achados := map[string]bool{}
+	writePathMethods := map[string]bool{"Set": true, "probeOrCreate": true}
+	found := map[string]bool{}
 	for _, d := range f.Decls {
 		fd, ok := d.(*ast.FuncDecl)
-		if !ok || fd.Recv == nil || !daEscrita[fd.Name.Name] {
+		if !ok || fd.Recv == nil || !writePathMethods[fd.Name.Name] {
 			continue
 		}
-		achados[fd.Name.Name] = true
+		found[fd.Name.Name] = true
 		ast.Inspect(fd.Body, func(n ast.Node) bool {
 			sel, ok := n.(*ast.SelectorExpr)
 			if !ok || sel.Sel.Name != "AtomicLoad64" {
 				return true
 			}
-			t.Errorf("%s:%d: %s lê o mapeamento por AtomicLoad64 direto — o contador de acessos não veria essa leitura, e uma caminhada de cadeia acrescentada aqui passaria despercebida pelos gates de custo. Use w.le.",
-				arquivo, fset.Position(sel.Pos()).Line, fd.Name.Name)
+			t.Errorf("%s:%d: %s lê o mapeamento por AtomicLoad64 direto — o contador de acessos não veria essa leitura, e uma caminhada de cadeia acrescentada aqui passaria despercebida pelos gates de custo. Use w.countedRead.",
+				file, fset.Position(sel.Pos()).Line, fd.Name.Name)
 			return true
 		})
 	}
 	// Sem esta conferência o gate passaria VAZIO no dia em que um dos dois
 	// métodos fosse renomeado: nada seria inspecionado e nada seria reportado.
-	for nome := range daEscrita {
-		if !achados[nome] {
-			t.Errorf("não achei o método %s em %s — o gate inspecionou menos do que promete", nome, arquivo)
+	for name := range writePathMethods {
+		if !found[name] {
+			t.Errorf("não achei o método %s em %s — o gate inspecionou menos do que promete", name, file)
 		}
 	}
 }

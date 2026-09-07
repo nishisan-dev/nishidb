@@ -43,15 +43,15 @@ func (s *Servidor) handleQuery(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
-		s.recusa(w, r, http.StatusMethodNotAllowed, datasetDesconhecido, protocol.Falha{
-			Code:    protocol.CodMetodo,
+		s.recusa(w, r, http.StatusMethodNotAllowed, datasetDesconhecido, protocol.ErrorDetail{
+			Code:    protocol.CodeMethod,
 			Message: fmt.Sprintf("%s não é aceito em /v1/query; use POST", r.Method),
 		})
 		return
 	}
 	if ct := r.Header.Get("Content-Type"); !ehJSON(ct) {
-		s.recusa(w, r, http.StatusUnsupportedMediaType, datasetDesconhecido, protocol.Falha{
-			Code:    protocol.CodMediaType,
+		s.recusa(w, r, http.StatusUnsupportedMediaType, datasetDesconhecido, protocol.ErrorDetail{
+			Code:    protocol.CodeMediaType,
 			Message: fmt.Sprintf("Content-Type %q não é aceito; use %s", ct, protocol.ContentTypeJSON),
 		})
 		return
@@ -67,17 +67,17 @@ func (s *Servidor) handleQuery(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		// O nome NÃO entra na métrica: ele é entrada do cliente, e um label
 		// alimentado por entrada do cliente é uma série nova por requisição.
-		s.recusa(w, r, http.StatusNotFound, datasetDesconhecido, protocol.Falha{
-			Code:    protocol.CodDatasetDesconhecido,
+		s.recusa(w, r, http.StatusNotFound, datasetDesconhecido, protocol.ErrorDetail{
+			Code:    protocol.CodeUnknownDataset,
 			Message: fmt.Sprintf("dataset %q não está registrado neste servidor", req.Dataset),
 		})
 		return
 	}
 
-	params, err := protocol.Valores(req.Parameters)
+	params, err := protocol.Values(req.Parameters)
 	if err != nil {
-		s.recusa(w, r, http.StatusBadRequest, d.nome, protocol.Falha{
-			Code: protocol.CodBadParameter, Message: err.Error(),
+		s.recusa(w, r, http.StatusBadRequest, d.nome, protocol.ErrorDetail{
+			Code: protocol.CodeBadParameter, Message: err.Error(),
 		})
 		return
 	}
@@ -107,8 +107,8 @@ func (s *Servidor) handleQuery(w http.ResponseWriter, r *http.Request) {
 		defer func() { <-s.vagas }()
 	default:
 		w.Header().Set("Retry-After", "1")
-		s.recusa(w, r, http.StatusServiceUnavailable, d.nome, protocol.Falha{
-			Code: protocol.CodMuitasQueries,
+		s.recusa(w, r, http.StatusServiceUnavailable, d.nome, protocol.ErrorDetail{
+			Code: protocol.CodeTooManyQueries,
 			Message: fmt.Sprintf("as %d vagas de consulta simultânea estão ocupadas (runtime.query.maxConcurrent)",
 				s.cfg.MaxConcurrent()),
 		})
@@ -134,8 +134,8 @@ func (s *Servidor) handleQuery(w http.ResponseWriter, r *http.Request) {
 			// cliente voltar em um segundo o treinaria a martelar o servidor.
 			w.Header().Set("Retry-After", "30")
 			s.met.recusaLonga()
-			s.recusa(w, r, http.StatusServiceUnavailable, d.nome, protocol.Falha{
-				Code: protocol.CodMuitasQueriesLongas,
+			s.recusa(w, r, http.StatusServiceUnavailable, d.nome, protocol.ErrorDetail{
+				Code: protocol.CodeTooManyLongQueries,
 				Message: fmt.Sprintf(
 					"as %d vagas de consulta longa estão ocupadas (runtime.query.maxLongRunning); "+
 						"peça um timeoutMs de até %d ms para entrar pelo pool geral",
@@ -160,8 +160,8 @@ func (s *Servidor) handleQuery(w http.ResponseWriter, r *http.Request) {
 	orc := s.orcamento.Query(s.cfg.MaxBufferPerQuery())
 	if !orc.Admit() {
 		w.Header().Set("Retry-After", "1")
-		s.recusa(w, r, http.StatusServiceUnavailable, d.nome, protocol.Falha{
-			Code: protocol.CodMuitasQueries,
+		s.recusa(w, r, http.StatusServiceUnavailable, d.nome, protocol.ErrorDetail{
+			Code: protocol.CodeTooManyQueries,
 			Message: fmt.Sprintf(
 				"o orçamento de memória de consulta do processo está esgotado (runtime.memoryTarget, %d bytes); "+
 					"esta consulta precisa de %d bytes (runtime.query.maxBufferPerQuery)",
@@ -196,8 +196,8 @@ func (s *Servidor) handleQuery(w http.ResponseWriter, r *http.Request) {
 		// Uma coluna chamada como a chave de moldura tornaria a row
 		// indistinguível de uma linha de controle. A recusa é aqui, antes do
 		// primeiro byte, porque depois dele já não haveria como recusar nada.
-		s.recusa(w, r, http.StatusBadRequest, d.nome, protocol.Falha{
-			Code: protocol.CodColunaReservada,
+		s.recusa(w, r, http.StatusBadRequest, d.nome, protocol.ErrorDetail{
+			Code: protocol.CodeReservedColumn,
 			Message: fmt.Sprintf("a coluna de saída %q colide com a chave reservada da resposta; "+
 				"renomeie com um alias na projeção", nome),
 		})
@@ -223,30 +223,30 @@ func ehJSON(ct string) bool {
 // operador a manter dois arquivos, mas aqui um `maxRow` com typo aceito em
 // silêncio faria o cliente acreditar que limitou o resultado. O caminho é
 // versionado (/v1) justamente para que campo novo venha com contrato novo.
-func (s *Servidor) leRequisicao(w http.ResponseWriter, r *http.Request) (protocol.Requisicao, *protocol.Falha, int) {
-	var req protocol.Requisicao
-	r.Body = http.MaxBytesReader(w, r.Body, protocol.MaxCorpoRequisicao)
+func (s *Servidor) leRequisicao(w http.ResponseWriter, r *http.Request) (protocol.Request, *protocol.ErrorDetail, int) {
+	var req protocol.Request
+	r.Body = http.MaxBytesReader(w, r.Body, protocol.MaxRequestBody)
 
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
 		var grande *http.MaxBytesError
 		if errors.As(err, &grande) {
-			return req, &protocol.Falha{
-				Code:    protocol.CodCorpoGrande,
-				Message: fmt.Sprintf("corpo acima do teto de %d bytes", protocol.MaxCorpoRequisicao),
+			return req, &protocol.ErrorDetail{
+				Code:    protocol.CodeBodyTooLarge,
+				Message: fmt.Sprintf("corpo acima do teto de %d bytes", protocol.MaxRequestBody),
 			}, http.StatusRequestEntityTooLarge
 		}
-		return req, &protocol.Falha{
-			Code:    protocol.CodBadRequest,
+		return req, &protocol.ErrorDetail{
+			Code:    protocol.CodeBadRequest,
 			Message: "corpo JSON inválido: " + err.Error(),
 		}, http.StatusBadRequest
 	}
 	switch {
 	case req.Dataset == "":
-		return req, &protocol.Falha{Code: protocol.CodBadRequest, Message: `"dataset" é obrigatório`}, http.StatusBadRequest
+		return req, &protocol.ErrorDetail{Code: protocol.CodeBadRequest, Message: `"dataset" é obrigatório`}, http.StatusBadRequest
 	case strings.TrimSpace(req.SQL) == "":
-		return req, &protocol.Falha{Code: protocol.CodBadRequest, Message: `"sql" é obrigatório`}, http.StatusBadRequest
+		return req, &protocol.ErrorDetail{Code: protocol.CodeBadRequest, Message: `"sql" é obrigatório`}, http.StatusBadRequest
 	}
 	return req, nil, http.StatusOK
 }
@@ -257,20 +257,20 @@ func (s *Servidor) leRequisicao(w http.ResponseWriter, r *http.Request) (protoco
 // servidor, não uma sugestão. Pedir mais é recusado em vez de reduzido em
 // silêncio — um clamp calado faria o cliente acreditar que recebeu tudo o que
 // pediu.
-func tetoDeLinhas(req protocol.Requisicao, tetoDoDataset int) (int, *protocol.Falha) {
+func tetoDeLinhas(req protocol.Request, tetoDoDataset int) (int, *protocol.ErrorDetail) {
 	if req.MaxRows == nil {
 		return 0, nil // sem teto próprio; vale o do dataset, aplicado pelo motor
 	}
 	n := *req.MaxRows
 	switch {
 	case n <= 0:
-		return 0, &protocol.Falha{
-			Code:    protocol.CodBadRequest,
+		return 0, &protocol.ErrorDetail{
+			Code:    protocol.CodeBadRequest,
 			Message: fmt.Sprintf(`"maxRows" precisa ser positivo (recebido %d)`, n),
 		}
 	case n > tetoDoDataset:
-		return 0, &protocol.Falha{
-			Code: protocol.CodMaxRowsAcimaDoTeto,
+		return 0, &protocol.ErrorDetail{
+			Code: protocol.CodeMaxRowsAboveCeiling,
 			Message: fmt.Sprintf(`"maxRows" %d acima do teto efetivo do dataset (%d); peça menos ou ajuste query.maxRows`,
 				n, tetoDoDataset),
 		}
@@ -293,24 +293,24 @@ func tetoDeLinhas(req protocol.Requisicao, tetoDoDataset int) (int, *protocol.Fa
 // deixar o executor pôr o prazo lá embaixo. Não é cerimônia: o executor agora
 // respeita o deadline de quem chama (ver executor.Open), então quem não puser
 // deadline aqui entrega uma consulta sem prazo nenhum.
-func (s *Servidor) contextoDaConsulta(r *http.Request, req protocol.Requisicao, sch *schema.Compiled) (
-	context.Context, context.CancelFunc, time.Duration, *protocol.Falha,
+func (s *Servidor) contextoDaConsulta(r *http.Request, req protocol.Request, sch *schema.Compiled) (
+	context.Context, context.CancelFunc, time.Duration, *protocol.ErrorDetail,
 ) {
 	prazo := sch.Timeout
 	if req.TimeoutMs != nil {
 		ms := *req.TimeoutMs
 		switch {
 		case ms <= 0:
-			return nil, nil, 0, &protocol.Falha{
-				Code:    protocol.CodBadRequest,
+			return nil, nil, 0, &protocol.ErrorDetail{
+				Code:    protocol.CodeBadRequest,
 				Message: fmt.Sprintf(`"timeoutMs" precisa ser positivo (recebido %d)`, ms),
 			}
 		case time.Duration(ms)*time.Millisecond > sch.MaxTimeout:
 			// A mensagem nomeia `query.maxTimeout`, e não `query.timeout`:
 			// mandar o operador mexer no default para atender um pedido pontual
 			// é exatamente o conselho errado — subiria o prazo de todo mundo.
-			return nil, nil, 0, &protocol.Falha{
-				Code: protocol.CodBadRequest,
+			return nil, nil, 0, &protocol.ErrorDetail{
+				Code: protocol.CodeBadRequest,
 				Message: fmt.Sprintf(
 					`"timeoutMs" %d acima do teto do dataset (%d ms); peça menos ou ajuste query.maxTimeout`,
 					ms, sch.MaxTimeout.Milliseconds()),
@@ -326,7 +326,7 @@ func (s *Servidor) contextoDaConsulta(r *http.Request, req protocol.Requisicao, 
 // moldura.
 func colunaReservada(cols []executor.ColMeta) (string, bool) {
 	for _, c := range cols {
-		if c.Name == protocol.ChaveMoldura {
+		if c.Name == protocol.FrameKey {
 			return c.Name, true
 		}
 	}
@@ -335,30 +335,30 @@ func colunaReservada(cols []executor.ColMeta) (string, bool) {
 
 // transmite emite a moldura completa: schema, rows e fecho.
 func (s *Servidor) transmite(
-	w http.ResponseWriter, r *http.Request, d *dataset, req protocol.Requisicao,
+	w http.ResponseWriter, r *http.Request, d *dataset, req protocol.Request,
 	it executor.RowIterator, colunas []executor.ColMeta, tetoDoRequest int, inicio time.Time,
 	orc *budget.PerQuery,
 ) {
 	log := s.log.Dataset(d.nome)
 
-	cols := make([]protocol.Coluna, len(colunas))
+	cols := make([]protocol.Column, len(colunas))
 	for i, c := range colunas {
-		cols[i] = protocol.ColunaDe(c.Name, c.Type, c.Nullable)
+		cols[i] = protocol.NewColumn(c.Name, c.Type, c.Nullable)
 	}
 
 	w.Header().Set("Content-Type", protocol.ContentTypeNDJSON)
 	flusher, _ := w.(http.Flusher)
 	// O schema sai ANTES de qualquer row, e é o que compromete o status em
 	// 200: daqui para a frente todo desfecho é uma linha de corpo.
-	if err := protocol.EscreveLinha(w, protocol.LinhaSchema{
-		Nishidb: protocol.MolduraSchema,
+	if err := protocol.WriteLine(w, protocol.SchemaLine{
+		Nishidb: protocol.FrameSchema,
 		Dataset: d.nome,
 		Columns: cols,
 	}); err != nil {
 		// O cliente sumiu antes da primeira linha. Não há a quem responder e
 		// não há dado perdido: só o registro de que a consulta não chegou a ser
 		// entregue.
-		s.met.erro(d.nome, protocol.CodInterno)
+		s.met.erro(d.nome, protocol.CodeInternal)
 		log.Warn("query.escrita_falhou", "o cliente fechou a conexão antes do schema", "erro", err.Error())
 		return
 	}
@@ -420,8 +420,8 @@ func (s *Servidor) transmite(
 		return
 	}
 
-	if err := protocol.EscreveLinha(w, protocol.LinhaFim{
-		Nishidb:   protocol.MolduraFim,
+	if err := protocol.WriteLine(w, protocol.EndLine{
+		Nishidb:   protocol.FrameEnd,
 		Rows:      emitidas,
 		Truncated: truncadoPeloRequest,
 	}); err != nil {
@@ -450,8 +450,8 @@ func (s *Servidor) transmite(
 // indistinguível de um resultado que simplesmente acabou.
 func (s *Servidor) fechaComErro(w http.ResponseWriter, d *dataset, codigo string, emitidas int64, causa error, log *logging.Logger) {
 	s.met.erro(d.nome, codigo)
-	if err := protocol.EscreveLinha(w, protocol.LinhaErro{
-		Nishidb: protocol.MolduraErro,
+	if err := protocol.WriteLine(w, protocol.ErrorLine{
+		Nishidb: protocol.FrameError,
 		Code:    codigo,
 		Rows:    emitidas,
 		Message: causa.Error(),
@@ -470,12 +470,12 @@ func (s *Servidor) fechaComErro(w http.ResponseWriter, d *dataset, codigo string
 //
 // dataset é o nome REGISTRADO, ou datasetDesconhecido quando a falha aconteceu
 // antes de resolvê-lo — nunca o nome cru vindo do request.
-func (s *Servidor) recusa(w http.ResponseWriter, r *http.Request, status int, dataset string, falha protocol.Falha) {
+func (s *Servidor) recusa(w http.ResponseWriter, r *http.Request, status int, dataset string, falha protocol.ErrorDetail) {
 	s.met.erro(dataset, falha.Code)
 
 	w.Header().Set("Content-Type", protocol.ContentTypeJSON)
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(protocol.CorpoErro{Error: falha}); err != nil {
+	if err := json.NewEncoder(w).Encode(protocol.ErrorBody{Error: falha}); err != nil {
 		s.log.Warn("query.escrita_falhou", "não foi possível entregar o corpo de erro", "erro", err.Error())
 	}
 	// A mensagem NÃO vai para o log: ela pode conter o texto da query, e com
@@ -487,10 +487,10 @@ func (s *Servidor) recusa(w http.ResponseWriter, r *http.Request, status int, da
 
 // traduzErroDeAbertura mapeia a falha do Execute — que acontece antes de
 // qualquer leitura de dado — em status e código.
-func traduzErroDeAbertura(err error, sql string) (int, protocol.Falha) {
+func traduzErroDeAbertura(err error, sql string) (int, protocol.ErrorDetail) {
 	switch {
 	case errors.Is(err, parser.ErrSyntax):
-		f := protocol.Falha{Code: protocol.CodSintaxe, Message: err.Error()}
+		f := protocol.ErrorDetail{Code: protocol.CodeSyntax, Message: err.Error()}
 		var se *lexer.SyntaxError
 		if errors.As(err, &se) {
 			f.Line, f.Column = posicao(sql, se.Pos)
@@ -501,29 +501,29 @@ func traduzErroDeAbertura(err error, sql string) (int, protocol.Falha) {
 			// dois faria o código novo nunca sair — degradando em silêncio
 			// para SYNTAX, que é exatamente o estado que ele veio corrigir.
 			if se.Clause != "" {
-				f.Code = protocol.CodClausulaNaoSuportada
+				f.Code = protocol.CodeUnsupportedClause
 			}
 		}
 		return http.StatusBadRequest, f
 	case errors.Is(err, binder.ErrBind):
-		f := protocol.Falha{Code: protocol.CodBind, Message: err.Error()}
+		f := protocol.ErrorDetail{Code: protocol.CodeBind, Message: err.Error()}
 		var be *binder.Error
 		if errors.As(err, &be) {
 			f.Line, f.Column = posicao(sql, be.Pos)
 		}
 		return http.StatusBadRequest, f
 	case errors.Is(err, context.DeadlineExceeded):
-		return http.StatusGatewayTimeout, protocol.Falha{Code: protocol.CodTimeout, Message: err.Error()}
+		return http.StatusGatewayTimeout, protocol.ErrorDetail{Code: protocol.CodeTimeout, Message: err.Error()}
 	case errors.Is(err, storage.ErrDatasetCorrupt), errors.Is(err, encoding.ErrCorrupt):
-		return http.StatusInternalServerError, protocol.Falha{Code: protocol.CodDatasetCorrompido, Message: err.Error()}
+		return http.StatusInternalServerError, protocol.ErrorDetail{Code: protocol.CodeDatasetCorrupt, Message: err.Error()}
 	case errors.Is(err, storage.ErrSnapshotExpirado):
 		// 503, e não 500: o servidor está íntegro e a consulta pode ser
 		// repetida — a nova abre um snapshot que ainda não retém nada.
-		return http.StatusServiceUnavailable, protocol.Falha{Code: protocol.CodSnapshotExpirado, Message: err.Error()}
+		return http.StatusServiceUnavailable, protocol.ErrorDetail{Code: protocol.CodeSnapshotExpired, Message: err.Error()}
 	default:
 		// Inclui executor.ErrInvalidPlan, que é bug do binder/planner e não do
 		// cliente: 500 é a resposta honesta.
-		return http.StatusInternalServerError, protocol.Falha{Code: protocol.CodInterno, Message: err.Error()}
+		return http.StatusInternalServerError, protocol.ErrorDetail{Code: protocol.CodeInternal, Message: err.Error()}
 	}
 }
 
@@ -542,9 +542,9 @@ func traduzErroDeAbertura(err error, sql string) (int, protocol.Falha) {
 func (s *Servidor) codigoDeErroDeEscrita(err error) string {
 	if errors.Is(err, executor.ErrRowTooLarge) {
 		s.met.recusaPorOrcamento()
-		return protocol.CodLinhaGrande
+		return protocol.CodeRowTooLarge
 	}
-	return protocol.CodInterno
+	return protocol.CodeInternal
 }
 
 // codigoDeErroDeQuery classifica a falha que aparece DEPOIS das rows, no
@@ -552,20 +552,20 @@ func (s *Servidor) codigoDeErroDeEscrita(err error) string {
 func codigoDeErroDeQuery(err error) string {
 	switch {
 	case errors.Is(err, executor.ErrMaxRowsExceeded):
-		return protocol.CodMaxRows
+		return protocol.CodeMaxRows
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
-		return protocol.CodTimeout
+		return protocol.CodeTimeout
 	case errors.Is(err, storage.ErrDatasetCorrupt), errors.Is(err, encoding.ErrCorrupt):
-		return protocol.CodDatasetCorrompido
+		return protocol.CodeDatasetCorrupt
 	case errors.Is(err, storage.ErrSnapshotExpirado):
 		// Sai DEPOIS das rows, e é onde ele aparece na prática: o Open não lê
 		// nada, então o journal só pode estourar com a consulta já correndo.
 		// As linhas já entregues são do universo de T0 e continuam válidas —
 		// o que o cliente não pode fazer é tratá-las como resultado completo,
 		// e é para isso que a linha de fecho carrega o código.
-		return protocol.CodSnapshotExpirado
+		return protocol.CodeSnapshotExpired
 	default:
-		return protocol.CodInterno
+		return protocol.CodeInternal
 	}
 }
 

@@ -61,7 +61,7 @@ func TestOWIPNaoEhAdotadoAtravesDeUmRestart(t *testing.T) {
 	}
 
 	// Corrompe o .widx de propósito: se ele fosse adotado, o Lookup mentiria.
-	caminho := segindex.CaminhoWIP(filepath.Join(dir, "data"), seg, campo)
+	caminho := segindex.WIPPath(filepath.Join(dir, "data"), seg, campo)
 	if err := os.WriteFile(caminho, bytes.Repeat([]byte{0xAA}, 4096), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestConstruirDoSegmentoDaOMesmoArquivoQueSelarOWIP(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	caminho := segindex.CaminhoSelado(filepath.Join(dir, "data"), alvo)
+	caminho := segindex.SealedPath(filepath.Join(dir, "data"), alvo)
 	porSelagem, err := os.ReadFile(caminho)
 	if err != nil {
 		t.Fatalf("o segmento %d rotacionou sem selar o índice: %v", alvo, err)
@@ -177,17 +177,17 @@ func TestOsWIPsQueNaoSaoDoCorrenteSaemNaAberturaESoQuemTemDadoEntraNaFila(t *tes
 	lixo := bytes.Repeat([]byte{0xAA}, 4096)
 	// Caso 2: segmento não corrente, com .widx e sem .sidx. É o estado que um
 	// crash entre a rotação e a selagem deixa.
-	if err := os.Remove(segindex.CaminhoSelado(dados, alvo)); err != nil {
+	if err := os.Remove(segindex.SealedPath(dados, alvo)); err != nil {
 		t.Fatal(err)
 	}
-	comDado := segindex.CaminhoWIP(dados, alvo, campo)
+	comDado := segindex.WIPPath(dados, alvo, campo)
 	if err := os.WriteFile(comDado, lixo, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	// Caso 3: .widx de um segmento que já não tem .dat. Sem esta regra ele
 	// ficaria em disco para sempre, e o IndexBytes o contaria como disco que
 	// nada explica.
-	semDado := segindex.CaminhoWIP(dados, 9999, campo)
+	semDado := segindex.WIPPath(dados, 9999, campo)
 	if err := os.WriteFile(semDado, lixo, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -234,12 +234,12 @@ func TestOWIPOrfaoDeUmSegmentoJaSeladoSaiSemMexerNoSelado(t *testing.T) {
 	}
 
 	dados := filepath.Join(dir, "data")
-	selado := segindex.CaminhoSelado(dados, alvo)
+	selado := segindex.SealedPath(dados, alvo)
 	antes, err := os.ReadFile(selado)
 	if err != nil {
 		t.Fatalf("pré-condição: o segmento %d deveria estar selado: %v", alvo, err)
 	}
-	orfao := segindex.CaminhoWIP(dados, alvo, campo)
+	orfao := segindex.WIPPath(dados, alvo, campo)
 	if err := os.WriteFile(orfao, bytes.Repeat([]byte{0xAA}, 4096), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -282,7 +282,7 @@ func TestConstruirOIndiceDoSegmentoCorrenteEhRecusado(t *testing.T) {
 	if !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("ConstroiIndiceDoSegmento(corrente) = %v, quero ErrInvalidArgument", err)
 	}
-	caminho := segindex.CaminhoSelado(filepath.Join(dir, "data"), corrente)
+	caminho := segindex.SealedPath(filepath.Join(dir, "data"), corrente)
 	if _, err := os.Stat(caminho); !os.IsNotExist(err) {
 		t.Errorf("Stat(%s) = %v, quero IsNotExist: a recusa não pode ter gravado nada",
 			filepath.Base(caminho), err)
@@ -331,7 +331,7 @@ func TestNomeIlegivelNoEspacoDoWIPSaiComoDatasetIlegivel(t *testing.T) {
 	if !errors.Is(err, ErrDatasetCorrupt) {
 		t.Errorf("Open = %v, quero ErrDatasetCorrupt (exit 3); sem a sentinela isto vira exit 1", err)
 	}
-	if !errors.Is(err, segindex.ErrFormato) {
+	if !errors.Is(err, segindex.ErrFormat) {
 		t.Errorf("Open = %v: a causa original tem de continuar alcançável por errors.Is", err)
 	}
 }

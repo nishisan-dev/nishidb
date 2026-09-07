@@ -142,15 +142,15 @@ func poeUmaLinha(t *testing.T, s *Store, i int) {
 func TestOSegmentoCorrenteGanhaWIPPorCampoIndexado(t *testing.T) {
 	s, dir := abreStoreIndexado(t, []string{"node", "type"})
 	poeLinhas(t, s, 10)
-	campos, err := segindex.ListaWIP(filepath.Join(dir, "data"), s.curSegID.Load())
+	campos, err := segindex.ListWIP(filepath.Join(dir, "data"), s.curSegID.Load())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(campos) != 2 {
-		t.Fatalf("ListaWIP = %v, quero um .widx por campo indexado", campos)
+		t.Fatalf("ListWIP = %v, quero um .widx por campo indexado", campos)
 	}
 	if !slices.Equal(campos, s.CamposIndexados()) {
-		t.Fatalf("ListaWIP = %v, CamposIndexados = %v: os dois conjuntos têm de coincidir",
+		t.Fatalf("ListWIP = %v, CamposIndexados = %v: os dois conjuntos têm de coincidir",
 			campos, s.CamposIndexados())
 	}
 }
@@ -167,21 +167,21 @@ func TestARotacaoSelaOSegmentoAnterior(t *testing.T) {
 	if s.curSegID.Load() == primeiro {
 		t.Fatal("o segmento não rotacionou; o teste não exercita nada")
 	}
-	if _, err := os.Stat(segindex.CaminhoSelado(filepath.Join(dir, "data"), primeiro)); err != nil {
+	if _, err := os.Stat(segindex.SealedPath(filepath.Join(dir, "data"), primeiro)); err != nil {
 		t.Fatalf("o segmento %d rotacionou sem selar o índice: %v", primeiro, err)
 	}
-	campos, _ := segindex.ListaWIP(filepath.Join(dir, "data"), primeiro)
+	campos, _ := segindex.ListWIP(filepath.Join(dir, "data"), primeiro)
 	if len(campos) != 0 {
 		t.Errorf("o segmento selado %d ainda tem .widx: %v", primeiro, campos)
 	}
 	// E o segmento novo já nasce com o dele: sem isso a ingestão seguiria sem
 	// índice até a próxima abertura, em silêncio.
-	novos, err := segindex.ListaWIP(filepath.Join(dir, "data"), s.curSegID.Load())
+	novos, err := segindex.ListWIP(filepath.Join(dir, "data"), s.curSegID.Load())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(novos) != 1 {
-		t.Fatalf("ListaWIP do segmento novo = %v, quero um .widx por campo indexado", novos)
+		t.Fatalf("ListWIP do segmento novo = %v, quero um .widx por campo indexado", novos)
 	}
 }
 
@@ -196,7 +196,7 @@ func TestOWIPDeUmaExecucaoAnteriorEhDescartadoNaAbertura(t *testing.T) {
 	s := openStore(t, Options{Dir: dir, CamposIndexadosPorNome: []string{"node"}})
 	poeLinhas(t, s, 50)
 	seg := s.curSegID.Load()
-	caminho := segindex.CaminhoWIP(filepath.Join(dir, "data"), seg, campoDoDicionario(t, s, "node"))
+	caminho := segindex.WIPPath(filepath.Join(dir, "data"), seg, campoDoDicionario(t, s, "node"))
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -232,10 +232,10 @@ func TestAAposentadoriaLevaOWIPOrfaoJunto(t *testing.T) {
 	alvo := s.curSegID.Load()
 	poeLinhasAteRotacionar(t, s, alvo)
 
-	// O resíduo é gravado com bytes que NENHUM AbreWIP aceitaria, e isso é o
+	// O resíduo é gravado com bytes que NENHUM OpenWIP aceitaria, e isso é o
 	// ponto: a limpeza tem de ser por nome, porque um .widx rasgado por crash é
 	// justamente o que não se deixa abrir.
-	orfao := segindex.CaminhoWIP(filepath.Join(dir, "data"), alvo, campoDoDicionario(t, s, "node"))
+	orfao := segindex.WIPPath(filepath.Join(dir, "data"), alvo, campoDoDicionario(t, s, "node"))
 	if err := os.WriteFile(orfao, bytes.Repeat([]byte{0xAA}, 4096), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +259,7 @@ func TestOIndiceDeSegmentoEntraNoIndexBytes(t *testing.T) {
 	alvo := s.curSegID.Load()
 	poeLinhasAteRotacionar(t, s, alvo)
 
-	caminho := segindex.CaminhoSelado(filepath.Join(dir, "data"), alvo)
+	caminho := segindex.SealedPath(filepath.Join(dir, "data"), alvo)
 	info, err := os.Stat(caminho)
 	if err != nil {
 		t.Fatalf("pré-condição: o segmento %d deveria estar selado: %v", alvo, err)
@@ -297,7 +297,7 @@ func TestAAposentadoriaLevaOIndiceJunto(t *testing.T) {
 	s, dir := abreStoreHistoricoIndexado(t, []string{"node"}, 64<<10)
 	alvo := s.curSegID.Load()
 	poeLinhasAteRotacionar(t, s, alvo)
-	caminho := segindex.CaminhoSelado(filepath.Join(dir, "data"), alvo)
+	caminho := segindex.SealedPath(filepath.Join(dir, "data"), alvo)
 	if _, err := os.Stat(caminho); err != nil {
 		t.Fatalf("pré-condição: o segmento %d deveria estar selado: %v", alvo, err)
 	}
@@ -324,10 +324,10 @@ func TestOSidxOrfaoDeSegmentoAposentadoSaiNaAbertura(t *testing.T) {
 
 	// O órfão: um .sidx de segmento que nunca existiu neste dataset — o estado
 	// que o crash da aposentadoria deixa (o .dat saiu, o índice ficou).
-	orfao := segindex.CaminhoSelado(filepath.Join(dir, "data"), 77)
-	e := segindex.NovoEscritor()
-	e.Adiciona(campoDoDicionario(t, s, "node"), 42, 1)
-	if err := e.Escreve(orfao, 77); err != nil {
+	orfao := segindex.SealedPath(filepath.Join(dir, "data"), 77)
+	e := segindex.NewWriter()
+	e.Add(campoDoDicionario(t, s, "node"), 42, 1)
+	if err := e.WriteSealed(orfao, 77); err != nil {
 		t.Fatal(err)
 	}
 
@@ -349,10 +349,10 @@ func TestOSidxOrfaoSaiMesmoSemCampoIndexadoNenhum(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	orfao := segindex.CaminhoSelado(filepath.Join(dir, "data"), 88)
-	e := segindex.NovoEscritor()
-	e.Adiciona(campo, 42, 1)
-	if err := e.Escreve(orfao, 88); err != nil {
+	orfao := segindex.SealedPath(filepath.Join(dir, "data"), 88)
+	e := segindex.NewWriter()
+	e.Add(campo, 42, 1)
+	if err := e.WriteSealed(orfao, 88); err != nil {
 		t.Fatal(err)
 	}
 

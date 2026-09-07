@@ -32,9 +32,9 @@ import (
 // 0 produz) não é erro aqui — é o pedido de "todos os datasets", a forma
 // mais comum de chamar as duas rotas. leRequisicao não tem esse caso porque
 // /v1/query não tem leitura implícita de "todos".
-func (s *Servidor) leRequisicaoDataset(w http.ResponseWriter, r *http.Request) (protocol.RequisicaoDataset, *protocol.Falha, int) {
-	var req protocol.RequisicaoDataset
-	r.Body = http.MaxBytesReader(w, r.Body, protocol.MaxCorpoRequisicao)
+func (s *Servidor) leRequisicaoDataset(w http.ResponseWriter, r *http.Request) (protocol.DatasetRequest, *protocol.ErrorDetail, int) {
+	var req protocol.DatasetRequest
+	r.Body = http.MaxBytesReader(w, r.Body, protocol.MaxRequestBody)
 
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
@@ -44,13 +44,13 @@ func (s *Servidor) leRequisicaoDataset(w http.ResponseWriter, r *http.Request) (
 		}
 		var grande *http.MaxBytesError
 		if errors.As(err, &grande) {
-			return req, &protocol.Falha{
-				Code:    protocol.CodCorpoGrande,
-				Message: fmt.Sprintf("corpo acima do teto de %d bytes", protocol.MaxCorpoRequisicao),
+			return req, &protocol.ErrorDetail{
+				Code:    protocol.CodeBodyTooLarge,
+				Message: fmt.Sprintf("corpo acima do teto de %d bytes", protocol.MaxRequestBody),
 			}, http.StatusRequestEntityTooLarge
 		}
-		return req, &protocol.Falha{
-			Code:    protocol.CodBadRequest,
+		return req, &protocol.ErrorDetail{
+			Code:    protocol.CodeBadRequest,
 			Message: "corpo JSON inválido: " + err.Error(),
 		}, http.StatusBadRequest
 	}
@@ -61,14 +61,14 @@ func (s *Servidor) leRequisicaoDataset(w http.ResponseWriter, r *http.Request) (
 // nome presente filtra para UM dataset (404 se desconhecido, o mesmo código
 // de /v1/query e /v1/metadata); nome ausente devolve TODOS, na ordem
 // determinística da subida.
-func (s *Servidor) datasetsAlvo(nome string) ([]*dataset, *protocol.Falha, int) {
+func (s *Servidor) datasetsAlvo(nome string) ([]*dataset, *protocol.ErrorDetail, int) {
 	if nome == "" {
 		return s.datasets, nil, http.StatusOK
 	}
 	d, ok := s.porNome[nome]
 	if !ok {
-		return nil, &protocol.Falha{
-			Code:    protocol.CodDatasetDesconhecido,
+		return nil, &protocol.ErrorDetail{
+			Code:    protocol.CodeUnknownDataset,
 			Message: fmt.Sprintf("dataset %q não está registrado neste servidor", nome),
 		}, http.StatusNotFound
 	}
@@ -81,23 +81,23 @@ func (s *Servidor) datasetsAlvo(nome string) ([]*dataset, *protocol.Falha, int) 
 // podem encontrar o MESMO modo falho sticky (aposentaSegmento chama
 // Store.Checkpoint por dentro, então uma falha de checkpoint é alcançável
 // pelas DUAS rotas, não só por /v1/checkpoint).
-func erroDeMutacao(err error) (int, protocol.Falha) {
+func erroDeMutacao(err error) (int, protocol.ErrorDetail) {
 	switch {
 	case errors.Is(err, storage.ErrCompactionBusy):
-		return http.StatusConflict, protocol.Falha{
-			Code: protocol.CodCompactionBusy,
+		return http.StatusConflict, protocol.ErrorDetail{
+			Code: protocol.CodeCompactionBusy,
 			Message: "uma passada de compaction já está em voo (o laço automático ou outra chamada manual); " +
 				"tente novamente em instantes",
 		}
 	case errors.Is(err, storage.ErrWriterFailed):
-		return http.StatusInternalServerError, protocol.Falha{
-			Code:    protocol.CodWriterFailed,
+		return http.StatusInternalServerError, protocol.ErrorDetail{
+			Code:    protocol.CodeWriterFailed,
 			Message: "o writer está em modo falho sticky; reabra o dataset (reinicie o servidor) antes de tentar de novo",
 		}
 	case errors.Is(err, storage.ErrDatasetCorrupt):
-		return http.StatusInternalServerError, protocol.Falha{Code: protocol.CodDatasetCorrompido, Message: err.Error()}
+		return http.StatusInternalServerError, protocol.ErrorDetail{Code: protocol.CodeDatasetCorrupt, Message: err.Error()}
 	default:
-		return http.StatusInternalServerError, protocol.Falha{Code: protocol.CodInterno, Message: err.Error()}
+		return http.StatusInternalServerError, protocol.ErrorDetail{Code: protocol.CodeInternal, Message: err.Error()}
 	}
 }
 
@@ -161,8 +161,8 @@ func mensagemParcial(p *ErroParcial, base string) string {
 func (s *Servidor) handleCheckpoint(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
-		s.recusa(w, r, http.StatusMethodNotAllowed, datasetDesconhecido, protocol.Falha{
-			Code:    protocol.CodMetodo,
+		s.recusa(w, r, http.StatusMethodNotAllowed, datasetDesconhecido, protocol.ErrorDetail{
+			Code:    protocol.CodeMethod,
 			Message: fmt.Sprintf("%s não é aceito em /v1/checkpoint; use POST", r.Method),
 		})
 		return
@@ -194,7 +194,7 @@ func (s *Servidor) handleCheckpoint(w http.ResponseWriter, r *http.Request) {
 		s.recusa(w, r, status, parcial.Dataset, f)
 		return
 	}
-	s.respondeJSON(w, protocol.RespostaCheckpoint{Datasets: resultados})
+	s.respondeJSON(w, protocol.CheckpointResponse{Datasets: resultados})
 }
 
 // handleCompact serve o POST /v1/compact do §96 (ADMIN).
@@ -210,8 +210,8 @@ func (s *Servidor) handleCheckpoint(w http.ResponseWriter, r *http.Request) {
 func (s *Servidor) handleCompact(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
-		s.recusa(w, r, http.StatusMethodNotAllowed, datasetDesconhecido, protocol.Falha{
-			Code:    protocol.CodMetodo,
+		s.recusa(w, r, http.StatusMethodNotAllowed, datasetDesconhecido, protocol.ErrorDetail{
+			Code:    protocol.CodeMethod,
 			Message: fmt.Sprintf("%s não é aceito em /v1/compact; use POST", r.Method),
 		})
 		return
@@ -256,5 +256,5 @@ func (s *Servidor) handleCompact(w http.ResponseWriter, r *http.Request) {
 		s.recusa(w, r, status, parcial.Dataset, f)
 		return
 	}
-	s.respondeJSON(w, protocol.RespostaCompact{Datasets: resultados})
+	s.respondeJSON(w, protocol.CompactResponse{Datasets: resultados})
 }

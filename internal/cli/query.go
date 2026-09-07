@@ -73,11 +73,11 @@ func runQuery(args []string, amb Ambiente) int {
 	}
 
 	// A validação roda ANTES de qualquer conexão ou abertura de dataset, e usa
-	// protocolo.Valores — a MESMA função que o servidor usa, nunca uma segunda
+	// protocol.Values — a MESMA função que o servidor usa, nunca uma segunda
 	// gramática. É o que faz `--param int64:9223372036854775808` receber a
 	// mensagem de overflow do protocolo na linha de comando, em vez de depois
 	// de um round-trip.
-	valores, err := protocol.Valores(params)
+	valores, err := protocol.Values(params)
 	if err != nil {
 		_, _ = fmt.Fprintln(amb.Stderr, "query:", err)
 		return ExitUso

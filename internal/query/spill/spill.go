@@ -35,31 +35,31 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// ErrOrcamentoExcedido é o teto de bytes em disco de UMA query estourado.
+// ErrBudgetExceeded é o teto de bytes em disco de UMA query estourado.
 //
 // Sentinela, e não um erro qualquer, porque o consumidor precisa distinguir
 // "não coube" de "o disco falhou": o primeiro é resposta ao usuário, o segundo
 // é problema do dataset.
-var ErrOrcamentoExcedido = errors.New("spill: orçamento de disco excedido")
+var ErrBudgetExceeded = errors.New("spill: orçamento de disco excedido")
 
-// NomeDoDiretorio é o subdiretório do dataset onde os arquivos vivem.
-const NomeDoDiretorio = "spill"
+// DirName é o subdiretório do dataset onde os arquivos vivem.
+const DirName = "spill"
 
-// Limpa remove todo resíduo de spill do diretório.
+// Cleanup remove todo resíduo de spill do diretório.
 //
 // Chamada na subida do dataset, DEPOIS do flock. Não é "melhor esforço": um
 // erro aqui sobe, porque não poder limpar significa não poder confiar no que
 // será escrito em seguida.
-func Limpa(dirDoDataset string) error {
-	dir := filepath.Join(dirDoDataset, NomeDoDiretorio)
-	entradas, err := os.ReadDir(dir)
+func Cleanup(datasetDir string) error {
+	dir := filepath.Join(datasetDir, DirName)
+	entries, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("spill: listar %s: %w", dir, err)
 	}
-	for _, e := range entradas {
+	for _, e := range entries {
 		if err := os.Remove(filepath.Join(dir, e.Name())); err != nil {
 			return fmt.Errorf("spill: remover resíduo %s: %w", e.Name(), err)
 		}
@@ -72,43 +72,43 @@ func Limpa(dirDoDataset string) error {
 // Não é seguro para uso concorrente: uma query tem um operador acumulador, e o
 // operador é de uma goroutine só. Duas queries têm duas Areas.
 type Area struct {
-	dir       string
-	orcamento int64
-	escritos  int64
-	seq       int
-	abertos   []*Arquivo
+	dir          string
+	ceiling      int64
+	bytesWritten int64
+	seq          int
+	openRuns     []*Run
 }
 
-// NovaArea prepara o espaço. orcamento <= 0 significa SEM TETO de disco.
-func NovaArea(dirDoDataset string, orcamento int64) (*Area, error) {
-	dir := filepath.Join(dirDoDataset, NomeDoDiretorio)
+// NewArea prepara o espaço. ceiling <= 0 significa SEM TETO de disco.
+func NewArea(datasetDir string, ceiling int64) (*Area, error) {
+	dir := filepath.Join(datasetDir, DirName)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("spill: criar %s: %w", dir, err)
 	}
-	return &Area{dir: dir, orcamento: orcamento}, nil
+	return &Area{dir: dir, ceiling: ceiling}, nil
 }
 
 // Bytes é quanto esta query já escreveu em disco.
-func (a *Area) Bytes() int64 { return a.escritos }
+func (a *Area) Bytes() int64 { return a.bytesWritten }
 
-// Novo abre um run.
+// NewRun abre um run.
 //
 // O pid entra no nome para que o resíduo de um processo morto seja
 // DIAGNOSTICÁVEL — a limpeza não depende dele, porque o flock já decidiu a
 // propriedade, mas quem for olhar o diretório precisa saber de onde veio.
-func (a *Area) Novo() (*Arquivo, error) {
+func (a *Area) NewRun() (*Run, error) {
 	a.seq++
-	nome := fmt.Sprintf("spill-%d-%03d.tmp", os.Getpid(), a.seq)
-	caminho := filepath.Join(a.dir, nome)
+	name := fmt.Sprintf("spill-%d-%03d.tmp", os.Getpid(), a.seq)
+	path := filepath.Join(a.dir, name)
 	// 0600 e não 0644: é resultado de consulta de um usuário autenticado, não
 	// estado do dataset.
-	f, err := os.OpenFile(caminho, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		return nil, fmt.Errorf("spill: criar run %s: %w", nome, err)
+		return nil, fmt.Errorf("spill: criar run %s: %w", name, err)
 	}
-	arq := &Arquivo{area: a, f: f, caminho: caminho}
-	a.abertos = append(a.abertos, arq)
-	return arq, nil
+	run := &Run{area: a, f: f, path: path}
+	a.openRuns = append(a.openRuns, run)
+	return run, nil
 }
 
 // Close remove TUDO o que a query deixou. Idempotente.
@@ -117,35 +117,35 @@ func (a *Area) Novo() (*Arquivo, error) {
 // chamá-lo inclusive nos caminhos de erro e de cancelamento — um defer no
 // Close do iterador.
 func (a *Area) Close() error {
-	var primeiro error
-	for _, arq := range a.abertos {
-		if err := arq.Close(); err != nil && primeiro == nil {
-			primeiro = err
+	var firstErr error
+	for _, run := range a.openRuns {
+		if err := run.Close(); err != nil && firstErr == nil {
+			firstErr = err
 		}
 	}
-	a.abertos = nil
-	return primeiro
+	a.openRuns = nil
+	return firstErr
 }
 
-// Arquivo é UM run: escreve em ordem, sela, lê em ordem.
-type Arquivo struct {
-	area    *Area
-	f       *os.File
-	caminho string
-	selado  bool
-	fechado bool
-	buf     []byte
+// Run é UM run: escreve em ordem, sela, lê em ordem.
+type Run struct {
+	area   *Area
+	f      *os.File
+	path   string
+	sealed bool
+	closed bool
+	buf    []byte
 }
 
-// Escreve acrescenta um registro ao run.
+// Write acrescenta um registro ao run.
 //
 // O ENQUADRAMENTO É DAQUI, e não do consumidor: dois formatos de moldura
 // divergem no primeiro registro de tamanho patológico, e a divergência aparece
 // como resultado errado. Reusa o record do storage, que já tem CRC32C e aplica
 // os tetos de tamanho ANTES de qualquer alocação do leitor.
-func (r *Arquivo) Escreve(rowID types.RowID, payload []byte) error {
-	if r.selado {
-		return errors.New("spill: Escreve depois de Sela")
+func (r *Run) Write(rowID types.RowID, payload []byte) error {
+	if r.sealed {
+		return errors.New("spill: Write depois de Seal")
 	}
 	var err error
 	// key vazia: o spill endereça por rowID, e a key do record não tem
@@ -154,120 +154,120 @@ func (r *Arquivo) Escreve(rowID types.RowID, payload []byte) error {
 	if r.buf, err = encoding.BuildRecord(r.buf[:0], rowID, int64(rowID), 0, nil, payload); err != nil {
 		return fmt.Errorf("spill: montar registro da row %d: %w", rowID, err)
 	}
-	if a := r.area; a.orcamento > 0 && a.escritos+int64(len(r.buf)) > a.orcamento {
+	if a := r.area; a.ceiling > 0 && a.bytesWritten+int64(len(r.buf)) > a.ceiling {
 		return fmt.Errorf("%w: %d bytes acima do teto de %d",
-			ErrOrcamentoExcedido, a.escritos+int64(len(r.buf)), a.orcamento)
+			ErrBudgetExceeded, a.bytesWritten+int64(len(r.buf)), a.ceiling)
 	}
 	n, err := r.f.Write(r.buf)
-	r.area.escritos += int64(n)
+	r.area.bytesWritten += int64(n)
 	if err != nil {
-		return fmt.Errorf("spill: escrever em %s: %w", r.caminho, err)
+		return fmt.Errorf("spill: escrever em %s: %w", r.path, err)
 	}
 	return nil
 }
 
-// Sela fecha a escrita e rebobina para leitura. SEM fsync — ver o godoc do
+// Seal fecha a escrita e rebobina para leitura. SEM fsync — ver o godoc do
 // pacote.
-func (r *Arquivo) Sela() error {
-	if r.selado {
+func (r *Run) Seal() error {
+	if r.sealed {
 		return nil
 	}
-	r.selado = true
+	r.sealed = true
 	if _, err := r.f.Seek(0, 0); err != nil {
-		return fmt.Errorf("spill: rebobinar %s: %w", r.caminho, err)
+		return fmt.Errorf("spill: rebobinar %s: %w", r.path, err)
 	}
 	return nil
 }
 
-// Le devolve o leitor sequencial. Só depois de Sela.
-func (r *Arquivo) Le() (*Leitor, error) {
-	if !r.selado {
-		return nil, errors.New("spill: Le antes de Sela")
+// NewReader devolve o leitor sequencial. Só depois de Seal.
+func (r *Run) NewReader() (*Reader, error) {
+	if !r.sealed {
+		return nil, errors.New("spill: NewReader antes de Seal")
 	}
-	return &Leitor{f: r.f, caminho: r.caminho}, nil
+	return &Reader{f: r.f, path: r.path}, nil
 }
 
 // Close fecha e REMOVE o arquivo. Idempotente.
-func (r *Arquivo) Close() error {
-	if r.fechado {
+func (r *Run) Close() error {
+	if r.closed {
 		return nil
 	}
-	r.fechado = true
-	errFechar := r.f.Close()
-	errRemover := os.Remove(r.caminho)
-	if errFechar != nil {
-		return fmt.Errorf("spill: fechar %s: %w", r.caminho, errFechar)
+	r.closed = true
+	closeErr := r.f.Close()
+	removeErr := os.Remove(r.path)
+	if closeErr != nil {
+		return fmt.Errorf("spill: fechar %s: %w", r.path, closeErr)
 	}
-	if errRemover != nil && !errors.Is(errRemover, os.ErrNotExist) {
-		return fmt.Errorf("spill: remover %s: %w", r.caminho, errRemover)
+	if removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+		return fmt.Errorf("spill: remover %s: %w", r.path, removeErr)
 	}
 	return nil
 }
 
-// Leitor percorre um run selado, em ordem de escrita.
-type Leitor struct {
-	f       *os.File
-	caminho string
-	buf     []byte
+// Reader percorre um run selado, em ordem de escrita.
+type Reader struct {
+	f    *os.File
+	path string
+	buf  []byte
 }
 
-// Proximo devolve o registro seguinte.
+// Next devolve o registro seguinte.
 //
 // O payload é ZERO-COPY sobre o buffer do leitor e vale só até a chamada
 // SEGUINTE — mesma disciplina do ColView.Val.Bytes do executor, e pela mesma
 // razão: alocar por registro num merge de N runs seria alocação por LINHA do
 // resultado.
-func (l *Leitor) Proximo() (types.RowID, []byte, bool, error) {
+func (l *Reader) Next() (types.RowID, []byte, bool, error) {
 	if cap(l.buf) < encoding.RecordHeaderSize {
 		l.buf = make([]byte, encoding.RecordHeaderSize, 4096)
 	}
-	cab := l.buf[:encoding.RecordHeaderSize]
-	if _, err := lerExato(l.f, cab); err != nil {
-		if errors.Is(err, errFim) {
+	header := l.buf[:encoding.RecordHeaderSize]
+	if _, err := readFull(l.f, header); err != nil {
+		if errors.Is(err, errEnd) {
 			return 0, nil, false, nil // fim do run, não erro
 		}
-		return 0, nil, false, fmt.Errorf("spill: ler header de %s: %w", l.caminho, err)
+		return 0, nil, false, fmt.Errorf("spill: ler header de %s: %w", l.path, err)
 	}
-	h, err := encoding.ParseHeader(cab)
+	h, err := encoding.ParseHeader(header)
 	if err != nil {
-		return 0, nil, false, fmt.Errorf("spill: header de %s: %w", l.caminho, err)
+		return 0, nil, false, fmt.Errorf("spill: header de %s: %w", l.path, err)
 	}
 	total := h.TotalSize()
 	if cap(l.buf) < total {
-		novo := make([]byte, total)
-		copy(novo, cab)
-		l.buf = novo
+		newBuf := make([]byte, total)
+		copy(newBuf, header)
+		l.buf = newBuf
 	}
 	l.buf = l.buf[:total]
-	if _, err := lerExato(l.f, l.buf[encoding.RecordHeaderSize:total]); err != nil {
-		return 0, nil, false, fmt.Errorf("spill: ler corpo de %s: %w", l.caminho, err)
+	if _, err := readFull(l.f, l.buf[encoding.RecordHeaderSize:total]); err != nil {
+		return 0, nil, false, fmt.Errorf("spill: ler corpo de %s: %w", l.path, err)
 	}
 	rec, err := encoding.ParseRecord(l.buf)
 	if err != nil {
-		return 0, nil, false, fmt.Errorf("spill: registro de %s: %w", l.caminho, err)
+		return 0, nil, false, fmt.Errorf("spill: registro de %s: %w", l.path, err)
 	}
 	return rec.RowID, rec.Payload, true, nil
 }
 
-// Close não fecha o arquivo: quem o possui é o Arquivo, e fechá-lo aqui
+// Close não fecha o arquivo: quem o possui é o Run, e fechá-lo aqui
 // tornaria dois donos responsáveis pelo mesmo descritor.
-func (l *Leitor) Close() error { return nil }
+func (l *Reader) Close() error { return nil }
 
-var errFim = errors.New("fim")
+var errEnd = errors.New("fim")
 
-// lerExato preenche p por inteiro. EOF no PRIMEIRO byte é fim de arquivo
+// readFull preenche p por inteiro. EOF no PRIMEIRO byte é fim de arquivo
 // legítimo; EOF no meio é truncamento, e vira erro.
-func lerExato(f *os.File, p []byte) (int, error) {
-	lidos := 0
-	for lidos < len(p) {
-		n, err := f.Read(p[lidos:])
-		lidos += n
+func readFull(f *os.File, p []byte) (int, error) {
+	nRead := 0
+	for nRead < len(p) {
+		n, err := f.Read(p[nRead:])
+		nRead += n
 		if err != nil {
-			if lidos == 0 {
-				return 0, errFim
+			if nRead == 0 {
+				return 0, errEnd
 			}
-			return lidos, fmt.Errorf("registro truncado: %d de %d bytes", lidos, len(p))
+			return nRead, fmt.Errorf("registro truncado: %d de %d bytes", nRead, len(p))
 		}
 	}
-	return lidos, nil
+	return nRead, nil
 }

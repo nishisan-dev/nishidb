@@ -15,7 +15,7 @@ números e as mutações está em [`docs/aceite-contadores.md`](../docs/aceite-c
 
 | Bloco | Estado | Validação |
 |---|---|---|
-| **A1** `Denso32` e atômicos de 32 bits | **feito** (`ff55597`) | o `denseFile` recusa a abertura com o outro tamanho de entrada; gate de alocação com contraparte sob `-race` |
+| **A1** `Dense32` e atômicos de 32 bits | **feito** (`ff55597`) | o `denseFile` recusa a abertura com o outro tamanho de entrada; gate de alocação com contraparte sob `-race` |
 | **A2** chave composta no `valuekey` | **feito** (`6820e25`) | golden de bytes; `ab\|c` ≠ `a\|bc` |
 | **A3** `AvaliadorDePayload` e `CompilaCondicao` | **feito** (`b03a21a`) | as regras de TTL passaram a compilar pelo mesmo caminho sem editar um teste; gate de alocação |
 | **B1** dicionário de grupos | **feito** (`3782d22`) | mutação do fsync: vermelha, revertida, verde |
@@ -128,7 +128,7 @@ por mensagem) foi refutada na proposta porque Kafka entrega pelo menos uma vez e
   ([store.go:2259-2275](internal/storage/store.go:2259)), não o journal; e a
   visibilidade filtra por prazo vencido, que o contador (por definição) só
   desconta quando a LÁPIDE é gravada. A auditoria ganha enumerador próprio no
-  pacote `storage`: `vers.Em(id, snap.Epoch)` senão `locs.Get(id)`, pula só
+  pacote `storage`: `vers.At(id, snap.Epoch)` senão `locs.Get(id)`, pula só
   ausente/lápide, lê o record sob `aposMu.RLock`. "Viva" para o contador é "com
   location e sem lápide", e isso fica escrito.
 - **Refutado: aposentar por `refs == 0` + prazo basta.** Se a transição que
@@ -171,7 +171,7 @@ por mensagem) foi refutada na proposta porque Kafka entrega pelo menos uma vez e
 - Ordem de locks `recPassadaMu → retPassadaMu → vida → wmu → aposMu`; `snapMu`,
   `selMu` e o lock do dicionário de grupos são FOLHA. Nada tomado sob folha toma
   `wmu`.
-- Métricas: nomes só por constantes de `internal/metrics/names.go`; `Familia` e
+- Métricas: nomes só por constantes de `internal/metrics/names.go`; `Family` e
   `Nome` por constante; label nunca vem de entrada do cliente; série que alarma
   nasce com zero.
 - Gates que continuam verdes sem edição: `TestCitacoesDeSecaoResolvem`,
@@ -191,8 +191,8 @@ por mensagem) foi refutada na proposta porque Kafka entrega pelo menos uma vez e
 | Arquivo | Responsabilidade |
 |---|---|
 | `internal/storage/mmap/region.go` | `AtomicLoad32`/`AtomicStore32` (único pacote com unsafe) |
-| `internal/storage/rowindex/rowindex.go` | `denseFile` com tamanho de entrada parametrizado; `Denso32` exportado |
-| `internal/index/valuekey/valuekey.go` | `AppendComposta`/`DecodeComposta` + golden |
+| `internal/storage/rowindex/rowindex.go` | `denseFile` com tamanho de entrada parametrizado; `Dense32` exportado |
+| `internal/index/valuekey/valuekey.go` | `AppendComposite`/`DecodeComposite` + golden |
 | `internal/predicate/evaluator.go` (novo) | `AvaliadorDePayload`: programa + slots + reader, `Avalia(payload)` |
 | `internal/predicate/rule.go` | `CompilaCondicao` extraída de `CompilaRegras` |
 | `internal/storage/counter/` (novo) | `dict.go`, `counter.go`, `textkey.go`, `audit.go`, `retirement.go` + testes |
@@ -217,7 +217,7 @@ por mensagem) foi refutada na proposta porque Kafka entrega pelo menos uma vez e
 
 ## Bloco A — Fundações de formato
 
-### Tarefa A1: `Denso32` na `rowindex` (vetor denso de 4 bytes)
+### Tarefa A1: `Dense32` na `rowindex` (vetor denso de 4 bytes)
 
 **Arquivos:**
 - Modificar: `internal/storage/mmap/region.go` (ao lado de `AtomicLoad64`, linha 269)
@@ -231,15 +231,15 @@ por mensagem) foi refutada na proposta porque Kafka entrega pelo menos uma vez e
 func (r *Region) AtomicLoad32(off int64) uint32
 func (r *Region) AtomicStore32(off int64, v uint32)
 // rowindex
-func OpenDenso32(path string, magic [4]byte, minRows uint64) (*Denso32, error)
-func (d *Denso32) Get(rowID types.RowID) (v uint32, gravado bool) // false além do arquivo
-func (d *Denso32) Set(rowID types.RowID, v uint32) error          // writer-only, cresce por doubling
-func (d *Denso32) Nasceu() bool
-func (d *Denso32) Cobre(limite types.RowID) bool                  // arquivo tem entrada para limite-1
-func (d *Denso32) Zera() error                                    // memset das entradas (reconstrução)
-func (d *Denso32) Msync() error
-func (d *Denso32) Close() error
-func (d *Denso32) SizeBytes() int64
+func OpenDense32(path string, magic [4]byte, minRows uint64) (*Dense32, error)
+func (d *Dense32) Get(rowID types.RowID) (v uint32, gravado bool) // false além do arquivo
+func (d *Dense32) Set(rowID types.RowID, v uint32) error          // writer-only, cresce por doubling
+func (d *Dense32) Nasceu() bool
+func (d *Dense32) Cobre(limite types.RowID) bool                  // arquivo tem entrada para limite-1
+func (d *Dense32) Zera() error                                    // memset das entradas (reconstrução)
+func (d *Dense32) Msync() error
+func (d *Dense32) Close() error
+func (d *Dense32) SizeBytes() int64
 ```
 
 - [ ] **Passo 1: teste do atômico de 32 bits no mmap**
@@ -265,12 +265,12 @@ func TestAtomicos32EnderecamMeiaWord(t *testing.T) {
 
 - [ ] **Passo 5: parametrizar `denseFile`** — `entrySize` deixa de ser const global: vira campo `entry int64` do `denseFile`; `openDense(path, magic, minRows, entry)`; `entryOff` vira método; `load/store` ganham as variantes de 32 quando `entry == 4`. Os cinco tipos existentes passam `8`. O byte 5 do header já grava o tamanho, então um arquivo de 8 aberto como 4 (ou vice-versa) é recusado pela checagem que já existe (`rowindex.go:83`).
 
-- [ ] **Passo 6: teste do `Denso32`**
+- [ ] **Passo 6: teste do `Dense32`**
 
 ```go
 func TestDenso32GravaLeECresce(t *testing.T) {
 	dir := t.TempDir()
-	d, err := OpenDenso32(filepath.Join(dir, "g.idx"), [4]byte{'T','S','T','1'}, 512)
+	d, err := OpenDense32(filepath.Join(dir, "g.idx"), [4]byte{'T','S','T','1'}, 512)
 	if err != nil { t.Fatal(err) }
 	defer d.Close()
 	if !d.Nasceu() { t.Fatal("arquivo novo tem de nascer") }
@@ -284,8 +284,8 @@ func TestDenso32GravaLeECresce(t *testing.T) {
 
 func TestDenso32RecusaArquivoDeOitoBytes(t *testing.T) {
 	dir := t.TempDir()
-	e, _ := OpenEscritas(filepath.Join(dir, "x.idx"), 512); e.Close()
-	if _, err := OpenDenso32(filepath.Join(dir, "x.idx"), escritasMagic, 512); err == nil {
+	e, _ := OpenLastWrites(filepath.Join(dir, "x.idx"), 512); e.Close()
+	if _, err := OpenDense32(filepath.Join(dir, "x.idx"), lastWritesMagic, 512); err == nil {
 		t.Fatal("arquivo com entrySize 8 aberto como 4 tem de ser recusado")
 	}
 }
@@ -310,12 +310,12 @@ git commit -m "rowindex: vetor denso de 4 bytes por linha (Denso32) e atômicos 
 
 **Interfaces produzidas:**
 ```go
-// AppendComposta grava, para cada componente, `u16 LE tamanho | chave simples`.
+// AppendComposite grava, para cada componente, `u16 LE tamanho | chave simples`.
 // dst é do chamador e o retorno tem de ser reatribuído (mesmo contrato do Append).
-func AppendComposta(dst []byte, vs []types.Value) ([]byte, error)
-// DecodeComposta decodifica em dst (reusado) os componentes; os Bytes das strings
+func AppendComposite(dst []byte, vs []types.Value) ([]byte, error)
+// DecodeComposite decodifica em dst (reusado) os componentes; os Bytes das strings
 // apontam para dentro de chave (zero-copy).
-func DecodeComposta(chave []byte, dst []types.Value) ([]types.Value, error)
+func DecodeComposite(chave []byte, dst []types.Value) ([]types.Value, error)
 ```
 
 - [ ] **Passo 1: golden de bytes** — em `TestChaveCanonicaEhGoldenDeDisco` adicionar uma tabela irmã `TestChaveCompostaEhGoldenDeDisco` com hex literal:
@@ -327,7 +327,7 @@ func DecodeComposta(chave []byte, dst []types.Value) ([]types.Value, error)
 ```
 (sem espaços no literal; `str`/`i64` são helpers do teste). Mais `TestDecodeCompostaDesfazOAppend` (round-trip para string/int64/bool) e `TestAppendCompostaRespeitaOBufferDoChamador` (ponteiro e cap iguais, como o existente).
 
-- [ ] **Passo 2: vermelho → implementar → verde.** `AppendComposta` chama `Append` por componente num scratch interno? NÃO: para não alocar, grava o prefixo de 2 bytes como placeholder, chama `Append(dst, v)`, e volta para preencher o tamanho. `DecodeComposta` lê `[tipo]` e decide: int64/bool → 8 bytes LE em `I64`; string → resto do componente em `Bytes`.
+- [ ] **Passo 2: vermelho → implementar → verde.** `AppendComposite` chama `Append` por componente num scratch interno? NÃO: para não alocar, grava o prefixo de 2 bytes como placeholder, chama `Append(dst, v)`, e volta para preencher o tamanho. `DecodeComposite` lê `[tipo]` e decide: int64/bool → 8 bytes LE em `I64`; string → resto do componente em `Bytes`.
 
 - [ ] **Passo 3: commit** — `valuekey: chave composta com prefixo de tamanho por componente, golden de disco`.
 
@@ -407,7 +407,7 @@ por grupo na internação e guardado ao lado da chave (tarefa B2 define
   - `TestDicionarioAposentaENuncaReemite`: aposenta o id 2, reabre, `Chave(2)` vivo=false, `Interna(mesma chave)` devolve id 4.
   - `TestDicionarioRecusaOTeto`: teto 2, terceira chave → `ErrTetoDeGrupos`; aposentar uma libera uma vaga.
   - `TestDicionarioNaoAlocaNoLookup` (`!race`, teto 0 sobre `Interna` de chave existente e `PorChave`).
-  - **Mutação obrigatória**: remover o `f.Sync()` de `Interna` e provar que um teste fica vermelho — `TestDicionarioFsyncaAntesDeDevolverOId` usa um seam `aposEscrita func()` (como `agenda.aposEscrita`) que injeta pânico entre o write e o sync, e confere na reabertura que a entrada NÃO está lá (com o sync, o pânico só pode acontecer depois dela durável).
+  - **Mutação obrigatória**: remover o `f.Sync()` de `Interna` e provar que um teste fica vermelho — `TestDicionarioFsyncaAntesDeDevolverOId` usa um seam `afterWrite func()` (como `agenda.afterWrite`) que injeta pânico entre o write e o sync, e confere na reabertura que a entrada NÃO está lá (com o sync, o pânico só pode acontecer depois dela durável).
 
 - [ ] **Passo 2: vermelho → implementar → verde → commit** — `contador: dicionário de grupos append-only com fsync por entrada e aposentadoria`.
 
@@ -498,7 +498,7 @@ UMA vez, por merge linear contra `colunasOrdenadas` (cópia ordenada de
 `Colunas` com o índice de volta à ordem declarada), preenchendo
 `c.valores []types.Value` (scratch do writer) e marcando presença; qualquer
 coluna ausente ⇒ `SemGrupo` (a proposta §6.3: entidade sem a coluna não é
-contada). Presentes todas: `valuekey.AppendComposta(c.chaveBuf[:0], c.valores)`,
+contada). Presentes todas: `valuekey.AppendComposite(c.chaveBuf[:0], c.valores)`,
 `c.chaveBuf = chave`, `id, err := c.dict.Interna(chave)`; `ErrTetoDeGrupos` ⇒
 `SemGrupo` + `recusados.Add(1)` + WARN uma vez. Condição: `c.avaliador.Avalia(payload)`
 (nil ⇒ true). Delta:
@@ -534,7 +534,7 @@ return nil
   - `TestLinhaSemColunaDeAgrupamentoNaoConta`: payload sem `olt` ⇒ refs de todos os grupos inalterados.
   - `TestTetoDeGruposRecusaEConta`: teto 1; segunda OLT ⇒ `Recusados == 1`, linha entra como SemGrupo.
   - `TestDobraReproduzOsTotais`: 1.000 transições aleatórias + `ApplyOverlay` + `Msync`; `Dobra` numa segunda instância aberta sobre os mesmos arquivos devolve exatamente os mesmos totais/refs. **Este é o teste que sustenta a consistência através de crash.**
-  - `TestOverlayNaoVaiAoMmapAntesDoApply`: transições sem `ApplyOverlay`; uma segunda instância sobre os arquivos dobra ZERO. Depois do `ApplyOverlay`, dobra os totais. (Mutação: `Transiciona` gravando direto no `Denso32` → vermelho.)
+  - `TestOverlayNaoVaiAoMmapAntesDoApply`: transições sem `ApplyOverlay`; uma segunda instância sobre os arquivos dobra ZERO. Depois do `ApplyOverlay`, dobra os totais. (Mutação: `Transiciona` gravando direto no `Dense32` → vermelho.)
   - `TestDobraTrataIdAposentadoComoOrfa`: reescreve a entrada para SemGrupo e conta em `Orfas`.
   - `TestCobreMexidasAcompanhaAsTransicoes`: `Transicoes()` sobe por transição efetiva (não por reprocessamento), `CobreMexidas` é monotônico.
   - **Mutações obrigatórias, relatadas no commit**: (1) remover o decremento de `refs` na saída de grupo → `TestMudarDeGrupoAjustaAsDuasPontas` vermelho; (2) remover o `total--` da lápide → `TestLapideDescontaEPreservaOGrupo` vermelho; (3) trocar `antiga == nova` por `true` → `TestReprocessarOMesmoEventoNaoMexe` continua verde (é o esperado: a mutação equivalente é remover o early-return e ver `TestDobraReproduzOsTotais`… continuar verde também — registrar que essa mutação é inofensiva por construção, e por quê).
@@ -682,7 +682,7 @@ Mecânica de `AuditaContadores`: `entra()`; `wmu.Lock()`; `snap := s.AbreSnapsho
 leitor, `snapshot.go:176-181`); `c.Congela()` de cada contador; `wmu.Unlock()`.
 Depois, sem `wmu`, **enumerador próprio** — NÃO `ScanLive`/`GetByRowID`, que
 leem a location corrente e filtram por prazo vencido: para `id` em
-`[snap.BaseRowID, snap.LimitRowID)`: `packed := s.vers.Em(id, snap.Epoch)`,
+`[snap.BaseRowID, snap.LimitRowID)`: `packed := s.vers.At(id, snap.Epoch)`,
 senão `s.locs.Get(id)`; pula só ausente ou bit de lápide; sob `aposMu.RLock`,
 `segR.ReadRecord(seg, off, buf)` e confere `rec.RowID == id`; rederiva com
 `c.Deriva(payload, avaliadorDaAuditoria, scratch, chaveBuf)`; acumula em slices
@@ -866,7 +866,7 @@ Fonte (`query.Store`): `AbreSnapshot()` devolve `types.Snapshot{LimitRowID: l.Li
 ficam zero e são ignorados pela fonte — godoc no molde do `meta.fonte.AbreSnapshot`);
 `ScanLive(snap)` itera `1..LimitRowID-1`, pulando `vivo == false`;
 `GetByRowID(snap, id, buf)` codifica: `groupKey` (texto), as colunas (por
-`valuekey.DecodeComposta` da chave, zero-copy), `total`. **Zero alocação por
+`valuekey.DecodeComposite` da chave, zero-copy), `total`. **Zero alocação por
 linha**: o texto e a chave vêm do dicionário (memória estável), o payload é
 montado em `buf[:0]` com `encoding.AppendField` em ordem de FieldID;
 `GetByKey(snap, key, buf)` ⇒ `PorTexto(key)` ⇒ mesmo `record`. `Indexado` false;
@@ -902,7 +902,7 @@ montado em `buf[:0]` com `encoding.AppendField` em ordem de FieldID;
 ### Tarefa F1: métricas e `/v1/stats`
 
 **Arquivos:**
-- Modificar: `internal/metrics/names.go` (bloco "Contadores mantidos na escrita", com a razão de cada série; `LabelCounter = "counter"` com a nota "valor vem do YAML, conjunto fechado — nunca do cliente"), `internal/server/metrics_dataset.go` (`amostrasDeContadores(d) []metrics.Amostra` lendo `d.st.EstatisticasDeContadores()` UMA vez), `internal/protocol/documents.go` (`DatasetStats.Counters []ContadorStats`), `internal/server/documents.go` (mesma chamada)
+- Modificar: `internal/metrics/names.go` (bloco "Contadores mantidos na escrita", com a razão de cada série; `LabelCounter = "counter"` com a nota "valor vem do YAML, conjunto fechado — nunca do cliente"), `internal/server/metrics_dataset.go` (`amostrasDeContadores(d) []metrics.Sample` lendo `d.st.EstatisticasDeContadores()` UMA vez), `internal/protocol/documents.go` (`DatasetStats.Counters []CounterStats`), `internal/server/documents.go` (mesma chamada)
 - Testar: `internal/server/metrics_dataset_test.go`, `internal/gates` continua verde
 
 Séries (todas por `dataset`,`counter`, nascem com zero na subida via coletor que
@@ -925,16 +925,16 @@ emite sempre): `nishidb_counter_groups` (medidor, vivos), `nishidb_counter_group
 
 **Wire (sem código de erro novo):**
 ```go
-type AuditoriaContador struct {
+type CounterAudit struct {
 	Name string `json:"name"`; Groups uint32 `json:"groups"`
 	Maintained, Recomputed int64 `json:"maintained","recomputed"`
 	DivergentGroups int `json:"divergentGroups"`
-	Sample []DivergenciaDeGrupo `json:"sample,omitempty"`
+	Sample []GroupDivergence `json:"sample,omitempty"`
 	RowsScanned uint64 `json:"rowsScanned"`; DurationMs int64 `json:"durationMs"`
 }
-type DivergenciaDeGrupo struct{ GroupKey string; Maintained, Recomputed, RefsMaintained, RefsRecomputed int64 }
-type AuditoriaDataset struct{ Name string; Counters []AuditoriaContador }
-type RespostaAuditoriaDeContadores struct{ Datasets []AuditoriaDataset }
+type GroupDivergence struct{ GroupKey string; Maintained, Recomputed, RefsMaintained, RefsRecomputed int64 }
+type DatasetAudit struct{ Name string; Counters []CounterAudit }
+type CountersAuditResponse struct{ Datasets []DatasetAudit }
 type RebuildContador struct{ Name string; Groups uint32; DurationMs int64 }
 type RebuildDataset struct{ Name string; Counters []RebuildContador }
 type RespostaRebuildDeContadores struct{ Datasets []RebuildDataset }

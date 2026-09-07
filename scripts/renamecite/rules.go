@@ -233,9 +233,9 @@ func (m *Mapping) resolveLeaf(leaf string) (string, string, bool) {
 // Antes de qualquer resolução por folha, o nome é confrontado com o que o
 // MÓDULO ainda declara (Mapping.Declared, lido da árvore por
 // collectDeclarations). Folha que ainda é declaração de alguém não é citação
-// pendurada: `Nome` segue sendo campo de `metrics.Amostra`, `BytesRetidos` de
-// `Store` e de `materializer.Decodificado`, `escreveAtomico` de
-// `index/segindex`. Reescrevê-las pelo nome novo de um homônimo de outro
+// pendurada: `Nome` segue sendo campo de `counter.Definicao`, `BytesRetidos`
+// de `Store` e de `materializer.Decodificado`, `Fecha` de
+// `kafka.Fila`. Reescrevê-las pelo nome novo de um homônimo de outro
 // pacote é criar a citação pendurada que esta passada existe para não deixar
 // para trás, e foi o que uma rodada de verdade fez seis vezes.
 //
@@ -354,10 +354,25 @@ func shortPkg(dir string) string {
 }
 
 // rewriteToken reescreve o CONTEÚDO de uma crase: `X`, `pkg.X`, `T.M`,
-// `pkg.T.M`, `(*T).M`. Devolve o texto novo e o que ficou de fora, se ficou.
+// `pkg.T.M`, `(*T).M`, com ou sem os parênteses da CHAMADA colados ao fim.
+// Devolve o texto novo e o que ficou de fora, se ficou.
 func (m *Mapping) rewriteToken(tok string) (string, *Skipped) {
 	if m.Protected[tok] {
 		return tok, &Skipped{Token: tok, Reason: "protegido"}
+	}
+	// `T.M()`, `pkg.T.M()`, `x.M()`: os parênteses colados ao fim são a marca da
+	// CHAMADA, não parte do nome. Sem separá-los, `Leitor.Linha()` entra no
+	// switch com a folha `Linha()`, que não é endereço de nada — nenhuma regra
+	// de membro casa e sobra o atalho do TIPO, que devolve `Reader.Linha()`.
+	// Meia citação é pior que a inteira velha: ela afirma que `Reader` tem um
+	// método `Linha`. Foi assim que as duas docstrings do client Python saíram
+	// da passada do G2.
+	//
+	// Vale para o que vier entre os parênteses: `Reader.Linha(x)` é exemplo de
+	// chamada, e o método ali é citação igual.
+	if i := callSuffix(tok); i > 0 {
+		out, skipped := m.rewriteToken(tok[:i])
+		return out + tok[i:], skipped
 	}
 	t := strings.TrimPrefix(tok, "(*")
 	t = strings.Replace(t, ").", ".", 1)
@@ -423,6 +438,39 @@ func (m *Mapping) rewriteToken(tok string) (string, *Skipped) {
 		}
 	}
 	return tok, nil
+}
+
+// callSuffix devolve o índice do parêntese que ABRE a chamada colada ao fim de
+// um token QUALIFICADO (`Reader.Linha()` → 12), ou -1 quando não há.
+//
+// Duas condições, e as duas são a diferença entre uma regra e um estrago:
+//
+//   - o parêntese do receptor ponteiro não conta. Em `(*T).M()` o primeiro `(`
+//     abre o QUALIFICADOR, e cortar ali deixaria o token vazio;
+//   - o que vem ANTES do parêntese tem de ser um endereço qualificado, com
+//     ponto. Sem o ponto, `dict(linha)` viraria `dict(...)` resolvido por
+//     folha nua minúscula — exatamente o que rewriteCompound recusa fazer, e
+//     pela mesma razão: dentro de uma crase composta a palavra minúscula é do
+//     EXEMPLO, não do mapeamento.
+func callSuffix(tok string) int {
+	start := 0
+	if strings.HasPrefix(tok, "(*") {
+		i := strings.Index(tok, ").")
+		if i < 0 {
+			return -1
+		}
+		start = i + 2
+	}
+	i := strings.IndexByte(tok[start:], '(')
+	if i < 0 {
+		return -1
+	}
+	i += start
+	head := strings.Replace(strings.TrimPrefix(tok[:i], "(*"), ").", ".", 1)
+	if !strings.Contains(head, ".") || !isSimpleToken(head) {
+		return -1
+	}
+	return i
 }
 
 // pkgOrType traduz o qualificador de um token: nome curto de pacote quando

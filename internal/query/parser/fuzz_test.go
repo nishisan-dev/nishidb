@@ -79,7 +79,7 @@ func FuzzParse(f *testing.F) {
 		// que é a ordem do percurso in-order.
 		var params []int
 		var walk func(parser.Expr, int)
-		walk = func(e parser.Expr, prof int) {
+		walk = func(e parser.Expr, height int) {
 			// MaxExprDepth limita o aninhamento de PARÊNTESES, não a altura da
 			// árvore: `a=1 AND a=1 AND …` é left-leaning e cresce um nível por
 			// termo, sem recursão no parser. A guarda anterior (MaxExprDepth+64)
@@ -89,8 +89,8 @@ func FuzzParse(f *testing.F) {
 			// O que é verdade: todo nó consome ao menos um token, então a altura
 			// não passa do tamanho da entrada. Isso ainda protege o walk de
 			// recursão infinita numa AST cíclica, que é o risco real aqui.
-			if prof > len(sql)+1 {
-				t.Fatalf("árvore com altura %d para %d bytes de query: nó sem token", prof, len(sql))
+			if height > len(sql)+1 {
+				t.Fatalf("árvore com altura %d para %d bytes de query: nó sem token", height, len(sql))
 			}
 			switch n := e.(type) {
 			case nil:
@@ -98,8 +98,8 @@ func FuzzParse(f *testing.F) {
 				if n.Op == 0 {
 					t.Fatal("LogicalOp zero")
 				}
-				walk(n.Left, prof+1)
-				walk(n.Right, prof+1)
+				walk(n.Left, height+1)
+				walk(n.Right, height+1)
 			case *parser.Comparison:
 				if n.Op == 0 || n.Operand.Kind == 0 {
 					t.Fatalf("nó com constante zero: %#v", n)

@@ -77,11 +77,11 @@ a superfície de configuração que a C estabelece.
 | Arquivo | Responsabilidade |
 |---|---|
 | `format.go` | magics, versões, offsets de header, largura de posting. O ÚNICO lugar que conhece bytes |
-| `writer.go` | `Escritor`: acumula postings e emite o `.sidx`. O ÚNICO lugar que decide o layout selado |
-| `sealed.go` | `Selado`: abre, valida CRC preguiçosamente, busca binária, devolve fatia |
+| `writer.go` | `Writer`: acumula postings e emite o `.sidx`. O ÚNICO lugar que decide o layout selado |
+| `sealed.go` | `Sealed`: abre, valida CRC preguiçosamente, busca binária, devolve fatia |
 | `wip.go` | `WIP`: diretório + array encadeado, `Set` O(1), crescimento |
-| `seal.go` | WIP → `Escritor` → selado, com re-base |
-| `union.go` | `Une`: concatenação sobre faixas disjuntas, merge k-way com dedup sobre sobrepostas |
+| `seal.go` | WIP → `Writer` → selado, com re-base |
+| `union.go` | `Union`: concatenação sobre faixas disjuntas, merge k-way com dedup sobre sobrepostas |
 
 **Criar — `internal/storage/`:**
 
@@ -120,20 +120,20 @@ a superfície de configuração que a C estabelece.
 - Produz:
   ```go
   const (
-      MagicSelado   = "NDBX"
-      VersaoSelado  = 1
-      HeaderSelado  = 64
-      TamSecao      = 24
-      TamSlotDir    = 16
+      SealedMagic   = "NDBX"
+      SealedVersion  = 1
+      SealedHeaderSize  = 64
+      SectionEntrySize      = 24
+      DirSlotSize    = 16
   )
-  type Escritor struct{ ... }
-  func NovoEscritor() *Escritor
-  func (e *Escritor) Adiciona(campo types.FieldID, h uint64, row types.RowID)
-  func (e *Escritor) Vazio() bool
-  func (e *Escritor) Escreve(caminho string, seg uint32) error
+  type Writer struct{ ... }
+  func NewWriter() *Writer
+  func (e *Writer) Add(campo types.FieldID, h uint64, row types.RowID)
+  func (e *Writer) IsEmpty() bool
+  func (e *Writer) WriteSealed(caminho string, seg uint32) error
   ```
 
-O `Escritor` é o **único lugar do repositório que decide o layout selado**. A
+O `Writer` é o **único lugar do repositório que decide o layout selado**. A
 selagem (Tarefa 4) e a reconstrução (Tarefa 7) o alimentam por caminhos
 diferentes, e é por isso que "incremental idêntico a reconstruído" é verdade por
 construção — sobra para o golden provar que a ALIMENTAÇÃO é equivalente, que é
@@ -196,24 +196,24 @@ package segindex
 // produziria delta negativo — que em u32 vira um rowId gigante e um falso
 // NEGATIVO silencioso, o único desfecho que este produto não tolera.
 const (
-	// MagicSelado identifica o arquivo selado.
-	MagicSelado = "NDBX"
-	// VersaoSelado é a versão do formato selado.
-	VersaoSelado = 1
-	// HeaderSelado é o tamanho do header em bytes.
-	HeaderSelado = 64
-	// TamSecao é o tamanho de uma entrada da tabela de seções.
-	TamSecao = 24
-	// TamSlotDir é o tamanho de uma entrada de diretório.
-	TamSlotDir = 16
-	// TamCRC é o crc32c no fim do arquivo.
-	TamCRC = 4
+	// SealedMagic identifica o arquivo selado.
+	SealedMagic = "NDBX"
+	// SealedVersion é a versão do formato selado.
+	SealedVersion = 1
+	// SealedHeaderSize é o tamanho do header em bytes.
+	SealedHeaderSize = 64
+	// SectionEntrySize é o tamanho de uma entrada da tabela de seções.
+	SectionEntrySize = 24
+	// DirSlotSize é o tamanho de uma entrada de diretório.
+	DirSlotSize = 16
+	// CRCSize é o crc32c no fim do arquivo.
+	CRCSize = 4
 )
 
 var (
-	// ErrFormato é a família de erros de arquivo de índice ilegível.
-	ErrFormato = errors.New("segindex: formato inválido")
-	// ErrCRC marca divergência de checksum. É SEPARADO do ErrFormato porque o
+	// ErrFormat é a família de erros de arquivo de índice ilegível.
+	ErrFormat = errors.New("segindex: formato inválido")
+	// ErrCRC marca divergência de checksum. É SEPARADO do ErrFormat porque o
 	// chamador reage diferente: formato inválido é bug ou versão, e para;
 	// crc divergente é corrupção de mídia, e o remédio é apagar e reconstruir.
 	ErrCRC = errors.New("segindex: crc divergente")
@@ -221,16 +221,16 @@ var (
 
 var castagnoli = crc32.MakeTable(crc32.Castagnoli)
 
-// CaminhoSelado devolve o caminho do índice selado do segmento dentro de dir.
+// SealedPath devolve o caminho do índice selado do segmento dentro de dir.
 // Ele mora ao lado do .dat de propósito: a aposentadoria remove os dois no
 // mesmo passo, e é isso que faz "purgar o segmento leva o índice junto" ser
 // uma linha de código em vez de uma promessa.
-func CaminhoSelado(dir string, seg uint32) string {
+func SealedPath(dir string, seg uint32) string {
 	return filepath.Join(dir, fmt.Sprintf("segment-%08d.sidx", seg))
 }
 
-// larguraPara devolve a menor largura de posting que cobre o intervalo.
-func larguraPara(span uint64) uint8 {
+// widthFor devolve a menor largura de posting que cobre o intervalo.
+func widthFor(span uint64) uint8 {
 	if span < 1<<32 {
 		return 4
 	}
@@ -262,30 +262,30 @@ import (
 // records com o mesmo valor dentro de um segmento.
 func TestOEscritorAgrupaOrdenaEDeduplicaAsPostings(t *testing.T) {
 	dir := t.TempDir()
-	e := segindex.NovoEscritor()
+	e := segindex.NewWriter()
 	// campo 7, valor A (hash 100): rows 30, 10, 30 (duplicata), 20
-	e.Adiciona(7, 100, 30)
-	e.Adiciona(7, 100, 10)
-	e.Adiciona(7, 100, 30)
-	e.Adiciona(7, 100, 20)
+	e.Add(7, 100, 30)
+	e.Add(7, 100, 10)
+	e.Add(7, 100, 30)
+	e.Add(7, 100, 20)
 	// campo 7, valor B (hash 50): row 15  -- hash MENOR, adicionado depois
-	e.Adiciona(7, 50, 15)
+	e.Add(7, 50, 15)
 	// campo 3 (fieldID MENOR, adicionado por último)
-	e.Adiciona(3, 999, 12)
+	e.Add(3, 999, 12)
 
-	caminho := segindex.CaminhoSelado(dir, 42)
-	if err := e.Escreve(caminho, 42); err != nil {
-		t.Fatalf("Escreve: %v", err)
+	caminho := segindex.SealedPath(dir, 42)
+	if err := e.WriteSealed(caminho, 42); err != nil {
+		t.Fatalf("WriteSealed: %v", err)
 	}
 
-	s, err := segindex.AbreSelado(caminho)
+	s, err := segindex.OpenSealed(caminho)
 	if err != nil {
-		t.Fatalf("AbreSelado: %v", err)
+		t.Fatalf("OpenSealed: %v", err)
 	}
-	defer s.Fecha()
+	defer s.Close()
 
-	if got, want := s.Campos(), []types.FieldID{3, 7}; len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
-		t.Fatalf("Campos() = %v, quero %v (ordenados por fieldID)", got, want)
+	if got, want := s.Fields(), []types.FieldID{3, 7}; len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("Fields() = %v, quero %v (ordenados por fieldID)", got, want)
 	}
 	if got, want := s.MinRowID(), types.RowID(10); got != want {
 		t.Errorf("MinRowID() = %d, quero %d", got, want)
@@ -322,18 +322,18 @@ func TestOEscritorAgrupaOrdenaEDeduplicaAsPostings(t *testing.T) {
 // "16 x distintos + 4 x linhas" seria mentira.
 func TestOEscritorRebaseiaParaAMenorLarguraQueCabe(t *testing.T) {
 	dir := t.TempDir()
-	e := segindex.NovoEscritor()
+	e := segindex.NewWriter()
 	// rowIds ALTOS, mas com intervalo pequeno: o delta cabe em u32 mesmo com
 	// o rowId absoluto passando de 2^32. É exatamente o caso do histórico com
 	// meses no ar, e é o caso em que uma implementação que ignorasse o base
 	// escolheria 8 bytes sem precisar.
 	base := types.RowID(1) << 35
-	e.Adiciona(7, 100, base)
-	e.Adiciona(7, 100, base+1000)
+	e.Add(7, 100, base)
+	e.Add(7, 100, base+1000)
 
-	caminho := segindex.CaminhoSelado(dir, 1)
-	if err := e.Escreve(caminho, 1); err != nil {
-		t.Fatalf("Escreve: %v", err)
+	caminho := segindex.SealedPath(dir, 1)
+	if err := e.WriteSealed(caminho, 1); err != nil {
+		t.Fatalf("WriteSealed: %v", err)
 	}
 	b, err := os.ReadFile(caminho)
 	if err != nil {
@@ -350,13 +350,13 @@ func TestOEscritorRebaseiaParaAMenorLarguraQueCabe(t *testing.T) {
 // pronto e o segmento nunca ganharia índice de verdade.
 func TestOEscritorVazioNaoCriaArquivo(t *testing.T) {
 	dir := t.TempDir()
-	e := segindex.NovoEscritor()
-	if !e.Vazio() {
-		t.Fatal("escritor recém-criado deveria ser Vazio()")
+	e := segindex.NewWriter()
+	if !e.IsEmpty() {
+		t.Fatal("escritor recém-criado deveria ser IsEmpty()")
 	}
-	caminho := segindex.CaminhoSelado(dir, 1)
-	if err := e.Escreve(caminho, 1); err != nil {
-		t.Fatalf("Escreve: %v", err)
+	caminho := segindex.SealedPath(dir, 1)
+	if err := e.WriteSealed(caminho, 1); err != nil {
+		t.Fatalf("WriteSealed: %v", err)
 	}
 	if _, err := os.Stat(caminho); !os.IsNotExist(err) {
 		t.Fatalf("Stat(%s) = %v, quero IsNotExist", filepath.Base(caminho), err)
@@ -370,7 +370,7 @@ func TestOEscritorVazioNaoCriaArquivo(t *testing.T) {
 go test ./internal/index/segindex/ -run 'TestOEscritor' -count=1
 ```
 
-Esperado: falha de build — `undefined: segindex.NovoEscritor`. É a falha
+Esperado: falha de build — `undefined: segindex.NewWriter`. É a falha
 correta: o teste nomeia a API antes de ela existir.
 
 - [ ] **Passo 4: implementar `writer.go`**
@@ -387,34 +387,34 @@ type entrada struct {
 	campo types.FieldID
 }
 
-// Escritor acumula postings e emite o arquivo selado. É o ÚNICO lugar que
+// Writer acumula postings e emite o arquivo selado. É o ÚNICO lugar que
 // decide o layout selado: a selagem do WIP e a reconstrução a partir dos
 // records alimentam ESTE tipo, e é isso que torna "incremental idêntico a
 // reconstruído" verdade por construção em vez de por vigilância.
 //
 // Não é seguro para uso concorrente. Cada selagem ou reconstrução usa o seu.
-type Escritor struct {
+type Writer struct {
 	ents []entrada
 }
 
-// NovoEscritor devolve um escritor vazio.
-func NovoEscritor() *Escritor { return &Escritor{} }
+// NewWriter devolve um escritor vazio.
+func NewWriter() *Writer { return &Writer{} }
 
-// Adiciona registra a posting. Duplicatas e desordem são aceitas: o Escreve
+// Add registra a posting. Duplicatas e desordem são aceitas: o WriteSealed
 // ordena e deduplica.
-func (e *Escritor) Adiciona(campo types.FieldID, h uint64, row types.RowID) {
+func (e *Writer) Add(campo types.FieldID, h uint64, row types.RowID) {
 	e.ents = append(e.ents, entrada{hash: h, row: row, campo: campo})
 }
 
-// Vazio reporta que nada foi adicionado.
-func (e *Escritor) Vazio() bool { return len(e.ents) == 0 }
+// IsEmpty reporta que nada foi adicionado.
+func (e *Writer) IsEmpty() bool { return len(e.ents) == 0 }
 
-// Escreve emite o arquivo em caminho, por .tmp + fsync + rename + fsync do
-// diretório. Escritor vazio NÃO cria arquivo: "sem índice" é um estado que o
+// WriteSealed emite o arquivo em caminho, por .tmp + fsync + rename + fsync do
+// diretório. Writer vazio NÃO cria arquivo: "sem índice" é um estado que o
 // Lookup trata por enumeração, e um arquivo vazio faria a reconstrução
 // considerar o segmento pronto.
-func (e *Escritor) Escreve(caminho string, seg uint32) error {
-	if e.Vazio() {
+func (e *Writer) WriteSealed(caminho string, seg uint32) error {
+	if e.IsEmpty() {
 		return nil
 	}
 	slices.SortFunc(e.ents, func(a, b entrada) int {
@@ -433,27 +433,27 @@ func (e *Escritor) Escreve(caminho string, seg uint32) error {
 		base = min(base, en.row)
 		maxRow = max(maxRow, en.row)
 	}
-	largura := larguraPara(uint64(maxRow - base))
+	largura := widthFor(uint64(maxRow - base))
 
-	corpo := e.montaCorpo(base, largura)
+	corpo := e.buildBody(base, largura)
 
-	buf := make([]byte, 0, HeaderSelado+len(corpo)+TamCRC)
-	buf = append(buf, MagicSelado...)
-	buf = append(buf, VersaoSelado, 0)
+	buf := make([]byte, 0, SealedHeaderSize+len(corpo)+CRCSize)
+	buf = append(buf, SealedMagic...)
+	buf = append(buf, SealedVersion, 0)
 	buf = binary.LittleEndian.AppendUint16(buf, uint16(e.contaCampos()))
 	buf = binary.LittleEndian.AppendUint64(buf, uint64(seg))
 	buf = binary.LittleEndian.AppendUint64(buf, uint64(base))
 	buf = binary.LittleEndian.AppendUint64(buf, uint64(maxRow))
 	buf = append(buf, largura)
-	buf = append(buf, make([]byte, HeaderSelado-len(buf))...)
+	buf = append(buf, make([]byte, SealedHeaderSize-len(buf))...)
 	buf = append(buf, corpo...)
 	buf = binary.LittleEndian.AppendUint32(buf, crc32.Checksum(buf, castagnoli))
 
-	return escreveAtomico(caminho, buf)
+	return writeAtomic(caminho, buf)
 }
 ```
 
-`montaCorpo` percorre `e.ents` (já ordenado) montando, em duas passadas: a
+`buildBody` percorre `e.ents` (já ordenado) montando, em duas passadas: a
 primeira conta campos e valores distintos por campo para dimensionar a tabela
 de seções e os diretórios; a segunda escreve. `contaCampos` conta fieldIDs
 distintos. `writeAtomic` faz `os.WriteFile(caminho+".tmp")`, `Sync`,
@@ -465,9 +465,9 @@ crash com o nome temporário e o `Open` o trataria como órfão.
 ```bash
 go test ./internal/index/segindex/ -run 'TestOEscritor' -count=1
 ```
-Esperado: PASS nos três. (`AbreSelado` vem na Tarefa 2 — até lá, o primeiro
-teste continua vermelho por `undefined: AbreSelado`. **Comente-o com
-`t.Skip("AbreSelado chega na Tarefa 2")` e remova o skip na Tarefa 2**; os
+Esperado: PASS nos três. (`OpenSealed` vem na Tarefa 2 — até lá, o primeiro
+teste continua vermelho por `undefined: OpenSealed`. **Comente-o com
+`t.Skip("OpenSealed chega na Tarefa 2")` e remova o skip na Tarefa 2**; os
 outros dois passam agora e não dependem do leitor.)
 
 - [ ] **Passo 6: golden de bytes**
@@ -513,7 +513,7 @@ ser necessária na selagem."
 - Testar: `internal/index/segindex/alloc_gate_test.go`
 
 **Interfaces:**
-- Consome: `Escritor.Escreve` (Tarefa 1); `mmap.Region`.
+- Consome: `Writer.WriteSealed` (Tarefa 1); `mmap.Region`.
 - Produz:
   ```go
   // internal/storage/mmap
@@ -521,26 +521,26 @@ ser necessária na selagem."
   func (r *Region) Bytes() []byte   // pânico se a região não for somente-leitura
 
   // internal/index/segindex
-  type Selado struct{ ... }
-  func AbreSelado(caminho string) (*Selado, error)
-  func (s *Selado) Campos() []types.FieldID
-  func (s *Selado) TemCampo(campo types.FieldID) bool
-  func (s *Selado) Lookup(campo types.FieldID, h uint64) (Fonte, bool)
-  func (s *Selado) MinRowID() types.RowID
-  func (s *Selado) MaxRowID() types.RowID
-  func (s *Selado) SegmentID() uint32
-  func (s *Selado) Fecha() error
+  type Sealed struct{ ... }
+  func OpenSealed(caminho string) (*Sealed, error)
+  func (s *Sealed) Fields() []types.FieldID
+  func (s *Sealed) HasField(campo types.FieldID) bool
+  func (s *Sealed) Lookup(campo types.FieldID, h uint64) (Source, bool)
+  func (s *Sealed) MinRowID() types.RowID
+  func (s *Sealed) MaxRowID() types.RowID
+  func (s *Sealed) SegmentID() uint32
+  func (s *Sealed) Close() error
 
-  type Fonte interface {
+  type Source interface {
       types.RowIDIterator
       MinRowID() types.RowID
       MaxRowID() types.RowID
   }
   ```
 
-`Fonte` é declarada aqui porque o `Selado` é o primeiro a produzi-la. Contrato:
+`Source` é declarada aqui porque o `Sealed` é o primeiro a produzi-la. Contrato:
 **`MinRowID`/`MaxRowID` limitam os rowIds que a fonte VAI emitir, e uma fonte
-que não vai emitir nada reporta `Min > Max`.** É o que permite ao `Une`
+que não vai emitir nada reporta `Min > Max`.** É o que permite ao `Union`
 (Tarefa 5) descartar as vazias antes de decidir sobre disjunção, sem consumir
 nenhuma.
 
@@ -614,7 +614,7 @@ Esperado: `undefined: mmap.OpenReadOnly`.
 `OpenReadOnly` abre com `O_RDONLY`, faz `unix.Mmap(fd, 0, tamanho,
 unix.PROT_READ, unix.MAP_SHARED)`, **fecha o descritor** e devolve a `Region`
 com `readOnly = true` e `f = nil`. `Grow`, `Msync`, `AtomicStore64`,
-`AtomicOr64`, `AtomicAnd64` e `LiberaAte` passam a devolver erro (ou entrar em
+`AtomicOr64`, `AtomicAnd64` e `ReleaseBlocks` passam a devolver erro (ou entrar em
 pânico, nos que não devolvem erro) quando `readOnly`. `Close` só faz
 `munmap`. `Bytes()` devolve `r.data` e entra em pânico se não for
 somente-leitura — o comentário registra que devolver o slice cru de uma região
@@ -629,7 +629,7 @@ go test -race ./internal/storage/mmap/ -count=1
 
 - [ ] **Passo 5: escrever `sealed.go` e ligar o primeiro teste da Tarefa 1**
 
-`AbreSelado` faz `OpenReadOnly`, valida magic e versão, lê o header e a
+`OpenSealed` faz `OpenReadOnly`, valida magic e versão, lê o header e a
 tabela de seções para um slice em heap (`secCount` entradas — dezenas, não
 milhares), e **não verifica o CRC**. A verificação é preguiçosa, na primeira
 consulta, por `sync.Once`: conferir 2,25 GB na subida custaria segundos por
@@ -643,23 +643,23 @@ nada.
 // acrescentado ao schema depois. NÃO significa "valor ausente": valor ausente
 // devolve ok=true com uma fonte vazia. A distinção decide se o chamador
 // enumera o segmento (§3.2 da spec) ou aceita zero linhas dele.
-func (s *Selado) Lookup(campo types.FieldID, h uint64) (Fonte, bool) {
-	if err := s.confereCRC(); err != nil {
+func (s *Sealed) Lookup(campo types.FieldID, h uint64) (Source, bool) {
+	if err := s.checkCRC(); err != nil {
 		return nil, false
 	}
 	sec, ok := s.secao(campo)   // busca binária na tabela de seções
 	if !ok {
 		return nil, false
 	}
-	idx, count, achou := s.buscaNoDiretorio(sec, h)
+	idx, count, achou := s.findInDirectory(sec, h)
 	if !achou {
-		return fonteVazia{}, true
+		return emptySource{}, true
 	}
-	return &iterSelado{s: s, sec: sec, prox: idx, fim: idx + count}, true
+	return &sealedIter{s: s, sec: sec, prox: idx, fim: idx + count}, true
 }
 ```
 
-`iterSelado.Next` avança `prox` e lê o delta em `s.reg.Bytes()` com
+`sealedIter.Next` avança `prox` e lê o delta em `s.reg.Bytes()` com
 `binary.LittleEndian` — **sem lock e sem atômico**, porque o arquivo é
 imutável. `RowID()` soma o `baseRowID`.
 
@@ -674,7 +674,7 @@ Remova o `t.Skip` de `TestOEscritorAgrupaOrdenaEDeduplicaAsPostings`.
 // enumeração — resposta correta, só lenta. Derrubar a consulta trocaria
 // corrupção de um arquivo reconstruível por indisponibilidade.
 func TestCRCDivergenteNaoDerrubaAConsulta(t *testing.T) {
-	caminho := escreveSeladoDeTeste(t)   // helper: 1 campo, 1 valor, 3 rows
+	caminho := writeTestSealed(t)   // helper: 1 campo, 1 valor, 3 rows
 	b, err := os.ReadFile(caminho)
 	if err != nil {
 		t.Fatal(err)
@@ -683,21 +683,21 @@ func TestCRCDivergenteNaoDerrubaAConsulta(t *testing.T) {
 	if err := os.WriteFile(caminho, b, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	s, err := segindex.AbreSelado(caminho)
+	s, err := segindex.OpenSealed(caminho)
 	if err != nil {
-		t.Fatalf("AbreSelado não deve falhar por crc: %v", err)
+		t.Fatalf("OpenSealed não deve falhar por crc: %v", err)
 	}
-	defer s.Fecha()
+	defer s.Close()
 	if _, ok := s.Lookup(7, 100); ok {
 		t.Error("Lookup sobre arquivo com crc divergente devolveu ok=true")
 	}
-	if !errors.Is(s.ErroDeIntegridade(), segindex.ErrCRC) {
-		t.Errorf("ErroDeIntegridade() = %v, quero ErrCRC — o chamador precisa saber que é corrupção, e não campo ausente", s.ErroDeIntegridade())
+	if !errors.Is(s.IntegrityErr(), segindex.ErrCRC) {
+		t.Errorf("IntegrityErr() = %v, quero ErrCRC — o chamador precisa saber que é corrupção, e não campo ausente", s.IntegrityErr())
 	}
 }
 ```
 
-`ErroDeIntegridade()` existe porque `ok=false` sozinho é ambíguo entre "campo
+`IntegrityErr()` existe porque `ok=false` sozinho é ambíguo entre "campo
 ausente" e "arquivo corrompido", e só o segundo dispara reconstrução, ERROR e
 métrica.
 
@@ -712,8 +712,8 @@ métrica.
 // custo de abertura e não de varredura — medi-los juntos esconderia justamente
 // a regressão que este gate existe para pegar.
 func TestIterarSeladoNaoAlocaPorLinha(t *testing.T) {
-	s := abreSeladoComNPostings(t, 1000)
-	defer s.Fecha()
+	s := openSealedWithNPostings(t, 1000)
+	defer s.Close()
 	it, ok := s.Lookup(7, 100)
 	if !ok {
 		t.Fatal("Lookup não encontrou")
@@ -722,7 +722,7 @@ func TestIterarSeladoNaoAlocaPorLinha(t *testing.T) {
 		for it.Next() {
 			_ = it.RowID()
 		}
-		it.(interface{ Rebobina() }).Rebobina()
+		it.(interface{ Rewind() }).Rewind()
 	})
 	if media != 0 {
 		t.Errorf("AllocsPerRun = %v, quero 0", media)
@@ -730,7 +730,7 @@ func TestIterarSeladoNaoAlocaPorLinha(t *testing.T) {
 }
 ```
 
-`Rebobina()` é método só do `iterSelado`, e existe para o gate poder repetir a
+`Rewind()` é método só do `sealedIter`, e existe para o gate poder repetir a
 varredura sem reabrir. A contraparte sob `-race` vive em
 `alloc_gate_race_test.go` com `//go:build race` e um `t.Skip` explícito, no
 molde de `internal/storage/rowindex/schedule_gate_race_test.go` — gate que some
@@ -776,18 +776,18 @@ reconstrução o refaz."
 - Produz:
   ```go
   type WIP struct{ ... }
-  func AbreWIP(dir string, seg uint32, campo types.FieldID, slotsMin uint32) (*WIP, error)
+  func OpenWIP(dir string, seg uint32, campo types.FieldID, slotsMin uint32) (*WIP, error)
   func (w *WIP) Set(h uint64, row types.RowID) error
   func (w *WIP) Lookup(h uint64) []types.RowID
-  func (w *WIP) Campo() types.FieldID
+  func (w *WIP) Field() types.FieldID
   func (w *WIP) Postings() uint32
-  func (w *WIP) Distintos() uint32
-  func (w *WIP) Fecha() error
-  func (w *WIP) Apaga() error
-  func CaminhoWIP(dir string, seg uint32, campo types.FieldID) string
-  func ListaWIP(dir string, seg uint32) ([]types.FieldID, error)
+  func (w *WIP) DistinctValues() uint32
+  func (w *WIP) Close() error
+  func (w *WIP) Remove() error
+  func WIPPath(dir string, seg uint32, campo types.FieldID) string
+  func ListWIP(dir string, seg uint32) ([]types.FieldID, error)
   ```
-  E, em `export_test.go`: `func (w *WIP) SondasDoUltimoSet() int`.
+  E, em `export_test.go`: `func (w *WIP) LastSetAccesses() int`.
 
 - [ ] **Passo 1: o gate de custo, escrito ANTES da implementação**
 
@@ -811,14 +811,14 @@ func TestOCustoDoSetNaoAcompanhaOTamanhoDoSegmento(t *testing.T) {
 	const tetoDeSondas = 4 // amortizado; o diretório é dimensionado por DISTINTOS
 	for _, n := range []int{10_000, 100_000, 1_000_000} {
 		t.Run(fmt.Sprintf("n=%d", n), func(t *testing.T) {
-			w := abreWIPDeTeste(t)
-			defer w.Fecha()
+			w := openTestWIP(t)
+			defer w.Close()
 			var pior int
 			for i := range n {
 				if err := w.Set(100, types.RowID(i)); err != nil {
 					t.Fatalf("Set #%d: %v", i, err)
 				}
-				pior = max(pior, w.SondasDoUltimoSet())
+				pior = max(pior, w.LastSetAccesses())
 			}
 			if pior > tetoDeSondas {
 				t.Errorf("pior caso de %d sondas com n=%d, teto %d — a cadeia voltou a crescer com o segmento",
@@ -838,8 +838,8 @@ func TestOCustoDoSetNaoAcompanhaOTamanhoDoSegmento(t *testing.T) {
 // campo indexado por evento. internal/storage/ não tinha nenhum gate de
 // alocação até aqui; este é o primeiro da família.
 func TestSetNoWIPNaoAloca(t *testing.T) {
-	w := abreWIPDeTeste(t)
-	defer w.Fecha()
+	w := openTestWIP(t)
+	defer w.Close()
 	var i int
 	media := testing.AllocsPerRun(1000, func() {
 		i++
@@ -856,8 +856,8 @@ func TestSetNoWIPNaoAloca(t *testing.T) {
 // contagem errada). Os dois desvios são bugs diferentes, e um teto de "<= 1"
 // esconderia o primeiro.
 func TestLookupNoWIPAlocaExatamenteUmaVez(t *testing.T) {
-	w := abreWIPDeTeste(t)
-	defer w.Fecha()
+	w := openTestWIP(t)
+	defer w.Close()
 	for i := range 100 {
 		if err := w.Set(100, types.RowID(i)); err != nil {
 			t.Fatal(err)
@@ -881,8 +881,8 @@ func TestLookupNoWIPAlocaExatamenteUmaVez(t *testing.T) {
 // crescente, e um id repetido faria o unionIter do executor emitir a mesma
 // linha duas vezes num OR.
 func TestOWIPDevolveOrdemEstritamenteCrescenteComRowIdsForaDeOrdem(t *testing.T) {
-	w := abreWIPDeTeste(t)
-	defer w.Fecha()
+	w := openTestWIP(t)
+	defer w.Close()
 	for _, r := range []types.RowID{50, 10, 30, 10, 40} {
 		if err := w.Set(100, r); err != nil {
 			t.Fatal(err)
@@ -900,8 +900,8 @@ func TestOWIPDevolveOrdemEstritamenteCrescenteComRowIdsForaDeOrdem(t *testing.T)
 // diretório — as postings não se movem, porque o índice 1-based delas é o que
 // a cadeia guarda.
 func TestOWIPCresceSemPerderPosting(t *testing.T) {
-	w := abreWIPDeTesteComSlots(t, 16) // força vários rehashes
-	defer w.Fecha()
+	w := openTestWIPWithSlots(t, 16) // força vários rehashes
+	defer w.Close()
 	const n = 5000
 	for i := range n {
 		if err := w.Set(uint64(i)+2, types.RowID(i)); err != nil { // n valores DISTINTOS
@@ -925,7 +925,7 @@ func TestOWIPCresceSemPerderPosting(t *testing.T) {
 ```bash
 go test ./internal/index/segindex/ -run 'WIP|Set' -count=1
 ```
-Esperado: `undefined: segindex.AbreWIP`.
+Esperado: `undefined: segindex.OpenWIP`.
 
 - [ ] **Passo 5: implementar `wip.go`**
 
@@ -962,10 +962,10 @@ Esperado: `undefined: segindex.AbreWIP`.
 //
 // Exclusivo do writer único.
 func (w *WIP) Set(h uint64, row types.RowID) error {
-	if err := w.talvezCresce(); err != nil {
+	if err := w.maybeGrow(); err != nil {
 		return err
 	}
-	slot := w.sondaOuCria(h) // conta as sondas em w.sondas
+	slot := w.probeOrCreate(h) // conta as sondas em w.sondas
 	idx := w.postCount       // 0-based; publicado como idx+1
 	off := w.postOff(idx)
 	estado := w.reg.AtomicLoad64(w.slotOff(slot) + 8)
@@ -1015,7 +1015,7 @@ func (w *WIP) Lookup(h uint64) []types.RowID {
 }
 ```
 
-`talvezCresce` dobra o array de postings via `Region.Grow` quando `postCount`
+`maybeGrow` dobra o array de postings via `Region.Grow` quando `postCount`
 alcança a capacidade, e rehasheia o diretório quando os distintos passam de 70%
 dos slots. **O rehash reescreve só o diretório**: as postings não se movem,
 porque o que a cadeia guarda é o índice delas.
@@ -1063,15 +1063,15 @@ de um orçamento a recalibrar por máquina."
 - Testar: `internal/index/segindex/seal_test.go`
 
 **Interfaces:**
-- Consome: `WIP.Lookup`, `ListaWIP`, `AbreWIP` (Tarefa 3); `Escritor` (Tarefa 1);
-  `AbreSelado` (Tarefa 2).
+- Consome: `WIP.Lookup`, `ListWIP`, `OpenWIP` (Tarefa 3); `Writer` (Tarefa 1);
+  `OpenSealed` (Tarefa 2).
 - Produz:
   ```go
-  func Sela(dir string, seg uint32) error
-  func ApagaWIPs(dir string, seg uint32) error
+  func Seal(dir string, seg uint32) error
+  func RemoveWIPs(dir string, seg uint32) error
   ```
 
-`Sela` lê **todos** os `.widx` do segmento, alimenta um `Escritor` e emite o
+`Seal` lê **todos** os `.widx` do segmento, alimenta um `Writer` e emite o
 `.sidx`. É idempotente: chamada sobre um segmento que já tem `.sidx` e não tem
 `.widx` é no-op, o que importa porque um crash entre o `rename` e o `unlink` dos
 `.widx` deixa exatamente esse estado.
@@ -1091,7 +1091,7 @@ func TestSelarPreservaExatamenteOQueOWIPRespondia(t *testing.T) {
 	}
 	antes := map[[2]uint64][]types.RowID{}
 	for campo, valores := range corpus {
-		w, err := segindex.AbreWIP(dir, 42, campo, 16)
+		w, err := segindex.OpenWIP(dir, 42, campo, 16)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1105,20 +1105,20 @@ func TestSelarPreservaExatamenteOQueOWIPRespondia(t *testing.T) {
 		for h := range valores {
 			antes[[2]uint64{uint64(campo), h}] = slices.Clone(w.Lookup(h))
 		}
-		if err := w.Fecha(); err != nil {
+		if err := w.Close(); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	if err := segindex.Sela(dir, 42); err != nil {
-		t.Fatalf("Sela: %v", err)
+	if err := segindex.Seal(dir, 42); err != nil {
+		t.Fatalf("Seal: %v", err)
 	}
 
-	s, err := segindex.AbreSelado(segindex.CaminhoSelado(dir, 42))
+	s, err := segindex.OpenSealed(segindex.SealedPath(dir, 42))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Fecha()
+	defer s.Close()
 	for chave, want := range antes {
 		campo, h := types.FieldID(chave[0]), chave[1]
 		it, ok := s.Lookup(campo, h)
@@ -1140,25 +1140,25 @@ func TestSelarPreservaExatamenteOQueOWIPRespondia(t *testing.T) {
 // receber postings que o .sidx nunca teria.
 func TestSelarDesligaOsWIPs(t *testing.T) {
 	dir := t.TempDir()
-	w, err := segindex.AbreWIP(dir, 42, 7, 16)
+	w, err := segindex.OpenWIP(dir, 42, 7, 16)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := w.Set(100, 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.Fecha(); err != nil {
+	if err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := segindex.Sela(dir, 42); err != nil {
+	if err := segindex.Seal(dir, 42); err != nil {
 		t.Fatal(err)
 	}
-	campos, err := segindex.ListaWIP(dir, 42)
+	campos, err := segindex.ListWIP(dir, 42)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(campos) != 0 {
-		t.Errorf("ListaWIP = %v, quero vazio", campos)
+		t.Errorf("ListWIP = %v, quero vazio", campos)
 	}
 }
 
@@ -1166,23 +1166,23 @@ func TestSelarDesligaOsWIPs(t *testing.T) {
 // unlink dos .widx — que é exatamente o estado "tem .sidx e não tem .widx".
 func TestSelarEIdempotente(t *testing.T) {
 	dir := t.TempDir()
-	w, err := segindex.AbreWIP(dir, 42, 7, 16)
+	w, err := segindex.OpenWIP(dir, 42, 7, 16)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_ = w.Set(100, 1)
-	_ = w.Fecha()
-	if err := segindex.Sela(dir, 42); err != nil {
+	_ = w.Close()
+	if err := segindex.Seal(dir, 42); err != nil {
 		t.Fatal(err)
 	}
-	primeiro, err := os.ReadFile(segindex.CaminhoSelado(dir, 42))
+	primeiro, err := os.ReadFile(segindex.SealedPath(dir, 42))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := segindex.Sela(dir, 42); err != nil {
+	if err := segindex.Seal(dir, 42); err != nil {
 		t.Fatalf("segunda selagem: %v", err)
 	}
-	segundo, err := os.ReadFile(segindex.CaminhoSelado(dir, 42))
+	segundo, err := os.ReadFile(segindex.SealedPath(dir, 42))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1197,12 +1197,12 @@ func TestSelarEIdempotente(t *testing.T) {
 ```bash
 go test ./internal/index/segindex/ -run TestSelar -count=1
 ```
-Esperado: `undefined: segindex.Sela`.
+Esperado: `undefined: segindex.Seal`.
 
 - [ ] **Passo 3: implementar `seal.go`**
 
 ```go
-// Sela converte a forma WIP do segmento na forma selada, e desliga os .widx.
+// Seal converte a forma WIP do segmento na forma selada, e desliga os .widx.
 //
 // A ORDEM é a garantia: escreve o .sidx.tmp, fsync, rename, fsync do
 // diretório, e SÓ ENTÃO remove os .widx. Na ordem inversa um crash no meio
@@ -1212,45 +1212,45 @@ Esperado: `undefined: segindex.Sela`.
 //
 // Idempotente: sem .widx e com .sidx presente, no-op. É o estado que um crash
 // entre o rename e o unlink deixa.
-func Sela(dir string, seg uint32) error {
-	campos, err := ListaWIP(dir, seg)
+func Seal(dir string, seg uint32) error {
+	campos, err := ListWIP(dir, seg)
 	if err != nil {
 		return err
 	}
 	if len(campos) == 0 {
 		return nil
 	}
-	e := NovoEscritor()
+	e := NewWriter()
 	for _, campo := range campos {
-		w, err := AbreWIP(dir, seg, campo, 0) // 0 = não dimensiona, só abre
+		w, err := OpenWIP(dir, seg, campo, 0) // 0 = não dimensiona, só abre
 		if err != nil {
 			return err
 		}
-		err = w.ParaCada(func(h uint64, row types.RowID) {
-			e.Adiciona(campo, h, row)
+		err = w.ForEach(func(h uint64, row types.RowID) {
+			e.Add(campo, h, row)
 		})
-		w.Fecha()
+		w.Close()
 		if err != nil {
 			return err
 		}
 	}
-	if err := e.Escreve(CaminhoSelado(dir, seg), seg); err != nil {
+	if err := e.WriteSealed(SealedPath(dir, seg), seg); err != nil {
 		return err
 	}
-	return ApagaWIPs(dir, seg)
+	return RemoveWIPs(dir, seg)
 }
 ```
 
-`WIP.ParaCada` é novo e varre o **array de postings**, não o diretório — cada
+`WIP.ForEach` é novo e varre o **array de postings**, não o diretório — cada
 posting aparece exatamente uma vez, e a varredura é sequencial em vez de saltar
 por cadeias. Para recuperar o `hash` de cada posting sem caminhar a cadeia,
-`ParaCada` faz uma primeira passada pelo diretório montando
+`ForEach` faz uma primeira passada pelo diretório montando
 `índiceDaPosting → hash` a partir das cadeias, e uma segunda pelo array. Se
 isso ficar caro, a alternativa é caminhar as cadeias direto — mas então
 documente que a saída não é sequencial no arquivo.
 
-**Nota para quem implementar:** o `Escritor` ordena e deduplica, então
-`ParaCada` **não** precisa entregar nada ordenado. Não reordene aqui: seria a
+**Nota para quem implementar:** o `Writer` ordena e deduplica, então
+`ForEach` **não** precisa entregar nada ordenado. Não reordene aqui: seria a
 mesma ordenação duas vezes, e o segundo lugar divergiria do primeiro no dia em
 que alguém mudasse o critério.
 
@@ -1280,12 +1280,12 @@ atravessável sem intervenção."
 - Testar: `internal/index/segindex/union_test.go`
 
 **Interfaces:**
-- Consome: `Fonte` (Tarefa 2).
+- Consome: `Source` (Tarefa 2).
 - Produz:
   ```go
-  func Une(fontes []Fonte) types.RowIDIterator
+  func Union(fontes []Source) types.RowIDIterator
   ```
-  E, em `export_test.go`: `func EstrategiaDe(it types.RowIDIterator) string`
+  E, em `export_test.go`: `func StrategyOf(it types.RowIDIterator) string`
   devolvendo `"concatenacao"` ou `"merge"`.
 
 - [ ] **Passo 1: escrever os testes que falham**
@@ -1295,12 +1295,12 @@ atravessável sem intervenção."
 // monotônico e os segmentos particionam o espaço. Concatenar custa ZERO
 // comparações, contra ~9 por linha de um heap de 500 fontes.
 func TestUneConcatenaFaixasDisjuntas(t *testing.T) {
-	it := segindex.Une([]segindex.Fonte{
-		fonteFalsa{10, 20, 30},
-		fonteFalsa{40, 50},
-		fonteFalsa{60},
+	it := segindex.Union([]segindex.Source{
+		fakeSource{10, 20, 30},
+		fakeSource{40, 50},
+		fakeSource{60},
 	})
-	if got := segindex.EstrategiaDe(it); got != "concatenacao" {
+	if got := segindex.StrategyOf(it); got != "concatenacao" {
 		t.Errorf("estratégia = %q, quero \"concatenacao\"", got)
 	}
 	if got := drena(t, it); !slices.Equal(got, []types.RowID{10, 20, 30, 40, 50, 60}) {
@@ -1314,11 +1314,11 @@ func TestUneConcatenaFaixasDisjuntas(t *testing.T) {
 // Emiti-la duas vezes faria o unionIter do executor devolver a mesma linha
 // duplicada num OR.
 func TestUneMergeiaFaixasSobrepostasEDeduplica(t *testing.T) {
-	it := segindex.Une([]segindex.Fonte{
-		fonteFalsa{10, 30, 50},
-		fonteFalsa{20, 30, 40},
+	it := segindex.Union([]segindex.Source{
+		fakeSource{10, 30, 50},
+		fakeSource{20, 30, 40},
 	})
-	if got := segindex.EstrategiaDe(it); got != "merge" {
+	if got := segindex.StrategyOf(it); got != "merge" {
 		t.Errorf("estratégia = %q, quero \"merge\"", got)
 	}
 	if got := drena(t, it); !slices.Equal(got, []types.RowID{10, 20, 30, 40, 50}) {
@@ -1330,12 +1330,12 @@ func TestUneMergeiaFaixasSobrepostasEDeduplica(t *testing.T) {
 // para não participar do teste de disjunção. Sem o descarte, uma fonte vazia
 // com Min=0,Max=0 empurraria o histórico inteiro para o caminho de merge.
 func TestUneDescartaFontesVazias(t *testing.T) {
-	it := segindex.Une([]segindex.Fonte{
-		fonteFalsa{10, 20},
-		fonteVaziaDeTeste{},
-		fonteFalsa{30, 40},
+	it := segindex.Union([]segindex.Source{
+		fakeSource{10, 20},
+		emptyTestSource{},
+		fakeSource{30, 40},
 	})
-	if got := segindex.EstrategiaDe(it); got != "concatenacao" {
+	if got := segindex.StrategyOf(it); got != "concatenacao" {
 		t.Errorf("estratégia = %q, quero \"concatenacao\" — a vazia não pode forçar o merge", got)
 	}
 	if got := drena(t, it); !slices.Equal(got, []types.RowID{10, 20, 30, 40}) {
@@ -1347,8 +1347,8 @@ func TestUneDescartaFontesVazias(t *testing.T) {
 // [10,20] e [20,30] compartilham o 20 e NÃO são disjuntas. Um `<=` no lugar de
 // `<` aqui produziria a mesma linha duas vezes, silenciosamente.
 func TestUneNaoConcatenaQuandoAsFaixasSeTocam(t *testing.T) {
-	it := segindex.Une([]segindex.Fonte{fonteFalsa{10, 20}, fonteFalsa{20, 30}})
-	if got := segindex.EstrategiaDe(it); got != "merge" {
+	it := segindex.Union([]segindex.Source{fakeSource{10, 20}, fakeSource{20, 30}})
+	if got := segindex.StrategyOf(it); got != "merge" {
 		t.Errorf("estratégia = %q, quero \"merge\"", got)
 	}
 	if got := drena(t, it); !slices.Equal(got, []types.RowID{10, 20, 30}) {
@@ -1360,8 +1360,8 @@ func TestUneNaoConcatenaQuandoAsFaixasSeTocam(t *testing.T) {
 // "resultado menor". Falso negativo é o único desfecho que este produto não
 // tolera, e resultado truncado sem erro é exatamente isso.
 func TestUnePropagaOPrimeiroErro(t *testing.T) {
-	quebrada := fonteComErro{rows: []types.RowID{10}, err: errors.New("mmap sumiu")}
-	it := segindex.Une([]segindex.Fonte{fonteFalsa{1, 2}, quebrada})
+	quebrada := brokenSource{rows: []types.RowID{10}, err: errors.New("mmap sumiu")}
+	it := segindex.Union([]segindex.Source{fakeSource{1, 2}, quebrada})
 	for it.Next() {
 	}
 	if it.Err() == nil {
@@ -1370,8 +1370,8 @@ func TestUnePropagaOPrimeiroErro(t *testing.T) {
 }
 ```
 
-Os dublês `fonteFalsa` (slice ordenado; `MinRowID`/`MaxRowID` do primeiro e do
-último), `fonteVaziaDeTeste` (`Min=1, Max=0`) e `fonteComErro` ficam no mesmo
+Os dublês `fakeSource` (slice ordenado; `MinRowID`/`MaxRowID` do primeiro e do
+último), `emptyTestSource` (`Min=1, Max=0`) e `brokenSource` ficam no mesmo
 arquivo de teste.
 
 - [ ] **Passo 2: rodar e ver falhar**
@@ -1379,12 +1379,12 @@ arquivo de teste.
 ```bash
 go test ./internal/index/segindex/ -run TestUne -count=1
 ```
-Esperado: `undefined: segindex.Une`.
+Esperado: `undefined: segindex.Union`.
 
 - [ ] **Passo 3: implementar `union.go`**
 
 ```go
-// Une combina as fontes de vários segmentos num iterador ascendente único.
+// Union combina as fontes de vários segmentos num iterador ascendente único.
 //
 // A estratégia vem dos DADOS — das faixas que as fontes declaram —, e nunca do
 // modo do dataset. A diferença importa: um predicado apoiado no modo transforma
@@ -1399,8 +1399,8 @@ Esperado: `undefined: segindex.Une`.
 // É o materializado, sempre: a mesma linha pode ter posting em dois segmentos,
 // porque um update a regrava com o mesmo valor num segmento novo sem que nada
 // remova a posting antiga (é a fase de Clear que deixou de existir).
-func Une(fontes []Fonte) types.RowIDIterator {
-	vivas := make([]Fonte, 0, len(fontes))
+func Union(fontes []Source) types.RowIDIterator {
+	vivas := make([]Source, 0, len(fontes))
 	for _, f := range fontes {
 		if f.MinRowID() > f.MaxRowID() {
 			f.Close() // vazia por declaração: não participa da disjunção
@@ -1414,17 +1414,17 @@ func Une(fontes []Fonte) types.RowIDIterator {
 	case 1:
 		return vivas[0]
 	}
-	slices.SortFunc(vivas, func(a, b Fonte) int { return cmp.Compare(a.MinRowID(), b.MinRowID()) })
+	slices.SortFunc(vivas, func(a, b Source) int { return cmp.Compare(a.MinRowID(), b.MinRowID()) })
 	if disjuntas(vivas) {
 		return &concatIter{fontes: vivas}
 	}
-	return novoMergeIter(vivas)
+	return newMergeIter(vivas)
 }
 
 // disjuntas exige separação ESTRITA. Faixas que se tocam num rowId comum não
 // são disjuntas: concatená-las emitiria esse rowId duas vezes, e o contrato do
 // iterador é estritamente crescente.
-func disjuntas(f []Fonte) bool {
+func disjuntas(f []Source) bool {
 	for i := 1; i < len(f); i++ {
 		if f[i-1].MaxRowID() >= f[i].MinRowID() {
 			return false
@@ -1450,7 +1450,7 @@ descritor esgotado em produção.
 func TestUneEhEquivalenteAUniaoOrdenada(t *testing.T) {
 	rng := rand.New(rand.NewPCG(1, 2))
 	for range 200 {
-		var fontes []segindex.Fonte
+		var fontes []segindex.Source
 		var esperado []types.RowID
 		for range 1 + rng.IntN(6) {
 			var rows []types.RowID
@@ -1460,12 +1460,12 @@ func TestUneEhEquivalenteAUniaoOrdenada(t *testing.T) {
 			slices.Sort(rows)
 			rows = slices.Compact(rows)
 			esperado = append(esperado, rows...)
-			fontes = append(fontes, fonteFalsa(rows))
+			fontes = append(fontes, fakeSource(rows))
 		}
 		slices.Sort(esperado)
 		esperado = slices.Compact(esperado)
-		if got := drena(t, segindex.Une(fontes)); !slices.Equal(got, esperado) {
-			t.Fatalf("Une = %v, quero %v", got, esperado)
+		if got := drena(t, segindex.Union(fontes)); !slices.Equal(got, esperado) {
+			t.Fatalf("Union = %v, quero %v", got, esperado)
 		}
 	}
 }
@@ -1530,12 +1530,12 @@ func TestOSegmentoCorrenteGanhaWIPPorCampoIndexado(t *testing.T) {
 	s, dir := abreStoreIndexado(t, []string{"node", "type"}) // helper novo
 	defer s.Close()
 	poeLinhas(t, s, 10)
-	campos, err := segindex.ListaWIP(filepath.Join(dir, "data"), s.SegmentoCorrente())
+	campos, err := segindex.ListWIP(filepath.Join(dir, "data"), s.SegmentoCorrente())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(campos) != 2 {
-		t.Fatalf("ListaWIP = %v, quero um .widx por campo indexado", campos)
+		t.Fatalf("ListWIP = %v, quero um .widx por campo indexado", campos)
 	}
 }
 
@@ -1552,10 +1552,10 @@ func TestARotacaoSelaOSegmentoAnterior(t *testing.T) {
 	if s.SegmentoCorrente() == primeiro {
 		t.Fatal("o segmento não rotacionou; o teste não exercita nada")
 	}
-	if _, err := os.Stat(segindex.CaminhoSelado(filepath.Join(dir, "data"), primeiro)); err != nil {
+	if _, err := os.Stat(segindex.SealedPath(filepath.Join(dir, "data"), primeiro)); err != nil {
 		t.Fatalf("o segmento %d rotacionou sem selar o índice: %v", primeiro, err)
 	}
-	campos, _ := segindex.ListaWIP(filepath.Join(dir, "data"), primeiro)
+	campos, _ := segindex.ListWIP(filepath.Join(dir, "data"), primeiro)
 	if len(campos) != 0 {
 		t.Errorf("o segmento selado %d ainda tem .widx: %v", primeiro, campos)
 	}
@@ -1569,7 +1569,7 @@ func TestAAposentadoriaLevaOIndiceJunto(t *testing.T) {
 	defer s.Close()
 	alvo := s.SegmentoCorrente()
 	poeLinhasAteRotacionar(t, s, alvo)
-	caminho := segindex.CaminhoSelado(filepath.Join(dir, "data"), alvo)
+	caminho := segindex.SealedPath(filepath.Join(dir, "data"), alvo)
 	if _, err := os.Stat(caminho); err != nil {
 		t.Fatalf("pré-condição: o segmento %d deveria estar selado: %v", alvo, err)
 	}
@@ -1601,7 +1601,7 @@ tarefa**):
 	// selados são os índices imutáveis, abertos SOB DEMANDA e mantidos
 	// mapeados. Não há LRU: o mapeamento somente-leitura não retém descritor,
 	// e 500 VMAs num teto padrão de 65.530 não é pressão.
-	selados map[uint32]*segindex.Selado
+	selados map[uint32]*segindex.Sealed
 	selMu   sync.RWMutex
 	// camposIndexados é o conjunto ordenado, resolvido no Open e IMUTÁVEL na
 	// vida do Store.
@@ -1637,7 +1637,7 @@ func (s *Store) aposAppend(novoSeg uint32) error {
 	if err := s.fechaWIPs(); err != nil {
 		return err
 	}
-	if err := segindex.Sela(s.dirDeDados(), anterior); err != nil {
+	if err := segindex.Seal(s.dirDeDados(), anterior); err != nil {
 		return err
 	}
 	return s.abreWIPsDoCorrente()
@@ -1678,8 +1678,8 @@ próxima revisão de "consertar" a ausência:
 - [ ] **Passo 6: a aposentadoria leva o índice**
 
 Em `aposentaSegmento` (`compaction.go:492`), no passo 4, junto de
-`fechaODescritorEApaga`: fechar o `Selado` daquele segmento (se mapeado),
-removê-lo de `s.selados` e `os.Remove(segindex.CaminhoSelado(...))`. Erro de
+`fechaODescritorEApaga`: fechar o `Sealed` daquele segmento (se mapeado),
+removê-lo de `s.selados` e `os.Remove(segindex.SealedPath(...))`. Erro de
 remoção do índice **não** falha a aposentadoria: o `.dat` já saiu e o disco já
 voltou; fica WARN nomeado e o `Open` limpa o órfão.
 
@@ -1745,7 +1745,7 @@ func TestOWIPNaoEhAdotadoAtravesDeUmRestart(t *testing.T) {
 	s.Close()
 
 	// Corrompe o .widx de propósito: se ele fosse adotado, o Lookup mentiria.
-	caminho := segindex.CaminhoWIP(filepath.Join(dir, "data"), 1, campoDe(t, s, "node"))
+	caminho := segindex.WIPPath(filepath.Join(dir, "data"), 1, campoDe(t, s, "node"))
 	if err := os.WriteFile(caminho, bytes.Repeat([]byte{0xAA}, 4096), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1759,7 +1759,7 @@ func TestOWIPNaoEhAdotadoAtravesDeUmRestart(t *testing.T) {
 }
 
 // TestConstruirDoSegmentoDaOMesmoArquivoQueSelarOWIP é o golden que torna a
-// reconstrução confiável. Os dois caminhos alimentam o MESMO Escritor, então a
+// reconstrução confiável. Os dois caminhos alimentam o MESMO Writer, então a
 // igualdade é por construção — o que este teste prova é que a ALIMENTAÇÃO é
 // equivalente, que é o risco de verdade: um caminho que pulasse tombstones ou
 // lesse o payload anterior produziria um índice silenciosamente diferente.
@@ -1770,7 +1770,7 @@ func TestConstruirDoSegmentoDaOMesmoArquivoQueSelarOWIP(t *testing.T) {
 	poeLinhasVariadasAteRotacionar(t, s, alvo) // inclui update, tombstone e campo ausente
 	s.Close()
 
-	caminho := segindex.CaminhoSelado(filepath.Join(dir, "data"), alvo)
+	caminho := segindex.SealedPath(filepath.Join(dir, "data"), alvo)
 	porSelagem, err := os.ReadFile(caminho)
 	if err != nil {
 		t.Fatal(err)
@@ -1797,17 +1797,17 @@ func TestConstruirDoSegmentoDaOMesmoArquivoQueSelarOWIP(t *testing.T) {
 - [ ] **Passo 2: rodar e ver falhar; depois implementar**
 
 `ConstroiIndiceDoSegmento` varre o segmento com o mesmo iterador de records que
-o replay do tail usa (`store_recovery.go`), alimenta um `segindex.Escritor` com
-`(campo, hash, rowID)` de cada record e chama `Escreve`. Ele **não** consulta
+o replay do tail usa (`store_recovery.go`), alimenta um `segindex.Writer` com
+`(campo, hash, rowID)` de cada record e chama `WriteSealed`. Ele **não** consulta
 `locations.idx`, **não** filtra tombstone e **não** decide liveness: o índice é
 superconjunto por contrato, e filtrar aqui introduziria uma segunda definição de
 "vivo" que divergiria da do executor.
 
 No `Open`, depois do replay do tail:
 
-1. `ApagaWIPs` de **todo** segmento que não é o corrente, e enfileira esses
+1. `RemoveWIPs` de **todo** segmento que não é o corrente, e enfileira esses
    segmentos para reconstrução se não tiverem `.sidx`;
-2. `ApagaWIPs` do corrente e `ConstroiIndiceDoSegmento` dele **em memória** —
+2. `RemoveWIPs` do corrente e `ConstroiIndiceDoSegmento` dele **em memória** —
    ou seja, reabre os WIPs vazios e realimenta lendo o segmento inteiro, antes
    de o primeiro `Put` ser aceito.
 
@@ -1856,7 +1856,7 @@ mudada**. A renomeação vem só na Tarefa 11.
 **Interfaces:**
 - Produz:
   ```go
-  func (s *Store) fontesDoCampo(campo types.FieldID, h uint64) ([]segindex.Fonte, error)
+  func (s *Store) fontesDoCampo(campo types.FieldID, h uint64) ([]segindex.Source, error)
   type fonteFaixa struct{ ... }      // histórico: [primeiro, primeiroDoSeguinte)
   type fonteLocations struct{ ... }  // materializado: filtro do locations.idx
   ```
@@ -1877,7 +1877,7 @@ func TestSegmentoSemIndiceRespondePorEnumeracao(t *testing.T) {
 	s.Close()
 
 	// Simula o dataset antigo: o segmento existe, o índice não.
-	if err := os.Remove(segindex.CaminhoSelado(filepath.Join(dir, "data"), alvo)); err != nil {
+	if err := os.Remove(segindex.SealedPath(filepath.Join(dir, "data"), alvo)); err != nil {
 		t.Fatal(err)
 	}
 	s2 := abreStoreHistoricoIndexadoEm(t, dir, []string{"node"}, 8<<10)
@@ -1940,13 +1940,13 @@ type fonteLocations struct{ s *Store; seg uint32; prox, fim types.RowID }
 `fontesDoCampo` monta, em ordem crescente de segmento:
 
 ```go
-func (s *Store) fontesDoCampo(campo types.FieldID, h uint64) ([]segindex.Fonte, error) {
+func (s *Store) fontesDoCampo(campo types.FieldID, h uint64) ([]segindex.Source, error) {
 	refs, err := s.listaSegmentos()
 	if err != nil {
 		return nil, err
 	}
 	corrente := s.curSegID.Load()
-	fontes := make([]segindex.Fonte, 0, len(refs))
+	fontes := make([]segindex.Source, 0, len(refs))
 	for _, ref := range refs {
 		switch {
 		case ref.ID == corrente:
@@ -1988,7 +1988,7 @@ func (s *Store) LookupBitmap(field types.FieldID, v types.Value) (types.RowIDIte
 ```
 
 `lookupIndexado` valida que o campo é indexado (erro `ErrInvalidArgument` se
-não), calcula o hash, monta as fontes, chama `segindex.Une` e embrulha no mesmo
+não), calcula o hash, monta as fontes, chama `segindex.Union` e embrulha no mesmo
 `hashIterator` que já existe — que é quem dá a reentrância contra o `Close` do
 dataset. **Não mexa nesse embrulho:** ele é o que faz um `Close` no meio da
 varredura sair com `ErrDatasetClosed` em vez de pânico, e o executor mistura as
@@ -2518,7 +2518,7 @@ Deve reprovar: `TestUneMergeiaFaixasSobrepostasEDeduplica` e
 propriedade não está gerando sobreposição suficiente — aumente a densidade do
 gerador.
 
-- [ ] **M3 — `disjuntas` devolve sempre `true`**
+- [ ] **M3 — `disjoint` devolve sempre `true`**
 
 Deve reprovar: `TestUneNaoConcatenaQuandoAsFaixasSeTocam` e o de propriedade.
 
@@ -2534,7 +2534,7 @@ porque a órfã não muda nenhuma resposta — só faz o disco não voltar.
 
 - [ ] **M6 — a reconstrução emite as postings na ordem de leitura, sem ordenar**
 
-Remova o `slices.SortFunc` de `Escritor.Escreve`. Deve reprovar:
+Remova o `slices.SortFunc` de `Writer.WriteSealed`. Deve reprovar:
 `TestGoldenDoSelado`, `TestConstruirDoSegmentoDaOMesmoArquivoQueSelarOWIP` e
 `TestOEscritorAgrupaOrdenaEDeduplicaAsPostings`.
 
@@ -2772,9 +2772,9 @@ propriedade exata a afirmar e do porquê ela existe — o executor sabe o que
 provar, e a montagem do fixture segue os helpers já nomeados nas tarefas
 anteriores.
 
-**3. Consistência de tipos.** `Fonte` é declarada na Tarefa 2 e consumida nas 5
-e 8 com a mesma assinatura. `Escritor.Adiciona(campo, h, row)` é a mesma nas 1,
-4 e 7. `CaminhoSelado`/`CaminhoWIP`/`ListaWIP` são usados nas 4, 6, 7 e 8 com a
+**3. Consistência de tipos.** `Source` é declarada na Tarefa 2 e consumida nas 5
+e 8 com a mesma assinatura. `Writer.Add(campo, h, row)` é a mesma nas 1,
+4 e 7. `SealedPath`/`WIPPath`/`ListWIP` são usados nas 4, 6, 7 e 8 com a
 forma declarada na 1 e na 3. `CamposIndexados()` é produzida na 6 e consumida na
 7 e na 12.
 

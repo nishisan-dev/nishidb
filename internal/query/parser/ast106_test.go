@@ -11,7 +11,7 @@ import (
 // query.Engine. Aqui o objetivo é garantir que a forma que o cliente envia
 // vira a árvore que o binder espera.
 
-func comparacao(t *testing.T, sql string) *parser.Comparison {
+func whereComparison(t *testing.T, sql string) *parser.Comparison {
 	t.Helper()
 	c, ok := parseOK(t, sql).Where.(*parser.Comparison)
 	if !ok {
@@ -21,21 +21,21 @@ func comparacao(t *testing.T, sql string) *parser.Comparison {
 }
 
 func TestAST106PrimaryLookup(t *testing.T) {
-	c := comparacao(t, "SELECT * FROM radius_sessions WHERE id = 'CMP-V0001PPCLP-013'")
+	c := whereComparison(t, "SELECT * FROM radius_sessions WHERE id = 'CMP-V0001PPCLP-013'")
 	if c.Column != "id" || c.Op != parser.CmpEq || c.Operand.S != "CMP-V0001PPCLP-013" {
 		t.Errorf("predicado = %#v", c)
 	}
 }
 
 func TestAST106BitmapLookup(t *testing.T) {
-	c := comparacao(t, "SELECT * FROM radius_sessions WHERE status = 'Stop'")
+	c := whereComparison(t, "SELECT * FROM radius_sessions WHERE status = 'Stop'")
 	if c.Column != "status" || c.Operand.Kind != parser.OperandString {
 		t.Errorf("predicado = %#v", c)
 	}
 }
 
 func TestAST106HashLookup(t *testing.T) {
-	c := comparacao(t, "SELECT * FROM radius_sessions WHERE nas = 'i-br-sp-cmp-cmp-hl4-01'")
+	c := whereComparison(t, "SELECT * FROM radius_sessions WHERE nas = 'i-br-sp-cmp-cmp-hl4-01'")
 	if c.Column != "nas" || c.Operand.S != "i-br-sp-cmp-cmp-hl4-01" {
 		t.Errorf("predicado = %#v", c)
 	}
@@ -58,7 +58,7 @@ func TestAST106Or(t *testing.T) {
 }
 
 func TestAST106Comparison(t *testing.T) {
-	casos := []struct {
+	cases := []struct {
 		sql string
 		op  parser.CmpOp
 	}{
@@ -69,9 +69,9 @@ func TestAST106Comparison(t *testing.T) {
 		{"SELECT * FROM s WHERE a < 1", parser.CmpLt},
 		{"SELECT * FROM s WHERE a <= 1", parser.CmpLte},
 	}
-	for _, tc := range casos {
+	for _, tc := range cases {
 		t.Run(tc.op.String(), func(t *testing.T) {
-			if got := comparacao(t, tc.sql).Op; got != tc.op {
+			if got := whereComparison(t, tc.sql).Op; got != tc.op {
 				t.Errorf("Op = %v, want %v", got, tc.op)
 			}
 		})
@@ -80,17 +80,17 @@ func TestAST106Comparison(t *testing.T) {
 
 func TestAST106Null(t *testing.T) {
 	st := parseOK(t, "SELECT * FROM s WHERE a IS NULL OR b IS NOT NULL")
-	raiz, ok := st.Where.(*parser.LogicalExpr)
-	if !ok || raiz.Op != parser.LogicalOr {
+	root, ok := st.Where.(*parser.LogicalExpr)
+	if !ok || root.Op != parser.LogicalOr {
 		t.Fatalf("Where = %#v", st.Where)
 	}
-	esq, ok := raiz.Left.(*parser.NullCheck)
-	if !ok || esq.Not {
-		t.Errorf("esquerda = %#v, want IS NULL", raiz.Left)
+	left, ok := root.Left.(*parser.NullCheck)
+	if !ok || left.Not {
+		t.Errorf("esquerda = %#v, want IS NULL", root.Left)
 	}
-	dir, ok := raiz.Right.(*parser.NullCheck)
-	if !ok || !dir.Not {
-		t.Errorf("direita = %#v, want IS NOT NULL", raiz.Right)
+	right, ok := root.Right.(*parser.NullCheck)
+	if !ok || !right.Not {
+		t.Errorf("direita = %#v, want IS NOT NULL", root.Right)
 	}
 }
 
@@ -108,7 +108,7 @@ func TestAST106FullScan(t *testing.T) {
 	}
 	// Full scan com predicado não indexável: a decisão de plano é do Q14, a
 	// forma aqui é a mesma.
-	c := comparacao(t, "SELECT * FROM radius_sessions WHERE username != 'x'")
+	c := whereComparison(t, "SELECT * FROM radius_sessions WHERE username != 'x'")
 	if c.Op != parser.CmpNe {
 		t.Errorf("Op = %v", c.Op)
 	}

@@ -65,9 +65,9 @@ func rodaReconstrucaoAteEsvaziar(t *testing.T, s *Store) {
 // (segmento, campo): "tem arquivo?" deixou de ser a pergunta.
 func camposDoSelado(t *testing.T, dir string, seg uint32) []types.FieldID {
 	t.Helper()
-	campos, err := segindex.CamposSelados(segindex.CaminhoSelado(filepath.Join(dir, "data"), seg))
+	campos, err := segindex.SealedFields(segindex.SealedPath(filepath.Join(dir, "data"), seg))
 	if err != nil {
-		t.Fatalf("CamposSelados(%d): %v", seg, err)
+		t.Fatalf("SealedFields(%d): %v", seg, err)
 	}
 	return campos
 }
@@ -207,7 +207,7 @@ func TestReconstruirSoOsCamposQueFaltamPreservaOsQueJaEstavam(t *testing.T) {
 		t.Fatalf("o .sidx ficou com %v, quero %v: reconstruir um campo apagou o outro", campos, esperado)
 	}
 
-	caminho := segindex.CaminhoSelado(filepath.Join(dir, "data"), alvo)
+	caminho := segindex.SealedPath(filepath.Join(dir, "data"), alvo)
 	porFaltante, err := os.ReadFile(caminho)
 	if err != nil {
 		t.Fatal(err)
@@ -284,7 +284,7 @@ func TestConstruirComCampoNaoIndexadoEhRecusado(t *testing.T) {
 	s, dir := abreStoreIndexadoComSegmentoPequeno(t, campos, 64<<10)
 	alvo := s.curSegID.Load()
 	poeLinhasAteRotacionar(t, s, alvo)
-	caminho := segindex.CaminhoSelado(filepath.Join(dir, "data"), alvo)
+	caminho := segindex.SealedPath(filepath.Join(dir, "data"), alvo)
 	antes, err := os.ReadFile(caminho)
 	if err != nil {
 		t.Fatalf("pré-condição: o segmento %d deveria estar selado: %v", alvo, err)
@@ -313,7 +313,7 @@ func TestConstruirComCampoNaoIndexadoEhRecusado(t *testing.T) {
 // Não é hipótese, e o gatilho era conhecido: com o temporário de nome FIXO, dois
 // escritores sobre o mesmo `<sidx>.tmp` — o O_TRUNC de um contra o rename do
 // outro — publicavam um arquivo final vazio. A Tarefa 14 fechou aquela corrida
-// com nome único por escritor (segindex.caminhoTemporario), e ESTA classificação
+// com nome único por escritor (segindex.tempPath), e ESTA classificação
 // continua valendo por dois motivos: o arquivo de zero bytes que um binário
 // anterior deixou em disco continua lá, e uma fila que morre em vez de refazer o
 // arquivo é o modo de falha errado para qualquer origem que ele venha a ter.
@@ -328,7 +328,7 @@ func TestSidxDeZeroBytesEhPendenteEmVezDeDerrubarAFila(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	caminho := segindex.CaminhoSelado(filepath.Join(dir, "data"), alvo)
+	caminho := segindex.SealedPath(filepath.Join(dir, "data"), alvo)
 	if _, err := os.Stat(caminho); err != nil {
 		t.Fatalf("pré-condição: o segmento %d deveria estar selado: %v", alvo, err)
 	}

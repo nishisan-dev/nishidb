@@ -11,9 +11,9 @@ import (
 
 func condicaoOK(t *testing.T, sql string) *binder.BoundCondicao {
 	t.Helper()
-	e, err := parser.ParseCondicao(sql)
+	e, err := parser.ParseCondition(sql)
 	if err != nil {
-		t.Fatalf("ParseCondicao(%q): %v", sql, err)
+		t.Fatalf("ParseCondition(%q): %v", sql, err)
 	}
 	bc, err := binder.BindCondicao(e, compilar(t))
 	if err != nil {
@@ -52,14 +52,14 @@ func TestBindCondicaoResolveSlots(t *testing.T) {
 // virar uma regra que faz outra coisa.
 func TestParseCondicaoRecusaTextoDepoisDaExpressao(t *testing.T) {
 	for _, sql := range []string{"octets = 2 LIMIT 5", "octets = 2 xyz", "octets = 2; octets = 3"} {
-		if _, err := parser.ParseCondicao(sql); err == nil {
-			t.Errorf("ParseCondicao(%q) aceitou a sobra", sql)
+		if _, err := parser.ParseCondition(sql); err == nil {
+			t.Errorf("ParseCondition(%q) aceitou a sobra", sql)
 		}
 	}
 }
 
 func TestBindCondicaoRecusaParametro(t *testing.T) {
-	e, err := parser.ParseCondicao("octets = ?")
+	e, err := parser.ParseCondition("octets = ?")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestBindCondicaoRecusaParametro(t *testing.T) {
 }
 
 func TestBindCondicaoRecusaColunaInexistente(t *testing.T) {
-	e, err := parser.ParseCondicao("naoExiste = 1")
+	e, err := parser.ParseCondition("naoExiste = 1")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -240,7 +240,7 @@ func TestAoRevogarEsperaWProntoAntesDeLerW(t *testing.T) {
 		t.Fatal("aoRevogar não prosseguiu depois de wPronto fechar")
 	}
 
-	if got := c.met.partAtribuidas.Valor(); got != 0 {
+	if got := c.met.partAtribuidas.Value(); got != 0 {
 		t.Fatalf("partAtribuidas = %v, quer 0: aoRevogar não chegou a processar a revogação com o c.w liberado", got)
 	}
 }

@@ -31,17 +31,17 @@ func (s *Servidor) handleMetadata(w http.ResponseWriter, r *http.Request) {
 	if filtro != "" {
 		d, ok := s.porNome[filtro]
 		if !ok {
-			s.recusa(w, r, http.StatusNotFound, datasetDesconhecido, protocol.Falha{
-				Code:    protocol.CodDatasetDesconhecido,
+			s.recusa(w, r, http.StatusNotFound, datasetDesconhecido, protocol.ErrorDetail{
+				Code:    protocol.CodeUnknownDataset,
 				Message: "dataset " + filtro + " não está registrado neste servidor",
 			})
 			return
 		}
-		s.respondeJSON(w, protocol.Metadados{Datasets: []protocol.DatasetMeta{metaDoDataset(d)}})
+		s.respondeJSON(w, protocol.Metadata{Datasets: []protocol.DatasetMeta{metaDoDataset(d)}})
 		return
 	}
 
-	out := protocol.Metadados{Datasets: make([]protocol.DatasetMeta, 0, len(s.datasets))}
+	out := protocol.Metadata{Datasets: make([]protocol.DatasetMeta, 0, len(s.datasets))}
 	for _, d := range s.datasets {
 		out.Datasets = append(out.Datasets, metaDoDataset(d))
 	}
@@ -68,7 +68,7 @@ func metaDoDataset(d *dataset) protocol.DatasetMeta {
 		MaxCols:          d.sch.MaxCols,
 		OnMaxCols:        d.sch.OnMaxCols,
 		MaxNestedCols:    d.sch.MaxNestedCols,
-		Columns:          make([]protocol.ColunaMeta, 0, len(campos)),
+		Columns:          make([]protocol.ColumnMeta, 0, len(campos)),
 	}
 	if d.sch.Key != nil {
 		m.Key = d.sch.Key.Name
@@ -79,15 +79,15 @@ func metaDoDataset(d *dataset) protocol.DatasetMeta {
 	return m
 }
 
-func colunaMeta(f *schema.CompiledField) protocol.ColunaMeta {
+func colunaMeta(f *schema.CompiledField) protocol.ColumnMeta {
 	// O tipo é o EFETIVO: para campo auto, o que a primeira observação fixou —
 	// e types.TypeNull quando nenhum evento o fixou ainda, que o protocolo
 	// traduz para "unknown"/"OTHER" em vez de escolher um tipo plausível.
 	t := f.EffectiveType()
-	d := protocol.DescritorDeTipo(t)
-	c := protocol.ColunaMeta{
+	d := protocol.DescriptorOf(t)
+	c := protocol.ColumnMeta{
 		Name: f.Name,
-		Type: protocol.NomeDeTipo(t),
+		Type: protocol.TypeName(t),
 		JDBC: d.JDBC,
 		// Mesma regra do executor, e a única fonte possível aqui: /v1/metadata
 		// descreve o SCHEMA, então o papel do campo vem direto do compilado.
@@ -108,10 +108,10 @@ func colunaMeta(f *schema.CompiledField) protocol.ColunaMeta {
 // contadorStats traduz o retrato dos contadores para o wire. Lista vazia, e
 // não nil, no dataset sem contador: o JSON sai como `[]`, e bloco presente é o
 // que separa "sem contadores" de "servidor antigo".
-func contadorStats(ests []counter.Estatisticas) []protocol.ContadorStats {
-	out := make([]protocol.ContadorStats, 0, len(ests))
+func contadorStats(ests []counter.Estatisticas) []protocol.CounterStats {
+	out := make([]protocol.CounterStats, 0, len(ests))
 	for _, e := range ests {
-		out = append(out, protocol.ContadorStats{
+		out = append(out, protocol.CounterStats{
 			Name:                 e.Nome,
 			Rows:                 e.Linhas,
 			Total:                e.Total,
@@ -142,10 +142,10 @@ func (s *Servidor) handleStats(w http.ResponseWriter, r *http.Request) {
 
 	em := s.eng.Metrics()
 	pm := s.eng.PlanMetrics()
-	out := protocol.Estatisticas{
-		Process: protocol.ProcessoStats{
+	out := protocol.Stats{
+		Process: protocol.ProcessStats{
 			Version: buildinfo.String(),
-			Query: protocol.MotorStats{
+			Query: protocol.EngineStats{
 				FullScans:    pm.FullScan.Load(),
 				PointLookups: pm.PointLookup.Load(),
 				BitmapScans:  pm.IndexScan.Load(),
@@ -202,12 +202,12 @@ func (s *Servidor) handleStats(w http.ResponseWriter, r *http.Request) {
 					BytesWritten: st.CompactionBytesWritten,
 				},
 			},
-			Query: protocol.RotaStats{
-				Total:  s.met.total.Com(d.nome).Valor(),
-				Active: int64(s.met.ativas.Com(d.nome).Valor()),
+			Query: protocol.RouteStats{
+				Total:  s.met.total.With(d.nome).Value(),
+				Active: int64(s.met.ativas.With(d.nome).Value()),
 			},
-			Ingestion: protocol.IngestaoStats{
-				Enabled: estado != protocol.EstadoDesligado,
+			Ingestion: protocol.IngestionStats{
+				Enabled: estado != protocol.StateDisabled,
 				State:   estado,
 				Paused:  detalhe,
 			},
@@ -263,10 +263,10 @@ func (s *Servidor) handleStats(w http.ResponseWriter, r *http.Request) {
 // categoria nova esquecesse de somar nele, os dois discordariam.
 func (s *Servidor) errosDoDataset(nome string) uint64 {
 	var total uint64
-	for _, a := range s.met.erros.Coleta() {
+	for _, a := range s.met.erros.Collect() {
 		for _, l := range a.Labels {
-			if l.Nome == metrics.LabelDataset && l.Valor == nome {
-				total += uint64(a.Valor)
+			if l.Name == metrics.LabelDataset && l.Value == nome {
+				total += uint64(a.Value)
 			}
 		}
 	}
@@ -285,8 +285,8 @@ func (s *Servidor) respondeJSON(w http.ResponseWriter, v any) {
 // recusaSimples responde método errado numa rota de leitura.
 func (s *Servidor) recusaSimples(w http.ResponseWriter, r *http.Request, permitido string) {
 	w.Header().Set("Allow", permitido)
-	s.recusa(w, r, http.StatusMethodNotAllowed, datasetDesconhecido, protocol.Falha{
-		Code:    protocol.CodMetodo,
+	s.recusa(w, r, http.StatusMethodNotAllowed, datasetDesconhecido, protocol.ErrorDetail{
+		Code:    protocol.CodeMethod,
 		Message: r.Method + " não é aceito nesta rota; use " + permitido,
 	})
 }

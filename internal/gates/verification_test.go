@@ -27,7 +27,7 @@ import (
 //
 // Os dois gates já foram, eles próprios, o defeito que dizem fechar. A primeira
 // versão do reconhecedor de amostra só enxergava o literal com o tipo escrito
-// (`metrics.Amostra{...}`) e era CEGA à forma elidida (`[]metrics.Amostra{{...}}`),
+// (`metrics.Sample{...}`) e era CEGA à forma elidida (`[]metrics.Sample{{...}}`),
 // que é a dominante no repositório: 23 dos 58 literais passavam por baixo, e
 // entre eles estavam justamente as quatro do coletor Kafka que aquele mesmo
 // commit tinha acabado de consertar. A primeira versão do gate de citação lia
@@ -378,12 +378,12 @@ func specSections(t *testing.T) map[string]bool {
 var histogramSuffixes = []string{"_bucket", "_sum", "_count"}
 
 // TestAmostrasDeMetricaTemFamiliaENome confere que todo literal
-// metrics.Amostra{...} em código de produção declara Familia e Nome por
-// CONSTANTE (nunca string literal, nunca vazio) e que o Nome pertence à
-// Familia.
+// metrics.Sample{...} em código de produção declara Family e Name por
+// CONSTANTE (nunca string literal, nunca vazio) e que o Name pertence à
+// Family.
 //
 // O defeito que ele fecha é concreto: as amostras do coletor Kafka nasciam sem
-// Familia, e o `# HELP`/`# TYPE` saía com nome vazio — o Prometheus recusa o
+// Family, e o `# HELP`/`# TYPE` saía com nome vazio — o Prometheus recusa o
 // scrape inteiro, não só a linha. Nenhum teste acusava, porque o formato de
 // exposição só é exercitado com amostras bem-formadas.
 //
@@ -394,19 +394,19 @@ var histogramSuffixes = []string{"_bucket", "_sum", "_count"}
 // # AS DUAS FORMAS DO LITERAL, E POR QUE ISSO É O CENTRO DO GATE
 //
 // O reconhecedor precisa enxergar a forma ELIDIDA — os elementos de
-// `[]metrics.Amostra{{...}, {...}}` são `CompositeLit` com `Type == nil`, e o
+// `[]metrics.Sample{{...}, {...}}` são `CompositeLit` com `Type == nil`, e o
 // tipo mora no ARRAY, não no elemento. Ela é a forma dominante do repositório
 // (quase 40% dos literais), e a primeira versão deste gate era cega a ela: as
 // quatro amostras do Kafka que o commit da doutrina acabara de consertar
 // podiam regredir com o gate verde. Daí a guarda de vacuidade exigir as DUAS
 // formas: um reconhecedor que só vê uma delas volta a ser carimbo.
 //
-// # FAMILIA E NOME TÊM DE COMBINAR
+// # FAMILY E NAME TÊM DE COMBINAR
 //
 // Conferir só a presença deixa passar duas constantes válidas mas TROCADAS, o
 // que publica uma série sob o cabeçalho de outra família. A regra não é
-// `Nome == Familia`: o histograma usa `Nome = Familia + sufixo` de propósito.
-// A regra é: Nome resolve para a MESMA expressão de Familia, ou para Familia
+// `Name == Family`: o histograma usa `Name = Family + sufixo` de propósito.
+// A regra é: Name resolve para a MESMA expressão de Family, ou para Family
 // mais um dos sufixos de histogramSuffixes.
 func TestAmostrasDeMetricaTemFamiliaENome(t *testing.T) {
 	root := filepath.Join(repoRoot, "internal")
@@ -440,7 +440,7 @@ func TestAmostrasDeMetricaTemFamiliaENome(t *testing.T) {
 			if !ok || cl.Type == nil {
 				// Literal sem tipo é elidido: quem sabe o tipo dele é o pai, e
 				// é o pai que o visita (walkElided). Visitá-lo aqui seria
-				// julgá-lo sem saber se é uma Amostra.
+				// julgá-lo sem saber se é uma Sample.
 				return true
 			}
 			if isSampleType(cl.Type, pkg) {
@@ -455,7 +455,7 @@ func TestAmostrasDeMetricaTemFamiliaENome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("literais metrics.Amostra alcançados: %d explícitos + %d elididos = %d",
+	t.Logf("literais metrics.Sample alcançados: %d explícitos + %d elididos = %d",
 		explicitCount, elidedCount, explicitCount+elidedCount)
 	if explicitCount == 0 || elidedCount == 0 {
 		t.Fatalf("o gate alcançou %d literais explícitos e %d elididos: com zero de qualquer das duas formas "+
@@ -466,40 +466,40 @@ func TestAmostrasDeMetricaTemFamiliaENome(t *testing.T) {
 }
 
 // checkSample aplica as três regras a um literal já reconhecido como
-// Amostra: Familia e Nome presentes, nenhum dos dois string literal, e Nome
-// pertencendo à Familia.
+// Sample: Family e Name presentes, nenhum dos dois string literal, e Name
+// pertencendo à Family.
 func checkSample(t *testing.T, fset *token.FileSet, path string, cl *ast.CompositeLit) {
 	t.Helper()
 	line := fset.Position(cl.Pos()).Line
 	values := map[string]ast.Expr{}
-	for _, name := range []string{"Familia", "Nome"} {
+	for _, name := range []string{"Family", "Name"} {
 		value, present := literalField(cl, name)
 		if !present {
-			t.Errorf("%s:%d: Amostra sem o campo %s — o # HELP/# TYPE sai vazio",
+			t.Errorf("%s:%d: Sample sem o campo %s — o # HELP/# TYPE sai vazio",
 				path, line, name)
 			continue
 		}
 		if isStringLiteral(value) {
-			t.Errorf("%s:%d: Amostra com %s como string literal — use a constante de internal/metrics/names.go",
+			t.Errorf("%s:%d: Sample com %s como string literal — use a constante de internal/metrics/names.go",
 				path, line, name)
 			continue
 		}
 		values[name] = value
 	}
-	family, name := values["Familia"], values["Nome"]
+	family, name := values["Family"], values["Name"]
 	if family == nil || name == nil {
 		return
 	}
 	if nameFollowsFamily(fset, family, name) {
 		return
 	}
-	t.Errorf("%s:%d: Amostra com Nome (%s) que não pertence à Familia (%s) — duas constantes válidas mas "+
-		"TROCADAS publicam a série sob o cabeçalho de outra família; o Nome só pode ser a própria Familia "+
+	t.Errorf("%s:%d: Sample com Name (%s) que não pertence à Family (%s) — duas constantes válidas mas "+
+		"TROCADAS publicam a série sob o cabeçalho de outra família; o Name só pode ser a própria Family "+
 		"ou ela mais %s",
 		path, line, expression(fset, name), expression(fset, family), strings.Join(histogramSuffixes, "/"))
 }
 
-// nameFollowsFamily decide se o Nome pertence à Familia: ou é a MESMA
+// nameFollowsFamily decide se o Name pertence à Family: ou é a MESMA
 // expressão, ou é ela somada a um sufixo de histograma.
 //
 // A comparação é feita sobre a expressão IMPRESSA, e não sobre a constante
@@ -542,12 +542,12 @@ func expression(fset *token.FileSet, e ast.Expr) string {
 	return b.String()
 }
 
-// walkElided entrega ao chamador todo literal de Amostra ELIDIDO dentro
+// walkElided entrega ao chamador todo literal de Sample ELIDIDO dentro
 // de um literal de slice, array ou mapa.
 //
-// Os elementos de `[]metrics.Amostra{{...}}` são CompositeLit com `Type == nil`:
+// Os elementos de `[]metrics.Sample{{...}}` são CompositeLit com `Type == nil`:
 // o tipo mora no `Elt` do ArrayType (ou no `Key`/`Value` do MapType). O
-// aninhamento é seguido até o fim porque `map[string][]metrics.Amostra{...}`
+// aninhamento é seguido até o fim porque `map[string][]metrics.Sample{...}`
 // elide DUAS vezes.
 func walkElided(cl *ast.CompositeLit, typ ast.Expr, pkg string, onFound func(*ast.CompositeLit)) {
 	var keyType, elemType ast.Expr
@@ -582,24 +582,24 @@ func walkElided(cl *ast.CompositeLit, typ ast.Expr, pkg string, onFound func(*as
 	}
 }
 
-// isSampleType reconhece a EXPRESSÃO DE TIPO metrics.Amostra, qualificada
-// (metrics.Amostra) ou não (Amostra, dentro do pacote metrics), atravessando o
-// ponteiro de `[]*metrics.Amostra`.
+// isSampleType reconhece a EXPRESSÃO DE TIPO metrics.Sample, qualificada
+// (metrics.Sample) ou não (Sample, dentro do pacote metrics), atravessando o
+// ponteiro de `[]*metrics.Sample`.
 //
-// `&metrics.Amostra{...}` não precisa de caso próprio: o `&` é um UnaryExpr em
+// `&metrics.Sample{...}` não precisa de caso próprio: o `&` é um UnaryExpr em
 // volta do CompositeLit, e o literal interno já traz o tipo escrito.
 func isSampleType(e ast.Expr, pkg string) bool {
 	switch t := e.(type) {
 	case *ast.StarExpr:
 		return isSampleType(t.X, pkg)
 	case *ast.SelectorExpr:
-		if t.Sel.Name != "Amostra" {
+		if t.Sel.Name != "Sample" {
 			return false
 		}
 		id, ok := t.X.(*ast.Ident)
 		return ok && id.Name == "metrics"
 	case *ast.Ident:
-		return t.Name == "Amostra" && pkg == "metrics"
+		return t.Name == "Sample" && pkg == "metrics"
 	}
 	return false
 }

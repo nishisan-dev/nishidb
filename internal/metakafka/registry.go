@@ -112,7 +112,7 @@ type Fonte struct {
 // dizer nem UP nem DOWN, e DEGRADED ("ainda subindo") seria mentira.
 func EstadoDeclarado(d Declarada) (estado, detalhe string) {
 	if !d.Declarado || !d.Habilitado {
-		return protocol.EstadoDesligado, ""
+		return protocol.StateDisabled, ""
 	}
 	return "", ""
 }

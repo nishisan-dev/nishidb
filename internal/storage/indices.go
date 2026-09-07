@@ -67,7 +67,7 @@ func (s *Store) abreIndicesDeSegmento(campos []types.FieldID) error {
 	// disso é que a escrita seguinte já não os trunca por cima. Sem esta limpeza,
 	// cada crash entre o WriteFile e o rename deixaria em disco um arquivo que
 	// o IndexBytes conta e ninguém explica.
-	if err := segindex.ApagaTemporarios(s.dirDeDados()); err != nil {
+	if err := segindex.RemoveTempFiles(s.dirDeDados()); err != nil {
 		return err
 	}
 	// O .sidx ÓRFÃO — de segmento que já não tem .dat — sai aqui, no mesmo
@@ -84,7 +84,7 @@ func (s *Store) abreIndicesDeSegmento(campos []types.FieldID) error {
 	if len(campos) == 0 {
 		return nil
 	}
-	s.selados = make(map[uint32]*segindex.Selado)
+	s.selados = make(map[uint32]*segindex.Sealed)
 	if err := s.abreWIPsDoCorrente(); err != nil {
 		return err
 	}
@@ -98,7 +98,7 @@ func (s *Store) abreIndicesDeSegmento(campos []types.FieldID) error {
 // prudência: o postCount só vai para o header no Fecha, então um processo morto
 // por SIGKILL deixa um header ATRASADO sobre um diretório adiantado — slots que
 // declaram cabeça e contagem contra um total que o arquivo não confirma. O
-// próprio segindex recusa esse arquivo com ErrFormato, e adotá-lo seria trocar
+// próprio segindex recusa esse arquivo com ErrFormat, e adotá-lo seria trocar
 // uma abertura que funciona por um dataset inacessível. Medido: sem este
 // descarte, o TestKill9NoMeioDaIngestaoPreservaOEstadoConfirmado passa a
 // reabrir com "o slot 572 declara contagem 10426 contra 0 postings".
@@ -118,7 +118,7 @@ func (s *Store) abreIndicesDeSegmento(campos []types.FieldID) error {
 //	                         parta dos dados o alcança — e o IndexBytes o
 //	                         contaria como disco que nada explica.
 func (s *Store) descartaTodosOsWIPs() error {
-	segs, err := segindex.SegmentosComWIP(s.dirDeDados())
+	segs, err := segindex.SegmentsWithWIP(s.dirDeDados())
 	if err != nil {
 		return classificaNomeIlegivelDeIndice(err, s.dirDeDados())
 	}
@@ -139,7 +139,7 @@ func (s *Store) descartaTodosOsWIPs() error {
 // a mesma que a recovery usa), e não contra o manifest: o filesystem é a
 // verdade sobre quais segmentos existem (spec §5.3).
 func (s *Store) apagaSidxOrfaos() error {
-	comSelado, err := segindex.SegmentosComSelado(s.dirDeDados())
+	comSelado, err := segindex.SegmentsWithSealed(s.dirDeDados())
 	if err != nil {
 		return classificaNomeIlegivelDeIndice(err, s.dirDeDados())
 	}
@@ -158,7 +158,7 @@ func (s *Store) apagaSidxOrfaos() error {
 		if _, ok := comDat[seg]; ok {
 			continue
 		}
-		caminho := segindex.CaminhoSelado(s.dirDeDados(), seg)
+		caminho := segindex.SealedPath(s.dirDeDados(), seg)
 		if err := os.Remove(caminho); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("storage: remover o índice órfão %s: %w", caminho, err)
 		}
@@ -169,7 +169,7 @@ func (s *Store) apagaSidxOrfaos() error {
 	return nil
 }
 
-// classificaNomeIlegivelDeIndice põe o ErrFormato do espaço de nomes .widx na
+// classificaNomeIlegivelDeIndice põe o ErrFormat do espaço de nomes .widx na
 // sentinela que o exit code entende.
 //
 // Sem isto o erro sobe cru e cai no default do codigoDoErro (cli.go) — exit 1,
@@ -186,7 +186,7 @@ func (s *Store) apagaSidxOrfaos() error {
 // infra, e chamá-la de corrupção induz a resposta destrutiva (restaurar backup).
 // São os três baldes do §101, e este só mexe no primeiro.
 func classificaNomeIlegivelDeIndice(err error, dir string) error {
-	if err == nil || !errors.Is(err, segindex.ErrFormato) {
+	if err == nil || !errors.Is(err, segindex.ErrFormat) {
 		return err
 	}
 	return fmt.Errorf("%w: %s tem um arquivo no espaço de nomes .widx que este binário não escreveu: %w",
@@ -200,17 +200,17 @@ func classificaNomeIlegivelDeIndice(err error, dir string) error {
 // precisam da MESMA regra, e uma segunda cópia divergiria na primeira vez que a
 // regra mudasse.
 //
-// Por NOME, e nunca pelo segindex.ApagaWIPs: aquele abre o arquivo com o
-// AbreWIP, que mapeia e valida o header antes de remover. Um .widx rasgado por
+// Por NOME, e nunca pelo segindex.RemoveWIPs: aquele abre o arquivo com o
+// OpenWIP, que mapeia e valida o header antes de remover. Um .widx rasgado por
 // crash é justamente o que não se deixa abrir — a limpeza do lixo não pode
 // depender de o lixo estar íntegro (spec §2.5).
 func (s *Store) apagaWIPsPeloNome(seg uint32) error {
-	campos, err := segindex.ListaWIP(s.dirDeDados(), seg)
+	campos, err := segindex.ListWIP(s.dirDeDados(), seg)
 	if err != nil {
 		return err
 	}
 	for _, campo := range campos {
-		caminho := segindex.CaminhoWIP(s.dirDeDados(), seg, campo)
+		caminho := segindex.WIPPath(s.dirDeDados(), seg, campo)
 		if err := os.Remove(caminho); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("storage: remover o índice WIP %s: %w", caminho, err)
 		}
@@ -234,10 +234,10 @@ func (s *Store) abreWIPsDoCorrente() error {
 	seg := s.curSegID.Load()
 	wips := make(map[types.FieldID]*segindex.WIP, len(s.camposIndexados))
 	for _, campo := range s.camposIndexados {
-		w, err := segindex.AbreWIP(s.dirDeDados(), seg, campo, slotsIniciaisDoWIP)
+		w, err := segindex.OpenWIP(s.dirDeDados(), seg, campo, slotsIniciaisDoWIP)
 		if err != nil {
 			for _, aberto := range wips {
-				_ = aberto.Fecha()
+				_ = aberto.Close()
 			}
 			return err
 		}
@@ -260,7 +260,7 @@ func (s *Store) abreWIPsDoCorrente() error {
 //
 // O Fecha acontece DENTRO do selMu, e não só a troca do mapa: uma consulta que
 // tivesse pegado o ponteiro caminharia a cadeia de um mapeamento desmontado, e
-// o WIP responde a isso com o pânico nomeado do exigeAberto. Fechar sob o mesmo
+// o WIP responde a isso com o pânico nomeado do requireOpen. Fechar sob o mesmo
 // lock que a consulta segura durante o Lookup é o que torna a janela
 // inexistente em vez de improvável.
 //
@@ -276,7 +276,7 @@ func (s *Store) fechaWIPs() error {
 	defer s.selMu.Unlock()
 	var errs []error
 	for _, w := range s.wips {
-		errs = append(errs, w.Fecha())
+		errs = append(errs, w.Close())
 	}
 	s.wips = nil
 	s.wipsSeg = 0
@@ -296,7 +296,7 @@ func (s *Store) fechaWIPs() error {
 // valor anterior é quem acabou de trocá-lo, e uma segunda chamada com o mesmo
 // novoSeg vê anterior == novoSeg e sai. Isso resolve, por construção, o
 // meio-termo que a selagem admite — .sidx durável com .widx de ALGUNS campos
-// ainda de pé, quando o ApagaWIPs falha no meio de um segmento multi-campo. Um
+// ainda de pé, quando o RemoveWIPs falha no meio de um segmento multi-campo. Um
 // Sela reinvocado nesse estado ENCOLHERIA o .sidx, porque o Escritor novo só
 // enxergaria os campos sobreviventes; aqui a reinvocação não existe. O que
 // sobrar desse meio-termo através de um restart é problema do Open, que por
@@ -323,7 +323,7 @@ func (s *Store) aposAppend(novoSeg uint32) error {
 	// header no Fecha (segindex/wip.go), e a selagem reabre o .widx pelo
 	// arquivo. Selar com o mapeamento ainda de pé leria um header atrasado e
 	// perderia as postings gravadas desde o último rehash.
-	if err := segindex.Sela(s.dirDeDados(), anterior); err != nil {
+	if err := segindex.Seal(s.dirDeDados(), anterior); err != nil {
 		return err
 	}
 	return s.abreWIPsDoCorrente()
@@ -446,7 +446,7 @@ func (s *Store) removeIndiceDoSegmento(seg uint32) {
 // segmento que nunca teve índice —, mas volta como removido=false: a expulsão
 // da janela conta só o que de fato saiu do disco.
 func (s *Store) removeSidxDoDisco(seg uint32) (bool, error) {
-	err := os.Remove(segindex.CaminhoSelado(s.dirDeDados(), seg))
+	err := os.Remove(segindex.SealedPath(s.dirDeDados(), seg))
 	if s.entreRemoverEEsquecerHook != nil {
 		s.entreRemoverEEsquecerHook(seg)
 	}
@@ -502,7 +502,7 @@ func (s *Store) esqueceSelado(seg uint32) {
 	if sel == nil {
 		return
 	}
-	if err := sel.Fecha(); err != nil {
+	if err := sel.Close(); err != nil {
 		s.opts.Log.Warn("indice.selado_nao_fechou",
 			"o mapeamento do índice do segmento não pôde ser desmontado",
 			"segmento", seg, "erro", err.Error())
@@ -517,7 +517,7 @@ func (s *Store) fechaIndices() error {
 	errs := []error{s.fechaWIPs()}
 	s.selMu.Lock()
 	for _, sel := range s.selados {
-		errs = append(errs, sel.Fecha())
+		errs = append(errs, sel.Close())
 	}
 	s.selados = nil
 	s.selMu.Unlock()

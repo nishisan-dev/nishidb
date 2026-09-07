@@ -21,50 +21,50 @@ func TestSelarPreservaExatamenteOQueOWIPRespondia(t *testing.T) {
 		7: {100: {50, 10, 30, 40}, 200: {25}},
 		9: {300: {11, 12, 13}},
 	}
-	antes := map[[2]uint64][]types.RowID{}
-	for campo, valores := range corpus {
-		w, err := segindex.AbreWIP(dir, 42, campo, 16)
+	before := map[[2]uint64][]types.RowID{}
+	for field, values := range corpus {
+		w, err := segindex.OpenWIP(dir, 42, field, 16)
 		if err != nil {
 			t.Fatal(err)
 		}
-		for h, rows := range valores {
+		for h, rows := range values {
 			for _, r := range rows {
 				if err := w.Set(h, r); err != nil {
 					t.Fatal(err)
 				}
 			}
 		}
-		for h := range valores {
-			antes[[2]uint64{uint64(campo), h}] = slices.Clone(w.Lookup(h))
+		for h := range values {
+			before[[2]uint64{uint64(field), h}] = slices.Clone(w.Lookup(h))
 		}
-		fechaWIP(t, w)
+		closeWIP(t, w)
 	}
 
-	if err := segindex.Sela(dir, 42); err != nil {
-		t.Fatalf("Sela: %v", err)
+	if err := segindex.Seal(dir, 42); err != nil {
+		t.Fatalf("Seal: %v", err)
 	}
 
-	s, err := segindex.AbreSelado(segindex.CaminhoSelado(dir, 42))
+	s, err := segindex.OpenSealed(segindex.SealedPath(dir, 42))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
-		if err := s.Fecha(); err != nil {
-			t.Errorf("Fecha: %v", err)
+		if err := s.Close(); err != nil {
+			t.Errorf("Close: %v", err)
 		}
 	}()
-	for chave, want := range antes {
-		campo, h := types.FieldID(chave[0]), chave[1]
-		it, ok := s.Lookup(campo, h)
+	for key, want := range before {
+		field, h := types.FieldID(key[0]), key[1]
+		it, ok := s.Lookup(field, h)
 		if !ok {
-			t.Fatalf("Lookup(%d, %d) devolveu ok=false depois da selagem", campo, h)
+			t.Fatalf("Lookup(%d, %d) devolveu ok=false depois da selagem", field, h)
 		}
 		var got []types.RowID
 		for it.Next() {
 			got = append(got, it.RowID())
 		}
 		if !slices.Equal(got, want) {
-			t.Errorf("Lookup(%d, %d) = %v, quero %v", campo, h, got, want)
+			t.Errorf("Lookup(%d, %d) = %v, quero %v", field, h, got, want)
 		}
 	}
 }
@@ -74,23 +74,23 @@ func TestSelarPreservaExatamenteOQueOWIPRespondia(t *testing.T) {
 // receber postings que o .sidx nunca teria.
 func TestSelarDesligaOsWIPs(t *testing.T) {
 	dir := t.TempDir()
-	w, err := segindex.AbreWIP(dir, 42, 7, 16)
+	w, err := segindex.OpenWIP(dir, 42, 7, 16)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := w.Set(100, 1); err != nil {
 		t.Fatal(err)
 	}
-	fechaWIP(t, w)
-	if err := segindex.Sela(dir, 42); err != nil {
+	closeWIP(t, w)
+	if err := segindex.Seal(dir, 42); err != nil {
 		t.Fatal(err)
 	}
-	campos, err := segindex.ListaWIP(dir, 42)
+	fields, err := segindex.ListWIP(dir, 42)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(campos) != 0 {
-		t.Errorf("ListaWIP = %v, quero vazio", campos)
+	if len(fields) != 0 {
+		t.Errorf("ListWIP = %v, quero vazio", fields)
 	}
 }
 
@@ -98,29 +98,29 @@ func TestSelarDesligaOsWIPs(t *testing.T) {
 // unlink dos .widx — que é exatamente o estado "tem .sidx e não tem .widx".
 func TestSelarEIdempotente(t *testing.T) {
 	dir := t.TempDir()
-	w, err := segindex.AbreWIP(dir, 42, 7, 16)
+	w, err := segindex.OpenWIP(dir, 42, 7, 16)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := w.Set(100, 1); err != nil {
 		t.Fatal(err)
 	}
-	fechaWIP(t, w)
-	if err := segindex.Sela(dir, 42); err != nil {
+	closeWIP(t, w)
+	if err := segindex.Seal(dir, 42); err != nil {
 		t.Fatal(err)
 	}
-	primeiro, err := os.ReadFile(segindex.CaminhoSelado(dir, 42))
+	first, err := os.ReadFile(segindex.SealedPath(dir, 42))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := segindex.Sela(dir, 42); err != nil {
+	if err := segindex.Seal(dir, 42); err != nil {
 		t.Fatalf("segunda selagem: %v", err)
 	}
-	segundo, err := os.ReadFile(segindex.CaminhoSelado(dir, 42))
+	second, err := os.ReadFile(segindex.SealedPath(dir, 42))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(primeiro, segundo) {
+	if !bytes.Equal(first, second) {
 		t.Error("a segunda selagem alterou o arquivo — ela deveria ser no-op")
 	}
 }

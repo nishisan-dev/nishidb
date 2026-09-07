@@ -17,25 +17,25 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// campoDeTeste e segmentoDeTeste são o (segmento, campo) de todos os WIP deste
+// testField e testSegment são o (segmento, campo) de todos os WIP deste
 // arquivo. Ficam nomeados porque o par é o que batiza o arquivo em disco, e um
 // teste que trocasse um dos dois estaria falando de outro arquivo.
 const (
-	segmentoDeTeste = uint32(1)
-	campoDeTeste    = types.FieldID(7)
+	testSegment = uint32(1)
+	testField   = types.FieldID(7)
 )
 
-// abreWIPDeTesteComSlots abre um WIP novo com o número de slots pedido.
-func abreWIPDeTesteComSlots(t *testing.T, slots uint32) *segindex.WIP {
+// openTestWIPWithSlots abre um WIP novo com o número de slots pedido.
+func openTestWIPWithSlots(t *testing.T, slots uint32) *segindex.WIP {
 	t.Helper()
-	w, err := segindex.AbreWIP(t.TempDir(), segmentoDeTeste, campoDeTeste, slots)
+	w, err := segindex.OpenWIP(t.TempDir(), testSegment, testField, slots)
 	if err != nil {
-		t.Fatalf("AbreWIP: %v", err)
+		t.Fatalf("OpenWIP: %v", err)
 	}
 	return w
 }
 
-// abreWIPDeTeste abre um WIP folgado o bastante para que NADA cresça durante o
+// openTestWIP abre um WIP folgado o bastante para que NADA cresça durante o
 // teste — nem o diretório, nem o array de postings.
 //
 // A folga é requisito dos gates de alocação, e não conforto: Region.Grow chama
@@ -43,21 +43,21 @@ func abreWIPDeTesteComSlots(t *testing.T, slots uint32) *segindex.WIP {
 // crescimento dentro da janela medida contaria a alocação do mmap como se fosse
 // do Set. Os gates medem o regime, que é onde a ingestão vive; o crescimento é
 // amortizado e tem gate próprio (TestOWIPCresceSemPerderPosting).
-func abreWIPDeTeste(t *testing.T) *segindex.WIP {
+func openTestWIP(t *testing.T) *segindex.WIP {
 	t.Helper()
-	return abreWIPDeTesteComSlots(t, 4096)
+	return openTestWIPWithSlots(t, 4096)
 }
 
-// fechaWIP fecha o WIP reportando a falha.
+// closeWIP fecha o WIP reportando a falha.
 //
-// Existe porque `defer w.Fecha()` descartaria o erro em silêncio, e o gate de
+// Existe porque `defer w.Close()` descartaria o erro em silêncio, e o gate de
 // lint deste projeto conta esse descarte. Fechar é também onde o header ganha o
 // postCount definitivo, então um erro aqui significa um arquivo que a Tarefa 4
 // não conseguiria reabrir.
-func fechaWIP(t *testing.T, w *segindex.WIP) {
+func closeWIP(t *testing.T, w *segindex.WIP) {
 	t.Helper()
-	if err := w.Fecha(); err != nil {
-		t.Errorf("Fecha: %v", err)
+	if err := w.Close(); err != nil {
+		t.Errorf("Close: %v", err)
 	}
 }
 
@@ -69,8 +69,8 @@ func fechaWIP(t *testing.T, w *segindex.WIP) {
 // crescente, e um id repetido faria o unionIter do executor emitir a mesma
 // linha duas vezes num OR.
 func TestOWIPDevolveOrdemEstritamenteCrescenteComRowIdsForaDeOrdem(t *testing.T) {
-	w := abreWIPDeTeste(t)
-	defer fechaWIP(t, w)
+	w := openTestWIP(t)
+	defer closeWIP(t, w)
 	for _, r := range []types.RowID{50, 10, 30, 10, 40} {
 		if err := w.Set(100, r); err != nil {
 			t.Fatal(err)
@@ -94,8 +94,8 @@ func TestOWIPDevolveOrdemEstritamenteCrescenteComRowIdsForaDeOrdem(t *testing.T)
 // caminho mais curto para um leitor concluir que o memmove de rehash() é
 // código morto.
 func TestOWIPCresceSemPerderPosting(t *testing.T) {
-	w := abreWIPDeTesteComSlots(t, 16) // força vários rehashes
-	defer fechaWIP(t, w)
+	w := openTestWIPWithSlots(t, 16) // força vários rehashes
+	defer closeWIP(t, w)
 	const n = 5000
 	for i := range n {
 		if err := w.Set(uint64(i)+2, types.RowID(i)); err != nil { // n valores DISTINTOS
@@ -111,8 +111,8 @@ func TestOWIPCresceSemPerderPosting(t *testing.T) {
 	if got := w.Postings(); got != n {
 		t.Errorf("Postings() = %d, quero %d", got, n)
 	}
-	if got := w.Distintos(); got != n {
-		t.Errorf("Distintos() = %d, quero %d", got, n)
+	if got := w.DistinctValues(); got != n {
+		t.Errorf("DistinctValues() = %d, quero %d", got, n)
 	}
 }
 
@@ -140,61 +140,61 @@ func TestOWIPCresceSemPerderPosting(t *testing.T) {
 // asserções valem nas duas rodadas.
 func TestOWIPAtendeLeitorConcorrenteDuranteOCrescimento(t *testing.T) {
 	const (
-		observado = uint64(7)
-		n         = 5000
+		observed = uint64(7)
+		n        = 5000
 	)
-	w := abreWIPDeTesteComSlots(t, 16)
-	defer fechaWIP(t, w)
+	w := openTestWIPWithSlots(t, 16)
+	defer closeWIP(t, w)
 
 	var (
-		mu       sync.Mutex
-		queixas  []string
-		lidas    atomic.Uint64
-		visto    atomic.Int64 // último comprimento observado pelo leitor
-		wg       sync.WaitGroup
-		pronto   = make(chan struct{})
-		anotaUma = func(formato string, args ...any) {
+		mu              sync.Mutex
+		complaints      []string
+		reads           atomic.Uint64
+		lastSeen        atomic.Int64 // último comprimento observado pelo leitor
+		wg              sync.WaitGroup
+		done            = make(chan struct{})
+		recordComplaint = func(format string, args ...any) {
 			mu.Lock()
 			defer mu.Unlock()
-			if len(queixas) < 8 {
-				queixas = append(queixas, fmt.Sprintf(formato, args...))
+			if len(complaints) < 8 {
+				complaints = append(complaints, fmt.Sprintf(format, args...))
 			}
 		}
 	)
-	// LIFO: fecha o canal, espera o leitor sair e SÓ ENTÃO o fechaWIP desmonta
+	// LIFO: fecha o canal, espera o leitor sair e SÓ ENTÃO o closeWIP desmonta
 	// o mapeamento. Invertido, um Lookup em voo leria memória desmontada.
 	defer wg.Wait()
-	defer close(pronto)
+	defer close(done)
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		maior := 0
+		largest := 0
 		for {
 			select {
-			case <-pronto:
+			case <-done:
 				return
 			default:
 			}
-			rows := w.Lookup(observado)
+			rows := w.Lookup(observed)
 			for i, r := range rows {
 				if r != types.RowID(i) {
-					anotaUma("Lookup de %d elementos tem rowId %d na posição %d", len(rows), r, i)
+					recordComplaint("Lookup de %d elementos tem rowId %d na posição %d", len(rows), r, i)
 					break
 				}
 			}
-			if len(rows) < maior {
-				anotaUma("Lookup encolheu de %d para %d — uma posting publicada se perdeu", maior, len(rows))
+			if len(rows) < largest {
+				recordComplaint("Lookup encolheu de %d para %d — uma posting publicada se perdeu", largest, len(rows))
 			}
-			maior = max(maior, len(rows))
-			visto.Store(int64(len(rows)))
-			lidas.Add(1)
+			largest = max(largest, len(rows))
+			lastSeen.Store(int64(len(rows)))
+			reads.Add(1)
 		}
 	}()
 
-	var parcial int64
+	var partial int64
 	for i := range n {
-		if err := w.Set(observado, types.RowID(i)); err != nil {
+		if err := w.Set(observed, types.RowID(i)); err != nil {
 			t.Errorf("Set(observado, %d): %v", i, err)
 			break
 		}
@@ -214,12 +214,12 @@ func TestOWIPAtendeLeitorConcorrenteDuranteOCrescimento(t *testing.T) {
 			// que regredisse para devolver sempre nil faria este laço girar
 			// até o timeout de dez minutos do go test — sinal caro e sem nome.
 			// Com ele, a mesma regressão falha em segundos, nomeada.
-			limite := time.Now().Add(30 * time.Second)
+			deadline := time.Now().Add(30 * time.Second)
 			for {
-				if parcial = visto.Load(); parcial > 0 {
+				if partial = lastSeen.Load(); partial > 0 {
 					break
 				}
-				if time.Now().After(limite) {
+				if time.Now().After(deadline) {
 					t.Fatal("o leitor nunca observou estado intermediário em 30s — o Lookup deixou de devolver as postings publicadas")
 				}
 				runtime.Gosched()
@@ -231,18 +231,18 @@ func TestOWIPAtendeLeitorConcorrenteDuranteOCrescimento(t *testing.T) {
 	}
 
 	mu.Lock()
-	registradas := slices.Clone(queixas)
+	recorded := slices.Clone(complaints)
 	mu.Unlock()
-	for _, q := range registradas {
+	for _, q := range recorded {
 		t.Error(q)
 	}
-	if lidas.Load() == 0 {
+	if reads.Load() == 0 {
 		t.Error("o leitor não completou nenhum Lookup — o teste mediu um laço vazio")
 	}
-	if parcial <= 0 || parcial >= n {
-		t.Errorf("o leitor observou o comprimento parcial %d, quero algo em (0, %d) — ele não atravessou o crescimento", parcial, n)
+	if partial <= 0 || partial >= n {
+		t.Errorf("o leitor observou o comprimento parcial %d, quero algo em (0, %d) — ele não atravessou o crescimento", partial, n)
 	}
-	if got := w.Lookup(observado); len(got) != n {
+	if got := w.Lookup(observed); len(got) != n {
 		t.Fatalf("Lookup final devolveu %d rowIds, quero %d", len(got), n)
 	}
 }
@@ -252,8 +252,8 @@ func TestOWIPAtendeLeitorConcorrenteDuranteOCrescimento(t *testing.T) {
 // precisa poder confiar: um slot vazio na cadeia de sondagem NÃO pode fazer a
 // busca continuar até dar a volta na tabela.
 func TestValorAusenteNoWIPNaoDevolveNada(t *testing.T) {
-	w := abreWIPDeTeste(t)
-	defer fechaWIP(t, w)
+	w := openTestWIP(t)
+	defer closeWIP(t, w)
 	if err := w.Set(100, 1); err != nil {
 		t.Fatal(err)
 	}
@@ -267,18 +267,18 @@ func TestValorAusenteNoWIPNaoDevolveNada(t *testing.T) {
 // saber que está falando do campo que pediu, porque um Lookup sobre o campo
 // errado devolveria linhas erradas sem nenhum sintoma.
 func TestOWIPGuardaOCampoQueFoiPedido(t *testing.T) {
-	w := abreWIPDeTeste(t)
-	defer fechaWIP(t, w)
-	if got := w.Campo(); got != campoDeTeste {
-		t.Errorf("Campo() = %d, quero %d", got, campoDeTeste)
+	w := openTestWIP(t)
+	defer closeWIP(t, w)
+	if got := w.Field(); got != testField {
+		t.Errorf("Field() = %d, quero %d", got, testField)
 	}
 }
 
 // TestParaCadaVarreTodasAsPostingsUmaVez é o que a selagem (Tarefa 4) consome
-// para alimentar o Escritor.
+// para alimentar o Writer.
 //
 // A varredura NÃO promete ordem, e não se assere ordem nenhuma de propósito: o
-// Escritor já ordena e deduplica, e ordenar aqui seria a mesma ordenação em dois
+// Writer já ordena e deduplica, e ordenar aqui seria a mesma ordenação em dois
 // lugares — que divergem na primeira mudança de critério. O que ela promete é
 // COBERTURA: cada posting do array visitada exatamente uma vez, senão a selagem
 // perderia postings que o WIP tem.
@@ -288,13 +288,13 @@ func TestOWIPGuardaOCampoQueFoiPedido(t *testing.T) {
 // A diferença separa duas coisas que a primeira versão deste teste confundia, e
 // foi a disciplina de mutação que a expôs. "Quantas postings o array guarda" é
 // política do Set — ele é append-only, então dois Set com o MESMO par (h, row)
-// deixam duas entradas —, enquanto "ParaCada visita todas elas, uma vez cada" é o
+// deixam duas entradas —, enquanto "ForEach visita todas elas, uma vez cada" é o
 // contrato desta função. Asserir o total contra len(postadas) amarra o contrato
 // da varredura à política de escrita, e o preço é que a suíte deixa de saber
 // separar bug de regressão de desempenho: um Set que voltasse a varrer a cadeia
 // para deduplicar — a forma exata do O(n²) que este pacote existe para matar —
 // produz respostas IDÊNTICAS em Lookup e no .sidx selado, e mesmo assim deixava
-// este teste vermelho ("ParaCada visitou 5 postings, quero 6"). Ele tem de
+// este teste vermelho ("ForEach visitou 5 postings, quero 6"). Ele tem de
 // reprovar em TestOCustoDoSetNaoAcompanhaOTamanhoDoSegmento e em mais lugar
 // nenhum.
 //
@@ -304,9 +304,9 @@ func TestOWIPGuardaOCampoQueFoiPedido(t *testing.T) {
 // seja a política de escrita. A duplicata deliberada do corpus fica, porque é ela
 // que põe duas entradas na MESMA cadeia sob a política de hoje.
 func TestParaCadaVarreTodasAsPostingsUmaVez(t *testing.T) {
-	w := abreWIPDeTeste(t)
-	defer fechaWIP(t, w)
-	postadas := []struct {
+	w := openTestWIP(t)
+	defer closeWIP(t, w)
+	posted := []struct {
 		h   uint64
 		row types.RowID
 	}{
@@ -314,7 +314,7 @@ func TestParaCadaVarreTodasAsPostingsUmaVez(t *testing.T) {
 		{200, 7},
 		{300, 42}, {300, 41},
 	}
-	for _, p := range postadas {
+	for _, p := range posted {
 		if err := w.Set(p.h, p.row); err != nil {
 			t.Fatal(err)
 		}
@@ -325,32 +325,32 @@ func TestParaCadaVarreTodasAsPostingsUmaVez(t *testing.T) {
 	if w.Postings() == 0 {
 		t.Fatal("o corpus não gravou posting nenhuma — a asserção de cobertura mede um laço vazio")
 	}
-	vistas := map[[2]uint64]int{}
+	visits := map[[2]uint64]int{}
 	total := 0
-	if err := w.ParaCada(func(h uint64, row types.RowID) {
-		vistas[[2]uint64{h, uint64(row)}]++
+	if err := w.ForEach(func(h uint64, row types.RowID) {
+		visits[[2]uint64{h, uint64(row)}]++
 		total++
 	}); err != nil {
-		t.Fatalf("ParaCada: %v", err)
+		t.Fatalf("ForEach: %v", err)
 	}
 	if total != int(w.Postings()) {
-		t.Errorf("ParaCada visitou %d postings e o array tem %d", total, w.Postings())
+		t.Errorf("ForEach visitou %d postings e o array tem %d", total, w.Postings())
 	}
-	querido := map[[2]uint64]int{}
-	for _, p := range postadas {
-		querido[[2]uint64{p.h, uint64(p.row)}]++
+	want := map[[2]uint64]int{}
+	for _, p := range posted {
+		want[[2]uint64{p.h, uint64(p.row)}]++
 	}
 	// Cobertura é sobre o CONJUNTO de pares: cada par postado tem de aparecer, e
 	// a multiplicidade de cada um é consequência da política do Set, medida pelo
 	// total acima.
-	for chave := range querido {
-		if vistas[chave] == 0 {
-			t.Errorf("ParaCada não visitou (h=%d,row=%d)", chave[0], chave[1])
+	for key := range want {
+		if visits[key] == 0 {
+			t.Errorf("ForEach não visitou (h=%d,row=%d)", key[0], key[1])
 		}
 	}
-	for chave := range vistas {
-		if querido[chave] == 0 {
-			t.Errorf("ParaCada inventou (h=%d,row=%d)", chave[0], chave[1])
+	for key := range visits {
+		if want[key] == 0 {
+			t.Errorf("ForEach inventou (h=%d,row=%d)", key[0], key[1])
 		}
 	}
 }
@@ -362,8 +362,8 @@ func TestParaCadaVarreTodasAsPostingsUmaVez(t *testing.T) {
 // segmento seria dado por indexado.
 func TestAbreWIPComSlotsZeroExigeArquivoExistente(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := segindex.AbreWIP(dir, segmentoDeTeste, campoDeTeste, 0); err == nil {
-		t.Fatal("AbreWIP com slotsMin 0 sobre arquivo ausente devolveu nil")
+	if _, err := segindex.OpenWIP(dir, testSegment, testField, 0); err == nil {
+		t.Fatal("OpenWIP com slotsMin 0 sobre arquivo ausente devolveu nil")
 	} else if !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("erro = %v, quero algo que case com os.ErrNotExist", err)
 	}
@@ -379,9 +379,9 @@ func TestAbreWIPComSlotsZeroExigeArquivoExistente(t *testing.T) {
 // com um valor só, uma máscara errada ainda acharia o slot por acaso.
 func TestOWIPReabertoRecuperaOEstadoGravado(t *testing.T) {
 	dir := t.TempDir()
-	w, err := segindex.AbreWIP(dir, segmentoDeTeste, campoDeTeste, 64)
+	w, err := segindex.OpenWIP(dir, testSegment, testField, 64)
 	if err != nil {
-		t.Fatalf("AbreWIP: %v", err)
+		t.Fatalf("OpenWIP: %v", err)
 	}
 	for _, p := range []struct {
 		h   uint64
@@ -391,67 +391,67 @@ func TestOWIPReabertoRecuperaOEstadoGravado(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := w.Fecha(); err != nil {
-		t.Fatalf("Fecha: %v", err)
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
 	}
 
-	reaberto, err := segindex.AbreWIP(dir, segmentoDeTeste, campoDeTeste, 0)
+	reopened, err := segindex.OpenWIP(dir, testSegment, testField, 0)
 	if err != nil {
-		t.Fatalf("AbreWIP(slotsMin=0): %v", err)
+		t.Fatalf("OpenWIP(slotsMin=0): %v", err)
 	}
-	defer fechaWIP(t, reaberto)
-	if got := reaberto.Campo(); got != campoDeTeste {
-		t.Errorf("Campo() = %d, quero %d", got, campoDeTeste)
+	defer closeWIP(t, reopened)
+	if got := reopened.Field(); got != testField {
+		t.Errorf("Field() = %d, quero %d", got, testField)
 	}
-	if got := reaberto.Postings(); got != 3 {
+	if got := reopened.Postings(); got != 3 {
 		t.Errorf("Postings() = %d, quero 3", got)
 	}
-	if got := reaberto.Distintos(); got != 2 {
-		t.Errorf("Distintos() = %d, quero 2", got)
+	if got := reopened.DistinctValues(); got != 2 {
+		t.Errorf("DistinctValues() = %d, quero 2", got)
 	}
-	if got := reaberto.Lookup(100); !slices.Equal(got, []types.RowID{10, 30}) {
+	if got := reopened.Lookup(100); !slices.Equal(got, []types.RowID{10, 30}) {
 		t.Errorf("Lookup(100) = %v, quero [10 30]", got)
 	}
-	if got := reaberto.Lookup(200); !slices.Equal(got, []types.RowID{20}) {
+	if got := reopened.Lookup(200); !slices.Equal(got, []types.RowID{20}) {
 		t.Errorf("Lookup(200) = %v, quero [20]", got)
 	}
 }
 
 // TestCaminhoEListaDoWIP trava o nome do arquivo e a enumeração por segmento.
-// A selagem descobre os campos do segmento corrente por ListaWIP — não há
+// A selagem descobre os campos do segmento corrente por ListWIP — não há
 // metadado listando isso, seguindo a doutrina de "um metadado a menos é uma
 // janela de crash a menos" (spec §5.3) —, então um nome fora do padrão faria a
 // selagem perder um campo inteiro em silêncio.
 func TestCaminhoEListaDoWIP(t *testing.T) {
 	dir := t.TempDir()
-	if got, want := segindex.CaminhoWIP(dir, 42, 7), dir+"/segment-00000042-00007.widx"; got != want {
-		t.Errorf("CaminhoWIP = %q, quero %q", got, want)
+	if got, want := segindex.WIPPath(dir, 42, 7), dir+"/segment-00000042-00007.widx"; got != want {
+		t.Errorf("WIPPath = %q, quero %q", got, want)
 	}
-	for _, campo := range []types.FieldID{9, 3} {
-		w, err := segindex.AbreWIP(dir, 42, campo, 16)
+	for _, field := range []types.FieldID{9, 3} {
+		w, err := segindex.OpenWIP(dir, 42, field, 16)
 		if err != nil {
-			t.Fatalf("AbreWIP(campo %d): %v", campo, err)
+			t.Fatalf("OpenWIP(campo %d): %v", field, err)
 		}
-		if err := w.Fecha(); err != nil {
-			t.Fatalf("Fecha(campo %d): %v", campo, err)
+		if err := w.Close(); err != nil {
+			t.Fatalf("Close(campo %d): %v", field, err)
 		}
 	}
 	// Um WIP de OUTRO segmento, para provar que a lista filtra pelo segmento e
 	// não só pela extensão.
-	outro, err := segindex.AbreWIP(dir, 43, 5, 16)
+	other, err := segindex.OpenWIP(dir, 43, 5, 16)
 	if err != nil {
-		t.Fatalf("AbreWIP(outro segmento): %v", err)
+		t.Fatalf("OpenWIP(outro segmento): %v", err)
 	}
-	if err := outro.Fecha(); err != nil {
-		t.Fatalf("Fecha(outro segmento): %v", err)
+	if err := other.Close(); err != nil {
+		t.Fatalf("Close(outro segmento): %v", err)
 	}
 
-	campos, err := segindex.ListaWIP(dir, 42)
+	fields, err := segindex.ListWIP(dir, 42)
 	if err != nil {
-		t.Fatalf("ListaWIP: %v", err)
+		t.Fatalf("ListWIP: %v", err)
 	}
-	if !slices.Equal(campos, []types.FieldID{3, 9}) {
-		t.Errorf("ListaWIP = %v, quero [3 9] (ordenado, só do segmento 42)", campos)
+	if !slices.Equal(fields, []types.FieldID{3, 9}) {
+		t.Errorf("ListWIP = %v, quero [3 9] (ordenado, só do segmento 42)", fields)
 	}
 }
 
@@ -462,38 +462,38 @@ func TestCaminhoEListaDoWIP(t *testing.T) {
 // sem esta função ele ficaria em disco para sempre.
 func TestSegmentosComWIPEnumeraODiretorioInteiro(t *testing.T) {
 	dir := t.TempDir()
-	for _, par := range []struct {
+	for _, pair := range []struct {
 		seg   uint32
-		campo types.FieldID
+		field types.FieldID
 	}{{7, 3}, {7, 9}, {2, 1}} {
-		w, err := segindex.AbreWIP(dir, par.seg, par.campo, 16)
+		w, err := segindex.OpenWIP(dir, pair.seg, pair.field, 16)
 		if err != nil {
-			t.Fatalf("AbreWIP(%d, %d): %v", par.seg, par.campo, err)
+			t.Fatalf("OpenWIP(%d, %d): %v", pair.seg, pair.field, err)
 		}
-		if err := w.Fecha(); err != nil {
-			t.Fatalf("Fecha(%d, %d): %v", par.seg, par.campo, err)
+		if err := w.Close(); err != nil {
+			t.Fatalf("Close(%d, %d): %v", pair.seg, pair.field, err)
 		}
 	}
 	// Vizinhos que NÃO são .widx: o diretório de dados é compartilhado com os
 	// segmentos e com a forma selada, e confundi-los faria a limpeza da
 	// abertura remover dado.
-	for _, nome := range []string{"segment-00000007.dat", "segment-00000007.sidx", "segment-00000007.sidx.tmp"} {
-		if err := os.WriteFile(filepath.Join(dir, nome), []byte("x"), 0o644); err != nil {
+	for _, name := range []string{"segment-00000007.dat", "segment-00000007.sidx", "segment-00000007.sidx.tmp"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	segs, err := segindex.SegmentosComWIP(dir)
+	segs, err := segindex.SegmentsWithWIP(dir)
 	if err != nil {
-		t.Fatalf("SegmentosComWIP: %v", err)
+		t.Fatalf("SegmentsWithWIP: %v", err)
 	}
 	if !slices.Equal(segs, []uint32{2, 7}) {
-		t.Errorf("SegmentosComWIP = %v, quero [2 7] (ordenado e sem repetir o segmento de dois campos)", segs)
+		t.Errorf("SegmentsWithWIP = %v, quero [2 7] (ordenado e sem repetir o segmento de dois campos)", segs)
 	}
 }
 
 // TestSegmentosComWIPRecusaNomeForaDoCanonico: quem enumera .widx REMOVE o que
-// encontra, e a remoção reconstrói o caminho por CaminhoWIP. Aceitar um nome com
+// encontra, e a remoção reconstrói o caminho por WIPPath. Aceitar um nome com
 // padding divergente faria a limpeza mirar um arquivo que não existe e reportar
 // sucesso sobre o resíduo intacto.
 func TestSegmentosComWIPRecusaNomeForaDoCanonico(t *testing.T) {
@@ -501,35 +501,36 @@ func TestSegmentosComWIPRecusaNomeForaDoCanonico(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "segment-7-00003.widx"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := segindex.SegmentosComWIP(dir); !errors.Is(err, segindex.ErrFormato) {
-		t.Errorf("SegmentosComWIP = %v, quero ErrFormato", err)
+	if _, err := segindex.SegmentsWithWIP(dir); !errors.Is(err, segindex.ErrFormat) {
+		t.Errorf("SegmentsWithWIP = %v, quero ErrFormat", err)
 	}
 }
 
 // TestApagaRemoveOArquivoDoWIP: a selagem desliga os .widx depois de emitir o
 // .sidx, e o Open descarta os órfãos (spec §2.5). Os dois passam por aqui, e um
-// Apaga que fechasse sem remover deixaria o segmento com índice em duas formas.
+// Remove que fechasse sem remover deixaria o segmento com índice em duas
+// formas.
 func TestApagaRemoveOArquivoDoWIP(t *testing.T) {
 	dir := t.TempDir()
-	w, err := segindex.AbreWIP(dir, segmentoDeTeste, campoDeTeste, 16)
+	w, err := segindex.OpenWIP(dir, testSegment, testField, 16)
 	if err != nil {
-		t.Fatalf("AbreWIP: %v", err)
+		t.Fatalf("OpenWIP: %v", err)
 	}
 	if err := w.Set(100, 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.Apaga(); err != nil {
-		t.Fatalf("Apaga: %v", err)
+	if err := w.Remove(); err != nil {
+		t.Fatalf("Remove: %v", err)
 	}
-	if _, err := os.Stat(segindex.CaminhoWIP(dir, segmentoDeTeste, campoDeTeste)); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("stat após Apaga = %v, quero não-existe", err)
+	if _, err := os.Stat(segindex.WIPPath(dir, testSegment, testField)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("stat após Remove = %v, quero não-existe", err)
 	}
-	campos, err := segindex.ListaWIP(dir, segmentoDeTeste)
+	fields, err := segindex.ListWIP(dir, testSegment)
 	if err != nil {
-		t.Fatalf("ListaWIP: %v", err)
+		t.Fatalf("ListWIP: %v", err)
 	}
-	if len(campos) != 0 {
-		t.Errorf("ListaWIP após Apaga = %v, quero vazio", campos)
+	if len(fields) != 0 {
+		t.Errorf("ListWIP após Remove = %v, quero vazio", fields)
 	}
 }
 
@@ -539,22 +540,22 @@ func TestApagaRemoveOArquivoDoWIP(t *testing.T) {
 // das constantes do pacote passaria a mutilar o lugar errado no dia em que o
 // layout mudasse, e continuaria verde.
 const (
-	offMagicWIP     = 0  // 4 bytes
-	offVersaoNoWIP  = 4  // u8
-	offCampoNoWIP   = 6  // u16
-	offDirSlotsNoW  = 8  // u32
-	offPostCountNoW = 12 // u32
+	offMagicWIP       = 0  // 4 bytes
+	offVersionInWIP   = 4  // u8
+	offFieldInWIP     = 6  // u16
+	offDirSlotsInWIP  = 8  // u32
+	offPostCountInWIP = 12 // u32
 )
 
-// escreveWIPDeTeste emite um .widx bem-formado — um campo, dois valores, três
+// writeTestWIP emite um .widx bem-formado — um campo, dois valores, três
 // postings — e devolve o diretório e os bytes do arquivo, para os testes que
 // precisam estragá-lo.
-func escreveWIPDeTeste(t *testing.T) (string, []byte) {
+func writeTestWIP(t *testing.T) (string, []byte) {
 	t.Helper()
 	dir := t.TempDir()
-	w, err := segindex.AbreWIP(dir, segmentoDeTeste, campoDeTeste, 16)
+	w, err := segindex.OpenWIP(dir, testSegment, testField, 16)
 	if err != nil {
-		t.Fatalf("AbreWIP: %v", err)
+		t.Fatalf("OpenWIP: %v", err)
 	}
 	for _, p := range []struct {
 		h   uint64
@@ -564,10 +565,10 @@ func escreveWIPDeTeste(t *testing.T) (string, []byte) {
 			t.Fatal(err)
 		}
 	}
-	if err := w.Fecha(); err != nil {
-		t.Fatalf("Fecha: %v", err)
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
 	}
-	b, err := os.ReadFile(segindex.CaminhoWIP(dir, segmentoDeTeste, campoDeTeste))
+	b, err := os.ReadFile(segindex.WIPPath(dir, testSegment, testField))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -577,7 +578,7 @@ func escreveWIPDeTeste(t *testing.T) (string, []byte) {
 // TestWIPRecusaHeaderInvalido cobre as recusas de FORMATO da abertura.
 //
 // O irmão selado tem o gate equivalente desde a Tarefa 2, e a ausência dele
-// aqui deixava sem prova a afirmação mais load-bearing do godoc de montaWIP: a
+// aqui deixava sem prova a afirmação mais load-bearing do godoc de newWIP: a
 // conferência do fieldID, que impede um arquivo renomeado de responder pelo
 // campo errado. Um Lookup sobre o campo errado devolve linhas erradas sem
 // sintoma nenhum — não é um erro que apareça, é um resultado que mente.
@@ -585,50 +586,50 @@ func escreveWIPDeTeste(t *testing.T) (string, []byte) {
 // As mutilações são CIRÚRGICAS, um guarda por caso: escrever 0xFF em tudo
 // provaria só que o guarda mais externo funciona.
 func TestWIPRecusaHeaderInvalido(t *testing.T) {
-	casos := map[string]func(b []byte){
+	cases := map[string]func(b []byte){
 		"magic trocado": func(b []byte) { copy(b[offMagicWIP:offMagicWIP+4], "XXXX") },
 		"versão desconhecida": func(b []byte) {
-			b[offVersaoNoWIP] = segindex.VersaoWIP + 1
+			b[offVersionInWIP] = segindex.WIPVersion + 1
 		},
 		"campo divergente do nome do arquivo": func(b []byte) {
-			// O nome diz campoDeTeste e o header passa a dizer outro. É o caso
+			// O nome diz testField e o header passa a dizer outro. É o caso
 			// do arquivo renomeado, e o único desfecho tolerável é a recusa.
-			binary.LittleEndian.PutUint16(b[offCampoNoWIP:offCampoNoWIP+2], uint16(campoDeTeste)+1)
+			binary.LittleEndian.PutUint16(b[offFieldInWIP:offFieldInWIP+2], uint16(testField)+1)
 		},
 		"dirSlots zero": func(b []byte) {
 			// Máscara dirSlots-1 viraria 0xFFFFFFFF e a sondagem andaria fora
 			// do diretório.
-			binary.LittleEndian.PutUint32(b[offDirSlotsNoW:offDirSlotsNoW+4], 0)
+			binary.LittleEndian.PutUint32(b[offDirSlotsInWIP:offDirSlotsInWIP+4], 0)
 		},
 		"dirSlots não é potência de dois": func(b []byte) {
-			binary.LittleEndian.PutUint32(b[offDirSlotsNoW:offDirSlotsNoW+4], 24)
+			binary.LittleEndian.PutUint32(b[offDirSlotsInWIP:offDirSlotsInWIP+4], 24)
 		},
 		"postCount maior que o arquivo": func(b []byte) {
-			binary.LittleEndian.PutUint32(b[offPostCountNoW:offPostCountNoW+4], 1<<20)
+			binary.LittleEndian.PutUint32(b[offPostCountInWIP:offPostCountInWIP+4], 1<<20)
 		},
 		"cabeça de cadeia além do postCount": func(b []byte) {
 			// O caso do .widx sobrevivente de crash: o header só ganha o
-			// postCount definitivo no Fecha, então a contagem fica atrasada e
+			// postCount definitivo no Close, então a contagem fica atrasada e
 			// as cadeias apontam além dela. Adotado assim, o próximo Set
 			// sobrescreveria postings vivas em silêncio.
-			binary.LittleEndian.PutUint32(b[offPostCountNoW:offPostCountNoW+4], 1)
+			binary.LittleEndian.PutUint32(b[offPostCountInWIP:offPostCountInWIP+4], 1)
 		},
 	}
-	for nome, estraga := range casos {
-		t.Run(nome, func(t *testing.T) {
-			dir, original := escreveWIPDeTeste(t)
+	for name, corrupt := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir, original := writeTestWIP(t)
 			b := append([]byte(nil), original...)
-			estraga(b)
-			if err := os.WriteFile(segindex.CaminhoWIP(dir, segmentoDeTeste, campoDeTeste), b, 0o644); err != nil {
+			corrupt(b)
+			if err := os.WriteFile(segindex.WIPPath(dir, testSegment, testField), b, 0o644); err != nil {
 				t.Fatal(err)
 			}
-			w, err := segindex.AbreWIP(dir, segmentoDeTeste, campoDeTeste, 0)
+			w, err := segindex.OpenWIP(dir, testSegment, testField, 0)
 			if err == nil {
-				_ = w.Fecha()
-				t.Fatal("AbreWIP aceitou o header mutilado")
+				_ = w.Close()
+				t.Fatal("OpenWIP aceitou o header mutilado")
 			}
-			if !errors.Is(err, segindex.ErrFormato) {
-				t.Errorf("erro = %v, quero ErrFormato", err)
+			if !errors.Is(err, segindex.ErrFormat) {
+				t.Errorf("erro = %v, quero ErrFormat", err)
 			}
 		})
 	}
@@ -641,38 +642,38 @@ func TestWIPRecusaHeaderInvalido(t *testing.T) {
 // linhas onde tem linhas.
 func TestListaWIPRecusaFieldIDIlegivel(t *testing.T) {
 	dir := t.TempDir()
-	intruso := filepath.Join(dir, fmt.Sprintf("segment-%08d-abcde.widx", segmentoDeTeste))
-	if err := os.WriteFile(intruso, []byte("nada"), 0o644); err != nil {
+	intruder := filepath.Join(dir, fmt.Sprintf("segment-%08d-abcde.widx", testSegment))
+	if err := os.WriteFile(intruder, []byte("nada"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := segindex.ListaWIP(dir, segmentoDeTeste); !errors.Is(err, segindex.ErrFormato) {
-		t.Errorf("ListaWIP = %v, quero ErrFormato", err)
+	if _, err := segindex.ListWIP(dir, testSegment); !errors.Is(err, segindex.ErrFormat) {
+		t.Errorf("ListWIP = %v, quero ErrFormat", err)
 	}
 }
 
 // TestUsarOWIPAposFecharPanicaEmVezDeFalharMudo trava a rede do nível de baixo.
 //
-// Region.Close zera data e size, então o gravaHeader de um segundo Fecha não
+// Region.Close zera data e size, então o writeHeader de um segundo Close não
 // daria erro: daria um pânico de bounds vindo de DENTRO do mmap, sem nome de
 // método e sem nome de arquivo — e o Lookup leria um mapeamento desmontado. O
 // pânico nomeado troca isso por uma falha que aponta para a linha certa, como
 // TestLookupAposFechaPanicaEmVezDeLerMemoriaDesmontada já faz no selado.
 func TestUsarOWIPAposFecharPanicaEmVezDeFalharMudo(t *testing.T) {
-	operacoes := map[string]func(w *segindex.WIP){
-		"Set":      func(w *segindex.WIP) { _ = w.Set(100, 1) },
-		"Lookup":   func(w *segindex.WIP) { _ = w.Lookup(100) },
-		"ParaCada": func(w *segindex.WIP) { _ = w.ParaCada(func(uint64, types.RowID) {}) },
-		"Fecha":    func(w *segindex.WIP) { _ = w.Fecha() },
+	operations := map[string]func(w *segindex.WIP){
+		"Set":     func(w *segindex.WIP) { _ = w.Set(100, 1) },
+		"Lookup":  func(w *segindex.WIP) { _ = w.Lookup(100) },
+		"ForEach": func(w *segindex.WIP) { _ = w.ForEach(func(uint64, types.RowID) {}) },
+		"Close":   func(w *segindex.WIP) { _ = w.Close() },
 	}
-	for nome, op := range operacoes {
-		t.Run(nome, func(t *testing.T) {
-			w := abreWIPDeTesteComSlots(t, 16)
-			if err := w.Fecha(); err != nil {
-				t.Fatalf("Fecha: %v", err)
+	for name, op := range operations {
+		t.Run(name, func(t *testing.T) {
+			w := openTestWIPWithSlots(t, 16)
+			if err := w.Close(); err != nil {
+				t.Fatalf("Close: %v", err)
 			}
 			defer func() {
 				if recover() == nil {
-					t.Errorf("%s após Fecha deveria entrar em pânico", nome)
+					t.Errorf("%s após Close deveria entrar em pânico", name)
 				}
 			}()
 			op(w)
@@ -683,31 +684,31 @@ func TestUsarOWIPAposFecharPanicaEmVezDeFalharMudo(t *testing.T) {
 // TestApagaDepoisDeFecharNaoDevolveErro é o encadeamento que a selagem faz:
 // emite o .sidx, fecha o .widx e o apaga.
 //
-// Apaga é a operação TERMINAL, e é a única que aceita ser chamada depois do
-// Fecha. Um Apaga que recusasse região já fechada devolveria à selagem o erro
+// Remove é a operação TERMINAL, e é a única que aceita ser chamada depois do
+// Close. Um Remove que recusasse região já fechada devolveria à selagem o erro
 // de "descritor já fechado" — que ela leria como falha de uma selagem que deu
-// certo. Chamar Apaga duas vezes também não é erro: o estado desejado é o
+// certo. Chamar Remove duas vezes também não é erro: o estado desejado é o
 // mesmo.
 func TestApagaDepoisDeFecharNaoDevolveErro(t *testing.T) {
 	dir := t.TempDir()
-	w, err := segindex.AbreWIP(dir, segmentoDeTeste, campoDeTeste, 16)
+	w, err := segindex.OpenWIP(dir, testSegment, testField, 16)
 	if err != nil {
-		t.Fatalf("AbreWIP: %v", err)
+		t.Fatalf("OpenWIP: %v", err)
 	}
 	if err := w.Set(100, 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.Fecha(); err != nil {
-		t.Fatalf("Fecha: %v", err)
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
 	}
-	if err := w.Apaga(); err != nil {
-		t.Fatalf("Apaga após Fecha: %v — a selagem leria isso como falha", err)
+	if err := w.Remove(); err != nil {
+		t.Fatalf("Remove após Close: %v — a selagem leria isso como falha", err)
 	}
-	if err := w.Apaga(); err != nil {
-		t.Errorf("Apaga repetido: %v, quero nil", err)
+	if err := w.Remove(); err != nil {
+		t.Errorf("Remove repetido: %v, quero nil", err)
 	}
-	if _, err := os.Stat(segindex.CaminhoWIP(dir, segmentoDeTeste, campoDeTeste)); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("stat após Apaga = %v, quero não-existe", err)
+	if _, err := os.Stat(segindex.WIPPath(dir, testSegment, testField)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("stat após Remove = %v, quero não-existe", err)
 	}
 }
 
@@ -718,8 +719,8 @@ func TestApagaDepoisDeFecharNaoDevolveErro(t *testing.T) {
 // A segurança vem hoje de primary.HashKey nunca devolver 0 nem 1, mas isso é
 // convenção de OUTRO pacote; o pânico é o que a transforma em invariante deste.
 func TestSetComHashZeroPanica(t *testing.T) {
-	w := abreWIPDeTesteComSlots(t, 16)
-	defer fechaWIP(t, w)
+	w := openTestWIPWithSlots(t, 16)
+	defer closeWIP(t, w)
 	defer func() {
 		if recover() == nil {
 			t.Error("Set com hash 0 deveria entrar em pânico")

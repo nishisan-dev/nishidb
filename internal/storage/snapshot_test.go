@@ -183,13 +183,13 @@ func TestSnapshotFechadoDevolveOJournalAoWriter(t *testing.T) {
 
 	snap := s.AbreSnapshot()
 	mustPut(t, s, "A", 2, statusPayload(t, s, "A", "Stop", 2), nil)
-	if got := s.vers.Entradas(); got != 1 {
-		t.Fatalf("Entradas() = %d, quero 1: a atualização sob leitor vivo não guardou a versão anterior", got)
+	if got := s.vers.Entries(); got != 1 {
+		t.Fatalf("Entries() = %d, quero 1: a atualização sob leitor vivo não guardou a versão anterior", got)
 	}
 
 	s.FechaSnapshot(snap)
-	if got := s.vers.Entradas(); got != 0 {
-		t.Errorf("Entradas() = %d, quero 0: o journal não voltou quando o último leitor fechou", got)
+	if got := s.vers.Entries(); got != 0 {
+		t.Errorf("Entries() = %d, quero 0: o journal não voltou quando o último leitor fechou", got)
 	}
 }
 
@@ -201,8 +201,8 @@ func TestSemConsultaAbertaAIngestaoNaoGuardaVersaoNenhuma(t *testing.T) {
 	mustPut(t, s, "A", 1, statusPayload(t, s, "A", "Start", 1), nil)
 	mustPut(t, s, "A", 2, statusPayload(t, s, "A", "Stop", 2), nil)
 
-	if got := s.vers.Entradas(); got != 0 {
-		t.Errorf("Entradas() = %d, quero 0: o writer guardou versão sem ninguém para lê-la", got)
+	if got := s.vers.Entries(); got != 0 {
+		t.Errorf("Entries() = %d, quero 0: o writer guardou versão sem ninguém para lê-la", got)
 	}
 }
 
@@ -234,7 +234,7 @@ func TestSegmentoComVersaoRetidaNaoEhEleitoPelaCompaction(t *testing.T) {
 
 	comLeitor := s.candidatos(0.5)
 	for _, seg := range comLeitor {
-		if s.vers.Pinado(seg) {
+		if s.vers.Pinned(seg) {
 			t.Errorf("o segmento %d guarda versão retida e foi eleito para aposentadoria", seg)
 		}
 	}
@@ -281,7 +281,7 @@ func TestCopyForwardNaoCriaVersaoENaoTravaAPropriaPassada(t *testing.T) {
 	// copy-forward versionar, se ele versionasse.
 	snap := s.AbreSnapshot()
 	defer s.FechaSnapshot(snap)
-	antes := s.vers.Entradas()
+	antes := s.vers.Entries()
 
 	res, err := s.CompactaUmaVez(context.Background(), 0.5)
 	if err != nil {
@@ -290,8 +290,8 @@ func TestCopyForwardNaoCriaVersaoENaoTravaAPropriaPassada(t *testing.T) {
 	if res.SegmentosAposentados == 0 {
 		t.Fatal("nenhum segmento aposentado: sem passada de verdade o teste não exercita o copy-forward")
 	}
-	if got := s.vers.Entradas(); got != antes {
-		t.Errorf("Entradas() = %d, quero %d: o copy-forward criou versão e vai pinar o segmento que ele mesmo aposenta", got, antes)
+	if got := s.vers.Entries(); got != antes {
+		t.Errorf("Entries() = %d, quero %d: o copy-forward criou versão e vai pinar o segmento que ele mesmo aposenta", got, antes)
 	}
 }
 

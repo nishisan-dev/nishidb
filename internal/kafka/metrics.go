@@ -23,18 +23,18 @@ import (
 // espalhar `if met != nil` por todo ponto de instrumentação, que é onde a
 // guarda esquecida vira panic em produção.
 type metricas struct {
-	eventos    *metrics.SerieContador
-	stale      *metrics.SerieContador
-	falhas     *metrics.SerieContador
-	errosKafka *metrics.SerieContador
+	eventos    *metrics.CounterSeries
+	stale      *metrics.CounterSeries
+	falhas     *metrics.CounterSeries
+	errosKafka *metrics.CounterSeries
 
-	// famInvalidos carrega o LabelMotivo (Task A5, issue #15): cada categoria
+	// famInvalidos carrega o LabelInvalidReason (Task A5, issue #15): cada categoria
 	// §101 de evento ruim tem sua própria série, e não uma soma cega — é o
 	// que permite ao painel e a um alerta nomear EVENT_TOO_LARGE em vez de
 	// enxergar só um total misturado com INVALID_JSON e as outras quatro.
-	famInvalidos *metrics.FamiliaContador
+	famInvalidos *metrics.CounterFamily
 
-	bloqueado *metrics.SerieMedidor
+	bloqueado *metrics.GaugeSeries
 	// filaViva é lida no instante do SCRAPE, e não gravada pelo laço de poll.
 	//
 	// Ela era um par de medidores que o poller atualizava depois de enfileirar
@@ -61,13 +61,13 @@ type metricas struct {
 	// temposDaFila é a integral de espera dos dois lados, lida no scrape pela
 	// mesma razão da profundidade.
 	temposDaFila   func() (time.Duration, time.Duration)
-	partAtribuidas *metrics.SerieMedidor
-	partTotal      *metrics.SerieMedidor
+	partAtribuidas *metrics.GaugeSeries
+	partTotal      *metrics.GaugeSeries
 	// slotsEncolhidos e decodeWorkers são as duas séries da esteira de
 	// decodificação: quantas vezes um slot devolveu memória, e com quantos
 	// decodificadores o dataset subiu.
-	slotsEncolhidos *metrics.SerieContador
-	decodeWorkers   *metrics.SerieMedidor
+	slotsEncolhidos *metrics.CounterSeries
+	decodeWorkers   *metrics.GaugeSeries
 
 	// posicoes é a posição APLICADA por partição — o próximo offset a
 	// consumir —, publicada pelo writer a cada evento decidido.
@@ -75,7 +75,7 @@ type metricas struct {
 	// Mapa IMUTÁVEL trocado por ponteiro atômico, e não uma família de
 	// medidores. O caminho quente só faz Store no *atomic.Int64 que já existe;
 	// nada é criado por evento. Antes, avanca chamava
-	// famOffset.Com(dataset, strconv.Itoa(p)), e Com monta a chave com
+	// famOffset.With(dataset, strconv.Itoa(p)), e Com monta a chave com
 	// strings.Join(valores, "\xff") — uma string nova A CADA EVENTO, mais o
 	// slice variádico, no caminho quente de um projeto cuja doutrina é zero
 	// alocação ali. Nenhum gate cobria esse trecho: os de alocação medem
@@ -96,7 +96,7 @@ type metricas struct {
 	marca atomic.Pointer[marcaDagua]
 
 	// aplicaSeg é a latência de um evento pelo Apply.
-	aplicaSeg *metrics.SerieHistograma
+	aplicaSeg *metrics.HistogramSeries
 
 	dataset string
 }
@@ -112,7 +112,7 @@ type marcaDagua struct {
 
 // limitesDoApply são os buckets do histograma do Apply.
 //
-// Próprios, e não os LimitesPadrao: aqueles começam em 50 µs, e a mediana
+// Próprios, e não os DefaultBuckets: aqueles começam em 50 µs, e a mediana
 // medida no piloto é da ordem de 8 µs — o primeiro bucket engoliria quase
 // tudo e o histograma não distinguiria nada abaixo dele. O topo em 1 s é o que
 // torna os stalls de segundos ATRIBUÍVEIS ao Apply, em vez de a "algo".
@@ -135,15 +135,15 @@ func registraMetricas(r *metrics.Registry, dataset string) *metricas {
 	if r == nil {
 		r = metrics.NewRegistry()
 	}
-	contador := func(nome, ajuda string) *metrics.SerieContador {
-		return r.Contador(nome, ajuda, metrics.LabelDataset).Com(dataset)
+	contador := func(nome, ajuda string) *metrics.CounterSeries {
+		return r.Counter(nome, ajuda, metrics.LabelDataset).With(dataset)
 	}
-	medidor := func(nome, ajuda string) *metrics.SerieMedidor {
-		return r.Medidor(nome, ajuda, metrics.LabelDataset).Com(dataset)
+	medidor := func(nome, ajuda string) *metrics.GaugeSeries {
+		return r.Gauge(nome, ajuda, metrics.LabelDataset).With(dataset)
 	}
-	famInvalidos := r.Contador(metrics.MetIngestInvalidTotal,
+	famInvalidos := r.Counter(metrics.MetIngestInvalidTotal,
 		"Eventos descartados por serem ruins (§101), por motivo (categoria §101; Task A5/issue #15).",
-		metrics.LabelDataset, metrics.LabelMotivo)
+		metrics.LabelDataset, metrics.LabelInvalidReason)
 	// Pré-registra as seis categorias de evento ruim em zero: sem isto, cada
 	// série só nasce no primeiro Apply que descartar um evento daquela
 	// categoria, e nishidb_ingest_invalid_total{motivo="..."} deixa de
@@ -153,7 +153,7 @@ func registraMetricas(r *metrics.Registry, dataset string) *metricas {
 	// é fixo: sempre seis séries por dataset.
 	for cat := materializer.ErrorCategory(0); cat < materializer.NumCategories; cat++ {
 		if cat.BadEvent() {
-			famInvalidos.Com(dataset, cat.String())
+			famInvalidos.With(dataset, cat.String())
 		}
 	}
 	m := &metricas{
@@ -176,9 +176,9 @@ func registraMetricas(r *metrics.Registry, dataset string) *metricas {
 		decodeWorkers: medidor(metrics.MetIngestDecodeWorkers,
 			"Decodificadores configurados para este dataset (source.kafka.consumer.decodeWorkers). É o denominador de qualquer leitura de vazão."),
 
-		aplicaSeg: r.Histograma(metrics.MetIngestApplySeconds,
+		aplicaSeg: r.Histogram(metrics.MetIngestApplySeconds,
 			"Latência de um evento pelo Apply: parse, estado, merge, Put e o Apenda do histórico. O checkpoint fica fora — ele tem histograma próprio.",
-			limitesDoApply, metrics.LabelDataset).Com(dataset),
+			limitesDoApply, metrics.LabelDataset).With(dataset),
 		dataset: dataset,
 	}
 
@@ -186,9 +186,9 @@ func registraMetricas(r *metrics.Registry, dataset string) *metricas {
 	// nasce: a fonte é instalada depois (OlhaAFila), e até lá o coletor não
 	// emite nada. Registrar cedo mantém a ordem de exposição estável entre
 	// um consumidor que subiu e um que não subiu.
-	r.Coletor(metrics.ColetorFunc(m.amostrasDaFila))
-	r.Coletor(metrics.ColetorFunc(m.amostrasDaEsteira))
-	r.Coletor(metrics.ColetorFunc(m.amostrasDaPosicao))
+	r.Register(metrics.CollectorFunc(m.amostrasDaFila))
+	r.Register(metrics.CollectorFunc(m.amostrasDaEsteira))
+	r.Register(metrics.CollectorFunc(m.amostrasDaPosicao))
 	return m
 }
 
@@ -214,22 +214,22 @@ func (m *metricas) OlhaAEsteira(bytes func() int64, ocioso func() time.Duration)
 //
 // Sem fonte instalada não emite nada: o dataset sem consumidor Kafka não tem
 // esteira, e zero ali afirmaria que existe uma e está vazia.
-func (m *metricas) amostrasDaEsteira() []metrics.Amostra {
+func (m *metricas) amostrasDaEsteira() []metrics.Sample {
 	if m.esteiraViva == nil {
 		return nil
 	}
-	rotulo := []metrics.Label{{Nome: metrics.LabelDataset, Valor: m.dataset}}
-	return []metrics.Amostra{
+	rotulo := []metrics.Label{{Name: metrics.LabelDataset, Value: m.dataset}}
+	return []metrics.Sample{
 		{
-			Familia: metrics.MetIngestDecodeArenaBytes, Nome: metrics.MetIngestDecodeArenaBytes, Tipo: metrics.TipoMedidor,
-			Valor:  float64(m.esteiraViva()),
-			Ajuda:  "Bytes que os slots da esteira de decodificação seguram entre eventos. Nenhum dos dois gates da fila conta esta memória.",
+			Family: metrics.MetIngestDecodeArenaBytes, Name: metrics.MetIngestDecodeArenaBytes, Type: metrics.TypeGauge,
+			Value:  float64(m.esteiraViva()),
+			Help:   "Bytes que os slots da esteira de decodificação seguram entre eventos. Nenhum dos dois gates da fila conta esta memória.",
 			Labels: rotulo,
 		},
 		{
-			Familia: metrics.MetKafkaWriterIdleSeconds, Nome: metrics.MetKafkaWriterIdleSeconds, Tipo: metrics.TipoContador,
-			Valor:  m.esteiraOciosa().Seconds(),
-			Ajuda:  "Segundos que o writer passou esperando trabalho na esteira. rate() alto com lag alto significa que quem não entrega é o poller ou os decodificadores.",
+			Family: metrics.MetKafkaWriterIdleSeconds, Name: metrics.MetKafkaWriterIdleSeconds, Type: metrics.TypeCounter,
+			Value:  m.esteiraOciosa().Seconds(),
+			Help:   "Segundos que o writer passou esperando trabalho na esteira. rate() alto com lag alto significa que quem não entrega é o poller ou os decodificadores.",
 			Labels: rotulo,
 		},
 	}
@@ -241,21 +241,21 @@ func (m *metricas) amostrasDaEsteira() []metrics.Amostra {
 // consumidor Kafka não tem fila, e publicar zero ali afirmaria que existe uma
 // e está vazia. É a mesma distinção entre "medi e deu zero" e "não há o que
 // medir" que o resto do produto faz.
-func (m *metricas) amostrasDaFila() []metrics.Amostra {
+func (m *metricas) amostrasDaFila() []metrics.Sample {
 	if m.filaViva == nil {
 		return nil
 	}
 	reg, bytes := m.filaViva()
-	rotulo := []metrics.Label{{Nome: metrics.LabelDataset, Valor: m.dataset}}
-	out := []metrics.Amostra{
+	rotulo := []metrics.Label{{Name: metrics.LabelDataset, Value: m.dataset}}
+	out := []metrics.Sample{
 		{
-			Familia: metrics.MetKafkaQueueDepth, Nome: metrics.MetKafkaQueueDepth, Tipo: metrics.TipoMedidor, Valor: float64(reg),
-			Ajuda:  "Registros na fila limitada poller→writer, lidos no instante do scrape.",
+			Family: metrics.MetKafkaQueueDepth, Name: metrics.MetKafkaQueueDepth, Type: metrics.TypeGauge, Value: float64(reg),
+			Help:   "Registros na fila limitada poller→writer, lidos no instante do scrape.",
 			Labels: rotulo,
 		},
 		{
-			Familia: metrics.MetKafkaQueueBytes, Nome: metrics.MetKafkaQueueBytes, Tipo: metrics.TipoMedidor, Valor: float64(bytes),
-			Ajuda:  "Bytes retidos na fila limitada (§79), lidos no instante do scrape.",
+			Family: metrics.MetKafkaQueueBytes, Name: metrics.MetKafkaQueueBytes, Type: metrics.TypeGauge, Value: float64(bytes),
+			Help:   "Bytes retidos na fila limitada (§79), lidos no instante do scrape.",
 			Labels: rotulo,
 		},
 	}
@@ -264,16 +264,16 @@ func (m *metricas) amostrasDaFila() []metrics.Amostra {
 	}
 	bloqueado, ocioso := m.temposDaFila()
 	return append(out,
-		metrics.Amostra{
-			Familia: metrics.MetKafkaPollBlockedSeconds, Nome: metrics.MetKafkaPollBlockedSeconds, Tipo: metrics.TipoContador,
-			Valor:  bloqueado.Seconds(),
-			Ajuda:  "Segundos que o poller passou esperando espaço na fila. rate() é a fração do tempo em que o writer foi o gargalo.",
+		metrics.Sample{
+			Family: metrics.MetKafkaPollBlockedSeconds, Name: metrics.MetKafkaPollBlockedSeconds, Type: metrics.TypeCounter,
+			Value:  bloqueado.Seconds(),
+			Help:   "Segundos que o poller passou esperando espaço na fila. rate() é a fração do tempo em que o writer foi o gargalo.",
 			Labels: rotulo,
 		},
-		metrics.Amostra{
-			Familia: metrics.MetKafkaDecodeIdleSeconds, Nome: metrics.MetKafkaDecodeIdleSeconds, Tipo: metrics.TipoContador,
-			Valor:  ocioso.Seconds(),
-			Ajuda:  "Segundos SOMADOS que os decodificadores passaram esperando evento na fila. Divida por nishidb_ingest_decode_workers para ler como fração.",
+		metrics.Sample{
+			Family: metrics.MetKafkaDecodeIdleSeconds, Name: metrics.MetKafkaDecodeIdleSeconds, Type: metrics.TypeCounter,
+			Value:  ocioso.Seconds(),
+			Help:   "Segundos SOMADOS que os decodificadores passaram esperando evento na fila. Divida por nishidb_ingest_decode_workers para ler como fração.",
 			Labels: rotulo,
 		},
 	)
@@ -343,34 +343,34 @@ func (m *metricas) publicaMarca(fim map[int32]int64, em time.Time) {
 // Sob falha do broker, as séries que dependem dele NÃO SAEM. Zero é medição;
 // ausência é ausência de medição, e `absent(nishidb_kafka_lag)` é um alerta
 // que o operador consegue escrever. É a mesma doutrina do coletor da fila.
-func (m *metricas) amostrasDaPosicao() []metrics.Amostra {
+func (m *metricas) amostrasDaPosicao() []metrics.Sample {
 	ps, _ := m.posicoesDoInstante()
 	if len(ps) == 0 {
 		return nil
 	}
-	out := make([]metrics.Amostra, 0, len(ps)*3)
+	out := make([]metrics.Sample, 0, len(ps)*3)
 	for _, p := range ps {
 		rot := []metrics.Label{
-			{Nome: metrics.LabelDataset, Valor: m.dataset},
-			{Nome: metrics.LabelPartition, Valor: strconv.Itoa(int(p.Particao))},
+			{Name: metrics.LabelDataset, Value: m.dataset},
+			{Name: metrics.LabelPartition, Value: strconv.Itoa(int(p.Particao))},
 		}
-		out = append(out, metrics.Amostra{
-			Familia: metrics.MetKafkaOffset, Nome: metrics.MetKafkaOffset, Tipo: metrics.TipoMedidor, Valor: float64(p.Aplicado),
-			Ajuda:  "Próximo offset a consumir, por partição: a posição APLICADA pelo writer.",
+		out = append(out, metrics.Sample{
+			Family: metrics.MetKafkaOffset, Name: metrics.MetKafkaOffset, Type: metrics.TypeGauge, Value: float64(p.Aplicado),
+			Help:   "Próximo offset a consumir, por partição: a posição APLICADA pelo writer.",
 			Labels: rot,
 		})
 		if !p.TemFim {
 			continue
 		}
 		out = append(out,
-			metrics.Amostra{
-				Familia: metrics.MetKafkaHighWatermark, Nome: metrics.MetKafkaHighWatermark, Tipo: metrics.TipoMedidor, Valor: float64(p.FimDoLog),
-				Ajuda:  "Fim do log por partição, como o broker respondeu no instante desta raspagem.",
+			metrics.Sample{
+				Family: metrics.MetKafkaHighWatermark, Name: metrics.MetKafkaHighWatermark, Type: metrics.TypeGauge, Value: float64(p.FimDoLog),
+				Help:   "Fim do log por partição, como o broker respondeu no instante desta raspagem.",
 				Labels: rot,
 			},
-			metrics.Amostra{
-				Familia: metrics.MetKafkaLag, Nome: metrics.MetKafkaLag, Tipo: metrics.TipoMedidor, Valor: float64(p.Atraso),
-				Ajuda:  "Mensagens entre a posição aplicada e o fim do log. Não depende do commit no group.",
+			metrics.Sample{
+				Family: metrics.MetKafkaLag, Name: metrics.MetKafkaLag, Type: metrics.TypeGauge, Value: float64(p.Atraso),
+				Help:   "Mensagens entre a posição aplicada e o fim do log. Não depende do commit no group.",
 				Labels: rot,
 			},
 		)
@@ -466,6 +466,6 @@ func (m *metricas) ultimoLoteEm() time.Time {
 
 // invalido devolve a série do motivo dado — o nome da categoria §101
 // (ErrorCategory.String() do materializer, ex.: "EVENT_TOO_LARGE").
-func (m *metricas) invalido(motivo string) *metrics.SerieContador {
-	return m.famInvalidos.Com(m.dataset, motivo)
+func (m *metricas) invalido(motivo string) *metrics.CounterSeries {
+	return m.famInvalidos.With(m.dataset, motivo)
 }

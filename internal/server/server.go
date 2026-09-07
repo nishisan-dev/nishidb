@@ -72,8 +72,8 @@ type dataset struct {
 	// Nil enquanto rodaIngestao não começou, e nil para sempre num dataset sem
 	// ingestão. É a resposta certa: série de watchdog num dataset que não
 	// consome afirmaria "existe um watchdog e ele nunca disparou".
-	trips    *metrics.SerieContador
-	desistiu *metrics.SerieMedidor
+	trips    *metrics.CounterSeries
+	desistiu *metrics.GaugeSeries
 	mu       sync.Mutex
 }
 
@@ -102,7 +102,7 @@ func (d *dataset) vigiaCorrente() (trips uint64, desistiu, ok bool) {
 	if d.trips == nil {
 		return 0, false, false
 	}
-	return d.trips.Valor(), d.desistiu.Valor() == 1, true
+	return d.trips.Value(), d.desistiu.Value() == 1, true
 }
 
 func (d *dataset) falha(err error) {
@@ -162,7 +162,7 @@ type Servidor struct {
 	// wrapper nunca chama recusaAutenticacao, então a série simplesmente não
 	// aparece no scrape (comportamento igual ao de qualquer família lazy
 	// deste registry).
-	authFalhas *metrics.FamiliaContador
+	authFalhas *metrics.CounterFamily
 
 	// tlsCert é o par certificado/chave já CARREGADO por
 	// validaCertificadoNaSubida (security.go), nil quando server.tls está
@@ -219,7 +219,7 @@ func Novo(cfg *config.Config, o Opcoes) (*Servidor, error) {
 	log = log.Component("server")
 
 	reg := metrics.NewRegistry()
-	metrics.RegistraProcesso(reg)
+	metrics.RegisterProcess(reg)
 
 	// server.enabled tem leitor. Aceitar a chave e ignorá-la seria repetir,
 	// dentro do próprio conserto, o defeito que a issue #1 denuncia: o
@@ -615,12 +615,12 @@ func (s *Servidor) rodaIngestao(ctx context.Context, d *dataset) {
 	// gráfico, e lacuna não se distingue de alvo fora do ar — é a mesma regra
 	// que as séries de compaction já seguem. Alarmar em "desistiu" exige que
 	// ela exista ANTES de desistir.
-	trips := s.reg.Contador(metrics.MetKafkaWatchdogTrips,
+	trips := s.reg.Counter(metrics.MetKafkaWatchdogTrips,
 		"Recriações do consumidor por falta de progresso com lag pendente.",
-		metrics.LabelDataset).Com(d.nome)
-	desistiu := s.reg.Medidor(metrics.MetKafkaWatchdogDesistiu,
+		metrics.LabelDataset).With(d.nome)
+	desistiu := s.reg.Gauge(metrics.MetKafkaWatchdogGaveUp,
 		"1 quando o watchdog esgotou as tentativas e a ingestão do dataset ficou parada.",
-		metrics.LabelDataset).Com(d.nome)
+		metrics.LabelDataset).With(d.nome)
 	desistiu.Set(0)
 	// Publicadas no dataset ANTES do laço, e é o que permite a `_meta.kafka`
 	// ler um zero LEGÍTIMO desde a primeira tentativa em vez de NULL.

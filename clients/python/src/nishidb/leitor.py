@@ -6,7 +6,7 @@ falha** — é assim que uma conexão cortada no meio deixa de ser indistinguív
 de um resultado que terminou.
 
 As linhas de dados são entregues CRUAS, sem decodificar, exatamente como o
-`Leitor.Linha()` do Go: quem quer o passthrough NDJSON não paga decodificação,
+`Reader.Line()` do Go: quem quer o passthrough NDJSON não paga decodificação,
 e quem quer valores decodifica uma vez só.
 
 E os três desfechos ficam SEPARADOS: `fim` (a consulta terminou bem), `erro`
@@ -25,7 +25,7 @@ from typing import Any, BinaryIO
 from . import erros
 
 #: A chave reservada que distingue uma linha de MOLDURA de uma de dados
-#: (`protocolo.ChaveMoldura`). O servidor RECUSA, antes do primeiro byte, a
+#: (`protocol.FrameKey`). O servidor RECUSA, antes do primeiro byte, a
 #: query cuja projeção produza uma coluna com este nome — é o que torna a
 #: discriminação por prefixo segura.
 CHAVE_MOLDURA = "nishidb"

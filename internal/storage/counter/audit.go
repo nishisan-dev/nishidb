@@ -30,7 +30,7 @@ type Relatorio struct {
 	Divergentes                        int
 	NaoInternadas                      uint64
 	// AgregadoLinhas e AgregadoTotal são os agregados do PRÓPRIO contador
-	// (Estatisticas.Linhas e .Total) em T0 — a segunda fonte para o mesmo
+	// (Stats.Linhas e .Total) em T0 — a segunda fonte para o mesmo
 	// fato que os vetores por grupo.
 	AgregadoLinhas, AgregadoTotal int64
 	// AgregadosDivergentes é 0, 1 ou 2: quantos dos dois discordam do

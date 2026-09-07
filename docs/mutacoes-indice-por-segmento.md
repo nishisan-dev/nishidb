@@ -25,12 +25,12 @@ Linha de base: `make test` verde, 43 pacotes `ok`, exit 0.
 |---|---|---|---|---|
 | M1 | o `Set` volta a varrer a cadeia antes de inserir | `segindex/wip.go` | `TestOCustoDoSetNaoAcompanhaOTamanhoDoSegmento` — **e nenhum teste de corretude** | `pior caso de 20000 acessos com n=10000, teto 4 — a cadeia voltou a crescer com o segmento` |
 | M2 | o merge k-way não descarta as cabeças empatadas | `segindex/union.go` | `TestUneMergeiaFaixasSobrepostasEDeduplica`, `TestUneNaoConcatenaQuandoAsFaixasSeTocam`, `TestUneEhEquivalenteAUniaoOrdenada`, `TestMergeIterCloseFechaTodasAsFontesInclusiveAsNaoConsumidas`, mais 3 em `internal/storage` | `drena = [10 20 30 30 40 50], quero sem repetir o 30` |
-| M3 | `disjuntas` devolve sempre `true` | `segindex/union.go` | os quatro acima mais `TestUneMergePropagaOPrimeiroErro`, mais 3 em `internal/storage` | `estratégia = "concatenacao", quero "merge"` |
+| M3 | `disjoint` devolve sempre `true` | `segindex/union.go` | os quatro acima mais `TestUneMergePropagaOPrimeiroErro`, mais 3 em `internal/storage` | `estratégia = "concatenacao", quero "merge"` |
 | M4 | o `Open` adota o `.widx` em vez de descartá-lo | `storage/indices.go` | `TestOWIPNaoEhAdotadoAtravesDeUmRestart`, `TestOsWIPsQueNaoSaoDoCorrenteSaemNaAberturaESoQuemTemDadoEntraNaFila`, `TestOWIPOrfaoDeUmSegmentoJaSeladoSaiSemMexerNoSelado`, `TestNomeIlegivelNoEspacoDoWIPSaiComoDatasetIlegivel`, `TestOWIPDeUmaExecucaoAnteriorEhDescartadoNaAbertura`, `TestKill9NoMeioDaIngestaoPreservaOEstadoConfirmado` | `Open: segindex: formato inválido: […]/segment-00000001-00001.widx não começa com "NDBW"` |
 | M4' | o `Open` adota o `.widx` **de segmento não corrente** | `storage/indices.go` | `TestOsWIPsQueNaoSaoDoCorrenteSaemNaAberturaESoQuemTemDadoEntraNaFila`, `TestOWIPOrfaoDeUmSegmentoJaSeladoSaiSemMexerNoSelado` | `Stat(segment-00009999-00001.widx) = <nil>, quero IsNotExist: o .widx de um segmento que não é o corrente tem de sair na abertura` |
 | M5 | a aposentadoria não remove o `.sidx` | `storage/indices.go` | `TestAAposentadoriaLevaOIndiceJunto`, `TestAJanelaNaoDeixaIndiceDeSegmentoAposentado`, `TestAAposentadoriaNaoDesmapeiaOIndiceSobUmaVarreduraEmVoo` | `Stat(segment-00000001.sidx) = <nil>, quero IsNotExist — o índice tem de sair com o .dat` |
 | M6 | a reconstrução emite as postings na ordem de leitura, sem ordenar | `segindex/writer.go` | `TestOEscritorAgrupaOrdenaEDeduplicaAsPostings`, `TestGoldenDoSelado`, `TestSelarPreservaExatamenteOQueOWIPRespondia`, `TestOSeladoDevolveOQueOEscritorRecebeu`, mais 8 em `internal/storage` incluindo `TestConstruirDoSegmentoDaOMesmoArquivoQueSelarOWIP` | `secoes[0].fieldID = 7, quero 3 (campo 3 antes do 7)` |
-| M7 | crc divergente devolve erro em vez de degradar | `segindex/sealed.go` | `TestCRCDivergenteNaoDerrubaAConsulta`, `TestOCrcDivergenteContaUmDegrauEEnumeraSempre`, `TestOGaugeDeEstadosEhCegoAIndicePodre`, `TestStatsEMetricsLeemAMesmaEstrutura` | `AbreSelado não deve falhar por crc: segindex: crc divergente: […] (calculado c11ea0ba, gravado 3e1ea0ba)` |
+| M7 | crc divergente devolve erro em vez de degradar | `segindex/sealed.go` | `TestCRCDivergenteNaoDerrubaAConsulta`, `TestOCrcDivergenteContaUmDegrauEEnumeraSempre`, `TestOGaugeDeEstadosEhCegoAIndicePodre`, `TestStatsEMetricsLeemAMesmaEstrutura` | `OpenSealed não deve falhar por crc: segindex: crc divergente: […] (calculado c11ea0ba, gravado 3e1ea0ba)` |
 
 **Nenhuma das sete escapou.** Uma reprovou **de mais**, e está corrigida
 (seção 2). A M5 — que o plano marcava como a mais provável de escapar, porque a
@@ -85,25 +85,25 @@ O que a rodada mostrou, medido:
 `TestParaCadaVarreTodasAsPostingsUmaVez` ficou vermelho sob a M1:
 
 ```
-wip_test.go:311: ParaCada visitou 5 postings, quero 6
-wip_test.go:319: ParaCada viu (h=100,row=10) 1 vezes, quero 2
+wip_test.go:311: ForEach visitou 5 postings, quero 6
+wip_test.go:319: ForEach viu (h=100,row=10) 1 vezes, quero 2
 ```
 
 Ele comparava o total visitado contra `len(postadas)` — a lista que o **teste**
-gravou. Isso amarra o contrato de `ParaCada` ("visita cada posting do array uma
+gravou. Isso amarra o contrato de `ForEach` ("visita cada posting do array uma
 vez") à política de escrita do `Set` ("o array é append-only, dois Set com o mesmo
 par deixam duas entradas"), que são coisas diferentes: a primeira é observável
 pela selagem, a segunda não é observável por consumidor nenhum, porque o
-`Escritor` deduplica de qualquer forma.
+`Writer` deduplica de qualquer forma.
 
 O oráculo passou a ser `w.Postings()` — o que o **WIP** diz que tem no array. O
 teste continua pegando o defeito que lhe cabe, e mais apertado, porque agora
 compara contra a verdade da estrutura em vez da expectativa do autor. Conferido
-por mutação em `ParaCada` (parar a cadeia um elo antes):
+por mutação em `ForEach` (parar a cadeia um elo antes):
 
 ```
-wip_test.go:337: ParaCada visitou 3 postings e o array tem 6
-wip_test.go:348: ParaCada não visitou (h=300,row=42)
+wip_test.go:337: ForEach visitou 3 postings e o array tem 6
+wip_test.go:348: ForEach não visitou (h=300,row=42)
 ```
 
 Com o conserto, a M1 reaplicada deixa o pacote inteiro verde fora dos gates de
@@ -134,9 +134,9 @@ que espalhadas pelos relatórios.
 
 | Mutação | Reprovou | Trecho |
 |---|---|---|
-| desligar o dedup do `Escritor` | `TestOEscritorAgrupaOrdenaEDeduplicaAsPostings` | `valor 100: count = 4, quero 3` |
+| desligar o dedup do `Writer` | `TestOEscritorAgrupaOrdenaEDeduplicaAsPostings` | `valor 100: count = 4, quero 3` |
 | inverter a prioridade do sort (hash antes de campo) | idem | `secoes[0].fieldID = 7, quero 3` |
-| `iterSelado.Next` copia o delta antes de decodificar | `TestIterarSeladoNaoAlocaPorLinha` | `AllocsPerRun = 1000, quero 0` — uma alocação por linha |
+| `sealedIter.Next` copia o delta antes de decodificar | `TestIterarSeladoNaoAlocaPorLinha` | `AllocsPerRun = 1000, quero 0` — uma alocação por linha |
 | neutralizar os dois guardas de tabela de seções | `TestSeladoRecusaTabelaDeSecoesForaDeOrdem`, `TestPostingsForaDaFaixaDegradamEmVezDePanicar` | `panic: slice bounds out of range [:4100] with capacity 120` |
 | o `Set` varre a cadeia (M1, forma canônica) | gate de custo, e só ele | `pior caso de 10001 acessos com n=10000, teto 4` |
 | a mesma varredura por `AtomicLoad64`, escapando do contador | `TestOCaminhoDeEscritaLeOMapeamentoSoPeloContador` | `Set lê o mapeamento por AtomicLoad64 direto […] Use w.le.` |
@@ -145,8 +145,8 @@ que espalhadas pelos relatórios.
 | tirar o `IsSorted`/`Sort` do `Lookup` | ordem estrita | `Lookup = [50 10 30 10 40], quero [10 30 40 50]` |
 | materialização exata trocada por `append` | `TestLookupNoWIPAlocaExatamenteUmaVez` | `AllocsPerRun(Lookup) = 8, quero exatamente 1` |
 | o rehash não desloca as postings | `TestOWIPCresceSemPerderPosting` | `Lookup(3) = [0], quero [1] — o crescimento perdeu a posting` |
-| merge sem dedup (M2) | as três de `Une` | `drena = [10 20 30 30 40 50]` |
-| concatenar sempre (M3) | as três de `Une` | `drena = [10 30 50 20 30 40]` |
+| merge sem dedup (M2) | as três de `Union` | `drena = [10 20 30 30 40 50]` |
+| concatenar sempre (M3) | as três de `Union` | `drena = [10 30 50 20 30 40]` |
 | `concatIter.Close` só fecha `fontes[idx:]` | `TestConcatIterCloseFechaTodasAsFontesInclusiveAsNaoConsumidas` | `f1 (já esgotada, cursor passou dela) não foi fechada` |
 | `mergeIter.Close` só fecha o que o heap guarda | `TestMergeIterCloseFechaTodasAsFontesInclusiveAsNaoConsumidas` | `f2 (já esgotou e saiu do heap) não foi fechada` |
 | o descarte da fonte vazia não fecha | `TestUneFechaAsFontesVaziasDescartadasAntesDeCombinar` | `a fonte vazia não foi fechada no descarte` |
@@ -161,7 +161,7 @@ que espalhadas pelos relatórios.
 | desligar a guarda do segmento corrente | `TestConstruirOIndiceDoSegmentoCorrenteEhRecusado` | `ConstroiIndiceDoSegmento(corrente) = <nil>, quero ErrInvalidArgument` |
 | aceitar subconjunto de campos na reconstrução | à época, o teste de recusa; hoje `TestConstruirComCampoNaoIndexadoEhRecusado` e `TestReconstruirSoOsCamposQueFaltamPreservaOsQueJaEstavam` | `= <nil>, quero ErrInvalidArgument` |
 | `aplicaIndiceSets` pula o campo não alterado | `TestUpdateQueCruzaSegmentoLevaAPostingDoCampoInalterado`, `TestAPostingDoCampoInalteradoSobreviveASelagemEAoRestart` | `a posting do campo inalterado não migrou com o record` |
-| `Fecha` desmonta o mapeamento incondicionalmente | `TestAAposentadoriaNaoDesmapeiaOIndiceSobUmaVarreduraEmVoo` | `fatal error: fault [signal SIGSEGV]` em `iterSelado.Next → leDelta` |
+| `Close` desmonta o mapeamento incondicionalmente | `TestAAposentadoriaNaoDesmapeiaOIndiceSobUmaVarreduraEmVoo` | `fatal error: fault [signal SIGSEGV]` em `sealedIter.Next → readDelta` |
 | o pread não trata `ErrNotExist` do segmento aposentado | `TestSegmentoAposentadoEntreAListagemEOPreadViraFonteVazia` | consulta abortada |
 | `limparIndicesGlobaisLegados` inerte | `TestDatasetLegadoAbreEOsIndicesGlobaisSaemDoDisco` | `IndexBytes 21.037.056 ≥ 20.996.096`, os dois diretórios sobrevivem |
 | `decode` do manifest só aceita v3 | idem | `o manifest legado montado à mão não é legível: version desconhecida 1` |
@@ -212,7 +212,7 @@ que espalhadas pelos relatórios.
 | `reconstrucao_ativa` ecoa `segCorrentes` | `TestOMedidorDaReconstrucaoNaoEhOContadorDeCorrentes` | `= true num Store cujo laço nunca subiu, com corrente = 1` |
 | `reconstrucao_ativa` **e** `RebuildRunning` ecoam `Estados.Corrente` (os dois lados) | `TestASerieDaReconstrucaoDesceQuandoOLacoMorre` | `nishidb_index_reconstrucao_ativa = 1 com o laço MORTO e corrente = 1` |
 | a `Ajuda` volta a prometer taxa | `TestAAjudaDoContadorDeCrcNaoApontaSerieQueNaoDiscrimina` | `ainda afirma que a falha não é memorizada` |
-| `Familia` vazia de volta | `TestOsCabecalhosSaemNomeadosParaCadaFamilia` | `cabeçalho com nome de métrica VAZIO: "# HELP  Linhas gravadas…"` |
+| `Family` vazia de volta | `TestOsCabecalhosSaemNomeadosParaCadaFamilia` | `cabeçalho com nome de métrica VAZIO: "# HELP  Linhas gravadas…"` |
 | citação morta plantada em `indices_metrics.go` | `TestAsCitacoesDeTesteNosComentariosExistem` | nomeia arquivo e nome |
 
 ---
@@ -231,7 +231,7 @@ deveria ter feito.
 
 *O oráculo é produzido pelo mesmo código que ele deveria conferir.*
 
-O golden do `.sidx` foi gerado pelo próprio `Escritor` que ele verifica: ele trava
+O golden do `.sidx` foi gerado pelo próprio `Writer` que ele verifica: ele trava
 desvio futuro, mas não prova acerto nenhum — se o escritor errasse a aritmética de
 offsets, o golden gravaria o erro e passaria para sempre. O remédio foi um
 decodificador local no teste, que **segue** os offsets gravados em vez de
@@ -289,7 +289,7 @@ defeito, que pegou a inversão de ordem de publicação que duas revisões não 
 
 *O teste para no ponto em que o defeito ainda não é observável.*
 
-Os dois testes de `Close` do `Une` passavam com o bug simulado. No `concatIter`,
+Os dois testes de `Close` do `Union` passavam com o bug simulado. No `concatIter`,
 interromper depois de um único `Next()` deixa `idx == 0`, então "fechar só
 `fontes[idx:]`" ainda fecha tudo. No `mergeIter`, depois de um `Next()` as duas
 fontes continuam **dentro** do heap, então "fechar só o heap" também fecha tudo. O
@@ -493,7 +493,7 @@ argumento estrutural de que ela é por segmento, não por dataset.
 
 ### O gate de AST protege dois nomes contra um seletor
 
-`TestOCaminhoDeEscritaLeOMapeamentoSoPeloContador` inspeciona `Set` e `sondaOuCria`
+`TestOCaminhoDeEscritaLeOMapeamentoSoPeloContador` inspeciona `Set` e `probeOrCreate`
 procurando `AtomicLoad64`. A mesma varredura movida para um auxiliar novo, ou feita
 por `WithBytes`, escaparia. É limite honesto e documentado, não defeito: a forma
 canônica da regressão reprova por dois caminhos independentes (o gate de custo e
@@ -523,7 +523,7 @@ triagem, não item para descartar.
   escapou**;
 - **uma** reprovou de mais — `TestParaCadaVarreTodasAsPostingsUmaVez` amarrava o
   contrato da varredura à política de escrita — e está corrigida, com a mutação de
-  `ParaCada` como critério de aceitação;
+  `ForEach` como critério de aceitação;
 - a M1 reprova no gate de custo e em nenhum teste de corretude, que é o sinal que
   a §6.5 manda procurar;
 - o corpus do ciclo tem mais de setenta mutações, e **vinte** delas encontraram

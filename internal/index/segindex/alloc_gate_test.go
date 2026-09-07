@@ -19,7 +19,7 @@ import (
 // mmap.Region.Grow, que chama unix.Mmap, que devolve uma slice nova e registra
 // o mapeamento — alocação que não está sob controle deste pacote.
 //
-// É por isso que abreWIPDeTeste abre folgado (4.096 slots, capacidade de
+// É por isso que openTestWIP abre folgado (4.096 slots, capacidade de
 // postings de sobra): as 1.001 chamadas medidas aqui não crescem nada, e o zero
 // que sai é o custo do Set em si. Um WIP apertado mediria o mmap junto e o
 // número diria outra coisa.
@@ -30,15 +30,15 @@ import (
 // segmento — antes de tratar como regressão. O crescimento tem gate próprio, de
 // corretude: TestOWIPCresceSemPerderPosting.
 func TestSetNoWIPNaoAloca(t *testing.T) {
-	w := abreWIPDeTeste(t)
-	defer fechaWIP(t, w)
+	w := openTestWIP(t)
+	defer closeWIP(t, w)
 	var i int
-	media := testing.AllocsPerRun(1000, func() {
+	avg := testing.AllocsPerRun(1000, func() {
 		i++
 		_ = w.Set(uint64(i%997)+2, types.RowID(i))
 	})
-	if media != 0 {
-		t.Errorf("AllocsPerRun(Set) = %v, quero 0", media)
+	if avg != 0 {
+		t.Errorf("AllocsPerRun(Set) = %v, quero 0", avg)
 	}
 }
 
@@ -48,16 +48,16 @@ func TestSetNoWIPNaoAloca(t *testing.T) {
 // contagem errada). Os dois desvios são bugs diferentes, e um teto de "<= 1"
 // esconderia o primeiro.
 func TestLookupNoWIPAlocaExatamenteUmaVez(t *testing.T) {
-	w := abreWIPDeTeste(t)
-	defer fechaWIP(t, w)
+	w := openTestWIP(t)
+	defer closeWIP(t, w)
 	for i := range 100 {
 		if err := w.Set(100, types.RowID(i)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	media := testing.AllocsPerRun(1000, func() { _ = w.Lookup(100) })
-	if media != 1 {
-		t.Errorf("AllocsPerRun(Lookup) = %v, quero exatamente 1", media)
+	avg := testing.AllocsPerRun(1000, func() { _ = w.Lookup(100) })
+	if avg != 1 {
+		t.Errorf("AllocsPerRun(Lookup) = %v, quero exatamente 1", avg)
 	}
 }
 
@@ -67,32 +67,32 @@ func TestLookupNoWIPAlocaExatamenteUmaVez(t *testing.T) {
 // custo de abertura e não de varredura — medi-los juntos esconderia justamente
 // a regressão que este gate existe para pegar.
 func TestIterarSeladoNaoAlocaPorLinha(t *testing.T) {
-	s := abreSeladoComNPostings(t, 1000)
+	s := openSealedWithNPostings(t, 1000)
 	defer func() {
-		if err := s.Fecha(); err != nil {
-			t.Errorf("Fecha: %v", err)
+		if err := s.Close(); err != nil {
+			t.Errorf("Close: %v", err)
 		}
 	}()
 	it, ok := s.Lookup(7, 100)
 	if !ok {
 		t.Fatal("Lookup não encontrou")
 	}
-	// visitadas existe para que o gate não possa passar VAZIO: um Lookup que
+	// visited existe para que o gate não possa passar VAZIO: um Lookup que
 	// devolvesse uma fonte de zero linhas mediria um laço que não roda, e
 	// "AllocsPerRun = 0" viraria carimbo (débito 53). A contagem é lida depois
 	// da medida — incrementá-la não aloca.
-	visitadas := 0
-	media := testing.AllocsPerRun(100, func() {
+	visited := 0
+	avg := testing.AllocsPerRun(100, func() {
 		for it.Next() {
 			_ = it.RowID()
-			visitadas++
+			visited++
 		}
-		it.(interface{ Rebobina() }).Rebobina()
+		it.(interface{ Rewind() }).Rewind()
 	})
-	if media != 0 {
-		t.Errorf("AllocsPerRun = %v, quero 0", media)
+	if avg != 0 {
+		t.Errorf("AllocsPerRun = %v, quero 0", avg)
 	}
-	if visitadas < 1000 {
-		t.Errorf("a varredura medida visitou %d linhas ao todo — o gate mediu um laço vazio", visitadas)
+	if visited < 1000 {
+		t.Errorf("a varredura medida visitou %d linhas ao todo — o gate mediu um laço vazio", visited)
 	}
 }

@@ -377,7 +377,7 @@ func (s *Store) aposentaDoHistorico(seg uint32, novaMarca *uint64) error {
 	// falha da passada: é degradação de espaço, e o dataset acabou de devolver
 	// um segmento inteiro. Filesystem sem punch-hole entra aqui uma vez por
 	// aposentadoria e o aviso fica no log.
-	if err := s.locs.LiberaAte(s.RowIDBase()); err != nil {
+	if err := s.locs.ReleaseBelow(s.RowIDBase()); err != nil {
 		if errors.Is(err, mmap.ErrFallocateUnsupported) {
 			s.opts.Log.Warn("retencao.sem_punch_hole",
 				"o filesystem não libera blocos: o prefixo morto do locations.idx continua alocado",

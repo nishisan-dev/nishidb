@@ -16,11 +16,11 @@ import (
 // reprovado exatamente este caso.
 func TestCadeiaLongaDeAndEhLegal(t *testing.T) {
 	for _, n := range []int{130, 500} {
-		termos := make([]string, n)
-		for i := range termos {
-			termos[i] = "a = 1"
+		terms := make([]string, n)
+		for i := range terms {
+			terms[i] = "a = 1"
 		}
-		sql := "SELECT a FROM x WHERE " + strings.Join(termos, " AND ")
+		sql := "SELECT a FROM x WHERE " + strings.Join(terms, " AND ")
 
 		st, err := parser.Parse(sql)
 		if err != nil {
@@ -28,20 +28,20 @@ func TestCadeiaLongaDeAndEhLegal(t *testing.T) {
 		}
 		// A árvore é left-leaning: altura n-1, espinha à esquerda. É o formato
 		// que o flatten do planner assume.
-		altura, e := 0, st.Where
+		height, e := 0, st.Where
 		for {
 			l, ok := e.(*parser.LogicalExpr)
 			if !ok {
 				break
 			}
-			if _, folha := l.Right.(*parser.Comparison); !folha {
+			if _, isLeaf := l.Right.(*parser.Comparison); !isLeaf {
 				t.Fatalf("%d termos: filho direito = %T, want folha", n, l.Right)
 			}
-			altura++
+			height++
 			e = l.Left
 		}
-		if altura != n-1 {
-			t.Errorf("%d termos: altura = %d, want %d", n, altura, n-1)
+		if height != n-1 {
+			t.Errorf("%d termos: altura = %d, want %d", n, height, n-1)
 		}
 	}
 }

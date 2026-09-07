@@ -524,7 +524,7 @@ trata como `ErrDatasetCorrupt`.
 mantiver o inode aberto, os blocos seguem alocados. E o cache de descritores do
 `segment.Reader` não tem despejo — o descritor que a própria varredura abriu
 para ler o segmento ficaria aberto pela vida do processo. Por isso a
-aposentadoria **fecha o descritor** (`Reader.FechaSegmento`) antes do unlink.
+aposentadoria **fecha o descritor** (`Reader.CloseSegment`) antes do unlink.
 Antes disso, a compaction devolvia disco ao *listing* do diretório e nada ao
 dispositivo, e os três instrumentos do projeto — `dirBytes`, `discoDosSegmentos`
 e o `Stats.StorageBytes` — somam o listing e não viam a diferença (débito 78, e
@@ -1450,7 +1450,7 @@ versão de record para tornar impossível a única falha que arruinaria a featur
 O índice `prazos.idx` (rowId→duração) é DERIVADO do campo, como o de escritas:
 o replay do tail o reconstrói pelo mesmo `applyRecord`. Zero nele significa
 **desconhecido**, e por isso a entidade imortal — a que casou com uma regra
-`never` — é gravada com um sentinela (`rowindex.PrazoImortal`). Sem essa
+`never` — é gravada com um sentinela (`rowindex.ImmortalTTL`). Sem essa
 distinção, ela herdaria o prazo da regra de fundo e morreria sozinha.
 
 **A visibilidade não depende do coletor.** Os três pontos de liveness checam o
@@ -2095,9 +2095,9 @@ coletor só pode alimentá-las percorrendo essas listas, e
 `TestOsLabelsDeIndiceSaoConjuntosFechados` confere as duas coisas — o conjunto
 que sai na porta e, pelo `go/ast`, a origem do valor no código.
 
-**Cabeçalho por família.** Toda `metrics.Amostra` precisa preencher `Familia`,
-e não só `Nome`. O `WriteTo` agrupa `# HELP`/`# TYPE` por aquele campo, então
-amostras com `Familia` vazia caem num grupo só: o par sai uma vez, **com o nome
+**Cabeçalho por família.** Toda `metrics.Sample` precisa preencher `Family`,
+e não só `Name`. O `WriteTo` agrupa `# HELP`/`# TYPE` por aquele campo, então
+amostras com `Family` vazia caem num grupo só: o par sai uma vez, **com o nome
 do metric vazio**, e as demais famílias chegam ao operador sem tipo e sem ajuda.
 Nada disso muda um número — foi por isso que o bloco `nishidb_history_*`
 conviveu com a omissão —, mas sem `# TYPE` o `rate()` não se aplica, e metade do
@@ -2155,7 +2155,7 @@ que houve mudança.
 
 **Três peças por contador**, em `indexes/contadores/<nome>/`. O vetor denso
 `grupos.idx` guarda por rowId `bit31 = condição valia | bits 0..30 = id do
-grupo` — quatro bytes por linha (`rowindex.Denso32`, o primeiro vetor de 32
+grupo` — quatro bytes por linha (`rowindex.Dense32`, o primeiro vetor de 32
 bits do produto: 32 MB por 8M linhas, e o contador pode existir várias vezes
 sobre o mesmo dataset). O dicionário `grupos.dict` interna a chave composta do
 grupo → id, append-only com CRC por registro e **fsync antes de devolver o id**

@@ -116,7 +116,7 @@ func (s *Store) EstatisticasDeIndice() EstatisticasDeIndice {
 // Blocos, e não tamanho aparente, pela mesma razão do blocosDoDiretorio: a série
 // fala de DISCO, e é em bloco que o disco é cobrado.
 func (s *Store) bytesDoIndicePorSegmento() int64 {
-	return blocosDoDiretorioSe(s.dirDeDados(), segindex.EhArquivoDeIndice)
+	return blocosDoDiretorioSe(s.dirDeDados(), segindex.IsIndexFile)
 }
 
 // publicaEstadosDeSegmento instala o retrato que a passada de pendência acabou

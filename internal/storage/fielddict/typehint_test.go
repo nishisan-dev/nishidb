@@ -24,7 +24,7 @@ func TestTypeHintPersisteEntreAberturas(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := mustCreate(t, d, "X-Attr")
-	outro := mustCreate(t, d, "Y-Attr")
+	other := mustCreate(t, d, "Y-Attr")
 	if err := d.SetTypeHint(id, types.TypeInt64); err != nil {
 		t.Fatal(err)
 	}
@@ -32,27 +32,27 @@ func TestTypeHintPersisteEntreAberturas(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reaberto, err := Open(path)
+	reopened, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reaberto.Close()
+	defer reopened.Close()
 
-	got, ok := reaberto.TypeHint(id)
+	got, ok := reopened.TypeHint(id)
 	if !ok || got != types.TypeInt64 {
 		t.Errorf("TypeHint após reabrir = %v/%v, want int64/true", got, ok)
 	}
 	// Campo sem hint continua sem hint — "não fixado" precisa ser
 	// distinguível de "fixado como algo".
-	if got, ok := reaberto.TypeHint(outro); ok {
+	if got, ok := reopened.TypeHint(other); ok {
 		t.Errorf("campo sem hint devolveu %v/true", got)
 	}
 	// Os nomes seguem íntegros: o registro de hint não pode confundir o scan.
-	if n, ok := reaberto.Name(id); !ok || n != "X-Attr" {
+	if n, ok := reopened.Name(id); !ok || n != "X-Attr" {
 		t.Errorf("Name(%d) = %q/%v", id, n, ok)
 	}
-	if reaberto.Len() != 2 {
-		t.Errorf("Len = %d, want 2", reaberto.Len())
+	if reopened.Len() != 2 {
+		t.Errorf("Len = %d, want 2", reopened.Len())
 	}
 }
 
@@ -63,15 +63,15 @@ func TestSetTypeHintIdempotente(t *testing.T) {
 	if err := d.SetTypeHint(id, types.TypeString); err != nil {
 		t.Fatal(err)
 	}
-	tamanho := d.SizeBytes()
+	size := d.SizeBytes()
 	for i := 0; i < 3; i++ {
 		if err := d.SetTypeHint(id, types.TypeString); err != nil {
 			t.Fatalf("repetição %d: %v", i, err)
 		}
 	}
-	if d.SizeBytes() != tamanho {
+	if d.SizeBytes() != size {
 		t.Errorf("SizeBytes = %d após repetições, want %d (nada deveria ser escrito)",
-			d.SizeBytes(), tamanho)
+			d.SizeBytes(), size)
 	}
 }
 
@@ -89,9 +89,9 @@ func TestSetTypeHintConflito(t *testing.T) {
 	}
 	// A mensagem precisa dizer QUAL campo e QUAIS tipos: é o que o operador
 	// lê no log de ingestão para descobrir que a fonte mudou de formato.
-	for _, trecho := range []string{"Connect-Info", "int64", "string"} {
-		if !strings.Contains(err.Error(), trecho) {
-			t.Errorf("mensagem = %q, want conter %q", err, trecho)
+	for _, snippet := range []string{"Connect-Info", "int64", "string"} {
+		if !strings.Contains(err.Error(), snippet) {
+			t.Errorf("mensagem = %q, want conter %q", err, snippet)
 		}
 	}
 	// O hint anterior PERMANECE: a tentativa falha, não corrompe.
@@ -104,8 +104,8 @@ func TestSetTypeHintRecusaNullEIdInvalido(t *testing.T) {
 	d, _ := openDict(t)
 	id := mustCreate(t, d, "X")
 
-	casos := []struct {
-		nome string
+	cases := []struct {
+		name string
 		id   types.FieldID
 		t    types.FieldType
 		msg  string
@@ -114,8 +114,8 @@ func TestSetTypeHintRecusaNullEIdInvalido(t *testing.T) {
 		{"id zero", 0, types.TypeInt64, "inexistente"},
 		{"id além do fim", types.FieldID(d.Len() + 5), types.TypeInt64, "inexistente"},
 	}
-	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			err := d.SetTypeHint(tc.id, tc.t)
 			if err == nil {
 				t.Fatal("erro esperado")
@@ -135,15 +135,15 @@ func TestTypeHintFsyncAntesDeRetornar(t *testing.T) {
 	id := mustCreate(t, d, "X")
 
 	rec := &orderRecorder{}
-	// visívelNoSync captura se o hint JÁ estava publicado em memória no
+	// visibleAtSync captura se o hint JÁ estava publicado em memória no
 	// instante do fsync. Precisa ser false: publicar antes de durar deixaria
 	// uma janela em que o writer aceita records referenciando um tipo que uma
 	// reabertura não conhece — e essa inversão não aparece na ordem
 	// WriteAt/Sync, que continuaria idêntica.
-	var visívelNoSync bool
+	var visibleAtSync bool
 	d.WrapFileForTest(func(f dictFile) dictFile {
-		rec.inner = &syncProbe{inner: f, antes: func() {
-			_, visívelNoSync = d.TypeHint(id)
+		rec.inner = &syncProbe{inner: f, beforeSync: func() {
+			_, visibleAtSync = d.TypeHint(id)
 		}}
 		return rec
 	})
@@ -153,7 +153,7 @@ func TestTypeHintFsyncAntesDeRetornar(t *testing.T) {
 	if want := []string{"WriteAt", "Sync"}; !slices.Equal(rec.calls, want) {
 		t.Fatalf("ordem de durabilidade = %v, want %v", rec.calls, want)
 	}
-	if visívelNoSync {
+	if visibleAtSync {
 		t.Error("o hint foi publicado em memória ANTES do fsync: um crash na janela deixaria " +
 			"records duráveis apontando para um tipo que o dicionário não conhece")
 	}
@@ -175,13 +175,13 @@ func TestTypeHintFsyncAntesDeRetornar(t *testing.T) {
 // memória no meio da operação — a ordem WriteAt/Sync sozinha não distingue
 // "publicou antes" de "publicou depois".
 type syncProbe struct {
-	inner dictFile
-	antes func()
+	inner      dictFile
+	beforeSync func()
 }
 
 func (p *syncProbe) WriteAt(b []byte, off int64) (int, error) { return p.inner.WriteAt(b, off) }
 func (p *syncProbe) Sync() error {
-	p.antes()
+	p.beforeSync()
 	return p.inner.Sync()
 }
 func (p *syncProbe) Truncate(size int64) error { return p.inner.Truncate(size) }
@@ -198,8 +198,8 @@ func TestTailRasgadoDeHintNaoDerrubaCampos(t *testing.T) {
 		t.Fatal(err)
 	}
 	var ids []types.FieldID
-	for _, nome := range []string{"a", "b", "c", "d"} {
-		ids = append(ids, mustCreate(t, d, nome))
+	for _, name := range []string{"a", "b", "c", "d"} {
+		ids = append(ids, mustCreate(t, d, name))
 	}
 	if err := d.SetTypeHint(ids[0], types.TypeInt64); err != nil {
 		t.Fatal(err)
@@ -207,7 +207,7 @@ func TestTailRasgadoDeHintNaoDerrubaCampos(t *testing.T) {
 	if err := d.SetTypeHint(ids[1], types.TypeString); err != nil {
 		t.Fatal(err)
 	}
-	tamanhoBom := d.SizeBytes()
+	validSize := d.SizeBytes()
 	if err := d.SetTypeHint(ids[2], types.TypeBool); err != nil {
 		t.Fatal(err)
 	}
@@ -216,38 +216,38 @@ func TestTailRasgadoDeHintNaoDerrubaCampos(t *testing.T) {
 	}
 
 	// Rasga o ÚLTIMO registro de hint pela metade.
-	if err := os.Truncate(path, tamanhoBom+hintRecordSize/2); err != nil {
+	if err := os.Truncate(path, validSize+hintRecordSize/2); err != nil {
 		t.Fatal(err)
 	}
 
-	reaberto, err := Open(path)
+	reopened, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reaberto.Close()
+	defer reopened.Close()
 
 	// Todos os campos sobrevivem — é o ponto.
-	if reaberto.Len() != 4 {
-		t.Fatalf("Len = %d após tail rasgado, want 4 (nenhum campo pode se perder)", reaberto.Len())
+	if reopened.Len() != 4 {
+		t.Fatalf("Len = %d após tail rasgado, want 4 (nenhum campo pode se perder)", reopened.Len())
 	}
-	for i, nome := range []string{"a", "b", "c", "d"} {
-		if n, ok := reaberto.Name(ids[i]); !ok || n != nome {
-			t.Errorf("Name(%d) = %q/%v, want %q", ids[i], n, ok, nome)
+	for i, name := range []string{"a", "b", "c", "d"} {
+		if n, ok := reopened.Name(ids[i]); !ok || n != name {
+			t.Errorf("Name(%d) = %q/%v, want %q", ids[i], n, ok, name)
 		}
 	}
 	// Os hints anteriores ao rasgo sobrevivem; o rasgado se perde e o campo
 	// volta a fixar o tipo na próxima observação.
-	if got, ok := reaberto.TypeHint(ids[0]); !ok || got != types.TypeInt64 {
+	if got, ok := reopened.TypeHint(ids[0]); !ok || got != types.TypeInt64 {
 		t.Errorf("hint de a = %v/%v, want int64/true", got, ok)
 	}
-	if got, ok := reaberto.TypeHint(ids[1]); !ok || got != types.TypeString {
+	if got, ok := reopened.TypeHint(ids[1]); !ok || got != types.TypeString {
 		t.Errorf("hint de b = %v/%v, want string/true", got, ok)
 	}
-	if _, ok := reaberto.TypeHint(ids[2]); ok {
+	if _, ok := reopened.TypeHint(ids[2]); ok {
 		t.Error("hint rasgado sobreviveu: o registro não foi truncado")
 	}
 	// E o arquivo volta a aceitar escrita a partir do ponto truncado.
-	if err := reaberto.SetTypeHint(ids[2], types.TypeBool); err != nil {
+	if err := reopened.SetTypeHint(ids[2], types.TypeBool); err != nil {
 		t.Fatalf("dicionário inutilizável após truncate: %v", err)
 	}
 }
@@ -265,7 +265,7 @@ func TestUltimoHintVence(t *testing.T) {
 	if err := d.SetTypeHint(id, types.TypeInt64); err != nil {
 		t.Fatal(err)
 	}
-	tamanho := d.SizeBytes()
+	size := d.SizeBytes()
 	if err := d.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -280,17 +280,17 @@ func TestUltimoHintVence(t *testing.T) {
 	binary.LittleEndian.PutUint16(rec[2:4], uint16(id))
 	rec[4] = byte(types.TypeString)
 	binary.LittleEndian.PutUint32(rec[5:9], crc32.Checksum(rec[:5], castagnoli))
-	if _, err := f.WriteAt(rec[:], tamanho); err != nil {
+	if _, err := f.WriteAt(rec[:], size); err != nil {
 		t.Fatal(err)
 	}
 	f.Close()
 
-	reaberto, err := Open(path)
+	reopened, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reaberto.Close()
-	if got, ok := reaberto.TypeHint(id); !ok || got != types.TypeString {
+	defer reopened.Close()
+	if got, ok := reopened.TypeHint(id); !ok || got != types.TypeString {
 		t.Errorf("TypeHint = %v/%v, want string/true (o último registro vence)", got, ok)
 	}
 }
@@ -324,9 +324,9 @@ func TestVersaoV1Recusada(t *testing.T) {
 	}
 	// Quem lê a mensagem é um operador com o processo caído: sem o arquivo,
 	// as duas versões e a saída, ele não tem o que fazer com a informação.
-	for _, quer := range []string{path, "version 1", "esperada 2", "recrie o dataset"} {
-		if !strings.Contains(err.Error(), quer) {
-			t.Errorf("erro = %q, want conter %q", err, quer)
+	for _, snippet := range []string{path, "version 1", "esperada 2", "recrie o dataset"} {
+		if !strings.Contains(err.Error(), snippet) {
+			t.Errorf("erro = %q, want conter %q", err, snippet)
 		}
 	}
 }
@@ -386,11 +386,11 @@ func TestGoldenBytesV2(t *testing.T) {
 func TestSizeBytesContabilizaHint(t *testing.T) {
 	d, _ := openDict(t)
 	id := mustCreate(t, d, "X")
-	antes := d.SizeBytes()
+	before := d.SizeBytes()
 	if err := d.SetTypeHint(id, types.TypeDouble); err != nil {
 		t.Fatal(err)
 	}
-	if got := d.SizeBytes() - antes; got != hintRecordSize {
+	if got := d.SizeBytes() - before; got != hintRecordSize {
 		t.Errorf("crescimento = %d bytes, want %d", got, hintRecordSize)
 	}
 }

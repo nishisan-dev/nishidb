@@ -16,7 +16,7 @@ import (
 // segunda calada.
 //
 // A armadilha está em reg.Contador criar a FAMÍLIA e não a série: enquanto
-// ninguém chama Sozinha(), o /metrics não publica linha nenhuma — nem sequer
+// ninguém chama Unlabeled(), o /metrics não publica linha nenhuma — nem sequer
 // o # HELP. Por isso o teste raspa a saída de verdade em vez de perguntar ao
 // registry, que responderia que a família existe.
 func TestSeriesDeRecusaDeQueryNascemComZero(t *testing.T) {
@@ -43,7 +43,7 @@ func TestSeriesDeRecusaDeQueryNascemComZero(t *testing.T) {
 		if achada.Valor != 0 {
 			t.Errorf("%s = %v num servidor que não recusou nada, quer 0", serie, achada.Valor)
 		}
-		if achada.Tipo != metrics.TipoContador {
+		if achada.Tipo != metrics.TypeCounter {
 			t.Errorf("%s tem de ser contador (só sobe), é %v", serie, achada.Tipo)
 		}
 		// Sem label: o sub-pool e o orçamento são do PROCESSO, não do dataset.

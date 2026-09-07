@@ -200,9 +200,9 @@ func avisaValidadeDoCertificado(cert tls.Certificate, log *logging.Logger, reg *
 			"LoadX509KeyPair já deveria ter recusado): %w", err)
 	}
 
-	reg.Medidor(metrics.MetTLSCertExpiryTimestamp,
+	reg.Gauge(metrics.MetTLSCertExpiryTimestamp,
 		"epoch segundos do NotAfter do leaf de server.tls; o operador deriva quanto falta no painel/alerta").
-		Sozinha().Set(float64(leaf.NotAfter.Unix()))
+		Unlabeled().Set(float64(leaf.NotAfter.Unix()))
 
 	notAfter := leaf.NotAfter.UTC().Format(time.RFC3339)
 	switch restante := time.Until(leaf.NotAfter); {

@@ -1,0 +1,495 @@
+pacote	especie	endereco	novo	motivo
+internal/protocol	type	RespostaAuditoriaDeContadores	CountersAuditResponse	corpo de 200 de POST /v1/counters/audit; glossário: contador → counter; GLOSSARIO: auditoria → audit e GLOSSARIO: resposta → response; ordem inglesa, como o par já inglês CheckpointDataset/CompactDataset
+internal/protocol	field	RespostaAuditoriaDeContadores.Datasets	Datasets	mantido: já em inglês (internal/protocol/counters.go:13:2)
+internal/protocol	type	AuditoriaDataset	DatasetAudit	os relatórios de auditoria de UM dataset; ALVO-PRIMEIRO, como CounterAudit, CounterRebuild, GroupDivergence, CountersAuditResponse e CountersRebuildResponse — a ordem que o próprio arquivo usa e o argumento com que este mapeamento já fixou CounterAudit; a forma <operação>Dataset de CheckpointDataset e CompactDataset NÃO serve aqui: aqueles dois carregam o RESULTADO de uma operação sobre o dataset (Name + números, mutations.go:31-34 e :49-55), enquanto este tipo não tem número de nível dataset nenhum — só Name + a lista de relatórios por contador (counters.go:18-21), e o godoc diz "são os relatórios de um dataset" (counters.go:16), plural e possessivo; "AuditDataset" ainda leria como imperativo verbo-objeto ("audite o dataset"), que é o que a struct NÃO é, e alternaria a ordem duas vezes na cadeia CountersAuditResponse → ... → CounterAudit; GLOSSARIO: auditoria → audit
+internal/protocol	field	AuditoriaDataset.Name	Name	mantido: já em inglês (internal/protocol/counters.go:19:2)
+internal/protocol	field	AuditoriaDataset.Counters	Counters	mantido: já em inglês (internal/protocol/counters.go:20:2)
+internal/protocol	type	AuditoriaContador	CounterAudit	resultado da auditoria de UM contador; ALVO-PRIMEIRO, e não <operação><alvo>: `AuditCounter` lê em inglês como "um contador de auditorias", leitura que "counter" tem e "dataset" não, então a analogia com AuditDataset não transfere; a ordem alvo-primeiro é a que o próprio arquivo usa no tipo que o contém (RespostaAuditoriaDeContadores → CountersAuditResponse) e no que ele contém (DivergenciaDeGrupo → GroupDivergence, counters.go:54), e é a que o produto já fixou para este mesmo fato em nishidb_counter_audit_* (internal/metrics/names.go:593-594); glossário: auditoria → audit, contador → counter
+internal/protocol	field	AuditoriaContador.Name	Name	mantido: já em inglês (internal/protocol/counters.go:32:2)
+internal/protocol	field	AuditoriaContador.Groups	Groups	mantido: já em inglês (internal/protocol/counters.go:33:2)
+internal/protocol	field	AuditoriaContador.Maintained	Maintained	mantido: já em inglês (internal/protocol/counters.go:34:2)
+internal/protocol	field	AuditoriaContador.Recomputed	Recomputed	mantido: já em inglês (internal/protocol/counters.go:35:2)
+internal/protocol	field	AuditoriaContador.DivergentGroups	DivergentGroups	mantido: já em inglês (internal/protocol/counters.go:36:2)
+internal/protocol	field	AuditoriaContador.NotInterned	NotInterned	mantido: já em inglês (internal/protocol/counters.go:37:2)
+internal/protocol	field	AuditoriaContador.AggregateRows	AggregateRows	mantido: já em inglês (internal/protocol/counters.go:43:2)
+internal/protocol	field	AuditoriaContador.AggregateTotal	AggregateTotal	mantido: já em inglês (internal/protocol/counters.go:44:2)
+internal/protocol	field	AuditoriaContador.DivergentAggregates	DivergentAggregates	mantido: já em inglês (internal/protocol/counters.go:45:2)
+internal/protocol	field	AuditoriaContador.RowsRecomputed	RowsRecomputed	mantido: já em inglês (internal/protocol/counters.go:47:2)
+internal/protocol	field	AuditoriaContador.Sample	Sample	mantido: já em inglês (internal/protocol/counters.go:48:2)
+internal/protocol	field	AuditoriaContador.RowsScanned	RowsScanned	mantido: já em inglês (internal/protocol/counters.go:49:2)
+internal/protocol	field	AuditoriaContador.DurationMs	DurationMs	mantido: já em inglês (internal/protocol/counters.go:50:2)
+internal/protocol	type	DivergenciaDeGrupo	GroupDivergence	um grupo que divergiu, pelo groupKey; glossário: divergência → divergence e grupo → group; o campo GroupKey já em inglês fixa Group como prefixo
+internal/protocol	field	DivergenciaDeGrupo.GroupKey	GroupKey	mantido: já em inglês (internal/protocol/counters.go:55:2)
+internal/protocol	field	DivergenciaDeGrupo.Maintained	Maintained	mantido: já em inglês (internal/protocol/counters.go:56:2)
+internal/protocol	field	DivergenciaDeGrupo.Recomputed	Recomputed	mantido: já em inglês (internal/protocol/counters.go:57:2)
+internal/protocol	field	DivergenciaDeGrupo.RefsMaintained	RefsMaintained	mantido: já em inglês (internal/protocol/counters.go:58:2)
+internal/protocol	field	DivergenciaDeGrupo.RefsRecomputed	RefsRecomputed	mantido: já em inglês (internal/protocol/counters.go:59:2)
+internal/protocol	type	RespostaReconstrucaoDeContadores	CountersRebuildResponse	corpo de 200 de POST /v1/counters/rebuild; glossário: reconstrução → rebuild e contador → counter; GLOSSARIO: resposta → response; par simétrico de CountersAuditResponse
+internal/protocol	field	RespostaReconstrucaoDeContadores.Datasets	Datasets	mantido: já em inglês (internal/protocol/counters.go:64:2)
+internal/protocol	type	ReconstrucaoDataset	DatasetRebuild	as reconstruções de um dataset; simétrico a DatasetAudit e a CounterRebuild/CounterAudit, alvo-primeiro como o resto do arquivo; "RebuildDataset" é pior que o irmão porque "rebuild" é verbo sem ambiguidade e leria como a AÇÃO (a rota POST /v1/counters/rebuild, o `nishidb counters rebuild`), não como o documento de resposta — e a struct é só Name + a lista de reconstruções por contador (counters.go:68-71), sem número de nível dataset; glossário: reconstrução → rebuild
+internal/protocol	field	ReconstrucaoDataset.Name	Name	mantido: já em inglês (internal/protocol/counters.go:69:2)
+internal/protocol	field	ReconstrucaoDataset.Counters	Counters	mantido: já em inglês (internal/protocol/counters.go:70:2)
+internal/protocol	type	ReconstrucaoContador	CounterRebuild	resultado da reconstrução de UM contador; ALVO-PRIMEIRO pelo mesmo motivo de CounterAudit, e aqui a leitura errada tem referente real no MESMO pacote: `RebuildCounter` lê como "o contador de reconstruções", que é IndexStats.Rebuilds (documents.go:332-335, "conta os segmentos cujo índice a reconstrução publicou") e a série nishidb_index_..._rebuilds_total; simétrico de CounterAudit e coerente com CountersRebuildResponse; glossário: reconstrução → rebuild, contador → counter
+internal/protocol	field	ReconstrucaoContador.Name	Name	mantido: já em inglês (internal/protocol/counters.go:77:2)
+internal/protocol	field	ReconstrucaoContador.Rows	Rows	mantido: já em inglês (internal/protocol/counters.go:78:2)
+internal/protocol	field	ReconstrucaoContador.Groups	Groups	mantido: já em inglês (internal/protocol/counters.go:79:2)
+internal/protocol	field	ReconstrucaoContador.DurationMs	DurationMs	mantido: já em inglês (internal/protocol/counters.go:80:2)
+internal/protocol	type	ColunaMeta	ColumnMeta	nome JÁ FECHADO na tabela de contratos do glossário §2 (Python público); glossário: coluna → column
+internal/protocol	field	ColunaMeta.Name	Name	mantido: já em inglês (internal/protocol/documents.go:114:2)
+internal/protocol	field	ColunaMeta.Alias	Alias	mantido: já em inglês (internal/protocol/documents.go:115:2)
+internal/protocol	field	ColunaMeta.Type	Type	mantido: já em inglês (internal/protocol/documents.go:116:2)
+internal/protocol	field	ColunaMeta.JDBC	JDBC	mantido: já em inglês (internal/protocol/documents.go:117:2)
+internal/protocol	field	ColunaMeta.Nullable	Nullable	mantido: já em inglês (internal/protocol/documents.go:118:2)
+internal/protocol	field	ColunaMeta.Precision	Precision	mantido: já em inglês (internal/protocol/documents.go:119:2)
+internal/protocol	field	ColunaMeta.Scale	Scale	mantido: já em inglês (internal/protocol/documents.go:120:2)
+internal/protocol	field	ColunaMeta.DisplaySize	DisplaySize	mantido: já em inglês (internal/protocol/documents.go:121:2)
+internal/protocol	field	ColunaMeta.Index	Index	mantido: já em inglês (internal/protocol/documents.go:122:2)
+internal/protocol	field	ColunaMeta.Auto	Auto	mantido: já em inglês (internal/protocol/documents.go:123:2)
+internal/protocol	type	Estatisticas	Stats	nome JÁ FECHADO na tabela de contratos do glossário §2; é o corpo de GET /v1/stats, e o sufixo Stats já é o do pacote inteiro
+internal/protocol	field	Estatisticas.Process	Process	mantido: já em inglês (internal/protocol/documents.go:140:2)
+internal/protocol	field	Estatisticas.Datasets	Datasets	mantido: já em inglês (internal/protocol/documents.go:141:2)
+internal/protocol	type	ProcessoStats	ProcessStats	o que é do PROCESSO e não de um dataset; híbrido, e o campo Estatisticas.Process já diz Process; GLOSSARIO: processo → process
+internal/protocol	field	ProcessoStats.Version	Version	mantido: já em inglês (internal/protocol/documents.go:151:2)
+internal/protocol	field	ProcessoStats.Query	Query	mantido: já em inglês (internal/protocol/documents.go:152:2)
+internal/protocol	field	ProcessoStats.InFlight	InFlight	mantido: já em inglês (internal/protocol/documents.go:161:2)
+internal/protocol	type	ConsultaEmVoo	InFlightQuery	nome JÁ FECHADO na tabela de contratos do glossário §2; glossário: consulta → query e em voo → in-flight
+internal/protocol	const	EstadoUP	StateUp	estado de subsistema no /v1/health; híbrido, e o valor de wire "UP" não muda; "UP" não é inicial da lista do §6, então MixedCaps manda StateUp, o que alinha os quatro irmãos; GLOSSARIO: estado → state
+internal/protocol	field	ConsultaEmVoo.Dataset	Dataset	mantido: já em inglês (internal/protocol/documents.go:180:2)
+internal/protocol	field	ConsultaEmVoo.SQLHash	SQLHash	mantido: já em inglês (internal/protocol/documents.go:181:2)
+internal/protocol	field	ConsultaEmVoo.RunningMs	RunningMs	mantido: já em inglês (internal/protocol/documents.go:182:2)
+internal/protocol	field	ConsultaEmVoo.Long	Long	mantido: já em inglês (internal/protocol/documents.go:183:2)
+internal/protocol	const	EstadoDown	StateDown	híbrido: só "Estado" é PT-BR; valor de wire "DOWN" inalterado
+internal/protocol	type	MotorStats	EngineStats	contadores do motor de consulta mantidos por Engine; GLOSSARIO: motor → engine, a palavra que internal/query já usa
+internal/protocol	const	EstadoDegraded	StateDegraded	híbrido: só "Estado" é PT-BR; valor de wire "DEGRADED" inalterado
+internal/protocol	field	MotorStats.FullScans	FullScans	mantido: já em inglês (internal/protocol/documents.go:200:2)
+internal/protocol	field	MotorStats.PointLookups	PointLookups	mantido: já em inglês (internal/protocol/documents.go:201:2)
+internal/protocol	field	MotorStats.BitmapScans	BitmapScans	mantido: já em inglês (internal/protocol/documents.go:202:2)
+internal/protocol	field	MotorStats.IndexUnions	IndexUnions	mantido: já em inglês (internal/protocol/documents.go:203:2)
+internal/protocol	field	MotorStats.Candidates	Candidates	mantido: já em inglês (internal/protocol/documents.go:204:2)
+internal/protocol	field	MotorStats.Rejected	Rejected	mantido: já em inglês (internal/protocol/documents.go:205:2)
+internal/protocol	field	MotorStats.DeadSkipped	DeadSkipped	mantido: já em inglês (internal/protocol/documents.go:206:2)
+internal/protocol	field	MotorStats.TypeMismatch	TypeMismatch	mantido: já em inglês (internal/protocol/documents.go:207:2)
+internal/protocol	field	MotorStats.Emitted	Emitted	mantido: já em inglês (internal/protocol/documents.go:208:2)
+internal/protocol	field	MotorStats.Truncated	Truncated	mantido: já em inglês (internal/protocol/documents.go:209:2)
+internal/protocol	const	EstadoDesligado	StateDisabled	o estado da ingestão sem consumidor Kafka; o campo IngestionStats.Enabled é o par booleano em inglês e disabled é o antônimo dele; GLOSSARIO: desligado → disabled
+internal/protocol	field	MotorStats.Canceled	Canceled	mantido: já em inglês (internal/protocol/documents.go:210:2)
+internal/protocol	type	DatasetStats	DatasetStats	mantido: já em inglês (internal/protocol/documents.go:214:6)
+internal/protocol	field	DatasetStats.Name	Name	mantido: já em inglês (internal/protocol/documents.go:215:2)
+internal/protocol	field	DatasetStats.Storage	Storage	mantido: já em inglês (internal/protocol/documents.go:216:2)
+internal/protocol	field	DatasetStats.Schema	Schema	mantido: já em inglês (internal/protocol/documents.go:217:2)
+internal/protocol	field	DatasetStats.Query	Query	mantido: já em inglês (internal/protocol/documents.go:218:2)
+internal/protocol	field	DatasetStats.Ingestion	Ingestion	mantido: já em inglês (internal/protocol/documents.go:219:2)
+internal/protocol	field	DatasetStats.Materialization	Materialization	mantido: já em inglês (internal/protocol/documents.go:224:2)
+internal/protocol	field	DatasetStats.History	History	mantido: já em inglês (internal/protocol/documents.go:230:2)
+internal/protocol	field	DatasetStats.Index	Index	mantido: já em inglês (internal/protocol/documents.go:243:2)
+internal/protocol	field	DatasetStats.Snapshot	Snapshot	mantido: já em inglês (internal/protocol/documents.go:252:2)
+internal/protocol	field	DatasetStats.Counters	Counters	mantido: já em inglês (internal/protocol/documents.go:256:2)
+internal/protocol	type	ContadorStats	CounterStats	retrato de UM contador mantido na escrita; híbrido, glossário: contador → counter
+internal/protocol	field	ContadorStats.Name	Name	mantido: já em inglês (internal/protocol/documents.go:271:2)
+internal/protocol	field	ContadorStats.Rows	Rows	mantido: já em inglês (internal/protocol/documents.go:276:2)
+internal/protocol	field	ContadorStats.Total	Total	mantido: já em inglês (internal/protocol/documents.go:277:2)
+internal/protocol	field	ContadorStats.Groups	Groups	mantido: já em inglês (internal/protocol/documents.go:278:2)
+internal/protocol	field	ContadorStats.MaxGroups	MaxGroups	mantido: já em inglês (internal/protocol/documents.go:279:2)
+internal/protocol	field	ContadorStats.Retired	Retired	mantido: já em inglês (internal/protocol/documents.go:280:2)
+internal/protocol	field	ContadorStats.Refused	Refused	mantido: já em inglês (internal/protocol/documents.go:281:2)
+internal/protocol	field	ContadorStats.OrphanEntries	OrphanEntries	mantido: já em inglês (internal/protocol/documents.go:282:2)
+internal/protocol	field	ContadorStats.Bytes	Bytes	mantido: já em inglês (internal/protocol/documents.go:283:2)
+internal/protocol	field	ContadorStats.AuditDivergentGroups	AuditDivergentGroups	mantido: já em inglês (internal/protocol/documents.go:284:2)
+internal/protocol	field	ContadorStats.AuditLastSuccessUnix	AuditLastSuccessUnix	mantido: já em inglês (internal/protocol/documents.go:285:2)
+internal/protocol	field	Saude.Detalhes	Details	nomeia o problema POR DATASET; a tabela de contratos do glossário §2 já fecha a chave JSON (detalhes → details) e o identificador acompanha no mesmo commit; esta linha vai obrigatoriamente ANTES da de Saude → Health (a ordem das linhas do TSV é a ordem do script rf, e depois do rename do tipo o endereço Saude.Detalhes não resolve: "rf: Saude not found" aborta o LOTE inteiro); destino QUALIFICADO porque com o destino nu o rf recusa com "unimplemented replacement"; rf: mv Saude.Detalhes Saude.Details
+internal/protocol	type	Saude	Health	corpo de GET /v1/health; nome JÁ FECHADO na tabela de contratos do glossário §2 (Python público)
+internal/protocol	type	SnapshotStats	SnapshotStats	mantido: já em inglês (internal/protocol/documents.go:297:6)
+internal/protocol	field	SnapshotStats.Bytes	Bytes	mantido: já em inglês (internal/protocol/documents.go:298:2)
+internal/protocol	field	SnapshotStats.OldestSeconds	OldestSeconds	mantido: já em inglês (internal/protocol/documents.go:299:2)
+internal/protocol	field	Saude.Status	Status	mantido: já em inglês (internal/protocol/documents.go:29:2)
+internal/protocol	field	SnapshotStats.PinnedSegments	PinnedSegments	mantido: já em inglês (internal/protocol/documents.go:300:2)
+internal/protocol	field	SnapshotStats.ExpiredTotal	ExpiredTotal	mantido: já em inglês (internal/protocol/documents.go:301:2)
+internal/protocol	field	Saude.Kafka	Kafka	mantido: já em inglês (internal/protocol/documents.go:30:2)
+internal/protocol	type	IndiceStats	IndexStats	retrato do índice por segmento; híbrido, glossário: índice → index, e o campo DatasetStats.Index já diz Index
+internal/protocol	field	IndiceStats.Sealed	Sealed	mantido: já em inglês (internal/protocol/documents.go:317:2)
+internal/protocol	field	IndiceStats.Current	Current	mantido: já em inglês (internal/protocol/documents.go:318:2)
+internal/protocol	field	IndiceStats.Pending	Pending	mantido: já em inglês (internal/protocol/documents.go:319:2)
+internal/protocol	field	Saude.Storage	Storage	mantido: já em inglês (internal/protocol/documents.go:31:2)
+internal/protocol	field	IndiceStats.OutOfWindow	OutOfWindow	mantido: já em inglês (internal/protocol/documents.go:320:2)
+internal/protocol	field	Saude.Datasets	Datasets	mantido: já em inglês (internal/protocol/documents.go:32:2)
+internal/protocol	field	IndiceStats.Bytes	Bytes	mantido: já em inglês (internal/protocol/documents.go:331:2)
+internal/protocol	field	IndiceStats.Rebuilds	Rebuilds	mantido: já em inglês (internal/protocol/documents.go:335:2)
+internal/protocol	field	IndiceStats.RebuildRunning	RebuildRunning	mantido: já em inglês (internal/protocol/documents.go:336:2)
+internal/protocol	field	IndiceStats.CRCFailures	CRCFailures	mantido: já em inglês (internal/protocol/documents.go:343:2)
+internal/protocol	field	IndiceStats.SegmentsByIndex	SegmentsByIndex	mantido: já em inglês (internal/protocol/documents.go:347:2)
+internal/protocol	field	IndiceStats.SegmentsByScan	SegmentsByScan	mantido: já em inglês (internal/protocol/documents.go:348:2)
+internal/protocol	type	HistoricoStats	HistoryStats	o que o bloco history está fazendo; híbrido, glossário: histórico → history
+internal/protocol	field	HistoricoStats.Table	Table	mantido: já em inglês (internal/protocol/documents.go:359:2)
+internal/protocol	field	HistoricoStats.Rows	Rows	mantido: já em inglês (internal/protocol/documents.go:362:2)
+internal/protocol	field	HistoricoStats.Dropped	Dropped	mantido: já em inglês (internal/protocol/documents.go:363:2)
+internal/protocol	field	HistoricoStats.Degraded	Degraded	mantido: já em inglês (internal/protocol/documents.go:366:2)
+internal/protocol	field	HistoricoStats.DataBytes	DataBytes	mantido: já em inglês (internal/protocol/documents.go:376:2)
+internal/protocol	field	HistoricoStats.IndexBytes	IndexBytes	mantido: já em inglês (internal/protocol/documents.go:377:2)
+internal/protocol	field	HistoricoStats.OldestWrittenAt	OldestWrittenAt	mantido: já em inglês (internal/protocol/documents.go:382:2)
+internal/protocol	field	HistoricoStats.PurgedByTTL	PurgedByTTL	mantido: já em inglês (internal/protocol/documents.go:385:2)
+internal/protocol	field	HistoricoStats.PurgedBySize	PurgedBySize	mantido: já em inglês (internal/protocol/documents.go:386:2)
+internal/protocol	field	HistoricoStats.ExpireAfterWrite	ExpireAfterWrite	mantido: já em inglês (internal/protocol/documents.go:389:2)
+internal/protocol	field	HistoricoStats.MaxBytes	MaxBytes	mantido: já em inglês (internal/protocol/documents.go:390:2)
+internal/protocol	field	HistoricoStats.IndexWindow	IndexWindow	mantido: já em inglês (internal/protocol/documents.go:405:2)
+internal/protocol	field	HistoricoStats.EffectiveIndexWindow	EffectiveIndexWindow	mantido: já em inglês (internal/protocol/documents.go:406:2)
+internal/protocol	type	MaterializacaoStats	MaterializationStats	efeitos das políticas de escrita e das regras de TTL; híbrido, glossário: materialização → materialization
+internal/protocol	field	MaterializacaoStats.FrozenCaptured	FrozenCaptured	mantido: já em inglês (internal/protocol/documents.go:419:2)
+internal/protocol	field	MaterializacaoStats.FrozenPreserved	FrozenPreserved	mantido: já em inglês (internal/protocol/documents.go:420:2)
+internal/protocol	field	MaterializacaoStats.Summed	Summed	mantido: já em inglês (internal/protocol/documents.go:423:2)
+internal/protocol	field	MaterializacaoStats.SummedSaturated	SummedSaturated	mantido: já em inglês (internal/protocol/documents.go:424:2)
+internal/protocol	field	MaterializacaoStats.TTLRules	TTLRules	mantido: já em inglês (internal/protocol/documents.go:427:2)
+internal/protocol	type	Metadados	Metadata	corpo de GET /v1/metadata; metadata é incontável em inglês e é a palavra que a rota já usa; GLOSSARIO: metadados → metadata
+internal/protocol	field	MaterializacaoStats.TTLUnmatched	TTLUnmatched	mantido: já em inglês (internal/protocol/documents.go:430:2)
+internal/protocol	type	RegraTTLStats	TTLRuleStats	uma regra de expiração e quantas escritas ela decidiu; glossário: regra → rule; a ordem inverte porque o qualificador vem antes em inglês, e o campo que a carrega já se chama TTLRules
+internal/protocol	field	RegraTTLStats.Index	Index	mantido: já em inglês (internal/protocol/documents.go:438:2)
+internal/protocol	field	RegraTTLStats.When	When	mantido: já em inglês (internal/protocol/documents.go:439:2)
+internal/protocol	field	Metadados.Datasets	Datasets	mantido: já em inglês (internal/protocol/documents.go:43:2)
+internal/protocol	field	RegraTTLStats.ExpireAfterWrite	ExpireAfterWrite	mantido: já em inglês (internal/protocol/documents.go:440:2)
+internal/protocol	field	RegraTTLStats.Matched	Matched	mantido: já em inglês (internal/protocol/documents.go:441:2)
+internal/protocol	type	SchemaStats	SchemaStats	mantido: já em inglês (internal/protocol/documents.go:453:6)
+internal/protocol	field	SchemaStats.Fields	Fields	mantido: já em inglês (internal/protocol/documents.go:454:2)
+internal/protocol	field	SchemaStats.FieldsDropped	FieldsDropped	mantido: já em inglês (internal/protocol/documents.go:455:2)
+internal/protocol	field	SchemaStats.NestedTypeMismatch	NestedTypeMismatch	mantido: já em inglês (internal/protocol/documents.go:464:2)
+internal/protocol	field	SchemaStats.MaxCols	MaxCols	mantido: já em inglês (internal/protocol/documents.go:465:2)
+internal/protocol	field	SchemaStats.OnMaxCols	OnMaxCols	mantido: já em inglês (internal/protocol/documents.go:466:2)
+internal/protocol	type	StorageStats	StorageStats	mantido: já em inglês (internal/protocol/documents.go:485:6)
+internal/protocol	field	StorageStats.Rows	Rows	mantido: já em inglês (internal/protocol/documents.go:486:2)
+internal/protocol	field	StorageStats.Segments	Segments	mantido: já em inglês (internal/protocol/documents.go:487:2)
+internal/protocol	field	StorageStats.CurrentSegment	CurrentSegment	mantido: já em inglês (internal/protocol/documents.go:488:2)
+internal/protocol	field	StorageStats.PrimaryLoadFactor	PrimaryLoadFactor	mantido: já em inglês (internal/protocol/documents.go:489:2)
+internal/protocol	field	StorageStats.Overlay	Overlay	mantido: já em inglês (internal/protocol/documents.go:490:2)
+internal/protocol	field	StorageStats.Bytes	Bytes	mantido: já em inglês (internal/protocol/documents.go:496:2)
+internal/protocol	field	StorageStats.GarbageBytes	GarbageBytes	mantido: já em inglês (internal/protocol/documents.go:502:2)
+internal/protocol	field	StorageStats.Compaction	Compaction	mantido: já em inglês (internal/protocol/documents.go:503:2)
+internal/protocol	type	CompactionStats	CompactionStats	mantido: já em inglês (internal/protocol/documents.go:517:6)
+internal/protocol	field	CompactionStats.Running	Running	mantido: já em inglês (internal/protocol/documents.go:518:2)
+internal/protocol	field	CompactionStats.BytesRead	BytesRead	mantido: já em inglês (internal/protocol/documents.go:519:2)
+internal/protocol	type	DatasetMeta	DatasetMeta	mantido: já em inglês (internal/protocol/documents.go:51:6)
+internal/protocol	field	CompactionStats.BytesWritten	BytesWritten	mantido: já em inglês (internal/protocol/documents.go:520:2)
+internal/protocol	type	RotaStats	RouteStats	os contadores do §92 que o protocolo alimenta por dataset; GLOSSARIO: rota → route, o termo do repositório para as rotas /v1/*
+internal/protocol	field	RotaStats.Total	Total	mantido: já em inglês (internal/protocol/documents.go:529:2)
+internal/protocol	field	DatasetMeta.Name	Name	mantido: já em inglês (internal/protocol/documents.go:52:2)
+internal/protocol	field	RotaStats.Active	Active	mantido: já em inglês (internal/protocol/documents.go:530:2)
+internal/protocol	field	RotaStats.Errors	Errors	mantido: já em inglês (internal/protocol/documents.go:531:2)
+internal/protocol	field	DatasetMeta.Key	Key	mantido: já em inglês (internal/protocol/documents.go:53:2)
+internal/protocol	type	IngestaoStats	IngestionStats	estado da ingestão Kafka do dataset; híbrido, glossário: ingestão → ingestion
+internal/protocol	field	IngestaoStats.Enabled	Enabled	mantido: já em inglês (internal/protocol/documents.go:544:2)
+internal/protocol	field	IngestaoStats.State	State	mantido: já em inglês (internal/protocol/documents.go:545:2)
+internal/protocol	field	IngestaoStats.Events	Events	mantido: já em inglês (internal/protocol/documents.go:546:2)
+internal/protocol	field	IngestaoStats.Applied	Applied	mantido: já em inglês (internal/protocol/documents.go:547:2)
+internal/protocol	field	IngestaoStats.Stale	Stale	mantido: já em inglês (internal/protocol/documents.go:548:2)
+internal/protocol	field	IngestaoStats.Discarded	Discarded	mantido: já em inglês (internal/protocol/documents.go:549:2)
+internal/protocol	field	DatasetMeta.MaxRows	MaxRows	mantido: já em inglês (internal/protocol/documents.go:54:2)
+internal/protocol	field	IngestaoStats.Failed	Failed	mantido: já em inglês (internal/protocol/documents.go:550:2)
+internal/protocol	field	IngestaoStats.Paused	Paused	mantido: já em inglês (internal/protocol/documents.go:551:2)
+internal/protocol	field	DatasetMeta.TimeoutMs	TimeoutMs	mantido: já em inglês (internal/protocol/documents.go:65:2)
+internal/protocol	field	DatasetMeta.DefaultTimeoutMs	DefaultTimeoutMs	mantido: já em inglês (internal/protocol/documents.go:72:2)
+internal/protocol	field	DatasetMeta.MaxCols	MaxCols	mantido: já em inglês (internal/protocol/documents.go:78:2)
+internal/protocol	field	DatasetMeta.OnMaxCols	OnMaxCols	mantido: já em inglês (internal/protocol/documents.go:79:2)
+internal/protocol	field	DatasetMeta.MaxNestedCols	MaxNestedCols	mantido: já em inglês (internal/protocol/documents.go:88:2)
+internal/protocol	field	DatasetMeta.Columns	Columns	mantido: já em inglês (internal/protocol/documents.go:89:2)
+internal/protocol	const	JDBCBoolean	JDBCBoolean	mantido: já em inglês (internal/protocol/jdbc.go:10:2)
+internal/protocol	const	JDBCTimestamp	JDBCTimestamp	mantido: já em inglês (internal/protocol/jdbc.go:11:2)
+internal/protocol	const	JDBCVarbinary	JDBCVarbinary	mantido: já em inglês (internal/protocol/jdbc.go:12:2)
+internal/protocol	param	JDBCDeTipo.t	t	mantido: já em inglês (internal/protocol/jdbc.go:151:17)
+internal/protocol	func	JDBCDeTipo	JDBCName	casca fina sobre DescriptorOf (linha 209) que devolve SÓ o nome java.sql.Types; substantivo-qualificador, como TypeName, e sem Get
+internal/protocol	param	ColunaDe.nome	name	nome de SAÍDA da coluna (jdbc.go:166); glossário: nome → name; destino QUALIFICADO: com o destino nu o rf recusa com "unimplemented replacement ... not found name" e ABORTA o script inteiro do pacote; rf: mv ColunaDe.nome ColunaDe.name
+internal/protocol	param	ColunaDe.t	t	mantido: já em inglês (internal/protocol/jdbc.go:166:28)
+internal/protocol	param	ColunaDe.nullable	nullable	mantido: já em inglês (internal/protocol/jdbc.go:166:47)
+internal/protocol	func	ColunaDe	NewColumn	monta a descrição de uma Coluna a partir do nome de saída, do tipo e da nulabilidade: é construtor de valor, e o §2 fixa construtores New/Open
+internal/protocol	local	ColunaDe.d	d	mantido: já em inglês (internal/protocol/jdbc.go:167:2)
+internal/protocol	const	JDBCTime	JDBCTime	mantido: já em inglês (internal/protocol/jdbc.go:16:2)
+internal/protocol	const	JDBCOther	JDBCOther	mantido: já em inglês (internal/protocol/jdbc.go:21:2)
+internal/protocol	type	DescritorJDBC	JDBCDescriptor	tudo o que o ResultSetMetaData do §71 precisa saber sobre um tipo; a ordem inverte porque o qualificador vem antes em inglês; glossário: descritor → descriptor, na qualificação ampliada que passa a cobrir o descritor de TIPO
+internal/protocol	field	DescritorJDBC.JDBC	JDBC	mantido: já em inglês (internal/protocol/jdbc.go:41:2)
+internal/protocol	field	DescritorJDBC.Precision	Precision	mantido: já em inglês (internal/protocol/jdbc.go:42:2)
+internal/protocol	field	DescritorJDBC.Scale	Scale	mantido: já em inglês (internal/protocol/jdbc.go:43:2)
+internal/protocol	field	DescritorJDBC.DisplaySize	DisplaySize	mantido: já em inglês (internal/protocol/jdbc.go:44:2)
+internal/protocol	param	DescritorDeTipo.t	t	mantido: já em inglês (internal/protocol/jdbc.go:67:22)
+internal/protocol	func	DescritorDeTipo	DescriptorOf	a tabela do §73 mais os três números do ResultSetMetaData (jdbc.go:47 e :67); NÃO TypeDescriptor: o substantivo puro é o do TIPO que a função DEVOLVE — o glossário fixa "descritor (de arquivo; e o de tipo que o ResultSetMetaData publica) → descriptor" (docs/glossario.md:235) e o "descritor de tipo que o ResultSetMetaData publica" é a STRUCT ("DescritorJDBC é tudo o que o ResultSetMetaData do §71 precisa saber sobre um tipo", jdbc.go:24-25), que este mapeamento manda para JDBCDescriptor; com TypeDescriptor o pacote passaria a ter dois substantivos para um conceito só, sem que nenhum dos dois diga qual é o valor e qual é a tabela que o produz, e o call site ganharia a forma EXATA de uma conversão pkg.Tipo(x) — d := protocol.TypeDescriptor(t) em internal/server/documents.go:87, internal/protocol/jdbc_test.go:130 e :195 — num pacote que de fato exporta uma struct no MESMO arquivo, de modo que a leitura errada é plausível e não teórica (var d protocol.TypeDescriptor nem compila); DescriptorOf preserva a forma substantivo-preposição do original (DescritorDeTipo), é o idioma de reflect.TypeOf para "o X de", não pode ser lido como conversão e deixa o substantivo puro para a struct: d := protocol.DescriptorOf(t) lê como derivação; a quebra de simetria com TypeName e JDBCName é deliberada — os dois não disputam nome com tipo nenhum do pacote, e é só aqui que a família colide com o que ela retorna; a linha 235 do glossário continua valendo sem mudança; os citadores em prosa (jdbc.go:148 e :158, protocol.go:114, documents.go:108, internal/server/documents_test.go:427, planning/fase7-driver-jdbc.md:122) mudam no mesmo commit
+internal/protocol	const	JDBCVarchar	JDBCVarchar	mantido: já em inglês (internal/protocol/jdbc.go:7:2)
+internal/protocol	const	JDBCBigint	JDBCBigint	mantido: já em inglês (internal/protocol/jdbc.go:8:2)
+internal/protocol	const	JDBCDouble	JDBCDouble	mantido: já em inglês (internal/protocol/jdbc.go:9:2)
+internal/protocol	param#ambiguo	TestODescritorDeCadaTipoTemPrecisionScaleEDisplaySize.t	t	mantido: já em inglês (internal/protocol/jdbc_test.go:107:60)
+internal/protocol	func	TestODescritorDeCadaTipoTemPrecisionScaleEDisplaySize	TestODescritorDeCadaTipoTemPrecisionScaleEDisplaySize	mantido: nome de teste, Fase 4 (internal/protocol/jdbc_test.go:107:6)
+internal/protocol	local#gopls	TestODescritorDeCadaTipoTemPrecisionScaleEDisplaySize.casos	cases	posicao internal/protocol/jdbc_test.go:108:2; glossário: casos (de teste) → cases; declarado em bloco aninhado, fora do alcance de endereço do rf
+internal/protocol	local	TestODescritorDeCadaTipoTemPrecisionScaleEDisplaySize.c	c	mantido: já em inglês (internal/protocol/jdbc_test.go:128:9)
+internal/protocol	local#ambiguo	TestODescritorDeCadaTipoTemPrecisionScaleEDisplaySize.t	t	mantido: já em inglês (internal/protocol/jdbc_test.go:129:41)
+internal/protocol	local	TestODescritorDeCadaTipoTemPrecisionScaleEDisplaySize.d	d	mantido: já em inglês (internal/protocol/jdbc_test.go:130:4)
+internal/protocol	param#ambiguo	TestDisplaySizeDeCadaTipoCasaComALarguraQueOEncoderEmite.t	t	mantido: já em inglês (internal/protocol/jdbc_test.go:158:63)
+internal/protocol	func	TestDisplaySizeDeCadaTipoCasaComALarguraQueOEncoderEmite	TestDisplaySizeDeCadaTipoCasaComALarguraQueOEncoderEmite	mantido: nome de teste, Fase 4 (internal/protocol/jdbc_test.go:158:6)
+internal/protocol	local#gopls	TestDisplaySizeDeCadaTipoCasaComALarguraQueOEncoderEmite.ipv6Cheio	ipv6AllOnes	posicao internal/protocol/jdbc_test.go:159:2; o endereço com TODOS os bits em 1 (bytes.Repeat([]byte{0xff}, 16)), reusado no caso ipv6_prefix de :175, que é o pior caso de largura do encoder; NÃO `ipv6Full`: em IPv6 "full" já nomeia a FORMA TEXTUAL expandida, oposta à comprimida, e este é justamente o teste cujo assunto é a forma textual (o comentário de :147-157 discute a forma mista x:x:x:x:x:x:d.d.d.d e o 39 que o teste crava é o comprimento da forma expandida) — a leitura errada seria silenciosa porque leva ao mesmo 39; GLOSSARIO: cheio (o endereço IPv6 com todos os bits em 1) → all ones (a linha "cheio → full", proposta nesta mesma rodada, foi requalificada); declarado em bloco aninhado, fora do alcance de endereço do rf
+internal/protocol	local#gopls	TestDisplaySizeDeCadaTipoCasaComALarguraQueOEncoderEmite.casos	cases	posicao internal/protocol/jdbc_test.go:160:2; glossário: casos (de teste) → cases; declarado em bloco aninhado, fora do alcance de endereço do rf
+internal/protocol	local	TestDisplaySizeDeCadaTipoCasaComALarguraQueOEncoderEmite.c	c	mantido: já em inglês (internal/protocol/jdbc_test.go:177:9)
+internal/protocol	local#ambiguo	TestDisplaySizeDeCadaTipoCasaComALarguraQueOEncoderEmite.t	t	mantido: já em inglês (internal/protocol/jdbc_test.go:178:22)
+internal/protocol	local	TestDisplaySizeDeCadaTipoCasaComALarguraQueOEncoderEmite.out	out	mantido: já em inglês (internal/protocol/jdbc_test.go:179:4)
+internal/protocol	param#ambiguo	TestATabelaDeTiposDoSpec73.t	t	mantido: já em inglês (internal/protocol/jdbc_test.go:17:33)
+internal/protocol	func	TestATabelaDeTiposDoSpec73	TestATabelaDeTiposDoSpec73	mantido: nome de teste, Fase 4 (internal/protocol/jdbc_test.go:17:6)
+internal/protocol	local#gopls	TestDisplaySizeDeCadaTipoCasaComALarguraQueOEncoderEmite.largura	width	posicao internal/protocol/jdbc_test.go:180:4; o número de caracteres que o encoder emitiu, comparado com o DisplaySize publicado; GLOSSARIO: largura → width, o termo do javadoc do ResultSetMetaData que o godoc já cita; declarado em bloco aninhado, fora do alcance de endereço do rf
+internal/protocol	local	TestDisplaySizeDeCadaTipoCasaComALarguraQueOEncoderEmite.got	got	mantido: já em inglês (internal/protocol/jdbc_test.go:184:7)
+internal/protocol	local#gopls	TestATabelaDeTiposDoSpec73.casos	cases	posicao internal/protocol/jdbc_test.go:18:2; glossário: casos (de teste) → cases; declarado em bloco aninhado, fora do alcance de endereço do rf
+internal/protocol	param	TestTipoSemNomeTemDescritorZerado.t	t	mantido: já em inglês (internal/protocol/jdbc_test.go:194:40)
+internal/protocol	func	TestTipoSemNomeTemDescritorZerado	TestTipoSemNomeTemDescritorZerado	mantido: nome de teste, Fase 4 (internal/protocol/jdbc_test.go:194:6)
+internal/protocol	local	TestTipoSemNomeTemDescritorZerado.d	d	mantido: já em inglês (internal/protocol/jdbc_test.go:195:2)
+internal/protocol	local	TestATabelaDeTiposDoSpec73.c	c	mantido: já em inglês (internal/protocol/jdbc_test.go:37:9)
+internal/protocol	local#ambiguo	TestATabelaDeTiposDoSpec73.t	t	mantido: já em inglês (internal/protocol/jdbc_test.go:38:22)
+internal/protocol	local	TestATabelaDeTiposDoSpec73.col	col	mantido: já em inglês (internal/protocol/jdbc_test.go:39:4)
+internal/protocol	param	TestCampoAutoNaoObservadoSaiComoUnknown.t	t	mantido: já em inglês (internal/protocol/jdbc_test.go:52:46)
+internal/protocol	func	TestCampoAutoNaoObservadoSaiComoUnknown	TestCampoAutoNaoObservadoSaiComoUnknown	mantido: nome de teste, Fase 4 (internal/protocol/jdbc_test.go:52:6)
+internal/protocol	local	TestCampoAutoNaoObservadoSaiComoUnknown.col	col	mantido: já em inglês (internal/protocol/jdbc_test.go:53:2)
+internal/protocol	param	TestTagDesconhecidaNaoViraTipoPlausivel.t	t	mantido: já em inglês (internal/protocol/jdbc_test.go:62:46)
+internal/protocol	func	TestTagDesconhecidaNaoViraTipoPlausivel	TestTagDesconhecidaNaoViraTipoPlausivel	mantido: nome de teste, Fase 4 (internal/protocol/jdbc_test.go:62:6)
+internal/protocol	local	TestTagDesconhecidaNaoViraTipoPlausivel.col	col	mantido: já em inglês (internal/protocol/jdbc_test.go:63:2)
+internal/protocol	param	TestTodaTagComNomeTemJDBCEspecifico.t	t	mantido: já em inglês (internal/protocol/jdbc_test.go:77:42)
+internal/protocol	func	TestTodaTagComNomeTemJDBCEspecifico	TestTodaTagComNomeTemJDBCEspecifico	mantido: nome de teste, Fase 4 (internal/protocol/jdbc_test.go:77:6)
+internal/protocol	local	TestTodaTagComNomeTemJDBCEspecifico.tag	tag	mantido: já em inglês (internal/protocol/jdbc_test.go:78:6)
+internal/protocol	local	TestTodaTagComNomeTemJDBCEspecifico.ft	ft	mantido: já em inglês (internal/protocol/jdbc_test.go:79:3)
+internal/protocol	local#gopls	TestTodaTagComNomeTemJDBCEspecifico.nome	name	posicao internal/protocol/jdbc_test.go:80:3; o ft.String() da tag, usado para pular as tags sem nome; glossário: nome → name; declarado em bloco aninhado, fora do alcance de endereço do rf
+internal/protocol	local	TestTodaTagComNomeTemJDBCEspecifico.got	got	mantido: já em inglês (internal/protocol/jdbc_test.go:87:6)
+internal/protocol	type	RequisicaoDataset	DatasetRequest	o corpo OPCIONAL das rotas mutantes, um dataset por nome; a ordem inverte porque o qualificador vem antes em inglês, o que mantém a distinção com Request (o corpo de /v1/query); GLOSSARIO: requisição → request
+internal/protocol	field	RequisicaoDataset.Dataset	Dataset	mantido: já em inglês (internal/protocol/mutations.go:16:2)
+internal/protocol	type	RespostaCheckpoint	CheckpointResponse	corpo de 200 de POST /v1/checkpoint; GLOSSARIO: resposta → response; o irmão já inglês CheckpointDataset fixa o qualificador
+internal/protocol	field	RespostaCheckpoint.Datasets	Datasets	mantido: já em inglês (internal/protocol/mutations.go:21:2)
+internal/protocol	type	CheckpointDataset	CheckpointDataset	mantido: já em inglês (internal/protocol/mutations.go:31:6)
+internal/protocol	field	CheckpointDataset.Name	Name	mantido: já em inglês (internal/protocol/mutations.go:32:2)
+internal/protocol	field	CheckpointDataset.DurationMs	DurationMs	mantido: já em inglês (internal/protocol/mutations.go:33:2)
+internal/protocol	type	RespostaCompact	CompactResponse	corpo de 200 de POST /v1/compact; simétrico de CheckpointResponse
+internal/protocol	field	RespostaCompact.Datasets	Datasets	mantido: já em inglês (internal/protocol/mutations.go:38:2)
+internal/protocol	type	CompactDataset	CompactDataset	mantido: já em inglês (internal/protocol/mutations.go:49:6)
+internal/protocol	field	CompactDataset.Name	Name	mantido: já em inglês (internal/protocol/mutations.go:50:2)
+internal/protocol	field	CompactDataset.SegmentsRetired	SegmentsRetired	mantido: já em inglês (internal/protocol/mutations.go:51:2)
+internal/protocol	field	CompactDataset.BytesRead	BytesRead	mantido: já em inglês (internal/protocol/mutations.go:52:2)
+internal/protocol	field	CompactDataset.BytesWritten	BytesWritten	mantido: já em inglês (internal/protocol/mutations.go:53:2)
+internal/protocol	field	CompactDataset.DurationMs	DurationMs	mantido: já em inglês (internal/protocol/mutations.go:54:2)
+internal/protocol	local	valorInt64.n	n	mantido: já em inglês (internal/protocol/params.go:104:2)
+internal/protocol	local	valorInt64.err	err	mantido: já em inglês (internal/protocol/params.go:104:5)
+internal/protocol	param	valorDouble.raw	raw	mantido: já em inglês (internal/protocol/params.go:113:18)
+internal/protocol	func	valorDouble	doubleValue	converte UM parâmetro declarado como double, guardando os BITS do float em I64; glossário: valor → value, com o tipo qualificando em inglês; não é parseDouble porque quem parseia é typeparse.Float64
+internal/protocol	local	valorDouble.f	f	mantido: já em inglês (internal/protocol/params.go:117:2)
+internal/protocol	local	valorDouble.err	err	mantido: já em inglês (internal/protocol/params.go:117:5)
+internal/protocol	param	valorBoolean.raw	raw	mantido: já em inglês (internal/protocol/params.go:126:19)
+internal/protocol	func	valorBoolean	booleanValue	converte UM parâmetro declarado como boolean; mesma família de stringValue/int64Value/doubleValue
+internal/protocol	param	formaDe.raw	raw	mantido: já em inglês (internal/protocol/params.go:141:14)
+internal/protocol	func	formaDe	shapeOf	nomeia a FORMA JSON do valor recebido sem ecoá-lo (§95); GLOSSARIO: forma (a espécie JSON do valor) → shape — "kind" e "type" estão queimados aqui, porque Param.Type é o tipo DECLARADO e a função existe para dizer que a forma recebida não é ele
+internal/protocol	var	ErrParametro	ErrParam	sentinela da falha de conversão do parameters do §68; glossário: parâmetro → param, linha fechada que aponta para ESTE arquivo; §2 fixa o prefixo Err
+internal/protocol	param	Valores.ps	ps	mantido: já em inglês (internal/protocol/params.go:31:14)
+internal/protocol	func	Valores	Values	converte o parameters do §68 na representação de wire que o binder aceita; glossário: valor → value; a citação em docs/debitos.md:132 vira protocol.Values no mesmo commit
+internal/protocol	local	Valores.out	out	mantido: já em inglês (internal/protocol/params.go:35:2)
+internal/protocol	local	Valores.i	i	mantido: já em inglês (internal/protocol/params.go:36:6)
+internal/protocol	local	Valores.p	p	mantido: já em inglês (internal/protocol/params.go:36:9)
+internal/protocol	local	Valores.v	v	mantido: já em inglês (internal/protocol/params.go:37:3)
+internal/protocol	local	Valores.err	err	mantido: já em inglês (internal/protocol/params.go:37:6)
+internal/protocol	method	Parametro.valor	typedValue	converte UM parâmetro despachando pelo tipo DECLARADO; não pode ser "value" porque o próprio Param tem campo Value, e o §2 manda resolver colisão pelo nome mais específico — o específico é o que a godoc afirma, que o tipo declarado manda; destino QUALIFICADO: com o destino nu o rf sai exit 0 e REBAIXA o método a função de pacote (func typedValue(p Parametro)), reescrevendo o chamador de params.go:37 — build e vet ficam verdes e nada no pipeline pega; rf: mv Parametro.valor Parametro.typedValue
+internal/protocol	local	Parametro.valor.raw	raw	mantido: já em inglês (internal/protocol/params.go:48:2)
+internal/protocol	const	tiposAceitos	acceptedTypes	a lista dos quatro tipos de wire, concatenada nas mensagens de recusa; GLOSSARIO: aceito → accepted
+internal/protocol	param	valorString.raw	raw	mantido: já em inglês (internal/protocol/params.go:80:18)
+internal/protocol	func	valorString	stringValue	converte UM parâmetro declarado como string; mesma família de int64Value/doubleValue/booleanValue
+internal/protocol	local	valorString.s	s	mantido: já em inglês (internal/protocol/params.go:88:6)
+internal/protocol	local	valorString.err	err	mantido: já em inglês (internal/protocol/params.go:89:5)
+internal/protocol	param	valorInt64.raw	raw	mantido: já em inglês (internal/protocol/params.go:95:17)
+internal/protocol	func	valorInt64	int64Value	converte UM parâmetro declarado como int64, recusando fração, expoente e overflow; mesma família
+internal/protocol	local	TestOTipoDeclaradoManda.c	c	mantido: já em inglês (internal/protocol/params_test.go:110:9)
+internal/protocol	local#ambiguo	TestOTipoDeclaradoManda.t	t	mantido: já em inglês (internal/protocol/params_test.go:111:22)
+internal/protocol	local	TestOTipoDeclaradoManda.err	err	mantido: já em inglês (internal/protocol/params_test.go:112:7)
+internal/protocol	param	TestTipoForaDosQuatroNomeiaAAlternativa.t	t	mantido: já em inglês (internal/protocol/params_test.go:129:46)
+internal/protocol	func	TestTipoForaDosQuatroNomeiaAAlternativa	TestTipoForaDosQuatroNomeiaAAlternativa	mantido: nome de teste, Fase 4 (internal/protocol/params_test.go:129:6)
+internal/protocol	local	TestTipoForaDosQuatroNomeiaAAlternativa.err	err	mantido: já em inglês (internal/protocol/params_test.go:130:5)
+internal/protocol	local	TestTipoForaDosQuatroNomeiaAAlternativa.msg	msg	mantido: já em inglês (internal/protocol/params_test.go:134:2)
+internal/protocol	local#gopls	TestTipoForaDosQuatroNomeiaAAlternativa.trecho	snippet	posicao internal/protocol/params_test.go:135:9; cada pedaço que a mensagem TEM de conter (strings.Contains), nunca a mensagem inteira; GLOSSARIO: trecho (o pedaço que a saída ou a mensagem TEM de conter) → snippet, o mesmo termo que o G0/G1 já fixou em internal/gates — não pode ser want, que o glossário reserva ao esperado por igualdade; declarado em bloco aninhado, fora do alcance de endereço do rf
+internal/protocol	param#gopls	param.tipo	typeName	posicao internal/protocol/params_test.go:13:12; o nome do tipo de wire que vai para Param.Type; "type" nu é palavra reservada em Go; declarado em bloco aninhado, fora do alcance de endereço do rf
+internal/protocol	param#gopls	param.valor	value	posicao internal/protocol/params_test.go:13:18; o texto JSON cru que vai para Param.Value; glossário: valor → value, e aqui não há a colisão de Param.valor; declarado em bloco aninhado, fora do alcance de endereço do rf
+internal/protocol	func	param	param	mantido: já em inglês (internal/protocol/params_test.go:13:6)
+internal/protocol	param	TestParametroNuloEnsinaIsNull.t	t	mantido: já em inglês (internal/protocol/params_test.go:144:36)
+internal/protocol	func	TestParametroNuloEnsinaIsNull	TestParametroNuloEnsinaIsNull	mantido: nome de teste, Fase 4 (internal/protocol/params_test.go:144:6)
+internal/protocol	local	TestParametroNuloEnsinaIsNull.err	err	mantido: já em inglês (internal/protocol/params_test.go:145:5)
+internal/protocol	param	TestOIndiceNaMensagemEh1Based.t	t	mantido: já em inglês (internal/protocol/params_test.go:156:36)
+internal/protocol	func	TestOIndiceNaMensagemEh1Based	TestOIndiceNaMensagemEh1Based	mantido: nome de teste, Fase 4 (internal/protocol/params_test.go:156:6)
+internal/protocol	local	TestOIndiceNaMensagemEh1Based.err	err	mantido: já em inglês (internal/protocol/params_test.go:157:5)
+internal/protocol	param	TestAMensagemNaoEcoaOValorDeString.t	t	mantido: já em inglês (internal/protocol/params_test.go:171:41)
+internal/protocol	func	TestAMensagemNaoEcoaOValorDeString	TestAMensagemNaoEcoaOValorDeString	mantido: nome de teste, Fase 4 (internal/protocol/params_test.go:171:6)
+internal/protocol	local#gopls	TestAMensagemNaoEcoaOValorDeString.segredo	secret	posicao internal/protocol/params_test.go:172:8; o valor de cliente que a mensagem de erro NÃO pode ecoar (§95); glossário: segredo → secret; declarado em bloco aninhado, fora do alcance de endereço do rf
+internal/protocol	local	TestAMensagemNaoEcoaOValorDeString.err	err	mantido: já em inglês (internal/protocol/params_test.go:173:5)
+internal/protocol	param#ambiguo	TestOsQuatroTiposDeWireViramValor.t	t	mantido: já em inglês (internal/protocol/params_test.go:17:40)
+internal/protocol	func	TestOsQuatroTiposDeWireViramValor	TestOsQuatroTiposDeWireViramValor	mantido: nome de teste, Fase 4 (internal/protocol/params_test.go:17:6)
+internal/protocol	param	TestValueAusenteOuTipoAusenteSaoRecusados.t	t	mantido: já em inglês (internal/protocol/params_test.go:182:48)
+internal/protocol	func	TestValueAusenteOuTipoAusenteSaoRecusados	TestValueAusenteOuTipoAusenteSaoRecusados	mantido: nome de teste, Fase 4 (internal/protocol/params_test.go:182:6)
+internal/protocol	local#ambiguo	TestValueAusenteOuTipoAusenteSaoRecusados.err	err	mantido: já em inglês (internal/protocol/params_test.go:183:8)
+internal/protocol	local#ambiguo	TestValueAusenteOuTipoAusenteSaoRecusados.err	err	mantido: já em inglês (internal/protocol/params_test.go:186:8)
+internal/protocol	local#gopls	TestOsQuatroTiposDeWireViramValor.casos	cases	posicao internal/protocol/params_test.go:18:2; glossário: casos (de teste) → cases; declarado em bloco aninhado, fora do alcance de endereço do rf
+internal/protocol	param	TestSemParametrosDevolveNil.t	t	mantido: já em inglês (internal/protocol/params_test.go:191:34)
+internal/protocol	func	TestSemParametrosDevolveNil	TestSemParametrosDevolveNil	mantido: nome de teste, Fase 4 (internal/protocol/params_test.go:191:6)
+internal/protocol	local	TestSemParametrosDevolveNil.vs	vs	mantido: já em inglês (internal/protocol/params_test.go:192:2)
+internal/protocol	local	TestSemParametrosDevolveNil.err	err	mantido: já em inglês (internal/protocol/params_test.go:192:6)
+internal/protocol	local	TestOsQuatroTiposDeWireViramValor.c	c	mantido: já em inglês (internal/protocol/params_test.go:32:9)
+internal/protocol	local#ambiguo	TestOsQuatroTiposDeWireViramValor.t	t	mantido: já em inglês (internal/protocol/params_test.go:33:22)
+internal/protocol	local	TestOsQuatroTiposDeWireViramValor.vs	vs	mantido: já em inglês (internal/protocol/params_test.go:34:4)
+internal/protocol	local	TestOsQuatroTiposDeWireViramValor.err	err	mantido: já em inglês (internal/protocol/params_test.go:34:8)
+internal/protocol	param	TestDoubleGuardaOsBitsEAceitaInteiro.t	t	mantido: já em inglês (internal/protocol/params_test.go:56:43)
+internal/protocol	func	TestDoubleGuardaOsBitsEAceitaInteiro	TestDoubleGuardaOsBitsEAceitaInteiro	mantido: nome de teste, Fase 4 (internal/protocol/params_test.go:56:6)
+internal/protocol	local#gopls	TestDoubleGuardaOsBitsEAceitaInteiro.texto	text	posicao internal/protocol/params_test.go:57:9; a grafia JSON do double percorrida pelo laço; GLOSSARIO: texto → text — a tabela de contratos já fixa o par na linha do CLI, mas faltava a linha nua; declarado em bloco aninhado, fora do alcance de endereço do rf
+internal/protocol	local	TestDoubleGuardaOsBitsEAceitaInteiro.vs	vs	mantido: já em inglês (internal/protocol/params_test.go:58:3)
+internal/protocol	local	TestDoubleGuardaOsBitsEAceitaInteiro.err	err	mantido: já em inglês (internal/protocol/params_test.go:58:7)
+internal/protocol	local	TestDoubleGuardaOsBitsEAceitaInteiro.f	f	mantido: já em inglês (internal/protocol/params_test.go:65:3)
+internal/protocol	param	TestInt64GrandeNaoPerdePrecisao.t	t	mantido: já em inglês (internal/protocol/params_test.go:86:38)
+internal/protocol	func	TestInt64GrandeNaoPerdePrecisao	TestInt64GrandeNaoPerdePrecisao	mantido: nome de teste, Fase 4 (internal/protocol/params_test.go:86:6)
+internal/protocol	local#gopls	TestInt64GrandeNaoPerdePrecisao.grande	large	posicao internal/protocol/params_test.go:87:8; 2^53+1, o inteiro que um decodificador any estragaria em silêncio; é a MAGNITUDE do valor, o sentido da linha 365 — GLOSSARIO: qualificar a linha 365 ("| grande | large | internal/protocol |") para "| grande (a magnitude do valor ou da escala) | large | internal/protocol, internal/index/segindex |" e ACRESCENTAR "| grande demais (o corpo ou a linha que passou de um teto) | too large | internal/protocol |" — é AMPLIAÇÃO, o mecanismo que o §4:428-430 manda usar para dois sentidos do mesmo termo PT-BR (qualificar o PT-BR, nunca dar o mesmo inglês aos dois), e não contradiz a linha existente; "big" foi descartado por ser o nome do pacote math/big, que este teste tangencia; declarado em bloco aninhado, fora do alcance de endereço do rf
+internal/protocol	local	TestInt64GrandeNaoPerdePrecisao.vs	vs	mantido: já em inglês (internal/protocol/params_test.go:88:2)
+internal/protocol	local	TestInt64GrandeNaoPerdePrecisao.err	err	mantido: já em inglês (internal/protocol/params_test.go:88:6)
+internal/protocol	param#ambiguo	TestOTipoDeclaradoManda.t	t	mantido: já em inglês (internal/protocol/params_test.go:97:30)
+internal/protocol	func	TestOTipoDeclaradoManda	TestOTipoDeclaradoManda	mantido: nome de teste, Fase 4 (internal/protocol/params_test.go:97:6)
+internal/protocol	local#gopls	TestOTipoDeclaradoManda.casos	cases	posicao internal/protocol/params_test.go:98:2; glossário: casos (de teste) → cases; declarado em bloco aninhado, fora do alcance de endereço do rf
+internal/protocol	type	LinhaSchema	SchemaLine	a PRIMEIRA linha da resposta de /v1/query; glossário: linha (de texto, de log ou de arquivo) → line — é linha NDJSON, não row do resultado; o trio SchemaLine/EndLine/ErrorLine passa a ler como as três molduras que é
+internal/protocol	field	LinhaSchema.Nishidb	Nishidb	mantido: já em inglês (internal/protocol/protocol.go:106:2)
+internal/protocol	field	LinhaSchema.Dataset	Dataset	mantido: já em inglês (internal/protocol/protocol.go:107:2)
+internal/protocol	field	LinhaSchema.Columns	Columns	mantido: já em inglês (internal/protocol/protocol.go:108:2)
+internal/protocol	type	Coluna	Column	descreve uma coluna da projeção na linha de schema; glossário: coluna → column, concordando com ColumnMeta e com o campo Columns
+internal/protocol	field	Coluna.Name	Name	mantido: já em inglês (internal/protocol/protocol.go:127:2)
+internal/protocol	field	Coluna.Type	Type	mantido: já em inglês (internal/protocol/protocol.go:128:2)
+internal/protocol	field	Coluna.JDBC	JDBC	mantido: já em inglês (internal/protocol/protocol.go:129:2)
+internal/protocol	field	Coluna.Nullable	Nullable	mantido: já em inglês (internal/protocol/protocol.go:130:2)
+internal/protocol	field	Coluna.Precision	Precision	mantido: já em inglês (internal/protocol/protocol.go:131:2)
+internal/protocol	field	Coluna.Scale	Scale	mantido: já em inglês (internal/protocol/protocol.go:132:2)
+internal/protocol	field	Coluna.DisplaySize	DisplaySize	mantido: já em inglês (internal/protocol/protocol.go:133:2)
+internal/protocol	type	LinhaFim	EndLine	a ÚLTIMA linha de uma resposta bem-sucedida; glossário: linha → line; GLOSSARIO: fim → end, que é o próprio valor de wire da moldura
+internal/protocol	field	LinhaFim.Nishidb	Nishidb	mantido: já em inglês (internal/protocol/protocol.go:143:2)
+internal/protocol	field	LinhaFim.Rows	Rows	mantido: já em inglês (internal/protocol/protocol.go:144:2)
+internal/protocol	field	LinhaFim.Truncated	Truncated	mantido: já em inglês (internal/protocol/protocol.go:145:2)
+internal/protocol	type	LinhaErro	ErrorLine	a última linha quando a consulta falha DEPOIS de a primeira linha já ter saído; glossário: linha → line, e Error é o valor de wire da moldura
+internal/protocol	field	LinhaErro.Nishidb	Nishidb	mantido: já em inglês (internal/protocol/protocol.go:156:2)
+internal/protocol	field	LinhaErro.Code	Code	mantido: já em inglês (internal/protocol/protocol.go:157:2)
+internal/protocol	field	LinhaErro.Rows	Rows	mantido: já em inglês (internal/protocol/protocol.go:158:2)
+internal/protocol	field	LinhaErro.Message	Message	mantido: já em inglês (internal/protocol/protocol.go:159:2)
+internal/protocol	type	CorpoErro	ErrorBody	a resposta de erro que sai ANTES da primeira linha, com o status HTTP correspondente; glossário: corpo → body, na ordem inglesa
+internal/protocol	field	CorpoErro.Error	Error	mantido: já em inglês (internal/protocol/protocol.go:165:2)
+internal/protocol	type	Falha	ErrorDetail	o objeto de erro que sai ANTES da primeira linha, valor da chave "error" de CorpoErro (protocol.go:164-166), com Code, Message, Line e Column; entra na família INGLESA que o wire já forma no mesmo bloco — ErrorBody{ Error ErrorDetail }, ErrorLine, FrameError, Code* — e não anuncia a interface error, o que descarta Error nu; NÃO FailureDetail: "Failure" fica EXCLUSIVO do acessor que o juiz do G2 fechou (Leitor.Erro → Failure, docs/glossario.md:515-523), e com FailureDetail o pacote exportaria protocol.FailureDetail ao lado de (*protocol.Reader).Failure() *protocol.ErrorLine — dois objetos de wire DIFERENTES sob a mesma raiz, com o sufixo Detail levando o leitor a concluir que um é o detalhe do outro, o que é falso: Failure() devolve *ErrorLine, cujos Code/Rows/Message são inline (protocol.go:155-160) e que não contém Falha nenhuma; o tipo também não é um "detalhe" para quem o consome — o servidor o passa SOLTO como o erro do protocolo, inclusive como valor de retorno de função (internal/server/mutations.go:84, internal/server/query.go:226, internal/server/counters.go:130) — e o godoc diz "Falha é o erro em si" (protocol.go:168): com ErrorDetail o nome deixa de brigar com a prosa em vez de a obrigar a ceder; GLOSSARIO: requalificar a linha "falha (o objeto de detalhe dentro de ErrorBody, o erro que sai ANTES da primeira linha) → failure detail" (docs/glossario.md:361 — linha desta MESMA passada, ainda não commitada, então não há linha fechada a contradizer) para "falha (o objeto de erro que sai ANTES da primeira linha, valor da chave error de ErrorBody) → error detail | internal/protocol/protocol.go"; a linha irmã "falha (o fecho de erro do stream, que Reader.Failure expõe) → failure" (docs/glossario.md:360) fica INTACTA, e as duas continuam sendo o mecanismo do §4:428-430 para os dois sentidos de "falha" no mesmo pacote
+internal/protocol	field	Falha.Code	Code	mantido: já em inglês (internal/protocol/protocol.go:172:2)
+internal/protocol	field	Falha.Message	Message	mantido: já em inglês (internal/protocol/protocol.go:173:2)
+internal/protocol	field	Falha.Line	Line	mantido: já em inglês (internal/protocol/protocol.go:174:2)
+internal/protocol	field	Falha.Column	Column	mantido: já em inglês (internal/protocol/protocol.go:175:2)
+internal/protocol	const	CodBadRequest	CodeBadRequest	híbrido: só o prefixo Cod é PT-BR; GLOSSARIO: código (de erro do protocolo) → code, prefixo de 23 constantes, e o campo que as carrega já diz Code; o VALOR de wire não muda
+internal/protocol	const	CodBadParameter	CodeBadParameter	híbrido: só Cod é PT-BR; "BadParameter" já está em inglês e espelha o valor de wire, então a linha parâmetro → param não o encurta
+internal/protocol	const	CodMaxRowsAcimaDoTeto	CodeMaxRowsAboveCeiling	o maxRows pedido acima do teto do dataset; glossário: teto → ceiling, linha FECHADA pelo juiz do G1 (docs/glossario.md:255) e reafirmada pelo juiz do G2 NOMEANDO esta constante — "teto → ceiling vence o valor de wire: CodMaxRowsAcimaDoTeto vira CodeMaxRowsAboveCeiling mesmo com o valor MAX_ROWS_ABOVE_LIMIT do wire intacto" (docs/glossario.md:524-528) —, e o §4:426-427 proíbe CONTRADIZER linha fechada; o valor de wire NÃO muda (§2, docs/glossario.md:56), e a divergência entre identificador e valor já é a regra e não a exceção neste bloco: CodMetodo/METHOD_NOT_ALLOWED e CodCorpoGrande/REQUEST_TOO_LARGE, os dois citados pelo próprio fecho do G2; "AboveLimit" está descartado porque "limit" é a cláusula LIMIT do SQL dentro de internal/query (bq.Limit, HasLimit), que é exatamente a colisão que a linha teto → ceiling existe para evitar
+internal/protocol	const	CodColunaReservada	CodeReservedColumn	a projeção produziu uma coluna chamada como a FrameKey; glossário: coluna → column; GLOSSARIO: reservado → reserved, na ordem inglesa, o que faz o identificador ler como o valor de wire
+internal/protocol	const	CodSintaxe	CodeSyntax	erro de sintaxe de SQL, com posição no texto da query; GLOSSARIO: sintaxe → syntax, termo compartilhado com internal/query/lexer
+internal/protocol	const	CodBind	CodeBind	híbrido: só Cod é PT-BR; Bind é o nome do estágio do pipeline
+internal/protocol	const	CodClausulaNaoSuportada	CodeUnsupportedClause	separa "isto não existe nesta versão" de "você digitou errado"; glossário: cláusula → clause; GLOSSARIO: não suportado → unsupported
+internal/protocol	const	CodDatasetDesconhecido	CodeUnknownDataset	GLOSSARIO: desconhecido → unknown, o adjetivo que já é VALOR de wire em TypeUnknown; ordem invertida pelo adjetivo
+internal/protocol	const	CodMetodo	CodeMethod	híbrido: Cod e Metodo são PT-BR; a tradução mantém a MESMA concisão do original — alongar para CodeMethodNotAllowed seria redesenho de nome, que esta fase não autoriza
+internal/protocol	const	CodMediaType	CodeMediaType	híbrido: só Cod é PT-BR; MediaType já está em inglês
+internal/protocol	const	CodCorpoGrande	CodeBodyTooLarge	o POST de /v1/query passou de MaxRequestBody; glossário: corpo → body — e "Body" é o que o próprio §4 do glossário já registra como divergência ACEITA entre identificador e valor de wire, ao citar CodCorpoGrande/REQUEST_TOO_LARGE como precedente do fecho "teto → ceiling vence o valor de wire" (docs/glossario.md:524-528); o sentido aqui não é "grande" e sim "grande DEMAIS" (passou de um teto), que em inglês só "too large" carrega, e por isso a tabela é AMPLIADA em vez de contrariada: GLOSSARIO: qualificar a linha 365 ("| grande | large | internal/protocol |") para "| grande (a magnitude do valor ou da escala) | large | internal/protocol, internal/index/segindex |" e ACRESCENTAR "| grande demais (o corpo ou a linha que passou de um teto) | too large | internal/protocol |" — é AMPLIAÇÃO, o mecanismo que o §4:428-430 manda usar para dois sentidos do mesmo termo PT-BR (qualificar o PT-BR, nunca dar o mesmo inglês aos dois), e não contradiz a linha existente; com as duas linhas, "grande → large" continua valendo para TestInt64GrandeNaoPerdePrecisao.grande e para internal/index/segindex, e nenhum termo PT-BR fica com dois inglês sem qualificação; "CodeRequestTooLarge" foi considerado e recusado: nenhum gate cobra que o identificador Go derive do valor — internal/gates/jdbc_test.go:202-205 fixa essa convenção para o nome da constante JAVA (javaNameOfCode devolve o próprio valor), e internal/gates/metrics_test.go faz o mesmo tipo de comparação sobre VALORES —, enquanto "corpo" é o termo PT-BR do identificador e a linha corpo → body (docs/glossario.md:216) é quem manda nele; trocar Body por Request seria traduzir o VALOR, não o nome
+internal/protocol	const	CodMuitasQueries	CodeTooManyQueries	recusa do pool geral; "muitas" aqui é "muitas DEMAIS", e o inglês exige o too
+internal/protocol	const	CodMuitasQueriesLongas	CodeTooManyLongQueries	recusa do SUB-POOL de consulta longa, com código próprio porque a AÇÃO do cliente é outra; Long é o mesmo adjetivo que InFlightQuery.Long já usa
+internal/protocol	const	CodTimeout	CodeTimeout	híbrido: só Cod é PT-BR; Timeout já é inglês
+internal/protocol	const	CodMaxRows	CodeMaxRows	híbrido: só Cod é PT-BR; o Max de nome composto já consagrado fica
+internal/protocol	const	CodLinhaGrande	CodeRowTooLarge	a LINHA DE RESULTADO que não coube no orçamento de buffer da consulta (§80) — é row, não line, e aqui o valor de wire ROW_TOO_LARGE confirma o sentido contra a linha "linha (de texto, de log ou de arquivo) → line" (docs/glossario.md:214); o "DEMAIS" repousa na MESMA ampliação pedida por CodeBodyTooLarge, e não numa exceção à linha 365: GLOSSARIO: qualificar a linha 365 ("| grande | large | internal/protocol |") para "| grande (a magnitude do valor ou da escala) | large | internal/protocol, internal/index/segindex |" e ACRESCENTAR "| grande demais (o corpo ou a linha que passou de um teto) | too large | internal/protocol |" — é AMPLIAÇÃO, o mecanismo que o §4:428-430 manda usar para dois sentidos do mesmo termo PT-BR (qualificar o PT-BR, nunca dar o mesmo inglês aos dois), e não contradiz a linha existente
+internal/protocol	const	CodSnapshotExpirado	CodeSnapshotExpired	o journal de versões estourou o teto e as versões que a consulta veria foram descartadas; glossário: expirado / expirada → expired, a mesma palavra de types.PresenceExpired
+internal/protocol	const	CodDatasetCorrompido	CodeDatasetCorrupt	GLOSSARIO: corrompido / estragar → corrupt, o particípio que o WARN indice.selado_corrompido já usa e que casa com o valor de wire
+internal/protocol	const	CodInterno	CodeInternal	defeito do servidor, o balde que os códigos com ação de cliente existem para NÃO usar
+internal/protocol	const	CodUnauthenticated	CodeUnauthenticated	híbrido: só Cod é PT-BR; sai com 401 e o header WWW-Authenticate
+internal/protocol	const	CodForbidden	CodeForbidden	híbrido: só Cod é PT-BR; sai com 403; a citação `protocol.CodForbidden` em docs/glossario.md:481 está entre crases e qualificada num .md — a primeira regra da tabela do §4.4 —, então o renamecite a resolve sem edição manual, e esta entrada não precisa de edição no passo 2c
+internal/protocol	const	ContentTypeNDJSON	ContentTypeNDJSON	mantido: já em inglês, com a inicial NDJSON do §6 (internal/protocol/protocol.go:25:7)
+internal/protocol	const	CodWriterFailed	CodeWriterFailed	híbrido: só Cod é PT-BR; WriterFailed já usa o adjetivo do glossário (falho → failed)
+internal/protocol	const	CodCompactionBusy	CodeCompactionBusy	híbrido: só Cod é PT-BR; já existe uma passada de compaction em voo, e sai com 409
+internal/protocol	param	NomeDeTipo.t	t	mantido: já em inglês (internal/protocol/protocol.go:278:17)
+internal/protocol	func	NomeDeTipo	TypeName	o nome do tipo como o operador o escreve no YAML (§17), com TypeNull saindo como "unknown"; glossário: nome → name, na forma substantivo-qualificador da família
+internal/protocol	const	ContentTypeJSON	ContentTypeJSON	mantido: já em inglês (internal/protocol/protocol.go:29:7)
+internal/protocol	const	MaxCorpoRequisicao	MaxRequestBody	o teto do corpo de /v1/query; glossário: corpo → body; GLOSSARIO: requisição → request; o Max de nome composto fica
+internal/protocol	type	Requisicao	Request	o corpo de POST /v1/query (§68); GLOSSARIO: requisição → request; fica nu, como o original, e é DatasetRequest que carrega o qualificador
+internal/protocol	field	Requisicao.Dataset	Dataset	mantido: já em inglês (internal/protocol/protocol.go:45:2)
+internal/protocol	field	Requisicao.SQL	SQL	mantido: já em inglês (internal/protocol/protocol.go:46:2)
+internal/protocol	field	Requisicao.Parameters	Parameters	mantido: já em inglês: espelha a chave de wire "parameters" do §68 e por isso não encurta para Params (internal/protocol/protocol.go:47:2)
+internal/protocol	field	Requisicao.MaxRows	MaxRows	mantido: já em inglês (internal/protocol/protocol.go:48:2)
+internal/protocol	field	Requisicao.TimeoutMs	TimeoutMs	mantido: já em inglês (internal/protocol/protocol.go:49:2)
+internal/protocol	type	Parametro	Param	um parâmetro posicional do §68; glossário: parâmetro → param, linha fechada que aponta para internal/protocol/params.go; a citação em docs/debitos.md:132 vira protocol.Param no mesmo commit
+internal/protocol	field	Parametro.Type	Type	mantido: já em inglês (internal/protocol/protocol.go:60:2)
+internal/protocol	field	Parametro.Value	Value	mantido: já em inglês (internal/protocol/protocol.go:61:2)
+internal/protocol	const	TipoString	WireTypeString	um dos quatro tipos de wire aceitos em Parametro.Type (protocol.go:64-70); NÃO TypeString nu: protocol.TipoString é a ETIQUETA DE WIRE sob a qual viajam OITO FieldTypes diferentes — "timestamp, ipv4, ipv6, prefixos, bytes e json viajam como %q e são convertidos contra o tipo da coluna" (params.go:72-74, mesma afirmação em protocol.go:64-70) —, enquanto types.TypeString é o FieldType 0x09 (internal/types/types.go:95); dar a mesma grafia aos dois carimbaria a equivalência que este pacote existe para NEGAR, e o colapso não é abstrato: valorString usa os dois em doze linhas (TipoString em params.go:82, types.TypeString em params.go:92) e o switch p.Type de params.go:59-67 despacha pelo vocabulário de WIRE para funções que constroem valores no vocabulário de FieldType; a qualificação de pacote só faz compilar, não separa conceitos, e a própria família desmentiria a regra que ela ensina, porque TypeBoolean não teria par em types.TypeBool (types.go:89) — quem aprendesse "protocol.TypeX é o types.TypeX" erraria no quarto caso; o prefixo sai do termo que o próprio godoc e a mensagem de recusa usam ("os quatro tipos de wire aceitos em Parametro.Type", protocol.go:64; `"type" %q não é um tipo de wire`, params.go:72); GLOSSARIO: tipo de wire (o nome de tipo que o cliente DECLARA em Parametro.Type, distinto do FieldType da coluna) → wire type | internal/protocol/params.go — linha NOVA ao lado de "tipo → type" (docs/glossario.md:351), que fica intacta; é o mecanismo do §4:428-430 para dois sentidos do mesmo termo PT-BR, e não contradiz linha nenhuma; híbrido, valor de wire "string" inalterado; TipoDesconhecido → TypeUnknown (linha 410) NÃO recebe o prefixo, porque é nome de tipo de COLUNA e não item desta lista
+internal/protocol	const	TipoInt64	WireTypeInt64	tipo de wire; mesma colisão de vocabulário descrita em TipoString → WireTypeString (linha 406), e aqui a homonímia seria EXATA: protocol.TypeInt64 (a etiqueta de wire "int64", protocol.go:73) contra types.TypeInt64 (FieldType 0x01, internal/types/types.go:87), com os dois no MESMO caminho de código — case TipoInt64 em params.go:61 despacha para valorInt64, que devolve types.Value{Type: types.TypeInt64} em params.go:110; são camadas diferentes: um é o tipo DECLARADO pelo cliente no JSON, que o pacote se recusa a inferir ou coagir (params.go:20-27), o outro é o tipo binário do valor já convertido; GLOSSARIO: tipo de wire → wire type, a mesma linha nova proposta na 406; híbrido, valor "int64" inalterado
+internal/protocol	const	TipoDouble	WireTypeDouble	tipo de wire; mesma colisão de vocabulário descrita em TipoString → WireTypeString (linha 406), também EXATA: protocol.TypeDouble (etiqueta de wire, protocol.go:74) contra types.TypeDouble (FieldType 0x02, internal/types/types.go:88), com os dois no mesmo caminho — case TipoDouble em params.go:62 e types.Value{Type: types.TypeDouble} em params.go:123; a distinção importa justamente aqui, onde o pacote RECUSA {"type":"int64","value":3.5} em vez de arredondar porque "o tipo DECLARADO manda" (protocol.go:56-58); GLOSSARIO: tipo de wire → wire type, a mesma linha nova proposta na 406; híbrido, valor "double" inalterado
+internal/protocol	const	TipoBoolean	WireTypeBoolean	tipo de wire; é o caso que expõe por que a qualificação é necessária nos outros três (linha 406): sem o prefixo, protocol.TypeString/TypeInt64/TypeDouble ficariam com a MESMA grafia de types.TypeString/TypeInt64/TypeDouble e ensinariam o leitor a tratar as duas famílias como espelho — e aí TypeBoolean não teria par, porque o FieldType correspondente é types.TypeBool (internal/types/types.go:89), usado três linhas depois do despacho por TipoBoolean (params.go:63 → :129/:131); espelho imperfeito é pior que espelho nenhum, e com WireType a diferença Boolean/Bool deixa de ser exceção não explicada; GLOSSARIO: tipo de wire → wire type, a mesma linha nova proposta na 406; híbrido, valor "boolean" inalterado
+internal/protocol	const	TipoDesconhecido	TypeUnknown	o nome de tipo de uma coluna auto que o dataset ainda não observou; GLOSSARIO: desconhecido → unknown, que já é o próprio valor desta constante
+internal/protocol	const	ChaveMoldura	FrameKey	a chave reservada na raiz do objeto que distingue moldura de linha de dados; glossário: chave → key e moldura → frame, na ordem inglesa; o valor "nishidb" não muda
+internal/protocol	const	MolduraSchema	FrameSchema	um dos três valores de FrameKey; glossário: moldura → frame; valor "schema" inalterado
+internal/protocol	const	MolduraFim	FrameEnd	glossário: moldura → frame; GLOSSARIO: fim → end, que já é o próprio valor da constante
+internal/protocol	const	MolduraErro	FrameError	glossário: moldura → frame; valor "error" inalterado
+internal/protocol	param	Leitor.moldura.linha	line	a linha NDJSON crua entregue ao decodificador de moldura; glossário: linha (de texto) → line; esta linha vai ANTES da de Leitor.moldura → frame (depois dela o endereço passa a ser Leitor.frame.linha) e antes da de Leitor → Reader; destino QUALIFICADO porque com o destino nu o rf recusa com "unimplemented replacement"; rf: mv Leitor.moldura.linha Leitor.moldura.line
+internal/protocol	local	Leitor.moldura.qual	which	a struct de decodificação PARCIAL que lê só o discriminador; GLOSSARIO: qual (o discriminador que diz de que moldura se trata) → which — kind e type estão ocupados neste pacote, e switch which.Nishidb lê como a pergunta que o código faz; mesma ordem e mesmo motivo de Leitor.moldura.linha; rf: mv Leitor.moldura.qual Leitor.moldura.which
+internal/protocol	method	Leitor.moldura	readFrame	CONSOME uma linha de moldura já recebida e devolve se a leitura continua (godoc de stream.go:104-106; chamado em stream.go:98); glossário: moldura → frame (docs/glossario.md:101), termo intacto — o que se acrescenta é o verbo comum "lê → read", que o §4 dispensa de entrar na tabela (docs/glossario.md:487-490); NÃO `frame` nu: em PT-BR "moldura" só se lê como substantivo, mas em inglês um MÉTODO chamado frame, com argumento e retorno bool, lê como VERBO ("emoldurar", montar a moldura) e inverte a direção da operação — reforçado pelo vizinho que de fato PRODUZ molduras, EscreveLinha → WriteLine (stream.go:23) — e o pacote já reserva frame como SUBSTANTIVO em toda a família (FrameKey, FrameSchema, FrameEnd, FrameError em protocol.go:90-97, framePrefix em stream.go:33), de modo que o único frame em posição de ação seria justamente o que não constrói moldura nenhuma; é o precedente do §4 "nome errado é corrigido, não traduzido" (docs/glossario.md:515-523) aplicado à classe gramatical: if !l.readFrame(line) diz a direção que o godoc descreve; destino QUALIFICADO: com o destino nu o rf REBAIXA o método a função de pacote (func readFrame(l *Leitor, ...)) com build e vet verdes; rf: mv Leitor.moldura Leitor.readFrame
+internal/protocol	field#gopls	Leitor.moldura.qual.Nishidb	Nishidb	mantido: já em inglês (internal/protocol/stream.go:108:3)
+internal/protocol	local#ambiguo	Leitor.moldura.err	err	mantido: já em inglês (internal/protocol/stream.go:110:5)
+internal/protocol	local	Leitor.moldura.s	s	mantido: já em inglês (internal/protocol/stream.go:122:7)
+internal/protocol	local#ambiguo	Leitor.moldura.err	err	mantido: já em inglês (internal/protocol/stream.go:123:6)
+internal/protocol	local	Leitor.moldura.f	f	mantido: já em inglês (internal/protocol/stream.go:131:7)
+internal/protocol	local#ambiguo	Leitor.moldura.err	err	mantido: já em inglês (internal/protocol/stream.go:132:6)
+internal/protocol	local	Leitor.moldura.e	e	mantido: já em inglês (internal/protocol/stream.go:139:7)
+internal/protocol	local#ambiguo	Leitor.moldura.err	err	mantido: já em inglês (internal/protocol/stream.go:140:6)
+internal/protocol	method	Leitor.Schema	Schema	mantido: já em inglês (internal/protocol/stream.go:156:18)
+internal/protocol	var	ErrStream	ErrStream	mantido: já em inglês (internal/protocol/stream.go:15:5)
+internal/protocol	method	Leitor.Linha	Line	a linha de dados corrente, CRUA e sem o LF; glossário: linha → line, e não row, porque o contrato é textual (o CLI a repassa ao stdout sem redecodificar); destino QUALIFICADO: com o destino nu o rf REBAIXA o método a função de pacote (func Line(l *Leitor) []byte) e reescreve os chamadores externos como protocol.Line(l), com build e vet verdes; rf: mv Leitor.Linha Leitor.Line
+internal/protocol	method	Leitor.Fim	End	o fecho de sucesso, ou nil se a consulta terminou em erro; glossário: fim (a moldura que fecha o stream) → end, o valor de wire da moldura que ele expõe; destino QUALIFICADO: com o destino nu o rf REBAIXA o método a função de pacote (func End(l *Leitor) *LinhaFim), sem colisão de escopo que o denuncie e com build e vet verdes; rf: mv Leitor.Fim Leitor.End
+internal/protocol	method	Leitor.Erro	Failure	o fecho de FALHA da consulta, distinto de Err(), que é a falha de TRANSPORTE — e a distinção é o tipo inteiro; o nome certo já está no código, porque o campo que este acessor expõe se chama falha; Error poria os dois acessores mais confundíveis de Go a uma letra um do outro e anunciaria uma interface que o tipo não implementa; escolha FECHADA pelo juiz do G2 (docs/glossario.md:515-523), e é por ela que o tipo Falha cede e vira ErrorDetail (linha 364); glossário: falha (o fecho de erro do stream, que Reader.Failure expõe) → failure (docs/glossario.md:360); destino QUALIFICADO: com o destino nu o rf NÃO recusa — medido com rf -diff sobre o script completo do pacote, exit 0 e stderr vazio, sem "already have" (o tipo Falha vira ErrorDetail, não Failure, então o nome não está ocupado no escopo de pacote) — ele REBAIXA o método a função de pacote (+func Failure(l *Reader) *ErrorLine { return l.failure }) e reescreve os chamadores externos como protocol.Failure(l), com build e vet verdes: é o mesmo defeito SILENCIOSO que os motivos de Leitor.Linha e Leitor.Fim descrevem, e não uma recusa alta; rf: mv Leitor.Erro Leitor.Failure
+internal/protocol	method	Leitor.Err	Err	mantido: já em inglês: a falha de TRANSPORTE, na convenção Err() da stdlib, e é o irmão contra o qual Failure() foi julgado (internal/protocol/stream.go:171:18)
+internal/protocol	param	EscreveLinha.w	w	mantido: já em inglês (internal/protocol/stream.go:23:19)
+internal/protocol	param	EscreveLinha.v	v	mantido: já em inglês (internal/protocol/stream.go:23:32)
+internal/protocol	func	EscreveLinha	WriteLine	serializa v como uma linha NDJSON (objeto mais LF) com SetEscapeHTML(false); verbo comum escreve → write; glossário: linha → line
+internal/protocol	local	EscreveLinha.enc	enc	mantido: já em inglês (internal/protocol/stream.go:24:2)
+internal/protocol	var	prefixoMoldura	framePrefix	o começo literal que o WriteLine produz para as três molduras, e o discriminador que nenhuma linha de dados pode ter; glossário: prefixo → prefix e moldura → frame
+internal/protocol	field	Leitor.linha	line	a linha de dados corrente, guardada crua entre chamadas de Next; par do acessor Line(); esta linha vai ANTES da de Leitor → Reader (depois dela o endereço não resolve: "rf: Leitor not found" aborta o lote); destino QUALIFICADO porque com o destino nu o rf recusa com "unimplemented replacement"; rf: mv Leitor.linha Leitor.line
+internal/protocol	field	Leitor.fim	end	o fecho de sucesso já lido; par do acessor End(); mesma ordem e mesmo motivo de Leitor.linha; rf: mv Leitor.fim Leitor.end
+internal/protocol	field	Leitor.falha	failure	o fecho de falha da consulta, distinto do campo err (transporte); é ESTE campo que dá o nome ao acessor Failure(), e o par campo/acessor é o que torna a escolha verificável; mesma ordem e mesmo motivo de Leitor.linha; rf: mv Leitor.falha Leitor.failure
+internal/protocol	type	Leitor	Reader	percorre uma resposta de /v1/query impondo o contrato schema → dados → fecho SEMPRE presente; glossário: leitor → reader
+internal/protocol	field	Leitor.br	br	mantido: já em inglês (internal/protocol/stream.go:46:2)
+internal/protocol	field	Leitor.schema	schema	mantido: já em inglês (internal/protocol/stream.go:47:2)
+internal/protocol	field	Leitor.err	err	mantido: já em inglês (internal/protocol/stream.go:51:2)
+internal/protocol	field	Leitor.done	done	mantido: já em inglês (internal/protocol/stream.go:52:2)
+internal/protocol	param	NovoLeitor.r	r	mantido: já em inglês (internal/protocol/stream.go:56:17)
+internal/protocol	func	NovoLeitor	NewReader	prepara a leitura de r; glossário: leitor → reader, e §2 fixa construtores em New
+internal/protocol	method	Leitor.Next	Next	mantido: já em inglês (internal/protocol/stream.go:62:18)
+internal/protocol	local	Leitor.Next.err	err	mantido: já em inglês (internal/protocol/stream.go:67:10)
+internal/protocol	local#gopls	Leitor.Next.linha	line	posicao internal/protocol/stream.go:67:3; a linha lida por br.ReadBytes('\n') dentro do laço de Next; glossário: linha (de texto) → line; declarado em bloco aninhado, fora do alcance de endereço do rf
+internal/protocol	param	TestStreamSemFechoEhFalha.t	t	mantido: já em inglês (internal/protocol/stream_test.go:110:32)
+internal/protocol	func	TestStreamSemFechoEhFalha	TestStreamSemFechoEhFalha	mantido: nome de teste, Fase 4 (internal/protocol/stream_test.go:110:6)
+internal/protocol	local	TestStreamSemFechoEhFalha.stream	stream	mantido: já em inglês (internal/protocol/stream_test.go:111:2)
+internal/protocol	local	TestStreamSemFechoEhFalha.l	l	mantido: já em inglês (internal/protocol/stream_test.go:113:2)
+internal/protocol	param	TestPrimeiraLinhaSemSchemaEhFalha.t	t	mantido: já em inglês (internal/protocol/stream_test.go:127:40)
+internal/protocol	func	TestPrimeiraLinhaSemSchemaEhFalha	TestPrimeiraLinhaSemSchemaEhFalha	mantido: nome de teste, Fase 4 (internal/protocol/stream_test.go:127:6)
+internal/protocol	local	TestPrimeiraLinhaSemSchemaEhFalha.l	l	mantido: já em inglês (internal/protocol/stream_test.go:128:2)
+internal/protocol	param	TestMolduraDesconhecidaEhFalha.t	t	mantido: já em inglês (internal/protocol/stream_test.go:137:37)
+internal/protocol	func	TestMolduraDesconhecidaEhFalha	TestMolduraDesconhecidaEhFalha	mantido: nome de teste, Fase 4 (internal/protocol/stream_test.go:137:6)
+internal/protocol	local	TestMolduraDesconhecidaEhFalha.stream	stream	mantido: já em inglês (internal/protocol/stream_test.go:138:2)
+internal/protocol	local	TestMolduraDesconhecidaEhFalha.l	l	mantido: já em inglês (internal/protocol/stream_test.go:140:2)
+internal/protocol	param	escreveStream.t	t	mantido: já em inglês (internal/protocol/stream_test.go:14:20)
+internal/protocol	param#gopls	escreveStream.fecho	closingFrame	posicao internal/protocol/stream_test.go:14:34; o helper aceita EndLine, ErrorLine ou nil, então o parâmetro nomeia a MOLDURA QUE FECHA o stream; GLOSSARIO: fecho (a linha que fecha o stream: fim ou erro) → closing — "close" nu é builtin, e "end" diria só metade dos valores; declarado em bloco aninhado, fora do alcance de endereço do rf
+internal/protocol	param	escreveStream.rows	rows	mantido: já em inglês (internal/protocol/stream_test.go:14:45)
+internal/protocol	func#gopls	escreveStream	writeStream	posicao internal/protocol/stream_test.go:14:6; helper que monta uma resposta completa (schema, rows cruas e fecho) para os testes do Reader; verbo comum escreve → write; declarado em bloco aninhado, fora do alcance de endereço do rf
+internal/protocol	param	TestMolduraNaoEscapaHTML.t	t	mantido: já em inglês (internal/protocol/stream_test.go:150:31)
+internal/protocol	func	TestMolduraNaoEscapaHTML	TestMolduraNaoEscapaHTML	mantido: nome de teste, Fase 4 (internal/protocol/stream_test.go:150:6)
+internal/protocol	local	TestMolduraNaoEscapaHTML.sb	sb	mantido: já em inglês (internal/protocol/stream_test.go:151:6)
+internal/protocol	local	TestMolduraNaoEscapaHTML.err	err	mantido: já em inglês (internal/protocol/stream_test.go:152:2)
+internal/protocol	param	TestPrefixoDeMolduraEhOQueOEncoderProduz.t	t	mantido: já em inglês (internal/protocol/stream_test.go:168:47)
+internal/protocol	func	TestPrefixoDeMolduraEhOQueOEncoderProduz	TestPrefixoDeMolduraEhOQueOEncoderProduz	mantido: nome de teste, Fase 4 (internal/protocol/stream_test.go:168:6)
+internal/protocol	local	TestPrefixoDeMolduraEhOQueOEncoderProduz.sb	sb	mantido: já em inglês (internal/protocol/stream_test.go:169:6)
+internal/protocol	local	escreveStream.sb	sb	mantido: já em inglês (internal/protocol/stream_test.go:16:6)
+internal/protocol	local	TestPrefixoDeMolduraEhOQueOEncoderProduz.err	err	mantido: já em inglês (internal/protocol/stream_test.go:170:5)
+internal/protocol	local#ambiguo	escreveStream.err	err	mantido: já em inglês (internal/protocol/stream_test.go:17:2)
+internal/protocol	local	escreveStream.r	r	mantido: já em inglês (internal/protocol/stream_test.go:28:9)
+internal/protocol	local#ambiguo	escreveStream.err	err	mantido: já em inglês (internal/protocol/stream_test.go:33:6)
+internal/protocol	param	TestLeitorPercorreSchemaRowsEFecho.t	t	mantido: já em inglês (internal/protocol/stream_test.go:40:41)
+internal/protocol	func	TestLeitorPercorreSchemaRowsEFecho	TestLeitorPercorreSchemaRowsEFecho	mantido: nome de teste, Fase 4 (internal/protocol/stream_test.go:40:6)
+internal/protocol	local	TestLeitorPercorreSchemaRowsEFecho.stream	stream	mantido: já em inglês (internal/protocol/stream_test.go:41:2)
+internal/protocol	local	TestLeitorPercorreSchemaRowsEFecho.l	l	mantido: já em inglês (internal/protocol/stream_test.go:47:2)
+internal/protocol	local#gopls	TestLeitorPercorreSchemaRowsEFecho.recebidas	received	posicao internal/protocol/stream_test.go:48:6; as linhas de dados que o Reader entregou, acumuladas cruas para comparação; GLOSSARIO: recebido → received; declarado em bloco aninhado, fora do alcance de endereço do rf
+internal/protocol	local	TestLeitorPercorreSchemaRowsEFecho.err	err	mantido: já em inglês (internal/protocol/stream_test.go:53:5)
+internal/protocol	local	TestLeitorPercorreSchemaRowsEFecho.got	got	mantido: já em inglês (internal/protocol/stream_test.go:59:5)
+internal/protocol	param	TestFechoDeErroChegaDepoisDasRows.t	t	mantido: já em inglês (internal/protocol/stream_test.go:78:40)
+internal/protocol	func	TestFechoDeErroChegaDepoisDasRows	TestFechoDeErroChegaDepoisDasRows	mantido: nome de teste, Fase 4 (internal/protocol/stream_test.go:78:6)
+internal/protocol	local	TestFechoDeErroChegaDepoisDasRows.stream	stream	mantido: já em inglês (internal/protocol/stream_test.go:79:2)
+internal/protocol	local	TestFechoDeErroChegaDepoisDasRows.l	l	mantido: já em inglês (internal/protocol/stream_test.go:89:2)
+internal/protocol	local	TestFechoDeErroChegaDepoisDasRows.n	n	mantido: já em inglês (internal/protocol/stream_test.go:90:2)
+internal/protocol	local	TestFechoDeErroChegaDepoisDasRows.err	err	mantido: já em inglês (internal/protocol/stream_test.go:94:5)
+internal/protocol	field#gopls	TestATabelaDeTiposDoSpec73.casos.tipo	typeName	posicao internal/protocol/jdbc_test.go:20:3; campo da struct anônima da tabela de casos, fora do inventário; guarda o NOME do tipo comparado contra col.Type, e "type" nu é palavra reservada em Go — mesma solução já usada para defaultValue
+internal/protocol	field#gopls	TestDisplaySizeDeCadaTipoCasaComALarguraQueOEncoderEmite.casos.nome	name	posicao internal/protocol/jdbc_test.go:161:3; campo da struct anônima da tabela de casos, fora do inventário; glossário: nome → name
+internal/protocol	field#gopls	TestOsQuatroTiposDeWireViramValor.casos.nome	name	posicao internal/protocol/params_test.go:19:3; campo da struct anônima da tabela de casos, fora do inventário; glossário: nome → name
+internal/protocol	field#gopls	TestOsQuatroTiposDeWireViramValor.casos.quer	want	posicao internal/protocol/params_test.go:21:3; campo da struct anônima da tabela de casos, fora do inventário; glossário: quer (esperado em teste) → want — aqui é igualdade, em contraste com o trecho de TestOTipoDeclaradoManda, que é substring
+internal/protocol	field#gopls	TestOTipoDeclaradoManda.casos.nome	name	posicao internal/protocol/params_test.go:99:3; campo da struct anônima da tabela de casos, fora do inventário; glossário: nome → name
+internal/protocol	field#gopls	TestOTipoDeclaradoManda.casos.trecho	snippet	posicao internal/protocol/params_test.go:101:3; campo da struct anônima da tabela de casos, fora do inventário; mesmo motivo de TestTipoForaDosQuatroNomeiaAAlternativa.trecho

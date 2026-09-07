@@ -396,7 +396,7 @@ func (s *Store) podaTamanhosExpulsos(vivos map[uint32]int64) {
 // passada de retenção por causa dele seria parar de devolver disco por uma
 // corrida cujo desfecho correto é ignorar o arquivo.
 func (s *Store) bytesDoIndiceDoSegmento(seg uint32) int64 {
-	info, err := os.Stat(segindex.CaminhoSelado(s.dirDeDados(), seg))
+	info, err := os.Stat(segindex.SealedPath(s.dirDeDados(), seg))
 	if err != nil {
 		return 0
 	}

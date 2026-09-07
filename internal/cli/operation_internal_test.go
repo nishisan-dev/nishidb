@@ -21,7 +21,7 @@ import (
 // Os cinco valores são diferentes de propósito: com dois iguais, um contador
 // impresso no lugar do outro passaria despercebido.
 func TestResumoDaIngestaoTrazOsContadoresDoDatasetQueConsome(t *testing.T) {
-	ligada := protocol.IngestaoStats{
+	ligada := protocol.IngestionStats{
 		Enabled: true, State: "UP",
 		Events: 1, Applied: 2, Stale: 3, Discarded: 4, Failed: 5,
 	}

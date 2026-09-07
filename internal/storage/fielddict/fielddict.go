@@ -256,27 +256,27 @@ func (d *Dict) SetTypeHint(id types.FieldID, t types.FieldType) error {
 		return fmt.Errorf("fielddict: tipo nulo não pode ser fixado no campo %d", id)
 	}
 	d.mu.RLock()
-	válido := id >= 1 && int(id) <= len(d.hints)
-	var atual types.FieldType
-	if válido {
-		atual = d.hints[id-1]
+	exists := id >= 1 && int(id) <= len(d.hints)
+	var current types.FieldType
+	if exists {
+		current = d.hints[id-1]
 	}
-	nome := ""
-	if válido {
-		nome = d.byID[id-1]
+	name := ""
+	if exists {
+		name = d.byID[id-1]
 	}
 	d.mu.RUnlock()
 
-	if !válido {
+	if !exists {
 		return fmt.Errorf("fielddict: campo %d inexistente", id)
 	}
-	switch atual {
+	switch current {
 	case t:
 		return nil // idempotente: já fixado com o mesmo tipo
 	case types.TypeNull: // ainda não fixado: segue
 	default:
 		return fmt.Errorf("%w: campo %q fixado como %s, tentativa de %s",
-			ErrTypeHintConflict, nome, atual, t)
+			ErrTypeHintConflict, name, current, t)
 	}
 
 	var rec [hintRecordSize]byte
@@ -286,13 +286,13 @@ func (d *Dict) SetTypeHint(id types.FieldID, t types.FieldType) error {
 	binary.LittleEndian.PutUint32(rec[5:9], crc32.Checksum(rec[:5], castagnoli))
 
 	if _, err := d.f.WriteAt(rec[:], d.size); err != nil {
-		return fmt.Errorf("fielddict: append do tipo de %q: %w", nome, err)
+		return fmt.Errorf("fielddict: append do tipo de %q: %w", name, err)
 	}
 	// fsync ANTES de publicar em memória: invertido, um crash entre a
 	// publicação e o fsync deixaria records duráveis apontando para um tipo
 	// que o dicionário não conhece.
 	if err := d.f.Sync(); err != nil {
-		return fmt.Errorf("fielddict: fsync do tipo de %q: %w", nome, err)
+		return fmt.Errorf("fielddict: fsync do tipo de %q: %w", name, err)
 	}
 
 	d.mu.Lock()

@@ -214,7 +214,7 @@ def do_fio(valor: Any, jdbc: str) -> Any:
 
 # ------------------------------------------------------------------ Python -> fio
 
-#: Os quatro tipos de wire de `protocolo.Parametro.Type`. A lista é curta
+#: Os quatro tipos de wire de `protocol.Param.Type`. A lista é curta
 #: porque é o contrato de `binder.coerceParam`: endereços, prefixos e temporais
 #: viajam como string ou inteiro e são convertidos pela MESMA tabela dos
 #: literais SQL.

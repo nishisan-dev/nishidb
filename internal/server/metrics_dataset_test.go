@@ -39,7 +39,7 @@ import (
 type amostraExposta struct {
 	Nome   string
 	Ajuda  string
-	Tipo   metrics.Tipo
+	Tipo   metrics.Type
 	Labels map[string]string
 	Valor  float64
 }
@@ -56,7 +56,7 @@ func coletaAmostras(t *testing.T, srv *server.Servidor) []amostraExposta {
 	var (
 		out   []amostraExposta
 		ajuda = make(map[string]string)
-		tipos = make(map[string]metrics.Tipo)
+		tipos = make(map[string]metrics.Type)
 	)
 	for _, linha := range strings.Split(pega(t, srv, "/metrics"), "\n") {
 		if linha == "" {
@@ -176,24 +176,24 @@ func achaSerie(amostras []amostraExposta, nome string, rotulos map[string]string
 //
 // A tradução é feita no teste, e não lida do registry, de propósito: o que
 // interessa aqui é o que o Prometheus LÊ na porta. Um coletor que devolvesse
-// TipoContador e um formatador que escrevesse "gauge" não teriam como ser
+// TypeCounter e um formatador que escrevesse "gauge" não teriam como ser
 // distinguidos por uma asserção que perguntasse ao coletor.
 //
 // Tipo desconhecido é falha, e não um default silencioso: `untyped` é o que o
 // formatador emite quando o Tipo não é nenhum dos três, e aceitá-lo aqui faria
 // o oráculo do contador passar sobre uma série sem tipo nenhum.
-func tipoDoScrape(t *testing.T, texto string) metrics.Tipo {
+func tipoDoScrape(t *testing.T, texto string) metrics.Type {
 	t.Helper()
 	switch strings.TrimSpace(texto) {
 	case "counter":
-		return metrics.TipoContador
+		return metrics.TypeCounter
 	case "gauge":
-		return metrics.TipoMedidor
+		return metrics.TypeGauge
 	case "histogram":
-		return metrics.TipoHistograma
+		return metrics.TypeHistogram
 	}
 	t.Fatalf("tipo %q no scrape: o formato de exposição só reconhece counter, gauge e histogram", texto)
-	return metrics.TipoContador
+	return metrics.TypeCounter
 }
 
 // familiaDe resolve o nome-base de uma linha: o próprio nome, quando ele é a
@@ -506,11 +506,11 @@ func TestSeriesDeCompactionGanhamAlimentador(t *testing.T) {
 	t.Logf("pela porta: %d bytes lidos e %d escritos, os mesmos que %d aposentadoria(s) registraram no log",
 		int64(lidos.Valor), int64(escritos.Valor), strings.Count(registro.String(), "event=compaction.segmento_aposentado"))
 
-	if lidos.Tipo != metrics.TipoContador {
+	if lidos.Tipo != metrics.TypeCounter {
 		t.Errorf("%s saiu como %v, queria contador: o painel do §86 lê a TAXA de bytes movidos, e taxa não se calcula sobre medidor",
 			metrics.MetCompactionBytesRead, lidos.Tipo)
 	}
-	if escritos.Tipo != metrics.TipoContador {
+	if escritos.Tipo != metrics.TypeCounter {
 		t.Errorf("%s saiu como %v, queria contador: o painel do §86 lê a TAXA de bytes movidos, e taxa não se calcula sobre medidor",
 			metrics.MetCompactionBytesWritten, escritos.Tipo)
 	}
@@ -523,7 +523,7 @@ func TestSeriesDeCompactionGanhamAlimentador(t *testing.T) {
 	if !ok {
 		t.Fatalf("%s não foi publicada", metrics.MetCompactionRunning)
 	}
-	if rodando.Tipo != metrics.TipoMedidor {
+	if rodando.Tipo != metrics.TypeGauge {
 		t.Errorf("%s saiu como %v, queria medidor: é estado, não acumulado", metrics.MetCompactionRunning, rodando.Tipo)
 	}
 	if rodando.Valor != 1 {

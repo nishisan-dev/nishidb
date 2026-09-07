@@ -24,8 +24,8 @@ import (
 // função faria o teste concordar com qualquer mudança que ela sofresse, que é
 // o oposto de um golden.
 func TestChaveCanonicaEhGoldenDeDisco(t *testing.T) {
-	casos := []struct {
-		nome string
+	cases := []struct {
+		name string
 		v    types.Value
 		hex  string
 	}{
@@ -50,8 +50,8 @@ func TestChaveCanonicaEhGoldenDeDisco(t *testing.T) {
 		{"ipv4_prefix", types.Value{Type: types.TypeIPv4Prefix, Bytes: []byte{192, 168, 0, 0, 16}}, "07c0a8000010"},
 		{"ipv6_prefix", types.Value{Type: types.TypeIPv6Prefix, Bytes: append(bytes.Repeat([]byte{0xfe, 0x80}, 8), 64)}, "08fe80fe80fe80fe80fe80fe80fe80fe8040"},
 	}
-	for _, c := range casos {
-		t.Run(c.nome, func(t *testing.T) {
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
 			got, err := Append(nil, c.v)
 			if err != nil {
 				t.Fatalf("Append: %v", err)
@@ -59,7 +59,7 @@ func TestChaveCanonicaEhGoldenDeDisco(t *testing.T) {
 			if h := hex.EncodeToString(got); h != c.hex {
 				t.Fatalf("chave canônica de %s mudou: %s, golden %s\n"+
 					"ATENÇÃO: estes bytes são o conteúdo do values.dict em disco. "+
-					"Alterá-los invalida todo índice já materializado.", c.nome, h, c.hex)
+					"Alterá-los invalida todo índice já materializado.", c.name, h, c.hex)
 			}
 		})
 	}
@@ -98,13 +98,13 @@ func TestTipoNaoIndexavelEhErro(t *testing.T) {
 // interno por errors.Is(err, types.ErrTooLarge). Um erro cru aqui mandaria o
 // operador procurar defeito no engine.
 func TestValidateSeparaCulpaDoEventoDeBugNosso(t *testing.T) {
-	grande := types.Value{Type: types.TypeString, Bytes: make([]byte, types.MaxIndexedValueBytes+1)}
-	err := Validate(grande)
+	aboveCeiling := types.Value{Type: types.TypeString, Bytes: make([]byte, types.MaxIndexedValueBytes+1)}
+	err := Validate(aboveCeiling)
 	if !errors.Is(err, types.ErrTooLarge) {
 		t.Fatalf("valor acima do teto deveria trazer ErrTooLarge, veio %v", err)
 	}
-	noLimite := types.Value{Type: types.TypeString, Bytes: make([]byte, types.MaxIndexedValueBytes)}
-	if err := Validate(noLimite); err != nil {
+	atCeiling := types.Value{Type: types.TypeString, Bytes: make([]byte, types.MaxIndexedValueBytes)}
+	if err := Validate(atCeiling); err != nil {
 		t.Fatalf("o teto é inclusivo (%d bytes cabem): %v", types.MaxIndexedValueBytes, err)
 	}
 }

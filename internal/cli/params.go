@@ -14,7 +14,7 @@ import (
 // A ordem da linha de comando é a ordem posicional dos `?` na query, e flag
 // chama Set na ordem em que os argumentos aparecem — o append preserva. Nada
 // aqui pode virar map.
-type listaDeParametros []protocol.Parametro
+type listaDeParametros []protocol.Param
 
 // String é chamada pelo pacote flag no valor ZERO para montar o texto do
 // --help, antes de qualquer Set. Receptor por valor e tolerante ao nil: um
@@ -44,21 +44,21 @@ func (l *listaDeParametros) Set(s string) error {
 	if err != nil {
 		return err
 	}
-	*l = append(*l, protocol.Parametro{Type: tipo, Value: bruto})
+	*l = append(*l, protocol.Param{Type: tipo, Value: bruto})
 	return nil
 }
 
 // valorDeWire monta o json.RawMessage que o campo "value" do protocolo espera.
 //
 // O int64 e o double vão VERBATIM, sem passar por strconv aqui. É o mesmo
-// motivo de protocolo.Parametro.Value ser json.RawMessage e não any: decodificar
+// motivo de protocol.Param.Value ser json.RawMessage e não any: decodificar
 // para float64 no caminho faria `--param int64:9223372036854775808` chegar ao
 // servidor como um número arredondado e ACEITO, em vez de receber a mensagem de
 // overflow. A validação é a do protocolo, uma só, e ela roda sobre o texto
 // original.
 func valorDeWire(tipo, valor string) (json.RawMessage, error) {
 	switch tipo {
-	case protocol.TipoString:
+	case protocol.WireTypeString:
 		// json.Marshal e não aspas na mão: é aqui que ", \ e os controles
 		// viram escapes JSON válidos.
 		b, err := json.Marshal(valor)
@@ -66,7 +66,7 @@ func valorDeWire(tipo, valor string) (json.RawMessage, error) {
 			return nil, err
 		}
 		return b, nil
-	case protocol.TipoInt64, protocol.TipoDouble, protocol.TipoBoolean:
+	case protocol.WireTypeInt64, protocol.WireTypeDouble, protocol.WireTypeBoolean:
 		return json.RawMessage(valor), nil
 	case "":
 		return nil, fmt.Errorf("tipo ausente (aceitos: %s)", tiposDeParametro)
@@ -77,5 +77,5 @@ func valorDeWire(tipo, valor string) (json.RawMessage, error) {
 
 // tiposDeParametro repete a lista do protocolo para a mensagem de USO, que
 // precisa dela antes de qualquer valor ser validado.
-const tiposDeParametro = protocol.TipoString + ", " + protocol.TipoInt64 + ", " +
-	protocol.TipoDouble + ", " + protocol.TipoBoolean
+const tiposDeParametro = protocol.WireTypeString + ", " + protocol.WireTypeInt64 + ", " +
+	protocol.WireTypeDouble + ", " + protocol.WireTypeBoolean

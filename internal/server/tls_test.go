@@ -146,8 +146,8 @@ func TestServeTLSStreamingNDJSONCompleto(t *testing.T) {
 	if len(rows) != 4 {
 		t.Fatalf("rows = %d, quer 4", len(rows))
 	}
-	if l.Fim() == nil || l.Fim().Rows != 4 || l.Fim().Truncated {
-		t.Fatalf("fecho = %+v", l.Fim())
+	if l.End() == nil || l.End().Rows != 4 || l.End().Truncated {
+		t.Fatalf("fecho = %+v", l.End())
 	}
 }
 

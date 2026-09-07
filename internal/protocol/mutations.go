@@ -9,15 +9,15 @@ package protocol
 // pergunta "em qual dataset" é idêntica nas duas rotas, e um cliente que já
 // sabe montar uma não aprende um segundo formato para a outra.
 
-// RequisicaoDataset é o corpo OPCIONAL de POST /v1/compact e POST
+// DatasetRequest é o corpo OPCIONAL de POST /v1/compact e POST
 // /v1/checkpoint. Corpo ausente (Content-Length: 0) é aceito e equivale a
 // Dataset == "" — as duas rotas tratam os dois casos da mesma forma.
-type RequisicaoDataset struct {
+type DatasetRequest struct {
 	Dataset string `json:"dataset,omitempty"`
 }
 
-// RespostaCheckpoint é o corpo de 200 de POST /v1/checkpoint.
-type RespostaCheckpoint struct {
+// CheckpointResponse é o corpo de 200 de POST /v1/checkpoint.
+type CheckpointResponse struct {
 	Datasets []CheckpointDataset `json:"datasets"`
 }
 
@@ -33,8 +33,8 @@ type CheckpointDataset struct {
 	DurationMs int64  `json:"durationMs"`
 }
 
-// RespostaCompact é o corpo de 200 de POST /v1/compact.
-type RespostaCompact struct {
+// CompactResponse é o corpo de 200 de POST /v1/compact.
+type CompactResponse struct {
 	Datasets []CompactDataset `json:"datasets"`
 }
 

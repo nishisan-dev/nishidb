@@ -9,7 +9,7 @@ binário `nishidb query --server` por `subprocess` e parsear NDJSON na mão, ou 
 o protocolo do zero em cada script.
 
 O trabalho é **muito mais barato do que foi o JDBC**, e por uma razão concreta: a Fase 7
-não foi só escrever Java. Ela foi **fechar o contrato de wire** — o `DescritorJDBC` com
+não foi só escrever Java. Ela foi **fechar o contrato de wire** — o `JDBCDescriptor` com
 `precision`/`scale`/`displaySize`, o `nullable` no executor, o `UNSUPPORTED_CLAUSE`, o
 `--param`, o flush depois da linha de schema. Tudo isso já está no servidor. O client
 Python entra num contrato **maduro, congelado e cobrado por gates dos dois lados**.
@@ -60,7 +60,7 @@ with nishidb.connect("nishidb://db01:9142/radius_sessions", user="leitor") as cx
 
 Verificado no código, não suposto:
 
-- **`Cursor.description` sai pronto da linha de schema.** `protocolo.Coluna`
+- **`Cursor.description` sai pronto da linha de schema.** `protocol.Column`
   ([protocol.go:126](internal/protocol/protocol.go:126)) tem `name`, `type`, `jdbc`,
   `nullable`, `precision`, `scale`, `displaySize` — os sete campos da tupla do DB-API, sem
   faltar nem sobrar. Nenhuma tabela de tipos nova no client, e um tipo novo no servidor
@@ -70,7 +70,7 @@ Verificado no código, não suposto:
 - **Chave duplicada é legal** (`SELECT a, a` produz `{"a":1,"a":1}`). O casamento tem de ser
   posicional/ordenado, **nunca por dict de nome** — um `json.loads` ingênuo perde a coluna
   repetida em silêncio.
-- **Os três desfechos do stream já estão separados** em `protocolo.Leitor`
+- **Os três desfechos do stream já estão separados** em `protocol.Reader`
   ([stream.go:45](internal/protocol/stream.go:45)): schema, fecho de sucesso, fecho de erro,
   e **stream que acaba sem fecho é falha**. É o contrato a portar, linha a linha.
 - **A tabela código→exceção tem oráculo do lado Go.** `internal/gates/jdbc_test.go` já parseia
@@ -85,7 +85,7 @@ E cinco fatos do servidor que o client **tem de respeitar**, todos verificados:
 
 - **O servidor usa `DisallowUnknownFields`** ([query.go:231](internal/server/query.go:231)).
   Um campo a mais no corpo de `/v1/query` é **400 `BAD_REQUEST`**, não um campo ignorado. O
-  serializador do client monta exatamente os cinco campos da `Requisicao` e nada mais.
+  serializador do client monta exatamente os cinco campos da `Request` e nada mais.
 - **`maxRows <= 0` é 400**, e `maxRows` acima do teto do dataset é 400 `MAX_ROWS_ABOVE_LIMIT`:
   o servidor **nunca apara em silêncio**. É por isso que a regra é omitir o campo, não mandar 0.
 - **Toda falha de autenticação paga 100 ms fixos** de atraso
@@ -212,7 +212,7 @@ soltos. E acrescentar os diretórios à lista que `testesDoRepositorio`
   que gasta um round-trip de 401 antes de mandar a credencial. Não é micro-otimização: **toda
   falha de autenticação custa 100 ms fixos no servidor**, e desafio-resposta pagaria isso em
   toda requisição.
-- Corpo de erro: decodifica `protocolo.CorpoErro`; quando não é JSON, **espelhar
+- Corpo de erro: decodifica `protocol.ErrorBody`; quando não é JSON, **espelhar
   `dicaDeEsquema`** ([query_remote.go:110](internal/cli/query_remote.go:110)) — porta TLS
   respondendo a texto puro devolve `Client sent an HTTP request to an HTTPS server`, e a
   mensagem tem de sugerir o `nishidbs://`/`tls=true`. Sem isso o usuário vê "400 sem corpo
@@ -242,7 +242,7 @@ Precedência: argumentos de `connect()` > DSN, explícita e testada (o espelho d
 
 ## Fase C — Leitor NDJSON
 
-`leitor.py` porta `protocolo.Leitor` com os **mesmos três desfechos separados**: schema, fecho
+`leitor.py` porta `protocol.Reader` com os **mesmos três desfechos separados**: schema, fecho
 de sucesso, fecho de erro — mais falha de transporte, que é distinta. Regras que o Go já fixa
 e o Python tem de repetir:
 
@@ -336,7 +336,7 @@ os dois construtores errados no JDBC (risco R9), e o Python tem armadilhas equiv
 - `query(sql, *params)` devolve iterador de `Row` — mapping **e** sequence (`linha["nome"]`,
   `linha[0]`, `dict(linha)`), com o casamento posicional por baixo.
 - `datasets()`, `metadata(nome)`, `stats()`, `health()` sobre as três rotas GET, devolvendo
-  dataclasses tipadas que espelham `protocolo.DatasetMeta`, `Estatisticas` e `Saude`.
+  dataclasses tipadas que espelham `protocolo.DatasetMeta`, `Estatisticas` e `Health`.
   **`health()` trata 503 como resposta, não como erro** — é o corpo que diz o estado.
 - `describe(dataset)` como açúcar sobre `SELECT … FROM _meta.fields`, que traz o que o
   `/v1/metadata` não tem: `indexed` (o índice **físico**, contra o `index` **declarado**),
@@ -457,8 +457,8 @@ rodam os alvos do Makefile, e a `python-version` do workflow **bate com o `requi
 ## Arquivos críticos
 
 **A ler (contrato, não mexer):**
-- [internal/protocol/protocol.go](internal/protocol/protocol.go) — `Coluna` (126), molduras, códigos de erro (180-256)
-- [internal/protocol/documents.go](internal/protocol/documents.go) — `/v1/metadata` e `/v1/stats`, `Saude`
+- [internal/protocol/protocol.go](internal/protocol/protocol.go) — `Column` (126), molduras, códigos de erro (180-256)
+- [internal/protocol/documents.go](internal/protocol/documents.go) — `/v1/metadata` e `/v1/stats`, `Health`
 - [internal/protocol/stream.go](internal/protocol/stream.go) — **o contrato a portar**, linha a linha
 - [internal/protocol/jdbc.go](internal/protocol/jdbc.go) — a tabela única de tipos
 - [internal/cli/query_remote.go](internal/cli/query_remote.go) — o cliente Go de referência

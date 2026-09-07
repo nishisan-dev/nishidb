@@ -120,7 +120,7 @@ func countersLocal(argConfig, dataset string, audita, reconstroi bool, amb Ambie
 func countersRemoto(servidor, dataset string, audita, reconstroi bool, cred credencialRemota, amb Ambiente) int {
 	switch {
 	case audita:
-		var resp protocol.RespostaAuditoriaDeContadores
+		var resp protocol.CountersAuditResponse
 		if code := postaMutacao("counters", servidor, "/v1/counters/audit", dataset, cred, &resp, amb); code != ExitOK {
 			return code
 		}
@@ -133,7 +133,7 @@ func countersRemoto(servidor, dataset string, audita, reconstroi bool, cred cred
 		code := escreveSaida("counters", amb, func(w io.Writer) { escreveAuditoria(w, dataset, linhas) })
 		return desfechoDaAuditoria(linhas, code, amb)
 	case reconstroi:
-		var resp protocol.RespostaReconstrucaoDeContadores
+		var resp protocol.CountersRebuildResponse
 		if code := postaMutacao("counters", servidor, "/v1/counters/rebuild", dataset, cred, &resp, amb); code != ExitOK {
 			return code
 		}
@@ -147,7 +147,7 @@ func countersRemoto(servidor, dataset string, audita, reconstroi bool, cred cred
 	default:
 		// A listagem é leitura, e sai do /v1/stats — a MESMA estrutura que
 		// alimenta as séries nishidb_counter_*.
-		var e protocol.Estatisticas
+		var e protocol.Stats
 		if code := buscaDocumento("counters", servidor, "/v1/stats", cred, &e, amb); code != ExitOK {
 			return code
 		}
@@ -185,7 +185,7 @@ func contadorDoStorage(e counter.Estatisticas) linhaDeContador {
 		auditDivergentes: e.AuditoriaDivergentes, auditUnix: e.AuditoriaUltimaUnix}
 }
 
-func contadorDoWire(c protocol.ContadorStats) linhaDeContador {
+func contadorDoWire(c protocol.CounterStats) linhaDeContador {
 	return linhaDeContador{nome: c.Name, linhas: c.Rows, total: c.Total,
 		grupos: c.Groups, teto: c.MaxGroups, aposentados: c.Retired,
 		recusados: c.Refused, orfas: c.OrphanEntries, bytes: c.Bytes,
@@ -247,7 +247,7 @@ func auditoriaDoStorage(r counter.Relatorio) linhaDeAuditoria {
 	return l
 }
 
-func auditoriaDoWire(c protocol.AuditoriaContador) linhaDeAuditoria {
+func auditoriaDoWire(c protocol.CounterAudit) linhaDeAuditoria {
 	l := linhaDeAuditoria{nome: c.Name, grupos: c.Groups, mantido: c.Maintained, recalculado: c.Recomputed,
 		divergentes: c.DivergentGroups, naoInternadas: c.NotInterned,
 		agregadosDivergentes: c.DivergentAggregates, linhasVarridas: c.RowsScanned,

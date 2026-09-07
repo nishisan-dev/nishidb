@@ -13,20 +13,20 @@ import (
 type parser struct {
 	lx  lexer.Lexer // por VALOR: é o que dá 0 alloc ao lexer
 	cur lexer.Token
-	// prox/temProx são UM token de lookahead, e existem por um motivo só:
-	// distinguir `NOT LIKE` de um NOT em posição de comparador. Sem ele, `x NOT
-	// LIKE 'a%'` obrigaria a recusar o NOT antes de saber o que ele abre.
+	// lookahead/hasLookahead são UM token de lookahead, e existem por um motivo
+	// só: distinguir `NOT LIKE` de um NOT em posição de comparador. Sem ele,
+	// `x NOT LIKE 'a%'` obrigaria a recusar o NOT antes de saber o que ele abre.
 	//
 	// A gramática continua LL(1) em toda decisão de CLÁUSULA — o comentário do
 	// `.` de nome qualificado, mais abaixo, contrasta justamente com o BY de
 	// GROUP BY, que exigiria olhar adiante para decidir se uma cláusula começa.
 	// Aqui não se decide cláusula: o parser já está no ponto em que só cabia
 	// erro, e o lookahead só escolhe QUAL erro deixar de ser erro.
-	prox    lexer.Token
-	temProx bool
-	depth   int // profundidade de parênteses corrente
-	termos  int // termos do WHERE já emitidos (teto de recurso, MaxWhereTerms)
-	params  int // próximo ParamIdx a atribuir
+	lookahead    lexer.Token
+	hasLookahead bool
+	depth        int // profundidade de parênteses corrente
+	terms        int // termos do WHERE já emitidos (teto de recurso, MaxWhereTerms)
+	params       int // próximo ParamIdx a atribuir
 }
 
 // Parse converte SQL v1 em AST. É pura e segura para uso concorrente; a AST
@@ -59,8 +59,8 @@ func Parse(sql string) (*SelectStmt, error) {
 		// [LIMIT] sintaticamente completo, e caem exatamente aqui. Sem isto a
 		// mensagem é "conteúdo inesperado após o fim da query", que manda o
 		// usuário procurar um erro de digitação que não existe.
-		if nome, ok := clausulaNaoSuportada(p.cur); ok {
-			return nil, lexer.NewUnsupportedClauseSyntaxError(p.cur.Pos, nome)
+		if name, ok := unsupportedClause(p.cur); ok {
+			return nil, lexer.NewUnsupportedClauseSyntaxError(p.cur.Pos, name)
 		}
 		return nil, p.errAt(p.cur.Pos, "conteúdo inesperado após o fim da query")
 	}
@@ -69,8 +69,8 @@ func Parse(sql string) (*SelectStmt, error) {
 }
 
 func (p *parser) advance() error {
-	if p.temProx {
-		p.cur, p.temProx = p.prox, false
+	if p.hasLookahead {
+		p.cur, p.hasLookahead = p.lookahead, false
 		return nil
 	}
 	tok, err := p.lx.Next()
@@ -81,21 +81,21 @@ func (p *parser) advance() error {
 	return nil
 }
 
-// espia devolve o token seguinte ao corrente sem consumi-lo.
+// peek devolve o token seguinte ao corrente sem consumi-lo.
 //
 // Erro do lexer NÃO é propagado aqui: ele fica para o advance seguinte, que é
 // quem já sabe reportá-lo com a posição certa. Espiar não pode ser um segundo
 // sítio de erro de sintaxe, senão a mesma query passa a falhar com mensagens
 // diferentes conforme quem chegou primeiro.
-func (p *parser) espia() (lexer.Token, error) {
-	if p.temProx {
-		return p.prox, nil
+func (p *parser) peek() (lexer.Token, error) {
+	if p.hasLookahead {
+		return p.lookahead, nil
 	}
 	tok, err := p.lx.Next()
 	if err != nil {
 		return lexer.Token{}, err
 	}
-	p.prox, p.temProx = tok, true
+	p.lookahead, p.hasLookahead = tok, true
 	return tok, nil
 }
 
@@ -122,7 +122,7 @@ func (p *parser) parseSelect() (*SelectStmt, error) {
 		return nil, err
 	}
 
-	nome, pos, ok := p.identifier()
+	name, pos, ok := p.identifier()
 	if !ok {
 		return nil, p.errAt(p.cur.Pos, "esperado nome do dataset")
 	}
@@ -137,9 +137,9 @@ func (p *parser) parseSelect() (*SelectStmt, error) {
 		if err := p.advance(); err != nil {
 			return nil, err
 		}
-		qualificado, qpos, ok := p.identifier()
+		table, tablePos, ok := p.identifier()
 		if !ok {
-			return nil, p.errAt(p.cur.Pos, "esperado nome de tabela depois de \""+nome+".\"")
+			return nil, p.errAt(p.cur.Pos, "esperado nome de tabela depois de \""+name+".\"")
 		}
 		if err := p.advance(); err != nil {
 			return nil, err
@@ -147,9 +147,9 @@ func (p *parser) parseSelect() (*SelectStmt, error) {
 		if p.cur.Type == lexer.TokenDot {
 			return nil, p.errAt(p.cur.Pos, "nome no FROM tem no máximo dois níveis (namespace.tabela); o NishiDB não tem catálogo")
 		}
-		st.Namespace, st.Dataset, st.DatasetPos = nome, qualificado, qpos
+		st.Namespace, st.Dataset, st.DatasetPos = name, table, tablePos
 	} else {
-		st.Dataset, st.DatasetPos = nome, pos
+		st.Dataset, st.DatasetPos = name, pos
 	}
 
 	if p.cur.Type == lexer.TokenWhere {
@@ -163,7 +163,7 @@ func (p *parser) parseSelect() (*SelectStmt, error) {
 		st.Where = where
 	}
 	// ORDER BY entra entre WHERE e LIMIT, que é a ordem do SQL padrão.
-	if ehPalavra(p.cur, "order") {
+	if isWord(p.cur, "order") {
 		if err := p.parseOrderBy(st); err != nil {
 			return nil, err
 		}
@@ -178,7 +178,7 @@ func (p *parser) parseSelect() (*SelectStmt, error) {
 	// OFFSET depois de LIMIT, e a ordem é fixa pela mesma razão de todas as
 	// outras: `OFFSET 10 LIMIT 5` cai no "conteúdo inesperado" do Parse em vez
 	// de ser aceito numa ordem que só este produto entenderia.
-	if ehPalavra(p.cur, "offset") {
+	if isWord(p.cur, "offset") {
 		if err := p.parseOffset(st); err != nil {
 			return nil, err
 		}
@@ -204,7 +204,7 @@ func (p *parser) parseOrderBy(st *SelectStmt) error {
 	if err := p.advance(); err != nil {
 		return err
 	}
-	if !ehPalavra(p.cur, "by") {
+	if !isWord(p.cur, "by") {
 		return p.errAt(p.cur.Pos, "esperado BY depois de ORDER")
 	}
 	if err := p.advance(); err != nil {
@@ -235,11 +235,11 @@ func (p *parser) parseOrderKey() (OrderKey, error) {
 	if p.cur.Type == lexer.TokenNumber {
 		return OrderKey{}, p.errAt(p.cur.Pos, "ORDER BY exige nome de coluna, não posição")
 	}
-	nome, pos, ok := p.identifier()
+	name, pos, ok := p.identifier()
 	if !ok {
 		return OrderKey{}, p.errAt(p.cur.Pos, "esperado nome de coluna no ORDER BY")
 	}
-	k := OrderKey{Column: nome, ColumnPos: pos}
+	k := OrderKey{Column: name, ColumnPos: pos}
 	if err := p.advance(); err != nil {
 		return OrderKey{}, err
 	}
@@ -248,34 +248,34 @@ func (p *parser) parseOrderKey() (OrderKey, error) {
 		if err := p.advance(); err != nil {
 			return OrderKey{}, err
 		}
-		caminho, cpos, ok := p.identifier()
+		path, cpos, ok := p.identifier()
 		if !ok {
-			return OrderKey{}, p.errAt(p.cur.Pos, "esperado caminho depois de \""+nome+".\"")
+			return OrderKey{}, p.errAt(p.cur.Pos, "esperado caminho depois de \""+name+".\"")
 		}
-		k.Qualifier, k.Column, k.ColumnPos = nome, caminho, cpos
+		k.Qualifier, k.Column, k.ColumnPos = name, path, cpos
 		if err := p.advance(); err != nil {
 			return OrderKey{}, err
 		}
 	}
 	switch {
-	case ehPalavra(p.cur, "asc"):
+	case isWord(p.cur, "asc"):
 		if err := p.advance(); err != nil {
 			return OrderKey{}, err
 		}
-	case ehPalavra(p.cur, "desc"):
+	case isWord(p.cur, "desc"):
 		k.Desc = true
 		if err := p.advance(); err != nil {
 			return OrderKey{}, err
 		}
 	}
-	if ehPalavra(p.cur, "nulls") {
+	if isWord(p.cur, "nulls") {
 		if err := p.advance(); err != nil {
 			return OrderKey{}, err
 		}
 		switch {
-		case ehPalavra(p.cur, "first"):
+		case isWord(p.cur, "first"):
 			k.NullsFirst = true
-		case ehPalavra(p.cur, "last"):
+		case isWord(p.cur, "last"):
 		default:
 			return OrderKey{}, p.errAt(p.cur.Pos, "esperado FIRST ou LAST depois de NULLS")
 		}
@@ -331,14 +331,14 @@ func (p *parser) parseProjection(st *SelectStmt) error {
 		return nil
 	}
 
-	primeira := true
+	first := true
 	for {
 		// O token é guardado ANTES de identifier(): a ColumnRef não registra se
 		// o nome veio entre aspas, e o guard de DISTINCT abaixo precisa saber.
-		tokDaColuna := p.cur
-		nome, pos, ok := p.identifier()
+		columnTok := p.cur
+		name, pos, ok := p.identifier()
 		if !ok {
-			if primeira {
+			if first {
 				return p.errAt(p.cur.Pos, "esperado nome de coluna ou '*'")
 			}
 			if p.cur.Type == lexer.TokenStar {
@@ -352,7 +352,7 @@ func (p *parser) parseProjection(st *SelectStmt) error {
 		if err := p.advance(); err != nil {
 			return err
 		}
-		ref := ColumnRef{Name: nome, Pos: pos}
+		ref := ColumnRef{Name: name, Pos: pos}
 		if p.cur.Type == lexer.TokenDot {
 			if err := p.advance(); err != nil {
 				return err
@@ -362,13 +362,13 @@ func (p *parser) parseProjection(st *SelectStmt) error {
 				// `pai.*`: as colunas extraídas do pai. O curinga de TOPO
 				// continua não podendo ser combinado, e este herda a regra —
 				// a checagem de mistura está no parseProjection acima.
-				ref.Qualifier, ref.Name, ref.Star = nome, "", true
+				ref.Qualifier, ref.Name, ref.Star = name, "", true
 			default:
-				caminho, cpos, ok := p.identifier()
+				path, cpos, ok := p.identifier()
 				if !ok {
-					return p.errAt(p.cur.Pos, "esperado nome de coluna ou '*' depois de \""+nome+".\"")
+					return p.errAt(p.cur.Pos, "esperado nome de coluna ou '*' depois de \""+name+".\"")
 				}
-				ref.Qualifier, ref.Name, ref.Pos = nome, caminho, cpos
+				ref.Qualifier, ref.Name, ref.Pos = name, path, cpos
 			}
 			if err := p.advance(); err != nil {
 				return err
@@ -389,9 +389,9 @@ func (p *parser) parseProjection(st *SelectStmt) error {
 			// escreveu "distinct" entre aspas quer a coluna); a palavra casa;
 			// e o que vem depois NÃO é FROM (`SELECT distinct FROM t`
 			// seleciona uma coluna chamada distinct e continua válido).
-			if primeira && p.cur.Type != lexer.TokenFrom {
-				if nome, ok := clausulaNaoSuportada(tokDaColuna); ok && nome == "DISTINCT" {
-					return lexer.NewUnsupportedClauseSyntaxError(tokDaColuna.Pos, nome)
+			if first && p.cur.Type != lexer.TokenFrom {
+				if name, ok := unsupportedClause(columnTok); ok && name == "DISTINCT" {
+					return lexer.NewUnsupportedClauseSyntaxError(columnTok.Pos, name)
 				}
 			}
 			return nil
@@ -399,7 +399,7 @@ func (p *parser) parseProjection(st *SelectStmt) error {
 		if err := p.advance(); err != nil {
 			return err
 		}
-		primeira = false
+		first = false
 	}
 }
 
@@ -489,8 +489,8 @@ func (p *parser) parsePredicate() (Expr, error) {
 	// AND/OR é iterativa e cresce sem aninhar, então nenhum limite de
 	// parênteses a alcança. Cada termo custa ~182 B de AST ligada, retidos
 	// enquanto a query viver.
-	p.termos++
-	if p.termos > MaxWhereTerms {
+	p.terms++
+	if p.terms > MaxWhereTerms {
 		return nil, p.errAt(p.cur.Pos, "WHERE com mais de "+itoa(MaxWhereTerms)+" termos")
 	}
 	col, pos, ok := p.identifier()
@@ -509,16 +509,16 @@ func (p *parser) parsePredicate() (Expr, error) {
 	// Caminho qualificado no filtro, pela mesma razão de existir na projeção:
 	// sem ele a gramática ficaria torta — `SELECT doc.x` valeria e
 	// `WHERE doc.x = 'y'` não, para a mesma coluna.
-	qualificador := ""
+	qualifier := ""
 	if p.cur.Type == lexer.TokenDot {
 		if err := p.advance(); err != nil {
 			return nil, err
 		}
-		caminho, cpos, ok := p.identifier()
+		path, cpos, ok := p.identifier()
 		if !ok {
 			return nil, p.errAt(p.cur.Pos, "esperado nome de coluna depois de \""+col+".\"")
 		}
-		qualificador, col, pos = col, caminho, cpos
+		qualifier, col, pos = col, path, cpos
 		if err := p.advance(); err != nil {
 			return nil, err
 		}
@@ -546,7 +546,7 @@ func (p *parser) parsePredicate() (Expr, error) {
 		if err := p.advance(); err != nil {
 			return nil, err
 		}
-		return &NullCheck{Qualifier: qualificador, Column: col, ColumnPos: pos, Not: not}, nil
+		return &NullCheck{Qualifier: qualifier, Column: col, ColumnPos: pos, Not: not}, nil
 	}
 
 	// LIKE e NOT LIKE, reconhecidos POR POSIÇÃO e não como keyword do lexer.
@@ -558,7 +558,7 @@ func (p *parser) parsePredicate() (Expr, error) {
 	// posição em que só cabia ERRO ("esperado comparador"), então reconhecer a
 	// palavra e EXIGIR o resto é consumo, não lookahead: a gramática segue
 	// LL(1).
-	if not, ok := p.abreLike(); ok {
+	if not, ok := p.opensLike(); ok {
 		// Um advance consome o LIKE; o NOT LIKE consome DOIS tokens, e o
 		// primeiro é o NOT. Avançar uma vez só deixava o parser no LIKE e o
 		// parseOperand seguinte o lia como coluna — recusando `x NOT LIKE 'a%'`
@@ -571,19 +571,19 @@ func (p *parser) parsePredicate() (Expr, error) {
 		if err := p.advance(); err != nil {
 			return nil, err
 		}
-		padrao, err := p.parseOperand()
+		pattern, err := p.parseOperand()
 		if err != nil {
 			return nil, err
 		}
-		if padrao.Kind == OperandString && len(padrao.S) > MaxLikePatternBytes {
-			return nil, p.errAt(padrao.Pos, "padrão de LIKE acima de "+itoa(MaxLikePatternBytes)+" bytes")
+		if pattern.Kind == OperandString && len(pattern.S) > MaxLikePatternBytes {
+			return nil, p.errAt(pattern.Pos, "padrão de LIKE acima de "+itoa(MaxLikePatternBytes)+" bytes")
 		}
-		if padrao.Kind != OperandString && padrao.Kind != OperandParam {
-			return nil, p.errAt(padrao.Pos, "o padrão de LIKE é texto ou parâmetro")
+		if pattern.Kind != OperandString && pattern.Kind != OperandParam {
+			return nil, p.errAt(pattern.Pos, "o padrão de LIKE é texto ou parâmetro")
 		}
 		return &LikeExpr{
-			Qualifier: qualificador,
-			Column:    col, ColumnPos: pos, Not: not, Pattern: padrao}, nil
+			Qualifier: qualifier,
+			Column:    col, ColumnPos: pos, Not: not, Pattern: pattern}, nil
 	}
 
 	op, ok := cmpOp(p.cur.Type)
@@ -598,17 +598,17 @@ func (p *parser) parsePredicate() (Expr, error) {
 		return nil, err
 	}
 	return &Comparison{
-		Qualifier: qualificador,
+		Qualifier: qualifier,
 		Column:    col, ColumnPos: pos, Op: op, Operand: operand}, nil
 }
 
-// abreLike reconhece `LIKE` ou `NOT LIKE` na posição do comparador, e deixa o
+// opensLike reconhece `LIKE` ou `NOT LIKE` na posição do comparador, e deixa o
 // parser posicionado NO token do LIKE (o chamador avança).
 //
 // Devolve (not, ok). Não consome nada quando devolve false, para que o caminho
-// do comparador siga intacto — é a mesma disciplina do clausulaNaoSuportada.
-func (p *parser) abreLike() (bool, bool) {
-	if ehPalavra(p.cur, "like") {
+// do comparador siga intacto — é a mesma disciplina do unsupportedClause.
+func (p *parser) opensLike() (bool, bool) {
+	if isWord(p.cur, "like") {
 		return false, true
 	}
 	if p.cur.Type != lexer.TokenNot {
@@ -619,22 +619,22 @@ func (p *parser) abreLike() (bool, bool) {
 	// necessário, e é o ÚNICO do parser — sem ele, `x NOT LIKE 'a%'` teria de
 	// escolher entre recusar o NOT antes de saber o que ele abre ou aceitar
 	// `x NOT 'a%'` como se fosse alguma coisa.
-	prox, err := p.espia()
-	if err != nil || !ehPalavra(prox, "like") {
+	lookahead, err := p.peek()
+	if err != nil || !isWord(lookahead, "like") {
 		return false, false
 	}
 	return true, true
 }
 
-// ehPalavra compara um TokenIdent BARE com uma palavra de cláusula.
+// isWord compara um TokenIdent BARE com uma palavra de cláusula.
 //
-// Duas condições, e as duas importam — são as mesmas do clausulaNaoSuportada:
+// Duas condições, e as duas importam — são as mesmas do unsupportedClause:
 // só TokenIdent e nunca TokenQuotedIdent, porque quem escreveu `"like"` quis
 // uma coluna com esse nome; e ASCIIEqualFold em vez de strings.EqualFold,
 // porque o folding Unicode do segundo dobra o Kelvin sign para 'k' e duas
 // regras de folding no mesmo front-end divergem no primeiro caso exótico.
-func ehPalavra(tok lexer.Token, palavra string) bool {
-	return tok.Type == lexer.TokenIdent && lexer.ASCIIEqualFold(tok.Text, palavra)
+func isWord(tok lexer.Token, word string) bool {
+	return tok.Type == lexer.TokenIdent && lexer.ASCIIEqualFold(tok.Text, word)
 }
 
 // itoa evita arrastar o fmt para o pacote por causa de uma mensagem de erro.

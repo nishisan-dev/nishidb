@@ -114,7 +114,7 @@ func (s *Store) abreContadores(opts Options, m *checkpoint.Manifest, idxDir stri
 		s.contadores = append(s.contadores, c)
 		if !recria && m != nil && ((c.Nasceu() && m.NextRowID > 0) || !c.Cobre(types.RowID(m.NextRowID))) {
 			// O manifest declara os parâmetros, não a existência dos arquivos —
-			// a mesma pergunta que a agenda faz com PrecisaConstruir.
+			// a mesma pergunta que a agenda faz com NeedsRebuild.
 			recria, motivo = true, "os arquivos do contador não descrevem as linhas do dataset"
 			if err := c.Zera(); err != nil {
 				return err
@@ -370,8 +370,8 @@ func (s *Store) AuditaContadores(ctx context.Context) ([]counter.Relatorio, erro
 		}
 		var packed uint64
 		var ok bool
-		if !s.vers.Vazio() {
-			packed, ok = s.vers.Em(id, snap.Epoch)
+		if !s.vers.IsEmpty() {
+			packed, ok = s.vers.At(id, snap.Epoch)
 		}
 		if !ok {
 			if packed, ok = s.locs.Get(id); !ok {

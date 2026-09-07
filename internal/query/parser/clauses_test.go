@@ -9,9 +9,9 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/query/parser"
 )
 
-// clausulaDe extrai a cláusula nomeada de um erro de parse, ou "" quando o
+// clauseOf extrai a cláusula nomeada de um erro de parse, ou "" quando o
 // erro é sintático comum.
-func clausulaDe(t *testing.T, err error) string {
+func clauseOf(t *testing.T, err error) string {
 	t.Helper()
 	var se *lexer.SyntaxError
 	if !errors.As(err, &se) {
@@ -34,10 +34,10 @@ func clausulaDe(t *testing.T, err error) string {
 // A posição aponta para o token da CLÁUSULA, não para o seguinte: é ela que a
 // ferramenta sublinha.
 func TestAsCincoClausulasNaoSuportadasSaoNomeadasUmaAUma(t *testing.T) {
-	casos := []struct {
-		sql      string
-		clausula string
-		pos      int
+	cases := []struct {
+		sql    string
+		clause string
+		pos    int
 	}{
 		{"SELECT a FROM x GROUP BY a", "GROUP BY", 16},
 		{"SELECT a FROM x JOIN y ON x.a = y.a", "JOIN", 16},
@@ -46,16 +46,16 @@ func TestAsCincoClausulasNaoSuportadasSaoNomeadasUmaAUma(t *testing.T) {
 		{"SELECT a FROM x UNION SELECT b FROM y", "UNION", 16},
 		{"SELECT DISTINCT a FROM x", "DISTINCT", 7},
 	}
-	for _, c := range casos {
-		t.Run(c.clausula+"/"+c.sql, func(t *testing.T) {
+	for _, c := range cases {
+		t.Run(c.clause+"/"+c.sql, func(t *testing.T) {
 			_, err := parser.Parse(c.sql)
 			if err == nil {
 				t.Fatalf("Parse(%q) não falhou", c.sql)
 			}
-			if got := clausulaDe(t, err); got != c.clausula {
-				t.Errorf("Clause = %q, quer %q (erro: %v)", got, c.clausula, err)
+			if got := clauseOf(t, err); got != c.clause {
+				t.Errorf("Clause = %q, quer %q (erro: %v)", got, c.clause, err)
 			}
-			if !strings.Contains(err.Error(), c.clausula) {
+			if !strings.Contains(err.Error(), c.clause) {
 				t.Errorf("a mensagem não nomeia a cláusula: %v", err)
 			}
 			var se *lexer.SyntaxError
@@ -77,14 +77,14 @@ func TestAsCincoClausulasNaoSuportadasSaoNomeadasUmaAUma(t *testing.T) {
 // outra. Por isso a detecção mora no sítio do erro do parser, e só para token
 // bare que já não tinha para onde ir.
 func TestColunaChamadaOrderContinuaValida(t *testing.T) {
-	casos := []struct{ nome, sql string }{
+	cases := []struct{ name, sql string }{
 		{"bare na projeção", "SELECT order FROM x"},
 		{"entre aspas na projeção", `SELECT "order" FROM x`},
 		{"bare no where", "SELECT a FROM x WHERE order = 1"},
 		{"as seis mais o offset, bare, na projeção", "SELECT order, group, offset, join, having, distinct, union FROM x"},
 	}
-	for _, c := range casos {
-		t.Run(c.nome, func(t *testing.T) {
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
 			if _, err := parser.Parse(c.sql); err != nil {
 				t.Fatalf("Parse(%q) falhou: %v", c.sql, err)
 			}
@@ -103,7 +103,7 @@ func TestColunaChamadaDistinctEntreAspasNaoDisparaAClausula(t *testing.T) {
 	if err == nil {
 		t.Fatal("quer erro: dois nomes de coluna sem vírgula")
 	}
-	if c := clausulaDe(t, err); c != "" {
+	if c := clauseOf(t, err); c != "" {
 		t.Errorf("Clause = %q, quer vazio: o nome estava entre aspas", c)
 	}
 }
@@ -145,7 +145,7 @@ func TestErroSintaticoComumNaoTemClausula(t *testing.T) {
 		if err == nil {
 			t.Fatalf("Parse(%q) não falhou", sql)
 		}
-		if c := clausulaDe(t, err); c != "" {
+		if c := clauseOf(t, err); c != "" {
 			t.Errorf("Parse(%q): Clause = %q, quer vazio", sql, c)
 		}
 	}

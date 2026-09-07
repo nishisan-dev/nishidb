@@ -11,31 +11,31 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// marcador é o bit que fonteFalsa e fonteComErro usam para sinalizar, DENTRO
+// marker é o bit que fakeSource e brokenSource usam para sinalizar, DENTRO
 // do próprio slice, que um rowId já foi emitido.
 //
-// Existe porque o literal `fonteFalsa{10, 20, 30}` — usado sem `&` em todos os
+// Existe porque o literal `fakeSource{10, 20, 30}` — usado sem `&` em todos os
 // testes deste arquivo — só compila se Next/RowID/etc. tiverem receiver por
 // VALOR (o conjunto de métodos de um tipo valor nunca inclui método com
 // receiver ponteiro, mesmo quando o valor é endereçável). Um receiver por
 // valor não pode manter um campo de posição comum: a mutação vale só para a
 // cópia local do método e se perde ao retornar. O que SOBREVIVE entre
 // chamadas por essa mesma via é a mutação de um ELEMENTO do slice — todas as
-// cópias do header, inclusive a guardada dentro da interface Fonte, apontam
+// cópias do header, inclusive a guardada dentro da interface Source, apontam
 // para o MESMO array de apoio. O bit 63 nunca colide com um rowId de teste (o
 // maior usado aqui é a centena do gerador aleatório).
-const marcador = types.RowID(1) << 63
+const marker = types.RowID(1) << 63
 
-// fonteFalsa é o dublê de Fonte sobre um slice já ORDENADO ascendente:
+// fakeSource é o dublê de Source sobre um slice já ORDENADO ascendente:
 // MinRowID/MaxRowID são o primeiro e o último elemento, sem marca.
-type fonteFalsa []types.RowID
+type fakeSource []types.RowID
 
 // Next marca o menor elemento ainda sem marca — o próximo da ordem ascendente,
 // já que a entrada chega ordenada e sem repetição.
-func (f fonteFalsa) Next() bool {
+func (f fakeSource) Next() bool {
 	for i := range f {
-		if f[i]&marcador == 0 {
-			f[i] |= marcador
+		if f[i]&marker == 0 {
+			f[i] |= marker
 			return true
 		}
 	}
@@ -46,107 +46,107 @@ func (f fonteFalsa) Next() bool {
 // ainda sem marca e a entrada é ascendente, o maior marcado é exatamente o
 // que a última chamada de Next() acabou de marcar — sem precisar de um campo
 // de posição à parte, que o receiver por valor não permitiria manter.
-func (f fonteFalsa) RowID() types.RowID {
-	var maior types.RowID
-	achou := false
+func (f fakeSource) RowID() types.RowID {
+	var largest types.RowID
+	found := false
 	for _, v := range f {
-		if v&marcador != 0 {
-			if valor := v &^ marcador; !achou || valor > maior {
-				maior, achou = valor, true
+		if v&marker != 0 {
+			if value := v &^ marker; !found || value > largest {
+				largest, found = value, true
 			}
 		}
 	}
-	return maior
+	return largest
 }
 
-func (f fonteFalsa) Err() error   { return nil }
-func (f fonteFalsa) Close() error { return nil }
+func (f fakeSource) Err() error   { return nil }
+func (f fakeSource) Close() error { return nil }
 
 // MinRowID devolve math.MaxUint64 quando o slice é vazio — o elemento neutro
-// que o contrato da Fonte reserva para "não vou emitir nada" (o gerador
+// que o contrato da Source reserva para "não vou emitir nada" (o gerador
 // aleatório do teste de propriedade produz slices vazios de vez em quando).
-func (f fonteFalsa) MinRowID() types.RowID {
+func (f fakeSource) MinRowID() types.RowID {
 	if len(f) == 0 {
 		return types.RowID(math.MaxUint64)
 	}
-	return f[0] &^ marcador
+	return f[0] &^ marker
 }
 
-func (f fonteFalsa) MaxRowID() types.RowID {
+func (f fakeSource) MaxRowID() types.RowID {
 	if len(f) == 0 {
 		return 0
 	}
-	return f[len(f)-1] &^ marcador
+	return f[len(f)-1] &^ marker
 }
 
-// fonteVaziaDeTeste é uma Fonte que já nasce vazia por declaração: Min(1) >
-// Max(0). É o caso central de TestUneDescartaFontesVazias — provar que Une a
+// emptyTestSource é uma Source que já nasce vazia por declaração: Min(1) >
+// Max(0). É o caso central de TestUneDescartaFontesVazias — provar que Union a
 // descarta ANTES de decidir entre concatenação e merge, sem consumi-la.
-type fonteVaziaDeTeste struct{}
+type emptyTestSource struct{}
 
-func (fonteVaziaDeTeste) Next() bool            { return false }
-func (fonteVaziaDeTeste) RowID() types.RowID    { return 0 }
-func (fonteVaziaDeTeste) Err() error            { return nil }
-func (fonteVaziaDeTeste) Close() error          { return nil }
-func (fonteVaziaDeTeste) MinRowID() types.RowID { return 1 }
-func (fonteVaziaDeTeste) MaxRowID() types.RowID { return 0 }
+func (emptyTestSource) Next() bool            { return false }
+func (emptyTestSource) RowID() types.RowID    { return 0 }
+func (emptyTestSource) Err() error            { return nil }
+func (emptyTestSource) Close() error          { return nil }
+func (emptyTestSource) MinRowID() types.RowID { return 1 }
+func (emptyTestSource) MaxRowID() types.RowID { return 0 }
 
-// fonteComErro emite as linhas de rows e, só depois de esgotá-las, reporta
+// brokenSource emite as linhas de rows e, só depois de esgotá-las, reporta
 // err — simula uma fonte que falha DEPOIS de entregar algo, não antes. Usa a
-// mesma marcação por bit alto de fonteFalsa, pelo mesmo motivo: receiver por
+// mesma marcação por bit alto de fakeSource, pelo mesmo motivo: receiver por
 // valor exigido pelo literal sem `&`.
-type fonteComErro struct {
+type brokenSource struct {
 	rows []types.RowID
 	err  error
 }
 
-func (f fonteComErro) Next() bool {
+func (f brokenSource) Next() bool {
 	for i := range f.rows {
-		if f.rows[i]&marcador == 0 {
-			f.rows[i] |= marcador
+		if f.rows[i]&marker == 0 {
+			f.rows[i] |= marker
 			return true
 		}
 	}
 	return false
 }
 
-func (f fonteComErro) RowID() types.RowID {
-	var maior types.RowID
-	achou := false
+func (f brokenSource) RowID() types.RowID {
+	var largest types.RowID
+	found := false
 	for _, v := range f.rows {
-		if v&marcador != 0 {
-			if valor := v &^ marcador; !achou || valor > maior {
-				maior, achou = valor, true
+		if v&marker != 0 {
+			if value := v &^ marker; !found || value > largest {
+				largest, found = value, true
 			}
 		}
 	}
-	return maior
+	return largest
 }
 
 // Err devolve o defeito configurado incondicionalmente. Os combinadores só
 // consultam Err() depois que Next() devolve false — e nesse ponto todas as
 // linhas boas já saíram, que é exatamente o "falha no meio" que o teste quer.
-func (f fonteComErro) Err() error   { return f.err }
-func (f fonteComErro) Close() error { return nil }
+func (f brokenSource) Err() error   { return f.err }
+func (f brokenSource) Close() error { return nil }
 
-func (f fonteComErro) MinRowID() types.RowID {
+func (f brokenSource) MinRowID() types.RowID {
 	if len(f.rows) == 0 {
 		return types.RowID(math.MaxUint64)
 	}
-	return f.rows[0] &^ marcador
+	return f.rows[0] &^ marker
 }
 
-func (f fonteComErro) MaxRowID() types.RowID {
+func (f brokenSource) MaxRowID() types.RowID {
 	if len(f.rows) == 0 {
 		return 0
 	}
-	return f.rows[len(f.rows)-1] &^ marcador
+	return f.rows[len(f.rows)-1] &^ marker
 }
 
-// drena consome o iterador até o fim e falha o teste se ele terminar em erro
-// — os testes que usam drena não esperam falha, então um erro aqui é sempre
+// drain consome o iterador até o fim e falha o teste se ele terminar em erro
+// — os testes que usam drain não esperam falha, então um erro aqui é sempre
 // quebra de teste, não asserção.
-func drena(t *testing.T, it types.RowIDIterator) []types.RowID {
+func drain(t *testing.T, it types.RowIDIterator) []types.RowID {
 	t.Helper()
 	var out []types.RowID
 	for it.Next() {
@@ -162,15 +162,15 @@ func drena(t *testing.T, it types.RowIDIterator) []types.RowID {
 // monotônico e os segmentos particionam o espaço. Concatenar custa ZERO
 // comparações, contra ~9 por linha de um heap de 500 fontes.
 func TestUneConcatenaFaixasDisjuntas(t *testing.T) {
-	it := segindex.Une([]segindex.Fonte{
-		fonteFalsa{10, 20, 30},
-		fonteFalsa{40, 50},
-		fonteFalsa{60},
+	it := segindex.Union([]segindex.Source{
+		fakeSource{10, 20, 30},
+		fakeSource{40, 50},
+		fakeSource{60},
 	})
-	if got := segindex.EstrategiaDe(it); got != "concatenacao" {
+	if got := segindex.StrategyOf(it); got != "concatenacao" {
 		t.Errorf("estratégia = %q, quero \"concatenacao\"", got)
 	}
-	if got := drena(t, it); !slices.Equal(got, []types.RowID{10, 20, 30, 40, 50, 60}) {
+	if got := drain(t, it); !slices.Equal(got, []types.RowID{10, 20, 30, 40, 50, 60}) {
 		t.Errorf("drena = %v", got)
 	}
 }
@@ -181,14 +181,14 @@ func TestUneConcatenaFaixasDisjuntas(t *testing.T) {
 // campo. Emiti-la duas vezes faria o unionIter do executor devolver a mesma
 // linha duplicada num OR.
 func TestUneMergeiaFaixasSobrepostasEDeduplica(t *testing.T) {
-	it := segindex.Une([]segindex.Fonte{
-		fonteFalsa{10, 30, 50},
-		fonteFalsa{20, 30, 40},
+	it := segindex.Union([]segindex.Source{
+		fakeSource{10, 30, 50},
+		fakeSource{20, 30, 40},
 	})
-	if got := segindex.EstrategiaDe(it); got != "merge" {
+	if got := segindex.StrategyOf(it); got != "merge" {
 		t.Errorf("estratégia = %q, quero \"merge\"", got)
 	}
-	if got := drena(t, it); !slices.Equal(got, []types.RowID{10, 20, 30, 40, 50}) {
+	if got := drain(t, it); !slices.Equal(got, []types.RowID{10, 20, 30, 40, 50}) {
 		t.Errorf("drena = %v, quero sem repetir o 30", got)
 	}
 }
@@ -197,15 +197,15 @@ func TestUneMergeiaFaixasSobrepostasEDeduplica(t *testing.T) {
 // para não participar do teste de disjunção. Sem o descarte, uma fonte vazia
 // com Min=0,Max=0 empurraria o histórico inteiro para o caminho de merge.
 func TestUneDescartaFontesVazias(t *testing.T) {
-	it := segindex.Une([]segindex.Fonte{
-		fonteFalsa{10, 20},
-		fonteVaziaDeTeste{},
-		fonteFalsa{30, 40},
+	it := segindex.Union([]segindex.Source{
+		fakeSource{10, 20},
+		emptyTestSource{},
+		fakeSource{30, 40},
 	})
-	if got := segindex.EstrategiaDe(it); got != "concatenacao" {
+	if got := segindex.StrategyOf(it); got != "concatenacao" {
 		t.Errorf("estratégia = %q, quero \"concatenacao\" — a vazia não pode forçar o merge", got)
 	}
-	if got := drena(t, it); !slices.Equal(got, []types.RowID{10, 20, 30, 40}) {
+	if got := drain(t, it); !slices.Equal(got, []types.RowID{10, 20, 30, 40}) {
 		t.Errorf("drena = %v", got)
 	}
 }
@@ -214,11 +214,11 @@ func TestUneDescartaFontesVazias(t *testing.T) {
 // [10,20] e [20,30] compartilham o 20 e NÃO são disjuntas. Um `<=` no lugar de
 // `<` aqui produziria a mesma linha duas vezes, silenciosamente.
 func TestUneNaoConcatenaQuandoAsFaixasSeTocam(t *testing.T) {
-	it := segindex.Une([]segindex.Fonte{fonteFalsa{10, 20}, fonteFalsa{20, 30}})
-	if got := segindex.EstrategiaDe(it); got != "merge" {
+	it := segindex.Union([]segindex.Source{fakeSource{10, 20}, fakeSource{20, 30}})
+	if got := segindex.StrategyOf(it); got != "merge" {
 		t.Errorf("estratégia = %q, quero \"merge\"", got)
 	}
-	if got := drena(t, it); !slices.Equal(got, []types.RowID{10, 20, 30}) {
+	if got := drain(t, it); !slices.Equal(got, []types.RowID{10, 20, 30}) {
 		t.Errorf("drena = %v, quero o 20 uma vez só", got)
 	}
 }
@@ -227,9 +227,9 @@ func TestUneNaoConcatenaQuandoAsFaixasSeTocam(t *testing.T) {
 // "resultado menor". Falso negativo é o único desfecho que este produto não
 // tolera, e resultado truncado sem erro é exatamente isso.
 func TestUnePropagaOPrimeiroErro(t *testing.T) {
-	quebrada := fonteComErro{rows: []types.RowID{10}, err: errors.New("mmap sumiu")}
-	it := segindex.Une([]segindex.Fonte{fonteFalsa{1, 2}, quebrada})
-	if got := segindex.EstrategiaDe(it); got != "concatenacao" {
+	broken := brokenSource{rows: []types.RowID{10}, err: errors.New("mmap sumiu")}
+	it := segindex.Union([]segindex.Source{fakeSource{1, 2}, broken})
+	if got := segindex.StrategyOf(it); got != "concatenacao" {
 		t.Fatalf("estratégia = %q, quero \"concatenacao\" — este teste só cobre concatIter.Err()", got)
 	}
 	for it.Next() {
@@ -242,15 +242,15 @@ func TestUnePropagaOPrimeiroErro(t *testing.T) {
 // TestUneMergePropagaOPrimeiroErro é o mesmo requisito de
 // TestUnePropagaOPrimeiroErro, mas sobre o caminho de MERGE: lá as faixas são
 // disjuntas ([1,2] e [10,10]), então aquele teste só exercita
-// concatIter.Err(). Aqui fonteFalsa{10,20} e a quebrada (contendo 15) TÊM
+// concatIter.Err(). Aqui fakeSource{10,20} e a quebrada (contendo 15) TÊM
 // faixas sobrepostas, forçando merge — e é exatamente o caminho que o
 // dataset materializado sempre usa. "Erro nunca vira resultado menor" é a
 // invariante mais dura do produto (resultado truncado sem erro é falso
 // negativo), e ela não pode ficar sem prova justamente aqui.
 func TestUneMergePropagaOPrimeiroErro(t *testing.T) {
-	quebrada := fonteComErro{rows: []types.RowID{15}, err: errors.New("mmap sumiu")}
-	it := segindex.Une([]segindex.Fonte{fonteFalsa{10, 20}, quebrada})
-	if got := segindex.EstrategiaDe(it); got != "merge" {
+	broken := brokenSource{rows: []types.RowID{15}, err: errors.New("mmap sumiu")}
+	it := segindex.Union([]segindex.Source{fakeSource{10, 20}, broken})
+	if got := segindex.StrategyOf(it); got != "merge" {
 		t.Fatalf("estratégia = %q, quero \"merge\" — este teste não estaria cobrindo o mergeIter", got)
 	}
 	for it.Next() {
@@ -260,23 +260,23 @@ func TestUneMergePropagaOPrimeiroErro(t *testing.T) {
 	}
 }
 
-// fonteFechavel embrulha uma Fonte e registra se Close() foi chamado.
+// closeTrackingSource embrulha uma Source e registra se Close() foi chamado.
 //
 // Prova a exigência do dispatch da Tarefa 5: "Close de qualquer combinador
 // fecha TODAS as fontes restantes" — inclusive as que a varredura nunca
 // consumiu (parou no meio por LIMIT, erro de outra fonte ou cancelamento do
-// cliente) e as vazias que Une descarta ANTES de qualquer decisão de
+// cliente) e as vazias que Union descarta ANTES de qualquer decisão de
 // estratégia. Um dataset em regime abre até 500 fontes por consulta; um
 // Close que não fecha todas vaza um mapeamento por fonte esquecida, e isso
 // só aparece em produção como esgotamento de descritor, sem apontar a causa.
-type fonteFechavel struct {
-	segindex.Fonte
-	fechada bool
+type closeTrackingSource struct {
+	segindex.Source
+	closed bool
 }
 
-func (f *fonteFechavel) Close() error {
-	f.fechada = true
-	return f.Fonte.Close()
+func (f *closeTrackingSource) Close() error {
+	f.closed = true
+	return f.Source.Close()
 }
 
 // TestConcatIterCloseFechaTodasAsFontesInclusiveAsNaoConsumidas trava que o
@@ -284,11 +284,11 @@ func (f *fonteFechavel) Close() error {
 // (parar de chamar Next antes do fim) e só então fechar tem de fechar tudo —
 // a fonte corrente E as que a concatenação nunca chegou a tocar.
 func TestConcatIterCloseFechaTodasAsFontesInclusiveAsNaoConsumidas(t *testing.T) {
-	f1 := &fonteFechavel{Fonte: fonteFalsa{10, 20}}
-	f2 := &fonteFechavel{Fonte: fonteFalsa{30, 40}}
-	f3 := &fonteFechavel{Fonte: fonteFalsa{50, 60}}
-	it := segindex.Une([]segindex.Fonte{f1, f2, f3})
-	if got := segindex.EstrategiaDe(it); got != "concatenacao" {
+	f1 := &closeTrackingSource{Source: fakeSource{10, 20}}
+	f2 := &closeTrackingSource{Source: fakeSource{30, 40}}
+	f3 := &closeTrackingSource{Source: fakeSource{50, 60}}
+	it := segindex.Union([]segindex.Source{f1, f2, f3})
+	if got := segindex.StrategyOf(it); got != "concatenacao" {
 		t.Fatalf("estratégia = %q, quero \"concatenacao\"", got)
 	}
 
@@ -296,7 +296,7 @@ func TestConcatIterCloseFechaTodasAsFontesInclusiveAsNaoConsumidas(t *testing.T)
 	// linha) — o suficiente para o cursor da concatenação já ter avançado
 	// PARA ALÉM de f1, que esgotou sozinha mas nunca foi fechada
 	// individualmente. f3 fica sem ser tocada. Se Close fechasse só
-	// `fontes[idx:]` (o que sobrou À FRENTE do cursor), f1 escaparia — ela já
+	// `sources[idx:]` (o que sobrou À FRENTE do cursor), f1 escaparia — ela já
 	// não está mais "à frente" depois de esgotar, mas também não foi fechada
 	// por ninguém até aqui.
 	for i, want := range []types.RowID{10, 20, 30} {
@@ -310,13 +310,13 @@ func TestConcatIterCloseFechaTodasAsFontesInclusiveAsNaoConsumidas(t *testing.T)
 	if err := it.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if !f1.fechada {
+	if !f1.closed {
 		t.Error("f1 (já esgotada, cursor passou dela) não foi fechada")
 	}
-	if !f2.fechada {
+	if !f2.closed {
 		t.Error("f2 (corrente, parcialmente consumida) não foi fechada")
 	}
-	if !f3.fechada {
+	if !f3.closed {
 		t.Error("f3 (nunca consumida) não foi fechada")
 	}
 }
@@ -326,10 +326,10 @@ func TestConcatIterCloseFechaTodasAsFontesInclusiveAsNaoConsumidas(t *testing.T)
 // Close precisa conhecer a lista COMPLETA das fontes de entrada para não
 // vazar as que nunca entraram no heap ou já saíram dele.
 func TestMergeIterCloseFechaTodasAsFontesInclusiveAsNaoConsumidas(t *testing.T) {
-	f1 := &fonteFechavel{Fonte: fonteFalsa{10, 30, 50}}
-	f2 := &fonteFechavel{Fonte: fonteFalsa{20, 30, 40}}
-	it := segindex.Une([]segindex.Fonte{f1, f2})
-	if got := segindex.EstrategiaDe(it); got != "merge" {
+	f1 := &closeTrackingSource{Source: fakeSource{10, 30, 50}}
+	f2 := &closeTrackingSource{Source: fakeSource{20, 30, 40}}
+	it := segindex.Union([]segindex.Source{f1, f2})
+	if got := segindex.StrategyOf(it); got != "merge" {
 		t.Fatalf("estratégia = %q, quero \"merge\"", got)
 	}
 
@@ -349,76 +349,76 @@ func TestMergeIterCloseFechaTodasAsFontesInclusiveAsNaoConsumidas(t *testing.T) 
 	if err := it.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if !f1.fechada {
+	if !f1.closed {
 		t.Error("f1 (ainda no heap, com o 50 por emitir) não foi fechada")
 	}
-	if !f2.fechada {
+	if !f2.closed {
 		t.Error("f2 (já esgotou e saiu do heap) não foi fechada")
 	}
 }
 
 // TestUneFechaAsFontesVaziasDescartadasAntesDeCombinar prova que descartar
-// não é vazar: Une fecha uma fonte vazia no MOMENTO do descarte — antes de
+// não é vazar: Union fecha uma fonte vazia no MOMENTO do descarte — antes de
 // qualquer decisão de estratégia —, e não deixa essa responsabilidade para o
 // Close do combinador, que nem chega a saber que ela existiu.
 func TestUneFechaAsFontesVaziasDescartadasAntesDeCombinar(t *testing.T) {
-	vazia := &fonteFechavel{Fonte: fonteVaziaDeTeste{}}
-	f1 := &fonteFechavel{Fonte: fonteFalsa{10, 20}}
-	f2 := &fonteFechavel{Fonte: fonteFalsa{30, 40}}
-	it := segindex.Une([]segindex.Fonte{f1, vazia, f2})
+	empty := &closeTrackingSource{Source: emptyTestSource{}}
+	f1 := &closeTrackingSource{Source: fakeSource{10, 20}}
+	f2 := &closeTrackingSource{Source: fakeSource{30, 40}}
+	it := segindex.Union([]segindex.Source{f1, empty, f2})
 
 	// A vazia já tem de estar fechada AQUI, antes de qualquer Next ou Close no
-	// iterador devolvido — quem fecha é o descarte de Une, não o Close do
+	// iterador devolvido — quem fecha é o descarte de Union, não o Close do
 	// combinador.
-	if !vazia.fechada {
+	if !empty.closed {
 		t.Error("a fonte vazia não foi fechada no descarte, antes da decisão de estratégia")
 	}
 
-	drena(t, it)
+	drain(t, it)
 	if err := it.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if !f1.fechada {
+	if !f1.closed {
 		t.Error("f1 não foi fechada pelo Close do combinador")
 	}
-	if !f2.fechada {
+	if !f2.closed {
 		t.Error("f2 não foi fechada pelo Close do combinador")
 	}
 }
 
 // TestUneDevolveAFonteDiretaQuandoSoUmaEViva cobre o ramo de fonte única, que
 // nenhum outro teste deste arquivo exercita: quando só uma fonte sobra depois
-// do descarte de vazias, Une a devolve SEM embrulhar em concatIter nem
+// do descarte de vazias, Union a devolve SEM embrulhar em concatIter nem
 // mergeIter. Não é caso de borda — é o caminho quente em produção para
 // colunas de alta cardinalidade (ex.: identifier), onde um valor mora em
 // praticamente um segmento só, e um ramo sem asserção aí é o lugar errado
 // para economizar teste.
 func TestUneDevolveAFonteDiretaQuandoSoUmaEViva(t *testing.T) {
-	f := &fonteFechavel{Fonte: fonteFalsa{10, 20, 30}}
-	it := segindex.Une([]segindex.Fonte{f})
-	if got := segindex.EstrategiaDe(it); got != "direta" {
+	f := &closeTrackingSource{Source: fakeSource{10, 20, 30}}
+	it := segindex.Union([]segindex.Source{f})
+	if got := segindex.StrategyOf(it); got != "direta" {
 		t.Fatalf("estratégia = %q, quero \"direta\"", got)
 	}
-	if got := drena(t, it); !slices.Equal(got, []types.RowID{10, 20, 30}) {
+	if got := drain(t, it); !slices.Equal(got, []types.RowID{10, 20, 30}) {
 		t.Errorf("drena = %v, quero o conteúdo da própria fonte", got)
 	}
 	if err := it.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if !f.fechada {
-		t.Error("a fonte única não foi fechada por Close — Une não pode devolvê-la sem que o Close do chamador continue fechando o que ela abriu")
+	if !f.closed {
+		t.Error("a fonte única não foi fechada por Close — Union não pode devolvê-la sem que o Close do chamador continue fechando o que ela abriu")
 	}
 }
 
 // TestUneDevolveVazioQuandoTodasAsFontesSaoVazias fecha o ramo que sobra no
-// switch de EstrategiaDe depois de "direta" ganhar case próprio: zero fontes
+// switch de StrategyOf depois de "direta" ganhar case próprio: zero fontes
 // vivas depois do descarte.
 func TestUneDevolveVazioQuandoTodasAsFontesSaoVazias(t *testing.T) {
-	it := segindex.Une([]segindex.Fonte{fonteVaziaDeTeste{}})
-	if got := segindex.EstrategiaDe(it); got != "vazia" {
+	it := segindex.Union([]segindex.Source{emptyTestSource{}})
+	if got := segindex.StrategyOf(it); got != "vazia" {
 		t.Errorf("estratégia = %q, quero \"vazia\"", got)
 	}
-	if got := drena(t, it); got != nil {
+	if got := drain(t, it); got != nil {
 		t.Errorf("drena = %v, quero vazio", got)
 	}
 }
@@ -429,8 +429,8 @@ func TestUneDevolveVazioQuandoTodasAsFontesSaoVazias(t *testing.T) {
 func TestUneEhEquivalenteAUniaoOrdenada(t *testing.T) {
 	rng := rand.New(rand.NewPCG(1, 2))
 	for range 200 {
-		var fontes []segindex.Fonte
-		var esperado []types.RowID
+		var sources []segindex.Source
+		var want []types.RowID
 		for range 1 + rng.IntN(6) {
 			var rows []types.RowID
 			for range rng.IntN(30) {
@@ -438,13 +438,13 @@ func TestUneEhEquivalenteAUniaoOrdenada(t *testing.T) {
 			}
 			slices.Sort(rows)
 			rows = slices.Compact(rows)
-			esperado = append(esperado, rows...)
-			fontes = append(fontes, fonteFalsa(rows))
+			want = append(want, rows...)
+			sources = append(sources, fakeSource(rows))
 		}
-		slices.Sort(esperado)
-		esperado = slices.Compact(esperado)
-		if got := drena(t, segindex.Une(fontes)); !slices.Equal(got, esperado) {
-			t.Fatalf("Une = %v, quero %v", got, esperado)
+		slices.Sort(want)
+		want = slices.Compact(want)
+		if got := drain(t, segindex.Union(sources)); !slices.Equal(got, want) {
+			t.Fatalf("Union = %v, quero %v", got, want)
 		}
 	}
 }

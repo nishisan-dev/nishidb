@@ -43,37 +43,37 @@ import (
 // que o mmap.Region exige das cargas atômicas. O desperdício é de UM segmento
 // (3,6 MB para 224 mil linhas) e a selagem re-baseia para 4 bytes.
 const (
-	// MagicWIP identifica o arquivo da forma WIP.
-	MagicWIP = "NDBW"
-	// VersaoWIP é a versão do formato WIP.
-	VersaoWIP = 1
-	// HeaderWIP é o tamanho do header em bytes.
-	HeaderWIP = 64
-	// TamSlotWIP é o tamanho de um slot de diretório: hash u64 + estado u64.
-	TamSlotWIP = 16
-	// TamPosting é o tamanho de uma posting: rowID u64 + anterior u64.
-	TamPosting = 16
+	// WIPMagic identifica o arquivo da forma WIP.
+	WIPMagic = "NDBW"
+	// WIPVersion é a versão do formato WIP.
+	WIPVersion = 1
+	// WIPHeaderSize é o tamanho do header em bytes.
+	WIPHeaderSize = 64
+	// WIPSlotSize é o tamanho de um slot de diretório: hash u64 + estado u64.
+	WIPSlotSize = 16
+	// WIPPostingSize é o tamanho de uma posting: rowID u64 + anterior u64.
+	WIPPostingSize = 16
 )
 
-// slotsMinimoWIP é o piso do diretório. Um diretório de poucos slots rehasheia
+// minWIPSlots é o piso do diretório. Um diretório de poucos slots rehasheia
 // nas primeiras dezenas de valores, e cada rehash move o array de postings —
 // 16 slots são 256 bytes e evitam a metade inicial dessas mudanças sem custo
 // mensurável em disco.
-const slotsMinimoWIP = 16
+const minWIPSlots = 16
 
 // Ocupação máxima do diretório antes do rehash. É a mesma folga que o índice
 // primário usa: acima de 70% a sondagem linear começa a formar clusters, e a
 // promessa deste pacote é sondagem AMORTIZADA constante — o gate de custo
 // mede exatamente isso.
 const (
-	cargaNum = 7
-	cargaDen = 10
+	loadFactorNum = 7
+	loadFactorDen = 10
 )
 
 // Offsets dos campos do header.
 const (
-	offVersaoWIP   = 4
-	offCampoWIP    = 6
+	offVersionWIP  = 4
+	offFieldWIP    = 6
 	offDirSlotsWIP = 8
 	offPostCount   = 12
 )
@@ -91,7 +91,7 @@ const (
 // # Concorrência
 //
 // Set é exclusivo do writer único, como o resto do caminho de escrita do
-// storage. Lookup e ParaCada aceitam N leitores concorrentes ao Set, e a
+// storage. Lookup e ForEach aceitam N leitores concorrentes ao Set, e a
 // segurança vem de duas coisas distintas que não se substituem.
 //
 // Contra o SET, a linearização: contagem e cabeça viajam na mesma palavra de 64
@@ -106,21 +106,22 @@ const (
 // lugar nenhum; nenhuma palavra publicada salva um leitor disso. O lock existe
 // pela MESMA razão que existia no motor global que este pacote substituiu —
 // proteger a região mapeada e a contagem de slots contra o swap da
-// reconstrução —, e o lugar dele é aqui: o Une da união é combinador puro sobre
-// Fontes já abertas e não tem referência ao writer, e a fonte que lê o WIP numa
-// consulta só poderia se serializar pelo wmu — o que serializaria consulta
-// contra ingestão, que é exatamente o que este ciclo existe para evitar, além
-// de violar a ordem de locks vida → wmu → aposMu.
+// reconstrução —, e o lugar dele é aqui: o Union da união é combinador puro
+// sobre Sources já abertas e não tem referência ao writer, e a fonte que lê o
+// WIP numa consulta só poderia se serializar pelo wmu — o que serializaria
+// consulta contra ingestão, que é exatamente o que este ciclo existe para
+// evitar, além de violar a ordem de locks vida → wmu → aposMu.
 //
 // O custo DESTE lock é um par RLock/RUnlock por Set e por Lookup, e ele é
 // ruído. O que ele NÃO elimina — e o texto anterior afirmava que sim — é o par
-// interno do mmap.Region, que cada acesso ao mapeamento (w.le, AtomicStore64)
-// continua pagando: a alternativa (a) do débito 102 NÃO está aplicada aqui. O
-// que matou o custo medido no piloto foi outra coisa: o NÚMERO de acessos por
-// operação caiu por desenho — a sondagem é sobre valores DISTINTOS (1-2
-// acessos) e a caminhada é só sobre as postings do valor —, então o par por
-// acesso, que antes era pago centenas de milhares de vezes por Set, é pago um
-// punhado de vezes. O débito 102 segue aberto para o custo por acesso.
+// interno do mmap.Region, que cada acesso ao mapeamento (w.countedRead,
+// AtomicStore64) continua pagando: a alternativa (a) do débito 102 NÃO está
+// aplicada aqui. O que matou o custo medido no piloto foi outra coisa: o
+// NÚMERO de acessos por operação caiu por desenho — a sondagem é sobre valores
+// DISTINTOS (1-2 acessos) e a caminhada é só sobre as postings do valor —,
+// então o par por acesso, que antes era pago centenas de milhares de vezes por
+// Set, é pago um punhado de vezes. O débito 102 segue aberto para o custo por
+// acesso.
 //
 // O que este lock NÃO promete é atomicidade entre operações: dois Set
 // concorrentes continuam proibidos (o writer é único), e um Lookup que corra
@@ -129,15 +130,15 @@ const (
 type WIP struct {
 	// mu protege dirSlots, postBase, postCap e o CONTEÚDO deslocado pelo
 	// crescimento. Escrita só no crescimento; leitura no Set e no Lookup.
-	mu      sync.RWMutex
-	reg     *mmap.Region
-	caminho string
-	// postBase é o offset da primeira posting: HeaderWIP + dirSlots*TamSlotWIP.
-	// Ele MUDA quando o diretório dobra, e é por isso que o rehash tem de
-	// deslocar o array de postings — o que ele nunca faz é renumerá-las, porque
-	// o que a cadeia guarda é o índice, não o endereço.
+	mu   sync.RWMutex
+	reg  *mmap.Region
+	path string
+	// postBase é o offset da primeira posting: WIPHeaderSize +
+	// dirSlots*WIPSlotSize. Ele MUDA quando o diretório dobra, e é por isso que
+	// o rehash tem de deslocar o array de postings — o que ele nunca faz é
+	// renumerá-las, porque o que a cadeia guarda é o índice, não o endereço.
 	postBase int64
-	campo    types.FieldID
+	field    types.FieldID
 	dirSlots uint32
 	// postCount é atômico porque o Lookup o usa como LIMITE dos elos da cadeia
 	// (um elo além dele é arquivo incoerente) e o Set o incrementa sob lock
@@ -149,38 +150,38 @@ type WIP struct {
 	// escrevendo fora do arquivo. Mesma razão de o formato selado não ter
 	// minRowID (format.go).
 	postCap uint32
-	// distintos é recontado na abertura varrendo o diretório, pela mesma razão:
-	// ele é DERIVÁVEL dos slots ocupados, e gravá-lo seria a chance de o
+	// distinctValues é recontado na abertura varrendo o diretório, pela mesma
+	// razão: ele é DERIVÁVEL dos slots ocupados, e gravá-lo seria a chance de o
 	// arquivo dizer uma coisa e o diretório outra.
-	distintos uint32
-	// sondas conta os ACESSOS AO MAPEAMENTO do último Set — não só as sondas
+	distinctValues uint32
+	// accesses conta os ACESSOS AO MAPEAMENTO do último Set — não só as sondas
 	// de diretório. Existe para o gate de custo (export_test.go) e é escrito só
 	// pelo writer: o caminho de leitura não pode tocá-lo, senão o contador
 	// vira corrida de dados.
-	sondas int
-	// fechado marca que o mapeamento já foi desmontado. É o mesmo papel do
-	// `dados == nil` de Selado, num campo atômico porque aqui há leitores
+	accesses int
+	// closed marca que o mapeamento já foi desmontado. É o mesmo papel do
+	// `data == nil` de Sealed, num campo atômico porque aqui há leitores
 	// concorrentes de verdade.
-	fechado atomic.Bool
+	closed atomic.Bool
 }
 
-// CaminhoWIP devolve o caminho do índice WIP do par (segmento, campo).
+// WIPPath devolve o caminho do índice WIP do par (segmento, campo).
 //
 // É um arquivo POR CAMPO, e não por segmento como o selado: o WIP existe para
 // um segmento por vez, então ele pode se dar ao luxo de descritores que o
 // selado — 500 segmentos vezes N campos contra um ulimit -n de 1024 — não
 // poderia (spec §1.2).
-func CaminhoWIP(dir string, seg uint32, campo types.FieldID) string {
-	return filepath.Join(dir, fmt.Sprintf("segment-%08d-%05d.widx", seg, campo))
+func WIPPath(dir string, seg uint32, field types.FieldID) string {
+	return filepath.Join(dir, fmt.Sprintf("segment-%08d-%05d.widx", seg, field))
 }
 
-// decompoeNomeWIP separa segmento e campo de um nome do espaço
+// parseWIPName separa segmento e campo de um nome do espaço
 // `segment-%08d-%05d.widx`.
 //
 // ok=false significa "este nome não é um .widx", e não é anomalia: o diretório
 // de dados também tem .dat, .sidx e temporários. Já um nome QUE É um .widx e não
 // decompõe — fieldID ilegível, segmento ilegível, padding divergente — é
-// RECUSADO com ErrFormato, nunca pulado: esse espaço de nomes é deste pacote, e
+// RECUSADO com ErrFormat, nunca pulado: esse espaço de nomes é deste pacote, e
 // um arquivo ali que não saiu daqui significa que outra coisa escreveu no
 // diretório do dataset. Pular seria perder um campo inteiro da selagem em
 // silêncio, ou deixar em disco um resíduo que a limpeza da abertura não alcança.
@@ -188,66 +189,66 @@ func CaminhoWIP(dir string, seg uint32, campo types.FieldID) string {
 // A comparação final contra o nome canônico é o mesmo cuidado do
 // segment.ListSegments, e ela é load-bearing aqui por um motivo que lá não
 // existe: quem enumera .widx REMOVE o que encontra, e a remoção reconstrói o
-// caminho por CaminhoWIP. Aceitar `segment-1-3.widx` como o segmento 1 campo 3
+// caminho por WIPPath. Aceitar `segment-1-3.widx` como o segmento 1 campo 3
 // faria a limpeza mirar um nome canônico que não existe e devolver "removido"
 // sobre um arquivo intacto.
-func decompoeNomeWIP(nome string) (uint32, types.FieldID, bool, error) {
-	const prefixo = "segment-"
-	if !strings.HasPrefix(nome, prefixo) || !strings.HasSuffix(nome, ".widx") {
+func parseWIPName(name string) (uint32, types.FieldID, bool, error) {
+	const prefix = "segment-"
+	if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, ".widx") {
 		return 0, 0, false, nil
 	}
-	miolo := nome[len(prefixo) : len(nome)-len(".widx")]
-	sep := strings.IndexByte(miolo, '-')
+	middle := name[len(prefix) : len(name)-len(".widx")]
+	sep := strings.IndexByte(middle, '-')
 	if sep < 0 {
-		return 0, 0, false, fmt.Errorf("%w: %s não separa segmento e campo em %q", ErrFormato, nome, miolo)
+		return 0, 0, false, fmt.Errorf("%w: %s não separa segmento e campo em %q", ErrFormat, name, middle)
 	}
-	seg, err := strconv.ParseUint(miolo[:sep], 10, 32)
+	seg, err := strconv.ParseUint(middle[:sep], 10, 32)
 	if err != nil {
-		return 0, 0, false, fmt.Errorf("%w: %s não tem um segmento legível em %q", ErrFormato, nome, miolo[:sep])
+		return 0, 0, false, fmt.Errorf("%w: %s não tem um segmento legível em %q", ErrFormat, name, middle[:sep])
 	}
-	campo, err := strconv.ParseUint(miolo[sep+1:], 10, 16)
+	field, err := strconv.ParseUint(middle[sep+1:], 10, 16)
 	if err != nil {
-		return 0, 0, false, fmt.Errorf("%w: %s não tem um fieldID legível em %q", ErrFormato, nome, miolo[sep+1:])
+		return 0, 0, false, fmt.Errorf("%w: %s não tem um fieldID legível em %q", ErrFormat, name, middle[sep+1:])
 	}
-	if canonico := filepath.Base(CaminhoWIP("", uint32(seg), types.FieldID(campo))); nome != canonico {
+	if canonical := filepath.Base(WIPPath("", uint32(seg), types.FieldID(field))); name != canonical {
 		return 0, 0, false, fmt.Errorf("%w: %s não é o nome canônico do par (%d, %d), que seria %s",
-			ErrFormato, nome, seg, campo, canonico)
+			ErrFormat, name, seg, field, canonical)
 	}
-	return uint32(seg), types.FieldID(campo), true, nil
+	return uint32(seg), types.FieldID(field), true, nil
 }
 
-// ListaWIP devolve, em ordem crescente, os campos que têm .widx no segmento.
+// ListWIP devolve, em ordem crescente, os campos que têm .widx no segmento.
 //
 // O FILESYSTEM é a verdade sobre quais campos o segmento corrente indexa: nada
 // no manifest lista isso, seguindo a doutrina que primeiroRowIDDoSeguinte já
 // escreve — "um metadado a menos é uma janela de crash a menos" (spec §5.3).
-func ListaWIP(dir string, seg uint32) ([]types.FieldID, error) {
-	entradas, err := os.ReadDir(dir)
+func ListWIP(dir string, seg uint32) ([]types.FieldID, error) {
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, fmt.Errorf("segindex: listar os .widx de %s: %w", dir, err)
 	}
-	var campos []types.FieldID
-	for _, e := range entradas {
+	var fields []types.FieldID
+	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
-		doArquivo, campo, ok, err := decompoeNomeWIP(e.Name())
+		fileSeg, field, ok, err := parseWIPName(e.Name())
 		if err != nil {
 			return nil, err
 		}
-		if !ok || doArquivo != seg {
+		if !ok || fileSeg != seg {
 			continue
 		}
-		campos = append(campos, campo)
+		fields = append(fields, field)
 	}
-	slices.Sort(campos)
-	return campos, nil
+	slices.Sort(fields)
+	return fields, nil
 }
 
-// SegmentosComWIP devolve, em ordem crescente e sem repetição, os segmentos com
+// SegmentsWithWIP devolve, em ordem crescente e sem repetição, os segmentos com
 // ao menos um .widx em dir.
 //
-// Ela é a contrapartida de ListaWIP para quem precisa da pergunta ao contrário —
+// Ela é a contrapartida de ListWIP para quem precisa da pergunta ao contrário —
 // "de quais segmentos há WIP em disco?" —, e quem precisa é a abertura: a §2.5
 // manda descartar o .widx de TODO segmento, e os dois casos que não são o
 // corrente só existem como resíduo de crash. O de um segmento já aposentado é o
@@ -256,27 +257,27 @@ func ListaWIP(dir string, seg uint32) ([]types.FieldID, error) {
 // e ele ficaria em disco para sempre — contado pelo IndexBytes como disco que
 // nada explica, que é o modo de falha que aquela contagem existe para eliminar.
 //
-// A CONSEQUÊNCIA DE RECUSAR AQUI É MAIOR DO QUE NO ListaWIP, e quem chamar
+// A CONSEQUÊNCIA DE RECUSAR AQUI É MAIOR DO QUE NO ListWIP, e quem chamar
 // precisa saber: como a abertura varre o diretório INTEIRO por esta função, um
 // .widx de nome ilegível de QUALQUER segmento deixa de custar "a selagem perde um
 // campo" e passa a custar "o dataset não abre". A doutrina continua sendo
 // recusar em vez de pular — um arquivo neste espaço de nomes que não saiu daqui
 // significa que outra coisa escreveu no diretório do dataset, e seguir em frente
 // seria decidir sobre um diretório que já não se entende. Mas o chamador tem de
-// classificar o ErrFormato numa sentinela de dataset ilegível: sem isso ele cai
+// classificar o ErrFormat numa sentinela de dataset ilegível: sem isso ele cai
 // no exit code genérico de erro de uso, que manda o operador olhar a linha de
 // comando em vez do dataset.
-func SegmentosComWIP(dir string) ([]uint32, error) {
-	entradas, err := os.ReadDir(dir)
+func SegmentsWithWIP(dir string) ([]uint32, error) {
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, fmt.Errorf("segindex: listar os .widx de %s: %w", dir, err)
 	}
 	var segs []uint32
-	for _, e := range entradas {
+	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
-		seg, _, ok, err := decompoeNomeWIP(e.Name())
+		seg, _, ok, err := parseWIPName(e.Name())
 		if err != nil {
 			return nil, err
 		}
@@ -289,7 +290,7 @@ func SegmentosComWIP(dir string) ([]uint32, error) {
 	return slices.Compact(segs), nil
 }
 
-// AbreWIP abre — criando se preciso — o índice WIP do par (segmento, campo).
+// OpenWIP abre — criando se preciso — o índice WIP do par (segmento, campo).
 //
 // slotsMin dimensiona o diretório de um arquivo NOVO e é arredondado para cima
 // até a próxima potência de dois. slotsMin == 0 significa "abre o que já está
@@ -300,12 +301,12 @@ func SegmentosComWIP(dir string) ([]uint32, error) {
 // Sobre um arquivo EXISTENTE o slotsMin é ignorado: o dirSlots gravado é o que
 // a máscara do diretório usa, e adotá-lo é a única leitura correta dos slots
 // que já estão ocupados.
-func AbreWIP(dir string, seg uint32, campo types.FieldID, slotsMin uint32) (*WIP, error) {
-	caminho := CaminhoWIP(dir, seg, campo)
-	info, err := os.Stat(caminho)
+func OpenWIP(dir string, seg uint32, field types.FieldID, slotsMin uint32) (*WIP, error) {
+	path := WIPPath(dir, seg, field)
+	info, err := os.Stat(path)
 	switch {
 	case err == nil && info.Size() > 0:
-		return abreWIPExistente(caminho, campo)
+		return openExistingWIP(path, field)
 	case err == nil || errors.Is(err, os.ErrNotExist):
 		// Arquivo de zero bytes cai aqui junto com o ausente, e é o tratamento
 		// certo: ele só existe como criação interrompida antes do fallocate, e
@@ -313,40 +314,40 @@ func AbreWIP(dir string, seg uint32, campo types.FieldID, slotsMin uint32) (*WIP
 		// chamador não precise distinguir os dois.
 		if slotsMin == 0 {
 			return nil, fmt.Errorf("segindex: %s não tem conteúdo e slotsMin 0 pede abertura sem redimensionar: %w",
-				caminho, os.ErrNotExist)
+				path, os.ErrNotExist)
 		}
-		return criaWIP(caminho, campo, slotsMin)
+		return createWIP(path, field, slotsMin)
 	default:
-		return nil, fmt.Errorf("segindex: stat de %s: %w", caminho, err)
+		return nil, fmt.Errorf("segindex: stat de %s: %w", path, err)
 	}
 }
 
-// criaWIP cria o arquivo já dimensionado e grava o header.
+// createWIP cria o arquivo já dimensionado e grava o header.
 //
 // A capacidade inicial de postings acompanha o número de slots do diretório
 // porque as duas medem a mesma aposta do chamador: um campo com muitos valores
 // distintos tem, no mínimo, uma posting por valor. Errar para baixo custa um
 // Grow amortizado; errar para cima custa 16 bytes por slot de UM segmento.
-func criaWIP(caminho string, campo types.FieldID, slotsMin uint32) (*WIP, error) {
-	slots := potenciaDeDois(max(slotsMin, slotsMinimoWIP))
-	base := int64(HeaderWIP) + int64(slots)*TamSlotWIP
-	reg, err := mmap.Open(caminho, base+int64(slots)*TamPosting)
+func createWIP(path string, field types.FieldID, slotsMin uint32) (*WIP, error) {
+	slots := powerOfTwo(max(slotsMin, minWIPSlots))
+	base := int64(WIPHeaderSize) + int64(slots)*WIPSlotSize
+	reg, err := mmap.Open(path, base+int64(slots)*WIPPostingSize)
 	if err != nil {
 		return nil, err
 	}
-	w := &WIP{reg: reg, caminho: caminho, campo: campo, dirSlots: slots, postBase: base}
-	w.atualizaCapacidade()
-	w.gravaHeader()
+	w := &WIP{reg: reg, path: path, field: field, dirSlots: slots, postBase: base}
+	w.updateCapacity()
+	w.writeHeader()
 	return w, nil
 }
 
-// abreWIPExistente adota o header gravado e reconta os distintos.
-func abreWIPExistente(caminho string, campo types.FieldID) (*WIP, error) {
-	reg, err := mmap.Open(caminho, HeaderWIP)
+// openExistingWIP adota o header gravado e reconta os distintos.
+func openExistingWIP(path string, field types.FieldID) (*WIP, error) {
+	reg, err := mmap.Open(path, WIPHeaderSize)
 	if err != nil {
 		return nil, err
 	}
-	w, err := montaWIP(reg, caminho, campo)
+	w, err := newWIP(reg, path, field)
 	if err != nil {
 		_ = reg.Close()
 		return nil, err
@@ -354,67 +355,67 @@ func abreWIPExistente(caminho string, campo types.FieldID) (*WIP, error) {
 	return w, nil
 }
 
-// montaWIP valida o header e devolve o WIP. Separado de abreWIPExistente para
+// newWIP valida o header e devolve o WIP. Separado de openExistingWIP para
 // que TODO caminho de recusa desmonte a região num lugar só, como em
-// montaSelado.
-func montaWIP(reg *mmap.Region, caminho string, campo types.FieldID) (*WIP, error) {
+// newSealed.
+func newWIP(reg *mmap.Region, path string, field types.FieldID) (*WIP, error) {
 	var (
 		magic     [4]byte
-		versao    byte
-		gravado   types.FieldID
+		version   byte
+		stored    types.FieldID
 		dirSlots  uint32
 		postCount uint32
 	)
-	reg.WithBytes(0, HeaderWIP, func(b []byte) {
+	reg.WithBytes(0, WIPHeaderSize, func(b []byte) {
 		copy(magic[:], b[0:4])
-		versao = b[offVersaoWIP]
-		gravado = types.FieldID(binary.LittleEndian.Uint16(b[offCampoWIP : offCampoWIP+2]))
+		version = b[offVersionWIP]
+		stored = types.FieldID(binary.LittleEndian.Uint16(b[offFieldWIP : offFieldWIP+2]))
 		dirSlots = binary.LittleEndian.Uint32(b[offDirSlotsWIP : offDirSlotsWIP+4])
 		postCount = binary.LittleEndian.Uint32(b[offPostCount : offPostCount+4])
 	})
-	if string(magic[:]) != MagicWIP {
-		return nil, fmt.Errorf("%w: %s não começa com %q", ErrFormato, caminho, MagicWIP)
+	if string(magic[:]) != WIPMagic {
+		return nil, fmt.Errorf("%w: %s não começa com %q", ErrFormat, path, WIPMagic)
 	}
-	if versao != VersaoWIP {
+	if version != WIPVersion {
 		return nil, fmt.Errorf("%w: %s é da versão %d, este binário lê a %d",
-			ErrFormato, caminho, versao, VersaoWIP)
+			ErrFormat, path, version, WIPVersion)
 	}
 	// O fieldID está no NOME e no header, e a conferência é o que impede um
 	// arquivo renomeado de responder pelo campo errado — um Lookup sobre o
 	// campo errado devolve linhas erradas sem sintoma nenhum.
-	if gravado != campo {
+	if stored != field {
 		return nil, fmt.Errorf("%w: %s declara o campo %d, mas foi aberto como %d",
-			ErrFormato, caminho, gravado, campo)
+			ErrFormat, path, stored, field)
 	}
 	if dirSlots == 0 || dirSlots&(dirSlots-1) != 0 {
 		return nil, fmt.Errorf("%w: %s declara dirSlots %d, que não é potência de dois",
-			ErrFormato, caminho, dirSlots)
+			ErrFormat, path, dirSlots)
 	}
-	base := int64(HeaderWIP) + int64(dirSlots)*TamSlotWIP
-	if minimo := base + int64(postCount)*TamPosting; reg.Size() < minimo {
+	base := int64(WIPHeaderSize) + int64(dirSlots)*WIPSlotSize
+	if minSize := base + int64(postCount)*WIPPostingSize; reg.Size() < minSize {
 		return nil, fmt.Errorf("%w: %s tem %d bytes e declara %d slots com %d postings, que pedem %d",
-			ErrFormato, caminho, reg.Size(), dirSlots, postCount, minimo)
+			ErrFormat, path, reg.Size(), dirSlots, postCount, minSize)
 	}
 	w := &WIP{
 		reg:      reg,
-		caminho:  caminho,
-		campo:    campo,
+		path:     path,
+		field:    field,
 		dirSlots: dirSlots,
 		postBase: base,
 	}
 	w.postCount.Store(postCount)
-	w.atualizaCapacidade()
-	if err := w.confereDiretorio(); err != nil {
+	w.updateCapacity()
+	if err := w.checkDirectory(); err != nil {
 		return nil, err
 	}
 	return w, nil
 }
 
-// potenciaDeDois arredonda n para cima até a próxima potência de dois — exceto
+// powerOfTwo arredonda n para cima até a próxima potência de dois — exceto
 // acima de 2^31, onde devolve 2^31 (o clamp arredonda para BAIXO: não existe
 // potência de dois maior num uint32, e um diretório desse tamanho já teria
 // 32 GiB só de slots).
-func potenciaDeDois(n uint32) uint32 {
+func powerOfTwo(n uint32) uint32 {
 	if n <= 1 {
 		return 1
 	}
@@ -424,32 +425,33 @@ func potenciaDeDois(n uint32) uint32 {
 	return 1 << bits.Len32(n-1)
 }
 
-// Campo devolve o campo indexado por este arquivo.
-func (w *WIP) Campo() types.FieldID { return w.campo }
+// Field devolve o campo indexado por este arquivo.
+func (w *WIP) Field() types.FieldID { return w.field }
 
 // Postings devolve quantas postings foram gravadas, DUPLICATAS INCLUÍDAS. É o
 // tamanho do array append-only, e não o número de pares distintos: a mesma
 // linha pode receber dois records com o mesmo valor dentro de um segmento, e é
-// o Lookup (e o Escritor, na selagem) quem compacta.
+// o Lookup (e o Writer, na selagem) quem compacta.
 func (w *WIP) Postings() uint32 { return w.postCount.Load() }
 
-// Distintos devolve quantos valores distintos ocupam o diretório. É a carga
-// que dimensiona a sondagem — e, portanto, o número que explica o custo do Set.
+// DistinctValues devolve quantos valores distintos ocupam o diretório. É a
+// carga que dimensiona a sondagem — e, portanto, o número que explica o custo
+// do Set.
 //
 // Acessor do lado do WRITER, ao contrário de Postings: o contador de distintos
 // é um uint32 comum, escrito pelo Set sob lock compartilhado, então lê-lo de
 // outro goroutine é corrida. Ele não é atômico porque nenhum leitor precisa
 // dele — o Lookup usa postCount como limite dos elos, e não este.
-func (w *WIP) Distintos() uint32 { return w.distintos }
+func (w *WIP) DistinctValues() uint32 { return w.distinctValues }
 
 // slotOff devolve o offset do slot de diretório.
 func (w *WIP) slotOff(slot uint32) int64 {
-	return int64(HeaderWIP) + int64(slot)*TamSlotWIP
+	return int64(WIPHeaderSize) + int64(slot)*WIPSlotSize
 }
 
 // postOff devolve o offset da posting de índice 0-based idx.
 func (w *WIP) postOff(idx uint32) int64 {
-	return w.postBase + int64(idx)*TamPosting
+	return w.postBase + int64(idx)*WIPPostingSize
 }
 
 // Set liga a posting (h, row). O(1): uma sondagem amortizada de diretório —
@@ -465,38 +467,38 @@ func (w *WIP) Set(h uint64, row types.RowID) error {
 	// como vazio, incrementaria os distintos e faria a posting sumir em
 	// SILÊNCIO. Convenção documentada vira invariante gateada.
 	if h == 0 {
-		panic("segindex: Set com hash 0 em " + w.caminho +
+		panic("segindex: Set com hash 0 em " + w.path +
 			" — 0 é o sentinela de slot vazio, e primary.HashKey nunca o devolve")
 	}
 	// O uso-após-fim é conferido ANTES de qualquer trabalho — inclusive do
 	// crescimento, que com o array cheio tocaria o mapeamento desmontado e
 	// devolveria um erro de mmap no lugar do pânico nomeado que o godoc
 	// promete. Fora do lock de propósito, e é seguro: o flag é atômico, e Set e
-	// Fecha são serializados pelo mesmo dono (o writer único, sob o wmu) — não
-	// existe Fecha concorrente com um Set em voo.
-	w.exigeAberto("Set")
-	if err := w.talvezCresce(); err != nil {
+	// Close são serializados pelo mesmo dono (o writer único, sob o wmu) — não
+	// existe Close concorrente com um Set em voo.
+	w.requireOpen("Set")
+	if err := w.maybeGrow(); err != nil {
 		return err
 	}
 	// O RLock entra DEPOIS do crescimento, e não pode entrar antes: o
 	// crescimento toma o mesmo mu em modo exclusivo, e o RWMutex do Go não é
-	// reentrante. postCount e sondas são escritos aqui sob lock COMPARTILHADO,
+	// reentrante. postCount e accesses são escritos aqui sob lock COMPARTILHADO,
 	// e isso é correto porque o writer é único — o que o mu serializa é o
 	// layout (dirSlots, postBase e os bytes que o rehash desloca), não o
 	// contador de quem já é dono exclusivo da escrita.
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 
-	w.sondas = 0              // o contador do gate de custo cobre o Set INTEIRO
-	slot := w.sondaOuCria(h)  // conta os acessos em w.sondas
-	idx := w.postCount.Load() // 0-based; publicado como idx+1
+	w.accesses = 0             // o contador do gate de custo cobre o Set INTEIRO
+	slot := w.probeOrCreate(h) // conta os acessos em w.accesses
+	idx := w.postCount.Load()  // 0-based; publicado como idx+1
 	off := w.postOff(idx)
-	estado := w.le(w.slotOff(slot) + 8)
+	state := w.countedRead(w.slotOff(slot) + 8)
 
 	// A posting é gravada ANTES de o estado ser publicado. Um leitor que
 	// enxerga a cabeça nova necessariamente enxerga o rowId e o elo dela.
 	w.reg.AtomicStore64(off, uint64(row))
-	w.reg.AtomicStore64(off+8, uint64(uint32(estado))) // anterior = ultimo atual
+	w.reg.AtomicStore64(off+8, uint64(uint32(state))) // anterior = ultimo atual
 
 	// postCount sobe ANTES de a cabeça ser publicada, e a ordem é obrigatória.
 	// O Lookup usa postCount como LIMITE dos elos da cadeia — um elo além do
@@ -516,12 +518,12 @@ func (w *WIP) Set(h uint64, row types.RowID) error {
 	// Contagem e cabeça viajam na MESMA palavra: publicá-las em duas escritas
 	// deixaria um leitor ver a cabeça nova com a contagem velha, e ele
 	// dimensionaria a fatia com um elemento a menos que a caminhada produz.
-	novo := (uint64(uint32(estado>>32)+1) << 32) | uint64(idx+1)
-	w.reg.AtomicStore64(w.slotOff(slot)+8, novo)
+	newState := (uint64(uint32(state>>32)+1) << 32) | uint64(idx+1)
+	w.reg.AtomicStore64(w.slotOff(slot)+8, newState)
 	return nil
 }
 
-// le carrega uma palavra do mapeamento CONTANDO o acesso.
+// countedRead carrega uma palavra do mapeamento CONTANDO o acesso.
 //
 // É o instrumento do gate de custo, e a diferença entre contar acessos e contar
 // sondas de diretório é o que dá valor ao gate. Um Set que voltasse a varrer a
@@ -530,13 +532,13 @@ func (w *WIP) Set(h uint64, row types.RowID) error {
 // acréscimo aparece aqui obrigatoriamente. Um contador que só soubesse de slots
 // veria 1 sonda e aprovaria a regressão.
 //
-// Só o CAMINHO DE ESCRITA pode usar este método: w.sondas é um int comum, e um
-// leitor concorrente que o incrementasse criaria a corrida de dados que o mu
-// existe para não ter. O Lookup e o ParaCada leem o mapeamento direto, de
+// Só o CAMINHO DE ESCRITA pode usar este método: w.accesses é um int comum, e
+// um leitor concorrente que o incrementasse criaria a corrida de dados que o mu
+// existe para não ter. O Lookup e o ForEach leem o mapeamento direto, de
 // propósito — e TestOCaminhoDeEscritaLeOMapeamentoSoPeloContador confere que a
 // recíproca também vale, para que o contador seja completo por construção.
-func (w *WIP) le(off int64) uint64 {
-	w.sondas++
+func (w *WIP) countedRead(off int64) uint64 {
+	w.accesses++
 	return w.reg.AtomicLoad64(off)
 }
 
@@ -555,14 +557,14 @@ func (w *WIP) le(off int64) uint64 {
 func (w *WIP) Lookup(h uint64) []types.RowID {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
-	w.exigeAberto("Lookup")
+	w.requireOpen("Lookup")
 
-	slot, ok := w.busca(h)
+	slot, ok := w.find(h)
 	if !ok {
 		return nil
 	}
-	estado := w.reg.AtomicLoad64(w.slotOff(slot) + 8)
-	n, cur := uint32(estado>>32), uint32(estado)
+	state := w.reg.AtomicLoad64(w.slotOff(slot) + 8)
+	n, cur := uint32(state>>32), uint32(state)
 	if n == 0 {
 		return nil
 	}
@@ -592,10 +594,10 @@ func (w *WIP) Lookup(h uint64) []types.RowID {
 	return slices.Compact(out)
 }
 
-// ParaCada varre TODAS as postings do WIP, uma vez cada.
+// ForEach varre TODAS as postings do WIP, uma vez cada.
 //
-// É o que a selagem consome para alimentar o Escritor, e ela NÃO entrega nada
-// ordenado de propósito: o Escritor já ordena por (campo, hash, row) e
+// É o que a selagem consome para alimentar o Writer, e ela NÃO entrega nada
+// ordenado de propósito: o Writer já ordena por (field, hash, row) e
 // deduplica na construção do arquivo selado. Ordenar aqui seria a MESMA
 // ordenação em dois lugares, e duas implementações do mesmo critério divergem
 // na primeira vez que o critério muda.
@@ -605,11 +607,11 @@ func (w *WIP) Lookup(h uint64) []types.RowID {
 //
 // fn roda com o lock de leitura tomado e NÃO pode reentrar no WIP: um Set de
 // dentro dela travaria contra o próprio RLock desta varredura assim que
-// precisasse crescer. Quem a consome é a selagem, e ela só alimenta o Escritor.
-func (w *WIP) ParaCada(fn func(h uint64, row types.RowID)) error {
+// precisasse crescer. Quem a consome é a selagem, e ela só alimenta o Writer.
+func (w *WIP) ForEach(fn func(h uint64, row types.RowID)) error {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
-	w.exigeAberto("ParaCada")
+	w.requireOpen("ForEach")
 
 	for slot := uint32(0); slot < w.dirSlots; slot++ {
 		off := w.slotOff(slot)
@@ -617,7 +619,7 @@ func (w *WIP) ParaCada(fn func(h uint64, row types.RowID)) error {
 		if h == 0 {
 			continue
 		}
-		estado := w.reg.AtomicLoad64(off + 8)
+		state := w.reg.AtomicLoad64(off + 8)
 		// O elo é confrontado com o total de postings pela mesma razão do
 		// Lookup: ele vem do ARQUIVO, e um elo além do array viraria pânico de
 		// bounds no meio da selagem. E o total é carregado por slot, DEPOIS do
@@ -625,7 +627,7 @@ func (w *WIP) ParaCada(fn func(h uint64, row types.RowID)) error {
 		// vez no topo do laço ficaria velho em relação às cabeças publicadas
 		// durante a varredura, e a cadeia seria descartada inteira.
 		total := w.postCount.Load()
-		for n, cur := uint32(estado>>32), uint32(estado); n > 0 && cur != 0 && cur <= total; n-- {
+		for n, cur := uint32(state>>32), uint32(state); n > 0 && cur != 0 && cur <= total; n-- {
 			p := w.postOff(cur - 1)
 			fn(h, types.RowID(w.reg.AtomicLoad64(p)))
 			cur = uint32(w.reg.AtomicLoad64(p + 8))
@@ -634,12 +636,12 @@ func (w *WIP) ParaCada(fn func(h uint64, row types.RowID)) error {
 	return nil
 }
 
-// busca acha o slot do hash, ou reporta que ele não está no diretório.
+// find acha o slot do hash, ou reporta que ele não está no diretório.
 //
 // Para no primeiro slot VAZIO, e isso é correto porque este índice é
 // append-only dentro do segmento: não há Clear, não há lápide, e portanto
 // nenhuma cadeia de sondagem pode ter sido cortada no meio (spec §5.2).
-func (w *WIP) busca(h uint64) (uint32, bool) {
+func (w *WIP) find(h uint64) (uint32, bool) {
 	mask := w.dirSlots - 1
 	for i := uint32(0); i < w.dirSlots; i++ {
 		slot := (uint32(h) + i) & mask
@@ -653,44 +655,45 @@ func (w *WIP) busca(h uint64) (uint32, bool) {
 	return 0, false
 }
 
-// sondaOuCria devolve o slot do hash, ocupando um vazio se ele ainda não
-// estiver no diretório. O que sobe em w.sondas são os ACESSOS AO MAPEAMENTO
-// (via w.le), não os slots examinados — é a unidade que o gate de custo mede.
+// probeOrCreate devolve o slot do hash, ocupando um vazio se ele ainda não
+// estiver no diretório. O que sobe em w.accesses são os ACESSOS AO MAPEAMENTO
+// (via w.countedRead), não os slots examinados — é a unidade que o gate de
+// custo mede.
 //
 // O hash é publicado ANTES de qualquer estado, e o slot recém-ocupado tem
 // estado zero — um leitor que enxergue o hash novo lê contagem 0 e devolve
 // nada, que é a resposta certa até o Set publicar a primeira posting.
-func (w *WIP) sondaOuCria(h uint64) uint32 {
+func (w *WIP) probeOrCreate(h uint64) uint32 {
 	mask := w.dirSlots - 1
 	for i := uint32(0); i < w.dirSlots; i++ {
 		slot := (uint32(h) + i) & mask
 		off := w.slotOff(slot)
-		switch w.le(off) {
+		switch w.countedRead(off) {
 		case 0:
 			w.reg.AtomicStore64(off, h)
-			w.distintos++
+			w.distinctValues++
 			return slot
 		case h:
 			return slot
 		}
 	}
-	// Inalcançável: talvezCresce mantém a ocupação em 70%, então sempre há
+	// Inalcançável: maybeGrow mantém a ocupação em 70%, então sempre há
 	// slot vazio. Chegar aqui é bug de load factor, e um erro devolvido seria
 	// tratado como falha de I/O pelo chamador — que é o balde errado (§101).
 	panic(fmt.Sprintf("segindex: diretório de %s cheio com %d slots e %d distintos (bug de load factor)",
-		w.caminho, w.dirSlots, w.distintos))
+		w.path, w.dirSlots, w.distinctValues))
 }
 
-// talvezCresce garante que cabem mais um valor distinto e mais uma posting.
+// maybeGrow garante que cabem mais um valor distinto e mais uma posting.
 //
 // O rehash vem PRIMEIRO porque ele desloca o array de postings: crescer o array
 // antes seria dimensioná-lo contra uma base que o rehash muda em seguida.
-func (w *WIP) talvezCresce() error {
+func (w *WIP) maybeGrow() error {
 	// O caminho comum — que é o de TODO Set em regime — nem toca o lock
 	// exclusivo. Ler os quatro campos aqui sem lock nenhum é seguro porque
 	// quem os escreve é o writer, e o writer é este goroutine: os leitores
 	// concorrentes só leem.
-	if uint64(w.distintos)+1 <= uint64(w.dirSlots)*cargaNum/cargaDen && w.postCount.Load() < w.postCap {
+	if uint64(w.distinctValues)+1 <= uint64(w.dirSlots)*loadFactorNum/loadFactorDen && w.postCount.Load() < w.postCap {
 		return nil
 	}
 	// Daqui para baixo o layout muda debaixo de quem estiver lendo: dirSlots e
@@ -699,29 +702,29 @@ func (w *WIP) talvezCresce() error {
 	// deixaria um leitor entrar entre o memmove e a publicação do postBase novo.
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if uint64(w.distintos)+1 > uint64(w.dirSlots)*cargaNum/cargaDen {
+	if uint64(w.distinctValues)+1 > uint64(w.dirSlots)*loadFactorNum/loadFactorDen {
 		if err := w.rehash(); err != nil {
 			return err
 		}
 	}
 	if w.postCount.Load() == w.postCap {
-		if err := w.crescePostings(); err != nil {
+		if err := w.growPostings(); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// crescePostings dobra a capacidade do array de postings.
-func (w *WIP) crescePostings() error {
-	novo := uint64(w.postCap) * 2
-	if novo == 0 {
-		novo = slotsMinimoWIP
+// growPostings dobra a capacidade do array de postings.
+func (w *WIP) growPostings() error {
+	newCap := uint64(w.postCap) * 2
+	if newCap == 0 {
+		newCap = minWIPSlots
 	}
-	if err := w.garante(w.postBase + int64(novo)*TamPosting); err != nil {
+	if err := w.ensure(w.postBase + int64(newCap)*WIPPostingSize); err != nil {
 		return err
 	}
-	w.atualizaCapacidade()
+	w.updateCapacity()
 	return nil
 }
 
@@ -740,91 +743,91 @@ func (w *WIP) crescePostings() error {
 // sondagens e depois sumiriam, cortando cadeias e produzindo FALSO NEGATIVO. O
 // custo é amortizado: o diretório dobra, e o buffer é proporcional a ele.
 func (w *WIP) rehash() error {
-	novoSlots := w.dirSlots * 2
-	if novoSlots < w.dirSlots {
-		return fmt.Errorf("segindex: diretório de %s no teto de %d slots", w.caminho, w.dirSlots)
+	newSlots := w.dirSlots * 2
+	if newSlots < w.dirSlots {
+		return fmt.Errorf("segindex: diretório de %s no teto de %d slots", w.path, w.dirSlots)
 	}
-	novaBase := int64(HeaderWIP) + int64(novoSlots)*TamSlotWIP
-	if err := w.garante(novaBase + int64(w.postCap)*TamPosting); err != nil {
+	newBase := int64(WIPHeaderSize) + int64(newSlots)*WIPSlotSize
+	if err := w.ensure(newBase + int64(w.postCap)*WIPPostingSize); err != nil {
 		return err
 	}
 
-	antigo := make([]uint64, 0, int(w.dirSlots)*2)
+	old := make([]uint64, 0, int(w.dirSlots)*2)
 	for i := uint32(0); i < w.dirSlots; i++ {
 		off := w.slotOff(i)
-		antigo = append(antigo, w.reg.AtomicLoad64(off), w.reg.AtomicLoad64(off+8))
+		old = append(old, w.reg.AtomicLoad64(off), w.reg.AtomicLoad64(off+8))
 	}
 
 	// Desloca as postings para cima. copy é memmove, então a sobreposição
 	// entre origem e destino é tratada; a view cobre as duas de uma vez porque
 	// WithBytes não pode ser reentrado (o RWMutex do mmap não é reentrante).
-	if n := int(w.postCount.Load()) * TamPosting; n > 0 {
-		desloc := int(novaBase - w.postBase)
-		w.reg.WithBytes(int(w.postBase), desloc+n, func(b []byte) {
-			copy(b[desloc:], b[:n])
+	if n := int(w.postCount.Load()) * WIPPostingSize; n > 0 {
+		shift := int(newBase - w.postBase)
+		w.reg.WithBytes(int(w.postBase), shift+n, func(b []byte) {
+			copy(b[shift:], b[:n])
 		})
 	}
 	// Zera o diretório novo — que cobre o antigo e o espaço que as postings
 	// acabaram de deixar. Só depois disso os slots voltam a ser reindexados.
-	w.reg.WithBytes(HeaderWIP, int(novoSlots)*TamSlotWIP, func(b []byte) { clear(b) })
+	w.reg.WithBytes(WIPHeaderSize, int(newSlots)*WIPSlotSize, func(b []byte) { clear(b) })
 
-	w.dirSlots = novoSlots
-	w.postBase = novaBase
-	mask := novoSlots - 1
-	for i := 0; i < len(antigo); i += 2 {
-		h, estado := antigo[i], antigo[i+1]
+	w.dirSlots = newSlots
+	w.postBase = newBase
+	mask := newSlots - 1
+	for i := 0; i < len(old); i += 2 {
+		h, state := old[i], old[i+1]
 		if h == 0 {
 			continue
 		}
-		reinserido := false
-		for p := uint32(0); p < novoSlots; p++ {
+		reinserted := false
+		for p := uint32(0); p < newSlots; p++ {
 			off := w.slotOff((uint32(h) + p) & mask)
 			if w.reg.AtomicLoad64(off) == 0 {
 				// Estado primeiro, hash por último: o hash é o marcador de
 				// ocupação, e publicá-lo antes exporia um slot que se diz
 				// habitado com contagem zero. É a mesma ordem do Set, e era a
 				// mesma do motor global que este pacote substituiu.
-				w.reg.AtomicStore64(off+8, estado)
+				w.reg.AtomicStore64(off+8, state)
 				w.reg.AtomicStore64(off, h)
-				reinserido = true
+				reinserted = true
 				break
 			}
 		}
-		// O laço é LIMITADO pela mesma razão que o de sondaOuCria: a tabela
+		// O laço é LIMITADO pela mesma razão que o de probeOrCreate: a tabela
 		// nova tem o dobro dos slots da antiga e no máximo os mesmos ocupantes,
 		// então não achar lugar é impossível. Impossível sem limite vira loop
 		// infinito, que é a falha mais cara de diagnosticar; com limite, vira
 		// um pânico que nomeia o arquivo e o hash.
-		if !reinserido {
+		if !reinserted {
 			panic(fmt.Sprintf("segindex: rehash de %s não achou slot para o hash %d em %d slots (bug de load factor)",
-				w.caminho, h, novoSlots))
+				w.path, h, newSlots))
 		}
 	}
-	w.atualizaCapacidade()
-	w.gravaHeader()
+	w.updateCapacity()
+	w.writeHeader()
 	return nil
 }
 
-// garante estende o mapeamento até tamanho, se ele ainda não chegou lá.
-func (w *WIP) garante(tamanho int64) error {
-	if w.reg.Size() >= tamanho {
+// ensure estende o mapeamento até tamanho, se ele ainda não chegou lá.
+func (w *WIP) ensure(size int64) error {
+	if w.reg.Size() >= size {
 		return nil
 	}
-	return w.reg.Grow(tamanho)
+	return w.reg.Grow(size)
 }
 
-// atualizaCapacidade recalcula postCap a partir do tamanho REAL do mapeamento.
+// updateCapacity recalcula postCap a partir do tamanho REAL do mapeamento.
 // A capacidade é sempre derivada, nunca lembrada: um Grow que arredondasse para
 // cima deixaria capacidade paga e não usada.
-func (w *WIP) atualizaCapacidade() {
-	w.postCap = uint32((w.reg.Size() - w.postBase) / TamPosting)
+func (w *WIP) updateCapacity() {
+	w.postCap = uint32((w.reg.Size() - w.postBase) / WIPPostingSize)
 }
 
-// confereDiretorio varre o diretório uma vez, contando os valores distintos e
+// checkDirectory varre o diretório uma vez, contando os valores distintos e
 // conferindo cada cabeça de cadeia contra o número de postings declarado.
 //
 // A conferência é o que impede o pior desfecho de um .widx incoerente. O header
-// só ganha o postCount definitivo no Fecha (gravaHeader não roda por Set), então
+// só ganha o postCount definitivo no Close (writeHeader não roda por Set), então
 // um arquivo que sobreviva a um crash tem a contagem ATRASADA e cadeias
 // apontando além dela. Adotado assim, o próximo Set começaria a escrever em
 // idx = postCount e sobrescreveria postings vivas — resultado silenciosamente
@@ -835,49 +838,49 @@ func (w *WIP) atualizaCapacidade() {
 // é a rede do nível de baixo, para o dia em que um caminho novo escapar do
 // contrato de outra tarefa — e custa a MESMA passada O(slots) que a recontagem
 // dos distintos já fazia.
-func (w *WIP) confereDiretorio() error {
+func (w *WIP) checkDirectory() error {
 	total := w.postCount.Load()
-	w.distintos = 0
+	w.distinctValues = 0
 	for i := uint32(0); i < w.dirSlots; i++ {
 		off := w.slotOff(i)
 		if w.reg.AtomicLoad64(off) == 0 {
 			continue
 		}
-		w.distintos++
-		estado := w.reg.AtomicLoad64(off + 8)
-		contagem, ultimo := uint32(estado>>32), uint32(estado)
-		if (contagem == 0) != (ultimo == 0) || contagem > total || ultimo > total {
+		w.distinctValues++
+		state := w.reg.AtomicLoad64(off + 8)
+		count, last := uint32(state>>32), uint32(state)
+		if (count == 0) != (last == 0) || count > total || last > total {
 			return fmt.Errorf("%w: %s: o slot %d declara contagem %d e cabeça %d contra %d postings",
-				ErrFormato, w.caminho, i, contagem, ultimo, total)
+				ErrFormat, w.path, i, count, last, total)
 		}
 	}
 	return nil
 }
 
-// gravaHeader escreve os campos de dimensão no header.
+// writeHeader escreve os campos de dimensão no header.
 //
-// Ele é chamado na criação, no rehash e no Fecha — não a cada Set. Entre um e
+// Ele é chamado na criação, no rehash e no Close — não a cada Set. Entre um e
 // outro, o postCount do ARQUIVO fica atrás do postCount em memória, e isso não
 // custa nada porque não existe leitor para quem a diferença importe: um .widx
 // que sobreviva a um crash é APAGADO no Open, nunca adotado (spec §2.5). Quem
-// lê o arquivo é a selagem, depois do Fecha.
-func (w *WIP) gravaHeader() {
-	w.reg.WithBytes(0, HeaderWIP, func(b []byte) {
-		copy(b[0:4], MagicWIP)
-		b[offVersaoWIP] = VersaoWIP
-		binary.LittleEndian.PutUint16(b[offCampoWIP:offCampoWIP+2], uint16(w.campo))
+// lê o arquivo é a selagem, depois do Close.
+func (w *WIP) writeHeader() {
+	w.reg.WithBytes(0, WIPHeaderSize, func(b []byte) {
+		copy(b[0:4], WIPMagic)
+		b[offVersionWIP] = WIPVersion
+		binary.LittleEndian.PutUint16(b[offFieldWIP:offFieldWIP+2], uint16(w.field))
 		binary.LittleEndian.PutUint32(b[offDirSlotsWIP:offDirSlotsWIP+4], w.dirSlots)
 		binary.LittleEndian.PutUint32(b[offPostCount:offPostCount+4], w.postCount.Load())
 	})
 }
 
-// Fecha grava o header definitivo e desmonta o mapeamento.
+// Close grava o header definitivo e desmonta o mapeamento.
 //
 // NÃO há msync, e a ausência é a decisão: o .widx não participa do checkpoint
 // nem da ordem de durabilidade do §48 (spec §5.3). Ele é índice do segmento
 // CORRENTE, dado derivado, e a recuperação mais barata que está correta é
 // derivá-lo de novo a partir do próprio segmento.
-func (w *WIP) Fecha() error {
+func (w *WIP) Close() error {
 	// O lock exclusivo não substitui o quiesce do dono — desmontar o
 	// mapeamento debaixo de um Lookup em voo seria SIGSEGV, e nenhum lock
 	// deste tipo alcança uma fatia que já escapou para dentro do mmap. Ele
@@ -885,49 +888,49 @@ func (w *WIP) Fecha() error {
 	// layout, e ela não pode cruzar com uma leitura dos campos.
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.exigeAberto("Fecha")
-	w.gravaHeader()
-	w.fechado.Store(true)
+	w.requireOpen("Close")
+	w.writeHeader()
+	w.closed.Store(true)
 	return w.reg.Close()
 }
 
-// exigeAberto entra em pânico se o mapeamento já foi desmontado.
+// requireOpen entra em pânico se o mapeamento já foi desmontado.
 //
-// É a mesma rede que Selado.exigeAberto arma, e ela existe porque a falha
-// natural é MUDA: Region.Close zera data e size, então um gravaHeader depois do
+// É a mesma rede que Sealed.requireOpen arma, e ela existe porque a falha
+// natural é MUDA: Region.Close zera data e size, então um writeHeader depois do
 // fechamento não daria erro nenhum — daria um pânico de bounds vindo de dentro
 // do mmap, sem nome de método e sem nome de arquivo. Aqui o pânico diz os dois,
 // e o servidor ainda o converte em erro na fronteira da requisição.
-func (w *WIP) exigeAberto(op string) {
-	if w.fechado.Load() {
-		panic("segindex: " + op + " após o fechamento de " + w.caminho)
+func (w *WIP) requireOpen(op string) {
+	if w.closed.Load() {
+		panic("segindex: " + op + " após o fechamento de " + w.path)
 	}
 }
 
-// Apaga remove o arquivo, desmontando o mapeamento antes se ele ainda estiver
+// Remove remove o arquivo, desmontando o mapeamento antes se ele ainda estiver
 // de pé.
 //
 // É a operação TERMINAL do WIP, e é a única que aceita ser chamada depois do
-// Fecha. A assimetria é deliberada e tem um consumidor concreto: a selagem
-// fecha o .widx e o apaga em seguida, e um Apaga que recusasse região já
+// Close. A assimetria é deliberada e tem um consumidor concreto: a selagem
+// fecha o .widx e o apaga em seguida, e um Remove que recusasse região já
 // fechada devolveria a ela o erro de "descritor já fechado" — que ela leria
-// como falha de uma selagem que deu certo. Fecha depois de Apaga, ao contrário,
-// é uso após o fim e entra em pânico nomeado como qualquer outro.
+// como falha de uma selagem que deu certo. Close depois de Remove, ao
+// contrário, é uso após o fim e entra em pânico nomeado como qualquer outro.
 //
 // Arquivo já ausente não é erro: a selagem e a limpeza de órfãos do Open podem
 // correr sobre um resto de uma execução anterior, e o estado desejado — não
-// existir — é o mesmo. Chamar Apaga duas vezes também não é.
-func (w *WIP) Apaga() error {
+// existir — é o mesmo. Chamar Remove duas vezes também não é.
+func (w *WIP) Remove() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	var errs []error
 	// Não grava o header: o arquivo está indo embora, e sujar páginas que o
 	// filesystem teria de escrever por nada é trabalho puro.
-	if w.fechado.CompareAndSwap(false, true) {
+	if w.closed.CompareAndSwap(false, true) {
 		errs = append(errs, w.reg.Close())
 	}
-	if err := os.Remove(w.caminho); err != nil && !errors.Is(err, os.ErrNotExist) {
-		errs = append(errs, fmt.Errorf("segindex: remover %s: %w", w.caminho, err))
+	if err := os.Remove(w.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		errs = append(errs, fmt.Errorf("segindex: remover %s: %w", w.path, err))
 	}
 	return errors.Join(errs...)
 }

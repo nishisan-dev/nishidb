@@ -241,7 +241,7 @@ Sem isto, nenhum número de laboratório vale:
   `Writer.aplica` ([writer.go:194](internal/kafka/writer.go:194)). Ali, e não dentro do
   `Materializer`, porque os gates de alocação e o `BenchmarkApplyIngestReal` medem o
   `Materializer.Apply` — instrumentar por dentro mudaria o baseline do próprio instrumento
-  com que a otimização será julgada. Buckets próprios a partir de 5 µs (o `LimitesPadrao`
+  com que a otimização será julgada. Buckets próprios a partir de 5 µs (o `DefaultBuckets`
   começa em 50 µs, grosseiro para uma mediana de ~8,6 µs) e topo em 1 s, que é o que torna
   os **stalls de 2,4 s** atribuíveis a `Apply` em vez de a "algo".
 - **`nishidb_kafka_poll_blocked_seconds_total`** e **`nishidb_kafka_writer_idle_seconds_total`** —
@@ -256,7 +256,7 @@ Sem isto, nenhum número de laboratório vale:
   | ≈0 | ≈1 | subindo | Poller não entrega — é o incidente de 27/08 |
 
 - **Alocação por evento no writer (verificada).** `avanca` chama `w.met.offset(p)` →
-  `famOffset.Com(dataset, strconv.Itoa(p))` → `chave(valores)` =
+  `famOffset.With(dataset, strconv.Itoa(p))` → `chave(valores)` =
   `strings.Join(valores, "\xff")` ([metrics.go:197](internal/metrics/metrics.go:197)) —
   **string nova a cada evento**, mais o slice variádico. Nenhum gate cobre esse trecho: os
   de alocação medem `PatchBuffer.Parse` e `Materializer.Apply`, e o writer Kafka está fora
@@ -377,7 +377,7 @@ Custo esperado: ~1,02 recomputes por evento.
 
 ### O que isso apaga
 
-A varredura some: o coletor pergunta `ProximoVencimento()` e **dorme exatamente até lá**,
+A varredura some: o coletor pergunta `NextExpiry()` e **dorme exatamente até lá**,
 em vez de acordar a cada minuto e varrer 4,57M linhas. O `locs.Get`, que é 39% do custo da
 passada de hoje, sai do laço. E o pré-filtro de tombstone vira código morto — a linha
 tombstonada recebe o sentinela "nunca" e sai da agenda de vez.

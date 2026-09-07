@@ -79,7 +79,7 @@ func (c *Consumidor) Instantaneo(ctx context.Context) Instantaneo {
 		UltimoLote:          c.met.ultimoLoteEm(),
 		Desfecho:            c.w.Desfecho(),
 		Pausa:               c.w.Pausa(),
-		ParticoesAtribuidas: int64(c.met.partAtribuidas.Valor()),
-		ParticoesDoTopico:   int64(c.met.partTotal.Valor()),
+		ParticoesAtribuidas: int64(c.met.partAtribuidas.Value()),
+		ParticoesDoTopico:   int64(c.met.partTotal.Value()),
 	}
 }

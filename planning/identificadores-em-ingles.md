@@ -303,7 +303,7 @@ exit e códigos do wire não mudam de valor.
 | JSON | `detalhes` | `details` |
 | métricas | `..._segmentos_pinados`, `..._index_segmentos`, `..._reconstrucoes_total`, `..._reconstrucao_ativa`, `..._crc_falhas_total`, `..._segmentos_consultados_total` | `..._pinned_segments`, `..._index_segments`, `..._rebuilds_total`, `..._rebuild_active`, `..._crc_failures_total`, `..._segments_scanned_total` |
 | CLI | `--log-format texto` | `--log-format text` |
-| disco | `grupos.dict`, `grupos.idx`, `prazos.idx`, `vencimentos.idx` | `groups.dict`, `groups.idx`, `deadlines.idx`, `expiries.idx` |
+| disco | `grupos.dict`, `grupos.idx`, `prazos.idx`, `vencimentos.idx` | `groups.dict`, `groups.idx`, `ttls.idx`, `expiries.idx` |
 | Python público | `ColunaMeta`, `Estatisticas`, `ConsultaEmVoo`, `Saude`, `ENV_SENHA` | `ColumnMeta`, `Stats`, `InFlightQuery`, `Health`, `ENV_PASSWORD` |
 
 **Colisão** resolve por nome mais específico (`Fila` da kafka e `Fila` do

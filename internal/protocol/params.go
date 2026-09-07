@@ -11,11 +11,11 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// ErrParametro é a categoria de falha na conversão do `parameters` do §68.
+// ErrParam é a categoria de falha na conversão do `parameters` do §68.
 // Quem está na fronteira HTTP classifica com errors.Is e responde 400.
-var ErrParametro = errors.New("protocolo: parâmetro inválido")
+var ErrParam = errors.New("protocolo: parâmetro inválido")
 
-// Valores converte o `parameters` do §68 na representação de wire que o
+// Values converte o `parameters` do §68 na representação de wire que o
 // binder aceita.
 //
 // A conversão é DELIBERADAMENTE burra: não infere tipo, não coage entre formas
@@ -28,23 +28,23 @@ var ErrParametro = errors.New("protocolo: parâmetro inválido")
 //
 // Os índices nas mensagens são 1-based, como no binder: quem escreve a query
 // conta os `?` a partir do primeiro.
-func Valores(ps []Parametro) ([]types.Value, error) {
+func Values(ps []Param) ([]types.Value, error) {
 	if len(ps) == 0 {
 		return nil, nil
 	}
 	out := make([]types.Value, len(ps))
 	for i, p := range ps {
-		v, err := p.valor()
+		v, err := p.typedValue()
 		if err != nil {
-			return nil, fmt.Errorf("%w: parameters[%d]: %w", ErrParametro, i+1, err)
+			return nil, fmt.Errorf("%w: parameters[%d]: %w", ErrParam, i+1, err)
 		}
 		out[i] = v
 	}
 	return out, nil
 }
 
-// valor converte UM parâmetro.
-func (p Parametro) valor() (types.Value, error) {
+// typedValue converte UM parâmetro.
+func (p Param) typedValue() (types.Value, error) {
 	raw := bytes.TrimSpace(p.Value)
 	if len(raw) == 0 {
 		return types.Value{}, errors.New(`"value" ausente`)
@@ -57,29 +57,29 @@ func (p Parametro) valor() (types.Value, error) {
 	}
 
 	switch p.Type {
-	case TipoString:
-		return valorString(raw)
-	case TipoInt64:
-		return valorInt64(raw)
-	case TipoDouble:
-		return valorDouble(raw)
-	case TipoBoolean:
-		return valorBoolean(raw)
+	case WireTypeString:
+		return stringValue(raw)
+	case WireTypeInt64:
+		return int64Value(raw)
+	case WireTypeDouble:
+		return doubleValue(raw)
+	case WireTypeBoolean:
+		return booleanValue(raw)
 	case "":
-		return types.Value{}, fmt.Errorf(`"type" ausente (aceitos: %s)`, tiposAceitos)
+		return types.Value{}, fmt.Errorf(`"type" ausente (aceitos: %s)`, acceptedTypes)
 	default:
 		return types.Value{}, fmt.Errorf(
 			`"type" %q não é um tipo de wire (aceitos: %s); timestamp, ipv4, ipv6, prefixos, bytes e json viajam como %q `+
 				`e são convertidos contra o tipo da coluna, pela mesma tabela dos literais SQL`,
-			p.Type, tiposAceitos, TipoString)
+			p.Type, acceptedTypes, WireTypeString)
 	}
 }
 
-const tiposAceitos = TipoString + ", " + TipoInt64 + ", " + TipoDouble + ", " + TipoBoolean
+const acceptedTypes = WireTypeString + ", " + WireTypeInt64 + ", " + WireTypeDouble + ", " + WireTypeBoolean
 
-func valorString(raw []byte) (types.Value, error) {
+func stringValue(raw []byte) (types.Value, error) {
 	if raw[0] != '"' {
-		return types.Value{}, fmt.Errorf(`type %q espera uma string JSON entre aspas, e "value" é %s`, TipoString, formaDe(raw))
+		return types.Value{}, fmt.Errorf(`type %q espera uma string JSON entre aspas, e "value" é %s`, WireTypeString, shapeOf(raw))
 	}
 	// encoding/json e não um decodificador próprio: é aqui que os escapes
 	// (\n, \uXXXX, pares surrogados) viram bytes, e reimplementá-los seria uma
@@ -92,14 +92,14 @@ func valorString(raw []byte) (types.Value, error) {
 	return types.Value{Type: types.TypeString, Bytes: []byte(s)}, nil
 }
 
-func valorInt64(raw []byte) (types.Value, error) {
+func int64Value(raw []byte) (types.Value, error) {
 	if !typeparse.JSONNumber(raw) {
-		return types.Value{}, fmt.Errorf(`type %q espera um número JSON, e "value" é %s`, TipoInt64, formaDe(raw))
+		return types.Value{}, fmt.Errorf(`type %q espera um número JSON, e "value" é %s`, WireTypeInt64, shapeOf(raw))
 	}
 	if !typeparse.IntegralNumber(raw) {
 		return types.Value{}, fmt.Errorf(
 			`type %q espera um inteiro, e "value" é %s: escreva o valor sem fração nem expoente, ou declare type %q`,
-			TipoInt64, raw, TipoDouble)
+			WireTypeInt64, raw, WireTypeDouble)
 	}
 	n, err := typeparse.Int64(raw)
 	if err != nil {
@@ -110,9 +110,9 @@ func valorInt64(raw []byte) (types.Value, error) {
 	return types.Value{Type: types.TypeInt64, I64: n}, nil
 }
 
-func valorDouble(raw []byte) (types.Value, error) {
+func doubleValue(raw []byte) (types.Value, error) {
 	if !typeparse.JSONNumber(raw) {
-		return types.Value{}, fmt.Errorf(`type %q espera um número JSON, e "value" é %s`, TipoDouble, formaDe(raw))
+		return types.Value{}, fmt.Errorf(`type %q espera um número JSON, e "value" é %s`, WireTypeDouble, shapeOf(raw))
 	}
 	f, err := typeparse.Float64(raw)
 	if err != nil {
@@ -123,22 +123,22 @@ func valorDouble(raw []byte) (types.Value, error) {
 	return types.Value{Type: types.TypeDouble, I64: int64(math.Float64bits(f))}, nil
 }
 
-func valorBoolean(raw []byte) (types.Value, error) {
+func booleanValue(raw []byte) (types.Value, error) {
 	switch {
 	case bytes.Equal(raw, []byte("true")):
 		return types.Value{Type: types.TypeBool, I64: 1}, nil
 	case bytes.Equal(raw, []byte("false")):
 		return types.Value{Type: types.TypeBool, I64: 0}, nil
 	}
-	return types.Value{}, fmt.Errorf(`type %q espera true ou false, e "value" é %s`, TipoBoolean, formaDe(raw))
+	return types.Value{}, fmt.Errorf(`type %q espera true ou false, e "value" é %s`, WireTypeBoolean, shapeOf(raw))
 }
 
-// formaDe nomeia a FORMA JSON do valor recebido, sem ecoá-lo por inteiro.
+// shapeOf nomeia a FORMA JSON do valor recebido, sem ecoá-lo por inteiro.
 //
 // Não ecoar é deliberado: o valor pode carregar dado do cliente, e o §95
 // proíbe registrar payload. A forma é o que o remetente precisa para achar o
 // erro — "esperava número, veio string" resolve sem expor o conteúdo.
-func formaDe(raw []byte) string {
+func shapeOf(raw []byte) string {
 	switch raw[0] {
 	case '"':
 		return "uma string"

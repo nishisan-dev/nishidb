@@ -105,7 +105,7 @@ func abreContador(t *testing.T, dir string, def Definicao, recria bool) *Contado
 // totalDe devolve total e refs do grupo cuja chave é a OLT dada.
 func totalDe(t *testing.T, c *Contador, olt string) (total, refs int64) {
 	t.Helper()
-	chave, err := valuekey.AppendComposta(nil, []types.Value{{Type: types.TypeString, Bytes: []byte(olt)}})
+	chave, err := valuekey.AppendComposite(nil, []types.Value{{Type: types.TypeString, Bytes: []byte(olt)}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -667,7 +667,7 @@ func TestGrupoCompostoTemColunasTipadas(t *testing.T) {
 	if !vivo || total != 1 || refs != 1 {
 		t.Fatalf("grupo 1: vivo=%v total=%d refs=%d", vivo, total, refs)
 	}
-	vals, err := valuekey.DecodeComposta(chave, nil)
+	vals, err := valuekey.DecodeComposite(chave, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

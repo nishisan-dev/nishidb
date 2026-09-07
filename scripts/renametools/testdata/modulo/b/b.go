@@ -44,3 +44,43 @@ func Rotula() string {
 func Conta(Conta int) int {
 	return Conta
 }
+
+// Tabela declara a struct ANÔNIMA da tabela de casos dentro da função — a
+// forma dominante das tabelas de teste do repositório
+// (`casos := []struct{...}{...}`). Não há TypeSpec nem `var` de pacote para o
+// rf endereçar, e quem batiza o campo é a variável do `:=` (Ruling R29): o
+// inventário emite Tabela.casos.nome e Tabela.casos.conta com espécie
+// field#gopls. Sem isso esses campos não chegam ao tradutor — foi assim que
+// 17 campos de tabela de caso ficaram em PT-BR depois do G2.
+func Tabela() int {
+	casos := []struct {
+		nome  string
+		conta int
+	}{{"um", 1}, {"dois", 2}}
+	total := 0
+	for _, c := range casos {
+		if c.nome != "" {
+			total += c.conta
+		}
+	}
+	return total
+}
+
+// Mapa declara a struct anônima como VALOR de um map, sem nenhum tipo
+// nomeado no caminho: o dono continua sendo a variável do `:=`.
+func Mapa() int {
+	pesos := map[string]struct{ peso int }{"a": {1}}
+	return pesos["a"].peso
+}
+
+// Pesa recebe a struct anônima por PARÂMETRO: quem batiza o campo é o
+// parâmetro (Pesa.p.peso).
+func Pesa(p struct{ peso int }) int {
+	return p.peso
+}
+
+// Marca passa a struct anônima direto na chamada: nenhum nome a batiza, e o
+// endereço fica sem componente de dono no meio (Marca.peso).
+func Marca() int {
+	return Pesa(struct{ peso int }{7})
+}

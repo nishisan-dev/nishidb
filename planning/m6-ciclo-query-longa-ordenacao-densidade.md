@@ -452,12 +452,12 @@ medição:
    ([:1016](internal/storage/store.go:1016)), `Expira`
    ([expiry.go:60](internal/storage/expiry.go:60)) e `reapendaSeVivo`
    ([compaction.go:130](internal/storage/compaction.go:130)).
-3. `Reader.FechaSegmento(seg)` novo em
+3. `Reader.CloseSegment(seg)` novo em
    [segment.go](internal/storage/segment/segment.go): `delete(r.fds, seg)` +
    `Close()` sob o `mu` que já existe.
 4. `aposentaSegmento` segura `aposMu.Lock()` do `os.Rename`
    ([compaction.go:455](internal/storage/compaction.go:455)) até depois do
-   `os.Remove` ([:490](internal/storage/compaction.go:490)), com `FechaSegmento`
+   `os.Remove` ([:490](internal/storage/compaction.go:490)), com `CloseSegment`
    entre os dois. **Os dois `Checkpoint()` ficam FORA** — eles tomam `wmu` e podem
    levar 30s.
 5. `podaSegmentoAposentado` ([compaction.go:556](internal/storage/compaction.go:556))
@@ -600,7 +600,7 @@ vira erro nomeado (`ROW_TOO_LARGE`) em vez de crescimento silencioso.
 #### C5 — `internal/query/spill`: a primitiva
 
 - **API**, com o contrato de cópia no próprio nome do método:
-  `AcrescentaCopiando(row)`, `Rebobina()`, `Proximo()`, `Close()`. É
+  `AcrescentaCopiando(row)`, `Rewind()`, `Next()`, `Close()`. É
   `AcrescentaCopiando` e não `Acrescenta` porque `ColView.Val.Bytes` vale só até
   o próximo `Next()` ([row.go:7-8](internal/query/executor/row.go:7)) — é a
   armadilha número um do componente, e um nome neutro convidaria a reter a slice.
@@ -670,7 +670,7 @@ caminho que passa a fazer trabalho condicional.
 > **A refutação que simplifica o bloco inteiro: nenhuma palavra vira keyword do
 > lexer.** `ORDER`, `BY`, `ASC`, `DESC`, `NULLS`, `FIRST`, `LAST`, `OFFSET` e
 > `LIKE` são `TokenIdent` reconhecidos **por posição**, via `ASCIIEqualFold` —
-> exatamente a máquina que `clausulaNaoSuportada`
+> exatamente a máquina que `unsupportedClause`
 > ([clauses.go:41](internal/query/parser/clauses.go:41)) já usa. Elas só
 > aparecem onde hoje **só cabe erro** (`parser.go:45-55` e `:372-375`), então o
 > parser **se compromete** ao ver a palavra e depois **exige** o resto — consumo,
@@ -759,7 +759,7 @@ senão o zero-alocação do matcher não é medido.
 `Ordem interna:` AST aditiva (`HasOffset`/`Offset`/`OffsetPos`, molde exato de
 `HasLimit`); `parseOffset` reusando as recusas de `parseLimit`
 ([:469](internal/query/parser/parser.go:469)); `offset` sai de
-`clausulasNaoSuportadas`; contador de skip antes de `it.emitidas++`
+`unsupportedClauses`; contador de skip antes de `it.emitidas++`
 ([executor.go:222](internal/query/executor/executor.go:222)); e `comLimit` passa a
 usar **`parser.Parse`**, cortando em `min(LimitPos, OffsetPos)` e **preservando o
 OFFSET**. Isso paga a metade local do **débito 46**.
@@ -832,10 +832,10 @@ vez** ao virar cabeça do seu run.
 
 **O contrato que peço à primitiva do Bloco C:** bytes **opacos** (o enquadramento
 é do spill, não meu — dois framings divergem no primeiro registro patológico);
-`Proximo()` sem alocação por registro; estouro devolve sentinela e **nunca trunca
+`Next()` sem alocação por registro; estouro devolve sentinela e **nunca trunca
 em silêncio**; **sem fsync** (spill não é durável, e crash perder a query é o
 desfecho certo); lixo de crash limpo pela primitiva na subida; K leitores
-concorrentes em K runs distintos; `Le()` só depois de `Sela()`.
+concorrentes em K runs distintos; `NewReader()` só depois de `Seal()`.
 
 #### D5 — Índice hash físico (fecha o **débito 19**) — *independente de D0..D4*
 

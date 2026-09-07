@@ -88,8 +88,8 @@ func TestMutantesRecusamPapelREAD(t *testing.T) {
 		t.Run(caminho, func(t *testing.T) {
 			resp := postComAuth(t, srv, caminho, "", "leitor", senhaLeitorAuth)
 			status := resp.StatusCode // falhaDe fecha o corpo; lido antes
-			if f := falhaDe(t, resp); f.Code != protocol.CodForbidden {
-				t.Errorf("código = %q, quer %q", f.Code, protocol.CodForbidden)
+			if f := falhaDe(t, resp); f.Code != protocol.CodeForbidden {
+				t.Errorf("código = %q, quer %q", f.Code, protocol.CodeForbidden)
 			}
 			if status != http.StatusForbidden {
 				t.Errorf("status = %d, quer 403", status)
@@ -98,7 +98,7 @@ func TestMutantesRecusamPapelREAD(t *testing.T) {
 	}
 }
 
-// GET nas duas rotas mutantes é 405 com o CONTRATO CorpoErro — registradas
+// GET nas duas rotas mutantes é 405 com o CONTRATO ErrorBody — registradas
 // SEM método no padrão, exatamente como as rotas de leitura do §67
 // (TestRotasDeLeituraRecusamMetodoErrado, documents_test.go), conferindo o
 // método por dentro do handler em vez de deixar o mux gerar o 405 cru em
@@ -115,7 +115,7 @@ func TestMutantesRecusamMetodoErrado(t *testing.T) {
 			if resp.StatusCode != http.StatusMethodNotAllowed {
 				t.Fatalf("GET %s = %d, quer 405", caminho, resp.StatusCode)
 			}
-			if f := falhaDe(t, resp); f.Code != protocol.CodMetodo {
+			if f := falhaDe(t, resp); f.Code != protocol.CodeMethod {
 				t.Fatalf("GET %s: código = %q", caminho, f.Code)
 			}
 		})
@@ -136,7 +136,7 @@ func TestCheckpointComAdminAvancaOContadorEDevolveODataset(t *testing.T) {
 		defer fecha(t, resp)
 		t.Fatalf("status = %d, quer 200", resp.StatusCode)
 	}
-	var out protocol.RespostaCheckpoint
+	var out protocol.CheckpointResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatalf("corpo ilegível: %v", err)
 	}
@@ -176,7 +176,7 @@ func TestCompactComAdminEEnabledFalseFunciona(t *testing.T) {
 		defer fecha(t, resp)
 		t.Fatalf("status = %d, quer 200", resp.StatusCode)
 	}
-	var out protocol.RespostaCompact
+	var out protocol.CompactResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatalf("corpo ilegível: %v", err)
 	}
@@ -203,8 +203,8 @@ func TestCheckpointFiltraPorDatasetOuRecusaDesconhecido(t *testing.T) {
 	if status != http.StatusNotFound {
 		t.Fatalf("status = %d, quer 404", status)
 	}
-	if f.Code != protocol.CodDatasetDesconhecido {
-		t.Fatalf("código = %q, quer %q", f.Code, protocol.CodDatasetDesconhecido)
+	if f.Code != protocol.CodeUnknownDataset {
+		t.Fatalf("código = %q, quer %q", f.Code, protocol.CodeUnknownDataset)
 	}
 }
 
@@ -238,7 +238,7 @@ func TestCheckpointComTodosOsDatasetsRespeitaAOrdemDeterministicaDaSubida(t *tes
 		defer fecha(t, resp)
 		t.Fatalf("status = %d, quer 200", resp.StatusCode)
 	}
-	var out protocol.RespostaCheckpoint
+	var out protocol.CheckpointResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatalf("corpo ilegível: %v", err)
 	}

@@ -14,8 +14,8 @@ import (
 // driver JDBC usa para apontar o byte. Um teste que só afira o sentinela fica
 // verde com a guarda errada disparando.
 func TestErrosDeSintaxe(t *testing.T) {
-	casos := []struct {
-		nome string
+	cases := []struct {
+		name string
 		sql  string
 		pos  int
 		msg  string
@@ -71,8 +71,8 @@ func TestErrosDeSintaxe(t *testing.T) {
 		{"dois comandos", "SELECT a FROM x; SELECT b FROM y", 17, "apenas um comando por query"},
 	}
 
-	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			st, err := parser.Parse(tc.sql)
 			if err == nil {
 				t.Fatalf("Parse(%q) não falhou (stmt = %#v)", tc.sql, st)
@@ -100,8 +100,8 @@ func TestErrosDeSintaxe(t *testing.T) {
 // Aninhamento além do teto é recusado com posição — sem o limite, um input
 // adversarial estoura a pilha.
 func TestAninhamentoDemais(t *testing.T) {
-	abre := strings.Repeat("(", parser.MaxExprDepth+1)
-	sql := "SELECT a FROM x WHERE " + abre + "a = 1"
+	openParens := strings.Repeat("(", parser.MaxExprDepth+1)
+	sql := "SELECT a FROM x WHERE " + openParens + "a = 1"
 
 	_, err := parser.Parse(sql)
 	if err == nil {
@@ -122,8 +122,8 @@ func TestAninhamentoDemais(t *testing.T) {
 // Erro que nasce no LEXER é repassado cru: embrulhar poria prefixo na
 // mensagem e quebraria as asserções de substring do pipeline inteiro.
 func TestErroDoLexerChegaSemEmbrulho(t *testing.T) {
-	casos := []struct {
-		nome string
+	cases := []struct {
+		name string
 		sql  string
 		msg  string
 		pos  int
@@ -133,8 +133,8 @@ func TestErroDoLexerChegaSemEmbrulho(t *testing.T) {
 		{"string aberta", "SELECT a FROM x WHERE a = 'aberta", "literal string sem fechamento", 26},
 		{"comentario sql", "SELECT a FROM x -- comentario", "caractere inesperado '-'", 16},
 	}
-	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			_, err := parser.Parse(tc.sql)
 			if err == nil {
 				t.Fatal("esperava erro")
@@ -160,14 +160,14 @@ func TestErroDoLexerChegaSemEmbrulho(t *testing.T) {
 // O caso clássico de recursive descent: um caminho de erro que faz `continue`
 // em vez de `return` entra em loop. Se este teste travar, é isso.
 func TestErroSempreTermina(t *testing.T) {
-	patologicas := []string{
+	pathologicalQueries := []string{
 		"SELECT a FROM x WHERE a = 1 AND AND AND b = 2",
 		"SELECT a FROM x WHERE ((((",
 		"SELECT ,,,, FROM x",
 		"SELECT a FROM x WHERE a IS IS IS NULL",
 		"SELECT a FROM x LIMIT LIMIT LIMIT",
 	}
-	for _, sql := range patologicas {
+	for _, sql := range pathologicalQueries {
 		t.Run(sql, func(t *testing.T) {
 			if _, err := parser.Parse(sql); err == nil {
 				t.Errorf("Parse(%q) não falhou", sql)
@@ -181,8 +181,8 @@ func TestErroSempreTermina(t *testing.T) {
 // uma destas entradas cairia numa recusa genérica ("esperado ',' ou FROM",
 // "esperado nome do dataset") que não nomeia o ponto nem diz o que fazer.
 func TestPontoForaDeLugarTemMensagemPropria(t *testing.T) {
-	casos := []struct {
-		nome string
+	cases := []struct {
+		name string
 		sql  string
 		msg  string
 	}{
@@ -192,8 +192,8 @@ func TestPontoForaDeLugarTemMensagemPropria(t *testing.T) {
 		{"projecao com tres niveis", "SELECT a.b.c FROM x", "dois níveis"},
 		{"projecao com ponto solto", "SELECT a. FROM x", "esperado nome de coluna"},
 	}
-	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			_, err := parser.Parse(tc.sql)
 			if err == nil {
 				t.Fatal("esperava erro")

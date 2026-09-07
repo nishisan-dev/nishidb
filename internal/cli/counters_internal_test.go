@@ -39,9 +39,9 @@ func TestDesfechoDaAuditoriaDivergenteSaiComExitDataset(t *testing.T) {
 }
 
 func TestAuditoriaDoWireEDoStoragePreenchemAMesmaLinha(t *testing.T) {
-	w := auditoriaDoWire(protocol.AuditoriaContador{
+	w := auditoriaDoWire(protocol.CounterAudit{
 		Name: "x", Groups: 2, Maintained: 5, Recomputed: 4, DivergentGroups: 1, NotInterned: 0, RowsScanned: 9, DurationMs: 7,
-		Sample: []protocol.DivergenciaDeGrupo{{GroupKey: "A", Maintained: 5, Recomputed: 4, RefsMaintained: 5, RefsRecomputed: 4}},
+		Sample: []protocol.GroupDivergence{{GroupKey: "A", Maintained: 5, Recomputed: 4, RefsMaintained: 5, RefsRecomputed: 4}},
 	})
 	if w.nome != "x" || w.grupos != 2 || w.mantido != 5 || w.recalculado != 4 || w.divergentes != 1 ||
 		w.linhasVarridas != 9 || w.duracaoMs != 7 || len(w.amostra) != 1 || w.amostra[0].groupKey != "A" {

@@ -59,8 +59,8 @@ func TestLinhaAcimaDoOrcamentoSaiComoRowTooLargeNoFecho(t *testing.T) {
 		t.Fatalf("status = %d, quer 200: o schema sai antes de a linha grande aparecer", resp.StatusCode)
 	}
 	n, codigo := desfechoDoStream(t, resp)
-	if codigo != protocol.CodLinhaGrande {
-		t.Fatalf("fecho = %q com %d rows, quer %q", codigo, n, protocol.CodLinhaGrande)
+	if codigo != protocol.CodeRowTooLarge {
+		t.Fatalf("fecho = %q com %d rows, quer %q", codigo, n, protocol.CodeRowTooLarge)
 	}
 	if n == 0 {
 		t.Error("nenhuma linha saiu antes da recusa: o teste não distingue a recusa de uma consulta vazia")

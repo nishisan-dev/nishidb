@@ -257,7 +257,7 @@ func (s *Store) ExpiraUmaPassada(ctx context.Context, lim LimitesDeExpiracao) (R
 
 	fim := s.agora().Add(lim.TempoPorPassada)
 	var falha error
-	r.Examinadas = s.agenda.Vencidos(uint64(s.agora().UnixMilli()), func(id types.RowID) bool {
+	r.Examinadas = s.agenda.VisitExpired(uint64(s.agora().UnixMilli()), func(id types.RowID) bool {
 		// O ctx é checado a cada linha, e não só entre marcas: uma descida que
 		// entra em ramos frouxos e não acha nada para expirar não passaria por
 		// nenhum ponto de cancelamento, e o Close ficaria esperando por ela.
@@ -340,7 +340,7 @@ func (s *Store) reagenda(id types.RowID) error {
 	if s.stickyErr != nil {
 		return fmt.Errorf("%w: %w", ErrWriterFailed, s.stickyErr)
 	}
-	return s.agenda.Atualiza(id, s.vencimentoDe(id))
+	return s.agenda.Update(id, s.vencimentoDe(id))
 }
 
 // tetoDeEspera é o quanto o coletor aceita dormir mesmo quando a agenda diz
@@ -455,7 +455,7 @@ func (s *Store) esperaAteOProximoVencimento(r ResultadoDaExpiracao) time.Duratio
 	if r.BateuTeto {
 		return 0
 	}
-	venc, ok := s.agenda.ProximoVencimento()
+	venc, ok := s.agenda.NextExpiry()
 	if !ok {
 		return tetoDeEspera
 	}
@@ -512,7 +512,7 @@ func (s *Store) daCarencia(id types.RowID) (bool, error) {
 	// linha seria reentregue em toda descida — o coletor daria a mesma
 	// carência indefinidamente, tomando o lock do writer a cada volta.
 	if s.agenda != nil {
-		if err := s.agenda.Atualiza(id, s.vencimentoDe(id)); err != nil {
+		if err := s.agenda.Update(id, s.vencimentoDe(id)); err != nil {
 			return false, err
 		}
 	}

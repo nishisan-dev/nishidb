@@ -35,7 +35,7 @@ end
 
 == a leitura ==
 q -> st : GetByRowID(snap, rowId)
-st -> jr : Em(rowId, snap.Epoch)
+st -> jr : At(rowId, snap.Epoch)
 alt há versão retida para esta época
   jr --> st : location de T0
 else
@@ -45,7 +45,7 @@ st -> st : liveness pelo snap.Instant\n(relógio congelado)
 st --> q : record da versão de T0
 
 == quem tem de esperar ==
-c -> jr : Pinado(segmento)?
+c -> jr : Pinned(segmento)?
 alt pinado
   c -> c : não elege — o passado dele\nainda é alcançável
 end
@@ -65,7 +65,7 @@ end note
 == fechamento ==
 q -> st : FechaSnapshot(snap)  (no Close do iterador)
 st -> reg : fecha(época)
-st -> jr : Poda(menor época viva)
+st -> jr : Prune(menor época viva)
 jr -> jr : pin liberado; heap devolvido
 
 == quando o teto estoura ==

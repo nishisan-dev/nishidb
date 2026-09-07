@@ -80,14 +80,14 @@ func (c *Consumidor) vigia(ctx context.Context, janela time.Duration) error {
 	t := time.NewTicker(intervaloDaVigia(janela))
 	defer t.Stop()
 
-	v := &vigilante{janela: janela, ultimoProgresso: time.Now(), eventos: c.met.eventos.Valor()}
+	v := &vigilante{janela: janela, ultimoProgresso: time.Now(), eventos: c.met.eventos.Value()}
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-t.C:
 		}
-		l := leitura{eventos: c.met.eventos.Valor()}
+		l := leitura{eventos: c.met.eventos.Value()}
 		// O lag e a fila só são consultados quando os eventos NÃO andaram:
 		// perguntar ao broker a cada tique de um consumidor saudável seria
 		// tráfego administrativo por nada.

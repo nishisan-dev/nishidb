@@ -56,11 +56,11 @@ func TestAgendaConcordaComPrazoVencidoSobCargaAleatoria(t *testing.T) {
 		agora := uint64(s.agora().UnixMilli())
 		for _, id := range ids {
 			venc := s.agenda.Get(id)
-			agendadoVencido := venc != rowindex.Nunca && venc <= agora
+			agendadoVencido := venc != rowindex.Never && venc <= agora
 			// Carencia é a linha sem instante conhecido: ela pede atenção do
 			// coletor sem ter vencido, e prazoVencido diz false para ela com
 			// razão. É a única divergência legítima.
-			if venc == rowindex.Carencia {
+			if venc == rowindex.Grace {
 				continue
 			}
 			if agendadoVencido != s.prazoVencido(id, s.agora()) {
@@ -76,7 +76,7 @@ func TestAgendaConcordaComPrazoVencidoSobCargaAleatoria(t *testing.T) {
 		rel.avanca(salto)
 		confere(fmt.Sprintf("salto %d (+%v)", i, salto))
 	}
-	if err := s.agenda.Confere(); err != nil {
+	if err := s.agenda.Check(); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -91,7 +91,7 @@ func TestAgendaConcordaComPrazoVencidoSobCargaAleatoria(t *testing.T) {
 func TestLinhaTombstonadaSaiDaAgenda(t *testing.T) {
 	s, rel := storeComExpiracao(t, t.TempDir(), time.Hour)
 	id, _ := mustPut(t, s, "A", 1, payloadComEscrita(t, s, "A", "Start", rel.t), nil)
-	if s.agenda.Get(id) == rowindex.Nunca {
+	if s.agenda.Get(id) == rowindex.Never {
 		t.Fatal("a linha nasceu fora da agenda")
 	}
 	rel.avanca(2 * time.Hour)
@@ -99,12 +99,12 @@ func TestLinhaTombstonadaSaiDaAgenda(t *testing.T) {
 	if err != nil || !expirou {
 		t.Fatalf("Expira devolveu %v, %v", expirou, err)
 	}
-	if v := s.agenda.Get(id); v != rowindex.Nunca {
+	if v := s.agenda.Get(id); v != rowindex.Never {
 		t.Fatalf("a linha tombstonada continua agendada para %d", v)
 	}
 	// E a descida não a entrega mais, por mais longe que o relógio vá.
 	rel.avanca(1000 * time.Hour)
-	s.agenda.Vencidos(uint64(s.agora().UnixMilli()), func(row types.RowID) bool {
+	s.agenda.VisitExpired(uint64(s.agora().UnixMilli()), func(row types.RowID) bool {
 		if row == id {
 			t.Fatal("a descida entregou uma linha tombstonada")
 		}
@@ -147,15 +147,15 @@ func TestLinhaSemInstanteEhAgendadaParaACarencia(t *testing.T) {
 	s.UsaRelogio(rel.agora)
 
 	id, _ := mustPut(t, s, "legada", 1, payloadSemEscrita(t, s, "legada"), nil)
-	if v := s.agenda.Get(id); v != rowindex.Carencia {
-		t.Fatalf("a linha sem instante foi agendada para %d, quer %d (carência)", v, rowindex.Carencia)
+	if v := s.agenda.Get(id); v != rowindex.Grace {
+		t.Fatalf("a linha sem instante foi agendada para %d, quer %d (carência)", v, rowindex.Grace)
 	}
 	// E depois da carência ela ganha vencimento de verdade.
 	if _, err := s.daCarencia(id); err != nil {
 		t.Fatal(err)
 	}
 	v := s.agenda.Get(id)
-	if v == rowindex.Carencia || v == rowindex.Nunca {
+	if v == rowindex.Grace || v == rowindex.Never {
 		t.Fatalf("depois da carência a linha continua em %d", v)
 	}
 	if querido := uint64(rel.t.Add(time.Hour).UnixMilli()); v != querido {
@@ -168,7 +168,7 @@ func TestLinhaSemInstanteEhAgendadaParaACarencia(t *testing.T) {
 func TestLinhaImortalNaoEntraNaAgenda(t *testing.T) {
 	s, rel := storeComExpiracao(t, t.TempDir(), 0) // sem duração de fundo
 	id, _ := mustPut(t, s, "A", 1, payloadComEscrita(t, s, "A", "Start", rel.t), nil)
-	if v := s.agenda.Get(id); v != rowindex.Nunca {
+	if v := s.agenda.Get(id); v != rowindex.Never {
 		t.Fatalf("linha sem prazo nenhum foi agendada para %d", v)
 	}
 }
@@ -371,7 +371,7 @@ func TestAuditoriaReprovaAAgendaDivergente(t *testing.T) {
 	}
 	// Empurra a folha para o infinito: a linha continua vencendo pelos
 	// índices, mas o coletor nunca mais a alcança.
-	if err := s.agenda.Atualiza(id, 0); err != nil {
+	if err := s.agenda.Update(id, 0); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.AuditaAgenda(); err == nil {
@@ -532,7 +532,7 @@ func TestEntradaFrouxaEhCorrigidaNaPrimeiraVisita(t *testing.T) {
 
 	// Simula o que uma interrupção deixa: a folha promete um vencimento muito
 	// anterior ao real. A linha NÃO venceu — prazoVencido diz que não.
-	if err := s.agenda.Atualiza(id, rowindex.PrimeiroVencimentoReal); err != nil {
+	if err := s.agenda.Update(id, rowindex.FirstRealExpiry); err != nil {
 		t.Fatal(err)
 	}
 	primeira, err := s.ExpiraUmaPassada(context.Background(), limitesDeTeste())
@@ -607,7 +607,7 @@ func TestCarenciaInterrompidaSeResolveNaVisitaSeguinte(t *testing.T) {
 	if err := s.escritas.Set(id, rel.t.UnixMilli()); err != nil {
 		t.Fatal(err)
 	}
-	if s.agenda.Get(id) != rowindex.Carencia {
+	if s.agenda.Get(id) != rowindex.Grace {
 		t.Fatal("o cenário não montou: a agenda não está na carência")
 	}
 

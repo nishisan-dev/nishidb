@@ -2,7 +2,7 @@ package parser
 
 import "github.com/nishisan-dev/nishidb/internal/query/lexer"
 
-// ParseCondicao parseia uma expressão booleana SOLTA — sem SELECT, sem FROM —
+// ParseCondition parseia uma expressão booleana SOLTA — sem SELECT, sem FROM —
 // com a MESMA gramática do WHERE.
 //
 // Existe para que a condição de uma regra de TTL seja escrita e entendida
@@ -13,7 +13,7 @@ import "github.com/nishisan-dev/nishidb/internal/query/lexer"
 // Parâmetro posicional é aceito pelo parser e recusado pelo binder: quem sabe
 // que não há ninguém para fornecê-lo é o consumidor da condição, não a
 // gramática.
-func ParseCondicao(sql string) (Expr, error) {
+func ParseCondition(sql string) (Expr, error) {
 	p := &parser{}
 	p.lx.Init(sql)
 	if err := p.advance(); err != nil {

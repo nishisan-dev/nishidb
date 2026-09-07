@@ -68,15 +68,15 @@ func TestServidorAbreODatasetComOsCamposDeHashDeclarados(t *testing.T) {
 	// ordem importa porque toda abertura descarta os .widx herdados e cria os
 	// seus (spec §2.5), de modo que reabrir declarando o campo e só então olhar
 	// para o arquivo mediria a reabertura, não o servidor.
-	segs, err := segindex.SegmentosComWIP(dataDir)
+	segs, err := segindex.SegmentsWithWIP(dataDir)
 	if err != nil {
-		t.Fatalf("SegmentosComWIP: %v", err)
+		t.Fatalf("SegmentsWithWIP: %v", err)
 	}
 	var deixados []types.FieldID
 	for _, seg := range segs {
-		campos, err := segindex.ListaWIP(dataDir, seg)
+		campos, err := segindex.ListWIP(dataDir, seg)
 		if err != nil {
-			t.Fatalf("ListaWIP(%d): %v", seg, err)
+			t.Fatalf("ListWIP(%d): %v", seg, err)
 		}
 		deixados = append(deixados, campos...)
 	}

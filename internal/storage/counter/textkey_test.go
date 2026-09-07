@@ -37,7 +37,7 @@ func TestTextoDaChaveEhGolden(t *testing.T) {
 	}
 	for _, c := range casos {
 		t.Run(c.nome, func(t *testing.T) {
-			chave, err := valuekey.AppendComposta(nil, c.vs)
+			chave, err := valuekey.AppendComposite(nil, c.vs)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -53,7 +53,7 @@ func TestTextoDaChaveEhGolden(t *testing.T) {
 }
 
 func TestTextoDaChaveRespeitaOsBuffersDoChamador(t *testing.T) {
-	chave, _ := valuekey.AppendComposta(nil, []types.Value{str("A"), i64(1)})
+	chave, _ := valuekey.AppendComposite(nil, []types.Value{str("A"), i64(1)})
 	dst := make([]byte, 0, 64)
 	scratch := make([]types.Value, 0, 4)
 	got, scratch2, err := TextoDaChave(dst, chave, scratch)
@@ -72,7 +72,7 @@ func TestTextoDaChaveRecusaChaveInvalida(t *testing.T) {
 	if _, _, err := TextoDaChave(nil, []byte{9, 0, 1}, nil); err == nil {
 		t.Fatal("chave rasgada tem de ser recusada")
 	}
-	chave, _ := valuekey.AppendComposta(nil, []types.Value{{Type: types.TypeTimestamp, I64: 1}})
+	chave, _ := valuekey.AppendComposite(nil, []types.Value{{Type: types.TypeTimestamp, I64: 1}})
 	if _, _, err := TextoDaChave(nil, chave, nil); err == nil {
 		t.Fatal("tipo fora de string/int64/boolean não tem renderização declarada")
 	}

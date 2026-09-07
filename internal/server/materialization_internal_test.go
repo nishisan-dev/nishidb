@@ -102,13 +102,13 @@ func TestAmostrasDeMaterializacaoPublicamAsSeries(t *testing.T) {
 
 	valores := map[string]float64{}
 	for _, a := range amostras {
-		chave := a.Nome
+		chave := a.Name
 		for _, l := range a.Labels {
-			if l.Nome == "rule" {
-				chave += "{rule=" + l.Valor + "}"
+			if l.Name == "rule" {
+				chave += "{rule=" + l.Value + "}"
 			}
 		}
-		valores[chave] = a.Valor
+		valores[chave] = a.Value
 	}
 	quer := map[string]float64{
 		metrics.MetFrozenCaptured:              7,
@@ -139,12 +139,12 @@ func TestSnapshotExpiradoSaiComCodigoProprioENaoComoInterno(t *testing.T) {
 	// pelo it.Err() depois de o storage o devolver na leitura de uma row.
 	err := fmt.Errorf("executor: leitura da row 42: %w", storage.ErrSnapshotExpirado)
 
-	if got := codigoDeErroDeQuery(err); got != protocol.CodSnapshotExpirado {
-		t.Errorf("codigoDeErroDeQuery = %q, quero %q", got, protocol.CodSnapshotExpirado)
+	if got := codigoDeErroDeQuery(err); got != protocol.CodeSnapshotExpired {
+		t.Errorf("codigoDeErroDeQuery = %q, quero %q", got, protocol.CodeSnapshotExpired)
 	}
 	// A contraprova: um erro qualquer continua caindo em INTERNAL. Sem ela, um
 	// mapeamento que devolvesse SNAPSHOT_TOO_OLD para tudo passaria acima.
-	if got := codigoDeErroDeQuery(errors.New("qualquer outra coisa")); got != protocol.CodInterno {
-		t.Errorf("codigoDeErroDeQuery de um erro genérico = %q, quero %q", got, protocol.CodInterno)
+	if got := codigoDeErroDeQuery(errors.New("qualquer outra coisa")); got != protocol.CodeInternal {
+		t.Errorf("codigoDeErroDeQuery de um erro genérico = %q, quero %q", got, protocol.CodeInternal)
 	}
 }

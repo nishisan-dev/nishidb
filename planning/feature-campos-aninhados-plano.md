@@ -292,7 +292,7 @@ passada não pode alocar por evento).
 - `index` no extract reusando o switch de [spec.go:476-491](internal/schema/spec.go:476).
 - Aviso de `index: hash` sem motor, estendendo `avisaChavesSemMotor`
   ([server.go:467](internal/server/server.go:467)).
-- `origem=` no REMARKS do JDBC + campo `Source` em `ColunaMeta`.
+- `origem=` no REMARKS do JDBC + campo `Source` em `ColumnMeta`.
 
 **Entrega:** `WHERE probe_ip = 'x'` usa bitmap num dataset novo, e o mesmo
 dataset abre pelo CLI e pelo servidor. **Corta aqui e não antes** porque a fiação
@@ -312,7 +312,7 @@ dataset abre pelo CLI e pelo servidor. **Corta aqui e não antes** porque a fia�
   a designar o **caminho**. Se um `as` contiver ponto, os dois colidem — recusar
   ponto em `as` na compilação (F3) fecha a categoria inteira.
 - **`maxNestedCols`:** molde completo do `maxRows` nas quatro pontas — YAML
-  ponteiro, validação `> 0`, `Compiled`, `/v1/metadata`, campo na `Requisicao`
+  ponteiro, validação `> 0`, `Compiled`, `/v1/metadata`, campo na `Request`
   ([protocol.go:44-50](internal/protocol/protocol.go:44)), função de teto no
   servidor que **recusa acima e nunca clampa** ([query.go:189-208](internal/server/query.go:189)),
   e `setMaxNestedCols` no `Statement` omitindo quando o pedido excede

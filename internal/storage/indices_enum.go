@@ -57,7 +57,7 @@ func (s *Store) lookupIndexado(field types.FieldID, v types.Value) (types.RowIDI
 	if err != nil {
 		return nil, err
 	}
-	return &hashIterator{s: s, it: segindex.Une(fontes)}, nil
+	return &hashIterator{s: s, it: segindex.Union(fontes)}, nil
 }
 
 // fontesDoCampo monta as fontes da consulta, em ordem crescente de segmento
@@ -80,21 +80,21 @@ func (s *Store) lookupIndexado(field types.FieldID, v types.Value) (types.RowIDI
 // seções não tem o campo, o selado que o crc32c reprovou e o segmento corrente
 // na janela de rotação em que os WIPs foram fechados e ainda não reabertos. Os
 // três chegam aqui como ok=false, e é POR ISSO que a decisão de indexar ou
-// enumerar sai do `ok` do Lookup e nunca do TemCampo — o godoc do TemCampo
+// enumerar sai do `ok` do Lookup e nunca do HasField — o godoc do HasField
 // escreve a ressalva por extenso. Tratar ok=false como "zero linhas" seria
 // falso negativo, a única coisa que a revalidação do §44 não sabe consertar:
 // ela só descarta candidato a mais.
-func (s *Store) fontesDoCampo(campo types.FieldID, h uint64) ([]segindex.Fonte, error) {
+func (s *Store) fontesDoCampo(campo types.FieldID, h uint64) ([]segindex.Source, error) {
 	refs, err := s.listaSegmentos()
 	if err != nil {
 		return nil, err
 	}
 	corrente := s.curSegID.Load()
-	fontes := make([]segindex.Fonte, 0, len(refs))
+	fontes := make([]segindex.Source, 0, len(refs))
 	// desiste fecha o que já foi montado. Sem isto, uma falha no meio da
 	// montagem vazaria as fontes anteriores — e vazar iterador de índice só
 	// aparece como descritor esgotado em produção.
-	desiste := func(err error) ([]segindex.Fonte, error) {
+	desiste := func(err error) ([]segindex.Source, error) {
 		for _, f := range fontes {
 			_ = f.Close()
 		}
@@ -136,7 +136,7 @@ func (s *Store) fontesDoCampo(campo types.FieldID, h uint64) ([]segindex.Fonte, 
 			// "teriam" respondido por índice esconderia exatamente o que a
 			// série existe para mostrar.
 			s.segPorEnumeracao.Add(int64(len(refs)))
-			return []segindex.Fonte{s.fonteDeTodasAsLocations()}, nil
+			return []segindex.Source{s.fonteDeTodasAsLocations()}, nil
 		}
 		f, err := s.fonteDaFaixa(refs, i)
 		if err != nil {
@@ -166,13 +166,13 @@ func (s *Store) fontesDoCampo(campo types.FieldID, h uint64) ([]segindex.Fonte, 
 //
 // O QUE CONTINUA SEM DONO é o arquivo REPROVADO NO CRC. O laço de reconstrução
 // da §2.4 já existe e drena a fila, mas a fila é derivada da tabela de seções,
-// que não confere crc (segindex.CamposSelados, e ela não pode: são até 2,25 GB
+// que não confere crc (segindex.SealedFields, e ela não pode: são até 2,25 GB
 // por arquivo a cada passada) — então um .sidx corrompido continua parecendo
 // completo para ela. Curá-lo exige que quem detecta a divergência AQUI apague o
 // arquivo, para o segmento voltar a ser pendente por AUSÊNCIA; é o gatilho 3 da
 // §2.4, e ele tem número próprio — débito 103 —, com a decisão que falta escrita
 // lá: se uma CONSULTA pode apagar arquivo do dataset.
-func (s *Store) fonteIndexada(seg, corrente uint32, campo types.FieldID, h uint64) (segindex.Fonte, bool) {
+func (s *Store) fonteIndexada(seg, corrente uint32, campo types.FieldID, h uint64) (segindex.Source, bool) {
 	if seg == corrente {
 		if f, ok := s.fonteDoWIP(seg, campo, h); ok {
 			return f, true
@@ -191,7 +191,7 @@ func (s *Store) fonteIndexada(seg, corrente uint32, campo types.FieldID, h uint6
 	// O Lookup roda SOB o selMu, e não só a busca no mapa, pela mesma razão que
 	// o fonteDoWIP segura o lock durante a caminhada da cadeia: entre pegar o
 	// ponteiro e usá-lo, a aposentadoria pode fechar o índice. É lá dentro que a
-	// Fonte registra a vida que impede o munmap (segindex.Selado.Fecha), e
+	// Fonte registra a vida que impede o munmap (segindex.Sealed.Close), e
 	// registrar fora do lock deixaria justamente a janela que a vida existe para
 	// fechar.
 	//
@@ -223,7 +223,7 @@ func (s *Store) fonteIndexada(seg, corrente uint32, campo types.FieldID, h uint6
 // estado no mapa que o Close teria de saber distinguir de um Selado vivo.
 //
 // A APOSENTADORIA PODE FECHAR O ÍNDICE COM UMA VARREDURA EM VOO, e quem resolve
-// isso é a contagem de vidas do segindex.Selado: o Fecha impede leitores novos e
+// isso é a contagem de vidas do segindex.Sealed: o Fecha impede leitores novos e
 // adia o munmap até a última Fonte sair. Sem ela o desfecho não seria resultado
 // degradado, seria SIGSEGV — o Close do dataset está coberto pelo quiesce (o
 // hashIterator reentra pelo entra() a cada avanço), mas a aposentadoria roda na
@@ -249,7 +249,7 @@ func (s *Store) garanteSelado(seg uint32) {
 	if ok {
 		return
 	}
-	novo, err := segindex.AbreSelado(segindex.CaminhoSelado(s.dirDeDados(), seg))
+	novo, err := segindex.OpenSealed(segindex.SealedPath(s.dirDeDados(), seg))
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			// Ausente é o estado NORMAL — segmento fora da janela, ou gravado
@@ -293,7 +293,7 @@ func (s *Store) garanteSelado(seg uint32) {
 	// ok=false e o segmento enumera, que é a degradação correta. Publicar
 	// mantém o Once cumprido e faz esse ok=false custar nada; recusar obrigaria
 	// a próxima consulta a reabrir e reconferir o arquivo podre inteiro.
-	if err := novo.ErroDeIntegridade(); err != nil {
+	if err := novo.IntegrityErr(); err != nil {
 		// A série sobe junto do WARN, e no mesmo ponto, porque as duas descrevem
 		// o mesmo evento: um arquivo de índice reprovado.
 		//
@@ -323,7 +323,7 @@ func (s *Store) garanteSelado(seg uint32) {
 // de OUTRO segmento) e é o lado barato do erro: a consulta seguinte reabre o
 // arquivo. O lado caro é o oposto — publicar o velho, que degrada até a próxima
 // abertura do dataset.
-func (s *Store) publicaSelado(seg uint32, novo *segindex.Selado, geracao uint64) {
+func (s *Store) publicaSelado(seg uint32, novo *segindex.Sealed, geracao uint64) {
 	s.selMu.Lock()
 	defer s.selMu.Unlock()
 	if s.selados == nil {
@@ -331,18 +331,18 @@ func (s *Store) publicaSelado(seg uint32, novo *segindex.Selado, geracao uint64)
 		// recusou antes de chegar aqui. A guarda existe porque a alternativa é
 		// escrever num mapa nil — pânico —, e o preço dela é fechar o
 		// mapeamento que ninguém mais teria como alcançar.
-		_ = novo.Fecha()
+		_ = novo.Close()
 		return
 	}
 	if s.selGeracao != geracao {
-		_ = novo.Fecha()
+		_ = novo.Close()
 		return
 	}
 	// Duas consultas podem ter aberto o mesmo arquivo em paralelo: quem chega
 	// depois descarta o próprio mapeamento e fica com o já publicado, senão o
 	// segundo vazaria — o Close só alcança o que está no mapa.
 	if _, ok := s.selados[seg]; ok {
-		_ = novo.Fecha()
+		_ = novo.Close()
 		return
 	}
 	s.selados[seg] = novo
@@ -365,7 +365,7 @@ func (s *Store) publicaSelado(seg uint32, novo *segindex.Selado, geracao uint64)
 // fechá-lo entre pegar o ponteiro e caminhar a cadeia. É lock FOLHA e a
 // consulta não toma o wmu por baixo dele. A identidade mora sob o MESMO lock
 // que publica mapa e dono juntos — não há janela entre conferir e caminhar.
-func (s *Store) fonteDoWIP(seg uint32, campo types.FieldID, h uint64) (segindex.Fonte, bool) {
+func (s *Store) fonteDoWIP(seg uint32, campo types.FieldID, h uint64) (segindex.Source, bool) {
 	s.selMu.RLock()
 	defer s.selMu.RUnlock()
 	if s.wipsSeg != seg {
@@ -426,7 +426,7 @@ func (s *Store) fonteDoWIP(seg uint32, campo types.FieldID, h uint64) (segindex.
 //
 // O aposMu continua aqui pela razão do GetByRowID: ele impede que o descritor
 // feche ENTRE o pread e a leitura dos bytes.
-func (s *Store) fonteDaFaixa(refs []segment.SegmentRef, i int) (segindex.Fonte, error) {
+func (s *Store) fonteDaFaixa(refs []segment.SegmentRef, i int) (segindex.Source, error) {
 	s.aposMu.RLock()
 	defer s.aposMu.RUnlock()
 	var buf []byte
@@ -486,7 +486,7 @@ func (s *Store) primeiroRowIDDe(ref segment.SegmentRef, buf []byte) (types.RowID
 //
 // Os limites são a marca-d'água e o nextRowID, tomados uma vez: a fonte é um
 // instantâneo do limite superior, como o ScanLive.
-func (s *Store) fonteDeTodasAsLocations() segindex.Fonte {
+func (s *Store) fonteDeTodasAsLocations() segindex.Source {
 	base := s.RowIDBase()
 	return &fonteLocations{s: s, ini: base, prox: base, fim: types.RowID(s.nextRowID.Load())}
 }

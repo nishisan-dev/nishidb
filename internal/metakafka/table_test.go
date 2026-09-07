@@ -76,8 +76,8 @@ func TestMetaKafkaSemKafkaRespondeUmaLinhaDeResumo(t *testing.T) {
 	if l["enabled"] != "false" {
 		t.Fatalf("enabled = %q; sem bloco Kafka o dataset não consome, e isso é um fato", l["enabled"])
 	}
-	if l["state"] != protocol.EstadoDesligado {
-		t.Fatalf("state = %q, quero %q", l["state"], protocol.EstadoDesligado)
+	if l["state"] != protocol.StateDisabled {
+		t.Fatalf("state = %q, quero %q", l["state"], protocol.StateDisabled)
 	}
 	// As de partição e as de identidade são ausência, não zero nem "".
 	for _, col := range []string{"partition", "topic", "appliedOffset"} {
@@ -99,7 +99,7 @@ func TestMetaKafkaDesligadoTrazOTopicoDoYAML(t *testing.T) {
 		t.Fatalf("%d linhas, quero 1", len(rows))
 	}
 	l := rows[0]
-	if l["enabled"] != "false" || l["state"] != protocol.EstadoDesligado {
+	if l["enabled"] != "false" || l["state"] != protocol.StateDisabled {
 		t.Fatalf("enabled=%q state=%q", l["enabled"], l["state"])
 	}
 	if l["topic"] != "service-view" || l["groupId"] != "piloto-7" {
@@ -244,9 +244,9 @@ func TestMetaKafkaWatchdogEhNuloSemGoroutineDeIngestao(t *testing.T) {
 func TestMetaKafkaEstadoVemDoClassificador(t *testing.T) {
 	c := &consumidorFalso{inst: instantaneoCom(pos(0, 1, 1))}
 	f := fonteCom(c)
-	f.Estado = func() (string, string) { return protocol.EstadoDegraded, "ingestão ainda subindo" }
+	f.Estado = func() (string, string) { return protocol.StateDegraded, "ingestão ainda subindo" }
 	rows := consulta(t, motorComKafka(t, f), "SELECT state, detail FROM _meta.kafka")
-	if rows[0]["state"] != protocol.EstadoDegraded || rows[0]["detail"] != "ingestão ainda subindo" {
+	if rows[0]["state"] != protocol.StateDegraded || rows[0]["detail"] != "ingestão ainda subindo" {
 		t.Fatalf("state=%q detail=%q", rows[0]["state"], rows[0]["detail"])
 	}
 }

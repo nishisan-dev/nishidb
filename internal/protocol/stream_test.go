@@ -10,16 +10,16 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// escreveStream monta uma resposta completa: schema, rows cruas e fecho.
-func escreveStream(t *testing.T, fecho any, rows ...string) string {
+// writeStream monta uma resposta completa: schema, rows cruas e fecho.
+func writeStream(t *testing.T, closingFrame any, rows ...string) string {
 	t.Helper()
 	var sb bytes.Buffer
-	err := protocol.EscreveLinha(&sb, protocol.LinhaSchema{
-		Nishidb: protocol.MolduraSchema,
+	err := protocol.WriteLine(&sb, protocol.SchemaLine{
+		Nishidb: protocol.FrameSchema,
 		Dataset: "radius_sessions",
-		Columns: []protocol.Coluna{
-			protocol.ColunaDe("id", types.TypeString, false),
-			protocol.ColunaDe("ip", types.TypeIPv4, true),
+		Columns: []protocol.Column{
+			protocol.NewColumn("id", types.TypeString, false),
+			protocol.NewColumn("ip", types.TypeIPv4, true),
 		},
 	})
 	if err != nil {
@@ -29,8 +29,8 @@ func escreveStream(t *testing.T, fecho any, rows ...string) string {
 		sb.WriteString(r)
 		sb.WriteByte('\n')
 	}
-	if fecho != nil {
-		if err := protocol.EscreveLinha(&sb, fecho); err != nil {
+	if closingFrame != nil {
+		if err := protocol.WriteLine(&sb, closingFrame); err != nil {
 			t.Fatalf("fecho: %v", err)
 		}
 	}
@@ -38,17 +38,17 @@ func escreveStream(t *testing.T, fecho any, rows ...string) string {
 }
 
 func TestLeitorPercorreSchemaRowsEFecho(t *testing.T) {
-	stream := escreveStream(t,
-		protocol.LinhaFim{Nishidb: protocol.MolduraFim, Rows: 2},
+	stream := writeStream(t,
+		protocol.EndLine{Nishidb: protocol.FrameEnd, Rows: 2},
 		`{"id":"ABC","ip":"177.1.2.3"}`,
 		`{"id":"DEF","ip":"177.1.2.4"}`,
 	)
 
-	l := protocol.NovoLeitor(strings.NewReader(stream))
-	var recebidas []string
+	l := protocol.NewReader(strings.NewReader(stream))
+	var received []string
 	for l.Next() {
 		// A linha é entregue CRUA: o cliente a repassa sem redecodificar.
-		recebidas = append(recebidas, string(l.Linha()))
+		received = append(received, string(l.Line()))
 	}
 	if err := l.Err(); err != nil {
 		t.Fatalf("Err: %v", err)
@@ -62,31 +62,31 @@ func TestLeitorPercorreSchemaRowsEFecho(t *testing.T) {
 	if l.Schema().Columns[1].JDBC != protocol.JDBCVarchar {
 		t.Fatalf("ipv4 saiu como %q, quer VARCHAR (§73)", l.Schema().Columns[1].JDBC)
 	}
-	if len(recebidas) != 2 || recebidas[0] != `{"id":"ABC","ip":"177.1.2.3"}` {
-		t.Fatalf("rows = %q", recebidas)
+	if len(received) != 2 || received[0] != `{"id":"ABC","ip":"177.1.2.3"}` {
+		t.Fatalf("rows = %q", received)
 	}
-	if l.Fim() == nil || l.Fim().Rows != 2 || l.Fim().Truncated {
-		t.Fatalf("fecho = %+v", l.Fim())
+	if l.End() == nil || l.End().Rows != 2 || l.End().Truncated {
+		t.Fatalf("fecho = %+v", l.End())
 	}
-	if l.Erro() != nil {
-		t.Fatalf("Erro = %+v, quer nil", l.Erro())
+	if l.Failure() != nil {
+		t.Fatalf("Failure = %+v, quer nil", l.Failure())
 	}
 }
 
 // O fecho de erro é o que separa "acabou" de "quebrou depois de 10.000 linhas".
 // Sem ele o cliente apresentaria um resultado parcial como completo.
 func TestFechoDeErroChegaDepoisDasRows(t *testing.T) {
-	stream := escreveStream(t,
-		protocol.LinhaErro{
-			Nishidb: protocol.MolduraErro,
-			Code:    protocol.CodMaxRows,
+	stream := writeStream(t,
+		protocol.ErrorLine{
+			Nishidb: protocol.FrameError,
+			Code:    protocol.CodeMaxRows,
 			Rows:    1,
 			Message: "resultado truncado no teto de query.maxRows: 1",
 		},
 		`{"id":"ABC"}`,
 	)
 
-	l := protocol.NovoLeitor(strings.NewReader(stream))
+	l := protocol.NewReader(strings.NewReader(stream))
 	n := 0
 	for l.Next() {
 		n++
@@ -97,20 +97,20 @@ func TestFechoDeErroChegaDepoisDasRows(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("rows = %d, quer 1", n)
 	}
-	if l.Fim() != nil {
-		t.Fatalf("Fim = %+v, quer nil", l.Fim())
+	if l.End() != nil {
+		t.Fatalf("End = %+v, quer nil", l.End())
 	}
-	if l.Erro() == nil || l.Erro().Code != protocol.CodMaxRows || l.Erro().Rows != 1 {
-		t.Fatalf("Erro = %+v", l.Erro())
+	if l.Failure() == nil || l.Failure().Code != protocol.CodeMaxRows || l.Failure().Rows != 1 {
+		t.Fatalf("Failure = %+v", l.Failure())
 	}
 }
 
 // Um stream que acaba sem fecho é falha de TRANSPORTE, não fim de resultado: é
 // assim que uma conexão cortada deixa de ser indistinguível de sucesso.
 func TestStreamSemFechoEhFalha(t *testing.T) {
-	stream := escreveStream(t, nil, `{"id":"ABC"}`)
+	stream := writeStream(t, nil, `{"id":"ABC"}`)
 
-	l := protocol.NovoLeitor(strings.NewReader(stream))
+	l := protocol.NewReader(strings.NewReader(stream))
 	for l.Next() {
 	}
 	if !errors.Is(l.Err(), protocol.ErrStream) {
@@ -119,13 +119,13 @@ func TestStreamSemFechoEhFalha(t *testing.T) {
 	if !strings.Contains(l.Err().Error(), "sem a linha de fecho") {
 		t.Fatalf("mensagem %q não nomeia a causa", l.Err())
 	}
-	if l.Fim() != nil || l.Erro() != nil {
+	if l.End() != nil || l.Failure() != nil {
 		t.Fatal("nenhum fecho deveria ter sido publicado")
 	}
 }
 
 func TestPrimeiraLinhaSemSchemaEhFalha(t *testing.T) {
-	l := protocol.NovoLeitor(strings.NewReader("{\"id\":\"ABC\"}\n"))
+	l := protocol.NewReader(strings.NewReader("{\"id\":\"ABC\"}\n"))
 	if l.Next() {
 		t.Fatal("Next devolveu true sem schema")
 	}
@@ -137,7 +137,7 @@ func TestPrimeiraLinhaSemSchemaEhFalha(t *testing.T) {
 func TestMolduraDesconhecidaEhFalha(t *testing.T) {
 	stream := "{\"nishidb\":\"schema\",\"dataset\":\"d\",\"columns\":[]}\n" +
 		"{\"nishidb\":\"comeco_do_futuro\"}\n"
-	l := protocol.NovoLeitor(strings.NewReader(stream))
+	l := protocol.NewReader(strings.NewReader(stream))
 	for l.Next() {
 	}
 	if !errors.Is(l.Err(), protocol.ErrStream) {
@@ -145,17 +145,17 @@ func TestMolduraDesconhecidaEhFalha(t *testing.T) {
 	}
 }
 
-// O EscreveLinha não pode escapar HTML: as rows não escapam, e duas políticas
+// O WriteLine não pode escapar HTML: as rows não escapam, e duas políticas
 // no mesmo stream fariam o mesmo nome de coluna sair de dois jeitos.
 func TestMolduraNaoEscapaHTML(t *testing.T) {
 	var sb bytes.Buffer
-	err := protocol.EscreveLinha(&sb, protocol.LinhaSchema{
-		Nishidb: protocol.MolduraSchema,
+	err := protocol.WriteLine(&sb, protocol.SchemaLine{
+		Nishidb: protocol.FrameSchema,
 		Dataset: "d",
-		Columns: []protocol.Coluna{protocol.ColunaDe("a<b>c&d", types.TypeString, true)},
+		Columns: []protocol.Column{protocol.NewColumn("a<b>c&d", types.TypeString, true)},
 	})
 	if err != nil {
-		t.Fatalf("EscreveLinha: %v", err)
+		t.Fatalf("WriteLine: %v", err)
 	}
 	if !strings.Contains(sb.String(), "a<b>c&d") {
 		t.Fatalf("nome escapado: %s", sb.String())
@@ -167,10 +167,10 @@ func TestMolduraNaoEscapaHTML(t *testing.T) {
 // chamada "nishidb".
 func TestPrefixoDeMolduraEhOQueOEncoderProduz(t *testing.T) {
 	var sb bytes.Buffer
-	if err := protocol.EscreveLinha(&sb, protocol.LinhaFim{Nishidb: protocol.MolduraFim}); err != nil {
-		t.Fatalf("EscreveLinha: %v", err)
+	if err := protocol.WriteLine(&sb, protocol.EndLine{Nishidb: protocol.FrameEnd}); err != nil {
+		t.Fatalf("WriteLine: %v", err)
 	}
-	if !strings.HasPrefix(sb.String(), `{"`+protocol.ChaveMoldura+`":`) {
+	if !strings.HasPrefix(sb.String(), `{"`+protocol.FrameKey+`":`) {
 		t.Fatalf("fecho não começa pelo prefixo de moldura: %s", sb.String())
 	}
 }

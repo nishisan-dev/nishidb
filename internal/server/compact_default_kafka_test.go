@@ -132,7 +132,7 @@ func TestCompactComAdminNaConfigDefaultELacoOciosoFazTrabalhoReal(t *testing.T) 
 		t.Fatalf("compact: status = %d após %d tentativas imediatas, quer 200 (o laço automático só volta a olhar "+
 			"daqui a 5s — folga de sobra para este POST)", resp.StatusCode, tentativas)
 	}
-	var out protocol.RespostaCompact
+	var out protocol.CompactResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatalf("corpo ilegível: %v", err)
 	}
@@ -204,7 +204,7 @@ func esperaIngestaoAplicarPeloMenos(t *testing.T, srv *server.Servidor, dataset 
 	for {
 		resp, err := http.Get("http://" + srv.Endereco() + "/v1/stats")
 		if err == nil {
-			var e protocol.Estatisticas
+			var e protocol.Stats
 			decErr := json.NewDecoder(resp.Body).Decode(&e)
 			_ = resp.Body.Close()
 			if decErr == nil {

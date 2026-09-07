@@ -14,7 +14,7 @@ import (
 // trocando o descent por regexp. Se este teste cair, a pergunta não é "como
 // otimizar", é "o que passou a alocar por token".
 func TestParseAllocsTripwire(t *testing.T) {
-	const teto = 64.0
+	const ceiling = 64.0
 	got := testing.AllocsPerRun(100, func() {
 		st, err := parser.Parse(querySpec72)
 		if err != nil {
@@ -22,8 +22,8 @@ func TestParseAllocsTripwire(t *testing.T) {
 		}
 		sinkStmt = st
 	})
-	if got > teto {
-		t.Errorf("Parse alocou %.0f objetos, teto %.0f", got, teto)
+	if got > ceiling {
+		t.Errorf("Parse alocou %.0f objetos, teto %.0f", got, ceiling)
 	}
-	t.Logf("allocs por parse: %.0f (teto %.0f)", got, teto)
+	t.Logf("allocs por parse: %.0f (teto %.0f)", got, ceiling)
 }

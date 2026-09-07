@@ -10,12 +10,12 @@ import (
 
 func TestRegistraProcessoExpoeHeapGo(t *testing.T) {
 	r := metrics.NewRegistry()
-	metrics.RegistraProcesso(r)
+	metrics.RegisterProcess(r)
 
-	s := exposicao(t, r)
-	for _, nome := range []string{metrics.MetGoHeapBytes, metrics.MetGoHeapObjects} {
-		if !strings.Contains(s, "# TYPE "+nome+" gauge") {
-			t.Errorf("métrica %s ausente:\n%s", nome, s)
+	s := exposition(t, r)
+	for _, name := range []string{metrics.MetGoHeapBytes, metrics.MetGoHeapObjects} {
+		if !strings.Contains(s, "# TYPE "+name+" gauge") {
+			t.Errorf("métrica %s ausente:\n%s", name, s)
 		}
 	}
 }
@@ -25,14 +25,14 @@ func TestRegistraProcessoExpoeHeapGo(t *testing.T) {
 // ausência do dado.
 func TestRSSAparecerSoOndeHaComoMedir(t *testing.T) {
 	r := metrics.NewRegistry()
-	metrics.RegistraProcesso(r)
-	s := exposicao(t, r)
+	metrics.RegisterProcess(r)
+	s := exposition(t, r)
 
-	tem := strings.Contains(s, metrics.MetProcessRSSBytes)
-	if runtime.GOOS == "linux" && !tem {
+	hasRSS := strings.Contains(s, metrics.MetProcessRSSBytes)
+	if runtime.GOOS == "linux" && !hasRSS {
 		t.Errorf("no Linux o RSS tem de ser medido:\n%s", s)
 	}
-	if runtime.GOOS != "linux" && tem {
+	if runtime.GOOS != "linux" && hasRSS {
 		t.Errorf("fora do Linux não há /proc; a série tem de sumir:\n%s", s)
 	}
 	if strings.Contains(s, metrics.MetProcessRSSBytes+" 0\n") {
@@ -44,13 +44,13 @@ func TestRSSAparecerSoOndeHaComoMedir(t *testing.T) {
 // como 3.14e+08.
 func TestValoresDeProcessoSaemSemNotacaoCientifica(t *testing.T) {
 	r := metrics.NewRegistry()
-	metrics.RegistraProcesso(r)
-	for _, linha := range strings.Split(exposicao(t, r), "\n") {
-		if strings.HasPrefix(linha, "#") || linha == "" {
+	metrics.RegisterProcess(r)
+	for _, line := range strings.Split(exposition(t, r), "\n") {
+		if strings.HasPrefix(line, "#") || line == "" {
 			continue
 		}
-		if strings.Contains(linha, "e+") || strings.Contains(linha, "e-") {
-			t.Errorf("notação científica no scrape: %q", linha)
+		if strings.Contains(line, "e+") || strings.Contains(line, "e-") {
+			t.Errorf("notação científica no scrape: %q", line)
 		}
 	}
 }

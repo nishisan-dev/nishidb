@@ -77,7 +77,7 @@ partition "Escrita (applyRecord, sob o wmu)" {
 }
 
 partition "Coletor" {
-  :ProximoVencimento() = mínimo do topo;
+  :NextExpiry() = mínimo do topo;
   :dorme até lá, com teto de um minuto;
   note right
     O valor é um limite INFERIOR do vencimento real, pela

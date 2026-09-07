@@ -59,17 +59,17 @@ func TestMetricasDeContadorNascemComZero(t *testing.T) {
 				t.Fatalf("%s de %s tinha de nascer em zero, veio %v", serie, nome, a.Valor)
 			}
 		}
-		if porSerie[metrics.MetCounterGroupsRefusedTotal].Tipo != metrics.TipoContador {
+		if porSerie[metrics.MetCounterGroupsRefusedTotal].Tipo != metrics.TypeCounter {
 			t.Fatalf("refused_total tem de ser contador")
 		}
-		if porSerie[metrics.MetCounterGroups].Tipo != metrics.TipoMedidor {
+		if porSerie[metrics.MetCounterGroups].Tipo != metrics.TypeGauge {
 			t.Fatalf("groups tem de ser medidor")
 		}
 		// Os dois agregados DESCEM quando uma linha é lapidada ou vence, então
 		// são medidores. Publicá-los como contador diria ao Prometheus que a
 		// queda é um reinício do processo, e o rate() sairia errado.
 		for _, serie := range []string{metrics.MetCounterRows, metrics.MetCounterCountedRows} {
-			if porSerie[serie].Tipo != metrics.TipoMedidor {
+			if porSerie[serie].Tipo != metrics.TypeGauge {
 				t.Fatalf("%s tem de ser medidor, é %v", serie, porSerie[serie].Tipo)
 			}
 		}
@@ -80,7 +80,7 @@ func TestMetricasDeContadorNascemComZero(t *testing.T) {
 // nenhum contador é mantido dos dois lados.
 func TestStatsEMetricsLeemOMesmoContador(t *testing.T) {
 	srv := servidorComServicos(t, 24)
-	var e protocol.Estatisticas
+	var e protocol.Stats
 	if err := json.Unmarshal([]byte(pega(t, srv, "/v1/stats")), &e); err != nil {
 		t.Fatal(err)
 	}

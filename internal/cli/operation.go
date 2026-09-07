@@ -56,7 +56,7 @@ func runStatus(args []string, amb Ambiente) int {
 		return code
 	}
 
-	var e protocol.Estatisticas
+	var e protocol.Stats
 	if code := buscaDocumento("status", *servidor, "/v1/stats", cred, &e, amb); code != ExitOK {
 		return code
 	}
@@ -84,7 +84,7 @@ func runDatasets(args []string, amb Ambiente) int {
 		return code
 	}
 
-	var m protocol.Metadados
+	var m protocol.Metadata
 	if code := buscaDocumento("datasets", *servidor, "/v1/metadata", cred, &m, amb); code != ExitOK {
 		return code
 	}
@@ -118,7 +118,7 @@ func runInspect(args []string, amb Ambiente) int {
 	}
 	nome := fs.Arg(0)
 
-	var m protocol.Metadados
+	var m protocol.Metadata
 	caminho := "/v1/metadata?dataset=" + url.QueryEscape(nome)
 	if code := buscaDocumento("inspect", *servidor, caminho, cred, &m, amb); code != ExitOK {
 		return code
@@ -241,12 +241,12 @@ func escreveSaida(cmd string, amb Ambiente, corpo func(w io.Writer)) int {
 	return ExitOK
 }
 
-func escreveStatus(w io.Writer, endereco string, e protocol.Estatisticas) {
+func escreveStatus(w io.Writer, endereco string, e protocol.Stats) {
 	titulo(w, "servidor %s", endereco)
 	titulo(w, "")
 
 	// Os contadores do motor são do PROCESSO e não de um dataset (ver o godoc
-	// de protocolo.Estatisticas): repeti-los por dataset publicaria o mesmo
+	// de protocol.Stats): repeti-los por dataset publicaria o mesmo
 	// número N vezes, e alguém somaria os N.
 	titulo(w, "processo")
 	q := e.Process.Query
@@ -288,7 +288,7 @@ func escreveStatus(w io.Writer, endereco string, e protocol.Estatisticas) {
 	titulo(w, "     PELO MENOS isto de lixo em disco — nunca menos.")
 }
 
-func escreveDatasets(w io.Writer, endereco string, m protocol.Metadados) {
+func escreveDatasets(w io.Writer, endereco string, m protocol.Metadata) {
 	titulo(w, "servidor %s", endereco)
 	titulo(w, "")
 	linha(w, "DATASET", "KEY", "COLUNAS", "MAXROWS", "TIMEOUT")
@@ -325,7 +325,7 @@ func escreveInspect(w io.Writer, d protocol.DatasetMeta) {
 		//
 		// Eram TRÊS palavras, e a terceira distinguia os motores: "hash" saiu
 		// quando o motor único tornou a distinção inexistente. As outras duas
-		// ficaram por serem contrato — ver o godoc de protocolo.MotorStats e de
+		// ficaram por serem contrato — ver o godoc de protocol.EngineStats e de
 		// schema.CompiledField.NomeDoIndice.
 		linha(w, c.Name, alias, c.Type, c.JDBC, c.Index, auto)
 	}
@@ -348,7 +348,7 @@ func estadoDaCompaction(c protocol.CompactionStats) string {
 // resumoDaIngestao usa o vocabulário do §94 — o mesmo do /v1/health —, para
 // que as duas leituras não descrevam a mesma realidade com palavras
 // diferentes.
-func resumoDaIngestao(i protocol.IngestaoStats) string {
+func resumoDaIngestao(i protocol.IngestionStats) string {
 	if !i.Enabled {
 		return i.State
 	}
@@ -398,7 +398,7 @@ func duracao(ms int64) string { return (time.Duration(ms) * time.Millisecond).St
 // Silêncio quando não há nenhuma: um bloco "em voo" vazio em toda chamada de
 // `nishidb status` seria ruído, e ruído treina o operador a pular a seção
 // justamente no dia em que ela tem conteúdo.
-func escreveEmVoo(w io.Writer, voos []protocol.ConsultaEmVoo) {
+func escreveEmVoo(w io.Writer, voos []protocol.InFlightQuery) {
 	if len(voos) == 0 {
 		return
 	}

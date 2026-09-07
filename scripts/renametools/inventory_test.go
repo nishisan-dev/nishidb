@@ -118,6 +118,46 @@ func TestInventoryMarksFieldsOfFunctionLocalStructForGopls(t *testing.T) {
 	}
 }
 
+func TestInventoryMarksFieldsOfAnonymousStructInsideFunctionForGopls(t *testing.T) {
+	// Tabela, Mapa, Pesa e Marca (b/b.go) declaram struct ANÔNIMA dentro da
+	// função — a forma dominante da tabela de casos de teste do repositório.
+	// Não há tipo nomeado nem `var` de pacote para o rf endereçar (Ruling
+	// R29): a espécie leva #gopls e o endereço leva o nome de quem batiza a
+	// struct (a variável do `:=`, a do `var`, o parâmetro), ou nada quando
+	// nenhum nome a batiza. Enquanto esses campos ficaram fora do inventário
+	// eles não chegaram a nenhum tradutor: o crítico de completude do G2 achou
+	// 17 deles ainda em PT-BR em quatro pacotes.
+	inv, err := Inventory("testdata/modulo", "./...")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct{ address, name string }{
+		{"Tabela.casos.nome", "nome"},   // `casos := []struct{...}{...}`
+		{"Tabela.casos.conta", "conta"}, // segundo campo da mesma struct
+		{"Mapa.pesos.peso", "peso"},     // `map[string]struct{...}`
+		{"Pesa.p.peso", "peso"},         // parâmetro de tipo struct anônimo
+		{"Marca.peso", "peso"},          // literal sem nome que o batize
+	}
+	for _, c := range cases {
+		r := findRow(t, inv.Rows, "field#gopls", c.address)
+		if r[0] != "b" || r[3] != c.name || r[5] != "nao" {
+			t.Errorf("%s: pacote=%q nome=%q exportado=%q, esperado b %q nao", c.address, r[0], r[3], r[5], c.name)
+		}
+		if !strings.HasPrefix(r[4], "b/b.go:") {
+			t.Errorf("%s: posição %q, esperada em b/b.go (o gopls renomeia por posição)", c.address, r[4])
+		}
+	}
+	// Negativo: campo de struct NOMEADA de topo continua `T.F` com a espécie
+	// `field`, que vai ao rf por endereço — a mudança não pode arrastar o caso
+	// comum para o fallback por posição.
+	findRow(t, inv.Rows, "field", "Contagem.Total")
+	for _, r := range inv.Rows[1:] {
+		if r[1] == "field#gopls" && (r[2] == "Contagem.Total" || r[2] == "Arquivo.Linhas") {
+			t.Errorf("campo de struct nomeada de topo caiu para gopls: %v", r)
+		}
+	}
+}
+
 func TestInventoryDoesNotCountTheFunctionNameAsAmbiguity(t *testing.T) {
 	// Conta(Conta int) int: o parâmetro tem o MESMO nome da função. O Ident
 	// de fn.Name não é uma segunda declaração no endereço Conta.Conta — é o

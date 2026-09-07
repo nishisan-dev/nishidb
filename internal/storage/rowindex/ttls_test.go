@@ -7,9 +7,9 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-func abrePrazos(t *testing.T, dir string, minRows uint64) *Prazos {
+func openTTLs(t *testing.T, dir string, minRows uint64) *TTLs {
 	t.Helper()
-	p, err := OpenPrazos(filepath.Join(dir, "prazos.idx"), minRows)
+	p, err := OpenTTLs(filepath.Join(dir, "prazos.idx"), minRows)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -21,34 +21,34 @@ func abrePrazos(t *testing.T, dir string, minRows uint64) *Prazos {
 // TAMBÉM declara regra de fundo herdaria o prazo de fundo — e o alarme que o
 // operador mandou nunca expirar sairia sozinho.
 func TestPrazosDistingueImortalDeDesconhecido(t *testing.T) {
-	p := abrePrazos(t, t.TempDir(), 16)
-	if _, conhecido := p.Get(1); conhecido {
+	p := openTTLs(t, t.TempDir(), 16)
+	if _, known := p.Get(1); known {
 		t.Error("entrada nunca gravada deveria ser desconhecida")
 	}
 	if err := p.Set(1, 0); err != nil {
 		t.Fatal(err)
 	}
-	ms, conhecido := p.Get(1)
-	if !conhecido || ms != 0 {
-		t.Errorf("Get depois de Set(0) = (%d,%v), quero (0,true)", ms, conhecido)
+	ms, known := p.Get(1)
+	if !known || ms != 0 {
+		t.Errorf("Get depois de Set(0) = (%d,%v), quero (0,true)", ms, known)
 	}
 }
 
 func TestPrazosGuardaDuracao(t *testing.T) {
-	p := abrePrazos(t, t.TempDir(), 4)
+	p := openTTLs(t, t.TempDir(), 4)
 	const ms = 180000
 	if err := p.Set(1, ms); err != nil {
 		t.Fatal(err)
 	}
-	got, conhecido := p.Get(1)
-	if !conhecido || got != ms {
-		t.Errorf("Get = (%d,%v), quero (%d,true)", got, conhecido, ms)
+	got, known := p.Get(1)
+	if !known || got != ms {
+		t.Errorf("Get = (%d,%v), quero (%d,true)", got, known, ms)
 	}
 }
 
 func TestPrazosSobreviveAoReabrir(t *testing.T) {
 	dir := t.TempDir()
-	p := abrePrazos(t, dir, 4)
+	p := openTTLs(t, dir, 4)
 	if err := p.Set(3, 604800000); err != nil {
 		t.Fatal(err)
 	}
@@ -58,12 +58,12 @@ func TestPrazosSobreviveAoReabrir(t *testing.T) {
 	if err := p.Close(); err != nil {
 		t.Fatal(err)
 	}
-	p2 := abrePrazos(t, dir, 4)
-	if ms, conhecido := p2.Get(3); !conhecido || ms != 604800000 {
-		t.Errorf("depois do reopen: (%d,%v)", ms, conhecido)
+	p2 := openTTLs(t, dir, 4)
+	if ms, known := p2.Get(3); !known || ms != 604800000 {
+		t.Errorf("depois do reopen: (%d,%v)", ms, known)
 	}
-	if ms, conhecido := p2.Get(4); !conhecido || ms != 0 {
-		t.Errorf("o imortal virou %v (%d) depois do reopen", conhecido, ms)
+	if ms, known := p2.Get(4); !known || ms != 0 {
+		t.Errorf("o imortal virou %v (%d) depois do reopen", known, ms)
 	}
 }
 
@@ -71,14 +71,14 @@ func TestPrazosSobreviveAoReabrir(t *testing.T) {
 // significado de prazo.
 func TestPrazosMagicaPropriaRecusaArquivoDeEscritas(t *testing.T) {
 	dir := t.TempDir()
-	e := abreEscritas(t, dir, 4)
+	e := openLastWrites(t, dir, 4)
 	if err := e.Set(1, 123); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := OpenPrazos(filepath.Join(dir, "expiry.idx"), 4); err == nil {
+	if _, err := OpenTTLs(filepath.Join(dir, "expiry.idx"), 4); err == nil {
 		t.Fatal("abrir o índice de escritas como prazos foi aceito")
 	}
 }
@@ -86,12 +86,12 @@ func TestPrazosMagicaPropriaRecusaArquivoDeEscritas(t *testing.T) {
 // A menor duração declarável é um minuto (60000 ms), então nenhum prazo real
 // colide com o sentinela.
 func TestSentinelaNaoColideComDuracaoReal(t *testing.T) {
-	p := abrePrazos(t, t.TempDir(), 4)
-	if err := p.Set(1, int64(PrazoImortal)); err != nil {
+	p := openTTLs(t, t.TempDir(), 4)
+	if err := p.Set(1, int64(ImmortalTTL)); err != nil {
 		t.Fatal(err)
 	}
-	if ms, conhecido := p.Get(1); !conhecido || ms != 0 {
-		t.Errorf("Get = (%d,%v): o valor do sentinela é lido como imortal", ms, conhecido)
+	if ms, known := p.Get(1); !known || ms != 0 {
+		t.Errorf("Get = (%d,%v): o valor do sentinela é lido como imortal", ms, known)
 	}
 	if err := p.Set(2, 60000); err != nil {
 		t.Fatal(err)
@@ -102,22 +102,22 @@ func TestSentinelaNaoColideComDuracaoReal(t *testing.T) {
 }
 
 func TestPrazoNegativoEhGravadoComoImortal(t *testing.T) {
-	p := abrePrazos(t, t.TempDir(), 4)
+	p := openTTLs(t, t.TempDir(), 4)
 	if err := p.Set(1, -5); err != nil {
 		t.Fatal(err)
 	}
-	if ms, conhecido := p.Get(1); !conhecido || ms != 0 {
-		t.Errorf("Get = (%d,%v), quero imortal", ms, conhecido)
+	if ms, known := p.Get(1); !known || ms != 0 {
+		t.Errorf("Get = (%d,%v), quero imortal", ms, known)
 	}
 }
 
 func TestPrazosCresceParaRowIDAlem(t *testing.T) {
-	p := abrePrazos(t, t.TempDir(), 4)
-	const alto = types.RowID(5000)
-	if err := p.Set(alto, 180000); err != nil {
+	p := openTTLs(t, t.TempDir(), 4)
+	const high = types.RowID(5000)
+	if err := p.Set(high, 180000); err != nil {
 		t.Fatal(err)
 	}
-	if ms, conhecido := p.Get(alto); !conhecido || ms != 180000 {
-		t.Errorf("Get(%d) = (%d,%v)", alto, ms, conhecido)
+	if ms, known := p.Get(high); !known || ms != 180000 {
+		t.Errorf("Get(%d) = (%d,%v)", high, ms, known)
 	}
 }

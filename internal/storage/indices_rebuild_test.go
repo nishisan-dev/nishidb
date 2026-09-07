@@ -155,7 +155,7 @@ func TestOPontoFixoCaiQuandoOIndiceSaiDeDisco(t *testing.T) {
 
 	// A expulsão da janela em forma mínima: o .sidx sai de disco e o segmento
 	// continua no dataset.
-	if err := os.Remove(segindex.CaminhoSelado(dir+"/data", alvo)); err != nil {
+	if err := os.Remove(segindex.SealedPath(dir+"/data", alvo)); err != nil {
 		t.Fatalf("remover o índice do segmento %d: %v", alvo, err)
 	}
 	if feitos := passadaDeReconstrucao(t, s); feitos != 1 {
@@ -278,7 +278,7 @@ func TestOSegmentoAposentadoNoMeioDaPassadaNaoDerrubaOLaco(t *testing.T) {
 // o mesmo: com o descritor ainda em cache, o pread sobre o arquivo já removido
 // devolve os bytes certos — foi assim que a primeira versão deste teste
 // reconstruiu com sucesso o índice de um segmento que já não existia. O erro que
-// o laço precisa tolerar só aparece depois do FechaSegmento.
+// o laço precisa tolerar só aparece depois do CloseSegment.
 func aposenta(t *testing.T, s *Store, dir string, seg uint32) {
 	t.Helper()
 	if err := s.fechaODescritorEApaga(seg, caminhoCanonicoDoSegmento(dir+"/data", seg)); err != nil {
@@ -320,7 +320,7 @@ func TestAReconstrucaoInterrompidaNaoPublicaIndiceParcial(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("ConstroiIndiceDoSegmento com ctx cancelado: err = %v, quero context.Canceled", err)
 	}
-	if _, err := os.Stat(segindex.CaminhoSelado(dir+"/data", alvo)); !os.IsNotExist(err) {
+	if _, err := os.Stat(segindex.SealedPath(dir+"/data", alvo)); !os.IsNotExist(err) {
 		t.Errorf("Stat do .sidx depois de uma varredura cancelada = %v, quero IsNotExist: um índice de varredura "+
 			"parcial é imutável e falso negativo para sempre", err)
 	}
@@ -474,11 +474,11 @@ func TestOMapeamentoAbertoAntesDaReescritaNaoEhPublicado(t *testing.T) {
 	s2.selMu.RLock()
 	geracao := s2.selGeracao
 	s2.selMu.RUnlock()
-	velho, err := segindex.AbreSelado(segindex.CaminhoSelado(dir+"/data", alvo))
+	velho, err := segindex.OpenSealed(segindex.SealedPath(dir+"/data", alvo))
 	if err != nil {
-		t.Fatalf("AbreSelado do índice antigo: %v", err)
+		t.Fatalf("OpenSealed do índice antigo: %v", err)
 	}
-	if campos := velho.Campos(); len(campos) != 1 {
+	if campos := velho.Fields(); len(campos) != 1 {
 		t.Fatalf("montagem: o mapeamento antigo cobre %v; o teste precisa dele SEM a seção do campo novo", campos)
 	}
 
@@ -513,7 +513,7 @@ func camposDoSeladoEmCache(t *testing.T, s *Store, seg uint32) []types.FieldID {
 	if sel == nil {
 		t.Fatalf("o segmento %d não tem índice em cache depois do garanteSelado", seg)
 	}
-	return sel.Campos()
+	return sel.Fields()
 }
 
 // TestOSegmentoQueVirouCorrenteEntreAFotografiaEAVarreduraNaoMataOLaco fecha a
@@ -575,7 +575,7 @@ func TestAReconstrucaoRecusaSegmentoSeladoComCorrupcaoNoMeio(t *testing.T) {
 
 	// O segmento selado perde o índice (fica pendente) e ganha um byte podre no
 	// MEIO do dado — depois do header do segmento, longe do fim.
-	caminhoSidx := segindex.CaminhoSelado(filepath.Join(dir, "data"), alvo)
+	caminhoSidx := segindex.SealedPath(filepath.Join(dir, "data"), alvo)
 	if err := os.Remove(caminhoSidx); err != nil {
 		t.Fatal(err)
 	}

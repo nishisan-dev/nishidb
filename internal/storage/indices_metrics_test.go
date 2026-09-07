@@ -39,7 +39,7 @@ func totalDeSegmentos(t *testing.T, s *Store) int64 {
 // moram em data/, medido por FORA do Store.
 //
 // A lista de extensões é escrita AQUI à mão, e essa duplicação é deliberada:
-// perguntar ao segindex.EhArquivoDeIndice — o predicado que a produção usa —
+// perguntar ao segindex.IsIndexFile — o predicado que a produção usa —
 // faria o oráculo concordar com a implementação por construção, e a pergunta em
 // julgamento é exatamente "quais arquivos entram na conta?". É o mesmo argumento
 // que faz o oráculo de storage_bytes somar os .dat por fora em vez de perguntar
@@ -251,7 +251,7 @@ func TestOCrcDivergenteContaUmDegrauEEnumeraSempre(t *testing.T) {
 
 	// A corrupção acontece ANTES de o arquivo ser aberto, que é o caminho real:
 	// um .sidx que já estava podre em disco quando a consulta chegou.
-	caminho := segindex.CaminhoSelado(filepath.Join(dir, "data"), alvo)
+	caminho := segindex.SealedPath(filepath.Join(dir, "data"), alvo)
 	f, err := os.OpenFile(caminho, os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatal(err)
@@ -483,7 +483,7 @@ func TestAPassadaQueFalhaPreservaORetratoAnterior(t *testing.T) {
 
 	segs := selados(t, hist)
 	alvo := segs[len(segs)-1]
-	caminho := segindex.CaminhoSelado(hist.dirDeDados(), alvo)
+	caminho := segindex.SealedPath(hist.dirDeDados(), alvo)
 	if err := os.Remove(caminho); err != nil {
 		t.Fatalf("montagem: remover %s: %v", caminho, err)
 	}
@@ -534,7 +534,7 @@ func TestOGaugeDeEstadosEhCegoAIndicePodre(t *testing.T) {
 		}
 		campo := campoDoDicionario(t, s, "node")
 		for seg := uint32(1); seg <= uint32(corromper); seg++ {
-			corrompeOUltimoByte(t, segindex.CaminhoSelado(filepath.Join(dir, "data"), seg))
+			corrompeOUltimoByte(t, segindex.SealedPath(filepath.Join(dir, "data"), seg))
 		}
 		// A passada de pendência é o que publica os estados; sem ela o retrato
 		// nasce zerado e a comparação abaixo seria entre dois nadas.

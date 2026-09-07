@@ -9,8 +9,8 @@
 //
 // O registry é PULL. Os contadores que já existem no projeto (materializer,
 // executor, planner, Store.Stats) NÃO são copiados para cá: são lidos na hora
-// do scrape, por um Coletor. Copiar o estado criaria um segundo contador com o
-// mesmo nome de spec, e o próprio código já registra que isso é bug de
+// do scrape, por um Collector. Copiar o estado criaria um segundo contador
+// com o mesmo nome de spec, e o próprio código já registra que isso é bug de
 // observabilidade — em produção alguém lê o errado.
 //
 // Registry é seguro para uso concorrente. A ordem de emissão é estável entre
@@ -28,25 +28,25 @@ import (
 	"sync/atomic"
 )
 
-// Tipo é o tipo Prometheus da família.
-type Tipo int
+// Type é o tipo Prometheus da família.
+type Type int
 
 // Os três tipos que o formato de exposição do Prometheus reconhece e que este
 // produto usa: contador monotônico, medidor e histograma de buckets fixos.
 const (
-	TipoContador Tipo = iota
-	TipoMedidor
-	TipoHistograma
+	TypeCounter Type = iota
+	TypeGauge
+	TypeHistogram
 )
 
-// nomeDoTipo é o que sai no `# TYPE`.
-func nomeDoTipo(t Tipo) string {
+// typeName é o que sai no `# TYPE`.
+func typeName(t Type) string {
 	switch t {
-	case TipoContador:
+	case TypeCounter:
 		return "counter"
-	case TipoMedidor:
+	case TypeGauge:
 		return "gauge"
-	case TipoHistograma:
+	case TypeHistogram:
 		return "histogram"
 	}
 	return "untyped"
@@ -54,206 +54,206 @@ func nomeDoTipo(t Tipo) string {
 
 // Label é um par nome/valor de uma série.
 type Label struct {
-	Nome  string
-	Valor string
+	Name  string
+	Value string
 }
 
-// Amostra é uma linha de exposição já resolvida.
+// Sample é uma linha de exposição já resolvida.
 //
-// Familia e Nome são separados por causa do histograma: as linhas se chamam
+// Family e Name são separados por causa do histograma: as linhas se chamam
 // `x_bucket`, `x_sum` e `x_count`, mas o `# HELP`/`# TYPE` sai UMA vez sob o
 // nome-base `x`. Emitir cabeçalho por sufixo faz o Prometheus recusar o
 // scrape inteiro, não só a linha.
-type Amostra struct {
-	Familia string
-	Nome    string
-	Ajuda   string
-	Tipo    Tipo
-	Labels  []Label
-	Valor   float64
+type Sample struct {
+	Family string
+	Name   string
+	Help   string
+	Type   Type
+	Labels []Label
+	Value  float64
 }
 
-// Coletor produz amostras no instante do scrape.
-type Coletor interface {
-	Coleta() []Amostra
+// Collector produz amostras no instante do scrape.
+type Collector interface {
+	Collect() []Sample
 }
 
-// ColetorFunc adapta uma função a Coletor.
-type ColetorFunc func() []Amostra
+// CollectorFunc adapta uma função a Collector.
+type CollectorFunc func() []Sample
 
-// Coleta implementa Coletor.
-func (f ColetorFunc) Coleta() []Amostra { return f() }
+// Collect implementa Collector.
+func (f CollectorFunc) Collect() []Sample { return f() }
 
 // Registry guarda as famílias e os coletores de um processo.
 type Registry struct {
-	mu      sync.Mutex
-	ordem   []Coletor
-	porNome map[string]any
+	mu     sync.Mutex
+	order  []Collector
+	byName map[string]any
 }
 
 // NewRegistry constrói um registry vazio.
 func NewRegistry() *Registry {
-	return &Registry{porNome: make(map[string]any)}
+	return &Registry{byName: make(map[string]any)}
 }
 
-// LimitesPadrao são os buckets de latência de consulta. Cobrem a faixa dos
+// DefaultBuckets são os buckets de latência de consulta. Cobrem a faixa dos
 // tetos do §89 (10 ms no point lookup) e do §90 (50 ms no indexado), com
 // resolução suficiente abaixo deles para que a violação apareça antes de
 // virar incidente — o p95 medido no M1 foi de 18 µs e 522 µs.
-var LimitesPadrao = []float64{
+var DefaultBuckets = []float64{
 	0.00005, 0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005,
 	0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10,
 }
 
-// Coletor registra uma fonte pull. É por aqui que os contadores existentes do
+// Register registra uma fonte pull. É por aqui que os contadores existentes do
 // projeto chegam ao /metrics sem serem duplicados.
-func (r *Registry) Coletor(c Coletor) {
+func (r *Registry) Register(c Collector) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.ordem = append(r.ordem, c)
+	r.order = append(r.order, c)
 }
 
-// registra devolve a família já existente com esse nome, ou instala a nova.
-// Nome repetido com tipo diferente é bug de programação e entra em pânico:
+// register devolve a família já existente com esse nome, ou instala a nova.
+// Name repetido com tipo diferente é bug de programação e entra em pânico:
 // duas famílias com o mesmo nome produzem um scrape que o Prometheus recusa.
-func registra[F any](r *Registry, nome string, nova func() *F) *F {
+func register[F any](r *Registry, name string, create func() *F) *F {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if existente, ok := r.porNome[nome]; ok {
-		f, ok := existente.(*F)
+	if existing, ok := r.byName[name]; ok {
+		f, ok := existing.(*F)
 		if !ok {
-			panic("metrics: família " + nome + " já registrada com outro tipo")
+			panic("metrics: família " + name + " já registrada com outro tipo")
 		}
 		return f
 	}
-	f := nova()
-	r.porNome[nome] = f
-	r.ordem = append(r.ordem, any(f).(Coletor))
+	f := create()
+	r.byName[name] = f
+	r.order = append(r.order, any(f).(Collector))
 	return f
 }
 
-// Contador registra (ou recupera) uma família de contadores monotônicos.
-func (r *Registry) Contador(nome, ajuda string, labels ...string) *FamiliaContador {
-	return registra(r, nome, func() *FamiliaContador {
-		return &FamiliaContador{
-			base:   base{nome: nome, ajuda: ajuda, labels: labels},
-			filhos: make(map[string]*SerieContador),
+// Counter registra (ou recupera) uma família de contadores monotônicos.
+func (r *Registry) Counter(name, help string, labels ...string) *CounterFamily {
+	return register(r, name, func() *CounterFamily {
+		return &CounterFamily{
+			base:     base{name: name, help: help, labels: labels},
+			children: make(map[string]*CounterSeries),
 		}
 	})
 }
 
-// Medidor registra (ou recupera) uma família de medidores.
-func (r *Registry) Medidor(nome, ajuda string, labels ...string) *FamiliaMedidor {
-	return registra(r, nome, func() *FamiliaMedidor {
-		return &FamiliaMedidor{
-			base:   base{nome: nome, ajuda: ajuda, labels: labels},
-			filhos: make(map[string]*SerieMedidor),
+// Gauge registra (ou recupera) uma família de medidores.
+func (r *Registry) Gauge(name, help string, labels ...string) *GaugeFamily {
+	return register(r, name, func() *GaugeFamily {
+		return &GaugeFamily{
+			base:     base{name: name, help: help, labels: labels},
+			children: make(map[string]*GaugeSeries),
 		}
 	})
 }
 
-// Histograma registra (ou recupera) uma família de histogramas. limites são
-// os limites superiores dos buckets, em ordem crescente; o bucket +Inf é
-// acrescentado sozinho.
-func (r *Registry) Histograma(nome, ajuda string, limites []float64, labels ...string) *FamiliaHistograma {
-	return registra(r, nome, func() *FamiliaHistograma {
-		lim := make([]float64, len(limites))
-		copy(lim, limites)
-		return &FamiliaHistograma{
-			base:    base{nome: nome, ajuda: ajuda, labels: labels},
-			limites: lim,
-			filhos:  make(map[string]*SerieHistograma),
+// Histogram registra (ou recupera) uma família de histogramas. buckets são
+// os limites superiores, em ordem crescente; o bucket +Inf é acrescentado
+// sozinho.
+func (r *Registry) Histogram(name, help string, buckets []float64, labels ...string) *HistogramFamily {
+	return register(r, name, func() *HistogramFamily {
+		bucketsCopy := make([]float64, len(buckets))
+		copy(bucketsCopy, buckets)
+		return &HistogramFamily{
+			base:     base{name: name, help: help, labels: labels},
+			buckets:  bucketsCopy,
+			children: make(map[string]*HistogramSeries),
 		}
 	})
 }
 
 // base é o que toda família tem.
 type base struct {
-	nome   string
-	ajuda  string
+	name   string
+	help   string
 	labels []string
 }
 
-// paresDeLabel casa os nomes declarados com os valores recebidos. Quantidade
+// labelPairs casa os nomes declarados com os valores recebidos. Quantidade
 // errada é panic e não erro: a lista de labels é literal no código, então
 // errá-la é bug de programação, não estado de runtime que dê para tratar.
-func (b *base) paresDeLabel(valores []string) []Label {
-	if len(valores) != len(b.labels) {
-		panic("metrics: " + b.nome + " espera " + strconv.Itoa(len(b.labels)) +
-			" label(s), recebeu " + strconv.Itoa(len(valores)))
+func (b *base) labelPairs(values []string) []Label {
+	if len(values) != len(b.labels) {
+		panic("metrics: " + b.name + " espera " + strconv.Itoa(len(b.labels)) +
+			" label(s), recebeu " + strconv.Itoa(len(values)))
 	}
-	if len(valores) == 0 {
+	if len(values) == 0 {
 		return nil
 	}
-	out := make([]Label, len(valores))
-	for i, v := range valores {
-		out[i] = Label{Nome: b.labels[i], Valor: v}
+	out := make([]Label, len(values))
+	for i, v := range values {
+		out[i] = Label{Name: b.labels[i], Value: v}
 	}
 	return out
 }
 
-// chave identifica a série. \xff não aparece em UTF-8 válido, então não há
+// key identifica a série. \xff não aparece em UTF-8 válido, então não há
 // como dois conjuntos de valores distintos colidirem.
-func chave(valores []string) string { return strings.Join(valores, "\xff") }
+func key(values []string) string { return strings.Join(values, "\xff") }
 
 // --- contador ---
 
-// FamiliaContador é uma família de contadores monotônicos.
-type FamiliaContador struct {
+// CounterFamily é uma família de contadores monotônicos.
+type CounterFamily struct {
 	base
-	mu     sync.RWMutex
-	filhos map[string]*SerieContador
-	ordem  []*SerieContador
+	mu       sync.RWMutex
+	children map[string]*CounterSeries
+	order    []*CounterSeries
 }
 
-// SerieContador é um contador de uma combinação de labels.
-type SerieContador struct {
+// CounterSeries é um contador de uma combinação de labels.
+type CounterSeries struct {
 	labels []Label
 	v      atomic.Uint64
 }
 
-// Com devolve a série dos valores de label dados, criando-a se preciso.
-func (f *FamiliaContador) Com(valores ...string) *SerieContador {
-	k := chave(valores)
+// With devolve a série dos valores de label dados, criando-a se preciso.
+func (f *CounterFamily) With(values ...string) *CounterSeries {
+	k := key(values)
 	f.mu.RLock()
-	s, ok := f.filhos[k]
+	s, ok := f.children[k]
 	f.mu.RUnlock()
 	if ok {
 		return s
 	}
-	labels := f.paresDeLabel(valores)
+	labels := f.labelPairs(values)
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if s, ok := f.filhos[k]; ok {
+	if s, ok := f.children[k]; ok {
 		return s
 	}
-	s = &SerieContador{labels: labels}
-	f.filhos[k] = s
-	f.ordem = append(f.ordem, s)
+	s = &CounterSeries{labels: labels}
+	f.children[k] = s
+	f.order = append(f.order, s)
 	return s
 }
 
-// Sozinha é o açúcar para a família sem labels.
-func (f *FamiliaContador) Sozinha() *SerieContador { return f.Com() }
+// Unlabeled é o açúcar para a família sem labels.
+func (f *CounterFamily) Unlabeled() *CounterSeries { return f.With() }
 
 // Inc soma 1.
-func (s *SerieContador) Inc() { s.v.Add(1) }
+func (s *CounterSeries) Inc() { s.v.Add(1) }
 
 // Add soma n.
-func (s *SerieContador) Add(n uint64) { s.v.Add(n) }
+func (s *CounterSeries) Add(n uint64) { s.v.Add(n) }
 
-// Valor lê o acumulado.
-func (s *SerieContador) Valor() uint64 { return s.v.Load() }
+// Value lê o acumulado.
+func (s *CounterSeries) Value() uint64 { return s.v.Load() }
 
-// Coleta implementa Coletor.
-func (f *FamiliaContador) Coleta() []Amostra {
+// Collect implementa Collector.
+func (f *CounterFamily) Collect() []Sample {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	out := make([]Amostra, 0, len(f.ordem))
-	for _, s := range f.ordem {
-		out = append(out, Amostra{
-			Familia: f.nome, Nome: f.nome, Ajuda: f.ajuda, Tipo: TipoContador,
-			Labels: s.labels, Valor: float64(s.v.Load()),
+	out := make([]Sample, 0, len(f.order))
+	for _, s := range f.order {
+		out = append(out, Sample{
+			Family: f.name, Name: f.name, Help: f.help, Type: TypeCounter,
+			Labels: s.labels, Value: float64(s.v.Load()),
 		})
 	}
 	return out
@@ -261,48 +261,48 @@ func (f *FamiliaContador) Coleta() []Amostra {
 
 // --- medidor ---
 
-// FamiliaMedidor é uma família de medidores.
-type FamiliaMedidor struct {
+// GaugeFamily é uma família de medidores.
+type GaugeFamily struct {
 	base
-	mu     sync.RWMutex
-	filhos map[string]*SerieMedidor
-	ordem  []*SerieMedidor
+	mu       sync.RWMutex
+	children map[string]*GaugeSeries
+	order    []*GaugeSeries
 }
 
-// SerieMedidor é um medidor de uma combinação de labels. O valor é float64
+// GaugeSeries é um medidor de uma combinação de labels. O valor é float64
 // guardado em bits para caber num atômico: lag, offset e RSS são inteiros
 // grandes, mas taxa e timestamp são fracionários.
-type SerieMedidor struct {
+type GaugeSeries struct {
 	labels []Label
 	bits   atomic.Uint64
 }
 
-// Com devolve a série dos valores de label dados, criando-a se preciso.
-func (f *FamiliaMedidor) Com(valores ...string) *SerieMedidor {
-	k := chave(valores)
+// With devolve a série dos valores de label dados, criando-a se preciso.
+func (f *GaugeFamily) With(values ...string) *GaugeSeries {
+	k := key(values)
 	f.mu.RLock()
-	s, ok := f.filhos[k]
+	s, ok := f.children[k]
 	f.mu.RUnlock()
 	if ok {
 		return s
 	}
-	labels := f.paresDeLabel(valores)
+	labels := f.labelPairs(values)
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if s, ok := f.filhos[k]; ok {
+	if s, ok := f.children[k]; ok {
 		return s
 	}
-	s = &SerieMedidor{labels: labels}
-	f.filhos[k] = s
-	f.ordem = append(f.ordem, s)
+	s = &GaugeSeries{labels: labels}
+	f.children[k] = s
+	f.order = append(f.order, s)
 	return s
 }
 
-// Sozinha é o açúcar para a família sem labels.
-func (f *FamiliaMedidor) Sozinha() *SerieMedidor { return f.Com() }
+// Unlabeled é o açúcar para a família sem labels.
+func (f *GaugeFamily) Unlabeled() *GaugeSeries { return f.With() }
 
 // Set fixa o valor.
-func (s *SerieMedidor) Set(v float64) { s.bits.Store(math.Float64bits(v)) }
+func (s *GaugeSeries) Set(v float64) { s.bits.Store(math.Float64bits(v)) }
 
 // Add soma delta (negativo para subtrair).
 //
@@ -311,28 +311,28 @@ func (s *SerieMedidor) Set(v float64) { s.bits.Store(math.Float64bits(v)) }
 // calculado fora perderia atualizações concorrentes, deixando o gauge preso num
 // valor que nunca mais desce. O CAS em laço é o preço de guardar float em bits,
 // e é irrelevante aqui: observa-se duas vezes por consulta.
-func (s *SerieMedidor) Add(delta float64) {
+func (s *GaugeSeries) Add(delta float64) {
 	for {
-		velho := s.bits.Load()
-		novo := math.Float64bits(math.Float64frombits(velho) + delta)
-		if s.bits.CompareAndSwap(velho, novo) {
+		old := s.bits.Load()
+		next := math.Float64bits(math.Float64frombits(old) + delta)
+		if s.bits.CompareAndSwap(old, next) {
 			return
 		}
 	}
 }
 
-// Valor lê o valor corrente.
-func (s *SerieMedidor) Valor() float64 { return math.Float64frombits(s.bits.Load()) }
+// Value lê o valor corrente.
+func (s *GaugeSeries) Value() float64 { return math.Float64frombits(s.bits.Load()) }
 
-// Coleta implementa Coletor.
-func (f *FamiliaMedidor) Coleta() []Amostra {
+// Collect implementa Collector.
+func (f *GaugeFamily) Collect() []Sample {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	out := make([]Amostra, 0, len(f.ordem))
-	for _, s := range f.ordem {
-		out = append(out, Amostra{
-			Familia: f.nome, Nome: f.nome, Ajuda: f.ajuda, Tipo: TipoMedidor,
-			Labels: s.labels, Valor: s.Valor(),
+	out := make([]Sample, 0, len(f.order))
+	for _, s := range f.order {
+		out = append(out, Sample{
+			Family: f.name, Name: f.name, Help: f.help, Type: TypeGauge,
+			Labels: s.labels, Value: s.Value(),
 		})
 	}
 	return out
@@ -340,106 +340,107 @@ func (f *FamiliaMedidor) Coleta() []Amostra {
 
 // --- histograma ---
 
-// FamiliaHistograma é uma família de histogramas de buckets fixos.
-type FamiliaHistograma struct {
+// HistogramFamily é uma família de histogramas de buckets fixos.
+type HistogramFamily struct {
 	base
-	limites []float64
-	mu      sync.RWMutex
-	filhos  map[string]*SerieHistograma
-	ordem   []*SerieHistograma
+	buckets  []float64
+	mu       sync.RWMutex
+	children map[string]*HistogramSeries
+	order    []*HistogramSeries
 }
 
-// SerieHistograma acumula contagem por bucket, soma e total.
+// HistogramSeries acumula contagem por bucket, soma e total.
 //
 // Usa mutex e não atômicos porque soma e buckets precisam avançar juntos: um
 // scrape que pegasse a soma nova com a contagem velha produziria média errada.
 // O custo é irrelevante — observa-se uma vez por consulta, não por evento.
-type SerieHistograma struct {
+type HistogramSeries struct {
 	labels []Label
-	// limites é a fatia da família, compartilhada e só de leitura. Vive
-	// também aqui para que Observa não precise da família — o chamador
+	// buckets é a fatia da família, compartilhada e só de leitura. Vive
+	// também aqui para que Observe não precise da família — o chamador
 	// guarda a série, não a família, no laço quente.
-	limites   []float64
-	mu        sync.Mutex
-	contagens []uint64
-	soma      float64
-	total     uint64
+	buckets []float64
+	mu      sync.Mutex
+	counts  []uint64
+	sum     float64
+	total   uint64
 }
 
-// Com devolve a série dos valores de label dados, criando-a se preciso.
-func (f *FamiliaHistograma) Com(valores ...string) *SerieHistograma {
-	k := chave(valores)
+// With devolve a série dos valores de label dados, criando-a se preciso.
+func (f *HistogramFamily) With(values ...string) *HistogramSeries {
+	k := key(values)
 	f.mu.RLock()
-	s, ok := f.filhos[k]
+	s, ok := f.children[k]
 	f.mu.RUnlock()
 	if ok {
 		return s
 	}
-	labels := f.paresDeLabel(valores)
+	labels := f.labelPairs(values)
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if s, ok := f.filhos[k]; ok {
+	if s, ok := f.children[k]; ok {
 		return s
 	}
-	s = &SerieHistograma{labels: labels, limites: f.limites, contagens: make([]uint64, len(f.limites))}
-	f.filhos[k] = s
-	f.ordem = append(f.ordem, s)
+	s = &HistogramSeries{labels: labels, buckets: f.buckets, counts: make([]uint64, len(f.buckets))}
+	f.children[k] = s
+	f.order = append(f.order, s)
 	return s
 }
 
-// Sozinha é o açúcar para a família sem labels.
-func (f *FamiliaHistograma) Sozinha() *SerieHistograma { return f.Com() }
+// Unlabeled é o açúcar para a família sem labels.
+func (f *HistogramFamily) Unlabeled() *HistogramSeries { return f.With() }
 
-// Observa registra uma observação na série.
-func (s *SerieHistograma) Observa(v float64) {
+// Observe registra uma observação na série.
+func (s *HistogramSeries) Observe(v float64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for i := range s.contagens {
-		if v <= s.limites[i] {
-			s.contagens[i]++
+	for i := range s.counts {
+		if v <= s.buckets[i] {
+			s.counts[i]++
 		}
 	}
-	s.soma += v
+	s.sum += v
 	s.total++
 }
 
-// Coleta implementa Coletor. Os buckets são CUMULATIVOS, como o formato exige.
-func (f *FamiliaHistograma) Coleta() []Amostra {
+// Collect implementa Collector. Os buckets são CUMULATIVOS, como o formato
+// exige.
+func (f *HistogramFamily) Collect() []Sample {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	out := make([]Amostra, 0, len(f.ordem)*(len(f.limites)+3))
-	for _, s := range f.ordem {
+	out := make([]Sample, 0, len(f.order)*(len(f.buckets)+3))
+	for _, s := range f.order {
 		s.mu.Lock()
-		contagens := make([]uint64, len(s.contagens))
-		copy(contagens, s.contagens)
-		soma, total := s.soma, s.total
+		counts := make([]uint64, len(s.counts))
+		copy(counts, s.counts)
+		sum, total := s.sum, s.total
 		s.mu.Unlock()
 
-		for i, lim := range f.limites {
-			out = append(out, Amostra{
-				Familia: f.nome, Nome: f.nome + "_bucket", Ajuda: f.ajuda, Tipo: TipoHistograma,
-				Labels: append(copiaLabels(s.labels), Label{Nome: "le", Valor: formataValor(lim)}),
-				Valor:  float64(contagens[i]),
+		for i, bound := range f.buckets {
+			out = append(out, Sample{
+				Family: f.name, Name: f.name + "_bucket", Help: f.help, Type: TypeHistogram,
+				Labels: append(copyLabels(s.labels), Label{Name: "le", Value: formatValue(bound)}),
+				Value:  float64(counts[i]),
 			})
 		}
-		out = append(out, Amostra{
-			Familia: f.nome, Nome: f.nome + "_bucket", Ajuda: f.ajuda, Tipo: TipoHistograma,
-			Labels: append(copiaLabels(s.labels), Label{Nome: "le", Valor: "+Inf"}),
-			Valor:  float64(total),
+		out = append(out, Sample{
+			Family: f.name, Name: f.name + "_bucket", Help: f.help, Type: TypeHistogram,
+			Labels: append(copyLabels(s.labels), Label{Name: "le", Value: "+Inf"}),
+			Value:  float64(total),
 		})
-		out = append(out, Amostra{
-			Familia: f.nome, Nome: f.nome + "_sum", Ajuda: f.ajuda, Tipo: TipoHistograma,
-			Labels: s.labels, Valor: soma,
+		out = append(out, Sample{
+			Family: f.name, Name: f.name + "_sum", Help: f.help, Type: TypeHistogram,
+			Labels: s.labels, Value: sum,
 		})
-		out = append(out, Amostra{
-			Familia: f.nome, Nome: f.nome + "_count", Ajuda: f.ajuda, Tipo: TipoHistograma,
-			Labels: s.labels, Valor: float64(total),
+		out = append(out, Sample{
+			Family: f.name, Name: f.name + "_count", Help: f.help, Type: TypeHistogram,
+			Labels: s.labels, Value: float64(total),
 		})
 	}
 	return out
 }
 
-func copiaLabels(in []Label) []Label {
+func copyLabels(in []Label) []Label {
 	out := make([]Label, len(in), len(in)+1)
 	copy(out, in)
 	return out
@@ -450,60 +451,60 @@ func copiaLabels(in []Label) []Label {
 // WriteTo emite o formato textual do Prometheus (§93).
 func (r *Registry) WriteTo(w io.Writer) (int64, error) {
 	r.mu.Lock()
-	coletores := make([]Coletor, len(r.ordem))
-	copy(coletores, r.ordem)
+	collectors := make([]Collector, len(r.order))
+	copy(collectors, r.order)
 	r.mu.Unlock()
 
 	var sb strings.Builder
-	vistas := make(map[string]bool)
-	for _, c := range coletores {
-		for _, a := range c.Coleta() {
-			if !vistas[a.Familia] {
-				vistas[a.Familia] = true
-				if a.Ajuda != "" {
+	seen := make(map[string]bool)
+	for _, c := range collectors {
+		for _, a := range c.Collect() {
+			if !seen[a.Family] {
+				seen[a.Family] = true
+				if a.Help != "" {
 					sb.WriteString("# HELP ")
-					sb.WriteString(a.Familia)
+					sb.WriteString(a.Family)
 					sb.WriteByte(' ')
-					sb.WriteString(escapaAjuda(a.Ajuda))
+					sb.WriteString(escapeHelp(a.Help))
 					sb.WriteByte('\n')
 				}
 				sb.WriteString("# TYPE ")
-				sb.WriteString(a.Familia)
+				sb.WriteString(a.Family)
 				sb.WriteByte(' ')
-				sb.WriteString(nomeDoTipo(a.Tipo))
+				sb.WriteString(typeName(a.Type))
 				sb.WriteByte('\n')
 			}
-			escreveAmostra(&sb, a)
+			writeSample(&sb, a)
 		}
 	}
 	n, err := io.WriteString(w, sb.String())
 	return int64(n), err
 }
 
-func escreveAmostra(sb *strings.Builder, a Amostra) {
-	sb.WriteString(a.Nome)
+func writeSample(sb *strings.Builder, a Sample) {
+	sb.WriteString(a.Name)
 	if len(a.Labels) > 0 {
 		sb.WriteByte('{')
 		for i, l := range a.Labels {
 			if i > 0 {
 				sb.WriteByte(',')
 			}
-			sb.WriteString(l.Nome)
+			sb.WriteString(l.Name)
 			sb.WriteString(`="`)
-			sb.WriteString(escapaValorDeLabel(l.Valor))
+			sb.WriteString(escapeLabelValue(l.Value))
 			sb.WriteByte('"')
 		}
 		sb.WriteByte('}')
 	}
 	sb.WriteByte(' ')
-	sb.WriteString(formataValor(a.Valor))
+	sb.WriteString(formatValue(a.Value))
 	sb.WriteByte('\n')
 }
 
-// formataValor evita notação científica para inteiros. 1e7 é aceito pelo
+// formatValue evita notação científica para inteiros. 1e7 é aceito pelo
 // Prometheus, mas "1e+07" quebra o olho de quem lê o scrape na mão — e o
 // scrape lido na mão é a primeira ferramenta de diagnóstico que existe.
-func formataValor(v float64) string {
+func formatValue(v float64) string {
 	switch {
 	case math.IsInf(v, 1):
 		return "+Inf"
@@ -518,10 +519,10 @@ func formataValor(v float64) string {
 	return strconv.FormatFloat(v, 'g', -1, 64)
 }
 
-// escapaValorDeLabel escapa barra, aspa e quebra de linha. Sem isso, um valor
+// escapeLabelValue escapa barra, aspa e quebra de linha. Sem isso, um valor
 // vindo de config (nome de tópico, motivo de erro) derruba o scrape INTEIRO,
 // não só a própria linha.
-func escapaValorDeLabel(s string) string {
+func escapeLabelValue(s string) string {
 	if !strings.ContainsAny(s, "\\\"\n") {
 		return s
 	}
@@ -542,8 +543,8 @@ func escapaValorDeLabel(s string) string {
 	return sb.String()
 }
 
-// escapaAjuda escapa barra e quebra de linha (aspa não é especial no HELP).
-func escapaAjuda(s string) string {
+// escapeHelp escapa barra e quebra de linha (aspa não é especial no HELP).
+func escapeHelp(s string) string {
 	if !strings.ContainsAny(s, "\\\n") {
 		return s
 	}

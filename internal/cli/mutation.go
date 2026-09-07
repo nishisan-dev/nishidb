@@ -17,7 +17,7 @@ import (
 // (flock exclusivo por processo), e falam POST em vez de GET: o corpo é
 // {"dataset":"..."} opcional (ausente = todos os datasets do servidor, na
 // ordem determinística da subida) e o padrão de erro é o do query_remota —
-// CorpoErro decodificado, mensagem no stderr, código traduzido pela MESMA
+// ErrorBody decodificado, mensagem no stderr, código traduzido pela MESMA
 // tabela de exit codes do resto do binário.
 //
 // Credencial e TLS (Task B6): os dois comandos aceitam --user, --tls-ca e
@@ -54,7 +54,7 @@ func runCompact(args []string, amb Ambiente) int {
 		dataset = fs.Arg(0)
 	}
 
-	var resp protocol.RespostaCompact
+	var resp protocol.CompactResponse
 	if code := postaMutacao("compact", *servidor, "/v1/compact", dataset, cred, &resp, amb); code != ExitOK {
 		return code
 	}
@@ -87,7 +87,7 @@ func runCheckpoint(args []string, amb Ambiente) int {
 		dataset = fs.Arg(0)
 	}
 
-	var resp protocol.RespostaCheckpoint
+	var resp protocol.CheckpointResponse
 	if code := postaMutacao("checkpoint", *servidor, "/v1/checkpoint", dataset, cred, &resp, amb); code != ExitOK {
 		return code
 	}
@@ -101,7 +101,7 @@ func runCheckpoint(args []string, amb Ambiente) int {
 // leRequisicaoDataset).
 //
 // O tratamento de erro é o do query_remota (recusaRemota, que operation.go
-// já generaliza com um parâmetro `cmd`): CorpoErro decodificado,
+// já generaliza com um parâmetro `cmd`): ErrorBody decodificado,
 // mensagem no stderr, código traduzido por codigoDoProtocolo — a MESMA
 // tabela que WRITER_FAILED (→ ExitWriter) e COMPACTION_BUSY (→ ExitUso, com
 // justificativa no comentário de codigoDoProtocolo) alimentam.
@@ -112,7 +112,7 @@ func runCheckpoint(args []string, amb Ambiente) int {
 func postaMutacao(cmd, endereco, caminho, dataset string, cred credencialRemota, destino any, amb Ambiente) int {
 	var corpo io.Reader
 	if dataset != "" {
-		b, err := json.Marshal(protocol.RequisicaoDataset{Dataset: dataset})
+		b, err := json.Marshal(protocol.DatasetRequest{Dataset: dataset})
 		if err != nil {
 			avisa(amb, "%s: %v\n", cmd, err)
 			return ExitUso
@@ -156,7 +156,7 @@ func postaMutacao(cmd, endereco, caminho, dataset string, cred credencialRemota,
 	return ExitOK
 }
 
-func escreveCompact(w io.Writer, endereco string, resp protocol.RespostaCompact) {
+func escreveCompact(w io.Writer, endereco string, resp protocol.CompactResponse) {
 	titulo(w, "servidor %s", endereco)
 	titulo(w, "")
 	linha(w, "DATASET", "SEGMENTOS", "BYTES LIDOS", "BYTES ESCRITOS", "DURAÇÃO")
@@ -166,7 +166,7 @@ func escreveCompact(w io.Writer, endereco string, resp protocol.RespostaCompact)
 	}
 }
 
-func escreveCheckpoint(w io.Writer, endereco string, resp protocol.RespostaCheckpoint) {
+func escreveCheckpoint(w io.Writer, endereco string, resp protocol.CheckpointResponse) {
 	titulo(w, "servidor %s", endereco)
 	titulo(w, "")
 	linha(w, "DATASET", "DURAÇÃO")

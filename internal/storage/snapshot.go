@@ -35,7 +35,7 @@ type registroDeSnapshots struct {
 	// instantes distintos, porque o relógio anda sem que ninguém publique.
 	porEpoca map[uint64]epocaViva
 	// menor espelha a menor chave viva de porEpoca, para que o caminho quente
-	// do writer a leia sem tomar o mutex. SemLeitor quando o mapa está vazio.
+	// do writer a leia sem tomar o mutex. NoReader quando o mapa está vazio.
 	menor atomic.Uint64
 	// menorInstante espelha o instante do snapshot mais antigo, em epoch
 	// millis, e vale ZERO quando não há leitor. Zero é um sentinela seguro
@@ -68,7 +68,7 @@ type epocaViva struct {
 
 func novoRegistroDeSnapshots() *registroDeSnapshots {
 	r := &registroDeSnapshots{porEpoca: make(map[uint64]epocaViva)}
-	r.menor.Store(versions.SemLeitor)
+	r.menor.Store(versions.NoReader)
 	r.menorBase.Store(SemPiso)
 	return r
 }
@@ -105,7 +105,7 @@ func (r *registroDeSnapshots) fecha(epoca uint64) {
 }
 
 func (r *registroDeSnapshots) recalculaLocked() {
-	menor := versions.SemLeitor
+	menor := versions.NoReader
 	menorBase := SemPiso
 	var menorMs int64
 	for e, v := range r.porEpoca {
@@ -160,7 +160,7 @@ func (r *registroDeSnapshots) instanteMaisAntigoVivo() (time.Time, bool) {
 	return time.UnixMilli(ms), true
 }
 
-// menorEpocaViva devolve versoes.SemLeitor quando nenhuma consulta está aberta.
+// menorEpocaViva devolve versions.NoReader quando nenhuma consulta está aberta.
 func (r *registroDeSnapshots) menorEpocaViva() uint64 { return r.menor.Load() }
 
 // AbreSnapshot fixa o universo da consulta: a versão, o relógio, o teto e o
@@ -196,7 +196,7 @@ func (s *Store) FechaSnapshot(snap types.Snapshot) {
 
 // podaVersoes descarta do journal o que nenhum leitor mais alcança.
 func (s *Store) podaVersoes() {
-	s.vers.Poda(s.snaps.menorEpocaViva())
+	s.vers.Prune(s.snaps.menorEpocaViva())
 }
 
 // presente é o snapshot do WRITER: o instante e a época de agora, sem
@@ -222,7 +222,7 @@ func (s *Store) presente() types.Snapshot {
 // de ponta a ponta usa para provar que uma consulta devolveu o que segurava.
 // Sem eles, "a consulta fechou" e "a memória voltou" seriam a mesma afirmação
 // sem oráculo.
-func (s *Store) VersoesRetidas() int { return s.vers.Entradas() }
+func (s *Store) VersoesRetidas() int { return s.vers.Entries() }
 
 // BytesRetidos é o heap estimado do journal de versões. Ver VersoesRetidas.
 func (s *Store) BytesRetidos() int64 { return s.vers.Bytes() }
@@ -282,11 +282,11 @@ func (s *Store) invalidaOMaisAntigoSeEstourou() {
 	}
 	for s.vers.Bytes() > teto {
 		menor := s.snaps.menorEpocaViva()
-		if menor == versions.SemLeitor {
+		if menor == versions.NoReader {
 			// Journal acima do teto sem leitor nenhum: não há consulta a
 			// invalidar, e a poda comum resolve. Acontece na janela entre o
 			// último Fecha e a poda dele.
-			s.vers.Poda(versions.SemLeitor)
+			s.vers.Prune(versions.NoReader)
 			return
 		}
 		// A fronteira sobe para DEPOIS da vítima: tudo que ela via, e só ela,
@@ -294,7 +294,7 @@ func (s *Store) invalidaOMaisAntigoSeEstourou() {
 		s.snaps.invalidaAte(menor + 1)
 		s.snaps.esquece(menor)
 		s.snapsExpirados.Add(1)
-		if antes := s.vers.Entradas(); s.vers.Poda(s.snaps.menorEpocaViva()) == 0 && antes == s.vers.Entradas() {
+		if antes := s.vers.Entries(); s.vers.Prune(s.snaps.menorEpocaViva()) == 0 && antes == s.vers.Entries() {
 			// Nada saiu: insistir seria laço infinito. Acontece quando o
 			// journal está cheio de versões que o PRÓPRIO leitor seguinte
 			// ainda alcança, e aí o teto já não tem o que devolver.
@@ -323,7 +323,7 @@ func (s *Store) IdadeDoSnapshotMaisAntigo() time.Duration {
 
 // SegmentosPinados é quantos segmentos a compaction não pode aposentar porque
 // guardam versões que uma consulta ainda alcança.
-func (s *Store) SegmentosPinados() int { return s.vers.SegmentosPinados() }
+func (s *Store) SegmentosPinados() int { return s.vers.PinnedSegments() }
 
 // SnapshotsExpirados conta as consultas invalidadas pelo teto de memória do
 // journal desde a subida. Enquanto for zero, o teto está sobrando.

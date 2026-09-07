@@ -7,9 +7,9 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-func abreEscritas(t *testing.T, dir string, minRows uint64) *Escritas {
+func openLastWrites(t *testing.T, dir string, minRows uint64) *LastWrites {
 	t.Helper()
-	e, err := OpenEscritas(filepath.Join(dir, "expiry.idx"), minRows)
+	e, err := OpenLastWrites(filepath.Join(dir, "expiry.idx"), minRows)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -20,45 +20,45 @@ func abreEscritas(t *testing.T, dir string, minRows uint64) *Escritas {
 // Zero é DESCONHECIDO, nunca "vencido em 1970". A distinção é o que impede a
 // primeira varredura de apagar uma row viva cuja entrada ainda não existe.
 func TestEntradaNuncaGravadaEhDesconhecidaENaoVencida(t *testing.T) {
-	e := abreEscritas(t, t.TempDir(), 16)
+	e := openLastWrites(t, t.TempDir(), 16)
 	for _, id := range []uint64{0, 1, 15} {
-		if ms, conhecido := e.Get(types.RowID(id)); conhecido || ms != 0 {
-			t.Errorf("rowID %d: ms=%d conhecido=%v; quer 0,false", id, ms, conhecido)
+		if ms, known := e.Get(types.RowID(id)); known || ms != 0 {
+			t.Errorf("rowID %d: ms=%d known=%v; quer 0,false", id, ms, known)
 		}
 	}
 }
 
 func TestSetEGetPreservamOInstante(t *testing.T) {
-	e := abreEscritas(t, t.TempDir(), 4)
+	e := openLastWrites(t, t.TempDir(), 4)
 	const ms = 1787878442123
 	if err := e.Set(types.RowID(2), ms); err != nil {
 		t.Fatal(err)
 	}
-	got, conhecido := e.Get(types.RowID(2))
-	if !conhecido || got != ms {
-		t.Fatalf("ms=%d conhecido=%v; quer %d,true", got, conhecido, ms)
+	got, known := e.Get(types.RowID(2))
+	if !known || got != ms {
+		t.Fatalf("ms=%d known=%v; quer %d,true", got, known, ms)
 	}
 	// Vizinhos não são afetados.
-	if _, conhecido := e.Get(types.RowID(1)); conhecido {
+	if _, known := e.Get(types.RowID(1)); known {
 		t.Error("rowID 1 ficou conhecido sem ter sido gravado")
 	}
 }
 
 func TestEscritasCresceAlemDaCapacidadeInicial(t *testing.T) {
-	e := abreEscritas(t, t.TempDir(), 2)
+	e := openLastWrites(t, t.TempDir(), 2)
 	const ms = 1787878442123
 	if err := e.Set(types.RowID(5000), ms); err != nil {
 		t.Fatal(err)
 	}
-	if got, conhecido := e.Get(types.RowID(5000)); !conhecido || got != ms {
-		t.Fatalf("ms=%d conhecido=%v", got, conhecido)
+	if got, known := e.Get(types.RowID(5000)); !known || got != ms {
+		t.Fatalf("ms=%d known=%v", got, known)
 	}
 }
 
 func TestEscritasSobrevivemAReabertura(t *testing.T) {
 	dir := t.TempDir()
 	const ms = 1787878442123
-	e := abreEscritas(t, dir, 4)
+	e := openLastWrites(t, dir, 4)
 	if err := e.Set(types.RowID(3), ms); err != nil {
 		t.Fatal(err)
 	}
@@ -68,9 +68,9 @@ func TestEscritasSobrevivemAReabertura(t *testing.T) {
 	if err := e.Close(); err != nil {
 		t.Fatal(err)
 	}
-	e2 := abreEscritas(t, dir, 4)
-	if got, conhecido := e2.Get(types.RowID(3)); !conhecido || got != ms {
-		t.Fatalf("depois de reabrir: ms=%d conhecido=%v", got, conhecido)
+	e2 := openLastWrites(t, dir, 4)
+	if got, known := e2.Get(types.RowID(3)); !known || got != ms {
+		t.Fatalf("depois de reabrir: ms=%d known=%v", got, known)
 	}
 }
 
@@ -86,7 +86,7 @@ func TestMagicDeEscritasNaoAceitaOutroIndice(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := OpenEscritas(path, 4); err == nil {
+	if _, err := OpenLastWrites(path, 4); err == nil {
 		t.Fatal("um sequences.idx foi aceito como expiry.idx")
 	}
 }
