@@ -336,14 +336,14 @@ type Store struct {
 	seqs        *rowindex.Sequences
 	// escritas é nil quando o dataset não declara expiração: sem ela não há
 	// o que indexar, e abrir o arquivo custaria mmap por nada.
-	escritas *rowindex.Escritas
-	prazos   *rowindex.Prazos
+	escritas *rowindex.LastWrites
+	prazos   *rowindex.TTLs
 	// agenda é o índice de QUANDO cada linha vence, e acompanha o escritas:
 	// nil junto com ele. Ela não é fonte de verdade de nada — prazoVencido
 	// continua lendo escritas e prazos —, é o que permite ao coletor
 	// perguntar pelo próximo vencimento em vez de varrer o dataset atrás
 	// dele.
-	agenda         *rowindex.Agenda
+	agenda         *rowindex.Schedule
 	duracaoDeFundo time.Duration
 	campoDeEscrita types.FieldID
 	campoDePrazo   types.FieldID
@@ -1125,13 +1125,13 @@ func Open(opts Options) (*Store, error) {
 			// expiração nunca aconteceria, em silêncio.
 			return nil, fmt.Errorf("%w: TTLAtivo exige CampoDeEscrita e CampoDePrazo", ErrInvalidArgument)
 		}
-		if s.escritas, err = rowindex.OpenEscritas(filepath.Join(idxDir, "expiry.idx"), minRows); err != nil {
+		if s.escritas, err = rowindex.OpenLastWrites(filepath.Join(idxDir, "expiry.idx"), minRows); err != nil {
 			return nil, err
 		}
-		if s.prazos, err = rowindex.OpenPrazos(filepath.Join(idxDir, "prazos.idx"), minRows); err != nil {
+		if s.prazos, err = rowindex.OpenTTLs(filepath.Join(idxDir, "prazos.idx"), minRows); err != nil {
 			return nil, err
 		}
-		if s.agenda, err = rowindex.OpenAgenda(idxDir, minRows); err != nil {
+		if s.agenda, err = rowindex.OpenSchedule(idxDir, minRows); err != nil {
 			return nil, err
 		}
 		s.duracaoDeFundo = opts.DuracaoDeFundo
@@ -1654,7 +1654,7 @@ func (s *Store) GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (typ
 	// não sobre os índices de escrita e prazo — que descrevem a versão
 	// CORRENTE. Numa linha reescrita durante a consulta os dois discordam, e é
 	// o payload que manda: ele é a fonte da verdade de que os índices são
-	// derivados (ver o godoc de rowindex.Escritas), então derivar daqui é a
+	// derivados (ver o godoc de rowindex.LastWrites), então derivar daqui é a
 	// MESMA conta que o applyRecord faz, sobre a versão certa.
 	if s.escritas != nil && s.venceuNaVersao(rec, snap.Instant) {
 		return types.Record{}, out, false, nil
@@ -1988,7 +1988,7 @@ func (s *Store) applyRecord(a recordApply) error {
 	// esta linha custaria, no pior caso, uma passada de atraso na expiração —
 	// e ela não existe, porque as duas rodam sob o mesmo wmu.
 	if s.agenda != nil {
-		if err := s.agenda.Atualiza(a.rowID, s.vencimentoDe(a.rowID)); err != nil {
+		if err := s.agenda.Update(a.rowID, s.vencimentoDe(a.rowID)); err != nil {
 			return err
 		}
 	}
@@ -2057,7 +2057,7 @@ func campoDoPayload(payload []byte, campo types.FieldID, esperado types.FieldTyp
 // O payload manda QUANDO ELE DECLARA o instante — aí ele é a fonte da verdade
 // de que o índice é derivado, e a conta é a mesma do applyRecord sobre a
 // versão certa. Quando ele NÃO declara, a resposta volta para o índice, e essa
-// metade não é um detalhe: o godoc de rowindex.Escritas diz que a fonte da
+// metade não é um detalhe: o godoc de rowindex.LastWrites diz que a fonte da
 // verdade é o campo do payload, e isso é verdade só para a linha que o tem. A
 // linha LEGADA — materializada antes de as regras existirem — não tem campo
 // nenhum, e o instante dela é o da CARÊNCIA, semeado pelo coletor na primeira
@@ -2142,34 +2142,34 @@ func (s *Store) prazoVencido(rowID types.RowID, em time.Time) bool {
 //
 // Os três casos que não são um instante:
 //
-//   - sem location, ou tombstonada: rowindex.Nunca. A linha não vence porque
+//   - sem location, ou tombstonada: rowindex.Never. A linha não vence porque
 //     não há o que expirar, e a lápide preserva o instante de escrita de
 //     propósito, então sem este ramo ela ficaria vencida para sempre.
-//   - instante DESCONHECIDO: rowindex.Carencia. Ela não venceu, mas precisa da
+//   - instante DESCONHECIDO: rowindex.Grace. Ela não venceu, mas precisa da
 //     atenção do coletor para receber o prazo cheio. É o único caso em que a
 //     agenda pede uma visita sem que prazoVencido concorde, e é assim que a
 //     entidade materializada antes de a expiração ser ligada deixa de ficar
 //     imortal por acidente de calendário.
-//   - duração não positiva: rowindex.Nunca. É a linha que uma regra `never`
+//   - duração não positiva: rowindex.Never. É a linha que uma regra `never`
 //     declarou imortal, ou o dataset sem duração de fundo.
 func (s *Store) vencimentoDe(rowID types.RowID) uint64 {
 	if s.escritas == nil {
-		return rowindex.Nunca
+		return rowindex.Never
 	}
 	packed, publicada := s.locs.Get(rowID)
 	if !publicada {
-		return rowindex.Nunca
+		return rowindex.Never
 	}
 	if _, _, flags := rowindex.Unpack(packed); flags&types.FlagTombstone != 0 {
-		return rowindex.Nunca
+		return rowindex.Never
 	}
 	ms, conhecido := s.escritas.Get(rowID)
 	if !conhecido {
-		return rowindex.Carencia
+		return rowindex.Grace
 	}
 	d := s.duracaoEfetiva(rowID)
 	if d <= 0 {
-		return rowindex.Nunca
+		return rowindex.Never
 	}
 	venc := ms + d.Milliseconds()
 	if venc < ms {
@@ -2178,12 +2178,12 @@ func (s *Store) vencimentoDe(rowID types.RowID) uint64 {
 		// descida, apagando dado vivo por causa de uma aritmética. Fora da
 		// agenda é o lado seguro — prazoVencido continua respondendo sobre
 		// ela.
-		return rowindex.Nunca
+		return rowindex.Never
 	}
-	if venc < int64(rowindex.PrimeiroVencimentoReal) {
+	if venc < int64(rowindex.FirstRealExpiry) {
 		// Um instante tão antigo que colidiria com os sentinelas. Elevar é
 		// seguro: o efeito é vencer em 1970 em vez de 1969.
-		return rowindex.PrimeiroVencimentoReal
+		return rowindex.FirstRealExpiry
 	}
 	return uint64(venc)
 }
@@ -2197,8 +2197,8 @@ func (s *Store) infoDaAgenda() *checkpoint.ScheduleInfo {
 	}
 	return &checkpoint.ScheduleInfo{
 		FallbackDurationMs: uint64(s.duracaoDeFundo.Milliseconds()),
-		BlockShift:         rowindex.AgendaBlockShift,
-		Levels:             rowindex.AgendaNiveis,
+		BlockShift:         rowindex.ScheduleBlockShift,
+		Levels:             rowindex.ScheduleLevels,
 	}
 }
 
@@ -2211,7 +2211,7 @@ func (s *Store) infoDaAgenda() *checkpoint.ScheduleInfo {
 // escrita seguinte.
 //
 // Zero devolvido COM conhecido=true é a entidade imortal, e ela NÃO cai no
-// fundo — é para essa distinção que o rowindex.PrazoImortal existe.
+// fundo — é para essa distinção que o rowindex.ImmortalTTL existe.
 func (s *Store) duracaoEfetiva(rowID types.RowID) time.Duration {
 	if s.prazos == nil {
 		return 0

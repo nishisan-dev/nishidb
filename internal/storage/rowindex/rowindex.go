@@ -15,7 +15,7 @@ import (
 const (
 	headerSize = 64
 	// entrySize é a entrada dos vetores de 64 bits — todos os deste arquivo e
-	// a agenda. entrySize32 é a do Denso32 (dense32.go). O byte 5 do header
+	// a agenda. entrySize32 é a do Dense32 (dense32.go). O byte 5 do header
 	// grava qual das duas o arquivo usa, e a abertura recusa a outra.
 	entrySize   = 8
 	entrySize32 = 4
@@ -52,45 +52,45 @@ func Unpack(p uint64) (segmentID, offset uint32, flags uint8) {
 }
 
 // denseFile é um array denso indexado por rowId sobre mmap, com header de 64
-// bytes. Base comum de Locations, Sequences, Escritas, Prazos, da agenda (entrada
-// de 8 bytes) e do Denso32 (entrada de 4).
+// bytes. Base comum de Locations, Sequences, LastWrites, TTLs, da agenda (entrada
+// de 8 bytes) e do Dense32 (entrada de 4).
 type denseFile struct {
 	region *mmap.Region
 	// entry é o tamanho da entrada, gravado no byte 5 do header. É campo, e
-	// não a constante de sempre, desde o Denso32: os métodos de 64 e de 32
+	// não a constante de sempre, desde o Dense32: os métodos de 64 e de 32
 	// endereçam pelo mesmo off(), e é este campo que faz o off de um vetor de 4
 	// bytes cair na entrada certa.
 	entry int64
-	// nasceu registra que ESTA abertura criou o arquivo, e não que ela o
+	// born registra que ESTA abertura criou o arquivo, e não que ela o
 	// reencontrou. É o único sinal que distingue "índice ainda não existia"
 	// de "índice existe e está vazio" — os dois têm o mesmo conteúdo, e para
 	// um índice derivado a diferença decide entre construir e adotar.
-	nasceu bool
+	born bool
 }
 
 // openDense abre um vetor de entradas de 64 bits — a forma de todos os
-// vetores anteriores ao Denso32, mantida como está para que nenhum chamador
+// vetores anteriores ao Dense32, mantida como está para que nenhum chamador
 // mude.
 func openDense(path string, magic [4]byte, minRows uint64) (*denseFile, error) {
-	return openDenseCom(path, magic, minRows, entrySize)
+	return openDenseWithEntrySize(path, magic, minRows, entrySize)
 }
 
-// openDenseCom abre um vetor com o tamanho de entrada dado. O tamanho vai para
+// openDenseWithEntrySize abre um vetor com o tamanho de entrada dado. O tamanho vai para
 // o byte 5 do header na criação e é CONFERIDO na reabertura: um vetor gravado
 // com um tamanho e lido com outro endereçaria a entrada errada em toda linha
 // sem que nada falhasse.
-func openDenseCom(path string, magic [4]byte, minRows uint64, entry int64) (*denseFile, error) {
+func openDenseWithEntrySize(path string, magic [4]byte, minRows uint64, entry int64) (*denseFile, error) {
 	minRows = max(minRows, 512)
 	r, err := mmap.Open(path, headerSize+int64(minRows)*entry)
 	if err != nil {
 		return nil, err
 	}
 	var hdrErr error
-	var nasceu bool
+	var born bool
 	r.WithBytes(0, headerSize, func(h []byte) {
 		if [4]byte(h[0:4]) == [4]byte{0, 0, 0, 0} && h[4] == 0 {
 			// Arquivo novo: grava o header.
-			nasceu = true
+			born = true
 			copy(h[0:4], magic[:])
 			h[4] = fileVersion
 			h[5] = byte(entry)
@@ -110,19 +110,19 @@ func openDenseCom(path string, magic [4]byte, minRows uint64, entry int64) (*den
 		r.Close()
 		return nil, hdrErr
 	}
-	return &denseFile{region: r, entry: entry, nasceu: nasceu}, nil
+	return &denseFile{region: r, entry: entry, born: born}, nil
 }
 
 // entryOff é o offset de uma entrada de 64 bits. Continua função de pacote —
-// e não método — porque a agenda e o LiberaAte o usam sobre vetores que são
+// e não método — porque a agenda e o ReleaseBelow o usam sobre vetores que são
 // sempre de 64.
 func entryOff(rowID types.RowID) int64 { return headerSize + int64(rowID)*entrySize }
 
 // off é o offset da entrada deste arquivo, no tamanho que ele gravou.
 func (d *denseFile) off(rowID types.RowID) int64 { return headerSize + int64(rowID)*d.entry }
 
-// cresce estende o arquivo (doubling, arredondado a página) até caber needed.
-func (d *denseFile) cresce(needed int64) error {
+// grow estende o arquivo (doubling, arredondado a página) até caber needed.
+func (d *denseFile) grow(needed int64) error {
 	if needed <= d.region.Size() {
 		return nil
 	}
@@ -144,14 +144,14 @@ func (d *denseFile) load(rowID types.RowID) (uint64, bool) {
 // Exclusivo do writer.
 func (d *denseFile) store(rowID types.RowID, v uint64) error {
 	off := d.off(rowID)
-	if err := d.cresce(off + entrySize); err != nil {
+	if err := d.grow(off + entrySize); err != nil {
 		return err
 	}
 	d.region.AtomicStore64(off, v)
 	return nil
 }
 
-// load32 e store32 são os irmãos de 4 bytes de load e store, para o Denso32.
+// load32 e store32 são os irmãos de 4 bytes de load e store, para o Dense32.
 func (d *denseFile) load32(rowID types.RowID) (uint32, bool) {
 	off := d.off(rowID)
 	if off+entrySize32 > d.region.Size() {
@@ -162,7 +162,7 @@ func (d *denseFile) load32(rowID types.RowID) (uint32, bool) {
 
 func (d *denseFile) store32(rowID types.RowID, v uint32) error {
 	off := d.off(rowID)
-	if err := d.cresce(off + entrySize32); err != nil {
+	if err := d.grow(off + entrySize32); err != nil {
 		return err
 	}
 	d.region.AtomicStore32(off, v)
@@ -347,7 +347,7 @@ func (s *Sequences) Msync() error { return s.dense.region.Msync() }
 // Close libera o mapeamento.
 func (s *Sequences) Close() error { return s.dense.region.Close() }
 
-// Escritas é o índice rowId→instante da última escrita, em epoch millis.
+// LastWrites é o índice rowId→instante da última escrita, em epoch millis.
 //
 // É DERIVADO, como o Sequences: a fonte da verdade é o campo de sistema no
 // payload do record, e o replay do tail o reconstrói pelo mesmo applyRecord
@@ -359,24 +359,24 @@ func (s *Sequences) Close() error { return s.dense.region.Close() }
 // Por isso zero significa DESCONHECIDO, nunca vencido. Row desconhecida ganha
 // um prazo cheio de carência na primeira varredura, e é o que permite ligar a
 // expiração num dataset já materializado sem reprocessar nada.
-type Escritas struct {
+type LastWrites struct {
 	dense *denseFile
 }
 
-var escritasMagic = [4]byte{'N', 'D', 'B', 'E'}
+var lastWritesMagic = [4]byte{'N', 'D', 'B', 'E'}
 
-// OpenEscritas cria/reabre o arquivo com capacidade para minRows.
-func OpenEscritas(path string, minRows uint64) (*Escritas, error) {
-	d, err := openDense(path, escritasMagic, minRows)
+// OpenLastWrites cria/reabre o arquivo com capacidade para minRows.
+func OpenLastWrites(path string, minRows uint64) (*LastWrites, error) {
+	d, err := openDense(path, lastWritesMagic, minRows)
 	if err != nil {
 		return nil, err
 	}
-	return &Escritas{dense: d}, nil
+	return &LastWrites{dense: d}, nil
 }
 
 // Get devolve o instante da última escrita do rowId em epoch millis, e
 // conhecido=false quando a entrada nunca foi gravada.
-func (e *Escritas) Get(rowID types.RowID) (millis int64, conhecido bool) {
+func (e *LastWrites) Get(rowID types.RowID) (millis int64, known bool) {
 	v, ok := e.dense.load(rowID)
 	if !ok || v == 0 {
 		return 0, false
@@ -385,17 +385,17 @@ func (e *Escritas) Get(rowID types.RowID) (millis int64, conhecido bool) {
 }
 
 // Set grava o instante da última escrita. Exclusivo do writer.
-func (e *Escritas) Set(rowID types.RowID, millis int64) error {
+func (e *LastWrites) Set(rowID types.RowID, millis int64) error {
 	return e.dense.store(rowID, uint64(millis))
 }
 
 // Msync força as páginas sujas para disco.
-func (e *Escritas) Msync() error { return e.dense.region.Msync() }
+func (e *LastWrites) Msync() error { return e.dense.region.Msync() }
 
 // Close libera o mapeamento.
-func (e *Escritas) Close() error { return e.dense.region.Close() }
+func (e *LastWrites) Close() error { return e.dense.region.Close() }
 
-// PrazoImortal é o valor gravado para a entidade cuja regra decidiu que ela
+// ImmortalTTL é o valor gravado para a entidade cuja regra decidiu que ela
 // NÃO expira.
 //
 // Existe porque denseFile.load devolve zero para a entrada nunca gravada,
@@ -408,37 +408,37 @@ func (e *Escritas) Close() error { return e.dense.region.Close() }
 //
 // Não há colisão possível com uma duração real: a menor declarável é um
 // minuto, 60000 ms.
-const PrazoImortal uint64 = 1
+const ImmortalTTL uint64 = 1
 
-// Prazos é o índice rowId→duração de ociosidade, em millis.
+// TTLs é o índice rowId→duração de ociosidade, em millis.
 //
-// É DERIVADO, como o Escritas: a fonte da verdade é o campo de sistema no
+// É DERIVADO, como o LastWrites: a fonte da verdade é o campo de sistema no
 // payload, e o replay do tail o reconstrói pelo mesmo applyRecord que o Put
 // usa. Zero significa DESCONHECIDO — entidade anterior à adoção das regras —,
-// nunca imortal; para imortal existe o PrazoImortal.
-type Prazos struct {
+// nunca imortal; para imortal existe o ImmortalTTL.
+type TTLs struct {
 	dense *denseFile
 }
 
-var prazosMagic = [4]byte{'N', 'D', 'B', 'P'}
+var ttlsMagic = [4]byte{'N', 'D', 'B', 'P'}
 
-// OpenPrazos cria/reabre o arquivo com capacidade para minRows.
-func OpenPrazos(path string, minRows uint64) (*Prazos, error) {
-	d, err := openDense(path, prazosMagic, minRows)
+// OpenTTLs cria/reabre o arquivo com capacidade para minRows.
+func OpenTTLs(path string, minRows uint64) (*TTLs, error) {
+	d, err := openDense(path, ttlsMagic, minRows)
 	if err != nil {
 		return nil, err
 	}
-	return &Prazos{dense: d}, nil
+	return &TTLs{dense: d}, nil
 }
 
 // Get devolve a duração em millis, e conhecido=false quando a entrada nunca
 // foi gravada. Duração zero COM conhecido=true é a entidade imortal.
-func (p *Prazos) Get(rowID types.RowID) (millis int64, conhecido bool) {
+func (p *TTLs) Get(rowID types.RowID) (millis int64, known bool) {
 	v, ok := p.dense.load(rowID)
 	if !ok || v == 0 {
 		return 0, false
 	}
-	if v == PrazoImortal {
+	if v == ImmortalTTL {
 		return 0, true
 	}
 	return int64(v), true
@@ -448,21 +448,21 @@ func (p *Prazos) Get(rowID types.RowID) (millis int64, conhecido bool) {
 //
 // Duração não positiva vira o sentinela: é a entidade que uma regra `never`
 // declarou imortal, e ela precisa ser distinguível da que nunca foi gravada.
-func (p *Prazos) Set(rowID types.RowID, millis int64) error {
+func (p *TTLs) Set(rowID types.RowID, millis int64) error {
 	v := uint64(millis)
 	if millis <= 0 {
-		v = PrazoImortal
+		v = ImmortalTTL
 	}
 	return p.dense.store(rowID, v)
 }
 
 // Msync força as páginas sujas para disco.
-func (p *Prazos) Msync() error { return p.dense.region.Msync() }
+func (p *TTLs) Msync() error { return p.dense.region.Msync() }
 
 // Close libera o mapeamento.
-func (p *Prazos) Close() error { return p.dense.region.Close() }
+func (p *TTLs) Close() error { return p.dense.region.Close() }
 
-// LiberaAte devolve ao filesystem os blocos das entradas ABAIXO de rowID.
+// ReleaseBelow devolve ao filesystem os blocos das entradas ABAIXO de rowID.
 //
 // A purga do histórico é de segmento e move uma marca-d'água, não limpa
 // entrada por entrada: zerar milhões de u64 sob o lock do writer a cada
@@ -477,10 +477,10 @@ func (p *Prazos) Close() error { return p.dense.region.Close() }
 //
 // Erro de filesystem sem suporte sobe para o chamador decidir: é degradação
 // de espaço, nunca de correção.
-func (l *Locations) LiberaAte(rowID types.RowID) error {
-	fim := entryOff(rowID)
-	if fim <= headerSize {
+func (l *Locations) ReleaseBelow(rowID types.RowID) error {
+	end := entryOff(rowID)
+	if end <= headerSize {
 		return nil
 	}
-	return l.dense.region.ReleaseBlocks(headerSize, fim-headerSize)
+	return l.dense.region.ReleaseBlocks(headerSize, end-headerSize)
 }

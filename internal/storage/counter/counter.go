@@ -99,7 +99,7 @@ type Contador struct {
 	def   Definicao
 	dir   string
 	dict  *Dicionario
-	vetor *rowindex.Denso32
+	vetor *rowindex.Dense32
 	// over é o overlay: transições ainda não aplicadas ao mmap. Writer-only —
 	// ninguém lê o vetor além do writer, então não precisa de lock.
 	over map[types.RowID]uint32
@@ -174,7 +174,7 @@ func Abre(dir string, def Definicao, minRows uint64, recria bool) (*Contador, er
 	if err != nil {
 		return nil, fmt.Errorf("contador %s: %w", def.Nome, err)
 	}
-	vetor, err := rowindex.OpenDenso32(filepath.Join(dir, arquivoDoVetor), vetorMagic, minRows)
+	vetor, err := rowindex.OpenDense32(filepath.Join(dir, arquivoDoVetor), vetorMagic, minRows)
 	if err != nil {
 		_ = dict.Close()
 		return nil, fmt.Errorf("contador %s: %w", def.Nome, err)
@@ -251,10 +251,10 @@ func (c *Contador) acompanhaODicionario() error {
 func (c *Contador) Def() Definicao { return c.def }
 
 // Nasceu diz se o vetor foi criado por ESTA abertura.
-func (c *Contador) Nasceu() bool { return c.vetor.Nasceu() }
+func (c *Contador) Nasceu() bool { return c.vetor.Born() }
 
 // Cobre diz se o vetor tem entrada para toda linha abaixo de limite.
-func (c *Contador) Cobre(limite types.RowID) bool { return c.vetor.Cobre(limite) }
+func (c *Contador) Cobre(limite types.RowID) bool { return c.vetor.Covers(limite) }
 
 // AoRecusar registra o callback chamado UMA vez, na primeira recusa pelo teto
 // desta abertura — é o log do Store, que não quer uma linha por evento.
@@ -466,7 +466,7 @@ func (c *Contador) Dobra() error {
 	// 1M. Um leitor no meio veria zero, e não um número parcial — mas a Dobra
 	// roda no Open, sem leitores.
 	var linhas, total int64
-	n := c.vetor.Entradas()
+	n := c.vetor.Entries()
 	for i := uint64(0); i < n; i++ {
 		v, _ := c.vetor.Get(types.RowID(i))
 		g := v &^ bitCondicao
@@ -507,7 +507,7 @@ func (c *Contador) Dobra() error {
 // são estáveis. É o começo de uma reconstrução: o Store transiciona de novo
 // cada linha viva.
 func (c *Contador) Zera() error {
-	if err := c.vetor.Zera(); err != nil {
+	if err := c.vetor.Clear(); err != nil {
 		return err
 	}
 	clear(c.over)

@@ -70,7 +70,7 @@ Pacotes que estruturam o todo:
   checkpoint/manifest, recovery, compaction, expiração, retenção. `storage/mmap`
   é o ÚNICO pacote autorizado a usar mmap/unsafe; `fielddict` é append-only com
   teto de 65.535 campos. `storage/contador` é o contador mantido na escrita:
-  vetor denso de 4 bytes por linha (`rowindex.Denso32`) + dicionário de grupos
+  vetor denso de 4 bytes por linha (`rowindex.Dense32`) + dicionário de grupos
   append-only + totais em heap, transicionado no passo 7c do `applyRecord`.
   Os agregados do contador inteiro (`linhas`, `total`) andam COLADOS aos
   vetores por grupo, dentro das mesmas guardas — nunca são somados na leitura,

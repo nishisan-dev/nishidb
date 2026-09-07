@@ -1450,7 +1450,7 @@ versão de record para tornar impossível a única falha que arruinaria a featur
 O índice `prazos.idx` (rowId→duração) é DERIVADO do campo, como o de escritas:
 o replay do tail o reconstrói pelo mesmo `applyRecord`. Zero nele significa
 **desconhecido**, e por isso a entidade imortal — a que casou com uma regra
-`never` — é gravada com um sentinela (`rowindex.PrazoImortal`). Sem essa
+`never` — é gravada com um sentinela (`rowindex.ImmortalTTL`). Sem essa
 distinção, ela herdaria o prazo da regra de fundo e morreria sozinha.
 
 **A visibilidade não depende do coletor.** Os três pontos de liveness checam o
@@ -2155,7 +2155,7 @@ que houve mudança.
 
 **Três peças por contador**, em `indexes/contadores/<nome>/`. O vetor denso
 `grupos.idx` guarda por rowId `bit31 = condição valia | bits 0..30 = id do
-grupo` — quatro bytes por linha (`rowindex.Denso32`, o primeiro vetor de 32
+grupo` — quatro bytes por linha (`rowindex.Dense32`, o primeiro vetor de 32
 bits do produto: 32 MB por 8M linhas, e o contador pode existir várias vezes
 sobre o mesmo dataset). O dicionário `grupos.dict` interna a chave composta do
 grupo → id, append-only com CRC por registro e **fsync antes de devolver o id**

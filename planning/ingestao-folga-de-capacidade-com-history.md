@@ -377,7 +377,7 @@ Custo esperado: ~1,02 recomputes por evento.
 
 ### O que isso apaga
 
-A varredura some: o coletor pergunta `ProximoVencimento()` e **dorme exatamente até lá**,
+A varredura some: o coletor pergunta `NextExpiry()` e **dorme exatamente até lá**,
 em vez de acordar a cada minuto e varrer 4,57M linhas. O `locs.Get`, que é 39% do custo da
 passada de hoje, sai do laço. E o pré-filtro de tombstone vira código morto — a linha
 tombstonada recebe o sentinela "nunca" e sai da agenda de vez.

@@ -21,7 +21,7 @@ alarme reabre e o `type` volta para 1.
 | Peça | Onde | O que entrega |
 |---|---|---|
 | Campo de sistema injetado pelo writer | `_writtenAt`, [spec.go:403](../internal/schema/spec.go:403) | Precedente completo: FieldID pelo dicionário durável, gravado no payload, recusado se vier no evento |
-| Índice denso rowId→valor | [`rowindex.Escritas`](../internal/storage/rowindex/rowindex.go:303) | 8 bytes por linha em mmap, derivado do payload, reconstruído pelo replay |
+| Índice denso rowId→valor | [`rowindex.LastWrites`](../internal/storage/rowindex/rowindex.go:303) | 8 bytes por linha em mmap, derivado do payload, reconstruído pelo replay |
 | Coletor de expiração | [expiry.go](../internal/storage/expiry.go) | Varredura circular, lápide durável, freio duplo (quantidade e tempo) |
 | Releitura do prazo sob o lock | [`Expira`](../internal/storage/expiry.go:37) | **O cancelamento**: decisão do agendador é revalidada dentro do `wmu` |
 | Predicado compilado | [predicate.go](../internal/query/executor/predicate.go), [collect.go](../internal/query/executor/collect.go) | Programa linear com saltos, sem recursão e sem alocação por linha |
@@ -306,8 +306,8 @@ o dicionário é append-only e o nome novo ganha o próximo id livre.
 
 ## 2.5 A segunda tabela
 
-`rowindex.Prazos`, arquivo `indexes/prazos.idx`: o mesmo `denseFile` de 8 bytes por
-linha que `Escritas` já usa ([rowindex.go:52](../internal/storage/rowindex/rowindex.go:52)),
+`rowindex.TTLs`, arquivo `indexes/prazos.idx`: o mesmo `denseFile` de 8 bytes por
+linha que `LastWrites` já usa ([rowindex.go:52](../internal/storage/rowindex/rowindex.go:52)),
 com assinatura própria. No piloto são os mesmos ~142 MB do `expiry.idx` que já existe.
 
 Preenchida em `applyRecord` ([store.go:1467](../internal/storage/store.go:1467)), ao
@@ -327,7 +327,7 @@ que casa com uma regra `never` grava duração zero; num dataset que TAMBÉM dec
 de fundo, o índice leria esse zero como desconhecido e lhe daria o prazo de fundo — o
 alarme crítico que o operador mandou nunca expirar sairia em 7 dias, sem erro nenhum.
 
-`Prazos` guarda então um **sentinela**: `PrazoImortal = 1`. Zero segue significando
+`TTLs` guarda então um **sentinela**: `ImmortalTTL = 1`. Zero segue significando
 desconhecido, `1` significa "avaliado, e nenhuma regra dá prazo", e qualquer outro valor
 é a duração em millis. Não há colisão possível — a menor duração declarável é um minuto,
 60000 ms.
@@ -336,7 +336,7 @@ desconhecido, `1` significa "avaliado, e nenhuma regra dá prazo", e qualquer ou
 
 ```
 prazos.Get(linha) = 0            → DESCONHECIDA  (linha anterior à adoção das regras)
-                  = PrazoImortal → 0             (avaliada; nenhuma regra dá prazo)
+                  = ImmortalTTL → 0             (avaliada; nenhuma regra dá prazo)
                   = v            → v             (duração em millis)
 
 duração efetiva(linha) = a duração acima, se a entrada for conhecida

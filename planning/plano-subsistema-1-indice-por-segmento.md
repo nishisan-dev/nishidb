@@ -614,7 +614,7 @@ Esperado: `undefined: mmap.OpenReadOnly`.
 `OpenReadOnly` abre com `O_RDONLY`, faz `unix.Mmap(fd, 0, tamanho,
 unix.PROT_READ, unix.MAP_SHARED)`, **fecha o descritor** e devolve a `Region`
 com `readOnly = true` e `f = nil`. `Grow`, `Msync`, `AtomicStore64`,
-`AtomicOr64`, `AtomicAnd64` e `LiberaAte` passam a devolver erro (ou entrar em
+`AtomicOr64`, `AtomicAnd64` e `ReleaseBelow` passam a devolver erro (ou entrar em
 pânico, nos que não devolvem erro) quando `readOnly`. `Close` só faz
 `munmap`. `Bytes()` devolve `r.data` e entra em pânico se não for
 somente-leitura — o comentário registra que devolver o slice cru de uma região

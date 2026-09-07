@@ -43,7 +43,7 @@ import (
 //
 // E reconstrói quando os ARQUIVOS não descrevem o dataset, que é a pergunta
 // que o manifest não responde: ele declara os parâmetros da árvore, não a
-// existência dela. Ver rowindex.Agenda.PrecisaConstruir.
+// existência dela. Ver rowindex.Schedule.NeedsRebuild.
 func (s *Store) adotaOuConstroiAgenda(m *checkpoint.Manifest) error {
 	if s.agenda == nil {
 		return nil
@@ -54,7 +54,7 @@ func (s *Store) adotaOuConstroiAgenda(m *checkpoint.Manifest) error {
 		atual = m.Schedule
 	}
 	limite := types.RowID(s.nextRowID.Load())
-	semArquivos := s.agenda.PrecisaConstruir(limite)
+	semArquivos := s.agenda.NeedsRebuild(limite)
 	if atual != nil && *atual == *querido && !semArquivos {
 		return nil
 	}
@@ -73,7 +73,7 @@ func (s *Store) adotaOuConstroiAgenda(m *checkpoint.Manifest) error {
 	}
 
 	inicio := time.Now()
-	if err := s.agenda.Reconstroi(limite, s.vencimentoDe); err != nil {
+	if err := s.agenda.Rebuild(limite, s.vencimentoDe); err != nil {
 		return fmt.Errorf("storage: construir a agenda de vencimentos de %s: %w", s.opts.Dir, err)
 	}
 	s.agendaReconstruida = true
@@ -125,11 +125,11 @@ func (s *Store) AuditaAgenda() error {
 		// Vencimento ANTES do devido é frouxo: custa uma descida que não acha
 		// nada, e a passada seguinte o corrige. Depois do devido é a falha
 		// fatal — a linha vence para o predicado e o coletor nunca a alcança.
-		if agendado != rowindex.Nunca && querido != rowindex.Nunca && agendado < querido {
+		if agendado != rowindex.Never && querido != rowindex.Never && agendado < querido {
 			continue
 		}
 		return fmt.Errorf("%w: row %d agendada para %d, mas os índices dizem %d",
 			ErrDatasetCorrupt, id, agendado, querido)
 	}
-	return s.agenda.Confere()
+	return s.agenda.Check()
 }

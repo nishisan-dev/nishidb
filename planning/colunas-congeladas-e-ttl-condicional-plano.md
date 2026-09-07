@@ -20,7 +20,7 @@
 - **Sem fallback para legado:** onde a spec diz que uma forma antiga sai, ela sai. Não manter as duas.
 - **Idioma do código:** identificadores e comentários em PT-BR, seguindo o que já está em cada arquivo. Comentários explicam o PORQUÊ, não o quê — é o padrão da base inteira.
 - **Duração mínima declarável:** 1 minuto (`schema.ResolucaoDaExpiracao`). O literal `never` é a única exceção e significa imortal.
-- **Sentinela do índice de prazos:** `PrazoImortal = 1`. Zero significa DESCONHECIDO, nunca imortal.
+- **Sentinela do índice de prazos:** `ImmortalTTL = 1`. Zero significa DESCONHECIDO, nunca imortal.
 
 ---
 
@@ -55,7 +55,7 @@
 | `internal/materializer/patch.go` | `patchEntry.congelada`; chamadas das duas passadas novas |
 | `internal/materializer/merge.go` | Ramo congelado |
 | `internal/materializer/materializer.go` | Passa `prevPayload` para a avaliação de prazo |
-| `internal/storage/rowindex/rowindex.go` | `Prazos` + `PrazoImortal` |
+| `internal/storage/rowindex/rowindex.go` | `TTLs` + `ImmortalTTL` |
 | `internal/storage/store.go` | Options, abertura do índice, `applyRecord`, `prazoVencido` |
 | `internal/storage/expiry.go` | Conta do prazo, pré-filtro de tombstone |
 | `internal/cli/cli.go`, `internal/cli/offsets.go`, `internal/server/server.go` | Montagem das Options |
@@ -1375,20 +1375,20 @@ git commit -m "Avalia as regras de ttl na ingestão e grava a duração no docum
 **Interfaces:**
 - Produces:
   ```go
-  const PrazoImortal uint64 = 1
-  type Prazos struct{ /* dense *denseFile */ }
-  func OpenPrazos(path string, minRows uint64) (*Prazos, error)
-  func (p *Prazos) Get(rowID types.RowID) (millis int64, conhecido bool)
-  func (p *Prazos) Set(rowID types.RowID, millis int64) error
-  func (p *Prazos) Msync() error
-  func (p *Prazos) Close() error
+  const ImmortalTTL uint64 = 1
+  type TTLs struct{ /* dense *denseFile */ }
+  func OpenTTLs(path string, minRows uint64) (*TTLs, error)
+  func (p *TTLs) Get(rowID types.RowID) (millis int64, conhecido bool)
+  func (p *TTLs) Set(rowID types.RowID, millis int64) error
+  func (p *TTLs) Msync() error
+  func (p *TTLs) Close() error
   ```
 
 - [ ] **Passo 1: escrever os testes**
 
 ```go
 func TestPrazosDistingueImortalDeDesconhecido(t *testing.T) {
-	p := abrePrazos(t)
+	p := openTTLs(t)
 	if _, conhecido := p.Get(1); conhecido {
 		t.Error("entrada nunca gravada deveria ser desconhecida")
 	}
@@ -1401,7 +1401,7 @@ func TestPrazosDistingueImortalDeDesconhecido(t *testing.T) {
 	}
 }
 func TestPrazosGuardaDuracao(t *testing.T)          { /* Set(1, 180000) → Get = 180000,true */ }
-func TestPrazosSobreviveAoReabrir(t *testing.T)     { /* Close e OpenPrazos de novo */ }
+func TestPrazosSobreviveAoReabrir(t *testing.T)     { /* Close e OpenTTLs de novo */ }
 func TestPrazosMagicaPropriaRecusaArquivoDeEscritas(t *testing.T) { /* abrir expiry.idx como prazos falha */ }
 ```
 
@@ -1413,7 +1413,7 @@ Expected: FAIL
 - [ ] **Passo 3: implementar**
 
 ```go
-// PrazoImortal é o valor gravado para a entidade cuja regra decidiu que ela
+// ImmortalTTL é o valor gravado para a entidade cuja regra decidiu que ela
 // NÃO expira.
 //
 // Existe porque denseFile.load devolve ok=false quando o valor é zero, então
@@ -1425,52 +1425,52 @@ Expected: FAIL
 //
 // Não há colisão possível com uma duração real: a menor declarável é um
 // minuto, 60000 ms.
-const PrazoImortal uint64 = 1
+const ImmortalTTL uint64 = 1
 
-// Prazos é o índice rowId→duração de ociosidade, em millis.
+// TTLs é o índice rowId→duração de ociosidade, em millis.
 //
-// É DERIVADO, como o Escritas: a fonte da verdade é o campo de sistema no
+// É DERIVADO, como o LastWrites: a fonte da verdade é o campo de sistema no
 // payload, e o replay do tail o reconstrói pelo mesmo applyRecord que o Put
 // usa. Zero significa DESCONHECIDO — entidade anterior à adoção das regras —,
-// nunca imortal; para imortal existe o PrazoImortal.
-type Prazos struct {
+// nunca imortal; para imortal existe o ImmortalTTL.
+type TTLs struct {
 	dense *denseFile
 }
 
-var prazosMagic = [4]byte{'N', 'D', 'B', 'P'}
+var ttlsMagic = [4]byte{'N', 'D', 'B', 'P'}
 
-func OpenPrazos(path string, minRows uint64) (*Prazos, error) {
-	d, err := openDense(path, prazosMagic, minRows)
+func OpenTTLs(path string, minRows uint64) (*TTLs, error) {
+	d, err := openDense(path, ttlsMagic, minRows)
 	if err != nil {
 		return nil, err
 	}
-	return &Prazos{dense: d}, nil
+	return &TTLs{dense: d}, nil
 }
 
 // Get devolve a duração em millis, e conhecido=false quando a entrada nunca
 // foi gravada. Duração zero COM conhecido=true é a entidade imortal.
-func (p *Prazos) Get(rowID types.RowID) (millis int64, conhecido bool) {
+func (p *TTLs) Get(rowID types.RowID) (millis int64, conhecido bool) {
 	v, ok := p.dense.load(rowID)
 	if !ok || v == 0 {
 		return 0, false
 	}
-	if v == PrazoImortal {
+	if v == ImmortalTTL {
 		return 0, true
 	}
 	return int64(v), true
 }
 
 // Set grava a duração. Exclusivo do writer.
-func (p *Prazos) Set(rowID types.RowID, millis int64) error {
+func (p *TTLs) Set(rowID types.RowID, millis int64) error {
 	v := uint64(millis)
 	if millis <= 0 {
-		v = PrazoImortal
+		v = ImmortalTTL
 	}
 	return p.dense.store(rowID, v)
 }
 
-func (p *Prazos) Msync() error { return p.dense.region.Msync() }
-func (p *Prazos) Close() error { return p.dense.region.Close() }
+func (p *TTLs) Msync() error { return p.dense.region.Msync() }
+func (p *TTLs) Close() error { return p.dense.region.Close() }
 ```
 
 - [ ] **Passo 4: rodar**
@@ -1495,7 +1495,7 @@ git commit -m "Acrescenta o índice de prazos com sentinela para o imortal"
 - Modify: `internal/storage/store.go` (Options `:115`, abertura `:721`, dicionário `:749`, applyRecord `:1467`, `prazoVencido` `:1528`), `internal/storage/store_checkpoint.go:102`, `internal/storage/expiry.go:256`
 
 **Interfaces:**
-- Consumes: `rowindex.Prazos`, `rowindex.PrazoImortal` (Task 11); `schema.CampoDePrazo` (Task 8)
+- Consumes: `rowindex.TTLs`, `rowindex.ImmortalTTL` (Task 11); `schema.CampoDePrazo` (Task 8)
 - Produces (Options):
   ```go
   TTLAtivo       bool          // há ao menos uma regra; substitui ExpireAfterWrite
@@ -1565,10 +1565,10 @@ Em `store.go:721`:
 		if opts.CampoDeEscrita == "" || opts.CampoDePrazo == "" {
 			return nil, fmt.Errorf("%w: TTLAtivo exige CampoDeEscrita e CampoDePrazo", ErrInvalidArgument)
 		}
-		if s.escritas, err = rowindex.OpenEscritas(filepath.Join(idxDir, "expiry.idx"), minRows); err != nil {
+		if s.escritas, err = rowindex.OpenLastWrites(filepath.Join(idxDir, "expiry.idx"), minRows); err != nil {
 			return nil, err
 		}
-		if s.prazos, err = rowindex.OpenPrazos(filepath.Join(idxDir, "prazos.idx"), minRows); err != nil {
+		if s.prazos, err = rowindex.OpenTTLs(filepath.Join(idxDir, "prazos.idx"), minRows); err != nil {
 			return nil, err
 		}
 		s.duracaoDeFundo = opts.DuracaoDeFundo
@@ -1625,7 +1625,7 @@ Em `store.go:1467`, ao lado do instante:
 // escrita seguinte.
 //
 // Zero devolvido COM conhecido=true é a entidade imortal, e ela NÃO cai no
-// fundo — é para essa distinção que o PrazoImortal existe.
+// fundo — é para essa distinção que o ImmortalTTL existe.
 func (s *Store) duracaoEfetiva(rowID types.RowID) time.Duration {
 	if s.prazos == nil {
 		return 0

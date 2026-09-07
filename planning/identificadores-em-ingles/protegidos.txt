@@ -31,7 +31,14 @@
 #     (internal/types/types.go:66,84,144) e os dois blocos ```go de
 #     planning/colunas-congeladas-e-ttl-condicional-plano.md:793,1419 viram
 #     `Exists`. O idioma "Existe porque…" abre godoc em mais de vinte arquivos
-#     deste repositório.
+#     deste repositório. `Nunca` é o segundo caso, e pela mesma mecânica: a
+#     constante `rowindex.Nunca` virou `Never`, e o ADVÉRBIO que abre frase
+#     ("Nunca cresce na leitura", internal/storage/rowindex/dense32.go:34;
+#     "Nunca reordene", "Nunca aloca quando a chave já existe", nos dois
+#     planos) não é citação nenhuma. As citações verdadeiras da constante já
+#     estão em inglês — o godoc de schedule.go:140,186 e as formas
+#     qualificadas `rowindex.Nunca` —, e o que a proteção segura daqui para a
+#     frente é só o advérbio.
 #   - NOME DE ARQUIVO EM DISCO cuja base é homônima de identificador
 #     renomeado: `vazio.bin`, o tempdir de
 #     internal/storage/mmap/region_test.go:337. O ponto o faz passar por
@@ -61,6 +68,7 @@ Arquivo.Apenda
 Data
 Escritor.Apenda
 Fonte.Estado
+Nunca
 selado
 Existe
 campo

@@ -15,7 +15,7 @@ números e as mutações está em [`docs/aceite-contadores.md`](../docs/aceite-c
 
 | Bloco | Estado | Validação |
 |---|---|---|
-| **A1** `Denso32` e atômicos de 32 bits | **feito** (`ff55597`) | o `denseFile` recusa a abertura com o outro tamanho de entrada; gate de alocação com contraparte sob `-race` |
+| **A1** `Dense32` e atômicos de 32 bits | **feito** (`ff55597`) | o `denseFile` recusa a abertura com o outro tamanho de entrada; gate de alocação com contraparte sob `-race` |
 | **A2** chave composta no `valuekey` | **feito** (`6820e25`) | golden de bytes; `ab\|c` ≠ `a\|bc` |
 | **A3** `AvaliadorDePayload` e `CompilaCondicao` | **feito** (`b03a21a`) | as regras de TTL passaram a compilar pelo mesmo caminho sem editar um teste; gate de alocação |
 | **B1** dicionário de grupos | **feito** (`3782d22`) | mutação do fsync: vermelha, revertida, verde |
@@ -191,7 +191,7 @@ por mensagem) foi refutada na proposta porque Kafka entrega pelo menos uma vez e
 | Arquivo | Responsabilidade |
 |---|---|
 | `internal/storage/mmap/region.go` | `AtomicLoad32`/`AtomicStore32` (único pacote com unsafe) |
-| `internal/storage/rowindex/rowindex.go` | `denseFile` com tamanho de entrada parametrizado; `Denso32` exportado |
+| `internal/storage/rowindex/rowindex.go` | `denseFile` com tamanho de entrada parametrizado; `Dense32` exportado |
 | `internal/index/valuekey/valuekey.go` | `AppendComposite`/`DecodeComposite` + golden |
 | `internal/predicate/evaluator.go` (novo) | `AvaliadorDePayload`: programa + slots + reader, `Avalia(payload)` |
 | `internal/predicate/rule.go` | `CompilaCondicao` extraída de `CompilaRegras` |
@@ -217,7 +217,7 @@ por mensagem) foi refutada na proposta porque Kafka entrega pelo menos uma vez e
 
 ## Bloco A — Fundações de formato
 
-### Tarefa A1: `Denso32` na `rowindex` (vetor denso de 4 bytes)
+### Tarefa A1: `Dense32` na `rowindex` (vetor denso de 4 bytes)
 
 **Arquivos:**
 - Modificar: `internal/storage/mmap/region.go` (ao lado de `AtomicLoad64`, linha 269)
@@ -231,15 +231,15 @@ por mensagem) foi refutada na proposta porque Kafka entrega pelo menos uma vez e
 func (r *Region) AtomicLoad32(off int64) uint32
 func (r *Region) AtomicStore32(off int64, v uint32)
 // rowindex
-func OpenDenso32(path string, magic [4]byte, minRows uint64) (*Denso32, error)
-func (d *Denso32) Get(rowID types.RowID) (v uint32, gravado bool) // false além do arquivo
-func (d *Denso32) Set(rowID types.RowID, v uint32) error          // writer-only, cresce por doubling
-func (d *Denso32) Nasceu() bool
-func (d *Denso32) Cobre(limite types.RowID) bool                  // arquivo tem entrada para limite-1
-func (d *Denso32) Zera() error                                    // memset das entradas (reconstrução)
-func (d *Denso32) Msync() error
-func (d *Denso32) Close() error
-func (d *Denso32) SizeBytes() int64
+func OpenDense32(path string, magic [4]byte, minRows uint64) (*Dense32, error)
+func (d *Dense32) Get(rowID types.RowID) (v uint32, gravado bool) // false além do arquivo
+func (d *Dense32) Set(rowID types.RowID, v uint32) error          // writer-only, cresce por doubling
+func (d *Dense32) Nasceu() bool
+func (d *Dense32) Cobre(limite types.RowID) bool                  // arquivo tem entrada para limite-1
+func (d *Dense32) Zera() error                                    // memset das entradas (reconstrução)
+func (d *Dense32) Msync() error
+func (d *Dense32) Close() error
+func (d *Dense32) SizeBytes() int64
 ```
 
 - [ ] **Passo 1: teste do atômico de 32 bits no mmap**
@@ -265,12 +265,12 @@ func TestAtomicos32EnderecamMeiaWord(t *testing.T) {
 
 - [ ] **Passo 5: parametrizar `denseFile`** — `entrySize` deixa de ser const global: vira campo `entry int64` do `denseFile`; `openDense(path, magic, minRows, entry)`; `entryOff` vira método; `load/store` ganham as variantes de 32 quando `entry == 4`. Os cinco tipos existentes passam `8`. O byte 5 do header já grava o tamanho, então um arquivo de 8 aberto como 4 (ou vice-versa) é recusado pela checagem que já existe (`rowindex.go:83`).
 
-- [ ] **Passo 6: teste do `Denso32`**
+- [ ] **Passo 6: teste do `Dense32`**
 
 ```go
 func TestDenso32GravaLeECresce(t *testing.T) {
 	dir := t.TempDir()
-	d, err := OpenDenso32(filepath.Join(dir, "g.idx"), [4]byte{'T','S','T','1'}, 512)
+	d, err := OpenDense32(filepath.Join(dir, "g.idx"), [4]byte{'T','S','T','1'}, 512)
 	if err != nil { t.Fatal(err) }
 	defer d.Close()
 	if !d.Nasceu() { t.Fatal("arquivo novo tem de nascer") }
@@ -284,8 +284,8 @@ func TestDenso32GravaLeECresce(t *testing.T) {
 
 func TestDenso32RecusaArquivoDeOitoBytes(t *testing.T) {
 	dir := t.TempDir()
-	e, _ := OpenEscritas(filepath.Join(dir, "x.idx"), 512); e.Close()
-	if _, err := OpenDenso32(filepath.Join(dir, "x.idx"), escritasMagic, 512); err == nil {
+	e, _ := OpenLastWrites(filepath.Join(dir, "x.idx"), 512); e.Close()
+	if _, err := OpenDense32(filepath.Join(dir, "x.idx"), lastWritesMagic, 512); err == nil {
 		t.Fatal("arquivo com entrySize 8 aberto como 4 tem de ser recusado")
 	}
 }
@@ -407,7 +407,7 @@ por grupo na internação e guardado ao lado da chave (tarefa B2 define
   - `TestDicionarioAposentaENuncaReemite`: aposenta o id 2, reabre, `Chave(2)` vivo=false, `Interna(mesma chave)` devolve id 4.
   - `TestDicionarioRecusaOTeto`: teto 2, terceira chave → `ErrTetoDeGrupos`; aposentar uma libera uma vaga.
   - `TestDicionarioNaoAlocaNoLookup` (`!race`, teto 0 sobre `Interna` de chave existente e `PorChave`).
-  - **Mutação obrigatória**: remover o `f.Sync()` de `Interna` e provar que um teste fica vermelho — `TestDicionarioFsyncaAntesDeDevolverOId` usa um seam `aposEscrita func()` (como `agenda.aposEscrita`) que injeta pânico entre o write e o sync, e confere na reabertura que a entrada NÃO está lá (com o sync, o pânico só pode acontecer depois dela durável).
+  - **Mutação obrigatória**: remover o `f.Sync()` de `Interna` e provar que um teste fica vermelho — `TestDicionarioFsyncaAntesDeDevolverOId` usa um seam `afterWrite func()` (como `agenda.aposEscrita`) que injeta pânico entre o write e o sync, e confere na reabertura que a entrada NÃO está lá (com o sync, o pânico só pode acontecer depois dela durável).
 
 - [ ] **Passo 2: vermelho → implementar → verde → commit** — `contador: dicionário de grupos append-only com fsync por entrada e aposentadoria`.
 
@@ -534,7 +534,7 @@ return nil
   - `TestLinhaSemColunaDeAgrupamentoNaoConta`: payload sem `olt` ⇒ refs de todos os grupos inalterados.
   - `TestTetoDeGruposRecusaEConta`: teto 1; segunda OLT ⇒ `Recusados == 1`, linha entra como SemGrupo.
   - `TestDobraReproduzOsTotais`: 1.000 transições aleatórias + `ApplyOverlay` + `Msync`; `Dobra` numa segunda instância aberta sobre os mesmos arquivos devolve exatamente os mesmos totais/refs. **Este é o teste que sustenta a consistência através de crash.**
-  - `TestOverlayNaoVaiAoMmapAntesDoApply`: transições sem `ApplyOverlay`; uma segunda instância sobre os arquivos dobra ZERO. Depois do `ApplyOverlay`, dobra os totais. (Mutação: `Transiciona` gravando direto no `Denso32` → vermelho.)
+  - `TestOverlayNaoVaiAoMmapAntesDoApply`: transições sem `ApplyOverlay`; uma segunda instância sobre os arquivos dobra ZERO. Depois do `ApplyOverlay`, dobra os totais. (Mutação: `Transiciona` gravando direto no `Dense32` → vermelho.)
   - `TestDobraTrataIdAposentadoComoOrfa`: reescreve a entrada para SemGrupo e conta em `Orfas`.
   - `TestCobreMexidasAcompanhaAsTransicoes`: `Transicoes()` sobe por transição efetiva (não por reprocessamento), `CobreMexidas` é monotônico.
   - **Mutações obrigatórias, relatadas no commit**: (1) remover o decremento de `refs` na saída de grupo → `TestMudarDeGrupoAjustaAsDuasPontas` vermelho; (2) remover o `total--` da lápide → `TestLapideDescontaEPreservaOGrupo` vermelho; (3) trocar `antiga == nova` por `true` → `TestReprocessarOMesmoEventoNaoMexe` continua verde (é o esperado: a mutação equivalente é remover o early-return e ver `TestDobraReproduzOsTotais`… continuar verde também — registrar que essa mutação é inofensiva por construção, e por quê).

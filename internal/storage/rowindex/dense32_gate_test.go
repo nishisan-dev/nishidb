@@ -14,16 +14,16 @@ import (
 // sobre entradas já cobertas pelo arquivo — a primeira escrita de um bloco
 // cresce a região, e isso é I/O, não caminho quente.
 func TestDenso32NaoAlocaNoCaminhoQuente(t *testing.T) {
-	const linhas = 1 << 16
-	d := abreDenso32(t, filepath.Join(t.TempDir(), "g.idx"), linhas)
-	for r := types.RowID(0); r < linhas; r++ {
+	const rows = 1 << 16
+	d := openDense32(t, filepath.Join(t.TempDir(), "g.idx"), rows)
+	for r := types.RowID(0); r < rows; r++ {
 		if err := d.Set(r, uint32(r)); err != nil {
 			t.Fatal(err)
 		}
 	}
 	var r types.RowID
 	if n := testing.AllocsPerRun(1000, func() {
-		r = (r + 1) & (linhas - 1)
+		r = (r + 1) & (rows - 1)
 		if err := d.Set(r, uint32(r)+1); err != nil {
 			t.Fatal(err)
 		}
