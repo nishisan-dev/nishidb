@@ -105,7 +105,7 @@ func todosOsIndices(tb testing.TB, c *schema.Compiled) *fakestorage.Store {
 	todos := fid(tb, c, "Acct-Status-Type", "Framed-Protocol", "Acct-Terminate-Cause",
 		"Filter-Id", "NAS-Port-Type", "Service-Type", "Acct-Authentic",
 		"NAS-IP-Address", "NAS-Identifier", "Framed-IP-Address")
-	return fakestorage.New(fakestorage.Indexes{Campos: todos})
+	return fakestorage.New(fakestorage.Indexes{Fields: todos})
 }
 
 // espiao falha o teste se o planner tocar em DADOS. Nenhum dos métodos de dado
@@ -303,7 +303,7 @@ func TestPlanUmIndexScan(t *testing.T) {
 // Lookup num campo sem índice e a query FALHARIA em vez de degradar.
 func TestPlanBitmapSemCapabilityFullScan(t *testing.T) {
 	c := compilar(t)
-	semEsseBitmap := fakestorage.New(fakestorage.Indexes{Campos: fid(t, c, "Framed-Protocol")})
+	semEsseBitmap := fakestorage.New(fakestorage.Indexes{Fields: fid(t, c, "Framed-Protocol")})
 	p := planner.New(semEsseBitmap, nil)
 	if pl := planeja(t, p, eq(campo(t, c, "status"), str("Stop"))); pl != planner.FullScan() {
 		t.Fatalf("plano = %T, want FullScan", pl)
@@ -511,7 +511,7 @@ func TestPlanTipoPromovidoNaoUsaIndice(t *testing.T) {
 		t.Fatal(err)
 	}
 	vlan := campo(t, c, "vlan")
-	store := fakestorage.New(fakestorage.Indexes{Campos: []types.FieldID{vlan.ID}})
+	store := fakestorage.New(fakestorage.Indexes{Fields: []types.FieldID{vlan.ID}})
 	p := planner.New(store, nil)
 
 	// Literal int: casa o tipo da coluna, usa o índice.
@@ -572,7 +572,7 @@ func TestPlanCampoAutoNaoUsaIndice(t *testing.T) {
 		IsAuto: true, Indexed: true,
 	}
 	comIndice := planner.New(fakestorage.New(fakestorage.Indexes{
-		Campos: []types.FieldID{sintetico.ID},
+		Fields: []types.FieldID{sintetico.ID},
 	}), nil)
 	if pl := planeja(t, comIndice, eq(sintetico, str("x"))); pl != planner.FullScan() {
 		t.Errorf("plano = %s, want FullScan: campo auto não é elegível a índice "+

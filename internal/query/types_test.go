@@ -45,7 +45,7 @@ func novoTiposHarness(t *testing.T) *tiposHarness {
 	texto, _ := sch.FieldByName([]byte("texto"))
 	v4, _ := sch.FieldByName([]byte("v4"))
 	st := fakestorage.New(fakestorage.Indexes{
-		Campos: []types.FieldID{texto.ID, v4.ID},
+		Fields: []types.FieldID{texto.ID, v4.ID},
 	})
 	eng := query.NewEngine()
 	if err := eng.Register("todos_os_tipos", sch, st); err != nil {

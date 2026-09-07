@@ -84,7 +84,14 @@
 #     Fase 3, não aqui. O local `ausente` do schema virou `absent`, e o gate
 #     nem o procura: token minúsculo sem maiúscula interna não entra no
 #     índice de nomes velhos.
+#     `Campos` entra pelo mesmo motivo de `campos`, só que na forma que abre
+#     frase: "Campos fora de ordem (id 3 antes do id 1) violam a invariante"
+#     (internal/testutil/fakestorage/fakestorage_test.go:315) fala dos campos
+#     DO PAYLOAD, não do `Indexes.Campos` que virou `Fields`. O substantivo
+#     PT-BR abre frase em vinte documentos e comentários; a citação
+#     qualificada daquele campo não sobrou em lugar nenhum.
 Arquivo.Apenda
+Campos
 Com
 Data
 Escritor.Apenda

@@ -62,7 +62,7 @@ func TestIndexedRefleteACapacidadeDoMotor(t *testing.T) {
 		return f.ID
 	}
 	st := fakestorage.New(fakestorage.Indexes{
-		Campos: []types.FieldID{id("status"), id("node")},
+		Fields: []types.FieldID{id("status"), id("node")},
 	})
 
 	visto := map[string][2]string{}

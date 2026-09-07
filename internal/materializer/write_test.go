@@ -204,7 +204,7 @@ schema:
 	if r := m.Apply([]byte(`{"id":"A","seq":10,"severidade":3}`)); r.Err != nil {
 		t.Fatal(r.Err)
 	}
-	rowID, ok := st.RowIDDaKey("A")
+	rowID, ok := st.RowIDByKey("A")
 	if !ok {
 		t.Fatal("key não materializada")
 	}
@@ -244,7 +244,7 @@ func TestRessurreicaoNaoFazMergeSobreOPayloadDaLapide(t *testing.T) {
 	if r := m.Apply([]byte(`{"id":"A","severidade":3,"extra":"velho"}`)); r.Err != nil {
 		t.Fatal(r.Err)
 	}
-	rowID, ok := st.RowIDDaKey("A")
+	rowID, ok := st.RowIDByKey("A")
 	if !ok {
 		t.Fatal("key não materializada")
 	}
@@ -253,7 +253,7 @@ func TestRessurreicaoNaoFazMergeSobreOPayloadDaLapide(t *testing.T) {
 	if r := m.Apply([]byte(`{"id":"A","severidade":9}`)); r.Err != nil {
 		t.Fatal(r.Err)
 	}
-	st.LimpaTombstone(rowID)
+	st.UnsetTombstone(rowID)
 
 	rec, _, presente, err := st.GetByKey(st.OpenSnapshot(), []byte("A"), nil)
 	if err != nil || !presente {

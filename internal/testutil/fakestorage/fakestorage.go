@@ -58,7 +58,7 @@ import (
 // montar um estado que o real não alcança — que é exatamente o que um dublê não
 // pode fazer.
 type Indexes struct {
-	Campos []types.FieldID
+	Fields []types.FieldID
 }
 
 type row struct {
@@ -87,7 +87,7 @@ type Store struct {
 	byKey    map[string]types.RowID
 	rows     map[types.RowID]*row
 	nextRow  types.RowID
-	indexado map[types.FieldID]bool
+	indexed  map[types.FieldID]bool
 	postings map[postingKey]map[types.RowID]struct{}
 
 	// PutCalls instrumenta as chamadas na ordem em que ocorreram.
@@ -108,11 +108,11 @@ func New(idx Indexes) *Store {
 		// contador zerado): os índices densos indexam por rowId, e começar
 		// em 1 desperdiçaria o slot 0 em todos eles.
 		nextRow:  0,
-		indexado: map[types.FieldID]bool{},
+		indexed:  map[types.FieldID]bool{},
 		postings: map[postingKey]map[types.RowID]struct{}{},
 	}
-	for _, f := range idx.Campos {
-		s.indexado[f] = true
+	for _, f := range idx.Fields {
+		s.indexed[f] = true
 	}
 	return s
 }
@@ -175,7 +175,7 @@ func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *ty
 	}
 
 	// O payload ANTERIOR deixou de ser lido aqui, e a ausência é o espelho do
-	// real: a indexação é aditiva (ver aplicaPostings), então não há diff a
+	// real: a indexação é aditiva (ver applyPostings), então não há diff a
 	// fazer e o prev serve apenas para resolver o rowId.
 	var (
 		rowID   types.RowID
@@ -193,7 +193,7 @@ func (s *Store) Put(key []byte, seq int64, flags uint8, payload []byte, prev *ty
 	}
 
 	s.byKey[string(key)] = rowID
-	s.aplicaPostings(rowID, payload)
+	s.applyPostings(rowID, payload)
 	s.rows[rowID] = &row{
 		rowID:   rowID,
 		seq:     seq,
@@ -223,14 +223,14 @@ func (s *Store) validateIndexable(payload []byte) error {
 		if !ok {
 			return r.Err()
 		}
-		if s.indexado[id] && len(v.Bytes) > types.MaxIndexedValueBytes {
+		if s.indexed[id] && len(v.Bytes) > types.MaxIndexedValueBytes {
 			return fmt.Errorf("%w: campo %d é indexado e tem valor de %d bytes, acima do teto de %d",
 				types.ErrInvalidArgument, id, len(v.Bytes), types.MaxIndexedValueBytes)
 		}
 	}
 }
 
-// aplicaPostings liga uma posting para CADA campo indexado presente no payload
+// applyPostings liga uma posting para CADA campo indexado presente no payload
 // novo, e não remove nenhuma. É o espelho exato do aplicaIndiceSets do Store
 // real, e a palavra "exato" é o requisito, não um elogio.
 //
@@ -253,7 +253,7 @@ func (s *Store) validateIndexable(payload []byte) error {
 // morreria com ele. Falso negativo, que é a única coisa que o §44 não perdoa.
 //
 // Não há parâmetro prevPayload porque não há diff a fazer.
-func (s *Store) aplicaPostings(rowID types.RowID, payload []byte) {
+func (s *Store) applyPostings(rowID types.RowID, payload []byte) {
 	var r encoding.FieldReader
 	r.Reset(payload)
 	for {
@@ -266,7 +266,7 @@ func (s *Store) aplicaPostings(rowID types.RowID, payload []byte) {
 }
 
 func (s *Store) addPosting(field types.FieldID, v types.Value, rowID types.RowID) {
-	if !s.indexado[field] {
+	if !s.indexed[field] {
 		return
 	}
 	k := postingKey{field, valKey(v)}
@@ -303,8 +303,8 @@ func (s *Store) State(key, buf []byte) (types.Record, []byte, types.Presence, er
 		return types.Record{}, buf, types.PresenceAbsent, nil
 	}
 	r := s.rows[rowID]
-	rec, out, lido, err := s.readRow(r, buf)
-	if err != nil || !lido {
+	rec, out, read, err := s.readRow(r, buf)
+	if err != nil || !read {
 		return types.Record{}, out, types.PresenceAbsent, err
 	}
 	if !r.live() {
@@ -365,16 +365,16 @@ func (s *Store) SetTombstone(id types.RowID) {
 	}
 }
 
-// LimpaTombstone desliga o bit, para o teste observar a entidade reaberta.
-func (s *Store) LimpaTombstone(id types.RowID) {
+// UnsetTombstone desliga o bit, para o teste observar a entidade reaberta.
+func (s *Store) UnsetTombstone(id types.RowID) {
 	if r, ok := s.rows[id]; ok {
 		r.flags &^= types.FlagTombstone
 	}
 }
 
-// RowIDDaKey resolve a key sem passar pela liveness — o teste precisa do id
+// RowIDByKey resolve a key sem passar pela liveness — o teste precisa do id
 // da row que acabou de marcar como lápide.
-func (s *Store) RowIDDaKey(key string) (types.RowID, bool) {
+func (s *Store) RowIDByKey(key string) (types.RowID, bool) {
 	id, ok := s.byKey[key]
 	return id, ok
 }
@@ -395,7 +395,7 @@ func (s *Store) ScanLive(types.Snapshot) types.RowIDIterator {
 // Indexed informa se o campo tem índice — o capability check do planner. Sem
 // ele o plano escolhe o caminho indexado e a query falha em runtime, em vez de
 // degradar para full scan como o design promete.
-func (s *Store) Indexed(field types.FieldID) bool { return s.indexado[field] }
+func (s *Store) Indexed(field types.FieldID) bool { return s.indexed[field] }
 
 // InjectPosting insere um posting no índice do campo SEM alterar o estado da
 // row. Existe para reproduzir o falso positivo que o Store real tolera por
@@ -409,7 +409,7 @@ func (s *Store) Indexed(field types.FieldID) bool { return s.indexado[field] }
 // inexistente é ACEITO — posting apontando para row que não está mais lá é
 // justamente um dos estados órfãos do real.
 func (s *Store) InjectPosting(field types.FieldID, v types.Value, id types.RowID) error {
-	if !s.indexado[field] {
+	if !s.indexed[field] {
 		return fmt.Errorf("%w: campo %d não possui índice", types.ErrInvalidArgument, field)
 	}
 	if len(v.Bytes) > types.MaxIndexedValueBytes {
@@ -420,10 +420,10 @@ func (s *Store) InjectPosting(field types.FieldID, v types.Value, id types.RowID
 	return nil
 }
 
-// CamposIndexados devolve, em ordem crescente, os campos com índice.
-func (s *Store) CamposIndexados() []types.FieldID {
-	out := make([]types.FieldID, 0, len(s.indexado))
-	for field := range s.indexado {
+// IndexedFields devolve, em ordem crescente, os campos com índice.
+func (s *Store) IndexedFields() []types.FieldID {
+	out := make([]types.FieldID, 0, len(s.indexed))
+	for field := range s.indexed {
 		out = append(out, field)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
@@ -435,7 +435,7 @@ func (s *Store) CamposIndexados() []types.FieldID {
 // candidatos: rows tombstoned podem aparecer — valide liveness e predicate via
 // GetByRowID (spec §44).
 func (s *Store) Lookup(field types.FieldID, v types.Value) (types.RowIDIterator, error) {
-	if !s.indexado[field] {
+	if !s.indexed[field] {
 		return nil, fmt.Errorf("%w: campo %d não possui índice", types.ErrInvalidArgument, field)
 	}
 	return s.lookup(field, v), nil
@@ -530,10 +530,10 @@ func (d *Dict) SetTypeHint(id types.FieldID, t types.FieldType) error {
 	if t == types.TypeNull {
 		return fmt.Errorf("fakestorage: tipo nulo não pode ser fixado no campo %d", id)
 	}
-	if _, existe := d.names[id]; !existe {
+	if _, exists := d.names[id]; !exists {
 		return fmt.Errorf("fakestorage: campo %d inexistente", id)
 	}
-	switch atual := d.hints[id]; atual {
+	switch current := d.hints[id]; current {
 	case t:
 		return nil
 	case types.TypeNull:
@@ -541,7 +541,7 @@ func (d *Dict) SetTypeHint(id types.FieldID, t types.FieldType) error {
 		return nil
 	default:
 		return fmt.Errorf("%w: campo %q fixado como %s, tentativa de %s",
-			fielddict.ErrTypeHintConflict, d.names[id], atual, t)
+			fielddict.ErrTypeHintConflict, d.names[id], current, t)
 	}
 }
 

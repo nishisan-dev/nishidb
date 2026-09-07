@@ -83,7 +83,7 @@ func intVal(n int64) types.Value {
 }
 
 func TestPutCreateAndGetByKey(t *testing.T) {
-	s := New(Indexes{Campos: []types.FieldID{2, 3}})
+	s := New(Indexes{Fields: []types.FieldID{2, 3}})
 	p := payload(t, fv(1, strVal("ABC")), fv(2, strVal("Start")), fv(3, intVal(7)))
 	rowID, created, err := s.Put([]byte("ABC"), 100, 0, p, nil)
 	if err != nil || !created {
@@ -162,7 +162,7 @@ func TestBufferOwnershipBothDirections(t *testing.T) {
 }
 
 func TestPutUpdateDiffsIndexPostings(t *testing.T) {
-	s := New(Indexes{Campos: []types.FieldID{2}})
+	s := New(Indexes{Fields: []types.FieldID{2}})
 	p1 := payload(t, fv(1, strVal("ABC")), fv(2, strVal("Start")))
 	rowID, _, err := s.Put([]byte("ABC"), 1, 0, p1, nil)
 	if err != nil {
@@ -172,7 +172,7 @@ func TestPutUpdateDiffsIndexPostings(t *testing.T) {
 
 	// Update trocando o valor indexado: o novo entra e o ANTIGO permanece.
 	// A indexação é aditiva, espelhando o índice por segmento do Store real,
-	// que não tem fase de CLEAR (spec §5.2) — ver aplicaPostings. Exigir que o
+	// que não tem fase de CLEAR (spec §5.2) — ver applyPostings. Exigir que o
 	// antigo saísse aqui deixaria o dublê mais preciso que o real.
 	var buf []byte
 	prev, _, _, _ := s.GetByKey(s.OpenSnapshot(), []byte("ABC"), buf)
@@ -191,24 +191,24 @@ func TestPutUpdateDiffsIndexPostings(t *testing.T) {
 // o lookup devolveria a row errada — que é exatamente o tipo de divergência
 // que o dublê existe para expor.
 func TestPostingKeySeparaTiposComMesmosBytes(t *testing.T) {
-	s := New(Indexes{Campos: []types.FieldID{2, 3}})
-	mesmoConteudo := []byte("0100")
-	comoString := types.Value{Type: types.TypeString, Bytes: mesmoConteudo}
-	comoBytes := types.Value{Type: types.TypeBytes, Bytes: mesmoConteudo}
+	s := New(Indexes{Fields: []types.FieldID{2, 3}})
+	sameContent := []byte("0100")
+	asString := types.Value{Type: types.TypeString, Bytes: sameContent}
+	asBytes := types.Value{Type: types.TypeBytes, Bytes: sameContent}
 
-	pA := payload(t, fv(1, strVal("A")), fv(2, comoString))
+	pA := payload(t, fv(1, strVal("A")), fv(2, asString))
 	rowA, _, err := s.Put([]byte("A"), 1, 0, pA, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	pB := payload(t, fv(1, strVal("B")), fv(2, comoBytes))
+	pB := payload(t, fv(1, strVal("B")), fv(2, asBytes))
 	rowB, _, err := s.Put([]byte("B"), 1, 0, pB, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	assertPosting(t, s, 2, comoString, []types.RowID{rowA})
-	assertPosting(t, s, 2, comoBytes, []types.RowID{rowB})
+	assertPosting(t, s, 2, asString, []types.RowID{rowA})
+	assertPosting(t, s, 2, asBytes, []types.RowID{rowB})
 
 	// Mesma armadilha entre tipos de largura fixa: bool 1 e int64 1 têm o
 	// mesmo I64.
@@ -230,7 +230,7 @@ func TestPostingKeySeparaTiposComMesmosBytes(t *testing.T) {
 // Campo indexado cujo valor NÃO mudou mantém o posting: o diff compara os
 // valores e só mexe no índice quando há troca real.
 func TestPutValorIndexadoInalteradoMantemPosting(t *testing.T) {
-	s := New(Indexes{Campos: []types.FieldID{2}})
+	s := New(Indexes{Fields: []types.FieldID{2}})
 	p1 := payload(t, fv(1, strVal("ABC")), fv(2, strVal("Start")))
 	rowID, _, err := s.Put([]byte("ABC"), 1, 0, p1, nil)
 	if err != nil {
@@ -255,7 +255,7 @@ func TestPutValorIndexadoInalteradoMantemPosting(t *testing.T) {
 // e é isso que o teste afirma: a posting sobrevive como candidato E o payload
 // corrente já não a justifica.
 func TestPutRemovedFieldClearsPosting(t *testing.T) {
-	s := New(Indexes{Campos: []types.FieldID{2}})
+	s := New(Indexes{Fields: []types.FieldID{2}})
 	p1 := payload(t, fv(1, strVal("ABC")), fv(2, strVal("Start")))
 	rowID, _, _ := s.Put([]byte("ABC"), 1, 0, p1, nil)
 	p2 := payload(t, fv(1, strVal("ABC")))
@@ -269,14 +269,14 @@ func TestPutRemovedFieldClearsPosting(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("GetByKey: ok=%v err=%v", ok, err)
 	}
-	if temCampo(t, rec.Payload, 2) {
+	if hasField(t, rec.Payload, 2) {
 		t.Error("o campo removido continua no payload corrente: a revalidação não descartaria a row")
 	}
 }
 
-// temCampo diz se o payload carrega o campo — é o que a revalidação do §44 faz
+// hasField diz se o payload carrega o campo — é o que a revalidação do §44 faz
 // com cada candidato que o índice devolve.
-func temCampo(t *testing.T, payload []byte, id types.FieldID) bool {
+func hasField(t *testing.T, payload []byte, id types.FieldID) bool {
 	t.Helper()
 	var r encoding.FieldReader
 	r.Reset(payload)
@@ -298,7 +298,7 @@ func TestPutWithNilPrevResolvesInternally(t *testing.T) {
 	// prev==nil com key existente: o Put resolve sozinho (fallback do
 	// contrato) e a indexação continua correta — o valor novo entra, e o antigo
 	// permanece como candidato (§5.2, sem fase de CLEAR).
-	s := New(Indexes{Campos: []types.FieldID{2}})
+	s := New(Indexes{Fields: []types.FieldID{2}})
 	p1 := payload(t, fv(1, strVal("ABC")), fv(2, strVal("Start")))
 	rowID, _, _ := s.Put([]byte("ABC"), 1, 0, p1, nil)
 	p2 := payload(t, fv(1, strVal("ABC")), fv(2, strVal("Stop")))
@@ -362,7 +362,7 @@ func TestPutRejectsInvalidArguments(t *testing.T) {
 // append deixa o dataset inabrível para sempre. Campo sem índice aceita o
 // mesmo valor: o teto é do índice, não do payload.
 func TestPutRejectsOversizedIndexedValue(t *testing.T) {
-	s := New(Indexes{Campos: []types.FieldID{2}})
+	s := New(Indexes{Fields: []types.FieldID{2}})
 	big := make([]byte, types.MaxIndexedValueBytes+1)
 	for i := range big {
 		big[i] = 'x'
@@ -518,7 +518,7 @@ func TestScanLiveAscending(t *testing.T) {
 // LookupHash. Os campos e as asserções são os mesmos; o que sumiu foi a
 // distinção entre as duas chamadas.
 func TestLookupAscendente(t *testing.T) {
-	s := New(Indexes{Campos: []types.FieldID{2, 3}})
+	s := New(Indexes{Fields: []types.FieldID{2, 3}})
 	for i, k := range []string{"K1", "K2", "K3"} {
 		p := payload(t, fv(1, strVal(k)), fv(2, strVal("Start")), fv(3, intVal(int64(i%2))))
 		if _, _, err := s.Put([]byte(k), 1, 0, p, nil); err != nil {
@@ -566,7 +566,7 @@ func TestLookupAscendente(t *testing.T) {
 // elas guardavam (campo fora do conjunto indexado é ErrInvalidArgument)
 // continua guardado pela primeira asserção, sobre o campo 1.
 func TestLookupWithoutIndexIsError(t *testing.T) {
-	s := New(Indexes{Campos: []types.FieldID{2}})
+	s := New(Indexes{Fields: []types.FieldID{2}})
 	if _, _, err := s.Put([]byte("K"), 1, 0, payload(t, fv(1, strVal("K")), fv(2, strVal("Start"))), nil); err != nil {
 		t.Fatal(err)
 	}
@@ -579,7 +579,7 @@ func TestLookupWithoutIndexIsError(t *testing.T) {
 	if s.Indexed(1) || s.Indexed(3) || !s.Indexed(2) {
 		t.Error("Indexado diverge dos índices declarados")
 	}
-	if got := s.CamposIndexados(); len(got) != 1 || got[0] != 2 {
+	if got := s.IndexedFields(); len(got) != 1 || got[0] != 2 {
 		t.Errorf("CamposIndexados = %v, want [2]", got)
 	}
 }
@@ -589,7 +589,7 @@ func TestLookupWithoutIndexIsError(t *testing.T) {
 // GetByRowID. Um fake que pré-filtrasse esconderia o bug de rows mortas
 // vazando no resultado.
 func TestLookupReturnsSupersetWithTombstones(t *testing.T) {
-	s := New(Indexes{Campos: []types.FieldID{2}})
+	s := New(Indexes{Fields: []types.FieldID{2}})
 	p := payload(t, fv(1, strVal("K1")), fv(2, strVal("Start")))
 	rowID, _, err := s.Put([]byte("K1"), 1, 0, p, nil)
 	if err != nil {

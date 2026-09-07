@@ -66,7 +66,7 @@ func fakeSetup(tb testing.TB) (*materializer.Materializer, *fakestorage.Store, *
 		if !ok {
 			tb.Fatalf("campo %q com índice no YAML não foi compilado", name)
 		}
-		idx.Campos = append(idx.Campos, f.ID)
+		idx.Fields = append(idx.Fields, f.ID)
 	}
 	st := fakestorage.New(idx)
 	m, err := materializer.New(c, st)

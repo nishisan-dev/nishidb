@@ -47,7 +47,7 @@ func newHarness(t *testing.T, yml string, bitmapFields ...string) *harness {
 		if !ok {
 			t.Fatalf("campo %q não compilado", name)
 		}
-		idx.Campos = append(idx.Campos, f.ID)
+		idx.Fields = append(idx.Fields, f.ID)
 	}
 	st := fakestorage.New(idx)
 	return &harness{t: t, m: mustNew(t, c, st), st: st, c: c}
@@ -992,7 +992,7 @@ func TestApplyFixtureRadiusCompletoDepoisPatch(t *testing.T) {
 	if !ok {
 		t.Fatal("Acct-Status-Type não compilado")
 	}
-	st := fakestorage.New(fakestorage.Indexes{Campos: []types.FieldID{statusField.ID}})
+	st := fakestorage.New(fakestorage.Indexes{Fields: []types.FieldID{statusField.ID}})
 	m := mustNew(t, c, st)
 	h := &harness{t: t, m: m, st: st, c: c}
 

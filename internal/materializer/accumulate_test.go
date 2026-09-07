@@ -74,7 +74,7 @@ func TestAcumulaRecomecaDepoisDeNullExplicito(t *testing.T) {
 func TestAcumulaRecomecaNaEntidadeQueRessuscita(t *testing.T) {
 	h := newHarness(t, acumulaYAML)
 	h.apply(`{"id":"a","matchedCounter":9}`)
-	row, ok := h.st.RowIDDaKey("a")
+	row, ok := h.st.RowIDByKey("a")
 	if !ok {
 		t.Fatal("a entidade não foi materializada")
 	}

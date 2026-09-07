@@ -47,7 +47,7 @@ func novoHarness(t *testing.T) *harness {
 	todosOsIndexados := ids(t, sch, "Acct-Status-Type", "Framed-Protocol", "Acct-Terminate-Cause",
 		"Filter-Id", "NAS-Port-Type", "Service-Type", "Acct-Authentic",
 		"NAS-IP-Address", "NAS-Identifier", "Framed-IP-Address")
-	idx := fakestorage.Indexes{Campos: todosOsIndexados}
+	idx := fakestorage.Indexes{Fields: todosOsIndexados}
 	st := fakestorage.New(idx)
 	eng := query.NewEngine()
 	if err := eng.Register(dataset, sch, st); err != nil {
