@@ -155,7 +155,7 @@ func TestFieldReaderRawField(t *testing.T) {
 	if raw := r.RawField(); raw != nil {
 		t.Fatalf("antes do primeiro Next não há campo corrente: %x", raw)
 	}
-	var reconstruido []byte
+	var rebuilt []byte
 	for range cases {
 		if _, _, ok := r.Next(); !ok {
 			t.Fatalf("Next: %v", r.Err())
@@ -164,7 +164,7 @@ func TestFieldReaderRawField(t *testing.T) {
 		if len(raw) == 0 {
 			t.Fatal("RawField vazio para campo válido")
 		}
-		reconstruido = append(reconstruido, raw...)
+		rebuilt = append(rebuilt, raw...)
 	}
 	if _, _, ok := r.Next(); ok {
 		t.Fatal("esperado fim do payload")
@@ -172,7 +172,7 @@ func TestFieldReaderRawField(t *testing.T) {
 	if raw := r.RawField(); raw != nil {
 		t.Fatalf("após o fim não há campo corrente: %x", raw)
 	}
-	if !bytes.Equal(reconstruido, payload) {
+	if !bytes.Equal(rebuilt, payload) {
 		t.Fatal("a concatenação dos spans brutos deveria reproduzir o payload")
 	}
 
@@ -264,14 +264,14 @@ func TestAppendFieldRejeitaValorInvalido(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			intacto := append([]byte(nil), base...)
+			unchanged := append([]byte(nil), base...)
 
 			got, err := AppendField(base, 2, c.val)
 			if !errors.Is(err, ErrInvalidPayload) {
 				t.Fatalf("esperado ErrInvalidPayload, obtido %v", err)
 			}
-			if !bytes.Equal(got, intacto) {
-				t.Fatalf("dst foi modificado apesar do erro: %x vs %x", got, intacto)
+			if !bytes.Equal(got, unchanged) {
+				t.Fatalf("dst foi modificado apesar do erro: %x vs %x", got, unchanged)
 			}
 			// E o que sobrou continua decodificável.
 			var r FieldReader
