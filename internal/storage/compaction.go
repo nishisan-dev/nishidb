@@ -482,7 +482,7 @@ func (s *Store) tamanhoDoSegmento(seg uint32) (int64, error) {
 func (s *Store) fechaODescritorEApaga(seg uint32, aposentado string) error {
 	s.aposMu.Lock()
 	defer s.aposMu.Unlock()
-	if err := s.segR.FechaSegmento(seg); err != nil {
+	if err := s.segR.CloseSegment(seg); err != nil {
 		return err
 	}
 	if err := os.Remove(aposentado); err != nil {

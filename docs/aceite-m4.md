@@ -22,7 +22,7 @@ espaço.
 > aposentadoria anunciava bytes que ninguém recebeu. **`df` e `du` discordavam, e
 > nenhum instrumento deste projeto os consultava.**
 >
-> Corrigido em `Reader.FechaSegmento` mais a barreira `aposMu`, e registrado como
+> Corrigido em `Reader.CloseSegment` mais a barreira `aposMu`, e registrado como
 > **débito 78** (já fechado). O número de disco desta rodada **não foi
 > recalculado** — a rodada não é reproduzível a posteriori —, então leia-o como
 > "bytes que a compaction desocupou logicamente", que é afirmação verdadeira, e

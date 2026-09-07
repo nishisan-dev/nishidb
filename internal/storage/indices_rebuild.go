@@ -418,7 +418,7 @@ func (s *Store) secoesDoSelado(seg uint32) ([]types.FieldID, error) {
 // conteúdo: quem renomear por último grava os mesmos bytes.
 //
 // O QUE O CHAMADOR PRECISA GARANTIR, e é concreto: esta função lê pelo s.segR, e
-// a aposentadoria fecha o descritor por segR.FechaSegmento, que exige que
+// a aposentadoria fecha o descritor por segR.CloseSegment, que exige que
 // nenhuma leitura esteja em voo — barreira que no Store é o aposMu. O Close fecha
 // o segR inteiro. Quem chama do laço é a passadaDeReconstrucao, e ela resolve os
 // dois: contra o Close, o ParaReconstrucao cancela e AGUARDA antes do quiesce;

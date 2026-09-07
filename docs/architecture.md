@@ -524,7 +524,7 @@ trata como `ErrDatasetCorrupt`.
 mantiver o inode aberto, os blocos seguem alocados. E o cache de descritores do
 `segment.Reader` não tem despejo — o descritor que a própria varredura abriu
 para ler o segmento ficaria aberto pela vida do processo. Por isso a
-aposentadoria **fecha o descritor** (`Reader.FechaSegmento`) antes do unlink.
+aposentadoria **fecha o descritor** (`Reader.CloseSegment`) antes do unlink.
 Antes disso, a compaction devolvia disco ao *listing* do diretório e nada ao
 dispositivo, e os três instrumentos do projeto — `dirBytes`, `discoDosSegmentos`
 e o `Stats.StorageBytes` — somam o listing e não viam a diferença (débito 78, e

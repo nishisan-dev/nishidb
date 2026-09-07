@@ -653,8 +653,8 @@ func TestSegmentoAposentadoEntreAListagemEOPreadViraFonteVazia(t *testing.T) {
 	// atos da aposentadoria, na ordem dela: fechar o descritor cacheado e só
 	// então remover o arquivo. Só o unlink não basta — o descritor aberto mantém
 	// o inode vivo e o pread continua funcionando, que é justamente por que os
-	// blocos não voltam ao dispositivo sem o FechaSegmento.
-	if err := s.segR.FechaSegmento(refs[0].ID); err != nil {
+	// blocos não voltam ao dispositivo sem o CloseSegment.
+	if err := s.segR.CloseSegment(refs[0].ID); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(filepath.Join(dir, "data", fmt.Sprintf("segment-%08d.dat", refs[0].ID))); err != nil {

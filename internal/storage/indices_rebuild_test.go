@@ -278,7 +278,7 @@ func TestOSegmentoAposentadoNoMeioDaPassadaNaoDerrubaOLaco(t *testing.T) {
 // o mesmo: com o descritor ainda em cache, o pread sobre o arquivo já removido
 // devolve os bytes certos — foi assim que a primeira versão deste teste
 // reconstruiu com sucesso o índice de um segmento que já não existia. O erro que
-// o laço precisa tolerar só aparece depois do FechaSegmento.
+// o laço precisa tolerar só aparece depois do CloseSegment.
 func aposenta(t *testing.T, s *Store, dir string, seg uint32) {
 	t.Helper()
 	if err := s.fechaODescritorEApaga(seg, caminhoCanonicoDoSegmento(dir+"/data", seg)); err != nil {

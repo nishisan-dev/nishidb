@@ -452,12 +452,12 @@ medição:
    ([:1016](internal/storage/store.go:1016)), `Expira`
    ([expiry.go:60](internal/storage/expiry.go:60)) e `reapendaSeVivo`
    ([compaction.go:130](internal/storage/compaction.go:130)).
-3. `Reader.FechaSegmento(seg)` novo em
+3. `Reader.CloseSegment(seg)` novo em
    [segment.go](internal/storage/segment/segment.go): `delete(r.fds, seg)` +
    `Close()` sob o `mu` que já existe.
 4. `aposentaSegmento` segura `aposMu.Lock()` do `os.Rename`
    ([compaction.go:455](internal/storage/compaction.go:455)) até depois do
-   `os.Remove` ([:490](internal/storage/compaction.go:490)), com `FechaSegmento`
+   `os.Remove` ([:490](internal/storage/compaction.go:490)), com `CloseSegment`
    entre os dois. **Os dois `Checkpoint()` ficam FORA** — eles tomam `wmu` e podem
    levar 30s.
 5. `podaSegmentoAposentado` ([compaction.go:556](internal/storage/compaction.go:556))

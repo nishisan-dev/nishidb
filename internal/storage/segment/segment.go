@@ -440,7 +440,7 @@ func scanFrom(f io.ReaderAt, seg uint32, from int64, fn func(off uint32, rec typ
 	}
 }
 
-// FechaSegmento fecha e descarta o descritor cacheado de UM segmento.
+// CloseSegment fecha e descarta o descritor cacheado de UM segmento.
 //
 // Existe para a aposentadoria da compaction, e é o que devolve os blocos ao
 // filesystem: o unlink remove o NOME, e enquanto qualquer descritor mantiver o
@@ -454,7 +454,7 @@ func scanFrom(f io.ReaderAt, seg uint32, from int64, fn func(off uint32, rec typ
 // O CHAMADOR PRECISA GARANTIR que nenhuma leitura esteja em voo sobre este
 // segmento — no Store isso é a barreira aposMu. Fechar sob um pread em
 // andamento faz a leitura falhar com os.ErrClosed, que aborta a query.
-func (r *Reader) FechaSegmento(seg uint32) error {
+func (r *Reader) CloseSegment(seg uint32) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	f, ok := r.fds[seg]
