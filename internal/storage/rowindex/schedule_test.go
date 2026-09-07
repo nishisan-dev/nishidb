@@ -37,10 +37,10 @@ func TestAgendaGuardaOVencimentoDaFolha(t *testing.T) {
 func TestAgendaProximoVencimentoEhOMinimoDeTodos(t *testing.T) {
 	a := openSchedule(t, 4096)
 	for _, c := range []struct {
-		row  types.RowID
-		venc uint64
+		row    types.RowID
+		expiry uint64
 	}{{10, 5_000}, {2_000, 300}, {3_500, 900}} {
-		if err := a.Update(c.row, c.venc); err != nil {
+		if err := a.Update(c.row, c.expiry); err != nil {
 			t.Fatal(err)
 		}
 	}

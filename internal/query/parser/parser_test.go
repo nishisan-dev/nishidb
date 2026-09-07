@@ -132,14 +132,14 @@ func TestPrecedenciaEAssociatividade(t *testing.T) {
 	// Left-leaning: recursão à direita produziria AND(a, AND(b,c)) e quebraria
 	// o flatten do planner.
 	for _, tc := range []struct {
-		nome string
+		name string
 		sql  string
 		op   parser.LogicalOp
 	}{
 		{"and", "SELECT a FROM x WHERE a=1 AND b=2 AND c=3", parser.LogicalAnd},
 		{"or", "SELECT a FROM x WHERE a=1 OR b=2 OR c=3", parser.LogicalOr},
 	} {
-		t.Run("left-leaning/"+tc.nome, func(t *testing.T) {
+		t.Run("left-leaning/"+tc.name, func(t *testing.T) {
 			st := parseOK(t, tc.sql)
 			root, ok := st.Where.(*parser.LogicalExpr)
 			if !ok || root.Op != tc.op {

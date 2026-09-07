@@ -178,6 +178,7 @@ inglês correspondente.
 | entrada (de teste) | input | internal/units/units_test.go |
 | casos (de teste) | cases | internal/units/units_test.go |
 | quer (esperado em teste) | want | internal/units/units_test.go |
+| porque (a justificativa do caso de teste, que a mensagem de falha imprime) | reason | internal/storage/versions/versions_test.go |
 | unidade (de tamanho) | unit | internal/units/units.go |
 | sufixo | suffix | internal/units/units.go |
 | carrega (transporta um valor no próprio tipo) | carries | internal/types/types.go |
@@ -369,6 +370,7 @@ inglês correspondente.
 | termo (cada comparação ou IS NULL contado no teto do WHERE) | term | internal/query/parser |
 | altura (da árvore da AST) | height | internal/query/parser |
 | palavra (de cláusula) | word | internal/query/parser |
+| vez (a n-ésima ocorrência de um token na query, contada a partir de 1) | occurrence | internal/query/parser/positions_test.go |
 | run (sequência de registros que o operador acumulador despeja em disco e relê em ordem) | run | internal/query/spill |
 | limpeza (remoção de resíduo de disco na subida do dataset) | cleanup | internal/query/spill |
 | conhecido (a entrada do índice já foi gravada; zero é desconhecido, nunca vencido) | known | internal/storage/rowindex |
@@ -526,6 +528,15 @@ Escolhas que o juiz do G2 fechou e que valem para os grupos seguintes:
   intacto: a linha `teto → ceiling` está fechada desde o G1 e o juiz não a
   contradiz. Identificador e valor já divergiam em `CodMetodo`
   (`METHOD_NOT_ALLOWED`) e `CodCorpoGrande` (`REQUEST_TOO_LARGE`).
+- **vez → occurrence, porque → reason.** Os dois termos entraram na limpeza
+  dos campos de struct anônima que o inventário não enxergava (as tabelas de
+  caso de teste). "vez" é a n-ésima ocorrência de um token dentro da query que
+  `positionOf` procura — `nth` diria o ordinal e não a coisa contada. "porque"
+  é a justificativa que o caso carrega para a mensagem de falha; `reason` já é
+  o inglês do "motivo" da falha de autenticação, e a tabela já tem precedente
+  de dois termos PT-BR com o mesmo inglês (`soltar` e `liberar` → `release`) —
+  o que a regra de colisão proíbe é o contrário, dois sentidos do MESMO termo
+  PT-BR virarem a mesma palavra.
 - **run fica run.** O `Arquivo` de `internal/query/spill` é definido pelo
   godoc como "UM run", e todo o pacote fala assim (o `runs` do executor, a
   mensagem `spill: criar run %s`, o nome do teste). `File` traduziria o

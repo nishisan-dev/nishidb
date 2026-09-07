@@ -15,7 +15,7 @@ import (
 // verde com a guarda errada disparando.
 func TestErrosDeSintaxe(t *testing.T) {
 	cases := []struct {
-		nome string
+		name string
 		sql  string
 		pos  int
 		msg  string
@@ -72,7 +72,7 @@ func TestErrosDeSintaxe(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.nome, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			st, err := parser.Parse(tc.sql)
 			if err == nil {
 				t.Fatalf("Parse(%q) não falhou (stmt = %#v)", tc.sql, st)
@@ -123,7 +123,7 @@ func TestAninhamentoDemais(t *testing.T) {
 // mensagem e quebraria as asserções de substring do pipeline inteiro.
 func TestErroDoLexerChegaSemEmbrulho(t *testing.T) {
 	cases := []struct {
-		nome string
+		name string
 		sql  string
 		msg  string
 		pos  int
@@ -134,7 +134,7 @@ func TestErroDoLexerChegaSemEmbrulho(t *testing.T) {
 		{"comentario sql", "SELECT a FROM x -- comentario", "caractere inesperado '-'", 16},
 	}
 	for _, tc := range cases {
-		t.Run(tc.nome, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			_, err := parser.Parse(tc.sql)
 			if err == nil {
 				t.Fatal("esperava erro")
@@ -182,7 +182,7 @@ func TestErroSempreTermina(t *testing.T) {
 // "esperado nome do dataset") que não nomeia o ponto nem diz o que fazer.
 func TestPontoForaDeLugarTemMensagemPropria(t *testing.T) {
 	cases := []struct {
-		nome string
+		name string
 		sql  string
 		msg  string
 	}{
@@ -193,7 +193,7 @@ func TestPontoForaDeLugarTemMensagemPropria(t *testing.T) {
 		{"projecao com ponto solto", "SELECT a. FROM x", "esperado nome de coluna"},
 	}
 	for _, tc := range cases {
-		t.Run(tc.nome, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			_, err := parser.Parse(tc.sql)
 			if err == nil {
 				t.Fatal("esperava erro")

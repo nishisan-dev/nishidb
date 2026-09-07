@@ -98,7 +98,7 @@ func TestExprEhSeladaComTresNos(t *testing.T) {
 // passaria despercebido no caminho feliz.
 func TestErroDoLexerEmCadaProducao(t *testing.T) {
 	cases := []struct {
-		nome string
+		name string
 		sql  string
 	}{
 		{"apos select", "SELECT # FROM x"},
@@ -122,7 +122,7 @@ func TestErroDoLexerEmCadaProducao(t *testing.T) {
 		{"apos ponto e virgula", "SELECT a FROM x; #"},
 	}
 	for _, tc := range cases {
-		t.Run(tc.nome, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			st, err := parser.Parse(tc.sql)
 			if err == nil {
 				t.Fatalf("Parse(%q) não falhou: %#v", tc.sql, st)

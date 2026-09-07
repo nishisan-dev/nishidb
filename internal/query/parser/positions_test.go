@@ -36,10 +36,10 @@ func positionOf(t *testing.T, sql, sub string, n int) int {
 
 func TestNullCheckColumnPos(t *testing.T) {
 	cases := []struct {
-		sql    string
-		coluna string
-		vez    int
-		not    bool
+		sql        string
+		column     string
+		occurrence int
+		not        bool
 	}{
 		{"SELECT a FROM x WHERE a IS NULL", "a", 2, false},
 		{"SELECT a FROM x WHERE a IS NOT NULL", "a", 2, true},
@@ -59,8 +59,8 @@ func TestNullCheckColumnPos(t *testing.T) {
 			if nc.Not != tc.not {
 				t.Errorf("Not = %v, want %v", nc.Not, tc.not)
 			}
-			if want := positionOf(t, tc.sql, tc.coluna, tc.vez); nc.ColumnPos != want {
-				t.Errorf("ColumnPos = %d, want %d (%q)", nc.ColumnPos, want, tc.coluna)
+			if want := positionOf(t, tc.sql, tc.column, tc.occurrence); nc.ColumnPos != want {
+				t.Errorf("ColumnPos = %d, want %d (%q)", nc.ColumnPos, want, tc.column)
 			}
 		})
 	}
@@ -68,9 +68,9 @@ func TestNullCheckColumnPos(t *testing.T) {
 
 func TestComparisonColumnPos(t *testing.T) {
 	cases := []struct {
-		sql    string
-		coluna string
-		vez    int
+		sql        string
+		column     string
+		occurrence int
 	}{
 		{"SELECT a FROM x WHERE a = 1", "a", 2},
 		{`SELECT a FROM x WHERE "Framed-IP-Address" = '10.0.0.1'`, `"Framed-IP-Address"`, 1},
@@ -83,8 +83,8 @@ func TestComparisonColumnPos(t *testing.T) {
 		t.Run(tc.sql, func(t *testing.T) {
 			st := parseOK(t, tc.sql)
 			c := lastComparison(t, st.Where)
-			if want := positionOf(t, tc.sql, tc.coluna, tc.vez); c.ColumnPos != want {
-				t.Errorf("ColumnPos = %d, want %d (%q)", c.ColumnPos, want, tc.coluna)
+			if want := positionOf(t, tc.sql, tc.column, tc.occurrence); c.ColumnPos != want {
+				t.Errorf("ColumnPos = %d, want %d (%q)", c.ColumnPos, want, tc.column)
 			}
 		})
 	}
@@ -94,7 +94,7 @@ func TestLimitPos(t *testing.T) {
 	cases := []struct {
 		sql     string
 		literal string
-		limite  int64
+		limit   int64
 	}{
 		{"SELECT a FROM x LIMIT 10", "10", 10},
 		{"SELECT a FROM x WHERE status = 'Stop' LIMIT 500", "500", 500},
@@ -104,8 +104,8 @@ func TestLimitPos(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.sql, func(t *testing.T) {
 			st := parseOK(t, tc.sql)
-			if !st.HasLimit || st.Limit != tc.limite {
-				t.Fatalf("HasLimit=%v Limit=%d, want true/%d", st.HasLimit, st.Limit, tc.limite)
+			if !st.HasLimit || st.Limit != tc.limit {
+				t.Fatalf("HasLimit=%v Limit=%d, want true/%d", st.HasLimit, st.Limit, tc.limit)
 			}
 			if want := positionOf(t, tc.sql, tc.literal, 1); st.LimitPos != want {
 				t.Errorf("LimitPos = %d, want %d", st.LimitPos, want)

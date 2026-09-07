@@ -27,9 +27,9 @@ func TestBuscaDevolveAVersaoVigenteNaEpocaENaoAIntermediaria(t *testing.T) {
 	c.Retain(7, v1, 20) // ao publicar v2, a anterior era v1
 
 	cases := []struct {
-		epoca  uint64
-		quero  uint64
-		porque string
+		epoch  uint64
+		want   uint64
+		reason string
 	}{
 		{5, v0, "quem abriu antes das duas atualizações tem de ver v0"},
 		{10, v1, "quem abriu na época 10 já viu v1: só a atualização da 20 é futura"},
@@ -38,15 +38,15 @@ func TestBuscaDevolveAVersaoVigenteNaEpocaENaoAIntermediaria(t *testing.T) {
 		{99, 0, "depois de tudo, nada a restaurar"},
 	}
 	for _, k := range cases {
-		got, found := c.At(7, k.epoca)
-		if k.quero == 0 {
+		got, found := c.At(7, k.epoch)
+		if k.want == 0 {
 			if found {
-				t.Errorf("At(7, %d) = %#x, quero achou=false: %s", k.epoca, got, k.porque)
+				t.Errorf("At(7, %d) = %#x, quero achou=false: %s", k.epoch, got, k.reason)
 			}
 			continue
 		}
-		if !found || got != k.quero {
-			t.Errorf("At(7, %d) = (%#x, %v), quero %#x: %s", k.epoca, got, found, k.quero, k.porque)
+		if !found || got != k.want {
+			t.Errorf("At(7, %d) = (%#x, %v), quero %#x: %s", k.epoch, got, found, k.want, k.reason)
 		}
 	}
 }
