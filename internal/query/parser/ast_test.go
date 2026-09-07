@@ -12,11 +12,11 @@ import (
 // operador investigar a coisa errada.
 func TestRotulosDasConstantes(t *testing.T) {
 	t.Run("LogicalOp", func(t *testing.T) {
-		casos := map[parser.LogicalOp]string{
+		cases := map[parser.LogicalOp]string{
 			parser.LogicalAnd: "AND",
 			parser.LogicalOr:  "OR",
 		}
-		for op, want := range casos {
+		for op, want := range cases {
 			if got := op.String(); got != want {
 				t.Errorf("LogicalOp(%d).String() = %q, want %q", op, got, want)
 			}
@@ -28,7 +28,7 @@ func TestRotulosDasConstantes(t *testing.T) {
 	})
 
 	t.Run("CmpOp", func(t *testing.T) {
-		casos := map[parser.CmpOp]string{
+		cases := map[parser.CmpOp]string{
 			parser.CmpEq:  "=",
 			parser.CmpNe:  "!=",
 			parser.CmpGt:  ">",
@@ -36,7 +36,7 @@ func TestRotulosDasConstantes(t *testing.T) {
 			parser.CmpLt:  "<",
 			parser.CmpLte: "<=",
 		}
-		for op, want := range casos {
+		for op, want := range cases {
 			if got := op.String(); got != want {
 				t.Errorf("CmpOp(%d).String() = %q, want %q", op, got, want)
 			}
@@ -49,14 +49,14 @@ func TestRotulosDasConstantes(t *testing.T) {
 	t.Run("OperandKind", func(t *testing.T) {
 		// O vocabulário é o da tabela de coerção do binder: mudar aqui muda a
 		// mensagem de erro de tipo que o usuário lê.
-		casos := map[parser.OperandKind]string{
+		cases := map[parser.OperandKind]string{
 			parser.OperandString: "string",
 			parser.OperandInt:    "int",
 			parser.OperandFloat:  "float",
 			parser.OperandBool:   "bool",
 			parser.OperandParam:  "param",
 		}
-		for k, want := range casos {
+		for k, want := range cases {
 			if got := k.String(); got != want {
 				t.Errorf("OperandKind(%d).String() = %q, want %q", k, got, want)
 			}
@@ -76,11 +76,11 @@ func TestExprEhSeladaComTresNos(t *testing.T) {
 
 	// Um type switch exaustivo cobre toda árvore que o parser produz.
 	st := parseOK(t, "SELECT a FROM x WHERE (a = 1 OR b IS NULL) AND c != 'z'")
-	var contar func(parser.Expr) int
-	contar = func(e parser.Expr) int {
+	var count func(parser.Expr) int
+	count = func(e parser.Expr) int {
 		switch n := e.(type) {
 		case *parser.LogicalExpr:
-			return 1 + contar(n.Left) + contar(n.Right)
+			return 1 + count(n.Left) + count(n.Right)
 		case *parser.Comparison, *parser.NullCheck:
 			return 1
 		default:
@@ -88,7 +88,7 @@ func TestExprEhSeladaComTresNos(t *testing.T) {
 			return 0
 		}
 	}
-	if got := contar(st.Where); got != 5 {
+	if got := count(st.Where); got != 5 {
 		t.Errorf("%d nós na árvore, want 5", got)
 	}
 }
@@ -97,7 +97,7 @@ func TestExprEhSeladaComTresNos(t *testing.T) {
 // pega um `advance()` diferente. Sem eles, um advance que engolisse o erro
 // passaria despercebido no caminho feliz.
 func TestErroDoLexerEmCadaProducao(t *testing.T) {
-	casos := []struct {
+	cases := []struct {
 		nome string
 		sql  string
 	}{
@@ -121,7 +121,7 @@ func TestErroDoLexerEmCadaProducao(t *testing.T) {
 		{"apos numero do limit", "SELECT a FROM x LIMIT 10 #"},
 		{"apos ponto e virgula", "SELECT a FROM x; #"},
 	}
-	for _, tc := range casos {
+	for _, tc := range cases {
 		t.Run(tc.nome, func(t *testing.T) {
 			st, err := parser.Parse(tc.sql)
 			if err == nil {

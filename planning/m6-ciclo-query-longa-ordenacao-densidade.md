@@ -670,7 +670,7 @@ caminho que passa a fazer trabalho condicional.
 > **A refutação que simplifica o bloco inteiro: nenhuma palavra vira keyword do
 > lexer.** `ORDER`, `BY`, `ASC`, `DESC`, `NULLS`, `FIRST`, `LAST`, `OFFSET` e
 > `LIKE` são `TokenIdent` reconhecidos **por posição**, via `ASCIIEqualFold` —
-> exatamente a máquina que `clausulaNaoSuportada`
+> exatamente a máquina que `unsupportedClause`
 > ([clauses.go:41](internal/query/parser/clauses.go:41)) já usa. Elas só
 > aparecem onde hoje **só cabe erro** (`parser.go:45-55` e `:372-375`), então o
 > parser **se compromete** ao ver a palavra e depois **exige** o resto — consumo,
@@ -759,7 +759,7 @@ senão o zero-alocação do matcher não é medido.
 `Ordem interna:` AST aditiva (`HasOffset`/`Offset`/`OffsetPos`, molde exato de
 `HasLimit`); `parseOffset` reusando as recusas de `parseLimit`
 ([:469](internal/query/parser/parser.go:469)); `offset` sai de
-`clausulasNaoSuportadas`; contador de skip antes de `it.emitidas++`
+`unsupportedClauses`; contador de skip antes de `it.emitidas++`
 ([executor.go:222](internal/query/executor/executor.go:222)); e `comLimit` passa a
 usar **`parser.Parse`**, cortando em `min(LimitPos, OffsetPos)` e **preservando o
 OFFSET**. Isso paga a metade local do **débito 46**.

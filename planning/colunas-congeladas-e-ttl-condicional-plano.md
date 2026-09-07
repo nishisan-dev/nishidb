@@ -48,7 +48,7 @@
 |---|---|
 | `internal/query/executor/collect.go` | Esvaziado; `slot`/`coleta` viram alias do pacote novo |
 | `internal/query/executor/predicate.go` | Esvaziado; `programa`/`compila` viram alias do pacote novo |
-| `internal/query/parser/parser.go` | `ParseCondicao` |
+| `internal/query/parser/parser.go` | `ParseCondition` |
 | `internal/query/binder/binder.go` | `BindCondicao` + `BoundCondicao` |
 | `internal/schema/spec.go` | `FieldSpec.FrozenFrom`; `TTLSpec` vira `[]RegraTTLSpec`; `_expiresIn` em `nomesDeSistema` |
 | `internal/schema/compile.go` | `CompiledField.FrozenFrom`; `Compiled.Congeladas`, `Compiled.RegrasTTL`, `Compiled.Prazo`; remoção de `IsTTL` |
@@ -750,7 +750,7 @@ git commit -m "Prova a coluna congelada de ponta a ponta e documenta a chave"
 - Produces:
   ```go
   // parser
-  func ParseCondicao(sql string) (Expr, error)
+  func ParseCondition(sql string) (Expr, error)
 
   // binder
   type BoundCondicao struct {
@@ -764,15 +764,15 @@ git commit -m "Prova a coluna congelada de ponta a ponta e documenta a chave"
 
 ```go
 func TestBindCondicaoResolveSlots(t *testing.T) {
-	e, err := parser.ParseCondicao("type = 2 AND sev > 3")
+	e, err := parser.ParseCondition("type = 2 AND sev > 3")
 	// bc.Slots.IDs tem os dois ids em ordem; as comparações têm Slot preenchido
 }
 func TestParseCondicaoRecusaTextoDepoisDaExpressao(t *testing.T) {
-	_, err := parser.ParseCondicao("type = 2 LIMIT 5")
+	_, err := parser.ParseCondition("type = 2 LIMIT 5")
 	// erro: sobra de tokens
 }
 func TestBindCondicaoRecusaParametro(t *testing.T) {
-	e, _ := parser.ParseCondicao("type = ?")
+	e, _ := parser.ParseCondition("type = ?")
 	_, err := binder.BindCondicao(e, sc)
 	// erro: não há quem forneça parâmetro
 }
@@ -784,17 +784,17 @@ func TestBindCondicaoRecusaColunaInexistente(t *testing.T) { /* propaga o erro d
 Run: `go test ./internal/query/... -run Condicao -v`
 Expected: FAIL — nenhuma das duas funções existe.
 
-- [ ] **Passo 3: `ParseCondicao`**
+- [ ] **Passo 3: `ParseCondition`**
 
 ```go
-// ParseCondicao parseia uma expressão booleana SOLTA — sem SELECT, sem FROM —
+// ParseCondition parseia uma expressão booleana SOLTA — sem SELECT, sem FROM —
 // com a MESMA gramática do WHERE.
 //
 // Existe para que a condição de uma regra de TTL seja escrita e entendida
 // exatamente como um WHERE. Envolver a condição num SELECT sintético daria o
 // mesmo resultado ao custo de mensagens de erro apontando para colunas de uma
 // query que o operador não escreveu.
-func ParseCondicao(sql string) (Expr, error) {
+func ParseCondition(sql string) (Expr, error) {
 	p := &parser{}
 	p.lx.Init(sql)
 	if err := p.advance(); err != nil {
@@ -1148,7 +1148,7 @@ func CompilaRegras(regras []schema.RegraTTL, sc *schema.Compiled) ([]RegraCompil
 			out = append(out, RegraCompilada{Duracao: r.Duracao})
 			continue
 		}
-		e, err := parser.ParseCondicao(r.When)
+		e, err := parser.ParseCondition(r.When)
 		if err != nil {
 			return nil, fmt.Errorf("ttl[%d]: condição %q: %w", i, r.When, err)
 		}

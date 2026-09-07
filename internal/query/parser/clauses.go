@@ -2,7 +2,7 @@ package parser
 
 import "github.com/nishisan-dev/nishidb/internal/query/lexer"
 
-// clausulasNaoSuportadas mapeia a palavra que abre uma cláusula ausente da v1
+// unsupportedClauses mapeia a palavra que abre uma cláusula ausente da v1
 // para o nome que a mensagem publica.
 //
 // GROUP publica "GROUP BY" mesmo sem o BY ter sido lido.
@@ -16,7 +16,7 @@ import "github.com/nishisan-dev/nishidb/internal/query/lexer"
 // OFFSET SAIU desta lista quando passou a existir. Ela é de cláusulas que o
 // produto RECUSA nomeando, e manter aqui uma implementada faria a mensagem
 // mentir.
-var clausulasNaoSuportadas = map[string]string{
+var unsupportedClauses = map[string]string{
 	"group":    "GROUP BY",
 	"join":     "JOIN",
 	"having":   "HAVING",
@@ -24,7 +24,7 @@ var clausulasNaoSuportadas = map[string]string{
 	"union":    "UNION",
 }
 
-// clausulaNaoSuportada devolve o nome da cláusula que tok abre, se abrir
+// unsupportedClause devolve o nome da cláusula que tok abre, se abrir
 // alguma.
 //
 // Duas condições, e as duas importam:
@@ -40,13 +40,13 @@ var clausulasNaoSuportadas = map[string]string{
 // consultada nos sítios onde o parser JÁ ia recusar a query — a palavra
 // continua sendo um identificador válido em toda posição em que a gramática a
 // aceita.
-func clausulaNaoSuportada(tok lexer.Token) (string, bool) {
+func unsupportedClause(tok lexer.Token) (string, bool) {
 	if tok.Type != lexer.TokenIdent {
 		return "", false
 	}
-	for palavra, nome := range clausulasNaoSuportadas {
-		if lexer.ASCIIEqualFold(tok.Text, palavra) {
-			return nome, true
+	for word, name := range unsupportedClauses {
+		if lexer.ASCIIEqualFold(tok.Text, word) {
+			return name, true
 		}
 	}
 	return "", false

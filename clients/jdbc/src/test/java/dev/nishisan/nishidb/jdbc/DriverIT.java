@@ -265,7 +265,7 @@ class DriverIT {
      *
      * <p>A cláusula recusada aqui é o GROUP BY, e não o ORDER BY como era até
      * a v1 ganhar ordenação: o ORDER BY passou a ser suportado (três modos, em
-     * internal/query/executor/sort.go) e saiu de `clausulasNaoSuportadas`,
+     * internal/query/executor/sort.go) e saiu de `unsupportedClauses`,
      * mas este teste ficou para trás e cobrava dele um erro que o servidor
      * deixou de emitir. O GROUP BY continua recusado e mantém a intenção
      * original — provar que UNSUPPORTED_CLAUSE chega traduzido —, e o

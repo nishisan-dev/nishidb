@@ -87,12 +87,12 @@ func TestQueryMultilinha(t *testing.T) {
 	if !ok || and.Op != parser.LogicalAnd {
 		t.Fatalf("Where = %#v, want AND", st.Where)
 	}
-	esq, ok := and.Left.(*parser.Comparison)
-	if !ok || esq.Column != "status" || esq.Operand.ParamIdx != 0 {
+	left, ok := and.Left.(*parser.Comparison)
+	if !ok || left.Column != "status" || left.Operand.ParamIdx != 0 {
 		t.Errorf("esquerda = %#v", and.Left)
 	}
-	dir, ok := and.Right.(*parser.Comparison)
-	if !ok || dir.Column != "nas" || dir.Operand.ParamIdx != 1 {
+	right, ok := and.Right.(*parser.Comparison)
+	if !ok || right.Column != "nas" || right.Operand.ParamIdx != 1 {
 		t.Errorf("direita = %#v", and.Right)
 	}
 	if got := sql[st.DatasetPos : st.DatasetPos+len(st.Dataset)]; got != st.Dataset {
@@ -105,27 +105,27 @@ func TestQueryMultilinha(t *testing.T) {
 func TestPrecedenciaEAssociatividade(t *testing.T) {
 	t.Run("and liga mais que or", func(t *testing.T) {
 		st := parseOK(t, "SELECT a FROM x WHERE a = 1 OR b = 2 AND c = 3")
-		raiz, ok := st.Where.(*parser.LogicalExpr)
-		if !ok || raiz.Op != parser.LogicalOr {
+		root, ok := st.Where.(*parser.LogicalExpr)
+		if !ok || root.Op != parser.LogicalOr {
 			t.Fatalf("raiz = %#v, want OR", st.Where)
 		}
-		if _, ok := raiz.Left.(*parser.Comparison); !ok {
-			t.Errorf("esquerda do OR = %#v, want Comparison", raiz.Left)
+		if _, ok := root.Left.(*parser.Comparison); !ok {
+			t.Errorf("esquerda do OR = %#v, want Comparison", root.Left)
 		}
-		dir, ok := raiz.Right.(*parser.LogicalExpr)
-		if !ok || dir.Op != parser.LogicalAnd {
-			t.Errorf("direita do OR = %#v, want AND", raiz.Right)
+		right, ok := root.Right.(*parser.LogicalExpr)
+		if !ok || right.Op != parser.LogicalAnd {
+			t.Errorf("direita do OR = %#v, want AND", root.Right)
 		}
 	})
 
 	t.Run("parenteses invertem", func(t *testing.T) {
 		st := parseOK(t, "SELECT a FROM x WHERE (a = 1 OR b = 2) AND c = 3")
-		raiz, ok := st.Where.(*parser.LogicalExpr)
-		if !ok || raiz.Op != parser.LogicalAnd {
+		root, ok := st.Where.(*parser.LogicalExpr)
+		if !ok || root.Op != parser.LogicalAnd {
 			t.Fatalf("raiz = %#v, want AND", st.Where)
 		}
-		if esq, ok := raiz.Left.(*parser.LogicalExpr); !ok || esq.Op != parser.LogicalOr {
-			t.Errorf("esquerda do AND = %#v, want OR", raiz.Left)
+		if left, ok := root.Left.(*parser.LogicalExpr); !ok || left.Op != parser.LogicalOr {
+			t.Errorf("esquerda do AND = %#v, want OR", root.Left)
 		}
 	})
 
@@ -141,15 +141,15 @@ func TestPrecedenciaEAssociatividade(t *testing.T) {
 	} {
 		t.Run("left-leaning/"+tc.nome, func(t *testing.T) {
 			st := parseOK(t, tc.sql)
-			raiz, ok := st.Where.(*parser.LogicalExpr)
-			if !ok || raiz.Op != tc.op {
+			root, ok := st.Where.(*parser.LogicalExpr)
+			if !ok || root.Op != tc.op {
 				t.Fatalf("raiz = %#v", st.Where)
 			}
-			if _, ok := raiz.Left.(*parser.LogicalExpr); !ok {
-				t.Errorf("esquerda = %#v, want conectivo (árvore à esquerda)", raiz.Left)
+			if _, ok := root.Left.(*parser.LogicalExpr); !ok {
+				t.Errorf("esquerda = %#v, want conectivo (árvore à esquerda)", root.Left)
 			}
-			if _, ok := raiz.Right.(*parser.Comparison); !ok {
-				t.Errorf("direita = %#v, want Comparison (árvore à esquerda)", raiz.Right)
+			if _, ok := root.Right.(*parser.Comparison); !ok {
+				t.Errorf("direita = %#v, want Comparison (árvore à esquerda)", root.Right)
 			}
 		})
 	}
@@ -157,19 +157,19 @@ func TestPrecedenciaEAssociatividade(t *testing.T) {
 
 // Parênteses não existem na AST: são só precedência.
 func TestParentesesRedundantesNaoAparecemNaArvore(t *testing.T) {
-	simples := parseOK(t, "SELECT a FROM x WHERE a = 1")
-	comParenteses := parseOK(t, "SELECT a FROM x WHERE ((a = 1))")
+	plain := parseOK(t, "SELECT a FROM x WHERE a = 1")
+	withParens := parseOK(t, "SELECT a FROM x WHERE ((a = 1))")
 	// As posições diferem (o literal está deslocado), então comparamos a
 	// forma do nó, não a árvore inteira.
-	c1 := simples.Where.(*parser.Comparison)
-	c2 := comParenteses.Where.(*parser.Comparison)
-	if c1.Column != c2.Column || c1.Op != c2.Op || c1.Operand.Kind != c2.Operand.Kind || c1.Operand.I != c2.Operand.I {
-		t.Errorf("árvores diferentes:\n %#v\n %#v", c1, c2)
+	plainCmp := plain.Where.(*parser.Comparison)
+	parensCmp := withParens.Where.(*parser.Comparison)
+	if plainCmp.Column != parensCmp.Column || plainCmp.Op != parensCmp.Op || plainCmp.Operand.Kind != parensCmp.Operand.Kind || plainCmp.Operand.I != parensCmp.Operand.I {
+		t.Errorf("árvores diferentes:\n %#v\n %#v", plainCmp, parensCmp)
 	}
 }
 
 func TestComparadores(t *testing.T) {
-	casos := map[string]parser.CmpOp{
+	cases := map[string]parser.CmpOp{
 		"=":  parser.CmpEq,
 		"!=": parser.CmpNe,
 		">":  parser.CmpGt,
@@ -177,7 +177,7 @@ func TestComparadores(t *testing.T) {
 		"<":  parser.CmpLt,
 		"<=": parser.CmpLte,
 	}
-	for op, want := range casos {
+	for op, want := range cases {
 		t.Run(op, func(t *testing.T) {
 			st := parseOK(t, "SELECT a FROM x WHERE a "+op+" 1")
 			c, ok := st.Where.(*parser.Comparison)
@@ -206,7 +206,7 @@ func TestIsNull(t *testing.T) {
 }
 
 func TestOperandos(t *testing.T) {
-	casos := []struct {
+	cases := []struct {
 		lit  string
 		want parser.Operand
 	}{
@@ -224,12 +224,12 @@ func TestOperandos(t *testing.T) {
 		{"?", parser.Operand{Kind: parser.OperandParam, ParamIdx: 0}},
 		{"9223372036854775807", parser.Operand{Kind: parser.OperandInt, I: 9223372036854775807}},
 	}
-	for _, tc := range casos {
+	for _, tc := range cases {
 		t.Run(tc.lit, func(t *testing.T) {
-			const prefixo = "SELECT a FROM x WHERE a = "
-			st := parseOK(t, prefixo+tc.lit)
+			const prefix = "SELECT a FROM x WHERE a = "
+			st := parseOK(t, prefix+tc.lit)
 			c := st.Where.(*parser.Comparison)
-			tc.want.Pos = len(prefixo)
+			tc.want.Pos = len(prefix)
 			if c.Operand != tc.want {
 				t.Errorf("Operand = %#v, want %#v", c.Operand, tc.want)
 			}
@@ -301,10 +301,10 @@ func TestKeywordsCaseInsensitiveIdentCaseSensitive(t *testing.T) {
 }
 
 func TestPontoEVirgulaFinal(t *testing.T) {
-	semPV := parseOK(t, "SELECT * FROM x")
+	withoutSemicolon := parseOK(t, "SELECT * FROM x")
 	for _, sql := range []string{"SELECT * FROM x;", "SELECT * FROM x ;"} {
-		comPV := parseOK(t, sql)
-		if !reflect.DeepEqual(comPV, semPV) {
+		withSemicolon := parseOK(t, sql)
+		if !reflect.DeepEqual(withSemicolon, withoutSemicolon) {
 			t.Errorf("%q produziu AST diferente da versão sem ';'", sql)
 		}
 	}
@@ -365,13 +365,13 @@ func TestParseConcorrente(t *testing.T) {
 }
 
 func TestAninhamentoNoLimite(t *testing.T) {
-	abre := ""
-	fecha := ""
+	openParens := ""
+	closeParens := ""
 	for i := 0; i < parser.MaxExprDepth; i++ {
-		abre += "("
-		fecha += ")"
+		openParens += "("
+		closeParens += ")"
 	}
-	if _, err := parser.Parse("SELECT a FROM x WHERE " + abre + "a = 1" + fecha); err != nil {
+	if _, err := parser.Parse("SELECT a FROM x WHERE " + openParens + "a = 1" + closeParens); err != nil {
 		t.Errorf("%d níveis deveriam ser aceitos: %v", parser.MaxExprDepth, err)
 	}
 }

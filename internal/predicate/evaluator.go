@@ -26,7 +26,7 @@ import (
 // "counters[0].where"): a recusa sai na subida, para um operador lendo o log,
 // e "condição inválida" sem dizer qual é inacionável.
 func CompilaCondicao(rotulo, condicao string, sc *schema.Compiled) (*Programa, binder.Slots, error) {
-	e, err := parser.ParseCondicao(condicao)
+	e, err := parser.ParseCondition(condicao)
 	if err != nil {
 		return nil, binder.Slots{}, fmt.Errorf("%s: condição %q: %w", rotulo, condicao, err)
 	}
