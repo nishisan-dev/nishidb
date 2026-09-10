@@ -132,7 +132,7 @@ func TestManifestReservaACapacidadeDoLayoutQueGrava(t *testing.T) {
 	// e não um literal, porque duplicar a conta foi exatamente o que deixou a
 	// capacidade em 12 quando o layout já gravava 36.
 	withSections := sampleManifest()
-	withSections.Mode, withSections.RowIDBase = 1, 500
+	withSections.StoreMode, withSections.RowIDBase = 1, 500
 	withSections.Schedule = &ScheduleInfo{FallbackDurationMs: 60_000, BlockShift: 6, Levels: 4}
 	bs := withSections.encode()
 	reservedWithSections := 96 + len(withSections.Segments)*36 + TLVTailSize(&withSections)

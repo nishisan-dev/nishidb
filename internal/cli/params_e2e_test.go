@@ -133,8 +133,8 @@ func TestParamInt64AcimaDoTetoRecusaComAMensagemDoProtocolo(t *testing.T) {
 	code := a.roda("query", "--config", a.config, "--dataset", "radius_sessions",
 		"--param", "int64:9223372036854775808",
 		"SELECT id FROM radius_sessions WHERE _SEQ = ?")
-	if code != cli.ExitUso {
-		t.Fatalf("exit = %d, quer %d (erro de uso)", code, cli.ExitUso)
+	if code != cli.ExitUsageError {
+		t.Fatalf("exit = %d, quer %d (erro de uso)", code, cli.ExitUsageError)
 	}
 	if !strings.Contains(a.stderr.String(), "parameters[1]") {
 		t.Errorf("a mensagem não é a do protocolo (índice 1-based): %s", a.stderr.String())
@@ -154,7 +154,7 @@ func TestParamNuloEnsinaIsNull(t *testing.T) {
 	code := a.roda("query", "--config", a.config, "--dataset", "radius_sessions",
 		"--param", "string:null",
 		"SELECT id FROM radius_sessions WHERE status = ?")
-	if code == cli.ExitUso && strings.Contains(a.stderr.String(), "IS NULL") {
+	if code == cli.ExitUsageError && strings.Contains(a.stderr.String(), "IS NULL") {
 		t.Fatal("a flag conseguiu produzir um parâmetro NULO; ela não deveria ter sintaxe para isso")
 	}
 }
@@ -169,8 +169,8 @@ func TestParamDepoisDaQueryEhRecusadoComMensagemQueEnsinaAOrdem(t *testing.T) {
 	a := novoAmbiente(t)
 	code := a.roda("query", "--config", a.config, "--dataset", "radius_sessions",
 		"SELECT id FROM radius_sessions WHERE status = ?", "--param", "string:Stop")
-	if code != cli.ExitUso {
-		t.Fatalf("exit = %d, quer %d", code, cli.ExitUso)
+	if code != cli.ExitUsageError {
+		t.Fatalf("exit = %d, quer %d", code, cli.ExitUsageError)
 	}
 	if !strings.Contains(a.stderr.String(), "ANTES") {
 		t.Errorf("a mensagem não ensina a ordem: %s", a.stderr.String())

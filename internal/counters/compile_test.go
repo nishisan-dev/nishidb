@@ -191,15 +191,15 @@ counters:
 		t.Fatal(err)
 	}
 	defer func() { _ = dict.Close() }()
-	comp := counters.NovoCompilador(spec)
-	if comp.Compilado() != nil {
+	comp := counters.NewCompiler(spec)
+	if comp.Compiled() != nil {
 		t.Fatal("antes do callback não há schema compilado")
 	}
 	defs, err := comp.Callback()(dict)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sc := comp.Compilado()
+	sc := comp.Compiled()
 	if sc == nil {
 		t.Fatal("o callback tem de deixar o schema compilado disponível")
 	}
@@ -222,12 +222,12 @@ func TestCompiladorSemCountersDevolveNada(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = dict.Close() }()
-	comp := counters.NovoCompilador(spec)
+	comp := counters.NewCompiler(spec)
 	defs, err := comp.Callback()(dict)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(defs) != 0 || comp.Compilado() == nil {
-		t.Fatalf("sem counters: nenhuma definição, mas o schema compilado: %d, %v", len(defs), comp.Compilado())
+	if len(defs) != 0 || comp.Compiled() == nil {
+		t.Fatalf("sem counters: nenhuma definição, mas o schema compilado: %d, %v", len(defs), comp.Compiled())
 	}
 }

@@ -21,7 +21,7 @@ func BenchmarkReconstroiContadores1M(b *testing.B) {
 		Dir:           b.TempDir(),
 		SegmentSize:   64 << 20,
 		EstimatedRows: linhas,
-		CompilaContadores: callbackDeContadores(
+		CompileCountersCallbackFunction: callbackDeContadores(
 			contadorDeTeste{nome: "aut", groupBy: []string{"olt"}, where: true, teto: 4096},
 			contadorDeTeste{nome: "serv", groupBy: []string{"olt"}, teto: 4096},
 		),

@@ -365,8 +365,8 @@ tocar em nada:
 | Compaction | [compaction.go:189](../internal/storage/compaction.go:189) | Descarta record de linha vencida na reescrita |
 
 `Store.Options` troca `ExpireAfterWrite time.Duration` por: `TTLAtivo bool`,
-`DuracaoDeFundo time.Duration` e `CampoDePrazo string` (o nome de `_expiresIn`, resolvido
-pelo dicionário no Open, como o `CampoDeEscrita` já é). Os três montadores de opts
+`FallbackDuration time.Duration` e `TTLFieldName string` (o nome de `_expiresIn`, resolvido
+pelo dicionário no Open, como o `WriteInstantFieldName` já é). Os três montadores de opts
 acompanham: [cli.go:243](../internal/cli/cli.go:243),
 [offsets.go:93](../internal/cli/offsets.go:93),
 [server.go:332](../internal/server/server.go:332).

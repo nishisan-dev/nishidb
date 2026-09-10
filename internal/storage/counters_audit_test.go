@@ -316,7 +316,7 @@ func TestAuditoriaInconclusivaQuandoOSnapshotEstoura(t *testing.T) {
 		mustPut(t, s, k, 2, payloadServico(t, s, k, "B", true, rel.agora()), &prev)
 	})
 	_, err := s.AuditaContadores(context.Background())
-	if !errors.Is(err, ErrSnapshotExpirado) {
+	if !errors.Is(err, ErrExpiredSnapshot) {
 		t.Fatalf("a auditoria tinha de sair inconclusiva com ErrSnapshotExpirado, veio %v", err)
 	}
 }

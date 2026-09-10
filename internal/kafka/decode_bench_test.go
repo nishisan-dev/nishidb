@@ -54,8 +54,8 @@ func BenchmarkDecodeWorkers(b *testing.B) {
 				Dataset: "eventos", Topic: "eventos", GroupID: "g",
 				Brokers:        []string{"127.0.0.1:9092"},
 				MaxPollRecords: 1000, QueueSize: 5000, QueueBytes: 64 << 20,
-				DecodeWorkers: workers,
-				InvalidEvent:  schema.InvalidEventLogAndSkip,
+				DecodeWorkers:      workers,
+				InvalidEventPolicy: schema.InvalidEventLogAndSkip,
 			}
 			fila := NovaFila(cfg.QueueSize, cfg.QueueBytes)
 			met := registraMetricas(nil, "eventos")

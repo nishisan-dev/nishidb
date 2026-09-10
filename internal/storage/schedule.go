@@ -9,7 +9,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// adotaOuConstroiAgenda decide, na abertura, entre usar a agenda que está em
+// adotaOuConstroiAgenda decide, na abertura, entre usar a schedule que está em
 // disco e reconstruí-la.
 //
 // # Por que isto NÃO é o débito 22
@@ -20,12 +20,12 @@ import (
 // política, até o índice por segmento partir a conta em uma varredura por
 // segmento, agendável (§2.4).
 //
-// A agenda não tem essa propriedade. Ela deriva de expiry.idx, prazos.idx e
+// A schedule não tem essa propriedade. Ela deriva de expiry.idx, prazos.idx e
 // locations.idx, que já estão populados, densos e em mmap: um u64 por linha,
 // lidos sequencialmente. Zero records lidos, zero dicionário tocado. É a
 // mesma classe de operação que o hash.Index já faz ao recontar no Open e que
 // a primary já faz ao reconstruir por rehash — e é por isso que um dataset
-// existente ganha a agenda ao subir o binário novo, sem recriação e sem
+// existente ganha a schedule ao subir o binário novo, sem recriação e sem
 // reingestão.
 //
 // # Quando reconstrói
@@ -34,18 +34,18 @@ import (
 // abertura. O caso que importa é a DURAÇÃO DE FUNDO: a linha sem prazo
 // próprio herda dela, então mudá-la no YAML muda o vencimento de toda linha
 // com prazo desconhecido. Hoje esse efeito é invisível — o predicado
-// simplesmente passa a responder outra coisa. Com a agenda ele vira um
+// simplesmente passa a responder outra coisa. Com a schedule ele vira um
 // rebuild explícito, logado e com custo medido, e essa visibilidade é ganho,
 // não custo.
 //
 // Manifest ausente também reconstrói: é o dataset novo, em que a varredura
-// não custa nada, e é o dataset anterior à agenda, que é o caso da migração.
+// não custa nada, e é o dataset anterior à schedule, que é o caso da migração.
 //
 // E reconstrói quando os ARQUIVOS não descrevem o dataset, que é a pergunta
 // que o manifest não responde: ele declara os parâmetros da árvore, não a
 // existência dela. Ver rowindex.Schedule.NeedsRebuild.
 func (s *Store) adotaOuConstroiAgenda(m *checkpoint.Manifest) error {
-	if s.agenda == nil {
+	if s.schedule == nil {
 		return nil
 	}
 	querido := s.infoDaAgenda()
@@ -54,7 +54,7 @@ func (s *Store) adotaOuConstroiAgenda(m *checkpoint.Manifest) error {
 		atual = m.Schedule
 	}
 	limite := types.RowID(s.nextRowID.Load())
-	semArquivos := s.agenda.NeedsRebuild(limite)
+	semArquivos := s.schedule.NeedsRebuild(limite)
 	if atual != nil && *atual == *querido && !semArquivos {
 		return nil
 	}
@@ -73,10 +73,10 @@ func (s *Store) adotaOuConstroiAgenda(m *checkpoint.Manifest) error {
 	}
 
 	inicio := time.Now()
-	if err := s.agenda.Rebuild(limite, s.vencimentoDe); err != nil {
+	if err := s.schedule.Rebuild(limite, s.vencimentoDe); err != nil {
 		return fmt.Errorf("storage: construir a agenda de vencimentos de %s: %w", s.opts.Dir, err)
 	}
-	s.agendaReconstruida = true
+	s.scheduleBuilt = true
 	// O log nomeia o custo porque ele é a única coisa que o operador precisa
 	// decidir: uma reconstrução de segundos numa subida é aceitável, uma de
 	// minutos num dataset grande muda a janela de manutenção. Sem o número
@@ -106,7 +106,7 @@ func (s *Store) adotaOuConstroiAgenda(m *checkpoint.Manifest) error {
 // isso. É o instrumento dos testes de crash e da investigação de um dataset
 // suspeito.
 func (s *Store) AuditaAgenda() error {
-	if s.agenda == nil {
+	if s.schedule == nil {
 		return nil
 	}
 	if err := s.entra(); err != nil {
@@ -118,7 +118,7 @@ func (s *Store) AuditaAgenda() error {
 
 	limite := types.RowID(s.nextRowID.Load())
 	for id := types.RowID(0); id < limite; id++ {
-		agendado, querido := s.agenda.Get(id), s.vencimentoDe(id)
+		agendado, querido := s.schedule.Get(id), s.vencimentoDe(id)
 		if agendado == querido {
 			continue
 		}
@@ -131,5 +131,5 @@ func (s *Store) AuditaAgenda() error {
 		return fmt.Errorf("%w: row %d agendada para %d, mas os índices dizem %d",
 			ErrDatasetCorrupt, id, agendado, querido)
 	}
-	return s.agenda.Check()
+	return s.schedule.Check()
 }

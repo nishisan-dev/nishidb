@@ -57,7 +57,7 @@ func TestResiduoDeLivenessDoReplayNaoConverge(t *testing.T) {
 	certo := livenessSemCrash(t)
 
 	dir := t.TempDir()
-	opts := Options{Dir: dir, CamposIndexados: []types.FieldID{fldStatus}}
+	opts := Options{Dir: dir, IndexedFields: []types.FieldID{fldStatus}}
 
 	// 1. Row criada e CHECKPOINTADA: a partir daqui ela existe no ponto S, e
 	// o record dela é o que vai virar órfão.
@@ -115,7 +115,7 @@ func TestResiduoDeLivenessDoReplayNaoConverge(t *testing.T) {
 func livenessSemCrash(t *testing.T) struct{ doisRecords, tresRecords checkpoint.SegmentInfo } {
 	t.Helper()
 	dir := t.TempDir()
-	s := audOpen(t, Options{Dir: dir, CamposIndexados: []types.FieldID{fldStatus}})
+	s := audOpen(t, Options{Dir: dir, IndexedFields: []types.FieldID{fldStatus}})
 	defer s.Close()
 
 	mustPut(t, s, "lv", 1, statusPayload(t, s, "lv", "Start", 1), nil)

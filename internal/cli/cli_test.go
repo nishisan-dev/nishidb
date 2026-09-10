@@ -88,7 +88,7 @@ func novoAmbiente(t *testing.T) *ambiente {
 func (a *ambiente) roda(args ...string) int {
 	a.stdout.Reset()
 	a.stderr.Reset()
-	return cli.Run(args, cli.Ambiente{
+	return cli.Run(args, cli.CLIContext{
 		Stdin:  strings.NewReader(""),
 		Stdout: &a.stdout,
 		Stderr: &a.stderr,
@@ -99,7 +99,7 @@ func (a *ambiente) roda(args ...string) int {
 func (a *ambiente) rodaComEntrada(entrada string, args ...string) int {
 	a.stdout.Reset()
 	a.stderr.Reset()
-	return cli.Run(args, cli.Ambiente{
+	return cli.Run(args, cli.CLIContext{
 		Stdin:  strings.NewReader(entrada),
 		Stdout: &a.stdout,
 		Stderr: &a.stderr,
@@ -107,7 +107,7 @@ func (a *ambiente) rodaComEntrada(entrada string, args ...string) int {
 	})
 }
 
-// corpus determinístico em NDJSON, uma linha por evento.
+// corpus determinístico em NDJSON, uma line por evento.
 func corpus(t *testing.T, n int) string {
 	t.Helper()
 	cfg := radiusgen.DefaultConfig()
@@ -317,8 +317,8 @@ func TestErrosDeUso(t *testing.T) {
 	}
 	for _, tc := range casos {
 		t.Run(tc.nome, func(t *testing.T) {
-			if code := a.roda(tc.args...); code != cli.ExitUso {
-				t.Errorf("code = %d, want %d\n%s", code, cli.ExitUso, a.stderr.String())
+			if code := a.roda(tc.args...); code != cli.ExitUsageError {
+				t.Errorf("code = %d, want %d\n%s", code, cli.ExitUsageError, a.stderr.String())
 			}
 			if !strings.Contains(a.stderr.String(), tc.msg) {
 				t.Errorf("stderr = %q, want conter %q", a.stderr.String(), tc.msg)

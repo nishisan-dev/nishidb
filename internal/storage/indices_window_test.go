@@ -22,13 +22,13 @@ func histIndexado(t *testing.T, segSize int64) (*Store, *relogioFalso) {
 	t.Helper()
 	base := openStore(t, Options{})
 	hist := openStore(t, Options{
-		Dir:                    t.TempDir(),
-		Dataset:                "events_history",
-		SegmentSize:            segSize,
-		Modo:                   ModoHistorico,
-		DictCompartilhado:      base.FieldDict(),
-		CampoDeEscrita:         "_writtenAt",
-		CamposIndexadosPorNome: []string{"status"},
+		Dir:                   t.TempDir(),
+		Dataset:               "events_history",
+		SegmentSize:           segSize,
+		Mode:                  HistoryMode,
+		SharedDictionary:      base.FieldDict(),
+		WriteInstantFieldName: "_writtenAt",
+		IndexedFieldsByName:   []string{"status"},
 	})
 	rel := &relogioFalso{t: time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)}
 	hist.UsaRelogio(rel.agora)

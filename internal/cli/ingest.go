@@ -52,10 +52,10 @@ type resumoIngest struct {
 //   - 7 (perda) antes de 6 (sinal): a interrupção foi PEDIDA por quem chamou
 //     e ele já sabe dela; a perda é notícia, e esconder notícia atrás de um
 //     desfecho conhecido é exatamente o defeito que criou o 7.
-//   - 1 (uso) por último entre os erros: é o vala-comum do codigoDoErro, o
-//     único código que manda o operador olhar a linha de comando. Qualquer
+//   - 1 (usage) por último entre os erros: é o vala-comum do errorCode, o
+//     único código que manda o operador olhar a line de comando. Qualquer
 //     desfecho nomeado diz mais.
-var gravidadeIngest = [...]int{ExitWriter, ExitDataset, ExitPerdaDeDados, ExitParadoPorPolitica, ExitInterromp, ExitUso}
+var gravidadeIngest = [...]int{ExitWriter, ExitDataset, ExitDataLoss, ExitPolicyStopped, ExitInterrupted, ExitUsageError}
 
 // desfechoMaisGrave devolve, entre dois códigos de saída, o de maior
 // gravidade. Código sem gravidade declarada (nenhum é alcançável hoje pelo
@@ -80,7 +80,7 @@ func desfechoMaisGrave(a, b int) int {
 	return a
 }
 
-func runIngest(args []string, amb Ambiente) int {
+func runIngest(args []string, amb CLIContext) int {
 	fs := flag.NewFlagSet("ingest", flag.ContinueOnError)
 	fs.SetOutput(amb.Stderr)
 	var (
@@ -91,7 +91,7 @@ func runIngest(args []string, amb Ambiente) int {
 		everyFlag = false
 	)
 	if err := fs.Parse(args); err != nil {
-		return ExitUso
+		return ExitUsageError
 	}
 	fs.Visit(func(f *flag.Flag) {
 		if f.Name == "checkpoint-every" {
@@ -100,11 +100,11 @@ func runIngest(args []string, amb Ambiente) int {
 	})
 	if *argConfig == "" || *dataset == "" {
 		fmt.Fprintln(amb.Stderr, "ingest: --config e --dataset são obrigatórios")
-		return ExitUso
+		return ExitUsageError
 	}
 	if *everyN < 0 {
 		fmt.Fprintln(amb.Stderr, "ingest: --checkpoint-every não pode ser negativo")
-		return ExitUso
+		return ExitUsageError
 	}
 	if everyFlag && *everyN == 0 {
 		// Desligar é permitido, e nunca em silêncio: quem desliga precisa saber
@@ -117,20 +117,20 @@ func runIngest(args []string, amb Ambiente) int {
 	cfg, err := nishiconfig.Load(*argConfig)
 	if err != nil {
 		fmt.Fprintln(amb.Stderr, "ingest:", err)
-		return ExitUso
+		return ExitUsageError
 	}
 
 	entrada, fechar, err := abreEntrada(*input, amb.Stdin)
 	if err != nil {
 		fmt.Fprintln(amb.Stderr, "ingest:", err)
-		return ExitUso
+		return ExitUsageError
 	}
 	defer fechar()
 
-	st, compilado, spec, err := abreDataset(cfg, *dataset)
+	st, compilado, spec, err := openDataset(cfg, *dataset)
 	if err != nil {
 		fmt.Fprintln(amb.Stderr, "ingest:", err)
-		return codigoDoErro(err)
+		return errorCode(err)
 	}
 	// O Close faz quiesce e só então devolve o lock — é o que permite ao
 	// comando seguinte assumir o dataset.
@@ -139,10 +139,10 @@ func runIngest(args []string, amb Ambiente) int {
 	// A tabela irmã abre DEPOIS do base e fecha ANTES dele (o defer é LIFO):
 	// ela usa o dicionário do base, e fechá-lo primeiro derrubaria o
 	// checkpoint dela no meio.
-	hist, campoRaw, err := abreHistorico(cfg, spec, compilado, st.FieldDict())
+	hist, campoRaw, err := openHistory(cfg, spec, compilado, st.FieldDict())
 	if err != nil {
 		_, _ = fmt.Fprintln(amb.Stderr, "ingest:", err)
-		return codigoDoErro(err)
+		return errorCode(err)
 	}
 	if hist != nil {
 		// O erro do Close da irmã é REPORTADO, e não engolido como o do base
@@ -162,7 +162,7 @@ func runIngest(args []string, amb Ambiente) int {
 		// Regra de TTL que não compila é erro de CONFIGURAÇÃO: o dataset não
 		// sobe, e a ingestão nem começa.
 		fmt.Fprintln(amb.Stderr, "ingest:", err)
-		return codigoDoErro(err)
+		return errorCode(err)
 	}
 	if hist != nil {
 		mat.LigaHistorico(hist, campoRaw)
@@ -188,7 +188,7 @@ func runIngest(args []string, amb Ambiente) int {
 		fmt.Fprintf(amb.Stderr,
 			"ingest: %d eventos NÃO entraram no dataset por falha — investigue antes de considerar a carga completa\n",
 			resumo.falhasTotal)
-		return desfechoMaisGrave(motivo, ExitPerdaDeDados)
+		return desfechoMaisGrave(motivo, ExitDataLoss)
 	}
 
 	sc := bufio.NewScanner(entrada)
@@ -199,10 +199,10 @@ func runIngest(args []string, amb Ambiente) int {
 	for sc.Scan() {
 		if err := amb.Ctx.Err(); err != nil {
 			fmt.Fprintln(amb.Stderr, "ingest: interrompido; gravando checkpoint do que foi aplicado")
-			motivo := ExitInterromp
+			motivo := ExitInterrupted
 			if cperr := checkpointDoPar(st, hist); cperr != nil {
 				fmt.Fprintln(amb.Stderr, "ingest: checkpoint final:", cperr)
-				motivo = desfechoMaisGrave(motivo, codigoDoErro(cperr))
+				motivo = desfechoMaisGrave(motivo, errorCode(cperr))
 			}
 			return encerra(motivo)
 		}
@@ -230,7 +230,7 @@ func runIngest(args []string, amb Ambiente) int {
 				fmt.Fprintf(amb.Stderr,
 					"ingest: errors.invalidEvent=stop e o evento %d é %v: %v\n",
 					resumo.lidos, r.Category, r.Err)
-				return encerra(ExitParadoPorPolitica)
+				return encerra(ExitPolicyStopped)
 			}
 		case r.Err != nil:
 			// Balde 2: a row não entrou e não foi por culpa do evento.
@@ -253,7 +253,7 @@ func runIngest(args []string, amb Ambiente) int {
 		if precisaCheckpoint(*everyN, resumo.lidos, ultimoCP, cfg.CheckpointInterval()) {
 			if err := checkpointDoPar(st, hist); err != nil {
 				fmt.Fprintln(amb.Stderr, "ingest: checkpoint:", err)
-				return encerra(codigoDoErro(err))
+				return encerra(errorCode(err))
 			}
 			ultimoCP = time.Now()
 		}
@@ -276,11 +276,11 @@ func runIngest(args []string, amb Ambiente) int {
 
 	motivo := ExitOK
 	if erroLeitura != nil {
-		motivo = ExitPerdaDeDados
+		motivo = ExitDataLoss
 	}
 	if err := checkpointDoPar(st, hist); err != nil {
 		fmt.Fprintln(amb.Stderr, "ingest: checkpoint final:", err)
-		motivo = desfechoMaisGrave(motivo, codigoDoErro(err))
+		motivo = desfechoMaisGrave(motivo, errorCode(err))
 	}
 	return encerra(motivo)
 }
@@ -335,7 +335,7 @@ func imprimeResumo(w io.Writer, r resumoIngest, dur time.Duration) {
 // linhaPorCategoria imprime na ordem de DECLARAÇÃO das categorias e percorre
 // todas elas. A ordem é fixa porque a saída é lida por script; o limite é
 // NumCategories porque escrevê-lo à mão foi o que fez INTERNAL_STATE sair como
-// uma linha de contagem sem categoria nenhuma.
+// uma line de contagem sem categoria nenhuma.
 func linhaPorCategoria(w io.Writer, rotulo string, total int64, por [materializer.NumCategories]int64) {
 	if total == 0 {
 		return

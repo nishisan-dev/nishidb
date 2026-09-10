@@ -39,7 +39,7 @@ func TestRestartBasico_WriteRestartLookup(t *testing.T) {
 	// N puts checkpointados + M puts só no overlay (perdidos no heap) —
 	// o replay do tail recupera os M.
 	dir := t.TempDir()
-	opts := Options{Dir: dir, CamposIndexados: []types.FieldID{fldStatus}}
+	opts := Options{Dir: dir, IndexedFields: []types.FieldID{fldStatus}}
 	s := openStore(t, opts)
 	for i := 0; i < 3; i++ {
 		k := fmt.Sprintf("rb-%d", i)
@@ -286,7 +286,7 @@ func TestPhantomCommitViraVisivelNoReplay(t *testing.T) {
 	// semântica aceita e documentada. O seam de erro na fase de Set produz
 	// o phantom com payload REPLAYÁVEL.
 	dir := t.TempDir()
-	opts := Options{Dir: dir, CamposIndexados: []types.FieldID{fldStatus}}
+	opts := Options{Dir: dir, IndexedFields: []types.FieldID{fldStatus}}
 	s := openStore(t, opts)
 	mustPut(t, s, "ph-ok", 1, statusPayload(t, s, "ph-ok", "Start", 1), nil)
 	if err := s.Checkpoint(); err != nil {
@@ -415,7 +415,7 @@ func TestReopenBitmapConverge(t *testing.T) {
 	// Transições do tail reconvergem os bitmaps: update A→B pós-checkpoint
 	// perdido do heap volta pelo replay — query pós-restart = pré-crash.
 	dir := t.TempDir()
-	opts := Options{Dir: dir, CamposIndexados: []types.FieldID{fldStatus}}
+	opts := Options{Dir: dir, IndexedFields: []types.FieldID{fldStatus}}
 	s := openStore(t, opts)
 	id, _ := mustPut(t, s, "bc", 1, statusPayload(t, s, "bc", "Start", 1), nil)
 	if err := s.Checkpoint(); err != nil {
@@ -452,7 +452,7 @@ func TestCrashEntreApplyEManifest(t *testing.T) {
 	// os índices em disco ficam À FRENTE do manifest. O replay re-aplica
 	// S→tail por cima — idempotente (§10.2), sem duplicação.
 	dir := t.TempDir()
-	opts := Options{Dir: dir, CamposIndexados: []types.FieldID{fldStatus}}
+	opts := Options{Dir: dir, IndexedFields: []types.FieldID{fldStatus}}
 	s := openStore(t, opts)
 	id1, _ := mustPut(t, s, "ca-1", 1, statusPayload(t, s, "ca-1", "Start", 1), nil)
 	if err := s.Checkpoint(); err != nil {
@@ -502,7 +502,7 @@ func TestCrashEntreApplyEManifest(t *testing.T) {
 
 func TestDoubleReopenEhIdempotente(t *testing.T) {
 	dir := t.TempDir()
-	opts := Options{Dir: dir, CamposIndexados: []types.FieldID{fldStatus}}
+	opts := Options{Dir: dir, IndexedFields: []types.FieldID{fldStatus}}
 	s := openStore(t, opts)
 	for i := 0; i < 4; i++ {
 		k := fmt.Sprintf("dr-%d", i)

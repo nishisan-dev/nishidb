@@ -191,13 +191,13 @@ func Abre(ctx context.Context, cfg *Config, o Opcoes) (*Consumidor, error) {
 	met.decodeWorkers.Set(float64(cfg.DecodeWorkers))
 
 	c := &Consumidor{
-		cfg: cfg, log: log, met: met, origem: cfg.Origem(),
+		cfg: cfg, log: log, met: met, origem: cfg.Source(),
 		admPronto:     make(chan struct{}),
 		offsetsPronto: make(chan struct{}),
 		wPronto:       make(chan struct{}),
 	}
 
-	opts := append(cfg.opcoesDoCliente(),
+	opts := append(cfg.clientOptions(),
 		kgo.OnPartitionsAssigned(c.aoAtribuir),
 		kgo.OnPartitionsRevoked(c.aoRevogar),
 		kgo.AdjustFetchOffsetsFn(c.ajustaOffsets),

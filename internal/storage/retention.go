@@ -215,13 +215,13 @@ func (s *Store) RetencaoUmaPassada(ctx context.Context, lim LimitesDeRetencao) (
 // A busca binária é possível por uma propriedade que só a tabela histórica
 // tem: os appends são serializados pelo mutex do writer e o _writtenAt é o
 // relógio da ingestão, então ele é NÃO-DECRESCENTE por rowId. No dataset
-// materializado a mesma pergunta exige varrer o índice de escritas, porque
+// materializado a mesma pergunta exige varrer o índice de writes, porque
 // cada update reescreve o instante de uma linha qualquer.
 //
 // São O(log n) preads por passada — com 100 milhões de linhas, 27 leituras.
 // A alternativa de varrer para achar a fronteira custaria a tabela inteira.
 func (s *Store) avancaMarcaDagua(prazo time.Duration) (uint64, error) {
-	corte := s.agora().Add(-prazo).UnixMilli()
+	corte := s.now().Add(-prazo).UnixMilli()
 	lo := s.rowIDBase.Load()
 	hi := s.nextRowID.Load()
 	if lo >= hi {
@@ -281,7 +281,7 @@ func (s *Store) vencidaEm(id types.RowID, corte int64) (venceu, conhecido bool, 
 	if err != nil {
 		return false, false, err
 	}
-	ms, ok := instanteDeEscrita(rec.Payload, s.campoDeEscrita)
+	ms, ok := instanteDeEscrita(rec.Payload, s.writeFieldId)
 	if !ok {
 		return false, false, nil
 	}
@@ -568,7 +568,7 @@ func (s *Store) instanteMaisAntigo() (int64, bool) {
 	if err != nil {
 		return 0, false
 	}
-	return instanteDeEscrita(rec.Payload, s.campoDeEscrita)
+	return instanteDeEscrita(rec.Payload, s.writeFieldId)
 }
 
 // blocosDoDiretorio soma os BLOCOS alocados dos arquivos, e não o tamanho

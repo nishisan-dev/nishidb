@@ -91,7 +91,7 @@ func TestRowIDNaoEhReutilizadoAposFalhaPosAppend(t *testing.T) {
 	// C1(a) continua valendo do Append em diante: ali o id JÁ está queimado
 	// e não pode voltar ao pool — reuso quebraria a bijeção rowId↔key no log
 	// (ABA). O que mudou no R-B é só o que acontece ANTES da reserva.
-	s := openStore(t, Options{CamposIndexados: []types.FieldID{fldStatus}})
+	s := openStore(t, Options{IndexedFields: []types.FieldID{fldStatus}})
 	s.SetSetErrHookForTest(func(types.FieldID) error { return errors.New("set falho simulado") })
 	if _, _, err := s.Put([]byte("queima"), 1, 0, statusPayload(t, s, "queima", "Start", 1), nil); err == nil {
 		t.Fatal("erro na fase de Set deveria falhar o Put")
@@ -107,7 +107,7 @@ func TestWriterStickyFailedAposErroPosAppend(t *testing.T) {
 	// C1(b) + I3: erro APÓS o Append (fase de Set do bitmap) põe o writer
 	// em modo falho; e como o Clear roda só depois do commit, a posting
 	// antiga fica intacta — nenhum falso negativo.
-	s := openStore(t, Options{CamposIndexados: []types.FieldID{fldStatus}})
+	s := openStore(t, Options{IndexedFields: []types.FieldID{fldStatus}})
 	id, _ := mustPut(t, s, "k1", 1, statusPayload(t, s, "k1", "Start", 1), nil)
 
 	prev, _, ok, err := s.GetByKey(s.presente(), []byte("k1"), nil)
@@ -193,7 +193,7 @@ func TestStatsConcorrenteComPut(t *testing.T) {
 func TestBitmapCampoQueEntraESai(t *testing.T) {
 	// M4: os ramos "campo que entra" (Set pré-commit) e "campo que sai"
 	// (Clear pós-commit) do diff.
-	s := openStore(t, Options{CamposIndexados: []types.FieldID{fldStatus}})
+	s := openStore(t, Options{IndexedFields: []types.FieldID{fldStatus}})
 	id, _ := mustPut(t, s, "es", 1, payloadSemStatus(t, s, "es", 1), nil)
 
 	lookup := func() []types.RowID {
@@ -235,7 +235,7 @@ func TestBitmapCampoQueEntraESai(t *testing.T) {
 func TestValueEqualNumericoNoBitmap(t *testing.T) {
 	// M4: valueEqual em tipo numérico (int64) — A→A não move a posting;
 	// mudança de valor move.
-	s := openStore(t, Options{CamposIndexados: []types.FieldID{fldCounter}})
+	s := openStore(t, Options{IndexedFields: []types.FieldID{fldCounter}})
 	i64 := func(v int64) types.Value { return types.Value{Type: types.TypeInt64, I64: v} }
 	id, _ := mustPut(t, s, "num", 1, statusPayload(t, s, "num", "Start", 7), nil)
 

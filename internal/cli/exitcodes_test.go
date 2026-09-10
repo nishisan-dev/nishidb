@@ -69,8 +69,8 @@ func TestTruncamentoPorMaxRowsTemExitCodeProprio(t *testing.T) {
 
 	code := a.roda("query", "--config", a.config, "--dataset", "pequeno",
 		"SELECT id FROM pequeno")
-	if code != cli.ExitTruncado {
-		t.Fatalf("code = %d, want %d\n%s", code, cli.ExitTruncado, a.stderr.String())
+	if code != cli.ExitResultTruncated {
+		t.Fatalf("code = %d, want %d\n%s", code, cli.ExitResultTruncated, a.stderr.String())
 	}
 	if !strings.Contains(a.stderr.String(), "truncado") {
 		t.Errorf("stderr = %q", a.stderr.String())
@@ -178,11 +178,11 @@ func TestIngestInterrompidoPreservaOQueFoiAplicado(t *testing.T) {
 	ctx, cancela := context.WithCancel(context.Background())
 	cancela()
 	code := cli.Run([]string{"ingest", "--config", a.config, "--dataset", "radius_sessions", "--input", "-"},
-		cli.Ambiente{
+		cli.CLIContext{
 			Stdin: strings.NewReader(sb.String()), Stdout: &a.stdout, Stderr: &a.stderr, Ctx: ctx,
 		})
-	if code != cli.ExitInterromp {
-		t.Fatalf("code = %d, want %d\n%s", code, cli.ExitInterromp, a.stderr.String())
+	if code != cli.ExitInterrupted {
+		t.Fatalf("code = %d, want %d\n%s", code, cli.ExitInterrupted, a.stderr.String())
 	}
 	if !strings.Contains(a.stderr.String(), "interrompido") {
 		t.Errorf("stderr = %q", a.stderr.String())
@@ -250,7 +250,7 @@ schema:
 
 // TestDatasetComGrafiaDeIndiceObsoletaSaiComExitDataset é o gate de exit code
 // da D5: sem ele, a recusa do schema poderia sair pelo default genérico do
-// codigoDoErro (ExitUso, 1) sem que ninguém percebesse — e exit 1 manda o
+// codigoDoErro (ExitUsageError, 1) sem que ninguém percebesse — e exit 1 manda o
 // operador olhar a LINHA DE COMANDO, não o dataset. `index: hash`/`index:
 // bitmap` são config RECUSADA na subida (o `Config recusa na subida` do
 // README), a mesma categoria do manifest ilegível e do dataset travado, e por
@@ -316,7 +316,7 @@ schema:
 // TestDatasetComJanelaInvalidaSaiComExitDataset é o gate de exit code da §4.1,
 // no mesmo molde do gate da D5 e pelo mesmo motivo: a recusa da janela é config
 // do DATASET recusada na subida, e sem o errors.Is no codigoDoErro ela cairia no
-// default (ExitUso, 1) — o código que manda o operador olhar a linha de comando
+// default (ExitUsageError, 1) — o código que manda o operador olhar a linha de comando
 // em vez do YAML.
 func TestDatasetComJanelaInvalidaSaiComExitDataset(t *testing.T) {
 	a := novoAmbiente(t)

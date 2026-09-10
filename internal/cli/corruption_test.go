@@ -15,7 +15,7 @@ import (
 // Open (a guarda do §14.20 vê encolhimento, não sobrescrita): ele aparece na
 // leitura, no meio do resultado. O que estava errado era o exit code — o erro
 // real é encoding.ErrCorrupt, que não constava do codigoDoErro e caía no
-// default ExitUso. O operador recebia "erro de uso ou de configuração", que é
+// default ExitUsageError. O operador recebia "erro de uso ou de configuração", que é
 // justamente o único código que NÃO manda olhar o dataset.
 func TestDatasetCorrompidoSaiComExitDeDataset(t *testing.T) {
 	a := novoAmbiente(t)

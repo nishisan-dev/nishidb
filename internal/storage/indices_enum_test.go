@@ -26,13 +26,13 @@ import (
 func abreHistoricoIndexadoEm(t *testing.T, base *Store, dir string, campos []string, segSize int64) *Store {
 	t.Helper()
 	return openStore(t, Options{
-		Dir:                    dir,
-		Dataset:                "events_history",
-		SegmentSize:            segSize,
-		Modo:                   ModoHistorico,
-		DictCompartilhado:      base.FieldDict(),
-		CampoDeEscrita:         "_writtenAt",
-		CamposIndexadosPorNome: campos,
+		Dir:                   dir,
+		Dataset:               "events_history",
+		SegmentSize:           segSize,
+		Mode:                  HistoryMode,
+		SharedDictionary:      base.FieldDict(),
+		WriteInstantFieldName: "_writtenAt",
+		IndexedFieldsByName:   campos,
 	})
 }
 
@@ -282,7 +282,7 @@ func rowsDoSegmento(t *testing.T, s *Store, seg uint32) []types.RowID {
 // candidatos de um full scan —, e não só as do segmento sem índice.
 func TestAEnumeracaoDoMaterializadoColapsaNumaCaminhadaUnicaDoLocations(t *testing.T) {
 	dir := t.TempDir()
-	s := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, CamposIndexadosPorNome: []string{"node"}})
+	s := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, IndexedFieldsByName: []string{"node"}})
 	alvo := s.curSegID.Load()
 	poeLinhasAteRotacionar(t, s, alvo)
 	// Os updates espalham rowIds antigos pelo segmento novo: é essa mistura que
@@ -303,7 +303,7 @@ func TestAEnumeracaoDoMaterializadoColapsaNumaCaminhadaUnicaDoLocations(t *testi
 	if err := os.Remove(segindex.SealedPath(filepath.Join(dir, "data"), alvo)); err != nil {
 		t.Fatal(err)
 	}
-	s2 := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, CamposIndexadosPorNome: []string{"node"}})
+	s2 := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, IndexedFieldsByName: []string{"node"}})
 
 	noAlvo := rowsComLocationNoSegmento(t, s2, alvo)
 	if len(noAlvo) == 0 {
@@ -379,7 +379,7 @@ func TestOResultadoNaoMudaComOSegmentoIndexadoOuNao(t *testing.T) {
 				if caso.historico {
 					return abreHistoricoIndexadoEm(t, base, dir, []string{"node"}, 8<<10)
 				}
-				return openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, CamposIndexadosPorNome: []string{"node"}})
+				return openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, IndexedFieldsByName: []string{"node"}})
 			}
 			s := abre()
 			poeLinhasAteRotacionar(t, s, s.curSegID.Load())
@@ -459,7 +459,7 @@ func apagaTodosOsSelados(t *testing.T, dir string) {
 // medir a coincidência.
 func TestUpdateQueCruzaSegmentoLevaAPostingDoCampoInalterado(t *testing.T) {
 	dir := t.TempDir()
-	s := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, CamposIndexadosPorNome: []string{"node", "type"}})
+	s := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, IndexedFieldsByName: []string{"node", "type"}})
 	campoNode := campoDoDicionario(t, s, "node")
 
 	row, _ := mustPut(t, s, "viajante", 1, linhaIndexada(t, s, "viajante", "estavel", 1), nil)
@@ -506,7 +506,7 @@ func TestUpdateQueCruzaSegmentoLevaAPostingDoCampoInalterado(t *testing.T) {
 // seria invisível ao teste anterior.
 func TestAPostingDoCampoInalteradoSobreviveASelagemEAoRestart(t *testing.T) {
 	dir := t.TempDir()
-	s := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, CamposIndexadosPorNome: []string{"node", "type"}})
+	s := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, IndexedFieldsByName: []string{"node", "type"}})
 	campoNode := campoDoDicionario(t, s, "node")
 
 	row, _ := mustPut(t, s, "viajante", 1, linhaIndexada(t, s, "viajante", "estavel", 1), nil)
@@ -553,7 +553,7 @@ func TestAPostingDoCampoInalteradoSobreviveASelagemEAoRestart(t *testing.T) {
 	}
 
 	// E o dataset reaberto continua devolvendo a linha.
-	s2 := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, CamposIndexadosPorNome: []string{"node", "type"}})
+	s2 := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, IndexedFieldsByName: []string{"node", "type"}})
 	if rows := lookupRevalidado(t, s2, campoNode, strVal("estavel")); !slices.Contains(rows, row) {
 		t.Errorf("depois do restart, WHERE node='estavel' não devolveu a row %d: %v", row, rows)
 	}
@@ -795,7 +795,7 @@ func TestSnapshotVelhoDoCorrenteNaoRespondePeloWIPDoSegmentoNovo(t *testing.T) {
 // por onde quer que more.
 func TestUpdateDuranteAConsultaNaoSomeDaEnumeracaoColapsada(t *testing.T) {
 	dir := t.TempDir()
-	s := openStore(t, Options{Dir: dir, SegmentSize: 16 << 10, CamposIndexadosPorNome: []string{"node"}})
+	s := openStore(t, Options{Dir: dir, SegmentSize: 16 << 10, IndexedFieldsByName: []string{"node"}})
 	campo := campoDoDicionario(t, s, "node")
 	seg1 := s.curSegID.Load()
 	payload := linhaIndexada(t, s, "movel", "alvo", 1)
@@ -809,7 +809,7 @@ func TestUpdateDuranteAConsultaNaoSomeDaEnumeracaoColapsada(t *testing.T) {
 	if err := os.Remove(segindex.SealedPath(filepath.Join(dir, "data"), seg1)); err != nil {
 		t.Fatal(err)
 	}
-	s2 := openStore(t, Options{Dir: dir, SegmentSize: 16 << 10, CamposIndexadosPorNome: []string{"node"}})
+	s2 := openStore(t, Options{Dir: dir, SegmentSize: 16 << 10, IndexedFieldsByName: []string{"node"}})
 
 	// A consulta constrói as fontes AGORA (o snapshot do WIP é deste instante)...
 	it, err := s2.Lookup(campo, strVal("alvo"))
@@ -841,7 +841,7 @@ func TestUpdateDuranteAConsultaNaoSomeDaEnumeracaoColapsada(t *testing.T) {
 // consulta exatamente na janela entre os dois passos.
 func TestAConsultaNaJanelaDaExpulsaoNaoPublicaMapeamentoDeArquivoRemovido(t *testing.T) {
 	dir := t.TempDir()
-	s := openStore(t, Options{Dir: dir, SegmentSize: 16 << 10, CamposIndexadosPorNome: []string{"node"}})
+	s := openStore(t, Options{Dir: dir, SegmentSize: 16 << 10, IndexedFieldsByName: []string{"node"}})
 	alvo := s.curSegID.Load()
 	poeLinhasAteRotacionar(t, s, alvo)
 

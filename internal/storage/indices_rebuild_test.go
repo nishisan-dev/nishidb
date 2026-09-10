@@ -559,7 +559,7 @@ func TestOSegmentoQueVirouCorrenteEntreAFotografiaEAVarreduraNaoMataOLaco(t *tes
 // com a mesma comparação (fimValido != tamanho).
 func TestAReconstrucaoRecusaSegmentoSeladoComCorrupcaoNoMeio(t *testing.T) {
 	dir := t.TempDir()
-	s := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, CamposIndexadosPorNome: []string{"node"}})
+	s := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, IndexedFieldsByName: []string{"node"}})
 	alvo := s.curSegID.Load()
 	poeLinhasAteRotacionar(t, s, alvo)
 	// O checkpoint avança o ponto S do manifest para DEPOIS do segmento alvo:
@@ -596,7 +596,7 @@ func TestAReconstrucaoRecusaSegmentoSeladoComCorrupcaoNoMeio(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s2 := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, CamposIndexadosPorNome: []string{"node"}})
+	s2 := openStore(t, Options{Dir: dir, SegmentSize: 8 << 10, IndexedFieldsByName: []string{"node"}})
 	err = s2.ConstroiIndiceDoSegmento(context.Background(), alvo, s2.camposIndexados)
 	if !errors.Is(err, ErrDatasetCorrupt) {
 		t.Fatalf("ConstroiIndiceDoSegmento sobre segmento podre = %v, quero ErrDatasetCorrupt: "+

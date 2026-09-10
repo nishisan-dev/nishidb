@@ -57,12 +57,12 @@ func novaBancadaTTL(t *testing.T, yaml string) *bancadaTTL {
 		t.Fatal(err)
 	}
 	st, err := storage.Open(storage.Options{
-		Dir:                    filepath.Join(dir, "dados"),
-		CamposIndexadosPorNome: schema.IndexedFieldNames(spec),
-		TTLAtivo:               len(spec.Materialization.TTLRules) > 0,
-		DuracaoDeFundo:         spec.Materialization.FallbackDuration,
-		CampoDeEscrita:         schema.WriteInstantFieldName,
-		CampoDePrazo:           schema.TTLFieldName,
+		Dir:                   filepath.Join(dir, "dados"),
+		IndexedFieldsByName:   schema.IndexedFieldNames(spec),
+		ActiveTTL:             len(spec.Materialization.TTLRules) > 0,
+		FallbackDuration:      spec.Materialization.FallbackDuration,
+		WriteInstantFieldName: schema.WriteInstantFieldName,
+		TTLFieldName:          schema.TTLFieldName,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -235,7 +235,7 @@ func TestCicloEntidadeLegadaUsaAduracaoDeFundo(t *testing.T) {
 }
 
 // payloadLegado monta o payload de uma entidade materializada ANTES de as
-// regras existirem: instante de escrita sim, campo de prazo não.
+// regras existirem: instante de escrita sim, field de prazo não.
 func payloadLegado(b *bancadaTTL, key string) ([]byte, error) {
 	b.t.Helper()
 	dict := b.st.FieldDict()

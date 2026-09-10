@@ -138,13 +138,13 @@ func exigeTotal(t *testing.T, s *Store, nome, olt string, total, refs int64) {
 
 func opcoesComContadores(dir string, cs ...contadorDeTeste) Options {
 	return Options{
-		Dir:               dir,
-		SegmentSize:       1 << 20,
-		TTLAtivo:          true,
-		DuracaoDeFundo:    time.Hour,
-		CampoDeEscrita:    "_writtenAt",
-		CampoDePrazo:      "_expiresIn",
-		CompilaContadores: callbackDeContadores(cs...),
+		Dir:                             dir,
+		SegmentSize:                     1 << 20,
+		ActiveTTL:                       true,
+		FallbackDuration:                time.Hour,
+		WriteInstantFieldName:           "_writtenAt",
+		TTLFieldName:                    "_expiresIn",
+		CompileCountersCallbackFunction: callbackDeContadores(cs...),
 	}
 }
 
@@ -419,7 +419,7 @@ func TestAberturaSemCallbackRecusaDatasetComContadores(t *testing.T) {
 		t.Fatal(err)
 	}
 	opts := opcoesComContadores(dir)
-	opts.CompilaContadores = nil
+	opts.CompileCountersCallbackFunction = nil
 	_, err := Open(opts)
 	if !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("abrir sem as definições um dataset com contadores tem de ser recusado com ErrInvalidArgument, veio %v", err)
@@ -432,10 +432,10 @@ func TestAberturaSemCallbackRecusaDatasetComContadores(t *testing.T) {
 func TestContadorEhRecusadoNoHistorico(t *testing.T) {
 	base := openStore(t, Options{})
 	opts := Options{
-		Dir:               t.TempDir(),
-		Modo:              ModoHistorico,
-		DictCompartilhado: base.FieldDict(),
-		CompilaContadores: callbackDeContadores(porOLT("aut", true)),
+		Dir:                             t.TempDir(),
+		Mode:                            HistoryMode,
+		SharedDictionary:                base.FieldDict(),
+		CompileCountersCallbackFunction: callbackDeContadores(porOLT("aut", true)),
 	}
 	if _, err := Open(opts); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("histórico com contador tem de ser recusado com ErrInvalidArgument, veio %v", err)

@@ -139,8 +139,8 @@ func TestCongeladaSobreviveAoReplayDoTail(t *testing.T) {
 		t.Fatal(err)
 	}
 	opts := storage.Options{
-		Dir:                    filepath.Join(a.dir, "dados", "alarmes"),
-		CamposIndexadosPorNome: schema.IndexedFieldNames(spec),
+		Dir:                 filepath.Join(a.dir, "dados", "alarmes"),
+		IndexedFieldsByName: schema.IndexedFieldNames(spec),
 	}
 	st, err := storage.Open(opts)
 	if err != nil {

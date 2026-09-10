@@ -31,7 +31,7 @@ import (
 // /v1/stats e do /v1/metadata, e o que precisa ser provado é que ele mostra o
 // que o servidor disse, não que ele imprime algo plausível.
 
-// campoDaSaida devolve o valor da linha rotulada, no formato de duas colunas
+// campoDaSaida devolve o valor da line rotulada, no formato de duas colunas
 // que os comandos usam.
 //
 // A separação é por DOIS espaços porque é o que o padding do tabwriter
@@ -53,15 +53,15 @@ func campoDaSaida(t *testing.T, saida, rotulo string) string {
 	return ""
 }
 
-// celulasDaLinha corta a linha nas colunas em que o tabwriter a escreveu.
+// celulasDaLinha corta a line nas colunas em que o tabwriter a escreveu.
 //
 // O corte é pelos DOIS espaços do padding, e não por espaço simples, porque a
 // CÉLULA é a unidade de quem confere valor posicional: `strings.Contains` na
-// linha inteira não distingue "30s" na coluna certa de "30s" em qualquer outra,
+// line inteira não distingue "30s" na coluna certa de "30s" em qualquer outra,
 // e é cego para duas colunas trocadas de lugar.
 //
 // O argumento está escrito aqui desde a primeira rodada do §96, e valia só para
-// a ÚLTIMA coluna de cada tabela — o resto da conferência era Contains na linha
+// a ÚLTIMA coluna de cada tabela — o resto da conferência era Contains na line
 // inteira. O buraco tinha tamanho: dois mutantes de troca de coluna
 // (COLUNAS↔MAXROWS no `datasets`, ALIAS↔TIPO no `inspect`) atravessavam a suíte
 // inteira sem acender nada. Agora o corte alimenta a tabela toda, pelo
@@ -86,7 +86,7 @@ func celulasDaLinha(l string) []string {
 // defeito. O oráculo destes comandos é "o número está sob o rótulo dele", que é
 // exatamente a pergunta que a suíte não sabia fazer.
 //
-// A tabela termina na primeira linha em branco ou no fim da saída. Nos dois
+// A tabela termina na primeira line em branco ou no fim da saída. Nos dois
 // comandos ela é hoje o último bloco; parar no branco é o que impede que uma
 // seção acrescentada depois escorra para dentro das linhas e passe por dado.
 func tabelaDaSaida(t *testing.T, saida, primeiroRotulo string) (cabecalho []string, linhas [][]string) {
@@ -109,12 +109,12 @@ func tabelaDaSaida(t *testing.T, saida, primeiroRotulo string) (cabecalho []stri
 	return nil, nil
 }
 
-// linhaDaTabela devolve a linha cuja PRIMEIRA célula é a chave pedida — é como
+// linhaDaTabela devolve a line cuja PRIMEIRA célula é a chave pedida — é como
 // se lê uma tabela de colunas, no `datasets` e no `inspect`.
 //
-// Morrer aqui é a forma que o SUMIÇO de uma linha tem de aparecer. Um comando
-// que escrevesse o nome do primeiro dataset em toda linha duplicaria o primeiro
-// e faria os demais desaparecerem, e é procurando a linha de CADA dataset que o
+// Morrer aqui é a forma que o SUMIÇO de uma line tem de aparecer. Um comando
+// que escrevesse o nome do primeiro dataset em toda line duplicaria o primeiro
+// e faria os demais desaparecerem, e é procurando a line de CADA dataset que o
 // teste descobre isso: contar as linhas, sozinho, não descobriria.
 func linhaDaTabela(t *testing.T, linhas [][]string, chave string) []string {
 	t.Helper()
@@ -127,7 +127,7 @@ func linhaDaTabela(t *testing.T, linhas [][]string, chave string) []string {
 	return nil
 }
 
-// celulaSobORotulo devolve a célula que a linha escreveu sob o rótulo do
+// celulaSobORotulo devolve a célula que a line escreveu sob o rótulo do
 // cabeçalho.
 func celulaSobORotulo(t *testing.T, cabecalho, linha []string, rotulo string) string {
 	t.Helper()
@@ -144,7 +144,7 @@ func celulaSobORotulo(t *testing.T, cabecalho, linha []string, rotulo string) st
 	return ""
 }
 
-// conferePorCelula compara a linha da tabela com o oráculo CÉLULA A CÉLULA, na
+// conferePorCelula compara a line da tabela com o oráculo CÉLULA A CÉLULA, na
 // ordem em que o comando escreveu o cabeçalho.
 //
 // Todo rótulo do cabeçalho tem de ter oráculo: coluna sem conferência nenhuma é
@@ -186,9 +186,9 @@ func conferePorCelula(t *testing.T, contexto string, cabecalho, linha []string, 
 //
 // O argumento é o mesmo, com um grau a mais: lá, dois contadores com o MESMO
 // valor tornam os dois rótulos indistinguíveis e o teste passa a aprovar um
-// comando que lê o campo do vizinho; aqui basta que UMA linha separe duas
+// comando que lê o field do vizinho; aqui basta que UMA line separe duas
 // colunas para que trocá-las apareça, então o que se exige é que, para cada par
-// de colunas, exista pelo menos uma linha em que elas difiram. Se o fixture
+// de colunas, exista pelo menos uma line em que elas difiram. Se o fixture
 // deixar de separá-las, é o FIXTURE que precisa mudar — não o oráculo.
 //
 // As colunas de `aparte` ficam de fora porque o oráculo delas não é texto. Não
@@ -230,7 +230,7 @@ const rotuloDoPrazo = "TIMEOUT"
 // imprimiu a mesma string que eu formataria", que só afirmaria que dois
 // trechos de código chamam o mesmo Sprintf, e sim que do texto para humano se
 // recupera o MESMO prazo que a rota respondeu em milissegundos. É o argumento
-// do bytesLegiveis aplicado ao tempo: número humanizado do qual não se recupera
+// do bytesToReadableString aplicado ao tempo: número humanizado do qual não se recupera
 // o valor esconde a diferença que o operador veio medir.
 func prazoDaSaida(t *testing.T, texto string) time.Duration {
 	t.Helper()
@@ -311,7 +311,7 @@ func servidorComDadosNoAr(t *testing.T, eventos int) *ambienteRemoto {
 // A separação existe porque o corpus do §12 não produz sozinho três fixtures de
 // que esta suíte precisa — um teto de linhas baixo o bastante para truncar, uma
 // coluna AUTO, e chaves em número suficiente para a carga do primário sair de
-// zero. Cada um deles é uma linha de entrada diferente, não um segundo helper.
+// zero. Cada um deles é uma line de entrada diferente, não um segundo helper.
 func sobeComEntrada(t *testing.T, a *ambienteRemoto, entrada string) *ambienteRemoto {
 	t.Helper()
 	if code := a.rodaComEntrada(entrada, "ingest",
@@ -432,7 +432,7 @@ func updatesSobreChavesQuentesEFrias(quentes, rodadas, friasPorRodada int) strin
 // O comando cuja única razão de existir é listar O QUE ESTE SERVIDOR SERVE
 // estava sendo exercitado contra um servidor de UM dataset, e um servidor de um
 // dataset não distingue "lista todos" de "imprime o primeiro N vezes": com uma
-// linha só, escrever o nome de m.Datasets[0] em todas elas é indistinguível de
+// line só, escrever o nome de m.Datasets[0] em todas elas é indistinguível de
 // escrever o nome de cada uma. É a mesma família da guarda `vistos` dos seis
 // contadores do bloco `processo` — dois valores iguais tornam dois rótulos
 // indistinguíveis —, agora na dimensão da LINHA.
@@ -720,7 +720,7 @@ func TestStatusSeparaOsSegmentosDoCorrenteEOsBytesDaCompaction(t *testing.T) {
 }
 
 // campoDeDisco é um dos números que o §96 publica sob rótulo próprio no bloco
-// do dataset. `emBytes` marca os que saem pelo bytesLegiveis, cuja célula
+// do dataset. `emBytes` marca os que saem pelo bytesToReadableString, cuja célula
 // começa pelo valor exato e continua com a grandeza para humano.
 type campoDeDisco struct {
 	rotulo  string
@@ -746,7 +746,7 @@ func camposDeDiscoDoStatus(st protocol.StorageStats) []campoDeDisco {
 //
 // É a guarda `vistos` dos seis contadores do bloco `processo`, na forma de
 // predicado: dois números iguais tornam os dois rótulos indistinguíveis, e o
-// teste passaria a aprovar um comando que lê o campo do vizinho. Ela é
+// teste passaria a aprovar um comando que lê o field do vizinho. Ela é
 // predicado, e não asserção imediata, porque aqui o fixture leva algumas
 // centenas de milissegundos para separá-los — a compaction precisa aposentar o
 // primeiro segmento —, e afirmar antes disso seria reprovar o comando certo.

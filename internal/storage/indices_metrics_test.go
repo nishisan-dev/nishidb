@@ -452,7 +452,7 @@ func TestAPassadaQueFalhaPreservaORetratoAnterior(t *testing.T) {
 	// Metade 1 — recusa ANTES da varredura. O materializado recebe uma passada
 	// boa (janela infinita, que é a dele por construção) e só então uma janela
 	// finita, que é erro de quem monta os limites.
-	mat := openStore(t, Options{CamposIndexadosPorNome: []string{"node"}})
+	mat := openStore(t, Options{IndexedFieldsByName: []string{"node"}})
 	if _, err := mat.SegmentosPendentesDeReconstrucao(JanelaDeIndice{}); err != nil {
 		t.Fatalf("montagem: a passada boa do materializado falhou: %v", err)
 	}

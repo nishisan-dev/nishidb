@@ -162,7 +162,7 @@ Pacotes que estruturam o todo:
   WARN nomeado; valor fora de faixa é recusado, não arredondado; ponteiros
   (`*bool` etc.) distinguem "ausente" (default) de "explícito".
 - **Exit codes são contrato** (0–8, precedência `4 > 3 > 7 > 6 > 1`; tabela no
-  README). Erro novo precisa de sentinela + `errors.Is` em `codigoDoErro`, senão
+  README). Erro novo precisa de sentinela + `errors.Is` em `errorCode`, senão
   cai no default 1.
 - **Rota HTTP nova entra por `rt.registra(padrao, papel, handler)`**
   (READ/ADMIN, fail-closed). Códigos de erro do wire são estáveis; código novo

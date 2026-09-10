@@ -110,13 +110,13 @@ func (s *Store) checkpoint() error {
 	if err := s.traceStep("msyncLocations", s.locs.Msync); err != nil {
 		return s.failWriter(err)
 	}
-	if s.prazos != nil {
-		if err := s.traceStep("msyncPrazos", s.prazos.Msync); err != nil {
+	if s.ttlMapping != nil {
+		if err := s.traceStep("msyncPrazos", s.ttlMapping.Msync); err != nil {
 			return err
 		}
 	}
-	if s.escritas != nil {
-		if err := s.traceStep("msyncEscritas", s.escritas.Msync); err != nil {
+	if s.writes != nil {
+		if err := s.traceStep("msyncEscritas", s.writes.Msync); err != nil {
 			return err
 		}
 	}
@@ -130,8 +130,8 @@ func (s *Store) checkpoint() error {
 	// os dois primeiros pelo applyRecord, e a agenda é reconstruída inteira a
 	// partir deles. Matar o writer por um índice que a próxima abertura refaz
 	// sozinha trocaria uma degradação recuperável por uma parada.
-	if s.agenda != nil {
-		if err := s.traceStep("msyncVencimentos", s.agenda.Msync); err != nil {
+	if s.schedule != nil {
+		if err := s.traceStep("msyncVencimentos", s.schedule.Msync); err != nil {
 			return err
 		}
 	}
@@ -171,7 +171,7 @@ func (s *Store) checkpoint() error {
 		CurrentSegment:      segID,
 		DurableOffset:       uint64(off),
 		FieldDictValidBytes: s.dict.SizeBytes(),
-		Mode:                uint8(s.opts.Modo),
+		StoreMode:           uint8(s.opts.Mode),
 		RowIDBase:           s.rowIDBase.Load(),
 		Schedule:            s.infoDaAgenda(),
 		Counters:            s.infoDosContadores(),

@@ -52,8 +52,8 @@ func TestOffsetsShowAvisaQuandoHaLinhasSemPosicao(t *testing.T) {
 func TestOffsetsSetExigeConfirmacao(t *testing.T) {
 	a := novoAmbiente(t)
 	code := a.roda("offsets", "--config", a.config, "--dataset", "radius_sessions", "--set", "0:100")
-	if code != cli.ExitUso {
-		t.Errorf("code = %d, quer %d (sem --yes)", code, cli.ExitUso)
+	if code != cli.ExitUsageError {
+		t.Errorf("code = %d, quer %d (sem --yes)", code, cli.ExitUsageError)
 	}
 	if !strings.Contains(a.stderr.String(), "--yes") {
 		t.Errorf("stderr = %q", a.stderr.String())
@@ -93,8 +93,8 @@ func TestOffsetsSetRecusaEntradaInvalida(t *testing.T) {
 		t.Run(c.valor, func(t *testing.T) {
 			a := novoAmbiente(t)
 			if code := a.roda("offsets", "--config", a.config, "--dataset", "radius_sessions",
-				"--set", c.valor, "--yes"); code != cli.ExitUso {
-				t.Errorf("code = %d, quer %d", code, cli.ExitUso)
+				"--set", c.valor, "--yes"); code != cli.ExitUsageError {
+				t.Errorf("code = %d, quer %d", code, cli.ExitUsageError)
 			}
 			if !strings.Contains(a.stderr.String(), c.trecho) {
 				t.Errorf("stderr = %q, quer conter %q", a.stderr.String(), c.trecho)
@@ -125,13 +125,13 @@ func TestOffsetsResetDescartaAPosicao(t *testing.T) {
 
 func TestOffsetsExigeUmaAcao(t *testing.T) {
 	a := novoAmbiente(t)
-	if code := a.roda("offsets", "--config", a.config, "--dataset", "radius_sessions"); code != cli.ExitUso {
-		t.Errorf("code = %d, quer %d (nenhuma ação)", code, cli.ExitUso)
+	if code := a.roda("offsets", "--config", a.config, "--dataset", "radius_sessions"); code != cli.ExitUsageError {
+		t.Errorf("code = %d, quer %d (nenhuma ação)", code, cli.ExitUsageError)
 	}
 	a2 := novoAmbiente(t)
 	if code := a2.roda("offsets", "--config", a2.config, "--dataset", "radius_sessions",
-		"--show", "--reset", "earliest"); code != cli.ExitUso {
-		t.Errorf("code = %d, quer %d (duas ações)", code, cli.ExitUso)
+		"--show", "--reset", "earliest"); code != cli.ExitUsageError {
+		t.Errorf("code = %d, quer %d (duas ações)", code, cli.ExitUsageError)
 	}
 }
 
@@ -149,8 +149,8 @@ func TestIngestParaComInvalidEventStop(t *testing.T) {
 
 	code := a.rodaComEntrada(entrada,
 		"ingest", "--config", a.config, "--dataset", "radius_sessions", "--input", "-")
-	if code != cli.ExitParadoPorPolitica {
-		t.Errorf("code = %d, quer %d\n%s", code, cli.ExitParadoPorPolitica, a.stderr.String())
+	if code != cli.ExitPolicyStopped {
+		t.Errorf("code = %d, quer %d\n%s", code, cli.ExitPolicyStopped, a.stderr.String())
 	}
 	msg := a.stderr.String()
 	if !strings.Contains(msg, "errors.invalidEvent=stop") {

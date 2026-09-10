@@ -28,14 +28,14 @@ import (
 //   - Trocar de tópico ou de cluster recusa a subida. A troca LEGÍTIMA
 //     (promoção de teste para produção) precisa de um ato explícito.
 //
-// O reposicionamento é operação de ADMINISTRAÇÃO e não campo de arquivo: o
+// O reposicionamento é operação de ADMINISTRAÇÃO e não field de arquivo: o
 // §49 torna o checkpoint autoritativo, e uma chave de YAML que reposiciona
 // seria aplicada de novo a cada reinício, silenciosamente.
 //
 // Toma o flock do dataset, logo exige o servidor parado. É proposital: mexer
 // na posição com o consumer de pé faria o writer sobrescrever a decisão no
 // checkpoint seguinte.
-func runOffsets(args []string, amb Ambiente) int {
+func runOffsets(args []string, amb CLIContext) int {
 	fs := flag.NewFlagSet("offsets", flag.ContinueOnError)
 	fs.SetOutput(amb.Stderr)
 	var (
@@ -47,11 +47,11 @@ func runOffsets(args []string, amb Ambiente) int {
 		confirmar = fs.Bool("yes", false, "confirma a escrita (obrigatório com --reset e --set)")
 	)
 	if err := fs.Parse(args); err != nil {
-		return ExitUso
+		return ExitUsageError
 	}
 	if *argConfig == "" || *dataset == "" {
 		fmt.Fprintln(amb.Stderr, "offsets: --config e --dataset são obrigatórios")
-		return ExitUso
+		return ExitUsageError
 	}
 	acoes := 0
 	for _, ligada := range []bool{*mostrar, *reiniciar != "", *definir != ""} {
@@ -61,22 +61,22 @@ func runOffsets(args []string, amb Ambiente) int {
 	}
 	if acoes != 1 {
 		fmt.Fprintln(amb.Stderr, "offsets: escolha exatamente uma ação: --show, --reset ou --set")
-		return ExitUso
+		return ExitUsageError
 	}
 
 	cfg, err := nishiconfig.Load(*argConfig)
 	if err != nil {
 		fmt.Fprintf(amb.Stderr, "offsets: %v\n", err)
-		return ExitUso
+		return ExitUsageError
 	}
 	spec, err := schema.Load(cfg.DatasetSpecPath(*dataset), cfg.QueryDefaults())
 	if err != nil {
 		fmt.Fprintf(amb.Stderr, "offsets: %v\n", err)
-		return ExitUso
+		return ExitUsageError
 	}
 	if spec.Source.Kafka == nil {
 		fmt.Fprintf(amb.Stderr, "offsets: o dataset %q não declara source.kafka\n", *dataset)
-		return ExitUso
+		return ExitUsageError
 	}
 
 	// Os campos indexados PRECISAM ser declarados: o Store recusa abrir um
@@ -84,23 +84,23 @@ func runOffsets(args []string, amb Ambiente) int {
 	// porque o índice pararia de ser atualizado e reapareceria incompleto.
 	indexados := schema.IndexedFieldNames(spec)
 	st, err := storage.Open(storage.Options{
-		Dir:                    cfg.DatasetDir(*dataset),
-		Dataset:                *dataset,
-		SegmentSize:            cfg.SegmentSize(),
-		CamposIndexadosPorNome: indexados,
-		ColunasDerivadas:       spec.DerivedColumnNames(),
-		TTLAtivo:               len(spec.Materialization.TTLRules) > 0,
-		DuracaoDeFundo:         spec.Materialization.FallbackDuration,
-		CampoDeEscrita:         schema.WriteInstantFieldName,
-		CampoDePrazo:           schema.TTLFieldName,
+		Dir:                   cfg.DatasetDir(*dataset),
+		Dataset:               *dataset,
+		SegmentSize:           cfg.SegmentSize(),
+		IndexedFieldsByName:   indexados,
+		DerivedColumnNames:    spec.DerivedColumnNames(),
+		ActiveTTL:             len(spec.Materialization.TTLRules) > 0,
+		FallbackDuration:      spec.Materialization.FallbackDuration,
+		WriteInstantFieldName: schema.WriteInstantFieldName,
+		TTLFieldName:          schema.TTLFieldName,
 		// Os contadores também: um dataset que os declara recusa abrir sem
 		// eles, e este comando não escreve linha nenhuma — mas o Open faz
 		// um checkpoint, e o checkpoint grava a seção deles no manifest.
-		CompilaContadores: counters.NovoCompilador(spec).Callback(),
+		CompileCountersCallbackFunction: counters.NewCompiler(spec).Callback(),
 	})
 	if err != nil {
 		fmt.Fprintf(amb.Stderr, "offsets: %v\n", err)
-		return codigoDoErro(err)
+		return errorCode(err)
 	}
 	defer st.Close()
 
@@ -114,13 +114,13 @@ func runOffsets(args []string, amb Ambiente) int {
 		if *reiniciar != schema.AutoOffsetResetEarliest && *reiniciar != schema.AutoOffsetResetLatest {
 			fmt.Fprintf(amb.Stderr, "offsets: --reset %q inválido (%s|%s)\n",
 				*reiniciar, schema.AutoOffsetResetEarliest, schema.AutoOffsetResetLatest)
-			return ExitUso
+			return ExitUsageError
 		}
 		if !*confirmar {
 			fmt.Fprintf(amb.Stderr,
 				"offsets: --reset %s DESCARTA a posição de %q e reprocessa ou pula uma janela do tópico. "+
 					"Confirme com --yes\n", *reiniciar, *dataset)
-			return ExitUso
+			return ExitUsageError
 		}
 		// Reset é a posição VAZIA com a origem do YAML: na próxima subida o
 		// dataset estará "sem posição", e o autoOffsetReset governa. O
@@ -132,7 +132,7 @@ func runOffsets(args []string, amb Ambiente) int {
 		}
 		if err := grava(st, nova); err != nil {
 			fmt.Fprintf(amb.Stderr, "offsets: %v\n", err)
-			return codigoDoErro(err)
+			return errorCode(err)
 		}
 		fmt.Fprintf(amb.Stdout, "offsets: posição de %q descartada; a próxima subida usa autoOffsetReset=%s\n",
 			*dataset, *reiniciar)
@@ -142,18 +142,18 @@ func runOffsets(args []string, amb Ambiente) int {
 		offsets, err := parseOffsets(*definir)
 		if err != nil {
 			fmt.Fprintf(amb.Stderr, "offsets: %v\n", err)
-			return ExitUso
+			return ExitUsageError
 		}
 		if !*confirmar {
 			fmt.Fprintf(amb.Stderr,
 				"offsets: --set sobrescreve a posição de %q por %s. Confirme com --yes\n",
 				*dataset, formataOffsets(offsets))
-			return ExitUso
+			return ExitUsageError
 		}
 		nova := checkpoint.SourceOffsets{Source: origemDaSpec(spec), Offsets: offsets}
 		if err := grava(st, nova); err != nil {
 			fmt.Fprintf(amb.Stderr, "offsets: %v\n", err)
-			return codigoDoErro(err)
+			return errorCode(err)
 		}
 		fmt.Fprintf(amb.Stdout, "offsets: posição de %q definida como %s\n", *dataset, formataOffsets(offsets))
 		return ExitOK
@@ -179,7 +179,7 @@ func grava(st *storage.Store, o checkpoint.SourceOffsets) error {
 	return st.Checkpoint()
 }
 
-func imprimeOffsets(amb Ambiente, dataset string, rows uint64,
+func imprimeOffsets(amb CLIContext, dataset string, rows uint64,
 	o checkpoint.SourceOffsets, existe bool, errLeitura error,
 ) int {
 	fmt.Fprintf(amb.Stdout, "dataset: %s\nrows: %d\n", dataset, rows)

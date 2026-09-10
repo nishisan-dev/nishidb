@@ -286,7 +286,7 @@ func TestReplayUsaOMesmoCodePathDoWritePath(t *testing.T) {
 	monta := func(t *testing.T, comCheckpointNoFim bool) []checkpoint.SegmentInfo {
 		t.Helper()
 		dir := t.TempDir()
-		opts := Options{Dir: dir, CamposIndexados: []types.FieldID{fldStatus}}
+		opts := Options{Dir: dir, IndexedFields: []types.FieldID{fldStatus}}
 		s := audOpen(t, opts)
 		for i := 0; i < 4; i++ {
 			k := fmt.Sprintf("cp-%d", i)
@@ -428,7 +428,7 @@ func TestPhantomCommitEmUpdateMaterializaEstadoNovo(t *testing.T) {
 	// row que já existia. O replay tem que promover esse estado E reexecutar
 	// a transição de bitmap que o Put falho deixou pela metade.
 	dir := t.TempDir()
-	opts := Options{Dir: dir, CamposIndexados: []types.FieldID{fldStatus}}
+	opts := Options{Dir: dir, IndexedFields: []types.FieldID{fldStatus}}
 	s := audOpen(t, opts)
 	id, _ := mustPut(t, s, "phu", 1, statusPayload(t, s, "phu", "Start", 1), nil)
 	if err := s.Checkpoint(); err != nil {

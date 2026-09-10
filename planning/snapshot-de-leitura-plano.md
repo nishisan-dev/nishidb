@@ -231,7 +231,7 @@ Testes: `TestCompactionNaoLapidaLinhaVisivelAoSnapshotMaisAntigo`,
 recusa na subida se fora de faixa, nunca arredonda). Estourado o teto, o
 snapshot **mais antigo** é invalidado e a consulta que o usa falha na próxima
 leitura com `SNAPSHOT_TOO_OLD` — a ingestão nunca para por causa de uma
-consulta. Sentinela `ErrSnapshotExpirado` + `errors.Is` em `codigoDoErro`,
+consulta. Sentinela `ErrSnapshotExpirado` + `errors.Is` em `errorCode`,
 código de wire estável, SQLSTATE no driver JDBC e exceção mapeada no client
 Python (o gate cobra os três).
 

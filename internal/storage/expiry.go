@@ -14,7 +14,7 @@ import (
 // prazo precisa avançar o tempo sem dormir, e a alternativa seria uma suíte
 // que leva minutos ou que só prova a expiração com prazos irrealistas.
 func (s *Store) UsaRelogio(f func() time.Time) {
-	s.agora = f
+	s.now = f
 	// Os contadores marcam o instante em que um grupo esvazia com o MESMO
 	// relógio: um teste de aposentadoria avança o tempo por aqui.
 	for _, c := range s.contadores {
@@ -23,7 +23,7 @@ func (s *Store) UsaRelogio(f func() time.Time) {
 }
 
 // TemExpiracao reporta se este dataset expira por escrita.
-func (s *Store) TemExpiracao() bool { return s.escritas != nil }
+func (s *Store) TemExpiracao() bool { return s.writes != nil }
 
 // Expira publica a lápide de uma row cujo prazo venceu, tornando o record
 // anterior recuperável pela compaction.
@@ -41,7 +41,7 @@ func (s *Store) TemExpiracao() bool { return s.escritas != nil }
 // location, já tombstonada, ou RENOVADA entre a decisão do agendador e esta
 // chamada. O último caso é o que torna a corrida com o Put segura.
 func (s *Store) Expira(rowID types.RowID) (expirou bool, err error) {
-	if s.escritas == nil {
+	if s.writes == nil {
 		return false, fmt.Errorf("%w: dataset sem expiração declarada", ErrInvalidArgument)
 	}
 	if err := s.entra(); err != nil {
@@ -76,12 +76,12 @@ func (s *Store) Expira(rowID types.RowID) (expirou bool, err error) {
 	if flags&types.FlagTombstone != 0 {
 		return false, nil // idempotente
 	}
-	if !s.prazoVencido(rowID, s.agora()) {
+	if !s.prazoVencido(rowID, s.now()) {
 		return false, nil // renovada entre a decisão e agora
 	}
 
-	rec, buf, err := s.segR.ReadRecord(seg, off, s.expiraBuf[:0])
-	s.expiraBuf = buf
+	rec, buf, err := s.segR.ReadRecord(seg, off, s.expireBuffer[:0])
+	s.expireBuffer = buf
 	if err != nil {
 		return false, err
 	}
@@ -150,7 +150,7 @@ func (s *Store) Expira(rowID types.RowID) (expirou bool, err error) {
 	}); err != nil {
 		return false, s.failWriter(err)
 	}
-	s.expiradas.Add(1)
+	s.expiredCount.Add(1)
 	return true, nil
 }
 
@@ -171,18 +171,18 @@ func (s *Store) Expira(rowID types.RowID) (expirou bool, err error) {
 // indexes são limpos" do §56 continua verdadeiro no OBSERVÁVEL (a row expirada
 // não sai em consulta indexada), por outro mecanismo.
 //
-// Usa o tombBuf, que é do writer e está sob o wmu — os dois chamadores (o
+// Usa o tempBuffer, que é do writer e está sob o wmu — os dois chamadores (o
 // coletor e a compaction) já estão dentro da seção crítica.
 func (s *Store) montaLapide(payloadAnterior []byte) ([]byte, error) {
-	tomb := s.tombBuf[:0]
-	if ms, tem := instanteDeEscrita(payloadAnterior, s.campoDeEscrita); tem {
+	tomb := s.tempBuffer[:0]
+	if ms, tem := instanteDeEscrita(payloadAnterior, s.writeFieldId); tem {
 		var err error
-		if tomb, err = encoding.AppendField(tomb, s.campoDeEscrita,
+		if tomb, err = encoding.AppendField(tomb, s.writeFieldId,
 			types.Value{Type: types.TypeTimestamp, I64: ms}); err != nil {
 			return nil, err
 		}
 	}
-	s.tombBuf = tomb
+	s.tempBuffer = tomb
 	return tomb, nil
 }
 
@@ -244,7 +244,7 @@ type ResultadoDaExpiracao struct {
 // elas aparecem pelo sentinela de carência, e não por um vencimento.
 func (s *Store) ExpiraUmaPassada(ctx context.Context, lim LimitesDeExpiracao) (ResultadoDaExpiracao, error) {
 	var r ResultadoDaExpiracao
-	if s.escritas == nil {
+	if s.writes == nil {
 		return r, nil
 	}
 	if lim.MaxPorPassada <= 0 || lim.TempoPorPassada <= 0 {
@@ -255,16 +255,16 @@ func (s *Store) ExpiraUmaPassada(ctx context.Context, lim LimitesDeExpiracao) (R
 	}
 	defer s.sai()
 
-	fim := s.agora().Add(lim.TempoPorPassada)
+	fim := s.now().Add(lim.TempoPorPassada)
 	var falha error
-	r.Examinadas = s.agenda.VisitExpired(uint64(s.agora().UnixMilli()), func(id types.RowID) bool {
+	r.Examinadas = s.schedule.VisitExpired(uint64(s.now().UnixMilli()), func(id types.RowID) bool {
 		// O ctx é checado a cada linha, e não só entre marcas: uma descida que
 		// entra em ramos frouxos e não acha nada para expirar não passaria por
 		// nenhum ponto de cancelamento, e o Close ficaria esperando por ela.
 		if ctx.Err() != nil {
 			return false
 		}
-		if r.Expiradas >= lim.MaxPorPassada || !s.agora().Before(fim) {
+		if r.Expiradas >= lim.MaxPorPassada || !s.now().Before(fim) {
 			r.BateuTeto = true
 			return false
 		}
@@ -292,15 +292,15 @@ func (s *Store) ExpiraUmaPassada(ctx context.Context, lim LimitesDeExpiracao) (R
 	if falha != nil {
 		return r, falha
 	}
-	s.examinadas.Add(uint64(r.Examinadas))
-	s.carencias.Add(uint64(r.Carencias))
+	s.examinedCount.Add(uint64(r.Examinadas))
+	s.lostCount.Add(uint64(r.Carencias))
 	return r, nil
 }
 
-// trataVencida aplica a uma linha entregue pela agenda a ação que ela pede, e
+// trataVencida aplica a uma linha entregue pela schedule a ação que ela pede, e
 // devolve agiu=false quando não havia nada a fazer.
 func (s *Store) trataVencida(id types.RowID, r *ResultadoDaExpiracao) (bool, error) {
-	if _, conhecido := s.escritas.Get(id); !conhecido {
+	if _, conhecido := s.writes.Get(id); !conhecido {
 		dada, err := s.daCarencia(id)
 		if err != nil {
 			return false, err
@@ -340,7 +340,7 @@ func (s *Store) reagenda(id types.RowID) error {
 	if s.stickyErr != nil {
 		return fmt.Errorf("%w: %w", ErrWriterFailed, s.stickyErr)
 	}
-	return s.agenda.Update(id, s.vencimentoDe(id))
+	return s.schedule.Update(id, s.vencimentoDe(id))
 }
 
 // tetoDeEspera é o quanto o coletor aceita dormir mesmo quando a agenda diz
@@ -364,7 +364,7 @@ const tetoDeEspera = time.Minute
 // IniciaExpiracao sobe o coletor do idle timeout. Sem expiração declarada não
 // há goroutine: o dataset não paga uma thread para não fazer nada.
 func (s *Store) IniciaExpiracao(ctx context.Context, lim LimitesDeExpiracao) {
-	if s.escritas == nil {
+	if s.writes == nil {
 		return
 	}
 	s.expMu.Lock()
@@ -447,23 +447,23 @@ func (s *Store) rodaExpiracao(ctx context.Context, lim LimitesDeExpiracao) {
 // Passada que bateu o teto volta JÁ: há trabalho represado, e esperar faria a
 // fila drenar na velocidade do relógio em vez da do disco.
 //
-// Fora isso, a espera é até o vencimento mais próximo que a agenda conhece,
-// limitada pelo tetoDeEspera. O valor que a agenda devolve é um limite
+// Fora isso, a espera é até o vencimento mais próximo que a schedule conhece,
+// limitada pelo tetoDeEspera. O valor que a schedule devolve é um limite
 // INFERIOR do vencimento real — a invariante da árvore garante isso —, então
 // errar aqui só pode acordar o coletor cedo, nunca tarde.
 func (s *Store) esperaAteOProximoVencimento(r ResultadoDaExpiracao) time.Duration {
 	if r.BateuTeto {
 		return 0
 	}
-	venc, ok := s.agenda.NextExpiry()
+	venc, ok := s.schedule.NextExpiry()
 	if !ok {
 		return tetoDeEspera
 	}
-	falta := time.UnixMilli(int64(venc)).Sub(s.agora())
+	falta := time.UnixMilli(int64(venc)).Sub(s.now())
 	return max(0, min(falta, tetoDeEspera))
 }
 
-// daCarencia grava o instante de agora para uma entidade que não tem nenhum,
+// daCarencia grava o instante de now para uma entidade que não tem nenhum,
 // dando-lhe um prazo cheio a partir daqui.
 //
 // Toma o wmu, e o motivo NÃO é corrida de dados: o valor do índice é gravado
@@ -498,21 +498,21 @@ func (s *Store) daCarencia(id types.RowID) (bool, error) {
 	if s.stickyErr != nil {
 		return false, fmt.Errorf("%w: %w", ErrWriterFailed, s.stickyErr)
 	}
-	if _, conhecido := s.escritas.Get(id); conhecido {
+	if _, conhecido := s.writes.Get(id); conhecido {
 		return false, nil // a ingestão chegou primeiro
 	}
 	if _, publicada := s.locs.Get(id); !publicada {
 		return false, nil
 	}
-	if err := s.escritas.Set(id, s.agora().UnixMilli()); err != nil {
+	if err := s.writes.Set(id, s.now().UnixMilli()); err != nil {
 		return false, err
 	}
 	// A agenda sai do sentinela de carência e passa a apontar o vencimento de
 	// verdade. Sem esta linha a entrada ficaria em Carencia para sempre, e a
 	// linha seria reentregue em toda descida — o coletor daria a mesma
 	// carência indefinidamente, tomando o lock do writer a cada volta.
-	if s.agenda != nil {
-		if err := s.agenda.Update(id, s.vencimentoDe(id)); err != nil {
+	if s.schedule != nil {
+		if err := s.schedule.Update(id, s.vencimentoDe(id)); err != nil {
 			return false, err
 		}
 	}

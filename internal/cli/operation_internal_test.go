@@ -26,7 +26,7 @@ func TestResumoDaIngestaoTrazOsContadoresDoDatasetQueConsome(t *testing.T) {
 		Events: 1, Applied: 2, Stale: 3, Discarded: 4, Failed: 5,
 	}
 
-	got := resumoDaIngestao(ligada)
+	got := ingestionStatsSummary(ligada)
 	for _, quer := range []string{"UP", "1 eventos", "2 aplicados", "3 stale", "4 descartados", "5 falhas"} {
 		if !strings.Contains(got, quer) {
 			t.Errorf("o resumo não traz %q: %q", quer, got)
@@ -43,7 +43,7 @@ func TestResumoDaIngestaoTrazOsContadoresDoDatasetQueConsome(t *testing.T) {
 	// de "por que está parada".
 	parada := ligada
 	parada.State, parada.Paused = "DEGRADED", "erro de desserialização em 3 partições"
-	if got := resumoDaIngestao(parada); !strings.Contains(got, "; parada: "+parada.Paused) {
+	if got := ingestionStatsSummary(parada); !strings.Contains(got, "; parada: "+parada.Paused) {
 		t.Errorf("o resumo não traz o motivo da parada: %q", got)
 	}
 
@@ -52,7 +52,7 @@ func TestResumoDaIngestaoTrazOsContadoresDoDatasetQueConsome(t *testing.T) {
 	// que ninguém pediu para consumir.
 	desligada := ligada
 	desligada.Enabled, desligada.State = false, "DISABLED"
-	if got := resumoDaIngestao(desligada); got != "DISABLED" {
+	if got := ingestionStatsSummary(desligada); got != "DISABLED" {
 		t.Errorf("resumo do dataset desligado = %q, queria só o estado", got)
 	}
 }

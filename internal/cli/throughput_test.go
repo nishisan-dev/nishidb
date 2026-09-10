@@ -209,9 +209,9 @@ func umaRodadaDireta(t *testing.T, entrada string) float64 {
 	// função existe para impedir.
 	indexados := schema.IndexedFieldNames(spec)
 	st, err := storage.Open(storage.Options{
-		Dir:                    t.TempDir(),
-		SegmentSize:            8 << 20,
-		CamposIndexadosPorNome: indexados,
+		Dir:                 t.TempDir(),
+		SegmentSize:         8 << 20,
+		IndexedFieldsByName: indexados,
 	})
 	if err != nil {
 		t.Fatal(err)

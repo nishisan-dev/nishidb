@@ -59,10 +59,10 @@ func servidorSpec106(t *testing.T) *server.Servidor {
 		t.Fatal(err)
 	}
 	st, err := storage.Open(storage.Options{
-		Dir:                    cfg.DatasetDir("d"),
-		Dataset:                "d",
-		SegmentSize:            cfg.SegmentSize(),
-		CamposIndexadosPorNome: schema.IndexedFieldNames(spec),
+		Dir:                 cfg.DatasetDir("d"),
+		Dataset:             "d",
+		SegmentSize:         cfg.SegmentSize(),
+		IndexedFieldsByName: schema.IndexedFieldNames(spec),
 	})
 	if err != nil {
 		t.Fatal(err)

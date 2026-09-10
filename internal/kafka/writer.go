@@ -179,7 +179,7 @@ func NovoWriter(cfg *Config, mat *materializer.Materializer, st Store, fila *Fil
 		limiarDeEncolhimento: limiarDeSlot(cfg),
 		log:                  log.Component("kafka").Dataset(cfg.Dataset),
 		met:                  met,
-		origem:               cfg.Origem(),
+		origem:               cfg.Source(),
 		cad:                  cad,
 		commit:               commit,
 		offsets:              o,
@@ -315,7 +315,7 @@ func (w *Writer) aplica(ctx context.Context, s *slot) error {
 			"writer.falho", it.Rec)
 
 	case r.Category.BadEvent():
-		if w.cfg.InvalidEvent == schema.InvalidEventStop {
+		if w.cfg.InvalidEventPolicy == schema.InvalidEventStop {
 			return w.para(ctx, fmt.Errorf("%w: errors.invalidEvent=stop e o evento é %s: %w",
 				ErrPausado, r.Category, r.Err), "evento.parou", it.Rec)
 		}

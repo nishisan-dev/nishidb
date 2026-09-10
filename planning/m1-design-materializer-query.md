@@ -937,10 +937,10 @@ segurar o lock pela vida do iterador bloquearia o `Close` atrás de um consumido
   diferença é o que o comando faz a mais.
 
 **Um achado sobre o meu próprio código, encontrado por mutação:** o `runQuery` tinha um ramo especial
-para o truncamento que era **indistinguível** do caminho geral, porque o `codigoDoErro` já traduzia o
+para o truncamento que era **indistinguível** do caminho geral, porque o `errorCode` já traduzia o
 sentinela no mesmo exit code e a mensagem do próprio erro já dizia "truncado". Nenhum teste
 conseguia separar os dois — código que nenhum teste distingue é decoração. Removido; a mutação que
-importa (o mapeamento em `codigoDoErro`) falha em 1 teste.
+importa (o mapeamento em `errorCode`) falha em 1 teste.
 
 ### I1 — o que a integração com o Store real encontrou
 

@@ -132,8 +132,8 @@ func TestPassadaDaCarenciaAQuemNaoTemInstante(t *testing.T) {
 func TestCompactionMarcaOVencidoQueEncontra(t *testing.T) {
 	s := openStore(t, Options{
 		Dir: t.TempDir(), SegmentSize: 8 << 10,
-		TTLAtivo: true, DuracaoDeFundo: time.Hour,
-		CampoDeEscrita: "_writtenAt", CampoDePrazo: "_expiresIn",
+		ActiveTTL: true, FallbackDuration: time.Hour,
+		WriteInstantFieldName: "_writtenAt", TTLFieldName: "_expiresIn",
 	})
 	rel := &relogioDeTeste{t: time.Date(2026, 8, 22, 20, 0, 0, 0, time.UTC)}
 	s.UsaRelogio(rel.agora)
@@ -196,11 +196,11 @@ func TestCompactionMarcaOVencidoQueEncontra(t *testing.T) {
 		t.Fatal("nenhum segmento candidato: o cenário não exercita a descoberta oportunista")
 	}
 
-	antes := s.expiradas.Load()
+	antes := s.expiredCount.Load()
 	if _, err := s.CompactaUmaVez(context.Background(), 0.5); err != nil {
 		t.Fatal(err)
 	}
-	if depois := s.expiradas.Load(); depois == antes {
+	if depois := s.expiredCount.Load(); depois == antes {
 		t.Fatal("a compaction copiou os vencidos para frente em vez de marcá-los")
 	}
 	for _, id := range abandonadas {
@@ -223,8 +223,8 @@ func TestCompactionNaoMarcaQuemEstaNoPrazo(t *testing.T) {
 	dir := t.TempDir()
 	s := openStore(t, Options{
 		Dir: dir, SegmentSize: 4 << 10,
-		TTLAtivo: true, DuracaoDeFundo: 100 * time.Hour,
-		CampoDeEscrita: "_writtenAt", CampoDePrazo: "_expiresIn",
+		ActiveTTL: true, FallbackDuration: 100 * time.Hour,
+		WriteInstantFieldName: "_writtenAt", TTLFieldName: "_expiresIn",
 	})
 	rel := &relogioDeTeste{t: time.Date(2026, 8, 22, 20, 0, 0, 0, time.UTC)}
 	s.UsaRelogio(rel.agora)
@@ -356,7 +356,7 @@ func TestSoOColetorAlcancaAbandonadaEmSegmentoSemGarbage(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if n := s.expiradas.Load(); n != 0 {
+	if n := s.expiredCount.Load(); n != 0 {
 		t.Fatalf("a compaction marcou %d entidades num segmento que ela nem elege", n)
 	}
 	for _, id := range ids {

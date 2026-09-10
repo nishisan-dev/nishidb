@@ -106,7 +106,7 @@ func TestInvalidosContamPorMotivoEmMetrics(t *testing.T) {
 func TestStopParaAIngestaoSemAvancarOOffset(t *testing.T) {
 	b := novaBancada(t, 1)
 	defer b.fecha()
-	b.cfg.InvalidEvent = schema.InvalidEventStop
+	b.cfg.InvalidEventPolicy = schema.InvalidEventStop
 
 	b.produz(evento("A", 1, "Start"), eventoRuim(), evento("B", 1, "Start"))
 
@@ -213,7 +213,7 @@ func TestTrocaDeGroupIdRecusaASubida(t *testing.T) {
 // §102 — a chave é aceita no parse (senão o snippet literal da spec seria
 // inválido) e recusada na ativação. O que não pode é ser aceita em silêncio.
 func TestDeadLetterTopicERecusadoNaAtivacao(t *testing.T) {
-	_, err := kafka.Resolve("d",
+	_, err := kafka.ResolveKafkaConfig("d",
 		&schema.KafkaSpec{
 			BootstrapServers: []string{"kafka01:9092"},
 			Topic:            "t",
@@ -239,7 +239,7 @@ func TestCredencialAusenteFalhaRapidoENomeiaAVariavel(t *testing.T) {
 			PasswordEnv:   "NISHIDB_TESTE_SENHA_INEXISTENTE",
 		},
 	}
-	_, err := kafka.Resolve("d", k, schema.ErrorsSpec{InvalidEvent: schema.InvalidEventLogAndSkip})
+	_, err := kafka.ResolveKafkaConfig("d", k, schema.ErrorsSpec{InvalidEvent: schema.InvalidEventLogAndSkip})
 	if !errors.Is(err, kafka.ErrConfig) {
 		t.Fatalf("erro = %v, quer ErrConfig", err)
 	}
@@ -265,7 +265,7 @@ func TestCredencialVaziaEhRecusada(t *testing.T) {
 			PasswordEnv:   "NISHIDB_TESTE_SENHA",
 		},
 	}
-	_, err := kafka.Resolve("d", k, schema.ErrorsSpec{InvalidEvent: schema.InvalidEventLogAndSkip})
+	_, err := kafka.ResolveKafkaConfig("d", k, schema.ErrorsSpec{InvalidEvent: schema.InvalidEventLogAndSkip})
 	if err == nil || !strings.Contains(err.Error(), "definida e vazia") {
 		t.Errorf("erro = %v, quer recusa por variável vazia", err)
 	}

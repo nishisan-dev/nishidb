@@ -54,10 +54,10 @@ func semeiaServicos(t *testing.T, a *ambiente, nome string, n int) {
 		t.Fatal(err)
 	}
 	st, err := storage.Open(storage.Options{
-		Dir:                    cfg.DatasetDir(nome),
-		Dataset:                nome,
-		SegmentSize:            cfg.SegmentSize(),
-		CamposIndexadosPorNome: schema.IndexedFieldNames(spec),
+		Dir:                 cfg.DatasetDir(nome),
+		Dataset:             nome,
+		SegmentSize:         cfg.SegmentSize(),
+		IndexedFieldsByName: schema.IndexedFieldNames(spec),
 	})
 	if err != nil {
 		t.Fatal(err)

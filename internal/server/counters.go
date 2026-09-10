@@ -129,7 +129,7 @@ func (s *Servidor) handleReconstrucaoDeContadores(w http.ResponseWriter, r *http
 // o contexto cancelado (o servidor encerrando, ou o cliente desistindo).
 func erroDeContadores(err error) (int, protocol.ErrorDetail) {
 	switch {
-	case errors.Is(err, storage.ErrSnapshotExpirado):
+	case errors.Is(err, storage.ErrExpiredSnapshot):
 		return http.StatusConflict, protocol.ErrorDetail{
 			Code: protocol.CodeSnapshotExpired,
 			Message: "a auditoria ficou inconclusiva: o journal de versões estourou runtime.query.snapshotMaxBytes durante a varredura; " +

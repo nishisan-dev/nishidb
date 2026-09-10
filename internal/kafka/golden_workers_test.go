@@ -141,7 +141,7 @@ func rodaPipeline(t *testing.T, workers int, eventos []string) retratoDoDataset 
 		Dataset: "eventos", Topic: "eventos", GroupID: "g",
 		Brokers: []string{"127.0.0.1:9092"}, MaxPollRecords: 32,
 		QueueSize: 64, QueueBytes: 1 << 20, DecodeWorkers: workers,
-		InvalidEvent: schema.InvalidEventLogAndSkip,
+		InvalidEventPolicy: schema.InvalidEventLogAndSkip,
 	}
 	fila := NovaFila(cfg.QueueSize, cfg.QueueBytes)
 	met := registraMetricas(nil, "eventos")

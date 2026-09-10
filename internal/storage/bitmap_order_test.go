@@ -27,8 +27,8 @@ func TestOrdemDosNomesDeBitmapNaoMudaOsFieldIDs(t *testing.T) {
 	ids := func(lista []string) map[string]types.FieldID {
 		t.Helper()
 		st, err := storage.Open(storage.Options{
-			Dir:                    filepath.Join(t.TempDir(), "ds"),
-			CamposIndexadosPorNome: lista,
+			Dir:                 filepath.Join(t.TempDir(), "ds"),
+			IndexedFieldsByName: lista,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -60,8 +60,8 @@ func TestOpenNaoReordenaOSliceDoChamador(t *testing.T) {
 	original := append([]string(nil), nomes...)
 
 	st, err := storage.Open(storage.Options{
-		Dir:                    filepath.Join(t.TempDir(), "ds"),
-		CamposIndexadosPorNome: nomes,
+		Dir:                 filepath.Join(t.TempDir(), "ds"),
+		IndexedFieldsByName: nomes,
 	})
 	if err != nil {
 		t.Fatal(err)

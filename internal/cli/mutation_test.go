@@ -19,7 +19,7 @@ import (
 
 // configComServidorSemCompaction é o gêmeo de configComServidor
 // (query_remote_test.go) com storage.compaction.enabled: false — o caso de
-// uso central de `compact`: o operador desligou o laço automático porque,
+// usage central de `compact`: o operador desligou o laço automático porque,
 // com ele de pé, TODO POST /v1/compact recebe 409 (compCancela nunca é nil
 // enquanto o laço existe, mesmo dormindo entre passadas).
 const configComServidorSemCompaction = `version: 1

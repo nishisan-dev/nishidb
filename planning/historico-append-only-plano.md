@@ -163,8 +163,8 @@ histórico ganha duplicatas, nunca buracos. O mesmo adaptador vale para o
 
 ### 5. O modo de storage
 
-`storage.Options` ganha `Modo storage.Modo` (`ModoMaterializado` default,
-`ModoHistorico`), fiado nos **dois** call sites que abrem dataset:
+`storage.Options` ganha `Mode storage.StoreMode` (`ModoMaterializado` default,
+`HistoryMode`), fiado nos **dois** call sites que abrem dataset:
 `internal/server/server.go:322` e `internal/cli/cli.go:237`.
 
 O modo é gravado no manifest numa **tag TLV crítica** (`tag >= 0x8000`,
@@ -181,7 +181,7 @@ padrão condicional que o TTL já estabeleceu (`if s.escritas != nil`):
 | `sequences.idx` | **não abre** — não há estado a sobrescrever |
 | `expiry.idx` / `prazos.idx` | **não abrem** — o prazo é do dataset, não da linha |
 | `locations.idx` | abre; continua o commit point de visibilidade |
-| `fields.dict` | **não cria** — usa o `DictCompartilhado` do base |
+| `fields.dict` | **não cria** — usa o `SharedDictionary` do base |
 | Compaction | **desligada** — sem update não há garbage; o disco volta por descarte de segmento |
 | Coletor de expiração | **desligado** — substituído pelo motor de retenção (§6) |
 | Consumer Kafka | **nenhum** — a escrita vem do materializer do base |
@@ -330,7 +330,7 @@ modo histórico. Callback `AoDescobrirCampo` em `Compiled`, disparado por
 a coluna nas **duas** tabelas sem restart.
 
 **Fase C — modo histórico no storage**
-`Options.Modo`, tag TLV crítica no manifest, ramos condicionais em
+`Options.Mode`, tag TLV crítica no manifest, ramos condicionais em
 `Open`/`applyRecord`, método `Apenda`. Testes de recovery pelo tail e de recusa
 do modo errado, no molde de `store_recovery_test.go`.
 

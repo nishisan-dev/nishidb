@@ -527,7 +527,7 @@ import (
 // antes da ordenação, para que participe do sort e do dedup como qualquer
 // outra entry.
 //
-// Origem ausente do evento, ou presente com null explícito, NÃO emite nada: a
+// Source ausente do evento, ou presente com null explícito, NÃO emite nada: a
 // coluna fica vazia e é preenchida no primeiro evento que trouxer a origem. É
 // a semântica de "primeiro valor visto", e é o que torna a feature tolerante a
 // fonte que manda evento parcial.
@@ -902,12 +902,12 @@ git commit -m "Compila uma condição solta pela mesma gramática do WHERE"
       When     string        // "" na regra de fundo
       Duracao  time.Duration // 0 == never
   }
-  const CampoDePrazo = "_expiresIn"
+  const TTLFieldName = "_expiresIn"
   const DurationNever = "never"
 
   // DatasetSpec ganha a forma validada, lida pelos montadores de Options
   TTLRules      []TTLRule
-  DuracaoDeFundo time.Duration // da regra sem `when`; 0 se não há
+  FallbackDuration time.Duration // da regra sem `when`; 0 se não há
   ```
 
   **Sai junto:** o método `DatasetSpec.ExpiraApos()`, hoje lido por
@@ -963,11 +963,11 @@ type TTLRuleSpec struct {
 // `never` diz a intenção, `0` parece um esquecimento.
 const DurationNever = "never"
 
-// CampoDePrazo carrega a DURAÇÃO de ociosidade que vale para a entidade, em
+// TTLFieldName carrega a DURAÇÃO de ociosidade que vale para a entidade, em
 // millis. Duração, e não prazo absoluto, para que se componha com o
 // WriteInstantFieldName e para que reordenar as regras no YAML não mude o
 // significado do que já está gravado.
-const CampoDePrazo = "_expiresIn"
+const TTLFieldName = "_expiresIn"
 ```
 
 E `systemNames` ganha a entrada:
@@ -975,7 +975,7 @@ E `systemNames` ganha a entrada:
 ```go
 var systemNames = map[string]string{
 	WriteInstantFieldName: "é injetado pelo writer a cada escrita",
-	CampoDePrazo:           "é calculado pelo writer a partir das regras de ttl",
+	TTLFieldName:           "é calculado pelo writer a partir das regras de ttl",
 }
 ```
 
@@ -1085,11 +1085,11 @@ problema.
 - [ ] **Passo 1: escrever os testes**
 
 ```go
-func TestCompilaRegistraOCampoDePrazoQuandoHaRegras(t *testing.T) {
+func TestCompilaRegistraOTTLFieldNameQuandoHaRegras(t *testing.T) {
 	// c.TTLField != nil, c.TTLField.IsSystem, c.TTLField.Type == types.TypeInt64
 }
-func TestSemRegrasNaoRegistraOCampoDePrazo(t *testing.T)   { /* c.TTLField == nil */ }
-func TestCampoDePrazoFicaForaDoSelectStar(t *testing.T)    { /* sortedFields sem sistema */ }
+func TestSemRegrasNaoRegistraOTTLFieldName(t *testing.T)   { /* c.TTLField == nil */ }
+func TestTTLFieldNameFicaForaDoSelectStar(t *testing.T)    { /* sortedFields sem sistema */ }
 func TestCompilaRegrasRecusaWhenSobreCampoDeSistema(t *testing.T) { /* em predicado */ }
 ```
 
@@ -1108,7 +1108,7 @@ Em `compile.go:453`, ao lado do `_writtenAt`:
 	// o mapeamento nome→id de um dataset NOVO, gravado para sempre. _writtenAt
 	// primeiro, _expiresIn depois, sempre — nunca reordene.
 	if len(c.TTLRules) > 0 {
-		names = append(names, WriteInstantFieldName, CampoDePrazo)
+		names = append(names, WriteInstantFieldName, TTLFieldName)
 	}
 ```
 
@@ -1117,7 +1117,7 @@ O `sort.Strings(names)` logo abaixo reordena para a compilação, mas o `LookupO
 E no laço, ao lado do ramo do `_writtenAt` (`compile.go:503`):
 
 ```go
-		if name == CampoDePrazo {
+		if name == TTLFieldName {
 			// int64, e NÃO timestamp: ela carrega uma DURAÇÃO em millis, e
 			// timestamp faria `SELECT _expiresIn` renderizar 3 minutos como
 			// 1970-01-01T00:03:00Z — uma data que não é uma data.
@@ -1499,18 +1499,18 @@ git commit -m "Acrescenta o índice de prazos com sentinela para o imortal"
 - Produces (Options):
   ```go
   TTLAtivo       bool          // há ao menos uma regra; substitui ExpireAfterWrite
-  DuracaoDeFundo time.Duration // da regra sem `when`; 0 se não há
+  FallbackDuration time.Duration // da regra sem `when`; 0 se não há
   CampoDeEscrita string
-  CampoDePrazo   string        // obrigatório quando TTLAtivo
+  TTLFieldName   string        // obrigatório quando TTLAtivo
   ```
 
 - [ ] **Passo 1: escrever os testes**
 
 ```go
 func TestPrazoVencidoUsaADuracaoDaLinha(t *testing.T)              {}
-func TestLinhaSemExpiresInCaiNaDuracaoDeFundo(t *testing.T)        { /* a prova da migração */ }
+func TestLinhaSemExpiresInCaiNaFallbackDuration(t *testing.T)      { /* a prova da migração */ }
 func TestLinhaSemExpiresInESemFundoEhImortal(t *testing.T)         {}
-func TestLinhaImortalNaoHerdaADuracaoDeFundo(t *testing.T)         { /* o sentinela */ }
+func TestLinhaImortalNaoHerdaAFallbackDuration(t *testing.T)       { /* o sentinela */ }
 func TestReplayDoTailReconstroiOsPrazos(t *testing.T)              {}
 func TestPrazoVencidoEscondeALinhaComOColetorParado(t *testing.T)  {}
 ```
@@ -1519,9 +1519,9 @@ func TestPrazoVencidoEscondeALinhaComOColetorParado(t *testing.T)  {}
 func TestCompactionDescartaRecordVencidoPorRegraCondicional(t *testing.T) {}
 ```
 
-`TestLinhaImortalNaoHerdaADuracaoDeFundo` é o teste do sentinela e o mais importante do conjunto: sem ele, um `Get` que colapse imortal com desconhecido passa despercebido.
+`TestLinhaImortalNaoHerdaAFallbackDuration` é o teste do sentinela e o mais importante do conjunto: sem ele, um `Get` que colapse imortal com desconhecido passa despercebido.
 
-**`montaLapide` NÃO muda.** Ela hoje preserva só o `campoDeEscrita`, e é para continuar
+**`montaLapide` NÃO muda.** Ela hoje preserva só o `writeFieldId`, e é para continuar
 assim: a lápide não precisa de prazo, e não preservar o `_expiresIn` devolve os bytes. A
 entrada em `prazos.idx` fica com o valor antigo, o que é inofensivo — a linha já está
 tombstonada e `Expira` é idempotente. Se você sentir vontade de acrescentá-lo ali, a
@@ -1543,17 +1543,17 @@ Substitua `ExpireAfterWrite time.Duration` por:
 	// ela nem os índices são abertos — o dataset não paga dois mmaps para não
 	// fazer nada.
 	TTLAtivo bool
-	// DuracaoDeFundo é a duração da regra SEM `when`, ou zero quando não há.
+	// FallbackDuration é a duração da regra SEM `when`, ou zero quando não há.
 	//
 	// Ela vale para a linha cuja entrada em prazos.idx é DESCONHECIDA — a que
 	// foi materializada antes de as regras existirem. É o que permite adotar
 	// as regras num dataset já populado sem que ele fique imortal da noite
 	// para o dia, e é o que faz a migração da forma escalar não mudar
 	// comportamento nenhum.
-	DuracaoDeFundo time.Duration
-	// CampoDePrazo é o NOME do campo de sistema que carrega a duração,
+	FallbackDuration time.Duration
+	// TTLFieldName é o NOME do campo de sistema que carrega a duração,
 	// resolvido pelo dicionário no Open. Obrigatório quando TTLAtivo.
-	CampoDePrazo string
+	TTLFieldName string
 ```
 
 - [ ] **Passo 4: abrir o segundo índice**
@@ -1562,8 +1562,8 @@ Em `store.go:721`:
 
 ```go
 	if opts.TTLAtivo {
-		if opts.CampoDeEscrita == "" || opts.CampoDePrazo == "" {
-			return nil, fmt.Errorf("%w: TTLAtivo exige CampoDeEscrita e CampoDePrazo", ErrInvalidArgument)
+		if opts.CampoDeEscrita == "" || opts.TTLFieldName == "" {
+			return nil, fmt.Errorf("%w: TTLAtivo exige CampoDeEscrita e TTLFieldName", ErrInvalidArgument)
 		}
 		if s.escritas, err = rowindex.OpenLastWrites(filepath.Join(idxDir, "expiry.idx"), minRows); err != nil {
 			return nil, err
@@ -1571,7 +1571,7 @@ Em `store.go:721`:
 		if s.prazos, err = rowindex.OpenTTLs(filepath.Join(idxDir, "prazos.idx"), minRows); err != nil {
 			return nil, err
 		}
-		s.duracaoDeFundo = opts.DuracaoDeFundo
+		s.fallbackDuration = opts.FallbackDuration
 	}
 ```
 
@@ -1586,8 +1586,8 @@ E em `store.go:749`, **na ordem**:
 		if s.campoDeEscrita, err = s.dict.LookupOrCreate([]byte(opts.CampoDeEscrita)); err != nil {
 			return nil, fmt.Errorf("storage: registrando %q no dicionário: %w", opts.CampoDeEscrita, err)
 		}
-		if s.campoDePrazo, err = s.dict.LookupOrCreate([]byte(opts.CampoDePrazo)); err != nil {
-			return nil, fmt.Errorf("storage: registrando %q no dicionário: %w", opts.CampoDePrazo, err)
+		if s.campoDePrazo, err = s.dict.LookupOrCreate([]byte(opts.TTLFieldName)); err != nil {
+			return nil, fmt.Errorf("storage: registrando %q no dicionário: %w", opts.TTLFieldName, err)
 		}
 	}
 ```
@@ -1633,7 +1633,7 @@ func (s *Store) duracaoEfetiva(rowID types.RowID) time.Duration {
 	if ms, conhecido := s.prazos.Get(rowID); conhecido {
 		return time.Duration(ms) * time.Millisecond
 	}
-	return s.duracaoDeFundo
+	return s.fallbackDuration
 }
 
 func (s *Store) prazoVencido(rowID types.RowID) bool {
@@ -1675,9 +1675,9 @@ O `case !conhecido` da carência continua olhando `s.escritas.Get(id)`, que é s
 
 ```go
 		TTLAtivo:       len(spec.TTLRules) > 0,
-		DuracaoDeFundo: spec.DuracaoDeFundo,
+		FallbackDuration: spec.FallbackDuration,
 		CampoDeEscrita: schema.WriteInstantFieldName,
-		CampoDePrazo:   schema.TTLFieldName,
+		TTLFieldName:   schema.TTLFieldName,
 ```
 
 - [ ] **Passo 10: rodar tudo**

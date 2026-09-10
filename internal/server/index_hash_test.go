@@ -81,7 +81,7 @@ func TestServidorAbreODatasetComOsCamposDeHashDeclarados(t *testing.T) {
 		deixados = append(deixados, campos...)
 	}
 
-	st, err := storage.Open(storage.Options{Dir: dir, CamposIndexadosPorNome: []string{"node"}})
+	st, err := storage.Open(storage.Options{Dir: dir, IndexedFieldsByName: []string{"node"}})
 	if err != nil {
 		t.Fatalf("reabrir declarando o campo: %v", err)
 	}

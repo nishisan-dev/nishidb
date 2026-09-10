@@ -177,7 +177,7 @@ func TestPutComPrevConfiaNoRowIDSemRefazerFind(t *testing.T) {
 }
 
 func TestPutSemPrevParaKeyExistenteFazFallback(t *testing.T) {
-	s := openStore(t, Options{CamposIndexados: []types.FieldID{fldStatus}})
+	s := openStore(t, Options{IndexedFields: []types.FieldID{fldStatus}})
 	mustPut(t, s, "fb", 1, statusPayload(t, s, "fb", "Start", 1), nil)
 
 	// prev=nil com key existente: o Store lê o prev sozinho e não cria rowId
@@ -208,7 +208,7 @@ func TestPutSemPrevParaKeyExistenteFazFallback(t *testing.T) {
 }
 
 func TestBitmapDiffEmUpdate(t *testing.T) {
-	s := openStore(t, Options{CamposIndexados: []types.FieldID{fldStatus}})
+	s := openStore(t, Options{IndexedFields: []types.FieldID{fldStatus}})
 	for i, k := range []string{"k1", "k2", "k3"} {
 		mustPut(t, s, k, int64(i), statusPayload(t, s, k, "Start", 0), nil)
 	}
@@ -257,7 +257,7 @@ func TestBitmapDiffEmUpdate(t *testing.T) {
 }
 
 func TestLookupCampoNaoIndexadoEValorDesconhecido(t *testing.T) {
-	s := openStore(t, Options{CamposIndexados: []types.FieldID{fldStatus}})
+	s := openStore(t, Options{IndexedFields: []types.FieldID{fldStatus}})
 	mustPut(t, s, "x", 1, statusPayload(t, s, "x", "Start", 0), nil)
 
 	if _, err := s.Lookup(999, strVal("qualquer")); err == nil {
@@ -556,7 +556,7 @@ func TestStatsDeDatasetSemRecordContaOSegmentoInicial(t *testing.T) {
 func TestVisibilidadeLeitorConcorrente(t *testing.T) {
 	// A location é o commit point: um leitor em loop nunca vê estado
 	// parcial — a key sempre confere e a sequence nunca regride.
-	s := openStore(t, Options{CamposIndexados: []types.FieldID{fldStatus}})
+	s := openStore(t, Options{IndexedFields: []types.FieldID{fldStatus}})
 	key := []byte("concurrent")
 	mustPut(t, s, "concurrent", 0, statusPayload(t, s, "concurrent", "Start", 0), nil)
 

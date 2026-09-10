@@ -61,10 +61,10 @@ func semeia(t *testing.T, a *ambiente, nome string, n int) {
 	// função existe para impedir.
 	indexados := schema.IndexedFieldNames(spec)
 	st, err := storage.Open(storage.Options{
-		Dir:                    cfg.DatasetDir(nome),
-		Dataset:                nome,
-		SegmentSize:            cfg.SegmentSize(),
-		CamposIndexadosPorNome: indexados,
+		Dir:                 cfg.DatasetDir(nome),
+		Dataset:             nome,
+		SegmentSize:         cfg.SegmentSize(),
+		IndexedFieldsByName: indexados,
 	})
 	if err != nil {
 		t.Fatal(err)

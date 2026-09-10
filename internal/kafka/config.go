@@ -32,9 +32,10 @@ import (
 	"github.com/twmb/franz-go/pkg/sasl/plain"
 	"github.com/twmb/franz-go/pkg/sasl/scram"
 
+	"time"
+
 	"github.com/nishisan-dev/nishidb/internal/schema"
 	"github.com/nishisan-dev/nishidb/internal/storage/checkpoint"
-	"time"
 )
 
 // ErrConfig categoriza erro de configuração efetiva do consumer: o que o
@@ -62,11 +63,11 @@ type Config struct {
 	MaxPollRecords  int
 	QueueSize       int
 	QueueBytes      int64
-	// WatchdogTimeout e WatchdogTentativas governam a recriação do consumidor
+	// WatchdogTimeout e WatchdogAttempts governam a recriação do consumidor
 	// quando ele para de receber com o broker declarando mensagens. Zero no
 	// timeout desliga. Ver o godoc de vigia.
-	WatchdogTimeout    time.Duration
-	WatchdogTentativas int
+	WatchdogTimeout  time.Duration
+	WatchdogAttempts int
 
 	// DecodeWorkers é quantas goroutinas decodificam em paralelo antes da
 	// esteira que reordena para o writer único. Um é o default e a ingestão
@@ -75,17 +76,17 @@ type Config struct {
 	// testar, do que dois.
 	DecodeWorkers int
 
-	// InvalidEvent é a política do §101 já resolvida.
-	InvalidEvent string
+	// InvalidEventPolicy é a política do §101 já resolvida.
+	InvalidEventPolicy string
 
-	// dialTLS e mecanismo são nil quando o protocolo não os usa.
+	// dialTLS e mechanism são nil quando o protocolo não os usa.
 	dialTLS   *tls.Config
-	mecanismo sasl.Mechanism
+	mechanism sasl.Mechanism
 }
 
-// Origem é a identidade do fluxo, para amarrar os offsets persistidos à fonte
+// Source é a identidade do fluxo, para amarrar os offsets persistidos à fonte
 // de onde vieram (o ClusterID só é conhecido depois de falar com o broker).
-func (c *Config) Origem() checkpoint.Source {
+func (c *Config) Source() checkpoint.Source {
 	return checkpoint.Source{
 		Topic:     c.Topic,
 		GroupID:   c.GroupID,
@@ -93,7 +94,7 @@ func (c *Config) Origem() checkpoint.Source {
 	}
 }
 
-// Resolve monta a configuração efetiva a partir da spec do dataset.
+// ResolveKafkaConfig monta a configuração efetiva a partir da spec do dataset.
 //
 // É AQUI que as variáveis de ambiente são lidas, e não no parse do YAML. A
 // separação é deliberada: o parse valida o NOME da variável e nada mais, o
@@ -101,7 +102,7 @@ func (c *Config) Origem() checkpoint.Source {
 // as credenciais no ambiente. A falta do VALOR é falha de ativação, e falha
 // rápido — um consumer que sobe sem credencial só descobre o problema no
 // handshake, com uma mensagem do broker que não nomeia a variável faltante.
-func Resolve(dataset string, k *schema.KafkaSpec, e schema.ErrorsSpec) (*Config, error) {
+func ResolveKafkaConfig(dataset string, k *schema.KafkaSpec, e schema.ErrorsSpec) (*Config, error) {
 	if k == nil {
 		return nil, fmt.Errorf("%w: dataset %q não declara source.kafka", ErrConfig, dataset)
 	}
@@ -110,18 +111,17 @@ func Resolve(dataset string, k *schema.KafkaSpec, e schema.ErrorsSpec) (*Config,
 	}
 
 	c := &Config{
-		Dataset:         dataset,
-		Topic:           k.Topic,
-		GroupID:         k.Consumer.GroupID,
-		Brokers:         append([]string(nil), k.BootstrapServers...),
-		AutoOffsetReset: k.Consumer.AutoOffsetReset,
-		MaxPollRecords:  k.Consumer.MaxPollRecords,
-		QueueSize:       k.Consumer.IngestionQueueSize,
-		QueueBytes:      k.Consumer.IngestionQueueBytes,
-		InvalidEvent:    e.InvalidEvent,
-
+		Dataset:            dataset,
+		Topic:              k.Topic,
+		GroupID:            k.Consumer.GroupID,
+		Brokers:            append([]string(nil), k.BootstrapServers...),
+		AutoOffsetReset:    k.Consumer.AutoOffsetReset,
+		MaxPollRecords:     k.Consumer.MaxPollRecords,
+		QueueSize:          k.Consumer.IngestionQueueSize,
+		QueueBytes:         k.Consumer.IngestionQueueBytes,
+		InvalidEventPolicy: e.InvalidEvent,
 		WatchdogTimeout:    k.Consumer.WatchdogTimeout,
-		WatchdogTentativas: k.Consumer.WatchdogAttempts,
+		WatchdogAttempts:   k.Consumer.WatchdogAttempts,
 		DecodeWorkers:      k.Consumer.DecodeWorkers,
 	}
 
@@ -144,27 +144,27 @@ func Resolve(dataset string, k *schema.KafkaSpec, e schema.ErrorsSpec) (*Config,
 	}
 
 	if sec.SASL() {
-		usuario, err := env(sec.UsernameEnv)
+		user, err := env(sec.UsernameEnv)
 		if err != nil {
 			return nil, fmt.Errorf("%w: security.usernameEnv: %w", ErrConfig, err)
 		}
-		senha, err := env(sec.PasswordEnv)
+		pass, err := env(sec.PasswordEnv)
 		if err != nil {
 			return nil, fmt.Errorf("%w: security.passwordEnv: %w", ErrConfig, err)
 		}
 		auth := func(context.Context) (plain.Auth, error) {
-			return plain.Auth{User: usuario, Pass: senha}, nil
+			return plain.Auth{User: user, Pass: pass}, nil
 		}
 		scramAuth := func(context.Context) (scram.Auth, error) {
-			return scram.Auth{User: usuario, Pass: senha}, nil
+			return scram.Auth{User: user, Pass: pass}, nil
 		}
 		switch sec.SASLMechanism {
 		case schema.SASLPlain:
-			c.mecanismo = plain.Plain(auth)
+			c.mechanism = plain.Plain(auth)
 		case schema.SASLScramSHA256:
-			c.mecanismo = scram.Sha256(scramAuth)
+			c.mechanism = scram.Sha256(scramAuth)
 		case schema.SASLScramSHA512:
-			c.mecanismo = scram.Sha512(scramAuth)
+			c.mechanism = scram.Sha512(scramAuth)
 		default:
 			// O parse já fechou o enum; chegar aqui é bug nosso.
 			return nil, fmt.Errorf("%w: saslMechanism %q sem implementação", ErrConfig, sec.SASLMechanism)
@@ -179,19 +179,19 @@ func Resolve(dataset string, k *schema.KafkaSpec, e schema.ErrorsSpec) (*Config,
 // deploy por container: o orquestrador injeta a chave sem valor, o processo
 // sobe, e a autenticação falha longe daqui. A mensagem nomeia a variável e
 // NUNCA o valor (§95).
-func env(nome string) (string, error) {
-	v, ok := os.LookupEnv(nome)
+func env(name string) (string, error) {
+	v, ok := os.LookupEnv(name)
 	if !ok {
-		return "", fmt.Errorf("variável de ambiente %s não está definida", nome)
+		return "", fmt.Errorf("variável de ambiente %s não está definida", name)
 	}
 	if v == "" {
-		return "", fmt.Errorf("variável de ambiente %s está definida e vazia", nome)
+		return "", fmt.Errorf("variável de ambiente %s está definida e vazia", name)
 	}
 	return v, nil
 }
 
-// opcoesDoCliente monta as opções do kgo comuns a produção e a teste.
-func (c *Config) opcoesDoCliente() []kgo.Opt {
+// clientOptions monta as opções do kgo comuns a produção e a teste.
+func (c *Config) clientOptions() []kgo.Opt {
 	opts := []kgo.Opt{
 		kgo.SeedBrokers(c.Brokers...),
 		kgo.ConsumeTopics(c.Topic),
@@ -218,8 +218,8 @@ func (c *Config) opcoesDoCliente() []kgo.Opt {
 	if c.dialTLS != nil {
 		opts = append(opts, kgo.DialTLSConfig(c.dialTLS))
 	}
-	if c.mecanismo != nil {
-		opts = append(opts, kgo.SASL(c.mecanismo))
+	if c.mechanism != nil {
+		opts = append(opts, kgo.SASL(c.mechanism))
 	}
 	return opts
 }

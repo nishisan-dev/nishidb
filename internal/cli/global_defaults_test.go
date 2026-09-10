@@ -96,9 +96,9 @@ func TestDefaultMaxRowsGlobalValeParaDatasetQueOmite(t *testing.T) {
 
 	code := a.roda("query", "--config", a.config, "--dataset", "sem_query",
 		"SELECT id FROM sem_query")
-	if code != cli.ExitTruncado {
+	if code != cli.ExitResultTruncated {
 		t.Fatalf("code = %d, want %d (truncado pelo teto global)\n%s",
-			code, cli.ExitTruncado, a.stderr.String())
+			code, cli.ExitResultTruncated, a.stderr.String())
 	}
 	linhas := strings.Split(strings.TrimSuffix(a.stdout.String(), "\n"), "\n")
 	if len(linhas) != 3 {
@@ -147,8 +147,8 @@ func TestDefaultMaxRowsNaoPositivoEhRecusado(t *testing.T) {
 				{"query", "--config", a.config, "--dataset", "sem_query", "SELECT id FROM sem_query"},
 			} {
 				code := a.rodaComEntrada("", args...)
-				if code != cli.ExitUso {
-					t.Fatalf("%s: code = %d, want %d\n%s", args[0], code, cli.ExitUso, a.stderr.String())
+				if code != cli.ExitUsageError {
+					t.Fatalf("%s: code = %d, want %d\n%s", args[0], code, cli.ExitUsageError, a.stderr.String())
 				}
 				if !strings.Contains(a.stderr.String(), "query.defaultMaxRows") {
 					t.Errorf("%s: stderr não nomeia a chave: %q", args[0], a.stderr.String())

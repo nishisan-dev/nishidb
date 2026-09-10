@@ -265,11 +265,11 @@ type Manifest struct {
 	// declarado, e nesse caso a seção não é emitida.
 	Counters []CounterInfo
 
-	// Mode é a engine do dataset: 0 materializado, 1 histórico. O tipo é
+	// StoreMode é a engine do dataset: 0 materializado, 1 histórico. O tipo é
 	// uint8 cru e não um enum do storage porque este pacote descreve um
 	// FORMATO — importar o vocabulário de quem o consome inverteria a
 	// dependência para ganhar um nome.
-	Mode uint8
+	StoreMode uint8
 	// RowIDBase é a marca-d'água de retenção do dataset histórico: rowId
 	// abaixo dela foi purgado e não é mais visível. Zero no dataset
 	// materializado, e é isso que o mantém na v1.
@@ -277,7 +277,7 @@ type Manifest struct {
 }
 
 // hasHistory diz se a seção 0x8002 precisa ser emitida.
-func (m *Manifest) hasHistory() bool { return m.Mode != 0 || m.RowIDBase != 0 }
+func (m *Manifest) hasHistory() bool { return m.StoreMode != 0 || m.RowIDBase != 0 }
 
 // TLVTailSize devolve quantos bytes a cauda ocupa neste manifest. Ela
 // nunca é vazia: a seção do índice por segmento é emitida SEMPRE.
@@ -378,7 +378,7 @@ func (m *Manifest) appendTLVTail(b []byte) []byte {
 	if m.hasHistory() {
 		b = binary.LittleEndian.AppendUint16(b, tagHistory)
 		b = binary.LittleEndian.AppendUint32(b, historyInfoSize)
-		b = append(b, m.Mode)
+		b = append(b, m.StoreMode)
 		b = binary.LittleEndian.AppendUint64(b, m.RowIDBase)
 	}
 	if m.Schedule != nil {
@@ -617,7 +617,7 @@ func decodeHistory(payload []byte, m *Manifest) error {
 			ErrCorruptManifest, len(payload), historyInfoSize)
 	}
 	hr := &reader{b: payload}
-	m.Mode = hr.take(1)[0]
+	m.StoreMode = hr.take(1)[0]
 	m.RowIDBase = hr.u64()
 	if hr.bad {
 		return fmt.Errorf("%w: seção de histórico truncada", ErrCorruptManifest)

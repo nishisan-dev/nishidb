@@ -174,7 +174,7 @@ func (r *registroDeSnapshots) menorEpocaViva() uint64 { return r.menor.Load() }
 func (s *Store) OpenSnapshot() types.Snapshot {
 	snap := types.Snapshot{
 		Epoch:      s.epocaPub.Load(),
-		Instant:    s.agora(),
+		Instant:    s.now(),
 		LimitRowID: types.RowID(s.nextRowID.Load()),
 		BaseRowID:  types.RowID(s.rowIDBase.Load()),
 	}
@@ -199,7 +199,7 @@ func (s *Store) podaVersoes() {
 	s.vers.Prune(s.snaps.menorEpocaViva())
 }
 
-// presente é o snapshot do WRITER: o instante e a época de agora, sem
+// presente é o snapshot do WRITER: o instante e a época de now, sem
 // registrar leitor nenhum.
 //
 // Existe porque o writer atravessa o mesmo lookup que a leitura, e precisa
@@ -209,7 +209,7 @@ func (s *Store) podaVersoes() {
 func (s *Store) presente() types.Snapshot {
 	return types.Snapshot{
 		Epoch:      s.epocaPub.Load(),
-		Instant:    s.agora(),
+		Instant:    s.now(),
 		LimitRowID: types.RowID(s.nextRowID.Load()),
 		BaseRowID:  types.RowID(s.rowIDBase.Load()),
 	}
@@ -233,7 +233,7 @@ func (s *Store) BytesRetidos() int64 { return s.vers.Bytes() }
 // É o do snapshot mais ANTIGO vivo, e não o corrente, por uma razão que o
 // copy-forward não pode resolver de outro jeito: ele NÃO versiona (ver o campo
 // `versiona` do recordApply), então a versão que ele apaga não vai para o
-// journal e nenhuma consulta a alcança depois. Lapidar com o relógio de agora
+// journal e nenhuma consulta a alcança depois. Lapidar com o relógio de now
 // apagaria o payload que uma consulta aberta ainda tem o direito de ver, e o
 // relógio congelado que a preservava não teria como devolvê-lo.
 //
@@ -245,7 +245,7 @@ func (s *Store) relogioDaExpiracaoOportunista() time.Time {
 	if t, ok := s.snaps.instanteMaisAntigoVivo(); ok {
 		return t
 	}
-	return s.agora()
+	return s.now()
 }
 
 // pisoDaRetencao é o teto até onde a purga do histórico pode avançar a
@@ -315,7 +315,7 @@ func (s *Store) IdadeDoSnapshotMaisAntigo() time.Duration {
 	if !ok {
 		return 0
 	}
-	if d := s.agora().Sub(t); d > 0 {
+	if d := s.now().Sub(t); d > 0 {
 		return d
 	}
 	return 0

@@ -2172,7 +2172,7 @@ func TestAsGrafiasAntigasSaoRecusadas(t *testing.T) {
 
 E o gate de exit code, em `internal/cli`: dataset com `index: hash` sai com
 **exit 3** (config recusada), não 1. Erro novo precisa de sentinela +
-`errors.Is` em `codigoDoErro`, senão cai no default 1.
+`errors.Is` em `errorCode`, senão cai no default 1.
 
 - [ ] **Passo 2 a 4:** rodar, implementar, rodar. `grep -rn "IndexBitmap\|IndexHash"
   --include=*.go internal/ | grep -v .claude/worktrees/` tem de sair vazio no

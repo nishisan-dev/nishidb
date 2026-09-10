@@ -16,7 +16,7 @@ import (
 // O motivo de serem o mesmo processo é o flock: ele é exclusivo por processo,
 // então um consumer separado tornaria o dataset inconsultável enquanto
 // rodasse. Ver o godoc do internal/server.
-func runServer(args []string, amb Ambiente) int {
+func runServer(args []string, amb CLIContext) int {
 	fs := flag.NewFlagSet("server", flag.ContinueOnError)
 	fs.SetOutput(amb.Stderr)
 	var (
@@ -26,42 +26,42 @@ func runServer(args []string, amb Ambiente) int {
 		pprofAddr = fs.String("pprof", "", "endereço dos endpoints de debug (§112); vazio desliga")
 	)
 	if err := fs.Parse(args); err != nil {
-		return ExitUso
+		return ExitUsageError
 	}
 	if *argConfig == "" {
 		fmt.Fprintln(amb.Stderr, "server: --config é obrigatório")
-		return ExitUso
+		return ExitUsageError
 	}
 
 	formato, err := formatoDeLog(*logFormat)
 	if err != nil {
 		fmt.Fprintf(amb.Stderr, "server: %v\n", err)
-		return ExitUso
+		return ExitUsageError
 	}
 	nivel, err := nivelDeLog(*logLevel)
 	if err != nil {
 		fmt.Fprintf(amb.Stderr, "server: %v\n", err)
-		return ExitUso
+		return ExitUsageError
 	}
 	log := logging.New(amb.Stderr, formato, nivel)
 
 	cfg, err := nishiconfig.Load(*argConfig)
 	if err != nil {
 		fmt.Fprintf(amb.Stderr, "server: %v\n", err)
-		return ExitUso
+		return ExitUsageError
 	}
 
 	srv, err := server.Novo(cfg, server.Opcoes{Log: log})
 	if err != nil {
 		fmt.Fprintf(amb.Stderr, "server: %v\n", err)
-		return codigoDoErro(err)
+		return errorCode(err)
 	}
 
 	// Roda bloqueia até o contexto ser cancelado pelo sinal. O encerramento é
 	// gracioso: drena a ingestão, checkpointa e devolve o flock.
 	if err := srv.Roda(amb.Ctx, *pprofAddr); err != nil {
 		fmt.Fprintf(amb.Stderr, "server: %v\n", err)
-		return codigoDoErro(err)
+		return errorCode(err)
 	}
 
 	// Um dataset com ingestão parada não derruba o processo (§51), mas o
@@ -72,7 +72,7 @@ func runServer(args []string, amb Ambiente) int {
 		for nome, motivo := range pausas {
 			fmt.Fprintf(amb.Stderr, "server: dataset %q com ingestão parada: %v\n", nome, motivo)
 		}
-		return ExitParadoPorPolitica
+		return ExitPolicyStopped
 	}
 	return ExitOK
 }

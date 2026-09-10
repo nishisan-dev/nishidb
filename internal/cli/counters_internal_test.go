@@ -15,7 +15,7 @@ import (
 // é testado sobre o relatório — o mesmo que os dois caminhos montam.
 func TestDesfechoDaAuditoriaDivergenteSaiComExitDataset(t *testing.T) {
 	var stderr bytes.Buffer
-	amb := Ambiente{Stderr: &stderr, Ctx: context.Background()}
+	amb := CLIContext{Stderr: &stderr, Ctx: context.Background()}
 	limpo := []linhaDeAuditoria{{nome: "a"}, {nome: "b"}}
 	if code := desfechoDaAuditoria(limpo, ExitOK, amb); code != ExitOK {
 		t.Fatalf("sem divergência: %d", code)
@@ -33,7 +33,7 @@ func TestDesfechoDaAuditoriaDivergenteSaiComExitDataset(t *testing.T) {
 	}
 	// Um erro de escrita da tabela vence: quem não conseguiu mostrar o
 	// relatório não pode afirmar que ele estava limpo.
-	if code := desfechoDaAuditoria(limpo, ExitUso, amb); code != ExitUso {
+	if code := desfechoDaAuditoria(limpo, ExitUsageError, amb); code != ExitUsageError {
 		t.Fatalf("erro de saída tinha de prevalecer: %d", code)
 	}
 }

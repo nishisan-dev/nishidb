@@ -58,7 +58,7 @@ func (s *Store) abreContadores(opts Options, m *checkpoint.Manifest, idxDir stri
 	if m != nil {
 		declarados = m.Counters
 	}
-	if opts.CompilaContadores == nil {
+	if opts.CompileCountersCallbackFunction == nil {
 		if len(declarados) > 0 {
 			nomes := make([]string, 0, len(declarados))
 			for _, d := range declarados {
@@ -70,14 +70,14 @@ func (s *Store) abreContadores(opts Options, m *checkpoint.Manifest, idxDir stri
 		}
 		return nil
 	}
-	defs, err := opts.CompilaContadores(s.dict)
+	defs, err := opts.CompileCountersCallbackFunction(s.dict)
 	if err != nil {
 		return fmt.Errorf("storage: compilar os contadores de %s: %w", opts.Dir, err)
 	}
 	if len(defs) == 0 && len(declarados) == 0 {
 		return nil
 	}
-	if len(defs) > 0 && opts.Modo == ModoHistorico {
+	if len(defs) > 0 && opts.Mode == HistoryMode {
 		// A retenção do histórico purga linhas por marca-d'água, sem passar
 		// pelo applyRecord: o contador nunca decrementaria. E não há estado
 		// corrente a contar num log append-only.
@@ -317,7 +317,7 @@ type recalculoDeContador struct {
 //
 // O journal tem teto (runtime.query.snapshotMaxBytes), e a varredura de um
 // dataset grande segura o snapshot por segundos. Estourado, o snapshot mais
-// antigo é invalidado — pode ser este — e a resposta é ErrSnapshotExpirado,
+// antigo é invalidado — pode ser este — e a resposta é ErrExpiredSnapshot,
 // nunca um relatório: uma divergência inventada por versão perdida mandaria o
 // operador reconstruir um contador certo.
 func (s *Store) AuditaContadores(ctx context.Context) ([]counter.Report, error) {
@@ -366,7 +366,7 @@ func (s *Store) AuditaContadores(ctx context.Context) ([]counter.Report, error) 
 		// já pode ter tido as versões dele podadas, e o journal responderia
 		// "location corrente" para uma linha que mudou depois de T0.
 		if !s.snaps.valido(snap.Epoch) {
-			return nil, ErrSnapshotExpirado
+			return nil, ErrExpiredSnapshot
 		}
 		var packed uint64
 		var ok bool
@@ -419,7 +419,7 @@ func (s *Store) AuditaContadores(ctx context.Context) ([]counter.Report, error) 
 		}
 	}
 	if !s.snaps.valido(snap.Epoch) {
-		return nil, ErrSnapshotExpirado
+		return nil, ErrExpiredSnapshot
 	}
 
 	duracao := time.Since(inicio)
@@ -469,7 +469,7 @@ func (s *Store) AuditaContadores(ctx context.Context) ([]counter.Report, error) 
 		if r.AggregateTotal != r.Recomputed {
 			r.DivergentAggregates++
 		}
-		c.RecordAudit(r.DivergentGroups+int(r.NotInterned)+r.DivergentAggregates, s.agora())
+		c.RecordAudit(r.DivergentGroups+int(r.NotInterned)+r.DivergentAggregates, s.now())
 		out = append(out, r)
 	}
 	return out, nil
@@ -550,7 +550,7 @@ func (s *Store) AposentaGruposVazios() (int, error) {
 	}
 	total := 0
 	for _, c := range s.contadores {
-		n, err := c.RetireEmptyGroups(s.agora())
+		n, err := c.RetireEmptyGroups(s.now())
 		total += n
 		if err != nil {
 			return total, fmt.Errorf("storage: aposentar grupos do contador %q: %w", c.Def().Name, err)

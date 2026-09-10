@@ -23,32 +23,32 @@ import (
 // chegou primeiro.
 //
 // O contrato de saída é o MESMO do caminho local: NDJSON cru no stdout, uma
-// linha por row, e o exit code dizendo o que aconteceu. Um script que troca
+// line por row, e o exit code dizendo o que aconteceu. Um script que troca
 // `--config` por `--server` não muda mais nada.
-func consultaRemota(endereco, dataset, sql string, params []protocol.Param, cred credencialRemota, amb Ambiente) int {
+func consultaRemota(endereco, dataset, sql string, params []protocol.Param, cred remoteCredential, amb CLIContext) int {
 	corpo, err := json.Marshal(protocol.Request{Dataset: dataset, SQL: sql, Parameters: params})
 	if err != nil {
 		fmt.Fprintln(amb.Stderr, "query:", err)
-		return ExitUso
+		return ExitUsageError
 	}
 
-	client, err := clienteRemoto(cred)
+	client, err := remoteClient(cred)
 	if err != nil {
 		// `_, _ =`: código NOVO desta task segue a disciplina de avisa
 		// (operation.go) — 0 apontamentos de lint novos; as chamadas bare a
 		// fmt.Fprintln já existentes neste arquivo são débito anterior.
 		_, _ = fmt.Fprintln(amb.Stderr, "query:", err)
-		return ExitUso
+		return ExitUsageError
 	}
 
 	url := normalizaEndereco(endereco) + "/v1/query"
 	req, err := http.NewRequestWithContext(amb.Ctx, http.MethodPost, url, strings.NewReader(string(corpo)))
 	if err != nil {
 		fmt.Fprintln(amb.Stderr, "query:", err)
-		return ExitUso
+		return ExitUsageError
 	}
 	req.Header.Set("Content-Type", protocol.ContentTypeJSON)
-	aplicaCredencial(req, cred)
+	applyCredential(req, cred)
 
 	// Sem timeout no cliente: o teto de uma consulta é o query.timeout do
 	// dataset, que o servidor aplica. Um prazo local mataria um stream longo
@@ -56,7 +56,7 @@ func consultaRemota(endereco, dataset, sql string, params []protocol.Param, cred
 	resp, err := client.Do(req)
 	if err != nil {
 		fmt.Fprintf(amb.Stderr, "query: falando com %s: %v\n", endereco, err)
-		return ExitUso
+		return ExitUsageError
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
@@ -114,16 +114,16 @@ func dicaDeEsquema(status int, corpoBruto []byte) string {
 	return "  a porta parece falar TLS: tente --server https://host:porta\n"
 }
 
-// recusaDoServidor trata o erro que chegou ANTES de qualquer linha: o corpo é
+// recusaDoServidor trata o erro que chegou ANTES de qualquer line: o corpo é
 // um JSON único e o status é de verdade.
-func recusaDoServidor(resp *http.Response, amb Ambiente) int {
+func recusaDoServidor(resp *http.Response, amb CLIContext) int {
 	corpo, dica, ok := leCorpoErro(resp)
 	if !ok {
 		fmt.Fprintf(amb.Stderr, "query: o servidor respondeu %s sem corpo legível\n", resp.Status)
 		if dica != "" {
 			_, _ = fmt.Fprint(amb.Stderr, dica)
 		}
-		return ExitUso
+		return ExitUsageError
 	}
 	fmt.Fprintf(amb.Stderr, "query: %s\n", corpo.Error.Message)
 	if corpo.Error.Line > 0 {
@@ -141,12 +141,12 @@ func recusaDoServidor(resp *http.Response, amb Ambiente) int {
 //
 // As linhas vão CRUAS: decodificá-las para recodificá-las mudaria a grafia dos
 // doubles e não acrescentaria nada — o servidor já emitiu o formato final.
-func leStream(corpo io.Reader, amb Ambiente) int {
+func leStream(corpo io.Reader, amb CLIContext) int {
 	l := protocol.NewReader(corpo)
 	for l.Next() {
 		if _, err := amb.Stdout.Write(append(l.Line(), '\n')); err != nil {
 			fmt.Fprintln(amb.Stderr, "query: escrevendo o resultado:", err)
-			return ExitUso
+			return ExitUsageError
 		}
 	}
 	if err := l.Err(); err != nil {
@@ -180,15 +180,15 @@ func codigoDoProtocolo(codigo string) int {
 		// "olhe o comando ou o servidor", que é conselho errado.
 		return ExitQuery
 	case protocol.CodeMaxRows:
-		return ExitTruncado
+		return ExitResultTruncated
 	case protocol.CodeSnapshotExpired:
 		// O caminho LOCAL já mapeia storage.ErrSnapshotExpirado para 5
 		// (codigoDoErro): a consulta — ou a auditoria dos contadores — não
 		// chegou ao fim porque o journal de versões estourou o teto. O
 		// resultado é desconhecido, não errado; a mesma classe do truncado.
-		return ExitTruncado
+		return ExitResultTruncated
 	case protocol.CodeTimeout:
-		return ExitInterromp
+		return ExitInterrupted
 	case protocol.CodeDatasetCorrupt:
 		return ExitDataset
 	case protocol.CodeWriterFailed:
@@ -218,7 +218,7 @@ func codigoDoProtocolo(codigo string) int {
 		// código que já tem significado próprio na tabela. TOO_MANY_QUERIES
 		// é o precedente exato: outro 4xx "tente de novo" que também cai no
 		// 1.
-		return ExitUso
+		return ExitUsageError
 	}
 }
 
@@ -226,7 +226,7 @@ func codigoDoProtocolo(codigo string) int {
 //
 // A mensagem do exit 3 já nomeia o pid que segura o dataset; até esta fase ela
 // parava aí, e o operador não tinha para onde ir. Agora tem.
-func dicaDeServidor(err error, cfgPath, dataset string, amb Ambiente) {
+func dicaDeServidor(err error, cfgPath, dataset string, amb CLIContext) {
 	if err == nil {
 		return
 	}

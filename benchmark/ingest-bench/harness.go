@@ -1590,10 +1590,10 @@ func humanBytes(n uint64) string {
 // idempotente), mas deixar o segundo Store aberto vazaria o flock.
 func abreStore(cfg Config, indexados []string) (*storage.Store, error) {
 	st, err := storage.Open(storage.Options{
-		Dir:                    cfg.DataDir,
-		SegmentSize:            cfg.SegmentSize,
-		EstimatedRows:          uint64(cfg.Entities),
-		CamposIndexadosPorNome: indexados,
+		Dir:                 cfg.DataDir,
+		SegmentSize:         cfg.SegmentSize,
+		EstimatedRows:       uint64(cfg.Entities),
+		IndexedFieldsByName: indexados,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("ingest-bench: abrindo dataset: %w", err)

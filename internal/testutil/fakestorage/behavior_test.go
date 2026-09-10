@@ -54,7 +54,7 @@ func TestComportamentoDoDubleEDoRealCoincidem(t *testing.T) {
 		st, err := storage.Open(storage.Options{
 			Dir: filepath.Join(t.TempDir(), "ds"),
 			// A ordem dos nomes define os IDs: status=1, name=2, third=3.
-			CamposIndexadosPorNome: []string{"status"},
+			IndexedFieldsByName: []string{"status"},
 		})
 		if err != nil {
 			t.Fatal(err)

@@ -40,7 +40,7 @@ func TestColunaDerivadaNovaEmDatasetComLinhasERecusada(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := Open(Options{Dir: dir, SegmentSize: 1 << 20, ColunasDerivadas: []string{"probe_ip"}})
+	_, err := Open(Options{Dir: dir, SegmentSize: 1 << 20, DerivedColumnNames: []string{"probe_ip"}})
 	if !errors.Is(err, ErrDatasetCorrupt) {
 		t.Fatalf("Open = %v, quer ErrDatasetCorrupt", err)
 	}
@@ -59,7 +59,7 @@ func TestColunaDerivadaNovaEmDatasetComLinhasERecusada(t *testing.T) {
 // desta guarda saiu, e foi a verificação com o binário que a pegou.
 func TestDatasetCriadoComDerivadaReabreDepoisDeTerLinhas(t *testing.T) {
 	dir := t.TempDir()
-	opts := Options{Dir: dir, SegmentSize: 1 << 20, ColunasDerivadas: []string{"probe_ip"}}
+	opts := Options{Dir: dir, SegmentSize: 1 << 20, DerivedColumnNames: []string{"probe_ip"}}
 
 	s := openStore(t, opts)
 	põeUmaLinha(t, s)
@@ -83,5 +83,5 @@ func TestDatasetCriadoComDerivadaReabreDepoisDeTerLinhas(t *testing.T) {
 // Dataset VAZIO aceita a declaração: é exatamente o momento em que ela deve
 // ser feita.
 func TestColunaDerivadaEmDatasetVazioEAceita(t *testing.T) {
-	openStore(t, Options{ColunasDerivadas: []string{"probe_ip"}})
+	openStore(t, Options{DerivedColumnNames: []string{"probe_ip"}})
 }

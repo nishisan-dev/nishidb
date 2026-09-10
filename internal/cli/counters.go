@@ -28,58 +28,58 @@ import (
 // como a consulta truncada — o número não é confiável nem inconfiável, é
 // desconhecido.
 
-func runCounters(args []string, amb Ambiente) int {
+func runCounters(args []string, amb CLIContext) int {
 	fs := flag.NewFlagSet("counters", flag.ContinueOnError)
 	fs.SetOutput(amb.Stderr)
 	var (
-		argConfig  = fs.String("config", "", "caminho do nishidb.yaml (caminho local: exige o servidor parado)")
-		servidor   = fs.String("server", "", "endereço do nishidb server (host:porta)")
-		dataset    = fs.String("dataset", "", "nome do dataset")
-		audita     = fs.Bool("audit", false, "recalcula os contadores por varredura e compara com o mantido")
-		reconstroi = fs.Bool("rebuild", false, "reconstrói os contadores varrendo as linhas vivas (segura o writer)")
+		argConfig = fs.String("config", "", "caminho do nishidb.yaml (caminho local: exige o servidor parado)")
+		server    = fs.String("server", "", "endereço do nishidb server (host:porta)")
+		dataset   = fs.String("dataset", "", "nome do dataset")
+		audit     = fs.Bool("audit", false, "recalcula os contadores por varredura e compara com o mantido")
+		rebuild   = fs.Bool("rebuild", false, "reconstrói os contadores varrendo as linhas vivas (segura o writer)")
 	)
-	credFlags := registraFlagsRemotas(fs)
+	credFlags := setupRemoteFlags(fs)
 	if err := fs.Parse(args); err != nil {
-		return ExitUso
+		return ExitUsageError
 	}
 	if fs.NArg() != 0 {
-		avisa(amb, "counters: argumento posicional inesperado %q\n", fs.Arg(0))
-		return ExitUso
+		notify(amb, "counters: argumento posicional inesperado %q\n", fs.Arg(0))
+		return ExitUsageError
 	}
-	if (*argConfig == "") == (*servidor == "") {
-		avisa(amb, "counters: informe exatamente um de --config (servidor parado) ou --server (servidor no ar)\n")
-		return ExitUso
+	if (*argConfig == "") == (*server == "") {
+		notify(amb, "counters: informe exatamente um de --config (servidor parado) ou --server (servidor no ar)\n")
+		return ExitUsageError
 	}
 	if *dataset == "" {
-		avisa(amb, "counters: --dataset é obrigatório\n")
-		return ExitUso
+		notify(amb, "counters: --dataset é obrigatório\n")
+		return ExitUsageError
 	}
-	if *audita && *reconstroi {
-		avisa(amb, "counters: --audit e --rebuild são exclusivos\n")
-		return ExitUso
+	if *audit && *rebuild {
+		notify(amb, "counters: --audit e --rebuild são exclusivos\n")
+		return ExitUsageError
 	}
-	if *servidor != "" {
+	if *server != "" {
 		cred, err := credFlags.resolve()
 		if err != nil {
-			avisa(amb, "counters: %v\n", err)
-			return ExitUso
+			notify(amb, "counters: %v\n", err)
+			return ExitUsageError
 		}
-		return countersRemoto(*servidor, *dataset, *audita, *reconstroi, cred, amb)
+		return countersRemoto(*server, *dataset, *audit, *rebuild, cred, amb)
 	}
-	return countersLocal(*argConfig, *dataset, *audita, *reconstroi, amb)
+	return countersLocal(*argConfig, *dataset, *audit, *rebuild, amb)
 }
 
-func countersLocal(argConfig, dataset string, audita, reconstroi bool, amb Ambiente) int {
+func countersLocal(argConfig, dataset string, audita, reconstroi bool, amb CLIContext) int {
 	cfg, err := nishiconfig.Load(argConfig)
 	if err != nil {
-		avisa(amb, "counters: %v\n", err)
-		return ExitUso
+		notify(amb, "counters: %v\n", err)
+		return ExitUsageError
 	}
-	st, _, _, err := abreDataset(cfg, dataset)
+	st, _, _, err := openDataset(cfg, dataset)
 	if err != nil {
-		avisa(amb, "counters: %v\n", err)
+		notify(amb, "counters: %v\n", err)
 		dicaDeServidor(err, argConfig, dataset, amb)
-		return codigoDoErro(err)
+		return errorCode(err)
 	}
 	defer func() { _ = st.Close() }()
 
@@ -87,37 +87,37 @@ func countersLocal(argConfig, dataset string, audita, reconstroi bool, amb Ambie
 	case audita:
 		rs, err := st.AuditaContadores(amb.Ctx)
 		if err != nil {
-			avisa(amb, "counters: auditoria: %v\n", err)
-			return codigoDoErro(err)
+			notify(amb, "counters: auditoria: %v\n", err)
+			return errorCode(err)
 		}
 		linhas := make([]linhaDeAuditoria, 0, len(rs))
 		for _, r := range rs {
 			linhas = append(linhas, auditoriaDoStorage(r))
 		}
-		code := escreveSaida("counters", amb, func(w io.Writer) { escreveAuditoria(w, dataset, linhas) })
+		code := writeOutputWithContext("counters", amb, func(w io.Writer) { escreveAuditoria(w, dataset, linhas) })
 		return desfechoDaAuditoria(linhas, code, amb)
 	case reconstroi:
 		recs, err := st.ReconstroiContadores(amb.Ctx)
 		if err != nil {
-			avisa(amb, "counters: reconstrução: %v\n", err)
-			return codigoDoErro(err)
+			notify(amb, "counters: reconstrução: %v\n", err)
+			return errorCode(err)
 		}
 		linhas := make([]linhaDeReconstrucao, 0, len(recs))
 		for _, r := range recs {
 			linhas = append(linhas, linhaDeReconstrucao{nome: r.Name, linhas: r.Rows, grupos: r.Groups, duracaoMs: r.Duration.Milliseconds()})
 		}
-		return escreveSaida("counters", amb, func(w io.Writer) { escreveReconstrucao(w, dataset, linhas) })
+		return writeOutputWithContext("counters", amb, func(w io.Writer) { escreveReconstrucao(w, dataset, linhas) })
 	default:
 		ests := st.EstatisticasDeContadores()
 		linhas := make([]linhaDeContador, 0, len(ests))
 		for _, e := range ests {
 			linhas = append(linhas, contadorDoStorage(e))
 		}
-		return escreveSaida("counters", amb, func(w io.Writer) { escreveContadores(w, dataset, linhas) })
+		return writeOutputWithContext("counters", amb, func(w io.Writer) { escreveContadores(w, dataset, linhas) })
 	}
 }
 
-func countersRemoto(servidor, dataset string, audita, reconstroi bool, cred credencialRemota, amb Ambiente) int {
+func countersRemoto(servidor, dataset string, audita, reconstroi bool, cred remoteCredential, amb CLIContext) int {
 	switch {
 	case audita:
 		var resp protocol.CountersAuditResponse
@@ -130,7 +130,7 @@ func countersRemoto(servidor, dataset string, audita, reconstroi bool, cred cred
 				linhas = append(linhas, auditoriaDoWire(c))
 			}
 		}
-		code := escreveSaida("counters", amb, func(w io.Writer) { escreveAuditoria(w, dataset, linhas) })
+		code := writeOutputWithContext("counters", amb, func(w io.Writer) { escreveAuditoria(w, dataset, linhas) })
 		return desfechoDaAuditoria(linhas, code, amb)
 	case reconstroi:
 		var resp protocol.CountersRebuildResponse
@@ -143,12 +143,12 @@ func countersRemoto(servidor, dataset string, audita, reconstroi bool, cred cred
 				linhas = append(linhas, linhaDeReconstrucao{nome: c.Name, linhas: c.Rows, grupos: c.Groups, duracaoMs: c.DurationMs})
 			}
 		}
-		return escreveSaida("counters", amb, func(w io.Writer) { escreveReconstrucao(w, dataset, linhas) })
+		return writeOutputWithContext("counters", amb, func(w io.Writer) { escreveReconstrucao(w, dataset, linhas) })
 	default:
 		// A listagem é leitura, e sai do /v1/stats — a MESMA estrutura que
 		// alimenta as séries nishidb_counter_*.
 		var e protocol.Stats
-		if code := buscaDocumento("counters", servidor, "/v1/stats", cred, &e, amb); code != ExitOK {
+		if code := searchDocument("counters", servidor, "/v1/stats", cred, &e, amb); code != ExitOK {
 			return code
 		}
 		for _, ds := range e.Datasets {
@@ -159,10 +159,10 @@ func countersRemoto(servidor, dataset string, audita, reconstroi bool, cred cred
 			for _, c := range ds.Counters {
 				linhas = append(linhas, contadorDoWire(c))
 			}
-			return escreveSaida("counters", amb, func(w io.Writer) { escreveContadores(w, dataset, linhas) })
+			return writeOutputWithContext("counters", amb, func(w io.Writer) { escreveContadores(w, dataset, linhas) })
 		}
-		avisa(amb, "counters: o dataset %q não está registrado em %s\n", dataset, servidor)
-		return ExitUso
+		notify(amb, "counters: o dataset %q não está registrado em %s\n", dataset, servidor)
+		return ExitUsageError
 	}
 }
 
@@ -193,25 +193,25 @@ func contadorDoWire(c protocol.CounterStats) linhaDeContador {
 }
 
 func escreveContadores(w io.Writer, dataset string, linhas []linhaDeContador) {
-	titulo(w, "dataset %s", dataset)
-	titulo(w, "")
+	title(w, "dataset %s", dataset)
+	title(w, "")
 	if len(linhas) == 0 {
-		titulo(w, "  (o dataset não declara counters)")
+		title(w, "  (o dataset não declara counters)")
 		return
 	}
 	// LINHAS e TOTAL vêm logo depois do nome porque são a pergunta do
 	// operador — quantas linhas o contador cobre, e quantas ele conta —; os
 	// números de inventário (grupos, teto) e de saúde vêm depois.
-	linha(w, "CONTADOR", "LINHAS", "TOTAL", "GRUPOS", "TETO", "APOSENTADOS", "RECUSADOS", "ÓRFÃS", "BYTES", "ÚLTIMA AUDITORIA")
+	line(w, "CONTADOR", "LINHAS", "TOTAL", "GRUPOS", "TETO", "APOSENTADOS", "RECUSADOS", "ÓRFÃS", "BYTES", "ÚLTIMA AUDITORIA")
 	for _, l := range linhas {
 		auditoria := "nunca"
 		if l.auditUnix != 0 {
 			auditoria = strconv.FormatInt(l.auditDivergentes, 10) + " divergente(s)"
 		}
-		linha(w, l.nome, strconv.FormatInt(l.linhas, 10), strconv.FormatInt(l.total, 10),
+		line(w, l.nome, strconv.FormatInt(l.linhas, 10), strconv.FormatInt(l.total, 10),
 			u32(l.grupos), u32(l.teto), u32(l.aposentados),
 			strconv.FormatUint(l.recusados, 10), strconv.FormatUint(l.orfas, 10),
-			bytesLegiveis(l.bytes), auditoria)
+			bytesToReadableString(l.bytes), auditoria)
 	}
 }
 
@@ -259,13 +259,13 @@ func auditoriaDoWire(c protocol.CounterAudit) linhaDeAuditoria {
 }
 
 func escreveAuditoria(w io.Writer, dataset string, linhas []linhaDeAuditoria) {
-	titulo(w, "dataset %s", dataset)
-	titulo(w, "")
+	title(w, "dataset %s", dataset)
+	title(w, "")
 	if len(linhas) == 0 {
-		titulo(w, "  (o dataset não declara counters)")
+		title(w, "  (o dataset não declara counters)")
 		return
 	}
-	linha(w, "CONTADOR", "GRUPOS", "MANTIDO", "RECALCULADO", "DIVERGÊNCIA", "LINHAS", "DURAÇÃO")
+	line(w, "CONTADOR", "GRUPOS", "MANTIDO", "RECALCULADO", "DIVERGÊNCIA", "LINHAS", "DURAÇÃO")
 	for _, l := range linhas {
 		divergencia := strconv.Itoa(l.divergentes)
 		if l.naoInternadas > 0 {
@@ -274,18 +274,18 @@ func escreveAuditoria(w io.Writer, dataset string, linhas []linhaDeAuditoria) {
 		if l.agregadosDivergentes > 0 {
 			divergencia += " (+" + strconv.Itoa(l.agregadosDivergentes) + " agregado(s) divergente(s))"
 		}
-		linha(w, l.nome, u32(l.grupos), strconv.FormatInt(l.mantido, 10), strconv.FormatInt(l.recalculado, 10),
-			divergencia, strconv.FormatUint(l.linhasVarridas, 10), duracao(l.duracaoMs))
+		line(w, l.nome, u32(l.grupos), strconv.FormatInt(l.mantido, 10), strconv.FormatInt(l.recalculado, 10),
+			divergencia, strconv.FormatUint(l.linhasVarridas, 10), duration(l.duracaoMs))
 	}
 	for _, l := range linhas {
 		if len(l.amostra) == 0 {
 			continue
 		}
-		titulo(w, "")
-		titulo(w, "divergências de %s (até %d):", l.nome, counter.SampleCeiling)
-		linha(w, "  GRUPO", "MANTIDO", "RECALCULADO", "REFS MANTIDO", "REFS RECALCULADO")
+		title(w, "")
+		title(w, "divergências de %s (até %d):", l.nome, counter.SampleCeiling)
+		line(w, "  GRUPO", "MANTIDO", "RECALCULADO", "REFS MANTIDO", "REFS RECALCULADO")
 		for _, d := range l.amostra {
-			linha(w, "  "+d.groupKey, strconv.FormatInt(d.mantido, 10), strconv.FormatInt(d.recalculado, 10),
+			line(w, "  "+d.groupKey, strconv.FormatInt(d.mantido, 10), strconv.FormatInt(d.recalculado, 10),
 				strconv.FormatInt(d.refsMantido, 10), strconv.FormatInt(d.refsRecalculado, 10))
 		}
 	}
@@ -294,7 +294,7 @@ func escreveAuditoria(w io.Writer, dataset string, linhas []linhaDeAuditoria) {
 // desfechoDaAuditoria decide o exit code depois de a tabela ter saído:
 // divergência é corrupção de índice derivado, e sai com ExitDataset (3) — o
 // mesmo código de "dataset corrompido", que é o que um script de operação lê.
-func desfechoDaAuditoria(linhas []linhaDeAuditoria, code int, amb Ambiente) int {
+func desfechoDaAuditoria(linhas []linhaDeAuditoria, code int, amb CLIContext) int {
 	if code != ExitOK {
 		return code
 	}
@@ -307,7 +307,7 @@ func desfechoDaAuditoria(linhas []linhaDeAuditoria, code int, amb Ambiente) int 
 	if divergentes == 0 {
 		return ExitOK
 	}
-	avisa(amb, "counters: %d contador(es) divergem do recalculado; reconstrua com --rebuild e investigue o caminho que esqueceu de descontar\n", divergentes)
+	notify(amb, "counters: %d contador(es) divergem do recalculado; reconstrua com --rebuild e investigue o caminho que esqueceu de descontar\n", divergentes)
 	return ExitDataset
 }
 
@@ -319,15 +319,15 @@ type linhaDeReconstrucao struct {
 }
 
 func escreveReconstrucao(w io.Writer, dataset string, linhas []linhaDeReconstrucao) {
-	titulo(w, "dataset %s", dataset)
-	titulo(w, "")
+	title(w, "dataset %s", dataset)
+	title(w, "")
 	if len(linhas) == 0 {
-		titulo(w, "  (o dataset não declara counters)")
+		title(w, "  (o dataset não declara counters)")
 		return
 	}
-	linha(w, "CONTADOR", "LINHAS", "GRUPOS", "DURAÇÃO")
+	line(w, "CONTADOR", "LINHAS", "GRUPOS", "DURAÇÃO")
 	for _, l := range linhas {
-		linha(w, l.nome, strconv.FormatUint(l.linhas, 10), u32(l.grupos), duracao(l.duracaoMs))
+		line(w, l.nome, strconv.FormatUint(l.linhas, 10), u32(l.grupos), duration(l.duracaoMs))
 	}
 }
 

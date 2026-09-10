@@ -155,7 +155,7 @@ def Binary(valor: Any) -> bytes:  # noqa: N802
 
 def client(dsn: str | None = None, **kwargs: Any) -> Client:
     """Abre a camada pythônica. Mesmos argumentos de `connect()`."""
-    return Client.conecta(dsn, **kwargs)
+    return Client.connect(dsn, **kwargs)
 
 
 # Agrupado por PAPEL, e não em ordem alfabética — daí o noqa. Esta lista é o

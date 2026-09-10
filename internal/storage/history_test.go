@@ -15,10 +15,10 @@ func parHistorico(t *testing.T) (base, hist *Store) {
 	t.Helper()
 	base = openStore(t, Options{})
 	hist = openStore(t, Options{
-		Dir:               t.TempDir(),
-		Dataset:           "events_history",
-		Modo:              ModoHistorico,
-		DictCompartilhado: base.FieldDict(),
+		Dir:              t.TempDir(),
+		Dataset:          "events_history",
+		Mode:             HistoryMode,
+		SharedDictionary: base.FieldDict(),
 	})
 	return base, hist
 }
@@ -96,7 +96,7 @@ func TestApendaNoMaterializadoEhRecusado(t *testing.T) {
 // Sem o dicionário do base os FieldIDs seriam outros e todo record
 // decodificaria colunas trocadas, sem erro e com o CRC batendo.
 func TestModoHistoricoSemDicionarioCompartilhadoEhRecusado(t *testing.T) {
-	_, err := Open(Options{Dir: t.TempDir(), SegmentSize: 1 << 20, Modo: ModoHistorico})
+	_, err := Open(Options{Dir: t.TempDir(), SegmentSize: 1 << 20, Mode: HistoryMode})
 	if !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("Open = %v, quer ErrInvalidArgument", err)
 	}
@@ -107,9 +107,9 @@ func TestModoHistoricoSemDicionarioCompartilhadoEhRecusado(t *testing.T) {
 func TestModoHistoricoComTTLAtivoEhRecusado(t *testing.T) {
 	base := openStore(t, Options{})
 	_, err := Open(Options{
-		Dir: t.TempDir(), SegmentSize: 1 << 20, Modo: ModoHistorico,
-		DictCompartilhado: base.FieldDict(),
-		TTLAtivo:          true, CampoDeEscrita: "_writtenAt", CampoDePrazo: "_expiresIn",
+		Dir: t.TempDir(), SegmentSize: 1 << 20, Mode: HistoryMode,
+		SharedDictionary: base.FieldDict(),
+		ActiveTTL:        true, WriteInstantFieldName: "_writtenAt", TTLFieldName: "_expiresIn",
 	})
 	if !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("Open = %v, quer ErrInvalidArgument", err)
@@ -122,7 +122,7 @@ func TestModoHistoricoComTTLAtivoEhRecusado(t *testing.T) {
 func TestModoGravadoEhImutavel(t *testing.T) {
 	base := openStore(t, Options{})
 	dir := t.TempDir()
-	hist, err := Open(Options{Dir: dir, SegmentSize: 1 << 20, Modo: ModoHistorico, DictCompartilhado: base.FieldDict()})
+	hist, err := Open(Options{Dir: dir, SegmentSize: 1 << 20, Mode: HistoryMode, SharedDictionary: base.FieldDict()})
 	if err != nil {
 		t.Fatalf("Open do histórico: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestModoGravadoEhImutavel(t *testing.T) {
 	if err := hist.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	_, err = Open(Options{Dir: dir, SegmentSize: 1 << 20, DictCompartilhado: base.FieldDict()})
+	_, err = Open(Options{Dir: dir, SegmentSize: 1 << 20, SharedDictionary: base.FieldDict()})
 	if !errors.Is(err, ErrDatasetCorrupt) {
 		t.Fatalf("reabrir como materializado = %v, quer ErrDatasetCorrupt", err)
 	}
@@ -144,7 +144,7 @@ func TestModoGravadoEhImutavel(t *testing.T) {
 func TestOHistoricoNaoCriaPrimaryNemSequences(t *testing.T) {
 	base := openStore(t, Options{})
 	dir := t.TempDir()
-	hist := openStore(t, Options{Dir: dir, Modo: ModoHistorico, DictCompartilhado: base.FieldDict()})
+	hist := openStore(t, Options{Dir: dir, Mode: HistoryMode, SharedDictionary: base.FieldDict()})
 	if _, err := hist.Apenda(statusPayload(t, base, "a", "novo", 1)); err != nil {
 		t.Fatalf("Apenda: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestOHistoricoNaoCriaPrimaryNemSequences(t *testing.T) {
 func TestHistoricoRecuperaOTailSemCheckpoint(t *testing.T) {
 	base := openStore(t, Options{})
 	dir := t.TempDir()
-	hist, err := Open(Options{Dir: dir, SegmentSize: 1 << 20, Modo: ModoHistorico, DictCompartilhado: base.FieldDict()})
+	hist, err := Open(Options{Dir: dir, SegmentSize: 1 << 20, Mode: HistoryMode, SharedDictionary: base.FieldDict()})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestHistoricoRecuperaOTailSemCheckpoint(t *testing.T) {
 	if err := hist.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	volta := openStore(t, Options{Dir: dir, Modo: ModoHistorico, DictCompartilhado: base.FieldDict()})
+	volta := openStore(t, Options{Dir: dir, Mode: HistoryMode, SharedDictionary: base.FieldDict()})
 	if n := contaVivas(t, volta); n != 5 {
 		t.Fatalf("%d linhas depois do replay, quer 5", n)
 	}
@@ -192,7 +192,7 @@ func TestHistoricoRecuperaOTailSemCheckpoint(t *testing.T) {
 func TestMarcaDaguaSobreviveAoRestart(t *testing.T) {
 	base := openStore(t, Options{})
 	dir := t.TempDir()
-	hist, err := Open(Options{Dir: dir, SegmentSize: 1 << 20, Modo: ModoHistorico, DictCompartilhado: base.FieldDict()})
+	hist, err := Open(Options{Dir: dir, SegmentSize: 1 << 20, Mode: HistoryMode, SharedDictionary: base.FieldDict()})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -211,7 +211,7 @@ func TestMarcaDaguaSobreviveAoRestart(t *testing.T) {
 	if err := hist.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	volta := openStore(t, Options{Dir: dir, Modo: ModoHistorico, DictCompartilhado: base.FieldDict()})
+	volta := openStore(t, Options{Dir: dir, Mode: HistoryMode, SharedDictionary: base.FieldDict()})
 	if got := volta.RowIDBase(); got != 2 {
 		t.Fatalf("RowIDBase = %d depois do restart, quer 2", got)
 	}

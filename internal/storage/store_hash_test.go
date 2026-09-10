@@ -41,7 +41,7 @@ func valorDoCampo(payload []byte, campo types.FieldID) (types.Value, bool) {
 // o ponteiro ficava nil e toda igualdade sobre a coluna degradava para FullScan
 // em silêncio.
 func TestIndexadoEhACapabilityQueOPlannerEsperava(t *testing.T) {
-	s := openStore(t, Options{CamposIndexadosPorNome: []string{"id", "status", "counter"}})
+	s := openStore(t, Options{IndexedFieldsByName: []string{"id", "status", "counter"}})
 	for _, campo := range []types.FieldID{fldID, fldStatus, fldCounter} {
 		if !s.Indexed(campo) {
 			t.Fatalf("Indexed(%d) = false num campo declarado", campo)
@@ -58,7 +58,7 @@ func TestIndexadoEhACapabilityQueOPlannerEsperava(t *testing.T) {
 // TestLookupEncontraAsRowsDoValor cobre o caminho feliz ponta a ponta no
 // Store, incluindo a ORDEM crescente que o executor assume.
 func TestLookupEncontraAsRowsDoValor(t *testing.T) {
-	s := openStore(t, Options{CamposIndexados: []types.FieldID{fldStatus}})
+	s := openStore(t, Options{IndexedFields: []types.FieldID{fldStatus}})
 	var esperadas []types.RowID
 	for i, estado := range []string{"Start", "Stop", "Start", "Interim", "Start"} {
 		k := chaveDe(i)
@@ -107,7 +107,7 @@ func TestLookupDeCampoNaoIndexadoEhErro(t *testing.T) {
 // falso negativo, e nenhuma camada acima recupera candidato que o índice não
 // devolveu.
 func TestUpdateRemoveAPostingDoValorAntigo(t *testing.T) {
-	s := openStore(t, Options{CamposIndexados: []types.FieldID{fldStatus}})
+	s := openStore(t, Options{IndexedFields: []types.FieldID{fldStatus}})
 	k := "CMP-V0001PPCLP-013"
 	row, _ := mustPut(t, s, k, 1, statusPayload(t, s, k, "Start", 1), nil)
 
@@ -134,7 +134,7 @@ func TestUpdateRemoveAPostingDoValorAntigo(t *testing.T) {
 // menos linhas do que existem.
 func TestPostingSobreviveAoRestart(t *testing.T) {
 	dir := t.TempDir()
-	opts := Options{Dir: dir, CamposIndexados: []types.FieldID{fldStatus}}
+	opts := Options{Dir: dir, IndexedFields: []types.FieldID{fldStatus}}
 	s := openStore(t, opts)
 	k := "CMP-V0001PPCLP-013"
 	row, _ := mustPut(t, s, k, 1, statusPayload(t, s, k, "Start", 1), nil)
@@ -168,7 +168,7 @@ func TestPostingSobreviveAoRestart(t *testing.T) {
 // estado que o produto não produz mais.
 func TestReplayDoTailReconstroiAsPostings(t *testing.T) {
 	dir := t.TempDir()
-	opts := Options{Dir: dir, CamposIndexados: []types.FieldID{fldStatus}}
+	opts := Options{Dir: dir, IndexedFields: []types.FieldID{fldStatus}}
 	s := openStore(t, opts)
 
 	k0 := chaveDe(0)
@@ -212,7 +212,7 @@ func TestReplayDoTailReconstroiAsPostings(t *testing.T) {
 // pós-restart devolve o mesmo conjunto que devolveria sem o crash.
 func TestReplayReaplicaOClearDoUpdate(t *testing.T) {
 	dir := t.TempDir()
-	opts := Options{Dir: dir, CamposIndexados: []types.FieldID{fldStatus}}
+	opts := Options{Dir: dir, IndexedFields: []types.FieldID{fldStatus}}
 	s := openStore(t, opts)
 
 	k := "CMP-V0001PPCLP-013"
@@ -317,7 +317,7 @@ func rebaixaManifestParaLegado(t *testing.T, caminho string) {
 // inerte. A única mudança entre as duas medidas é a abertura.
 func TestDatasetLegadoAbreEOsIndicesGlobaisSaemDoDisco(t *testing.T) {
 	dir := t.TempDir()
-	opts := Options{Dir: dir, CamposIndexados: []types.FieldID{fldStatus}}
+	opts := Options{Dir: dir, IndexedFields: []types.FieldID{fldStatus}}
 	s := openStore(t, opts)
 	for i := 0; i < 5; i++ {
 		k := chaveDe(i)
@@ -394,7 +394,7 @@ func TestDatasetLegadoAbreEOsIndicesGlobaisSaemDoDisco(t *testing.T) {
 // tenta reindexá-lo a cada abertura, falha sempre, e o dataset inteiro passa a
 // ser INABRÍVEL.
 func TestValorAcimaDoTetoEmCampoComHashEhRecusadoAntesDoAppend(t *testing.T) {
-	s := openStore(t, Options{CamposIndexados: []types.FieldID{fldStatus}})
+	s := openStore(t, Options{IndexedFields: []types.FieldID{fldStatus}})
 	k := "CMP-V0001PPCLP-013"
 	grande := string(make([]byte, types.MaxIndexedValueBytes+1))
 	_, _, err := s.Put([]byte(k), 1, 0, statusPayload(t, s, k, grande, 1), nil)
@@ -423,7 +423,7 @@ func TestValorAcimaDoTetoEmCampoComHashEhRecusadoAntesDoAppend(t *testing.T) {
 // onde está. O teste passou a exercitar o caminho real, e o hook saiu junto com
 // a fase que ele injetava.
 func TestPostingOrfaEhSupersetEOExecutorFiltra(t *testing.T) {
-	s := openStore(t, Options{CamposIndexados: []types.FieldID{fldStatus}})
+	s := openStore(t, Options{IndexedFields: []types.FieldID{fldStatus}})
 
 	k := "CMP-V0001PPCLP-013"
 	row, _ := mustPut(t, s, k, 1, statusPayload(t, s, k, "Start", 1), nil)
@@ -460,7 +460,7 @@ func TestPostingOrfaEhSupersetEOExecutorFiltra(t *testing.T) {
 // log-and-skip da ingestão não captura panic, ela derruba o processo.
 func TestCloseNoMeioDaVarreduraDoHashNaoDaPanic(t *testing.T) {
 	dir := t.TempDir()
-	s, err := Open(Options{Dir: dir, SegmentSize: 1 << 20, CamposIndexados: []types.FieldID{fldStatus}})
+	s, err := Open(Options{Dir: dir, SegmentSize: 1 << 20, IndexedFields: []types.FieldID{fldStatus}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -506,12 +506,12 @@ func TestCloseNoMeioDaVarreduraDoHashNaoDaPanic(t *testing.T) {
 func TestLapideLimpaAsPostingsDeHash(t *testing.T) {
 	dir := t.TempDir()
 	s := openStore(t, Options{
-		Dir:                    dir,
-		TTLAtivo:               true,
-		DuracaoDeFundo:         time.Hour,
-		CampoDeEscrita:         "_writtenAt",
-		CampoDePrazo:           "_expiresIn",
-		CamposIndexadosPorNome: []string{"status"},
+		Dir:                   dir,
+		ActiveTTL:             true,
+		FallbackDuration:      time.Hour,
+		WriteInstantFieldName: "_writtenAt",
+		TTLFieldName:          "_expiresIn",
+		IndexedFieldsByName:   []string{"status"},
 	})
 	rel := &relogioDeTeste{t: time.Date(2026, 8, 25, 20, 0, 0, 0, time.UTC)}
 	s.UsaRelogio(rel.agora)

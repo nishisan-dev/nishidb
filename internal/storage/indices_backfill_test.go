@@ -21,9 +21,9 @@ import (
 func abreStoreIndexadoEm(t *testing.T, dir string, campos []string, segSize int64) *Store {
 	t.Helper()
 	return openStore(t, Options{
-		Dir:                    dir,
-		SegmentSize:            segSize,
-		CamposIndexadosPorNome: campos,
+		Dir:                 dir,
+		SegmentSize:         segSize,
+		IndexedFieldsByName: campos,
 	})
 }
 

@@ -88,9 +88,9 @@ func realSetup(tb testing.TB, dir string, estimatedRows uint64) (*materializer.M
 		Dir: dir,
 		// 64 MiB em vez dos 512 MiB default: o fallocate é REAL, e um
 		// benchmark não deve reservar meio giga para gravar alguns MiB.
-		SegmentSize:            64 << 20,
-		EstimatedRows:          estimatedRows,
-		CamposIndexadosPorNome: indexNames(spec),
+		SegmentSize:         64 << 20,
+		EstimatedRows:       estimatedRows,
+		IndexedFieldsByName: indexNames(spec),
 	})
 	if err != nil {
 		tb.Fatalf("abrindo store em %s: %v", dir, err)

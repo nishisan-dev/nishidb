@@ -202,7 +202,7 @@ func registraMetricasDeDataset(reg *metrics.Registry, s *Servidor) {
 					Help:   "entidades que ganharam lápide por inatividade, pelas duas rotas: o coletor e a descoberta oportunista da compaction",
 					Type:   metrics.TypeCounter,
 					Labels: rotulo,
-					Value:  float64(st.Expiradas),
+					Value:  float64(st.ExpiredCount),
 				},
 				metrics.Sample{
 					Family: metrics.MetExpiryGraceTotal,
@@ -210,7 +210,7 @@ func registraMetricasDeDataset(reg *metrics.Registry, s *Servidor) {
 					Help:   "carências dadas a entidades sem instante de escrita; é o que sobe nos primeiros minutos depois de ligar a expiração num dataset já materializado, quando ainda não há nada a expirar",
 					Type:   metrics.TypeCounter,
 					Labels: rotulo,
-					Value:  float64(st.Carencias),
+					Value:  float64(st.PendingCount),
 				},
 				metrics.Sample{
 					Family: metrics.MetExpiryScannedTotal,
@@ -218,7 +218,7 @@ func registraMetricasDeDataset(reg *metrics.Registry, s *Servidor) {
 					Help:   "entradas do índice de escritas examinadas pelo coletor; comparada com o total de rows, diz se o cursor dá a volta ou empaca",
 					Type:   metrics.TypeCounter,
 					Labels: rotulo,
-					Value:  float64(st.ExpiryExaminadas),
+					Value:  float64(st.ExpiredExamined),
 				})
 		}
 		return out

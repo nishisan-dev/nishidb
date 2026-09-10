@@ -19,12 +19,14 @@ from .linha import Row
 class Client:
     """Fachada de leitura sobre uma conexão."""
 
-    def __init__(self, conexao: Connection) -> None:
-        self._cx = conexao
+    def __init__(self, connection: Connection) -> None:
+        self._cx = connection
 
     @classmethod
-    def conecta(cls, dsn: str | None = None, **kwargs: Any) -> Client:
+    def connect(cls, dsn: str | None = None, **kwargs: Any) -> Client:
         return cls(connect(dsn, **kwargs))
+
+    conecta = connect
 
     @property
     def connection(self) -> Connection:
@@ -64,8 +66,8 @@ class Client:
 
     def one(self, sql: str, *params: Any, dataset: str | None = None) -> Row | None:
         """A primeira linha, ou None. Fecha o stream sem consumir o resto."""
-        for linha in self.query(sql, *params, dataset=dataset):
-            return linha
+        for row in self.query(sql, *params, dataset=dataset):
+            return row
         return None
 
     # -------------------------------------------------------------- metadados
@@ -75,8 +77,8 @@ class Client:
         return self._cx.metadata()
 
     def metadata(self, dataset: str) -> documentos.DatasetMeta | None:
-        metas = self._cx.metadata(dataset)
-        return metas[0] if metas else None
+        metadata = self._cx.metadata(dataset)
+        return metadata[0] if metadata else None
 
     def describe(self, dataset: str | None = None) -> list[Row]:
         """As colunas por `_meta.fields`, que traz o que `/v1/metadata` não tem:

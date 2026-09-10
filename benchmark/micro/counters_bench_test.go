@@ -42,14 +42,14 @@ func realSetupCom(tb testing.TB, dir string, estimatedRows uint64, comContadores
 	if err != nil {
 		tb.Fatalf("spec: %v", err)
 	}
-	comp := counters.NovoCompilador(spec)
+	comp := counters.NewCompiler(spec)
 	st, err := storage.Open(storage.Options{
-		Dir:                    dir,
-		SegmentSize:            64 << 20,
-		EstimatedRows:          estimatedRows,
-		CamposIndexadosPorNome: indexNames(spec),
-		CompilaContadores:      comp.Callback(),
-		Log:                    logging.New(io.Discard, logging.FormatText, slog.LevelError),
+		Dir:                             dir,
+		SegmentSize:                     64 << 20,
+		EstimatedRows:                   estimatedRows,
+		IndexedFieldsByName:             indexNames(spec),
+		CompileCountersCallbackFunction: comp.Callback(),
+		Log:                             logging.New(io.Discard, logging.FormatText, slog.LevelError),
 	})
 	if err != nil {
 		tb.Fatalf("abrindo store em %s: %v", dir, err)
@@ -59,7 +59,7 @@ func realSetupCom(tb testing.TB, dir string, estimatedRows uint64, comContadores
 			tb.Errorf("fechando store: %v", err)
 		}
 	})
-	m, err := materializer.New(comp.Compilado(), st)
+	m, err := materializer.New(comp.Compiled(), st)
 	if err != nil {
 		tb.Fatal(err)
 	}

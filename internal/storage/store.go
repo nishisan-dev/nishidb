@@ -46,7 +46,7 @@ var (
 
 	ErrWriterFailed = types.ErrWriterFailed
 
-	// ErrSnapshotExpirado indica consulta cujo universo o dataset não consegue
+	// ErrExpiredSnapshot indica consulta cujo universo o dataset não consegue
 	// mais reconstruir: o journal de versões estourou o teto de memória e as
 	// versões que ela veria foram descartadas.
 	//
@@ -55,7 +55,7 @@ var (
 	// verdadeira. Um resultado que mistura estados sem avisar é o único
 	// desfecho que o isolamento não pode ter — quem pediu isolamento precisa
 	// saber quando não o recebeu.
-	ErrSnapshotExpirado = errors.New("storage: snapshot expirado: o journal de versões estourou o teto de memória")
+	ErrExpiredSnapshot = errors.New("storage: snapshot expirado: o journal de versões estourou o teto de memória")
 )
 
 // ErrDatasetCorrupt indica dataset que a recovery não consegue recuperar
@@ -74,10 +74,10 @@ var ErrDatasetCorrupt = errors.New("storage: dataset corrompido")
 // manifestando para quem pede uma passada avulsa em vez de ligar o laço.
 var ErrCompactionBusy = errors.New("storage: compaction já em voo")
 
-// semRecords informa se nenhum segmento do diretório tem record algum (só
+// emptySegmentDirectory informa se nenhum segmento do diretório tem record algum (só
 // header): é o que distingue um dataset recém-criado de um dataset com
 // dados cujo manifest se perdeu.
-func semRecords(refs []segment.SegmentRef) bool {
+func emptySegmentDirectory(refs []segment.SegmentRef) bool {
 	for _, ref := range refs {
 		if ref.SizeBytes > segment.HeaderSize {
 			return false
@@ -86,25 +86,25 @@ func semRecords(refs []segment.SegmentRef) bool {
 	return true
 }
 
-// Modo é a engine do dataset. Ele é DURÁVEL: viaja numa seção crítica do
+// StoreMode é a engine do dataset. Ele é DURÁVEL: viaja numa seção crítica do
 // manifest, e abrir um dataset com o modo errado é recusado em vez de
 // tentado. O modo de falha que isso impede não é índice incompleto — é ler um
 // log append-only de eventos como se fosse estado corrente, com cada entidade
 // aparecendo dezenas de vezes e o CRC batendo em todas.
-type Modo uint8
+type StoreMode uint8
 
 const (
 	// ModoMaterializado é o dataset do produto: uma linha por entidade,
 	// deduplicada pela primary e atualizada por merge. É o zero value, e é
 	// por isso que todo dataset já em disco continua abrindo sem migração.
-	ModoMaterializado Modo = 0
-	// ModoHistorico é a tabela irmã append-only: uma linha por evento, sem
+	ModoMaterializado StoreMode = 0
+	// HistoryMode é a tabela irmã append-only: uma linha por evento, sem
 	// key, sem dedup e sem update. Ver o godoc de Apenda.
-	ModoHistorico Modo = 1
+	HistoryMode StoreMode = 1
 )
 
-func (m Modo) String() string {
-	if m == ModoHistorico {
+func (m StoreMode) String() string {
+	if m == HistoryMode {
 		return "historico"
 	}
 	return "materializado"
@@ -115,28 +115,28 @@ type Options struct {
 	Dir           string
 	SegmentSize   int64  // default 512 MiB; teto validado pelo segment
 	EstimatedRows uint64 // pre-sizing da primary (piso 1<<20 slots)
-	// CamposIndexados são os campos com índice por segmento, por ID.
+	// IndexedFields são os campos com índice por segmento, por ID.
 	//
 	// É UM par, e não mais os quatro campos de dois motores (BitmapFields,
 	// BitmapFieldNames, HashFields, HashFieldNames): com um motor só, os dois
 	// grupos alimentavam o MESMO índice, e o Store abria a união deles. Um par
 	// de campos que só sabe declarar o mesmo conjunto duas vezes é convite ao
 	// dia em que alguém preenche um e esquece o outro.
-	CamposIndexados []types.FieldID
-	// CamposIndexadosPorNome são os mesmos campos por NOME, resolvidos pelo
+	IndexedFields []types.FieldID
+	// IndexedFieldsByName são os mesmos campos por NOME, resolvidos pelo
 	// dicionário do próprio dataset durante o Open (criando a entry se
 	// necessário). Existe porque os FieldIDs nascem de schema.Compile, que
 	// precisa do dicionário — e o dicionário vive dentro do Store: exigir
 	// IDs aqui obrigaria a abrir o dataset sem índices, compilar, fechar e
 	// reabrir. Os dois campos se somam (união).
-	CamposIndexadosPorNome []string
+	IndexedFieldsByName []string
 
-	// Modo é a engine do dataset (ver o tipo). O default — o zero value — é o
+	// Mode é a engine do dataset (ver o tipo). O default — o zero value — é o
 	// dataset materializado, e é isso que faz todo dataset já em disco
 	// continuar abrindo sem migração nenhuma.
-	Modo Modo
+	Mode StoreMode
 
-	// DictCompartilhado faz este Store USAR o dicionário de campos de outro,
+	// SharedDictionary faz este Store USAR o dicionário de campos de outro,
 	// em vez de abrir o seu.
 	//
 	// Existe para a tabela histórica, e a razão é a identidade das colunas: o
@@ -151,25 +151,25 @@ type Options struct {
 	// Quem passa o dicionário CONTINUA dono dele: este Store não o fecha. A
 	// consequência operacional fica escrita — o dataset que compartilha não
 	// abre sozinho, e quem o abrir precisa abrir o dono primeiro.
-	DictCompartilhado *fielddict.Dict
+	SharedDictionary *fielddict.Dict
 
-	// ColunasDerivadas são os nomes declarados em `extract`. Chegam como
+	// DerivedColumnNames são os nomes declarados em `extract`. Chegam como
 	// STRING para não fazer o storage depender do schema: o que ele precisa
 	// saber é só se o nome já está no dicionário.
-	ColunasDerivadas []string
-	SyncEveryPut     bool // durability=sync (testes/config)
-	// TTLAtivo liga a expiração: o dataset declarou ao menos uma regra. Sem
+	DerivedColumnNames []string
+	SyncEveryPut       bool // durability=sync (testes/config)
+	// ActiveTTL liga a expiração: o dataset declarou ao menos uma regra. Sem
 	// ela nem os índices são abertos — o dataset não paga dois mmaps para não
 	// fazer nada.
-	TTLAtivo bool
-	// DuracaoDeFundo é a duração da regra SEM `when`, ou zero quando não há.
+	ActiveTTL bool
+	// FallbackDuration é a duração da regra SEM `when`, ou zero quando não há.
 	//
 	// Ela vale para a linha cuja entrada em prazos.idx é DESCONHECIDA — a que
 	// foi materializada antes de as regras existirem. É o que permite adotar
 	// as regras num dataset já populado sem que ele fique imortal da noite
 	// para o dia, e é o que faz a migração da forma escalar não mudar
 	// comportamento nenhum.
-	DuracaoDeFundo time.Duration
+	FallbackDuration time.Duration
 	// SnapshotMaxBytes é o teto de heap do journal de versões — a memória que
 	// o isolamento de leitura pode reter enquanto consultas estão abertas.
 	//
@@ -178,22 +178,22 @@ type Options struct {
 	// ingerir, e uma consulta recusada com código próprio é um resultado que o
 	// cliente sabe tratar.
 	SnapshotMaxBytes int64
-	// CampoDeEscrita é o NOME do campo de sistema que carrega o instante da
+	// WriteInstantFieldName é o NOME do campo de sistema que carrega o instante da
 	// escrita, resolvido pelo dicionário do próprio dataset durante o Open.
-	// Obrigatório quando TTLAtivo: é dele que o applyRecord tira o valor,
+	// Obrigatório quando ActiveTTL: é dele que o applyRecord tira o valor,
 	// tanto no Put quanto no replay do tail, e é por isso que o índice de
 	// expiração é reconstruível depois de um crash.
 	//
-	// Nome e não FieldID pela mesma razão do CamposIndexadosPorNome: os ids nascem
+	// Nome e não FieldID pela mesma razão do IndexedFieldsByName: os ids nascem
 	// de schema.Compile, que precisa do dicionário — e o dicionário vive
 	// dentro do Store. Exigir o id aqui obrigaria a abrir o dataset sem
 	// expiração, compilar, fechar e reabrir.
-	CampoDeEscrita string
-	// CampoDePrazo é o NOME do campo de sistema que carrega a DURAÇÃO de
-	// ociosidade da entidade, em millis. Obrigatório quando TTLAtivo, e pela
-	// mesma razão do CampoDeEscrita: os dois são lidos do payload.
-	CampoDePrazo string
-	// CompilaContadores devolve as definições dos contadores mantidos na
+	WriteInstantFieldName string
+	// TTLFieldName é o NOME do campo de sistema que carrega a DURAÇÃO de
+	// ociosidade da entidade, em millis. Obrigatório quando ActiveTTL, e pela
+	// mesma razão do WriteInstantFieldName: os dois são lidos do payload.
+	TTLFieldName string
+	// CompileCountersCallbackFunction devolve as definições dos contadores mantidos na
 	// escrita (o bloco `counters:` do YAML) compiladas contra o dicionário.
 	//
 	// É callback, e não lista, por uma dependência circular que nenhuma ordem
@@ -208,7 +208,7 @@ type Options struct {
 	// Nil é "sem contadores" — e um dataset cujo manifest declara contadores
 	// é RECUSADO nesse caso: abrir sem as definições deixaria o vetor parado
 	// enquanto o Put anda.
-	CompilaContadores func(dict *fielddict.Dict) ([]counter.Definition, error)
+	CompileCountersCallbackFunction func(dict *fielddict.Dict) ([]counter.Definition, error)
 	// Log é o logger estruturado do §95. Quando nil, o Store escreve em
 	// stderr no formato texto — que é o comportamento que os log.Printf
 	// tinham antes, e perder a divergência de recovery só porque o chamador
@@ -303,13 +303,13 @@ type Stats struct {
 	// trata com `rate()`.
 	// ExpiryRunning é o 0/1 do coletor do idle timeout; os três contadores
 	// abaixo são monotônicos e respondem, juntos, "ele está trabalhando?".
-	// Carencias importa isolada porque é a única coisa que acontece nos
+	// PendingCount importa isolada porque é a única coisa que acontece nos
 	// primeiros minutos depois de ligar a expiração num dataset já
-	// materializado — período em que Expiradas fica em zero por estar certo.
+	// materializado — período em que ExpiredCount fica em zero por estar certo.
 	ExpiryRunning          bool
-	Expiradas              uint64
-	Carencias              uint64
-	ExpiryExaminadas       uint64
+	ExpiredCount           uint64
+	PendingCount           uint64
+	ExpiredExamined        uint64
 	CompactionBytesRead    int64
 	CompactionBytesWritten int64
 }
@@ -334,32 +334,32 @@ type Store struct {
 	prim        *primary.Index
 	locs        *rowindex.Locations
 	seqs        *rowindex.Sequences
-	// escritas é nil quando o dataset não declara expiração: sem ela não há
+	// writes é nil quando o dataset não declara expiração: sem ela não há
 	// o que indexar, e abrir o arquivo custaria mmap por nada.
-	escritas *rowindex.LastWrites
-	prazos   *rowindex.TTLs
-	// agenda é o índice de QUANDO cada linha vence, e acompanha o escritas:
+	writes     *rowindex.LastWrites
+	ttlMapping *rowindex.TTLs
+	// schedule é o índice de QUANDO cada linha vence, e acompanha o writes:
 	// nil junto com ele. Ela não é fonte de verdade de nada — prazoVencido
-	// continua lendo escritas e prazos —, é o que permite ao coletor
+	// continua lendo writes e ttlMapping —, é o que permite ao coletor
 	// perguntar pelo próximo vencimento em vez de varrer o dataset atrás
 	// dele.
-	agenda         *rowindex.Schedule
-	duracaoDeFundo time.Duration
-	campoDeEscrita types.FieldID
-	campoDePrazo   types.FieldID
-	// expiraBuf e tombBuf são do Expira, owned pelo wmu como o compactBuf:
+	schedule      *rowindex.Schedule
+	duration      time.Duration
+	writeFieldId  types.FieldID
+	writeFieldTtl types.FieldID
+	// expireBuffer e tempBuffer são do Expira, owned pelo wmu como o compactBuf:
 	// reter os dois evita realocar o record lido e o payload da lápide a cada
 	// expiração, e a varredura expira em rajada.
-	expiraBuf  []byte
-	tombBuf    []byte
-	expiradas  atomic.Uint64
-	carencias  atomic.Uint64
-	examinadas atomic.Uint64
-	// agendaReconstruida registra que esta abertura teve de construir a
-	// agenda em vez de adotar a que estava em disco. É o que permite ao teste
+	expireBuffer  []byte
+	tempBuffer    []byte
+	expiredCount  atomic.Uint64
+	lostCount     atomic.Uint64
+	examinedCount atomic.Uint64
+	// scheduleBuilt registra que esta abertura teve de construir a
+	// schedule em vez de adotar a que estava em disco. É o que permite ao teste
 	// afirmar a NÃO reconstrução — sem isso, "adotou" e "reconstruiu e
 	// chegou ao mesmo resultado" seriam indistinguíveis.
-	agendaReconstruida bool
+	scheduleBuilt bool
 
 	// contadores são os contadores mantidos na escrita, na ordem declarada;
 	// vazio no dataset sem `counters:`. Transicionados no passo 7c do
@@ -371,7 +371,7 @@ type Store struct {
 	contadoresARecriar []pendenciaDeContador
 	// contadoresConstruidos conta as reconstruções desta abertura — o
 	// observável que separa "adotou" de "reconstruiu e chegou ao mesmo
-	// resultado", como agendaReconstruida.
+	// resultado", como scheduleBuilt.
 	contadoresConstruidos int
 	// audTrace é o seam de teste da auditoria dos contadores: chamado depois
 	// de cada linha varrida. Nil em produção.
@@ -396,16 +396,16 @@ type Store struct {
 	expCancela context.CancelFunc
 	expEmVoo   sync.WaitGroup
 	expAtiva   atomic.Bool
-	// agora é o relógio da expiração. Campo, e não time.Now direto, porque um
+	// now é o relógio da expiração. Campo, e não time.Now direto, porque um
 	// teste de prazo precisa avançar o tempo sem dormir.
-	agora func() time.Time
+	now func() time.Time
 
 	// wips são os índices de segmento MUTÁVEIS — um por campo indexado, todos
 	// do segmento corrente. Mapa e não slice porque o applyRecord endereça por
 	// FieldID, uma vez por campo do payload.
 	//
 	// A LEITURA DO MAPA PELO CAMINHO DE ESCRITA (aplicaIndiceSets) dispensa o
-	// selMu, e a razão é que ele já tem o wmu na mão: as duas únicas escritas
+	// selMu, e a razão é que ele já tem o wmu na mão: as duas únicas writes
 	// deste campo — abreWIPsDoCorrente e fechaWIPs — só acontecem sob o wmu, no
 	// aposAppend, ou no Open, antes de existir concorrência. Contra a CONSULTA,
 	// que não toma o wmu por desenho, o que separa leitura de escrita é o selMu.
@@ -765,7 +765,7 @@ type Store struct {
 	// passada em voo — só se o LAÇO existe. compCancela fica não-nil da
 	// primeira à última hora do laço, dormindo ou varrendo, então checá-lo
 	// para decidir 409 tornava a rota morta o tempo todo na config default
-	// (storage.compaction.enabled ausente ⇒ true). Quem decide isso agora é
+	// (storage.compaction.enabled ausente ⇒ true). Quem decide isso now é
 	// compPassadaMu, abaixo — um mutex PRÓPRIO, de propósito: compMu fica
 	// preso do início ao fim de ParaCompaction (Lock → compCancela() →
 	// compEmVoo.Wait(), que pode durar minutos com uma passada em
@@ -1045,7 +1045,7 @@ func Open(opts Options) (*Store, error) {
 		opts:     opts,
 		segTally: make(map[uint32]*segStats),
 		segSize:  make(map[uint32]int64),
-		agora:    time.Now,
+		now:      time.Now,
 		snaps:    novoRegistroDeSnapshots(),
 		vers:     versions.New(),
 	}
@@ -1083,8 +1083,8 @@ func Open(opts Options) (*Store, error) {
 	if err := spill.Cleanup(opts.Dir); err != nil {
 		return nil, fmt.Errorf("storage: abrir o dataset %s: %w", opts.Dir, err)
 	}
-	if opts.DictCompartilhado != nil {
-		s.dict = opts.DictCompartilhado
+	if opts.SharedDictionary != nil {
+		s.dict = opts.SharedDictionary
 	} else if s.dict, err = fielddict.Open(filepath.Join(metaDir, "fields.dict")); err != nil {
 		// O erro do dicionário já traz arquivo, versão e remediação; aqui entra
 		// o dataset, que é o identificador que o operador tem na mão.
@@ -1106,7 +1106,7 @@ func Open(opts Options) (*Store, error) {
 	// nem um nem outro, e abri-los seria pagar dois mmaps (um deles com rehash
 	// a 70% de ocupação, sobre dezenas de milhões de linhas) para não fazer
 	// nada. É a mesma economia que o TTLAtivo já faz com expiry.idx.
-	if opts.Modo != ModoHistorico {
+	if opts.Mode != HistoryMode {
 		minSlots := max(uint64(1<<20), opts.EstimatedRows*10/7)
 		if s.prim, err = primary.Open(filepath.Join(idxDir, "primary.idx"), minSlots); err != nil {
 			return nil, err
@@ -1118,23 +1118,23 @@ func Open(opts Options) (*Store, error) {
 	if s.locs, err = rowindex.OpenLocations(filepath.Join(idxDir, "locations.idx"), minRows); err != nil {
 		return nil, err
 	}
-	if opts.TTLAtivo {
-		if opts.CampoDeEscrita == "" || opts.CampoDePrazo == "" {
+	if opts.ActiveTTL {
+		if opts.WriteInstantFieldName == "" || opts.TTLFieldName == "" {
 			// Sem os campos o applyRecord não teria de onde tirar o instante
 			// nem a duração, e toda row ficaria com prazo desconhecido — a
 			// expiração nunca aconteceria, em silêncio.
-			return nil, fmt.Errorf("%w: TTLAtivo exige CampoDeEscrita e CampoDePrazo", ErrInvalidArgument)
+			return nil, fmt.Errorf("%w: TTLAtivo exige WriteInstantFieldName e TTLFieldName", ErrInvalidArgument)
 		}
-		if s.escritas, err = rowindex.OpenLastWrites(filepath.Join(idxDir, "expiry.idx"), minRows); err != nil {
+		if s.writes, err = rowindex.OpenLastWrites(filepath.Join(idxDir, "expiry.idx"), minRows); err != nil {
 			return nil, err
 		}
-		if s.prazos, err = rowindex.OpenTTLs(filepath.Join(idxDir, "prazos.idx"), minRows); err != nil {
+		if s.ttlMapping, err = rowindex.OpenTTLs(filepath.Join(idxDir, "prazos.idx"), minRows); err != nil {
 			return nil, err
 		}
-		if s.agenda, err = rowindex.OpenSchedule(idxDir, minRows); err != nil {
+		if s.schedule, err = rowindex.OpenSchedule(idxDir, minRows); err != nil {
 			return nil, err
 		}
-		s.duracaoDeFundo = opts.DuracaoDeFundo
+		s.duration = opts.FallbackDuration
 	}
 	m, mErr := checkpoint.Load(s.manifestPath())
 	refs, err := segment.ListSegments(dataDir)
@@ -1148,7 +1148,7 @@ func Open(opts Options) (*Store, error) {
 	// _writtenAt e os campos indexados são registrados logo abaixo, com fsync,
 	// e o dicionário é append-only. Uma subida abortada depois disso deixaria
 	// o nome registrado para sempre.
-	if err := validaDerivadasContraDicionario(m, s.dict, opts.ColunasDerivadas); err != nil {
+	if err := validaDerivadasContraDicionario(m, s.dict, opts.DerivedColumnNames); err != nil {
 		return nil, err
 	}
 
@@ -1165,23 +1165,23 @@ func Open(opts Options) (*Store, error) {
 	// nome já está no dicionário compartilhado — o dataset base o registrou
 	// antes, porque declarar `history.expireAfterWrite` faz o Compile dele
 	// exigir o campo.
-	if s.escritas == nil && opts.Modo == ModoHistorico && opts.CampoDeEscrita != "" {
-		if s.campoDeEscrita, err = s.dict.LookupOrCreate([]byte(opts.CampoDeEscrita)); err != nil {
-			return nil, fmt.Errorf("storage: registrando %q no dicionário: %w", opts.CampoDeEscrita, err)
+	if s.writes == nil && opts.Mode == HistoryMode && opts.WriteInstantFieldName != "" {
+		if s.writeFieldId, err = s.dict.LookupOrCreate([]byte(opts.WriteInstantFieldName)); err != nil {
+			return nil, fmt.Errorf("storage: registrando %q no dicionário: %w", opts.WriteInstantFieldName, err)
 		}
 	}
-	if s.escritas != nil {
+	if s.writes != nil {
 		// LookupOrCreate e não Lookup, e nesta ORDEM. O id sai daqui e tem de
 		// ser o MESMO que o schema.Compile resolve depois, e a ordem das
 		// chamadas decide o mapeamento nome→id de um dataset NOVO, gravado
 		// para sempre: _writtenAt, _expiresIn, e só então os campos indexados,
 		// resolvidos logo abaixo (ver o comentário ali para o que mudou DENTRO
 		// desse último grupo desde a D5). Nunca reordene esta sequência.
-		if s.campoDeEscrita, err = s.dict.LookupOrCreate([]byte(opts.CampoDeEscrita)); err != nil {
-			return nil, fmt.Errorf("storage: registrando %q no dicionário: %w", opts.CampoDeEscrita, err)
+		if s.writeFieldId, err = s.dict.LookupOrCreate([]byte(opts.WriteInstantFieldName)); err != nil {
+			return nil, fmt.Errorf("storage: registrando %q no dicionário: %w", opts.WriteInstantFieldName, err)
 		}
-		if s.campoDePrazo, err = s.dict.LookupOrCreate([]byte(opts.CampoDePrazo)); err != nil {
-			return nil, fmt.Errorf("storage: registrando %q no dicionário: %w", opts.CampoDePrazo, err)
+		if s.writeFieldTtl, err = s.dict.LookupOrCreate([]byte(opts.TTLFieldName)); err != nil {
+			return nil, fmt.Errorf("storage: registrando %q no dicionário: %w", opts.TTLFieldName, err)
 		}
 	}
 
@@ -1232,7 +1232,7 @@ func Open(opts Options) (*Store, error) {
 	// O que ainda NÃO existe é quem CONSUMA a fila: a goroutine da §2.4. Sem ela
 	// o agendamento não vira trabalho, e os segmentos antigos enumeram
 	// indefinidamente — é por isso que o débito 22 continua aberto.
-	campos, err := s.resolveCamposIndexados(opts.CamposIndexados, opts.CamposIndexadosPorNome)
+	campos, err := s.resolveCamposIndexados(opts.IndexedFields, opts.IndexedFieldsByName)
 	if err != nil {
 		return nil, err
 	}
@@ -1252,7 +1252,7 @@ func Open(opts Options) (*Store, error) {
 	}
 
 	switch {
-	case errors.Is(mErr, checkpoint.ErrNoManifest) && semRecords(refs):
+	case errors.Is(mErr, checkpoint.ErrNoManifest) && emptySegmentDirectory(refs):
 		// Dataset novo. Entram aqui tanto o diretório virgem quanto o
 		// dataset que crashou DENTRO do primeiro Open: o segmento 1 nasce
 		// antes do manifest inicial, então "segmento sem record e sem
@@ -1571,7 +1571,7 @@ func (s *Store) GetByKey(snap types.Snapshot, key, buf []byte) (types.Record, []
 	}
 	defer s.sai()
 	if !s.snaps.valido(snap.Epoch) {
-		return types.Record{}, buf, false, ErrSnapshotExpirado
+		return types.Record{}, buf, false, ErrExpiredSnapshot
 	}
 	rec, out, exists, live, err := s.lookup(key, buf, snap)
 	if err != nil || !exists || !live {
@@ -1616,7 +1616,7 @@ func (s *Store) GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (typ
 	}
 	defer s.sai()
 	if !s.snaps.valido(snap.Epoch) {
-		return types.Record{}, buf, false, ErrSnapshotExpirado
+		return types.Record{}, buf, false, ErrExpiredSnapshot
 	}
 	// Par (Get, Read) sob a barreira de aposentadoria: ver o godoc de aposMu.
 	s.aposMu.RLock()
@@ -1656,7 +1656,7 @@ func (s *Store) GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (typ
 	// o payload que manda: ele é a fonte da verdade de que os índices são
 	// derivados (ver o godoc de rowindex.LastWrites), então derivar daqui é a
 	// MESMA conta que o applyRecord faz, sobre a versão certa.
-	if s.escritas != nil && s.venceuNaVersao(rec, snap.Instant) {
+	if s.writes != nil && s.venceuNaVersao(rec, snap.Instant) {
 		return types.Record{}, out, false, nil
 	}
 	return rec, out, true, nil
@@ -1923,18 +1923,18 @@ func (s *Store) applyRecord(a recordApply) error {
 	// crash o replay repõe exatamente os mesmos instantes. Se o valor viesse
 	// do relógio, o replay empurraria todos os prazos para frente pelo tempo
 	// de queda — e um processo reiniciado em laço nunca expiraria nada.
-	if s.escritas != nil {
-		if ms, ok := instanteDeEscrita(a.payload, s.campoDeEscrita); ok {
-			if err := s.escritas.Set(a.rowID, ms); err != nil {
+	if s.writes != nil {
+		if ms, ok := instanteDeEscrita(a.payload, s.writeFieldId); ok {
+			if err := s.writes.Set(a.rowID, ms); err != nil {
 				return err
 			}
 		}
 	}
 	// 6c. duração de ociosidade da linha, LIDA DO PAYLOAD pela mesma razão do
 	// instante: o replay do tail repõe as MESMAS durações depois de um crash.
-	if s.prazos != nil {
-		if ms, ok := campoDoPayload(a.payload, s.campoDePrazo, types.TypeInt64); ok {
-			if err := s.prazos.Set(a.rowID, ms); err != nil {
+	if s.ttlMapping != nil {
+		if ms, ok := campoDoPayload(a.payload, s.writeFieldTtl, types.TypeInt64); ok {
+			if err := s.ttlMapping.Set(a.rowID, ms); err != nil {
 				return err
 			}
 		}
@@ -1987,8 +1987,8 @@ func (s *Store) applyRecord(a recordApply) error {
 	// um instante, não uma referência a record. Uma janela entre o Publish e
 	// esta linha custaria, no pior caso, uma passada de atraso na expiração —
 	// e ela não existe, porque as duas rodam sob o mesmo wmu.
-	if s.agenda != nil {
-		if err := s.agenda.Update(a.rowID, s.vencimentoDe(a.rowID)); err != nil {
+	if s.schedule != nil {
+		if err := s.schedule.Update(a.rowID, s.vencimentoDe(a.rowID)); err != nil {
 			return err
 		}
 	}
@@ -2070,10 +2070,10 @@ func campoDoPayload(payload []byte, campo types.FieldID, esperado types.FieldTyp
 // avaliada por — não existe dado que a responda —, e a carência é a única
 // resposta que o dataset tem.
 func (s *Store) venceuNaVersao(rec types.Record, em time.Time) bool {
-	if s.escritas == nil {
+	if s.writes == nil {
 		return false
 	}
-	ms, declarado := instanteDeEscrita(rec.Payload, s.campoDeEscrita)
+	ms, declarado := instanteDeEscrita(rec.Payload, s.writeFieldId)
 	if !declarado {
 		return s.prazoVencido(rec.RowID, em)
 	}
@@ -2088,13 +2088,13 @@ func (s *Store) venceuNaVersao(rec types.Record, em time.Time) bool {
 // caindo na duração de fundo quando ele não declara nenhuma — a mesma
 // precedência de duracaoEfetiva, sobre o payload em vez do índice.
 func (s *Store) duracaoDoPayload(payload []byte) time.Duration {
-	if ms, ok := campoDoPayload(payload, s.campoDePrazo, types.TypeInt64); ok {
+	if ms, ok := campoDoPayload(payload, s.writeFieldTtl, types.TypeInt64); ok {
 		if ms <= 0 {
 			return 0 // imortal declarado pela regra `never`
 		}
 		return time.Duration(ms) * time.Millisecond
 	}
-	return s.duracaoDeFundo
+	return s.duration
 }
 
 // prazoVencido é o predicado de leitura da expiração, e ele existe para que a
@@ -2113,30 +2113,30 @@ func (s *Store) duracaoDoPayload(payload []byte) time.Duration {
 // meio do resultado. O writer passa s.agora(): a expiração oportunista é dele,
 // e ela decide sobre o presente.
 func (s *Store) prazoVencido(rowID types.RowID, em time.Time) bool {
-	if s.escritas == nil {
+	if s.writes == nil {
 		return false
 	}
 	d := s.duracaoEfetiva(rowID)
 	if d <= 0 {
 		return false
 	}
-	ms, conhecido := s.escritas.Get(rowID)
+	ms, conhecido := s.writes.Get(rowID)
 	if !conhecido {
 		return false
 	}
 	return em.UnixMilli()-ms >= d.Milliseconds()
 }
 
-// vencimentoDe calcula QUANDO esta linha vence, no formato que a agenda
-// guarda. É função pura do estado indexado — location, escritas, prazos e a
-// duração de fundo —, e é essa pureza que permite reconstruir a agenda inteira
+// vencimentoDe calcula QUANDO esta linha vence, no formato que a schedule
+// guarda. É função pura do estado indexado — location, writes, ttlMapping e a
+// duração de fundo —, e é essa pureza que permite reconstruir a schedule inteira
 // a partir dos arquivos que já existem, sem ler um record sequer.
 //
 // A relação com prazoVencido é deliberadamente de DERIVAÇÃO, não de
 // substituição: prazoVencido continua sendo o predicado que decide
-// visibilidade, lendo os mesmos dois índices. A agenda só decide quando o
+// visibilidade, lendo os mesmos dois índices. A schedule só decide quando o
 // coletor olha. Fazer prazoVencido ler o vencimento materializado
-// transformaria um bug de agenda em um bug de query — a linha sumiria da
+// transformaria um bug de schedule em um bug de query — a linha sumiria da
 // consulta por causa de uma entrada de árvore errada —, e é por isso que ele
 // não lê.
 //
@@ -2147,13 +2147,13 @@ func (s *Store) prazoVencido(rowID types.RowID, em time.Time) bool {
 //     propósito, então sem este ramo ela ficaria vencida para sempre.
 //   - instante DESCONHECIDO: rowindex.Grace. Ela não venceu, mas precisa da
 //     atenção do coletor para receber o prazo cheio. É o único caso em que a
-//     agenda pede uma visita sem que prazoVencido concorde, e é assim que a
+//     schedule pede uma visita sem que prazoVencido concorde, e é assim que a
 //     entidade materializada antes de a expiração ser ligada deixa de ficar
 //     imortal por acidente de calendário.
 //   - duração não positiva: rowindex.Never. É a linha que uma regra `never`
 //     declarou imortal, ou o dataset sem duração de fundo.
 func (s *Store) vencimentoDe(rowID types.RowID) uint64 {
-	if s.escritas == nil {
+	if s.writes == nil {
 		return rowindex.Never
 	}
 	packed, publicada := s.locs.Get(rowID)
@@ -2163,7 +2163,7 @@ func (s *Store) vencimentoDe(rowID types.RowID) uint64 {
 	if _, _, flags := rowindex.Unpack(packed); flags&types.FlagTombstone != 0 {
 		return rowindex.Never
 	}
-	ms, conhecido := s.escritas.Get(rowID)
+	ms, conhecido := s.writes.Get(rowID)
 	if !conhecido {
 		return rowindex.Grace
 	}
@@ -2188,15 +2188,15 @@ func (s *Store) vencimentoDe(rowID types.RowID) uint64 {
 	return uint64(venc)
 }
 
-// infoDaAgenda descreve, para o manifest, os parâmetros de que a agenda em
+// infoDaAgenda descreve, para o manifest, os parâmetros de que a schedule em
 // disco deriva. Devolve nil no dataset sem expiração — e é isso que mantém o
 // manifest dele na v1.
 func (s *Store) infoDaAgenda() *checkpoint.ScheduleInfo {
-	if s.agenda == nil {
+	if s.schedule == nil {
 		return nil
 	}
 	return &checkpoint.ScheduleInfo{
-		FallbackDurationMs: uint64(s.duracaoDeFundo.Milliseconds()),
+		FallbackDurationMs: uint64(s.duration.Milliseconds()),
 		BlockShift:         rowindex.ScheduleBlockShift,
 		Levels:             rowindex.ScheduleLevels,
 	}
@@ -2213,13 +2213,13 @@ func (s *Store) infoDaAgenda() *checkpoint.ScheduleInfo {
 // Zero devolvido COM conhecido=true é a entidade imortal, e ela NÃO cai no
 // fundo — é para essa distinção que o rowindex.ImmortalTTL existe.
 func (s *Store) duracaoEfetiva(rowID types.RowID) time.Duration {
-	if s.prazos == nil {
+	if s.ttlMapping == nil {
 		return 0
 	}
-	if ms, conhecido := s.prazos.Get(rowID); conhecido {
+	if ms, conhecido := s.ttlMapping.Get(rowID); conhecido {
 		return time.Duration(ms) * time.Millisecond
 	}
-	return s.duracaoDeFundo
+	return s.duration
 }
 
 // failWriter registra o primeiro erro pós-Append e o devolve embrulhado em
@@ -2488,7 +2488,7 @@ func (s *Store) Sequence(id types.RowID) (int64, types.Presence) {
 	// lastSequence, e é ela que impede um evento antigo de reabrir a
 	// entidade. Quem pergunta a sequence de uma row está decidindo sobre
 	// ordem, e "não sei" é a pior resposta possível.
-	if _, _, flags := rowindex.Unpack(packed); flags&types.FlagTombstone != 0 || s.prazoVencido(id, s.agora()) {
+	if _, _, flags := rowindex.Unpack(packed); flags&types.FlagTombstone != 0 || s.prazoVencido(id, s.now()) {
 		return s.sequenceDe(id), types.PresenceExpired
 	}
 	return s.sequenceDe(id), types.PresenceLive
@@ -2567,9 +2567,9 @@ func (s *Store) Stats() Stats {
 		LiveBytesUpperBound:    s.liveBytesAll.Load(),
 		CompactionRunning:      s.compAtiva.Load(),
 		ExpiryRunning:          s.expAtiva.Load(),
-		Expiradas:              s.expiradas.Load(),
-		Carencias:              s.carencias.Load(),
-		ExpiryExaminadas:       s.examinadas.Load(),
+		ExpiredCount:           s.expiredCount.Load(),
+		PendingCount:           s.lostCount.Load(),
+		ExpiredExamined:        s.examinedCount.Load(),
 		CompactionBytesRead:    s.compBytesLidos.Load(),
 		CompactionBytesWritten: s.compBytesEscritos.Load(),
 	}
@@ -2628,8 +2628,8 @@ func (s *Store) Close() error {
 	// é concedido quando o RLock dela é liberado.
 	var errs []error
 	errs = append(errs, s.fechaIndices())
-	if s.agenda != nil {
-		errs = append(errs, s.agenda.Close())
+	if s.schedule != nil {
+		errs = append(errs, s.schedule.Close())
 	}
 	// Sem msync no Close, como nos outros derivados: o que não foi
 	// checkpointado volta pelo replay, e o overlay dos contadores é
@@ -2637,11 +2637,11 @@ func (s *Store) Close() error {
 	for _, c := range s.contadores {
 		errs = append(errs, c.Close())
 	}
-	if s.prazos != nil {
-		errs = append(errs, s.prazos.Close())
+	if s.ttlMapping != nil {
+		errs = append(errs, s.ttlMapping.Close())
 	}
-	if s.escritas != nil {
-		errs = append(errs, s.escritas.Close())
+	if s.writes != nil {
+		errs = append(errs, s.writes.Close())
 	}
 	if s.seqs != nil {
 		errs = append(errs, s.seqs.Close())
@@ -2716,17 +2716,17 @@ func validaDerivadasContraDicionario(m *checkpoint.Manifest, dict *fielddict.Dic
 // histórico malformado. As duas recusas são de CONFIGURAÇÃO e saem antes do
 // flock: um Open que vai falhar não pode travar o dataset nem tocar arquivo.
 func validaOpcoesDoModo(opts Options) error {
-	if opts.Modo != ModoHistorico {
+	if opts.Mode != HistoryMode {
 		return nil
 	}
-	if opts.DictCompartilhado == nil {
+	if opts.SharedDictionary == nil {
 		// O histórico não tem dicionário próprio por desenho: o payload que
 		// ele guarda é o que o patch do base montou, endereçado por FieldID.
 		// Sem o dicionário do base, os ids seriam outros e todo record
 		// decodificaria colunas trocadas — sem erro e com o CRC batendo.
 		return fmt.Errorf("%w: ModoHistorico exige DictCompartilhado: a tabela irmã não tem dicionário próprio", ErrInvalidArgument)
 	}
-	if opts.TTLAtivo {
+	if opts.ActiveTTL {
 		// A expiração por inatividade renova o prazo a cada escrita, e no
 		// histórico nenhuma linha é reescrita: a regra nunca teria a segunda
 		// escrita que ela existe para observar. A retenção daqui é outra, e é
@@ -2737,7 +2737,7 @@ func validaOpcoesDoModo(opts Options) error {
 }
 
 // EhHistorico reporta se este Store é a tabela irmã append-only.
-func (s *Store) EhHistorico() bool { return s.opts.Modo == ModoHistorico }
+func (s *Store) EhHistorico() bool { return s.opts.Mode == HistoryMode }
 
 // sequenceDe lê o índice de sequences, ou zero quando ele não existe.
 //
@@ -2770,11 +2770,11 @@ func (s *Store) adotaModoDoManifest(m *checkpoint.Manifest) error {
 	if m == nil {
 		return nil
 	}
-	gravado := Modo(m.Mode)
-	if gravado != s.opts.Modo {
+	gravado := StoreMode(m.StoreMode)
+	if gravado != s.opts.Mode {
 		return fmt.Errorf("%w: o dataset %s está gravado como %s e a configuração pede %s; "+
 			"o modo é imutável — recrie o dataset ou corrija o YAML",
-			ErrDatasetCorrupt, s.opts.Dir, gravado, s.opts.Modo)
+			ErrDatasetCorrupt, s.opts.Dir, gravado, s.opts.Mode)
 	}
 	s.rowIDBase.Store(m.RowIDBase)
 	return nil

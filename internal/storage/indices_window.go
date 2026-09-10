@@ -310,7 +310,7 @@ func (s *Store) janelaDeSegmentos(j JanelaDeIndice, refs []segment.SegmentRef) (
 
 	dentroPorTempo := cand
 	if j.Duracao > 0 {
-		corte := s.agora().Add(-j.Duracao).UnixMilli()
+		corte := s.now().Add(-j.Duracao).UnixMilli()
 		dentroPorTempo = nil
 		var buf []byte
 		for _, i := range cand {
@@ -463,7 +463,7 @@ func (s *Store) instanteDoRecordMaisNovo(refs []segment.SegmentRef, i int, buf [
 		}
 		return 0, buf, false, err
 	}
-	ms, conhecido := instanteDeEscrita(rec.Payload, s.campoDeEscrita)
+	ms, conhecido := instanteDeEscrita(rec.Payload, s.writeFieldId)
 	return ms, buf, conhecido, nil
 }
 
@@ -520,7 +520,7 @@ func (s *Store) JanelaEfetiva() time.Duration {
 			// zero para um dataset com índice.
 			continue
 		}
-		if d := time.Duration(s.agora().UnixMilli()-ms) * time.Millisecond; d > 0 {
+		if d := time.Duration(s.now().UnixMilli()-ms) * time.Millisecond; d > 0 {
 			return d
 		}
 		return 0
@@ -575,6 +575,6 @@ func (s *Store) instanteVisivelDe(ref segment.SegmentRef, buf []byte) (int64, []
 	if err != nil {
 		return 0, buf, false
 	}
-	ms, ok := instanteDeEscrita(rec.Payload, s.campoDeEscrita)
+	ms, ok := instanteDeEscrita(rec.Payload, s.writeFieldId)
 	return ms, buf, ok
 }

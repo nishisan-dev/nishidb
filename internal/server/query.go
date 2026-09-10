@@ -516,7 +516,7 @@ func traduzErroDeAbertura(err error, sql string) (int, protocol.ErrorDetail) {
 		return http.StatusGatewayTimeout, protocol.ErrorDetail{Code: protocol.CodeTimeout, Message: err.Error()}
 	case errors.Is(err, storage.ErrDatasetCorrupt), errors.Is(err, encoding.ErrCorrupt):
 		return http.StatusInternalServerError, protocol.ErrorDetail{Code: protocol.CodeDatasetCorrupt, Message: err.Error()}
-	case errors.Is(err, storage.ErrSnapshotExpirado):
+	case errors.Is(err, storage.ErrExpiredSnapshot):
 		// 503, e não 500: o servidor está íntegro e a consulta pode ser
 		// repetida — a nova abre um snapshot que ainda não retém nada.
 		return http.StatusServiceUnavailable, protocol.ErrorDetail{Code: protocol.CodeSnapshotExpired, Message: err.Error()}
@@ -557,7 +557,7 @@ func codigoDeErroDeQuery(err error) string {
 		return protocol.CodeTimeout
 	case errors.Is(err, storage.ErrDatasetCorrupt), errors.Is(err, encoding.ErrCorrupt):
 		return protocol.CodeDatasetCorrupt
-	case errors.Is(err, storage.ErrSnapshotExpirado):
+	case errors.Is(err, storage.ErrExpiredSnapshot):
 		// Sai DEPOIS das rows, e é onde ele aparece na prática: o Open não lê
 		// nada, então o journal só pode estourar com a consulta já correndo.
 		// As linhas já entregues são do universo de T0 e continuam válidas —

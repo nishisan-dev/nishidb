@@ -82,16 +82,16 @@ func (s *Servidor) abreHistorico(base *dataset, log *logging.Logger) (*dataset, 
 	}
 
 	st, err := storage.Open(storage.Options{
-		Dir:                    s.cfg.DatasetRootDir(specIrma.Name),
-		Dataset:                specIrma.Name,
-		SegmentSize:            segmento,
-		Modo:                   storage.ModoHistorico,
-		DictCompartilhado:      base.st.FieldDict(),
-		CamposIndexadosPorNome: schema.IndexedFieldNames(specIrma),
-		ColunasDerivadas:       specIrma.DerivedColumnNames(),
-		CampoDeEscrita:         schema.WriteInstantFieldName,
-		Log:                    log,
-		Metrics:                s.reg,
+		Dir:                   s.cfg.DatasetRootDir(specIrma.Name),
+		Dataset:               specIrma.Name,
+		SegmentSize:           segmento,
+		Mode:                  storage.HistoryMode,
+		SharedDictionary:      base.st.FieldDict(),
+		IndexedFieldsByName:   schema.IndexedFieldNames(specIrma),
+		DerivedColumnNames:    specIrma.DerivedColumnNames(),
+		WriteInstantFieldName: schema.WriteInstantFieldName,
+		Log:                   log,
+		Metrics:               s.reg,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("tabela histórica de %q: %w", base.nome, err)

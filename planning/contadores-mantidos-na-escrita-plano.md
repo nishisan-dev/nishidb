@@ -885,13 +885,13 @@ montado em `buf[:0]` com `encoding.AppendField` em ordem de FieldID;
 ### Tarefa E3: wiring no servidor e no CLI
 
 **Arquivos:**
-- Modificar: `internal/server/server.go:336-426` (`abreDataset`: `NovoCompilador` → `Options.CompilaContadores` → `compilado := comp.Compilado()` no lugar de `spec.Compile(st.FieldDict())`; depois de `eng.Register`: `contadores.Registra(s.eng, spec.Name, st)`; log `contadores.declarados` com nome/groupBy/where/teto por contador, como `ttl.regras`)
-- Modificar: `internal/cli/cli.go:248-279` (`abreDataset` idem) e `cli.go:302` (segunda abertura), `internal/cli/query.go:107` (`contadores.Registra` depois do `Register`), `internal/cli/offsets.go:85` (callback nas `Options`), `benchmark/ingest-bench/harness.go:1592` (idem). **Todo chamador de `storage.Open` de um dataset base passa o callback** — a guarda do C1 ("manifest com contadores sem callback ⇒ recusa") é o que pega o chamador esquecido; `history.go:84` (irmã) NÃO passa, e a irmã nunca tem a seção.
+- Modificar: `internal/server/server.go:336-426` (`openDataset`: `NovoCompilador` → `Options.CompilaContadores` → `compilado := comp.Compilado()` no lugar de `spec.Compile(st.FieldDict())`; depois de `eng.Register`: `contadores.Registra(s.eng, spec.Name, st)`; log `contadores.declarados` com nome/groupBy/where/teto por contador, como `ttl.regras`)
+- Modificar: `internal/cli/cli.go:248-279` (`openDataset` idem) e `cli.go:302` (segunda abertura), `internal/cli/query.go:107` (`contadores.Registra` depois do `Register`), `internal/cli/offsets.go:85` (callback nas `Options`), `benchmark/ingest-bench/harness.go:1592` (idem). **Todo chamador de `storage.Open` de um dataset base passa o callback** — a guarda do C1 ("manifest com contadores sem callback ⇒ recusa") é o que pega o chamador esquecido; `history.go:84` (irmã) NÃO passa, e a irmã nunca tem a seção.
 - Testar: `internal/server/query_test.go` (`TestCountersRespondePelaRotaDeQuery`, no molde de `TestMetaFieldsRespondePelaRotaDeQuery:916`), `internal/cli/query_test.go` (consulta local a `_counters`)
 
 - [ ] **Passo 1: testes** — HTTP: sobe servidor de teste com YAML contendo `counters`, ingere via o caminho de teste existente, consulta `_counters.x` e afirma linhas + moldura de fim; JDBC/Python NÃO mudam (é SQL). CLI: `nishidb query --config … "SELECT … FROM _counters.x"` devolve NDJSON.
 
-- [ ] **Passo 2: vermelho → implementar → verde.** Conferir que `abreHistorico` (irmã) NÃO recebe callback e que a irmã sobe (`TestHistorico…` existentes verdes).
+- [ ] **Passo 2: vermelho → implementar → verde.** Conferir que `openHistory` (irmã) NÃO recebe callback e que a irmã sobe (`TestHistorico…` existentes verdes).
 
 - [ ] **Passo 3: `make test`, `make test-race`, `make lint` → commit** — `server, cli: contadores compilados na abertura e _counters registrado no motor`.
 
@@ -962,7 +962,7 @@ recalculado divergência`), com a amostra de divergências abaixo quando houver,
 exit 3 (`ErrDatasetCorrupt`) quando `DivergentGroups > 0` — divergência é corrupção
 de índice derivado, e o exit code é o que um script de operação lê. `--rebuild`:
 tabela `contador grupos duração`. `--config` com servidor no ar ⇒ exit 3 + dica
-`dicaDeServidor` (já existe). Saída via `escreveSaida` (tabwriter, uma escrita).
+`dicaDeServidor` (já existe). Saída via `writeOutputWithContext` (tabwriter, uma escrita).
 
 - [ ] **Passo 1: testes** — `TestOUsoAnunciaCounters`; `TestCountersLocalListaEAudita` (dataset de teste); `TestCountersAuditaComDivergenciaSaiComExitDataset` (deriva injetada pelo seam); `TestCountersRemotoChamaARota` (httptest, como os testes de `postaMutacao`); `TestCountersComServidorNoArSaiComExit3`.
 

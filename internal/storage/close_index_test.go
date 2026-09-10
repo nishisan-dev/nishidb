@@ -30,7 +30,7 @@ import (
 func abreComBitmap(t *testing.T, campo string) (*storage.Store, types.FieldID) {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "ds")
-	st, err := storage.Open(storage.Options{Dir: dir, CamposIndexadosPorNome: []string{campo}})
+	st, err := storage.Open(storage.Options{Dir: dir, IndexedFieldsByName: []string{campo}})
 	if err != nil {
 		t.Fatal(err)
 	}

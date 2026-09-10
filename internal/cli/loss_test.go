@@ -13,7 +13,7 @@ import (
 // colapsava os dois num único mapa de "descartados" e terminava com exit 0: a
 // row sumia e `$?` dizia sucesso, que é a definição de perda silenciosa.
 //
-// eventoGigante tem um VALOR acima de types.MaxIndexedValueBytes num campo
+// eventoGigante tem um VALOR acima de types.MaxIndexedValueBytes num field
 // com índice bitmap. Até o M1 essa era a rota de FALHA (balde 2), porque o
 // erro caía em STORAGE_ERROR por falta de categoria melhor. No M2 ele é a
 // rota de DESCARTE: um atributo RADIUS de 70 KiB é culpa do evento, e o §101
@@ -24,8 +24,8 @@ func eventoGigante() string {
 
 // eventoComNomeDeCampoGigante é a rota de FALHA que sobrou, e é
 // qualitativamente diferente: o teto violado não é de um VALOR, é do NOME do
-// campo no dicionário. Um valor grande é dado legítimo mal dimensionado; um
-// nome de campo de 64 KiB é produtor emitindo lixo estrutural, e cada um
+// field no dicionário. Um valor grande é dado legítimo mal dimensionado; um
+// nome de field de 64 KiB é produtor emitindo lixo estrutural, e cada um
 // desses consumiria permanentemente um slot do dicionário do dataset. Pedir
 // atenção humana em vez de descartar e seguir é conservador na direção certa.
 func eventoComNomeDeCampoGigante() string {
@@ -72,9 +72,9 @@ func TestEventoNaoAplicadoPorFalhaTemExitCodeProprio(t *testing.T) {
 	code := a.rodaComEntrada(entrada,
 		"ingest", "--config", a.config, "--dataset", "radius_sessions", "--input", "-")
 
-	if code != cli.ExitPerdaDeDados {
+	if code != cli.ExitDataLoss {
 		t.Errorf("code = %d, want %d (perda de dado): a ingestão perdeu uma row e reportou sucesso\n%s",
-			code, cli.ExitPerdaDeDados, a.stderr.String())
+			code, cli.ExitDataLoss, a.stderr.String())
 	}
 	msg := a.stderr.String()
 	if !strings.Contains(msg, "3 lidos, 2 aplicados") {
@@ -131,8 +131,8 @@ func TestDescarteEFalhaSaoReportadosSeparadamente(t *testing.T) {
 	}, "\n") + "\n"
 
 	if code := a.rodaComEntrada(entrada,
-		"ingest", "--config", a.config, "--dataset", "radius_sessions", "--input", "-"); code != cli.ExitPerdaDeDados {
-		t.Errorf("code = %d, want %d\n%s", code, cli.ExitPerdaDeDados, a.stderr.String())
+		"ingest", "--config", a.config, "--dataset", "radius_sessions", "--input", "-"); code != cli.ExitDataLoss {
+		t.Errorf("code = %d, want %d\n%s", code, cli.ExitDataLoss, a.stderr.String())
 	}
 	msg := a.stderr.String()
 	if !strings.Contains(msg, "1 descartados por categoria: INVALID_JSON=1") {

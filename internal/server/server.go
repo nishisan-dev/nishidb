@@ -381,26 +381,26 @@ func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*
 	// definições precisam do schema, e o replay da recovery precisa das
 	// definições. É o mesmo Compile de sempre, no mesmo dicionário — só que
 	// antes do replay.
-	comp := counters.NovoCompilador(spec)
+	comp := counters.NewCompiler(spec)
 	st, err := storage.Open(storage.Options{
-		Dir:                    dir,
-		Dataset:                spec.Name,
-		SegmentSize:            s.cfg.SegmentSize(),
-		CamposIndexadosPorNome: indexados,
-		ColunasDerivadas:       spec.DerivedColumnNames(),
-		Log:                    log,
-		Metrics:                s.reg,
-		TTLAtivo:               len(spec.Materialization.TTLRules) > 0,
-		DuracaoDeFundo:         spec.Materialization.FallbackDuration,
-		CampoDeEscrita:         schema.WriteInstantFieldName,
-		CampoDePrazo:           schema.TTLFieldName,
-		SnapshotMaxBytes:       s.cfg.SnapshotMaxBytes(),
-		CompilaContadores:      comp.Callback(),
+		Dir:                             dir,
+		Dataset:                         spec.Name,
+		SegmentSize:                     s.cfg.SegmentSize(),
+		IndexedFieldsByName:             indexados,
+		DerivedColumnNames:              spec.DerivedColumnNames(),
+		Log:                             log,
+		Metrics:                         s.reg,
+		ActiveTTL:                       len(spec.Materialization.TTLRules) > 0,
+		FallbackDuration:                spec.Materialization.FallbackDuration,
+		WriteInstantFieldName:           schema.WriteInstantFieldName,
+		TTLFieldName:                    schema.TTLFieldName,
+		SnapshotMaxBytes:                s.cfg.SnapshotMaxBytes(),
+		CompileCountersCallbackFunction: comp.Callback(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("dataset %q: %w", spec.Name, err)
 	}
-	compilado := comp.Compilado()
+	compilado := comp.Compiled()
 	if compilado == nil {
 		return nil, fechandoStore(st, fmt.Errorf("dataset %q: o Open não compilou o schema", spec.Name))
 	}
@@ -570,7 +570,7 @@ func (s *Servidor) ingestaoHabilitada(d *dataset) bool {
 func (s *Servidor) rodaIngestao(ctx context.Context, d *dataset) {
 	log := s.log.Dataset(d.nome)
 
-	cfg, err := kafka.Resolve(d.nome, d.spec.Source.Kafka, d.spec.Errors)
+	cfg, err := kafka.ResolveKafkaConfig(d.nome, d.spec.Source.Kafka, d.spec.Errors)
 	if err != nil {
 		d.falha(err)
 		log.Error("ingestao.nao_subiu", "a ingestão não pôde subir; as consultas seguem de pé (§51)",
@@ -628,7 +628,7 @@ func (s *Servidor) rodaIngestao(ctx context.Context, d *dataset) {
 	d.trips, d.desistiu = trips, desistiu
 	d.mu.Unlock()
 
-	tentativas := cfg.WatchdogTentativas
+	tentativas := cfg.WatchdogAttempts
 	for tentativa := 0; ; tentativa++ {
 		cons, err := kafka.Abre(ctx, cfg, opcoes)
 		if err != nil {

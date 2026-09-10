@@ -125,7 +125,7 @@ func (s *Store) bytesDoIndicePorSegmento() int64 {
 // Chamada por quem já segura o retPassadaMu, e só por ele: os quatro números
 // saem da MESMA varredura que decide a fila, então publicá-los de outro lugar
 // exigiria uma segunda conta de "este segmento deve ter índice?" — que é
-// exatamente o moinho que a janela-parâmetro existe para impedir, agora com a
+// exatamente o moinho que a janela-parâmetro existe para impedir, now com a
 // métrica como terceiro discordante.
 //
 // Os quatro são atômicos INDEPENDENTES, então uma raspagem pode apanhar dois

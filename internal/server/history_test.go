@@ -426,10 +426,10 @@ func semeiaHistorico(t *testing.T, a *ambiente, nome string, comCampo, semCampo 
 		t.Fatal(err)
 	}
 	base, err := storage.Open(storage.Options{
-		Dir:                    cfg.DatasetRootDir(nome),
-		Dataset:                nome,
-		SegmentSize:            cfg.SegmentSize(),
-		CamposIndexadosPorNome: schema.IndexedFieldNames(spec),
+		Dir:                 cfg.DatasetRootDir(nome),
+		Dataset:             nome,
+		SegmentSize:         cfg.SegmentSize(),
+		IndexedFieldsByName: schema.IndexedFieldNames(spec),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -446,13 +446,13 @@ func semeiaHistorico(t *testing.T, a *ambiente, nome string, comCampo, semCampo 
 	}
 	dirIrma := cfg.DatasetRootDir(specIrma.Name)
 	hist, err := storage.Open(storage.Options{
-		Dir:                    dirIrma,
-		Dataset:                specIrma.Name,
-		SegmentSize:            segmentoDaIrma,
-		Modo:                   storage.ModoHistorico,
-		DictCompartilhado:      base.FieldDict(),
-		CamposIndexadosPorNome: schema.IndexedFieldNames(specIrma),
-		CampoDeEscrita:         schema.WriteInstantFieldName,
+		Dir:                   dirIrma,
+		Dataset:               specIrma.Name,
+		SegmentSize:           segmentoDaIrma,
+		Mode:                  storage.HistoryMode,
+		SharedDictionary:      base.FieldDict(),
+		IndexedFieldsByName:   schema.IndexedFieldNames(specIrma),
+		WriteInstantFieldName: schema.WriteInstantFieldName,
 	})
 	if err != nil {
 		t.Fatal(err)

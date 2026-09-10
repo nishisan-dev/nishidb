@@ -54,9 +54,9 @@ var reTempo = regexp.MustCompile(`em \d+(\.\d+)?[a-zµ]+ \(\d+ ev/s\)`)
 func normalizaTempos(s string) string { return reTempo.ReplaceAllString(s, "em T (R ev/s)") }
 
 // comandoESaida separa um bloco ```console em (comando, saída esperada). O
-// comando continua na linha seguinte por dois motivos: '\' no fim (quebra de
+// comando continua na line seguinte por dois motivos: '\' no fim (quebra de
 // shell) ou aspas ainda ABERTAS — que é o caso do exemplo de erro, cujo SQL
-// ocupa duas linhas de propósito, para mostrar linha e coluna.
+// ocupa duas linhas de propósito, para mostrar line e coluna.
 func comandoESaida(bloco string) (cmd string, saida string) {
 	var esperado []string
 	emComando := false
@@ -153,7 +153,7 @@ func TestQuickstartDoREADMEExecuta(t *testing.T) {
 }
 
 // eventosEResumo separa o bloco `cat eventos.ndjson` + `nishidb ingest` nas
-// duas partes: o corpus exibido e a linha de resumo documentada.
+// duas partes: o corpus exibido e a line de resumo documentada.
 func eventosEResumo(t *testing.T, bloco string) (eventos, resumo string) {
 	t.Helper()
 	var ev []string
@@ -176,7 +176,7 @@ func eventosEResumo(t *testing.T, bloco string) (eventos, resumo string) {
 	return strings.Join(ev, "\n") + "\n", resumo
 }
 
-// sqlDoComando extrai o SQL entre aspas duplas da linha de comando documentada.
+// sqlDoComando extrai o SQL entre aspas duplas da line de comando documentada.
 func sqlDoComando(cmd string) (string, bool) {
 	i := strings.Index(cmd, `"`)
 	j := strings.LastIndex(cmd, `"`)

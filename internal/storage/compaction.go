@@ -186,7 +186,7 @@ func (s *Store) reapendaSeVivo(seg, off uint32, rec types.Record) (copiado bool,
 	// pega o resto.
 	payload, flagsSaida := rec.Payload, flags
 	expirou := false
-	if s.escritas != nil && flags&types.FlagTombstone == 0 && s.prazoVencido(rec.RowID, s.relogioDaExpiracaoOportunista()) {
+	if s.writes != nil && flags&types.FlagTombstone == 0 && s.prazoVencido(rec.RowID, s.relogioDaExpiracaoOportunista()) {
 		lapide, err := s.montaLapide(rec.Payload)
 		if err != nil {
 			return false, 0, err
@@ -230,7 +230,7 @@ func (s *Store) reapendaSeVivo(seg, off uint32, rec types.Record) (copiado bool,
 		return false, 0, s.failWriter(err)
 	}
 	if expirou {
-		s.expiradas.Add(1)
+		s.expiredCount.Add(1)
 	}
 	return true, len(buf), nil
 }
@@ -386,7 +386,7 @@ func (s *Store) compactaSegmento(ctx context.Context, seg uint32) (copiados uint
 // se move no checkpoint: um segmento selado depois do último checkpoint ainda
 // não tem entrada nele, e responder "não sei o tamanho" logo para o segmento
 // que a varredura acabou de ler seria trocar a medida por uma coincidência de
-// agenda. Um readdir por segmento compactado é ruído ao lado das milhares de
+// schedule. Um readdir por segmento compactado é ruído ao lado das milhares de
 // leituras da varredura que acabou de rodar.
 func (s *Store) tamanhoDoSegmento(seg uint32) (int64, error) {
 	refs, err := segment.ListSegments(filepath.Join(s.opts.Dir, "data"))
@@ -431,7 +431,7 @@ func (s *Store) tamanhoDoSegmento(seg uint32) (int64, error) {
 //  3. Checkpoint      o manifest é reconstruído a partir do ListSegments, que
 //     já não enxerga o arquivo. Daqui em diante nenhum estado
 //     durável referencia o segmento.
-//  4. unlink          só agora os bytes saem, e o que um crash pode deixar é
+//  4. unlink          só now os bytes saem, e o que um crash pode deixar é
 //     um arquivo que ninguém referencia — resíduo, não perda.
 //
 // Inverter 3 e 4 é a troca que perde dado: o unlink com o manifest ainda
@@ -858,7 +858,7 @@ func (s *Store) rodaUmaPassadaClaimada(ctx context.Context, ratio float64) error
 	return err
 }
 
-// tentaClaimarPassada reivindica o direito de rodar UMA passada agora.
+// tentaClaimarPassada reivindica o direito de rodar UMA passada now.
 // manual escolhe qual das duas flags do single-flight fino
 // (compPassadaEmVoo para o laço, compManualEmVoo para CompactaUmaVez) checar
 // e setar; devolve false se a OUTRA já estiver em voo, OU se compEncerrando

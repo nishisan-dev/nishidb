@@ -140,9 +140,9 @@ var camposIndexados = []string{"Acct-Status-Type", "Framed-Protocol", "Acct-Term
 func (ig *integracao) abre() {
 	ig.t.Helper()
 	st, err := storage.Open(storage.Options{
-		Dir:                    ig.dir,
-		CamposIndexadosPorNome: camposIndexados,
-		EstimatedRows:          10_000,
+		Dir:                 ig.dir,
+		IndexedFieldsByName: camposIndexados,
+		EstimatedRows:       10_000,
 	})
 	if err != nil {
 		ig.t.Fatal(err)

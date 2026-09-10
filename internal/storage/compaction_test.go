@@ -475,7 +475,7 @@ func TestCopyForwardRecusaResiduoSemLocationEmVezDeRessuscitarOEstado(t *testing
 // descrever. A varredura da Task 5 recebe este erro e para — é o sentinela
 // que separa "pule este record" de "pare a compaction".
 func TestCopyForwardRecusaComOWriterEmModoFalho(t *testing.T) {
-	s := openStore(t, Options{CamposIndexados: []types.FieldID{fldStatus}})
+	s := openStore(t, Options{IndexedFields: []types.FieldID{fldStatus}})
 	const key = "cf-sticky"
 	rowID, _ := mustPut(t, s, key, 1, statusPayload(t, s, key, "Start", 1), nil)
 	origSeg, origOff := localizacaoDaRow(t, s, rowID)
@@ -911,7 +911,7 @@ func TestCopyForwardQueRotacionaAtualizaOSegmentoCorrentePublicado(t *testing.T)
 func abreComResiduoOrfaoNoSegmento1(t *testing.T) (*Store, string, uint64) {
 	t.Helper()
 	dir := t.TempDir()
-	opts := Options{Dir: dir, SegmentSize: 400, CamposIndexados: []types.FieldID{fldStatus}}
+	opts := Options{Dir: dir, SegmentSize: 400, IndexedFields: []types.FieldID{fldStatus}}
 
 	s := audOpen(t, opts)
 	mustPut(t, s, "lv", 1, statusPayload(t, s, "lv", "Start", 1), nil)
@@ -2459,10 +2459,10 @@ func mataOWriter(t *testing.T, s *Store) {
 func TestCompactionEmBackgroundParaNaPrimeiraFalhaDoWriter(t *testing.T) {
 	var registro registroDeLog
 	s := openStore(t, Options{
-		Dir:             t.TempDir(),
-		SegmentSize:     8 << 10,
-		CamposIndexados: []types.FieldID{fldStatus},
-		Log:             logging.New(&registro, logging.FormatText, slog.LevelInfo),
+		Dir:           t.TempDir(),
+		SegmentSize:   8 << 10,
+		IndexedFields: []types.FieldID{fldStatus},
+		Log:           logging.New(&registro, logging.FormatText, slog.LevelInfo),
 	})
 	corpusDeSegmentosSelados(t, s, 40, 30)
 	if eleitos := s.candidatos(0.5); len(eleitos) == 0 {
@@ -2998,10 +2998,10 @@ func TestMedidorDaCompactionSobeComOLacoEDesceQuandoEleAcaba(t *testing.T) {
 func TestMedidorDaCompactionDesceQuandoOLacoParaSozinho(t *testing.T) {
 	var registro registroDeLog
 	s := openStore(t, Options{
-		Dir:             t.TempDir(),
-		SegmentSize:     8 << 10,
-		CamposIndexados: []types.FieldID{fldStatus},
-		Log:             logging.New(&registro, logging.FormatText, slog.LevelInfo),
+		Dir:           t.TempDir(),
+		SegmentSize:   8 << 10,
+		IndexedFields: []types.FieldID{fldStatus},
+		Log:           logging.New(&registro, logging.FormatText, slog.LevelInfo),
 	})
 	corpusDeSegmentosSelados(t, s, 40, 30)
 	if eleitos := s.candidatos(0.5); len(eleitos) == 0 {

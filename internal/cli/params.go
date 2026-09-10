@@ -11,7 +11,7 @@ import (
 // listaDeParametros implementa flag.Value para --param <tipo>:<valor>,
 // repetível.
 //
-// A ordem da linha de comando é a ordem posicional dos `?` na query, e flag
+// A ordem da line de comando é a ordem posicional dos `?` na query, e flag
 // chama Set na ordem em que os argumentos aparecem — o append preserva. Nada
 // aqui pode virar map.
 type listaDeParametros []protocol.Param
@@ -48,7 +48,7 @@ func (l *listaDeParametros) Set(s string) error {
 	return nil
 }
 
-// valorDeWire monta o json.RawMessage que o campo "value" do protocolo espera.
+// valorDeWire monta o json.RawMessage que o field "value" do protocolo espera.
 //
 // O int64 e o double vão VERBATIM, sem passar por strconv aqui. É o mesmo
 // motivo de protocol.Param.Value ser json.RawMessage e não any: decodificar

@@ -137,7 +137,7 @@ func TestAmostrasDeMaterializacaoPublicamAsSeries(t *testing.T) {
 func TestSnapshotExpiradoSaiComCodigoProprioENaoComoInterno(t *testing.T) {
 	// O erro chega embrulhado, como chega de verdade: o executor o propaga
 	// pelo it.Err() depois de o storage o devolver na leitura de uma row.
-	err := fmt.Errorf("executor: leitura da row 42: %w", storage.ErrSnapshotExpirado)
+	err := fmt.Errorf("executor: leitura da row 42: %w", storage.ErrExpiredSnapshot)
 
 	if got := codigoDeErroDeQuery(err); got != protocol.CodeSnapshotExpired {
 		t.Errorf("codigoDeErroDeQuery = %q, quero %q", got, protocol.CodeSnapshotExpired)

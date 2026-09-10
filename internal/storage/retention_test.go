@@ -28,12 +28,12 @@ func parComRetencao(t *testing.T, segSize int64) (*Store, *Store, *relogioFalso)
 	base := openStore(t, Options{})
 	dir := t.TempDir()
 	hist := openStore(t, Options{
-		Dir:               dir,
-		Dataset:           "events_history",
-		SegmentSize:       segSize,
-		Modo:              ModoHistorico,
-		DictCompartilhado: base.FieldDict(),
-		CampoDeEscrita:    "_writtenAt",
+		Dir:                   dir,
+		Dataset:               "events_history",
+		SegmentSize:           segSize,
+		Mode:                  HistoryMode,
+		SharedDictionary:      base.FieldDict(),
+		WriteInstantFieldName: "_writtenAt",
 	})
 	rel := &relogioFalso{t: time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)}
 	hist.UsaRelogio(rel.agora)
@@ -257,7 +257,7 @@ func TestAMarcaEhDuravelDepoisDaPurga(t *testing.T) {
 	dir := t.TempDir()
 	hist, err := Open(Options{
 		Dir: dir, Dataset: "events_history", SegmentSize: 512,
-		Modo: ModoHistorico, DictCompartilhado: base.FieldDict(), CampoDeEscrita: "_writtenAt",
+		Mode: HistoryMode, SharedDictionary: base.FieldDict(), WriteInstantFieldName: "_writtenAt",
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -280,7 +280,7 @@ func TestAMarcaEhDuravelDepoisDaPurga(t *testing.T) {
 
 	volta := openStore(t, Options{
 		Dir: dir, Dataset: "events_history", SegmentSize: 512,
-		Modo: ModoHistorico, DictCompartilhado: base.FieldDict(), CampoDeEscrita: "_writtenAt",
+		Mode: HistoryMode, SharedDictionary: base.FieldDict(), WriteInstantFieldName: "_writtenAt",
 	})
 	if got := volta.RowIDBase(); got != marca {
 		t.Fatalf("marca = %d depois do restart, quer %d", got, marca)

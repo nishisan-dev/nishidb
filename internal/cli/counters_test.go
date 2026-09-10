@@ -34,8 +34,8 @@ func TestCountersValidaAsFlags(t *testing.T) {
 	}
 	for _, c := range casos {
 		t.Run(c.nome, func(t *testing.T) {
-			if code := a.roda(c.args...); code != cli.ExitUso {
-				t.Fatalf("exit = %d, quer %d\n%s", code, cli.ExitUso, a.stderr.String())
+			if code := a.roda(c.args...); code != cli.ExitUsageError {
+				t.Fatalf("exit = %d, quer %d\n%s", code, cli.ExitUsageError, a.stderr.String())
 			}
 			if !strings.Contains(a.stderr.String(), c.quer) {
 				t.Fatalf("stderr não explica (%q):\n%s", c.quer, a.stderr.String())
@@ -158,8 +158,8 @@ func TestCountersRemotoChamaAsRotas(t *testing.T) {
 		t.Errorf("depois da auditoria a listagem remota tinha de mostrá-la:\n%s", a.stdout.String())
 	}
 	// Dataset que o servidor não serve.
-	if code := a.roda("counters", "--server", a.endereco(), "--dataset", "nao_existe"); code != cli.ExitUso {
-		t.Fatalf("dataset desconhecido = %d, quer %d", code, cli.ExitUso)
+	if code := a.roda("counters", "--server", a.endereco(), "--dataset", "nao_existe"); code != cli.ExitUsageError {
+		t.Fatalf("dataset desconhecido = %d, quer %d", code, cli.ExitUsageError)
 	}
 	// E o caminho local, com o servidor no ar, sai com 3 e aponta o --server.
 	if code := a.roda("counters", "--config", a.config, "--dataset", "servicos"); code != cli.ExitDataset {
@@ -170,7 +170,7 @@ func TestCountersRemotoChamaAsRotas(t *testing.T) {
 	}
 }
 
-// colunasDoContador devolve LINHAS e TOTAL da linha do contador nomeado na
+// colunasDoContador devolve LINHAS e TOTAL da line do contador nomeado na
 // tabela do `counters`. A tabela sai alinhada por um tabwriter, então as
 // colunas se separam por espaços e nenhum dos três primeiros campos os contém.
 func colunasDoContador(t *testing.T, saida, nome string) [2]string {

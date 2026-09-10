@@ -3,10 +3,11 @@ package storage
 import (
 	"context"
 	"errors"
-	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
-	"github.com/nishisan-dev/nishidb/internal/types"
 	"testing"
 	"time"
+
+	"github.com/nishisan-dev/nishidb/internal/storage/encoding"
+	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
 // A varredura tem de enxergar o universo do instante em que COMEÇOU.
@@ -312,8 +313,8 @@ func TestCompactionNaoLapidaLinhaVisivelAoSnapshotMaisAntigo(t *testing.T) {
 	// a compaction não elege nada — a D6 nunca elege o corrente.
 	s := openStore(t, Options{
 		Dir: t.TempDir(), SegmentSize: 8 << 10,
-		TTLAtivo: true, DuracaoDeFundo: time.Hour,
-		CampoDeEscrita: "_writtenAt", CampoDePrazo: "_expiresIn",
+		ActiveTTL: true, FallbackDuration: time.Hour,
+		WriteInstantFieldName: "_writtenAt", TTLFieldName: "_expiresIn",
 	})
 	rel := &relogioDeTeste{t: time.Date(2026, 8, 22, 20, 0, 0, 0, time.UTC)}
 	s.UsaRelogio(rel.agora)
@@ -445,7 +446,7 @@ func TestSnapshotQueEstouraOTetoEhInvalidadoEAIngestaoContinua(t *testing.T) {
 		}
 	}
 
-	if _, _, _, err := s.GetByRowID(snap, id, nil); !errors.Is(err, ErrSnapshotExpirado) {
+	if _, _, _, err := s.GetByRowID(snap, id, nil); !errors.Is(err, ErrExpiredSnapshot) {
 		t.Errorf("GetByRowID = %v, quero ErrSnapshotExpirado: o snapshot invalidado respondeu como se ainda valesse", err)
 	}
 

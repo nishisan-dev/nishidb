@@ -13,8 +13,8 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/storage/checkpoint"
 )
 
-// leitorDeLinhas entrega UMA linha por Read e, esgotadas as linhas, devolve
-// erroFinal. Um Read por linha é o que torna determinístico o ponto em que o
+// leitorDeLinhas entrega UMA line por Read e, esgotadas as linhas, devolve
+// erroFinal. Um Read por line é o que torna determinístico o ponto em que o
 // erro (ou o cancelamento de aoEntregarAUltima) alcança o laço de ingestão:
 // com um strings.Reader o Scanner leria o arquivo inteiro de uma vez e não
 // haveria "meio da entrada".
@@ -48,7 +48,7 @@ func rodaIngestCom(a *ambiente, ctx context.Context, entrada io.Reader) int {
 	a.stdout.Reset()
 	a.stderr.Reset()
 	return cli.Run([]string{"ingest", "--config", a.config, "--dataset", "radius_sessions", "--input", "-"},
-		cli.Ambiente{Stdin: entrada, Stdout: &a.stdout, Stderr: &a.stderr, Ctx: ctx})
+		cli.CLIContext{Stdin: entrada, Stdout: &a.stdout, Stderr: &a.stderr, Ctx: ctx})
 }
 
 func manifestDo(t *testing.T, a *ambiente) *checkpoint.Manifest {
@@ -76,9 +76,9 @@ func TestErroDeLeituraNaoMascaraPerdaDeDado(t *testing.T) {
 
 	code := rodaIngestCom(a, context.Background(), leitor)
 
-	if code != cli.ExitPerdaDeDados {
+	if code != cli.ExitDataLoss {
 		t.Errorf("code = %d, want %d (perda de dado, não erro de uso)\n%s",
-			code, cli.ExitPerdaDeDados, a.stderr.String())
+			code, cli.ExitDataLoss, a.stderr.String())
 	}
 	msg := a.stderr.String()
 	// O erro de leitura continua VISÍVEL: trocar o código enganoso por
@@ -106,8 +106,8 @@ func TestEntradaInterrompidaSemFalhaDeEventoAindaEPerda(t *testing.T) {
 
 	code := rodaIngestCom(a, context.Background(), leitor)
 
-	if code != cli.ExitPerdaDeDados {
-		t.Errorf("code = %d, want %d\n%s", code, cli.ExitPerdaDeDados, a.stderr.String())
+	if code != cli.ExitDataLoss {
+		t.Errorf("code = %d, want %d\n%s", code, cli.ExitDataLoss, a.stderr.String())
 	}
 	if msg := a.stderr.String(); !strings.Contains(msg, "ENTRADA INTERROMPIDA") ||
 		!strings.Contains(msg, "stdin fechou") {
@@ -144,8 +144,8 @@ func TestLinhaLongaDemaisInterrompeAEntradaComPerda(t *testing.T) {
 
 	code := rodaIngestCom(a, context.Background(), entrada)
 
-	if code != cli.ExitPerdaDeDados {
-		t.Errorf("code = %d, want %d\n%s", code, cli.ExitPerdaDeDados, a.stderr.String())
+	if code != cli.ExitDataLoss {
+		t.Errorf("code = %d, want %d\n%s", code, cli.ExitDataLoss, a.stderr.String())
 	}
 	if msg := a.stderr.String(); !strings.Contains(msg, "ENTRADA INTERROMPIDA") ||
 		!strings.Contains(msg, "token too long") {
@@ -175,9 +175,9 @@ func TestInterrupcaoNaoApagaAPerdaJaApurada(t *testing.T) {
 
 	code := rodaIngestCom(a, ctx, leitor)
 
-	if code != cli.ExitPerdaDeDados {
+	if code != cli.ExitDataLoss {
 		t.Errorf("code = %d, want %d (a perda vence o sinal)\n%s",
-			code, cli.ExitPerdaDeDados, a.stderr.String())
+			code, cli.ExitDataLoss, a.stderr.String())
 	}
 	msg := a.stderr.String()
 	// A interrupção continua visível no stderr — o código de saída escolhe o

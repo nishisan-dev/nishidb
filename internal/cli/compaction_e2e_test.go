@@ -182,7 +182,7 @@ func novaBancadaE2E(t *testing.T) *bancadaE2E {
 // novaBancadaE2EComConfig é o novaBancadaE2E de baixo, parametrizado pelo
 // nishidb.yaml (Task B5, Fase 11): o compact MANUAL do §96 precisa da MESMA
 // montagem — broker kfake, spec do dataset, binário compilado — com
-// storage.compaction.enabled: false, o caso de uso central da rota (o
+// storage.compaction.enabled: false, o caso de usage central da rota (o
 // operador desligou o laço automático). Sem esta separação, o e2e do compact
 // manual duplicaria a montagem inteira em vez de trocar só o YAML.
 func novaBancadaE2EComConfig(t *testing.T, configYAML string) *bancadaE2E {
@@ -307,7 +307,7 @@ func (b *bancadaE2E) produzRodada() int64 {
 // §53 devolve lista vazia.
 //
 // Os erros de produção são engolidos DE PROPÓSITO: quem chama já não é a
-// goroutine do teste (t.Fatalf de fora dela é uso indevido do testing), e o que
+// goroutine do teste (t.Fatalf de fora dela é usage indevido do testing), e o que
 // interessa aqui é manter pressão, não auditar cada lote. A falha de verdade
 // aparece no oráculo — o processo que não encerra, a row que não volta.
 func (b *bancadaE2E) produzSemParar() (parar func()) {
@@ -445,7 +445,7 @@ func (b *bancadaE2E) consulta(sql string) map[string]int64 {
 	b.t.Helper()
 	var saida, erro bytes.Buffer
 	code := cli.Run([]string{"query", "--server", b.endereco(), "--dataset", e2eDataset, sql},
-		cli.Ambiente{Stdin: strings.NewReader(""), Stdout: &saida, Stderr: &erro, Ctx: context.Background()})
+		cli.CLIContext{Stdin: strings.NewReader(""), Stdout: &saida, Stderr: &erro, Ctx: context.Background()})
 	if code != 0 {
 		b.t.Fatalf("a consulta remota %q saiu com %d: %s", sql, code, erro.String())
 	}
@@ -476,7 +476,7 @@ func decodificaLinhas(t *testing.T, ndjson string) map[string]int64 {
 }
 
 // metrica raspa o /metrics pela porta HTTP e devolve o valor da série do
-// dataset. É a leitura do OPERADOR — nenhum campo Go, nenhum atalho por dentro
+// dataset. É a leitura do OPERADOR — nenhum field Go, nenhum atalho por dentro
 // do processo, que é o que o item 3 do critério exige.
 func (b *bancadaE2E) metrica(nome string) float64 {
 	b.t.Helper()
@@ -593,7 +593,7 @@ func (b *bancadaE2E) consultaLocal() map[string]int64 {
 	var saida, erro bytes.Buffer
 	code := cli.Run([]string{"query", "--config", b.config, "--dataset", e2eDataset,
 		"SELECT id, seq FROM " + e2eDataset},
-		cli.Ambiente{Stdin: strings.NewReader(""), Stdout: &saida, Stderr: &erro, Ctx: context.Background()})
+		cli.CLIContext{Stdin: strings.NewReader(""), Stdout: &saida, Stderr: &erro, Ctx: context.Background()})
 	if code != 0 {
 		b.t.Fatalf("a consulta após a reabertura saiu com %d: %s", code, erro.String())
 	}
@@ -1039,7 +1039,7 @@ func TestCompactManualPeloCLIReduzDiscoNumaBancadaPequena(t *testing.T) {
 
 	var saida, erro bytes.Buffer
 	code := cli.Run([]string{"compact", "--server", b.endereco()},
-		cli.Ambiente{Stdin: strings.NewReader(""), Stdout: &saida, Stderr: &erro, Ctx: context.Background()})
+		cli.CLIContext{Stdin: strings.NewReader(""), Stdout: &saida, Stderr: &erro, Ctx: context.Background()})
 	if code != 0 {
 		t.Fatalf("compact saiu %d: %s", code, erro.String())
 	}

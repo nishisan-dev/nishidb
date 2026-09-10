@@ -53,9 +53,9 @@ func TestAgendaConcordaComPrazoVencidoSobCargaAleatoria(t *testing.T) {
 
 	confere := func(momento string) {
 		t.Helper()
-		agora := uint64(s.agora().UnixMilli())
+		agora := uint64(s.now().UnixMilli())
 		for _, id := range ids {
-			venc := s.agenda.Get(id)
+			venc := s.schedule.Get(id)
 			agendadoVencido := venc != rowindex.Never && venc <= agora
 			// Carencia é a linha sem instante conhecido: ela pede atenção do
 			// coletor sem ter vencido, e prazoVencido diz false para ela com
@@ -63,10 +63,10 @@ func TestAgendaConcordaComPrazoVencidoSobCargaAleatoria(t *testing.T) {
 			if venc == rowindex.Grace {
 				continue
 			}
-			if agendadoVencido != s.prazoVencido(id, s.agora()) {
-				ms, conhecido := s.escritas.Get(id)
+			if agendadoVencido != s.prazoVencido(id, s.now()) {
+				ms, conhecido := s.writes.Get(id)
 				t.Fatalf("%s: row %d diverge — agenda diz vencida=%v (venc=%d, agora=%d), prazoVencido diz %v (escrita=%d conhecido=%v, duração=%v)",
-					momento, id, agendadoVencido, venc, agora, s.prazoVencido(id, s.agora()), ms, conhecido, s.duracaoEfetiva(id))
+					momento, id, agendadoVencido, venc, agora, s.prazoVencido(id, s.now()), ms, conhecido, s.duracaoEfetiva(id))
 			}
 		}
 	}
@@ -76,7 +76,7 @@ func TestAgendaConcordaComPrazoVencidoSobCargaAleatoria(t *testing.T) {
 		rel.avanca(salto)
 		confere(fmt.Sprintf("salto %d (+%v)", i, salto))
 	}
-	if err := s.agenda.Check(); err != nil {
+	if err := s.schedule.Check(); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -91,7 +91,7 @@ func TestAgendaConcordaComPrazoVencidoSobCargaAleatoria(t *testing.T) {
 func TestLinhaTombstonadaSaiDaAgenda(t *testing.T) {
 	s, rel := storeComExpiracao(t, t.TempDir(), time.Hour)
 	id, _ := mustPut(t, s, "A", 1, payloadComEscrita(t, s, "A", "Start", rel.t), nil)
-	if s.agenda.Get(id) == rowindex.Never {
+	if s.schedule.Get(id) == rowindex.Never {
 		t.Fatal("a linha nasceu fora da agenda")
 	}
 	rel.avanca(2 * time.Hour)
@@ -99,12 +99,12 @@ func TestLinhaTombstonadaSaiDaAgenda(t *testing.T) {
 	if err != nil || !expirou {
 		t.Fatalf("Expira devolveu %v, %v", expirou, err)
 	}
-	if v := s.agenda.Get(id); v != rowindex.Never {
+	if v := s.schedule.Get(id); v != rowindex.Never {
 		t.Fatalf("a linha tombstonada continua agendada para %d", v)
 	}
 	// E a descida não a entrega mais, por mais longe que o relógio vá.
 	rel.avanca(1000 * time.Hour)
-	s.agenda.VisitExpired(uint64(s.agora().UnixMilli()), func(row types.RowID) bool {
+	s.schedule.VisitExpired(uint64(s.now().UnixMilli()), func(row types.RowID) bool {
 		if row == id {
 			t.Fatal("a descida entregou uma linha tombstonada")
 		}
@@ -117,11 +117,11 @@ func TestLinhaTombstonadaSaiDaAgenda(t *testing.T) {
 func TestEscritaNovaEmpurraOVencimentoAgendado(t *testing.T) {
 	s, rel := storeComExpiracao(t, t.TempDir(), time.Hour)
 	id, _ := mustPut(t, s, "A", 1, payloadComEscrita(t, s, "A", "Start", rel.t), nil)
-	primeiro := s.agenda.Get(id)
+	primeiro := s.schedule.Get(id)
 
 	rel.avanca(30 * time.Minute)
 	mustPut(t, s, "A", 2, payloadComEscrita(t, s, "A", "Run", rel.t), nil)
-	segundo := s.agenda.Get(id)
+	segundo := s.schedule.Get(id)
 
 	if segundo <= primeiro {
 		t.Fatalf("o vencimento não andou: %d → %d", primeiro, segundo)
@@ -140,21 +140,21 @@ func TestEscritaNovaEmpurraOVencimentoAgendado(t *testing.T) {
 // diferentes para o mesmo dataset conforme QUANDO ele foi aberto.
 func TestLinhaSemInstanteEhAgendadaParaACarencia(t *testing.T) {
 	s := openStore(t, Options{
-		Dir: t.TempDir(), TTLAtivo: true, DuracaoDeFundo: time.Hour,
-		CampoDeEscrita: "_writtenAt", CampoDePrazo: "_expiresIn",
+		Dir: t.TempDir(), ActiveTTL: true, FallbackDuration: time.Hour,
+		WriteInstantFieldName: "_writtenAt", TTLFieldName: "_expiresIn",
 	})
 	rel := &relogioDeTeste{t: time.Date(2026, 8, 22, 20, 0, 0, 0, time.UTC)}
 	s.UsaRelogio(rel.agora)
 
 	id, _ := mustPut(t, s, "legada", 1, payloadSemEscrita(t, s, "legada"), nil)
-	if v := s.agenda.Get(id); v != rowindex.Grace {
+	if v := s.schedule.Get(id); v != rowindex.Grace {
 		t.Fatalf("a linha sem instante foi agendada para %d, quer %d (carência)", v, rowindex.Grace)
 	}
 	// E depois da carência ela ganha vencimento de verdade.
 	if _, err := s.daCarencia(id); err != nil {
 		t.Fatal(err)
 	}
-	v := s.agenda.Get(id)
+	v := s.schedule.Get(id)
 	if v == rowindex.Grace || v == rowindex.Never {
 		t.Fatalf("depois da carência a linha continua em %d", v)
 	}
@@ -168,7 +168,7 @@ func TestLinhaSemInstanteEhAgendadaParaACarencia(t *testing.T) {
 func TestLinhaImortalNaoEntraNaAgenda(t *testing.T) {
 	s, rel := storeComExpiracao(t, t.TempDir(), 0) // sem duração de fundo
 	id, _ := mustPut(t, s, "A", 1, payloadComEscrita(t, s, "A", "Start", rel.t), nil)
-	if v := s.agenda.Get(id); v != rowindex.Never {
+	if v := s.schedule.Get(id); v != rowindex.Never {
 		t.Fatalf("linha sem prazo nenhum foi agendada para %d", v)
 	}
 }
@@ -217,8 +217,8 @@ func TestCheckpointDurabilizaAAgendaAntesDoManifest(t *testing.T) {
 // que precisam reabrir o MESMO diretório com parâmetros variados.
 func opcoesComExpiracao(dir string, d time.Duration) Options {
 	return Options{
-		Dir: dir, SegmentSize: 1 << 20, TTLAtivo: true, DuracaoDeFundo: d,
-		CampoDeEscrita: "_writtenAt", CampoDePrazo: "_expiresIn",
+		Dir: dir, SegmentSize: 1 << 20, ActiveTTL: true, FallbackDuration: d,
+		WriteInstantFieldName: "_writtenAt", TTLFieldName: "_expiresIn",
 	}
 }
 
@@ -288,7 +288,7 @@ func TestAgendaAusenteEhConstruidaNaAberturaSemLerRecord(t *testing.T) {
 	s2 := openStore(t, opcoesComExpiracao(dir, time.Hour))
 	s2.UsaRelogio(rel.agora)
 	for _, id := range ids {
-		if v := s2.agenda.Get(id); v != s2.vencimentoDe(id) {
+		if v := s2.schedule.Get(id); v != s2.vencimentoDe(id) {
 			t.Fatalf("row %d ficou em %d depois da construção, quer %d", id, v, s2.vencimentoDe(id))
 		}
 	}
@@ -311,7 +311,7 @@ func TestAgendaEhReconstruidaQuandoADuracaoDeFundoMuda(t *testing.T) {
 	s.UsaRelogio(rel.agora)
 	// Sem _expiresIn: a linha herda a duração de FUNDO, que é o que muda.
 	id, _ := mustPut(t, s, "A", 1, payloadComEscrita(t, s, "A", "Start", rel.t), nil)
-	antes := s.agenda.Get(id)
+	antes := s.schedule.Get(id)
 	if querido := uint64(base.Add(time.Hour).UnixMilli()); antes != querido {
 		t.Fatalf("vencimento inicial %d, quer %d", antes, querido)
 	}
@@ -325,7 +325,7 @@ func TestAgendaEhReconstruidaQuandoADuracaoDeFundoMuda(t *testing.T) {
 	// Reabre com OUTRA duração de fundo.
 	s2 := openStore(t, opcoesComExpiracao(dir, 10*time.Hour))
 	s2.UsaRelogio(rel.agora)
-	depois := s2.agenda.Get(id)
+	depois := s2.schedule.Get(id)
 	if querido := uint64(base.Add(10 * time.Hour).UnixMilli()); depois != querido {
 		t.Fatalf("depois de mudar a duração de fundo o vencimento é %d, quer %d (a agenda não foi reconstruída)",
 			depois, querido)
@@ -353,10 +353,10 @@ func TestAgendaCoerenteEhAdotadaSemReconstrucao(t *testing.T) {
 
 	s2 := openStore(t, opcoesComExpiracao(dir, time.Hour))
 	s2.UsaRelogio(rel.agora)
-	if s2.agendaReconstruida {
+	if s2.scheduleBuilt {
 		t.Fatal("a agenda foi reconstruída sem nenhum parâmetro ter mudado")
 	}
-	if v := s2.agenda.Get(id); v != s2.vencimentoDe(id) {
+	if v := s2.schedule.Get(id); v != s2.vencimentoDe(id) {
 		t.Fatalf("a agenda adotada diverge: %d != %d", v, s2.vencimentoDe(id))
 	}
 }
@@ -371,7 +371,7 @@ func TestAuditoriaReprovaAAgendaDivergente(t *testing.T) {
 	}
 	// Empurra a folha para o infinito: a linha continua vencendo pelos
 	// índices, mas o coletor nunca mais a alcança.
-	if err := s.agenda.Update(id, 0); err != nil {
+	if err := s.schedule.Update(id, 0); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.AuditaAgenda(); err == nil {
@@ -417,10 +417,10 @@ func TestAgendaQueNaoCobreODatasetEhReconstruida(t *testing.T) {
 
 	s2 := openStore(t, opcoesComExpiracao(dir, time.Hour))
 	s2.UsaRelogio(rel.agora)
-	if !s2.agendaReconstruida {
+	if !s2.scheduleBuilt {
 		t.Fatal("a agenda vazia foi adotada: nenhuma linha voltaria a vencer")
 	}
-	if v := s2.agenda.Get(id); v != s2.vencimentoDe(id) {
+	if v := s2.schedule.Get(id); v != s2.vencimentoDe(id) {
 		t.Fatalf("row %d ficou em %d, quer %d", id, v, s2.vencimentoDe(id))
 	}
 	if err := s2.AuditaAgenda(); err != nil {
@@ -532,7 +532,7 @@ func TestEntradaFrouxaEhCorrigidaNaPrimeiraVisita(t *testing.T) {
 
 	// Simula o que uma interrupção deixa: a folha promete um vencimento muito
 	// anterior ao real. A linha NÃO venceu — prazoVencido diz que não.
-	if err := s.agenda.Update(id, rowindex.FirstRealExpiry); err != nil {
+	if err := s.schedule.Update(id, rowindex.FirstRealExpiry); err != nil {
 		t.Fatal(err)
 	}
 	primeira, err := s.ExpiraUmaPassada(context.Background(), limitesDeTeste())
@@ -572,7 +572,7 @@ func TestAgendaEhReconstruidaPeloReplayDoTail(t *testing.T) {
 
 	s2, rel2 := storeComExpiracao(t, dir, time.Hour)
 	rel2.t = escrita
-	if v := s2.agenda.Get(id); v != uint64(escrita.Add(time.Hour).UnixMilli()) {
+	if v := s2.schedule.Get(id); v != uint64(escrita.Add(time.Hour).UnixMilli()) {
 		t.Fatalf("depois do replay a agenda diz %d, quer %d", v, escrita.Add(time.Hour).UnixMilli())
 	}
 	if err := s2.AuditaAgenda(); err != nil {
@@ -604,10 +604,10 @@ func TestCarenciaInterrompidaSeResolveNaVisitaSeguinte(t *testing.T) {
 
 	// O desencontro: o instante de escrita foi gravado e a agenda ficou no
 	// sentinela de carência, como se a queda tivesse acontecido entre os dois.
-	if err := s.escritas.Set(id, rel.t.UnixMilli()); err != nil {
+	if err := s.writes.Set(id, rel.t.UnixMilli()); err != nil {
 		t.Fatal(err)
 	}
-	if s.agenda.Get(id) != rowindex.Grace {
+	if s.schedule.Get(id) != rowindex.Grace {
 		t.Fatal("o cenário não montou: a agenda não está na carência")
 	}
 
@@ -618,7 +618,7 @@ func TestCarenciaInterrompidaSeResolveNaVisitaSeguinte(t *testing.T) {
 	if r.Carencias != 0 || r.Expiradas != 0 {
 		t.Fatalf("a passada agiu sobre uma linha que já tinha instante: %+v", r)
 	}
-	if v := s.agenda.Get(id); v != uint64(rel.t.Add(time.Hour).UnixMilli()) {
+	if v := s.schedule.Get(id); v != uint64(rel.t.Add(time.Hour).UnixMilli()) {
 		t.Fatalf("a agenda ficou em %d; a carência pendente não foi resolvida", v)
 	}
 	// E a linha vence no prazo, em vez de ficar presa no sentinela.
