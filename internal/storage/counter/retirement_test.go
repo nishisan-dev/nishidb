@@ -85,7 +85,7 @@ func TestGrupoSemRefsEhAposentadoDepoisDoPrazo(t *testing.T) {
 	if n, err := c.RetireEmptyGroups(clk.now()); err != nil || n != 1 {
 		t.Fatalf("depois do prazo: %d, %v", n, err)
 	}
-	if _, _, _, _, vivo := c.Group(1); vivo {
+	if _, _, _, _, live := c.Group(1); live {
 		t.Fatal("grupo aposentado não é vivo")
 	}
 	if _, ok := c.ByText([]byte("X")); ok {

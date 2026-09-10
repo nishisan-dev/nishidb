@@ -46,19 +46,19 @@ func TestDicionarioInternaEReabre(t *testing.T) {
 	if d2.Limit() != 4 || d2.LiveGroups() != 3 {
 		t.Fatalf("reabertura: limite %d vivos %d, quer 4 e 3", d2.Limit(), d2.LiveGroups())
 	}
-	for i, ch := range keys {
+	for i, key := range keys {
 		got, live := d2.Key(uint32(i + 1))
-		if !live || string(got) != string(ch) {
-			t.Fatalf("Key(%d) = %q, %v; quer %q, true", i+1, got, live, ch)
+		if !live || string(got) != string(key) {
+			t.Fatalf("Key(%d) = %q, %v; quer %q, true", i+1, got, live, key)
 		}
-		if id, ok := d2.ByKey(ch); !ok || id != uint32(i+1) {
-			t.Fatalf("ByKey(%q) = %d, %v", ch, id, ok)
+		if id, ok := d2.ByKey(key); !ok || id != uint32(i+1) {
+			t.Fatalf("ByKey(%q) = %d, %v", key, id, ok)
 		}
 	}
-	if _, vivo := d2.Key(0); vivo {
+	if _, live := d2.Key(0); live {
 		t.Fatal("id 0 é WithoutGroup, nunca vivo")
 	}
-	if _, vivo := d2.Key(4); vivo {
+	if _, live := d2.Key(4); live {
 		t.Fatal("id além do limite não é vivo")
 	}
 }
@@ -135,7 +135,7 @@ func TestDicionarioAposentaENuncaReemite(t *testing.T) {
 	}
 	// A aposentadoria é durável: sobrevive à reabertura.
 	d2 := openDict(t, path, 100)
-	if _, vivo := d2.Key(2); vivo {
+	if _, live := d2.Key(2); live {
 		t.Fatal("aposentadoria perdida na reabertura")
 	}
 	if id, ok := d2.ByKey([]byte("b")); !ok || id != 4 {

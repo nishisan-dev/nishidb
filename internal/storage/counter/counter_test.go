@@ -192,16 +192,16 @@ func TestAgregadosAcompanhamAsDuasPontasDaTransicao(t *testing.T) {
 	if err := c.Transition(0, payload(t, "B", 1, 1, true), false); err != nil {
 		t.Fatal(err)
 	}
-	if est := c.Stats(); est.Rows != 1 || est.Total != 1 {
-		t.Fatalf("depois da troca de grupo: linhas %d total %d, quer 1 e 1", est.Rows, est.Total)
+	if stats := c.Stats(); stats.Rows != 1 || stats.Total != 1 {
+		t.Fatalf("depois da troca de grupo: linhas %d total %d, quer 1 e 1", stats.Rows, stats.Total)
 	}
 	requireCoherentAggregates(t, c)
 	// Mesma linha, mesmo grupo, condição deixa de valer: só o total desce.
 	if err := c.Transition(0, payload(t, "B", 1, 1, false), false); err != nil {
 		t.Fatal(err)
 	}
-	if est := c.Stats(); est.Rows != 1 || est.Total != 0 {
-		t.Fatalf("depois de perder a condição: linhas %d total %d, quer 1 e 0", est.Rows, est.Total)
+	if stats := c.Stats(); stats.Rows != 1 || stats.Total != 0 {
+		t.Fatalf("depois de perder a condição: linhas %d total %d, quer 1 e 0", stats.Rows, stats.Total)
 	}
 	requireCoherentAggregates(t, c)
 }
@@ -224,8 +224,8 @@ func TestLapideDescontaOsAgregados(t *testing.T) {
 	if err := c.Transition(1, nil, true); err != nil {
 		t.Fatal(err)
 	}
-	if est := c.Stats(); est.Rows != 0 || est.Total != 0 {
-		t.Fatalf("com tudo lapidado: linhas %d total %d, quer 0 e 0", est.Rows, est.Total)
+	if stats := c.Stats(); stats.Rows != 0 || stats.Total != 0 {
+		t.Fatalf("com tudo lapidado: linhas %d total %d, quer 0 e 0", stats.Rows, stats.Total)
 	}
 	requireCoherentAggregates(t, c)
 }
@@ -634,8 +634,8 @@ func TestDobraTrataIdAposentadoComoOrfa(t *testing.T) {
 	// agregado: sobra UMA linha viva, a do grupo B. Sem esta asserção, uma
 	// dobra que acumulasse antes do continue da órfã passaria verde com os
 	// grupos certos e o agregado inflado pelas duas órfãs.
-	if est := c2.Stats(); est.Rows != 1 || est.Total != 1 {
-		t.Fatalf("agregados = linhas %d total %d, quer 1 e 1 (as duas órfãs não contam)", est.Rows, est.Total)
+	if stats := c2.Stats(); stats.Rows != 1 || stats.Total != 1 {
+		t.Fatalf("agregados = linhas %d total %d, quer 1 e 1 (as duas órfãs não contam)", stats.Rows, stats.Total)
 	}
 	requireCoherentAggregates(t, c2)
 }
@@ -722,8 +722,8 @@ func TestZeraLimpaOsAgregados(t *testing.T) {
 	if err := c.Clear(); err != nil {
 		t.Fatal(err)
 	}
-	if est := c.Stats(); est.Rows != 0 || est.Total != 0 {
-		t.Fatalf("depois do Clear: linhas %d total %d, quer 0 e 0", est.Rows, est.Total)
+	if stats := c.Stats(); stats.Rows != 0 || stats.Total != 0 {
+		t.Fatalf("depois do Clear: linhas %d total %d, quer 0 e 0", stats.Rows, stats.Total)
 	}
 	// Reconstruir tem de chegar aos MESMOS números, não ao dobro.
 	for i, cond := range []bool{true, true, false} {
@@ -731,8 +731,8 @@ func TestZeraLimpaOsAgregados(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if est := c.Stats(); est.Rows != 3 || est.Total != 2 {
-		t.Fatalf("depois de reconstruir: linhas %d total %d, quer 3 e 2", est.Rows, est.Total)
+	if stats := c.Stats(); stats.Rows != 3 || stats.Total != 2 {
+		t.Fatalf("depois de reconstruir: linhas %d total %d, quer 3 e 2", stats.Rows, stats.Total)
 	}
 	requireCoherentAggregates(t, c)
 }

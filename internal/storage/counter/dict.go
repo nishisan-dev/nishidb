@@ -171,12 +171,12 @@ func (d *Dict) readRecords(raw []byte) int {
 		if len(rest) < entryOverhead+n {
 			break
 		}
-		corpo := rest[:2+n]
-		if crc32.Checksum(corpo, castagnoli) != binary.LittleEndian.Uint32(rest[2+n:2+n+4]) {
+		body := rest[:2+n]
+		if crc32.Checksum(body, castagnoli) != binary.LittleEndian.Uint32(rest[2+n:2+n+4]) {
 			break
 		}
 		key := make([]byte, n)
-		copy(key, corpo[2:])
+		copy(key, body[2:])
 		d.internInMemory(key)
 		pos += entryOverhead + n
 	}
