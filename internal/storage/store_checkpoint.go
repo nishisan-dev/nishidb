@@ -143,7 +143,7 @@ func (s *Store) checkpoint() error {
 		if err := s.traceStep("msyncContadores", c.Msync); err != nil {
 			return err
 		}
-		c.CobreMexidas(c.Transicoes())
+		c.RecordCoveredTouches(c.Transitions())
 	}
 	if s.seqs != nil {
 		if err := s.traceStep("msyncSequences", s.seqs.Msync); err != nil {

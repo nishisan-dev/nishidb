@@ -119,3 +119,6 @@ texto
 tipo
 valor
 vazio.bin
+Chave
+Grupos
+Linhas

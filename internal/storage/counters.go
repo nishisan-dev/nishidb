@@ -22,7 +22,7 @@ const diretorioDosContadores = "contadores"
 // pendenciaDeContador é um contador que a abertura decidiu RECONSTRUIR: a
 // varredura roda depois do ramo de recovery, e o motivo vai para o log.
 type pendenciaDeContador struct {
-	c      *counter.Contador
+	c      *counter.Counter
 	motivo string
 }
 
@@ -90,12 +90,12 @@ func (s *Store) abreContadores(opts Options, m *checkpoint.Manifest, idxDir stri
 	}
 	vistos := make(map[string]struct{}, len(defs))
 	for _, def := range defs {
-		if _, dup := vistos[def.Nome]; dup {
-			return fmt.Errorf("%w: contador %q declarado duas vezes", ErrInvalidArgument, def.Nome)
+		if _, dup := vistos[def.Name]; dup {
+			return fmt.Errorf("%w: contador %q declarado duas vezes", ErrInvalidArgument, def.Name)
 		}
-		vistos[def.Nome] = struct{}{}
-		info, tinha := porNome[def.Nome]
-		delete(porNome, def.Nome)
+		vistos[def.Name] = struct{}{}
+		info, tinha := porNome[def.Name]
+		delete(porNome, def.Name)
 
 		recria, motivo := false, ""
 		switch {
@@ -107,25 +107,25 @@ func (s *Store) abreContadores(opts Options, m *checkpoint.Manifest, idxDir stri
 			recria, motivo = true, fmt.Sprintf("os parâmetros mudaram (groupBy %v → %v, where %q → %q)",
 				info.Columns, colunasDe(def), info.Where, def.Where)
 		}
-		c, err := counter.Abre(filepath.Join(dir, def.Nome), def, minRows, recria)
+		c, err := counter.Open(filepath.Join(dir, def.Name), def, minRows, recria)
 		if err != nil {
-			return fmt.Errorf("storage: abrir o contador %q de %s: %w", def.Nome, opts.Dir, err)
+			return fmt.Errorf("storage: abrir o contador %q de %s: %w", def.Name, opts.Dir, err)
 		}
 		s.contadores = append(s.contadores, c)
-		if !recria && m != nil && ((c.Nasceu() && m.NextRowID > 0) || !c.Cobre(types.RowID(m.NextRowID))) {
+		if !recria && m != nil && ((c.Born() && m.NextRowID > 0) || !c.Covers(types.RowID(m.NextRowID))) {
 			// O manifest declara os parâmetros, não a existência dos arquivos —
 			// a mesma pergunta que a agenda faz com NeedsRebuild.
 			recria, motivo = true, "os arquivos do contador não descrevem as linhas do dataset"
-			if err := c.Zera(); err != nil {
+			if err := c.Clear(); err != nil {
 				return err
 			}
 		}
-		if est := c.Stats(); est.Grupos > def.MaxGroups {
+		if est := c.Stats(); est.Groups > def.MaxGroups {
 			return fmt.Errorf("%w: contador %q tem %d grupos em uso e maxGroups %d; o teto só pode diminuir até os grupos em uso (ou reconstrua o contador)",
-				ErrInvalidArgument, def.Nome, est.Grupos, def.MaxGroups)
+				ErrInvalidArgument, def.Name, est.Groups, def.MaxGroups)
 		}
-		nome := def.Nome
-		c.AoRecusar(func() {
+		nome := def.Name
+		c.OnRefuse(func() {
 			s.opts.Log.Warn("contador.teto",
 				"um grupo novo foi recusado pelo teto de maxGroups; a linha entrou, mas não é contada até o contador ser reconstruído com teto maior",
 				"contador", nome, "maxGroups", def.MaxGroups)
@@ -134,10 +134,10 @@ func (s *Store) abreContadores(opts Options, m *checkpoint.Manifest, idxDir stri
 			s.contadoresARecriar = append(s.contadoresARecriar, pendenciaDeContador{c: c, motivo: motivo})
 			continue
 		}
-		if err := c.Dobra(); err != nil {
-			return fmt.Errorf("storage: dobrar o contador %q de %s: %w", def.Nome, opts.Dir, err)
+		if err := c.Fold(); err != nil {
+			return fmt.Errorf("storage: dobrar o contador %q de %s: %w", def.Name, opts.Dir, err)
 		}
-		if orfas := c.Stats().Orfas; orfas > 0 {
+		if orfas := c.Stats().Orphans; orfas > 0 {
 			s.opts.Log.Warn("contador.orfas",
 				"entradas do vetor apontavam para grupos aposentados ou inexistentes e foram zeradas; não é esperado fora de uma janela de crash",
 				"contador", nome, "orfas", orfas)
@@ -162,13 +162,13 @@ func (s *Store) abreContadores(opts Options, m *checkpoint.Manifest, idxDir stri
 
 // mesmaDefinicao compara os parâmetros que decidem o conteúdo: nome, colunas
 // (na ordem) e where.
-func mesmaDefinicao(info checkpoint.CounterInfo, def counter.Definicao) bool {
-	return info.Name == def.Nome && info.Where == def.Where && slices.Equal(info.Columns, colunasDe(def))
+func mesmaDefinicao(info checkpoint.CounterInfo, def counter.Definition) bool {
+	return info.Name == def.Name && info.Where == def.Where && slices.Equal(info.Columns, colunasDe(def))
 }
 
-func colunasDe(def counter.Definicao) []uint16 {
-	out := make([]uint16, len(def.Colunas))
-	for i, c := range def.Colunas {
+func colunasDe(def counter.Definition) []uint16 {
+	out := make([]uint16, len(def.Columns))
+	for i, c := range def.Columns {
 		out[i] = uint16(c)
 	}
 	return out
@@ -183,7 +183,7 @@ func (s *Store) infoDosContadores() []checkpoint.CounterInfo {
 	out := make([]checkpoint.CounterInfo, 0, len(s.contadores))
 	for _, c := range s.contadores {
 		def := c.Def()
-		out = append(out, checkpoint.CounterInfo{Name: def.Nome, Columns: colunasDe(def), Where: def.Where})
+		out = append(out, checkpoint.CounterInfo{Name: def.Name, Columns: colunasDe(def), Where: def.Where})
 	}
 	return out
 }
@@ -198,9 +198,9 @@ func (s *Store) reconstroiContadoresPendentes() error {
 		inicio := time.Now()
 		linhas, err := s.varreLinhasVivasNoContador(context.Background(), p.c, false)
 		if err != nil {
-			return fmt.Errorf("storage: construir o contador %q de %s: %w", p.c.Def().Nome, s.opts.Dir, err)
+			return fmt.Errorf("storage: construir o contador %q de %s: %w", p.c.Def().Name, s.opts.Dir, err)
 		}
-		if err := p.c.ApagaAntigos(); err != nil {
+		if err := p.c.RemoveOld(); err != nil {
 			return err
 		}
 		s.contadoresConstruidos++
@@ -209,8 +209,8 @@ func (s *Store) reconstroiContadoresPendentes() error {
 		// minutos num dataset grande mudam a janela de manutenção.
 		s.opts.Log.Info("contador.construido",
 			"o contador foi construído varrendo as linhas vivas do dataset",
-			"contador", p.c.Def().Nome, "motivo", p.motivo, "linhas", linhas,
-			"grupos", p.c.Stats().Grupos, "duracao", time.Since(inicio).String())
+			"contador", p.c.Def().Name, "motivo", p.motivo, "linhas", linhas,
+			"grupos", p.c.Stats().Groups, "duracao", time.Since(inicio).String())
 	}
 	s.contadoresARecriar = nil
 	return nil
@@ -222,7 +222,7 @@ func (s *Store) reconstroiContadoresPendentes() error {
 // abertura não há concorrência; em operação (ReconstroiContadores) o writer
 // já segura o wmu e a leitura do par (location, bytes) entra no aposMu, que é
 // o lock mais interno.
-func (s *Store) varreLinhasVivasNoContador(ctx context.Context, c *counter.Contador, sobAposMu bool) (uint64, error) {
+func (s *Store) varreLinhasVivasNoContador(ctx context.Context, c *counter.Counter, sobAposMu bool) (uint64, error) {
 	limite := types.RowID(s.nextRowID.Load())
 	var buf []byte
 	var linhas uint64
@@ -254,7 +254,7 @@ func (s *Store) varreLinhasVivasNoContador(ctx context.Context, c *counter.Conta
 		if rec.RowID != id {
 			return linhas, fmt.Errorf("%w: a location da linha %d aponta para o record da linha %d", ErrDatasetCorrupt, id, rec.RowID)
 		}
-		if err := c.Transiciona(id, rec.Payload, false); err != nil {
+		if err := c.Transition(id, rec.Payload, false); err != nil {
 			return linhas, err
 		}
 		linhas++
@@ -264,12 +264,12 @@ func (s *Store) varreLinhasVivasNoContador(ctx context.Context, c *counter.Conta
 
 // Contadores devolve os contadores abertos, na ordem declarada. A slice é do
 // Store: quem chama não a altera.
-func (s *Store) Contadores() []*counter.Contador { return s.contadores }
+func (s *Store) Contadores() []*counter.Counter { return s.contadores }
 
 // EstatisticasDeContadores é o retrato de todos os contadores, para as
 // métricas e o /v1/stats — a MESMA chamada nos dois.
-func (s *Store) EstatisticasDeContadores() []counter.Estatisticas {
-	out := make([]counter.Estatisticas, 0, len(s.contadores))
+func (s *Store) EstatisticasDeContadores() []counter.Stats {
+	out := make([]counter.Stats, 0, len(s.contadores))
 	for _, c := range s.contadores {
 		out = append(out, c.Stats())
 	}
@@ -286,7 +286,7 @@ const passoDoContexto = 1023
 type recalculoDeContador struct {
 	totais, refs  []int64
 	naoInternadas uint64
-	deriv         *counter.Derivador
+	deriv         *counter.Deriver
 }
 
 // AuditaContadores recalcula cada contador por varredura e compara com o
@@ -320,7 +320,7 @@ type recalculoDeContador struct {
 // antigo é invalidado — pode ser este — e a resposta é ErrSnapshotExpirado,
 // nunca um relatório: uma divergência inventada por versão perdida mandaria o
 // operador reconstruir um contador certo.
-func (s *Store) AuditaContadores(ctx context.Context) ([]counter.Relatorio, error) {
+func (s *Store) AuditaContadores(ctx context.Context) ([]counter.Report, error) {
 	if err := s.entra(); err != nil {
 		return nil, err
 	}
@@ -338,9 +338,9 @@ func (s *Store) AuditaContadores(ctx context.Context) ([]counter.Relatorio, erro
 	if s.audAntesDaCopia != nil {
 		s.audAntesDaCopia()
 	}
-	congelados := make([]counter.Congelado, len(s.contadores))
+	congelados := make([]counter.AuditSnapshot, len(s.contadores))
 	for i, c := range s.contadores {
-		congelados[i] = c.Congela()
+		congelados[i] = c.AuditSnapshot()
 	}
 	s.wmu.Unlock()
 	defer s.CloseSnapshot(snap)
@@ -348,9 +348,9 @@ func (s *Store) AuditaContadores(ctx context.Context) ([]counter.Relatorio, erro
 	recalc := make([]recalculoDeContador, len(s.contadores))
 	for i, c := range s.contadores {
 		recalc[i] = recalculoDeContador{
-			totais: make([]int64, congelados[i].Limite),
-			refs:   make([]int64, congelados[i].Limite),
-			deriv:  c.NovoDerivador(),
+			totais: make([]int64, congelados[i].Limit),
+			refs:   make([]int64, congelados[i].Limit),
+			deriv:  c.NewDeriver(),
 		}
 	}
 
@@ -394,15 +394,15 @@ func (s *Store) AuditaContadores(ctx context.Context) ([]counter.Relatorio, erro
 		}
 		linhas++
 		for i, c := range s.contadores {
-			chave, cond, tem, err := recalc[i].deriv.Deriva(rec.Payload)
+			chave, cond, tem, err := recalc[i].deriv.Derive(rec.Payload)
 			if err != nil {
-				return nil, fmt.Errorf("storage: auditoria do contador %q na linha %d: %w", c.Def().Nome, id, err)
+				return nil, fmt.Errorf("storage: auditoria do contador %q na linha %d: %w", c.Def().Name, id, err)
 			}
 			if !tem {
 				continue
 			}
-			g, ok := c.PorChave(chave)
-			if !ok || g >= congelados[i].Limite {
+			g, ok := c.ByKey(chave)
+			if !ok || g >= congelados[i].Limit {
 				// Grupo internado DEPOIS de T0 (a linha era de outro grupo em
 				// T0 e o journal já devolveu a versão T0, então isto só
 				// acontece por deriva) ou nunca internado.
@@ -423,33 +423,33 @@ func (s *Store) AuditaContadores(ctx context.Context) ([]counter.Relatorio, erro
 	}
 
 	duracao := time.Since(inicio)
-	out := make([]counter.Relatorio, 0, len(s.contadores))
+	out := make([]counter.Report, 0, len(s.contadores))
 	for i, c := range s.contadores {
 		cg, rc := congelados[i], recalc[i]
-		r := counter.Relatorio{
-			Nome:           c.Def().Nome,
-			Grupos:         c.Stats().Grupos,
-			NaoInternadas:  rc.naoInternadas,
-			LinhasVarridas: linhas,
-			Duracao:        duracao,
+		r := counter.Report{
+			Name:        c.Def().Name,
+			Groups:      c.Stats().Groups,
+			NotInterned: rc.naoInternadas,
+			RowsScanned: linhas,
+			Duration:    duracao,
 		}
-		for g := uint32(1); g < cg.Limite; g++ {
-			m, mr := cg.Totais[g], cg.Refs[g]
+		for g := uint32(1); g < cg.Limit; g++ {
+			m, mr := cg.Totals[g], cg.Refs[g]
 			q, qr := rc.totais[g], rc.refs[g]
-			r.Mantido += m
-			r.Recalculado += q
-			r.LinhasMantidas += mr
-			r.LinhasRecalculadas += qr
+			r.Maintained += m
+			r.Recomputed += q
+			r.RowsMaintained += mr
+			r.RowsRecomputed += qr
 			if m == q && mr == qr {
 				continue
 			}
-			r.Divergentes++
-			if len(r.Amostra) < counter.TetoDaAmostra {
+			r.DivergentGroups++
+			if len(r.Sample) < counter.SampleCeiling {
 				_, texto, _, _, _ := c.Group(g)
-				r.Amostra = append(r.Amostra, counter.Divergencia{
-					ID: g, Texto: string(texto),
-					Mantido: m, Recalculado: q,
-					RefsMantido: mr, RefsRecalculado: qr,
+				r.Sample = append(r.Sample, counter.Divergence{
+					ID: g, Text: string(texto),
+					Maintained: m, Recomputed: q,
+					RefsMaintained: mr, RefsRecomputed: qr,
 				})
 			}
 		}
@@ -462,14 +462,14 @@ func (s *Store) AuditaContadores(ctx context.Context) ([]counter.Relatorio, erro
 		// Contados à parte de Divergentes porque a pergunta é outra: uma linha
 		// que trocou de grupo por deriva deixa os grupos errados e o agregado
 		// CERTO, e somar as duas contagens esconderia essa distinção.
-		r.AgregadoLinhas, r.AgregadoTotal = cg.Linhas, cg.Total
-		if r.AgregadoLinhas != r.LinhasRecalculadas {
-			r.AgregadosDivergentes++
+		r.AggregateRows, r.AggregateTotal = cg.Rows, cg.Total
+		if r.AggregateRows != r.RowsRecomputed {
+			r.DivergentAggregates++
 		}
-		if r.AgregadoTotal != r.Recalculado {
-			r.AgregadosDivergentes++
+		if r.AggregateTotal != r.Recomputed {
+			r.DivergentAggregates++
 		}
-		c.RegistraAuditoria(r.Divergentes+int(r.NaoInternadas)+r.AgregadosDivergentes, s.agora())
+		c.RecordAudit(r.DivergentGroups+int(r.NotInterned)+r.DivergentAggregates, s.agora())
 		out = append(out, r)
 	}
 	return out, nil
@@ -480,7 +480,7 @@ func (s *Store) AuditaContadores(ctx context.Context) ([]counter.Relatorio, erro
 // deriva que a auditoria apontou — explícito, caro e raro —, e o custo é
 // dito no godoc e na documentação em vez de escondido atrás de um caminho
 // "sem lock" que deixaria o contador inconsistente enquanto o Put anda.
-func (s *Store) ReconstroiContadores(ctx context.Context) ([]counter.Reconstrucao, error) {
+func (s *Store) ReconstroiContadores(ctx context.Context) ([]counter.Rebuild, error) {
 	if err := s.entra(); err != nil {
 		return nil, err
 	}
@@ -496,22 +496,22 @@ func (s *Store) ReconstroiContadores(ctx context.Context) ([]counter.Reconstruca
 	if s.stickyErr != nil {
 		return nil, fmt.Errorf("%w: %w", ErrWriterFailed, s.stickyErr)
 	}
-	out := make([]counter.Reconstrucao, 0, len(s.contadores))
+	out := make([]counter.Rebuild, 0, len(s.contadores))
 	for _, c := range s.contadores {
 		inicio := time.Now()
-		if err := c.Zera(); err != nil {
-			return nil, fmt.Errorf("storage: reconstruir o contador %q: %w", c.Def().Nome, err)
+		if err := c.Clear(); err != nil {
+			return nil, fmt.Errorf("storage: reconstruir o contador %q: %w", c.Def().Name, err)
 		}
 		linhas, err := s.varreLinhasVivasNoContador(ctx, c, true)
 		if err != nil {
-			return nil, fmt.Errorf("storage: reconstruir o contador %q: %w", c.Def().Nome, err)
+			return nil, fmt.Errorf("storage: reconstruir o contador %q: %w", c.Def().Name, err)
 		}
-		out = append(out, counter.Reconstrucao{
-			Nome: c.Def().Nome, Linhas: linhas, Grupos: c.Stats().Grupos, Duracao: time.Since(inicio),
+		out = append(out, counter.Rebuild{
+			Name: c.Def().Name, Rows: linhas, Groups: c.Stats().Groups, Duration: time.Since(inicio),
 		})
 		s.opts.Log.Info("contador.reconstruido",
 			"o contador foi reconstruído em operação, varrendo as linhas vivas sob o lock do writer",
-			"contador", c.Def().Nome, "linhas", linhas, "grupos", c.Stats().Grupos, "duracao", time.Since(inicio).String())
+			"contador", c.Def().Name, "linhas", linhas, "grupos", c.Stats().Groups, "duracao", time.Since(inicio).String())
 	}
 	return out, nil
 }
@@ -550,10 +550,10 @@ func (s *Store) AposentaGruposVazios() (int, error) {
 	}
 	total := 0
 	for _, c := range s.contadores {
-		n, err := c.AposentaVazios(s.agora())
+		n, err := c.RetireEmptyGroups(s.agora())
 		total += n
 		if err != nil {
-			return total, fmt.Errorf("storage: aposentar grupos do contador %q: %w", c.Def().Nome, err)
+			return total, fmt.Errorf("storage: aposentar grupos do contador %q: %w", c.Def().Name, err)
 		}
 	}
 	return total, nil
@@ -622,14 +622,14 @@ func (s *Store) rodaAposentadoria(ctx context.Context) {
 }
 
 // descreveContadores rende as definições numa linha, para o log de subida.
-func descreveContadores(cs []*counter.Contador) string {
+func descreveContadores(cs []*counter.Counter) string {
 	var sb strings.Builder
 	for i, c := range cs {
 		if i > 0 {
 			sb.WriteString("; ")
 		}
 		def := c.Def()
-		fmt.Fprintf(&sb, "%s groupBy=%v", def.Nome, def.Nomes)
+		fmt.Fprintf(&sb, "%s groupBy=%v", def.Name, def.Names)
 		if def.Where != "" {
 			fmt.Fprintf(&sb, " where=%q", def.Where)
 		}

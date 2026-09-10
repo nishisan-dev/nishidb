@@ -2241,7 +2241,7 @@ registro. Existe em todo dataset, vazia quando não há `counters:`.
 
 **Os agregados do contador.** `rows` e `total` são a soma dos `refs` e a soma
 dos `totais` de todos os grupos, mantidas no próprio contador como dois
-atômicos ajustados dentro do `Transiciona` — o delta já é conhecido ali e é
+atômicos ajustados dentro do `Transition` — o delta já é conhecido ali e é
 sempre ±1. Somá-los na leitura custaria O(grupos) por linha de `_meta.counters`
 e criaria uma segunda maneira de calcular o mesmo fato. Eles são a MESMA dobra
 do vetor que os totais por grupo, acumulada no mesmo laço, então nada de novo

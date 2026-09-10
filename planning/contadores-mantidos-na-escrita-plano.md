@@ -134,7 +134,7 @@ por mensagem) foi refutada na proposta porque Kafka entrega pelo menos uma vez e
 - **Refutado: aposentar por `refs == 0` + prazo basta.** Se a transição que
   esvaziou o grupo estiver numa cauda rasgada, o estado durável ainda aponta
   para um grupo aposentado. Regra adicional: aposentar só se a última mexida do
-  grupo já foi coberta por um checkpoint (`ultimaMexida[g] <= mexidasCobertas`).
+  grupo já foi coberta por um checkpoint (`lastTouch[g] <= coveredTouches`).
 - **Refutado: a seção do manifest deve ser crítica.** Como "seção ausente ⇒
   reconstruir" já é o comportamento certo, uma tag crítica só serviria para
   bloquear o rollback do piloto (`nishidb-update.sh`). A tag é IGNORÁVEL
@@ -159,7 +159,7 @@ por mensagem) foi refutada na proposta porque Kafka entrega pelo menos uma vez e
 | "viva" para o contador | Linha com location e SEM lápide. Linha com prazo vencido e ainda sem lápide continua contada até o coletor chegar (a proposta §5.5 já assume isso: "o total cai quando o coletor chega"). A auditoria usa essa definição, não a de visibilidade da consulta. |
 | reconstrução | Decidida ANTES da recovery a partir do manifest (seção ausente, colunas ou `where` diferentes, vetor nascido com linhas, vetor que não cobre `NextRowID`). Reconstruir recria os DOIS arquivos (dicionário e vetor): chaves de outras colunas não podem poluir um dicionário cujos ids nunca são reemitidos. Mudança de `maxGroups` NÃO reconstrói — só é recusada se menor que os grupos em uso. |
 | manifest | Seção IGNORÁVEL (`tagCounters = 0x0001`): nome, colunas, `where` por contador. |
-| aposentadoria segura | Aposentar exige `refs == 0`, prazo vencido E `ultimaMexida[g] <= mexidasCobertas` (contador monotônico de transições; `mexidasCobertas` é gravado no checkpoint, sob `wmu`, depois do `Msync` do vetor). |
+| aposentadoria segura | Aposentar exige `refs == 0`, prazo vencido E `lastTouch[g] <= coveredTouches` (contador monotônico de transições; `coveredTouches` é gravado no checkpoint, sob `wmu`, depois do `Msync` do vetor). |
 | histórico | Dataset em `ModoHistorico` recusa `counters:` na subida (a retenção purga por marca-d'água sem `applyRecord`; o contador nunca decrementaria). |
 | sem § novo | Como o `_meta`, o contador nasce sem seção na spec da raiz; `markerSpecs` não muda. |
 
@@ -202,7 +202,7 @@ por mensagem) foi refutada na proposta porque Kafka entrega pelo menos uma vez e
 | `internal/storage/store_checkpoint.go` | `traceStep("msyncContadores")` |
 | `internal/schema/counter.go` (novo) | `CounterSpec`, parse do bloco `counters:`, validação |
 | `internal/schema/spec.go` | `rawSpec.Counters`, `DatasetSpec.Counters`, mensagem do prefixo `_` |
-| `internal/counters/` (novo) | `compile.go` (spec → `contador.Definicao`), `table.go` (schema sintético + fonte virtual), `open.go` (callback) |
+| `internal/counters/` (novo) | `compile.go` (spec → `counter.Definition`), `table.go` (schema sintético + fonte virtual), `open.go` (callback) |
 | `internal/query/engine.go` | `RegistraVirtual` + roteamento por namespace |
 | `internal/query/meta/meta.go` | mensagem de namespace desconhecido lista os existentes |
 | `internal/server/server.go`, `history.go` | wiring do callback e do registro das tabelas |
@@ -234,9 +234,9 @@ func (r *Region) AtomicStore32(off int64, v uint32)
 func OpenDense32(path string, magic [4]byte, minRows uint64) (*Dense32, error)
 func (d *Dense32) Get(rowID types.RowID) (v uint32, gravado bool) // false além do arquivo
 func (d *Dense32) Set(rowID types.RowID, v uint32) error          // writer-only, cresce por doubling
-func (d *Dense32) Nasceu() bool
-func (d *Dense32) Cobre(limite types.RowID) bool                  // arquivo tem entrada para limite-1
-func (d *Dense32) Zera() error                                    // memset das entradas (reconstrução)
+func (d *Dense32) Born() bool
+func (d *Dense32) Covers(limite types.RowID) bool                  // arquivo tem entrada para limite-1
+func (d *Dense32) Clear() error                                    // memset das entradas (reconstrução)
 func (d *Dense32) Msync() error
 func (d *Dense32) Close() error
 func (d *Dense32) SizeBytes() int64
@@ -273,13 +273,13 @@ func TestDenso32GravaLeECresce(t *testing.T) {
 	d, err := OpenDense32(filepath.Join(dir, "g.idx"), [4]byte{'T','S','T','1'}, 512)
 	if err != nil { t.Fatal(err) }
 	defer d.Close()
-	if !d.Nasceu() { t.Fatal("arquivo novo tem de nascer") }
+	if !d.Born() { t.Fatal("arquivo novo tem de nascer") }
 	if _, ok := d.Get(10); ok { t.Fatal("entrada nunca gravada tem de sair gravado=false") }
 	if err := d.Set(100_000, 1<<31|7); err != nil { t.Fatal(err) } // além do piso: cresce
 	if v, ok := d.Get(100_000); !ok || v != 1<<31|7 { t.Fatalf("got %v %v", v, ok) }
-	if !d.Cobre(100_001) || d.Cobre(1<<40) { t.Fatal("Cobre errado") }
-	if err := d.Zera(); err != nil { t.Fatal(err) }
-	if v, _ := d.Get(100_000); v != 0 { t.Fatal("Zera não zerou") }
+	if !d.Covers(100_001) || d.Covers(1<<40) { t.Fatal("Covers errado") }
+	if err := d.Clear(); err != nil { t.Fatal(err) }
+	if v, _ := d.Get(100_000); v != 0 { t.Fatal("Clear não zerou") }
 }
 
 func TestDenso32RecusaArquivoDeOitoBytes(t *testing.T) {
@@ -291,7 +291,7 @@ func TestDenso32RecusaArquivoDeOitoBytes(t *testing.T) {
 }
 ```
 
-- [ ] **Passo 7: vermelho → implementar `dense32.go` → verde.** `Zera` usa `WithBytes` em blocos, sem alocar o arquivo inteiro.
+- [ ] **Passo 7: vermelho → implementar `dense32.go` → verde.** `Clear` usa `WithBytes` em blocos, sem alocar o arquivo inteiro.
 
 - [ ] **Passo 8: gate de alocação**: `TestDenso32NaoAlocaNoCaminhoQuente` (`//go:build !race`, `testing.AllocsPerRun(1000, …)` sobre `Get`+`Set` em entrada já coberta; teto 0). Contraparte `_race.go` com `t.Skip` explícito.
 
@@ -378,144 +378,144 @@ trunca a cauda rasgada.
 
 **Interfaces produzidas:**
 ```go
-type Dicionario struct{ … }
-func AbreDicionario(path string, teto uint32) (*Dicionario, error)
-// Interna devolve o id do grupo; cria (com fsync) se novo. ErrTetoDeGrupos quando
+type Dict struct{ … }
+func OpenDict(path string, teto uint32) (*Dict, error)
+// Intern devolve o id do grupo; cria (com fsync) se novo. ErrGroupCeilingReached quando
 // o número de grupos VIVOS já é o teto. Nunca aloca quando a chave já existe
 // (lookup por m[string(chave)]).
-func (d *Dicionario) Interna(chave []byte) (uint32, error)
-func (d *Dicionario) Chave(id uint32) (chave []byte, vivo bool)   // aposentado → vivo=false
-func (d *Dicionario) PorChave(chave []byte) (uint32, bool)
-func (d *Dicionario) PorTexto(texto []byte) (uint32, bool)         // groupKey → id
-func (d *Dicionario) Aposenta(id uint32) error                     // registro + fsync; remove de PorChave/PorTexto
-func (d *Dicionario) Limite() uint32                               // maior id emitido + 1
-func (d *Dicionario) Vivos() uint32
-func (d *Dicionario) Aposentados() uint32
-func (d *Dicionario) SizeBytes() int64
-func (d *Dicionario) Close() error
-var ErrTetoDeGrupos = errors.New("contador: teto de grupos atingido")
+func (d *Dict) Intern(chave []byte) (uint32, error)
+func (d *Dict) Key(id uint32) (chave []byte, vivo bool)   // aposentado → vivo=false
+func (d *Dict) ByKey(chave []byte) (uint32, bool)
+func (d *Dict) PorTexto(texto []byte) (uint32, bool)         // groupKey → id
+func (d *Dict) Retire(id uint32) error                     // registro + fsync; remove de ByKey/PorTexto
+func (d *Dict) Limit() uint32                               // maior id emitido + 1
+func (d *Dict) LiveGroups() uint32
+func (d *Dict) RetiredGroups() uint32
+func (d *Dict) SizeBytes() int64
+func (d *Dict) Close() error
+var ErrGroupCeilingReached = errors.New("contador: teto de grupos atingido")
 ```
 O mapa chave→id e o slice de chaves são protegidos por um `sync.RWMutex` FOLHA:
 o writer só toma `Lock` ao internar um grupo NOVO ou aposentar; leitores
 (`_counters`, auditoria) tomam `RLock`. O texto (`groupKey`) é calculado uma vez
 por grupo na internação e guardado ao lado da chave (tarefa B2 define
-`TextoDaChave`).
+`KeyText`).
 
 - [ ] **Passo 1: testes**
   - `TestDicionarioInternaEReabre`: interna 3 chaves, fecha, reabre, ids e chaves iguais.
-  - `TestDicionarioTruncaCaudaRasgada`: escreve meio registro no fim do arquivo à mão, reabre, `Limite()` inalterado e o arquivo encolheu.
-  - `TestDicionarioAposentaENuncaReemite`: aposenta o id 2, reabre, `Chave(2)` vivo=false, `Interna(mesma chave)` devolve id 4.
-  - `TestDicionarioRecusaOTeto`: teto 2, terceira chave → `ErrTetoDeGrupos`; aposentar uma libera uma vaga.
-  - `TestDicionarioNaoAlocaNoLookup` (`!race`, teto 0 sobre `Interna` de chave existente e `PorChave`).
-  - **Mutação obrigatória**: remover o `f.Sync()` de `Interna` e provar que um teste fica vermelho — `TestDicionarioFsyncaAntesDeDevolverOId` usa um seam `afterWrite func()` (como `agenda.afterWrite`) que injeta pânico entre o write e o sync, e confere na reabertura que a entrada NÃO está lá (com o sync, o pânico só pode acontecer depois dela durável).
+  - `TestDicionarioTruncaCaudaRasgada`: escreve meio registro no fim do arquivo à mão, reabre, `Limit()` inalterado e o arquivo encolheu.
+  - `TestDicionarioAposentaENuncaReemite`: aposenta o id 2, reabre, `Key(2)` vivo=false, `Intern(mesma chave)` devolve id 4.
+  - `TestDicionarioRecusaOTeto`: teto 2, terceira chave → `ErrGroupCeilingReached`; aposentar uma libera uma vaga.
+  - `TestDicionarioNaoAlocaNoLookup` (`!race`, teto 0 sobre `Intern` de chave existente e `ByKey`).
+  - **Mutação obrigatória**: remover o `f.Sync()` de `Intern` e provar que um teste fica vermelho — `TestDicionarioFsyncaAntesDeDevolverOId` usa um seam `afterWrite func()` (como `agenda.afterWrite`) que injeta pânico entre o write e o sync, e confere na reabertura que a entrada NÃO está lá (com o sync, o pânico só pode acontecer depois dela durável).
 
 - [ ] **Passo 2: vermelho → implementar → verde → commit** — `contador: dicionário de grupos append-only com fsync por entrada e aposentadoria`.
 
-### Tarefa B2: o `Contador` — vetor, dobra, transição, texto da chave
+### Tarefa B2: o `Counter` — vetor, dobra, transição, texto da chave
 
 **Arquivos:**
 - Criar: `internal/storage/counter/counter.go`, `textkey.go`, `counter_test.go`, `textkey_test.go`, `alloc_gate_test.go` (+ `_race`)
 
 **Interfaces produzidas:**
 ```go
-// Avaliador é o `where` compilado. nil = sem condição (conta toda linha com grupo).
-type Avaliador interface{ Avalia(payload []byte) (bool, error) }
+// Evaluator é o `where` compilado. nil = sem condição (conta toda linha com grupo).
+type Evaluator interface{ Avalia(payload []byte) (bool, error) }
 
-type Definicao struct {
+type Definition struct {
 	Nome        string
-	Colunas     []types.FieldID   // na ordem DECLARADA do groupBy
-	Nomes       []string          // nomes das colunas, mesma ordem (para a tabela virtual e mensagens)
-	Tipos       []types.FieldType // string | int64 | bool, mesma ordem
+	Columns     []types.FieldID   // na ordem DECLARADA do groupBy
+	Names       []string          // nomes das colunas, mesma ordem (para a tabela virtual e mensagens)
+	Types       []types.FieldType // string | int64 | bool, mesma ordem
 	Where       string            // texto normalizado; "" = sem condição
-	NovoAvaliador func() Avaliador // nil quando Where == ""
+	NewEvaluator func() Evaluator // nil quando Where == ""
 	MaxGroups   uint32
 	RetainEmptyGroups time.Duration // 0 = never
 }
 
-type Contador struct{ … }
+type Counter struct{ … }
 
-const SemGrupo uint32 = 0
-const bitCondicao uint32 = 1 << 31
+const WithoutGroup uint32 = 0
+const conditionBit uint32 = 1 << 31
 
 // Abre abre (ou cria) dicionário e vetor em dir = indexes/contadores/<nome>.
 // recria=true renomeia os arquivos existentes para *.old e nasce vazio — é a
 // reconstrução por divergência de parâmetros, decidida pelo Store a partir do
 // manifest ANTES da recovery.
-func Abre(dir string, def Definicao, minRows uint64, recria bool) (*Contador, error)
-func (c *Contador) Def() Definicao
-// Dobra recomputa totais e refs a partir do vetor em DISCO, pelo tamanho do
+func Abre(dir string, def Definition, minRows uint64, recria bool) (*Counter, error)
+func (c *Counter) Def() Definition
+// Fold recomputa totais e refs a partir do vetor em DISCO, pelo tamanho do
 // arquivo (nextRowID ainda é zero antes da recovery). Entrada com id aposentado
-// ou além do dicionário é órfã: reescrita para SemGrupo (o Open não tem
-// leitores), contada em Orfas e logada em WARN. UMA vez na abertura, antes do
+// ou além do dicionário é órfã: reescrita para WithoutGroup (o Open não tem
+// leitores), contada em Orphans e logada em WARN. UMA vez na abertura, antes do
 // replay; pulada quando recria=true.
-func (c *Contador) Dobra() error
-// Transiciona é o único ponto de escrita: antiga := vetor[rowID] (overlay, senão
-// mmap); nova := Deriva(payload). lapide=true força nova = SemGrupo. Writer-only.
+func (c *Counter) Fold() error
+// Transition é o único ponto de escrita: antiga := vetor[rowID] (overlay, senão
+// mmap); nova := Derive(payload). lapide=true força nova = WithoutGroup. Writer-only.
 // Zero alocação com grupo existente. Incrementa o grupo novo ANTES de decrementar
 // o antigo (um leitor somando nunca subestima). Roda nos dois modos do
 // applyRecord — write e replay.
-func (c *Contador) Transiciona(rowID types.RowID, payload []byte, lapide bool) error
-// Deriva é a função pura (grupo, condição) → entrada; exposta para a auditoria,
-// que a chama com scratch PRÓPRIO (av Avaliador e vals são do chamador).
-func (c *Contador) Deriva(payload []byte, av Avaliador, vals []types.Value, chaveBuf []byte) (entrada uint32, chaveBuf2 []byte, err error)
+func (c *Counter) Transition(rowID types.RowID, payload []byte, lapide bool) error
+// Derive é a função pura (grupo, condição) → entrada; exposta para a auditoria,
+// que a chama com scratch PRÓPRIO (av Evaluator e vals são do chamador).
+func (c *Counter) Derive(payload []byte, av Evaluator, vals []types.Value, keyBuf []byte) (entrada uint32, chaveBuf2 []byte, err error)
 // ApplyOverlay drena o overlay para o mmap. Só no checkpoint, DEPOIS do segSync.
-func (c *Contador) ApplyOverlay() error
-// CobreMexidas registra que todas as transições até n estão duráveis (record E
+func (c *Counter) ApplyOverlay() error
+// RecordCoveredTouches registra que todas as transições até n estão duráveis (record E
 // página). Chamado no checkpoint depois do Msync, sob wmu.
-func (c *Contador) CobreMexidas(n uint64)
-func (c *Contador) Transicoes() uint64
-// Congela devolve cópias de totais e refs e o limite de ids — para a auditoria,
+func (c *Counter) RecordCoveredTouches(n uint64)
+func (c *Counter) Transitions() uint64
+// AuditSnapshot devolve cópias de totais e refs e o limite de ids — para a auditoria,
 // sob wmu.
-func (c *Contador) Congela() (totais, refs []int64, limite uint32)
+func (c *Counter) AuditSnapshot() (totais, refs []int64, limite uint32)
 // Leitura (concorrente ao writer):
-func (c *Contador) Limite() uint32
-func (c *Contador) Grupo(id uint32) (chave []byte, texto []byte, total, refs int64, vivo bool)
-func (c *Contador) PorTexto(texto []byte) (uint32, bool)
-func (c *Contador) Estatisticas() Estatisticas
-func (c *Contador) Msync() error
-func (c *Contador) Close() error
-func (c *Contador) Nasceu() bool
-func (c *Contador) Cobre(limite types.RowID) bool
+func (c *Counter) Limit() uint32
+func (c *Counter) Grupo(id uint32) (chave []byte, texto []byte, total, refs int64, vivo bool)
+func (c *Counter) PorTexto(texto []byte) (uint32, bool)
+func (c *Counter) Stats() Stats
+func (c *Counter) Msync() error
+func (c *Counter) Close() error
+func (c *Counter) Born() bool
+func (c *Counter) Covers(limite types.RowID) bool
 
-type Estatisticas struct {
-	Nome string; Grupos, Aposentados, Teto uint32
-	Recusados, Orfas uint64 // grupos recusados pelo teto; entradas órfãs vistas na dobra
+type Stats struct {
+	Name string; Groups, Retired, Ceiling uint32
+	Refused, Orphans uint64 // grupos recusados pelo teto; entradas órfãs vistas na dobra
 	Bytes int64            // vetor + dicionário
 }
 ```
 Totais e refs são `[]atomic.Int64` indexados por id. Crescem por `append` SÓ
-dentro de `Interna` de grupo novo, sob o `Lock` do dicionário; leitores indexam
+dentro de `Intern` de grupo novo, sob o `Lock` do dicionário; leitores indexam
 sob `RLock` (nunca guardam o header do slice fora do lock); as `Add` do writer
 em entradas existentes são atômicas e sem lock — o writer é um só, então nunca
-há `append` concorrente a um `Add`. Por grupo há ainda `ultimaMexida []uint64`
-(o valor de `transicoes` na última transição que o tocou) e `vazioDesde`
+há `append` concorrente a um `Add`. Por grupo há ainda `lastTouch []uint64`
+(o valor de `transitions` na última transição que o tocou) e `emptySince`
 (tarefa C4). O overlay é `over map[types.RowID]uint32`, writer-only (não precisa
-de lock: `Transiciona`, `Dobra` e `ApplyOverlay` rodam sob `wmu`); `clear(over)`
+de lock: `Transition`, `Fold` e `ApplyOverlay` rodam sob `wmu`); `clear(over)`
 depois de drenar, para não realocar.
 
 **Derivação por linha, sem alocar:** um `encoding.FieldReader` percorre o payload
 UMA vez, por merge linear contra `colunasOrdenadas` (cópia ordenada de
-`Colunas` com o índice de volta à ordem declarada), preenchendo
+`Columns` com o índice de volta à ordem declarada), preenchendo
 `c.valores []types.Value` (scratch do writer) e marcando presença; qualquer
-coluna ausente ⇒ `SemGrupo` (a proposta §6.3: entidade sem a coluna não é
+coluna ausente ⇒ `WithoutGroup` (a proposta §6.3: entidade sem a coluna não é
 contada). Presentes todas: `valuekey.AppendComposite(c.chaveBuf[:0], c.valores)`,
-`c.chaveBuf = chave`, `id, err := c.dict.Interna(chave)`; `ErrTetoDeGrupos` ⇒
-`SemGrupo` + `recusados.Add(1)` + WARN uma vez. Condição: `c.avaliador.Avalia(payload)`
+`c.chaveBuf = chave`, `id, err := c.dict.Interna(chave)`; `ErrGroupCeilingReached` ⇒
+`WithoutGroup` + `recusados.Add(1)` + WARN uma vez. Condição: `c.avaliador.Avalia(payload)`
 (nil ⇒ true). Delta:
 
 ```go
-antiga := c.entrada(rowID) // overlay, senão mmap; além do arquivo = SemGrupo
+antiga := c.entrada(rowID) // overlay, senão mmap; além do arquivo = WithoutGroup
 if antiga == nova { return nil }
 c.transicoes++
-if g := nova &^ bitCondicao; g != SemGrupo {           // inc ANTES do dec
+if g := nova &^ conditionBit; g != WithoutGroup {           // inc ANTES do dec
 	c.refs[g].Add(1)
-	if nova&bitCondicao != 0 { c.totais[g].Add(1) }
+	if nova&conditionBit != 0 { c.totais[g].Add(1) }
 	c.ultimaMexida[g] = c.transicoes
-	c.tocou(g) // aposentadoria (C4): limpa vazioDesde
+	c.tocou(g) // aposentadoria (C4): limpa emptySince
 }
-if g := antiga &^ bitCondicao; g != SemGrupo && g < c.dict.Limite() { // guarda contra id órfão
+if g := antiga &^ conditionBit; g != WithoutGroup && g < c.dict.Limite() { // guarda contra id órfão
 	c.refs[g].Add(-1)
-	if antiga&bitCondicao != 0 { c.totais[g].Add(-1) }
+	if antiga&conditionBit != 0 { c.totais[g].Add(-1) }
 	c.ultimaMexida[g] = c.transicoes
 	if c.refs[g].Load() == 0 { c.esvaziou(g, agora) }
 }
@@ -523,25 +523,25 @@ c.over[rowID] = nova // Publish no overlay; o mmap só muda no ApplyOverlay
 return nil
 ```
 
-**`textkey.go`:** `func TextoDaChave(dst []byte, chave []byte, scratch []types.Value) ([]byte, []types.Value, error)` — renderiza `groupKey` como decidido acima. Golden: `TestTextoDaChaveEhGolden` com `A|1|9`, `a\|b|true`, `x\\y`.
+**`textkey.go`:** `func KeyText(dst []byte, chave []byte, scratch []types.Value) ([]byte, []types.Value, error)` — renderiza `groupKey` como decidido acima. Golden: `TestTextoDaChaveEhGolden` com `A|1|9`, `a\|b|true`, `x\\y`.
 
 - [ ] **Passo 1: testes de transição** (payloads montados com `encoding.AppendField`; o "schema" é só a lista de FieldIDs, sem YAML):
   - `TestTransicaoNovaLinhaContaNoGrupo`: refs 1, total 1 (cond true) / total 0 (cond false).
   - `TestReprocessarOMesmoEventoNaoMexe`: duas chamadas iguais; total e refs inalterados. (É a segunda linha da tabela da proposta §5.5.)
-  - `TestMudarDeGrupoAjustaAsDuasPontas`: A→B: refs/total de A caem, de B sobem, no mesmo `Transiciona`.
+  - `TestMudarDeGrupoAjustaAsDuasPontas`: A→B: refs/total de A caem, de B sobem, no mesmo `Transition`.
   - `TestLapideDescontaEPreservaOGrupo`: total 1→0, refs 1→0, grupo continua `vivo` com total 0 (proposta §5.4, decisão 2).
   - `TestRessurreicaoVoltaAContar`: lápide depois Put → total 1.
   - `TestLinhaSemColunaDeAgrupamentoNaoConta`: payload sem `olt` ⇒ refs de todos os grupos inalterados.
-  - `TestTetoDeGruposRecusaEConta`: teto 1; segunda OLT ⇒ `Recusados == 1`, linha entra como SemGrupo.
-  - `TestDobraReproduzOsTotais`: 1.000 transições aleatórias + `ApplyOverlay` + `Msync`; `Dobra` numa segunda instância aberta sobre os mesmos arquivos devolve exatamente os mesmos totais/refs. **Este é o teste que sustenta a consistência através de crash.**
-  - `TestOverlayNaoVaiAoMmapAntesDoApply`: transições sem `ApplyOverlay`; uma segunda instância sobre os arquivos dobra ZERO. Depois do `ApplyOverlay`, dobra os totais. (Mutação: `Transiciona` gravando direto no `Dense32` → vermelho.)
-  - `TestDobraTrataIdAposentadoComoOrfa`: reescreve a entrada para SemGrupo e conta em `Orfas`.
-  - `TestCobreMexidasAcompanhaAsTransicoes`: `Transicoes()` sobe por transição efetiva (não por reprocessamento), `CobreMexidas` é monotônico.
+  - `TestTetoDeGruposRecusaEConta`: teto 1; segunda OLT ⇒ `Refused == 1`, linha entra como WithoutGroup.
+  - `TestDobraReproduzOsTotais`: 1.000 transições aleatórias + `ApplyOverlay` + `Msync`; `Fold` numa segunda instância aberta sobre os mesmos arquivos devolve exatamente os mesmos totais/refs. **Este é o teste que sustenta a consistência através de crash.**
+  - `TestOverlayNaoVaiAoMmapAntesDoApply`: transições sem `ApplyOverlay`; uma segunda instância sobre os arquivos dobra ZERO. Depois do `ApplyOverlay`, dobra os totais. (Mutação: `Transition` gravando direto no `Dense32` → vermelho.)
+  - `TestDobraTrataIdAposentadoComoOrfa`: reescreve a entrada para WithoutGroup e conta em `Orphans`.
+  - `TestCobreMexidasAcompanhaAsTransicoes`: `Transitions()` sobe por transição efetiva (não por reprocessamento), `RecordCoveredTouches` é monotônico.
   - **Mutações obrigatórias, relatadas no commit**: (1) remover o decremento de `refs` na saída de grupo → `TestMudarDeGrupoAjustaAsDuasPontas` vermelho; (2) remover o `total--` da lápide → `TestLapideDescontaEPreservaOGrupo` vermelho; (3) trocar `antiga == nova` por `true` → `TestReprocessarOMesmoEventoNaoMexe` continua verde (é o esperado: a mutação equivalente é remover o early-return e ver `TestDobraReproduzOsTotais`… continuar verde também — registrar que essa mutação é inofensiva por construção, e por quê).
 
 - [ ] **Passo 2: vermelho → implementar → verde.**
 
-- [ ] **Passo 3: gate** — `TestContadorNaoAlocaNoCaminhoQuente`: `AllocsPerRun(10_000, Transiciona)` alternando dois grupos já internados sobre linhas já presentes no overlay (o mapa não cresce; é o mesmo regime do overlay das locations), teto 0. Contraparte `_race`.
+- [ ] **Passo 3: gate** — `TestContadorNaoAlocaNoCaminhoQuente`: `AllocsPerRun(10_000, Transition)` alternando dois grupos já internados sobre linhas já presentes no overlay (o mapa não cresce; é o mesmo regime do overlay das locations), teto 0. Contraparte `_race`.
 
 - [ ] **Passo 4: commit** — `contador: vetor de grupos, dobra na abertura e transição por delta do próprio vetor`.
 
@@ -560,7 +560,7 @@ return nil
 const tagCounters = 0x0001
 type CounterInfo struct {
 	Nome    string
-	Colunas []uint16 // FieldIDs na ordem declarada
+	Columns []uint16 // FieldIDs na ordem declarada
 	Where   string   // texto normalizado; "" = sem condição
 }
 // Manifest.Counters []CounterInfo — nil no dataset sem contadores (seção omitida)
@@ -597,14 +597,14 @@ todas as críticas).
 // Um dataset cujo manifest declara contadores e cuja abertura não fornece o
 // callback é RECUSADO: abrir sem as definições deixaria o vetor parado enquanto o
 // Put anda, e a divergência só apareceria na auditoria.
-CompilaContadores func(dict *fielddict.Dict) ([]contador.Definicao, error)
+CompilaContadores func(dict *fielddict.Dict) ([]counter.Definition, error)
 
 // Store
-func (s *Store) Contadores() []*contador.Contador
-func (s *Store) EstatisticasDeContadores() []contador.Estatisticas
+func (s *Store) Contadores() []*counter.Counter
+func (s *Store) EstatisticasDeContadores() []counter.Stats
 ```
 
-- [ ] **Passo 1: testes de integração no Store** (`counters_test.go`, usando o helper de abertura de dataset de teste do pacote e um `Definicao` montado à mão com FieldIDs do dicionário):
+- [ ] **Passo 1: testes de integração no Store** (`counters_test.go`, usando o helper de abertura de dataset de teste do pacote e um `Definition` montado à mão com FieldIDs do dicionário):
   - `TestContadorAcompanhaPutLapideECopyForward`: Put A(cond) → total 1; Put A(¬cond) → 0; Put A(cond) → 1; `Expira` → 0 e refs 0; `Compact` (copy-forward) → inalterado.
   - `TestContadorSobreviveAoCheckpointEReabertura`: 100 linhas, Checkpoint, Close, Open → totais iguais (adoção, sem log de construção).
   - `TestContadorRecuperaDoTailSemCheckpoint`: 100 linhas, Checkpoint, +50 escritas (algumas mudando de grupo, algumas lápides), fecha SEM checkpoint (simula crash via o seam que o pacote já usa nos testes de recovery), reabre → totais iguais aos de uma instância de referência que nunca caiu. **Duas variantes, e as duas têm de convergir**: (a) crash sem nenhum checkpoint depois das 50 escritas — o mmap do vetor está em S, o replay aplica tudo; (b) checkpoint INTERROMPIDO depois de `applyOverlayContadores`+`msyncContadores` e antes do manifest (seam `writeTrace`/`traceStep`) — o mmap está à frente de S com records duráveis, o replay reaplica e vê `antiga == nova`. É a prova do argumento "dobra antes do replay".
@@ -615,14 +615,14 @@ func (s *Store) EstatisticasDeContadores() []contador.Estatisticas
   - `TestAberturaSemCallbackRecusaDatasetComContadores` (`ErrDatasetCorrupt` com mensagem nomeando os contadores).
   - `TestContadorEhRecusadoNoHistorico`.
   - `TestOrdemDeLocks…`: a auditoria e o `_counters` nunca tomam `wmu` a partir do lock do dicionário — coberto estruturalmente (o lock do dicionário só existe dentro de `contador`, que não conhece o Store).
-  - **Mutações obrigatórias (as três de proposta §10)**: (1) `Expira` deixa de chamar `applyRecord` para o contador (comentar o passo 7c no ramo de lápide) → `TestContadorAcompanhaPutLapideECopyForward` vermelho; (2) a expiração oportunista da compaction grava a lápide sem `applyRecord` → teste próprio `TestExpiracaoOportunistaDescontaDoContador` vermelho; (3) `Dobra` chamada DEPOIS do replay → `TestContadorRecuperaDoTailSemCheckpoint` (variante msyncada) vermelho.
+  - **Mutações obrigatórias (as três de proposta §10)**: (1) `Expira` deixa de chamar `applyRecord` para o contador (comentar o passo 7c no ramo de lápide) → `TestContadorAcompanhaPutLapideECopyForward` vermelho; (2) a expiração oportunista da compaction grava a lápide sem `applyRecord` → teste próprio `TestExpiracaoOportunistaDescontaDoContador` vermelho; (3) `Fold` chamada DEPOIS do replay → `TestContadorRecuperaDoTailSemCheckpoint` (variante msyncada) vermelho.
 
 - [ ] **Passo 2: implementar `Open`** na ordem (validada contra `store_recovery.go` e `store_checkpoint.go`):
   1. depois de `resolveCamposIndexados` (linha 1190) e antes do `switch` (1195): `defs, err := s.compilaContadores(opts, m)` — chama o callback (se `opts.CompilaContadores == nil` e `m != nil && len(m.Counters) > 0` ⇒ `ErrDatasetCorrupt` nomeando os contadores); recusa `ModoHistorico` com defs (molde `validaOpcoesDoModo`, store.go:2629).
-  2. **Decidir a reconstrução ANTES da recovery**, por contador: `recria = m == nil || seção ausente || colunas/where diferem de m.Counters[nome]`; `contador.Abre(dir, def, minRows, recria)`. Se `!recria` e (`Nasceu()` com `m.NextRowID > 0` ou `!Cobre(m.NextRowID)`) ⇒ marcar `recria` também (o vetor não descreve as linhas) — nesse caso o `Abre` já aconteceu; chamar `Zera()`. Guardar `s.contadores` e `s.contadoresARecriar`. Contadores no manifest que não estão nas defs ⇒ `os.RemoveAll` do diretório + log `contador.removido`.
-  3. **Dobra** (`c.Dobra()`, pelo tamanho do arquivo) para cada contador SEM reconstrução pendente.
+  2. **Decidir a reconstrução ANTES da recovery**, por contador: `recria = m == nil || seção ausente || colunas/where diferem de m.Counters[nome]`; `counter.Open(dir, def, minRows, recria)`. Se `!recria` e (`Born()` com `m.NextRowID > 0` ou `!Covers(m.NextRowID)`) ⇒ marcar `recria` também (o vetor não descreve as linhas) — nesse caso o `Abre` já aconteceu; chamar `Clear()`. Guardar `s.contadores` e `s.contadoresARecriar`. Contadores no manifest que não estão nas defs ⇒ `os.RemoveAll` do diretório + log `contador.removido`.
+  3. **Dobra** (`c.Fold()`, pelo tamanho do arquivo) para cada contador SEM reconstrução pendente.
   4. o ramo de recovery roda como hoje — o replay passa pelo passo 7c (os dois modos).
-  5. logo depois do ramo e ANTES de `abreIndicesDeSegmento`: para cada contador em `contadoresARecriar`, `s.reconstroiContador(c)` — varredura de `[0, nextRowID)` por `locs.Get`, pula ausente e lápide, `segR.ReadRecord`, `Transiciona` (idempotente com o que o replay já aplicou: o delta é contra a entrada corrente); log `contador.construido` (motivo, linhas, grupos, duração), molde de `schedule.go:62-87`.
+  5. logo depois do ramo e ANTES de `abreIndicesDeSegmento`: para cada contador em `contadoresARecriar`, `s.reconstroiContador(c)` — varredura de `[0, nextRowID)` por `locs.Get`, pula ausente e lápide, `segR.ReadRecord`, `Transition` (idempotente com o que o replay já aplicou: o delta é contra a entrada corrente); log `contador.construido` (motivo, linhas, grupos, duração), molde de `schedule.go:62-87`.
   6. `abreIndicesDeSegmento`, `adotaOuConstroiAgenda`, `carregaOffsets`, `Checkpoint()` — como hoje; o checkpoint grava a seção nova e aplica o overlay.
 
 - [ ] **Passo 3: `applyRecord` passo 7c** — logo depois do bloco da agenda (1919-1923):
@@ -633,13 +633,13 @@ func (s *Store) EstatisticasDeContadores() []contador.Estatisticas
 	// do contador (entrada antiga → nova), nunca de prevPayload — no replay ele
 	// não existe (store_recovery.go). A lápide entra como "sem grupo".
 	for _, c := range s.contadores {
-		if err := c.Transiciona(a.rowID, a.payload, a.flags&types.FlagTombstone != 0); err != nil {
+		if err := c.Transition(a.rowID, a.payload, a.flags&types.FlagTombstone != 0); err != nil {
 			return err
 		}
 	}
 ```
 
-- [ ] **Passo 4: checkpoint** — dois passos novos: `traceStep("applyOverlayContadores", …)` logo DEPOIS de `applyOverlay` das locations (isto é, depois do `segSync`: é o que garante que o mmap do vetor só recebe transições de records duráveis), e `traceStep("msyncContadores", …)` entre `msyncVencimentos` e `msyncSequences`, erro NÃO sticky (godoc igual ao da agenda). Depois do msync, ainda sob `wmu`: `c.CobreMexidas(c.Transicoes())`. `Manifest.Counters` montado de `c.Def()` a cada checkpoint. **Close**: parar o laço de aposentadoria (C4) ao lado de `ParaExpiracao`; `Close()` dos contadores ao lado da agenda; sem msync no Close (o que não foi checkpointado volta pelo replay, como hoje).
+- [ ] **Passo 4: checkpoint** — dois passos novos: `traceStep("applyOverlayContadores", …)` logo DEPOIS de `applyOverlay` das locations (isto é, depois do `segSync`: é o que garante que o mmap do vetor só recebe transições de records duráveis), e `traceStep("msyncContadores", …)` entre `msyncVencimentos` e `msyncSequences`, erro NÃO sticky (godoc igual ao da agenda). Depois do msync, ainda sob `wmu`: `c.RecordCoveredTouches(c.Transitions())`. `Manifest.Counters` montado de `c.Def()` a cada checkpoint. **Close**: parar o laço de aposentadoria (C4) ao lado de `ParaExpiracao`; `Close()` dos contadores ao lado da agenda; sem msync no Close (o que não foi checkpointado volta pelo replay, como hoje).
 
 - [ ] **Passo 5: verde na suíte do storage** (`go test ./internal/storage/... -count=1`), depois `make test` e `make test-race`.
 
@@ -664,41 +664,41 @@ func (s *Store) EstatisticasDeContadores() []contador.Estatisticas
 **Interfaces produzidas:**
 ```go
 // contador
-type Divergencia struct{ ID uint32; Texto string; Mantido, Recalculado, RefsMantido, RefsRecalculado int64 }
-type Relatorio struct {
-	Nome string; Grupos uint32
-	Mantido, Recalculado int64      // soma dos totais
-	Divergentes int                 // grupos com total OU refs diferentes
-	Amostra []Divergencia           // as primeiras 20
-	LinhasVarridas uint64; Duracao time.Duration
+type Divergence struct{ ID uint32; Text string; Maintained, Recomputed, RefsMaintained, RefsRecomputed int64 }
+type Report struct {
+	Nome string; Groups uint32
+	Maintained, Recomputed int64      // soma dos totais
+	DivergentGroups int                 // grupos com total OU refs diferentes
+	Sample []Divergence           // as primeiras 20
+	RowsScanned uint64; Duracao time.Duration
 }
 // Store
-func (s *Store) AuditaContadores(ctx context.Context) ([]contador.Relatorio, error)
-func (s *Store) ReconstroiContadores(ctx context.Context) ([]contador.Estatisticas, error)
+func (s *Store) AuditaContadores(ctx context.Context) ([]counter.Report, error)
+func (s *Store) ReconstroiContadores(ctx context.Context) ([]counter.Stats, error)
 ```
 
 Mecânica de `AuditaContadores`: `entra()`; `wmu.Lock()`; `snap := s.AbreSnapshot()`
 (dentro do `wmu` de propósito: fecha a corrida entre ler a época e registrar o
-leitor, `snapshot.go:176-181`); `c.Congela()` de cada contador; `wmu.Unlock()`.
+leitor, `snapshot.go:176-181`); `c.AuditSnapshot()` de cada contador; `wmu.Unlock()`.
 Depois, sem `wmu`, **enumerador próprio** — NÃO `ScanLive`/`GetByRowID`, que
 leem a location corrente e filtram por prazo vencido: para `id` em
 `[snap.BaseRowID, snap.LimitRowID)`: `packed := s.vers.At(id, snap.Epoch)`,
 senão `s.locs.Get(id)`; pula só ausente ou bit de lápide; sob `aposMu.RLock`,
 `segR.ReadRecord(seg, off, buf)` e confere `rec.RowID == id`; rederiva com
-`c.Deriva(payload, avaliadorDaAuditoria, scratch, chaveBuf)`; acumula em slices
+`c.Derive(payload, avaliadorDaAuditoria, scratch, keyBuf)`; acumula em slices
 por id (do tamanho do limite congelado; id ausente do dicionário ⇒ divergência
 própria "grupo não internado"). Ao fim compara com a cópia e monta o relatório;
 `FechaSnapshot`. `ErrSnapshotExpirado` ⇒ a auditoria é INCONCLUSIVA: devolve o
 erro, nunca um relatório (o CLI já o traduz para exit 5). Godoc nomeia a
 definição: "viva = com location e sem lápide", e por que a visibilidade da
 consulta (prazo vencido) não serve de oráculo. `ReconstroiContadores` = sob
-`wmu`: `Zera()` + varredura como na abertura; documentar que segura o writer
+`wmu`: `Clear()` + varredura como na abertura; documentar que segura o writer
 pela varredura inteira.
 
 - [ ] **Passo 1: testes**
-  - `TestAuditoriaSemDivergenciaComIngestaoConcorrente`: goroutine escrevendo Puts (mudando grupos) E lápides via `Expira` enquanto a auditoria roda; `Divergentes == 0` em todas as rodadas. Prova que o par (snapshot, cópia T0) é consistente — inclusive contra lápide gravada durante a varredura, que `ScanLive` pularia.
+  - `TestAuditoriaSemDivergenciaComIngestaoConcorrente`: goroutine escrevendo Puts (mudando grupos) E lápides via `Expira` enquanto a auditoria roda; `DivergentGroups == 0` em todas as rodadas. Prova que o par (snapshot, cópia T0) é consistente — inclusive contra lápide gravada durante a varredura, que `ScanLive` pularia.
   - `TestAuditoriaContaLinhaVencidaSemLapide`: linha com prazo vencido, coletor parado; a consulta não a vê, a auditoria a conta e bate com o mantido (é a definição, escrita no godoc).
-  - `TestAuditoriaDetectaDeriva`: injeta deriva via seam de teste (`c.corrompeParaTeste(id, +1)`) ⇒ `Divergentes == 1`, amostra nomeia o grupo.
+  - `TestAuditoriaDetectaDeriva`: injeta deriva via seam de teste (`c.corrompeParaTeste(id, +1)`) ⇒ `DivergentGroups == 1`, amostra nomeia o grupo.
   - `TestAuditoriaInconclusivaQuandoOSnapshotEstoura`: `SnapshotMaxBytes` mínimo + escrita concorrente ⇒ erro `ErrSnapshotExpirado`, sem relatório.
   - `TestReconstruirZeraADeriva`.
   - **Mutações obrigatórias**: (1) tirar a cópia dos totais de dentro do `wmu` (copiar depois de soltar) ⇒ `TestAuditoriaSemDivergenciaComIngestaoConcorrente` vermelho (intermitente é vermelho: `-count=20`); (2) trocar o enumerador por `ScanLive` ⇒ o mesmo teste vermelho pelas lápides concorrentes, e `TestAuditoriaContaLinhaVencidaSemLapide` vermelho.
@@ -713,27 +713,27 @@ pela varredura inteira.
 **Interfaces produzidas:**
 ```go
 // contador
-func (c *Contador) AposentaVazios(agora time.Time) (aposentados int, err error) // writer-only
+func (c *Counter) RetireEmptyGroups(agora time.Time) (aposentados int, err error) // writer-only
 // Store: goroutine própria (como rodaExpiracao), cadência 1 min, sob wmu por passada.
 ```
-Regra: `vazioDesde[g]` é definido quando `refs[g]` chega a 0 (`esvaziou`) e limpado
+Regra: `emptySince[g]` é definido quando `refs[g]` chega a 0 (`esvaziou`) e limpado
 quando sobe (`tocou`); na abertura, todo grupo vivo com `refs == 0` recebe
-`vazioDesde = agora` (o reinício só ESTENDE a visibilidade, nunca a encurta). Um
-grupo sai quando `RetainEmptyGroups > 0 && refs == 0 && agora − vazioDesde ≥ RetainEmptyGroups`
-**E `ultimaMexida[g] <= mexidasCobertas`** — a transição que esvaziou o grupo já
+`emptySince = agora` (o reinício só ESTENDE a visibilidade, nunca a encurta). Um
+grupo sai quando `RetainEmptyGroups > 0 && refs == 0 && agora − emptySince ≥ RetainEmptyGroups`
+**E `lastTouch[g] <= coveredTouches`** — a transição que esvaziou o grupo já
 está durável em record E em página (coberta por um checkpoint). Sem essa cláusula,
 uma cauda rasgada deixaria em disco uma linha viva apontando para um grupo
 aposentado, e a dobra da reabertura a contaria como órfã. Aposentar =
-`dict.Aposenta(id)` (fsync) + `aposentados.Add(1)`. Grupo aposentado some do
+`dict.Retire(id)` (fsync) + `aposentados.Add(1)`. Grupo aposentado some do
 `_counters` (`vivo == false`) e a mesma chave, se reaparecer, interna um id NOVO.
 
 - [ ] **Passo 1: testes**
-  - `TestGrupoZeradoComRefsNaoEhAposentado`: 500 linhas na OLT X, nenhuma satisfaz o `where`; `total == 0`; relógio avança 30 dias; `AposentaVazios` ⇒ 0. (É o cenário da proposta §6.5 que a regra intuitiva erra.)
+  - `TestGrupoZeradoComRefsNaoEhAposentado`: 500 linhas na OLT X, nenhuma satisfaz o `where`; `total == 0`; relógio avança 30 dias; `RetireEmptyGroups` ⇒ 0. (É o cenário da proposta §6.5 que a regra intuitiva erra.)
   - `TestGrupoSemRefsEhAposentadoDepoisDoPrazo`: lápides em todas as linhas; antes do prazo ⇒ continua; depois ⇒ aposentado; `_counters` (via `Grupo`) `vivo=false`; a OLT reaparece ⇒ id novo.
-  - `TestReinicioEstendeAVisibilidade`: refs 0 há 6 dias, reabre, `vazioDesde` = agora.
+  - `TestReinicioEstendeAVisibilidade`: refs 0 há 6 dias, reabre, `emptySince` = agora.
   - `TestRetainNeverNuncaAposenta`.
-  - `TestGrupoSoEhAposentadoDepoisDoCheckpointQueCobreASaida`: lápides esvaziam o grupo; relógio avança além do prazo; SEM checkpoint ⇒ `AposentaVazios` devolve 0; `Checkpoint()` ⇒ aposentado.
-  - **Mutações obrigatórias**: (1) (proposta §10) trocar a condição `refs == 0` por `total == 0` ⇒ `TestGrupoZeradoComRefsNaoEhAposentado` vermelho; (2) remover a cláusula `ultimaMexida <= mexidasCobertas` ⇒ `TestGrupoSoEhAposentadoDepoisDoCheckpointQueCobreASaida` vermelho. Relatar os dois.
+  - `TestGrupoSoEhAposentadoDepoisDoCheckpointQueCobreASaida`: lápides esvaziam o grupo; relógio avança além do prazo; SEM checkpoint ⇒ `RetireEmptyGroups` devolve 0; `Checkpoint()` ⇒ aposentado.
+  - **Mutações obrigatórias**: (1) (proposta §10) trocar a condição `refs == 0` por `total == 0` ⇒ `TestGrupoZeradoComRefsNaoEhAposentado` vermelho; (2) remover a cláusula `lastTouch <= coveredTouches` ⇒ `TestGrupoSoEhAposentadoDepoisDoCheckpointQueCobreASaida` vermelho. Relatar os dois.
 
 - [ ] **Passo 2: vermelho → implementar → verde → commit** — `contador: aposentadoria de grupos por refs==0 com prazo de visibilidade`.
 
@@ -793,17 +793,17 @@ do schema compilado — D2), mesma nota de `validateTTLRules`.
 // efetivos, `where` pelo CompilaCondicao (recusa campo de sistema), e recusa
 // `where` ou groupBy sobre coluna com merge: sum (Accumulates) — a idempotência do
 // contador depende de o estado ser função do último evento.
-func Compila(spec *schema.DatasetSpec, sc *schema.Compiled) ([]contador.Definicao, error)
+func Compila(spec *schema.DatasetSpec, sc *schema.Compiled) ([]counter.Definition, error)
 
 // Compilador prepara o callback de abertura do storage. Dentro do callback o
 // schema é compilado (spec.Compile(dict)) — no MESMO ponto em que hoje é compilado
 // depois do Open, só que antes do replay. Compilado() devolve o resultado.
 type Compilador struct{ … }
 func NovoCompilador(spec *schema.DatasetSpec) *Compilador
-func (c *Compilador) Callback() func(*fielddict.Dict) ([]contador.Definicao, error)
+func (c *Compilador) Callback() func(*fielddict.Dict) ([]counter.Definition, error)
 func (c *Compilador) Compilado() *schema.Compiled
 ```
-`Definicao.Where` é o texto do YAML com espaços colapsados (`strings.Join(strings.Fields(w), " ")`)
+`Definition.Where` é o texto do YAML com espaços colapsados (`strings.Join(strings.Fields(w), " ")`)
 — é o que vai ao manifest e decide reconstrução.
 
 - [ ] **Passo 1: testes** — `TestCompilaRecusaWhereSobreCampoSomado` (`merge: sum`), `TestCompilaRecusaWhereComCampoDeSistema`, `TestCompilaResolveColunaExtraida` (groupBy sobre coluna de `extract`), `TestCompiladorDevolveOMesmoSchemaQueOCallbackCompilou`.
@@ -846,22 +846,22 @@ schema sintético tem `name: <tabela>`. Erro do binder é renomeado para
 
 **Interfaces produzidas:**
 ```go
-// Leitor é o que a tabela precisa do contador (satisfeito por *contador.Contador).
+// Leitor é o que a tabela precisa do contador (satisfeito por *counter.Counter).
 type Leitor interface {
-	Limite() uint32
+	Limit() uint32
 	Grupo(id uint32) (chave, texto []byte, total, refs int64, vivo bool)
 	PorTexto(texto []byte) (uint32, bool)
 }
-func Tabela(def contador.Definicao, l Leitor) (*schema.Compiled, query.Store, error)
+func Tabela(def counter.Definition, l Leitor) (*schema.Compiled, query.Store, error)
 // Registra liga todos os contadores do Store no motor, sob o dataset.
 func Registra(eng *query.Engine, dataset string, st *storage.Store) error
 ```
 Schema sintético (string YAML como `especDaTabela` do meta): `name: <nome>`,
 `key.field: groupKey`, `schema.include: [groupKey, <colunas…>, total]`, tipos das
-colunas de `def.Tipos` (`boolean` para `TypeBool`). Cache: um `*schema.Compiled`
+colunas de `def.Types` (`boolean` para `TypeBool`). Cache: um `*schema.Compiled`
 por contador, construído em `Tabela` (não há `sync.Once` global).
 
-Fonte (`query.Store`): `AbreSnapshot()` devolve `types.Snapshot{LimitRowID: l.Limite()}`
+Fonte (`query.Store`): `AbreSnapshot()` devolve `types.Snapshot{LimitRowID: l.Limit()}`
 (congela o conjunto de grupos por consulta; `Epoch`/`Instant`/`BaseRowID`
 ficam zero e são ignorados pela fonte — godoc no molde do `meta.fonte.AbreSnapshot`);
 `ScanLive(snap)` itera `1..LimitRowID-1`, pulando `vivo == false`;
@@ -959,7 +959,7 @@ Sintaxe: `nishidb counters (--config F | --server ADDR [--user --password-file -
 Sem ação: tabela `contador  grupos  teto  aposentados  recusados` (local: `EstatisticasDeContadores`;
 remoto: `/v1/stats`). `--audit`: a tabela da proposta §5.6 (`contador grupos mantido
 recalculado divergência`), com a amostra de divergências abaixo quando houver, e
-exit 3 (`ErrDatasetCorrupt`) quando `Divergentes > 0` — divergência é corrupção
+exit 3 (`ErrDatasetCorrupt`) quando `DivergentGroups > 0` — divergência é corrupção
 de índice derivado, e o exit code é o que um script de operação lê. `--rebuild`:
 tabela `contador grupos duração`. `--config` com servidor no ar ⇒ exit 3 + dica
 `dicaDeServidor` (já existe). Saída via `escreveSaida` (tabwriter, uma escrita).
@@ -992,7 +992,7 @@ tabela `contador grupos duração`. `--config` com servidor no ar ⇒ exit 3 + d
 - Criar: `docs/aceite-contadores.md`
 
 - [ ] **Passo 1: rodar** `NISHIDB_BENCH_DIR=<disco real> go test ./benchmark/micro/ -run='^$' -bench='BenchmarkApplyIngestReal' -benchmem -benchtime=20000x -count=6` sem e com contadores; `benchstat`. Critério: allocs/op iguais; custo por evento reportado (esperado: microssegundos — uma passada extra pelo payload por contador).
-- [ ] **Passo 2: medir a dobra e a reconstrução** num dataset de 1M linhas sintéticas (o pacote `benchmark` tem gerador): tempo de `Dobra` (esperado: dezenas de ms) e de reconstrução (esperado: ordem do full scan).
+- [ ] **Passo 2: medir a dobra e a reconstrução** num dataset de 1M linhas sintéticas (o pacote `benchmark` tem gerador): tempo de `Fold` (esperado: dezenas de ms) e de reconstrução (esperado: ordem do full scan).
 - [ ] **Passo 3: `docs/aceite-contadores.md`** — no molde de `docs/aceite-indice-por-segmento.md`: critérios (um por invariante da proposta §10), os testes que provam cada um, as **mutações aplicadas com o vermelho e o verde de cada uma**, os números da bancada com origem, e o que ficou como débito.
 - [ ] **Passo 4:** `docs/architecture.md` recebe os números com a origem; commit — `aceite: contadores mantidos na escrita — bancada e prova por mutação`.
 
@@ -1042,7 +1042,7 @@ os gates de alocação (Denso32, dicionário, contador, avaliador, tabela, Put r
 
 **Mutações obrigatórias (vermelho → verde relatados no aceite):** fsync do
 dicionário; decremento de refs na troca de grupo; decremento de total na lápide;
-`Transiciona` gravando direto no mmap em vez do overlay; lápide da expiração sem
+`Transition` gravando direto no mmap em vez do overlay; lápide da expiração sem
 `applyRecord`; expiração oportunista sem `applyRecord`; dobra depois do replay;
 cópia dos totais fora do `wmu` na auditoria; enumerador da auditoria trocado por
 `ScanLive`; `total == 0` no lugar de `refs == 0` na aposentadoria; aposentadoria

@@ -104,7 +104,7 @@ func countersLocal(argConfig, dataset string, audita, reconstroi bool, amb Ambie
 		}
 		linhas := make([]linhaDeReconstrucao, 0, len(recs))
 		for _, r := range recs {
-			linhas = append(linhas, linhaDeReconstrucao{nome: r.Nome, linhas: r.Linhas, grupos: r.Grupos, duracaoMs: r.Duracao.Milliseconds()})
+			linhas = append(linhas, linhaDeReconstrucao{nome: r.Name, linhas: r.Rows, grupos: r.Groups, duracaoMs: r.Duration.Milliseconds()})
 		}
 		return escreveSaida("counters", amb, func(w io.Writer) { escreveReconstrucao(w, dataset, linhas) })
 	default:
@@ -178,11 +178,11 @@ type linhaDeContador struct {
 	auditDivergentes, auditUnix int64
 }
 
-func contadorDoStorage(e counter.Estatisticas) linhaDeContador {
-	return linhaDeContador{nome: e.Nome, linhas: e.Linhas, total: e.Total,
-		grupos: e.Grupos, teto: e.Teto, aposentados: e.Aposentados,
-		recusados: e.Recusados, orfas: e.Orfas, bytes: e.Bytes,
-		auditDivergentes: e.AuditoriaDivergentes, auditUnix: e.AuditoriaUltimaUnix}
+func contadorDoStorage(e counter.Stats) linhaDeContador {
+	return linhaDeContador{nome: e.Name, linhas: e.Rows, total: e.Total,
+		grupos: e.Groups, teto: e.Ceiling, aposentados: e.Retired,
+		recusados: e.Refused, orfas: e.Orphans, bytes: e.Bytes,
+		auditDivergentes: e.AuditDivergences, auditUnix: e.AuditLastUnix}
 }
 
 func contadorDoWire(c protocol.CounterStats) linhaDeContador {
@@ -236,13 +236,13 @@ type linhaDeAuditoria struct {
 	amostra              []amostraDeDivergencia
 }
 
-func auditoriaDoStorage(r counter.Relatorio) linhaDeAuditoria {
-	l := linhaDeAuditoria{nome: r.Nome, grupos: r.Grupos, mantido: r.Mantido, recalculado: r.Recalculado,
-		divergentes: r.Divergentes, naoInternadas: r.NaoInternadas,
-		agregadosDivergentes: r.AgregadosDivergentes, linhasVarridas: r.LinhasVarridas,
-		duracaoMs: r.Duracao.Milliseconds()}
-	for _, d := range r.Amostra {
-		l.amostra = append(l.amostra, amostraDeDivergencia{d.Texto, d.Mantido, d.Recalculado, d.RefsMantido, d.RefsRecalculado})
+func auditoriaDoStorage(r counter.Report) linhaDeAuditoria {
+	l := linhaDeAuditoria{nome: r.Name, grupos: r.Groups, mantido: r.Maintained, recalculado: r.Recomputed,
+		divergentes: r.DivergentGroups, naoInternadas: r.NotInterned,
+		agregadosDivergentes: r.DivergentAggregates, linhasVarridas: r.RowsScanned,
+		duracaoMs: r.Duration.Milliseconds()}
+	for _, d := range r.Sample {
+		l.amostra = append(l.amostra, amostraDeDivergencia{d.Text, d.Maintained, d.Recomputed, d.RefsMaintained, d.RefsRecomputed})
 	}
 	return l
 }
@@ -282,7 +282,7 @@ func escreveAuditoria(w io.Writer, dataset string, linhas []linhaDeAuditoria) {
 			continue
 		}
 		titulo(w, "")
-		titulo(w, "divergências de %s (até %d):", l.nome, counter.TetoDaAmostra)
+		titulo(w, "divergências de %s (até %d):", l.nome, counter.SampleCeiling)
 		linha(w, "  GRUPO", "MANTIDO", "RECALCULADO", "REFS MANTIDO", "REFS RECALCULADO")
 		for _, d := range l.amostra {
 			linha(w, "  "+d.groupKey, strconv.FormatInt(d.mantido, 10), strconv.FormatInt(d.recalculado, 10),

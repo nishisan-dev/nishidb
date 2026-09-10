@@ -208,7 +208,7 @@ type Options struct {
 	// Nil é "sem contadores" — e um dataset cujo manifest declara contadores
 	// é RECUSADO nesse caso: abrir sem as definições deixaria o vetor parado
 	// enquanto o Put anda.
-	CompilaContadores func(dict *fielddict.Dict) ([]counter.Definicao, error)
+	CompilaContadores func(dict *fielddict.Dict) ([]counter.Definition, error)
 	// Log é o logger estruturado do §95. Quando nil, o Store escreve em
 	// stderr no formato texto — que é o comportamento que os log.Printf
 	// tinham antes, e perder a divergência de recovery só porque o chamador
@@ -365,7 +365,7 @@ type Store struct {
 	// vazio no dataset sem `counters:`. Transicionados no passo 7c do
 	// applyRecord, sob o wmu; lidos pela tabela virtual e pela auditoria sem
 	// lock do Store.
-	contadores []*counter.Contador
+	contadores []*counter.Counter
 	// contadoresARecriar são os que a abertura decidiu reconstruir; a
 	// varredura roda depois do ramo de recovery e a lista é esvaziada.
 	contadoresARecriar []pendenciaDeContador
@@ -2005,7 +2005,7 @@ func (s *Store) applyRecord(a recordApply) error {
 	// como um erro na agenda. Não é sticky.
 	lapide := a.flags&types.FlagTombstone != 0
 	for _, c := range s.contadores {
-		if err := c.Transiciona(a.rowID, a.payload, lapide); err != nil {
+		if err := c.Transition(a.rowID, a.payload, lapide); err != nil {
 			return err
 		}
 	}

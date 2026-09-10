@@ -240,12 +240,12 @@ func umSeVerdadeiro(v bool) float64 {
 // Nascem com zero na subida, como todas as que podem alarmar: um dataset com
 // contador e nenhuma linha emite as dez, zeradas — lacuna não se distingue de
 // alvo fora do ar. O rótulo `counter` vem do YAML, conjunto fechado.
-func amostrasDeContadores(dataset string, ests []counter.Estatisticas) []metrics.Sample {
+func amostrasDeContadores(dataset string, ests []counter.Stats) []metrics.Sample {
 	out := make([]metrics.Sample, 0, len(ests)*10)
 	for _, e := range ests {
 		rotulo := []metrics.Label{
 			{Name: metrics.LabelDataset, Value: dataset},
-			{Name: metrics.LabelCounter, Value: e.Nome},
+			{Name: metrics.LabelCounter, Value: e.Name},
 		}
 		out = append(out,
 			metrics.Sample{
@@ -254,7 +254,7 @@ func amostrasDeContadores(dataset string, ests []counter.Estatisticas) []metrics
 				Help:   "grupos vivos do contador (inclui os com total zero; exclui os aposentados)",
 				Type:   metrics.TypeGauge,
 				Labels: rotulo,
-				Value:  float64(e.Grupos),
+				Value:  float64(e.Groups),
 			},
 			metrics.Sample{
 				Family: metrics.MetCounterGroupsMax,
@@ -262,7 +262,7 @@ func amostrasDeContadores(dataset string, ests []counter.Estatisticas) []metrics
 				Help:   "teto de grupos vivos (maxGroups) do contador",
 				Type:   metrics.TypeGauge,
 				Labels: rotulo,
-				Value:  float64(e.Teto),
+				Value:  float64(e.Ceiling),
 			},
 			metrics.Sample{
 				Family: metrics.MetCounterGroupsRefusedTotal,
@@ -270,7 +270,7 @@ func amostrasDeContadores(dataset string, ests []counter.Estatisticas) []metrics
 				Help:   "grupos novos recusados pelo teto nesta abertura; a linha entrou e NÃO é contada — diferente de zero é total errado para baixo",
 				Type:   metrics.TypeCounter,
 				Labels: rotulo,
-				Value:  float64(e.Recusados),
+				Value:  float64(e.Refused),
 			},
 			metrics.Sample{
 				Family: metrics.MetCounterGroupsRetiredTotal,
@@ -278,7 +278,7 @@ func amostrasDeContadores(dataset string, ests []counter.Estatisticas) []metrics
 				Help:   "grupos aposentados por ficarem sem linha há mais que retainEmptyGroups, desde a criação do contador",
 				Type:   metrics.TypeCounter,
 				Labels: rotulo,
-				Value:  float64(e.Aposentados),
+				Value:  float64(e.Retired),
 			},
 			metrics.Sample{
 				Family: metrics.MetCounterOrphanEntries,
@@ -286,7 +286,7 @@ func amostrasDeContadores(dataset string, ests []counter.Estatisticas) []metrics
 				Help:   "entradas do vetor apontando para grupo aposentado ou inexistente, zeradas na dobra da abertura; não é esperado fora de uma janela de crash",
 				Type:   metrics.TypeGauge,
 				Labels: rotulo,
-				Value:  float64(e.Orfas),
+				Value:  float64(e.Orphans),
 			},
 			metrics.Sample{
 				Family: metrics.MetCounterBytes,
@@ -302,7 +302,7 @@ func amostrasDeContadores(dataset string, ests []counter.Estatisticas) []metrics
 				Help:   "linhas vivas que apontam para algum grupo deste contador; abaixo do rows do dataset são as linhas sem alguma coluna do groupBy, que o contador não conta por desenho",
 				Type:   metrics.TypeGauge,
 				Labels: rotulo,
-				Value:  float64(e.Linhas),
+				Value:  float64(e.Rows),
 			},
 			metrics.Sample{
 				Family: metrics.MetCounterCountedRows,
@@ -318,7 +318,7 @@ func amostrasDeContadores(dataset string, ests []counter.Estatisticas) []metrics
 				Help:   "divergências na última auditoria conclusiva — grupos, linhas sem grupo internado e os dois agregados; 0 até a primeira (ver o timestamp ao lado)",
 				Type:   metrics.TypeGauge,
 				Labels: rotulo,
-				Value:  float64(e.AuditoriaDivergentes),
+				Value:  float64(e.AuditDivergences),
 			},
 			metrics.Sample{
 				Family: metrics.MetCounterAuditLastSuccessTimestamp,
@@ -326,7 +326,7 @@ func amostrasDeContadores(dataset string, ests []counter.Estatisticas) []metrics
 				Help:   "Unix timestamp da última auditoria conclusiva do contador; 0 até a primeira",
 				Type:   metrics.TypeGauge,
 				Labels: rotulo,
-				Value:  float64(e.AuditoriaUltimaUnix),
+				Value:  float64(e.AuditLastUnix),
 			},
 		)
 	}

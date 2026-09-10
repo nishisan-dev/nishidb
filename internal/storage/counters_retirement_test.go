@@ -42,7 +42,7 @@ func TestAposentadoriaDeGruposNoStore(t *testing.T) {
 	if _, ok := ct.ByText([]byte("X")); ok {
 		t.Fatal("o grupo aposentado não pode resolver por texto")
 	}
-	if est := ct.Stats(); est.Aposentados != 1 || est.Grupos != 0 {
+	if est := ct.Stats(); est.Retired != 1 || est.Groups != 0 {
 		t.Fatalf("estatísticas = %+v", est)
 	}
 }

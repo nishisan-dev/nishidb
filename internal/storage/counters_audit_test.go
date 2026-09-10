@@ -15,15 +15,15 @@ import (
 func chaveDeServico(i int) string { return fmt.Sprintf("c-%04d", i) }
 
 // relatorioDe devolve o relatório do contador nomeado.
-func relatorioDe(t *testing.T, rs []counter.Relatorio, nome string) counter.Relatorio {
+func relatorioDe(t *testing.T, rs []counter.Report, nome string) counter.Report {
 	t.Helper()
 	for _, r := range rs {
-		if r.Nome == nome {
+		if r.Name == nome {
 			return r
 		}
 	}
 	t.Fatalf("relatório de %q não veio: %+v", nome, rs)
-	return counter.Relatorio{}
+	return counter.Report{}
 }
 
 // TestAuditoriaSemDivergenciaComIngestaoConcorrente prova que o par (snapshot,
@@ -86,12 +86,12 @@ func TestAuditoriaSemDivergenciaComIngestaoConcorrente(t *testing.T) {
 			t.Fatalf("rodada %d: %v", rodada, err)
 		}
 		for _, r := range rs {
-			if r.Divergentes != 0 || r.NaoInternadas != 0 {
+			if r.DivergentGroups != 0 || r.NotInterned != 0 {
 				close(pare)
 				wg.Wait()
-				t.Fatalf("rodada %d: %s divergiu com ingestão concorrente: %+v", rodada, r.Nome, r)
+				t.Fatalf("rodada %d: %s divergiu com ingestão concorrente: %+v", rodada, r.Name, r)
 			}
-			if r.LinhasVarridas == 0 {
+			if r.RowsScanned == 0 {
 				close(pare)
 				wg.Wait()
 				t.Fatalf("rodada %d: a auditoria não varreu linha nenhuma", rodada)
@@ -133,13 +133,13 @@ func TestAuditoriaCopiaOsTotaisNoMesmoInstanteDoSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := relatorioDe(t, rs, "aut")
-	if r.Divergentes != 0 {
+	if r.DivergentGroups != 0 {
 		t.Fatalf("a cópia dos totais não é do instante do snapshot: %+v", r)
 	}
 	// Os agregados vêm do MESMO retrato, tirado sob o mesmo wmu. Lidos depois
 	// de soltar o writer, o Put que este seam deixa entrar os moveria e a
 	// auditoria acusaria divergência onde só houve escrita concorrente.
-	if r.AgregadosDivergentes != 0 {
+	if r.DivergentAggregates != 0 {
 		t.Fatalf("os agregados não vieram do instante do snapshot: %+v", r)
 	}
 }
@@ -184,10 +184,10 @@ func TestAuditoriaCongelaOsAgregadosNoMesmoInstante(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := relatorioDe(t, rs, "aut")
-	if r.AgregadoLinhas != 10 || r.AgregadoTotal != 10 {
+	if r.AggregateRows != 10 || r.AggregateTotal != 10 {
 		t.Fatalf("os agregados não são do instante do snapshot: %+v", r)
 	}
-	if r.AgregadosDivergentes != 0 || r.Divergentes != 0 {
+	if r.DivergentAggregates != 0 || r.DivergentGroups != 0 {
 		t.Fatalf("escrita concorrente não é divergência: %+v", r)
 	}
 }
@@ -209,7 +209,7 @@ func TestAuditoriaContaLinhaVencidaSemLapide(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := relatorioDe(t, rs, "aut")
-	if r.Divergentes != 0 || r.Mantido != 1 || r.Recalculado != 1 || r.LinhasVarridas != 1 {
+	if r.DivergentGroups != 0 || r.Maintained != 1 || r.Recomputed != 1 || r.RowsScanned != 1 {
 		t.Fatalf("a linha vencida sem lápide tem de contar dos dois lados: %+v", r)
 	}
 }
@@ -224,7 +224,7 @@ func TestAuditoriaDetectaDeriva(t *testing.T) {
 	// Deriva injetada por FORA do Store: o contador passa a acreditar que a
 	// última linha está em B, enquanto o record diz A.
 	c := contadorChamado(t, s, "aut")
-	if err := c.Transiciona(ultima, payloadServico(t, s, "x", "B", true, rel.agora()), false); err != nil {
+	if err := c.Transition(ultima, payloadServico(t, s, "x", "B", true, rel.agora()), false); err != nil {
 		t.Fatal(err)
 	}
 	rs, err := s.AuditaContadores(context.Background())
@@ -232,30 +232,30 @@ func TestAuditoriaDetectaDeriva(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := relatorioDe(t, rs, "aut")
-	if r.Divergentes != 2 {
+	if r.DivergentGroups != 2 {
 		t.Fatalf("A e B tinham de divergir: %+v", r)
 	}
-	if r.Mantido != 10 || r.Recalculado != 10 {
+	if r.Maintained != 10 || r.Recomputed != 10 {
 		t.Fatalf("as somas batem por coincidência (uma linha trocou de grupo): %+v", r)
 	}
 	// Os grupos derivaram e o AGREGADO não: a linha continua sendo uma, e
 	// continua satisfazendo a condição — só está no grupo errado. É esta
 	// asserção que impede a conferência dos agregados de virar uma segunda
 	// contagem da mesma coisa que Divergentes já conta.
-	if r.AgregadosDivergentes != 0 {
+	if r.DivergentAggregates != 0 {
 		t.Fatalf("deriva de grupo não pode acusar o agregado: %+v", r)
 	}
-	if r.AgregadoLinhas != 10 || r.AgregadoTotal != 10 {
-		t.Fatalf("agregados = linhas %d total %d, quer 10 e 10", r.AgregadoLinhas, r.AgregadoTotal)
+	if r.AggregateRows != 10 || r.AggregateTotal != 10 {
+		t.Fatalf("agregados = linhas %d total %d, quer 10 e 10", r.AggregateRows, r.AggregateTotal)
 	}
-	nomes := map[string]counter.Divergencia{}
-	for _, d := range r.Amostra {
-		nomes[d.Texto] = d
+	nomes := map[string]counter.Divergence{}
+	for _, d := range r.Sample {
+		nomes[d.Text] = d
 	}
-	if a := nomes["A"]; a.Mantido != 9 || a.Recalculado != 10 || a.RefsMantido != 9 || a.RefsRecalculado != 10 {
+	if a := nomes["A"]; a.Maintained != 9 || a.Recomputed != 10 || a.RefsMaintained != 9 || a.RefsRecomputed != 10 {
 		t.Fatalf("A = %+v", a)
 	}
-	if b := nomes["B"]; b.Mantido != 1 || b.Recalculado != 0 {
+	if b := nomes["B"]; b.Maintained != 1 || b.Recomputed != 0 {
 		t.Fatalf("B = %+v", b)
 	}
 }
@@ -268,14 +268,14 @@ func TestReconstruirZeraADeriva(t *testing.T) {
 		ultima, _ = mustPut(t, s, k, 1, payloadServico(t, s, k, "A", true, rel.agora()), nil)
 	}
 	c := contadorChamado(t, s, "aut")
-	if err := c.Transiciona(ultima, payloadServico(t, s, "x", "B", true, rel.agora()), false); err != nil {
+	if err := c.Transition(ultima, payloadServico(t, s, "x", "B", true, rel.agora()), false); err != nil {
 		t.Fatal(err)
 	}
 	recs, err := s.ReconstroiContadores(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(recs) != 1 || recs[0].Linhas != 10 || recs[0].Nome != "aut" {
+	if len(recs) != 1 || recs[0].Rows != 10 || recs[0].Name != "aut" {
 		t.Fatalf("reconstrução = %+v", recs)
 	}
 	exigeTotal(t, s, "aut", "A", 10, 10)
@@ -284,7 +284,7 @@ func TestReconstruirZeraADeriva(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r := relatorioDe(t, rs, "aut"); r.Divergentes != 0 {
+	if r := relatorioDe(t, rs, "aut"); r.DivergentGroups != 0 {
 		t.Fatalf("depois de reconstruir: %+v", r)
 	}
 	// E o writer continua aceitando escrita.
@@ -363,7 +363,7 @@ func TestAuditoriaAcusaOAgregadoContraORecalculado(t *testing.T) {
 		ultima, _ = mustPut(t, s, k, 1, payloadServico(t, s, k, "A", true, rel.agora()), nil)
 	}
 	c := contadorChamado(t, s, "aut")
-	if err := c.Transiciona(ultima, payloadServico(t, s, "x", "A", false, rel.agora()), false); err != nil {
+	if err := c.Transition(ultima, payloadServico(t, s, "x", "A", false, rel.agora()), false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -372,24 +372,24 @@ func TestAuditoriaAcusaOAgregadoContraORecalculado(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := relatorioDe(t, rs, "aut")
-	if r.Mantido != 9 || r.Recalculado != 10 {
+	if r.Maintained != 9 || r.Recomputed != 10 {
 		t.Fatalf("a bancada não separa mantido de recalculado: %+v", r)
 	}
 	// As LINHAS não mudaram: a linha continua no grupo A, só deixou de contar
 	// para a condição. Logo só o total do agregado pode divergir.
-	if r.AgregadoLinhas != 10 || r.LinhasRecalculadas != 10 {
-		t.Fatalf("linhas: agregado %d, recalculado %d; quer 10 e 10", r.AgregadoLinhas, r.LinhasRecalculadas)
+	if r.AggregateRows != 10 || r.RowsRecomputed != 10 {
+		t.Fatalf("linhas: agregado %d, recalculado %d; quer 10 e 10", r.AggregateRows, r.RowsRecomputed)
 	}
-	if r.AgregadoTotal != 9 {
-		t.Fatalf("o agregado tem de carregar a deriva: total %d, quer 9", r.AgregadoTotal)
+	if r.AggregateTotal != 9 {
+		t.Fatalf("o agregado tem de carregar a deriva: total %d, quer 9", r.AggregateTotal)
 	}
-	if r.AgregadosDivergentes != 1 {
+	if r.DivergentAggregates != 1 {
 		t.Fatalf("o agregado discorda do recalculado e tem de ser acusado: %+v", r)
 	}
 	// A divergência do agregado alarma pela MESMA série que a dos grupos: uma
 	// conferência que achasse e não registrasse não teria efeito nenhum.
 	// Aqui são duas — o grupo A e o agregado.
-	if est := c.Stats(); est.AuditoriaDivergentes != 2 {
-		t.Fatalf("a auditoria registrou %d divergências, quer 2 (o grupo A e o agregado)", est.AuditoriaDivergentes)
+	if est := c.Stats(); est.AuditDivergences != 2 {
+		t.Fatalf("a auditoria registrou %d divergências, quer 2 (o grupo A e o agregado)", est.AuditDivergences)
 	}
 }

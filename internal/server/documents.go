@@ -108,21 +108,21 @@ func colunaMeta(f *schema.CompiledField) protocol.ColumnMeta {
 // contadorStats traduz o retrato dos contadores para o wire. Lista vazia, e
 // não nil, no dataset sem contador: o JSON sai como `[]`, e bloco presente é o
 // que separa "sem contadores" de "servidor antigo".
-func contadorStats(ests []counter.Estatisticas) []protocol.CounterStats {
+func contadorStats(ests []counter.Stats) []protocol.CounterStats {
 	out := make([]protocol.CounterStats, 0, len(ests))
 	for _, e := range ests {
 		out = append(out, protocol.CounterStats{
-			Name:                 e.Nome,
-			Rows:                 e.Linhas,
+			Name:                 e.Name,
+			Rows:                 e.Rows,
 			Total:                e.Total,
-			Groups:               e.Grupos,
-			MaxGroups:            e.Teto,
-			Retired:              e.Aposentados,
-			Refused:              e.Recusados,
-			OrphanEntries:        e.Orfas,
+			Groups:               e.Groups,
+			MaxGroups:            e.Ceiling,
+			Retired:              e.Retired,
+			Refused:              e.Refused,
+			OrphanEntries:        e.Orphans,
 			Bytes:                e.Bytes,
-			AuditDivergentGroups: e.AuditoriaDivergentes,
-			AuditLastSuccessUnix: e.AuditoriaUltimaUnix,
+			AuditDivergentGroups: e.AuditDivergences,
+			AuditLastSuccessUnix: e.AuditLastUnix,
 		})
 	}
 	return out

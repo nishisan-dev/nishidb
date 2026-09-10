@@ -15,7 +15,7 @@ import (
 
 // motorComMeta registra o dataset de mentira e a `_meta.counters` sobre os
 // contadores dados — a mesma costura do Registra, sem o Store real.
-func motorComMeta(t *testing.T, cs ...*counter.Contador) *query.Engine {
+func motorComMeta(t *testing.T, cs ...*counter.Counter) *query.Engine {
 	t.Helper()
 	spec, err := schema.Parse([]byte("version: 1\nname: servicos\nmaterialization:\n  key:\n    field: id\nschema:\n  fields:\n    id:\n      type: string\n"), schema.BuiltinDefaults)
 	if err != nil {
@@ -139,7 +139,7 @@ func TestMetaCountersAuditoriaEhNulaAteAPrimeira(t *testing.T) {
 		t.Fatalf("IS NULL tem de achar o contador nunca auditado: %v", rows)
 	}
 
-	c.RegistraAuditoria(3, time.Date(2026, 9, 4, 23, 40, 0, 0, time.UTC))
+	c.RecordAudit(3, time.Date(2026, 9, 4, 23, 40, 0, 0, time.UTC))
 	rows = consulta(t, eng, "SELECT auditDivergent, auditAt FROM _meta.counters")
 	if len(rows) != 1 || rows[0]["auditDivergent"] != "3" || rows[0]["auditAt"] == "<null>" {
 		t.Fatalf("depois da auditoria: %v", rows)
@@ -155,7 +155,7 @@ func TestMetaCountersAuditoriaEhNulaAteAPrimeira(t *testing.T) {
 func TestMetaCountersSemWhereTemCondicaoNula(t *testing.T) {
 	def := defPorOLT("servicos_por_olt")
 	def.Where = ""
-	def.NovoAvaliador = nil
+	def.NewEvaluator = nil
 	c := abreContador(t, def)
 	eng := motorComMeta(t, c)
 	rows := consulta(t, eng, "SELECT name, condition FROM _meta.counters WHERE condition IS NULL")

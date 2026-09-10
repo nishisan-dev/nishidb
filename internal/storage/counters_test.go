@@ -47,11 +47,11 @@ type contadorDeTeste struct {
 // callbackDeContadores é o CompilaContadores dos testes: resolve os nomes pelo
 // dicionário que o Open entrega — como o compilador de verdade faz — e devolve
 // as definições.
-func callbackDeContadores(cs ...contadorDeTeste) func(*fielddict.Dict) ([]counter.Definicao, error) {
-	return func(dict *fielddict.Dict) ([]counter.Definicao, error) {
-		out := make([]counter.Definicao, 0, len(cs))
+func callbackDeContadores(cs ...contadorDeTeste) func(*fielddict.Dict) ([]counter.Definition, error) {
+	return func(dict *fielddict.Dict) ([]counter.Definition, error) {
+		out := make([]counter.Definition, 0, len(cs))
 		for _, c := range cs {
-			def := counter.Definicao{Nome: c.nome, MaxGroups: c.teto, RetainEmptyGroups: c.retencao}
+			def := counter.Definition{Name: c.nome, MaxGroups: c.teto, RetainEmptyGroups: c.retencao}
 			if def.MaxGroups == 0 {
 				def.MaxGroups = 100
 			}
@@ -60,13 +60,13 @@ func callbackDeContadores(cs ...contadorDeTeste) func(*fielddict.Dict) ([]counte
 				if err != nil {
 					return nil, err
 				}
-				def.Colunas = append(def.Colunas, id)
-				def.Nomes = append(def.Nomes, col)
+				def.Columns = append(def.Columns, id)
+				def.Names = append(def.Names, col)
 				tipo := types.TypeString
 				if col == "slot" || col == "port" {
 					tipo = types.TypeInt64
 				}
-				def.Tipos = append(def.Tipos, tipo)
+				def.Types = append(def.Types, tipo)
 			}
 			if c.where {
 				auth, err := dict.LookupOrCreate([]byte("authenticated"))
@@ -74,7 +74,7 @@ func callbackDeContadores(cs ...contadorDeTeste) func(*fielddict.Dict) ([]counte
 					return nil, err
 				}
 				def.Where = "authenticated = true"
-				def.NovoAvaliador = func() counter.Avaliador { return &avaliadorPorID{campo: auth} }
+				def.NewEvaluator = func() counter.Evaluator { return &avaliadorPorID{campo: auth} }
 			}
 			out = append(out, def)
 		}
@@ -106,10 +106,10 @@ func payloadServico(t *testing.T, s *Store, key, olt string, auth bool, escrita 
 	return payloadOrdenado(t, s, campos)
 }
 
-func contadorChamado(t *testing.T, s *Store, nome string) *counter.Contador {
+func contadorChamado(t *testing.T, s *Store, nome string) *counter.Counter {
 	t.Helper()
 	for _, c := range s.Contadores() {
-		if c.Def().Nome == nome {
+		if c.Def().Name == nome {
 			return c
 		}
 	}
@@ -217,7 +217,7 @@ func TestCopyForwardNaoMexeNoContador(t *testing.T) {
 		t.Fatalf("reapendaSeVivo: %v, %v", copiado, err)
 	}
 	exigeTotal(t, s, "aut", "A", 1, 1)
-	if got := contadorChamado(t, s, "aut").Transicoes(); got == 0 {
+	if got := contadorChamado(t, s, "aut").Transitions(); got == 0 {
 		t.Fatal("as escritas anteriores tinham de ter transicionado")
 	}
 }
@@ -456,7 +456,7 @@ func TestMudarMaxGroupsNaoReconstroi(t *testing.T) {
 	if s2.ContadoresConstruidosForTest() != 0 {
 		t.Fatal("mudar o teto não muda o conteúdo: não reconstrói")
 	}
-	if contadorChamado(t, s2, "aut").Stats().Teto != 20 {
+	if contadorChamado(t, s2, "aut").Stats().Ceiling != 20 {
 		t.Fatal("o teto novo tem de valer")
 	}
 	exigeTotal(t, s2, "aut", "A", 1, 1)

@@ -60,7 +60,7 @@ declarado num dataset com `RowCount > 0`. A guarda está certa; o backfill a
    [store.go:691-698](internal/storage/store.go:691) e o `switch` de recovery só
    começa em `:699`; quem semeia o contador é
    [store_recovery.go:23](internal/storage/store_recovery.go:23). Um estado de
-   backfill criado ali com `Limite=0` se declararia **completo sem um único
+   backfill criado ali com `Limit=0` se declararia **completo sem um único
    bit** — `HasBitmap` true, plano indexado, e `WHERE x='y'` devolvendo zero
    linhas num dataset cheio. O estado nasce **depois** do switch e antes do
    `s.Checkpoint()` de [store.go:752](internal/storage/store.go:752).
