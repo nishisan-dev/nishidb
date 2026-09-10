@@ -3259,6 +3259,11 @@ const GLOSSARIO = 'docs/glossario.md'
 const SPEC = 'planning/identificadores-em-ingles.md'
 const PROTEGIDOS = 'planning/identificadores-em-ingles/protegidos.txt'
 const CAMINHOS = '-paths planning/identificadores-em-ingles/mapeamento-pacotes.tsv -paths planning/identificadores-em-ingles/mapeamento-arquivos.tsv'
+// Um -ifaces por TSV de grupo de interface JÁ APLICADO, montado no shell porque
+// o flag é repetível e não aceita glob. Sem ele, o método renomeado pelo
+// ifacerename não tem passada de citação nenhuma: o rf não o vê (é prosa) e o
+// renamecite lia só os mapeamento-*.tsv (Ruling R32).
+const IFACES = 'IFACES=$(ls planning/identificadores-em-ingles/grupos-de-interface-*.tsv | sed "s|^|-ifaces |" | tr "\\n" " ")'
 const tsvDe = (p) => `planning/identificadores-em-ingles/mapeamento-${fase}-${p.replaceAll('/', '_')}.tsv`
 const tsvGrupos = `planning/identificadores-em-ingles/grupos-de-interface-${fase}-${grupo}.tsv`
 
@@ -3410,7 +3415,10 @@ Ordem obrigatória (spec §4.6), com commit ao fim de cada passo:
       para um arquivo <pacote>.recusadas.txt no scratch, anote, e rode de novo sem elas; se falhar de novo, devolva ok=false.
    c) Edições ATENÇÃO: para cada motivo do TSV do pacote que começa por "ATENÇÃO arquivo:linha:", aplique a edição e
       confira com grep que o "<texto que some>" não existe mais no arquivo; se ainda existir, corrija; registre cada uma.
-   d) Passada de prosa DO PACOTE: "go run ./scripts/renamecite -dir . -idents ${tsvDe('<pacote>')} ${CAMINHOS} -protect ${PROTEGIDOS} -report ${scratch}/renamecite-<pacote>.txt".
+   d) Passada de prosa DO PACOTE: monte primeiro os flags dos grupos de interface com "${IFACES}" e rode
+      "go run ./scripts/renamecite -dir . -idents ${tsvDe('<pacote>')} ${CAMINHOS} $IFACES -protect ${PROTEGIDOS} -report ${scratch}/renamecite-<pacote>.txt".
+      O $IFACES cobre TODOS os grupos-de-interface-*.tsv já aplicados, inclusive os dos grupos anteriores: método de
+      interface é renomeado por outra ferramenta, e sem esses TSV as citações dele não têm passada nenhuma (R32).
       Leia as linhas "aplicado" e "pulado": toda "pulado ... ambíguo" é resolvida qualificando a citação à mão (é prosa);
       toda "aplicado" cujo token não era citação de identificador (nome de coluna, chave YAML, arquivo em disco, palavra
       de prosa) é revertida à mão e o token entra em ${PROTEGIDOS} (um por linha) no mesmo commit.
