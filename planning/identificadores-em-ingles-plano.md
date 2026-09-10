@@ -3395,8 +3395,11 @@ Ordem obrigatória (spec §4.6), com commit ao fim de cada passo:
    Verde → "git add -A" e "git commit -m '${grupo}: métodos de interface em inglês'".
 2. Para cada pacote, na ordem ${JSON.stringify(pacotes)}:
    a) Renames por posição PRIMEIRO (antes de o rf mexer nos arquivos, quando as posições do inventário ainda valem): para
-      cada linha de ${tsvDe('<pacote>')} com especie terminada em "#ambiguo" ou "#gopls" e novo ≠ nome atual, rode
-      "gopls rename -w <arquivo>:<linha>:<coluna> <novo>" (a posição está no motivo). Processe em ordem DECRESCENTE de
+      cada LINHA de ${tsvDe('<pacote>')} com especie terminada em "#ambiguo" ou "#gopls" e novo ≠ nome atual, rode
+      "gopls rename -w <arquivo>:<linha>:<coluna> <novo>" (a posição está no motivo). ATENÇÃO: um mesmo endereço
+      "#ambiguo" aparece em VÁRIAS linhas do TSV, uma por posição (o mesmo local declarado em blocos diferentes) — cada
+      linha é um rename; não deduplique por endereço. Confira com sed que o nome velho está na posição antes de cada
+      rename; se a coluna deslocou por um rename anterior na mesma linha, recalcule pela posição do token. Processe em ordem DECRESCENTE de
       linha e, na mesma linha, decrescente de coluna, para um rename não deslocar a coluna do seguinte. Use um daemon:
       antes do primeiro, 'gopls -listen="unix;/run/user/1000/gopls-ciclo.sock" >/dev/null 2>&1 &' e depois
       'gopls -remote="unix;/run/user/1000/gopls-ciclo.sock" rename -w ...' (~2 s por rename); mate o daemon ao fim do
