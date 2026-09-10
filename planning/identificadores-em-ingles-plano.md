@@ -3287,6 +3287,13 @@ refactor/identificadores-em-ingles; nunca toque em /home/lucas/Projects/nishisan
 compostos com git: UM comando git por chamada; laços vão para um arquivo .sh rodado com "bash arquivo.sh". Prosa em PT-BR,
 identificadores em inglês, mensagens de commit em PT-BR na voz do time, sem menção a agente.`
 
+const ide = `IDE: o GoLand tem ESTE worktree aberto como projeto (projectPath
+/home/lucas/Projects/nishisan/nishidb/.claude/worktrees/identificadores-em-ingles). Para achar declarações e usos prefira
+mcp__goland__search_symbol e mcp__goland__analyze_calls (índice da IDE, sem o falso positivo do grep por texto) e, para
+inspeções nos arquivos tocados, mcp__goland__lint_files; se a ferramenta não responder, use grep e go vet. NÃO use
+mcp__goland__rename_refactoring: ele endereça só por nome-no-arquivo (não distingue T.M nem locais homônimos) e não
+propaga método de interface aos implementadores — os renames são do gopls, do rf e do ifacerename.`
+
 const regras = `Regras (spec ${SPEC} §6, glossário ${GLOSSARIO}): identificadores em inglês idiomático Go
 (MixedCaps; iniciais ID, URL, HTTP, JSON, TLS, CRC, TTL, SQL, NDJSON, CLI, RSS; sem Get; nada de sufixo numérico);
 o que já está em inglês NÃO muda (entra em "mantidos" com motivo "já em inglês"); nome híbrido traduz só a
@@ -3373,7 +3380,7 @@ não cobre o fecho de ${GRUPOS}, linha do inventário sem decisão, linha ATENÇ
 disco ou chave de log que o rename tocaria (só identificadores Go mudam nesta fase).`
 {
   const vereditos = (await parallel(pacotes.map(p => () =>
-    agent(`Você é o refutador do pacote ${p}. Leia ${tsvDe(p)}, ${tsvGrupos}, ${GLOSSARIO} e o código do pacote.
+    agent(`Você é o refutador do pacote ${p}. Leia ${tsvDe(p)}, ${tsvGrupos}, ${GLOSSARIO} e o código do pacote. ${ide}
 Tente DERRUBAR entradas por qualquer destes critérios: ${CRITERIOS}
 Para cada uma que cair, dê o motivo e uma sugestão concreta. Só refute com evidência (cite arquivo e linha); dúvida não é
 refutação. Não edite nada. Devolva a lista, vazia se nada cair.`,
@@ -3464,6 +3471,9 @@ const [verificacao, completude] = await parallel([
 Rode, nesta ordem, e cole a saída resumida de cada um:
 "make build", "make test", "make test-race", "go test ./internal/gates/ -count=1", "make lint" (a contagem impressa
 tem de ser igual ao conteúdo de .golangci-baseline; se for maior, liste os apontamentos novos com arquivo:linha).
+Depois rode mcp__goland__lint_files (min_severity error) sobre os arquivos .go listados por
+"git diff --name-only origin/main..HEAD" (${ide}) e relate os erros que a IDE apontar; erro da IDE que o compilador
+não pega entra no relatório, não derruba ok.
 Qualquer vermelho: ok=false, com a saída COMPLETA do que falhou e o seu diagnóstico (mapeamento errado? citação morta?
 godoc que não começa pelo nome novo?). Não corrija nada.`, { label: `verifica:${grupo}`, phase: 'Verificar', schema: RELATORIO, model: 'opus' }),
   () => agent(`Você é o crítico de completude do grupo ${grupo}. ${ambiente}
@@ -3807,7 +3817,7 @@ Mais um commit por pacote cujas citações herdadas foram corrigidas.
 
 ### Tarefa 6.1: Docs e diagramas
 
-- [ ] `docs/architecture.md`: rodar `renamecite` com TODOS os TSV do ciclo (`-idents` de cada `mapeamento-2-*.tsv`, `-paths` dos dois de caminhos, `-tests`, `-logkeys`) sobre o repositório inteiro uma última vez — é idempotente — e ler o relatório: toda linha "ambíguo" é resolvida à mão qualificando a citação.
+- [ ] `docs/architecture.md`: rodar `renamecite` com TODOS os TSV do ciclo (`-idents` de cada `mapeamento-2-*.tsv`, `-ifaces` de cada `grupos-de-interface-2-*.tsv`, `-paths` dos dois de caminhos, `-tests`, `-logkeys`) sobre o repositório inteiro uma última vez — é idempotente — e ler o relatório: toda linha "ambíguo" é resolvida à mão qualificando a citação.
 - [ ] `docs/diagrams/*.puml`: um agente lê cada diagrama e troca participantes e notas que citam identificador (`Store.Apenda` → `Store.Append`), deixando a prosa; validar cada um pelo servidor `uml.nishisan.dev` (a memória do projeto diz como: encoder deflate+base64 e uma linha que não é sintaxe para provar que o validador discrimina).
 - [ ] `docs/doutrina-de-verificacao.md`: parágrafo novo com a classe de defeito que este ciclo fechou ("citação morta em comentário fora do escopo") e o gate que a cobre.
 - [ ] Commit "docs: architecture, diagramas e doutrina após os identificadores em inglês".

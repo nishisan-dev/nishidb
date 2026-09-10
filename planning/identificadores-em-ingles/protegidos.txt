@@ -114,8 +114,8 @@
 #     internal/storage/counter/dict.go:203; "Grupos são inventário físico",
 #     retirement.go:34).
 #   - TEXTO DE AJUDA de métrica, que é dado exposto no /metrics: `Linhas`, do
-#     `# HELP  Linhas gravadas…` de internal/server/history.go:294 e dos dois
-#     lugares que reproduzem o cabeçalho.
+#     `# HELP  Linhas gravadas…` de internal/server/history.go:321 (o comentário em :294 e os dois
+#     lugares seguintes reproduzem o cabeçalho).
 #   - CHAVE DE LOG cujo domínio é homônimo de identificador: a WARN
 #     `janela.maior_que_retencao` (internal/server/history.go:133,
 #     internal/server/history_test.go:265 e a tabela do README:723) é chave
