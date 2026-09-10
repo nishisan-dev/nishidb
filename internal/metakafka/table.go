@@ -152,7 +152,7 @@ type colunaComID struct {
 }
 
 // Tabela monta o schema sintético e o Store virtual de `_meta.kafka`.
-func Tabela(f Fonte) (*schema.Compiled, query.Store, error) {
+func Table(f Fonte) (*schema.Compiled, query.Store, error) {
 	spec, err := schema.Parse([]byte(especDaTabela), schema.BuiltinDefaults)
 	if err != nil {
 		return nil, nil, fmt.Errorf("metakafka: spec da tabela %s.%s inválida: %w", meta.Namespace, TabelaMetaKafka, err)
@@ -172,7 +172,7 @@ func Tabela(f Fonte) (*schema.Compiled, query.Store, error) {
 	for k, nome := range nomesDasColunas {
 		campo, ok := sc.FieldByName([]byte(nome))
 		if !ok {
-			return nil, nil, erroDeColuna(nome)
+			return nil, nil, columnError(nome)
 		}
 		fo.colunas = append(fo.colunas, colunaComID{id: campo.ID, k: coluna(k)})
 	}
@@ -342,7 +342,7 @@ func (f *fonte) colheComum(temConsumidor bool, inst kafka.Instantaneo) comum {
 	if f.f.Estado != nil {
 		c.estado, c.detalhe = f.f.Estado()
 	} else {
-		c.estado, c.detalhe = EstadoDeclarado(f.f.Declarada)
+		c.estado, c.detalhe = DeclaredState(f.f.Declarada)
 	}
 	if temConsumidor {
 		c.filaRegistros, c.filaBytes = inst.FilaRegistros, inst.FilaBytes
@@ -410,7 +410,7 @@ func (f *fonte) GetByKey(snap types.Snapshot, key, buf []byte) (types.Record, []
 	// partições: o point lookup tem de enxergar exatamente o que o scan
 	// enxerga, senão devolveria falso negativo numa linha que o scan traria.
 	for id, l := range r.linhas {
-		if igualAChave(key, l) {
+		if equalsKey(key, l) {
 			return f.record(id, r, l, buf)
 		}
 	}
@@ -419,7 +419,7 @@ func (f *fonte) GetByKey(snap types.Snapshot, key, buf []byte) (types.Record, []
 
 // igualAChave compara a key pedida com o `id` da linha SEM alocar: o resumo é
 // a literal fixa, e a partição é o número em decimal.
-func igualAChave(key []byte, l linha) bool {
+func equalsKey(key []byte, l linha) bool {
 	if l.Resumo {
 		return string(key) == ChaveDoResumo
 	}

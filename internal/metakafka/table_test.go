@@ -379,7 +379,7 @@ func TestParticaoNovaEntraSemEmbaralharAsOutras(t *testing.T) {
 func TestMetaKafkaNaoRetemRetratoDepoisDoClose(t *testing.T) {
 	c := &consumidorFalso{inst: instantaneoCom(pos(0, 1, 1))}
 	f := fonteCom(c)
-	sc, store, err := metakafka.Tabela(f)
+	sc, store, err := metakafka.Table(f)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -398,7 +398,7 @@ func TestMetaKafkaNaoRetemRetratoDepoisDoClose(t *testing.T) {
 // sumir do resultado sem nada aparecer.
 func TestMetaKafkaRecusaSnapshotDesconhecido(t *testing.T) {
 	c := &consumidorFalso{inst: instantaneoCom(pos(0, 1, 1))}
-	_, store, err := metakafka.Tabela(fonteCom(c))
+	_, store, err := metakafka.Table(fonteCom(c))
 	if err != nil {
 		t.Fatal(err)
 	}

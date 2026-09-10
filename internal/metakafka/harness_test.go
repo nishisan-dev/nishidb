@@ -58,7 +58,7 @@ func motorComKafka(t *testing.T, f metakafka.Fonte) *query.Engine {
 	if err := eng.Register(dataset, sc, fakestorage.New(fakestorage.Indexes{})); err != nil {
 		t.Fatal(err)
 	}
-	if err := metakafka.Registra(eng, dataset, f); err != nil {
+	if err := metakafka.Register(eng, dataset, f); err != nil {
 		t.Fatal(err)
 	}
 	return eng

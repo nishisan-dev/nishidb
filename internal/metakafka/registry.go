@@ -110,7 +110,7 @@ type Fonte struct {
 // depende de processo nenhum. Com `enabled: true` e sem classificador, a
 // resposta é "" (→ NULL): um processo que não observa a ingestão não pode
 // dizer nem UP nem DOWN, e DEGRADED ("ainda subindo") seria mentira.
-func EstadoDeclarado(d Declarada) (estado, detalhe string) {
+func DeclaredState(d Declarada) (estado, detalhe string) {
 	if !d.Declarado || !d.Habilitado {
 		return protocol.StateDisabled, ""
 	}
@@ -122,14 +122,14 @@ func EstadoDeclarado(d Declarada) (estado, detalhe string) {
 // Chamado por todo caminho que registra um dataset BASE — servidor e CLI —,
 // SEMPRE, inclusive num dataset que não declara Kafka: "esta tabela não tem
 // fonte" é uma resposta, e `SELECT *` nunca pode ser erro.
-func Registra(eng *query.Engine, dataset string, f Fonte) error {
-	sc, store, err := Tabela(f)
+func Register(eng *query.Engine, dataset string, f Fonte) error {
+	sc, store, err := Table(f)
 	if err != nil {
 		return err
 	}
-	return eng.RegistraVirtual(dataset, meta.Namespace, TabelaMetaKafka, sc, store)
+	return eng.RegisterVirtual(dataset, meta.Namespace, TabelaMetaKafka, sc, store)
 }
 
-func erroDeColuna(nome string) error {
+func columnError(nome string) error {
 	return fmt.Errorf("metakafka: coluna %q sem FieldID no schema sintético", nome)
 }
