@@ -35,7 +35,7 @@ type TTLRuleSpec struct {
 	ExpireAfterWrite string `yaml:"expireAfterWrite"`
 }
 
-// TTLRule é uma regra validada. Duracao zero significa IMORTAL — a regra
+// TTLRule é uma regra validada. Duration zero significa IMORTAL — a regra
 // casou e decidiu que a entidade não expira —, e é distinto de "nenhuma regra
 // casou", que o chamador representa não achando regra nenhuma.
 type TTLRule struct {

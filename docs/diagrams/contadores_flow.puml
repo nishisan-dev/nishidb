@@ -15,7 +15,7 @@ partition "Escrita (applyRecord, sob wmu)" {
   if (lápide?) then (sim)
     :nova = WithoutGroup;
   else (não)
-    :Deriva(payload):
+    :Derive(payload):
     chave composta (valuekey) + where;
     if (grupo novo?) then (sim)
       :Interna no dicionário
@@ -79,12 +79,12 @@ partition "Abertura" {
 partition "Auditoria (rota ADMIN)" {
   start
   :sob wmu por microssegundos:
-  AbreSnapshot + Congela(totais, refs);
+  AbreSnapshot + AuditSnapshot(totais, refs);
   :solta o wmu;
   :enumerador próprio:
   linha com location e sem lápide
   na versão T0 (journal), rederiva
-  com um Derivador próprio;
+  com um Deriver próprio;
   if (snapshot expirou?) then (sim)
     :SNAPSHOT_TOO_OLD
     (inconclusiva);

@@ -468,7 +468,7 @@ func (s *DatasetSpec) DeriveHistory() *DatasetSpec {
 	}
 	// A spec derivada carrega o bloco (ver abaixo), então derivar de novo a
 	// partir dela produziria uma irmã da irmã. O par tem exatamente dois
-	// lados, e é o EhHistorico que fecha a recursão.
+	// lados, e é o IsHistory que fecha a recursão.
 	if s.IsHistory {
 		return nil
 	}

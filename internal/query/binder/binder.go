@@ -831,7 +831,7 @@ func (b *binder) fillExprSlots(e BoundExpr, s Slots) {
 			// A `folha` acima já falha alto por este motivo; este switch não
 			// falhava, e não há linter `exhaustive` no .golangci.yml para
 			// cobrar. Entra ANTES do primeiro nó novo precisar dele.
-			panic(fmt.Sprintf("binder: preencheSlots sem case para %T", e))
+			panic(fmt.Sprintf("binder: fillSlots sem case para %T", e))
 		}
 	}
 }

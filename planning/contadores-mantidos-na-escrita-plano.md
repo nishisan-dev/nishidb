@@ -386,8 +386,8 @@ func OpenDict(path string, teto uint32) (*Dict, error)
 func (d *Dict) Intern(chave []byte) (uint32, error)
 func (d *Dict) Key(id uint32) (chave []byte, vivo bool)   // aposentado → vivo=false
 func (d *Dict) ByKey(chave []byte) (uint32, bool)
-func (d *Dict) PorTexto(texto []byte) (uint32, bool)         // groupKey → id
-func (d *Dict) Retire(id uint32) error                     // registro + fsync; remove de ByKey/PorTexto
+func (d *Dict) ByText(texto []byte) (uint32, bool)         // groupKey → id
+func (d *Dict) Retire(id uint32) error                     // registro + fsync; remove de ByKey/ByText
 func (d *Dict) Limit() uint32                               // maior id emitido + 1
 func (d *Dict) LiveGroups() uint32
 func (d *Dict) RetiredGroups() uint32
@@ -470,7 +470,7 @@ func (c *Counter) AuditSnapshot() (totais, refs []int64, limite uint32)
 // Leitura (concorrente ao writer):
 func (c *Counter) Limit() uint32
 func (c *Counter) Grupo(id uint32) (chave []byte, texto []byte, total, refs int64, vivo bool)
-func (c *Counter) PorTexto(texto []byte) (uint32, bool)
+func (c *Counter) ByText(texto []byte) (uint32, bool)
 func (c *Counter) Stats() Stats
 func (c *Counter) Msync() error
 func (c *Counter) Close() error
@@ -498,8 +498,8 @@ UMA vez, por merge linear contra `colunasOrdenadas` (cópia ordenada de
 `Columns` com o índice de volta à ordem declarada), preenchendo
 `c.valores []types.Value` (scratch do writer) e marcando presença; qualquer
 coluna ausente ⇒ `WithoutGroup` (a proposta §6.3: entidade sem a coluna não é
-contada). Presentes todas: `valuekey.AppendComposite(c.chaveBuf[:0], c.valores)`,
-`c.chaveBuf = chave`, `id, err := c.dict.Interna(chave)`; `ErrGroupCeilingReached` ⇒
+contada). Presentes todas: `valuekey.AppendComposite(c.keyBuf[:0], c.valores)`,
+`c.keyBuf = chave`, `id, err := c.dict.Intern(chave)`; `ErrGroupCeilingReached` ⇒
 `WithoutGroup` + `recusados.Add(1)` + WARN uma vez. Condição: `c.avaliador.Avalia(payload)`
 (nil ⇒ true). Delta:
 
@@ -510,13 +510,13 @@ c.transicoes++
 if g := nova &^ conditionBit; g != WithoutGroup {           // inc ANTES do dec
 	c.refs[g].Add(1)
 	if nova&conditionBit != 0 { c.totais[g].Add(1) }
-	c.ultimaMexida[g] = c.transicoes
+	c.lastTouch[g] = c.transicoes
 	c.tocou(g) // aposentadoria (C4): limpa emptySince
 }
-if g := antiga &^ conditionBit; g != WithoutGroup && g < c.dict.Limite() { // guarda contra id órfão
+if g := antiga &^ conditionBit; g != WithoutGroup && g < c.dict.Limit() { // guarda contra id órfão
 	c.refs[g].Add(-1)
 	if antiga&conditionBit != 0 { c.totais[g].Add(-1) }
-	c.ultimaMexida[g] = c.transicoes
+	c.lastTouch[g] = c.transicoes
 	if c.refs[g].Load() == 0 { c.esvaziou(g, agora) }
 }
 c.over[rowID] = nova // Publish no overlay; o mmap só muda no ApplyOverlay
@@ -850,7 +850,7 @@ schema sintético tem `name: <tabela>`. Erro do binder é renomeado para
 type Leitor interface {
 	Limit() uint32
 	Grupo(id uint32) (chave, texto []byte, total, refs int64, vivo bool)
-	PorTexto(texto []byte) (uint32, bool)
+	ByText(texto []byte) (uint32, bool)
 }
 func Tabela(def counter.Definition, l Leitor) (*schema.Compiled, query.Store, error)
 // Registra liga todos os contadores do Store no motor, sob o dataset.
@@ -869,7 +869,7 @@ ficam zero e são ignorados pela fonte — godoc no molde do `meta.fonte.AbreSna
 `valuekey.DecodeComposite` da chave, zero-copy), `total`. **Zero alocação por
 linha**: o texto e a chave vêm do dicionário (memória estável), o payload é
 montado em `buf[:0]` com `encoding.AppendField` em ordem de FieldID;
-`GetByKey(snap, key, buf)` ⇒ `PorTexto(key)` ⇒ mesmo `record`. `Indexed` false;
+`GetByKey(snap, key, buf)` ⇒ `ByText(key)` ⇒ mesmo `record`. `Indexed` false;
 `Lookup` erro de rede de segurança (como o meta). RowID = id do grupo (crescente).
 
 - [ ] **Passo 1: testes ponta a ponta no pacote** (harness igual ao `meta_test.linhas`, mas via `query.Engine` com `RegistraVirtual`): as consultas da proposta §5.2/§5.3:

@@ -580,7 +580,7 @@ func TestLookupWithoutIndexIsError(t *testing.T) {
 		t.Error("Indexado diverge dos índices declarados")
 	}
 	if got := s.IndexedFields(); len(got) != 1 || got[0] != 2 {
-		t.Errorf("CamposIndexados = %v, want [2]", got)
+		t.Errorf("IndexedFields = %v, want [2]", got)
 	}
 }
 

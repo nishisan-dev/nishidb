@@ -289,7 +289,7 @@ Nenhum contrato muda, nenhuma concorrência é tocada.
 1. `descobreAninhados(p)` ([extract.go:221](internal/materializer/extract.go:221)) — **uma**
    varredura completa, com parser próprio (`b.descobridor`), que para cada chave chama
    `declarado(p.campo, f.Key)` e **pula** as declaradas;
-2. o laço `for _, d := range p.campo.Derivadas` ([extract.go:65-66](internal/materializer/extract.go:65)) —
+2. o laço `for _, d := range p.campo.DerivedColumns` ([extract.go:65-66](internal/materializer/extract.go:65)) —
    **mais 25** varreduras completas, uma por path, todas até o fim do documento.
 
 São **26 varreduras** do mesmo documento por evento. E `declarado`

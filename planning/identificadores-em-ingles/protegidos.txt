@@ -122,3 +122,7 @@ vazio.bin
 Chave
 Grupos
 Linhas
+Amostra
+Tipo
+Janela
+Prazo

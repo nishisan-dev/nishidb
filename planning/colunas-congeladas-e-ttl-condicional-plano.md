@@ -845,7 +845,7 @@ func BindCondition(e parser.Expr, sc *schema.Compiled) (*BoundCondition, error) 
 		return nil, errNoPos("condição não aceita parâmetro posicional")
 	}
 	bc := &BoundCondition{Expr: expr, Slots: b.slots()}
-	b.preencheSlotsDaExpr(bc.Expr, bc.Slots)
+	b.fillExprSlots(bc.Expr, bc.Slots)
 	for _, j := range b.pendente {
 		j.cmp.Val.Bytes = b.arena[j.start:j.end:j.end]
 	}

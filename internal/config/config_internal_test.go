@@ -99,7 +99,7 @@ func TestOBindPadraoEhLoopback(t *testing.T) {
 		t.Fatalf("bind padrão = %q, quer 127.0.0.1", c.Server.Bind)
 	}
 	if c.Addr() != "127.0.0.1:9142" {
-		t.Fatalf("Endereco = %q", c.Addr())
+		t.Fatalf("Addr = %q", c.Addr())
 	}
 	if c.BindExposed() {
 		t.Fatal("o bind padrão foi classificado como exposto")

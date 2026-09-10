@@ -227,7 +227,7 @@ func servidorComDoisDatasets(t *testing.T, blocoServer string) *server.Servidor 
 // TestCheckpointComTodosOsDatasetsRespeitaAOrdemDeterministicaDaSubida é o
 // Important 3 da revisão da B5: "todos os datasets" (corpo ausente) com MAIS
 // DE UM dataset de verdade, provando a ordem determinística (alfabética,
-// config.ListaDatasets) e que os DOIS aparecem na resposta feliz — não só
+// config.ListDatasets) e que os DOIS aparecem na resposta feliz — não só
 // um teste de unidade com dublê (mutations_internal_test.go), que prova a
 // LÓGICA de parar-no-primeiro-erro mas não a fiação real com s.datasets.
 func TestCheckpointComTodosOsDatasetsRespeitaAOrdemDeterministicaDaSubida(t *testing.T) {
@@ -248,7 +248,7 @@ func TestCheckpointComTodosOsDatasetsRespeitaAOrdemDeterministicaDaSubida(t *tes
 		t.Fatalf("datasets = %+v, quer 2", out.Datasets)
 	}
 	if out.Datasets[0].Name != "alfa" || out.Datasets[1].Name != "beta" {
-		t.Fatalf("ordem = [%s, %s], quer [alfa, beta] (ordem alfabética da subida, config.ListaDatasets)",
+		t.Fatalf("ordem = [%s, %s], quer [alfa, beta] (ordem alfabética da subida, config.ListDatasets)",
 			out.Datasets[0].Name, out.Datasets[1].Name)
 	}
 }

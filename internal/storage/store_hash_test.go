@@ -44,7 +44,7 @@ func TestIndexadoEhACapabilityQueOPlannerEsperava(t *testing.T) {
 	s := openStore(t, Options{CamposIndexadosPorNome: []string{"id", "status", "counter"}})
 	for _, campo := range []types.FieldID{fldID, fldStatus, fldCounter} {
 		if !s.Indexed(campo) {
-			t.Fatalf("Indexado(%d) = false num campo declarado", campo)
+			t.Fatalf("Indexed(%d) = false num campo declarado", campo)
 		}
 	}
 	if s.Indexed(999) {

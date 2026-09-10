@@ -60,7 +60,7 @@ func TestBind106IndexLookup(t *testing.T) {
 	c := comparisonOf(t, bq)
 	// O planner escolhe o caminho indexado por Indexado + CmpEq.
 	if !c.Field.Indexed {
-		t.Error("Indexado = false, want true")
+		t.Error("Indexed = false, want true")
 	}
 	if c.Op != parser.CmpEq {
 		t.Errorf("Op = %v", c.Op)

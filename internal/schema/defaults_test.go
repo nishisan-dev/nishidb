@@ -96,9 +96,9 @@ func TestDefaultsGlobaisInvalidosSaoRecusados(t *testing.T) {
 // exemplo do README e da spec mudam junto.
 func TestDefaultsPadraoSaoOsDaSpec(t *testing.T) {
 	if BuiltinDefaults.MaxRows != 100000 {
-		t.Errorf("DefaultsPadrao.MaxRows = %d, want 100000", BuiltinDefaults.MaxRows)
+		t.Errorf("BuiltinDefaults.MaxRows = %d, want 100000", BuiltinDefaults.MaxRows)
 	}
 	if BuiltinDefaults.Timeout != 30*time.Second {
-		t.Errorf("DefaultsPadrao.Timeout = %s, want 30s", BuiltinDefaults.Timeout)
+		t.Errorf("BuiltinDefaults.Timeout = %s, want 30s", BuiltinDefaults.Timeout)
 	}
 }

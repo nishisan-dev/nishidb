@@ -1164,7 +1164,7 @@ func (c *Compiled) lookupUnknown(name []byte) (*CompiledField, bool, error) {
 func (c *Compiled) createUnknown(name []byte) (*CompiledField, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	// Reconfere sob o lock exclusivo: entre o RLock do resolveDesconhecido e
+	// Reconfere sob o lock exclusivo: entre o RLock do lookupUnknown e
 	// este Lock, o próprio writer pode ter criado a coluna ao reprocessar um
 	// evento anterior do mesmo lote.
 	if f, ok := c.byName[string(name)]; ok {

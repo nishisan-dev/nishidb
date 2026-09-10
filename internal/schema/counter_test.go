@@ -76,7 +76,7 @@ func TestCountersAusenteEhDatasetSemContador(t *testing.T) {
 		t.Fatal(err)
 	}
 	if spec.Counters != nil {
-		t.Fatalf("sem bloco, Contadores tem de ser nil; veio %+v", spec.Counters)
+		t.Fatalf("sem bloco, Counters tem de ser nil; veio %+v", spec.Counters)
 	}
 }
 

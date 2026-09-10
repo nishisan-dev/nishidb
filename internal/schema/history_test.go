@@ -50,7 +50,7 @@ func refusesHistory(t *testing.T, history string, snippets ...string) {
 
 func TestSemBlocoHistoricoNaoHaTabelaIrma(t *testing.T) {
 	if h := specWithHistory(t, "").History; h != nil {
-		t.Fatalf("Historico = %+v, quer nil", h)
+		t.Fatalf("History = %+v, quer nil", h)
 	}
 }
 
@@ -190,7 +190,7 @@ func TestDerivaHistoricoNomeiaATabelaIrma(t *testing.T) {
 		t.Fatalf("Name = %q, quer %q", h.Name, "events_history")
 	}
 	if !h.IsHistory {
-		t.Fatal("EhHistorico = false")
+		t.Fatal("IsHistory = false")
 	}
 }
 
@@ -669,7 +669,7 @@ func TestASpecDerivadaCarregaOBlocoDeRetencao(t *testing.T) {
 }
 
 // O par tem exatamente dois lados: derivar a partir da irmã produziria uma
-// irmã da irmã, e é o EhHistorico que fecha a recursão.
+// irmã da irmã, e é o IsHistory que fecha a recursão.
 func TestAIrmaNaoDerivaOutraIrma(t *testing.T) {
 	s := specWithHistory(t, "history:\n  expireAfterWrite: 7d\n")
 	if grandchild := s.DeriveHistory().DeriveHistory(); grandchild != nil {
@@ -731,7 +731,7 @@ func TestAdmissaoDaJanela(t *testing.T) {
 			}
 			h := specWithHistory(t, c.history).History
 			if c.infiniteWindow && h.Window != nil {
-				t.Fatalf("Janela = %+v, quer nil: sem o bloco index: a janela é INFINITA, "+
+				t.Fatalf("Window = %+v, quer nil: sem o bloco index: a janela é INFINITA, "+
 					"e indexa tudo que a retenção mantém", h.Window)
 			}
 		})
@@ -794,7 +794,7 @@ func TestJanelaDeclaradaChegaNaSpec(t *testing.T) {
 		t.Fatal("o bloco index: não foi lido")
 	}
 	if h.Window.Duration != 6*time.Hour {
-		t.Fatalf("Duracao = %s, quer 6h", h.Window.Duration)
+		t.Fatalf("Duration = %s, quer 6h", h.Window.Duration)
 	}
 	if h.Window.MaxBytes != 2<<30 {
 		t.Fatalf("MaxBytes = %d, quer %d", h.Window.MaxBytes, 2<<30)

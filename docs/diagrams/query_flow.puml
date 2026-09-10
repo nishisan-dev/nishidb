@@ -36,7 +36,7 @@ bnd -> bnd : coage literais E parâmetros\npara a representação da COLUNA
 bnd -> bnd : numera os slots (projeção ∪ WHERE)
 bnd --> pln : BoundQuery
 
-pln -> st : Indexado(field) — só CAPABILITY
+pln -> st : Indexed(field) — só CAPABILITY
 pln -> pln : R1 primary → R2 índice (scan/interseção)\n→ R5 união → full scan
 note right of pln
   O plano é só a FONTE DE CANDIDATOS.

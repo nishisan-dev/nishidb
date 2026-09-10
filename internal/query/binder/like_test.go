@@ -86,7 +86,7 @@ func TestClassificacaoDoPadrao(t *testing.T) {
 	}
 	for _, tc := range cases {
 		if got := CompileLike([]byte(tc.pat)).Type; got != tc.want {
-			t.Errorf("CompileLike(%q).Tipo = %d, quer %d", tc.pat, got, tc.want)
+			t.Errorf("CompileLike(%q).Type = %d, quer %d", tc.pat, got, tc.want)
 		}
 	}
 }

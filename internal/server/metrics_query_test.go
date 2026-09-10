@@ -15,7 +15,7 @@ import (
 // "o alvo caiu". O operador escreve o alerta contra a primeira e recebe a
 // segunda calada.
 //
-// A armadilha está em reg.Contador criar a FAMÍLIA e não a série: enquanto
+// A armadilha está em reg.Counter criar a FAMÍLIA e não a série: enquanto
 // ninguém chama Unlabeled(), o /metrics não publica linha nenhuma — nem sequer
 // o # HELP. Por isso o teste raspa a saída de verdade em vez de perguntar ao
 // registry, que responderia que a família existe.

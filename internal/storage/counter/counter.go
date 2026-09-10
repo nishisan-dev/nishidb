@@ -91,7 +91,7 @@ const (
 // # Concorrência
 //
 // Transition, Fold, Clear, ApplyOverlay, RecordCoveredTouches e RetireEmptyGroups são
-// exclusivos do writer (o Store os chama sob o wmu). Limit, Grupo, PorTexto,
+// exclusivos do writer (o Store os chama sob o wmu). Limit, Group, ByText,
 // AuditSnapshot e Stats são seguros para leitores concorrentes: os totais são
 // atômicos e os slices por grupo só crescem sob o lock FOLHA do dicionário,
 // que os leitores tomam para indexar. Nada aqui toma lock do Store.

@@ -69,7 +69,7 @@ func TestExpireAfterWriteNaoExigeCampoNoSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := spec.Materialization.FallbackDuration; got != 7*24*time.Hour {
-		t.Fatalf("DuracaoDeFundo = %v, quer 168h", got)
+		t.Fatalf("FallbackDuration = %v, quer 168h", got)
 	}
 	c, err := spec.Compile(newFakeDict())
 	if err != nil {

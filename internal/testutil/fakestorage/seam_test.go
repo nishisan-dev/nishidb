@@ -33,7 +33,7 @@ func TestIndexado(t *testing.T) {
 	}
 	for _, tc := range cases {
 		if got := s.Indexed(tc.field); got != tc.indexed {
-			t.Errorf("Indexado(%d) = %v, want %v (%s)", tc.field, got, tc.indexed, tc.reason)
+			t.Errorf("Indexed(%d) = %v, want %v (%s)", tc.field, got, tc.indexed, tc.reason)
 		}
 	}
 }

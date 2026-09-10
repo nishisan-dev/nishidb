@@ -354,7 +354,7 @@ func TestWatchdogTemDefaultDeUmMinutoETresTentativas(t *testing.T) {
 		t.Errorf("WatchdogTimeout = %s, quer 1m", c.WatchdogTimeout)
 	}
 	if c.WatchdogAttempts != 3 {
-		t.Errorf("WatchdogTentativas = %d, quer 3", c.WatchdogAttempts)
+		t.Errorf("WatchdogAttempts = %d, quer 3", c.WatchdogAttempts)
 	}
 }
 
@@ -368,7 +368,7 @@ func TestWatchdogEhConfiguravel(t *testing.T) {
 		t.Errorf("WatchdogTimeout = %s, quer 90s", c.WatchdogTimeout)
 	}
 	if c.WatchdogAttempts != 5 {
-		t.Errorf("WatchdogTentativas = %d, quer 5", c.WatchdogAttempts)
+		t.Errorf("WatchdogAttempts = %d, quer 5", c.WatchdogAttempts)
 	}
 }
 

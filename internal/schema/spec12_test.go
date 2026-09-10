@@ -69,7 +69,7 @@ func TestLoadSpec12YAML(t *testing.T) {
 			continue
 		}
 		if cf.Name != tc.name || cf.Type != tc.typ || cf.Indexed != tc.index {
-			t.Errorf("%q → {Name:%s Type:%v Indexado:%v}, want {%s %v %v}",
+			t.Errorf("%q → {Name:%s Type:%v Indexed:%v}, want {%s %v %v}",
 				tc.lookup, cf.Name, cf.Type, cf.Indexed, tc.name, tc.typ, tc.index)
 		}
 	}

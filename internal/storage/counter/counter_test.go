@@ -678,7 +678,7 @@ func TestGrupoCompostoTemColunasTipadas(t *testing.T) {
 		t.Fatalf("texto = %q", text)
 	}
 	if id, ok := c.ByText([]byte("PRCTA_G1M10|1|9")); !ok || id != 1 {
-		t.Fatalf("PorTexto = %d, %v", id, ok)
+		t.Fatalf("ByText = %d, %v", id, ok)
 	}
 }
 

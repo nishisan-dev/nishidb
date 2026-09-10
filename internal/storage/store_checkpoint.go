@@ -138,7 +138,7 @@ func (s *Store) checkpoint() error {
 	// Os contadores seguem a agenda: derivados, reconstruíveis, erro não
 	// sticky. Depois do msync, cada contador registra que toda transição até
 	// aqui está durável em record E em página — é essa cobertura que autoriza
-	// a aposentadoria de um grupo vazio (contador.AposentaVazios).
+	// a aposentadoria de um grupo vazio (counter.RetireEmptyGroups).
 	for _, c := range s.contadores {
 		if err := s.traceStep("msyncContadores", c.Msync); err != nil {
 			return err
