@@ -160,8 +160,8 @@ type Config struct {
 	// query.defaultMaxRows e query.defaultTimeout são os DEFAULTS GLOBAIS do
 	// teto de linhas e do timeout de consulta: valem para o dataset que omite
 	// `query.maxRows`/`query.timeout` no YAML dele, e perdem para o dataset
-	// que os declara. Chegam ao motor por Load →
-	// Config.QueryDefaults → schema.Load.
+	// que os declara. Chegam ao motor por Load → Config.QueryDefaults →
+	// schema.Load.
 	//
 	// DefaultMaxRows é ponteiro para separar "ausente" de "zero": ausente
 	// herda o padrão da spec, zero é valor inválido e precisa ser recusado
@@ -330,8 +330,8 @@ func Load(path string) (*Config, error) {
 	if c.defaultTimeout, err = units.Duration(c.Query.DefaultTimeout, defaultQueryTimeout); err != nil {
 		return nil, fmt.Errorf("configuração %s: query.defaultTimeout: %w", path, err)
 	}
-	// O padrão é ZERO, e zero é o sinal de "ausente" que schema.validate lê
-	// como "cada dataset herda o próprio query.timeout". Passar defaultQueryTimeout
+	// O padrão é ZERO, e zero é o sinal de "ausente" que schema.validate lê como
+	// "cada dataset herda o próprio query.timeout". Passar defaultQueryTimeout
 	// aqui daria um teto global de 30s a datasets que hoje declaram
 	// `query.timeout: 5m` — e a spec deles passaria a ser recusada na abertura.
 	if c.defaultMaxTimeout, err = units.Duration(c.Query.DefaultMaxTimeout, 0); err != nil {
@@ -608,8 +608,7 @@ func (c *Config) BindExposed() bool {
 // A lista existe porque configuração que mente é pior que configuração
 // ausente: quem escreve uma chave de memória e não recebe aviso nenhum conclui
 // que há um teto, e vai dimensionar a máquina por ele. É a mesma doutrina que
-// IgnoredStorageKeys, logo abaixo, aplica a storage.durability (débito
-// 50).
+// IgnoredStorageKeys, logo abaixo, aplica a storage.durability (débito 50).
 //
 // Sobrou UMA. `memoryTarget` e `query.maxBufferPerQuery` SAÍRAM daqui ao
 // ganharem leitor — e sair é obrigatório, não cosmético: um aviso que continua

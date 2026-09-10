@@ -206,7 +206,7 @@ func (s SecuritySpec) TLS() bool {
 	return s.Protocol == ProtocolSSL || s.Protocol == ProtocolSASLSSL
 }
 
-// bloco lê um nó de mapeamento recusando chave desconhecida ou duplicada.
+// block lê um nó de mapeamento recusando chave desconhecida ou duplicada.
 //
 // A recusa é por WHITELIST MANUAL, e não por yaml.KnownFields, por duas
 // razões. A primeira é técnica: no yaml.v3 o KnownFields só existe em

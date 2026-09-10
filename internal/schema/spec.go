@@ -210,7 +210,7 @@ type rawSpec struct {
 	Name    string `yaml:"name"`
 	// Source e Errors ficam como nó cru porque a recusa de chave desconhecida
 	// nesses dois blocos é feita à mão, sobre as chaves do documento — ver
-	// bloco(), em source.go, para o motivo de yaml.KnownFields não servir.
+	// block(), em source.go, para o motivo de yaml.KnownFields não servir.
 	//
 	// São VALOR e não ponteiro porque o yaml.v3 só trata yaml.Node de forma
 	// especial no tipo valor: um campo *yaml.Node fica com o nó zerado, sem
@@ -445,8 +445,8 @@ func isIdentName(s string) bool {
 // bitmapIndexable/hashIndexable definem os tipos que cada um dos DOIS motores
 // GLOBAIS aceitava (design §2.1) — histórico, porque os dois motores saíram
 // (Tarefa 9), mas os dois conjuntos continuam vivos como a base do que
-// indexavel une logo abaixo: `auto` não entra em nenhum dos dois porque o tipo
-// só é conhecido em runtime.
+// isIndexableType une logo abaixo: `auto` não entra em nenhum dos dois porque
+// o tipo só é conhecido em runtime.
 func bitmapIndexable(t string) bool {
 	return t == "string" || t == "int64" || t == "boolean"
 }
@@ -455,12 +455,13 @@ func hashIndexable(t string) bool {
 	return t == "string" || t == "int64" || t == "ipv4" || t == "ipv6"
 }
 
-// isIndexableType é o conjunto que `index: true` aceita: a UNIÃO dos dois motores
-// antigos, e não a interseção. Com um motor só, a distinção de cardinalidade
-// que os separava morreu — mas nenhuma coluna pode PERDER a indexabilidade que
-// já tinha só porque as duas grafias viraram uma: um campo `ipv4` que só
-// bitmapIndexable recusava (e só hashIndexable aceitava) continua indexável
-// com `index: true`, exatamente como continuava indexável com `index: hash`.
+// isIndexableType é o conjunto que `index: true` aceita: a UNIÃO dos dois
+// motores antigos, e não a interseção. Com um motor só, a distinção de
+// cardinalidade que os separava morreu — mas nenhuma coluna pode PERDER a
+// indexabilidade que já tinha só porque as duas grafias viraram uma: um campo
+// `ipv4` que só bitmapIndexable recusava (e só hashIndexable aceitava)
+// continua indexável com `index: true`, exatamente como continuava indexável
+// com `index: hash`.
 func isIndexableType(t string) bool {
 	return bitmapIndexable(t) || hashIndexable(t)
 }

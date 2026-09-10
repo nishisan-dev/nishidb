@@ -119,9 +119,9 @@ type IndexWindowSpec struct {
 	MaxBytes int64
 }
 
-// WindowExceedsRetention reporta a redundância que a subida ANUNCIA sem recusar:
-// uma janela maior que o prazo de retenção não indexa nada a mais, porque a
-// retenção aposenta o segmento antes de a janela o alcançar.
+// WindowExceedsRetention reporta a redundância que a subida ANUNCIA sem
+// recusar: uma janela maior que o prazo de retenção não indexa nada a mais,
+// porque a retenção aposenta o segmento antes de a janela o alcançar.
 //
 // Não é erro, é inócuo — e recusar transformaria redundância em queda de
 // serviço. O WARN nomeado é o meio-termo que a doutrina pede: a configuração
@@ -343,7 +343,7 @@ func validateWindow(n *yaml.Node) (*IndexWindowSpec, error) {
 // refuseWindowOutsideHistory recusa uma chave `index:` no TOPO do documento.
 //
 // A janela é `history.index` e só isso: ela é política da tabela histórica, e o
-// dataset materializado tem janela infinita por construção (D1). WriteInstantField no
+// dataset materializado tem janela infinita por construção (D1). Declarada no
 // topo, a chave seria IGNORADA em silêncio — o rawSpec não usa
 // yaml.KnownFields —, e o operador ficaria com o comportamento default achando
 // que declarou uma janela.
@@ -430,7 +430,7 @@ func historyIndices(n *yaml.Node, fields map[string]FieldSpec) (map[string]strin
 	return out, nil
 }
 
-// columnNames é a whitelist que o bloco() usa para recusar coluna
+// columnNames é a whitelist que o block() usa para recusar coluna
 // inexistente. Passar a lista das que EXISTEM faz a mensagem de erro nomear as
 // alternativas, em vez de só dizer que a chave é desconhecida.
 func columnNames(fields map[string]FieldSpec) []string {
@@ -704,10 +704,10 @@ func (c *Compiled) adoptDiscovered(orig *CompiledField) {
 		Path:   orig.Path,
 	}
 	if orig.Parent != nil {
-		// O parent é reatado POR ID a este Compiled, e nunca copiado do original:
-		// o `parent.*` compara ponteiro de parent, e apontar para o campo do outro
+		// O pai é reatado POR ID a este Compiled, e nunca copiado do original:
+		// o `pai.*` compara ponteiro de pai, e apontar para o campo do outro
 		// Compiled faria a expansão não achar as filhas — e, pior, a coluna
-		// derivada apareceria no SELECT * daqui, porque é a ligação com o parent
+		// derivada apareceria no SELECT * daqui, porque é a ligação com o pai
 		// que a mantém fora dele.
 		parent, ok := c.byID[orig.Parent.ID]
 		if !ok {

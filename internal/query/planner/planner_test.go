@@ -109,7 +109,7 @@ func allIndexes(tb testing.TB, c *schema.Compiled) *fakestorage.Store {
 }
 
 // spy falha o teste se o planner tocar em DADOS. Nenhum dos métodos de dado
-// é alcançável de fato: a interface Store do planner tem apenas Indexado — mas
+// é alcançável de fato: a interface Store do planner tem apenas Indexed — mas
 // o dublê os carrega para que uma ampliação futura da interface acuse aqui.
 type spy struct {
 	t     *testing.T

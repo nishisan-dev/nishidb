@@ -770,7 +770,7 @@ func TestJanelaMaiorQueARetencaoEhAnunciada(t *testing.T) {
 	if !h.WindowExceedsRetention() {
 		t.Fatal("window: 7d sobre expireAfterWrite: 1h precisa anunciar que a janela é inócua")
 	}
-	// E o contrário não anuncia nada: janela smaller que a retenção é o caso
+	// E o contrário não anuncia nada: janela menor que a retenção é o caso
 	// para o qual a chave existe.
 	smaller := specWithHistory(t, "history:\n  expireAfterWrite: 7d\n  index:\n    window: 6h\n").History
 	if smaller.WindowExceedsRetention() {

@@ -134,21 +134,21 @@ type CompiledField struct {
 	// o -race pega no CI e nem sempre em dev.
 	autoType atomic.Uint32
 
-	// occurrenceCount e divergencias são a densidade e a confiabilidade DESTA
-	// coluna, e existem porque o contador por DATASET é alarme sem endereço:
-	// ele diz "2.085.138 valores perdidos" e não diz qual das ~1.700 colunas
-	// respondeu por isso.
+	// occurrenceCount e divergenceCount são a densidade e a confiabilidade
+	// DESTA coluna, e existem porque o contador por DATASET é alarme sem
+	// endereço: ele diz "2.085.138 valores perdidos" e não diz qual das ~1.700
+	// colunas respondeu por isso.
 	//
 	// São DUAS colunas cruas e não uma razão, porque a razão não compõe: saber
 	// que uma chave divergiu 2.315 vezes só significa alguma coisa contra as
 	// 2.383 em que ela apareceu, e `93 de 3.334` é problema de outra ordem. A
 	// divisão fica com quem consulta.
 	//
-	// occurrenceCount conta a chave APARECER no documento — antes da conversão —,
-	// e não a materialização bem-sucedida. É o que faz divergencias ser um
-	// SUBCONJUNTO de occurrenceCount e a leitura "2.315 de 2.383" sair direta do
-	// SQL; contando o sucesso, o denominador viraria uma soma na cabeça de
-	// quem consulta.
+	// occurrenceCount conta a chave APARECER no documento — antes da
+	// conversão —, e não a materialização bem-sucedida. É o que faz
+	// divergenceCount ser um SUBCONJUNTO de occurrenceCount e a leitura
+	// "2.315 de 2.383" sair direta do SQL; contando o sucesso, o denominador
+	// viraria uma soma na cabeça de quem consulta.
 	//
 	// Atômicos pela mesma razão do autoType logo acima, e é a família dos
 	// débitos 60, 69 e 70: as queries de _meta.fields leem estes campos
@@ -167,22 +167,23 @@ type CompiledField struct {
 	// numa coluna int64.
 	//
 	// Ele existe porque a coerção CEGA o contador vizinho. Enquanto a coluna
-	// `string` recusava número, um valor divergente aparecia em divergencias e
-	// o operador via que a origem estava inconsistente; passando a converter,
-	// divergencias vai a ZERO no mesmo cenário e o diagnóstico some junto com o
-	// problema aparente. Sem este terceiro contador, o efeito líquido da
-	// mudança seria trocar uma perda visível por uma inconsistência invisível —
-	// e a origem continuaria escrevendo `07` e `7` para a mesma coisa.
+	// `string` recusava número, um valor divergente aparecia em
+	// divergenceCount e o operador via que a origem estava inconsistente;
+	// passando a converter, divergenceCount vai a ZERO no mesmo cenário e o
+	// diagnóstico some junto com o problema aparente. Sem este terceiro
+	// contador, o efeito líquido da mudança seria trocar uma perda visível por
+	// uma inconsistência invisível — e a origem continuaria escrevendo `07` e
+	// `7` para a mesma coisa.
 	//
-	// É um contador SEPARADO e não uma soma com divergencias porque as duas
+	// É um contador SEPARADO e não uma soma com divergenceCount porque as duas
 	// afirmações são diferentes e pedem remédios diferentes: divergiu é "o
 	// valor se perdeu, a coluna está incompleta"; coergiu é "o valor está lá,
 	// mas a origem escreve a mesma coisa de duas formas e o filtro por um único
 	// literal não a encontra inteira". Somá-las apagaria justamente a distinção
 	// que decide o que fazer.
 	//
-	// É subconjunto de ocorrencias, como divergencias, e disjunto dela: uma
-	// ocorrência ou converteu ou não converteu.
+	// É subconjunto de occurrenceCount, como divergenceCount, e disjunto dela:
+	// uma ocorrência ou converteu ou não converteu.
 	coercionCount atomic.Uint64
 }
 
@@ -193,8 +194,8 @@ type CompiledField struct {
 // custo de CPU está medido em benchmark/baselines/segunda-passada-20260825.txt.
 func (f *CompiledField) CountOccurrence() { f.occurrenceCount.Add(1) }
 
-// OccurrenceCount é quantas vezes a chave desta coluna apareceu no documento desde
-// a abertura do dataset. Zero para coluna que não é derivada.
+// OccurrenceCount é quantas vezes a chave desta coluna apareceu no documento
+// desde a abertura do dataset. Zero para coluna que não é derivada.
 func (f *CompiledField) OccurrenceCount() uint64 { return f.occurrenceCount.Load() }
 
 // DivergenceCount é quantas dessas ocorrências não couberam no tipo da coluna.
@@ -209,8 +210,9 @@ func (f *CompiledField) DivergenceCount() uint64 { return f.divergenceCount.Load
 // atomic.Add: não aloca, que é o que o gate do materializer cobra.
 func (f *CompiledField) CountCoercion() { f.coercionCount.Add(1) }
 
-// CoercionCount é quantas dessas ocorrências vieram noutra forma JSON e ainda assim
-// entraram na coluna. É sempre <= OccurrenceCount, e disjunto de DivergenceCount.
+// CoercionCount é quantas dessas ocorrências vieram noutra forma JSON e ainda
+// assim entraram na coluna. É sempre <= OccurrenceCount, e disjunto de
+// DivergenceCount.
 func (f *CompiledField) CoercionCount() uint64 { return f.coercionCount.Load() }
 
 // EffectiveType devolve o tipo contra o qual os valores deste campo devem ser
@@ -350,10 +352,10 @@ type Compiled struct {
 	// Não-nil exatamente quando há regras de TTL — sem expiração não há para
 	// que pagar 11 bytes por record.
 	WriteInstantField *CompiledField
-	// TTLField é o campo de sistema que carrega a DURAÇÃO de ociosidade que vale
-	// para a entidade, em millis. Não-nil junto com o WriteInstantField: os dois só
-	// fazem sentido em par — um diz quando foi a última escrita, o outro por
-	// quanto tempo ela vale.
+	// TTLField é o campo de sistema que carrega a DURAÇÃO de ociosidade que
+	// vale para a entidade, em millis. Não-nil junto com o WriteInstantField:
+	// os dois só fazem sentido em par — um diz quando foi a última escrita, o
+	// outro por quanto tempo ela vale.
 	TTLField *CompiledField
 
 	mu      sync.RWMutex
@@ -703,7 +705,7 @@ func (s *DatasetSpec) Compile(dict FieldDictionary) (*Compiled, error) {
 			if !ok || name == "" {
 				continue
 			}
-			// Nome já taken (inclusive por ALIAS de campo declarado): uma
+			// Nome já tomado (inclusive por ALIAS de campo declarado): uma
 			// segunda entrada sob o mesmo nome faria o resultado da query
 			// depender da ordem de inserção no mapa.
 			if _, taken := c.byName[name]; taken {
@@ -857,11 +859,11 @@ func (c *Compiled) ResolveNested(parent *CompiledField, qualifiedName, path []by
 
 // ResolveNestedReadOnly é o ResolveNested SEM NENHUM EFEITO.
 //
-// `precisa=true` marca o exato ponto em que a coluna seria criada. O caso
-// `f.Parent != pai` — nome tomado por uma coluna de topo com ponto no nome —
-// continua sendo um NÃO legítimo, e não um "precisaria criar": ele nunca vira
-// coluna, em decodificador nenhum, e devolvê-lo como pendência faria o writer
-// reprocessar o mesmo evento para sempre.
+// `needsWriter=true` marca o exato ponto em que a coluna seria criada. O caso
+// `f.Parent != parent` — nome tomado por uma coluna de topo com ponto no
+// nome — continua sendo um NÃO legítimo, e não um "precisaria criar": ele
+// nunca vira coluna, em decodificador nenhum, e devolvê-lo como pendência
+// faria o writer reprocessar o mesmo evento para sempre.
 func (c *Compiled) ResolveNestedReadOnly(parent *CompiledField, qualifiedName []byte) (*CompiledField, bool) {
 	c.mu.RLock()
 	f, ok := c.byName[string(qualifiedName)]
@@ -1043,11 +1045,11 @@ func (c *Compiled) FieldsByParent(parent string) []*CompiledField {
 // ingestão. Esta anexa num buffer do chamador e não ordena — quem consome as
 // entries já as ordena por FieldID depois.
 //
-// O segundo é o conjunto. `pai.DerivedColumns` tem só as DECLARADAS: ResolveNested
-// registra a coluna descoberta em byName/byID com o Parent apontado, e nunca a
-// anexa à lista do pai. Quem precisar tratar "todas as colunas deste
-// documento" e olhar só as DerivedColumns trata um dataset de descoberta pura — o
-// caso do piloto — como se ele não tivesse coluna nenhuma.
+// O segundo é o conjunto. `parent.DerivedColumns` tem só as DECLARADAS:
+// ResolveNested registra a coluna descoberta em byName/byID com o Parent
+// apontado, e nunca a anexa à lista do pai. Quem precisar tratar "todas as
+// colunas deste documento" e olhar só as DerivedColumns trata um dataset de
+// descoberta pura — o caso do piloto — como se ele não tivesse coluna nenhuma.
 //
 // A ordem NÃO é estável entre chamadas (varre um map). Quem precisar de ordem
 // estável usa FieldsByParent.
@@ -1110,7 +1112,7 @@ func (c *Compiled) ResolveUnknown(name []byte) (*CompiledField, error) {
 
 // ResolveUnknownReadOnly é o ResolveUnknown SEM NENHUM EFEITO.
 //
-// Devolve `precisa=true` no exato ponto em que o ResolveUnknown criaria a
+// Devolve `needsWriter=true` no exato ponto em que o ResolveUnknown criaria a
 // coluna — e nem um passo além. É o que permite decodificar um evento fora da
 // goroutine do writer: o decodificador descobre que não pode decidir e para,
 // sem ter tocado o dicionário, os contadores nem o aviso do teto.
@@ -1118,16 +1120,16 @@ func (c *Compiled) ResolveUnknown(name []byte) (*CompiledField, error) {
 // A DISTINÇÃO QUE NÃO PODE COLAPSAR. Há quatro maneiras de um campo
 // desconhecido NÃO virar coluna — excluído, universo fechado, política
 // `ignore` e política `reject` —, e nenhuma delas é "precisaria criar". Um
-// leitor que devolvesse `precisa=true` para todas faria o writer reprocessar
-// todo evento que traga um campo excluído, para sempre, num laço que nenhuma
-// métrica explicaria.
+// leitor que devolvesse `needsWriter=true` para todas faria o writer
+// reprocessar todo evento que traga um campo excluído, para sempre, num laço
+// que nenhuma métrica explicaria.
 //
 // O TETO FICA DE FORA de propósito, e é a única assimetria. Ele podia ser
 // consultado puramente (`dict.Len() >= MaxCols`), mas o ResolveUnknown
 // CONTABILIZA a recusa — discardedFieldCount e o aviso de uma vez só — antes de
 // decidir entre parar e ignorar. Antecipar essa contabilidade aqui a duplicaria
 // no evento reprocessado; adiá-la exigiria uma terceira via. A escolha é
-// devolver `precisa=true` e deixar o writer decidir, ao custo de um parse
+// devolver `needsWriter=true` e deixar o writer decidir, ao custo de um parse
 // dobrado por evento enquanto o dicionário estiver cheio sob `ignore` — a
 // degradação nomeada no plano da Fase 4: nunca pior que a vazão de antes, e
 // visível em nishidb_ingest_decode_serial_total.
@@ -1136,7 +1138,7 @@ func (c *Compiled) ResolveUnknownReadOnly(name []byte) (*CompiledField, bool, er
 }
 
 // lookupUnknown é a parte PURA do ResolveUnknown: a política e o cache.
-// precisa=true significa "daqui em diante só o writer pode seguir".
+// needsWriter=true significa "daqui em diante só o writer pode seguir".
 func (c *Compiled) lookupUnknown(name []byte) (*CompiledField, bool, error) {
 	if _, excluded := c.exclude[string(name)]; excluded {
 		return nil, false, nil

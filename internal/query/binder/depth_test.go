@@ -49,7 +49,7 @@ func TestBindCadeiaLongaComPilhaConstante(t *testing.T) {
 		t.Fatalf("bind de %d termos: %v", terms, err)
 	}
 
-	// A árvore ligada tem a mesma height da do parser, e é left-leaning: é o
+	// A árvore ligada tem a mesma altura da do parser, e é left-leaning: é o
 	// formato que o flatten do planner assume.
 	height, e := 0, bq.Where
 	for {

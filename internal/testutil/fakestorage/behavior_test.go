@@ -82,7 +82,7 @@ func TestComportamentoDoDubleEDoRealCoincidem(t *testing.T) {
 			// 1. Primeiro Put cria, e o rowId é 0-based nos dois.
 			id, created, err := st.Put([]byte("A"), 1, 0, payload("Start", "ze"), nil)
 			if err != nil || !created {
-				t.Fatalf("Put: id=%d criado=%v err=%v", id, created, err)
+				t.Fatalf("Put: id=%d created=%v err=%v", id, created, err)
 			}
 			if id != 0 {
 				t.Errorf("primeiro rowId = %d, want 0", id)
@@ -141,10 +141,10 @@ func TestComportamentoDoDubleEDoRealCoincidem(t *testing.T) {
 				t.Errorf("Lookup em campo sem índice: %v", err)
 			}
 			if st.Indexed(nameID) || st.Indexed(withoutIndexID) {
-				t.Error("Indexado true para campo sem índice")
+				t.Error("Indexed true para campo sem índice")
 			}
 			if !st.Indexed(statusID) {
-				t.Error("Indexado false para o campo indexado")
+				t.Error("Indexed false para o campo indexado")
 			}
 
 			// 7. rowId inexistente: ok=false SEM erro (não é falha, é ausência).

@@ -77,7 +77,7 @@ type rawCounter struct {
 }
 
 // countersFromNode decodifica o bloco `counters`. Ausente devolve nil; lista
-// vazia devolve slice vazio (e a validação recusa). Cada item passa por bloco()
+// vazia devolve slice vazio (e a validação recusa). Cada item passa por block()
 // para que uma chave desconhecida (`wher: …`) seja recusada em vez de
 // silenciosamente ignorada.
 func countersFromNode(n *yaml.Node) ([]rawCounter, error) {

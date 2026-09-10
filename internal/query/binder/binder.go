@@ -272,8 +272,8 @@ func (b *binder) run() (*BoundQuery, error) {
 	}
 	// ORDER BY DEPOIS do WHERE e ANTES de fechar os slots: as colunas de
 	// ordenação entram no conjunto a coletar como qualquer outra. Sem o
-	// b.usa(f.ID) que a resolução faz, a coluna não teria slot e o executor
-	// ordenaria por um valor que nunca leu.
+	// b.markReferenced(f.ID) que a resolução faz, a coluna não teria slot e o
+	// executor ordenaria por um valor que nunca leu.
 	if len(b.stmt.OrderBy) > 0 {
 		keys, err := b.ordering()
 		if err != nil {
@@ -310,7 +310,7 @@ func (b *binder) projection() ([]BoundColumn, error) {
 		fields := b.sc.FieldsByID()
 		cols := make([]BoundColumn, 0, len(fields))
 		for _, f := range fields {
-			// No '*' o usuário não escreveu name nenhum, então o rótulo é o
+			// No '*' o usuário não escreveu nome nenhum, então o rótulo é o
 			// alias quando existe.
 			name := f.Name
 			if f.Alias != "" {
@@ -409,9 +409,10 @@ func (b *binder) qualifiedProjection(cols []BoundColumn, ref parser.ColumnRef, d
 			"campo %q não declara extract nem descoberta de campos aninhados; não há coluna a projetar", ref.Qualifier)
 	}
 
-	// Quantas colunas aninhadas este item addedCols. O teto é conferido para
-	// os DOIS caminhos: contá-lo só na expansão deixava `pai.*, pai.caminho`
-	// passar acima do limite, porque cada metade cabia sozinha.
+	// addedCols é quantas colunas aninhadas este item acrescenta. O teto é
+	// conferido para os DOIS caminhos: contá-lo só na expansão deixava
+	// `pai.*, pai.caminho` passar acima do limite, porque cada metade cabia
+	// sozinha.
 	addedCols := 1
 	if ref.Star {
 		addedCols = len(children)
@@ -448,16 +449,16 @@ func (b *binder) qualifiedProjection(cols []BoundColumn, ref parser.ColumnRef, d
 	return cols, derivedCount + len(children), nil
 }
 
-// projectionMapThreshold é onde a checagem de nome repetido troca varredura linear
-// por mapa. A projeção real tem unidades de colunas, e aí a varredura é mais
-// barata e não aloca; o mapa existe porque o número de nomes DISTINTOS que
-// bindam com sucesso não é pequeno (FieldID é uint16, e cada campo responde por
-// nome e alias), e o custo quadrático transformaria uma query de algumas
-// centenas de KB em segundos de CPU.
+// projectionMapThreshold é onde a checagem de nome repetido troca varredura
+// linear por mapa. A projeção real tem unidades de colunas, e aí a varredura é
+// mais barata e não aloca; o mapa existe porque o número de nomes DISTINTOS
+// que bindam com sucesso não é pequeno (FieldID é uint16, e cada campo
+// responde por nome e alias), e o custo quadrático transformaria uma query de
+// algumas centenas de KB em segundos de CPU.
 const projectionMapThreshold = 32
 
-// isDuplicate usa o mapa quando ele existe e a varredura enquanto não existe. As
-// duas responderiam igual em qualquer ponto: o mapa é semeado com o que a
+// isDuplicate usa o mapa quando ele existe e a varredura enquanto não existe.
+// As duas responderiam igual em qualquer ponto: o mapa é semeado com o que a
 // varredura já tinha visto.
 func isDuplicate(cols []BoundColumn, seen map[string]struct{}, name string) bool {
 	if seen != nil {
@@ -828,7 +829,7 @@ func (b *binder) fillExprSlots(e BoundExpr, s Slots) {
 			// Nó novo sem case aqui é FALHA SILENCIOSA, e a pior espécie: o
 			// Slot fica em 0, o predicado testa o campo de MENOR FieldID da
 			// query, e a resposta sai errada sem erro, sem log e sem métrica.
-			// A `folha` acima já falha alto por este motivo; este switch não
+			// A `leaf` acima já falha alto por este motivo; este switch não
 			// falhava, e não há linter `exhaustive` no .golangci.yml para
 			// cobrar. Entra ANTES do primeiro nó novo precisar dele.
 			panic(fmt.Sprintf("binder: fillSlots sem case para %T", e))

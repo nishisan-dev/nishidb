@@ -577,7 +577,7 @@ func TestLookupWithoutIndexIsError(t *testing.T) {
 
 	// O capability check concorda com o que o lookup aceita.
 	if s.Indexed(1) || s.Indexed(3) || !s.Indexed(2) {
-		t.Error("Indexado diverge dos índices declarados")
+		t.Error("Indexed diverge dos índices declarados")
 	}
 	if got := s.IndexedFields(); len(got) != 1 || got[0] != 2 {
 		t.Errorf("IndexedFields = %v, want [2]", got)

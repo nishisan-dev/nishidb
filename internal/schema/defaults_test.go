@@ -11,8 +11,8 @@ import (
 // morava numa constante dentro do validate, editar a chave global não mudava
 // nada e não avisava nada — era o débito 37.
 
-// specWithoutQuery é o YAML mínimo sem a seção `query`: é exatamente o caso em que
-// o global tem de valer.
+// specWithoutQuery é o YAML mínimo sem a seção `query`: é exatamente o caso
+// em que o global tem de valer.
 const specWithoutQuery = `
 version: 1
 name: sem_query
@@ -91,9 +91,9 @@ func TestDefaultsGlobaisInvalidosSaoRecusados(t *testing.T) {
 	}
 }
 
-// BuiltinDefaults é o que a spec §78 documenta, e é o que vale para quem carrega
-// uma spec sem nishidb.yaml nenhum (testes, benchmarks). Se mudar, o YAML de
-// exemplo do README e da spec mudam junto.
+// BuiltinDefaults é o que a spec §78 documenta, e é o que vale para quem
+// carrega uma spec sem nishidb.yaml nenhum (testes, benchmarks). Se mudar, o
+// YAML de exemplo do README e da spec mudam junto.
 func TestDefaultsPadraoSaoOsDaSpec(t *testing.T) {
 	if BuiltinDefaults.MaxRows != 100000 {
 		t.Errorf("BuiltinDefaults.MaxRows = %d, want 100000", BuiltinDefaults.MaxRows)

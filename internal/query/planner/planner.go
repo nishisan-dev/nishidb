@@ -195,7 +195,7 @@ func eqTermOf(e binder.BoundExpr) (eqTerm, bool) {
 
 // indexable: o schema declara E o store atende.
 //
-// O Indexado é obrigatório mesmo com o YAML dizendo `index: true` porque o
+// O Indexed é obrigatório mesmo com o YAML dizendo `index: true` porque o
 // conjunto indexado é o que a ABERTURA do dataset declarou, e nada garante que
 // ele cubra o que o YAML pede — um Store aberto sem o campo é legítimo. Sem o
 // check, o executor chamaria Lookup num campo sem índice, receberia

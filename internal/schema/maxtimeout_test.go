@@ -6,7 +6,8 @@ import (
 	"time"
 )
 
-// specWithQuery monta uma spec mínima com o bloco `query` que o teste quiser.
+// specWithQueryBlock monta uma spec mínima com o bloco `query` que o teste
+// quiser.
 func specWithQueryBlock(queryBlock string) []byte {
 	return []byte(`version: 1
 name: d

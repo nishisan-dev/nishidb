@@ -49,10 +49,10 @@ var (
 	castagnoli = crc32.MakeTable(crc32.Castagnoli)
 )
 
-// ErrGroupCeilingReached marca a internação de um grupo NOVO quando o número de grupos
-// vivos já é o teto declarado (maxGroups). Não é dado ruim nem falha de infra:
-// a linha entra normalmente e o contador a trata como "sem grupo" — é quem
-// chama que decide isso, e conta.
+// ErrGroupCeilingReached marca a internação de um grupo NOVO quando o
+// número de grupos vivos já é o teto declarado (maxGroups). Não é dado ruim
+// nem falha de infra: a linha entra normalmente e o contador a trata como
+// "sem grupo" — é quem chama que decide isso, e conta.
 var ErrGroupCeilingReached = errors.New("contador: teto de grupos atingido")
 
 // dictFile é a superfície de arquivo do dicionário. Interface para
@@ -81,7 +81,7 @@ type Dict struct {
 	f       dictFile
 	size    int64
 	ceiling uint32
-	// keys e vivo são paralelos, índice 0 = id 1. A chave de um grupo
+	// keys e live são paralelos, índice 0 = id 1. A chave de um grupo
 	// aposentado continua guardada: a tabela virtual e a auditoria precisam
 	// nomear o grupo que uma entrada órfã do vetor ainda aponta.
 	keys          [][]byte
@@ -92,8 +92,8 @@ type Dict struct {
 }
 
 // OpenDict cria ou reabre o dicionário, validando o prefixo por CRC e
-// truncando qualquer cauda rasgada por crash. teto é o número máximo de grupos
-// VIVOS.
+// truncando qualquer cauda rasgada por crash. ceiling é o número máximo de
+// grupos VIVOS.
 func OpenDict(path string, ceiling uint32) (*Dict, error) {
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o644)
 	if err != nil {
@@ -201,7 +201,7 @@ func (d *Dict) retireInMemory(id uint32) {
 
 // Intern devolve o id do grupo, criando-o (com fsync) se novo. Exclusivo do
 // writer. Chave já internada nunca toca o arquivo nem aloca: o lookup é
-// m[string(chave)], que o compilador não materializa.
+// m[string(key)], que o compilador não materializa.
 //
 // ErrGroupCeilingReached quando um grupo NOVO não cabe: o teto conta vivos, e
 // aposentar um grupo libera a vaga.
@@ -277,7 +277,7 @@ func (d *Dict) Retire(id uint32) error {
 }
 
 // Key devolve a chave composta do id e se o grupo está vivo. A chave de um
-// grupo aposentado continua disponível (vivo=false); id 0 e id além do limite
+// grupo aposentado continua disponível (live=false); id 0 e id além do limite
 // devolvem nil, false. Seguro para leitores concorrentes; a slice é estável
 // (nunca mutada) e pode ser retida.
 func (d *Dict) Key(id uint32) (key []byte, live bool) {

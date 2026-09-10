@@ -266,7 +266,7 @@ func validateUsers(users []UserSpec, usersNode *yaml.Node, path string) error {
 
 // documentRoot devolve o nó-mapa de topo do documento YAML, pulando o
 // DocumentNode que o yaml.v3 sempre insere como envelope. Documento vazio
-// (arquivo sem conteúdo) devolve nil, e filho(nil, ...) trata isso como
+// (arquivo sem conteúdo) devolve nil, e child(nil, ...) trata isso como
 // bloco ausente — o mesmo comportamento que o Config zerado já tinha antes
 // desta tarefa.
 func documentRoot(n *yaml.Node) *yaml.Node {
@@ -276,8 +276,8 @@ func documentRoot(n *yaml.Node) *yaml.Node {
 	return n
 }
 
-// child devolve o valor de `chave` dentro do nó de mapeamento pai, ou nil se
-// a chave não existe ou pai não é mapa (bloco ausente) — não há sentinela
+// child devolve o valor de `key` dentro do nó de mapeamento parent, ou nil se
+// a chave não existe ou parent não é mapa (bloco ausente) — não há sentinela
 // melhor porque yaml.Node é struct e não interface.
 func child(parent *yaml.Node, key string) *yaml.Node {
 	if parent == nil {

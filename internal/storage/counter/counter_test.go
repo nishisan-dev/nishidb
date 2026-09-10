@@ -124,7 +124,7 @@ func totalOf(t *testing.T, c *Counter, olt string) (total, refs int64) {
 // consigo mesma.
 //
 // A soma é sobre TODOS os ids, vivos ou não: grupo aposentado tem refs 0 e,
-// por totais[g] <= refs[g], total 0 — logo não muda a soma, que é exatamente
+// por totals[g] <= refs[g], total 0 — logo não muda a soma, que é exatamente
 // a razão de a aposentadoria não precisar mexer nos agregados.
 func requireCoherentAggregates(t *testing.T, c *Counter) {
 	t.Helper()

@@ -15,10 +15,11 @@ type Divergence struct {
 // totais contra o que a varredura das linhas vivas (com location e sem lápide
 // em T0) recalculou com a mesma definição.
 //
-// DivergentGroups conta grupos com total OU refs diferentes — refs entra porque é
-// ele que governa a aposentadoria, e um refs errado é o que faria um grupo
-// referenciado sair. NotInterned conta linhas vivas cujo grupo o dicionário
-// não tem: é a divergência que não cabe num grupo, porque o grupo não existe.
+// DivergentGroups conta grupos com total OU refs diferentes — refs entra
+// porque é ele que governa a aposentadoria, e um refs errado é o que faria
+// um grupo referenciado sair. NotInterned conta linhas vivas cujo grupo o
+// dicionário não tem: é a divergência que não cabe num grupo, porque o grupo
+// não existe.
 type Report struct {
 	Name   string
 	Groups uint32
@@ -30,7 +31,7 @@ type Report struct {
 	DivergentGroups                int
 	NotInterned                    uint64
 	// AggregateRows e AggregateTotal são os agregados do PRÓPRIO contador
-	// (Stats.Linhas e .Total) em T0 — a segunda fonte para o mesmo
+	// (Stats.Rows e .Total) em T0 — a segunda fonte para o mesmo
 	// fato que os vetores por grupo.
 	AggregateRows, AggregateTotal int64
 	// DivergentAggregates é 0, 1 ou 2: quantos dos dois discordam do

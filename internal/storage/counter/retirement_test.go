@@ -218,10 +218,10 @@ func TestAposentadoriaSobreviveAReabertura(t *testing.T) {
 
 // TestAposentadoriaNaoMexeNosAgregados trava o raciocínio que faz a
 // aposentadoria não precisar tocar nos agregados: ela só aposenta com
-// refs == 0, e totais[g] <= refs[g] por construção, então o grupo que sai
+// refs == 0, e totals[g] <= refs[g] por construção, então o grupo que sai
 // contribuía ZERO para os dois.
 //
-// Existe porque o "conserto" intuitivo — descontar refs[g] e totais[g] do
+// Existe porque o "conserto" intuitivo — descontar refs[g] e totals[g] do
 // agregado ao aposentar — é plausível de escrever e derruba o agregado abaixo
 // da soma dos grupos, em silêncio, meses depois da linha ter saído.
 func TestAposentadoriaNaoMexeNosAgregados(t *testing.T) {

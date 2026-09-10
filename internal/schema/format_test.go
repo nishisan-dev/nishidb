@@ -72,8 +72,8 @@ func TestFormatEmTipoQueNaoOUsaEhRecusado(t *testing.T) {
 
 // A D5 tirou a segunda dimensão deste teste (bitmap × hash): com um índice só,
 // `index: true` é a única grafia que declara indexação, e datetime/time
-// continuam fora do conjunto indexável (indexavel, em spec.go) que qualquer
-// um dos dois motores antigos já recusava.
+// continuam fora do conjunto indexável (isIndexableType, em spec.go) que
+// qualquer um dos dois motores antigos já recusava.
 func TestDatetimeETimeNaoSaoIndexaveis(t *testing.T) {
 	for _, typ := range []string{"datetime", "time"} {
 		decl := "      type: " + typ + "\n      format: \"" + formatOf(typ) + "\"\n      index: true\n"

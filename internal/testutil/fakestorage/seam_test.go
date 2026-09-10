@@ -8,7 +8,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// Indexado é o capability check POR CAMPO do planner. Sem ele, um schema que
+// Indexed é o capability check POR CAMPO do planner. Sem ele, um schema que
 // declara `index: true` num campo que o store não indexa faria o planner
 // escolher o caminho indexado e o executor falhar em runtime — exatamente o que
 // a degradação para full scan existe para evitar.

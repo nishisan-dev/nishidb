@@ -72,11 +72,11 @@ const (
 // Os totais NÃO são persistidos. Na abertura eles são DOBRA do vetor em disco,
 // e cada transição aplica `delta = f(nova) − f(antiga)` com antiga lida do
 // PRÓPRIO vetor — nunca do payload anterior, que o replay da recovery não tem
-// (store_recovery.go). Assim `totais == fold(vetor)` vale em qualquer instante,
-// e o replay reaplicando uma transição já refletida no vetor vê antiga == nova
-// e não mexe em nada.
+// (store_recovery.go). Assim `totals == fold(vector)` vale em qualquer
+// instante, e o replay reaplicando uma transição já refletida no vetor vê
+// antiga == nova e não mexe em nada.
 //
-// Os agregados do contador inteiro (linhas e total) herdam essa propriedade
+// Os agregados do contador inteiro (rows e total) herdam essa propriedade
 // inteira: são a MESMA dobra, acumulada no mesmo laço, e por isso nada de novo
 // vai a disco — nem no vetor de 32 bits, nem no dicionário, nem na seção dos
 // contadores do manifest, que só carrega os parâmetros que decidem o CONTEÚDO
@@ -90,11 +90,12 @@ const (
 //
 // # Concorrência
 //
-// Transition, Fold, Clear, ApplyOverlay, RecordCoveredTouches e RetireEmptyGroups são
-// exclusivos do writer (o Store os chama sob o wmu). Limit, Group, ByText,
-// AuditSnapshot e Stats são seguros para leitores concorrentes: os totais são
-// atômicos e os slices por grupo só crescem sob o lock FOLHA do dicionário,
-// que os leitores tomam para indexar. Nada aqui toma lock do Store.
+// Transition, Fold, Clear, ApplyOverlay, RecordCoveredTouches e
+// RetireEmptyGroups são exclusivos do writer (o Store os chama sob o wmu).
+// Limit, Group, ByText, AuditSnapshot e Stats são seguros para leitores
+// concorrentes: os totais são atômicos e os slices por grupo só crescem sob
+// o lock FOLHA do dicionário, que os leitores tomam para indexar. Nada aqui
+// toma lock do Store.
 type Counter struct {
 	def    Definition
 	dir    string
@@ -121,13 +122,13 @@ type Counter struct {
 	// por linha de _meta.counters — num contador por PON são milhares.
 	//
 	// Grupo aposentado não entra na conta e não precisa sair dela: a
-	// aposentadoria exige refs == 0 (retirement.go), e totais[g] <= refs[g]
-	// por construção — cada linha contribui 1 para refs e 0 ou 1 para totais,
+	// aposentadoria exige refs == 0 (retirement.go), e totals[g] <= refs[g]
+	// por construção — cada linha contribui 1 para refs e 0 ou 1 para totals,
 	// decidido pelo MESMO bit da MESMA entrada. Logo a soma sobre todos os ids
 	// é igual à soma sobre os vivos, em qualquer instante.
 	//
 	// São atomic.Int64 (método, nunca indexação) para que `c.total` não se
-	// confunda com `c.totais[g]` na leitura de quem mexer neste arquivo. O
+	// confunda com `c.totals[g]` na leitura de quem mexer neste arquivo. O
 	// preço de mantê-los é uma SEGUNDA fonte para o mesmo fato, e o que a
 	// reconcilia é a auditoria, que os confere contra o recalculado.
 	rows  atomic.Int64
@@ -150,7 +151,7 @@ type Counter struct {
 	now         func() time.Time
 }
 
-// Open abre (ou cria) o dicionário e o vetor do contador em dir. recria=true
+// Open abre (ou cria) o dicionário e o vetor do contador em dir. recreate=true
 // renomeia os arquivos existentes para *.old e nasce vazio — é a reconstrução
 // por divergência de parâmetros, decidida pelo Store a partir do manifest
 // ANTES da recovery; RemoveOld remove os renomeados quando a reconstrução
@@ -253,7 +254,7 @@ func (c *Counter) Def() Definition { return c.def }
 // Born diz se o vetor foi criado por ESTA abertura.
 func (c *Counter) Born() bool { return c.vector.Born() }
 
-// Covers diz se o vetor tem entrada para toda linha abaixo de limite.
+// Covers diz se o vetor tem entrada para toda linha abaixo de limit.
 func (c *Counter) Covers(limit types.RowID) bool { return c.vector.Covers(limit) }
 
 // OnRefuse registra o callback chamado UMA vez, na primeira recusa pelo teto
@@ -300,7 +301,7 @@ func (c *Counter) NewDeriver() *Deriver {
 }
 
 // Derive lê o payload UMA vez e devolve a chave composta do grupo e a condição.
-// temGrupo=false quando alguma coluna do groupBy está ausente (NULL é ausência)
+// hasGroup=false quando alguma coluna do groupBy está ausente (NULL é ausência)
 // ou com tipo diferente do declarado — a linha não é contada. A chave é válida
 // até a próxima chamada. Não aloca.
 func (d *Deriver) Derive(payload []byte) (key []byte, cond, hasGroup bool, err error) {
@@ -344,7 +345,7 @@ func (d *Deriver) Derive(payload []byte) (key []byte, cond, hasGroup bool, err e
 	return d.keyBuf, cond, true, nil
 }
 
-// entry devolve a entry corrente da linha: overlay, senão mmap; além do
+// entry devolve a entrada corrente da linha: overlay, senão mmap; além do
 // arquivo é WithoutGroup.
 func (c *Counter) entry(rowID types.RowID) uint32 {
 	if v, ok := c.over[rowID]; ok {
@@ -356,7 +357,7 @@ func (c *Counter) entry(rowID types.RowID) uint32 {
 
 // Transition é o ÚNICO ponto de escrita do contador: aplica ao estado a
 // transição da linha do que ela era (a entrada do vetor) para o que passou a
-// ser (derivado do payload). lapide=true força "sem grupo" — a lápide não
+// ser (derivado do payload). tombstone=true força "sem grupo" — a lápide não
 // carrega o groupBy, e é a entrada antiga que lembra de onde a linha saiu.
 //
 // Roda nos DOIS modos do applyRecord — write e replay —, sob o wmu. Zero
@@ -407,7 +408,7 @@ func (c *Counter) Transition(rowID types.RowID, payload []byte, tombstone bool) 
 	// O agregado anda COLADO ao grupo, nas duas pontas: cada Add do agregado
 	// fica ao lado do AddInt64 do vetor que ele soma, e DENTRO das mesmas
 	// guardas. O do decremento, em especial, mora dentro do
-	// `int(g) < len(c.totais)`: quando essa guarda é falsa não existe slot e
+	// `int(g) < len(c.totals)`: quando essa guarda é falsa não existe slot e
 	// nenhum grupo desce, então um agregado que descesse ali derivaria da soma
 	// dos grupos em silêncio.
 	if g := newEntry &^ conditionBit; g != WithoutGroup {
@@ -541,14 +542,14 @@ func (c *Counter) ApplyOverlay() error {
 // OverlayLen devolve quantas transições ainda não foram ao mmap.
 func (c *Counter) OverlayLen() int { return len(c.over) }
 
-// Transitions é o contador monotônico de transições efetivas (reprocessar não
-// conta). Com RecordCoveredTouches, é o que diz se a última mexida de um grupo já
-// está durável.
+// Transitions é o contador monotônico de transições efetivas (reprocessar
+// não conta). Com RecordCoveredTouches, é o que diz se a última mexida de um
+// grupo já está durável.
 func (c *Counter) Transitions() uint64 { return c.transitions }
 
-// RecordCoveredTouches registra que todas as transições até n estão duráveis — em
-// record E em página. O Store a chama no checkpoint, depois do Msync do vetor,
-// sob o wmu. Nunca regride.
+// RecordCoveredTouches registra que todas as transições até n estão
+// duráveis — em record E em página. O Store a chama no checkpoint, depois do
+// Msync do vetor, sob o wmu. Nunca regride.
 func (c *Counter) RecordCoveredTouches(n uint64) {
 	if n > c.coveredTouches {
 		c.coveredTouches = n
@@ -674,7 +675,7 @@ func (c *Counter) RecordAudit(divergences int, when time.Time) {
 // Msync força as páginas sujas do vetor para disco.
 func (c *Counter) Msync() error { return c.vector.Msync() }
 
-// RemoveOld remove os arquivos postos de lado por uma abertura com recria.
+// RemoveOld remove os arquivos postos de lado por uma abertura com recreate.
 func (c *Counter) RemoveOld() error {
 	var errs []error
 	for _, name := range []string{dictFileName, vectorFileName} {

@@ -106,7 +106,7 @@ func TestCompileNaoCriaCampoDoDicionario(t *testing.T) {
 	}
 
 	// O YAML registra os seus; o campo do dicionário não pode aparecer duas
-	// occurrences na ordem de criação.
+	// vezes na ordem de criação.
 	var occurrences int
 	for _, n := range dict.order {
 		if n == "X-Vendor-Attr" {

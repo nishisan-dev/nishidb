@@ -12,9 +12,9 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// writerUnderTest é a superfície de ESCRITA comum ao dublê e ao real. As asserções
-// de compilação garantem assinaturas idênticas; este teste garante o que elas
-// não alcançam — o COMPORTAMENTO nas bordas.
+// writerUnderTest é a superfície de ESCRITA comum ao dublê e ao real. As
+// asserções de compilação garantem assinaturas idênticas; este teste garante
+// o que elas não alcançam — o COMPORTAMENTO nas bordas.
 type writerUnderTest interface {
 	Put(key []byte, seq int64, flags uint8, payload []byte, prev *types.Record) (types.RowID, bool, error)
 	GetByKey(snap types.Snapshot, key, buf []byte) (types.Record, []byte, bool, error)

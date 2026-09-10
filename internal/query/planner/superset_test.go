@@ -148,7 +148,7 @@ func buildPayload(t *testing.T, fields []fieldValue) []byte {
 	return p
 }
 
-// candidates materializa a fonte de candidates de um plano — é o que o
+// candidates materializa a fonte de candidatos de um plano — é o que o
 // executor fará, de forma ingênua (maps) porque aqui é teste.
 func candidates(t *testing.T, s *fakestorage.Store, plan planner.Plan) map[types.RowID]bool {
 	t.Helper()
