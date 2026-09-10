@@ -8,9 +8,10 @@ import (
 )
 
 // IdentEntry é um identificador do mapeamento: pacote (diretório), espécie
-// (`type`, `func`, `method`, `field`, `const`, `var`), endereço velho
-// (`Fila`, `Fila.Empurra`) e endereço novo COMPLETO (`Queue.Push`) — nunca só
-// a folha, que é o que o TSV traz na coluna `novo`.
+// (`type`, `func`, `method`, `field`, `const`, `var`, mais `ifacemethod` para
+// o que vem do TSV de grupos de interface), endereço velho (`Fila`,
+// `Fila.Empurra`) e endereço novo COMPLETO (`Queue.Push`) — nunca só a folha,
+// que é o que o TSV traz na coluna `novo`.
 type IdentEntry struct {
 	Pkg, Kind, Old, New string
 }

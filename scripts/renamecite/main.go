@@ -8,10 +8,15 @@
 //
 // O `-paths` entra em TODA passada, inclusive nas de identificador: o pacote
 // foi renomeado numa fase e os símbolos dele em outra, e sem o mapa de pacotes
-// carregado a citação `orcamento.NovoGlobal` não resolve o qualificador.
+// carregado a citação `orcamento.NovoGlobal` não resolve o qualificador. O
+// `-ifaces` entra pela mesma razão, e com TODOS os grupos já aplicados: o
+// método de interface é renomeado pelo `scripts/ifacerename` a partir de um TSV
+// de outro formato, e sem ele as citações desses métodos não têm ferramenta
+// nenhuma.
 //
 //	go run ./scripts/renamecite -dir . \
 //	    -idents planning/identificadores-em-ingles/mapeamento-2-internal_types.tsv \
+//	    -ifaces planning/identificadores-em-ingles/grupos-de-interface-2-G3.tsv \
 //	    -paths planning/identificadores-em-ingles/mapeamento-pacotes.tsv \
 //	    -paths planning/identificadores-em-ingles/mapeamento-arquivos.tsv \
 //	    -protect planning/identificadores-em-ingles/protegidos.txt \
@@ -124,8 +129,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("renamecite", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	dir := flags.String("dir", ".", "raiz do repositório")
-	var idents, paths, tests, logkeys, subtests, protect, exclude multi
+	var idents, ifaces, paths, tests, logkeys, subtests, protect, exclude multi
 	flags.Var(&idents, "idents", "TSV pacote/especie/endereco/novo/motivo (repetível)")
+	flags.Var(&ifaces, "ifaces", "TSV pacote/interface/metodo/novo dos grupos de interface (repetível)")
 	flags.Var(&paths, "paths", "TSV velho/novo de caminhos (repetível)")
 	flags.Var(&tests, "tests", "TSV pacote/velho/novo de testes (repetível)")
 	flags.Var(&logkeys, "logkeys", "TSV velho/novo de chaves de log (repetível)")
@@ -150,7 +156,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 	}
-	m, err := loadMapping(idents, paths, tests, logkeys, subtests, protect)
+	m, err := loadMapping(idents, ifaces, paths, tests, logkeys, subtests, protect)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "renamecite: %v\n", err)
 		return 2
@@ -228,11 +234,20 @@ func run(args []string, stdout, stderr io.Writer) int {
 // entra como Old inteiro (`T.M`) e `Compila` como nome nu; param, local,
 // label e receiver são descartados porque prosa não os cita por endereço.
 //
+// O -ifaces é o SEGUNDO formato do ciclo: o TSV `pacote interface metodo novo`
+// que o `scripts/ifacerename` aplica (spec §4.2). Cada linha entra como um
+// método de endereço `Interface.metodo`, exatamente como se tivesse vindo do
+// -idents com espécie `method` — é o que faz a folha nua (`AbreSnapshot`), o
+// endereço qualificado (`Store.FechaSnapshot`) e a citação em literal caírem
+// nas MESMAS regras. Sem isso, as citações dos métodos de interface não tinham
+// ferramenta nenhuma: o rf não as vê porque são prosa, e esta passada não as
+// via porque o mapeamento delas mora em outro arquivo.
+//
 // Os identificadores entram em DUAS passadas — os tipos primeiro, o resto
 // depois —, porque o endereço novo de um método ou campo é sintetizado com o
 // receptor, e o receptor pode estar sendo renomeado no mesmo lote. Ver
 // Mapping.addIdentRow.
-func loadMapping(idents, paths, tests, logkeys, subtests, protect []string) (*Mapping, error) {
+func loadMapping(idents, ifaces, paths, tests, logkeys, subtests, protect []string) (*Mapping, error) {
 	m := NewMapping()
 	type identRow struct{ pkg, kind, address, newLeaf string }
 	var rows []identRow
@@ -247,6 +262,16 @@ func loadMapping(idents, paths, tests, logkeys, subtests, protect []string) (*Ma
 				return
 			}
 			rows = append(rows, identRow{c[0], kind, c[2], c[3]})
+		}); err != nil {
+			return nil, err
+		}
+	}
+	for _, f := range ifaces {
+		if err := eachRow(f, 4, func(c []string) {
+			if c[1] == "" || c[2] == "" || c[3] == "" || c[2] == c[3] {
+				return
+			}
+			rows = append(rows, identRow{c[0], "ifacemethod", c[1] + "." + c[2], c[3]})
 		}); err != nil {
 			return nil, err
 		}

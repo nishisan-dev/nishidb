@@ -232,21 +232,32 @@ func receiverKey(fset *token.FileSet, m renametools.Member) string {
 	return m.Pkg + "." + m.Type
 }
 
-// docEdit troca a PRIMEIRA palavra do godoc quando ela é o nome velho —
-// a forma que a regra `exported` do revive cobra. Só a primeira linha do
-// grupo; menções no meio da prosa são trabalho do renamecite.
+// docEdit troca a palavra que ABRE o godoc quando ela é o nome velho — a forma
+// que a regra `exported` do revive cobra. Menções no meio da prosa continuam
+// sendo trabalho do renamecite: só o token no COMEÇO de uma linha conta, e só
+// a PRIMEIRA linha que casa é trocada.
+//
+// A busca varre o grupo inteiro, e não só `doc.List[0]`, porque o comentário
+// que abre o godoc nem sempre é o primeiro do grupo: quando o parágrafo
+// anterior fica COLADO (sem a linha em branco que separaria os dois grupos), o
+// go/parser entrega os dois como um comentário só. A interface Store de
+// internal/materializer é assim — o contrato do buffer emenda na frase que abre
+// o godoc de Estado —, e olhando só a primeira linha o aplicador não achava o
+// nome velho, não trocava nada e reportava sucesso: o godoc ficava descrevendo
+// um método que o mesmo lote acabara de renomear.
 func docEdit(doc *ast.CommentGroup, old, newName string, add func(token.Pos, string, string)) {
-	c := doc.List[0]
-	text := c.Text
-	prefix := "// "
-	if !strings.HasPrefix(text, prefix) {
+	const prefix = "// "
+	for _, c := range doc.List {
+		if !strings.HasPrefix(c.Text, prefix) {
+			continue
+		}
+		rest := c.Text[len(prefix):]
+		if rest != old && !strings.HasPrefix(rest, old+" ") && !strings.HasPrefix(rest, old+".") && !strings.HasPrefix(rest, old+",") {
+			continue
+		}
+		add(c.Pos()+token.Pos(len(prefix)), old, newName)
 		return
 	}
-	rest := text[len(prefix):]
-	if rest != old && !strings.HasPrefix(rest, old+" ") && !strings.HasPrefix(rest, old+".") && !strings.HasPrefix(rest, old+",") {
-		return
-	}
-	add(c.Pos()+token.Pos(len(prefix)), old, newName)
 }
 
 func applyEdits(file string, es map[int]edit) error {

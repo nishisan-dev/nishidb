@@ -182,7 +182,7 @@ func TestLoadMappingSynthesizesTheFullNewAddressForMethodsAndFields(t *testing.T
 			"internal/kafka\tfield\tFila.tamanho\tsize\t\n"+
 			"internal/storage\tmethod\tStore.Apenda\tAppend\t\n")
 
-	m, err := loadMapping([]string{idents}, nil, nil, nil, nil, nil)
+	m, err := loadMapping([]string{idents}, nil, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -381,5 +381,65 @@ func TestQualifiedAddressRewritesDespiteALiveHomonym(t *testing.T) {
 	}
 	if got, want := read(t, alvo), "o `Manifest.Counters` e o `Contadores` solto\n"; got != want {
 		t.Fatalf("saída: %q\nquer:  %q", got, want)
+	}
+}
+
+// TestInterfaceGroupsTSVReachesTheCitations é o furo estrutural que a revisão
+// do G3 encontrou: método de interface é renomeado pelo `scripts/ifacerename`,
+// que lê um TSV de OUTRO formato (`pacote interface metodo novo`), e enquanto
+// esta passada só lia os `mapeamento-*.tsv` as citações desses métodos não
+// tinham ferramenta nenhuma. `AbreSnapshot`, `FechaSnapshot`, `Indexado` e
+// `Estado` sobreviveram assim em godoc, diagrama e documento.
+//
+// As duas metades do caso são as duas formas em que a prosa cita um método: a
+// folha nua (`AbreSnapshot`, alcançada por ter maiúscula interna) e o endereço
+// qualificado pelo dono (`Store.FechaSnapshot`), que só resolve com o endereço
+// SINTETIZADO `Interface.metodo`.
+//
+// A contraparte sem `-ifaces` é o que prova que é o flag, e não outra regra,
+// que alcança as duas: com o MESMO documento, nada muda.
+func TestInterfaceGroupsTSVReachesTheCitations(t *testing.T) {
+	const doc = "package x\n\n// A leitura chama AbreSnapshot e devolve por Store.FechaSnapshot.\nfunc F() {}\n"
+	const ifaces = "pacote\tinterface\tmetodo\tnovo\n" +
+		"internal/query/executor\tStore\tAbreSnapshot\tOpenSnapshot\n" +
+		"internal/query/executor\tStore\tFechaSnapshot\tCloseSnapshot\n"
+
+	com := t.TempDir()
+	alvo := write(t, com, "doc.go", doc)
+	report := filepath.Join(com, "relatorio.txt")
+	var out, errb bytes.Buffer
+	code := run([]string{
+		"-dir", com,
+		"-ifaces", write(t, com, "mapa/ifaces.tsv", ifaces),
+		"-exclude", "mapa",
+		"-report", report,
+	}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, errb.String())
+	}
+	want := "package x\n\n// A leitura chama OpenSnapshot e devolve por Store.CloseSnapshot.\nfunc F() {}\n"
+	if got := read(t, alvo); got != want {
+		t.Fatalf("com -ifaces: %q\nquer:       %q", got, want)
+	}
+	rel := read(t, report)
+	for _, linha := range []string{
+		"aplicado\tdoc.go:3\tAbreSnapshot\tOpenSnapshot\tnu\n",
+		"aplicado\tdoc.go:3\tStore.FechaSnapshot\tStore.CloseSnapshot\tqualificado\n",
+	} {
+		if !strings.Contains(rel, linha) {
+			t.Errorf("relatório sem %q:\n%s", linha, rel)
+		}
+	}
+
+	sem := t.TempDir()
+	alvo = write(t, sem, "doc.go", doc)
+	out.Reset()
+	errb.Reset()
+	code = run([]string{"-dir", sem, "-report", filepath.Join(sem, "relatorio.txt")}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, errb.String())
+	}
+	if got := read(t, alvo); got != doc {
+		t.Errorf("sem -ifaces o documento mudou, e a regra alcançada não seria a do flag: %q", got)
 	}
 }
