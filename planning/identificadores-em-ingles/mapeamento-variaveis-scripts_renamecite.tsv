@@ -1,0 +1,20 @@
+pacote	especie	endereco	novo	motivo
+scripts/renamecite	local	collectDeclarations.dirDoArquivo	dirDoFile	tradução via dicionário base
+scripts/renamecite	local	TestExcludedFilesAreUntouchedAndAppliedSubstitutionsAreReported.linha	row	tradução via dicionário base
+scripts/renamecite	local	TestProtectedTokenIsKeptAndReported.alvo	target	tradução via dicionário base
+scripts/renamecite	local	TestBareUnexportedTokenIsStillReplaced.alvo	target	tradução via dicionário base
+scripts/renamecite	local	TestPackageMapCompletesTheQualifiedCitation.alvo	target	tradução via dicionário base
+scripts/renamecite	local	TestPackageMapCompletesTheQualifiedCitation.semMapa	withoutMapa	tradução via dicionário base
+scripts/renamecite	local	TestLiveDeclarationBlocksTheLeafRewriteAndIsReported.alvo	target	tradução via dicionário base
+scripts/renamecite	local	TestLiveDeclarationBlocksTheLeafRewriteAndIsReported.semDeclaracao	withoutDeclaracao	tradução via dicionário base
+scripts/renamecite	local	TestQualifiedAddressRewritesDespiteALiveHomonym.alvo	target	tradução via dicionário base
+scripts/renamecite	local	TestInterfaceGroupsTSVReachesTheCitations.alvo	target	tradução via dicionário base
+scripts/renamecite	local	TestInterfaceGroupsTSVReachesTheCitations.linha	row	tradução via dicionário base
+scripts/renamecite	local	TestInterfaceGroupsTSVReachesTheCitations.sem	without	tradução via dicionário base
+scripts/renamecite	local	TestExcludedFilesAreUntouchedAndAppliedSubstitutionsAreReported.porFlag	byFlag	tradução via dicionário base
+scripts/renamecite	local	TestExcludedFilesAreUntouchedAndAppliedSubstitutionsAreReported.alvo	target	tradução via dicionário base
+scripts/renamecite	local#ambiguo	Mapping.buildIndex.novo	new	tradução via dicionário base
+scripts/renamecite	local#ambiguo	Mapping.buildIndex.novo	new	tradução via dicionário base
+scripts/renamecite	local	Mapping.applyPaths.novo	new	tradução via dicionário base
+scripts/renamecite	local	goFenceRanges.fim	end	tradução via dicionário base
+scripts/renamecite	local	goFenceRanges.linha	row	tradução via dicionário base

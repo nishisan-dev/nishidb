@@ -1,0 +1,22 @@
+pacote	especie	endereco	novo	motivo
+internal/counters	var	nomesDasColunasMeta	nomesDasColumnsMeta	tradução via dicionário base
+internal/counters	field	fonteMeta.linhas	rows	tradução via dicionário base
+internal/counters	field	fonteMeta.porNome	byNome	tradução via dicionário base
+internal/counters	field	fonteMeta.colunas	columns	tradução via dicionário base
+internal/counters	field	iteradorMeta.limite	limit	tradução via dicionário base
+internal/counters	local	TestTabelaMetaCountersNaoAlocaPorLinha.fonte	source	tradução via dicionário base
+internal/counters	local	TestTabelaMetaCountersNaoAlocaPorLinha.chave	key	tradução via dicionário base
+internal/counters	local	motorComMeta.fonte	source	tradução via dicionário base
+internal/counters	local	TestMetaCountersListaOsContadores.porOLT	byOLT	tradução via dicionário base
+internal/counters	local	TestMetaCountersListaOsContadores.porPON	byPON	tradução via dicionário base
+internal/counters	local	TestMetaCountersPublicaLinhasETotal.porOLT	byOLT	tradução via dicionário base
+internal/counters	local	TestMetaCountersPublicaLinhasETotal.porPON	byPON	tradução via dicionário base
+internal/counters	local	Register.fonte	source	tradução via dicionário base
+internal/counters	field	fonte.idChave	idKey	tradução via dicionário base
+internal/counters	field	fonte.colunas	columns	tradução via dicionário base
+internal/counters	local	fonte.GetByRowID.chave	key	tradução via dicionário base
+internal/counters	param	fonte.record.chave	key	tradução via dicionário base
+internal/counters	field	iterador.limite	limit	tradução via dicionário base
+internal/counters	local	TestTabelaDoContadorNaoAlocaPorLinha.fonte	source	tradução via dicionário base
+internal/counters	local	TestTabelaDoContadorNaoAlocaPorLinha.chave	key	tradução via dicionário base
+internal/counters	local	motorComContador.fonte	source	tradução via dicionário base

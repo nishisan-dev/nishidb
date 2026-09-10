@@ -537,9 +537,9 @@ func TestAtrasoFixoDeAproximadamente100msEmTodaFalhaDeAutenticacao(t *testing.T)
 	req := httptest.NewRequest(http.MethodGet, "/rota-read", nil)
 	req.SetBasicAuth("leitor", senhaLeitorDeTeste)
 	rec := httptest.NewRecorder()
-	inicio := time.Now()
+	start := time.Now()
 	h.ServeHTTP(rec, req)
-	sucesso := time.Since(inicio)
+	sucesso := time.Since(start)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, credencial válida deveria autenticar", rec.Code)
 	}

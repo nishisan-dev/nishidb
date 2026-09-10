@@ -151,14 +151,14 @@ func TestResolveSenhaAparaTrailingNewlineDoPasswordFile(t *testing.T) {
 
 	casos := []struct {
 		nome    string
-		caminho string
+		path string
 	}{
 		{"LF", comLF},
 		{"CRLF", comCRLF},
 	}
 	for _, c := range casos {
 		t.Run(c.nome, func(t *testing.T) {
-			digest, err := resolvePassword(config.UserSpec{Username: "op", PasswordFile: c.caminho, Role: config.RoleRead})
+			digest, err := resolvePassword(config.UserSpec{Username: "op", PasswordFile: c.path, Role: config.RoleRead})
 			if err != nil {
 				t.Fatal(err)
 			}

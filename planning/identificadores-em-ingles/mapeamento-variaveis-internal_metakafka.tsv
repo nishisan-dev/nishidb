@@ -1,0 +1,14 @@
+pacote	especie	endereco	novo	motivo
+internal/metakafka	param	pos.fim	end	tradução via dicionário base
+internal/metakafka	param	snapshotDeEpoca.limite	limit	tradução via dicionário base
+internal/metakafka	param	DeclaredState.estado	state	tradução via dicionário base
+internal/metakafka	field	Fonte.Estado	State	tradução via dicionário base
+internal/metakafka	var	nomesDasColunas	nomesDasColumns	tradução via dicionário base
+internal/metakafka	local	Table.campo	field	tradução via dicionário base
+internal/metakafka	field	comum.estado	state	tradução via dicionário base
+internal/metakafka	field	comum.filaRegistros	filaRecords	tradução via dicionário base
+internal/metakafka	field	linha.Posicao	Position	tradução via dicionário base
+internal/metakafka	field	retrato.linhas	rows	tradução via dicionário base
+internal/metakafka	field	retrato.limite	limit	tradução via dicionário base
+internal/metakafka	field	fonte.colunas	columns	tradução via dicionário base
+internal/metakafka	local	fonte.record.chave	key	tradução via dicionário base

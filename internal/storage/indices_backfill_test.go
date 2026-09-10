@@ -167,8 +167,8 @@ func TestSegmentoSeladoSemASecaoDoCampoNovoEntraNaFila(t *testing.T) {
 
 	rodaReconstrucaoAteEsvaziar(t, s2)
 
-	if campos := camposDoSelado(t, dir, alvo); len(campos) != 2 {
-		t.Errorf("o .sidx do segmento %d ficou com %v; quero as duas seções", alvo, campos)
+	if fields := camposDoSelado(t, dir, alvo); len(fields) != 2 {
+		t.Errorf("o .sidx do segmento %d ficou com %v; quero as duas seções", alvo, fields)
 	}
 	if depois := candidatosCrus(t, s2, campoType, inexistente); len(depois) != 0 {
 		t.Errorf("depois da reconstrução o campo novo ainda enumerou %d candidatos", len(depois))
@@ -262,9 +262,9 @@ func TestRemoverIndiceApagaAsSecoes(t *testing.T) {
 
 	rodaReconstrucaoAteEsvaziar(t, s2)
 
-	if campos := camposDoSelado(t, dir, alvo); !slices.Equal(campos, []types.FieldID{campoNode}) {
+	if fields := camposDoSelado(t, dir, alvo); !slices.Equal(fields, []types.FieldID{campoNode}) {
 		t.Errorf("o .sidx do segmento %d ficou com %v, quero só [%d]: a seção do campo removido não saiu",
-			alvo, campos, campoNode)
+			alvo, fields, campoNode)
 	}
 	// O campo que continua indexado tem de continuar respondendo: a remoção não
 	// pode levar junto o índice de quem ficou.

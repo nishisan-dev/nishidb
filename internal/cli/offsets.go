@@ -150,8 +150,8 @@ func runOffsets(args []string, amb CLIContext) int {
 				*dataset, formatOffsets(offsets))
 			return ExitUsageError
 		}
-		nova := checkpoint.SourceOffsets{Source: specOrigin(spec), Offsets: offsets}
-		if err := grava(st, nova); err != nil {
+		new := checkpoint.SourceOffsets{Source: specOrigin(spec), Offsets: offsets}
+		if err := grava(st, new); err != nil {
 			fmt.Fprintf(amb.Stderr, "offsets: %v\n", err)
 			return errorCode(err)
 		}

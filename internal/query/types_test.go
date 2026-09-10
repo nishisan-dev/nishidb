@@ -89,8 +89,8 @@ func TestIngestaoEQueryConcordamPorTipo(t *testing.T) {
 	casos := []struct {
 		nome string
 		// campo e valor como aparecem no evento JSON.
-		campoJSON string
-		valorJSON string
+		fieldJSON string
+		valueJSON string
 		// predicado SQL que TEM de achar a row.
 		where string
 	}{
@@ -134,12 +134,12 @@ func TestIngestaoEQueryConcordamPorTipo(t *testing.T) {
 	for _, tc := range casos {
 		t.Run(tc.nome, func(t *testing.T) {
 			h := novoTiposHarness(t)
-			h.ingere(fmt.Sprintf(`{"id":"K1","_SEQ":1,%q:%s}`, tc.campoJSON, tc.valorJSON))
+			h.ingere(fmt.Sprintf(`{"id":"K1","_SEQ":1,%q:%s}`, tc.fieldJSON, tc.valueJSON))
 
 			got := h.achaIDs(`SELECT id FROM todos_os_tipos WHERE ` + tc.where)
 			if len(got) != 1 || got[0] != "K1" {
 				t.Errorf("query não achou a row ingerida: %v\n  evento: %s = %s\n  where:  %s",
-					got, tc.campoJSON, tc.valorJSON, tc.where)
+					got, tc.fieldJSON, tc.valueJSON, tc.where)
 			}
 		})
 	}
@@ -283,8 +283,8 @@ func TestIngestaoEQueryConcordamNosTiposOpacos(t *testing.T) {
 func TestValorInvalidoEhRecusadoNosDoisLados(t *testing.T) {
 	casos := []struct {
 		nome      string
-		campoJSON string
-		valor     string // literal, sem aspas JSON
+		fieldJSON string
+		value     string // literal, sem aspas JSON
 		where     string
 	}{
 		// Zeros à esquerda em ipv4: ambíguo (octal?), recusado na ingestão e
@@ -298,15 +298,15 @@ func TestValorInvalidoEhRecusadoNosDoisLados(t *testing.T) {
 		t.Run(tc.nome, func(t *testing.T) {
 			h := novoTiposHarness(t)
 
-			r := h.mat.Apply([]byte(fmt.Sprintf(`{"id":"K1","_SEQ":1,%q:%q}`, tc.campoJSON, tc.valor)))
+			r := h.mat.Apply([]byte(fmt.Sprintf(`{"id":"K1","_SEQ":1,%q:%q}`, tc.fieldJSON, tc.value)))
 			if r.Err == nil {
-				t.Errorf("a INGESTÃO aceitou %q", tc.valor)
+				t.Errorf("a INGESTÃO aceitou %q", tc.value)
 			}
 
 			_, err := h.engine.Execute(context.Background(), "todos_os_tipos",
 				`SELECT id FROM todos_os_tipos WHERE `+tc.where, nil)
 			if err == nil {
-				t.Errorf("a QUERY aceitou %q", tc.valor)
+				t.Errorf("a QUERY aceitou %q", tc.value)
 			}
 		})
 	}

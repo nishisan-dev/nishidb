@@ -110,8 +110,8 @@ func (o oraculo) texto(key, campo string) (string, bool) {
 // predicado — o conjunto que a query TEM de devolver.
 func (o oraculo) keysOnde(pred func(estado map[string]any) bool) []string {
 	var out []string
-	for k, estado := range o {
-		if pred(estado) {
+	for k, state := range o {
+		if pred(state) {
 			out = append(out, k)
 		}
 	}
@@ -338,10 +338,10 @@ func TestIntegracaoFimAFim(t *testing.T) {
 
 	t.Run("full scan com campo nao indexado", func(t *testing.T) {
 		// Um username que exista de verdade no corpus.
-		alvo := algumValor(t, ig.oracle, "User-Name")
-		want := ig.oracle.keysOnde(func(e map[string]any) bool { return campoIgual(e, "User-Name", alvo) })
+		target := algumValor(t, ig.oracle, "User-Name")
+		want := ig.oracle.keysOnde(func(e map[string]any) bool { return campoIgual(e, "User-Name", target) })
 		got := ig.ids(`SELECT id FROM radius_sessions WHERE username = ?`,
-			types.Value{Type: types.TypeString, Bytes: []byte(alvo)})
+			types.Value{Type: types.TypeString, Bytes: []byte(target)})
 		comparaConjuntos(t, "full scan", got, want)
 		if n := ig.engine.PlanMetrics().FullScan.Load(); n == 0 {
 			t.Error("query.full_scan não contou o full scan")

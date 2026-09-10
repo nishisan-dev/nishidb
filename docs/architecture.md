@@ -1776,7 +1776,7 @@ e as **duas** parcelas são necessárias. Só a primeira **não é monótona**: 
 própria expulsão apaga arquivos, então apagar o maior BAIXA a estimativa, e quem
 ela passa a subestimar é exatamente o segmento que acabou de sair — ele volta a
 caber, é reconstruído, estoura o teto de novo e é expulso de novo. A segunda
-parcela (`Store.tamanhoExpulso`) é gravada em memória no instante do `unlink`;
+parcela (`Store.sizeExpulso`) é gravada em memória no instante do `unlink`;
 para o caso do moinho ela não é estimativa nenhuma, é o tamanho que o arquivo de
 fato teve. Ela não é persistida — um metadado a menos é uma janela de crash a
 menos —, e o preço é uma reconstrução desperdiçada por segmento atípico depois

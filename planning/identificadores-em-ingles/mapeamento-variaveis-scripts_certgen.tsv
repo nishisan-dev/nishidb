@@ -1,0 +1,11 @@
+pacote	especie	endereco	novo	motivo
+scripts/certgen	local	main.chave	key	tradução via dicionário base
+scripts/certgen	param	gera.caminhoCert	pathCert	tradução via dicionário base
+scripts/certgen	param	gera.caminhoChave	pathKey	tradução via dicionário base
+scripts/certgen	local	gera.chave	key	tradução via dicionário base
+scripts/certgen	local	gera.bytesChave	bytesKey	tradução via dicionário base
+scripts/certgen	param	escrevePEM.caminho	path	tradução via dicionário base
+scripts/certgen	local	escrevePEM.arquivo	file	tradução via dicionário base
+scripts/certgen	local	TestOCertificadoServeParaLocalhostEParaOIP.chave	key	tradução via dicionário base
+scripts/certgen	local	TestOParDeCertificadoEChaveCasa.chave	key	tradução via dicionário base
+scripts/certgen	local	TestAChavePrivadaNaoEhLegivelPorOutros.chave	key	tradução via dicionário base

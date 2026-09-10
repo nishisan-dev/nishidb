@@ -90,12 +90,12 @@ func countersLocal(argConfig, dataset string, audita, reconstroi bool, amb CLICo
 			notify(amb, "counters: auditoria: %v\n", err)
 			return errorCode(err)
 		}
-		linhas := make([]linhaDeAuditoria, 0, len(rs))
+		rows := make([]linhaDeAuditoria, 0, len(rs))
 		for _, r := range rs {
-			linhas = append(linhas, auditoriaDoStorage(r))
+			rows = append(rows, auditoriaDoStorage(r))
 		}
-		code := writeOutputWithContext("counters", amb, func(w io.Writer) { writeAudit(w, dataset, linhas) })
-		return auditOutcome(linhas, code, amb)
+		code := writeOutputWithContext("counters", amb, func(w io.Writer) { writeAudit(w, dataset, rows) })
+		return auditOutcome(rows, code, amb)
 	case reconstroi:
 		recs, err := st.ReconstroiContadores(amb.Ctx)
 		if err != nil {
@@ -155,11 +155,11 @@ func countersRemoto(servidor, dataset string, audita, reconstroi bool, cred remo
 			if ds.Name != dataset {
 				continue
 			}
-			linhas := make([]linhaDeContador, 0, len(ds.Counters))
+			rows := make([]linhaDeContador, 0, len(ds.Counters))
 			for _, c := range ds.Counters {
-				linhas = append(linhas, wireCounter(c))
+				rows = append(rows, wireCounter(c))
 			}
-			return writeOutputWithContext("counters", amb, func(w io.Writer) { writeCounters(w, dataset, linhas) })
+			return writeOutputWithContext("counters", amb, func(w io.Writer) { writeCounters(w, dataset, rows) })
 		}
 		notify(amb, "counters: o dataset %q não está registrado em %s\n", dataset, servidor)
 		return ExitUsageError

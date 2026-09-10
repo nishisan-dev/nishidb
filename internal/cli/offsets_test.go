@@ -83,17 +83,17 @@ func TestOffsetsSetGravaEDepoisEhLido(t *testing.T) {
 }
 
 func TestOffsetsSetRecusaEntradaInvalida(t *testing.T) {
-	casos := []struct{ valor, trecho string }{
+	casos := []struct{ value, trecho string }{
 		{"lixo", "particao:offset"},
 		{"0:-1", "offset inválido"},
 		{"-1:0", "partição inválida"},
 		{"0:1,0:2", "repetida"},
 	}
 	for _, c := range casos {
-		t.Run(c.valor, func(t *testing.T) {
+		t.Run(c.value, func(t *testing.T) {
 			a := novoAmbiente(t)
 			if code := a.roda("offsets", "--config", a.config, "--dataset", "radius_sessions",
-				"--set", c.valor, "--yes"); code != cli.ExitUsageError {
+				"--set", c.value, "--yes"); code != cli.ExitUsageError {
 				t.Errorf("code = %d, quer %d", code, cli.ExitUsageError)
 			}
 			if !strings.Contains(a.stderr.String(), c.trecho) {

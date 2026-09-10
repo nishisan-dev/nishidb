@@ -90,10 +90,10 @@ type Fonte struct {
 	// dois viram NULL na coluna — porque nenhum dos dois é um offset.
 	Duraveis func() (checkpoint.SourceOffsets, bool, error)
 
-	// Estado classifica a ingestão no vocabulário do §94. No servidor é a
+	// State classifica a ingestão no vocabulário do §94. No servidor é a
 	// MESMA função que o /v1/health e o /v1/stats usam — não uma segunda
 	// classificação que descreveria a mesma realidade com outra palavra.
-	// Estado vazio vira NULL.
+	// State vazio vira NULL.
 	Estado func() (estado, detalhe string)
 
 	// Vigia devolve as duas séries do watchdog, lidas dos MESMOS handles que
@@ -104,7 +104,7 @@ type Fonte struct {
 }
 
 // EstadoDeclarado é o que o YAML SOZINHO prova sobre o estado, e é usado
-// APENAS quando Fonte.Estado é nil.
+// APENAS quando Fonte.State é nil.
 //
 // Sem bloco Kafka, ou com `enabled: false`, o veredito é DISABLED e não
 // depende de processo nenhum. Com `enabled: true` e sem classificador, a

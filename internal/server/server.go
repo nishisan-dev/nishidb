@@ -293,10 +293,10 @@ func Novo(cfg *config.Config, o Opcoes) (*Servidor, error) {
 			"a chave é aceita e NÃO tem implementação nesta versão; não dimensione a máquina por ela",
 			"chave", chave)
 	}
-	for _, chave := range cfg.IgnoredStorageKeys() {
+	for _, key := range cfg.IgnoredStorageKeys() {
 		log.Warn("config.sem_efeito",
 			"a chave é aceita e NÃO tem implementação nesta versão; a janela real de durabilidade é storage.checkpoint.interval",
-			"chave", chave)
+			"chave", key)
 	}
 
 	s := &Servidor{

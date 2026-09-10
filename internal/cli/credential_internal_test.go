@@ -49,7 +49,7 @@ func TestFlagsRemotasResolveRegrasDePrecedencia(t *testing.T) {
 		nome        string
 		args        []string
 		env         string // "" = não seta a variável
-		querErro    bool
+		querErr    bool
 		querUsuario string
 		querSenha   string
 		querTLSCA   string
@@ -60,17 +60,17 @@ func TestFlagsRemotasResolveRegrasDePrecedencia(t *testing.T) {
 		{
 			nome:     "user sem nenhuma fonte de senha: erro",
 			args:     []string{"--user", "chefe"},
-			querErro: true,
+			querErr: true,
 		},
 		{
 			nome:     "password-file sem user: erro",
 			args:     []string{"--password-file", arq},
-			querErro: true,
+			querErr: true,
 		},
 		{
 			nome:     "env sem user: erro",
 			env:      "abc",
-			querErro: true,
+			querErr: true,
 		},
 		{
 			nome:        "user + env: ok",
@@ -89,12 +89,12 @@ func TestFlagsRemotasResolveRegrasDePrecedencia(t *testing.T) {
 			nome:     "user + as duas fontes ao mesmo tempo: erro",
 			args:     []string{"--user", "chefe", "--password-file", arq},
 			env:      "abc",
-			querErro: true,
+			querErr: true,
 		},
 		{
 			nome:     "user + password-file vazio (só quebra de linha): erro",
 			args:     []string{"--user", "chefe", "--password-file", arqVazio},
-			querErro: true,
+			querErr: true,
 		},
 		{
 			nome:      "--tls-ca sozinho, sem user: ok, tlsCA preenchido",
@@ -109,7 +109,7 @@ func TestFlagsRemotasResolveRegrasDePrecedencia(t *testing.T) {
 			}
 			f := flagsParaTeste(t, c.args...)
 			cred, err := f.resolve()
-			if c.querErro {
+			if c.querErr {
 				if err == nil {
 					t.Fatalf("queria erro, saiu nil (cred=%+v)", cred)
 				}

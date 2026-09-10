@@ -280,13 +280,13 @@ func readIdentMappings(dir string) (renamed []renamedIdent, surviving map[string
 				if len(cols) < 4 {
 					continue
 				}
-				pkg, iface, metodo, novo := cols[0], cols[1], cols[2], cols[3]
-				if novo == "" || metodo == "" {
+				pkg, iface, metodo, new := cols[0], cols[1], cols[2], cols[3]
+				if new == "" || metodo == "" {
 					continue
 				}
-				surviving[novo] = true
-				if metodo != novo {
-					renamed = append(renamed, renamedIdent{pkg: pkg, address: iface + "." + metodo, old: metodo, new: novo})
+				surviving[new] = true
+				if metodo != new {
+					renamed = append(renamed, renamedIdent{pkg: pkg, address: iface + "." + metodo, old: metodo, new: new})
 				}
 			}
 		default:

@@ -1,0 +1,7 @@
+pacote	especie	endereco	novo	motivo
+internal/query/meta	var	colunasIDs	columnsIDs	tradução via dicionário base
+internal/query/meta	param	Abre.alvo	target	tradução via dicionário base
+internal/query/meta	local	TestFieldsListaOsCamposDoDataset.porNome	byNome	tradução via dicionário base
+internal/query/meta	local	TestCoercionsApareceNoCuringaDaTabelaVirtual.linhas	rows	tradução via dicionário base
+internal/query/meta	field	fonte.campos	fields	tradução via dicionário base
+internal/query/meta	param	novaFonte.alvo	target	tradução via dicionário base

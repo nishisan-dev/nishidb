@@ -1,0 +1,5 @@
+pacote	especie	endereco	novo	motivo
+internal/gates	local#ambiguo	readIdentMappings.novo	new	tradução via dicionário base
+internal/gates	local#ambiguo	readIdentMappings.novo	new	tradução via dicionário base
+internal/gates	local	goFenceRanges.fim	end	tradução via dicionário base
+internal/gates	local	goFenceRanges.linha	row	tradução via dicionário base

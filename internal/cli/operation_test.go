@@ -871,7 +871,7 @@ func TestStatusPublicaOsContadoresDoMotorDoProcesso(t *testing.T) {
 	q := estatisticas(t, a).Process.Query
 	campos := []struct {
 		rotulo string
-		valor  int64
+		value  int64
 	}{
 		{"full scans", q.FullScans},
 		{"point lookups", q.PointLookups},
@@ -887,16 +887,16 @@ func TestStatusPublicaOsContadoresDoMotorDoProcesso(t *testing.T) {
 	// fixture que precisa mudar — não o oráculo.
 	vistos := map[int64]string{}
 	for _, c := range campos {
-		if outro, ok := vistos[c.valor]; ok {
+		if outro, ok := vistos[c.value]; ok {
 			t.Fatalf("%q e %q valem %d: com dois contadores iguais o teste não distingue os rótulos",
-				outro, c.rotulo, c.valor)
+				outro, c.rotulo, c.value)
 		}
-		vistos[c.valor] = c.rotulo
+		vistos[c.value] = c.rotulo
 	}
 
 	for _, c := range campos {
-		if got := campoDaSaida(t, saida, c.rotulo); got != strconv.FormatInt(c.valor, 10) {
-			t.Errorf("%s = %q na saída e %d no /v1/stats", c.rotulo, got, c.valor)
+		if got := campoDaSaida(t, saida, c.rotulo); got != strconv.FormatInt(c.value, 10) {
+			t.Errorf("%s = %q na saída e %d no /v1/stats", c.rotulo, got, c.value)
 		}
 	}
 }

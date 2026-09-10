@@ -508,8 +508,8 @@ func (s *Store) constroiIndiceDoSegmento(ctx context.Context, seg uint32, campos
 	}
 	e := segindex.NewWriter()
 	fimValido, err := s.varreOsRecordsDoSegmento(ctx, seg, cobertura,
-		func(campo types.FieldID, h uint64, row types.RowID) error {
-			e.Add(campo, h, row)
+		func(field types.FieldID, h uint64, row types.RowID) error {
+			e.Add(field, h, row)
 			return nil
 		})
 	if err != nil {

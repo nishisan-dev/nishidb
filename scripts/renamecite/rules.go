@@ -165,12 +165,12 @@ func (m *Mapping) buildIndex() {
 		idx.pkgNames[old] = true
 		idx.pkgNames[novo] = true
 	}
-	for old, novo := range m.Paths {
+	for old, new := range m.Paths {
 		if strings.Contains(old, ".go") {
 			continue
 		}
 		idx.pkgNames[shortPkg(old)] = true
-		idx.pkgNames[shortPkg(novo)] = true
+		idx.pkgNames[shortPkg(new)] = true
 	}
 	for name := range m.PackageDirs {
 		idx.pkgNames[name] = true

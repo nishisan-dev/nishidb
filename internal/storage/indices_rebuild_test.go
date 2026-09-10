@@ -162,8 +162,8 @@ func TestOPontoFixoCaiQuandoOIndiceSaiDeDisco(t *testing.T) {
 		t.Fatalf("a passada depois da expulsão reconstruiu %d segmentos, quero 1: o índice expulso não voltou, e "+
 			"alargar a janela seria um botão de mão única", feitos)
 	}
-	if campos := camposDoSelado(t, dir, alvo); len(campos) != 1 {
-		t.Errorf("o índice do segmento %d voltou cobrindo %v", alvo, campos)
+	if fields := camposDoSelado(t, dir, alvo); len(fields) != 1 {
+		t.Errorf("o índice do segmento %d voltou cobrindo %v", alvo, fields)
 	}
 }
 
@@ -197,9 +197,9 @@ func TestAReconstrucaoResolveTodosOsCamposPendentesNaMesmaLeitura(t *testing.T) 
 		t.Errorf("o segmento foi varrido %d vezes para resolver dois campos pendentes: a leitura sequencial é o "+
 			"custo inteiro da operação, e uma por campo a duplica", lidas)
 	}
-	if campos := camposDoSelado(t, dir, alvo); len(campos) != 2 {
+	if fields := camposDoSelado(t, dir, alvo); len(fields) != 2 {
 		t.Errorf("o .sidx reconstruído cobre %v, quero os dois campos indexados: reescrever só o campo que faltava "+
-			"apagaria a seção que já estava lá", campos)
+			"apagaria a seção que já estava lá", fields)
 	}
 }
 
@@ -495,8 +495,8 @@ func TestOMapeamentoAbertoAntesDaReescritaNaoEhPublicado(t *testing.T) {
 			"velho — sem a seção do campo novo, portanto enumerando — até a próxima abertura do dataset, e ainda " +
 			"prende o inode substituído")
 	}
-	if campos := camposDoSeladoEmCache(t, s2, alvo); len(campos) != 2 {
-		t.Errorf("o cache serve um índice que cobre %v depois da reconstrução, quero os dois campos", campos)
+	if fields := camposDoSeladoEmCache(t, s2, alvo); len(fields) != 2 {
+		t.Errorf("o cache serve um índice que cobre %v depois da reconstrução, quero os dois campos", fields)
 	}
 }
 

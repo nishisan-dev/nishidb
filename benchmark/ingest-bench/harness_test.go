@@ -249,10 +249,10 @@ func TestAvaliaHeapDoisRegimes(t *testing.T) {
 	const mib = 1 << 20
 	casos := []struct {
 		nome                  string
-		atual, base           uint64
-		entAtual, entBase     int
+		current, base           uint64
+		entCurrent, entBase     int
 		querPassar            bool
-		trechoEsperadoNoTexto string
+		trechoExpectedNoTexto string
 	}{
 		{"desprezível encerra pelo valor", 1 * mib, 400 * 1024, 8_000_000, 1_000_000, true, "piso"},
 		{"desprezível mesmo com razão alta", 15 * mib, 1 * mib, 8_000_000, 1_000_000, true, "piso"},
@@ -268,12 +268,12 @@ func TestAvaliaHeapDoisRegimes(t *testing.T) {
 	}
 	for _, tc := range casos {
 		t.Run(tc.nome, func(t *testing.T) {
-			passou, detalhe := avaliaHeap(tc.atual, tc.base, tc.entAtual, tc.entBase)
+			passou, detalhe := avaliaHeap(tc.current, tc.base, tc.entCurrent, tc.entBase)
 			if passou != tc.querPassar {
 				t.Errorf("passou = %v, want %v (detalhe: %s)", passou, tc.querPassar, detalhe)
 			}
-			if !strings.Contains(detalhe, tc.trechoEsperadoNoTexto) {
-				t.Errorf("detalhe = %q, want conter %q", detalhe, tc.trechoEsperadoNoTexto)
+			if !strings.Contains(detalhe, tc.trechoExpectedNoTexto) {
+				t.Errorf("detalhe = %q, want conter %q", detalhe, tc.trechoExpectedNoTexto)
 			}
 		})
 	}

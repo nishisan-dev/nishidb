@@ -248,9 +248,9 @@ func TestTopNDaOMesmoResultadoQueOSortCompleto(t *testing.T) {
 
 	casos := []struct {
 		nome            string
-		chaves          []binder.BoundOrderKey
-		limite, offset  int64
-		linhasEsperadas int
+		keys          []binder.BoundOrderKey
+		limit, offset  int64
+		rowsEsperadas int
 	}{
 		{"uma chave asc", []binder.BoundOrderKey{chaveNome(t, c, false, false)}, 25, 0, 25},
 		{"uma chave desc", []binder.BoundOrderKey{chaveNome(t, c, true, false)}, 25, 0, 25},
@@ -262,8 +262,8 @@ func TestTopNDaOMesmoResultadoQueOSortCompleto(t *testing.T) {
 
 	for _, cs := range casos {
 		t.Run(cs.nome, func(t *testing.T) {
-			rapido := executa(t, st, bqTopN(t, c, cs.chaves, cs.limite, cs.offset), executor.Options{})
-			completo := executa(t, st, bqTopN(t, c, cs.chaves, cs.limite, cs.offset), desligaTopN)
+			rapido := executa(t, st, bqTopN(t, c, cs.keys, cs.limit, cs.offset), executor.Options{})
+			completo := executa(t, st, bqTopN(t, c, cs.keys, cs.limit, cs.offset), desligaTopN)
 
 			if rapido.usouTopN != 1 {
 				t.Fatalf("o lado rápido NÃO escolheu o top-N (TopN=%d): os dois lados são o mesmo "+
@@ -278,9 +278,9 @@ func TestTopNDaOMesmoResultadoQueOSortCompleto(t *testing.T) {
 					"completo e o diferencial voltou a comparar um caminho consigo mesmo",
 					rapido.degradouTo)
 			}
-			if len(completo.ids) != cs.linhasEsperadas {
+			if len(completo.ids) != cs.rowsEsperadas {
 				t.Fatalf("%d linhas, quer %d: a montagem não produziu o corpus",
-					len(completo.ids), cs.linhasEsperadas)
+					len(completo.ids), cs.rowsEsperadas)
 			}
 			if len(rapido.ids) != len(completo.ids) {
 				t.Fatalf("top-N devolveu %d linhas, completo devolveu %d", len(rapido.ids), len(completo.ids))
