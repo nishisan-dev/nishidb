@@ -92,7 +92,7 @@ func (e *Engine) Register(name string, sch *schema.Compiled, st Store) error {
 // O namespace tem de começar com "_", que é o prefixo que a compilação da spec
 // reserva; o nome da tabela tem de ser o Name do schema sintético, porque é
 // contra ele que o binder confere o FROM.
-func (e *Engine) RegistraVirtual(dataset, namespace, tabela string, sch *schema.Compiled, st Store) error {
+func (e *Engine) RegisterVirtual(dataset, namespace, tabela string, sch *schema.Compiled, st Store) error {
 	switch {
 	case !strings.HasPrefix(namespace, "_"):
 		return fmt.Errorf("query: namespace virtual %q sem o prefixo reservado \"_\"", namespace)

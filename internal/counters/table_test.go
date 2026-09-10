@@ -116,7 +116,7 @@ func motorComContador(t *testing.T, c *counter.Counter) *query.Engine {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.RegistraVirtual("servicos", schema.CountersNamespace, c.Def().Name, tsc, fonte); err != nil {
+	if err := eng.RegisterVirtual("servicos", schema.CountersNamespace, c.Def().Name, tsc, fonte); err != nil {
 		t.Fatal(err)
 	}
 	return eng

@@ -37,7 +37,7 @@ func motorComMeta(t *testing.T, cs ...*counter.Counter) *query.Engine {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.RegistraVirtual("servicos", meta.Namespace, counters.TabelaMetaCounters, msc, fonte); err != nil {
+	if err := eng.RegisterVirtual("servicos", meta.Namespace, counters.TabelaMetaCounters, msc, fonte); err != nil {
 		t.Fatal(err)
 	}
 	return eng

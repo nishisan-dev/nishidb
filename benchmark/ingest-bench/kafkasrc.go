@@ -94,7 +94,7 @@ func abreFonteKafka(ctx context.Context, o opcoesKafka) (*fonteKafka, error) {
 	f := &fonteKafka{
 		cl:     cl,
 		adm:    kadm.NewClient(cl),
-		fila:   kafka.NovaFila(o.FilaTam, o.FilaBytes),
+		fila:   kafka.NewQueue(o.FilaTam, o.FilaBytes),
 		topico: o.Topico,
 		grupo:  o.Grupo,
 	}

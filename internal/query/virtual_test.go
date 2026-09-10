@@ -64,7 +64,7 @@ schema:
 			t.Fatal(err)
 		}
 	}
-	if err := eng.RegistraVirtual(dataset, namespace, tabela, sc, st); err != nil {
+	if err := eng.RegisterVirtual(dataset, namespace, tabela, sc, st); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -134,13 +134,13 @@ func TestRegistraVirtualRecusaDuplicataEDatasetDesconhecido(t *testing.T) {
 	tabelaVirtualDeTeste(t, h.engine, "_counters", "x")
 	spec, _ := schema.Parse([]byte("version: 1\nname: x\nmaterialization:\n  key:\n    field: k\nschema:\n  fields:\n    k:\n      type: string\n"), schema.BuiltinDefaults)
 	sc, _ := spec.Compile(fakestorage.NewDict())
-	if err := h.engine.RegistraVirtual(dataset, "_counters", "x", sc, fakestorage.New(fakestorage.Indexes{})); err == nil {
+	if err := h.engine.RegisterVirtual(dataset, "_counters", "x", sc, fakestorage.New(fakestorage.Indexes{})); err == nil {
 		t.Fatal("tabela virtual repetida tem de ser recusada")
 	}
-	if err := h.engine.RegistraVirtual("nao_registrado", "_counters", "y", sc, fakestorage.New(fakestorage.Indexes{})); err == nil {
+	if err := h.engine.RegisterVirtual("nao_registrado", "_counters", "y", sc, fakestorage.New(fakestorage.Indexes{})); err == nil {
 		t.Fatal("dataset não registrado tem de ser recusado")
 	}
-	if err := h.engine.RegistraVirtual(dataset, "semprefixo", "y", sc, fakestorage.New(fakestorage.Indexes{})); err == nil {
+	if err := h.engine.RegisterVirtual(dataset, "semprefixo", "y", sc, fakestorage.New(fakestorage.Indexes{})); err == nil {
 		t.Fatal("namespace sem o prefixo reservado tem de ser recusado")
 	}
 }

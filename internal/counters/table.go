@@ -125,7 +125,7 @@ func idDaColuna(sc *schema.Compiled, nome string) (types.FieldID, error) {
 // nenhum. Chamado por todo caminho que registra um dataset no motor —
 // servidor e CLI — para que `FROM _counters.<nome>` e `FROM _meta.counters`
 // funcionem da mesma forma nos dois.
-func Registra(eng *query.Engine, dataset string, st *storage.Store) error {
+func Register(eng *query.Engine, dataset string, st *storage.Store) error {
 	if err := eng.DeclaraNamespace(dataset, schema.CountersNamespace); err != nil {
 		return err
 	}
@@ -136,7 +136,7 @@ func Registra(eng *query.Engine, dataset string, st *storage.Store) error {
 		if err != nil {
 			return err
 		}
-		if err := eng.RegistraVirtual(dataset, schema.CountersNamespace, c.Def().Name, sc, fonte); err != nil {
+		if err := eng.RegisterVirtual(dataset, schema.CountersNamespace, c.Def().Name, sc, fonte); err != nil {
 			return err
 		}
 		contados = append(contados, c)
@@ -145,7 +145,7 @@ func Registra(eng *query.Engine, dataset string, st *storage.Store) error {
 	if err != nil {
 		return err
 	}
-	return eng.RegistraVirtual(dataset, meta.Namespace, TabelaMetaCounters, msc, mfonte)
+	return eng.RegisterVirtual(dataset, meta.Namespace, TabelaMetaCounters, msc, mfonte)
 }
 
 // fonte é o Store virtual: cada rowID é um id de grupo, e o record é
