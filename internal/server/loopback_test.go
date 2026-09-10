@@ -190,12 +190,12 @@ func TestShutdownFechaListenerPrincipalELoopbackSemVazarGoroutine(t *testing.T) 
 	go func() { fim <- srv.Roda(ctx, "") }()
 
 	enderecoPrincipal := srv.Endereco()
-	enderecoLoopback := srv.EnderecoLoopback()
-	if enderecoLoopback == "" {
+	loopbackAddress := srv.EnderecoLoopback()
+	if loopbackAddress == "" {
 		t.Fatal("EnderecoLoopback() vazio com server.loopback.enabled: true")
 	}
 	esperaListenerAceitar(t, enderecoPrincipal)
-	esperaListenerAceitar(t, enderecoLoopback)
+	esperaListenerAceitar(t, loopbackAddress)
 
 	cancela()
 	if err := <-fim; err != nil {
@@ -206,7 +206,7 @@ func TestShutdownFechaListenerPrincipalELoopbackSemVazarGoroutine(t *testing.T) 
 		_ = conn.Close()
 		t.Error("o listener principal ainda aceita conexão depois do shutdown gracioso")
 	}
-	if conn, err := net.Dial("tcp", enderecoLoopback); err == nil {
+	if conn, err := net.Dial("tcp", loopbackAddress); err == nil {
 		_ = conn.Close()
 		t.Error("o listener loopback ainda aceita conexão depois do shutdown gracioso")
 	}

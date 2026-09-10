@@ -30,7 +30,7 @@ func TestResolveSenhaComPasswordEnvAusenteNomeiaAVariavel(t *testing.T) {
 	os.Unsetenv(variavel) //nolint:errcheck // ausência é o próprio setup do teste
 
 	u := config.UserSpec{Username: "op", PasswordEnv: variavel, Role: config.RoleRead}
-	_, err := resolveSenha(u)
+	_, err := resolvePassword(u)
 	if err == nil {
 		t.Fatal("quer recusa: passwordEnv não definida no ambiente")
 	}
@@ -47,7 +47,7 @@ func TestResolveSenhaComPasswordEnvVaziaNomeiaAVariavel(t *testing.T) {
 	t.Setenv(variavel, "")
 
 	u := config.UserSpec{Username: "op", PasswordEnv: variavel, Role: config.RoleRead}
-	_, err := resolveSenha(u)
+	_, err := resolvePassword(u)
 	if err == nil {
 		t.Fatal("quer recusa: passwordEnv definida e vazia")
 	}
@@ -60,7 +60,7 @@ func TestResolveSenhaComPasswordFileInexistenteNomeiaOCaminho(t *testing.T) {
 	caminho := filepath.Join(t.TempDir(), "nao-existe.txt")
 
 	u := config.UserSpec{Username: "op", PasswordFile: caminho, Role: config.RoleRead}
-	_, err := resolveSenha(u)
+	_, err := resolvePassword(u)
 	if err == nil {
 		t.Fatal("quer recusa: passwordFile inexistente")
 	}
@@ -95,7 +95,7 @@ func TestResolveSenhaComPasswordFileGroupOuWorldReadableRecusaNomeandoCaminhoEMo
 			}
 
 			u := config.UserSpec{Username: "op", PasswordFile: caminho, Role: config.RoleRead}
-			_, err := resolveSenha(u)
+			_, err := resolvePassword(u)
 			if err == nil {
 				t.Fatalf("quer recusa: passwordFile com modo %04o", c.modo)
 			}
@@ -119,7 +119,7 @@ func TestResolveSenhaComPasswordFileModo600EhAceito(t *testing.T) {
 	}
 
 	u := config.UserSpec{Username: "op", PasswordFile: caminho, Role: config.RoleRead}
-	if _, err := resolveSenha(u); err != nil {
+	if _, err := resolvePassword(u); err != nil {
 		t.Fatalf("passwordFile 0600 deveria ser aceito: %v", err)
 	}
 }
@@ -144,7 +144,7 @@ func TestResolveSenhaAparaTrailingNewlineDoPasswordFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	base, err := resolveSenha(config.UserSpec{Username: "op", PasswordFile: semQuebra, Role: config.RoleRead})
+	base, err := resolvePassword(config.UserSpec{Username: "op", PasswordFile: semQuebra, Role: config.RoleRead})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestResolveSenhaAparaTrailingNewlineDoPasswordFile(t *testing.T) {
 	}
 	for _, c := range casos {
 		t.Run(c.nome, func(t *testing.T) {
-			digest, err := resolveSenha(config.UserSpec{Username: "op", PasswordFile: c.caminho, Role: config.RoleRead})
+			digest, err := resolvePassword(config.UserSpec{Username: "op", PasswordFile: c.caminho, Role: config.RoleRead})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -197,7 +197,7 @@ func TestResolveSenhaComPasswordFileVazioOuSoNewlineRecusaNomeandoOCaminho(t *te
 			}
 
 			u := config.UserSpec{Username: "op", PasswordFile: caminho, Role: config.RoleRead}
-			_, err := resolveSenha(u)
+			_, err := resolvePassword(u)
 			if err == nil {
 				t.Fatalf("quer recusa: %s não pode resolver para senha vazia em silêncio", c.descricao)
 			}
@@ -216,7 +216,7 @@ func TestResolveSenhaPasswordEnvNaoEhAparada(t *testing.T) {
 	const variavel = "NISHIDB_TESTE_SENHA_COM_NEWLINE_B2"
 	t.Setenv(variavel, "segredo123\n")
 
-	digestEnv, err := resolveSenha(config.UserSpec{Username: "op", PasswordEnv: variavel, Role: config.RoleRead})
+	digestEnv, err := resolvePassword(config.UserSpec{Username: "op", PasswordEnv: variavel, Role: config.RoleRead})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,7 +226,7 @@ func TestResolveSenhaPasswordEnvNaoEhAparada(t *testing.T) {
 	if err := os.WriteFile(caminho, []byte("segredo123\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	digestArquivo, err := resolveSenha(config.UserSpec{Username: "op", PasswordFile: caminho, Role: config.RoleRead})
+	digestArquivo, err := resolvePassword(config.UserSpec{Username: "op", PasswordFile: caminho, Role: config.RoleRead})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +251,7 @@ func TestResolveCredenciaisIgnoraUsuariosQuandoAutenticacaoDesligada(t *testing.
 		{Username: "op", PasswordEnv: "NISHIDB_TESTE_VARIAVEL_QUE_NAO_EXISTE_B2", Role: config.RoleRead},
 	}
 
-	out, err := resolveCredenciais(cfg)
+	out, err := resolveCredentials(cfg)
 	if err != nil {
 		t.Fatalf("com autenticação desligada, resolveCredenciais não deveria tocar o ambiente: %v", err)
 	}
@@ -278,7 +278,7 @@ func TestResolveCredenciaisMapeiaUsernameParaDigestEPapel(t *testing.T) {
 		{Username: "leitor", PasswordFile: arquivoLeitor, Role: config.RoleRead},
 	}
 
-	out, err := resolveCredenciais(cfg)
+	out, err := resolveCredentials(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -440,7 +440,7 @@ func TestAvisaValidadeDoCertificadoSaudavelNaoLogaMasPublicaGauge(t *testing.T) 
 // listener a mais sobe.
 func TestEnderecoLoopbackDesligadoDevolveVazio(t *testing.T) {
 	var cfg config.Config
-	addr, err := enderecoLoopback(&cfg)
+	addr, err := loopbackAddress(&cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -457,7 +457,7 @@ func TestEnderecoLoopbackDesligadoDevolveVazio(t *testing.T) {
 func TestEnderecoLoopbackLigadoSemPortaRecusa(t *testing.T) {
 	var cfg config.Config
 	cfg.Server.Loopback.Enabled = true
-	_, err := enderecoLoopback(&cfg)
+	_, err := loopbackAddress(&cfg)
 	if err == nil {
 		t.Fatal("quer recusa: loopback ligado sem porta declarada")
 	}
@@ -474,7 +474,7 @@ func TestEnderecoLoopbackLigadoComPortaMontaEnderecoNoLoopback(t *testing.T) {
 	cfg.Server.Loopback.Enabled = true
 	porta := 9143
 	cfg.Server.Loopback.Port = &porta
-	addr, err := enderecoLoopback(&cfg)
+	addr, err := loopbackAddress(&cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

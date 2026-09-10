@@ -254,7 +254,7 @@ func Novo(cfg *config.Config, o Opcoes) (*Servidor, error) {
 	if err := config.ValidateGroupUniqueness(specs); err != nil {
 		return nil, err
 	}
-	if err := validaNomesDeHistorico(specs); err != nil {
+	if err := validateHistoryNames(specs); err != nil {
 		return nil, err
 	}
 	avisaChavesSemMotor(specs, log)
@@ -268,11 +268,11 @@ func Novo(cfg *config.Config, o Opcoes) (*Servidor, error) {
 	if err := avaliaExposicaoEAutenticacao(cfg, log); err != nil {
 		return nil, err
 	}
-	loopbackAddr, err := enderecoLoopback(cfg)
+	loopbackAddr, err := loopbackAddress(cfg)
 	if err != nil {
 		return nil, err
 	}
-	certificado, err := validaCertificadoNaSubida(cfg)
+	certificado, err := validateCertificateOnUpload(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -284,7 +284,7 @@ func Novo(cfg *config.Config, o Opcoes) (*Servidor, error) {
 			return nil, err
 		}
 	}
-	credenciais, err := resolveCredenciais(cfg)
+	credenciais, err := resolveCredentials(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -402,7 +402,7 @@ func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*
 	}
 	compilado := comp.Compiled()
 	if compilado == nil {
-		return nil, fechandoStore(st, fmt.Errorf("dataset %q: o Open não compilou o schema", spec.Name))
+		return nil, closingStore(st, fmt.Errorf("dataset %q: o Open não compilou o schema", spec.Name))
 	}
 	// O contador de descarte diz QUANTO; o log diz por ONDE começar. Uma vez
 	// por dataset: sob a política `ignore` o descarte é o estado normal, e uma
@@ -434,7 +434,7 @@ func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*
 		// Regra de TTL que não compila derruba a SUBIDA do dataset: um
 		// servidor que aceitasse a regra e a ignorasse expiraria pelo prazo
 		// errado, em silêncio.
-		return nil, fechandoStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
+		return nil, closingStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}
 	// O decode paralelo é somente-leitura, e três coisas o mandam de volta ao
 	// writer: coluna a criar, tipo a fixar, e documento com forma divergente
@@ -452,13 +452,13 @@ func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*
 			"maxCols", compilado.MaxCols, "politica", compilado.OnMaxCols)
 	})
 	if err := s.eng.Register(spec.Name, compilado, st); err != nil {
-		return nil, fechandoStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
+		return nil, closingStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}
 	// As tabelas `_counters.<nome>` entram no motor sob o dataset — e o
 	// namespace é declarado mesmo sem contador, para que a recusa nomeie o
 	// que existe.
-	if err := counters.Registra(s.eng, spec.Name, st); err != nil {
-		return nil, fechandoStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
+	if err := counters.Register(s.eng, spec.Name, st); err != nil {
+		return nil, closingStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}
 	d := &dataset{
 		nome: spec.Name,
@@ -475,14 +475,14 @@ func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*
 	//
 	// A tabela irmã não a recebe, como não recebe a `_meta.counters`: a
 	// ingestão dela é a do dataset base.
-	if err := metakafka.Registra(s.eng, spec.Name, metakafka.Fonte{
+	if err := metakafka.Register(s.eng, spec.Name, metakafka.Fonte{
 		Declarada:  metakafka.DoYAML(spec.Source.Kafka),
 		Consumidor: d.consumidorCorrente,
 		Duraveis:   st.SourceOffsets,
 		Estado:     func() (string, string) { return estadoDaIngestao(d) },
 		Vigia:      d.vigiaCorrente,
 	}); err != nil {
-		return nil, fechandoStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
+		return nil, closingStore(st, fmt.Errorf("dataset %q: %w", spec.Name, err))
 	}
 
 	// A irmã abre por ÚLTIMO, depois de o base estar inteiro: ela recebe o
@@ -490,7 +490,7 @@ func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*
 	// ele já exista.
 	irma, err := s.abreHistorico(d, log)
 	if err != nil {
-		return nil, fechandoStore(st, err)
+		return nil, closingStore(st, err)
 	}
 	d.irma = irma
 	return d, nil
@@ -499,7 +499,7 @@ func (s *Servidor) abreDataset(spec *schema.DatasetSpec, log *logging.Logger) (*
 // fechandoStore devolve o erro original, fechando o Store antes. O erro do
 // Close é agregado e nunca substitui a causa: quem lê precisa do motivo de a
 // abertura ter falhado, não do que aconteceu na limpeza.
-func fechandoStore(st *storage.Store, causa error) error {
+func closingStore(st *storage.Store, causa error) error {
 	if err := st.Close(); err != nil {
 		return errors.Join(causa, err)
 	}
@@ -702,7 +702,7 @@ func (s *Servidor) rodaIngestao(ctx context.Context, d *dataset) {
 // outra, porque o sintoma esperado (disco parando de crescer) só apareceria
 // dias depois.
 func avisaChavesSemMotor(specs map[string]*schema.DatasetSpec, log *logging.Logger) {
-	for _, nome := range nomesOrdenados(specs) {
+	for _, nome := range sortedNames(specs) {
 		spec := specs[nome]
 		if d := spec.Materialization.TombstoneRetention; d > 0 {
 			log.Warn("ttl.tombstoneRetention.sem_motor",
@@ -712,7 +712,7 @@ func avisaChavesSemMotor(specs map[string]*schema.DatasetSpec, log *logging.Logg
 	}
 }
 
-func nomesOrdenados(specs map[string]*schema.DatasetSpec) []string {
+func sortedNames(specs map[string]*schema.DatasetSpec) []string {
 	out := make([]string, 0, len(specs))
 	for nome := range specs {
 		out = append(out, nome)

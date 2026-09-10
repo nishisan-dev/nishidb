@@ -51,7 +51,7 @@ func (s *Servidor) handleAuditoriaDeContadores(w http.ResponseWriter, r *http.Re
 	ctx, cancela := s.ctxDeMutacao(r)
 	defer cancela()
 
-	resultados, parcial := processaDatasets(alvos, func(d *dataset) (protocol.DatasetAudit, error) {
+	resultados, parcial := processDatasets(alvos, func(d *dataset) (protocol.DatasetAudit, error) {
 		relatorios, err := d.st.AuditaContadores(ctx)
 		if err != nil {
 			return protocol.DatasetAudit{}, err
@@ -67,8 +67,8 @@ func (s *Servidor) handleAuditoriaDeContadores(w http.ResponseWriter, r *http.Re
 		return out, nil
 	})
 	if parcial != nil {
-		status, f := erroDeContadores(parcial.Err)
-		f.Message = mensagemParcial(parcial, f.Message)
+		status, f := countersError(parcial.Err)
+		f.Message = partialMessage(parcial, f.Message)
 		s.recusa(w, r, status, parcial.Dataset, f)
 		return
 	}
@@ -102,7 +102,7 @@ func (s *Servidor) handleReconstrucaoDeContadores(w http.ResponseWriter, r *http
 	ctx, cancela := s.ctxDeMutacao(r)
 	defer cancela()
 
-	resultados, parcial := processaDatasets(alvos, func(d *dataset) (protocol.DatasetRebuild, error) {
+	resultados, parcial := processDatasets(alvos, func(d *dataset) (protocol.DatasetRebuild, error) {
 		recs, err := d.st.ReconstroiContadores(ctx)
 		if err != nil {
 			return protocol.DatasetRebuild{}, err
@@ -116,8 +116,8 @@ func (s *Servidor) handleReconstrucaoDeContadores(w http.ResponseWriter, r *http
 		return out, nil
 	})
 	if parcial != nil {
-		status, f := erroDeContadores(parcial.Err)
-		f.Message = mensagemParcial(parcial, f.Message)
+		status, f := countersError(parcial.Err)
+		f.Message = partialMessage(parcial, f.Message)
 		s.recusa(w, r, status, parcial.Dataset, f)
 		return
 	}
@@ -127,7 +127,7 @@ func (s *Servidor) handleReconstrucaoDeContadores(w http.ResponseWriter, r *http
 // erroDeContadores traduz o erro do storage para as duas rotas. Além dos casos
 // de erroDeMutacao, o snapshot estourado — a auditoria ficou inconclusiva — e
 // o contexto cancelado (o servidor encerrando, ou o cliente desistindo).
-func erroDeContadores(err error) (int, protocol.ErrorDetail) {
+func countersError(err error) (int, protocol.ErrorDetail) {
 	switch {
 	case errors.Is(err, storage.ErrExpiredSnapshot):
 		return http.StatusConflict, protocol.ErrorDetail{
@@ -138,7 +138,7 @@ func erroDeContadores(err error) (int, protocol.ErrorDetail) {
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return http.StatusServiceUnavailable, protocol.ErrorDetail{Code: protocol.CodeInternal, Message: "interrompida: " + err.Error()}
 	}
-	return erroDeMutacao(err)
+	return mutationError(err)
 }
 
 func auditoriaContador(rel counter.Report) protocol.CounterAudit {

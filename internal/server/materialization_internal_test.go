@@ -38,7 +38,7 @@ func TestMaterializacaoStatsTraduzOSnapshot(t *testing.T) {
 		RegrasCasadas:         []int64{4, 2},
 		SemRegra:              3,
 	}
-	got := materializacaoStats(specComPoliticas(), snap)
+	got := materializationStats(specComPoliticas(), snap)
 
 	if got.FrozenCaptured != 7 || got.FrozenPreserved != 5 {
 		t.Errorf("congeladas = %+v", got)
@@ -71,7 +71,7 @@ func TestMaterializacaoStatsPublicaNeverComoLiteral(t *testing.T) {
 	spec := &schema.DatasetSpec{Name: "d", Materialization: schema.MaterializationSpec{
 		TTLRules: []schema.TTLRule{{When: "type = 9", Duration: 0}},
 	}}
-	got := materializacaoStats(spec, materializer.MetricsSnapshot{RegrasCasadas: []int64{1}})
+	got := materializationStats(spec, materializer.MetricsSnapshot{RegrasCasadas: []int64{1}})
 	if got.TTLRules[0].ExpireAfterWrite != schema.DurationNever {
 		t.Errorf("duração = %q, quero %q", got.TTLRules[0].ExpireAfterWrite, schema.DurationNever)
 	}
@@ -80,7 +80,7 @@ func TestMaterializacaoStatsPublicaNeverComoLiteral(t *testing.T) {
 // Dataset sem regra nenhuma não publica lista vazia nem contagem: o bloco sai
 // com os contadores das políticas de escrita e nada de TTL.
 func TestMaterializacaoStatsSemRegrasNaoPublicaTTL(t *testing.T) {
-	got := materializacaoStats(&schema.DatasetSpec{Name: "d"}, materializer.MetricsSnapshot{Acumuladas: 2})
+	got := materializationStats(&schema.DatasetSpec{Name: "d"}, materializer.MetricsSnapshot{Acumuladas: 2})
 	if len(got.TTLRules) != 0 {
 		t.Errorf("regras = %+v, quero nenhuma", got.TTLRules)
 	}

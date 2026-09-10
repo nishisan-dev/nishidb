@@ -217,7 +217,7 @@ func (s *Servidor) handleStats(w http.ResponseWriter, r *http.Request) {
 			// irmã, porque o índice por segmento é mecânica do Store e não
 			// política declarada no YAML do base — que é o que o bloco History
 			// acima descreve.
-			Index: indiceStats(d.st.EstatisticasDeIndice()),
+			Index: indexStats(d.st.EstatisticasDeIndice()),
 			// Do MESMO Store que alimenta as séries nishidb_query_snapshot_*,
 			// pela regra deste handler.
 			Snapshot: protocol.SnapshotStats{
@@ -234,7 +234,7 @@ func (s *Servidor) handleStats(w http.ResponseWriter, r *http.Request) {
 		// dizer que nenhuma política de escrita agiu, quando na verdade elas
 		// agiram — do outro lado.
 		if d.mat != nil {
-			ds.Materialization = materializacaoStats(d.spec, d.mat.Metrics())
+			ds.Materialization = materializationStats(d.spec, d.mat.Metrics())
 		}
 		ds.Query.Errors = s.errosDoDataset(d.nome)
 

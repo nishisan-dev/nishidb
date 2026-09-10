@@ -15,7 +15,7 @@ import (
 // A spec entra junto porque o snapshot só tem contagens por ÍNDICE: publicar o
 // índice sem o `when` mandaria quem lê o painel abrir o YAML para saber o que
 // casou, e a ordem das regras é justamente o que decide qual vence.
-func materializacaoStats(spec *schema.DatasetSpec, snap materializer.MetricsSnapshot) protocol.MaterializationStats {
+func materializationStats(spec *schema.DatasetSpec, snap materializer.MetricsSnapshot) protocol.MaterializationStats {
 	out := protocol.MaterializationStats{
 		FrozenCaptured:  snap.CongeladasCapturadas,
 		FrozenPreserved: snap.CongeladasPreservadas,
@@ -36,7 +36,7 @@ func materializacaoStats(spec *schema.DatasetSpec, snap materializer.MetricsSnap
 		out.TTLRules = append(out.TTLRules, protocol.TTLRuleStats{
 			Index:            i,
 			When:             r.When,
-			ExpireAfterWrite: duracaoDaRegra(r),
+			ExpireAfterWrite: ruleDuration(r),
 			Matched:          casou,
 		})
 	}
@@ -46,7 +46,7 @@ func materializacaoStats(spec *schema.DatasetSpec, snap materializer.MetricsSnap
 // duracaoDaRegra rende a duração como o operador a escreveu: `never` sai como
 // o literal, e não como "0s" — zero e imortal não são a mesma coisa, e um
 // painel mostrando 0s diria o oposto do que a regra faz.
-func duracaoDaRegra(r schema.TTLRule) string {
+func ruleDuration(r schema.TTLRule) string {
 	if r.Duration == 0 {
 		return schema.DurationNever
 	}

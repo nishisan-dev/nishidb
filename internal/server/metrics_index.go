@@ -45,7 +45,7 @@ func amostrasDeIndice(nome string, e storage.EstatisticasDeIndice) []metrics.Sam
 			Help: "segmentos por estado de índice: selado (o .sidx cobre o conjunto indexado), corrente (o índice é o WIP), " +
 				"pendente (dentro da janela e na fila de reconstrução) e fora (a janela não o cobre, e ele responde por enumeração de propósito)",
 			Type:   metrics.TypeGauge,
-			Labels: comRotulo(rotulo, metrics.LabelState, estado),
+			Labels: withLabel(rotulo, metrics.LabelState, estado),
 			Value:  float64(porEstado[estado]),
 		})
 	}
@@ -60,7 +60,7 @@ func amostrasDeIndice(nome string, e storage.EstatisticasDeIndice) []metrics.Sam
 			Help: "segmentos que os Lookups resolveram por cada caminho; é o único observável da degradação, " +
 				"porque para o planner e o executor os dois são o mesmo iterador ascendente",
 			Type:   metrics.TypeCounter,
-			Labels: comRotulo(rotulo, metrics.LabelMode, modo),
+			Labels: withLabel(rotulo, metrics.LabelMode, modo),
 			Value:  float64(porModo[modo]),
 		})
 	}
@@ -115,7 +115,7 @@ func amostrasDeIndice(nome string, e storage.EstatisticasDeIndice) []metrics.Sam
 // sobrando faria a segunda série sobrescrever o rótulo da primeira, e as duas
 // sairiam com o mesmo valor de `estado`. O bug seria invisível no código e óbvio
 // no painel — quatro séries iguais.
-func comRotulo(base []metrics.Label, nome, valor string) []metrics.Label {
+func withLabel(base []metrics.Label, nome, valor string) []metrics.Label {
 	out := make([]metrics.Label, len(base), len(base)+1)
 	copy(out, base)
 	return append(out, metrics.Label{Name: nome, Value: valor})
@@ -127,7 +127,7 @@ func comRotulo(base []metrics.Label, nome, valor string) []metrics.Label {
 // Nenhum número é recalculado aqui, pela regra do handleStats: duas fontes para
 // o mesmo fato divergem, e a divergência aparece como um painel que discorda do
 // JSON sem nada estar quebrado.
-func indiceStats(e storage.EstatisticasDeIndice) protocol.IndexStats {
+func indexStats(e storage.EstatisticasDeIndice) protocol.IndexStats {
 	return protocol.IndexStats{
 		Sealed:          e.Estados.Selado,
 		Current:         e.Estados.Corrente,

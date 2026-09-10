@@ -247,7 +247,7 @@ func confereConjuntoFechado(t *testing.T, amostras []amostraExposta, familia, ro
 // um grep por `"selado"` aprovaria um arquivo que monta o valor por concatenação,
 // e reprovaria um comentário que menciona a palavra.
 //
-// A conferência tem uma porta só de propósito — o comRotulo. Um segundo caminho
+// A conferência tem uma porta só de propósito — o withLabel. Um segundo caminho
 // (um metrics.Label{} montado à mão com LabelState) passaria por baixo desta
 // checagem, e por isso ele também é recusado abaixo.
 func confereOrigemFechadaDosLabels(t *testing.T) {
@@ -296,7 +296,7 @@ func confereOrigemFechadaDosLabels(t *testing.T) {
 			if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "metrics" &&
 				(sel.Sel.Name == "LabelState" || sel.Sel.Name == "LabelMode") {
 				if !dentroDeComRotulo(f, sel) {
-					t.Errorf("%s usa metrics.%s fora de uma chamada a comRotulo: uma segunda porta para o rótulo "+
+					t.Errorf("%s usa metrics.%s fora de uma chamada a withLabel: uma segunda porta para o rótulo "+
 						"é uma porta que esta conferência não enxerga", arquivo, sel.Sel.Name)
 				}
 			}
@@ -306,13 +306,13 @@ func confereOrigemFechadaDosLabels(t *testing.T) {
 			return true
 		}
 		fn, ok := chamada.Fun.(*ast.Ident)
-		if !ok || fn.Name != "comRotulo" || len(chamada.Args) != 3 {
+		if !ok || fn.Name != "withLabel" || len(chamada.Args) != 3 {
 			return true
 		}
 		conferidas++
 		nome, ok := chamada.Args[1].(*ast.SelectorExpr)
 		if !ok || nome.Sel.Name != "LabelState" && nome.Sel.Name != "LabelMode" {
-			t.Errorf("%s: comRotulo recebeu um nome de rótulo que não é constante do pacote de métricas", arquivo)
+			t.Errorf("%s: withLabel recebeu um nome de rótulo que não é constante do pacote de métricas", arquivo)
 			return true
 		}
 		valor, ok := chamada.Args[2].(*ast.Ident)
@@ -330,13 +330,13 @@ func confereOrigemFechadaDosLabels(t *testing.T) {
 		return true
 	})
 	if conferidas != 2 {
-		t.Fatalf("%s tem %d chamada(s) a comRotulo, esperava 2: se a publicação mudou de forma, esta conferência "+
+		t.Fatalf("%s tem %d chamada(s) a withLabel, esperava 2: se a publicação mudou de forma, esta conferência "+
 			"parou de olhar o caminho real", arquivo, conferidas)
 	}
 }
 
 // dentroDeComRotulo responde se o selector está entre os argumentos de uma
-// chamada a comRotulo. É o que impede a checagem de aprovar um segundo caminho
+// chamada a withLabel. É o que impede a checagem de aprovar um segundo caminho
 // de publicação escrito ao lado.
 func dentroDeComRotulo(raiz ast.Node, alvo ast.Node) bool {
 	achou := false
@@ -345,7 +345,7 @@ func dentroDeComRotulo(raiz ast.Node, alvo ast.Node) bool {
 		if !ok {
 			return true
 		}
-		if fn, ok := chamada.Fun.(*ast.Ident); !ok || fn.Name != "comRotulo" {
+		if fn, ok := chamada.Fun.(*ast.Ident); !ok || fn.Name != "withLabel" {
 			return true
 		}
 		for _, arg := range chamada.Args {

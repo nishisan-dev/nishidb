@@ -49,7 +49,7 @@ func (s *Servidor) handleQuery(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if ct := r.Header.Get("Content-Type"); !ehJSON(ct) {
+	if ct := r.Header.Get("Content-Type"); !isJSON(ct) {
 		s.recusa(w, r, http.StatusUnsupportedMediaType, datasetDesconhecido, protocol.ErrorDetail{
 			Code:    protocol.CodeMediaType,
 			Message: fmt.Sprintf("Content-Type %q não é aceito; use %s", ct, protocol.ContentTypeJSON),
@@ -82,7 +82,7 @@ func (s *Servidor) handleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tetoDoRequest, falha := tetoDeLinhas(req, d.sch.MaxRows)
+	tetoDoRequest, falha := rowCeiling(req, d.sch.MaxRows)
 	if falha != nil {
 		s.recusa(w, r, http.StatusBadRequest, d.nome, *falha)
 		return
@@ -185,7 +185,7 @@ func (s *Servidor) handleQuery(w http.ResponseWriter, r *http.Request) {
 
 	it, err := s.eng.Execute(ctx, d.nome, req.SQL, params)
 	if err != nil {
-		status, falha := traduzErroDeAbertura(err, req.SQL)
+		status, falha := translateOpenError(err, req.SQL)
 		s.recusa(w, r, status, d.nome, falha)
 		return
 	}
@@ -208,7 +208,7 @@ func (s *Servidor) handleQuery(w http.ResponseWriter, r *http.Request) {
 }
 
 // ehJSON aceita application/json com ou sem parâmetros (charset, por exemplo).
-func ehJSON(ct string) bool {
+func isJSON(ct string) bool {
 	if i := strings.IndexByte(ct, ';'); i >= 0 {
 		ct = ct[:i]
 	}
@@ -257,7 +257,7 @@ func (s *Servidor) leRequisicao(w http.ResponseWriter, r *http.Request) (protoco
 // servidor, não uma sugestão. Pedir mais é recusado em vez de reduzido em
 // silêncio — um clamp calado faria o cliente acreditar que recebeu tudo o que
 // pediu.
-func tetoDeLinhas(req protocol.Request, tetoDoDataset int) (int, *protocol.ErrorDetail) {
+func rowCeiling(req protocol.Request, tetoDoDataset int) (int, *protocol.ErrorDetail) {
 	if req.MaxRows == nil {
 		return 0, nil // sem teto próprio; vale o do dataset, aplicado pelo motor
 	}
@@ -487,7 +487,7 @@ func (s *Servidor) recusa(w http.ResponseWriter, r *http.Request, status int, da
 
 // traduzErroDeAbertura mapeia a falha do Execute — que acontece antes de
 // qualquer leitura de dado — em status e código.
-func traduzErroDeAbertura(err error, sql string) (int, protocol.ErrorDetail) {
+func translateOpenError(err error, sql string) (int, protocol.ErrorDetail) {
 	switch {
 	case errors.Is(err, parser.ErrSyntax):
 		f := protocol.ErrorDetail{Code: protocol.CodeSyntax, Message: err.Error()}

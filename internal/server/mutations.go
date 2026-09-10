@@ -81,7 +81,7 @@ func (s *Servidor) datasetsAlvo(nome string) ([]*dataset, *protocol.ErrorDetail,
 // podem encontrar o MESMO modo falho sticky (aposentaSegmento chama
 // Store.Checkpoint por dentro, então uma falha de checkpoint é alcançável
 // pelas DUAS rotas, não só por /v1/checkpoint).
-func erroDeMutacao(err error) (int, protocol.ErrorDetail) {
+func mutationError(err error) (int, protocol.ErrorDetail) {
 	switch {
 	case errors.Is(err, storage.ErrCompactionBusy):
 		return http.StatusConflict, protocol.ErrorDetail{
@@ -125,7 +125,7 @@ type ErroParcial struct {
 // fn devolve o erro CRU do storage — processaDatasets não traduz status HTTP
 // nem código de protocolo, só agrega ordem e nomes; a tradução continua em
 // erroDeMutacao, chamada pelo handler com ErroParcial.Err.
-func processaDatasets[T any](alvos []*dataset, fn func(*dataset) (T, error)) (processados []T, parcial *ErroParcial) {
+func processDatasets[T any](alvos []*dataset, fn func(*dataset) (T, error)) (processados []T, parcial *ErroParcial) {
 	nomes := make([]string, 0, len(alvos))
 	for _, d := range alvos {
 		v, err := fn(d)
@@ -142,7 +142,7 @@ func processaDatasets[T any](alvos []*dataset, fn func(*dataset) (T, error)) (pr
 // falhou e os que já tinham sido processados ANTES dele. "nenhum" quando a
 // lista está vazia (falhou no primeiro) — nunca uma lista vazia silenciosa
 // que o operador poderia ler como "não sei".
-func mensagemParcial(p *ErroParcial, base string) string {
+func partialMessage(p *ErroParcial, base string) string {
 	processados := "nenhum"
 	if len(p.Processados) > 0 {
 		processados = strings.Join(p.Processados, ", ")
@@ -178,7 +178,7 @@ func (s *Servidor) handleCheckpoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resultados, parcial := processaDatasets(alvos, func(d *dataset) (protocol.CheckpointDataset, error) {
+	resultados, parcial := processDatasets(alvos, func(d *dataset) (protocol.CheckpointDataset, error) {
 		inicio := time.Now()
 		if err := d.st.Checkpoint(); err != nil {
 			return protocol.CheckpointDataset{}, err
@@ -189,8 +189,8 @@ func (s *Servidor) handleCheckpoint(w http.ResponseWriter, r *http.Request) {
 		return protocol.CheckpointDataset{Name: d.nome, DurationMs: duracao.Milliseconds()}, nil
 	})
 	if parcial != nil {
-		status, f := erroDeMutacao(parcial.Err)
-		f.Message = mensagemParcial(parcial, f.Message)
+		status, f := mutationError(parcial.Err)
+		f.Message = partialMessage(parcial, f.Message)
 		s.recusa(w, r, status, parcial.Dataset, f)
 		return
 	}
@@ -230,7 +230,7 @@ func (s *Servidor) handleCompact(w http.ResponseWriter, r *http.Request) {
 	ctx, cancela := s.ctxDeMutacao(r)
 	defer cancela()
 
-	resultados, parcial := processaDatasets(alvos, func(d *dataset) (protocol.CompactDataset, error) {
+	resultados, parcial := processDatasets(alvos, func(d *dataset) (protocol.CompactDataset, error) {
 		inicio := time.Now()
 		res, err := d.st.CompactaUmaVez(ctx, ratio)
 		if err != nil {
@@ -251,8 +251,8 @@ func (s *Servidor) handleCompact(w http.ResponseWriter, r *http.Request) {
 		}, nil
 	})
 	if parcial != nil {
-		status, f := erroDeMutacao(parcial.Err)
-		f.Message = mensagemParcial(parcial, f.Message)
+		status, f := mutationError(parcial.Err)
+		f.Message = partialMessage(parcial, f.Message)
 		s.recusa(w, r, status, parcial.Dataset, f)
 		return
 	}

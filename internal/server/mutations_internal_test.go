@@ -43,7 +43,7 @@ func TestErroDeMutacaoTraduzATabelaInteira(t *testing.T) {
 	}
 	for _, c := range casos {
 		t.Run(c.nome, func(t *testing.T) {
-			status, falha := erroDeMutacao(c.err)
+			status, falha := mutationError(c.err)
 			if status != c.querStatus {
 				t.Errorf("status = %d, quer %d", status, c.querStatus)
 			}
@@ -70,7 +70,7 @@ func TestProcessaDatasetsParaNoPrimeiroErroENomeiaOsJaProcessados(t *testing.T) 
 	erroFalso := errors.New("falha simulada no dataset b")
 	var tentados []string
 
-	processados, parcial := processaDatasets(alvos, func(d *dataset) (string, error) {
+	processados, parcial := processDatasets(alvos, func(d *dataset) (string, error) {
 		tentados = append(tentados, d.nome)
 		if d.nome == "b" {
 			return "", erroFalso
@@ -102,7 +102,7 @@ func TestProcessaDatasetsParaNoPrimeiroErroENomeiaOsJaProcessados(t *testing.T) 
 // erro, todos os resultados voltam na MESMA ordem de alvos.
 func TestProcessaDatasetsSemErroDevolveTodosNaOrdem(t *testing.T) {
 	alvos := []*dataset{{nome: "x"}, {nome: "y"}}
-	processados, parcial := processaDatasets(alvos, func(d *dataset) (string, error) {
+	processados, parcial := processDatasets(alvos, func(d *dataset) (string, error) {
 		return d.nome, nil
 	})
 	if parcial != nil {
@@ -126,7 +126,7 @@ func TestProcessaDatasetsFalhaNoPrimeiroItemDevolveProcessadosVazio(t *testing.T
 	erroFalso := errors.New("falha simulada no dataset a")
 	var tentados []string
 
-	processados, parcial := processaDatasets(alvos, func(d *dataset) (string, error) {
+	processados, parcial := processDatasets(alvos, func(d *dataset) (string, error) {
 		tentados = append(tentados, d.nome)
 		if d.nome == "a" {
 			return "", erroFalso
@@ -153,7 +153,7 @@ func TestProcessaDatasetsFalhaNoPrimeiroItemDevolveProcessadosVazio(t *testing.T
 		t.Fatalf("fn foi chamada para %v, quer exatamente [a]: 'b' e 'c' não podem ser tentados", tentados)
 	}
 
-	msg := mensagemParcial(parcial, "base")
+	msg := partialMessage(parcial, "base")
 	if !strings.Contains(msg, "nenhum") {
 		t.Errorf("mensagem = %q, quer conter %q (Processados vazio)", msg, "nenhum")
 	}
@@ -171,7 +171,7 @@ func TestProcessaDatasetsFalhaNoUltimoItemNomeiaTodosOsAnteriores(t *testing.T) 
 	erroFalso := errors.New("falha simulada no dataset c")
 	var tentados []string
 
-	processados, parcial := processaDatasets(alvos, func(d *dataset) (string, error) {
+	processados, parcial := processDatasets(alvos, func(d *dataset) (string, error) {
 		tentados = append(tentados, d.nome)
 		if d.nome == "c" {
 			return "", erroFalso
@@ -198,7 +198,7 @@ func TestProcessaDatasetsFalhaNoUltimoItemNomeiaTodosOsAnteriores(t *testing.T) 
 		t.Fatalf("fn foi chamada para %v, quer exatamente [a b c]", tentados)
 	}
 
-	msg := mensagemParcial(parcial, "base")
+	msg := partialMessage(parcial, "base")
 	if !strings.Contains(msg, "a, b") {
 		t.Errorf("mensagem = %q, quer nomear os dois processados antes (\"a, b\")", msg)
 	}

@@ -20,7 +20,7 @@ import (
 // não pode ser descoberto com meio processo já de pé. E o desfecho aqui é
 // pior que o de lá — o dataset declarado e a tabela irmã disputariam o mesmo
 // diretório, com dois writers, dois contadores de rowId e dois manifests.
-func validaNomesDeHistorico(specs map[string]*schema.DatasetSpec) error {
+func validateHistoryNames(specs map[string]*schema.DatasetSpec) error {
 	derivados := map[string]string{}
 	nomes := make([]string, 0, len(specs))
 	for nome := range specs {
@@ -98,18 +98,18 @@ func (s *Servidor) abreHistorico(base *dataset, log *logging.Logger) (*dataset, 
 	}
 	compilado, err := specIrma.Compile(base.st.FieldDict())
 	if err != nil {
-		return nil, fechandoStore(st, fmt.Errorf("tabela histórica de %q: %w", base.nome, err))
+		return nil, closingStore(st, fmt.Errorf("tabela histórica de %q: %w", base.nome, err))
 	}
 	base.sch.AddMirror(compilado)
 	if err := s.eng.Register(specIrma.Name, compilado, st); err != nil {
-		return nil, fechandoStore(st, fmt.Errorf("tabela histórica de %q: %w", base.nome, err))
+		return nil, closingStore(st, fmt.Errorf("tabela histórica de %q: %w", base.nome, err))
 	}
 
 	var raw *schema.CompiledField
 	if h.RawPayload {
 		f, ok := compilado.FieldByName([]byte(schema.RawFieldName))
 		if !ok {
-			return nil, fechandoStore(st, fmt.Errorf("tabela histórica de %q: a coluna %q não compilou",
+			return nil, closingStore(st, fmt.Errorf("tabela histórica de %q: a coluna %q não compilou",
 				base.nome, schema.RawFieldName))
 		}
 		raw = f

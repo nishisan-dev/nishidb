@@ -50,13 +50,13 @@ type credencial struct {
 // false ou ausente (débito 49, doutrina da B1) — mas não há por que exigir a
 // variável de ambiente ou o arquivo do operador antes de a autenticação
 // existir de fato.
-func resolveCredenciais(cfg *config.Config) (map[string]credencial, error) {
+func resolveCredentials(cfg *config.Config) (map[string]credencial, error) {
 	if !cfg.AuthenticationEnabled() {
 		return nil, nil
 	}
 	out := make(map[string]credencial, len(cfg.Server.Authentication.Users))
 	for _, u := range cfg.Server.Authentication.Users {
-		digest, err := resolveSenha(u)
+		digest, err := resolvePassword(u)
 		if err != nil {
 			return nil, err
 		}
@@ -68,7 +68,7 @@ func resolveCredenciais(cfg *config.Config) (map[string]credencial, error) {
 // resolveSenha lê a credencial de UM usuário do ambiente (env ou arquivo,
 // XOR já garantido pela B1) e devolve o digest SHA-256 — nunca a senha em
 // si além do escopo desta função.
-func resolveSenha(u config.UserSpec) ([sha256.Size]byte, error) {
+func resolvePassword(u config.UserSpec) ([sha256.Size]byte, error) {
 	var zero [sha256.Size]byte
 	var senha string
 
@@ -160,7 +160,7 @@ func resolveSenha(u config.UserSpec) ([sha256.Size]byte, error) {
 // LoadX509KeyPair — o par nunca é relido do disco depois deste ponto;
 // rotação de certificado é reiniciar o processo (limite nomeado: não há
 // SIGHUP-reload aqui, mesma decisão de resolveCredenciais acima).
-func validaCertificadoNaSubida(cfg *config.Config) (*tls.Certificate, error) {
+func validateCertificateOnUpload(cfg *config.Config) (*tls.Certificate, error) {
 	if !cfg.TLSEnabled() {
 		return nil, nil
 	}
@@ -231,7 +231,7 @@ func avisaValidadeDoCertificado(cert tls.Certificate, log *logging.Logger, reg *
 // silencioso (a porta principal + 1, por exemplo) escolheria pelo operador
 // numa decisão que é dele — a mesma doutrina do resto do §77: recusar,
 // nomeando a chave, nunca assumir.
-func enderecoLoopback(cfg *config.Config) (string, error) {
+func loopbackAddress(cfg *config.Config) (string, error) {
 	if !cfg.LoopbackEnabled() {
 		return "", nil
 	}
