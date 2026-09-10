@@ -3245,7 +3245,7 @@ export const meta = {
   phases: [
     { title: 'Propor', detail: 'um tradutor por pacote, a partir do inventário e do glossário' },
     { title: 'Julgar', detail: 'consolida contra o glossário, resolve colisões, separa grupos de interface' },
-    { title: 'Refutar', detail: 'três lentes por pacote: sentido, convenção Go, colisão/grupo' },
+    { title: 'Refutar', detail: 'um refutador por pacote com quatro critérios, uma rodada; corretor se algo cair' },
     { title: 'Aplicar', detail: 'um aplicador só: ifacerename, gopls por posição, rf e renamecite por pacote, commits' },
     { title: 'Prosa', detail: 'um revisor de prosa por pacote (sem git); um agente commita' },
     { title: 'Verificar', detail: 'make test, test-race, lint, gates; crítico de completude' },
@@ -3361,26 +3361,31 @@ no glossário, e a saída do dry-run.`,
   { label: `juiz:${grupo}`, phase: 'Julgar', model: 'opus' })
 log(`juiz: ${String(juizo).slice(0, 300)}`)
 
-// ---------- Refutar (até 3 rodadas) ----------
+// ---------- Refutar (uma lente combinada, uma rodada; corte de custo pedido em 10/09) ----------
 phase('Refutar')
-const LENTES = [
-  ['sentido', 'o nome novo muda o SIGNIFICADO do velho, perde uma distinção que o código faz (dois conceitos PT-BR distintos colapsados no mesmo inglês), ou só se explica com o verbo da operação irmã'],
-  ['convencao', 'viola convenção Go: Id/Url/Http em vez de ID/URL/HTTP, prefixo Get, sufixo numérico, receptor renomeado para mais de três letras sem motivo, nome de erro fora de ErrXxx/XxxError, ou termo fora do glossário; ou um identificador já em inglês foi alterado sem motivo'],
-  ['colisao', 'colide no escopo (rode rf -diff no pacote e procure "already have"), ou um método de interface entrou em entradas em vez de grupos, ou o grupo não cobre o fecho de ' + GRUPOS + ', ou uma linha do inventário do pacote ficou sem decisão, ou uma linha ATENÇÃO não está no formato fixo "ATENÇÃO arquivo:linha: <some> → <novo>"'],
-]
-for (let rodada = 1; rodada <= 3; rodada++) {
-  const vereditos = (await parallel(pacotes.flatMap(p => LENTES.map(([lente, criterio]) => () =>
-    agent(`Você é o refutador "${lente}" do pacote ${p}. Leia ${tsvDe(p)}, ${tsvGrupos}, ${GLOSSARIO} e o código do pacote.
-Tente DERRUBAR entradas com este critério: ${criterio}. Para cada uma que cair, dê o motivo e uma sugestão concreta.
-Só refute com evidência (cite arquivo e linha); dúvida não é refutação. Não edite nada. Devolva a lista, vazia se nada cair.`,
-      { label: `refuta:${lente}:${p}`, phase: 'Refutar', schema: VEREDICTO, model: 'opus' }))))).filter(Boolean)
+const CRITERIOS = `(1) SENTIDO: o nome novo muda o significado do velho, perde uma distinção que o código faz (dois conceitos
+PT-BR distintos colapsados no mesmo inglês), ou só se explica com o verbo da operação irmã; (2) CONVENÇÃO: Id/Url/Http em
+vez de ID/URL/HTTP, prefixo Get, sufixo numérico, receptor renomeado para mais de três letras sem motivo, nome de erro fora
+de ErrXxx/XxxError, termo fora do glossário, identificador já em inglês alterado sem motivo; (3) COLISÃO E COBERTURA: colide
+no escopo (rode rf -diff no pacote e procure "already have"), método de interface em entradas em vez de grupos, grupo que
+não cobre o fecho de ${GRUPOS}, linha do inventário sem decisão, linha ATENÇÃO fora do formato fixo
+"ATENÇÃO arquivo:linha: <some> → <novo>"; (4) CONTRATO: nome de métrica, tag json/yaml, código do wire, nome de arquivo em
+disco ou chave de log que o rename tocaria (só identificadores Go mudam nesta fase).`
+{
+  const vereditos = (await parallel(pacotes.map(p => () =>
+    agent(`Você é o refutador do pacote ${p}. Leia ${tsvDe(p)}, ${tsvGrupos}, ${GLOSSARIO} e o código do pacote.
+Tente DERRUBAR entradas por qualquer destes critérios: ${CRITERIOS}
+Para cada uma que cair, dê o motivo e uma sugestão concreta. Só refute com evidência (cite arquivo e linha); dúvida não é
+refutação. Não edite nada. Devolva a lista, vazia se nada cair.`,
+      { label: `refuta:${p}`, phase: 'Refutar', schema: VEREDICTO, model: 'opus' })))).filter(Boolean)
   const caidas = vereditos.flatMap(v => v.refutadas)
-  log(`rodada ${rodada}: ${caidas.length} refutações`)
-  if (caidas.length === 0) break
-  await agent(`Você é o corretor do grupo ${grupo}. Estas entradas foram refutadas: ${JSON.stringify(caidas)}.
+  log(`refutação: ${caidas.length} entradas derrubadas`)
+  if (caidas.length > 0) {
+    await agent(`Você é o corretor do grupo ${grupo}. Estas entradas foram refutadas: ${JSON.stringify(caidas)}.
 Para cada uma, corrija o TSV correspondente (${pacotes.map(tsvDe).join(', ')} ou ${tsvGrupos}) aplicando a sugestão
 ou uma alternativa melhor, mantendo a consistência entre pacotes e o glossário (${GLOSSARIO}). ${regras}
-Não faça commit. Devolva o que mudou.`, { label: `corrige:${grupo}:${rodada}`, phase: 'Refutar', model: 'opus' })
+Não faça commit. Devolva o que mudou.`, { label: `corrige:${grupo}`, phase: 'Refutar', model: 'opus' })
+  }
 }
 
 // ---------- Aplicar (um só) ----------
@@ -3395,8 +3400,11 @@ Ordem obrigatória (spec §4.6), com commit ao fim de cada passo:
    Verde → "git add -A" e "git commit -m '${grupo}: métodos de interface em inglês'".
 2. Para cada pacote, na ordem ${JSON.stringify(pacotes)}:
    a) Renames por posição PRIMEIRO (antes de o rf mexer nos arquivos, quando as posições do inventário ainda valem): para
-      cada linha de ${tsvDe('<pacote>')} com especie terminada em "#ambiguo" ou "#gopls" e novo ≠ nome atual, rode
-      "gopls rename -w <arquivo>:<linha>:<coluna> <novo>" (a posição está no motivo). Processe em ordem DECRESCENTE de
+      cada LINHA de ${tsvDe('<pacote>')} com especie terminada em "#ambiguo" ou "#gopls" e novo ≠ nome atual, rode
+      "gopls rename -w <arquivo>:<linha>:<coluna> <novo>" (a posição está no motivo). ATENÇÃO: um mesmo endereço
+      "#ambiguo" aparece em VÁRIAS linhas do TSV, uma por posição (o mesmo local declarado em blocos diferentes) — cada
+      linha é um rename; não deduplique por endereço. Confira com sed que o nome velho está na posição antes de cada
+      rename; se a coluna deslocou por um rename anterior na mesma linha, recalcule pela posição do token. Processe em ordem DECRESCENTE de
       linha e, na mesma linha, decrescente de coluna, para um rename não deslocar a coluna do seguinte. Use um daemon:
       antes do primeiro, 'gopls -listen="unix;/run/user/1000/gopls-ciclo.sock" >/dev/null 2>&1 &' e depois
       'gopls -remote="unix;/run/user/1000/gopls-ciclo.sock" rename -w ...' (~2 s por rename); mate o daemon ao fim do
@@ -3407,7 +3415,7 @@ Ordem obrigatória (spec §4.6), com commit ao fim de cada passo:
       para um arquivo <pacote>.recusadas.txt no scratch, anote, e rode de novo sem elas; se falhar de novo, devolva ok=false.
    c) Edições ATENÇÃO: para cada motivo do TSV do pacote que começa por "ATENÇÃO arquivo:linha:", aplique a edição e
       confira com grep que o "<texto que some>" não existe mais no arquivo; se ainda existir, corrija; registre cada uma.
-   d) Passada de prosa DO PACOTE: "go run ./scripts/renamecite -dir . -idents ${tsvDe('<pacote>')} ${CAMINHOS} -protect ${PROTEGIDOS} -report ${scratch}/renamecite-<pacote>.txt".
+   d) Passada de prosa DO PACOTE: "go run ./scripts/renamecite -dir . -idents ${tsvDe('<pacote>')} <um -ifaces por arquivo planning/identificadores-em-ingles/grupos-de-interface-*.tsv, inclusive ${tsvGrupos}> ${CAMINHOS} -protect ${PROTEGIDOS} -report ${scratch}/renamecite-<pacote>.txt".
       Leia as linhas "aplicado" e "pulado": toda "pulado ... ambíguo" é resolvida qualificando a citação à mão (é prosa);
       toda "aplicado" cujo token não era citação de identificador (nome de coluna, chave YAML, arquivo em disco, palavra
       de prosa) é revertida à mão e o token entra em ${PROTEGIDOS} (um por linha) no mesmo commit.

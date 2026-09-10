@@ -45,13 +45,13 @@ type credencial struct {
 // ~0,28s de restart, o que barateia bastante a alternativa de reiniciar o
 // processo a cada rotação de senha.
 //
-// Só roda quando a autenticação está LIGADA (AutenticacaoHabilitada). Um
+// Só roda quando a autenticação está LIGADA (AuthenticationEnabled). Um
 // usuário pode existir com FORMA validada mesmo com authentication.enabled:
 // false ou ausente (débito 49, doutrina da B1) — mas não há por que exigir a
 // variável de ambiente ou o arquivo do operador antes de a autenticação
 // existir de fato.
 func resolveCredenciais(cfg *config.Config) (map[string]credencial, error) {
-	if !cfg.AutenticacaoHabilitada() {
+	if !cfg.AuthenticationEnabled() {
 		return nil, nil
 	}
 	out := make(map[string]credencial, len(cfg.Server.Authentication.Users))
@@ -138,7 +138,7 @@ func resolveSenha(u config.UserSpec) ([sha256.Size]byte, error) {
 
 	default:
 		// A B1 garante XOR: exatamente um dos dois é não-vazio (invariante
-		// pós-CarregaConfig). Chegar aqui é bug de forma da B1 escapando
+		// pós-Load). Chegar aqui é bug de forma da B1 escapando
 		// para a ativação, não caminho alcançável com uma config válida.
 		return zero, fmt.Errorf(
 			"server.authentication.users: usuário %q sem passwordEnv nem passwordFile (violação de invariante da B1)",
@@ -161,7 +161,7 @@ func resolveSenha(u config.UserSpec) ([sha256.Size]byte, error) {
 // rotação de certificado é reiniciar o processo (limite nomeado: não há
 // SIGHUP-reload aqui, mesma decisão de resolveCredenciais acima).
 func validaCertificadoNaSubida(cfg *config.Config) (*tls.Certificate, error) {
-	if !cfg.TLSHabilitado() {
+	if !cfg.TLSEnabled() {
 		return nil, nil
 	}
 	cert, err := tls.LoadX509KeyPair(cfg.Server.TLS.CertificateFile, cfg.Server.TLS.PrivateKeyFile)
@@ -232,7 +232,7 @@ func avisaValidadeDoCertificado(cert tls.Certificate, log *logging.Logger, reg *
 // numa decisão que é dele — a mesma doutrina do resto do §77: recusar,
 // nomeando a chave, nunca assumir.
 func enderecoLoopback(cfg *config.Config) (string, error) {
-	if !cfg.LoopbackHabilitado() {
+	if !cfg.LoopbackEnabled() {
 		return "", nil
 	}
 	if cfg.Server.Loopback.Port == nil {
@@ -271,17 +271,17 @@ func enderecoLoopback(cfg *config.Config) (string, error) {
 //  5. bind exposto + autenticação ligada + TLS ligado -> sobe, sem aviso: é
 //     a combinação que o §77 pede.
 func avaliaExposicaoEAutenticacao(cfg *config.Config, log *logging.Logger) error {
-	if !cfg.BindExposto() {
-		if cfg.AutenticacaoHabilitada() && !cfg.TLSHabilitado() {
+	if !cfg.BindExposed() {
+		if cfg.AuthenticationEnabled() && !cfg.TLSEnabled() {
 			log.Warn("auth.sem_tls",
 				"server.authentication está ligada sem server.tls: HTTP Basic transmite a senha em texto "+
 					"claro, mesmo que o bind só seja alcançável pelo próprio host",
-				"endereco", cfg.Endereco())
+				"endereco", cfg.Addr())
 		}
 		return nil
 	}
 
-	if !cfg.AuthenticationDeclarada() {
+	if !cfg.AuthenticationDeclared() {
 		return fmt.Errorf(
 			"server.bind (%s) está exposto e server.authentication não aparece na configuração: "+
 				"declare a seção explicitamente — enabled: true com server.tls.enabled: true e users, ou "+
@@ -290,14 +290,14 @@ func avaliaExposicaoEAutenticacao(cfg *config.Config, log *logging.Logger) error
 			cfg.Server.Bind)
 	}
 
-	if !cfg.AutenticacaoHabilitada() {
+	if !cfg.AuthenticationEnabled() {
 		// enabled: false EXPLÍCITO: a decisão já foi tomada, e o aviso de
 		// sempre é o que resta a fazer.
 		avisaSobreAExposicao(cfg, log)
 		return nil
 	}
 
-	if !cfg.TLSHabilitado() {
+	if !cfg.TLSEnabled() {
 		return fmt.Errorf(
 			"server.bind (%s) está exposto com server.authentication.enabled: true e server.tls.enabled: "+
 				"false: autenticação HTTP Basic sem TLS transmitiria a senha em texto claro pela rede "+
@@ -326,5 +326,5 @@ func avisaSobreAExposicao(cfg *config.Config, log *logging.Logger) {
 		"o servidor vai escutar FORA do loopback com server.authentication.enabled: false — decisão explícita "+
 			"do operador, não lacuna do produto: quem alcançar esta porta lê (POST /v1/query) E MUTA "+
 			"(POST /v1/compact, POST /v1/checkpoint) o dataset inteiro, sem credencial nenhuma",
-		"endereco", cfg.Endereco())
+		"endereco", cfg.Addr())
 }

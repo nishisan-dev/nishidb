@@ -73,7 +73,7 @@ func TestAvaliadorDePayloadAvaliaOEstadoInteiro(t *testing.T) {
 		"authenticated": {Type: types.TypeBool, I64: 1},
 		"slot":          {Type: types.TypeInt64, I64: 3},
 	})
-	if ok, err := av.Avalia(autenticado); err != nil || !ok {
+	if ok, err := av.Evaluate(autenticado); err != nil || !ok {
 		t.Fatalf("autenticado com slot 3 tem de casar: %v, %v", ok, err)
 	}
 	naoAutenticado := payloadDe(t, c, map[string]types.Value{
@@ -81,7 +81,7 @@ func TestAvaliadorDePayloadAvaliaOEstadoInteiro(t *testing.T) {
 		"authenticated": {Type: types.TypeBool, I64: 0},
 		"slot":          {Type: types.TypeInt64, I64: 3},
 	})
-	if ok, err := av.Avalia(naoAutenticado); err != nil || ok {
+	if ok, err := av.Evaluate(naoAutenticado); err != nil || ok {
 		t.Fatalf("não autenticado não pode casar: %v, %v", ok, err)
 	}
 	// Campo AUSENTE compara falso para todo operador (NULL é ausência nas
@@ -90,11 +90,11 @@ func TestAvaliadorDePayloadAvaliaOEstadoInteiro(t *testing.T) {
 		"customerId":    {Type: types.TypeString, Bytes: []byte("A")},
 		"authenticated": {Type: types.TypeBool, I64: 1},
 	})
-	if ok, err := av.Avalia(semSlot); err != nil || ok {
+	if ok, err := av.Evaluate(semSlot); err != nil || ok {
 		t.Fatalf("sem slot não pode casar: %v, %v", ok, err)
 	}
 	// O mesmo avaliador é reusado entre payloads: nada do anterior vaza.
-	if ok, err := av.Avalia(autenticado); err != nil || !ok {
+	if ok, err := av.Evaluate(autenticado); err != nil || !ok {
 		t.Fatalf("reuso do avaliador: %v, %v", ok, err)
 	}
 }
@@ -106,7 +106,7 @@ func TestAvaliadorDePayloadPropagaCorrupcao(t *testing.T) {
 		t.Fatal(err)
 	}
 	av := predicate.NovoAvaliadorDePayload(prog, slots.IDs)
-	if _, err := av.Avalia([]byte{0x01}); !errors.Is(err, encoding.ErrCorrupt) {
+	if _, err := av.Evaluate([]byte{0x01}); !errors.Is(err, encoding.ErrCorrupt) {
 		t.Fatalf("payload rasgado tem de subir como corrupção, veio %v", err)
 	}
 }

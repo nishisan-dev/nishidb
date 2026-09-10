@@ -32,7 +32,7 @@ schema:
 
 func compiladoComExpire(t *testing.T, yaml string) (*schema.Compiled, *fakestorage.Store) {
 	t.Helper()
-	spec, err := schema.Parse([]byte(yaml), schema.DefaultsPadrao)
+	spec, err := schema.Parse([]byte(yaml), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func compiladoComExpire(t *testing.T, yaml string) (*schema.Compiled, *fakestora
 // leInstanteDeEscrita extrai o campo de sistema do payload materializado.
 func leInstanteDeEscrita(t *testing.T, c *schema.Compiled, st *fakestorage.Store, key string) (int64, bool) {
 	t.Helper()
-	rec, _, presente, err := st.GetByKey(st.AbreSnapshot(), []byte(key), nil)
+	rec, _, presente, err := st.GetByKey(st.OpenSnapshot(), []byte(key), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func leInstanteDeEscrita(t *testing.T, c *schema.Compiled, st *fakestorage.Store
 		if !ok {
 			break
 		}
-		if id == c.Escrita.ID {
+		if id == c.WriteInstantField.ID {
 			if v.Type != types.TypeTimestamp {
 				t.Fatalf("campo de sistema com tipo %v", v.Type)
 			}
@@ -111,14 +111,14 @@ func TestCadaEscritaRenovaOInstante(t *testing.T) {
 func TestSemExpireAfterWriteNaoHaCampoDeSistema(t *testing.T) {
 	yaml := strings.Replace(yamlComExpire, "  ttl:\n    - expireAfterWrite: 2h\n", "", 1)
 	c, st := compiladoComExpire(t, yaml)
-	if c.Escrita != nil {
+	if c.WriteInstantField != nil {
 		t.Fatal("campo de sistema compilado sem expiração declarada")
 	}
 	m := mustNew(t, c, st)
 	if r := m.Apply([]byte(`{"id":"A","severidade":3}`)); r.Err != nil {
 		t.Fatal(r.Err)
 	}
-	rec, _, presente, err := st.GetByKey(st.AbreSnapshot(), []byte("A"), nil)
+	rec, _, presente, err := st.GetByKey(st.OpenSnapshot(), []byte("A"), nil)
 	if err != nil || !presente {
 		t.Fatalf("presente=%v err=%v", presente, err)
 	}
@@ -140,14 +140,14 @@ func TestSemExpireAfterWriteNaoHaCampoDeSistema(t *testing.T) {
 func TestEventoQueTrazOCampoDeSistemaEhRecusado(t *testing.T) {
 	c, st := compiladoComExpire(t, yamlComExpire)
 	m := mustNew(t, c, st)
-	r := m.Apply([]byte(`{"id":"A","` + schema.CampoInstanteDeEscrita + `":253402300799000}`))
+	r := m.Apply([]byte(`{"id":"A","` + schema.WriteInstantFieldName + `":253402300799000}`))
 	if r.Err == nil {
 		t.Fatal("evento com o campo de sistema foi aceito")
 	}
 	if r.Action != ActionSkipped && r.Action != ActionFailed {
 		t.Fatalf("Action = %v, quer Skipped ou Failed", r.Action)
 	}
-	if !strings.Contains(r.Err.Error(), schema.CampoInstanteDeEscrita) {
+	if !strings.Contains(r.Err.Error(), schema.WriteInstantFieldName) {
 		t.Errorf("a mensagem não nomeia o campo: %v", r.Err)
 	}
 }
@@ -204,7 +204,7 @@ schema:
 	if r := m.Apply([]byte(`{"id":"A","seq":10,"severidade":3}`)); r.Err != nil {
 		t.Fatal(r.Err)
 	}
-	rowID, ok := st.RowIDDaKey("A")
+	rowID, ok := st.RowIDByKey("A")
 	if !ok {
 		t.Fatal("key não materializada")
 	}
@@ -244,7 +244,7 @@ func TestRessurreicaoNaoFazMergeSobreOPayloadDaLapide(t *testing.T) {
 	if r := m.Apply([]byte(`{"id":"A","severidade":3,"extra":"velho"}`)); r.Err != nil {
 		t.Fatal(r.Err)
 	}
-	rowID, ok := st.RowIDDaKey("A")
+	rowID, ok := st.RowIDByKey("A")
 	if !ok {
 		t.Fatal("key não materializada")
 	}
@@ -253,9 +253,9 @@ func TestRessurreicaoNaoFazMergeSobreOPayloadDaLapide(t *testing.T) {
 	if r := m.Apply([]byte(`{"id":"A","severidade":9}`)); r.Err != nil {
 		t.Fatal(r.Err)
 	}
-	st.LimpaTombstone(rowID)
+	st.UnsetTombstone(rowID)
 
-	rec, _, presente, err := st.GetByKey(st.AbreSnapshot(), []byte("A"), nil)
+	rec, _, presente, err := st.GetByKey(st.OpenSnapshot(), []byte("A"), nil)
 	if err != nil || !presente {
 		t.Fatalf("presente=%v err=%v", presente, err)
 	}

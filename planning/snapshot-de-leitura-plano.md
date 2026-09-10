@@ -93,15 +93,15 @@ type Snapshot struct {
     id         uint64      // handle do registro de snapshots vivos
 }
 
-func (s *Store) AbreSnapshot() Snapshot
-func (s *Store) FechaSnapshot(Snapshot)
+func (s *Store) OpenSnapshot() Snapshot
+func (s *Store) CloseSnapshot(Snapshot)
 ```
 
 O snapshot **viaja em `Options`, nunca em campo do `Store`** — dois leitores
 concorrentes têm snapshots diferentes, e um campo os fundiria num só. É o ponto
 que o plano M6 já marcava como o que costuma ser errado.
 
-`AbreSnapshot` registra; `FechaSnapshot` desregistra e dispara a poda. O par é
+`OpenSnapshot` registra; `CloseSnapshot` desregistra e dispara a poda. O par é
 o que dá ao writer a **menor época viva** (um atômico), que governa três
 decisões: se vale versionar, o que podar do journal, e qual relógio a compaction
 usa.
@@ -184,7 +184,7 @@ Roda sob a tag `integration` onde precisar de disco real.
 
 ### E1 — Snapshot de valor, relógio congelado, teto e piso
 
-`storage.Snapshot`, `AbreSnapshot`/`FechaSnapshot`, registro de vivos com a
+`storage.Snapshot`, `OpenSnapshot`/`CloseSnapshot`, registro de vivos com a
 menor época atômica. `prazoVencido` ganha o parâmetro `em time.Time` e deixa de
 chamar `s.agora()`; os cinco pontos de liveness passam o instante do snapshot —
 `reapendaSeVivo` é a exceção tratada em E3. Propagação até o executor conforme

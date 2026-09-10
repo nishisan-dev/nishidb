@@ -47,7 +47,7 @@ schema:
 
 func carrega(t *testing.T, yaml string) (*schema.DatasetSpec, *schema.Compiled) {
 	t.Helper()
-	spec, err := schema.Parse([]byte(yaml), schema.DefaultsPadrao)
+	spec, err := schema.Parse([]byte(yaml), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,27 +86,27 @@ counters:
 		t.Fatalf("%d definições, quero 2", len(defs))
 	}
 	a := defs[0]
-	if a.Nome != "servicos_por_olt" || len(a.Colunas) != 1 || a.Colunas[0] != idDe(t, sc, "olt") ||
-		a.Tipos[0] != types.TypeString || a.Nomes[0] != "olt" || a.Where != "" || a.NovoAvaliador != nil ||
-		a.MaxGroups != schema.MaxGroupsPadrao || a.RetainEmptyGroups != schema.RetainEmptyGroupsPadrao {
+	if a.Name != "servicos_por_olt" || len(a.Columns) != 1 || a.Columns[0] != idDe(t, sc, "olt") ||
+		a.Types[0] != types.TypeString || a.Names[0] != "olt" || a.Where != "" || a.NewEvaluator != nil ||
+		a.MaxGroups != schema.DefaultMaxGroups || a.RetainEmptyGroups != schema.DefaultRetainEmptyGroups {
 		t.Fatalf("servicos_por_olt = %+v", a)
 	}
 	b := defs[1]
-	if b.Nome != "autenticados_por_pon" || len(b.Colunas) != 3 ||
-		b.Colunas[0] != idDe(t, sc, "olt") || b.Colunas[1] != idDe(t, sc, "slot") || b.Colunas[2] != idDe(t, sc, "port") ||
-		b.Tipos[1] != types.TypeInt64 || b.Where != "authenticated = true" || b.NovoAvaliador == nil ||
+	if b.Name != "autenticados_por_pon" || len(b.Columns) != 3 ||
+		b.Columns[0] != idDe(t, sc, "olt") || b.Columns[1] != idDe(t, sc, "slot") || b.Columns[2] != idDe(t, sc, "port") ||
+		b.Types[1] != types.TypeInt64 || b.Where != "authenticated = true" || b.NewEvaluator == nil ||
 		b.MaxGroups != 1000 || b.RetainEmptyGroups != time.Duration(0) {
 		t.Fatalf("autenticados_por_pon = %+v", b)
 	}
 	// O avaliador funciona sobre um payload real, e cada chamada dá uma
 	// instância própria (o writer e a auditoria não compartilham scratch).
-	av1, av2 := b.NovoAvaliador(), b.NovoAvaliador()
+	av1, av2 := b.NewEvaluator(), b.NewEvaluator()
 	if av1 == av2 {
-		t.Fatal("NovoAvaliador tem de instanciar um avaliador por chamada")
+		t.Fatal("NewEvaluator tem de instanciar um avaliador por chamada")
 	}
 	var p []byte
 	p, _ = encoding.AppendField(p, idDe(t, sc, "authenticated"), types.Value{Type: types.TypeBool, I64: 1})
-	if ok, err := av1.Avalia(p); err != nil || !ok {
+	if ok, err := av1.Evaluate(p); err != nil || !ok {
 		t.Fatalf("avaliador: %v, %v", ok, err)
 	}
 }
@@ -121,7 +121,7 @@ counters:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if defs[0].Colunas[0] != idDe(t, sc, "pon") || defs[0].Tipos[0] != types.TypeString {
+	if defs[0].Columns[0] != idDe(t, sc, "pon") || defs[0].Types[0] != types.TypeString {
 		t.Fatalf("%+v", defs[0])
 	}
 }
@@ -182,7 +182,7 @@ counters:
   - name: x
     groupBy: [olt]
     where: authenticated = true
-`), schema.DefaultsPadrao)
+`), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,17 +203,17 @@ counters:
 	if sc == nil {
 		t.Fatal("o callback tem de deixar o schema compilado disponível")
 	}
-	if len(defs) != 1 || defs[0].Colunas[0] != idDe(t, sc, "olt") {
+	if len(defs) != 1 || defs[0].Columns[0] != idDe(t, sc, "olt") {
 		t.Fatalf("as definições têm de vir do MESMO schema: %+v", defs)
 	}
 	// Os ids saíram do dicionário real, na ordem do Compile.
-	if id, ok := dict.Lookup([]byte("olt")); !ok || id != defs[0].Colunas[0] {
-		t.Fatalf("o id de olt no dicionário (%d, %v) não é o da definição (%d)", id, ok, defs[0].Colunas[0])
+	if id, ok := dict.Lookup([]byte("olt")); !ok || id != defs[0].Columns[0] {
+		t.Fatalf("o id de olt no dicionário (%d, %v) não é o da definição (%d)", id, ok, defs[0].Columns[0])
 	}
 }
 
 func TestCompiladorSemCountersDevolveNada(t *testing.T) {
-	spec, err := schema.Parse([]byte(yamlBase), schema.DefaultsPadrao)
+	spec, err := schema.Parse([]byte(yamlBase), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}

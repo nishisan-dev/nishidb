@@ -124,11 +124,11 @@ func (b *PatchBuffer) aplicaContagens(met *Metrics) {
 		k := &b.contagens[i]
 		switch k.tipo {
 		case contaOcorrencia:
-			k.coluna.ContaOcorrencia()
+			k.coluna.CountOccurrence()
 		case contaCoercao:
-			k.coluna.ContaCoercao()
+			k.coluna.CountCoercion()
 		case contaDivergencia:
-			b.compilado.ContaValorIncompativel(k.coluna, k.veio)
+			b.compilado.CountIncompatibleValue(k.coluna, k.veio)
 		case contaCongelada:
 			if met != nil {
 				met.congeladasCapturadas.Add(1)

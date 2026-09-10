@@ -169,13 +169,13 @@ func TestDescobertaSemNenhumExtractDeclarado(t *testing.T) {
 func TestValorIncompativelEContado(t *testing.T) {
 	h := newHarness(t, descobreYAML)
 	h.apply(`{"id":"A","doc":{"podName":"texto"}}`)
-	if n := h.c.ValoresIncompativeis(); n != 0 {
+	if n := h.c.IncompatibleValueCount(); n != 0 {
 		t.Fatalf("contador nasceu em %d", n)
 	}
 	h.apply(`{"id":"B","doc":{"podName":{"a":1}}}`)
 	h.apply(`{"id":"C","doc":{"podName":[1,2]}}`)
-	if n := h.c.ValoresIncompativeis(); n != 2 {
-		t.Errorf("ValoresIncompativeis = %d, quer 2", n)
+	if n := h.c.IncompatibleValueCount(); n != 2 {
+		t.Errorf("IncompatibleValueCount = %d, quer 2", n)
 	}
 }
 
@@ -184,7 +184,7 @@ func TestValorIncompativelEContado(t *testing.T) {
 func TestValorIncompativelAvisaUmaVezComOsDoisTipos(t *testing.T) {
 	h := newHarness(t, descobreYAML)
 	var avisos []string
-	h.c.AoValorIncompativel(func(coluna, fixado, veio string) {
+	h.c.OnIncompatibleValue(func(coluna, fixado, veio string) {
 		avisos = append(avisos, coluna+": fixado="+fixado+" veio="+veio)
 	})
 	h.apply(`{"id":"A","doc":{"podName":"texto"}}`)
@@ -203,8 +203,8 @@ func TestValorIncompativelAvisaUmaVezComOsDoisTipos(t *testing.T) {
 func TestValorIncompativelEContadoNaExtracaoDeclarada(t *testing.T) {
 	h := newHarness(t, extractYAML)
 	h.apply(`{"id":"A","doc":{"tally":"nao-e-numero"}}`)
-	if n := h.c.ValoresIncompativeis(); n != 1 {
-		t.Errorf("ValoresIncompativeis = %d, quer 1", n)
+	if n := h.c.IncompatibleValueCount(); n != 1 {
+		t.Errorf("IncompatibleValueCount = %d, quer 1", n)
 	}
 }
 
@@ -269,7 +269,7 @@ func TestChaveQueSomeDoDocumentoSegueOMerge(t *testing.T) {
 // existe neste evento": sem erro, sem log, sem métrica, com Failed=0 no painel.
 // Pior no modo merge, onde a coluna ainda ficava congelada no valor anterior.
 func TestFalhaDeIODoDicionarioNoCaminhoANINHADOEhFailed(t *testing.T) {
-	s, err := schema.Parse([]byte(descobreYAML), schema.DefaultsPadrao)
+	s, err := schema.Parse([]byte(descobreYAML), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,7 +310,7 @@ func TestFalhaDeIODoDicionarioNoCaminhoANINHADOEhFailed(t *testing.T) {
 func TestConflitoDeTipoNoCaminhoAninhadoRemoveAColunaSemDerrubarOEvento(t *testing.T) {
 	h := newHarness(t, descobreYAML)
 	h.apply(`{"id":"A","doc":{"podName":"texto"}}`)
-	antes := h.c.ValoresIncompativeis()
+	antes := h.c.IncompatibleValueCount()
 
 	// O tipo já está fixado como string; um objeto no mesmo caminho diverge.
 	r := h.m.Apply([]byte(`{"id":"A","doc":{"podName":{"a":1}}}`))
@@ -318,7 +318,7 @@ func TestConflitoDeTipoNoCaminhoAninhadoRemoveAColunaSemDerrubarOEvento(t *testi
 		t.Fatalf("o evento caiu por causa de uma chave interna: %v", r.Err)
 	}
 	h.wantAbsent(h.state("A"), "doc.podName")
-	if got := h.c.ValoresIncompativeis() - antes; got != 1 {
+	if got := h.c.IncompatibleValueCount() - antes; got != 1 {
 		t.Errorf("contador subiu %d, quer 1", got)
 	}
 }
@@ -337,18 +337,18 @@ func TestConflitoDeTipoNoCaminhoAninhadoRemoveAColunaSemDerrubarOEvento(t *testi
 func TestNullExplicitoNaoContaComoTipoIncompativel(t *testing.T) {
 	h := newHarness(t, descobreYAML)
 	h.apply(`{"id":"A","doc":{"podName":"pod-1"}}`)
-	antes := h.c.ValoresIncompativeis()
+	antes := h.c.IncompatibleValueCount()
 
 	h.apply(`{"id":"A","doc":{"podName":null}}`)
-	if got := h.c.ValoresIncompativeis() - antes; got != 0 {
+	if got := h.c.IncompatibleValueCount() - antes; got != 0 {
 		t.Errorf("contador subiu %d com um null explícito, quer 0", got)
 	}
 
 	// E a divergência de verdade continua contando, no mesmo dataset e na
 	// mesma coluna — sem isto o teste acima passaria com o contador quebrado.
-	antes = h.c.ValoresIncompativeis()
+	antes = h.c.IncompatibleValueCount()
 	h.apply(`{"id":"A","doc":{"podName":{"a":1}}}`)
-	if got := h.c.ValoresIncompativeis() - antes; got != 1 {
+	if got := h.c.IncompatibleValueCount() - antes; got != 1 {
 		t.Errorf("contador subiu %d com tipo divergente, quer 1", got)
 	}
 }

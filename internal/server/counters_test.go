@@ -49,15 +49,15 @@ counters:
 func semeiaServicos(t *testing.T, a *ambiente, nome string, n int) {
 	t.Helper()
 	cfg := a.carrega()
-	spec, err := schema.Load(cfg.SpecDoDataset(nome), cfg.DefaultsDeQuery())
+	spec, err := schema.Load(cfg.DatasetSpecPath(nome), cfg.QueryDefaults())
 	if err != nil {
 		t.Fatal(err)
 	}
 	st, err := storage.Open(storage.Options{
-		Dir:                    cfg.DirDoDataset(nome),
+		Dir:                    cfg.DatasetDir(nome),
 		Dataset:                nome,
 		SegmentSize:            cfg.SegmentSize(),
-		CamposIndexadosPorNome: schema.CamposComIndice(spec),
+		CamposIndexadosPorNome: schema.IndexedFieldNames(spec),
 	})
 	if err != nil {
 		t.Fatal(err)

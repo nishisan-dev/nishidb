@@ -54,15 +54,15 @@ func servidorSpec106(t *testing.T) *server.Servidor {
 	a.escreveDataset("d", strings.ReplaceAll(spec106YAML, "%s", "d"))
 
 	cfg := a.carrega()
-	spec, err := schema.Load(cfg.SpecDoDataset("d"), cfg.DefaultsDeQuery())
+	spec, err := schema.Load(cfg.DatasetSpecPath("d"), cfg.QueryDefaults())
 	if err != nil {
 		t.Fatal(err)
 	}
 	st, err := storage.Open(storage.Options{
-		Dir:                    cfg.DirDoDataset("d"),
+		Dir:                    cfg.DatasetDir("d"),
 		Dataset:                "d",
 		SegmentSize:            cfg.SegmentSize(),
-		CamposIndexadosPorNome: schema.CamposComIndice(spec),
+		CamposIndexadosPorNome: schema.IndexedFieldNames(spec),
 	})
 	if err != nil {
 		t.Fatal(err)

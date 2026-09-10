@@ -14,7 +14,7 @@ import (
 // specComHash declara uma coluna indexada — o caso do piloto, em que a
 // dimensão de consulta mais valiosa (`node`) precisa de índice. A grafia
 // mudou com a D5 (`index: true`, não mais `index: hash`), e a função que ele
-// exercita virou uma só — schema.CamposComIndice, no lugar do par
+// exercita virou uma só — schema.IndexedFieldNames, no lugar do par
 // CamposComBitmap/CamposComHash —, mas o nome do fixture e o caminho continuam
 // os mesmos.
 const specComHash = `version: 1
@@ -32,7 +32,7 @@ schema:
 `
 
 // TestServidorAbreODatasetComOsCamposDeHashDeclarados prova, pelo caminho de
-// subida REAL, que o servidor passa schema.CamposComIndice ao Store.
+// subida REAL, que o servidor passa schema.IndexedFieldNames ao Store.
 //
 // A asserção não olha para dentro do servidor: ela olha para o DISCO. O oráculo
 // é o ARQUIVO DE ÍNDICE do segmento corrente — o Open cria um .widx por campo
@@ -46,7 +46,7 @@ schema:
 // enumera —, então a prova mudou de lugar e foi para o arquivo, que é onde o
 // efeito de passar a lista sempre esteve.
 //
-// É a metade do modo de falha cruzado servidor↔CLI que schema.CamposComIndice
+// É a metade do modo de falha cruzado servidor↔CLI que schema.IndexedFieldNames
 // existe para impedir; a outra metade é o mesmo erro visto do lado do CLI.
 func TestServidorAbreODatasetComOsCamposDeHashDeclarados(t *testing.T) {
 	a := novoAmbiente(t)
@@ -61,7 +61,7 @@ func TestServidorAbreODatasetComOsCamposDeHashDeclarados(t *testing.T) {
 		t.Fatalf("Fecha: %v", err)
 	}
 
-	dir := cfg.CaminhoDoDataset("d")
+	dir := cfg.DatasetRootDir("d")
 	dataDir := filepath.Join(dir, "data")
 
 	// O que o SERVIDOR deixou em disco, lido ANTES de qualquer reabertura: a
@@ -93,7 +93,7 @@ func TestServidorAbreODatasetComOsCamposDeHashDeclarados(t *testing.T) {
 	if !ok {
 		t.Fatal("o campo node não foi registrado no dicionário do dataset")
 	}
-	if !st.Indexado(f) {
+	if !st.Indexed(f) {
 		t.Fatal("o Store reabriu sem a capability de índice no campo declarado")
 	}
 	if !slices.Contains(deixados, f) {

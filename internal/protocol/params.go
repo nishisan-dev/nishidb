@@ -50,7 +50,7 @@ func (p Param) typedValue() (types.Value, error) {
 		return types.Value{}, errors.New(`"value" ausente`)
 	}
 	if bytes.Equal(raw, []byte("null")) {
-		// Espelha errParamNulo do binder, e pela mesma razão: `col = ?` com ?
+		// Espelha errParamNull do binder, e pela mesma razão: `col = ?` com ?
 		// nulo não tem semântica definida sem lógica trivalente, e o que o
 		// usuário quer dizer é IS NULL.
 		return types.Value{}, errors.New(`"value" é null; para testar ausência escreva IS NULL na query, não um parâmetro nulo`)

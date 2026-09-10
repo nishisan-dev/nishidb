@@ -47,7 +47,7 @@ func newHarness(t *testing.T, yml string, bitmapFields ...string) *harness {
 		if !ok {
 			t.Fatalf("campo %q não compilado", name)
 		}
-		idx.Campos = append(idx.Campos, f.ID)
+		idx.Fields = append(idx.Fields, f.ID)
 	}
 	st := fakestorage.New(idx)
 	return &harness{t: t, m: mustNew(t, c, st), st: st, c: c}
@@ -76,7 +76,7 @@ func (h *harness) apply(event string) ApplyResult {
 // a visão que o executor terá.
 func (h *harness) state(key string) map[string]types.Value {
 	h.t.Helper()
-	rec, _, ok, err := h.st.GetByKey(h.st.AbreSnapshot(), []byte(key), nil)
+	rec, _, ok, err := h.st.GetByKey(h.st.OpenSnapshot(), []byte(key), nil)
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -693,11 +693,11 @@ func (s storeErro) Put(key []byte, seq int64, flags uint8, payload []byte, prev 
 	return s.Store.Put(key, seq, flags, payload, prev)
 }
 
-func (s storeErro) Estado(key, buf []byte) (types.Record, []byte, types.Presence, error) {
+func (s storeErro) State(key, buf []byte) (types.Record, []byte, types.Presence, error) {
 	if s.get != nil {
 		return types.Record{}, buf, types.PresenceAbsent, s.get
 	}
-	return s.Store.Estado(key, buf)
+	return s.Store.State(key, buf)
 }
 
 func (s storeErro) GetByKey(snap types.Snapshot, key, buf []byte) (types.Record, []byte, bool, error) {
@@ -784,7 +784,7 @@ type storePayloadTruncado struct {
 	rec types.Record
 }
 
-func (s storePayloadTruncado) Estado(key, buf []byte) (types.Record, []byte, types.Presence, error) {
+func (s storePayloadTruncado) State(key, buf []byte) (types.Record, []byte, types.Presence, error) {
 	buf = buf[:0]
 	buf = append(buf, key...)
 	keyEnd := len(buf)
@@ -935,7 +935,7 @@ func (d dictErro) Name(id types.FieldID) (string, bool) { return d.inner.Name(id
 // Falha ao registrar campo desconhecido vem do STORAGE, não do evento: não
 // pode ser contabilizada como SCHEMA_VALIDATION nem virar Skipped.
 func TestApplyFalhaDoDicionarioEhFailed(t *testing.T) {
-	s, err := schema.Parse([]byte(fmt.Sprintf(unknownYAMLTmpl, "include", "include")), schema.DefaultsPadrao)
+	s, err := schema.Parse([]byte(fmt.Sprintf(unknownYAMLTmpl, "include", "include")), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -980,7 +980,7 @@ func TestApplyReutilizaBuffersEntreEventos(t *testing.T) {
 // produção (spec §12): evento cheio cria a entidade, patch parcial com _SEQ
 // maior mescla, e o estado final é conferido campo a campo.
 func TestApplyFixtureRadiusCompletoDepoisPatch(t *testing.T) {
-	spec, err := schema.Load(fixtureSpec, schema.DefaultsPadrao)
+	spec, err := schema.Load(fixtureSpec, schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -992,7 +992,7 @@ func TestApplyFixtureRadiusCompletoDepoisPatch(t *testing.T) {
 	if !ok {
 		t.Fatal("Acct-Status-Type não compilado")
 	}
-	st := fakestorage.New(fakestorage.Indexes{Campos: []types.FieldID{statusField.ID}})
+	st := fakestorage.New(fakestorage.Indexes{Fields: []types.FieldID{statusField.ID}})
 	m := mustNew(t, c, st)
 	h := &harness{t: t, m: m, st: st, c: c}
 
@@ -1094,7 +1094,7 @@ schema:
 
 func compilaComTeto(t *testing.T, maxCols int, onMax string) *schema.Compiled {
 	t.Helper()
-	s, err := schema.Parse([]byte(fmt.Sprintf(tetoYAMLTmpl, maxCols, onMax)), schema.DefaultsPadrao)
+	s, err := schema.Parse([]byte(fmt.Sprintf(tetoYAMLTmpl, maxCols, onMax)), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1118,8 +1118,8 @@ func TestApplyAcimaDoTetoSobIgnoreGravaOEvento(t *testing.T) {
 	if r.Action != ActionCreated {
 		t.Fatalf("resultado = %+v, quer Created — o evento tem de entrar", r)
 	}
-	if got := c.CamposDescartados(); got != 1 {
-		t.Errorf("CamposDescartados = %d, quer 1", got)
+	if got := c.DiscardedFieldCount(); got != 1 {
+		t.Errorf("DiscardedFieldCount = %d, quer 1", got)
 	}
 	if mt := m.Metrics(); mt.FailedTotal != 0 || mt.InvalidTotal != 0 {
 		t.Errorf("métricas = %+v; descartar campo não é falha de evento", mt)
@@ -1173,7 +1173,7 @@ schema:
 
 func compilaComTetoAninhado(t *testing.T, maxCols int, onMax string) *schema.Compiled {
 	t.Helper()
-	s, err := schema.Parse([]byte(fmt.Sprintf(tetoAninhadoYAMLTmpl, maxCols, onMax)), schema.DefaultsPadrao)
+	s, err := schema.Parse([]byte(fmt.Sprintf(tetoAninhadoYAMLTmpl, maxCols, onMax)), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1188,7 +1188,7 @@ func compilaComTetoAninhado(t *testing.T, maxCols int, onMax string) *schema.Com
 // faltava: a política que o operador declarou valia no caminho de topo e era
 // silenciosamente REBAIXADA a `ignore` no caminho aninhado.
 //
-// O ResolveAninhado devolvia erro para as duas políticas, e o `continue` do
+// O ResolveNested devolvia erro para as duas políticas, e o `continue` do
 // extract engolia as duas — então `stop` seguia ingerindo, com o contador de
 // descarte subindo e nada parando. O operador que escolheu `stop` recebia o
 // comportamento de quem escolheu `ignore`, sem uma linha de log dizendo isso.
@@ -1214,8 +1214,8 @@ func TestTetoSobIgnoreNoCaminhoANINHADOGravaOEvento(t *testing.T) {
 	if r.Action != ActionCreated {
 		t.Fatalf("resultado = %+v, quer Created — o evento tem de entrar", r)
 	}
-	if got := c.CamposDescartados(); got == 0 {
-		t.Error("CamposDescartados = 0; a chave excedente sumiu sem ser contada")
+	if got := c.DiscardedFieldCount(); got == 0 {
+		t.Error("DiscardedFieldCount = 0; a chave excedente sumiu sem ser contada")
 	}
 	if mt := m.Metrics(); mt.FailedTotal != 0 || mt.InvalidTotal != 0 {
 		t.Errorf("métricas = %+v; descartar campo não é falha de evento", mt)

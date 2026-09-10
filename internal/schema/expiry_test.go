@@ -8,9 +8,9 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// yamlComTTL monta uma spec mínima com o bloco ttl dado.
-func yamlComTTL(bloco string) string {
-	return "version: 1\nname: t\nmaterialization:\n  key:\n    field: id\n" + bloco +
+// yamlWithTTL monta uma spec mínima com o bloco ttl dado.
+func yamlWithTTL(ttlBlock string) string {
+	return "version: 1\nname: t\nmaterialization:\n  key:\n    field: id\n" + ttlBlock +
 		"schema:\n  include: [id, exp]\n  fields:\n    id:\n      type: string\n" +
 		"    exp:\n      type: timestamp\n"
 }
@@ -20,14 +20,14 @@ func yamlComTTL(bloco string) string {
 // nada ao lado de um mecanismo que funciona é defeito. A recusa nomeia a
 // lista, que é para onde o operador tem de migrar.
 func TestBlocoTTLAntigoEhRecusadoNomeandoALista(t *testing.T) {
-	for _, bloco := range []string{
+	for _, ttlBlock := range []string{
 		"  ttl:\n    field: exp\n    expireAfterWrite: 2h\n",
 		"  ttl:\n    type: timestamp\n",
 		"  ttl:\n    expireAfterWrite: 2h\n",
 	} {
-		_, err := Parse([]byte(yamlComTTL(bloco)), DefaultsPadrao)
+		_, err := Parse([]byte(yamlWithTTL(ttlBlock)), BuiltinDefaults)
 		if err == nil {
-			t.Errorf("a forma antiga foi aceita: %s", bloco)
+			t.Errorf("a forma antiga foi aceita: %s", ttlBlock)
 			continue
 		}
 		if !strings.Contains(err.Error(), "lista") {
@@ -41,8 +41,8 @@ func TestBlocoTTLAntigoEhRecusadoNomeandoALista(t *testing.T) {
 // liveness da compaction.
 func TestExpireAfterWriteAbaixoDaResolucaoEhRecusadoEmVezDeArredondado(t *testing.T) {
 	for _, d := range []string{"30s", "1s", "59s"} {
-		yaml := yamlComTTL("  ttl:\n    - expireAfterWrite: " + d + "\n")
-		_, err := Parse([]byte(yaml), DefaultsPadrao)
+		yaml := yamlWithTTL("  ttl:\n    - expireAfterWrite: " + d + "\n")
+		_, err := Parse([]byte(yaml), BuiltinDefaults)
 		if err == nil {
 			t.Errorf("%s: aceito", d)
 			continue
@@ -52,8 +52,8 @@ func TestExpireAfterWriteAbaixoDaResolucaoEhRecusadoEmVezDeArredondado(t *testin
 		}
 	}
 	// O piso exato é aceito.
-	yaml := yamlComTTL("  ttl:\n    - expireAfterWrite: 1m\n")
-	if _, err := Parse([]byte(yaml), DefaultsPadrao); err != nil {
+	yaml := yamlWithTTL("  ttl:\n    - expireAfterWrite: 1m\n")
+	if _, err := Parse([]byte(yaml), BuiltinDefaults); err != nil {
 		t.Errorf("1m (a própria resolução) foi recusado: %v", err)
 	}
 }
@@ -64,28 +64,28 @@ func TestExpireAfterWriteNaoExigeCampoNoSchema(t *testing.T) {
 	yaml := "version: 1\nname: t\nmaterialization:\n  key:\n    field: id\n" +
 		"  ttl:\n    - expireAfterWrite: 7d\n" +
 		"schema:\n  include: [id]\n  fields:\n    id:\n      type: string\n"
-	spec, err := Parse([]byte(yaml), DefaultsPadrao)
+	spec, err := Parse([]byte(yaml), BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := spec.Materialization.DuracaoDeFundo; got != 7*24*time.Hour {
-		t.Fatalf("DuracaoDeFundo = %v, quer 168h", got)
+	if got := spec.Materialization.FallbackDuration; got != 7*24*time.Hour {
+		t.Fatalf("FallbackDuration = %v, quer 168h", got)
 	}
 	c, err := spec.Compile(newFakeDict())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.DuracaoDeFundo != 7*24*time.Hour {
-		t.Fatalf("Compiled.DuracaoDeFundo = %v", c.DuracaoDeFundo)
+	if c.FallbackDuration != 7*24*time.Hour {
+		t.Fatalf("Compiled.FallbackDuration = %v", c.FallbackDuration)
 	}
-	if len(c.RegrasTTL) != 1 {
-		t.Fatalf("%d regras compiladas, quero 1", len(c.RegrasTTL))
+	if len(c.TTLRules) != 1 {
+		t.Fatalf("%d regras compiladas, quero 1", len(c.TTLRules))
 	}
 }
 
 func TestChaveTypeNaRegraEhRecusada(t *testing.T) {
-	yaml := yamlComTTL("  ttl:\n    - expireAfterWrite: 2h\n      type: timestamp\n")
-	if _, err := Parse([]byte(yaml), DefaultsPadrao); err == nil {
+	yaml := yamlWithTTL("  ttl:\n    - expireAfterWrite: 2h\n      type: timestamp\n")
+	if _, err := Parse([]byte(yaml), BuiltinDefaults); err == nil {
 		t.Fatal("ttl[].type foi aceito")
 	}
 }
@@ -93,17 +93,17 @@ func TestChaveTypeNaRegraEhRecusada(t *testing.T) {
 // Era string crua sem parse e sem leitor: configuração que não faz nada e não
 // avisa. Agora a gramática é conferida no load.
 func TestTombstoneRetentionEhValidadoNoLoad(t *testing.T) {
-	bom := "version: 1\nname: t\nmaterialization:\n  key:\n    field: id\n  tombstoneRetention: 7d\n" +
+	good := "version: 1\nname: t\nmaterialization:\n  key:\n    field: id\n  tombstoneRetention: 7d\n" +
 		"schema:\n  include: [id]\n  fields:\n    id:\n      type: string\n"
-	spec, err := Parse([]byte(bom), DefaultsPadrao)
+	spec, err := Parse([]byte(good), BuiltinDefaults)
 	if err != nil {
 		t.Fatalf("7d (a forma do §12) foi recusado: %v", err)
 	}
 	if got := spec.Materialization.TombstoneRetention; got != 7*24*time.Hour {
 		t.Fatalf("TombstoneRetention = %v, quer 168h", got)
 	}
-	ruim := strings.Replace(bom, "7d", "sempre", 1)
-	if _, err := Parse([]byte(ruim), DefaultsPadrao); err == nil {
+	bad := strings.Replace(good, "7d", "sempre", 1)
+	if _, err := Parse([]byte(bad), BuiltinDefaults); err == nil {
 		t.Fatal("duração inválida foi aceita")
 	}
 }
@@ -113,8 +113,8 @@ func TestTombstoneRetentionEhValidadoNoLoad(t *testing.T) {
 func TestCampoDeSistemaNaoPodeSerDeclarado(t *testing.T) {
 	yaml := "version: 1\nname: t\nmaterialization:\n  key:\n    field: id\n" +
 		"schema:\n  include: [id]\n  fields:\n    id:\n      type: string\n" +
-		"    " + CampoInstanteDeEscrita + ":\n      type: timestamp\n"
-	_, err := Parse([]byte(yaml), DefaultsPadrao)
+		"    " + WriteInstantFieldName + ":\n      type: timestamp\n"
+	_, err := Parse([]byte(yaml), BuiltinDefaults)
 	if err == nil {
 		t.Fatal("campo de sistema foi aceito em schema.fields")
 	}
@@ -127,7 +127,7 @@ func TestCampoDeSistemaNaoPodeSerDeclarado(t *testing.T) {
 // legítimos e já estão em uso — _SEQ é o nome de sequence do §12. Reservar o
 // prefixo recusaria datasets que hoje sobem.
 func TestCampoComUnderscoreQueNaoEhDeSistemaContinuaValido(t *testing.T) {
-	if _, err := Parse([]byte(baseYAML), DefaultsPadrao); err != nil {
+	if _, err := Parse([]byte(baseYAML), BuiltinDefaults); err != nil {
 		t.Fatalf("a spec base, que declara _SEQ, foi recusada: %v", err)
 	}
 }
@@ -139,7 +139,7 @@ func TestFieldsByIDOcultaOCampoDeSistemaMasAVersaoCompletaNao(t *testing.T) {
 	yaml := "version: 1\nname: t\nmaterialization:\n  key:\n    field: id\n" +
 		"  ttl:\n    - expireAfterWrite: 2h\n" +
 		"schema:\n  include: [id]\n  fields:\n    id:\n      type: string\n"
-	spec, err := Parse([]byte(yaml), DefaultsPadrao)
+	spec, err := Parse([]byte(yaml), BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,27 +147,27 @@ func TestFieldsByIDOcultaOCampoDeSistemaMasAVersaoCompletaNao(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Escrita == nil {
+	if c.WriteInstantField == nil {
 		t.Fatal("campo de sistema não compilado")
 	}
 
-	temSistema := func(campos []*CompiledField) bool {
-		for _, f := range campos {
-			if f.Name == CampoInstanteDeEscrita {
+	hasSystem := func(fields []*CompiledField) bool {
+		for _, f := range fields {
+			if f.Name == WriteInstantFieldName {
 				return true
 			}
 		}
 		return false
 	}
-	if temSistema(c.FieldsByID()) {
+	if hasSystem(c.FieldsByID()) {
 		t.Error("FieldsByID expôs o campo de sistema: ele apareceria no SELECT * e no /v1/metadata")
 	}
-	if !temSistema(c.FieldsByIDIncluindoSistema()) {
-		t.Error("FieldsByIDIncluindoSistema escondeu o campo de sistema")
+	if !hasSystem(c.FieldsByIDIncludingSystem()) {
+		t.Error("FieldsByIDIncludingSystem escondeu o campo de sistema")
 	}
 
 	// Endereçável por nome, como ROWID/xmin: oculto no *, não inacessível.
-	f, ok := c.FieldByName([]byte(CampoInstanteDeEscrita))
+	f, ok := c.FieldByName([]byte(WriteInstantFieldName))
 	if !ok {
 		t.Fatal("FieldByName não resolve o campo de sistema")
 	}

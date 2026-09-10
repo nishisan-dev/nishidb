@@ -326,7 +326,7 @@ func escreveInspect(w io.Writer, d protocol.DatasetMeta) {
 		// Eram TRÊS palavras, e a terceira distinguia os motores: "hash" saiu
 		// quando o motor único tornou a distinção inexistente. As outras duas
 		// ficaram por serem contrato — ver o godoc de protocol.EngineStats e de
-		// schema.CompiledField.NomeDoIndice.
+		// schema.CompiledField.IndexName.
 		linha(w, c.Name, alias, c.Type, c.JDBC, c.Index, auto)
 	}
 }

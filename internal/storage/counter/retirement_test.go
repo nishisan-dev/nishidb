@@ -7,101 +7,101 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-func defComRetencao(nome string, retencao time.Duration) Definicao {
-	d := defPorOLT(nome, true, 100)
-	d.RetainEmptyGroups = retencao
+func defWithRetention(name string, retention time.Duration) Definition {
+	d := defByOLT(name, true, 100)
+	d.RetainEmptyGroups = retention
 	return d
 }
 
-type relogio struct{ t time.Time }
+type clock struct{ t time.Time }
 
-func (r *relogio) agora() time.Time       { return r.t }
-func (r *relogio) avanca(d time.Duration) { r.t = r.t.Add(d) }
+func (r *clock) now() time.Time          { return r.t }
+func (r *clock) advance(d time.Duration) { r.t = r.t.Add(d) }
 
-func abreComRelogio(t *testing.T, dir string, def Definicao) (*Contador, *relogio) {
+func openWithClock(t *testing.T, dir string, def Definition) (*Counter, *clock) {
 	t.Helper()
-	c := abreContador(t, dir, def, false)
-	rel := &relogio{t: time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)}
-	c.UsaRelogio(rel.agora)
-	return c, rel
+	c := openCounter(t, dir, def, false)
+	clk := &clock{t: time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)}
+	c.UseClock(clk.now)
+	return c, clk
 }
 
-// cobre simula o checkpoint: toda transição até aqui está durável.
-func cobre(c *Contador) { c.CobreMexidas(c.Transicoes()) }
+// cover simula o checkpoint: toda transição até aqui está durável.
+func cover(c *Counter) { c.RecordCoveredTouches(c.Transitions()) }
 
 // TestGrupoZeradoComRefsNaoEhAposentado é o cenário da proposta §6.5 que a
 // regra intuitiva erra: 500 serviços numa OLT, nenhum autenticado. total == 0
 // não diz "não há ninguém aqui" — diz "ninguém aqui satisfaz a condição".
 func TestGrupoZeradoComRefsNaoEhAposentado(t *testing.T) {
-	c, rel := abreComRelogio(t, t.TempDir(), defComRetencao("aut", 7*24*time.Hour))
+	c, clk := openWithClock(t, t.TempDir(), defWithRetention("aut", 7*24*time.Hour))
 	for r := types.RowID(0); r < 500; r++ {
-		if err := c.Transiciona(r, payload(t, "X", 1, 1, false), false); err != nil {
+		if err := c.Transition(r, payload(t, "X", 1, 1, false), false); err != nil {
 			t.Fatal(err)
 		}
 	}
-	cobre(c)
-	if total, refs := totalDe(t, c, "X"); total != 0 || refs != 500 {
+	cover(c)
+	if total, refs := totalOf(t, c, "X"); total != 0 || refs != 500 {
 		t.Fatalf("X: total %d refs %d", total, refs)
 	}
-	rel.avanca(30 * 24 * time.Hour)
-	n, err := c.AposentaVazios(rel.agora())
+	clk.advance(30 * 24 * time.Hour)
+	n, err := c.RetireEmptyGroups(clk.now())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if n != 0 {
 		t.Fatalf("aposentou %d grupos com refs > 0", n)
 	}
-	if _, _, _, _, vivo := c.Grupo(1); !vivo {
+	if _, _, _, _, live := c.Group(1); !live {
 		t.Fatal("o grupo com 500 linhas apontando para ele tem de continuar vivo")
 	}
 }
 
 func TestGrupoSemRefsEhAposentadoDepoisDoPrazo(t *testing.T) {
-	c, rel := abreComRelogio(t, t.TempDir(), defComRetencao("aut", 7*24*time.Hour))
+	c, clk := openWithClock(t, t.TempDir(), defWithRetention("aut", 7*24*time.Hour))
 	for r := types.RowID(0); r < 10; r++ {
-		if err := c.Transiciona(r, payload(t, "X", 1, 1, true), false); err != nil {
+		if err := c.Transition(r, payload(t, "X", 1, 1, true), false); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for r := types.RowID(0); r < 10; r++ {
-		if err := c.Transiciona(r, nil, true); err != nil {
+		if err := c.Transition(r, nil, true); err != nil {
 			t.Fatal(err)
 		}
 	}
-	cobre(c)
-	if total, refs := totalDe(t, c, "X"); total != 0 || refs != 0 {
+	cover(c)
+	if total, refs := totalOf(t, c, "X"); total != 0 || refs != 0 {
 		t.Fatalf("X: %d %d", total, refs)
 	}
 	// Antes do prazo: continua visível, com total 0.
-	rel.avanca(6 * 24 * time.Hour)
-	if n, err := c.AposentaVazios(rel.agora()); err != nil || n != 0 {
+	clk.advance(6 * 24 * time.Hour)
+	if n, err := c.RetireEmptyGroups(clk.now()); err != nil || n != 0 {
 		t.Fatalf("antes do prazo: %d, %v", n, err)
 	}
-	if _, _, _, _, vivo := c.Grupo(1); !vivo {
+	if _, _, _, _, live := c.Group(1); !live {
 		t.Fatal("dentro do prazo o grupo vazio continua visível")
 	}
 	// Depois do prazo: sai.
-	rel.avanca(2 * 24 * time.Hour)
-	if n, err := c.AposentaVazios(rel.agora()); err != nil || n != 1 {
+	clk.advance(2 * 24 * time.Hour)
+	if n, err := c.RetireEmptyGroups(clk.now()); err != nil || n != 1 {
 		t.Fatalf("depois do prazo: %d, %v", n, err)
 	}
-	if _, _, _, _, vivo := c.Grupo(1); vivo {
+	if _, _, _, _, live := c.Group(1); live {
 		t.Fatal("grupo aposentado não é vivo")
 	}
-	if _, ok := c.PorTexto([]byte("X")); ok {
+	if _, ok := c.ByText([]byte("X")); ok {
 		t.Fatal("grupo aposentado não resolve por texto")
 	}
-	if est := c.Estatisticas(); est.Aposentados != 1 || est.Grupos != 0 {
-		t.Fatalf("estatísticas = %+v", est)
+	if stats := c.Stats(); stats.Retired != 1 || stats.Groups != 0 {
+		t.Fatalf("estatísticas = %+v", stats)
 	}
 	// A OLT reaparece: id NOVO, nunca o 1.
-	if err := c.Transiciona(0, payload(t, "X", 1, 1, true), false); err != nil {
+	if err := c.Transition(0, payload(t, "X", 1, 1, true), false); err != nil {
 		t.Fatal(err)
 	}
-	if id, ok := c.PorTexto([]byte("X")); !ok || id != 2 {
+	if id, ok := c.ByText([]byte("X")); !ok || id != 2 {
 		t.Fatalf("a OLT que reapareceu ganhou id %d, %v; quer 2", id, ok)
 	}
-	if total, refs := totalDe(t, c, "X"); total != 1 || refs != 1 {
+	if total, refs := totalOf(t, c, "X"); total != 1 || refs != 1 {
 		t.Fatalf("X de volta: %d %d", total, refs)
 	}
 }
@@ -111,35 +111,35 @@ func TestGrupoSemRefsEhAposentadoDepoisDoPrazo(t *testing.T) {
 // checkpoint, o estado durável ainda pode dizer "a linha está em X" — e X
 // aposentado seria um grupo referenciado que saiu.
 func TestGrupoSoEhAposentadoDepoisDoCheckpointQueCobreASaida(t *testing.T) {
-	c, rel := abreComRelogio(t, t.TempDir(), defComRetencao("aut", time.Hour))
-	if err := c.Transiciona(0, payload(t, "X", 1, 1, true), false); err != nil {
+	c, clk := openWithClock(t, t.TempDir(), defWithRetention("aut", time.Hour))
+	if err := c.Transition(0, payload(t, "X", 1, 1, true), false); err != nil {
 		t.Fatal(err)
 	}
-	cobre(c)
-	if err := c.Transiciona(0, nil, true); err != nil {
+	cover(c)
+	if err := c.Transition(0, nil, true); err != nil {
 		t.Fatal(err)
 	}
-	rel.avanca(2 * time.Hour)
-	if n, err := c.AposentaVazios(rel.agora()); err != nil || n != 0 {
+	clk.advance(2 * time.Hour)
+	if n, err := c.RetireEmptyGroups(clk.now()); err != nil || n != 0 {
 		t.Fatalf("sem checkpoint cobrindo a saída: aposentou %d, %v", n, err)
 	}
-	cobre(c)
-	if n, err := c.AposentaVazios(rel.agora()); err != nil || n != 1 {
+	cover(c)
+	if n, err := c.RetireEmptyGroups(clk.now()); err != nil || n != 1 {
 		t.Fatalf("com a saída coberta: aposentou %d, %v", n, err)
 	}
 }
 
 func TestRetainNeverNuncaAposenta(t *testing.T) {
-	c, rel := abreComRelogio(t, t.TempDir(), defComRetencao("aut", 0))
-	if err := c.Transiciona(0, payload(t, "X", 1, 1, true), false); err != nil {
+	c, clk := openWithClock(t, t.TempDir(), defWithRetention("aut", 0))
+	if err := c.Transition(0, payload(t, "X", 1, 1, true), false); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Transiciona(0, nil, true); err != nil {
+	if err := c.Transition(0, nil, true); err != nil {
 		t.Fatal(err)
 	}
-	cobre(c)
-	rel.avanca(365 * 24 * time.Hour)
-	if n, err := c.AposentaVazios(rel.agora()); err != nil || n != 0 {
+	cover(c)
+	clk.advance(365 * 24 * time.Hour)
+	if n, err := c.RetireEmptyGroups(clk.now()); err != nil || n != 0 {
 		t.Fatalf("never aposentou %d, %v", n, err)
 	}
 }
@@ -149,12 +149,12 @@ func TestRetainNeverNuncaAposenta(t *testing.T) {
 // o grupo viver mais um prazo inteiro — nunca menos.
 func TestReinicioEstendeAVisibilidade(t *testing.T) {
 	dir := t.TempDir()
-	def := defComRetencao("aut", 7*24*time.Hour)
-	c, rel := abreComRelogio(t, dir, def)
-	if err := c.Transiciona(0, payload(t, "X", 1, 1, true), false); err != nil {
+	def := defWithRetention("aut", 7*24*time.Hour)
+	c, clk := openWithClock(t, dir, def)
+	if err := c.Transition(0, payload(t, "X", 1, 1, true), false); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Transiciona(0, nil, true); err != nil {
+	if err := c.Transition(0, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.ApplyOverlay(); err != nil {
@@ -163,39 +163,39 @@ func TestReinicioEstendeAVisibilidade(t *testing.T) {
 	if err := c.Msync(); err != nil {
 		t.Fatal(err)
 	}
-	rel.avanca(6 * 24 * time.Hour)
+	clk.advance(6 * 24 * time.Hour)
 	if err := c.Close(); err != nil {
 		t.Fatal(err)
 	}
-	c2 := abreContador(t, dir, def, false)
-	c2.UsaRelogio(rel.agora)
-	if err := c2.Dobra(); err != nil {
+	c2 := openCounter(t, dir, def, false)
+	c2.UseClock(clk.now)
+	if err := c2.Fold(); err != nil {
 		t.Fatal(err)
 	}
 	// Seis dias já tinham passado, mas a reabertura recomeça a contar.
-	rel.avanca(2 * 24 * time.Hour)
-	if n, err := c2.AposentaVazios(rel.agora()); err != nil || n != 0 {
+	clk.advance(2 * 24 * time.Hour)
+	if n, err := c2.RetireEmptyGroups(clk.now()); err != nil || n != 0 {
 		t.Fatalf("a reabertura tinha de estender a visibilidade: aposentou %d, %v", n, err)
 	}
-	rel.avanca(6 * 24 * time.Hour)
-	if n, err := c2.AposentaVazios(rel.agora()); err != nil || n != 1 {
+	clk.advance(6 * 24 * time.Hour)
+	if n, err := c2.RetireEmptyGroups(clk.now()); err != nil || n != 1 {
 		t.Fatalf("um prazo inteiro depois da reabertura: aposentou %d, %v", n, err)
 	}
 }
 
 func TestAposentadoriaSobreviveAReabertura(t *testing.T) {
 	dir := t.TempDir()
-	def := defComRetencao("aut", time.Hour)
-	c, rel := abreComRelogio(t, dir, def)
-	if err := c.Transiciona(0, payload(t, "X", 1, 1, true), false); err != nil {
+	def := defWithRetention("aut", time.Hour)
+	c, clk := openWithClock(t, dir, def)
+	if err := c.Transition(0, payload(t, "X", 1, 1, true), false); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Transiciona(0, nil, true); err != nil {
+	if err := c.Transition(0, nil, true); err != nil {
 		t.Fatal(err)
 	}
-	cobre(c)
-	rel.avanca(2 * time.Hour)
-	if n, _ := c.AposentaVazios(rel.agora()); n != 1 {
+	cover(c)
+	clk.advance(2 * time.Hour)
+	if n, _ := c.RetireEmptyGroups(clk.now()); n != 1 {
 		t.Fatalf("aposentou %d", n)
 	}
 	if err := c.ApplyOverlay(); err != nil {
@@ -204,55 +204,55 @@ func TestAposentadoriaSobreviveAReabertura(t *testing.T) {
 	if err := c.Close(); err != nil {
 		t.Fatal(err)
 	}
-	c2 := abreContador(t, dir, def, false)
-	if err := c2.Dobra(); err != nil {
+	c2 := openCounter(t, dir, def, false)
+	if err := c2.Fold(); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, _, vivo := c2.Grupo(1); vivo {
+	if _, _, _, _, live := c2.Group(1); live {
 		t.Fatal("a aposentadoria é durável")
 	}
-	if c2.Estatisticas().Aposentados != 1 {
+	if c2.Stats().Retired != 1 {
 		t.Fatal("o aposentado tem de ser contado depois da reabertura")
 	}
 }
 
 // TestAposentadoriaNaoMexeNosAgregados trava o raciocínio que faz a
 // aposentadoria não precisar tocar nos agregados: ela só aposenta com
-// refs == 0, e totais[g] <= refs[g] por construção, então o grupo que sai
+// refs == 0, e totals[g] <= refs[g] por construção, então o grupo que sai
 // contribuía ZERO para os dois.
 //
-// Existe porque o "conserto" intuitivo — descontar refs[g] e totais[g] do
+// Existe porque o "conserto" intuitivo — descontar refs[g] e totals[g] do
 // agregado ao aposentar — é plausível de escrever e derruba o agregado abaixo
 // da soma dos grupos, em silêncio, meses depois da linha ter saído.
 func TestAposentadoriaNaoMexeNosAgregados(t *testing.T) {
-	c, rel := abreComRelogio(t, t.TempDir(), defComRetencao("aut", 7*24*time.Hour))
+	c, clk := openWithClock(t, t.TempDir(), defWithRetention("aut", 7*24*time.Hour))
 	// Um grupo que vai esvaziar, e outro que fica.
 	for r := types.RowID(0); r < 3; r++ {
-		if err := c.Transiciona(r, payload(t, "X", 1, 1, true), false); err != nil {
+		if err := c.Transition(r, payload(t, "X", 1, 1, true), false); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := c.Transiciona(9, payload(t, "Y", 1, 1, true), false); err != nil {
+	if err := c.Transition(9, payload(t, "Y", 1, 1, true), false); err != nil {
 		t.Fatal(err)
 	}
 	for r := types.RowID(0); r < 3; r++ {
-		if err := c.Transiciona(r, nil, true); err != nil {
+		if err := c.Transition(r, nil, true); err != nil {
 			t.Fatal(err)
 		}
 	}
-	cobre(c)
-	antes := c.Estatisticas()
-	if antes.Linhas != 1 || antes.Total != 1 {
-		t.Fatalf("com X vazio e Y com uma linha: linhas %d total %d, quer 1 e 1", antes.Linhas, antes.Total)
+	cover(c)
+	before := c.Stats()
+	if before.Rows != 1 || before.Total != 1 {
+		t.Fatalf("com X vazio e Y com uma linha: linhas %d total %d, quer 1 e 1", before.Rows, before.Total)
 	}
-	rel.avanca(8 * 24 * time.Hour)
-	if n, err := c.AposentaVazios(rel.agora()); err != nil || n != 1 {
+	clk.advance(8 * 24 * time.Hour)
+	if n, err := c.RetireEmptyGroups(clk.now()); err != nil || n != 1 {
 		t.Fatalf("aposentadoria: %d, %v", n, err)
 	}
-	depois := c.Estatisticas()
-	if depois.Linhas != antes.Linhas || depois.Total != antes.Total {
+	after := c.Stats()
+	if after.Rows != before.Rows || after.Total != before.Total {
 		t.Fatalf("a aposentadoria mexeu nos agregados: linhas %d total %d, quer %d e %d",
-			depois.Linhas, depois.Total, antes.Linhas, antes.Total)
+			after.Rows, after.Total, before.Rows, before.Total)
 	}
-	exigeAgregadosCoerentes(t, c)
+	requireCoherentAggregates(t, c)
 }

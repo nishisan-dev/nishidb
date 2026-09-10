@@ -59,12 +59,12 @@ Regras de validação (em `internal/schema/history.go`, novo):
 - `maxBytes >= 4 × segmentSize`. Com menos, a purga nunca consegue ficar abaixo
   do teto sem tocar o segmento corrente, que a D6 proíbe.
 - `expireAfterWrite` reusa `units.DurationWithDays` e o piso de
-  `ResolucaoDaExpiracao` (1 min), como as regras de TTL.
+  `ExpiryResolution` (1 min), como as regras de TTL.
 - `history.fields` só aceita `index:`, e só sobre campo que **existe** no
   schema base. Tipo, `format`, `merge` e `frozenFrom` são recusados ali — o
   histórico espelha, não redefine.
 - O nome derivado não pode colidir com um dataset declarado em
-  `datasets.directory`. Conferido na subida, junto de `ValidaUnicidadeDeGroup`
+  `datasets.directory`. Conferido na subida, junto de `ValidateGroupUniqueness`
   (`internal/config/config.go:669`).
 - Se `rawPayload: true`, o schema base não pode ter campo chamado `_raw`.
 
@@ -98,14 +98,14 @@ tabelas". A regra: **um dicionário, dois `Compiled`.**
   construção, e o payload escrito pelo patch do base decodifica no histórico
   sem tradução.
 - O `Compiled` do histórico é derivado do spec base por
-  `spec.DerivaHistorico()` (novo, em `internal/schema/history.go`) e
+  `spec.DeriveHistory()` (novo, em `internal/schema/history.go`) e
   compilado contra **esse mesmo dicionário**. Ele difere do base em quatro
   pontos, e só neles: `Name`, ausência de `Key`/`Sequence`, ausência das
   colunas congeladas e de `_expiresIn`, e os `index:` de `history.fields`.
 - **Colunas descobertas em runtime são espelhadas.** `ResolveUnknown` e
-  `ResolveAninhado` (`compile.go:1044` e `:815`) ganham um callback
-  `AoDescobrirCampo`, no mesmo molde de `AoDescartarCampo` /
-  `AoValorIncompativel` que `server.abreDataset` já instala. Sem isso, uma
+  `ResolveNested` (`compile.go:1044` e `:815`) ganham um callback
+  `AoDescobrirCampo`, no mesmo molde de `OnFieldDiscarded` /
+  `OnIncompatibleValue` que `server.abreDataset` já instala. Sem isso, uma
   chave promovida a coluna depois da subida seria consultável em `events` e
   invisível em `events_history` até o restart — exatamente a divergência que a
   feature existe para não ter. O mesmo callback propaga `FixAutoType`.
@@ -316,8 +316,8 @@ e não tem coletor.
 Cada fase fecha com a suíte verde. TDD: o teste que trava o contrato vem antes.
 
 **Fase A — schema e configuração**
-`internal/schema/history.go` (novo): `HistoricoSpec`, `validaHistorico` com
-`bloco()`, `DerivaHistorico()`. Campo `Historico *HistoricoSpec` em
+`internal/schema/history.go` (novo): `HistorySpec`, `validateHistory` com
+`bloco()`, `DeriveHistory()`. Campo `History *HistorySpec` em
 `DatasetSpec` e `yaml.Node` por valor em `rawSpec` (`spec.go:199-214`). Recusa
 de colisão de nome na subida. Testes no molde de `ttl_rule_test.go` e
 `frozen_test.go`.
@@ -325,7 +325,7 @@ de colisão de nome na subida. Testes no molde de `ttl_rule_test.go` e
 **Fase B — dicionário compartilhado e espelho de descoberta**
 `storage.Options.DictCompartilhado`; `Open` deixa de criar `fields.dict` no
 modo histórico. Callback `AoDescobrirCampo` em `Compiled`, disparado por
-`ResolveUnknown`/`ResolveAninhado`/`FixAutoType`, instalado em
+`ResolveUnknown`/`ResolveNested`/`FixAutoType`, instalado em
 `server.abreDataset`. Teste de paridade: descobrir campo em runtime e consultar
 a coluna nas **duas** tabelas sem restart.
 

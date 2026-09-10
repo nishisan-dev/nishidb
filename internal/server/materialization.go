@@ -23,7 +23,7 @@ func materializacaoStats(spec *schema.DatasetSpec, snap materializer.MetricsSnap
 		SummedSaturated: snap.Saturadas,
 		TTLUnmatched:    snap.SemRegra,
 	}
-	regras := spec.Materialization.RegrasTTL
+	regras := spec.Materialization.TTLRules
 	if len(regras) == 0 {
 		return out
 	}
@@ -46,11 +46,11 @@ func materializacaoStats(spec *schema.DatasetSpec, snap materializer.MetricsSnap
 // duracaoDaRegra rende a duração como o operador a escreveu: `never` sai como
 // o literal, e não como "0s" — zero e imortal não são a mesma coisa, e um
 // painel mostrando 0s diria o oposto do que a regra faz.
-func duracaoDaRegra(r schema.RegraTTL) string {
-	if r.Duracao == 0 {
-		return schema.DuracaoNunca
+func duracaoDaRegra(r schema.TTLRule) string {
+	if r.Duration == 0 {
+		return schema.DurationNever
 	}
-	return r.Duracao.String()
+	return r.Duration.String()
 }
 
 // amostrasDeMaterializacao publica as mesmas contagens como séries.
@@ -98,7 +98,7 @@ func amostrasDeMaterializacao(dataset string, spec *schema.DatasetSpec, snap mat
 			Labels: rotulo, Value: float64(snap.SemRegra),
 		},
 	}
-	for i := range spec.Materialization.RegrasTTL {
+	for i := range spec.Materialization.TTLRules {
 		var casou int64
 		if i < len(snap.RegrasCasadas) {
 			casou = snap.RegrasCasadas[i]

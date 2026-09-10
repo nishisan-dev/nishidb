@@ -151,7 +151,7 @@ recarregável por construção; restart custa ~0,28 s) — SIGHUP-reload vira d�
 | exposto | **ausente** | — | **recusa** pedindo decisão explícita (defesa contra typo engolido) |
 | exposto | `enabled: false` explícito | — | sobe com o aviso atual |
 
-Reusar `cfg.BindExposto()` ([config.go:297](internal/config/config.go:297)). Oráculo
+Reusar `cfg.BindExposed()` ([config.go:297](internal/config/config.go:297)). Oráculo
 central: `TestAuthSemTLSComBindExpostoRecusaASubida`.
 
 ### B3 — Middleware e papéis

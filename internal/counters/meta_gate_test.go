@@ -21,8 +21,8 @@ func TestTabelaMetaCountersNaoAlocaPorLinha(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snap := fonte.AbreSnapshot()
-	defer fonte.FechaSnapshot(snap)
+	snap := fonte.OpenSnapshot()
+	defer fonte.CloseSnapshot(snap)
 	var buf []byte
 	if _, bb, ok, err := fonte.GetByRowID(snap, 1, buf); err != nil || !ok {
 		t.Fatalf("linha 1: %v %v", ok, err)

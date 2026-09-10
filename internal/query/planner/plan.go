@@ -110,15 +110,15 @@ func (*FullScanPlan) isPlan()       {}
 func (*FullScanPlan) String() string { return "FullScan" }
 
 func (p *PointLookupPlan) String() string {
-	return "PointLookup(" + nomeCampo(p.Field) + "=" + formatValue(p.Key) + ")"
+	return "PointLookup(" + fieldName(p.Field) + "=" + formatValue(p.Key) + ")"
 }
 
 func (p *IndexScanPlan) String() string {
-	return "IndexScan(" + nomeCampo(p.Field) + "=" + formatValue(p.Val) + ")"
+	return "IndexScan(" + fieldName(p.Field) + "=" + formatValue(p.Val) + ")"
 }
 
 func (p *IndexIntersectPlan) String() string {
-	return "IndexIntersect(" + termos(p.Terms) + ")"
+	return "IndexIntersect(" + formatTerms(p.Terms) + ")"
 }
 
 // A união NÃO prefixa mais o índice de cada termo. O prefixo dizia qual dos
@@ -126,23 +126,23 @@ func (p *IndexIntersectPlan) String() string {
 // misturar —, e com um motor só ele seria a mesma palavra repetida em toda
 // linha de diagnóstico.
 func (p *IndexUnionPlan) String() string {
-	return "IndexUnion(" + termos(p.Terms) + ")"
+	return "IndexUnion(" + formatTerms(p.Terms) + ")"
 }
 
-func termos(ts []IndexTerm) string {
+func formatTerms(ts []IndexTerm) string {
 	var b strings.Builder
 	for i, t := range ts {
 		if i > 0 {
 			b.WriteString(", ")
 		}
-		b.WriteString(nomeCampo(t.Field))
+		b.WriteString(fieldName(t.Field))
 		b.WriteByte('=')
 		b.WriteString(formatValue(t.Val))
 	}
 	return b.String()
 }
 
-func nomeCampo(f *schema.CompiledField) string {
+func fieldName(f *schema.CompiledField) string {
 	if f == nil {
 		return "?"
 	}

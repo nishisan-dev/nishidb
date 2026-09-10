@@ -336,7 +336,7 @@ os dois construtores errados no JDBC (risco R9), e o Python tem armadilhas equiv
 - `query(sql, *params)` devolve iterador de `Row` — mapping **e** sequence (`linha["nome"]`,
   `linha[0]`, `dict(linha)`), com o casamento posicional por baixo.
 - `datasets()`, `metadata(nome)`, `stats()`, `health()` sobre as três rotas GET, devolvendo
-  dataclasses tipadas que espelham `protocolo.DatasetMeta`, `Estatisticas` e `Health`.
+  dataclasses tipadas que espelham `protocolo.DatasetMeta`, `Stats` e `Health`.
   **`health()` trata 503 como resposta, não como erro** — é o corpo que diz o estado.
 - `describe(dataset)` como açúcar sobre `SELECT … FROM _meta.fields`, que traz o que o
   `/v1/metadata` não tem: `indexed` (o índice **físico**, contra o `index` **declarado**),

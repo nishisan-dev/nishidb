@@ -25,61 +25,61 @@ import (
 // e antecipá-lo aqui faria o teste comparar o planner com uma cópia da mesma
 // lógica que ele deveria vigiar.
 func TestPlanCandidatosSaoSuperset(t *testing.T) {
-	c := compilar(t)
-	store := todosOsIndices(t, c)
+	c := compile(t)
+	store := allIndexes(t, c)
 	p := planner.New(store, nil)
 
 	var (
-		id       = campo(t, c, "id")
-		status   = campo(t, c, "Acct-Status-Type")
-		protocol = campo(t, c, "Framed-Protocol")
-		nasIP    = campo(t, c, "NAS-IP-Address")
-		username = campo(t, c, "User-Name")
+		id       = field(t, c, "id")
+		status   = field(t, c, "Acct-Status-Type")
+		protocol = field(t, c, "Framed-Protocol")
+		nasIP    = field(t, c, "NAS-IP-Address")
+		username = field(t, c, "User-Name")
 	)
 
-	linhas := []struct {
+	rows := []struct {
 		key    string
-		campos []campoValor
-		morta  bool
+		fields []fieldValue
+		dead   bool
 	}{
-		{key: "A", campos: []campoValor{
+		{key: "A", fields: []fieldValue{
 			{status, str("Stop")}, {protocol, str("PPPoE")}, {nasIP, ipv4(t, "10.0.0.1")}, {username, str("ze")}}},
-		{key: "B", campos: []campoValor{
+		{key: "B", fields: []fieldValue{
 			{status, str("Start")}, {protocol, str("PPPoE")}, {nasIP, ipv4(t, "10.0.0.1")}, {username, str("ana")}}},
-		{key: "C", campos: []campoValor{
+		{key: "C", fields: []fieldValue{
 			{status, str("Stop")}, {protocol, str("PPP")}, {nasIP, ipv4(t, "10.0.0.2")}, {username, str("ze")}}},
-		{key: "D", campos: []campoValor{
+		{key: "D", fields: []fieldValue{
 			{status, str("Stop")}, {protocol, str("PPPoE")}, {nasIP, ipv4(t, "10.0.0.2")}, {username, str("bia")}}},
 		// E satisfaz o WHERE de várias queries, mas está MORTA: aparece nos
 		// candidatos (as postings não são limpas) e não no resultado. É o
 		// superset acontecendo na prática.
-		{key: "E", campos: []campoValor{
+		{key: "E", fields: []fieldValue{
 			{status, str("Stop")}, {protocol, str("PPPoE")}, {nasIP, ipv4(t, "10.0.0.1")}, {username, str("ze")}},
-			morta: true},
+			dead: true},
 		// F não tem o campo status: campo AUSENTE compara falso para qualquer
 		// operador, e não há posting para ausência.
-		{key: "F", campos: []campoValor{
+		{key: "F", fields: []fieldValue{
 			{protocol, str("PPPoE")}, {nasIP, ipv4(t, "10.0.0.3")}, {username, str("ze")}}},
 	}
 
 	rowIDs := map[string]types.RowID{}
-	for _, l := range linhas {
-		campos := append([]campoValor{{id, str(l.key)}}, l.campos...)
-		rid, _, err := store.Put([]byte(l.key), 1, 0, montaPayload(t, campos), nil)
+	for _, l := range rows {
+		fields := append([]fieldValue{{id, str(l.key)}}, l.fields...)
+		rid, _, err := store.Put([]byte(l.key), 1, 0, buildPayload(t, fields), nil)
 		if err != nil {
 			t.Fatalf("Put(%s): %v", l.key, err)
 		}
 		rowIDs[l.key] = rid
-		if l.morta {
+		if l.dead {
 			store.SetTombstone(rid)
 		}
 	}
 
-	casos := []struct {
-		nome     string
-		where    binder.BoundExpr
-		plano    string
-		esperado []string // rows VIVAS que satisfazem o WHERE
+	cases := []struct {
+		name       string
+		where      binder.BoundExpr
+		planString string
+		want       []string // rows VIVAS que satisfazem o WHERE
 	}{
 		{"point lookup", eq(id, str("A")), `PointLookup(id="A")`, []string{"A"}},
 		{"index scan", eq(status, str("Stop")), `IndexScan(Acct-Status-Type="Stop")`,
@@ -99,14 +99,14 @@ func TestPlanCandidatosSaoSuperset(t *testing.T) {
 		{"sem where", nil, "FullScan", []string{"A", "B", "C", "D", "F"}},
 	}
 
-	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
-			plan := p.Plan(consulta(tc.where))
-			if got := plan.String(); got != tc.plano {
-				t.Fatalf("plano = %s, want %s", got, tc.plano)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			plan := p.Plan(query(tc.where))
+			if got := plan.String(); got != tc.planString {
+				t.Fatalf("plano = %s, want %s", got, tc.planString)
 			}
-			cands := candidatos(t, store, plan)
-			for _, key := range tc.esperado {
+			cands := candidates(t, store, plan)
+			for _, key := range tc.want {
 				if !cands[rowIDs[key]] {
 					t.Errorf("row %s satisfaz o WHERE e NÃO está nos candidatos de %s: "+
 						"resultado silenciosamente incompleto", key, plan)
@@ -119,46 +119,46 @@ func TestPlanCandidatosSaoSuperset(t *testing.T) {
 	// os candidatos do bitmap. Se um dia ela sumir, o superset virou conjunto
 	// exato em algum lugar — e aí o teste acima deixa de provar o que promete.
 	t.Run("candidato morto aparece", func(t *testing.T) {
-		plan := p.Plan(consulta(eq(status, str("Stop"))))
-		if !candidatos(t, store, plan)[rowIDs["E"]] {
+		plan := p.Plan(query(eq(status, str("Stop"))))
+		if !candidates(t, store, plan)[rowIDs["E"]] {
 			t.Error("a row tombstoned não apareceu nos candidatos do índice")
 		}
 	})
 }
 
-type campoValor struct {
+type fieldValue struct {
 	f *schema.CompiledField
 	v types.Value
 }
 
-// montaPayload ordena por FieldID antes de codificar: payload fora de ordem é
+// buildPayload ordena por FieldID antes de codificar: payload fora de ordem é
 // recusado pelo Put (do fake e do real).
-func montaPayload(t *testing.T, campos []campoValor) []byte {
+func buildPayload(t *testing.T, fields []fieldValue) []byte {
 	t.Helper()
-	ordenado := append([]campoValor(nil), campos...)
-	sort.Slice(ordenado, func(i, j int) bool { return ordenado[i].f.ID < ordenado[j].f.ID })
+	sorted := append([]fieldValue(nil), fields...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].f.ID < sorted[j].f.ID })
 
 	var p []byte
-	for _, cv := range ordenado {
+	for _, fv := range sorted {
 		var err error
-		if p, err = encoding.AppendField(p, cv.f.ID, cv.v); err != nil {
-			t.Fatalf("AppendField(%s): %v", cv.f.Name, err)
+		if p, err = encoding.AppendField(p, fv.f.ID, fv.v); err != nil {
+			t.Fatalf("AppendField(%s): %v", fv.f.Name, err)
 		}
 	}
 	return p
 }
 
-// candidatos materializa a fonte de candidatos de um plano — é o que o
+// candidates materializa a fonte de candidatos de um plano — é o que o
 // executor fará, de forma ingênua (maps) porque aqui é teste.
-func candidatos(t *testing.T, s *fakestorage.Store, plan planner.Plan) map[types.RowID]bool {
+func candidates(t *testing.T, s *fakestorage.Store, plan planner.Plan) map[types.RowID]bool {
 	t.Helper()
 	out := map[types.RowID]bool{}
 	switch pl := plan.(type) {
 	case *planner.FullScanPlan:
-		coleta(t, s.ScanLive(s.AbreSnapshot()), out)
+		collect(t, s.ScanLive(s.OpenSnapshot()), out)
 
 	case *planner.PointLookupPlan:
-		rec, _, ok, err := s.GetByKey(s.AbreSnapshot(), pl.Key.Bytes, nil)
+		rec, _, ok, err := s.GetByKey(s.OpenSnapshot(), pl.Key.Bytes, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -171,18 +171,18 @@ func candidatos(t *testing.T, s *fakestorage.Store, plan planner.Plan) map[types
 		if err != nil {
 			t.Fatal(err)
 		}
-		coleta(t, it, out)
+		collect(t, it, out)
 
 	case *planner.IndexIntersectPlan:
 		for i, term := range pl.Terms {
-			parcial := map[types.RowID]bool{}
-			coleta(t, lookup(t, s, term), parcial)
+			partial := map[types.RowID]bool{}
+			collect(t, lookup(t, s, term), partial)
 			if i == 0 {
-				out = parcial
+				out = partial
 				continue
 			}
 			for id := range out {
-				if !parcial[id] {
+				if !partial[id] {
 					delete(out, id)
 				}
 			}
@@ -190,7 +190,7 @@ func candidatos(t *testing.T, s *fakestorage.Store, plan planner.Plan) map[types
 
 	case *planner.IndexUnionPlan:
 		for _, term := range pl.Terms {
-			coleta(t, lookup(t, s, term), out)
+			collect(t, lookup(t, s, term), out)
 		}
 
 	default:
@@ -210,7 +210,7 @@ func lookup(t *testing.T, s *fakestorage.Store, term planner.IndexTerm) types.Ro
 	return it
 }
 
-func coleta(t *testing.T, it types.RowIDIterator, dst map[types.RowID]bool) {
+func collect(t *testing.T, it types.RowIDIterator, dst map[types.RowID]bool) {
 	t.Helper()
 	defer it.Close()
 	for it.Next() {

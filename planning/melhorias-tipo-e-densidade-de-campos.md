@@ -168,7 +168,7 @@ Eu a cortei na fase de planejamento (decisão D7 do plano), por dois motivos.
 
 1. *"Seria varredura"* — só se calculada sob demanda percorrendo o dataset. Um
    contador incremental no materializer não é varredura, e já existem dois
-   assim (`camposDescartados`, `valoresIncompativeis`), ambos passando no gate
+   assim (`discardedFieldCount`, `incompatibleValueCount`), ambos passando no gate
    de zero alocação por evento.
 2. *"Contador que nasce zerado"* — num dataset **existente**, um campo presente
    em 100% das linhas reportaria 0%. O argumento caiu quando `extract` e a
@@ -195,7 +195,7 @@ razão, não.
    ganha dois `atomic.Uint64`. O struct já tem `autoType atomic.Uint32` e o
    godoc já exige uso por ponteiro, então não há regra nova. ~1.700 campos × 16
    bytes é irrelevante.
-2. **`ContaValorIncompativel`** já recebe o `*CompiledField` — incrementa o
+2. **`CountIncompatibleValue`** já recebe o `*CompiledField` — incrementa o
    segundo contador ali, sem mudança de assinatura.
 3. **`occurrences`** incrementa em toda materialização bem-sucedida de coluna
    derivada, em `extraiDerivadas`/`descobreAninhados`
@@ -254,7 +254,7 @@ na documentação da tabela** — senão alguém lê 0 e conclui "estável".
 1. **Há rota de perda ainda NÃO contada?** Se houver, os 2.085.138 são piso e
    não total. Os candidatos a auditar em
    [extract.go](internal/materializer/extract.go) são os `continue` que não
-   passam por `ContaValorIncompativel`: pai não-objeto, caminho ausente, null
+   passam por `CountIncompatibleValue`: pai não-objeto, caminho ausente, null
    JSON, falha do jsonp em nível interno, `FixAutoType` falhando, nome tomado.
    Alguns são legítimos (caminho ausente não é perda), outros talvez não.
    **Isto precisa ser resolvido antes de tratar o número como total.**

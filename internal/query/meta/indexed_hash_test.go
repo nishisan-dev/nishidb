@@ -46,7 +46,7 @@ schema:
 // entram no mesmo conjunto indexado. As asserções abaixo são as MESMAS, valor
 // por valor, incluindo o vocabulário de wire da coluna `index`.
 func TestIndexedRefleteACapacidadeDoMotor(t *testing.T) {
-	spec, err := schema.Parse([]byte(alvoComIndiceYAML), schema.DefaultsPadrao)
+	spec, err := schema.Parse([]byte(alvoComIndiceYAML), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestIndexedRefleteACapacidadeDoMotor(t *testing.T) {
 		return f.ID
 	}
 	st := fakestorage.New(fakestorage.Indexes{
-		Campos: []types.FieldID{id("status"), id("node")},
+		Fields: []types.FieldID{id("status"), id("node")},
 	})
 
 	visto := map[string][2]string{}

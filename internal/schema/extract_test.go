@@ -29,7 +29,7 @@ schema:
           type: string
 `
 
-func compilaExtract(t *testing.T, yml string) *Compiled {
+func compileExtract(t *testing.T, yml string) *Compiled {
 	t.Helper()
 	s := parseOK(t, yml)
 	c, err := s.Compile(newFakeDict())
@@ -43,7 +43,7 @@ func compilaExtract(t *testing.T, yml string) *Compiled {
 // declarado e comparável. É isso que a torna consultável — coluna json não é
 // comparável, e o binder recusa.
 func TestExtractViraColunaDeVerdade(t *testing.T) {
-	c := compilaExtract(t, extractYAML)
+	c := compileExtract(t, extractYAML)
 	f, ok := c.FieldByName([]byte("probe_ip"))
 	if !ok {
 		t.Fatal("probe_ip não foi compilado")
@@ -65,7 +65,7 @@ func TestExtractViraColunaDeVerdade(t *testing.T) {
 // `as` omitido vale o próprio path, que é o caso comum e não merece
 // cerimônia. Só o path com ponto exige o nome explícito — ver a recusa abaixo.
 func TestAsOmitidoValeOPath(t *testing.T) {
-	c := compilaExtract(t, extractYAML)
+	c := compileExtract(t, extractYAML)
 	if _, ok := c.FieldByName([]byte("frontAlarmId")); !ok {
 		t.Fatal("frontAlarmId não foi compilado com o nome do path")
 	}
@@ -74,7 +74,7 @@ func TestAsOmitidoValeOPath(t *testing.T) {
 // O documento json ORIGINAL continua inteiro na coluna dele. Extrair não é
 // mover: nada se perde, e a aplicação que já lia o documento continua lendo.
 func TestOPaiContinuaSendoColuna(t *testing.T) {
-	c := compilaExtract(t, extractYAML)
+	c := compileExtract(t, extractYAML)
 	f, ok := c.FieldByName([]byte("doc"))
 	if !ok {
 		t.Fatal("o campo json pai sumiu")
@@ -91,7 +91,7 @@ func TestOPaiContinuaSendoColuna(t *testing.T) {
 // do piloto nasceria com centenas de colunas por linha, e o custo de fio
 // passaria a ser proporcional ao dicionário em vez de ao que foi pedido.
 func TestDerivadaNaoEntraNoSelectEstrela(t *testing.T) {
-	c := compilaExtract(t, extractYAML)
+	c := compileExtract(t, extractYAML)
 	for _, f := range c.FieldsByID() {
 		if f.Parent != nil {
 			t.Errorf("coluna derivada %q apareceu no SELECT *", f.Name)
@@ -106,21 +106,21 @@ func TestDerivadaNaoEntraNoSelectEstrela(t *testing.T) {
 // O metadata é SUPERSET do SELECT *: esconder a derivada ali faria o DBeaver
 // não mostrá-la, e ninguém descobriria que ela existe.
 func TestDerivadaApareceNoMetadata(t *testing.T) {
-	c := compilaExtract(t, extractYAML)
-	var achou bool
-	for _, f := range c.FieldsParaMetadata() {
+	c := compileExtract(t, extractYAML)
+	var found bool
+	for _, f := range c.FieldsForMetadata() {
 		if f.Name == "probe_ip" {
-			achou = true
+			found = true
 		}
 	}
-	if !achou {
+	if !found {
 		t.Error("probe_ip não apareceu no conjunto de metadata")
 	}
 }
 
 // FieldsByParent é o que o `SELECT doc.*` vai expandir.
 func TestFieldsByParentDevolveAsDerivadas(t *testing.T) {
-	c := compilaExtract(t, extractYAML)
+	c := compileExtract(t, extractYAML)
 	got := c.FieldsByParent("doc")
 	if len(got) != 2 {
 		t.Fatalf("FieldsByParent(doc) = %d colunas, quer 2", len(got))
@@ -134,10 +134,10 @@ func TestFieldsByParentDevolveAsDerivadas(t *testing.T) {
 }
 
 func TestExtractRecusas(t *testing.T) {
-	casos := []struct {
-		nome string
+	cases := []struct {
+		name string
 		yml  string
-		quer string
+		want string
 	}{
 		{
 			"extract sobre campo que nao e json",
@@ -192,9 +192,9 @@ func TestExtractRecusas(t *testing.T) {
 			"exclude",
 		},
 	}
-	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
-			parseErr(t, tc.yml, tc.quer)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			parseErr(t, tc.yml, tc.want)
 		})
 	}
 }
@@ -222,8 +222,8 @@ func TestDerivadaComTipoDivergenteDoFixadoERecusada(t *testing.T) {
 	}
 	s := parseOK(t, extractYAML)
 	_, err = s.Compile(d)
-	if !errors.Is(err, ErrColunaDerivada) {
-		t.Fatalf("Compile = %v, quer ErrColunaDerivada", err)
+	if !errors.Is(err, ErrDerivedColumn) {
+		t.Fatalf("Compile = %v, quer ErrDerivedColumn", err)
 	}
 	if !strings.Contains(err.Error(), "int64") {
 		t.Errorf("erro = %q, quer nomear o tipo que o dataset já fixou", err)
@@ -260,7 +260,7 @@ func TestDerivadaSobreviveAoReopenSemVirarCampoDeTopo(t *testing.T) {
 	}
 }
 
-// CamposComIndice é o ÚNICO lugar que decide quais campos o Store abre com
+// IndexedFieldNames é o ÚNICO lugar que decide quais campos o Store abre com
 // índice. Existia como um laço copiado em quatro sítios — servidor, duas rotas
 // do CLI e o benchmark —, e nenhum deles conhecia a coluna derivada: o
 // servidor criaria o dataset com o índice, e o `nishidb query` seguinte
@@ -283,25 +283,25 @@ func TestCamposComBitmapIncluiADerivada(t *testing.T) {
 		"    id:\n      type: string\n    status:\n      type: string\n      index: true", 1)
 	s := parseOK(t, yml)
 
-	got := CamposComIndice(s)
-	quer := []string{"probe_ip", "status"} // ordenado
-	if len(got) != len(quer) {
-		t.Fatalf("CamposComIndice = %v, quer %v", got, quer)
+	got := IndexedFieldNames(s)
+	want := []string{"probe_ip", "status"} // ordenado
+	if len(got) != len(want) {
+		t.Fatalf("IndexedFieldNames = %v, quer %v", got, want)
 	}
-	for i := range quer {
-		if got[i] != quer[i] {
-			t.Fatalf("CamposComIndice = %v, quer %v (ordem é contrato: ela decide o FieldID de um dataset novo)", got, quer)
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("IndexedFieldNames = %v, quer %v (ordem é contrato: ela decide o FieldID de um dataset novo)", got, want)
 		}
 	}
 }
 
 func TestCamposComBitmapVazioSemIndice(t *testing.T) {
-	if got := CamposComIndice(parseOK(t, extractYAML)); len(got) != 0 {
-		t.Errorf("CamposComIndice = %v, quer vazio", got)
+	if got := IndexedFieldNames(parseOK(t, extractYAML)); len(got) != 0 {
+		t.Errorf("IndexedFieldNames = %v, quer vazio", got)
 	}
 }
 
-const descobreYAML = `version: 1
+const discoverYAML = `version: 1
 name: eventos
 materialization:
   key:
@@ -326,45 +326,45 @@ schema:
 // campos de topo. É deliberadamente a mesma palavra: o operador já sabe o que
 // ela significa um nível acima.
 func TestUnknownFieldsNoCampoLigaADescoberta(t *testing.T) {
-	c := compilaExtract(t, descobreYAML)
+	c := compileExtract(t, discoverYAML)
 	doc, ok := c.FieldByName([]byte("doc"))
 	if !ok {
 		t.Fatal("doc não compilou")
 	}
-	if !doc.DescobreAninhados {
-		t.Error("doc.DescobreAninhados = false; a chave no campo não ligou a descoberta")
+	if !doc.DiscoverNested {
+		t.Error("doc.DiscoverNested = false; a chave no campo não ligou a descoberta")
 	}
 }
 
 // Sem a chave, o campo json continua opaco — o comportamento de antes.
 func TestSemAChaveOCampoJsonContinuaOpaco(t *testing.T) {
-	c := compilaExtract(t, extractYAML)
+	c := compileExtract(t, extractYAML)
 	doc, _ := c.FieldByName([]byte("doc"))
-	if doc.DescobreAninhados {
+	if doc.DiscoverNested {
 		t.Error("descoberta ligada sem a chave ter sido declarada")
 	}
 }
 
 func TestRecusasDaDescoberta(t *testing.T) {
-	casos := []struct{ nome, yml, quer string }{
+	cases := []struct{ name, yml, want string }{
 		{
 			"em campo que nao e json",
-			strings.Replace(descobreYAML, "    doc:\n      type: json", "    doc:\n      type: string", 1),
+			strings.Replace(discoverYAML, "    doc:\n      type: json", "    doc:\n      type: string", 1),
 			"json",
 		},
 		{
 			"valor invalido",
-			strings.Replace(descobreYAML, "      unknownFields: include", "      unknownFields: talvez", 1),
+			strings.Replace(discoverYAML, "      unknownFields: include", "      unknownFields: talvez", 1),
 			"unknownFields",
 		},
 		{
 			"reject nao faz sentido dentro do documento",
-			strings.Replace(descobreYAML, "      unknownFields: include", "      unknownFields: reject", 1),
+			strings.Replace(discoverYAML, "      unknownFields: include", "      unknownFields: reject", 1),
 			"reject",
 		},
 	}
-	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) { parseErr(t, tc.yml, tc.quer) })
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { parseErr(t, tc.yml, tc.want) })
 	}
 }
 
@@ -380,17 +380,17 @@ func TestRecusasDaDescoberta(t *testing.T) {
 // ligada. Não é preciso estado durável novo — o nome já é o registro.
 func TestColunaDescobertaVoltaComoDerivadaNoReopen(t *testing.T) {
 	d := newFakeDict()
-	if _, err := parseOK(t, descobreYAML).Compile(d); err != nil {
+	if _, err := parseOK(t, discoverYAML).Compile(d); err != nil {
 		t.Fatal(err)
 	}
 	// Simula o que a ingestão faria: registra colunas descobertas.
-	for _, nome := range []string{"doc.tlCause", "doc.alarme"} {
-		if _, err := d.LookupOrCreate([]byte(nome)); err != nil {
+	for _, name := range []string{"doc.tlCause", "doc.alarme"} {
+		if _, err := d.LookupOrCreate([]byte(name)); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	c, err := parseOK(t, descobreYAML).Compile(d)
+	c, err := parseOK(t, discoverYAML).Compile(d)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -443,29 +443,29 @@ func TestNomeComPontoSemPaiQueDescobreContinuaDeTopo(t *testing.T) {
 // passa a ser o estado normal, e uma linha por evento afogaria o log num
 // dataset que ingere a 500 ev/s.
 func TestDescarteAvisaUmaVezPorDataset(t *testing.T) {
-	s := parseOK(t, tetoYAML(2, "ignore"))
+	s := parseOK(t, ceilingYAML(2, "ignore"))
 	c, err := s.Compile(newFakeDict())
 	if err != nil {
 		t.Fatal(err)
 	}
-	var avisos []string
-	c.AoDescartarCampo(func(campo string) { avisos = append(avisos, campo) })
+	var warnings []string
+	c.OnFieldDiscarded(func(field string) { warnings = append(warnings, field) })
 
 	if _, err := c.ResolveUnknown([]byte("cabe")); err != nil {
 		t.Fatal(err)
 	}
-	for _, nome := range []string{"primeiroExcedente", "segundo", "terceiro"} {
-		if _, err := c.ResolveUnknown([]byte(nome)); err != nil {
+	for _, name := range []string{"primeiroExcedente", "segundo", "terceiro"} {
+		if _, err := c.ResolveUnknown([]byte(name)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if len(avisos) != 1 {
-		t.Fatalf("avisos = %v, quer exatamente um", avisos)
+	if len(warnings) != 1 {
+		t.Fatalf("avisos = %v, quer exatamente um", warnings)
 	}
-	if avisos[0] != "primeiroExcedente" {
-		t.Errorf("aviso = %q, quer o PRIMEIRO campo que não coube", avisos[0])
+	if warnings[0] != "primeiroExcedente" {
+		t.Errorf("aviso = %q, quer o PRIMEIRO campo que não coube", warnings[0])
 	}
-	if c.CamposDescartados() != 3 {
-		t.Errorf("contador = %d, quer 3 — o log é uma vez, a contagem é toda", c.CamposDescartados())
+	if c.DiscardedFieldCount() != 3 {
+		t.Errorf("contador = %d, quer 3 — o log é uma vez, a contagem é toda", c.DiscardedFieldCount())
 	}
 }

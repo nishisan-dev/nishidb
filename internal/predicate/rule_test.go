@@ -33,7 +33,7 @@ schema:
 
 func compila(t *testing.T, yaml string) *schema.Compiled {
 	t.Helper()
-	spec, err := schema.Parse([]byte(yaml), schema.DefaultsPadrao)
+	spec, err := schema.Parse([]byte(yaml), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func compila(t *testing.T, yaml string) *schema.Compiled {
 
 func TestCompilaRegrasProduzProgramaEFundo(t *testing.T) {
 	c := compila(t, dsYAML)
-	regras, err := predicate.CompilaRegras(c.RegrasTTL, c)
+	regras, err := predicate.CompilaRegras(c.TTLRules, c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,10 +78,10 @@ func TestCompilaRegrasProduzProgramaEFundo(t *testing.T) {
 // A duração não pode depender de si mesma, nem do instante que ela própria
 // ajuda a interpretar.
 func TestCompilaRegrasRecusaWhenSobreCampoDeSistema(t *testing.T) {
-	for _, campo := range []string{schema.CampoInstanteDeEscrita, schema.CampoDePrazo} {
+	for _, campo := range []string{schema.WriteInstantFieldName, schema.TTLFieldName} {
 		yaml := strings.Replace(dsYAML, `"tipo = 2"`, `"`+campo+` = 2"`, 1)
 		c := compila(t, yaml)
-		_, err := predicate.CompilaRegras(c.RegrasTTL, c)
+		_, err := predicate.CompilaRegras(c.TTLRules, c)
 		if err == nil {
 			t.Fatalf("condição sobre %q foi aceita", campo)
 		}
@@ -93,21 +93,21 @@ func TestCompilaRegrasRecusaWhenSobreCampoDeSistema(t *testing.T) {
 
 func TestCompilaRegrasRecusaWhenQueNaoCompila(t *testing.T) {
 	c := compila(t, strings.Replace(dsYAML, `"tipo = 2"`, `"tipo ==== 2"`, 1))
-	if _, err := predicate.CompilaRegras(c.RegrasTTL, c); err == nil {
+	if _, err := predicate.CompilaRegras(c.TTLRules, c); err == nil {
 		t.Fatal("condição com sintaxe inválida foi aceita")
 	}
 }
 
 func TestCompilaRegrasRecusaWhenSobreColunaInexistente(t *testing.T) {
 	c := compila(t, strings.Replace(dsYAML, `"tipo = 2"`, `"naoExiste = 2"`, 1))
-	if _, err := predicate.CompilaRegras(c.RegrasTTL, c); err == nil {
+	if _, err := predicate.CompilaRegras(c.TTLRules, c); err == nil {
 		t.Fatal("condição sobre coluna inexistente foi aceita")
 	}
 }
 
 func TestCompilaRegrasRecusaWhenComParametro(t *testing.T) {
 	c := compila(t, strings.Replace(dsYAML, `"tipo = 2"`, `"tipo = ?"`, 1))
-	_, err := predicate.CompilaRegras(c.RegrasTTL, c)
+	_, err := predicate.CompilaRegras(c.TTLRules, c)
 	if err == nil {
 		t.Fatal("parâmetro posicional foi aceito numa regra")
 	}

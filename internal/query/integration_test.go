@@ -147,7 +147,7 @@ func (ig *integracao) abre() {
 	if err != nil {
 		ig.t.Fatal(err)
 	}
-	spec, err := schema.Load(fixtureYAML, schema.DefaultsPadrao)
+	spec, err := schema.Load(fixtureYAML, schema.BuiltinDefaults)
 	if err != nil {
 		ig.t.Fatal(err)
 	}

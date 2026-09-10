@@ -34,7 +34,7 @@ type tiposHarness struct {
 
 func novoTiposHarness(t *testing.T) *tiposHarness {
 	t.Helper()
-	spec, err := schema.Load(tiposYAML, schema.DefaultsPadrao)
+	spec, err := schema.Load(tiposYAML, schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func novoTiposHarness(t *testing.T) *tiposHarness {
 	texto, _ := sch.FieldByName([]byte("texto"))
 	v4, _ := sch.FieldByName([]byte("v4"))
 	st := fakestorage.New(fakestorage.Indexes{
-		Campos: []types.FieldID{texto.ID, v4.ID},
+		Fields: []types.FieldID{texto.ID, v4.ID},
 	})
 	eng := query.NewEngine()
 	if err := eng.Register("todos_os_tipos", sch, st); err != nil {

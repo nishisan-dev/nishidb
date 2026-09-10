@@ -39,7 +39,7 @@ func (e *Error) Error() string {
 
 func (e *Error) Unwrap() error { return ErrBind }
 
-// ErroEm é o construtor de erro de análise semântica com posição no SQL para
+// ErrorAt é o construtor de erro de análise semântica com posição no SQL para
 // quem produz esse erro FORA deste pacote — hoje, o roteamento das tabelas
 // virtuais (internal/query/engine.go), que recusa `_meta.nada` ANTES de o
 // binder rodar e por isso não tem como devolver um erro do binder.
@@ -49,7 +49,7 @@ func (e *Error) Unwrap() error { return ErrBind }
 // digitou o nome de uma tabela que não existe — que é o defeito da issue #35.
 // Recusa de roteamento é da mesma família de "coluna desconhecida", que na
 // MESMA tabela virtual já sai como BIND.
-func ErroEm(pos int, format string, args ...any) error {
+func ErrorAt(pos int, format string, args ...any) error {
 	return errAt(pos, format, args...)
 }
 

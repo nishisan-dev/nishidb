@@ -49,7 +49,7 @@ schema:
 
 func compileYAML(t *testing.T, yml string) *schema.Compiled {
 	t.Helper()
-	s, err := schema.Parse([]byte(yml), schema.DefaultsPadrao)
+	s, err := schema.Parse([]byte(yml), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -289,7 +289,7 @@ Nenhum contrato muda, nenhuma concorrência é tocada.
 1. `descobreAninhados(p)` ([extract.go:221](internal/materializer/extract.go:221)) — **uma**
    varredura completa, com parser próprio (`b.descobridor`), que para cada chave chama
    `declarado(p.campo, f.Key)` e **pula** as declaradas;
-2. o laço `for _, d := range p.campo.Derivadas` ([extract.go:65-66](internal/materializer/extract.go:65)) —
+2. o laço `for _, d := range p.campo.DerivedColumns` ([extract.go:65-66](internal/materializer/extract.go:65)) —
    **mais 25** varreduras completas, uma por path, todas até o fim do documento.
 
 São **26 varreduras** do mesmo documento por evento. E `declarado`
@@ -303,11 +303,11 @@ chave e já pergunta se ela é declarada. Em vez de pular a declarada, **resolv�
 mesmo**:
 
 - para cada chave do documento, um lookup no índice `path → *CompiledField`, pré-construído
-  no `Compile` ao lado de `pai.Derivadas` ([compile.go:143](internal/schema/compile.go:143),
+  no `Compile` ao lado de `pai.DerivedColumns` ([compile.go:143](internal/schema/compile.go:143),
   populado em [compile.go:846](internal/schema/compile.go:846)) — não por evento, e
   substituindo a busca linear de `declarado`;
 - chave declarada → `Convert` + entry, como hoje;
-- chave não declarada e `DescobreAninhados` ligado → caminho atual de descoberta;
+- chave não declarada e `DiscoverNested` ligado → caminho atual de descoberta;
 - *last-wins* dentro do documento sai de graça: a passada é sequencial e a última
   ocorrência sobrescreve, que é exatamente o que o laço de
   [extract.go:184-190](internal/materializer/extract.go:184) faz hoje à mão.
@@ -330,7 +330,7 @@ mesmo**:
 - Ordem de resolução muda (ordem de aparição no documento, não de FieldID). A ordem final
   é preservada pelo `SortStableFunc` + `dedupLastWins`
   ([patch.go:250-259](internal/materializer/patch.go:250)), mas precisa de teste explícito.
-- `d.ContaOcorrencia()` ([extract.go:71](internal/materializer/extract.go:71)) conta quando
+- `d.CountOccurrence()` ([extract.go:71](internal/materializer/extract.go:71)) conta quando
   a chave **aparece**, antes da conversão — semântica a preservar, com teste.
 - `BenchmarkParseComDescoberta` e `BenchmarkPatchParseRadiusEvent`
   (`internal/materializer/patch_bench_test.go`) com baseline em `benchmark/baselines/`,

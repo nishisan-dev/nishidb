@@ -60,12 +60,12 @@ func (s *stub) GetByKey(_ types.Snapshot, key, buf []byte) (types.Record, []byte
 	if !ok {
 		return types.Record{}, buf, false, nil
 	}
-	return s.GetByRowID(s.AbreSnapshot(), id, buf)
+	return s.GetByRowID(s.OpenSnapshot(), id, buf)
 }
 
-func (s *stub) AbreSnapshot() types.Snapshot { return types.Snapshot{} }
+func (s *stub) OpenSnapshot() types.Snapshot { return types.Snapshot{} }
 
-func (s *stub) FechaSnapshot(types.Snapshot) {}
+func (s *stub) CloseSnapshot(types.Snapshot) {}
 
 func (s *stub) ScanLive(types.Snapshot) types.RowIDIterator {
 	s.scans++
@@ -76,7 +76,7 @@ func (s *stub) Lookup(types.FieldID, types.Value) (types.RowIDIterator, error) {
 	return nil, fmt.Errorf("%w: stub sem índice", types.ErrInvalidArgument)
 }
 
-func (s *stub) Indexado(types.FieldID) bool { return false }
+func (s *stub) Indexed(types.FieldID) bool { return false }
 
 type stubIter struct {
 	s      *stub
@@ -195,7 +195,7 @@ func novoStubHarnessB(b *testing.B, rows int) *stubHarness {
 
 func montaStubHarness(tb testing.TB, rows, maxRows int, timeout string) *stubHarness {
 	tb.Helper()
-	spec, err := schema.Parse([]byte(fmt.Sprintf(stubYAML, maxRows, timeout)), schema.DefaultsPadrao)
+	spec, err := schema.Parse([]byte(fmt.Sprintf(stubYAML, maxRows, timeout)), schema.BuiltinDefaults)
 	if err != nil {
 		tb.Fatal(err)
 	}

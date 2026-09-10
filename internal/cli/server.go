@@ -45,7 +45,7 @@ func runServer(args []string, amb Ambiente) int {
 	}
 	log := logging.New(amb.Stderr, formato, nivel)
 
-	cfg, err := nishiconfig.CarregaConfig(*argConfig)
+	cfg, err := nishiconfig.Load(*argConfig)
 	if err != nil {
 		fmt.Fprintf(amb.Stderr, "server: %v\n", err)
 		return ExitUso

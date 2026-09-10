@@ -49,10 +49,10 @@ func (s *Servidor) handleMetadata(w http.ResponseWriter, r *http.Request) {
 }
 
 func metaDoDataset(d *dataset) protocol.DatasetMeta {
-	// FieldsParaMetadata, e não FieldsByID: a coluna derivada fica fora do
+	// FieldsForMetadata, e não FieldsByID: a coluna derivada fica fora do
 	// SELECT * e este é o lugar onde ela é descoberta. Esconder aqui também
 	// deixaria o operador sem forma nenhuma de saber que ela existe.
-	campos := d.sch.FieldsParaMetadata()
+	campos := d.sch.FieldsForMetadata()
 	m := protocol.DatasetMeta{
 		Name: d.nome,
 		// MaxRows e Timeout saem do COMPILADO, que é onde o default global já
@@ -95,7 +95,7 @@ func colunaMeta(f *schema.CompiledField) protocol.ColumnMeta {
 		Precision:   d.Precision,
 		Scale:       d.Scale,
 		DisplaySize: d.DisplaySize,
-		Index:       f.NomeDoIndice(),
+		Index:       f.IndexName(),
 		Auto:        f.IsAuto,
 	}
 	if f.Alias != "" {
@@ -108,21 +108,21 @@ func colunaMeta(f *schema.CompiledField) protocol.ColumnMeta {
 // contadorStats traduz o retrato dos contadores para o wire. Lista vazia, e
 // não nil, no dataset sem contador: o JSON sai como `[]`, e bloco presente é o
 // que separa "sem contadores" de "servidor antigo".
-func contadorStats(ests []counter.Estatisticas) []protocol.CounterStats {
+func contadorStats(ests []counter.Stats) []protocol.CounterStats {
 	out := make([]protocol.CounterStats, 0, len(ests))
 	for _, e := range ests {
 		out = append(out, protocol.CounterStats{
-			Name:                 e.Nome,
-			Rows:                 e.Linhas,
+			Name:                 e.Name,
+			Rows:                 e.Rows,
 			Total:                e.Total,
-			Groups:               e.Grupos,
-			MaxGroups:            e.Teto,
-			Retired:              e.Aposentados,
-			Refused:              e.Recusados,
-			OrphanEntries:        e.Orfas,
+			Groups:               e.Groups,
+			MaxGroups:            e.Ceiling,
+			Retired:              e.Retired,
+			Refused:              e.Refused,
+			OrphanEntries:        e.Orphans,
 			Bytes:                e.Bytes,
-			AuditDivergentGroups: e.AuditoriaDivergentes,
-			AuditLastSuccessUnix: e.AuditoriaUltimaUnix,
+			AuditDivergentGroups: e.AuditDivergences,
+			AuditLastSuccessUnix: e.AuditLastUnix,
 		})
 	}
 	return out
@@ -177,9 +177,9 @@ func (s *Servidor) handleStats(w http.ResponseWriter, r *http.Request) {
 			// de qualquer condicional de consumidor: o dicionário cresce por
 			// toda rota de escrita, não só pela do Kafka.
 			Schema: protocol.SchemaStats{
-				Fields:             d.sch.CamposConhecidos(),
-				FieldsDropped:      d.sch.CamposDescartados(),
-				NestedTypeMismatch: d.sch.ValoresIncompativeis(),
+				Fields:             d.sch.KnownFieldCount(),
+				FieldsDropped:      d.sch.DiscardedFieldCount(),
+				NestedTypeMismatch: d.sch.IncompatibleValueCount(),
 				MaxCols:            d.sch.MaxCols,
 				OnMaxCols:          d.sch.OnMaxCols,
 			},

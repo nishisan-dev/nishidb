@@ -19,7 +19,7 @@
 - **Mensagens de commit:** voz do time, imperativo, PT-BR. Sem referência a agente, IA ou ferramenta.
 - **Sem fallback para legado:** onde a spec diz que uma forma antiga sai, ela sai. Não manter as duas.
 - **Idioma do código:** identificadores e comentários em PT-BR, seguindo o que já está em cada arquivo. Comentários explicam o PORQUÊ, não o quê — é o padrão da base inteira.
-- **Duração mínima declarável:** 1 minuto (`schema.ResolucaoDaExpiracao`). O literal `never` é a única exceção e significa imortal.
+- **Duração mínima declarável:** 1 minuto (`schema.ExpiryResolution`). O literal `never` é a única exceção e significa imortal.
 - **Sentinela do índice de prazos:** `ImmortalTTL = 1`. Zero significa DESCONHECIDO, nunca imortal.
 
 ---
@@ -49,9 +49,9 @@
 | `internal/query/executor/collect.go` | Esvaziado; `slot`/`coleta` viram alias do pacote novo |
 | `internal/query/executor/predicate.go` | Esvaziado; `programa`/`compila` viram alias do pacote novo |
 | `internal/query/parser/parser.go` | `ParseCondition` |
-| `internal/query/binder/binder.go` | `BindCondicao` + `BoundCondicao` |
-| `internal/schema/spec.go` | `FieldSpec.FrozenFrom`; `TTLSpec` vira `[]RegraTTLSpec`; `_expiresIn` em `nomesDeSistema` |
-| `internal/schema/compile.go` | `CompiledField.FrozenFrom`; `Compiled.Congeladas`, `Compiled.RegrasTTL`, `Compiled.Prazo`; remoção de `IsTTL` |
+| `internal/query/binder/binder.go` | `BindCondition` + `BoundCondition` |
+| `internal/schema/spec.go` | `FieldSpec.FrozenFrom`; `TTLSpec` vira `[]TTLRuleSpec`; `_expiresIn` em `systemNames` |
+| `internal/schema/compile.go` | `CompiledField.FrozenFrom`; `Compiled.FrozenColumns`, `Compiled.TTLRules`, `Compiled.TTLField`; remoção de `IsTTL` |
 | `internal/materializer/patch.go` | `patchEntry.congelada`; chamadas das duas passadas novas |
 | `internal/materializer/merge.go` | Ramo congelado |
 | `internal/materializer/materializer.go` | Passa `prevPayload` para a avaliação de prazo |
@@ -199,7 +199,7 @@ git commit -m "Extrai o avaliador de predicado para um pacote próprio"
 - Modify: `internal/schema/spec.go` (`FieldSpec`, laço de validação em `spec.go:761`)
 
 **Interfaces:**
-- Produces: `FieldSpec.FrozenFrom string` (yaml `frozenFrom`); `schema.OrigemRelogio = "@writeTime"`; `func validaCongeladas(fields map[string]FieldSpec, keyField, modo string) error`
+- Produces: `FieldSpec.FrozenFrom string` (yaml `frozenFrom`); `schema.FrozenFromClock = "@writeTime"`; `func validateFrozen(fields map[string]FieldSpec, keyField, modo string) error`
 
 - [ ] **Passo 1: escrever os testes de recusa**
 
@@ -244,7 +244,7 @@ Em `internal/schema/spec.go`, no struct `FieldSpec` (junto de `Format`):
 
 ```go
 	// FrozenFrom nomeia a ORIGEM de uma coluna congelada: outra coluna
-	// declarada, ou OrigemRelogio. A coluna recebe o primeiro valor que a
+	// declarada, ou FrozenFromClock. A coluna recebe o primeiro valor que a
 	// origem tiver e nunca mais muda.
 	//
 	// A tag é explícita como todas as outras: sem ela o yaml.v3 procuraria
@@ -259,15 +259,15 @@ Em `internal/schema/spec.go`, no struct `FieldSpec` (junto de `Format`):
 // internal/schema/frozen.go
 package schema
 
-// OrigemRelogio é a origem especial que entrega o instante da escrita em vez
+// FrozenFromClock é a origem especial que entrega o instante da escrita em vez
 // do valor de outra coluna. É o que faz um `createdAt` sair da mesma máquina
 // que o `originalSeverity`, sem caso especial em lugar nenhum.
-const OrigemRelogio = "@writeTime"
+const FrozenFromClock = "@writeTime"
 
-// validaCongeladas confere as regras de frozenFrom que dependem de OUTROS
+// validateFrozen confere as regras de frozenFrom que dependem de OUTROS
 // campos, e por isso não cabem no laço por campo: cadeia, autorreferência e
 // origem inexistente só são decidíveis com o mapa inteiro na mão.
-func validaCongeladas(fields map[string]FieldSpec, keyField, modo string) error {
+func validateFrozen(fields map[string]FieldSpec, keyField, modo string) error {
 	for nome, f := range fields {
 		if f.FrozenFrom == "" {
 			continue
@@ -288,7 +288,7 @@ func validaCongeladas(fields map[string]FieldSpec, keyField, modo string) error 
 			return specErrf("campo %q: format não se aplica a frozenFrom — "+
 				"o formato é do parsing da origem", nome)
 		}
-		if f.FrozenFrom == OrigemRelogio {
+		if f.FrozenFrom == FrozenFromClock {
 			continue
 		}
 		if f.FrozenFrom == nome {
@@ -322,7 +322,7 @@ No laço de validação de campos (`internal/schema/spec.go:761`), o `isValidTyp
 		}
 ```
 
-E chame `validaCongeladas` depois do laço, onde `raw.Materialization.Key.Field` e `Mode` já estão resolvidos.
+E chame `validateFrozen` depois do laço, onde `raw.Materialization.Key.Field` e `Mode` já estão resolvidos.
 
 - [ ] **Passo 5: rodar os testes**
 
@@ -349,15 +349,15 @@ git commit -m "Valida frozenFrom na carga da spec"
 - Test: `internal/schema/frozen_test.go`
 
 **Interfaces:**
-- Consumes: `FieldSpec.FrozenFrom`, `OrigemRelogio` (Task 2)
+- Consumes: `FieldSpec.FrozenFrom`, `FrozenFromClock` (Task 2)
 - Produces:
   ```go
   // CompiledField
   FrozenFrom *CompiledField // origem do valor congelado; nil se não é congelada
-  DoRelogio  bool           // congelada cuja origem é o relógio do writer
+  FromClock  bool           // congelada cuja origem é o relógio do writer
 
   // Compiled
-  Congeladas []*CompiledField // congeladas em ordem de FieldID
+  FrozenColumns []*CompiledField // congeladas em ordem de FieldID
   ```
 
 - [ ] **Passo 1: escrever o teste**
@@ -378,7 +378,7 @@ func TestCompilaCongeladaHerdaOTipoDaOrigem(t *testing.T) {
 	if f.IsSystem {
 		t.Error("congelada virou campo de sistema; ela é dado do usuário e tem de sair no SELECT *")
 	}
-	if len(c.Congeladas) != 1 || c.Congeladas[0] != f {
+	if len(c.FrozenColumns) != 1 || c.FrozenColumns[0] != f {
 		t.Error("a lista pré-computada não tem a congelada")
 	}
 }
@@ -398,14 +398,14 @@ Em `CompiledField` (junto de `Parent`/`Path`):
 
 ```go
 	// FrozenFrom é a coluna de onde o valor congelado vem; nil quando esta
-	// não é congelada. DoRelogio marca a congelada cuja origem é o relógio do
+	// não é congelada. FromClock marca a congelada cuja origem é o relógio do
 	// writer, que não tem CompiledField para apontar.
 	//
 	// A congelada é uma coluna NORMAL em tudo o que importa ao binder, ao
 	// planner e ao encoder — tem FieldID, tipo e índice, aparece no SELECT *
 	// e no /v1/metadata. O par governa uma coisa só: quem escreve o valor.
 	FrozenFrom *CompiledField
-	DoRelogio  bool
+	FromClock  bool
 ```
 
 No laço de compilação, **depois** de todos os campos terem `CompiledField` (a origem pode aparecer depois da congelada na ordem alfabética), uma segunda passada religa e herda:
@@ -422,8 +422,8 @@ No laço de compilação, **depois** de todos os campos terem `CompiledField` (a
 		if !ok {
 			continue // excluída do dataset
 		}
-		if spec.FrozenFrom == OrigemRelogio {
-			cf.Type, cf.DoRelogio = types.TypeTimestamp, true
+		if spec.FrozenFrom == FrozenFromClock {
+			cf.Type, cf.FromClock = types.TypeTimestamp, true
 		} else {
 			origem, ok := c.byName[spec.FrozenFrom]
 			if !ok {
@@ -432,12 +432,12 @@ No laço de compilação, **depois** de todos os campos terem `CompiledField` (a
 			cf.FrozenFrom = origem
 			cf.Type, cf.IsAuto = origem.Type, origem.IsAuto
 		}
-		c.Congeladas = append(c.Congeladas, cf)
+		c.FrozenColumns = append(c.FrozenColumns, cf)
 	}
-	sort.Slice(c.Congeladas, func(i, j int) bool { return c.Congeladas[i].ID < c.Congeladas[j].ID })
+	sort.Slice(c.FrozenColumns, func(i, j int) bool { return c.FrozenColumns[i].ID < c.FrozenColumns[j].ID })
 ```
 
-`Congeladas` é pré-computada e ordenada pela mesma razão que `Derivadas`: o materializer a consulta por evento e não pode varrer o mapa no caminho quente.
+`FrozenColumns` é pré-computada e ordenada pela mesma razão que `DerivedColumns`: o materializer a consulta por evento e não pode varrer o mapa no caminho quente.
 
 - [ ] **Passo 4: rodar**
 
@@ -461,7 +461,7 @@ git commit -m "Compila a coluna congelada herdando o tipo da origem"
 - Modify: `internal/materializer/patch.go` (struct em `:25`, guarda em `:101`, chamada em `:208`)
 
 **Interfaces:**
-- Consumes: `Compiled.Congeladas`, `CompiledField.FrozenFrom`, `CompiledField.DoRelogio` (Task 3)
+- Consumes: `Compiled.FrozenColumns`, `CompiledField.FrozenFrom`, `CompiledField.FromClock` (Task 3)
 - Produces: `patchEntry.congelada bool`; `func (b *PatchBuffer) capturaCongeladas(c *schema.Compiled, agora time.Time)`
 
 - [ ] **Passo 1: escrever os testes**
@@ -537,8 +537,8 @@ import (
 // muitas e cujo bench acuse deve guardar o índice da entry durante o parsing,
 // não trocar isto por um mapa alocado por evento.
 func (b *PatchBuffer) capturaCongeladas(c *schema.Compiled, agora time.Time) {
-	for _, cf := range c.Congeladas {
-		if cf.DoRelogio {
+	for _, cf := range c.FrozenColumns {
+		if cf.FromClock {
 			b.entries = append(b.entries, patchEntry{
 				field:     cf,
 				val:       types.Value{Type: types.TypeTimestamp, I64: agora.UnixMilli()},
@@ -564,7 +564,7 @@ O `val` aponta para a mesma janela do arena que a entry de origem. É seguro e n
 
 - [ ] **Passo 5: chamar a captura e estender a guarda**
 
-Em `patch.go`, logo depois do bloco `extraiDerivadas()` e **antes** do bloco `if c.Escrita != nil` (linha 208):
+Em `patch.go`, logo depois do bloco `extraiDerivadas()` e **antes** do bloco `if c.WriteInstantField != nil` (linha 208):
 
 ```go
 	// As congeladas entram depois das derivadas e antes da ordenação: podem
@@ -576,7 +576,7 @@ Em `patch.go`, logo depois do bloco `extraiDerivadas()` e **antes** do bloco `if
 E a guarda de `patch.go:101` passa a cobrir as duas famílias:
 
 ```go
-		if found && (cf.IsSystem || cf.FrozenFrom != nil || cf.DoRelogio) {
+		if found && (cf.IsSystem || cf.FrozenFrom != nil || cf.FromClock) {
 			// O evento não pode escrever nem o relógio do writer nem uma
 			// coluna congelada. No primeiro caso o produtor controlaria quando
 			// a entidade expira; no segundo, decidiria qual é o valor
@@ -753,11 +753,11 @@ git commit -m "Prova a coluna congelada de ponta a ponta e documenta a chave"
   func ParseCondition(sql string) (Expr, error)
 
   // binder
-  type BoundCondicao struct {
+  type BoundCondition struct {
       Expr  BoundExpr
       Slots Slots
   }
-  func BindCondicao(e parser.Expr, sc *schema.Compiled) (*BoundCondicao, error)
+  func BindCondition(e parser.Expr, sc *schema.Compiled) (*BoundCondition, error)
   ```
 
 - [ ] **Passo 1: escrever os testes**
@@ -773,7 +773,7 @@ func TestParseCondicaoRecusaTextoDepoisDaExpressao(t *testing.T) {
 }
 func TestBindCondicaoRecusaParametro(t *testing.T) {
 	e, _ := parser.ParseCondition("type = ?")
-	_, err := binder.BindCondicao(e, sc)
+	_, err := binder.BindCondition(e, sc)
 	// erro: não há quem forneça parâmetro
 }
 func TestBindCondicaoRecusaColunaInexistente(t *testing.T) { /* propaga o erro do binder */ }
@@ -813,26 +813,26 @@ func ParseCondition(sql string) (Expr, error) {
 
 Se o parser não tiver `errAtCur`, use o mesmo construtor de erro posicional que `parseSelect` já usa para token inesperado.
 
-- [ ] **Passo 4: `BindCondicao`**
+- [ ] **Passo 4: `BindCondition`**
 
 ```go
-// BoundCondicao é uma condição resolvida contra o schema, com seus próprios
+// BoundCondition é uma condição resolvida contra o schema, com seus próprios
 // slots. É o que o TTL condicional consome.
-type BoundCondicao struct {
+type BoundCondition struct {
 	Expr  BoundExpr
 	Slots Slots
 
 	arena []byte // bytes dos literais; as janelas em Val.Bytes apontam para cá
 }
 
-// BindCondicao resolve uma condição solta contra o schema, pelo MESMO caminho
+// BindCondition resolve uma condição solta contra o schema, pelo MESMO caminho
 // do WHERE: mesma coerção, mesma tabela de comparabilidade, mesmo tratamento
 // de coluna auto. É essa identidade que garante que `type = 2` numa regra e
 // `type = 2` numa consulta signifiquem a mesma coisa.
 //
 // Parâmetro posicional é recusado: a condição vem do YAML e não há quem o
 // forneça.
-func BindCondicao(e parser.Expr, sc *schema.Compiled) (*BoundCondicao, error) {
+func BindCondition(e parser.Expr, sc *schema.Compiled) (*BoundCondition, error) {
 	if e == nil || sc == nil {
 		return nil, errNoPos("bind de condição sem expressão ou schema")
 	}
@@ -844,8 +844,8 @@ func BindCondicao(e parser.Expr, sc *schema.Compiled) (*BoundCondicao, error) {
 	if b.nParams > 0 {
 		return nil, errNoPos("condição não aceita parâmetro posicional")
 	}
-	bc := &BoundCondicao{Expr: expr, Slots: b.slots()}
-	b.preencheSlotsDaExpr(bc.Expr, bc.Slots)
+	bc := &BoundCondition{Expr: expr, Slots: b.slots()}
+	b.fillExprSlots(bc.Expr, bc.Slots)
 	for _, j := range b.pendente {
 		j.cmp.Val.Bytes = b.arena[j.start:j.end:j.end]
 	}
@@ -854,10 +854,10 @@ func BindCondicao(e parser.Expr, sc *schema.Compiled) (*BoundCondicao, error) {
 }
 ```
 
-`preencheSlotsDaExpr` é o percurso com pilha explícita que hoje vive dentro de `preencheSlots` (`binder.go:794`). **Extraia-o** para que os dois chamadores usem o mesmo código:
+`fillExprSlots` é o percurso com pilha explícita que hoje vive dentro de `preencheSlots` (`binder.go:794`). **Extraia-o** para que os dois chamadores usem o mesmo código:
 
 ```go
-func (b *binder) preencheSlotsDaExpr(e BoundExpr, s Slots) {
+func (b *binder) fillExprSlots(e BoundExpr, s Slots) {
 	if e == nil {
 		return
 	}
@@ -868,7 +868,7 @@ func (b *binder) preencheSlotsDaExpr(e BoundExpr, s Slots) {
 
 e `preencheSlots` passa a chamá-lo depois de resolver `Columns` e `OrderBy`.
 
-Atenção: `b.stmt` fica nil em `BindCondicao`. Confira que `b.expr` e `b.folha` não o tocam — se tocarem (para posição de erro), passe um `stmt` vazio não-nil em vez de nil.
+Atenção: `b.stmt` fica nil em `BindCondition`. Confira que `b.expr` e `b.folha` não o tocam — se tocarem (para posição de erro), passe um `stmt` vazio não-nil em vez de nil.
 
 - [ ] **Passo 5: rodar**
 
@@ -889,24 +889,24 @@ git commit -m "Compila uma condição solta pela mesma gramática do WHERE"
 
 **Files:**
 - Create: `internal/schema/ttl_rule.go`, `internal/schema/ttl_rule_test.go`
-- Modify: `internal/schema/spec.go` (`TTLSpec` → `[]RegraTTLSpec`, `nomesDeSistema`), `internal/schema/expiry_test.go` (adaptar ao formato novo)
+- Modify: `internal/schema/spec.go` (`TTLSpec` → `[]TTLRuleSpec`, `systemNames`), `internal/schema/expiry_test.go` (adaptar ao formato novo)
 
 **Interfaces:**
 - Produces:
   ```go
-  type RegraTTLSpec struct {
+  type TTLRuleSpec struct {
       When             string `yaml:"when"`
       ExpireAfterWrite string `yaml:"expireAfterWrite"`
   }
-  type RegraTTL struct {
+  type TTLRule struct {
       When     string        // "" na regra de fundo
       Duracao  time.Duration // 0 == never
   }
   const CampoDePrazo = "_expiresIn"
-  const DuracaoNunca = "never"
+  const DurationNever = "never"
 
   // DatasetSpec ganha a forma validada, lida pelos montadores de Options
-  RegrasTTL      []RegraTTL
+  TTLRules      []TTLRule
   DuracaoDeFundo time.Duration // da regra sem `when`; 0 se não há
   ```
 
@@ -942,16 +942,16 @@ Expected: FAIL — `TTLSpec` ainda é objeto.
 
 - [ ] **Passo 3: trocar a forma no spec**
 
-Em `internal/schema/spec.go`, `MaterializationSpec.TTL` passa a `[]RegraTTLSpec`, e `TTLSpec` sai junto com `SequenceSpec.Type`-style resíduos:
+Em `internal/schema/spec.go`, `MaterializationSpec.TTL` passa a `[]TTLRuleSpec`, e `TTLSpec` sai junto com `SequenceSpec.Type`-style resíduos:
 
 ```go
-// RegraTTLSpec é uma regra de expiração como escrita no YAML.
+// TTLRuleSpec é uma regra de expiração como escrita no YAML.
 //
 // A lista substituiu o objeto único, e a forma `{field, type}` — deadline
 // absoluto vindo do payload — foi REMOVIDA: ela era parseada e validada sem
 // nenhum consumidor, e manter configuração que não faz nada ao lado de um
 // mecanismo que funciona é o defeito que este projeto já trata como tal.
-type RegraTTLSpec struct {
+type TTLRuleSpec struct {
 	// When é a condição, com a mesma gramática do WHERE. Vazio marca a regra
 	// de FUNDO: no máximo uma, obrigatoriamente a última.
 	When string `yaml:"when"`
@@ -959,22 +959,22 @@ type RegraTTLSpec struct {
 	ExpireAfterWrite string `yaml:"expireAfterWrite"`
 }
 
-// DuracaoNunca é o literal que declara imortalidade. `0` numérico é recusado:
+// DurationNever é o literal que declara imortalidade. `0` numérico é recusado:
 // `never` diz a intenção, `0` parece um esquecimento.
-const DuracaoNunca = "never"
+const DurationNever = "never"
 
 // CampoDePrazo carrega a DURAÇÃO de ociosidade que vale para a entidade, em
 // millis. Duração, e não prazo absoluto, para que se componha com o
-// CampoInstanteDeEscrita e para que reordenar as regras no YAML não mude o
+// WriteInstantFieldName e para que reordenar as regras no YAML não mude o
 // significado do que já está gravado.
 const CampoDePrazo = "_expiresIn"
 ```
 
-E `nomesDeSistema` ganha a entrada:
+E `systemNames` ganha a entrada:
 
 ```go
-var nomesDeSistema = map[string]string{
-	CampoInstanteDeEscrita: "é injetado pelo writer a cada escrita",
+var systemNames = map[string]string{
+	WriteInstantFieldName: "é injetado pelo writer a cada escrita",
 	CampoDePrazo:           "é calculado pelo writer a partir das regras de ttl",
 }
 ```
@@ -985,22 +985,22 @@ var nomesDeSistema = map[string]string{
 // internal/schema/ttl_rule.go
 package schema
 
-// RegraTTL é uma regra validada. Duracao zero significa IMORTAL — a regra
+// TTLRule é uma regra validada. Duracao zero significa IMORTAL — a regra
 // casou e decidiu que a entidade não expira —, e é distinto de "nenhuma regra
 // casou", que o chamador representa não achando regra nenhuma.
-type RegraTTL struct {
+type TTLRule struct {
 	When    string
 	Duracao time.Duration
 }
 
-func validaRegrasTTL(regras []RegraTTLSpec) ([]RegraTTL, error) {
+func validateTTLRules(regras []TTLRuleSpec) ([]TTLRule, error) {
 	if regras == nil {
 		return nil, nil
 	}
 	if len(regras) == 0 {
 		return nil, specErrf("materialization.ttl: lista vazia — remova a chave ou declare uma regra")
 	}
-	out := make([]RegraTTL, 0, len(regras))
+	out := make([]TTLRule, 0, len(regras))
 	for i, r := range regras {
 		if r.When == "" && i != len(regras)-1 {
 			// A regra de fundo casa com tudo. Colocá-la antes de uma
@@ -1012,19 +1012,19 @@ func validaRegrasTTL(regras []RegraTTLSpec) ([]RegraTTL, error) {
 			return nil, specErrf("materialization.ttl[%d]: expireAfterWrite é obrigatório", i)
 		}
 		var d time.Duration
-		if r.ExpireAfterWrite != DuracaoNunca {
+		if r.ExpireAfterWrite != DurationNever {
 			var err error
 			if d, err = units.Duration(r.ExpireAfterWrite, 0); err != nil {
 				return nil, specErrf("materialization.ttl[%d]: expireAfterWrite: %v", i, err)
 			}
-			if d < ResolucaoDaExpiracao {
+			if d < ExpiryResolution {
 				return nil, specErrf(
 					"materialization.ttl[%d]: expireAfterWrite %s é menor que a resolução do coletor (%s) — "+
 						"use %q para declarar que a entidade não expira",
-					i, r.ExpireAfterWrite, ResolucaoDaExpiracao, DuracaoNunca)
+					i, r.ExpireAfterWrite, ExpiryResolution, DurationNever)
 			}
 		}
-		out = append(out, RegraTTL{When: r.When, Duracao: d})
+		out = append(out, TTLRule{When: r.When, Duracao: d})
 	}
 	return out, nil
 }
@@ -1060,12 +1060,12 @@ git commit -m "Troca o bloco ttl por uma lista de regras condicionais"
 - Test: `internal/schema/ttl_rule_test.go`
 
 **Interfaces:**
-- Consumes: `RegraTTL` (Task 8), `binder.BindCondicao` (Task 7), `predicado.Compila` (Task 1)
+- Consumes: `TTLRule` (Task 8), `binder.BindCondition` (Task 7), `predicado.Compila` (Task 1)
 - Produces:
   ```go
   // schema.Compiled — guarda a forma VALIDADA, com o `when` ainda em texto
-  RegrasTTL []RegraTTL
-  Prazo     *CompiledField // o _expiresIn; nil sem regras
+  TTLRules []TTLRule
+  TTLField     *CompiledField // o _expiresIn; nil sem regras
 
   // internal/predicate — a forma COMPILADA
   type RegraCompilada struct {
@@ -1073,7 +1073,7 @@ git commit -m "Troca o bloco ttl por uma lista de regras condicionais"
       Slots   binder.Slots
       Duracao time.Duration
   }
-  func CompilaRegras(regras []schema.RegraTTL, sc *schema.Compiled) ([]RegraCompilada, error)
+  func CompilaRegras(regras []schema.TTLRule, sc *schema.Compiled) ([]RegraCompilada, error)
   ```
 
 **Por que a regra compilada NÃO mora em `schema`:** compilar exige o `binder`, e o
@@ -1086,10 +1086,10 @@ problema.
 
 ```go
 func TestCompilaRegistraOCampoDePrazoQuandoHaRegras(t *testing.T) {
-	// c.Prazo != nil, c.Prazo.IsSystem, c.Prazo.Type == types.TypeInt64
+	// c.TTLField != nil, c.TTLField.IsSystem, c.TTLField.Type == types.TypeInt64
 }
-func TestSemRegrasNaoRegistraOCampoDePrazo(t *testing.T)   { /* c.Prazo == nil */ }
-func TestCampoDePrazoFicaForaDoSelectStar(t *testing.T)    { /* camposOrdenados sem sistema */ }
+func TestSemRegrasNaoRegistraOCampoDePrazo(t *testing.T)   { /* c.TTLField == nil */ }
+func TestCampoDePrazoFicaForaDoSelectStar(t *testing.T)    { /* sortedFields sem sistema */ }
 func TestCompilaRegrasRecusaWhenSobreCampoDeSistema(t *testing.T) { /* em predicado */ }
 ```
 
@@ -1107,8 +1107,8 @@ Em `compile.go:453`, ao lado do `_writtenAt`:
 	// LookupOrCreate queima ids na ordem em que é chamado, e essa ordem decide
 	// o mapeamento nome→id de um dataset NOVO, gravado para sempre. _writtenAt
 	// primeiro, _expiresIn depois, sempre — nunca reordene.
-	if len(c.RegrasTTL) > 0 {
-		names = append(names, CampoInstanteDeEscrita, CampoDePrazo)
+	if len(c.TTLRules) > 0 {
+		names = append(names, WriteInstantFieldName, CampoDePrazo)
 	}
 ```
 
@@ -1122,7 +1122,7 @@ E no laço, ao lado do ramo do `_writtenAt` (`compile.go:503`):
 			// timestamp faria `SELECT _expiresIn` renderizar 3 minutos como
 			// 1970-01-01T00:03:00Z — uma data que não é uma data.
 			cf.Type, cf.IsSystem = types.TypeInt64, true
-			c.Prazo = cf
+			c.TTLField = cf
 			c.byName[cf.Name] = cf
 			c.byID[cf.ID] = cf
 			continue
@@ -1141,7 +1141,7 @@ Tire `IsTTL` de `CompiledField` (`compile.go:115`), a atribuição em `:501`, o 
 // Mora AQUI, e não em schema, porque compilar exige o binder — e o binder
 // importa schema. Este pacote é o único lugar da árvore que pode importar os
 // dois sem fechar ciclo.
-func CompilaRegras(regras []schema.RegraTTL, sc *schema.Compiled) ([]RegraCompilada, error) {
+func CompilaRegras(regras []schema.TTLRule, sc *schema.Compiled) ([]RegraCompilada, error) {
 	out := make([]RegraCompilada, 0, len(regras))
 	for i, r := range regras {
 		if r.When == "" {
@@ -1152,7 +1152,7 @@ func CompilaRegras(regras []schema.RegraTTL, sc *schema.Compiled) ([]RegraCompil
 		if err != nil {
 			return nil, fmt.Errorf("ttl[%d]: condição %q: %w", i, r.When, err)
 		}
-		bc, err := binder.BindCondicao(e, sc)
+		bc, err := binder.BindCondition(e, sc)
 		if err != nil {
 			return nil, fmt.Errorf("ttl[%d]: condição %q: %w", i, r.When, err)
 		}
@@ -1314,7 +1314,7 @@ Em `patch.go`, o bloco do `_writtenAt` ganha um irmão. Como a duração depende
 
 ```go
 	// materializer.go, depois de m.patch.Parse e antes do merge
-	if m.schema.Prazo != nil {
+	if m.schema.TTLField != nil {
 		d, err := m.duracaoDe(prevPayload, m.patch.entries)
 		if err != nil {
 			return err
@@ -1325,7 +1325,7 @@ Em `patch.go`, o bloco do `_writtenAt` ganha um irmão. Como a duração depende
 		// sobreviver ao evento que a quebra — e a entidade morreria logo
 		// depois de o alarme reabrir. São 8 bytes por versão de record para
 		// tornar impossível a única falha que arruinaria a feature.
-		m.patch.emitePrazo(m.schema.Prazo, d)
+		m.patch.emitePrazo(m.schema.TTLField, d)
 	}
 ```
 
@@ -1495,7 +1495,7 @@ git commit -m "Acrescenta o índice de prazos com sentinela para o imortal"
 - Modify: `internal/storage/store.go` (Options `:115`, abertura `:721`, dicionário `:749`, applyRecord `:1467`, `prazoVencido` `:1528`), `internal/storage/store_checkpoint.go:102`, `internal/storage/expiry.go:256`
 
 **Interfaces:**
-- Consumes: `rowindex.TTLs`, `rowindex.ImmortalTTL` (Task 11); `schema.CampoDePrazo` (Task 8)
+- Consumes: `rowindex.TTLs`, `rowindex.ImmortalTTL` (Task 11); `schema.TTLFieldName` (Task 8)
 - Produces (Options):
   ```go
   TTLAtivo       bool          // há ao menos uma regra; substitui ExpireAfterWrite
@@ -1674,10 +1674,10 @@ O `case !conhecido` da carência continua olhando `s.escritas.Get(id)`, que é s
 `internal/cli/cli.go:243`, `internal/cli/offsets.go:93`, `internal/server/server.go:332`:
 
 ```go
-		TTLAtivo:       len(spec.RegrasTTL) > 0,
+		TTLAtivo:       len(spec.TTLRules) > 0,
 		DuracaoDeFundo: spec.DuracaoDeFundo,
-		CampoDeEscrita: schema.CampoInstanteDeEscrita,
-		CampoDePrazo:   schema.CampoDePrazo,
+		CampoDeEscrita: schema.WriteInstantFieldName,
+		CampoDePrazo:   schema.TTLFieldName,
 ```
 
 - [ ] **Passo 10: rodar tudo**
@@ -1882,7 +1882,7 @@ Dentro da Fase C a ordem é estrita: 7 → 8 → 9 → 10 → 11 → 12 → 13 �
 | Risco | Sinal | O que fazer |
 |---|---|---|
 | A extração da Fase A muda comportamento | Um teste do executor precisa de asserção nova | **Pare.** A extração é para ser invisível. Investigue o que mudou |
-| `binder.BindCondicao` estoura com `b.stmt` nil | Panic em `b.folha` ou `b.expr` | Passe um `&parser.SelectStmt{}` vazio em vez de nil |
+| `binder.BindCondition` estoura com `b.stmt` nil | Panic em `b.folha` ou `b.expr` | Passe um `&parser.SelectStmt{}` vazio em vez de nil |
 | Alocação por evento sobe na Task 10 | Bench de ingestão com `allocs/op` maior | `m.slots` ou `m.fr` não estão sendo reusados entre eventos |
 | O pré-filtro da Task 13 trava a passada | Teste do coletor não termina | O `continue` pulou o incremento do cursor |
 | A ordem do `LookupOrCreate` muda ids de dataset existente | Teste de reabertura falha | Dataset existente não é afetado (dict é append-only). Se falhou, o nome novo está sendo registrado ANTES do `_writtenAt` |

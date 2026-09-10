@@ -60,7 +60,7 @@ declarado num dataset com `RowCount > 0`. A guarda está certa; o backfill a
    [store.go:691-698](internal/storage/store.go:691) e o `switch` de recovery só
    começa em `:699`; quem semeia o contador é
    [store_recovery.go:23](internal/storage/store_recovery.go:23). Um estado de
-   backfill criado ali com `Limite=0` se declararia **completo sem um único
+   backfill criado ali com `Limit=0` se declararia **completo sem um único
    bit** — `HasBitmap` true, plano indexado, e `WHERE x='y'` devolvendo zero
    linhas num dataset cheio. O estado nasce **depois** do switch e antes do
    `s.Checkpoint()` de [store.go:752](internal/storage/store.go:752).
@@ -179,7 +179,7 @@ Ordem interna:
    a escolheu).
 2. Guarda `c.dict.Len() >= c.MaxCols` em `ResolveUnknown`, **antes** de
    [compile.go:490](internal/schema/compile.go:490), devolvendo
-   `schema.ErrTetoDeCampos`.
+   `schema.ErrFieldCeiling`.
 3. Ramo `continue` em [patch.go:91-93](internal/materializer/patch.go:91) para
    `ignore`.
 4. `CategoryFieldsExhausted` declarada **depois** de `CategoryWriterFailed` —
@@ -253,9 +253,9 @@ fields:
   alias, outro `as`, ou **nome já no dicionário como campo de topo
   autodescoberto** (senão a derivada adota o histórico de outra coluna).
   `extract` só sobre `type: json`.
-- **`SELECT *` não expande:** segundo predicado em `camposOrdenados`
+- **`SELECT *` não expande:** segundo predicado em `sortedFields`
   ([compile.go:436-438](internal/schema/compile.go:436) já filtra `IsSystem`),
-  mais `FieldsParaMetadata()` — o gate de paridade de
+  mais `FieldsForMetadata()` — o gate de paridade de
   `documents_test.go:464-476` é unidirecional, então metadata como superset é
   legal, e a coluna derivada aparece no DBeaver mesmo fora do `*`.
 - **Materialização:** segunda passada em [patch.go](internal/materializer/patch.go)

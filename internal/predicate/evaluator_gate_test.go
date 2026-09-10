@@ -26,7 +26,7 @@ func TestAvaliadorDePayloadNaoAloca(t *testing.T) {
 		"slot":          {Type: types.TypeInt64, I64: 3},
 	})
 	if n := testing.AllocsPerRun(1000, func() {
-		if ok, err := av.Avalia(payload); err != nil || !ok {
+		if ok, err := av.Evaluate(payload); err != nil || !ok {
 			t.Fatalf("avaliação: %v, %v", ok, err)
 		}
 	}); n != 0 {

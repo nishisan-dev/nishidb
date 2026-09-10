@@ -13,15 +13,15 @@ partition "Escrita (applyRecord, sob wmu)" {
   :7b agenda de vencimentos;
   :7c contadores;
   if (lápide?) then (sim)
-    :nova = SemGrupo;
+    :nova = WithoutGroup;
   else (não)
-    :Deriva(payload):
+    :Derive(payload):
     chave composta (valuekey) + where;
     if (grupo novo?) then (sim)
       :Interna no dicionário
       (fsync ANTES de devolver o id);
     endif
-    :nova = id | bitCondicao;
+    :nova = id | conditionBit;
   endif
   :antiga = overlay[rowId] ou mmap[rowId];
   if (antiga == nova) then (sim)
@@ -44,7 +44,7 @@ partition "Checkpoint" {
   :ApplyOverlay dos contadores
   (o mmap nunca fica à frente do log);
   :msync ... msync dos contadores;
-  :CobreMexidas(transições)
+  :RecordCoveredTouches(transições)
   (autoriza a aposentadoria);
   :manifest com a seção 0x0001
   (nome, colunas, where);
@@ -79,12 +79,12 @@ partition "Abertura" {
 partition "Auditoria (rota ADMIN)" {
   start
   :sob wmu por microssegundos:
-  AbreSnapshot + Congela(totais, refs);
+  OpenSnapshot + AuditSnapshot(totais, refs);
   :solta o wmu;
   :enumerador próprio:
   linha com location e sem lápide
   na versão T0 (journal), rederiva
-  com um Derivador próprio;
+  com um Deriver próprio;
   if (snapshot expirou?) then (sim)
     :SNAPSHOT_TOO_OLD
     (inconclusiva);

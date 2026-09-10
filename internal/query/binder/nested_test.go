@@ -10,11 +10,11 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/testutil/fakestorage"
 )
 
-// compilaYAML monta um Compiled a partir de um YAML próprio — os helpers do
+// compileYAML monta um Compiled a partir de um YAML próprio — os helpers do
 // pacote usam a spec compartilhada, que não declara extract.
-func compilaYAML(t *testing.T, yml string) *schema.Compiled {
+func compileYAML(t *testing.T, yml string) *schema.Compiled {
 	t.Helper()
-	spec, err := schema.Parse([]byte(yml), schema.DefaultsPadrao)
+	spec, err := schema.Parse([]byte(yml), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,16 +25,16 @@ func compilaYAML(t *testing.T, yml string) *schema.Compiled {
 	return c
 }
 
-func bindComYAML(t *testing.T, yml, sql string) (*binder.BoundQuery, error) {
+func bindWithYAML(t *testing.T, yml, sql string) (*binder.BoundQuery, error) {
 	t.Helper()
 	st, err := parser.Parse(sql)
 	if err != nil {
 		t.Fatalf("Parse(%q): %v", sql, err)
 	}
-	return binder.Bind(st, compilaYAML(t, yml), nil)
+	return binder.Bind(st, compileYAML(t, yml), nil)
 }
 
-const yamlAninhado = `version: 1
+const nestedYAML = `version: 1
 name: eventos
 materialization:
   key:
@@ -66,15 +66,15 @@ schema:
 // mesma do SELECT *, pela mesma razão: a projeção precisa ser estável entre
 // execuções.
 func TestCuringaQualificadoExpandeAsDerivadas(t *testing.T) {
-	bq, err := bindComYAML(t, yamlAninhado, "SELECT id, doc.* FROM eventos")
+	bq, err := bindWithYAML(t, nestedYAML, "SELECT id, doc.* FROM eventos")
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
-	quer := []string{"id", "probe_ip", "alarme_id"}
-	if len(bq.Columns) != len(quer) {
-		t.Fatalf("colunas = %d, quer %d", len(bq.Columns), len(quer))
+	want := []string{"id", "probe_ip", "alarme_id"}
+	if len(bq.Columns) != len(want) {
+		t.Fatalf("colunas = %d, quer %d", len(bq.Columns), len(want))
 	}
-	for i, n := range quer {
+	for i, n := range want {
 		if bq.Columns[i].Name != n {
 			t.Errorf("coluna %d = %q, quer %q", i, bq.Columns[i].Name, n)
 		}
@@ -84,7 +84,7 @@ func TestCuringaQualificadoExpandeAsDerivadas(t *testing.T) {
 // A coluna derivada também é endereçável pelo CAMINHO, que é como ela aparece
 // dentro do documento — inclusive o caminho aninhado.
 func TestCaminhoQualificadoResolveAColuna(t *testing.T) {
-	bq, err := bindComYAML(t, yamlAninhado, "SELECT doc.probeIpNode FROM eventos")
+	bq, err := bindWithYAML(t, nestedYAML, "SELECT doc.probeIpNode FROM eventos")
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
@@ -97,24 +97,24 @@ func TestCaminhoQualificadoResolveAColuna(t *testing.T) {
 }
 
 func TestRecusasDoQualificado(t *testing.T) {
-	casos := []struct {
-		nome string
+	cases := []struct {
+		name string
 		sql  string
-		quer string
+		want string
 	}{
 		{"pai inexistente", "SELECT nada.* FROM eventos", "nada"},
 		{"pai sem extracoes", "SELECT id.* FROM eventos", "não declara extract"},
 		{"caminho inexistente", "SELECT doc.naoExiste FROM eventos", "naoExiste"},
 		{"acima do teto", "SELECT doc.*, outro.* FROM eventos", "maxNestedCols"},
 	}
-	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
-			_, err := bindComYAML(t, yamlAninhado, tc.sql)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := bindWithYAML(t, nestedYAML, tc.sql)
 			if err == nil {
 				t.Fatal("esperava recusa")
 			}
-			if !strings.Contains(err.Error(), tc.quer) {
-				t.Errorf("erro = %q, quer conter %q", err, tc.quer)
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("erro = %q, quer conter %q", err, tc.want)
 			}
 		})
 	}
@@ -125,13 +125,13 @@ func TestRecusasDoQualificado(t *testing.T) {
 // defeito que o produto fecha em toda parte. O erro é acionável: pede-se as
 // colunas pelo nome.
 func TestTetoDeColunasAninhadasRecusaEmVezDeTruncar(t *testing.T) {
-	_, err := bindComYAML(t, yamlAninhado, "SELECT doc.*, outro.* FROM eventos")
+	_, err := bindWithYAML(t, nestedYAML, "SELECT doc.*, outro.* FROM eventos")
 	if err == nil {
 		t.Fatal("esperava recusa")
 	}
-	for _, quer := range []string{"3", "maxNestedCols", "2"} {
-		if !strings.Contains(err.Error(), quer) {
-			t.Errorf("erro = %q, quer conter %q (pedido, chave e teto)", err, quer)
+	for _, want := range []string{"3", "maxNestedCols", "2"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("erro = %q, quer conter %q (pedido, chave e teto)", err, want)
 		}
 	}
 }
@@ -142,7 +142,7 @@ func TestTetoDeColunasAninhadasRecusaEmVezDeTruncar(t *testing.T) {
 // pegou — a expansão sozinha respeitava o limite, então nenhum teste do
 // caminho feliz acusava.
 func TestTetoContaTambemOCaminhoQualificado(t *testing.T) {
-	_, err := bindComYAML(t, yamlAninhado, "SELECT doc.*, doc.probeIpNode FROM eventos")
+	_, err := bindWithYAML(t, nestedYAML, "SELECT doc.*, doc.probeIpNode FROM eventos")
 	if err == nil {
 		t.Fatal("três colunas aninhadas passaram sob um teto de duas")
 	}
@@ -151,7 +151,7 @@ func TestTetoContaTambemOCaminhoQualificado(t *testing.T) {
 	}
 }
 
-const yamlSoDescobre = `version: 1
+const discoveryOnlyYAML = `version: 1
 name: eventos
 materialization:
   key:
@@ -171,7 +171,7 @@ schema:
 // "não declara extract", porque ele declara descoberta — a mensagem mandaria
 // o operador escrever um extract que ele não precisa. O que falta é evento.
 func TestPaiQueDescobreEAindaNaoViuNadaDizOQueFalta(t *testing.T) {
-	_, err := bindComYAML(t, yamlSoDescobre, "SELECT doc.* FROM eventos")
+	_, err := bindWithYAML(t, discoveryOnlyYAML, "SELECT doc.* FROM eventos")
 	if err == nil {
 		t.Fatal("esperava recusa: nada foi descoberto ainda")
 	}
@@ -187,7 +187,7 @@ func TestPaiQueDescobreEAindaNaoViuNadaDizOQueFalta(t *testing.T) {
 // gramática fica torta: `SELECT doc.probeIpNode` vale e
 // `WHERE doc.probeIpNode = 'x'` não, para a mesma coluna.
 func TestWhereAceitaCaminhoQualificado(t *testing.T) {
-	bq, err := bindComYAML(t, yamlAninhado, "SELECT id FROM eventos WHERE doc.probeIpNode = '10.0.0.1'")
+	bq, err := bindWithYAML(t, nestedYAML, "SELECT id FROM eventos WHERE doc.probeIpNode = '10.0.0.1'")
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
@@ -197,7 +197,7 @@ func TestWhereAceitaCaminhoQualificado(t *testing.T) {
 }
 
 func TestWhereQualificadoRecusaCaminhoInexistente(t *testing.T) {
-	_, err := bindComYAML(t, yamlAninhado, "SELECT id FROM eventos WHERE doc.naoExiste = 'x'")
+	_, err := bindWithYAML(t, nestedYAML, "SELECT id FROM eventos WHERE doc.naoExiste = 'x'")
 	if err == nil {
 		t.Fatal("esperava recusa")
 	}
@@ -209,7 +209,7 @@ func TestWhereQualificadoRecusaCaminhoInexistente(t *testing.T) {
 // IS NULL também: a coluna aninhada é ausente na maioria das linhas, então
 // perguntar por presença é o filtro mais natural sobre ela.
 func TestWhereQualificadoAceitaIsNull(t *testing.T) {
-	if _, err := bindComYAML(t, yamlAninhado, "SELECT id FROM eventos WHERE doc.probeIpNode IS NULL"); err != nil {
+	if _, err := bindWithYAML(t, nestedYAML, "SELECT id FROM eventos WHERE doc.probeIpNode IS NULL"); err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
 }

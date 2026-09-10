@@ -33,7 +33,7 @@ TypeTime     FieldType = 0x0D // 8B LE, millis desde a meia-noite, [0, 86_400_00
 
 Ambos de largura 8 com valor em `Value.I64` — [fields.go:60](internal/storage/encoding/fields.go:60) (`AppendField`) e [:128](internal/storage/encoding/fields.go:128) (`Next`) já tratam `w == 8` genericamente e **não mudam**; só `fieldWidth` ([:28-47](internal/storage/encoding/fields.go:28)) ganha as duas entradas.
 
-**Por que `time` obriga tag própria:** millis-do-dia não é instante. Reusando `0x04`, a `celula` já casaria `timestamp × string` e `WHERE hora = '2026-08-13T12:00:00Z'` compararia `1786…` contra `68042000` — false sempre, **sem erro de bind**. Pior, [ndjson.go:88](internal/query/executor/ndjson.go:88) mandaria `68042000` para `appendTimestamp` e emitiria `"1970-01-01T18:54:02.000Z"`: uma mentira plausível, exatamente o que o comentário de [ndjson.go:50](internal/query/executor/ndjson.go:50) proíbe.
+**Por que `time` obriga tag própria:** millis-do-dia não é instante. Reusando `0x04`, a `cell` já casaria `timestamp × string` e `WHERE hora = '2026-08-13T12:00:00Z'` compararia `1786…` contra `68042000` — false sempre, **sem erro de bind**. Pior, [ndjson.go:88](internal/query/executor/ndjson.go:88) mandaria `68042000` para `appendTimestamp` e emitiria `"1970-01-01T18:54:02.000Z"`: uma mentira plausível, exatamente o que o comentário de [ndjson.go:50](internal/query/executor/ndjson.go:50) proíbe.
 
 **Por que `datetime` também ganha tag**, ainda que fisicamente idêntico a `timestamp` depois de resolvido o fuso: com tag distinta, `fieldTypeNames` e `TypeName` ([protocol.go:210](internal/protocol/protocol.go:210)) publicam o nome declarado **de graça** em `/v1/metadata` e na linha de schema do `/v1/query`. Um tipo lógico sobre `0x04` exigiria um sistema de tipos sombra (`CompiledField.LogicalType` + `ColView` + `NewColumn` + dois call sites) e faria `coerceLiteral` ramificar no tipo lógico *dentro* de um case chaveado pelo físico — "duas tabelas que só funcionam lidas juntas", o oposto do dono único que [coerce.go:66](internal/query/binder/coerce.go:66) declara.
 
@@ -73,7 +73,7 @@ O piloto vira `format: "MMM d, yyyy hh:mm:ss a"`.
 6. `datetime` exige ano+mês+dia+hora+minuto; `time` **recusa** tokens de data.
 7. `format:` em campo cujo tipo não o usa → recusa. **Crítico:** `FieldSpec` é decodificado sem `KnownFields` ([spec.go:150](internal/schema/spec.go:150)), então assim que `Format` existir no struct, `format: x` num `type: string` decodifica com sucesso e não faz nada — configuração sem leitor, o pecado que o débito 37 registra.
 
-O compilador de padrão e a lista de tokens têm **um dono**: `internal/typeparse`. O `schema` valida chamando o compilador, não com uma segunda lista que envelheceria em silêncio. É a mesma disciplina da `celula` e a mitigação estrutural do risco R3.
+O compilador de padrão e a lista de tokens têm **um dono**: `internal/typeparse`. O `schema` valida chamando o compilador, não com uma segunda lista que envelheceria em silêncio. É a mesma disciplina da `cell` e a mitigação estrutural do risco R3.
 
 ## 1.3 O parser
 
@@ -131,7 +131,7 @@ func montaInstanteLocal(ano, mes, dia, h, min, seg, millis int, loc *time.Locati
 
 ## 1.4 Query
 
-**`celula`** ([coerce.go:122-159](internal/query/binder/coerce.go:122)) ganha duas linhas; `admitsOp` ([:163](internal/query/binder/coerce.go:163)) **não muda** (ambos totalmente ordenados, caem no `default: true`):
+**`cell`** ([coerce.go:122-159](internal/query/binder/coerce.go:122)) ganha duas linhas; `admitsOp` ([:163](internal/query/binder/coerce.go:163)) **não muda** (ambos totalmente ordenados, caem no `default: true`):
 
 | Coluna | literal string | literal int | ops |
 |---|---|---|---|
@@ -142,7 +142,7 @@ func montaInstanteLocal(ano, mes, dia, h, min, seg, millis int, loc *time.Locati
 
 `coerceLiteral` ([:178-263](internal/query/binder/coerce.go:178)) já recebe `f *schema.CompiledField` — zero fiação nova. `coerceParam` ([:275](internal/query/binder/coerce.go:275)) não muda: delega ao `coerceLiteral`.
 
-`erroLiteral` ([binder.go:474](internal/query/binder/binder.go:474)) passa a nomear o formato declarado — sem isso a mensagem é inacionável.
+`literalError` ([binder.go:474](internal/query/binder/binder.go:474)) passa a nomear o formato declarado — sem isso a mensagem é inacionável.
 
 ## 1.5 Saída
 
@@ -163,7 +163,7 @@ func montaInstanteLocal(ano, mes, dia, h, min, seg, millis int, loc *time.Locati
 | T5 | `FieldSpec.Format`, nomes YAML, as 7 regras de validação | [spec.go:63-67](internal/schema/spec.go:63), [:160-179](internal/schema/spec.go:160), [:311-347](internal/schema/spec.go:311) |
 | T6 | `CompiledField.Format`/`Layout` + resolução no laço + guard de `auto` temporal | [compile.go:89-103](internal/schema/compile.go:89), [:229-280](internal/schema/compile.go:229) |
 | T7 | `Convert` com layouts + call site do `PatchBuffer` | [typeconv.go:39](internal/materializer/typeconv.go:39), [patch.go:117](internal/materializer/patch.go:117) |
-| T8 | `celula` + `coerceLiteral` + mensagem de erro | [coerce.go:122-263](internal/query/binder/coerce.go:122), [binder.go:474](internal/query/binder/binder.go:474) |
+| T8 | `cell` + `coerceLiteral` + mensagem de erro | [coerce.go:122-263](internal/query/binder/coerce.go:122), [binder.go:474](internal/query/binder/binder.go:474) |
 | T9 | `AppendValue` + `appendHoraDoDia`; `formatValue` | [ndjson.go:62-142](internal/query/executor/ndjson.go:62), [plan.go:168](internal/query/planner/plan.go:168) |
 | T10 | `JDBCTime` + `JDBCName` | [jdbc.go:31-53](internal/protocol/jdbc.go:31) |
 | T11 | Suíte de testes (§1.7) | vários |
@@ -214,7 +214,7 @@ O pacote `internal/query` não muda uma linha.
 
 **`_writtenAt` e não `_expiresAt`:** o campo registra um **fato** (quando o writer escreveu), não uma **política**. Mudar `expireAfterWrite: 2h` → `4h` no YAML passa a valer imediatamente para as 17,8M rows existentes; com `_expiresAt` cada row carregaria a política congelada e o operador reescreveria o dataset inteiro por uma mudança de config.
 
-- **`SELECT *`:** não aparece. Filtra-se dentro de `FieldsByID` ([compile.go:360](internal/schema/compile.go:360)), cujos dois únicos consumidores são exatamente os que devem filtrar (`binder.projecao()`, `metaDoDataset`), com um `FieldsByIDIncluindoSistema()` para quem precisa do conjunto todo. `SELECT _writtenAt` **funciona** — convenção `ROWID`/`xmin`.
+- **`SELECT *`:** não aparece. Filtra-se dentro de `FieldsByID` ([compile.go:360](internal/schema/compile.go:360)), cujos dois únicos consumidores são exatamente os que devem filtrar (`binder.projection()`, `metaDoDataset`), com um `FieldsByIDIncludingSystem()` para quem precisa do conjunto todo. `SELECT _writtenAt` **funciona** — convenção `ROWID`/`xmin`.
 - **Evento que traga `_writtenAt`:** recusa explícita em `PatchBuffer.Parse` ([patch.go:73](internal/materializer/patch.go:73)) — sobrescreveria o relógio do writer. E `schema.fields` com nome iniciado por `_` é recusado no `validate`: prefixo reservado.
 
 **`expiry.idx`**, magic `NDBE`, `int64` de millis por rowId, no molde exato de `Sequences` ([rowindex.go:258-289](internal/storage/rowindex/rowindex.go:258)) — mesmo `openDense` ([:56](internal/storage/rowindex/rowindex.go:56)), mesmo header de 64B.
@@ -316,7 +316,7 @@ materialization:
     type: timestamp
 ```
 
-Precisam de **schedulers diferentes**: toda a otimização de §2.3 depende de duração uniforme; com `ttl.field` o prazo vem do payload (pode vir no passado ou daqui a três anos), a deque vira heap e a semeadura `O(n)` vira `O(n log n)`. Aninhar dentro de `ttl` torna a exclusão estrutural e local, validada onde [spec.go:293-303](internal/schema/spec.go:293) já valida o bloco. `expireAfterWrite` por `units.Duration` ([units.go:80](internal/units/units.go:80)), com **piso de 1 minuto** — abaixo da resolução do §57 a chave mentiria; recusa, não arredondamento, mesma doutrina de `razaoDeLiveness` ([config.go:266](internal/config/config.go:266)).
+Precisam de **schedulers diferentes**: toda a otimização de §2.3 depende de duração uniforme; com `ttl.field` o prazo vem do payload (pode vir no passado ou daqui a três anos), a deque vira heap e a semeadura `O(n)` vira `O(n log n)`. Aninhar dentro de `ttl` torna a exclusão estrutural e local, validada onde [spec.go:293-303](internal/schema/spec.go:293) já valida o bloco. `expireAfterWrite` por `units.Duration` ([units.go:80](internal/units/units.go:80)), com **piso de 1 minuto** — abaixo da resolução do §57 a chave mentiria; recusa, não arredondamento, mesma doutrina de `livenessRatio` ([config.go:266](internal/config/config.go:266)).
 
 `tombstoneRetention` (hoje parseado e descartado, [spec.go:272](internal/schema/spec.go:272)): **parsear, validar e emitir WARN de que não tem motor**. Implementá-lo é fase separada — é o que exige `slotDeleted` e purga da primary. Custo permanente enquanto não existir, a registrar como débito novo: uma key vista uma vez custa para sempre ~47 B (primary 23 + location 8 + sequence 8 + expiry 8); com 100M identificadores distintos ao longo da vida, **~4,7 GB de índice** que nada devolve.
 

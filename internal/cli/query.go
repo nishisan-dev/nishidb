@@ -91,7 +91,7 @@ func runQuery(args []string, amb Ambiente) int {
 		return consultaRemota(*servidor, *dataset, sql, params, cred, amb)
 	}
 
-	cfg, err := nishiconfig.CarregaConfig(*argConfig)
+	cfg, err := nishiconfig.Load(*argConfig)
 	if err != nil {
 		fmt.Fprintln(amb.Stderr, "query:", err)
 		return ExitUso
@@ -156,7 +156,7 @@ func runQuery(args []string, amb Ambiente) int {
 	orc := budget.NewGlobal(cfg.MemoryTarget()).Query(cfg.MaxBufferPerQuery())
 	if !orc.Admit() {
 		// Só acontece com `maxBufferPerQuery` acima do `memoryTarget`, que o
-		// CarregaConfig já recusa — mas o retorno é conferido do mesmo jeito:
+		// Load já recusa — mas o retorno é conferido do mesmo jeito:
 		// ignorá-lo por "não pode acontecer" é como o writer ficaria sem
 		// orçamento no dia em que a validação mudasse de lugar.
 		// `_, _ =`: a disciplina que este arquivo já declara para código NOVO —

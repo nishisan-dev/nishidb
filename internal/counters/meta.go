@@ -27,11 +27,11 @@ const TabelaMetaCounters = "counters"
 
 // Contado é o que a tabela precisa de cada contador: a definição (nome,
 // groupBy, condição, teto) e o retrato corrente. Interface, e não o
-// *contador.Contador, pelo mesmo motivo do Leitor — *contador.Contador a
+// *counter.Counter, pelo mesmo motivo do Leitor — *counter.Counter a
 // satisfaz.
 type Contado interface {
-	Def() counter.Definicao
-	Estatisticas() counter.Estatisticas
+	Def() counter.Definition
+	Stats() counter.Stats
 }
 
 // especDaTabelaMeta é a spec da tabela, no MESMO YAML de um dataset de
@@ -127,11 +127,11 @@ const SeparadorDoGroupBy = "|"
 // (o nome) resolve por mapa. O que muda entre duas consultas são os números,
 // lidos no presente a cada linha, como o `_counters` lê os totais.
 func TabelaMeta(cs []Contado) (*schema.Compiled, query.Store, error) {
-	spec, err := schema.Parse([]byte(especDaTabelaMeta), schema.DefaultsPadrao)
+	spec, err := schema.Parse([]byte(especDaTabelaMeta), schema.BuiltinDefaults)
 	if err != nil {
 		return nil, nil, fmt.Errorf("contadores: spec da tabela %s.%s inválida: %w", meta.Namespace, TabelaMetaCounters, err)
 	}
-	sc, err := spec.Compile(schema.NovoDicionarioEmMemoria())
+	sc, err := spec.Compile(schema.NewInMemoryDict())
 	if err != nil {
 		return nil, nil, fmt.Errorf("contadores: compilando a tabela %s.%s: %w", meta.Namespace, TabelaMetaCounters, err)
 	}
@@ -152,14 +152,14 @@ func TabelaMeta(cs []Contado) (*schema.Compiled, query.Store, error) {
 	sort.Slice(f.colunas, func(i, j int) bool { return f.colunas[i].id < f.colunas[j].id })
 	for _, c := range cs {
 		def := c.Def()
-		if _, existe := f.porNome[def.Nome]; existe {
-			return nil, nil, fmt.Errorf("contadores: dois contadores chamados %q", def.Nome)
+		if _, existe := f.porNome[def.Name]; existe {
+			return nil, nil, fmt.Errorf("contadores: dois contadores chamados %q", def.Name)
 		}
-		f.porNome[def.Nome] = len(f.linhas)
+		f.porNome[def.Name] = len(f.linhas)
 		f.linhas = append(f.linhas, linhaMeta{
 			c:       c,
-			nome:    []byte(def.Nome),
-			groupBy: []byte(strings.Join(def.Nomes, SeparadorDoGroupBy)),
+			nome:    []byte(def.Name),
+			groupBy: []byte(strings.Join(def.Names, SeparadorDoGroupBy)),
 			cond:    []byte(def.Where),
 		})
 	}
@@ -187,14 +187,14 @@ type fonteMeta struct {
 	colunas []colunaComID // em ordem crescente de FieldID
 }
 
-// AbreSnapshot devolve o limite de linhas; o conjunto é fixo, então não há o
+// OpenSnapshot devolve o limite de linhas; o conjunto é fixo, então não há o
 // que congelar além dele. Época e instante ficam zerados e são ignorados.
-func (f *fonteMeta) AbreSnapshot() types.Snapshot {
+func (f *fonteMeta) OpenSnapshot() types.Snapshot {
 	return types.Snapshot{LimitRowID: types.RowID(len(f.linhas) + 1)}
 }
 
-// FechaSnapshot é no-op: a fonte não retém nada.
-func (f *fonteMeta) FechaSnapshot(types.Snapshot) {}
+// CloseSnapshot é no-op: a fonte não retém nada.
+func (f *fonteMeta) CloseSnapshot(types.Snapshot) {}
 
 func (f *fonteMeta) ScanLive(snap types.Snapshot) types.RowIDIterator {
 	return &iteradorMeta{limite: snap.LimitRowID}
@@ -215,10 +215,10 @@ func (f *fonteMeta) GetByKey(snap types.Snapshot, key, buf []byte) (types.Record
 	return f.GetByRowID(snap, types.RowID(i+1), buf)
 }
 
-// Indexado responde SEMPRE false, como nas outras tabelas virtuais: sem
+// Indexed responde SEMPRE false, como nas outras tabelas virtuais: sem
 // índice declarado o planner varre as linhas — uma por contador — e a key
 // (o nome) dá o point lookup por conta própria.
-func (f *fonteMeta) Indexado(types.FieldID) bool { return false }
+func (f *fonteMeta) Indexed(types.FieldID) bool { return false }
 
 // Lookup nunca é chamado: rede de segurança, como no _meta e no _counters.
 func (f *fonteMeta) Lookup(field types.FieldID, _ types.Value) (types.RowIDIterator, error) {
@@ -230,7 +230,7 @@ func (f *fonteMeta) Lookup(field types.FieldID, _ types.Value) (types.RowIDItera
 // `where`, e as duas da auditoria enquanto nenhuma auditoria concluiu.
 func (f *fonteMeta) record(row types.RowID, buf []byte) (types.Record, []byte, bool, error) {
 	l := f.linhas[row-1]
-	est := l.c.Estatisticas()
+	est := l.c.Stats()
 	buf = buf[:0]
 	var err error
 	for _, col := range f.colunas {
@@ -246,31 +246,31 @@ func (f *fonteMeta) record(row types.RowID, buf []byte) (types.Record, []byte, b
 			}
 			v = types.Value{Type: types.TypeString, Bytes: l.cond}
 		case cmLinhas:
-			v = types.Value{Type: types.TypeInt64, I64: est.Linhas}
+			v = types.Value{Type: types.TypeInt64, I64: est.Rows}
 		case cmTotal:
 			v = types.Value{Type: types.TypeInt64, I64: est.Total}
 		case cmGrupos:
-			v = types.Value{Type: types.TypeInt64, I64: int64(est.Grupos)}
+			v = types.Value{Type: types.TypeInt64, I64: int64(est.Groups)}
 		case cmTeto:
-			v = types.Value{Type: types.TypeInt64, I64: int64(est.Teto)}
+			v = types.Value{Type: types.TypeInt64, I64: int64(est.Ceiling)}
 		case cmAposentados:
-			v = types.Value{Type: types.TypeInt64, I64: int64(est.Aposentados)}
+			v = types.Value{Type: types.TypeInt64, I64: int64(est.Retired)}
 		case cmRecusados:
-			v = types.Value{Type: types.TypeInt64, I64: int64(est.Recusados)} //nolint:gosec // contagem, nunca perto do teto do int64
+			v = types.Value{Type: types.TypeInt64, I64: int64(est.Refused)} //nolint:gosec // contagem, nunca perto do teto do int64
 		case cmOrfas:
-			v = types.Value{Type: types.TypeInt64, I64: int64(est.Orfas)} //nolint:gosec // idem
+			v = types.Value{Type: types.TypeInt64, I64: int64(est.Orphans)} //nolint:gosec // idem
 		case cmBytes:
 			v = types.Value{Type: types.TypeInt64, I64: est.Bytes}
 		case cmAuditoriaDivergentes:
-			if est.AuditoriaUltimaUnix == 0 {
+			if est.AuditLastUnix == 0 {
 				continue
 			}
-			v = types.Value{Type: types.TypeInt64, I64: est.AuditoriaDivergentes}
+			v = types.Value{Type: types.TypeInt64, I64: est.AuditDivergences}
 		case cmAuditoriaEm:
-			if est.AuditoriaUltimaUnix == 0 {
+			if est.AuditLastUnix == 0 {
 				continue
 			}
-			v = types.Value{Type: types.TypeTimestamp, I64: est.AuditoriaUltimaUnix * 1000}
+			v = types.Value{Type: types.TypeTimestamp, I64: est.AuditLastUnix * 1000}
 		}
 		if buf, err = encoding.AppendField(buf, col.id, v); err != nil {
 			return types.Record{}, buf, false, fmt.Errorf("contadores: codificando a coluna %s do contador %q: %w", nomesDasColunasMeta[col.k], l.nome, err)

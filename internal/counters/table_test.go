@@ -26,7 +26,7 @@ const (
 
 type avaliadorDeTeste struct{ fr encoding.FieldReader }
 
-func (a *avaliadorDeTeste) Avalia(payload []byte) (bool, error) {
+func (a *avaliadorDeTeste) Evaluate(payload []byte) (bool, error) {
 	a.fr.Reset(payload)
 	for {
 		id, v, ok := a.fr.Next()
@@ -39,27 +39,27 @@ func (a *avaliadorDeTeste) Avalia(payload []byte) (bool, error) {
 	}
 }
 
-func defPorPON(nome string) counter.Definicao {
-	return counter.Definicao{
-		Nome:          nome,
-		Colunas:       []types.FieldID{fOlt, fSlot, fPort},
-		Nomes:         []string{"olt", "slot", "port"},
-		Tipos:         []types.FieldType{types.TypeString, types.TypeInt64, types.TypeInt64},
-		Where:         "authenticated = true",
-		NovoAvaliador: func() counter.Avaliador { return &avaliadorDeTeste{} },
-		MaxGroups:     1000,
+func defPorPON(nome string) counter.Definition {
+	return counter.Definition{
+		Name:         nome,
+		Columns:      []types.FieldID{fOlt, fSlot, fPort},
+		Names:        []string{"olt", "slot", "port"},
+		Types:        []types.FieldType{types.TypeString, types.TypeInt64, types.TypeInt64},
+		Where:        "authenticated = true",
+		NewEvaluator: func() counter.Evaluator { return &avaliadorDeTeste{} },
+		MaxGroups:    1000,
 	}
 }
 
-func defPorOLT(nome string) counter.Definicao {
-	return counter.Definicao{
-		Nome:          nome,
-		Colunas:       []types.FieldID{fOlt},
-		Nomes:         []string{"olt"},
-		Tipos:         []types.FieldType{types.TypeString},
-		Where:         "authenticated = true",
-		NovoAvaliador: func() counter.Avaliador { return &avaliadorDeTeste{} },
-		MaxGroups:     1000,
+func defPorOLT(nome string) counter.Definition {
+	return counter.Definition{
+		Name:         nome,
+		Columns:      []types.FieldID{fOlt},
+		Names:        []string{"olt"},
+		Types:        []types.FieldType{types.TypeString},
+		Where:        "authenticated = true",
+		NewEvaluator: func() counter.Evaluator { return &avaliadorDeTeste{} },
+		MaxGroups:    1000,
 	}
 }
 
@@ -86,9 +86,9 @@ func payloadDeServico(t *testing.T, olt string, slot, port int64, auth bool) []b
 	return buf
 }
 
-func abreContador(t *testing.T, def counter.Definicao) *counter.Contador {
+func abreContador(t *testing.T, def counter.Definition) *counter.Counter {
 	t.Helper()
-	c, err := counter.Abre(t.TempDir(), def, 1024, false)
+	c, err := counter.Open(t.TempDir(), def, 1024, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,9 +98,9 @@ func abreContador(t *testing.T, def counter.Definicao) *counter.Contador {
 
 // motorComContador registra um dataset de mentira (o alvo) e a tabela virtual
 // do contador sob ele.
-func motorComContador(t *testing.T, c *counter.Contador) *query.Engine {
+func motorComContador(t *testing.T, c *counter.Counter) *query.Engine {
 	t.Helper()
-	spec, err := schema.Parse([]byte("version: 1\nname: servicos\nmaterialization:\n  key:\n    field: id\nschema:\n  fields:\n    id:\n      type: string\n"), schema.DefaultsPadrao)
+	spec, err := schema.Parse([]byte("version: 1\nname: servicos\nmaterialization:\n  key:\n    field: id\nschema:\n  fields:\n    id:\n      type: string\n"), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func motorComContador(t *testing.T, c *counter.Contador) *query.Engine {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.RegistraVirtual("servicos", schema.NamespaceContadores, c.Def().Nome, tsc, fonte); err != nil {
+	if err := eng.RegistraVirtual("servicos", schema.CountersNamespace, c.Def().Name, tsc, fonte); err != nil {
 		t.Fatal(err)
 	}
 	return eng
@@ -174,12 +174,12 @@ func coluna(rows []linha, col string) string {
 
 // populaPON monta o cenário da proposta §5.3: PRCTA_G1M10 com três PONs (uma
 // zerada) e outra OLT.
-func populaPON(t *testing.T, c *counter.Contador) {
+func populaPON(t *testing.T, c *counter.Counter) {
 	t.Helper()
 	row := types.RowID(0)
 	put := func(olt string, slot, port int64, auth bool, n int) {
 		for i := 0; i < n; i++ {
-			if err := c.Transiciona(row, payloadDeServico(t, olt, slot, port, auth), false); err != nil {
+			if err := c.Transition(row, payloadDeServico(t, olt, slot, port, auth), false); err != nil {
 				t.Fatal(err)
 			}
 			row++
@@ -227,7 +227,7 @@ func TestTabelaDoContadorRespondeAsConsultasDaProposta(t *testing.T) {
 func TestTabelaPorOLTTemUmComponenteSemSeparador(t *testing.T) {
 	c := abreContador(t, defPorOLT("autenticados_por_olt"))
 	for i := 0; i < 10; i++ {
-		if err := c.Transiciona(types.RowID(i), payloadDeServico(t, "PRCTA_G1M10", 1, 1, i%2 == 0), false); err != nil {
+		if err := c.Transition(types.RowID(i), payloadDeServico(t, "PRCTA_G1M10", 1, 1, i%2 == 0), false); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -240,7 +240,7 @@ func TestTabelaPorOLTTemUmComponenteSemSeparador(t *testing.T) {
 
 func TestTabelaLeOPresenteEOConjuntoDeGruposCongelaPorConsulta(t *testing.T) {
 	c := abreContador(t, defPorOLT("aut"))
-	if err := c.Transiciona(0, payloadDeServico(t, "A", 1, 1, true), false); err != nil {
+	if err := c.Transition(0, payloadDeServico(t, "A", 1, 1, true), false); err != nil {
 		t.Fatal(err)
 	}
 	eng := motorComContador(t, c)
@@ -250,12 +250,12 @@ func TestTabelaLeOPresenteEOConjuntoDeGruposCongelaPorConsulta(t *testing.T) {
 	}
 	defer func() { _ = it.Close() }()
 	// Um grupo novo depois de a consulta abrir não entra no universo dela.
-	if err := c.Transiciona(1, payloadDeServico(t, "B", 1, 1, true), false); err != nil {
+	if err := c.Transition(1, payloadDeServico(t, "B", 1, 1, true), false); err != nil {
 		t.Fatal(err)
 	}
 	// Mas o total do grupo existente é o PRESENTE — os totais não são
 	// versionados pelo snapshot.
-	if err := c.Transiciona(2, payloadDeServico(t, "A", 1, 1, true), false); err != nil {
+	if err := c.Transition(2, payloadDeServico(t, "A", 1, 1, true), false); err != nil {
 		t.Fatal(err)
 	}
 	var vistos []string
@@ -282,7 +282,7 @@ func TestTabelaRecusaColunaInexistenteNomeandoATabela(t *testing.T) {
 
 func TestTabelaRecusaDefinicaoQueColideComAsColunasFixas(t *testing.T) {
 	def := defPorOLT("x")
-	def.Nomes = []string{"total"}
+	def.Names = []string{"total"}
 	if _, _, err := counters.Tabela(def, nil); err == nil {
 		t.Fatal("coluna do groupBy chamada total tem de ser recusada")
 	}

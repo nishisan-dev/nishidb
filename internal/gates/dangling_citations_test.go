@@ -3,6 +3,7 @@
 package gates_test
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -14,15 +15,25 @@ import (
 	"testing"
 )
 
-// identMappingDir é onde moram os TSV do ciclo, e identMappingHeader é o
-// cabeçalho EXATO do TSV de IDENTIFICADORES. O diretório guarda mais de um
+// identMappingDir é onde moram os TSV do ciclo, e os dois cabeçalhos são os
+// EXATOS dos dois formatos que este gate lê. O diretório guarda mais de um
 // formato (caminhos e pacotes têm duas colunas, o inventário tem sete), então
 // o cabeçalho é o que discrimina: ler `mapeamento-*.tsv` sem conferi-lo faria
 // o gate interpretar `velho`/`novo` como `pacote`/`especie` e sair com zero
 // candidato — que é justamente a vacuidade que ele proíbe.
+//
+// O segundo formato é o dos GRUPOS DE INTERFACE, que o `scripts/ifacerename`
+// aplica (spec §4.2). Ele ficou de fora da primeira redação, e o furo é da
+// mesma classe que o gate existe para fechar: método de interface é renomeado
+// por uma ferramenta DIFERENTE, com um TSV de outro formato, e por isso as
+// citações de `AbreSnapshot`, `Indexado` e `Estado` sobreviveram a duas
+// ferramentas e a duas revisões — dezessete delas em godoc, diagrama e
+// documento. O endereço de uma linha desse TSV é `Interface.metodo` e a folha
+// é o `metodo`, que é como a prosa cita um método.
 const (
-	identMappingDir    = "planning/identificadores-em-ingles"
-	identMappingHeader = "pacote\tespecie\tendereco\tnovo\tmotivo"
+	identMappingDir      = "planning/identificadores-em-ingles"
+	identMappingHeader   = "pacote\tespecie\tendereco\tnovo\tmotivo"
+	identInterfaceHeader = "pacote\tinterface\tmetodo\tnovo"
 )
 
 // renamedIdent é uma linha de mapeamento com rename EFETIVO: o nome velho
@@ -105,49 +116,18 @@ func TestRenamedIdentifiersAreNotCitedByTheirOldNames(t *testing.T) {
 	renamed, surviving := loadRenamedIdents(t)
 	protected := loadProtectedTokens(t)
 
-	// byOldName é o índice que torna a varredura viável: um passe por token do
-	// repositório, não um por (token × candidato).
-	byOldName := map[string][]renamedIdent{}
-	for _, r := range renamed {
-		if protected[r.old] {
-			continue
-		}
-		if !startsUpper(r.old) && !hasInnerUpper(r.old) {
-			continue
-		}
-		byOldName[r.old] = append(byOldName[r.old], r)
-	}
+	byOldName := indexByOldName(renamed, protected)
 	if len(byOldName) == 0 {
 		t.Fatalf("nenhum nome velho a procurar em %s: com %d linhas de rename lidas, isso significa TSV movido, "+
 			"cabeçalho mudado ou lista de protegidos engolindo tudo — e o gate passaria por vacuidade",
 			identMappingDir, len(renamed))
 	}
 
-	type hit struct {
-		file  string
-		line  int
-		token string
-		entry renamedIdent
-	}
-	var hits []hit
 	chunks, declared := danglingCitationChunks(t)
-	for _, c := range chunks {
-		eachWordToken(c.text, func(tok string, off int) {
-			entries, ok := byOldName[tok]
-			if !ok {
-				return
-			}
-			alive := surviving[tok] || declared.module[tok]
-			entry, ok := citedEntry(c, off, tok, entries, alive, declared)
-			if !ok {
-				return
-			}
-			hits = append(hits, hit{c.file, c.line + strings.Count(c.text[:off], "\n"), tok, entry})
-		})
-	}
 	if len(chunks) == 0 {
 		t.Fatalf("nenhum texto varrido: o escopo do gate ficou vazio e ele passaria por vacuidade")
 	}
+	hits := danglingHits(chunks, declared, byOldName, surviving)
 	if len(hits) == 0 {
 		return
 	}
@@ -166,6 +146,55 @@ func TestRenamedIdentifiersAreNotCitedByTheirOldNames(t *testing.T) {
 		len(hits), len(byOldName), identMappingDir)
 }
 
+// danglingHit é uma citação pendurada encontrada: onde ela está, o token e a
+// entrada do mapeamento que a explica.
+type danglingHit struct {
+	file  string
+	line  int
+	token string
+	entry renamedIdent
+}
+
+// indexByOldName é o índice que torna a varredura viável: um passe por token do
+// repositório, não um por (token × candidato). Token protegido e nome que não é
+// reconhecível como identificador (ver o godoc do teste) ficam de fora aqui, e
+// não no laço de varredura.
+func indexByOldName(renamed []renamedIdent, protected map[string]bool) map[string][]renamedIdent {
+	byOldName := map[string][]renamedIdent{}
+	for _, r := range renamed {
+		if protected[r.old] {
+			continue
+		}
+		if !startsUpper(r.old) && !hasInnerUpper(r.old) {
+			continue
+		}
+		byOldName[r.old] = append(byOldName[r.old], r)
+	}
+	return byOldName
+}
+
+// danglingHits varre os pedaços e devolve as citações penduradas. É uma função
+// à parte do teste porque é o que o caso do TSV de interface exercita: um teste
+// que reimplementasse esta varredura provaria a si mesmo, não ao gate.
+func danglingHits(chunks []citationChunk, declared declarations, byOldName map[string][]renamedIdent, surviving map[string]bool) []danglingHit {
+	var hits []danglingHit
+	for _, c := range chunks {
+		eachWordToken(c.text, func(tok string, off int) {
+			entries, ok := byOldName[tok]
+			if !ok {
+				return
+			}
+			alive := surviving[tok] || declared.module[tok]
+			entry, ok := citedEntry(c, off, tok, entries, alive, declared)
+			if !ok {
+				return
+			}
+			hits = append(hits, danglingHit{c.file, c.line + strings.Count(c.text[:off], "\n"), tok, entry})
+		})
+	}
+	return hits
+}
+
 // loadRenamedIdents lê os TSV de identificadores do ciclo e devolve as linhas
 // com rename EFETIVO mais o conjunto dos nomes que SOBREVIVEM.
 //
@@ -177,52 +206,94 @@ func TestRenamedIdentifiersAreNotCitedByTheirOldNames(t *testing.T) {
 func loadRenamedIdents(t *testing.T) ([]renamedIdent, map[string]bool) {
 	t.Helper()
 	dir := filepath.Join(repoRoot, filepath.FromSlash(identMappingDir))
-	entries, err := os.ReadDir(dir)
+	renamed, surviving, identFiles, ifaceFiles, err := readIdentMappings(dir)
 	if err != nil {
 		t.Fatalf("os mapeamentos do ciclo não puderam ser lidos em %s: %v", identMappingDir, err)
 	}
-	var renamed []renamedIdent
-	surviving := map[string]bool{}
-	files := 0
+	if identFiles == 0 {
+		t.Fatalf("nenhum TSV de identificadores em %s com o cabeçalho %q: o gate ficaria sem oráculo",
+			identMappingDir, identMappingHeader)
+	}
+	if ifaceFiles == 0 {
+		t.Fatalf("nenhum TSV de grupos de interface em %s com o cabeçalho %q: os métodos renomeados pelo "+
+			"scripts/ifacerename sairiam do escopo do gate sem ninguém notar",
+			identMappingDir, identInterfaceHeader)
+	}
+	return renamed, surviving
+}
+
+// readIdentMappings lê os DOIS formatos de TSV do ciclo num diretório e devolve
+// as linhas com rename efetivo, o conjunto dos nomes que sobrevivem e quantos
+// arquivos de cada formato foram lidos. As contagens são o que a vacuidade
+// cobra: um formato que sumisse do diretório calaria metade do gate.
+//
+// O formato de IDENTIFICADORES traz a espécie e o endereço; o de GRUPOS DE
+// INTERFACE traz interface e método, e o endereço `Interface.metodo` é
+// sintetizado — é por ele que `Store.Estado` num documento é cobrado como
+// citação qualificada, e a folha `Estado` sozinha só onde a regra normal
+// permite.
+func readIdentMappings(dir string) (renamed []renamedIdent, surviving map[string]bool, identFiles, ifaceFiles int, err error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, nil, 0, 0, err
+	}
+	surviving = map[string]bool{}
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasPrefix(e.Name(), "mapeamento-") || !strings.HasSuffix(e.Name(), ".tsv") {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".tsv") {
 			continue
 		}
 		content, err := os.ReadFile(filepath.Join(dir, e.Name()))
 		if err != nil {
-			t.Fatalf("%s: %v", e.Name(), err)
+			return nil, nil, 0, 0, fmt.Errorf("%s: %w", e.Name(), err)
 		}
 		lines := strings.Split(string(content), "\n")
-		if len(lines) == 0 || strings.TrimRight(lines[0], "\r") != identMappingHeader {
+		if len(lines) == 0 {
+			continue
+		}
+		switch strings.TrimRight(lines[0], "\r") {
+		case identMappingHeader:
+			identFiles++
+			for _, line := range lines[1:] {
+				cols := strings.Split(strings.TrimRight(line, "\r"), "\t")
+				if len(cols) < 5 {
+					continue
+				}
+				pkg, especie, address, novo := cols[0], strings.SplitN(cols[1], "#", 2)[0], cols[2], cols[3]
+				if novo == "" {
+					continue
+				}
+				surviving[novo] = true
+				switch especie {
+				case "param", "local", "label", "receiver":
+					// Prosa não cita local por endereço, e o nome de um parâmetro
+					// renomeado não é citação pendurada em lugar nenhum.
+					continue
+				}
+				if old := addressLeaf(address); old != novo {
+					renamed = append(renamed, renamedIdent{pkg: pkg, address: address, old: old, new: novo})
+				}
+			}
+		case identInterfaceHeader:
+			ifaceFiles++
+			for _, line := range lines[1:] {
+				cols := strings.Split(strings.TrimRight(line, "\r"), "\t")
+				if len(cols) < 4 {
+					continue
+				}
+				pkg, iface, metodo, novo := cols[0], cols[1], cols[2], cols[3]
+				if novo == "" || metodo == "" {
+					continue
+				}
+				surviving[novo] = true
+				if metodo != novo {
+					renamed = append(renamed, renamedIdent{pkg: pkg, address: iface + "." + metodo, old: metodo, new: novo})
+				}
+			}
+		default:
 			continue // TSV de outro formato (caminhos, pacotes, inventário)
 		}
-		files++
-		for _, line := range lines[1:] {
-			cols := strings.Split(strings.TrimRight(line, "\r"), "\t")
-			if len(cols) < 5 {
-				continue
-			}
-			pkg, especie, address, novo := cols[0], strings.SplitN(cols[1], "#", 2)[0], cols[2], cols[3]
-			if novo == "" {
-				continue
-			}
-			surviving[novo] = true
-			switch especie {
-			case "param", "local", "label", "receiver":
-				// Prosa não cita local por endereço, e o nome de um parâmetro
-				// renomeado não é citação pendurada em lugar nenhum.
-				continue
-			}
-			if old := addressLeaf(address); old != novo {
-				renamed = append(renamed, renamedIdent{pkg: pkg, address: address, old: old, new: novo})
-			}
-		}
 	}
-	if files == 0 {
-		t.Fatalf("nenhum TSV de identificadores em %s com o cabeçalho %q: o gate ficaria sem oráculo",
-			identMappingDir, identMappingHeader)
-	}
-	return renamed, surviving
+	return renamed, surviving, identFiles, ifaceFiles, nil
 }
 
 // loadProtectedTokens lê a lista de tokens que o ciclo declarou NÃO serem
@@ -656,6 +727,86 @@ func addressLeaf(address string) string {
 		return address[i+1:]
 	}
 	return address
+}
+
+// TestInterfaceMethodRenamesAreChargedLikeAnyOtherLeaf exercita o segundo
+// formato de TSV — o dos grupos que o `scripts/ifacerename` aplica — com um
+// diretório de fixture, e não com o do repositório: o do repositório muda a
+// cada grupo do ciclo, e um teste amarrado a ele mediria o estado da rodada em
+// vez da regra.
+//
+// O caso é o que a revisão do G3 encontrou: `Store.AbreSnapshot` virou
+// `OpenSnapshot` por uma ferramenta que o gate não lia, e dezessete citações
+// ficaram penduradas. As três asserções cobrem as três metades da regra:
+//
+//   - folha com maiúscula INTERNA (`AbreSnapshot`) é cobrada em qualquer
+//     lugar, como qualquer identificador que não é palavra de nenhuma língua;
+//   - folha de uma maiúscula só (`Estado`) NÃO é cobrada em prosa nua — em
+//     PT-BR ela abre frase —, e é o controle que prova que a leitura do TSV
+//     novo não virou uma máquina de acusar prosa;
+//   - a mesma folha É cobrada na forma qualificada pelo dono do endereço
+//     (`Store.Estado`), que é a citação que diz de quem está falando.
+func TestInterfaceMethodRenamesAreChargedLikeAnyOtherLeaf(t *testing.T) {
+	dir := t.TempDir()
+	// O TSV de identificadores entra porque o carregador lê os dois formatos, e
+	// um diretório com um só não exercitaria a discriminação por cabeçalho.
+	if err := os.WriteFile(filepath.Join(dir, "mapeamento-2-exemplo.tsv"),
+		[]byte(identMappingHeader+"\ninternal/exemplo\ttype\tFila\tQueue\tfila é queue\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "grupos-de-interface-2-G9.tsv"),
+		[]byte(identInterfaceHeader+"\ninternal/query/executor\tStore\tAbreSnapshot\tOpenSnapshot\n"+
+			"internal/materializer\tStore\tEstado\tState\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	renamed, surviving, identFiles, ifaceFiles, err := readIdentMappings(dir)
+	if err != nil {
+		t.Fatalf("leitura do fixture: %v", err)
+	}
+	if identFiles != 1 || ifaceFiles != 1 {
+		t.Fatalf("arquivos lidos: %d de identificadores e %d de interface, esperado 1 e 1", identFiles, ifaceFiles)
+	}
+	if !surviving["OpenSnapshot"] {
+		t.Errorf("OpenSnapshot não entrou no conjunto dos nomes vivos: o alvo de um rename de método de "+
+			"interface seria cobrado como se fosse nome velho, %v", surviving)
+	}
+	byOldName := indexByOldName(renamed, map[string]bool{})
+	if _, ok := byOldName["AbreSnapshot"]; !ok {
+		t.Fatalf("AbreSnapshot não entrou no índice de nomes velhos: o TSV de grupos de interface não foi lido, "+
+			"e as citações dos métodos renomeados pelo ifacerename ficam fora do gate (%d linhas lidas)", len(renamed))
+	}
+	casos := []struct {
+		nome   string
+		chunk  citationChunk
+		cobra  bool
+		porque string
+	}{
+		{
+			nome:   "folha com maiúscula interna em prosa nua",
+			chunk:  citationChunk{file: "internal/outro/o.go", pkg: "internal/outro", line: 7, kind: chunkGoComment, text: "// A leitura chama AbreSnapshot antes de varrer."},
+			cobra:  true,
+			porque: "AbreSnapshot não é palavra de prosa em nenhuma das duas línguas do repositório",
+		},
+		{
+			nome:   "folha de uma maiúscula em prosa nua",
+			chunk:  citationChunk{file: "internal/outro/o.go", pkg: "internal/outro", line: 3, kind: chunkGoComment, text: "// Estado corrente da entidade, mantido na escrita."},
+			cobra:  false,
+			porque: "Estado abre frase em PT-BR, e cobrá-la nua encheria o gate de prosa legítima",
+		},
+		{
+			nome:   "folha de uma maiúscula qualificada pelo dono",
+			chunk:  citationChunk{file: "docs/debitos.md", line: 230, kind: chunkMarkup, text: "O materializador expõe Store.Estado para o executor."},
+			cobra:  true,
+			porque: "a forma qualificada diz de quem está falando",
+		},
+	}
+	vazio := declarations{module: map[string]bool{}, byPkg: map[string]map[string]bool{}}
+	for _, c := range casos {
+		hits := danglingHits([]citationChunk{c.chunk}, vazio, byOldName, surviving)
+		if got := len(hits) > 0; got != c.cobra {
+			t.Errorf("%s: cobrada = %v, esperado %v (%s): %q", c.nome, got, c.cobra, c.porque, c.chunk.text)
+		}
+	}
 }
 
 // TestTheLiveDeclarationOracleIgnoresTestdata exercita a regra de underTestdata

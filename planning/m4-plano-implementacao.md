@@ -1395,7 +1395,7 @@ func TestCheckpointPorTempoDestravaOLagComIngestaoOciosa(t *testing.T) {
 	produz(t, w, 10) // abaixo do limiar por contagem
 	antes := w.OffsetCommitado()
 
-	relogio.Avanca(6 * time.Second)
+	clock.Avanca(6 * time.Second)
 	w.Tick()
 
 	if depois := w.OffsetCommitado(); depois <= antes {

@@ -32,7 +32,7 @@ type TLSSpec struct {
 //
 // Não há campo Password: a senha em si NUNCA atravessa o YAML — o §75 exige
 // recusa explícita de um `password` literal, e não há onde decodificá-lo
-// mesmo que viesse (validaUsuarios recusa a chave por não estar na
+// mesmo que viesse (validateUsers recusa a chave por não estar na
 // whitelist). PasswordEnv/PasswordFile guardam ONDE a credencial mora — nome
 // de variável de ambiente ou caminho de arquivo —, nunca o valor; resolver o
 // valor é ativação (B2, em server.Novo), não parse.
@@ -55,10 +55,10 @@ type UserSpec struct {
 // e loopback não têm célula de matriz que precise dela, então continuam
 // bool. Não é a mesma regra de Server.Enabled: lá nil vale TRUE (rodar o
 // comando já é o ato de ligar); aqui nil vale FALSE — ver
-// AutenticacaoHabilitada.
+// AuthenticationEnabled.
 //
-// AuthenticationDeclarada() responde "a seção apareceu no YAML?" com
-// independência do valor de Enabled (inclusive nil); AutenticacaoHabilitada()
+// AuthenticationDeclared() responde "a seção apareceu no YAML?" com
+// independência do valor de Enabled (inclusive nil); AuthenticationEnabled()
 // responde "está LIGADA?", derivado do ponteiro.
 type AuthenticationSpec struct {
 	Enabled *bool      `yaml:"enabled"`
@@ -78,21 +78,21 @@ type LoopbackSpec struct {
 	// está ligado é ativação (B2), não desta tarefa. O que ESTA tarefa
 	// recusa é a porta declarada colidir de fato com server.port — mesma
 	// porta E o bind principal alcançando 127.0.0.1 (recusa 8, refinada pela
-	// revisão final: ver bindColideComLoopback, acima). Um bind principal em
+	// revisão final: ver bindCollidesWithLoopback, acima). Um bind principal em
 	// IP específico não-loopback pode repetir a porta do loopback sem
 	// colisão nenhuma no kernel — é o desenho da Fase C.
 	Port *int `yaml:"port"`
 }
 
-// bindColideComLoopback diz se o bind do listener PRINCIPAL alcança o mesmo
+// bindCollidesWithLoopback diz se o bind do listener PRINCIPAL alcança o mesmo
 // endereço que o listener loopback usa fixo (127.0.0.1, enderecoLoopback em
 // internal/server/security.go) — a única condição em que os dois listeners
 // na MESMA porta colidiriam de fato no kernel.
 //
 // Dois casos colidem: o bind principal É um endereço loopback (mesma
-// doutrina de BindExposto — IsLoopback cobre 127.0.0.0/8 inteiro, não só
+// doutrina de BindExposed — IsLoopback cobre 127.0.0.0/8 inteiro, não só
 // 127.0.0.1 literal — e "localhost" antes do ParseIP, pela mesma razão que
-// BindExposto o trata à parte), ou é o unspecified (0.0.0.0/::), que escuta
+// BindExposed o trata à parte), ou é o unspecified (0.0.0.0/::), que escuta
 // em TODAS as interfaces locais, 127.0.0.1 inclusive. Um IP ESPECÍFICO e
 // NÃO-loopback (o caso da Fase C: expor 10.200.20.218:9142 com o plano
 // loopback também em :9142) não colide — para o kernel são dois sockets em
@@ -100,11 +100,11 @@ type LoopbackSpec struct {
 // nenhuma.
 //
 // Nome que não resolve para IP (hostname arbitrário) é tratado como
-// podendo colidir — mesma doutrina de BindExposto: presumir inocência de um
+// podendo colidir — mesma doutrina de BindExposed: presumir inocência de um
 // endereço que não se sabe qual é seria errar para o lado errado, e aqui o
 // lado errado é deixar dois listeners tentarem bindar a mesma porta na
 // mesma interface sem avisar antes.
-func bindColideComLoopback(bind string) bool {
+func bindCollidesWithLoopback(bind string) bool {
 	if bind == "localhost" {
 		return true
 	}
@@ -123,10 +123,10 @@ const (
 	RoleAdmin = "ADMIN"
 )
 
-// validaServerSeguranca valida FORMA nos blocos server.tls,
+// validateServerSecurity valida FORMA nos blocos server.tls,
 // server.authentication e server.loopback (§74-78): whitelist manual de
 // chave dentro de cada bloco (o KnownFields GLOBAL continua desligado, ver
-// comentário em CarregaConfig) e as recusas cruzadas que dependem só do
+// comentário em Load) e as recusas cruzadas que dependem só do
 // arquivo. Roda depois do decode tipado (c já tem TLS/Authentication/
 // Loopback preenchidos) e depois de c.serverPort resolvido, porque a recusa
 // 8 compara loopback.port contra a porta PRINCIPAL JÁ COM O DEFAULT
@@ -139,47 +139,47 @@ const (
 // authentication está desligada; quem ligasse `enabled: true` meses depois
 // descobriria o erro só ali. As duas exceções são as próprias recusas 5 e 6,
 // que SÃO sobre a implicação de `enabled: true`.
-func validaServerSeguranca(c *Config, raiz *yaml.Node, path string) error {
-	servidor := filho(raizDoDocumento(raiz), "server")
+func validateServerSecurity(c *Config, root *yaml.Node, path string) error {
+	serverNode := child(documentRoot(root), "server")
 
-	if err := chavesConhecidas(filho(servidor, "tls"), "server.tls",
+	if err := knownKeys(child(serverNode, "tls"), "server.tls",
 		"enabled", "certificateFile", "privateKeyFile"); err != nil {
 		return fmt.Errorf("configuração %s: %w", path, err)
 	}
 	if c.Server.TLS.Enabled {
-		var faltando []string
+		var missing []string
 		if c.Server.TLS.CertificateFile == "" {
-			faltando = append(faltando, "server.tls.certificateFile")
+			missing = append(missing, "server.tls.certificateFile")
 		}
 		if c.Server.TLS.PrivateKeyFile == "" {
-			faltando = append(faltando, "server.tls.privateKeyFile")
+			missing = append(missing, "server.tls.privateKeyFile")
 		}
-		if len(faltando) > 0 {
+		if len(missing) > 0 {
 			return fmt.Errorf("configuração %s: server.tls.enabled: true exige %s",
-				path, strings.Join(faltando, " e "))
+				path, strings.Join(missing, " e "))
 		}
 	}
 
-	authNode := filho(servidor, "authentication")
+	authNode := child(serverNode, "authentication")
 	// A seção "apareceu no YAML" é fato do DOCUMENTO, não do valor decodificado
 	// de enabled: authNode != nil já responde isso mesmo quando `enabled` vem
 	// omitido dentro do bloco (Enabled fica nil do mesmo jeito que ficaria com
-	// o bloco inteiro ausente). É o que AuthenticationDeclarada expõe para a
+	// o bloco inteiro ausente). É o que AuthenticationDeclared expõe para a
 	// matriz do §77.
-	c.authenticationDeclarada = authNode != nil
-	if err := chavesConhecidas(authNode, "server.authentication", "enabled", "users"); err != nil {
+	c.authenticationDeclared = authNode != nil
+	if err := knownKeys(authNode, "server.authentication", "enabled", "users"); err != nil {
 		return fmt.Errorf("configuração %s: %w", path, err)
 	}
-	if err := validaUsuarios(c.Server.Authentication.Users, filho(authNode, "users"), path); err != nil {
+	if err := validateUsers(c.Server.Authentication.Users, child(authNode, "users"), path); err != nil {
 		return err
 	}
-	if c.AutenticacaoHabilitada() && len(c.Server.Authentication.Users) == 0 {
+	if c.AuthenticationEnabled() && len(c.Server.Authentication.Users) == 0 {
 		return fmt.Errorf(
 			"configuração %s: server.authentication.enabled: true exige ao menos um item em server.authentication.users",
 			path)
 	}
 
-	if err := chavesConhecidas(filho(servidor, "loopback"), "server.loopback", "enabled", "port"); err != nil {
+	if err := knownKeys(child(serverNode, "loopback"), "server.loopback", "enabled", "port"); err != nil {
 		return fmt.Errorf("configuração %s: %w", path, err)
 	}
 	// Mesma faixa de server.port (Minor 7 da revisão final): sem isto,
@@ -193,7 +193,7 @@ func validaServerSeguranca(c *Config, raiz *yaml.Node, path string) error {
 	if p := c.Server.Loopback.Port; p != nil && *p > 65535 {
 		return fmt.Errorf("configuração %s: server.loopback.port %d fora de 1..65535", path, *p)
 	}
-	if p := c.Server.Loopback.Port; p != nil && *p == c.serverPort && bindColideComLoopback(c.Server.Bind) {
+	if p := c.Server.Loopback.Port; p != nil && *p == c.serverPort && bindCollidesWithLoopback(c.Server.Bind) {
 		return fmt.Errorf(
 			"configuração %s: server.loopback.port (%d) colide com server.port (%d): o bind principal (%s) "+
 				"alcança 127.0.0.1, o endereço fixo do listener loopback, e os dois bindariam a mesma porta na "+
@@ -205,7 +205,7 @@ func validaServerSeguranca(c *Config, raiz *yaml.Node, path string) error {
 	return nil
 }
 
-// validaUsuarios recusa chave desconhecida em cada item de
+// validateUsers recusa chave desconhecida em cada item de
 // server.authentication.users e as quatro condições de FORMA do §75 que
 // valem por usuário: username presente e único na lista, role no enum
 // fechado, e exatamente uma fonte de senha entre passwordEnv/passwordFile.
@@ -213,37 +213,37 @@ func validaServerSeguranca(c *Config, raiz *yaml.Node, path string) error {
 // usersNode é o nó cru da lista (para a whitelist manual); users é a mesma
 // lista já decodificada tipada (para as checagens semânticas). Os dois
 // existem porque decodificação tipada e whitelist manual enxergam o
-// documento de formas diferentes — ver comentário de chavesConhecidas.
-func validaUsuarios(users []UserSpec, usersNode *yaml.Node, path string) error {
+// documento de formas diferentes — ver comentário de knownKeys.
+func validateUsers(users []UserSpec, usersNode *yaml.Node, path string) error {
 	if usersNode != nil {
 		for i, item := range usersNode.Content {
-			caminho := fmt.Sprintf("server.authentication.users[%d]", i)
-			if err := chavesConhecidas(item, caminho,
+			keyPath := fmt.Sprintf("server.authentication.users[%d]", i)
+			if err := knownKeys(item, keyPath,
 				"username", "passwordEnv", "passwordFile", "role"); err != nil {
 				return fmt.Errorf("configuração %s: %w", path, err)
 			}
 		}
 	}
 
-	vistos := make(map[string]bool, len(users))
+	seen := make(map[string]bool, len(users))
 	for i, u := range users {
-		caminho := fmt.Sprintf("server.authentication.users[%d]", i)
+		keyPath := fmt.Sprintf("server.authentication.users[%d]", i)
 
 		if u.Username == "" {
-			return fmt.Errorf("configuração %s: %s.username é obrigatório", path, caminho)
+			return fmt.Errorf("configuração %s: %s.username é obrigatório", path, keyPath)
 		}
-		if vistos[u.Username] {
-			return fmt.Errorf("configuração %s: %s.username %q duplicado entre users", path, caminho, u.Username)
+		if seen[u.Username] {
+			return fmt.Errorf("configuração %s: %s.username %q duplicado entre users", path, keyPath, u.Username)
 		}
-		vistos[u.Username] = true
+		seen[u.Username] = true
 
 		switch {
 		case u.PasswordEnv == "" && u.PasswordFile == "":
 			return fmt.Errorf("configuração %s: %s exige exatamente um entre passwordEnv e passwordFile (nenhum declarado)",
-				path, caminho)
+				path, keyPath)
 		case u.PasswordEnv != "" && u.PasswordFile != "":
 			return fmt.Errorf("configuração %s: %s exige exatamente um entre passwordEnv e passwordFile (os dois declarados)",
-				path, caminho)
+				path, keyPath)
 		}
 
 		// Comparação de string exata, de propósito: o enum é fechado e
@@ -256,53 +256,53 @@ func validaUsuarios(users []UserSpec, usersNode *yaml.Node, path string) error {
 		switch u.Role {
 		case RoleRead, RoleAdmin:
 		case "":
-			return fmt.Errorf("configuração %s: %s.role é obrigatório (%s|%s)", path, caminho, RoleRead, RoleAdmin)
+			return fmt.Errorf("configuração %s: %s.role é obrigatório (%s|%s)", path, keyPath, RoleRead, RoleAdmin)
 		default:
-			return fmt.Errorf("configuração %s: %s.role %q inválido (%s|%s)", path, caminho, u.Role, RoleRead, RoleAdmin)
+			return fmt.Errorf("configuração %s: %s.role %q inválido (%s|%s)", path, keyPath, u.Role, RoleRead, RoleAdmin)
 		}
 	}
 	return nil
 }
 
-// raizDoDocumento devolve o nó-mapa de topo do documento YAML, pulando o
+// documentRoot devolve o nó-mapa de topo do documento YAML, pulando o
 // DocumentNode que o yaml.v3 sempre insere como envelope. Documento vazio
-// (arquivo sem conteúdo) devolve nil, e filho(nil, ...) trata isso como
+// (arquivo sem conteúdo) devolve nil, e child(nil, ...) trata isso como
 // bloco ausente — o mesmo comportamento que o Config zerado já tinha antes
 // desta tarefa.
-func raizDoDocumento(n *yaml.Node) *yaml.Node {
+func documentRoot(n *yaml.Node) *yaml.Node {
 	if n != nil && n.Kind == yaml.DocumentNode && len(n.Content) > 0 {
 		return n.Content[0]
 	}
 	return n
 }
 
-// filho devolve o valor de `chave` dentro do nó de mapeamento pai, ou nil se
-// a chave não existe ou pai não é mapa (bloco ausente) — não há sentinela
+// child devolve o valor de `key` dentro do nó de mapeamento parent, ou nil se
+// a chave não existe ou parent não é mapa (bloco ausente) — não há sentinela
 // melhor porque yaml.Node é struct e não interface.
-func filho(pai *yaml.Node, chave string) *yaml.Node {
-	if pai == nil {
+func child(parent *yaml.Node, key string) *yaml.Node {
+	if parent == nil {
 		return nil
 	}
-	for pai.Kind == yaml.AliasNode {
-		pai = pai.Alias
+	for parent.Kind == yaml.AliasNode {
+		parent = parent.Alias
 	}
-	if pai.Kind != yaml.MappingNode {
+	if parent.Kind != yaml.MappingNode {
 		return nil
 	}
-	for i := 0; i+1 < len(pai.Content); i += 2 {
-		if pai.Content[i].Value == chave {
-			return pai.Content[i+1]
+	for i := 0; i+1 < len(parent.Content); i += 2 {
+		if parent.Content[i].Value == key {
+			return parent.Content[i+1]
 		}
 	}
 	return nil
 }
 
-// chavesConhecidas recusa chave desconhecida ou duplicada dentro de um nó de
+// knownKeys recusa chave desconhecida ou duplicada dentro de um nó de
 // mapeamento — WHITELIST MANUAL, no molde de bloco() em
 // internal/schema/source.go (mesma técnica descrita em
 // docs/operacao-kafka.md:115-119 para source/errors). A repetição é
 // deliberada: o KnownFields GLOBAL continua desligado de propósito
-// (comentário em CarregaConfig), porque o arquivo de um binário mais novo
+// (comentário em Load), porque o arquivo de um binário mais novo
 // (M3) não pode ficar inválido para este. Os blocos de segurança da Fase 11
 // são justamente os que não podem herdar essa tolerância — "enabld: true"
 // (typo) engolido em silêncio é o typo mais caro do arquivo.
@@ -311,7 +311,7 @@ func filho(pai *yaml.Node, chave string) *yaml.Node {
 // a ausência do bloco é aceitável. A iteração é na ordem do documento para
 // que o primeiro erro seja sempre o mesmo — ordem de mapa faria a mensagem
 // variar entre execuções.
-func chavesConhecidas(n *yaml.Node, caminho string, permitidas ...string) error {
+func knownKeys(n *yaml.Node, keyPath string, known ...string) error {
 	if n == nil {
 		return nil
 	}
@@ -319,19 +319,19 @@ func chavesConhecidas(n *yaml.Node, caminho string, permitidas ...string) error 
 		n = n.Alias
 	}
 	if n.Kind != yaml.MappingNode {
-		return fmt.Errorf("%s deve ser um mapa", caminho)
+		return fmt.Errorf("%s deve ser um mapa", keyPath)
 	}
-	vistas := make(map[string]bool, len(n.Content)/2)
+	seen := make(map[string]bool, len(n.Content)/2)
 	for i := 0; i+1 < len(n.Content); i += 2 {
 		k := n.Content[i].Value
-		if !slices.Contains(permitidas, k) {
+		if !slices.Contains(known, k) {
 			return fmt.Errorf("%s.%s: chave desconhecida (conhecidas: %s)",
-				caminho, k, strings.Join(permitidas, ", "))
+				keyPath, k, strings.Join(known, ", "))
 		}
-		if vistas[k] {
-			return fmt.Errorf("%s.%s: chave duplicada", caminho, k)
+		if seen[k] {
+			return fmt.Errorf("%s.%s: chave duplicada", keyPath, k)
 		}
-		vistas[k] = true
+		seen[k] = true
 	}
 	return nil
 }

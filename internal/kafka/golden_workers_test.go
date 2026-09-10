@@ -114,7 +114,7 @@ func corpusGolden() []string {
 // mat.Apply em laço passaria com a esteira quebrada.
 func rodaPipeline(t *testing.T, workers int, eventos []string) retratoDoDataset {
 	t.Helper()
-	spec, err := schema.Parse([]byte(goldenYAML), schema.DefaultsPadrao)
+	spec, err := schema.Parse([]byte(goldenYAML), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}

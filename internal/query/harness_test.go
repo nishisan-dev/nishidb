@@ -32,7 +32,7 @@ type harness struct {
 
 func novoHarness(t *testing.T) *harness {
 	t.Helper()
-	spec, err := schema.Load(fixtureYAML, schema.DefaultsPadrao)
+	spec, err := schema.Load(fixtureYAML, schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func novoHarness(t *testing.T) *harness {
 	todosOsIndexados := ids(t, sch, "Acct-Status-Type", "Framed-Protocol", "Acct-Terminate-Cause",
 		"Filter-Id", "NAS-Port-Type", "Service-Type", "Acct-Authentic",
 		"NAS-IP-Address", "NAS-Identifier", "Framed-IP-Address")
-	idx := fakestorage.Indexes{Campos: todosOsIndexados}
+	idx := fakestorage.Indexes{Fields: todosOsIndexados}
 	st := fakestorage.New(idx)
 	eng := query.NewEngine()
 	if err := eng.Register(dataset, sch, st); err != nil {
@@ -90,7 +90,7 @@ func (h *harness) ingere(eventos ...string) {
 // dublê só para teste.
 func (h *harness) rowID(key string) types.RowID {
 	h.t.Helper()
-	rec, _, ok, err := h.store.GetByKey(h.store.AbreSnapshot(), []byte(key), nil)
+	rec, _, ok, err := h.store.GetByKey(h.store.OpenSnapshot(), []byte(key), nil)
 	if err != nil || !ok {
 		h.t.Fatalf("key %q não materializada (ok=%v err=%v)", key, ok, err)
 	}

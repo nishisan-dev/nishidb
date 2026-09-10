@@ -16,7 +16,7 @@ import (
 // matDoGolden monta um materializer sobre o YAML do golden, com relógio fixo.
 func matDoGolden(t testing.TB) *materializer.Materializer {
 	t.Helper()
-	spec, err := schema.Parse([]byte(goldenYAML), schema.DefaultsPadrao)
+	spec, err := schema.Parse([]byte(goldenYAML), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}

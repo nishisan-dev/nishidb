@@ -8,9 +8,9 @@ import (
 	"testing"
 )
 
-func abreDicionario(t *testing.T, path string, teto uint32) *Dicionario {
+func openDict(t *testing.T, path string, ceiling uint32) *Dict {
 	t.Helper()
-	d, err := AbreDicionario(path, teto)
+	d, err := OpenDict(path, ceiling)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -20,58 +20,58 @@ func abreDicionario(t *testing.T, path string, teto uint32) *Dicionario {
 
 func TestDicionarioInternaEReabre(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "grupos.dict")
-	d := abreDicionario(t, path, 100)
-	chaves := [][]byte{[]byte("PRCTA_G1M10"), []byte("BR_SPOMO_OLT10"), []byte("\x00bin\xff")}
-	for i, ch := range chaves {
-		id, err := d.Interna(ch)
+	d := openDict(t, path, 100)
+	keys := [][]byte{[]byte("PRCTA_G1M10"), []byte("BR_SPOMO_OLT10"), []byte("\x00bin\xff")}
+	for i, key := range keys {
+		id, err := d.Intern(key)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if id != uint32(i+1) {
-			t.Fatalf("id de %q = %d, quer %d (1-based, em ordem de internação)", ch, id, i+1)
+			t.Fatalf("id de %q = %d, quer %d (1-based, em ordem de internação)", key, id, i+1)
 		}
 	}
 	// Internar de novo devolve o MESMO id, sem crescer o arquivo.
-	antes := d.SizeBytes()
-	if id, err := d.Interna(chaves[1]); err != nil || id != 2 {
+	before := d.SizeBytes()
+	if id, err := d.Intern(keys[1]); err != nil || id != 2 {
 		t.Fatalf("reinternar: %d, %v", id, err)
 	}
-	if d.SizeBytes() != antes {
+	if d.SizeBytes() != before {
 		t.Fatal("reinternar chave existente não pode escrever no arquivo")
 	}
 	if err := d.Close(); err != nil {
 		t.Fatal(err)
 	}
-	d2 := abreDicionario(t, path, 100)
-	if d2.Limite() != 4 || d2.Vivos() != 3 {
-		t.Fatalf("reabertura: limite %d vivos %d, quer 4 e 3", d2.Limite(), d2.Vivos())
+	d2 := openDict(t, path, 100)
+	if d2.Limit() != 4 || d2.LiveGroups() != 3 {
+		t.Fatalf("reabertura: limite %d vivos %d, quer 4 e 3", d2.Limit(), d2.LiveGroups())
 	}
-	for i, ch := range chaves {
-		got, vivo := d2.Chave(uint32(i + 1))
-		if !vivo || string(got) != string(ch) {
-			t.Fatalf("Chave(%d) = %q, %v; quer %q, true", i+1, got, vivo, ch)
+	for i, key := range keys {
+		got, live := d2.Key(uint32(i + 1))
+		if !live || string(got) != string(key) {
+			t.Fatalf("Key(%d) = %q, %v; quer %q, true", i+1, got, live, key)
 		}
-		if id, ok := d2.PorChave(ch); !ok || id != uint32(i+1) {
-			t.Fatalf("PorChave(%q) = %d, %v", ch, id, ok)
+		if id, ok := d2.ByKey(key); !ok || id != uint32(i+1) {
+			t.Fatalf("ByKey(%q) = %d, %v", key, id, ok)
 		}
 	}
-	if _, vivo := d2.Chave(0); vivo {
-		t.Fatal("id 0 é SemGrupo, nunca vivo")
+	if _, live := d2.Key(0); live {
+		t.Fatal("id 0 é WithoutGroup, nunca vivo")
 	}
-	if _, vivo := d2.Chave(4); vivo {
+	if _, live := d2.Key(4); live {
 		t.Fatal("id além do limite não é vivo")
 	}
 }
 
 func TestDicionarioTruncaCaudaRasgada(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "grupos.dict")
-	d := abreDicionario(t, path, 100)
-	for _, ch := range []string{"a", "bb"} {
-		if _, err := d.Interna([]byte(ch)); err != nil {
+	d := openDict(t, path, 100)
+	for _, key := range []string{"a", "bb"} {
+		if _, err := d.Intern([]byte(key)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	tamanho := d.SizeBytes()
+	size := d.SizeBytes()
 	if err := d.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -86,44 +86,44 @@ func TestDicionarioTruncaCaudaRasgada(t *testing.T) {
 	if err := f.Close(); err != nil {
 		t.Fatal(err)
 	}
-	d2 := abreDicionario(t, path, 100)
-	if d2.Limite() != 3 {
-		t.Fatalf("limite depois da cauda rasgada = %d, quer 3", d2.Limite())
+	d2 := openDict(t, path, 100)
+	if d2.Limit() != 3 {
+		t.Fatalf("limite depois da cauda rasgada = %d, quer 3", d2.Limit())
 	}
-	if d2.SizeBytes() != tamanho {
-		t.Fatalf("o arquivo tinha de voltar a %d bytes, tem %d", tamanho, d2.SizeBytes())
+	if d2.SizeBytes() != size {
+		t.Fatalf("o arquivo tinha de voltar a %d bytes, tem %d", size, d2.SizeBytes())
 	}
 	st, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.Size() != tamanho {
-		t.Fatalf("o arquivo em disco tem %d bytes, quer %d (truncado)", st.Size(), tamanho)
+	if st.Size() != size {
+		t.Fatalf("o arquivo em disco tem %d bytes, quer %d (truncado)", st.Size(), size)
 	}
 }
 
 func TestDicionarioAposentaENuncaReemite(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "grupos.dict")
-	d := abreDicionario(t, path, 100)
-	for _, ch := range []string{"a", "b", "c"} {
-		if _, err := d.Interna([]byte(ch)); err != nil {
+	d := openDict(t, path, 100)
+	for _, key := range []string{"a", "b", "c"} {
+		if _, err := d.Intern([]byte(key)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := d.Aposenta(2); err != nil {
+	if err := d.Retire(2); err != nil {
 		t.Fatal(err)
 	}
-	if _, vivo := d.Chave(2); vivo {
+	if _, live := d.Key(2); live {
 		t.Fatal("grupo aposentado não é vivo")
 	}
-	if _, ok := d.PorChave([]byte("b")); ok {
+	if _, ok := d.ByKey([]byte("b")); ok {
 		t.Fatal("chave aposentada não resolve mais")
 	}
-	if d.Vivos() != 2 || d.Aposentados() != 1 {
-		t.Fatalf("vivos %d aposentados %d", d.Vivos(), d.Aposentados())
+	if d.LiveGroups() != 2 || d.RetiredGroups() != 1 {
+		t.Fatalf("vivos %d aposentados %d", d.LiveGroups(), d.RetiredGroups())
 	}
 	// A mesma chave, de volta, é um grupo NOVO: o id 2 nunca é reemitido.
-	id, err := d.Interna([]byte("b"))
+	id, err := d.Intern([]byte("b"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,47 +134,47 @@ func TestDicionarioAposentaENuncaReemite(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A aposentadoria é durável: sobrevive à reabertura.
-	d2 := abreDicionario(t, path, 100)
-	if _, vivo := d2.Chave(2); vivo {
+	d2 := openDict(t, path, 100)
+	if _, live := d2.Key(2); live {
 		t.Fatal("aposentadoria perdida na reabertura")
 	}
-	if id, ok := d2.PorChave([]byte("b")); !ok || id != 4 {
-		t.Fatalf("PorChave(b) depois da reabertura = %d, %v; quer 4", id, ok)
+	if id, ok := d2.ByKey([]byte("b")); !ok || id != 4 {
+		t.Fatalf("ByKey(b) depois da reabertura = %d, %v; quer 4", id, ok)
 	}
-	if d2.Limite() != 5 || d2.Vivos() != 3 || d2.Aposentados() != 1 {
-		t.Fatalf("reabertura: limite %d vivos %d aposentados %d", d2.Limite(), d2.Vivos(), d2.Aposentados())
+	if d2.Limit() != 5 || d2.LiveGroups() != 3 || d2.RetiredGroups() != 1 {
+		t.Fatalf("reabertura: limite %d vivos %d aposentados %d", d2.Limit(), d2.LiveGroups(), d2.RetiredGroups())
 	}
 	// Aposentar duas vezes, ou um id que não existe, é erro: aposentadoria é
 	// decisão do coletor sobre um grupo vivo, e a repetição denunciaria um
 	// coletor que perdeu o próprio estado.
-	if err := d2.Aposenta(2); err == nil {
+	if err := d2.Retire(2); err == nil {
 		t.Fatal("aposentar de novo tem de falhar")
 	}
-	if err := d2.Aposenta(99); err == nil {
+	if err := d2.Retire(99); err == nil {
 		t.Fatal("aposentar id inexistente tem de falhar")
 	}
 }
 
 func TestDicionarioRecusaOTeto(t *testing.T) {
-	d := abreDicionario(t, filepath.Join(t.TempDir(), "grupos.dict"), 2)
-	if _, err := d.Interna([]byte("a")); err != nil {
+	d := openDict(t, filepath.Join(t.TempDir(), "grupos.dict"), 2)
+	if _, err := d.Intern([]byte("a")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.Interna([]byte("b")); err != nil {
+	if _, err := d.Intern([]byte("b")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.Interna([]byte("c")); !errors.Is(err, ErrTetoDeGrupos) {
-		t.Fatalf("terceira chave com teto 2 tem de dar ErrTetoDeGrupos, veio %v", err)
+	if _, err := d.Intern([]byte("c")); !errors.Is(err, ErrGroupCeilingReached) {
+		t.Fatalf("terceira chave com teto 2 tem de dar ErrGroupCeilingReached, veio %v", err)
 	}
 	// Chave já internada continua resolvendo mesmo no teto.
-	if id, err := d.Interna([]byte("a")); err != nil || id != 1 {
+	if id, err := d.Intern([]byte("a")); err != nil || id != 1 {
 		t.Fatalf("chave existente no teto: %d, %v", id, err)
 	}
 	// O teto conta grupos VIVOS: aposentar um libera uma vaga.
-	if err := d.Aposenta(1); err != nil {
+	if err := d.Retire(1); err != nil {
 		t.Fatal(err)
 	}
-	if id, err := d.Interna([]byte("c")); err != nil || id != 3 {
+	if id, err := d.Intern([]byte("c")); err != nil || id != 3 {
 		t.Fatalf("depois de aposentar: %d, %v; quer 3", id, err)
 	}
 }
@@ -186,52 +186,52 @@ func TestDicionarioRecusaOTeto(t *testing.T) {
 // distinguir "escreveu e sincronizou" de "escreveu e sincronizou depois" sem
 // derrubar a máquina.
 func TestDicionarioFsyncaAntesDeDevolverOId(t *testing.T) {
-	d := abreDicionario(t, filepath.Join(t.TempDir(), "grupos.dict"), 10)
-	rec := &gravadorDeOrdem{}
-	d.envolveArquivoParaTeste(func(f arquivoDoDicionario) arquivoDoDicionario {
+	d := openDict(t, filepath.Join(t.TempDir(), "grupos.dict"), 10)
+	rec := &orderRecorder{}
+	d.wrapFileForTest(func(f dictFile) dictFile {
 		rec.inner = f
 		return rec
 	})
-	if _, err := d.Interna([]byte("a")); err != nil {
+	if _, err := d.Intern([]byte("a")); err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"WriteAt", "Sync"}; !slices.Equal(rec.chamadas, want) {
-		t.Fatalf("ordem de durabilidade da internação = %v, quer %v", rec.chamadas, want)
+	if want := []string{"WriteAt", "Sync"}; !slices.Equal(rec.calls, want) {
+		t.Fatalf("ordem de durabilidade da internação = %v, quer %v", rec.calls, want)
 	}
-	rec.chamadas = nil
-	if err := d.Aposenta(1); err != nil {
+	rec.calls = nil
+	if err := d.Retire(1); err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"WriteAt", "Sync"}; !slices.Equal(rec.chamadas, want) {
-		t.Fatalf("ordem de durabilidade da aposentadoria = %v, quer %v", rec.chamadas, want)
+	if want := []string{"WriteAt", "Sync"}; !slices.Equal(rec.calls, want) {
+		t.Fatalf("ordem de durabilidade da aposentadoria = %v, quer %v", rec.calls, want)
 	}
 }
 
 func TestDicionarioRecusaChaveVaziaOuGrandeDemais(t *testing.T) {
-	d := abreDicionario(t, filepath.Join(t.TempDir(), "grupos.dict"), 10)
-	if _, err := d.Interna(nil); err == nil {
+	d := openDict(t, filepath.Join(t.TempDir(), "grupos.dict"), 10)
+	if _, err := d.Intern(nil); err == nil {
 		t.Fatal("chave vazia tem de ser recusada")
 	}
-	if _, err := d.Interna(make([]byte, 1<<16)); err == nil {
+	if _, err := d.Intern(make([]byte, 1<<16)); err == nil {
 		t.Fatal("chave acima de u16 tem de ser recusada")
 	}
 }
 
-// gravadorDeOrdem registra a sequência de chamadas de durabilidade.
-type gravadorDeOrdem struct {
-	inner    arquivoDoDicionario
-	chamadas []string
+// orderRecorder registra a sequência de chamadas de durabilidade.
+type orderRecorder struct {
+	inner dictFile
+	calls []string
 }
 
-func (r *gravadorDeOrdem) WriteAt(p []byte, off int64) (int, error) {
-	r.chamadas = append(r.chamadas, "WriteAt")
+func (r *orderRecorder) WriteAt(p []byte, off int64) (int, error) {
+	r.calls = append(r.calls, "WriteAt")
 	return r.inner.WriteAt(p, off)
 }
 
-func (r *gravadorDeOrdem) Sync() error {
-	r.chamadas = append(r.chamadas, "Sync")
+func (r *orderRecorder) Sync() error {
+	r.calls = append(r.calls, "Sync")
 	return r.inner.Sync()
 }
 
-func (r *gravadorDeOrdem) Truncate(n int64) error { return r.inner.Truncate(n) }
-func (r *gravadorDeOrdem) Close() error           { return r.inner.Close() }
+func (r *orderRecorder) Truncate(n int64) error { return r.inner.Truncate(n) }
+func (r *orderRecorder) Close() error           { return r.inner.Close() }

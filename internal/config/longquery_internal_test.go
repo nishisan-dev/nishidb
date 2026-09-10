@@ -16,7 +16,7 @@ import (
 // maxLongRunning acima do maxConcurrent pede algo que o semáforo geral recusaria
 // primeiro, e aí a recusa é o serviço.
 func TestMaxLongRunningTemLeitorEValidacao(t *testing.T) {
-	c, err := CarregaConfig(escreveConfig(t, ""))
+	c, err := Load(writeConfig(t, ""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,7 +24,7 @@ func TestMaxLongRunningTemLeitorEValidacao(t *testing.T) {
 		t.Fatalf("MaxLongRunning padrão = %d, quer 2", c.MaxLongRunning())
 	}
 
-	c, err = CarregaConfig(escreveConfig(t, "runtime:\n  query:\n    maxLongRunning: 5\n"))
+	c, err = Load(writeConfig(t, "runtime:\n  query:\n    maxLongRunning: 5\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,7 @@ func TestMaxLongRunningTemLeitorEValidacao(t *testing.T) {
 	}
 
 	// O caso de compatibilidade: pool de uma vaga, sub-pool não declarado.
-	c, err = CarregaConfig(escreveConfig(t, "runtime:\n  query:\n    maxConcurrent: 1\n"))
+	c, err = Load(writeConfig(t, "runtime:\n  query:\n    maxConcurrent: 1\n"))
 	if err != nil {
 		t.Fatalf("maxConcurrent: 1 sem maxLongRunning tem de subir: %v", err)
 	}
@@ -42,17 +42,17 @@ func TestMaxLongRunningTemLeitorEValidacao(t *testing.T) {
 			c.MaxLongRunning())
 	}
 
-	_, err = CarregaConfig(escreveConfig(t, "runtime:\n  query:\n    maxConcurrent: 2\n    maxLongRunning: 3\n"))
+	_, err = Load(writeConfig(t, "runtime:\n  query:\n    maxConcurrent: 2\n    maxLongRunning: 3\n"))
 	if err == nil {
 		t.Fatal("maxLongRunning acima do maxConcurrent deveria ser recusado")
 	}
-	for _, chave := range []string{"runtime.query.maxLongRunning", "runtime.query.maxConcurrent"} {
-		if !strings.Contains(err.Error(), chave) {
-			t.Errorf("a mensagem não nomeia %s: %v", chave, err)
+	for _, key := range []string{"runtime.query.maxLongRunning", "runtime.query.maxConcurrent"} {
+		if !strings.Contains(err.Error(), key) {
+			t.Errorf("a mensagem não nomeia %s: %v", key, err)
 		}
 	}
 
-	_, err = CarregaConfig(escreveConfig(t, "runtime:\n  query:\n    maxLongRunning: 0\n"))
+	_, err = Load(writeConfig(t, "runtime:\n  query:\n    maxLongRunning: 0\n"))
 	if err == nil {
 		t.Fatal("maxLongRunning: 0 deveria ser recusado")
 	}
@@ -69,29 +69,29 @@ func TestMaxLongRunningTemLeitorEValidacao(t *testing.T) {
 // abertura: o processo morreria na troca de binário por causa de um arquivo que
 // ninguém tocou.
 func TestDefaultMaxTimeoutTemLeitorEValidacao(t *testing.T) {
-	c, err := CarregaConfig(escreveConfig(t, ""))
+	c, err := Load(writeConfig(t, ""))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d := c.DefaultsDeQuery(); d.MaxTimeout != 0 {
-		t.Fatalf("DefaultsDeQuery().MaxTimeout = %s sem a chave, quer 0 (o sinal de \"herda o timeout\")",
+	if d := c.QueryDefaults(); d.MaxTimeout != 0 {
+		t.Fatalf("QueryDefaults().MaxTimeout = %s sem a chave, quer 0 (o sinal de \"herda o timeout\")",
 			d.MaxTimeout)
 	}
 
-	c, err = CarregaConfig(escreveConfig(t, "query:\n  defaultMaxTimeout: 12m\n"))
+	c, err = Load(writeConfig(t, "query:\n  defaultMaxTimeout: 12m\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d := c.DefaultsDeQuery(); d.MaxTimeout != 12*time.Minute {
-		t.Fatalf("DefaultsDeQuery().MaxTimeout = %s, quer 12m", d.MaxTimeout)
+	if d := c.QueryDefaults(); d.MaxTimeout != 12*time.Minute {
+		t.Fatalf("QueryDefaults().MaxTimeout = %s, quer 12m", d.MaxTimeout)
 	}
 	// Declarar o TETO não pode mexer no prazo padrão: são chaves distintas
 	// justamente para que subir uma não suba a outra.
-	if d := c.DefaultsDeQuery(); d.Timeout != timeoutPadrao {
-		t.Fatalf("DefaultsDeQuery().Timeout = %s, quer %s", d.Timeout, timeoutPadrao)
+	if d := c.QueryDefaults(); d.Timeout != defaultQueryTimeout {
+		t.Fatalf("QueryDefaults().Timeout = %s, quer %s", d.Timeout, defaultQueryTimeout)
 	}
 
-	_, err = CarregaConfig(escreveConfig(t, "query:\n  defaultMaxTimeout: nao-e-duracao\n"))
+	_, err = Load(writeConfig(t, "query:\n  defaultMaxTimeout: nao-e-duracao\n"))
 	if err == nil {
 		t.Fatal("defaultMaxTimeout inválido deveria ser recusado")
 	}
@@ -107,19 +107,19 @@ func TestDefaultMaxTimeoutTemLeitorEValidacao(t *testing.T) {
 // `query.maxTimeout`/`query.timeout` — chaves de OUTRO arquivo, que o operador
 // não encontraria no nishidb.yaml que ele acabou de editar.
 func TestDefaultMaxTimeoutAbaixoDoDefaultTimeoutEhRecusado(t *testing.T) {
-	_, err := CarregaConfig(escreveConfig(t, "query:\n  defaultTimeout: 30s\n  defaultMaxTimeout: 10s\n"))
+	_, err := Load(writeConfig(t, "query:\n  defaultTimeout: 30s\n  defaultMaxTimeout: 10s\n"))
 	if err == nil {
 		t.Fatal("quer recusa: o teto global recusaria o prazo que ele mesmo dá por padrão")
 	}
-	for _, chave := range []string{"query.defaultMaxTimeout", "query.defaultTimeout"} {
-		if !strings.Contains(err.Error(), chave) {
-			t.Errorf("a mensagem não nomeia %s: %v", chave, err)
+	for _, key := range []string{"query.defaultMaxTimeout", "query.defaultTimeout"} {
+		if !strings.Contains(err.Error(), key) {
+			t.Errorf("a mensagem não nomeia %s: %v", key, err)
 		}
 	}
 
 	// Igual é o caso normal e tem de passar: um `<=` no lugar do `<` recusaria
 	// a configuração mais natural que existe.
-	if _, err := CarregaConfig(escreveConfig(t,
+	if _, err := Load(writeConfig(t,
 		"query:\n  defaultTimeout: 30s\n  defaultMaxTimeout: 30s\n")); err != nil {
 		t.Fatalf("teto igual ao prazo padrão tem de ser aceito: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestDefaultMaxTimeoutAbaixoDoDefaultTimeoutEhRecusado(t *testing.T) {
 // teste cobre os três estados que separam "tem leitor" de "está no arquivo":
 // o default do §80, o valor declarado, e a recusa do valor inválido pela chave.
 func TestMaxBufferPerQueryTemLeitorEValidacao(t *testing.T) {
-	c, err := CarregaConfig(escreveConfig(t, ""))
+	c, err := Load(writeConfig(t, ""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestMaxBufferPerQueryTemLeitorEValidacao(t *testing.T) {
 		t.Fatalf("MemoryTarget padrão = %d, quer 512MiB (§80)", c.MemoryTarget())
 	}
 
-	c, err = CarregaConfig(escreveConfig(t,
+	c, err = Load(writeConfig(t,
 		"runtime:\n  memoryTarget: 2GiB\n  query:\n    maxBufferPerQuery: 16MiB\n"))
 	if err != nil {
 		t.Fatal(err)
@@ -160,7 +160,7 @@ func TestMaxBufferPerQueryTemLeitorEValidacao(t *testing.T) {
 	// "4MiB" pareceriam a mesma coisa e diferiam em 5%.
 	for _, v := range []string{"quatro", "0", "-1", "4MB"} {
 		t.Run("maxBufferPerQuery "+v, func(t *testing.T) {
-			_, err := CarregaConfig(escreveConfig(t, "runtime:\n  query:\n    maxBufferPerQuery: \""+v+"\"\n"))
+			_, err := Load(writeConfig(t, "runtime:\n  query:\n    maxBufferPerQuery: \""+v+"\"\n"))
 			if err == nil {
 				t.Fatalf("maxBufferPerQuery %q deveria ser recusado", v)
 			}
@@ -171,7 +171,7 @@ func TestMaxBufferPerQueryTemLeitorEValidacao(t *testing.T) {
 	}
 	for _, v := range []string{"quatro", "0", "-1", "512MB"} {
 		t.Run("memoryTarget "+v, func(t *testing.T) {
-			_, err := CarregaConfig(escreveConfig(t, "runtime:\n  memoryTarget: \""+v+"\"\n"))
+			_, err := Load(writeConfig(t, "runtime:\n  memoryTarget: \""+v+"\"\n"))
 			if err == nil {
 				t.Fatalf("memoryTarget %q deveria ser recusado", v)
 			}
@@ -189,20 +189,20 @@ func TestMaxBufferPerQueryTemLeitorEValidacao(t *testing.T) {
 // contradição que ele escreveu. Recusar na abertura, nomeando as duas chaves, é
 // o que transforma isso num erro de configuração legível.
 func TestMaxBufferPerQueryAcimaDoMemoryTargetEhRecusado(t *testing.T) {
-	_, err := CarregaConfig(escreveConfig(t,
+	_, err := Load(writeConfig(t,
 		"runtime:\n  memoryTarget: 8MiB\n  query:\n    maxBufferPerQuery: 16MiB\n"))
 	if err == nil {
 		t.Fatal("quer recusa: o orçamento de UMA consulta não pode passar o do processo")
 	}
-	for _, chave := range []string{"runtime.query.maxBufferPerQuery", "runtime.memoryTarget"} {
-		if !strings.Contains(err.Error(), chave) {
-			t.Errorf("a mensagem não nomeia %s: %v", chave, err)
+	for _, key := range []string{"runtime.query.maxBufferPerQuery", "runtime.memoryTarget"} {
+		if !strings.Contains(err.Error(), key) {
+			t.Errorf("a mensagem não nomeia %s: %v", key, err)
 		}
 	}
 
 	// Igual passa: um processo de uma consulta só é configuração legítima, e um
 	// `>=` no lugar do `>` a recusaria.
-	if _, err := CarregaConfig(escreveConfig(t,
+	if _, err := Load(writeConfig(t,
 		"runtime:\n  memoryTarget: 8MiB\n  query:\n    maxBufferPerQuery: 8MiB\n")); err != nil {
 		t.Fatalf("orçamento por consulta igual ao do processo tem de ser aceito: %v", err)
 	}
@@ -215,18 +215,18 @@ func TestMaxBufferPerQueryAcimaDoMemoryTargetEhRecusado(t *testing.T) {
 func TestSnapshotMaxBytesAusenteUsaOPadraoEAcimaDoMemoryTargetRecusa(t *testing.T) {
 	// Com o memoryTarget padrão (512 MiB), um oitavo dá 64 MiB — o teto
 	// absoluto. É o caso comum, e o que o operador vê sem declarar nada.
-	c, err := CarregaConfig(escreveConfig(t, ""))
+	c, err := Load(writeConfig(t, ""))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := c.SnapshotMaxBytes(); got != snapshotMaxBytesPadrao {
-		t.Errorf("SnapshotMaxBytes ausente = %d, quero o padrão %d", got, snapshotMaxBytesPadrao)
+	if got := c.SnapshotMaxBytes(); got != defaultSnapshotMaxBytes {
+		t.Errorf("SnapshotMaxBytes ausente = %d, quero o padrão %d", got, defaultSnapshotMaxBytes)
 	}
 
 	// Num processo pequeno o padrão ENCOLHE junto, e não derruba a subida: uma
 	// configuração que sobe hoje tem de continuar subindo depois de a chave
 	// existir.
-	c, err = CarregaConfig(escreveConfig(t, "runtime:\n  memoryTarget: 8MiB\n"))
+	c, err = Load(writeConfig(t, "runtime:\n  memoryTarget: 8MiB\n"))
 	if err != nil {
 		t.Fatalf("o padrão do journal derrubou a subida de um processo pequeno: %v", err)
 	}
@@ -234,7 +234,7 @@ func TestSnapshotMaxBytesAusenteUsaOPadraoEAcimaDoMemoryTargetRecusa(t *testing.
 		t.Errorf("SnapshotMaxBytes com memoryTarget de 8MiB = %d, quero 1MiB (um oitavo)", got)
 	}
 
-	c, err = CarregaConfig(escreveConfig(t, "runtime:\n  query:\n    snapshotMaxBytes: 128MiB\n"))
+	c, err = Load(writeConfig(t, "runtime:\n  query:\n    snapshotMaxBytes: 128MiB\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +245,7 @@ func TestSnapshotMaxBytesAusenteUsaOPadraoEAcimaDoMemoryTargetRecusa(t *testing.
 	// Acima do memoryTarget, o journal sozinho estouraria o orçamento do
 	// processo inteiro — é a mesma recusa que o maxBufferPerQuery já faz, e
 	// pela mesma razão: um teto que não cabe no teto de cima não é teto.
-	_, err = CarregaConfig(escreveConfig(t, "runtime:\n  memoryTarget: 64MiB\n  query:\n    snapshotMaxBytes: 128MiB\n"))
+	_, err = Load(writeConfig(t, "runtime:\n  memoryTarget: 64MiB\n  query:\n    snapshotMaxBytes: 128MiB\n"))
 	if err == nil {
 		t.Error("snapshotMaxBytes acima do memoryTarget foi ACEITO: o journal sozinho estouraria o orçamento do processo")
 	}

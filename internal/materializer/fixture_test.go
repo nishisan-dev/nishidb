@@ -112,7 +112,7 @@ func TestConvertRadiusFixture(t *testing.T) {
 // um mapa local de tipos; este prova que a spec inteira casa com o evento
 // inteiro, que é o que a ingestão vai fazer.
 func TestParseRadiusFixtureWithSpecYAML(t *testing.T) {
-	spec, err := schema.Load(fixtureSpec, schema.DefaultsPadrao)
+	spec, err := schema.Load(fixtureSpec, schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}

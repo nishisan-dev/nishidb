@@ -59,12 +59,12 @@ func (b *PatchBuffer) extraiDerivadas() error {
 			}
 			continue
 		}
-		if p.campo.DescobreAninhados {
+		if p.campo.DiscoverNested {
 			if err := b.descobreAninhados(p); err != nil {
 				return err
 			}
 		}
-		for _, d := range p.campo.Derivadas {
+		for _, d := range p.campo.DerivedColumns {
 			f, ok := b.buscaCaminho(p.valor, d.Path, 0)
 			if !ok {
 				continue
@@ -112,7 +112,7 @@ func (b *PatchBuffer) extraiDerivadas() error {
 // de corrente — linha errada, não linha a menos.
 //
 // ENUMERA DECLARADAS E DESCOBERTAS, e essa é a parte que não pode ser
-// esquecida: `pai.Derivadas` só tem as declaradas, e um dataset de descoberta
+// esquecida: `pai.DerivedColumns` só tem as declaradas, e um dataset de descoberta
 // pura (o do piloto: `unknownFields: include` sem nenhum `extract`) tem essa
 // lista VAZIA. Percorrer só as Derivadas aqui seria um conserto que não
 // consertaria nada exatamente onde o defeito foi medido.
@@ -158,7 +158,7 @@ func (b *PatchBuffer) removeAsColunasDoPai(p paiVisto) error {
 		// 0 de 3.000 documentos.
 		return errPrecisaDoWriter
 	}
-	b.filhosBuf = b.compilado.AnexaFilhos(p.campo, b.filhosBuf[:0])
+	b.filhosBuf = b.compilado.AppendChildren(p.campo, b.filhosBuf[:0])
 	if len(b.filhosBuf) == 0 {
 		return nil
 	}
@@ -275,18 +275,18 @@ func (b *PatchBuffer) descobreAninhados(p paiVisto) error {
 		b.nomeBuf = append(append(append(b.nomeBuf[:0], p.campo.Name...), '.'), f.Key...)
 		cf, err := b.resolveAninhado(p.campo, b.nomeBuf, f.Key)
 		if err != nil {
-			// Teto sob política `stop` (schema.ErrTetoDeCampos, que o classify
+			// Teto sob política `stop` (schema.ErrFieldCeiling, que o classify
 			// mapeia para FIELDS_EXHAUSTED e que PARA a ingestão) ou falha do
 			// dicionário (infra). Os dois sobem: o primeiro é a política que o
 			// operador declarou, o segundo é dataset avariado. Sob `ignore` não
-			// se chega aqui — o ResolveAninhado devolve (nil, nil).
+			// se chega aqui — o ResolveNested devolve (nil, nil).
 			return err
 		}
 		if cf == nil {
 			// Teto sob `ignore`, ou nome tomado por uma coluna de topo com
 			// ponto no nome. A coluna não existe e nunca existiu, então não há
 			// valor anterior que ela pudesse contradizer — o documento segue
-			// guardando o valor. A perda do teto está no camposDescartados.
+			// guardando o valor. A perda do teto está no discardedFieldCount.
 			continue
 		}
 		b.conta(contaOcorrencia, cf, types.TypeNull)
@@ -342,7 +342,7 @@ func (b *PatchBuffer) descobreAninhados(p paiVisto) error {
 
 // declarado informa se o caminho de um nível já é coberto por um extract.
 func (b *PatchBuffer) declarado(pai *schema.CompiledField, chave []byte) bool {
-	for _, d := range pai.Derivadas {
+	for _, d := range pai.DerivedColumns {
 		if d.Path == string(chave) {
 			return true
 		}

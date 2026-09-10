@@ -22,10 +22,10 @@ func boolv(b bool) types.Value {
 // contadores num mapa. Os esperados são literais — o texto é contrato com quem
 // consulta, e derivá-lo da função faria o teste concordar com qualquer mudança.
 func TestTextoDaChaveEhGolden(t *testing.T) {
-	casos := []struct {
-		nome  string
-		vs    []types.Value
-		texto string
+	cases := []struct {
+		name string
+		vs   []types.Value
+		text string
 	}{
 		{"um componente sai sem separador", []types.Value{str("PRCTA_G1M10")}, "PRCTA_G1M10"},
 		{"composto", []types.Value{str("PRCTA_G1M10"), i64(1), i64(9)}, "PRCTA_G1M10|1|9"},
@@ -35,45 +35,45 @@ func TestTextoDaChaveEhGolden(t *testing.T) {
 		{"barra invertida escapada", []types.Value{str(`x\y`)}, `x\\y`},
 		{"string vazia", []types.Value{str(""), i64(2)}, "|2"},
 	}
-	for _, c := range casos {
-		t.Run(c.nome, func(t *testing.T) {
-			chave, err := valuekey.AppendComposite(nil, c.vs)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			key, err := valuekey.AppendComposite(nil, c.vs)
 			if err != nil {
 				t.Fatal(err)
 			}
-			got, _, err := TextoDaChave(nil, chave, nil)
+			got, _, err := KeyText(nil, key, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if string(got) != c.texto {
-				t.Fatalf("texto de %s = %q, golden %q", c.nome, got, c.texto)
+			if string(got) != c.text {
+				t.Fatalf("texto de %s = %q, golden %q", c.name, got, c.text)
 			}
 		})
 	}
 }
 
 func TestTextoDaChaveRespeitaOsBuffersDoChamador(t *testing.T) {
-	chave, _ := valuekey.AppendComposite(nil, []types.Value{str("A"), i64(1)})
+	key, _ := valuekey.AppendComposite(nil, []types.Value{str("A"), i64(1)})
 	dst := make([]byte, 0, 64)
 	scratch := make([]types.Value, 0, 4)
-	got, scratch2, err := TextoDaChave(dst, chave, scratch)
+	got, scratch2, err := KeyText(dst, key, scratch)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cap(got) != cap(dst) || &got[:1][0] != &dst[:1][0] {
-		t.Fatal("TextoDaChave alocou o texto em vez de usar o buffer do chamador")
+		t.Fatal("KeyText alocou o texto em vez de usar o buffer do chamador")
 	}
 	if cap(scratch2) != cap(scratch) {
-		t.Fatal("TextoDaChave alocou o scratch em vez de usar o do chamador")
+		t.Fatal("KeyText alocou o scratch em vez de usar o do chamador")
 	}
 }
 
 func TestTextoDaChaveRecusaChaveInvalida(t *testing.T) {
-	if _, _, err := TextoDaChave(nil, []byte{9, 0, 1}, nil); err == nil {
+	if _, _, err := KeyText(nil, []byte{9, 0, 1}, nil); err == nil {
 		t.Fatal("chave rasgada tem de ser recusada")
 	}
-	chave, _ := valuekey.AppendComposite(nil, []types.Value{{Type: types.TypeTimestamp, I64: 1}})
-	if _, _, err := TextoDaChave(nil, chave, nil); err == nil {
+	key, _ := valuekey.AppendComposite(nil, []types.Value{{Type: types.TypeTimestamp, I64: 1}})
+	if _, _, err := KeyText(nil, key, nil); err == nil {
 		t.Fatal("tipo fora de string/int64/boolean não tem renderização declarada")
 	}
 }

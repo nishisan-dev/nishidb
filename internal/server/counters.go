@@ -61,8 +61,8 @@ func (s *Servidor) handleAuditoriaDeContadores(w http.ResponseWriter, r *http.Re
 			out.Counters = append(out.Counters, auditoriaContador(rel))
 			s.log.Dataset(d.nome).Info("contadores.auditoria",
 				"auditoria do contador concluída",
-				"contador", rel.Nome, "grupos", rel.Grupos, "divergentes", rel.Divergentes,
-				"naoInternadas", rel.NaoInternadas, "linhas", rel.LinhasVarridas, "duracao", rel.Duracao.String())
+				"contador", rel.Name, "grupos", rel.Groups, "divergentes", rel.DivergentGroups,
+				"naoInternadas", rel.NotInterned, "linhas", rel.RowsScanned, "duracao", rel.Duration.String())
 		}
 		return out, nil
 	})
@@ -110,7 +110,7 @@ func (s *Servidor) handleReconstrucaoDeContadores(w http.ResponseWriter, r *http
 		out := protocol.DatasetRebuild{Name: d.nome, Counters: make([]protocol.CounterRebuild, 0, len(recs))}
 		for _, rec := range recs {
 			out.Counters = append(out.Counters, protocol.CounterRebuild{
-				Name: rec.Nome, Rows: rec.Linhas, Groups: rec.Grupos, DurationMs: rec.Duracao.Milliseconds(),
+				Name: rec.Name, Rows: rec.Rows, Groups: rec.Groups, DurationMs: rec.Duration.Milliseconds(),
 			})
 		}
 		return out, nil
@@ -141,26 +141,26 @@ func erroDeContadores(err error) (int, protocol.ErrorDetail) {
 	return erroDeMutacao(err)
 }
 
-func auditoriaContador(rel counter.Relatorio) protocol.CounterAudit {
+func auditoriaContador(rel counter.Report) protocol.CounterAudit {
 	out := protocol.CounterAudit{
-		Name:            rel.Nome,
-		Groups:          rel.Grupos,
-		Maintained:      rel.Mantido,
-		Recomputed:      rel.Recalculado,
-		DivergentGroups: rel.Divergentes,
-		NotInterned:     rel.NaoInternadas,
+		Name:            rel.Name,
+		Groups:          rel.Groups,
+		Maintained:      rel.Maintained,
+		Recomputed:      rel.Recomputed,
+		DivergentGroups: rel.DivergentGroups,
+		NotInterned:     rel.NotInterned,
 
-		AggregateRows:       rel.AgregadoLinhas,
-		AggregateTotal:      rel.AgregadoTotal,
-		DivergentAggregates: rel.AgregadosDivergentes,
-		RowsRecomputed:      rel.LinhasRecalculadas,
-		RowsScanned:         rel.LinhasVarridas,
-		DurationMs:          rel.Duracao.Milliseconds(),
+		AggregateRows:       rel.AggregateRows,
+		AggregateTotal:      rel.AggregateTotal,
+		DivergentAggregates: rel.DivergentAggregates,
+		RowsRecomputed:      rel.RowsRecomputed,
+		RowsScanned:         rel.RowsScanned,
+		DurationMs:          rel.Duration.Milliseconds(),
 	}
-	for _, d := range rel.Amostra {
+	for _, d := range rel.Sample {
 		out.Sample = append(out.Sample, protocol.GroupDivergence{
-			GroupKey: d.Texto, Maintained: d.Mantido, Recomputed: d.Recalculado,
-			RefsMaintained: d.RefsMantido, RefsRecomputed: d.RefsRecalculado,
+			GroupKey: d.Text, Maintained: d.Maintained, Recomputed: d.Recomputed,
+			RefsMaintained: d.RefsMaintained, RefsRecomputed: d.RefsRecomputed,
 		})
 	}
 	return out

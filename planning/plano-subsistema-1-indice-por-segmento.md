@@ -2133,7 +2133,7 @@ para baixo."
 - Modificar: `README.md`, `CHANGELOG.md`
 
 **Interfaces:**
-- Produz: `CompiledField.Indexado bool` no lugar de `Index IndexKind`.
+- Produz: `CompiledField.Indexed bool` no lugar de `Index IndexKind`.
   `IndexKind`, `IndexNone`, `IndexBitmap`, `IndexHash` e `indexKindDe`
   desaparecem.
 
@@ -2143,7 +2143,7 @@ para baixo."
 // TestIndexTrueEhAceito
 func TestIndexTrueEhAceito(t *testing.T) {
 	c := compilaOK(t, "campos:\n  node:\n    tipo: string\n    index: true\n")
-	if !c.Campo("node").Indexado {
+	if !c.Campo("node").Indexed {
 		t.Error("index: true não marcou o campo como indexado")
 	}
 }
@@ -2212,10 +2212,10 @@ nova, porque quem a lê está com o servidor fora do ar."
   ```go
   // internal/storage
   func (s *Store) Lookup(field types.FieldID, v types.Value) (types.RowIDIterator, error)
-  func (s *Store) Indexado(field types.FieldID) bool
+  func (s *Store) Indexed(field types.FieldID) bool
 
   // internal/query/planner
-  type Store interface { Indexado(field types.FieldID) bool }
+  type Store interface { Indexed(field types.FieldID) bool }
   type IndexScanPlan struct { Field *binder.Field; Val types.Value }
   type IndexIntersectPlan struct { Terms []IndexTerm }
   type IndexUnionPlan struct { Terms []IndexTerm }   // já existe; perde o Kind

@@ -19,7 +19,7 @@ import (
 // era tratado como "atende tudo", e a diferença entre "não sei responder" e
 // "sim" só aparecia como erro em runtime no executor.
 type Store interface {
-	Indexado(field types.FieldID) bool
+	Indexed(field types.FieldID) bool
 }
 
 // maxFlattenDepth limita a recursão do achatamento. Estourá-lo não é erro: a
@@ -75,7 +75,7 @@ func New(store Store, m *Metrics) *Planner {
 // lados de uma vez, nunca só num.
 func (p *Planner) Plan(bq *binder.BoundQuery) Plan {
 	if bq == nil || bq.Where == nil {
-		return p.conta(FullScan())
+		return p.count(FullScan())
 	}
 
 	conjuncts := flattenAnd(bq.Where, nil, 0)
@@ -92,7 +92,7 @@ func (p *Planner) Plan(bq *binder.BoundQuery) Plan {
 	// vazio é o correto.
 	for _, t := range eqs {
 		if t.field.IsKey {
-			return p.conta(&PointLookupPlan{Field: t.field, Key: t.val})
+			return p.count(&PointLookupPlan{Field: t.field, Key: t.val})
 		}
 	}
 
@@ -107,51 +107,51 @@ func (p *Planner) Plan(bq *binder.BoundQuery) Plan {
 	// — são dois termos, a interseção é vazia, e é o resultado correto.
 	var terms []IndexTerm
 	for _, t := range eqs {
-		if !p.indexavel(t.field) {
+		if !p.indexable(t.field) {
 			continue
 		}
 		terms = appendDedup(terms, IndexTerm{Field: t.field, Val: t.val})
 	}
 	switch {
 	case len(terms) >= 2:
-		return p.conta(&IndexIntersectPlan{Terms: terms})
+		return p.count(&IndexIntersectPlan{Terms: terms})
 	case len(terms) == 1:
-		return p.conta(&IndexScanPlan{Field: terms[0].Field, Val: terms[0].Val})
+		return p.count(&IndexScanPlan{Field: terms[0].Field, Val: terms[0].Val})
 	}
 
 	// R5 — OR na raiz. Só se aplica quando o flatten de AND produziu um único
 	// conjunct e ele é um nó OR: com AND no topo haveria >= 2 conjuncts.
 	if len(conjuncts) == 1 {
 		if l, ok := conjuncts[0].(*binder.BoundLogical); ok && l.Op == parser.LogicalOr {
-			return p.uniao(l)
+			return p.union(l)
 		}
 	}
 
-	return p.conta(FullScan())
+	return p.count(FullScan())
 }
 
-// uniao aplica a regra 5. REGRA DURA: se QUALQUER disjunct não for indexável,
+// union aplica a regra 5. REGRA DURA: se QUALQUER disjunct não for indexável,
 // o OR inteiro degrada. Uma união parcial perderia candidatos e produziria
 // resultado silenciosamente incompleto — o pior defeito possível nesta engine.
 // Não existe meia união.
-func (p *Planner) uniao(raiz *binder.BoundLogical) Plan {
-	disjuncts := flattenOr(raiz, nil, 0)
+func (p *Planner) union(root *binder.BoundLogical) Plan {
+	disjuncts := flattenOr(root, nil, 0)
 	terms := make([]IndexTerm, 0, len(disjuncts))
 	for _, d := range disjuncts {
 		t, ok := eqTermOf(d)
 		if !ok {
-			return p.conta(FullScan())
+			return p.count(FullScan())
 		}
-		if !p.indexavel(t.field) {
-			return p.conta(FullScan())
+		if !p.indexable(t.field) {
+			return p.count(FullScan())
 		}
 		terms = appendDedup(terms, IndexTerm{Field: t.field, Val: t.val})
 	}
 	// Um termo só depois do dedup não é união: colapsa para o scan.
 	if len(terms) == 1 {
-		return p.conta(&IndexScanPlan{Field: terms[0].Field, Val: terms[0].Val})
+		return p.count(&IndexScanPlan{Field: terms[0].Field, Val: terms[0].Val})
 	}
-	return p.conta(&IndexUnionPlan{Terms: terms})
+	return p.count(&IndexUnionPlan{Terms: terms})
 }
 
 // eqTerm é um `campo = valor` que serve de chave de índice.
@@ -193,15 +193,15 @@ func eqTermOf(e binder.BoundExpr) (eqTerm, bool) {
 	return eqTerm{field: f, val: c.Val}, true
 }
 
-// indexavel: o schema declara E o store atende.
+// indexable: o schema declara E o store atende.
 //
-// O Indexado é obrigatório mesmo com o YAML dizendo `index: true` porque o
+// O Indexed é obrigatório mesmo com o YAML dizendo `index: true` porque o
 // conjunto indexado é o que a ABERTURA do dataset declarou, e nada garante que
 // ele cubra o que o YAML pede — um Store aberto sem o campo é legítimo. Sem o
 // check, o executor chamaria Lookup num campo sem índice, receberia
 // ErrInvalidArgument e a query FALHARIA em vez de degradar.
-func (p *Planner) indexavel(f *schema.CompiledField) bool {
-	return f != nil && f.Indexado && p.store != nil && p.store.Indexado(f.ID)
+func (p *Planner) indexable(f *schema.CompiledField) bool {
+	return f != nil && f.Indexed && p.store != nil && p.store.Indexed(f.ID)
 }
 
 // flattenAnd colhe as folhas do spine de AND no topo da árvore. Um nó OR (ou
@@ -231,13 +231,13 @@ func flatten(e binder.BoundExpr, op parser.LogicalOp, dst []binder.BoundExpr, de
 // appendDedup acrescenta o termo se ele já não estiver na lista. A varredura é
 // O(n²) de propósito: a lista tem meia dúzia de elementos, e um map alocaria
 // por consulta e ainda daria ordem não-determinística.
-func appendDedup(ts []IndexTerm, novo IndexTerm) []IndexTerm {
+func appendDedup(ts []IndexTerm, newTerm IndexTerm) []IndexTerm {
 	for _, t := range ts {
-		if t.Field.ID == novo.Field.ID && sameValue(t.Val, novo.Val) {
+		if t.Field.ID == newTerm.Field.ID && sameValue(t.Val, newTerm.Val) {
 			return ts
 		}
 	}
-	return append(ts, novo)
+	return append(ts, newTerm)
 }
 
 // sameValue é igualdade EXATA de valor, incluindo o tipo — a mesma chave que o
@@ -246,11 +246,11 @@ func sameValue(a, b types.Value) bool {
 	return a.Type == b.Type && a.I64 == b.I64 && bytes.Equal(a.Bytes, b.Bytes)
 }
 
-// conta incrementa o contador do plano ESCOLHIDO e devolve o plano. É o único
+// count incrementa o contador do plano ESCOLHIDO e devolve o plano. É o único
 // ponto de contagem do pacote: com um incremento espalhado por regra, a
 // primeira regra nova esqueceria o seu, e `query.full_scan` — que é o sinal
 // operacional de índice faltando — deixaria de ser confiável.
-func (p *Planner) conta(pl Plan) Plan {
+func (p *Planner) count(pl Plan) Plan {
 	if p.metrics == nil {
 		return pl
 	}

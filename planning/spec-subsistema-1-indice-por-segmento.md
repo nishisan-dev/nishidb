@@ -526,7 +526,7 @@ func (s *Store) Lookup(field types.FieldID, v types.Value) (types.RowIDIterator,
 ```
 
 E com elas colapsam as capabilities do planner e do executor —
-`HasBitmap`/`HasHash`/`HashLookuper`/`HashCapable` viram `Indexado(field) bool`
+`HasBitmap`/`HasHash`/`HashLookuper`/`HashCapable` viram `Indexed(field) bool`
 mais o `Lookup` acima ([planner.go:12-30](../internal/query/planner/planner.go:12)).
 Os tipos de plano seguem junto: `BitmapScanPlan` e `HashIndexPlan` viram
 `IndexScanPlan`; `BitmapIntersectPlan` vira `IndexIntersectPlan`; o campo `Kind`

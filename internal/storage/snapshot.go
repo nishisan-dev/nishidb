@@ -163,15 +163,15 @@ func (r *registroDeSnapshots) instanteMaisAntigoVivo() (time.Time, bool) {
 // menorEpocaViva devolve versions.NoReader quando nenhuma consulta está aberta.
 func (r *registroDeSnapshots) menorEpocaViva() uint64 { return r.menor.Load() }
 
-// AbreSnapshot fixa o universo da consulta: a versão, o relógio, o teto e o
+// OpenSnapshot fixa o universo da consulta: a versão, o relógio, o teto e o
 // piso.
 //
-// O par com FechaSnapshot é OBRIGATÓRIO, e é isso que muda em relação a um
+// O par com CloseSnapshot é OBRIGATÓRIO, e é isso que muda em relação a um
 // snapshot puramente de valor: enquanto ele está aberto, o writer guarda as
 // versões anteriores das linhas que atualizar, e a compaction não aposenta os
 // segmentos onde essas versões moram. Um snapshot que nunca fecha faz o
 // journal crescer pela vida do processo.
-func (s *Store) AbreSnapshot() types.Snapshot {
+func (s *Store) OpenSnapshot() types.Snapshot {
 	snap := types.Snapshot{
 		Epoch:      s.epocaPub.Load(),
 		Instant:    s.agora(),
@@ -182,14 +182,14 @@ func (s *Store) AbreSnapshot() types.Snapshot {
 	return snap
 }
 
-// FechaSnapshot devolve o que o snapshot segurava e poda o que nenhum leitor
+// CloseSnapshot devolve o que o snapshot segurava e poda o que nenhum leitor
 // mais alcança.
 //
 // A poda acontece AQUI, e não num laço de fundo, porque o instante em que ela
 // pode acontecer é exatamente este: nenhuma outra coisa muda a menor época
 // viva. Um coletor periódico só acrescentaria latência entre a última consulta
 // fechar e a memória voltar.
-func (s *Store) FechaSnapshot(snap types.Snapshot) {
+func (s *Store) CloseSnapshot(snap types.Snapshot) {
 	s.snaps.fecha(snap.Epoch)
 	s.podaVersoes()
 }

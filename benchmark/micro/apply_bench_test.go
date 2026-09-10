@@ -18,7 +18,7 @@ type voidStore struct {
 	found   bool
 }
 
-func (s *voidStore) Estado(key, buf []byte) (types.Record, []byte, types.Presence, error) {
+func (s *voidStore) State(key, buf []byte) (types.Record, []byte, types.Presence, error) {
 	rec, out, ok, err := s.GetByKey(key, buf)
 	if err != nil || !ok {
 		return types.Record{}, out, types.PresenceAbsent, err
@@ -56,8 +56,8 @@ func estadoDeReferencia(b *testing.B, events [][]byte) (key, payload []byte) {
 	if r.Err != nil {
 		b.Fatal(r.Err)
 	}
-	snap := st.AbreSnapshot()
-	defer st.FechaSnapshot(snap)
+	snap := st.OpenSnapshot()
+	defer st.CloseSnapshot(snap)
 	rec, _, ok, err := st.GetByRowID(snap, r.RowID, nil)
 	if err != nil || !ok {
 		b.Fatalf("estado de referência ausente: ok=%v err=%v", ok, err)

@@ -13,8 +13,8 @@ import (
 // A tabela §3.6 célula a célula. É a fronteira entre "a query encontra o dado
 // gravado" e "a query devolve vazio sem erro", então cada célula tem caso.
 func TestComparableTabela(t *testing.T) {
-	casos := []struct {
-		nome string
+	cases := []struct {
+		name string
 		col  types.FieldType
 		lit  parser.OperandKind
 		op   parser.CmpOp
@@ -51,8 +51,8 @@ func TestComparableTabela(t *testing.T) {
 		{"ipv4_prefix com string", types.TypeIPv4Prefix, parser.OperandString, parser.CmpEq, binder.CompareBytes},
 		{"ipv6_prefix com string", types.TypeIPv6Prefix, parser.OperandString, parser.CmpNe, binder.CompareBytes},
 	}
-	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			got, err := binder.Comparable(tc.col, false, tc.lit, tc.op)
 			if err != nil {
 				t.Fatalf("Comparable(%v,%v,%v): %v", tc.col, tc.lit, tc.op, err)
@@ -70,8 +70,8 @@ func TestComparableTabela(t *testing.T) {
 // Células VAZIAS da tabela: cada uma é um erro que o usuário precisa
 // entender, não um resultado vazio.
 func TestComparableCelulasVazias(t *testing.T) {
-	casos := []struct {
-		nome string
+	cases := []struct {
+		name string
 		col  types.FieldType
 		lit  parser.OperandKind
 		op   parser.CmpOp
@@ -89,8 +89,8 @@ func TestComparableCelulasVazias(t *testing.T) {
 		{"ipv6 com bool", types.TypeIPv6, parser.OperandBool, parser.CmpEq},
 		{"string com bool", types.TypeString, parser.OperandBool, parser.CmpEq},
 	}
-	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			if _, err := binder.Comparable(tc.col, false, tc.lit, tc.op); err == nil {
 				t.Errorf("Comparable(%v,%v) deveria falhar", tc.col, tc.lit)
 			}
@@ -115,7 +115,7 @@ func TestComparableBytesEJsonNaoComparam(t *testing.T) {
 // Ordem só existe onde faz sentido: booleano e prefixo de rede admitem
 // igualdade e diferença, e mais nada.
 func TestComparableOperadoresRestritos(t *testing.T) {
-	restritos := []struct {
+	restricted := []struct {
 		col types.FieldType
 		lit parser.OperandKind
 	}{
@@ -123,7 +123,7 @@ func TestComparableOperadoresRestritos(t *testing.T) {
 		{types.TypeIPv4Prefix, parser.OperandString},
 		{types.TypeIPv6Prefix, parser.OperandString},
 	}
-	for _, r := range restritos {
+	for _, r := range restricted {
 		for _, op := range []parser.CmpOp{parser.CmpEq, parser.CmpNe} {
 			if _, err := binder.Comparable(r.col, false, r.lit, op); err != nil {
 				t.Errorf("%v %v deveria ser permitido: %v", r.col, op, err)
@@ -164,14 +164,14 @@ func TestComparableAutoSemTipo(t *testing.T) {
 // A coerção do valor é conferida fim a fim pelo Bind (ver binder_test.go);
 // aqui garantimos que os bits do float não se perdem no caminho.
 func TestCompareKindString(t *testing.T) {
-	nomes := map[binder.CompareKind]string{
+	names := map[binder.CompareKind]string{
 		binder.CompareUnset:      "unset",
 		binder.CompareInt:        "int",
 		binder.CompareFloatBits:  "float-bits",
 		binder.CompareIntAsFloat: "int-as-float",
 		binder.CompareBytes:      "bytes",
 	}
-	for k, want := range nomes {
+	for k, want := range names {
 		if got := k.String(); got != want {
 			t.Errorf("CompareKind(%d).String() = %q, want %q", k, got, want)
 		}
@@ -195,13 +195,13 @@ func TestBitsDeFloatSobrevivemAoI64(t *testing.T) {
 //
 // Nas quatro formas abaixo — coluna de operador RESTRITO (boolean, prefixo)
 // com literal de tipo INCOMPATÍVEL — as duas checagens falhariam, e só a ordem
-// decide qual mensagem o usuário vê. Trocar `celula` e `admitsOp` de lugar
+// decide qual mensagem o usuário vê. Trocar `cell` e `admitsOp` de lugar
 // compila, passa na árvore inteira, e faz o erro dar um conselho ERRADO:
 // "use = ou !=" não resolve nada quando o problema é o tipo do literal
 // (`ativo = 'x'` dá o mesmo erro de incompatibilidade).
 func TestOrdemDasChecagensDeComparable(t *testing.T) {
-	casos := []struct {
-		nome string
+	cases := []struct {
+		name string
 		sql  string
 		msg  string
 	}{
@@ -214,8 +214,8 @@ func TestOrdemDasChecagensDeComparable(t *testing.T) {
 		{"prefixo v6 com boolean", `SELECT id FROM radius_sessions WHERE rede6 < TRUE`,
 			"não é comparável com literal do tipo boolean"},
 	}
-	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			err := bindErr(t, tc.sql)
 			if !strings.Contains(err.Error(), tc.msg) {
 				t.Errorf("erro = %q\n want conter %q\n (a ordem celula→admitsOp inverteu?)", err, tc.msg)
@@ -232,8 +232,8 @@ func TestOrdemDasChecagensDeComparable(t *testing.T) {
 // nos seis; o que faltava era a rede — e a dos prefixos é a única coerção de
 // literal cujo caminho de falha não era exercitado por nada.
 func TestCaminhosDeErroDeCoercao(t *testing.T) {
-	casos := []struct {
-		nome, sql, msg string
+	cases := []struct {
+		name, sql, msg string
 	}{
 		{"prefixo v4 inválido", `SELECT id FROM radius_sessions WHERE rede4 = 'nao-eh-prefixo'`,
 			`literal "nao-eh-prefixo" inválido para a coluna "rede4" (ipv4_prefix)`},
@@ -248,8 +248,8 @@ func TestCaminhosDeErroDeCoercao(t *testing.T) {
 		{"timestamp inválido", `SELECT id FROM radius_sessions WHERE quando = 'ontem'`,
 			`inválido para a coluna "quando" (timestamp)`},
 	}
-	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			err := bindErr(t, tc.sql)
 			if !strings.Contains(err.Error(), tc.msg) {
 				t.Errorf("erro = %q, want conter %q", err, tc.msg)
@@ -265,8 +265,8 @@ func TestCaminhosDeErroDeCoercao(t *testing.T) {
 // Os mesmos caminhos pelo lado do PARÂMETRO: são duas rotas de coerção, e a
 // mensagem de parâmetro não tem posição no texto (o valor não está na query).
 func TestCaminhosDeErroDeCoercaoComParametro(t *testing.T) {
-	casos := []struct {
-		nome, sql, msg string
+	cases := []struct {
+		name, sql, msg string
 		param          types.Value
 	}{
 		{"prefixo v4 inválido", `SELECT id FROM radius_sessions WHERE rede4 = ?`,
@@ -276,8 +276,8 @@ func TestCaminhosDeErroDeCoercaoComParametro(t *testing.T) {
 		{"ipv6 inválido", `SELECT id FROM radius_sessions WHERE v6 = ?`,
 			"parâmetro 1", wireString("nope")},
 	}
-	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			err := bindErr(t, tc.sql, tc.param)
 			if !strings.Contains(err.Error(), tc.msg) {
 				t.Errorf("erro = %q, want conter %q", err, tc.msg)

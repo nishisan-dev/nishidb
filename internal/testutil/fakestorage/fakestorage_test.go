@@ -27,14 +27,14 @@ type consumerStore interface {
 	GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (types.Record, []byte, bool, error)
 	Put(key []byte, seq int64, flags uint8, payload []byte, prev *types.Record) (types.RowID, bool, error)
 	ScanLive(snap types.Snapshot) types.RowIDIterator
-	AbreSnapshot() types.Snapshot
+	OpenSnapshot() types.Snapshot
 	Lookup(field types.FieldID, v types.Value) (types.RowIDIterator, error)
-	Indexado(field types.FieldID) bool
+	Indexed(field types.FieldID) bool
 	Sequence(id types.RowID) (int64, types.Presence)
-	// Estado é o que a ingestão usa, e entra aqui pelo mesmo motivo dos
+	// State é o que a ingestão usa, e entra aqui pelo mesmo motivo dos
 	// outros: é assinatura que dublê e real precisam compartilhar, e o
 	// materializer só é intercambiável entre os dois enquanto ela bater.
-	Estado(key, buf []byte) (types.Record, []byte, types.Presence, error)
+	State(key, buf []byte) (types.Record, []byte, types.Presence, error)
 }
 
 var (
@@ -83,7 +83,7 @@ func intVal(n int64) types.Value {
 }
 
 func TestPutCreateAndGetByKey(t *testing.T) {
-	s := New(Indexes{Campos: []types.FieldID{2, 3}})
+	s := New(Indexes{Fields: []types.FieldID{2, 3}})
 	p := payload(t, fv(1, strVal("ABC")), fv(2, strVal("Start")), fv(3, intVal(7)))
 	rowID, created, err := s.Put([]byte("ABC"), 100, 0, p, nil)
 	if err != nil || !created {
@@ -94,7 +94,7 @@ func TestPutCreateAndGetByKey(t *testing.T) {
 		t.Errorf("primeiro rowId = %d, want 0", rowID)
 	}
 	var buf []byte
-	rec, buf2, ok, err := s.GetByKey(s.AbreSnapshot(), []byte("ABC"), buf)
+	rec, buf2, ok, err := s.GetByKey(s.OpenSnapshot(), []byte("ABC"), buf)
 	if err != nil || !ok {
 		t.Fatalf("GetByKey: ok=%v err=%v", ok, err)
 	}
@@ -105,7 +105,7 @@ func TestPutCreateAndGetByKey(t *testing.T) {
 		t.Errorf("Key/Payload incorretos")
 	}
 	_ = buf2
-	if _, _, ok, _ := s.GetByKey(s.AbreSnapshot(), []byte("NOPE"), nil); ok {
+	if _, _, ok, _ := s.GetByKey(s.OpenSnapshot(), []byte("NOPE"), nil); ok {
 		t.Error("key inexistente não deveria resolver")
 	}
 }
@@ -126,7 +126,7 @@ func TestBufferOwnershipBothDirections(t *testing.T) {
 	// (a) Record.Key/Payload são janelas sobre o buf do caller, não sobre o
 	// estado interno — a checagem de identidade é o que distingue cópia real
 	// de "mutei outra região e não percebi".
-	rec, buf, ok, err := s.GetByKey(s.AbreSnapshot(), key, nil)
+	rec, buf, ok, err := s.GetByKey(s.OpenSnapshot(), key, nil)
 	if err != nil || !ok {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestBufferOwnershipBothDirections(t *testing.T) {
 	for i := range buf {
 		buf[i] = 0xAA
 	}
-	rec2, _, ok, _ := s.GetByKey(s.AbreSnapshot(), key, nil)
+	rec2, _, ok, _ := s.GetByKey(s.OpenSnapshot(), key, nil)
 	if !ok || !bytes.Equal(rec2.Payload, want) {
 		t.Errorf("estado interno corrompido via buf do caller: %x", rec2.Payload)
 	}
@@ -152,7 +152,7 @@ func TestBufferOwnershipBothDirections(t *testing.T) {
 	for i := range p {
 		p[i] = 0xFF
 	}
-	rec3, _, ok, _ := s.GetByKey(s.AbreSnapshot(), []byte("ABC"), nil)
+	rec3, _, ok, _ := s.GetByKey(s.OpenSnapshot(), []byte("ABC"), nil)
 	if !ok {
 		t.Fatal("key mutada pelo caller apagou a row")
 	}
@@ -162,7 +162,7 @@ func TestBufferOwnershipBothDirections(t *testing.T) {
 }
 
 func TestPutUpdateDiffsIndexPostings(t *testing.T) {
-	s := New(Indexes{Campos: []types.FieldID{2}})
+	s := New(Indexes{Fields: []types.FieldID{2}})
 	p1 := payload(t, fv(1, strVal("ABC")), fv(2, strVal("Start")))
 	rowID, _, err := s.Put([]byte("ABC"), 1, 0, p1, nil)
 	if err != nil {
@@ -172,10 +172,10 @@ func TestPutUpdateDiffsIndexPostings(t *testing.T) {
 
 	// Update trocando o valor indexado: o novo entra e o ANTIGO permanece.
 	// A indexação é aditiva, espelhando o índice por segmento do Store real,
-	// que não tem fase de CLEAR (spec §5.2) — ver aplicaPostings. Exigir que o
+	// que não tem fase de CLEAR (spec §5.2) — ver applyPostings. Exigir que o
 	// antigo saísse aqui deixaria o dublê mais preciso que o real.
 	var buf []byte
-	prev, _, _, _ := s.GetByKey(s.AbreSnapshot(), []byte("ABC"), buf)
+	prev, _, _, _ := s.GetByKey(s.OpenSnapshot(), []byte("ABC"), buf)
 	p2 := payload(t, fv(1, strVal("ABC")), fv(2, strVal("Stop")))
 	rowID2, created, err := s.Put([]byte("ABC"), 2, 0, p2, &prev)
 	if err != nil || created || rowID2 != rowID {
@@ -191,24 +191,24 @@ func TestPutUpdateDiffsIndexPostings(t *testing.T) {
 // o lookup devolveria a row errada — que é exatamente o tipo de divergência
 // que o dublê existe para expor.
 func TestPostingKeySeparaTiposComMesmosBytes(t *testing.T) {
-	s := New(Indexes{Campos: []types.FieldID{2, 3}})
-	mesmoConteudo := []byte("0100")
-	comoString := types.Value{Type: types.TypeString, Bytes: mesmoConteudo}
-	comoBytes := types.Value{Type: types.TypeBytes, Bytes: mesmoConteudo}
+	s := New(Indexes{Fields: []types.FieldID{2, 3}})
+	sameContent := []byte("0100")
+	asString := types.Value{Type: types.TypeString, Bytes: sameContent}
+	asBytes := types.Value{Type: types.TypeBytes, Bytes: sameContent}
 
-	pA := payload(t, fv(1, strVal("A")), fv(2, comoString))
+	pA := payload(t, fv(1, strVal("A")), fv(2, asString))
 	rowA, _, err := s.Put([]byte("A"), 1, 0, pA, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	pB := payload(t, fv(1, strVal("B")), fv(2, comoBytes))
+	pB := payload(t, fv(1, strVal("B")), fv(2, asBytes))
 	rowB, _, err := s.Put([]byte("B"), 1, 0, pB, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	assertPosting(t, s, 2, comoString, []types.RowID{rowA})
-	assertPosting(t, s, 2, comoBytes, []types.RowID{rowB})
+	assertPosting(t, s, 2, asString, []types.RowID{rowA})
+	assertPosting(t, s, 2, asBytes, []types.RowID{rowB})
 
 	// Mesma armadilha entre tipos de largura fixa: bool 1 e int64 1 têm o
 	// mesmo I64.
@@ -230,7 +230,7 @@ func TestPostingKeySeparaTiposComMesmosBytes(t *testing.T) {
 // Campo indexado cujo valor NÃO mudou mantém o posting: o diff compara os
 // valores e só mexe no índice quando há troca real.
 func TestPutValorIndexadoInalteradoMantemPosting(t *testing.T) {
-	s := New(Indexes{Campos: []types.FieldID{2}})
+	s := New(Indexes{Fields: []types.FieldID{2}})
 	p1 := payload(t, fv(1, strVal("ABC")), fv(2, strVal("Start")))
 	rowID, _, err := s.Put([]byte("ABC"), 1, 0, p1, nil)
 	if err != nil {
@@ -238,7 +238,7 @@ func TestPutValorIndexadoInalteradoMantemPosting(t *testing.T) {
 	}
 	// Só o campo 1 muda; o indexado fica igual.
 	var buf []byte
-	prev, _, _, _ := s.GetByKey(s.AbreSnapshot(), []byte("ABC"), buf)
+	prev, _, _, _ := s.GetByKey(s.OpenSnapshot(), []byte("ABC"), buf)
 	p2 := payload(t, fv(1, strVal("XYZ")), fv(2, strVal("Start")))
 	if _, _, err := s.Put([]byte("ABC"), 2, 0, p2, &prev); err != nil {
 		t.Fatal(err)
@@ -255,28 +255,28 @@ func TestPutValorIndexadoInalteradoMantemPosting(t *testing.T) {
 // e é isso que o teste afirma: a posting sobrevive como candidato E o payload
 // corrente já não a justifica.
 func TestPutRemovedFieldClearsPosting(t *testing.T) {
-	s := New(Indexes{Campos: []types.FieldID{2}})
+	s := New(Indexes{Fields: []types.FieldID{2}})
 	p1 := payload(t, fv(1, strVal("ABC")), fv(2, strVal("Start")))
 	rowID, _, _ := s.Put([]byte("ABC"), 1, 0, p1, nil)
 	p2 := payload(t, fv(1, strVal("ABC")))
 	var buf []byte
-	prev, _, _, _ := s.GetByKey(s.AbreSnapshot(), []byte("ABC"), buf)
+	prev, _, _, _ := s.GetByKey(s.OpenSnapshot(), []byte("ABC"), buf)
 	if _, _, err := s.Put([]byte("ABC"), 2, 0, p2, &prev); err != nil {
 		t.Fatal(err)
 	}
 	assertPosting(t, s, 2, strVal("Start"), []types.RowID{rowID})
-	rec, _, ok, err := s.GetByKey(s.AbreSnapshot(), []byte("ABC"), nil)
+	rec, _, ok, err := s.GetByKey(s.OpenSnapshot(), []byte("ABC"), nil)
 	if err != nil || !ok {
 		t.Fatalf("GetByKey: ok=%v err=%v", ok, err)
 	}
-	if temCampo(t, rec.Payload, 2) {
+	if hasField(t, rec.Payload, 2) {
 		t.Error("o campo removido continua no payload corrente: a revalidação não descartaria a row")
 	}
 }
 
-// temCampo diz se o payload carrega o campo — é o que a revalidação do §44 faz
+// hasField diz se o payload carrega o campo — é o que a revalidação do §44 faz
 // com cada candidato que o índice devolve.
-func temCampo(t *testing.T, payload []byte, id types.FieldID) bool {
+func hasField(t *testing.T, payload []byte, id types.FieldID) bool {
 	t.Helper()
 	var r encoding.FieldReader
 	r.Reset(payload)
@@ -298,7 +298,7 @@ func TestPutWithNilPrevResolvesInternally(t *testing.T) {
 	// prev==nil com key existente: o Put resolve sozinho (fallback do
 	// contrato) e a indexação continua correta — o valor novo entra, e o antigo
 	// permanece como candidato (§5.2, sem fase de CLEAR).
-	s := New(Indexes{Campos: []types.FieldID{2}})
+	s := New(Indexes{Fields: []types.FieldID{2}})
 	p1 := payload(t, fv(1, strVal("ABC")), fv(2, strVal("Start")))
 	rowID, _, _ := s.Put([]byte("ABC"), 1, 0, p1, nil)
 	p2 := payload(t, fv(1, strVal("ABC")), fv(2, strVal("Stop")))
@@ -348,7 +348,7 @@ func TestPutRejectsInvalidArguments(t *testing.T) {
 	if _, _, err := s.Put([]byte("A"), 1, 0, p, nil); err != nil {
 		t.Fatal(err)
 	}
-	prevA, _, _, _ := s.GetByKey(s.AbreSnapshot(), []byte("A"), nil)
+	prevA, _, _, _ := s.GetByKey(s.OpenSnapshot(), []byte("A"), nil)
 	pb := payload(t, fv(1, strVal("B")))
 	_, _, err = s.Put([]byte("B"), 1, 0, pb, &prevA)
 	assertInvalidArgument(t, err, "prev pertence à key")
@@ -362,7 +362,7 @@ func TestPutRejectsInvalidArguments(t *testing.T) {
 // append deixa o dataset inabrível para sempre. Campo sem índice aceita o
 // mesmo valor: o teto é do índice, não do payload.
 func TestPutRejectsOversizedIndexedValue(t *testing.T) {
-	s := New(Indexes{Campos: []types.FieldID{2}})
+	s := New(Indexes{Fields: []types.FieldID{2}})
 	big := make([]byte, types.MaxIndexedValueBytes+1)
 	for i := range big {
 		big[i] = 'x'
@@ -427,22 +427,22 @@ func TestGetByRowIDAndLiveness(t *testing.T) {
 	s := New(Indexes{})
 	p := payload(t, fv(1, strVal("ABC")))
 	rowID, _, _ := s.Put([]byte("ABC"), 1, 0, p, nil)
-	rec, _, ok, err := s.GetByRowID(s.AbreSnapshot(), rowID, nil)
+	rec, _, ok, err := s.GetByRowID(s.OpenSnapshot(), rowID, nil)
 	if err != nil || !ok || !bytes.Equal(rec.Payload, p) {
 		t.Fatalf("GetByRowID: ok=%v err=%v", ok, err)
 	}
-	if _, _, ok, _ := s.GetByRowID(s.AbreSnapshot(), 999, nil); ok {
+	if _, _, ok, _ := s.GetByRowID(s.OpenSnapshot(), 999, nil); ok {
 		t.Error("row inexistente")
 	}
 	// Tombstone: some das leituras (inclusive por key) e do scan.
 	s.SetTombstone(rowID)
-	if _, _, ok, _ := s.GetByRowID(s.AbreSnapshot(), rowID, nil); ok {
+	if _, _, ok, _ := s.GetByRowID(s.OpenSnapshot(), rowID, nil); ok {
 		t.Error("tombstoned deveria dar ok=false")
 	}
-	if _, _, ok, _ := s.GetByKey(s.AbreSnapshot(), []byte("ABC"), nil); ok {
+	if _, _, ok, _ := s.GetByKey(s.OpenSnapshot(), []byte("ABC"), nil); ok {
 		t.Error("GetByKey de row tombstoned deveria dar ok=false")
 	}
-	if got := drain(t, s.ScanLive(s.AbreSnapshot())); len(got) != 0 {
+	if got := drain(t, s.ScanLive(s.OpenSnapshot())); len(got) != 0 {
 		t.Errorf("ScanLive com tombstone = %v", got)
 	}
 }
@@ -456,17 +456,17 @@ func TestPutFlagsDriveLiveness(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, ok, _ := s.GetByRowID(s.AbreSnapshot(), rowID, nil); ok {
+	if _, _, ok, _ := s.GetByRowID(s.OpenSnapshot(), rowID, nil); ok {
 		t.Error("Put com FlagTombstone deveria nascer morta")
 	}
-	if got := drain(t, s.ScanLive(s.AbreSnapshot())); len(got) != 0 {
+	if got := drain(t, s.ScanLive(s.OpenSnapshot())); len(got) != 0 {
 		t.Errorf("ScanLive = %v", got)
 	}
 	// Ressuscitar é um Put sem a flag.
 	if _, _, err := s.Put([]byte("ABC"), 2, 0, p, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, ok, _ := s.GetByRowID(s.AbreSnapshot(), rowID, nil); !ok {
+	if _, _, ok, _ := s.GetByRowID(s.OpenSnapshot(), rowID, nil); !ok {
 		t.Error("Put sem flag deveria reviver a row")
 	}
 }
@@ -499,7 +499,7 @@ func TestScanLiveAscending(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	got := drain(t, s.ScanLive(s.AbreSnapshot()))
+	got := drain(t, s.ScanLive(s.OpenSnapshot()))
 	for i := 1; i < len(got); i++ {
 		if got[i] <= got[i-1] {
 			t.Fatalf("rowIds fora de ordem: %v", got)
@@ -518,7 +518,7 @@ func TestScanLiveAscending(t *testing.T) {
 // LookupHash. Os campos e as asserções são os mesmos; o que sumiu foi a
 // distinção entre as duas chamadas.
 func TestLookupAscendente(t *testing.T) {
-	s := New(Indexes{Campos: []types.FieldID{2, 3}})
+	s := New(Indexes{Fields: []types.FieldID{2, 3}})
 	for i, k := range []string{"K1", "K2", "K3"} {
 		p := payload(t, fv(1, strVal(k)), fv(2, strVal("Start")), fv(3, intVal(int64(i%2))))
 		if _, _, err := s.Put([]byte(k), 1, 0, p, nil); err != nil {
@@ -566,7 +566,7 @@ func TestLookupAscendente(t *testing.T) {
 // elas guardavam (campo fora do conjunto indexado é ErrInvalidArgument)
 // continua guardado pela primeira asserção, sobre o campo 1.
 func TestLookupWithoutIndexIsError(t *testing.T) {
-	s := New(Indexes{Campos: []types.FieldID{2}})
+	s := New(Indexes{Fields: []types.FieldID{2}})
 	if _, _, err := s.Put([]byte("K"), 1, 0, payload(t, fv(1, strVal("K")), fv(2, strVal("Start"))), nil); err != nil {
 		t.Fatal(err)
 	}
@@ -576,11 +576,11 @@ func TestLookupWithoutIndexIsError(t *testing.T) {
 	assertInvalidArgument(t, err, "não possui índice")
 
 	// O capability check concorda com o que o lookup aceita.
-	if s.Indexado(1) || s.Indexado(3) || !s.Indexado(2) {
-		t.Error("Indexado diverge dos índices declarados")
+	if s.Indexed(1) || s.Indexed(3) || !s.Indexed(2) {
+		t.Error("Indexed diverge dos índices declarados")
 	}
-	if got := s.CamposIndexados(); len(got) != 1 || got[0] != 2 {
-		t.Errorf("CamposIndexados = %v, want [2]", got)
+	if got := s.IndexedFields(); len(got) != 1 || got[0] != 2 {
+		t.Errorf("IndexedFields = %v, want [2]", got)
 	}
 }
 
@@ -589,7 +589,7 @@ func TestLookupWithoutIndexIsError(t *testing.T) {
 // GetByRowID. Um fake que pré-filtrasse esconderia o bug de rows mortas
 // vazando no resultado.
 func TestLookupReturnsSupersetWithTombstones(t *testing.T) {
-	s := New(Indexes{Campos: []types.FieldID{2}})
+	s := New(Indexes{Fields: []types.FieldID{2}})
 	p := payload(t, fv(1, strVal("K1")), fv(2, strVal("Start")))
 	rowID, _, err := s.Put([]byte("K1"), 1, 0, p, nil)
 	if err != nil {
@@ -605,7 +605,7 @@ func TestLookupReturnsSupersetWithTombstones(t *testing.T) {
 	if len(got) != 1 || got[0] != rowID {
 		t.Fatalf("lookup deveria devolver o candidato morto: %v", got)
 	}
-	if _, _, ok, _ := s.GetByRowID(s.AbreSnapshot(), got[0], nil); ok {
+	if _, _, ok, _ := s.GetByRowID(s.OpenSnapshot(), got[0], nil); ok {
 		t.Error("a revalidação por GetByRowID é que derruba o candidato")
 	}
 }

@@ -197,7 +197,7 @@ func TestPaiNuloNaoCongelaAColunaAnterior(t *testing.T) {
 // TestPaiArrayRemoveTambemAsColunasDESCOBERTAS é o teste que decide se a
 // correção serve ao dataset em que o defeito foi medido.
 //
-// `pai.Derivadas` guarda só as extrações DECLARADAS. O piloto declara ZERO — o
+// `pai.DerivedColumns` guarda só as extrações DECLARADAS. O piloto declara ZERO — o
 // campo `persistent` tem `unknownFields: include` e mais nada —, então uma
 // correção que percorresse apenas as Derivadas passaria neste arquivo inteiro e
 // não removeria uma coluna sequer lá. É a diferença entre consertar o defeito e
@@ -227,10 +227,10 @@ func TestPaiArrayRemoveTambemAsColunasDESCOBERTAS(t *testing.T) {
 func TestPaiComFormaDivergenteContaUmaVezSoNoPai(t *testing.T) {
 	h := newHarness(t, descobreYAML)
 	h.apply(`{"id":"MESMA","doc":{"podName":"pod-1","tally":9,"outra":"x"}}`)
-	antes := h.c.ValoresIncompativeis()
+	antes := h.c.IncompatibleValueCount()
 
 	h.apply(`{"id":"MESMA","doc":[1,2,3]}`)
-	if got := h.c.ValoresIncompativeis() - antes; got != 1 {
+	if got := h.c.IncompatibleValueCount() - antes; got != 1 {
 		t.Errorf("contador subiu %d com três colunas removidas, quer 1 (uma por documento divergente)", got)
 	}
 }
@@ -241,11 +241,11 @@ func TestNullExplicitoNaExtracaoDeclaradaLimpaSemContar(t *testing.T) {
 	h := newHarness(t, extractYAML)
 	h.apply(`{"id":"MESMA","doc":{"tally":7}}`)
 	h.wantInt(h.state("MESMA"), "tally", 7)
-	antes := h.c.ValoresIncompativeis()
+	antes := h.c.IncompatibleValueCount()
 
 	h.apply(`{"id":"MESMA","doc":{"tally":null}}`)
 	h.wantAbsent(h.state("MESMA"), "tally")
-	if got := h.c.ValoresIncompativeis() - antes; got != 0 {
+	if got := h.c.IncompatibleValueCount() - antes; got != 0 {
 		t.Errorf("contador subiu %d com um null explícito, quer 0", got)
 	}
 }

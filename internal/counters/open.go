@@ -31,8 +31,8 @@ func NovoCompilador(spec *schema.DatasetSpec) *Compilador {
 }
 
 // Callback devolve o CompilaContadores para as Options do storage.
-func (c *Compilador) Callback() func(*fielddict.Dict) ([]counter.Definicao, error) {
-	return func(dict *fielddict.Dict) ([]counter.Definicao, error) {
+func (c *Compilador) Callback() func(*fielddict.Dict) ([]counter.Definition, error) {
+	return func(dict *fielddict.Dict) ([]counter.Definition, error) {
 		compilado, err := c.spec.Compile(dict)
 		if err != nil {
 			return nil, err

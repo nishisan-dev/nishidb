@@ -12,55 +12,55 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// storeSobTeste é a superfície que o bloco de query consome. O MESMO roteiro
+// storeUnderTest é a superfície que o bloco de query consome. O MESMO roteiro
 // roda no dublê e no real: asserção de assinatura garante que compilam iguais,
 // e só um roteiro compartilhado garante que se COMPORTAM iguais.
-type storeSobTeste interface {
+type storeUnderTest interface {
 	Put(key []byte, seq int64, flags uint8, payload []byte, prev *types.Record) (types.RowID, bool, error)
 	GetByKey(snap types.Snapshot, key, buf []byte) (types.Record, []byte, bool, error)
 	GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (types.Record, []byte, bool, error)
 	ScanLive(snap types.Snapshot) types.RowIDIterator
-	AbreSnapshot() types.Snapshot
+	OpenSnapshot() types.Snapshot
 	Lookup(field types.FieldID, v types.Value) (types.RowIDIterator, error)
-	Indexado(field types.FieldID) bool
+	Indexed(field types.FieldID) bool
 }
 
 var (
-	_ storeSobTeste = (*fakestorage.Store)(nil)
-	_ storeSobTeste = (*storage.Store)(nil)
+	_ storeUnderTest = (*fakestorage.Store)(nil)
+	_ storeUnderTest = (*storage.Store)(nil)
 )
 
 // O roteiro cobre o que o executor observa: identidade de rowId, update sobre
 // a mesma key, indexação de postings, liveness e os erros de argumento.
 func TestComportamentoDoDubleEDoRealCoincidem(t *testing.T) {
 	const (
-		statusID = types.FieldID(1) // indexado
-		nomeID   = types.FieldID(2) // não indexado
-		semIndex = types.FieldID(3)
+		statusID       = types.FieldID(1) // indexado
+		nameID         = types.FieldID(2) // não indexado
+		withoutIndexID = types.FieldID(3)
 	)
 	str := func(s string) types.Value { return types.Value{Type: types.TypeString, Bytes: []byte(s)} }
-	payload := func(status, nome string) []byte {
+	payload := func(status, name string) []byte {
 		p, err := encoding.AppendField(nil, statusID, str(status))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if p, err = encoding.AppendField(p, nomeID, str(nome)); err != nil {
+		if p, err = encoding.AppendField(p, nameID, str(name)); err != nil {
 			t.Fatal(err)
 		}
 		return p
 	}
 
-	novoReal := func(t *testing.T) storeSobTeste {
+	newReal := func(t *testing.T) storeUnderTest {
 		st, err := storage.Open(storage.Options{
 			Dir: filepath.Join(t.TempDir(), "ds"),
-			// A ordem dos nomes define os IDs: status=1, nome=2, terceiro=3.
+			// A ordem dos nomes define os IDs: status=1, name=2, third=3.
 			CamposIndexadosPorNome: []string{"status"},
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { st.Close() })
-		for _, n := range []string{"nome", "terceiro"} {
+		for _, n := range []string{"name", "third"} {
 			if _, err := st.FieldDict().LookupOrCreate([]byte(n)); err != nil {
 				t.Fatal(err)
 			}
@@ -68,32 +68,32 @@ func TestComportamentoDoDubleEDoRealCoincidem(t *testing.T) {
 		return st
 	}
 
-	stores := map[string]func(t *testing.T) storeSobTeste{
-		"fake": func(*testing.T) storeSobTeste {
-			return fakestorage.New(fakestorage.Indexes{Campos: []types.FieldID{statusID}})
+	stores := map[string]func(t *testing.T) storeUnderTest{
+		"fake": func(*testing.T) storeUnderTest {
+			return fakestorage.New(fakestorage.Indexes{Fields: []types.FieldID{statusID}})
 		},
-		"real": novoReal,
+		"real": newReal,
 	}
 
-	for nome, novo := range stores {
-		t.Run(nome, func(t *testing.T) {
-			st := novo(t)
+	for name, newStore := range stores {
+		t.Run(name, func(t *testing.T) {
+			st := newStore(t)
 
 			// 1. Primeiro Put cria, e o rowId é 0-based nos dois.
-			id, criado, err := st.Put([]byte("A"), 1, 0, payload("Start", "ze"), nil)
-			if err != nil || !criado {
-				t.Fatalf("Put: id=%d criado=%v err=%v", id, criado, err)
+			id, created, err := st.Put([]byte("A"), 1, 0, payload("Start", "ze"), nil)
+			if err != nil || !created {
+				t.Fatalf("Put: id=%d created=%v err=%v", id, created, err)
 			}
 			if id != 0 {
 				t.Errorf("primeiro rowId = %d, want 0", id)
 			}
 
 			// 2. Put na MESMA key atualiza, sem criar id novo.
-			id2, criado2, err := st.Put([]byte("A"), 2, 0, payload("Stop", "ze"), nil)
+			id2, created2, err := st.Put([]byte("A"), 2, 0, payload("Stop", "ze"), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if criado2 {
+			if created2 {
 				t.Error("update marcou created=true")
 			}
 			if id2 != id {
@@ -101,7 +101,7 @@ func TestComportamentoDoDubleEDoRealCoincidem(t *testing.T) {
 			}
 
 			// 3. O estado corrente é o do último Put.
-			rec, _, ok, err := st.GetByKey(st.AbreSnapshot(), []byte("A"), nil)
+			rec, _, ok, err := st.GetByKey(st.OpenSnapshot(), []byte("A"), nil)
 			if err != nil || !ok {
 				t.Fatalf("GetByKey: ok=%v err=%v", ok, err)
 			}
@@ -124,35 +124,35 @@ func TestComportamentoDoDubleEDoRealCoincidem(t *testing.T) {
 			// uma estreiteza de superconjunto que o produto não tem. O dublê
 			// existe para reproduzir o real, inclusive no que o real faz de
 			// feio; a divergência só apareceria na integração.
-			if ids := colhe(t, st, statusID, str("Start")); len(ids) != 1 || ids[0] != id {
+			if ids := collect(t, st, statusID, str("Start")); len(ids) != 1 || ids[0] != id {
 				t.Errorf("posting do valor antigo = %v, want [%d]: ela sobrevive como candidato, e o §44 a descarta", ids, id)
 			}
-			if ids := colhe(t, st, statusID, str("Stop")); len(ids) != 1 || ids[0] != id {
+			if ids := collect(t, st, statusID, str("Stop")); len(ids) != 1 || ids[0] != id {
 				t.Errorf("posting do valor novo = %v, want [%d]", ids, id)
 			}
 
 			// 5. Valor nunca visto devolve iterador VAZIO, não erro.
-			if ids := colhe(t, st, statusID, str("Jamais")); len(ids) != 0 {
+			if ids := collect(t, st, statusID, str("Jamais")); len(ids) != 0 {
 				t.Errorf("valor nunca visto = %v", ids)
 			}
 
 			// 6. Campo sem índice bitmap é ErrInvalidArgument nos dois.
-			if _, err := st.Lookup(nomeID, str("ze")); !errors.Is(err, types.ErrInvalidArgument) {
+			if _, err := st.Lookup(nameID, str("ze")); !errors.Is(err, types.ErrInvalidArgument) {
 				t.Errorf("Lookup em campo sem índice: %v", err)
 			}
-			if st.Indexado(nomeID) || st.Indexado(semIndex) {
-				t.Error("Indexado true para campo sem índice")
+			if st.Indexed(nameID) || st.Indexed(withoutIndexID) {
+				t.Error("Indexed true para campo sem índice")
 			}
-			if !st.Indexado(statusID) {
-				t.Error("Indexado false para o campo indexado")
+			if !st.Indexed(statusID) {
+				t.Error("Indexed false para o campo indexado")
 			}
 
 			// 7. rowId inexistente: ok=false SEM erro (não é falha, é ausência).
-			if _, _, ok, err := st.GetByRowID(st.AbreSnapshot(), types.RowID(9999), nil); ok || err != nil {
+			if _, _, ok, err := st.GetByRowID(st.OpenSnapshot(), types.RowID(9999), nil); ok || err != nil {
 				t.Errorf("GetByRowID inexistente: ok=%v err=%v", ok, err)
 			}
 			// Key inexistente idem.
-			if _, _, ok, err := st.GetByKey(st.AbreSnapshot(), []byte("NAO-EXISTE"), nil); ok || err != nil {
+			if _, _, ok, err := st.GetByKey(st.OpenSnapshot(), []byte("NAO-EXISTE"), nil); ok || err != nil {
 				t.Errorf("GetByKey inexistente: ok=%v err=%v", ok, err)
 			}
 
@@ -161,10 +161,10 @@ func TestComportamentoDoDubleEDoRealCoincidem(t *testing.T) {
 			if _, _, err := st.Put([]byte("A"), 3, types.FlagTombstone, payload("Stop", "ze"), nil); err != nil {
 				t.Fatal(err)
 			}
-			if _, _, ok, _ := st.GetByKey(st.AbreSnapshot(), []byte("A"), nil); ok {
+			if _, _, ok, _ := st.GetByKey(st.OpenSnapshot(), []byte("A"), nil); ok {
 				t.Error("row tombstoned continuou visível no GetByKey")
 			}
-			if _, _, ok, _ := st.GetByRowID(st.AbreSnapshot(), id, nil); ok {
+			if _, _, ok, _ := st.GetByRowID(st.OpenSnapshot(), id, nil); ok {
 				t.Error("row tombstoned continuou visível no GetByRowID")
 			}
 			if ids := scanLive(t, st); len(ids) != 0 {
@@ -188,20 +188,20 @@ func TestOrdemDoScanLiveCoincide(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	real, err := storage.Open(storage.Options{Dir: filepath.Join(t.TempDir(), "ds")})
+	realStore, err := storage.Open(storage.Options{Dir: filepath.Join(t.TempDir(), "ds")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer real.Close()
-	if _, err := real.FieldDict().LookupOrCreate([]byte("campo")); err != nil {
+	defer realStore.Close()
+	if _, err := realStore.FieldDict().LookupOrCreate([]byte("campo")); err != nil {
 		t.Fatal(err)
 	}
 
-	for nome, st := range map[string]storeSobTeste{
+	for name, st := range map[string]storeUnderTest{
 		"fake": fakestorage.New(fakestorage.Indexes{}),
-		"real": real,
+		"real": realStore,
 	} {
-		t.Run(nome, func(t *testing.T) {
+		t.Run(name, func(t *testing.T) {
 			for i := 0; i < 20; i++ {
 				if _, _, err := st.Put([]byte{'K', byte('a' + i)}, 1, 0, p, nil); err != nil {
 					t.Fatal(err)
@@ -220,7 +220,7 @@ func TestOrdemDoScanLiveCoincide(t *testing.T) {
 	}
 }
 
-func colhe(t *testing.T, st storeSobTeste, f types.FieldID, v types.Value) []types.RowID {
+func collect(t *testing.T, st storeUnderTest, f types.FieldID, v types.Value) []types.RowID {
 	t.Helper()
 	it, err := st.Lookup(f, v)
 	if err != nil {
@@ -237,9 +237,9 @@ func colhe(t *testing.T, st storeSobTeste, f types.FieldID, v types.Value) []typ
 	return out
 }
 
-func scanLive(t *testing.T, st storeSobTeste) []types.RowID {
+func scanLive(t *testing.T, st storeUnderTest) []types.RowID {
 	t.Helper()
-	it := st.ScanLive(st.AbreSnapshot())
+	it := st.ScanLive(st.OpenSnapshot())
 	defer it.Close()
 	var out []types.RowID
 	for it.Next() {

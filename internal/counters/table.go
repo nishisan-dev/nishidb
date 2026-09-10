@@ -20,16 +20,16 @@ import (
 const maxColunasDeAgrupamento = 16
 
 // Leitor é o que a tabela virtual precisa do contador. Interface, e não o
-// *contador.Contador, para que o teste da tabela e o do contador não se
-// conheçam além do contrato — *contador.Contador a satisfaz.
+// *counter.Counter, para que o teste da tabela e o do contador não se
+// conheçam além do contrato — *counter.Counter a satisfaz.
 type Leitor interface {
-	// Limite é o maior id de grupo emitido mais um.
-	Limite() uint32
-	// Grupo devolve a chave composta, o texto (groupKey), o total e os refs do
+	// Limit é o maior id de grupo emitido mais um.
+	Limit() uint32
+	// Group devolve a chave composta, o texto (groupKey), o total e os refs do
 	// grupo, e se ele está vivo. Chave e texto são estáveis.
-	Grupo(id uint32) (chave, texto []byte, total, refs int64, vivo bool)
-	// PorTexto resolve o groupKey de um grupo vivo para o id.
-	PorTexto(texto []byte) (uint32, bool)
+	Group(id uint32) (chave, texto []byte, total, refs int64, vivo bool)
+	// ByText resolve o groupKey de um grupo vivo para o id.
+	ByText(texto []byte) (uint32, bool)
 }
 
 // Tabela monta o schema sintético e o Store virtual de `_counters.<nome>`.
@@ -49,48 +49,48 @@ type Leitor interface {
 // A tabela lê o PRESENTE: os totais não são versionados pelo journal do
 // snapshot. O que o snapshot congela é o CONJUNTO de grupos — um grupo que
 // nasce no meio da varredura não entra no universo dela.
-func Tabela(def counter.Definicao, l Leitor) (*schema.Compiled, query.Store, error) {
-	if len(def.Colunas) == 0 || len(def.Colunas) > maxColunasDeAgrupamento {
-		return nil, nil, fmt.Errorf("contadores: %q tem %d colunas de agrupamento; a tabela aceita de 1 a %d", def.Nome, len(def.Colunas), maxColunasDeAgrupamento)
+func Tabela(def counter.Definition, l Leitor) (*schema.Compiled, query.Store, error) {
+	if len(def.Columns) == 0 || len(def.Columns) > maxColunasDeAgrupamento {
+		return nil, nil, fmt.Errorf("contadores: %q tem %d colunas de agrupamento; a tabela aceita de 1 a %d", def.Name, len(def.Columns), maxColunasDeAgrupamento)
 	}
-	if len(def.Nomes) != len(def.Colunas) || len(def.Tipos) != len(def.Colunas) {
-		return nil, nil, fmt.Errorf("contadores: %q com Nomes, Tipos e Colunas de tamanhos diferentes", def.Nome)
+	if len(def.Names) != len(def.Columns) || len(def.Types) != len(def.Columns) {
+		return nil, nil, fmt.Errorf("contadores: %q com Names, Types e Columns de tamanhos diferentes", def.Name)
 	}
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "version: 1\nname: %s\nmaterialization:\n  key:\n    field: %s\nschema:\n  include: [%s",
-		def.Nome, schema.ColunaChaveDoContador, schema.ColunaChaveDoContador)
-	for _, n := range def.Nomes {
-		if n == schema.ColunaChaveDoContador || n == schema.ColunaTotalDoContador {
-			return nil, nil, fmt.Errorf("contadores: %q agrupa por %q, que colide com a coluna fixa da tabela", def.Nome, n)
+		def.Name, schema.CounterKeyColumn, schema.CounterKeyColumn)
+	for _, n := range def.Names {
+		if n == schema.CounterKeyColumn || n == schema.CounterTotalColumn {
+			return nil, nil, fmt.Errorf("contadores: %q agrupa por %q, que colide com a coluna fixa da tabela", def.Name, n)
 		}
 		fmt.Fprintf(&sb, ", %s", n)
 	}
-	fmt.Fprintf(&sb, ", %s]\n  fields:\n    %s:\n      type: string\n", schema.ColunaTotalDoContador, schema.ColunaChaveDoContador)
-	for i, n := range def.Nomes {
-		tipo, err := nomeDoTipo(def.Tipos[i])
+	fmt.Fprintf(&sb, ", %s]\n  fields:\n    %s:\n      type: string\n", schema.CounterTotalColumn, schema.CounterKeyColumn)
+	for i, n := range def.Names {
+		tipo, err := nomeDoTipo(def.Types[i])
 		if err != nil {
-			return nil, nil, fmt.Errorf("contadores: %q, coluna %q: %w", def.Nome, n, err)
+			return nil, nil, fmt.Errorf("contadores: %q, coluna %q: %w", def.Name, n, err)
 		}
 		fmt.Fprintf(&sb, "    %s:\n      type: %s\n", n, tipo)
 	}
-	fmt.Fprintf(&sb, "    %s:\n      type: int64\n", schema.ColunaTotalDoContador)
+	fmt.Fprintf(&sb, "    %s:\n      type: int64\n", schema.CounterTotalColumn)
 
-	spec, err := schema.Parse([]byte(sb.String()), schema.DefaultsPadrao)
+	spec, err := schema.Parse([]byte(sb.String()), schema.BuiltinDefaults)
 	if err != nil {
-		return nil, nil, fmt.Errorf("contadores: spec da tabela %s.%s inválida: %w", schema.NamespaceContadores, def.Nome, err)
+		return nil, nil, fmt.Errorf("contadores: spec da tabela %s.%s inválida: %w", schema.CountersNamespace, def.Name, err)
 	}
-	sc, err := spec.Compile(schema.NovoDicionarioEmMemoria())
+	sc, err := spec.Compile(schema.NewInMemoryDict())
 	if err != nil {
-		return nil, nil, fmt.Errorf("contadores: compilando a tabela %s.%s: %w", schema.NamespaceContadores, def.Nome, err)
+		return nil, nil, fmt.Errorf("contadores: compilando a tabela %s.%s: %w", schema.CountersNamespace, def.Name, err)
 	}
-	f := &fonte{l: l, colunas: make([]types.FieldID, len(def.Nomes))}
-	if f.idChave, err = idDaColuna(sc, schema.ColunaChaveDoContador); err != nil {
+	f := &fonte{l: l, colunas: make([]types.FieldID, len(def.Names))}
+	if f.idChave, err = idDaColuna(sc, schema.CounterKeyColumn); err != nil {
 		return nil, nil, err
 	}
-	if f.idTotal, err = idDaColuna(sc, schema.ColunaTotalDoContador); err != nil {
+	if f.idTotal, err = idDaColuna(sc, schema.CounterTotalColumn); err != nil {
 		return nil, nil, err
 	}
-	for i, n := range def.Nomes {
+	for i, n := range def.Names {
 		if f.colunas[i], err = idDaColuna(sc, n); err != nil {
 			return nil, nil, err
 		}
@@ -126,7 +126,7 @@ func idDaColuna(sc *schema.Compiled, nome string) (types.FieldID, error) {
 // servidor e CLI — para que `FROM _counters.<nome>` e `FROM _meta.counters`
 // funcionem da mesma forma nos dois.
 func Registra(eng *query.Engine, dataset string, st *storage.Store) error {
-	if err := eng.DeclaraNamespace(dataset, schema.NamespaceContadores); err != nil {
+	if err := eng.DeclaraNamespace(dataset, schema.CountersNamespace); err != nil {
 		return err
 	}
 	cs := st.Contadores()
@@ -136,7 +136,7 @@ func Registra(eng *query.Engine, dataset string, st *storage.Store) error {
 		if err != nil {
 			return err
 		}
-		if err := eng.RegistraVirtual(dataset, schema.NamespaceContadores, c.Def().Nome, sc, fonte); err != nil {
+		if err := eng.RegistraVirtual(dataset, schema.CountersNamespace, c.Def().Name, sc, fonte); err != nil {
 			return err
 		}
 		contados = append(contados, c)
@@ -157,15 +157,15 @@ type fonte struct {
 	colunas []types.FieldID // FieldID de cada coluna do groupBy, na ordem declarada
 }
 
-// AbreSnapshot congela o conjunto de grupos: ids a partir do limite nasceram
+// OpenSnapshot congela o conjunto de grupos: ids a partir do limite nasceram
 // depois da consulta. Época e instante ficam zerados e são ignorados — os
 // totais são lidos no presente.
-func (f *fonte) AbreSnapshot() types.Snapshot {
-	return types.Snapshot{LimitRowID: types.RowID(f.l.Limite())}
+func (f *fonte) OpenSnapshot() types.Snapshot {
+	return types.Snapshot{LimitRowID: types.RowID(f.l.Limit())}
 }
 
-// FechaSnapshot é no-op: a fonte não retém nada.
-func (f *fonte) FechaSnapshot(types.Snapshot) {}
+// CloseSnapshot é no-op: a fonte não retém nada.
+func (f *fonte) CloseSnapshot(types.Snapshot) {}
 
 func (f *fonte) ScanLive(snap types.Snapshot) types.RowIDIterator {
 	return &iterador{l: f.l, limite: uint32(snap.LimitRowID)}
@@ -175,7 +175,7 @@ func (f *fonte) GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (typ
 	if id == 0 || id >= snap.LimitRowID {
 		return types.Record{}, buf, false, nil
 	}
-	chave, texto, total, _, vivo := f.l.Grupo(uint32(id))
+	chave, texto, total, _, vivo := f.l.Group(uint32(id))
 	if !vivo {
 		return types.Record{}, buf, false, nil
 	}
@@ -183,17 +183,17 @@ func (f *fonte) GetByRowID(snap types.Snapshot, id types.RowID, buf []byte) (typ
 }
 
 func (f *fonte) GetByKey(snap types.Snapshot, key, buf []byte) (types.Record, []byte, bool, error) {
-	id, ok := f.l.PorTexto(key)
+	id, ok := f.l.ByText(key)
 	if !ok {
 		return types.Record{}, buf, false, nil
 	}
 	return f.GetByRowID(snap, types.RowID(id), buf)
 }
 
-// Indexado responde SEMPRE false: a tabela não declara índice, e o planner
+// Indexed responde SEMPRE false: a tabela não declara índice, e o planner
 // degrada para a varredura dos grupos — que sobre milhares de linhas é o
 // plano certo. A key (groupKey) dá o point lookup por conta própria.
-func (f *fonte) Indexado(types.FieldID) bool { return false }
+func (f *fonte) Indexed(types.FieldID) bool { return false }
 
 // Lookup nunca é chamado: sem índice declarado o planner não escolhe plano
 // indexado. Rede de segurança, como no _meta.
@@ -254,7 +254,7 @@ type iterador struct {
 func (it *iterador) Next() bool {
 	for it.id+1 < it.limite {
 		it.id++
-		if _, _, _, _, vivo := it.l.Grupo(it.id); vivo {
+		if _, _, _, _, vivo := it.l.Group(it.id); vivo {
 			return true
 		}
 	}

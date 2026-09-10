@@ -7,16 +7,16 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// preenche registra um campo no dicionário ANTES do Compile, com ou sem tipo
+// seedField registra um campo no dicionário ANTES do Compile, com ou sem tipo
 // fixado — é o estado que uma execução anterior deixou no fields.dict.
-func preenche(t *testing.T, d *fakeDict, nome string, tipo types.FieldType) types.FieldID {
+func seedField(t *testing.T, d *fakeDict, name string, typ types.FieldType) types.FieldID {
 	t.Helper()
-	id, err := d.LookupOrCreate([]byte(nome))
+	id, err := d.LookupOrCreate([]byte(name))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tipo != types.TypeNull {
-		if err := d.SetTypeHint(id, tipo); err != nil {
+	if typ != types.TypeNull {
+		if err := d.SetTypeHint(id, typ); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -33,7 +33,7 @@ func preenche(t *testing.T, d *fakeDict, nome string, tipo types.FieldType) type
 // campo por causa de um erro de digitação numa query.
 func TestCompileCarregaCamposDoDicionario(t *testing.T) {
 	dict := newFakeDict()
-	id := preenche(t, dict, "X-Vendor-Attr", types.TypeString)
+	id := seedField(t, dict, "X-Vendor-Attr", types.TypeString)
 
 	s := parseOK(t, baseYAML)
 	c, err := s.Compile(dict)
@@ -58,13 +58,13 @@ func TestCompileCarregaCamposDoDicionario(t *testing.T) {
 		t.Error("FieldByID deveria resolver o mesmo ponteiro")
 	}
 	// SELECT * enxerga a coluna.
-	var achou bool
+	var found bool
 	for _, cf := range c.FieldsByID() {
 		if cf.ID == id {
-			achou = true
+			found = true
 		}
 	}
-	if !achou {
+	if !found {
 		t.Error("FieldsByID omitiu o campo do dicionário: SELECT * perderia a coluna")
 	}
 }
@@ -75,7 +75,7 @@ func TestCompileCarregaCamposDoDicionario(t *testing.T) {
 // quem escreveu a query.
 func TestCompileCarregaCampoDoDicionarioSemTipo(t *testing.T) {
 	dict := newFakeDict()
-	id := preenche(t, dict, "X-Sem-Tipo", types.TypeNull)
+	id := seedField(t, dict, "X-Sem-Tipo", types.TypeNull)
 
 	c, err := parseOK(t, baseYAML).Compile(dict)
 	if err != nil {
@@ -98,8 +98,8 @@ func TestCompileCarregaCampoDoDicionarioSemTipo(t *testing.T) {
 // no dicionário é carregado com o ID que já tem, sem nova entry.
 func TestCompileNaoCriaCampoDoDicionario(t *testing.T) {
 	dict := newFakeDict()
-	preenche(t, dict, "X-Vendor-Attr", types.TypeString)
-	antes := append([]string(nil), dict.order...)
+	seedField(t, dict, "X-Vendor-Attr", types.TypeString)
+	before := append([]string(nil), dict.order...)
 
 	if _, err := parseOK(t, baseYAML).Compile(dict); err != nil {
 		t.Fatal(err)
@@ -107,16 +107,16 @@ func TestCompileNaoCriaCampoDoDicionario(t *testing.T) {
 
 	// O YAML registra os seus; o campo do dicionário não pode aparecer duas
 	// vezes na ordem de criação.
-	var vezes int
+	var occurrences int
 	for _, n := range dict.order {
 		if n == "X-Vendor-Attr" {
-			vezes++
+			occurrences++
 		}
 	}
-	if vezes != 1 {
-		t.Errorf("X-Vendor-Attr criado %d vezes no dicionário, want 1", vezes)
+	if occurrences != 1 {
+		t.Errorf("X-Vendor-Attr criado %d vezes no dicionário, want 1", occurrences)
 	}
-	if dict.order[0] != antes[0] {
+	if dict.order[0] != before[0] {
 		t.Errorf("ordem do dicionário mudou: %v", dict.order)
 	}
 }
@@ -126,7 +126,7 @@ func TestCompileNaoCriaCampoDoDicionario(t *testing.T) {
 // desfaria a decisão do operador.
 func TestCompileNaoRessuscitaExcluidoDoDicionario(t *testing.T) {
 	dict := newFakeDict()
-	preenche(t, dict, "debug", types.TypeString) // baseYAML tem exclude: [debug]
+	seedField(t, dict, "debug", types.TypeString) // baseYAML tem exclude: [debug]
 
 	c, err := parseOK(t, baseYAML).Compile(dict)
 	if err != nil {
@@ -143,8 +143,8 @@ func TestCompileNaoRessuscitaExcluidoDoDicionario(t *testing.T) {
 // configuração anterior — e o operador que tirou o campo da lista quer ele
 // fora. O Compile carrega exatamente o que o writer poderia ter criado.
 func TestCompileNaoCarregaDicionarioEmUniversoFechado(t *testing.T) {
-	casos := []struct {
-		nome string
+	cases := []struct {
+		name string
 		yaml string
 	}{
 		{"include explícito", `
@@ -165,10 +165,10 @@ schema:
 		{"wildcard com unknownFields reject",
 			strings.Replace(baseYAML, "unknownFields: include", "unknownFields: reject", 1)},
 	}
-	for _, tc := range casos {
-		t.Run(tc.nome, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			dict := newFakeDict()
-			preenche(t, dict, "X-Residuo", types.TypeString)
+			seedField(t, dict, "X-Residuo", types.TypeString)
 
 			c, err := parseOK(t, tc.yaml).Compile(dict)
 			if err != nil {
@@ -187,7 +187,7 @@ schema:
 // da ordem de inserção no mapa.
 func TestCompileDicionarioNaoSombreiaAlias(t *testing.T) {
 	dict := newFakeDict()
-	colisao := preenche(t, dict, "status", types.TypeString) // alias de Acct-Status-Type
+	collision := seedField(t, dict, "status", types.TypeString) // alias de Acct-Status-Type
 
 	c, err := parseOK(t, baseYAML).Compile(dict)
 	if err != nil {
@@ -197,7 +197,7 @@ func TestCompileDicionarioNaoSombreiaAlias(t *testing.T) {
 	if !ok {
 		t.Fatal("alias deveria continuar resolvendo")
 	}
-	if f.Name != "Acct-Status-Type" || f.ID == colisao {
+	if f.Name != "Acct-Status-Type" || f.ID == collision {
 		t.Errorf("alias resolveu para %+v, want o campo declarado", f)
 	}
 }

@@ -10,7 +10,7 @@ func contadores(t *testing.T, h *harness, nome string) (ocorr, diverg, coerc uin
 	if !ok {
 		t.Fatalf("coluna %q não compilada", nome)
 	}
-	return f.Ocorrencias(), f.Divergencias(), f.Coercoes()
+	return f.OccurrenceCount(), f.DivergenceCount(), f.CoercionCount()
 }
 
 // A coerção é contada em `coercions` e NÃO em `typeMismatches`, e este é o teste
@@ -179,9 +179,9 @@ func TestCoercaoNoTopoNaoEhContada(t *testing.T) {
 	if !ok {
 		t.Fatal("campo `topo` não compilado")
 	}
-	if f.Coercoes() != 0 || f.Ocorrencias() != 0 {
+	if f.CoercionCount() != 0 || f.OccurrenceCount() != 0 {
 		t.Errorf("campo de topo contou coercions=%d occurrences=%d, quer os dois em 0",
-			f.Coercoes(), f.Ocorrencias())
+			f.CoercionCount(), f.OccurrenceCount())
 	}
 	// E a coluna É de topo, senão o teste afirmaria isso do campo errado.
 	if f.Parent != nil {

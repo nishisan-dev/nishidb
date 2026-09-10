@@ -262,7 +262,7 @@ func TestMetaKafkaSemClassificadorODeclaradoNaoInventaEstado(t *testing.T) {
 }
 
 // TestMetaKafkaConsultaOConsumidorUmaVezPorConsulta: o retrato é colhido no
-// AbreSnapshot, não por linha. Uma ida ao broker por LINHA seria carga
+// OpenSnapshot, não por linha. Uma ida ao broker por LINHA seria carga
 // multiplicada pelo número de partições.
 func TestMetaKafkaConsultaOConsumidorUmaVezPorConsulta(t *testing.T) {
 	c := &consumidorFalso{inst: instantaneoCom(pos(0, 1, 1), pos(1, 2, 2), pos(2, 3, 3))}
@@ -385,8 +385,8 @@ func TestMetaKafkaNaoRetemRetratoDepoisDoClose(t *testing.T) {
 	}
 	_ = sc
 	for i := 0; i < 5; i++ {
-		snap := store.AbreSnapshot()
-		store.FechaSnapshot(snap)
+		snap := store.OpenSnapshot()
+		store.CloseSnapshot(snap)
 	}
 	if n := metakafka.RetratosAbertosForTest(store); n != 0 {
 		t.Fatalf("%d retratos retidos depois de fechar todos", n)

@@ -24,7 +24,7 @@ func TestRowQueVenceNoMeioDaVarreduraContinuaVisivelAteOFimDaQuery(t *testing.T)
 	mustPut(t, s, "A", 1, payloadComPrazo(t, s, "A", rel.t, 3*time.Minute), nil)
 	mustPut(t, s, "B", 1, payloadComPrazo(t, s, "B", rel.t, 3*time.Minute), nil)
 
-	snap := s.AbreSnapshot()
+	snap := s.OpenSnapshot()
 
 	it := s.ScanLive(snap)
 	defer func() { _ = it.Close() }()
@@ -57,7 +57,7 @@ func TestGetByRowIDUsaORelogioDoSnapshotENaoODoPresente(t *testing.T) {
 	s, rel := storeComRegras(t, t.TempDir(), 0)
 	id, _ := mustPut(t, s, "A", 1, payloadComPrazo(t, s, "A", rel.t, 3*time.Minute), nil)
 
-	snap := s.AbreSnapshot()
+	snap := s.OpenSnapshot()
 
 	// A linha vence DEPOIS de o snapshot ser tomado.
 	rel.avanca(4 * time.Minute)
@@ -68,7 +68,7 @@ func TestGetByRowIDUsaORelogioDoSnapshotENaoODoPresente(t *testing.T) {
 
 	// A contraprova: sob um snapshot tomado AGORA, ela está mesmo vencida — sem
 	// isto o teste acima passaria com um GetByRowID que ignorasse a expiração.
-	if _, _, ok, _ := s.GetByRowID(s.AbreSnapshot(), id, nil); ok {
+	if _, _, ok, _ := s.GetByRowID(s.OpenSnapshot(), id, nil); ok {
 		t.Error("sob um snapshot do presente a linha continua visível: o teste acima não distingue congelar o relógio de não olhá-lo")
 	}
 }
@@ -82,13 +82,13 @@ func TestGetByKeyUsaORelogioDoSnapshotENaoODoPresente(t *testing.T) {
 	s, rel := storeComRegras(t, t.TempDir(), 0)
 	mustPut(t, s, "A", 1, payloadComPrazo(t, s, "A", rel.t, 3*time.Minute), nil)
 
-	snap := s.AbreSnapshot()
+	snap := s.OpenSnapshot()
 	rel.avanca(4 * time.Minute)
 
 	if _, _, ok, err := s.GetByKey(snap, []byte("A"), nil); err != nil || !ok {
 		t.Errorf("GetByKey sob o snapshot: ok=%v err=%v; a linha viva em T0 sumiu do point lookup", ok, err)
 	}
-	if _, _, ok, _ := s.GetByKey(s.AbreSnapshot(), []byte("A"), nil); ok {
+	if _, _, ok, _ := s.GetByKey(s.OpenSnapshot(), []byte("A"), nil); ok {
 		t.Error("sob um snapshot do presente a linha continua visível: o teste acima não distingue congelar o relógio de não olhá-lo")
 	}
 }
@@ -103,8 +103,8 @@ func TestLinhaAtualizadaDuranteAConsultaEhEntregueNaVersaoDeT0(t *testing.T) {
 	s := openStore(t, Options{})
 	id, _ := mustPut(t, s, "A", 1, statusPayload(t, s, "A", "Start", 1), nil)
 
-	snap := s.AbreSnapshot()
-	defer s.FechaSnapshot(snap)
+	snap := s.OpenSnapshot()
+	defer s.CloseSnapshot(snap)
 
 	// A entidade é atualizada com a consulta em voo.
 	mustPut(t, s, "A", 2, statusPayload(t, s, "A", "Stop", 2), nil)
@@ -119,7 +119,7 @@ func TestLinhaAtualizadaDuranteAConsultaEhEntregueNaVersaoDeT0(t *testing.T) {
 
 	// A contraprova: quem abre depois vê o estado novo. Sem ela, um GetByRowID
 	// quebrado que devolvesse sempre a versão mais antiga passaria no teste.
-	rec2, _, ok, err := s.GetByRowID(s.AbreSnapshot(), id, nil)
+	rec2, _, ok, err := s.GetByRowID(s.OpenSnapshot(), id, nil)
 	if err != nil || !ok {
 		t.Fatalf("GetByRowID no presente: ok=%v err=%v", ok, err)
 	}
@@ -159,8 +159,8 @@ func TestDuasAtualizacoesNaMesmaLinhaEntregamAVersaoDeT0ENaoAIntermediaria(t *te
 	s := openStore(t, Options{})
 	id, _ := mustPut(t, s, "A", 1, statusPayload(t, s, "A", "T0", 1), nil)
 
-	snap := s.AbreSnapshot()
-	defer s.FechaSnapshot(snap)
+	snap := s.OpenSnapshot()
+	defer s.CloseSnapshot(snap)
 
 	mustPut(t, s, "A", 2, statusPayload(t, s, "A", "intermediaria", 2), nil)
 	mustPut(t, s, "A", 3, statusPayload(t, s, "A", "corrente", 3), nil)
@@ -181,13 +181,13 @@ func TestSnapshotFechadoDevolveOJournalAoWriter(t *testing.T) {
 	s := openStore(t, Options{})
 	mustPut(t, s, "A", 1, statusPayload(t, s, "A", "Start", 1), nil)
 
-	snap := s.AbreSnapshot()
+	snap := s.OpenSnapshot()
 	mustPut(t, s, "A", 2, statusPayload(t, s, "A", "Stop", 2), nil)
 	if got := s.vers.Entries(); got != 1 {
 		t.Fatalf("Entries() = %d, quero 1: a atualização sob leitor vivo não guardou a versão anterior", got)
 	}
 
-	s.FechaSnapshot(snap)
+	s.CloseSnapshot(snap)
 	if got := s.vers.Entries(); got != 0 {
 		t.Errorf("Entries() = %d, quero 0: o journal não voltou quando o último leitor fechou", got)
 	}
@@ -228,8 +228,8 @@ func TestSegmentoComVersaoRetidaNaoEhEleitoPelaCompaction(t *testing.T) {
 
 	// Com a consulta aberta, uma atualização retém a versão anterior — que
 	// mora num dos segmentos que a eleição acabou de escolher.
-	snap := s.AbreSnapshot()
-	defer s.FechaSnapshot(snap)
+	snap := s.OpenSnapshot()
+	defer s.CloseSnapshot(snap)
 	corpusDeSegmentosSelados(t, s, keys, 1)
 
 	comLeitor := s.candidatos(0.5)
@@ -250,8 +250,8 @@ func TestPointLookupEntregaAVersaoDeT0(t *testing.T) {
 	s := openStore(t, Options{})
 	mustPut(t, s, "A", 1, statusPayload(t, s, "A", "T0", 1), nil)
 
-	snap := s.AbreSnapshot()
-	defer s.FechaSnapshot(snap)
+	snap := s.OpenSnapshot()
+	defer s.CloseSnapshot(snap)
 	mustPut(t, s, "A", 2, statusPayload(t, s, "A", "corrente", 2), nil)
 
 	rec, _, ok, err := s.GetByKey(snap, []byte("A"), nil)
@@ -279,8 +279,8 @@ func TestCopyForwardNaoCriaVersaoENaoTravaAPropriaPassada(t *testing.T) {
 
 	// Uma consulta aberta ANTES da passada: é a condição que faria o
 	// copy-forward versionar, se ele versionasse.
-	snap := s.AbreSnapshot()
-	defer s.FechaSnapshot(snap)
+	snap := s.OpenSnapshot()
+	defer s.CloseSnapshot(snap)
 	antes := s.vers.Entries()
 
 	res, err := s.CompactaUmaVez(context.Background(), 0.5)
@@ -325,7 +325,7 @@ func TestCompactionNaoLapidaLinhaVisivelAoSnapshotMaisAntigo(t *testing.T) {
 			"status":     {Type: types.TypeString, Bytes: []byte(k + "-payload-de-tamanho-razoavel-para-encher-segmento")},
 			"_writtenAt": {Type: types.TypeTimestamp, I64: rel.t.UnixMilli()},
 		})
-		rec, _, pres, err := s.Estado([]byte(k), nil)
+		rec, _, pres, err := s.State([]byte(k), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -353,8 +353,8 @@ func TestCompactionNaoLapidaLinhaVisivelAoSnapshotMaisAntigo(t *testing.T) {
 
 	// A consulta abre com TUDO vivo. É este instante que a compaction tem de
 	// respeitar.
-	snap := s.AbreSnapshot()
-	defer s.FechaSnapshot(snap)
+	snap := s.OpenSnapshot()
+	defer s.CloseSnapshot(snap)
 
 	rel.avanca(2 * time.Hour) // a abandonada vence DEPOIS do snapshot
 	for r := 0; r < 15; r++ {
@@ -398,8 +398,8 @@ func TestRetencaoNaoUltrapassaOPisoDoSnapshotVivo(t *testing.T) {
 	}
 
 	// A consulta abre com as 50 linhas vivas: o piso dela é o rowId zero.
-	snap := hist.AbreSnapshot()
-	defer hist.FechaSnapshot(snap)
+	snap := hist.OpenSnapshot()
+	defer hist.CloseSnapshot(snap)
 
 	// A mesma passada que, sem leitor, avançaria a marca em 20.
 	res := passada(t, hist, LimitesDeRetencao{ExpireAfterWrite: 30 * time.Minute})
@@ -412,7 +412,7 @@ func TestRetencaoNaoUltrapassaOPisoDoSnapshotVivo(t *testing.T) {
 
 	// A contraprova: fechada a consulta, a mesma passada avança normalmente —
 	// sem ela, este teste passaria com uma retenção que nunca avança.
-	hist.FechaSnapshot(snap)
+	hist.CloseSnapshot(snap)
 	res = passada(t, hist, LimitesDeRetencao{ExpireAfterWrite: 30 * time.Minute})
 	if res.MarcaAvancou != 20 {
 		t.Errorf("a marca avançou %d depois de a consulta fechar, quero 20: a retenção não recuperou o alcance", res.MarcaAvancou)
@@ -435,8 +435,8 @@ func TestSnapshotQueEstouraOTetoEhInvalidadoEAIngestaoContinua(t *testing.T) {
 	s := openStore(t, Options{SnapshotMaxBytes: 48}) // duas versões cabem
 	id, _ := mustPut(t, s, "A", 1, statusPayload(t, s, "A", "T0", 1), nil)
 
-	snap := s.AbreSnapshot()
-	defer s.FechaSnapshot(snap)
+	snap := s.OpenSnapshot()
+	defer s.CloseSnapshot(snap)
 
 	// Cada atualização retém uma versão. A quarta estoura o teto.
 	for seq := int64(2); seq <= 5; seq++ {

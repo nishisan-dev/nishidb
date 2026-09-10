@@ -8,7 +8,7 @@ import (
 	"github.com/nishisan-dev/nishidb/internal/types"
 )
 
-// Indexado é o capability check POR CAMPO do planner. Sem ele, um schema que
+// Indexed é o capability check POR CAMPO do planner. Sem ele, um schema que
 // declara `index: true` num campo que o store não indexa faria o planner
 // escolher o caminho indexado e o executor falhar em runtime — exatamente o que
 // a degradação para full scan existe para evitar.
@@ -19,21 +19,21 @@ import (
 // declarar um campo em um motor e não no outro deixou de ser um estado
 // construível, aqui e no Store real.
 func TestIndexado(t *testing.T) {
-	s := New(Indexes{Campos: []types.FieldID{2, 3}})
+	s := New(Indexes{Fields: []types.FieldID{2, 3}})
 
-	casos := []struct {
-		field    types.FieldID
-		indexado bool
-		porque   string
+	cases := []struct {
+		field   types.FieldID
+		indexed bool
+		reason  string
 	}{
 		{3, true, "campo declarado indexado"},
 		{2, true, "campo declarado indexado"},
 		{99, false, "campo sem índice"},
 		{0, false, "fieldID reservado"},
 	}
-	for _, tc := range casos {
-		if got := s.Indexado(tc.field); got != tc.indexado {
-			t.Errorf("Indexado(%d) = %v, want %v (%s)", tc.field, got, tc.indexado, tc.porque)
+	for _, tc := range cases {
+		if got := s.Indexed(tc.field); got != tc.indexed {
+			t.Errorf("Indexed(%d) = %v, want %v (%s)", tc.field, got, tc.indexed, tc.reason)
 		}
 	}
 }
@@ -44,7 +44,7 @@ func TestIndexado(t *testing.T) {
 // confiar no índice — sem ele, um executor que devolvesse os candidatos crus
 // passaria em todos os testes.
 func TestInjectPostingCriaFalsoPositivo(t *testing.T) {
-	s := New(Indexes{Campos: []types.FieldID{2}})
+	s := New(Indexes{Fields: []types.FieldID{2}})
 	p := payload(t, fv(1, strVal("ABC")), fv(2, strVal("Start")))
 	rowID, _, err := s.Put([]byte("ABC"), 1, 0, p, nil)
 	if err != nil {
@@ -64,7 +64,7 @@ func TestInjectPostingCriaFalsoPositivo(t *testing.T) {
 		t.Errorf("Lookup(Start) = %v, want [%d]", got, rowID)
 	}
 	// O ESTADO da row não muda — é o que separa um posting órfão de um update.
-	rec, _, ok, err := s.GetByRowID(s.AbreSnapshot(), rowID, nil)
+	rec, _, ok, err := s.GetByRowID(s.OpenSnapshot(), rowID, nil)
 	if err != nil || !ok {
 		t.Fatalf("GetByRowID: ok=%v err=%v", ok, err)
 	}
@@ -76,14 +76,14 @@ func TestInjectPostingCriaFalsoPositivo(t *testing.T) {
 // Posting para rowId que não existe também é estado alcançável no real (a row
 // some do índice denso, o posting fica). O consumidor tem de sobreviver a ele.
 func TestInjectPostingRowInexistente(t *testing.T) {
-	s := New(Indexes{Campos: []types.FieldID{2}})
+	s := New(Indexes{Fields: []types.FieldID{2}})
 	if err := s.InjectPosting(2, strVal("Stop"), types.RowID(42)); err != nil {
 		t.Fatal(err)
 	}
 	if got := ids(t, s, 2, strVal("Stop")); len(got) != 1 || got[0] != 42 {
 		t.Errorf("candidatos = %v, want [42]", got)
 	}
-	if _, _, ok, err := s.GetByRowID(s.AbreSnapshot(), 42, nil); ok || err != nil {
+	if _, _, ok, err := s.GetByRowID(s.OpenSnapshot(), 42, nil); ok || err != nil {
 		t.Errorf("GetByRowID(42) = ok:%v err:%v, want false/nil", ok, err)
 	}
 }
@@ -97,7 +97,7 @@ func TestInjectPostingRowInexistente(t *testing.T) {
 // sem API desde que LookupHash colapsou em Lookup. O corpo não mudou: o campo 3
 // continua sendo o campo de valor inteiro.
 func TestInjectPostingValorInteiro(t *testing.T) {
-	s := New(Indexes{Campos: []types.FieldID{3}})
+	s := New(Indexes{Fields: []types.FieldID{3}})
 	if err := s.InjectPosting(3, intVal(7), types.RowID(1)); err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestInjectPostingValorInteiro(t *testing.T) {
 // estado que o real não alcança, e o teste que dependesse dele passaria aqui e
 // falharia na integração.
 func TestInjectPostingCampoSemIndice(t *testing.T) {
-	s := New(Indexes{Campos: []types.FieldID{2}})
+	s := New(Indexes{Fields: []types.FieldID{2}})
 	err := s.InjectPosting(7, strVal("Stop"), types.RowID(0))
 	if !errors.Is(err, types.ErrInvalidArgument) {
 		t.Fatalf("erro = %v, want ErrInvalidArgument", err)
@@ -127,9 +127,9 @@ func TestInjectPostingCampoSemIndice(t *testing.T) {
 // O teto do values.dict vale para a injeção como vale para o Put: um posting
 // de valor acima do teto é um estado que o real recusa a criar.
 func TestInjectPostingRespeitaTetoDoValor(t *testing.T) {
-	s := New(Indexes{Campos: []types.FieldID{2}})
-	grande := types.Value{Type: types.TypeString, Bytes: make([]byte, types.MaxIndexedValueBytes+1)}
-	err := s.InjectPosting(2, grande, types.RowID(0))
+	s := New(Indexes{Fields: []types.FieldID{2}})
+	large := types.Value{Type: types.TypeString, Bytes: make([]byte, types.MaxIndexedValueBytes+1)}
+	err := s.InjectPosting(2, large, types.RowID(0))
 	if !errors.Is(err, types.ErrInvalidArgument) {
 		t.Fatalf("erro = %v, want ErrInvalidArgument", err)
 	}

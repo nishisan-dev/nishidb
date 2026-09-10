@@ -123,7 +123,7 @@ func (in *instr) testa(slots []Slot, mismatches *int64) bool {
 		// sem regra nova: campo ausente é false inclusive em NOT LIKE, pela
 		// mesma razão que é false em `!=`. `WHERE x NOT LIKE 'a%'` não devolve
 		// a linha que não tem `x` — quem quer isso escreve IS NULL.
-		return in.like.Casa(s.Val.Bytes) != in.not
+		return in.like.Match(s.Val.Bytes) != in.not
 	}
 	// O despacho é pelo KIND, nunca por Val.Type: `octets > 1.5` numa coluna
 	// int64 e `ratio > 1.5` numa coluna double produzem um Val IDÊNTICO —
@@ -307,8 +307,8 @@ func (p *Programa) emite(e binder.BoundExpr, nSlots int, pilha *[]tarefa) error 
 			return fmt.Errorf("%w: coluna %q com slot %d fora de [0,%d)",
 				ErrProgramaInvalido, n.Field.Name, n.Slot, nSlots)
 		}
-		if n.Pat.Tipo == binder.PadraoInvalido {
-			// Zero value do padrão: BoundLike construído sem CompilaLike. É bug
+		if n.Pat.Type == binder.PatternInvalid {
+			// Zero value do padrão: BoundLike construído sem CompileLike. É bug
 			// de plan-time, e casar nada em silêncio o esconderia.
 			return fmt.Errorf("%w: LIKE em %q com padrão não compilado", ErrProgramaInvalido, n.Field.Name)
 		}

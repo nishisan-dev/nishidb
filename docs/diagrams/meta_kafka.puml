@@ -10,7 +10,7 @@ participant "Consumidor" as C
 participant "broker" as B
 
 == abertura da consulta ==
-EX -> F: AbreSnapshot()
+EX -> F: OpenSnapshot()
 F -> D: Consumidor() sob d.mu
 note right of D
   resolvido NA HORA:
@@ -62,6 +62,6 @@ loop por linha
 end
 
 == fecho ==
-EX -> F: FechaSnapshot(snap)
+EX -> F: CloseSnapshot(snap)
 F -> F: descarta o retrato
 @enduml

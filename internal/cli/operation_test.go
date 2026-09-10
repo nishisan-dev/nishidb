@@ -1103,8 +1103,8 @@ func TestInspectDetalhaColunasEIndices(t *testing.T) {
 	// As DUAS saem "bitmap": antes da D5, NAS-IP-Address era `index: hash` e
 	// saía diferente de Acct-Status-Type. Com um motor só, `index: true` é a
 	// única grafia e o campo compilado carrega um bool — era o IndexKind, hoje
-	// schema.CompiledField.Indexado; "bitmap" e "none" continuam sendo as duas
-	// palavras que o wire publica, ver o godoc do NomeDoIndice.
+	// schema.CompiledField.Indexed; "bitmap" e "none" continuam sendo as duas
+	// palavras que o wire publica, ver o godoc do IndexName.
 	for coluna, quer := range map[string]string{"Acct-Status-Type": "bitmap", "NAS-IP-Address": "bitmap"} {
 		if got := celulaSobORotulo(t, cabecalho, linhaDaTabela(t, linhas, coluna), "ÍNDICE"); got != quer {
 			t.Errorf("o índice de %s saiu %q, queria %q", coluna, got, quer)

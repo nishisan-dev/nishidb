@@ -133,8 +133,8 @@ func TestGateAllocsPointLookupReal(t *testing.T) {
 	// O snapshot é aberto FORA da função medida: ele é por consulta, e abri-lo
 	// dentro mediria o custo de admissão de um leitor a cada linha — que não é
 	// o que este gate afirma medir.
-	snap := st.AbreSnapshot()
-	defer st.FechaSnapshot(snap)
+	snap := st.OpenSnapshot()
+	defer st.CloseSnapshot(snap)
 	got := testing.AllocsPerRun(200, func() {
 		rec, out, ok, err := st.GetByKey(snap, keys[i%len(keys)], buf[:0])
 		if err != nil || !ok {
@@ -177,8 +177,8 @@ func estadoDeReferenciaT(t *testing.T, events [][]byte) (key, payload []byte) {
 	if r.Err != nil {
 		t.Fatal(r.Err)
 	}
-	snap := st.AbreSnapshot()
-	defer st.FechaSnapshot(snap)
+	snap := st.OpenSnapshot()
+	defer st.CloseSnapshot(snap)
 	rec, _, ok, err := st.GetByRowID(snap, r.RowID, nil)
 	if err != nil || !ok {
 		t.Fatalf("estado de referência ausente: ok=%v err=%v", ok, err)

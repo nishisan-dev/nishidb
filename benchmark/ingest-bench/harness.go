@@ -78,7 +78,7 @@ type Config struct {
 	// aprovasse a rodada sem compaction não estaria medindo compaction.
 	//
 	// Fora da faixa aberta (0, 1) o Store não teria política nenhuma para
-	// aplicar — é a mesma faixa que o config.razaoDeLiveness impõe ao YAML, e
+	// aplicar — é a mesma faixa que o config.livenessRatio impõe ao YAML, e
 	// aqui ela é validada pelo mesmo motivo: ratio >= 1 elege todo segmento e
 	// reescreve o dataset em laço.
 	CompactionRatio float64
@@ -426,15 +426,15 @@ func Run(cfg Config) (*Report, error) {
 		cfg.Out = io.Discard
 	}
 
-	spec, err := schema.Load(cfg.SpecPath, schema.DefaultsPadrao)
+	spec, err := schema.Load(cfg.SpecPath, schema.BuiltinDefaults)
 	if err != nil {
 		return nil, fmt.Errorf("ingest-bench: carregando spec: %w", err)
 	}
 	// A lista sai do schema, e NÃO de um laço local: este arquivo era a quarta
-	// cópia do laço que o godoc de schema.CamposComIndice descreve, e a cópia
+	// cópia do laço que o godoc de schema.IndexedFieldNames descreve, e a cópia
 	// não conhecia coluna derivada. Um benchmark que abrisse o dataset com um
 	// conjunto de índices diferente do que o servidor usa mediria outro produto.
-	camposIndexados := schema.CamposComIndice(spec)
+	camposIndexados := schema.IndexedFieldNames(spec)
 
 	st, err := abreStore(cfg, camposIndexados)
 	if err != nil {
@@ -914,9 +914,9 @@ func startReaders(cfg Config, st *storage.Store, c *schema.Compiled) *readerPool
 				início := time.Now()
 				switch classe {
 				case 0:
-					snap := st.AbreSnapshot()
+					snap := st.OpenSnapshot()
 					_, out, _, _ := st.GetByKey(snap, keys[n%len(keys)], rbuf[:0])
-					st.FechaSnapshot(snap)
+					st.CloseSnapshot(snap)
 					rbuf = out
 				case 1:
 					rbuf = lookupIndexadoLimit(st, statusField.ID, rbuf, 100)
@@ -945,8 +945,8 @@ func (p *readerPool) stop() []QueryStats {
 
 func lookupIndexadoLimit(st *storage.Store, field types.FieldID, buf []byte, limit int) []byte {
 	v := types.Value{Type: types.TypeString, Bytes: []byte("Interim-Update")}
-	snap := st.AbreSnapshot()
-	defer st.FechaSnapshot(snap)
+	snap := st.OpenSnapshot()
+	defer st.CloseSnapshot(snap)
 	it, err := st.Lookup(field, v)
 	if err != nil {
 		return buf
@@ -964,8 +964,8 @@ func lookupIndexadoLimit(st *storage.Store, field types.FieldID, buf []byte, lim
 }
 
 func scanLimit(st *storage.Store, buf []byte, limit int) []byte {
-	snap := st.AbreSnapshot()
-	defer st.FechaSnapshot(snap)
+	snap := st.OpenSnapshot()
+	defer st.CloseSnapshot(snap)
 	it := st.ScanLive(snap)
 	defer it.Close()
 	n := 0

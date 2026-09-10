@@ -148,7 +148,7 @@ func InterfaceGroups(pkgs []*packages.Package, fset *token.FileSet) *Groups {
 				// roubaria a atribuição por tabela, mesmo sem declarar nada.
 				// Achado no repositório real: internal/query.Store (só
 				// embute executor.Store e planner.Store, zero método
-				// explícito) roubava Indexado de internal/query/planner.Store
+				// explícito) roubava Indexed de internal/query/planner.Store
 				// por satisfazer de raspão internal/query/meta.Capacidades,
 				// que só compartilha a FORMA do método, não a implementação.
 				for j := 0; j < oit.NumExplicitMethods(); j++ {

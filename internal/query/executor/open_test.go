@@ -53,7 +53,7 @@ schema:
 
 func compilaSchema(t *testing.T) *schema.Compiled {
 	t.Helper()
-	spec, err := schema.Parse([]byte(yamlTeste), schema.DefaultsPadrao)
+	spec, err := schema.Parse([]byte(yamlTeste), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestPlanoInvalido(t *testing.T) {
 			return bq
 		}, planner.FullScan(), st, "campo nulo"},
 		// Prazo ausente é BUG do binder, e tem de sair aqui: o executor deixou
-		// de ter um timeoutPadrao próprio, que era uma segunda fonte da verdade
+		// de ter um defaultQueryTimeout próprio, que era uma segunda fonte da verdade
 		// capaz de vencer em silêncio o `query.maxTimeout` configurado.
 		{"query ligada sem prazo", func() *binder.BoundQuery {
 			bq := bqBase(t, c)
@@ -222,9 +222,9 @@ func (s *storeQueExplode) GetByKey(types.Snapshot, []byte, []byte) (types.Record
 	return types.Record{}, nil, false, nil
 }
 
-func (s *storeQueExplode) AbreSnapshot() types.Snapshot { return types.Snapshot{} }
+func (s *storeQueExplode) OpenSnapshot() types.Snapshot { return types.Snapshot{} }
 
-func (s *storeQueExplode) FechaSnapshot(types.Snapshot) {}
+func (s *storeQueExplode) CloseSnapshot(types.Snapshot) {}
 
 func (s *storeQueExplode) ScanLive(types.Snapshot) types.RowIDIterator { return vazio{} }
 

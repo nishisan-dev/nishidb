@@ -158,9 +158,9 @@ func (s *storeFalhaNoSegundo) GetByKey(types.Snapshot, []byte, []byte) (types.Re
 
 func (s *storeFalhaNoSegundo) ScanLive(types.Snapshot) types.RowIDIterator { return lista() }
 
-func (s *storeFalhaNoSegundo) AbreSnapshot() types.Snapshot { return types.Snapshot{} }
+func (s *storeFalhaNoSegundo) OpenSnapshot() types.Snapshot { return types.Snapshot{} }
 
-func (s *storeFalhaNoSegundo) FechaSnapshot(types.Snapshot) {}
+func (s *storeFalhaNoSegundo) CloseSnapshot(types.Snapshot) {}
 
 func (s *storeFalhaNoSegundo) Lookup(types.FieldID, types.Value) (types.RowIDIterator, error) {
 	s.n++
@@ -177,7 +177,7 @@ func (s *storeFalhaNoSegundo) Lookup(types.FieldID, types.Value) (types.RowIDIte
 // descritor esgotado depois de horas.
 func TestAbreTermosFechaOsJaAbertosNoErro(t *testing.T) {
 	st := &storeFalhaNoSegundo{}
-	campo := &schema.CompiledField{ID: 1, Name: "x", Indexado: true}
+	campo := &schema.CompiledField{ID: 1, Name: "x", Indexed: true}
 	termos := []planner.IndexTerm{{Field: campo}, {Field: campo}}
 
 	if _, err := abreTermos(termos, st); err == nil {

@@ -60,8 +60,8 @@ func BenchmarkQueryPointLookup(b *testing.B) {
 	st, _, keys := datasetDeLeitura(b, 5000)
 
 	var buf []byte
-	snap := st.AbreSnapshot()
-	defer st.FechaSnapshot(snap)
+	snap := st.OpenSnapshot()
+	defer st.CloseSnapshot(snap)
 	b.ReportAllocs()
 	i := 0
 	for b.Loop() {
@@ -94,8 +94,8 @@ func BenchmarkQueryBitmapLimit100(b *testing.B) {
 	}
 
 	var buf []byte
-	snap := st.AbreSnapshot()
-	defer st.FechaSnapshot(snap)
+	snap := st.OpenSnapshot()
+	defer st.CloseSnapshot(snap)
 	b.ReportAllocs()
 	for b.Loop() {
 		it, err := st.Lookup(field, valor)
@@ -148,8 +148,8 @@ func BenchmarkFullScan1k(b *testing.B) {
 	st, _, _ := datasetDeLeitura(b, 5000)
 
 	var buf []byte
-	snap := st.AbreSnapshot()
-	defer st.FechaSnapshot(snap)
+	snap := st.OpenSnapshot()
+	defer st.CloseSnapshot(snap)
 	b.ReportAllocs()
 	for b.Loop() {
 		it := st.ScanLive(snap)

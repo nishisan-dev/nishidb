@@ -134,13 +134,13 @@ func TestCongeladaComIndiceBitmapEhFiltravel(t *testing.T) {
 // valor CORRENTE depois de um crash, e ninguém veria.
 func TestCongeladaSobreviveAoReplayDoTail(t *testing.T) {
 	a := ambienteAlarmes(t)
-	spec, err := schema.Load(filepath.Join(a.dir, "datasets", "alarmes.yaml"), schema.DefaultsPadrao)
+	spec, err := schema.Load(filepath.Join(a.dir, "datasets", "alarmes.yaml"), schema.BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
 	opts := storage.Options{
 		Dir:                    filepath.Join(a.dir, "dados", "alarmes"),
-		CamposIndexadosPorNome: schema.CamposComIndice(spec),
+		CamposIndexadosPorNome: schema.IndexedFieldNames(spec),
 	}
 	st, err := storage.Open(opts)
 	if err != nil {
@@ -174,7 +174,7 @@ func TestCongeladaSobreviveAoReplayDoTail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec, _, ok, err := st2.GetByKey(st2.AbreSnapshot(), []byte("a"), nil)
+	rec, _, ok, err := st2.GetByKey(st2.OpenSnapshot(), []byte("a"), nil)
 	if err != nil || !ok {
 		t.Fatalf("entidade perdida no replay (ok=%v err=%v)", ok, err)
 	}

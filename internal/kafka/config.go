@@ -121,7 +121,7 @@ func Resolve(dataset string, k *schema.KafkaSpec, e schema.ErrorsSpec) (*Config,
 		InvalidEvent:    e.InvalidEvent,
 
 		WatchdogTimeout:    k.Consumer.WatchdogTimeout,
-		WatchdogTentativas: k.Consumer.WatchdogTentativas,
+		WatchdogTentativas: k.Consumer.WatchdogAttempts,
 		DecodeWorkers:      k.Consumer.DecodeWorkers,
 	}
 

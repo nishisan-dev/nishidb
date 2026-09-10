@@ -23,7 +23,7 @@ type nullStore struct {
 	found   bool
 }
 
-func (s *nullStore) Estado(key, buf []byte) (types.Record, []byte, types.Presence, error) {
+func (s *nullStore) State(key, buf []byte) (types.Record, []byte, types.Presence, error) {
 	rec, out, ok, err := s.GetByKey(key, buf)
 	if err != nil || !ok {
 		return types.Record{}, out, types.PresenceAbsent, err
@@ -153,7 +153,7 @@ schema:
 // e mantém mapas de postings, e é daí que vêm as alocações.
 func newFakeMaterializer(tb testing.TB) (*Materializer, *schema.Compiled) {
 	tb.Helper()
-	s, err := schema.Parse([]byte(benchNoSeqYAML), schema.DefaultsPadrao)
+	s, err := schema.Parse([]byte(benchNoSeqYAML), schema.BuiltinDefaults)
 	if err != nil {
 		tb.Fatal(err)
 	}
@@ -165,7 +165,7 @@ func newFakeMaterializer(tb testing.TB) (*Materializer, *schema.Compiled) {
 	if !ok {
 		tb.Fatal("Acct-Status-Type não compilado")
 	}
-	m, err := New(c, fakestorage.New(fakestorage.Indexes{Campos: []types.FieldID{f.ID}}))
+	m, err := New(c, fakestorage.New(fakestorage.Indexes{Fields: []types.FieldID{f.ID}}))
 	if err != nil {
 		tb.Fatalf("New: %v", err)
 	}

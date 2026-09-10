@@ -104,6 +104,51 @@ func TestRewritesTheFirstWordOfTheGodoc(t *testing.T) {
 	}
 }
 
+// O godoc COLADO: o grupo de comentários da declaração começa por um parágrafo
+// de outro assunto, e a linha que nomeia o método vem depois, sem a linha em
+// branco que separaria os dois grupos. Olhando só `doc.List[0]`, o aplicador
+// não reconhece o nome velho, não troca nada e reporta sucesso — e o godoc
+// fica descrevendo um método que não existe mais.
+//
+// O caso é real: `internal/materializer` declara a interface Store com o
+// parágrafo do contrato do buffer colado à frase que abre o godoc de Estado
+// (materializer.go:25-41), e foi assim que `Estado` sobreviveu ao G3.
+func TestRewritesTheGodocLineThatNamesTheMethodEvenWhenItIsNotTheFirst(t *testing.T) {
+	dir := writeModule(t, map[string]string{
+		"go.mod": "module exemplo.local/godoccolado\n\ngo 1.25\n",
+		"p/p.go": `package p
+
+// Store é a superfície do storage consumida pelo materializer.
+type Store interface {
+	// Contrato do buffer: o caller passa buf[:0] e REATRIBUI o slice
+	// devolvido; o provedor pode substituí-lo por um maior, mas NUNCA pode
+	// preservar o conteúdo anterior. O Estado anterior continua no buf.
+	// Estado devolve os TRÊS estados da key.
+	Estado(key []byte) int
+}
+`,
+	})
+	if _, err := Apply(dir, []Entry{{Pkg: "p", Iface: "Store", Method: "Estado", New: "State"}}, false); err != nil {
+		t.Fatal(err)
+	}
+	s := readFile(t, dir, "p/p.go")
+	if !strings.Contains(s, "// State devolve os TRÊS estados da key.") {
+		t.Errorf("p.go: a linha do godoc que nomeia o método não foi reescrita:\n%s", s)
+	}
+	if strings.Contains(s, "// Estado devolve") {
+		t.Errorf("p.go: o nome velho sobrou no godoc:\n%s", s)
+	}
+	if !strings.Contains(s, "// Contrato do buffer:") {
+		t.Errorf("p.go: o parágrafo de outro assunto foi mexido:\n%s", s)
+	}
+	// A menção NO MEIO da prosa fica: só o token que abre a linha é o nome que
+	// o revive cobra, e o resto é trabalho do renamecite, que sabe distinguir
+	// citação de palavra.
+	if !strings.Contains(s, "O Estado anterior continua no buf.") {
+		t.Errorf("p.go: a menção no meio da prosa foi trocada; isso é trabalho do renamecite:\n%s", s)
+	}
+}
+
 func TestRefusesCollisionInTheMethodSet(t *testing.T) {
 	dir := copyModule(t)
 	_, err := Apply(dir, []Entry{{Pkg: "a", Iface: "Escritor", Method: "Apenda", New: "Fecha"}}, false)

@@ -6,7 +6,7 @@ package c
 // Anel só embute Regua, sem método explícito próprio: é o tipo-ponte que a
 // varredura do repositório real achou roubando a atribuição de quem declara
 // de verdade (internal/query.Store, que só embute executor.Store e
-// planner.Store, roubava Indexado de planner.Store por satisfazer de raspão
+// planner.Store, roubava Indexed de planner.Store por satisfazer de raspão
 // internal/query/meta.Capacidades). Anel entra ANTES de Regua na varredura de
 // `ifaces` do pacote c (ordem alfabética), que é a ordem que reproduz o bug.
 type Regua interface {

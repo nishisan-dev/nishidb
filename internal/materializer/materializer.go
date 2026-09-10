@@ -35,11 +35,11 @@ type Store interface {
 	// erro: devolver nil ali faz o materializer perder o buffer e realocar a
 	// cada evento, e isso não aparece em nenhum teste de comportamento — só
 	// no gate de alocação.
-	// Estado devolve os TRÊS estados da key (§58). São três e não dois
+	// State devolve os TRÊS estados da key (§58). São três e não dois
 	// porque o stale check precisa rodar também sobre a entidade EXPIRADA:
 	// tratá-la como ausente a faria ser recriada por um evento antigo, que é
 	// a ressurreição que o tombstone existe para impedir.
-	Estado(key, buf []byte) (types.Record, []byte, types.Presence, error)
+	State(key, buf []byte) (types.Record, []byte, types.Presence, error)
 
 	// Put publica o estado novo. prev != nil evita o re-lookup e entrega o
 	// payload anterior para o diff dos índices; deve ser o record corrente
@@ -336,8 +336,8 @@ type Materializer struct {
 // evento, com a ingestão já rodando.
 func New(c *schema.Compiled, s Store) (*Materializer, error) {
 	m := &Materializer{schema: c, store: s, agora: time.Now}
-	if len(c.RegrasTTL) > 0 {
-		regras, err := predicate.CompilaRegras(c.RegrasTTL, c)
+	if len(c.TTLRules) > 0 {
+		regras, err := predicate.CompilaRegras(c.TTLRules, c)
 		if err != nil {
 			return nil, err
 		}
@@ -470,7 +470,7 @@ func (m *Materializer) Aplica(d *Decodificado) ApplyResult {
 	)
 	// O buf devolvido é reatribuído SEMPRE (pode ter crescido), inclusive no
 	// erro — descartá-lo faria o próximo evento realocar do zero.
-	m.prevRec, m.prevBuf, presenca, err = m.store.Estado(d.key, m.prevBuf[:0])
+	m.prevRec, m.prevBuf, presenca, err = m.store.State(d.key, m.prevBuf[:0])
 	if err != nil {
 		return m.failure(err)
 	}
@@ -491,7 +491,7 @@ func (m *Materializer) Aplica(d *Decodificado) ApplyResult {
 	// O prazo é decidido DEPOIS do Parse e ANTES do merge: ele depende do
 	// estado anterior, que o Parse não tem, e a entry precisa entrar no patch
 	// antes de o payload novo ser montado.
-	if m.schema.Prazo != nil {
+	if m.schema.TTLField != nil {
 		dur, err := m.duracaoDe(m.prevRec.Payload, d.entries)
 		if err != nil {
 			return m.failure(err)
@@ -502,7 +502,7 @@ func (m *Materializer) Aplica(d *Decodificado) ApplyResult {
 		// sobreviver ao evento que a quebra — e a entidade morreria logo
 		// depois de o alarme reabrir. São 8 bytes por versão de record para
 		// tornar impossível a única falha que arruinaria a feature.
-		d.emitePrazo(m.schema.Prazo, dur)
+		d.emitePrazo(m.schema.TTLField, dur)
 	}
 
 	// prevRec.Payload aponta para prevBuf e outBuf é um buffer DISTINTO: o
@@ -602,7 +602,7 @@ func classify(err error) ErrorCategory {
 	// limite declarado sendo atingido. Sem este ramo ele caía no default e o
 	// operador o lia como STORAGE_ERROR — "bug nosso" — enquanto o writer
 	// parava para sempre sem explicação acionável.
-	case errors.Is(err, schema.ErrTetoDeCampos):
+	case errors.Is(err, schema.ErrFieldCeiling):
 		return CategoryFieldsExhausted
 	default:
 		return CategoryStorage

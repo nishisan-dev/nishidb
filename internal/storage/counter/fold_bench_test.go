@@ -13,8 +13,8 @@ import (
 // sequencial de 4 bytes por linha, e o custo tem de ser de milissegundos, não
 // de segundos.
 func BenchmarkDobra1M(b *testing.B) {
-	const linhas = 1 << 20
-	c, err := Abre(b.TempDir(), defPorPON("pon", 4096), linhas, false)
+	const rows = 1 << 20
+	c, err := Open(b.TempDir(), defByPON("pon", 4096), rows, false)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -24,9 +24,9 @@ func BenchmarkDobra1M(b *testing.B) {
 	for i := range olts {
 		olts[i] = []byte("OLT" + string(rune('A'+i%26)) + string(rune('A'+i/26)))
 	}
-	for r := types.RowID(0); r < linhas; r++ {
+	for r := types.RowID(0); r < rows; r++ {
 		p := payloadBench(olts[int(r)%64], int64(r%4), int64(r%8), r%3 != 0)
-		if err := c.Transiciona(r, p, false); err != nil {
+		if err := c.Transition(r, p, false); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -35,7 +35,7 @@ func BenchmarkDobra1M(b *testing.B) {
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if err := c.Dobra(); err != nil {
+		if err := c.Fold(); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -45,7 +45,7 @@ func BenchmarkDobra1M(b *testing.B) {
 // dataset de teste em ordem crescente de FieldID.
 func payloadBench(olt []byte, slot, port int64, auth bool) []byte {
 	var buf []byte
-	buf, _ = encoding.AppendField(buf, cOlt, types.Value{Type: types.TypeString, Bytes: olt})
+	buf, _ = encoding.AppendField(buf, cOLT, types.Value{Type: types.TypeString, Bytes: olt})
 	buf, _ = encoding.AppendField(buf, cSlot, types.Value{Type: types.TypeInt64, I64: slot})
 	buf, _ = encoding.AppendField(buf, cPort, types.Value{Type: types.TypeInt64, I64: port})
 	a := types.Value{Type: types.TypeBool}

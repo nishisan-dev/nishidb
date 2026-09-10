@@ -25,7 +25,7 @@ import (
 // lê MAIS a capability que o planner consulta.
 //
 // A união é necessária: com executor.Store sozinho o planner não teria
-// Indexado e não poderia fazer o capability check — escolheria um plano
+// Indexed e não poderia fazer o capability check — escolheria um plano
 // indexado que falharia em runtime, que é justamente o que a degradação para
 // full scan existe para evitar.
 type Store interface {
@@ -161,7 +161,7 @@ func (reg *registro) namespacesConhecidos() []string {
 // nomeando o que existe — ninguém é mandado procurar um dataset que nunca quis.
 //
 // As três são erro DE QUEM ESCREVEU A QUERY, e por isso saem tipadas por
-// binder.ErroEm: o FROM aponta para algo que não existe, que é a mesma família
+// binder.ErrorAt: o FROM aponta para algo que não existe, que é a mesma família
 // de "coluna desconhecida" — esta, na MESMA tabela virtual, já sai como BIND
 // pelo renomeiaTabelaVirtual. Com fmt.Errorf cru o servidor não tinha como
 // distingui-las de um bug e respondia INTERNAL/500, subindo a série de erro
@@ -174,7 +174,7 @@ func (reg *registro) tabelaVirtual(dataset, namespace, tabela string, pos int) (
 	// no pacote meta, fora deste registro.
 	porTabela, ok := reg.virtuais[namespace]
 	if !ok && namespace != meta.Namespace {
-		return nil, binder.ErroEm(pos, "namespace %q não existe; existem %s", namespace, strings.Join(reg.namespacesConhecidos(), " e "))
+		return nil, binder.ErrorAt(pos, "namespace %q não existe; existem %s", namespace, strings.Join(reg.namespacesConhecidos(), " e "))
 	}
 	v, ok := porTabela[tabela]
 	if !ok {
@@ -186,10 +186,10 @@ func (reg *registro) tabelaVirtual(dataset, namespace, tabela string, pos int) (
 			nomes = append(nomes, meta.TabelaFields)
 		}
 		if len(nomes) == 0 {
-			return nil, binder.ErroEm(pos, "o dataset %q não declara tabela nenhuma em %s", dataset, namespace)
+			return nil, binder.ErrorAt(pos, "o dataset %q não declara tabela nenhuma em %s", dataset, namespace)
 		}
 		sort.Strings(nomes)
-		return nil, binder.ErroEm(pos, "%s não tem tabela %q no dataset %q; existem: %s", namespace, tabela, dataset, strings.Join(nomes, ", "))
+		return nil, binder.ErrorAt(pos, "%s não tem tabela %q no dataset %q; existem: %s", namespace, tabela, dataset, strings.Join(nomes, ", "))
 	}
 	return v, nil
 }

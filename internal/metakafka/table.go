@@ -153,11 +153,11 @@ type colunaComID struct {
 
 // Tabela monta o schema sintético e o Store virtual de `_meta.kafka`.
 func Tabela(f Fonte) (*schema.Compiled, query.Store, error) {
-	spec, err := schema.Parse([]byte(especDaTabela), schema.DefaultsPadrao)
+	spec, err := schema.Parse([]byte(especDaTabela), schema.BuiltinDefaults)
 	if err != nil {
 		return nil, nil, fmt.Errorf("metakafka: spec da tabela %s.%s inválida: %w", meta.Namespace, TabelaMetaKafka, err)
 	}
-	sc, err := spec.Compile(schema.NovoDicionarioEmMemoria())
+	sc, err := spec.Compile(schema.NewInMemoryDict())
 	if err != nil {
 		return nil, nil, fmt.Errorf("metakafka: compilando a tabela %s.%s: %w", meta.Namespace, TabelaMetaKafka, err)
 	}
@@ -206,8 +206,8 @@ type linha struct {
 	MarcaEm  time.Time
 }
 
-// retrato é o que UMA consulta enxerga: colhido no AbreSnapshot, IMUTÁVEL, e
-// devolvido no FechaSnapshot.
+// retrato é o que UMA consulta enxerga: colhido no OpenSnapshot, IMUTÁVEL, e
+// devolvido no CloseSnapshot.
 type retrato struct {
 	comum  comum
 	linhas map[types.RowID]linha
@@ -227,11 +227,11 @@ type fonte struct {
 	abertos   map[uint64]*retrato
 
 	// medindo é o voo único da marca d'água: uma consulta por vez fala com o
-	// broker. Ver AbreSnapshot.
+	// broker. Ver OpenSnapshot.
 	medindo atomic.Bool
 }
 
-// AbreSnapshot congela o universo DESTA consulta: o conjunto de linhas E os
+// OpenSnapshot congela o universo DESTA consulta: o conjunto de linhas E os
 // números.
 //
 // Aqui a tabela diverge do `_counters`, que congela só o conjunto e lê os
@@ -244,9 +244,9 @@ type fonte struct {
 // painel que discorda de si mesmo.
 //
 // O retrato é guardado por ÉPOCA, mintada aqui. O executor fecha o par
-// AbreSnapshot/FechaSnapshot em todos os caminhos de saída, inclusive no Open
+// OpenSnapshot/CloseSnapshot em todos os caminhos de saída, inclusive no Open
 // que falha depois de abrir.
-func (f *fonte) AbreSnapshot() types.Snapshot {
+func (f *fonte) OpenSnapshot() types.Snapshot {
 	var inst kafka.Instantaneo
 	c := f.consumidor()
 	if c != nil {
@@ -359,9 +359,9 @@ func (f *fonte) colheComum(temConsumidor bool, inst kafka.Instantaneo) comum {
 	return c
 }
 
-// FechaSnapshot devolve o retrato desta consulta. O registro de partições NÃO
+// CloseSnapshot devolve o retrato desta consulta. O registro de partições NÃO
 // é podado: ele é a identidade dos rowIDs.
-func (f *fonte) FechaSnapshot(snap types.Snapshot) {
+func (f *fonte) CloseSnapshot(snap types.Snapshot) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.abertos, snap.Epoch)
@@ -443,10 +443,10 @@ func decimal(b []byte) (int64, bool) {
 	return n, true
 }
 
-// Indexado responde SEMPRE false, como nas outras tabelas virtuais: sem índice
+// Indexed responde SEMPRE false, como nas outras tabelas virtuais: sem índice
 // declarado o planner varre as linhas — uma por partição — e a key dá o point
 // lookup por conta própria.
-func (f *fonte) Indexado(types.FieldID) bool { return false }
+func (f *fonte) Indexed(types.FieldID) bool { return false }
 
 // Lookup nunca é chamado: rede de segurança, como no _meta e no _counters.
 func (f *fonte) Lookup(field types.FieldID, _ types.Value) (types.RowIDIterator, error) {

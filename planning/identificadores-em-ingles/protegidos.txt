@@ -76,21 +76,76 @@
 #     `Run.sealed`, e sem a proteção o valor do rótulo mudaria em crase pela
 #     metade — `corrente`, `pendente` e `fora` ficariam —, que é contrato de
 #     wire, e ele muda na Fase 3, não aqui.
+#     `ausente` entra pela MESMA porta de `selado`: é VALOR de dado, não
+#     identificador. A spec do subsistema 1 conta que "uma versão anterior
+#     desta tabela dizia `ausente`" sobre o rótulo `estado` da métrica
+#     (planning/spec-subsistema-1-indice-por-segmento.md:878), e o valor
+#     `"ausente"` de `types.Presence.String` é contrato de wire que muda na
+#     Fase 3, não aqui. O local `ausente` do schema virou `absent`, e o gate
+#     nem o procura: token minúsculo sem maiúscula interna não entra no
+#     índice de nomes velhos.
+#     `Campos` entra pelo mesmo motivo de `campos`, só que na forma que abre
+#     frase: "Campos fora de ordem (id 3 antes do id 1) violam a invariante"
+#     (internal/testutil/fakestorage/fakestorage_test.go:315) fala dos campos
+#     DO PAYLOAD, não do `Indexes.Campos` que virou `Fields`. O substantivo
+#     PT-BR abre frase em vinte documentos e comentários; a citação
+#     qualificada daquele campo não sobrou em lugar nenhum.
+#   - NOME DE COLUNA DO CORPUS dentro do pacote que perdeu o identificador:
+#     `Tipo`. A fixture do binder consulta a coluna `X-Sem-Tipo`
+#     (internal/query/binder/restart_test.go:93,95,107), e a varredura quebra o
+#     nome em `X`, `Sem` e `Tipo` — dentro de internal/query/binder, que é
+#     justamente o pacote onde `Tipo` virou `Type`, e onde a regra de mesmo
+#     pacote dispensa qualquer outra marca. É dado do dataset, não citação.
+#   - PADRÃO DE `-run` sobre NOME DE TESTE, que só muda na Fase 4: `Prazo`.
+#     Os três `go test … -run Prazo -v` de
+#     planning/colunas-congeladas-e-ttl-condicional-plano.md:1098,1227,1534
+#     selecionam `TestPrazoVencidoUsaADuracaoDaLinha` e companhia, que
+#     continuam em PT-BR. Trocar o padrão pelo nome novo do campo
+#     (`schema.Compiled.Prazo` virou `TTLField`) casaria ZERO teste — o mesmo
+#     estrago que a revisão do G2 pegou em `-run Prazos`.
+#   - IDENTIFICADOR VIVO DE OUTRA LÍNGUA, que o oráculo da declaração viva não
+#     enxerga porque lê Go: `Amostra`. `metrics.Amostra` virou `Sample`, mas
+#     `class Amostra` é declaração viva de scripts/nishidb-stats.py (linhas 70,
+#     148, 149, 252, 507, mais o teste ao lado), e o Python só é renomeado na
+#     Fase 6.
+#   - SUBSTANTIVO PT-BR que abre frase de godoc DENTRO do pacote que perdeu o
+#     nome, onde a regra de mesmo pacote também dispensa outras marcas:
+#     `Chave` e `Grupos` ("Chave já internada nunca toca o arquivo",
+#     internal/storage/counter/dict.go:203; "Grupos são inventário físico",
+#     retirement.go:34).
+#   - TEXTO DE AJUDA de métrica, que é dado exposto no /metrics: `Linhas`, do
+#     `# HELP  Linhas gravadas…` de internal/server/history.go:294 e dos dois
+#     lugares que reproduzem o cabeçalho.
+#   - CHAVE DE LOG cujo domínio é homônimo de identificador: a WARN
+#     `janela.maior_que_retencao` (internal/server/history.go:133,
+#     internal/server/history_test.go:265 e a tabela do README:723) é chave
+#     de log estruturado, e chave de log é contrato que muda INTEIRO na
+#     Fase 3. Sem a proteção o `janela` do binder a traduz pela metade e
+#     sobra `window.maior_que_retencao`, que não é nem uma coisa nem outra.
+Amostra
 Arquivo.Apenda
+Campos
+Chave
 Com
 Data
 Escritor.Apenda
 Fonte.Estado
+Grupos
+Linhas
 Nunca
+Prazo
+Tipo
 Vazio
 selado
 Existe
+ausente
 campo
 campos
 chave
 emite
 erro
 hora
+janela.maior_que_retencao
 seg
 texto
 tipo

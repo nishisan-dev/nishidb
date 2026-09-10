@@ -25,18 +25,18 @@ import (
 // `where` ou groupBy sobre coluna com `merge: sum` — com a soma, o estado deixa
 // de ser função pura do último evento e a idempotência do contador evapora
 // (planning §10). É recusa na subida, não documentação.
-func Compila(spec *schema.DatasetSpec, sc *schema.Compiled) ([]counter.Definicao, error) {
+func Compila(spec *schema.DatasetSpec, sc *schema.Compiled) ([]counter.Definition, error) {
 	if spec == nil || sc == nil {
 		return nil, fmt.Errorf("contadores: spec ou schema ausentes")
 	}
-	out := make([]counter.Definicao, 0, len(spec.Contadores))
-	for i, cs := range spec.Contadores {
+	out := make([]counter.Definition, 0, len(spec.Counters))
+	for i, cs := range spec.Counters {
 		rotulo := fmt.Sprintf("counters[%d]", i)
-		def := counter.Definicao{
-			Nome:              cs.Name,
-			Colunas:           make([]types.FieldID, 0, len(cs.GroupBy)),
-			Nomes:             cs.GroupBy,
-			Tipos:             make([]types.FieldType, 0, len(cs.GroupBy)),
+		def := counter.Definition{
+			Name:              cs.Name,
+			Columns:           make([]types.FieldID, 0, len(cs.GroupBy)),
+			Names:             cs.GroupBy,
+			Types:             make([]types.FieldType, 0, len(cs.GroupBy)),
 			Where:             cs.Where,
 			MaxGroups:         cs.MaxGroups,
 			RetainEmptyGroups: cs.RetainEmptyGroups,
@@ -46,11 +46,11 @@ func Compila(spec *schema.DatasetSpec, sc *schema.Compiled) ([]counter.Definicao
 			if !ok {
 				return nil, fmt.Errorf("%s.groupBy: coluna %q não existe no schema compilado", rotulo, col)
 			}
-			if f.Acumula {
+			if f.Accumulates {
 				return nil, fmt.Errorf("%s.groupBy: coluna %q tem merge: sum — o valor somado não é estado do último evento, e o grupo mudaria a cada reprocessamento", rotulo, col)
 			}
-			def.Colunas = append(def.Colunas, f.ID)
-			def.Tipos = append(def.Tipos, f.Type)
+			def.Columns = append(def.Columns, f.ID)
+			def.Types = append(def.Types, f.Type)
 		}
 		if cs.Where != "" {
 			prog, slots, err := predicate.CompilaCondicao(rotulo+".where", cs.Where, sc)
@@ -58,12 +58,12 @@ func Compila(spec *schema.DatasetSpec, sc *schema.Compiled) ([]counter.Definicao
 				return nil, err
 			}
 			for _, id := range slots.IDs {
-				if f, ok := sc.FieldByID(id); ok && f.Acumula {
+				if f, ok := sc.FieldByID(id); ok && f.Accumulates {
 					return nil, fmt.Errorf("%s.where: condição %q referencia %q, que tem merge: sum — a soma não é idempotente e o contador deixaria de ser função do estado", rotulo, cs.Where, f.Name)
 				}
 			}
 			ids := slots.IDs
-			def.NovoAvaliador = func() counter.Avaliador {
+			def.NewEvaluator = func() counter.Evaluator {
 				return predicate.NovoAvaliadorDePayload(prog, ids)
 			}
 		}

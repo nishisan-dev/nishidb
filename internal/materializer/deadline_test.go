@@ -143,19 +143,19 @@ func TestExpiresInEhEmitidoEmTodaEscrita(t *testing.T) {
 	h := newHarness(t, prazoYAML)
 	h.apply(`{"id":"a","tipo":2}`)
 	st := h.state("a")
-	if got := st[schema.CampoDePrazo]; got.Type != types.TypeInt64 || got.I64 != (3*time.Minute).Milliseconds() {
+	if got := st[schema.TTLFieldName]; got.Type != types.TypeInt64 || got.I64 != (3*time.Minute).Milliseconds() {
 		t.Fatalf("primeira escrita: _expiresIn = %+v, quero 180000", got)
 	}
 	// Segunda escrita com a MESMA duração: a entry sai de novo.
 	h.apply(`{"id":"a","sev":7}`)
 	st = h.state("a")
-	if got := st[schema.CampoDePrazo]; got.I64 != (3 * time.Minute).Milliseconds() {
+	if got := st[schema.TTLFieldName]; got.I64 != (3 * time.Minute).Milliseconds() {
 		t.Fatalf("segunda escrita: _expiresIn = %+v", got)
 	}
 	// E o evento que quebra a condição REESCREVE o prazo.
 	h.apply(`{"id":"a","tipo":1}`)
 	st = h.state("a")
-	if got := st[schema.CampoDePrazo]; got.I64 != (7 * 24 * time.Hour).Milliseconds() {
+	if got := st[schema.TTLFieldName]; got.I64 != (7 * 24 * time.Hour).Milliseconds() {
 		t.Errorf("depois do cancelamento: _expiresIn = %+v, quero 604800000", got)
 	}
 }

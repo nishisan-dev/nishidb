@@ -37,11 +37,11 @@ func compileAuto(t *testing.T, dict FieldDictionary) *Compiled {
 	return c
 }
 
-func campo(t *testing.T, c *Compiled, nome string) *CompiledField {
+func fieldNamed(t *testing.T, c *Compiled, name string) *CompiledField {
 	t.Helper()
-	f, ok := c.FieldByName([]byte(nome))
+	f, ok := c.FieldByName([]byte(name))
 	if !ok {
-		t.Fatalf("campo %q não compilado", nome)
+		t.Fatalf("campo %q não compilado", name)
 	}
 	return f
 }
@@ -53,24 +53,24 @@ func TestEffectiveTypeDeclaradoEAuto(t *testing.T) {
 	dict := newFakeDict()
 	c := compileAuto(t, dict)
 
-	if got := campo(t, c, "declarado").EffectiveType(); got != types.TypeInt64 {
+	if got := fieldNamed(t, c, "declarado").EffectiveType(); got != types.TypeInt64 {
 		t.Errorf("campo declarado: EffectiveType = %v, want int64", got)
 	}
 	// Campo auto sem observação: TypeNull é "não há tipo contra o que
 	// comparar", e o binder recusa em vez de inventar um.
-	livre := campo(t, c, "livre")
-	if got := livre.EffectiveType(); got != types.TypeNull {
+	free := fieldNamed(t, c, "livre")
+	if got := free.EffectiveType(); got != types.TypeNull {
 		t.Errorf("campo auto virgem: EffectiveType = %v, want null", got)
 	}
 
-	if err := c.FixAutoType(livre, types.TypeTimestamp); err != nil {
+	if err := c.FixAutoType(free, types.TypeTimestamp); err != nil {
 		t.Fatal(err)
 	}
-	if got := livre.EffectiveType(); got != types.TypeTimestamp {
+	if got := free.EffectiveType(); got != types.TypeTimestamp {
 		t.Errorf("após fixar: EffectiveType = %v, want timestamp", got)
 	}
 	// A fixação foi ao DICIONÁRIO, não só à memória — é o que a faz durar.
-	if got, ok := dict.TypeHint(livre.ID); !ok || got != types.TypeTimestamp {
+	if got, ok := dict.TypeHint(free.ID); !ok || got != types.TypeTimestamp {
 		t.Errorf("dicionário = %v/%v, want timestamp/true", got, ok)
 	}
 	if dict.setCalls != 1 {
@@ -78,7 +78,7 @@ func TestEffectiveTypeDeclaradoEAuto(t *testing.T) {
 	}
 
 	// Idempotente: fixar o mesmo tipo de novo não escreve.
-	if err := c.FixAutoType(livre, types.TypeTimestamp); err != nil {
+	if err := c.FixAutoType(free, types.TypeTimestamp); err != nil {
 		t.Fatal(err)
 	}
 	if dict.setCalls != 1 {
@@ -93,17 +93,17 @@ func TestEffectiveTypeDeclaradoEAuto(t *testing.T) {
 func TestCompileCarregaTypeHint(t *testing.T) {
 	dict := newFakeDict()
 	c1 := compileAuto(t, dict)
-	livre := campo(t, c1, "livre")
-	if err := c1.FixAutoType(livre, types.TypeInt64); err != nil {
+	free := fieldNamed(t, c1, "livre")
+	if err := c1.FixAutoType(free, types.TypeInt64); err != nil {
 		t.Fatal(err)
 	}
 
 	c2 := compileAuto(t, dict) // "reabertura"
-	if got := campo(t, c2, "livre").EffectiveType(); got != types.TypeInt64 {
+	if got := fieldNamed(t, c2, "livre").EffectiveType(); got != types.TypeInt64 {
 		t.Errorf("após recompilar: EffectiveType = %v, want int64 (o tipo precisa sobreviver)", got)
 	}
 	// Campo declarado não é afetado pelo hint.
-	if got := campo(t, c2, "declarado").EffectiveType(); got != types.TypeInt64 {
+	if got := fieldNamed(t, c2, "declarado").EffectiveType(); got != types.TypeInt64 {
 		t.Errorf("campo declarado = %v", got)
 	}
 }
@@ -111,11 +111,11 @@ func TestCompileCarregaTypeHint(t *testing.T) {
 func TestResolveUnknownCarregaTypeHint(t *testing.T) {
 	dict := newFakeDict()
 	c1 := compileAuto(t, dict)
-	novo, err := c1.ResolveUnknown([]byte("X-Vendor"))
-	if err != nil || novo == nil {
-		t.Fatalf("ResolveUnknown: %v (campo %v)", err, novo)
+	created, err := c1.ResolveUnknown([]byte("X-Vendor"))
+	if err != nil || created == nil {
+		t.Fatalf("ResolveUnknown: %v (campo %v)", err, created)
 	}
-	if err := c1.FixAutoType(novo, types.TypeString); err != nil {
+	if err := c1.FixAutoType(created, types.TypeString); err != nil {
 		t.Fatal(err)
 	}
 
@@ -135,7 +135,7 @@ func TestResolveUnknownCarregaTypeHint(t *testing.T) {
 func TestFixAutoTypeRejeitaCampoDeclarado(t *testing.T) {
 	c := compileAuto(t, newFakeDict())
 
-	err := c.FixAutoType(campo(t, c, "declarado"), types.TypeString)
+	err := c.FixAutoType(fieldNamed(t, c, "declarado"), types.TypeString)
 	if err == nil {
 		t.Fatal("FixAutoType sobre campo declarado deveria falhar")
 	}
@@ -143,7 +143,7 @@ func TestFixAutoTypeRejeitaCampoDeclarado(t *testing.T) {
 		t.Errorf("erro = %q, want nomear o campo", err)
 	}
 
-	if err := c.FixAutoType(campo(t, c, "livre"), types.TypeNull); err == nil {
+	if err := c.FixAutoType(fieldNamed(t, c, "livre"), types.TypeNull); err == nil {
 		t.Error("fixar TypeNull deveria falhar")
 	}
 	if err := c.FixAutoType(nil, types.TypeInt64); err == nil {
@@ -156,17 +156,17 @@ func TestFixAutoTypeRejeitaCampoDeclarado(t *testing.T) {
 func TestFixAutoTypeConflitoPropagaErroDoDicionario(t *testing.T) {
 	dict := newFakeDict()
 	c := compileAuto(t, dict)
-	livre := campo(t, c, "livre")
-	if err := c.FixAutoType(livre, types.TypeInt64); err != nil {
+	free := fieldNamed(t, c, "livre")
+	if err := c.FixAutoType(free, types.TypeInt64); err != nil {
 		t.Fatal(err)
 	}
 
-	err := c.FixAutoType(livre, types.TypeString)
+	err := c.FixAutoType(free, types.TypeString)
 	if err == nil {
 		t.Fatal("conflito deveria falhar")
 	}
 	// O tipo em memória NÃO muda: a tentativa falha, não corrompe.
-	if got := livre.EffectiveType(); got != types.TypeInt64 {
+	if got := free.EffectiveType(); got != types.TypeInt64 {
 		t.Errorf("EffectiveType após conflito = %v, want int64", got)
 	}
 }
@@ -174,34 +174,34 @@ func TestFixAutoTypeConflitoPropagaErroDoDicionario(t *testing.T) {
 // O writer fixa enquanto as queries leem: sem o atômico isto é data race.
 func TestFixAutoTypeConcorrenteComLeitura(t *testing.T) {
 	c := compileAuto(t, newFakeDict())
-	livre := campo(t, c, "livre")
+	free := fieldNamed(t, c, "livre")
 
 	var wg sync.WaitGroup
-	parar := make(chan struct{})
+	done := make(chan struct{})
 	for i := 0; i < 4; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for {
 				select {
-				case <-parar:
+				case <-done:
 					return
 				default:
 				}
 				// Toda leitura devolve TypeNull OU o tipo final, nunca lixo.
-				if got := livre.EffectiveType(); got != types.TypeNull && got != types.TypeDouble {
+				if got := free.EffectiveType(); got != types.TypeNull && got != types.TypeDouble {
 					t.Errorf("EffectiveType = %v, want null ou double", got)
 					return
 				}
 			}
 		}()
 	}
-	if err := c.FixAutoType(livre, types.TypeDouble); err != nil {
+	if err := c.FixAutoType(free, types.TypeDouble); err != nil {
 		t.Fatal(err)
 	}
-	close(parar)
+	close(done)
 	wg.Wait()
-	if got := livre.EffectiveType(); got != types.TypeDouble {
+	if got := free.EffectiveType(); got != types.TypeDouble {
 		t.Errorf("EffectiveType final = %v, want double", got)
 	}
 }

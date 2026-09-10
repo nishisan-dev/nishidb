@@ -38,7 +38,7 @@ func realSetupCom(tb testing.TB, dir string, estimatedRows uint64, comContadores
 	if comContadores {
 		yml = append(yml, blocoDeContadores...)
 	}
-	spec, err := schema.Parse(yml, schema.DefaultsPadrao)
+	spec, err := schema.Parse(yml, schema.BuiltinDefaults)
 	if err != nil {
 		tb.Fatalf("spec: %v", err)
 	}

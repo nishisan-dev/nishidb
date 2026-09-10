@@ -20,11 +20,11 @@ func specComPoliticas() *schema.DatasetSpec {
 	return &schema.DatasetSpec{
 		Name: "d",
 		Materialization: schema.MaterializationSpec{
-			RegrasTTL: []schema.RegraTTL{
-				{When: "type = 2", Duracao: 3 * time.Minute},
-				{Duracao: 7 * 24 * time.Hour},
+			TTLRules: []schema.TTLRule{
+				{When: "type = 2", Duration: 3 * time.Minute},
+				{Duration: 7 * 24 * time.Hour},
 			},
-			DuracaoDeFundo: 7 * 24 * time.Hour,
+			FallbackDuration: 7 * 24 * time.Hour,
 		},
 	}
 }
@@ -69,11 +69,11 @@ func TestMaterializacaoStatsTraduzOSnapshot(t *testing.T) {
 // mesma coisa, e o painel que mostrasse 0s diria o oposto do que a regra faz.
 func TestMaterializacaoStatsPublicaNeverComoLiteral(t *testing.T) {
 	spec := &schema.DatasetSpec{Name: "d", Materialization: schema.MaterializationSpec{
-		RegrasTTL: []schema.RegraTTL{{When: "type = 9", Duracao: 0}},
+		TTLRules: []schema.TTLRule{{When: "type = 9", Duration: 0}},
 	}}
 	got := materializacaoStats(spec, materializer.MetricsSnapshot{RegrasCasadas: []int64{1}})
-	if got.TTLRules[0].ExpireAfterWrite != schema.DuracaoNunca {
-		t.Errorf("duração = %q, quero %q", got.TTLRules[0].ExpireAfterWrite, schema.DuracaoNunca)
+	if got.TTLRules[0].ExpireAfterWrite != schema.DurationNever {
+		t.Errorf("duração = %q, quero %q", got.TTLRules[0].ExpireAfterWrite, schema.DurationNever)
 	}
 }
 

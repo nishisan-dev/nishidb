@@ -24,30 +24,30 @@ import (
 // A leitura sai por SQL em `_counters.<name>`, uma tabela por contador com a
 // coluna `groupKey`, as colunas do groupBy abertas e tipadas, e `total`.
 const (
-	// MaxGroupsPadrao é o teto de grupos vivos quando o YAML não declara. É a
+	// DefaultMaxGroups é o teto de grupos vivos quando o YAML não declara. É a
 	// proteção contra um groupBy declarado, por engano, sobre uma coluna de
 	// alta cardinalidade: o nível de OLT cabe folgado; PON e splitter exigem
 	// declarar.
-	MaxGroupsPadrao = 65_536
-	// MaxGroupsTetoFisico é o maior teto declarável: o vetor de grupos guarda
+	DefaultMaxGroups = 65_536
+	// MaxGroupsPhysicalCeiling é o maior teto declarável: o vetor de grupos guarda
 	// o id em 31 bits, e o bit restante é a condição.
-	MaxGroupsTetoFisico = 1<<31 - 1
-	// RetainEmptyGroupsPadrao é quanto tempo um grupo sem linhas continua
+	MaxGroupsPhysicalCeiling = 1<<31 - 1
+	// DefaultRetainEmptyGroups é quanto tempo um grupo sem linhas continua
 	// visível com total zero. O critério é operacional (planning §6.5): maior
 	// que o tempo entre um equipamento apagar por inteiro e alguém agir.
-	RetainEmptyGroupsPadrao = 7 * 24 * time.Hour
-	// NamespaceContadores é o espaço de nome virtual das tabelas dos contadores.
-	NamespaceContadores = "_counters"
-	// ColunaChaveDoContador é a key de toda tabela `_counters.<name>`: o texto
+	DefaultRetainEmptyGroups = 7 * 24 * time.Hour
+	// CountersNamespace é o espaço de nome virtual das tabelas dos contadores.
+	CountersNamespace = "_counters"
+	// CounterKeyColumn é a key de toda tabela `_counters.<name>`: o texto
 	// canônico do grupo. Existe porque a key da v1 é uma coluna string única, e
 	// um groupBy composto não tem coluna que identifique a linha.
-	ColunaChaveDoContador = "groupKey"
-	// ColunaTotalDoContador é a coluna com a contagem.
-	ColunaTotalDoContador = "total"
+	CounterKeyColumn = "groupKey"
+	// CounterTotalColumn é a coluna com a contagem.
+	CounterTotalColumn = "total"
 )
 
-// ContadorSpec é um contador validado, com defaults aplicados.
-type ContadorSpec struct {
+// CounterSpec é um contador validado, com defaults aplicados.
+type CounterSpec struct {
 	Name string
 	// GroupBy são as colunas de agrupamento, na ordem declarada — a ordem dos
 	// componentes da chave e das colunas da tabela.
@@ -61,61 +61,61 @@ type ContadorSpec struct {
 	RetainEmptyGroups time.Duration
 }
 
-// tiposDeAgrupamento são os tipos que o groupBy aceita. Três, e não a lista de
+// groupingTypes são os tipos que o groupBy aceita. Três, e não a lista de
 // indexáveis: são os únicos com renderização textual declarada para o groupKey,
 // e um tipo novo aqui exige a renderização antes.
-var tiposDeAgrupamento = map[string]bool{"string": true, "int64": true, "boolean": true}
+var groupingTypes = map[string]bool{"string": true, "int64": true, "boolean": true}
 
-// rawContador é um item do bloco como lido do YAML, antes da validação.
-type rawContador struct {
+// rawCounter é um item do bloco como lido do YAML, antes da validação.
+type rawCounter struct {
 	Name              string
 	GroupBy           []string
 	Where             *string
 	MaxGroups         *int64
 	RetainEmptyGroups string
-	temGroupBy        bool
+	hasGroupBy        bool
 }
 
-// contadoresDoNo decodifica o bloco `counters`. Ausente devolve nil; lista
-// vazia devolve slice vazio (e a validação recusa). Cada item passa por bloco()
+// countersFromNode decodifica o bloco `counters`. Ausente devolve nil; lista
+// vazia devolve slice vazio (e a validação recusa). Cada item passa por block()
 // para que uma chave desconhecida (`wher: …`) seja recusada em vez de
 // silenciosamente ignorada.
-func contadoresDoNo(n *yaml.Node) ([]rawContador, error) {
+func countersFromNode(n *yaml.Node) ([]rawCounter, error) {
 	for n != nil && n.Kind == yaml.AliasNode {
 		n = n.Alias
 	}
-	if ausente(n) {
+	if absent(n) {
 		return nil, nil
 	}
 	if n.Kind != yaml.SequenceNode {
 		return nil, specErrf("counters deve ser uma lista de contadores")
 	}
-	out := make([]rawContador, 0, len(n.Content))
+	out := make([]rawCounter, 0, len(n.Content))
 	for i, item := range n.Content {
-		caminho := fmt.Sprintf("counters[%d]", i)
-		chaves, err := bloco(item, caminho, "name", "groupBy", "where", "maxGroups", "retainEmptyGroups")
+		keyPath := fmt.Sprintf("counters[%d]", i)
+		keys, err := block(item, keyPath, "name", "groupBy", "where", "maxGroups", "retainEmptyGroups")
 		if err != nil {
 			return nil, err
 		}
-		var r rawContador
-		for chave, valor := range chaves {
+		var r rawCounter
+		for key, value := range keys {
 			var err error
-			switch chave {
+			switch key {
 			case "name":
-				err = decodeEm(valor, caminho+".name", &r.Name)
+				err = decodeInto(value, keyPath+".name", &r.Name)
 			case "groupBy":
-				r.temGroupBy = true
-				err = decodeEm(valor, caminho+".groupBy", &r.GroupBy)
+				r.hasGroupBy = true
+				err = decodeInto(value, keyPath+".groupBy", &r.GroupBy)
 			case "where":
 				var w string
-				err = decodeEm(valor, caminho+".where", &w)
+				err = decodeInto(value, keyPath+".where", &w)
 				r.Where = &w
 			case "maxGroups":
 				var m int64
-				err = decodeEm(valor, caminho+".maxGroups", &m)
+				err = decodeInto(value, keyPath+".maxGroups", &m)
 				r.MaxGroups = &m
 			case "retainEmptyGroups":
-				err = decodeEm(valor, caminho+".retainEmptyGroups", &r.RetainEmptyGroups)
+				err = decodeInto(value, keyPath+".retainEmptyGroups", &r.RetainEmptyGroups)
 			}
 			if err != nil {
 				return nil, err
@@ -126,63 +126,63 @@ func contadoresDoNo(n *yaml.Node) ([]rawContador, error) {
 	return out, nil
 }
 
-// validaContadores confere a lista inteira e devolve a forma validada.
+// validateCounters confere a lista inteira e devolve a forma validada.
 //
 // fields são os campos declarados; as colunas extraídas entram pelo nome que
-// nomeDaExtracao lhes dá. key e seq são os papéis que o groupBy não pode
+// derivedColumnName lhes dá. key e seq são os papéis que o groupBy não pode
 // usar: agrupar pela key é um grupo por entidade, e pela sequence é agrupar
 // pela ordem do evento — os dois são cardinalidade sem teto por engano.
-func validaContadores(raws []rawContador, fields map[string]FieldSpec, key, seq string) ([]ContadorSpec, error) {
+func validateCounters(raws []rawCounter, fields map[string]FieldSpec, key, seq string) ([]CounterSpec, error) {
 	if len(raws) == 0 {
 		return nil, specErrf("counters: lista vazia — remova a chave ou declare um contador")
 	}
-	colunas, err := colunasDeclaradas(fields)
+	columns, err := declaredColumns(fields)
 	if err != nil {
 		return nil, err
 	}
-	vistos := make(map[string]int, len(raws))
-	out := make([]ContadorSpec, 0, len(raws))
+	seenNames := make(map[string]int, len(raws))
+	out := make([]CounterSpec, 0, len(raws))
 	for i, r := range raws {
-		caminho := fmt.Sprintf("counters[%d]", i)
+		keyPath := fmt.Sprintf("counters[%d]", i)
 		if r.Name == "" {
-			return nil, specErrf("%s.name obrigatório", caminho)
+			return nil, specErrf("%s.name obrigatório", keyPath)
 		}
 		if !isIdentName(r.Name) {
-			return nil, specErrf("%s.name %q inválido (esperado [a-z0-9_]+)", caminho, r.Name)
+			return nil, specErrf("%s.name %q inválido (esperado [a-z0-9_]+)", keyPath, r.Name)
 		}
-		if j, dup := vistos[r.Name]; dup {
-			return nil, specErrf("%s.name %q repetido (já declarado em counters[%d])", caminho, r.Name, j)
+		if j, dup := seenNames[r.Name]; dup {
+			return nil, specErrf("%s.name %q repetido (já declarado em counters[%d])", keyPath, r.Name, j)
 		}
-		vistos[r.Name] = i
-		if !r.temGroupBy || len(r.GroupBy) == 0 {
-			return nil, specErrf("%s.groupBy obrigatório (lista de colunas de agrupamento)", caminho)
+		seenNames[r.Name] = i
+		if !r.hasGroupBy || len(r.GroupBy) == 0 {
+			return nil, specErrf("%s.groupBy obrigatório (lista de colunas de agrupamento)", keyPath)
 		}
-		vistas := make(map[string]bool, len(r.GroupBy))
+		seenColumns := make(map[string]bool, len(r.GroupBy))
 		for _, col := range r.GroupBy {
-			if vistas[col] {
-				return nil, specErrf("%s.groupBy: coluna %q repetida", caminho, col)
+			if seenColumns[col] {
+				return nil, specErrf("%s.groupBy: coluna %q repetida", keyPath, col)
 			}
-			vistas[col] = true
-			if err := validaColunaDeAgrupamento(caminho, col, colunas, key, seq); err != nil {
+			seenColumns[col] = true
+			if err := validateGroupingColumn(keyPath, col, columns, key, seq); err != nil {
 				return nil, err
 			}
 		}
-		c := ContadorSpec{Name: r.Name, GroupBy: r.GroupBy, MaxGroups: MaxGroupsPadrao, RetainEmptyGroups: RetainEmptyGroupsPadrao}
+		c := CounterSpec{Name: r.Name, GroupBy: r.GroupBy, MaxGroups: DefaultMaxGroups, RetainEmptyGroups: DefaultRetainEmptyGroups}
 		if r.Where != nil {
 			w := strings.Join(strings.Fields(*r.Where), " ")
 			if w == "" {
-				return nil, specErrf("%s.where vazio — omita a chave para contar toda linha com grupo", caminho)
+				return nil, specErrf("%s.where vazio — omita a chave para contar toda linha com grupo", keyPath)
 			}
 			c.Where = w
 		}
 		if r.MaxGroups != nil {
-			if *r.MaxGroups < 1 || *r.MaxGroups > MaxGroupsTetoFisico {
-				return nil, specErrf("%s.maxGroups %d fora de [1, %d]", caminho, *r.MaxGroups, MaxGroupsTetoFisico)
+			if *r.MaxGroups < 1 || *r.MaxGroups > MaxGroupsPhysicalCeiling {
+				return nil, specErrf("%s.maxGroups %d fora de [1, %d]", keyPath, *r.MaxGroups, MaxGroupsPhysicalCeiling)
 			}
 			c.MaxGroups = uint32(*r.MaxGroups)
 		}
 		if r.RetainEmptyGroups != "" {
-			d, err := duracaoDeVisibilidade(caminho, r.RetainEmptyGroups)
+			d, err := visibilityDuration(keyPath, r.RetainEmptyGroups)
 			if err != nil {
 				return nil, err
 			}
@@ -193,76 +193,76 @@ func validaContadores(raws []rawContador, fields map[string]FieldSpec, key, seq 
 	return out, nil
 }
 
-// colunasDeclaradas devolve nome → tipo declarado de toda coluna que o groupBy
+// declaredColumns devolve nome → tipo declarado de toda coluna que o groupBy
 // pode referenciar: os campos de topo e as colunas extraídas. A congelada entra
 // sem tipo (ela o herda na compilação) e por isso é recusada como "sem tipo
 // declarado" — agrupar por uma coluna cujo tipo só se conhece depois seria
 // decidir a chave do grupo tarde demais.
-func colunasDeclaradas(fields map[string]FieldSpec) (map[string]string, error) {
+func declaredColumns(fields map[string]FieldSpec) (map[string]string, error) {
 	out := make(map[string]string, len(fields))
-	nomes := make([]string, 0, len(fields))
-	for nome := range fields {
-		nomes = append(nomes, nome)
+	names := make([]string, 0, len(fields))
+	for name := range fields {
+		names = append(names, name)
 	}
-	sort.Strings(nomes)
-	for _, nome := range nomes {
-		f := fields[nome]
-		out[nome] = f.Type
+	sort.Strings(names)
+	for _, name := range names {
+		f := fields[name]
+		out[name] = f.Type
 		for i, e := range f.Extract {
-			coluna, err := nomeDaExtracao(nome, i, e)
+			column, err := derivedColumnName(name, i, e)
 			if err != nil {
 				return nil, err
 			}
-			out[coluna] = e.Type
+			out[column] = e.Type
 		}
 	}
 	return out, nil
 }
 
-func validaColunaDeAgrupamento(caminho, col string, colunas map[string]string, key, seq string) error {
+func validateGroupingColumn(keyPath, col string, columns map[string]string, key, seq string) error {
 	switch col {
-	case ColunaChaveDoContador, ColunaTotalDoContador:
+	case CounterKeyColumn, CounterTotalColumn:
 		return specErrf("%s.groupBy: coluna %q colide com a coluna %s da tabela %s.<name>; renomeie a coluna no schema",
-			caminho, col, col, NamespaceContadores)
+			keyPath, col, col, CountersNamespace)
 	case key:
-		return specErrf("%s.groupBy: coluna %q é a key do dataset — agrupar pela key é um grupo por entidade", caminho, col)
+		return specErrf("%s.groupBy: coluna %q é a key do dataset — agrupar pela key é um grupo por entidade", keyPath, col)
 	case seq:
 		if seq != "" {
-			return specErrf("%s.groupBy: coluna %q é a sequence do dataset — a ordem do evento não é um grupo", caminho, col)
+			return specErrf("%s.groupBy: coluna %q é a sequence do dataset — a ordem do evento não é um grupo", keyPath, col)
 		}
 	}
-	tipo, ok := colunas[col]
+	typ, ok := columns[col]
 	if !ok {
-		return specErrf("%s.groupBy: coluna %q não declarada em schema.fields (nem como extração)", caminho, col)
+		return specErrf("%s.groupBy: coluna %q não declarada em schema.fields (nem como extração)", keyPath, col)
 	}
-	if tipo == "" || tipo == "auto" {
+	if typ == "" || typ == "auto" {
 		return specErrf("%s.groupBy: coluna %q precisa de tipo declarado (é auto ou herdado) — a chave do grupo é decidida pelo tipo",
-			caminho, col)
+			keyPath, col)
 	}
-	if !tiposDeAgrupamento[tipo] {
-		return specErrf("%s.groupBy: coluna %q tem tipo %q; groupBy aceita string, int64 e boolean", caminho, col, tipo)
+	if !groupingTypes[typ] {
+		return specErrf("%s.groupBy: coluna %q tem tipo %q; groupBy aceita string, int64 e boolean", keyPath, col, typ)
 	}
 	return nil
 }
 
-// duracaoDeVisibilidade lê retainEmptyGroups com as mesmas regras do
+// visibilityDuration lê retainEmptyGroups com as mesmas regras do
 // expireAfterWrite: `never` é zero, zero explícito é recusado apontando para
 // `never`, e abaixo da resolução do coletor é recusado.
-func duracaoDeVisibilidade(caminho, bruto string) (time.Duration, error) {
-	if bruto == DuracaoNunca {
+func visibilityDuration(keyPath, raw string) (time.Duration, error) {
+	if raw == DurationNever {
 		return 0, nil
 	}
-	if ehDuracaoZero(bruto) {
+	if isZeroDuration(raw) {
 		return 0, specErrf("%s.retainEmptyGroups %q não declara prazo — use %q para manter o grupo vazio para sempre",
-			caminho, bruto, DuracaoNunca)
+			keyPath, raw, DurationNever)
 	}
-	d, err := units.DurationWithDays(bruto, 0)
+	d, err := units.DurationWithDays(raw, 0)
 	if err != nil {
-		return 0, specErrf("%s.retainEmptyGroups: %s", caminho, semPrefixoDeSpec(err))
+		return 0, specErrf("%s.retainEmptyGroups: %s", keyPath, withoutSpecPrefix(err))
 	}
-	if d < ResolucaoDaExpiracao {
+	if d < ExpiryResolution {
 		return 0, specErrf("%s.retainEmptyGroups %s é menor que a resolução do coletor (%s) — use %q para não aposentar",
-			caminho, bruto, ResolucaoDaExpiracao, DuracaoNunca)
+			keyPath, raw, ExpiryResolution, DurationNever)
 	}
 	return d, nil
 }

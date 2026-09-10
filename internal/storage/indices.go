@@ -36,7 +36,7 @@ func (s *Store) dirDeDados() string { return filepath.Join(s.opts.Dir, "data") }
 
 // CamposIndexados devolve, em ordem crescente, os campos com índice por
 // segmento. O conjunto é resolvido no Open e IMUTÁVEL na vida do Store, então a
-// resposta é estável — é a mesma promessa que o Indexado faz.
+// resposta é estável — é a mesma promessa que o Indexed faz.
 //
 // Cópia, e não o slice interno: o conjunto é imutável por contrato, e devolver
 // a fatia de dentro deixaria qualquer chamador quebrar a promessa por engano.

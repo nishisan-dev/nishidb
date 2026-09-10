@@ -867,7 +867,7 @@ registro descreveria para sempre um consumidor morto.
 
 **Recusa de roteamento é erro do cliente, e por isso é tipada.** Namespace
 inexistente, namespace sem tabela nenhuma e tabela inexistente saem por
-`binder.ErroEm` com a posição do nome depois do ponto, o que as põe na família
+`binder.ErrorAt` com a posição do nome depois do ponto, o que as põe na família
 `binder.ErrBind` — o servidor as classifica como `BIND`/400 pelo `case` que já
 existia, o driver JDBC as traduz para o SQLState 42000 e o cliente Python para
 `ProgrammingError`, sem código novo no wire. Enquanto eram `fmt.Errorf` cru
@@ -1061,7 +1061,7 @@ sub-pool sai como `TOO_MANY_LONG_QUERIES`, separada de `TOO_MANY_QUERIES` porque
 a ação do cliente é outra: o pool geral esvazia em milissegundos, e este pode
 levar minutos.
 
-**O prazo tem UMA fonte.** O executor tinha um `timeoutPadrao` de 30s próprio, e
+**O prazo tem UMA fonte.** O executor tinha um `defaultQueryTimeout` de 30s próprio, e
 aplicava o `bq.Timeout` do dataset SEMPRE — inclusive por cima de um contexto que
 já trazia deadline. Como o menor deadline vence, um servidor que tivesse
 resolvido cinco minutos contra `query.maxTimeout` veria o prazo cortado de volta
@@ -1152,7 +1152,7 @@ denuncia, só que na chave mais cara do arquivo.
 anônimas também no plano PRINCIPAL, não só no loopback.** Isso vale na
 célula 3 da matriz (bind exposto, `enabled: false` explícito) e, do mesmo
 jeito, na config DEFAULT (bind loopback, `server.authentication` nem
-declarado): `AutenticacaoHabilitada()` falsa faz `comAutenticacao`
+declarado): `AuthenticationEnabled()` falsa faz `comAutenticacao`
 (`internal/server/auth.go`) devolver o mux CRU como passthrough
 puro, sem checar papel nenhum — `POST /v1/compact` e `POST /v1/checkpoint`
 respondem sem credencial no MESMO listener que serve `/v1/query`. É
@@ -1635,8 +1635,8 @@ da sequence e das colunas congeladas.
 O dicionário resolve o restart; ele não resolve a sessão. Num dataset de
 universo aberto, a chave promovida a coluna **depois** da subida só existiria no
 `Compiled` do base — a mesma consulta responderia numa tabela e diria "coluna
-não existe" na outra até o processo reiniciar. `Compiled.Espelha` registra o
-par, e `ResolveUnknown`, `ResolveAninhado` e `FixAutoType` propagam.
+não existe" na outra até o processo reiniciar. `Compiled.AddMirror` registra o
+par, e `ResolveUnknown`, `ResolveNested` e `FixAutoType` propagam.
 
 ### O que entra na linha, e o que não entra
 
@@ -2241,7 +2241,7 @@ registro. Existe em todo dataset, vazia quando não há `counters:`.
 
 **Os agregados do contador.** `rows` e `total` são a soma dos `refs` e a soma
 dos `totais` de todos os grupos, mantidas no próprio contador como dois
-atômicos ajustados dentro do `Transiciona` — o delta já é conhecido ali e é
+atômicos ajustados dentro do `Transition` — o delta já é conhecido ali e é
 sempre ±1. Somá-los na leitura custaria O(grupos) por linha de `_meta.counters`
 e criaria uma segunda maneira de calcular o mesmo fato. Eles são a MESMA dobra
 do vetor que os totais por grupo, acumulada no mesmo laço, então nada de novo

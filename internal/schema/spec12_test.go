@@ -13,7 +13,7 @@ import (
 // (aceito e ignorado no M1), wildcard com unknownFields include, ttl e
 // tombstoneRetention.
 func TestLoadSpec12YAML(t *testing.T) {
-	s, err := Load("../../testdata/radius.materialization.yaml", DefaultsPadrao)
+	s, err := Load("../../testdata/radius.materialization.yaml", BuiltinDefaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,9 +68,9 @@ func TestLoadSpec12YAML(t *testing.T) {
 			t.Errorf("lookup %q não resolve", tc.lookup)
 			continue
 		}
-		if cf.Name != tc.name || cf.Type != tc.typ || cf.Indexado != tc.index {
-			t.Errorf("%q → {Name:%s Type:%v Indexado:%v}, want {%s %v %v}",
-				tc.lookup, cf.Name, cf.Type, cf.Indexado, tc.name, tc.typ, tc.index)
+		if cf.Name != tc.name || cf.Type != tc.typ || cf.Indexed != tc.index {
+			t.Errorf("%q → {Name:%s Type:%v Indexed:%v}, want {%s %v %v}",
+				tc.lookup, cf.Name, cf.Type, cf.Indexed, tc.name, tc.typ, tc.index)
 		}
 	}
 
