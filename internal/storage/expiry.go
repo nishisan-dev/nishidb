@@ -175,7 +175,7 @@ func (s *Store) Expira(rowID types.RowID) (expirou bool, err error) {
 // coletor e a compaction) já estão dentro da seção crítica.
 func (s *Store) montaLapide(payloadAnterior []byte) ([]byte, error) {
 	tomb := s.tempBuffer[:0]
-	if ms, tem := instanteDeEscrita(payloadAnterior, s.writeFieldId); tem {
+	if ms, tem := writeInstant(payloadAnterior, s.writeFieldId); tem {
 		var err error
 		if tomb, err = encoding.AppendField(tomb, s.writeFieldId,
 			types.Value{Type: types.TypeTimestamp, I64: ms}); err != nil {

@@ -1064,7 +1064,7 @@ func Open(opts Options) (*Store, error) {
 		}
 	}()
 
-	if err := validaOpcoesDoModo(opts); err != nil {
+	if err := validateModeOptions(opts); err != nil {
 		return nil, err
 	}
 
@@ -1148,7 +1148,7 @@ func Open(opts Options) (*Store, error) {
 	// _writtenAt e os campos indexados são registrados logo abaixo, com fsync,
 	// e o dicionário é append-only. Uma subida abortada depois disso deixaria
 	// o nome registrado para sempre.
-	if err := validaDerivadasContraDicionario(m, s.dict, opts.DerivedColumnNames); err != nil {
+	if err := validateDerivedAgainstDictionary(m, s.dict, opts.DerivedColumnNames); err != nil {
 		return nil, err
 	}
 
@@ -1346,7 +1346,7 @@ func Open(opts Options) (*Store, error) {
 	// dataset ainda pode ser aberto pelo binário que criou aqueles arquivos, e
 	// apagá-los ali deixaria justamente o índice INCOMPLETO que este ciclo
 	// inteiro existe para tornar impossível.
-	limparIndicesGlobaisLegados(s.opts.Log, idxDir)
+	cleanLegacyGlobalIndices(s.opts.Log, idxDir)
 	ok = true
 	return s, nil
 }
@@ -1443,7 +1443,7 @@ func (s *Store) resolveCamposIndexados(ids []types.FieldID, nomesDeclarados []st
 // disco desperdiçado, não corretude. Recusar o Open por um RemoveAll que não deu
 // certo trocaria um dataset que funciona por um dataset fora do ar. Fica o WARN
 // nomeado, e a próxima abertura tenta de novo.
-func limparIndicesGlobaisLegados(log *logging.Logger, idxDir string) {
+func cleanLegacyGlobalIndices(log *logging.Logger, idxDir string) {
 	for _, motor := range []string{"bitmap", "hash"} {
 		dir := filepath.Join(idxDir, motor)
 		if _, err := os.Stat(dir); err != nil {
@@ -1924,7 +1924,7 @@ func (s *Store) applyRecord(a recordApply) error {
 	// do relógio, o replay empurraria todos os prazos para frente pelo tempo
 	// de queda — e um processo reiniciado em laço nunca expiraria nada.
 	if s.writes != nil {
-		if ms, ok := instanteDeEscrita(a.payload, s.writeFieldId); ok {
+		if ms, ok := writeInstant(a.payload, s.writeFieldId); ok {
 			if err := s.writes.Set(a.rowID, ms); err != nil {
 				return err
 			}
@@ -2020,7 +2020,7 @@ func (s *Store) applyRecord(a recordApply) error {
 
 // instanteDeEscrita extrai o campo de sistema do payload. Ausente devolve
 // ok=false, que o índice registra como DESCONHECIDO — nunca como vencido.
-func instanteDeEscrita(payload []byte, campo types.FieldID) (int64, bool) {
+func writeInstant(payload []byte, campo types.FieldID) (int64, bool) {
 	return campoDoPayload(payload, campo, types.TypeTimestamp)
 }
 
@@ -2073,7 +2073,7 @@ func (s *Store) venceuNaVersao(rec types.Record, em time.Time) bool {
 	if s.writes == nil {
 		return false
 	}
-	ms, declarado := instanteDeEscrita(rec.Payload, s.writeFieldId)
+	ms, declarado := writeInstant(rec.Payload, s.writeFieldId)
 	if !declarado {
 		return s.prazoVencido(rec.RowID, em)
 	}
@@ -2692,7 +2692,7 @@ func (s *Store) RowCount() uint64 { return s.rowCount.Load() }
 // dataset criado já com extract tem a coluna registrada desde a primeira
 // subida, e recusá-lo faria a feature ser inutilizável depois do primeiro
 // evento.
-func validaDerivadasContraDicionario(m *checkpoint.Manifest, dict *fielddict.Dict, derivadas []string) error {
+func validateDerivedAgainstDictionary(m *checkpoint.Manifest, dict *fielddict.Dict, derivadas []string) error {
 	if len(derivadas) == 0 || m == nil || m.RowCount == 0 {
 		return nil
 	}
@@ -2715,7 +2715,7 @@ func validaDerivadasContraDicionario(m *checkpoint.Manifest, dict *fielddict.Dic
 // validaOpcoesDoModo recusa as combinações que produziriam um dataset
 // histórico malformado. As duas recusas são de CONFIGURAÇÃO e saem antes do
 // flock: um Open que vai falhar não pode travar o dataset nem tocar arquivo.
-func validaOpcoesDoModo(opts Options) error {
+func validateModeOptions(opts Options) error {
 	if opts.Mode != HistoryMode {
 		return nil
 	}

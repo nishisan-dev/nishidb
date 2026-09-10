@@ -299,7 +299,7 @@ func TestOErroDoSegmentoSumidoEhOQueOLacoTolera(t *testing.T) {
 	if err == nil {
 		t.Fatal("reconstruir um segmento que já não existe devolveu nil")
 	}
-	if !oSegmentoSaiuDoDataset(err) {
+	if !segmentLeftDataset(err) {
 		t.Errorf("o erro %v não foi classificado como segmento que saiu do dataset: o laço o trataria como falha "+
 			"de infra e pararia de vez", err)
 	}
@@ -620,7 +620,7 @@ func TestOSegmentoAusenteNaGuardaDeTamanhoEhCorridaBenigna(t *testing.T) {
 	poeLinhas(t, s, 3)
 
 	_, err := s.constroiIndiceDoSegmento(context.Background(), 999, s.camposIndexados)
-	if !oSegmentoSaiuDoDataset(err) {
+	if !segmentLeftDataset(err) {
 		t.Fatalf("segmento ausente classificado como %v: tem de ser a corrida benigna (os.ErrNotExist), "+
 			"senão a aposentadoria concorrente mata o laço", err)
 	}

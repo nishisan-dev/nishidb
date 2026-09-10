@@ -202,7 +202,7 @@ func (s *Store) reconstroiOsPendentes(ctx context.Context, pendentes []uint32) (
 		}
 		publicou, err := s.reconstroiUmSegmento(ctx, seg)
 		if err != nil {
-			if oSegmentoSaiuDoDataset(err) {
+			if segmentLeftDataset(err) {
 				// A retenção ou a compaction aposentou o segmento entre a
 				// fotografia da fila e esta varredura. Não é falha da passada e
 				// não pode PARAR o laço: num histórico a aposentadoria acontece a
@@ -293,7 +293,7 @@ func (s *Store) reconstroiUmSegmento(ctx context.Context, seg uint32) (bool, err
 //
 // Um segmento interrompido no meio NÃO publica índice parcial: o erro sobe antes
 // do Escreve, e o arquivo só nasce de uma varredura completa.
-func oSegmentoSaiuDoDataset(err error) bool {
+func segmentLeftDataset(err error) bool {
 	return errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrClosed)
 }
 
@@ -362,7 +362,7 @@ func (s *Store) podaOsPontosFixos(pendentes []uint32) {
 func (s *Store) secoesDoSelado(seg uint32) ([]types.FieldID, error) {
 	campos, err := segindex.SealedFields(segindex.SealedPath(s.dirDeDados(), seg))
 	switch {
-	case indiceIlegivel(err):
+	case unreadableIndex(err):
 		return nil, nil
 	case err != nil:
 		return nil, err
@@ -594,7 +594,7 @@ func (s *Store) coberturaDaReconstrucao(caminho string, campos []types.FieldID) 
 	cobertura := slices.Clone(campos)
 	existentes, err := segindex.SealedFields(caminho)
 	switch {
-	case indiceIlegivel(err):
+	case unreadableIndex(err):
 		existentes = nil
 	case err != nil:
 		return nil, err
@@ -837,7 +837,7 @@ func (s *Store) SegmentosPendentesDeReconstrucao(j JanelaDeIndice) ([]uint32, er
 func (s *Store) segmentoPendente(dir string, seg uint32) (bool, error) {
 	campos, err := segindex.SealedFields(segindex.SealedPath(dir, seg))
 	switch {
-	case indiceIlegivel(err):
+	case unreadableIndex(err):
 		return true, nil
 	case err != nil:
 		return false, err
@@ -865,7 +865,7 @@ func (s *Store) segmentoPendente(dir string, seg uint32) (bool, error) {
 //     por escritor da §2.4. A tolerância fica: ela vale para o arquivo que um
 //     binário anterior deixou em disco, e é o próprio godoc do
 //     mmap.ErrEmptyFile que manda tratá-lo como "sem índice".
-func indiceIlegivel(err error) bool {
+func unreadableIndex(err error) bool {
 	return errors.Is(err, os.ErrNotExist) ||
 		errors.Is(err, segindex.ErrFormat) ||
 		errors.Is(err, mmap.ErrEmptyFile)

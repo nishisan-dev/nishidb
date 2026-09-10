@@ -273,19 +273,19 @@ func TestInstanteDeEscritaLeOCampoCertoOuNadaInforma(t *testing.T) {
 	p = mustAppendFieldSolto(t, p, 9, types.Value{Type: types.TypeTimestamp, I64: 1787878442000})
 	p = mustAppendFieldSolto(t, p, 12, types.Value{Type: types.TypeInt64, I64: 20})
 
-	if ms, ok := instanteDeEscrita(p, 9); !ok || ms != 1787878442000 {
+	if ms, ok := writeInstant(p, 9); !ok || ms != 1787878442000 {
 		t.Fatalf("ms=%d ok=%v", ms, ok)
 	}
-	if _, ok := instanteDeEscrita(p, 7); ok {
+	if _, ok := writeInstant(p, 7); ok {
 		t.Error("campo ausente foi reportado como conhecido")
 	}
-	if _, ok := instanteDeEscrita(p, 20); ok {
+	if _, ok := writeInstant(p, 20); ok {
 		t.Error("campo além do fim foi reportado como conhecido")
 	}
 	// Tipo errado no campo não vira instante plausível.
 	var q []byte
 	q = mustAppendFieldSolto(t, q, 9, types.Value{Type: types.TypeInt64, I64: 5})
-	if _, ok := instanteDeEscrita(q, 9); ok {
+	if _, ok := writeInstant(q, 9); ok {
 		t.Error("campo com tipo não-timestamp foi aceito")
 	}
 }

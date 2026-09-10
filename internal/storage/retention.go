@@ -281,7 +281,7 @@ func (s *Store) vencidaEm(id types.RowID, corte int64) (venceu, conhecido bool, 
 	if err != nil {
 		return false, false, err
 	}
-	ms, ok := instanteDeEscrita(rec.Payload, s.writeFieldId)
+	ms, ok := writeInstant(rec.Payload, s.writeFieldId)
 	if !ok {
 		return false, false, nil
 	}
@@ -568,7 +568,7 @@ func (s *Store) instanteMaisAntigo() (int64, bool) {
 	if err != nil {
 		return 0, false
 	}
-	return instanteDeEscrita(rec.Payload, s.writeFieldId)
+	return writeInstant(rec.Payload, s.writeFieldId)
 }
 
 // blocosDoDiretorio soma os BLOCOS alocados dos arquivos, e não o tamanho

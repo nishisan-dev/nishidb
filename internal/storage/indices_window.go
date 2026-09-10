@@ -463,7 +463,7 @@ func (s *Store) instanteDoRecordMaisNovo(refs []segment.SegmentRef, i int, buf [
 		}
 		return 0, buf, false, err
 	}
-	ms, conhecido := instanteDeEscrita(rec.Payload, s.writeFieldId)
+	ms, conhecido := writeInstant(rec.Payload, s.writeFieldId)
 	return ms, buf, conhecido, nil
 }
 
@@ -575,6 +575,6 @@ func (s *Store) instanteVisivelDe(ref segment.SegmentRef, buf []byte) (int64, []
 	if err != nil {
 		return 0, buf, false
 	}
-	ms, ok := instanteDeEscrita(rec.Payload, s.writeFieldId)
+	ms, ok := writeInstant(rec.Payload, s.writeFieldId)
 	return ms, buf, ok
 }
