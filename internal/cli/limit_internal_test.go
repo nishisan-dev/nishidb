@@ -104,7 +104,7 @@ func TestComLimitNaoCortaDentroDeLiteralNemDeIdentificador(t *testing.T) {
 	}
 	for _, c := range casos {
 		t.Run(c.nome, func(t *testing.T) {
-			if got := comLimit(c.sql, c.n); got != c.want {
+			if got := withLimit(c.sql, c.n); got != c.want {
 				t.Errorf("comLimit(%q, %d)\n got %q\nwant %q", c.sql, c.n, got, c.want)
 			}
 		})
@@ -126,7 +126,7 @@ func TestComLimitNaoCortaQueryQueNaoTokeniza(t *testing.T) {
 		// deixar o erro de sintaxe aparecer.
 		`SELECT a FROM t LIMIT 3 AND s = 'x`,
 	} {
-		if got, want := comLimit(sql, 5), sql+" LIMIT 5"; got != want {
+		if got, want := withLimit(sql, 5), sql+" LIMIT 5"; got != want {
 			t.Errorf("comLimit(%q, 5)\n got %q\nwant %q", sql, got, want)
 		}
 	}

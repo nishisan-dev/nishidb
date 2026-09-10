@@ -40,7 +40,7 @@ func (l *listaDeParametros) Set(s string) error {
 	// strings.Cut corta no PRIMEIRO ':', e é o que faz
 	// `--param string:http://x:9142` ser a string "http://x:9142" em vez de um
 	// erro. Dois-pontos é comum demais em valor real para outra escolha.
-	bruto, err := valorDeWire(tipo, valor)
+	bruto, err := wireValue(tipo, valor)
 	if err != nil {
 		return err
 	}
@@ -56,7 +56,7 @@ func (l *listaDeParametros) Set(s string) error {
 // servidor como um número arredondado e ACEITO, em vez de receber a mensagem de
 // overflow. A validação é a do protocolo, uma só, e ela roda sobre o texto
 // original.
-func valorDeWire(tipo, valor string) (json.RawMessage, error) {
+func wireValue(tipo, valor string) (json.RawMessage, error) {
 	switch tipo {
 	case protocol.WireTypeString:
 		// json.Marshal e não aspas na mão: é aqui que ", \ e os controles

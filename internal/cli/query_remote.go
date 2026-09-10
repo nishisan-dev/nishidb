@@ -25,7 +25,7 @@ import (
 // O contrato de saída é o MESMO do caminho local: NDJSON cru no stdout, uma
 // line por row, e o exit code dizendo o que aconteceu. Um script que troca
 // `--config` por `--server` não muda mais nada.
-func consultaRemota(endereco, dataset, sql string, params []protocol.Param, cred remoteCredential, amb CLIContext) int {
+func remoteQuery(endereco, dataset, sql string, params []protocol.Param, cred remoteCredential, amb CLIContext) int {
 	corpo, err := json.Marshal(protocol.Request{Dataset: dataset, SQL: sql, Parameters: params})
 	if err != nil {
 		fmt.Fprintln(amb.Stderr, "query:", err)
@@ -41,7 +41,7 @@ func consultaRemota(endereco, dataset, sql string, params []protocol.Param, cred
 		return ExitUsageError
 	}
 
-	url := normalizaEndereco(endereco) + "/v1/query"
+	url := normalizeAddress(endereco) + "/v1/query"
 	req, err := http.NewRequestWithContext(amb.Ctx, http.MethodPost, url, strings.NewReader(string(corpo)))
 	if err != nil {
 		fmt.Fprintln(amb.Stderr, "query:", err)
@@ -65,14 +65,14 @@ func consultaRemota(endereco, dataset, sql string, params []protocol.Param, cred
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return recusaDoServidor(resp, amb)
+		return serverRefusal(resp, amb)
 	}
-	return leStream(resp.Body, amb)
+	return readStream(resp.Body, amb)
 }
 
 // normalizaEndereco aceita host:porta e URL completa. O operador digita
 // `--server db01:9142`, que não é URL; exigir o esquema seria cerimônia.
-func normalizaEndereco(e string) string {
+func normalizeAddress(e string) string {
 	if strings.HasPrefix(e, "http://") || strings.HasPrefix(e, "https://") {
 		return strings.TrimRight(e, "/")
 	}
@@ -91,13 +91,13 @@ const corpoHTTPQuandoEsperavaHTTPS = "Client sent an HTTP request to an HTTPS se
 // corpo que não é JSON — só o segundo caso preserva os BYTES originais para
 // dicaDeEsquema examinar; uma falha de leitura não tem corpo nenhum a
 // examinar.
-func leCorpoErro(resp *http.Response) (corpo protocol.ErrorBody, dica string, ok bool) {
+func readErrorBody(resp *http.Response) (corpo protocol.ErrorBody, dica string, ok bool) {
 	bruto, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return corpo, "", false
 	}
 	if err := json.Unmarshal(bruto, &corpo); err != nil {
-		return corpo, dicaDeEsquema(resp.StatusCode, bruto), false
+		return corpo, schemaHint(resp.StatusCode, bruto), false
 	}
 	return corpo, "", true
 }
@@ -107,7 +107,7 @@ func leCorpoErro(resp *http.Response) (corpo protocol.ErrorBody, dica string, ok
 // (server.tls.enabled: true) e o operador esqueceu o https://.
 // normalizaEndereco (acima) já ACEITA o esquema quando ele vem escrito; só
 // não assume sozinho — a dica fecha essa distância.
-func dicaDeEsquema(status int, corpoBruto []byte) string {
+func schemaHint(status int, corpoBruto []byte) string {
 	if status != http.StatusBadRequest || !bytes.Contains(corpoBruto, []byte(corpoHTTPQuandoEsperavaHTTPS)) {
 		return ""
 	}
@@ -116,8 +116,8 @@ func dicaDeEsquema(status int, corpoBruto []byte) string {
 
 // recusaDoServidor trata o erro que chegou ANTES de qualquer line: o corpo é
 // um JSON único e o status é de verdade.
-func recusaDoServidor(resp *http.Response, amb CLIContext) int {
-	corpo, dica, ok := leCorpoErro(resp)
+func serverRefusal(resp *http.Response, amb CLIContext) int {
+	corpo, dica, ok := readErrorBody(resp)
 	if !ok {
 		fmt.Fprintf(amb.Stderr, "query: o servidor respondeu %s sem corpo legível\n", resp.Status)
 		if dica != "" {
@@ -141,7 +141,7 @@ func recusaDoServidor(resp *http.Response, amb CLIContext) int {
 //
 // As linhas vão CRUAS: decodificá-las para recodificá-las mudaria a grafia dos
 // doubles e não acrescentaria nada — o servidor já emitiu o formato final.
-func leStream(corpo io.Reader, amb CLIContext) int {
+func readStream(corpo io.Reader, amb CLIContext) int {
 	l := protocol.NewReader(corpo)
 	for l.Next() {
 		if _, err := amb.Stdout.Write(append(l.Line(), '\n')); err != nil {
@@ -226,7 +226,7 @@ func codigoDoProtocolo(codigo string) int {
 //
 // A mensagem do exit 3 já nomeia o pid que segura o dataset; até esta fase ela
 // parava aí, e o operador não tinha para onde ir. Agora tem.
-func dicaDeServidor(err error, cfgPath, dataset string, amb CLIContext) {
+func serverHint(err error, cfgPath, dataset string, amb CLIContext) {
 	if err == nil {
 		return
 	}

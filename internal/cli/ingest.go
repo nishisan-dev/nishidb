@@ -61,7 +61,7 @@ var gravidadeIngest = [...]int{ExitWriter, ExitDataset, ExitDataLoss, ExitPolicy
 // gravidade. Código sem gravidade declarada (nenhum é alcançável hoje pelo
 // ingest) vale o mesmo que o vala-comum: perde para os nomeados e vence o
 // sucesso, porque sair 0 com desfecho anômalo é a perda silenciosa de volta.
-func desfechoMaisGrave(a, b int) int {
+func mostSevereOutcome(a, b int) int {
 	if a == b {
 		return a
 	}
@@ -177,7 +177,7 @@ func runIngest(args []string, amb CLIContext) int {
 	// saída que fala de outra coisa. O motivo do encerramento não substitui a
 	// perda: os dois são impressos, e o código devolvido é o MAIS GRAVE.
 	encerra := func(motivo int) int {
-		imprimeResumo(amb.Stderr, resumo, time.Since(inicio))
+		printSummary(amb.Stderr, resumo, time.Since(inicio))
 		if resumo.falhasTotal == 0 {
 			return motivo
 		}
@@ -188,7 +188,7 @@ func runIngest(args []string, amb CLIContext) int {
 		fmt.Fprintf(amb.Stderr,
 			"ingest: %d eventos NÃO entraram no dataset por falha — investigue antes de considerar a carga completa\n",
 			resumo.falhasTotal)
-		return desfechoMaisGrave(motivo, ExitDataLoss)
+		return mostSevereOutcome(motivo, ExitDataLoss)
 	}
 
 	sc := bufio.NewScanner(entrada)
@@ -202,7 +202,7 @@ func runIngest(args []string, amb CLIContext) int {
 			motivo := ExitInterrupted
 			if cperr := checkpointDoPar(st, hist); cperr != nil {
 				fmt.Fprintln(amb.Stderr, "ingest: checkpoint final:", cperr)
-				motivo = desfechoMaisGrave(motivo, errorCode(cperr))
+				motivo = mostSevereOutcome(motivo, errorCode(cperr))
 			}
 			return encerra(motivo)
 		}
@@ -250,7 +250,7 @@ func runIngest(args []string, amb CLIContext) int {
 			}
 		}
 
-		if precisaCheckpoint(*everyN, resumo.lidos, ultimoCP, cfg.CheckpointInterval()) {
+		if needsCheckpoint(*everyN, resumo.lidos, ultimoCP, cfg.CheckpointInterval()) {
 			if err := checkpointDoPar(st, hist); err != nil {
 				fmt.Fprintln(amb.Stderr, "ingest: checkpoint:", err)
 				return encerra(errorCode(err))
@@ -280,7 +280,7 @@ func runIngest(args []string, amb CLIContext) int {
 	}
 	if err := checkpointDoPar(st, hist); err != nil {
 		fmt.Fprintln(amb.Stderr, "ingest: checkpoint final:", err)
-		motivo = desfechoMaisGrave(motivo, errorCode(err))
+		motivo = mostSevereOutcome(motivo, errorCode(err))
 	}
 	return encerra(motivo)
 }
@@ -288,7 +288,7 @@ func runIngest(args []string, amb CLIContext) int {
 // precisaCheckpoint dispara por CONTAGEM ou por TEMPO, o que vier primeiro:
 // uma ingestão lenta não pode ficar horas sem checkpoint só porque não atingiu
 // a contagem, e uma rápida não pode esperar o relógio.
-func precisaCheckpoint(everyN int, lidos int64, ultimo time.Time, intervalo time.Duration) bool {
+func needsCheckpoint(everyN int, lidos int64, ultimo time.Time, intervalo time.Duration) bool {
 	if everyN == 0 {
 		return false
 	}
@@ -315,7 +315,7 @@ func abreEntrada(caminho string, stdin io.Reader) (io.Reader, func(), error) {
 	return f, func() { f.Close() }, nil
 }
 
-func imprimeResumo(w io.Writer, r resumoIngest, dur time.Duration) {
+func printSummary(w io.Writer, r resumoIngest, dur time.Duration) {
 	taxa := 0.0
 	if dur > 0 {
 		taxa = float64(r.lidos) / dur.Seconds()
@@ -328,15 +328,15 @@ func imprimeResumo(w io.Writer, r resumoIngest, dur time.Duration) {
 	// Duas linhas distintas para os dois baldes: "descartado" é uma decisão
 	// sobre um evento ruim, "não aplicado" é perda. Juntá-las numa linha só foi
 	// o que deixou a perda passar por descarte.
-	linhaPorCategoria(w, "descartados por categoria", r.descartadosTotal, r.descartados)
-	linhaPorCategoria(w, "não aplicados por falha (perda de dado)", r.falhasTotal, r.falhas)
+	rowByCategory(w, "descartados por categoria", r.descartadosTotal, r.descartados)
+	rowByCategory(w, "não aplicados por falha (perda de dado)", r.falhasTotal, r.falhas)
 }
 
 // linhaPorCategoria imprime na ordem de DECLARAÇÃO das categorias e percorre
 // todas elas. A ordem é fixa porque a saída é lida por script; o limite é
 // NumCategories porque escrevê-lo à mão foi o que fez INTERNAL_STATE sair como
 // uma line de contagem sem categoria nenhuma.
-func linhaPorCategoria(w io.Writer, rotulo string, total int64, por [materializer.NumCategories]int64) {
+func rowByCategory(w io.Writer, rotulo string, total int64, por [materializer.NumCategories]int64) {
 	if total == 0 {
 		return
 	}

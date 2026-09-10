@@ -28,7 +28,7 @@ func TestResumoNomeiaTodasAsCategorias(t *testing.T) {
 		}
 
 		var buf bytes.Buffer
-		imprimeResumo(&buf, r, time.Second)
+		printSummary(&buf, r, time.Second)
 
 		if !strings.Contains(buf.String(), c.String()+"=1") {
 			t.Errorf("categoria %v (=%d) não aparece no resumo:\n%s", c, c, buf.String())
@@ -45,7 +45,7 @@ func TestResumoMantemAOrdemDasCategorias(t *testing.T) {
 	r.descartados[materializer.CategoryInvalidKey] = 1
 
 	var buf bytes.Buffer
-	imprimeResumo(&buf, r, time.Second)
+	printSummary(&buf, r, time.Second)
 
 	saida := buf.String()
 	pos := func(s string) int { return strings.Index(saida, s) }

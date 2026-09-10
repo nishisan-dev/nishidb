@@ -38,10 +38,10 @@ func TestDesfechoMaisGraveRespeitaAOrdemDeGravidade(t *testing.T) {
 	for _, c := range casos {
 		t.Run(c.nome, func(t *testing.T) {
 			// Comutativo: a ordem dos argumentos não pode mudar o resultado.
-			if got := desfechoMaisGrave(c.a, c.b); got != c.quer {
+			if got := mostSevereOutcome(c.a, c.b); got != c.quer {
 				t.Errorf("desfechoMaisGrave(%d, %d) = %d, want %d — %s", c.a, c.b, got, c.quer, c.porque)
 			}
-			if got := desfechoMaisGrave(c.b, c.a); got != c.quer {
+			if got := mostSevereOutcome(c.b, c.a); got != c.quer {
 				t.Errorf("desfechoMaisGrave(%d, %d) = %d, want %d (não é comutativo)", c.b, c.a, got, c.quer)
 			}
 		})

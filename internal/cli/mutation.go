@@ -46,7 +46,7 @@ func runCompact(args []string, amb CLIContext) int {
 		notify(amb, "  as flags vêm antes: nishidb compact --server <host:porta> [dataset]\n")
 		return ExitUsageError
 	}
-	if code := exigeServidor("compact", *servidor, amb); code != ExitOK {
+	if code := requiresServer("compact", *servidor, amb); code != ExitOK {
 		return code
 	}
 	dataset := ""
@@ -55,10 +55,10 @@ func runCompact(args []string, amb CLIContext) int {
 	}
 
 	var resp protocol.CompactResponse
-	if code := postaMutacao("compact", *servidor, "/v1/compact", dataset, cred, &resp, amb); code != ExitOK {
+	if code := postMutation("compact", *servidor, "/v1/compact", dataset, cred, &resp, amb); code != ExitOK {
 		return code
 	}
-	return writeOutputWithContext("compact", amb, func(w io.Writer) { escreveCompact(w, *servidor, resp) })
+	return writeOutputWithContext("compact", amb, func(w io.Writer) { writeCompact(w, *servidor, resp) })
 }
 
 func runCheckpoint(args []string, amb CLIContext) int {
@@ -79,7 +79,7 @@ func runCheckpoint(args []string, amb CLIContext) int {
 		notify(amb, "  as flags vêm antes: nishidb checkpoint --server <host:porta> [dataset]\n")
 		return ExitUsageError
 	}
-	if code := exigeServidor("checkpoint", *servidor, amb); code != ExitOK {
+	if code := requiresServer("checkpoint", *servidor, amb); code != ExitOK {
 		return code
 	}
 	dataset := ""
@@ -88,10 +88,10 @@ func runCheckpoint(args []string, amb CLIContext) int {
 	}
 
 	var resp protocol.CheckpointResponse
-	if code := postaMutacao("checkpoint", *servidor, "/v1/checkpoint", dataset, cred, &resp, amb); code != ExitOK {
+	if code := postMutation("checkpoint", *servidor, "/v1/checkpoint", dataset, cred, &resp, amb); code != ExitOK {
 		return code
 	}
-	return writeOutputWithContext("checkpoint", amb, func(w io.Writer) { escreveCheckpoint(w, *servidor, resp) })
+	return writeOutputWithContext("checkpoint", amb, func(w io.Writer) { writeCheckpoint(w, *servidor, resp) })
 }
 
 // postaMutacao faz o POST de uma rota mutante (compact/checkpoint) e
@@ -109,7 +109,7 @@ func runCheckpoint(args []string, amb CLIContext) int {
 // cred entra pelo MESMO remoteClient/aplicaCredencial que consultaRemota e
 // searchDocument usam (Task B6) — este É o ponto de costura único que a B5
 // já apontava para a credencial entrar.
-func postaMutacao(cmd, endereco, caminho, dataset string, cred remoteCredential, destino any, amb CLIContext) int {
+func postMutation(cmd, endereco, caminho, dataset string, cred remoteCredential, destino any, amb CLIContext) int {
 	var corpo io.Reader
 	if dataset != "" {
 		b, err := json.Marshal(protocol.DatasetRequest{Dataset: dataset})
@@ -125,7 +125,7 @@ func postaMutacao(cmd, endereco, caminho, dataset string, cred remoteCredential,
 		notify(amb, "%s: %v\n", cmd, err)
 		return ExitUsageError
 	}
-	req, err := http.NewRequestWithContext(amb.Ctx, http.MethodPost, normalizaEndereco(endereco)+caminho, corpo)
+	req, err := http.NewRequestWithContext(amb.Ctx, http.MethodPost, normalizeAddress(endereco)+caminho, corpo)
 	if err != nil {
 		notify(amb, "%s: %v\n", cmd, err)
 		return ExitUsageError
@@ -147,7 +147,7 @@ func postaMutacao(cmd, endereco, caminho, dataset string, cred remoteCredential,
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return recusaRemota(cmd, resp, amb)
+		return remoteRefusal(cmd, resp, amb)
 	}
 	if err := json.NewDecoder(resp.Body).Decode(destino); err != nil {
 		notify(amb, "%s: resposta ilegível de %s: %v\n", cmd, endereco, err)
@@ -156,7 +156,7 @@ func postaMutacao(cmd, endereco, caminho, dataset string, cred remoteCredential,
 	return ExitOK
 }
 
-func escreveCompact(w io.Writer, endereco string, resp protocol.CompactResponse) {
+func writeCompact(w io.Writer, endereco string, resp protocol.CompactResponse) {
 	title(w, "servidor %s", endereco)
 	title(w, "")
 	line(w, "DATASET", "SEGMENTOS", "BYTES LIDOS", "BYTES ESCRITOS", "DURAÇÃO")
@@ -166,7 +166,7 @@ func escreveCompact(w io.Writer, endereco string, resp protocol.CompactResponse)
 	}
 }
 
-func escreveCheckpoint(w io.Writer, endereco string, resp protocol.CheckpointResponse) {
+func writeCheckpoint(w io.Writer, endereco string, resp protocol.CheckpointResponse) {
 	title(w, "servidor %s", endereco)
 	title(w, "")
 	line(w, "DATASET", "DURAÇÃO")

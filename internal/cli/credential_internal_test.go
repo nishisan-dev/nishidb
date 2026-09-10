@@ -354,7 +354,7 @@ func TestDicaDeEsquemaSoDisparaNoCorpoEStatusExatos(t *testing.T) {
 		{http.StatusBadRequest, "", false},
 	}
 	for _, c := range casos {
-		got := dicaDeEsquema(c.status, []byte(c.corpo))
+		got := schemaHint(c.status, []byte(c.corpo))
 		if (got != "") != c.querDica {
 			t.Errorf("status=%d corpo=%q: dica=%q, queria presente=%v", c.status, c.corpo, got, c.querDica)
 		}

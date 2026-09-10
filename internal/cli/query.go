@@ -84,11 +84,11 @@ func runQuery(args []string, amb CLIContext) int {
 	}
 	sql := fs.Arg(0)
 	if *limit >= 0 {
-		sql = comLimit(sql, *limit)
+		sql = withLimit(sql, *limit)
 	}
 
 	if *servidor != "" {
-		return consultaRemota(*servidor, *dataset, sql, params, cred, amb)
+		return remoteQuery(*servidor, *dataset, sql, params, cred, amb)
 	}
 
 	cfg, err := nishiconfig.Load(*argConfig)
@@ -100,7 +100,7 @@ func runQuery(args []string, amb CLIContext) int {
 	st, compilado, spec, fecha, err := openForQuery(cfg, *dataset)
 	if err != nil {
 		fmt.Fprintln(amb.Stderr, "query:", err)
-		dicaDeServidor(err, *argConfig, *dataset, amb)
+		serverHint(err, *argConfig, *dataset, amb)
 		return errorCode(err)
 	}
 	defer fecha()
@@ -110,7 +110,7 @@ func runQuery(args []string, amb CLIContext) int {
 		fmt.Fprintln(amb.Stderr, "query:", err)
 		return ExitUsageError
 	}
-	if err := counters.Registra(eng, *dataset, st); err != nil {
+	if err := counters.Register(eng, *dataset, st); err != nil {
 		notify(amb, "query: %v\n", err)
 		return ExitUsageError
 	}
@@ -123,7 +123,7 @@ func runQuery(args []string, amb CLIContext) int {
 	//
 	// Só no dataset DECLARADO, como no servidor: a irmã não tem fonte própria.
 	if spec != nil {
-		if err := metakafka.Registra(eng, *dataset, metakafka.Fonte{
+		if err := metakafka.Register(eng, *dataset, metakafka.Fonte{
 			Declarada: metakafka.DoYAML(spec.Source.Kafka),
 			Duraveis:  st.SourceOffsets,
 		}); err != nil {
@@ -140,7 +140,7 @@ func runQuery(args []string, amb CLIContext) int {
 	if err != nil {
 		// O erro de sintaxe/bind sai ANTES de qualquer byte no stdout: quem
 		// consome a saída não pode receber linha parcial seguida de erro.
-		imprimeErroDeQuery(amb.Stderr, sql, err)
+		printQueryError(amb.Stderr, sql, err)
 		return errorCode(err)
 	}
 	defer it.Close()
@@ -213,7 +213,7 @@ func runQuery(args []string, amb CLIContext) int {
 // PARSER de verdade, o mesmo que o Execute vai usar — pelo mesmo argumento que
 // já tinha tirado essa decisão de uma varredura textual própria: duas gramáticas
 // divergem, e a divergência aparece como query reescrita errada.
-func comLimit(sql string, n int) string {
+func withLimit(sql string, n int) string {
 	corte := strings.TrimRight(strings.TrimSpace(sql), ";")
 	st, err := parser.Parse(corte)
 	if err != nil {
@@ -225,10 +225,10 @@ func comLimit(sql string, n int) string {
 	}
 	inicio := len(corte)
 	if st.HasLimit && st.LimitPos < inicio {
-		inicio = inicioDaClausula(corte, st.LimitPos)
+		inicio = clauseStart(corte, st.LimitPos)
 	}
-	if st.HasOffset && inicioDaClausula(corte, st.OffsetPos) < inicio {
-		inicio = inicioDaClausula(corte, st.OffsetPos)
+	if st.HasOffset && clauseStart(corte, st.OffsetPos) < inicio {
+		inicio = clauseStart(corte, st.OffsetPos)
 	}
 	corte = strings.TrimSpace(corte[:inicio])
 	if st.HasOffset {
@@ -243,25 +243,25 @@ func comLimit(sql string, n int) string {
 // O parser guarda a posição do NÚMERO (`LimitPos` aponta para o `10` de
 // `LIMIT 10`), que é o que a mensagem de erro precisa. Para cortar, é preciso a
 // posição da PALAVRA — cortar no número deixaria um `LIMIT` órfão no texto.
-func inicioDaClausula(sql string, posDoLiteral int) int {
+func clauseStart(sql string, posDoLiteral int) int {
 	i := posDoLiteral
 	// Recua o espaço entre a palavra e o número.
 	for i > 0 && (sql[i-1] == ' ' || sql[i-1] == '\t' || sql[i-1] == '\n' || sql[i-1] == '\r') {
 		i--
 	}
 	// Recua a palavra.
-	for i > 0 && !ehEspaco(sql[i-1]) {
+	for i > 0 && !isSpace(sql[i-1]) {
 		i--
 	}
 	return i
 }
 
-func ehEspaco(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' }
+func isSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' }
 
 // imprimeErroDeQuery mostra a POSIÇÃO e o trecho ofensor, não só a mensagem.
 // A posição é a informação que o front-end já carrega e que o usuário precisa
 // para achar o erro numa query de várias linhas.
-func imprimeErroDeQuery(w io.Writer, sql string, err error) {
+func printQueryError(w io.Writer, sql string, err error) {
 	fmt.Fprintln(w, "query:", err)
 
 	var se *lexer.SyntaxError

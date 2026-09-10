@@ -52,7 +52,7 @@ func runStatus(args []string, amb CLIContext) int {
 		notify(amb, "status: não recebe argumentos posicionais\n")
 		return ExitUsageError
 	}
-	if code := exigeServidor("status", *server, amb); code != ExitOK {
+	if code := requiresServer("status", *server, amb); code != ExitOK {
 		return code
 	}
 
@@ -80,7 +80,7 @@ func runDatasets(args []string, amb CLIContext) int {
 		notify(amb, "datasets: não recebe argumentos posicionais\n")
 		return ExitUsageError
 	}
-	if code := exigeServidor("datasets", *servidor, amb); code != ExitOK {
+	if code := requiresServer("datasets", *servidor, amb); code != ExitOK {
 		return code
 	}
 
@@ -113,7 +113,7 @@ func runInspect(args []string, amb CLIContext) int {
 		notify(amb, "  as flags vêm antes: nishidb inspect --server <host:porta> <dataset>\n")
 		return ExitUsageError
 	}
-	if code := exigeServidor("inspect", *servidor, amb); code != ExitOK {
+	if code := requiresServer("inspect", *servidor, amb); code != ExitOK {
 		return code
 	}
 	nome := fs.Arg(0)
@@ -136,7 +136,7 @@ func runInspect(args []string, amb CLIContext) int {
 // exigeServidor recusa o comando sem `--server` explicando POR QUE não existe
 // caminho local — sem isso o operador procuraria um `--config` que estes
 // comandos não têm.
-func exigeServidor(cmd, endereco string, amb CLIContext) int {
+func requiresServer(cmd, endereco string, amb CLIContext) int {
 	if endereco != "" {
 		return ExitOK
 	}
@@ -167,7 +167,7 @@ func searchDocument(cmd, endereco, caminho string, cred remoteCredential, destin
 		notify(amb, "%s: %v\n", cmd, err)
 		return ExitUsageError
 	}
-	req, err := http.NewRequestWithContext(amb.Ctx, http.MethodGet, normalizaEndereco(endereco)+caminho, nil)
+	req, err := http.NewRequestWithContext(amb.Ctx, http.MethodGet, normalizeAddress(endereco)+caminho, nil)
 	if err != nil {
 		notify(amb, "%s: %v\n", cmd, err)
 		return ExitUsageError
@@ -185,7 +185,7 @@ func searchDocument(cmd, endereco, caminho string, cred remoteCredential, destin
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return recusaRemota(cmd, resp, amb)
+		return remoteRefusal(cmd, resp, amb)
 	}
 	if err := json.NewDecoder(resp.Body).Decode(destino); err != nil {
 		// Corpo 200 que não decodifica é falha de TRANSPORTE, não de uso: o
@@ -203,8 +203,8 @@ func searchDocument(cmd, endereco, caminho string, cred remoteCredential, destin
 // por código, nunca pelo texto. Renomeada na revisão da B5 (Minor 6): o
 // nome antigo, recusaDeLeitura, já não descrevia os dois comandos mutantes
 // que a B5 acrescentou como chamadores.
-func recusaRemota(cmd string, resp *http.Response, amb CLIContext) int {
-	corpo, dica, ok := leCorpoErro(resp)
+func remoteRefusal(cmd string, resp *http.Response, amb CLIContext) int {
+	corpo, dica, ok := readErrorBody(resp)
 	if !ok {
 		notify(amb, "%s: o servidor respondeu %s sem corpo legível\n", cmd, resp.Status)
 		if dica != "" {

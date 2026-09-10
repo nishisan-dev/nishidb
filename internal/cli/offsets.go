@@ -108,7 +108,7 @@ func runOffsets(args []string, amb CLIContext) int {
 
 	switch {
 	case *mostrar:
-		return imprimeOffsets(amb, *dataset, st.RowCount(), atual, existe, errLeitura)
+		return printOffsets(amb, *dataset, st.RowCount(), atual, existe, errLeitura)
 
 	case *reiniciar != "":
 		if *reiniciar != schema.AutoOffsetResetEarliest && *reiniciar != schema.AutoOffsetResetLatest {
@@ -127,7 +127,7 @@ func runOffsets(args []string, amb CLIContext) int {
 		// RowCount deixa de bloquear porque a decisão foi tomada aqui, de
 		// forma explícita e registrada.
 		nova := checkpoint.SourceOffsets{
-			Source:  origemDaSpec(spec),
+			Source:  specOrigin(spec),
 			Offsets: map[int32]int64{},
 		}
 		if err := grava(st, nova); err != nil {
@@ -147,15 +147,15 @@ func runOffsets(args []string, amb CLIContext) int {
 		if !*confirmar {
 			fmt.Fprintf(amb.Stderr,
 				"offsets: --set sobrescreve a posição de %q por %s. Confirme com --yes\n",
-				*dataset, formataOffsets(offsets))
+				*dataset, formatOffsets(offsets))
 			return ExitUsageError
 		}
-		nova := checkpoint.SourceOffsets{Source: origemDaSpec(spec), Offsets: offsets}
+		nova := checkpoint.SourceOffsets{Source: specOrigin(spec), Offsets: offsets}
 		if err := grava(st, nova); err != nil {
 			fmt.Fprintf(amb.Stderr, "offsets: %v\n", err)
 			return errorCode(err)
 		}
-		fmt.Fprintf(amb.Stdout, "offsets: posição de %q definida como %s\n", *dataset, formataOffsets(offsets))
+		fmt.Fprintf(amb.Stdout, "offsets: posição de %q definida como %s\n", *dataset, formatOffsets(offsets))
 		return ExitOK
 	}
 }
@@ -163,7 +163,7 @@ func runOffsets(args []string, amb CLIContext) int {
 // origemDaSpec reconstrói a identidade a partir do YAML. O cluster id fica
 // vazio: quem o preenche é a primeira subida, que fala com o broker — e a
 // Divergencia trata o vazio como "não confere", não como "divergiu".
-func origemDaSpec(spec *schema.DatasetSpec) checkpoint.Source {
+func specOrigin(spec *schema.DatasetSpec) checkpoint.Source {
 	k := spec.Source.Kafka
 	return checkpoint.Source{
 		Topic:     k.Topic,
@@ -179,7 +179,7 @@ func grava(st *storage.Store, o checkpoint.SourceOffsets) error {
 	return st.Checkpoint()
 }
 
-func imprimeOffsets(amb CLIContext, dataset string, rows uint64,
+func printOffsets(amb CLIContext, dataset string, rows uint64,
 	o checkpoint.SourceOffsets, existe bool, errLeitura error,
 ) int {
 	fmt.Fprintf(amb.Stdout, "dataset: %s\nrows: %d\n", dataset, rows)
@@ -245,7 +245,7 @@ func parseOffsets(s string) (map[int32]int64, error) {
 	return out, nil
 }
 
-func formataOffsets(o map[int32]int64) string {
+func formatOffsets(o map[int32]int64) string {
 	ps := make([]int, 0, len(o))
 	for p := range o {
 		ps = append(ps, int(p))

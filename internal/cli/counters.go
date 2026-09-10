@@ -78,7 +78,7 @@ func countersLocal(argConfig, dataset string, audita, reconstroi bool, amb CLICo
 	st, _, _, err := openDataset(cfg, dataset)
 	if err != nil {
 		notify(amb, "counters: %v\n", err)
-		dicaDeServidor(err, argConfig, dataset, amb)
+		serverHint(err, argConfig, dataset, amb)
 		return errorCode(err)
 	}
 	defer func() { _ = st.Close() }()
@@ -94,8 +94,8 @@ func countersLocal(argConfig, dataset string, audita, reconstroi bool, amb CLICo
 		for _, r := range rs {
 			linhas = append(linhas, auditoriaDoStorage(r))
 		}
-		code := writeOutputWithContext("counters", amb, func(w io.Writer) { escreveAuditoria(w, dataset, linhas) })
-		return desfechoDaAuditoria(linhas, code, amb)
+		code := writeOutputWithContext("counters", amb, func(w io.Writer) { writeAudit(w, dataset, linhas) })
+		return auditOutcome(linhas, code, amb)
 	case reconstroi:
 		recs, err := st.ReconstroiContadores(amb.Ctx)
 		if err != nil {
@@ -106,14 +106,14 @@ func countersLocal(argConfig, dataset string, audita, reconstroi bool, amb CLICo
 		for _, r := range recs {
 			linhas = append(linhas, linhaDeReconstrucao{nome: r.Name, linhas: r.Rows, grupos: r.Groups, duracaoMs: r.Duration.Milliseconds()})
 		}
-		return writeOutputWithContext("counters", amb, func(w io.Writer) { escreveReconstrucao(w, dataset, linhas) })
+		return writeOutputWithContext("counters", amb, func(w io.Writer) { writeReconstruction(w, dataset, linhas) })
 	default:
 		ests := st.EstatisticasDeContadores()
 		linhas := make([]linhaDeContador, 0, len(ests))
 		for _, e := range ests {
-			linhas = append(linhas, contadorDoStorage(e))
+			linhas = append(linhas, storageCounter(e))
 		}
-		return writeOutputWithContext("counters", amb, func(w io.Writer) { escreveContadores(w, dataset, linhas) })
+		return writeOutputWithContext("counters", amb, func(w io.Writer) { writeCounters(w, dataset, linhas) })
 	}
 }
 
@@ -121,7 +121,7 @@ func countersRemoto(servidor, dataset string, audita, reconstroi bool, cred remo
 	switch {
 	case audita:
 		var resp protocol.CountersAuditResponse
-		if code := postaMutacao("counters", servidor, "/v1/counters/audit", dataset, cred, &resp, amb); code != ExitOK {
+		if code := postMutation("counters", servidor, "/v1/counters/audit", dataset, cred, &resp, amb); code != ExitOK {
 			return code
 		}
 		var linhas []linhaDeAuditoria
@@ -130,11 +130,11 @@ func countersRemoto(servidor, dataset string, audita, reconstroi bool, cred remo
 				linhas = append(linhas, auditoriaDoWire(c))
 			}
 		}
-		code := writeOutputWithContext("counters", amb, func(w io.Writer) { escreveAuditoria(w, dataset, linhas) })
-		return desfechoDaAuditoria(linhas, code, amb)
+		code := writeOutputWithContext("counters", amb, func(w io.Writer) { writeAudit(w, dataset, linhas) })
+		return auditOutcome(linhas, code, amb)
 	case reconstroi:
 		var resp protocol.CountersRebuildResponse
-		if code := postaMutacao("counters", servidor, "/v1/counters/rebuild", dataset, cred, &resp, amb); code != ExitOK {
+		if code := postMutation("counters", servidor, "/v1/counters/rebuild", dataset, cred, &resp, amb); code != ExitOK {
 			return code
 		}
 		var linhas []linhaDeReconstrucao
@@ -143,7 +143,7 @@ func countersRemoto(servidor, dataset string, audita, reconstroi bool, cred remo
 				linhas = append(linhas, linhaDeReconstrucao{nome: c.Name, linhas: c.Rows, grupos: c.Groups, duracaoMs: c.DurationMs})
 			}
 		}
-		return writeOutputWithContext("counters", amb, func(w io.Writer) { escreveReconstrucao(w, dataset, linhas) })
+		return writeOutputWithContext("counters", amb, func(w io.Writer) { writeReconstruction(w, dataset, linhas) })
 	default:
 		// A listagem é leitura, e sai do /v1/stats — a MESMA estrutura que
 		// alimenta as séries nishidb_counter_*.
@@ -157,9 +157,9 @@ func countersRemoto(servidor, dataset string, audita, reconstroi bool, cred remo
 			}
 			linhas := make([]linhaDeContador, 0, len(ds.Counters))
 			for _, c := range ds.Counters {
-				linhas = append(linhas, contadorDoWire(c))
+				linhas = append(linhas, wireCounter(c))
 			}
-			return writeOutputWithContext("counters", amb, func(w io.Writer) { escreveContadores(w, dataset, linhas) })
+			return writeOutputWithContext("counters", amb, func(w io.Writer) { writeCounters(w, dataset, linhas) })
 		}
 		notify(amb, "counters: o dataset %q não está registrado em %s\n", dataset, servidor)
 		return ExitUsageError
@@ -178,21 +178,21 @@ type linhaDeContador struct {
 	auditDivergentes, auditUnix int64
 }
 
-func contadorDoStorage(e counter.Stats) linhaDeContador {
+func storageCounter(e counter.Stats) linhaDeContador {
 	return linhaDeContador{nome: e.Name, linhas: e.Rows, total: e.Total,
 		grupos: e.Groups, teto: e.Ceiling, aposentados: e.Retired,
 		recusados: e.Refused, orfas: e.Orphans, bytes: e.Bytes,
 		auditDivergentes: e.AuditDivergences, auditUnix: e.AuditLastUnix}
 }
 
-func contadorDoWire(c protocol.CounterStats) linhaDeContador {
+func wireCounter(c protocol.CounterStats) linhaDeContador {
 	return linhaDeContador{nome: c.Name, linhas: c.Rows, total: c.Total,
 		grupos: c.Groups, teto: c.MaxGroups, aposentados: c.Retired,
 		recusados: c.Refused, orfas: c.OrphanEntries, bytes: c.Bytes,
 		auditDivergentes: c.AuditDivergentGroups, auditUnix: c.AuditLastSuccessUnix}
 }
 
-func escreveContadores(w io.Writer, dataset string, linhas []linhaDeContador) {
+func writeCounters(w io.Writer, dataset string, linhas []linhaDeContador) {
 	title(w, "dataset %s", dataset)
 	title(w, "")
 	if len(linhas) == 0 {
@@ -258,7 +258,7 @@ func auditoriaDoWire(c protocol.CounterAudit) linhaDeAuditoria {
 	return l
 }
 
-func escreveAuditoria(w io.Writer, dataset string, linhas []linhaDeAuditoria) {
+func writeAudit(w io.Writer, dataset string, linhas []linhaDeAuditoria) {
 	title(w, "dataset %s", dataset)
 	title(w, "")
 	if len(linhas) == 0 {
@@ -294,7 +294,7 @@ func escreveAuditoria(w io.Writer, dataset string, linhas []linhaDeAuditoria) {
 // desfechoDaAuditoria decide o exit code depois de a tabela ter saído:
 // divergência é corrupção de índice derivado, e sai com ExitDataset (3) — o
 // mesmo código de "dataset corrompido", que é o que um script de operação lê.
-func desfechoDaAuditoria(linhas []linhaDeAuditoria, code int, amb CLIContext) int {
+func auditOutcome(linhas []linhaDeAuditoria, code int, amb CLIContext) int {
 	if code != ExitOK {
 		return code
 	}
@@ -318,7 +318,7 @@ type linhaDeReconstrucao struct {
 	duracaoMs int64
 }
 
-func escreveReconstrucao(w io.Writer, dataset string, linhas []linhaDeReconstrucao) {
+func writeReconstruction(w io.Writer, dataset string, linhas []linhaDeReconstrucao) {
 	title(w, "dataset %s", dataset)
 	title(w, "")
 	if len(linhas) == 0 {

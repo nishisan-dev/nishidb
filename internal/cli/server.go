@@ -21,8 +21,8 @@ func runServer(args []string, amb CLIContext) int {
 	fs.SetOutput(amb.Stderr)
 	var (
 		argConfig = fs.String("config", "", "caminho do nishidb.yaml")
-		logFormat = fs.String("log-format", "json", "json|texto")
-		logLevel  = fs.String("log-level", "info", "debug|info|warn|error")
+		argLogFormat = fs.String("log-format", "json", "json|texto")
+		argLogLevel  = fs.String("log-level", "info", "debug|info|warn|error")
 		pprofAddr = fs.String("pprof", "", "endereço dos endpoints de debug (§112); vazio desliga")
 	)
 	if err := fs.Parse(args); err != nil {
@@ -33,12 +33,12 @@ func runServer(args []string, amb CLIContext) int {
 		return ExitUsageError
 	}
 
-	formato, err := formatoDeLog(*logFormat)
+	formato, err := logFormat(*argLogFormat)
 	if err != nil {
 		fmt.Fprintf(amb.Stderr, "server: %v\n", err)
 		return ExitUsageError
 	}
-	nivel, err := nivelDeLog(*logLevel)
+	nivel, err := logLevel(*argLogLevel)
 	if err != nil {
 		fmt.Fprintf(amb.Stderr, "server: %v\n", err)
 		return ExitUsageError
@@ -77,7 +77,7 @@ func runServer(args []string, amb CLIContext) int {
 	return ExitOK
 }
 
-func formatoDeLog(v string) (logging.Format, error) {
+func logFormat(v string) (logging.Format, error) {
 	switch v {
 	case "json":
 		return logging.FormatJSON, nil
@@ -87,7 +87,7 @@ func formatoDeLog(v string) (logging.Format, error) {
 	return 0, fmt.Errorf("--log-format %q inválido (json|texto)", v)
 }
 
-func nivelDeLog(v string) (slog.Level, error) {
+func logLevel(v string) (slog.Level, error) {
 	switch v {
 	case "debug":
 		return slog.LevelDebug, nil
