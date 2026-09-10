@@ -193,7 +193,7 @@ por mensagem) foi refutada na proposta porque Kafka entrega pelo menos uma vez e
 | `internal/storage/mmap/region.go` | `AtomicLoad32`/`AtomicStore32` (único pacote com unsafe) |
 | `internal/storage/rowindex/rowindex.go` | `denseFile` com tamanho de entrada parametrizado; `Dense32` exportado |
 | `internal/index/valuekey/valuekey.go` | `AppendComposite`/`DecodeComposite` + golden |
-| `internal/predicate/evaluator.go` (novo) | `AvaliadorDePayload`: programa + slots + reader, `Avalia(payload)` |
+| `internal/predicate/evaluator.go` (novo) | `AvaliadorDePayload`: programa + slots + reader, `Evaluate(payload)` |
 | `internal/predicate/rule.go` | `CompilaCondicao` extraída de `CompilaRegras` |
 | `internal/storage/counter/` (novo) | `dict.go`, `counter.go`, `textkey.go`, `audit.go`, `retirement.go` + testes |
 | `internal/storage/checkpoint/manifest.go` | tag 0x8005, `CounterInfo`, `Manifest.Counters` |
@@ -348,7 +348,7 @@ func CompilaCondicao(rotulo, condicao string, sc *schema.Compiled) (*Programa, b
 // auditoria instancia outro.
 type AvaliadorDePayload struct{ prog *Programa; slots []Slot; fr encoding.FieldReader }
 func NovoAvaliadorDePayload(prog *Programa, ids []types.FieldID) *AvaliadorDePayload
-func (a *AvaliadorDePayload) Avalia(payload []byte) (bool, error)
+func (a *AvaliadorDePayload) Evaluate(payload []byte) (bool, error)
 ```
 
 - [ ] **Passo 1: teste** — compila `authenticated = true AND slot > 0` contra um `schema.Compiled` de teste (o pacote já tem helper para regras; reusar), monta payload com `encoding.AppendField`, afirma true/false, e afirma que campo ausente compara false. `TestCompilaCondicaoRecusaCampoDeSistema` (`_writtenAt`), reaproveitando o caso que `CompilaRegras` já cobre.
@@ -419,10 +419,10 @@ por grupo na internação e guardado ao lado da chave (tarefa B2 define
 **Interfaces produzidas:**
 ```go
 // Evaluator é o `where` compilado. nil = sem condição (conta toda linha com grupo).
-type Evaluator interface{ Avalia(payload []byte) (bool, error) }
+type Evaluator interface{ Evaluate(payload []byte) (bool, error) }
 
 type Definition struct {
-	Nome        string
+	Name        string
 	Columns     []types.FieldID   // na ordem DECLARADA do groupBy
 	Names       []string          // nomes das colunas, mesma ordem (para a tabela virtual e mensagens)
 	Types       []types.FieldType // string | int64 | bool, mesma ordem
@@ -500,7 +500,7 @@ UMA vez, por merge linear contra `colunasOrdenadas` (cópia ordenada de
 coluna ausente ⇒ `WithoutGroup` (a proposta §6.3: entidade sem a coluna não é
 contada). Presentes todas: `valuekey.AppendComposite(c.keyBuf[:0], c.valores)`,
 `c.keyBuf = chave`, `id, err := c.dict.Intern(chave)`; `ErrGroupCeilingReached` ⇒
-`WithoutGroup` + `recusados.Add(1)` + WARN uma vez. Condição: `c.avaliador.Avalia(payload)`
+`WithoutGroup` + `recusados.Add(1)` + WARN uma vez. Condição: `c.avaliador.Evaluate(payload)`
 (nil ⇒ true). Delta:
 
 ```go
@@ -559,7 +559,7 @@ return nil
 // seção, grava manifest sem ela, e o binário novo reconstrói ao voltar.
 const tagCounters = 0x0001
 type CounterInfo struct {
-	Nome    string
+	Name    string
 	Columns []uint16 // FieldIDs na ordem declarada
 	Where   string   // texto normalizado; "" = sem condição
 }
@@ -666,7 +666,7 @@ func (s *Store) EstatisticasDeContadores() []counter.Stats
 // contador
 type Divergence struct{ ID uint32; Text string; Maintained, Recomputed, RefsMaintained, RefsRecomputed int64 }
 type Report struct {
-	Nome string; Groups uint32
+	Name string; Groups uint32
 	Maintained, Recomputed int64      // soma dos totais
 	DivergentGroups int                 // grupos com total OU refs diferentes
 	Sample []Divergence           // as primeiras 20
@@ -677,7 +677,7 @@ func (s *Store) AuditaContadores(ctx context.Context) ([]counter.Report, error)
 func (s *Store) ReconstroiContadores(ctx context.Context) ([]counter.Stats, error)
 ```
 
-Mecânica de `AuditaContadores`: `entra()`; `wmu.Lock()`; `snap := s.AbreSnapshot()`
+Mecânica de `AuditaContadores`: `entra()`; `wmu.Lock()`; `snap := s.OpenSnapshot()`
 (dentro do `wmu` de propósito: fecha a corrida entre ler a época e registrar o
 leitor, `snapshot.go:176-181`); `c.AuditSnapshot()` de cada contador; `wmu.Unlock()`.
 Depois, sem `wmu`, **enumerador próprio** — NÃO `ScanLive`/`GetByRowID`, que
@@ -688,7 +688,7 @@ senão `s.locs.Get(id)`; pula só ausente ou bit de lápide; sob `aposMu.RLock`,
 `c.Derive(payload, avaliadorDaAuditoria, scratch, keyBuf)`; acumula em slices
 por id (do tamanho do limite congelado; id ausente do dicionário ⇒ divergência
 própria "grupo não internado"). Ao fim compara com a cópia e monta o relatório;
-`FechaSnapshot`. `ErrSnapshotExpirado` ⇒ a auditoria é INCONCLUSIVA: devolve o
+`CloseSnapshot`. `ErrSnapshotExpirado` ⇒ a auditoria é INCONCLUSIVA: devolve o
 erro, nunca um relatório (o CLI já o traduz para exit 5). Godoc nomeia a
 definição: "viva = com location e sem lápide", e por que a visibilidade da
 consulta (prazo vencido) não serve de oráculo. `ReconstroiContadores` = sob
@@ -861,9 +861,9 @@ Schema sintético (string YAML como `especDaTabela` do meta): `name: <nome>`,
 colunas de `def.Types` (`boolean` para `TypeBool`). Cache: um `*schema.Compiled`
 por contador, construído em `Tabela` (não há `sync.Once` global).
 
-Fonte (`query.Store`): `AbreSnapshot()` devolve `types.Snapshot{LimitRowID: l.Limit()}`
+Fonte (`query.Store`): `OpenSnapshot()` devolve `types.Snapshot{LimitRowID: l.Limit()}`
 (congela o conjunto de grupos por consulta; `Epoch`/`Instant`/`BaseRowID`
-ficam zero e são ignorados pela fonte — godoc no molde do `meta.fonte.AbreSnapshot`);
+ficam zero e são ignorados pela fonte — godoc no molde do `meta.fonte.OpenSnapshot`);
 `ScanLive(snap)` itera `1..LimitRowID-1`, pulando `vivo == false`;
 `GetByRowID(snap, id, buf)` codifica: `groupKey` (texto), as colunas (por
 `valuekey.DecodeComposite` da chave, zero-copy), `total`. **Zero alocação por
@@ -977,7 +977,7 @@ tabela `contador grupos duração`. `--config` com servidor no ar ⇒ exit 3 + d
 **Arquivos:**
 - `README.md`: em `### 2. Definição do dataset`, DEPOIS do bloco YAML existente da linha 319, um bloco ```` ```yaml ```` com `counters:` (proposta §5.1) — posição segura para `TestQuickstartDoREADMEExecuta` (só `yamls[0..1]` são posicionais; conferir com o gate antes de commitar); nova seção `### Contadores mantidos na escrita` depois de `### Ver o estado do servidor no ar` (linha ~1137) com os exemplos de consulta em ```` ```bash ```` (não `console`), a tabela `_counters`, `groupKey`, a nota "lê o presente, não é versionado pelo snapshot", o `nishidb counters` e as rotas; na tabela de SQL suportado, a linha de namespaces virtuais lista `_meta` e `_counters`.
 - `docs/architecture.md`: seção "Contadores mantidos na escrita" (o quê, os quatro momentos, por que a dobra vem antes do replay, o resíduo da cauda rasgada, o ciclo de vida por `refs`, a auditoria sob snapshot, a tabela virtual), com números só depois de medidos (G2); incorporar `docs/diagrams/contadores_flow.puml` pelo padrão `uml.nishisan.dev/proxy?src=…/main/docs/diagrams/contadores_flow.puml` (validar pelo servidor, ver memória `plantuml-ausente-validar-pelo-servidor`); a lista "O que ainda não existe" perde o item se houver.
-- `docs/debitos.md`: itens 107+ no fim da seção "Sem milestone": (a) `AbreSnapshot` fora do `wmu` nas CONSULTAS lê a época e registra o leitor em dois passos (`snapshot.go:176-181`) — a auditoria fecha a corrida tomando o `wmu`; as consultas não (pré-existente, achado na validação deste ciclo); (b) fsync por grupo novo no nível PON/splitter (custo não medido); (c) `_counters` fora do isolamento de snapshot; (d) `Lookup` indexado na tabela virtual (hoje `WHERE olt = …` em contador composto é varredura dos grupos); (e) `ScanLive(snap)` não é versionado para lápides — a consulta longa pode perder uma linha lapidada durante a varredura (pré-existente; a auditoria não depende dele).
+- `docs/debitos.md`: itens 107+ no fim da seção "Sem milestone": (a) `OpenSnapshot` fora do `wmu` nas CONSULTAS lê a época e registra o leitor em dois passos (`snapshot.go:176-181`) — a auditoria fecha a corrida tomando o `wmu`; as consultas não (pré-existente, achado na validação deste ciclo); (b) fsync por grupo novo no nível PON/splitter (custo não medido); (c) `_counters` fora do isolamento de snapshot; (d) `Lookup` indexado na tabela virtual (hoje `WHERE olt = …` em contador composto é varredura dos grupos); (e) `ScanLive(snap)` não é versionado para lápides — a consulta longa pode perder uma linha lapidada durante a varredura (pré-existente; a auditoria não depende dele).
 - `CLAUDE.md`: corrigir "índices secundários fazem SET antes e CLEAR depois do commit" para "SET antes do commit; não há CLEAR (spec §5.2 do subsistema 1)"; acrescentar o contador à lista de pacotes (`internal/storage/counter`, `internal/counters`) e a invariante "contador é delta do próprio vetor, nunca de `prevPayload`; dobra antes do replay".
 - `.gitignore`: `samples/` (a amostra não é versionada, proposta §12).
 - `internal/cli/evidence_test.go:53-58`: acrescentar `docs/aceite-contadores.md` (G2 cria).

@@ -457,7 +457,7 @@ type Store struct {
 	// mesmo evento, a rotação de segmento.
 	selMu sync.RWMutex
 	// camposIndexados é o conjunto ordenado, resolvido no Open e IMUTÁVEL na
-	// vida do Store. É ele que responde Indexado e CamposIndexados, e a
+	// vida do Store. É ele que responde Indexed e CamposIndexados, e a
 	// imutabilidade é o que permite responder aos dois sem lock.
 	camposIndexados []types.FieldID
 	// chaveIndiceBuf é o buffer da chave canônica do índice por segmento,

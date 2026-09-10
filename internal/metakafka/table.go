@@ -206,8 +206,8 @@ type linha struct {
 	MarcaEm  time.Time
 }
 
-// retrato é o que UMA consulta enxerga: colhido no AbreSnapshot, IMUTÁVEL, e
-// devolvido no FechaSnapshot.
+// retrato é o que UMA consulta enxerga: colhido no OpenSnapshot, IMUTÁVEL, e
+// devolvido no CloseSnapshot.
 type retrato struct {
 	comum  comum
 	linhas map[types.RowID]linha
@@ -227,7 +227,7 @@ type fonte struct {
 	abertos   map[uint64]*retrato
 
 	// medindo é o voo único da marca d'água: uma consulta por vez fala com o
-	// broker. Ver AbreSnapshot.
+	// broker. Ver OpenSnapshot.
 	medindo atomic.Bool
 }
 
@@ -244,7 +244,7 @@ type fonte struct {
 // painel que discorda de si mesmo.
 //
 // O retrato é guardado por ÉPOCA, mintada aqui. O executor fecha o par
-// AbreSnapshot/FechaSnapshot em todos os caminhos de saída, inclusive no Open
+// OpenSnapshot/CloseSnapshot em todos os caminhos de saída, inclusive no Open
 // que falha depois de abrir.
 func (f *fonte) OpenSnapshot() types.Snapshot {
 	var inst kafka.Instantaneo

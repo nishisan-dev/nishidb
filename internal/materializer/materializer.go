@@ -35,7 +35,7 @@ type Store interface {
 	// erro: devolver nil ali faz o materializer perder o buffer e realocar a
 	// cada evento, e isso não aparece em nenhum teste de comportamento — só
 	// no gate de alocação.
-	// Estado devolve os TRÊS estados da key (§58). São três e não dois
+	// State devolve os TRÊS estados da key (§58). São três e não dois
 	// porque o stale check precisa rodar também sobre a entidade EXPIRADA:
 	// tratá-la como ausente a faria ser recriada por um evento antigo, que é
 	// a ressurreição que o tombstone existe para impedir.

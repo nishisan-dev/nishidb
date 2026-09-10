@@ -54,7 +54,7 @@ func Tabela(def counter.Definition, l Leitor) (*schema.Compiled, query.Store, er
 		return nil, nil, fmt.Errorf("contadores: %q tem %d colunas de agrupamento; a tabela aceita de 1 a %d", def.Name, len(def.Columns), maxColunasDeAgrupamento)
 	}
 	if len(def.Names) != len(def.Columns) || len(def.Types) != len(def.Columns) {
-		return nil, nil, fmt.Errorf("contadores: %q com Nomes, Tipos e Colunas de tamanhos diferentes", def.Name)
+		return nil, nil, fmt.Errorf("contadores: %q com Names, Types e Columns de tamanhos diferentes", def.Name)
 	}
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "version: 1\nname: %s\nmaterialization:\n  key:\n    field: %s\nschema:\n  include: [%s",

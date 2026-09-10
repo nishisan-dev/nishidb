@@ -165,7 +165,7 @@ aplicadas, vermelhas e revertidas.
 ## O que ficou como débito
 
 Registrados em [`debitos.md`](debitos.md) durante o ciclo: a corrida do
-`AbreSnapshot` das consultas fora do `wmu` (107, pré-existente, achado na
+`OpenSnapshot` das consultas fora do `wmu` (107, pré-existente, achado na
 validação), o fsync por grupo novo no nível de PON ou splitter (108),
 `_counters` fora do isolamento de snapshot (109), a tabela virtual sem índice
 para `WHERE olt = …` em contador composto (110) e o `ScanLive` não versionado

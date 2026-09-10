@@ -166,7 +166,7 @@ func (r *registroDeSnapshots) menorEpocaViva() uint64 { return r.menor.Load() }
 // OpenSnapshot fixa o universo da consulta: a versão, o relógio, o teto e o
 // piso.
 //
-// O par com FechaSnapshot é OBRIGATÓRIO, e é isso que muda em relação a um
+// O par com CloseSnapshot é OBRIGATÓRIO, e é isso que muda em relação a um
 // snapshot puramente de valor: enquanto ele está aberto, o writer guarda as
 // versões anteriores das linhas que atualizar, e a compaction não aposenta os
 // segmentos onde essas versões moram. Um snapshot que nunca fecha faz o

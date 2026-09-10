@@ -53,7 +53,7 @@ func (m *Materializer) preencheSlots(slots []predicate.Slot, prevPayload []byte,
 	for i := range slots {
 		slots[i].Present = false
 	}
-	// 1. Estado anterior, em uma passada; para quando os slots acabam.
+	// 1. O estado anterior, em uma passada; para quando os slots acabam.
 	m.fr.Reset(prevPayload)
 	i := 0
 	for i < len(slots) {

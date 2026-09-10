@@ -1035,7 +1035,7 @@ func (c *Compiled) FieldsByParent(parent string) []*CompiledField {
 	return out
 }
 
-// AppendChildren acrescenta a dst todas as colunas derivadas de pai — as
+// AppendChildren acrescenta a dst todas as colunas derivadas de parent — as
 // DECLARADAS por `extract` e as DESCOBERTAS por `unknownFields: include` —, e
 // devolve o slice possivelmente crescido.
 //

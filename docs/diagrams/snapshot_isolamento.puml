@@ -9,7 +9,7 @@ participant "writer\n(Put/Expira)" as w
 participant "compaction /\nretenção" as c
 
 == abertura ==
-q -> st : AbreSnapshot()
+q -> st : OpenSnapshot()
 st -> reg : abre(época, instante, piso)
 st --> q : Snapshot{Epoch, Instant,\nLimitRowID, BaseRowID}
 note right of q
@@ -63,7 +63,7 @@ note right of c
 end note
 
 == fechamento ==
-q -> st : FechaSnapshot(snap)  (no Close do iterador)
+q -> st : CloseSnapshot(snap)  (no Close do iterador)
 st -> reg : fecha(época)
 st -> jr : Prune(menor época viva)
 jr -> jr : pin liberado; heap devolvido

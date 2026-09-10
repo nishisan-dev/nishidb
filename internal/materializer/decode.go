@@ -184,9 +184,9 @@ func (m *Materializer) AoReprocessar(fn func(seguidos int64, colunas int)) { m.a
 // carimbaRelogio grava o instante da ESCRITA nas entries que o representam.
 //
 // São duas famílias e elas têm o mesmo dono: o campo de sistema `_writtenAt`
-// (schema.WriteInstantField) e as congeladas cuja origem é o relógio (`@writeTime`). O
-// Parse emitiu as duas com o instante zero; aqui elas recebem o instante de
-// verdade, uma vez só, o mesmo para o evento inteiro.
+// (schema.WriteInstantField) e as congeladas cuja origem é o relógio
+// (`@writeTime`). O Parse emitiu as duas com o instante zero; aqui elas recebem
+// o instante de verdade, uma vez só, o mesmo para o evento inteiro.
 //
 // A busca é BINÁRIA, e não uma varredura. Quando o Parse retorna, as entries
 // já estão ordenadas por FieldID e sem duplicatas, e um documento do piloto

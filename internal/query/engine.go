@@ -25,7 +25,7 @@ import (
 // lê MAIS a capability que o planner consulta.
 //
 // A união é necessária: com executor.Store sozinho o planner não teria
-// Indexado e não poderia fazer o capability check — escolheria um plano
+// Indexed e não poderia fazer o capability check — escolheria um plano
 // indexado que falharia em runtime, que é justamente o que a degradação para
 // full scan existe para evitar.
 type Store interface {

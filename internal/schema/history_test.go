@@ -758,7 +758,7 @@ func TestRecusaDaJanelaTemSentinelaPropria(t *testing.T) {
 	}
 }
 
-// Janela maior que a retenção não está ERRADA, é INÓCUA — a retenção já limita
+// A janela maior que a retenção não está ERRADA, é INÓCUA — a retenção já limita
 // antes —, e recusá-la transformaria redundância em queda de serviço. O que ela
 // ganha é um WARN nomeado, e é este predicado que a subida consulta para
 // emiti-lo.

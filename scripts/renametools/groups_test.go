@@ -60,7 +60,7 @@ func TestInterfaceGroupsDoNotAttributeInheritedMethodToEmbeddingInterface(t *tes
 	// método promovido a quem o herda por embedding, Anel roubaria a posição
 	// de Regua (bug achado na varredura do repositório real:
 	// internal/query.Store, que só embute executor.Store e planner.Store,
-	// roubava Indexado de planner.Store por satisfazer de raspão
+	// roubava Indexed de planner.Store por satisfazer de raspão
 	// internal/query/meta.Capacidades).
 	pkgs, fset, err := LoadModule("testdata/modulo", "./...")
 	if err != nil {

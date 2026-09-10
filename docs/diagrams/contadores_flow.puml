@@ -79,7 +79,7 @@ partition "Abertura" {
 partition "Auditoria (rota ADMIN)" {
   start
   :sob wmu por microssegundos:
-  AbreSnapshot + AuditSnapshot(totais, refs);
+  OpenSnapshot + AuditSnapshot(totais, refs);
   :solta o wmu;
   :enumerador próprio:
   linha com location e sem lápide

@@ -48,7 +48,7 @@ func TestIndexadoEhACapabilityQueOPlannerEsperava(t *testing.T) {
 		}
 	}
 	if s.Indexed(999) {
-		t.Fatal("Indexado de campo não declarado devia ser false")
+		t.Fatal("Indexed de campo não declarado devia ser false")
 	}
 	if got := s.CamposIndexados(); !slices.Equal(got, []types.FieldID{fldID, fldStatus, fldCounter}) {
 		t.Fatalf("CamposIndexados = %v", got)

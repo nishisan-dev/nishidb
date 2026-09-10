@@ -223,6 +223,7 @@ func (s SecuritySpec) TLS() bool {
 //
 // A iteração é na ordem do documento para que o primeiro erro seja sempre o
 // mesmo — ordem de mapa faria a mensagem variar entre execuções.
+
 // absent diz se o bloco não veio no documento. Kind zero é o nó que o
 // yaml.v3 deixa quando a chave não existe — não há sentinela melhor, porque o
 // campo é valor e não ponteiro.
