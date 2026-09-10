@@ -22,7 +22,7 @@ import (
 // registraMetricas restaura a presença-em-zero, que é a prática canônica do
 // Prometheus para séries cuja cardinalidade é conhecida de antemão.
 func TestRegistraMetricasPreRegistraAsSeisCategoriasDeEventoRuimEmZero(t *testing.T) {
-	m := registraMetricas(nil, "events")
+	m := registerMetrics(nil, "events")
 
 	amostras := m.famInvalidos.Collect()
 	vistas := make(map[string]float64, len(amostras))
@@ -82,7 +82,7 @@ func TestCadaEsperaSaiDaSuaFonteEUmaVezSo(t *testing.T) {
 		esperaDosDecodificadores = 11 * time.Second
 		esperaDoWriter           = 23 * time.Second
 	)
-	m := registraMetricas(nil, "events")
+	m := registerMetrics(nil, "events")
 	m.OlhaAFila(func() (int, int64) { return 0, 0 })
 	m.OlhaOsTempos(func() (time.Duration, time.Duration) { return 0, esperaDosDecodificadores })
 	m.OlhaAEsteira(func() int64 { return 0 }, func() time.Duration { return esperaDoWriter })

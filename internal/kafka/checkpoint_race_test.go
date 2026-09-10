@@ -86,7 +86,7 @@ func (s *storeLento) leTudo() {
 func TestCheckpointDaRevogacaoNaoCorreComOWriter(t *testing.T) {
 	st := &storeLento{demora: 2 * time.Millisecond}
 	cfg := &Config{Dataset: "eventos", Topic: "eventos", GroupID: "g", Brokers: []string{"127.0.0.1:9092"}}
-	met := registraMetricas(nil, "eventos")
+	met := registerMetrics(nil, "eventos")
 
 	commit := func(_ context.Context, off map[int32]int64) error {
 		// Percorre o mapa recebido, como o franz-go faz ao montar a requisição
@@ -97,7 +97,7 @@ func TestCheckpointDaRevogacaoNaoCorreComOWriter(t *testing.T) {
 		return nil
 	}
 
-	w := NovoWriter(cfg, nil, st, nil, nil, met, map[int32]int64{0: 0},
+	w := NewWriter(cfg, nil, st, nil, nil, met, map[int32]int64{0: 0},
 		Cadencia{Eventos: 5, Intervalo: time.Millisecond}, commit)
 
 	ctx := context.Background()

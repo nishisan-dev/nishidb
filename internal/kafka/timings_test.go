@@ -22,7 +22,7 @@ import (
 // espera não terminasse. Foi assim no incidente de 27/08/2026, em que o poller
 // ficou preso uma hora.
 func TestFilaCheiaContaEsperaDoPollerENaoDoWriter(t *testing.T) {
-	f := NovaFila(1, 1<<20)
+	f := NewQueue(1, 1<<20)
 	ctx := context.Background()
 	if err := f.Envia(ctx, &kgo.Record{Value: []byte("a")}); err != nil {
 		t.Fatal(err)
@@ -67,7 +67,7 @@ func TestFilaCheiaContaEsperaDoPollerENaoDoWriter(t *testing.T) {
 // Este acumulador virou o `decode_idle`, que é a espera SOMADA de K
 // decodificadores — daí o nome do teste ter deixado de dizer "writer".
 func TestFilaVaziaContaOciosidadeDeQuemConsomeENaoDoPoller(t *testing.T) {
-	f := NovaFila(4, 1<<20)
+	f := NewQueue(4, 1<<20)
 	ctx, cancela := context.WithTimeout(context.Background(), 40*time.Millisecond)
 	defer cancela()
 
@@ -87,7 +87,7 @@ func TestFilaVaziaContaOciosidadeDeQuemConsomeENaoDoPoller(t *testing.T) {
 // O caminho rápido não conta nada, e é o que mantém a instrumentação honesta:
 // um contador que sobe em regime não distingue mais nada.
 func TestSemEsperaNadaEContado(t *testing.T) {
-	f := NovaFila(8, 1<<20)
+	f := NewQueue(8, 1<<20)
 	ctx := context.Background()
 	for i := 0; i < 4; i++ {
 		if err := f.Envia(ctx, &kgo.Record{Value: []byte("x")}); err != nil {
@@ -121,7 +121,7 @@ func TestDespertadorNaoEEngolidoPelaFilaCheia(t *testing.T) {
 	var viuTique int
 	const rodadas = 400
 	for i := 0; i < rodadas; i++ {
-		f := NovaFila(4, 1<<20)
+		f := NewQueue(4, 1<<20)
 		if err := f.Envia(ctx, &kgo.Record{Value: []byte("x")}); err != nil {
 			t.Fatal(err)
 		}
@@ -148,7 +148,7 @@ func TestDespertadorNaoEEngolidoPelaFilaCheia(t *testing.T) {
 // derruba o processo. Foi encontrado assim, pela suíte, ao mover a barreira de
 // fim de lote para a revogação.
 func TestEnfileirarEmFilaFechadaEErroENaoPanico(t *testing.T) {
-	f := NovaFila(4, 1<<20)
+	f := NewQueue(4, 1<<20)
 	f.Fecha()
 
 	defer func() {
@@ -156,7 +156,7 @@ func TestEnfileirarEmFilaFechadaEErroENaoPanico(t *testing.T) {
 			t.Fatalf("enfileirar em fila fechada paniquei: %v", v)
 		}
 	}()
-	err := f.EnviaBarreira(context.Background(), novaBarreira())
+	err := f.EnviaBarreira(context.Background(), newBarrier())
 	if !errors.Is(err, ErrFilaFechada) {
 		t.Fatalf("EnviaBarreira devolveu %v, quer ErrFilaFechada", err)
 	}
@@ -168,8 +168,8 @@ func TestEnfileirarEmFilaFechadaEErroENaoPanico(t *testing.T) {
 func TestQuiesceSoVoltaDepoisDeDrenar(t *testing.T) {
 	st := &storeLento{demora: time.Millisecond}
 	cfg := &Config{Dataset: "eventos", Topic: "eventos", GroupID: "g", Brokers: []string{"127.0.0.1:9092"}}
-	fila := NovaFila(64, 1<<20)
-	w := NovoWriter(cfg, nil, st, fila, nil, registraMetricas(nil, "eventos"),
+	fila := NewQueue(64, 1<<20)
+	w := NewWriter(cfg, nil, st, fila, nil, registerMetrics(nil, "eventos"),
 		map[int32]int64{0: 0}, Cadencia{Eventos: 1 << 30, Intervalo: time.Hour}, nil)
 
 	// O writer é marcado como INICIADO sem que Roda rode: é a precondição que
@@ -236,8 +236,8 @@ func TestQuiesceSoVoltaDepoisDeDrenar(t *testing.T) {
 func TestQuiesceVoltaNaHoraSeOWriterNuncaSubiu(t *testing.T) {
 	cfg := &Config{Dataset: "eventos", Topic: "eventos", GroupID: "g",
 		Brokers: []string{"127.0.0.1:9092"}, MaxPollRecords: 8, QueueSize: 8, QueueBytes: 1 << 20}
-	fila := NovaFila(cfg.QueueSize, cfg.QueueBytes)
-	w := NovoWriter(cfg, nil, &storeLento{}, fila, nil, registraMetricas(nil, "eventos"),
+	fila := NewQueue(cfg.QueueSize, cfg.QueueBytes)
+	w := NewWriter(cfg, nil, &storeLento{}, fila, nil, registerMetrics(nil, "eventos"),
 		map[int32]int64{0: 0}, Cadencia{Eventos: 1 << 30, Intervalo: time.Hour}, nil)
 
 	pronto := make(chan error, 1)

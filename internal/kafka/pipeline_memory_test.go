@@ -43,7 +43,7 @@ func matDoGolden(t testing.TB) *materializer.Materializer {
 // é o que ocupa memória.
 func TestEventoGrandeNaoPrendeMemoriaNoSlot(t *testing.T) {
 	mat := matDoGolden(t)
-	e := novaEsteira(4)
+	e := newPipeline(4)
 	ctx := context.Background()
 
 	// Um documento gordo, e depois eventos minúsculos no MESMO slot.
@@ -92,15 +92,15 @@ func TestEventoGrandeNaoPrendeMemoriaNoSlot(t *testing.T) {
 func TestOLimiarPorSlotSaiDoOrcamentoDaFila(t *testing.T) {
 	cfg := &Config{MaxPollRecords: 1000, QueueBytes: 64 << 20}
 	// janela arredonda 1000 → 1024; 64 MiB / 1024 = 64 KiB.
-	if got, quero := limiarDeSlot(cfg), 64<<10; got != quero {
+	if got, quero := slotThreshold(cfg), 64<<10; got != quero {
 		t.Errorf("limiarDeSlot = %d, quero %d (%d bytes de fila / janela de %d)",
-			got, quero, cfg.QueueBytes, potenciaDeDois(cfg.MaxPollRecords))
+			got, quero, cfg.QueueBytes, powerOfTwo(cfg.MaxPollRecords))
 	}
 	// E o piso: uma fila declarada minúscula não pode transformar cada evento
 	// numa realocação. Abaixo de uma página, soltar o buffer não devolve nada
 	// ao sistema operacional.
 	pequena := &Config{MaxPollRecords: 1000, QueueBytes: 1 << 10}
-	if got := limiarDeSlot(pequena); got != paginaDoSO {
+	if got := slotThreshold(pequena); got != paginaDoSO {
 		t.Errorf("limiarDeSlot com fila minúscula = %d, quero o piso de %d", got, paginaDoSO)
 	}
 }
@@ -114,7 +114,7 @@ func TestOLimiarPorSlotSaiDoOrcamentoDaFila(t *testing.T) {
 // são o que diz que o limiar governa alguma coisa.
 func TestAbaixoDoLimiarOSlotNaoEncolhe(t *testing.T) {
 	mat := matDoGolden(t)
-	e := novaEsteira(4)
+	e := newPipeline(4)
 	ctx := context.Background()
 
 	const limiar = 64 << 10
@@ -152,7 +152,7 @@ func TestAbaixoDoLimiarOSlotNaoEncolhe(t *testing.T) {
 // parar".
 func TestOContadorDeSlotsEncolhidosAcompanhaOEncolhimento(t *testing.T) {
 	mat := matDoGolden(t)
-	e := novaEsteira(4)
+	e := newPipeline(4)
 	ctx := context.Background()
 	gordo := `{"id":"A","sev":1,"doc":{"grande":"` + strings.Repeat("x", 256<<10) + `"}}`
 

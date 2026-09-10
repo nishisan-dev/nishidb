@@ -15,7 +15,7 @@ func rec(valor string) *kgo.Record {
 
 // §128: NO unbounded queues. O gate de registros é a capacidade do channel.
 func TestFilaBloqueiaNoGateDeRegistros(t *testing.T) {
-	f := NovaFila(2, 1<<30)
+	f := NewQueue(2, 1<<30)
 	ctx := context.Background()
 	for i := 0; i < 2; i++ {
 		if err := f.Envia(ctx, rec("x")); err != nil {
@@ -33,7 +33,7 @@ func TestFilaBloqueiaNoGateDeRegistros(t *testing.T) {
 // O gate que a spec NÃO tem e o §79/§108 exigem: contar registros não é
 // unidade de memória.
 func TestFilaBloqueiaNoGateDeBytes(t *testing.T) {
-	f := NovaFila(1000, 100)
+	f := NewQueue(1000, 100)
 	ctx := context.Background()
 
 	// 100 bytes cabem exatamente.
@@ -55,7 +55,7 @@ func TestFilaBloqueiaNoGateDeBytes(t *testing.T) {
 // Sem o escape da fila vazia, um único record acima do teto nunca caberia e a
 // ingestão travaria para sempre — num deadlock que nenhuma métrica explicaria.
 func TestRecordMaiorQueOTetoPassaSozinho(t *testing.T) {
-	f := NovaFila(10, 100)
+	f := NewQueue(10, 100)
 	ctx, cancela := context.WithTimeout(context.Background(), time.Second)
 	defer cancela()
 
@@ -72,7 +72,7 @@ func TestRecordMaiorQueOTetoPassaSozinho(t *testing.T) {
 // Consumir tem de devolver o orçamento; senão a fila só estreita e o consumo
 // para depois de N eventos, sem erro nenhum.
 func TestReceberLiberaOOrcamentoDeBytes(t *testing.T) {
-	f := NovaFila(10, 100)
+	f := NewQueue(10, 100)
 	ctx, cancela := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancela()
 
@@ -93,7 +93,7 @@ func TestReceberLiberaOOrcamentoDeBytes(t *testing.T) {
 // timeout: um poller que só desbloqueia por polling ativo queima CPU e atrasa
 // o intake exatamente quando o sistema está saturado.
 func TestConsumidorAcordaOProdutorBloqueado(t *testing.T) {
-	f := NovaFila(1, 50)
+	f := NewQueue(1, 50)
 	ctx, cancela := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancela()
 
@@ -127,11 +127,11 @@ func TestConsumidorAcordaOProdutorBloqueado(t *testing.T) {
 // sinalizar, e cobrá-lo do teto tornaria a contabilidade de memória
 // dependente de quantas revogações aconteceram.
 func TestBarreiraNaoConsomeOrcamento(t *testing.T) {
-	f := NovaFila(10, 100)
+	f := NewQueue(10, 100)
 	ctx, cancela := context.WithTimeout(context.Background(), time.Second)
 	defer cancela()
 
-	b := novaBarreira()
+	b := newBarrier()
 	if err := f.EnviaBarreira(ctx, b); err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +145,7 @@ func TestBarreiraNaoConsomeOrcamento(t *testing.T) {
 }
 
 func TestFilaRespeitaCancelamento(t *testing.T) {
-	f := NovaFila(1, 10)
+	f := NewQueue(1, 10)
 	ctx, cancela := context.WithCancel(context.Background())
 	cancela()
 

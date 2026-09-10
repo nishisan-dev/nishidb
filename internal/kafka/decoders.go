@@ -34,7 +34,7 @@ type decodificadores struct {
 
 // novoPoolDeDecode monta o pool. limiar é o teto de memória retida por slot
 // acima do qual o writer encolhe os buffers ao liberá-lo.
-func novoPoolDeDecode(n int, fila *Fila, est *esteira, mat *materializer.Materializer, met *metricas, limiar int) *decodificadores {
+func newDecodePool(n int, fila *Fila, est *esteira, mat *materializer.Materializer, met *metricas, limiar int) *decodificadores {
 	return &decodificadores{fila: fila, est: est, mat: mat, met: met, n: n, limiar: limiar}
 }
 

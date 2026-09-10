@@ -47,7 +47,7 @@ func TestAoAtribuirEsperaAdmProntoAntesDeTocarAdm(t *testing.T) {
 	c := &Consumidor{
 		cfg:       &Config{Topic: "topico-teste", GroupID: "grupo-teste"},
 		log:       logging.Discard().Component("kafka").Dataset("teste"),
-		met:       registraMetricas(nil, "teste"),
+		met:       registerMetrics(nil, "teste"),
 		admPronto: make(chan struct{}),
 	}
 
@@ -113,7 +113,7 @@ func TestAjustaOffsetsEsperaOffsetsProntoAntesDeLerOMapa(t *testing.T) {
 	c := &Consumidor{
 		cfg:           &Config{Topic: "topico-teste"},
 		log:           logging.Discard().Component("kafka").Dataset("teste"),
-		met:           registraMetricas(nil, "teste"),
+		met:           registerMetrics(nil, "teste"),
 		offsetsPronto: make(chan struct{}),
 	}
 
@@ -190,7 +190,7 @@ func TestAoRevogarEsperaWProntoAntesDeLerW(t *testing.T) {
 	c := &Consumidor{
 		cfg:     &Config{Topic: "topico-teste"},
 		log:     logging.Discard().Component("kafka").Dataset("teste"),
-		met:     registraMetricas(nil, "teste"),
+		met:     registerMetrics(nil, "teste"),
 		wPronto: make(chan struct{}),
 	}
 	c.met.partAtribuidas.Set(7) // valor sentinela: só zera se aoRevogar de fato avançar até lá.
@@ -228,7 +228,7 @@ func TestAoRevogarEsperaWProntoAntesDeLerW(t *testing.T) {
 	// pelo braço do `parado`.
 	iniciado := make(chan struct{})
 	close(iniciado)
-	c.w = &Writer{fila: NovaFila(1, 1<<20), parado: parado, iniciado: iniciado}
+	c.w = &Writer{fila: NewQueue(1, 1<<20), parado: parado, iniciado: iniciado}
 	close(c.wPronto)
 
 	select {

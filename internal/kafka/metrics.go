@@ -131,7 +131,7 @@ var limitesDoApply = []float64{
 const validadeDaMarcaDagua = time.Minute
 
 // registraMetricas instala as séries do dataset.
-func registraMetricas(r *metrics.Registry, dataset string) *metricas {
+func registerMetrics(r *metrics.Registry, dataset string) *metricas {
 	if r == nil {
 		r = metrics.NewRegistry()
 	}

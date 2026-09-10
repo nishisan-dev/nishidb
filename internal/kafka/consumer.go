@@ -181,7 +181,7 @@ func Abre(ctx context.Context, cfg *Config, o Opcoes) (*Consumidor, error) {
 		log = logging.Discard()
 	}
 	log = log.Component("kafka").Dataset(cfg.Dataset)
-	met := registraMetricas(o.Metrics, cfg.Dataset)
+	met := registerMetrics(o.Metrics, cfg.Dataset)
 	// O gauge é escrito AQUI, antes de qualquer caminho de erro do Abre.
 	// A família materializa a série em zero assim que é criada, e zero nunca é
 	// um valor válido desta chave — o parse recusa 0. Um dataset cujo consumidor
@@ -236,10 +236,10 @@ func Abre(ctx context.Context, cfg *Config, o Opcoes) (*Consumidor, error) {
 		return nil, err
 	}
 
-	c.fila = NovaFila(cfg.QueueSize, cfg.QueueBytes)
+	c.fila = NewQueue(cfg.QueueSize, cfg.QueueBytes)
 	met.OlhaAFila(c.fila.Profundidade)
 	met.OlhaOsTempos(c.fila.Tempos)
-	c.w = NovoWriter(cfg, o.Mat, o.Store, c.fila, log, met, c.offsetsIniciais, o.Cadencia, c.commitNoBroker)
+	c.w = NewWriter(cfg, o.Mat, o.Store, c.fila, log, met, c.offsetsIniciais, o.Cadencia, c.commitNoBroker)
 	met.OlhaAEsteira(c.w.est.bytesRetidos, c.w.est.Ocioso)
 	log.Info("decode.workers", "decodificadores da ingestão",
 		"workers", cfg.DecodeWorkers, "janela", c.w.est.tamanho(),
@@ -270,7 +270,7 @@ func (c *Consumidor) resolveOrigemEPosicao(ctx context.Context, st Store) error 
 			return fmt.Errorf("%w: %s mudou (persistido %q, configurado %q); "+
 				"use `nishidb offsets` para reposicionar deliberadamente",
 				ErrOrigemDivergente, campo,
-				valorDoCampo(persistidos.Source, campo), valorDoCampo(c.origem, campo))
+				fieldValue(persistidos.Source, campo), fieldValue(c.origem, campo))
 		}
 		c.offsetsIniciais = persistidos.Offsets
 
@@ -316,7 +316,7 @@ func (c *Consumidor) resolveOrigemEPosicao(ctx context.Context, st Store) error 
 	return nil
 }
 
-func valorDoCampo(o checkpoint.Source, campo string) string {
+func fieldValue(o checkpoint.Source, campo string) string {
 	switch campo {
 	case "topic":
 		return o.Topic
@@ -519,7 +519,7 @@ func (c *Consumidor) Roda(ctx context.Context) error {
 	// writer esperando num anel que ninguém alimenta até a última goroutine
 	// nascer — inofensivo, mas o encerramento tem ordem oposta e simétrica, e
 	// escrever as duas na mesma direção é o que torna a simetria legível.
-	pool := novoPoolDeDecode(c.cfg.DecodeWorkers, c.fila, c.w.est, c.w.mat, c.met, c.w.limiarDeEncolhimento)
+	pool := newDecodePool(c.cfg.DecodeWorkers, c.fila, c.w.est, c.w.mat, c.met, c.w.limiarDeEncolhimento)
 	esperaDecode := pool.Sobe(ctx)
 
 	erroWriter := make(chan error, 1)

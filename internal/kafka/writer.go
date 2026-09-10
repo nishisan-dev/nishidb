@@ -162,7 +162,7 @@ type Desfecho struct {
 }
 
 // NovoWriter monta o writer.
-func NovoWriter(cfg *Config, mat *materializer.Materializer, st Store, fila *Fila,
+func NewWriter(cfg *Config, mat *materializer.Materializer, st Store, fila *Fila,
 	log *logging.Logger, met *metricas, offsets map[int32]int64, cad Cadencia,
 	commit func(context.Context, map[int32]int64) error,
 ) *Writer {
@@ -175,8 +175,8 @@ func NovoWriter(cfg *Config, mat *materializer.Materializer, st Store, fila *Fil
 	}
 	return &Writer{
 		cfg: cfg, mat: mat, store: st, fila: fila,
-		est:                  novaEsteira(cfg.MaxPollRecords),
-		limiarDeEncolhimento: limiarDeSlot(cfg),
+		est:                  newPipeline(cfg.MaxPollRecords),
+		limiarDeEncolhimento: slotThreshold(cfg),
 		log:                  log.Component("kafka").Dataset(cfg.Dataset),
 		met:                  met,
 		origem:               cfg.Source(),
@@ -426,7 +426,7 @@ func (w *Writer) Quiesce(ctx context.Context) error {
 		return nil
 	}
 
-	b := novaBarreira()
+	b := newBarrier()
 	if err := w.fila.EnviaBarreira(ctx, b); err != nil {
 		if errors.Is(err, ErrFilaFechada) {
 			// O consumidor está encerrando: o writer drena o que sobrou e faz
@@ -450,7 +450,7 @@ func (w *Writer) Quiesce(ctx context.Context) error {
 
 func (w *Writer) talvezCheckpoint(ctx context.Context) error {
 	w.posMu.Lock()
-	precisa := precisaCheckpoint(w.cad, w.desdeCP, w.ultimoCP)
+	precisa := needsCheckpoint(w.cad, w.desdeCP, w.ultimoCP)
 	w.posMu.Unlock()
 	if !precisa {
 		return nil
@@ -528,7 +528,7 @@ func (w *Writer) finaliza(ctx context.Context) error {
 // commitar, e um dataset parado reescreveria o manifest e daria fsync a cada
 // intervalo, para sempre. Pelo caminho do evento a guarda é redundante —
 // avanca() sempre incrementa antes —, e é por isso que ela não existia.
-func precisaCheckpoint(c Cadencia, desde int64, ultimo time.Time) bool {
+func needsCheckpoint(c Cadencia, desde int64, ultimo time.Time) bool {
 	if c.Eventos <= 0 || desde <= 0 {
 		return false
 	}

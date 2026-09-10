@@ -81,7 +81,7 @@ func TestPrecisaCheckpointDecideOsDoisGatilhos(t *testing.T) {
 
 	for _, c := range casos {
 		t.Run(c.nome, func(t *testing.T) {
-			if got := precisaCheckpoint(c.cad, c.desde, c.ultimo); got != c.quer {
+			if got := needsCheckpoint(c.cad, c.desde, c.ultimo); got != c.quer {
 				t.Errorf("precisaCheckpoint(%+v, desde=%d, ocioso há %s) = %v, quer %v",
 					c.cad, c.desde, time.Since(c.ultimo).Round(time.Millisecond), got, c.quer)
 			}

@@ -143,15 +143,15 @@ func rodaPipeline(t *testing.T, workers int, eventos []string) retratoDoDataset 
 		QueueSize: 64, QueueBytes: 1 << 20, DecodeWorkers: workers,
 		InvalidEventPolicy: schema.InvalidEventLogAndSkip,
 	}
-	fila := NovaFila(cfg.QueueSize, cfg.QueueBytes)
-	met := registraMetricas(nil, "eventos")
-	w := NovoWriter(cfg, mat, storeGolden{}, fila, nil, met,
+	fila := NewQueue(cfg.QueueSize, cfg.QueueBytes)
+	met := registerMetrics(nil, "eventos")
+	w := NewWriter(cfg, mat, storeGolden{}, fila, nil, met,
 		map[int32]int64{0: 0}, Cadencia{Eventos: 1 << 30, Intervalo: time.Hour}, nil)
 
 	ctx, cancela := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancela()
 
-	pool := novoPoolDeDecode(workers, fila, w.est, mat, met, w.limiarDeEncolhimento)
+	pool := newDecodePool(workers, fila, w.est, mat, met, w.limiarDeEncolhimento)
 	esperaDecode := pool.Sobe(ctx)
 	writerPronto := make(chan error, 1)
 	go func() { writerPronto <- w.Roda(ctx) }()

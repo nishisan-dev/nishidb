@@ -57,14 +57,14 @@ func BenchmarkDecodeWorkers(b *testing.B) {
 				DecodeWorkers:      workers,
 				InvalidEventPolicy: schema.InvalidEventLogAndSkip,
 			}
-			fila := NovaFila(cfg.QueueSize, cfg.QueueBytes)
-			met := registraMetricas(nil, "eventos")
-			w := NovoWriter(cfg, mat, storeGolden{}, fila, nil, met,
+			fila := NewQueue(cfg.QueueSize, cfg.QueueBytes)
+			met := registerMetrics(nil, "eventos")
+			w := NewWriter(cfg, mat, storeGolden{}, fila, nil, met,
 				map[int32]int64{0: 0}, Cadencia{Eventos: 1 << 30, Intervalo: time.Hour}, nil)
 
 			ctx, cancela := context.WithCancel(context.Background())
 			defer cancela()
-			pool := novoPoolDeDecode(workers, fila, w.est, mat, met, w.limiarDeEncolhimento)
+			pool := newDecodePool(workers, fila, w.est, mat, met, w.limiarDeEncolhimento)
 			esperaDecode := pool.Sobe(ctx)
 			pronto := make(chan error, 1)
 			go func() { pronto <- w.Roda(ctx) }()

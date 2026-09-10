@@ -26,7 +26,7 @@ import (
 // offsets. Medir avanca inteiro contaria a escrita no mapa, que é do writer e
 // não da métrica.
 func TestPublicarPosicaoNaoAloca(t *testing.T) {
-	m := registraMetricas(nil, "eventos")
+	m := registerMetrics(nil, "eventos")
 	// Warm-up: a criação do slot é uma vez por partição, não por evento, e é
 	// ela que aloca de propósito.
 	for p := int32(0); p < 4; p++ {

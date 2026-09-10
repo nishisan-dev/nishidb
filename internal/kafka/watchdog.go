@@ -36,7 +36,7 @@ const prazoDaConsultaDeLag = 10 * time.Second
 // intervaloDaVigia é de quanto em quanto tempo o watchdog olha. A janela de
 // decisão é o WatchdogTimeout; este é só o passo da amostragem, e um quarto da
 // janela dá quatro chances de ver o progresso antes de concluir que não houve.
-func intervaloDaVigia(janela time.Duration) time.Duration {
+func watchdogInterval(janela time.Duration) time.Duration {
 	if p := janela / 4; p > time.Second {
 		return p
 	}
@@ -77,7 +77,7 @@ func (c *Consumidor) vigia(ctx context.Context, janela time.Duration) error {
 		<-ctx.Done()
 		return nil
 	}
-	t := time.NewTicker(intervaloDaVigia(janela))
+	t := time.NewTicker(watchdogInterval(janela))
 	defer t.Stop()
 
 	v := &vigilante{janela: janela, ultimoProgresso: time.Now(), eventos: c.met.eventos.Value()}

@@ -50,7 +50,7 @@ type barreira struct {
 	err    error
 }
 
-func novaBarreira() *barreira { return &barreira{pronto: make(chan struct{})} }
+func newBarrier() *barreira { return &barreira{pronto: make(chan struct{})} }
 
 // conclui libera quem espera. Só o writer chama, uma vez.
 func (b *barreira) conclui(err error) {
@@ -133,7 +133,7 @@ var ErrFilaFechada = errors.New("kafka: fila encerrada")
 
 // marcaEspera registra o início de uma espera e devolve a função que a fecha,
 // somando o trecho ao acumulado.
-func marcaEspera(inicio, acumulado *atomic.Int64) func() {
+func markWait(inicio, acumulado *atomic.Int64) func() {
 	comeco := time.Now()
 	inicio.Store(comeco.UnixNano())
 	return func() {
@@ -143,7 +143,7 @@ func marcaEspera(inicio, acumulado *atomic.Int64) func() {
 }
 
 // emCurso é o trecho da espera que ainda não terminou, no instante da leitura.
-func emCurso(inicio *atomic.Int64) int64 {
+func inProgress(inicio *atomic.Int64) int64 {
 	t := inicio.Load()
 	if t == 0 {
 		return 0
@@ -155,7 +155,7 @@ func emCurso(inicio *atomic.Int64) int64 {
 }
 
 // NovaFila constrói a fila com os dois tetos.
-func NovaFila(registros int, maxBytes int64) *Fila {
+func NewQueue(registros int, maxBytes int64) *Fila {
 	return &Fila{
 		ch:       make(chan Item, registros),
 		maxBytes: maxBytes,
@@ -183,7 +183,7 @@ func (f *Fila) Envia(ctx context.Context, r *kgo.Record) error {
 		return nil
 	default:
 	}
-	fecha := marcaEspera(&f.desdeBloq, &f.bloqueado)
+	fecha := markWait(&f.desdeBloq, &f.bloqueado)
 	select {
 	case f.ch <- it:
 		fecha()
@@ -238,7 +238,7 @@ func (f *Fila) reserva(ctx context.Context, n int64) error {
 		}
 		f.mu.Unlock()
 		// Só aqui houve espera de verdade: o gate de bytes recusou.
-		fecha := marcaEspera(&f.desdeBloq, &f.bloqueado)
+		fecha := markWait(&f.desdeBloq, &f.bloqueado)
 		select {
 		case <-f.espera:
 			fecha()
@@ -307,7 +307,7 @@ func (f *Fila) recebeOuAcorda(ctx context.Context, acorda <-chan time.Time) (Ite
 	default:
 	}
 	// Nada pronto: daqui em diante o writer está ocioso de verdade.
-	fecha := marcaEspera(&f.desdeOcio, &f.ocioso)
+	fecha := markWait(&f.desdeOcio, &f.ocioso)
 	select {
 	case it, ok := <-f.ch:
 		fecha()
@@ -330,8 +330,8 @@ func (f *Fila) recebeOuAcorda(ctx context.Context, acorda <-chan time.Time) (Ite
 // Somar o trecho em curso é o que torna a série útil no caso que interessa: um
 // lado preso agora aparece agora, e não só quando (ou se) ele destravar.
 func (f *Fila) Tempos() (bloqueado, ocioso time.Duration) {
-	return time.Duration(f.bloqueado.Load() + emCurso(&f.desdeBloq)),
-		time.Duration(f.ocioso.Load() + emCurso(&f.desdeOcio))
+	return time.Duration(f.bloqueado.Load() + inProgress(&f.desdeBloq)),
+		time.Duration(f.ocioso.Load() + inProgress(&f.desdeOcio))
 }
 
 // Fecha encerra a fila. Só o produtor pode chamar.

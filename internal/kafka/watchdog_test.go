@@ -100,10 +100,10 @@ func TestOReinicioImpedeQueAJanelaVelhaContamineOProximoVeredito(t *testing.T) {
 }
 
 func TestIntervaloDaVigiaNuncaEhMenorQueUmSegundo(t *testing.T) {
-	if got := intervaloDaVigia(10 * time.Second); got != 2500*time.Millisecond {
+	if got := watchdogInterval(10 * time.Second); got != 2500*time.Millisecond {
 		t.Errorf("janela de 10s -> passo %s, quer 2.5s", got)
 	}
-	if got := intervaloDaVigia(2 * time.Second); got != time.Second {
+	if got := watchdogInterval(2 * time.Second); got != time.Second {
 		t.Errorf("janela curta -> passo %s, quer 1s", got)
 	}
 }

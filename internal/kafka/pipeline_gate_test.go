@@ -25,7 +25,7 @@ import (
 // e o próximo decode realoca, então medir com um limiar apertado mediria o
 // churn do trim, não o caminho quente.
 func TestEsteiraNaoAlocaNoCaminhoQuente(t *testing.T) {
-	e := novaEsteira(64)
+	e := newPipeline(64)
 	ctx := context.Background()
 	rec := &kgo.Record{Partition: 0, Offset: 0, Value: []byte(`{"id":"A"}`)}
 	seq := int64(0)

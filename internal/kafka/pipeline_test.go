@@ -21,7 +21,7 @@ import (
 // A publicação é feita de trás para frente de propósito: é o pior caso, e o que
 // um anel quebrado entregaria invertido.
 func TestAEsteiraEntregaEmOrdemDeSeq(t *testing.T) {
-	e := novaEsteira(8)
+	e := newPipeline(8)
 	ctx := context.Background()
 
 	const n = 8
@@ -51,7 +51,7 @@ func TestAEsteiraEntregaEmOrdemDeSeq(t *testing.T) {
 // o slot de um evento ainda não aplicado, e o writer aplicaria o evento errado
 // sem que nada acusasse.
 func TestAJanelaSeguraQuemSeAdianta(t *testing.T) {
-	e := novaEsteira(2) // janela 2: seq 2 só cabe depois de o writer passar do 0
+	e := newPipeline(2) // janela 2: seq 2 só cabe depois de o writer passar do 0
 
 	for seq := int64(0); seq < 2; seq++ {
 		e.reserva(seq)
@@ -91,7 +91,7 @@ func TestAJanelaSeguraQuemSeAdianta(t *testing.T) {
 // pegam seq fora de ordem de propósito e dormem tempos diferentes.
 func TestEsteiraComKDecodificadoresPreservaAOrdem(t *testing.T) {
 	const n = 512
-	e := novaEsteira(64)
+	e := newPipeline(64)
 	ctx := context.Background()
 
 	vistos := make([]int64, 0, n)
@@ -156,7 +156,7 @@ func TestEsteiraComKDecodificadoresPreservaAOrdem(t *testing.T) {
 // indistinguível de um decode em curso —, e quem espera vaga precisa ser
 // destravado quando o writer vai embora, ou o encerramento nunca termina.
 func TestEncerramentoDrenaTudoENaoTrava(t *testing.T) {
-	e := novaEsteira(16)
+	e := newPipeline(16)
 	ctx := context.Background()
 
 	for seq := int64(0); seq < 8; seq++ {
@@ -179,7 +179,7 @@ func TestEncerramentoDrenaTudoENaoTrava(t *testing.T) {
 	}
 
 	// E o outro lado: quem espera vaga com o writer já fora.
-	e2 := novaEsteira(1)
+	e2 := newPipeline(1)
 	e2.reserva(0)
 	e2.publica(0, &kgo.Record{}, nil)
 	saiu := make(chan bool, 1)
@@ -210,8 +210,8 @@ func TestEncerramentoDrenaTudoENaoTrava(t *testing.T) {
 // docs/operacao-kafka.md compara `rate()` com 1. Pior: a espera do writer, que é
 // a metade que decide se ele é o gargalo, deixaria de ser medida.
 func TestAOciosidadeDoWriterSaiDaEsteiraENaoDaFila(t *testing.T) {
-	e := novaEsteira(4)
-	f := NovaFila(4, 1<<20)
+	e := newPipeline(4)
+	f := NewQueue(4, 1<<20)
 
 	if d := e.Ocioso(); d != 0 {
 		t.Fatalf("esteira nasceu com %v de ociosidade", d)

@@ -115,8 +115,8 @@ type slot struct {
 // de ENTRADA, que existe para absorver rajada, e não pelo trabalho em voo, que
 // é o que o anel de fato guarda. Um lote de poll é o que o pipeline processa de
 // uma vez.
-func novaEsteira(janela int) *esteira {
-	n := potenciaDeDois(janela)
+func newPipeline(janela int) *esteira {
+	n := powerOfTwo(janela)
 	e := &esteira{
 		slots:  make([]slot, n),
 		mask:   n - 1,
@@ -205,7 +205,7 @@ func (e *esteira) consome(ctx context.Context, acorda <-chan time.Time) (*slot, 
 		// acima já não achou trabalho. O relógio só é lido QUANDO HOUVE espera,
 		// como na Fila — um time.Now() por evento no caminho rápido seria
 		// instrumentação mudando o que ela mede.
-		fecha := marcaEspera(&e.desdeOcio, &e.ocioso)
+		fecha := markWait(&e.desdeOcio, &e.ocioso)
 		select {
 		case <-e.pronto:
 			fecha()
@@ -266,7 +266,7 @@ func (e *esteira) bytesRetidos() int64 {
 // Ocioso é o tempo que o writer passou esperando trabalho, INCLUINDO a espera
 // que ainda está em curso.
 func (e *esteira) Ocioso() time.Duration {
-	return time.Duration(e.ocioso.Load() + emCurso(&e.desdeOcio))
+	return time.Duration(e.ocioso.Load() + inProgress(&e.desdeOcio))
 }
 
 // SemMaisEventos declara que nenhum decodificador vai publicar de novo.
@@ -314,7 +314,7 @@ const janelaMaxima = 1 << 16
 
 // potenciaDeDois arredonda a janela para cima até a potência de dois, limitada
 // a janelaMaxima.
-func potenciaDeDois(janela int) int64 {
+func powerOfTwo(janela int) int64 {
 	if janela >= janelaMaxima {
 		return janelaMaxima
 	}
@@ -361,8 +361,8 @@ const paginaDoSO = 4096
 //
 // O piso de uma página impede que uma fila declarada pequena transforme cada
 // evento numa realocação.
-func limiarDeSlot(cfg *Config) int {
-	janela := potenciaDeDois(cfg.MaxPollRecords)
+func slotThreshold(cfg *Config) int {
+	janela := powerOfTwo(cfg.MaxPollRecords)
 	limiar := cfg.QueueBytes / janela
 	if limiar < paginaDoSO {
 		return paginaDoSO

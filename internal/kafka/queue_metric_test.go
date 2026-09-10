@@ -31,7 +31,7 @@ func scrape(t *testing.T, r *metrics.Registry) string {
 // scrapes SEM que nada do consumidor rode.
 func TestProfundidadeDaFilaNaoCongelaQuandoOPollerPara(t *testing.T) {
 	r := metrics.NewRegistry()
-	met := registraMetricas(r, "events")
+	met := registerMetrics(r, "events")
 
 	// Nenhuma fonte instalada: o dataset sem consumidor Kafka não tem fila, e
 	// publicar zero afirmaria que existe uma e está vazia.
@@ -62,8 +62,8 @@ func TestProfundidadeDaFilaNaoCongelaQuandoOPollerPara(t *testing.T) {
 // está ligado ao objeto que o writer drena.
 func TestOColetorLeAFilaDeVerdade(t *testing.T) {
 	r := metrics.NewRegistry()
-	met := registraMetricas(r, "events")
-	f := NovaFila(8, 1<<20)
+	met := registerMetrics(r, "events")
+	f := NewQueue(8, 1<<20)
 	met.OlhaAFila(f.Profundidade)
 
 	if s := scrape(t, r); !strings.Contains(s, `nishidb_kafka_queue_depth{dataset="events"} 0`) {
