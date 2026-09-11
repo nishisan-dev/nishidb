@@ -294,9 +294,13 @@ type Compiled struct {
 	Name string
 	// SchemaName é o schema declarado pelo dataset (DatasetSpec.SchemaName),
 	// copiado para cá porque depois da subida o motor de consulta só carrega o
-	// Compiled: quem monta o catálogo das tabelas responde no caminho de uma
-	// requisição e não pode reabrir o YAML para descobrir em que schema a
-	// tabela vive.
+	// Compiled — a DatasetSpec fica para trás, e reabrir o YAML para descobrir
+	// em que schema a tabela vive seria a estrutura errada para o caminho de
+	// uma requisição.
+	//
+	// Nenhum leitor de produção existe AINDA: a cópia é a preparação para o
+	// catálogo das tabelas, que é quem vai lê-la. Hoje quem a exercita são os
+	// testes desta chave.
 	//
 	// Ele viaja para as tabelas IRMÃS pelo mesmo caminho da spec: a histórica
 	// nasce de DeriveHistory, que o herda, porque a irmã é outra tabela do

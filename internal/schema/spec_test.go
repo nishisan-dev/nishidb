@@ -1,6 +1,8 @@
 package schema
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -292,6 +294,12 @@ schema:
       type: string
 `
 
+// O schema é o container de tudo que o dataset publica — a tabela base, os
+// contadores e as de meta —, e sem ele a árvore do cliente SQL não tem onde
+// pendurar as tabelas. Adivinhar um default reintroduziria a schema nula que
+// esta mudança veio tirar, então a subida recusa; e a recusa nomeia a chave e
+// mostra um exemplo, porque recusa que não ensina a correção só transfere o
+// trabalho para quem lê o log.
 // O exemplo é conferido ALIMENTANDO-O DE VOLTA ao Parse, e não procurando a
 // palavra "exemplo" na mensagem: procurar a palavra deixaria passar um
 // "sem exemplo disponível", que é exatamente a degradação contra a qual o
@@ -332,6 +340,44 @@ func betweenBackticks(msg string) string {
 		return ""
 	}
 	return rest[:closed]
+}
+
+// O sentinela das tabelas virtuais mora dentro da faixa reservada pelo prefixo
+// "_" justamente para não poder ser confundido com um schema de usuário. O
+// validate precisa aceitá-lo, porque as quatro specs sintéticas atravessam o
+// mesmo caminho; quem fecha o outro lado é Load, e é ele que este teste
+// exercita — sem a recusa, um YAML de dataset publicaria suas tabelas no
+// schema que o produto usa como marca de "isto não é dado de ninguém".
+func TestArquivoDeDatasetRecusaOSchemaReservadoDasTabelasVirtuais(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "servicos.yaml")
+	yml := "version: 1\nname: servicos\nschemaName: " + SyntheticSchemaName + "\n" + minimalMaterialization
+	if err := os.WriteFile(path, []byte(yml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path, BuiltinDefaults)
+	if err == nil {
+		t.Fatalf("arquivo de dataset com schemaName %q tem de ser recusado", SyntheticSchemaName)
+	}
+	if !strings.Contains(err.Error(), SyntheticSchemaName) {
+		t.Errorf("a mensagem não nomeia o valor reservado: %v", err)
+	}
+}
+
+// A contrapartida do teste acima: a spec sintética montada em código continua
+// atravessando o Parse. Se a exceção ao prefixo "_" cair, as quatro tabelas
+// virtuais param de subir — e este teste é quem diz isso em uma linha, em vez
+// de espalhar a falha por quatro pacotes.
+func TestSpecSinteticaAtravessaAValidacaoComOSchemaReservado(t *testing.T) {
+	spec, err := Parse([]byte("version: 1\nname: servicos\nschemaName: "+SyntheticSchemaName+"\n"+minimalMaterialization), BuiltinDefaults)
+	if err != nil {
+		t.Fatalf("a spec sintética tem de passar na validação: %v", err)
+	}
+	if spec.SchemaName != SyntheticSchemaName {
+		t.Fatalf("SchemaName = %q, quer %q", spec.SchemaName, SyntheticSchemaName)
+	}
+	if !strings.HasPrefix(SyntheticSchemaName, "_") {
+		t.Fatalf("SyntheticSchemaName = %q: sem o prefixo reservado, o sentinela vira um schemaName que um dataset de usuário também pode declarar", SyntheticSchemaName)
+	}
 }
 
 // As quatro grafias recusadas são as quatro formas de o schema deixar de ser

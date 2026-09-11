@@ -26,13 +26,31 @@ var ErrInvalidSpec = errors.New("materialization spec inválida")
 // mesmo Parse/Compile de um dataset de verdade em vez de terem um caminho
 // próprio de validação.
 //
-// O valor não é lido por ninguém: no catálogo, a tabela virtual aparece no
-// schema do DATASET a que pertence — que é quem declarou um —, e não no da
-// spec que a descreve. Ele existe porque a obrigatoriedade do schemaName vale
-// para todas as specs, sem exceção que abriria buraco; e é UMA constante
-// porque três literais soltos em três pacotes viram três valores diferentes na
-// primeira vez que alguém mexer num deles.
-const SyntheticSchemaName = "virtual"
+// Ela existe porque a obrigatoriedade do schemaName vale para todas as specs,
+// sem exceção que abriria buraco; e é UMA constante porque três literais
+// soltos em três pacotes viram três valores diferentes na primeira vez que
+// alguém mexer num deles.
+//
+// # POR QUE O PREFIXO "_"
+//
+// Ninguém LÊ este valor hoje, e é justamente por isso que ele não pode ser um
+// nome que um dataset de usuário também poderia declarar: sentinela que se
+// confunde com dado legítimo não se denuncia quando vaza — ela aparece como um
+// schema plausível e ninguém desconfia. O prefixo "_" é o que validate recusa
+// para todo schemaName vindo de YAML, e esta constante é a ÚNICA exceção a
+// essa recusa; Load, que é a porta por onde entra todo dataset de arquivo,
+// recusa o valor explicitamente. As duas guardas juntas dizem que nenhuma spec
+// de usuário pode carregar este schema, e que encontrá-lo fora das quatro
+// specs sintéticas é bug, não configuração.
+//
+// # O QUE AINDA NÃO EXISTE
+//
+// Não há catálogo. Quando ele existir (Task 5 de
+// `planning/schema-declarado-e-catalogo-jdbc-plano.md`), a tabela virtual
+// aparecerá no schema do DATASET a que pertence — que é quem declarou um —, e
+// não no da spec que a descreve; é aí que este valor deixa de ser apenas
+// aceito pela validação e passa a ser sobrescrito na montagem da árvore.
+const SyntheticSchemaName = "_virtual"
 
 // DatasetSpec é a spec validada, com defaults aplicados.
 type DatasetSpec struct {
@@ -43,10 +61,15 @@ type DatasetSpec struct {
 	// default faria `servicos.servicos`, e a ausência faria schema nula na
 	// árvore do cliente SQL. As duas foram olhadas e recusadas no desenho.
 	//
-	// Ele é o que torna a colisão de nomes irrepresentável em vez de
-	// detectada: dentro do schema, a tabela base, os contadores e as de meta
-	// dividem um espaço de nomes, e o prefixo "_" reservado é o que separa o
-	// que é do motor do que é do dado.
+	// HOJE o campo é declarado, validado e copiado para o Compiled, e nada
+	// além disso: nenhum caminho de consulta ou de ingestão o lê. O que a
+	// validação já estabelece é a gramática (`[a-z0-9_]+`) e a reserva do
+	// prefixo "_" — que é o que separa o que é do motor do que é do dado.
+	//
+	// O que ele AINDA NÃO faz, e é o destino desta chave: tornar a colisão de
+	// nomes irrepresentável em vez de detectada. Isso depende do catálogo e da
+	// unicidade do schema entre datasets, que ainda não existem; até lá, dois
+	// datasets podem declarar o mesmo schema e a subida aceita.
 	SchemaName      string
 	Source          SourceSpec
 	Errors          ErrorsSpec
@@ -339,6 +362,12 @@ type Defaults struct {
 var BuiltinDefaults = Defaults{MaxRows: 100000, Timeout: 30 * time.Second}
 
 // Load lê e valida uma spec de um arquivo YAML.
+//
+// É a porta por onde entra todo dataset que vem de arquivo — o servidor, a CLI
+// e o benchmark passam por aqui —, e por isso é aqui que mora a recusa do
+// SyntheticSchemaName: validate precisa aceitá-lo, porque as specs sintéticas
+// das tabelas virtuais atravessam o mesmo caminho, mas nada que venha de um
+// YAML de usuário pode carregar o sentinela do produto.
 func Load(path string, d Defaults) (*DatasetSpec, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -347,6 +376,11 @@ func Load(path string, d Defaults) (*DatasetSpec, error) {
 	s, err := Parse(data, d)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	if s.SchemaName == SyntheticSchemaName {
+		return nil, fmt.Errorf("%s: %w", path, specErrf(
+			"schemaName %q é reservado às tabelas virtuais do produto e não pode ser declarado por um dataset; escolha outro nome",
+			SyntheticSchemaName))
 	}
 	return s, nil
 }
@@ -732,7 +766,14 @@ func validate(raw *rawSpec, defaults Defaults) (*DatasetSpec, error) {
 	// moram no schema com o "_" na frente (`telecom._fields`), e um schema que
 	// pudesse se chamar `_meta` disputaria o nome com o espaço de nome do
 	// produto.
-	if strings.HasPrefix(raw.SchemaName, "_") {
+	//
+	// A ÚNICA exceção é SyntheticSchemaName, e ela é o motivo de o sentinela
+	// das tabelas virtuais morar dentro da faixa reservada: as quatro specs
+	// sintéticas atravessam este mesmo validate, e um sentinela fora da faixa
+	// seria um nome que qualquer dataset de usuário também poderia declarar.
+	// Quem fecha o outro lado é Load: arquivo de dataset não passa por aqui
+	// com este valor.
+	if strings.HasPrefix(raw.SchemaName, "_") && raw.SchemaName != SyntheticSchemaName {
 		return nil, specErrf(
 			"schemaName %q: o prefixo \"_\" é reservado aos espaços de nome do produto (_meta, %s); escolha outro nome",
 			raw.SchemaName, CountersNamespace)
