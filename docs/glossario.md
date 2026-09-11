@@ -166,6 +166,9 @@ inglês correspondente.
 | paridade | parity | internal/query/executor/ndjson.go |
 | comportamento | behavior | internal/config/config.go |
 | chave-texto | textkey | internal/storage/counter/textkey.go |
+| molde (o formato declarado do `groupKey`) | format | internal/keyformat |
+| marcador (o `{coluna}` dentro do molde) | placeholder | internal/keyformat |
+| literal (o texto entre dois marcadores) | literal | internal/keyformat |
 | capacidades | capabilities | internal/server/auth.go |
 | consumido | consumed | internal/jsonp/jsonp.go |
 | contado | counted | internal/cli/loss_test.go |

@@ -2221,7 +2221,7 @@ instante em que o grupo esvaziou não é persistido).
 
 **A tabela virtual.** `_counters.<nome>` é um schema sintético compilado do
 mesmo YAML de um dataset de verdade, como o `_meta`, com a key `groupKey` (o
-texto canônico do grupo — a key da v1 é uma coluna string única, e um
+texto do grupo — a key da v1 é uma coluna string única, e um
 `groupBy` composto não tem coluna que identifique a linha), as colunas do
 `groupBy` abertas e tipadas, e `total`. Diferente do `_meta`, ela é
 **registrada no motor** sob o dataset e corre pelo pipeline inteiro — planner
@@ -2233,7 +2233,26 @@ registrada sob o dataset — uma linha por contador, com a definição (`name`,
 `groupBy`, `condition`) e o retrato vivo de `EstatisticasOfCounters`
 (`rows`, `total`, `groups`, `maxGroups`, `retired`, `refused`, `orphans`,
 `bytes`, `auditDivergent`, `auditAt`, os dois últimos NULL até a primeira
-auditoria).
+auditoria), mais `keyFormat`, o molde efetivo da key.
+
+**O texto do grupo é derivado, nunca guardado.** O que vai a disco é a chave
+composta; `groupKey` nasce em `internal/keyformat` na abertura, para todos os
+grupos, e a cada grupo novo — a tabela depois lê o texto pronto, e não
+renderiza por linha. Duas consequências caem daí. A primeira é que trocar o
+molde (`keyFormat` no bloco `counters:`) **não reconstrói** o contador: ele
+fica fora do manifest e da comparação que decide adotar ou reconstruir, pelo
+mesmo critério do `maxGroups` — decide como o grupo é escrito, não o que foi
+contado. Quem avisa que mudou é o log de subida, que sai com o molde efetivo.
+A segunda é que a não-ambiguidade é responsabilidade do molde: `groupKey` é a
+key, e a busca por ela tem de identificar UM grupo. As recusas de
+`keyformat.Parse` (toda coluna do `groupBy` exatamente uma vez, nenhum par de
+marcadores colados, nenhum dígito ou `-` logo depois de um `int64`, nenhum
+`\` em literal) mais o escape do primeiro caractere do literal seguinte fazem
+o texto ter uma leitura única da esquerda para a direita. Embaixo disso há uma
+rede: um texto que colidisse com o de outro grupo vivo é recusado ANTES do
+`Intern`, porque o dicionário fsynca a chave antes de devolver o id e o id
+nunca é reemitido — uma chave colidente que chegasse ao disco faria toda
+abertura seguinte falhar.
 Ela mora em `internal/counters`, não no pacote `meta`, porque o `meta`
 descreve o dataset pela definição estática e não conhece o storage; o motor
 manda `_meta.fields` para o `meta` e qualquer outra tabela do `_meta` para o
