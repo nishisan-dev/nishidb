@@ -34,6 +34,12 @@ func TestTextoDaChaveEhGolden(t *testing.T) {
 		{"barra vertical escapada", []types.Value{str("a|b"), i64(1)}, `a\|b|1`},
 		{"barra invertida escapada", []types.Value{str(`x\y`)}, `x\\y`},
 		{"string vazia", []types.Value{str(""), i64(2)}, "|2"},
+		// O ÚLTIMO componente também escapa a barra vertical. Os seis casos
+		// acima passam tanto com esta regra quanto sem ela — nenhum tem string
+		// com `|` na última posição —, e por isso não provam nada sobre ela.
+		// Este prova: é o caso que fica vermelho quando o escape passa a
+		// proteger só a fronteira que existe.
+		{"barra vertical no último componente", []types.Value{str("a"), str("b|c")}, `a|b\|c`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
