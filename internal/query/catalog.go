@@ -38,7 +38,9 @@ type TableInfo struct {
 	// quem precisar montar o atalho de uma view — o /v1/metadata e a
 	// `_meta.tables` — não teria como chegar a `_counters.por_olt` sabendo
 	// apenas `telecom` e `por_olt`. O par (Schema, Name) é o OUTRO endereço, e
-	// esse o FROM aceita direto.
+	// o FROM o aceita direto QUANDO o Schema é o declarado pelo dataset; nas
+	// linhas do `_meta` o atalho é o único endereço que existe (ver o godoc do
+	// Catalog).
 	Namespace string
 	Kind      TableKind
 	// Description é o texto que o cliente mostra ao lado da tabela. Hoje sai
@@ -73,16 +75,26 @@ type TableInfo struct {
 // desvio do Execute a trata. Toda tabela listada aqui É aberta pelo Execute, e
 // tabela que ele abre não fica de fora.
 //
-// O par (Schema, Name) É o endereço que o FROM aceita: o contador publicado
-// como `(telecom, por_olt)` abre por `FROM telecom.por_olt`, de qualquer
-// dataset do servidor. Quem resolve esse FROM é o resolveSchemaQualified
-// (engine.go), e ele resolve LENDO ESTA LISTA — não há segunda varredura dos
-// registros, justamente para que o catálogo e o roteamento não possam
-// discordar.
+// O par (Schema, Name) É o endereço que o FROM aceita, com uma ressalva que
+// muda de linha para linha: o contador publicado como `(telecom, por_olt)` abre
+// por `FROM telecom.por_olt` de QUALQUER dataset do servidor, e o mesmo vale
+// para a base — são as linhas que moram no schema declarado. As linhas do
+// `_meta` que esta função também publica — `(_meta, fields)`, `(_meta, tables)`
+// e as registradas (`counters`, `kafka`) — NÃO são endereço de servidor:
+// `_meta` tem o prefixo reservado, o Execute desvia todo `FROM _x.y` para o
+// atalho antes de chegar à resolução por schema, e o atalho significa sempre
+// "no dataset da requisição". Quem resolve o par do schema declarado é o
+// resolveSchemaQualified (engine.go), e ele resolve LENDO ESTA ENUMERAÇÃO — não
+// há segunda varredura dos registros, justamente para que o catálogo e o
+// roteamento não possam discordar.
 //
 // O Namespace continua publicado porque ele é o outro endereço, o do atalho:
 // `FROM _counters.por_olt` significa "no dataset da requisição", e é a forma
 // que o `_meta` usa. Ele não é reconstruível a partir de (Schema, Name).
+//
+// As COLUNAS são montadas aqui e não na enumeração: FieldsForMetadata aloca um
+// slice de todos os campos e o ordena, e quem só precisa saber onde a tabela
+// mora não pode pagar isso. Ver catalogEntries.
 //
 // A `_meta.tables` já sai daqui (metatables.go); o /v1/metadata ainda monta a
 // resposta dele por conta própria, a partir do compilado do dataset, e passa a
@@ -91,6 +103,39 @@ type TableInfo struct {
 // lista — duas derivações do mesmo fato divergem, e a divergência aparece como
 // uma ferramenta que discorda do SQL sem nada estar quebrado.
 func (e *Engine) Catalog(dataset string) ([]TableInfo, error) {
+	entries, err := e.catalogEntries(dataset)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]TableInfo, 0, len(entries))
+	for _, entry := range entries {
+		info := entry.info
+		if info.Columns, err = entry.columns(); err != nil {
+			return nil, err
+		}
+		out = append(out, info)
+	}
+	return out, nil
+}
+
+// catalogEntries é a ENUMERAÇÃO: onde cada tabela mora (Schema), como se chama
+// (Name), por qual atalho abre (Namespace) e o que ela é (Kind) — na ordem do
+// contrato, e sem tocar no dicionário de campos.
+//
+// A separação entre enumerar e montar colunas existe por MEDIDA, não por
+// estética. Enquanto o Catalog era um bloco só, a resolução do `FROM
+// <schema>.<tabela>` — que usa apenas Schema, Name e Namespace — pagava um
+// FieldsForMetadata por tabela de cada dataset, e essa função aloca um slice
+// com todos os campos e o ORDENA. Num dataset de 4.000 colunas a forma
+// qualificada custava ~480 µs e ~35 KiB contra ~4 µs e 1,5 KiB da forma
+// simples, e é a qualificada que o DBeaver gera sozinho a partir do catálogo:
+// era o caminho quente do cliente-alvo pagando por colunas que ninguém lia.
+// Ver BenchmarkExecuteFromQualified.
+//
+// Continua havendo uma derivação só: o Catalog é esta enumeração MAIS as
+// colunas, e a resolução é esta enumeração e nada mais. Não há segunda
+// varredura dos registros a divergir desta.
+func (e *Engine) catalogEntries(dataset string) ([]catalogEntry, error) {
 	e.mu.RLock()
 	reg, ok := e.datasets[dataset]
 	var virtualTables []virtualTableRef
@@ -102,23 +147,18 @@ func (e *Engine) Catalog(dataset string) ([]TableInfo, error) {
 		return nil, fmt.Errorf("query: dataset %q não registrado", dataset)
 	}
 
-	fieldsColumns, err := meta.ColumnsOfFields()
-	if err != nil {
-		return nil, err
-	}
-
 	// O nome da base é o Name do COMPILADO, e não a chave do registro: é
 	// contra o Name que o binder confere o FROM, então é ele o nome pelo qual
 	// a tabela pode ser aberta.
 	entries := make([]catalogEntry, 0, len(virtualTables)+2)
 	entries = append(entries, catalogEntry{
 		info: TableInfo{
-			Schema:  reg.sch.SchemaName,
-			Name:    reg.sch.Name,
-			Kind:    KindTable,
-			Columns: reg.sch.FieldsForMetadata(),
+			Schema: reg.sch.SchemaName,
+			Name:   reg.sch.Name,
+			Kind:   KindTable,
 		},
 		rank: rankBase,
+		sch:  reg.sch,
 	})
 	entries = append(entries, catalogEntry{
 		info: TableInfo{
@@ -126,7 +166,6 @@ func (e *Engine) Catalog(dataset string) ([]TableInfo, error) {
 			Name:      meta.TableFields,
 			Namespace: meta.Namespace,
 			Kind:      KindView,
-			Columns:   fieldsColumns,
 		},
 		rank: rankMeta,
 	})
@@ -154,9 +193,9 @@ func (e *Engine) Catalog(dataset string) ([]TableInfo, error) {
 				Name:      v.table,
 				Namespace: v.namespace,
 				Kind:      KindView,
-				Columns:   v.sch.FieldsForMetadata(),
 			},
 			rank: rank,
+			sch:  v.sch,
 		})
 	}
 
@@ -176,12 +215,7 @@ func (e *Engine) Catalog(dataset string) ([]TableInfo, error) {
 			return a.info.Namespace < b.info.Namespace
 		}
 	})
-
-	out := make([]TableInfo, 0, len(entries))
-	for _, e := range entries {
-		out = append(out, e.info)
-	}
-	return out, nil
+	return entries, nil
 }
 
 // Os três grupos do contrato de ordem, na sequência em que saem.
@@ -191,12 +225,33 @@ const (
 	rankMeta
 )
 
-// catalogEntry carrega, além da linha publicada, o único critério de ordem que
-// não cabe nela: o grupo. O namespace é critério de desempate e mora na linha,
-// porque o consumidor precisa dele para montar o FROM.
+// catalogEntry carrega, além da linha publicada, o que a enumeração sabe e a
+// linha não publica: o grupo, que é o único critério de ordem que não cabe
+// nela, e de onde as colunas SAIRIAM se alguém as pedisse. O namespace é
+// critério de desempate e mora na linha, porque o consumidor precisa dele para
+// montar o FROM.
+//
+// info.Columns sai SEMPRE vazio daqui: quem as quer é o Catalog, e ele as pede
+// pelo método columns.
 type catalogEntry struct {
 	info TableInfo
 	rank int
+	// sch é o compilado de onde as colunas desta linha saem, e é NIL na linha
+	// da `_meta.fields`: as colunas dela são fixas do pacote meta e não vêm de
+	// registro nenhum — é o mesmo fato que faz o Execute desviá-la para o meta
+	// antes de olhar o registro do dataset.
+	sch *schema.Compiled
+}
+
+// columns monta as colunas DESCRITÍVEIS da linha, pela regra do /v1/metadata.
+//
+// É onde mora o custo que a enumeração não paga: FieldsForMetadata aloca um
+// slice com todos os campos conhecidos e o ordena por FieldID.
+func (c catalogEntry) columns() ([]*schema.CompiledField, error) {
+	if c.sch == nil {
+		return meta.ColumnsOfFields()
+	}
+	return c.sch.FieldsForMetadata(), nil
 }
 
 type virtualTableRef struct {

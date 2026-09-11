@@ -4,6 +4,7 @@ package query_test
 
 import (
 	"context"
+	"runtime"
 	"testing"
 )
 
@@ -110,4 +111,77 @@ func TestLimitAllocsIndependenteDoNumeroDeRows(t *testing.T) {
 	if mil, oitoMil := testing.AllocsPerRun(20, varre(1_000)), testing.AllocsPerRun(20, varre(8_000)); mil != oitoMil {
 		t.Errorf("allocs/query = %.0f vs %.0f", mil, oitoMil)
 	}
+}
+
+// TestResolucaoQualificadaNaoAlocaPorCampoDoDataset é o gate do custo do
+// `FROM <schema>.<tabela>`: resolver o dono do schema tem de custar o mesmo num
+// dataset de 40 colunas e num de 4.000.
+//
+// A medição é em BYTES, e não em número de alocações, porque o defeito que ela
+// fecha não move o contador: montar a lista de colunas de uma tabela é UM
+// make com a capacidade já conhecida mais um sort, então um dicionário 100
+// vezes maior alocava o mesmo NÚMERO de vezes e cem vezes mais BYTES. Um gate
+// de contagem passa com o defeito presente — foi conferido, mutando a
+// resolução de volta para o Catalog completo.
+//
+// O defeito é real e já esteve presente: a resolução pedia o catálogo COMPLETO
+// para ler três strings por linha, e com 4.000 campos o caminho que o DBeaver
+// gera sozinho custava ~480 µs e ~35 KiB de lixo por consulta, contra ~4 µs e
+// 1,5 KiB da forma simples. Ver BenchmarkExecuteFromQualified.
+//
+// A comparação é por IGUALDADE entre dois dicionários, e não por um teto, pelo
+// mesmo motivo dos gates acima: o que se persegue é crescimento POR CAMPO, e um
+// teto folgado o esconderia. A forma NÃO qualificada entra junto como controle:
+// ela nunca passou pela resolução, então é ela que diz se a igualdade mede o
+// roteamento ou uma invariância que já existia em todo o Execute.
+func TestResolucaoQualificadaNaoAlocaPorCampoDoDataset(t *testing.T) {
+	abre := func(fields int, qualificado bool) func() {
+		eng, name, schemaName := engineOfWideDataset(t, fields)
+		sql := "SELECT id FROM " + name
+		if qualificado {
+			sql = "SELECT id FROM " + schemaName + "." + name
+		}
+		return func() {
+			it, err := eng.Execute(context.Background(), name, sql, nil)
+			if err != nil {
+				t.Fatalf("Execute %q: %v", sql, err)
+			}
+			if err := it.Close(); err != nil {
+				t.Fatalf("Close: %v", err)
+			}
+		}
+	}
+
+	for _, caso := range []struct {
+		nome        string
+		qualificado bool
+	}{
+		{"FROM <nome>", false},
+		{"FROM <schema>.<nome>", true},
+	} {
+		estreito := bytesPerRun(200, abre(40, caso.qualificado))
+		largo := bytesPerRun(200, abre(4_000, caso.qualificado))
+		if estreito != largo {
+			t.Errorf("%s: %d bytes por consulta com 40 campos e %d com 4.000: "+
+				"o roteamento aloca POR CAMPO do dataset (%d bytes por campo)",
+				caso.nome, estreito, largo, (largo-estreito)/3960)
+		}
+		t.Logf("%s: bytes por consulta (constante no tamanho do dicionário): %d", caso.nome, estreito)
+	}
+}
+
+// bytesPerRun é o AllocsPerRun em bytes: quanto f aloca por execução, medido
+// pelo TotalAlloc, que é monotônico e não é afetado pelo coletor.
+//
+// O GC é forçado antes da primeira leitura para que o custo de uma coleta
+// disparada por trabalho ANTERIOR não entre na conta.
+func bytesPerRun(runs int, f func()) uint64 {
+	runtime.GC()
+	var antes, depois runtime.MemStats
+	runtime.ReadMemStats(&antes)
+	for i := 0; i < runs; i++ {
+		f()
+	}
+	runtime.ReadMemStats(&depois)
+	return (depois.TotalAlloc - antes.TotalAlloc) / uint64(runs)
 }

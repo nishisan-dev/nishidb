@@ -291,3 +291,61 @@ func assertRefusalOfBind(t *testing.T, err error, sql, ofensor string) {
 		t.Fatalf("a posição %d tem de apontar %q em %q", be.Pos, ofensor, sql)
 	}
 }
+
+// TestRecusaDeSchemaNaoOfereceOsNamespacesDoMotor guarda o único efeito do
+// filtro de prefixo "_" da resolução: a lista que a recusa oferece é de
+// ENDEREÇOS, e `_meta` não é um.
+//
+// Ele não guarda a barreira — o `_meta` não vira endereço qualificado por
+// outras duas razões, as duas fora do resolveSchemaQualified: o Execute desvia
+// todo `FROM _x.y` pelo meta.Reconhece antes de chegar lá, e um dataset não
+// consegue declarar schemaName com "_" (schema.validate). Foi conferido
+// removendo o filtro: a suíte inteira segue verde, e só este teste acusa.
+// Guardar o efeito que EXISTE é o que impede o filtro de ser removido por
+// parecer morto.
+func TestRecusaDeSchemaNaoOfereceOsNamespacesDoMotor(t *testing.T) {
+	eng := engineWithTwoDatasets(t)
+
+	_, err := queryOf(t, eng, dataset, "SELECT a FROM nao_existe.coisa")
+	if err == nil {
+		t.Fatal("schema desconhecido tem de ser recusado")
+	}
+	// A conferência é pelo `_`, e não pelo nome `_meta`: qualquer espaço de
+	// nome do motor que passasse a aparecer no catálogo cairia aqui junto.
+	for _, schemaOfList := range schemasOfRefusal(t, err.Error()) {
+		if strings.HasPrefix(schemaOfList, "_") {
+			t.Errorf("a lista oferece %q como endereço, e o prefixo \"_\" é do motor: %v", schemaOfList, err)
+		}
+	}
+	// E o `_meta` existe mesmo no catálogo dos dois datasets — sem isto o teste
+	// passaria por não haver o que filtrar.
+	tables, errOfCatalog := eng.Catalog(dataset)
+	if errOfCatalog != nil {
+		t.Fatal(errOfCatalog)
+	}
+	var temMeta bool
+	for _, tb := range tables {
+		if tb.Schema == "_meta" {
+			temMeta = true
+		}
+	}
+	if !temMeta {
+		t.Fatal("o catálogo tem de publicar linhas no `_meta`, senão não há o que a recusa deixe de fora")
+	}
+}
+
+// schemasOfRefusal extrai a lista que a recusa de schema desconhecido publica
+// depois de "existem: ".
+func schemasOfRefusal(t *testing.T, msg string) []string {
+	t.Helper()
+	const marca = "existem: "
+	i := strings.Index(msg, marca)
+	if i < 0 {
+		t.Fatalf("a recusa tem de listar os schemas existentes: %q", msg)
+	}
+	out := strings.Split(msg[i+len(marca):], ", ")
+	for j := range out {
+		out[j] = strings.TrimSpace(out[j])
+	}
+	return out
+}

@@ -232,25 +232,33 @@ type schemaQualifiedTarget struct {
 // resolveSchemaQualified traduz o par publicado pelo catálogo — `(Schema,
 // Name)` — no endereço interno que o Execute já sabe abrir.
 //
-// A tradução sai do Catalog, e não de uma varredura própria dos registros, de
-// propósito: o Catalog é a ÚNICA derivação de "que tabelas cada dataset
-// publica, em que schema cada uma aparece e por qual namespace cada uma abre",
-// e o godoc dele já se compromete com isso ("Toda tabela listada aqui É aberta
-// pelo Execute, e tabela que ele abre não fica de fora"). Com uma segunda
-// varredura aqui a promessa viraria coincidência: na primeira tabela que
-// entrasse só num dos dois lados, o catálogo e o FROM discordariam sem nada
-// estar quebrado — a ferramenta mostraria uma tabela que a consulta recusa, ou
-// o contrário.
+// A tradução sai da enumeração do catálogo (catalogEntries), e não de uma
+// varredura própria dos registros, de propósito: ela é a ÚNICA derivação de
+// "que tabelas cada dataset publica, em que schema cada uma aparece e por qual
+// namespace cada uma abre", e o godoc do Catalog se compromete com isso ("Toda
+// tabela listada aqui É aberta pelo Execute, e tabela que ele abre não fica de
+// fora"). Com uma segunda varredura aqui a promessa viraria coincidência: na
+// primeira tabela que entrasse só num dos dois lados, o catálogo e o FROM
+// discordariam sem nada estar quebrado — a ferramenta mostraria uma tabela que
+// a consulta recusa, ou o contrário.
+//
+// O que ela NÃO pede é a montagem das colunas, e essa é a diferença entre uma
+// consulta qualificada custar microssegundos e custar meio milissegundo: ver o
+// godoc de catalogEntries e o BenchmarkExecuteFromQualified.
 //
 // O laço é sobre TODOS os datasets registrados, e é isso que faz o schema ser
-// endereço de servidor e não de conexão. O custo é uma montagem de catálogo
-// por dataset por consulta QUALIFICADA — os datasets são unidades e as tabelas
-// de cada um também, e o caminho já paga parse, bind e plano.
+// endereço de servidor e não de conexão. O custo é uma enumeração por dataset
+// por consulta QUALIFICADA — os datasets são unidades e as tabelas de cada um
+// também, e o caminho já paga parse, bind e plano.
 //
-// Schema com prefixo "_" nunca entra: `_meta` é schema do MOTOR, alcançado
-// pelo atalho `_meta.x`, que significa "o dataset da requisição". Oferecê-lo
-// aqui daria um segundo endereço para a mesma tabela, resolvendo outro
-// dataset.
+// A lista sai SEM os schemas de prefixo "_", e é só isso que o filtro faz: ele
+// não é a barreira que impede `_meta` de ser endereço qualificado. Quem impede
+// são dois outros fatos, e os dois estão fora daqui — o Execute desvia todo
+// `FROM _x.y` pelo meta.Reconhece ANTES de chegar nesta função, e um dataset
+// não consegue declarar schemaName com "_" (schema.validate recusa o prefixo
+// reservado). Sem o filtro, o único efeito seria a recusa de schema
+// desconhecido OFERECER `_meta` numa lista de endereços que não endereçam
+// nada.
 //
 // pos é a posição do nome DEPOIS do ponto (parser.SelectStmt.DatasetPos), o
 // mesmo token ofensor que as recusas de namespace apontam.
@@ -274,11 +282,12 @@ func (e *Engine) resolveSchemaQualified(schemaName, table string, pos int) (sche
 		seenSchema     = make(map[string]bool, len(names))
 	)
 	for _, n := range names {
-		tables, err := e.Catalog(n)
+		entries, err := e.catalogEntries(n)
 		if err != nil {
 			return schemaQualifiedTarget{}, err
 		}
-		for _, tb := range tables {
+		for _, entry := range entries {
+			tb := entry.info
 			if strings.HasPrefix(tb.Schema, "_") {
 				continue
 			}
