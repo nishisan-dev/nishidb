@@ -844,15 +844,38 @@ importar `query`; e não num pacote à parte como `internal/counters` e
 O `FROM` tem três formas, e cada uma resolve o dataset alvo de um jeito:
 `FROM <nome>` é a base do dataset da requisição; `FROM _ns.<nome>` é o ATALHO,
 que significa "a tabela virtual do dataset da requisição" e não nomeia dataset
-nenhum; `FROM <schema>.<nome>` é o **endereço completo** — como o `schemaName`
-é único entre os datasets (`config.ValidateSchemaUniqueness`), o par identifica
-uma tabela e só uma em todo o servidor, e a resolve venha a requisição pelo
-handle que vier. É a forma que um cliente SQL gera sozinho a partir do
-catálogo, e o spike do DBeaver confirmou que é a que ele monta.
+nenhum; `FROM <schema>.<nome>` é o **endereço completo** — o par endereça uma
+tabela em qualquer dataset, e a resolve venha a requisição pelo handle que
+vier. É a forma que um cliente SQL gera sozinho a partir do catálogo, e o spike
+do DBeaver confirmou que é a que ele monta.
 
-**Quem resolve o par é o `Engine.Catalog`, não uma varredura própria do
-roteamento.** O catálogo já é a única derivação de "que tabelas cada dataset
-publica, em que schema cada uma aparece e por qual namespace cada uma abre", e
+**A unicidade do par é sustentada pela CONFIGURAÇÃO, e não pela forma do
+catálogo.** São três recusas, todas na subida: dois datasets não declaram o
+mesmo `schemaName` (`config.ValidateSchemaUniqueness`), e um contador não se
+chama como o próprio dataset nem como a tabela irmã do histórico
+(`schema.validateCounters`) — a irmã herda o schemaName do base, e o nome dela
+sai de um sufixo configurável, de modo que `name: events` + `history:` +
+`counters: [{name: events_history}]` publicava o mesmo par duas vezes num
+arquivo só, e era aceito. O motor continua recusando o par ambíguo na
+resolução, mas isso é **rede**: um YAML aceito não chega lá, e quem pode chegar
+é um `RegisterVirtual` que não passa por nenhuma das três
+(`TestCountersRecusaNomeDaTabelaHistorica`).
+
+**A resolução lê a ENUMERAÇÃO do catálogo, não o catálogo montado.** O
+`Catalog` público é a enumeração — schema, nome, namespace, kind — mais as
+colunas de cada tabela; a resolução usa só a enumeração. A separação é medida,
+não estética: montar as colunas chama `FieldsForMetadata`, que aloca um slice
+com todos os campos e o ordena, e a resolução as montava para jogá-las fora.
+Num dataset de 4.000 colunas a forma qualificada custava ~479 µs e ~35 KiB de
+lixo contra ~4 µs e 1,5 KiB da simples — 113x —, e é a qualificada que o
+DBeaver gera sozinho. Depois da separação são ~1,6x nos três tamanhos medidos
+(40, 400 e 4.000 campos) e 2.216 B por consulta, constante no tamanho do
+dicionário (`BenchmarkExecuteFromQualified`,
+`TestResolucaoQualificadaNaoAlocaPorCampoDoDataset`).
+
+**Quem resolve o par é a enumeração do `Engine.Catalog`, não uma varredura
+própria do roteamento.** A enumeração já é a única derivação de "que tabelas
+cada dataset publica, em que schema cada uma aparece e por qual namespace cada uma abre", e
 o godoc dele já prometia que toda tabela listada é aberta pelo `Execute`. Uma
 segunda varredura no roteamento faria dessa promessa uma coincidência: na
 primeira tabela que entrasse só num dos dois lados, a ferramenta mostraria uma

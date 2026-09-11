@@ -380,12 +380,20 @@ tabelas diferentes dentro, e qual deles o cliente enxergaria dependeria da
 ordem em que o diretório foi lido, que nunca foi contrato. E o schema é
 **endereço**: `SELECT * FROM telecom.por_olt` abre a tabela do dataset dono do
 schema `telecom`, seja qual for o dataset da conexão — repetido, a mesma
-consulta responderia de um ou de outro. Um qualificador que não é schema
-declarado é **recusado**, nomeando os que existem. A recusa vale para o
-servidor e para os comandos locais (`ingest`, `query`, `counters`, `offsets`),
-que leem o mesmo diretório.
-A tabela **histórica não entra nessa conta**: ela herda o schema do dataset que
-a declara, porque é outra tabela do mesmo dataset.
+consulta responderia de um ou de outro. A recusa do `schemaName` repetido vale
+para o servidor e para os comandos locais (`ingest`, `query`, `counters`,
+`offsets`), que leem o mesmo diretório: ela é da **carga** da configuração, não
+do SQL.
+
+No SQL, um qualificador que não é schema declarado é **recusado**, nomeando os
+que existem — isso é do motor de consulta, e só os comandos que executam SQL
+(`query`, e o servidor) chegam a ele.
+
+A tabela **histórica não entra na conta do `schemaName` único**: ela herda o
+schema do dataset que a declara, porque é outra tabela do mesmo dataset. Ela
+entra, sim, na conta dos **nomes de tabela dentro do schema** — um contador não
+pode se chamar como ela (`events_history`, pelo `history.suffix`) nem como o
+próprio dataset, e o YAML é recusado na subida se isso acontecer.
 
 Um campo **não declarado** aqui continua sendo aceito (`unknownFields:
 include`) e vira coluna `auto`, mas só é consultável pelo **nome original** —
@@ -1396,10 +1404,14 @@ Comparadores `=`, `!=`, `>`, `>=`, `<`, `<=`; `AND`, `OR`, parênteses;
 duplas (obrigatórias para nomes com hífen, como `"Acct-Status-Type"`).
 
 **O `FROM` qualificado pelo schema é endereço de servidor, não de conexão.**
-Como o `schemaName` é único entre os datasets, o par `schema.tabela` identifica
-uma tabela e só uma: `SELECT * FROM telecom.por_olt` abre o contador `por_olt`
+O par `schema.tabela` endereça uma tabela em qualquer dataset:
+`SELECT * FROM telecom.por_olt` abre o contador `por_olt`
 do dataset que declara o schema `telecom`, mesmo que a conexão tenha sido
-aberta contra outro dataset. Vale para a base e para as views, e é a forma que
+aberta contra outro dataset. Que o par endereça **uma** tabela e não duas vem
+de três recusas na **carga da configuração** — `schemaName` único entre
+datasets, e nome de contador distinto do nome do dataset e do da tabela
+histórica —, não da forma do catálogo; por isso o motor ainda recusa um par
+ambíguo em runtime, como rede. Vale para a base e para as views, e é a forma que
 um cliente SQL gera sozinho a partir do catálogo (é o que o DBeaver monta ao
 clicar na tabela). O dataset da requisição continua sendo o default das formas
 NÃO qualificadas — `FROM <nome>` e os atalhos `_counters.<nome>` /

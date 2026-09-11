@@ -151,7 +151,11 @@ func countersFromNode(n *yaml.Node) ([]rawCounter, error) {
 // dataset é o nome do próprio dataset: no schema declarado a tabela base
 // aparece como `<schemaName>.<dataset>` (planning/schema-declarado-e-catalogo-jdbc.md),
 // e é contra esse nome que o nome do contador precisa ser distinto.
-func validateCounters(raws []rawCounter, fields map[string]FieldSpec, key, seq, dataset string) ([]CounterSpec, error) {
+// historyTable é o nome da tabela IRMÃ, ou vazio quando não há bloco
+// `history`: ela herda o schema do base e é a outra tabela com que o contador
+// pode colidir. É por isso que a validação dos contadores roda depois da do
+// histórico (spec.go).
+func validateCounters(raws []rawCounter, fields map[string]FieldSpec, key, seq, dataset, historyTable string) ([]CounterSpec, error) {
 	if len(raws) == 0 {
 		return nil, specErrf("counters: lista vazia — remova a chave ou declare um contador")
 	}
@@ -186,6 +190,24 @@ func validateCounters(raws []rawCounter, fields map[string]FieldSpec, key, seq, 
 		if r.Name == dataset {
 			return nil, specErrf(
 				"%s.name %q é o nome do próprio dataset: no schema declarado os dois seriam a mesma tabela",
+				keyPath, r.Name)
+		}
+		// A tabela IRMÃ do histórico é a mesma colisão por outro caminho, e é
+		// construível com um arquivo só: `name: events` + `history:` produz a
+		// irmã `events_history`, que HERDA o schemaName do base
+		// (DeriveHistory), e um contador chamado `events_history` publica o par
+		// `(telecom, events_history)` uma segunda vez. O catálogo mostraria
+		// duas tabelas idênticas na árvore e o SELECT que a ferramenta gera a
+		// partir delas seria recusado como ambíguo em runtime — configuração
+		// aceita na subida que só quebra depois, que é o oposto do que este
+		// validate existe para fazer.
+		//
+		// A mensagem nomeia o sufixo porque ele é configurável: quem escolheu
+		// `history.suffix` precisa saber qual dos dois nomes mudar.
+		if historyTable != "" && r.Name == historyTable {
+			return nil, specErrf(
+				"%s.name %q é o nome da tabela histórica deste dataset (history.suffix): "+
+					"as duas moram no mesmo schema e seriam a mesma tabela no catálogo",
 				keyPath, r.Name)
 		}
 		if j, dup := seenNames[r.Name]; dup {

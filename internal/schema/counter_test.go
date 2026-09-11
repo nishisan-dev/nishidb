@@ -216,6 +216,64 @@ counters:
 	}
 }
 
+// TestCountersRecusaNomeDaTabelaHistorica é a MESMA colisão por outro caminho,
+// e a que estava aberta: a irmã do histórico herda o schemaName do base
+// (DeriveHistory) e o nome dela sai de `history.suffix`, então um arquivo só —
+// `name: servicos`, bloco `history` e um contador `servicos_history` — publica
+// o par `(telecom, servicos_history)` duas vezes.
+//
+// Antes desta recusa o YAML era ACEITO: a árvore do cliente SQL mostrava duas
+// tabelas idênticas e o SELECT gerado a partir delas morria como ambíguo em
+// runtime. A guarda do roteamento continua existindo, como rede; a barreira é
+// esta, na subida.
+func TestCountersRecusaNomeDaTabelaHistorica(t *testing.T) {
+	const historyBlock = `
+history:
+  expireAfterWrite: 7d
+`
+	_, err := Parse([]byte(yamlWithCounters(historyBlock+`
+counters:
+  - name: servicos_history
+    groupBy: [olt]
+`)), BuiltinDefaults)
+	if err == nil || !strings.Contains(err.Error(), "tabela histórica") {
+		t.Fatalf("contador homônimo da tabela irmã tem de ser recusado pelo motivo certo: %v", err)
+	}
+
+	// O sufixo é configurável, e a recusa acompanha: com outro sufixo o nome
+	// antes recusado passa a ser legítimo, e o novo é que colide. Sem os dois
+	// lados, a recusa poderia estar comparando contra o literal "_history".
+	if _, err := Parse([]byte(yamlWithCounters(`
+history:
+  suffix: _bruto
+  expireAfterWrite: 7d
+counters:
+  - name: servicos_history
+    groupBy: [olt]
+`)), BuiltinDefaults); err != nil {
+		t.Fatalf("com outro sufixo o nome deixa de colidir: %v", err)
+	}
+	if _, err := Parse([]byte(yamlWithCounters(`
+history:
+  suffix: _bruto
+  expireAfterWrite: 7d
+counters:
+  - name: servicos_bruto
+    groupBy: [olt]
+`)), BuiltinDefaults); err == nil || !strings.Contains(err.Error(), "tabela histórica") {
+		t.Fatalf("a recusa tem de seguir o sufixo declarado: %v", err)
+	}
+
+	// E SEM bloco `history` não há irmã: o mesmo nome é um contador comum.
+	if _, err := Parse([]byte(yamlWithCounters(`
+counters:
+  - name: servicos_history
+    groupBy: [olt]
+`)), BuiltinDefaults); err != nil {
+		t.Fatalf("sem bloco history não há tabela irmã com que colidir: %v", err)
+	}
+}
+
 func TestOPrefixoReservadoNomeiaOsDoisNamespaces(t *testing.T) {
 	_, err := Parse([]byte(strings.Replace(yamlWithCounters(""), "name: servicos", "name: _counters", 1)), BuiltinDefaults)
 	if err == nil || !strings.Contains(err.Error(), "_counters") || !strings.Contains(err.Error(), "_meta") {

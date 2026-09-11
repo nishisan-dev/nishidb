@@ -309,14 +309,19 @@ func (e *Engine) resolveSchemaQualified(schemaName, table string, pos int) (sche
 	case len(found) == 1:
 		return found[0], nil
 	case len(found) > 1:
-		// A configuração fecha as duas colisões que se sabe construir — dois
+		// Esta é a REDE, não a barreira. A barreira é a configuração, e ela
+		// recusa na subida as três colisões construíveis por YAML: dois
 		// datasets no mesmo schemaName (config.ValidateSchemaUniqueness) e um
-		// contador com o nome do próprio dataset (schema.validateCounters) —,
-		// mas a tabela irmã do histórico herda o schema do base e tem o nome
-		// derivado por sufixo configurável, então a unicidade do par não é
-		// garantida por construção. Escolher um dos dois em silêncio seria a
-		// consulta respondendo de outra tabela sem nada acusar; a recusa nomeia
-		// os datasets para que o YAML possa ser corrigido.
+		// contador com o nome do próprio dataset ou com o da tabela irmã do
+		// histórico, que herda o schema do base (schema.validateCounters). Um
+		// YAML aceito não chega aqui.
+		//
+		// A rede existe porque a unicidade do par é sustentada por uma LISTA
+		// de recusas, e não pela forma da estrutura: quem registrar uma tabela
+		// virtual direto pelo RegisterVirtual não passa por nenhuma delas.
+		// Escolher um dos dois em silêncio seria a consulta respondendo de
+		// outra tabela sem nada acusar; a recusa nomeia os datasets para que o
+		// YAML possa ser corrigido.
 		donos := make([]string, 0, len(found))
 		for _, f := range found {
 			donos = append(donos, f.dataset)
@@ -346,9 +351,15 @@ func (e *Engine) resolveSchemaQualified(schemaName, table string, pos int) (sche
 //     o chamador pediu.
 //   - `FROM _ns.x` — namespace reservado. É atalho, e significa "a tabela
 //     virtual x DO DATASET DA REQUISIÇÃO"; ele não nomeia dataset nenhum.
-//   - `FROM schema.x` — schema declarado. É ENDEREÇO COMPLETO: o schemaName é
-//     único no servidor (config.ValidateSchemaUniqueness), então o par
-//     (schema, tabela) identifica uma tabela e só uma, em qualquer dataset.
+//   - `FROM schema.x` — schema declarado. É ENDEREÇO COMPLETO: o par
+//     (schema, tabela) endereça uma tabela em qualquer dataset do servidor.
+//
+// Que o par endereça UMA tabela e não duas é sustentado por três recusas de
+// CONFIGURAÇÃO, todas na subida: dois datasets não declaram o mesmo schemaName
+// (config.ValidateSchemaUniqueness) e um contador não se chama como o próprio
+// dataset nem como a tabela irmã do histórico (schema.validateCounters), que
+// herda o schema do base. Não é propriedade da estrutura — por isso a
+// resolução ainda recusa o par ambíguo, como rede.
 //
 // Na terceira forma o dataset do argumento deixa de ser o alvo e passa a ser
 // só o default das outras duas — é o papel que um "current schema" tem numa

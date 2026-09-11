@@ -802,10 +802,16 @@ func ValidateGroupUniqueness(specs map[string]*schema.DatasetSpec) error {
 //
 // A recusa deixou de ser preventiva: o motor RESOLVE o qualificador de um
 // `FROM telecom.tabela` contra os schemas declarados (query.Execute, pelo
-// Catalog), e é essa unicidade que faz o par (schema, tabela) endereçar uma
-// tabela e só uma em todo o servidor. Dois datasets no mesmo schema fariam a
-// mesma consulta abrir a tabela de um ou de outro conforme a ordem de carga do
-// diretório — que nunca foi contrato.
+// Catalog). Dois datasets no mesmo schema fariam a mesma consulta abrir a
+// tabela de um ou de outro conforme a ordem de carga do diretório — que nunca
+// foi contrato.
+//
+// Ela é UMA das três recusas que sustentam a unicidade do par (schema,
+// tabela). As outras duas são de schema.validateCounters, e são sobre as
+// tabelas de DENTRO de um dataset: o contador não pode se chamar como o
+// próprio dataset nem como a tabela irmã do histórico. As três juntas é que
+// fazem o par endereçar uma tabela e só uma no servidor — o motor ainda
+// recusa o par ambíguo em runtime, mas como rede, não como barreira.
 //
 // A tabela IRMÃ do histórico NÃO entra nesta conta, e isso é desenho: ela
 // herda o schemaName do dataset base (schema.DeriveHistory) porque é outra

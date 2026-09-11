@@ -968,18 +968,6 @@ func validate(raw *rawSpec, defaults Defaults) (*DatasetSpec, error) {
 		}
 	}
 
-	// Os contadores vêm DEPOIS de key e sequence estarem resolvidos: metade
-	// das recusas do groupBy é sobre o PAPEL da coluna, não sobre ela.
-	if raws, err := countersFromNode(&raw.Counters); err != nil {
-		return nil, err
-	} else if raws != nil {
-		validated, err := validateCounters(raws, fields, key.Field, declaredSeq, s.Name)
-		if err != nil {
-			return nil, err
-		}
-		s.Counters = validated
-	}
-
 	// include / exclude / unknownFields
 	include := raw.Schema.Include
 	includeAll := false
@@ -1088,6 +1076,26 @@ func validate(raw *rawSpec, defaults Defaults) (*DatasetSpec, error) {
 	// dela decide a indexabilidade, e a congelada precisa ser reconhecida.
 	if s.History, err = validateHistory(&raw.History, s.Name, fields); err != nil {
 		return nil, err
+	}
+
+	// Os contadores vêm DEPOIS de key e sequence estarem resolvidos — metade
+	// das recusas do groupBy é sobre o PAPEL da coluna, não sobre ela — e
+	// DEPOIS do histórico, porque o nome da tabela irmã é uma das colisões que
+	// eles têm de recusar: ela herda o schema do base e o nome dela sai de um
+	// sufixo configurável, então `name: events_history` num dataset `events`
+	// com bloco `history` põe duas tabelas diferentes no mesmo (schema, nome).
+	historyTable := ""
+	if s.History != nil {
+		historyTable = s.History.TableName(s.Name)
+	}
+	if raws, err := countersFromNode(&raw.Counters); err != nil {
+		return nil, err
+	} else if raws != nil {
+		validated, err := validateCounters(raws, fields, key.Field, declaredSeq, s.Name, historyTable)
+		if err != nil {
+			return nil, err
+		}
+		s.Counters = validated
 	}
 
 	// query: o dataset que declara a chave vence; quem omite herda o global.
