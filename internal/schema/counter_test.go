@@ -196,8 +196,8 @@ counters:
   - name: _fields
     groupBy: [olt]
 `)), BuiltinDefaults)
-	if err == nil || !strings.Contains(err.Error(), "_") {
-		t.Fatalf("contador com prefixo reservado tem de ser recusado: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "reservado ao produto") {
+		t.Fatalf("contador com prefixo reservado tem de ser recusado pelo motivo certo: %v", err)
 	}
 }
 
@@ -211,8 +211,8 @@ counters:
   - name: servicos
     groupBy: [olt]
 `)), BuiltinDefaults)
-	if err == nil || !strings.Contains(err.Error(), "servicos") {
-		t.Fatalf("contador homônimo do dataset tem de ser recusado: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "mesma tabela") {
+		t.Fatalf("contador homônimo do dataset tem de ser recusado pelo motivo certo: %v", err)
 	}
 }
 
